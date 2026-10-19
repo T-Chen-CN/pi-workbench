@@ -112,6 +112,55 @@ npm run package:linux    # Linux
 - 🌍 中英文国际化
 - 🔍 Diff 查看器
 - 🎨 现代化 UI (TailwindCSS)
+- 📦 **便携式架构**: 所有数据自包含，支持整体迁移
+
+## 便携式架构
+
+Pi Workbench 采用**便携式架构**，所有应用数据存储在应用目录内，不依赖系统标准路径。
+
+### 目录结构
+
+```
+Pi Workbench/                    # 应用安装目录
+├── Pi Workbench.exe            # 可执行文件
+├── resources/                  # 应用资源（只读）
+├── config/                     # ⭐ 应用配置
+│   ├── settings.json          # 用户设置
+│   └── api-keys.json          # API Keys
+├── cache/                      # ⭐ 缓存数据
+│   └── temp/                  # 临时文件
+├── data/                       # ⭐ 持久化数据
+│   ├── workspaces.db          # 工作区数据库
+│   └── sessions/              # 会话历史
+└── logs/                       # ⭐ 日志文件
+    └── app.log
+
+{工作区目录}/                   # 用户的项目目录
+└── .pi-workbench/              # 工作区配置
+    ├── config.json            # 项目配置
+    ├── sessions/              # 项目会话
+    └── plugins/               # 项目插件
+```
+
+### 优势
+
+- ✅ **真正便携**: 可整个目录拷贝到 U 盘或其他电脑运行
+- ✅ **易于备份**: 一个目录包含所有数据
+- ✅ **多版本共存**: 不同版本各自独立
+- ✅ **易于清理**: 删除目录即可完全卸载
+- ✅ **不污染系统**: 不在系统目录留下数据
+
+### 安装方式
+
+**方式 1: 安装版**（推荐）
+- 运行 `Pi-Workbench-Setup-x.x.x.exe`
+- 默认安装到 `%LOCALAPPDATA%\Programs\Pi Workbench\`
+- Per-user 安装，无需管理员权限
+
+**方式 2: 便携版**
+- 解压 `Pi-Workbench-x.x.x-portable.zip`
+- 运行 `Pi Workbench.exe`
+- 可放在 U 盘或任意位置
 
 ## 开发流程
 

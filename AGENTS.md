@@ -18,6 +18,7 @@
 - 支持多工作区和多 Agent 协作
 - 简洁易扩展的插件系统
 - 跨平台（Windows/macOS/Linux）
+- **便携式架构**: 所有数据自包含，无外部路径依赖
 
 ### 当前状态
 - ✅ MVP 完成：文件管理、代码编辑、Diff 查看、聊天界面
@@ -215,7 +216,183 @@ const fullPath = `${dirPath}/${fileName}`  // Windows 会失败！
 
 ---
 
-### 5. TypeScript 规范
+### 5. 文件路径规范（便携式约束）
+
+**核心原则**: 所有应用数据必须在应用目录内，不得使用系统标准路径
+
+#### 获取应用目录
+
+```typescript
+// ✅ 正确：基于可执行文件路径（便携式）
+import { app } from 'electron'
+import path from 'path'
+
+// 开发模式和生产模式的统一处理
+function getAppDir(): string {
+  if (app.isPackaged) {
+    // 生产模式：可执行文件所在目录
+    return path.dirname(app.getPath('exe'))
+  } else {
+    // 开发模式：项目根目录
+    return process.cwd()
+  }
+}
+
+const appDir = getAppDir()
+const configDir = path.join(appDir, 'config')    // 配置目录
+const cacheDir = path.join(appDir, 'cache')      // 缓存目录
+const dataDir = path.join(appDir, 'data')        // 数据目录
+const logsDir = path.join(appDir, 'logs')        // 日志目录
+
+// ❌ 错误：使用系统标准路径（违反便携式约束！）
+const userData = app.getPath('userData')         // 不要使用！
+// Windows: C:\Users\xxx\AppData\Roaming\pi-workbench
+// macOS: ~/Library/Application Support/pi-workbench
+
+const appData = app.getPath('appData')           // 不要使用！
+const home = app.getPath('home')                 // 不要使用！
+const documents = app.getPath('documents')       // 不要使用！
+```
+
+#### 路径分类和用途
+
+```typescript
+// ✅ 应用级数据：在应用目录
+const settingsPath = path.join(appDir, 'config', 'settings.json')
+const apiKeysPath = path.join(appDir, 'config', 'api-keys.json')
+const dbPath = path.join(appDir, 'data', 'workspaces.db')
+const logPath = path.join(appDir, 'logs', 'main.log')
+
+// ✅ 工作区级数据：在工作区目录（用户选择的项目目录）
+const workspaceConfig = path.join(workspacePath, '.pi-workbench', 'config.json')
+const workspacePlugins = path.join(workspacePath, '.pi-workbench', 'plugins')
+const workspaceSessions = path.join(workspacePath, '.pi-workbench', 'sessions')
+
+// ✅ 临时数据：在应用缓存目录
+const tempFile = path.join(appDir, 'cache', 'temp', `diff-${Date.now()}.txt`)
+```
+
+#### 初始化目录结构
+
+```typescript
+// electron/main.ts - 应用启动时创建必要的目录
+async function initAppDirectories() {
+  const appDir = getAppDir()
+  
+  const dirs = [
+    path.join(appDir, 'config'),
+    path.join(appDir, 'cache'),
+    path.join(appDir, 'cache', 'temp'),
+    path.join(appDir, 'data'),
+    path.join(appDir, 'data', 'sessions'),
+    path.join(appDir, 'logs')
+  ]
+  
+  for (const dir of dirs) {
+    await fs.mkdir(dir, { recursive: true })
+  }
+  
+  console.log('应用目录已初始化:', appDir)
+}
+
+// 在 app.whenReady() 中调用
+app.whenReady().then(async () => {
+  await initAppDirectories()
+  createWindow()
+})
+```
+
+#### 工作区配置初始化
+
+```typescript
+// 打开工作区时创建 .pi-workbench 目录
+async function initWorkspaceConfig(workspacePath: string) {
+  const configDir = path.join(workspacePath, '.pi-workbench')
+  const pluginsDir = path.join(configDir, 'plugins')
+  const sessionsDir = path.join(configDir, 'sessions')
+  
+  // 创建目录
+  await fs.mkdir(configDir, { recursive: true })
+  await fs.mkdir(pluginsDir, { recursive: true })
+  await fs.mkdir(sessionsDir, { recursive: true })
+  
+  // 创建默认配置
+  const configPath = path.join(configDir, 'config.json')
+  if (!existsSync(configPath)) {
+    const defaultConfig = {
+      version: '1.0',
+      enabledPlugins: [],
+      agentConfig: {
+        model: 'claude-3-5-sonnet',
+        temperature: 0.7
+      }
+    }
+    await fs.writeFile(configPath, JSON.stringify(defaultConfig, null, 2))
+  }
+}
+
+// 添加 IPC 处理器
+ipcMain.handle('workspace:init', async (_, workspacePath: string) => {
+  try {
+    await initWorkspaceConfig(workspacePath)
+    return { success: true }
+  } catch (error) {
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : String(error) 
+    }
+  }
+})
+```
+
+#### 配置文件管理
+
+```typescript
+// electron/main.ts - 读写应用配置
+async function loadAppSettings() {
+  const settingsPath = path.join(getAppDir(), 'config', 'settings.json')
+  
+  if (!existsSync(settingsPath)) {
+    // 默认配置
+    return {
+      language: 'zh-CN',
+      theme: 'dark',
+      autoSave: true
+    }
+  }
+  
+  const content = await fs.readFile(settingsPath, 'utf-8')
+  return JSON.parse(content)
+}
+
+async function saveAppSettings(settings: any) {
+  const settingsPath = path.join(getAppDir(), 'config', 'settings.json')
+  await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2))
+}
+
+// IPC 处理器
+ipcMain.handle('app:getSettings', async () => {
+  try {
+    const settings = await loadAppSettings()
+    return { success: true, settings }
+  } catch (error) {
+    return { success: false, error: String(error) }
+  }
+})
+
+ipcMain.handle('app:saveSettings', async (_, settings) => {
+  try {
+    await saveAppSettings(settings)
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: String(error) }
+  }
+})
+```
+
+---
+
+### 6. TypeScript 规范
 
 #### 类型定义位置
 ```typescript
@@ -303,6 +480,47 @@ useEffect(() => {
   loadItems()
 }, [])  // 空依赖数组
 ```
+
+### 错误 6: 使用系统标准配置目录（违反便携式约束）
+
+```typescript
+// ❌ 错误：使用系统路径
+import { app } from 'electron'
+const configPath = path.join(app.getPath('userData'), 'config.json')
+// 这会存储到：
+// Windows: C:\Users\xxx\AppData\Roaming\pi-workbench\
+// macOS: ~/Library/Application Support/pi-workbench/
+
+// ❌ 错误：使用其他系统路径
+const settingsPath = path.join(app.getPath('appData'), 'settings.json')
+const cachePath = path.join(app.getPath('temp'), 'cache')
+const logPath = path.join(app.getPath('home'), '.pi-workbench', 'logs')
+
+// ✅ 正确：使用应用目录
+function getAppDir() {
+  return app.isPackaged 
+    ? path.dirname(app.getPath('exe'))
+    : process.cwd()
+}
+
+const appDir = getAppDir()
+const configPath = path.join(appDir, 'config', 'config.json')
+const cachePath = path.join(appDir, 'cache')
+const logPath = path.join(appDir, 'logs', 'app.log')
+// 这会存储到应用安装目录内
+```
+
+**为什么这是错误的**:
+- 违反便携式架构原则
+- 无法整体迁移应用（配置留在系统目录）
+- 卸载后会留下数据残留
+- 多版本会相互干扰（共享同一个配置目录）
+- 不方便备份（数据分散在不同位置）
+
+**正确的做法**:
+- 所有应用数据存在应用目录：`{appDir}/config/`, `{appDir}/cache/`, `{appDir}/data/`
+- 工作区数据存在工作区目录：`{workspaceDir}/.pi-workbench/`
+- 临时文件存在应用缓存：`{appDir}/cache/temp/`
 
 ---
 

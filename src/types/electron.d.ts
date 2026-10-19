@@ -1,66 +1,111 @@
 export interface ElectronAPI {
   // File system operations
-  selectDirectory: () => Promise<SelectDirectoryResult>;
-  readDirectory: (path: string) => Promise<ReadDirectoryResult>;
-  readFile: (path: string) => Promise<ReadFileResult>;
-  writeFile: (path: string, content: string) => Promise<WriteFileResult>;
+  openDirectoryDialog: () => Promise<OpenDirectoryResult>
+  readFile: (path: string) => Promise<ReadFileResult>
+  writeFile: (path: string, content: string) => Promise<WriteFileResult>
+  listDirectory: (path: string) => Promise<ListDirectoryResult>
+  exists: (path: string) => Promise<ExistsResult>
+  stat: (path: string) => Promise<StatResult>
 
-  // Dialog operations
-  showOpenDialog: (options: OpenDialogOptions) => Promise<OpenDialogResult>;
-  showSaveDialog: (options: SaveDialogOptions) => Promise<SaveDialogResult>;
+  // App configuration (portable architecture)
+  getAppDir: () => Promise<GetAppDirResult>
+  getSettings: () => Promise<GetSettingsResult>
+  saveSettings: (settings: any) => Promise<SaveSettingsResult>
+
+  // Workspace configuration
+  initWorkspace: (workspacePath: string) => Promise<WorkspaceResult>
+  getWorkspaceConfig: (workspacePath: string) => Promise<GetWorkspaceConfigResult>
+  saveWorkspaceConfig: (workspacePath: string, config: any) => Promise<WorkspaceResult>
 }
 
-export interface SelectDirectoryResult {
-  success: boolean;
-  path?: string;
-  canceled?: boolean;
+export interface OpenDirectoryResult {
+  success: boolean
+  path?: string
+  canceled?: boolean
+  error?: string
 }
 
-export interface ReadDirectoryResult {
-  success: boolean;
+export interface ListDirectoryResult {
+  success: boolean
   items?: Array<{
-    name: string;
-    path: string;
-    isDirectory: boolean;
-  }>;
-  error?: string;
+    name: string
+    path: string
+    isDirectory: boolean
+  }>
+  error?: string
 }
 
 export interface ReadFileResult {
-  success: boolean;
-  content?: string;
-  error?: string;
+  success: boolean
+  content?: string
+  error?: string
 }
 
 export interface WriteFileResult {
-  success: boolean;
-  error?: string;
+  success: boolean
+  error?: string
 }
 
-export interface OpenDialogOptions {
-  properties?: Array<'openFile' | 'openDirectory' | 'multiSelections'>;
-  filters?: Array<{ name: string; extensions: string[] }>;
+export interface ExistsResult {
+  success: boolean
+  exists?: boolean
+  error?: string
 }
 
-export interface OpenDialogResult {
-  success: boolean;
-  filePaths?: string[];
-  canceled?: boolean;
+export interface StatResult {
+  success: boolean
+  isFile?: boolean
+  isDirectory?: boolean
+  size?: number
+  error?: string
 }
 
-export interface SaveDialogOptions {
-  defaultPath?: string;
-  filters?: Array<{ name: string; extensions: string[] }>;
+export interface GetAppDirResult {
+  success: boolean
+  appDir?: string
+  error?: string
 }
 
-export interface SaveDialogResult {
-  success: boolean;
-  filePath?: string;
-  canceled?: boolean;
+export interface GetSettingsResult {
+  success: boolean
+  settings?: {
+    language: string
+    theme: string
+    autoSave: boolean
+    autoSaveDelay: number
+    [key: string]: any
+  }
+  error?: string
+}
+
+export interface SaveSettingsResult {
+  success: boolean
+  error?: string
+}
+
+export interface WorkspaceResult {
+  success: boolean
+  error?: string
+}
+
+export interface GetWorkspaceConfigResult {
+  success: boolean
+  config?: {
+    version: string
+    enabledPlugins: string[]
+    agentConfig: {
+      model: string
+      temperature: number
+      [key: string]: any
+    }
+    [key: string]: any
+  }
+  error?: string
 }
 
 declare global {
   interface Window {
-    electronAPI?: ElectronAPI;
+    electronAPI: ElectronAPI
   }
 }
+

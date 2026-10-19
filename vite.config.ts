@@ -4,6 +4,7 @@ import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
+  root: 'src',  // 设置根目录为 src
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -14,7 +15,7 @@ export default defineConfig({
     strictPort: true,
   },
   build: {
-    outDir: 'dist',
+    outDir: '../dist',  // 输出到上一级的 dist 目录
     emptyOutDir: true,
     sourcemap: false,
     minify: 'esbuild',

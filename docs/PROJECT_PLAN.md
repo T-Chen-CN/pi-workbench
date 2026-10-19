@@ -21,6 +21,7 @@
 - **工作区隔离**: 每个项目独立的 Agent、配置和会话
 - **插件驱动**: 按需扩展功能
 - **直接集成**: Pi 核心模块直接导入，零子进程开销
+- **便携式优先**: 所有运行时数据在应用目录内，无外部依赖，支持整体迁移
 
 ### 目标用户
 
@@ -177,13 +178,153 @@
 │     ├─ @earendil-works/pi-ai                           │
 │     └─ @earendil-works/pi-durable                      │
 ├─────────────────────────────────────────────────────────┤
-│  存储层                                                  │
-│  ├─ 本地文件系统         项目文件                       │
-│  ├─ 应用配置             (待实现 - SQLite)              │
-│  └─ 工作区配置           .pi-workbench/                │
-│     ├─ config.json       工作区设置                     │
-│     ├─ sessions/         会话历史（待实现）             │
-│     └─ plugins/          项目插件（待实现）             │
+│  存储层（便携式架构）                                    │
+│  ├─ 应用目录 (appDir/)                                  │
+│  │  ├─ config/          应用全局配置                    │
+│  │  ├─ cache/           缓存数据                        │
+│  │  ├─ data/            持久化数据（数据库、会话）      │
+│  │  └─ logs/            日志文件                        │
+│  └─ 工作区目录 (workspaceDir/)                          │
+│     └─ .pi-workbench/   工作区配置                      │
+│        ├─ config.json   工作区设置                      │
+│        ├─ sessions/     会话历史（待实现）              │
+│        └─ plugins/      项目插件（待实现）              │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 数据存储策略（便携式架构）
+
+**设计原则**: 应用是自包含的，所有运行时数据存储在应用目录内，不依赖系统标准路径
+
+#### 应用目录结构
+
+```
+应用安装目录/
+├── Pi Workbench.exe       # 可执行文件
+├── resources/             # 应用资源（只读）
+│   ├── app.asar          # 打包后的应用代码
+│   └── ...
+├── config/                # ⭐ 应用全局配置
+│   ├── settings.json     # 用户设置（主题、语言等）
+│   └── api-keys.json     # API Keys（加密存储）
+├── cache/                 # ⭐ 缓存数据
+│   └── temp/             # 临时文件
+├── data/                  # ⭐ 持久化数据
+│   ├── workspaces.db     # 工作区数据库（SQLite）
+│   └── sessions/         # 跨工作区会话历史
+└── logs/                  # ⭐ 日志文件
+    ├── main.log          # 主进程日志
+    └── renderer.log      # 渲染进程日志
+```
+
+#### 路径类型和用途
+
+| 类型 | 位置 | 说明 | 示例 |
+|------|------|------|------|
+| **应用数据** | `{appDir}/config/` | 应用级配置、缓存、日志 | API Keys, 全局设置 |
+| **工作区数据** | `{workspaceDir}/.pi-workbench/` | 项目级配置、插件 | 项目配置、自定义工具 |
+| **临时数据** | `{appDir}/cache/temp/` | 运行时临时文件 | Diff 缓存、下载临时文件 |
+| **用户文件** | `{workspaceDir}/` | 用户的项目文件 | 源代码、文档 |
+
+#### 实现要求
+
+```typescript
+// ✅ 正确：基于可执行文件的路径
+const appDir = path.dirname(app.getPath('exe'))
+const configDir = path.join(appDir, 'config')
+const cacheDir = path.join(appDir, 'cache')
+const dataDir = path.join(appDir, 'data')
+const logsDir = path.join(appDir, 'logs')
+
+// ❌ 禁止：使用系统标准路径（违反便携式约束）
+const userData = app.getPath('userData')    // 不要使用！
+const appData = app.getPath('appData')      // 不要使用！
+```
+
+#### 安装策略
+
+- **安装版**: 默认安装到 `%LOCALAPPDATA%\Programs\Pi Workbench\`（Windows）
+  - Per-user 安装，无需管理员权限
+  - 用户目录有写权限
+- **便携版**: 用户解压到任意位置（如 U 盘）
+  - 整个目录可拷贝
+  - 无需安装，解压即用
+
+#### 优势
+
+- ✅ **真正便携**: 可整个目录拷贝到 U 盘或其他电脑运行
+- ✅ **易于备份**: 一个目录包含所有数据
+- ✅ **多版本共存**: 不同版本不会冲突
+- ✅ **易于清理**: 删除目录即可完全卸载
+- ✅ **不污染系统**: 不在系统标准目录留下痕迹
+
+---
+
+### 当前架构（v2.0 - Electron）
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                 Electron 应用层                          │
+├─────────────────────────────────────────────────────────┤
+│  前端层 (React 19 + Vite)                               │
+│  ├─ 组件层                                              │
+│  │  ├─ FileExplorer     文件浏览器                      │
+│  │  ├─ MonacoEditor     代码编辑器                      │
+│  │  ├─ ChatPanel        聊天面板                        │
+│  │  ├─ DiffViewer       Diff 查看器                     │
+│  │  ├─ Settings         设置面板                        │
+│  │  ├─ Toast            通知系统                        │
+│  │  └─ IPCDebug         IPC 调试                        │
+│  ├─ 状态管理 (Zustand)                                  │
+│  │  ├─ editorStore      编辑器状态                      │
+│  │  ├─ chatStore        聊天状态                        │
+│  │  ├─ diffStore        Diff 状态                       │
+│  │  ├─ errorStore       错误处理                        │
+│  │  ├─ i18nStore        国际化                          │
+│  │  └─ agentStore       Agent 状态                      │
+│  └─ API 层 (src/api/)                                   │
+│     ├─ index.ts          统一 API 接口                  │
+│     ├─ diff.ts           Diff 工具                      │
+│     └─ piAgent.ts        Pi Agent (目前为 Mock)         │
+├─────────────────────────────────────────────────────────┤
+│  通信层 (Electron IPC)                                   │
+│  ├─ fs:selectDirectory   选择目录                        │
+│  ├─ fs:readDirectory     读取目录                        │
+│  ├─ fs:readFile          读取文件                        │
+│  ├─ fs:writeFile         写入文件                        │
+│  └─ fs:deleteFile        删除文件（待实现）              │
+├─────────────────────────────────────────────────────────┤
+│  主进程层 (Electron Main Process - TypeScript)          │
+│  ├─ electron/main.ts                                     │
+│  │  ├─ 窗口管理          BrowserWindow                  │
+│  │  ├─ IPC 处理器        ipcMain.handle()              │
+│  │  └─ 菜单和托盘        (待实现)                       │
+│  └─ electron/preload.ts                                 │
+│     └─ contextBridge     安全的 API 暴露               │
+├─────────────────────────────────────────────────────────┤
+│  Node.js 层（与主进程同进程）                            │
+│  ├─ 文件系统操作         Node.js fs/promises           │
+│  ├─ 路径处理             Node.js path                  │
+│  ├─ 对话框               Electron dialog               │
+│  └─ Pi Agent 桥接（待实现）                             │
+│     ├─ pi-bridge/        Agent 管理模块                │
+│     ├─ @earendil-works/pi-agent-core                   │
+│     ├─ @earendil-works/pi-ai                           │
+│     └─ @earendil-works/pi-durable                      │
+├─────────────────────────────────────────────────────────┤
+│  存储层（便携式架构）                                    │
+│  ├─ 应用目录 (appDir/)                                  │
+│  │  ├─ config/          应用全局配置                    │
+│  │  ├─ cache/           缓存数据                        │
+│  │  ├─ data/            持久化数据（数据库、会话）      │
+│  │  └─ logs/            日志文件                        │
+│  └─ 工作区目录 (workspaceDir/)                          │
+│     └─ .pi-workbench/   工作区配置                      │
+│        ├─ config.json   工作区设置                      │
+│        ├─ sessions/     会话历史（待实现）              │
+│        └─ plugins/      项目插件（待实现）              │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -707,6 +848,35 @@ npm run package:linux      # Linux
 
 - 个人项目，不需要复杂的沙箱和权限系统
 - 本地加载更灵活，开发更快
+- 按需开发插件，不预先实现所有功能
+- 降低维护成本
+
+### 为什么采用便携式架构？
+
+**传统应用数据目录**（系统标准路径）:
+- Windows: `%APPDATA%\pi-workbench\` 或 `%LOCALAPPDATA%\pi-workbench\`
+- macOS: `~/Library/Application Support/pi-workbench/`
+- Linux: `~/.config/pi-workbench/`
+
+**便携式架构** (我们的选择):
+- 所有应用数据在应用目录内
+- 安装版默认安装到 `%LOCALAPPDATA%\Programs\Pi Workbench\`（有写权限）
+- 便携版可解压到任意位置
+
+**优势**:
+- ✅ **真正便携**: 可整个目录拷贝到 U 盘或其他电脑运行，无需重新安装
+- ✅ **易于备份**: 一个目录包含所有数据，备份只需拷贝整个文件夹
+- ✅ **多版本共存**: 不同版本各自独立，不会相互干扰
+- ✅ **易于清理**: 删除目录即可完全卸载，不留残留
+- ✅ **不污染系统**: 不在系统标准目录留下数据，保持系统干净
+- ✅ **开发友好**: 开发和测试时可以快速创建多个独立实例
+
+**劣势**:
+- ❌ 不符合系统标准（但我们认为优势更重要）
+- ❌ 需要确保安装目录有写权限（通过 per-user 安装解决）
+- ❌ 用户数据不会自动同步到云端（但可以手动备份整个目录）
+
+**结论**: 对于开发工具类应用，便携性、易管理性和多版本共存比遵循系统规范更重要。用户可以轻松地在多台电脑间迁移工作环境，或者同时使用多个版本进行测试。
 - 按需开发插件，不预先实现所有功能
 - 降低维护成本
 
