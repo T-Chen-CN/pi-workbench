@@ -10,14 +10,14 @@
 
 - ✅ **Phase 0: MVP** - Electron 框架、文件管理、编辑器、国际化
 - ✅ **便携式架构** - 所有数据自包含，无外部路径依赖
-- 🔄 **Phase 1: Pi Agent 集成** - 规划中，尚未开始
+- ✅ **Phase 1: Pi Agent 集成** - 真实 Agent 集成完成 🎉
 - ⏳ **Phase 2-6** - 待开发
 
 ## 当前版本
 
 - **版本**: 0.1.0
 - **框架**: Electron 28 + React 19
-- **状态**: MVP 完成，便携式架构已实现
+- **状态**: Phase 1 完成，真实 Agent 可用
 
 ## 功能清单
 
@@ -47,7 +47,22 @@
 
 ### 🔄 进行中
 
-#### Phase 1: Pi Agent 真实集成
+无（Phase 1 已完成）
+
+### ✅ 最近完成
+
+#### Phase 1: Pi Agent 真实集成（2026-10-20 完成）
+- ✅ 安装 Pi Agent 依赖包
+- ✅ 实现 AgentManager（主进程）
+- ✅ API Key 安全管理（AES 加密）
+- ✅ Settings UI API Keys 配置
+- ✅ ChatPanel 真实 Agent 集成
+- ✅ Pi Agent API 封装层
+- ✅ 基础工具集（read/write/edit/bash）
+- ✅ IPC 桥接层完整实现
+- ✅ 符合便携式架构约束
+
+详细报告：[Phase 1 完成报告](./PHASE-1-COMPLETE.md)
 - **状态**: 🟡 尚未开始
 - **预计时间**: 8-16 小时
 - **优先级**: 🔴 高

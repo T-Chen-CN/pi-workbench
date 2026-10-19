@@ -4,7 +4,7 @@
 
 **项目**: Pi Workbench  
 **架构**: Electron 28 + React 19 + TypeScript  
-**当前阶段**: MVP 完成，Phase 1 开发中  
+**当前阶段**: Phase 1 完成，Phase 2 待启动  
 **最后更新**: 2026-10-20
 
 ---
@@ -22,8 +22,8 @@
 
 ### 当前状态
 - ✅ MVP 完成：文件管理、代码编辑、Diff 查看、聊天界面
-- 🔄 Phase 1 进行中：Pi Agent 真实集成
-- 📋 后续 Phase：工作区管理、终端、插件系统、Fleet 任务
+- ✅ Phase 1 完成：Pi Agent 真实集成
+- ⏳ Phase 2 待启动：工作区管理、终端、插件系统、Fleet 任务
 
 ---
 

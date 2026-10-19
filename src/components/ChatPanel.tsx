@@ -1,25 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { useChatStore, ChatMessage } from '../store/chatStore'
-import { useEditorStore } from '../store/editorStore'
-import { useDiffStore } from '../store/diffStore'
-import { useI18nStore } from '../store/i18nStore'
-import { handleError } from '../store/errorStore'
-import { useToast } from './Toast'
-import {
-  initializeAgent,
-  sendMessageToAgent,
-  isAgentInitialized,
-  setAgentContext,
-} from '../api/piAgent'
-import { computeDiff } from '../api/diff'
+import { useChatStore } from '../store/chatStore'
+import { piAgentAPI } from '../api/piAgentAPI'
+import { api } from '../api'
 
 export const ChatPanel: React.FC = () => {
-  const { t } = useI18nStore()
-  const toast = useToast()
-  const [inputValue, setInputValue] = useState('')
-  const [initialized, setInitialized] = useState(false)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-
   const {
     messages,
     isLoading,
@@ -27,133 +11,150 @@ export const ChatPanel: React.FC = () => {
     addMessage,
     setLoading,
     setError,
-    setInitialized: setChatInitialized,
   } = useChatStore()
 
-  const { openFiles, currentFile } = useEditorStore()
-  const { setDiff } = useDiffStore()
-
-  // Update agent context when files change
-  useEffect(() => {
-    setAgentContext({
-      currentFile: currentFile?.name,
-      openFiles: openFiles.map((f: any) => f.name),
-    })
-  }, [currentFile, openFiles])
+  const [input, setInput] = useState('')
+  const [initialized, setInitialized] = useState(false)
+  const [needsApiKey, setNeedsApiKey] = useState(false)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   // Initialize agent on mount
   useEffect(() => {
     const init = async () => {
       try {
-        if (!isAgentInitialized()) {
-          await initializeAgent()
+        setLoading(true)
+
+        // 检查是否配置了 API Key
+        const apiKeysResult = await api.apiKeysGet()
+        if (!apiKeysResult.success || !apiKeysResult.apiKeys?.anthropic) {
+          setNeedsApiKey(true)
+          setLoading(false)
+          return
         }
-        setInitialized(true)
-        setChatInitialized(true)
+
+        // 初始化 Agent（使用当前工作目录作为workspace）
+        const result = await piAgentAPI.initialize({
+          workspaceDir: process.cwd(),
+          provider: 'anthropic',
+          model: 'claude-3-5-sonnet-20241022',
+        })
+
+        if (result.success) {
+          setInitialized(true)
+          addMessage({
+            role: 'assistant',
+            content: 'Pi Agent is ready! How can I help you with your code today?',
+            timestamp: new Date(),
+          })
+        } else {
+          setError(result.error || 'Failed to initialize agent')
+          setNeedsApiKey(true)
+        }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err)
-        handleError(err, 'Initialize Pi Agent', (msg) => console.error(msg))
         setError(errorMsg)
+        console.error('[ChatPanel] Initialize error:', err)
+      } finally {
+        setLoading(false)
       }
     }
 
     init()
-  }, [])
 
-  // Update agent context when files change
-  useEffect(() => {
-    setAgentContext({
-      currentFile: currentFile?.name,
-      openFiles: openFiles.map((f) => f.name),
-    })
-  }, [currentFile, openFiles])
+    // Cleanup on unmount
+    return () => {
+      piAgentAPI.dispose()
+    }
+  }, [])
 
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  const sendMessage = async () => {
-    const userMessage = inputValue.trim()
-    if (!userMessage || !initialized) return
+  // Focus input on mount
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
 
+  const handleSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault()
+
+    if (!input.trim() || isLoading) return
+
+    const userMessage = input.trim()
+    setInput('')
+
+    // Add user message
+    addMessage({
+      role: 'user',
+      content: userMessage,
+      timestamp: new Date(),
+    })
+
+    // Send to agent
+    setLoading(true)
     try {
-      setLoading(true)
-      setError(null)
+      const result = await piAgentAPI.chat(userMessage)
 
-      // Add user message
-      addMessage({
-        role: 'user',
-        content: userMessage,
-        isLoading: false,
-      })
-
-      // Clear input
-      setInputValue('')
-
-      // Send to agent
-      const response = await sendMessageToAgent(userMessage)
-
-      if (response.isSuccess) {
-        // Add assistant response
+      if (result.success && result.response) {
         addMessage({
           role: 'assistant',
-          content: response.content,
-          isLoading: false,
+          content: result.response,
+          timestamp: new Date(),
         })
-        toast.success('收到 Pi Agent 回复', 2000)
       } else {
-        // Handle error response
-        const errorMsg = response.error || 'Failed to get response'
-        setError(errorMsg)
-        toast.error(`Agent 回复失败: ${errorMsg}`, 3000)
+        setError(result.error || 'Failed to get response from agent')
+        addMessage({
+          role: 'assistant',
+          content: `Error: ${result.error || 'Failed to get response'}`,
+          timestamp: new Date(),
+        })
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
-      handleError(err, 'Send chat message', (msg) => console.error(msg))
       setError(errorMsg)
-      toast.error('消息发送失败', 3000)
+      addMessage({
+        role: 'assistant',
+        content: `Error: ${errorMsg}`,
+        timestamp: new Date(),
+      })
     } finally {
       setLoading(false)
+      inputRef.current?.focus()
     }
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      sendMessage()
+      handleSubmit()
     }
   }
 
-  const showCodeDiff = (original: string, modified: string, name: string) => {
-    try {
-      const diff = computeDiff(original, modified, `${name} (original)`, `${name} (modified)`)
-      setDiff(diff)
-    } catch (err) {
-      handleError(err, 'Show diff', (msg) => console.error(msg))
-      toast.error('Failed to show diff', 3000)
-    }
-  }
-
-  // Make showCodeDiff available to message content (for future interactive features)
-  useEffect(() => {
-    ;(window as any).__showCodeDiff = showCodeDiff
-  }, [showCodeDiff])
-
-  if (!initialized) {
+  if (needsApiKey) {
     return (
-      <div className="flex flex-col h-full bg-gray-50 dark:bg-[#252526]">
-        <div className="flex justify-between items-center px-3 py-2 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-          <h3 className="text-sm font-semibold m-0">Pi Agent</h3>
-          <span className="text-base">⏳</span>
-        </div>
-        <div className="flex-1 flex items-center justify-center overflow-y-auto">
-          <div className="flex flex-col items-center gap-3 p-4">
-            <div className="text-3xl">🔄</div>
-            <div className="text-center">
-              <h4 className="text-sm font-medium m-0">{t('initializing')}</h4>
-              <p className="text-xs text-gray-600 dark:text-gray-400 m-0">{t('startingAgent')}</p>
-            </div>
+      <div className="flex flex-col h-full bg-gray-900 p-6">
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center max-w-md">
+            <h3 className="text-xl font-bold text-gray-100 mb-4">
+              API Key Required
+            </h3>
+            <p className="text-gray-400 mb-6">
+              Please configure your Anthropic API key in Settings to use Pi Agent.
+            </p>
+            <a
+              href="#settings"
+              className="inline-block bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded font-medium transition-colors"
+              onClick={(e) => {
+                e.preventDefault()
+                // TODO: 触发 Settings 面板打开
+                alert('Please open Settings from the sidebar to configure API keys')
+              }}
+            >
+              Go to Settings
+            </a>
           </div>
         </div>
       </div>
@@ -161,93 +162,83 @@ export const ChatPanel: React.FC = () => {
   }
 
   return (
-    <div className="flex flex-col h-full bg-gray-50 dark:bg-[#252526]">
+    <div className="flex flex-col h-full bg-gray-900">
       {/* Header */}
-      <div className="flex justify-between items-center px-3 py-2 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-        <h3 className="text-sm font-semibold m-0">Pi Agent</h3>
-        {isLoading && <span className="text-base">⏳</span>}
+      <div className="border-b border-gray-700 p-4">
+        <h3 className="text-lg font-semibold text-gray-100">
+          Pi Agent Chat
+          {initialized && <span className="ml-2 text-xs text-green-400">● Ready</span>}
+          {!initialized && <span className="ml-2 text-xs text-yellow-400">● Initializing...</span>}
+        </h3>
       </div>
-
-      {/* Error Banner */}
-      {error && (
-        <div className="px-3 py-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 text-xs border-b border-red-300 dark:border-red-700/50">
-          <p className="m-0">{error}</p>
-        </div>
-      )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-600 dark:text-gray-400">
-            <div className="text-3xl">💬</div>
-            <div className="text-center">
-              <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100 m-0">{t('startConversation')}</h4>
-              <p className="text-xs m-0">{t('discussCode')}</p>
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.map((msg, idx) => (
+          <div
+            key={idx}
+            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+          >
+            <div
+              className={`max-w-[80%] rounded-lg p-3 ${
+                msg.role === 'user'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-800 text-gray-100'
+              }`}
+            >
+              <div className="text-sm font-medium mb-1">
+                {msg.role === 'user' ? 'You' : 'Pi Agent'}
+              </div>
+              <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
+              <div className="text-xs mt-2 opacity-70">
+                {msg.timestamp.toLocaleTimeString()}
+              </div>
             </div>
           </div>
-        ) : (
-          <>
-            {messages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} />
-            ))}
-            {isLoading && (
-              <div className="flex gap-2 p-2">
-                <div className="text-lg">🤖</div>
-                <div className="flex gap-1 items-end">
-                  <span className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
-                  <span className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
-                  <span className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
-                </div>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </>
+        ))}
+
+        {isLoading && (
+          <div className="flex justify-start">
+            <div className="bg-gray-800 text-gray-100 rounded-lg p-3">
+              <div className="text-sm font-medium mb-1">Pi Agent</div>
+              <div className="text-sm">Thinking...</div>
+            </div>
+          </div>
         )}
+
+        {error && (
+          <div className="flex justify-center">
+            <div className="bg-red-900/20 border border-red-600 text-red-400 rounded-lg p-3 max-w-[80%]">
+              <div className="text-sm font-medium mb-1">Error</div>
+              <div className="text-sm">{error}</div>
+            </div>
+          </div>
+        )}
+
+        <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Area */}
-      <div className="flex gap-2 p-3 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
-        <textarea
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={t('inputPlaceholder')}
-          disabled={isLoading}
-          rows={3}
-          className="flex-1 p-2 bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-gray-100 border border-gray-300 dark:border-gray-600 rounded text-sm resize-none disabled:opacity-50"
-        />
-        <button
-          onClick={sendMessage}
-          disabled={isLoading || !inputValue.trim()}
-          title={t('sendMessage')}
-          className="self-end px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white border-none rounded text-lg font-semibold cursor-pointer disabled:cursor-not-allowed transition-colors"
-        >
-          {isLoading ? '⏳' : '↗'}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-interface MessageBubbleProps {
-  message: ChatMessage
-}
-
-const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
-  const isUser = message.role === 'user'
-
-  return (
-    <div className={`flex gap-2 p-2 ${isUser ? 'flex-row-reverse' : ''}`}>
-      <div className="text-lg flex-shrink-0">
-        {isUser ? '👤' : '🤖'}
-      </div>
-      <div className={`flex-1 ${isUser ? 'text-right' : 'text-left'}`}>
-        <p className="text-sm text-gray-900 dark:text-gray-100 m-0 break-words">
-          {message.content}
-        </p>
-        <span className="text-xs text-gray-500 dark:text-gray-400 block mt-1">
-          {new Date(message.timestamp).toLocaleTimeString()}
-        </span>
+      {/* Input */}
+      <div className="border-t border-gray-700 p-4">
+        <form onSubmit={handleSubmit} className="flex gap-2">
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Type your message... (Shift+Enter for new line)"
+            disabled={!initialized || isLoading}
+            className="flex-1 bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500 resize-none disabled:opacity-50 disabled:cursor-not-allowed"
+            rows={3}
+          />
+          <button
+            type="submit"
+            disabled={!initialized || isLoading || !input.trim()}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Send
+          </button>
+        </form>
       </div>
     </div>
   )

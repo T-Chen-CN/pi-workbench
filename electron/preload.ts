@@ -18,5 +18,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   initWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace:init', workspacePath),
   getWorkspaceConfig: (workspacePath: string) => ipcRenderer.invoke('workspace:getConfig', workspacePath),
   saveWorkspaceConfig: (workspacePath: string, config: any) => ipcRenderer.invoke('workspace:saveConfig', workspacePath, config),
+
+  // Pi Agent API
+  agentInitialize: (config: {
+    workspaceDir: string
+    apiKey: string
+    provider?: 'anthropic' | 'openai' | 'google'
+    model?: string
+  }) => ipcRenderer.invoke('agent:initialize', config),
+  agentChat: (message: string) => ipcRenderer.invoke('agent:chat', message),
+  agentIsInitialized: () => ipcRenderer.invoke('agent:isInitialized'),
+  agentGetHistory: () => ipcRenderer.invoke('agent:getHistory'),
+  agentDispose: () => ipcRenderer.invoke('agent:dispose'),
+
+  // API Keys 管理（便携式架构）
+  apiKeysGet: () => ipcRenderer.invoke('apiKeys:get'),
+  apiKeysSave: (apiKeys: Record<string, string>) => ipcRenderer.invoke('apiKeys:save', apiKeys),
 })
 

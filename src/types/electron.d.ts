@@ -16,6 +16,17 @@ export interface ElectronAPI {
   initWorkspace: (workspacePath: string) => Promise<WorkspaceResult>
   getWorkspaceConfig: (workspacePath: string) => Promise<GetWorkspaceConfigResult>
   saveWorkspaceConfig: (workspacePath: string, config: any) => Promise<WorkspaceResult>
+
+  // Pi Agent API
+  agentInitialize: (config: AgentInitConfig) => Promise<AgentInitResult>
+  agentChat: (message: string) => Promise<AgentChatResult>
+  agentIsInitialized: () => Promise<AgentStatusResult>
+  agentGetHistory: () => Promise<AgentHistoryResult>
+  agentDispose: () => Promise<AgentDisposeResult>
+
+  // API Keys management (便携式架构)
+  apiKeysGet: () => Promise<ApiKeysGetResult>
+  apiKeysSave: (apiKeys: Record<string, string>) => Promise<ApiKeysResult>
 }
 
 export interface OpenDirectoryResult {
@@ -100,6 +111,57 @@ export interface GetWorkspaceConfigResult {
     }
     [key: string]: any
   }
+  error?: string
+}
+
+// Pi Agent types
+export interface AgentInitConfig {
+  workspaceDir: string
+  apiKey: string
+  provider?: 'anthropic' | 'openai' | 'google'
+  model?: string
+}
+
+export interface AgentInitResult {
+  success: boolean
+  error?: string
+}
+
+export interface AgentChatResult {
+  success: boolean
+  response?: string
+  error?: string
+}
+
+export interface AgentStatusResult {
+  success: boolean
+  initialized?: boolean
+  error?: string
+}
+
+export interface AgentHistoryResult {
+  success: boolean
+  history?: Array<{
+    role: 'user' | 'assistant'
+    content: string
+    timestamp: number
+  }>
+  error?: string
+}
+
+export interface AgentDisposeResult {
+  success: boolean
+  error?: string
+}
+
+export interface ApiKeysGetResult {
+  success: boolean
+  apiKeys?: Record<string, string>
+  error?: string
+}
+
+export interface ApiKeysResult {
+  success: boolean
   error?: string
 }
 

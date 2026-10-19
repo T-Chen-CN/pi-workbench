@@ -15,6 +15,8 @@ import type {
   SaveSettingsResult,
   WorkspaceResult,
   GetWorkspaceConfigResult,
+  ApiKeysGetResult,
+  ApiKeysResult,
 } from '../types/electron'
 
 // Mock API for browser development
@@ -91,6 +93,14 @@ const mockAPI = {
     console.log('[Mock] saveWorkspaceConfig:', workspacePath, config)
     return { success: true }
   },
+  apiKeysGet: async (): Promise<ApiKeysGetResult> => {
+    console.log('[Mock] apiKeysGet')
+    return { success: true, apiKeys: {} }
+  },
+  apiKeysSave: async (apiKeys: Record<string, string>): Promise<ApiKeysResult> => {
+    console.log('[Mock] apiKeysSave:', Object.keys(apiKeys))
+    return { success: true }
+  },
 }
 
 const electronAPI = window.electronAPI || mockAPI
@@ -113,5 +123,9 @@ export const api = {
   initWorkspace: (workspacePath: string) => electronAPI.initWorkspace(workspacePath),
   getWorkspaceConfig: (workspacePath: string) => electronAPI.getWorkspaceConfig(workspacePath),
   saveWorkspaceConfig: (workspacePath: string, config: any) => electronAPI.saveWorkspaceConfig(workspacePath, config),
+
+  // API Keys management (portable architecture)
+  apiKeysGet: () => electronAPI.apiKeysGet(),
+  apiKeysSave: (apiKeys: Record<string, string>) => electronAPI.apiKeysSave(apiKeys),
 }
 
