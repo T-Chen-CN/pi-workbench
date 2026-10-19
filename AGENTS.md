@@ -524,50 +524,86 @@ const logPath = path.join(appDir, 'logs', 'app.log')
 
 ---
 
-## 📋 当前开发任务优先级
+## 🔒 核心架构约束
 
-### 🔥 Phase 1: Pi Agent 真实集成（规划中）
+### Pi Agent 集成约束
 
-**目标**: 替换 Mock Agent 为真实的 Pi Agent
+**运行位置**:
+- ✅ Pi Agent **必须**运行在 Electron 主进程中
+- ✅ 与 `electron/main.ts` 在同一进程
+- ❌ **禁止**创建子进程或 Worker 运行 Agent
+- ❌ **禁止**通过 HTTP 服务运行 Agent
 
-**当前状态**: 🟡 尚未开始  
-**预计时间**: 8-16 小时  
-**优先级**: 🔴 高 - 核心功能  
-**下一步**: 评估 @earendil-works 包的可用性并制定详细实现计划
+**文件操作约束**:
+- ✅ Agent 的文件操作**必须**通过现有的 IPC 通道
+- ✅ 使用 `fs:readFile`, `fs:writeFile` 等已定义的 IPC handler
+- ❌ **禁止** Agent 直接调用 Node.js fs 模块（会绕过权限控制）
 
-**任务清单**:
-1. [ ] 安装 Pi 核心模块 - 待安排
-   ```bash
-   npm install @earendil-works/pi-agent-core
-   npm install @earendil-works/pi-ai
-   npm install @earendil-works/pi-durable
-   ```
+**配置存储约束**:
+- ✅ API Keys 存储在 `{appDir}/config/api-keys.json`（加密）
+- ✅ Agent 配置存储在 `{appDir}/config/agent-config.json`
+- ❌ **禁止**使用 `.env` 文件（位置不明确，违反便携式约束）
+- ❌ **禁止**使用系统环境变量存储 API Keys
 
-2. [ ] 实现 `pi-bridge/src/agent-manager.ts` - 待安排
-   - 创建 Agent 实例
-   - 消息发送和接收
-   - 工具系统集成
+**示例**:
+```typescript
+// ✅ 正确：Agent 在主进程初始化
+// electron/main.ts
+import { AgentRuntime } from '@earendil-works/pi-agent-core'
 
-3. [ ] 配置 LLM 提供商 - 待安排
-   - Anthropic Claude API
-   - 环境变量管理（.env 文件）
-   - API Key 配置界面（Settings 组件）
+let agentRuntime: AgentRuntime | null = null
 
-4. [ ] 基础工具集成 - 待安排
-   - `read_file`: 通过 IPC 读取文件
-   - `write_file`: 通过 IPC 写入文件
-   - `edit_file`: 通过 diff 库编辑文件
-   - `bash`: 执行命令（简化版，先返回 mock）
+async function initAgent() {
+  const apiKeys = await loadApiKeys() // 从 {appDir}/config/api-keys.json
+  agentRuntime = new AgentRuntime({
+    apiKey: apiKeys.anthropic,
+    tools: [readFileTool, writeFileTool, editFileTool]
+  })
+}
 
-5. [ ] 更新 `src/api/piAgent.ts` - 待安排
-   - 移除 Mock 实现
-   - 连接到真实的 Agent Manager
-   - 处理流式响应
+app.whenReady().then(async () => {
+  await initAppDirectories()
+  await initAgent()
+  createWindow()
+})
+```
 
-**重要提示**: 
-- Pi Agent 运行在**主进程**，与 Electron main.ts 同进程
-- 不要创建子进程或 Worker
-- 所有文件操作必须通过现有的 IPC 通道
+### 数据库和持久化约束
+
+**SQLite 数据库位置**:
+- ✅ 应用级数据库：`{appDir}/data/workspaces.db`
+- ✅ 工作区数据库（可选）：`{workspaceDir}/.pi-workbench/workspace.db`
+- ❌ **禁止**使用系统数据库目录
+
+**会话存储策略**:
+- ✅ 全局会话：`{appDir}/data/sessions/{session-id}.json`
+- ✅ 工作区会话：`{workspaceDir}/.pi-workbench/sessions/{session-id}.json`
+- 区分标准：跨工作区的会话用全局，单工作区的会话用工作区目录
+
+**日志文件位置**:
+- ✅ 所有日志：`{appDir}/logs/`
+- ✅ 主进程日志：`{appDir}/logs/main.log`
+- ✅ 渲染进程日志：`{appDir}/logs/renderer.log`
+- ✅ Agent 日志：`{appDir}/logs/agent.log`
+
+### 插件系统约束
+
+**插件加载位置**:
+- ✅ 工作区插件：`{workspaceDir}/.pi-workbench/plugins/`
+- ❌ **禁止**从系统目录加载插件
+- ❌ **禁止**从网络下载插件（安全风险）
+
+**插件沙箱**:
+- ⚠️ 简化版插件系统**无**沙箱隔离
+- ⚠️ 插件可以访问 Node.js API
+- ⚠️ 仅用于个人项目，不对外分发
+
+### Fleet 任务约束
+
+**Worktree 存储位置**:
+- ✅ Worktree 目录：`{workspaceDir}/.pi-worktrees/{task-name}/`
+- ✅ 任务元数据：`{appDir}/data/fleet-tasks.db`
+- ❌ **禁止**在系统临时目录创建 worktree
 
 ---
 

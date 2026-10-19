@@ -228,6 +228,31 @@
 | **临时数据** | `{appDir}/cache/temp/` | 运行时临时文件 | Diff 缓存、下载临时文件 |
 | **用户文件** | `{workspaceDir}/` | 用户的项目文件 | 源代码、文档 |
 
+#### 完整路径映射表
+
+| 数据类型 | 存储位置 | 说明 | Phase |
+|---------|---------|------|-------|
+| **应用配置** | `{appDir}/config/settings.json` | 用户设置（语言、主题、自动保存等） | Phase 0 ✅ |
+| **API Keys** | `{appDir}/config/api-keys.json` | LLM API Keys（加密存储） | Phase 1 |
+| **Agent 配置** | `{appDir}/config/agent-config.json` | 全局 Agent 配置（模型、温度等） | Phase 1 |
+| **快捷键配置** | `{appDir}/config/keybindings.json` | 自定义快捷键 | Phase 6 |
+| **主题文件** | `{appDir}/config/themes/` | 自定义主题 | Phase 6 |
+| **工作区数据库** | `{appDir}/data/workspaces.db` | 工作区列表和元数据（SQLite） | Phase 2 |
+| **全局会话** | `{appDir}/data/sessions/{session-id}.json` | 跨工作区会话历史 | Phase 2 |
+| **Fleet 任务** | `{appDir}/data/fleet-tasks.db` | 后台任务元数据 | Phase 5 |
+| **Diff 缓存** | `{appDir}/cache/temp/diff-{id}.txt` | 临时 Diff 文件 | Phase 0 ✅ |
+| **编辑历史** | `{appDir}/cache/edit-history/` | 撤销/重做历史 | Phase 6 |
+| **自动保存草稿** | `{appDir}/cache/drafts/` | 崩溃恢复数据 | Phase 6 |
+| **主进程日志** | `{appDir}/logs/main.log` | Electron 主进程日志 | Phase 2 |
+| **渲染进程日志** | `{appDir}/logs/renderer.log` | React 渲染进程日志 | Phase 2 |
+| **Agent 日志** | `{appDir}/logs/agent.log` | Pi Agent 运行日志 | Phase 1 |
+| **工作区日志** | `{appDir}/logs/workspace-{id}.log` | 工作区特定日志 | Phase 2 |
+| **Fleet 任务日志** | `{appDir}/logs/fleet-{task-id}.log` | 后台任务日志 | Phase 5 |
+| **工作区配置** | `{workspaceDir}/.pi-workbench/config.json` | 项目级配置（Agent、插件等） | Phase 2 |
+| **工作区会话** | `{workspaceDir}/.pi-workbench/sessions/` | 项目会话历史 | Phase 2 |
+| **工作区插件** | `{workspaceDir}/.pi-workbench/plugins/` | 项目插件目录 | Phase 4 |
+| **Fleet Worktrees** | `{workspaceDir}/.pi-worktrees/{task-name}/` | 后台任务 worktree | Phase 5 |
+
 #### 实现要求
 
 ```typescript
@@ -659,6 +684,10 @@ export default {
 
 **目标**: 替换 Mock Agent 为真实的 Pi Agent
 
+**当前状态**: 🟡 尚未开始  
+**预计时间**: 8-16 小时  
+**优先级**: 🔴 高 - 核心功能
+
 **任务**:
 1. 安装 Pi 核心模块
    ```bash
@@ -667,31 +696,40 @@ export default {
    npm install @earendil-works/pi-durable
    ```
 
-2. 实现 Agent Manager
-   - 创建 Agent 实例
+2. 实现 Agent Manager (`pi-bridge/src/agent-manager.ts`)
+   - 创建 Agent 实例（在主进程）
    - 消息发送和接收
    - 工具系统集成
+   - **路径约束**: Agent 运行在主进程，与 `electron/main.ts` 同进程
 
 3. 配置 LLM 提供商
-   - Anthropic Claude API
-   - 环境变量管理
-   - API Key 配置界面
+   - Anthropic Claude API 集成
+   - **API Key 管理**: 加密存储在 `{appDir}/config/api-keys.json`
+   - **禁止使用**: `.env` 文件或系统环境变量
+   - Settings 组件：API Key 配置界面
 
 4. 基础工具集成
-   - `read_file`: 读取文件工具
-   - `write_file`: 写入文件工具
-   - `edit_file`: 编辑文件工具
-   - `bash`: 执行命令工具（简化版）
+   - `read_file`: 通过 IPC 调用 `fs:readFile`
+   - `write_file`: 通过 IPC 调用 `fs:writeFile`
+   - `edit_file`: 通过 diff 库编辑文件
+   - `bash`: 执行命令工具（简化版，先返回 mock）
+   - **约束**: 所有文件操作必须通过 IPC，不直接调用 fs
 
-5. 测试验证
-   - Agent 能读写文件
-   - Agent 能响应自然语言指令
-   - 错误处理完善
+5. 更新 `src/api/piAgent.ts`
+   - 移除 Mock 实现
+   - 连接到真实的 Agent Manager（通过 IPC）
+   - 处理流式响应
+
+6. Agent 配置持久化
+   - 全局配置：`{appDir}/config/agent-config.json`
+   - 工作区配置：`{workspaceDir}/.pi-workbench/config.json`
 
 **验收标准**:
-- 能创建真实的 Agent 实例
-- 能通过自然语言让 Agent 修改代码
-- Agent 的修改能正确显示在 Diff 查看器中
+- ✅ 能创建真实的 Agent 实例
+- ✅ 能通过自然语言让 Agent 修改代码
+- ✅ Agent 的修改能正确显示在 Diff 查看器中
+- ✅ API Keys 加密存储在应用目录
+- ✅ 配置符合便携式架构约束
 
 ---
 
@@ -701,16 +739,55 @@ export default {
 
 **任务**:
 1. 工作区数据结构设计
+   ```typescript
+   interface Workspace {
+     id: string                     // UUID
+     path: string                   // 项目路径
+     name: string                   // 工作区名称
+     config: WorkspaceConfig        // 配置
+     createdAt: number
+     lastAccessedAt: number
+   }
+   ```
+
 2. SQLite 数据库集成
-3. 工作区创建和打开
+   - **数据库位置**: `{appDir}/data/workspaces.db`
+   - 存储工作区列表和元数据
+   - 使用 `better-sqlite3` 或 `sql.js`
+
+3. 工作区初始化
+   - 创建工作区时初始化 `.pi-workbench/` 目录
+   - 生成默认配置文件
+   - **配置位置**: `{workspaceDir}/.pi-workbench/config.json`
+
 4. Agent 实例与工作区绑定
+   - 每个工作区独立的 Agent 实例
+   - Agent 工作目录设置为工作区路径
+   - Agent 配置从工作区配置读取
+
 5. 会话历史保存和恢复
+   - **全局会话**: `{appDir}/data/sessions/{session-id}.json`
+   - **工作区会话**: `{workspaceDir}/.pi-workbench/sessions/{session-id}.json`
+   - 区分策略：跨工作区会话用全局，单工作区会话用工作区目录
+
 6. 工作区切换
+   - 保存当前工作区状态
+   - 加载目标工作区状态
+   - 切换 Agent 实例
+
+7. 日志管理
+   - **日志位置**: `{appDir}/logs/`
+   - `main.log`: 主进程日志
+   - `renderer.log`: 渲染进程日志
+   - `agent.log`: Agent 运行日志
+   - `workspace-{id}.log`: 工作区特定日志
 
 **验收标准**:
-- 能同时管理多个项目工作区
-- 切换工作区时 Agent 和历史记录正确切换
-- 关闭应用后能恢复上次的工作区状态
+- ✅ 能同时管理多个项目工作区
+- ✅ 切换工作区时 Agent 和历史记录正确切换
+- ✅ 关闭应用后能恢复上次的工作区状态
+- ✅ 所有数据存储符合便携式架构
+- ✅ 数据库文件在应用目录内
 
 ---
 
@@ -737,14 +814,31 @@ export default {
 
 **任务**:
 1. 插件加载器实现
+   - **插件位置**: `{workspaceDir}/.pi-workbench/plugins/`
+   - 扫描插件目录
+   - 加载 manifest.json
+   - 动态 require 插件代码
+
 2. 插件 SDK 设计
+   - 定义插件接口 (`PluginInterface`)
+   - 工具注册 API
+   - Agent 工具系统集成
+
 3. 插件热重载
-4. 示例插件开发（Git 插件）
+   - 监听插件目录变化
+   - 卸载旧版本
+   - 重新加载新版本
+
+4. 示例插件开发
+   - Git 插件（查看状态、提交、推送）
+   - GitHub API 插件（创建 issue、PR）
+   - **约束**: 插件无沙箱，仅用于个人项目
 
 **验收标准**:
-- 能从 `.pi-workbench/plugins/` 加载插件
-- 插件能为 Agent 添加自定义工具
-- 修改插件后能热重载
+- ✅ 能从 `.pi-workbench/plugins/` 加载插件
+- ✅ 插件能为 Agent 添加自定义工具
+- ✅ 修改插件后能热重载
+- ✅ 插件配置存储在工作区目录
 
 ---
 
@@ -754,20 +848,68 @@ export default {
 
 **任务**:
 1. Git worktree 管理
+   - **Worktree 位置**: `{workspaceDir}/.pi-worktrees/{task-name}/`
+   - 创建独立的 worktree
+   - 管理 worktree 生命周期
+
 2. 后台 Agent 实例
+   - 为每个任务创建独立的 Agent 实例
+   - Agent 工作目录设置为 worktree 路径
+   - 任务之间互不干扰
+
 3. 任务队列系统
+   - **任务数据库**: `{appDir}/data/fleet-tasks.db`
+   - 任务状态管理（pending, running, completed, failed）
+   - 任务优先级队列
+
 4. 任务状态监控
+   - 实时任务进度更新
+   - 任务日志收集：`{appDir}/logs/fleet-{task-id}.log`
+   - 任务结果展示
 
 **验收标准**:
-- 能创建独立的 worktree 执行任务
-- 任务在后台运行不阻塞主 Agent
-- 能查看任务进度和结果
+- ✅ 能创建独立的 worktree 执行任务
+- ✅ 任务在后台运行不阻塞主 Agent
+- ✅ 能查看任务进度和结果
+- ✅ Worktree 在工作区目录内
+- ✅ 任务元数据在应用数据库中
 
 ---
 
 ### 🔄 Phase 6: 优化和完善 (持续进行)
 
 **任务**:
+- 性能优化（大文件、大项目）
+  - 虚拟滚动
+  - 文件懒加载
+  - Monaco Editor 性能调优
+  
+- 文件监听（外部修改同步）
+  - 使用 `chokidar` 监听文件变化
+  - 自动重新加载外部修改的文件
+  
+- 撤销/重做系统
+  - 编辑历史管理
+  - **历史存储**: `{appDir}/cache/edit-history/`
+  
+- 快捷键支持
+  - 定义全局快捷键
+  - 快捷键配置：`{appDir}/config/keybindings.json`
+  
+- 主题系统（明暗主题）
+  - 主题配置：`{appDir}/config/themes/`
+  - 自定义主题支持
+  
+- 错误恢复机制
+  - 自动保存草稿：`{appDir}/cache/drafts/`
+  - 崩溃恢复
+  
+- 日志管理优化
+  - 日志轮转（按日期或大小）
+  - 日志清理策略
+  - **日志位置**: `{appDir}/logs/`
+
+**所有新增功能必须符合便携式架构约束**
 - 性能优化（大文件、大项目）
 - 文件监听（外部修改同步）
 - 快捷键支持
