@@ -1,9 +1,9 @@
 /**
  * Pi Agent Bridge
  *
- * This module exposes Pi Agent functionality to Tauri backend.
- * Currently using mock implementation for local development.
- * Will integrate with real Pi modules once available.
+ * Bridges Electron main process to Pi Agent runtime.
+ * Currently using mock implementation for development.
+ * Will integrate with real Pi modules (from @earendil-works) once available.
  */
 
 export interface AgentConfig {
