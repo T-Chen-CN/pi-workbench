@@ -308,35 +308,40 @@ useEffect(() => {
 
 ## 📋 当前开发任务优先级
 
-### 🔥 Phase 1: Pi Agent 真实集成（进行中）
+### 🔥 Phase 1: Pi Agent 真实集成（规划中）
 
 **目标**: 替换 Mock Agent 为真实的 Pi Agent
 
+**当前状态**: 🟡 尚未开始  
+**预计时间**: 8-16 小时  
+**优先级**: 🔴 高 - 核心功能  
+**下一步**: 评估 @earendil-works 包的可用性并制定详细实现计划
+
 **任务清单**:
-1. [ ] 安装 Pi 核心模块
+1. [ ] 安装 Pi 核心模块 - 待安排
    ```bash
    npm install @earendil-works/pi-agent-core
    npm install @earendil-works/pi-ai
    npm install @earendil-works/pi-durable
    ```
 
-2. [ ] 实现 `pi-bridge/src/agent-manager.ts`
+2. [ ] 实现 `pi-bridge/src/agent-manager.ts` - 待安排
    - 创建 Agent 实例
    - 消息发送和接收
    - 工具系统集成
 
-3. [ ] 配置 LLM 提供商
+3. [ ] 配置 LLM 提供商 - 待安排
    - Anthropic Claude API
    - 环境变量管理（.env 文件）
    - API Key 配置界面（Settings 组件）
 
-4. [ ] 基础工具集成
+4. [ ] 基础工具集成 - 待安排
    - `read_file`: 通过 IPC 读取文件
    - `write_file`: 通过 IPC 写入文件
    - `edit_file`: 通过 diff 库编辑文件
    - `bash`: 执行命令（简化版，先返回 mock）
 
-5. [ ] 更新 `src/api/piAgent.ts`
+5. [ ] 更新 `src/api/piAgent.ts` - 待安排
    - 移除 Mock 实现
    - 连接到真实的 Agent Manager
    - 处理流式响应

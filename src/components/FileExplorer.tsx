@@ -229,22 +229,22 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = () => {
     newVisited.add(node.path)
 
     return (
-      <div key={node.path} className="tree-item">
+      <div key={node.path}>
         <div
-          className="tree-item-content"
+          className="flex items-center gap-2 px-2 py-1 hover:bg-gray-200 dark:hover:bg-[#2d2d30] cursor-pointer select-none"
           style={{ paddingLeft: `${depth * 16}px` }}
           onClick={() => handleFileClick(node)}
         >
           {node.isDirectory && (
-            <span className="tree-icon">
+            <span className="text-base">
               {node.isExpanded ? '📂' : '📁'}
             </span>
           )}
-          {!node.isDirectory && <span className="tree-icon">📄</span>}
-          <span className="tree-label">{node.name}</span>
+          {!node.isDirectory && <span className="text-base">📄</span>}
+          <span className="text-gray-900 dark:text-gray-100">{node.name}</span>
         </div>
         {node.isDirectory && node.isExpanded && node.children && (
-          <div className="tree-children">
+          <div>
             {node.children.map((child) => renderNode(child, depth + 1, newVisited))}
           </div>
         )}
@@ -253,27 +253,27 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = () => {
   }
 
   return (
-    <div className="file-explorer">
-      <div className="explorer-header">
-        <h3>{t('files')}</h3>
-        <div className="explorer-controls">
+    <div className="flex flex-col h-full bg-white dark:bg-[#1e1e1e] border-r border-gray-200 dark:border-gray-700 w-64 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+        <h3 className="text-base font-semibold m-0 text-gray-900 dark:text-gray-100">{t('files')}</h3>
+        <div className="flex items-center gap-2">
           <button
-            className="btn-new-file"
+            className="p-1 rounded hover:bg-gray-200 dark:hover:bg-[#2d2d30] text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 cursor-pointer border-none bg-none text-sm"
             onClick={openCreateFileDialog}
             title={t('createNewFile')}
           >
             ✚
           </button>
-          {loading && <span className="loading">⌛</span>}
-          {error && <span className="error-indicator">⚠️</span>}
+          {loading && <span className="text-base">⌛</span>}
+          {error && <span className="text-base">⚠️</span>}
         </div>
       </div>
 
       {createDialog.isOpen && (
-        <div className="create-file-dialog">
-          <div className="dialog-overlay" onClick={() => setCreateDialog({ isOpen: false, fileName: '', parentPath: null })} />
-          <div className="dialog-content">
-            <h4>{t('createFile')}</h4>
+        <div className="fixed inset-0 z-50">
+          <div className="fixed inset-0 bg-black/50 cursor-pointer" onClick={() => setCreateDialog({ isOpen: false, fileName: '', parentPath: null })} />
+          <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-[#1e1e1e] border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg p-6 z-50 w-96">
+            <h4 className="text-lg font-semibold mb-4 m-0 text-gray-900 dark:text-gray-100">{t('createFile')}</h4>
             <input
               type="text"
               placeholder={t('fileName')}
@@ -287,16 +287,17 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = () => {
                   setCreateDialog({ isOpen: false, fileName: '', parentPath: null })
               }}
               autoFocus
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#252526] text-gray-900 dark:text-gray-100 mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
-            <div className="dialog-actions">
-              <button onClick={handleCreateFile} className="btn-primary">
+            <div className="flex gap-2 justify-end">
+              <button onClick={handleCreateFile} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 border-none cursor-pointer font-medium">
                 {t('create')}
               </button>
               <button
                 onClick={() =>
                   setCreateDialog({ isOpen: false, fileName: '', parentPath: null })
                 }
-                className="btn-secondary"
+                className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded hover:bg-gray-300 dark:hover:bg-gray-600 border-none cursor-pointer font-medium"
               >
                 {t('cancel')}
               </button>
@@ -305,16 +306,16 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = () => {
         </div>
       )}
 
-      <div className="explorer-content">
+      <div className="flex-1 overflow-y-auto">
         {error && (
-          <div className="error-message">
-            <p>{error}</p>
+          <div className="px-4 py-3 bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-700/50">
+            <p className="text-red-700 dark:text-red-400 text-sm m-0">{error}</p>
           </div>
         )}
         {tree.length === 0 && !loading ? (
-          <div className="empty-state">{t('noWorkspace')}</div>
+          <div className="flex items-center justify-center h-32 text-gray-500 dark:text-gray-400">{t('noWorkspace')}</div>
         ) : (
-          <div className="tree">
+          <div>
             {tree.map((node) => renderNode(node))}
           </div>
         )}

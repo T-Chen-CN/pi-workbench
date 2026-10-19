@@ -120,33 +120,37 @@ export const MonacoEditor: React.FC = () => {
 
   if (!currentFile) {
     return (
-      <div className="editor-empty">
-        <div className="editor-empty-content">
-          <h2>{t('noFileOpen')}</h2>
-          <p>{t('selectFileToEdit')}</p>
+      <div className="flex-1 flex flex-col items-center justify-center bg-white dark:bg-[#1e1e1e]">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-2">{t('noFileOpen')}</h2>
+          <p className="text-gray-600 dark:text-gray-400">{t('selectFileToEdit')}</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="monaco-editor-wrapper">
-      <div className="editor-tabs">
+    <div className="flex flex-col flex-1 bg-white dark:bg-[#1e1e1e]">
+      <div className="flex gap-0 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#252526] flex-shrink-0 overflow-x-auto">
         {openFiles.map((file) => (
           <div
             key={file.path}
-            className={`tab ${currentFile?.path === file.path ? 'active' : ''}`}
+            className={`flex items-center gap-2 px-4 py-2 border-r border-gray-200 dark:border-gray-700 cursor-pointer select-none whitespace-nowrap ${
+              currentFile?.path === file.path
+                ? 'bg-white dark:bg-[#1e1e1e] border-b-2 border-b-blue-600'
+                : 'hover:bg-gray-100 dark:hover:bg-[#2d2d30]'
+            }`}
           >
             <span
-              className="tab-content"
+              className="flex items-center gap-2 flex-1"
               onClick={() => useEditorStore.setState({ currentFile: file })}
             >
-              <span className="tab-name">{file.name}</span>
-              {file.isDirty && <span className="dirty-dot">●</span>}
-              {file.isSaving && <span className="saving-dot">⟳</span>}
+              <span className="text-gray-900 dark:text-gray-100">{file.name}</span>
+              {file.isDirty && <span className="w-2 h-2 rounded-full bg-red-500"></span>}
+              {file.isSaving && <span className="animate-spin text-xs">⟳</span>}
             </span>
             <button
-              className="tab-close"
+              className="p-1 hover:bg-gray-200 dark:hover:bg-[#2d2d30] rounded text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 border-none bg-none cursor-pointer"
               onClick={() => removeOpenFile(file.path)}
               title="Close"
             >
@@ -155,7 +159,7 @@ export const MonacoEditor: React.FC = () => {
           </div>
         ))}
       </div>
-      <div ref={editorRef} className="editor-container" />
+      <div ref={editorRef} className="flex-1" />
     </div>
   )
 }
