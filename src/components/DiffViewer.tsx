@@ -2,7 +2,6 @@ import React, { useState } from 'react'
 import { useDiffStore } from '../store/diffStore'
 import { useI18nStore } from '../store/i18nStore'
 import { DiffLineType, DiffResult } from '../api/diff'
-import '../styles/DiffViewer.css'
 
 export const DiffViewer: React.FC = () => {
   const { t } = useI18nStore()
@@ -18,51 +17,71 @@ export const DiffViewer: React.FC = () => {
   }
 
   return (
-    <div className="diff-modal">
-      <div className="diff-overlay" onClick={handleClose} />
-      <div className="diff-container">
-        <div className="diff-header">
-          <div className="diff-title">
-            <h3>{t('diffViewer')}</h3>
-            <span className="diff-stats">
+    <div className="fixed inset-0 z-40 flex items-center justify-center">
+      <div className="fixed inset-0 bg-black/50 cursor-pointer" onClick={handleClose} />
+      <div className="relative bg-white dark:bg-[#1e1e1e] border border-gray-300 dark:border-gray-700 rounded-lg w-11/12 h-5/6 max-w-6xl shadow-xl flex flex-col">
+        {/* Header */}
+        <div className="flex justify-between items-center px-6 py-4 border-b border-gray-300 dark:border-gray-700 flex-shrink-0">
+          <div className="flex items-center gap-4">
+            <h3 className="text-lg font-semibold m-0 text-gray-900 dark:text-gray-100">{t('diffViewer')}</h3>
+            <span className="px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-sm font-mono">
               +{currentDiff.addedCount} -{currentDiff.removedCount}
             </span>
           </div>
 
-          <div className="diff-controls">
-            <div className="view-mode-toggle">
+          <div className="flex items-center gap-3">
+            <div className="flex gap-1 bg-gray-200 dark:bg-gray-700 p-1 rounded">
               <button
-                className={`mode-btn ${viewMode === 'split' ? 'active' : ''}`}
                 onClick={() => setViewMode('split')}
                 title={t('splitView')}
+                className={`px-3 py-1 text-sm font-medium rounded transition-colors ${
+                  viewMode === 'split'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-transparent text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                }`}
               >
-                ∥
+                ∥ Split
               </button>
               <button
-                className={`mode-btn ${viewMode === 'unified' ? 'active' : ''}`}
                 onClick={() => setViewMode('unified')}
                 title={t('unifiedView')}
+                className={`px-3 py-1 text-sm font-medium rounded transition-colors ${
+                  viewMode === 'unified'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-transparent text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                }`}
               >
-                ≡
+                ≡ Unified
               </button>
             </div>
 
-            <button className="close-btn" onClick={handleClose} title={t('close')}>
+            <button
+              onClick={handleClose}
+              title={t('close')}
+              className="bg-none border-none cursor-pointer text-xl text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
+            >
               ✕
             </button>
           </div>
         </div>
 
-        {error && <div className="diff-error">{error}</div>}
-
-        {isLoading && (
-          <div className="diff-loading">
-            <span>⏳ {t('comparing')}</span>
+        {/* Error */}
+        {error && (
+          <div className="px-6 py-4 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-b border-red-300 dark:border-red-700/50">
+            {error}
           </div>
         )}
 
+        {/* Loading */}
+        {isLoading && (
+          <div className="flex-1 flex items-center justify-center">
+            <span className="text-xl">⏳ {t('comparing')}</span>
+          </div>
+        )}
+
+        {/* Content */}
         {!isLoading && (
-          <div className="diff-content">
+          <div className="flex-1 overflow-hidden">
             {viewMode === 'split' ? (
               <SplitDiffView diff={currentDiff} />
             ) : (
@@ -84,25 +103,25 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
   const modifiedLines = diff.lines.filter((l) => l.type !== DiffLineType.Removed)
 
   return (
-    <div className="split-diff">
-      <div className="diff-column">
-        <div className="column-header">
-          <span className="filename">{diff.originalFile}</span>
-          <span className="stats removed">-{diff.removedCount}</span>
+    <div className="flex h-full divide-x divide-gray-300 dark:divide-gray-700">
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2 bg-gray-100 dark:bg-[#252526] border-b border-gray-300 dark:border-gray-700 flex-shrink-0">
+          <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{diff.originalFile}</span>
+          <span className="text-sm px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded">-{diff.removedCount}</span>
         </div>
-        <div className="diff-lines">
+        <div className="flex-1 overflow-y-auto">
           {originalLines.map((line, idx) => (
             <DiffLineElement key={`orig-${idx}`} line={line} />
           ))}
         </div>
       </div>
 
-      <div className="diff-column">
-        <div className="column-header">
-          <span className="filename">{diff.modifiedFile}</span>
-          <span className="stats added">+{diff.addedCount}</span>
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2 bg-gray-100 dark:bg-[#252526] border-b border-gray-300 dark:border-gray-700 flex-shrink-0">
+          <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{diff.modifiedFile}</span>
+          <span className="text-sm px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded">+{diff.addedCount}</span>
         </div>
-        <div className="diff-lines">
+        <div className="flex-1 overflow-y-auto">
           {modifiedLines.map((line, idx) => (
             <DiffLineElement key={`mod-${idx}`} line={line} />
           ))}
@@ -114,13 +133,13 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
 
 const UnifiedDiffView: React.FC<DiffViewProps> = ({ diff }) => {
   return (
-    <div className="unified-diff">
-      <div className="diff-info">
-        <span className="file-a">{diff.originalFile}</span>
-        <span className="separator">→</span>
-        <span className="file-b">{diff.modifiedFile}</span>
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-center gap-2 px-4 py-3 bg-gray-100 dark:bg-[#252526] border-b border-gray-300 dark:border-gray-700 flex-shrink-0">
+        <span className="font-mono text-sm text-gray-700 dark:text-gray-300">{diff.originalFile}</span>
+        <span className="text-gray-500 dark:text-gray-400">→</span>
+        <span className="font-mono text-sm text-gray-700 dark:text-gray-300">{diff.modifiedFile}</span>
       </div>
-      <div className="diff-lines">
+      <div className="flex-1 overflow-y-auto">
         {diff.lines.map((line, idx) => (
           <DiffLineElement key={idx} line={line} />
         ))}
@@ -134,25 +153,25 @@ interface DiffLineElementProps {
 }
 
 const DiffLineElement: React.FC<DiffLineElementProps> = ({ line }) => {
-  let className = 'diff-line'
+  let bgColor = 'bg-white dark:bg-[#1e1e1e]'
+  let textColor = 'text-gray-700 dark:text-gray-300'
   let prefix = ' '
 
   if (line.type === DiffLineType.Added) {
-    className += ' line-added'
+    bgColor = 'bg-green-50 dark:bg-green-900/20'
+    textColor = 'text-green-700 dark:text-green-400'
     prefix = '+'
   } else if (line.type === DiffLineType.Removed) {
-    className += ' line-removed'
+    bgColor = 'bg-red-50 dark:bg-red-900/20'
+    textColor = 'text-red-700 dark:text-red-400'
     prefix = '-'
-  } else {
-    className += ' line-unchanged'
-    prefix = ' '
   }
 
   return (
-    <div className={className}>
-      <span className="line-prefix">{prefix}</span>
-      <span className="line-number">{line.lineNumber || '-'}</span>
-      <span className="line-content">{line.content}</span>
+    <div className={`flex font-mono text-sm ${bgColor} border-b border-gray-200 dark:border-gray-700`}>
+      <span className={`w-8 text-center py-1 px-2 select-none text-gray-500 dark:text-gray-600 flex-shrink-0`}>{prefix}</span>
+      <span className={`w-12 text-right py-1 px-2 select-none text-gray-500 dark:text-gray-600 flex-shrink-0`}>{line.lineNumber || '-'}</span>
+      <span className={`flex-1 py-1 px-2 break-all ${textColor}`}>{line.content}</span>
     </div>
   )
 }
