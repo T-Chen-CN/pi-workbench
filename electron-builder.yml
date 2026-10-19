@@ -1,0 +1,25 @@
+appId: com.piworkbench.app
+productName: Pi Workbench
+directories:
+  buildResources: build
+  output: release
+files:
+  - dist
+  - dist-electron
+  - package.json
+  - app-icon.png
+win:
+  target:
+    - nsis
+  icon: app-icon.png
+mac:
+  target:
+    - dmg
+  icon: app-icon.png
+linux:
+  target:
+    - AppImage
+  icon: app-icon.png
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

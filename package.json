@@ -1,0 +1,70 @@
+{
+  "name": "pi-workbench",
+  "version": "0.1.0",
+  "description": "Lightweight desktop code editor with Pi Agent integration",
+  "main": "dist-electron/main.js",
+  "type": "module",
+  "workspaces": [
+    "pi-bridge"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run web:dev\" \"npm run electron:dev\" --kill-others",
+    "web:dev": "vite",
+    "electron:dev": "wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "build": "npm run build:renderer && npm run build:main && npm run build:bridge",
+    "build:renderer": "vite build",
+    "build:main": "tsc -p electron/tsconfig.json",
+    "build:bridge": "cd pi-bridge && npm run build",
+    "type-check": "tsc --noEmit",
+    "package": "npm run build && electron-builder",
+    "package:win": "npm run build && electron-builder --win",
+    "package:mac": "npm run build && electron-builder --mac",
+    "package:linux": "npm run build && electron-builder --linux"
+  },
+  "dependencies": {
+    "monaco-editor": "^0.57.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zustand": "^4.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "autoprefixer": "^10.4.17",
+    "concurrently": "^8.2.2",
+    "cross-env": "^10.1.0",
+    "electron": "^28.3.3",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.1.0",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.piworkbench.app",
+    "productName": "Pi Workbench",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "app-icon.png"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "app-icon.png"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "app-icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "app-icon.png"
+    }
+  }
+}
