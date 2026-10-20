@@ -9,6 +9,9 @@ import { FileLogger, installConsoleTee } from './logger.js'
 import { AgentRegistry } from './agent-registry.js'
 import { TerminalManager } from './terminal-manager.js'
 import { PluginManager } from './plugin-manager.js'
+import { FleetWorktree } from './fleet-worktree.js'
+import { createFleetStore } from './fleet-store.js'
+import { FleetManager } from './fleet-manager.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
 
@@ -65,6 +68,34 @@ function workspaceForPath(filePath: string): string | null {
   }
   return null
 }
+
+const fleetStore = createFleetStore(path.join(getAppDir(), 'data', 'fleet-tasks.db'))
+const fleetManager = new FleetManager({
+  store: fleetStore,
+  worktrees: new FleetWorktree(),
+  createAgent: async () => {
+    const bridgePath = path.join(__dirname, '..', 'pi-bridge', 'dist', 'index.js')
+    const { AgentManager } = await import(pathToFileURL(bridgePath).href)
+    return new AgentManager()
+  },
+  getApiConfig: async () => {
+    const config = await loadApiConfig()
+    if (!config?.apiKey) return null
+    return {
+      provider: config.provider,
+      apiUrl: config.apiUrl,
+      apiKey: config.apiKey,
+      selectedModel: config.selectedModel,
+    }
+  },
+  agentDir: path.join(getAppDir(), 'data', 'agent'),
+  logDir: path.join(getAppDir(), 'logs'),
+  onUpdate: (task) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('fleet:task-updated', task)
+    }
+  },
+})
 
 // 便携式架构：获取应用目录
 function getAppDir(): string {
@@ -165,6 +196,7 @@ app.on('will-quit', () => {
   fileLogger?.close()
   terminalManager.closeAll()
   pluginManager.disposeAll()
+  void fleetManager.disposeAll()
   void agentRegistry.disposeAll()
 })
 
@@ -421,6 +453,26 @@ ipcMain.handle(
     }
   }
 )
+
+// ---- Fleet 后台任务 ----
+
+ipcMain.handle('fleet:create', async (_event, workspaceDir: string, name: string, prompt: string) =>
+  fleetManager.createTask(workspaceDir, name, prompt)
+)
+
+ipcMain.handle('fleet:list', async (_event, workspaceDir: string) => ({
+  success: true,
+  tasks: fleetManager.list(workspaceDir),
+}))
+
+ipcMain.handle('fleet:get', async (_event, id: string) => {
+  const task = fleetManager.get(id)
+  return task ? { success: true, task } : { success: false, error: 'Task not found' }
+})
+
+ipcMain.handle('fleet:cancel', async (_event, id: string) => fleetManager.cancel(id))
+
+ipcMain.handle('fleet:cleanup', async (_event, id: string) => fleetManager.cleanupWorktree(id))
 
 // 便携式架构：应用配置管理
 ipcMain.handle('app:getAppDir', async () => {

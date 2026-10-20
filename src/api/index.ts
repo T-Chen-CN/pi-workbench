@@ -22,6 +22,11 @@ import type {
   RecentWorkspacesResult,
   PluginsListResult,
   PluginCommandResult,
+  FleetCreateResult,
+  FleetListResult,
+  FleetGetResult,
+  FleetActionResult,
+  FleetTask,
 } from '../types/electron'
 
 // Mock API for browser development
@@ -195,6 +200,26 @@ const mockAPI = {
   pluginsReload: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
   pluginsSetEnabled: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
   onPluginsChanged: (_callback: (payload: { workspaceDir: string }) => void) => () => {},
+
+  // Fleet tasks（Web 模式不可用）
+  fleetCreate: async (): Promise<FleetCreateResult> => ({
+    success: false,
+    error: 'Fleet tasks are only available in the Electron app',
+  }),
+  fleetList: async (): Promise<FleetListResult> => ({ success: true, tasks: [] }),
+  fleetGet: async (): Promise<FleetGetResult> => ({
+    success: false,
+    error: 'Fleet tasks are only available in the Electron app',
+  }),
+  fleetCancel: async (): Promise<FleetActionResult> => ({
+    success: false,
+    error: 'Fleet tasks are only available in the Electron app',
+  }),
+  fleetCleanup: async (): Promise<FleetActionResult> => ({
+    success: false,
+    error: 'Fleet tasks are only available in the Electron app',
+  }),
+  onFleetTaskUpdated: (_callback: (task: FleetTask) => void) => () => {},
 }
 
 const electronAPI = window.electronAPI || mockAPI
@@ -249,5 +274,15 @@ export const api = {
     electronAPI.pluginsSetEnabled(workspaceDir, pluginId, enabled),
   onPluginsChanged: (callback: (payload: { workspaceDir: string }) => void) =>
     electronAPI.onPluginsChanged(callback),
+
+  // Fleet tasks
+  fleetCreate: (workspaceDir: string, name: string, prompt: string) =>
+    electronAPI.fleetCreate(workspaceDir, name, prompt),
+  fleetList: (workspaceDir: string) => electronAPI.fleetList(workspaceDir),
+  fleetGet: (id: string) => electronAPI.fleetGet(id),
+  fleetCancel: (id: string) => electronAPI.fleetCancel(id),
+  fleetCleanup: (id: string) => electronAPI.fleetCleanup(id),
+  onFleetTaskUpdated: (callback: (task: FleetTask) => void) =>
+    electronAPI.onFleetTaskUpdated(callback),
 }
 

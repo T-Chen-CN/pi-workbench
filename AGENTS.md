@@ -5,7 +5,7 @@
 **项目**: Pi Workbench  
 **架构**: Electron 44 + React 19 + TypeScript
 **运行要求**: Node.js ≥ 22.19（Pi SDK 要求；Electron 44 内置 Node 24）  
-**当前阶段**: Phase 4 完成，Phase 5 待启动  
+**当前阶段**: Phase 5 完成，Phase 6 持续优化  
 **最后更新**: 2026-10-20
 
 ---
@@ -27,7 +27,8 @@
 - ✅ Phase 2 完成：工作区与对话体验（流式输出、修改审阅、上下文选择、多工作区）
 - ✅ Phase 3 完成：终端集成（xterm + node-pty，输出可附加给 Agent）
 - ✅ Phase 4 完成：工作台插件系统（命令 / 钩子 / 命令面板，示例 Git 插件）
-- ⏳ Phase 5 待启动：Fleet 后台任务
+- ✅ Phase 5 完成：Fleet 后台任务（worktree 隔离、队列、任务级 Agent、日志）
+- 🟡 Phase 6 持续：性能、快捷键、主题、崩溃恢复、自动更新等
 
 ---
 
@@ -617,8 +618,11 @@ async function initAgent(config: ApiConfig) {
 ### Fleet 任务约束
 
 **Worktree 存储位置**:
-- ✅ Worktree 目录：`{workspaceDir}/.pi-worktrees/{task-name}/`
-- ✅ 任务元数据：`{appDir}/data/fleet-tasks.db`
+- ✅ Worktree 目录：`{workspaceDir}/.pi-worktrees/{name}-{taskId}/`，分支 `pi-fleet/...`
+- ✅ 任务元数据：`{appDir}/data/fleet-tasks.db`（`node:sqlite`；不可用时回退 JSON）
+- ✅ 任务日志：`{appDir}/logs/fleet-{task-id}.log`
+- ✅ 清理 worktree 时**保留分支**，避免丢失 Agent 提交
+- ✅ 队列默认并发 1，可通过 `FleetManager` 的 `maxConcurrent` 调整
 - ❌ **禁止**在系统临时目录创建 worktree
 
 ---

@@ -39,7 +39,8 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 | Phase 2：工作区与对话体验 | ✅ 完成 |
 | Phase 3：终端集成 | ✅ 完成 |
 | Phase 4：工作台插件系统 | ✅ 完成 |
-| Phase 5-6 | ⏳ 未开始 |
+| Phase 5：Fleet 后台任务 | ✅ 完成 |
+| Phase 6：优化与完善 | 🟡 持续 |
 
 **已可用的端到端能力**：配置供应商 → 拉取真实模型 → 打开工作区 → Agent 对话（read/write/edit/bash）
 → Agent 修改自动展示 Diff → 重启后恢复会话。
@@ -90,6 +91,7 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 - 多工作区标签页，各工作区独立 Agent 实例
 - 工作台插件系统（主进程加载、命令 / 钩子、启用禁用与热重载、命令面板）
 - GitHub 风格的 Git 示例插件（`examples/plugins/git-tools`）
+- Fleet 后台任务：Git worktree 隔离、任务队列、每任务独立 Agent、状态与日志
 - 生产构建注入 Content-Security-Policy（开发模式不受影响）
 - Vitest 单测（store / diff / logger / AgentManager / IPC）、ESLint、Prettier、GitHub Actions CI
 
@@ -98,7 +100,6 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 | 能力 | 阶段 |
 |---|---|
 | 上下文片段 / 符号级选择（v1 已支持整文件附加） | Phase 2（待增强） |
-| Fleet 后台任务（Git worktree） | Phase 5 |
 | 性能、撤销/重做、快捷键、主题、自动更新 | Phase 6 |
 
 ---
@@ -166,6 +167,8 @@ Main Process (Node 24, Electron 44)
 | Web dev Agent 数据 | `{appDir}/cache/temp/web-agent/` | 可随时删除 |
 | 主进程日志 | `{appDir}/logs/main.log` | 5 MB 轮转，保留 `main.log.1`；渲染进程日志待补 |
 | 终端输出 | `{workspace}/.pi-workbench/terminal.log` | 每次新建终端时重置；可附加给 Agent |
+| Fleet 任务 | `{appDir}/data/fleet-tasks.db` | `node:sqlite`（不可用时回退 `fleet-tasks.json`） |
+| Fleet 日志 | `{appDir}/logs/fleet-{task-id}.log` | 任务开始 / 流式输出 / 结束 |
 
 **禁止**：`app.getPath('userData')` / `appData` / `.env` / 系统临时目录。
 
@@ -257,12 +260,16 @@ docs/               项目文档
 - 无沙箱，仅限个人可信插件；不向渲染进程加载插件 JS
 - 示例插件：`examples/plugins/git-tools`（status / log / commit all）
 
-### 模块 8：Fleet 任务（待实现）
+### 模块 8：Fleet 任务（已实现）
 
-- Git worktree：`{workspace}/.pi-worktrees/{task-name}/`
-- 每个任务独立 Agent 实例与工作目录
-- 任务元数据：`{appDir}/data/fleet-tasks.db`（SQLite 在此阶段引入更有价值）
-- 任务日志：`{appDir}/logs/fleet-{task-id}.log`
+- Git worktree：`{workspace}/.pi-worktrees/{name}-{taskId}`，分支 `pi-fleet/...`
+- 任务队列：默认并发 1，可在 `FleetManager` 配置中调整
+- 每个任务独立 Agent 实例，运行在 worktree 目录，结束后释放
+- 状态机：queued → running → succeeded / failed / cancelled
+- 任务元数据：`{appDir}/data/fleet-tasks.db`（Electron 内置 `node:sqlite`；不可用时回退 JSON）
+- 任务日志：`{appDir}/logs/fleet-{task-id}.log`，流式输出同时写入记录
+- 清理 worktree 时保留分支，避免丢失 Agent 提交
+- UI：Fleet 面板（创建 / 取消 / 查看输出 / 清理 worktree）
 
 ---
 
@@ -317,12 +324,15 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 > 插件只扩展工作台本身，不扩展 Pi Agent，也不加载 Pi SDK extensions。
 > v1 只加载主进程 CommonJS 插件，不向渲染进程注入任意 JS（受生产 CSP 约束）。
 
-### ⏳ Phase 5：Fleet 后台任务（预计 2-3 周）
+### ✅ Phase 5：Fleet 后台任务（完成）
 
-- [ ] Git worktree 管理
-- [ ] 任务队列与状态机
-- [ ] 每任务独立 Agent 实例
-- [ ] 任务监控与日志
+- [x] Git worktree 管理（创建 / 清理，分支保留）
+- [x] 任务队列与状态机（queued / running / succeeded / failed / cancelled）
+- [x] 每任务独立 Agent 实例
+- [x] 任务监控与日志（Fleet 面板、`fleet-{id}.log`）
+- [x] 任务元数据持久化（`node:sqlite`，JSON 回退）
+
+**验收**：从 Fleet 面板创建任务 → worktree 中运行 Agent → 状态与输出实时更新 → 可取消、查看日志、清理 worktree。
 
 ### ⏳ Phase 6：优化与完善（持续）
 
@@ -358,7 +368,7 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 
 ```bash
 npm run type-check   # TypeScript 严格模式
-npm test             # Vitest（store / diff / logger / AgentManager / IPC / 终端 / 插件）
+npm test             # Vitest（store / diff / logger / AgentManager / IPC / 终端 / 插件 / Fleet）
 npm run lint         # ESLint + react-hooks
 npm run build        # renderer → bridge → main（顺序不可颠倒）
 npm run package:win  # NSIS + portable
@@ -374,19 +384,19 @@ npm run package:win  # NSIS + portable
 
 ### 短期（1 个月内）
 
-- 完成 Phase 2：流式输出、Diff 审阅、上下文选择、多工作区
 - 发布可用的 Windows 安装包（NSIS + portable）
+- Phase 2-5 已全部完成
 
 ### 中期（3 个月内）
 
-- 内置终端（Phase 3）
-- 工作台插件系统（Phase 4）
 - 跨平台打包与自动更新
+- 上下文片段 / 符号级选择
+- Fleet 并发调度策略
 
 ### 长期（6-12 个月）
 
-- Fleet 后台任务系统（Phase 5）
-- 性能、快捷键、主题、崩溃恢复等打磨（Phase 6）
+- Phase 6 打磨：性能、快捷键、主题、崩溃恢复
+- 工作台插件生态（面板级 UI、状态项）
 
 ---
 

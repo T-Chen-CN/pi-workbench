@@ -86,6 +86,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('plugins:changed', listener)
   },
 
+  // Fleet 后台任务
+  fleetCreate: (workspaceDir: string, name: string, prompt: string) =>
+    ipcRenderer.invoke('fleet:create', workspaceDir, name, prompt),
+  fleetList: (workspaceDir: string) => ipcRenderer.invoke('fleet:list', workspaceDir),
+  fleetGet: (id: string) => ipcRenderer.invoke('fleet:get', id),
+  fleetCancel: (id: string) => ipcRenderer.invoke('fleet:cancel', id),
+  fleetCleanup: (id: string) => ipcRenderer.invoke('fleet:cleanup', id),
+  onFleetTaskUpdated: (callback: (task: unknown) => void) => {
+    const listener = (_event: unknown, task: unknown) => callback(task)
+    ipcRenderer.on('fleet:task-updated', listener)
+    return () => ipcRenderer.removeListener('fleet:task-updated', listener)
+  },
+
   // API Configuration 管理（便携式架构）
   apiConfigGet: () => ipcRenderer.invoke('apiConfig:get'),
   apiConfigSave: (config: any) => ipcRenderer.invoke('apiConfig:save', config),
