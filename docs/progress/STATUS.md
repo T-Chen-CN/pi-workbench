@@ -12,14 +12,15 @@
 - ✅ **Phase 2: 工作区与对话体验** — 流式输出、修改审阅、上下文选择、多工作区标签
 - ✅ **Phase 3: 终端集成** — xterm.js + node-pty，输出可附加给 Agent
 - ✅ **Phase 4: 工作台插件系统** — 命令/钩子、启用禁用、热重载、命令面板
-- ⏳ **Phase 5-6** — 待开发
+- ✅ **Phase 5: Fleet 后台任务** — worktree 隔离、任务队列、每任务 Agent、监控与日志
+- 🟡 **Phase 6: 优化与完善** — 持续（分包 / CSP / 测试已完成）
 
 ## 当前版本
 
 - **版本**: 0.1.0
 - **框架**: Electron 44 + React 19 + TypeScript
 - **Agent**: `@earendil-works/pi-coding-agent` 1.3.0
-- **状态**: Phase 4 完成，Electron 与纯 Web（开发模式）均可真实对话
+- **状态**: Phase 5 完成，Phase 6 持续优化
 
 ## 功能清单
 
@@ -101,10 +102,13 @@
 - ✅ Git 示例插件（`examples/plugins/git-tools`）
 - ⏳ 面板级 UI / 菜单 / 状态项（v1 未实现）
 
-#### Phase 5: Fleet 任务系统（预计 2-3 周）
+#### Phase 5: Fleet 任务系统（完成）
 
-- Git worktree 管理
-- 后台 Agent 任务队列与监控
+- ✅ Git worktree 创建 / 清理（`{workspace}/.pi-worktrees/`，分支保留）
+- ✅ 任务队列与状态机（queued / running / succeeded / failed / cancelled，默认并发 1）
+- ✅ 每任务独立 Agent 实例，流式输出写入任务记录与 `fleet-{id}.log`
+- ✅ 元数据持久化：`{appDir}/data/fleet-tasks.db`（`node:sqlite`，JSON 回退）
+- ✅ Fleet 面板：创建 / 取消 / 查看日志 / 清理 worktree
 
 #### Phase 6: 优化和完善（持续）
 

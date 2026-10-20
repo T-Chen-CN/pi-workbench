@@ -58,6 +58,14 @@ export interface ElectronAPI {
   ) => Promise<PluginsListResult>
   onPluginsChanged: (callback: (payload: { workspaceDir: string }) => void) => () => void
 
+  // Fleet tasks
+  fleetCreate: (workspaceDir: string, name: string, prompt: string) => Promise<FleetCreateResult>
+  fleetList: (workspaceDir: string) => Promise<FleetListResult>
+  fleetGet: (id: string) => Promise<FleetGetResult>
+  fleetCancel: (id: string) => Promise<FleetActionResult>
+  fleetCleanup: (id: string) => Promise<FleetActionResult>
+  onFleetTaskUpdated: (callback: (task: FleetTask) => void) => () => void
+
   // API Configuration management (便携式架构)
   apiConfigGet: () => Promise<ApiConfigGetResult>
   apiConfigSave: (config: ApiConfig) => Promise<ApiConfigSaveResult>
@@ -259,6 +267,48 @@ export interface PluginCommandResult {
   success: boolean
   message?: string
   output?: string
+  error?: string
+}
+
+export type FleetTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+export interface FleetTask {
+  id: string
+  workspace: string
+  name: string
+  prompt: string
+  status: FleetTaskStatus
+  worktree: string
+  branch: string
+  createdAt: number
+  updatedAt: number
+  startedAt?: number
+  finishedAt?: number
+  error?: string
+  output: string
+  worktreeRemoved?: boolean
+}
+
+export interface FleetCreateResult {
+  success: boolean
+  task?: FleetTask
+  error?: string
+}
+
+export interface FleetListResult {
+  success: boolean
+  tasks: FleetTask[]
+  error?: string
+}
+
+export interface FleetGetResult {
+  success: boolean
+  task?: FleetTask
+  error?: string
+}
+
+export interface FleetActionResult {
+  success: boolean
   error?: string
 }
 

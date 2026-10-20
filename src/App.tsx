@@ -9,6 +9,7 @@ import { IPCDebug } from './components/IPCDebug'
 import { Settings } from './components/Settings'
 import { TerminalPanel } from './components/TerminalPanel'
 import { CommandPalette } from './components/CommandPalette'
+import { FleetPanel } from './components/FleetPanel'
 import { ToastContainer } from './components/Toast'
 import { useToastStore } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
@@ -29,6 +30,7 @@ export default function App() {
   const [showDebug, setShowDebug] = useState(import.meta.env.DEV)
   const [showSettings, setShowSettings] = useState(false)
   const [showTerminal, setShowTerminal] = useState(false)
+  const [showFleet, setShowFleet] = useState(false)
   const toastMessages = useToastStore((state) => state.messages)
   const removeToast = useToastStore((state) => state.remove)
 
@@ -178,6 +180,15 @@ export default function App() {
           )}
           {workspace && (
             <button
+              onClick={() => setShowFleet(true)}
+              title={t('openFleet')}
+              className="bg-none border-none cursor-pointer text-sm px-1.5 py-1 rounded opacity-70 hover:opacity-100 transition-opacity"
+            >
+              ⛵
+            </button>
+          )}
+          {workspace && (
+            <button
               onClick={() => setShowTerminal((value) => !value)}
               title={t('terminal')}
               className={`bg-none border-none cursor-pointer text-sm font-mono px-1.5 py-1 rounded opacity-70 hover:opacity-100 transition-opacity ${
@@ -277,6 +288,13 @@ export default function App() {
 
       <ToastContainer messages={toastMessages} onClose={removeToast} />
       {workspace && <CommandPalette workspacePath={workspace} />}
+      {workspace && (
+        <FleetPanel
+          workspacePath={workspace}
+          open={showFleet}
+          onClose={() => setShowFleet(false)}
+        />
+      )}
       <DiffViewer />
 
       {/* Main Content */}

@@ -87,7 +87,8 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await fs.rm(appDir, { recursive: true, force: true })
+  // Fleet 的 SQLite 连接在主进程模块里保持打开，Windows 上可能暂时无法删除目录
+  await fs.rm(appDir, { recursive: true, force: true }).catch(() => undefined)
 })
 
 beforeEach(async () => {
