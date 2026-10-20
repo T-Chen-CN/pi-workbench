@@ -157,7 +157,12 @@ const mockAPI = {
     try {
       const saved = localStorage.getItem(MOCK_CONFIG_KEY)
       if (saved) {
-        return { success: true, config: JSON.parse(saved) }
+        const config = JSON.parse(saved)
+        // 只支持 OpenAI 兼容渠道；旧版供应商配置在 Web 模式下同样作废
+        if (config?.provider === 'custom') {
+          return { success: true, config }
+        }
+        localStorage.removeItem(MOCK_CONFIG_KEY)
       }
     } catch (error) {
       console.warn('[Mock] Failed to read saved config:', error)
@@ -165,8 +170,8 @@ const mockAPI = {
     return {
       success: true,
       config: {
-        provider: 'anthropic',
-        apiUrl: 'https://api.anthropic.com/v1',
+        provider: 'custom',
+        apiUrl: '',
         apiKey: '',
         availableModels: [],
         selectedModel: ''

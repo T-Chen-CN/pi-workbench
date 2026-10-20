@@ -829,6 +829,15 @@ function decryptApiKey(stored: string): string {
   }
 }
 
+/** 只支持 OpenAI 兼容渠道；provider 字段保留给 AgentManager 兼容旧结构 */
+const DEFAULT_API_CONFIG = {
+  provider: 'custom',
+  apiUrl: '',
+  apiKey: '',
+  availableModels: [] as string[],
+  selectedModel: '',
+}
+
 // Helper function to load API Config
 async function loadApiConfig(): Promise<any> {
   try {
@@ -837,17 +846,28 @@ async function loadApiConfig(): Promise<any> {
 
     if (!existsSync(configPath)) {
       // Return minimal default config (no hardcoded models)
-      return {
-        provider: 'anthropic',
-        apiUrl: 'https://api.anthropic.com/v1',
-        apiKey: '',
-        availableModels: [],  // Empty by default, user must fetch
-        selectedModel: ''
-      }
+      return { ...DEFAULT_API_CONFIG }
     }
 
     const content = await fs.readFile(configPath, 'utf-8')
     const config = JSON.parse(content)
+
+    // 旧版供应商（Anthropic / OpenAI）配置已不再支持：备份后清空，避免旧配置继续生效
+    if (config.provider !== 'custom') {
+      const backupPath = path.join(path.dirname(configPath), 'api-config.legacy.json')
+      try {
+        if (!existsSync(backupPath)) {
+          await fs.rename(configPath, backupPath)
+        } else {
+          await fs.unlink(configPath)
+        }
+      } catch (error) {
+        console.warn('[Main] Failed to back up legacy API config:', error)
+      }
+      console.warn('[Main] Legacy provider config cleared; only OpenAI-compatible channels are supported')
+      return { ...DEFAULT_API_CONFIG }
+    }
+
     config.apiKey = decryptApiKey(config.apiKey)
     return config
   } catch (error) {

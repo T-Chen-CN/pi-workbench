@@ -1,15 +1,9 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
-import type { ApiConfig, ApiProvider } from '../types/electron'
-
-const DEFAULT_URLS: Record<ApiProvider, string> = {
-  anthropic: 'https://api.anthropic.com/v1',
-  openai: 'https://api.openai.com/v1',
-  custom: '',
-}
+import type { ApiConfig } from '../types/electron'
 
 interface SettingsProps {
   onClose?: () => void
@@ -30,8 +24,8 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
   }
 
   const [apiConfig, setApiConfig] = useState<ApiConfig>({
-    provider: 'anthropic',
-    apiUrl: DEFAULT_URLS.anthropic,
+    provider: 'custom',
+    apiUrl: '',
     apiKey: '',
     availableModels: [],
     selectedModel: ''
@@ -41,32 +35,22 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
   const [isFetchingModels, setIsFetchingModels] = useState(false)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle')
 
-  useEffect(() => {
-    loadApiConfig()
-  }, [])
-
-  const loadApiConfig = async () => {
+  const loadApiConfig = useCallback(async () => {
     try {
       const result = await api.apiConfigGet()
       if (result.success && result.config) {
-        setApiConfig(result.config)
+        // 只支持 OpenAI 兼容渠道，旧配置一律按兼容模式处理
+        setApiConfig({ ...result.config, provider: 'custom' })
       }
     } catch (error) {
       console.error('[Settings] Failed to load API config:', error)
       toast.error(t('loadApiConfigFailed'))
     }
-  }
+  }, [t])
 
-  const handleProviderChange = (provider: ApiProvider) => {
-    setApiConfig(prev => ({
-      ...prev,
-      provider,
-      apiUrl: DEFAULT_URLS[provider],
-      availableModels: [],  // 切换供应商后必须重新拉取
-      selectedModel: ''
-    }))
-    setSaveStatus('idle')
-  }
+  useEffect(() => {
+    void loadApiConfig()
+  }, [loadApiConfig])
 
   const handleFetchModels = async () => {
     if (!apiConfig.apiUrl.trim()) {
@@ -83,7 +67,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       const result = await api.apiConfigFetchModels(
         apiConfig.apiUrl,
         apiConfig.apiKey,
-        apiConfig.provider
+        'custom'
       )
 
       if (result.success && result.models && result.models.length > 0) {
@@ -177,31 +161,16 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
           {t('apiConfigurationDesc')}
         </p>
 
-        {/* Provider Selection */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium mb-2">{t('provider')}</label>
-          <select
-            value={apiConfig.provider}
-            onChange={(e) => handleProviderChange(e.target.value as ApiProvider)}
-            className="w-full bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500"
-          >
-            <option value="anthropic">Anthropic (Claude)</option>
-            <option value="openai">OpenAI (GPT)</option>
-            <option value="custom">{t('providerCustom')}</option>
-          </select>
-        </div>
-
         {/* API URL */}
         <div className="mb-4">
           <label className="block text-sm font-medium mb-2">
             {t('apiUrl')}
-            <span className="text-gray-500 text-xs ml-2">{t('apiUrlHint')}</span>
           </label>
           <input
             type="text"
             value={apiConfig.apiUrl}
             onChange={(e) => setApiConfig(prev => ({ ...prev, apiUrl: e.target.value }))}
-            placeholder="https://api.anthropic.com/v1"
+            placeholder="https://your-api-endpoint/v1"
             className="w-full bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500 font-mono text-sm"
           />
         </div>
@@ -216,18 +185,9 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
             type="password"
             value={apiConfig.apiKey}
             onChange={(e) => setApiConfig(prev => ({ ...prev, apiKey: e.target.value }))}
-            placeholder="sk-ant-... or sk-..."
+            placeholder="sk-..."
             className="w-full bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500 font-mono text-sm"
           />
-          <p className="text-xs text-gray-500 mt-1">
-            {apiConfig.provider === 'anthropic' && (
-              <>{t('getFrom')}<a href="https://console.anthropic.com/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">console.anthropic.com</a></>
-            )}
-            {apiConfig.provider === 'openai' && (
-              <>{t('getFrom')}<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">platform.openai.com</a></>
-            )}
-            {apiConfig.provider === 'custom' && t('customApiKeyHint')}
-          </p>
         </div>
 
         {/* Fetch Models Button */}
@@ -243,9 +203,6 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
           >
             {isFetchingModels ? t('fetching') : t('fetchModels')}
           </button>
-          <p className="text-xs text-gray-500 mt-1">
-            {t('fetchModelsHint', { url: apiConfig.apiUrl || 'API' })}
-          </p>
         </div>
 
         {/* Model Selection */}
