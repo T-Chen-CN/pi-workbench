@@ -4,6 +4,7 @@ import * as fs from 'fs/promises'
 import { existsSync, statSync, watch, type FSWatcher } from 'fs'
 import { fileURLToPath } from 'url'
 import { isIgnoredWatchPath } from './watch-filter.js'
+import { FileLogger, installConsoleTee } from './logger.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
 
@@ -14,6 +15,7 @@ let mainWindow: BrowserWindow | null = null
 let agentManager: any | null = null // AgentManager type loaded dynamically
 let workspaceWatcher: FSWatcher | null = null
 let watchDebounce: NodeJS.Timeout | null = null
+let fileLogger: FileLogger | null = null
 
 // 便携式架构：获取应用目录
 function getAppDir(): string {
@@ -97,8 +99,21 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // 先启用文件日志，后续初始化与 Agent 日志都会落盘（打包后没有控制台）
+  try {
+    fileLogger = new FileLogger({ logDir: path.join(getAppDir(), 'logs') })
+    installConsoleTee(fileLogger)
+    console.log('[Main] File logging enabled:', fileLogger.filePath)
+  } catch (error) {
+    console.error('[Main] Failed to enable file logging:', error)
+  }
+
   await initAppDirectories()
   createWindow()
+})
+
+app.on('will-quit', () => {
+  fileLogger?.close()
 })
 
 app.on('window-all-closed', () => {

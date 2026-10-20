@@ -76,7 +76,7 @@
 - ✅ 会话持久化与恢复（Pi 会话 + UI 历史）
 - ⏳ 多工作区并行 + 工作区级 Agent 实例
 - ⏳ 工作区数据库（SQLite，`{appDir}/data/workspaces.db`）
-- ⏳ 日志系统（`{appDir}/logs/`）
+- ✅ 主进程文件日志（`{appDir}/logs/main.log`，5MB 轮转并保留 `.1` 备份；渲染进程日志待补）
 
 #### Phase 3: 终端集成（预计 1 周）
 
