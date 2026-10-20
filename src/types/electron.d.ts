@@ -1,4 +1,5 @@
 export interface ElectronAPI {
+  platform: string
   // File system operations
   openDirectoryDialog: () => Promise<OpenDirectoryResult>
   readFile: (path: string) => Promise<ReadFileResult>
@@ -18,6 +19,11 @@ export interface ElectronAPI {
   saveSettings: (settings: any) => Promise<SaveSettingsResult>
   getRecentWorkspaces: () => Promise<RecentWorkspacesResult>
   addRecentWorkspace: (workspacePath: string) => Promise<RecentWorkspacesResult>
+  minimizeWindow: () => Promise<{ success: boolean }>
+  toggleMaximizeWindow: () => Promise<{ success: boolean; maximized: boolean }>
+  closeWindow: () => Promise<{ success: boolean }>
+  isWindowMaximized: () => Promise<{ success: boolean; maximized: boolean }>
+  onWindowMaximizedChange: (callback: (maximized: boolean) => void) => () => void
 
   // Workspace configuration
   initWorkspace: (workspacePath: string) => Promise<WorkspaceResult>

@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.0 |
+| 文档版本 | v1.5 |
 | 状态 | Active（正式规范） |
-| 最后更新 | 2026-10-20 |
+| 最后更新 | 2026-10-21 |
 | 适用范围 | 渲染进程全部 UI、Monaco / xterm 主题、应用主题设置 |
 | 唯一事实来源 | 本文件。所有前端设计相关实现以此为准 |
 | 历史方案 | [PAPER_INK.md](./PAPER_INK.md)（方案、决策与实施记录） |
@@ -266,7 +266,7 @@
 
 ### 6.1 应用外壳
 
-- 顶栏 52px：衬线字标 `Pi` + mono `WORKBENCH` + 工作区路径；右侧文字操作（命令面板、Fleet、终端、设置）与主操作按钮。
+- 顶栏 45px：衬线字标 `Pi` + mono `WORKBENCH` + 工作区路径；右侧文字操作（命令面板、Fleet、终端、设置）与主操作按钮。
 - 工作区标签栏 34px：矩形 mono 标签，激活项纸面底 + 2px `accent` 顶线。
 - 主区域三栏：文件树 232px / 编辑器自适应 / 聊天 336px；可拖拽、可折叠，默认宽度见上。
 - 状态栏 28px：mono 文本，左侧品牌/本地优先/Agent 状态，右侧语言、编码、主题。
@@ -306,7 +306,9 @@
 
 ### 6.7 设置 / 命令面板 / Diff / Fleet / Toast
 
-- 设置：纸片弹窗 + 左侧分节导航；分节标签 mono 10px；字段使用 Field + Input/Select；主按钮绿色。
+- 设置：纸片弹窗 + 左侧分节导航（通用 / API 配置 / 快捷键 / 关于）；分节标签 mono 10px；字段使用 Field + Input/Select；主按钮绿色。
+  - 快捷键分节：动作名使用 Inter 12px，键帽使用 mono 10px + 1px `border-line` + `bg-sunken`，用 `<kbd>` 语义；按平台显示 `Ctrl` 或 `⌘`。
+  - 分组：全局 / 编辑器（打开文件时）/ 聊天（工作区内）/ 浮层；仅列出实际生效的快捷键。
 - 命令面板：560px 纸片、mono 搜索、编号结果列表、选中项 2px 绿色左边线；Esc 关闭。
 - Diff：纸面审阅单；新增用 `success/10` 橄榄淡洗，删除用 `danger/10` 朱砂淡洗；统计用印章式 mono 标签。
 - Fleet：编号任务清单；状态使用 mono 文案 + 语义色（RUNNING 绿、DONE 橄榄、QUEUED 弱化、FAILED 红），不使用彩色胶囊。
@@ -318,6 +320,29 @@
 - 主题写入 `{appDir}/config/settings.json`；已保存偏好优先。
 - 切换时同步 `<html class="dark">`、`document.documentElement.lang`、窗口标题、Monaco、xterm。
 - 不要在组件内写 `dark:` 变体；全部通过 token 自动切换。
+
+### 6.9 窗口外壳与标题栏
+
+采用 **无边框窗口（方案 B）**：Windows / Linux 使用 `frame: false` 与自绘窗口按钮；macOS 保留原生红绿灯。
+
+- **Windows / Linux**：
+  - `frame: false`，顶栏即标题栏，高度由 `--titlebar-height` 控制（当前 45px）。
+  - 右上角为自绘窗口按钮，单颗 **45×45px 正方形**（宽度绑定 `--titlebar-height`），贴齐窗口边缘。
+  - 图标为定制细线 glyph（不使用 lucide）：13px、`stroke-width: 1.25`、`stroke-linecap: butt`、`stroke-linejoin: miter`。
+    - 最小化：10px 水平线；
+    - 最大化：9×9 直角方框；
+    - 还原：两个错位的 7×7 直角方框；
+    - 关闭：两条 9px 斜线。
+  - 悬停：最小化/最大化 `bg-hover` + `text-ink`；关闭 `bg-danger` + `text-danger-fg`；按下 `bg-active`；过渡 150ms。
+  - 最大化状态通过主进程事件同步，图标在 `Square` / `Copy` 之间切换。
+  - 双击顶栏空白区域切换最大化；按钮、链接、输入框不触发。
+  - 菜单栏隐藏（`autoHideMenuBar` + `setMenuBarVisibility(false)`），但保留应用菜单角色以维持快捷键。
+  - 已知取舍：自绘最大化按钮不会触发 Windows 11 的 Snap Layouts 悬停菜单；拖拽到屏幕边缘的吸附仍可用。
+- **macOS**：`titleBarStyle: 'hiddenInset'`；保留左上角原生红绿灯，顶栏左侧预留 78px，不渲染自绘按钮。
+- **拖拽区**：顶栏使用 `.app-drag`；按钮、链接、输入框通过 `.app-drag` 子选择器或 `.app-no-drag` 设为 `no-drag`。
+- **不要在顶栏重复窗口标题**；品牌区 `Pi / WORKBENCH` 已承担标题作用。
+- **窗口控制 IPC**：`window:minimize` / `window:toggleMaximize` / `window:close` / `window:isMaximized`，以及 `window:maximized-changed` 事件；Web 模式下所有窗口控制为空操作。
+- **跨平台**：Windows 已实测；macOS / Linux 需要在对应系统上验证红绿灯/自绘按钮、拖拽与缩放。
 
 ---
 
@@ -396,6 +421,9 @@
 | 聊天稿纸 | `src/components/ChatPanel.tsx` |
 | 编辑器主题 | `src/components/MonacoEditor.tsx`（`pi-paper` / `pi-ink`） |
 | 终端主题 | `src/components/TerminalPanel.tsx` |
+| 窗口外壳 / 标题栏 | `electron/main.ts`、`electron/preload.cts` |
+| 自绘窗口按钮 | `src/components/WindowControls.tsx` |
+| 拖拽区工具类 | `src/index.css`（`.app-drag` / `.app-no-drag`） |
 | 字体入口 | `src/main.tsx` |
 | 主题默认值 | `electron/main.ts`（`DEFAULT_SETTINGS.theme`） |
 | 视觉历史 | [PAPER_INK.md](./PAPER_INK.md) |
@@ -413,4 +441,9 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.5 | 2026-10-21 | 设置新增“快捷键”分节，按平台展示快捷键键帽与分组说明 |
+| v1.4 | 2026-10-21 | 顶栏与窗口按钮高度收到 45px，通过 `--titlebar-height` 统一控制，按钮保持正方形 |
+| v1.3 | 2026-10-21 | 窗口按钮改为 52×52 正方形，图标换成 1.25px 直边直角定制 glyph |
+| v1.2 | 2026-10-21 | 窗口外壳升级为方案 B：Windows/Linux 无边框 + 自绘窗口按钮（含 hover/active 与最大化状态），macOS 保留原生红绿灯 |
+| v1.1 | 2026-10-21 | 新增无边框窗口/标题栏 overlay 规范（方案 A），Windows 原生窗口按钮与 macOS 红绿灯；主色改为松墨绿，阅读正文改用思源宋体 |
 | v1.0 | 2026-10-20 | 建立正式设计规范；确定 Paper & Ink、松墨绿主色、暖橄榄成功、朱砂错误；收录组件 API 与变更流程 |

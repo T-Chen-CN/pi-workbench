@@ -226,9 +226,21 @@ async function initAppDirectories() {
 }
 
 function createWindow() {
+  const isMac = process.platform === 'darwin'
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    backgroundColor: '#F4F1EA',
+    autoHideMenuBar: true,
+    ...(isMac
+      ? {
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 14, y: 15 },
+        }
+      : {
+          frame: false,
+        }),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -236,6 +248,20 @@ function createWindow() {
     },
     icon: path.join(__dirname, '../app-icon.png'),
   })
+
+  // Windows/Linux：隐藏默认菜单栏，但保留菜单角色提供的快捷键
+  if (!isMac) {
+    mainWindow.setMenuBarVisibility(false)
+  }
+
+  // 通知渲染进程最大化状态，用于自绘窗口按钮的图标切换
+  const sendMaximizedState = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:maximized-changed', mainWindow.isMaximized())
+    }
+  }
+  mainWindow.on('maximize', sendMaximizedState)
+  mainWindow.on('unmaximize', sendMaximizedState)
 
   // 如果 preload 加载失败，明确报错（否则 window.electronAPI 会静默缺失）
   mainWindow.webContents.on('preload-error', (_event, preloadPath, error) => {
@@ -666,6 +692,35 @@ ipcMain.handle('app:saveSettings', async (_event, settings: any) => {
     }
   }
 })
+
+// 标题栏 overlay 颜色跟随 Paper / Ink 主题（仅 Windows 生效）
+// 自绘窗口按钮（Windows / Linux；macOS 保留原生红绿灯）
+ipcMain.handle('window:minimize', () => {
+  mainWindow?.minimize()
+  return { success: true }
+})
+
+ipcMain.handle('window:toggleMaximize', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { success: false, maximized: false }
+  }
+  if (mainWindow.isMaximized()) {
+    mainWindow.unmaximize()
+  } else {
+    mainWindow.maximize()
+  }
+  return { success: true, maximized: mainWindow.isMaximized() }
+})
+
+ipcMain.handle('window:close', () => {
+  mainWindow?.close()
+  return { success: true }
+})
+
+ipcMain.handle('window:isMaximized', () => ({
+  success: true,
+  maximized: mainWindow?.isMaximized() ?? false,
+}))
 
 ipcMain.handle('app:getRecentWorkspaces', async () => {
   try {
