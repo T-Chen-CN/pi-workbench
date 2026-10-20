@@ -22,6 +22,8 @@ export interface ChatState {
   error: string | null
   /** 下一条消息要附带的工作区文件 */
   attachments: ChatAttachment[]
+  /** 欢迎页提问后带入聊天输入框的草稿 */
+  draftInput: string
 
   // Actions
   addMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void
@@ -32,6 +34,8 @@ export interface ChatState {
   addAttachment: (attachment: ChatAttachment) => void
   removeAttachment: (path: string) => void
   clearAttachments: () => void
+  setDraftInput: (value: string) => void
+  clearDraftInput: () => void
   setMessages: (messages: Array<Omit<ChatMessage, 'id'>>) => void
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
@@ -46,6 +50,7 @@ export const useChatStore = create<ChatState>((set) => ({
   isLoading: false,
   error: null,
   attachments: [],
+  draftInput: '',
 
   addMessage: (message) =>
     set((state) => ({
@@ -115,11 +120,20 @@ export const useChatStore = create<ChatState>((set) => ({
     })),
 
   clearAttachments: () => set({ attachments: [] }),
+  setDraftInput: (value) => set({ draftInput: value }),
+  clearDraftInput: () => set({ draftInput: '' }),
 
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
   clearMessages: () => set({ messages: [] }),
   reset: () =>
-    set({ messages: [], isLoading: false, error: null, isInitialized: false, attachments: [] }),
+    set({
+      messages: [],
+      isLoading: false,
+      error: null,
+      isInitialized: false,
+      attachments: [],
+      draftInput: '',
+    }),
   setInitialized: (initialized) => set({ isInitialized: initialized }),
 }))

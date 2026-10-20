@@ -8,6 +8,8 @@ import { api } from '../src/api'
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   setModelLanguage: vi.fn(),
+  setTheme: vi.fn(),
+  defineTheme: vi.fn(),
   createModel: vi.fn(() => ({})),
 }))
 
@@ -16,6 +18,8 @@ vi.mock('monaco-editor', () => ({
     create: (element: HTMLElement, options: { value?: string }) =>
       mocks.create(element, options),
     setModelLanguage: mocks.setModelLanguage,
+    setTheme: mocks.setTheme,
+    defineTheme: mocks.defineTheme,
     createModel: mocks.createModel,
   },
 }))

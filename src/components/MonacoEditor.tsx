@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import * as monaco from 'monaco-editor'
+import { FileCode, Loader2, X } from 'lucide-react'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
+import { useResolvedTheme } from '../store/themeStore'
 import { localizeError } from '../i18n/errors'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
+import { EmptyState } from './ui'
 
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   ts: 'typescript',
@@ -26,8 +29,88 @@ function detectLanguage(fileName: string): string {
   return LANGUAGE_BY_EXTENSION[extension] || 'plaintext'
 }
 
+const EDITOR_THEME = {
+  paper: 'pi-paper',
+  ink: 'pi-ink',
+} as const
+
+monaco.editor.defineTheme(EDITOR_THEME.paper, {
+  base: 'vs',
+  inherit: true,
+  rules: [
+    { token: 'comment', foreground: '9A9284', fontStyle: 'italic' },
+    { token: 'keyword', foreground: '8A3B2A' },
+    { token: 'string', foreground: '4F6B3A' },
+    { token: 'number', foreground: '8A6A3B' },
+    { token: 'type', foreground: '3E5D66' },
+    { token: 'type.identifier', foreground: '3E5D66' },
+    { token: 'identifier', foreground: '2B2721' },
+    { token: 'function', foreground: '6B4E2E' },
+    { token: 'delimiter', foreground: '6D675C' },
+    { token: 'tag', foreground: '8A3B2A' },
+    { token: 'attribute.name', foreground: '7A4B36' },
+  ],
+  colors: {
+    'editor.background': '#FBF9F4',
+    'editor.foreground': '#2B2721',
+    'editorLineNumber.foreground': '#B5AE9F',
+    'editorLineNumber.activeForeground': '#6D675C',
+    'editor.selectionBackground': '#2F5D4E24',
+    'editor.inactiveSelectionBackground': '#17151212',
+    'editor.lineHighlightBackground': '#17151209',
+    'editorCursor.foreground': '#2F5D4E',
+    'editorIndentGuide.background1': '#17151214',
+    'editorIndentGuide.activeBackground1': '#17151233',
+    'editorWidget.background': '#FBF9F4',
+    'editorWidget.border': '#17151229',
+    'editorSuggestWidget.background': '#FBF9F4',
+    'editorSuggestWidget.border': '#17151229',
+    'editorSuggestWidget.selectedBackground': '#EFECE4',
+    'scrollbarSlider.background': '#918A7D55',
+    'scrollbarSlider.hoverBackground': '#918A7D88',
+  },
+})
+
+monaco.editor.defineTheme(EDITOR_THEME.ink, {
+  base: 'vs-dark',
+  inherit: true,
+  rules: [
+    { token: 'comment', foreground: '7C7466', fontStyle: 'italic' },
+    { token: 'keyword', foreground: 'E08A72' },
+    { token: 'string', foreground: '9DBF8A' },
+    { token: 'number', foreground: 'D6B26E' },
+    { token: 'type', foreground: '8FC4CF' },
+    { token: 'type.identifier', foreground: '8FC4CF' },
+    { token: 'identifier', foreground: 'E6DFD3' },
+    { token: 'function', foreground: 'DEC49E' },
+    { token: 'delimiter', foreground: '9C9487' },
+    { token: 'tag', foreground: 'E08A72' },
+    { token: 'attribute.name', foreground: 'C8A88A' },
+  ],
+  colors: {
+    'editor.background': '#1A1815',
+    'editor.foreground': '#E6DFD3',
+    'editorLineNumber.foreground': '#736C60',
+    'editorLineNumber.activeForeground': '#9C9487',
+    'editor.selectionBackground': '#8FC7B43D',
+    'editor.inactiveSelectionBackground': '#EDE7DC14',
+    'editor.lineHighlightBackground': '#EDE7DC0A',
+    'editorCursor.foreground': '#8FC7B4',
+    'editorIndentGuide.background1': '#EDE7DC14',
+    'editorIndentGuide.activeBackground1': '#EDE7DC33',
+    'editorWidget.background': '#1A1815',
+    'editorWidget.border': '#EDE7DC29',
+    'editorSuggestWidget.background': '#1A1815',
+    'editorSuggestWidget.border': '#EDE7DC29',
+    'editorSuggestWidget.selectedBackground': '#2B2722',
+    'scrollbarSlider.background': '#736C6055',
+    'scrollbarSlider.hoverBackground': '#736C6088',
+  },
+})
+
 export const MonacoEditor: React.FC = () => {
   const { t } = useI18nStore()
+  const resolvedTheme = useResolvedTheme()
   const editorRef = useRef<HTMLDivElement>(null)
   const monacoRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const { currentFile, openFiles, updateOpenFile, markClean, removeOpenFile } = useEditorStore()
@@ -52,15 +135,23 @@ export const MonacoEditor: React.FC = () => {
     monacoRef.current = monaco.editor.create(editorRef.current, {
       value: currentFile.content,
       language: detectLanguage(currentFile.name),
-      theme: 'vs-dark',
+      theme: resolvedTheme === 'dark' ? EDITOR_THEME.ink : EDITOR_THEME.paper,
       automaticLayout: true,
-      minimap: { enabled: true },
-      fontSize: 14,
+      minimap: { enabled: false },
+      fontSize: 13.5,
+      lineHeight: 22,
+      fontFamily: '"IBM Plex Mono", "Cascadia Code", Consolas, monospace',
       lineNumbers: 'on',
       wordWrap: 'on',
+      padding: { top: 10 },
     })
     setEditorReady(true)
-  }, [currentFile])
+  }, [currentFile, resolvedTheme])
+
+  // 主题切换时更新编辑器配色
+  useEffect(() => {
+    monaco.editor.setTheme(resolvedTheme === 'dark' ? EDITOR_THEME.ink : EDITOR_THEME.paper)
+  }, [resolvedTheme])
 
   // 组件卸载时释放编辑器
   useEffect(() => {
@@ -209,50 +300,60 @@ export const MonacoEditor: React.FC = () => {
 
   if (!currentFile) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-white dark:bg-[#1e1e1e]">
-        <div>
-          <h2 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-2">{t('noFileOpen')}</h2>
-          <p className="text-gray-600 dark:text-gray-400">{t('selectFileToEdit')}</p>
-        </div>
+      <div className="flex flex-1 items-center justify-center bg-panel">
+        <EmptyState icon={FileCode} title={t('noFileOpen')} description={t('selectFileToEdit')} />
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col flex-1 bg-white dark:bg-[#1e1e1e] min-h-0">
-      <div className="flex gap-0 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#252526] flex-shrink-0 overflow-x-auto">
-        {openFiles.map((file) => (
-          <div
-            key={file.path}
-            className={`flex items-center gap-2 px-4 py-2 border-r border-gray-200 dark:border-gray-700 cursor-pointer select-none whitespace-nowrap ${
-              currentFile?.path === file.path
-                ? 'bg-white dark:bg-[#1e1e1e] border-b-2 border-b-blue-600'
-                : 'hover:bg-gray-100 dark:hover:bg-[#2d2d30]'
-            }`}
-          >
-            <span
-              className="flex items-center gap-2 flex-1"
-              onClick={() => useEditorStore.setState({ currentFile: file })}
+    <div className="flex min-h-0 flex-1 flex-col bg-panel">
+      <div className="flex flex-shrink-0 items-stretch overflow-x-auto border-b border-line bg-surface">
+        {openFiles.map((file) => {
+          const active = currentFile?.path === file.path
+          return (
+            <div
+              key={file.path}
+              className={`group flex h-[34px] items-center gap-2 border-r border-line pl-3 pr-1.5 font-mono text-[10.5px] transition-colors ${
+                active
+                  ? 'bg-panel text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
+                  : 'text-ink-subtle hover:bg-hover hover:text-ink'
+              }`}
             >
-              <span className="text-gray-900 dark:text-gray-100">{file.name}</span>
-              {file.isDirty && <span className="w-2 h-2 rounded-full bg-red-500"></span>}
-              {file.isSaving && <span className="animate-spin text-xs">⟳</span>}
-            </span>
-            <button
-              className="p-1 hover:bg-gray-200 dark:hover:bg-[#2d2d30] rounded text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 border-none bg-none cursor-pointer"
-              onClick={() => {
-                const target = useEditorStore.getState().openFiles.find((f) => f.path === file.path)
-                if (target?.isDirty && !window.confirm(t('discardChangesConfirm'))) return
-                removeOpenFile(file.path)
-              }}
-              title={t('close')}
-            >
-              ✕
-            </button>
-          </div>
-        ))}
+              <button
+                type="button"
+                className="flex max-w-[220px] items-center gap-1.5 bg-transparent text-inherit"
+                title={file.path}
+                onClick={() => useEditorStore.setState({ currentFile: file })}
+              >
+                <FileCode size={12} className={active ? 'text-accent' : 'text-ink-subtle'} />
+                <span className="truncate">{file.name}</span>
+                {file.isDirty && (
+                  <span
+                    className="h-1 w-1 flex-shrink-0 rounded-full bg-accent"
+                    title={t('unsavedChanges')}
+                  />
+                )}
+                {file.isSaving && <Loader2 size={10} className="animate-spin text-ink-subtle" />}
+              </button>
+              <button
+                type="button"
+                className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-ink-subtle opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100"
+                aria-label={t('close')}
+                title={t('close')}
+                onClick={() => {
+                  const target = useEditorStore.getState().openFiles.find((f) => f.path === file.path)
+                  if (target?.isDirty && !window.confirm(t('discardChangesConfirm'))) return
+                  removeOpenFile(file.path)
+                }}
+              >
+                <X size={11} />
+              </button>
+            </div>
+          )
+        })}
       </div>
-      <div ref={editorRef} className="flex-1 min-h-0" />
+      <div ref={editorRef} className="min-h-0 flex-1" />
     </div>
   )
 }

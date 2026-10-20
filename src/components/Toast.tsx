@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react'
+import { useI18nStore } from '../store/i18nStore'
 
 export type ToastType = 'success' | 'error' | 'info' | 'warning'
 
@@ -14,7 +16,15 @@ interface ToastProps {
   onClose: (id: string) => void
 }
 
+const TOAST_STYLES: Record<ToastType, { border: string; icon: string; Icon: typeof Info }> = {
+  success: { border: 'border-l-success', icon: 'text-success', Icon: CheckCircle2 },
+  error: { border: 'border-l-danger', icon: 'text-danger', Icon: XCircle },
+  warning: { border: 'border-l-warning', icon: 'text-warning', Icon: AlertTriangle },
+  info: { border: 'border-l-accent', icon: 'text-accent', Icon: Info },
+}
+
 const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
+  const { t } = useI18nStore()
   const [isExiting, setIsExiting] = useState(false)
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -41,47 +51,26 @@ const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
     exitTimerRef.current = setTimeout(() => onClose(message.id), 300)
   }
 
-  const colors = {
-    success: 'border-l-4 border-green-500 bg-green-50 dark:bg-green-900/20',
-    error: 'border-l-4 border-red-500 bg-red-50 dark:bg-red-900/20',
-    warning: 'border-l-4 border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20',
-    info: 'border-l-4 border-blue-500 bg-blue-50 dark:bg-blue-900/20',
-  }
-
-  const iconColors = {
-    success: 'text-green-600 dark:text-green-400',
-    error: 'text-red-600 dark:text-red-400',
-    warning: 'text-yellow-600 dark:text-yellow-400',
-    info: 'text-blue-600 dark:text-blue-400',
-  }
-
-  const textColors = {
-    success: 'text-green-800 dark:text-green-200',
-    error: 'text-red-800 dark:text-red-200',
-    warning: 'text-yellow-800 dark:text-yellow-200',
-    info: 'text-blue-800 dark:text-blue-200',
-  }
+  const { border, icon, Icon } = TOAST_STYLES[message.type]
 
   return (
     <div
-      className={`flex items-center gap-3 px-4 py-3 rounded bg-white dark:bg-[#252526] shadow-lg ${colors[message.type]} ${
-        isExiting ? 'animate-out slide-out-to-right-full duration-300' : 'animate-in slide-in-from-right-full duration-300'
+      role="status"
+      className={`flex items-start gap-2.5 border border-line border-l-2 ${border} bg-raised px-3 py-2.5 text-ink shadow-print ${
+        isExiting
+          ? 'animate-out slide-out-to-right-full duration-300'
+          : 'animate-in slide-in-from-right-full duration-300'
       }`}
     >
-      <span className={`text-lg font-bold flex-shrink-0 ${iconColors[message.type]}`}>
-        {message.type === 'success' && '✓'}
-        {message.type === 'error' && '✕'}
-        {message.type === 'warning' && '⚠'}
-        {message.type === 'info' && 'ℹ'}
-      </span>
-      <span className={`flex-1 text-sm font-medium ${textColors[message.type]}`}>
-        {message.message}
-      </span>
+      <Icon size={15} className={`mt-0.5 flex-shrink-0 ${icon}`} />
+      <span className="flex-1 text-xs leading-relaxed text-ink">{message.message}</span>
       <button
+        type="button"
         onClick={handleClose}
-        className={`flex-shrink-0 bg-none border-none cursor-pointer text-lg font-bold transition-colors ${textColors[message.type]} hover:opacity-75`}
+        aria-label={t('close')}
+        className="flex-shrink-0 rounded p-0.5 text-ink-subtle transition-colors hover:bg-ink/10 hover:text-ink"
       >
-        ×
+        <X size={13} />
       </button>
     </div>
   )
@@ -92,7 +81,7 @@ export const ToastContainer: React.FC<{ messages: ToastMessage[]; onClose: (id: 
   onClose,
 }) => {
   return (
-    <div className="fixed top-5 right-5 z-50 flex flex-col gap-2 pointer-events-none">
+    <div className="pointer-events-none fixed right-4 top-14 z-50 flex w-80 flex-col gap-2">
       {messages.map((msg) => (
         <div key={msg.id} className="pointer-events-auto">
           <Toast message={msg} onClose={onClose} />

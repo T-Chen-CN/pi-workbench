@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { RefreshCw, Search, X } from 'lucide-react'
 import { api } from '../api'
 import { useI18nStore } from '../store/i18nStore'
 import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
+import { IconButton, Spinner } from './ui'
 import type { PluginCommandInfo, PluginInfo } from '../types/electron'
 
 interface CommandPaletteProps {
@@ -148,31 +150,30 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-24">
-      <div className="fixed inset-0 bg-black/50" onClick={() => setOpen(false)} />
-      <div className="relative w-11/12 max-w-2xl bg-white dark:bg-[#252526] border border-gray-300 dark:border-gray-700 rounded-lg shadow-xl flex flex-col max-h-[70vh]">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-20"
+    >
+      <div className="absolute inset-0 bg-black/50" onClick={() => setOpen(false)} />
+      <div className="relative flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden border border-line bg-panel shadow-print">
+        <div className="flex h-10 flex-shrink-0 items-center justify-between border-b border-line px-3">
+          <h3 className="m-0 text-[11px] font-semibold uppercase tracking-wide text-ink-subtle">
             {t('commandPalette')}
           </h3>
-          <div className="flex items-center gap-2">
-            <button
+          <div className="flex items-center gap-1">
+            <IconButton
+              icon={RefreshCw}
+              label={t('reloadPlugins')}
+              size="sm"
               onClick={reload}
-              className="px-2 py-1 text-xs rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600"
-            >
-              {t('reloadPlugins')}
-            </button>
-            <button
-              onClick={() => setOpen(false)}
-              title={t('close')}
-              className="bg-none border-none cursor-pointer text-lg text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-            >
-              ✕
-            </button>
+            />
+            <IconButton icon={X} label={t('close')} size="sm" onClick={() => setOpen(false)} />
           </div>
         </div>
 
-        <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700">
+        <div className="flex flex-shrink-0 items-center gap-2 border-b border-line px-3">
+          <Search size={15} className="text-ink-subtle" />
           <input
             ref={inputRef}
             value={query}
@@ -191,27 +192,31 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
               }
             }}
             placeholder={t('pluginCommands')}
-            className="w-full bg-transparent text-sm text-gray-900 dark:text-gray-100 focus:outline-none"
+            className="h-10 w-full bg-transparent font-mono text-[13px] text-ink placeholder:text-ink-subtle focus:outline-none"
           />
+          {loading && <Spinner size={14} className="text-ink-subtle" />}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-gray-200 dark:border-gray-700">
-          <span className="text-xs uppercase tracking-wide text-gray-500">{t('plugins')}</span>
+        <div className="flex flex-shrink-0 flex-wrap items-center gap-1.5 border-b border-line px-3 py-1.5">
+          <span className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-ink-subtle">
+            {t('plugins')}
+          </span>
           {plugins.length === 0 && !loading && (
-            <span className="text-xs text-gray-500">{t('noPlugins')}</span>
+            <span className="font-mono text-[10px] text-ink-subtle">{t('noPlugins')}</span>
           )}
           {plugins.map((plugin) => (
             <label
               key={plugin.id}
-              className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer ${
+              className={`inline-flex cursor-pointer items-center gap-1.5 border px-2 py-0.5 font-mono text-[10px] ${
                 plugin.error
-                  ? 'bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200'
+                  ? 'border-danger/40 bg-danger/10 text-danger'
+                  : 'border-line bg-sunken text-ink-muted hover:text-ink'
               }`}
               title={plugin.error || plugin.description || plugin.id}
             >
               <input
                 type="checkbox"
+                className="h-3 w-3 accent-[rgb(var(--accent))]"
                 checked={plugin.enabled}
                 onChange={() => void setEnabled(plugin)}
               />
@@ -220,66 +225,73 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
           ))}
         </div>
 
-        <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700">
+        <div className="flex-shrink-0 border-b border-line px-3 py-1.5">
           <input
             value={args}
             onChange={(event) => setArgs(event.target.value)}
             placeholder={t('commandArguments')}
-            className="w-full bg-transparent text-xs text-gray-700 dark:text-gray-300 focus:outline-none"
+            className="w-full bg-transparent text-[11px] text-ink-muted placeholder:text-ink-subtle focus:outline-none"
           />
         </div>
 
         {error && (
-          <div className="px-4 py-2 text-sm text-red-600 dark:text-red-400 border-b border-red-200 dark:border-red-700/50">
+          <div className="flex-shrink-0 border-b border-danger/30 bg-danger/10 px-3 py-1.5 text-xs text-danger">
             {error}
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto">
           {filtered.length === 0 ? (
-            <div className="px-4 py-6 text-sm text-center text-gray-500">
+            <div className="px-3 py-8 text-center text-xs text-ink-subtle">
               {loading ? t('loading') : t('noPluginCommands')}
             </div>
           ) : (
             filtered.map((command, index) => (
               <button
                 key={command.id}
+                type="button"
                 onClick={() => void runCommand(command)}
                 onMouseEnter={() => setSelected(index)}
-                className={`w-full text-left px-4 py-2 border-b border-gray-100 dark:border-gray-700/50 bg-none cursor-pointer ${
+                className={`flex w-full items-start gap-3 border-b border-b-line/50 border-l-2 px-3 py-2 text-left transition-colors ${
                   index === selected
-                    ? 'bg-blue-50 dark:bg-blue-900/20'
-                    : 'hover:bg-gray-50 dark:hover:bg-[#2d2d30]'
+                    ? 'border-l-accent bg-accent/[0.06]'
+                    : 'border-l-transparent hover:bg-hover'
                 }`}
               >
-                <div className="text-sm text-gray-900 dark:text-gray-100">{command.title}</div>
-                <div className="text-xs text-gray-500">
-                  {command.pluginName} · {command.id}
-                  {command.description ? ` — ${command.description}` : ''}
-                </div>
+                <span className="mt-0.5 font-mono text-[9px] text-ink-subtle">
+                  {String(index + 1).padStart(2, '0')}
+                </span>
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="text-xs text-ink">{command.title}</span>
+                  <span className="font-mono text-[9.5px] text-ink-subtle">
+                    {command.pluginName} · {command.id}
+                    {command.description ? ` — ${command.description}` : ''}
+                  </span>
+                </span>
               </button>
             ))
           )}
         </div>
 
         {output && (
-          <div className="border-t border-gray-200 dark:border-gray-700">
-            <div className="flex items-center justify-between px-4 py-2">
+          <div className="flex-shrink-0 border-t border-line">
+            <div className="flex items-center justify-between px-3 py-1.5">
               <span
-                className={`text-xs font-medium ${
-                  output.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                className={`text-[11px] font-medium ${
+                  output.success ? 'text-success' : 'text-danger'
                 }`}
               >
                 {t('commandOutput')}: {output.title}
               </span>
               <button
+                type="button"
                 onClick={() => setOutput(null)}
-                className="bg-none border-none cursor-pointer text-xs text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"
+                className="text-[11px] text-ink-subtle hover:text-ink"
               >
                 {t('clear')}
               </button>
             </div>
-            <pre className="max-h-40 overflow-auto px-4 pb-3 text-xs font-mono whitespace-pre-wrap text-gray-800 dark:text-gray-200">
+            <pre className="m-0 max-h-40 overflow-auto px-3 pb-2 font-mono text-[11px] text-ink-muted whitespace-pre-wrap">
               {output.text}
             </pre>
           </div>

@@ -47,6 +47,8 @@ vi.mock('monaco-editor', () => ({
       dispose: vi.fn(),
     })),
     setModelLanguage: vi.fn(),
+    setTheme: vi.fn(),
+    defineTheme: vi.fn(),
     createModel: vi.fn(() => ({})),
   },
 }))
@@ -97,6 +99,31 @@ describe('ChatPanel', () => {
       expect(screen.queryByText(translations.zh.apiConfigRequired)).toBeNull()
     })
     expect(screen.getByText(new RegExp(translations.zh.agentChatTitle))).toBeTruthy()
+  })
+
+  it('renders assistant markdown with highlighted code blocks', async () => {
+    vi.mocked(api.apiConfigGet).mockResolvedValue({
+      success: true,
+      config: configWithKey,
+    })
+    vi.mocked(piAgentAPI.getHistory).mockResolvedValue({
+      success: true,
+      history: [
+        {
+          role: 'assistant',
+          content: 'Example:\n\n```ts\nconst answer = 42\n```',
+          timestamp: Date.now(),
+        },
+      ],
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    await waitFor(() => {
+      const code = document.querySelector('.chat-markdown pre code')
+      expect(code?.textContent).toContain('const answer = 42')
+    })
+    expect(screen.getByLabelText(translations.zh.copyCode)).toBeTruthy()
   })
 })
 

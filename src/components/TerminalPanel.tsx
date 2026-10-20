@@ -1,12 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { X } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { api } from '../api'
 import { useChatStore } from '../store/chatStore'
 import { useI18nStore } from '../store/i18nStore'
+import { useResolvedTheme } from '../store/themeStore'
 import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
+import { IconButton } from './ui'
 
 interface TerminalPanelProps {
   workspacePath: string
@@ -22,6 +25,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   onClose,
 }) => {
   const { t } = useI18nStore()
+  const resolvedTheme = useResolvedTheme()
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -72,12 +76,22 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
     const terminal = new Terminal({
       fontSize: 13,
-      fontFamily: 'Consolas, "Cascadia Mono", "Courier New", monospace',
+      fontFamily: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace',
       cursorBlink: true,
-      theme: {
-        background: '#1e1e1e',
-        foreground: '#cccccc',
-      },
+      theme:
+        resolvedTheme === 'dark'
+          ? {
+              background: '#1A1815',
+              foreground: '#E6DFD3',
+              cursor: '#8FC7B4',
+              selectionBackground: '#8FC7B43D',
+            }
+          : {
+              background: '#FBF9F4',
+              foreground: '#2B2721',
+              cursor: '#2F5D4E',
+              selectionBackground: '#2F5D4E30',
+            },
     })
     const fit = new FitAddon()
     terminal.loadAddon(fit)
@@ -118,7 +132,27 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     return () => {
       cancelled = true
     }
-  }, [visible, workspacePath, generation, t])
+  }, [visible, workspacePath, generation, t, resolvedTheme])
+
+  // 主题切换时同步终端配色
+  useEffect(() => {
+    const terminal = termRef.current
+    if (!terminal) return
+    terminal.options.theme =
+      resolvedTheme === 'dark'
+        ? {
+            background: '#1A1815',
+            foreground: '#E6DFD3',
+            cursor: '#8FC7B4',
+            selectionBackground: '#8FC7B43D',
+          }
+        : {
+            background: '#FBF9F4',
+            foreground: '#2B2721',
+            cursor: '#2F5D4E',
+            selectionBackground: '#2F5D4E30',
+          }
+  }, [resolvedTheme])
 
   // 可见时适配尺寸
   useEffect(() => {
@@ -177,40 +211,37 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     <div
       className={
         visible
-          ? 'h-64 flex flex-col border-t border-gray-200 dark:border-gray-700 bg-[#1e1e1e] flex-shrink-0'
+          ? 'flex h-[172px] flex-shrink-0 flex-col border-t border-line bg-panel'
           : 'hidden'
       }
     >
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#252526] flex-shrink-0">
-        <div className="flex items-center gap-3 text-xs text-gray-600 dark:text-gray-400">
-          <span className="uppercase tracking-wide">{t('terminal')}</span>
+      <div className="flex h-7 flex-shrink-0 items-center justify-between border-b border-line px-3.5">
+        <div className="flex items-center gap-3 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-subtle">
+          <span className="text-ink-muted">{t('terminal')}</span>
+          <span className="border-b border-accent pb-0.5 text-ink">zsh</span>
           {status === 'starting' && <span>{t('terminalStarting')}</span>}
-          {status === 'error' && <span className="text-red-500">{error}</span>}
+          {status === 'error' && <span className="normal-case tracking-normal text-danger">{error}</span>}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <button
-            onClick={sendOutputToChat}
+            type="button"
             disabled={status !== 'ready'}
-            className="px-2 py-1 text-xs rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={() => void sendOutputToChat()}
+            className="font-mono text-[9px] text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
           >
             {t('sendTerminalOutput')}
           </button>
           <button
+            type="button"
             onClick={restart}
-            className="px-2 py-1 text-xs rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600"
+            className="font-mono text-[9px] text-ink-muted transition-colors hover:text-ink"
           >
             {t('restartTerminal')}
           </button>
-          <button
-            onClick={onClose}
-            title={t('close')}
-            className="px-1.5 py-1 text-sm bg-none border-none cursor-pointer text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-          >
-            ✕
-          </button>
+          <IconButton icon={X} label={t('close')} size="sm" onClick={onClose} />
         </div>
       </div>
-      <div ref={containerRef} className="flex-1 min-h-0 px-1 pb-1" />
+      <div ref={containerRef} className="min-h-0 flex-1 px-2 pb-1 pt-1" />
     </div>
   )
 }

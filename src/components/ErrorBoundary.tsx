@@ -38,21 +38,21 @@ export class ErrorBoundary extends React.Component<
     if (this.state.error) {
       const { t } = useI18nStore.getState()
       return (
-        <div className="flex flex-col h-screen items-center justify-center gap-4 bg-gray-900 text-gray-100 p-6">
-          <h1 className="text-xl font-semibold">{t('errorBoundaryTitle')}</h1>
-          <pre className="max-w-2xl max-h-64 overflow-auto text-xs text-red-300 bg-gray-800 p-3 rounded whitespace-pre-wrap">
+        <div className="flex h-screen flex-col items-center justify-center gap-4 bg-surface p-6 text-ink">
+          <h1 className="font-display text-3xl text-ink">{t('errorBoundaryTitle')}</h1>
+          <pre className="max-h-64 max-w-2xl overflow-auto whitespace-pre-wrap border border-line bg-sunken p-3 font-mono text-xs text-danger">
             {this.state.error.message}
           </pre>
           <div className="flex gap-2">
             <button
               onClick={() => this.setState({ error: null })}
-              className="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm"
+              className="border border-line bg-raised px-4 py-2 text-sm text-ink transition-colors hover:bg-hover"
             >
               {t('tryAgain')}
             </button>
             <button
               onClick={() => window.location.reload()}
-              className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-sm"
+              className="bg-accent px-4 py-2 text-sm text-accent-fg transition-colors hover:bg-accent-hover"
             >
               {t('reload')}
             </button>

@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { FileText, Plus, Ship, X } from 'lucide-react'
 import { api } from '../api'
 import { useI18nStore } from '../store/i18nStore'
 import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
+import { Button, EmptyState, IconButton, Input, Spinner, Textarea } from './ui'
 import type { FleetTask, FleetTaskStatus } from '../types/electron'
 
 interface FleetPanelProps {
@@ -12,11 +14,11 @@ interface FleetPanelProps {
 }
 
 const STATUS_STYLES: Record<FleetTaskStatus, string> = {
-  queued: 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  running: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',
-  succeeded: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400',
-  failed: 'bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400',
-  cancelled: 'bg-yellow-100 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400',
+  queued: 'text-ink-subtle',
+  running: 'text-accent',
+  succeeded: 'text-success',
+  failed: 'text-danger',
+  cancelled: 'text-warning',
 }
 
 const STATUS_KEYS: Record<FleetTaskStatus, 'fleetQueued' | 'fleetRunning' | 'fleetSucceeded' | 'fleetFailed' | 'fleetCancelled'> = {
@@ -44,6 +46,15 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
       setError(t('fleetLoadFailed', { error: localizeError(result.error) || t('unknownError') }))
     }
   }, [workspacePath, t])
+
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, onClose])
 
   useEffect(() => {
     if (!open) return
@@ -105,107 +116,110 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
   const selectedTask = tasks.find((task) => task.id === selectedId) ?? null
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-white dark:bg-[#1e1e1e] border border-gray-300 dark:border-gray-700 rounded-lg w-11/12 h-5/6 max-w-4xl shadow-xl flex flex-col">
-        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-          <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">
-            {t('fleetTasks')}
-            <span className="ml-2 text-xs font-normal text-gray-500">
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-40 flex items-center justify-center p-6"
+    >
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative flex h-[85vh] w-full max-w-3xl flex-col overflow-hidden border border-line bg-panel shadow-print">
+        <div className="flex h-11 flex-shrink-0 items-center justify-between border-b border-line px-4">
+          <div className="flex items-center gap-2">
+            <Ship size={15} className="text-accent" />
+            <h3 className="m-0 text-sm font-semibold text-ink">{t('fleetTasks')}</h3>
+            <span className="border border-line px-1.5 py-0.5 text-[10px] tabular-nums text-ink-subtle">
               {tasks.length}
             </span>
-          </h3>
-          <button
-            onClick={onClose}
-            title={t('close')}
-            className="bg-none border-none cursor-pointer text-xl text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-          >
-            ✕
-          </button>
+          </div>
+          <IconButton icon={X} label={t('close')} size="sm" onClick={onClose} />
         </div>
 
         {/* Create form */}
-        <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex flex-col gap-2 flex-shrink-0">
+        <div className="flex flex-shrink-0 flex-col gap-2 border-b border-line p-3">
           <div className="flex gap-2">
-            <input
+            <Input
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder={t('fleetNamePlaceholder')}
-              className="flex-1 bg-gray-50 dark:bg-[#252526] text-sm text-gray-900 dark:text-gray-100 px-3 py-2 rounded border border-gray-300 dark:border-gray-700 focus:outline-none focus:border-blue-500"
+              className="flex-1"
             />
-            <button
+            <Button
+              variant="primary"
+              size="sm"
+              icon={Plus}
               onClick={() => void createTask()}
               disabled={busy || !name.trim() || !prompt.trim()}
-              className="px-4 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {busy ? t('fleetCreating') : t('fleetCreate')}
-            </button>
+            </Button>
           </div>
-          <textarea
+          <Textarea
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             placeholder={t('fleetPromptPlaceholder')}
             rows={2}
-            className="w-full bg-gray-50 dark:bg-[#252526] text-sm text-gray-900 dark:text-gray-100 px-3 py-2 rounded border border-gray-300 dark:border-gray-700 focus:outline-none focus:border-blue-500 resize-none"
           />
-          <p className="text-xs text-gray-500">{t('fleetHint')}</p>
-          {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+          <p className="m-0 text-[11px] text-ink-subtle">{t('fleetHint')}</p>
+          {error && <p className="m-0 text-[11px] text-danger">{error}</p>}
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto">
           {tasks.length === 0 ? (
-            <div className="px-5 py-10 text-sm text-center text-gray-500">{t('fleetEmpty')}</div>
+            <EmptyState icon={Ship} title={t('fleetEmpty')} description={t('fleetHint')} />
           ) : (
             tasks.map((task) => (
               <div
                 key={task.id}
-                className="px-5 py-3 border-b border-gray-100 dark:border-gray-700/60"
+                className="border-b border-line/60 px-4 py-2.5 transition-colors hover:bg-hover/40"
               >
-                <div className="flex items-center gap-3">
-                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${STATUS_STYLES[task.status]}`}>
-                    {t(STATUS_KEYS[task.status])}
+                <div className="flex items-center gap-2.5">
+                  <span
+                    className={`font-mono text-[9px] uppercase tracking-[0.1em] ${STATUS_STYLES[task.status]}`}
+                  >
+                    ● {t(STATUS_KEYS[task.status])}
                   </span>
-                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                    {task.name}
+                  <span className="truncate text-xs font-medium text-ink">{task.name}</span>
+                  <span className="flex-1 truncate font-mono text-[10px] text-ink-subtle">
+                    {task.branch}
                   </span>
-                  <span className="text-xs text-gray-500 truncate flex-1">{task.branch}</span>
-                  <div className="flex items-center gap-2">
-                    <button
+                  <div className="flex flex-shrink-0 items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={FileText}
                       onClick={() => setSelectedId(selectedId === task.id ? null : task.id)}
-                      className="px-2 py-1 text-xs rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600"
                     >
                       {t('fleetViewLog')}
-                    </button>
+                    </Button>
                     {(task.status === 'queued' || task.status === 'running') && (
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-danger hover:bg-danger/10 hover:text-danger"
                         onClick={() => void cancelTask(task)}
-                        className="px-2 py-1 text-xs rounded bg-red-600 text-white hover:bg-red-700"
                       >
                         {t('fleetCancel')}
-                      </button>
+                      </Button>
                     )}
                     {task.status !== 'queued' &&
                       task.status !== 'running' &&
                       !task.worktreeRemoved && (
-                        <button
-                          onClick={() => void cleanupTask(task)}
-                          className="px-2 py-1 text-xs rounded border border-gray-400 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        >
+                        <Button variant="ghost" size="sm" onClick={() => void cleanupTask(task)}>
                           {t('fleetCleanup')}
-                        </button>
+                        </Button>
                       )}
                   </div>
                 </div>
 
-                <div className="mt-1 text-xs text-gray-500 truncate" title={task.worktree}>
+                <div className="mt-1 truncate text-[11px] text-ink-muted" title={task.worktree}>
                   {task.prompt}
                 </div>
                 {task.error && (
-                  <div className="mt-1 text-xs text-red-600 dark:text-red-400">{task.error}</div>
+                  <div className="mt-1 text-[11px] text-danger">{task.error}</div>
                 )}
 
                 {selectedId === task.id && (
-                  <pre className="mt-2 max-h-48 overflow-auto text-xs font-mono whitespace-pre-wrap bg-gray-50 dark:bg-[#252526] border border-gray-200 dark:border-gray-700 rounded p-2 text-gray-800 dark:text-gray-200">
+                  <pre className="m-0 mt-2 max-h-48 overflow-auto whitespace-pre-wrap border border-line bg-sunken p-2 font-mono text-[11px] text-ink-muted">
                     {task.output || task.error || t('fleetLogEmpty')}
                   </pre>
                 )}
@@ -215,8 +229,11 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
         </div>
 
         {selectedTask && (
-          <div className="px-5 py-2 border-t border-gray-200 dark:border-gray-700 text-xs text-gray-500 flex-shrink-0">
-            {selectedTask.worktreeRemoved ? t('fleetWorktreeRemoved') : selectedTask.worktree}
+          <div className="flex flex-shrink-0 items-center gap-2 border-t border-line px-4 py-1.5 text-[10px] text-ink-subtle">
+            {busy && <Spinner size={11} />}
+            <span className="truncate font-mono">
+              {selectedTask.worktreeRemoved ? t('fleetWorktreeRemoved') : selectedTask.worktree}
+            </span>
           </div>
         )}
       </div>

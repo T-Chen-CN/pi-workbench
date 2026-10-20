@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
+import { Button } from './ui'
 
 type TestResult = { command: string; status: 'ok' | 'error'; message: string }
 
@@ -98,35 +99,35 @@ export const IPCDebug: React.FC = () => {
   const allPassed = testResults.length > 0 && testResults.every((r) => r.status === 'ok')
 
   return (
-    <div className="flex flex-col gap-4 p-4 bg-white dark:bg-[#1e1e1e] rounded-lg border border-gray-200 dark:border-gray-700">
-      <h3 className="text-base font-semibold m-0 text-gray-900 dark:text-gray-100">{t('ipcDebug')}</h3>
-      <button
-        onClick={runTests}
-        disabled={loading}
-        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 border-none cursor-pointer font-medium"
-      >
-        {loading ? t('testing') : t('runTests')}
-      </button>
+    <div className="flex flex-col gap-2.5">
+      <div className="flex items-center justify-between">
+        <h3 className="m-0 font-mono text-[9.5px] uppercase tracking-[0.16em] text-ink-subtle">
+          {t('ipcDebug')}
+        </h3>
+        <Button variant="secondary" size="sm" loading={loading} onClick={() => void runTests()}>
+          {loading ? t('testing') : t('runTests')}
+        </Button>
+      </div>
 
       {testResults.length > 0 && (
-        <div className={`p-3 rounded border ${allPassed ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-700/50' : 'bg-gray-50 dark:bg-gray-900/20 border-gray-200 dark:border-gray-700'}`}>
-          <h4 className="text-sm font-semibold mb-2 m-0 text-gray-900 dark:text-gray-100">
+        <div className="border border-line bg-panel p-2">
+          <h4 className="m-0 mb-1.5 flex items-center gap-2 text-[11px] font-semibold text-ink">
             {t('results')}
-            {allPassed && <span className="ml-2 text-green-600 dark:text-green-400">✓ {t('allPassed')}</span>}
+            {allPassed && <span className="text-success">✓ {t('allPassed')}</span>}
           </h4>
-          <ul className="list-none p-0 m-0 space-y-2">
+          <ul className="m-0 flex list-none flex-col gap-1 p-0">
             {testResults.map((result, i) => (
               <li
                 key={i}
-                className={`text-sm p-2 rounded ${
+                className={`px-2 py-1 font-mono text-[10px] ${
                   result.status === 'ok'
-                    ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
-                    : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+                    ? 'bg-success/10 text-success'
+                    : 'bg-danger/10 text-danger'
                 }`}
               >
                 <span className="font-mono font-semibold">{result.command}</span>
-                <span className="mx-2">[{result.status}]</span>
-                <span>{result.message}</span>
+                <span className="mx-1.5 opacity-70">[{result.status}]</span>
+                <span className="text-ink-muted">{result.message}</span>
               </li>
             ))}
           </ul>

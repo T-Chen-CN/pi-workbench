@@ -208,7 +208,7 @@ describe('app settings handlers', () => {
     expect(result.success).toBe(true)
     expect(settings).toMatchObject({
       language: 'zh',
-      theme: 'dark',
+      theme: 'light',
       autoSave: true,
       autoSaveDelay: 2000,
       recentWorkspaces: [],
