@@ -15,8 +15,9 @@ import type {
   SaveSettingsResult,
   WorkspaceResult,
   GetWorkspaceConfigResult,
-  ApiKeysGetResult,
-  ApiKeysResult,
+  ApiConfigGetResult,
+  ApiConfigSaveResult,
+  FetchModelsResult,
 } from '../types/electron'
 
 // Mock API for browser development
@@ -93,13 +94,29 @@ const mockAPI = {
     console.log('[Mock] saveWorkspaceConfig:', workspacePath, config)
     return { success: true }
   },
-  apiKeysGet: async (): Promise<ApiKeysGetResult> => {
-    console.log('[Mock] apiKeysGet')
-    return { success: true, apiKeys: {} }
+  apiConfigGet: async (): Promise<ApiConfigGetResult> => {
+    console.log('[Mock] apiConfigGet')
+    return {
+      success: true,
+      config: {
+        provider: 'anthropic',
+        apiUrl: 'https://api.anthropic.com/v1',
+        apiKey: '',
+        availableModels: ['claude-3-5-sonnet-20241022'],
+        selectedModel: 'claude-3-5-sonnet-20241022'
+      }
+    }
   },
-  apiKeysSave: async (apiKeys: Record<string, string>): Promise<ApiKeysResult> => {
-    console.log('[Mock] apiKeysSave:', Object.keys(apiKeys))
+  apiConfigSave: async (config: any): Promise<ApiConfigSaveResult> => {
+    console.log('[Mock] apiConfigSave:', config.provider)
     return { success: true }
+  },
+  apiConfigFetchModels: async (apiUrl: string, apiKey: string, provider: string): Promise<FetchModelsResult> => {
+    console.log('[Mock] apiConfigFetchModels:', provider)
+    return {
+      success: true,
+      models: ['claude-3-5-sonnet-20241022', 'gpt-4-turbo']
+    }
   },
 }
 
@@ -124,8 +141,10 @@ export const api = {
   getWorkspaceConfig: (workspacePath: string) => electronAPI.getWorkspaceConfig(workspacePath),
   saveWorkspaceConfig: (workspacePath: string, config: any) => electronAPI.saveWorkspaceConfig(workspacePath, config),
 
-  // API Keys management (portable architecture)
-  apiKeysGet: () => electronAPI.apiKeysGet(),
-  apiKeysSave: (apiKeys: Record<string, string>) => electronAPI.apiKeysSave(apiKeys),
+  // API Configuration management (portable architecture)
+  apiConfigGet: () => electronAPI.apiConfigGet(),
+  apiConfigSave: (config: any) => electronAPI.apiConfigSave(config),
+  apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: string) =>
+    electronAPI.apiConfigFetchModels(apiUrl, apiKey, provider),
 }
 

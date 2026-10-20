@@ -6,9 +6,12 @@
  */
 export interface AgentConfig {
     workspaceDir: string;
-    apiKey: string;
-    provider?: 'anthropic' | 'openai' | 'google';
-    model?: string;
+    apiConfig: {
+        provider: string;
+        apiUrl: string;
+        apiKey: string;
+        selectedModel: string;
+    };
 }
 export interface AgentMessage {
     role: 'user' | 'assistant';

@@ -3,10 +3,11 @@
  * Interfaces with Pi Agent running in Electron main process
  */
 
+import type { ApiConfig } from '../types/electron'
+
 interface AgentInitConfig {
   workspaceDir: string
-  provider?: 'anthropic' | 'openai' | 'google'
-  model?: string
+  apiConfig: ApiConfig
 }
 
 interface AgentResponse {
@@ -25,8 +26,7 @@ const electronAPI = window.electronAPI
 
 export const piAgentAPI = {
   /**
-   * Initialize Pi Agent
-   * API Key will be loaded from secure storage
+   * Initialize Pi Agent with API configuration
    */
   async initialize(config: AgentInitConfig): Promise<AgentResponse> {
     if (!electronAPI?.agentInitialize) {

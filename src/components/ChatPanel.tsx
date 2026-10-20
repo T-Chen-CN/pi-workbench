@@ -25,26 +25,25 @@ export const ChatPanel: React.FC = () => {
       try {
         setLoading(true)
 
-        // 检查是否配置了 API Key
-        const apiKeysResult = await api.apiKeysGet()
-        if (!apiKeysResult.success || !apiKeysResult.apiKeys?.anthropic) {
+        // Load API configuration
+        const configResult = await api.apiConfigGet()
+        if (!configResult.success || !configResult.config || !configResult.config.apiKey) {
           setNeedsApiKey(true)
           setLoading(false)
           return
         }
 
-        // 初始化 Agent（使用当前工作目录作为workspace）
+        // Initialize Agent with full API config
         const result = await piAgentAPI.initialize({
           workspaceDir: process.cwd(),
-          provider: 'anthropic',
-          model: 'claude-3-5-sonnet-20241022',
+          apiConfig: configResult.config
         })
 
         if (result.success) {
           setInitialized(true)
           addMessage({
             role: 'assistant',
-            content: 'Pi Agent is ready! How can I help you with your code today?',
+            content: `Pi Agent (${configResult.config.selectedModel}) is ready! How can I help you with your code today?`,
             timestamp: new Date(),
           })
         } else {

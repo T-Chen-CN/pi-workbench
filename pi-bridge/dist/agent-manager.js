@@ -32,11 +32,12 @@ export class AgentManager {
         try {
             console.log('[Agent Manager] Initializing agent...');
             console.log('[Agent Manager] Workspace:', config.workspaceDir);
-            console.log('[Agent Manager] Provider:', config.provider || 'anthropic');
+            console.log('[Agent Manager] Provider:', config.apiConfig.provider);
+            console.log('[Agent Manager] Model:', config.apiConfig.selectedModel);
             this.config = config;
             // 设置环境变量（Pi Agent 会从环境变量读取 API Key）
-            const providerKey = (config.provider || 'anthropic').toUpperCase();
-            process.env[`${providerKey}_API_KEY`] = config.apiKey;
+            const providerKey = config.apiConfig.provider.toUpperCase();
+            process.env[`${providerKey}_API_KEY`] = config.apiConfig.apiKey;
             // 创建 Pi Coding Agent 会话
             // Pi Agent 自带 read/write/edit/bash 工具
             const result = await createAgentSession({
@@ -48,6 +49,7 @@ export class AgentManager {
             });
             this.session = result.session;
             console.log('[Agent Manager] Agent initialized successfully');
+            console.log('[Agent Manager] Using model:', config.apiConfig.selectedModel);
             console.log('[Agent Manager] Available tools: read, write, edit, bash (built-in)');
             return { success: true };
         }

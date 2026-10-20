@@ -3,13 +3,14 @@ import * as path from 'path'
 import * as fs from 'fs/promises'
 import { existsSync, statSync } from 'fs'
 import { fileURLToPath } from 'url'
-import { AgentManager } from '../pi-bridge/dist/index.js'
+// Lazy load AgentManager to avoid early import errors
+// import { AgentManager } from '../pi-bridge/dist/index.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 let mainWindow: BrowserWindow | null = null
-let agentManager: AgentManager | null = null
+let agentManager: any | null = null // AgentManager type loaded dynamically
 
 // 便携式架构：获取应用目录
 function getAppDir(): string {
@@ -290,40 +291,51 @@ ipcMain.handle('workspace:saveConfig', async (_event, workspacePath: string, con
   }
 })
 
-// ==================== API Keys Management ====================
+// ==================== API Configuration Management ====================
 
-// Helper function to load API Keys
-async function loadApiKeys(): Promise<Record<string, string>> {
-  try {
-    const appDir = getAppDir()
-    const apiKeysPath = path.join(appDir, 'config', 'api-keys.json')
-
-    if (!existsSync(apiKeysPath)) {
-      return {}
-    }
-
-    const content = await fs.readFile(apiKeysPath, 'utf-8')
-    const apiKeys = JSON.parse(content)
-    return apiKeys
-  } catch (error) {
-    console.error('[Main] Failed to load API keys:', error)
-    return {}
+// Default API configurations
+const DEFAULT_API_CONFIGS: Record<string, { url: string; models: string[] }> = {
+  anthropic: {
+    url: 'https://api.anthropic.com/v1',
+    models: ['claude-3-5-sonnet-20241022', 'claude-3-opus-20240229', 'claude-3-sonnet-20240229']
+  },
+  openai: {
+    url: 'https://api.openai.com/v1',
+    models: ['gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo']
   }
 }
 
-// 读取 API Keys
-ipcMain.handle('apiKeys:get', async () => {
+// Helper function to load API Config
+async function loadApiConfig(): Promise<any> {
   try {
     const appDir = getAppDir()
-    const apiKeysPath = path.join(appDir, 'config', 'api-keys.json')
+    const configPath = path.join(appDir, 'config', 'api-config.json')
 
-    if (!existsSync(apiKeysPath)) {
-      return { success: true, apiKeys: {} }
+    if (!existsSync(configPath)) {
+      // Return default Anthropic config
+      return {
+        provider: 'anthropic',
+        apiUrl: DEFAULT_API_CONFIGS.anthropic.url,
+        apiKey: '',
+        availableModels: DEFAULT_API_CONFIGS.anthropic.models,
+        selectedModel: DEFAULT_API_CONFIGS.anthropic.models[0]
+      }
     }
 
-    const content = await fs.readFile(apiKeysPath, 'utf-8')
-    const apiKeys = JSON.parse(content)
-    return { success: true, apiKeys }
+    const content = await fs.readFile(configPath, 'utf-8')
+    const config = JSON.parse(content)
+    return config
+  } catch (error) {
+    console.error('[Main] Failed to load API config:', error)
+    return null
+  }
+}
+
+// Get API Configuration
+ipcMain.handle('apiConfig:get', async () => {
+  try {
+    const config = await loadApiConfig()
+    return { success: true, config }
   } catch (error) {
     return {
       success: false,
@@ -332,16 +344,70 @@ ipcMain.handle('apiKeys:get', async () => {
   }
 })
 
-// 保存 API Keys
-ipcMain.handle('apiKeys:save', async (_event, apiKeys: Record<string, string>) => {
+// Save API Configuration
+ipcMain.handle('apiConfig:save', async (_event, config: any) => {
   try {
     const appDir = getAppDir()
-    const apiKeysPath = path.join(appDir, 'config', 'api-keys.json')
+    const configPath = path.join(appDir, 'config', 'api-config.json')
 
-    // TODO: 后续版本添加 AES 加密
-    await fs.writeFile(apiKeysPath, JSON.stringify(apiKeys, null, 2))
+    // TODO: 后续版本添加 API Key 的 AES 加密
+    await fs.writeFile(configPath, JSON.stringify(config, null, 2))
 
     return { success: true }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+})
+
+// Fetch available models from API
+ipcMain.handle('apiConfig:fetchModels', async (_event, apiUrl: string, apiKey: string, provider: string) => {
+  try {
+    console.log(`[Main] Fetching models from ${provider}...`)
+
+    let models: string[] = []
+
+    if (provider === 'anthropic') {
+      // Anthropic doesn't have a models API, return known models
+      models = DEFAULT_API_CONFIGS.anthropic.models
+    } else if (provider === 'openai') {
+      // Call OpenAI /v1/models endpoint
+      const response = await fetch(`${apiUrl}/models`, {
+        headers: {
+          'Authorization': `Bearer ${apiKey}`
+        }
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch models: ${response.statusText}`)
+      }
+
+      const data: any = await response.json()
+      models = data.data.map((m: any) => m.id)
+    } else {
+      // For custom providers, try OpenAI-compatible format
+      try {
+        const response = await fetch(`${apiUrl}/models`, {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`
+          }
+        })
+
+        if (response.ok) {
+          const data: any = await response.json()
+          models = data.data.map((m: any) => m.id)
+        } else {
+          // If /models fails, return empty array
+          models = []
+        }
+      } catch {
+        models = []
+      }
+    }
+
+    return { success: true, models }
   } catch (error) {
     return {
       success: false,
@@ -355,33 +421,38 @@ ipcMain.handle('apiKeys:save', async (_event, apiKeys: Record<string, string>) =
 // Agent 初始化
 ipcMain.handle('agent:initialize', async (_event, config: {
   workspaceDir: string
-  provider?: 'anthropic' | 'openai' | 'google'
-  model?: string
+  apiConfig: {
+    provider: string
+    apiUrl: string
+    apiKey: string
+    selectedModel: string
+  }
 }) => {
   try {
-    console.log('[Main] Initializing Pi Agent...')
+    console.log('[Main] Initializing Pi Agent with config:', {
+      provider: config.apiConfig.provider,
+      model: config.apiConfig.selectedModel,
+      workspaceDir: config.workspaceDir
+    })
 
-    // 从存储中加载 API Keys
-    const apiKeys = await loadApiKeys()
+    // 延迟加载 AgentManager
+    const { AgentManager } = await import('../pi-bridge/dist/index.js')
 
-    // 根据 provider 选择对应的 API Key
-    const provider = config.provider || 'anthropic'
-    const apiKey = apiKeys[provider]
-
-    if (!apiKey) {
+    // 验证 API Key
+    if (!config.apiConfig.apiKey) {
       return {
         success: false,
-        error: `API key for ${provider} not configured. Please set it in Settings.`
+        error: 'API key not configured. Please set it in Settings.'
       }
     }
 
     // 创建新的 Agent Manager 实例
     agentManager = new AgentManager()
 
-    // 初始化 Agent（使用存储的 API Key）
+    // 初始化 Agent（传入完整的 apiConfig）
     const result = await agentManager.initialize({
-      ...config,
-      apiKey,
+      workspaceDir: config.workspaceDir,
+      apiConfig: config.apiConfig
     })
 
     if (result.success) {

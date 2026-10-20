@@ -22,17 +22,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Pi Agent API
   agentInitialize: (config: {
     workspaceDir: string
-    apiKey: string
-    provider?: 'anthropic' | 'openai' | 'google'
-    model?: string
+    apiConfig: {
+      provider: string
+      apiUrl: string
+      apiKey: string
+      selectedModel: string
+    }
   }) => ipcRenderer.invoke('agent:initialize', config),
   agentChat: (message: string) => ipcRenderer.invoke('agent:chat', message),
   agentIsInitialized: () => ipcRenderer.invoke('agent:isInitialized'),
   agentGetHistory: () => ipcRenderer.invoke('agent:getHistory'),
   agentDispose: () => ipcRenderer.invoke('agent:dispose'),
 
-  // API Keys 管理（便携式架构）
-  apiKeysGet: () => ipcRenderer.invoke('apiKeys:get'),
-  apiKeysSave: (apiKeys: Record<string, string>) => ipcRenderer.invoke('apiKeys:save', apiKeys),
+  // API Configuration 管理（便携式架构）
+  apiConfigGet: () => ipcRenderer.invoke('apiConfig:get'),
+  apiConfigSave: (config: any) => ipcRenderer.invoke('apiConfig:save', config),
+  apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: string) =>
+    ipcRenderer.invoke('apiConfig:fetchModels', apiUrl, apiKey, provider),
 })
 

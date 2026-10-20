@@ -24,9 +24,10 @@ export interface ElectronAPI {
   agentGetHistory: () => Promise<AgentHistoryResult>
   agentDispose: () => Promise<AgentDisposeResult>
 
-  // API Keys management (便携式架构)
-  apiKeysGet: () => Promise<ApiKeysGetResult>
-  apiKeysSave: (apiKeys: Record<string, string>) => Promise<ApiKeysResult>
+  // API Configuration management (便携式架构)
+  apiConfigGet: () => Promise<ApiConfigGetResult>
+  apiConfigSave: (config: ApiConfig) => Promise<ApiConfigSaveResult>
+  apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: ApiProvider) => Promise<FetchModelsResult>
 }
 
 export interface OpenDirectoryResult {
@@ -115,11 +116,19 @@ export interface GetWorkspaceConfigResult {
 }
 
 // Pi Agent types
+export type ApiProvider = 'anthropic' | 'openai' | 'custom'
+
+export interface ApiConfig {
+  provider: ApiProvider
+  apiUrl: string
+  apiKey: string
+  availableModels: string[]
+  selectedModel: string
+}
+
 export interface AgentInitConfig {
   workspaceDir: string
-  apiKey: string
-  provider?: 'anthropic' | 'openai' | 'google'
-  model?: string
+  apiConfig: ApiConfig
 }
 
 export interface AgentInitResult {
@@ -154,14 +163,20 @@ export interface AgentDisposeResult {
   error?: string
 }
 
-export interface ApiKeysGetResult {
+export interface ApiConfigGetResult {
   success: boolean
-  apiKeys?: Record<string, string>
+  config?: ApiConfig
   error?: string
 }
 
-export interface ApiKeysResult {
+export interface ApiConfigSaveResult {
   success: boolean
+  error?: string
+}
+
+export interface FetchModelsResult {
+  success: boolean
+  models?: string[]
   error?: string
 }
 
