@@ -12,7 +12,7 @@
     "dev": "concurrently \"npm run web:dev\" \"npm run electron:dev\" --kill-others",
     "web:dev": "vite",
     "electron:dev": "wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
-    "build": "npm run build:renderer && npm run build:main && npm run build:bridge",
+    "build": "npm run build:renderer && npm run build:bridge && npm run build:main",
     "build:renderer": "vite build",
     "build:main": "tsc -p electron/tsconfig.json && tsc -p electron/tsconfig.preload.json",
     "build:bridge": "cd pi-bridge && npm run build",
@@ -67,11 +67,28 @@
       "dist-electron/**/*",
       "pi-bridge/dist/**/*",
       "pi-bridge/package.json",
-      "app-icon.png"
+      "app-icon.png",
+      "app-icon.ico"
     ],
     "win": {
-      "target": "nsis",
-      "icon": "app-icon.png"
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "app-icon.ico"
+    },
+    "nsis": {
+      "perMachine": false,
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "app-icon.ico",
+      "uninstallerIcon": "app-icon.ico",
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "license": "LICENSE"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
     },
     "mac": {
       "target": "dmg",

@@ -62,7 +62,8 @@ npm run package:mac
 npm run package:linux
 ```
 
-Output: `release/`. See [BUILD_AND_PACKAGE.md](docs/guides/BUILD_AND_PACKAGE.md).
+Output: `release/` — Windows builds produce an NSIS installer and a portable `.exe`.
+See [BUILD_AND_PACKAGE.md](docs/guides/BUILD_AND_PACKAGE.md).
 
 ---
 

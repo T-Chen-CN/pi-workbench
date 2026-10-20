@@ -74,14 +74,21 @@ npm run build:bridge
 
 ```bash
 npm run package          # 当前平台
-npm run package:win      # Windows (NSIS)
+npm run package:win      # Windows：NSIS 安装包 + portable 便携版
 npm run package:mac      # macOS (DMG)
 npm run package:linux    # Linux (AppImage)
 ```
 
 输出目录：`release/`
 
-electron-builder 关键配置（`package.json` → `build`）：
+Windows 产物：
+
+- `Pi Workbench Setup <version>.exe` — NSIS 安装包（per-user、可选安装路径）
+- `Pi Workbench-<version>-portable.exe` — 便携版单文件
+
+**构建配置只有一处**：`package.json` → `build` 字段（`electron-builder.yml` 已移除，避免两份配置互相覆盖）。
+
+关键配置：
 
 ```jsonc
 {
@@ -90,10 +97,19 @@ electron-builder 关键配置（`package.json` → `build`）：
     "dist-electron/**/*",
     "pi-bridge/dist/**/*",     // AgentManager 必须打包
     "pi-bridge/package.json",
-    "app-icon.png"
-  ]
+    "app-icon.png",
+    "app-icon.ico"
+  ],
+  "win": {
+    "target": ["nsis", "portable"],
+    "icon": "app-icon.ico"      // Windows exe / 安装器需要 .ico
+  }
 }
 ```
+
+> Windows 图标：`app-icon.png`（1024×1024）用于界面与 mac/linux；
+> `app-icon.ico` 为 256×256 PNG-compressed ICO，供 exe 与 NSIS 安装器使用。
+> NSIS 不接受 PNG 作为 installer icon，必须使用 `.ico`。
 
 根依赖中必须保留：
 
@@ -106,9 +122,9 @@ electron-builder 关键配置（`package.json` → `build`）：
 # 仅生成解包目录，便于快速验证
 npx electron-builder --dir --win
 
-# 检查 asar 内容
-npx asar list release/win-unpacked/resources/app.asar | grep pi-bridge
-npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent
+# 检查 asar 内容（根目录的 pi-bridge 必须存在）
+npx asar list release/win-unpacked/resources/app.asar | grep "^.pi-bridge"
+npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | head
 ```
 
 建议在打包后手动冒烟测试一次：启动应用 → 打开工作区 → 配置 API → Fetch 模型 → 对话。
