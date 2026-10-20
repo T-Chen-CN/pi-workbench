@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   initWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace:init', workspacePath),
   getWorkspaceConfig: (workspacePath: string) => ipcRenderer.invoke('workspace:getConfig', workspacePath),
   saveWorkspaceConfig: (workspacePath: string, config: any) => ipcRenderer.invoke('workspace:saveConfig', workspacePath, config),
+  disposeWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace:dispose', workspacePath),
 
   // Pi Agent API
   agentInitialize: (config: {
@@ -70,6 +71,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event: unknown, payload: { id: string; exitCode: number }) => callback(payload)
     ipcRenderer.on('terminal:exit', listener)
     return () => ipcRenderer.removeListener('terminal:exit', listener)
+  },
+
+  // 工作台插件
+  pluginsList: (workspaceDir: string) => ipcRenderer.invoke('plugins:list', workspaceDir),
+  pluginsInvoke: (workspaceDir: string, commandId: string, args?: unknown) =>
+    ipcRenderer.invoke('plugins:invoke', workspaceDir, commandId, args),
+  pluginsReload: (workspaceDir: string) => ipcRenderer.invoke('plugins:reload', workspaceDir),
+  pluginsSetEnabled: (workspaceDir: string, pluginId: string, enabled: boolean) =>
+    ipcRenderer.invoke('plugins:setEnabled', workspaceDir, pluginId, enabled),
+  onPluginsChanged: (callback: (payload: { workspaceDir: string }) => void) => {
+    const listener = (_event: unknown, payload: { workspaceDir: string }) => callback(payload)
+    ipcRenderer.on('plugins:changed', listener)
+    return () => ipcRenderer.removeListener('plugins:changed', listener)
   },
 
   // API Configuration 管理（便携式架构）

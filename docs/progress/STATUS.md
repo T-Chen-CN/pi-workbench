@@ -11,14 +11,15 @@
 - ✅ **Phase 1: Pi Agent 集成** — 真实 Agent 可用（模型拉取 / 对话 / 工具）
 - ✅ **Phase 2: 工作区与对话体验** — 流式输出、修改审阅、上下文选择、多工作区标签
 - ✅ **Phase 3: 终端集成** — xterm.js + node-pty，输出可附加给 Agent
-- ⏳ **Phase 4-6** — 待开发
+- ✅ **Phase 4: 工作台插件系统** — 命令/钩子、启用禁用、热重载、命令面板
+- ⏳ **Phase 5-6** — 待开发
 
 ## 当前版本
 
 - **版本**: 0.1.0
 - **框架**: Electron 44 + React 19 + TypeScript
 - **Agent**: `@earendil-works/pi-coding-agent` 1.3.0
-- **状态**: Phase 3 完成，Electron 与纯 Web（开发模式）均可真实对话
+- **状态**: Phase 4 完成，Electron 与纯 Web（开发模式）均可真实对话
 
 ## 功能清单
 
@@ -91,12 +92,14 @@
 - ✅ 输出日志 `{workspace}/.pi-workbench/terminal.log`
 - ✅ 终端输出一键附加为 Agent 上下文
 
-#### Phase 4: 工作台插件系统（预计 1-2 周）
+#### Phase 4: 工作台插件系统（完成）
 
-- 插件清单与主进程加载器（只扩展工作台，不扩展 Pi Agent）
-- 命令 / 菜单 / 钩子 / 状态项贡献点
-- 启用禁用与热重载
-- 示例插件（Git）
+- ✅ 插件清单与主进程加载器（`electron/plugin-manager.ts`，CommonJS 入口）
+- ✅ 命令 / 钩子贡献点（`workspace:opened`、`file:saved`、`chat:message`）
+- ✅ 启用禁用（`config.json` 持久化）与热重载（目录监听 + 手动）
+- ✅ 命令面板（Ctrl+Shift+P）：执行命令、传参、查看输出、管理插件
+- ✅ Git 示例插件（`examples/plugins/git-tools`）
+- ⏳ 面板级 UI / 菜单 / 状态项（v1 未实现）
 
 #### Phase 5: Fleet 任务系统（预计 2-3 周）
 

@@ -20,6 +20,8 @@ import type {
   FetchModelsResult,
   ApiProvider,
   RecentWorkspacesResult,
+  PluginsListResult,
+  PluginCommandResult,
 } from '../types/electron'
 
 // Mock API for browser development
@@ -134,6 +136,10 @@ const mockAPI = {
     console.log('[Mock] saveWorkspaceConfig:', workspacePath, config)
     return { success: true }
   },
+  disposeWorkspace: async (workspacePath: string): Promise<WorkspaceResult> => {
+    console.log('[Mock] disposeWorkspace:', workspacePath)
+    return { success: true }
+  },
 
   apiConfigGet: async (): Promise<ApiConfigGetResult> => {
     console.log('[Mock] apiConfigGet')
@@ -179,6 +185,16 @@ const mockAPI = {
       }
     }
   },
+
+  // Workbench plugins（Web 模式没有主进程，返回空列表）
+  pluginsList: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
+  pluginsInvoke: async (): Promise<PluginCommandResult> => ({
+    success: false,
+    error: 'Plugins are only available in the Electron app',
+  }),
+  pluginsReload: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
+  pluginsSetEnabled: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
+  onPluginsChanged: (_callback: (payload: { workspaceDir: string }) => void) => () => {},
 }
 
 const electronAPI = window.electronAPI || mockAPI
@@ -216,11 +232,22 @@ export const api = {
   initWorkspace: (workspacePath: string) => electronAPI.initWorkspace(workspacePath),
   getWorkspaceConfig: (workspacePath: string) => electronAPI.getWorkspaceConfig(workspacePath),
   saveWorkspaceConfig: (workspacePath: string, config: any) => electronAPI.saveWorkspaceConfig(workspacePath, config),
+  disposeWorkspace: (workspacePath: string) => electronAPI.disposeWorkspace(workspacePath),
 
   // API Configuration management (portable architecture)
   apiConfigGet: () => electronAPI.apiConfigGet(),
   apiConfigSave: (config: any) => electronAPI.apiConfigSave(config),
   apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: ApiProvider) =>
     electronAPI.apiConfigFetchModels(apiUrl, apiKey, provider),
+
+  // Workbench plugins
+  pluginsList: (workspaceDir: string) => electronAPI.pluginsList(workspaceDir),
+  pluginsInvoke: (workspaceDir: string, commandId: string, args?: unknown) =>
+    electronAPI.pluginsInvoke(workspaceDir, commandId, args),
+  pluginsReload: (workspaceDir: string) => electronAPI.pluginsReload(workspaceDir),
+  pluginsSetEnabled: (workspaceDir: string, pluginId: string, enabled: boolean) =>
+    electronAPI.pluginsSetEnabled(workspaceDir, pluginId, enabled),
+  onPluginsChanged: (callback: (payload: { workspaceDir: string }) => void) =>
+    electronAPI.onPluginsChanged(callback),
 }
 

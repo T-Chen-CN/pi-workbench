@@ -8,6 +8,7 @@ import { isIgnoredWatchPath } from './watch-filter.js'
 import { FileLogger, installConsoleTee } from './logger.js'
 import { AgentRegistry } from './agent-registry.js'
 import { TerminalManager } from './terminal-manager.js'
+import { PluginManager } from './plugin-manager.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
 
@@ -46,6 +47,24 @@ const terminalManager = new TerminalManager({
   },
   logPathFor: (workspaceDir) => path.join(workspaceDir, '.pi-workbench', 'terminal.log'),
 })
+
+const pluginManager = new PluginManager({
+  onChanged: (workspaceDir) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('plugins:changed', { workspaceDir })
+    }
+  },
+})
+
+/** 找到文件所属的已加载工作区（用于插件钩子） */
+function workspaceForPath(filePath: string): string | null {
+  for (const workspaceDir of pluginManager.loadedWorkspaces()) {
+    if (filePath === workspaceDir) return workspaceDir
+    const prefix = workspaceDir.endsWith(path.sep) ? workspaceDir : workspaceDir + path.sep
+    if (filePath.startsWith(prefix)) return workspaceDir
+  }
+  return null
+}
 
 // 便携式架构：获取应用目录
 function getAppDir(): string {
@@ -145,6 +164,7 @@ app.whenReady().then(async () => {
 app.on('will-quit', () => {
   fileLogger?.close()
   terminalManager.closeAll()
+  pluginManager.disposeAll()
   void agentRegistry.disposeAll()
 })
 
@@ -190,6 +210,10 @@ ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
 ipcMain.handle('fs:writeFile', async (_event, filePath: string, content: string) => {
   try {
     await fs.writeFile(filePath, content, 'utf-8')
+    const workspaceDir = workspaceForPath(filePath)
+    if (workspaceDir) {
+      void pluginManager.emit(workspaceDir, 'file:saved', { path: filePath })
+    }
     return { success: true }
   } catch (error) {
     return {
@@ -350,6 +374,54 @@ ipcMain.handle('terminal:getRecentOutput', async (_event, id: string) => ({
   output: terminalManager.getRecentOutput(id),
 }))
 
+// ---- 工作台插件 ----
+
+ipcMain.handle('plugins:list', async (_event, workspaceDir: string) => {
+  try {
+    return { success: true, plugins: pluginManager.list(workspaceDir) }
+  } catch (error) {
+    return {
+      success: false,
+      plugins: [],
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+})
+
+ipcMain.handle('plugins:invoke', async (_event, workspaceDir: string, commandId: string, args?: unknown) =>
+  pluginManager.invoke(workspaceDir, commandId, args)
+)
+
+ipcMain.handle('plugins:reload', async (_event, workspaceDir: string) => {
+  try {
+    return { success: true, plugins: pluginManager.reload(workspaceDir) }
+  } catch (error) {
+    return {
+      success: false,
+      plugins: [],
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+})
+
+ipcMain.handle(
+  'plugins:setEnabled',
+  async (_event, workspaceDir: string, pluginId: string, enabled: boolean) => {
+    try {
+      return {
+        success: true,
+        plugins: pluginManager.setEnabled(workspaceDir, pluginId, Boolean(enabled)),
+      }
+    } catch (error) {
+      return {
+        success: false,
+        plugins: [],
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
+)
+
 // 便携式架构：应用配置管理
 ipcMain.handle('app:getAppDir', async () => {
   try {
@@ -465,6 +537,10 @@ ipcMain.handle('workspace:init', async (_event, workspacePath: string) => {
       await fs.writeFile(configPath, JSON.stringify(defaultConfig, null, 2), 'utf-8')
     }
 
+    // 加载工作区插件并派发打开事件
+    pluginManager.loadWorkspace(workspacePath)
+    await pluginManager.emit(workspacePath, 'workspace:opened', { workspaceDir: workspacePath })
+
     return { success: true }
   } catch (error) {
     return {
@@ -497,6 +573,19 @@ ipcMain.handle('workspace:saveConfig', async (_event, workspacePath: string, con
   try {
     const configPath = path.join(workspacePath, '.pi-workbench', 'config.json')
     await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8')
+    return { success: true }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+})
+
+// 关闭工作区标签时释放该工作区的主进程资源（插件、监听）
+ipcMain.handle('workspace:dispose', async (_event, workspacePath: string) => {
+  try {
+    pluginManager.unload(workspacePath)
     return { success: true }
   } catch (error) {
     return {
@@ -747,6 +836,9 @@ ipcMain.handle('agent:chat', async (event, message: string, requestId?: string, 
     }
 
     console.log('[Main] Sending message to agent:', message.substring(0, 100))
+    if (workspaceDir) {
+      void pluginManager.emit(workspaceDir, 'chat:message', { message })
+    }
 
     // 流式文本增量推送给发起请求的窗口；requestId 用于渲染进程区分本次会话
     const result = await agent.chat(message, {

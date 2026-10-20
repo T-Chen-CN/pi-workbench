@@ -23,6 +23,7 @@ export interface ElectronAPI {
   initWorkspace: (workspacePath: string) => Promise<WorkspaceResult>
   getWorkspaceConfig: (workspacePath: string) => Promise<GetWorkspaceConfigResult>
   saveWorkspaceConfig: (workspacePath: string, config: any) => Promise<WorkspaceResult>
+  disposeWorkspace: (workspacePath: string) => Promise<WorkspaceResult>
 
   // Pi Agent API
   agentInitialize: (config: AgentInitConfig) => Promise<AgentInitResult>
@@ -41,6 +42,21 @@ export interface ElectronAPI {
   terminalGetRecentOutput: (id: string) => Promise<TerminalOutputResult>
   onTerminalData: (callback: (payload: { id: string; data: string }) => void) => () => void
   onTerminalExit: (callback: (payload: { id: string; exitCode: number }) => void) => () => void
+
+  // Workbench plugins
+  pluginsList: (workspaceDir: string) => Promise<PluginsListResult>
+  pluginsInvoke: (
+    workspaceDir: string,
+    commandId: string,
+    args?: unknown
+  ) => Promise<PluginCommandResult>
+  pluginsReload: (workspaceDir: string) => Promise<PluginsListResult>
+  pluginsSetEnabled: (
+    workspaceDir: string,
+    pluginId: string,
+    enabled: boolean
+  ) => Promise<PluginsListResult>
+  onPluginsChanged: (callback: (payload: { workspaceDir: string }) => void) => () => void
 
   // API Configuration management (便携式架构)
   apiConfigGet: () => Promise<ApiConfigGetResult>
@@ -212,6 +228,37 @@ export interface TerminalResult {
 export interface TerminalOutputResult {
   success: boolean
   output: string
+  error?: string
+}
+
+export interface PluginCommandInfo {
+  id: string
+  title: string
+  description?: string
+  pluginId: string
+  pluginName: string
+}
+
+export interface PluginInfo {
+  id: string
+  name: string
+  version?: string
+  description?: string
+  enabled: boolean
+  commands: PluginCommandInfo[]
+  error?: string
+}
+
+export interface PluginsListResult {
+  success: boolean
+  plugins: PluginInfo[]
+  error?: string
+}
+
+export interface PluginCommandResult {
+  success: boolean
+  message?: string
+  output?: string
   error?: string
 }
 
