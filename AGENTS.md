@@ -24,7 +24,8 @@
 ### 当前状态
 - ✅ MVP 完成：文件管理、代码编辑、Diff 查看、聊天界面
 - ✅ Phase 1 完成：Pi Agent 真实集成
-- ⏳ Phase 2 待启动：工作区管理、终端、插件系统、Fleet 任务
+- ⏳ Phase 2 进行中：工作区与对话体验（流式输出、Diff 审阅、上下文选择、多工作区）
+- ⏳ Phase 3-5 待启动：终端、工作台插件、Fleet 任务
 
 ---
 
@@ -584,16 +585,20 @@ async function initAgent(config: ApiConfig) {
 
 **日志文件位置**:
 - ✅ 所有日志：`{appDir}/logs/`
-- ✅ 主进程日志：`{appDir}/logs/main.log`
-- ✅ 渲染进程日志：`{appDir}/logs/renderer.log`
-- ✅ Agent 日志：`{appDir}/logs/agent.log`
+- ✅ 主进程日志：`{appDir}/logs/main.log`（5MB 轮转，保留 `.1`）
+- ⏳ 渲染进程日志：`{appDir}/logs/renderer.log`（待实现）
+- ⏳ Agent 日志：`{appDir}/logs/agent.log`（待实现；目前与主进程共用 main.log）
 
 ### 插件系统约束
 
-**插件加载位置**:
-- ✅ 工作区插件：`{workspaceDir}/.pi-workbench/plugins/`
+**插件定位**:
+- ✅ 插件只扩展 **Pi Workbench 本身**（命令 / 菜单 / 钩子 / 声明式 UI）
+- ❌ **禁止**把插件系统当作 Pi Agent 扩展机制（不接入 Pi SDK 的 extensions / custom tools）
 - ❌ **禁止**从系统目录加载插件
 - ❌ **禁止**从网络下载插件（安全风险）
+
+**插件加载位置**:
+- ✅ 工作区插件：`{workspaceDir}/.pi-workbench/plugins/`
 
 **插件沙箱**:
 - ⚠️ 简化版插件系统**无**沙箱隔离
