@@ -1,5 +1,14 @@
 import { create } from 'zustand'
 
+export interface ChatUsage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  totalTokens: number
+  cost: number
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
@@ -8,6 +17,8 @@ export interface ChatMessage {
   isLoading?: boolean
   /** 正在流式接收文本增量 */
   isStreaming?: boolean
+  /** 本轮模型调用的 token 用量 */
+  usage?: ChatUsage
 }
 
 export interface ChatAttachment {
@@ -31,6 +42,8 @@ export interface ChatState {
   startStreamingMessage: () => string
   appendToMessage: (id: string, delta: string) => void
   finishStreamingMessage: (id: string, content?: string) => void
+  /** 给一条 assistant 消息附上 token 用量 */
+  setMessageUsage: (id: string, usage: ChatUsage) => void
   addAttachment: (attachment: ChatAttachment) => void
   removeAttachment: (path: string) => void
   clearAttachments: () => void
@@ -104,6 +117,13 @@ export const useChatStore = create<ChatState>((set) => ({
         message.id === id
           ? { ...message, content: content ?? message.content, isStreaming: false }
           : message
+      ),
+    })),
+
+  setMessageUsage: (id, usage) =>
+    set((state) => ({
+      messages: state.messages.map((message) =>
+        message.id === id ? { ...message, usage } : message
       ),
     })),
 

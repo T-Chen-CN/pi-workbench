@@ -78,6 +78,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     startStreamingMessage,
     appendToMessage,
     finishStreamingMessage,
+    setMessageUsage,
     attachments,
     addAttachment,
     removeAttachment,
@@ -252,6 +253,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       if (result.success && result.response) {
         setError(null)
         finishStreamingMessage(assistantId, result.response)
+        if (result.usage) {
+          setMessageUsage(assistantId, result.usage)
+        }
 
         // 打开本轮全部文件修改供审阅（接受或还原）
         if (result.edits && result.edits.length > 0) {
@@ -382,6 +386,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                   </ReactMarkdown>
                   {msg.isStreaming && (
                     <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom" />
+                  )}
+                  {msg.usage && (
+                    <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.08em] text-ink-subtle">
+                      {msg.usage.totalTokens.toLocaleString()} tokens
+                      {msg.usage.cost > 0 ? ` · $${msg.usage.cost.toFixed(4)}` : ''}
+                    </div>
                   )}
                 </div>
               )}

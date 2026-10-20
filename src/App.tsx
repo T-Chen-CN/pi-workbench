@@ -186,6 +186,29 @@ export default function App() {
 
       activateWorkspace(targetPath)
 
+      // 上次异常退出留下的未保存草稿：询问用户是否恢复
+      try {
+        const drafts = await api.draftList(targetPath)
+        if (drafts.success && drafts.drafts.length > 0) {
+          if (window.confirm(t('recoverDraftsConfirm', { count: drafts.drafts.length }))) {
+            for (const draft of drafts.drafts) {
+              useEditorStore.getState().addOpenFile({
+                path: draft.path,
+                name: draft.path.split(/[\\/]/).pop() || draft.path,
+                content: draft.content,
+                isDirty: true,
+                isSaving: false,
+              })
+              useEditorStore.getState().markDirty(draft.path)
+            }
+          } else {
+            await api.draftClear(targetPath).catch(() => undefined)
+          }
+        }
+      } catch (draftError) {
+        console.error('Failed to restore drafts:', draftError)
+      }
+
       // 欢迎页提问：打开工作区后把问题带入聊天输入框
       if (initialPrompt) {
         useChatStore.getState().setDraftInput(initialPrompt)

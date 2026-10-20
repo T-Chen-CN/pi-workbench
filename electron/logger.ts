@@ -15,7 +15,7 @@ export interface FileLoggerOptions {
   maxBytes?: number
 }
 
-type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG'
+export type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG'
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024
 

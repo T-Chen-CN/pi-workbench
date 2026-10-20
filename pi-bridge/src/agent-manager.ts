@@ -122,12 +122,24 @@ export interface FileEdit {
   newContent: string
 }
 
+export interface AgentUsage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  totalTokens: number
+  /** 供应商回报的累计费用（可能为 0） */
+  cost: number
+}
+
 export interface AgentChatResult {
   success: boolean
   response?: string
   error?: string
   /** Agent 在本轮对话中修改过的文件（用于 Diff 展示） */
   edits?: FileEdit[]
+  /** 本轮模型调用的 token 用量 */
+  usage?: AgentUsage
 }
 
 export interface AgentChatOptions {
@@ -221,6 +233,22 @@ export class AgentManager {
     if (missing.length > 0) {
       process.env.PATH = [...missing, currentPath].join(path.delimiter)
       console.log('[Agent Manager] Added Git Bash to PATH:', missing.join(', '))
+    }
+  }
+
+  /** 从 assistant 消息中提取 usage（Pi 保证 assistant 消息带 usage） */
+  private readUsage(message: any): AgentUsage | undefined {
+    const raw = message?.usage
+    if (!raw || typeof raw !== 'object') return undefined
+    const value = (input: unknown): number =>
+      typeof input === 'number' && Number.isFinite(input) ? input : 0
+    return {
+      input: value(raw.input),
+      output: value(raw.output),
+      cacheRead: value(raw.cacheRead),
+      cacheWrite: value(raw.cacheWrite),
+      totalTokens: value(raw.totalTokens),
+      cost: value(raw.cost?.total),
     }
   }
 
@@ -512,14 +540,16 @@ export class AgentManager {
         return { success: false, error: 'Agent did not produce a response.', edits }
       }
 
+      const usage = this.readUsage(lastAssistant)
+
       // Pi 在请求失败时不会抛异常，而是把错误放在 stopReason/errorMessage 中
       if (lastAssistant.stopReason === 'error') {
         const detail = lastAssistant.errorMessage || 'Agent request failed'
         console.error('[Agent Manager] Provider error:', detail)
-        return { success: false, error: detail, edits }
+        return { success: false, error: detail, edits, usage }
       }
       if (lastAssistant.stopReason === 'aborted') {
-        return { success: false, error: 'Agent request was aborted.', edits }
+        return { success: false, error: 'Agent request was aborted.', edits, usage }
       }
 
       let assistantResponse = ''
@@ -553,6 +583,7 @@ export class AgentManager {
         success: true,
         response: assistantResponse,
         edits,
+        usage,
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)

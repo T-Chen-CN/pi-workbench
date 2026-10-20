@@ -18,6 +18,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('fs:changed', listener)
   },
 
+  // 自动更新
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateDownload: () => ipcRenderer.invoke('update:download'),
+  updateInstall: () => ipcRenderer.invoke('update:install'),
+  onUpdateStatus: (callback: (status: unknown) => void) => {
+    const listener = (_event: unknown, status: unknown) => callback(status)
+    ipcRenderer.on('update:status', listener)
+    return () => ipcRenderer.removeListener('update:status', listener)
+  },
+
+  // 渲染进程日志（写入 {appDir}/logs/renderer.log）
+  logRenderer: (level: string, args: unknown[]) => ipcRenderer.invoke('log:renderer', level, args),
+
   // 应用配置管理（便携式架构）
   getAppDir: () => ipcRenderer.invoke('app:getAppDir'),
   getSettings: () => ipcRenderer.invoke('app:getSettings'),
@@ -30,6 +43,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWorkspaceConfig: (workspacePath: string) => ipcRenderer.invoke('workspace:getConfig', workspacePath),
   saveWorkspaceConfig: (workspacePath: string, config: any) => ipcRenderer.invoke('workspace:saveConfig', workspacePath, config),
   disposeWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace:dispose', workspacePath),
+
+  // 崩溃恢复草稿
+  draftSave: (workspacePath: string, filePath: string, content: string) =>
+    ipcRenderer.invoke('draft:save', workspacePath, filePath, content),
+  draftDelete: (workspacePath: string, filePath: string) =>
+    ipcRenderer.invoke('draft:delete', workspacePath, filePath),
+  draftList: (workspacePath: string) => ipcRenderer.invoke('draft:list', workspacePath),
+  draftClear: (workspacePath: string) => ipcRenderer.invoke('draft:clear', workspacePath),
 
   // Pi Agent API
   agentInitialize: (config: {

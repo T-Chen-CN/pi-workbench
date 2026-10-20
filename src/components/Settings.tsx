@@ -31,6 +31,71 @@ export const Settings: React.FC<SettingsProps> = () => {
   const [isFetchingModels, setIsFetchingModels] = useState(false)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle')
 
+  type UpdateState = {
+    status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'latest' | 'error'
+    version?: string
+    percent?: number
+    error?: string
+  }
+  const [updateState, setUpdateState] = useState<UpdateState>({ status: 'idle' })
+
+  useEffect(() => {
+    return api.onUpdateStatus((status) => {
+      if (status.type === 'checking') {
+        setUpdateState({ status: 'checking' })
+      } else if (status.type === 'available') {
+        setUpdateState({ status: 'available', version: status.version })
+      } else if (status.type === 'not-available') {
+        setUpdateState({ status: 'latest' })
+      } else if (status.type === 'error') {
+        setUpdateState({ status: 'error', error: status.message })
+      } else if (status.type === 'download-progress') {
+        setUpdateState({ status: 'downloading', percent: Math.round(status.percent) })
+      } else if (status.type === 'downloaded') {
+        setUpdateState({ status: 'downloaded', version: status.version })
+      }
+    })
+  }, [])
+
+  const handleCheckUpdate = async () => {
+    setUpdateState({ status: 'checking' })
+    const result = await api.updateCheck()
+    if (!result.success) {
+      setUpdateState({ status: 'error', error: result.error })
+    } else if (result.update) {
+      setUpdateState({ status: 'available', version: result.update.version })
+    } else {
+      setUpdateState({ status: 'latest' })
+    }
+  }
+
+  const handleDownloadUpdate = async () => {
+    setUpdateState({ status: 'downloading', percent: 0 })
+    const result = await api.updateDownload()
+    if (!result.success) {
+      setUpdateState({ status: 'error', error: result.error })
+    }
+  }
+
+  const updateStatusText = (() => {
+    switch (updateState.status) {
+      case 'checking':
+        return t('checkingUpdates')
+      case 'available':
+        return t('updateAvailable', { version: updateState.version ?? '' })
+      case 'downloading':
+        return t('updateDownloading', { percent: updateState.percent ?? 0 })
+      case 'downloaded':
+        return t('updateDownloaded')
+      case 'latest':
+        return t('updateLatest')
+      case 'error':
+        return t('updateFailed', { error: localizeError(updateState.error) || t('unknownError') })
+      default:
+        return ''
+    }
+  })()
+
   const persistSettings = async (patch: Record<string, unknown>) => {
     try {
       const current = await api.getSettings()
@@ -295,6 +360,46 @@ export const Settings: React.FC<SettingsProps> = () => {
               <dt className="text-ink-subtle">{t('aboutApiSupport')}</dt>
               <dd className="m-0 text-ink">{t('infoApiSupport')}</dd>
             </dl>
+
+            <div className="mt-4 border-t border-line pt-4">
+              <p className="m-0 text-xs text-ink-subtle">{t('updates')}</p>
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                {(updateState.status === 'idle' ||
+                  updateState.status === 'latest' ||
+                  updateState.status === 'error') && (
+                  <Button size="sm" icon={RefreshCw} onClick={() => void handleCheckUpdate()}>
+                    {t('checkForUpdates')}
+                  </Button>
+                )}
+                {updateState.status === 'available' && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => void handleDownloadUpdate()}
+                  >
+                    {t('downloadUpdate')}
+                  </Button>
+                )}
+                {updateState.status === 'downloaded' && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => void api.updateInstall()}
+                  >
+                    {t('restartToInstall')}
+                  </Button>
+                )}
+                {updateStatusText && (
+                  <span
+                    className={
+                      updateState.status === 'error' ? 'text-xs text-danger' : 'text-xs text-ink-muted'
+                    }
+                  >
+                    {updateStatusText}
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>

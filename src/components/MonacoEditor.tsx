@@ -2,11 +2,13 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import * as monaco from 'monaco-editor'
 import { FileCode, Loader2, X } from 'lucide-react'
 import { useEditorStore } from '../store/editorStore'
+import { useWorkspaceStore } from '../store/workspaceStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useResolvedTheme } from '../store/themeStore'
 import { localizeError } from '../i18n/errors'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
+import type { OpenFile } from '../types'
 import { EmptyState } from './ui'
 
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {
@@ -115,9 +117,33 @@ export const MonacoEditor: React.FC = () => {
   const monacoRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const { currentFile, openFiles, updateOpenFile, markClean, removeOpenFile } = useEditorStore()
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const draftTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  // 每个文件一个 model：切换标签时保留撤销栈、光标与滚动位置
+  const modelsRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map())
+  const viewStatesRef = useRef<Map<string, monaco.editor.ICodeEditorViewState | null>>(new Map())
+  const activePathRef = useRef<string | null>(null)
   // 程序化 setValue 时抑制内容变化回调，避免误标脏 + 自动保存回环
   const suppressChangeRef = useRef(false)
   const [editorReady, setEditorReady] = useState(false)
+
+  const getOrCreateModel = useCallback((file: OpenFile): monaco.editor.ITextModel => {
+    const existing = modelsRef.current.get(file.path)
+    if (existing) {
+      if (existing.getValue() !== file.content) {
+        suppressChangeRef.current = true
+        existing.setValue(file.content)
+        suppressChangeRef.current = false
+      }
+      return existing
+    }
+
+    const uri = monaco.Uri.file(file.path)
+    const model =
+      monaco.editor.getModel(uri) ??
+      monaco.editor.createModel(file.content, detectLanguage(file.name), uri)
+    modelsRef.current.set(file.path, model)
+    return model
+  }, [])
 
   // 打开首个文件时创建编辑器；关闭全部文件后释放。容器随 currentFile 一起挂载。
   useEffect(() => {
@@ -132,8 +158,10 @@ export const MonacoEditor: React.FC = () => {
 
     if (monacoRef.current || !editorRef.current) return
 
+    const model = getOrCreateModel(currentFile)
+    activePathRef.current = currentFile.path
     monacoRef.current = monaco.editor.create(editorRef.current, {
-      value: currentFile.content,
+      model,
       language: detectLanguage(currentFile.name),
       theme: resolvedTheme === 'dark' ? EDITOR_THEME.ink : EDITOR_THEME.paper,
       automaticLayout: true,
@@ -146,35 +174,58 @@ export const MonacoEditor: React.FC = () => {
       padding: { top: 10 },
     })
     setEditorReady(true)
-  }, [currentFile, resolvedTheme])
+  }, [currentFile, resolvedTheme, getOrCreateModel])
 
   // 主题切换时更新编辑器配色
   useEffect(() => {
     monaco.editor.setTheme(resolvedTheme === 'dark' ? EDITOR_THEME.ink : EDITOR_THEME.paper)
   }, [resolvedTheme])
 
-  // 组件卸载时释放编辑器
+  // 组件卸载时释放编辑器与所有 model
   useEffect(() => {
+    const models = modelsRef.current
+    const viewStates = viewStatesRef.current
     return () => {
       monacoRef.current?.dispose()
       monacoRef.current = null
+      for (const model of models.values()) {
+        model.dispose()
+      }
+      models.clear()
+      viewStates.clear()
     }
   }, [])
 
-  // Update editor content when current file changes
+  // 切换当前文件：保存上一个文件的视图状态，并切换到它自己的 model
   useEffect(() => {
-    if (!monacoRef.current || !currentFile) return
+    const editor = monacoRef.current
+    if (!editor || !currentFile) return
 
-    const model = monacoRef.current.getModel()
-    if (model && model.getValue() === currentFile.content) return
+    const previousPath = activePathRef.current
+    if (previousPath && previousPath !== currentFile.path) {
+      viewStatesRef.current.set(previousPath, editor.saveViewState())
+    }
 
-    suppressChangeRef.current = true
-    monacoRef.current.setValue(currentFile.content)
-    suppressChangeRef.current = false
+    const model = getOrCreateModel(currentFile)
+    if (editor.getModel() !== model) {
+      editor.setModel(model)
+      editor.restoreViewState(viewStatesRef.current.get(currentFile.path) ?? null)
+    }
+    monaco.editor.setModelLanguage(model, detectLanguage(currentFile.name))
+    activePathRef.current = currentFile.path
+  }, [currentFile, editorReady, getOrCreateModel])
 
-    const language = detectLanguage(currentFile.name)
-    monaco.editor.setModelLanguage(model || monaco.editor.createModel('', ''), language)
-  }, [currentFile, editorReady])
+  // 标签关闭后释放对应 model，避免撤销栈和内容长期占用内存
+  useEffect(() => {
+    const openPaths = new Set(openFiles.map((file) => file.path))
+    for (const [filePath, model] of [...modelsRef.current.entries()]) {
+      if (!openPaths.has(filePath)) {
+        model.dispose()
+        modelsRef.current.delete(filePath)
+        viewStatesRef.current.delete(filePath)
+      }
+    }
+  }, [openFiles])
 
   // 容器尺寸变化时重新布局（编辑器可能在面板尺寸为 0 时创建）
   useEffect(() => {
@@ -239,6 +290,11 @@ export const MonacoEditor: React.FC = () => {
         }
         markClean(targetPath)
         updateOpenFile(targetPath, { isSaving: false })
+        // 文件已落盘，删除对应的崩溃恢复草稿
+        const workspacePath = useWorkspaceStore.getState().workspacePath
+        if (workspacePath) {
+          void api.draftDelete(workspacePath, targetPath).catch(() => undefined)
+        }
         toast.success(t('savedFile', { name: latest.name }), 2000)
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error)
@@ -267,6 +323,16 @@ export const MonacoEditor: React.FC = () => {
       state.updateOpenFile(file.path, { content: newContent })
       state.markDirty(file.path)
 
+      // 崩溃恢复：内容变化后把未保存内容落到 cache/drafts（正常保存后删除）
+      const workspacePath = useWorkspaceStore.getState().workspacePath
+      if (workspacePath) {
+        if (draftTimeoutRef.current) clearTimeout(draftTimeoutRef.current)
+        draftTimeoutRef.current = setTimeout(() => {
+          draftTimeoutRef.current = null
+          void api.draftSave(workspacePath, file.path, newContent).catch(() => undefined)
+        }, 500)
+      }
+
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
       saveTimeoutRef.current = setTimeout(() => {
         saveTimeoutRef.current = null
@@ -279,6 +345,17 @@ export const MonacoEditor: React.FC = () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current)
         saveTimeoutRef.current = null
+      }
+      // 卸载前把最后一次未写入的草稿补上
+      if (draftTimeoutRef.current) {
+        clearTimeout(draftTimeoutRef.current)
+        draftTimeoutRef.current = null
+        const state = useEditorStore.getState()
+        const file = state.currentFile
+        const workspacePath = useWorkspaceStore.getState().workspacePath
+        if (workspacePath && file?.isDirty) {
+          void api.draftSave(workspacePath, file.path, file.content).catch(() => undefined)
+        }
       }
     }
   }, [editorReady, saveFile])
@@ -344,6 +421,10 @@ export const MonacoEditor: React.FC = () => {
                 onClick={() => {
                   const target = useEditorStore.getState().openFiles.find((f) => f.path === file.path)
                   if (target?.isDirty && !window.confirm(t('discardChangesConfirm'))) return
+                  const workspacePath = useWorkspaceStore.getState().workspacePath
+                  if (workspacePath) {
+                    void api.draftDelete(workspacePath, file.path).catch(() => undefined)
+                  }
                   removeOpenFile(file.path)
                 }}
               >

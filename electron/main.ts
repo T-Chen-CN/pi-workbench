@@ -6,7 +6,7 @@ import { createRequire } from 'module'
 import { existsSync, mkdirSync, realpathSync, statSync, watch, type FSWatcher } from 'fs'
 import { isIgnoredWatchPath } from './watch-filter.js'
 import { WatchBatcher } from './watch-batcher.js'
-import { FileLogger, installConsoleTee } from './logger.js'
+import { FileLogger, installConsoleTee, type LogLevel } from './logger.js'
 import { readJsonWithBackup, writeJsonAtomic } from './atomic-json.js'
 import { AgentRegistry } from './agent-registry.js'
 import { TerminalManager } from './terminal-manager.js'
@@ -14,6 +14,8 @@ import { PluginManager } from './plugin-manager.js'
 import { FleetWorktree } from './fleet-worktree.js'
 import { createFleetStore } from './fleet-store.js'
 import { FleetManager } from './fleet-manager.js'
+import { DraftStore } from './draft-store.js'
+import type { UpdateController } from './updater.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
 
@@ -44,6 +46,7 @@ if (!singleInstanceLock) {
 /** 每个打开的工作区一个 Agent 实例 */
 const agentRegistry = new AgentRegistry()
 let fileLogger: FileLogger | null = null
+let rendererLogger: FileLogger | null = null
 
 const requireFromMain = createRequire(import.meta.url)
 let ptyModule: typeof import('node-pty') | null = null
@@ -188,6 +191,18 @@ function closeAllWorkspaceWatchers(): void {
   workspaceWatchers.clear()
 }
 
+/** 校验工作区与文件路径，用于草稿等按文件持久化的能力 */
+function resolveWorkspaceFile(
+  workspacePath: string,
+  filePath: string
+): { workspace: string; file: string } | null {
+  if (!isTrustedWorkspacePath(workspacePath)) return null
+  const workspace = canonicalizePath(workspacePath)
+  const file = canonicalizePath(filePath)
+  if (!workspace || !file || !isPathInsideRoot(workspace, file)) return null
+  return { workspace, file }
+}
+
 /** 启动时把最近打开的工作区视为已批准（它们都来自此前的目录选择器） */
 async function seedTrustedWorkspacesFromSettings(): Promise<void> {
   try {
@@ -203,6 +218,7 @@ async function seedTrustedWorkspacesFromSettings(): Promise<void> {
 }
 
 const fleetStore = createFleetStore(path.join(getAppDir(), 'data', 'fleet-tasks.db'))
+const draftStore = new DraftStore(path.join(getAppDir(), 'cache', 'drafts'))
 const fleetManager = new FleetManager({
   store: fleetStore,
   worktrees: new FleetWorktree(),
@@ -231,8 +247,7 @@ const fleetManager = new FleetManager({
 })
 
 // 便携式架构：获取应用目录
-function getAppDir(): string {
-  // electron-builder portable：应用从 %TEMP% 解压目录运行，真实目录由环境变量提供
+function getAppDir(): string {  // electron-builder portable：应用从 %TEMP% 解压目录运行，真实目录由环境变量提供
   if (process.env.PORTABLE_EXECUTABLE_DIR) {
     return process.env.PORTABLE_EXECUTABLE_DIR
   }
@@ -371,6 +386,10 @@ app.whenReady().then(async () => {
   // 先启用文件日志，后续初始化与 Agent 日志都会落盘（打包后没有控制台）
   try {
     fileLogger = new FileLogger({ logDir: path.join(getAppDir(), 'logs') })
+    rendererLogger = new FileLogger({
+      logDir: path.join(getAppDir(), 'logs'),
+      fileName: 'renderer.log',
+    })
     installConsoleTee(fileLogger)
     console.log('[Main] File logging enabled:', fileLogger.filePath)
   } catch (error) {
@@ -396,6 +415,7 @@ async function shutdownApplication(): Promise<void> {
   } finally {
     console.log('[Main] Shutdown complete')
     fileLogger?.close()
+    rendererLogger?.close()
   }
 }
 
@@ -410,6 +430,7 @@ app.on('before-quit', (event) => {
 app.on('will-quit', () => {
   // 兜底关闭日志（正常路径已在 shutdownApplication 中关闭）
   fileLogger?.close()
+  rendererLogger?.close()
 })
 
 app.on('window-all-closed', () => {
@@ -814,9 +835,73 @@ handleIpc('fleet:cleanup', async (_event, id: string, workspaceDir?: string) => 
   return fleetManager.cleanupWorktree(id, workspaceDir)
 })
 
-// 便携式架构：应用配置管理
-handleIpc('app:getAppDir', async () => {
+// ---- 自动更新 ----
+
+let updateController: UpdateController | null = null
+
+/**
+ * electron-updater 只在打包版本有意义；懒加载避免开发/测试环境引入其运行时。
+ */
+async function ensureUpdateController(): Promise<UpdateController | null> {
+  if (!app.isPackaged) return null
+  if (updateController) return updateController
   try {
+    const { UpdateController: Controller } = await import('./updater.js')
+    updateController = new Controller((status) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:status', status)
+      }
+    })
+    return updateController
+  } catch (error) {
+    console.error('[Main] Failed to initialize auto updater:', error)
+    return null
+  }
+}
+
+handleIpc('update:check', async () => {
+  const controller = await ensureUpdateController()
+  if (!controller) {
+    return { success: false, error: 'Updates are only available in packaged builds.' }
+  }
+  return controller.check()
+})
+
+handleIpc('update:download', async () => {
+  const controller = await ensureUpdateController()
+  if (!controller) {
+    return { success: false, error: 'Updates are only available in packaged builds.' }
+  }
+  return controller.download()
+})
+
+handleIpc('update:install', async () => {
+  const controller = await ensureUpdateController()
+  if (!controller) {
+    return { success: false, error: 'Updates are only available in packaged builds.' }
+  }
+  return controller.install()
+})
+
+// ---- 渲染进程日志 ----
+
+const RENDERER_LOG_LEVELS: LogLevel[] = ['INFO', 'WARN', 'ERROR', 'DEBUG']
+
+handleIpc('log:renderer', async (_event, level: unknown, args: unknown) => {
+  const normalized = RENDERER_LOG_LEVELS.includes(String(level).toUpperCase() as LogLevel)
+    ? (String(level).toUpperCase() as LogLevel)
+    : 'INFO'
+  const values = Array.isArray(args) ? args : [args]
+  try {
+    rendererLogger?.write(normalized, values)
+  } catch {
+    // 日志失败不影响渲染进程
+  }
+  return { success: true }
+})
+
+// 便携式架构：应用配置管理
+handleIpc('app:getAppDir', async () => {  try {
     return { success: true, appDir: getAppDir() }
   } catch (error) {
     return {
@@ -1023,6 +1108,65 @@ handleIpc('workspace:dispose', async (_event, workspacePath: string) => {
       success: false,
       error: error instanceof Error ? error.message : String(error)
     }
+  }
+})
+
+// ---- 崩溃恢复草稿 ----
+
+handleIpc('draft:save', async (_event, workspacePath: string, filePath: string, content: unknown) => {
+  try {
+    const target = resolveWorkspaceFile(workspacePath, filePath)
+    if (!target) {
+      return { success: false, error: 'Path is outside the open workspace' }
+    }
+    if (typeof content !== 'string') {
+      return { success: false, error: 'Draft content must be a string' }
+    }
+    draftStore.save(target.workspace, target.file, content)
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc('draft:delete', async (_event, workspacePath: string, filePath: string) => {
+  try {
+    const target = resolveWorkspaceFile(workspacePath, filePath)
+    if (!target) {
+      return { success: false, error: 'Path is outside the open workspace' }
+    }
+    draftStore.remove(target.workspace, target.file)
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc('draft:list', async (_event, workspacePath: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspacePath)) {
+      return { success: false, drafts: [], error: 'Workspace is not approved' }
+    }
+    const workspace = canonicalizePath(workspacePath) ?? workspacePath
+    return { success: true, drafts: draftStore.list(workspace) }
+  } catch (error) {
+    return {
+      success: false,
+      drafts: [],
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+})
+
+handleIpc('draft:clear', async (_event, workspacePath: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspacePath)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    draftStore.clear(canonicalizePath(workspacePath) ?? workspacePath)
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
   }
 })
 

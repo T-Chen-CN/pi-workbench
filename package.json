@@ -34,6 +34,7 @@
     "@fontsource/instrument-serif": "^5.3.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "electron-updater": "^6.8.9",
     "highlight.js": "^11.12.0",
     "lucide-react": "^1.60.0",
     "monaco-editor": "^0.57.0",
@@ -74,6 +75,13 @@
   "build": {
     "appId": "com.piworkbench.app",
     "productName": "Pi Workbench",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "T-Chen-CN",
+        "repo": "pi-workbench"
+      }
+    ],
     "directories": {
       "output": "release"
     },

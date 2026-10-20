@@ -14,6 +14,11 @@ export interface ElectronAPI {
 
   // App configuration (portable architecture)
   getAppDir: () => Promise<GetAppDirResult>
+  logRenderer: (level: string, args: unknown[]) => Promise<{ success: boolean }>
+  updateCheck: () => Promise<UpdateCheckResult>
+  updateDownload: () => Promise<UpdateActionResult>
+  updateInstall: () => Promise<UpdateActionResult>
+  onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
   getSettings: () => Promise<GetSettingsResult>
   saveSettings: (settings: any) => Promise<SaveSettingsResult>
   getRecentWorkspaces: () => Promise<RecentWorkspacesResult>
@@ -24,6 +29,10 @@ export interface ElectronAPI {
   getWorkspaceConfig: (workspacePath: string) => Promise<GetWorkspaceConfigResult>
   saveWorkspaceConfig: (workspacePath: string, config: any) => Promise<WorkspaceResult>
   disposeWorkspace: (workspacePath: string) => Promise<WorkspaceResult>
+  draftSave: (workspacePath: string, filePath: string, content: string) => Promise<DraftResult>
+  draftDelete: (workspacePath: string, filePath: string) => Promise<DraftResult>
+  draftList: (workspacePath: string) => Promise<DraftListResult>
+  draftClear: (workspacePath: string) => Promise<DraftResult>
 
   // Pi Agent API
   agentInitialize: (config: AgentInitConfig) => Promise<AgentInitResult>
@@ -335,6 +344,43 @@ export interface FetchModelsResult {
   models?: string[]
   error?: string
 }
+
+export interface DraftRecord {
+  workspace: string
+  path: string
+  content: string
+  updatedAt: number
+}
+
+export interface DraftResult {
+  success: boolean
+  error?: string
+}
+
+export interface DraftListResult {
+  success: boolean
+  drafts: DraftRecord[]
+  error?: string
+}
+
+export interface UpdateCheckResult {
+  success: boolean
+  update?: { version: string }
+  error?: string
+}
+
+export interface UpdateActionResult {
+  success: boolean
+  error?: string
+}
+
+export type UpdateStatus =
+  | { type: 'checking' }
+  | { type: 'available'; version: string; releaseNotes?: string }
+  | { type: 'not-available'; version?: string }
+  | { type: 'error'; message: string }
+  | { type: 'download-progress'; percent: number; transferred: number; total: number }
+  | { type: 'downloaded'; version: string }
 
 declare global {
   interface Window {

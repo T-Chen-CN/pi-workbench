@@ -221,6 +221,25 @@ describe('filesystem IPC handlers', () => {
     await expect(call('fs:exists', target)).resolves.toMatchObject({ exists: false })
   })
 
+  it('saves and lists crash-recovery drafts only inside the workspace', async () => {
+    const file = path.join(workDir, 'draft.ts')
+    await fs.writeFile(file, 'on disk', 'utf-8')
+
+    await expect(call('draft:save', workDir, file, 'unsaved')).resolves.toMatchObject({
+      success: true,
+    })
+    const list = await call('draft:list', workDir)
+    expect(list.drafts).toMatchObject([{ path: file, content: 'unsaved' }])
+
+    const outside = path.join(workDir, '..', 'outside.ts')
+    await expect(call('draft:save', workDir, outside, 'x')).resolves.toMatchObject({
+      success: false,
+    })
+
+    await expect(call('draft:clear', workDir)).resolves.toMatchObject({ success: true })
+    expect((await call('draft:list', workDir)).drafts).toEqual([])
+  })
+
   it('starts and stops the workspace watcher', async () => {
     const sender = { isDestroyed: () => false, send: vi.fn() }
 

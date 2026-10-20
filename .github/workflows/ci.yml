@@ -24,3 +24,21 @@ jobs:
       - run: npm test
       - run: npm run lint
       - run: npm run build
+
+  package-smoke:
+    # 打包冒烟：确认 electron-builder 能产出未压缩的应用目录（不发布、不签名）
+    runs-on: windows-latest
+    needs: verify
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npx electron-builder --win --dir --publish never
