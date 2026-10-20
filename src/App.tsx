@@ -222,18 +222,12 @@ export default function App() {
     }
   }
 
-  /** 欢迎页提问：先选目录，再打开工作区并带入问题 */
-  const askFromWelcome = async (prompt: string) => {
+  const refreshRecentWorkspaces = async () => {
     try {
-      setError(null)
-      const result = await api.openDirectoryDialog()
-      if (result.success && !result.canceled && result.path) {
-        await openWorkspaceAt(result.path, prompt)
-      }
+      const result = await api.getRecentWorkspaces()
+      if (result.success) setRecentWorkspaces(result.workspaces)
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setError(localizeError(message))
-      console.error('Failed to open workspace from welcome prompt:', err)
+      console.error('Failed to refresh recent workspaces:', err)
     }
   }
 
@@ -530,7 +524,8 @@ export default function App() {
           recentWorkspaces={recentWorkspaces}
           onOpenProject={() => void pickWorkspace()}
           onOpenWorkspace={(path) => void openWorkspaceAt(path)}
-          onAsk={(prompt) => void askFromWelcome(prompt)}
+          onOpenSettings={() => setShowSettings(true)}
+          onRefreshRecent={() => void refreshRecentWorkspaces()}
         />
       )}
 
