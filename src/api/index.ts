@@ -308,8 +308,8 @@ export const api = {
     electronAPI.fleetCreate(workspaceDir, name, prompt),
   fleetList: (workspaceDir: string) => electronAPI.fleetList(workspaceDir),
   fleetGet: (id: string) => electronAPI.fleetGet(id),
-  fleetCancel: (id: string) => electronAPI.fleetCancel(id),
-  fleetCleanup: (id: string) => electronAPI.fleetCleanup(id),
+  fleetCancel: (id: string, workspaceDir?: string) => electronAPI.fleetCancel(id, workspaceDir),
+  fleetCleanup: (id: string, workspaceDir?: string) => electronAPI.fleetCleanup(id, workspaceDir),
   onFleetTaskUpdated: (callback: (task: FleetTask) => void) =>
     electronAPI.onFleetTaskUpdated(callback),
 

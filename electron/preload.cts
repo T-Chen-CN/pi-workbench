@@ -92,8 +92,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('fleet:create', workspaceDir, name, prompt),
   fleetList: (workspaceDir: string) => ipcRenderer.invoke('fleet:list', workspaceDir),
   fleetGet: (id: string) => ipcRenderer.invoke('fleet:get', id),
-  fleetCancel: (id: string) => ipcRenderer.invoke('fleet:cancel', id),
-  fleetCleanup: (id: string) => ipcRenderer.invoke('fleet:cleanup', id),
+  fleetCancel: (id: string, workspaceDir?: string) =>
+    ipcRenderer.invoke('fleet:cancel', id, workspaceDir),
+  fleetCleanup: (id: string, workspaceDir?: string) =>
+    ipcRenderer.invoke('fleet:cleanup', id, workspaceDir),
   onFleetTaskUpdated: (callback: (task: unknown) => void) => {
     const listener = (_event: unknown, task: unknown) => callback(task)
     ipcRenderer.on('fleet:task-updated', listener)

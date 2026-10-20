@@ -15,6 +15,7 @@ import {
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { existsSync, readFileSync } from 'fs'
+import { writeJsonAtomicSync } from './atomic-json.js'
 
 /** 写入 models.json 的自定义供应商 ID */
 const WORKBENCH_PROVIDER_ID = 'pi-workbench'
@@ -120,7 +121,7 @@ export class AgentManager {
     }
 
     await fs.mkdir(agentDir, { recursive: true })
-    await fs.writeFile(modelsPath, JSON.stringify(modelsConfig, null, 2), 'utf-8')
+    writeJsonAtomicSync(modelsPath, modelsConfig)
     return modelsPath
   }
 

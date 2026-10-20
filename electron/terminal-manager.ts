@@ -53,10 +53,28 @@ interface TerminalEntry {
   /** 尚未写入日志文件的内容 */
   pending: string
   logPath: string | null
+  /** 当前日志文件大小，用于轮转 */
+  logBytes: number
 }
 
 const MAX_BUFFER_CHARS = 200_000
 const FLUSH_DELAY_MS = 500
+const MAX_LOG_BYTES = 5 * 1024 * 1024
+/** 终端子进程不应继承 Agent 的供应商密钥 */
+const SENSITIVE_ENV_KEYS = ['PI_WORKBENCH_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']
+
+export function sanitizeTerminalEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const sanitized: NodeJS.ProcessEnv = { ...env }
+  for (const key of SENSITIVE_ENV_KEYS) {
+    delete sanitized[key]
+  }
+  return sanitized
+}
+
+function clampDimension(value: number, min: number, max: number): number {
+  const numeric = Number.isFinite(value) ? Math.floor(value) : min
+  return Math.min(Math.max(numeric, min), max)
+}
 
 function defaultShell(): string {
   if (process.platform === 'win32') {
@@ -86,10 +104,10 @@ export class TerminalManager {
     try {
       const pty = this.options.spawn(this.options.shell ?? defaultShell(), this.options.shellArgs ?? [], {
         name: 'xterm-256color',
-        cols: Math.max(cols, 20),
-        rows: Math.max(rows, 5),
+        cols: clampDimension(cols, 20, 1000),
+        rows: clampDimension(rows, 5, 500),
         cwd: workspaceDir,
-        env: this.options.env ?? process.env,
+        env: sanitizeTerminalEnv(this.options.env ?? process.env),
       })
 
       const entry: TerminalEntry = {
@@ -99,15 +117,27 @@ export class TerminalManager {
         buffer: '',
         pending: '',
         logPath,
+        logBytes: 0,
       }
 
-      // 新终端会话使用新的日志文件
+      // 同一工作区的终端共用一个日志文件：追加会话标记而不是清空历史
       if (logPath) {
         try {
           fs.mkdirSync(path.dirname(logPath), { recursive: true })
-          fs.writeFileSync(logPath, '', 'utf-8')
+          try {
+            entry.logBytes = fs.statSync(logPath).size
+          } catch {
+            entry.logBytes = 0
+          }
+          if (entry.logBytes > MAX_LOG_BYTES) {
+            this.rotateLog(entry)
+          }
+          this.appendToLog(
+            entry,
+            `\n--- terminal ${id} started at ${new Date().toISOString()} ---\n`
+          )
         } catch (error) {
-          console.warn('[Terminal] Failed to reset terminal log:', error)
+          console.warn('[Terminal] Failed to prepare terminal log:', error)
         }
       }
 
@@ -143,7 +173,7 @@ export class TerminalManager {
   resize(id: string, cols: number, rows: number): boolean {
     const entry = this.terminals.get(id)
     if (!entry) return false
-    entry.pty.resize(Math.max(cols, 20), Math.max(rows, 5))
+    entry.pty.resize(clampDimension(cols, 20, 1000), clampDimension(rows, 5, 500))
     return true
   }
 
@@ -200,12 +230,34 @@ export class TerminalManager {
 
   private flush(entry: TerminalEntry): void {
     if (!entry.logPath || !entry.pending) return
+    const text = entry.pending
+    entry.pending = ''
+    this.appendToLog(entry, text)
+  }
+
+  private appendToLog(entry: TerminalEntry, text: string): void {
+    if (!entry.logPath || !text) return
     try {
       fs.mkdirSync(path.dirname(entry.logPath), { recursive: true })
-      fs.appendFileSync(entry.logPath, entry.pending, 'utf-8')
-      entry.pending = ''
+      fs.appendFileSync(entry.logPath, text, 'utf-8')
+      entry.logBytes += Buffer.byteLength(text, 'utf-8')
+      if (entry.logBytes > MAX_LOG_BYTES) {
+        this.rotateLog(entry)
+      }
     } catch (error) {
       console.warn('[Terminal] Failed to write terminal log:', error)
+    }
+  }
+
+  private rotateLog(entry: TerminalEntry): void {
+    if (!entry.logPath) return
+    const rotated = `${entry.logPath}.1`
+    try {
+      fs.rmSync(rotated, { force: true })
+      fs.renameSync(entry.logPath, rotated)
+      entry.logBytes = 0
+    } catch (error) {
+      console.warn('[Terminal] Failed to rotate terminal log:', error)
     }
   }
 }

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
-import { JsonFleetStore, type FleetTask } from '../electron/fleet-store'
+import { JsonFleetStore, isAllowedStatusTransition, type FleetTask } from '../electron/fleet-store'
 import { FleetManager, type FleetAgent } from '../electron/fleet-manager'
 import type { FleetWorktree } from '../electron/fleet-worktree'
 
@@ -101,6 +101,99 @@ describe('FleetManager', () => {
     const task = store.get('stale')
     expect(task?.status).toBe('failed')
     expect(task?.error).toContain('interrupted')
+  })
+
+  it('resumes queued tasks left by a previous process', async () => {
+    const preStore = new JsonFleetStore(path.join(tmpDir, 'fleet-tasks.json'))
+    preStore.insert({
+      id: 'pending',
+      workspace: '/tmp/workspace',
+      name: 'pending task',
+      prompt: 'work',
+      status: 'queued',
+      worktree: '/tmp/worktree-pending',
+      branch: 'pi-fleet/pending',
+      createdAt: 1,
+      updatedAt: 1,
+      output: '',
+    })
+    preStore.close()
+
+    createManager(() => makeAgent(async () => ({ success: true, response: 'resumed' })))
+
+    await waitFor(() => store.get('pending')?.status === 'succeeded')
+    expect(store.get('pending')?.output).toBe('resumed')
+  })
+
+  it('runs tasks from different workspaces concurrently', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let running = 0
+    let peak = 0
+
+    createManager(() =>
+      makeAgent(async () => {
+        running++
+        peak = Math.max(peak, running)
+        await gate
+        running--
+        return { success: true, response: 'done' }
+      })
+    )
+
+    const first = await manager!.createTask('/tmp/ws-a', 'a', 'work')
+    const second = await manager!.createTask('/tmp/ws-b', 'b', 'work')
+
+    await waitFor(
+      () =>
+        store.get(first.task!.id)?.status === 'running' &&
+        store.get(second.task!.id)?.status === 'running'
+    )
+    await waitFor(() => peak === 2)
+    expect(peak).toBe(2)
+
+    release()
+    await waitFor(
+      () =>
+        store.get(first.task!.id)?.status === 'succeeded' &&
+        store.get(second.task!.id)?.status === 'succeeded'
+    )
+  })
+
+  it('only accepts tasks from the workspace that owns them', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    createManager(() =>
+      makeAgent(async () => {
+        await gate
+        return { success: true, response: 'done' }
+      })
+    )
+
+    const created = await manager!.createTask('/tmp/ws-a', 'own', 'work')
+    const id = created.task!.id
+    await waitFor(() => store.get(id)?.status === 'running')
+
+    await expect(manager!.cancel(id, '/tmp/ws-b')).resolves.toMatchObject({
+      success: false,
+      error: 'Task not found',
+    })
+    expect(store.get(id)?.status).toBe('running')
+
+    release()
+    await waitFor(() => store.get(id)?.status === 'succeeded')
+  })
+
+  it('rejects invalid status transitions', () => {
+    expect(isAllowedStatusTransition('queued', 'running')).toBe(true)
+    expect(isAllowedStatusTransition('running', 'succeeded')).toBe(true)
+    expect(isAllowedStatusTransition('queued', 'succeeded')).toBe(false)
+    expect(isAllowedStatusTransition('succeeded', 'running')).toBe(false)
+    expect(isAllowedStatusTransition('cancelled', 'failed')).toBe(false)
   })
 
   it('runs a queued task to success and stores output and logs', async () => {

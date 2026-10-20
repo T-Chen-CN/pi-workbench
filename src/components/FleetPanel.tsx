@@ -94,7 +94,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
   }
 
   const cancelTask = async (task: FleetTask) => {
-    const result = await api.fleetCancel(task.id)
+    const result = await api.fleetCancel(task.id, workspacePath)
     if (!result.success) {
       toast.error(t('fleetCancelFailed', { error: localizeError(result.error) || t('unknownError') }))
     }
@@ -102,7 +102,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
   }
 
   const cleanupTask = async (task: FleetTask) => {
-    const result = await api.fleetCleanup(task.id)
+    const result = await api.fleetCleanup(task.id, workspacePath)
     if (!result.success) {
       toast.error(t('fleetCleanupFailed', { error: localizeError(result.error) || t('unknownError') }))
     } else {

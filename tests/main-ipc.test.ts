@@ -127,6 +127,46 @@ describe('filesystem IPC handlers', () => {
     }
   })
 
+  it('rejects reads outside the approved workspaces', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-outside-'))
+    try {
+      const file = path.join(outside, 'secret.txt')
+      await fs.writeFile(file, 'secret')
+
+      await expect(call('fs:readFile', file)).resolves.toMatchObject({ success: false })
+      await expect(call('fs:listDirectory', outside)).resolves.toMatchObject({ success: false })
+      await expect(call('fs:stat', file)).resolves.toMatchObject({ success: false })
+      await expect(call('fs:exists', file)).resolves.toEqual({ success: true, exists: false })
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses to delete or rename a workspace root', async () => {
+    const deleteResult = await call('fs:delete', workDir)
+    expect(deleteResult.success).toBe(false)
+    expect(deleteResult.error).toContain('root')
+
+    const renameResult = await call('fs:rename', workDir, path.join(workDir, 'moved'))
+    expect(renameResult.success).toBe(false)
+    expect(renameResult.error).toContain('root')
+
+    await expect(fs.stat(workDir)).resolves.toBeTruthy()
+  })
+
+  it('rejects terminal, plugin and fleet calls for unapproved workspaces', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-outside-'))
+    try {
+      await expect(call('terminal:create', outside, 80, 24)).resolves.toMatchObject({
+        success: false,
+      })
+      await expect(call('plugins:list', outside)).resolves.toMatchObject({ success: false })
+      await expect(call('fleet:list', outside)).resolves.toMatchObject({ success: false })
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true })
+    }
+  })
+
   it('returns an error for missing files', async () => {
     const result = await call('fs:readFile', path.join(workDir, 'missing.txt'))
 
@@ -226,6 +266,32 @@ describe('app settings handlers', () => {
       theme: 'light',
       autoSave: true,
     })
+  })
+
+  it('recovers settings from the backup when settings.json is corrupted', async () => {
+    const settingsPath = path.join(appDir, 'config', 'settings.json')
+    await fs.writeFile(settingsPath, '{ truncated', 'utf-8')
+    await fs.writeFile(
+      `${settingsPath}.bak`,
+      JSON.stringify({ language: 'en', theme: 'dark' }),
+      'utf-8'
+    )
+
+    const result = await call('app:getSettings')
+    expect(result.success).toBe(true)
+    expect(result.settings).toMatchObject({
+      language: 'en',
+      theme: 'dark',
+      autoSave: true,
+    })
+  })
+
+  it('falls back to defaults when settings.json is corrupted and has no backup', async () => {
+    await fs.writeFile(path.join(appDir, 'config', 'settings.json'), '{ truncated', 'utf-8')
+
+    const result = await call('app:getSettings')
+    expect(result.success).toBe(true)
+    expect(result.settings).toMatchObject({ language: 'zh', theme: 'light' })
   })
 
   it('moves recent workspaces to the front, deduplicates and caps at 10', async () => {

@@ -63,8 +63,8 @@ export interface ElectronAPI {
   fleetCreate: (workspaceDir: string, name: string, prompt: string) => Promise<FleetCreateResult>
   fleetList: (workspaceDir: string) => Promise<FleetListResult>
   fleetGet: (id: string) => Promise<FleetGetResult>
-  fleetCancel: (id: string) => Promise<FleetActionResult>
-  fleetCleanup: (id: string) => Promise<FleetActionResult>
+  fleetCancel: (id: string, workspaceDir?: string) => Promise<FleetActionResult>
+  fleetCleanup: (id: string, workspaceDir?: string) => Promise<FleetActionResult>
   onFleetTaskUpdated: (callback: (task: FleetTask) => void) => () => void
 
   // API Configuration management (便携式架构)

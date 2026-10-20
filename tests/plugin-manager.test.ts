@@ -10,7 +10,8 @@ let manager: PluginManager | null = null
 async function writePlugin(
   id: string,
   source: string,
-  manifest: Record<string, unknown> = {}
+  manifest: Record<string, unknown> = {},
+  options: { enabled?: boolean } = {}
 ): Promise<string> {
   const directory = path.join(workspace, '.pi-workbench', 'plugins', id)
   await fs.mkdir(directory, { recursive: true })
@@ -29,7 +30,28 @@ async function writePlugin(
     'utf-8'
   )
   await fs.writeFile(path.join(directory, 'index.js'), source, 'utf-8')
+
+  // 插件默认禁用：除显式关闭外，测试里把插件写进启用白名单
+  if (options.enabled !== false) {
+    await enablePlugin(id)
+  }
   return directory
+}
+
+async function enablePlugin(id: string): Promise<void> {
+  const configPath = path.join(workspace, '.pi-workbench', 'config.json')
+  let config: { enabledPlugins?: string[] } = {}
+  try {
+    config = JSON.parse(await fs.readFile(configPath, 'utf-8'))
+  } catch {
+    config = {}
+  }
+  const enabled = new Set([...(config.enabledPlugins ?? []), id])
+  await fs.writeFile(
+    configPath,
+    JSON.stringify({ ...config, enabledPlugins: [...enabled], pluginsConfigured: true }),
+    'utf-8'
+  )
 }
 
 beforeEach(async () => {
@@ -46,6 +68,23 @@ afterEach(async () => {
 })
 
 describe('PluginManager', () => {
+  it('does not activate plugins until they are explicitly enabled', async () => {
+    ;(globalThis as Record<string, unknown>).__pluginActivated = false
+    await writePlugin(
+      'demo',
+      `module.exports = { activate() { globalThis.__pluginActivated = true } }`,
+      {},
+      { enabled: false }
+    )
+
+    manager = new PluginManager({ watch: false })
+    const plugins = manager.loadWorkspace(workspace)
+
+    expect(plugins[0].enabled).toBe(false)
+    expect((globalThis as Record<string, unknown>).__pluginActivated).toBe(false)
+    expect(manager.hasExplicitEnableList(workspace)).toBe(false)
+  })
+
   it('loads a plugin and lists its commands', async () => {
     await writePlugin(
       'demo',

@@ -7,8 +7,22 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { createRequire } from 'module'
+import { writeJsonAtomicSync } from './atomic-json.js'
 
 export type FleetTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+const TERMINAL_STATUSES: FleetTaskStatus[] = ['succeeded', 'failed', 'cancelled']
+
+/** 任务状态机：终态不可再迁移；queued 只能进入 running / cancelled */
+export function isAllowedStatusTransition(
+  from: FleetTaskStatus,
+  to: FleetTaskStatus
+): boolean {
+  if (from === to) return true
+  if (TERMINAL_STATUSES.includes(from)) return false
+  if (from === 'queued') return to === 'running' || to === 'cancelled'
+  return to === 'succeeded' || to === 'failed' || to === 'cancelled'
+}
 
 export interface FleetTask {
   id: string
@@ -149,8 +163,7 @@ export class JsonFleetStore implements FleetStore {
 
   private persist(): void {
     try {
-      fs.mkdirSync(path.dirname(this.filePath), { recursive: true })
-      fs.writeFileSync(this.filePath, JSON.stringify(this.tasks, null, 2), 'utf-8')
+      writeJsonAtomicSync(this.filePath, this.tasks)
     } catch (error) {
       console.warn('[Fleet] Failed to persist tasks:', error)
     }
