@@ -37,7 +37,8 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 | Phase 1：真实 Pi Agent 集成 | ✅ 完成 |
 | Phase 1 加固（工作区生命周期 / 会话持久化 / Diff 联动 / 文件监听 / 测试） | ✅ 完成 |
 | Phase 2：工作区与对话体验 | ✅ 完成 |
-| Phase 3-6 | ⏳ 未开始 |
+| Phase 3：终端集成 | ✅ 完成 |
+| Phase 4-6 | ⏳ 未开始 |
 
 **已可用的端到端能力**：配置供应商 → 拉取真实模型 → 打开工作区 → Agent 对话（read/write/edit/bash）
 → Agent 修改自动展示 Diff → 重启后恢复会话。
@@ -84,6 +85,8 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 - IPC 调试面板（开发模式）
 - 便携式数据目录；Web 开发模式调试桥接
 - 主进程文件日志（`logs/main.log`，5 MB 轮转并保留 `.1` 备份）
+- 内置终端（xterm.js + node-pty；输出写入 `terminal.log`，可附加给 Agent）
+- 多工作区标签页，各工作区独立 Agent 实例
 - 生产构建注入 Content-Security-Policy（开发模式不受影响）
 - Vitest 单测（store / diff / logger / AgentManager / IPC）、ESLint、Prettier、GitHub Actions CI
 
@@ -92,7 +95,6 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 | 能力 | 阶段 |
 |---|---|
 | 上下文片段 / 符号级选择（v1 已支持整文件附加） | Phase 2（待增强） |
-| 内置终端（xterm.js + node-pty） | Phase 3 |
 | 工作台插件系统（命令 / 菜单 / 钩子 / 声明式 UI） | Phase 4 |
 | Fleet 后台任务（Git worktree） | Phase 5 |
 | 性能、撤销/重做、快捷键、主题、自动更新 | Phase 6 |
@@ -124,6 +126,7 @@ Main Process (Node 24, Electron 44)
 | 状态管理 | Zustand | 4.5 |
 | 编辑器 | Monaco Editor | 0.57 |
 | 样式 | TailwindCSS | 3.4 |
+| 终端 | `@xterm/xterm` + `node-pty` | 5.x / 1.1 |
 | Agent SDK | @earendil-works/pi-coding-agent | 1.3 |
 | 测试 | Vitest | 2.1 |
 | 打包 | electron-builder | 26 |
@@ -160,6 +163,7 @@ Main Process (Node 24, Electron 44)
 | 工作区配置 | `{workspace}/.pi-workbench/config.json` | `workspace:init` 创建 |
 | Web dev Agent 数据 | `{appDir}/cache/temp/web-agent/` | 可随时删除 |
 | 主进程日志 | `{appDir}/logs/main.log` | 5 MB 轮转，保留 `main.log.1`；渲染进程日志待补 |
+| 终端输出 | `{workspace}/.pi-workbench/terminal.log` | 每次新建终端时重置；可附加给 Agent |
 
 **禁止**：`app.getPath('userData')` / `appData` / `.env` / 系统临时目录。
 
@@ -229,10 +233,13 @@ docs/               项目文档
 
 - 工作区元数据存储：先 JSON，SQLite 待 Fleet 规模再评估
 
-### 模块 6：终端（待实现）
+### 模块 6：终端（已实现）
 
-- xterm.js + node-pty（原生模块，需 electron-rebuild 与打包验证）
-- 用户终端与 Agent bash 工具独立
+- 主进程 `TerminalManager`（`electron/terminal-manager.ts`）管理 PTY 进程
+- 渲染进程使用 `@xterm/xterm` + FitAddon，面板位于编辑器下方
+- 每个终端输出写入 `{workspace}/.pi-workbench/terminal.log`，可一键附加为 Agent 上下文
+- 面板隐藏时保留会话；重启按钮重建 PTY；切换工作区按 key 重建
+- node-pty 为原生模块：延迟加载，失败只影响终端；打包使用 `asarUnpack`
 
 ### 模块 7：工作台插件系统（待实现）
 
@@ -288,11 +295,13 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 
 **验收**：对话流式渲染；修改可审阅并逐项保留/还原；已打开的文件可附加为上下文；多工作区标签切换时 Agent 与会话正确隔离；重启恢复上次会话。切换工作区会重置编辑器标签页。
 
-### ⏳ Phase 3：终端集成（预计 1-2 周）
+### ✅ Phase 3：终端集成（完成）
 
-- [ ] xterm.js + node-pty（验证 Electron 44 原生模块构建）
-- [ ] 用户终端与命令日志
-- [ ] Agent 与终端联动（读取终端输出）
+- [x] xterm.js + node-pty（Electron 44 下验证可用；安装包通过 `asarUnpack` 保留原生二进制）
+- [x] 用户终端、重启与输出日志（`{workspace}/.pi-workbench/terminal.log`）
+- [x] Agent 与终端联动：终端输出可作为上下文附件发送给 Agent
+
+**说明**：终端按工作区创建，面板显隐不销毁会话；切换工作区会重建终端。"Agent 读取终端输出"通过附加 `terminal.log` 实现。
 
 ### ⏳ Phase 4：工作台插件系统（预计 1-2 周）
 
@@ -345,7 +354,7 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 
 ```bash
 npm run type-check   # TypeScript 严格模式
-npm test             # Vitest（store / diff / logger / AgentManager / IPC）
+npm test             # Vitest（store / diff / logger / AgentManager / IPC / 终端）
 npm run lint         # ESLint + react-hooks
 npm run build        # renderer → bridge → main（顺序不可颠倒）
 npm run package:win  # NSIS + portable

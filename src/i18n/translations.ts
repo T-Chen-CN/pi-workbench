@@ -72,6 +72,14 @@ export const translations = {
     reverted: '已还原',
     keptChanges: '已保留修改',
 
+    // Terminal
+    terminal: '终端',
+    terminalStarting: '启动中...',
+    restartTerminal: '重启',
+    sendTerminalOutput: '输出发送到聊天',
+    terminalAttached: '终端输出已附加到下一条消息',
+    terminalOutputUnavailable: '终端输出文件不存在',
+
     // IPC Debug
     ipcDebug: 'IPC 通信调试',
     runTests: '运行测试',
@@ -162,6 +170,14 @@ export const translations = {
     revertFailed: 'Revert failed',
     reverted: 'Reverted',
     keptChanges: 'Changes kept',
+
+    // Terminal
+    terminal: 'Terminal',
+    terminalStarting: 'Starting...',
+    restartTerminal: 'Restart',
+    sendTerminalOutput: 'Send output to chat',
+    terminalAttached: 'Terminal output attached to the next message',
+    terminalOutputUnavailable: 'Terminal output is not available',
 
     // IPC Debug
     ipcDebug: 'IPC Communication Debug',

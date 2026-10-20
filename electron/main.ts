@@ -1,11 +1,13 @@
 import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs/promises'
-import { existsSync, statSync, watch, type FSWatcher } from 'fs'
 import { fileURLToPath, pathToFileURL } from 'url'
+import { createRequire } from 'module'
+import { existsSync, statSync, watch, type FSWatcher } from 'fs'
 import { isIgnoredWatchPath } from './watch-filter.js'
 import { FileLogger, installConsoleTee } from './logger.js'
 import { AgentRegistry } from './agent-registry.js'
+import { TerminalManager } from './terminal-manager.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
 
@@ -18,6 +20,32 @@ const agentRegistry = new AgentRegistry()
 let workspaceWatcher: FSWatcher | null = null
 let watchDebounce: NodeJS.Timeout | null = null
 let fileLogger: FileLogger | null = null
+
+const requireFromMain = createRequire(import.meta.url)
+let ptyModule: typeof import('node-pty') | null = null
+
+/** node-pty 是原生模块，延迟加载：加载失败不应阻止应用启动 */
+function loadPty(): typeof import('node-pty') {
+  if (!ptyModule) {
+    ptyModule = requireFromMain('node-pty') as typeof import('node-pty')
+  }
+  return ptyModule
+}
+
+const terminalManager = new TerminalManager({
+  spawn: (shell, args, options) => loadPty().spawn(shell, args, options),
+  onData: (id, data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('terminal:data', { id, data })
+    }
+  },
+  onExit: (id, exitCode) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('terminal:exit', { id, exitCode })
+    }
+  },
+  logPathFor: (workspaceDir) => path.join(workspaceDir, '.pi-workbench', 'terminal.log'),
+})
 
 // 便携式架构：获取应用目录
 function getAppDir(): string {
@@ -116,6 +144,7 @@ app.whenReady().then(async () => {
 
 app.on('will-quit', () => {
   fileLogger?.close()
+  terminalManager.closeAll()
   void agentRegistry.disposeAll()
 })
 
@@ -293,6 +322,33 @@ ipcMain.handle('fs:unwatch', async () => {
     }
   }
 })
+
+// ---- 终端（PTY） ----
+
+ipcMain.handle('terminal:create', async (_event, workspaceDir: string, cols: number, rows: number) =>
+  terminalManager.create(workspaceDir, cols, rows)
+)
+
+ipcMain.handle('terminal:write', async (_event, id: string, data: string) => ({
+  success: terminalManager.write(id, data),
+}))
+
+ipcMain.handle('terminal:resize', async (_event, id: string, cols: number, rows: number) => ({
+  success: terminalManager.resize(id, cols, rows),
+}))
+
+ipcMain.handle('terminal:close', async (_event, id: string) => ({
+  success: terminalManager.close(id),
+}))
+
+ipcMain.handle('terminal:flush', async (_event, id: string) => ({
+  success: terminalManager.flushNow(id),
+}))
+
+ipcMain.handle('terminal:getRecentOutput', async (_event, id: string) => ({
+  success: true,
+  output: terminalManager.getRecentOutput(id),
+}))
 
 // 便携式架构：应用配置管理
 ipcMain.handle('app:getAppDir', async () => {

@@ -52,6 +52,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentGetHistory: (workspaceDir?: string) => ipcRenderer.invoke('agent:getHistory', workspaceDir),
   agentDispose: (workspaceDir?: string) => ipcRenderer.invoke('agent:dispose', workspaceDir),
 
+  // 终端
+  terminalCreate: (workspaceDir: string, cols: number, rows: number) =>
+    ipcRenderer.invoke('terminal:create', workspaceDir, cols, rows),
+  terminalWrite: (id: string, data: string) => ipcRenderer.invoke('terminal:write', id, data),
+  terminalResize: (id: string, cols: number, rows: number) =>
+    ipcRenderer.invoke('terminal:resize', id, cols, rows),
+  terminalClose: (id: string) => ipcRenderer.invoke('terminal:close', id),
+  terminalFlush: (id: string) => ipcRenderer.invoke('terminal:flush', id),
+  terminalGetRecentOutput: (id: string) => ipcRenderer.invoke('terminal:getRecentOutput', id),
+  onTerminalData: (callback: (payload: { id: string; data: string }) => void) => {
+    const listener = (_event: unknown, payload: { id: string; data: string }) => callback(payload)
+    ipcRenderer.on('terminal:data', listener)
+    return () => ipcRenderer.removeListener('terminal:data', listener)
+  },
+  onTerminalExit: (callback: (payload: { id: string; exitCode: number }) => void) => {
+    const listener = (_event: unknown, payload: { id: string; exitCode: number }) => callback(payload)
+    ipcRenderer.on('terminal:exit', listener)
+    return () => ipcRenderer.removeListener('terminal:exit', listener)
+  },
+
   // API Configuration 管理（便携式架构）
   apiConfigGet: () => ipcRenderer.invoke('apiConfig:get'),
   apiConfigSave: (config: any) => ipcRenderer.invoke('apiConfig:save', config),

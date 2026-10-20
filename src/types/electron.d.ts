@@ -32,6 +32,16 @@ export interface ElectronAPI {
   agentGetHistory: (workspaceDir?: string) => Promise<AgentHistoryResult>
   agentDispose: (workspaceDir?: string) => Promise<AgentDisposeResult>
 
+  // Terminal
+  terminalCreate: (workspaceDir: string, cols: number, rows: number) => Promise<TerminalCreateResult>
+  terminalWrite: (id: string, data: string) => Promise<TerminalResult>
+  terminalResize: (id: string, cols: number, rows: number) => Promise<TerminalResult>
+  terminalClose: (id: string) => Promise<TerminalResult>
+  terminalFlush: (id: string) => Promise<TerminalResult>
+  terminalGetRecentOutput: (id: string) => Promise<TerminalOutputResult>
+  onTerminalData: (callback: (payload: { id: string; data: string }) => void) => () => void
+  onTerminalExit: (callback: (payload: { id: string; exitCode: number }) => void) => () => void
+
   // API Configuration management (便携式架构)
   apiConfigGet: () => Promise<ApiConfigGetResult>
   apiConfigSave: (config: ApiConfig) => Promise<ApiConfigSaveResult>
@@ -185,6 +195,23 @@ export interface AgentHistoryResult {
 
 export interface AgentDisposeResult {
   success: boolean
+  error?: string
+}
+
+export interface TerminalCreateResult {
+  success: boolean
+  id?: string
+  error?: string
+}
+
+export interface TerminalResult {
+  success: boolean
+  error?: string
+}
+
+export interface TerminalOutputResult {
+  success: boolean
+  output: string
   error?: string
 }
 
