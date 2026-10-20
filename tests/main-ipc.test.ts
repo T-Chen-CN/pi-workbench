@@ -33,6 +33,7 @@ vi.mock('electron', () => ({
     isPackaged: false,
     getAppPath: () => mocks.state.appDir,
     getPath: () => mocks.state.appDir,
+    setPath: () => {},
     whenReady: () => new Promise(() => {}),
     on: () => {},
     quit: () => {},
@@ -189,7 +190,7 @@ describe('app settings handlers', () => {
 
     expect(result.success).toBe(true)
     expect(settings).toMatchObject({
-      language: 'zh-CN',
+      language: 'zh',
       theme: 'dark',
       autoSave: true,
       autoSaveDelay: 2000,

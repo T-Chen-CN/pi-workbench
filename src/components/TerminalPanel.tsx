@@ -32,12 +32,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   // 输出订阅（组件生命周期内只注册一次）
   useEffect(() => {
-    const offData = window.electronAPI.onTerminalData(({ id, data }) => {
+    const offData = api.onTerminalData(({ id, data }) => {
       if (id === terminalIdRef.current) {
         termRef.current?.write(data)
       }
     })
-    const offExit = window.electronAPI.onTerminalExit(({ id, exitCode }) => {
+    const offExit = api.onTerminalExit(({ id, exitCode }) => {
       if (id === terminalIdRef.current) {
         termRef.current?.writeln(`\r\n[process exited: ${exitCode}]`)
         setStatus('error')
@@ -54,7 +54,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   useEffect(() => {
     return () => {
       const id = terminalIdRef.current
-      if (id) void window.electronAPI.terminalClose(id)
+      if (id) void api.terminalClose(id)
       terminalIdRef.current = null
       termRef.current?.dispose()
       termRef.current = null
@@ -86,25 +86,25 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
     terminal.onData((data) => {
       const id = terminalIdRef.current
-      if (id) void window.electronAPI.terminalWrite(id, data)
+      if (id) void api.terminalWrite(id, data)
     })
 
     let cancelled = false
     void (async () => {
-      const result = await window.electronAPI.terminalCreate(
+      const result = await api.terminalCreate(
         workspacePath,
         terminal.cols || 80,
         terminal.rows || 24
       )
       if (cancelled) {
-        if (result.id) void window.electronAPI.terminalClose(result.id)
+        if (result.id) void api.terminalClose(result.id)
         return
       }
       if (result.success && result.id) {
         terminalIdRef.current = result.id
         setStatus('ready')
         fit.fit()
-        void window.electronAPI.terminalResize(result.id, terminal.cols, terminal.rows)
+        void api.terminalResize(result.id, terminal.cols, terminal.rows)
       } else {
         const message = result.error || 'Failed to create terminal'
         setStatus('error')
@@ -127,7 +127,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       const id = terminalIdRef.current
       const terminal = termRef.current
       if (id && terminal) {
-        void window.electronAPI.terminalResize(id, terminal.cols, terminal.rows)
+        void api.terminalResize(id, terminal.cols, terminal.rows)
       }
     }
 
@@ -144,7 +144,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   const restart = () => {
     const id = terminalIdRef.current
-    if (id) void window.electronAPI.terminalClose(id)
+    if (id) void api.terminalClose(id)
     terminalIdRef.current = null
     termRef.current?.dispose()
     termRef.current = null
@@ -157,7 +157,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const sendOutputToChat = async () => {
     const id = terminalIdRef.current
     if (!id) return
-    await window.electronAPI.terminalFlush(id)
+    await api.terminalFlush(id)
 
     const separator = workspacePath.includes('\\') ? '\\' : '/'
     const logPath = `${workspacePath}${separator}.pi-workbench${separator}terminal.log`

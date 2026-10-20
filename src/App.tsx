@@ -40,14 +40,21 @@ export default function App() {
     window.addEventListener('open-settings', openSettings)
     return () => window.removeEventListener('open-settings', openSettings)
   }, [])
-  const { t, setLanguage, language } = useI18nStore()
+  const { t, setLanguage } = useI18nStore()
 
-  // 初始化语言为中文
+  // 从便携式 settings.json 恢复语言偏好（默认中文）
   useEffect(() => {
-    if (language !== 'zh') {
-      setLanguage('zh')
-    }
-  }, [language, setLanguage])
+    api.getSettings()
+      .then((result) => {
+        const saved = result.success ? result.settings?.language : undefined
+        if (saved === 'en' || saved === 'en-US') {
+          setLanguage('en')
+        } else if (saved === 'zh' || saved === 'zh-CN') {
+          setLanguage('zh')
+        }
+      })
+      .catch((err) => console.error('Failed to load language setting:', err))
+  }, [setLanguage])
 
   // 加载最近打开的工作区
   useEffect(() => {

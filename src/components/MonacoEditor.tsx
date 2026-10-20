@@ -1,35 +1,71 @@
-import React, { useCallback, useEffect, useRef } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import * as monaco from 'monaco-editor'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
 
+const LANGUAGE_BY_EXTENSION: Record<string, string> = {
+  ts: 'typescript',
+  tsx: 'typescript',
+  js: 'javascript',
+  jsx: 'javascript',
+  json: 'json',
+  md: 'markdown',
+  html: 'html',
+  css: 'css',
+  py: 'python',
+  rs: 'rust',
+  go: 'go',
+  rb: 'ruby',
+}
+
+function detectLanguage(fileName: string): string {
+  const extension = fileName.split('.').pop() || 'txt'
+  return LANGUAGE_BY_EXTENSION[extension] || 'plaintext'
+}
+
 export const MonacoEditor: React.FC = () => {
   const { t } = useI18nStore()
   const editorRef = useRef<HTMLDivElement>(null)
   const monacoRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
-  const { currentFile, openFiles, updateOpenFile, markDirty, markClean, removeOpenFile } = useEditorStore()
+  const { currentFile, openFiles, updateOpenFile, markClean, removeOpenFile } = useEditorStore()
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   // 程序化 setValue 时抑制内容变化回调，避免误标脏 + 自动保存回环
   const suppressChangeRef = useRef(false)
+  const [editorReady, setEditorReady] = useState(false)
 
-  // Initialize Monaco editor
+  // 打开首个文件时创建编辑器；关闭全部文件后释放。容器随 currentFile 一起挂载。
   useEffect(() => {
-    if (!editorRef.current) return
+    if (!currentFile) {
+      if (monacoRef.current) {
+        monacoRef.current.dispose()
+        monacoRef.current = null
+        setEditorReady(false)
+      }
+      return
+    }
+
+    if (monacoRef.current || !editorRef.current) return
 
     monacoRef.current = monaco.editor.create(editorRef.current, {
+      value: currentFile.content,
+      language: detectLanguage(currentFile.name),
       theme: 'vs-dark',
-      language: 'typescript',
       automaticLayout: true,
       minimap: { enabled: true },
       fontSize: 14,
       lineNumbers: 'on',
       wordWrap: 'on',
     })
+    setEditorReady(true)
+  }, [currentFile])
 
+  // 组件卸载时释放编辑器
+  useEffect(() => {
     return () => {
       monacoRef.current?.dispose()
+      monacoRef.current = null
     }
   }, [])
 
@@ -44,26 +80,29 @@ export const MonacoEditor: React.FC = () => {
     monacoRef.current.setValue(currentFile.content)
     suppressChangeRef.current = false
 
-    // Detect language from file extension
-    const extension = currentFile.name.split('.').pop() || 'txt'
-    const languageMap: Record<string, string> = {
-      ts: 'typescript',
-      tsx: 'typescript',
-      js: 'javascript',
-      jsx: 'javascript',
-      json: 'json',
-      md: 'markdown',
-      html: 'html',
-      css: 'css',
-      py: 'python',
-      rs: 'rust',
-      go: 'go',
-      rb: 'ruby',
-    }
-
-    const language = languageMap[extension] || 'plaintext'
+    const language = detectLanguage(currentFile.name)
     monaco.editor.setModelLanguage(model || monaco.editor.createModel('', ''), language)
-  }, [currentFile])
+  }, [currentFile, editorReady])
+
+  // 容器尺寸变化时重新布局（编辑器可能在面板尺寸为 0 时创建）
+  useEffect(() => {
+    if (!editorReady) return
+    const editor = monacoRef.current
+    const container = editorRef.current
+    if (!editor || !container) return
+
+    const layout = () => editor.layout()
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(layout) : null
+    observer?.observe(container)
+    window.addEventListener('resize', layout)
+    const timer = setTimeout(layout, 50)
+
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', layout)
+      clearTimeout(timer)
+    }
+  }, [editorReady])
 
   // 外部文件变化：未被本地修改时同步磁盘内容；被外部删除时关闭标签
   const currentPath = currentFile?.path
@@ -125,37 +164,38 @@ export const MonacoEditor: React.FC = () => {
     [updateOpenFile, markClean]
   )
 
-  // Handle editor changes
+  // 监听编辑器内容变化：自动保存的防抖计时器独立于 currentFile，
+  // 切换文件不会清掉尚未触发的保存。
   useEffect(() => {
-    if (!monacoRef.current) return
+    if (!editorReady || !monacoRef.current) return
 
-    const model = monacoRef.current.getModel()
-    if (!model) return
+    const editor = monacoRef.current
+    const subscription = editor.onDidChangeModelContent(() => {
+      if (suppressChangeRef.current) return
 
-    const subscription = model.onDidChangeContent(() => {
-      if (!currentFile || suppressChangeRef.current) return
+      const state = useEditorStore.getState()
+      const file = state.currentFile
+      if (!file) return
 
-      const newContent = model.getValue()
-      updateOpenFile(currentFile.path, { content: newContent })
-      markDirty(currentFile.path)
+      const newContent = editor.getValue()
+      state.updateOpenFile(file.path, { content: newContent })
+      state.markDirty(file.path)
 
-      // Auto-save after 2 seconds of inactivity
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
       saveTimeoutRef.current = setTimeout(() => {
-        void saveFile(currentFile.path)
+        saveTimeoutRef.current = null
+        void saveFile(file.path)
       }, 2000)
     })
 
     return () => {
       subscription.dispose()
-      // 切换文件/卸载时取消未触发的自动保存，避免写入旧内容
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current)
         saveTimeoutRef.current = null
       }
     }
-  }, [currentFile, updateOpenFile, markDirty, saveFile])
-
+  }, [editorReady, saveFile])
 
   const handleSave = useCallback(
     async (e: KeyboardEvent) => {
@@ -184,7 +224,7 @@ export const MonacoEditor: React.FC = () => {
   }
 
   return (
-    <div className="flex flex-col flex-1 bg-white dark:bg-[#1e1e1e]">
+    <div className="flex flex-col flex-1 bg-white dark:bg-[#1e1e1e] min-h-0">
       <div className="flex gap-0 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#252526] flex-shrink-0 overflow-x-auto">
         {openFiles.map((file) => (
           <div
@@ -217,7 +257,7 @@ export const MonacoEditor: React.FC = () => {
           </div>
         ))}
       </div>
-      <div ref={editorRef} className="flex-1" />
+      <div ref={editorRef} className="flex-1 min-h-0" />
     </div>
   )
 }

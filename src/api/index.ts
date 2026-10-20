@@ -27,10 +27,14 @@ import type {
   FleetGetResult,
   FleetActionResult,
   FleetTask,
+  TerminalCreateResult,
+  TerminalResult,
+  TerminalOutputResult,
 } from '../types/electron'
 
 // Mock API for browser development
 const MOCK_CONFIG_KEY = 'pi-workbench-api-config'
+const MOCK_SETTINGS_KEY = 'pi-workbench-settings'
 
 const mockAPI = {
   openDirectoryDialog: async (): Promise<OpenDirectoryResult> => {
@@ -87,19 +91,21 @@ const mockAPI = {
     return { success: true, appDir: '/mock/app/dir' }
   },
   getSettings: async (): Promise<GetSettingsResult> => {
-    console.log('[Mock] getSettings')
-    return {
-      success: true,
-      settings: {
-        language: 'zh-CN',
-        theme: 'dark',
-        autoSave: true,
-        autoSaveDelay: 2000
-      }
+    const defaults = {
+      language: 'zh',
+      theme: 'dark',
+      autoSave: true,
+      autoSaveDelay: 2000,
+    }
+    try {
+      const saved = localStorage.getItem(MOCK_SETTINGS_KEY)
+      return { success: true, settings: saved ? { ...defaults, ...JSON.parse(saved) } : defaults }
+    } catch {
+      return { success: true, settings: defaults }
     }
   },
   saveSettings: async (settings: any): Promise<SaveSettingsResult> => {
-    console.log('[Mock] saveSettings:', settings)
+    localStorage.setItem(MOCK_SETTINGS_KEY, JSON.stringify(settings))
     return { success: true }
   },
   getRecentWorkspaces: async (): Promise<RecentWorkspacesResult> => {
@@ -220,6 +226,23 @@ const mockAPI = {
     error: 'Fleet tasks are only available in the Electron app',
   }),
   onFleetTaskUpdated: (_callback: (task: FleetTask) => void) => () => {},
+
+  // Terminal（Web 模式没有 PTY，返回失败而不是抛异常）
+  terminalCreate: async (): Promise<TerminalCreateResult> => ({
+    success: false,
+    error: 'Terminal is only available in the Electron app',
+  }),
+  terminalWrite: async (): Promise<TerminalResult> => ({ success: false }),
+  terminalResize: async (): Promise<TerminalResult> => ({ success: false }),
+  terminalClose: async (): Promise<TerminalResult> => ({ success: false }),
+  terminalFlush: async (): Promise<TerminalResult> => ({ success: false }),
+  terminalGetRecentOutput: async (): Promise<TerminalOutputResult> => ({
+    success: false,
+    output: '',
+    error: 'Terminal is only available in the Electron app',
+  }),
+  onTerminalData: (_callback: (payload: { id: string; data: string }) => void) => () => {},
+  onTerminalExit: (_callback: (payload: { id: string; exitCode: number }) => void) => () => {},
 }
 
 const electronAPI = window.electronAPI || mockAPI
@@ -284,5 +307,19 @@ export const api = {
   fleetCleanup: (id: string) => electronAPI.fleetCleanup(id),
   onFleetTaskUpdated: (callback: (task: FleetTask) => void) =>
     electronAPI.onFleetTaskUpdated(callback),
+
+  // Terminal
+  terminalCreate: (workspaceDir: string, cols: number, rows: number) =>
+    electronAPI.terminalCreate(workspaceDir, cols, rows),
+  terminalWrite: (id: string, data: string) => electronAPI.terminalWrite(id, data),
+  terminalResize: (id: string, cols: number, rows: number) =>
+    electronAPI.terminalResize(id, cols, rows),
+  terminalClose: (id: string) => electronAPI.terminalClose(id),
+  terminalFlush: (id: string) => electronAPI.terminalFlush(id),
+  terminalGetRecentOutput: (id: string) => electronAPI.terminalGetRecentOutput(id),
+  onTerminalData: (callback: (payload: { id: string; data: string }) => void) =>
+    electronAPI.onTerminalData(callback),
+  onTerminalExit: (callback: (payload: { id: string; exitCode: number }) => void) =>
+    electronAPI.onTerminalExit(callback),
 }
 
