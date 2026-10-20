@@ -3,6 +3,7 @@ import * as path from 'path'
 import * as fs from 'fs/promises'
 import { existsSync, statSync, watch, type FSWatcher } from 'fs'
 import { fileURLToPath } from 'url'
+import { isIgnoredWatchPath } from './watch-filter.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
 
@@ -229,10 +230,9 @@ ipcMain.handle('fs:watch', async (event, workspacePath: string) => {
     }
 
     const sender = event.sender
-    const ignored = /(^|[\\/])(\.git|node_modules|\.pi-workbench|cache|dist|dist-electron|release)([\\/]|$)/
 
     workspaceWatcher = watch(workspacePath, { recursive: true }, (eventType, filename) => {
-      if (!filename || ignored.test(filename)) return
+      if (!filename || isIgnoredWatchPath(filename)) return
       if (watchDebounce) clearTimeout(watchDebounce)
       watchDebounce = setTimeout(() => {
         if (!sender.isDestroyed()) {
