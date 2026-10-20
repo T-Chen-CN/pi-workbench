@@ -71,7 +71,8 @@ const terminalManager = new TerminalManager({
       mainWindow.webContents.send('terminal:exit', { id, exitCode })
     }
   },
-  logPathFor: (workspaceDir) => path.join(workspaceDir, '.pi-workbench', 'terminal.log'),
+  logPathFor: (workspaceDir, terminalId) =>
+    path.join(workspaceDir, '.pi-workbench', `terminal-${terminalId}.log`),
 })
 
 const pluginManager = new PluginManager({

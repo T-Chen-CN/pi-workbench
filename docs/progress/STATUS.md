@@ -90,7 +90,7 @@
 
 - ✅ xterm.js + node-pty（Electron 44 验证可用，`asarUnpack` 保留原生二进制）
 - ✅ 编辑器下方终端面板：显示/隐藏保留会话、重启、尺寸自适应
-- ✅ 输出日志 `{workspace}/.pi-workbench/terminal.log`
+- ✅ 输出日志 `{workspace}/.pi-workbench/terminal-{id}.log`（按终端拆分、5MB 轮转）
 - ✅ 终端输出一键附加为 Agent 上下文
 
 #### Phase 4: 工作台插件系统（完成）

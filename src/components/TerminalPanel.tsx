@@ -30,6 +30,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const terminalIdRef = useRef<string | null>(null)
+  const terminalLogPathRef = useRef<string | null>(null)
   const startedRef = useRef(false)
   const [status, setStatus] = useState<TerminalStatus>('idle')
   const [error, setError] = useState<string | null>(null)
@@ -118,6 +119,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       }
       if (result.success && result.id) {
         terminalIdRef.current = result.id
+        terminalLogPathRef.current = result.logPath ?? null
         setStatus('ready')
         fit.fit()
         void api.terminalResize(result.id, terminal.cols, terminal.rows)
@@ -182,6 +184,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     const id = terminalIdRef.current
     if (id) void api.terminalClose(id)
     terminalIdRef.current = null
+    terminalLogPathRef.current = null
     termRef.current?.dispose()
     termRef.current = null
     fitRef.current = null
@@ -195,15 +198,21 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     if (!id) return
     await api.terminalFlush(id)
 
-    const separator = workspacePath.includes('\\') ? '\\' : '/'
-    const logPath = `${workspacePath}${separator}.pi-workbench${separator}terminal.log`
+    const logPath = terminalLogPathRef.current
+    if (!logPath) {
+      toast.error(t('terminalOutputUnavailable'))
+      return
+    }
     const exists = await api.exists(logPath)
     if (!exists.success || !exists.exists) {
       toast.error(t('terminalOutputUnavailable'))
       return
     }
 
-    useChatStore.getState().addAttachment({ path: logPath, name: 'terminal.log' })
+    useChatStore.getState().addAttachment({
+      path: logPath,
+      name: logPath.split(/[\\/]/).pop() || 'terminal.log',
+    })
     toast.success(t('terminalAttached'))
   }
 

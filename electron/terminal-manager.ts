@@ -1,6 +1,6 @@
 /**
  * 终端管理：每个终端一个 PTY 进程，输出通过回调推送给渲染进程，
- * 同时把最近输出写入工作区的 .pi-workbench/terminal.log 供 Agent 读取。
+ * 同时把输出写入工作区的 .pi-workbench/terminal-{id}.log 供 Agent 读取。
  */
 import * as fs from 'fs'
 import * as path from 'path'
@@ -33,7 +33,7 @@ export interface TerminalManagerOptions {
   shellArgs?: string[]
   env?: NodeJS.ProcessEnv
   /** 终端输出落盘路径；返回 null 表示不落盘 */
-  logPathFor?: (workspaceDir: string) => string | null
+  logPathFor?: (workspaceDir: string, terminalId: string) => string | null
   onData?: (id: string, data: string) => void
   onExit?: (id: string, exitCode: number) => void
 }
@@ -41,6 +41,8 @@ export interface TerminalManagerOptions {
 export interface TerminalCreateResult {
   success: boolean
   id?: string
+  /** 该终端输出日志文件（按终端拆分） */
+  logPath?: string | null
   error?: string
 }
 
@@ -99,7 +101,7 @@ export class TerminalManager {
     }
 
     const id = `term-${this.nextId++}`
-    const logPath = this.options.logPathFor?.(workspaceDir) ?? null
+    const logPath = this.options.logPathFor?.(workspaceDir, id) ?? null
 
     try {
       const pty = this.options.spawn(this.options.shell ?? defaultShell(), this.options.shellArgs ?? [], {
@@ -155,7 +157,7 @@ export class TerminalManager {
       })
 
       this.terminals.set(id, entry)
-      return { success: true, id }
+      return { success: true, id, logPath }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.error('[Terminal] Failed to create terminal:', message)

@@ -235,6 +235,7 @@ export interface AgentDisposeResult {
 export interface TerminalCreateResult {
   success: boolean
   id?: string
+  logPath?: string | null
   error?: string
 }
 
