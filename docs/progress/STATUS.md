@@ -76,7 +76,7 @@
 - ✅ 会话持久化与恢复（Pi 会话 + UI 历史）
 - ✅ 主进程文件日志（`{appDir}/logs/main.log`，5MB 轮转并保留 `.1` 备份；渲染进程日志待补）
 - ✅ 流式输出（Electron：主进程推送 `text_delta` 增量；Web dev 模式仍整轮返回）
-- ⏳ Diff 接受/拒绝（当前 Agent 修改直接落盘）
+- ✅ Agent 修改审阅：本轮全部文件修改进入队列，可逐项保留或还原为修改前内容（修改已落盘，属事后审阅）
 - ⏳ 上下文选择（文件 / 符号注入对话）
 - ⏳ 多工作区并行 + 工作区级 Agent 实例
 - ⏳ 工作区数据库（SQLite，`{appDir}/data/workspaces.db`，视 Fleet 规模再评估）

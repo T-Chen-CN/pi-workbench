@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeDiff, DiffLineType, formatDiffStats } from '../src/api/diff'
+import { computeDiff, DiffLineType, formatDiffStats, mergeFileEdits } from '../src/api/diff'
 
 describe('computeDiff', () => {
   it('returns no additions or removals for identical text', () => {
@@ -22,5 +22,26 @@ describe('computeDiff', () => {
     expect(result.addedCount).toBe(2)
     expect(result.removedCount).toBe(0)
     expect(formatDiffStats(result)).toBe('+2 -0')
+  })
+})
+
+describe('mergeFileEdits', () => {
+  it('keeps one entry per file with the full before/after range', () => {
+    const merged = mergeFileEdits([
+      { path: '/a.ts', oldContent: 'v0', newContent: 'v1' },
+      { path: '/b.ts', oldContent: 'b0', newContent: 'b1' },
+      { path: '/a.ts', oldContent: 'v1', newContent: 'v2' },
+    ])
+
+    expect(merged).toEqual([
+      { path: '/a.ts', oldContent: 'v0', newContent: 'v2' },
+      { path: '/b.ts', oldContent: 'b0', newContent: 'b1' },
+    ])
+  })
+
+  it('does not mutate the input edits', () => {
+    const edits = [{ path: '/a.ts', oldContent: 'v0', newContent: 'v1' }]
+    mergeFileEdits(edits)
+    expect(edits).toEqual([{ path: '/a.ts', oldContent: 'v0', newContent: 'v1' }])
   })
 })

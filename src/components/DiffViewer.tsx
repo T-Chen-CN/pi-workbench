@@ -1,19 +1,106 @@
 import React, { useState } from 'react'
 import { useDiffStore } from '../store/diffStore'
 import { useI18nStore } from '../store/i18nStore'
-import { DiffLineType, DiffResult } from '../api/diff'
+import { useEditorStore } from '../store/editorStore'
+import { api } from '../api'
+import { toast } from '../store/toastStore'
+import { computeDiff, DiffLineType, DiffResult } from '../api/diff'
+import type { FileEdit } from '../types/electron'
 
 export const DiffViewer: React.FC = () => {
   const { t } = useI18nStore()
-  const { currentDiff, isOpen, isLoading, error, clearDiff } = useDiffStore()
+  const {
+    edits,
+    currentIndex,
+    isOpen,
+    isLoading,
+    error,
+    clearDiff,
+    setCurrentIndex,
+    removeEdit,
+  } = useDiffStore()
   const [viewMode, setViewMode] = useState<'split' | 'unified'>('split')
+  const [busy, setBusy] = useState(false)
 
-  if (!isOpen || !currentDiff) {
+  const edit = edits[currentIndex]
+  if (!isOpen || !edit) {
     return null
   }
 
+  const diff = computeDiff(
+    edit.oldContent,
+    edit.newContent,
+    `${edit.path} (before)`,
+    edit.path
+  )
+  const canGoPrev = currentIndex > 0
+  const canGoNext = currentIndex < edits.length - 1
+
   const handleClose = () => {
     clearDiff()
+  }
+
+  /** 把文件恢复为 Agent 修改前的内容；文件被外部改动过时拒绝覆盖 */
+  const revertFile = async (target: FileEdit): Promise<boolean> => {
+    const openFile = useEditorStore.getState().openFiles.find((file) => file.path === target.path)
+    if (openFile?.isDirty) {
+      toast.error(t('revertBlockedDirty'))
+      return false
+    }
+
+    const current = await api.readFile(target.path)
+    if (!current.success || typeof current.content !== 'string') {
+      toast.error(`${t('revertFailed')}: ${current.error ?? target.path}`)
+      return false
+    }
+    if (current.content !== target.newContent) {
+      toast.error(t('revertConflict'))
+      return false
+    }
+
+    const written = await api.writeFile(target.path, target.oldContent)
+    if (!written.success) {
+      toast.error(`${t('revertFailed')}: ${written.error ?? target.path}`)
+      return false
+    }
+    return true
+  }
+
+  const handleKeep = () => {
+    removeEdit(edit.path)
+    toast.info(t('keptChanges'))
+  }
+
+  const handleRevert = async () => {
+    if (!window.confirm(t('revertConfirm'))) return
+    setBusy(true)
+    try {
+      if (await revertFile(edit)) {
+        removeEdit(edit.path)
+        toast.success(t('reverted'))
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleRevertAll = async () => {
+    if (!window.confirm(t('revertAllConfirm'))) return
+    setBusy(true)
+    let reverted = 0
+    try {
+      for (const target of [...edits]) {
+        if (await revertFile(target)) {
+          removeEdit(target.path)
+          reverted++
+        }
+      }
+      if (reverted > 0) {
+        toast.success(`${t('reverted')}: ${reverted}`)
+      }
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -21,15 +108,64 @@ export const DiffViewer: React.FC = () => {
       <div className="fixed inset-0 bg-black/50 cursor-pointer" onClick={handleClose} />
       <div className="relative bg-white dark:bg-[#1e1e1e] border border-gray-300 dark:border-gray-700 rounded-lg w-11/12 h-5/6 max-w-6xl shadow-xl flex flex-col">
         {/* Header */}
-        <div className="flex justify-between items-center px-6 py-4 border-b border-gray-300 dark:border-gray-700 flex-shrink-0">
-          <div className="flex items-center gap-4">
-            <h3 className="text-lg font-semibold m-0 text-gray-900 dark:text-gray-100">{t('diffViewer')}</h3>
-            <span className="px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-sm font-mono">
-              +{currentDiff.addedCount} -{currentDiff.removedCount}
+        <div className="flex justify-between items-center px-6 py-4 border-b border-gray-300 dark:border-gray-700 flex-shrink-0 gap-4">
+          <div className="flex items-center gap-4 min-w-0">
+            <h3 className="text-lg font-semibold m-0 text-gray-900 dark:text-gray-100 whitespace-nowrap">
+              {t('reviewChanges')}
+            </h3>
+            <span className="px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-sm font-mono whitespace-nowrap">
+              +{diff.addedCount} -{diff.removedCount}
             </span>
+            {edits.length > 1 && (
+              <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                <button
+                  onClick={() => setCurrentIndex(currentIndex - 1)}
+                  disabled={!canGoPrev || busy}
+                  title={t('previousFile')}
+                  className="px-2 py-0.5 rounded bg-gray-200 dark:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  ‹
+                </button>
+                <span className="whitespace-nowrap">
+                  {currentIndex + 1} / {edits.length}
+                </span>
+                <button
+                  onClick={() => setCurrentIndex(currentIndex + 1)}
+                  disabled={!canGoNext || busy}
+                  title={t('nextFile')}
+                  className="px-2 py-0.5 rounded bg-gray-200 dark:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  ›
+                </button>
+              </div>
+            )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <button
+              onClick={handleKeep}
+              disabled={busy}
+              className="px-3 py-1 text-sm font-medium rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-40"
+            >
+              {t('keepChanges')}
+            </button>
+            <button
+              onClick={handleRevert}
+              disabled={busy}
+              className="px-3 py-1 text-sm font-medium rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-40"
+            >
+              {t('revertFile')}
+            </button>
+            {edits.length > 1 && (
+              <button
+                onClick={handleRevertAll}
+                disabled={busy}
+                className="px-3 py-1 text-sm font-medium rounded border border-red-500 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-40"
+              >
+                {t('revertAll')}
+              </button>
+            )}
+
             <div className="flex gap-1 bg-gray-200 dark:bg-gray-700 p-1 rounded">
               <button
                 onClick={() => setViewMode('split')}
@@ -65,6 +201,11 @@ export const DiffViewer: React.FC = () => {
           </div>
         </div>
 
+        {/* Hint */}
+        <div className="px-6 py-2 text-xs text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+          {t('reviewHint')}
+        </div>
+
         {/* Error */}
         {error && (
           <div className="px-6 py-4 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-b border-red-300 dark:border-red-700/50">
@@ -83,9 +224,9 @@ export const DiffViewer: React.FC = () => {
         {!isLoading && (
           <div className="flex-1 overflow-hidden">
             {viewMode === 'split' ? (
-              <SplitDiffView diff={currentDiff} />
+              <SplitDiffView diff={diff} />
             ) : (
-              <UnifiedDiffView diff={currentDiff} />
+              <UnifiedDiffView diff={diff} />
             )}
           </div>
         )}

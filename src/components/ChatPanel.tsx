@@ -3,7 +3,6 @@ import { useChatStore } from '../store/chatStore'
 import { useDiffStore } from '../store/diffStore'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
-import { computeDiff } from '../api/diff'
 import { toast } from '../store/toastStore'
 
 interface ChatPanelProps {
@@ -24,7 +23,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     finishStreamingMessage,
   } = useChatStore()
 
-  const setDiff = useDiffStore((state) => state.setDiff)
+  const openEdits = useDiffStore((state) => state.openEdits)
 
   const [input, setInput] = useState('')
   const [initialized, setInitialized] = useState(false)
@@ -148,10 +147,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         // 最终消息以主进程返回的完整文本为准
         finishStreamingMessage(assistantId, result.response)
 
-        // 展示 Agent 本轮修改（最后一个改动的文件）
+        // 打开本轮全部文件修改供审阅（接受或还原）
         if (result.edits && result.edits.length > 0) {
-          const lastEdit = result.edits[result.edits.length - 1]
-          setDiff(computeDiff(lastEdit.oldContent, lastEdit.newContent, `${lastEdit.path} (before)`, lastEdit.path))
+          openEdits(result.edits)
           toast.info(`Agent modified ${result.edits.length} file(s)`)
         }
       } else {
