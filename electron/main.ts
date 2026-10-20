@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { existsSync, statSync, watch, type FSWatcher } from 'fs'
-import { fileURLToPath } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
 import { isIgnoredWatchPath } from './watch-filter.js'
 import { FileLogger, installConsoleTee } from './logger.js'
 // Lazy load AgentManager to avoid early import errors
@@ -613,8 +613,9 @@ ipcMain.handle('agent:initialize', async (_event, config: {
       workspaceDir: config.workspaceDir
     })
 
-    // 延迟加载 AgentManager
-    const { AgentManager } = await import('../pi-bridge/dist/index.js')
+    // 延迟加载 AgentManager（用运行时路径解析，避免类型检查依赖未构建的 pi-bridge/dist）
+    const bridgePath = path.join(__dirname, '..', 'pi-bridge', 'dist', 'index.js')
+    const { AgentManager } = await import(pathToFileURL(bridgePath).href)
 
     // 验证 API Key
     if (!config.apiConfig.apiKey) {
