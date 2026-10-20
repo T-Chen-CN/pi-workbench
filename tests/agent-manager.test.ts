@@ -271,6 +271,54 @@ describe('AgentManager chat', () => {
     expect(result.error).toContain('did not produce')
   })
 
+  it('forwards text deltas while the agent streams', async () => {
+    const session = createFakeSession(async (s) => {
+      s.emit({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'Hel' },
+      })
+      s.emit({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'lo' },
+      })
+      s.emit({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_delta', delta: 'hidden' },
+      })
+      s.messages.push({ role: 'assistant', content: 'Hello' })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const chunks: string[] = []
+    const result = await manager.chat('hi', { onTextDelta: (delta) => chunks.push(delta) })
+
+    expect(chunks).toEqual(['Hel', 'lo'])
+    expect(result.response).toBe('Hello')
+  })
+
+  it('stops forwarding deltas after the run completes', async () => {
+    const session = createFakeSession(async (s) => {
+      s.emit({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'a' },
+      })
+      s.messages.push({ role: 'assistant', content: 'a' })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const chunks: string[] = []
+    await manager.chat('hi', { onTextDelta: (delta) => chunks.push(delta) })
+
+    session.emit({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', delta: 'late' },
+    })
+
+    expect(chunks).toEqual(['a'])
+  })
+
   it('rejects concurrent requests while one is in flight', async () => {
     let releasePrompt: () => void = () => {}
     const gate = new Promise<void>((resolve) => {

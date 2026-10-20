@@ -73,6 +73,41 @@ describe('chatStore', () => {
   })
 })
 
+describe('chatStore streaming', () => {
+  it('creates, appends to and finalizes a streaming message', () => {
+    const id = useChatStore.getState().startStreamingMessage()
+
+    let message = useChatStore.getState().messages.find((m) => m.id === id)
+    expect(message?.isStreaming).toBe(true)
+    expect(message?.content).toBe('')
+
+    useChatStore.getState().appendToMessage(id, 'Hel')
+    useChatStore.getState().appendToMessage(id, 'lo')
+
+    message = useChatStore.getState().messages.find((m) => m.id === id)
+    expect(message?.content).toBe('Hello')
+    expect(message?.isStreaming).toBe(true)
+
+    useChatStore.getState().finishStreamingMessage(id, 'Hello!')
+
+    message = useChatStore.getState().messages.find((m) => m.id === id)
+    expect(message?.content).toBe('Hello!')
+    expect(message?.isStreaming).toBe(false)
+  })
+
+  it('ignores appends to unknown message ids', () => {
+    useChatStore.getState().addMessage({ role: 'user', content: 'q' })
+    useChatStore.getState().startStreamingMessage()
+
+    useChatStore.getState().appendToMessage('missing-id', 'x')
+
+    const messages = useChatStore.getState().messages
+    expect(messages).toHaveLength(2)
+    expect(messages[0].content).toBe('q')
+    expect(messages[1].content).toBe('')
+  })
+})
+
 describe('toastStore', () => {
   it('shows and removes toasts', () => {
     toast.success('saved')

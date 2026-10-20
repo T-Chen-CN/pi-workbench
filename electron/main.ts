@@ -662,7 +662,7 @@ ipcMain.handle('agent:initialize', async (_event, config: {
 })
 
 // Agent 聊天
-ipcMain.handle('agent:chat', async (_event, message: string) => {
+ipcMain.handle('agent:chat', async (event, message: string, requestId?: string) => {
   try {
     if (!agentManager) {
       return {
@@ -673,7 +673,14 @@ ipcMain.handle('agent:chat', async (_event, message: string) => {
 
     console.log('[Main] Sending message to agent:', message.substring(0, 100))
 
-    const result = await agentManager.chat(message)
+    // 流式文本增量推送给发起请求的窗口；requestId 用于渲染进程区分本次会话
+    const result = await agentManager.chat(message, {
+      onTextDelta: (delta: string) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('agent:stream', { requestId, delta })
+        }
+      },
+    })
 
     if (result.success) {
       console.log('[Main] Agent response received')

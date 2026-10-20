@@ -36,7 +36,7 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 | 便携式架构 | ✅ 完成 |
 | Phase 1：真实 Pi Agent 集成 | ✅ 完成 |
 | Phase 1 加固（工作区生命周期 / 会话持久化 / Diff 联动 / 文件监听 / 测试） | ✅ 完成 |
-| Phase 2：工作区管理 | 🟡 约 60% |
+| Phase 2：工作区与对话体验 | 🟡 约 70% |
 | Phase 3-6 | ⏳ 未开始 |
 
 **已可用的端到端能力**：配置供应商 → 拉取真实模型 → 打开工作区 → Agent 对话（read/write/edit/bash）
@@ -62,6 +62,7 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 - API Key 使用 Electron `safeStorage` 加密存储
 - 真实 Pi Agent：read / write / edit / bash（Windows 自动发现用户目录 Git Bash）
 - 会话持久化：按工作区恢复对话（跨重启）
+- 流式输出：主进程推送 `text_delta` 增量，聊天面板实时渲染（Web dev 模式仍整轮返回）
 - 供应商错误（401/限流等）原样透传
 - Agent 修改捕获 → 自动打开 DiffViewer；全局 Toast 提示
 
@@ -79,19 +80,19 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 - Diff 查看器（Split / Unified）
 - IPC 调试面板（开发模式）
 - 便携式数据目录；Web 开发模式调试桥接
-- Vitest 单测、ESLint、Prettier、GitHub Actions CI
+- 主进程文件日志（`logs/main.log`，5 MB 轮转并保留 `.1` 备份）
+- 生产构建注入 Content-Security-Policy（开发模式不受影响）
+- Vitest 单测（store / diff / logger / AgentManager / IPC）、ESLint、Prettier、GitHub Actions CI
 
 ### 🔄 进行中 / 计划中
 
 | 能力 | 阶段 |
 |---|---|
-| 多工作区并行 + 工作区级 Agent 实例 | Phase 2 |
-| 流式输出（当前为整轮返回） | Phase 2 |
 | Diff 接受/拒绝（当前 Agent 直接落盘） | Phase 2 |
 | 上下文选择（文件/符号）注入对话 | Phase 2 |
-| 应用日志系统（`logs/`） | Phase 2 |
+| 多工作区并行 + 工作区级 Agent 实例 | Phase 2 |
 | 内置终端（xterm.js + node-pty） | Phase 3 |
-| 插件 / 自定义工具（倾向基于 Pi 扩展系统） | Phase 4 |
+| 工作台插件系统（命令 / 菜单 / 钩子 / 声明式 UI） | Phase 4 |
 | Fleet 后台任务（Git worktree） | Phase 5 |
 | 性能、撤销/重做、快捷键、主题、自动更新 | Phase 6 |
 
@@ -157,7 +158,7 @@ Main Process (Node 24, Electron 44)
 | Agent 会话 | `{appDir}/data/agent/sessions/<cwd>/` | Pi SessionManager 管理，跨重启恢复 |
 | 工作区配置 | `{workspace}/.pi-workbench/config.json` | `workspace:init` 创建 |
 | Web dev Agent 数据 | `{appDir}/cache/temp/web-agent/` | 可随时删除 |
-| 日志（待实现） | `{appDir}/logs/` | |
+| 主进程日志 | `{appDir}/logs/main.log` | 5 MB 轮转，保留 `main.log.1`；渲染进程日志待补 |
 
 **禁止**：`app.getPath('userData')` / `appData` / `.env` / 系统临时目录。
 
@@ -226,19 +227,25 @@ docs/               项目文档
 
 - 多工作区并行与工作区级 Agent 实例（`Map<workspacePath, AgentManager>`）
 - 工作区元数据存储：先 JSON，SQLite 待 Fleet 规模再评估
-- 日志系统
 
 ### 模块 6：终端（待实现）
 
 - xterm.js + node-pty（原生模块，需 electron-rebuild 与打包验证）
 - 用户终端与 Agent bash 工具独立
 
-### 模块 7：插件系统（待实现）
+### 模块 7：工作台插件系统（待实现）
 
-- 优先基于 **Pi SDK 扩展机制**（extensions / custom tools / inline extensions），
-  而不是自研 loader + dynamic require
-- 插件目录：`{workspace}/.pi-workbench/plugins/`
-- 无沙箱，仅限个人可信项目
+**定位**：插件扩展的是 Pi Workbench 本身，不是 Pi Agent。Agent 能力保持内置，
+不接入 Pi SDK 的 extensions / custom tools。
+
+- 插件目录：`{workspace}/.pi-workbench/plugins/`，不读取系统目录或网络
+- 由工作台定义清单格式（id / name / version / 贡献点）与加载器
+- v1 贡献点：命令、菜单/右键项、生命周期钩子（工作区打开、文件保存、对话消息）、状态项
+- v1 不向渲染进程加载插件 JS：受生产 CSP `script-src 'self'` 限制，UI 采用声明式贡献；
+  面板级 UI 作为可选后续（需要专用协议或隔离 iframe + CSP 方案）
+- 主进程加载、无沙箱，仅限个人可信插件
+- 支持启用/禁用与热重载
+- 示例插件：Git 状态 / 提交操作
 
 ### 模块 8：Fleet 任务（待实现）
 
@@ -250,6 +257,13 @@ docs/               项目文档
 ---
 
 ## 八、开发路线图
+
+### 推进约定（Phase 2–5）
+
+- 每个阶段使用 `feat/phase-N-*` 分支，质量门禁（type-check → test → lint → build → 打包冒烟）通过后合并到 main 并推送
+- 阶段内按依赖顺序交付，独立功能单元完成即提交，保持 main 始终可用
+- 阶段收尾更新本文件与 [progress/STATUS.md](./progress/STATUS.md)，并输出简短汇报
+- 只有遇到产品/架构分叉或环境阻塞时才暂停确认
 
 ### ✅ Phase 0：MVP（2026-10-20 完成）
 
@@ -265,13 +279,13 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 - [x] 工作区初始化 / 生命周期 / 最近列表
 - [x] 会话持久化与恢复
 - [x] 切换时状态隔离
-- [ ] 多工作区并行 + 工作区级 Agent 实例
-- [ ] 流式输出
+- [x] 主进程文件日志（`main.log`，5 MB 轮转）
+- [x] 流式输出（Electron 流式增量；Web dev 仍整轮返回）
 - [ ] Diff 接受/拒绝
 - [ ] 上下文选择（文件 / 符号）注入
-- [ ] 日志系统
+- [ ] 多工作区并行 + 工作区级 Agent 实例
 
-**验收**：切换工作区时 Agent 与会话正确隔离；重启恢复上次状态；修改可审阅后应用。
+**验收**：对话流式渲染；修改可审阅后应用；指定文件/片段可注入对话；切换工作区时 Agent 与会话正确隔离；重启恢复上次状态。
 
 ### ⏳ Phase 3：终端集成（预计 1-2 周）
 
@@ -279,11 +293,15 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 - [ ] 用户终端与命令日志
 - [ ] Agent 与终端联动（读取终端输出）
 
-### ⏳ Phase 4：插件与自定义工具（预计 1-2 周）
+### ⏳ Phase 4：工作台插件系统（预计 1-2 周）
 
-- [ ] 接入 Pi 扩展系统（工具 / 命令 / 模板）
-- [ ] 工作区插件目录与热重载
-- [ ] 示例插件（Git / GitHub）
+- [ ] 插件清单格式与主进程加载器
+- [ ] 命令 / 菜单 / 生命周期钩子 / 状态项贡献点
+- [ ] 插件启用/禁用与热重载
+- [ ] Git 示例插件（状态 / 提交操作）
+- [ ] （可选）面板级 UI 贡献（需独立的协议或 iframe + CSP 方案）
+
+> 插件只扩展工作台本身，不扩展 Pi Agent，也不加载 Pi SDK extensions。
 
 ### ⏳ Phase 5：Fleet 后台任务（预计 2-3 周）
 
@@ -295,13 +313,14 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 ### ⏳ Phase 6：优化与完善（持续）
 
 - [ ] 性能（大文件、大项目、虚拟滚动）
+- [x] 构建分包（Monaco / React / vendor 独立 chunk）
 - [ ] 撤销/重做
 - [ ] 快捷键 / 命令面板
 - [ ] 主题系统
 - [ ] 崩溃恢复（草稿）
-- [ ] CSP 与安全加固
+- [x] CSP 与安全加固（生产构建已注入 CSP）
 - [ ] 自动更新（electron-updater）
-- [ ] 测试覆盖率提升（AgentManager、IPC）
+- [x] 测试覆盖率提升（store / logger / AgentManager / IPC 已覆盖）
 
 ---
 
@@ -316,7 +335,7 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 | Agent 工具文件访问 | 主进程直连 fs | SDK 设计如此；安全边界仍在主进程 |
 | 供应商配置 | 统一 OpenAI 兼容 + models.json | 支持 DeepSeek 等任意端点 |
 | 工作区存储 | 先 JSON，SQLite 延后 | 数量小；避免原生模块成本 |
-| 插件系统 | 基于 Pi 扩展（规划） | 避免维护两套插件 API |
+| 插件系统 | 工作台插件宿主（规划） | 插件只扩展工作台，不扩展 Pi Agent，避免与 Pi 扩展目录耦合 |
 | Web 模式 | Vite dev 中间件 | 便于 UI/Agent 调试，不进入生产 |
 
 ---
@@ -325,7 +344,7 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 
 ```bash
 npm run type-check   # TypeScript 严格模式
-npm test             # Vitest（store / diff）
+npm test             # Vitest（store / diff / logger / AgentManager / IPC）
 npm run lint         # ESLint + react-hooks
 npm run build        # renderer → bridge → main（顺序不可颠倒）
 npm run package:win  # NSIS + portable
@@ -341,13 +360,13 @@ npm run package:win  # NSIS + portable
 
 ### 短期（1 个月内）
 
-- 完成 Phase 2：多工作区、流式输出、Diff 审阅、日志
+- 完成 Phase 2：流式输出、Diff 审阅、上下文选择、多工作区
 - 发布可用的 Windows 安装包（NSIS + portable）
 
 ### 中期（3 个月内）
 
 - 内置终端（Phase 3）
-- 基于 Pi 扩展的插件系统（Phase 4）
+- 工作台插件系统（Phase 4）
 - 跨平台打包与自动更新
 
 ### 长期（6-12 个月）

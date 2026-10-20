@@ -53,6 +53,11 @@ export interface AgentChatResult {
   edits?: FileEdit[]
 }
 
+export interface AgentChatOptions {
+  /** 接收流式文本增量（模型逐段输出时调用） */
+  onTextDelta?: (delta: string) => void
+}
+
 /**
  * Agent Manager 类
  *
@@ -72,6 +77,8 @@ export class AgentManager {
   private editSnapshots = new Map<string, { path: string; oldContent: string }>()
   /** 本轮对话产生的文件修改 */
   private pendingEdits: FileEdit[] = []
+  /** 本轮对话的流式回调（chat 期间有效） */
+  private onTextDelta: ((delta: string) => void) | null = null
 
   /**
    * 将用户配置的 URL / 模型写入 Pi 的 models.json，
@@ -153,6 +160,14 @@ export class AgentManager {
 
     this.unsubscribe = this.session.subscribe((event: any) => {
       try {
+        if (event.type === 'message_update') {
+          const update = event.assistantMessageEvent
+          if (update?.type === 'text_delta' && typeof update.delta === 'string') {
+            this.onTextDelta?.(update.delta)
+          }
+          return
+        }
+
         if (event.type === 'tool_execution_start') {
           if (event.toolName !== 'write' && event.toolName !== 'edit') return
           const target = this.resolveToolPath(event.args?.path)
@@ -280,7 +295,7 @@ export class AgentManager {
    * @param message 用户消息
    * @returns Agent 响应（含本轮文件修改）
    */
-  async chat(message: string): Promise<AgentChatResult> {
+  async chat(message: string, options?: AgentChatOptions): Promise<AgentChatResult> {
     if (!this.session) {
       return {
         success: false,
@@ -297,6 +312,7 @@ export class AgentManager {
 
     try {
       this.isProcessing = true
+      this.onTextDelta = options?.onTextDelta ?? null
       this.pendingEdits = []
       console.log('[Agent Manager] Sending message to agent:', message.substring(0, 100))
 
@@ -383,6 +399,7 @@ export class AgentManager {
       }
     } finally {
       this.isProcessing = false
+      this.onTextDelta = null
     }
   }
 
@@ -444,6 +461,7 @@ export class AgentManager {
     this.messageHistory = []
     this.pendingEdits = []
     this.editSnapshots.clear()
+    this.onTextDelta = null
   }
 
   /**

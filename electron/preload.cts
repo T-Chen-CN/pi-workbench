@@ -41,7 +41,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       selectedModel: string
     }
   }) => ipcRenderer.invoke('agent:initialize', config),
-  agentChat: (message: string) => ipcRenderer.invoke('agent:chat', message),
+  agentChat: (message: string, requestId?: string) =>
+    ipcRenderer.invoke('agent:chat', message, requestId),
+  onAgentStream: (callback: (payload: { requestId?: string; delta: string }) => void) => {
+    const listener = (_event: unknown, payload: { requestId?: string; delta: string }) => callback(payload)
+    ipcRenderer.on('agent:stream', listener)
+    return () => ipcRenderer.removeListener('agent:stream', listener)
+  },
   agentIsInitialized: () => ipcRenderer.invoke('agent:isInitialized'),
   agentGetHistory: () => ipcRenderer.invoke('agent:getHistory'),
   agentDispose: () => ipcRenderer.invoke('agent:dispose'),

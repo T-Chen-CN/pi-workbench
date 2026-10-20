@@ -19,6 +19,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     setMessages,
     setLoading,
     setError,
+    startStreamingMessage,
+    appendToMessage,
+    finishStreamingMessage,
   } = useChatStore()
 
   const setDiff = useDiffStore((state) => state.setDiff)
@@ -107,7 +110,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
   // Auto-scroll to bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // 流式更新时用即时滚动，避免每个增量都触发平滑滚动动画
+    const streaming = useChatStore.getState().messages.some((message) => message.isStreaming)
+    messagesEndRef.current?.scrollIntoView({ behavior: streaming ? 'auto' : 'smooth' })
   }, [messages])
 
   // Focus input on mount
@@ -131,15 +136,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
     // Send to agent
     setLoading(true)
+    // 先插入流式占位消息，文本增量到达时直接追加
+    const assistantId = startStreamingMessage()
     try {
-      const result = await piAgentAPI.chat(userMessage)
+      const result = await piAgentAPI.chat(userMessage, (delta) => {
+        appendToMessage(assistantId, delta)
+      })
 
       if (result.success && result.response) {
         setError(null)
-        addMessage({
-          role: 'assistant',
-          content: result.response,
-        })
+        // 最终消息以主进程返回的完整文本为准
+        finishStreamingMessage(assistantId, result.response)
 
         // 展示 Agent 本轮修改（最后一个改动的文件）
         if (result.edits && result.edits.length > 0) {
@@ -148,19 +155,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           toast.info(`Agent modified ${result.edits.length} file(s)`)
         }
       } else {
-        setError(result.error || 'Failed to get response from agent')
-        addMessage({
-          role: 'assistant',
-          content: `Error: ${result.error || 'Failed to get response'}`,
-        })
+        const errorMessage = result.error || 'Failed to get response from agent'
+        setError(errorMessage)
+        finishStreamingMessage(assistantId, `Error: ${errorMessage}`)
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       setError(errorMsg)
-      addMessage({
-        role: 'assistant',
-        content: `Error: ${errorMsg}`,
-      })
+      finishStreamingMessage(assistantId, `Error: ${errorMsg}`)
     } finally {
       setLoading(false)
       inputRef.current?.focus()
@@ -210,30 +212,39 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((msg, idx) => (
-          <div
-            key={idx}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
+        {messages.map((msg) => {
+          // 流式消息还没有内容时显示下方的 Thinking 占位
+          if (msg.isStreaming && !msg.content) return null
+          return (
             <div
-              className={`max-w-[80%] rounded-lg p-3 ${
-                msg.role === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-800 text-gray-100'
-              }`}
+              key={msg.id}
+              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              <div className="text-sm font-medium mb-1">
-                {msg.role === 'user' ? 'You' : 'Pi Agent'}
-              </div>
-              <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
-              <div className="text-xs mt-2 opacity-70">
-                {new Date(msg.timestamp).toLocaleTimeString()}
+              <div
+                className={`max-w-[80%] rounded-lg p-3 ${
+                  msg.role === 'user'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-800 text-gray-100'
+                }`}
+              >
+                <div className="text-sm font-medium mb-1">
+                  {msg.role === 'user' ? 'You' : 'Pi Agent'}
+                </div>
+                <div className="text-sm whitespace-pre-wrap">
+                  {msg.content}
+                  {msg.isStreaming && (
+                    <span className="inline-block w-1.5 h-3.5 ml-0.5 align-text-bottom bg-gray-400 animate-pulse" />
+                  )}
+                </div>
+                <div className="text-xs mt-2 opacity-70">
+                  {new Date(msg.timestamp).toLocaleTimeString()}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
 
-        {isLoading && (
+        {isLoading && !messages.some((msg) => msg.isStreaming && msg.content) && (
           <div className="flex justify-start">
             <div className="bg-gray-800 text-gray-100 rounded-lg p-3">
               <div className="text-sm font-medium mb-1">Pi Agent</div>
