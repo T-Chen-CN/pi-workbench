@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '../api'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
+import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
 
 interface FileEntry {
@@ -85,12 +86,12 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
-      setError(errorMsg)
-      toast.error(`Failed to load workspace: ${errorMsg}`)
+      setError(localizeError(errorMsg))
+      toast.error(t('loadWorkspaceFailed', { error: localizeError(errorMsg) }))
     } finally {
       setLoading(false)
     }
-  }, [refreshExpanded])
+  }, [refreshExpanded, t])
 
   // Initialize tree when workspace changes
   useEffect(() => {
@@ -127,8 +128,8 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
       return sortEntries(result.items)
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
-      toast.error(`Failed to load directory: ${errorMsg}`)
-      setError(errorMsg)
+      toast.error(t('loadDirectoryFailed', { error: localizeError(errorMsg) }))
+      setError(localizeError(errorMsg))
       return []
     }
   }
@@ -196,8 +197,8 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
       })
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
-      toast.error(`Failed to open file: ${errorMsg}`)
-      setError(errorMsg)
+      toast.error(t('openFileFailed', { error: localizeError(errorMsg) }))
+      setError(localizeError(errorMsg))
     }
   }
 
@@ -224,7 +225,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
       if (workspacePath) await loadRootDirectory(workspacePath)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      toast.error(`${t('rename')} failed: ${msg}`)
+      toast.error(t('renameFailed', { error: localizeError(msg) }))
     }
   }
 
@@ -243,7 +244,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
       if (workspacePath) await loadRootDirectory(workspacePath)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      toast.error(`${t('delete')} failed: ${msg}`)
+      toast.error(t('deleteFailed', { error: localizeError(msg) }))
     }
   }
 
@@ -265,12 +266,12 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
 
   const handleCreateFile = async () => {
     if (!createDialog.fileName.trim()) {
-      setError('File name cannot be empty')
+      setError(t('fileNameEmpty'))
       return
     }
 
     if (!createDialog.parentPath) {
-      setError('No workspace selected')
+      setError(t('noWorkspaceSelected'))
       return
     }
 
@@ -300,8 +301,8 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
       setError(null)
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
-      toast.error(`Failed to create file: ${errorMsg}`)
-      setError(errorMsg)
+      toast.error(t('createFileFailed', { error: localizeError(errorMsg) }))
+      setError(localizeError(errorMsg))
     }
   }
 

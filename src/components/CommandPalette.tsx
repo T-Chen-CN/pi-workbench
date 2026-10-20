@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { useI18nStore } from '../store/i18nStore'
+import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
 import type { PluginCommandInfo, PluginInfo } from '../types/electron'
 
@@ -34,14 +35,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
       if (result.success) {
         setPlugins(result.plugins)
       } else {
-        setError(result.error || 'Failed to load plugins')
+        setError(t('loadPluginsFailed', { error: localizeError(result.error) || t('unknownError') }))
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(localizeError(err instanceof Error ? err.message : String(err)))
     } finally {
       setLoading(false)
     }
-  }, [workspacePath])
+  }, [workspacePath, t])
 
   // 全局快捷键与外部打开事件
   useEffect(() => {
@@ -119,7 +120,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       setOutput({ title: command.title, text: message, success: false })
-      toast.error(`${command.title}: ${message}`)
+      toast.error(`${command.title}: ${localizeError(message)}`)
     } finally {
       setLoading(false)
     }
@@ -130,7 +131,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
     if (result.success) {
       setPlugins(result.plugins)
     } else {
-      toast.error(result.error || 'Failed to update plugin')
+      toast.error(t('updatePluginFailed', { error: localizeError(result.error) || t('unknownError') }))
     }
   }
 
@@ -140,7 +141,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
       setPlugins(result.plugins)
       toast.success(t('pluginsReloaded'))
     } else {
-      toast.error(result.error || 'Failed to reload plugins')
+      toast.error(t('reloadPluginsFailed', { error: localizeError(result.error) || t('unknownError') }))
     }
   }
 

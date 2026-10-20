@@ -1,10 +1,23 @@
 import { create } from 'zustand'
-import { Language, translations, TranslationKey } from '../i18n/translations'
+import {
+  Language,
+  translations,
+  TranslationKey,
+  TranslationParams,
+} from '../i18n/translations'
 
 interface I18nState {
   language: Language
   setLanguage: (lang: Language) => void
-  t: (key: TranslationKey) => string
+  t: (key: TranslationKey, params?: TranslationParams) => string
+}
+
+/** 把 `{name}` 占位符替换为调用方传入的参数 */
+function interpolate(template: string, params?: TranslationParams): string {
+  if (!params) return template
+  return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+    name in params ? String(params[name]) : match
+  )
 }
 
 /**
@@ -20,8 +33,8 @@ export const useI18nStore = create<I18nState>()((set, get) => ({
     set({ language: lang })
   },
 
-  t: (key: TranslationKey): string => {
+  t: (key: TranslationKey, params?: TranslationParams): string => {
     const { language } = get()
-    return translations[language]?.[key] || key
+    return interpolate(translations[language]?.[key] || key, params)
   },
 }))

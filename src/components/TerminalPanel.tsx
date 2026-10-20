@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css'
 import { api } from '../api'
 import { useChatStore } from '../store/chatStore'
 import { useI18nStore } from '../store/i18nStore'
+import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
 
 interface TerminalPanelProps {
@@ -39,16 +40,17 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     })
     const offExit = api.onTerminalExit(({ id, exitCode }) => {
       if (id === terminalIdRef.current) {
-        termRef.current?.writeln(`\r\n[process exited: ${exitCode}]`)
+        const message = t('processExited', { code: exitCode })
+        termRef.current?.writeln(`\r\n[${message}]`)
         setStatus('error')
-        setError(`Process exited (${exitCode})`)
+        setError(message)
       }
     })
     return () => {
       offData()
       offExit()
     }
-  }, [])
+  }, [t])
 
   // 卸载时释放 PTY
   useEffect(() => {
@@ -106,7 +108,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         fit.fit()
         void api.terminalResize(result.id, terminal.cols, terminal.rows)
       } else {
-        const message = result.error || 'Failed to create terminal'
+        const message = result.error ? localizeError(result.error) : t('terminalCreateFailed')
         setStatus('error')
         setError(message)
         terminal.writeln(`\r\n${message}`)
@@ -116,7 +118,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     return () => {
       cancelled = true
     }
-  }, [visible, workspacePath, generation])
+  }, [visible, workspacePath, generation, t])
 
   // 可见时适配尺寸
   useEffect(() => {

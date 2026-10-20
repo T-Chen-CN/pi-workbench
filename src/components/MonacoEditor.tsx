@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import * as monaco from 'monaco-editor'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
+import { localizeError } from '../i18n/errors'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
 
@@ -114,7 +115,7 @@ export const MonacoEditor: React.FC = () => {
       const existsResult = await api.exists(payload.path)
       if (existsResult.success && existsResult.exists === false) {
         state.removeOpenFile(payload.path)
-        toast.info(`File removed: ${target.name}`)
+        toast.info(t('fileRemoved', { name: target.name }))
         return
       }
 
@@ -128,7 +129,7 @@ export const MonacoEditor: React.FC = () => {
     })
 
     return unsubscribe
-  }, [])
+  }, [t])
 
   const saveFile = useCallback(
     async (pathOverride?: string) => {
@@ -147,15 +148,15 @@ export const MonacoEditor: React.FC = () => {
         }
         markClean(targetPath)
         updateOpenFile(targetPath, { isSaving: false })
-        toast.success(`已保存: ${latest.name}`, 2000)
+        toast.success(t('savedFile', { name: latest.name }), 2000)
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error)
         console.error('Failed to save file:', error)
-        toast.error(`保存失败: ${errorMsg}`)
+        toast.error(t('saveFileFailed', { error: localizeError(errorMsg) }))
         updateOpenFile(targetPath, { isSaving: false })
       }
     },
-    [updateOpenFile, markClean]
+    [updateOpenFile, markClean, t]
   )
 
   // 监听编辑器内容变化：自动保存的防抖计时器独立于 currentFile，
@@ -244,7 +245,7 @@ export const MonacoEditor: React.FC = () => {
                 if (target?.isDirty && !window.confirm(t('discardChangesConfirm'))) return
                 removeOpenFile(file.path)
               }}
-              title="Close"
+              title={t('close')}
             >
               ✕
             </button>

@@ -6,6 +6,8 @@ import { FileExplorer } from '../src/components/FileExplorer'
 import { MonacoEditor } from '../src/components/MonacoEditor'
 import { useChatStore } from '../src/store/chatStore'
 import { useEditorStore } from '../src/store/editorStore'
+import { useI18nStore } from '../src/store/i18nStore'
+import { translations } from '../src/i18n/translations'
 import { api } from '../src/api'
 import { piAgentAPI } from '../src/api/piAgentAPI'
 import type { ApiConfig } from '../src/types/electron'
@@ -60,6 +62,7 @@ const configWithKey: ApiConfig = {
 beforeEach(() => {
   useChatStore.getState().reset()
   useEditorStore.getState().reset()
+  useI18nStore.getState().setLanguage('zh')
   vi.clearAllMocks()
   Element.prototype.scrollIntoView = vi.fn()
   vi.mocked(piAgentAPI.initialize).mockResolvedValue({ success: true })
@@ -79,7 +82,7 @@ describe('ChatPanel', () => {
     })
 
     render(<ChatPanel workspacePath="/ws" />)
-    await screen.findByText('API Configuration Required')
+    await screen.findByText(translations.zh.apiConfigRequired)
 
     vi.mocked(api.apiConfigGet).mockResolvedValue({
       success: true,
@@ -91,9 +94,9 @@ describe('ChatPanel', () => {
     })
 
     await waitFor(() => {
-      expect(screen.queryByText('API Configuration Required')).toBeNull()
+      expect(screen.queryByText(translations.zh.apiConfigRequired)).toBeNull()
     })
-    expect(screen.getByText(/Pi Agent Chat/)).toBeTruthy()
+    expect(screen.getByText(new RegExp(translations.zh.agentChatTitle))).toBeTruthy()
   })
 })
 

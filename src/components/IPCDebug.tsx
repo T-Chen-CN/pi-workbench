@@ -20,7 +20,9 @@ export const IPCDebug: React.FC = () => {
         results.push({
           command: 'openDirectoryDialog',
           status: result.success ? 'ok' : 'error',
-          message: result.canceled ? 'Canceled by user' : `Returned: ${result.path}`,
+          message: result.canceled
+            ? t('canceledByUser')
+            : t('returnedPath', { path: result.path ?? '' }),
         })
       } catch (error) {
         results.push({
@@ -36,7 +38,9 @@ export const IPCDebug: React.FC = () => {
         results.push({
           command: 'listDirectory',
           status: result.success ? 'ok' : 'error',
-          message: result.items ? `Returned ${result.items.length} items` : result.error || 'Unknown error',
+          message: result.items
+            ? t('returnedItems', { count: result.items.length })
+            : result.error || t('unknownError'),
         })
       } catch (error) {
         results.push({
@@ -52,7 +56,9 @@ export const IPCDebug: React.FC = () => {
         results.push({
           command: 'readFile',
           status: result.success ? 'ok' : 'error',
-          message: result.content ? `Returned ${result.content.length} characters` : result.error || 'Unknown error',
+          message: result.content
+            ? t('returnedChars', { count: result.content.length })
+            : result.error || t('unknownError'),
         })
       } catch (error) {
         results.push({
@@ -73,7 +79,7 @@ export const IPCDebug: React.FC = () => {
         results.push({
           command: 'writeFile',
           status: result.success ? 'ok' : 'error',
-          message: result.success ? 'File written successfully' : result.error || 'Unknown error',
+          message: result.success ? t('fileWritten') : result.error || t('unknownError'),
         })
       } catch (error) {
         results.push({
@@ -105,7 +111,8 @@ export const IPCDebug: React.FC = () => {
       {testResults.length > 0 && (
         <div className={`p-3 rounded border ${allPassed ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-700/50' : 'bg-gray-50 dark:bg-gray-900/20 border-gray-200 dark:border-gray-700'}`}>
           <h4 className="text-sm font-semibold mb-2 m-0 text-gray-900 dark:text-gray-100">
-            {t('results')} {allPassed && '✓'}
+            {t('results')}
+            {allPassed && <span className="ml-2 text-green-600 dark:text-green-400">✓ {t('allPassed')}</span>}
           </h4>
           <ul className="list-none p-0 m-0 space-y-2">
             {testResults.map((result, i) => (
