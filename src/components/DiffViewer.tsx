@@ -4,6 +4,7 @@ import { useI18nStore } from '../store/i18nStore'
 import { useEditorStore } from '../store/editorStore'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
+import { localizeError } from '../i18n/errors'
 import { computeDiff, DiffLineType, DiffResult, type DiffLine } from '../api/diff'
 import type { FileEdit } from '../types/electron'
 
@@ -26,9 +27,9 @@ export const DiffViewer: React.FC = () => {
   const diff = useMemo(
     () =>
       edit
-        ? computeDiff(edit.oldContent, edit.newContent, `${edit.path} (before)`, edit.path)
+        ? computeDiff(edit.oldContent, edit.newContent, `${edit.path}${t('diffBefore')}`, edit.path)
         : null,
-    [edit]
+    [edit, t]
   )
   if (!isOpen || !edit || !diff) {
     return null
@@ -51,7 +52,7 @@ export const DiffViewer: React.FC = () => {
 
     const current = await api.readFile(target.path)
     if (!current.success || typeof current.content !== 'string') {
-      toast.error(`${t('revertFailed')}: ${current.error ?? target.path}`)
+      toast.error(`${t('revertFailed')}: ${localizeError(current.error) || target.path}`)
       return false
     }
     if (current.content !== target.newContent) {
@@ -61,7 +62,7 @@ export const DiffViewer: React.FC = () => {
 
     const written = await api.writeFile(target.path, target.oldContent)
     if (!written.success) {
-      toast.error(`${t('revertFailed')}: ${written.error ?? target.path}`)
+      toast.error(`${t('revertFailed')}: ${localizeError(written.error) || target.path}`)
       return false
     }
     return true
@@ -177,7 +178,7 @@ export const DiffViewer: React.FC = () => {
                     : 'bg-transparent text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
                 }`}
               >
-                ∥ Split
+                ∥ {t('splitView')}
               </button>
               <button
                 onClick={() => setViewMode('unified')}
@@ -188,7 +189,7 @@ export const DiffViewer: React.FC = () => {
                     : 'bg-transparent text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
                 }`}
               >
-                ≡ Unified
+                ≡ {t('unifiedView')}
               </button>
             </div>
 

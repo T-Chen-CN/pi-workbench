@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
 import { useI18nStore } from '../store/i18nStore'
+import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
 import type { FleetTask, FleetTaskStatus } from '../types/electron'
 
@@ -40,9 +41,9 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
     if (result.success) {
       setTasks(result.tasks)
     } else {
-      setError(result.error || 'Failed to load Fleet tasks')
+      setError(t('fleetLoadFailed', { error: localizeError(result.error) || t('unknownError') }))
     }
-  }, [workspacePath])
+  }, [workspacePath, t])
 
   useEffect(() => {
     if (!open) return
@@ -74,7 +75,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
         toast.success(t('fleetCreated'))
         await refresh()
       } else {
-        setError(result.error || 'Failed to create task')
+        setError(t('fleetCreateFailed', { error: localizeError(result.error) || t('unknownError') }))
       }
     } finally {
       setBusy(false)
@@ -84,7 +85,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
   const cancelTask = async (task: FleetTask) => {
     const result = await api.fleetCancel(task.id)
     if (!result.success) {
-      toast.error(result.error || 'Failed to cancel task')
+      toast.error(t('fleetCancelFailed', { error: localizeError(result.error) || t('unknownError') }))
     }
     await refresh()
   }
@@ -92,7 +93,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
   const cleanupTask = async (task: FleetTask) => {
     const result = await api.fleetCleanup(task.id)
     if (!result.success) {
-      toast.error(result.error || 'Failed to remove worktree')
+      toast.error(t('fleetCleanupFailed', { error: localizeError(result.error) || t('unknownError') }))
     } else {
       toast.success(t('fleetCleanupDone'))
     }

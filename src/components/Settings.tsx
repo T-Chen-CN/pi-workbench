@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
+import { localizeError } from '../i18n/errors'
 import type { ApiConfig, ApiProvider } from '../types/electron'
 
 const DEFAULT_URLS: Record<ApiProvider, string> = {
@@ -52,7 +53,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       }
     } catch (error) {
       console.error('[Settings] Failed to load API config:', error)
-      toast.error('Failed to load API configuration')
+      toast.error(t('loadApiConfigFailed'))
     }
   }
 
@@ -69,11 +70,11 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
 
   const handleFetchModels = async () => {
     if (!apiConfig.apiUrl.trim()) {
-      toast.error('Please enter API URL first')
+      toast.error(t('enterApiUrlFirst'))
       return
     }
     if (!apiConfig.apiKey) {
-      toast.error('Please enter API Key first')
+      toast.error(t('enterApiKeyFirst'))
       return
     }
 
@@ -93,15 +94,15 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
             ? prev.selectedModel
             : result.models![0]
         }))
-        toast.success(`Fetched ${result.models.length} models`)
+        toast.success(t('fetchedModels', { count: result.models.length }))
       } else if (result.success) {
-        toast.warning('The API returned an empty model list')
+        toast.warning(t('emptyModelList'))
       } else {
-        toast.error(`Failed to fetch models: ${result.error || 'Unknown error'}`)
+        toast.error(t('fetchModelsFailed', { error: localizeError(result.error) || t('unknownError') }))
       }
     } catch (error) {
       console.error('[Settings] Fetch models error:', error)
-      toast.error('Failed to fetch models: ' + String(error))
+      toast.error(t('fetchModelsFailed', { error: localizeError(String(error)) }))
     } finally {
       setIsFetchingModels(false)
     }
@@ -109,11 +110,11 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
 
   const handleSaveConfig = async () => {
     if (!apiConfig.apiKey) {
-      toast.error('API Key is required')
+      toast.error(t('apiKeyRequired'))
       return
     }
     if (!apiConfig.selectedModel) {
-      toast.error('Please fetch and select a model first')
+      toast.error(t('selectModelFirst'))
       return
     }
 
@@ -124,18 +125,18 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       const result = await api.apiConfigSave(apiConfig)
       if (result.success) {
         setSaveStatus('success')
-        toast.success('API configuration saved')
+        toast.success(t('apiConfigSaved'))
         // 通知 ChatPanel 用新配置重新初始化 Agent
         window.dispatchEvent(new CustomEvent('api-config-saved'))
         setTimeout(() => setSaveStatus('idle'), 2000)
       } else {
         setSaveStatus('error')
-        toast.error(result.error || 'Failed to save configuration')
+        toast.error(t('saveConfigFailed', { error: localizeError(result.error) || t('unknownError') }))
       }
     } catch (error) {
       console.error('[Settings] Save config error:', error)
       setSaveStatus('error')
-      toast.error('Failed to save configuration: ' + String(error))
+      toast.error(t('saveConfigFailed', { error: localizeError(String(error)) }))
     } finally {
       setIsSaving(false)
     }
@@ -149,7 +150,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
           <button
             onClick={onClose}
             className="bg-none border-none text-gray-400 hover:text-gray-100 text-2xl cursor-pointer p-1"
-            title="Close"
+            title={t('close')}
           >
             ×
           </button>
@@ -171,14 +172,14 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
 
       {/* API Configuration */}
       <div className="mb-8 border-t border-gray-700 pt-6">
-        <h3 className="text-lg font-semibold mb-3">API Configuration</h3>
+        <h3 className="text-lg font-semibold mb-3">{t('apiConfiguration')}</h3>
         <p className="text-sm text-gray-400 mb-4">
-          Configure AI model provider. Supports Anthropic, OpenAI, and OpenAI-compatible APIs.
+          {t('apiConfigurationDesc')}
         </p>
 
         {/* Provider Selection */}
         <div className="mb-4">
-          <label className="block text-sm font-medium mb-2">Provider</label>
+          <label className="block text-sm font-medium mb-2">{t('provider')}</label>
           <select
             value={apiConfig.provider}
             onChange={(e) => handleProviderChange(e.target.value as ApiProvider)}
@@ -186,15 +187,15 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
           >
             <option value="anthropic">Anthropic (Claude)</option>
             <option value="openai">OpenAI (GPT)</option>
-            <option value="custom">Custom (OpenAI-compatible)</option>
+            <option value="custom">{t('providerCustom')}</option>
           </select>
         </div>
 
         {/* API URL */}
         <div className="mb-4">
           <label className="block text-sm font-medium mb-2">
-            API URL
-            <span className="text-gray-500 text-xs ml-2">(Base endpoint, e.g. https://api.deepseek.com/v1)</span>
+            {t('apiUrl')}
+            <span className="text-gray-500 text-xs ml-2">{t('apiUrlHint')}</span>
           </label>
           <input
             type="text"
@@ -208,8 +209,8 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
         {/* API Key */}
         <div className="mb-4">
           <label className="block text-sm font-medium mb-2">
-            API Key
-            <span className="text-gray-500 text-xs ml-2">(Encrypted at rest on desktop)</span>
+            {t('apiKey')}
+            <span className="text-gray-500 text-xs ml-2">{t('apiKeyHint')}</span>
           </label>
           <input
             type="password"
@@ -220,12 +221,12 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
           />
           <p className="text-xs text-gray-500 mt-1">
             {apiConfig.provider === 'anthropic' && (
-              <>Get from <a href="https://console.anthropic.com/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">console.anthropic.com</a></>
+              <>{t('getFrom')}<a href="https://console.anthropic.com/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">console.anthropic.com</a></>
             )}
             {apiConfig.provider === 'openai' && (
-              <>Get from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">platform.openai.com</a></>
+              <>{t('getFrom')}<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">platform.openai.com</a></>
             )}
-            {apiConfig.provider === 'custom' && 'Enter your custom API key'}
+            {apiConfig.provider === 'custom' && t('customApiKeyHint')}
           </p>
         </div>
 
@@ -240,19 +241,19 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                 : 'bg-green-600 hover:bg-green-700 text-white'
             }`}
           >
-            {isFetchingModels ? 'Fetching...' : 'Fetch Available Models'}
+            {isFetchingModels ? t('fetching') : t('fetchModels')}
           </button>
           <p className="text-xs text-gray-500 mt-1">
-            Retrieves the model list from {apiConfig.apiUrl || 'the API'}/models
+            {t('fetchModelsHint', { url: apiConfig.apiUrl || 'API' })}
           </p>
         </div>
 
         {/* Model Selection */}
         <div className="mb-4">
           <label className="block text-sm font-medium mb-2">
-            Model
+            {t('model')}
             <span className="text-gray-500 text-xs ml-2">
-              ({apiConfig.availableModels.length} available)
+              {t('modelsAvailable', { count: apiConfig.availableModels.length })}
             </span>
           </label>
           <select
@@ -262,7 +263,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
             className="w-full bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {apiConfig.availableModels.length === 0 ? (
-              <option value="">No models available - fetch first</option>
+              <option value="">{t('noModelsAvailable')}</option>
             ) : (
               apiConfig.availableModels.map(model => (
                 <option key={model} value={model}>{model}</option>
@@ -282,26 +283,26 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                 : 'bg-blue-600 hover:bg-blue-700 text-white'
             }`}
           >
-            {isSaving ? 'Saving...' : 'Save Configuration'}
+            {isSaving ? t('saving') : t('saveConfiguration')}
           </button>
 
           {saveStatus === 'success' && (
-            <span className="text-green-400 text-sm">✓ Saved successfully</span>
+            <span className="text-green-400 text-sm">{t('savedSuccessfully')}</span>
           )}
           {saveStatus === 'error' && (
-            <span className="text-red-400 text-sm">✗ Failed to save</span>
+            <span className="text-red-400 text-sm">{t('saveFailedShort')}</span>
           )}
         </div>
       </div>
 
       {/* Application Info */}
       <div className="border-t border-gray-700 pt-6">
-        <h3 className="text-lg font-semibold mb-3">Application Info</h3>
+        <h3 className="text-lg font-semibold mb-3">{t('applicationInfo')}</h3>
         <div className="text-sm text-gray-400 space-y-1">
-          <p>Version: 0.1.0 (Phase 5 Complete)</p>
-          <p>Framework: Electron 44 + React 19</p>
-          <p>Architecture: Portable (self-contained)</p>
-          <p>API Support: Anthropic, OpenAI, Custom</p>
+          <p>{t('infoVersion')}</p>
+          <p>{t('infoFramework')}</p>
+          <p>{t('infoArchitecture')}</p>
+          <p>{t('infoApiSupport')}</p>
         </div>
       </div>
     </div>

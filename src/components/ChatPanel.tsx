@@ -6,6 +6,7 @@ import { useI18nStore } from '../store/i18nStore'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
 import { buildContextPrompt } from '../api/chatContext'
+import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
 
 interface ChatPanelProps {
@@ -35,7 +36,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   } = useChatStore()
 
   const openFiles = useEditorStore((state) => state.openFiles)
-  const { t } = useI18nStore()
+  const { t, language } = useI18nStore()
 
   const openEdits = useDiffStore((state) => state.openEdits)
 
@@ -85,17 +86,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           } else if (useChatStore.getState().messages.length === 0) {
             addMessage({
               role: 'assistant',
-              content: `Pi Agent (${configResult.config.selectedModel}) is ready! How can I help you with your code today?`,
+              content: t('agentReadyMessage', { model: configResult.config.selectedModel }),
             })
           }
         } else {
-          setError(result.error || 'Failed to initialize agent')
+          setError(result.error ? localizeError(result.error) : t('agentInitFailed'))
           setNeedsApiKey(true)
         }
       } catch (err) {
         if (seq !== initSeqRef.current) return
         const errorMsg = err instanceof Error ? err.message : String(err)
-        setError(errorMsg)
+        setError(localizeError(errorMsg))
         console.error('[ChatPanel] Initialize error:', err)
       } finally {
         if (seq === initSeqRef.current) setLoading(false)
@@ -121,7 +122,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       window.removeEventListener('api-config-saved', handleConfigSaved)
       // 切换工作区时保留各工作区的 Agent 实例；关闭工作区由 App 显式 dispose
     }
-  }, [workspacePath, addMessage, setError, setLoading, setMessages])
+  }, [workspacePath, addMessage, setError, setLoading, setMessages, t])
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -189,17 +190,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         // 打开本轮全部文件修改供审阅（接受或还原）
         if (result.edits && result.edits.length > 0) {
           openEdits(result.edits)
-          toast.info(`Agent modified ${result.edits.length} file(s)`)
+          toast.info(t('agentModifiedFiles', { count: result.edits.length }))
         }
       } else {
-        const errorMessage = result.error || 'Failed to get response from agent'
+        const errorMessage = result.error ? localizeError(result.error) : t('agentResponseFailed')
         setError(errorMessage)
-        finishStreamingMessage(assistantId, `Error: ${errorMessage}`)
+        finishStreamingMessage(assistantId, t('errorPrefix', { message: errorMessage }))
       }
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err)
+      const errorMsg = localizeError(err instanceof Error ? err.message : String(err))
       setError(errorMsg)
-      finishStreamingMessage(assistantId, `Error: ${errorMsg}`)
+      finishStreamingMessage(assistantId, t('errorPrefix', { message: errorMsg }))
     } finally {
       setLoading(false)
       clearAttachments()
@@ -224,16 +225,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center max-w-md">
             <h3 className="text-xl font-bold text-gray-100 mb-4">
-              API Configuration Required
+              {t('apiConfigRequired')}
             </h3>
             <p className="text-gray-400 mb-6">
-              Please configure your API provider, URL, key and model in Settings to use Pi Agent.
+              {t('apiConfigRequiredDesc')}
             </p>
             <button
               className="inline-block bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded font-medium transition-colors border-none cursor-pointer"
               onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))}
             >
-              Go to Settings
+              {t('goToSettings')}
             </button>
           </div>
         </div>
@@ -246,9 +247,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       {/* Header */}
       <div className="border-b border-gray-700 p-4">
         <h3 className="text-lg font-semibold text-gray-100">
-          Pi Agent Chat
-          {initialized && <span className="ml-2 text-xs text-green-400">● Ready</span>}
-          {!initialized && <span className="ml-2 text-xs text-yellow-400">● Initializing...</span>}
+          {t('agentChatTitle')}
+          {initialized && <span className="ml-2 text-xs text-green-400">{t('agentReadyStatus')}</span>}
+          {!initialized && <span className="ml-2 text-xs text-yellow-400">{t('agentInitializingStatus')}</span>}
         </h3>
       </div>
 
@@ -270,7 +271,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                 }`}
               >
                 <div className="text-sm font-medium mb-1">
-                  {msg.role === 'user' ? 'You' : 'Pi Agent'}
+                  {msg.role === 'user' ? t('roleYou') : t('piAgent')}
                 </div>
                 <div className="text-sm whitespace-pre-wrap">
                   {msg.content}
@@ -279,7 +280,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                   )}
                 </div>
                 <div className="text-xs mt-2 opacity-70">
-                  {new Date(msg.timestamp).toLocaleTimeString()}
+                  {new Date(msg.timestamp).toLocaleTimeString(language === 'zh' ? 'zh-CN' : 'en-US')}
                 </div>
               </div>
             </div>
@@ -289,8 +290,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         {isLoading && !messages.some((msg) => msg.isStreaming && msg.content) && (
           <div className="flex justify-start">
             <div className="bg-gray-800 text-gray-100 rounded-lg p-3">
-              <div className="text-sm font-medium mb-1">Pi Agent</div>
-              <div className="text-sm">Thinking...</div>
+              <div className="text-sm font-medium mb-1">{t('piAgent')}</div>
+              <div className="text-sm">{t('thinking')}</div>
             </div>
           </div>
         )}
@@ -298,7 +299,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         {error && (
           <div className="flex justify-center">
             <div className="bg-red-900/20 border border-red-600 text-red-400 rounded-lg p-3 max-w-[80%]">
-              <div className="text-sm font-medium mb-1">Error</div>
+              <div className="text-sm font-medium mb-1">{t('errorLabel')}</div>
               <div className="text-sm">{error}</div>
             </div>
           </div>
@@ -376,7 +377,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type your message... (Shift+Enter for new line)"
+            placeholder={t('inputPlaceholder')}
             disabled={!initialized || isLoading}
             className="flex-1 bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500 resize-none disabled:opacity-50 disabled:cursor-not-allowed"
             rows={3}
@@ -395,7 +396,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               disabled={!initialized || !input.trim()}
               className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Send
+              {t('send')}
             </button>
           )}
         </form>

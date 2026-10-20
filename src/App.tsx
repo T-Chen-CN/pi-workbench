@@ -13,6 +13,7 @@ import { FleetPanel } from './components/FleetPanel'
 import { ToastContainer } from './components/Toast'
 import { useToastStore } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
+import { localizeError } from './i18n/errors'
 import { useWorkspaceStore } from './store/workspaceStore'
 import { useEditorStore } from './store/editorStore'
 import { useChatStore } from './store/chatStore'
@@ -42,9 +43,10 @@ export default function App() {
   }, [])
   const { t, setLanguage, language } = useI18nStore()
 
-  // 窗口标题跟随语言
+  // 窗口标题与文档语言跟随语言
   useEffect(() => {
     document.title = t('appTitle')
+    document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en'
   }, [t, language])
 
   // 从便携式 settings.json 恢复语言偏好（默认中文）
@@ -106,7 +108,7 @@ export default function App() {
       // 初始化工作区目录（.pi-workbench）
       const initResult = await api.initWorkspace(targetPath)
       if (!initResult.success) {
-        setError(initResult.error || 'Failed to initialize workspace')
+        setError(initResult.error ? localizeError(initResult.error) : t('initWorkspaceFailed'))
         return
       }
 
@@ -124,7 +126,7 @@ export default function App() {
       if (recent.success) setRecentWorkspaces(recent.workspaces)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      setError(message)
+      setError(localizeError(message))
       console.error('Failed to open workspace:', err)
     }
   }
@@ -138,7 +140,7 @@ export default function App() {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      setError(message)
+      setError(localizeError(message))
       console.error('Failed to open workspace:', err)
     }
   }
