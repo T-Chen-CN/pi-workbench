@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useChatStore } from '../store/chatStore'
+import { useDiffStore } from '../store/diffStore'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
+import { computeDiff } from '../api/diff'
+import { toast } from '../store/toastStore'
 
 interface ChatPanelProps {
   workspacePath: string
@@ -13,9 +16,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     isLoading,
     error,
     addMessage,
+    setMessages,
     setLoading,
     setError,
   } = useChatStore()
+
+  const setDiff = useDiffStore((state) => state.setDiff)
 
   const [input, setInput] = useState('')
   const [initialized, setInitialized] = useState(false)
@@ -51,10 +57,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         if (result.success) {
           setError(null)
           setInitialized(true)
-          addMessage({
-            role: 'assistant',
-            content: `Pi Agent (${configResult.config.selectedModel}) is ready! How can I help you with your code today?`,
-          })
+
+          // 恢复该工作区持久化的对话历史
+          const history = await piAgentAPI.getHistory()
+          if (seq !== initSeqRef.current) return
+
+          if (history.success && history.history && history.history.length > 0) {
+            setMessages(history.history)
+          } else if (useChatStore.getState().messages.length === 0) {
+            addMessage({
+              role: 'assistant',
+              content: `Pi Agent (${configResult.config.selectedModel}) is ready! How can I help you with your code today?`,
+            })
+          }
         } else {
           setError(result.error || 'Failed to initialize agent')
           setNeedsApiKey(true)
@@ -83,11 +98,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     // Cleanup on unmount
     return () => {
       // 使旧的初始化流程失效（含 React StrictMode 的双重挂载）
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       initSeqRef.current++
       window.removeEventListener('api-config-saved', handleConfigSaved)
       piAgentAPI.dispose()
     }
-  }, [workspacePath])
+  }, [workspacePath, addMessage, setError, setLoading, setMessages])
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -124,6 +140,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           role: 'assistant',
           content: result.response,
         })
+
+        // 展示 Agent 本轮修改（最后一个改动的文件）
+        if (result.edits && result.edits.length > 0) {
+          const lastEdit = result.edits[result.edits.length - 1]
+          setDiff(computeDiff(lastEdit.oldContent, lastEdit.newContent, `${lastEdit.path} (before)`, lastEdit.path))
+          toast.info(`Agent modified ${result.edits.length} file(s)`)
+        }
       } else {
         setError(result.error || 'Failed to get response from agent')
         addMessage({

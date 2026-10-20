@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from './api'
+import { piAgentAPI } from './api/piAgentAPI'
 import { FileExplorer } from './components/FileExplorer'
 import { MonacoEditor } from './components/MonacoEditor'
 import { ChatPanel } from './components/ChatPanel'
@@ -9,9 +10,13 @@ import { Settings } from './components/Settings'
 import { ToastContainer } from './components/Toast'
 import { useToastStore } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
+import { useWorkspaceStore } from './store/workspaceStore'
+import { useEditorStore } from './store/editorStore'
+import { useChatStore } from './store/chatStore'
+import { useDiffStore } from './store/diffStore'
 
 export default function App() {
-  const [workspace, setWorkspace] = useState<string | null>(null)
+  const { workspacePath: workspace, recentWorkspaces, setWorkspace, setRecentWorkspaces } = useWorkspaceStore()
   const [error, setError] = useState<string | null>(null)
   const [showDebug, setShowDebug] = useState(import.meta.env.DEV)
   const [showSettings, setShowSettings] = useState(false)
@@ -31,23 +36,95 @@ export default function App() {
     if (language !== 'zh') {
       setLanguage('zh')
     }
+  }, [language, setLanguage])
+
+  // 加载最近打开的工作区
+  useEffect(() => {
+    api.getRecentWorkspaces()
+      .then((result) => {
+        if (result.success) setRecentWorkspaces(result.workspaces)
+      })
+      .catch((err) => console.error('Failed to load recent workspaces:', err))
+  }, [setRecentWorkspaces])
+
+  // 有未保存修改时阻止关闭窗口
+  useEffect(() => {
+    const handler = (event: BeforeUnloadEvent) => {
+      if (useEditorStore.getState().hasDirtyFiles()) {
+        event.preventDefault()
+        event.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
   }, [])
+
+  const resetWorkspaceState = () => {
+    useEditorStore.getState().reset()
+    useChatStore.getState().reset()
+    useDiffStore.getState().clearDiff()
+  }
+
+  const confirmCloseWorkspace = (): boolean => {
+    if (!useEditorStore.getState().hasDirtyFiles()) return true
+    return window.confirm(t('discardChangesConfirm'))
+  }
+
+  const openWorkspaceAt = async (targetPath: string) => {
+    try {
+      setError(null)
+
+      if (workspace && workspace !== targetPath && !confirmCloseWorkspace()) {
+        return
+      }
+
+      // 初始化工作区目录（.pi-workbench）
+      const initResult = await api.initWorkspace(targetPath)
+      if (!initResult.success) {
+        setError(initResult.error || 'Failed to initialize workspace')
+        return
+      }
+
+      // 切换前释放旧工作区的 Agent 与 UI 状态
+      await piAgentAPI.dispose()
+      await api.unwatchWorkspace().catch(() => undefined)
+      resetWorkspaceState()
+
+      setWorkspace(targetPath)
+
+      api.watchWorkspace(targetPath).catch((err) =>
+        console.error('Failed to watch workspace:', err)
+      )
+
+      const recent = await api.addRecentWorkspace(targetPath)
+      if (recent.success) setRecentWorkspaces(recent.workspaces)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setError(message)
+      console.error('Failed to open workspace:', err)
+    }
+  }
 
   const openWorkspace = async () => {
     try {
       setError(null)
       const result = await api.openDirectoryDialog()
       if (result.success && !result.canceled && result.path) {
-        setWorkspace(result.path)
+        await openWorkspaceAt(result.path)
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
       setError(message)
-      console.error('Failed to open workspace:', error)
+      console.error('Failed to open workspace:', err)
     }
   }
 
-  const closeWorkspace = () => {
+  const closeWorkspace = async () => {
+    if (!confirmCloseWorkspace()) return
+
+    await piAgentAPI.dispose()
+    await api.unwatchWorkspace().catch(() => undefined)
+    resetWorkspaceState()
     setWorkspace(null)
   }
 
@@ -135,7 +212,7 @@ export default function App() {
             </aside>
           </div>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-gray-600 dark:text-gray-400 text-center gap-5">
+          <div className="flex-1 flex flex-col items-center justify-center text-gray-600 dark:text-gray-400 text-center gap-5 p-6">
             <h2 className="text-2xl text-gray-900 dark:text-gray-100 m-0">{t('welcome')}</h2>
             <p className="text-base m-0">{t('welcomeSubtitle')}</p>
             <button
@@ -144,6 +221,26 @@ export default function App() {
             >
               {t('openProject')}
             </button>
+
+            {recentWorkspaces.length > 0 && (
+              <div className="w-full max-w-lg mt-2 text-left">
+                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-500 mb-2">
+                  {t('recentWorkspaces')}
+                </p>
+                <div className="flex flex-col gap-1">
+                  {recentWorkspaces.map((recentPath) => (
+                    <button
+                      key={recentPath}
+                      onClick={() => openWorkspaceAt(recentPath)}
+                      title={recentPath}
+                      className="w-full text-left px-3 py-2 rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#252526] hover:bg-gray-100 dark:hover:bg-[#2d2d30] text-sm text-gray-700 dark:text-gray-300 overflow-hidden text-ellipsis whitespace-nowrap"
+                    >
+                      {recentPath}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>

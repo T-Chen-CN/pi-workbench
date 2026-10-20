@@ -97,11 +97,11 @@
 ## ⚠️ 已知限制（进入 Phase 2 处理）
 
 1. **无流式输出**：`chat()` 等待整轮完成才返回，长回答时 UI 只有 "Thinking..."。
-2. **会话不持久化**：ChatPanel 消息存于内存，重启丢失；Pi 的会话文件写入 `data/agent/sessions`，但 UI 未接入恢复。
-3. **Diff 未联动**：Agent 的编辑直接落到工作区文件，尚未自动推送到 DiffViewer 展示。
-4. **单 Agent 实例**：全局一个 AgentManager，多工作区切换时以最后初始化的工作区为准（Phase 2 多工作区时解决）。
-5. **Web 桥接仅限开发环境**：生产构建的纯 Web 版本没有 Agent，必须使用 Electron。
-6. **打包验证**：`pi-bridge/dist` 与 `@earendil-works/*` 已加入 electron-builder 打包清单，但尚未对安装包做完整冒烟测试。
+2. **单 Agent 实例**：同一时间只服务一个工作区；多工作区并行需要 Phase 2 的实例管理。
+3. **Web 桥接仅限开发环境**：生产构建的纯 Web 版本没有 Agent，必须使用 Electron。
+
+> 会话持久化、Diff 联动、文件监听、工作区生命周期等已在「Phase 1 加固」中完成，
+> 详见 [STATUS.md](./STATUS.md)。
 
 ---
 

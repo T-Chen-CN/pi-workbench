@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { api } from '../api'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
-import { handleError } from '../store/errorStore'
+import { toast } from '../store/toastStore'
 
 interface FileEntry {
   name: string
@@ -31,6 +31,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
     fileName: '',
     parentPath: null,
   })
+  const [contextMenu, setContextMenu] = useState<{ node: TreeNode; x: number; y: number } | null>(null)
   const { addOpenFile } = useEditorStore.getState()
 
   // Initialize tree when workspace changes
@@ -38,6 +39,17 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
     if (workspacePath) {
       loadRootDirectory(workspacePath)
     }
+  }, [workspacePath])
+
+  // 文件系统变化时刷新目录树（只在新增/删除/重命名时刷新，忽略编辑器保存）
+  useEffect(() => {
+    if (!workspacePath) return
+    const unsubscribe = api.onFsChanged((payload) => {
+      if (payload.type === 'rename') {
+        void loadRootDirectory(workspacePath)
+      }
+    })
+    return unsubscribe
   }, [workspacePath])
 
   const loadRootDirectory = async (rootPath: string) => {
@@ -57,7 +69,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       setError(errorMsg)
-      handleError(err, 'Load workspace', (msg) => console.error(msg))
+      toast.error(`Failed to load workspace: ${errorMsg}`)
     } finally {
       setLoading(false)
     }
@@ -75,7 +87,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
       })
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
-      handleError(error, `Load directory: ${path}`, (msg) => console.error(msg))
+      toast.error(`Failed to load directory: ${errorMsg}`)
       setError(errorMsg)
       return []
     }
@@ -144,8 +156,54 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
       })
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
-      handleError(err, `Open file: ${node.name}`, (msg) => console.error(msg))
+      toast.error(`Failed to open file: ${errorMsg}`)
       setError(errorMsg)
+    }
+  }
+
+  const dirname = (targetPath: string): string => {
+    const index = Math.max(targetPath.lastIndexOf('/'), targetPath.lastIndexOf('\\'))
+    return index > 0 ? targetPath.slice(0, index) : targetPath
+  }
+
+  const handleRename = async (node: TreeNode) => {
+    setContextMenu(null)
+    const newName = window.prompt(t('renamePrompt'), node.name)
+    if (!newName || newName === node.name) return
+
+    try {
+      const newPath = joinPath(dirname(node.path), newName)
+      const result = await api.renamePath(node.path, newPath)
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to rename')
+      }
+
+      // 关闭旧的编辑器标签（路径已失效）
+      useEditorStore.getState().removeOpenFile(node.path)
+      toast.success(`${t('rename')}: ${newName}`)
+      if (workspacePath) await loadRootDirectory(workspacePath)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toast.error(`${t('rename')} failed: ${msg}`)
+    }
+  }
+
+  const handleDelete = async (node: TreeNode) => {
+    setContextMenu(null)
+    if (!window.confirm(t('deleteConfirm'))) return
+
+    try {
+      const result = await api.deletePath(node.path)
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to delete')
+      }
+
+      useEditorStore.getState().removeOpenFile(node.path)
+      toast.success(`${t('delete')}: ${node.name}`)
+      if (workspacePath) await loadRootDirectory(workspacePath)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toast.error(`${t('delete')} failed: ${msg}`)
     }
   }
 
@@ -202,7 +260,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
       setError(null)
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
-      handleError(err, `Create file: ${createDialog.fileName}`, (msg) => console.error(msg))
+      toast.error(`Failed to create file: ${errorMsg}`)
       setError(errorMsg)
     }
   }
@@ -224,6 +282,10 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
           className="flex items-center gap-2 px-2 py-1 hover:bg-gray-200 dark:hover:bg-[#2d2d30] cursor-pointer select-none"
           style={{ paddingLeft: `${depth * 16}px` }}
           onClick={() => handleFileClick(node)}
+          onContextMenu={(event) => {
+            event.preventDefault()
+            setContextMenu({ node, x: event.clientX, y: event.clientY })
+          }}
         >
           {node.isDirectory && (
             <span className="text-base">
@@ -258,6 +320,29 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
           {error && <span className="text-base">⚠️</span>}
         </div>
       </div>
+
+      {contextMenu && (
+        <div className="fixed inset-0 z-50" onClick={() => setContextMenu(null)}>
+          <div
+            className="absolute bg-white dark:bg-[#252526] border border-gray-300 dark:border-gray-600 rounded shadow-lg py-1 min-w-[140px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="w-full text-left px-3 py-1.5 text-sm text-gray-900 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#2d2d30] border-none bg-none cursor-pointer"
+              onClick={() => handleRename(contextMenu.node)}
+            >
+              {t('rename')}
+            </button>
+            <button
+              className="w-full text-left px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-gray-100 dark:hover:bg-[#2d2d30] border-none bg-none cursor-pointer"
+              onClick={() => handleDelete(contextMenu.node)}
+            >
+              {t('delete')}
+            </button>
+          </div>
+        </div>
+      )}
 
       {createDialog.isOpen && (
         <div className="fixed inset-0 z-50">

@@ -1,0 +1,11 @@
+dist
+dist-electron
+release
+node_modules
+pi-bridge/dist
+package-lock.json
+docs
+cache
+data
+config
+logs

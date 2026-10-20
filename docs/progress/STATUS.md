@@ -49,18 +49,34 @@
 - 供应商错误（401、限流等）原样透传到聊天面板
 - preload 采用 CommonJS 编译（sandbox 兼容），并提供启动自检
 - 纯 Web 开发模式：Vite 中间件提供模型拉取代理与 Agent 桥接
-- 已知限制：无流式输出、会话不持久化、Diff 未与 Agent 联动（见 Phase 1 报告）
+- 已知限制：无流式输出（见 Phase 1 报告）
 
 详细报告：[Phase 1 完成报告](./PHASE-1-COMPLETE.md)
 
+### ✅ Phase 1 加固（2026-10-20）
+
+- 工作区生命周期闭环：打开时初始化 `.pi-workbench/`、切换/关闭时释放 Agent 并清空编辑器/聊天/Diff 状态
+- 最近打开工作区列表（`config/settings.json`），欢迎页可直接打开
+- 会话持久化：按工作区恢复 Pi 会话与聊天历史（跨重启）
+- Agent 编辑捕获：write/edit 工具前后内容对比 → 自动打开 DiffViewer
+- 文件操作补齐：重命名、删除；递归文件监听（300ms 防抖）
+- 外部文件变化：未被本地修改时自动同步编辑器内容，删除时关闭标签
+- 未保存保护：关闭标签 / 关闭工作区 / 关闭窗口均提示
+- 修复 `markDirty` 未更新 `isDirty` 的问题（未保存圆点现在正确显示）
+- 删除死代码：`Editor.tsx`、`errorStore`、旧 Mock IPC
+- 工程化：Vitest 单元测试、ESLint、Prettier、GitHub Actions CI
+- `pi-bridge/dist` 移出版本库（构建时生成）
+
 ### ⏳ 待实现
 
-#### Phase 2: 工作区管理（预计 1-2 周）
+#### Phase 2: 工作区管理（进行中）
 
-- 工作区数据库（`{appDir}/data/workspaces.db`）
-- 会话持久化与恢复
-- 多工作区 + 工作区级 Agent 实例
-- 日志系统（`{appDir}/logs/`）
+- ✅ 最近打开列表（JSON，`config/settings.json`）
+- ✅ 工作区生命周期（初始化 / 切换清理 / 关闭）
+- ✅ 会话持久化与恢复（Pi 会话 + UI 历史）
+- ⏳ 多工作区并行 + 工作区级 Agent 实例
+- ⏳ 工作区数据库（SQLite，`{appDir}/data/workspaces.db`）
+- ⏳ 日志系统（`{appDir}/logs/`）
 
 #### Phase 3: 终端集成（预计 1 周）
 

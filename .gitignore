@@ -8,6 +8,7 @@ pnpm-lock.yaml
 # Production
 /dist
 /dist-electron
+/pi-bridge/dist
 /build
 /out
 *.dmg

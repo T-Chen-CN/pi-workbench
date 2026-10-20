@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs/promises'
-import { existsSync, statSync } from 'fs'
+import { existsSync, statSync, watch, type FSWatcher } from 'fs'
 import { fileURLToPath } from 'url'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
@@ -11,6 +11,8 @@ const __dirname = path.dirname(__filename)
 
 let mainWindow: BrowserWindow | null = null
 let agentManager: any | null = null // AgentManager type loaded dynamically
+let workspaceWatcher: FSWatcher | null = null
+let watchDebounce: NodeJS.Timeout | null = null
 
 // 便携式架构：获取应用目录
 function getAppDir(): string {
@@ -194,6 +196,86 @@ ipcMain.handle('fs:stat', async (_event, filePath: string) => {
   }
 })
 
+ipcMain.handle('fs:delete', async (_event, targetPath: string) => {
+  try {
+    await fs.rm(targetPath, { recursive: true, force: false })
+    return { success: true }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+})
+
+ipcMain.handle('fs:rename', async (_event, oldPath: string, newPath: string) => {
+  try {
+    await fs.rename(oldPath, newPath)
+    return { success: true }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+})
+
+// 工作区文件监听（递归，忽略依赖/构建/应用数据目录）
+ipcMain.handle('fs:watch', async (event, workspacePath: string) => {
+  try {
+    if (workspaceWatcher) {
+      workspaceWatcher.close()
+      workspaceWatcher = null
+    }
+
+    const sender = event.sender
+    const ignored = /(^|[\\/])(\.git|node_modules|\.pi-workbench|cache|dist|dist-electron|release)([\\/]|$)/
+
+    workspaceWatcher = watch(workspacePath, { recursive: true }, (eventType, filename) => {
+      if (!filename || ignored.test(filename)) return
+      if (watchDebounce) clearTimeout(watchDebounce)
+      watchDebounce = setTimeout(() => {
+        if (!sender.isDestroyed()) {
+          sender.send('fs:changed', {
+            type: eventType,
+            path: path.join(workspacePath, filename)
+          })
+        }
+      }, 300)
+    })
+
+    workspaceWatcher.on('error', (error) => {
+      console.error('[Main] Workspace watcher error:', error)
+    })
+
+    return { success: true }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+})
+
+ipcMain.handle('fs:unwatch', async () => {
+  try {
+    if (watchDebounce) {
+      clearTimeout(watchDebounce)
+      watchDebounce = null
+    }
+    if (workspaceWatcher) {
+      workspaceWatcher.close()
+      workspaceWatcher = null
+    }
+    return { success: true }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+})
+
 // 便携式架构：应用配置管理
 ipcMain.handle('app:getAppDir', async () => {
   try {
@@ -206,24 +288,33 @@ ipcMain.handle('app:getAppDir', async () => {
   }
 })
 
+// ---- 应用设置（settings.json）----
+
+const DEFAULT_SETTINGS = {
+  language: 'zh-CN',
+  theme: 'dark',
+  autoSave: true,
+  autoSaveDelay: 2000,
+  recentWorkspaces: [] as string[],
+}
+
+async function loadSettingsFile(): Promise<any> {
+  const settingsPath = path.join(getAppDir(), 'config', 'settings.json')
+  if (!existsSync(settingsPath)) {
+    return { ...DEFAULT_SETTINGS }
+  }
+  const content = await fs.readFile(settingsPath, 'utf-8')
+  return { ...DEFAULT_SETTINGS, ...JSON.parse(content) }
+}
+
+async function saveSettingsFile(settings: any): Promise<void> {
+  const settingsPath = path.join(getAppDir(), 'config', 'settings.json')
+  await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8')
+}
+
 ipcMain.handle('app:getSettings', async () => {
   try {
-    const settingsPath = path.join(getAppDir(), 'config', 'settings.json')
-
-    if (!existsSync(settingsPath)) {
-      // 返回默认配置
-      const defaultSettings = {
-        language: 'zh-CN',
-        theme: 'dark',
-        autoSave: true,
-        autoSaveDelay: 2000
-      }
-      return { success: true, settings: defaultSettings }
-    }
-
-    const content = await fs.readFile(settingsPath, 'utf-8')
-    const settings = JSON.parse(content)
-    return { success: true, settings }
+    return { success: true, settings: await loadSettingsFile() }
   } catch (error) {
     return {
       success: false,
@@ -234,12 +325,41 @@ ipcMain.handle('app:getSettings', async () => {
 
 ipcMain.handle('app:saveSettings', async (_event, settings: any) => {
   try {
-    const settingsPath = path.join(getAppDir(), 'config', 'settings.json')
-    await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8')
+    await saveSettingsFile(settings)
     return { success: true }
   } catch (error) {
     return {
       success: false,
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+})
+
+ipcMain.handle('app:getRecentWorkspaces', async () => {
+  try {
+    const settings = await loadSettingsFile()
+    const workspaces: string[] = Array.isArray(settings.recentWorkspaces) ? settings.recentWorkspaces : []
+    return { success: true, workspaces }
+  } catch (error) {
+    return {
+      success: false,
+      workspaces: [],
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+})
+
+ipcMain.handle('app:addRecentWorkspace', async (_event, workspacePath: string) => {
+  try {
+    const settings = await loadSettingsFile()
+    const existing: string[] = Array.isArray(settings.recentWorkspaces) ? settings.recentWorkspaces : []
+    const workspaces = [workspacePath, ...existing.filter((p) => p !== workspacePath)].slice(0, 10)
+    await saveSettingsFile({ ...settings, recentWorkspaces: workspaces })
+    return { success: true, workspaces }
+  } catch (error) {
+    return {
+      success: false,
+      workspaces: [],
       error: error instanceof Error ? error.message : String(error)
     }
   }
@@ -577,7 +697,10 @@ ipcMain.handle('agent:getHistory', async () => {
       return { success: false, error: 'Agent not initialized' }
     }
 
-    const history = agentManager.getMessageHistory()
+    // 返回持久化 Pi 会话中的可展示历史（跨重启恢复）
+    const history = typeof agentManager.getSessionMessages === 'function'
+      ? agentManager.getSessionMessages()
+      : agentManager.getMessageHistory()
     return { success: true, history }
   } catch (error) {
     return {

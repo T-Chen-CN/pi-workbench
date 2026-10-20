@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useCallback, useEffect, useRef } from 'react'
 import * as monaco from 'monaco-editor'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
@@ -11,6 +11,8 @@ export const MonacoEditor: React.FC = () => {
   const monacoRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const { currentFile, openFiles, updateOpenFile, markDirty, markClean, removeOpenFile } = useEditorStore()
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  // 程序化 setValue 时抑制内容变化回调，避免误标脏 + 自动保存回环
+  const suppressChangeRef = useRef(false)
 
   // Initialize Monaco editor
   useEffect(() => {
@@ -38,7 +40,9 @@ export const MonacoEditor: React.FC = () => {
     const model = monacoRef.current.getModel()
     if (model && model.getValue() === currentFile.content) return
 
+    suppressChangeRef.current = true
     monacoRef.current.setValue(currentFile.content)
+    suppressChangeRef.current = false
 
     // Detect language from file extension
     const extension = currentFile.name.split('.').pop() || 'txt'
@@ -61,6 +65,66 @@ export const MonacoEditor: React.FC = () => {
     monaco.editor.setModelLanguage(model || monaco.editor.createModel('', ''), language)
   }, [currentFile])
 
+  // 外部文件变化：未被本地修改时同步磁盘内容；被外部删除时关闭标签
+  const currentPath = currentFile?.path
+
+  useEffect(() => {
+    if (!currentPath) return
+
+    const unsubscribe = api.onFsChanged(async (payload) => {
+      if (payload.path !== currentPath) return
+
+      const state = useEditorStore.getState()
+      const target = state.openFiles.find((file) => file.path === currentPath)
+      if (!target) return
+
+      const existsResult = await api.exists(currentPath)
+      if (existsResult.success && existsResult.exists === false) {
+        state.removeOpenFile(currentPath)
+        toast.info(`File removed: ${target.name}`)
+        return
+      }
+
+      if (target.isDirty) return
+
+      const result = await api.readFile(currentPath)
+      if (result.success && typeof result.content === 'string' && result.content !== target.content) {
+        state.updateOpenFile(currentPath, { content: result.content })
+        state.markClean(currentPath)
+      }
+    })
+
+    return unsubscribe
+  }, [currentPath])
+
+  const saveFile = useCallback(
+    async (pathOverride?: string) => {
+      const targetPath = pathOverride ?? useEditorStore.getState().currentFile?.path
+      if (!targetPath) return
+
+      // 从 store 读取最新内容，避免闭包中的旧快照导致写回旧内容
+      const latest = useEditorStore.getState().openFiles.find((file) => file.path === targetPath)
+      if (!latest) return
+
+      try {
+        updateOpenFile(targetPath, { isSaving: true })
+        const result = await api.writeFile(targetPath, latest.content)
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to save file')
+        }
+        markClean(targetPath)
+        updateOpenFile(targetPath, { isSaving: false })
+        toast.success(`已保存: ${latest.name}`, 2000)
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        console.error('Failed to save file:', error)
+        toast.error(`保存失败: ${errorMsg}`)
+        updateOpenFile(targetPath, { isSaving: false })
+      }
+    },
+    [updateOpenFile, markClean]
+  )
+
   // Handle editor changes
   useEffect(() => {
     if (!monacoRef.current) return
@@ -69,7 +133,7 @@ export const MonacoEditor: React.FC = () => {
     if (!model) return
 
     const subscription = model.onDidChangeContent(() => {
-      if (!currentFile) return
+      if (!currentFile || suppressChangeRef.current) return
 
       const newContent = model.getValue()
       updateOpenFile(currentFile.path, { content: newContent })
@@ -90,44 +154,23 @@ export const MonacoEditor: React.FC = () => {
         saveTimeoutRef.current = null
       }
     }
-  }, [currentFile, updateOpenFile, markDirty])
+  }, [currentFile, updateOpenFile, markDirty, saveFile])
 
-  const saveFile = async (pathOverride?: string) => {
-    const targetPath = pathOverride ?? currentFile?.path
-    if (!targetPath) return
 
-    // 从 store 读取最新内容，避免闭包中的旧快照导致写回旧内容
-    const latest = useEditorStore.getState().openFiles.find(file => file.path === targetPath)
-    if (!latest) return
-
-    try {
-      updateOpenFile(targetPath, { isSaving: true })
-      const result = await api.writeFile(targetPath, latest.content)
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to save file')
+  const handleSave = useCallback(
+    async (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault()
+        await saveFile()
       }
-      markClean(targetPath)
-      updateOpenFile(targetPath, { isSaving: false })
-      toast.success(`已保存: ${latest.name}`, 2000)
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error)
-      console.error('Failed to save file:', error)
-      toast.error(`保存失败: ${errorMsg}`)
-      updateOpenFile(targetPath, { isSaving: false })
-    }
-  }
-
-  const handleSave = async (e: KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-      e.preventDefault()
-      await saveFile()
-    }
-  }
+    },
+    [saveFile]
+  )
 
   useEffect(() => {
     window.addEventListener('keydown', handleSave)
     return () => window.removeEventListener('keydown', handleSave)
-  }, [currentFile])
+  }, [handleSave])
 
   if (!currentFile) {
     return (
@@ -162,7 +205,11 @@ export const MonacoEditor: React.FC = () => {
             </span>
             <button
               className="p-1 hover:bg-gray-200 dark:hover:bg-[#2d2d30] rounded text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 border-none bg-none cursor-pointer"
-              onClick={() => removeOpenFile(file.path)}
+              onClick={() => {
+                const target = useEditorStore.getState().openFiles.find((f) => f.path === file.path)
+                if (target?.isDirty && !window.confirm(t('discardChangesConfirm'))) return
+                removeOpenFile(file.path)
+              }}
               title="Close"
             >
               ✕

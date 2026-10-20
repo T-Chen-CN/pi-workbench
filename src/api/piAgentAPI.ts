@@ -5,7 +5,7 @@
  * - Web dev: goes through the Vite dev-server Agent bridge (/__pi/agent/*)
  */
 
-import type { ApiConfig } from '../types/electron'
+import type { ApiConfig, FileEdit } from '../types/electron'
 
 interface AgentInitConfig {
   workspaceDir: string
@@ -22,12 +22,24 @@ interface AgentChatResponse {
   success: boolean
   response?: string
   error?: string
+  edits?: FileEdit[]
+}
+
+interface AgentHistoryResponse {
+  success: boolean
+  history?: Array<{
+    role: 'user' | 'assistant'
+    content: string
+    timestamp: number
+  }>
+  error?: string
 }
 
 /** Web 开发模式下由 Vite dev server 提供的 Agent 桥接 */
 const DEV_AGENT_INIT = '/__pi/agent/init'
 const DEV_AGENT_CHAT = '/__pi/agent/chat'
 const DEV_AGENT_DISPOSE = '/__pi/agent/dispose'
+const DEV_AGENT_HISTORY = '/__pi/agent/history'
 
 function hasElectronAgent(): boolean {
   return Boolean(window.electronAPI?.agentInitialize)
@@ -78,6 +90,21 @@ export const piAgentAPI = {
       return await callDevBridge<AgentChatResponse>(DEV_AGENT_CHAT, { message })
     } catch (error) {
       console.error('[Pi Agent] Chat error:', error)
+      return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  /**
+   * Restore the conversation history persisted by the agent session
+   */
+  async getHistory(): Promise<AgentHistoryResponse> {
+    try {
+      if (hasElectronAgent()) {
+        return await window.electronAPI.agentGetHistory()
+      }
+      return await callDevBridge<AgentHistoryResponse>(DEV_AGENT_HISTORY, {})
+    } catch (error) {
+      console.error('[Pi Agent] History error:', error)
       return { success: false, error: bridgeUnavailableError(error) }
     }
   },

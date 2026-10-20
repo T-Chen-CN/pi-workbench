@@ -8,9 +8,11 @@ interface EditorStore extends EditorState {
   updateOpenFile: (path: string, changes: Partial<OpenFile>) => void
   markDirty: (path: string) => void
   markClean: (path: string) => void
+  reset: () => void
+  hasDirtyFiles: () => boolean
 }
 
-export const useEditorStore = create<EditorStore>((set) => ({
+export const useEditorStore = create<EditorStore>((set, get) => ({
   currentFile: null,
   openFiles: [],
   unsavedChanges: new Set(),
@@ -60,13 +62,43 @@ export const useEditorStore = create<EditorStore>((set) => ({
     set((state) => {
       const newDirty = new Set(state.unsavedChanges)
       newDirty.add(path)
-      return { unsavedChanges: newDirty }
+      return {
+        unsavedChanges: newDirty,
+        openFiles: state.openFiles.map((file) =>
+          file.path === path ? { ...file, isDirty: true } : file
+        ),
+        currentFile:
+          state.currentFile?.path === path
+            ? { ...state.currentFile, isDirty: true }
+            : state.currentFile,
+      }
     }),
 
   markClean: (path) =>
     set((state) => {
       const newDirty = new Set(state.unsavedChanges)
       newDirty.delete(path)
-      return { unsavedChanges: newDirty }
+      return {
+        unsavedChanges: newDirty,
+        openFiles: state.openFiles.map((file) =>
+          file.path === path ? { ...file, isDirty: false } : file
+        ),
+        currentFile:
+          state.currentFile?.path === path
+            ? { ...state.currentFile, isDirty: false }
+            : state.currentFile,
+      }
     }),
+
+  reset: () =>
+    set({
+      currentFile: null,
+      openFiles: [],
+      unsavedChanges: new Set(),
+    }),
+
+  hasDirtyFiles: () => {
+    const state = get()
+    return state.openFiles.some((file) => file.isDirty) || state.unsavedChanges.size > 0
+  },
 }))

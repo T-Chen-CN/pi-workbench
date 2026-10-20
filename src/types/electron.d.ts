@@ -6,11 +6,18 @@ export interface ElectronAPI {
   listDirectory: (path: string) => Promise<ListDirectoryResult>
   exists: (path: string) => Promise<ExistsResult>
   stat: (path: string) => Promise<StatResult>
+  deletePath: (path: string) => Promise<WorkspaceResult>
+  renamePath: (oldPath: string, newPath: string) => Promise<WorkspaceResult>
+  watchWorkspace: (workspacePath: string) => Promise<WorkspaceResult>
+  unwatchWorkspace: () => Promise<WorkspaceResult>
+  onFsChanged: (callback: (payload: { type: string; path: string }) => void) => () => void
 
   // App configuration (portable architecture)
   getAppDir: () => Promise<GetAppDirResult>
   getSettings: () => Promise<GetSettingsResult>
   saveSettings: (settings: any) => Promise<SaveSettingsResult>
+  getRecentWorkspaces: () => Promise<RecentWorkspacesResult>
+  addRecentWorkspace: (workspacePath: string) => Promise<RecentWorkspacesResult>
 
   // Workspace configuration
   initWorkspace: (workspacePath: string) => Promise<WorkspaceResult>
@@ -138,10 +145,18 @@ export interface AgentInitResult {
   error?: string
 }
 
+export interface FileEdit {
+  path: string
+  oldContent: string
+  newContent: string
+}
+
 export interface AgentChatResult {
   success: boolean
   response?: string
   error?: string
+  /** Agent 本轮修改过的文件（用于 Diff 展示） */
+  edits?: FileEdit[]
 }
 
 export interface AgentStatusResult {
@@ -162,6 +177,12 @@ export interface AgentHistoryResult {
 
 export interface AgentDisposeResult {
   success: boolean
+  error?: string
+}
+
+export interface RecentWorkspacesResult {
+  success: boolean
+  workspaces: string[]
   error?: string
 }
 

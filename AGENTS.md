@@ -3,7 +3,8 @@
 > 本文件为 AI 助手（Claude、Pi Agent 等）提供项目特定的上下文、约束和最佳实践
 
 **项目**: Pi Workbench  
-**架构**: Electron 44 + React 19 + TypeScript  
+**架构**: Electron 44 + React 19 + TypeScript
+**运行要求**: Node.js ≥ 22.19（Pi SDK 要求；Electron 44 内置 Node 24）  
 **当前阶段**: Phase 1 完成，Phase 2 待启动  
 **最后更新**: 2026-10-20
 
@@ -32,17 +33,22 @@
 ```
 pi-workbench/
 ├── electron/          # Electron 主进程（TypeScript）
-│   ├── main.ts       # 窗口管理、IPC 处理
-│   └── preload.cts   # contextBridge API 暴露（编译为 CommonJS preload.cjs）
+│   ├── main.ts       # 窗口管理、IPC、文件监听、safeStorage、Agent 生命周期
+│   ├── preload.cts   # contextBridge API 暴露（CommonJS → preload.cjs）
+│   ├── tsconfig.json # 主进程构建（ESM）
+│   └── tsconfig.preload.json  # preload 构建（CommonJS）
 ├── src/              # React 渲染进程
 │   ├── components/   # UI 组件（扁平结构）
 │   ├── store/        # Zustand 状态管理（独立 store）
-│   ├── api/          # Electron IPC 封装 + Web dev 桥接
+│   ├── api/          # Electron IPC 封装 + Web dev 桥接 + diff
 │   ├── types/        # TypeScript 类型定义
 │   └── i18n/         # 国际化（中英文）
 ├── pi-bridge/        # Pi Agent 桥接层（AgentManager，已实现）
+│   ├── src/
+│   └── dist/         # 构建产物（不纳入版本库）
+├── tests/            # Vitest 单元测试
 ├── docs/             # 项目文档
-└── 配置文件          # package.json, tsconfig.json 等
+└── 配置文件          # package.json, tsconfig.json, eslint.config.js, vitest.config.ts
 ```
 
 **重要**: 
@@ -85,11 +91,10 @@ pi-workbench/
 
 #### 组件放置规则
 ```typescript
-// ✅ 正确：8 个顶层组件，扁平结构
+// ✅ 正确：7 个顶层组件，扁平结构
 src/components/
 ├── ChatPanel.tsx
 ├── DiffViewer.tsx
-├── Editor.tsx
 ├── FileExplorer.tsx
 ├── IPCDebug.tsx
 ├── MonacoEditor.tsx
@@ -104,12 +109,12 @@ src/components/chat/ChatPanel.tsx  // 不要这样！
 ```typescript
 // ✅ 正确：每个功能域一个独立 store
 src/store/
-├── agentStore.ts      // Agent 状态
-├── chatStore.ts       // 聊天消息
+├── chatStore.ts       // 聊天消息（支持历史恢复）
 ├── diffStore.ts       // Diff 查看器
-├── editorStore.ts     // 编辑器标签页
-├── errorStore.ts      // 全局错误
-└── i18nStore.ts       // 语言切换
+├── editorStore.ts     // 编辑器标签页、脏标记
+├── i18nStore.ts       // 语言切换（persist）
+├── toastStore.ts      // 全局 Toast（组件外也可调用）
+└── workspaceStore.ts  // 当前工作区 + 最近打开
 
 // ❌ 错误：不要合并 store
 src/store/appStore.ts  // 不要创建巨大的单一 store！
@@ -650,7 +655,15 @@ npm run web:dev       # http://localhost:5173
 
 # 仅 Electron（调试主进程）
 npm run electron:dev
+
+# 质量检查
+npm run type-check    # TypeScript
+npm test              # Vitest
+npm run lint          # ESLint
+npm run build         # 全量构建
 ```
+
+> `npm run dev` 会通过 `predev` 自动构建 `pi-bridge` 与主进程/preload，无需手动 build。
 
 ### IPC 调试
 - 使用 `<IPCDebug />` 组件查看 IPC 调用
@@ -726,7 +739,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 
 ### 添加新的 IPC 命令
 1. 在 `electron/main.ts` 添加 `ipcMain.handle('command:name', ...)`
-2. 在 `electron/preload.ts` 暴露到 `contextBridge`
+2. 在 `electron/preload.cts` 暴露到 `contextBridge`
 3. 在 `src/types/electron.d.ts` 添加类型定义
 4. 在 `src/api/index.ts` 封装 API
 

@@ -19,6 +19,7 @@ import type {
   ApiConfigSaveResult,
   FetchModelsResult,
   ApiProvider,
+  RecentWorkspacesResult,
 } from '../types/electron'
 
 // Mock API for browser development
@@ -55,6 +56,25 @@ const mockAPI = {
     console.log('[Mock] stat:', filePath)
     return { success: true, isFile: true, isDirectory: false, size: 1024 }
   },
+  deletePath: async (targetPath: string): Promise<WorkspaceResult> => {
+    console.log('[Mock] deletePath:', targetPath)
+    return { success: true }
+  },
+  renamePath: async (oldPath: string, newPath: string): Promise<WorkspaceResult> => {
+    console.log('[Mock] renamePath:', oldPath, '->', newPath)
+    return { success: true }
+  },
+  watchWorkspace: async (workspacePath: string): Promise<WorkspaceResult> => {
+    console.log('[Mock] watchWorkspace:', workspacePath)
+    return { success: true }
+  },
+  unwatchWorkspace: async (): Promise<WorkspaceResult> => {
+    return { success: true }
+  },
+  onFsChanged: (_callback: (payload: { type: string; path: string }) => void) => {
+    // Web 开发模式没有文件监听
+    return () => {}
+  },
   getAppDir: async (): Promise<GetAppDirResult> => {
     console.log('[Mock] getAppDir')
     return { success: true, appDir: '/mock/app/dir' }
@@ -74,6 +94,23 @@ const mockAPI = {
   saveSettings: async (settings: any): Promise<SaveSettingsResult> => {
     console.log('[Mock] saveSettings:', settings)
     return { success: true }
+  },
+  getRecentWorkspaces: async (): Promise<RecentWorkspacesResult> => {
+    try {
+      const saved = localStorage.getItem('pi-workbench-recent-workspaces')
+      return { success: true, workspaces: saved ? JSON.parse(saved) : [] }
+    } catch {
+      return { success: true, workspaces: [] }
+    }
+  },
+  addRecentWorkspace: async (workspacePath: string): Promise<RecentWorkspacesResult> => {
+    let existing: string[] = []
+    try {
+      existing = JSON.parse(localStorage.getItem('pi-workbench-recent-workspaces') || '[]')
+    } catch { /* ignore */ }
+    const workspaces = [workspacePath, ...existing.filter(p => p !== workspacePath)].slice(0, 10)
+    localStorage.setItem('pi-workbench-recent-workspaces', JSON.stringify(workspaces))
+    return { success: true, workspaces }
   },
   initWorkspace: async (workspacePath: string): Promise<WorkspaceResult> => {
     console.log('[Mock] initWorkspace:', workspacePath)
@@ -161,11 +198,19 @@ export const api = {
   writeFile: (path: string, content: string) => electronAPI.writeFile(path, content),
   exists: (path: string) => electronAPI.exists(path),
   stat: (path: string) => electronAPI.stat(path),
+  deletePath: (path: string) => electronAPI.deletePath(path),
+  renamePath: (oldPath: string, newPath: string) => electronAPI.renamePath(oldPath, newPath),
+  watchWorkspace: (workspacePath: string) => electronAPI.watchWorkspace(workspacePath),
+  unwatchWorkspace: () => electronAPI.unwatchWorkspace(),
+  onFsChanged: (callback: (payload: { type: string; path: string }) => void) =>
+    electronAPI.onFsChanged(callback),
 
   // App configuration (portable architecture)
   getAppDir: () => electronAPI.getAppDir(),
   getSettings: () => electronAPI.getSettings(),
   saveSettings: (settings: any) => electronAPI.saveSettings(settings),
+  getRecentWorkspaces: () => electronAPI.getRecentWorkspaces(),
+  addRecentWorkspace: (workspacePath: string) => electronAPI.addRecentWorkspace(workspacePath),
 
   // Workspace configuration
   initWorkspace: (workspacePath: string) => electronAPI.initWorkspace(workspacePath),

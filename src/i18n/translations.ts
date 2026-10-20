@@ -64,6 +64,12 @@ export const translations = {
     language: '语言',
     chinese: '中文',
     english: 'English',
+    recentWorkspaces: '最近打开',
+    discardChangesConfirm: '有未保存的修改，确定要关闭吗？未保存的内容会丢失。',
+    rename: '重命名',
+    delete: '删除',
+    deleteConfirm: '确定要删除吗？此操作不可撤销。',
+    renamePrompt: '输入新的名称：',
   },
 
   en: {
@@ -129,6 +135,12 @@ export const translations = {
     language: 'Language',
     chinese: '中文',
     english: 'English',
+    recentWorkspaces: 'Recent workspaces',
+    discardChangesConfirm: 'You have unsaved changes. Close anyway? Unsaved changes will be lost.',
+    rename: 'Rename',
+    delete: 'Delete',
+    deleteConfirm: 'Delete this item? This cannot be undone.',
+    renamePrompt: 'Enter a new name:',
   },
 }
 

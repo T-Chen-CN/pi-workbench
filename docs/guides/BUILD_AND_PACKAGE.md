@@ -1,90 +1,158 @@
-# Build Targets - 持续构建目标
+# 构建与打包指南
 
-## ✅ 已完成: Phase 2.3 - 文件操作完善
-**完成时间**: 约 60 分钟
-**成果**: 完整的文件读写流程
-
-### ✅ 完成的子目标
-- [x] 2.3.1: 文件保存 UI 反馈完善 - Toast 通知系统
-- [x] 2.3.2: 错误处理增强 - errorStore + handleError 工具函数
-- [x] 2.3.3: 文件新建功能 - Create dialog + 即时编辑器激活
-- [x] 2.3.4: 测试和验证 - TypeScript strict mode 通过
+**适用版本**: 0.1.0（Phase 1 完成）
+**最后更新**: 2026-10-20
 
 ---
 
-## ✅ 已完成: Phase 3 - Chat 聊天集成
-**完成时间**: 约 90 分钟
-**成果**: 与 Pi Agent 实时对话
+## 1. 环境要求
 
-### ✅ 完成的子目标
-- [x] 3.1: 聊天 UI 面板 - 完整的消息 UI、输入框、自动滚动
-- [x] 3.2: Pi Agent 集成 - sendMessageToAgent、初始化、上下文感知
-- [x] 3.3: 消息历史管理 - Zustand chatStore、消息持久化
-- [x] 3.4: Agent 状态管理 - 加载、错误、初始化状态
+| 依赖 | 版本 | 说明 |
+|---|---|---|
+| Node.js | **≥ 22.19** | Pi SDK 硬性要求（Electron 44 内置 Node 24） |
+| npm | 10+ | 使用 npm workspaces（`pi-bridge`） |
+| Git for Windows | 可选 | Agent 的 bash 工具需要 Git Bash（支持用户目录安装） |
 
----
-
-## ✅ 已完成: Phase 4.1 - Diff 查看器基础
-**完成时间**: 约 45 分钟
-**成果**: 代码变更预览和对比
-
-### ✅ 完成的子目标
-- [x] 4.1: Diff 渲染 - 基础 diff 算法 + 行级对比
-- [x] 4.1: 并排对比 - Split 视图 + Unified 视图切换
-- [x] 4.1: 集成到 ChatPanel - showCodeDiff 工具函数
+> 国内网络下载 Electron 二进制可能失败。仓库内的 `.npmrc` 已配置 `electron_mirror`（npmmirror）。
+> 若仍失败，可手动安装：
+>
+> ```bash
+> ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electron/install.js
+> ```
 
 ---
 
-## 后续优化项目 (Optional)
-- [ ] 4.2: 应用/拒绝 UI - 批量应用 diff 功能
-- [ ] 4.3: 修改历史 - Undo/Redo 支持
-- [ ] 5.1: 代码建议 - Agent 生成代码片段
-- [ ] 5.2: 快捷键 - 编辑器快捷键增强
-- [ ] 6.1: 主题切换 - Dark/Light 主题支持
+## 2. 开发运行
+
+```bash
+npm install
+npm run dev
+```
+
+`npm run dev` 会通过 `predev` **自动先构建** `pi-bridge`（`pi-bridge/dist`）与 Electron 主进程（`dist-electron`），再并行启动：
+
+- Vite dev server：`http://localhost:5173`
+- Electron：加载该 dev server，并自动打开 DevTools
+
+仅 Web 调试：
+
+```bash
+npm run web:dev
+```
+
+> Web 模式没有 Electron 主进程：文件系统与 Agent 由 Vite dev 中间件模拟/代理，仅用于界面与 Agent 调试。
 
 ---
 
-## 🎯 项目完成统计
+## 3. 构建
 
-### 代码质量
-✅ 零 TypeScript 编译错误
-✅ 严格模式 (strict: true)
-✅ 所有异步操作都有错误处理
-✅ 完整的类型注解
+```bash
+npm run build
+```
 
-### 功能完成度
-✅ 文件浏览和打开
-✅ 代码编辑和保存
-✅ 实时 Monaco 编辑器
-✅ 文件创建功能
-✅ Chat 聊天面板
-✅ Pi Agent 集成（模拟）
-✅ Diff 查看器
-✅ Toast 通知系统
-✅ 集中错误管理
+依次执行：
 
-### 用户交互
-✅ 所有操作都有 UI 反馈
-✅ 加载状态指示
-✅ 错误信息显示
-✅ Toast 通知反馈
-✅ 模态对话框（创建文件、Diff 查看）
+| 步骤 | 命令 | 产物 |
+|---|---|---|
+| 渲染进程 | `npm run build:renderer` | `dist/` |
+| 主进程 + preload | `npm run build:main` | `dist-electron/main.js`、`dist-electron/preload.cjs` |
+| Agent 桥接层 | `npm run build:bridge` | `pi-bridge/dist/`（已加入 `.gitignore`，构建时生成） |
 
-### Git 提交历史
-总计 5 个原子提交，每个子目标一个：
-1. Phase 2.3.2: 错误处理 + Tauri 配置修复
-2. Phase 2.3.3: 文件创建工作流
-3. Phase 2.3.4: 验证完成
-4. Phase 3.1: Chat 面板 + Mock Agent
-5. Phase 3.2: 真实 Pi Agent 集成
-6. Phase 4.1: Diff 查看器
+单独构建某一层：
+
+```bash
+npm run build:renderer
+npm run build:main
+npm run build:bridge
+```
+
+**注意**：preload 使用独立 tsconfig 以 **CommonJS** 编译（`preload.cjs`），因为 Electron 的 sandbox preload 不支持 ESM。
 
 ---
 
-## 关键成功指标 (KPI) - ✅ 全部达成
-- ✅ 每个子目标完成后提交 git
-- ✅ 每个 Phase 完成后构建验证
-- ✅ 零 TypeScript 编译错误
-- ✅ 所有功能都有 UI 反馈
-- ✅ 清晰的用户交互流程
+## 4. 打包
 
+```bash
+npm run package          # 当前平台
+npm run package:win      # Windows (NSIS)
+npm run package:mac      # macOS (DMG)
+npm run package:linux    # Linux (AppImage)
+```
+
+输出目录：`release/`
+
+electron-builder 关键配置（`package.json` → `build`）：
+
+```jsonc
+{
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*",
+    "pi-bridge/dist/**/*",     // AgentManager 必须打包
+    "pi-bridge/package.json",
+    "app-icon.png"
+  ]
+}
+```
+
+根依赖中必须保留：
+
+- `pi-bridge`（workspace 包）
+- `@earendil-works/pi-coding-agent`（其依赖会一并打包）
+
+### 打包产物验证
+
+```bash
+# 仅生成解包目录，便于快速验证
+npx electron-builder --dir --win
+
+# 检查 asar 内容
+npx asar list release/win-unpacked/resources/app.asar | grep pi-bridge
+npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent
+```
+
+建议在打包后手动冒烟测试一次：启动应用 → 打开工作区 → 配置 API → Fetch 模型 → 对话。
+
+---
+
+## 5. 质量检查
+
+```bash
+npm run type-check   # TypeScript（严格模式）
+npm test             # Vitest 单元测试
+npm run lint         # ESLint（含 react-hooks 规则）
+npm run format       # Prettier（会重排源码，按需执行）
+```
+
+CI（`.github/workflows/ci.yml`）在 push / PR 时执行：`npm ci` → type-check → test → lint → build。
+
+---
+
+## 6. 便携式数据目录
+
+应用在可执行文件所在目录（开发模式为项目根目录）创建并维护：
+
+```
+{appDir}/
+├── config/          # settings.json, api-config.json（API Key 经 safeStorage 加密）
+├── cache/           # 临时文件、Web dev 模式 Agent 数据
+├── data/            # Agent 模型配置与会话（data/agent/）
+└── logs/            # 预留
+```
+
+工作区级数据：`{workspace}/.pi-workbench/`
+
+卸载 / 迁移时整体拷贝应用目录即可。
+
+---
+
+## 7. 常见问题
+
+| 问题 | 处理 |
+|---|---|
+| `Electron failed to install` / 下载超时 | 使用 ELECTRON_MIRROR（见上）或重试 |
+| 端口 5173 被占用 | 结束占用进程；`vite.config.ts` 中 `strictPort: true` 会直接报错 |
+| 启动后 Fetch 无反应 | 检查 DevTools 是否出现 `window.electronAPI is undefined`（preload 加载失败） |
+| Agent 初始化失败 `Unexpected token 'with'` | Electron 版本过低（内置 Node < 22），必须使用 Electron ≥ 39 |
+| Windows 下 Agent bash 工具不可用 | 安装 Git for Windows；AgentManager 会自动把用户目录下的 Git Bash 加入 PATH |
+| 打包后 Agent 初始化失败 | 确认 `pi-bridge/dist` 与 `@earendil-works/pi-coding-agent` 已进入 asar（见上） |

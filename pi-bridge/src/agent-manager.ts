@@ -8,11 +8,13 @@
 import {
   createAgentSession,
   ModelRuntime,
+  SessionManager,
   type AgentSession,
   type CreateAgentSessionResult,
 } from '@earendil-works/pi-coding-agent'
 import * as path from 'path'
 import * as fs from 'fs/promises'
+import { existsSync, readFileSync } from 'fs'
 
 /** 写入 models.json 的自定义供应商 ID */
 const WORKBENCH_PROVIDER_ID = 'pi-workbench'
@@ -37,19 +39,39 @@ export interface AgentMessage {
   timestamp: number
 }
 
+export interface FileEdit {
+  path: string
+  oldContent: string
+  newContent: string
+}
+
+export interface AgentChatResult {
+  success: boolean
+  response?: string
+  error?: string
+  /** Agent 在本轮对话中修改过的文件（用于 Diff 展示） */
+  edits?: FileEdit[]
+}
+
 /**
  * Agent Manager 类
  *
  * 负责：
- * 1. 创建和初始化 Pi Agent 会话
+ * 1. 创建和初始化 Pi Agent 会话（自动恢复同一工作区的最近会话）
  * 2. 处理用户消息和 Agent 响应
- * 3. 管理会话状态
+ * 3. 捕获 Agent 的文件修改，供 Diff 查看器展示
  */
 export class AgentManager {
   private session: AgentSession | null = null
   private config: AgentConfig | null = null
   private messageHistory: AgentMessage[] = []
   private isProcessing = false
+  private unsubscribe: (() => void) | null = null
+
+  /** toolCallId -> 执行前的文件快照 */
+  private editSnapshots = new Map<string, { path: string; oldContent: string }>()
+  /** 本轮对话产生的文件修改 */
+  private pendingEdits: FileEdit[] = []
 
   /**
    * 将用户配置的 URL / 模型写入 Pi 的 models.json，
@@ -78,6 +100,89 @@ export class AgentManager {
   }
 
   /**
+   * Windows 上 Pi 的 bash 工具需要 Git Bash：它只查 Program Files 和 PATH。
+   * 若 Git 安装在用户目录（常见于 per-user 安装），这里把 bash.exe 所在目录补进 PATH。
+   */
+  private ensureBashOnPath(): void {
+    if (process.platform !== 'win32') return
+
+    const localAppData = process.env.LOCALAPPDATA ?? ''
+    const programFiles = process.env.ProgramFiles ?? ''
+    const programFilesX86 = process.env['ProgramFiles(x86)'] ?? ''
+
+    const candidates = [
+      path.join(localAppData, 'Programs', 'Git', 'bin'),
+      path.join(localAppData, 'Programs', 'Git', 'usr', 'bin'),
+      path.join(programFiles, 'Git', 'bin'),
+      path.join(programFilesX86, 'Git', 'bin'),
+      'C:\\Program Files\\Git\\bin',
+    ].filter((dir) => dir && existsSync(path.join(dir, 'bash.exe')))
+
+    if (candidates.length === 0) {
+      console.warn('[Agent Manager] Git Bash not found; the bash tool will be unavailable')
+      return
+    }
+
+    const currentPath = process.env.PATH ?? ''
+    const existing = currentPath
+      .split(path.delimiter)
+      .map((entry) => entry.toLowerCase())
+      .filter(Boolean)
+    const missing = candidates.filter((dir) => !existing.includes(dir.toLowerCase()))
+
+    if (missing.length > 0) {
+      process.env.PATH = [...missing, currentPath].join(path.delimiter)
+      console.log('[Agent Manager] Added Git Bash to PATH:', missing.join(', '))
+    }
+  }
+
+  /** 把工具参数里的路径解析为绝对路径 */
+  private resolveToolPath(toolPath: unknown): string | null {
+    if (typeof toolPath !== 'string' || !toolPath) return null
+    return path.isAbsolute(toolPath)
+      ? toolPath
+      : path.resolve(this.config?.workspaceDir ?? process.cwd(), toolPath)
+  }
+
+  /**
+   * 订阅工具执行事件，记录 write/edit 前后的文件内容。
+   * Pi 的 write / edit 工具参数分别为 { path, content } 和 { path, edits }。
+   */
+  private subscribeToToolEdits(): void {
+    if (!this.session) return
+
+    this.unsubscribe = this.session.subscribe((event: any) => {
+      try {
+        if (event.type === 'tool_execution_start') {
+          if (event.toolName !== 'write' && event.toolName !== 'edit') return
+          const target = this.resolveToolPath(event.args?.path)
+          if (!target) return
+          const oldContent = existsSync(target) ? readFileSync(target, 'utf-8') : ''
+          this.editSnapshots.set(event.toolCallId, { path: target, oldContent })
+          return
+        }
+
+        if (event.type === 'tool_execution_end') {
+          const snapshot = this.editSnapshots.get(event.toolCallId)
+          if (!snapshot) return
+          this.editSnapshots.delete(event.toolCallId)
+
+          const newContent = existsSync(snapshot.path) ? readFileSync(snapshot.path, 'utf-8') : ''
+          if (newContent !== snapshot.oldContent) {
+            this.pendingEdits.push({
+              path: snapshot.path,
+              oldContent: snapshot.oldContent,
+              newContent,
+            })
+          }
+        }
+      } catch (error) {
+        console.warn('[Agent Manager] Failed to capture tool edit:', error)
+      }
+    })
+  }
+
+  /**
    * 初始化 Agent 会话
    *
    * @param config Agent 配置
@@ -98,6 +203,8 @@ export class AgentManager {
       // 重新初始化时释放旧会话
       if (this.session) {
         try {
+          this.unsubscribe?.()
+          this.unsubscribe = null
           this.session.dispose()
         } catch (error) {
           console.warn('[Agent Manager] Failed to dispose previous session:', error)
@@ -107,6 +214,9 @@ export class AgentManager {
 
       const agentDir = config.agentDir || path.join(config.workspaceDir, '.pi-workbench', 'agent')
       const modelsPath = await this.writeModelsConfig(agentDir, config)
+
+      // Windows: 确保 bash 工具能找到 Git Bash
+      this.ensureBashOnPath()
 
       // API Key 通过环境变量提供给 models.json（不写入磁盘）
       process.env[API_KEY_ENV] = apiKey
@@ -132,18 +242,25 @@ export class AgentManager {
         }
       }
 
+      // 同一工作区恢复最近的会话（跨重启保留上下文）
+      const sessionDir = path.join(agentDir, 'sessions')
+      const sessionManager = SessionManager.continueRecent(config.workspaceDir, sessionDir)
+
       // 创建 Pi Coding Agent 会话（自带 read/write/edit/bash 工具）
       const result: CreateAgentSessionResult = await createAgentSession({
         cwd: config.workspaceDir,
         agentDir,
         modelRuntime,
         model,
+        sessionManager,
       })
 
       this.session = result.session
+      this.subscribeToToolEdits()
 
       console.log('[Agent Manager] Agent initialized successfully')
       console.log('[Agent Manager] Using model:', `${model.provider}/${model.id}`)
+      console.log('[Agent Manager] Session file:', sessionManager.getSessionFile() ?? '(new, not persisted yet)')
 
       return { success: true }
     } catch (error) {
@@ -161,9 +278,9 @@ export class AgentManager {
    * 发送消息给 Agent
    *
    * @param message 用户消息
-   * @returns Agent 响应
+   * @returns Agent 响应（含本轮文件修改）
    */
-  async chat(message: string): Promise<{ success: boolean; response?: string; error?: string }> {
+  async chat(message: string): Promise<AgentChatResult> {
     if (!this.session) {
       return {
         success: false,
@@ -180,6 +297,7 @@ export class AgentManager {
 
     try {
       this.isProcessing = true
+      this.pendingEdits = []
       console.log('[Agent Manager] Sending message to agent:', message.substring(0, 100))
 
       // 记录用户消息
@@ -191,6 +309,9 @@ export class AgentManager {
 
       // 发送用户消息并等待 Agent 完成
       await this.session.prompt(message)
+
+      // 收集本轮文件修改（在读取回复前取出，确保不串到下一轮）
+      const edits = this.pendingEdits.splice(0)
 
       // 获取 Agent 的最新消息
       const messages = this.session.messages
@@ -205,17 +326,17 @@ export class AgentManager {
       }
 
       if (!lastAssistant) {
-        return { success: false, error: 'Agent did not produce a response.' }
+        return { success: false, error: 'Agent did not produce a response.', edits }
       }
 
       // Pi 在请求失败时不会抛异常，而是把错误放在 stopReason/errorMessage 中
       if (lastAssistant.stopReason === 'error') {
         const detail = lastAssistant.errorMessage || 'Agent request failed'
         console.error('[Agent Manager] Provider error:', detail)
-        return { success: false, error: detail }
+        return { success: false, error: detail, edits }
       }
       if (lastAssistant.stopReason === 'aborted') {
-        return { success: false, error: 'Agent request was aborted.' }
+        return { success: false, error: 'Agent request was aborted.', edits }
       }
 
       let assistantResponse = ''
@@ -241,10 +362,14 @@ export class AgentManager {
 
       console.log('[Agent Manager] Agent response received')
       console.log('[Agent Manager] Response preview:', assistantResponse.substring(0, 200))
+      if (edits.length > 0) {
+        console.log('[Agent Manager] Files edited:', edits.map(e => e.path).join(', '))
+      }
 
       return {
         success: true,
         response: assistantResponse,
+        edits,
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
@@ -254,6 +379,7 @@ export class AgentManager {
       return {
         success: false,
         error: `Agent error: ${errorMessage}`,
+        edits: this.pendingEdits.splice(0),
       }
     } finally {
       this.isProcessing = false
@@ -261,22 +387,63 @@ export class AgentManager {
   }
 
   /**
-   * 获取消息历史
+   * 获取消息历史（本轮进程内的增量）
    */
   getMessageHistory(): AgentMessage[] {
     return this.messageHistory
   }
 
   /**
+   * 从持久化的 Pi 会话中恢复可展示的对话历史
+   */
+  getSessionMessages(): AgentMessage[] {
+    const messages = this.session?.messages ?? []
+    const result: AgentMessage[] = []
+
+    for (const msg of messages) {
+      if (msg.role !== 'user' && msg.role !== 'assistant') continue
+
+      let content = ''
+      if (typeof msg.content === 'string') {
+        content = msg.content
+      } else if (Array.isArray(msg.content)) {
+        content = msg.content
+          .filter((part: any) => part.type === 'text')
+          .map((part: any) => part.text)
+          .join('\n')
+      }
+      if (!content) continue
+
+      result.push({
+        role: msg.role,
+        content,
+        timestamp: typeof msg.timestamp === 'number' ? msg.timestamp : Date.now(),
+      })
+    }
+
+    return result
+  }
+
+  /**
    * 清理资源
    */
   async dispose() {
+    if (this.unsubscribe) {
+      try {
+        this.unsubscribe()
+      } catch {
+        // ignore
+      }
+      this.unsubscribe = null
+    }
     if (this.session) {
       this.session.dispose()
       this.session = null
     }
     this.config = null
     this.messageHistory = []
+    this.pendingEdits = []
+    this.editSnapshots.clear()
   }
 
   /**

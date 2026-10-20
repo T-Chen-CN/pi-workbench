@@ -16,9 +16,11 @@ export interface ChatState {
 
   // Actions
   addMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void
+  setMessages: (messages: Array<Omit<ChatMessage, 'id'>>) => void
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
   clearMessages: () => void
+  reset: () => void
   setInitialized: (initialized: boolean) => void
 }
 
@@ -40,8 +42,17 @@ export const useChatStore = create<ChatState>((set) => ({
       ],
     })),
 
+  setMessages: (messages) =>
+    set({
+      messages: messages.map((message, index) => ({
+        ...message,
+        id: `msg-${message.timestamp}-${index}`,
+      })),
+    }),
+
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
   clearMessages: () => set({ messages: [] }),
+  reset: () => set({ messages: [], isLoading: false, error: null, isInitialized: false }),
   setInitialized: (initialized) => set({ isInitialized: initialized }),
 }))

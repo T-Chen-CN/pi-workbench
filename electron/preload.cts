@@ -8,11 +8,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listDirectory: (path: string) => ipcRenderer.invoke('fs:listDirectory', path),
   exists: (path: string) => ipcRenderer.invoke('fs:exists', path),
   stat: (path: string) => ipcRenderer.invoke('fs:stat', path),
+  deletePath: (path: string) => ipcRenderer.invoke('fs:delete', path),
+  renamePath: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:rename', oldPath, newPath),
+  watchWorkspace: (workspacePath: string) => ipcRenderer.invoke('fs:watch', workspacePath),
+  unwatchWorkspace: () => ipcRenderer.invoke('fs:unwatch'),
+  onFsChanged: (callback: (payload: { type: string; path: string }) => void) => {
+    const listener = (_event: unknown, payload: { type: string; path: string }) => callback(payload)
+    ipcRenderer.on('fs:changed', listener)
+    return () => ipcRenderer.removeListener('fs:changed', listener)
+  },
 
   // 应用配置管理（便携式架构）
   getAppDir: () => ipcRenderer.invoke('app:getAppDir'),
   getSettings: () => ipcRenderer.invoke('app:getSettings'),
   saveSettings: (settings: any) => ipcRenderer.invoke('app:saveSettings', settings),
+  getRecentWorkspaces: () => ipcRenderer.invoke('app:getRecentWorkspaces'),
+  addRecentWorkspace: (workspacePath: string) => ipcRenderer.invoke('app:addRecentWorkspace', workspacePath),
 
   // 工作区配置管理
   initWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace:init', workspacePath),
