@@ -370,8 +370,22 @@ ipcMain.handle('apiConfig:fetchModels', async (_event, apiUrl: string, apiKey: s
     let models: string[] = []
 
     if (provider === 'anthropic') {
-      // Anthropic doesn't have a models API, return known models
-      models = DEFAULT_API_CONFIGS.anthropic.models
+      // Call Anthropic /v1/models endpoint
+      // https://docs.anthropic.com/en/api/models
+      const response = await fetch(`${apiUrl}/models`, {
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01'
+        }
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch models: ${response.statusText}`)
+      }
+
+      const data: any = await response.json()
+      // Anthropic returns { data: [{id, ...}, ...] }
+      models = data.data.map((m: any) => m.id)
     } else if (provider === 'openai') {
       // Call OpenAI /v1/models endpoint
       const response = await fetch(`${apiUrl}/models`, {
