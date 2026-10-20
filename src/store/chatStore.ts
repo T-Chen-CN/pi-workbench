@@ -10,11 +10,18 @@ export interface ChatMessage {
   isStreaming?: boolean
 }
 
+export interface ChatAttachment {
+  path: string
+  name: string
+}
+
 export interface ChatState {
   messages: ChatMessage[]
   isInitialized: boolean
   isLoading: boolean
   error: string | null
+  /** 下一条消息要附带的工作区文件 */
+  attachments: ChatAttachment[]
 
   // Actions
   addMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void
@@ -22,6 +29,9 @@ export interface ChatState {
   startStreamingMessage: () => string
   appendToMessage: (id: string, delta: string) => void
   finishStreamingMessage: (id: string, content?: string) => void
+  addAttachment: (attachment: ChatAttachment) => void
+  removeAttachment: (path: string) => void
+  clearAttachments: () => void
   setMessages: (messages: Array<Omit<ChatMessage, 'id'>>) => void
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
@@ -35,6 +45,7 @@ export const useChatStore = create<ChatState>((set) => ({
   isInitialized: false,
   isLoading: false,
   error: null,
+  attachments: [],
 
   addMessage: (message) =>
     set((state) => ({
@@ -91,9 +102,24 @@ export const useChatStore = create<ChatState>((set) => ({
       ),
     })),
 
+  addAttachment: (attachment) =>
+    set((state) => ({
+      attachments: state.attachments.some((item) => item.path === attachment.path)
+        ? state.attachments
+        : [...state.attachments, attachment],
+    })),
+
+  removeAttachment: (path) =>
+    set((state) => ({
+      attachments: state.attachments.filter((item) => item.path !== path),
+    })),
+
+  clearAttachments: () => set({ attachments: [] }),
+
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
   clearMessages: () => set({ messages: [] }),
-  reset: () => set({ messages: [], isLoading: false, error: null, isInitialized: false }),
+  reset: () =>
+    set({ messages: [], isLoading: false, error: null, isInitialized: false, attachments: [] }),
   setInitialized: (initialized) => set({ isInitialized: initialized }),
 }))

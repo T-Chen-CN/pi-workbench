@@ -1,9 +1,20 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useChatStore } from '../store/chatStore'
 import { useDiffStore } from '../store/diffStore'
+import { useEditorStore } from '../store/editorStore'
+import { useI18nStore } from '../store/i18nStore'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
+import { buildContextPrompt } from '../api/chatContext'
 import { toast } from '../store/toastStore'
+
+interface ChatPanelProps {
+  workspacePath: string
+}
+
+/** 单个附件与单条消息的上下文字符上限 */
+const MAX_CONTEXT_FILE_CHARS = 120_000
+const MAX_CONTEXT_TOTAL_CHARS = 300_000
 
 interface ChatPanelProps {
   workspacePath: string
@@ -21,13 +32,21 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     startStreamingMessage,
     appendToMessage,
     finishStreamingMessage,
+    attachments,
+    addAttachment,
+    removeAttachment,
+    clearAttachments,
   } = useChatStore()
+
+  const openFiles = useEditorStore((state) => state.openFiles)
+  const { t } = useI18nStore()
 
   const openEdits = useDiffStore((state) => state.openEdits)
 
   const [input, setInput] = useState('')
   const [initialized, setInitialized] = useState(false)
   const [needsApiKey, setNeedsApiKey] = useState(false)
+  const [showAttachMenu, setShowAttachMenu] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -133,12 +152,35 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       content: userMessage,
     })
 
-    // Send to agent
+    setShowAttachMenu(false)
     setLoading(true)
+
     // 先插入流式占位消息，文本增量到达时直接追加
     const assistantId = startStreamingMessage()
     try {
-      const result = await piAgentAPI.chat(userMessage, (delta) => {
+      // 读取附件内容并注入本轮 prompt；用户气泡只显示原始文本
+      const contextFiles: Array<{ path: string; content: string }> = []
+      let totalChars = 0
+      for (const attachment of attachments) {
+        const file = await api.readFile(attachment.path)
+        if (!file.success || typeof file.content !== 'string') {
+          toast.error(`${t('contextReadFailed')}: ${attachment.name}`)
+          continue
+        }
+        if (file.content.length > MAX_CONTEXT_FILE_CHARS) {
+          toast.error(`${t('contextTooLarge')}: ${attachment.name}`)
+          continue
+        }
+        if (totalChars + file.content.length > MAX_CONTEXT_TOTAL_CHARS) {
+          toast.error(t('contextTotalTooLarge'))
+          break
+        }
+        totalChars += file.content.length
+        contextFiles.push({ path: attachment.path, content: file.content })
+      }
+      const prompt = buildContextPrompt(userMessage, contextFiles)
+
+      const result = await piAgentAPI.chat(prompt, (delta) => {
         appendToMessage(assistantId, delta)
       })
 
@@ -163,6 +205,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       finishStreamingMessage(assistantId, `Error: ${errorMsg}`)
     } finally {
       setLoading(false)
+      clearAttachments()
       inputRef.current?.focus()
     }
   }
@@ -265,7 +308,68 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
       {/* Input */}
       <div className="border-t border-gray-700 p-4">
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {attachments.map((attachment) => (
+              <span
+                key={attachment.path}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-gray-800 border border-gray-700 text-xs text-gray-300"
+                title={attachment.path}
+              >
+                📄 {attachment.name}
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(attachment.path)}
+                  title={t('removeAttachment')}
+                  className="bg-none border-none cursor-pointer text-gray-500 hover:text-gray-200"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="flex gap-2">
+          <div className="relative flex">
+            <button
+              type="button"
+              onClick={() => setShowAttachMenu((open) => !open)}
+              disabled={!initialized || isLoading}
+              title={t('attachContext')}
+              className="px-3 rounded border border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              ＋
+            </button>
+            {showAttachMenu && (
+              <div className="absolute bottom-full left-0 mb-2 w-72 max-h-64 overflow-y-auto bg-gray-800 border border-gray-700 rounded shadow-lg z-10">
+                <div className="px-3 py-2 text-xs text-gray-400 border-b border-gray-700">
+                  {t('attachContext')}
+                </div>
+                {openFiles.length === 0 ? (
+                  <div className="px-3 py-2 text-sm text-gray-500">{t('noOpenFiles')}</div>
+                ) : (
+                  openFiles.map((file) => {
+                    const attached = attachments.some((item) => item.path === file.path)
+                    return (
+                      <button
+                        key={file.path}
+                        type="button"
+                        disabled={attached}
+                        onClick={() => {
+                          addAttachment({ path: file.path, name: file.name })
+                          setShowAttachMenu(false)
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed bg-none border-none cursor-pointer"
+                      >
+                        <div>{file.name}</div>
+                        <div className="text-xs text-gray-500 truncate">{file.path}</div>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            )}
+          </div>
           <textarea
             ref={inputRef}
             value={input}
