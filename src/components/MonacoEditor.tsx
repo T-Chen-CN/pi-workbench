@@ -104,37 +104,31 @@ export const MonacoEditor: React.FC = () => {
     }
   }, [editorReady])
 
-  // 外部文件变化：未被本地修改时同步磁盘内容；被外部删除时关闭标签
-  const currentPath = currentFile?.path
-
+  // 外部文件变化：所有已打开文件（含后台标签页）都同步磁盘内容；被外部删除时关闭标签
   useEffect(() => {
-    if (!currentPath) return
-
     const unsubscribe = api.onFsChanged(async (payload) => {
-      if (payload.path !== currentPath) return
-
       const state = useEditorStore.getState()
-      const target = state.openFiles.find((file) => file.path === currentPath)
+      const target = state.openFiles.find((file) => file.path === payload.path)
       if (!target) return
 
-      const existsResult = await api.exists(currentPath)
+      const existsResult = await api.exists(payload.path)
       if (existsResult.success && existsResult.exists === false) {
-        state.removeOpenFile(currentPath)
+        state.removeOpenFile(payload.path)
         toast.info(`File removed: ${target.name}`)
         return
       }
 
       if (target.isDirty) return
 
-      const result = await api.readFile(currentPath)
+      const result = await api.readFile(payload.path)
       if (result.success && typeof result.content === 'string' && result.content !== target.content) {
-        state.updateOpenFile(currentPath, { content: result.content })
-        state.markClean(currentPath)
+        state.updateOpenFile(payload.path, { content: result.content })
+        state.markClean(payload.path)
       }
     })
 
     return unsubscribe
-  }, [currentPath])
+  }, [])
 
   const saveFile = useCallback(
     async (pathOverride?: string) => {

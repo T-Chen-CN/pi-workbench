@@ -20,6 +20,8 @@ import { existsSync, readFileSync } from 'fs'
 const WORKBENCH_PROVIDER_ID = 'pi-workbench'
 /** models.json 中引用的环境变量名（避免把 API Key 写进磁盘） */
 const API_KEY_ENV = 'PI_WORKBENCH_API_KEY'
+/** 单轮请求的默认超时（毫秒）；超时后自动中止，避免 Agent 永远处于忙碌状态 */
+const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000
 /** 与 src/api/chatContext.ts 的标记保持一致 */
 const CONTEXT_BLOCK_START = '<pi-workbench-context>'
 const CONTEXT_BLOCK_END = '</pi-workbench-context>'
@@ -70,6 +72,8 @@ export interface AgentChatResult {
 export interface AgentChatOptions {
   /** 接收流式文本增量（模型逐段输出时调用） */
   onTextDelta?: (delta: string) => void
+  /** 单轮请求超时（毫秒），0 表示不超时；默认 10 分钟 */
+  timeoutMs?: number
 }
 
 /**
@@ -324,6 +328,10 @@ export class AgentManager {
       }
     }
 
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    let timeoutTimer: NodeJS.Timeout | null = null
+    let timedOut = false
+
     try {
       this.isProcessing = true
       this.onTextDelta = options?.onTextDelta ?? null
@@ -337,11 +345,33 @@ export class AgentManager {
         timestamp: Date.now(),
       })
 
-      // 发送用户消息并等待 Agent 完成
-      await this.session.prompt(message)
+      // 发送用户消息并等待 Agent 完成；超时后中止，避免永久阻塞后续请求
+      const promptPromise = this.session.prompt(message)
+      if (timeoutMs > 0) {
+        timeoutTimer = setTimeout(() => {
+          timedOut = true
+          const session = this.session
+          console.warn(`[Agent Manager] Request timed out after ${timeoutMs}ms; aborting`)
+          if (session) {
+            void session.abort().catch((error) => {
+              console.warn('[Agent Manager] Failed to abort timed-out request:', error)
+            })
+          }
+        }, timeoutMs)
+        timeoutTimer.unref?.()
+      }
+      await promptPromise
 
       // 收集本轮文件修改（在读取回复前取出，确保不串到下一轮）
       const edits = this.pendingEdits.splice(0)
+
+      if (timedOut) {
+        return {
+          success: false,
+          error: `Agent request timed out after ${Math.round(timeoutMs / 1000)}s`,
+          edits,
+        }
+      }
 
       // 获取 Agent 的最新消息
       const messages = this.session.messages
@@ -412,8 +442,19 @@ export class AgentManager {
         edits: this.pendingEdits.splice(0),
       }
     } finally {
+      if (timeoutTimer) clearTimeout(timeoutTimer)
       this.isProcessing = false
       this.onTextDelta = null
+    }
+  }
+
+  /** 中止当前请求（用户手动停止或超时） */
+  async abort(): Promise<void> {
+    if (!this.session) return
+    try {
+      await this.session.abort()
+    } catch (error) {
+      console.warn('[Agent Manager] Failed to abort request:', error)
     }
   }
 

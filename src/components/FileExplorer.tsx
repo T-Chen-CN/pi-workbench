@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '../api'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
@@ -13,6 +13,25 @@ interface FileEntry {
 interface TreeNode extends FileEntry {
   isExpanded?: boolean
   children?: TreeNode[]
+}
+
+/** 刷新目录时保留已有节点的展开状态与已加载的子节点 */
+function mergeTree(previous: TreeNode[], incoming: TreeNode[]): TreeNode[] {
+  const byPath = new Map(previous.map((node) => [node.path, node]))
+  return incoming.map((node) => {
+    const existing = byPath.get(node.path)
+    return existing
+      ? { ...node, isExpanded: existing.isExpanded, children: existing.children }
+      : node
+  })
+}
+
+/** 目录优先、名称排序 */
+function sortEntries(items: FileEntry[]): TreeNode[] {
+  return [...items].sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return b.isDirectory ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
 }
 
 interface CreateFileDialogState {
@@ -34,35 +53,33 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
   const [contextMenu, setContextMenu] = useState<{ node: TreeNode; x: number; y: number } | null>(null)
   const { addOpenFile } = useEditorStore.getState()
 
-  // Initialize tree when workspace changes
+  // 保存最新树，供异步刷新读取（避免闭包拿到旧的展开状态）
+  const treeRef = useRef<TreeNode[]>([])
   useEffect(() => {
-    if (workspacePath) {
-      loadRootDirectory(workspacePath)
-    }
-  }, [workspacePath])
+    treeRef.current = tree
+  }, [tree])
 
-  // 文件系统变化时刷新目录树（只在新增/删除/重命名时刷新，忽略编辑器保存）
-  useEffect(() => {
-    if (!workspacePath) return
-    const unsubscribe = api.onFsChanged((payload) => {
-      if (payload.type === 'rename') {
-        void loadRootDirectory(workspacePath)
-      }
-    })
-    return unsubscribe
-  }, [workspacePath])
+  /** 递归刷新所有已展开目录的子节点，保持展开状态 */
+  const refreshExpanded = useCallback(async function refresh(nodes: TreeNode[]): Promise<TreeNode[]> {
+    return Promise.all(
+      nodes.map(async (node) => {
+        if (!node.isDirectory || !node.isExpanded) return node
+        const result = await api.listDirectory(node.path)
+        if (!result.success || !result.items) return node
+        const merged = mergeTree(node.children ?? [], sortEntries(result.items))
+        return { ...node, children: await refresh(merged) }
+      })
+    )
+  }, [])
 
-  const loadRootDirectory = async (rootPath: string) => {
+  const loadRootDirectory = useCallback(async (rootPath: string) => {
     try {
       setLoading(true)
       setError(null)
       const dirResult = await api.listDirectory(rootPath)
       if (dirResult.success && dirResult.items) {
-        const sortedFiles = [...dirResult.items].sort((a, b) => {
-          if (a.isDirectory !== b.isDirectory) return b.isDirectory ? -1 : 1
-          return a.name.localeCompare(b.name)
-        })
-        setTree(sortedFiles as TreeNode[])
+        const merged = mergeTree(treeRef.current, sortEntries(dirResult.items))
+        setTree(await refreshExpanded(merged))
       } else {
         setError(dirResult.error || 'Failed to list workspace directory')
       }
@@ -73,7 +90,33 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
     } finally {
       setLoading(false)
     }
-  }
+  }, [refreshExpanded])
+
+  // Initialize tree when workspace changes
+  useEffect(() => {
+    if (workspacePath) {
+      loadRootDirectory(workspacePath)
+    }
+  }, [workspacePath, loadRootDirectory])
+
+  // 文件系统变化时刷新目录树（只在新增/删除/重命名时刷新，忽略编辑器保存）
+  // 防抖合并批量事件，避免一次批量操作触发多次根目录重建
+  useEffect(() => {
+    if (!workspacePath) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const unsubscribe = api.onFsChanged((payload) => {
+      if (payload.type !== 'rename') return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        void loadRootDirectory(workspacePath)
+      }, 200)
+    })
+    return () => {
+      unsubscribe()
+      if (timer) clearTimeout(timer)
+    }
+  }, [workspacePath, loadRootDirectory])
 
   const loadDirectory = async (path: string): Promise<FileEntry[]> => {
     try {
@@ -81,10 +124,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
       if (!result.success || !result.items) {
         throw new Error(result.error || 'Failed to list directory')
       }
-      return result.items.sort((a, b) => {
-        if (a.isDirectory !== b.isDirectory) return b.isDirectory ? -1 : 1
-        return a.name.localeCompare(b.name)
-      })
+      return sortEntries(result.items)
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
       toast.error(`Failed to load directory: ${errorMsg}`)
@@ -131,9 +171,9 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
           return n
         })
       }
-      setTree(updateWithChildren(tree))
+      setTree((previous) => updateWithChildren(previous))
     } else {
-      setTree(updateNode(tree))
+      setTree((previous) => updateNode(previous))
     }
   }
 

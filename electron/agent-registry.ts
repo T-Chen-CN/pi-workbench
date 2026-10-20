@@ -18,6 +18,8 @@ export interface RegisteredAgent {
     options?: { onTextDelta?: (delta: string) => void }
   ) => Promise<AgentChatOutcome>
   dispose: () => Promise<void> | void
+  /** 中止正在进行的请求（可选，Agent 不支持时忽略） */
+  abort?: () => Promise<void>
   isInitialized: () => boolean
   getSessionMessages?: () => unknown
   getMessageHistory?: () => unknown

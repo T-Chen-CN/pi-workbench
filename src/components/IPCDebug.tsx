@@ -62,9 +62,13 @@ export const IPCDebug: React.FC = () => {
         })
       }
 
-      // Test 4: writeFile (to temp location)
+      // Test 4: writeFile（写入应用缓存目录，避免落在工作区之外）
       try {
-        const testPath = './test-electron-write.txt'
+        const appDirResult = await api.getAppDir()
+        const separator = appDirResult.appDir?.includes('\\') ? '\\' : '/'
+        const testPath = appDirResult.success && appDirResult.appDir
+          ? `${appDirResult.appDir}${separator}cache${separator}temp${separator}ipc-debug-write.txt`
+          : './test-electron-write.txt'
         const result = await api.writeFile(testPath, 'Test content from Electron')
         results.push({
           command: 'writeFile',

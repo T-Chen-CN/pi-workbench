@@ -298,7 +298,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       <div className="border-t border-gray-700 pt-6">
         <h3 className="text-lg font-semibold mb-3">Application Info</h3>
         <div className="text-sm text-gray-400 space-y-1">
-          <p>Version: 0.1.0 (Phase 1 Complete)</p>
+          <p>Version: 0.1.0 (Phase 5 Complete)</p>
           <p>Framework: Electron 44 + React 19</p>
           <p>Architecture: Portable (self-contained)</p>
           <p>API Support: Anthropic, OpenAI, Custom</p>

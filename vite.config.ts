@@ -79,6 +79,7 @@ function devModelsProxy(): Plugin {
  */
 const DEV_AGENT_INIT = '/__pi/agent/init'
 const DEV_AGENT_CHAT = '/__pi/agent/chat'
+const DEV_AGENT_ABORT = '/__pi/agent/abort'
 const DEV_AGENT_DISPOSE = '/__pi/agent/dispose'
 const DEV_AGENT_HISTORY = '/__pi/agent/history'
 
@@ -151,6 +152,16 @@ function devAgentBridge(): Plugin {
           }
           const body = await readJson(req)
           reply(res, await agentManager.chat(String(body.message ?? '')))
+        } catch (error) {
+          reply(res, { success: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      })
+
+      server.middlewares.use(DEV_AGENT_ABORT, async (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') return next()
+        try {
+          if (agentManager) await agentManager.abort()
+          reply(res, { success: true })
         } catch (error) {
           reply(res, { success: false, error: error instanceof Error ? error.message : String(error) })
         }

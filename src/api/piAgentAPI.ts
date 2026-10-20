@@ -38,6 +38,7 @@ interface AgentHistoryResponse {
 /** Web 开发模式下由 Vite dev server 提供的 Agent 桥接 */
 const DEV_AGENT_INIT = '/__pi/agent/init'
 const DEV_AGENT_CHAT = '/__pi/agent/chat'
+const DEV_AGENT_ABORT = '/__pi/agent/abort'
 const DEV_AGENT_DISPOSE = '/__pi/agent/dispose'
 const DEV_AGENT_HISTORY = '/__pi/agent/history'
 
@@ -124,6 +125,21 @@ export const piAgentAPI = {
       return await callDevBridge<AgentHistoryResponse>(DEV_AGENT_HISTORY, {})
     } catch (error) {
       console.error('[Pi Agent] History error:', error)
+      return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  /**
+   * Abort the request currently in flight
+   */
+  async abort(workspaceDir?: string): Promise<AgentResponse> {
+    try {
+      if (hasElectronAgent()) {
+        return await window.electronAPI.agentAbort(workspaceDir)
+      }
+      return await callDevBridge<AgentResponse>(DEV_AGENT_ABORT, {})
+    } catch (error) {
+      console.error('[Pi Agent] Abort error:', error)
       return { success: false, error: bridgeUnavailableError(error) }
     }
   },

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 
 export type ToastType = 'success' | 'error' | 'info' | 'warning'
 
@@ -16,13 +16,20 @@ interface ToastProps {
 
 const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
   const [isExiting, setIsExiting] = useState(false)
+  const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (message.duration === 0) return
 
     const timer = setTimeout(() => {
       setIsExiting(true)
-      setTimeout(() => onClose(message.id), 300)
+      exitTimerRef.current = setTimeout(() => onClose(message.id), 300)
     }, message.duration || 3000)
 
     return () => clearTimeout(timer)
@@ -30,7 +37,8 @@ const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
 
   const handleClose = () => {
     setIsExiting(true)
-    setTimeout(() => onClose(message.id), 300)
+    if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
+    exitTimerRef.current = setTimeout(() => onClose(message.id), 300)
   }
 
   const colors = {
