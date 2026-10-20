@@ -16,7 +16,13 @@ import { useChatStore } from './store/chatStore'
 import { useDiffStore } from './store/diffStore'
 
 export default function App() {
-  const { workspacePath: workspace, recentWorkspaces, setWorkspace, setRecentWorkspaces } = useWorkspaceStore()
+  const {
+    workspacePath: workspace,
+    openWorkspaces,
+    recentWorkspaces,
+    openWorkspace: activateWorkspace,
+    setRecentWorkspaces,
+  } = useWorkspaceStore()
   const [error, setError] = useState<string | null>(null)
   const [showDebug, setShowDebug] = useState(import.meta.env.DEV)
   const [showSettings, setShowSettings] = useState(false)
@@ -74,7 +80,9 @@ export default function App() {
     try {
       setError(null)
 
-      if (workspace && workspace !== targetPath && !confirmCloseWorkspace()) {
+      if (targetPath === workspace) return
+
+      if (workspace && !confirmCloseWorkspace()) {
         return
       }
 
@@ -85,12 +93,11 @@ export default function App() {
         return
       }
 
-      // 切换前释放旧工作区的 Agent 与 UI 状态
-      await piAgentAPI.dispose()
+      // 切换当前工作区：停止旧监听、重置 UI 状态，但保留各工作区的 Agent 实例
       await api.unwatchWorkspace().catch(() => undefined)
       resetWorkspaceState()
 
-      setWorkspace(targetPath)
+      activateWorkspace(targetPath)
 
       api.watchWorkspace(targetPath).catch((err) =>
         console.error('Failed to watch workspace:', err)
@@ -105,7 +112,7 @@ export default function App() {
     }
   }
 
-  const openWorkspace = async () => {
+  const pickWorkspace = async () => {
     try {
       setError(null)
       const result = await api.openDirectoryDialog()
@@ -119,13 +126,24 @@ export default function App() {
     }
   }
 
-  const closeWorkspace = async () => {
-    if (!confirmCloseWorkspace()) return
+  const closeWorkspaceTab = async (targetPath: string) => {
+    const closingCurrent = targetPath === workspace
+    if (closingCurrent && !confirmCloseWorkspace()) return
 
-    await piAgentAPI.dispose()
+    // 只释放该工作区的 Agent 与会话资源
+    await piAgentAPI.dispose(targetPath)
+    const nextWorkspace = useWorkspaceStore.getState().closeWorkspace(targetPath)
+
+    if (!closingCurrent) return
+
     await api.unwatchWorkspace().catch(() => undefined)
     resetWorkspaceState()
-    setWorkspace(null)
+
+    if (nextWorkspace) {
+      api.watchWorkspace(nextWorkspace).catch((err) =>
+        console.error('Failed to watch workspace:', err)
+      )
+    }
   }
 
   return (
@@ -161,13 +179,57 @@ export default function App() {
             ⚙️
           </button>
           <button
-            onClick={workspace ? closeWorkspace : openWorkspace}
+            onClick={() => (workspace ? void closeWorkspaceTab(workspace) : void pickWorkspace())}
             className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white border-none rounded transition-colors text-sm font-medium"
           >
             {workspace ? t('closeProject') : t('openProject')}
           </button>
         </div>
       </header>
+
+      {/* Workspace tabs */}
+      {openWorkspaces.length > 0 && (
+        <div className="flex items-center gap-1 px-3 py-1.5 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#252526] overflow-x-auto flex-shrink-0">
+          {openWorkspaces.map((path) => {
+            const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path
+            const active = path === workspace
+            return (
+              <div
+                key={path}
+                className={`flex items-center rounded text-sm ${
+                  active
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
+                }`}
+              >
+                <button
+                  onClick={() => void openWorkspaceAt(path)}
+                  title={path}
+                  className="px-3 py-1 bg-none border-none cursor-pointer text-inherit"
+                >
+                  {name}
+                </button>
+                <button
+                  onClick={() => void closeWorkspaceTab(path)}
+                  title={t('close')}
+                  className={`px-1.5 py-1 bg-none border-none cursor-pointer text-inherit ${
+                    active ? 'hover:text-gray-200' : 'hover:text-gray-900 dark:hover:text-gray-100'
+                  }`}
+                >
+                  ×
+                </button>
+              </div>
+            )
+          })}
+          <button
+            onClick={() => void pickWorkspace()}
+            title={t('openProject')}
+            className="px-2 py-1 text-sm bg-none border-none cursor-pointer text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
+          >
+            ＋
+          </button>
+        </div>
+      )}
 
       {/* Error Banner */}
       {error && (
@@ -216,7 +278,7 @@ export default function App() {
             <h2 className="text-2xl text-gray-900 dark:text-gray-100 m-0">{t('welcome')}</h2>
             <p className="text-base m-0">{t('welcomeSubtitle')}</p>
             <button
-              onClick={openWorkspace}
+              onClick={pickWorkspace}
               className="px-6 py-2.5 text-base bg-blue-600 hover:bg-blue-700 text-white border-none rounded transition-colors font-medium"
             >
               {t('openProject')}

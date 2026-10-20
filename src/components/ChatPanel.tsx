@@ -80,7 +80,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           setInitialized(true)
 
           // 恢复该工作区持久化的对话历史
-          const history = await piAgentAPI.getHistory()
+          const history = await piAgentAPI.getHistory(workspacePath)
           if (seq !== initSeqRef.current) return
 
           if (history.success && history.history && history.history.length > 0) {
@@ -122,7 +122,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       // eslint-disable-next-line react-hooks/exhaustive-deps
       initSeqRef.current++
       window.removeEventListener('api-config-saved', handleConfigSaved)
-      piAgentAPI.dispose()
+      // 切换工作区时保留各工作区的 Agent 实例；关闭工作区由 App 显式 dispose
     }
   }, [workspacePath, addMessage, setError, setLoading, setMessages])
 
@@ -182,7 +182,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
       const result = await piAgentAPI.chat(prompt, (delta) => {
         appendToMessage(assistantId, delta)
-      })
+      }, workspacePath)
 
       if (result.success && result.response) {
         setError(null)

@@ -83,7 +83,11 @@ export const piAgentAPI = {
    * Send a chat message to the agent.
    * In Electron, text deltas are forwarded to `onDelta` while the run streams.
    */
-  async chat(message: string, onDelta?: (delta: string) => void): Promise<AgentChatResponse> {
+  async chat(
+    message: string,
+    onDelta?: (delta: string) => void,
+    workspaceDir?: string
+  ): Promise<AgentChatResponse> {
     try {
       if (hasElectronAgent()) {
         const requestId = `chat-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -96,7 +100,7 @@ export const piAgentAPI = {
         }
 
         try {
-          return await window.electronAPI.agentChat(message, requestId)
+          return await window.electronAPI.agentChat(message, requestId, workspaceDir)
         } finally {
           unsubscribe?.()
         }
@@ -112,10 +116,10 @@ export const piAgentAPI = {
   /**
    * Restore the conversation history persisted by the agent session
    */
-  async getHistory(): Promise<AgentHistoryResponse> {
+  async getHistory(workspaceDir?: string): Promise<AgentHistoryResponse> {
     try {
       if (hasElectronAgent()) {
-        return await window.electronAPI.agentGetHistory()
+        return await window.electronAPI.agentGetHistory(workspaceDir)
       }
       return await callDevBridge<AgentHistoryResponse>(DEV_AGENT_HISTORY, {})
     } catch (error) {
@@ -127,10 +131,10 @@ export const piAgentAPI = {
   /**
    * Dispose the agent instance
    */
-  async dispose(): Promise<AgentResponse> {
+  async dispose(workspaceDir?: string): Promise<AgentResponse> {
     try {
       if (hasElectronAgent()) {
-        return await window.electronAPI.agentDispose()
+        return await window.electronAPI.agentDispose(workspaceDir)
       }
       return await callDevBridge<AgentResponse>(DEV_AGENT_DISPOSE, {})
     } catch (error) {

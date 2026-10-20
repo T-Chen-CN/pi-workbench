@@ -41,16 +41,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       selectedModel: string
     }
   }) => ipcRenderer.invoke('agent:initialize', config),
-  agentChat: (message: string, requestId?: string) =>
-    ipcRenderer.invoke('agent:chat', message, requestId),
+  agentChat: (message: string, requestId?: string, workspaceDir?: string) =>
+    ipcRenderer.invoke('agent:chat', message, requestId, workspaceDir),
   onAgentStream: (callback: (payload: { requestId?: string; delta: string }) => void) => {
     const listener = (_event: unknown, payload: { requestId?: string; delta: string }) => callback(payload)
     ipcRenderer.on('agent:stream', listener)
     return () => ipcRenderer.removeListener('agent:stream', listener)
   },
-  agentIsInitialized: () => ipcRenderer.invoke('agent:isInitialized'),
-  agentGetHistory: () => ipcRenderer.invoke('agent:getHistory'),
-  agentDispose: () => ipcRenderer.invoke('agent:dispose'),
+  agentIsInitialized: (workspaceDir?: string) => ipcRenderer.invoke('agent:isInitialized', workspaceDir),
+  agentGetHistory: (workspaceDir?: string) => ipcRenderer.invoke('agent:getHistory', workspaceDir),
+  agentDispose: (workspaceDir?: string) => ipcRenderer.invoke('agent:dispose', workspaceDir),
 
   // API Configuration 管理（便携式架构）
   apiConfigGet: () => ipcRenderer.invoke('apiConfig:get'),
