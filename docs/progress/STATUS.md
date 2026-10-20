@@ -10,14 +10,15 @@
 - ✅ **便携式架构** — 所有应用数据自包含在应用目录内
 - ✅ **Phase 1: Pi Agent 集成** — 真实 Agent 可用（模型拉取 / 对话 / 工具）
 - ✅ **Phase 2: 工作区与对话体验** — 流式输出、修改审阅、上下文选择、多工作区标签
-- ⏳ **Phase 3-6** — 待开发
+- ✅ **Phase 3: 终端集成** — xterm.js + node-pty，输出可附加给 Agent
+- ⏳ **Phase 4-6** — 待开发
 
 ## 当前版本
 
 - **版本**: 0.1.0
 - **框架**: Electron 44 + React 19 + TypeScript
 - **Agent**: `@earendil-works/pi-coding-agent` 1.3.0
-- **状态**: Phase 2 完成，Electron 与纯 Web（开发模式）均可真实对话
+- **状态**: Phase 3 完成，Electron 与纯 Web（开发模式）均可真实对话
 
 ## 功能清单
 
@@ -83,11 +84,12 @@
 - ⏳ 上下文片段 / 符号级选择
 - ⏳ 工作区数据库（SQLite，`{appDir}/data/workspaces.db`，视 Fleet 规模再评估）
 
-#### Phase 3: 终端集成（预计 1 周）
+#### Phase 3: 终端集成（完成）
 
-- xterm.js + node-pty
-- Bash 命令执行与日志
-- 终端与 Agent 工具联动
+- ✅ xterm.js + node-pty（Electron 44 验证可用，`asarUnpack` 保留原生二进制）
+- ✅ 编辑器下方终端面板：显示/隐藏保留会话、重启、尺寸自适应
+- ✅ 输出日志 `{workspace}/.pi-workbench/terminal.log`
+- ✅ 终端输出一键附加为 Agent 上下文
 
 #### Phase 4: 工作台插件系统（预计 1-2 周）
 

@@ -7,6 +7,7 @@ import { ChatPanel } from './components/ChatPanel'
 import { DiffViewer } from './components/DiffViewer'
 import { IPCDebug } from './components/IPCDebug'
 import { Settings } from './components/Settings'
+import { TerminalPanel } from './components/TerminalPanel'
 import { ToastContainer } from './components/Toast'
 import { useToastStore } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
@@ -26,6 +27,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [showDebug, setShowDebug] = useState(import.meta.env.DEV)
   const [showSettings, setShowSettings] = useState(false)
+  const [showTerminal, setShowTerminal] = useState(false)
   const toastMessages = useToastStore((state) => state.messages)
   const removeToast = useToastStore((state) => state.remove)
 
@@ -163,6 +165,17 @@ export default function App() {
               {workspace}
             </span>
           )}
+          {workspace && (
+            <button
+              onClick={() => setShowTerminal((value) => !value)}
+              title={t('terminal')}
+              className={`bg-none border-none cursor-pointer text-sm font-mono px-1.5 py-1 rounded opacity-70 hover:opacity-100 transition-opacity ${
+                showTerminal ? 'bg-gray-200 dark:bg-gray-700' : ''
+              }`}
+            >
+              &gt;_
+            </button>
+          )}
           {import.meta.env.DEV && (
             <button
               onClick={() => setShowDebug(!showDebug)}
@@ -264,8 +277,14 @@ export default function App() {
             </aside>
 
             {/* Editor Section */}
-            <section className="flex flex-col bg-white dark:bg-[#1e1e1e]">
+            <section className="flex flex-col bg-white dark:bg-[#1e1e1e] min-h-0">
               <MonacoEditor />
+              <TerminalPanel
+                key={workspace}
+                workspacePath={workspace}
+                visible={showTerminal}
+                onClose={() => setShowTerminal(false)}
+              />
             </section>
 
             {/* Chat Section */}
