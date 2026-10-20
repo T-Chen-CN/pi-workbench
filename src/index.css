@@ -2,37 +2,117 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ------------------------------------------------------------------
+   Paper & Ink 设计 token
+   Paper 为默认主题；Ink 通过 <html class="dark"> 切换
+   RGB 三元组便于 Tailwind 使用透明度修饰符
+------------------------------------------------------------------- */
 :root {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f5f5f5;
-  --text-primary: #333333;
-  --text-secondary: #666666;
-  --border: #e0e0e0;
-  --accent: #007acc;
+  /* 纸面 */
+  --surface: 244 241 234;      /* canvas */
+  --panel: 251 249 244;        /* surface */
+  --raised: 255 253 248;       /* card */
+  --sunken: 239 236 228;       /* inset */
+  --hover: 238 234 225;
+  --active: 232 227 217;
+  --line: 23 21 18;            /* 使用透明度控制强度 */
+
+  /* 墨色 */
+  --ink: 23 21 18;
+  --ink-muted: 109 103 92;
+  --ink-subtle: 145 138 125;
+  --ink-inverted: 251 249 244;
+
+  /* 松墨绿 */
+  --accent: 47 93 78;          /* #2F5D4E，6.66:1 */
+  --accent-hover: 36 73 61;    /* #24493D */
+  --accent-fg: 251 249 244;
+
+  /* 语义 */
+  --success: 94 107 46;        /* #5E6B2E，暖橄榄 */
+  --success-hover: 74 85 36;
+  --warning: 154 91 31;        /* #9A5B1F，4.79:1 */
+  --warning-hover: 126 74 24;
+  --danger: 168 58 34;
+  --danger-hover: 140 44 24;
+  --danger-fg: 251 249 244;
+
+  /* 代码与高亮 */
+  --code-bg: 239 236 228;
+  --code-border: 214 208 196;
+  --shadow-color: 23 21 18;
+  --shadow-alpha: 0.08;
+  --hl-keyword: 138 59 42;
+  --hl-string: 79 107 58;
+  --hl-number: 138 106 59;
+  --hl-comment: 154 146 132;
+  --hl-function: 107 78 46;
+  --hl-type: 62 93 102;
+  --hl-attr: 122 75 54;
+
+  --font-ui: 'Inter Variable', 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-display: 'Instrument Serif', 'Noto Serif SC Variable', 'Songti SC', 'SimSun', serif;
+  --font-reading: 'Noto Serif SC Variable', 'Songti SC', 'SimSun', serif;
+  --font-mono: 'IBM Plex Mono', 'Cascadia Code', Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-primary: #1e1e1e;
-    --bg-secondary: #252526;
-    --text-primary: #e0e0e0;
-    --text-secondary: #999999;
-    --border: #3e3e42;
-    --accent: #007acc;
-  }
+html.dark {
+  /* 墨面 */
+  --surface: 20 19 17;
+  --panel: 26 24 21;
+  --raised: 32 29 25;
+  --sunken: 34 31 27;
+  --hover: 43 39 34;
+  --active: 52 47 41;
+  --line: 237 231 220;
+
+  --ink: 237 231 220;
+  --ink-muted: 156 148 135;
+  --ink-subtle: 115 108 96;
+  --ink-inverted: 20 19 17;
+
+  --accent: 143 199 180;
+  --accent-hover: 169 216 200;
+  --accent-fg: 20 19 17;
+
+  --success: 168 191 122;
+  --success-hover: 187 208 143;
+  --warning: 214 178 110;
+  --warning-hover: 236 194 124;
+  --danger: 224 106 74;
+  --danger-hover: 236 132 102;
+  --danger-fg: 20 19 17;
+
+  --code-bg: 34 31 27;
+  --code-border: 61 56 48;
+  --shadow-color: 0 0 0;
+  --shadow-alpha: 0.45;
+  --hl-keyword: 224 138 114;
+  --hl-string: 157 191 138;
+  --hl-number: 214 178 110;
+  --hl-comment: 124 116 102;
+  --hl-function: 222 196 158;
+  --hl-type: 143 196 207;
+  --hl-attr: 200 168 138;
 }
 
 * {
-  margin: 0;
-  padding: 0;
   box-sizing: border-box;
 }
 
+html,
 body {
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  font-size: 14px;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: rgb(var(--surface));
+  color: rgb(var(--ink));
+  font-family: var(--font-ui);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 #root {
@@ -40,4 +120,251 @@ body {
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
+}
+
+/* 统一滚动条，纸面细墨线风格 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--ink-subtle) / 0.45) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgb(var(--ink-subtle) / 0.35);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 0;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--ink-subtle) / 0.6);
+  background-clip: content-box;
+}
+
+::selection {
+  background: rgb(var(--accent) / 0.18);
+}
+
+:focus-visible {
+  outline: 1px solid rgb(var(--accent));
+  outline-offset: 2px;
+}
+
+button {
+  font-family: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 极淡纸张纹理，仅用于欢迎页 */
+.paper-noise {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+}
+
+/* ------------------------------------------------------------------
+   聊天 Markdown 排版（稿纸）
+------------------------------------------------------------------- */
+.chat-markdown {
+  font-family: var(--font-reading);
+  font-size: 14px;
+  line-height: 1.85;
+  letter-spacing: 0.01em;
+  word-break: break-word;
+}
+
+.chat-markdown > *:first-child {
+  margin-top: 0;
+}
+
+.chat-markdown > *:last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown p {
+  margin: 0.5em 0;
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4 {
+  margin: 1em 0 0.45em;
+  font-family: var(--font-display);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.chat-markdown h1 {
+  font-size: 1.4em;
+}
+
+.chat-markdown h2 {
+  font-size: 1.25em;
+}
+
+.chat-markdown h3 {
+  font-size: 1.1em;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: 0.5em 0;
+  padding-left: 1.4em;
+}
+
+.chat-markdown ul {
+  list-style: disc;
+}
+
+.chat-markdown ol {
+  list-style: decimal;
+}
+
+.chat-markdown li {
+  margin: 0.2em 0;
+}
+
+.chat-markdown a {
+  color: rgb(var(--accent));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-markdown blockquote {
+  margin: 0.6em 0;
+  padding: 0.1em 0.9em;
+  border-left: 2px solid rgb(var(--accent) / 0.5);
+  color: rgb(var(--ink-muted));
+}
+
+.chat-markdown code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: rgb(var(--ink) / 0.06);
+  border-radius: 2px;
+  padding: 0.1em 0.35em;
+  color: rgb(var(--hl-type));
+}
+
+.chat-markdown pre {
+  margin: 0.6em 0;
+  background: rgb(var(--code-bg));
+  border: 1px solid rgb(var(--line) / 0.16);
+  border-left: 2px solid rgb(var(--accent));
+  border-radius: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-markdown pre code {
+  background: transparent;
+  padding: 0;
+  color: rgb(var(--ink));
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.chat-markdown table {
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  font-size: 12px;
+}
+
+.chat-markdown th,
+.chat-markdown td {
+  border: 1px solid rgb(var(--line) / 0.16);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.chat-markdown th {
+  background: rgb(var(--ink) / 0.04);
+  font-weight: 600;
+}
+
+.chat-markdown hr {
+  border: none;
+  border-top: 1px solid rgb(var(--line) / 0.16);
+  margin: 1em 0;
+}
+
+/* highlight.js 语法着色（跟随主题 token） */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag {
+  color: rgb(var(--hl-keyword));
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-meta-string {
+  color: rgb(var(--hl-string));
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet {
+  color: rgb(var(--hl-number));
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: rgb(var(--hl-comment));
+  font-style: italic;
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name {
+  color: rgb(var(--hl-function));
+}
+
+.hljs-type,
+.hljs-built_in,
+.hljs-class .hljs-title {
+  color: rgb(var(--hl-type));
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: rgb(var(--hl-attr));
+}
+
+.hljs-deletion {
+  color: rgb(var(--danger));
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 700;
 }

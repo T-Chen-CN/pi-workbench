@@ -1,39 +1,55 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
+import { Info, KeyRound, RefreshCw, Save, SlidersHorizontal } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
+import { useThemeStore, type ThemeMode } from '../store/themeStore'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
 import type { ApiConfig } from '../types/electron'
+import { Button, Field, Input, Select } from './ui'
+
+type Section = 'general' | 'api' | 'about'
 
 interface SettingsProps {
   onClose?: () => void
 }
 
-export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
+export const Settings: React.FC<SettingsProps> = () => {
   const { language, setLanguage, t } = useI18nStore()
-
-  const handleLanguageChange = async (next: 'zh' | 'en') => {
-    setLanguage(next)
-    try {
-      const current = await api.getSettings()
-      const settings = current.success && current.settings ? current.settings : {}
-      await api.saveSettings({ ...settings, language: next })
-    } catch (error) {
-      console.error('Failed to persist language setting:', error)
-    }
-  }
+  const { mode, setMode } = useThemeStore()
+  const [section, setSection] = useState<Section>('general')
 
   const [apiConfig, setApiConfig] = useState<ApiConfig>({
     provider: 'custom',
     apiUrl: '',
     apiKey: '',
     availableModels: [],
-    selectedModel: ''
+    selectedModel: '',
   })
 
   const [isSaving, setIsSaving] = useState(false)
   const [isFetchingModels, setIsFetchingModels] = useState(false)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle')
+
+  const persistSettings = async (patch: Record<string, unknown>) => {
+    try {
+      const current = await api.getSettings()
+      const settings = current.success && current.settings ? current.settings : {}
+      await api.saveSettings({ ...settings, ...patch })
+    } catch (error) {
+      console.error('Failed to persist settings:', error)
+    }
+  }
+
+  const handleLanguageChange = (next: 'zh' | 'en') => {
+    setLanguage(next)
+    void persistSettings({ language: next })
+  }
+
+  const handleThemeChange = (next: ThemeMode) => {
+    setMode(next)
+    void persistSettings({ theme: next })
+  }
 
   const loadApiConfig = useCallback(async () => {
     try {
@@ -64,25 +80,23 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
 
     setIsFetchingModels(true)
     try {
-      const result = await api.apiConfigFetchModels(
-        apiConfig.apiUrl,
-        apiConfig.apiKey,
-        'custom'
-      )
+      const result = await api.apiConfigFetchModels(apiConfig.apiUrl, apiConfig.apiKey, 'custom')
 
       if (result.success && result.models && result.models.length > 0) {
-        setApiConfig(prev => ({
+        setApiConfig((prev) => ({
           ...prev,
           availableModels: result.models!,
           selectedModel: result.models!.includes(prev.selectedModel)
             ? prev.selectedModel
-            : result.models![0]
+            : result.models![0],
         }))
         toast.success(t('fetchedModels', { count: result.models.length }))
       } else if (result.success) {
         toast.warning(t('emptyModelList'))
       } else {
-        toast.error(t('fetchModelsFailed', { error: localizeError(result.error) || t('unknownError') }))
+        toast.error(
+          t('fetchModelsFailed', { error: localizeError(result.error) || t('unknownError') })
+        )
       }
     } catch (error) {
       console.error('[Settings] Fetch models error:', error)
@@ -126,141 +140,163 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
     }
   }
 
+  const navItems: Array<{ id: Section; label: string; icon: typeof Info }> = [
+    { id: 'general', label: t('general'), icon: SlidersHorizontal },
+    { id: 'api', label: t('apiConfiguration'), icon: KeyRound },
+    { id: 'about', label: t('about'), icon: Info },
+  ]
+
   return (
-    <div className="p-6 bg-gray-900 text-gray-100 h-full overflow-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold">{t('settings')}</h2>
-        {onClose && (
-          <button
-            onClick={onClose}
-            className="bg-none border-none text-gray-400 hover:text-gray-100 text-2xl cursor-pointer p-1"
-            title={t('close')}
-          >
-            ×
-          </button>
+    <div className="flex min-h-[420px]">
+      {/* Section nav */}
+      <nav className="w-40 flex-shrink-0 border-r border-line bg-surface p-2">
+        <div className="flex flex-col gap-0.5">
+          {navItems.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setSection(id)}
+              className={`flex items-center gap-2 border-l-2 px-2.5 py-1.5 text-left font-mono text-[10px] uppercase tracking-[0.1em] transition-colors ${
+                section === id
+                  ? 'border-accent bg-accent/[0.06] text-ink'
+                  : 'border-transparent text-ink-muted hover:bg-hover hover:text-ink'
+              }`}
+            >
+              <Icon size={13} />
+              {label}
+            </button>
+          ))}
+        </div>
+      </nav>
+
+      <div className="min-w-0 flex-1 overflow-y-auto p-5">
+        {section === 'general' && (
+          <div className="flex max-w-sm flex-col gap-5">
+            <Field label={t('language')}>
+              <Select
+                value={language}
+                onChange={(e) => handleLanguageChange(e.target.value as 'zh' | 'en')}
+              >
+                <option value="zh">中文</option>
+                <option value="en">English</option>
+              </Select>
+            </Field>
+
+            <Field label={t('theme')}>
+              <Select
+                value={mode}
+                onChange={(e) => handleThemeChange(e.target.value as ThemeMode)}
+              >
+                <option value="system">{t('themeSystem')}</option>
+                <option value="dark">{t('themeDark')}</option>
+                <option value="light">{t('themeLight')}</option>
+              </Select>
+            </Field>
+          </div>
         )}
-      </div>
 
-      {/* Language Settings */}
-      <div className="mb-8">
-        <h3 className="text-lg font-semibold mb-3">{t('language')}</h3>
-        <select
-          value={language}
-          onChange={(e) => void handleLanguageChange(e.target.value as 'zh' | 'en')}
-          className="bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500"
-        >
-          <option value="zh">中文</option>
-          <option value="en">English</option>
-        </select>
-      </div>
+        {section === 'api' && (
+          <div className="flex max-w-lg flex-col gap-4">
+            <p className="m-0 font-reading text-[13px] leading-[1.75] text-ink-muted">
+              {t('apiConfigurationDesc')}
+            </p>
 
-      {/* API Configuration */}
-      <div className="mb-8 border-t border-gray-700 pt-6">
-        <h3 className="text-lg font-semibold mb-3">{t('apiConfiguration')}</h3>
-        <p className="text-sm text-gray-400 mb-4">
-          {t('apiConfigurationDesc')}
-        </p>
+            <Field label={t('apiUrl')}>
+              <Input
+                type="text"
+                value={apiConfig.apiUrl}
+                onChange={(e) => setApiConfig((prev) => ({ ...prev, apiUrl: e.target.value }))}
+                placeholder="https://your-api-endpoint/v1"
+                className="font-mono"
+              />
+            </Field>
 
-        {/* API URL */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium mb-2">
-            {t('apiUrl')}
-          </label>
-          <input
-            type="text"
-            value={apiConfig.apiUrl}
-            onChange={(e) => setApiConfig(prev => ({ ...prev, apiUrl: e.target.value }))}
-            placeholder="https://your-api-endpoint/v1"
-            className="w-full bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500 font-mono text-sm"
-          />
-        </div>
+            <Field label={t('apiKey')} hint={t('apiKeyHint')}>
+              <Input
+                type="password"
+                value={apiConfig.apiKey}
+                onChange={(e) => setApiConfig((prev) => ({ ...prev, apiKey: e.target.value }))}
+                placeholder="sk-..."
+                className="font-mono"
+              />
+            </Field>
 
-        {/* API Key */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium mb-2">
-            {t('apiKey')}
-            <span className="text-gray-500 text-xs ml-2">{t('apiKeyHint')}</span>
-          </label>
-          <input
-            type="password"
-            value={apiConfig.apiKey}
-            onChange={(e) => setApiConfig(prev => ({ ...prev, apiKey: e.target.value }))}
-            placeholder="sk-..."
-            className="w-full bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500 font-mono text-sm"
-          />
-        </div>
+            <div>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={RefreshCw}
+                loading={isFetchingModels}
+                onClick={() => void handleFetchModels()}
+              >
+                {isFetchingModels ? t('fetching') : t('fetchModels')}
+              </Button>
+            </div>
 
-        {/* Fetch Models Button */}
-        <div className="mb-4">
-          <button
-            onClick={handleFetchModels}
-            disabled={isFetchingModels}
-            className={`px-4 py-2 rounded font-medium transition-colors ${
-              isFetchingModels
-                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                : 'bg-green-600 hover:bg-green-700 text-white'
-            }`}
-          >
-            {isFetchingModels ? t('fetching') : t('fetchModels')}
-          </button>
-        </div>
+            <Field
+              label={t('model')}
+              hint={t('modelsAvailable', { count: apiConfig.availableModels.length })}
+            >
+              <Select
+                value={apiConfig.selectedModel}
+                onChange={(e) =>
+                  setApiConfig((prev) => ({ ...prev, selectedModel: e.target.value }))
+                }
+                disabled={apiConfig.availableModels.length === 0}
+              >
+                {apiConfig.availableModels.length === 0 ? (
+                  <option value="">{t('noModelsAvailable')}</option>
+                ) : (
+                  apiConfig.availableModels.map((model) => (
+                    <option key={model} value={model}>
+                      {model}
+                    </option>
+                  ))
+                )}
+              </Select>
+            </Field>
 
-        {/* Model Selection */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium mb-2">
-            {t('model')}
-            <span className="text-gray-500 text-xs ml-2">
-              {t('modelsAvailable', { count: apiConfig.availableModels.length })}
-            </span>
-          </label>
-          <select
-            value={apiConfig.selectedModel}
-            onChange={(e) => setApiConfig(prev => ({ ...prev, selectedModel: e.target.value }))}
-            disabled={apiConfig.availableModels.length === 0}
-            className="w-full bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {apiConfig.availableModels.length === 0 ? (
-              <option value="">{t('noModelsAvailable')}</option>
-            ) : (
-              apiConfig.availableModels.map(model => (
-                <option key={model} value={model}>{model}</option>
-              ))
-            )}
-          </select>
-        </div>
+            <div className="mt-1 flex items-center gap-3">
+              <Button
+                variant="primary"
+                size="sm"
+                icon={Save}
+                loading={isSaving}
+                onClick={() => void handleSaveConfig()}
+              >
+                {isSaving ? t('saving') : t('saveConfiguration')}
+              </Button>
+              {saveStatus === 'success' && (
+                <span className="text-xs text-success">{t('savedSuccessfully')}</span>
+              )}
+              {saveStatus === 'error' && (
+                <span className="text-xs text-danger">{t('saveFailedShort')}</span>
+              )}
+            </div>
+          </div>
+        )}
 
-        {/* Save Button */}
-        <div className="flex items-center gap-3 mt-6">
-          <button
-            onClick={handleSaveConfig}
-            disabled={isSaving}
-            className={`px-6 py-2 rounded font-medium transition-colors ${
-              isSaving
-                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                : 'bg-blue-600 hover:bg-blue-700 text-white'
-            }`}
-          >
-            {isSaving ? t('saving') : t('saveConfiguration')}
-          </button>
-
-          {saveStatus === 'success' && (
-            <span className="text-green-400 text-sm">{t('savedSuccessfully')}</span>
-          )}
-          {saveStatus === 'error' && (
-            <span className="text-red-400 text-sm">{t('saveFailedShort')}</span>
-          )}
-        </div>
-      </div>
-
-      {/* Application Info */}
-      <div className="border-t border-gray-700 pt-6">
-        <h3 className="text-lg font-semibold mb-3">{t('applicationInfo')}</h3>
-        <div className="text-sm text-gray-400 space-y-1">
-          <p>{t('infoVersion')}</p>
-          <p>{t('infoFramework')}</p>
-          <p>{t('infoArchitecture')}</p>
-          <p>{t('infoApiSupport')}</p>
-        </div>
+        {section === 'about' && (
+          <div className="flex max-w-lg flex-col gap-3 text-xs text-ink-muted">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center border border-line bg-raised font-display text-xl text-accent">
+                Pi
+              </div>
+              <div>
+                <p className="m-0 text-sm font-medium text-ink">Pi Workbench</p>
+                <p className="m-0 text-ink-subtle">{t('infoVersion')}</p>
+              </div>
+            </div>
+            <dl className="m-0 mt-2 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2">
+              <dt className="text-ink-subtle">{t('aboutFramework')}</dt>
+              <dd className="m-0 text-ink">{t('infoFramework')}</dd>
+              <dt className="text-ink-subtle">{t('aboutArchitecture')}</dt>
+              <dd className="m-0 text-ink">{t('infoArchitecture')}</dd>
+              <dt className="text-ink-subtle">{t('aboutApiSupport')}</dt>
+              <dd className="m-0 text-ink">{t('infoApiSupport')}</dd>
+            </dl>
+          </div>
+        )}
       </div>
     </div>
   )

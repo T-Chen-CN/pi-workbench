@@ -1,4 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  Bug,
+  Folder,
+  FolderOpen,
+  PanelLeft,
+  PanelRight,
+  Plus,
+  X,
+} from 'lucide-react'
 import { api } from './api'
 import { piAgentAPI } from './api/piAgentAPI'
 import { FileExplorer } from './components/FileExplorer'
@@ -11,13 +20,23 @@ import { TerminalPanel } from './components/TerminalPanel'
 import { CommandPalette } from './components/CommandPalette'
 import { FleetPanel } from './components/FleetPanel'
 import { ToastContainer } from './components/Toast'
+import { WelcomeScreen } from './components/WelcomeScreen'
+import { Button, IconButton, Modal } from './components/ui'
 import { useToastStore } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
-import { localizeError } from './i18n/errors'
+import { useThemeStore, useResolvedTheme, type ThemeMode } from './store/themeStore'
 import { useWorkspaceStore } from './store/workspaceStore'
 import { useEditorStore } from './store/editorStore'
 import { useChatStore } from './store/chatStore'
 import { useDiffStore } from './store/diffStore'
+import { localizeError } from './i18n/errors'
+
+const SIDEBAR_MIN = 180
+const SIDEBAR_MAX = 420
+const CHAT_MIN = 280
+const CHAT_MAX = 560
+
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
 export default function App() {
   const {
@@ -28,12 +47,42 @@ export default function App() {
     setRecentWorkspaces,
   } = useWorkspaceStore()
   const [error, setError] = useState<string | null>(null)
-  const [showDebug, setShowDebug] = useState(import.meta.env.DEV)
+  const [showDebug, setShowDebug] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showTerminal, setShowTerminal] = useState(false)
   const [showFleet, setShowFleet] = useState(false)
+  const [showSidebar, setShowSidebar] = useState(true)
+  const [showChat, setShowChat] = useState(true)
+  const [sidebarWidth, setSidebarWidth] = useState(232)
+  const [chatWidth, setChatWidth] = useState(336)
   const toastMessages = useToastStore((state) => state.messages)
   const removeToast = useToastStore((state) => state.remove)
+  const { t, setLanguage, language } = useI18nStore()
+  const { setMode } = useThemeStore()
+  const resolvedTheme = useResolvedTheme()
+  const currentFile = useEditorStore((state) => state.currentFile)
+
+  const fileLanguage = (() => {
+    const ext = currentFile?.name.split('.').pop()?.toLowerCase()
+    switch (ext) {
+      case 'ts':
+      case 'tsx':
+        return 'TypeScript'
+      case 'js':
+      case 'jsx':
+        return 'JavaScript'
+      case 'json':
+        return 'JSON'
+      case 'md':
+        return 'Markdown'
+      case 'css':
+        return 'CSS'
+      case 'html':
+        return 'HTML'
+      default:
+        return 'Plain Text'
+    }
+  })()
 
   // 允许子组件（如 ChatPanel）请求打开设置面板
   useEffect(() => {
@@ -41,27 +90,34 @@ export default function App() {
     window.addEventListener('open-settings', openSettings)
     return () => window.removeEventListener('open-settings', openSettings)
   }, [])
-  const { t, setLanguage, language } = useI18nStore()
 
-  // 窗口标题与文档语言跟随语言
+  // 窗口标题、文档语言与主题跟随设置
   useEffect(() => {
     document.title = t('appTitle')
     document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en'
   }, [t, language])
 
-  // 从便携式 settings.json 恢复语言偏好（默认中文）
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', resolvedTheme === 'dark')
+  }, [resolvedTheme])
+
+  // 从便携式 settings.json 恢复语言与主题偏好
   useEffect(() => {
     api.getSettings()
       .then((result) => {
-        const saved = result.success ? result.settings?.language : undefined
-        if (saved === 'en' || saved === 'en-US') {
+        if (!result.success || !result.settings) return
+        const saved = result.settings
+        if (saved.language === 'en' || saved.language === 'en-US') {
           setLanguage('en')
-        } else if (saved === 'zh' || saved === 'zh-CN') {
+        } else if (saved.language === 'zh' || saved.language === 'zh-CN') {
           setLanguage('zh')
         }
+        if (saved.theme === 'dark' || saved.theme === 'light' || saved.theme === 'system') {
+          setMode(saved.theme as ThemeMode)
+        }
       })
-      .catch((err) => console.error('Failed to load language setting:', err))
-  }, [setLanguage])
+      .catch((err) => console.error('Failed to load app settings:', err))
+  }, [setLanguage, setMode])
 
   // 加载最近打开的工作区
   useEffect(() => {
@@ -84,6 +140,18 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [])
 
+  // Ctrl/Cmd+, 打开设置
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === ',') {
+        event.preventDefault()
+        setShowSettings(true)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   const resetWorkspaceState = () => {
     useEditorStore.getState().reset()
     useChatStore.getState().reset()
@@ -95,7 +163,7 @@ export default function App() {
     return window.confirm(t('discardChangesConfirm'))
   }
 
-  const openWorkspaceAt = async (targetPath: string) => {
+  const openWorkspaceAt = async (targetPath: string, initialPrompt?: string) => {
     try {
       setError(null)
 
@@ -117,6 +185,11 @@ export default function App() {
       resetWorkspaceState()
 
       activateWorkspace(targetPath)
+
+      // 欢迎页提问：打开工作区后把问题带入聊天输入框
+      if (initialPrompt) {
+        useChatStore.getState().setDraftInput(initialPrompt)
+      }
 
       api.watchWorkspace(targetPath).catch((err) =>
         console.error('Failed to watch workspace:', err)
@@ -145,6 +218,21 @@ export default function App() {
     }
   }
 
+  /** 欢迎页提问：先选目录，再打开工作区并带入问题 */
+  const askFromWelcome = async (prompt: string) => {
+    try {
+      setError(null)
+      const result = await api.openDirectoryDialog()
+      if (result.success && !result.canceled && result.path) {
+        await openWorkspaceAt(result.path, prompt)
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setError(localizeError(message))
+      console.error('Failed to open workspace from welcome prompt:', err)
+    }
+  }
+
   const closeWorkspaceTab = async (targetPath: string) => {
     const closingCurrent = targetPath === workspace
     if (closingCurrent && !confirmCloseWorkspace()) return
@@ -166,137 +254,192 @@ export default function App() {
     }
   }
 
+  const startResize = useCallback(
+    (target: 'sidebar' | 'chat') => (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault()
+      const startX = event.clientX
+      const initial = target === 'sidebar' ? sidebarWidth : chatWidth
+
+      const onMove = (moveEvent: PointerEvent) => {
+        const delta = moveEvent.clientX - startX
+        if (target === 'sidebar') {
+          setSidebarWidth(clamp(initial + delta, SIDEBAR_MIN, SIDEBAR_MAX))
+        } else {
+          setChatWidth(clamp(initial - delta, CHAT_MIN, CHAT_MAX))
+        }
+      }
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+      }
+
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+    },
+    [sidebarWidth, chatWidth]
+  )
+
+  const headerLink =
+    'font-mono text-[10.5px] text-ink-muted transition-colors hover:text-ink'
+
   return (
-    <div className="flex flex-col h-screen bg-white dark:bg-[#1e1e1e]">
+    <div className="flex h-screen flex-col bg-surface text-ink">
       {showSettings && (
-        <div className="fixed inset-0 z-40 bg-gray-900 overflow-auto">
+        <Modal
+          open={showSettings}
+          onClose={() => setShowSettings(false)}
+          title={t('settings')}
+          size="lg"
+          closeLabel={t('close')}
+        >
           <Settings onClose={() => setShowSettings(false)} />
-        </div>
+        </Modal>
       )}
 
       {/* Header */}
-      <header className="flex justify-between items-center px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#252526] flex-shrink-0 gap-4">
-        <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{t('appTitle')}</h1>
-        <div className="flex items-center gap-3">
+      <header className="flex h-[52px] flex-shrink-0 items-center justify-between gap-4 border-b border-line bg-surface px-4">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="font-display text-2xl leading-none text-ink">Pi</span>
+          <span className="font-mono text-[8.5px] uppercase tracking-[0.2em] text-ink-subtle">
+            Workbench
+          </span>
+          <span className="border border-line px-1.5 py-0.5 font-mono text-[8px] tracking-[0.12em] text-ink-subtle">
+            LOCAL
+          </span>
           {workspace && (
-            <span className="text-gray-600 dark:text-gray-400 text-sm max-w-xs overflow-hidden text-ellipsis whitespace-nowrap">
-              {workspace}
-            </span>
+            <>
+              <div className="mx-2 h-4 w-px flex-shrink-0 bg-line" />
+              <span
+                className="flex min-w-0 items-center gap-1.5 font-mono text-[10.5px] text-ink-subtle"
+                title={workspace}
+              >
+                <Folder size={11} className="flex-shrink-0" />
+                <span className="truncate">{workspace}</span>
+              </span>
+            </>
           )}
+        </div>
+
+        <div className="flex flex-shrink-0 items-center gap-4">
           {workspace && (
-            <button
-              onClick={() => window.dispatchEvent(new CustomEvent('open-command-palette'))}
-              title={t('openCommandPalette')}
-              className="bg-none border-none cursor-pointer text-sm px-1.5 py-1 rounded opacity-70 hover:opacity-100 transition-opacity"
-            >
-              ⌘
-            </button>
-          )}
-          {workspace && (
-            <button
-              onClick={() => setShowFleet(true)}
-              title={t('openFleet')}
-              className="bg-none border-none cursor-pointer text-sm px-1.5 py-1 rounded opacity-70 hover:opacity-100 transition-opacity"
-            >
-              ⛵
-            </button>
-          )}
-          {workspace && (
-            <button
-              onClick={() => setShowTerminal((value) => !value)}
-              title={t('terminal')}
-              className={`bg-none border-none cursor-pointer text-sm font-mono px-1.5 py-1 rounded opacity-70 hover:opacity-100 transition-opacity ${
-                showTerminal ? 'bg-gray-200 dark:bg-gray-700' : ''
-              }`}
-            >
-              &gt;_
-            </button>
+            <>
+              <div className="flex items-center gap-0.5">
+                <IconButton
+                  icon={PanelLeft}
+                  label={t('toggleSidebar')}
+                  size="sm"
+                  active={showSidebar}
+                  onClick={() => setShowSidebar((value) => !value)}
+                />
+                <IconButton
+                  icon={PanelRight}
+                  label={t('toggleChat')}
+                  size="sm"
+                  active={showChat}
+                  onClick={() => setShowChat((value) => !value)}
+                />
+              </div>
+              <button
+                type="button"
+                className={headerLink}
+                onClick={() => window.dispatchEvent(new CustomEvent('open-command-palette'))}
+              >
+                {t('commandPalette')} <span className="text-ink-subtle">⌘K</span>
+              </button>
+              <button type="button" className={headerLink} onClick={() => setShowFleet(true)}>
+                {t('fleetTasks')}
+              </button>
+              <button
+                type="button"
+                className={headerLink}
+                onClick={() => setShowTerminal((value) => !value)}
+              >
+                {t('terminal')}
+              </button>
+            </>
           )}
           {import.meta.env.DEV && (
-            <button
-              onClick={() => setShowDebug(!showDebug)}
-              className="bg-none border-none cursor-pointer text-lg p-1 opacity-60 hover:opacity-100 transition-opacity"
-            >
-              {showDebug ? '🐛' : '⚙️'}
-            </button>
+            <IconButton
+              icon={Bug}
+              label={t('ipcDebug')}
+              size="sm"
+              active={showDebug}
+              onClick={() => setShowDebug((value) => !value)}
+            />
           )}
-          <button
-            onClick={() => setShowSettings(!showSettings)}
-            title={t('settings')}
-            className="bg-none border-none cursor-pointer text-lg p-1 opacity-60 hover:opacity-100 transition-opacity"
-          >
-            ⚙️
+          <button type="button" className={headerLink} onClick={() => setShowSettings(true)}>
+            {t('settings')}
           </button>
-          <button
+          <Button
+            variant={workspace ? 'secondary' : 'primary'}
+            size="sm"
+            icon={workspace ? X : FolderOpen}
             onClick={() => (workspace ? void closeWorkspaceTab(workspace) : void pickWorkspace())}
-            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white border-none rounded transition-colors text-sm font-medium"
           >
             {workspace ? t('closeProject') : t('openProject')}
-          </button>
+          </Button>
         </div>
       </header>
 
       {/* Workspace tabs */}
       {openWorkspaces.length > 0 && (
-        <div className="flex items-center gap-1 px-3 py-1.5 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#252526] overflow-x-auto flex-shrink-0">
+        <div className="flex flex-shrink-0 items-center overflow-x-auto border-b border-line bg-surface px-2">
           {openWorkspaces.map((path) => {
             const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path
             const active = path === workspace
             return (
               <div
                 key={path}
-                className={`flex items-center rounded text-sm ${
+                className={`group flex h-8 items-center gap-2 border-r border-line px-3 font-mono text-[10.5px] ${
                   active
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
+                    ? 'bg-panel text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
+                    : 'text-ink-subtle hover:bg-hover hover:text-ink'
                 }`}
               >
                 <button
+                  type="button"
                   onClick={() => void openWorkspaceAt(path)}
                   title={path}
-                  className="px-3 py-1 bg-none border-none cursor-pointer text-inherit"
+                  className="flex max-w-[200px] items-center gap-1.5 bg-transparent text-inherit"
                 >
-                  {name}
+                  <Folder size={11} className="flex-shrink-0 opacity-70" />
+                  <span className="truncate">{name}</span>
                 </button>
                 <button
+                  type="button"
                   onClick={() => void closeWorkspaceTab(path)}
                   title={t('close')}
-                  className={`px-1.5 py-1 bg-none border-none cursor-pointer text-inherit ${
-                    active ? 'hover:text-gray-200' : 'hover:text-gray-900 dark:hover:text-gray-100'
-                  }`}
+                  aria-label={t('close')}
+                  className="flex h-4 w-4 items-center justify-center text-ink-subtle hover:text-ink"
                 >
-                  ×
+                  <X size={10} />
                 </button>
               </div>
             )
           })}
-          <button
+          <IconButton
+            icon={Plus}
+            label={t('openProject')}
+            size="sm"
             onClick={() => void pickWorkspace()}
-            title={t('openProject')}
-            className="px-2 py-1 text-sm bg-none border-none cursor-pointer text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-          >
-            ＋
-          </button>
+          />
         </div>
       )}
 
       {/* Error Banner */}
       {error && (
-        <div className="flex justify-between items-center px-4 py-2 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-b border-red-300 dark:border-red-700/50 flex-shrink-0">
+        <div className="flex flex-shrink-0 items-center gap-3 border-b border-danger/30 bg-danger/10 px-4 py-1.5 text-xs text-danger">
           <p className="m-0 flex-1">{error}</p>
-          <button
+          <IconButton
+            icon={X}
+            label={t('close')}
+            size="sm"
             onClick={() => setError(null)}
-            className="bg-none border-none text-red-700 dark:text-red-400 cursor-pointer text-xl p-1"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      {/* Debug Panel */}
-      {showDebug && (
-        <div className="fixed bottom-5 right-5 w-96 max-h-80 bg-gray-50 dark:bg-[#252526] border-2 border-blue-600 rounded-lg p-4 shadow-lg overflow-y-auto z-50 text-xs">
-          <IPCDebug />
+          />
         </div>
       )}
 
@@ -311,64 +454,79 @@ export default function App() {
       )}
       <DiffViewer />
 
+      {/* Debug panel */}
+      {showDebug && (
+        <div className="fixed bottom-4 right-4 z-30 max-h-80 w-96 overflow-y-auto border border-line bg-panel p-3 shadow-print">
+          <IPCDebug />
+        </div>
+      )}
+
       {/* Main Content */}
-      <main className="flex-1 overflow-hidden flex bg-white dark:bg-[#1e1e1e]">
-        {workspace ? (
-          <div className="grid grid-cols-[250px_1fr_300px] w-full h-full gap-px bg-gray-300 dark:bg-gray-700">
-            {/* Sidebar */}
-            <aside className="bg-gray-50 dark:bg-[#252526] border-r border-gray-200 dark:border-gray-700 overflow-y-auto">
-              <FileExplorer workspacePath={workspace} />
-            </aside>
-
-            {/* Editor Section */}
-            <section className="flex flex-col bg-white dark:bg-[#1e1e1e] min-h-0">
-              <MonacoEditor />
-              <TerminalPanel
-                key={workspace}
-                workspacePath={workspace}
-                visible={showTerminal}
-                onClose={() => setShowTerminal(false)}
+      {workspace ? (
+        <main className="flex min-h-0 flex-1 bg-surface">
+          {showSidebar && (
+            <>
+              <aside
+                className="flex-shrink-0 overflow-hidden border-r border-line bg-panel"
+                style={{ width: sidebarWidth }}
+              >
+                <FileExplorer workspacePath={workspace} />
+              </aside>
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                className="w-px flex-shrink-0 cursor-col-resize bg-line transition-colors hover:bg-accent"
+                onPointerDown={startResize('sidebar')}
               />
-            </section>
+            </>
+          )}
 
-            {/* Chat Section */}
-            <aside className="bg-gray-50 dark:bg-[#252526] border-l border-gray-200 dark:border-gray-700 overflow-y-auto">
-              <ChatPanel workspacePath={workspace} />
-            </aside>
-          </div>
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-gray-600 dark:text-gray-400 text-center gap-5 p-6">
-            <h2 className="text-2xl text-gray-900 dark:text-gray-100 m-0">{t('welcome')}</h2>
-            <p className="text-base m-0">{t('welcomeSubtitle')}</p>
-            <button
-              onClick={pickWorkspace}
-              className="px-6 py-2.5 text-base bg-blue-600 hover:bg-blue-700 text-white border-none rounded transition-colors font-medium"
-            >
-              {t('openProject')}
-            </button>
+          <section className="flex min-w-0 flex-1 flex-col">
+            <MonacoEditor />
+            <TerminalPanel
+              key={workspace}
+              workspacePath={workspace}
+              visible={showTerminal}
+              onClose={() => setShowTerminal(false)}
+            />
+          </section>
 
-            {recentWorkspaces.length > 0 && (
-              <div className="w-full max-w-lg mt-2 text-left">
-                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-500 mb-2">
-                  {t('recentWorkspaces')}
-                </p>
-                <div className="flex flex-col gap-1">
-                  {recentWorkspaces.map((recentPath) => (
-                    <button
-                      key={recentPath}
-                      onClick={() => openWorkspaceAt(recentPath)}
-                      title={recentPath}
-                      className="w-full text-left px-3 py-2 rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#252526] hover:bg-gray-100 dark:hover:bg-[#2d2d30] text-sm text-gray-700 dark:text-gray-300 overflow-hidden text-ellipsis whitespace-nowrap"
-                    >
-                      {recentPath}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </main>
+          {showChat && (
+            <>
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                className="w-px flex-shrink-0 cursor-col-resize bg-line transition-colors hover:bg-accent"
+                onPointerDown={startResize('chat')}
+              />
+              <aside
+                className="flex-shrink-0 overflow-hidden border-l border-line bg-panel"
+                style={{ width: chatWidth }}
+              >
+                <ChatPanel workspacePath={workspace} />
+              </aside>
+            </>
+          )}
+        </main>
+      ) : (
+        <WelcomeScreen
+          recentWorkspaces={recentWorkspaces}
+          onOpenProject={() => void pickWorkspace()}
+          onOpenWorkspace={(path) => void openWorkspaceAt(path)}
+          onAsk={(prompt) => void askFromWelcome(prompt)}
+        />
+      )}
+
+      <footer className="flex h-7 flex-shrink-0 items-center gap-4 border-t border-line bg-surface px-3.5 font-mono text-[9px] uppercase tracking-[0.06em] text-ink-subtle">
+        <span className="text-ink-muted">PI WORKBENCH</span>
+        <span>LOCAL-FIRST</span>
+        {workspace && <span className="text-accent">● PI AGENT</span>}
+        <div className="ml-auto flex items-center gap-4">
+          {currentFile && <span>{fileLanguage}</span>}
+          <span>UTF-8</span>
+          <span>{resolvedTheme === 'dark' ? 'INK' : 'PAPER'}</span>
+        </div>
+      </footer>
     </div>
   )
 }

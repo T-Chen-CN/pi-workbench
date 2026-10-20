@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Check, ChevronLeft, ChevronRight, Columns2, Rows3, X } from 'lucide-react'
 import { useDiffStore } from '../store/diffStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useEditorStore } from '../store/editorStore'
@@ -7,6 +8,7 @@ import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
 import { computeDiff, DiffLineType, DiffResult, type DiffLine } from '../api/diff'
 import type { FileEdit } from '../types/electron'
+import { Button, IconButton, Spinner } from './ui'
 
 export const DiffViewer: React.FC = () => {
   const { t } = useI18nStore()
@@ -22,6 +24,15 @@ export const DiffViewer: React.FC = () => {
   } = useDiffStore()
   const [viewMode, setViewMode] = useState<'split' | 'unified'>('split')
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!isOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') clearDiff()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isOpen, clearDiff])
 
   const edit = edits[currentIndex]
   const diff = useMemo(
@@ -106,130 +117,126 @@ export const DiffViewer: React.FC = () => {
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center">
-      <div className="fixed inset-0 bg-black/50 cursor-pointer" onClick={handleClose} />
-      <div className="relative bg-white dark:bg-[#1e1e1e] border border-gray-300 dark:border-gray-700 rounded-lg w-11/12 h-5/6 max-w-6xl shadow-xl flex flex-col">
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-40 flex items-center justify-center p-6"
+    >
+      <div className="absolute inset-0 bg-black/50" onClick={handleClose} />
+      <div className="relative flex h-[85vh] w-full max-w-6xl flex-col overflow-hidden border border-line bg-panel shadow-print">
         {/* Header */}
-        <div className="flex justify-between items-center px-6 py-4 border-b border-gray-300 dark:border-gray-700 flex-shrink-0 gap-4">
-          <div className="flex items-center gap-4 min-w-0">
-            <h3 className="text-lg font-semibold m-0 text-gray-900 dark:text-gray-100 whitespace-nowrap">
+        <div className="flex flex-shrink-0 items-center justify-between gap-4 border-b border-line px-4 py-2">
+          <div className="flex min-w-0 items-center gap-3">
+            <h3 className="m-0 whitespace-nowrap text-sm font-semibold text-ink">
               {t('reviewChanges')}
             </h3>
-            <span className="px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-sm font-mono whitespace-nowrap">
-              +{diff.addedCount} -{diff.removedCount}
+            <span className="whitespace-nowrap border border-success/30 px-2 py-0.5 font-mono text-[10px] text-success">
+              +{diff.addedCount}
+            </span>
+            <span className="whitespace-nowrap border border-danger/30 px-2 py-0.5 font-mono text-[10px] text-danger">
+              -{diff.removedCount}
             </span>
             {edits.length > 1 && (
-              <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                <button
-                  onClick={() => setCurrentIndex(currentIndex - 1)}
+              <div className="flex items-center gap-1 text-xs text-ink-muted">
+                <IconButton
+                  icon={ChevronLeft}
+                  label={t('previousFile')}
+                  size="sm"
                   disabled={!canGoPrev || busy}
-                  title={t('previousFile')}
-                  className="px-2 py-0.5 rounded bg-gray-200 dark:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  ‹
-                </button>
-                <span className="whitespace-nowrap">
+                  onClick={() => setCurrentIndex(currentIndex - 1)}
+                />
+                <span className="whitespace-nowrap tabular-nums">
                   {currentIndex + 1} / {edits.length}
                 </span>
-                <button
-                  onClick={() => setCurrentIndex(currentIndex + 1)}
+                <IconButton
+                  icon={ChevronRight}
+                  label={t('nextFile')}
+                  size="sm"
                   disabled={!canGoNext || busy}
-                  title={t('nextFile')}
-                  className="px-2 py-0.5 rounded bg-gray-200 dark:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  ›
-                </button>
+                  onClick={() => setCurrentIndex(currentIndex + 1)}
+                />
               </div>
             )}
           </div>
 
-          <div className="flex items-center gap-3 flex-shrink-0">
-            <button
-              onClick={handleKeep}
-              disabled={busy}
-              className="px-3 py-1 text-sm font-medium rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-40"
-            >
-              {t('keepChanges')}
-            </button>
-            <button
-              onClick={handleRevert}
-              disabled={busy}
-              className="px-3 py-1 text-sm font-medium rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-40"
-            >
-              {t('revertFile')}
-            </button>
-            {edits.length > 1 && (
+          <div className="flex flex-shrink-0 items-center gap-2">
+            <div className="flex items-center gap-0.5 border border-line bg-sunken p-0.5">
               <button
-                onClick={handleRevertAll}
-                disabled={busy}
-                className="px-3 py-1 text-sm font-medium rounded border border-red-500 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-40"
-              >
-                {t('revertAll')}
-              </button>
-            )}
-
-            <div className="flex gap-1 bg-gray-200 dark:bg-gray-700 p-1 rounded">
-              <button
+                type="button"
                 onClick={() => setViewMode('split')}
                 title={t('splitView')}
-                className={`px-3 py-1 text-sm font-medium rounded transition-colors ${
+                aria-pressed={viewMode === 'split'}
+                className={`flex items-center gap-1.5 px-2 py-1 text-xs transition-colors ${
                   viewMode === 'split'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-transparent text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                    ? 'bg-raised text-ink shadow-sm'
+                    : 'text-ink-muted hover:text-ink'
                 }`}
               >
-                ∥ {t('splitView')}
+                <Columns2 size={13} />
+                {t('splitView')}
               </button>
               <button
+                type="button"
                 onClick={() => setViewMode('unified')}
                 title={t('unifiedView')}
-                className={`px-3 py-1 text-sm font-medium rounded transition-colors ${
+                aria-pressed={viewMode === 'unified'}
+                className={`flex items-center gap-1.5 px-2 py-1 text-xs transition-colors ${
                   viewMode === 'unified'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-transparent text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                    ? 'bg-raised text-ink shadow-sm'
+                    : 'text-ink-muted hover:text-ink'
                 }`}
               >
-                ≡ {t('unifiedView')}
+                <Rows3 size={13} />
+                {t('unifiedView')}
               </button>
             </div>
 
-            <button
-              onClick={handleClose}
-              title={t('close')}
-              className="bg-none border-none cursor-pointer text-xl text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
-            >
-              ✕
-            </button>
+            <Button size="sm" icon={Check} disabled={busy} onClick={handleKeep}>
+              {t('keepChanges')}
+            </Button>
+            <Button variant="danger" size="sm" disabled={busy} onClick={() => void handleRevert()}>
+              {t('revertFile')}
+            </Button>
+            {edits.length > 1 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                className="text-danger hover:bg-danger/10 hover:text-danger"
+                onClick={() => void handleRevertAll()}
+              >
+                {t('revertAll')}
+              </Button>
+            )}
+
+            <IconButton icon={X} label={t('close')} size="sm" onClick={handleClose} />
           </div>
         </div>
 
         {/* Hint */}
-        <div className="px-6 py-2 text-xs text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+        <div className="flex-shrink-0 border-b border-line px-4 py-1.5 text-[11px] text-ink-subtle">
           {t('reviewHint')}
         </div>
 
         {/* Error */}
         {error && (
-          <div className="px-6 py-4 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-b border-red-300 dark:border-red-700/50">
+          <div className="flex-shrink-0 border-b border-danger/30 bg-danger/10 px-4 py-2 text-xs text-danger">
             {error}
           </div>
         )}
 
         {/* Loading */}
         {isLoading && (
-          <div className="flex-1 flex items-center justify-center">
-            <span className="text-xl">⏳ {t('comparing')}</span>
+          <div className="flex flex-1 items-center justify-center gap-2 text-sm text-ink-muted">
+            <Spinner />
+            {t('comparing')}
           </div>
         )}
 
         {/* Content */}
         {!isLoading && (
           <div className="flex-1 overflow-hidden">
-            {viewMode === 'split' ? (
-              <SplitDiffView diff={diff} />
-            ) : (
-              <UnifiedDiffView diff={diff} />
-            )}
+            {viewMode === 'split' ? <SplitDiffView diff={diff} /> : <UnifiedDiffView diff={diff} />}
           </div>
         )}
       </div>
@@ -246,11 +253,13 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
   const modifiedLines = diff.lines.filter((l) => l.type !== DiffLineType.Removed)
 
   return (
-    <div className="flex h-full divide-x divide-gray-300 dark:divide-gray-700">
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2 bg-gray-100 dark:bg-[#252526] border-b border-gray-300 dark:border-gray-700 flex-shrink-0">
-          <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{diff.originalFile}</span>
-          <span className="text-sm px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded">-{diff.removedCount}</span>
+    <div className="flex h-full divide-x divide-line">
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-line bg-panel px-3 py-1.5">
+          <span className="truncate font-mono text-xs text-ink">{diff.originalFile}</span>
+          <span className="px-1.5 py-0.5 font-mono text-[10px] text-danger">
+            -{diff.removedCount}
+          </span>
         </div>
         <div className="flex-1 overflow-y-auto">
           {originalLines.map((line, idx) => (
@@ -259,10 +268,12 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2 bg-gray-100 dark:bg-[#252526] border-b border-gray-300 dark:border-gray-700 flex-shrink-0">
-          <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{diff.modifiedFile}</span>
-          <span className="text-sm px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded">+{diff.addedCount}</span>
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-line bg-panel px-3 py-1.5">
+          <span className="truncate font-mono text-xs text-ink">{diff.modifiedFile}</span>
+          <span className="px-1.5 py-0.5 font-mono text-[10px] text-success">
+            +{diff.addedCount}
+          </span>
         </div>
         <div className="flex-1 overflow-y-auto">
           {modifiedLines.map((line, idx) => (
@@ -276,11 +287,11 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
 
 const UnifiedDiffView: React.FC<DiffViewProps> = ({ diff }) => {
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-center gap-2 px-4 py-3 bg-gray-100 dark:bg-[#252526] border-b border-gray-300 dark:border-gray-700 flex-shrink-0">
-        <span className="font-mono text-sm text-gray-700 dark:text-gray-300">{diff.originalFile}</span>
-        <span className="text-gray-500 dark:text-gray-400">→</span>
-        <span className="font-mono text-sm text-gray-700 dark:text-gray-300">{diff.modifiedFile}</span>
+    <div className="flex h-full flex-col">
+      <div className="flex flex-shrink-0 items-center justify-center gap-2 border-b border-line bg-panel px-3 py-1.5">
+        <span className="truncate font-mono text-xs text-ink-muted">{diff.originalFile}</span>
+        <span className="text-ink-subtle">→</span>
+        <span className="truncate font-mono text-xs text-ink">{diff.modifiedFile}</span>
       </div>
       <div className="flex-1 overflow-y-auto">
         {diff.lines.map((line, idx) => (
@@ -297,27 +308,31 @@ interface DiffLineElementProps {
 }
 
 const DiffLineElement: React.FC<DiffLineElementProps> = ({ line, side }) => {
-  let bgColor = 'bg-white dark:bg-[#1e1e1e]'
-  let textColor = 'text-gray-700 dark:text-gray-300'
+  let bgColor = 'bg-surface'
   let prefix = ' '
+  let prefixColor = 'text-ink-subtle'
   const lineNumber =
     side === 'modified' ? line.modifiedLineNumber : line.originalLineNumber
 
   if (line.type === DiffLineType.Added) {
-    bgColor = 'bg-green-50 dark:bg-green-900/20'
-    textColor = 'text-green-700 dark:text-green-400'
+    bgColor = 'bg-success/10'
     prefix = '+'
+    prefixColor = 'text-success'
   } else if (line.type === DiffLineType.Removed) {
-    bgColor = 'bg-red-50 dark:bg-red-900/20'
-    textColor = 'text-red-700 dark:text-red-400'
+    bgColor = 'bg-danger/10'
     prefix = '-'
+    prefixColor = 'text-danger'
   }
 
   return (
-    <div className={`flex font-mono text-sm ${bgColor} border-b border-gray-200 dark:border-gray-700`}>
-      <span className={`w-8 text-center py-1 px-2 select-none text-gray-500 dark:text-gray-600 flex-shrink-0`}>{prefix}</span>
-      <span className={`w-12 text-right py-1 px-2 select-none text-gray-500 dark:text-gray-600 flex-shrink-0`}>{lineNumber || '-'}</span>
-      <span className={`flex-1 py-1 px-2 break-all ${textColor}`}>{line.content}</span>
+    <div className={`flex border-b border-line/60 font-mono text-xs ${bgColor}`}>
+      <span className={`w-6 flex-shrink-0 select-none py-0.5 text-center ${prefixColor}`}>
+        {prefix}
+      </span>
+      <span className="w-10 flex-shrink-0 select-none py-0.5 pr-2 text-right text-ink-subtle">
+        {lineNumber || '-'}
+      </span>
+      <span className="flex-1 break-all px-2 py-0.5 text-ink">{line.content}</span>
     </div>
   )
 }

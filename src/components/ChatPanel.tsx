@@ -1,4 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react'
+import ReactMarkdown, { type Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeHighlight from 'rehype-highlight'
+import {
+  AlertCircle,
+  Check,
+  Copy,
+  FileText,
+  Paperclip,
+  Send,
+  Settings2,
+  Square,
+  X,
+} from 'lucide-react'
 import { useChatStore } from '../store/chatStore'
 import { useDiffStore } from '../store/diffStore'
 import { useEditorStore } from '../store/editorStore'
@@ -8,6 +22,7 @@ import { api } from '../api'
 import { buildContextPrompt } from '../api/chatContext'
 import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
+import { Button, EmptyState, IconButton, Spinner, Textarea } from './ui'
 
 interface ChatPanelProps {
   workspacePath: string
@@ -16,6 +31,40 @@ interface ChatPanelProps {
 /** 单个附件与单条消息的上下文字符上限 */
 const MAX_CONTEXT_FILE_CHARS = 120_000
 const MAX_CONTEXT_TOTAL_CHARS = 300_000
+
+/** 代码块：带复制按钮 */
+const CodeBlock: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
+  const { t } = useI18nStore()
+  const preRef = useRef<HTMLPreElement>(null)
+  const [copied, setCopied] = useState(false)
+
+  const copy = async () => {
+    const text = preRef.current?.textContent ?? ''
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch (error) {
+      console.error('Failed to copy code:', error)
+    }
+  }
+
+  return (
+    <div className="group/code relative">
+      <pre ref={preRef}>{children}</pre>
+      <button
+        type="button"
+        onClick={() => void copy()}
+        aria-label={t('copyCode')}
+        className="absolute right-2 top-2 flex items-center gap-1 rounded-md border border-line bg-raised px-1.5 py-1 text-[10px] text-ink-muted opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover/code:opacity-100 group-focus-within/code:opacity-100"
+      >
+        {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
+        {copied ? t('copied') : t('copyCode')}
+      </button>
+    </div>
+  )
+}
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const {
@@ -33,6 +82,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     addAttachment,
     removeAttachment,
     clearAttachments,
+    draftInput,
+    clearDraftInput,
   } = useChatStore()
 
   const openFiles = useEditorStore((state) => state.openFiles)
@@ -69,7 +120,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         // Initialize Agent with full API config
         const result = await piAgentAPI.initialize({
           workspaceDir: workspacePath,
-          apiConfig: configResult.config
+          apiConfig: configResult.config,
         })
         if (seq !== initSeqRef.current) return
 
@@ -82,7 +133,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           if (seq !== initSeqRef.current) return
 
           if (history.success && history.history && history.history.length > 0) {
-            setMessages(history.history)
+            setMessages(
+              history.history.map((message, index) => ({
+                ...message,
+                id: `history-${index}-${message.timestamp}`,
+              }))
+            )
           } else if (useChatStore.getState().messages.length === 0) {
             addMessage({
               role: 'assistant',
@@ -114,7 +170,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     const handleConfigSaved = () => runInit()
     window.addEventListener('api-config-saved', handleConfigSaved)
 
-    // Cleanup on unmount
     return () => {
       // 使旧的初始化流程失效（含 React StrictMode 的双重挂载）
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -128,13 +183,26 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   useEffect(() => {
     // 流式更新时用即时滚动，避免每个增量都触发平滑滚动动画
     const streaming = useChatStore.getState().messages.some((message) => message.isStreaming)
-    messagesEndRef.current?.scrollIntoView({ behavior: streaming ? 'auto' : 'smooth' })
+    const reduceMotion =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    messagesEndRef.current?.scrollIntoView({
+      behavior: streaming || reduceMotion ? 'auto' : 'smooth',
+    })
   }, [messages])
 
   // Focus input on mount
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  // 欢迎页提问：把草稿带入输入框
+  useEffect(() => {
+    if (!draftInput) return
+    setInput(draftInput)
+    clearDraftInput()
+    inputRef.current?.focus()
+  }, [workspacePath, draftInput, clearDraftInput])
 
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault()
@@ -144,7 +212,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     const userMessage = input.trim()
     setInput('')
 
-    // Add user message
     addMessage({
       role: 'user',
       content: userMessage,
@@ -184,7 +251,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
       if (result.success && result.response) {
         setError(null)
-        // 最终消息以主进程返回的完整文本为准
         finishStreamingMessage(assistantId, result.response)
 
         // 打开本轮全部文件修改供审阅（接受或还原）
@@ -219,187 +285,232 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }
 
+  const markdownComponents: Components = {
+    a: ({ href, children }) => (
+      <a href={href} target="_blank" rel="noopener noreferrer">
+        {children}
+      </a>
+    ),
+    pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+  }
+
   if (needsApiKey) {
     return (
-      <div className="flex flex-col h-full bg-gray-900 p-6">
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center max-w-md">
-            <h3 className="text-xl font-bold text-gray-100 mb-4">
-              {t('apiConfigRequired')}
-            </h3>
-            <p className="text-gray-400 mb-6">
-              {t('apiConfigRequiredDesc')}
-            </p>
-            <button
-              className="inline-block bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded font-medium transition-colors border-none cursor-pointer"
-              onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))}
-            >
-              {t('goToSettings')}
-            </button>
-          </div>
+      <div className="flex h-full flex-col bg-panel">
+        <div className="flex flex-1 items-center justify-center p-4">
+          <EmptyState
+            icon={Settings2}
+            title={t('apiConfigRequired')}
+            description={t('apiConfigRequiredDesc')}
+            action={
+              <Button
+                variant="primary"
+                size="sm"
+                icon={Settings2}
+                onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))}
+              >
+                {t('goToSettings')}
+              </Button>
+            }
+          />
         </div>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col h-full bg-gray-900">
+    <div className="flex h-full flex-col bg-panel">
       {/* Header */}
-      <div className="border-b border-gray-700 p-4">
-        <h3 className="text-lg font-semibold text-gray-100">
-          {t('agentChatTitle')}
-          {initialized && <span className="ml-2 text-xs text-green-400">{t('agentReadyStatus')}</span>}
-          {!initialized && <span className="ml-2 text-xs text-yellow-400">{t('agentInitializingStatus')}</span>}
-        </h3>
+      <div className="flex h-[38px] flex-shrink-0 items-center justify-between border-b border-line px-3.5">
+        <div className="flex items-center gap-2.5">
+          <h3 className="m-0 font-mono text-[9.5px] uppercase tracking-[0.16em] text-ink-muted">
+            {t('agentChatTitle')}
+          </h3>
+          <span className="flex items-center gap-1.5 font-mono text-[9px] text-ink-subtle">
+            <span
+              className={`h-1 w-1 rounded-full ${
+                initialized ? 'bg-success' : 'animate-pulse bg-warning'
+              }`}
+            />
+            {initialized ? t('agentReadyStatus') : t('agentInitializingStatus')}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="border border-line px-1.5 py-0.5 font-mono text-[8.5px] text-ink-subtle">
+            ⌘K
+          </span>
+          <IconButton
+            icon={Settings2}
+            label={t('settings')}
+            size="sm"
+            onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))}
+          />
+        </div>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      {/* Transcript */}
+      <div className="flex-1 overflow-y-auto px-3.5 py-3">
         {messages.map((msg) => {
           // 流式消息还没有内容时显示下方的 Thinking 占位
           if (msg.isStreaming && !msg.content) return null
+          const isUser = msg.role === 'user'
           return (
-            <div
-              key={msg.id}
-              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div
-                className={`max-w-[80%] rounded-lg p-3 ${
-                  msg.role === 'user'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-800 text-gray-100'
-                }`}
-              >
-                <div className="text-sm font-medium mb-1">
-                  {msg.role === 'user' ? t('roleYou') : t('piAgent')}
+            <div key={msg.id} className="border-b border-line py-3 first:pt-0 last:border-b-0">
+              <div className="mb-1.5 flex items-baseline gap-2 font-mono text-[8.5px] uppercase tracking-[0.14em] text-ink-subtle">
+                <span className="text-ink-muted">
+                  {isUser ? t('roleYou') : t('piAgent')}
+                </span>
+                <span>
+                  {new Date(msg.timestamp).toLocaleTimeString(
+                    language === 'zh' ? 'zh-CN' : 'en-US'
+                  )}
+                </span>
+              </div>
+              {isUser ? (
+                <div className="flex gap-2 font-reading text-[14px] leading-[1.85] tracking-[0.01em] text-ink">
+                  <span className="font-mono text-accent">›</span>
+                  <span className="whitespace-pre-wrap">{msg.content}</span>
                 </div>
-                <div className="text-sm whitespace-pre-wrap">
-                  {msg.content}
+              ) : (
+                <div className="chat-markdown text-ink">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeHighlight]}
+                    components={markdownComponents}
+                  >
+                    {msg.content}
+                  </ReactMarkdown>
                   {msg.isStreaming && (
-                    <span className="inline-block w-1.5 h-3.5 ml-0.5 align-text-bottom bg-gray-400 animate-pulse" />
+                    <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom" />
                   )}
                 </div>
-                <div className="text-xs mt-2 opacity-70">
-                  {new Date(msg.timestamp).toLocaleTimeString(language === 'zh' ? 'zh-CN' : 'en-US')}
-                </div>
-              </div>
+              )}
             </div>
           )
         })}
 
         {isLoading && !messages.some((msg) => msg.isStreaming && msg.content) && (
-          <div className="flex justify-start">
-            <div className="bg-gray-800 text-gray-100 rounded-lg p-3">
-              <div className="text-sm font-medium mb-1">{t('piAgent')}</div>
-              <div className="text-sm">{t('thinking')}</div>
-            </div>
+          <div className="flex items-center gap-2 border-b border-line py-3 font-mono text-[10px] text-ink-muted last:border-b-0">
+            <Spinner size={12} />
+            {t('thinking')}
           </div>
         )}
 
         {error && (
-          <div className="flex justify-center">
-            <div className="bg-red-900/20 border border-red-600 text-red-400 rounded-lg p-3 max-w-[80%]">
-              <div className="text-sm font-medium mb-1">{t('errorLabel')}</div>
-              <div className="text-sm">{error}</div>
-            </div>
+          <div className="mt-3 flex items-start gap-2 border-l-2 border-danger bg-danger/5 py-2 pl-3 text-xs text-danger">
+            <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
+            <span className="leading-relaxed">{error}</span>
           </div>
         )}
 
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <div className="border-t border-gray-700 p-4">
+      {/* Composer */}
+      <div className="flex-shrink-0 p-2.5">
         {attachments.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-2">
+          <div className="mb-1.5 flex flex-wrap gap-1.5">
             {attachments.map((attachment) => (
               <span
                 key={attachment.path}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-gray-800 border border-gray-700 text-xs text-gray-300"
+                className="inline-flex items-center gap-1 border border-line bg-sunken px-2 py-1 font-mono text-[10px] text-ink-muted"
                 title={attachment.path}
               >
-                📄 {attachment.name}
+                <FileText size={10} className="text-ink-subtle" />
+                {attachment.name}
                 <button
                   type="button"
                   onClick={() => removeAttachment(attachment.path)}
                   title={t('removeAttachment')}
-                  className="bg-none border-none cursor-pointer text-gray-500 hover:text-gray-200"
+                  aria-label={t('removeAttachment')}
+                  className="ml-0.5 p-0.5 text-ink-subtle hover:text-ink"
                 >
-                  ×
+                  <X size={10} />
                 </button>
               </span>
             ))}
           </div>
         )}
-        <form onSubmit={handleSubmit} className="flex gap-2">
-          <div className="relative flex">
-            <button
-              type="button"
-              onClick={() => setShowAttachMenu((open) => !open)}
-              disabled={!initialized || isLoading}
-              title={t('attachContext')}
-              className="px-3 rounded border border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              ＋
-            </button>
-            {showAttachMenu && (
-              <div className="absolute bottom-full left-0 mb-2 w-72 max-h-64 overflow-y-auto bg-gray-800 border border-gray-700 rounded shadow-lg z-10">
-                <div className="px-3 py-2 text-xs text-gray-400 border-b border-gray-700">
-                  {t('attachContext')}
-                </div>
-                {openFiles.length === 0 ? (
-                  <div className="px-3 py-2 text-sm text-gray-500">{t('noOpenFiles')}</div>
-                ) : (
-                  openFiles.map((file) => {
-                    const attached = attachments.some((item) => item.path === file.path)
-                    return (
-                      <button
-                        key={file.path}
-                        type="button"
-                        disabled={attached}
-                        onClick={() => {
-                          addAttachment({ path: file.path, name: file.name })
-                          setShowAttachMenu(false)
-                        }}
-                        className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed bg-none border-none cursor-pointer"
-                      >
-                        <div>{file.name}</div>
-                        <div className="text-xs text-gray-500 truncate">{file.path}</div>
-                      </button>
-                    )
-                  })
-                )}
-              </div>
-            )}
-          </div>
-          <textarea
+
+        <form
+          onSubmit={handleSubmit}
+          className="border border-line bg-sunken transition-colors focus-within:border-accent"
+        >
+          <Textarea
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={t('inputPlaceholder')}
             disabled={!initialized || isLoading}
-            className="flex-1 bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500 resize-none disabled:opacity-50 disabled:cursor-not-allowed"
             rows={3}
+            className="min-h-[68px] max-h-40 border-none bg-transparent px-3 py-2 focus:ring-0"
           />
-          {isLoading ? (
-            <button
-              type="button"
-              onClick={() => void handleStop()}
-              className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded font-medium transition-colors"
-            >
-              {t('stop')}
-            </button>
-          ) : (
-            <button
-              type="submit"
-              disabled={!initialized || !input.trim()}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {t('send')}
-            </button>
-          )}
+          <div className="flex items-center justify-between gap-2 px-2 pb-2">
+            <div className="relative flex items-center gap-1">
+              <IconButton
+                icon={Paperclip}
+                label={t('attachContext')}
+                size="sm"
+                disabled={!initialized || isLoading}
+                onClick={() => setShowAttachMenu((open) => !open)}
+              />
+              {showAttachMenu && (
+                <div className="absolute bottom-full left-0 z-10 mb-2 max-h-64 w-72 overflow-y-auto border border-line bg-raised py-1 shadow-print">
+                  <div className="px-3 py-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-subtle">
+                    {t('attachContext')}
+                  </div>
+                  {openFiles.length === 0 ? (
+                    <div className="px-3 py-2 text-xs text-ink-subtle">{t('noOpenFiles')}</div>
+                  ) : (
+                    openFiles.map((file) => {
+                      const attached = attachments.some((item) => item.path === file.path)
+                      return (
+                        <button
+                          key={file.path}
+                          type="button"
+                          disabled={attached}
+                          onClick={() => {
+                            addAttachment({ path: file.path, name: file.name })
+                            setShowAttachMenu(false)
+                          }}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink hover:bg-hover disabled:opacity-40"
+                        >
+                          <FileText size={12} className="flex-shrink-0 text-ink-subtle" />
+                          <span className="flex min-w-0 flex-col">
+                            <span className="truncate">{file.name}</span>
+                            <span className="truncate font-mono text-[9.5px] text-ink-subtle">
+                              {file.path}
+                            </span>
+                          </span>
+                        </button>
+                      )
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+
+            {isLoading ? (
+              <Button variant="danger" size="sm" icon={Square} onClick={() => void handleStop()}>
+                {t('stop')}
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                variant="primary"
+                size="sm"
+                icon={Send}
+                disabled={!initialized || !input.trim()}
+              >
+                {t('send')}
+              </Button>
+            )}
+          </div>
         </form>
+        <p className="mb-0 mt-1.5 px-0.5 font-mono text-[8.5px] uppercase tracking-[0.06em] text-ink-subtle">
+          {t('chatInputHint')}
+        </p>
       </div>
     </div>
   )

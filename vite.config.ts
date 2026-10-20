@@ -266,10 +266,24 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes('node_modules')) return
           if (id.includes('monaco-editor')) return 'monaco'
+          if (
+            id.includes('react-markdown') ||
+            id.includes('remark-') ||
+            id.includes('rehype-') ||
+            id.includes('highlight.js') ||
+            id.includes('lowlight') ||
+            id.includes('micromark') ||
+            id.includes('/mdast') ||
+            id.includes('/hast') ||
+            id.includes('/unified/') ||
+            id.includes('/unist')
+          ) {
+            return 'markdown'
+          }
           if (id.includes('react-dom') || id.includes('/react/') || id.includes('scheduler')) {
             return 'react-vendor'
           }
-          if (id.includes('zustand')) return 'vendor'
+          if (id.includes('zustand') || id.includes('lucide-react')) return 'vendor'
         },
       },
     },

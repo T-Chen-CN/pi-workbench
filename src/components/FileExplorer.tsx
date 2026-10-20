@@ -1,9 +1,24 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import {
+  AlertTriangle,
+  File as FileIcon,
+  FileCode,
+  FileJson,
+  FileText,
+  Folder,
+  FolderOpen,
+  Image,
+  Loader2,
+  Pencil,
+  Plus,
+  Trash2,
+} from 'lucide-react'
 import { api } from '../api'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
+import { Button, EmptyState, IconButton, Input, Modal } from './ui'
 
 interface FileEntry {
   name: string
@@ -35,6 +50,15 @@ function sortEntries(items: FileEntry[]): TreeNode[] {
   })
 }
 
+/** 按扩展名挑一个文件图标 */
+function fileIconFor(name: string) {
+  if (/\.(ts|tsx|js|jsx|mjs|cjs)$/i.test(name)) return FileCode
+  if (/\.json$/i.test(name)) return FileJson
+  if (/\.(md|markdown|txt)$/i.test(name)) return FileText
+  if (/\.(png|jpe?g|gif|svg|webp|ico)$/i.test(name)) return Image
+  return FileIcon
+}
+
 interface CreateFileDialogState {
   isOpen: boolean
   fileName: string
@@ -53,6 +77,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
   })
   const [contextMenu, setContextMenu] = useState<{ node: TreeNode; x: number; y: number } | null>(null)
   const { addOpenFile } = useEditorStore.getState()
+  const currentFilePath = useEditorStore((state) => state.currentFile?.path)
 
   // 保存最新树，供异步刷新读取（避免闭包拿到旧的展开状态）
   const treeRef = useRef<TreeNode[]>([])
@@ -317,27 +342,35 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
     const newVisited = new Set(visited)
     newVisited.add(node.path)
 
+    const active = currentFilePath === node.path
+    const NodeIcon = node.isDirectory ? (node.isExpanded ? FolderOpen : Folder) : fileIconFor(node.name)
+
     return (
       <div key={node.path}>
         <div
-          className="flex items-center gap-2 px-2 py-1 hover:bg-gray-200 dark:hover:bg-[#2d2d30] cursor-pointer select-none"
-          style={{ paddingLeft: `${depth * 16}px` }}
+          role="treeitem"
+          aria-selected={active}
+          aria-expanded={node.isDirectory ? !!node.isExpanded : undefined}
+          className={`flex h-7 cursor-pointer select-none items-center gap-1.5 border-l-2 pr-2 text-[12.5px] transition-colors ${
+            active
+              ? 'border-accent bg-accent/[0.06] text-ink'
+              : 'border-transparent text-ink-muted hover:bg-hover hover:text-ink'
+          }`}
+          style={{ paddingLeft: `${depth * 14 + 8}px` }}
           onClick={() => handleFileClick(node)}
           onContextMenu={(event) => {
             event.preventDefault()
             setContextMenu({ node, x: event.clientX, y: event.clientY })
           }}
         >
-          {node.isDirectory && (
-            <span className="text-base">
-              {node.isExpanded ? '📂' : '📁'}
-            </span>
-          )}
-          {!node.isDirectory && <span className="text-base">📄</span>}
-          <span className="text-gray-900 dark:text-gray-100">{node.name}</span>
+          <NodeIcon
+            size={14}
+            className={`flex-shrink-0 ${node.isDirectory ? 'text-ink-muted' : 'text-ink-subtle'}`}
+          />
+          <span className="truncate">{node.name}</span>
         </div>
         {node.isDirectory && node.isExpanded && node.children && (
-          <div>
+          <div role="group">
             {node.children.map((child) => renderNode(child, depth + 1, newVisited))}
           </div>
         )}
@@ -346,94 +379,101 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
   }
 
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-[#1e1e1e] border-r border-gray-200 dark:border-gray-700 w-64 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-        <h3 className="text-base font-semibold m-0 text-gray-900 dark:text-gray-100">{t('files')}</h3>
-        <div className="flex items-center gap-2">
-          <button
-            className="p-1 rounded hover:bg-gray-200 dark:hover:bg-[#2d2d30] text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 cursor-pointer border-none bg-none text-sm"
+    <div className="flex h-full flex-col overflow-hidden bg-panel">
+      <div className="flex h-[34px] flex-shrink-0 items-center justify-between border-b border-line px-3">
+        <h3 className="m-0 font-mono text-[9.5px] uppercase tracking-[0.16em] text-ink-subtle">
+          {t('files')}
+        </h3>
+        <div className="flex items-center gap-1">
+          {loading && <Loader2 size={13} className="animate-spin text-ink-subtle" />}
+          {error && (
+            <span title={error} className="text-warning">
+              <AlertTriangle size={13} />
+            </span>
+          )}
+          <IconButton
+            icon={Plus}
+            label={t('createNewFile')}
+            size="sm"
             onClick={openCreateFileDialog}
-            title={t('createNewFile')}
-          >
-            ✚
-          </button>
-          {loading && <span className="text-base">⌛</span>}
-          {error && <span className="text-base">⚠️</span>}
+          />
         </div>
       </div>
 
       {contextMenu && (
         <div className="fixed inset-0 z-50" onClick={() => setContextMenu(null)}>
           <div
-            className="absolute bg-white dark:bg-[#252526] border border-gray-300 dark:border-gray-600 rounded shadow-lg py-1 min-w-[140px]"
+            className="absolute min-w-[150px] overflow-hidden border border-line bg-raised py-1 shadow-print"
             style={{ left: contextMenu.x, top: contextMenu.y }}
             onClick={(event) => event.stopPropagation()}
           >
             <button
-              className="w-full text-left px-3 py-1.5 text-sm text-gray-900 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-[#2d2d30] border-none bg-none cursor-pointer"
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink hover:bg-hover"
               onClick={() => handleRename(contextMenu.node)}
             >
+              <Pencil size={13} className="text-ink-subtle" />
               {t('rename')}
             </button>
             <button
-              className="w-full text-left px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-gray-100 dark:hover:bg-[#2d2d30] border-none bg-none cursor-pointer"
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-danger hover:bg-danger/10"
               onClick={() => handleDelete(contextMenu.node)}
             >
+              <Trash2 size={13} />
               {t('delete')}
             </button>
           </div>
         </div>
       )}
 
-      {createDialog.isOpen && (
-        <div className="fixed inset-0 z-50">
-          <div className="fixed inset-0 bg-black/50 cursor-pointer" onClick={() => setCreateDialog({ isOpen: false, fileName: '', parentPath: null })} />
-          <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-[#1e1e1e] border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg p-6 z-50 w-96">
-            <h4 className="text-lg font-semibold mb-4 m-0 text-gray-900 dark:text-gray-100">{t('createFile')}</h4>
-            <input
-              type="text"
-              placeholder={t('fileName')}
-              value={createDialog.fileName}
-              onChange={(e) =>
-                setCreateDialog({ ...createDialog, fileName: e.target.value })
-              }
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleCreateFile()
-                if (e.key === 'Escape')
-                  setCreateDialog({ isOpen: false, fileName: '', parentPath: null })
-              }}
-              autoFocus
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#252526] text-gray-900 dark:text-gray-100 mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            <div className="flex gap-2 justify-end">
-              <button onClick={handleCreateFile} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 border-none cursor-pointer font-medium">
-                {t('create')}
-              </button>
-              <button
-                onClick={() =>
-                  setCreateDialog({ isOpen: false, fileName: '', parentPath: null })
-                }
-                className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded hover:bg-gray-300 dark:hover:bg-gray-600 border-none cursor-pointer font-medium"
-              >
-                {t('cancel')}
-              </button>
-            </div>
-          </div>
+      <Modal
+        open={createDialog.isOpen}
+        onClose={() => setCreateDialog({ isOpen: false, fileName: '', parentPath: null })}
+        title={t('createFile')}
+        size="sm"
+        closeLabel={t('close')}
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setCreateDialog({ isOpen: false, fileName: '', parentPath: null })}
+            >
+              {t('cancel')}
+            </Button>
+            <Button variant="primary" size="sm" onClick={handleCreateFile}>
+              {t('create')}
+            </Button>
+          </>
+        }
+      >
+        <div className="p-4">
+          <Input
+            type="text"
+            placeholder={t('fileName')}
+            value={createDialog.fileName}
+            onChange={(e) => setCreateDialog({ ...createDialog, fileName: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleCreateFile()
+              if (e.key === 'Escape')
+                setCreateDialog({ isOpen: false, fileName: '', parentPath: null })
+            }}
+            autoFocus
+          />
         </div>
-      )}
+      </Modal>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto py-1" role="tree">
         {error && (
-          <div className="px-4 py-3 bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-700/50">
-            <p className="text-red-700 dark:text-red-400 text-sm m-0">{error}</p>
+          <div className="mx-2 mb-1 border border-danger/30 bg-danger/5 px-2.5 py-1.5">
+            <p className="m-0 text-[11px] leading-relaxed text-danger">{error}</p>
           </div>
         )}
         {tree.length === 0 && !loading ? (
-          <div className="flex items-center justify-center h-32 text-gray-500 dark:text-gray-400">{t('noWorkspace')}</div>
+          <EmptyState compact icon={FolderOpen} title={t('noWorkspace')} />
         ) : (
-          <div>
-            {tree.map((node) => renderNode(node))}
-          </div>
+          tree.map((node) => renderNode(node))
         )}
       </div>
     </div>

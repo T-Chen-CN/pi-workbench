@@ -616,7 +616,7 @@ ipcMain.handle('app:getAppDir', async () => {
 
 const DEFAULT_SETTINGS = {
   language: 'zh',
-  theme: 'dark',
+  theme: 'light',
   autoSave: true,
   autoSaveDelay: 2000,
   recentWorkspaces: [] as string[],
