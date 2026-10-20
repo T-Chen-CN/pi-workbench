@@ -113,10 +113,14 @@ function devAgentBridge(): Plugin {
         res.end(JSON.stringify(body))
       }
 
-      const workspaceKey = (value: unknown): string | null => {
-        if (typeof value !== 'string' || !value) return null
-        const resolved = path.resolve(value)
-        return existsSync(resolved) ? resolved : null
+      // Web 调试没有真实的目录选择器：存在的路径按工作区隔离，
+      // 不存在（例如 mock 路径）时回退到项目根目录，保持纯 Web 模式可用
+      const workspaceKey = (value: unknown): string => {
+        if (typeof value === 'string' && value) {
+          const resolved = path.resolve(value)
+          if (existsSync(resolved)) return resolved
+        }
+        return path.resolve(process.cwd())
       }
 
       const agentDirFor = (workspaceDir: string): string =>
@@ -132,7 +136,6 @@ function devAgentBridge(): Plugin {
 
       const requireAgent = (workspaceDir: unknown) => {
         const key = workspaceKey(workspaceDir)
-        if (!key) return { key: null, agent: null, error: 'Workspace does not exist' }
         const agent = agents.get(key)
         if (!agent) return { key, agent: null, error: 'Agent not initialized for this workspace' }
         return { key, agent, error: null }
@@ -143,9 +146,6 @@ function devAgentBridge(): Plugin {
         try {
           const body = await readJson(req)
           const workspaceDir = workspaceKey(body.workspaceDir)
-          if (!workspaceDir) {
-            return reply(res, { success: false, error: 'Workspace does not exist' })
-          }
 
           const bridgePath = path.resolve(process.cwd(), 'pi-bridge/dist/index.js')
           const { AgentManager } = await import(pathToFileURL(bridgePath).href)
@@ -192,27 +192,41 @@ function devAgentBridge(): Plugin {
 
       server.middlewares.use(DEV_AGENT_CHAT_STREAM, async (req: any, res: any, next: any) => {
         if (req.method !== 'POST') return next()
-        const body = await readJson(req)
-        const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
-        if (!agent) return reply(res, { success: false, error })
 
-        res.writeHead(200, {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        })
-        try {
-          const result = await agent.chat(String(body.message ?? ''), {
-            onTextDelta: (delta: string) => sendSse(res, 'delta', { delta }),
+        const startSse = () => {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
           })
-          sendSse(res, 'done', result)
-        } catch (chatError) {
-          sendSse(res, 'done', {
-            success: false,
-            error: chatError instanceof Error ? chatError.message : String(chatError),
-          })
-        } finally {
+        }
+        const respondError = (message: string) => {
+          if (!res.headersSent) startSse()
+          sendSse(res, 'done', { success: false, error: message })
           res.end()
+        }
+
+        try {
+          const body = await readJson(req)
+          const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
+          if (!agent) return respondError(error ?? 'Agent not initialized')
+
+          startSse()
+          try {
+            const result = await agent.chat(String(body.message ?? ''), {
+              onTextDelta: (delta: string) => sendSse(res, 'delta', { delta }),
+            })
+            sendSse(res, 'done', result)
+          } catch (chatError) {
+            sendSse(res, 'done', {
+              success: false,
+              error: chatError instanceof Error ? chatError.message : String(chatError),
+            })
+          } finally {
+            res.end()
+          }
+        } catch (streamError) {
+          respondError(streamError instanceof Error ? streamError.message : String(streamError))
         }
       })
 
@@ -247,12 +261,16 @@ function devAgentBridge(): Plugin {
         if (req.method !== 'POST') return next()
         try {
           const body = await readJson(req)
-          const workspaceDir = workspaceKey(body.workspaceDir)
-          if (workspaceDir) {
-            const agent = agents.get(workspaceDir)
+          const requested =
+            typeof body.workspaceDir === 'string' && body.workspaceDir
+              ? workspaceKey(body.workspaceDir)
+              : null
+
+          if (requested) {
+            const agent = agents.get(requested)
             if (agent) {
               await agent.dispose()
-              agents.delete(workspaceDir)
+              agents.delete(requested)
             }
           } else {
             // 没有指定工作区时释放全部实例

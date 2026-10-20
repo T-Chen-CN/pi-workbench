@@ -11,7 +11,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deletePath: (path: string) => ipcRenderer.invoke('fs:delete', path),
   renamePath: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:rename', oldPath, newPath),
   watchWorkspace: (workspacePath: string) => ipcRenderer.invoke('fs:watch', workspacePath),
-  unwatchWorkspace: () => ipcRenderer.invoke('fs:unwatch'),
+  unwatchWorkspace: (workspacePath?: string) => ipcRenderer.invoke('fs:unwatch', workspacePath),
   onFsChanged: (callback: (payload: { type: string; path: string }) => void) => {
     const listener = (_event: unknown, payload: { type: string; path: string }) => callback(payload)
     ipcRenderer.on('fs:changed', listener)

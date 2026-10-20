@@ -34,6 +34,8 @@ export interface TerminalManagerOptions {
   env?: NodeJS.ProcessEnv
   /** 终端输出落盘路径；返回 null 表示不落盘 */
   logPathFor?: (workspaceDir: string, terminalId: string) => string | null
+  /** 自定义环境过滤（默认删除已知供应商 Key） */
+  envSanitizer?: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv
   onData?: (id: string, data: string) => void
   onExit?: (id: string, exitCode: number) => void
 }
@@ -104,12 +106,17 @@ export class TerminalManager {
     const logPath = this.options.logPathFor?.(workspaceDir, id) ?? null
 
     try {
+      const baseEnv = this.options.env ?? process.env
+      const spawnEnv = this.options.envSanitizer
+        ? this.options.envSanitizer(baseEnv)
+        : sanitizeTerminalEnv(baseEnv)
+
       const pty = this.options.spawn(this.options.shell ?? defaultShell(), this.options.shellArgs ?? [], {
         name: 'xterm-256color',
         cols: clampDimension(cols, 20, 1000),
         rows: clampDimension(rows, 5, 500),
         cwd: workspaceDir,
-        env: sanitizeTerminalEnv(this.options.env ?? process.env),
+        env: spawnEnv,
       })
 
       const entry: TerminalEntry = {

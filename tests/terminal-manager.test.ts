@@ -198,6 +198,22 @@ describe('TerminalManager', () => {
     expect(content).toContain('--- terminal term-1 started at')
   })
 
+  it('honors a custom env sanitizer', () => {
+    const spawn = vi.fn(
+      (_shell: string, _args: string[], _options: { env: NodeJS.ProcessEnv }) => createFakePty()
+    )
+    manager = new TerminalManager({
+      spawn,
+      shell: 'bash',
+      env: { OPENAI_API_KEY: 'user-owned-key' },
+      envSanitizer: (env) => ({ ...env }),
+    })
+
+    manager.create(tmpDir, 80, 24)
+
+    expect(spawn.mock.calls[0][2].env.OPENAI_API_KEY).toBe('user-owned-key')
+  })
+
   it('does not pass provider API keys to the terminal process', () => {
     const spawn = vi.fn(
       (_shell: string, _args: string[], _options: { env: NodeJS.ProcessEnv }) => createFakePty()

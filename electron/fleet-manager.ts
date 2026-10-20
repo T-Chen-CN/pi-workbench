@@ -73,10 +73,21 @@ export class FleetManager {
   constructor(options: FleetManagerOptions) {
     this.options = options
     this.recoverInterruptedTasks()
-    // 上次退出时仍在排队的任务继续执行，不需要用户重新创建
-    if (this.options.store.all().some((task) => task.status === 'queued')) {
-      void this.pump()
+  }
+
+  /**
+   * 恢复上次退出时仍在排队的任务。
+   * 必须等应用 ready（safeStorage 可用）后调用；没有 API Key 时保持 queued。
+   */
+  async resumeQueued(): Promise<{ resumed: number; reason?: string }> {
+    if (this.disposed) return { resumed: 0, reason: 'Application is shutting down' }
+    const apiConfig = await this.options.getApiConfig()
+    if (!apiConfig?.apiKey) {
+      return { resumed: 0, reason: 'API key not configured' }
     }
+    const queued = this.options.store.all().filter((task) => task.status === 'queued').length
+    if (queued > 0) this.pump()
+    return { resumed: queued }
   }
 
   /** 上次进程退出时仍在运行的任务不可能继续，启动时标记为失败 */
@@ -166,7 +177,7 @@ export class FleetManager {
     workspaceDir?: string
   ): Promise<{ success: boolean; error?: string }> {
     const task = this.options.store.get(id)
-    if (!task || (workspaceDir && task.workspace !== workspaceDir)) {
+    if (!task || (workspaceDir && !this.sameWorkspace(task.workspace, workspaceDir))) {
       return { success: false, error: 'Task not found' }
     }
     if (task.status !== 'queued' && task.status !== 'running') {
@@ -204,7 +215,7 @@ export class FleetManager {
     workspaceDir?: string
   ): Promise<{ success: boolean; error?: string }> {
     const task = this.options.store.get(id)
-    if (!task || (workspaceDir && task.workspace !== workspaceDir)) {
+    if (!task || (workspaceDir && !this.sameWorkspace(task.workspace, workspaceDir))) {
       return { success: false, error: 'Task not found' }
     }
     if (task.status === 'queued' || task.status === 'running') {
@@ -222,11 +233,28 @@ export class FleetManager {
     return { success: true }
   }
 
+  /** 路径比较：统一解析绝对路径，Windows 下忽略大小写 */
+  private sameWorkspace(a: string, b: string): boolean {
+    const normalize = (value: string): string => {
+      const resolved = path.resolve(value)
+      return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+    }
+    return normalize(a) === normalize(b)
+  }
+
   async disposeAll(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
     const agents = [...this.active.entries()]
     this.active.clear()
+    // 正在运行的任务没有机会走完 run()，退出前落到终态，避免重启前一直显示 running
+    for (const [id] of agents) {
+      this.updateTask(id, {
+        status: 'failed',
+        finishedAt: this.now(),
+        error: 'Application exited before the task finished',
+      })
+    }
     for (const [, agent] of agents) {
       try {
         if (typeof agent.abort === 'function') {

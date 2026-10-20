@@ -25,6 +25,8 @@ const API_KEY_ENV = 'PI_WORKBENCH_API_KEY'
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000
 /** abort 之后等待 SDK 收尾的宽限期；超过后强制结束本轮，防止永久挂起 */
 const ABORT_GRACE_MS = 10_000
+/** 调用 session.abort() 本身的等待上限，避免 dispose / 重启被卡住 */
+const ABORT_TIMEOUT_MS = 5_000
 /** 初始化（模型运行时 + 会话创建）超时 */
 const INIT_TIMEOUT_MS = 30_000
 /** 与 src/api/chatContext.ts 的标记保持一致 */
@@ -82,6 +84,27 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
   })
   try {
     return await Promise.race([promise, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+/** 超时返回 null，便于调用方处理“迟到的成功结果” */
+async function withTimeoutResult<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string
+): Promise<{ value: T } | null> {
+  let timer: NodeJS.Timeout | null = null
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      console.warn(`[Agent Manager] ${label} timed out after ${timeoutMs}ms`)
+      resolve(null)
+    }, timeoutMs)
+    timer.unref?.()
+  })
+  try {
+    return await Promise.race([promise.then((value) => ({ value })), timeout])
   } finally {
     if (timer) clearTimeout(timer)
   }
@@ -355,7 +378,7 @@ export class AgentManager {
       if (this.session) {
         if (this.isProcessing) {
           try {
-            await this.session.abort()
+            await withTimeout(this.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
           } catch (error) {
             console.warn('[Agent Manager] Failed to abort previous request:', error)
           }
@@ -409,17 +432,32 @@ export class AgentManager {
       const sessionManager = SessionManager.continueRecent(config.workspaceDir, sessionDir)
 
       // 创建 Pi Coding Agent 会话（自带 read/write/edit/bash 工具）
-      const result: CreateAgentSessionResult = await withTimeout(
-        createAgentSession({
-          cwd: config.workspaceDir,
-          agentDir,
-          modelRuntime,
-          model,
-          sessionManager,
-        }),
+      const sessionPromise = createAgentSession({
+        cwd: config.workspaceDir,
+        agentDir,
+        modelRuntime,
+        model,
+        sessionManager,
+      })
+      const sessionOutcome = await withTimeoutResult(
+        sessionPromise,
         INIT_TIMEOUT_MS,
         'Agent session creation'
       )
+      if (!sessionOutcome) {
+        // 超时后底层创建仍可能晚到成功：等它落地并释放，避免会话/句柄泄漏
+        void sessionPromise
+          .then((late) => {
+            try {
+              late.session?.dispose()
+            } catch {
+              // ignore
+            }
+          })
+          .catch(() => undefined)
+        throw new Error(`Agent session creation timed out after ${INIT_TIMEOUT_MS}ms`)
+      }
+      const result: CreateAgentSessionResult = sessionOutcome.value
 
       this.session = result.session
       this.subscribeToToolEdits()
@@ -472,6 +510,7 @@ export class AgentManager {
     let timeoutTimer: NodeJS.Timeout | null = null
     let hardStopTimer: NodeJS.Timeout | null = null
     let timedOut = false
+    let hardStopped = false
 
     try {
       this.isProcessing = true
@@ -501,6 +540,7 @@ export class AgentManager {
             console.warn('[Agent Manager] Failed to abort timed-out request:', error)
           })
           hardStopTimer = setTimeout(() => {
+            hardStopped = true
             reject(new Error(`Agent request did not stop within ${ABORT_GRACE_MS}ms after abort`))
           }, ABORT_GRACE_MS)
           hardStopTimer.unref?.()
@@ -589,10 +629,15 @@ export class AgentManager {
       const errorMessage = error instanceof Error ? error.message : String(error)
       if (timedOut) {
         console.error('[Agent Manager] Request timed out:', errorMessage)
+        const edits = this.pendingEdits.splice(0)
+        // SDK 没有响应 abort：销毁旧会话，避免迟到的流式/工具事件污染下一轮
+        if (hardStopped) {
+          await this.resetSessionAfterHardStop()
+        }
         return {
           success: false,
           error: `Agent request timed out after ${Math.round(timeoutMs / 1000)}s`,
-          edits: this.pendingEdits.splice(0),
+          edits,
         }
       }
       console.error('[Agent Manager] Chat error:', errorMessage)
@@ -615,9 +660,42 @@ export class AgentManager {
   async abort(): Promise<void> {
     if (!this.session) return
     try {
-      await this.session.abort()
+      await withTimeout(this.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
     } catch (error) {
       console.warn('[Agent Manager] Failed to abort request:', error)
+    }
+  }
+
+  /**
+   * 硬超时后销毁旧会话并重建：迟到的流式/工具事件随订阅一起消失，
+   * 下一轮不会继承上一轮的输出或文件修改。
+   */
+  private async resetSessionAfterHardStop(): Promise<void> {
+    const config = this.config
+    try {
+      this.unsubscribe?.()
+    } catch {
+      // ignore
+    }
+    this.unsubscribe = null
+    if (this.session) {
+      try {
+        this.session.dispose()
+      } catch (error) {
+        console.warn('[Agent Manager] Failed to dispose stuck session:', error)
+      }
+      this.session = null
+    }
+    this.editSnapshots.clear()
+
+    if (!config) return
+    try {
+      const result = await this.initialize(config)
+      if (!result.success) {
+        console.error('[Agent Manager] Failed to reinitialize after hard stop:', result.error)
+      }
+    } catch (error) {
+      console.error('[Agent Manager] Failed to reinitialize after hard stop:', error)
     }
   }
 
@@ -669,7 +747,7 @@ export class AgentManager {
   async dispose() {
     if (this.session && this.isProcessing) {
       try {
-        await this.session.abort()
+        await withTimeout(this.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
       } catch (error) {
         console.warn('[Agent Manager] Failed to abort before dispose:', error)
       }

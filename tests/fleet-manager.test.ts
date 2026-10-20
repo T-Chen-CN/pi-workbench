@@ -121,8 +121,72 @@ describe('FleetManager', () => {
 
     createManager(() => makeAgent(async () => ({ success: true, response: 'resumed' })))
 
+    await expect(manager!.resumeQueued()).resolves.toMatchObject({ resumed: 1 })
     await waitFor(() => store.get('pending')?.status === 'succeeded')
     expect(store.get('pending')?.output).toBe('resumed')
+  })
+
+  it('keeps queued tasks waiting when no API key is configured', async () => {
+    createManager(() => makeAgent(async () => ({ success: true })), {
+      getApiConfig: async () => null,
+    })
+
+    const created = await manager!.createTask('/tmp/workspace', 'blocked', 'work')
+    expect(created.success).toBe(false)
+
+    const preStore = new JsonFleetStore(path.join(tmpDir, 'recovered.json'))
+    preStore.insert({
+      id: 'waiting',
+      workspace: '/tmp/workspace',
+      name: 'waiting',
+      prompt: 'work',
+      status: 'queued',
+      worktree: '/tmp/worktree-waiting',
+      branch: 'pi-fleet/waiting',
+      createdAt: 1,
+      updatedAt: 1,
+      output: '',
+    })
+    preStore.close()
+
+    store = new JsonFleetStore(path.join(tmpDir, 'recovered.json'))
+    manager = new FleetManager({
+      store,
+      worktrees: fakeWorktrees(),
+      createAgent: () => makeAgent(async () => ({ success: true })),
+      getApiConfig: async () => null,
+      agentDir: path.join(tmpDir, 'agent'),
+      logDir,
+    })
+
+    await expect(manager.resumeQueued()).resolves.toMatchObject({
+      resumed: 0,
+      reason: 'API key not configured',
+    })
+    expect(store.get('waiting')?.status).toBe('queued')
+  })
+
+  it('marks running tasks as failed when the application shuts down', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    createManager(() =>
+      makeAgent(async () => {
+        await gate
+        return { success: true, response: 'done' }
+      })
+    )
+
+    const created = await manager!.createTask('/tmp/workspace', 'running', 'work')
+    const id = created.task!.id
+    await waitFor(() => store.get(id)?.status === 'running')
+
+    await manager!.disposeAll()
+    expect(store.get(id)?.status).toBe('failed')
+    expect(store.get(id)?.error).toContain('Application exited')
+
+    release()
   })
 
   it('runs tasks from different workspaces concurrently', async () => {

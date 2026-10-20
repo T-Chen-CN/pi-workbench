@@ -3,6 +3,7 @@ import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MonacoEditor } from '../src/components/MonacoEditor'
 import { useEditorStore } from '../src/store/editorStore'
+import { useWorkspaceStore } from '../src/store/workspaceStore'
 import { api } from '../src/api'
 
 interface FakeModel {
@@ -195,5 +196,76 @@ describe('MonacoEditor', () => {
     })
 
     expect(writeSpy).toHaveBeenCalledWith('/tmp/a.ts', 'changed')
+  })
+
+  it('keeps auto-save timers independent for each file', async () => {
+    vi.useFakeTimers()
+    const writeSpy = vi.spyOn(api, 'writeFile').mockResolvedValue({ success: true })
+
+    render(<MonacoEditor />)
+    act(() => {
+      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
+    })
+    const editor = mocks.create.mock.results[0].value
+    act(() => {
+      editor.emitChange('a-changed')
+    })
+    act(() => {
+      useEditorStore.getState().addOpenFile(makeFile('/tmp/b.ts', 'b'))
+    })
+    act(() => {
+      editor.emitChange('b-changed')
+    })
+
+    await act(async () => {
+      vi.advanceTimersByTime(2000)
+      await Promise.resolve()
+    })
+
+    expect(writeSpy).toHaveBeenCalledWith('/tmp/a.ts', 'a-changed')
+    expect(writeSpy).toHaveBeenCalledWith('/tmp/b.ts', 'b-changed')
+  })
+
+  it('keeps the file dirty when it changes while a save is in flight', async () => {
+    vi.useFakeTimers()
+    useWorkspaceStore.setState({ workspacePath: '/ws' })
+
+    let resolveWrite: (value: { success: boolean }) => void = () => {}
+    vi.spyOn(api, 'writeFile').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveWrite = resolve
+        })
+    )
+    const draftSpy = vi.spyOn(api, 'draftSave').mockResolvedValue({ success: true })
+
+    render(<MonacoEditor />)
+    act(() => {
+      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
+    })
+    const editor = mocks.create.mock.results[0].value
+
+    act(() => {
+      editor.emitChange('first')
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(2000)
+      await Promise.resolve()
+    })
+
+    // 保存请求还在飞行时用户继续输入
+    act(() => {
+      editor.emitChange('second')
+    })
+    await act(async () => {
+      resolveWrite({ success: true })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(useEditorStore.getState().currentFile?.isDirty).toBe(true)
+    expect(draftSpy).toHaveBeenCalledWith('/ws', '/tmp/a.ts', 'second')
+
+    useWorkspaceStore.setState({ workspacePath: null })
   })
 })

@@ -34,7 +34,12 @@ const workspaceWatchers = new Map<string, WorkspaceWatchEntry>()
 const singleInstanceLock =
   typeof app.requestSingleInstanceLock === 'function' ? app.requestSingleInstanceLock() : true
 if (!singleInstanceLock) {
-  app.quit()
+  // 立即退出，避免第二个进程继续打开数据库或执行队列
+  if (typeof app.exit === 'function') {
+    app.exit(0)
+  } else {
+    app.quit()
+  }
 } else {
   app.on('second-instance', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return
@@ -50,6 +55,9 @@ let rendererLogger: FileLogger | null = null
 
 const requireFromMain = createRequire(import.meta.url)
 let ptyModule: typeof import('node-pty') | null = null
+
+/** 当前生效的供应商 Key（用于终端环境过滤，避免连用户自己的同名 Key 一起删掉） */
+let activeProviderApiKey = ''
 
 /** node-pty 是原生模块，延迟加载：加载失败不应阻止应用启动 */
 function loadPty(): typeof import('node-pty') {
@@ -73,6 +81,19 @@ const terminalManager = new TerminalManager({
   },
   logPathFor: (workspaceDir, terminalId) =>
     path.join(workspaceDir, '.pi-workbench', `terminal-${terminalId}.log`),
+  // 只移除应用自己注入的供应商 Key；用户 shell 里同名的其他 Key 保持不变
+  envSanitizer: (env) => {
+    const sanitized = { ...env }
+    delete sanitized.PI_WORKBENCH_API_KEY
+    if (activeProviderApiKey) {
+      for (const key of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
+        if (sanitized[key] === activeProviderApiKey) {
+          delete sanitized[key]
+        }
+      }
+    }
+    return sanitized
+  },
 })
 
 const pluginManager = new PluginManager({
@@ -363,6 +384,11 @@ function createWindow() {
       detail: zh ? '关闭窗口会丢失这些修改。' : 'Closing the window will discard them.',
     })
     if (choice === 1) {
+      // 用户明确放弃未保存内容：清掉已加载工作区的草稿，避免下次启动又提示恢复
+      for (const loaded of pluginManager.loadedWorkspaces()) {
+        const canonical = canonicalizePath(loaded)
+        if (canonical) draftStore.clear(canonical)
+      }
       event.preventDefault()
     }
   })
@@ -400,6 +426,15 @@ app.whenReady().then(async () => {
   await initAppDirectories()
   await seedTrustedWorkspacesFromSettings()
   createWindow()
+
+  // 应用 ready、safeStorage 可用之后再恢复上次排队的 Fleet 任务
+  void fleetManager.resumeQueued().then((result) => {
+    if (result.reason) {
+      console.log('[Main] Fleet queue not resumed:', result.reason)
+    } else if (result.resumed > 0) {
+      console.log(`[Main] Resumed ${result.resumed} Fleet task(s)`)
+    }
+  })
 })
 
 let shuttingDown = false
@@ -420,18 +455,13 @@ async function shutdownApplication(): Promise<void> {
   }
 }
 
-app.on('before-quit', (event) => {
-  // 第一次退出请求先拦下，完成异步清理后再真正退出
+// 退出顺序：先让窗口完成 beforeunload / will-prevent-unload 的未保存确认，
+// 所有窗口真正关闭后再在 will-quit 里做异步清理，避免用户取消关闭时资源已被释放。
+app.on('will-quit', (event) => {
   if (shuttingDown) return
   event.preventDefault()
   shuttingDown = true
   void shutdownApplication().finally(() => app.quit())
-})
-
-app.on('will-quit', () => {
-  // 兜底关闭日志（正常路径已在 shutdownApplication 中关闭）
-  fileLogger?.close()
-  rendererLogger?.close()
 })
 
 app.on('window-all-closed', () => {
@@ -448,10 +478,15 @@ app.on('activate', () => {
 
 // IPC Handlers
 
-/** 只接受主窗口发来的 IPC，其他 webContents（未来窗口/iframe）一律拒绝 */
+/** 只接受主窗口主框架发来的 IPC；应用 ready 之后 fail-closed */
 function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
-  if (!mainWindow || mainWindow.isDestroyed()) return true
-  return event.sender === mainWindow.webContents
+  // 测试替身没有 isReady，直接放行
+  if (typeof app.isReady !== 'function') return true
+  if (!app.isReady()) return true
+  if (!mainWindow || mainWindow.isDestroyed()) return false
+  if (event.sender !== mainWindow.webContents) return false
+  if (event.senderFrame && event.senderFrame !== mainWindow.webContents.mainFrame) return false
+  return true
 }
 
 function handleIpc(
@@ -669,9 +704,13 @@ handleIpc('fs:watch', async (event, workspacePath: string) => {
   }
 })
 
-handleIpc('fs:unwatch', async () => {
+handleIpc('fs:unwatch', async (_event, workspacePath?: string) => {
   try {
-    closeAllWorkspaceWatchers()
+    if (workspacePath) {
+      closeWorkspaceWatcher(workspacePath)
+    } else {
+      closeAllWorkspaceWatchers()
+    }
     return { success: true }
   } catch (error) {
     return {
@@ -1217,6 +1256,7 @@ const DEFAULT_API_CONFIG = {
 // Helper function to load API Config
 async function loadApiConfig(): Promise<any> {
   try {
+    activeProviderApiKey = ''
     const appDir = getAppDir()
     const configPath = path.join(appDir, 'config', 'api-config.json')
 
@@ -1251,6 +1291,7 @@ async function loadApiConfig(): Promise<any> {
     }
 
     config.apiKey = decryptApiKey(config.apiKey)
+    activeProviderApiKey = typeof config.apiKey === 'string' ? config.apiKey : ''
     return config
   } catch (error) {
     console.error('[Main] Failed to load API config:', error)
@@ -1282,6 +1323,9 @@ handleIpc('apiConfig:save', async (_event, config: any) => {
       apiKey: encryptApiKey(String(config?.apiKey ?? '')),
     }
     await writeJsonAtomic(configPath, stored)
+    activeProviderApiKey = String(config?.apiKey ?? '')
+    // 配置好 Key 之后，恢复因缺少 Key 而停在队列中的 Fleet 任务
+    void fleetManager.resumeQueued()
 
     return { success: true }
   } catch (error) {

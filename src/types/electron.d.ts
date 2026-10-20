@@ -9,7 +9,7 @@ export interface ElectronAPI {
   deletePath: (path: string) => Promise<WorkspaceResult>
   renamePath: (oldPath: string, newPath: string) => Promise<WorkspaceResult>
   watchWorkspace: (workspacePath: string) => Promise<WorkspaceResult>
-  unwatchWorkspace: () => Promise<WorkspaceResult>
+  unwatchWorkspace: (workspacePath?: string) => Promise<WorkspaceResult>
   onFsChanged: (callback: (payload: { type: string; path: string }) => void) => () => void
 
   // App configuration (portable architecture)

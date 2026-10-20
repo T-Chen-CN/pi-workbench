@@ -105,7 +105,7 @@
 #### Phase 5: Fleet 任务系统（完成）
 
 - ✅ Git worktree 创建 / 清理（`{workspace}/.pi-worktrees/`，分支保留）
-- ✅ 任务队列与状态机（queued / running / succeeded / failed / cancelled，默认并发 1）
+- ✅ 任务队列与状态机（queued / running / succeeded / failed / cancelled，每个工作区默认并发 1，全局上限 4）
 - ✅ 每任务独立 Agent 实例，流式输出写入任务记录与 `fleet-{id}.log`
 - ✅ 元数据持久化：`{appDir}/data/fleet-tasks.db`（`node:sqlite`，JSON 回退）
 - ✅ Fleet 面板：创建 / 取消 / 查看日志 / 清理 worktree

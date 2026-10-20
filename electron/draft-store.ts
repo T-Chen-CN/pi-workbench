@@ -33,12 +33,18 @@ export class DraftStore {
   }
 
   save(workspace: string, filePath: string, content: string): void {
-    const truncated =
-      content.length > MAX_DRAFT_CHARS ? content.slice(0, MAX_DRAFT_CHARS) : content
+    // 超长草稿不做截断保存：截断内容一旦被恢复并保存，会破坏原文件
+    if (content.length > MAX_DRAFT_CHARS) {
+      console.warn(
+        `[Drafts] Skipping draft for ${filePath}: content exceeds ${MAX_DRAFT_CHARS} characters`
+      )
+      this.remove(workspace, filePath)
+      return
+    }
     const record: DraftRecord = {
       workspace,
       path: filePath,
-      content: truncated,
+      content,
       updatedAt: Date.now(),
     }
     writeJsonAtomicSync(this.fileFor(workspace, filePath), record)
@@ -53,6 +59,11 @@ export class DraftStore {
   }
 
   list(workspace: string): DraftRecord[] {
+    return this.allForWorkspace(workspace).slice(0, MAX_DRAFTS_PER_WORKSPACE)
+  }
+
+  /** 不截断的工作区草稿集合（清理时使用） */
+  private allForWorkspace(workspace: string): DraftRecord[] {
     let files: string[] = []
     try {
       files = fs.readdirSync(this.rootDir).filter((name) => name.endsWith('.json'))
@@ -68,13 +79,11 @@ export class DraftStore {
       records.push(result.data)
     }
 
-    return records
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .slice(0, MAX_DRAFTS_PER_WORKSPACE)
+    return records.sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
   clear(workspace: string): void {
-    for (const draft of this.list(workspace)) {
+    for (const draft of this.allForWorkspace(workspace)) {
       this.remove(workspace, draft.path)
     }
   }

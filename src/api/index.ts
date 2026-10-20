@@ -84,7 +84,7 @@ const mockAPI = {
     console.log('[Mock] watchWorkspace:', workspacePath)
     return { success: true }
   },
-  unwatchWorkspace: async (): Promise<WorkspaceResult> => {
+  unwatchWorkspace: async (_workspacePath?: string): Promise<WorkspaceResult> => {
     return { success: true }
   },
   onFsChanged: (_callback: (payload: { type: string; path: string }) => void) => {
@@ -293,7 +293,7 @@ export const api = {
   deletePath: (path: string) => electronAPI.deletePath(path),
   renamePath: (oldPath: string, newPath: string) => electronAPI.renamePath(oldPath, newPath),
   watchWorkspace: (workspacePath: string) => electronAPI.watchWorkspace(workspacePath),
-  unwatchWorkspace: () => electronAPI.unwatchWorkspace(),
+  unwatchWorkspace: (workspacePath?: string) => electronAPI.unwatchWorkspace(workspacePath),
   onFsChanged: (callback: (payload: { type: string; path: string }) => void) =>
     electronAPI.onFsChanged(callback),
 

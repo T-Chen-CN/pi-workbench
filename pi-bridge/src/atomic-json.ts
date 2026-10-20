@@ -9,7 +9,11 @@ export function writeJsonAtomicSync(filePath: string, value: unknown): void {
   const dir = path.dirname(filePath)
   fs.mkdirSync(dir, { recursive: true })
 
-  const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`)
+  const random = Math.random().toString(36).slice(2, 8)
+  const tmpPath = path.join(
+    dir,
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${random}.tmp`
+  )
   const content = JSON.stringify(value, null, 2)
 
   let fd: number | null = null
@@ -23,10 +27,12 @@ export function writeJsonAtomicSync(filePath: string, value: unknown): void {
 
   try {
     if (fs.existsSync(filePath)) {
+      // 只有主文件仍是合法 JSON 时才覆盖备份，避免把损坏内容写进 .bak
+      JSON.parse(fs.readFileSync(filePath, 'utf-8'))
       fs.copyFileSync(filePath, `${filePath}.bak`)
     }
   } catch (error) {
-    console.warn(`[AtomicJson] Failed to back up ${filePath}:`, error)
+    console.warn(`[AtomicJson] Skipped backing up unreadable ${filePath}:`, error)
   }
 
   try {

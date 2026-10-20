@@ -57,10 +57,20 @@ describe('DraftStore', () => {
     expect(store.list('/ws/a')).toMatchObject([{ content: 'recover me' }])
   })
 
-  it('truncates oversized drafts', () => {
+  it('does not persist oversized drafts', () => {
     const huge = 'x'.repeat(2_000_010)
     store.save('/ws/a', '/ws/a/huge.txt', huge)
 
-    expect(store.list('/ws/a')[0].content.length).toBe(2_000_000)
+    expect(store.list('/ws/a')).toEqual([])
+  })
+
+  it('clears every draft even beyond the list cap', () => {
+    for (let index = 0; index < 105; index++) {
+      store.save('/ws/a', `/ws/a/file-${index}.ts`, `content-${index}`)
+    }
+    expect(store.list('/ws/a')).toHaveLength(100)
+
+    store.clear('/ws/a')
+    expect(store.list('/ws/a')).toEqual([])
   })
 })

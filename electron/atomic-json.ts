@@ -39,8 +39,9 @@ export function readJsonWithBackup<T>(filePath: string): JsonReadResult<T> {
 function temporaryPathFor(filePath: string): string {
   const dir = path.dirname(filePath)
   const name = path.basename(filePath)
+  const random = Math.random().toString(36).slice(2, 8)
   // 临时文件以 . 开头，避免被文件树或监听器当作正常文件
-  return path.join(dir, `.${name}.${process.pid}.${Date.now()}.tmp`)
+  return path.join(dir, `.${name}.${process.pid}.${Date.now()}.${random}.tmp`)
 }
 
 /** 同步原子写 JSON（文件很小，主进程直接写即可） */
@@ -62,10 +63,12 @@ export function writeJsonAtomicSync(filePath: string, value: unknown): void {
 
   try {
     if (fs.existsSync(filePath)) {
+      // 只有主文件仍是合法 JSON 时才覆盖备份，避免把损坏内容写进 .bak
+      JSON.parse(fs.readFileSync(filePath, 'utf-8'))
       fs.copyFileSync(filePath, `${filePath}.bak`)
     }
   } catch (error) {
-    console.warn(`[AtomicJson] Failed to back up ${filePath}:`, error)
+    console.warn(`[AtomicJson] Skipped backing up unreadable ${filePath}:`, error)
   }
 
   try {

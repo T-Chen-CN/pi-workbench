@@ -180,10 +180,11 @@ Main Process (Node 24, Electron 44)
 ```
 electron/           主进程（main.ts、preload.cts、两套 tsconfig）
 src/
-  components/       7 个扁平组件（ChatPanel、DiffViewer、FileExplorer、IPCDebug、
-                    MonacoEditor、Settings、Toast）
-  store/            6 个独立 store（chat、diff、editor、i18n、toast、workspace）
-  api/              IPC 封装、Agent API、diff 算法
+  components/       13 个扁平组件（ChatPanel、CommandPalette、DiffViewer、ErrorBoundary、
+                    FileExplorer、FleetPanel、IPCDebug、MonacoEditor、Settings、
+                    TerminalPanel、Toast、WelcomeScreen、ui）
+  store/            7 个独立 store（chat、diff、editor、i18n、theme、toast、workspace）
+  api/              IPC 封装、Agent API（Electron IPC / Web SSE）、渲染日志、diff 算法
   types/            Electron API 与通用类型
   i18n/             中英文文案
 pi-bridge/          AgentManager（主进程内运行；dist 不入库）
@@ -265,7 +266,7 @@ docs/               项目文档
 ### 模块 8：Fleet 任务（已实现）
 
 - Git worktree：`{workspace}/.pi-worktrees/{name}-{taskId}`，分支 `pi-fleet/...`
-- 任务队列：默认并发 1，可在 `FleetManager` 配置中调整
+- 任务队列：每个工作区默认并发 1（全局上限 4），工作区之间互不排队
 - 每个任务独立 Agent 实例，运行在 worktree 目录，结束后释放
 - 状态机：queued → running → succeeded / failed / cancelled
 - 任务元数据：`{appDir}/data/fleet-tasks.db`（Electron 内置 `node:sqlite`；不可用时回退 JSON）

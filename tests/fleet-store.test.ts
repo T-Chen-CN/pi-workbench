@@ -2,7 +2,18 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
+import { createRequire } from 'module'
 import { JsonFleetStore, SqliteFleetStore, createFleetStore, type FleetTask } from '../electron/fleet-store'
+
+const requireFromHere = createRequire(import.meta.url)
+const sqliteAvailable = (() => {
+  try {
+    requireFromHere('node:sqlite')
+    return true
+  } catch {
+    return false
+  }
+})()
 
 let tmpDir: string
 let storePath: string
@@ -81,7 +92,7 @@ describe('JsonFleetStore', () => {
   })
 })
 
-describe('SqliteFleetStore', () => {
+describe.skipIf(!sqliteAvailable)('SqliteFleetStore', () => {
   let dbPath: string
   let sqlite: SqliteFleetStore
 

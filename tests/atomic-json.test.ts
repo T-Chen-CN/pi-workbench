@@ -57,6 +57,18 @@ describe('atomic JSON persistence', () => {
     expect(result.source).toBeUndefined()
   })
 
+  it('keeps a good backup when the primary file is already corrupted', async () => {
+    const file = path.join(dir, 'settings.json')
+    writeJsonAtomicSync(file, { version: 1 })
+    writeJsonAtomicSync(file, { version: 2 })
+    await fs.writeFile(file, '{ broken', 'utf-8')
+
+    writeJsonAtomicSync(file, { version: 3 })
+
+    expect(JSON.parse(await fs.readFile(`${file}.bak`, 'utf-8'))).toEqual({ version: 1 })
+    expect(JSON.parse(await fs.readFile(file, 'utf-8'))).toEqual({ version: 3 })
+  })
+
   it('does not leave temporary files behind', async () => {
     const file = path.join(dir, 'settings.json')
     writeJsonAtomicSync(file, { ok: true })
