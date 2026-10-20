@@ -102,5 +102,10 @@
   "author": "Pi Workbench Team",
   "engines": {
     "node": ">=22.19.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/T-Chen-CN/pi-workbench.git"
   }
 }

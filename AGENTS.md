@@ -72,7 +72,7 @@ pi-workbench/
 | 编辑器 | **Monaco Editor** | 0.57.0 | VS Code 内核 |
 | 样式 | **TailwindCSS** | 3.4.19 | 原子化 CSS |
 | 类型检查 | **TypeScript** | 5.9.3 | 严格模式 |
-| 打包 | **electron-builder** | 24.13.3 | 生成安装包 |
+| 打包 | **electron-builder** | 26.15.3 | 生成安装包 |
 | Agent SDK | **@earendil-works/pi-coding-agent** | 1.3.0 | 运行在主进程 |
 
 ### 禁止使用的技术
