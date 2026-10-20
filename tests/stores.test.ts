@@ -48,6 +48,24 @@ describe('editorStore', () => {
     useEditorStore.getState().removeOpenFile('/tmp/b.ts')
     expect(useEditorStore.getState().currentFile?.path).toBe('/tmp/a.ts')
   })
+
+  it('clears dirty tracking when a dirty file is closed', () => {
+    useEditorStore.getState().addOpenFile(file)
+    useEditorStore.getState().markDirty(file.path)
+
+    useEditorStore.getState().removeOpenFile(file.path)
+
+    expect(useEditorStore.getState().hasDirtyFiles()).toBe(false)
+    expect(useEditorStore.getState().unsavedChanges.has(file.path)).toBe(false)
+  })
+
+  it('clears stale dirty tracking when reopening a file from disk', () => {
+    useEditorStore.setState({ unsavedChanges: new Set([file.path]) })
+
+    useEditorStore.getState().addOpenFile(file)
+
+    expect(useEditorStore.getState().unsavedChanges.has(file.path)).toBe(false)
+  })
 })
 
 describe('chatStore', () => {

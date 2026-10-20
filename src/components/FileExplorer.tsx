@@ -144,7 +144,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
 
     try {
       const result = await api.readFile(node.path)
-      if (!result.success || !result.content) {
+      if (!result.success || typeof result.content !== 'string') {
         throw new Error(result.error || 'Failed to read file')
       }
       addOpenFile({

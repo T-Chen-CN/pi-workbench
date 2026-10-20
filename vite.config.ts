@@ -237,6 +237,13 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
   },
+  // Monaco 的 worker 入口需要由 Vite 直接处理，不能被依赖预打包
+  optimizeDeps: {
+    exclude: ['monaco-editor'],
+  },
+  worker: {
+    format: 'es',
+  },
   build: {
     outDir: '../dist',  // 输出到上一级的 dist 目录
     emptyOutDir: true,

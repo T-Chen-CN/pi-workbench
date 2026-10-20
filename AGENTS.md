@@ -593,6 +593,10 @@ async function initAgent(config: ApiConfig) {
 - ⏳ 渲染进程日志：`{appDir}/logs/renderer.log`（待实现）
 - ⏳ Agent 日志：`{appDir}/logs/agent.log`（待实现；目前与主进程共用 main.log）
 
+**Chromium profile**:
+- ✅ `app.setPath('userData', '{appDir}/data/profile')`，缓存与 localStorage 随应用目录迁移
+- ✅ 语言偏好等应用设置仍写 `{appDir}/config/settings.json`（渲染进程不使用 localStorage 保存设置）
+
 ### 插件系统约束
 
 **插件定位**:
@@ -699,6 +703,11 @@ useEditorStore.subscribe((state) => {
 const result = await api.readFile(path)
 console.log('IPC result:', result)
 ```
+
+### 渲染层测试
+- Vitest + `jsdom` + React Testing Library；测试文件用 `// @vitest-environment jsdom`
+- Monaco 等重型组件通过 `vi.mock` 模拟，避免真实渲染
+- 修改编辑器 / 聊天 / 文件树交互后，请补充或更新对应的渲染层测试
 
 ---
 

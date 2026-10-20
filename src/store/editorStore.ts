@@ -23,15 +23,20 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set((state) => {
       const exists = state.openFiles.find((f) => f.path === file.path)
       if (exists) return { currentFile: exists }
+      const newDirty = new Set(state.unsavedChanges)
+      newDirty.delete(file.path)
       return {
         openFiles: [...state.openFiles, file],
         currentFile: file,
+        unsavedChanges: newDirty,
       }
     }),
 
   removeOpenFile: (path) =>
     set((state) => {
       const newFiles = state.openFiles.filter((f) => f.path !== path)
+      const newDirty = new Set(state.unsavedChanges)
+      newDirty.delete(path)
       let currentFile = state.currentFile
       if (currentFile?.path === path) {
         currentFile = newFiles[newFiles.length - 1] || null
@@ -39,6 +44,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       return {
         openFiles: newFiles,
         currentFile,
+        unsavedChanges: newDirty,
       }
     }),
 

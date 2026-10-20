@@ -166,6 +166,7 @@ Main Process (Node 24, Electron 44)
 | 工作区配置 | `{workspace}/.pi-workbench/config.json` | `workspace:init` 创建 |
 | Web dev Agent 数据 | `{appDir}/cache/temp/web-agent/` | 可随时删除 |
 | 主进程日志 | `{appDir}/logs/main.log` | 5 MB 轮转，保留 `main.log.1`；渲染进程日志待补 |
+| Chromium profile | `{appDir}/data/profile/` | `app.setPath('userData', ...)`，缓存与 localStorage 随应用目录迁移 |
 | 终端输出 | `{workspace}/.pi-workbench/terminal.log` | 每次新建终端时重置；可附加给 Agent |
 | Fleet 任务 | `{appDir}/data/fleet-tasks.db` | `node:sqlite`（不可用时回退 `fleet-tasks.json`） |
 | Fleet 日志 | `{appDir}/logs/fleet-{task-id}.log` | 任务开始 / 流式输出 / 结束 |
@@ -343,8 +344,10 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 - [ ] 主题系统
 - [ ] 崩溃恢复（草稿）
 - [x] CSP 与安全加固（生产构建已注入 CSP）
+- [x] 代码审查回归修复（编辑器初始化/自动保存、Web 终端降级、错误边界、监听批量事件、语言持久化、Fleet 崩溃恢复）
+- [x] 渲染层测试（jsdom + React Testing Library：编辑器创建 / 自动保存）
 - [ ] 自动更新（electron-updater）
-- [x] 测试覆盖率提升（store / logger / AgentManager / IPC 已覆盖）
+- [x] 测试覆盖率提升（store / logger / AgentManager / IPC / 终端 / 插件 / Fleet / 渲染组件）
 
 ---
 

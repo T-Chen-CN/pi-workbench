@@ -57,6 +57,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     const doInit = async (seq: number) => {
       try {
         setInitialized(false)
+        setNeedsApiKey(false)
         setLoading(true)
 
         // Load API configuration

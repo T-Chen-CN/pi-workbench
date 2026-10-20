@@ -3,8 +3,9 @@ import * as path from 'path'
 import * as fs from 'fs/promises'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { createRequire } from 'module'
-import { existsSync, statSync, watch, type FSWatcher } from 'fs'
+import { existsSync, mkdirSync, statSync, watch, type FSWatcher } from 'fs'
 import { isIgnoredWatchPath } from './watch-filter.js'
+import { WatchBatcher } from './watch-batcher.js'
 import { FileLogger, installConsoleTee } from './logger.js'
 import { AgentRegistry } from './agent-registry.js'
 import { TerminalManager } from './terminal-manager.js'
@@ -22,7 +23,7 @@ let mainWindow: BrowserWindow | null = null
 /** 每个打开的工作区一个 Agent 实例 */
 const agentRegistry = new AgentRegistry()
 let workspaceWatcher: FSWatcher | null = null
-let watchDebounce: NodeJS.Timeout | null = null
+let watchBatcher: WatchBatcher | null = null
 let fileLogger: FileLogger | null = null
 
 const requireFromMain = createRequire(import.meta.url)
@@ -107,6 +108,15 @@ function getAppDir(): string {
     return app.getAppPath()
   }
 }
+
+// Chromium 的 profile（localStorage、缓存等）也放进应用目录，保证整体可迁移
+const userDataDir = path.join(getAppDir(), 'data', 'profile')
+try {
+  mkdirSync(userDataDir, { recursive: true })
+} catch {
+  // 目录创建失败时仍让 Electron 使用默认路径，避免启动失败
+}
+app.setPath('userData', userDataDir)
 
 // 初始化应用目录结构
 async function initAppDirectories() {
@@ -334,17 +344,19 @@ ipcMain.handle('fs:watch', async (event, workspacePath: string) => {
 
     const sender = event.sender
 
+    watchBatcher?.cancel()
+    watchBatcher = new WatchBatcher((changes) => {
+      if (sender.isDestroyed()) return
+      for (const change of changes) {
+        sender.send('fs:changed', change)
+      }
+    })
+
     workspaceWatcher = watch(workspacePath, { recursive: true }, (eventType, filename) => {
       if (!filename || isIgnoredWatchPath(filename)) return
-      if (watchDebounce) clearTimeout(watchDebounce)
-      watchDebounce = setTimeout(() => {
-        if (!sender.isDestroyed()) {
-          sender.send('fs:changed', {
-            type: eventType,
-            path: path.join(workspacePath, filename)
-          })
-        }
-      }, 300)
+      const fullPath = path.join(workspacePath, filename)
+      const key = process.platform === 'win32' ? fullPath.toLowerCase() : fullPath
+      watchBatcher?.add({ type: eventType, path: fullPath }, key)
     })
 
     workspaceWatcher.on('error', (error) => {
@@ -362,10 +374,8 @@ ipcMain.handle('fs:watch', async (event, workspacePath: string) => {
 
 ipcMain.handle('fs:unwatch', async () => {
   try {
-    if (watchDebounce) {
-      clearTimeout(watchDebounce)
-      watchDebounce = null
-    }
+    watchBatcher?.cancel()
+    watchBatcher = null
     if (workspaceWatcher) {
       workspaceWatcher.close()
       workspaceWatcher = null
@@ -489,7 +499,7 @@ ipcMain.handle('app:getAppDir', async () => {
 // ---- 应用设置（settings.json）----
 
 const DEFAULT_SETTINGS = {
-  language: 'zh-CN',
+  language: 'zh',
   theme: 'dark',
   autoSave: true,
   autoSaveDelay: 2000,

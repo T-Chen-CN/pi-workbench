@@ -80,6 +80,29 @@ afterEach(async () => {
 })
 
 describe('FleetManager', () => {
+  it('marks tasks left running by a previous process as failed', () => {
+    const preStore = new JsonFleetStore(path.join(tmpDir, 'fleet-tasks.json'))
+    preStore.insert({
+      id: 'stale',
+      workspace: '/tmp/workspace',
+      name: 'stale task',
+      prompt: 'work',
+      status: 'running',
+      worktree: '/tmp/worktree-stale',
+      branch: 'pi-fleet/stale',
+      createdAt: 1,
+      updatedAt: 1,
+      output: '',
+    })
+    preStore.close()
+
+    createManager(() => makeAgent(async () => ({ success: true })))
+
+    const task = store.get('stale')
+    expect(task?.status).toBe('failed')
+    expect(task?.error).toContain('interrupted')
+  })
+
   it('runs a queued task to success and stores output and logs', async () => {
     const agent = makeAgent(async (_message, options) => {
       options?.onTextDelta?.('Hello ')

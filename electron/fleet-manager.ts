@@ -60,6 +60,19 @@ export class FleetManager {
 
   constructor(options: FleetManagerOptions) {
     this.options = options
+    this.recoverInterruptedTasks()
+  }
+
+  /** 上次进程退出时仍在运行的任务不可能继续，启动时标记为失败 */
+  private recoverInterruptedTasks(): void {
+    for (const task of this.options.store.all()) {
+      if (task.status !== 'running') continue
+      this.options.store.update(task.id, {
+        status: 'failed',
+        finishedAt: this.now(),
+        error: 'Task was interrupted by application exit',
+      })
+    }
   }
 
   private now(): number {

@@ -17,6 +17,17 @@ interface SettingsProps {
 export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
   const { language, setLanguage, t } = useI18nStore()
 
+  const handleLanguageChange = async (next: 'zh' | 'en') => {
+    setLanguage(next)
+    try {
+      const current = await api.getSettings()
+      const settings = current.success && current.settings ? current.settings : {}
+      await api.saveSettings({ ...settings, language: next })
+    } catch (error) {
+      console.error('Failed to persist language setting:', error)
+    }
+  }
+
   const [apiConfig, setApiConfig] = useState<ApiConfig>({
     provider: 'anthropic',
     apiUrl: DEFAULT_URLS.anthropic,
@@ -150,7 +161,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
         <h3 className="text-lg font-semibold mb-3">{t('language')}</h3>
         <select
           value={language}
-          onChange={(e) => setLanguage(e.target.value as 'zh' | 'en')}
+          onChange={(e) => void handleLanguageChange(e.target.value as 'zh' | 'en')}
           className="bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500"
         >
           <option value="zh">中文</option>
