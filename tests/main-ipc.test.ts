@@ -313,7 +313,7 @@ describe('workspace lifecycle handlers', () => {
 describe('API configuration handlers', () => {
   it('encrypts the API key on disk and decrypts it on read', async () => {
     const config = {
-      provider: 'openai',
+      provider: 'custom',
       apiUrl: 'https://api.example.com/v1',
       apiKey: 'sk-123',
       availableModels: ['model-a'],
@@ -335,7 +335,8 @@ describe('API configuration handlers', () => {
 
     expect(result.success).toBe(true)
     expect(result.config).toMatchObject({
-      provider: 'anthropic',
+      provider: 'custom',
+      apiUrl: '',
       availableModels: [],
       selectedModel: '',
     })
@@ -344,12 +345,41 @@ describe('API configuration handlers', () => {
   it('reads legacy plaintext API keys', async () => {
     await fs.writeFile(
       path.join(appDir, 'config', 'api-config.json'),
-      JSON.stringify({ provider: 'openai', apiKey: 'legacy-key' }),
+      JSON.stringify({ provider: 'custom', apiKey: 'legacy-key' }),
       'utf-8'
     )
 
     const result = await call('apiConfig:get')
     expect((result.config as Record<string, unknown>).apiKey).toBe('legacy-key')
+  })
+
+  it('clears legacy provider configs and keeps a backup', async () => {
+    const legacy = {
+      provider: 'anthropic',
+      apiUrl: 'https://api.anthropic.com/v1',
+      apiKey: 'enc:whatever',
+      availableModels: ['claude-model'],
+      selectedModel: 'claude-model',
+    }
+    await fs.writeFile(
+      path.join(appDir, 'config', 'api-config.json'),
+      JSON.stringify(legacy),
+      'utf-8'
+    )
+
+    const result = await call('apiConfig:get')
+
+    expect(result.config).toMatchObject({
+      provider: 'custom',
+      apiUrl: '',
+      apiKey: '',
+      availableModels: [],
+      selectedModel: '',
+    })
+    await expect(
+      fs.readFile(path.join(appDir, 'config', 'api-config.legacy.json'), 'utf-8')
+    ).resolves.toContain('anthropic')
+    await expect(fs.access(path.join(appDir, 'config', 'api-config.json'))).rejects.toThrow()
   })
 
   it('fetches and normalizes models from a { data: [{ id }] } response', async () => {

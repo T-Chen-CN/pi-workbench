@@ -12,6 +12,9 @@ const EXACT: Record<string, TranslationKey> = {
   'Workspace is not approved': 'errWorkspaceNotApproved',
   'Agent not initialized for this workspace': 'errAgentNotInitialized',
   'Agent does not support abort': 'errAgentNoAbort',
+  'Please enter a valid API URL': 'errInvalidApiUrl',
+  'API URL must start with http:// or https://': 'errApiUrlScheme',
+  'API key not configured. Please set it in Settings.': 'errApiKeyNotConfigured',
 }
 
 const PREFIXES: Array<[string, TranslationKey]> = [
