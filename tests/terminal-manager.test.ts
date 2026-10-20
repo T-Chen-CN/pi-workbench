@@ -180,10 +180,12 @@ describe('TerminalManager', () => {
     ptys[0].emitData('line one\n')
     expect(manager.flushNow(id)).toBe(true)
 
-    await expect(fs.readFile(logPath, 'utf-8')).resolves.toBe('line one\n')
+    const content = await fs.readFile(logPath, 'utf-8')
+    expect(content).toContain(`--- terminal ${id} started at`)
+    expect(content).toContain('line one\n')
   })
 
-  it('truncates the log for a new terminal session', async () => {
+  it('appends a session marker instead of truncating an existing log', async () => {
     const logPath = path.join(tmpDir, '.pi-workbench', 'terminal.log')
     await fs.mkdir(path.dirname(logPath), { recursive: true })
     await fs.writeFile(logPath, 'old session output', 'utf-8')
@@ -191,6 +193,48 @@ describe('TerminalManager', () => {
     makeManager({ logPathFor: () => logPath })
     manager.create(tmpDir, 80, 24)
 
-    await expect(fs.readFile(logPath, 'utf-8')).resolves.toBe('')
+    const content = await fs.readFile(logPath, 'utf-8')
+    expect(content).toContain('old session output')
+    expect(content).toContain('--- terminal term-1 started at')
+  })
+
+  it('honors a custom env sanitizer', () => {
+    const spawn = vi.fn(
+      (_shell: string, _args: string[], _options: { env: NodeJS.ProcessEnv }) => createFakePty()
+    )
+    manager = new TerminalManager({
+      spawn,
+      shell: 'bash',
+      env: { OPENAI_API_KEY: 'user-owned-key' },
+      envSanitizer: (env) => ({ ...env }),
+    })
+
+    manager.create(tmpDir, 80, 24)
+
+    expect(spawn.mock.calls[0][2].env.OPENAI_API_KEY).toBe('user-owned-key')
+  })
+
+  it('does not pass provider API keys to the terminal process', () => {
+    const spawn = vi.fn(
+      (_shell: string, _args: string[], _options: { env: NodeJS.ProcessEnv }) => createFakePty()
+    )
+    manager = new TerminalManager({
+      spawn,
+      shell: 'bash',
+      env: {
+        PATH: '/usr/bin',
+        PI_WORKBENCH_API_KEY: 'sk-secret',
+        ANTHROPIC_API_KEY: 'sk-ant',
+        OPENAI_API_KEY: 'sk-openai',
+      },
+    })
+
+    manager.create(tmpDir, 80, 24)
+
+    const options = spawn.mock.calls[0][2]
+    expect(options.env.PATH).toBe('/usr/bin')
+    expect(options.env.PI_WORKBENCH_API_KEY).toBeUndefined()
+    expect(options.env.ANTHROPIC_API_KEY).toBeUndefined()
+    expect(options.env.OPENAI_API_KEY).toBeUndefined()
   })
 })

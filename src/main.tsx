@@ -9,7 +9,10 @@ import '@fontsource/ibm-plex-mono/500.css'
 import './monacoEnvironment'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { installRendererLogging } from './api/rendererLog'
 import './index.css'
+
+installRendererLogging()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

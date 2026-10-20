@@ -8,6 +8,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { createRequire } from 'module'
+import { readJsonWithBackup, writeJsonAtomicSync } from './atomic-json.js'
 
 export interface PluginManifest {
   id?: string
@@ -195,11 +196,9 @@ export class PluginManager {
 
   /** 启用/禁用插件并持久化到工作区配置 */
   setEnabled(workspaceDir: string, pluginId: string, enabled: boolean): PluginInfo[] {
-    const state = this.workspaces.get(workspaceDir)
-    const allIds = state?.plugins.map((plugin) => plugin.info.id) ?? []
     const current = this.readEnabledIds(workspaceDir)
-    // null 表示尚未配置，默认全部启用
-    const base = current ?? allIds
+    // 未配置时默认全部禁用：启用一个插件只把它自己写进白名单
+    const base = current ?? []
 
     const enabledPlugins = enabled
       ? [...new Set([...base, pluginId])]
@@ -207,6 +206,11 @@ export class PluginManager {
 
     this.writeEnabledIds(workspaceDir, enabledPlugins)
     return this.loadWorkspace(workspaceDir)
+  }
+
+  /** 该工作区是否已经有显式的插件启用列表（用于首次启用时的风险提示） */
+  hasExplicitEnableList(workspaceDir: string): boolean {
+    return this.readEnabledIds(workspaceDir) !== null
   }
 
   reload(workspaceDir: string): PluginInfo[] {
@@ -303,13 +307,20 @@ export class PluginManager {
   ): void {
     const mainFile = typeof manifest.main === 'string' && manifest.main ? manifest.main : 'index.js'
     const root = path.resolve(directory)
-    const entryPath = path.resolve(root, mainFile)
+    const entryCandidate = path.resolve(root, mainFile)
 
-    if (entryPath !== root && !entryPath.startsWith(root + path.sep)) {
+    if (entryCandidate !== root && !entryCandidate.startsWith(root + path.sep)) {
       throw new Error('Plugin "main" must stay inside its own directory')
     }
-    if (!fs.existsSync(entryPath)) {
+    if (!fs.existsSync(entryCandidate)) {
       throw new Error(`Plugin entry not found: ${mainFile}`)
+    }
+
+    // 词法检查挡不住指向目录外的符号链接，入口必须用 realpath 再校验一次
+    const realRoot = fs.realpathSync.native(root)
+    const entryPath = fs.realpathSync.native(entryCandidate)
+    if (entryPath !== realRoot && !entryPath.startsWith(realRoot + path.sep)) {
+      throw new Error('Plugin entry must stay inside its own directory')
     }
 
     const load = this.options.requireModule ?? defaultRequire
@@ -331,7 +342,10 @@ export class PluginManager {
       pluginId: plugin.info.id,
       registerCommand: (id, handler) => {
         plugin.handlers.set(id, handler)
-        const declared = manifest.contributes?.commands?.find((command) => command.id === id)
+        const declaredCommands = Array.isArray(manifest.contributes?.commands)
+          ? manifest.contributes.commands
+          : []
+        const declared = declaredCommands.find((command) => command?.id === id)
         plugin.info.commands.push({
           id,
           title: declared?.title ?? id,
@@ -394,23 +408,20 @@ export class PluginManager {
   private writeEnabledIds(workspaceDir: string, ids: string[]): void {
     const configDir = path.join(workspaceDir, '.pi-workbench')
     const configPath = path.join(configDir, 'config.json')
-    let config: Record<string, unknown> = {}
-
-    try {
-      config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>
-    } catch {
-      config = { version: '1.0', agentConfig: { temperature: 0.7 } }
-    }
+    const existing = readJsonWithBackup<Record<string, unknown>>(configPath)
+    const config: Record<string, unknown> =
+      existing.data && typeof existing.data === 'object' && !Array.isArray(existing.data)
+        ? existing.data
+        : { version: '1.0', agentConfig: { temperature: 0.7 } }
 
     config.enabledPlugins = ids
     config.pluginsConfigured = true
-    fs.mkdirSync(configDir, { recursive: true })
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+    writeJsonAtomicSync(configPath, config)
   }
 
   private isEnabled(id: string, enabledIds: string[] | null): boolean {
-    if (enabledIds === null) return true
-    return enabledIds.includes(id)
+    // 默认禁用：插件在主进程拥有完整 Node 权限，不能在打开工作区时自动执行
+    return enabledIds !== null && enabledIds.includes(id)
   }
 
   private startWatcher(

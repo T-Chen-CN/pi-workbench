@@ -15,6 +15,7 @@ import {
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { existsSync, readFileSync } from 'fs'
+import { writeJsonAtomicSync } from './atomic-json.js'
 
 /** 写入 models.json 的自定义供应商 ID */
 const WORKBENCH_PROVIDER_ID = 'pi-workbench'
@@ -22,9 +23,92 @@ const WORKBENCH_PROVIDER_ID = 'pi-workbench'
 const API_KEY_ENV = 'PI_WORKBENCH_API_KEY'
 /** 单轮请求的默认超时（毫秒）；超时后自动中止，避免 Agent 永远处于忙碌状态 */
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000
+/** abort 之后等待 SDK 收尾的宽限期；超过后强制结束本轮，防止永久挂起 */
+const ABORT_GRACE_MS = 10_000
+/** 调用 session.abort() 本身的等待上限，避免 dispose / 重启被卡住 */
+const ABORT_TIMEOUT_MS = 5_000
+/** 初始化（模型运行时 + 会话创建）超时 */
+const INIT_TIMEOUT_MS = 30_000
 /** 与 src/api/chatContext.ts 的标记保持一致 */
 const CONTEXT_BLOCK_START = '<pi-workbench-context>'
 const CONTEXT_BLOCK_END = '</pi-workbench-context>'
+
+/**
+ * 供应商密钥通过 process.env 提供给 Pi SDK（models.json 只存变量名）。
+ * 多个 Agent 实例共享进程环境，用引用计数保证最后一个实例释放后才清理。
+ */
+const providerEnvState = {
+  users: 0,
+  saved: new Map<string, string | undefined>(),
+}
+const PROVIDER_ENV_KEYS = ['PI_WORKBENCH_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const
+
+function acquireProviderEnv(apiKey: string, provider: string): void {
+  if (providerEnvState.users === 0) {
+    providerEnvState.saved.clear()
+    for (const key of PROVIDER_ENV_KEYS) {
+      providerEnvState.saved.set(key, process.env[key])
+      delete process.env[key]
+    }
+  }
+  providerEnvState.users++
+
+  process.env[API_KEY_ENV] = apiKey
+  if (provider === 'anthropic') {
+    process.env.ANTHROPIC_API_KEY = apiKey
+  } else if (provider === 'openai') {
+    process.env.OPENAI_API_KEY = apiKey
+  }
+}
+
+function releaseProviderEnv(): void {
+  if (providerEnvState.users === 0) return
+  providerEnvState.users--
+  if (providerEnvState.users > 0) return
+
+  for (const [key, value] of providerEnvState.saved) {
+    if (value === undefined) {
+      delete process.env[key]
+    } else {
+      process.env[key] = value
+    }
+  }
+  providerEnvState.saved.clear()
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | null = null
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
+    timer.unref?.()
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+/** 超时返回 null，便于调用方处理“迟到的成功结果” */
+async function withTimeoutResult<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string
+): Promise<{ value: T } | null> {
+  let timer: NodeJS.Timeout | null = null
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      console.warn(`[Agent Manager] ${label} timed out after ${timeoutMs}ms`)
+      resolve(null)
+    }, timeoutMs)
+    timer.unref?.()
+  })
+  try {
+    return await Promise.race([promise.then((value) => ({ value })), timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
 
 /** 恢复历史时去掉附件上下文块，避免聊天面板展示整段文件内容 */
 function stripContextBlock(content: string): string {
@@ -61,12 +145,24 @@ export interface FileEdit {
   newContent: string
 }
 
+export interface AgentUsage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  totalTokens: number
+  /** 供应商回报的累计费用（可能为 0） */
+  cost: number
+}
+
 export interface AgentChatResult {
   success: boolean
   response?: string
   error?: string
   /** Agent 在本轮对话中修改过的文件（用于 Diff 展示） */
   edits?: FileEdit[]
+  /** 本轮模型调用的 token 用量 */
+  usage?: AgentUsage
 }
 
 export interface AgentChatOptions {
@@ -90,6 +186,8 @@ export class AgentManager {
   private messageHistory: AgentMessage[] = []
   private isProcessing = false
   private unsubscribe: (() => void) | null = null
+  /** 是否持有 process.env 中的供应商密钥租约 */
+  private envLease = false
 
   /** toolCallId -> 执行前的文件快照 */
   private editSnapshots = new Map<string, { path: string; oldContent: string }>()
@@ -120,7 +218,7 @@ export class AgentManager {
     }
 
     await fs.mkdir(agentDir, { recursive: true })
-    await fs.writeFile(modelsPath, JSON.stringify(modelsConfig, null, 2), 'utf-8')
+    writeJsonAtomicSync(modelsPath, modelsConfig)
     return modelsPath
   }
 
@@ -161,12 +259,36 @@ export class AgentManager {
     }
   }
 
+  /** 从 assistant 消息中提取 usage（Pi 保证 assistant 消息带 usage） */
+  private readUsage(message: any): AgentUsage | undefined {
+    const raw = message?.usage
+    if (!raw || typeof raw !== 'object') return undefined
+    const value = (input: unknown): number =>
+      typeof input === 'number' && Number.isFinite(input) ? input : 0
+    return {
+      input: value(raw.input),
+      output: value(raw.output),
+      cacheRead: value(raw.cacheRead),
+      cacheWrite: value(raw.cacheWrite),
+      totalTokens: value(raw.totalTokens),
+      cost: value(raw.cost?.total),
+    }
+  }
+
   /** 把工具参数里的路径解析为绝对路径 */
   private resolveToolPath(toolPath: unknown): string | null {
     if (typeof toolPath !== 'string' || !toolPath) return null
     return path.isAbsolute(toolPath)
       ? toolPath
       : path.resolve(this.config?.workspaceDir ?? process.cwd(), toolPath)
+  }
+
+  /** 工具路径是否位于工作区内（快照只关心工作区文件） */
+  private isInsideWorkspace(targetPath: string): boolean {
+    const root = this.config?.workspaceDir
+    if (!root) return false
+    const relative = path.relative(path.resolve(root), path.resolve(targetPath))
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
   }
 
   /**
@@ -186,10 +308,28 @@ export class AgentManager {
           return
         }
 
+        // Pi SDK 自带自动重试（429 / 5xx / 网络抖动），这里只记录，便于诊断
+        if (event.type === 'auto_retry_start') {
+          console.warn(
+            `[Agent Manager] Provider retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms: ${event.errorMessage ?? ''}`
+          )
+          return
+        }
+        if (event.type === 'auto_retry_end') {
+          console.log(`[Agent Manager] Provider retry ${event.success ? 'succeeded' : 'failed'}`)
+          return
+        }
+
+        // 一轮结束：丢弃本轮未闭合的工具快照，避免 Map 无限增长
+        if (event.type === 'turn_end' || event.type === 'agent_end') {
+          this.editSnapshots.clear()
+          return
+        }
+
         if (event.type === 'tool_execution_start') {
           if (event.toolName !== 'write' && event.toolName !== 'edit') return
           const target = this.resolveToolPath(event.args?.path)
-          if (!target) return
+          if (!target || !this.isInsideWorkspace(target)) return
           const oldContent = existsSync(target) ? readFileSync(target, 'utf-8') : ''
           this.editSnapshots.set(event.toolCallId, { path: target, oldContent })
           return
@@ -222,6 +362,7 @@ export class AgentManager {
    * @returns 初始化结果
    */
   async initialize(config: AgentConfig): Promise<{ success: boolean; error?: string }> {
+    let initialized = false
     try {
       const { provider, apiUrl, apiKey, selectedModel } = config.apiConfig
 
@@ -233,8 +374,15 @@ export class AgentManager {
 
       this.config = config
 
-      // 重新初始化时释放旧会话
+      // 重新初始化时释放旧会话：先中止进行中的请求，再释放会话与环境租约
       if (this.session) {
+        if (this.isProcessing) {
+          try {
+            await withTimeout(this.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
+          } catch (error) {
+            console.warn('[Agent Manager] Failed to abort previous request:', error)
+          }
+        }
         try {
           this.unsubscribe?.()
           this.unsubscribe = null
@@ -243,6 +391,11 @@ export class AgentManager {
           console.warn('[Agent Manager] Failed to dispose previous session:', error)
         }
         this.session = null
+        this.isProcessing = false
+      }
+      if (this.envLease) {
+        releaseProviderEnv()
+        this.envLease = false
       }
 
       const agentDir = config.agentDir || path.join(config.workspaceDir, '.pi-workbench', 'agent')
@@ -251,21 +404,20 @@ export class AgentManager {
       // Windows: 确保 bash 工具能找到 Git Bash
       this.ensureBashOnPath()
 
-      // API Key 通过环境变量提供给 models.json（不写入磁盘）
-      process.env[API_KEY_ENV] = apiKey
-      // 原生供应商的环境变量兜底（custom 走 models.json）
-      if (provider === 'anthropic') {
-        process.env.ANTHROPIC_API_KEY = apiKey
-      } else if (provider === 'openai') {
-        process.env.OPENAI_API_KEY = apiKey
-      }
+      // API Key 通过环境变量提供给 models.json（不写入磁盘）；多实例共享，引用计数释放
+      acquireProviderEnv(apiKey, provider)
+      this.envLease = true
 
       // 使用 models.json 构建运行时，并显式选中用户配置的模型
-      const modelRuntime = await ModelRuntime.create({
-        modelsPath,
-        authPath: path.join(agentDir, 'auth.json'),
-        refreshOnCreate: false,
-      })
+      const modelRuntime = await withTimeout(
+        ModelRuntime.create({
+          modelsPath,
+          authPath: path.join(agentDir, 'auth.json'),
+          refreshOnCreate: false,
+        }),
+        INIT_TIMEOUT_MS,
+        'Agent model runtime'
+      )
 
       const model = modelRuntime.getModel(WORKBENCH_PROVIDER_ID, selectedModel)
       if (!model) {
@@ -280,13 +432,32 @@ export class AgentManager {
       const sessionManager = SessionManager.continueRecent(config.workspaceDir, sessionDir)
 
       // 创建 Pi Coding Agent 会话（自带 read/write/edit/bash 工具）
-      const result: CreateAgentSessionResult = await createAgentSession({
+      const sessionPromise = createAgentSession({
         cwd: config.workspaceDir,
         agentDir,
         modelRuntime,
         model,
         sessionManager,
       })
+      const sessionOutcome = await withTimeoutResult(
+        sessionPromise,
+        INIT_TIMEOUT_MS,
+        'Agent session creation'
+      )
+      if (!sessionOutcome) {
+        // 超时后底层创建仍可能晚到成功：等它落地并释放，避免会话/句柄泄漏
+        void sessionPromise
+          .then((late) => {
+            try {
+              late.session?.dispose()
+            } catch {
+              // ignore
+            }
+          })
+          .catch(() => undefined)
+        throw new Error(`Agent session creation timed out after ${INIT_TIMEOUT_MS}ms`)
+      }
+      const result: CreateAgentSessionResult = sessionOutcome.value
 
       this.session = result.session
       this.subscribeToToolEdits()
@@ -295,6 +466,7 @@ export class AgentManager {
       console.log('[Agent Manager] Using model:', `${model.provider}/${model.id}`)
       console.log('[Agent Manager] Session file:', sessionManager.getSessionFile() ?? '(new, not persisted yet)')
 
+      initialized = true
       return { success: true }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
@@ -303,6 +475,12 @@ export class AgentManager {
       return {
         success: false,
         error: `Failed to initialize agent: ${errorMessage}`
+      }
+    } finally {
+      // 初始化失败（含模型不存在等提前返回）时立即归还环境租约
+      if (!initialized && this.envLease) {
+        releaseProviderEnv()
+        this.envLease = false
       }
     }
   }
@@ -330,12 +508,17 @@ export class AgentManager {
 
     const timeoutMs = options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     let timeoutTimer: NodeJS.Timeout | null = null
+    let hardStopTimer: NodeJS.Timeout | null = null
     let timedOut = false
+    let hardStopped = false
 
     try {
       this.isProcessing = true
       this.onTextDelta = options?.onTextDelta ?? null
       this.pendingEdits = []
+      this.editSnapshots.clear()
+      // 只认本轮新增的 assistant 消息，避免请求失败时把上一轮回复当成本轮结果
+      const messageStartIndex = this.session.messages.length
       console.log('[Agent Manager] Sending message to agent:', message.substring(0, 100))
 
       // 记录用户消息
@@ -345,22 +528,30 @@ export class AgentManager {
         timestamp: Date.now(),
       })
 
-      // 发送用户消息并等待 Agent 完成；超时后中止，避免永久阻塞后续请求
-      const promptPromise = this.session.prompt(message)
-      if (timeoutMs > 0) {
+      // 发送用户消息并等待 Agent 完成；超时先 abort，宽限期后仍未结束则强制收尾
+      const session = this.session
+      const promptPromise = session.prompt(message)
+      const timeoutPromise = new Promise<never>((_resolve, reject) => {
+        if (timeoutMs <= 0) return
         timeoutTimer = setTimeout(() => {
           timedOut = true
-          const session = this.session
           console.warn(`[Agent Manager] Request timed out after ${timeoutMs}ms; aborting`)
-          if (session) {
-            void session.abort().catch((error) => {
-              console.warn('[Agent Manager] Failed to abort timed-out request:', error)
-            })
-          }
+          void session.abort().catch((error) => {
+            console.warn('[Agent Manager] Failed to abort timed-out request:', error)
+          })
+          hardStopTimer = setTimeout(() => {
+            hardStopped = true
+            reject(new Error(`Agent request did not stop within ${ABORT_GRACE_MS}ms after abort`))
+          }, ABORT_GRACE_MS)
+          hardStopTimer.unref?.()
         }, timeoutMs)
         timeoutTimer.unref?.()
-      }
-      await promptPromise
+      })
+      await Promise.race([promptPromise, timeoutPromise])
+
+      // 正常完成时清掉计时器；超时路径由 finally 统一清理
+      if (timeoutTimer) clearTimeout(timeoutTimer)
+      if (hardStopTimer) clearTimeout(hardStopTimer)
 
       // 收集本轮文件修改（在读取回复前取出，确保不串到下一轮）
       const edits = this.pendingEdits.splice(0)
@@ -376,9 +567,9 @@ export class AgentManager {
       // 获取 Agent 的最新消息
       const messages = this.session.messages
 
-      // 从后往前查找最后一条 assistant 消息
+      // 只从本轮开始的位置往后找最后一条 assistant 消息
       let lastAssistant: any = null
-      for (let i = messages.length - 1; i >= 0; i--) {
+      for (let i = messages.length - 1; i >= messageStartIndex; i--) {
         if (messages[i].role === 'assistant') {
           lastAssistant = messages[i]
           break
@@ -389,14 +580,16 @@ export class AgentManager {
         return { success: false, error: 'Agent did not produce a response.', edits }
       }
 
+      const usage = this.readUsage(lastAssistant)
+
       // Pi 在请求失败时不会抛异常，而是把错误放在 stopReason/errorMessage 中
       if (lastAssistant.stopReason === 'error') {
         const detail = lastAssistant.errorMessage || 'Agent request failed'
         console.error('[Agent Manager] Provider error:', detail)
-        return { success: false, error: detail, edits }
+        return { success: false, error: detail, edits, usage }
       }
       if (lastAssistant.stopReason === 'aborted') {
-        return { success: false, error: 'Agent request was aborted.', edits }
+        return { success: false, error: 'Agent request was aborted.', edits, usage }
       }
 
       let assistantResponse = ''
@@ -430,9 +623,23 @@ export class AgentManager {
         success: true,
         response: assistantResponse,
         edits,
+        usage,
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
+      if (timedOut) {
+        console.error('[Agent Manager] Request timed out:', errorMessage)
+        const edits = this.pendingEdits.splice(0)
+        // SDK 没有响应 abort：销毁旧会话，避免迟到的流式/工具事件污染下一轮
+        if (hardStopped) {
+          await this.resetSessionAfterHardStop()
+        }
+        return {
+          success: false,
+          error: `Agent request timed out after ${Math.round(timeoutMs / 1000)}s`,
+          edits,
+        }
+      }
       console.error('[Agent Manager] Chat error:', errorMessage)
       console.error('[Agent Manager] Stack:', error instanceof Error ? error.stack : '')
 
@@ -443,6 +650,7 @@ export class AgentManager {
       }
     } finally {
       if (timeoutTimer) clearTimeout(timeoutTimer)
+      if (hardStopTimer) clearTimeout(hardStopTimer)
       this.isProcessing = false
       this.onTextDelta = null
     }
@@ -452,9 +660,42 @@ export class AgentManager {
   async abort(): Promise<void> {
     if (!this.session) return
     try {
-      await this.session.abort()
+      await withTimeout(this.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
     } catch (error) {
       console.warn('[Agent Manager] Failed to abort request:', error)
+    }
+  }
+
+  /**
+   * 硬超时后销毁旧会话并重建：迟到的流式/工具事件随订阅一起消失，
+   * 下一轮不会继承上一轮的输出或文件修改。
+   */
+  private async resetSessionAfterHardStop(): Promise<void> {
+    const config = this.config
+    try {
+      this.unsubscribe?.()
+    } catch {
+      // ignore
+    }
+    this.unsubscribe = null
+    if (this.session) {
+      try {
+        this.session.dispose()
+      } catch (error) {
+        console.warn('[Agent Manager] Failed to dispose stuck session:', error)
+      }
+      this.session = null
+    }
+    this.editSnapshots.clear()
+
+    if (!config) return
+    try {
+      const result = await this.initialize(config)
+      if (!result.success) {
+        console.error('[Agent Manager] Failed to reinitialize after hard stop:', result.error)
+      }
+    } catch (error) {
+      console.error('[Agent Manager] Failed to reinitialize after hard stop:', error)
     }
   }
 
@@ -504,6 +745,13 @@ export class AgentManager {
    * 清理资源
    */
   async dispose() {
+    if (this.session && this.isProcessing) {
+      try {
+        await withTimeout(this.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
+      } catch (error) {
+        console.warn('[Agent Manager] Failed to abort before dispose:', error)
+      }
+    }
     if (this.unsubscribe) {
       try {
         this.unsubscribe()
@@ -516,11 +764,16 @@ export class AgentManager {
       this.session.dispose()
       this.session = null
     }
+    if (this.envLease) {
+      releaseProviderEnv()
+      this.envLease = false
+    }
     this.config = null
     this.messageHistory = []
     this.pendingEdits = []
     this.editSnapshots.clear()
     this.onTextDelta = null
+    this.isProcessing = false
   }
 
   /**

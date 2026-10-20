@@ -10,11 +10,16 @@ export interface ElectronAPI {
   deletePath: (path: string) => Promise<WorkspaceResult>
   renamePath: (oldPath: string, newPath: string) => Promise<WorkspaceResult>
   watchWorkspace: (workspacePath: string) => Promise<WorkspaceResult>
-  unwatchWorkspace: () => Promise<WorkspaceResult>
+  unwatchWorkspace: (workspacePath?: string) => Promise<WorkspaceResult>
   onFsChanged: (callback: (payload: { type: string; path: string }) => void) => () => void
 
   // App configuration (portable architecture)
   getAppDir: () => Promise<GetAppDirResult>
+  logRenderer: (level: string, args: unknown[]) => Promise<{ success: boolean }>
+  updateCheck: () => Promise<UpdateCheckResult>
+  updateDownload: () => Promise<UpdateActionResult>
+  updateInstall: () => Promise<UpdateActionResult>
+  onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
   getSettings: () => Promise<GetSettingsResult>
   saveSettings: (settings: any) => Promise<SaveSettingsResult>
   getRecentWorkspaces: () => Promise<RecentWorkspacesResult>
@@ -30,6 +35,10 @@ export interface ElectronAPI {
   getWorkspaceConfig: (workspacePath: string) => Promise<GetWorkspaceConfigResult>
   saveWorkspaceConfig: (workspacePath: string, config: any) => Promise<WorkspaceResult>
   disposeWorkspace: (workspacePath: string) => Promise<WorkspaceResult>
+  draftSave: (workspacePath: string, filePath: string, content: string) => Promise<DraftResult>
+  draftDelete: (workspacePath: string, filePath: string) => Promise<DraftResult>
+  draftList: (workspacePath: string) => Promise<DraftListResult>
+  draftClear: (workspacePath: string) => Promise<DraftResult>
 
   // Pi Agent API
   agentInitialize: (config: AgentInitConfig) => Promise<AgentInitResult>
@@ -69,8 +78,8 @@ export interface ElectronAPI {
   fleetCreate: (workspaceDir: string, name: string, prompt: string) => Promise<FleetCreateResult>
   fleetList: (workspaceDir: string) => Promise<FleetListResult>
   fleetGet: (id: string) => Promise<FleetGetResult>
-  fleetCancel: (id: string) => Promise<FleetActionResult>
-  fleetCleanup: (id: string) => Promise<FleetActionResult>
+  fleetCancel: (id: string, workspaceDir?: string) => Promise<FleetActionResult>
+  fleetCleanup: (id: string, workspaceDir?: string) => Promise<FleetActionResult>
   onFleetTaskUpdated: (callback: (task: FleetTask) => void) => () => void
 
   // API Configuration management (便携式架构)
@@ -232,6 +241,7 @@ export interface AgentDisposeResult {
 export interface TerminalCreateResult {
   success: boolean
   id?: string
+  logPath?: string | null
   error?: string
 }
 
@@ -341,6 +351,43 @@ export interface FetchModelsResult {
   models?: string[]
   error?: string
 }
+
+export interface DraftRecord {
+  workspace: string
+  path: string
+  content: string
+  updatedAt: number
+}
+
+export interface DraftResult {
+  success: boolean
+  error?: string
+}
+
+export interface DraftListResult {
+  success: boolean
+  drafts: DraftRecord[]
+  error?: string
+}
+
+export interface UpdateCheckResult {
+  success: boolean
+  update?: { version: string }
+  error?: string
+}
+
+export interface UpdateActionResult {
+  success: boolean
+  error?: string
+}
+
+export type UpdateStatus =
+  | { type: 'checking' }
+  | { type: 'available'; version: string; releaseNotes?: string }
+  | { type: 'not-available'; version?: string }
+  | { type: 'error'; message: string }
+  | { type: 'download-progress'; percent: number; transferred: number; total: number }
+  | { type: 'downloaded'; version: string }
 
 declare global {
   interface Window {

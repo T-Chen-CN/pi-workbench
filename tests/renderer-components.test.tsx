@@ -39,22 +39,46 @@ vi.mock('../src/api/piAgentAPI', () => ({
   },
 }))
 
-vi.mock('monaco-editor', () => ({
-  editor: {
-    create: vi.fn(() => ({
-      getModel: () => ({ getValue: () => '' }),
-      getValue: () => '',
-      setValue: vi.fn(),
-      onDidChangeModelContent: vi.fn(() => ({ dispose: vi.fn() })),
-      layout: vi.fn(),
-      dispose: vi.fn(),
-    })),
-    setModelLanguage: vi.fn(),
-    setTheme: vi.fn(),
-    defineTheme: vi.fn(),
-    createModel: vi.fn(() => ({})),
-  },
-}))
+vi.mock('monaco-editor', () => {
+  const createModel = (initialValue: string) => {
+    let value = initialValue
+    return {
+      getValue: () => value,
+      setValue: (next: string) => {
+        value = next
+      },
+      dispose: () => {},
+    }
+  }
+  return {
+    Uri: {
+      file: (filePath: string) => ({ path: filePath, toString: () => `file://${filePath}` }),
+    },
+    editor: {
+      create: () => {
+        let model = createModel('')
+        return {
+          getModel: () => model,
+          setModel: (next: typeof model) => {
+            model = next
+          },
+          getValue: () => model.getValue(),
+          setValue: (next: string) => model.setValue(next),
+          saveViewState: () => null,
+          restoreViewState: () => {},
+          onDidChangeModelContent: () => ({ dispose: () => {} }),
+          layout: () => {},
+          dispose: () => {},
+        }
+      },
+      getModel: () => null,
+      setModelLanguage: vi.fn(),
+      setTheme: vi.fn(),
+      defineTheme: vi.fn(),
+      createModel: vi.fn((value: string) => createModel(value)),
+    },
+  }
+})
 
 const configWithKey: ApiConfig = {
   provider: 'anthropic',

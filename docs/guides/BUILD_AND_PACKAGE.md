@@ -1,7 +1,7 @@
 # 构建与打包指南
 
-**适用版本**: 0.1.0（Phase 1 完成）
-**最后更新**: 2026-10-20
+**适用版本**: 0.1.0（Phase 5 完成，Phase 6 持续）
+**最后更新**: 2026-10-21
 
 ---
 
@@ -128,6 +128,18 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
 ```
 
 建议在打包后手动冒烟测试一次：启动应用 → 打开工作区 → 配置 API → Fetch 模型 → 对话。
+
+---
+
+## 4.1 发布与自动更新（GitHub Releases）
+
+- 发布前先把 `package.json` 的 `version` 提升到目标版本。
+- 推送 `v*` 标签（例如 `git tag v0.1.1 && git push origin v0.1.1`）会触发
+  `.github/workflows/release.yml`：在 Windows runner 上构建 NSIS / portable 安装包并上传到 GitHub Release。
+- 打包版本通过 `electron-updater` 检查 GitHub Release；CI 与打包冒烟使用
+  `--publish never`，不会误发布。
+- 本地验证打包：`npx electron-builder --win --dir --publish never`。
+- CI 的 `package-smoke` job 每次 push / PR 都会执行一次未压缩打包，防止打包配置回归。
 
 ---
 

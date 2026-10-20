@@ -132,7 +132,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
     const result = await api.pluginsSetEnabled(workspacePath, plugin.id, !plugin.enabled)
     if (result.success) {
       setPlugins(result.plugins)
-    } else {
+    } else if (result.error !== 'Cancelled') {
       toast.error(t('updatePluginFailed', { error: localizeError(result.error) || t('unknownError') }))
     }
   }

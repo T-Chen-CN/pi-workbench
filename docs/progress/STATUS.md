@@ -90,7 +90,7 @@
 
 - ✅ xterm.js + node-pty（Electron 44 验证可用，`asarUnpack` 保留原生二进制）
 - ✅ 编辑器下方终端面板：显示/隐藏保留会话、重启、尺寸自适应
-- ✅ 输出日志 `{workspace}/.pi-workbench/terminal.log`
+- ✅ 输出日志 `{workspace}/.pi-workbench/terminal-{id}.log`（按终端拆分、5MB 轮转）
 - ✅ 终端输出一键附加为 Agent 上下文
 
 #### Phase 4: 工作台插件系统（完成）
@@ -105,7 +105,7 @@
 #### Phase 5: Fleet 任务系统（完成）
 
 - ✅ Git worktree 创建 / 清理（`{workspace}/.pi-worktrees/`，分支保留）
-- ✅ 任务队列与状态机（queued / running / succeeded / failed / cancelled，默认并发 1）
+- ✅ 任务队列与状态机（queued / running / succeeded / failed / cancelled，每个工作区默认并发 1，全局上限 4）
 - ✅ 每任务独立 Agent 实例，流式输出写入任务记录与 `fleet-{id}.log`
 - ✅ 元数据持久化：`{appDir}/data/fleet-tasks.db`（`node:sqlite`，JSON 回退）
 - ✅ Fleet 面板：创建 / 取消 / 查看日志 / 清理 worktree
@@ -114,7 +114,11 @@
 
 - ✅ 2026-10-20 代码审查修复：编辑器初始化与自动保存、Web 模式终端降级与错误边界、API Key 配置后卡死、空文件打开、脏标签状态、文件监听批量事件、语言持久化、Fleet 崩溃恢复
 - ✅ 新增渲染层测试（jsdom + React Testing Library）：编辑器创建、释放、自动保存与切换文件
-- 性能优化、撤销/重做、快捷键、主题系统、崩溃恢复、自动更新
+- ✅ 2026-10-21 后端可靠性加固：原子写配置与 `.bak` 恢复、工作区信任边界统一、插件默认禁用与首次启用确认、终端剥离 API Key、单实例锁、未保存关窗确认、按工作区监听 / 终端 / Fleet 队列
+- ✅ 2026-10-21 Agent / Fleet：硬超时与 abort 宽限、dispose 前中止、本轮消息判定、token 用量统计、Fleet queued 恢复与 UUID 任务 id
+- ✅ 2026-10-21 Phase 6 功能：渲染进程日志、自动更新（electron-updater）、崩溃恢复草稿、Monaco 每文件 model（撤销栈隔离）、Web dev 桥按工作区 + SSE 流式
+- ✅ 2026-10-21 工程：CI 增加 Windows 打包冒烟、新增 tag 发布工作流
+- ⏳ 剩余：大文件/虚拟滚动等性能优化
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
 ## 最近提交

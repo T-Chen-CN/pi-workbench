@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, safeStorage, type IpcMainInvokeEvent } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { fileURLToPath, pathToFileURL } from 'url'
@@ -6,13 +6,16 @@ import { createRequire } from 'module'
 import { existsSync, mkdirSync, realpathSync, statSync, watch, type FSWatcher } from 'fs'
 import { isIgnoredWatchPath } from './watch-filter.js'
 import { WatchBatcher } from './watch-batcher.js'
-import { FileLogger, installConsoleTee } from './logger.js'
+import { FileLogger, installConsoleTee, type LogLevel } from './logger.js'
+import { readJsonWithBackup, writeJsonAtomic } from './atomic-json.js'
 import { AgentRegistry } from './agent-registry.js'
 import { TerminalManager } from './terminal-manager.js'
 import { PluginManager } from './plugin-manager.js'
 import { FleetWorktree } from './fleet-worktree.js'
 import { createFleetStore } from './fleet-store.js'
 import { FleetManager } from './fleet-manager.js'
+import { DraftStore } from './draft-store.js'
+import type { UpdateController } from './updater.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
 
@@ -20,14 +23,41 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 let mainWindow: BrowserWindow | null = null
+/** 每个被监听的工作区一个 watcher；切换工作区不再挤掉其他工作区 */
+interface WorkspaceWatchEntry {
+  watcher: FSWatcher
+  batcher: WatchBatcher
+}
+const workspaceWatchers = new Map<string, WorkspaceWatchEntry>()
+
+// 只允许一个实例：避免两个进程同时写同一份配置和 Fleet 数据库。
+const singleInstanceLock =
+  typeof app.requestSingleInstanceLock === 'function' ? app.requestSingleInstanceLock() : true
+if (!singleInstanceLock) {
+  // 立即退出，避免第二个进程继续打开数据库或执行队列
+  if (typeof app.exit === 'function') {
+    app.exit(0)
+  } else {
+    app.quit()
+  }
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  })
+}
+
 /** 每个打开的工作区一个 Agent 实例 */
 const agentRegistry = new AgentRegistry()
-let workspaceWatcher: FSWatcher | null = null
-let watchBatcher: WatchBatcher | null = null
 let fileLogger: FileLogger | null = null
+let rendererLogger: FileLogger | null = null
 
 const requireFromMain = createRequire(import.meta.url)
 let ptyModule: typeof import('node-pty') | null = null
+
+/** 当前生效的供应商 Key（用于终端环境过滤，避免连用户自己的同名 Key 一起删掉） */
+let activeProviderApiKey = ''
 
 /** node-pty 是原生模块，延迟加载：加载失败不应阻止应用启动 */
 function loadPty(): typeof import('node-pty') {
@@ -49,7 +79,21 @@ const terminalManager = new TerminalManager({
       mainWindow.webContents.send('terminal:exit', { id, exitCode })
     }
   },
-  logPathFor: (workspaceDir) => path.join(workspaceDir, '.pi-workbench', 'terminal.log'),
+  logPathFor: (workspaceDir, terminalId) =>
+    path.join(workspaceDir, '.pi-workbench', `terminal-${terminalId}.log`),
+  // 只移除应用自己注入的供应商 Key；用户 shell 里同名的其他 Key 保持不变
+  envSanitizer: (env) => {
+    const sanitized = { ...env }
+    delete sanitized.PI_WORKBENCH_API_KEY
+    if (activeProviderApiKey) {
+      for (const key of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
+        if (sanitized[key] === activeProviderApiKey) {
+          delete sanitized[key]
+        }
+      }
+    }
+    return sanitized
+  },
 })
 
 const pluginManager = new PluginManager({
@@ -77,19 +121,28 @@ function normalizeForComparison(value: string): string {
   return process.platform === 'win32' ? value.toLowerCase() : value
 }
 
-/** realpath 规范化；目标尚不存在时规范化最近的已存在父目录（用于新建文件） */
+/** realpath 规范化；目标尚不存在时向上找到最近的已存在祖先再拼回剩余路径（覆盖多级新建） */
 function canonicalizePath(targetPath: string): string | null {
-  const resolved = path.resolve(targetPath)
-  try {
-    return realpathSync.native(resolved)
-  } catch {
+  if (typeof targetPath !== 'string' || !targetPath) return null
+
+  let current = path.resolve(targetPath)
+  const missingSegments: string[] = []
+
+  for (let depth = 0; depth < 64; depth++) {
     try {
-      const parent = realpathSync.native(path.dirname(resolved))
-      return path.join(parent, path.basename(resolved))
+      const resolved = realpathSync.native(current)
+      return missingSegments.length > 0
+        ? path.join(resolved, ...missingSegments.reverse())
+        : resolved
     } catch {
-      return null
+      const parent = path.dirname(current)
+      if (parent === current) return null
+      missingSegments.push(path.basename(current))
+      current = parent
     }
   }
+
+  return null
 }
 
 /**
@@ -120,15 +173,56 @@ function isTrustedWorkspacePath(targetPath: string): boolean {
 }
 
 /** 文件写删改操作允许的范围：受信任工作区与应用缓存目录 */
-function isAllowedFileTarget(targetPath: string): boolean {
+function resolveAllowedFileTarget(targetPath: string): string | null {
   const target = canonicalizePath(targetPath)
-  if (!target) return false
+  if (!target) return null
 
   const roots = [...trustedWorkspaceRoots]
   const cacheRoot = canonicalizePath(path.join(getAppDir(), 'cache'))
   if (cacheRoot) roots.push(normalizeForComparison(cacheRoot))
 
-  return roots.some((root) => isPathInsideRoot(root, target))
+  return roots.some((root) => isPathInsideRoot(root, target)) ? target : null
+}
+
+/** 受保护的应用/工作区根目录：允许操作其中内容，但不允许删除或改名根本身 */
+function isProtectedRoot(canonicalPath: string): boolean {
+  const normalized = normalizeForComparison(canonicalPath)
+  if (trustedWorkspaceRoots.has(normalized)) return true
+  const cacheRoot = canonicalizePath(path.join(getAppDir(), 'cache'))
+  return cacheRoot !== null && normalizeForComparison(cacheRoot) === normalized
+}
+
+function workspaceWatchKey(workspacePath: string): string {
+  return normalizeForComparison(canonicalizePath(workspacePath) ?? path.resolve(workspacePath))
+}
+
+function closeWorkspaceWatcher(workspacePath: string): void {
+  const key = workspaceWatchKey(workspacePath)
+  const entry = workspaceWatchers.get(key)
+  if (!entry) return
+  entry.batcher.cancel()
+  entry.watcher.close()
+  workspaceWatchers.delete(key)
+}
+
+function closeAllWorkspaceWatchers(): void {
+  for (const entry of workspaceWatchers.values()) {
+    entry.batcher.cancel()
+    entry.watcher.close()
+  }
+  workspaceWatchers.clear()
+}
+
+/** 校验工作区与文件路径，用于草稿等按文件持久化的能力 */
+function resolveWorkspaceFile(
+  workspacePath: string,
+  filePath: string
+): { workspace: string; file: string } | null {
+  if (!isTrustedWorkspacePath(workspacePath)) return null
+  const workspace = canonicalizePath(workspacePath)
+  const file = canonicalizePath(filePath)
+  if (!workspace || !file || !isPathInsideRoot(workspace, file)) return null
+  return { workspace, file }
 }
 
 /** 启动时把最近打开的工作区视为已批准（它们都来自此前的目录选择器） */
@@ -146,6 +240,7 @@ async function seedTrustedWorkspacesFromSettings(): Promise<void> {
 }
 
 const fleetStore = createFleetStore(path.join(getAppDir(), 'data', 'fleet-tasks.db'))
+const draftStore = new DraftStore(path.join(getAppDir(), 'cache', 'drafts'))
 const fleetManager = new FleetManager({
   store: fleetStore,
   worktrees: new FleetWorktree(),
@@ -174,8 +269,7 @@ const fleetManager = new FleetManager({
 })
 
 // 便携式架构：获取应用目录
-function getAppDir(): string {
-  // electron-builder portable：应用从 %TEMP% 解压目录运行，真实目录由环境变量提供
+function getAppDir(): string {  // electron-builder portable：应用从 %TEMP% 解压目录运行，真实目录由环境变量提供
   if (process.env.PORTABLE_EXECUTABLE_DIR) {
     return process.env.PORTABLE_EXECUTABLE_DIR
   }
@@ -295,12 +389,60 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+
+  // 渲染进程 beforeunload 阻止关闭时，Electron 会保持窗口打开但不给用户任何提示。
+  // 这里用原生对话框把选择权交给用户；确认放弃后才允许卸载（will-prevent-unload）。
+  mainWindow.webContents.on('will-prevent-unload', (event) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (typeof dialog.showMessageBoxSync !== 'function') {
+      event.preventDefault()
+      return
+    }
+    const zh = app.getLocale?.().toLowerCase().startsWith('zh') ?? true
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'warning',
+      buttons: zh ? ['取消', '放弃修改并关闭'] : ['Cancel', 'Discard and close'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+      title: zh ? '未保存的修改' : 'Unsaved changes',
+      message: zh ? '有文件尚未保存。' : 'Some files have unsaved changes.',
+      detail: zh ? '关闭窗口会丢失这些修改。' : 'Closing the window will discard them.',
+    })
+    if (choice === 1) {
+      // 用户明确放弃未保存内容：清掉已加载工作区的草稿，避免下次启动又提示恢复
+      for (const loaded of pluginManager.loadedWorkspaces()) {
+        const canonical = canonicalizePath(loaded)
+        if (canonical) draftStore.clear(canonical)
+      }
+      event.preventDefault()
+    }
+  })
+
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const devServerUrl = process.env.VITE_DEV_SERVER_URL
+    const allowed =
+      url.startsWith('file://') || (devServerUrl ? url.startsWith(devServerUrl) : false)
+    if (!allowed) {
+      event.preventDefault()
+    }
+  })
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[Main] Renderer process gone:', details.reason)
+  })
 }
 
 app.whenReady().then(async () => {
   // 先启用文件日志，后续初始化与 Agent 日志都会落盘（打包后没有控制台）
   try {
     fileLogger = new FileLogger({ logDir: path.join(getAppDir(), 'logs') })
+    rendererLogger = new FileLogger({
+      logDir: path.join(getAppDir(), 'logs'),
+      fileName: 'renderer.log',
+    })
     installConsoleTee(fileLogger)
     console.log('[Main] File logging enabled:', fileLogger.filePath)
   } catch (error) {
@@ -310,6 +452,15 @@ app.whenReady().then(async () => {
   await initAppDirectories()
   await seedTrustedWorkspacesFromSettings()
   createWindow()
+
+  // 应用 ready、safeStorage 可用之后再恢复上次排队的 Fleet 任务
+  void fleetManager.resumeQueued().then((result) => {
+    if (result.reason) {
+      console.log('[Main] Fleet queue not resumed:', result.reason)
+    } else if (result.resumed > 0) {
+      console.log(`[Main] Resumed ${result.resumed} Fleet task(s)`)
+    }
+  })
 })
 
 let shuttingDown = false
@@ -317,6 +468,7 @@ let shuttingDown = false
 /** 退出前等待异步资源释放，避免在任务仍写库时关闭 store */
 async function shutdownApplication(): Promise<void> {
   try {
+    closeAllWorkspaceWatchers()
     terminalManager.closeAll()
     pluginManager.disposeAll()
     await Promise.allSettled([fleetManager.disposeAll(), agentRegistry.disposeAll()])
@@ -325,20 +477,17 @@ async function shutdownApplication(): Promise<void> {
   } finally {
     console.log('[Main] Shutdown complete')
     fileLogger?.close()
+    rendererLogger?.close()
   }
 }
 
-app.on('before-quit', (event) => {
-  // 第一次退出请求先拦下，完成异步清理后再真正退出
+// 退出顺序：先让窗口完成 beforeunload / will-prevent-unload 的未保存确认，
+// 所有窗口真正关闭后再在 will-quit 里做异步清理，避免用户取消关闭时资源已被释放。
+app.on('will-quit', (event) => {
   if (shuttingDown) return
   event.preventDefault()
   shuttingDown = true
   void shutdownApplication().finally(() => app.quit())
-})
-
-app.on('will-quit', () => {
-  // 兜底关闭日志（正常路径已在 shutdownApplication 中关闭）
-  fileLogger?.close()
 })
 
 app.on('window-all-closed', () => {
@@ -354,25 +503,60 @@ app.on('activate', () => {
 })
 
 // IPC Handlers
-ipcMain.handle('dialog:openDirectory', async () => {
+
+/** 只接受主窗口主框架发来的 IPC；应用 ready 之后 fail-closed */
+function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
+  // 测试替身没有 isReady，直接放行
+  if (typeof app.isReady !== 'function') return true
+  if (!app.isReady()) return true
+  if (!mainWindow || mainWindow.isDestroyed()) return false
+  if (event.sender !== mainWindow.webContents) return false
+  if (event.senderFrame && event.senderFrame !== mainWindow.webContents.mainFrame) return false
+  return true
+}
+
+function handleIpc(
+  channel: string,
+  listener: (event: IpcMainInvokeEvent, ...args: any[]) => unknown
+): void {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (!isTrustedIpcSender(event)) {
+      return { success: false, error: 'Untrusted IPC sender' }
+    }
+    return listener(event, ...args)
+  })
+}
+
+handleIpc('dialog:openDirectory', async () => {
   const result = mainWindow
     ? await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
     : await dialog.showOpenDialog({ properties: ['openDirectory'] })
 
   const picked = result.filePaths[0]
-  // 只有用户通过原生对话框明确选择的目录才会被批准为工作区
-  const trusted = !result.canceled && picked ? trustWorkspace(picked) : null
-
-  return {
-    success: true,
-    canceled: result.canceled,
-    path: trusted ?? picked
+  if (result.canceled || !picked) {
+    return { success: true, canceled: true }
   }
+
+  // 只有用户通过原生对话框明确选择的目录才会被批准为工作区
+  const trusted = trustWorkspace(picked)
+  if (!trusted) {
+    return {
+      success: false,
+      canceled: false,
+      error: 'Selected directory could not be approved as a workspace'
+    }
+  }
+
+  return { success: true, canceled: false, path: trusted }
 })
 
-ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
+handleIpc('fs:readFile', async (_event, filePath: string) => {
   try {
-    const content = await fs.readFile(filePath, 'utf-8')
+    const target = resolveAllowedFileTarget(filePath)
+    if (!target) {
+      return { success: false, error: 'Path is outside the open workspace' }
+    }
+    const content = await fs.readFile(target, 'utf-8')
     return { success: true, content }
   } catch (error) {
     return {
@@ -382,15 +566,16 @@ ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
   }
 })
 
-ipcMain.handle('fs:writeFile', async (_event, filePath: string, content: string) => {
+handleIpc('fs:writeFile', async (_event, filePath: string, content: string) => {
   try {
-    if (!isAllowedFileTarget(filePath)) {
+    const target = resolveAllowedFileTarget(filePath)
+    if (!target) {
       return { success: false, error: 'Path is outside the open workspace' }
     }
-    await fs.writeFile(filePath, content, 'utf-8')
-    const workspaceDir = workspaceForPath(filePath)
+    await fs.writeFile(target, content, 'utf-8')
+    const workspaceDir = workspaceForPath(target)
     if (workspaceDir) {
-      void pluginManager.emit(workspaceDir, 'file:saved', { path: filePath })
+      void pluginManager.emit(workspaceDir, 'file:saved', { path: target })
     }
     return { success: true }
   } catch (error) {
@@ -401,12 +586,16 @@ ipcMain.handle('fs:writeFile', async (_event, filePath: string, content: string)
   }
 })
 
-ipcMain.handle('fs:listDirectory', async (_event, dirPath: string) => {
+handleIpc('fs:listDirectory', async (_event, dirPath: string) => {
   try {
-    const entries = await fs.readdir(dirPath, { withFileTypes: true })
+    const target = resolveAllowedFileTarget(dirPath)
+    if (!target) {
+      return { success: false, error: 'Path is outside the open workspace' }
+    }
+    const entries = await fs.readdir(target, { withFileTypes: true })
     const items = entries.map(entry => ({
       name: entry.name,
-      path: path.join(dirPath, entry.name),
+      path: path.join(target, entry.name),
       isDirectory: entry.isDirectory()
     }))
     return { success: true, items }
@@ -418,9 +607,13 @@ ipcMain.handle('fs:listDirectory', async (_event, dirPath: string) => {
   }
 })
 
-ipcMain.handle('fs:exists', async (_event, filePath: string) => {
+handleIpc('fs:exists', async (_event, filePath: string) => {
   try {
-    return { success: true, exists: existsSync(filePath) }
+    const target = resolveAllowedFileTarget(filePath)
+    if (!target) {
+      return { success: true, exists: false }
+    }
+    return { success: true, exists: existsSync(target) }
   } catch (error) {
     return {
       success: false,
@@ -429,9 +622,13 @@ ipcMain.handle('fs:exists', async (_event, filePath: string) => {
   }
 })
 
-ipcMain.handle('fs:stat', async (_event, filePath: string) => {
+handleIpc('fs:stat', async (_event, filePath: string) => {
   try {
-    const stats = statSync(filePath)
+    const target = resolveAllowedFileTarget(filePath)
+    if (!target) {
+      return { success: false, error: 'Path is outside the open workspace' }
+    }
+    const stats = statSync(target)
     return {
       success: true,
       isFile: stats.isFile(),
@@ -446,12 +643,16 @@ ipcMain.handle('fs:stat', async (_event, filePath: string) => {
   }
 })
 
-ipcMain.handle('fs:delete', async (_event, targetPath: string) => {
+handleIpc('fs:delete', async (_event, targetPath: string) => {
   try {
-    if (!isAllowedFileTarget(targetPath)) {
+    const target = resolveAllowedFileTarget(targetPath)
+    if (!target) {
       return { success: false, error: 'Path is outside the open workspace' }
     }
-    await fs.rm(targetPath, { recursive: true, force: false })
+    if (isProtectedRoot(target)) {
+      return { success: false, error: 'Cannot delete a workspace root' }
+    }
+    await fs.rm(target, { recursive: true, force: false })
     return { success: true }
   } catch (error) {
     return {
@@ -461,12 +662,17 @@ ipcMain.handle('fs:delete', async (_event, targetPath: string) => {
   }
 })
 
-ipcMain.handle('fs:rename', async (_event, oldPath: string, newPath: string) => {
+handleIpc('fs:rename', async (_event, oldPath: string, newPath: string) => {
   try {
-    if (!isAllowedFileTarget(oldPath) || !isAllowedFileTarget(newPath)) {
+    const source = resolveAllowedFileTarget(oldPath)
+    const destination = resolveAllowedFileTarget(newPath)
+    if (!source || !destination) {
       return { success: false, error: 'Path is outside the open workspace' }
     }
-    await fs.rename(oldPath, newPath)
+    if (isProtectedRoot(source) || isProtectedRoot(destination)) {
+      return { success: false, error: 'Cannot rename a workspace root' }
+    }
+    await fs.rename(source, destination)
     return { success: true }
   } catch (error) {
     return {
@@ -477,34 +683,44 @@ ipcMain.handle('fs:rename', async (_event, oldPath: string, newPath: string) => 
 })
 
 // 工作区文件监听（递归，忽略依赖/构建/应用数据目录）
-ipcMain.handle('fs:watch', async (event, workspacePath: string) => {
+handleIpc('fs:watch', async (event, workspacePath: string) => {
   try {
-    if (workspaceWatcher) {
-      workspaceWatcher.close()
-      workspaceWatcher = null
+    const trustedWorkspace = isTrustedWorkspacePath(workspacePath)
+      ? canonicalizePath(workspacePath)
+      : null
+    if (!trustedWorkspace) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+
+    const key = workspaceWatchKey(trustedWorkspace)
+    // 同一工作区重复 watch 时先替换旧监听，其他工作区不受影响
+    const previous = workspaceWatchers.get(key)
+    if (previous) {
+      previous.batcher.cancel()
+      previous.watcher.close()
+      workspaceWatchers.delete(key)
     }
 
     const sender = event.sender
-
-    watchBatcher?.cancel()
-    watchBatcher = new WatchBatcher((changes) => {
+    const batcher = new WatchBatcher((changes) => {
       if (sender.isDestroyed()) return
       for (const change of changes) {
         sender.send('fs:changed', change)
       }
     })
 
-    workspaceWatcher = watch(workspacePath, { recursive: true }, (eventType, filename) => {
+    const watcher = watch(trustedWorkspace, { recursive: true }, (eventType, filename) => {
       if (!filename || isIgnoredWatchPath(filename)) return
-      const fullPath = path.join(workspacePath, filename)
-      const key = process.platform === 'win32' ? fullPath.toLowerCase() : fullPath
-      watchBatcher?.add({ type: eventType, path: fullPath }, key)
+      const fullPath = path.join(trustedWorkspace, filename)
+      const changeKey = process.platform === 'win32' ? fullPath.toLowerCase() : fullPath
+      batcher.add({ type: eventType, path: fullPath }, changeKey)
     })
 
-    workspaceWatcher.on('error', (error) => {
+    watcher.on('error', (error) => {
       console.error('[Main] Workspace watcher error:', error)
     })
 
+    workspaceWatchers.set(key, { watcher, batcher })
     return { success: true }
   } catch (error) {
     return {
@@ -514,13 +730,12 @@ ipcMain.handle('fs:watch', async (event, workspacePath: string) => {
   }
 })
 
-ipcMain.handle('fs:unwatch', async () => {
+handleIpc('fs:unwatch', async (_event, workspacePath?: string) => {
   try {
-    watchBatcher?.cancel()
-    watchBatcher = null
-    if (workspaceWatcher) {
-      workspaceWatcher.close()
-      workspaceWatcher = null
+    if (workspacePath) {
+      closeWorkspaceWatcher(workspacePath)
+    } else {
+      closeAllWorkspaceWatchers()
     }
     return { success: true }
   } catch (error) {
@@ -533,35 +748,42 @@ ipcMain.handle('fs:unwatch', async () => {
 
 // ---- 终端（PTY） ----
 
-ipcMain.handle('terminal:create', async (_event, workspaceDir: string, cols: number, rows: number) =>
-  terminalManager.create(workspaceDir, cols, rows)
-)
+handleIpc('terminal:create', async (_event, workspaceDir: string, cols: number, rows: number) => {
+  if (!isTrustedWorkspacePath(workspaceDir)) {
+    return { success: false, error: 'Workspace is not approved' }
+  }
+  const trusted = canonicalizePath(workspaceDir) ?? workspaceDir
+  return terminalManager.create(trusted, cols, rows)
+})
 
-ipcMain.handle('terminal:write', async (_event, id: string, data: string) => ({
+handleIpc('terminal:write', async (_event, id: string, data: string) => ({
   success: terminalManager.write(id, data),
 }))
 
-ipcMain.handle('terminal:resize', async (_event, id: string, cols: number, rows: number) => ({
+handleIpc('terminal:resize', async (_event, id: string, cols: number, rows: number) => ({
   success: terminalManager.resize(id, cols, rows),
 }))
 
-ipcMain.handle('terminal:close', async (_event, id: string) => ({
+handleIpc('terminal:close', async (_event, id: string) => ({
   success: terminalManager.close(id),
 }))
 
-ipcMain.handle('terminal:flush', async (_event, id: string) => ({
+handleIpc('terminal:flush', async (_event, id: string) => ({
   success: terminalManager.flushNow(id),
 }))
 
-ipcMain.handle('terminal:getRecentOutput', async (_event, id: string) => ({
+handleIpc('terminal:getRecentOutput', async (_event, id: string) => ({
   success: true,
   output: terminalManager.getRecentOutput(id),
 }))
 
 // ---- 工作台插件 ----
 
-ipcMain.handle('plugins:list', async (_event, workspaceDir: string) => {
+handleIpc('plugins:list', async (_event, workspaceDir: string) => {
   try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, plugins: [], error: 'Workspace is not approved' }
+    }
     return { success: true, plugins: pluginManager.list(workspaceDir) }
   } catch (error) {
     return {
@@ -572,12 +794,18 @@ ipcMain.handle('plugins:list', async (_event, workspaceDir: string) => {
   }
 })
 
-ipcMain.handle('plugins:invoke', async (_event, workspaceDir: string, commandId: string, args?: unknown) =>
-  pluginManager.invoke(workspaceDir, commandId, args)
-)
+handleIpc('plugins:invoke', async (_event, workspaceDir: string, commandId: string, args?: unknown) => {
+  if (!isTrustedWorkspacePath(workspaceDir)) {
+    return { success: false, error: 'Workspace is not approved' }
+  }
+  return pluginManager.invoke(workspaceDir, commandId, args)
+})
 
-ipcMain.handle('plugins:reload', async (_event, workspaceDir: string) => {
+handleIpc('plugins:reload', async (_event, workspaceDir: string) => {
   try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, plugins: [], error: 'Workspace is not approved' }
+    }
     return { success: true, plugins: pluginManager.reload(workspaceDir) }
   } catch (error) {
     return {
@@ -588,10 +816,42 @@ ipcMain.handle('plugins:reload', async (_event, workspaceDir: string) => {
   }
 })
 
-ipcMain.handle(
+handleIpc(
   'plugins:setEnabled',
   async (_event, workspaceDir: string, pluginId: string, enabled: boolean) => {
     try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, plugins: [], error: 'Workspace is not approved' }
+      }
+
+      // 插件在主进程拥有完整 Node 权限：首次启用某工作区的插件前必须显式确认
+      if (enabled && !pluginManager.hasExplicitEnableList(workspaceDir)) {
+        if (typeof dialog.showMessageBoxSync === 'function') {
+          const zh = app.getLocale?.().toLowerCase().startsWith('zh') ?? true
+          const messageOptions = {
+            type: 'warning' as const,
+            buttons: zh ? ['取消', '启用插件'] : ['Cancel', 'Enable plugin'],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+            title: zh ? '启用工作区插件' : 'Enable workspace plugins',
+            message: zh
+              ? '插件在主进程中运行，拥有完整的 Node.js 权限。'
+              : 'Plugins run in the main process with full Node.js access.',
+            detail: zh
+              ? '只应启用你信任的工作区插件。'
+              : 'Only enable plugins from workspaces you trust.',
+          }
+          const choice =
+            mainWindow && !mainWindow.isDestroyed()
+              ? dialog.showMessageBoxSync(mainWindow, messageOptions)
+              : dialog.showMessageBoxSync(messageOptions)
+          if (choice !== 1) {
+            return { success: false, plugins: pluginManager.list(workspaceDir), error: 'Cancelled' }
+          }
+        }
+      }
+
       return {
         success: true,
         plugins: pluginManager.setEnabled(workspaceDir, pluginId, Boolean(enabled)),
@@ -608,27 +868,106 @@ ipcMain.handle(
 
 // ---- Fleet 后台任务 ----
 
-ipcMain.handle('fleet:create', async (_event, workspaceDir: string, name: string, prompt: string) =>
-  fleetManager.createTask(workspaceDir, name, prompt)
-)
+handleIpc('fleet:create', async (_event, workspaceDir: string, name: string, prompt: string) => {
+  if (!isTrustedWorkspacePath(workspaceDir)) {
+    return { success: false, error: 'Workspace is not approved' }
+  }
+  return fleetManager.createTask(workspaceDir, name, prompt)
+})
 
-ipcMain.handle('fleet:list', async (_event, workspaceDir: string) => ({
-  success: true,
-  tasks: fleetManager.list(workspaceDir),
-}))
+handleIpc('fleet:list', async (_event, workspaceDir: string) => {
+  if (!isTrustedWorkspacePath(workspaceDir)) {
+    return { success: false, tasks: [], error: 'Workspace is not approved' }
+  }
+  return { success: true, tasks: fleetManager.list(workspaceDir) }
+})
 
-ipcMain.handle('fleet:get', async (_event, id: string) => {
+handleIpc('fleet:get', async (_event, id: string) => {
   const task = fleetManager.get(id)
   return task ? { success: true, task } : { success: false, error: 'Task not found' }
 })
 
-ipcMain.handle('fleet:cancel', async (_event, id: string) => fleetManager.cancel(id))
+handleIpc('fleet:cancel', async (_event, id: string, workspaceDir?: string) => {
+  if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
+    return { success: false, error: 'Workspace is not approved' }
+  }
+  return fleetManager.cancel(id, workspaceDir)
+})
 
-ipcMain.handle('fleet:cleanup', async (_event, id: string) => fleetManager.cleanupWorktree(id))
+handleIpc('fleet:cleanup', async (_event, id: string, workspaceDir?: string) => {
+  if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
+    return { success: false, error: 'Workspace is not approved' }
+  }
+  return fleetManager.cleanupWorktree(id, workspaceDir)
+})
+
+// ---- 自动更新 ----
+
+let updateController: UpdateController | null = null
+
+/**
+ * electron-updater 只在打包版本有意义；懒加载避免开发/测试环境引入其运行时。
+ */
+async function ensureUpdateController(): Promise<UpdateController | null> {
+  if (!app.isPackaged) return null
+  if (updateController) return updateController
+  try {
+    const { UpdateController: Controller } = await import('./updater.js')
+    updateController = new Controller((status) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:status', status)
+      }
+    })
+    return updateController
+  } catch (error) {
+    console.error('[Main] Failed to initialize auto updater:', error)
+    return null
+  }
+}
+
+handleIpc('update:check', async () => {
+  const controller = await ensureUpdateController()
+  if (!controller) {
+    return { success: false, error: 'Updates are only available in packaged builds.' }
+  }
+  return controller.check()
+})
+
+handleIpc('update:download', async () => {
+  const controller = await ensureUpdateController()
+  if (!controller) {
+    return { success: false, error: 'Updates are only available in packaged builds.' }
+  }
+  return controller.download()
+})
+
+handleIpc('update:install', async () => {
+  const controller = await ensureUpdateController()
+  if (!controller) {
+    return { success: false, error: 'Updates are only available in packaged builds.' }
+  }
+  return controller.install()
+})
+
+// ---- 渲染进程日志 ----
+
+const RENDERER_LOG_LEVELS: LogLevel[] = ['INFO', 'WARN', 'ERROR', 'DEBUG']
+
+handleIpc('log:renderer', async (_event, level: unknown, args: unknown) => {
+  const normalized = RENDERER_LOG_LEVELS.includes(String(level).toUpperCase() as LogLevel)
+    ? (String(level).toUpperCase() as LogLevel)
+    : 'INFO'
+  const values = Array.isArray(args) ? args : [args]
+  try {
+    rendererLogger?.write(normalized, values)
+  } catch {
+    // 日志失败不影响渲染进程
+  }
+  return { success: true }
+})
 
 // 便携式架构：应用配置管理
-ipcMain.handle('app:getAppDir', async () => {
-  try {
+handleIpc('app:getAppDir', async () => {  try {
     return { success: true, appDir: getAppDir() }
   } catch (error) {
     return {
@@ -650,19 +989,25 @@ const DEFAULT_SETTINGS = {
 
 async function loadSettingsFile(): Promise<any> {
   const settingsPath = path.join(getAppDir(), 'config', 'settings.json')
-  if (!existsSync(settingsPath)) {
-    return { ...DEFAULT_SETTINGS }
+  const result = readJsonWithBackup<Record<string, unknown>>(settingsPath)
+  if (result.data && typeof result.data === 'object' && !Array.isArray(result.data)) {
+    if (result.source === 'backup') {
+      console.warn('[Main] settings.json was unreadable; loaded backup copy')
+    }
+    return { ...DEFAULT_SETTINGS, ...result.data }
   }
-  const content = await fs.readFile(settingsPath, 'utf-8')
-  return { ...DEFAULT_SETTINGS, ...JSON.parse(content) }
+  if (result.error) {
+    console.warn('[Main] Failed to read settings.json:', result.error)
+  }
+  return { ...DEFAULT_SETTINGS }
 }
 
 async function saveSettingsFile(settings: any): Promise<void> {
   const settingsPath = path.join(getAppDir(), 'config', 'settings.json')
-  await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8')
+  await writeJsonAtomic(settingsPath, settings)
 }
 
-ipcMain.handle('app:getSettings', async () => {
+handleIpc('app:getSettings', async () => {
   try {
     return { success: true, settings: await loadSettingsFile() }
   } catch (error) {
@@ -673,7 +1018,7 @@ ipcMain.handle('app:getSettings', async () => {
   }
 })
 
-ipcMain.handle('app:saveSettings', async (_event, settings: any) => {
+handleIpc('app:saveSettings', async (_event, settings: any) => {
   try {
     const sanitized = { ...(settings ?? {}) }
     // 最近工作区只允许保存已批准路径，避免渲染进程借此为任意目录背书
@@ -693,14 +1038,13 @@ ipcMain.handle('app:saveSettings', async (_event, settings: any) => {
   }
 })
 
-// 标题栏 overlay 颜色跟随 Paper / Ink 主题（仅 Windows 生效）
 // 自绘窗口按钮（Windows / Linux；macOS 保留原生红绿灯）
-ipcMain.handle('window:minimize', () => {
+handleIpc('window:minimize', () => {
   mainWindow?.minimize()
   return { success: true }
 })
 
-ipcMain.handle('window:toggleMaximize', () => {
+handleIpc('window:toggleMaximize', () => {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return { success: false, maximized: false }
   }
@@ -712,17 +1056,17 @@ ipcMain.handle('window:toggleMaximize', () => {
   return { success: true, maximized: mainWindow.isMaximized() }
 })
 
-ipcMain.handle('window:close', () => {
+handleIpc('window:close', () => {
   mainWindow?.close()
   return { success: true }
 })
 
-ipcMain.handle('window:isMaximized', () => ({
+handleIpc('window:isMaximized', () => ({
   success: true,
   maximized: mainWindow?.isMaximized() ?? false,
 }))
 
-ipcMain.handle('app:getRecentWorkspaces', async () => {
+handleIpc('app:getRecentWorkspaces', async () => {
   try {
     const settings = await loadSettingsFile()
     const workspaces: string[] = Array.isArray(settings.recentWorkspaces) ? settings.recentWorkspaces : []
@@ -736,7 +1080,7 @@ ipcMain.handle('app:getRecentWorkspaces', async () => {
   }
 })
 
-ipcMain.handle('app:addRecentWorkspace', async (_event, workspacePath: string) => {
+handleIpc('app:addRecentWorkspace', async (_event, workspacePath: string) => {
   try {
     if (!isTrustedWorkspacePath(workspacePath)) {
       return { success: false, workspaces: [], error: 'Workspace is not approved' }
@@ -756,7 +1100,7 @@ ipcMain.handle('app:addRecentWorkspace', async (_event, workspacePath: string) =
 })
 
 // 工作区配置管理
-ipcMain.handle('workspace:init', async (_event, workspacePath: string) => {
+handleIpc('workspace:init', async (_event, workspacePath: string) => {
   try {
     // 工作区根必须由主进程批准（目录选择器或启动时的最近工作区）
     if (!isTrustedWorkspacePath(workspacePath)) {
@@ -786,7 +1130,7 @@ ipcMain.handle('workspace:init', async (_event, workspacePath: string) => {
           temperature: 0.7
         }
       }
-      await fs.writeFile(configPath, JSON.stringify(defaultConfig, null, 2), 'utf-8')
+      await writeJsonAtomic(configPath, defaultConfig)
     }
 
     // 加载工作区插件并派发打开事件
@@ -802,17 +1146,22 @@ ipcMain.handle('workspace:init', async (_event, workspacePath: string) => {
   }
 })
 
-ipcMain.handle('workspace:getConfig', async (_event, workspacePath: string) => {
+handleIpc('workspace:getConfig', async (_event, workspacePath: string) => {
   try {
+    if (!isTrustedWorkspacePath(workspacePath)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
     const configPath = path.join(workspacePath, '.pi-workbench', 'config.json')
 
     if (!existsSync(configPath)) {
       return { success: false, error: 'Workspace not initialized' }
     }
 
-    const content = await fs.readFile(configPath, 'utf-8')
-    const config = JSON.parse(content)
-    return { success: true, config }
+    const result = readJsonWithBackup<Record<string, unknown>>(configPath)
+    if (!result.data) {
+      return { success: false, error: result.error || 'Failed to parse workspace config' }
+    }
+    return { success: true, config: result.data }
   } catch (error) {
     return {
       success: false,
@@ -821,13 +1170,13 @@ ipcMain.handle('workspace:getConfig', async (_event, workspacePath: string) => {
   }
 })
 
-ipcMain.handle('workspace:saveConfig', async (_event, workspacePath: string, config: any) => {
+handleIpc('workspace:saveConfig', async (_event, workspacePath: string, config: any) => {
   try {
     if (!isTrustedWorkspacePath(workspacePath)) {
       return { success: false, error: 'Workspace is not approved' }
     }
     const configPath = path.join(workspacePath, '.pi-workbench', 'config.json')
-    await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8')
+    await writeJsonAtomic(configPath, config)
     return { success: true }
   } catch (error) {
     return {
@@ -838,8 +1187,14 @@ ipcMain.handle('workspace:saveConfig', async (_event, workspacePath: string, con
 })
 
 // 关闭工作区标签时释放该工作区的主进程资源（插件、监听）
-ipcMain.handle('workspace:dispose', async (_event, workspacePath: string) => {
+handleIpc('workspace:dispose', async (_event, workspacePath: string) => {
   try {
+    if (!isTrustedWorkspacePath(workspacePath)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    // 关闭该工作区的监听与终端，其他打开的工作区不受影响
+    closeWorkspaceWatcher(workspacePath)
+    terminalManager.closeWorkspace(canonicalizePath(workspacePath) ?? workspacePath)
     pluginManager.unload(workspacePath)
     return { success: true }
   } catch (error) {
@@ -847,6 +1202,65 @@ ipcMain.handle('workspace:dispose', async (_event, workspacePath: string) => {
       success: false,
       error: error instanceof Error ? error.message : String(error)
     }
+  }
+})
+
+// ---- 崩溃恢复草稿 ----
+
+handleIpc('draft:save', async (_event, workspacePath: string, filePath: string, content: unknown) => {
+  try {
+    const target = resolveWorkspaceFile(workspacePath, filePath)
+    if (!target) {
+      return { success: false, error: 'Path is outside the open workspace' }
+    }
+    if (typeof content !== 'string') {
+      return { success: false, error: 'Draft content must be a string' }
+    }
+    draftStore.save(target.workspace, target.file, content)
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc('draft:delete', async (_event, workspacePath: string, filePath: string) => {
+  try {
+    const target = resolveWorkspaceFile(workspacePath, filePath)
+    if (!target) {
+      return { success: false, error: 'Path is outside the open workspace' }
+    }
+    draftStore.remove(target.workspace, target.file)
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc('draft:list', async (_event, workspacePath: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspacePath)) {
+      return { success: false, drafts: [], error: 'Workspace is not approved' }
+    }
+    const workspace = canonicalizePath(workspacePath) ?? workspacePath
+    return { success: true, drafts: draftStore.list(workspace) }
+  } catch (error) {
+    return {
+      success: false,
+      drafts: [],
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+})
+
+handleIpc('draft:clear', async (_event, workspacePath: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspacePath)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    draftStore.clear(canonicalizePath(workspacePath) ?? workspacePath)
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
   }
 })
 
@@ -896,6 +1310,7 @@ const DEFAULT_API_CONFIG = {
 // Helper function to load API Config
 async function loadApiConfig(): Promise<any> {
   try {
+    activeProviderApiKey = ''
     const appDir = getAppDir()
     const configPath = path.join(appDir, 'config', 'api-config.json')
 
@@ -904,8 +1319,14 @@ async function loadApiConfig(): Promise<any> {
       return { ...DEFAULT_API_CONFIG }
     }
 
-    const content = await fs.readFile(configPath, 'utf-8')
-    const config = JSON.parse(content)
+    const configResult = readJsonWithBackup<any>(configPath)
+    if (!configResult.data || typeof configResult.data !== 'object') {
+      if (configResult.error) {
+        console.warn('[Main] Failed to parse API config:', configResult.error)
+      }
+      return { ...DEFAULT_API_CONFIG }
+    }
+    const config = configResult.data
 
     // 旧版供应商（Anthropic / OpenAI）配置已不再支持：备份后清空，避免旧配置继续生效
     if (config.provider !== 'custom') {
@@ -924,6 +1345,7 @@ async function loadApiConfig(): Promise<any> {
     }
 
     config.apiKey = decryptApiKey(config.apiKey)
+    activeProviderApiKey = typeof config.apiKey === 'string' ? config.apiKey : ''
     return config
   } catch (error) {
     console.error('[Main] Failed to load API config:', error)
@@ -932,7 +1354,7 @@ async function loadApiConfig(): Promise<any> {
 }
 
 // Get API Configuration
-ipcMain.handle('apiConfig:get', async () => {
+handleIpc('apiConfig:get', async () => {
   try {
     const config = await loadApiConfig()
     return { success: true, config }
@@ -945,7 +1367,7 @@ ipcMain.handle('apiConfig:get', async () => {
 })
 
 // Save API Configuration
-ipcMain.handle('apiConfig:save', async (_event, config: any) => {
+handleIpc('apiConfig:save', async (_event, config: any) => {
   try {
     const appDir = getAppDir()
     const configPath = path.join(appDir, 'config', 'api-config.json')
@@ -954,7 +1376,10 @@ ipcMain.handle('apiConfig:save', async (_event, config: any) => {
       ...config,
       apiKey: encryptApiKey(String(config?.apiKey ?? '')),
     }
-    await fs.writeFile(configPath, JSON.stringify(stored, null, 2), 'utf-8')
+    await writeJsonAtomic(configPath, stored)
+    activeProviderApiKey = String(config?.apiKey ?? '')
+    // 配置好 Key 之后，恢复因缺少 Key 而停在队列中的 Fleet 任务
+    void fleetManager.resumeQueued()
 
     return { success: true }
   } catch (error) {
@@ -966,7 +1391,7 @@ ipcMain.handle('apiConfig:save', async (_event, config: any) => {
 })
 
 // Fetch available models from API
-ipcMain.handle('apiConfig:fetchModels', async (_event, apiUrl: string, apiKey: string, provider: string) => {
+handleIpc('apiConfig:fetchModels', async (_event, apiUrl: string, apiKey: string, provider: string) => {
   try {
     // 归一化 Base URL：去掉末尾斜杠，模板占位符视为未填写
     const baseUrl = (apiUrl || '').trim().replace(/\/+$/, '')
@@ -984,7 +1409,20 @@ ipcMain.handle('apiConfig:fetchModels', async (_event, apiUrl: string, apiKey: s
       ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
       : { 'Authorization': `Bearer ${apiKey}` }
 
-    const response = await fetch(modelsEndpoint, { headers })
+    // 主进程发起请求：必须有超时，避免供应商无响应时永久挂起
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15_000)
+    let response: Response
+    try {
+      response = await fetch(modelsEndpoint, { headers, signal: controller.signal })
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error('Request timed out after 15s')
+      }
+      throw error
+    } finally {
+      clearTimeout(timeout)
+    }
     console.log(`[Main] Response status: ${response.status}`)
 
     if (!response.ok) {
@@ -1035,7 +1473,7 @@ function agentConfigKey(apiConfig: {
 }
 
 // Agent 初始化（按工作区）
-ipcMain.handle('agent:initialize', async (_event, config: {
+handleIpc('agent:initialize', async (_event, config: {
   workspaceDir: string
   apiConfig: {
     provider: string
@@ -1046,6 +1484,10 @@ ipcMain.handle('agent:initialize', async (_event, config: {
 }) => {
   try {
     const { workspaceDir, apiConfig } = config
+
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
 
     console.log('[Main] Initializing Pi Agent with config:', {
       provider: apiConfig.provider,
@@ -1100,8 +1542,11 @@ ipcMain.handle('agent:initialize', async (_event, config: {
 })
 
 // Agent 聊天
-ipcMain.handle('agent:chat', async (event, message: string, requestId?: string, workspaceDir?: string) => {
+handleIpc('agent:chat', async (event, message: string, requestId?: string, workspaceDir?: string) => {
   try {
+    if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
     const agent = workspaceDir ? agentRegistry.get(workspaceDir) : null
     if (!agent) {
       return {
@@ -1142,8 +1587,11 @@ ipcMain.handle('agent:chat', async (event, message: string, requestId?: string, 
 })
 
 // Agent 中止当前请求
-ipcMain.handle('agent:abort', async (_event, workspaceDir?: string) => {
+handleIpc('agent:abort', async (_event, workspaceDir?: string) => {
   try {
+    if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
     const agent = workspaceDir ? agentRegistry.get(workspaceDir) : null
     if (!agent) {
       return { success: false, error: 'Agent not initialized for this workspace' }
@@ -1162,7 +1610,7 @@ ipcMain.handle('agent:abort', async (_event, workspaceDir?: string) => {
 })
 
 // Agent 状态查询
-ipcMain.handle('agent:isInitialized', async (_event, workspaceDir?: string) => {
+handleIpc('agent:isInitialized', async (_event, workspaceDir?: string) => {
   try {
     const agent = workspaceDir ? agentRegistry.get(workspaceDir) : null
     return { success: true, initialized: agent?.isInitialized() || false }
@@ -1175,8 +1623,11 @@ ipcMain.handle('agent:isInitialized', async (_event, workspaceDir?: string) => {
 })
 
 // Agent 消息历史
-ipcMain.handle('agent:getHistory', async (_event, workspaceDir?: string) => {
+handleIpc('agent:getHistory', async (_event, workspaceDir?: string) => {
   try {
+    if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
     const agent = workspaceDir ? agentRegistry.get(workspaceDir) : null
     if (!agent) {
       return { success: false, error: 'Agent not initialized for this workspace' }
@@ -1196,8 +1647,11 @@ ipcMain.handle('agent:getHistory', async (_event, workspaceDir?: string) => {
 })
 
 // Agent 清理
-ipcMain.handle('agent:dispose', async (_event, workspaceDir?: string) => {
+handleIpc('agent:dispose', async (_event, workspaceDir?: string) => {
   try {
+    if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
     if (workspaceDir) {
       await agentRegistry.dispose(workspaceDir)
       console.log('[Main] Agent disposed:', workspaceDir)

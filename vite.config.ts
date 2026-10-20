@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 import { pathToFileURL } from 'url'
 import { existsSync } from 'fs'
+import { createHash } from 'crypto'
 
 /**
  * 仅开发模式使用的模型列表代理。
@@ -79,6 +80,7 @@ function devModelsProxy(): Plugin {
  */
 const DEV_AGENT_INIT = '/__pi/agent/init'
 const DEV_AGENT_CHAT = '/__pi/agent/chat'
+const DEV_AGENT_CHAT_STREAM = '/__pi/agent/chat-stream'
 const DEV_AGENT_ABORT = '/__pi/agent/abort'
 const DEV_AGENT_DISPOSE = '/__pi/agent/dispose'
 const DEV_AGENT_HISTORY = '/__pi/agent/history'
@@ -88,7 +90,8 @@ function devAgentBridge(): Plugin {
     name: 'pi-workbench-dev-agent-bridge',
     apply: 'serve',
     configureServer(server) {
-      let agentManager: any = null
+      // 每个工作区一个 Agent 实例（Web 调试也能模拟多工作区）
+      const agents = new Map<string, any>()
 
       const readJson = (req: any): Promise<any> =>
         new Promise((resolve, reject) => {
@@ -110,34 +113,65 @@ function devAgentBridge(): Plugin {
         res.end(JSON.stringify(body))
       }
 
+      // Web 调试没有真实的目录选择器：存在的路径按工作区隔离，
+      // 不存在（例如 mock 路径）时回退到项目根目录，保持纯 Web 模式可用
+      const workspaceKey = (value: unknown): string => {
+        if (typeof value === 'string' && value) {
+          const resolved = path.resolve(value)
+          if (existsSync(resolved)) return resolved
+        }
+        return path.resolve(process.cwd())
+      }
+
+      const agentDirFor = (workspaceDir: string): string =>
+        path.resolve(
+          process.cwd(),
+          'cache/temp/web-agent',
+          createHash('sha1').update(workspaceDir).digest('hex').slice(0, 16)
+        )
+
+      const sendSse = (res: any, event: string, data: unknown) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+      }
+
+      const requireAgent = (workspaceDir: unknown) => {
+        const key = workspaceKey(workspaceDir)
+        const agent = agents.get(key)
+        if (!agent) return { key, agent: null, error: 'Agent not initialized for this workspace' }
+        return { key, agent, error: null }
+      }
+
       server.middlewares.use(DEV_AGENT_INIT, async (req: any, res: any, next: any) => {
         if (req.method !== 'POST') return next()
         try {
           const body = await readJson(req)
+          const workspaceDir = workspaceKey(body.workspaceDir)
+
           const bridgePath = path.resolve(process.cwd(), 'pi-bridge/dist/index.js')
           const { AgentManager } = await import(pathToFileURL(bridgePath).href)
 
-          // 重新初始化前先释放旧实例
-          if (agentManager) {
+          // 同一工作区重新初始化前先释放旧实例
+          const existing = agents.get(workspaceDir)
+          if (existing) {
             try {
-              await agentManager.dispose()
+              await existing.dispose()
             } catch (error) {
               console.warn('[dev-agent] dispose failed:', error)
             }
-            agentManager = null
+            agents.delete(workspaceDir)
           }
 
-          agentManager = new AgentManager()
-          // Web 模式没有目录选择器：优先使用存在的路径，否则退回项目根目录
-          const workspaceDir =
-            body.workspaceDir && existsSync(body.workspaceDir) ? body.workspaceDir : process.cwd()
-          const agentDir = path.resolve(process.cwd(), 'cache/temp/web-agent')
-
+          const agentManager = new AgentManager()
           const result = await agentManager.initialize({
             workspaceDir,
-            agentDir,
+            agentDir: agentDirFor(workspaceDir),
             apiConfig: body.apiConfig,
           })
+          if (result.success) {
+            agents.set(workspaceDir, agentManager)
+          } else {
+            await agentManager.dispose().catch(() => undefined)
+          }
           reply(res, result)
         } catch (error) {
           reply(res, { success: false, error: error instanceof Error ? error.message : String(error) })
@@ -147,20 +181,61 @@ function devAgentBridge(): Plugin {
       server.middlewares.use(DEV_AGENT_CHAT, async (req: any, res: any, next: any) => {
         if (req.method !== 'POST') return next()
         try {
-          if (!agentManager) {
-            return reply(res, { success: false, error: 'Agent not initialized' })
-          }
           const body = await readJson(req)
-          reply(res, await agentManager.chat(String(body.message ?? '')))
+          const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
+          if (!agent) return reply(res, { success: false, error })
+          reply(res, await agent.chat(String(body.message ?? '')))
         } catch (error) {
           reply(res, { success: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      })
+
+      server.middlewares.use(DEV_AGENT_CHAT_STREAM, async (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') return next()
+
+        const startSse = () => {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+          })
+        }
+        const respondError = (message: string) => {
+          if (!res.headersSent) startSse()
+          sendSse(res, 'done', { success: false, error: message })
+          res.end()
+        }
+
+        try {
+          const body = await readJson(req)
+          const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
+          if (!agent) return respondError(error ?? 'Agent not initialized')
+
+          startSse()
+          try {
+            const result = await agent.chat(String(body.message ?? ''), {
+              onTextDelta: (delta: string) => sendSse(res, 'delta', { delta }),
+            })
+            sendSse(res, 'done', result)
+          } catch (chatError) {
+            sendSse(res, 'done', {
+              success: false,
+              error: chatError instanceof Error ? chatError.message : String(chatError),
+            })
+          } finally {
+            res.end()
+          }
+        } catch (streamError) {
+          respondError(streamError instanceof Error ? streamError.message : String(streamError))
         }
       })
 
       server.middlewares.use(DEV_AGENT_ABORT, async (req: any, res: any, next: any) => {
         if (req.method !== 'POST') return next()
         try {
-          if (agentManager) await agentManager.abort()
+          const body = await readJson(req)
+          const { agent } = requireAgent(body.workspaceDir ?? process.cwd())
+          if (agent) await agent.abort()
           reply(res, { success: true })
         } catch (error) {
           reply(res, { success: false, error: error instanceof Error ? error.message : String(error) })
@@ -170,12 +245,12 @@ function devAgentBridge(): Plugin {
       server.middlewares.use(DEV_AGENT_HISTORY, async (req: any, res: any, next: any) => {
         if (req.method !== 'POST') return next()
         try {
-          if (!agentManager) {
-            return reply(res, { success: false, error: 'Agent not initialized' })
-          }
-          const history = typeof agentManager.getSessionMessages === 'function'
-            ? agentManager.getSessionMessages()
-            : agentManager.getMessageHistory()
+          const body = await readJson(req)
+          const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
+          if (!agent) return reply(res, { success: false, error })
+          const history = typeof agent.getSessionMessages === 'function'
+            ? agent.getSessionMessages()
+            : agent.getMessageHistory()
           reply(res, { success: true, history })
         } catch (error) {
           reply(res, { success: false, error: error instanceof Error ? error.message : String(error) })
@@ -185,9 +260,28 @@ function devAgentBridge(): Plugin {
       server.middlewares.use(DEV_AGENT_DISPOSE, async (req: any, res: any, next: any) => {
         if (req.method !== 'POST') return next()
         try {
-          if (agentManager) {
-            await agentManager.dispose()
-            agentManager = null
+          const body = await readJson(req)
+          const requested =
+            typeof body.workspaceDir === 'string' && body.workspaceDir
+              ? workspaceKey(body.workspaceDir)
+              : null
+
+          if (requested) {
+            const agent = agents.get(requested)
+            if (agent) {
+              await agent.dispose()
+              agents.delete(requested)
+            }
+          } else {
+            // 没有指定工作区时释放全部实例
+            for (const [key, agent] of [...agents.entries()]) {
+              try {
+                await agent.dispose()
+              } catch (error) {
+                console.warn('[dev-agent] dispose failed:', error)
+              }
+              agents.delete(key)
+            }
           }
           reply(res, { success: true })
         } catch (error) {

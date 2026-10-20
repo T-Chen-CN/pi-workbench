@@ -1,40 +1,66 @@
 // @vitest-environment jsdom
-import { act, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MonacoEditor } from '../src/components/MonacoEditor'
 import { useEditorStore } from '../src/store/editorStore'
+import { useWorkspaceStore } from '../src/store/workspaceStore'
 import { api } from '../src/api'
+
+interface FakeModel {
+  uri?: { path?: string }
+  getValue: () => string
+  setValue: (next: string) => void
+  dispose: ReturnType<typeof vi.fn>
+}
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   setModelLanguage: vi.fn(),
   setTheme: vi.fn(),
   defineTheme: vi.fn(),
-  createModel: vi.fn(() => ({})),
+  createModel: vi.fn(),
+  getModel: vi.fn(),
 }))
 
 vi.mock('monaco-editor', () => ({
+  Uri: {
+    file: (filePath: string) => ({ path: filePath, toString: () => `file://${filePath}` }),
+  },
   editor: {
-    create: (element: HTMLElement, options: { value?: string }) =>
-      mocks.create(element, options),
+    create: (element: HTMLElement, options: unknown) => mocks.create(element, options),
     setModelLanguage: mocks.setModelLanguage,
     setTheme: mocks.setTheme,
     defineTheme: mocks.defineTheme,
     createModel: mocks.createModel,
+    getModel: mocks.getModel,
   },
 }))
 
-function createFakeEditor(initialValue: string) {
+function createFakeModel(initialValue: string, uri?: { path?: string }): FakeModel {
   let value = initialValue
+  return {
+    uri,
+    getValue: () => value,
+    setValue: (next: string) => {
+      value = next
+    },
+    dispose: vi.fn(),
+  }
+}
+
+function createFakeEditor(initialModel: FakeModel) {
+  let model = initialModel
   let listener: (() => void) | null = null
-  const model = { getValue: () => value }
 
   return {
     getModel: () => model,
-    getValue: () => value,
-    setValue: vi.fn((next: string) => {
-      value = next
+    setModel: vi.fn((next: FakeModel) => {
+      model = next
     }),
+    getValue: () => model.getValue(),
+    setValue: vi.fn((next: string) => model.setValue(next)),
+    saveViewState: vi.fn(() => ({ scrollTop: 0 })),
+    restoreViewState: vi.fn(),
     onDidChangeModelContent: vi.fn((callback: () => void) => {
       listener = callback
       return { dispose: vi.fn() }
@@ -42,7 +68,7 @@ function createFakeEditor(initialValue: string) {
     layout: vi.fn(),
     dispose: vi.fn(),
     emitChange(next?: string) {
-      if (next !== undefined) value = next
+      if (next !== undefined) model.setValue(next)
       listener?.()
     },
   }
@@ -61,13 +87,19 @@ function makeFile(path: string, content: string) {
 beforeEach(() => {
   useEditorStore.getState().reset()
   mocks.create.mockReset()
-  mocks.create.mockImplementation(
-    (_element: HTMLElement, options: { value?: string }) =>
-      createFakeEditor(options?.value ?? '')
+  mocks.createModel.mockReset()
+  mocks.getModel.mockReset()
+  mocks.getModel.mockReturnValue(null)
+  mocks.createModel.mockImplementation(
+    (value: string, _language: string, uri?: { path?: string }) => createFakeModel(value, uri)
+  )
+  mocks.create.mockImplementation((_element: HTMLElement, options: { model?: FakeModel }) =>
+    createFakeEditor(options?.model ?? createFakeModel(''))
   )
 })
 
 afterEach(() => {
+  cleanup()
   vi.useRealTimers()
   vi.restoreAllMocks()
 })
@@ -98,6 +130,24 @@ describe('MonacoEditor', () => {
     })
 
     expect(editor.dispose).toHaveBeenCalled()
+  })
+
+  it('keeps a separate model per file when switching tabs', () => {
+    render(<MonacoEditor />)
+    act(() => {
+      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
+    })
+    act(() => {
+      useEditorStore.getState().addOpenFile(makeFile('/tmp/b.ts', 'b'))
+    })
+
+    const editor = mocks.create.mock.results[0].value
+    expect(mocks.createModel).toHaveBeenCalledTimes(2)
+    expect(editor.setModel).toHaveBeenCalled()
+    expect(mocks.setModelLanguage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ uri: expect.objectContaining({ path: '/tmp/b.ts' }) }),
+      'typescript'
+    )
   })
 
   it('auto-saves two seconds after the last edit', async () => {
@@ -146,5 +196,76 @@ describe('MonacoEditor', () => {
     })
 
     expect(writeSpy).toHaveBeenCalledWith('/tmp/a.ts', 'changed')
+  })
+
+  it('keeps auto-save timers independent for each file', async () => {
+    vi.useFakeTimers()
+    const writeSpy = vi.spyOn(api, 'writeFile').mockResolvedValue({ success: true })
+
+    render(<MonacoEditor />)
+    act(() => {
+      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
+    })
+    const editor = mocks.create.mock.results[0].value
+    act(() => {
+      editor.emitChange('a-changed')
+    })
+    act(() => {
+      useEditorStore.getState().addOpenFile(makeFile('/tmp/b.ts', 'b'))
+    })
+    act(() => {
+      editor.emitChange('b-changed')
+    })
+
+    await act(async () => {
+      vi.advanceTimersByTime(2000)
+      await Promise.resolve()
+    })
+
+    expect(writeSpy).toHaveBeenCalledWith('/tmp/a.ts', 'a-changed')
+    expect(writeSpy).toHaveBeenCalledWith('/tmp/b.ts', 'b-changed')
+  })
+
+  it('keeps the file dirty when it changes while a save is in flight', async () => {
+    vi.useFakeTimers()
+    useWorkspaceStore.setState({ workspacePath: '/ws' })
+
+    let resolveWrite: (value: { success: boolean }) => void = () => {}
+    vi.spyOn(api, 'writeFile').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveWrite = resolve
+        })
+    )
+    const draftSpy = vi.spyOn(api, 'draftSave').mockResolvedValue({ success: true })
+
+    render(<MonacoEditor />)
+    act(() => {
+      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
+    })
+    const editor = mocks.create.mock.results[0].value
+
+    act(() => {
+      editor.emitChange('first')
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(2000)
+      await Promise.resolve()
+    })
+
+    // 保存请求还在飞行时用户继续输入
+    act(() => {
+      editor.emitChange('second')
+    })
+    await act(async () => {
+      resolveWrite({ success: true })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(useEditorStore.getState().currentFile?.isDirty).toBe(true)
+    expect(draftSpy).toHaveBeenCalledWith('/ws', '/tmp/a.ts', 'second')
+
+    useWorkspaceStore.setState({ workspacePath: null })
   })
 })

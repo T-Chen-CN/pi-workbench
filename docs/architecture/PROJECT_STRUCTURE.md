@@ -1,6 +1,6 @@
 # 项目结构
 
-**最后更新**: 2026-10-20（Phase 1 完成后）
+**最后更新**: 2026-10-21（Phase 5 完成 / Phase 6 加固后）
 
 ---
 
@@ -31,23 +31,31 @@ pi-workbench/
 │
 ├── src/                          # React 渲染进程
 │   ├── components/               # 扁平结构，无子目录
-│   │   ├── ChatPanel.tsx         # Agent 对话、历史恢复、Diff 触发
+│   │   ├── ChatPanel.tsx         # Agent 对话、历史恢复、Diff 触发、token 用量
+│   │   ├── CommandPalette.tsx    # 插件命令面板（Ctrl+Shift+P）
 │   │   ├── DiffViewer.tsx        # Split / Unified Diff 查看器
+│   │   ├── ErrorBoundary.tsx     # 渲染错误兜底
 │   │   ├── FileExplorer.tsx      # 文件树、新建/重命名/删除、目录监听刷新
+│   │   ├── FleetPanel.tsx        # Fleet 任务创建 / 取消 / 日志
 │   │   ├── IPCDebug.tsx          # 开发调试面板
-│   │   ├── MonacoEditor.tsx      # Monaco、自动保存、外部变更同步
-│   │   ├── Settings.tsx          # 供应商 / URL / Key / 模型拉取
-│   │   └── Toast.tsx             # Toast 展示组件
-│   ├── store/                    # 每个功能域一个 store
-│   │   ├── chatStore.ts          # 消息、加载、错误（支持历史恢复）
+│   │   ├── MonacoEditor.tsx      # Monaco、每文件 model、自动保存、草稿、外部变更同步
+│   │   ├── Settings.tsx          # 语言 / 主题 / 供应商 / 模型 / 更新
+│   │   ├── TerminalPanel.tsx     # xterm + PTY、输出附加给 Agent
+│   │   ├── Toast.tsx             # Toast 展示组件
+│   │   ├── WelcomeScreen.tsx     # 欢迎页与最近工作区
+│   │   └── ui.tsx                # Button / Input / Modal 等基础组件
+│   ├── store/                    # 每个功能域一个 store（7 个）
+│   │   ├── chatStore.ts          # 消息、流式、附件、用量
 │   │   ├── diffStore.ts          # Diff 查看器状态
 │   │   ├── editorStore.ts        # 标签页、当前文件、脏标记
 │   │   ├── i18nStore.ts          # 语言（persist）
+│   │   ├── themeStore.ts         # Paper / Ink 主题
 │   │   ├── toastStore.ts         # 全局 Toast（组件外也可调用）
 │   │   └── workspaceStore.ts     # 当前工作区 + 最近打开列表
 │   ├── api/
 │   │   ├── index.ts              # IPC 封装 + Web dev mock / dev 代理
-│   │   ├── piAgentAPI.ts         # Agent 调用（Electron IPC / Web dev 桥接）
+│   │   ├── piAgentAPI.ts         # Agent 调用（Electron IPC / Web SSE 桥接）
+│   │   ├── rendererLog.ts        # 渲染进程日志上报
 │   │   └── diff.ts               # 行级 Diff 算法
 │   ├── types/
 │   │   ├── electron.d.ts         # window.electronAPI 与 IPC 结果类型
@@ -150,6 +158,14 @@ ChatPanel.handleSubmit
 | `workspace:init` / `getConfig` / `saveConfig` | invoke | 工作区初始化与配置 |
 | `apiConfig:get` / `save` / `fetchModels` | invoke | 供应商配置与模型拉取 |
 | `agent:initialize` / `chat` / `getHistory` / `dispose` | invoke | Agent 生命周期 |
+| `agent:stream` | main → renderer | 流式文本增量 |
+| `terminal:create` / `write` / `resize` / `close` | invoke | 终端 PTY |
+| `plugins:list` / `invoke` / `reload` / `setEnabled` | invoke | 工作台插件 |
+| `fleet:create` / `list` / `get` / `cancel` / `cleanup` | invoke | Fleet 后台任务 |
+| `draft:save` / `delete` / `list` / `clear` | invoke | 崩溃恢复草稿 |
+| `log:renderer` | invoke | 渲染进程日志 |
+| `update:check` / `download` / `install` | invoke | 自动更新 |
+| `update:status` | main → renderer | 更新进度事件 |
 
 ---
 

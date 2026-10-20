@@ -15,7 +15,7 @@ const execFileAsync = promisify(execFile)
 export type GitRunner = (
   file: string,
   args: string[],
-  options: { cwd: string; maxBuffer?: number }
+  options: { cwd: string; maxBuffer?: number; timeout?: number }
 ) => Promise<{ stdout: string; stderr: string }>
 
 export interface WorktreeResult {
@@ -49,7 +49,12 @@ export class FleetWorktree {
 
   private async git(cwd: string, args: string[]): Promise<CommandResult> {
     try {
-      const { stdout, stderr } = await this.exec('git', args, { cwd, maxBuffer: 4 * 1024 * 1024 })
+      const { stdout, stderr } = await this.exec('git', args, {
+        cwd,
+        maxBuffer: 4 * 1024 * 1024,
+        // 仓库异常时 git 可能卡住，限制单条命令的执行时间
+        timeout: 60_000,
+      })
       return { success: true, output: (stdout || stderr || '').trim() }
     } catch (error) {
       const detail = error as { stderr?: string; stdout?: string; message?: string }

@@ -12,12 +12,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deletePath: (path: string) => ipcRenderer.invoke('fs:delete', path),
   renamePath: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:rename', oldPath, newPath),
   watchWorkspace: (workspacePath: string) => ipcRenderer.invoke('fs:watch', workspacePath),
-  unwatchWorkspace: () => ipcRenderer.invoke('fs:unwatch'),
+  unwatchWorkspace: (workspacePath?: string) => ipcRenderer.invoke('fs:unwatch', workspacePath),
   onFsChanged: (callback: (payload: { type: string; path: string }) => void) => {
     const listener = (_event: unknown, payload: { type: string; path: string }) => callback(payload)
     ipcRenderer.on('fs:changed', listener)
     return () => ipcRenderer.removeListener('fs:changed', listener)
   },
+
+  // 自动更新
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateDownload: () => ipcRenderer.invoke('update:download'),
+  updateInstall: () => ipcRenderer.invoke('update:install'),
+  onUpdateStatus: (callback: (status: unknown) => void) => {
+    const listener = (_event: unknown, status: unknown) => callback(status)
+    ipcRenderer.on('update:status', listener)
+    return () => ipcRenderer.removeListener('update:status', listener)
+  },
+
+  // 渲染进程日志（写入 {appDir}/logs/renderer.log）
+  logRenderer: (level: string, args: unknown[]) => ipcRenderer.invoke('log:renderer', level, args),
 
   // 应用配置管理（便携式架构）
   getAppDir: () => ipcRenderer.invoke('app:getAppDir'),
@@ -42,6 +55,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWorkspaceConfig: (workspacePath: string) => ipcRenderer.invoke('workspace:getConfig', workspacePath),
   saveWorkspaceConfig: (workspacePath: string, config: any) => ipcRenderer.invoke('workspace:saveConfig', workspacePath, config),
   disposeWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace:dispose', workspacePath),
+
+  // 崩溃恢复草稿
+  draftSave: (workspacePath: string, filePath: string, content: string) =>
+    ipcRenderer.invoke('draft:save', workspacePath, filePath, content),
+  draftDelete: (workspacePath: string, filePath: string) =>
+    ipcRenderer.invoke('draft:delete', workspacePath, filePath),
+  draftList: (workspacePath: string) => ipcRenderer.invoke('draft:list', workspacePath),
+  draftClear: (workspacePath: string) => ipcRenderer.invoke('draft:clear', workspacePath),
 
   // Pi Agent API
   agentInitialize: (config: {
@@ -104,8 +125,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('fleet:create', workspaceDir, name, prompt),
   fleetList: (workspaceDir: string) => ipcRenderer.invoke('fleet:list', workspaceDir),
   fleetGet: (id: string) => ipcRenderer.invoke('fleet:get', id),
-  fleetCancel: (id: string) => ipcRenderer.invoke('fleet:cancel', id),
-  fleetCleanup: (id: string) => ipcRenderer.invoke('fleet:cleanup', id),
+  fleetCancel: (id: string, workspaceDir?: string) =>
+    ipcRenderer.invoke('fleet:cancel', id, workspaceDir),
+  fleetCleanup: (id: string, workspaceDir?: string) =>
+    ipcRenderer.invoke('fleet:cleanup', id, workspaceDir),
   onFleetTaskUpdated: (callback: (task: unknown) => void) => {
     const listener = (_event: unknown, task: unknown) => callback(task)
     ipcRenderer.on('fleet:task-updated', listener)

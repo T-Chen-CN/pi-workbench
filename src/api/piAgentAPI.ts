@@ -18,11 +18,21 @@ interface AgentResponse {
   error?: string
 }
 
+interface AgentUsage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  totalTokens: number
+  cost: number
+}
+
 interface AgentChatResponse {
   success: boolean
   response?: string
   error?: string
   edits?: FileEdit[]
+  usage?: AgentUsage
 }
 
 interface AgentHistoryResponse {
@@ -38,6 +48,7 @@ interface AgentHistoryResponse {
 /** Web 开发模式下由 Vite dev server 提供的 Agent 桥接 */
 const DEV_AGENT_INIT = '/__pi/agent/init'
 const DEV_AGENT_CHAT = '/__pi/agent/chat'
+const DEV_AGENT_CHAT_STREAM = '/__pi/agent/chat-stream'
 const DEV_AGENT_ABORT = '/__pi/agent/abort'
 const DEV_AGENT_DISPOSE = '/__pi/agent/dispose'
 const DEV_AGENT_HISTORY = '/__pi/agent/history'
@@ -62,6 +73,59 @@ function bridgeUnavailableError(error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error)
   return `Agent is unavailable in this environment (${detail}). ` +
     'Run the Electron app (npm run dev) or the Vite dev server to use the agent.'
+}
+
+/** 读取 Web dev 桥的 SSE 流：delta 事件增量回调，done 事件返回最终结果 */
+async function streamDevChat(
+  message: string,
+  onDelta: (delta: string) => void,
+  workspaceDir?: string
+): Promise<AgentChatResponse> {
+  const response = await fetch(DEV_AGENT_CHAT_STREAM, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, workspaceDir }),
+  })
+  if (!response.ok || !response.body) {
+    throw new Error(`Dev agent stream returned HTTP ${response.status}`)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let final: AgentChatResponse | null = null
+
+  const consume = (chunk: string): void => {
+    let event = 'message'
+    const dataLines: string[] = []
+    for (const line of chunk.split('\n')) {
+      if (line.startsWith('event:')) event = line.slice(6).trim()
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+    }
+    if (dataLines.length === 0) return
+    const payload = JSON.parse(dataLines.join('\n'))
+    if (event === 'delta' && typeof payload.delta === 'string') {
+      onDelta(payload.delta)
+    } else if (event === 'done') {
+      final = payload as AgentChatResponse
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let boundary = buffer.indexOf('\n\n')
+    while (boundary >= 0) {
+      const chunk = buffer.slice(0, boundary)
+      buffer = buffer.slice(boundary + 2)
+      boundary = buffer.indexOf('\n\n')
+      consume(chunk)
+    }
+  }
+
+  if (!final) throw new Error('Dev agent stream ended without a result')
+  return final
 }
 
 export const piAgentAPI = {
@@ -106,8 +170,10 @@ export const piAgentAPI = {
           unsubscribe?.()
         }
       }
-      // Web dev bridge 目前整轮返回，不做流式
-      return await callDevBridge<AgentChatResponse>(DEV_AGENT_CHAT, { message })
+      if (onDelta) {
+        return await streamDevChat(message, onDelta, workspaceDir)
+      }
+      return await callDevBridge<AgentChatResponse>(DEV_AGENT_CHAT, { message, workspaceDir })
     } catch (error) {
       console.error('[Pi Agent] Chat error:', error)
       return { success: false, error: bridgeUnavailableError(error) }
@@ -122,7 +188,7 @@ export const piAgentAPI = {
       if (hasElectronAgent()) {
         return await window.electronAPI.agentGetHistory(workspaceDir)
       }
-      return await callDevBridge<AgentHistoryResponse>(DEV_AGENT_HISTORY, {})
+      return await callDevBridge<AgentHistoryResponse>(DEV_AGENT_HISTORY, { workspaceDir })
     } catch (error) {
       console.error('[Pi Agent] History error:', error)
       return { success: false, error: bridgeUnavailableError(error) }
@@ -137,7 +203,7 @@ export const piAgentAPI = {
       if (hasElectronAgent()) {
         return await window.electronAPI.agentAbort(workspaceDir)
       }
-      return await callDevBridge<AgentResponse>(DEV_AGENT_ABORT, {})
+      return await callDevBridge<AgentResponse>(DEV_AGENT_ABORT, { workspaceDir })
     } catch (error) {
       console.error('[Pi Agent] Abort error:', error)
       return { success: false, error: bridgeUnavailableError(error) }
@@ -152,7 +218,7 @@ export const piAgentAPI = {
       if (hasElectronAgent()) {
         return await window.electronAPI.agentDispose(workspaceDir)
       }
-      return await callDevBridge<AgentResponse>(DEV_AGENT_DISPOSE, {})
+      return await callDevBridge<AgentResponse>(DEV_AGENT_DISPOSE, { workspaceDir })
     } catch (error) {
       console.error('[Pi Agent] Dispose error:', error)
       return { success: false, error: bridgeUnavailableError(error) }

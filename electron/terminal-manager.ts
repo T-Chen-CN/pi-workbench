@@ -1,6 +1,6 @@
 /**
  * 终端管理：每个终端一个 PTY 进程，输出通过回调推送给渲染进程，
- * 同时把最近输出写入工作区的 .pi-workbench/terminal.log 供 Agent 读取。
+ * 同时把输出写入工作区的 .pi-workbench/terminal-{id}.log 供 Agent 读取。
  */
 import * as fs from 'fs'
 import * as path from 'path'
@@ -33,7 +33,9 @@ export interface TerminalManagerOptions {
   shellArgs?: string[]
   env?: NodeJS.ProcessEnv
   /** 终端输出落盘路径；返回 null 表示不落盘 */
-  logPathFor?: (workspaceDir: string) => string | null
+  logPathFor?: (workspaceDir: string, terminalId: string) => string | null
+  /** 自定义环境过滤（默认删除已知供应商 Key） */
+  envSanitizer?: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv
   onData?: (id: string, data: string) => void
   onExit?: (id: string, exitCode: number) => void
 }
@@ -41,6 +43,8 @@ export interface TerminalManagerOptions {
 export interface TerminalCreateResult {
   success: boolean
   id?: string
+  /** 该终端输出日志文件（按终端拆分） */
+  logPath?: string | null
   error?: string
 }
 
@@ -53,10 +57,28 @@ interface TerminalEntry {
   /** 尚未写入日志文件的内容 */
   pending: string
   logPath: string | null
+  /** 当前日志文件大小，用于轮转 */
+  logBytes: number
 }
 
 const MAX_BUFFER_CHARS = 200_000
 const FLUSH_DELAY_MS = 500
+const MAX_LOG_BYTES = 5 * 1024 * 1024
+/** 终端子进程不应继承 Agent 的供应商密钥 */
+const SENSITIVE_ENV_KEYS = ['PI_WORKBENCH_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']
+
+export function sanitizeTerminalEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const sanitized: NodeJS.ProcessEnv = { ...env }
+  for (const key of SENSITIVE_ENV_KEYS) {
+    delete sanitized[key]
+  }
+  return sanitized
+}
+
+function clampDimension(value: number, min: number, max: number): number {
+  const numeric = Number.isFinite(value) ? Math.floor(value) : min
+  return Math.min(Math.max(numeric, min), max)
+}
 
 function defaultShell(): string {
   if (process.platform === 'win32') {
@@ -81,15 +103,20 @@ export class TerminalManager {
     }
 
     const id = `term-${this.nextId++}`
-    const logPath = this.options.logPathFor?.(workspaceDir) ?? null
+    const logPath = this.options.logPathFor?.(workspaceDir, id) ?? null
 
     try {
+      const baseEnv = this.options.env ?? process.env
+      const spawnEnv = this.options.envSanitizer
+        ? this.options.envSanitizer(baseEnv)
+        : sanitizeTerminalEnv(baseEnv)
+
       const pty = this.options.spawn(this.options.shell ?? defaultShell(), this.options.shellArgs ?? [], {
         name: 'xterm-256color',
-        cols: Math.max(cols, 20),
-        rows: Math.max(rows, 5),
+        cols: clampDimension(cols, 20, 1000),
+        rows: clampDimension(rows, 5, 500),
         cwd: workspaceDir,
-        env: this.options.env ?? process.env,
+        env: spawnEnv,
       })
 
       const entry: TerminalEntry = {
@@ -99,15 +126,27 @@ export class TerminalManager {
         buffer: '',
         pending: '',
         logPath,
+        logBytes: 0,
       }
 
-      // 新终端会话使用新的日志文件
+      // 同一工作区的终端共用一个日志文件：追加会话标记而不是清空历史
       if (logPath) {
         try {
           fs.mkdirSync(path.dirname(logPath), { recursive: true })
-          fs.writeFileSync(logPath, '', 'utf-8')
+          try {
+            entry.logBytes = fs.statSync(logPath).size
+          } catch {
+            entry.logBytes = 0
+          }
+          if (entry.logBytes > MAX_LOG_BYTES) {
+            this.rotateLog(entry)
+          }
+          this.appendToLog(
+            entry,
+            `\n--- terminal ${id} started at ${new Date().toISOString()} ---\n`
+          )
         } catch (error) {
-          console.warn('[Terminal] Failed to reset terminal log:', error)
+          console.warn('[Terminal] Failed to prepare terminal log:', error)
         }
       }
 
@@ -125,7 +164,7 @@ export class TerminalManager {
       })
 
       this.terminals.set(id, entry)
-      return { success: true, id }
+      return { success: true, id, logPath }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.error('[Terminal] Failed to create terminal:', message)
@@ -143,7 +182,7 @@ export class TerminalManager {
   resize(id: string, cols: number, rows: number): boolean {
     const entry = this.terminals.get(id)
     if (!entry) return false
-    entry.pty.resize(Math.max(cols, 20), Math.max(rows, 5))
+    entry.pty.resize(clampDimension(cols, 20, 1000), clampDimension(rows, 5, 500))
     return true
   }
 
@@ -164,6 +203,16 @@ export class TerminalManager {
   closeAll(): void {
     for (const id of [...this.terminals.keys()]) {
       this.close(id)
+    }
+  }
+
+  /** 关闭某个工作区的全部终端（关闭工作区标签时调用） */
+  closeWorkspace(workspaceDir: string): void {
+    const normalized = path.resolve(workspaceDir)
+    for (const [id, entry] of [...this.terminals.entries()]) {
+      if (path.resolve(entry.workspaceDir) === normalized) {
+        this.close(id)
+      }
     }
   }
 
@@ -200,12 +249,34 @@ export class TerminalManager {
 
   private flush(entry: TerminalEntry): void {
     if (!entry.logPath || !entry.pending) return
+    const text = entry.pending
+    entry.pending = ''
+    this.appendToLog(entry, text)
+  }
+
+  private appendToLog(entry: TerminalEntry, text: string): void {
+    if (!entry.logPath || !text) return
     try {
       fs.mkdirSync(path.dirname(entry.logPath), { recursive: true })
-      fs.appendFileSync(entry.logPath, entry.pending, 'utf-8')
-      entry.pending = ''
+      fs.appendFileSync(entry.logPath, text, 'utf-8')
+      entry.logBytes += Buffer.byteLength(text, 'utf-8')
+      if (entry.logBytes > MAX_LOG_BYTES) {
+        this.rotateLog(entry)
+      }
     } catch (error) {
       console.warn('[Terminal] Failed to write terminal log:', error)
+    }
+  }
+
+  private rotateLog(entry: TerminalEntry): void {
+    if (!entry.logPath) return
+    const rotated = `${entry.logPath}.1`
+    try {
+      fs.rmSync(rotated, { force: true })
+      fs.renameSync(entry.logPath, rotated)
+      entry.logBytes = 0
+    } catch (error) {
+      console.warn('[Terminal] Failed to rotate terminal log:', error)
     }
   }
 }

@@ -96,15 +96,21 @@ pi-workbench/
 
 #### 组件放置规则
 ```typescript
-// ✅ 正确：7 个顶层组件，扁平结构
+// ✅ 正确：顶层组件扁平放置，不建子目录
 src/components/
 ├── ChatPanel.tsx
+├── CommandPalette.tsx
 ├── DiffViewer.tsx
+├── ErrorBoundary.tsx
 ├── FileExplorer.tsx
+├── FleetPanel.tsx
 ├── IPCDebug.tsx
 ├── MonacoEditor.tsx
 ├── Settings.tsx
-└── Toast.tsx
+├── TerminalPanel.tsx
+├── Toast.tsx
+├── WelcomeScreen.tsx
+└── ui.tsx
 
 // ❌ 错误：不要创建子目录
 src/components/chat/ChatPanel.tsx  // 不要这样！
@@ -112,12 +118,13 @@ src/components/chat/ChatPanel.tsx  // 不要这样！
 
 #### Store 放置规则
 ```typescript
-// ✅ 正确：每个功能域一个独立 store
+// ✅ 正确：每个功能域一个独立 store（7 个）
 src/store/
-├── chatStore.ts       // 聊天消息（支持历史恢复）
+├── chatStore.ts       // 聊天消息（支持历史恢复、token 用量）
 ├── diffStore.ts       // Diff 查看器
 ├── editorStore.ts     // 编辑器标签页、脏标记
 ├── i18nStore.ts       // 语言切换（persist）
+├── themeStore.ts      // Paper / Ink 主题
 ├── toastStore.ts      // 全局 Toast（组件外也可调用）
 └── workspaceStore.ts  // 当前工作区 + 最近打开
 
@@ -597,7 +604,7 @@ async function initAgent(config: ApiConfig) {
 **日志文件位置**:
 - ✅ 所有日志：`{appDir}/logs/`
 - ✅ 主进程日志：`{appDir}/logs/main.log`（5MB 轮转，保留 `.1`）
-- ⏳ 渲染进程日志：`{appDir}/logs/renderer.log`（待实现）
+- ✅ 渲染进程日志：`{appDir}/logs/renderer.log`（未捕获异常与 console.warn/error）
 - ⏳ Agent 日志：`{appDir}/logs/agent.log`（待实现；目前与主进程共用 main.log）
 
 **Chromium profile**:
@@ -633,7 +640,7 @@ async function initAgent(config: ApiConfig) {
 - ✅ 任务元数据：`{appDir}/data/fleet-tasks.db`（`node:sqlite`；不可用时回退 JSON）
 - ✅ 任务日志：`{appDir}/logs/fleet-{task-id}.log`
 - ✅ 清理 worktree 时**保留分支**，避免丢失 Agent 提交
-- ✅ 队列默认并发 1，可通过 `FleetManager` 的 `maxConcurrent` 调整
+- ✅ 队列每个工作区默认并发 1、全局上限 4，可通过 `FleetManager` 的 `maxConcurrent` / `maxTotalConcurrent` 调整
 - ❌ **禁止**在系统临时目录创建 worktree
 
 ---

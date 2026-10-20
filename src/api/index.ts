@@ -30,6 +30,11 @@ import type {
   TerminalCreateResult,
   TerminalResult,
   TerminalOutputResult,
+  UpdateCheckResult,
+  UpdateActionResult,
+  UpdateStatus,
+  DraftListResult,
+  DraftResult,
 } from '../types/electron'
 
 // Mock API for browser development
@@ -80,7 +85,7 @@ const mockAPI = {
     console.log('[Mock] watchWorkspace:', workspacePath)
     return { success: true }
   },
-  unwatchWorkspace: async (): Promise<WorkspaceResult> => {
+  unwatchWorkspace: async (_workspacePath?: string): Promise<WorkspaceResult> => {
     return { success: true }
   },
   onFsChanged: (_callback: (payload: { type: string; path: string }) => void) => {
@@ -91,10 +96,24 @@ const mockAPI = {
     console.log('[Mock] getAppDir')
     return { success: true, appDir: '/mock/app/dir' }
   },
+  logRenderer: async () => ({ success: true }),
+  updateCheck: async (): Promise<UpdateCheckResult> => ({
+    success: false,
+    error: 'Updates are only available in the Electron app',
+  }),
+  updateDownload: async (): Promise<UpdateActionResult> => ({
+    success: false,
+    error: 'Updates are only available in the Electron app',
+  }),
+  updateInstall: async (): Promise<UpdateActionResult> => ({
+    success: false,
+    error: 'Updates are only available in the Electron app',
+  }),
+  onUpdateStatus: (_callback: (status: UpdateStatus) => void) => () => {},
   getSettings: async (): Promise<GetSettingsResult> => {
     const defaults = {
       language: 'zh',
-      theme: 'dark',
+      theme: 'light',
       autoSave: true,
       autoSaveDelay: 2000,
     }
@@ -163,6 +182,10 @@ const mockAPI = {
     console.log('[Mock] disposeWorkspace:', workspacePath)
     return { success: true }
   },
+  draftSave: async (): Promise<DraftResult> => ({ success: true }),
+  draftDelete: async (): Promise<DraftResult> => ({ success: true }),
+  draftList: async (): Promise<DraftListResult> => ({ success: true, drafts: [] }),
+  draftClear: async (): Promise<DraftResult> => ({ success: true }),
 
   apiConfigGet: async (): Promise<ApiConfigGetResult> => {
     console.log('[Mock] apiConfigGet')
@@ -282,12 +305,17 @@ export const api = {
   deletePath: (path: string) => electronAPI.deletePath(path),
   renamePath: (oldPath: string, newPath: string) => electronAPI.renamePath(oldPath, newPath),
   watchWorkspace: (workspacePath: string) => electronAPI.watchWorkspace(workspacePath),
-  unwatchWorkspace: () => electronAPI.unwatchWorkspace(),
+  unwatchWorkspace: (workspacePath?: string) => electronAPI.unwatchWorkspace(workspacePath),
   onFsChanged: (callback: (payload: { type: string; path: string }) => void) =>
     electronAPI.onFsChanged(callback),
 
   // App configuration (portable architecture)
   getAppDir: () => electronAPI.getAppDir(),
+  logRenderer: (level: string, args: unknown[]) => electronAPI.logRenderer(level, args),
+  updateCheck: () => electronAPI.updateCheck(),
+  updateDownload: () => electronAPI.updateDownload(),
+  updateInstall: () => electronAPI.updateInstall(),
+  onUpdateStatus: (callback: (status: UpdateStatus) => void) => electronAPI.onUpdateStatus(callback),
   getSettings: () => electronAPI.getSettings(),
   saveSettings: (settings: any) => electronAPI.saveSettings(settings),
   getRecentWorkspaces: () => electronAPI.getRecentWorkspaces(),
@@ -304,6 +332,12 @@ export const api = {
   getWorkspaceConfig: (workspacePath: string) => electronAPI.getWorkspaceConfig(workspacePath),
   saveWorkspaceConfig: (workspacePath: string, config: any) => electronAPI.saveWorkspaceConfig(workspacePath, config),
   disposeWorkspace: (workspacePath: string) => electronAPI.disposeWorkspace(workspacePath),
+  draftSave: (workspacePath: string, filePath: string, content: string) =>
+    electronAPI.draftSave(workspacePath, filePath, content),
+  draftDelete: (workspacePath: string, filePath: string) =>
+    electronAPI.draftDelete(workspacePath, filePath),
+  draftList: (workspacePath: string) => electronAPI.draftList(workspacePath),
+  draftClear: (workspacePath: string) => electronAPI.draftClear(workspacePath),
 
   // API Configuration management (portable architecture)
   apiConfigGet: () => electronAPI.apiConfigGet(),
@@ -326,8 +360,8 @@ export const api = {
     electronAPI.fleetCreate(workspaceDir, name, prompt),
   fleetList: (workspaceDir: string) => electronAPI.fleetList(workspaceDir),
   fleetGet: (id: string) => electronAPI.fleetGet(id),
-  fleetCancel: (id: string) => electronAPI.fleetCancel(id),
-  fleetCleanup: (id: string) => electronAPI.fleetCleanup(id),
+  fleetCancel: (id: string, workspaceDir?: string) => electronAPI.fleetCancel(id, workspaceDir),
+  fleetCleanup: (id: string, workspaceDir?: string) => electronAPI.fleetCleanup(id, workspaceDir),
   onFleetTaskUpdated: (callback: (task: FleetTask) => void) =>
     electronAPI.onFleetTaskUpdated(callback),
 

@@ -1,8 +1,8 @@
 # Pi Workbench 项目方案
 
 **版本**: 0.1.0
-**最后更新**: 2026-10-20
-**当前阶段**: Phase 1 完成并加固，Phase 2 进行中
+**最后更新**: 2026-10-21
+**当前阶段**: Phase 5 完成，Phase 6 持续优化
 
 ---
 
@@ -87,7 +87,7 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 - IPC 调试面板（开发模式）
 - 便携式数据目录；Web 开发模式调试桥接
 - 主进程文件日志（`logs/main.log`，5 MB 轮转并保留 `.1` 备份）
-- 内置终端（xterm.js + node-pty；输出写入 `terminal.log`，可附加给 Agent）
+- 内置终端（xterm.js + node-pty；输出按终端写入 `terminal-{id}.log`，可附加给 Agent）
 - 多工作区标签页，各工作区独立 Agent 实例
 - 工作台插件系统（主进程加载、命令 / 钩子、启用禁用与热重载、命令面板）
 - GitHub 风格的 Git 示例插件（`examples/plugins/git-tools`）
@@ -167,7 +167,7 @@ Main Process (Node 24, Electron 44)
 | Web dev Agent 数据 | `{appDir}/cache/temp/web-agent/` | 可随时删除 |
 | 主进程日志 | `{appDir}/logs/main.log` | 5 MB 轮转，保留 `main.log.1`；渲染进程日志待补 |
 | Chromium profile | `{appDir}/data/profile/` | `app.setPath('userData', ...)`，缓存与 localStorage 随应用目录迁移 |
-| 终端输出 | `{workspace}/.pi-workbench/terminal.log` | 每次新建终端时重置；可附加给 Agent |
+| 终端输出 | `{workspace}/.pi-workbench/terminal-{id}.log` | 每个终端独立文件；5MB 轮转；可附加给 Agent |
 | Fleet 任务 | `{appDir}/data/fleet-tasks.db` | `node:sqlite`（不可用时回退 `fleet-tasks.json`） |
 | Fleet 日志 | `{appDir}/logs/fleet-{task-id}.log` | 任务开始 / 流式输出 / 结束 |
 
@@ -180,10 +180,11 @@ Main Process (Node 24, Electron 44)
 ```
 electron/           主进程（main.ts、preload.cts、两套 tsconfig）
 src/
-  components/       7 个扁平组件（ChatPanel、DiffViewer、FileExplorer、IPCDebug、
-                    MonacoEditor、Settings、Toast）
-  store/            6 个独立 store（chat、diff、editor、i18n、toast、workspace）
-  api/              IPC 封装、Agent API、diff 算法
+  components/       13 个扁平组件（ChatPanel、CommandPalette、DiffViewer、ErrorBoundary、
+                    FileExplorer、FleetPanel、IPCDebug、MonacoEditor、Settings、
+                    TerminalPanel、Toast、WelcomeScreen、ui）
+  store/            7 个独立 store（chat、diff、editor、i18n、theme、toast、workspace）
+  api/              IPC 封装、Agent API（Electron IPC / Web SSE）、渲染日志、diff 算法
   types/            Electron API 与通用类型
   i18n/             中英文文案
 pi-bridge/          AgentManager（主进程内运行；dist 不入库）
@@ -218,7 +219,7 @@ docs/               项目文档
 - 对话：`session.prompt()`，读取最后一条 assistant 消息，错误透传
 - 历史：从 Pi 会话恢复为可展示消息
 
-**待增强**：流式输出、上下文选择、Diff 接受/拒绝。
+**已增强**：流式输出、上下文选择、token 用量统计、自动重试（由 Pi SDK 提供）。
 
 ### 模块 4：Diff 查看（已实现）
 
@@ -228,12 +229,13 @@ docs/               项目文档
 
 **待增强**：写入前审批（当前为事后审阅，修改已直接落盘）。
 
-### 模块 5：工作区管理（进行中）
+### 模块 5：工作区管理（已实现）
 
 已完成：
 
 - `.pi-workbench/` 初始化、最近工作区、切换清理、会话恢复
 - 多工作区标签页与工作区级 Agent 注册表（`electron/agent-registry.ts`）
+- 按工作区的文件监听与终端生命周期（关闭工作区时一并释放）
 
 待完成：
 
@@ -243,7 +245,7 @@ docs/               项目文档
 
 - 主进程 `TerminalManager`（`electron/terminal-manager.ts`）管理 PTY 进程
 - 渲染进程使用 `@xterm/xterm` + FitAddon，面板位于编辑器下方
-- 每个终端输出写入 `{workspace}/.pi-workbench/terminal.log`，可一键附加为 Agent 上下文
+- 每个终端输出写入 `{workspace}/.pi-workbench/terminal-{id}.log`，可一键附加为 Agent 上下文
 - 面板隐藏时保留会话；重启按钮重建 PTY；切换工作区按 key 重建
 - node-pty 为原生模块：延迟加载，失败只影响终端；打包使用 `asarUnpack`
 
@@ -264,7 +266,7 @@ docs/               项目文档
 ### 模块 8：Fleet 任务（已实现）
 
 - Git worktree：`{workspace}/.pi-worktrees/{name}-{taskId}`，分支 `pi-fleet/...`
-- 任务队列：默认并发 1，可在 `FleetManager` 配置中调整
+- 任务队列：每个工作区默认并发 1（全局上限 4），工作区之间互不排队
 - 每个任务独立 Agent 实例，运行在 worktree 目录，结束后释放
 - 状态机：queued → running → succeeded / failed / cancelled
 - 任务元数据：`{appDir}/data/fleet-tasks.db`（Electron 内置 `node:sqlite`；不可用时回退 JSON）
@@ -308,10 +310,10 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 ### ✅ Phase 3：终端集成（完成）
 
 - [x] xterm.js + node-pty（Electron 44 下验证可用；安装包通过 `asarUnpack` 保留原生二进制）
-- [x] 用户终端、重启与输出日志（`{workspace}/.pi-workbench/terminal.log`）
+- [x] 用户终端、重启与输出日志（`{workspace}/.pi-workbench/terminal-{id}.log`）
 - [x] Agent 与终端联动：终端输出可作为上下文附件发送给 Agent
 
-**说明**：终端按工作区创建，面板显隐不销毁会话；切换工作区会重建终端。"Agent 读取终端输出"通过附加 `terminal.log` 实现。
+**说明**：终端按工作区创建，面板显隐不销毁会话；切换工作区会重建终端。"Agent 读取终端输出"通过附加当前终端的 `terminal-{id}.log` 实现。
 
 ### ✅ Phase 4：工作台插件系统（完成）
 
@@ -337,16 +339,18 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 
 ### ⏳ Phase 6：优化与完善（持续）
 
-- [ ] 性能（大文件、大项目、虚拟滚动）
+- [ ] 性能（大文件、大项目、虚拟滚动；Monaco 首屏块仍较大）
 - [x] 构建分包（Monaco / React / vendor 独立 chunk）
-- [ ] 撤销/重做
-- [ ] 快捷键 / 命令面板
-- [ ] 主题系统
-- [ ] 崩溃恢复（草稿）
+- [x] 撤销/重做（Monaco 每个文件独立 model，撤销栈按文件隔离）
+- [x] 快捷键 / 命令面板（Ctrl+, / Ctrl+Shift+P / Ctrl+S；自定义快捷键待增强）
+- [x] 主题系统（Paper & Ink，Paper / Ink 双主题）
+- [x] 崩溃恢复（编辑器草稿写入 `cache/drafts/`，启动时提示恢复）
 - [x] CSP 与安全加固（生产构建已注入 CSP）
 - [x] 代码审查回归修复（编辑器初始化/自动保存、Web 终端降级、错误边界、监听批量事件、语言持久化、Fleet 崩溃恢复）
 - [x] 渲染层测试（jsdom + React Testing Library：编辑器创建 / 自动保存）
-- [ ] 自动更新（electron-updater）
+- [x] 自动更新（electron-updater，打包版本可用）
+- [x] 渲染进程日志（`logs/renderer.log`）
+- [x] 后端可靠性加固（原子写配置、可信路径、Agent/Fleet 中止与恢复、按工作区监听）
 - [x] 测试覆盖率提升（store / logger / AgentManager / IPC / 终端 / 插件 / Fleet / 渲染组件）
 
 ---
