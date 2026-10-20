@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  platform: process.platform,
   // 文件系统操作
   openDirectoryDialog: () => ipcRenderer.invoke('dialog:openDirectory'),
   readFile: (path: string) => ipcRenderer.invoke('fs:readFile', path),
@@ -37,6 +38,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveSettings: (settings: any) => ipcRenderer.invoke('app:saveSettings', settings),
   getRecentWorkspaces: () => ipcRenderer.invoke('app:getRecentWorkspaces'),
   addRecentWorkspace: (workspacePath: string) => ipcRenderer.invoke('app:addRecentWorkspace', workspacePath),
+
+  // 自绘窗口按钮
+  minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
+  toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggleMaximize'),
+  closeWindow: () => ipcRenderer.invoke('window:close'),
+  isWindowMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+  onWindowMaximizedChange: (callback: (maximized: boolean) => void) => {
+    const listener = (_event: unknown, maximized: boolean) => callback(maximized)
+    ipcRenderer.on('window:maximized-changed', listener)
+    return () => ipcRenderer.removeListener('window:maximized-changed', listener)
+  },
 
   // 工作区配置管理
   initWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace:init', workspacePath),

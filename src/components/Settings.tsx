@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { Info, KeyRound, RefreshCw, Save, SlidersHorizontal } from 'lucide-react'
+import { Info, KeyRound, Keyboard, RefreshCw, Save, SlidersHorizontal } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useThemeStore, type ThemeMode } from '../store/themeStore'
 import { api } from '../api'
@@ -8,7 +8,20 @@ import { localizeError } from '../i18n/errors'
 import type { ApiConfig } from '../types/electron'
 import { Button, Field, Input, Select } from './ui'
 
-type Section = 'general' | 'api' | 'about'
+type Section = 'general' | 'api' | 'shortcuts' | 'about'
+
+const ShortcutKeys: React.FC<{ keys: string[] }> = ({ keys }) => (
+  <span className="flex flex-shrink-0 items-center gap-1 font-mono text-[10px] text-ink-muted">
+    {keys.map((key, index) => (
+      <React.Fragment key={`${key}-${index}`}>
+        {index > 0 && <span className="text-ink-subtle">+</span>}
+        <kbd className="border border-line bg-sunken px-1.5 py-0.5 leading-none text-ink">
+          {key}
+        </kbd>
+      </React.Fragment>
+    ))}
+  </span>
+)
 
 interface SettingsProps {
   onClose?: () => void
@@ -18,6 +31,10 @@ export const Settings: React.FC<SettingsProps> = () => {
   const { language, setLanguage, t } = useI18nStore()
   const { mode, setMode } = useThemeStore()
   const [section, setSection] = useState<Section>('general')
+  const isMac = typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin'
+  const mod = isMac ? '⌘' : 'Ctrl'
+  const shift = isMac ? '⇧' : 'Shift'
+  const alt = isMac ? '⌥' : 'Alt'
 
   const [apiConfig, setApiConfig] = useState<ApiConfig>({
     provider: 'custom',
@@ -208,7 +225,51 @@ export const Settings: React.FC<SettingsProps> = () => {
   const navItems: Array<{ id: Section; label: string; icon: typeof Info }> = [
     { id: 'general', label: t('general'), icon: SlidersHorizontal },
     { id: 'api', label: t('apiConfiguration'), icon: KeyRound },
+    { id: 'shortcuts', label: t('shortcuts'), icon: Keyboard },
     { id: 'about', label: t('about'), icon: Info },
+  ]
+
+  const shortcutGroups: Array<{
+    title: string
+    items: Array<{ label: string; keys: string[]; note?: string }>
+  }> = [
+    {
+      title: t('shortcutGroupGeneral'),
+      items: [
+        {
+          label: t('shortcutCommandPalette'),
+          keys: [mod, shift, 'P'],
+          note: t('shortcutCommandPaletteNote'),
+        },
+        { label: t('shortcutSettings'), keys: [mod, ','] },
+        { label: t('shortcutReload'), keys: [mod, 'R'] },
+        {
+          label: t('shortcutDevTools'),
+          keys: isMac ? [mod, alt, 'I'] : ['Ctrl', 'Shift', 'I'],
+        },
+        { label: t('shortcutCloseWindow'), keys: [mod, 'W'] },
+      ],
+    },
+    {
+      title: t('shortcutGroupEditor'),
+      items: [
+        { label: t('shortcutSave'), keys: [mod, 'S'] },
+        { label: t('shortcutUndo'), keys: [mod, 'Z'] },
+        { label: t('shortcutRedo'), keys: [mod, shift, 'Z'] },
+        { label: t('shortcutFind'), keys: [mod, 'F'] },
+      ],
+    },
+    {
+      title: t('shortcutGroupChat'),
+      items: [
+        { label: t('shortcutSend'), keys: ['Enter'] },
+        { label: t('shortcutNewline'), keys: [shift, 'Enter'] },
+      ],
+    },
+    {
+      title: t('shortcutGroupOverlays'),
+      items: [{ label: t('shortcutCloseOverlay'), keys: ['Esc'] }],
+    },
   ]
 
   return (
@@ -338,6 +399,38 @@ export const Settings: React.FC<SettingsProps> = () => {
                 <span className="text-xs text-danger">{t('saveFailedShort')}</span>
               )}
             </div>
+          </div>
+        )}
+
+        {section === 'shortcuts' && (
+          <div className="flex max-w-xl flex-col gap-5">
+            <p className="m-0 font-reading text-[13px] leading-[1.75] text-ink-muted">
+              {t('shortcutHint')}
+            </p>
+
+            {shortcutGroups.map((group) => (
+              <section key={group.title}>
+                <h4 className="m-0 mb-1.5 font-mono text-[9px] uppercase tracking-[0.16em] text-ink-subtle">
+                  {group.title}
+                </h4>
+                <div className="border-t border-line">
+                  {group.items.map((item) => (
+                    <div
+                      key={`${group.title}-${item.label}`}
+                      className="flex items-start justify-between gap-4 border-b border-line py-2"
+                    >
+                      <div className="flex min-w-0 flex-col gap-0.5">
+                        <span className="text-xs text-ink">{item.label}</span>
+                        {item.note && (
+                          <span className="font-mono text-[9px] text-ink-subtle">{item.note}</span>
+                        )}
+                      </div>
+                      <ShortcutKeys keys={item.keys} />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
           </div>
         )}
 

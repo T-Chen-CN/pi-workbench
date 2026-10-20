@@ -373,8 +373,8 @@ boxShadow: { print: '5px 6px 0 rgb(23 21 18 / 0.08)' },
 
 | # | 任务 | 具体内容 | 产出 |
 |---|---|---|---|
-| 0.1 | 搭建工作区原型 | 复用欢迎页的 token 与字体，制作"文件树 + 编辑器 + 聊天空状态 + 终端"四区布局 | `cache/prototypes/e-workspace.html` |
-| 0.2 | 出图 | 用 headless Chrome 以 2 倍像素导出 2560×1600 PNG | `cache/prototypes/screenshots/e-workspace.png` |
+| 0.1 | 搭建工作区原型 | 复用欢迎页的 token 与字体，制作"文件树 + 编辑器 + 聊天空状态 + 终端"四区布局 | 临时原型（已完成并清理） |
+| 0.2 | 出图 | 用 headless Chrome 以 2 倍像素导出 2560×1600 PNG | 截图（最终见 `docs/design/assets/`） |
 | 0.3 | 评审清单 | 层级是否清楚；浅色代码是否可读；聊天稿纸是否成立；标签/状态栏是否协调 | 评审结论 |
 
 **门槛**：确认工作区观感后才进入阶段 1。本阶段不修改项目源码。
@@ -586,7 +586,7 @@ grep -rnE "text-gray-|bg-gray-|border-gray-|dark:" src/components src/App.tsx
 
 ### 10.1 原型与截图
 
-- 选定方向原型：`cache/prototypes/e.html`（临时文件，`.gitignore` 已忽略 `cache/`）
+- 选定方向原型为临时文件，阶段结束后已清理；最终视觉见 `docs/design/assets/`。
 - 高清截图：`docs/design/assets/paper-ink-welcome.png`（2560×1600）
 
 ### 10.2 字体引入示例

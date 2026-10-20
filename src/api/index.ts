@@ -42,6 +42,7 @@ const MOCK_CONFIG_KEY = 'pi-workbench-api-config'
 const MOCK_SETTINGS_KEY = 'pi-workbench-settings'
 
 const mockAPI = {
+  platform: 'web',
   openDirectoryDialog: async (): Promise<OpenDirectoryResult> => {
     console.log('[Mock] openDirectoryDialog')
     return { success: true, path: '/mock/selected/path' }
@@ -144,6 +145,17 @@ const mockAPI = {
     localStorage.setItem('pi-workbench-recent-workspaces', JSON.stringify(workspaces))
     return { success: true, workspaces }
   },
+  minimizeWindow: async (): Promise<{ success: boolean }> => ({ success: false }),
+  toggleMaximizeWindow: async (): Promise<{ success: boolean; maximized: boolean }> => ({
+    success: false,
+    maximized: false,
+  }),
+  closeWindow: async (): Promise<{ success: boolean }> => ({ success: false }),
+  isWindowMaximized: async (): Promise<{ success: boolean; maximized: boolean }> => ({
+    success: true,
+    maximized: false,
+  }),
+  onWindowMaximizedChange: (_callback: (maximized: boolean) => void) => () => {},
   initWorkspace: async (workspacePath: string): Promise<WorkspaceResult> => {
     console.log('[Mock] initWorkspace:', workspacePath)
     return { success: true }
@@ -308,6 +320,12 @@ export const api = {
   saveSettings: (settings: any) => electronAPI.saveSettings(settings),
   getRecentWorkspaces: () => electronAPI.getRecentWorkspaces(),
   addRecentWorkspace: (workspacePath: string) => electronAPI.addRecentWorkspace(workspacePath),
+  minimizeWindow: () => electronAPI.minimizeWindow(),
+  toggleMaximizeWindow: () => electronAPI.toggleMaximizeWindow(),
+  closeWindow: () => electronAPI.closeWindow(),
+  isWindowMaximized: () => electronAPI.isWindowMaximized(),
+  onWindowMaximizedChange: (callback: (maximized: boolean) => void) =>
+    electronAPI.onWindowMaximizedChange(callback),
 
   // Workspace configuration
   initWorkspace: (workspacePath: string) => electronAPI.initWorkspace(workspacePath),

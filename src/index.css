@@ -8,6 +8,8 @@
    RGB 三元组便于 Tailwind 使用透明度修饰符
 ------------------------------------------------------------------- */
 :root {
+  --titlebar-height: 45px;
+
   /* 纸面 */
   --surface: 244 241 234;      /* canvas */
   --panel: 251 249 244;        /* surface */
@@ -160,6 +162,24 @@ body {
 
 button {
   font-family: inherit;
+}
+
+/* 无边框窗口：顶栏可拖拽，交互元素保持可点击 */
+.app-drag {
+  -webkit-app-region: drag;
+}
+
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.app-drag button,
+.app-drag a,
+.app-drag input,
+.app-drag select,
+.app-drag textarea,
+.app-drag label {
+  -webkit-app-region: no-drag;
 }
 
 @media (prefers-reduced-motion: reduce) {

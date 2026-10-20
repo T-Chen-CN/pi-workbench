@@ -21,6 +21,7 @@ import { CommandPalette } from './components/CommandPalette'
 import { FleetPanel } from './components/FleetPanel'
 import { ToastContainer } from './components/Toast'
 import { WelcomeScreen } from './components/WelcomeScreen'
+import { WindowControls } from './components/WindowControls'
 import { Button, IconButton, Modal } from './components/ui'
 import { useToastStore } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
@@ -61,6 +62,9 @@ export default function App() {
   const { setMode } = useThemeStore()
   const resolvedTheme = useResolvedTheme()
   const currentFile = useEditorStore((state) => state.currentFile)
+  const platform = typeof window !== 'undefined' ? window.electronAPI?.platform : undefined
+  const usesMacTrafficLights = platform === 'darwin'
+  const usesCustomWindowControls = !!platform && platform !== 'darwin' && platform !== 'web'
 
   const fileLanguage = (() => {
     const ext = currentFile?.name.split('.').pop()?.toLowerCase()
@@ -324,7 +328,17 @@ export default function App() {
       )}
 
       {/* Header */}
-      <header className="flex h-[52px] flex-shrink-0 items-center justify-between gap-4 border-b border-line bg-surface px-4">
+      <header
+        className={`app-drag flex h-[var(--titlebar-height)] flex-shrink-0 select-none items-center justify-between gap-4 border-b border-line bg-surface ${
+          usesMacTrafficLights ? 'pl-[78px]' : 'pl-4'
+        } ${usesCustomWindowControls ? 'pr-0' : 'pr-4'}`}
+        onDoubleClick={(event) => {
+          if (!usesCustomWindowControls) return
+          const target = event.target as HTMLElement
+          if (target.closest('button, a, input, select, textarea')) return
+          void window.electronAPI?.toggleMaximizeWindow()
+        }}
+      >
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="font-display text-2xl leading-none text-ink">Pi</span>
           <span className="font-mono text-[8.5px] uppercase tracking-[0.2em] text-ink-subtle">
@@ -347,7 +361,8 @@ export default function App() {
           )}
         </div>
 
-        <div className="flex flex-shrink-0 items-center gap-4">
+        <div className="flex h-full flex-shrink-0 items-center">
+          <div className={`flex items-center gap-4 ${usesCustomWindowControls ? 'pr-3' : ''}`}>
           {workspace && (
             <>
               <div className="flex items-center gap-0.5">
@@ -405,6 +420,8 @@ export default function App() {
           >
             {workspace ? t('closeProject') : t('openProject')}
           </Button>
+          </div>
+          {usesCustomWindowControls && <WindowControls />}
         </div>
       </header>
 
