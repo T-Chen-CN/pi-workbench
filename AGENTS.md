@@ -640,6 +640,14 @@ async function initAgent(config: ApiConfig) {
 
 ## 🎨 UI/UX 指南
 
+### 前端设计规范（强制）
+
+- **唯一事实来源**：[docs/design/DESIGN_SYSTEM.md](docs/design/DESIGN_SYSTEM.md)。进行任何前端设计相关改动前必须先阅读并遵守。
+- 适用范围：颜色、字体、字号、间距、圆角、阴影、图标、动效、组件、布局、主题、空状态、提示文案。
+- 只允许使用规范中的设计 token 与 `src/components/ui.tsx` 的基础组件；禁止硬编码颜色、`gray-* / blue-* / red-*` 调色板类、`dark:` 变体、emoji 图标。
+- **需要引入规范之外的设计元素时，必须先更新 `DESIGN_SYSTEM.md` 并获得项目所有者确认，再写代码；未经确认的设计例外不得合并。**
+- 每次 UI 改动需提供 Paper / Ink 两套截图，并通过对比度、键盘焦点、1024 / 1440 宽度、`type-check` / `lint` / `test` 检查。
+
 ### 布局结构
 ```
 ┌─────────────────────────────────────────────┐
@@ -657,12 +665,19 @@ async function initAgent(config: ApiConfig) {
 └──────────┴──────────────────────────────────┘
 ```
 
-### 颜色规范（TailwindCSS）
-- 背景：`bg-gray-900` (深色主题)
-- 文字：`text-gray-100`
-- 边框：`border-gray-700`
-- 高亮：`bg-blue-600` (选中状态)
-- 错误：`text-red-400`
+### 视觉与组件规范（Paper & Ink）
+- 视觉语言：纸面 + 墨线 + 松绿。默认 Paper 浅色，Ink 深色通过 `<html class="dark">` 切换；不要在组件里写 `dark:` 变体。
+- 所有颜色使用语义 token，禁止硬编码色值或 gray/blue/red 调色板类：
+  - 纸面：`bg-surface`（画布）/ `bg-panel`（面板）/ `bg-raised`（纸卡）/ `bg-sunken`（输入与代码）
+  - 悬停与选中：`bg-hover` / `bg-active`
+  - 文字：`text-ink` / `text-ink-muted` / `text-ink-subtle`
+  - 边框：`border-line`
+  - 强调与状态：`text-accent`（松绿链接/选中）、`bg-accent`（主按钮）、`text-success`（暖橄榄）、`text-warning`、`text-danger`（朱砂红）
+- 字体：`font-display`（Instrument Serif + 思源宋体）用于 ≥18px 标题与项目名；`font-reading`（思源宋体）用于 14px 阅读型正文（欢迎页导语、Agent 回复、设置说明）；控件用默认 `font-sans`（Inter）；路径、时间、状态、代码标签用 `font-mono`（IBM Plex Mono）。
+- 形状：圆角 0–2px（`rounded-sm` / `rounded`）；纸卡阴影用 `shadow-print`；禁止渐变、玻璃拟态、柔光。
+- 新组件优先复用 `src/components/ui.tsx` 的 `Button / IconButton / Input / Select / Textarea / Field / EmptyState / Modal / Spinner`。
+- 图标统一使用 `lucide-react`（16px 常规 / 14px 紧凑），不要使用 emoji 充当图标。
+- 间距使用 4px 网格。
 
 ### 交互规范
 - 文件点击：立即打开，不需要双击
@@ -764,6 +779,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 
 - **项目方案**: [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) - 完整的项目规划和路线图
 - **项目结构**: [docs/architecture/PROJECT_STRUCTURE.md](docs/architecture/PROJECT_STRUCTURE.md) - 架构详解
+- **设计规范**: [docs/design/DESIGN_SYSTEM.md](docs/design/DESIGN_SYSTEM.md) - 前端设计唯一事实来源（强制）
 - **构建指南**: [docs/guides/BUILD_AND_PACKAGE.md](docs/guides/BUILD_AND_PACKAGE.md) - 打包发布流程
 - **功能状态**: [docs/progress/STATUS.md](docs/progress/STATUS.md) - 当前进度追踪
 
