@@ -44,6 +44,12 @@ export const translations = {
     receivedReply: '收到 Pi Agent 回复',
     replyFailed: 'Agent 回复失败',
     sendFailed: '消息发送失败',
+    attachContext: '附加文件上下文',
+    noOpenFiles: '没有打开的文件',
+    removeAttachment: '移除附件',
+    contextReadFailed: '读取文件失败',
+    contextTooLarge: '文件过大，已跳过',
+    contextTotalTooLarge: '附件总大小超出限制，已跳过后续文件',
 
     // Diff Viewer
     diffViewer: '代码对比',
@@ -129,6 +135,12 @@ export const translations = {
     receivedReply: 'Received reply from Pi Agent',
     replyFailed: 'Agent reply failed',
     sendFailed: 'Failed to send message',
+    attachContext: 'Attach file context',
+    noOpenFiles: 'No open files',
+    removeAttachment: 'Remove attachment',
+    contextReadFailed: 'Failed to read file',
+    contextTooLarge: 'File too large, skipped',
+    contextTotalTooLarge: 'Attached files exceed the total limit; remaining files were skipped',
 
     // Diff Viewer
     diffViewer: 'Diff Viewer',

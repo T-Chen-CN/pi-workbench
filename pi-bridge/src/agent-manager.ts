@@ -20,6 +20,20 @@ import { existsSync, readFileSync } from 'fs'
 const WORKBENCH_PROVIDER_ID = 'pi-workbench'
 /** models.json 中引用的环境变量名（避免把 API Key 写进磁盘） */
 const API_KEY_ENV = 'PI_WORKBENCH_API_KEY'
+/** 与 src/api/chatContext.ts 的标记保持一致 */
+const CONTEXT_BLOCK_START = '<pi-workbench-context>'
+const CONTEXT_BLOCK_END = '</pi-workbench-context>'
+
+/** 恢复历史时去掉附件上下文块，避免聊天面板展示整段文件内容 */
+function stripContextBlock(content: string): string {
+  const start = content.indexOf(CONTEXT_BLOCK_START)
+  const end = content.indexOf(CONTEXT_BLOCK_END)
+  if (start === -1 || end <= start) return content
+
+  const before = content.slice(0, start).trim()
+  const after = content.slice(end + CONTEXT_BLOCK_END.length).trim()
+  return [before, after].filter(Boolean).join('\n\n') || '(attached files)'
+}
 
 export interface AgentConfig {
   workspaceDir: string
@@ -430,6 +444,10 @@ export class AgentManager {
           .join('\n')
       }
       if (!content) continue
+
+      if (msg.role === 'user') {
+        content = stripContextBlock(content)
+      }
 
       result.push({
         role: msg.role,

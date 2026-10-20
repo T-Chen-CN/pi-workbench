@@ -75,6 +75,38 @@ describe('chatStore', () => {
   })
 })
 
+describe('chatStore attachments', () => {
+  it('adds attachments without duplicating the same path', () => {
+    useChatStore.getState().addAttachment({ path: '/tmp/a.ts', name: 'a.ts' })
+    useChatStore.getState().addAttachment({ path: '/tmp/a.ts', name: 'a.ts' })
+    useChatStore.getState().addAttachment({ path: '/tmp/b.ts', name: 'b.ts' })
+
+    expect(useChatStore.getState().attachments).toEqual([
+      { path: '/tmp/a.ts', name: 'a.ts' },
+      { path: '/tmp/b.ts', name: 'b.ts' },
+    ])
+  })
+
+  it('removes and clears attachments', () => {
+    useChatStore.getState().addAttachment({ path: '/tmp/a.ts', name: 'a.ts' })
+    useChatStore.getState().addAttachment({ path: '/tmp/b.ts', name: 'b.ts' })
+
+    useChatStore.getState().removeAttachment('/tmp/a.ts')
+    expect(useChatStore.getState().attachments).toEqual([
+      { path: '/tmp/b.ts', name: 'b.ts' },
+    ])
+
+    useChatStore.getState().clearAttachments()
+    expect(useChatStore.getState().attachments).toEqual([])
+  })
+
+  it('clears attachments on reset', () => {
+    useChatStore.getState().addAttachment({ path: '/tmp/a.ts', name: 'a.ts' })
+    useChatStore.getState().reset()
+    expect(useChatStore.getState().attachments).toEqual([])
+  })
+})
+
 describe('chatStore streaming', () => {
   it('creates, appends to and finalizes a streaming message', () => {
     const id = useChatStore.getState().startStreamingMessage()

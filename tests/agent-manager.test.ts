@@ -437,6 +437,22 @@ describe('AgentManager session history', () => {
     ])
   })
 
+  it('strips attached context blocks from restored user messages', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    session.messages.push({
+      role: 'user',
+      content:
+        '<pi-workbench-context>\n--- /tmp/a.ts ---\nconst a = 1\n</pi-workbench-context>\n\nexplain this',
+    })
+
+    expect(manager.getSessionMessages()).toEqual([
+      { role: 'user', content: 'explain this', timestamp: expect.any(Number) },
+    ])
+  })
+
   it('returns an empty list before initialization', () => {
     expect(manager.getSessionMessages()).toEqual([])
   })
