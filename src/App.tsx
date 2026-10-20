@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type PointerEvent as ReactPointerEvent } from 'react'
+import { useState, useEffect, useCallback, useRef, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   Bug,
   Folder,
@@ -20,17 +20,21 @@ import { TerminalPanel } from './components/TerminalPanel'
 import { CommandPalette } from './components/CommandPalette'
 import { FleetPanel } from './components/FleetPanel'
 import { ToastContainer } from './components/Toast'
+import { DialogHost } from './components/DialogHost'
 import { WelcomeScreen } from './components/WelcomeScreen'
 import { WindowControls } from './components/WindowControls'
 import { Button, IconButton, Modal } from './components/ui'
-import { useToastStore } from './store/toastStore'
+import { useToastStore, toast } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
 import { useThemeStore, useResolvedTheme, type ThemeMode } from './store/themeStore'
 import { useWorkspaceStore } from './store/workspaceStore'
 import { useEditorStore } from './store/editorStore'
 import { useChatStore } from './store/chatStore'
 import { useDiffStore } from './store/diffStore'
+import { confirmDialog } from './store/dialogStore'
+import { useSettingsStore } from './store/settingsStore'
 import { localizeError } from './i18n/errors'
+import { commandPaletteShortcut } from './utils/shortcuts'
 
 const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 420
@@ -48,6 +52,7 @@ export default function App() {
     setRecentWorkspaces,
   } = useWorkspaceStore()
   const [error, setError] = useState<string | null>(null)
+  const openingWorkspaceRef = useRef(false)
   const [showDebug, setShowDebug] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showTerminal, setShowTerminal] = useState(false)
@@ -119,6 +124,7 @@ export default function App() {
         if (saved.theme === 'dark' || saved.theme === 'light' || saved.theme === 'system') {
           setMode(saved.theme as ThemeMode)
         }
+        useSettingsStore.getState().hydrate(saved)
       })
       .catch((err) => console.error('Failed to load app settings:', err))
   }, [setLanguage, setMode])
@@ -162,18 +168,21 @@ export default function App() {
     useDiffStore.getState().clearDiff()
   }
 
-  const confirmCloseWorkspace = (): boolean => {
+  const confirmCloseWorkspace = async (): Promise<boolean> => {
     if (!useEditorStore.getState().hasDirtyFiles()) return true
-    return window.confirm(t('discardChangesConfirm'))
+    return confirmDialog({ message: t('discardChangesConfirm'), danger: true })
   }
 
   const openWorkspaceAt = async (targetPath: string, initialPrompt?: string) => {
+    // 快速双击/连续选择时只处理第一次，避免 init/watch 交错
+    if (openingWorkspaceRef.current) return
+    openingWorkspaceRef.current = true
     try {
       setError(null)
 
       if (targetPath === workspace) return
 
-      if (workspace && !confirmCloseWorkspace()) {
+      if (workspace && !(await confirmCloseWorkspace())) {
         return
       }
 
@@ -194,7 +203,7 @@ export default function App() {
       try {
         const drafts = await api.draftList(targetPath)
         if (drafts.success && drafts.drafts.length > 0) {
-          if (window.confirm(t('recoverDraftsConfirm', { count: drafts.drafts.length }))) {
+          if (await confirmDialog({ message: t('recoverDraftsConfirm', { count: drafts.drafts.length }) })) {
             for (const draft of drafts.drafts) {
               useEditorStore.getState().addOpenFile({
                 path: draft.path,
@@ -218,9 +227,11 @@ export default function App() {
         useChatStore.getState().setDraftInput(initialPrompt)
       }
 
-      api.watchWorkspace(targetPath).catch((err) =>
+      api.watchWorkspace(targetPath).catch((err) => {
+        const detail = err instanceof Error ? err.message : String(err)
         console.error('Failed to watch workspace:', err)
-      )
+        toast.error(t('watchWorkspaceFailed', { error: localizeError(detail) }))
+      })
 
       const recent = await api.addRecentWorkspace(targetPath)
       if (recent.success) setRecentWorkspaces(recent.workspaces)
@@ -228,6 +239,8 @@ export default function App() {
       const message = err instanceof Error ? err.message : String(err)
       setError(localizeError(message))
       console.error('Failed to open workspace:', err)
+    } finally {
+      openingWorkspaceRef.current = false
     }
   }
 
@@ -262,7 +275,7 @@ export default function App() {
 
   const closeWorkspaceTab = async (targetPath: string) => {
     const closingCurrent = targetPath === workspace
-    if (closingCurrent && !confirmCloseWorkspace()) return
+    if (closingCurrent && !(await confirmCloseWorkspace())) return
 
     // 只释放该工作区的 Agent 与会话资源
     await piAgentAPI.dispose(targetPath)
@@ -271,13 +284,16 @@ export default function App() {
 
     if (!closingCurrent) return
 
+    setError(null)
     await api.unwatchWorkspace().catch(() => undefined)
     resetWorkspaceState()
 
     if (nextWorkspace) {
-      api.watchWorkspace(nextWorkspace).catch((err) =>
+      api.watchWorkspace(nextWorkspace).catch((err) => {
+        const detail = err instanceof Error ? err.message : String(err)
         console.error('Failed to watch workspace:', err)
-      )
+        toast.error(t('watchWorkspaceFailed', { error: localizeError(detail) }))
+      })
     }
   }
 
@@ -386,7 +402,8 @@ export default function App() {
                 className={headerLink}
                 onClick={() => window.dispatchEvent(new CustomEvent('open-command-palette'))}
               >
-                {t('commandPalette')} <span className="text-ink-subtle">⌘K</span>
+                {t('commandPalette')}{' '}
+                <span className="text-ink-subtle">{commandPaletteShortcut()}</span>
               </button>
               <button type="button" className={headerLink} onClick={() => setShowFleet(true)}>
                 {t('fleetTasks')}
@@ -483,6 +500,7 @@ export default function App() {
         </div>
       )}
 
+      <DialogHost />
       <ToastContainer messages={toastMessages} onClose={removeToast} />
       {workspace && <CommandPalette workspacePath={workspace} />}
       {workspace && (

@@ -1176,7 +1176,25 @@ handleIpc('workspace:saveConfig', async (_event, workspacePath: string, config: 
       return { success: false, error: 'Workspace is not approved' }
     }
     const configPath = path.join(workspacePath, '.pi-workbench', 'config.json')
-    await writeJsonAtomic(configPath, config)
+
+    // 插件启用状态由 PluginManager 独占管理：合并保存时保留磁盘上的插件字段，
+    // 避免渲染进程拿旧配置覆盖掉期间发生的启用/禁用
+    const current = readJsonWithBackup<Record<string, unknown>>(configPath).data ?? {}
+    const incoming =
+      config && typeof config === 'object' && !Array.isArray(config)
+        ? { ...(config as Record<string, unknown>) }
+        : {}
+    const merged: Record<string, unknown> = { ...current, ...incoming }
+
+    for (const key of ['enabledPlugins', 'pluginsConfigured']) {
+      if (key in current) {
+        merged[key] = current[key]
+      } else {
+        delete merged[key]
+      }
+    }
+
+    await writeJsonAtomic(configPath, merged)
     return { success: true }
   } catch (error) {
     return {
@@ -1463,12 +1481,13 @@ function agentConfigKey(apiConfig: {
   apiUrl: string
   apiKey: string
   selectedModel: string
-}): string {
+}, temperature?: number): string {
   return JSON.stringify({
     provider: apiConfig.provider,
     apiUrl: apiConfig.apiUrl,
     selectedModel: apiConfig.selectedModel,
     apiKey: apiConfig.apiKey,
+    temperature,
   })
 }
 
@@ -1503,7 +1522,17 @@ handleIpc('agent:initialize', async (_event, config: {
       }
     }
 
-    const configKey = agentConfigKey(apiConfig)
+    // 工作区级采样温度（可选）：只接受 0–2 的有限数值
+    const workspaceConfig = readJsonWithBackup<any>(
+      path.join(workspaceDir, '.pi-workbench', 'config.json')
+    ).data
+    const rawTemperature = Number(workspaceConfig?.agentConfig?.temperature)
+    const temperature =
+      Number.isFinite(rawTemperature) && rawTemperature >= 0 && rawTemperature <= 2
+        ? rawTemperature
+        : undefined
+
+    const configKey = agentConfigKey(apiConfig, temperature)
     if (agentRegistry.shouldReuse(workspaceDir, configKey)) {
       console.log('[Main] Reusing agent for workspace:', workspaceDir)
       return { success: true }
@@ -1518,6 +1547,7 @@ handleIpc('agent:initialize', async (_event, config: {
     const result = await agent.initialize({
       workspaceDir,
       agentDir: path.join(getAppDir(), 'data', 'agent'),
+      temperature,
       apiConfig
     })
 

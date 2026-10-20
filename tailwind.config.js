@@ -78,6 +78,20 @@ export default {
         print: '5px 6px 0 rgb(var(--shadow-color) / var(--shadow-alpha))',
         panel: '5px 6px 0 rgb(var(--shadow-color) / var(--shadow-alpha))',
       },
+      keyframes: {
+        'toast-in': {
+          from: { opacity: '0', transform: 'translateX(12px)' },
+          to: { opacity: '1', transform: 'translateX(0)' },
+        },
+        'toast-out': {
+          from: { opacity: '1', transform: 'translateX(0)' },
+          to: { opacity: '0', transform: 'translateX(12px)' },
+        },
+      },
+      animation: {
+        'toast-in': 'toast-in 160ms ease-out',
+        'toast-out': 'toast-out 160ms ease-in forwards',
+      },
     },
   },
   plugins: [],

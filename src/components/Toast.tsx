@@ -23,6 +23,8 @@ const TOAST_STYLES: Record<ToastType, { border: string; icon: string; Icon: type
   info: { border: 'border-l-accent', icon: 'text-accent', Icon: Info },
 }
 
+const TOAST_EXIT_MS = 160
+
 const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
   const { t } = useI18nStore()
   const [isExiting, setIsExiting] = useState(false)
@@ -39,7 +41,7 @@ const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
 
     const timer = setTimeout(() => {
       setIsExiting(true)
-      exitTimerRef.current = setTimeout(() => onClose(message.id), 300)
+      exitTimerRef.current = setTimeout(() => onClose(message.id), TOAST_EXIT_MS)
     }, message.duration || 3000)
 
     return () => clearTimeout(timer)
@@ -48,7 +50,7 @@ const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
   const handleClose = () => {
     setIsExiting(true)
     if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
-    exitTimerRef.current = setTimeout(() => onClose(message.id), 300)
+    exitTimerRef.current = setTimeout(() => onClose(message.id), TOAST_EXIT_MS)
   }
 
   const { border, icon, Icon } = TOAST_STYLES[message.type]
@@ -56,10 +58,8 @@ const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
   return (
     <div
       role="status"
-      className={`flex items-start gap-2.5 border border-line border-l-2 ${border} bg-raised px-3 py-2.5 text-ink shadow-print ${
-        isExiting
-          ? 'animate-out slide-out-to-right-full duration-300'
-          : 'animate-in slide-in-from-right-full duration-300'
+      className={`flex items-start gap-2.5 border border-line border-l-2 ${border} bg-raised px-3 py-2.5 text-ink shadow-print motion-reduce:animate-none ${
+        isExiting ? 'animate-toast-out' : 'animate-toast-in'
       }`}
     >
       <Icon size={15} className={`mt-0.5 flex-shrink-0 ${icon}`} />
@@ -89,28 +89,4 @@ export const ToastContainer: React.FC<{ messages: ToastMessage[]; onClose: (id: 
       ))}
     </div>
   )
-}
-
-export const useToast = () => {
-  const [messages, setMessages] = useState<ToastMessage[]>([])
-
-  const show = (message: string, type: ToastType = 'info', duration?: number) => {
-    const id = Math.random().toString(36).substr(2, 9)
-    const toast: ToastMessage = { id, message, type, duration }
-    setMessages((prev) => [...prev, toast])
-  }
-
-  const remove = (id: string) => {
-    setMessages((prev) => prev.filter((m) => m.id !== id))
-  }
-
-  return {
-    messages,
-    show,
-    remove,
-    success: (msg: string, duration?: number) => show(msg, 'success', duration),
-    error: (msg: string, duration?: number) => show(msg, 'error', duration),
-    warning: (msg: string, duration?: number) => show(msg, 'warning', duration),
-    info: (msg: string, duration?: number) => show(msg, 'info', duration),
-  }
 }

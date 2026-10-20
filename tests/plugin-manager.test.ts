@@ -33,7 +33,8 @@ async function writePlugin(
 
   // 插件默认禁用：除显式关闭外，测试里把插件写进启用白名单
   if (options.enabled !== false) {
-    await enablePlugin(id)
+    const manifestId = typeof manifest.id === 'string' && manifest.id ? manifest.id : id
+    await enablePlugin(manifestId)
   }
   return directory
 }
@@ -222,6 +223,32 @@ describe('PluginManager', () => {
     )
     expect(config.pluginsConfigured).toBe(true)
     expect(config.enabledPlugins).toEqual(['demo'])
+  })
+
+  it('rejects duplicate plugin ids without breaking the first plugin', async () => {
+    const source = `module.exports = {
+      activate(api) {
+        api.registerCommand('shared.run', () => ({ success: true, output: 'ok' }))
+      },
+    }`
+
+    await writePlugin('first', source, { id: 'shared' })
+    await writePlugin('second', source, { id: 'shared' })
+
+    manager = new PluginManager({ watch: false })
+    const plugins = manager.loadWorkspace(workspace)
+
+    const shared = plugins.filter((plugin) => plugin.id === 'shared')
+    expect(shared).toHaveLength(2)
+    expect(shared[0].enabled).toBe(true)
+    expect(shared[0].error).toBeUndefined()
+    expect(shared[1].enabled).toBe(false)
+    expect(shared[1].error).toContain('Duplicate plugin id')
+
+    await expect(manager.invoke(workspace, 'shared.run')).resolves.toMatchObject({
+      success: true,
+      output: 'ok',
+    })
   })
 
   it('reloads changed plugin code', async () => {

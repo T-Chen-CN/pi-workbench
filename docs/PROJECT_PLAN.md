@@ -180,10 +180,10 @@ Main Process (Node 24, Electron 44)
 ```
 electron/           主进程（main.ts、preload.cts、两套 tsconfig）
 src/
-  components/       13 个扁平组件（ChatPanel、CommandPalette、DiffViewer、ErrorBoundary、
-                    FileExplorer、FleetPanel、IPCDebug、MonacoEditor、Settings、
-                    TerminalPanel、Toast、WelcomeScreen、ui）
-  store/            7 个独立 store（chat、diff、editor、i18n、theme、toast、workspace）
+  components/       15 个扁平组件（ChatPanel、CommandPalette、DialogHost、DiffViewer、
+                    ErrorBoundary、FileExplorer、FleetPanel、IPCDebug、MonacoEditor、
+                    Settings、TerminalPanel、Toast、WelcomeScreen、WindowControls、ui）
+  store/            9 个独立 store（chat、dialog、diff、editor、i18n、settings、theme、toast、workspace）
   api/              IPC 封装、Agent API（Electron IPC / Web SSE）、渲染日志、diff 算法
   types/            Electron API 与通用类型
   i18n/             中英文文案
@@ -350,6 +350,7 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 - [x] 渲染层测试（jsdom + React Testing Library：编辑器创建 / 自动保存）
 - [x] 自动更新（electron-updater，打包版本可用）
 - [x] 渲染进程日志（`logs/renderer.log`）
+- [x] P3 体验收尾（Toast 动画、快捷键文案、编辑器/终端主题 token 化、应用内对话框、自动保存与工作区配置 UI、插件重复 id 与配置竞争修复）
 - [x] 后端可靠性加固（原子写配置、可信路径、Agent/Fleet 中止与恢复、按工作区监听）
 - [x] 测试覆盖率提升（store / logger / AgentManager / IPC / 终端 / 插件 / Fleet / 渲染组件）
 

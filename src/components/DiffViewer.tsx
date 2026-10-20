@@ -5,6 +5,7 @@ import { useI18nStore } from '../store/i18nStore'
 import { useEditorStore } from '../store/editorStore'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
+import { confirmDialog } from '../store/dialogStore'
 import { localizeError } from '../i18n/errors'
 import { computeDiff, DiffLineType, DiffResult, type DiffLine } from '../api/diff'
 import type { FileEdit } from '../types/electron'
@@ -85,7 +86,7 @@ export const DiffViewer: React.FC = () => {
   }
 
   const handleRevert = async () => {
-    if (!window.confirm(t('revertConfirm'))) return
+    if (!(await confirmDialog({ message: t('revertConfirm'), danger: true }))) return
     setBusy(true)
     try {
       if (await revertFile(edit)) {
@@ -98,7 +99,7 @@ export const DiffViewer: React.FC = () => {
   }
 
   const handleRevertAll = async () => {
-    if (!window.confirm(t('revertAllConfirm'))) return
+    if (!(await confirmDialog({ message: t('revertAllConfirm'), danger: true }))) return
     setBusy(true)
     let reverted = 0
     try {

@@ -21,6 +21,7 @@ import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
 import { buildContextPrompt } from '../api/chatContext'
 import { localizeError } from '../i18n/errors'
+import { commandPaletteShortcut } from '../utils/shortcuts'
 import { toast } from '../store/toastStore'
 import { Button, EmptyState, IconButton, Spinner, Textarea } from './ui'
 
@@ -118,6 +119,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           return
         }
 
+        // 主进程可能已持有该工作区的 Agent：先反映真实状态，再按配置初始化（可复用）
+        const existing = await piAgentAPI.isInitialized(workspacePath)
+        if (seq !== initSeqRef.current) return
+        if (existing.success && existing.initialized) {
+          setInitialized(true)
+        }
+
         // Initialize Agent with full API config
         const result = await piAgentAPI.initialize({
           workspaceDir: workspacePath,
@@ -127,7 +135,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
         if (result.success) {
           setError(null)
-          setInitialized(true)
+          const status = await piAgentAPI.isInitialized(workspacePath)
+          if (seq !== initSeqRef.current) return
+          setInitialized(status.success ? Boolean(status.initialized) : true)
 
           // 恢复该工作区持久化的对话历史
           const history = await piAgentAPI.getHistory(workspacePath)
@@ -171,11 +181,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     const handleConfigSaved = () => runInit()
     window.addEventListener('api-config-saved', handleConfigSaved)
 
+    // 工作区配置（如模型 temperature）变化后重建 Agent
+    window.addEventListener('workspace-config-changed', handleConfigSaved)
+
     return () => {
       // 使旧的初始化流程失效（含 React StrictMode 的双重挂载）
       // eslint-disable-next-line react-hooks/exhaustive-deps
       initSeqRef.current++
       window.removeEventListener('api-config-saved', handleConfigSaved)
+      window.removeEventListener('workspace-config-changed', handleConfigSaved)
       // 切换工作区时保留各工作区的 Agent 实例；关闭工作区由 App 显式 dispose
     }
   }, [workspacePath, addMessage, setError, setLoading, setMessages, t])
@@ -341,7 +355,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         </div>
         <div className="flex items-center gap-2">
           <span className="border border-line px-1.5 py-0.5 font-mono text-[8.5px] text-ink-subtle">
-            ⌘K
+            {commandPaletteShortcut()}
           </span>
           <IconButton
             icon={Settings2}

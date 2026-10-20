@@ -45,6 +45,12 @@ interface AgentHistoryResponse {
   error?: string
 }
 
+interface AgentStatusResponse {
+  success: boolean
+  initialized?: boolean
+  error?: string
+}
+
 /** Web 开发模式下由 Vite dev server 提供的 Agent 桥接 */
 const DEV_AGENT_INIT = '/__pi/agent/init'
 const DEV_AGENT_CHAT = '/__pi/agent/chat'
@@ -52,6 +58,7 @@ const DEV_AGENT_CHAT_STREAM = '/__pi/agent/chat-stream'
 const DEV_AGENT_ABORT = '/__pi/agent/abort'
 const DEV_AGENT_DISPOSE = '/__pi/agent/dispose'
 const DEV_AGENT_HISTORY = '/__pi/agent/history'
+const DEV_AGENT_IS_INITIALIZED = '/__pi/agent/isInitialized'
 
 function hasElectronAgent(): boolean {
   return Boolean(window.electronAPI?.agentInitialize)
@@ -177,6 +184,21 @@ export const piAgentAPI = {
     } catch (error) {
       console.error('[Pi Agent] Chat error:', error)
       return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  /**
+   * Whether the main process currently holds an initialized agent for this workspace
+   */
+  async isInitialized(workspaceDir?: string): Promise<AgentStatusResponse> {
+    try {
+      if (hasElectronAgent()) {
+        return await window.electronAPI.agentIsInitialized(workspaceDir)
+      }
+      return await callDevBridge<AgentStatusResponse>(DEV_AGENT_IS_INITIALIZED, { workspaceDir })
+    } catch (error) {
+      console.error('[Pi Agent] Status error:', error)
+      return { success: false, initialized: false, error: bridgeUnavailableError(error) }
     }
   },
 

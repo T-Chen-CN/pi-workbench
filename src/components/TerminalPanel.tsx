@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { api } from '../api'
 import { useChatStore } from '../store/chatStore'
+import { readThemeTokens, tokenHex } from '../theme/tokens'
 import { useI18nStore } from '../store/i18nStore'
 import { useResolvedTheme } from '../store/themeStore'
 import { localizeError } from '../i18n/errors'
@@ -18,6 +19,17 @@ interface TerminalPanelProps {
 }
 
 type TerminalStatus = 'idle' | 'starting' | 'ready' | 'error'
+
+/** xterm 主题跟随 Paper & Ink token */
+function terminalTheme(dark: boolean) {
+  const tokens = readThemeTokens(dark)
+  return {
+    background: tokenHex(tokens, 'panel'),
+    foreground: tokenHex(tokens, 'ink'),
+    cursor: tokenHex(tokens, 'accent'),
+    selectionBackground: tokenHex(tokens, 'accent', 0x30),
+  }
+}
 
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   workspacePath,
@@ -79,20 +91,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       fontSize: 13,
       fontFamily: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace',
       cursorBlink: true,
-      theme:
-        resolvedTheme === 'dark'
-          ? {
-              background: '#1A1815',
-              foreground: '#E6DFD3',
-              cursor: '#8FC7B4',
-              selectionBackground: '#8FC7B43D',
-            }
-          : {
-              background: '#FBF9F4',
-              foreground: '#2B2721',
-              cursor: '#2F5D4E',
-              selectionBackground: '#2F5D4E30',
-            },
+      theme: terminalTheme(resolvedTheme === 'dark'),
     })
     const fit = new FitAddon()
     terminal.loadAddon(fit)
@@ -140,20 +139,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   useEffect(() => {
     const terminal = termRef.current
     if (!terminal) return
-    terminal.options.theme =
-      resolvedTheme === 'dark'
-        ? {
-            background: '#1A1815',
-            foreground: '#E6DFD3',
-            cursor: '#8FC7B4',
-            selectionBackground: '#8FC7B43D',
-          }
-        : {
-            background: '#FBF9F4',
-            foreground: '#2B2721',
-            cursor: '#2F5D4E',
-            selectionBackground: '#2F5D4E30',
-          }
+    terminal.options.theme = terminalTheme(resolvedTheme === 'dark')
   }, [resolvedTheme])
 
   // 可见时适配尺寸
@@ -216,6 +202,24 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     toast.success(t('terminalAttached'))
   }
 
+  const copyRecentOutput = async () => {
+    const id = terminalIdRef.current
+    if (!id) return
+    const result = await api.terminalGetRecentOutput(id)
+    const text = result.success && typeof result.output === 'string' ? result.output : ''
+    if (!text.trim()) {
+      toast.error(t('terminalOutputUnavailable'))
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success(t('terminalOutputCopied'))
+    } catch (error) {
+      console.error('Failed to copy terminal output:', error)
+      toast.error(t('terminalOutputCopyFailed'))
+    }
+  }
+
   return (
     <div
       className={
@@ -239,6 +243,14 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             className="font-mono text-[9px] text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
           >
             {t('sendTerminalOutput')}
+          </button>
+          <button
+            type="button"
+            disabled={status !== 'ready'}
+            onClick={() => void copyRecentOutput()}
+            className="font-mono text-[9px] text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
+          >
+            {t('copyTerminalOutput')}
           </button>
           <button
             type="button"

@@ -33,25 +33,31 @@ pi-workbench/
 │   ├── components/               # 扁平结构，无子目录
 │   │   ├── ChatPanel.tsx         # Agent 对话、历史恢复、Diff 触发、token 用量
 │   │   ├── CommandPalette.tsx    # 插件命令面板（Ctrl+Shift+P）
+│   │   ├── DialogHost.tsx        # 应用内确认 / 输入对话框
 │   │   ├── DiffViewer.tsx        # Split / Unified Diff 查看器
 │   │   ├── ErrorBoundary.tsx     # 渲染错误兜底
 │   │   ├── FileExplorer.tsx      # 文件树、新建/重命名/删除、目录监听刷新
 │   │   ├── FleetPanel.tsx        # Fleet 任务创建 / 取消 / 日志
 │   │   ├── IPCDebug.tsx          # 开发调试面板
 │   │   ├── MonacoEditor.tsx      # Monaco、每文件 model、自动保存、草稿、外部变更同步
-│   │   ├── Settings.tsx          # 语言 / 主题 / 供应商 / 模型 / 更新
-│   │   ├── TerminalPanel.tsx     # xterm + PTY、输出附加给 Agent
+│   │   ├── Settings.tsx          # 通用 / API / 工作区 / 快捷键 / 关于
+│   │   ├── TerminalPanel.tsx     # xterm + PTY、输出附加或复制
 │   │   ├── Toast.tsx             # Toast 展示组件
 │   │   ├── WelcomeScreen.tsx     # 欢迎页与最近工作区
+│   │   ├── WindowControls.tsx    # 自绘窗口按钮（Windows / Linux）
 │   │   └── ui.tsx                # Button / Input / Modal 等基础组件
-│   ├── store/                    # 每个功能域一个 store（7 个）
+│   ├── store/                    # 每个功能域一个 store（9 个）
 │   │   ├── chatStore.ts          # 消息、流式、附件、用量
+│   │   ├── dialogStore.ts        # 确认 / 输入对话框
 │   │   ├── diffStore.ts          # Diff 查看器状态
 │   │   ├── editorStore.ts        # 标签页、当前文件、脏标记
 │   │   ├── i18nStore.ts          # 语言（persist）
+│   │   ├── settingsStore.ts      # 自动保存等编辑偏好
 │   │   ├── themeStore.ts         # Paper / Ink 主题
 │   │   ├── toastStore.ts         # 全局 Toast（组件外也可调用）
 │   │   └── workspaceStore.ts     # 当前工作区 + 最近打开列表
+│   ├── theme/tokens.ts           # 从 CSS 变量读取颜色（Monaco / xterm）
+│   ├── utils/shortcuts.ts        # 平台相关快捷键文案
 │   ├── api/
 │   │   ├── index.ts              # IPC 封装 + Web dev mock / dev 代理
 │   │   ├── piAgentAPI.ts         # Agent 调用（Electron IPC / Web SSE 桥接）
@@ -166,6 +172,8 @@ ChatPanel.handleSubmit
 | `log:renderer` | invoke | 渲染进程日志 |
 | `update:check` / `download` / `install` | invoke | 自动更新 |
 | `update:status` | main → renderer | 更新进度事件 |
+| `window:minimize` / `toggleMaximize` / `close` / `isMaximized` | invoke | 自绘窗口按钮 |
+| `window:maximized-changed` | main → renderer | 最大化状态变化 |
 
 ---
 

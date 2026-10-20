@@ -1,15 +1,18 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import * as monaco from 'monaco-editor'
 import { FileCode, Loader2, X } from 'lucide-react'
 import { useEditorStore } from '../store/editorStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
+import { useSettingsStore } from '../store/settingsStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useResolvedTheme } from '../store/themeStore'
 import { localizeError } from '../i18n/errors'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
+import { confirmDialog } from '../store/dialogStore'
 import type { OpenFile } from '../types'
 import { EmptyState } from './ui'
+import { readThemeTokens, tokenHex } from '../theme/tokens'
 
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   ts: 'typescript',
@@ -36,79 +39,53 @@ const EDITOR_THEME = {
   ink: 'pi-ink',
 } as const
 
-monaco.editor.defineTheme(EDITOR_THEME.paper, {
-  base: 'vs',
-  inherit: true,
-  rules: [
-    { token: 'comment', foreground: '9A9284', fontStyle: 'italic' },
-    { token: 'keyword', foreground: '8A3B2A' },
-    { token: 'string', foreground: '4F6B3A' },
-    { token: 'number', foreground: '8A6A3B' },
-    { token: 'type', foreground: '3E5D66' },
-    { token: 'type.identifier', foreground: '3E5D66' },
-    { token: 'identifier', foreground: '2B2721' },
-    { token: 'function', foreground: '6B4E2E' },
-    { token: 'delimiter', foreground: '6D675C' },
-    { token: 'tag', foreground: '8A3B2A' },
-    { token: 'attribute.name', foreground: '7A4B36' },
-  ],
-  colors: {
-    'editor.background': '#FBF9F4',
-    'editor.foreground': '#2B2721',
-    'editorLineNumber.foreground': '#B5AE9F',
-    'editorLineNumber.activeForeground': '#6D675C',
-    'editor.selectionBackground': '#2F5D4E24',
-    'editor.inactiveSelectionBackground': '#17151212',
-    'editor.lineHighlightBackground': '#17151209',
-    'editorCursor.foreground': '#2F5D4E',
-    'editorIndentGuide.background1': '#17151214',
-    'editorIndentGuide.activeBackground1': '#17151233',
-    'editorWidget.background': '#FBF9F4',
-    'editorWidget.border': '#17151229',
-    'editorSuggestWidget.background': '#FBF9F4',
-    'editorSuggestWidget.border': '#17151229',
-    'editorSuggestWidget.selectedBackground': '#EFECE4',
-    'scrollbarSlider.background': '#918A7D55',
-    'scrollbarSlider.hoverBackground': '#918A7D88',
-  },
-})
+function buildEditorTheme(dark: boolean): monaco.editor.IStandaloneThemeData {
+  const tokens = readThemeTokens(dark)
+  const color = (name: Parameters<typeof tokenHex>[1], alpha?: number): string =>
+    tokenHex(tokens, name, alpha)
 
-monaco.editor.defineTheme(EDITOR_THEME.ink, {
-  base: 'vs-dark',
-  inherit: true,
-  rules: [
-    { token: 'comment', foreground: '7C7466', fontStyle: 'italic' },
-    { token: 'keyword', foreground: 'E08A72' },
-    { token: 'string', foreground: '9DBF8A' },
-    { token: 'number', foreground: 'D6B26E' },
-    { token: 'type', foreground: '8FC4CF' },
-    { token: 'type.identifier', foreground: '8FC4CF' },
-    { token: 'identifier', foreground: 'E6DFD3' },
-    { token: 'function', foreground: 'DEC49E' },
-    { token: 'delimiter', foreground: '9C9487' },
-    { token: 'tag', foreground: 'E08A72' },
-    { token: 'attribute.name', foreground: 'C8A88A' },
-  ],
-  colors: {
-    'editor.background': '#1A1815',
-    'editor.foreground': '#E6DFD3',
-    'editorLineNumber.foreground': '#736C60',
-    'editorLineNumber.activeForeground': '#9C9487',
-    'editor.selectionBackground': '#8FC7B43D',
-    'editor.inactiveSelectionBackground': '#EDE7DC14',
-    'editor.lineHighlightBackground': '#EDE7DC0A',
-    'editorCursor.foreground': '#8FC7B4',
-    'editorIndentGuide.background1': '#EDE7DC14',
-    'editorIndentGuide.activeBackground1': '#EDE7DC33',
-    'editorWidget.background': '#1A1815',
-    'editorWidget.border': '#EDE7DC29',
-    'editorSuggestWidget.background': '#1A1815',
-    'editorSuggestWidget.border': '#EDE7DC29',
-    'editorSuggestWidget.selectedBackground': '#2B2722',
-    'scrollbarSlider.background': '#736C6055',
-    'scrollbarSlider.hoverBackground': '#736C6088',
-  },
-})
+  return {
+    base: dark ? 'vs-dark' : 'vs',
+    inherit: true,
+    rules: [
+      { token: 'comment', foreground: color('hl-comment').slice(1), fontStyle: 'italic' },
+      { token: 'keyword', foreground: color('hl-keyword').slice(1) },
+      { token: 'string', foreground: color('hl-string').slice(1) },
+      { token: 'number', foreground: color('hl-number').slice(1) },
+      { token: 'type', foreground: color('hl-type').slice(1) },
+      { token: 'type.identifier', foreground: color('hl-type').slice(1) },
+      { token: 'identifier', foreground: color('ink').slice(1) },
+      { token: 'function', foreground: color('hl-function').slice(1) },
+      { token: 'delimiter', foreground: color('ink-muted').slice(1) },
+      { token: 'tag', foreground: color('hl-keyword').slice(1) },
+      { token: 'attribute.name', foreground: color('hl-attr').slice(1) },
+    ],
+    colors: {
+      'editor.background': color('panel'),
+      'editor.foreground': color('ink'),
+      'editorLineNumber.foreground': color('ink-subtle'),
+      'editorLineNumber.activeForeground': color('ink-muted'),
+      'editor.selectionBackground': color('accent', 0x24),
+      'editor.inactiveSelectionBackground': color('ink', 0x12),
+      'editor.lineHighlightBackground': color('ink', 0x09),
+      'editorCursor.foreground': color('accent'),
+      'editorIndentGuide.background1': color('ink', 0x14),
+      'editorIndentGuide.activeBackground1': color('ink', 0x33),
+      'editorWidget.background': color('panel'),
+      'editorWidget.border': color('ink', 0x29),
+      'editorSuggestWidget.background': color('panel'),
+      'editorSuggestWidget.border': color('ink', 0x29),
+      'editorSuggestWidget.selectedBackground': color('hover'),
+      'scrollbarSlider.background': color('ink-subtle', 0x55),
+      'scrollbarSlider.hoverBackground': color('ink-subtle', 0x88),
+    },
+  }
+}
+
+function defineEditorThemes(): void {
+  monaco.editor.defineTheme(EDITOR_THEME.paper, buildEditorTheme(false))
+  monaco.editor.defineTheme(EDITOR_THEME.ink, buildEditorTheme(true))
+}
 
 export const MonacoEditor: React.FC = () => {
   const { t } = useI18nStore()
@@ -125,6 +102,11 @@ export const MonacoEditor: React.FC = () => {
   // 程序化 setValue 时抑制内容变化回调，避免误标脏 + 自动保存回环
   const suppressChangeRef = useRef(false)
   const [editorReady, setEditorReady] = useState(false)
+
+  // 在创建编辑器前注册主题（颜色从 Paper & Ink 的 CSS token 读取）
+  useLayoutEffect(() => {
+    defineEditorThemes()
+  }, [])
 
   const getOrCreateModel = useCallback((file: OpenFile): monaco.editor.ITextModel => {
     const existing = modelsRef.current.get(file.path)
@@ -176,8 +158,9 @@ export const MonacoEditor: React.FC = () => {
     setEditorReady(true)
   }, [currentFile, resolvedTheme, getOrCreateModel])
 
-  // 主题切换时更新编辑器配色
+  // 主题切换时重新读取 token 并更新编辑器配色
   useEffect(() => {
+    defineEditorThemes()
     monaco.editor.setTheme(resolvedTheme === 'dark' ? EDITOR_THEME.ink : EDITOR_THEME.paper)
   }, [resolvedTheme])
 
@@ -368,13 +351,18 @@ export const MonacoEditor: React.FC = () => {
       // 自动保存计时器按文件独立，切换文件不会取消其他文件待触发的保存
       const pendingSave = saveTimers.get(file.path)
       if (pendingSave) clearTimeout(pendingSave)
-      saveTimers.set(
-        file.path,
-        setTimeout(() => {
-          saveTimers.delete(file.path)
-          void saveFile(file.path)
-        }, 2000)
-      )
+      const { autoSave, autoSaveDelay } = useSettingsStore.getState()
+      if (autoSave) {
+        saveTimers.set(
+          file.path,
+          setTimeout(() => {
+            saveTimers.delete(file.path)
+            if (useSettingsStore.getState().autoSave) {
+              void saveFile(file.path)
+            }
+          }, autoSaveDelay)
+        )
+      }
     })
 
     return () => {
@@ -457,9 +445,17 @@ export const MonacoEditor: React.FC = () => {
                 className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-ink-subtle opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100"
                 aria-label={t('close')}
                 title={t('close')}
-                onClick={() => {
+                onClick={async () => {
                   const target = useEditorStore.getState().openFiles.find((f) => f.path === file.path)
-                  if (target?.isDirty && !window.confirm(t('discardChangesConfirm'))) return
+                  if (
+                    target?.isDirty &&
+                    !(await confirmDialog({
+                      message: t('discardChangesConfirm'),
+                      danger: true,
+                    }))
+                  ) {
+                    return
+                  }
 
                   // 取消该文件所有待触发的保存/草稿计时器
                   const pendingSave = saveTimersRef.current.get(file.path)

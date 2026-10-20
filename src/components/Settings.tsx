@@ -1,14 +1,21 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { Info, KeyRound, Keyboard, RefreshCw, Save, SlidersHorizontal } from 'lucide-react'
+import { Folder, Info, KeyRound, Keyboard, RefreshCw, Save, SlidersHorizontal } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
+import { useWorkspaceStore } from '../store/workspaceStore'
 import { useThemeStore, type ThemeMode } from '../store/themeStore'
+import {
+  useSettingsStore,
+  clampAutoSaveDelay,
+  MIN_AUTO_SAVE_DELAY,
+  MAX_AUTO_SAVE_DELAY,
+} from '../store/settingsStore'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
 import type { ApiConfig } from '../types/electron'
-import { Button, Field, Input, Select } from './ui'
+import { Button, Field, Input, Select, Spinner } from './ui'
 
-type Section = 'general' | 'api' | 'shortcuts' | 'about'
+type Section = 'general' | 'api' | 'workspace' | 'shortcuts' | 'about'
 
 const ShortcutKeys: React.FC<{ keys: string[] }> = ({ keys }) => (
   <span className="flex flex-shrink-0 items-center gap-1 font-mono text-[10px] text-ink-muted">
@@ -30,6 +37,8 @@ interface SettingsProps {
 export const Settings: React.FC<SettingsProps> = () => {
   const { language, setLanguage, t } = useI18nStore()
   const { mode, setMode } = useThemeStore()
+  const { autoSave, autoSaveDelay, setAutoSave, setAutoSaveDelay } = useSettingsStore()
+  const workspacePath = useWorkspaceStore((state) => state.workspacePath)
   const [section, setSection] = useState<Section>('general')
   const isMac = typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin'
   const mod = isMac ? '⌘' : 'Ctrl'
@@ -133,6 +142,91 @@ export const Settings: React.FC<SettingsProps> = () => {
     void persistSettings({ theme: next })
   }
 
+  const handleAutoSaveChange = (enabled: boolean) => {
+    setAutoSave(enabled)
+    void persistSettings({ autoSave: enabled })
+  }
+
+  const handleAutoSaveDelayChange = (delayMs: number) => {
+    const next = clampAutoSaveDelay(delayMs)
+    setAutoSaveDelay(next)
+    void persistSettings({ autoSaveDelay: next })
+  }
+
+  const [workspaceConfig, setWorkspaceConfig] = useState<Record<string, unknown> | null>(null)
+  const [workspaceTemperature, setWorkspaceTemperature] = useState('0.7')
+  const [workspaceStatus, setWorkspaceStatus] = useState<
+    'idle' | 'loading' | 'saving' | 'saved' | 'error'
+  >('idle')
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (section !== 'workspace' || !workspacePath) return
+
+    let cancelled = false
+    setWorkspaceStatus('loading')
+    setWorkspaceError(null)
+
+    api
+      .getWorkspaceConfig(workspacePath)
+      .then((result) => {
+        if (cancelled) return
+        if (result.success && result.config) {
+          const config = result.config as Record<string, unknown>
+          const agentConfig =
+            config.agentConfig && typeof config.agentConfig === 'object'
+              ? (config.agentConfig as Record<string, unknown>)
+              : {}
+          const temperature = Number(agentConfig.temperature)
+          setWorkspaceConfig(config)
+          setWorkspaceTemperature(String(Number.isFinite(temperature) ? temperature : 0.7))
+          setWorkspaceStatus('idle')
+        } else {
+          setWorkspaceConfig(null)
+          setWorkspaceStatus('error')
+          setWorkspaceError(result.error || t('workspaceConfigUnavailable'))
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setWorkspaceStatus('error')
+        setWorkspaceError(error instanceof Error ? error.message : String(error))
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [section, workspacePath, t])
+
+  const handleSaveWorkspaceConfig = async () => {
+    if (!workspacePath) return
+    const temperature = Number(workspaceTemperature)
+    if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
+      setWorkspaceStatus('error')
+      setWorkspaceError(t('temperatureRange'))
+      return
+    }
+
+    setWorkspaceStatus('saving')
+    setWorkspaceError(null)
+    const base = workspaceConfig ?? {}
+    const agentConfig =
+      base.agentConfig && typeof base.agentConfig === 'object'
+        ? (base.agentConfig as Record<string, unknown>)
+        : {}
+    const next = { ...base, agentConfig: { ...agentConfig, temperature } }
+
+    const result = await api.saveWorkspaceConfig(workspacePath, next)
+    if (result.success) {
+      setWorkspaceConfig(next)
+      setWorkspaceStatus('saved')
+      window.dispatchEvent(new CustomEvent('workspace-config-changed'))
+    } else {
+      setWorkspaceStatus('error')
+      setWorkspaceError(result.error || t('unknownError'))
+    }
+  }
+
   const loadApiConfig = useCallback(async () => {
     try {
       const result = await api.apiConfigGet()
@@ -225,6 +319,7 @@ export const Settings: React.FC<SettingsProps> = () => {
   const navItems: Array<{ id: Section; label: string; icon: typeof Info }> = [
     { id: 'general', label: t('general'), icon: SlidersHorizontal },
     { id: 'api', label: t('apiConfiguration'), icon: KeyRound },
+    { id: 'workspace', label: t('workspace'), icon: Folder },
     { id: 'shortcuts', label: t('shortcuts'), icon: Keyboard },
     { id: 'about', label: t('about'), icon: Info },
   ]
@@ -318,6 +413,86 @@ export const Settings: React.FC<SettingsProps> = () => {
                 <option value="light">{t('themeLight')}</option>
               </Select>
             </Field>
+
+            <Field label={t('autoSave')} hint={t('autoSaveHint')}>
+              <label className="flex h-8 items-center gap-2 text-xs text-ink">
+                <input
+                  type="checkbox"
+                  className="h-3 w-3 accent-[rgb(var(--accent))]"
+                  checked={autoSave}
+                  onChange={(event) => handleAutoSaveChange(event.target.checked)}
+                />
+                {autoSave ? t('autoSaveEnabled') : t('autoSaveDisabled')}
+              </label>
+            </Field>
+
+            <Field label={t('autoSaveDelay')}>
+              <Select
+                value={String(autoSaveDelay)}
+                disabled={!autoSave}
+                onChange={(event) => handleAutoSaveDelayChange(Number(event.target.value))}
+              >
+                {[MIN_AUTO_SAVE_DELAY, 1000, 2000, 3000, 5000, MAX_AUTO_SAVE_DELAY].map((delay) => (
+                  <option key={delay} value={delay}>
+                    {delay >= 1000 ? `${delay / 1000} s` : `${delay} ms`}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+        )}
+
+        {section === 'workspace' && (
+          <div className="flex max-w-lg flex-col gap-4">
+            <p className="m-0 font-reading text-[13px] leading-[1.75] text-ink-muted">
+              {t('workspaceConfigDesc')}
+            </p>
+
+            {!workspacePath ? (
+              <p className="m-0 text-xs text-ink-subtle">{t('noWorkspaceOpen')}</p>
+            ) : workspaceStatus === 'loading' ? (
+              <div className="flex items-center gap-2 text-xs text-ink-muted">
+                <Spinner size={12} />
+                {t('loading')}
+              </div>
+            ) : (
+              <>
+                <Field label={t('workspacePath')}>
+                  <div className="break-all border border-line bg-sunken px-2.5 py-1.5 font-mono text-[11px] text-ink-muted">
+                    {workspacePath}
+                  </div>
+                </Field>
+
+                <Field label={t('agentTemperature')} hint={t('agentTemperatureHint')}>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    value={workspaceTemperature}
+                    onChange={(event) => setWorkspaceTemperature(event.target.value)}
+                  />
+                </Field>
+
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={Save}
+                    loading={workspaceStatus === 'saving'}
+                    onClick={() => void handleSaveWorkspaceConfig()}
+                  >
+                    {t('save')}
+                  </Button>
+                  {workspaceStatus === 'saved' && (
+                    <span className="text-xs text-success">{t('savedSuccessfully')}</span>
+                  )}
+                  {workspaceStatus === 'error' && workspaceError && (
+                    <span className="text-xs text-danger">{localizeError(workspaceError)}</span>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
 

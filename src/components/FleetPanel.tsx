@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { FileText, Plus, Ship, X } from 'lucide-react'
 import { api } from '../api'
 import { useI18nStore } from '../store/i18nStore'
@@ -37,13 +37,29 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const refreshingRef = useRef(false)
+  const pendingRefreshRef = useRef(false)
 
   const refresh = useCallback(async () => {
-    const result = await api.fleetList(workspacePath)
-    if (result.success) {
-      setTasks(result.tasks)
-    } else {
-      setError(t('fleetLoadFailed', { error: localizeError(result.error) || t('unknownError') }))
+    // 轮询与任务事件可能同时触发：进行中时记一个待刷新，结束后再补一次
+    if (refreshingRef.current) {
+      pendingRefreshRef.current = true
+      return
+    }
+    refreshingRef.current = true
+    try {
+      const result = await api.fleetList(workspacePath)
+      if (result.success) {
+        setTasks(result.tasks)
+      } else {
+        setError(t('fleetLoadFailed', { error: localizeError(result.error) || t('unknownError') }))
+      }
+    } finally {
+      refreshingRef.current = false
+      if (pendingRefreshRef.current) {
+        pendingRefreshRef.current = false
+        void refresh()
+      }
     }
   }, [workspacePath, t])
 
@@ -62,7 +78,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
     void refresh()
     const timer = setInterval(() => {
       void refresh()
-    }, 2000)
+    }, 5000)
     const unsubscribe = api.onFleetTaskUpdated(() => {
       void refresh()
     })
@@ -72,6 +88,21 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
       unsubscribe()
     }
   }, [open, refresh])
+
+  const selectTask = async (id: string) => {
+    const next = selectedId === id ? null : id
+    setSelectedId(next)
+    if (!next) return
+
+    // 展开时拉取一次最新详情，避免依赖列表快照里的旧输出
+    const result = await api.fleetGet(next)
+    const detail = result.task
+    if (result.success && detail) {
+      setTasks((previous) =>
+        previous.map((task) => (task.id === next ? detail : task))
+      )
+    }
+  }
 
   const createTask = async () => {
     if (!name.trim() || !prompt.trim()) return
@@ -187,7 +218,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
                       variant="ghost"
                       size="sm"
                       icon={FileText}
-                      onClick={() => setSelectedId(selectedId === task.id ? null : task.id)}
+                      onClick={() => void selectTask(task.id)}
                     >
                       {t('fleetViewLog')}
                     </Button>

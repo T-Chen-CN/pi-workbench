@@ -1,0 +1,87 @@
+import React, { useEffect, useState } from 'react'
+import { useDialogStore } from '../store/dialogStore'
+import { useI18nStore } from '../store/i18nStore'
+import { Button, Input, Modal } from './ui'
+
+/** 全局确认/输入对话框，替代 window.confirm / window.prompt */
+export const DialogHost: React.FC = () => {
+  const current = useDialogStore((state) => state.current)
+  const close = useDialogStore((state) => state.close)
+  const { t } = useI18nStore()
+  const [value, setValue] = useState('')
+
+  useEffect(() => {
+    if (current?.kind === 'prompt') {
+      setValue(current.options.defaultValue ?? '')
+    }
+  }, [current])
+
+  useEffect(() => {
+    if (!current) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        close(current.kind === 'confirm' ? false : null)
+      } else if (event.key === 'Enter') {
+        event.preventDefault()
+        close(current.kind === 'confirm' ? true : value)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [current, value, close])
+
+  if (!current) return null
+
+  const { kind, options } = current
+  const isConfirm = kind === 'confirm'
+  const danger = kind === 'confirm' && Boolean(options.danger)
+
+  const cancel = () => close(isConfirm ? false : null)
+  const confirm = () => close(isConfirm ? true : value)
+
+  return (
+    <Modal
+      open
+      onClose={cancel}
+      title={options.title ?? t('confirm')}
+      size="sm"
+      closeLabel={t('close')}
+      footer={
+        <>
+          <Button variant="ghost" onClick={cancel}>
+            {options.cancelLabel ?? t('cancel')}
+          </Button>
+          <Button variant={danger ? 'danger' : 'primary'} onClick={confirm}>
+            {options.confirmLabel ?? t('confirm')}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        {options.message && (
+          <p className="m-0 font-reading text-[13px] leading-relaxed text-ink-muted">
+            {options.message}
+          </p>
+        )}
+        {kind === 'prompt' && (
+          <Input
+            autoFocus
+            value={value}
+            placeholder={options.placeholder}
+            onChange={(event) => setValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                confirm()
+              } else if (event.key === 'Escape') {
+                event.preventDefault()
+                cancel()
+              }
+            }}
+          />
+        )}
+      </div>
+    </Modal>
+  )
+}

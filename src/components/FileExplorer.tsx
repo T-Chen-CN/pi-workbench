@@ -17,8 +17,12 @@ import { api } from '../api'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { localizeError } from '../i18n/errors'
+import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { toast } from '../store/toastStore'
 import { Button, EmptyState, IconButton, Input, Modal } from './ui'
+
+/** 超过该大小的文件打开前先确认，避免 Monaco 卡顿 */
+const LARGE_FILE_BYTES = 5 * 1024 * 1024
 
 interface FileEntry {
   name: string
@@ -209,6 +213,17 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
     }
 
     try {
+      const info = await api.stat(node.path)
+      if (info?.success && typeof info.size === 'number' && info.size > LARGE_FILE_BYTES) {
+        const proceed = await confirmDialog({
+          message: t('openLargeFileConfirm', {
+            name: node.name,
+            size: `${(info.size / 1024 / 1024).toFixed(1)} MB`,
+          }),
+        })
+        if (!proceed) return
+      }
+
       const result = await api.readFile(node.path)
       if (!result.success || typeof result.content !== 'string') {
         throw new Error(result.error || 'Failed to read file')
@@ -234,7 +249,12 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
 
   const handleRename = async (node: TreeNode) => {
     setContextMenu(null)
-    const newName = window.prompt(t('renamePrompt'), node.name)
+    const newName = await promptDialog({
+      title: t('rename'),
+      message: t('renamePrompt'),
+      defaultValue: node.name,
+      confirmLabel: t('rename'),
+    })
     if (!newName || newName === node.name) return
 
     try {
@@ -256,7 +276,15 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
 
   const handleDelete = async (node: TreeNode) => {
     setContextMenu(null)
-    if (!window.confirm(t('deleteConfirm'))) return
+    if (
+      !(await confirmDialog({
+        message: t('deleteConfirm'),
+        confirmLabel: t('delete'),
+        danger: true,
+      }))
+    ) {
+      return
+    }
 
     try {
       const result = await api.deletePath(node.path)

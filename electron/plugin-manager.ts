@@ -133,9 +133,10 @@ export class PluginManager {
       console.warn('[Plugins] Failed to read plugins directory:', error)
     }
 
+    const seenIds = new Set<string>()
     for (const entry of entries) {
       const directory = path.join(pluginsDir, entry.name)
-      const plugin = this.loadPlugin(directory, entry.name, enabledIds, workspaceDir)
+      const plugin = this.loadPlugin(directory, entry.name, enabledIds, workspaceDir, seenIds)
       state.plugins.push(plugin)
     }
 
@@ -249,7 +250,8 @@ export class PluginManager {
     directory: string,
     fallbackId: string,
     enabledIds: string[] | null,
-    workspaceDir: string
+    workspaceDir: string,
+    seenIds: Set<string>
   ): LoadedPlugin {
     const manifestPath = path.join(directory, 'plugin.json')
     let manifest: PluginManifest = {}
@@ -286,6 +288,15 @@ export class PluginManager {
       handlers: new Map(),
       hooks: new Map(),
     }
+
+    // 重复 id 只允许第一个插件激活，避免命令索引被静默覆盖
+    if (seenIds.has(id)) {
+      plugin.info.enabled = false
+      plugin.info.error = `Duplicate plugin id: ${id}`
+      console.warn(`[Plugins] Duplicate plugin id "${id}" in ${directory}; ignored`)
+      return plugin
+    }
+    seenIds.add(id)
 
     if (!enabled) return plugin
 
@@ -373,9 +384,14 @@ export class PluginManager {
       if (!plugin.info.enabled || plugin.info.error) continue
       for (const info of plugin.info.commands) {
         const handler = plugin.handlers.get(info.id)
-        if (handler) {
-          state.commands.set(info.id, { plugin, handler, info })
+        if (!handler) continue
+        if (state.commands.has(info.id)) {
+          console.warn(
+            `[Plugins] Duplicate command id "${info.id}" from ${plugin.info.id}; keeping the first`
+          )
+          continue
         }
+        state.commands.set(info.id, { plugin, handler, info })
       }
     }
   }

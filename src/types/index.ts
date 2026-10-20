@@ -26,13 +26,6 @@ export interface ChatMessage {
   }
 }
 
-export interface AgentState {
-  isInitialized: boolean
-  isLoading: boolean
-  error: string | null
-  messages: ChatMessage[]
-}
-
 // Editor state
 export interface EditorState {
   currentFile: OpenFile | null

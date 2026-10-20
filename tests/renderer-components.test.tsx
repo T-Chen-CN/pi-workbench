@@ -33,6 +33,7 @@ vi.mock('../src/api/piAgentAPI', () => ({
     chat: vi.fn(),
     abort: vi.fn(),
     dispose: vi.fn(),
+    isInitialized: vi.fn(),
   },
 }))
 
@@ -93,6 +94,8 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.mocked(piAgentAPI.initialize).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.getHistory).mockResolvedValue({ success: true, history: [] })
+  vi.mocked(piAgentAPI.isInitialized).mockResolvedValue({ success: true, initialized: false })
+  vi.mocked(api.stat).mockResolvedValue({ success: true, isFile: true, isDirectory: false, size: 0 })
   vi.mocked(api.onFsChanged).mockReturnValue(() => {})
 })
 

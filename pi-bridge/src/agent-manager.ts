@@ -125,6 +125,8 @@ export interface AgentConfig {
   workspaceDir: string
   /** Agent 数据目录（默认为 {workspace}/.pi-workbench/agent） */
   agentDir?: string
+  /** 工作区级采样温度（OpenAI 兼容 / Anthropic 模型写入 samplingParams） */
+  temperature?: number
   apiConfig: {
     provider: string
     apiUrl: string
@@ -212,7 +214,14 @@ export class AgentManager {
           baseUrl: apiUrl.replace(/\/+$/, ''),
           api: provider === 'anthropic' ? 'anthropic-messages' : 'openai-completions',
           apiKey: `$${API_KEY_ENV}`,
-          models: [{ id: selectedModel }],
+          models: [
+            {
+              id: selectedModel,
+              ...(typeof config.temperature === 'number'
+                ? { samplingParams: { temperature: config.temperature } }
+                : {}),
+            },
+          ],
         },
       },
     }

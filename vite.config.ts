@@ -84,6 +84,7 @@ const DEV_AGENT_CHAT_STREAM = '/__pi/agent/chat-stream'
 const DEV_AGENT_ABORT = '/__pi/agent/abort'
 const DEV_AGENT_DISPOSE = '/__pi/agent/dispose'
 const DEV_AGENT_HISTORY = '/__pi/agent/history'
+const DEV_AGENT_IS_INITIALIZED = '/__pi/agent/isInitialized'
 
 function devAgentBridge(): Plugin {
   return {
@@ -239,6 +240,17 @@ function devAgentBridge(): Plugin {
           reply(res, { success: true })
         } catch (error) {
           reply(res, { success: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      })
+
+      server.middlewares.use(DEV_AGENT_IS_INITIALIZED, async (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') return next()
+        try {
+          const body = await readJson(req)
+          const { agent } = requireAgent(body.workspaceDir ?? process.cwd())
+          reply(res, { success: true, initialized: Boolean(agent) })
+        } catch (error) {
+          reply(res, { success: false, initialized: false, error: error instanceof Error ? error.message : String(error) })
         }
       })
 

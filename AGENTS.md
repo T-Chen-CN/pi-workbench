@@ -100,6 +100,7 @@ pi-workbench/
 src/components/
 ├── ChatPanel.tsx
 ├── CommandPalette.tsx
+├── DialogHost.tsx
 ├── DiffViewer.tsx
 ├── ErrorBoundary.tsx
 ├── FileExplorer.tsx
@@ -110,6 +111,7 @@ src/components/
 ├── TerminalPanel.tsx
 ├── Toast.tsx
 ├── WelcomeScreen.tsx
+├── WindowControls.tsx
 └── ui.tsx
 
 // ❌ 错误：不要创建子目录
@@ -118,12 +120,14 @@ src/components/chat/ChatPanel.tsx  // 不要这样！
 
 #### Store 放置规则
 ```typescript
-// ✅ 正确：每个功能域一个独立 store（7 个）
+// ✅ 正确：每个功能域一个独立 store（9 个）
 src/store/
 ├── chatStore.ts       // 聊天消息（支持历史恢复、token 用量）
+├── dialogStore.ts     // 应用内确认/输入对话框（替代 confirm/prompt）
 ├── diffStore.ts       // Diff 查看器
 ├── editorStore.ts     // 编辑器标签页、脏标记
 ├── i18nStore.ts       // 语言切换（persist）
+├── settingsStore.ts   // 自动保存等应用级编辑偏好
 ├── themeStore.ts      // Paper / Ink 主题
 ├── toastStore.ts      // 全局 Toast（组件外也可调用）
 └── workspaceStore.ts  // 当前工作区 + 最近打开

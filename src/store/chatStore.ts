@@ -28,7 +28,6 @@ export interface ChatAttachment {
 
 export interface ChatState {
   messages: ChatMessage[]
-  isInitialized: boolean
   isLoading: boolean
   error: string | null
   /** 下一条消息要附带的工作区文件 */
@@ -54,12 +53,10 @@ export interface ChatState {
   setError: (error: string | null) => void
   clearMessages: () => void
   reset: () => void
-  setInitialized: (initialized: boolean) => void
 }
 
 export const useChatStore = create<ChatState>((set) => ({
   messages: [],
-  isInitialized: false,
   isLoading: false,
   error: null,
   attachments: [],
@@ -151,9 +148,7 @@ export const useChatStore = create<ChatState>((set) => ({
       messages: [],
       isLoading: false,
       error: null,
-      isInitialized: false,
       attachments: [],
       draftInput: '',
     }),
-  setInitialized: (initialized) => set({ isInitialized: initialized }),
 }))
