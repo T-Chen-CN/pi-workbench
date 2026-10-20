@@ -8,6 +8,7 @@ describe('isIgnoredWatchPath', () => {
       'src/node_modules/@types/node/index.d.ts',
       '.git/config',
       '.pi-workbench/sessions/a.json',
+      '.pi-worktrees/demo-abc123/src/index.ts',
       'dist/assets/index.js',
       'dist-electron/main.js',
       'release/Pi Workbench.exe',
@@ -25,6 +26,7 @@ describe('isIgnoredWatchPath', () => {
       'docs/readme.md',
       'src/cacheUtils.ts',
       'src/distance.ts',
+      'src/.pi-worktreesBackup/file.ts',
       'package.json',
     ]
 

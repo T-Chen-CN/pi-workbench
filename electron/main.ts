@@ -21,6 +21,12 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 let mainWindow: BrowserWindow | null = null
+/** 每个被监听的工作区一个 watcher；切换工作区不再挤掉其他工作区 */
+interface WorkspaceWatchEntry {
+  watcher: FSWatcher
+  batcher: WatchBatcher
+}
+const workspaceWatchers = new Map<string, WorkspaceWatchEntry>()
 
 // 只允许一个实例：避免两个进程同时写同一份配置和 Fleet 数据库。
 const singleInstanceLock =
@@ -37,8 +43,6 @@ if (!singleInstanceLock) {
 
 /** 每个打开的工作区一个 Agent 实例 */
 const agentRegistry = new AgentRegistry()
-let workspaceWatcher: FSWatcher | null = null
-let watchBatcher: WatchBatcher | null = null
 let fileLogger: FileLogger | null = null
 
 const requireFromMain = createRequire(import.meta.url)
@@ -161,6 +165,27 @@ function isProtectedRoot(canonicalPath: string): boolean {
   if (trustedWorkspaceRoots.has(normalized)) return true
   const cacheRoot = canonicalizePath(path.join(getAppDir(), 'cache'))
   return cacheRoot !== null && normalizeForComparison(cacheRoot) === normalized
+}
+
+function workspaceWatchKey(workspacePath: string): string {
+  return normalizeForComparison(canonicalizePath(workspacePath) ?? path.resolve(workspacePath))
+}
+
+function closeWorkspaceWatcher(workspacePath: string): void {
+  const key = workspaceWatchKey(workspacePath)
+  const entry = workspaceWatchers.get(key)
+  if (!entry) return
+  entry.batcher.cancel()
+  entry.watcher.close()
+  workspaceWatchers.delete(key)
+}
+
+function closeAllWorkspaceWatchers(): void {
+  for (const entry of workspaceWatchers.values()) {
+    entry.batcher.cancel()
+    entry.watcher.close()
+  }
+  workspaceWatchers.clear()
 }
 
 /** 启动时把最近打开的工作区视为已批准（它们都来自此前的目录选择器） */
@@ -362,10 +387,7 @@ let shuttingDown = false
 /** 退出前等待异步资源释放，避免在任务仍写库时关闭 store */
 async function shutdownApplication(): Promise<void> {
   try {
-    watchBatcher?.cancel()
-    watchBatcher = null
-    workspaceWatcher?.close()
-    workspaceWatcher = null
+    closeAllWorkspaceWatchers()
     terminalManager.closeAll()
     pluginManager.disposeAll()
     await Promise.allSettled([fleetManager.disposeAll(), agentRegistry.disposeAll()])
@@ -587,32 +609,35 @@ handleIpc('fs:watch', async (event, workspacePath: string) => {
       return { success: false, error: 'Workspace is not approved' }
     }
 
-    if (workspaceWatcher) {
-      workspaceWatcher.close()
-      workspaceWatcher = null
+    const key = workspaceWatchKey(trustedWorkspace)
+    // 同一工作区重复 watch 时先替换旧监听，其他工作区不受影响
+    const previous = workspaceWatchers.get(key)
+    if (previous) {
+      previous.batcher.cancel()
+      previous.watcher.close()
+      workspaceWatchers.delete(key)
     }
 
     const sender = event.sender
-
-    watchBatcher?.cancel()
-    watchBatcher = new WatchBatcher((changes) => {
+    const batcher = new WatchBatcher((changes) => {
       if (sender.isDestroyed()) return
       for (const change of changes) {
         sender.send('fs:changed', change)
       }
     })
 
-    workspaceWatcher = watch(trustedWorkspace, { recursive: true }, (eventType, filename) => {
+    const watcher = watch(trustedWorkspace, { recursive: true }, (eventType, filename) => {
       if (!filename || isIgnoredWatchPath(filename)) return
       const fullPath = path.join(trustedWorkspace, filename)
-      const key = process.platform === 'win32' ? fullPath.toLowerCase() : fullPath
-      watchBatcher?.add({ type: eventType, path: fullPath }, key)
+      const changeKey = process.platform === 'win32' ? fullPath.toLowerCase() : fullPath
+      batcher.add({ type: eventType, path: fullPath }, changeKey)
     })
 
-    workspaceWatcher.on('error', (error) => {
+    watcher.on('error', (error) => {
       console.error('[Main] Workspace watcher error:', error)
     })
 
+    workspaceWatchers.set(key, { watcher, batcher })
     return { success: true }
   } catch (error) {
     return {
@@ -624,12 +649,7 @@ handleIpc('fs:watch', async (event, workspacePath: string) => {
 
 handleIpc('fs:unwatch', async () => {
   try {
-    watchBatcher?.cancel()
-    watchBatcher = null
-    if (workspaceWatcher) {
-      workspaceWatcher.close()
-      workspaceWatcher = null
-    }
+    closeAllWorkspaceWatchers()
     return { success: true }
   } catch (error) {
     return {
@@ -990,6 +1010,12 @@ handleIpc('workspace:saveConfig', async (_event, workspacePath: string, config: 
 // 关闭工作区标签时释放该工作区的主进程资源（插件、监听）
 handleIpc('workspace:dispose', async (_event, workspacePath: string) => {
   try {
+    if (!isTrustedWorkspacePath(workspacePath)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    // 关闭该工作区的监听与终端，其他打开的工作区不受影响
+    closeWorkspaceWatcher(workspacePath)
+    terminalManager.closeWorkspace(canonicalizePath(workspacePath) ?? workspacePath)
     pluginManager.unload(workspacePath)
     return { success: true }
   } catch (error) {

@@ -301,6 +301,44 @@ describe('AgentManager chat', () => {
     expect(result.error).toContain('did not produce')
   })
 
+  it('does not return an assistant message from a previous round', async () => {
+    const session = createFakeSession(async () => {
+      // 本轮失败，没有新的 assistant 消息
+    })
+    session.messages.push({ role: 'assistant', content: 'previous reply' })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const result = await manager.chat('hi')
+
+    expect(result.success).toBe(false)
+    expect(result.response).toBeUndefined()
+    expect(result.error).toContain('did not produce')
+  })
+
+  it('hard-stops a request whose abort never settles', async () => {
+    const session = createFakeSession(() => new Promise<void>(() => {}))
+    session.abort = vi.fn(async () => {
+      // SDK 没有响应 abort
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    vi.useFakeTimers()
+    try {
+      const pending = manager.chat('hi', { timeoutMs: 1000 })
+      await vi.advanceTimersByTimeAsync(1000)
+      await vi.advanceTimersByTimeAsync(10_000)
+      const result = await pending
+
+      expect(session.abort).toHaveBeenCalled()
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('timed out')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('forwards text deltas while the agent streams', async () => {
     const session = createFakeSession(async (s) => {
       s.emit({
@@ -500,5 +538,40 @@ describe('AgentManager dispose', () => {
     expect(manager.isInitialized()).toBe(false)
     expect(manager.getConfig()).toBeNull()
     expect(manager.getMessageHistory()).toEqual([])
+  })
+
+  it('aborts an in-flight request before disposing', async () => {
+    let release: () => void = () => {}
+    const session = createFakeSession(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    session.abort = vi.fn(async () => release())
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const pending = manager.chat('hi')
+    await manager.dispose()
+
+    expect(session.abort).toHaveBeenCalled()
+    await expect(pending).resolves.toMatchObject({ success: false })
+    expect(session.disposed).toBe(true)
+  })
+
+  it('restores provider environment variables after the last instance is disposed', async () => {
+    process.env.OPENAI_API_KEY = 'previous-key'
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    expect(process.env.OPENAI_API_KEY).toBe('sk-secret')
+    expect(process.env.PI_WORKBENCH_API_KEY).toBe('sk-secret')
+
+    await manager.dispose()
+
+    expect(process.env.OPENAI_API_KEY).toBe('previous-key')
+    expect(process.env.PI_WORKBENCH_API_KEY).toBeUndefined()
   })
 })

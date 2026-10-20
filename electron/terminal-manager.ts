@@ -197,6 +197,16 @@ export class TerminalManager {
     }
   }
 
+  /** 关闭某个工作区的全部终端（关闭工作区标签时调用） */
+  closeWorkspace(workspaceDir: string): void {
+    const normalized = path.resolve(workspaceDir)
+    for (const [id, entry] of [...this.terminals.entries()]) {
+      if (path.resolve(entry.workspaceDir) === normalized) {
+        this.close(id)
+      }
+    }
+  }
+
   /** 立即把待写入内容刷到日志文件 */
   flushNow(id: string): boolean {
     const entry = this.terminals.get(id)

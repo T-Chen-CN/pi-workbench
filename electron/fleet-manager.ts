@@ -229,6 +229,13 @@ export class FleetManager {
     this.active.clear()
     for (const [, agent] of agents) {
       try {
+        if (typeof agent.abort === 'function') {
+          await agent.abort()
+        }
+      } catch {
+        // ignore
+      }
+      try {
         await agent.dispose()
       } catch {
         // ignore
