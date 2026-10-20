@@ -80,6 +80,22 @@ export const translations = {
     terminalAttached: '终端输出已附加到下一条消息',
     terminalOutputUnavailable: '终端输出文件不存在',
 
+    // Command palette / plugins
+    commandPalette: '命令面板',
+    pluginCommands: '搜索插件命令',
+    commandArguments: '命令参数（可选）',
+    plugins: '插件',
+    reloadPlugins: '重新加载插件',
+    pluginsReloaded: '插件已重新加载',
+    noPlugins: '未发现插件',
+    noPluginCommands: '没有可用的插件命令',
+    commandSucceeded: '执行成功',
+    commandFailed: '执行失败',
+    commandOutput: '命令输出',
+    loading: '加载中...',
+    clear: '清除',
+    openCommandPalette: '命令面板 (Ctrl+Shift+P)',
+
     // IPC Debug
     ipcDebug: 'IPC 通信调试',
     runTests: '运行测试',
@@ -178,6 +194,22 @@ export const translations = {
     sendTerminalOutput: 'Send output to chat',
     terminalAttached: 'Terminal output attached to the next message',
     terminalOutputUnavailable: 'Terminal output is not available',
+
+    // Command palette / plugins
+    commandPalette: 'Command palette',
+    pluginCommands: 'Search plugin commands',
+    commandArguments: 'Command arguments (optional)',
+    plugins: 'Plugins',
+    reloadPlugins: 'Reload plugins',
+    pluginsReloaded: 'Plugins reloaded',
+    noPlugins: 'No plugins found',
+    noPluginCommands: 'No plugin commands available',
+    commandSucceeded: 'Succeeded',
+    commandFailed: 'Failed',
+    commandOutput: 'Command output',
+    loading: 'Loading...',
+    clear: 'Clear',
+    openCommandPalette: 'Command palette (Ctrl+Shift+P)',
 
     // IPC Debug
     ipcDebug: 'IPC Communication Debug',

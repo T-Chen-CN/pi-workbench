@@ -1,0 +1,26 @@
+{
+  "id": "git-tools",
+  "name": "Git Tools",
+  "version": "0.1.0",
+  "description": "Git status, log and commit helpers for Pi Workbench",
+  "main": "index.js",
+  "contributes": {
+    "commands": [
+      {
+        "id": "git.status",
+        "title": "Git: Status",
+        "description": "Show the short working-tree status"
+      },
+      {
+        "id": "git.log",
+        "title": "Git: Recent commits",
+        "description": "Show the last 10 commits"
+      },
+      {
+        "id": "git.commitAll",
+        "title": "Git: Commit all changes",
+        "description": "Stage all changes and commit using the command arguments as the message"
+      }
+    ]
+  }
+}

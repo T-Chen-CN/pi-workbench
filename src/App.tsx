@@ -8,6 +8,7 @@ import { DiffViewer } from './components/DiffViewer'
 import { IPCDebug } from './components/IPCDebug'
 import { Settings } from './components/Settings'
 import { TerminalPanel } from './components/TerminalPanel'
+import { CommandPalette } from './components/CommandPalette'
 import { ToastContainer } from './components/Toast'
 import { useToastStore } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
@@ -134,6 +135,7 @@ export default function App() {
 
     // 只释放该工作区的 Agent 与会话资源
     await piAgentAPI.dispose(targetPath)
+    await api.disposeWorkspace(targetPath).catch(() => undefined)
     const nextWorkspace = useWorkspaceStore.getState().closeWorkspace(targetPath)
 
     if (!closingCurrent) return
@@ -164,6 +166,15 @@ export default function App() {
             <span className="text-gray-600 dark:text-gray-400 text-sm max-w-xs overflow-hidden text-ellipsis whitespace-nowrap">
               {workspace}
             </span>
+          )}
+          {workspace && (
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent('open-command-palette'))}
+              title={t('openCommandPalette')}
+              className="bg-none border-none cursor-pointer text-sm px-1.5 py-1 rounded opacity-70 hover:opacity-100 transition-opacity"
+            >
+              ⌘
+            </button>
           )}
           {workspace && (
             <button
@@ -265,6 +276,7 @@ export default function App() {
       )}
 
       <ToastContainer messages={toastMessages} onClose={removeToast} />
+      {workspace && <CommandPalette workspacePath={workspace} />}
       <DiffViewer />
 
       {/* Main Content */}

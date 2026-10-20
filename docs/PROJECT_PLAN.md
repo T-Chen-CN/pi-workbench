@@ -38,7 +38,8 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 | Phase 1 加固（工作区生命周期 / 会话持久化 / Diff 联动 / 文件监听 / 测试） | ✅ 完成 |
 | Phase 2：工作区与对话体验 | ✅ 完成 |
 | Phase 3：终端集成 | ✅ 完成 |
-| Phase 4-6 | ⏳ 未开始 |
+| Phase 4：工作台插件系统 | ✅ 完成 |
+| Phase 5-6 | ⏳ 未开始 |
 
 **已可用的端到端能力**：配置供应商 → 拉取真实模型 → 打开工作区 → Agent 对话（read/write/edit/bash）
 → Agent 修改自动展示 Diff → 重启后恢复会话。
@@ -87,6 +88,8 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 - 主进程文件日志（`logs/main.log`，5 MB 轮转并保留 `.1` 备份）
 - 内置终端（xterm.js + node-pty；输出写入 `terminal.log`，可附加给 Agent）
 - 多工作区标签页，各工作区独立 Agent 实例
+- 工作台插件系统（主进程加载、命令 / 钩子、启用禁用与热重载、命令面板）
+- GitHub 风格的 Git 示例插件（`examples/plugins/git-tools`）
 - 生产构建注入 Content-Security-Policy（开发模式不受影响）
 - Vitest 单测（store / diff / logger / AgentManager / IPC）、ESLint、Prettier、GitHub Actions CI
 
@@ -95,7 +98,6 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 | 能力 | 阶段 |
 |---|---|
 | 上下文片段 / 符号级选择（v1 已支持整文件附加） | Phase 2（待增强） |
-| 工作台插件系统（命令 / 菜单 / 钩子 / 声明式 UI） | Phase 4 |
 | Fleet 后台任务（Git worktree） | Phase 5 |
 | 性能、撤销/重做、快捷键、主题、自动更新 | Phase 6 |
 
@@ -241,19 +243,19 @@ docs/               项目文档
 - 面板隐藏时保留会话；重启按钮重建 PTY；切换工作区按 key 重建
 - node-pty 为原生模块：延迟加载，失败只影响终端；打包使用 `asarUnpack`
 
-### 模块 7：工作台插件系统（待实现）
+### 模块 7：工作台插件系统（已实现）
 
 **定位**：插件扩展的是 Pi Workbench 本身，不是 Pi Agent。Agent 能力保持内置，
 不接入 Pi SDK 的 extensions / custom tools。
 
-- 插件目录：`{workspace}/.pi-workbench/plugins/`，不读取系统目录或网络
-- 由工作台定义清单格式（id / name / version / 贡献点）与加载器
-- v1 贡献点：命令、菜单/右键项、生命周期钩子（工作区打开、文件保存、对话消息）、状态项
-- v1 不向渲染进程加载插件 JS：受生产 CSP `script-src 'self'` 限制，UI 采用声明式贡献；
-  面板级 UI 作为可选后续（需要专用协议或隔离 iframe + CSP 方案）
-- 主进程加载、无沙箱，仅限个人可信插件
-- 支持启用/禁用与热重载
-- 示例插件：Git 状态 / 提交操作
+- 插件目录：`{workspace}/.pi-workbench/plugins/<id>/`，由 `plugin.json` 声明
+- CommonJS 入口导出 `activate(api)`，可注册命令与钩子；`deactivate()` 可选
+- 可用 API：`api.workspaceDir`、`registerCommand`、`on`、`log`
+- 命令通过命令面板（Ctrl+Shift+P）执行，可传字符串参数并查看输出
+- 启用/禁用持久化在 `config.json` 的 `enabledPlugins` + `pluginsConfigured`
+- 目录监听自动重载（500ms 防抖），也可手动重新加载
+- 无沙箱，仅限个人可信插件；不向渲染进程加载插件 JS
+- 示例插件：`examples/plugins/git-tools`（status / log / commit all）
 
 ### 模块 8：Fleet 任务（待实现）
 
@@ -303,15 +305,17 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 
 **说明**：终端按工作区创建，面板显隐不销毁会话；切换工作区会重建终端。"Agent 读取终端输出"通过附加 `terminal.log` 实现。
 
-### ⏳ Phase 4：工作台插件系统（预计 1-2 周）
+### ✅ Phase 4：工作台插件系统（完成）
 
-- [ ] 插件清单格式与主进程加载器
-- [ ] 命令 / 菜单 / 生命周期钩子 / 状态项贡献点
-- [ ] 插件启用/禁用与热重载
-- [ ] Git 示例插件（状态 / 提交操作）
-- [ ] （可选）面板级 UI 贡献（需独立的协议或 iframe + CSP 方案）
+- [x] 插件清单格式与主进程加载器（`electron/plugin-manager.ts`）
+- [x] 命令与生命周期钩子贡献点（`workspace:opened` / `file:saved` / `chat:message`）
+- [x] 插件启用/禁用与热重载（目录监听 + 手动重新加载）
+- [x] Git 示例插件（`examples/plugins/git-tools`）
+- [x] 命令面板（Ctrl+Shift+P）执行插件命令、查看输出、管理插件
+- [ ] （可选）面板级 UI 贡献与菜单/状态项（v1 未实现）
 
 > 插件只扩展工作台本身，不扩展 Pi Agent，也不加载 Pi SDK extensions。
+> v1 只加载主进程 CommonJS 插件，不向渲染进程注入任意 JS（受生产 CSP 约束）。
 
 ### ⏳ Phase 5：Fleet 后台任务（预计 2-3 周）
 
@@ -354,7 +358,7 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 
 ```bash
 npm run type-check   # TypeScript 严格模式
-npm test             # Vitest（store / diff / logger / AgentManager / IPC / 终端）
+npm test             # Vitest（store / diff / logger / AgentManager / IPC / 终端 / 插件）
 npm run lint         # ESLint + react-hooks
 npm run build        # renderer → bridge → main（顺序不可颠倒）
 npm run package:win  # NSIS + portable

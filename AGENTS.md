@@ -5,7 +5,7 @@
 **项目**: Pi Workbench  
 **架构**: Electron 44 + React 19 + TypeScript
 **运行要求**: Node.js ≥ 22.19（Pi SDK 要求；Electron 44 内置 Node 24）  
-**当前阶段**: Phase 3 完成，Phase 4 待启动  
+**当前阶段**: Phase 4 完成，Phase 5 待启动  
 **最后更新**: 2026-10-20
 
 ---
@@ -26,7 +26,8 @@
 - ✅ Phase 1 完成：Pi Agent 真实集成
 - ✅ Phase 2 完成：工作区与对话体验（流式输出、修改审阅、上下文选择、多工作区）
 - ✅ Phase 3 完成：终端集成（xterm + node-pty，输出可附加给 Agent）
-- ⏳ Phase 4-5 待启动：工作台插件、Fleet 任务
+- ✅ Phase 4 完成：工作台插件系统（命令 / 钩子 / 命令面板，示例 Git 插件）
+- ⏳ Phase 5 待启动：Fleet 后台任务
 
 ---
 
@@ -606,6 +607,12 @@ async function initAgent(config: ApiConfig) {
 - ⚠️ 简化版插件系统**无**沙箱隔离
 - ⚠️ 插件可以访问 Node.js API
 - ⚠️ 仅用于个人项目，不对外分发
+
+**v1 能力边界**:
+- ✅ 主进程 CommonJS 插件：命令（命令面板执行）与钩子（workspace:opened / file:saved / chat:message）
+- ✅ 启用禁用与热重载（`config.json` 的 `enabledPlugins` + `pluginsConfigured`）
+- ❌ 不向渲染进程加载插件 JS（生产 CSP `script-src 'self'`）
+- ❌ 不接入 Pi SDK extensions / custom tools
 
 ### Fleet 任务约束
 
