@@ -26,7 +26,8 @@ export interface ElectronAPI {
 
   // Pi Agent API
   agentInitialize: (config: AgentInitConfig) => Promise<AgentInitResult>
-  agentChat: (message: string) => Promise<AgentChatResult>
+  agentChat: (message: string, requestId?: string) => Promise<AgentChatResult>
+  onAgentStream: (callback: (payload: AgentStreamPayload) => void) => () => void
   agentIsInitialized: () => Promise<AgentStatusResult>
   agentGetHistory: () => Promise<AgentHistoryResult>
   agentDispose: () => Promise<AgentDisposeResult>
@@ -157,6 +158,13 @@ export interface AgentChatResult {
   error?: string
   /** Agent 本轮修改过的文件（用于 Diff 展示） */
   edits?: FileEdit[]
+}
+
+export interface AgentStreamPayload {
+  /** 发起请求时生成，用于忽略过期会话的增量 */
+  requestId?: string
+  /** 本次推送的文本增量 */
+  delta: string
 }
 
 export interface AgentStatusResult {

@@ -80,13 +80,28 @@ export const piAgentAPI = {
   },
 
   /**
-   * Send a chat message to the agent
+   * Send a chat message to the agent.
+   * In Electron, text deltas are forwarded to `onDelta` while the run streams.
    */
-  async chat(message: string): Promise<AgentChatResponse> {
+  async chat(message: string, onDelta?: (delta: string) => void): Promise<AgentChatResponse> {
     try {
       if (hasElectronAgent()) {
-        return await window.electronAPI.agentChat(message)
+        const requestId = `chat-${Date.now()}-${Math.random().toString(36).slice(2)}`
+        let unsubscribe: (() => void) | null = null
+
+        if (onDelta && typeof window.electronAPI.onAgentStream === 'function') {
+          unsubscribe = window.electronAPI.onAgentStream((payload) => {
+            if (payload.requestId === requestId) onDelta(payload.delta)
+          })
+        }
+
+        try {
+          return await window.electronAPI.agentChat(message, requestId)
+        } finally {
+          unsubscribe?.()
+        }
       }
+      // Web dev bridge 目前整轮返回，不做流式
       return await callDevBridge<AgentChatResponse>(DEV_AGENT_CHAT, { message })
     } catch (error) {
       console.error('[Pi Agent] Chat error:', error)
