@@ -293,18 +293,6 @@ ipcMain.handle('workspace:saveConfig', async (_event, workspacePath: string, con
 
 // ==================== API Configuration Management ====================
 
-// Default API configurations
-const DEFAULT_API_CONFIGS: Record<string, { url: string; models: string[] }> = {
-  anthropic: {
-    url: 'https://api.anthropic.com/v1',
-    models: ['claude-3-5-sonnet-20241022', 'claude-3-opus-20240229', 'claude-3-sonnet-20240229']
-  },
-  openai: {
-    url: 'https://api.openai.com/v1',
-    models: ['gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo']
-  }
-}
-
 // Helper function to load API Config
 async function loadApiConfig(): Promise<any> {
   try {
@@ -312,13 +300,13 @@ async function loadApiConfig(): Promise<any> {
     const configPath = path.join(appDir, 'config', 'api-config.json')
 
     if (!existsSync(configPath)) {
-      // Return default Anthropic config
+      // Return minimal default config (no hardcoded models)
       return {
         provider: 'anthropic',
-        apiUrl: DEFAULT_API_CONFIGS.anthropic.url,
+        apiUrl: 'https://api.anthropic.com/v1',
         apiKey: '',
-        availableModels: DEFAULT_API_CONFIGS.anthropic.models,
-        selectedModel: DEFAULT_API_CONFIGS.anthropic.models[0]
+        availableModels: [],  // Empty by default, user must fetch
+        selectedModel: ''
       }
     }
 

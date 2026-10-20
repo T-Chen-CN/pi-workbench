@@ -39,20 +39,16 @@ export const Settings: React.FC = () => {
   const handleProviderChange = (provider: ApiProvider) => {
     // Update URL based on provider
     let defaultUrl = ''
-    let defaultModels: string[] = []
 
     switch (provider) {
       case 'anthropic':
         defaultUrl = 'https://api.anthropic.com/v1'
-        defaultModels = ['claude-3-5-sonnet-20241022', 'claude-3-opus-20240229']
         break
       case 'openai':
         defaultUrl = 'https://api.openai.com/v1'
-        defaultModels = ['gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo']
         break
       case 'custom':
         defaultUrl = 'https://your-api-endpoint.com/v1'
-        defaultModels = []
         break
     }
 
@@ -60,8 +56,8 @@ export const Settings: React.FC = () => {
       ...prev,
       provider,
       apiUrl: defaultUrl,
-      availableModels: defaultModels,
-      selectedModel: defaultModels[0] || ''
+      availableModels: [],  // Always clear models when provider changes
+      selectedModel: ''
     }))
     setSaveStatus('idle')
   }

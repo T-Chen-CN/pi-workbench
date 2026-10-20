@@ -102,8 +102,8 @@ const mockAPI = {
         provider: 'anthropic',
         apiUrl: 'https://api.anthropic.com/v1',
         apiKey: '',
-        availableModels: ['claude-3-5-sonnet-20241022'],
-        selectedModel: 'claude-3-5-sonnet-20241022'
+        availableModels: [],
+        selectedModel: ''
       }
     }
   },
@@ -115,7 +115,7 @@ const mockAPI = {
     console.log('[Mock] apiConfigFetchModels:', provider)
     return {
       success: true,
-      models: ['claude-3-5-sonnet-20241022', 'gpt-4-turbo']
+      models: []
     }
   },
 }
