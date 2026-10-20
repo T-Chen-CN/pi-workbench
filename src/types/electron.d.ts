@@ -26,11 +26,11 @@ export interface ElectronAPI {
 
   // Pi Agent API
   agentInitialize: (config: AgentInitConfig) => Promise<AgentInitResult>
-  agentChat: (message: string, requestId?: string) => Promise<AgentChatResult>
+  agentChat: (message: string, requestId?: string, workspaceDir?: string) => Promise<AgentChatResult>
   onAgentStream: (callback: (payload: AgentStreamPayload) => void) => () => void
-  agentIsInitialized: () => Promise<AgentStatusResult>
-  agentGetHistory: () => Promise<AgentHistoryResult>
-  agentDispose: () => Promise<AgentDisposeResult>
+  agentIsInitialized: (workspaceDir?: string) => Promise<AgentStatusResult>
+  agentGetHistory: (workspaceDir?: string) => Promise<AgentHistoryResult>
+  agentDispose: (workspaceDir?: string) => Promise<AgentDisposeResult>
 
   // API Configuration management (便携式架构)
   apiConfigGet: () => Promise<ApiConfigGetResult>

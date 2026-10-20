@@ -5,6 +5,7 @@ import { existsSync, statSync, watch, type FSWatcher } from 'fs'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { isIgnoredWatchPath } from './watch-filter.js'
 import { FileLogger, installConsoleTee } from './logger.js'
+import { AgentRegistry } from './agent-registry.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
 
@@ -12,7 +13,8 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 let mainWindow: BrowserWindow | null = null
-let agentManager: any | null = null // AgentManager type loaded dynamically
+/** 每个打开的工作区一个 Agent 实例 */
+const agentRegistry = new AgentRegistry()
 let workspaceWatcher: FSWatcher | null = null
 let watchDebounce: NodeJS.Timeout | null = null
 let fileLogger: FileLogger | null = null
@@ -114,6 +116,7 @@ app.whenReady().then(async () => {
 
 app.on('will-quit', () => {
   fileLogger?.close()
+  void agentRegistry.disposeAll()
 })
 
 app.on('window-all-closed', () => {
@@ -596,7 +599,22 @@ ipcMain.handle('apiConfig:fetchModels', async (_event, apiUrl: string, apiKey: s
 
 // ==================== Pi Agent Integration ====================
 
-// Agent 初始化
+/** 配置签名：同一工作区配置变化时需要重建 Agent，否则复用 */
+function agentConfigKey(apiConfig: {
+  provider: string
+  apiUrl: string
+  apiKey: string
+  selectedModel: string
+}): string {
+  return JSON.stringify({
+    provider: apiConfig.provider,
+    apiUrl: apiConfig.apiUrl,
+    selectedModel: apiConfig.selectedModel,
+    apiKey: apiConfig.apiKey,
+  })
+}
+
+// Agent 初始化（按工作区）
 ipcMain.handle('agent:initialize', async (_event, config: {
   workspaceDir: string
   apiConfig: {
@@ -607,47 +625,46 @@ ipcMain.handle('agent:initialize', async (_event, config: {
   }
 }) => {
   try {
+    const { workspaceDir, apiConfig } = config
+
     console.log('[Main] Initializing Pi Agent with config:', {
-      provider: config.apiConfig.provider,
-      model: config.apiConfig.selectedModel,
-      workspaceDir: config.workspaceDir
+      provider: apiConfig.provider,
+      model: apiConfig.selectedModel,
+      workspaceDir
     })
 
-    // 延迟加载 AgentManager（用运行时路径解析，避免类型检查依赖未构建的 pi-bridge/dist）
-    const bridgePath = path.join(__dirname, '..', 'pi-bridge', 'dist', 'index.js')
-    const { AgentManager } = await import(pathToFileURL(bridgePath).href)
-
     // 验证 API Key
-    if (!config.apiConfig.apiKey) {
+    if (!apiConfig.apiKey) {
       return {
         success: false,
         error: 'API key not configured. Please set it in Settings.'
       }
     }
 
-    // 重新初始化前先释放旧实例，避免会话/子进程泄漏
-    if (agentManager) {
-      try {
-        await agentManager.dispose()
-      } catch (error) {
-        console.warn('[Main] Failed to dispose previous agent:', error)
-      }
-      agentManager = null
+    const configKey = agentConfigKey(apiConfig)
+    if (agentRegistry.shouldReuse(workspaceDir, configKey)) {
+      console.log('[Main] Reusing agent for workspace:', workspaceDir)
+      return { success: true }
     }
 
-    // 创建新的 Agent Manager 实例
-    agentManager = new AgentManager()
+    // 延迟加载 AgentManager（用运行时路径解析，避免类型检查依赖未构建的 pi-bridge/dist）
+    const bridgePath = path.join(__dirname, '..', 'pi-bridge', 'dist', 'index.js')
+    const { AgentManager } = await import(pathToFileURL(bridgePath).href)
+    const agent = new AgentManager()
 
     // 初始化 Agent（传入完整的 apiConfig + 便携式 agent 数据目录）
-    const result = await agentManager.initialize({
-      workspaceDir: config.workspaceDir,
+    const result = await agent.initialize({
+      workspaceDir,
       agentDir: path.join(getAppDir(), 'data', 'agent'),
-      apiConfig: config.apiConfig
+      apiConfig
     })
 
     if (result.success) {
+      // 登记实例；若该工作区已有旧实例会先释放
+      await agentRegistry.set(workspaceDir, agent, configKey)
       console.log('[Main] Pi Agent initialized successfully')
     } else {
+      await agent.dispose().catch(() => undefined)
       console.error('[Main] Failed to initialize Pi Agent:', result.error)
     }
 
@@ -663,19 +680,20 @@ ipcMain.handle('agent:initialize', async (_event, config: {
 })
 
 // Agent 聊天
-ipcMain.handle('agent:chat', async (event, message: string, requestId?: string) => {
+ipcMain.handle('agent:chat', async (event, message: string, requestId?: string, workspaceDir?: string) => {
   try {
-    if (!agentManager) {
+    const agent = workspaceDir ? agentRegistry.get(workspaceDir) : null
+    if (!agent) {
       return {
         success: false,
-        error: 'Agent not initialized. Please initialize agent first.'
+        error: 'Agent not initialized for this workspace. Please initialize agent first.'
       }
     }
 
     console.log('[Main] Sending message to agent:', message.substring(0, 100))
 
     // 流式文本增量推送给发起请求的窗口；requestId 用于渲染进程区分本次会话
-    const result = await agentManager.chat(message, {
+    const result = await agent.chat(message, {
       onTextDelta: (delta: string) => {
         if (!event.sender.isDestroyed()) {
           event.sender.send('agent:stream', { requestId, delta })
@@ -701,10 +719,10 @@ ipcMain.handle('agent:chat', async (event, message: string, requestId?: string) 
 })
 
 // Agent 状态查询
-ipcMain.handle('agent:isInitialized', async () => {
+ipcMain.handle('agent:isInitialized', async (_event, workspaceDir?: string) => {
   try {
-    const initialized = agentManager?.isInitialized() || false
-    return { success: true, initialized }
+    const agent = workspaceDir ? agentRegistry.get(workspaceDir) : null
+    return { success: true, initialized: agent?.isInitialized() || false }
   } catch (error) {
     return {
       success: false,
@@ -714,16 +732,17 @@ ipcMain.handle('agent:isInitialized', async () => {
 })
 
 // Agent 消息历史
-ipcMain.handle('agent:getHistory', async () => {
+ipcMain.handle('agent:getHistory', async (_event, workspaceDir?: string) => {
   try {
-    if (!agentManager) {
-      return { success: false, error: 'Agent not initialized' }
+    const agent = workspaceDir ? agentRegistry.get(workspaceDir) : null
+    if (!agent) {
+      return { success: false, error: 'Agent not initialized for this workspace' }
     }
 
     // 返回持久化 Pi 会话中的可展示历史（跨重启恢复）
-    const history = typeof agentManager.getSessionMessages === 'function'
-      ? agentManager.getSessionMessages()
-      : agentManager.getMessageHistory()
+    const history = typeof agent.getSessionMessages === 'function'
+      ? agent.getSessionMessages()
+      : agent.getMessageHistory?.()
     return { success: true, history }
   } catch (error) {
     return {
@@ -734,12 +753,11 @@ ipcMain.handle('agent:getHistory', async () => {
 })
 
 // Agent 清理
-ipcMain.handle('agent:dispose', async () => {
+ipcMain.handle('agent:dispose', async (_event, workspaceDir?: string) => {
   try {
-    if (agentManager) {
-      await agentManager.dispose()
-      agentManager = null
-      console.log('[Main] Agent disposed')
+    if (workspaceDir) {
+      await agentRegistry.dispose(workspaceDir)
+      console.log('[Main] Agent disposed:', workspaceDir)
     }
     return { success: true }
   } catch (error) {

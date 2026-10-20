@@ -9,7 +9,7 @@ beforeEach(() => {
   useEditorStore.getState().reset()
   useChatStore.getState().reset()
   useToastStore.setState({ messages: [] })
-  useWorkspaceStore.setState({ workspacePath: null, recentWorkspaces: [] })
+  useWorkspaceStore.setState({ workspacePath: null, openWorkspaces: [], recentWorkspaces: [] })
   useDiffStore.getState().clearDiff()
 })
 
@@ -158,6 +158,36 @@ describe('workspaceStore', () => {
     useWorkspaceStore.getState().setRecentWorkspaces(['/tmp/project'])
     expect(useWorkspaceStore.getState().workspacePath).toBe('/tmp/project')
     expect(useWorkspaceStore.getState().recentWorkspaces).toEqual(['/tmp/project'])
+  })
+
+  it('opens multiple workspaces without duplicating entries', () => {
+    useWorkspaceStore.getState().openWorkspace('/tmp/a')
+    useWorkspaceStore.getState().openWorkspace('/tmp/b')
+    useWorkspaceStore.getState().openWorkspace('/tmp/a')
+
+    expect(useWorkspaceStore.getState().openWorkspaces).toEqual(['/tmp/a', '/tmp/b'])
+    expect(useWorkspaceStore.getState().workspacePath).toBe('/tmp/a')
+  })
+
+  it('switches back to the previous workspace when the current tab closes', () => {
+    useWorkspaceStore.getState().openWorkspace('/tmp/a')
+    useWorkspaceStore.getState().openWorkspace('/tmp/b')
+
+    expect(useWorkspaceStore.getState().closeWorkspace('/tmp/b')).toBe('/tmp/a')
+    expect(useWorkspaceStore.getState().workspacePath).toBe('/tmp/a')
+    expect(useWorkspaceStore.getState().openWorkspaces).toEqual(['/tmp/a'])
+
+    expect(useWorkspaceStore.getState().closeWorkspace('/tmp/a')).toBeNull()
+    expect(useWorkspaceStore.getState().workspacePath).toBeNull()
+    expect(useWorkspaceStore.getState().openWorkspaces).toEqual([])
+  })
+
+  it('keeps the current workspace when another tab closes', () => {
+    useWorkspaceStore.getState().openWorkspace('/tmp/a')
+    useWorkspaceStore.getState().openWorkspace('/tmp/b')
+
+    expect(useWorkspaceStore.getState().closeWorkspace('/tmp/a')).toBe('/tmp/b')
+    expect(useWorkspaceStore.getState().workspacePath).toBe('/tmp/b')
   })
 })
 

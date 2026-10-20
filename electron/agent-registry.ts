@@ -1,0 +1,80 @@
+/**
+ * 工作区级 Agent 注册表。
+ *
+ * 每个打开的工作区持有独立的 AgentManager 实例；配置未变化时复用，
+ * 配置变化或工作区关闭时释放。
+ */
+export interface AgentChatOutcome {
+  success: boolean
+  response?: string
+  error?: string
+  edits?: unknown[]
+}
+
+export interface RegisteredAgent {
+  initialize: (config: unknown) => Promise<{ success: boolean; error?: string }>
+  chat: (
+    message: string,
+    options?: { onTextDelta?: (delta: string) => void }
+  ) => Promise<AgentChatOutcome>
+  dispose: () => Promise<void> | void
+  isInitialized: () => boolean
+  getSessionMessages?: () => unknown
+  getMessageHistory?: () => unknown
+}
+
+interface Entry {
+  agent: RegisteredAgent
+  configKey: string
+}
+
+export class AgentRegistry {
+  private entries = new Map<string, Entry>()
+
+  /** 该工作区是否已有同配置且已初始化的 Agent */
+  shouldReuse(workspaceDir: string, configKey: string): boolean {
+    const entry = this.entries.get(workspaceDir)
+    return Boolean(entry && entry.configKey === configKey && entry.agent.isInitialized())
+  }
+
+  get(workspaceDir: string): RegisteredAgent | null {
+    return this.entries.get(workspaceDir)?.agent ?? null
+  }
+
+  /** 登记新 Agent；若该工作区已有旧实例则先释放 */
+  async set(workspaceDir: string, agent: RegisteredAgent, configKey: string): Promise<void> {
+    const existing = this.entries.get(workspaceDir)
+    if (existing) {
+      try {
+        await existing.agent.dispose()
+      } catch (error) {
+        console.warn('[Agent Registry] Failed to dispose previous agent:', error)
+      }
+    }
+    this.entries.set(workspaceDir, { agent, configKey })
+  }
+
+  async dispose(workspaceDir: string): Promise<void> {
+    const entry = this.entries.get(workspaceDir)
+    if (!entry) return
+    this.entries.delete(workspaceDir)
+    await entry.agent.dispose()
+  }
+
+  async disposeAll(): Promise<void> {
+    const entries = [...this.entries.values()]
+    this.entries.clear()
+    for (const entry of entries) {
+      try {
+        await entry.agent.dispose()
+      } catch (error) {
+        console.warn('[Agent Registry] Failed to dispose agent:', error)
+      }
+    }
+  }
+
+  /** 已登记的工作区数量（测试与诊断用） */
+  size(): number {
+    return this.entries.size
+  }
+}
