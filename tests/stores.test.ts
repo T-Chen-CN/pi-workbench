@@ -3,12 +3,14 @@ import { useEditorStore } from '../src/store/editorStore'
 import { useChatStore } from '../src/store/chatStore'
 import { useToastStore, toast } from '../src/store/toastStore'
 import { useWorkspaceStore } from '../src/store/workspaceStore'
+import { useDiffStore } from '../src/store/diffStore'
 
 beforeEach(() => {
   useEditorStore.getState().reset()
   useChatStore.getState().reset()
   useToastStore.setState({ messages: [] })
   useWorkspaceStore.setState({ workspacePath: null, recentWorkspaces: [] })
+  useDiffStore.getState().clearDiff()
 })
 
 describe('editorStore', () => {
@@ -124,5 +126,53 @@ describe('workspaceStore', () => {
     useWorkspaceStore.getState().setRecentWorkspaces(['/tmp/project'])
     expect(useWorkspaceStore.getState().workspacePath).toBe('/tmp/project')
     expect(useWorkspaceStore.getState().recentWorkspaces).toEqual(['/tmp/project'])
+  })
+})
+
+describe('diffStore review queue', () => {
+  const edits = [
+    { path: '/tmp/a.ts', oldContent: 'a0', newContent: 'a1' },
+    { path: '/tmp/b.ts', oldContent: 'b0', newContent: 'b1' },
+  ]
+
+  it('opens a merged review queue', () => {
+    useDiffStore.getState().openEdits([
+      ...edits,
+      { path: '/tmp/a.ts', oldContent: 'a1', newContent: 'a2' },
+    ])
+
+    const state = useDiffStore.getState()
+    expect(state.isOpen).toBe(true)
+    expect(state.currentIndex).toBe(0)
+    expect(state.edits).toEqual([
+      { path: '/tmp/a.ts', oldContent: 'a0', newContent: 'a2' },
+      { path: '/tmp/b.ts', oldContent: 'b0', newContent: 'b1' },
+    ])
+  })
+
+  it('clamps navigation to the queue bounds', () => {
+    useDiffStore.getState().openEdits(edits)
+    useDiffStore.getState().setCurrentIndex(5)
+    expect(useDiffStore.getState().currentIndex).toBe(1)
+    useDiffStore.getState().setCurrentIndex(-3)
+    expect(useDiffStore.getState().currentIndex).toBe(0)
+  })
+
+  it('removes edits and closes when the queue is empty', () => {
+    useDiffStore.getState().openEdits(edits)
+    useDiffStore.getState().setCurrentIndex(1)
+
+    useDiffStore.getState().removeEdit('/tmp/b.ts')
+    expect(useDiffStore.getState().edits).toHaveLength(1)
+    expect(useDiffStore.getState().currentIndex).toBe(0)
+
+    useDiffStore.getState().removeEdit('/tmp/a.ts')
+    expect(useDiffStore.getState().edits).toEqual([])
+    expect(useDiffStore.getState().isOpen).toBe(false)
+  })
+
+  it('does not open an empty review queue', () => {
+    useDiffStore.getState().openEdits([])
+    expect(useDiffStore.getState().isOpen).toBe(false)
   })
 })
