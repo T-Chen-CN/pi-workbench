@@ -187,8 +187,46 @@ function devAgentBridge(): Plugin {
   }
 }
 
+/**
+ * 仅生产构建注入 CSP。
+ *
+ * 开发模式需要 Vite HMR 的内联脚本和 WebSocket，因此不在 dev 下启用。
+ * style 允许 inline：Monaco 会在运行时注入 <style>；
+ * worker 允许 blob：Monaco 的语言 worker 通过 Blob 创建。
+ */
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
+  "img-src 'self' data:",
+  "worker-src 'self' blob:",
+  "connect-src 'self' http: https:",
+  "object-src 'none'",
+  "base-uri 'self'",
+].join('; ')
+
+function contentSecurityPolicy(): Plugin {
+  return {
+    name: 'pi-workbench-csp',
+    apply: 'build',
+    transformIndexHtml() {
+      return [
+        {
+          tag: 'meta',
+          attrs: {
+            'http-equiv': 'Content-Security-Policy',
+            content: CONTENT_SECURITY_POLICY,
+          },
+          injectTo: 'head-prepend',
+        },
+      ]
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), devModelsProxy(), devAgentBridge()],
+  plugins: [react(), devModelsProxy(), devAgentBridge(), contentSecurityPolicy()],
   root: 'src',  // 设置根目录为 src
   resolve: {
     alias: {
