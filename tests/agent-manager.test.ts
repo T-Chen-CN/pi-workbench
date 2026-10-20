@@ -146,16 +146,6 @@ describe('AgentManager initialization', () => {
     expect(process.env.ANTHROPIC_API_KEY).toBe('sk-ant')
   })
 
-  it('writes the workspace temperature into models.json', async () => {
-    const session = createFakeSession()
-    primeSdk(session)
-    await manager.initialize(makeConfig({ temperature: 0.3 }))
-
-    const raw = await fs.readFile(path.join(agentDir, 'models.json'), 'utf-8')
-    const parsed = JSON.parse(raw)
-    expect(parsed.providers['pi-workbench'].models[0].samplingParams.temperature).toBe(0.3)
-  })
-
   it('defaults agentDir to the workspace .pi-workbench directory', async () => {
     primeSdk(createFakeSession())
 

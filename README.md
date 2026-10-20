@@ -22,7 +22,7 @@ Lightweight desktop code editor with Pi Agent integration, built with Electron +
 - **Model discovery** — fetch the real model list from the provider and pick one
 - **Secure config** — API keys encrypted at rest with Electron `safeStorage`
 - **Session persistence** — conversations resume across restarts per workspace
-- **Portable** — all data lives next to the executable (`config/`, `cache/`, `data/`, `logs/`)
+- **Self-contained data** — all data lives next to the executable (`config/`, `cache/`, `data/`, `logs/`)
 - **Bilingual UI** — Chinese / English
 
 ---
@@ -68,7 +68,7 @@ npm run package:mac
 npm run package:linux
 ```
 
-Output: `release/` — Windows builds produce an NSIS installer and a portable `.exe`.
+Output: `release/` — Windows builds produce an NSIS installer.
 See [BUILD_AND_PACKAGE.md](docs/guides/BUILD_AND_PACKAGE.md).
 
 ---
@@ -103,7 +103,7 @@ Detailed architecture: [docs/architecture/PROJECT_STRUCTURE.md](docs/architectur
 
 ---
 
-## Data locations (portable)
+## Data locations (self-contained)
 
 ```
 {appDir}/config/    settings.json, api-config.json (encrypted key)

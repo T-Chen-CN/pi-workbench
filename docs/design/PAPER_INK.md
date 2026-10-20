@@ -567,7 +567,7 @@ grep -rnE "text-gray-|bg-gray-|border-gray-|dark:" src/components src/App.tsx
 |---|---|
 | `npm run type-check` | 通过 |
 | `npm run lint` | 通过 |
-| `npm test` | 20 个文件 / 189 个用例通过 |
+| `npm test` | 20 个文件 / 188 个用例通过 |
 | `npm run build:renderer` / `build:main` | 通过 |
 | 旧调色板类与 `dark:` 变体 | 0 处 |
 | 1024 / 1440 宽度 | 无横向溢出 |

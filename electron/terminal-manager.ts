@@ -52,8 +52,6 @@ interface TerminalEntry {
   id: string
   workspaceDir: string
   pty: PtyProcess
-  /** 最近输出（用于 Agent 读取 / 诊断） */
-  buffer: string
   /** 尚未写入日志文件的内容 */
   pending: string
   logPath: string | null
@@ -61,7 +59,6 @@ interface TerminalEntry {
   logBytes: number
 }
 
-const MAX_BUFFER_CHARS = 200_000
 const FLUSH_DELAY_MS = 500
 const MAX_LOG_BYTES = 5 * 1024 * 1024
 /** 终端子进程不应继承 Agent 的供应商密钥 */
@@ -123,7 +120,6 @@ export class TerminalManager {
         id,
         workspaceDir,
         pty,
-        buffer: '',
         pending: '',
         logPath,
         logBytes: 0,
@@ -151,7 +147,6 @@ export class TerminalManager {
       }
 
       pty.onData((data) => {
-        entry.buffer = (entry.buffer + data).slice(-MAX_BUFFER_CHARS)
         entry.pending += data
         this.scheduleFlush(entry)
         this.options.onData?.(id, data)
@@ -223,10 +218,6 @@ export class TerminalManager {
     this.clearFlushTimer(id)
     this.flush(entry)
     return true
-  }
-
-  getRecentOutput(id: string): string {
-    return this.terminals.get(id)?.buffer ?? ''
   }
 
   private scheduleFlush(entry: TerminalEntry): void {

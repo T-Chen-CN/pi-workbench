@@ -95,7 +95,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('terminal:resize', id, cols, rows),
   terminalClose: (id: string) => ipcRenderer.invoke('terminal:close', id),
   terminalFlush: (id: string) => ipcRenderer.invoke('terminal:flush', id),
-  terminalGetRecentOutput: (id: string) => ipcRenderer.invoke('terminal:getRecentOutput', id),
   onTerminalData: (callback: (payload: { id: string; data: string }) => void) => {
     const listener = (_event: unknown, payload: { id: string; data: string }) => callback(payload)
     ipcRenderer.on('terminal:data', listener)

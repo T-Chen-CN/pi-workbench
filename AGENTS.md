@@ -349,10 +349,6 @@ async function initWorkspaceConfig(workspacePath: string) {
     const defaultConfig = {
       version: '1.0',
       enabledPlugins: [],
-      agentConfig: {
-        model: 'claude-3-5-sonnet',
-        temperature: 0.7
-      }
     }
     await fs.writeFile(configPath, JSON.stringify(defaultConfig, null, 2))
   }

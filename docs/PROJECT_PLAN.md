@@ -339,6 +339,7 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 
 ### ⏳ Phase 6：优化与完善（持续）
 
+- [x] Monaco 懒加载（欢迎页/首屏不再加载编辑器 chunk，打开工作区时按需加载）
 - [ ] 性能（大文件、大项目、虚拟滚动；Monaco 首屏块仍较大）
 - [x] 构建分包（Monaco / React / vendor 独立 chunk）
 - [x] 撤销/重做（Monaco 每个文件独立 model，撤销栈按文件隔离）
@@ -350,7 +351,7 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 - [x] 渲染层测试（jsdom + React Testing Library：编辑器创建 / 自动保存）
 - [x] 自动更新（electron-updater，打包版本可用）
 - [x] 渲染进程日志（`logs/renderer.log`）
-- [x] P3 体验收尾（Toast 动画、快捷键文案、编辑器/终端主题 token 化、应用内对话框、自动保存与工作区配置 UI、插件重复 id 与配置竞争修复）
+- [x] P3 体验收尾（Toast 动画、快捷键文案、编辑器/终端主题 token 化、应用内对话框、自动保存设置、插件重复 id 与配置竞争修复）
 - [x] 后端可靠性加固（原子写配置、可信路径、Agent/Fleet 中止与恢复、按工作区监听）
 - [x] 测试覆盖率提升（store / logger / AgentManager / IPC / 终端 / 插件 / Fleet / 渲染组件）
 
@@ -379,7 +380,7 @@ npm run type-check   # TypeScript 严格模式
 npm test             # Vitest（store / diff / logger / AgentManager / IPC / 终端 / 插件 / Fleet）
 npm run lint         # ESLint + react-hooks
 npm run build        # renderer → bridge → main（顺序不可颠倒）
-npm run package:win  # NSIS + portable
+npm run package:win  # NSIS 安装包
 ```
 
 - 构建顺序：**桥接层必须先于主进程**（主进程引用 `pi-bridge/dist` 类型）
@@ -392,7 +393,7 @@ npm run package:win  # NSIS + portable
 
 ### 短期（1 个月内）
 
-- 发布可用的 Windows 安装包（NSIS + portable）
+- 发布可用的 Windows 安装包（NSIS）
 - Phase 2-5 已全部完成
 
 ### 中期（3 个月内）

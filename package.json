@@ -99,8 +99,7 @@
     ],
     "win": {
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ],
       "icon": "app-icon.ico"
     },
@@ -113,9 +112,6 @@
       "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,
       "license": "LICENSE"
-    },
-    "portable": {
-      "artifactName": "${productName}-${version}-portable.${ext}"
     },
     "mac": {
       "target": "dmg",

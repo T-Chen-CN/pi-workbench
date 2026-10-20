@@ -202,24 +202,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     toast.success(t('terminalAttached'))
   }
 
-  const copyRecentOutput = async () => {
-    const id = terminalIdRef.current
-    if (!id) return
-    const result = await api.terminalGetRecentOutput(id)
-    const text = result.success && typeof result.output === 'string' ? result.output : ''
-    if (!text.trim()) {
-      toast.error(t('terminalOutputUnavailable'))
-      return
-    }
-    try {
-      await navigator.clipboard.writeText(text)
-      toast.success(t('terminalOutputCopied'))
-    } catch (error) {
-      console.error('Failed to copy terminal output:', error)
-      toast.error(t('terminalOutputCopyFailed'))
-    }
-  }
-
   return (
     <div
       className={
@@ -243,14 +225,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             className="font-mono text-[9px] text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
           >
             {t('sendTerminalOutput')}
-          </button>
-          <button
-            type="button"
-            disabled={status !== 'ready'}
-            onClick={() => void copyRecentOutput()}
-            className="font-mono text-[9px] text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
-          >
-            {t('copyTerminalOutput')}
           </button>
           <button
             type="button"

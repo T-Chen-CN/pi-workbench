@@ -16,21 +16,6 @@ export const DialogHost: React.FC = () => {
     }
   }, [current])
 
-  useEffect(() => {
-    if (!current) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        close(current.kind === 'confirm' ? false : null)
-      } else if (event.key === 'Enter') {
-        event.preventDefault()
-        close(current.kind === 'confirm' ? true : value)
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [current, value, close])
-
   if (!current) return null
 
   const { kind, options } = current
@@ -49,7 +34,7 @@ export const DialogHost: React.FC = () => {
       closeLabel={t('close')}
       footer={
         <>
-          <Button variant="ghost" onClick={cancel}>
+          <Button variant="ghost" onClick={cancel} autoFocus={isConfirm}>
             {options.cancelLabel ?? t('cancel')}
           </Button>
           <Button variant={danger ? 'danger' : 'primary'} onClick={confirm}>

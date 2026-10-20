@@ -55,7 +55,6 @@ export interface ElectronAPI {
   terminalResize: (id: string, cols: number, rows: number) => Promise<TerminalResult>
   terminalClose: (id: string) => Promise<TerminalResult>
   terminalFlush: (id: string) => Promise<TerminalResult>
-  terminalGetRecentOutput: (id: string) => Promise<TerminalOutputResult>
   onTerminalData: (callback: (payload: { id: string; data: string }) => void) => () => void
   onTerminalExit: (callback: (payload: { id: string; exitCode: number }) => void) => () => void
 
@@ -163,12 +162,7 @@ export interface GetWorkspaceConfigResult {
   config?: {
     version: string
     enabledPlugins: string[]
-    agentConfig: {
-      model: string
-      temperature: number
-      [key: string]: any
-    }
-    [key: string]: any
+    [key: string]: unknown
   }
   error?: string
 }
@@ -247,12 +241,6 @@ export interface TerminalCreateResult {
 
 export interface TerminalResult {
   success: boolean
-  error?: string
-}
-
-export interface TerminalOutputResult {
-  success: boolean
-  output: string
   error?: string
 }
 

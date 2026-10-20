@@ -362,7 +362,6 @@ describe('workspace lifecycle handlers', () => {
     expect(config).toEqual({
       version: '1.0',
       enabledPlugins: [],
-      agentConfig: { temperature: 0.7 },
     })
   })
 
@@ -386,12 +385,12 @@ describe('workspace lifecycle handlers', () => {
 
   it('saves workspace config while preserving plugin-owned fields', async () => {
     await call('workspace:init', workDir)
-    const config = { version: '1.1', enabledPlugins: ['git'], agentConfig: { temperature: 0.2 } }
+    const config = { version: '1.1', enabledPlugins: ['git'], notes: 'custom' }
     const expected = {
       version: '1.1',
       // 插件字段由 PluginManager 独占，保存普通配置时以磁盘上的值为准
       enabledPlugins: [],
-      agentConfig: { temperature: 0.2 },
+      notes: 'custom',
     }
 
     await expect(call('workspace:saveConfig', workDir, config)).resolves.toMatchObject({

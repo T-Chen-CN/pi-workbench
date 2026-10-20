@@ -134,7 +134,7 @@ describe('TerminalManager', () => {
     expect(ptys[1].sized).toEqual([[100, 40]])
   })
 
-  it('reports output and keeps a bounded tail', () => {
+  it('reports output to the renderer', () => {
     const onData = vi.fn()
     makeManager({ onData })
     const id = manager.create(tmpDir, 80, 24).id as string
@@ -144,7 +144,6 @@ describe('TerminalManager', () => {
 
     expect(onData).toHaveBeenCalledWith(id, 'hello ')
     expect(onData).toHaveBeenCalledWith(id, 'world')
-    expect(manager.getRecentOutput(id)).toBe('hello world')
   })
 
   it('cleans up when the process exits', () => {
@@ -155,7 +154,6 @@ describe('TerminalManager', () => {
     ptys[0].emitExit(0)
 
     expect(onExit).toHaveBeenCalledWith(id, 0)
-    expect(manager.getRecentOutput(id)).toBe('')
     expect(manager.write(id, 'x')).toBe(false)
   })
 

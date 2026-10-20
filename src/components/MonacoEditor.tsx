@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import '../monacoEnvironment'
 import * as monaco from 'monaco-editor'
 import { FileCode, Loader2, X } from 'lucide-react'
 import { useEditorStore } from '../store/editorStore'
@@ -102,6 +103,19 @@ export const MonacoEditor: React.FC = () => {
   // 程序化 setValue 时抑制内容变化回调，避免误标脏 + 自动保存回环
   const suppressChangeRef = useRef(false)
   const [editorReady, setEditorReady] = useState(false)
+
+  const clearFileTimers = useCallback((filePath: string): void => {
+    const pendingSave = saveTimersRef.current.get(filePath)
+    if (pendingSave) {
+      clearTimeout(pendingSave)
+      saveTimersRef.current.delete(filePath)
+    }
+    const pendingDraft = draftTimersRef.current.get(filePath)
+    if (pendingDraft) {
+      clearTimeout(pendingDraft)
+      draftTimersRef.current.delete(filePath)
+    }
+  }, [])
 
   // 在创建编辑器前注册主题（颜色从 Paper & Ink 的 CSS token 读取）
   useLayoutEffect(() => {
@@ -239,6 +253,11 @@ export const MonacoEditor: React.FC = () => {
 
       const existsResult = await api.exists(payload.path)
       if (existsResult.success && existsResult.exists === false) {
+        clearFileTimers(payload.path)
+        const workspacePath = useWorkspaceStore.getState().workspacePath
+        if (workspacePath) {
+          void api.draftDelete(workspacePath, payload.path).catch(() => undefined)
+        }
         state.removeOpenFile(payload.path)
         toast.info(t('fileRemoved', { name: target.name }))
         return
@@ -254,7 +273,7 @@ export const MonacoEditor: React.FC = () => {
     })
 
     return unsubscribe
-  }, [t])
+  }, [clearFileTimers, t])
 
   const saveFile = useCallback(
     async (pathOverride?: string) => {
@@ -458,16 +477,7 @@ export const MonacoEditor: React.FC = () => {
                   }
 
                   // 取消该文件所有待触发的保存/草稿计时器
-                  const pendingSave = saveTimersRef.current.get(file.path)
-                  if (pendingSave) {
-                    clearTimeout(pendingSave)
-                    saveTimersRef.current.delete(file.path)
-                  }
-                  const pendingDraft = draftTimersRef.current.get(file.path)
-                  if (pendingDraft) {
-                    clearTimeout(pendingDraft)
-                    draftTimersRef.current.delete(file.path)
-                  }
+                  clearFileTimers(file.path)
 
                   const workspacePath = useWorkspaceStore.getState().workspacePath
                   if (workspacePath) {

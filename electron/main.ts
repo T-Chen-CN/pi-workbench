@@ -269,10 +269,7 @@ const fleetManager = new FleetManager({
 })
 
 // 便携式架构：获取应用目录
-function getAppDir(): string {  // electron-builder portable：应用从 %TEMP% 解压目录运行，真实目录由环境变量提供
-  if (process.env.PORTABLE_EXECUTABLE_DIR) {
-    return process.env.PORTABLE_EXECUTABLE_DIR
-  }
+function getAppDir(): string {
   // AppImage：可执行文件位于只读挂载点，数据放在 .AppImage 文件旁边
   if (process.env.APPIMAGE) {
     return path.dirname(process.env.APPIMAGE)
@@ -772,11 +769,6 @@ handleIpc('terminal:flush', async (_event, id: string) => ({
   success: terminalManager.flushNow(id),
 }))
 
-handleIpc('terminal:getRecentOutput', async (_event, id: string) => ({
-  success: true,
-  output: terminalManager.getRecentOutput(id),
-}))
-
 // ---- 工作台插件 ----
 
 handleIpc('plugins:list', async (_event, workspaceDir: string) => {
@@ -1125,10 +1117,6 @@ handleIpc('workspace:init', async (_event, workspacePath: string) => {
       const defaultConfig = {
         version: '1.0',
         enabledPlugins: [],
-        agentConfig: {
-          // 模型由应用级 API 配置决定，工作区不再写死默认模型
-          temperature: 0.7
-        }
       }
       await writeJsonAtomic(configPath, defaultConfig)
     }
@@ -1481,13 +1469,12 @@ function agentConfigKey(apiConfig: {
   apiUrl: string
   apiKey: string
   selectedModel: string
-}, temperature?: number): string {
+}): string {
   return JSON.stringify({
     provider: apiConfig.provider,
     apiUrl: apiConfig.apiUrl,
     selectedModel: apiConfig.selectedModel,
     apiKey: apiConfig.apiKey,
-    temperature,
   })
 }
 
@@ -1522,17 +1509,7 @@ handleIpc('agent:initialize', async (_event, config: {
       }
     }
 
-    // 工作区级采样温度（可选）：只接受 0–2 的有限数值
-    const workspaceConfig = readJsonWithBackup<any>(
-      path.join(workspaceDir, '.pi-workbench', 'config.json')
-    ).data
-    const rawTemperature = Number(workspaceConfig?.agentConfig?.temperature)
-    const temperature =
-      Number.isFinite(rawTemperature) && rawTemperature >= 0 && rawTemperature <= 2
-        ? rawTemperature
-        : undefined
-
-    const configKey = agentConfigKey(apiConfig, temperature)
+    const configKey = agentConfigKey(apiConfig)
     if (agentRegistry.shouldReuse(workspaceDir, configKey)) {
       console.log('[Main] Reusing agent for workspace:', workspaceDir)
       return { success: true }
@@ -1547,7 +1524,6 @@ handleIpc('agent:initialize', async (_event, config: {
     const result = await agent.initialize({
       workspaceDir,
       agentDir: path.join(getAppDir(), 'data', 'agent'),
-      temperature,
       apiConfig
     })
 

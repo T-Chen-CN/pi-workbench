@@ -74,7 +74,7 @@ npm run build:bridge
 
 ```bash
 npm run package          # 当前平台
-npm run package:win      # Windows：NSIS 安装包 + portable 便携版
+npm run package:win      # Windows：NSIS 安装包
 npm run package:mac      # macOS (DMG)
 npm run package:linux    # Linux (AppImage)
 ```
@@ -84,7 +84,6 @@ npm run package:linux    # Linux (AppImage)
 Windows 产物：
 
 - `Pi Workbench Setup <version>.exe` — NSIS 安装包（per-user、可选安装路径）
-- `Pi Workbench-<version>-portable.exe` — 便携版单文件
 
 **构建配置只有一处**：`package.json` → `build` 字段（`electron-builder.yml` 已移除，避免两份配置互相覆盖）。
 
@@ -101,7 +100,7 @@ Windows 产物：
     "app-icon.ico"
   ],
   "win": {
-    "target": ["nsis", "portable"],
+    "target": ["nsis"],
     "icon": "app-icon.ico"      // Windows exe / 安装器需要 .ico
   }
 }
@@ -135,7 +134,7 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
 
 - 发布前先把 `package.json` 的 `version` 提升到目标版本。
 - 推送 `v*` 标签（例如 `git tag v0.1.1 && git push origin v0.1.1`）会触发
-  `.github/workflows/release.yml`：在 Windows runner 上构建 NSIS / portable 安装包并上传到 GitHub Release。
+  `.github/workflows/release.yml`：在 Windows runner 上构建 NSIS 安装包并上传到 GitHub Release。
 - 打包版本通过 `electron-updater` 检查 GitHub Release；CI 与打包冒烟使用
   `--publish never`，不会误发布。
 - 本地验证打包：`npx electron-builder --win --dir --publish never`。

@@ -119,13 +119,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           return
         }
 
-        // 主进程可能已持有该工作区的 Agent：先反映真实状态，再按配置初始化（可复用）
-        const existing = await piAgentAPI.isInitialized(workspacePath)
-        if (seq !== initSeqRef.current) return
-        if (existing.success && existing.initialized) {
-          setInitialized(true)
-        }
-
         // Initialize Agent with full API config
         const result = await piAgentAPI.initialize({
           workspaceDir: workspacePath,
@@ -181,15 +174,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     const handleConfigSaved = () => runInit()
     window.addEventListener('api-config-saved', handleConfigSaved)
 
-    // 工作区配置（如模型 temperature）变化后重建 Agent
-    window.addEventListener('workspace-config-changed', handleConfigSaved)
-
     return () => {
       // 使旧的初始化流程失效（含 React StrictMode 的双重挂载）
       // eslint-disable-next-line react-hooks/exhaustive-deps
       initSeqRef.current++
       window.removeEventListener('api-config-saved', handleConfigSaved)
-      window.removeEventListener('workspace-config-changed', handleConfigSaved)
       // 切换工作区时保留各工作区的 Agent 实例；关闭工作区由 App 显式 dispose
     }
   }, [workspacePath, addMessage, setError, setLoading, setMessages, t])

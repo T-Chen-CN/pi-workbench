@@ -370,7 +370,13 @@ export default defineConfig({
       output: {
         // Monaco 体积约 3.5MB，与业务代码分开，避免主 chunk 过大
         manualChunks(id) {
-          if (!id.includes('node_modules')) return
+          if (!id.includes('node_modules')) {
+            // Vite 的 preload helper 是虚拟模块，若落进 monaco chunk 会让入口静态依赖它
+            if (id.includes('vite/preload-helper') || id.includes('vite/preload')) {
+              return 'vendor'
+            }
+            return
+          }
           if (id.includes('monaco-editor')) return 'monaco'
           if (
             id.includes('react-markdown') ||

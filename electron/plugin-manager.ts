@@ -428,7 +428,7 @@ export class PluginManager {
     const config: Record<string, unknown> =
       existing.data && typeof existing.data === 'object' && !Array.isArray(existing.data)
         ? existing.data
-        : { version: '1.0', agentConfig: { temperature: 0.7 } }
+        : { version: '1.0' }
 
     config.enabledPlugins = ids
     config.pluginsConfigured = true

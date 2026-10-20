@@ -29,7 +29,6 @@ import type {
   FleetTask,
   TerminalCreateResult,
   TerminalResult,
-  TerminalOutputResult,
   UpdateCheckResult,
   UpdateActionResult,
   UpdateStatus,
@@ -167,10 +166,6 @@ const mockAPI = {
       config: {
         version: '1.0',
         enabledPlugins: [],
-        agentConfig: {
-          model: '',
-          temperature: 0.7
-        }
       }
     }
   },
@@ -276,11 +271,6 @@ const mockAPI = {
   terminalResize: async (): Promise<TerminalResult> => ({ success: false }),
   terminalClose: async (): Promise<TerminalResult> => ({ success: false }),
   terminalFlush: async (): Promise<TerminalResult> => ({ success: false }),
-  terminalGetRecentOutput: async (): Promise<TerminalOutputResult> => ({
-    success: false,
-    output: '',
-    error: 'Terminal is only available in the Electron app',
-  }),
   onTerminalData: (_callback: (payload: { id: string; data: string }) => void) => () => {},
   onTerminalExit: (_callback: (payload: { id: string; exitCode: number }) => void) => () => {},
 }
@@ -373,7 +363,6 @@ export const api = {
     electronAPI.terminalResize(id, cols, rows),
   terminalClose: (id: string) => electronAPI.terminalClose(id),
   terminalFlush: (id: string) => electronAPI.terminalFlush(id),
-  terminalGetRecentOutput: (id: string) => electronAPI.terminalGetRecentOutput(id),
   onTerminalData: (callback: (payload: { id: string; data: string }) => void) =>
     electronAPI.onTerminalData(callback),
   onTerminalExit: (callback: (payload: { id: string; exitCode: number }) => void) =>

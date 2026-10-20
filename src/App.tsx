@@ -1,4 +1,12 @@
-import { useState, useEffect, useCallback, useRef, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  lazy,
+  Suspense,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import {
   Bug,
   Folder,
@@ -11,7 +19,6 @@ import {
 import { api } from './api'
 import { piAgentAPI } from './api/piAgentAPI'
 import { FileExplorer } from './components/FileExplorer'
-import { MonacoEditor } from './components/MonacoEditor'
 import { ChatPanel } from './components/ChatPanel'
 import { DiffViewer } from './components/DiffViewer'
 import { IPCDebug } from './components/IPCDebug'
@@ -23,7 +30,7 @@ import { ToastContainer } from './components/Toast'
 import { DialogHost } from './components/DialogHost'
 import { WelcomeScreen } from './components/WelcomeScreen'
 import { WindowControls } from './components/WindowControls'
-import { Button, IconButton, Modal } from './components/ui'
+import { Button, IconButton, Modal, Spinner } from './components/ui'
 import { useToastStore, toast } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
 import { useThemeStore, useResolvedTheme, type ThemeMode } from './store/themeStore'
@@ -35,6 +42,10 @@ import { confirmDialog } from './store/dialogStore'
 import { useSettingsStore } from './store/settingsStore'
 import { localizeError } from './i18n/errors'
 import { commandPaletteShortcut } from './utils/shortcuts'
+
+const MonacoEditor = lazy(() =>
+  import('./components/MonacoEditor').then((module) => ({ default: module.MonacoEditor }))
+)
 
 const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 420
@@ -540,7 +551,15 @@ export default function App() {
           )}
 
           <section className="flex min-w-0 flex-1 flex-col">
-            <MonacoEditor />
+            <Suspense
+              fallback={
+                <div className="flex min-h-0 flex-1 items-center justify-center bg-panel">
+                  <Spinner size={14} />
+                </div>
+              }
+            >
+              <MonacoEditor />
+            </Suspense>
             <TerminalPanel
               key={workspace}
               workspacePath={workspace}

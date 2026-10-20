@@ -118,7 +118,8 @@
 - ✅ 2026-10-21 Agent / Fleet：硬超时与 abort 宽限、dispose 前中止、本轮消息判定、token 用量统计、Fleet queued 恢复与 UUID 任务 id
 - ✅ 2026-10-21 Phase 6 功能：渲染进程日志、自动更新（electron-updater）、崩溃恢复草稿、Monaco 每文件 model（撤销栈隔离）、Web dev 桥按工作区 + SSE 流式
 - ✅ 2026-10-21 工程：CI 增加 Windows 打包冒烟、新增 tag 发布工作流
-- ✅ 2026-10-21 P3 体验收尾：Toast 动画与时长、快捷键文案、Monaco/xterm 主题改为读取 CSS token、应用内确认/输入对话框、自动保存设置、工作区温度配置、终端最近输出复制、Fleet 详情刷新去重、插件重复 id 与配置写入保护、工作区打开/监听失败等交互细节
+- ✅ 2026-10-21 P3 体验收尾：Toast 动画与时长、快捷键文案、Monaco/xterm 主题改为读取 CSS token、应用内确认/输入对话框、自动保存设置、Fleet 详情刷新去重、插件重复 id 与配置写入保护、工作区打开/监听失败等交互细节
+- ✅ 2026-10-21 性能与发布：Monaco 编辑器改为懒加载（首屏不再加载 4.4MB chunk）；Windows 发布只保留 NSIS 安装包，自动更新继续走 electron-updater
 - ⏳ 剩余：大文件/虚拟滚动等性能优化
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
