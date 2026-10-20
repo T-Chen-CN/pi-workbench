@@ -3,7 +3,7 @@ import * as monaco from 'monaco-editor'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
-import { useToast } from './Toast'
+import { toast } from '../store/toastStore'
 
 export const MonacoEditor: React.FC = () => {
   const { t } = useI18nStore()
@@ -11,7 +11,6 @@ export const MonacoEditor: React.FC = () => {
   const monacoRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const { currentFile, openFiles, updateOpenFile, markDirty, markClean, removeOpenFile } = useEditorStore()
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const toast = useToast()
 
   // Initialize Monaco editor
   useEffect(() => {
@@ -79,30 +78,42 @@ export const MonacoEditor: React.FC = () => {
       // Auto-save after 2 seconds of inactivity
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
       saveTimeoutRef.current = setTimeout(() => {
-        saveFile()
+        void saveFile(currentFile.path)
       }, 2000)
     })
 
-    return () => subscription.dispose()
+    return () => {
+      subscription.dispose()
+      // 切换文件/卸载时取消未触发的自动保存，避免写入旧内容
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current)
+        saveTimeoutRef.current = null
+      }
+    }
   }, [currentFile, updateOpenFile, markDirty])
 
-  const saveFile = async () => {
-    if (!currentFile) return
+  const saveFile = async (pathOverride?: string) => {
+    const targetPath = pathOverride ?? currentFile?.path
+    if (!targetPath) return
+
+    // 从 store 读取最新内容，避免闭包中的旧快照导致写回旧内容
+    const latest = useEditorStore.getState().openFiles.find(file => file.path === targetPath)
+    if (!latest) return
 
     try {
-      updateOpenFile(currentFile.path, { isSaving: true })
-      const result = await api.writeFile(currentFile.path, currentFile.content)
+      updateOpenFile(targetPath, { isSaving: true })
+      const result = await api.writeFile(targetPath, latest.content)
       if (!result.success) {
         throw new Error(result.error || 'Failed to save file')
       }
-      markClean(currentFile.path)
-      updateOpenFile(currentFile.path, { isSaving: false })
-      toast.success(`已保存: ${currentFile.name}`, 2000)
+      markClean(targetPath)
+      updateOpenFile(targetPath, { isSaving: false })
+      toast.success(`已保存: ${latest.name}`, 2000)
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
       console.error('Failed to save file:', error)
       toast.error(`保存失败: ${errorMsg}`)
-      updateOpenFile(currentFile.path, { isSaving: false })
+      updateOpenFile(targetPath, { isSaving: false })
     }
   }
 

@@ -21,7 +21,7 @@ interface CreateFileDialogState {
   parentPath: string | null
 }
 
-export const FileExplorer: React.FC<{ workspacePath?: string }> = () => {
+export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePath }) => {
   const { t } = useI18nStore()
   const [tree, setTree] = useState<TreeNode[]>([])
   const [loading, setLoading] = useState(false)
@@ -33,27 +33,26 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = () => {
   })
   const { addOpenFile } = useEditorStore.getState()
 
-  // Initialize tree on mount
+  // Initialize tree when workspace changes
   useEffect(() => {
-    loadRootDirectory()
-  }, [])
+    if (workspacePath) {
+      loadRootDirectory(workspacePath)
+    }
+  }, [workspacePath])
 
-  const loadRootDirectory = async () => {
+  const loadRootDirectory = async (rootPath: string) => {
     try {
       setLoading(true)
       setError(null)
-      const result = await api.openDirectoryDialog()
-      if (!result.success || result.canceled || !result.path) {
-        setLoading(false)
-        return
-      }
-      const dirResult = await api.listDirectory(result.path)
+      const dirResult = await api.listDirectory(rootPath)
       if (dirResult.success && dirResult.items) {
-        const sortedFiles = dirResult.items.sort((a, b) => {
+        const sortedFiles = [...dirResult.items].sort((a, b) => {
           if (a.isDirectory !== b.isDirectory) return b.isDirectory ? -1 : 1
           return a.name.localeCompare(b.name)
         })
         setTree(sortedFiles as TreeNode[])
+      } else {
+        setError(dirResult.error || 'Failed to list workspace directory')
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
@@ -154,8 +153,16 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = () => {
     setCreateDialog({
       isOpen: true,
       fileName: '',
-      parentPath: tree.length > 0 ? tree[0].path : null,
+      // 默认在工作区根目录创建
+      parentPath: workspacePath ?? null,
     })
+  }
+
+  // 简单的跨平台路径拼接（渲染进程不能使用 Node 的 path 模块）
+  const joinPath = (dir: string, name: string): string => {
+    const trimmed = dir.replace(/[\\/]+$/, '')
+    const sep = trimmed.includes('\\') ? '\\' : '/'
+    return `${trimmed}${sep}${name}`
   }
 
   const handleCreateFile = async () => {
@@ -170,7 +177,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = () => {
     }
 
     try {
-      const filePath = `${createDialog.parentPath}/${createDialog.fileName}`
+      const filePath = joinPath(createDialog.parentPath, createDialog.fileName)
       const result = await api.writeFile(filePath, '')
       if (!result.success) {
         throw new Error(result.error || 'Failed to create file')
@@ -185,8 +192,10 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = () => {
         isSaving: false,
       })
 
-      // Refresh parent directory in tree
-      await refreshDirectory(createDialog.parentPath)
+      // Refresh the workspace tree
+      if (workspacePath) {
+        await loadRootDirectory(workspacePath)
+      }
 
       // Close dialog
       setCreateDialog({ isOpen: false, fileName: '', parentPath: null })
@@ -196,25 +205,6 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = () => {
       handleError(err, `Create file: ${createDialog.fileName}`, (msg) => console.error(msg))
       setError(errorMsg)
     }
-  }
-
-  const refreshDirectory = async (dirPath: string) => {
-    // Immutably update the tree by resetting the target directory
-    const updateNode = (nodes: TreeNode[]): TreeNode[] => {
-      return nodes.map(node => {
-        if (node.path === dirPath && node.isDirectory) {
-          // Reset this directory node
-          return { ...node, children: undefined, isExpanded: false }
-        }
-        if (node.children) {
-          // Recursively update children
-          return { ...node, children: updateNode(node.children) }
-        }
-        return node
-      })
-    }
-
-    setTree(updateNode(tree))
   }
 
   const renderNode = (node: TreeNode, depth: number = 0, visited = new Set<string>()) => {

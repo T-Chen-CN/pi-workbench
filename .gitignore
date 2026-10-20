@@ -2,7 +2,6 @@
 node_modules/
 .pnp
 .pnp.js
-package-lock.json
 yarn.lock
 pnpm-lock.yaml
 
@@ -48,6 +47,12 @@ Thumbs.db
 
 # Workspace
 .pi-workbench/
+
+# Runtime data (portable architecture) — may contain API keys
+/config/
+/cache/
+/data/
+/release/
 
 # Vite
 .vite/

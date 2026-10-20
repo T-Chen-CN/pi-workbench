@@ -7,14 +7,22 @@
 
 import {
   createAgentSession,
+  ModelRuntime,
   type AgentSession,
   type CreateAgentSessionResult,
 } from '@earendil-works/pi-coding-agent'
 import * as path from 'path'
-import * as os from 'os'
+import * as fs from 'fs/promises'
+
+/** 写入 models.json 的自定义供应商 ID */
+const WORKBENCH_PROVIDER_ID = 'pi-workbench'
+/** models.json 中引用的环境变量名（避免把 API Key 写进磁盘） */
+const API_KEY_ENV = 'PI_WORKBENCH_API_KEY'
 
 export interface AgentConfig {
   workspaceDir: string
+  /** Agent 数据目录（默认为 {workspace}/.pi-workbench/agent） */
+  agentDir?: string
   apiConfig: {
     provider: string
     apiUrl: string
@@ -44,6 +52,32 @@ export class AgentManager {
   private isProcessing = false
 
   /**
+   * 将用户配置的 URL / 模型写入 Pi 的 models.json，
+   * 这样任何 OpenAI 兼容端点（DeepSeek、中转站等）都能被 Pi Agent 使用。
+   * API Key 通过环境变量引用，不落盘。
+   */
+  private async writeModelsConfig(agentDir: string, config: AgentConfig): Promise<string> {
+    const { provider, apiUrl, selectedModel } = config.apiConfig
+
+    const modelsPath = path.join(agentDir, 'models.json')
+    const modelsConfig = {
+      $schema: 'https://pi.dev/schemas/models.schema.json',
+      providers: {
+        [WORKBENCH_PROVIDER_ID]: {
+          baseUrl: apiUrl.replace(/\/+$/, ''),
+          api: provider === 'anthropic' ? 'anthropic-messages' : 'openai-completions',
+          apiKey: `$${API_KEY_ENV}`,
+          models: [{ id: selectedModel }],
+        },
+      },
+    }
+
+    await fs.mkdir(agentDir, { recursive: true })
+    await fs.writeFile(modelsPath, JSON.stringify(modelsConfig, null, 2), 'utf-8')
+    return modelsPath
+  }
+
+  /**
    * 初始化 Agent 会话
    *
    * @param config Agent 配置
@@ -51,33 +85,65 @@ export class AgentManager {
    */
   async initialize(config: AgentConfig): Promise<{ success: boolean; error?: string }> {
     try {
+      const { provider, apiUrl, apiKey, selectedModel } = config.apiConfig
+
       console.log('[Agent Manager] Initializing agent...')
       console.log('[Agent Manager] Workspace:', config.workspaceDir)
-      console.log('[Agent Manager] Provider:', config.apiConfig.provider)
-      console.log('[Agent Manager] Model:', config.apiConfig.selectedModel)
+      console.log('[Agent Manager] Provider:', provider)
+      console.log('[Agent Manager] API URL:', apiUrl)
+      console.log('[Agent Manager] Model:', selectedModel)
 
       this.config = config
 
-      // 设置环境变量（Pi Agent 会从环境变量读取 API Key）
-      const providerKey = config.apiConfig.provider.toUpperCase()
-      process.env[`${providerKey}_API_KEY`] = config.apiConfig.apiKey
+      // 重新初始化时释放旧会话
+      if (this.session) {
+        try {
+          this.session.dispose()
+        } catch (error) {
+          console.warn('[Agent Manager] Failed to dispose previous session:', error)
+        }
+        this.session = null
+      }
 
-      // 创建 Pi Coding Agent 会话
-      // Pi Agent 自带 read/write/edit/bash 工具
+      const agentDir = config.agentDir || path.join(config.workspaceDir, '.pi-workbench', 'agent')
+      const modelsPath = await this.writeModelsConfig(agentDir, config)
+
+      // API Key 通过环境变量提供给 models.json（不写入磁盘）
+      process.env[API_KEY_ENV] = apiKey
+      // 原生供应商的环境变量兜底（custom 走 models.json）
+      if (provider === 'anthropic') {
+        process.env.ANTHROPIC_API_KEY = apiKey
+      } else if (provider === 'openai') {
+        process.env.OPENAI_API_KEY = apiKey
+      }
+
+      // 使用 models.json 构建运行时，并显式选中用户配置的模型
+      const modelRuntime = await ModelRuntime.create({
+        modelsPath,
+        authPath: path.join(agentDir, 'auth.json'),
+        refreshOnCreate: false,
+      })
+
+      const model = modelRuntime.getModel(WORKBENCH_PROVIDER_ID, selectedModel)
+      if (!model) {
+        return {
+          success: false,
+          error: `Model "${selectedModel}" not found. Please fetch models again in Settings.`,
+        }
+      }
+
+      // 创建 Pi Coding Agent 会话（自带 read/write/edit/bash 工具）
       const result: CreateAgentSessionResult = await createAgentSession({
-        // 工作目录
         cwd: config.workspaceDir,
-
-        // Agent 配置目录（可选，用于持久化设置和认证）
-        // 使用临时目录避免污染用户的 ~/.pi
-        agentDir: path.join(os.tmpdir(), 'pi-workbench-agent'),
+        agentDir,
+        modelRuntime,
+        model,
       })
 
       this.session = result.session
 
       console.log('[Agent Manager] Agent initialized successfully')
-      console.log('[Agent Manager] Using model:', config.apiConfig.selectedModel)
-      console.log('[Agent Manager] Available tools: read, write, edit, bash (built-in)')
+      console.log('[Agent Manager] Using model:', `${model.provider}/${model.id}`)
 
       return { success: true }
     } catch (error) {
@@ -126,28 +192,40 @@ export class AgentManager {
       // 发送用户消息并等待 Agent 完成
       await this.session.prompt(message)
 
-      // 等待 Agent 完成处理
-      await this.waitForCompletion()
-
       // 获取 Agent 的最新消息
       const messages = this.session.messages
-      let assistantResponse = ''
 
       // 从后往前查找最后一条 assistant 消息
+      let lastAssistant: any = null
       for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i]
-        if (msg.role === 'assistant') {
-          // 提取文本内容
-          if (typeof msg.content === 'string') {
-            assistantResponse = msg.content
-          } else if (Array.isArray(msg.content)) {
-            assistantResponse = msg.content
-              .filter((part: any) => part.type === 'text')
-              .map((part: any) => part.text)
-              .join('\n')
-          }
+        if (messages[i].role === 'assistant') {
+          lastAssistant = messages[i]
           break
         }
+      }
+
+      if (!lastAssistant) {
+        return { success: false, error: 'Agent did not produce a response.' }
+      }
+
+      // Pi 在请求失败时不会抛异常，而是把错误放在 stopReason/errorMessage 中
+      if (lastAssistant.stopReason === 'error') {
+        const detail = lastAssistant.errorMessage || 'Agent request failed'
+        console.error('[Agent Manager] Provider error:', detail)
+        return { success: false, error: detail }
+      }
+      if (lastAssistant.stopReason === 'aborted') {
+        return { success: false, error: 'Agent request was aborted.' }
+      }
+
+      let assistantResponse = ''
+      if (typeof lastAssistant.content === 'string') {
+        assistantResponse = lastAssistant.content
+      } else if (Array.isArray(lastAssistant.content)) {
+        assistantResponse = lastAssistant.content
+          .filter((part: any) => part.type === 'text')
+          .map((part: any) => part.text)
+          .join('\n')
       }
 
       if (!assistantResponse) {
@@ -183,34 +261,6 @@ export class AgentManager {
   }
 
   /**
-   * 等待 Agent 完成当前处理
-   *
-   * 简单的轮询实现，等待 isProcessing 状态变为 false
-   */
-  private async waitForCompletion(): Promise<void> {
-    // 给 Agent 一些时间开始处理
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    // 等待直到处理完成（最多等待 60 秒）
-    const startTime = Date.now()
-    const maxWaitTime = 60000 // 60 seconds
-
-    while (Date.now() - startTime < maxWaitTime) {
-      // 检查是否还有消息在处理
-      // Pi Agent 内部会更新 session.messages
-      // 简单策略：等待一段时间让 agent 完成
-      await new Promise(resolve => setTimeout(resolve, 1000))
-
-      // 如果消息列表已经有了 assistant 响应，认为完成了
-      const messages = this.session?.messages || []
-      const hasResponse = messages.some(m => m.role === 'assistant')
-      if (hasResponse) {
-        break
-      }
-    }
-  }
-
-  /**
    * 获取消息历史
    */
   getMessageHistory(): AgentMessage[] {
@@ -222,6 +272,7 @@ export class AgentManager {
    */
   async dispose() {
     if (this.session) {
+      this.session.dispose()
       this.session = null
     }
     this.config = null

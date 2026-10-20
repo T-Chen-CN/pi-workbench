@@ -4,7 +4,7 @@ Lightweight desktop code editor with Pi Agent integration, built with Electron +
 
 ## 技术栈
 
-- **桌面框架**: Electron 28
+- **桌面框架**: Electron 44
 - **前端**: React 19 + TypeScript
 - **编辑器**: Monaco Editor
 - **构建**: Vite 5
@@ -126,7 +126,7 @@ Pi Workbench/                    # 应用安装目录
 ├── resources/                  # 应用资源（只读）
 ├── config/                     # ⭐ 应用配置
 │   ├── settings.json          # 用户设置
-│   └── api-keys.json          # API Keys
+│   └── api-config.json        # API 配置（Key 加密）
 ├── cache/                      # ⭐ 缓存数据
 │   └── temp/                  # 临时文件
 ├── data/                       # ⭐ 持久化数据

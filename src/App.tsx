@@ -6,7 +6,8 @@ import { ChatPanel } from './components/ChatPanel'
 import { DiffViewer } from './components/DiffViewer'
 import { IPCDebug } from './components/IPCDebug'
 import { Settings } from './components/Settings'
-import { ToastContainer, useToast } from './components/Toast'
+import { ToastContainer } from './components/Toast'
+import { useToastStore } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
 
 export default function App() {
@@ -14,7 +15,15 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [showDebug, setShowDebug] = useState(import.meta.env.DEV)
   const [showSettings, setShowSettings] = useState(false)
-  const toast = useToast()
+  const toastMessages = useToastStore((state) => state.messages)
+  const removeToast = useToastStore((state) => state.remove)
+
+  // 允许子组件（如 ChatPanel）请求打开设置面板
+  useEffect(() => {
+    const openSettings = () => setShowSettings(true)
+    window.addEventListener('open-settings', openSettings)
+    return () => window.removeEventListener('open-settings', openSettings)
+  }, [])
   const { t, setLanguage, language } = useI18nStore()
 
   // 初始化语言为中文
@@ -44,7 +53,11 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-white dark:bg-[#1e1e1e]">
-      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <div className="fixed inset-0 z-40 bg-gray-900 overflow-auto">
+          <Settings onClose={() => setShowSettings(false)} />
+        </div>
+      )}
 
       {/* Header */}
       <header className="flex justify-between items-center px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#252526] flex-shrink-0 gap-4">
@@ -99,7 +112,7 @@ export default function App() {
         </div>
       )}
 
-      <ToastContainer messages={toast.messages} onClose={toast.remove} />
+      <ToastContainer messages={toastMessages} onClose={removeToast} />
       <DiffViewer />
 
       {/* Main Content */}
@@ -118,7 +131,7 @@ export default function App() {
 
             {/* Chat Section */}
             <aside className="bg-gray-50 dark:bg-[#252526] border-l border-gray-200 dark:border-gray-700 overflow-y-auto">
-              <ChatPanel />
+              <ChatPanel workspacePath={workspace} />
             </aside>
           </div>
         ) : (

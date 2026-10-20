@@ -6,6 +6,8 @@
  */
 export interface AgentConfig {
     workspaceDir: string;
+    /** Agent 数据目录（默认为 {workspace}/.pi-workbench/agent） */
+    agentDir?: string;
     apiConfig: {
         provider: string;
         apiUrl: string;
@@ -32,6 +34,12 @@ export declare class AgentManager {
     private messageHistory;
     private isProcessing;
     /**
+     * 将用户配置的 URL / 模型写入 Pi 的 models.json，
+     * 这样任何 OpenAI 兼容端点（DeepSeek、中转站等）都能被 Pi Agent 使用。
+     * API Key 通过环境变量引用，不落盘。
+     */
+    private writeModelsConfig;
+    /**
      * 初始化 Agent 会话
      *
      * @param config Agent 配置
@@ -52,12 +60,6 @@ export declare class AgentManager {
         response?: string;
         error?: string;
     }>;
-    /**
-     * 等待 Agent 完成当前处理
-     *
-     * 简单的轮询实现，等待 isProcessing 状态变为 false
-     */
-    private waitForCompletion;
     /**
      * 获取消息历史
      */

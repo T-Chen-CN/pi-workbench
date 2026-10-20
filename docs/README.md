@@ -96,7 +96,7 @@ npm run package:linux  # Linux
 
 ### 项目使用了哪些技术？
 
-- **桌面框架**: Electron 28
+- **桌面框架**: Electron 44
 - **前端**: React 19 + TypeScript
 - **编辑器**: Monaco Editor
 - **构建**: Vite 5

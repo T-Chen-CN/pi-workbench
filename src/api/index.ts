@@ -18,9 +18,12 @@ import type {
   ApiConfigGetResult,
   ApiConfigSaveResult,
   FetchModelsResult,
+  ApiProvider,
 } from '../types/electron'
 
 // Mock API for browser development
+const MOCK_CONFIG_KEY = 'pi-workbench-api-config'
+
 const mockAPI = {
   openDirectoryDialog: async (): Promise<OpenDirectoryResult> => {
     console.log('[Mock] openDirectoryDialog')
@@ -84,7 +87,7 @@ const mockAPI = {
         version: '1.0',
         enabledPlugins: [],
         agentConfig: {
-          model: 'claude-3-5-sonnet',
+          model: '',
           temperature: 0.7
         }
       }
@@ -94,8 +97,17 @@ const mockAPI = {
     console.log('[Mock] saveWorkspaceConfig:', workspacePath, config)
     return { success: true }
   },
+
   apiConfigGet: async (): Promise<ApiConfigGetResult> => {
     console.log('[Mock] apiConfigGet')
+    try {
+      const saved = localStorage.getItem(MOCK_CONFIG_KEY)
+      if (saved) {
+        return { success: true, config: JSON.parse(saved) }
+      }
+    } catch (error) {
+      console.warn('[Mock] Failed to read saved config:', error)
+    }
     return {
       success: true,
       config: {
@@ -109,18 +121,37 @@ const mockAPI = {
   },
   apiConfigSave: async (config: any): Promise<ApiConfigSaveResult> => {
     console.log('[Mock] apiConfigSave:', config.provider)
+    localStorage.setItem(MOCK_CONFIG_KEY, JSON.stringify(config))
     return { success: true }
   },
   apiConfigFetchModels: async (apiUrl: string, apiKey: string, provider: string): Promise<FetchModelsResult> => {
-    console.log('[Mock] apiConfigFetchModels:', provider)
-    return {
-      success: true,
-      models: []
+    console.log('[Mock] apiConfigFetchModels via dev proxy:', provider)
+    // 纯 Web 模式下走 Vite dev server 代理，真实请求供应商的 /models
+    try {
+      const response = await fetch(
+        `/__pi/fetch-models?apiUrl=${encodeURIComponent(apiUrl)}&provider=${encodeURIComponent(provider)}`,
+        { headers: { 'x-pi-api-key': apiKey } }
+      )
+      const result = await response.json()
+      return result as FetchModelsResult
+    } catch (error) {
+      return {
+        success: false,
+        models: [],
+        error: error instanceof Error ? error.message : String(error)
+      }
     }
   },
 }
 
 const electronAPI = window.electronAPI || mockAPI
+
+if (!window.electronAPI) {
+  console.warn(
+    '[API] window.electronAPI is undefined — falling back to mock API. ' +
+    'In Electron this usually means the preload script failed to load.'
+  )
+}
 
 export const api = {
   // File system operations
@@ -144,7 +175,7 @@ export const api = {
   // API Configuration management (portable architecture)
   apiConfigGet: () => electronAPI.apiConfigGet(),
   apiConfigSave: (config: any) => electronAPI.apiConfigSave(config),
-  apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: string) =>
+  apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: ApiProvider) =>
     electronAPI.apiConfigFetchModels(apiUrl, apiKey, provider),
 }
 

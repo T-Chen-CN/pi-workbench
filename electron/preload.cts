@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Pi Agent API
   agentInitialize: (config: {
     workspaceDir: string
+    agentDir?: string
     apiConfig: {
       provider: string
       apiUrl: string
@@ -40,4 +41,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: string) =>
     ipcRenderer.invoke('apiConfig:fetchModels', apiUrl, apiKey, provider),
 })
+
 

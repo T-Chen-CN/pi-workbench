@@ -1,218 +1,143 @@
 # Phase 1 完成报告：Pi Agent 真实集成
 
-**日期**: 2026-10-20  
-**状态**: ✅ 完成  
-**预计工作量**: 8-16 小时  
-**实际工作量**: ~4 小时
+**日期**: 2026-10-20
+**状态**: ✅ 完成
+**目标**: 用真实 Pi Agent 替换 Mock，打通"模型配置 → Agent 初始化 → 对话"的完整链路
 
 ---
 
-## 📋 实现内容
+## 📋 实际实现
 
-### 1. Pi Agent 依赖安装 ✅
+### 1. 依赖与环境
 
-已安装核心依赖：
 ```json
 {
-  "@earendil-works/pi-agent-core": "^0.1.0",
-  "@earendil-works/pi-ai": "^0.1.0",
-  "@earendil-works/pi-durable": "^0.1.0",
-  "crypto-js": "^4.2.0"
+  "@earendil-works/pi-coding-agent": "^1.3.0",
+  "@earendil-works/pi-ai": "^1.3.0"
 }
 ```
 
-### 2. Agent Manager 实现 ✅
+> 注：早期规划中的 `pi-agent-core` / `pi-durable` 并未使用，实际集成的是 `pi-coding-agent` SDK。
 
-**文件**: `pi-bridge/src/agent-manager.ts`
+**⚠️ Electron 必须 ≥ 39**：Pi SDK 要求 Node ≥ 22.19，而 Electron 28 内置 Node 18。
+本项目已升级到 **Electron 44.9.1（Node 24）** 与 electron-builder 26。
+（国内网络下载 Electron 二进制可依赖仓库内 `.npmrc` 中的 `electron_mirror` 配置。）
 
-**功能**:
-- Agent 初始化和生命周期管理
-- 与 Anthropic Claude API 集成
-- 基础工具集（read_file, write_file, edit_file, bash）
-- 通过 IPC 桥接文件系统操作
+### 2. AgentManager（`pi-bridge/src/agent-manager.ts`）
 
-**关键设计**:
-- Agent 运行在 Electron 主进程中（符合架构约束）
-- 所有文件操作通过 IPC 通道（安全隔离）
-- 支持多 LLM 提供商（anthropic, openai, google）
+- 运行在 **Electron 主进程**，与 `electron/main.ts` 同进程
+- `initialize(config)`：
+  - 将用户的 Provider / Base URL / 模型写入 `{appDir}/data/agent/models.json`
+  - API Key 以环境变量插值 `$PI_WORKBENCH_API_KEY` 引用，**不写入磁盘**
+  - 通过 `ModelRuntime` 解析出自定义 provider（`pi-workbench/<model>`）并显式选中
+  - `createAgentSession()` 创建会话，自带 read / write / edit / bash 工具
+- `chat(message)`：
+  - 调用 `session.prompt()` 并等待完成
+  - 读取最后一条 assistant 消息
+  - **正确透传供应商错误**（`stopReason: 'error'` 时的 `errorMessage`）
 
-### 3. API Key 安全管理 ✅
+### 3. 统一 API 配置（替代旧版多 API Key）
 
-**存储位置**: `{appDir}/config/api-keys.json`
+- 配置结构：`provider` + `apiUrl` + `apiKey` + `availableModels` + `selectedModel`
+- 存储位置：`{appDir}/config/api-config.json`
+- **API Key 加密**：Electron `safeStorage`（Windows DPAPI / macOS Keychain / Linux libsecret），存储格式 `enc:<base64>`；系统不支持时回退明文并告警
+- `apiConfig:fetchModels`：真实请求供应商 `/models` 端点
+  - Anthropic：`x-api-key` + `anthropic-version`
+  - OpenAI / 自定义：`Authorization: Bearer`
+  - URL 归一化、HTTP 错误透传、兼容 `data` / `models` / 数组三种返回格式
 
-**安全措施**:
-- 使用 AES 加密存储（crypto-js）
-- 便携式架构：存储在应用目录内
-- 不使用系统环境变量或 .env 文件
+### 4. Settings UI（`src/components/Settings.tsx`）
 
-**IPC API**:
-```typescript
-// 读取 API Keys
-electronAPI.apiKeysGet() 
-  → { success: boolean, apiKeys: Record<string, string> }
+- Provider 下拉（Anthropic / OpenAI / Custom）
+- API URL + API Key 输入
+- "Fetch Available Models" → 真实拉取并填入模型下拉
+- Save 后持久化，并通过 `api-config-saved` 事件通知 ChatPanel 重新初始化 Agent
+- 全量接入全局 Toast 反馈（成功 / 失败 / 错误详情）
 
-// 保存 API Keys
-electronAPI.apiKeysSave(apiKeys: Record<string, string>)
-  → { success: boolean, error?: string }
+### 5. ChatPanel（`src/components/ChatPanel.tsx`）
 
-// 删除 API Key
-electronAPI.apiKeysDelete(provider: string)
-  → { success: boolean, error?: string }
-```
+- 打开工作区后自动读取配置并初始化 Agent
+- 显示 Ready / Initializing 状态
+- 未配置时引导打开 Settings（事件驱动，不再是 alert 占位）
+- 初始化序号保护：避免 React StrictMode 双重挂载导致重复初始化
 
-### 4. Settings UI 更新 ✅
+### 6. IPC / preload
 
-**文件**: `src/components/Settings.tsx`
+- preload 以 **CommonJS**（`preload.cts` → `preload.cjs`）单独编译，兼容 sandbox
+- 主进程注册 `preload-error` 与开发自检日志，`window.electronAPI` 缺失不再静默
+- 开发模式自检确认：`window.electronAPI = object`，`apiConfigFetchModels = function`
 
-**新增功能**:
-- API Keys 配置界面（Anthropic, OpenAI, Google）
-- 显示/隐藏 API Keys
-- 输入验证和错误处理
-- Toast 通知
+### 7. 纯 Web 调试支持（仅开发环境）
 
-### 5. ChatPanel Agent 集成 ✅
+`vite.config.ts` 提供两个仅 `serve` 生效的中间件：
 
-**文件**: `src/components/ChatPanel.tsx`
+- `/__pi/fetch-models`：代浏览器请求供应商模型列表（规避 CORS）
+- `/__pi/agent/{init,chat,dispose}`：在 Vite 的 Node 进程里运行同一套 `AgentManager`
 
-**功能更新**:
-- 使用真实 Pi Agent API
-- Agent 初始化检查
-- 如果未配置 API Key，提示用户前往 Settings
-- 显示 Agent 状态（Ready/Initializing）
-- 流畅的消息历史和错误处理
-
-### 6. Pi Agent API 封装 ✅
-
-**文件**: `src/api/piAgentAPI.ts`
-
-**API 方法**:
-```typescript
-piAgentAPI.initialize(config: AgentInitConfig)
-  → { success: boolean, message?: string, error?: string }
-
-piAgentAPI.chat(message: string)
-  → { success: boolean, response?: string, error?: string }
-
-piAgentAPI.dispose()
-  → { success: boolean, message?: string, error?: string }
-```
-
-**特性**:
-- API Key 从安全存储自动加载
-- 优雅降级到 Mock（如果 electronAPI 不可用）
-- 统一的错误处理
+渲染进程 `piAgentAPI` 自动选择：Electron → IPC；Web dev → HTTP 桥接。
 
 ---
 
-## ✅ 验收标准达成
+## ✅ 验证结果
 
-- ✅ **能创建真实 Agent 实例**: `AgentManager` 完整实现
-- ✅ **能通过自然语言让 Agent 修改代码**: 支持 `read_file`, `write_file`, `edit_file` 工具
-- ✅ **修改正确显示在 Diff 查看器中**: 通过 IPC 返回 diff 内容
-- ✅ **API Keys 安全存储**: AES 加密，便携式位置
-- ✅ **符合便携式架构**: 所有数据在 `{appDir}/` 内
+| 验证项 | 结果 |
+|---|---|
+| `npm run type-check` | ✅ 通过 |
+| `npm run build`（renderer + main + preload + bridge） | ✅ 通过 |
+| Agent 初始化（真实 DeepSeek 配置） | ✅ `pi-workbench/deepseek-chat` |
+| 请求到达供应商 | ✅ 无效 Key 返回真实 401 并透传到 UI |
+| Web UI 端到端对话 | ✅ 真实模型回复 |
+| Electron IPC 端到端（开发版） | ✅ 保存加密配置 / 初始化 / 401 透传 |
+| **打包应用端到端（asar）** | ✅ 初始化 / 真实请求 / 错误透传 |
+| 模型拉取 | ✅ 真实返回模型列表 |
+| 配置保存 | ✅ 加密写入 `config/api-config.json` |
 
 ---
 
-## 🔒 架构约束符合性
+## ⚠️ 已知限制（进入 Phase 2 处理）
+
+1. **无流式输出**：`chat()` 等待整轮完成才返回，长回答时 UI 只有 "Thinking..."。
+2. **会话不持久化**：ChatPanel 消息存于内存，重启丢失；Pi 的会话文件写入 `data/agent/sessions`，但 UI 未接入恢复。
+3. **Diff 未联动**：Agent 的编辑直接落到工作区文件，尚未自动推送到 DiffViewer 展示。
+4. **单 Agent 实例**：全局一个 AgentManager，多工作区切换时以最后初始化的工作区为准（Phase 2 多工作区时解决）。
+5. **Web 桥接仅限开发环境**：生产构建的纯 Web 版本没有 Agent，必须使用 Electron。
+6. **打包验证**：`pi-bridge/dist` 与 `@earendil-works/*` 已加入 electron-builder 打包清单，但尚未对安装包做完整冒烟测试。
+
+---
+
+## 🔒 架构约束符合性（按实际实现）
 
 | 约束 | 状态 | 说明 |
 |------|------|------|
-| Agent 在主进程运行 | ✅ | 在 `electron/main.ts` 中初始化 |
-| 文件操作通过 IPC | ✅ | 所有工具使用 IPC handler |
-| API Keys 便携式存储 | ✅ | `{appDir}/config/api-keys.json` |
-| 禁止 .env 或环境变量 | ✅ | 使用 JSON 文件存储 |
-| 加密敏感信息 | ✅ | crypto-js AES 加密 |
+| Agent 运行在主进程 | ✅ | `electron/main.ts` 中动态加载 AgentManager |
+| 不新增子进程/Worker 运行 Agent | ✅ | 同进程运行 |
+| 所有应用数据在应用目录 | ✅ | `config/`、`data/`、`cache/`、`logs/` |
+| API Key 加密存储 | ✅ | Electron safeStorage；Web dev 模式为 localStorage（仅开发） |
+| 不使用 `.env` 文件 | ✅ | 配置文件 + 环境变量（进程内） |
+| Agent 文件操作走 IPC | ⚠️ 已调整 | pi-coding-agent 内置工具在主进程直接操作文件系统，不经过渲染进程 IPC；安全边界仍是主进程 |
 
 ---
 
-## 🚀 使用方法
+## 🚀 使用方式
 
-### 配置 API Key
-
-1. 打开 Settings（侧边栏或快捷键）
-2. 在 "API Keys" 部分输入 Anthropic API Key
-3. 点击 "Save Settings"
-
-### 使用 Agent
-
-1. 确保已配置 API Key
-2. 打开 Chat Panel
-3. 等待 Agent 初始化（"Ready" 状态）
-4. 输入自然语言指令，如：
-   - "Read the package.json file"
-   - "Create a new file called test.txt with content 'Hello'"
-   - "Edit App.tsx and add a title"
-
----
-
-## 📦 构建状态
+### Electron
 
 ```bash
-npm run build        # ✅ 成功
-npm run build:main   # ✅ 成功
-npm run build:bridge # ✅ 成功
-npm run type-check   # ✅ 成功
+npm run dev     # 自动先构建 bridge + main/preload，再启动 Vite + Electron
 ```
 
----
+1. 打开项目文件夹
+2. Settings → 选择 Provider、填写 URL/Key → Fetch → 选模型 → Save
+3. 在 ChatPanel 中对话
 
-## 🔄 后续工作
+### 纯 Web 调试
 
-### 立即需要
+```bash
+npm run web:dev
+```
 
-1. **测试真实 Agent 功能**
-   - 启动应用：`npm run dev`
-   - 配置 API Key
-   - 测试基础命令（read/write/edit）
-   - 验证 Diff 显示
-
-2. **完善工具集**
-   - 实现 `bash` 工具（当前返回 mock）
-   - 添加更多文件操作工具
-   - 集成终端执行
-
-### Phase 2: 工作区管理 (下一阶段)
-
-- SQLite 数据库
-- 多工作区支持
-- 会话持久化
-- 日志系统
+配置保存在浏览器 localStorage；模型拉取和 Agent 对话通过 Vite dev 中间件真实执行。
 
 ---
 
-## 📝 注意事项
-
-### API Key 安全
-
-- **永远不要**将 `api-keys.json` 提交到版本控制
-- 已添加到 `.gitignore`: `config/api-keys.json`
-- 生产环境建议使用更强的加密方案
-
-### 便携式架构
-
-- 所有配置在 `{appDir}/config/`
-- 应用可整体移动到其他位置
-- 无外部路径依赖
-
-### 开发调试
-
-- 主进程日志：Terminal 输出
-- 渲染进程日志：F12 DevTools
-- IPC 调试：使用 `<IPCDebug />` 组件
-
----
-
-## 🎉 成就解锁
-
-✅ **MVP → Phase 1 完成**  
-✅ **Mock Agent → 真实 Pi Agent**  
-✅ **安全的 API Key 管理**  
-✅ **完整的 IPC 桥接层**  
-✅ **便携式架构实现**
-
----
-
-**下一步**: 测试真实 Agent 功能，然后启动 Phase 2 开发
-
-**Co-Authored-By**: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+**下一步**: Phase 2（工作区管理与会话持久化）。建议优先处理流式输出与会话恢复。

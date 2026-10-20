@@ -3,7 +3,7 @@
 > 本文件为 AI 助手（Claude、Pi Agent 等）提供项目特定的上下文、约束和最佳实践
 
 **项目**: Pi Workbench  
-**架构**: Electron 28 + React 19 + TypeScript  
+**架构**: Electron 44 + React 19 + TypeScript  
 **当前阶段**: Phase 1 完成，Phase 2 待启动  
 **最后更新**: 2026-10-20
 
@@ -33,15 +33,15 @@
 pi-workbench/
 ├── electron/          # Electron 主进程（TypeScript）
 │   ├── main.ts       # 窗口管理、IPC 处理
-│   └── preload.ts    # contextBridge API 暴露
+│   └── preload.cts   # contextBridge API 暴露（编译为 CommonJS preload.cjs）
 ├── src/              # React 渲染进程
-│   ├── components/   # UI 组件（8 个）
-│   ├── store/        # Zustand 状态管理（6 个 store）
-│   ├── api/          # Electron IPC 封装
+│   ├── components/   # UI 组件（扁平结构）
+│   ├── store/        # Zustand 状态管理（独立 store）
+│   ├── api/          # Electron IPC 封装 + Web dev 桥接
 │   ├── types/        # TypeScript 类型定义
 │   └── i18n/         # 国际化（中英文）
-├── pi-bridge/        # Pi Agent 桥接层（待实现）
-├── docs/             # 项目文档（9 个文件）
+├── pi-bridge/        # Pi Agent 桥接层（AgentManager，已实现）
+├── docs/             # 项目文档
 └── 配置文件          # package.json, tsconfig.json 等
 ```
 
@@ -59,14 +59,15 @@ pi-workbench/
 
 | 层级 | 技术 | 版本 | 说明 |
 |------|------|------|------|
-| 桌面框架 | **Electron** | 28.3.3 | ⚠️ 不是 Tauri，已从 Tauri 迁移 |
-| 前端框架 | **React** | 19.0.0 | 使用函数组件 + Hooks |
-| 构建工具 | **Vite** | 5.4.11 | HMR + 快速构建 |
-| 状态管理 | **Zustand** | 5.0.2 | ⚠️ 不是 Redux 或 Context API |
-| 编辑器 | **Monaco Editor** | 0.52.2 | VS Code 内核 |
-| 样式 | **TailwindCSS** | 3.4.16 | 原子化 CSS |
-| 类型检查 | **TypeScript** | 5.6.3 | 严格模式 |
-| 打包 | **electron-builder** | 25.1.8 | 生成安装包 |
+| 桌面框架 | **Electron** | 44.9.1 | ⚠️ 不是 Tauri，已从 Tauri 迁移 |
+| 前端框架 | **React** | 19.3.1 | 使用函数组件 + Hooks |
+| 构建工具 | **Vite** | 5.4.21 | HMR + 快速构建 |
+| 状态管理 | **Zustand** | 4.5.7 | ⚠️ 不是 Redux 或 Context API |
+| 编辑器 | **Monaco Editor** | 0.57.0 | VS Code 内核 |
+| 样式 | **TailwindCSS** | 3.4.19 | 原子化 CSS |
+| 类型检查 | **TypeScript** | 5.9.3 | 严格模式 |
+| 打包 | **electron-builder** | 24.13.3 | 生成安装包 |
+| Agent SDK | **@earendil-works/pi-coding-agent** | 1.3.0 | 运行在主进程 |
 
 ### 禁止使用的技术
 
@@ -233,8 +234,8 @@ function getAppDir(): string {
     // 生产模式：可执行文件所在目录
     return path.dirname(app.getPath('exe'))
   } else {
-    // 开发模式：项目根目录
-    return process.cwd()
+    // 开发模式：项目根目录（app.getAppPath() 比 process.cwd() 更稳定）
+    return app.getAppPath()
   }
 }
 
@@ -259,7 +260,7 @@ const documents = app.getPath('documents')       // 不要使用！
 ```typescript
 // ✅ 应用级数据：在应用目录
 const settingsPath = path.join(appDir, 'config', 'settings.json')
-const apiKeysPath = path.join(appDir, 'config', 'api-keys.json')
+const apiConfigPath = path.join(appDir, 'config', 'api-config.json')  // API Key 使用 safeStorage 加密
 const dbPath = path.join(appDir, 'data', 'workspaces.db')
 const logPath = path.join(appDir, 'logs', 'main.log')
 
@@ -535,37 +536,33 @@ const logPath = path.join(appDir, 'logs', 'app.log')
 - ❌ **禁止**通过 HTTP 服务运行 Agent
 
 **文件操作约束**:
-- ✅ Agent 的文件操作**必须**通过现有的 IPC 通道
-- ✅ 使用 `fs:readFile`, `fs:writeFile` 等已定义的 IPC handler
-- ❌ **禁止** Agent 直接调用 Node.js fs 模块（会绕过权限控制）
+- ⚠️ **现状说明**：`pi-coding-agent` 内置的 read/write/edit/bash 工具在主进程中直接操作文件系统，不经过渲染进程 IPC
+- ✅ 安全边界：Agent 只运行在主进程，渲染进程仍无 Node.js 权限
+- ✅ 应用自身（文件树、编辑器）的文件操作仍**必须**通过 IPC
+- ❌ **禁止**把 Agent 放入渲染进程或额外子进程
 
 **配置存储约束**:
-- ✅ API Keys 存储在 `{appDir}/config/api-keys.json`（加密）
-- ✅ Agent 配置存储在 `{appDir}/config/agent-config.json`
+- ✅ API 配置存储在 `{appDir}/config/api-config.json`（API Key 使用 Electron `safeStorage` 加密，格式 `enc:<base64>`）
+- ✅ Agent 模型配置写入 `{appDir}/data/agent/models.json`（API Key 通过环境变量 `$PI_WORKBENCH_API_KEY` 插值，不落盘）
 - ❌ **禁止**使用 `.env` 文件（位置不明确，违反便携式约束）
-- ❌ **禁止**使用系统环境变量存储 API Keys
+- ❌ **禁止**将 API Key 写入源码或提交到版本控制
 
 **示例**:
 ```typescript
 // ✅ 正确：Agent 在主进程初始化
 // electron/main.ts
-import { AgentRuntime } from '@earendil-works/pi-agent-core'
+const { AgentManager } = await import('../pi-bridge/dist/index.js')
 
-let agentRuntime: AgentRuntime | null = null
+let agentManager: any | null = null
 
-async function initAgent() {
-  const apiKeys = await loadApiKeys() // 从 {appDir}/config/api-keys.json
-  agentRuntime = new AgentRuntime({
-    apiKey: apiKeys.anthropic,
-    tools: [readFileTool, writeFileTool, editFileTool]
+async function initAgent(config: ApiConfig) {
+  agentManager = new AgentManager()
+  await agentManager.initialize({
+    workspaceDir: config.workspaceDir,
+    agentDir: path.join(getAppDir(), 'data', 'agent'),
+    apiConfig: config.apiConfig, // provider / apiUrl / apiKey / selectedModel
   })
 }
-
-app.whenReady().then(async () => {
-  await initAppDirectories()
-  await initAgent()
-  createWindow()
-})
 ```
 
 ### 数据库和持久化约束
@@ -705,10 +702,10 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 ```
 feat(agent): Integrate real Pi Agent runtime
 
-- Install @earendil-works/pi-agent-core
+- Install @earendil-works/pi-coding-agent
 - Implement AgentManager in pi-bridge/
-- Connect to Anthropic Claude API
-- Add read_file and write_file tools
+- Support OpenAI-compatible providers (DeepSeek etc.) via models.json
+- Add read/write/edit/bash tools
 - Remove mock implementation
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>

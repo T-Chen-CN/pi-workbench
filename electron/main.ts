@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { existsSync, statSync } from 'fs'
@@ -18,8 +18,8 @@ function getAppDir(): string {
     // 生产模式：可执行文件所在目录
     return path.dirname(app.getPath('exe'))
   } else {
-    // 开发模式：项目根目录
-    return process.cwd()
+    // 开发模式：项目根目录（比 process.cwd() 更稳定，不依赖启动目录）
+    return app.getAppPath()
   }
 }
 
@@ -52,12 +52,33 @@ function createWindow() {
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
     },
     icon: path.join(__dirname, '../app-icon.png'),
   })
+
+  // 如果 preload 加载失败，明确报错（否则 window.electronAPI 会静默缺失）
+  mainWindow.webContents.on('preload-error', (_event, preloadPath, error) => {
+    console.error('[Main] Preload script failed to load:', preloadPath)
+    console.error('[Main] Preload error:', error)
+  })
+
+  // 开发模式自检：确认 preload 已成功暴露 electronAPI
+  if (process.env.VITE_DEV_SERVER_URL) {
+    mainWindow.webContents.once('did-finish-load', async () => {
+      try {
+        const apiType = await mainWindow?.webContents.executeJavaScript('typeof window.electronAPI')
+        const hasFetchModels = await mainWindow?.webContents.executeJavaScript(
+          'typeof window.electronAPI?.apiConfigFetchModels'
+        )
+        console.log(`[Main] Preload check: window.electronAPI = ${apiType}, apiConfigFetchModels = ${hasFetchModels}`)
+      } catch (error) {
+        console.error('[Main] Preload check failed:', error)
+      }
+    })
+  }
 
   // Load the app
   if (process.env.VITE_DEV_SERVER_URL) {
@@ -243,7 +264,7 @@ ipcMain.handle('workspace:init', async (_event, workspacePath: string) => {
         version: '1.0',
         enabledPlugins: [],
         agentConfig: {
-          model: 'claude-3-5-sonnet',
+          // 模型由应用级 API 配置决定，工作区不再写死默认模型
           temperature: 0.7
         }
       }
@@ -293,6 +314,38 @@ ipcMain.handle('workspace:saveConfig', async (_event, workspacePath: string, con
 
 // ==================== API Configuration Management ====================
 
+/**
+ * API Key 静态加密（Electron safeStorage：Windows DPAPI / macOS Keychain / Linux libsecret）。
+ * 文件仍保存在便携式目录中，只有加密所用的系统密钥来自操作系统。
+ * 系统不支持加密时回退为明文，并打印警告。
+ */
+function encryptApiKey(apiKey: string): string {
+  if (!apiKey) return ''
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      return 'enc:' + safeStorage.encryptString(apiKey).toString('base64')
+    }
+  } catch (error) {
+    console.warn('[Main] safeStorage encryption failed:', error)
+  }
+  console.warn('[Main] safeStorage unavailable — API key will be stored in plain text')
+  return apiKey
+}
+
+function decryptApiKey(stored: string): string {
+  if (!stored) return ''
+  if (!stored.startsWith('enc:')) {
+    // 兼容旧版明文配置
+    return stored
+  }
+  try {
+    return safeStorage.decryptString(Buffer.from(stored.slice(4), 'base64'))
+  } catch (error) {
+    console.error('[Main] Failed to decrypt stored API key:', error)
+    return ''
+  }
+}
+
 // Helper function to load API Config
 async function loadApiConfig(): Promise<any> {
   try {
@@ -312,6 +365,7 @@ async function loadApiConfig(): Promise<any> {
 
     const content = await fs.readFile(configPath, 'utf-8')
     const config = JSON.parse(content)
+    config.apiKey = decryptApiKey(config.apiKey)
     return config
   } catch (error) {
     console.error('[Main] Failed to load API config:', error)
@@ -338,8 +392,11 @@ ipcMain.handle('apiConfig:save', async (_event, config: any) => {
     const appDir = getAppDir()
     const configPath = path.join(appDir, 'config', 'api-config.json')
 
-    // TODO: 后续版本添加 API Key 的 AES 加密
-    await fs.writeFile(configPath, JSON.stringify(config, null, 2))
+    const stored = {
+      ...config,
+      apiKey: encryptApiKey(String(config?.apiKey ?? '')),
+    }
+    await fs.writeFile(configPath, JSON.stringify(stored, null, 2), 'utf-8')
 
     return { success: true }
   } catch (error) {
@@ -353,67 +410,51 @@ ipcMain.handle('apiConfig:save', async (_event, config: any) => {
 // Fetch available models from API
 ipcMain.handle('apiConfig:fetchModels', async (_event, apiUrl: string, apiKey: string, provider: string) => {
   try {
-    console.log(`[Main] Fetching models from ${provider}...`)
-
-    let models: string[] = []
-
-    if (provider === 'anthropic') {
-      // Call Anthropic /v1/models endpoint
-      // https://docs.anthropic.com/en/api/models
-      const response = await fetch(`${apiUrl}/models`, {
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01'
-        }
-      })
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch models: ${response.statusText}`)
-      }
-
-      const data: any = await response.json()
-      // Anthropic returns { data: [{id, ...}, ...] }
-      models = data.data.map((m: any) => m.id)
-    } else if (provider === 'openai') {
-      // Call OpenAI /v1/models endpoint
-      const response = await fetch(`${apiUrl}/models`, {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`
-        }
-      })
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch models: ${response.statusText}`)
-      }
-
-      const data: any = await response.json()
-      models = data.data.map((m: any) => m.id)
-    } else {
-      // For custom providers, try OpenAI-compatible format
-      try {
-        const response = await fetch(`${apiUrl}/models`, {
-          headers: {
-            'Authorization': `Bearer ${apiKey}`
-          }
-        })
-
-        if (response.ok) {
-          const data: any = await response.json()
-          models = data.data.map((m: any) => m.id)
-        } else {
-          // If /models fails, return empty array
-          models = []
-        }
-      } catch {
-        models = []
-      }
+    // 归一化 Base URL：去掉末尾斜杠，模板占位符视为未填写
+    const baseUrl = (apiUrl || '').trim().replace(/\/+$/, '')
+    if (!baseUrl || baseUrl.includes('your-api-endpoint')) {
+      throw new Error('Please enter a valid API URL')
+    }
+    if (!/^https?:\/\//i.test(baseUrl)) {
+      throw new Error('API URL must start with http:// or https://')
     }
 
+    const modelsEndpoint = `${baseUrl}/models`
+    console.log(`[Main] Fetching models from ${modelsEndpoint} (provider: ${provider})`)
+
+    const headers: Record<string, string> = provider === 'anthropic'
+      ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
+      : { 'Authorization': `Bearer ${apiKey}` }
+
+    const response = await fetch(modelsEndpoint, { headers })
+    console.log(`[Main] Response status: ${response.status}`)
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      throw new Error(`HTTP ${response.status} ${response.statusText}${body ? `: ${body.slice(0, 200)}` : ''}`)
+    }
+
+    const data: any = await response.json()
+
+    // 兼容常见返回格式：{ data: [{id}] } / { models: [...] } / [...]
+    let models: string[] = []
+    if (Array.isArray(data?.data)) {
+      models = data.data.map((m: any) => (typeof m === 'string' ? m : m?.id)).filter(Boolean)
+    } else if (Array.isArray(data?.models)) {
+      models = data.models.map((m: any) => (typeof m === 'string' ? m : m?.id)).filter(Boolean)
+    } else if (Array.isArray(data)) {
+      models = data.map((m: any) => (typeof m === 'string' ? m : m?.id)).filter(Boolean)
+    }
+
+    console.log(`[Main] Fetched ${models.length} models`)
     return { success: true, models }
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    console.error('[Main] fetchModels error:', errorMessage)
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: errorMessage,
+      models: []
     }
   }
 })
@@ -448,12 +489,23 @@ ipcMain.handle('agent:initialize', async (_event, config: {
       }
     }
 
+    // 重新初始化前先释放旧实例，避免会话/子进程泄漏
+    if (agentManager) {
+      try {
+        await agentManager.dispose()
+      } catch (error) {
+        console.warn('[Main] Failed to dispose previous agent:', error)
+      }
+      agentManager = null
+    }
+
     // 创建新的 Agent Manager 实例
     agentManager = new AgentManager()
 
-    // 初始化 Agent（传入完整的 apiConfig）
+    // 初始化 Agent（传入完整的 apiConfig + 便携式 agent 数据目录）
     const result = await agentManager.initialize({
       workspaceDir: config.workspaceDir,
+      agentDir: path.join(getAppDir(), 'data', 'agent'),
       apiConfig: config.apiConfig
     })
 
@@ -551,53 +603,3 @@ ipcMain.handle('agent:dispose', async () => {
     }
   }
 })
-
-// API Key 管理（加密存储）
-ipcMain.handle('apiKey:save', async (_event, provider: string, apiKey: string) => {
-  try {
-    const apiKeysPath = path.join(getAppDir(), 'config', 'api-keys.json')
-
-    let apiKeys: Record<string, string> = {}
-
-    // 读取现有的 API Keys
-    if (existsSync(apiKeysPath)) {
-      const content = await fs.readFile(apiKeysPath, 'utf-8')
-      apiKeys = JSON.parse(content)
-    }
-
-    // 更新 API Key
-    apiKeys[provider] = apiKey
-
-    // 保存（TODO: 后续可以添加加密）
-    await fs.writeFile(apiKeysPath, JSON.stringify(apiKeys, null, 2), 'utf-8')
-
-    console.log(`[Main] API Key saved for provider: ${provider}`)
-    return { success: true }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    }
-  }
-})
-
-ipcMain.handle('apiKey:load', async (_event, provider: string) => {
-  try {
-    const apiKeysPath = path.join(getAppDir(), 'config', 'api-keys.json')
-
-    if (!existsSync(apiKeysPath)) {
-      return { success: true, apiKey: null }
-    }
-
-    const content = await fs.readFile(apiKeysPath, 'utf-8')
-    const apiKeys = JSON.parse(content)
-
-    return { success: true, apiKey: apiKeys[provider] || null }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    }
-  }
-})
-

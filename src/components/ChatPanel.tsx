@@ -3,7 +3,11 @@ import { useChatStore } from '../store/chatStore'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
 
-export const ChatPanel: React.FC = () => {
+interface ChatPanelProps {
+  workspacePath: string
+}
+
+export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const {
     messages,
     isLoading,
@@ -20,13 +24,17 @@ export const ChatPanel: React.FC = () => {
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   // Initialize agent on mount
+  const initSeqRef = useRef(0)
+
   useEffect(() => {
-    const init = async () => {
+    const doInit = async (seq: number) => {
       try {
+        setInitialized(false)
         setLoading(true)
 
         // Load API configuration
         const configResult = await api.apiConfigGet()
+        if (seq !== initSeqRef.current) return
         if (!configResult.success || !configResult.config || !configResult.config.apiKey) {
           setNeedsApiKey(true)
           setLoading(false)
@@ -35,37 +43,51 @@ export const ChatPanel: React.FC = () => {
 
         // Initialize Agent with full API config
         const result = await piAgentAPI.initialize({
-          workspaceDir: process.cwd(),
+          workspaceDir: workspacePath,
           apiConfig: configResult.config
         })
+        if (seq !== initSeqRef.current) return
 
         if (result.success) {
+          setError(null)
           setInitialized(true)
           addMessage({
             role: 'assistant',
             content: `Pi Agent (${configResult.config.selectedModel}) is ready! How can I help you with your code today?`,
-            timestamp: new Date(),
           })
         } else {
           setError(result.error || 'Failed to initialize agent')
           setNeedsApiKey(true)
         }
       } catch (err) {
+        if (seq !== initSeqRef.current) return
         const errorMsg = err instanceof Error ? err.message : String(err)
         setError(errorMsg)
         console.error('[ChatPanel] Initialize error:', err)
       } finally {
-        setLoading(false)
+        if (seq === initSeqRef.current) setLoading(false)
       }
     }
 
-    init()
+    const runInit = () => {
+      const seq = ++initSeqRef.current
+      void doInit(seq)
+    }
+
+    runInit()
+
+    // Settings 保存新 API 配置后重新初始化 Agent
+    const handleConfigSaved = () => runInit()
+    window.addEventListener('api-config-saved', handleConfigSaved)
 
     // Cleanup on unmount
     return () => {
+      // 使旧的初始化流程失效（含 React StrictMode 的双重挂载）
+      initSeqRef.current++
+      window.removeEventListener('api-config-saved', handleConfigSaved)
       piAgentAPI.dispose()
     }
-  }, [])
+  }, [workspacePath])
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -89,7 +111,6 @@ export const ChatPanel: React.FC = () => {
     addMessage({
       role: 'user',
       content: userMessage,
-      timestamp: new Date(),
     })
 
     // Send to agent
@@ -98,17 +119,16 @@ export const ChatPanel: React.FC = () => {
       const result = await piAgentAPI.chat(userMessage)
 
       if (result.success && result.response) {
+        setError(null)
         addMessage({
           role: 'assistant',
           content: result.response,
-          timestamp: new Date(),
         })
       } else {
         setError(result.error || 'Failed to get response from agent')
         addMessage({
           role: 'assistant',
           content: `Error: ${result.error || 'Failed to get response'}`,
-          timestamp: new Date(),
         })
       }
     } catch (err) {
@@ -117,7 +137,6 @@ export const ChatPanel: React.FC = () => {
       addMessage({
         role: 'assistant',
         content: `Error: ${errorMsg}`,
-        timestamp: new Date(),
       })
     } finally {
       setLoading(false)
@@ -138,22 +157,17 @@ export const ChatPanel: React.FC = () => {
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center max-w-md">
             <h3 className="text-xl font-bold text-gray-100 mb-4">
-              API Key Required
+              API Configuration Required
             </h3>
             <p className="text-gray-400 mb-6">
-              Please configure your Anthropic API key in Settings to use Pi Agent.
+              Please configure your API provider, URL, key and model in Settings to use Pi Agent.
             </p>
-            <a
-              href="#settings"
-              className="inline-block bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded font-medium transition-colors"
-              onClick={(e) => {
-                e.preventDefault()
-                // TODO: 触发 Settings 面板打开
-                alert('Please open Settings from the sidebar to configure API keys')
-              }}
+            <button
+              className="inline-block bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded font-medium transition-colors border-none cursor-pointer"
+              onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))}
             >
               Go to Settings
-            </a>
+            </button>
           </div>
         </div>
       </div>
@@ -190,7 +204,7 @@ export const ChatPanel: React.FC = () => {
               </div>
               <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
               <div className="text-xs mt-2 opacity-70">
-                {msg.timestamp.toLocaleTimeString()}
+                {new Date(msg.timestamp).toLocaleTimeString()}
               </div>
             </div>
           </div>

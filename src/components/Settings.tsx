@@ -1,16 +1,25 @@
 import React, { useState, useEffect } from 'react'
 import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
-import { useErrorStore } from '../store/errorStore'
+import { toast } from '../store/toastStore'
 import type { ApiConfig, ApiProvider } from '../types/electron'
 
-export const Settings: React.FC = () => {
+const DEFAULT_URLS: Record<ApiProvider, string> = {
+  anthropic: 'https://api.anthropic.com/v1',
+  openai: 'https://api.openai.com/v1',
+  custom: '',
+}
+
+interface SettingsProps {
+  onClose?: () => void
+}
+
+export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
   const { language, setLanguage, t } = useI18nStore()
-  const { addError } = useErrorStore()
 
   const [apiConfig, setApiConfig] = useState<ApiConfig>({
     provider: 'anthropic',
-    apiUrl: 'https://api.anthropic.com/v1',
+    apiUrl: DEFAULT_URLS.anthropic,
     apiKey: '',
     availableModels: [],
     selectedModel: ''
@@ -31,40 +40,29 @@ export const Settings: React.FC = () => {
         setApiConfig(result.config)
       }
     } catch (error) {
-      console.error('Failed to load API config:', error)
-      addError('Failed to load API configuration')
+      console.error('[Settings] Failed to load API config:', error)
+      toast.error('Failed to load API configuration')
     }
   }
 
   const handleProviderChange = (provider: ApiProvider) => {
-    // Update URL based on provider
-    let defaultUrl = ''
-
-    switch (provider) {
-      case 'anthropic':
-        defaultUrl = 'https://api.anthropic.com/v1'
-        break
-      case 'openai':
-        defaultUrl = 'https://api.openai.com/v1'
-        break
-      case 'custom':
-        defaultUrl = 'https://your-api-endpoint.com/v1'
-        break
-    }
-
     setApiConfig(prev => ({
       ...prev,
       provider,
-      apiUrl: defaultUrl,
-      availableModels: [],  // Always clear models when provider changes
+      apiUrl: DEFAULT_URLS[provider],
+      availableModels: [],  // 切换供应商后必须重新拉取
       selectedModel: ''
     }))
     setSaveStatus('idle')
   }
 
   const handleFetchModels = async () => {
+    if (!apiConfig.apiUrl.trim()) {
+      toast.error('Please enter API URL first')
+      return
+    }
     if (!apiConfig.apiKey) {
-      addError('Please enter API key first')
+      toast.error('Please enter API Key first')
       return
     }
 
@@ -76,19 +74,23 @@ export const Settings: React.FC = () => {
         apiConfig.provider
       )
 
-      if (result.success && result.models) {
+      if (result.success && result.models && result.models.length > 0) {
         setApiConfig(prev => ({
           ...prev,
           availableModels: result.models!,
-          selectedModel: result.models![0] || ''
+          selectedModel: result.models!.includes(prev.selectedModel)
+            ? prev.selectedModel
+            : result.models![0]
         }))
-        addError('Models fetched successfully')
+        toast.success(`Fetched ${result.models.length} models`)
+      } else if (result.success) {
+        toast.warning('The API returned an empty model list')
       } else {
-        addError(result.error || 'Failed to fetch models')
+        toast.error(`Failed to fetch models: ${result.error || 'Unknown error'}`)
       }
     } catch (error) {
-      console.error('Failed to fetch models:', error)
-      addError('Failed to fetch models')
+      console.error('[Settings] Fetch models error:', error)
+      toast.error('Failed to fetch models: ' + String(error))
     } finally {
       setIsFetchingModels(false)
     }
@@ -96,12 +98,11 @@ export const Settings: React.FC = () => {
 
   const handleSaveConfig = async () => {
     if (!apiConfig.apiKey) {
-      addError('API key is required')
+      toast.error('API Key is required')
       return
     }
-
     if (!apiConfig.selectedModel) {
-      addError('Please select a model')
+      toast.error('Please fetch and select a model first')
       return
     }
 
@@ -112,15 +113,18 @@ export const Settings: React.FC = () => {
       const result = await api.apiConfigSave(apiConfig)
       if (result.success) {
         setSaveStatus('success')
+        toast.success('API configuration saved')
+        // 通知 ChatPanel 用新配置重新初始化 Agent
+        window.dispatchEvent(new CustomEvent('api-config-saved'))
         setTimeout(() => setSaveStatus('idle'), 2000)
       } else {
         setSaveStatus('error')
-        addError(result.error || 'Failed to save configuration')
+        toast.error(result.error || 'Failed to save configuration')
       }
     } catch (error) {
-      console.error('Failed to save config:', error)
+      console.error('[Settings] Save config error:', error)
       setSaveStatus('error')
-      addError('Failed to save configuration')
+      toast.error('Failed to save configuration: ' + String(error))
     } finally {
       setIsSaving(false)
     }
@@ -128,17 +132,28 @@ export const Settings: React.FC = () => {
 
   return (
     <div className="p-6 bg-gray-900 text-gray-100 h-full overflow-auto">
-      <h2 className="text-2xl font-bold mb-6">{t('settings.title')}</h2>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-2xl font-bold">{t('settings')}</h2>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="bg-none border-none text-gray-400 hover:text-gray-100 text-2xl cursor-pointer p-1"
+            title="Close"
+          >
+            ×
+          </button>
+        )}
+      </div>
 
       {/* Language Settings */}
       <div className="mb-8">
-        <h3 className="text-lg font-semibold mb-3">{t('settings.language')}</h3>
+        <h3 className="text-lg font-semibold mb-3">{t('language')}</h3>
         <select
           value={language}
-          onChange={(e) => setLanguage(e.target.value as 'zh-CN' | 'en')}
+          onChange={(e) => setLanguage(e.target.value as 'zh' | 'en')}
           className="bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500"
         >
-          <option value="zh-CN">中文</option>
+          <option value="zh">中文</option>
           <option value="en">English</option>
         </select>
       </div>
@@ -168,7 +183,7 @@ export const Settings: React.FC = () => {
         <div className="mb-4">
           <label className="block text-sm font-medium mb-2">
             API URL
-            <span className="text-gray-500 text-xs ml-2">(Base endpoint)</span>
+            <span className="text-gray-500 text-xs ml-2">(Base endpoint, e.g. https://api.deepseek.com/v1)</span>
           </label>
           <input
             type="text"
@@ -183,7 +198,7 @@ export const Settings: React.FC = () => {
         <div className="mb-4">
           <label className="block text-sm font-medium mb-2">
             API Key
-            <span className="text-gray-500 text-xs ml-2">(Encrypted storage)</span>
+            <span className="text-gray-500 text-xs ml-2">(Encrypted at rest on desktop)</span>
           </label>
           <input
             type="password"
@@ -207,9 +222,9 @@ export const Settings: React.FC = () => {
         <div className="mb-4">
           <button
             onClick={handleFetchModels}
-            disabled={isFetchingModels || !apiConfig.apiKey}
+            disabled={isFetchingModels}
             className={`px-4 py-2 rounded font-medium transition-colors ${
-              isFetchingModels || !apiConfig.apiKey
+              isFetchingModels
                 ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
                 : 'bg-green-600 hover:bg-green-700 text-white'
             }`}
@@ -217,7 +232,7 @@ export const Settings: React.FC = () => {
             {isFetchingModels ? 'Fetching...' : 'Fetch Available Models'}
           </button>
           <p className="text-xs text-gray-500 mt-1">
-            Click to retrieve available models from the API
+            Retrieves the model list from {apiConfig.apiUrl || 'the API'}/models
           </p>
         </div>
 
@@ -273,7 +288,7 @@ export const Settings: React.FC = () => {
         <h3 className="text-lg font-semibold mb-3">Application Info</h3>
         <div className="text-sm text-gray-400 space-y-1">
           <p>Version: 0.1.0 (Phase 1 Complete)</p>
-          <p>Framework: Electron 28 + React 19</p>
+          <p>Framework: Electron 44 + React 19</p>
           <p>Architecture: Portable (self-contained)</p>
           <p>API Support: Anthropic, OpenAI, Custom</p>
         </div>

@@ -76,17 +76,19 @@
 
 ### 🔄 待实现功能（Roadmap）
 
-#### Phase 1: Pi Agent 真实集成
-- [ ] 替换 Mock Agent 为真实 Pi Agent
-- [ ] 安装 Pi 核心模块
+#### Phase 1: Pi Agent 真实集成 ✅（2026-10-20 完成）
+- [x] 替换 Mock Agent 为真实 Pi Agent
+- [x] 安装 Pi 核心模块
   ```bash
-  npm install @earendil-works/pi-agent-core
+  npm install @earendil-works/pi-coding-agent
   npm install @earendil-works/pi-ai
-  npm install @earendil-works/pi-durable
   ```
-- [ ] 实现 Agent Manager
-- [ ] 配置 LLM 提供商（Anthropic Claude）
-- [ ] 集成工具系统（read/write/edit/bash）
+- [x] 实现 Agent Manager（`pi-bridge/src/agent-manager.ts`）
+- [x] 统一的 OpenAI 兼容 API 配置（Provider / URL / Key / 模型列表 / 选择模型）
+- [x] 配置 LLM 提供商（Anthropic / OpenAI / 任意兼容端点，如 DeepSeek）
+- [x] 集成工具系统（read/write/edit/bash，由 SDK 内置）
+- [x] API Key 使用 Electron safeStorage 加密存储
+- [x] 纯 Web 开发模式调试桥接（仅 `vite dev`）
 
 #### Phase 2: 工作区管理
 - [ ] 多工作区支持
@@ -172,11 +174,10 @@
 │  ├─ 文件系统操作         Node.js fs/promises           │
 │  ├─ 路径处理             Node.js path                  │
 │  ├─ 对话框               Electron dialog               │
-│  └─ Pi Agent 桥接（待实现）                             │
-│     ├─ pi-bridge/        Agent 管理模块                │
-│     ├─ @earendil-works/pi-agent-core                   │
-│     ├─ @earendil-works/pi-ai                           │
-│     └─ @earendil-works/pi-durable                      │
+│  └─ Pi Agent 桥接（已实现）                             │
+│     ├─ pi-bridge/        AgentManager                  │
+│     ├─ @earendil-works/pi-coding-agent                 │
+│     └─ @earendil-works/pi-ai                           │
 ├─────────────────────────────────────────────────────────┤
 │  存储层（便携式架构）                                    │
 │  ├─ 应用目录 (appDir/)                                  │
@@ -208,7 +209,7 @@
 │   └── ...
 ├── config/                # ⭐ 应用全局配置
 │   ├── settings.json     # 用户设置（主题、语言等）
-│   └── api-keys.json     # API Keys（加密存储）
+│   └── api-config.json   # API 配置（Key 加密存储）
 ├── cache/                 # ⭐ 缓存数据
 │   └── temp/             # 临时文件
 ├── data/                  # ⭐ 持久化数据
@@ -233,7 +234,7 @@
 | 数据类型 | 存储位置 | 说明 | Phase |
 |---------|---------|------|-------|
 | **应用配置** | `{appDir}/config/settings.json` | 用户设置（语言、主题、自动保存等） | Phase 0 ✅ |
-| **API Keys** | `{appDir}/config/api-keys.json` | LLM API Keys（加密存储） | Phase 1 |
+| **API 配置** | `{appDir}/config/api-config.json` | Provider / URL / API Key（safeStorage 加密）/ 模型 | Phase 1 ✅ |
 | **Agent 配置** | `{appDir}/config/agent-config.json` | 全局 Agent 配置（模型、温度等） | Phase 1 |
 | **快捷键配置** | `{appDir}/config/keybindings.json` | 自定义快捷键 | Phase 6 |
 | **主题文件** | `{appDir}/config/themes/` | 自定义主题 | Phase 6 |
@@ -333,11 +334,10 @@ const appData = app.getPath('appData')      // 不要使用！
 │  ├─ 文件系统操作         Node.js fs/promises           │
 │  ├─ 路径处理             Node.js path                  │
 │  ├─ 对话框               Electron dialog               │
-│  └─ Pi Agent 桥接（待实现）                             │
-│     ├─ pi-bridge/        Agent 管理模块                │
-│     ├─ @earendil-works/pi-agent-core                   │
-│     ├─ @earendil-works/pi-ai                           │
-│     └─ @earendil-works/pi-durable                      │
+│  └─ Pi Agent 桥接（已实现）                             │
+│     ├─ pi-bridge/        AgentManager                  │
+│     ├─ @earendil-works/pi-coding-agent                 │
+│     └─ @earendil-works/pi-ai                           │
 ├─────────────────────────────────────────────────────────┤
 │  存储层（便携式架构）                                    │
 │  ├─ 应用目录 (appDir/)                                  │
@@ -356,7 +356,7 @@ const appData = app.getPath('appData')      // 不要使用！
 ### 技术栈
 
 #### 桌面框架
-- **Electron 28.3.3**
+- **Electron 44.9.1**（Node 24，Pi SDK 要求 Node ≥22.19）
   - 理由：成熟的生态系统、易于调试、丰富的社区支持
   - 与 Tauri 对比：打包体积更大（~120MB vs ~40MB），但开发体验更好
 
@@ -373,9 +373,9 @@ const appData = app.getPath('appData')      // 不要使用！
 - **Electron API**: 窗口、对话框、IPC
 
 #### Agent 内核（待集成）
-- **@earendil-works/pi-agent-core**: Agent 运行时
+- **@earendil-works/pi-coding-agent**: Agent 运行时（含 read/write/edit/bash 工具）
 - **@earendil-works/pi-ai**: 统一 LLM API
-- **@earendil-works/pi-durable**: 持久化会话
+- **@earendil-works/pi-ai**: 模型与供应商抽象（ModelRuntime）
 - **支持的 LLM**: Anthropic Claude, OpenAI GPT-4
 
 ---
@@ -496,45 +496,31 @@ interface EditorState {
 
 ---
 
-### 模块 3: 对话交互（Mock）
+### 模块 3: 对话交互
 
-**当前实现** (Mock):
-```typescript
-// src/api/piAgent.ts
-export async function sendMessageToAgent(message: string) {
-  // 模拟响应
-  return {
-    role: 'assistant',
-    content: `Mock response to: ${message}`,
-    timestamp: Date.now()
-  }
-}
-```
+**Phase 0 的 Mock 实现已移除**（原 `src/api/piAgent.ts` 已删除）。
 
-**未来实现** (真实 Pi Agent):
+**实际实现**:
 ```typescript
 // pi-bridge/src/agent-manager.ts
-import { AgentRuntime } from '@earendil-works/pi-agent-core'
-import { LLMClient } from '@earendil-works/pi-ai'
+import { createAgentSession, ModelRuntime } from '@earendil-works/pi-coding-agent'
 
 class AgentManager {
-  async createAgent(config: AgentConfig) {
-    const agent = new AgentRuntime({
-      llm: new LLMClient({
-        provider: 'anthropic',
-        apiKey: process.env.ANTHROPIC_API_KEY,
-        model: 'claude-3-5-sonnet'
-      }),
-      tools: [readTool, writeTool, editTool, bashTool],
-      workingDirectory: config.workspacePath
+  async initialize(config: AgentConfig) {
+    // 1. 将 provider / baseUrl / model 写入 models.json
+    //    （apiKey 用 $PI_WORKBENCH_API_KEY 环境变量插值，不落盘）
+    // 2. 用 ModelRuntime 解析自定义 provider 的模型
+    const modelRuntime = await ModelRuntime.create({ modelsPath, authPath })
+    const model = modelRuntime.getModel('pi-workbench', config.apiConfig.selectedModel)
+
+    // 3. 创建会话（内置 read/write/edit/bash 工具）
+    const { session } = await createAgentSession({
+      cwd: config.workspaceDir,
+      agentDir,
+      modelRuntime,
+      model,
     })
-    
-    return agent
-  }
-  
-  async sendMessage(agentId: string, content: string) {
-    const agent = this.agents.get(agentId)
-    return await agent.sendMessage(content)
+    return session
   }
 }
 ```
@@ -680,56 +666,35 @@ export default {
 
 ---
 
-### 🔄 Phase 1: Pi Agent 真实集成 (预计 1-2 周)
+### ✅ Phase 1: Pi Agent 真实集成（2026-10-20 完成）
 
 **目标**: 替换 Mock Agent 为真实的 Pi Agent
 
-**当前状态**: 🟡 尚未开始  
-**预计时间**: 8-16 小时  
-**优先级**: 🔴 高 - 核心功能
+**结果**: 已完成，详细记录见 [progress/PHASE-1-COMPLETE.md](./progress/PHASE-1-COMPLETE.md)
 
-**任务**:
-1. 安装 Pi 核心模块
-   ```bash
-   npm install @earendil-works/pi-agent-core
-   npm install @earendil-works/pi-ai
-   npm install @earendil-works/pi-durable
-   ```
+**实际实现**:
+1. 依赖：`@earendil-works/pi-coding-agent` 1.3.0（早期规划中的 pi-agent-core / pi-durable 未使用）
+2. `AgentManager`（`pi-bridge/src/agent-manager.ts`）运行在主进程
+   - 生成 `{appDir}/data/agent/models.json`，支持任意 OpenAI 兼容端点
+   - API Key 通过环境变量 `$PI_WORKBENCH_API_KEY` 插值，不写入磁盘
+3. 统一 API 配置：Provider + Base URL + API Key + 模型列表 + 选择模型
+   - API Key 通过 Electron `safeStorage` 加密存储在 `{appDir}/config/api-config.json`
+   - 真实调用供应商 `/models` 拉取模型
+4. 工具：read / write / edit / bash 由 SDK 内置，在主进程中直接执行
+   （原“文件操作必须通过 IPC”的约束据此调整：渲染进程仍无 Node 权限，安全边界为主进程）
+5. 纯 Web 开发模式：Vite 中间件提供模型拉取代理与 Agent 桥接（仅 `vite dev`）
 
-2. 实现 Agent Manager (`pi-bridge/src/agent-manager.ts`)
-   - 创建 Agent 实例（在主进程）
-   - 消息发送和接收
-   - 工具系统集成
-   - **路径约束**: Agent 运行在主进程，与 `electron/main.ts` 同进程
+**验证**:
+- ✅ Agent 实例创建成功，模型解析为 `pi-workbench/<model>`
+- ✅ 供应商错误（401 等）透传到 UI
+- ✅ Web 与 Electron 两种模式均可真实对话
+- ✅ `type-check` / `build` 通过
 
-3. 配置 LLM 提供商
-   - Anthropic Claude API 集成
-   - **API Key 管理**: 加密存储在 `{appDir}/config/api-keys.json`
-   - **禁止使用**: `.env` 文件或系统环境变量
-   - Settings 组件：API Key 配置界面
-
-4. 基础工具集成
-   - `read_file`: 通过 IPC 调用 `fs:readFile`
-   - `write_file`: 通过 IPC 调用 `fs:writeFile`
-   - `edit_file`: 通过 diff 库编辑文件
-   - `bash`: 执行命令工具（简化版，先返回 mock）
-   - **约束**: 所有文件操作必须通过 IPC，不直接调用 fs
-
-5. 更新 `src/api/piAgent.ts`
-   - 移除 Mock 实现
-   - 连接到真实的 Agent Manager（通过 IPC）
-   - 处理流式响应
-
-6. Agent 配置持久化
-   - 全局配置：`{appDir}/config/agent-config.json`
-   - 工作区配置：`{workspaceDir}/.pi-workbench/config.json`
-
-**验收标准**:
-- ✅ 能创建真实的 Agent 实例
-- ✅ 能通过自然语言让 Agent 修改代码
-- ✅ Agent 的修改能正确显示在 Diff 查看器中
-- ✅ API Keys 加密存储在应用目录
-- ✅ 配置符合便携式架构约束
+**遗留项（转入后续阶段）**:
+- 流式输出
+- 会话持久化与恢复
+- Agent 编辑与 DiffViewer 联动
+- 安装包完整冒烟测试
 
 ---
 

@@ -128,6 +128,8 @@ export interface ApiConfig {
 
 export interface AgentInitConfig {
   workspaceDir: string
+  /** Agent 数据目录（主进程默认使用 {appDir}/data/agent） */
+  agentDir?: string
   apiConfig: ApiConfig
 }
 
