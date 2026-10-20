@@ -16,10 +16,6 @@ interface ChatPanelProps {
 const MAX_CONTEXT_FILE_CHARS = 120_000
 const MAX_CONTEXT_TOTAL_CHARS = 300_000
 
-interface ChatPanelProps {
-  workspacePath: string
-}
-
 export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const {
     messages,
@@ -211,6 +207,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }
 
+  const handleStop = async () => {
+    await piAgentAPI.abort(workspacePath)
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -381,13 +381,23 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             className="flex-1 bg-gray-800 text-gray-100 px-4 py-2 rounded border border-gray-700 focus:outline-none focus:border-blue-500 resize-none disabled:opacity-50 disabled:cursor-not-allowed"
             rows={3}
           />
-          <button
-            type="submit"
-            disabled={!initialized || isLoading || !input.trim()}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Send
-          </button>
+          {isLoading ? (
+            <button
+              type="button"
+              onClick={() => void handleStop()}
+              className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded font-medium transition-colors"
+            >
+              {t('stop')}
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!initialized || !input.trim()}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Send
+            </button>
+          )}
         </form>
       </div>
     </div>

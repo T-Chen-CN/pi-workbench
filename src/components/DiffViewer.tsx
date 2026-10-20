@@ -1,10 +1,10 @@
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useDiffStore } from '../store/diffStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useEditorStore } from '../store/editorStore'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
-import { computeDiff, DiffLineType, DiffResult } from '../api/diff'
+import { computeDiff, DiffLineType, DiffResult, type DiffLine } from '../api/diff'
 import type { FileEdit } from '../types/electron'
 
 export const DiffViewer: React.FC = () => {
@@ -23,16 +23,17 @@ export const DiffViewer: React.FC = () => {
   const [busy, setBusy] = useState(false)
 
   const edit = edits[currentIndex]
-  if (!isOpen || !edit) {
+  const diff = useMemo(
+    () =>
+      edit
+        ? computeDiff(edit.oldContent, edit.newContent, `${edit.path} (before)`, edit.path)
+        : null,
+    [edit]
+  )
+  if (!isOpen || !edit || !diff) {
     return null
   }
 
-  const diff = computeDiff(
-    edit.oldContent,
-    edit.newContent,
-    `${edit.path} (before)`,
-    edit.path
-  )
   const canGoPrev = currentIndex > 0
   const canGoNext = currentIndex < edits.length - 1
 
@@ -252,7 +253,7 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
         </div>
         <div className="flex-1 overflow-y-auto">
           {originalLines.map((line, idx) => (
-            <DiffLineElement key={`orig-${idx}`} line={line} />
+            <DiffLineElement key={`orig-${idx}`} line={line} side="original" />
           ))}
         </div>
       </div>
@@ -264,7 +265,7 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
         </div>
         <div className="flex-1 overflow-y-auto">
           {modifiedLines.map((line, idx) => (
-            <DiffLineElement key={`mod-${idx}`} line={line} />
+            <DiffLineElement key={`mod-${idx}`} line={line} side="modified" />
           ))}
         </div>
       </div>
@@ -282,7 +283,7 @@ const UnifiedDiffView: React.FC<DiffViewProps> = ({ diff }) => {
       </div>
       <div className="flex-1 overflow-y-auto">
         {diff.lines.map((line, idx) => (
-          <DiffLineElement key={idx} line={line} />
+          <DiffLineElement key={idx} line={line} side="original" />
         ))}
       </div>
     </div>
@@ -290,13 +291,16 @@ const UnifiedDiffView: React.FC<DiffViewProps> = ({ diff }) => {
 }
 
 interface DiffLineElementProps {
-  line: any // DiffLine
+  line: DiffLine
+  side: 'original' | 'modified'
 }
 
-const DiffLineElement: React.FC<DiffLineElementProps> = ({ line }) => {
+const DiffLineElement: React.FC<DiffLineElementProps> = ({ line, side }) => {
   let bgColor = 'bg-white dark:bg-[#1e1e1e]'
   let textColor = 'text-gray-700 dark:text-gray-300'
   let prefix = ' '
+  const lineNumber =
+    side === 'modified' ? line.modifiedLineNumber : line.originalLineNumber
 
   if (line.type === DiffLineType.Added) {
     bgColor = 'bg-green-50 dark:bg-green-900/20'
@@ -311,7 +315,7 @@ const DiffLineElement: React.FC<DiffLineElementProps> = ({ line }) => {
   return (
     <div className={`flex font-mono text-sm ${bgColor} border-b border-gray-200 dark:border-gray-700`}>
       <span className={`w-8 text-center py-1 px-2 select-none text-gray-500 dark:text-gray-600 flex-shrink-0`}>{prefix}</span>
-      <span className={`w-12 text-right py-1 px-2 select-none text-gray-500 dark:text-gray-600 flex-shrink-0`}>{line.lineNumber || '-'}</span>
+      <span className={`w-12 text-right py-1 px-2 select-none text-gray-500 dark:text-gray-600 flex-shrink-0`}>{lineNumber || '-'}</span>
       <span className={`flex-1 py-1 px-2 break-all ${textColor}`}>{line.content}</span>
     </div>
   )

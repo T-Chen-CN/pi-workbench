@@ -179,7 +179,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
             onKeyDown={(event) => {
               if (event.key === 'ArrowDown') {
                 event.preventDefault()
-                setSelected((value) => Math.min(value + 1, filtered.length - 1))
+                setSelected((value) => Math.min(value + 1, Math.max(filtered.length - 1, 0)))
               } else if (event.key === 'ArrowUp') {
                 event.preventDefault()
                 setSelected((value) => Math.max(value - 1, 0))

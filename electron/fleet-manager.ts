@@ -26,7 +26,7 @@ export interface FleetAgent {
   initialize: (config: FleetAgentInitConfig) => Promise<{ success: boolean; error?: string }>
   chat: (
     message: string,
-    options?: { onTextDelta?: (delta: string) => void }
+    options?: { onTextDelta?: (delta: string) => void; timeoutMs?: number }
   ) => Promise<{ success: boolean; response?: string; error?: string }>
   dispose: () => Promise<void> | void
 }
@@ -51,12 +51,16 @@ export interface CreateTaskResult {
 
 const MAX_OUTPUT_CHARS = 100_000
 const MAX_STREAM_BUFFER = 200_000
+/** 后台任务允许更长的单轮执行时间，同时避免永久挂起堵住队列 */
+const FLEET_TASK_TIMEOUT_MS = 30 * 60_000
 
 export class FleetManager {
   private readonly options: FleetManagerOptions
   private readonly active = new Map<string, FleetAgent>()
   private activeCount = 0
   private pumping = false
+  /** 应用正在退出：不再调度新任务，也不再写入已关闭的 store */
+  private disposed = false
 
   constructor(options: FleetManagerOptions) {
     this.options = options
@@ -88,6 +92,9 @@ export class FleetManager {
     name: string,
     prompt: string
   ): Promise<CreateTaskResult> {
+    if (this.disposed) {
+      return { success: false, error: 'Application is shutting down' }
+    }
     if (!workspaceDir || !name.trim() || !prompt.trim()) {
       return { success: false, error: 'Workspace, task name and prompt are required' }
     }
@@ -175,6 +182,8 @@ export class FleetManager {
   }
 
   async disposeAll(): Promise<void> {
+    if (this.disposed) return
+    this.disposed = true
     const agents = [...this.active.entries()]
     this.active.clear()
     for (const [, agent] of agents) {
@@ -189,7 +198,7 @@ export class FleetManager {
 
   /** 从队列中取出任务并执行（默认并发 1） */
   private pump(): void {
-    if (this.pumping) return
+    if (this.pumping || this.disposed) return
     this.pumping = true
 
     try {
@@ -261,11 +270,15 @@ export class FleetManager {
           output = (output + delta).slice(-MAX_STREAM_BUFFER)
           append(delta)
         },
+        timeoutMs: FLEET_TASK_TIMEOUT_MS,
       })
 
       if (!result.success) {
         throw new Error(result.error || 'Agent failed')
       }
+
+      // 应用正在退出时不再写入已关闭的 store
+      if (this.disposed) return
 
       // 运行期间被取消时保持 cancelled 状态
       const current = this.options.store.get(task.id)
@@ -285,6 +298,7 @@ export class FleetManager {
       append(`\n[${new Date(this.now()).toISOString()}] succeeded\n`)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      if (this.disposed) return
       const current = this.options.store.get(task.id)
       if (current?.status === 'cancelled') {
         append(`\n[${new Date(this.now()).toISOString()}] cancelled\n`)

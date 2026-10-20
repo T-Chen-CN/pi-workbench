@@ -40,7 +40,12 @@ export default function App() {
     window.addEventListener('open-settings', openSettings)
     return () => window.removeEventListener('open-settings', openSettings)
   }, [])
-  const { t, setLanguage } = useI18nStore()
+  const { t, setLanguage, language } = useI18nStore()
+
+  // 窗口标题跟随语言
+  useEffect(() => {
+    document.title = t('appTitle')
+  }, [t, language])
 
   // 从便携式 settings.json 恢复语言偏好（默认中文）
   useEffect(() => {

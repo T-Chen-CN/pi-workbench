@@ -3,7 +3,7 @@ import * as path from 'path'
 import * as fs from 'fs/promises'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { createRequire } from 'module'
-import { existsSync, mkdirSync, statSync, watch, type FSWatcher } from 'fs'
+import { existsSync, mkdirSync, realpathSync, statSync, watch, type FSWatcher } from 'fs'
 import { isIgnoredWatchPath } from './watch-filter.js'
 import { WatchBatcher } from './watch-batcher.js'
 import { FileLogger, installConsoleTee } from './logger.js'
@@ -70,6 +70,81 @@ function workspaceForPath(filePath: string): string | null {
   return null
 }
 
+/** 用户明确批准过的工作区根（realpath 规范化后的小写形式，Windows 大小写不敏感） */
+const trustedWorkspaceRoots = new Set<string>()
+
+function normalizeForComparison(value: string): string {
+  return process.platform === 'win32' ? value.toLowerCase() : value
+}
+
+/** realpath 规范化；目标尚不存在时规范化最近的已存在父目录（用于新建文件） */
+function canonicalizePath(targetPath: string): string | null {
+  const resolved = path.resolve(targetPath)
+  try {
+    return realpathSync.native(resolved)
+  } catch {
+    try {
+      const parent = realpathSync.native(path.dirname(resolved))
+      return path.join(parent, path.basename(resolved))
+    } catch {
+      return null
+    }
+  }
+}
+
+/**
+ * 判断 target 是否位于 root 内。使用 path.relative 而不是字符串前缀比较，
+ * 避免 C:\foo 与 C:\foobar 这类前缀误判，也能正确处理符号链接解析后的路径。
+ */
+function isPathInsideRoot(root: string, target: string): boolean {
+  const relative = path.relative(normalizeForComparison(root), normalizeForComparison(target))
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
+/** 登记用户通过原生目录选择器批准的工作区根 */
+function trustWorkspace(targetPath: string): string | null {
+  const canonical = canonicalizePath(targetPath)
+  if (!canonical) return null
+  try {
+    if (!statSync(canonical).isDirectory()) return null
+  } catch {
+    return null
+  }
+  trustedWorkspaceRoots.add(normalizeForComparison(canonical))
+  return canonical
+}
+
+function isTrustedWorkspacePath(targetPath: string): boolean {
+  const canonical = canonicalizePath(targetPath)
+  return canonical !== null && trustedWorkspaceRoots.has(normalizeForComparison(canonical))
+}
+
+/** 文件写删改操作允许的范围：受信任工作区与应用缓存目录 */
+function isAllowedFileTarget(targetPath: string): boolean {
+  const target = canonicalizePath(targetPath)
+  if (!target) return false
+
+  const roots = [...trustedWorkspaceRoots]
+  const cacheRoot = canonicalizePath(path.join(getAppDir(), 'cache'))
+  if (cacheRoot) roots.push(normalizeForComparison(cacheRoot))
+
+  return roots.some((root) => isPathInsideRoot(root, target))
+}
+
+/** 启动时把最近打开的工作区视为已批准（它们都来自此前的目录选择器） */
+async function seedTrustedWorkspacesFromSettings(): Promise<void> {
+  try {
+    const settings = await loadSettingsFile()
+    const recent: unknown = settings.recentWorkspaces
+    if (!Array.isArray(recent)) return
+    for (const workspacePath of recent) {
+      if (typeof workspacePath === 'string') trustWorkspace(workspacePath)
+    }
+  } catch (error) {
+    console.warn('[Main] Failed to seed trusted workspaces:', error)
+  }
+}
+
 const fleetStore = createFleetStore(path.join(getAppDir(), 'data', 'fleet-tasks.db'))
 const fleetManager = new FleetManager({
   store: fleetStore,
@@ -100,6 +175,14 @@ const fleetManager = new FleetManager({
 
 // 便携式架构：获取应用目录
 function getAppDir(): string {
+  // electron-builder portable：应用从 %TEMP% 解压目录运行，真实目录由环境变量提供
+  if (process.env.PORTABLE_EXECUTABLE_DIR) {
+    return process.env.PORTABLE_EXECUTABLE_DIR
+  }
+  // AppImage：可执行文件位于只读挂载点，数据放在 .AppImage 文件旁边
+  if (process.env.APPIMAGE) {
+    return path.dirname(process.env.APPIMAGE)
+  }
   if (app.isPackaged) {
     // 生产模式：可执行文件所在目录
     return path.dirname(app.getPath('exe'))
@@ -199,15 +282,37 @@ app.whenReady().then(async () => {
   }
 
   await initAppDirectories()
+  await seedTrustedWorkspacesFromSettings()
   createWindow()
 })
 
+let shuttingDown = false
+
+/** 退出前等待异步资源释放，避免在任务仍写库时关闭 store */
+async function shutdownApplication(): Promise<void> {
+  try {
+    terminalManager.closeAll()
+    pluginManager.disposeAll()
+    await Promise.allSettled([fleetManager.disposeAll(), agentRegistry.disposeAll()])
+  } catch (error) {
+    console.error('[Main] Shutdown cleanup failed:', error)
+  } finally {
+    console.log('[Main] Shutdown complete')
+    fileLogger?.close()
+  }
+}
+
+app.on('before-quit', (event) => {
+  // 第一次退出请求先拦下，完成异步清理后再真正退出
+  if (shuttingDown) return
+  event.preventDefault()
+  shuttingDown = true
+  void shutdownApplication().finally(() => app.quit())
+})
+
 app.on('will-quit', () => {
+  // 兜底关闭日志（正常路径已在 shutdownApplication 中关闭）
   fileLogger?.close()
-  terminalManager.closeAll()
-  pluginManager.disposeAll()
-  void fleetManager.disposeAll()
-  void agentRegistry.disposeAll()
 })
 
 app.on('window-all-closed', () => {
@@ -224,16 +329,18 @@ app.on('activate', () => {
 
 // IPC Handlers
 ipcMain.handle('dialog:openDirectory', async () => {
-  if (!mainWindow) return { success: false, error: 'No window available' }
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
+    : await dialog.showOpenDialog({ properties: ['openDirectory'] })
 
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory']
-  })
+  const picked = result.filePaths[0]
+  // 只有用户通过原生对话框明确选择的目录才会被批准为工作区
+  const trusted = !result.canceled && picked ? trustWorkspace(picked) : null
 
   return {
     success: true,
     canceled: result.canceled,
-    path: result.filePaths[0]
+    path: trusted ?? picked
   }
 })
 
@@ -251,6 +358,9 @@ ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
 
 ipcMain.handle('fs:writeFile', async (_event, filePath: string, content: string) => {
   try {
+    if (!isAllowedFileTarget(filePath)) {
+      return { success: false, error: 'Path is outside the open workspace' }
+    }
     await fs.writeFile(filePath, content, 'utf-8')
     const workspaceDir = workspaceForPath(filePath)
     if (workspaceDir) {
@@ -312,6 +422,9 @@ ipcMain.handle('fs:stat', async (_event, filePath: string) => {
 
 ipcMain.handle('fs:delete', async (_event, targetPath: string) => {
   try {
+    if (!isAllowedFileTarget(targetPath)) {
+      return { success: false, error: 'Path is outside the open workspace' }
+    }
     await fs.rm(targetPath, { recursive: true, force: false })
     return { success: true }
   } catch (error) {
@@ -324,6 +437,9 @@ ipcMain.handle('fs:delete', async (_event, targetPath: string) => {
 
 ipcMain.handle('fs:rename', async (_event, oldPath: string, newPath: string) => {
   try {
+    if (!isAllowedFileTarget(oldPath) || !isAllowedFileTarget(newPath)) {
+      return { success: false, error: 'Path is outside the open workspace' }
+    }
     await fs.rename(oldPath, newPath)
     return { success: true }
   } catch (error) {
@@ -533,7 +649,15 @@ ipcMain.handle('app:getSettings', async () => {
 
 ipcMain.handle('app:saveSettings', async (_event, settings: any) => {
   try {
-    await saveSettingsFile(settings)
+    const sanitized = { ...(settings ?? {}) }
+    // 最近工作区只允许保存已批准路径，避免渲染进程借此为任意目录背书
+    if (Array.isArray(sanitized.recentWorkspaces)) {
+      sanitized.recentWorkspaces = sanitized.recentWorkspaces.filter(
+        (workspacePath: unknown): boolean =>
+          typeof workspacePath === 'string' && isTrustedWorkspacePath(workspacePath)
+      )
+    }
+    await saveSettingsFile(sanitized)
     return { success: true }
   } catch (error) {
     return {
@@ -559,6 +683,9 @@ ipcMain.handle('app:getRecentWorkspaces', async () => {
 
 ipcMain.handle('app:addRecentWorkspace', async (_event, workspacePath: string) => {
   try {
+    if (!isTrustedWorkspacePath(workspacePath)) {
+      return { success: false, workspaces: [], error: 'Workspace is not approved' }
+    }
     const settings = await loadSettingsFile()
     const existing: string[] = Array.isArray(settings.recentWorkspaces) ? settings.recentWorkspaces : []
     const workspaces = [workspacePath, ...existing.filter((p) => p !== workspacePath)].slice(0, 10)
@@ -576,6 +703,14 @@ ipcMain.handle('app:addRecentWorkspace', async (_event, workspacePath: string) =
 // 工作区配置管理
 ipcMain.handle('workspace:init', async (_event, workspacePath: string) => {
   try {
+    // 工作区根必须由主进程批准（目录选择器或启动时的最近工作区）
+    if (!isTrustedWorkspacePath(workspacePath)) {
+      return {
+        success: false,
+        error: 'Workspace is not approved. Open it with the Open Project dialog.'
+      }
+    }
+
     const configDir = path.join(workspacePath, '.pi-workbench')
     const pluginsDir = path.join(configDir, 'plugins')
     const sessionsDir = path.join(configDir, 'sessions')
@@ -633,6 +768,9 @@ ipcMain.handle('workspace:getConfig', async (_event, workspacePath: string) => {
 
 ipcMain.handle('workspace:saveConfig', async (_event, workspacePath: string, config: any) => {
   try {
+    if (!isTrustedWorkspacePath(workspacePath)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
     const configPath = path.join(workspacePath, '.pi-workbench', 'config.json')
     await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8')
     return { success: true }
@@ -924,6 +1062,26 @@ ipcMain.handle('agent:chat', async (event, message: string, requestId?: string, 
     return {
       success: false,
       error: `Agent error: ${errorMessage}`
+    }
+  }
+})
+
+// Agent 中止当前请求
+ipcMain.handle('agent:abort', async (_event, workspaceDir?: string) => {
+  try {
+    const agent = workspaceDir ? agentRegistry.get(workspaceDir) : null
+    if (!agent) {
+      return { success: false, error: 'Agent not initialized for this workspace' }
+    }
+    if (typeof agent.abort !== 'function') {
+      return { success: false, error: 'Agent does not support abort' }
+    }
+    await agent.abort()
+    return { success: true }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
     }
   }
 })

@@ -131,6 +131,11 @@ src/store/appStore.ts  // 不要创建巨大的单一 store！
 
 **所有文件系统操作必须通过 IPC！**
 
+**工作区信任**：
+- ✅ 工作区根目录只能由主进程批准：原生目录选择器的结果，或启动时从 `config/settings.json` 载入的最近工作区
+- ✅ 文件写 / 删 / 改只允许发生在受信任工作区与应用缓存目录（`{appDir}/cache/`）内；校验使用 `realpath` 规范化 + `path.relative` 判断包含关系
+- ❌ 禁止让渲染进程通过 `workspace:init` 自行注册任意目录；`app:saveSettings` 保存的 `recentWorkspaces` 也会被过滤为已批准路径
+
 #### ✅ 正确的做法
 ```typescript
 // 渲染进程 (src/api/index.ts)
@@ -554,6 +559,8 @@ const logPath = path.join(appDir, 'logs', 'app.log')
 **配置存储约束**:
 - ✅ API 配置存储在 `{appDir}/config/api-config.json`（API Key 使用 Electron `safeStorage` 加密，格式 `enc:<base64>`）
 - ✅ Agent 模型配置写入 `{appDir}/data/agent/models.json`（API Key 通过环境变量 `$PI_WORKBENCH_API_KEY` 插值，不落盘）
+- ✅ 模型供应商（provider / API URL / API Key / 模型）是**应用级全局配置**，所有工作区共用
+- ❌ 禁止在工作区配置（`.pi-workbench/config.json`）中提供 provider / API Key / 模型选择
 - ❌ **禁止**使用 `.env` 文件（位置不明确，违反便携式约束）
 - ❌ **禁止**将 API Key 写入源码或提交到版本控制
 

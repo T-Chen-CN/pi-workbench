@@ -23,6 +23,16 @@ describe('computeDiff', () => {
     expect(result.removedCount).toBe(0)
     expect(formatDiffStats(result)).toBe('+2 -0')
   })
+
+  it('keeps following lines unchanged after an insertion', () => {
+    const result = computeDiff('a\nb\nc', 'x\na\nb\nc')
+    expect(result.addedCount).toBe(1)
+    expect(result.removedCount).toBe(0)
+    const unchanged = result.lines.filter((line) => line.type === DiffLineType.Unchanged)
+    expect(unchanged.map((line) => line.content)).toEqual(['a', 'b', 'c'])
+    expect(unchanged.map((line) => line.originalLineNumber)).toEqual([1, 2, 3])
+    expect(unchanged.map((line) => line.modifiedLineNumber)).toEqual([2, 3, 4])
+  })
 })
 
 describe('mergeFileEdits', () => {

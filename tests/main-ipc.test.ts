@@ -19,7 +19,7 @@ type IpcHandler = (event: unknown, ...args: unknown[]) => Promise<IpcResult> | I
  */
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, IpcHandler>()
-  const state = { appDir: '' }
+  const state = { appDir: '', pickedPath: '' }
   const safeStorage = {
     isEncryptionAvailable: () => true,
     encryptString: (value: string) => Buffer.from(`enc:${value}`, 'utf-8'),
@@ -59,7 +59,7 @@ vi.mock('electron', () => ({
     on = () => {}
   },
   dialog: {
-    showOpenDialog: async () => ({ canceled: false, filePaths: ['/tmp/picked'] }),
+    showOpenDialog: async () => ({ canceled: false, filePaths: [mocks.state.pickedPath] }),
   },
   safeStorage: mocks.safeStorage,
 }))
@@ -96,19 +96,35 @@ beforeEach(async () => {
   await fs.rm(path.join(appDir, 'config'), { recursive: true, force: true })
   await fs.mkdir(path.join(appDir, 'config'), { recursive: true })
   workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-ipc-'))
+  // 模拟用户通过原生目录选择器打开工作区（主进程据此批准工作区根）
+  mocks.state.pickedPath = workDir
+  await call('dialog:openDirectory')
 })
 
 afterEach(async () => {
   vi.unstubAllGlobals()
+  await call('workspace:dispose', workDir).catch(() => undefined)
   await fs.rm(workDir, { recursive: true, force: true })
 })
 
 describe('filesystem IPC handlers', () => {
   it('writes and reads a file', async () => {
+    await call('workspace:init', workDir)
     const target = path.join(workDir, 'a.txt')
 
     await expect(call('fs:writeFile', target, 'hello')).resolves.toMatchObject({ success: true })
     await expect(call('fs:readFile', target)).resolves.toEqual({ success: true, content: 'hello' })
+  })
+
+  it('rejects writes outside the approved workspaces', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-outside-'))
+    try {
+      const result = await call('fs:writeFile', path.join(outside, 'x.txt'), 'x')
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('outside')
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true })
+    }
   })
 
   it('returns an error for missing files', async () => {
@@ -152,6 +168,7 @@ describe('filesystem IPC handlers', () => {
   })
 
   it('renames and deletes files', async () => {
+    await call('workspace:init', workDir)
     const source = path.join(workDir, 'old.txt')
     const target = path.join(workDir, 'new.txt')
     await fs.writeFile(source, 'x')
@@ -212,22 +229,43 @@ describe('app settings handlers', () => {
   })
 
   it('moves recent workspaces to the front, deduplicates and caps at 10', async () => {
-    for (let i = 0; i < 11; i++) {
-      await call('app:addRecentWorkspace', `/tmp/ws-${i}`)
+    const recentRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-recent-'))
+    try {
+      for (let i = 0; i < 11; i++) {
+        const dir = path.join(recentRoot, `ws-${i}`)
+        await fs.mkdir(dir)
+        mocks.state.pickedPath = dir
+        await call('dialog:openDirectory')
+        await call('app:addRecentWorkspace', dir)
+      }
+
+      let workspaces = (await call('app:getRecentWorkspaces')).workspaces as string[]
+      expect(workspaces).toHaveLength(10)
+      expect(workspaces[0]).toBe(path.join(recentRoot, 'ws-10'))
+      expect(workspaces).not.toContain(path.join(recentRoot, 'ws-0'))
+
+      const again = path.join(recentRoot, 'ws-5')
+      workspaces = (await call('app:addRecentWorkspace', again)).workspaces as string[]
+      expect(workspaces[0]).toBe(again)
+      expect(workspaces.filter((w) => w === again)).toHaveLength(1)
+    } finally {
+      await fs.rm(recentRoot, { recursive: true, force: true })
     }
-
-    let workspaces = (await call('app:getRecentWorkspaces')).workspaces as string[]
-    expect(workspaces).toHaveLength(10)
-    expect(workspaces[0]).toBe('/tmp/ws-10')
-    expect(workspaces).not.toContain('/tmp/ws-0')
-
-    workspaces = (await call('app:addRecentWorkspace', '/tmp/ws-5')).workspaces as string[]
-    expect(workspaces[0]).toBe('/tmp/ws-5')
-    expect(workspaces.filter((w) => w === '/tmp/ws-5')).toHaveLength(1)
   })
 })
 
 describe('workspace lifecycle handlers', () => {
+  it('rejects a workspace path the user never approved', async () => {
+    const untrusted = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-untrusted-'))
+    try {
+      const result = await call('workspace:init', untrusted)
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('not approved')
+    } finally {
+      await fs.rm(untrusted, { recursive: true, force: true })
+    }
+  })
+
   it('initializes the .pi-workbench directory with a default config', async () => {
     await expect(call('workspace:init', workDir)).resolves.toMatchObject({ success: true })
 
@@ -404,10 +442,11 @@ describe('agent handlers without an initialized agent', () => {
 })
 
 describe('dialog handler', () => {
-  it('fails when no window is available', async () => {
+  it('returns the selected directory and approves it as a workspace', async () => {
     const result = await call('dialog:openDirectory')
 
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('No window')
+    expect(result.success).toBe(true)
+    expect(result.canceled).toBe(false)
+    expect(typeof result.path).toBe('string')
   })
 })

@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   }) => ipcRenderer.invoke('agent:initialize', config),
   agentChat: (message: string, requestId?: string, workspaceDir?: string) =>
     ipcRenderer.invoke('agent:chat', message, requestId, workspaceDir),
+  agentAbort: (workspaceDir?: string) => ipcRenderer.invoke('agent:abort', workspaceDir),
   onAgentStream: (callback: (payload: { requestId?: string; delta: string }) => void) => {
     const listener = (_event: unknown, payload: { requestId?: string; delta: string }) => callback(payload)
     ipcRenderer.on('agent:stream', listener)

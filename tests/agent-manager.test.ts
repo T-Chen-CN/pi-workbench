@@ -23,6 +23,7 @@ interface FakeSession {
   disposed: boolean
   subscribe: (listener: (event: SessionEvent) => void) => () => void
   prompt: (message: string) => Promise<void>
+  abort: () => Promise<void>
   dispose: () => void
   emit: (event: SessionEvent) => void
 }
@@ -43,6 +44,7 @@ function createFakeSession(
     prompt: async (message) => {
       await onPrompt?.(session, message)
     },
+    abort: async () => {},
     dispose: () => {
       session.disposed = true
     },
@@ -256,6 +258,34 @@ describe('AgentManager chat', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toContain('aborted')
+  })
+
+  it('aborts and reports an error when the request times out', async () => {
+    let resolvePrompt: (() => void) | null = null
+    const session = createFakeSession(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvePrompt = resolve
+        })
+    )
+    session.abort = vi.fn(async () => {
+      resolvePrompt?.()
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    vi.useFakeTimers()
+    try {
+      const pending = manager.chat('hi', { timeoutMs: 1000 })
+      await vi.advanceTimersByTimeAsync(1000)
+      const result = await pending
+
+      expect(session.abort).toHaveBeenCalled()
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('timed out')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('reports when the agent produced no response', async () => {
