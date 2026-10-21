@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.12 |
+| 文档版本 | v1.13 |
 | 状态 | Active（正式规范） |
 | 最后更新 | 2026-10-21 |
 | 适用范围 | 渲染进程全部 UI、Monaco / xterm 主题、应用主题设置 |
@@ -64,6 +64,7 @@
 | `--rule-control` | `border-rule-control` | 墨 50% | 墨 50% | 控件边界：输入框、按钮、键帽、搜索框；≥3:1 |
 | `--rule-divide` | `border-rule-divide` | 墨 22% | 墨 22% | 分隔线：卡头下沿、列表行、顶栏/状态栏/面板交界 |
 | `--rule-hairline` | `border-rule-hairline` | 墨 18% | 墨 18% | 卡片外框（装饰性收口） |
+| `--rule-seam` | `bg-rule-seam` | 墨 11% | 墨 11% | 2px 拖拽接缝（等效 1px×22%，125% DPI 下宽度一致） |
 | `--overlay` | `bg-overlay` | `#000000` | `#000000` | 模态遮罩 |
 | `--ink` | `text-ink` | `#171512` | `#EDE7DC` | 主文字 |
 | `--ink-muted` | `text-ink-muted` | `#615C52` | `#A8A093` | 次级文字、功能性元数据（路径、计数、标签、空状态、placeholder） |
@@ -206,6 +207,7 @@
 | 圆形按钮、头像、LED | 9999px | `rounded-full` |
 
 - 边框统一 1px，按角色取值：强调用 `border-accent`；控件边界用 `border-rule-control`；结构分隔用 `border-rule-divide`；卡片外框用 `border-rule-hairline`。
+- 可拖拽接缝使用 **2px `bg-rule-seam`**（等效 1px×22% 的墨量）：1px 在 125% 缩放/DPI 下可能栅格化为 1 或 2 个设备像素，导致两侧接缝一宽一窄；2px 带宽可保证两端一致。
 - 满墨 `border-line` 只用于浮层（弹窗、菜单、命令面板、Toast）外框；不要用它画普通区域或纸卡外框。
 - 不使用大圆角卡片（>6px）；不允许胶囊形按钮（圆形图标按钮除外）。
 
@@ -357,7 +359,8 @@
 - 顶栏 45px：衬线字标 `Pi` + mono `WORKBENCH` + 工作区路径；右侧文字操作（命令面板、Fleet、终端、设置）与主操作按钮。
 - 工作区标签栏 34px：矩形 mono 标签，激活项纸面底 + 2px `accent` 顶线。
 - 主区域三栏：文件树 232px / 编辑器自适应 / 聊天 336px；可拖拽、可折叠，默认宽度见上。
-- 可拖拽分隔条：1px `rule-divide`，hover / 拖拽时转 `accent`；不要用满墨 `bg-line` 画分栏线。
+- **区域分层**：顶栏、工作区标签栏、状态栏、文件树、聊天与终端使用 `bg-panel`；编辑器画布与激活标签页使用 `bg-surface`（更深的"墨池"）；纸卡使用 `bg-raised`。区域先靠底色区分，接缝只做收口。
+- 可拖拽分隔条：2px `bg-rule-seam`，hover / 拖拽时转 `accent`；不要用满墨 `bg-line` 或 1px 线画分栏接缝。
 - 状态栏 28px：mono 文本，左侧品牌/本地优先/Agent 状态，右侧语言、编码、主题。
 
 ### 6.2 欢迎页
@@ -374,7 +377,7 @@
 
 ### 6.3 编辑器
 
-- Monaco 主题固定为 `pi-paper` / `pi-ink`，随 `resolvedTheme` 切换。
+- Monaco 主题固定为 `pi-paper` / `pi-ink`，随 `resolvedTheme` 切换；编辑器背景取 `surface`（工作中的墨池），文件标签条取 `panel`，激活标签取 `surface` 与画布连通。
 - 字体 Geist Mono 13.5px / 22px 行高；中文回退 Noto Sans SC；关闭 minimap；行号弱化。
 - Monaco / xterm 等第三方渲染器通过 `src/theme/tokens.ts` 的 `readThemeTokens(dark)` / `tokenHex` 从 CSS token 读取颜色，不硬编码；行号激活色使用 `ink-muted`。修改主题 token 时只需保证 `TOKEN_NAMES` 覆盖对应变量。
 - 光标、选区、当前行使用松绿（Paper `#2F5D4E` / Ink `#8FC7B4`）；语法色使用第 2.3 节内容色。
@@ -491,6 +494,7 @@
 - [ ] 业务组件未直接写 `font-*`、任意字号、`uppercase`、`tracking-[...]`、`leading-[...]`。
 - [ ] 新增内容类型已落到 `patterns.tsx`，页面只做组合。
 - [ ] 卡片为 `bg-raised` + `border-rule-hairline` 且无投影；控件边界为 `border-rule-control` 且 ≥3:1。
+- [ ] 区域分层正确：外壳/侧栏 `panel`，编辑器与激活标签 `surface`；接缝为 2px `bg-rule-seam`。
 - [ ] 满墨 `border-line` 只出现在浮层（Modal、菜单、命令面板、Toast）上。
 - [ ] `tests/design-system.test.ts` 通过。
 - [ ] placeholder 使用 `ink-muted`。
@@ -558,6 +562,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.13 | 2026-10-21 | 工作区区域分层：外壳/侧栏/终端用 `bg-panel`，编辑器画布与激活标签用 `bg-surface`，Monaco 背景改为 surface；拖拽接缝改为 2px `--rule-seam`（等效 1px×22%），解决 125% 缩放下两侧线宽不一致 |
 | v1.12 | 2026-10-21 | 线条角色化与卡片表面分离：新增 `--rule-control`（控件 50%）/ `--rule-divide`（分隔 22%）/ `--rule-hairline`（卡片外框 18%）三档；纸卡改为 `bg-raised` + 发丝边、取消区内投影，`shadow-print` 只保留给浮层；修正 `--panel` / `--raised` 用途冲突与文首版本号 |
 | v1.11 | 2026-10-21 | Monaco / xterm 主题颜色改由 `src/theme/tokens.ts` 从 CSS token 读取；移除“硬编码颜色例外”规则，守卫不再豁免这两个文件 |
 | v1.10 | 2026-10-21 | 修复设计系统审查问题：搜索焦点可见、移除未定义 `border-line-strong`、同步 Monaco 行号色；`ui.tsx` 原语全部角色化；新增 overlay token；修正圆角/阴影/Toast 时长；Fleet 使用 `StatusText`、Settings 使用 `KeyCap`；扩展守卫检查颜色、圆角、阴影与动效 |

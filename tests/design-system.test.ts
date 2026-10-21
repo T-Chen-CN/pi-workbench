@@ -120,7 +120,7 @@ describe('design system usage', () => {
   it('defines the line roles and maps them to Tailwind', () => {
     const css = readFileSync(resolve(SRC, 'index.css'), 'utf-8')
     const tailwind = readFileSync(resolve(__dirname, '../tailwind.config.js'), 'utf-8')
-    for (const role of ['rule-control', 'rule-divide', 'rule-hairline']) {
+    for (const role of ['rule-control', 'rule-divide', 'rule-hairline', 'rule-seam']) {
       expect(css).toContain(`--${role}`)
       expect(tailwind).toContain(`'${role}'`)
     }

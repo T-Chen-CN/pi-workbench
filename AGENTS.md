@@ -677,10 +677,11 @@ async function initAgent(config: ApiConfig) {
 ### 视觉与组件规范（Paper & Ink）
 - 视觉语言：纸面 + 墨线 + 松绿。默认 Paper 浅色，Ink 深色通过 `<html class="dark">` 切换；不要在组件里写 `dark:` 变体。
 - 所有颜色使用语义 token，禁止硬编码色值或 gray/blue/red 调色板类：
-  - 纸面：`bg-surface`（画布）/ `bg-panel`（面板）/ `bg-raised`（纸卡）/ `bg-sunken`（输入与代码）
+  - 纸面：`bg-surface`（编辑器画布、激活标签）/ `bg-panel`（顶栏、侧栏、状态栏、终端）/ `bg-raised`（纸卡、浮层）/ `bg-sunken`（输入与代码）
   - 悬停与选中：`bg-hover` / `bg-active`
   - 文字：`text-ink` / `text-ink-muted`（承载信息）/ `text-ink-subtle`（仅装饰、分隔与禁用态）
-  - 边框：`border-rule-control`（控件边界）/ `border-rule-divide`（结构分隔）/ `border-rule-hairline`（卡片外框）；满墨 `border-line` 仅用于浮层
+  - 边框：`border-rule-control`（控件边界）/ `border-rule-divide`（结构分隔）/ `border-rule-hairline`（卡片外框）/ `bg-rule-seam`（2px 拖拽接缝）；满墨 `border-line` 仅用于浮层
+- 区域分层：编辑器画布与激活标签用 `surface`（更深），顶栏、侧栏、状态栏、终端用 `panel`；区域先靠底色区分，接缝只做收口。
   - 强调与状态：`text-accent`（松绿链接/选中）、`bg-accent`（主按钮）、`text-success`（暖橄榄）、`text-warning`、`text-danger`（朱砂红）
 - 字体：`font-display`（Instrument Serif + 思源宋体）用于 ≥18px 标题与项目名；`font-reading`（思源宋体）用于 14px 阅读型正文（欢迎页导语、Agent 回复、设置说明）；控件、标签与字段值用默认 `font-sans`（Noto Sans + Noto Sans SC，Label 12px / Value 12.5px）；路径、ID、时间、快捷键与代码用 `font-mono`（Geist Mono，Data 11.5px）。中文标签不要用 mono，也不要加 uppercase 或字距。
 - 形状：圆角 0–2px（`rounded-sm` / `rounded`）；页面内纸卡用 `bg-raised` + 发丝外框、不用阴影；浮层（弹窗、菜单、Toast）用 `bg-raised` + 满墨外框 + `shadow-print`；禁止渐变、玻璃拟态、柔光。

@@ -17,6 +17,7 @@ export default {
         'rule-control': 'var(--rule-control)',
         'rule-divide': 'var(--rule-divide)',
         'rule-hairline': 'var(--rule-hairline)',
+        'rule-seam': 'var(--rule-seam)',
         overlay: 'rgb(var(--overlay) / <alpha-value>)',
         ink: {
           DEFAULT: 'rgb(var(--ink) / <alpha-value>)',

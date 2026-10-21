@@ -77,8 +77,8 @@ describe.each([
     }
   })
 
-  it('keeps dividers and hairlines decorative', () => {
-    for (const role of ['rule-divide', 'rule-hairline']) {
+  it('keeps dividers, hairlines and seams decorative', () => {
+    for (const role of ['rule-divide', 'rule-hairline', 'rule-seam']) {
       const alpha = ruleAlpha(role)
       for (const background of ['surface', 'panel'] as const) {
         expect(

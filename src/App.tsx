@@ -350,7 +350,7 @@ export default function App() {
 
       {/* Header */}
       <header
-        className={`app-drag flex h-[var(--titlebar-height)] flex-shrink-0 select-none items-center justify-between gap-4 border-b border-rule-divide bg-surface ${
+        className={`app-drag flex h-[var(--titlebar-height)] flex-shrink-0 select-none items-center justify-between gap-4 border-b border-rule-divide bg-panel ${
           usesMacTrafficLights ? 'pl-[78px]' : 'pl-4'
         } ${usesCustomWindowControls ? 'pr-0' : 'pr-4'}`}
         onDoubleClick={(event) => {
@@ -449,7 +449,7 @@ export default function App() {
 
       {/* Workspace tabs */}
       {openWorkspaces.length > 0 && (
-        <div className="flex flex-shrink-0 items-center overflow-x-auto border-b border-rule-divide bg-surface px-2">
+        <div className="flex flex-shrink-0 items-center overflow-x-auto border-b border-rule-divide bg-panel px-2">
           {openWorkspaces.map((path) => {
             const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path
             const active = path === workspace
@@ -458,7 +458,7 @@ export default function App() {
                 key={path}
                 className={`group flex h-8 items-center gap-2 border-r border-rule-divide px-3 type-label ${
                   active
-                    ? 'bg-panel text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
+                    ? 'bg-surface text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
                     : 'text-ink-muted hover:bg-hover hover:text-ink'
                 }`}
               >
@@ -538,7 +538,7 @@ export default function App() {
               <div
                 role="separator"
                 aria-orientation="vertical"
-                className="w-px flex-shrink-0 cursor-col-resize bg-rule-divide transition-colors hover:bg-accent"
+                className="w-0.5 flex-shrink-0 cursor-col-resize bg-rule-seam transition-colors hover:bg-accent"
                 onPointerDown={startResize('sidebar')}
               />
             </>
@@ -547,7 +547,7 @@ export default function App() {
           <section className="flex min-w-0 flex-1 flex-col">
             <Suspense
               fallback={
-                <div className="flex min-h-0 flex-1 items-center justify-center bg-panel">
+                <div className="flex min-h-0 flex-1 items-center justify-center bg-surface">
                   <Spinner size={14} />
                 </div>
               }
@@ -567,7 +567,7 @@ export default function App() {
               <div
                 role="separator"
                 aria-orientation="vertical"
-                className="w-px flex-shrink-0 cursor-col-resize bg-rule-divide transition-colors hover:bg-accent"
+                className="w-0.5 flex-shrink-0 cursor-col-resize bg-rule-seam transition-colors hover:bg-accent"
                 onPointerDown={startResize('chat')}
               />
               <aside
@@ -589,7 +589,7 @@ export default function App() {
         />
       )}
 
-      <footer className="flex h-7 flex-shrink-0 items-center gap-4 border-t border-rule-divide bg-surface px-3.5 type-caption text-ink-muted">
+      <footer className="flex h-7 flex-shrink-0 items-center gap-4 border-t border-rule-divide bg-panel px-3.5 type-caption text-ink-muted">
         <span className="text-ink-muted">PI WORKBENCH</span>
         <span>LOCAL-FIRST</span>
         {workspace && <span className="text-accent">● PI AGENT</span>}

@@ -62,7 +62,7 @@ function buildEditorTheme(isDark: boolean): monaco.editor.IStandaloneThemeData {
       { token: 'attribute.name', foreground: color('hl-attr').slice(1) },
     ],
     colors: {
-      'editor.background': color('panel'),
+      'editor.background': color('surface'),
       'editor.foreground': color('ink'),
       'editorLineNumber.foreground': color('ink-subtle'),
       'editorLineNumber.activeForeground': color('ink-muted'),
@@ -423,15 +423,15 @@ export const MonacoEditor: React.FC = () => {
 
   if (!currentFile) {
     return (
-      <div className="flex flex-1 items-center justify-center bg-panel">
+      <div className="flex flex-1 items-center justify-center bg-surface">
         <EmptyState icon={FileCode} title={t('noFileOpen')} description={t('selectFileToEdit')} />
       </div>
     )
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-panel">
-      <div className="flex flex-shrink-0 items-stretch overflow-x-auto border-b border-rule-divide bg-surface">
+    <div className="flex min-h-0 flex-1 flex-col bg-surface">
+      <div className="flex flex-shrink-0 items-stretch overflow-x-auto border-b border-rule-divide bg-panel">
         {openFiles.map((file) => {
           const active = currentFile?.path === file.path
           return (
@@ -439,7 +439,7 @@ export const MonacoEditor: React.FC = () => {
               key={file.path}
               className={`group flex h-[34px] items-center gap-2 border-r border-rule-divide pl-3 pr-1.5 type-label transition-colors ${
                 active
-                  ? 'bg-panel text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
+                  ? 'bg-surface text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
                   : 'text-ink-muted hover:bg-hover hover:text-ink'
               }`}
             >
