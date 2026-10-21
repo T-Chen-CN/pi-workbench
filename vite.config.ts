@@ -227,13 +227,10 @@ function devAgentBridge(): Plugin {
           try {
             const message = String(body.message ?? '')
             const sessionId = typeof body.sessionId === 'string' ? body.sessionId : undefined
+            const onTrace = (event: Record<string, unknown>) => sendSse(res, 'trace', event)
             const result = sessionId
-              ? await agent.chat(sessionId, message, {
-                  onTextDelta: (delta: string) => sendSse(res, 'delta', { delta }),
-                })
-              : await agent.chat(message, {
-                  onTextDelta: (delta: string) => sendSse(res, 'delta', { delta }),
-                })
+              ? await agent.chat(sessionId, message, { onTrace })
+              : await agent.chat(message, { onTrace })
             sendSse(res, 'done', result)
           } catch (chatError) {
             sendSse(res, 'done', {

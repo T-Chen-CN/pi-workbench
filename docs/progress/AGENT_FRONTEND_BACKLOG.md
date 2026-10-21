@@ -1,0 +1,329 @@
+# Agent 前端开发目标（Backlog）
+
+> **状态**: 待排期（仅记录目标，不代表已排期或已实现）
+> **日期**: 2026-10-22
+> **范围**: Pi Workbench 聊天 / Agent 前端，以及必要的桥接能力
+> **相关**: [Agent 过程轨迹方案](../architecture/AGENT_TRACE.md)、[设计系统](../design/DESIGN_SYSTEM.md)、[项目状态](./STATUS.md)
+
+---
+
+## 1. 文档目的
+
+本文汇总 2026-10-22 对 Agent 前端的差距审查结果，作为后续独立排期的开发目标清单。每一项包含：
+
+- 当前状态与问题
+- 目标交互
+- 技术可行性 / SDK 能力
+- 依赖与风险
+- 验收方向
+
+本文不承诺实现顺序或时间。思考与工具轨迹已由 [AGENT_TRACE.md](../architecture/AGENT_TRACE.md) 单独规划，这里不重复展开，只把它作为多项能力的依赖。
+
+## 2. 当前基线
+
+已经具备：
+
+- 多会话并行、会话标签 / 列表、模型自动标题、重命名 / 删除
+- 运行中 / 未读 / 错误 / 待操作（占位）标签状态
+- 流式输出、50ms 合并、块级 Markdown memo、低优先级解析
+- 附件：已打开文件、编辑器选区片段
+- 事后 Diff 审阅：逐文件保留 / 还原
+- 终端输出附加给 Agent、Fleet 后台任务、工作区信任边界
+- 命令面板中的应用命令与会话命令
+
+已知缺口集中在：**控制权（审批 / 计划 / 回退）、长任务注意力（队列 / 通知）、上下文与恢复、消息级操作。**
+
+## 3. 优先级总览
+
+| ID | 目标 | 优先级 | 依赖 |
+| --- | --- | --- | --- |
+| AF-01 | 工具审批与权限模式 | P0 | AGENT_TRACE 工具行、`needsAction` 状态 |
+| AF-02 | 计划模式（Plan / Act） | P0 | 工具过滤、审批/计划卡 |
+| AF-03 | 检查点与回退 | P0 | 文件快照、会话树、Diff 审阅 |
+| AF-04 | 运行中队列与 steer | P0 | Pi `PromptOptions.streamingBehavior` |
+| AF-05 | 上下文用量与压缩 | P0 | `getContextUsage`、compaction 事件 |
+| AF-06 | 通知与注意力路由 | P0 | `needsAction`、Electron Notification |
+| AF-07 | 消息操作与对话分支 | P1 | 会话树 / 重新生成 |
+| AF-08 | 模型与思考控制 | P1 | Pi 模型 / thinking 变更 API |
+| AF-09 | 文件引用、mention 与附件 | P1 | 文件树、`PromptOptions.images` |
+| AF-10 | 内联变更审阅 | P1 | Diff 审阅、检查点 |
+| AF-11 | 错误与重试 UX | P1 | auto_retry 事件 |
+| AF-12 | 当前任务 / 计划列表 | P1 | 计划模式、压缩保留 |
+| AF-13 | 会话搜索、置顶、归档、导出 | P2 | 会话存储、导出 API |
+| AF-14 | 斜杠命令与提示模板 | P2 | 命令面板、Pi prompt templates |
+| AF-15 | 用量、成本与预算 | P2 | `getSessionStats` |
+| AF-16 | 导航与无障碍 | P2 | 聊天滚动、消息操作 |
+| AF-17 | 统一活动 / 子 Agent 可见性 | P2 | Fleet、工具轨迹 |
+| AF-18 | 空状态建议与下一步操作 | P2 | Welcome、会话上下文 |
+
+---
+
+## 4. P0 目标详情
+
+### AF-01 工具审批与权限模式
+
+**现状**
+
+- `read / write / edit / bash` 等工具在工作区内自动执行，只有工作区信任边界。
+- 会话标签的 `needsAction` 状态已设计但没有任何触发。
+- 设置中没有权限模式或按类别的自动批准。
+
+**目标交互**
+
+- 工具执行前按策略判断：自动批准、需要审批、直接阻止。
+- 审批卡展示：工具名、参数摘要、影响范围、write/edit 的 Diff 预览、风险提示。
+- 操作：允许一次 / 本会话允许 / 始终允许 / 拒绝并说明；拒绝理由回传给模型。
+- 支持按类别配置：读项目文件、改项目文件、执行安全命令、执行全部命令、外部 / MCP；默认只自动批准读取。
+- 等待审批时：驱动 `needsAction` 标签状态、系统通知、会话内联提示；超时默认拒绝，不能“超时即通过”。
+- 审批与具体参数绑定；参数变化后旧批准失效。
+
+**技术要点**
+
+- Pi SDK 的 `beforeToolCall` 可返回 `{ block, reason }` 并等待 Promise，可在主进程挂起工具执行。
+- 新增主进程 ↔ 渲染层审批请求 / 响应 IPC；按 `requestId + sessionId + toolCallId` 路由。
+- 策略存储在工作区配置或应用设置；审批结果写 `agent.log` 以便审计。
+- 与 AGENT_TRACE 的 `ToolRow` 复用展示；审批状态不要另造一套工具 UI。
+
+**风险**
+
+- 审批疲劳：必须按风险分级，不能每个 read 都询问。
+- 失败要 fail-closed；未响应的审批不能视为允许。
+- 参数中可能含敏感信息，审批卡只展示摘要，不展示完整 write 内容。
+
+**验收方向**
+
+- write / bash 在默认策略下需要审批；read 可自动批准。
+- 允许一次、本会话允许、始终允许、拒绝四条路径都可验证。
+- 拒绝后模型收到明确原因；超时不会执行。
+- 等待期间标签状态和系统通知正确，批准后恢复执行。
+
+### AF-02 计划模式（Plan / Act）
+
+**现状**
+
+- 模型收到任务后可以直接改文件，没有“先只读探索、给出计划、用户确认后执行”的阶段。
+- 没有结构化的计划预览，也没有计划与运行进度的区分。
+
+**目标交互**
+
+- Plan / Act 模式切换；Plan 模式只挂只读工具，禁止写文件和执行命令。
+- Plan 输出可编辑、可拒绝、可批准的步骤列表；明确列出计划使用的工具、影响文件和副作用。
+- 批准后切换到 Act；计划作为任务列表保留，执行时更新状态。
+- 计划变更或上下文变化时，旧批准要失效或要求重新确认。
+
+**技术要点**
+
+- `createAgentSession` 支持指定工具集；可使用只读工具创建 Plan 运行时。
+- 计划可由模型结构化输出（JSON / 专用工具）或从消息中解析；优先做专用工具以便校验。
+- 计划批准与 AF-01 的审批机制共用一套“暂停—确认—继续”基础设施。
+
+**验收方向**
+
+- Plan 模式下写文件和命令工具不可用。
+- 用户可以编辑计划、拒绝、批准；批准后才进入 Act。
+- 计划预览与运行轨迹在视觉上分开，不把已完成工具事件伪装成计划。
+
+### AF-03 检查点与回退
+
+**现状**
+
+- 只在轮次结束后按文件展示 Diff，支持逐文件保留 / 还原。
+- 不能回退对话，也没有整轮文件快照；bash 副作用无法回退。
+
+**目标交互**
+
+- 每轮 prompt 前自动建立检查点（文件 + 对话位置）。
+- 回退菜单：恢复代码、恢复对话、两者都恢复、从此处摘要、取消。
+- 明确提示：通过 bash 产生的文件变更、外部进程副作用不在检查点范围内。
+- 保留最近 N 个检查点，可配置清理周期；跨重启可恢复。
+
+**技术要点**
+
+- 复用现有 write/edit 前后内容捕获，扩展到每轮全部被修改文件。
+- 快照按内容哈希存储，避免重复；存放在应用数据目录，不能写入用户工作区。
+- Pi 会话树支持 `navigateTree` / `getUserMessagesForForking`，可用于对话回退与分支。
+- 大文件、二进制文件和子 Agent 修改需要明确排除规则。
+
+**验收方向**
+
+- 修改多个文件后可以整轮回退，代码与对话分别/同时恢复。
+- 回退后 Diff 审阅状态、会话消息和文件系统一致。
+- 明确显示 bash 副作用不可回退，不能用检查点冒充全局撤销。
+
+### AF-04 运行中队列与 steer
+
+**现状**
+
+- `isLoading` 时输入框禁用，用户只能等待或停止。
+- 没有待发送消息、排队、steer、编辑/删除队列等能力。
+
+**目标交互**
+
+- 运行中仍可输入，提交后进入“待发送消息”卡片。
+- 两种模式：Steer（注入当前轮，优先）和 Queue（当前轮结束后发送）。
+- 支持编辑、删除、排序、切换模式；Stop and send 表示停止当前轮并立即发送。
+- 待发送消息在会话切换、应用重启后不丢失。
+
+**技术要点**
+
+- Pi `PromptOptions.streamingBehavior` 已支持 `steer` / `followUp`。
+- 主进程按会话维护队列；渲染层只负责展示与编辑。
+- 需要明确 steer 被接受、被忽略、被合并时的 UI 反馈。
+
+**验收方向**
+
+- 运行中发送 steer 能影响当前轮；queue 在当前轮结束后执行。
+- 停止并发送、删除、编辑、切换会话后队列状态正确。
+- 长输出期间输入框不再被禁用。
+
+### AF-05 上下文用量与压缩
+
+**现状**
+
+- 只有每条回复后的 token 统计，没有上下文窗口占用、压缩入口或压缩提示。
+
+**目标交互**
+
+- 输入框附近或状态栏显示上下文仪表：已用 / 上限、百分比，80% 警告、95% 严重。
+- 悬浮或点击展开：系统提示、工具、消息、缓存等分项；成本可选。
+- 手动“压缩上下文”操作；自动压缩发生时在对话中显示分隔线/系统事件。
+- 压缩后任务列表、计划、关键上下文要保留并重新注入。
+
+**技术要点**
+
+- Pi `AgentSession.getContextUsage()` 提供当前投影用量；`compact()` 支持手动压缩；`compaction_start/end` 事件可转发。
+- 模型元数据包含 `contextWindow`，可用于计算百分比。
+- `getSessionStats()` 可提供会话累计 token / 成本。
+- 压缩事件必须同步刷新仪表，避免仪表在压缩后冻结。
+
+**验收方向**
+
+- 仪表随上下文增长更新，压缩后立即回落。
+- 80% / 95% 提示可见但不遮挡输入。
+- 手动压缩失败时有明确错误；压缩期间状态可见。
+
+### AF-06 通知与注意力路由
+
+**现状**
+
+- 后台会话只有标签未读点；没有 OS 通知、声音或任务栏提示。
+- 用户切走后无法知道会话完成、报错或卡在审批。
+
+**目标交互**
+
+- 触发事件：需要审批 / 回答、计划待确认、轮次完成、失败。
+- 通道：OS 通知 + 标签徽标 + 可选声音；应用在前台时不重复通知。
+- 短任务不通知（可配置阈值）；安静时段；点击通知聚焦应用并切到对应会话。
+- 审批通知可显示“查看”入口，不在通知里直接执行高风险操作（首版）。
+
+**技术要点**
+
+- Electron `Notification` + `BrowserWindow` 焦点判断；点击后切换工作区/会话。
+- 与 `needsAction` 状态、审批请求、轮次结束事件统一为“attention”事件。
+- 通知设置持久化到应用配置；每个事件类型可独立开关。
+
+**验收方向**
+
+- 后台完成、错误、待审批三种事件都能通知；前台不重复。
+- 点击通知能定位到正确工作区和会话。
+- 安静时段、阈值、开关生效。
+
+---
+
+## 5. P1 目标摘要
+
+### AF-07 消息操作与对话分支
+
+- 复制整条回复、重试 / 重新生成、编辑用户消息后重发、删除消息。
+- 对话分支：从某条消息 fork；重新生成产生兄弟回复，用 `n / m` 切换。
+- 技术：Pi 会话树导航 / fork、消息 ID 稳定化；首版可先做重试和复制，再做分支 UI。
+
+### AF-08 模型与思考控制
+
+- 输入框旁显示当前模型，可切换模型与 reasoning effort / thinking level。
+- 按会话持久化；模型能力、上下文窗口、是否支持 thinking 可见。
+- 失败时提供 fallback 或引导到设置。
+- 技术：Pi 的模型 / thinking 变更 API；与上下文仪表联动。
+
+### AF-09 文件引用、mention 与附件
+
+- Agent 输出中的文件路径可点击，支持 `path:line` 打开编辑器。
+- `@` 文件搜索、拖拽文件、粘贴图片 / 截图作为附件。
+- 附件显示类型、大小、来源；发送前可移除。
+- 技术：工作区文件索引、Monaco `openFile`、Pi `PromptOptions.images`。
+
+### AF-10 内联变更审阅
+
+- 在消息内显示“修改了 N 个文件”的变更卡，而不是只打开独立 DiffViewer。
+- 支持逐项 / 全部接受、还原、打开文件、查看 diff；与检查点联动。
+- 首版可复用现有 DiffViewer，只增加消息内摘要卡。
+
+### AF-11 错误与重试 UX
+
+- 显示自动重试次数、倒计时、失败原因；提供手动重试。
+- 速率限制、额度不足、模型不可用时给出具体下一步（切换模型 / 打开设置）。
+- 技术：把 `auto_retry_start/end` 事件转发到渲染层，而不是只写日志。
+
+### AF-12 当前任务 / 计划列表
+
+- 当前 Agent 轮次的 todo / 步骤列表：状态、进度、折叠、跨压缩保留。
+- 与 Plan 模式、工具轨迹联动；不要把 Fleet 后台任务与当前任务混在一起。
+
+---
+
+## 6. P2 目标摘要
+
+- **AF-13 会话管理**：搜索、置顶、归档、导出 HTML / JSONL；SDK 已提供导出能力。
+- **AF-14 斜杠命令 / 模板**：`/compact`、`/clear`、`/plan`、`/model`，以及技能 / 提示模板。
+- **AF-15 用量与预算**：会话总 token / 成本、预算提醒、模型成本对比。
+- **AF-16 导航与无障碍**：滚动到底 / 新消息提示、消息键盘导航、完成 / 审批的 `aria-live`、焦点管理。
+- **AF-17 统一活动 / 子 Agent**：把 Fleet、当前会话、子 Agent 的活动整合为一个可见中心。
+- **AF-18 空状态与建议**：根据工作区或最近操作提供建议提示、下一步操作。
+
+---
+
+## 7. 跨领域设计原则
+
+- **审批疲劳**：默认只自动批准低风险读取；高风险动作才打断用户。
+- **失败关闭**：审批超时、通道断开、策略缺失时不能默认允许执行。
+- **批准与载荷绑定**：参数或目标文件变化后，旧批准失效。
+- **注意力分层**：应用内状态 → 标签徽标 → OS 通知；前台优先，避免重复打扰。
+- **诚实的能力边界**：检查点不能撤销 bash 副作用；上下文压缩不能保证保留全部细节，UI 必须说明。
+- **持久化**：队列、待审批、检查点、通知设置要跨会话切换和重启保留。
+- **性能预算**：新增 UI 不能破坏现有流式优化；长轨迹、长结果必须截断或虚拟化。
+- **设计系统**：每项新 UI 先更新 `DESIGN_SYSTEM.md` 并获得确认，再做 Paper / Ink 截图和 1024 / 1440 检查。
+- **可访问性**：审批、错误、完成状态不能只靠颜色；关键事件要有文本与键盘路径。
+
+## 8. 建议排期（仅建议，未承诺）
+
+| 里程碑 | 内容 | 理由 |
+| --- | --- | --- |
+| M1 控制权 | AF-01 审批、AF-02 计划模式，并接通 `needsAction` | 决定 Agent 能否安全自主工作 |
+| M2 长任务 | AF-04 队列/steer、AF-06 通知、AF-05 上下文/压缩 | 决定长任务能否放心切走 |
+| M3 恢复 | AF-03 检查点、AF-07 重试/分支基础 | 决定出错后能否低成本恢复 |
+| M4 日常体验 | AF-08 模型控制、AF-09 文件引用、AF-10 内联审阅、AF-11 错误重试、AF-12 任务列表 | 提升日常使用效率 |
+| M5 完善 | P2 各项 | 搜索、导出、预算、无障碍等 |
+
+前置条件：先完成 AGENT_TRACE 的 parts / ToolRow，因为审批卡、工具轨迹、计划列表都会复用同一套步骤与状态模型。
+
+## 9. 明确不在本文范围
+
+- 语音输入、移动端、多人协作、云同步
+- 插件市场、Agent 商店
+- 与 Pi SDK 无关的通用 IDE 功能
+
+## 10. 参考资料
+
+- [Cline Auto Approve & YOLO mode](https://docs.cline.bot/features/auto-approve)
+- [UX Patterns Guide — Human approval gate](https://uxpatternsguide.com/compare/human-approval-gate-vs-approval-workflow-vs-review-queue-vs-review-before-submit-vs-recommended-next-action/)
+- [UX Patterns Guide — Agent plan preview](https://uxpatternsguide.com/patterns/agent-plan-preview/)
+- [Claude Code Checkpointing](https://code.claude.com/docs/en/checkpointing)
+- [Replit — Steer or queue follow-up messages](https://docs.replit.com/features/agent/steer-and-queue-messages)
+- [AI Elements — Context](https://elements.ai-sdk.dev/components/context)
+- [assistant-ui — Context display](https://www.assistant-ui.com/elements/context-display)
+- [AI Elements — Message actions and branches](https://github.com/vercel/ai-elements/blob/main/skills/ai-elements/references/message.md)
+- [assistant-ui — Message branches](https://www.assistant-ui.com/elements/message-branches)
+- [Cline v3.15 Task Timeline](https://cline.bot/blog/cline-v3-15-unveiling-task-timeline-gemini-implicit-caching-new-community-docs)
+- [Cloudflare Agents — Human-in-the-loop patterns](https://developers.cloudflare.com/agents/concepts/agentic-patterns/human-in-the-loop/)
+- [Kanopy Labs — Agentic UI Patterns](https://kanopylabs.com/blog/agentic-ui-patterns-designing-ai-agent-interfaces)
+- [OpenClaw — Session compaction](https://docs.openclaw.ai/reference/session-management-compaction/compaction)

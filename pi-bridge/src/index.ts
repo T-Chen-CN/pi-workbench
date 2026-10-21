@@ -12,6 +12,8 @@ export type {
   AgentConfig,
   AgentLogger,
   AgentMessage,
+  AgentTraceEvent,
+  AgentTracePart,
   FileEdit,
   SessionOpenResult,
   SessionSummary,

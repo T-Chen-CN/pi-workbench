@@ -1,5 +1,27 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+type AgentStreamPayload = {
+  requestId?: string
+  workspaceDir?: string
+  sessionId?: string
+  type:
+    | 'text_delta'
+    | 'thinking_delta'
+    | 'thinking_redacted'
+    | 'tool_start'
+    | 'tool_update'
+    | 'tool_end'
+  delta?: string
+  toolCallId?: string
+  toolName?: string
+  argsSummary?: string
+  startedAt?: number
+  status?: 'success' | 'error'
+  durationMs?: number
+  resultPreview?: string
+  filePath?: string
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   // 文件系统操作
@@ -79,18 +101,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:chat', message, requestId, workspaceDir, sessionId),
   agentAbort: (workspaceDir?: string, sessionId?: string) =>
     ipcRenderer.invoke('agent:abort', workspaceDir, sessionId),
-  onAgentStream: (
-    callback: (payload: {
-      requestId?: string
-      workspaceDir?: string
-      sessionId?: string
-      delta: string
-    }) => void
-  ) => {
-    const listener = (
-      _event: unknown,
-      payload: { requestId?: string; workspaceDir?: string; sessionId?: string; delta: string }
-    ) => callback(payload)
+  onAgentStream: (callback: (payload: AgentStreamPayload) => void) => {
+    const listener = (_event: unknown, payload: AgentStreamPayload) => callback(payload)
     ipcRenderer.on('agent:stream', listener)
     return () => ipcRenderer.removeListener('agent:stream', listener)
   },

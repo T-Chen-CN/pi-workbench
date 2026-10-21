@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { AgentStreamEvent, AgentTracePart } from '../types/electron'
 
 export interface ChatUsage {
   input: number
@@ -14,6 +15,10 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   timestamp: number
+  /** 按发生顺序排列的文本 / 思考 / 工具片段（assistant） */
+  parts?: AgentTracePart[]
+  /** 内部：当前 thinking 片段的开始时间，用于计算时长 */
+  thinkingStartedAt?: number
   isLoading?: boolean
   /** 正在流式接收文本增量 */
   isStreaming?: boolean
@@ -56,6 +61,10 @@ export function conversationKey(workspacePath: string, sessionId: string): strin
   return `${workspacePath}\u0000${sessionId}`
 }
 
+type ToolStartEvent = Extract<AgentStreamEvent, { type: 'tool_start' }>
+type ToolUpdateEvent = Extract<AgentStreamEvent, { type: 'tool_update' }>
+type ToolEndEvent = Extract<AgentStreamEvent, { type: 'tool_end' }>
+
 interface ChatState {
   conversations: Record<string, ConversationState>
   /** 欢迎页带入的草稿，等工作区会话初始化后写入激活会话 */
@@ -67,6 +76,17 @@ interface ChatState {
   clearPendingDraft: () => void
   addMessage: (key: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => void
   startStreamingMessage: (key: string) => string
+  appendTextPart: (key: string, id: string, delta: string) => void
+  appendThinkingPart: (
+    key: string,
+    id: string,
+    delta: string,
+    options?: { redacted?: boolean }
+  ) => void
+  startToolPart: (key: string, id: string, event: ToolStartEvent) => void
+  updateToolPart: (key: string, id: string, event: ToolUpdateEvent) => void
+  endToolPart: (key: string, id: string, event: ToolEndEvent) => void
+  /** @deprecated 使用 appendTextPart；保留给旧调用方与测试 */
   appendToMessage: (key: string, id: string, delta: string) => void
   finishStreamingMessage: (key: string, id: string, content?: string) => void
   setMessageUsage: (key: string, id: string, usage: ChatUsage) => void
@@ -99,7 +119,57 @@ function updateExisting(
   }
 }
 
-export const useChatStore = create<ChatState>((set) => ({
+/** 只更新指定消息；消息不存在时保持原状态 */
+function updateMessage(
+  state: ChatState,
+  key: string,
+  id: string,
+  updater: (message: ChatMessage) => ChatMessage
+): Partial<ChatState> | ChatState {
+  return updateExisting(state, key, (current) => {
+    let found = false
+    const messages = current.messages.map((message) => {
+      if (message.id !== id) return message
+      found = true
+      return updater(message)
+    })
+    if (!found) return current
+    return { ...current, messages }
+  })
+}
+
+function nextPartId(parts: AgentTracePart[], prefix: string): string {
+  const ids = new Set(parts.map((part) => part.id))
+  let index = 1
+  while (ids.has(`${prefix}-${index}`)) index += 1
+  return `${prefix}-${index}`
+}
+
+function textFromParts(parts: AgentTracePart[] | undefined): string {
+  return (parts ?? [])
+    .filter(
+      (part): part is Extract<AgentTracePart, { type: 'text' }> => part.type === 'text'
+    )
+    .map((part) => part.text)
+    .join('\n')
+}
+
+/** 在写入 text/tool 之前结束当前 thinking 片段并记录时长 */
+function closeThinking(message: ChatMessage, now = Date.now()): ChatMessage {
+  if (!message.thinkingStartedAt) return message
+  const parts = message.parts ? [...message.parts] : []
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index]
+    if (part.type !== 'thinking') continue
+    if (part.durationMs === undefined) {
+      parts[index] = { ...part, durationMs: Math.max(0, now - message.thinkingStartedAt) }
+    }
+    break
+  }
+  return { ...message, parts, thinkingStartedAt: undefined }
+}
+
+export const useChatStore = create<ChatState>((set, get) => ({
   conversations: {},
   pendingDraft: '',
 
@@ -152,6 +222,7 @@ export const useChatStore = create<ChatState>((set) => ({
               id,
               role: 'assistant',
               content: '',
+              parts: [],
               timestamp: Date.now(),
               isStreaming: true,
             },
@@ -162,40 +233,147 @@ export const useChatStore = create<ChatState>((set) => ({
     return id
   },
 
-  appendToMessage: (key, id, delta) =>
+  appendTextPart: (key, id, delta) =>
     set((state) =>
-      updateExisting(state, key, (current) => ({
-        ...current,
-        messages: current.messages.map((message) =>
-          message.id === id ? { ...message, content: message.content + delta } : message
-        ),
-      }))
+      updateMessage(state, key, id, (message) => {
+        const next = closeThinking(message)
+        const parts = next.parts ? [...next.parts] : []
+        const last = parts[parts.length - 1]
+        if (last?.type === 'text') {
+          parts[parts.length - 1] = { ...last, text: last.text + delta }
+        } else {
+          parts.push({ type: 'text', id: nextPartId(parts, 'text'), text: delta })
+        }
+        return { ...next, parts, content: next.content + delta }
+      })
     ),
+
+  appendThinkingPart: (key, id, delta, options) =>
+    set((state) =>
+      updateMessage(state, key, id, (message) => {
+        const parts = message.parts ? [...message.parts] : []
+        const last = parts[parts.length - 1]
+        const redacted = options?.redacted === true
+        if (last?.type === 'thinking' && !last.redacted && !redacted) {
+          parts[parts.length - 1] = { ...last, text: last.text + delta }
+        } else {
+          parts.push({
+            type: 'thinking',
+            id: nextPartId(parts, 'thinking'),
+            text: delta,
+            redacted,
+          })
+        }
+        return {
+          ...message,
+          parts,
+          thinkingStartedAt: message.thinkingStartedAt ?? Date.now(),
+        }
+      })
+    ),
+
+  startToolPart: (key, id, event) =>
+    set((state) =>
+      updateMessage(state, key, id, (message) => {
+        const next = closeThinking(message)
+        const parts = next.parts ? [...next.parts] : []
+        const part: AgentTracePart = {
+          type: 'tool',
+          id: event.toolCallId,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          argsSummary: event.argsSummary,
+          status: 'running',
+        }
+        const existing = parts.findIndex(
+          (item) => item.type === 'tool' && item.toolCallId === event.toolCallId
+        )
+        if (existing >= 0) parts[existing] = part
+        else parts.push(part)
+        return { ...next, parts }
+      })
+    ),
+
+  updateToolPart: (key, id, event) =>
+    set((state) =>
+      updateMessage(state, key, id, (message) => {
+        if (!message.parts) return message
+        const parts = message.parts.map((part) =>
+          part.type === 'tool' && part.toolCallId === event.toolCallId
+            ? { ...part, resultPreview: event.resultPreview ?? part.resultPreview }
+            : part
+        )
+        return { ...message, parts }
+      })
+    ),
+
+  endToolPart: (key, id, event) =>
+    set((state) =>
+      updateMessage(state, key, id, (message) => {
+        if (!message.parts) return message
+        let found = false
+        const parts = message.parts.map((part) => {
+          if (part.type !== 'tool' || part.toolCallId !== event.toolCallId) return part
+          found = true
+          return {
+            ...part,
+            status: event.status,
+            isError: event.status === 'error',
+            durationMs: event.durationMs,
+            resultPreview: event.resultPreview ?? part.resultPreview,
+            filePath: event.filePath ?? part.filePath,
+          }
+        })
+        if (!found) {
+          parts.push({
+            type: 'tool',
+            id: event.toolCallId,
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            argsSummary: '',
+            status: event.status,
+            isError: event.status === 'error',
+            durationMs: event.durationMs,
+            resultPreview: event.resultPreview,
+            filePath: event.filePath,
+          })
+        }
+        return { ...message, parts }
+      })
+    ),
+
+  appendToMessage: (key, id, delta) => get().appendTextPart(key, id, delta),
 
   finishStreamingMessage: (key, id, content) =>
     set((state) =>
-      updateExisting(state, key, (current) => ({
-        ...current,
-        messages: current.messages.map((message) =>
-          message.id === id
-            ? {
-                ...message,
-                content: content ?? message.content,
-                isStreaming: false,
-              }
-            : message
-        ),
-      }))
+      updateMessage(state, key, id, (message) => {
+        const next = closeThinking(message)
+        let parts = (next.parts ?? []).map((part) =>
+          part.type === 'tool' && part.status === 'running'
+            ? { ...part, status: 'error' as const, isError: true }
+            : part
+        )
+        if (parts.length === 0) {
+          const text = content ?? next.content
+          parts = text
+            ? [{ type: 'text', id: nextPartId(parts, 'text'), text }]
+            : []
+        } else if (!parts.some((part) => part.type === 'text') && content) {
+          parts.push({ type: 'text', id: nextPartId(parts, 'text'), text: content })
+        }
+        return {
+          ...next,
+          parts,
+          content: textFromParts(parts) || next.content,
+          isStreaming: false,
+          thinkingStartedAt: undefined,
+        }
+      })
     ),
 
   setMessageUsage: (key, id, usage) =>
     set((state) =>
-      updateExisting(state, key, (current) => ({
-        ...current,
-        messages: current.messages.map((message) =>
-          message.id === id ? { ...message, usage } : message
-        ),
-      }))
+      updateMessage(state, key, id, (message) => ({ ...message, usage }))
     ),
 
   addAttachment: (key, attachment) =>
@@ -243,10 +421,25 @@ export const useChatStore = create<ChatState>((set) => ({
         ...state.conversations,
         [key]: {
           ...conversation(state, key),
-          messages: messages.map((message, index) => ({
-            ...message,
-            id: `msg-${message.timestamp}-${index}`,
-          })),
+          messages: messages.map((message, index) => {
+            const parts =
+              message.parts ??
+              (message.role === 'assistant' && message.content
+                ? [
+                    {
+                      type: 'text' as const,
+                      id: `text-${index + 1}`,
+                      text: message.content,
+                    },
+                  ]
+                : undefined)
+            return {
+              ...message,
+              id: `msg-${message.timestamp}-${index}`,
+              parts,
+              thinkingStartedAt: undefined,
+            }
+          }),
         },
       },
     })),

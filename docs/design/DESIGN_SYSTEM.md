@@ -405,6 +405,11 @@
 - 标签的 `title` / `aria-label` 必须包含状态与草稿文案，运行中同时设置 `aria-busy`；状态不能只靠颜色或动效传达。
 - 会话列表：聊天列内的全高抽屉，行显示标题、消息数、相对时间与"已打开"标记；当前会话用 2px `accent` 左边线 + `accent/[0.06]`；hover 显示重命名 / 删除。
 - 会话标题：首轮回复后由模型生成一次（中文 ≤16 字 / 英文 ≤8 词），存为 `session_info`；手动重命名后不再自动覆盖；无标题时回退首条用户消息。
+- 过程轨迹：助手消息内的 thinking / text / tool 按发生顺序排列；相邻 thinking/tool 合并为一个**默认收起**的过程组。组标题实时显示“思考中… / 运行命令…”或完成摘要“过程 · 思考 N 秒 · N 个工具”；用户手动展开后保持展开，不随正文开始或轮次结束自动改变。
+- 过程组触发器：`type-label` + `text-ink-muted`，chevron 14px，运行中状态点为 `accent` 1.4s 脉冲；内容左侧 `rule-hairline` 发丝线 + 12px 缩进，不使用卡片、阴影或渐变。
+- 思考正文：`.chat-markdown.agent-trace-markdown`（reading 13px / 1.7）+ `text-ink-muted`，Markdown 渲染但流式期间关闭代码高亮。
+- 工具行：状态图标（`accent` spinner / `success` Check / `danger` AlertCircle）+ `type-label` 工具名 + `type-data` 目标 + `type-caption` 耗时；展开后的参数与结果使用 `type-data`，结果块使用 `bg-sunken` + `rule-hairline`，最大高度约 240px 内部滚动；write/edit 有对应 Diff 时提供“查看修改”。
+- 过程组收起时不挂载内容 DOM；触发器使用 `aria-expanded` / `aria-controls`，运行中的内容加 `aria-busy`；失败与状态必须有文字，不能只靠颜色或动效传达。
 
 ### 6.6 终端
 
@@ -572,6 +577,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.17 | 2026-10-22 | Agent 过程轨迹：thinking/text/tool 有序 parts；相邻过程组合并为默认收起的过程组；工具步骤状态、耗时与结果预览；思考正文降低一级排版；补充展开/收起规则与无障碍要求 |
 | v1.16 | 2026-10-22 | 会话标签状态：运行中 accent 脉冲、错误 danger 图标、待操作 warning 靶心环（占位、无触发）、未读 success 实心点、已读无标记；草稿用标题旁铅笔；补充状态动效与可访问性规则 |
 | v1.15 | 2026-10-21 | 多会话：聊天会话标签栏与会话列表抽屉、同工作区并发会话、模型自动标题与手动重命名；标签持久化到工作区 `.pi-workbench/chat-tabs.json` |
 | v1.14 | 2026-10-21 | 长列表性能：聊天消息、Diff 行、文件树改为虚拟渲染；Diff 长行横向滚动、行高 22px；Monaco 大文件模式（关闭换行/折叠，超大文件只读）与细线提示 |
