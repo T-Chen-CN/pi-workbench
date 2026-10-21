@@ -58,7 +58,7 @@ const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
   return (
     <div
       role="status"
-      className={`flex items-start gap-2.5 border border-line border-l-2 ${border} bg-raised px-3 py-2.5 text-ink shadow-print motion-reduce:animate-none ${
+      className={`flex items-start gap-2.5 border border-line border-l-2 ${border} bg-raised px-3 py-2.5 text-ink shadow-print ${
         isExiting ? 'animate-toast-out' : 'animate-toast-in'
       }`}
     >
