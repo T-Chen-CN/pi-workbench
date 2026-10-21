@@ -6,7 +6,7 @@ import { SessionTabs } from '../src/components/SessionTabs'
 import { ChatSessionList } from '../src/components/ChatSessionList'
 import { useI18nStore } from '../src/store/i18nStore'
 import { useSessionStore } from '../src/store/sessionStore'
-import { conversationKey } from '../src/store/chatStore'
+import { conversationKey, useChatStore } from '../src/store/chatStore'
 import { translations } from '../src/i18n/translations'
 import type { SessionSummary } from '../src/types/electron'
 
@@ -65,15 +65,50 @@ describe('SessionTabs', () => {
     expect(props.onClose).toHaveBeenCalledWith('a')
   })
 
-  it('shows running and unread indicators', () => {
+  it('shows running, error, needs-action, unread and draft states', () => {
     useSessionStore.getState().markStreaming(WS, 'a', true)
+    useSessionStore.getState().markError(WS, 'b', 'provider down')
+    useSessionStore.getState().markNeedsAction(WS, 'a', 'review')
+    useSessionStore.getState().markUnread(WS, 'a', true)
+    useChatStore.getState().ensureConversation(conversationKey(WS, 'a'))
+    useChatStore.getState().setDraftInput(conversationKey(WS, 'a'), 'half typed')
+    renderTabs()
+
+    // 运行中优先于待操作/未读/草稿
+    const runningTab = screen.getByRole('tab', { name: /Fix login/ })
+    expect(runningTab.querySelector('.animate-pulse.bg-accent')).toBeTruthy()
+    expect(runningTab.getAttribute('aria-busy')).toBe('true')
+    expect(runningTab.getAttribute('aria-label')).toContain(translations.zh.sessionRunning)
+    expect(runningTab.getAttribute('aria-label')).toContain(translations.zh.sessionDraft)
+    expect(screen.getByLabelText(translations.zh.sessionDraft)).toBeTruthy()
+
+    // 错误优先于未读；tooltip 带错误摘要
+    const errorTab = screen.getByRole('tab', { name: /Refactor tree/ })
+    expect(errorTab.querySelector('.text-danger')).toBeTruthy()
+    expect(errorTab.getAttribute('aria-label')).toContain(translations.zh.sessionError)
+    expect(errorTab.getAttribute('title')).toContain('provider down')
+  })
+
+  it('renders the needs-action target as a hollow warning ring with a center dot', () => {
+    useSessionStore.getState().markNeedsAction(WS, 'b', 'review')
+    renderTabs()
+
+    const tab = screen.getByRole('tab', { name: /Refactor tree/ })
+    const ring = tab.querySelector('.animate-breathe')
+    expect(ring).toBeTruthy()
+    expect(ring?.className).toContain('border-warning')
+    expect(ring?.className).toContain('shadow-')
+    expect(ring?.querySelector('.bg-warning')).toBeTruthy()
+    expect(tab.getAttribute('aria-label')).toContain(translations.zh.sessionNeedsAction)
+  })
+
+  it('shows the unread state as a static success dot', () => {
     useSessionStore.getState().markUnread(WS, 'b', true)
     renderTabs()
 
-    expect(
-      document.querySelectorAll('.animate-pulse.rounded-full.bg-accent').length
-    ).toBeGreaterThan(0)
-    expect(document.querySelectorAll('.rounded-full.bg-accent').length).toBeGreaterThanOrEqual(2)
+    const dot = screen.getByRole('tab', { name: /Refactor tree/ }).querySelector('.bg-success')
+    expect(dot).toBeTruthy()
+    expect(dot?.className).not.toContain('animate')
   })
 })
 

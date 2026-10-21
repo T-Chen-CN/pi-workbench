@@ -523,6 +523,7 @@ export default defineConfig({
             id.includes('highlight.js') ||
             id.includes('lowlight') ||
             id.includes('micromark') ||
+            id.includes('/marked/') ||
             id.includes('/mdast') ||
             id.includes('/hast') ||
             id.includes('/unified/') ||

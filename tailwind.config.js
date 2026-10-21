@@ -96,10 +96,15 @@ export default {
           from: { opacity: '1', transform: 'translateX(0)' },
           to: { opacity: '0', transform: 'translateX(12px)' },
         },
+        breathe: {
+          '0%, 100%': { opacity: '0.55' },
+          '50%': { opacity: '1' },
+        },
       },
       animation: {
         'toast-in': 'toast-in 160ms ease-out',
         'toast-out': 'toast-out 160ms ease-in forwards',
+        breathe: 'breathe 2.4s ease-in-out infinite',
       },
     },
   },

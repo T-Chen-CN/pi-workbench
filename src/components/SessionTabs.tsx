@@ -1,5 +1,6 @@
 import React from 'react'
-import { History, Plus, X } from 'lucide-react'
+import { AlertCircle, History, Pencil, Plus, X } from 'lucide-react'
+import { conversationKey, useChatStore } from '../store/chatStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useSessionStore } from '../store/sessionStore'
 import { IconButton } from './ui'
@@ -27,6 +28,9 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
   const state = useSessionStore((store) => store.byWorkspace[workspacePath])
   const streaming = useSessionStore((store) => store.streaming)
   const unread = useSessionStore((store) => store.unread)
+  const errors = useSessionStore((store) => store.errors)
+  const needsAction = useSessionStore((store) => store.needsAction)
+  const conversations = useChatStore((store) => store.conversations)
   const open = state?.open ?? []
   const active = state?.active ?? null
 
@@ -41,11 +45,28 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
       >
         {open.map((id) => {
           const session = byId.get(id)
-          const key = `${workspacePath}\u0000${id}`
+          const key = conversationKey(workspacePath, id)
           const isActive = id === active
           const isStreaming = Boolean(streaming[key])
           const isUnread = Boolean(unread[key])
+          const error = errors[key]
+          const actionReason = needsAction[key]
+          const draft = Boolean(conversations[key]?.draftInput.trim())
           const title = session?.title?.trim() || t('untitledSession')
+          const statusLabel = isStreaming
+            ? t('sessionRunning')
+            : error
+              ? t('sessionError')
+              : actionReason
+                ? t('sessionNeedsAction')
+                : isUnread
+                  ? t('sessionUnread')
+                  : ''
+          const draftLabel = draft ? t('sessionDraft') : ''
+          const accessible = [title, statusLabel, draftLabel].filter(Boolean).join(' · ')
+          const tooltip = error
+            ? `${accessible}：${error.slice(0, 80)}`
+            : accessible
           return (
             <div
               key={id}
@@ -59,16 +80,48 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
                 type="button"
                 role="tab"
                 aria-selected={isActive}
-                title={title}
+                aria-busy={isStreaming || undefined}
+                aria-label={accessible}
+                title={tooltip}
                 onClick={() => onSelect(id)}
                 className="flex min-w-0 items-center gap-1.5 bg-transparent text-inherit"
               >
                 {isStreaming ? (
-                  <span className="h-1 w-1 flex-shrink-0 animate-pulse rounded-full bg-accent" />
+                  <span
+                    aria-hidden="true"
+                    className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-accent"
+                  />
+                ) : error ? (
+                  <AlertCircle
+                    size={10}
+                    className="flex-shrink-0 text-danger"
+                    aria-hidden="true"
+                  />
+                ) : actionReason ? (
+                  <span
+                    aria-hidden="true"
+                    className="relative flex h-1.5 w-1.5 flex-shrink-0 items-center justify-center rounded-full border border-warning shadow-[0_0_0_2px_rgb(var(--warning)_/_0.18)] animate-breathe"
+                  >
+                    <span className="h-0.5 w-0.5 rounded-full bg-warning" />
+                  </span>
                 ) : isUnread ? (
-                  <span className="h-1 w-1 flex-shrink-0 rounded-full bg-accent" />
-                ) : null}
+                  <span
+                    aria-hidden="true"
+                    className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-success"
+                  />
+                ) : (
+                  <span className="h-1.5 w-1.5 flex-shrink-0" aria-hidden="true" />
+                )}
                 <span className="truncate">{title}</span>
+                {draft && (
+                  <span
+                    title={draftLabel}
+                    aria-label={draftLabel}
+                    className="flex flex-shrink-0 items-center text-ink-subtle"
+                  >
+                    <Pencil size={9} aria-hidden="true" />
+                  </span>
+                )}
               </button>
               <button
                 type="button"

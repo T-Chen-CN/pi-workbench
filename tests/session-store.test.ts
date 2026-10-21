@@ -77,6 +77,24 @@ describe('sessionStore', () => {
     expect(useSessionStore.getState().unread[key]).toBeUndefined()
   })
 
+  it('stores errors and clears them', () => {
+    useSessionStore.getState().markError(WS, 'a', 'provider down')
+    const key = conversationKey(WS, 'a')
+    expect(useSessionStore.getState().errors[key]).toBe('provider down')
+
+    useSessionStore.getState().markError(WS, 'a', null)
+    expect(useSessionStore.getState().errors[key]).toBeUndefined()
+  })
+
+  it('stores a placeholder needs-action reason and clears it', () => {
+    useSessionStore.getState().markNeedsAction(WS, 'a', 'review')
+    const key = conversationKey(WS, 'a')
+    expect(useSessionStore.getState().needsAction[key]).toBe('review')
+
+    useSessionStore.getState().markNeedsAction(WS, 'a', null)
+    expect(useSessionStore.getState().needsAction[key]).toBeUndefined()
+  })
+
   it('clears one workspace without touching others', () => {
     useSessionStore.getState().setOpen(WS, ['a'], 'a')
     useSessionStore.getState().setOpen('/other', ['b'], 'b')
