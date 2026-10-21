@@ -9,6 +9,7 @@ import { confirmDialog } from '../store/dialogStore'
 import { localizeError } from '../i18n/errors'
 import { computeDiff, DiffLineType, DiffResult, type DiffLine } from '../api/diff'
 import type { FileEdit } from '../types/electron'
+import { useVirtualRows } from '../hooks/useVirtualRows'
 import { Button, IconButton, Spinner } from './ui'
 
 export const DiffViewer: React.FC = () => {
@@ -254,7 +255,7 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
   const modifiedLines = diff.lines.filter((l) => l.type !== DiffLineType.Removed)
 
   return (
-    <div className="flex h-full divide-x divide-line">
+    <div className="flex h-full divide-x divide-rule-divide">
       <div className="flex flex-1 flex-col overflow-hidden">
         <div className="flex flex-shrink-0 items-center justify-between border-b border-rule-divide bg-panel px-3 py-1.5">
           <span className="truncate type-data text-ink">{diff.originalFile}</span>
@@ -262,11 +263,7 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
             -{diff.removedCount}
           </span>
         </div>
-        <div className="flex-1 overflow-y-auto">
-          {originalLines.map((line, idx) => (
-            <DiffLineElement key={`orig-${idx}`} line={line} side="original" />
-          ))}
-        </div>
+        <VirtualDiffLines lines={originalLines} side="original" />
       </div>
 
       <div className="flex flex-1 flex-col overflow-hidden">
@@ -276,11 +273,7 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
             +{diff.addedCount}
           </span>
         </div>
-        <div className="flex-1 overflow-y-auto">
-          {modifiedLines.map((line, idx) => (
-            <DiffLineElement key={`mod-${idx}`} line={line} side="modified" />
-          ))}
-        </div>
+        <VirtualDiffLines lines={modifiedLines} side="modified" />
       </div>
     </div>
   )
@@ -294,10 +287,50 @@ const UnifiedDiffView: React.FC<DiffViewProps> = ({ diff }) => {
         <span className="text-ink-muted">→</span>
         <span className="truncate type-data text-ink">{diff.modifiedFile}</span>
       </div>
-      <div className="flex-1 overflow-y-auto">
-        {diff.lines.map((line, idx) => (
-          <DiffLineElement key={idx} line={line} side="original" />
-        ))}
+      <VirtualDiffLines lines={diff.lines} side="original" />
+    </div>
+  )
+}
+
+const DIFF_ROW_HEIGHT = 22
+
+const VirtualDiffLines: React.FC<{ lines: DiffLine[]; side: 'original' | 'modified' }> = ({
+  lines,
+  side,
+}) => {
+  const { parentRef, virtualizer } = useVirtualRows({
+    count: lines.length,
+    estimateSize: DIFF_ROW_HEIGHT,
+  })
+
+  return (
+    <div ref={parentRef} className="flex-1 overflow-auto">
+      <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
+        {virtualizer.getVirtualItems().length > 0
+          ? virtualizer.getVirtualItems().map((virtualRow) => {
+              const line = lines[virtualRow.index]
+              if (!line) return null
+              return (
+                <div
+                  key={virtualRow.key}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    minWidth: '100%',
+                    width: 'max-content',
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <DiffLineElement line={line} side={side} />
+                </div>
+              )
+            })
+          : lines
+              .slice(0, 80)
+              .map((line, index) => (
+                <DiffLineElement key={index} line={line} side={side} />
+              ))}
       </div>
     </div>
   )
@@ -326,14 +359,17 @@ const DiffLineElement: React.FC<DiffLineElementProps> = ({ line, side }) => {
   }
 
   return (
-    <div className={`flex border-b border-rule-divide type-code ${bgColor}`}>
-      <span className={`w-6 flex-shrink-0 select-none py-0.5 text-center ${prefixColor}`}>
+    <div
+      className={`flex h-[22px] items-center border-b border-rule-divide type-code ${bgColor}`}
+      style={{ minWidth: '100%', width: 'max-content' }}
+    >
+      <span className={`w-6 flex-shrink-0 select-none text-center ${prefixColor}`}>
         {prefix}
       </span>
-      <span className="w-10 flex-shrink-0 select-none py-0.5 pr-2 text-right text-ink-muted">
+      <span className="w-10 flex-shrink-0 select-none pr-2 text-right text-ink-muted">
         {lineNumber || '-'}
       </span>
-      <span className="flex-1 break-all px-2 py-0.5 text-ink">{line.content}</span>
+      <span className="flex-1 whitespace-pre px-2 text-ink">{line.content}</span>
     </div>
   )
 }

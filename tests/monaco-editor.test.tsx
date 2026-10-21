@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MonacoEditor } from '../src/components/MonacoEditor'
 import { useEditorStore } from '../src/store/editorStore'
@@ -66,6 +66,7 @@ function createFakeEditor(initialModel: FakeModel) {
       return { dispose: vi.fn() }
     }),
     layout: vi.fn(),
+    updateOptions: vi.fn(),
     dispose: vi.fn(),
     emitChange(next?: string) {
       if (next !== undefined) model.setValue(next)
@@ -118,8 +119,22 @@ describe('MonacoEditor', () => {
     expect(useEditorStore.getState().currentFile?.path).toBe('/tmp/a.ts')
   })
 
-  it('disposes the editor when the last file is closed', () => {
+  it('enters large-file mode for files above 2MB', async () => {
     render(<MonacoEditor />)
+    act(() => {
+      useEditorStore.getState().addOpenFile(
+        makeFile('/tmp/big.ts', 'x'.repeat(2 * 1024 * 1024 + 1))
+      )
+    })
+
+    const editor = mocks.create.mock.results[0].value
+    expect(await screen.findByText(/大文件模式/)).toBeTruthy()
+    expect(editor.updateOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ wordWrap: 'off', folding: false })
+    )
+  })
+
+  it('disposes the editor when the last file is closed', () => {    render(<MonacoEditor />)
     act(() => {
       useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
     })

@@ -69,6 +69,7 @@ vi.mock('monaco-editor', () => {
           restoreViewState: () => {},
           onDidChangeModelContent: () => ({ dispose: () => {} }),
           layout: () => {},
+          updateOptions: () => {},
           dispose: () => {},
         }
       },
@@ -156,6 +157,23 @@ describe('ChatPanel', () => {
       expect(code?.textContent).toContain('const answer = 42')
     })
     expect(screen.getByLabelText(translations.zh.copyCode)).toBeTruthy()
+  })
+
+  it('virtualizes long transcripts instead of rendering every message', async () => {
+    const messages = Array.from({ length: 200 }, (_, index) => ({
+      role: 'assistant' as const,
+      content: `message ${index}`,
+      timestamp: index + 1,
+    }))
+    useChatStore.getState().setMessages(messages)
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-testid="chat-message"]').length).toBeGreaterThan(0)
+    })
+    expect(document.querySelectorAll('[data-testid="chat-message"]').length).toBeLessThan(60)
+    expect(screen.queryByText('message 199')).toBeNull()
   })
 })
 
