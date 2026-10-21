@@ -33,6 +33,21 @@ const INIT_TIMEOUT_MS = 30_000
 const CONTEXT_BLOCK_START = '<pi-workbench-context>'
 const CONTEXT_BLOCK_END = '</pi-workbench-context>'
 
+export interface AgentLogger {
+  info: (...args: unknown[]) => void
+  warn: (...args: unknown[]) => void
+  error: (...args: unknown[]) => void
+  debug: (...args: unknown[]) => void
+}
+
+/** 未注入 logger 时保持原有 console 行为 */
+const consoleAgentLogger: AgentLogger = {
+  info: (...args) => console.log(...args),
+  warn: (...args) => console.warn(...args),
+  error: (...args) => console.error(...args),
+  debug: (...args) => console.debug(...args),
+}
+
 /**
  * 供应商密钥通过 process.env 提供给 Pi SDK（models.json 只存变量名）。
  * 多个 Agent 实例共享进程环境，用引用计数保证最后一个实例释放后才清理。
@@ -93,12 +108,13 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
 async function withTimeoutResult<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  label: string
+  label: string,
+  logger: AgentLogger
 ): Promise<{ value: T } | null> {
   let timer: NodeJS.Timeout | null = null
   const timeout = new Promise<null>((resolve) => {
     timer = setTimeout(() => {
-      console.warn(`[Agent Manager] ${label} timed out after ${timeoutMs}ms`)
+      logger.warn(`[Agent Manager] ${label} timed out after ${timeoutMs}ms`)
       resolve(null)
     }, timeoutMs)
     timer.unref?.()
@@ -131,6 +147,8 @@ export interface AgentConfig {
     apiKey: string
     selectedModel: string
   }
+  /** 日志出口；主进程注入 agent.log，未注入时退回 console */
+  logger?: AgentLogger
 }
 
 export interface AgentMessage {
@@ -183,6 +201,7 @@ export interface AgentChatOptions {
 export class AgentManager {
   private session: AgentSession | null = null
   private config: AgentConfig | null = null
+  private logger: AgentLogger = consoleAgentLogger
   private messageHistory: AgentMessage[] = []
   private isProcessing = false
   private unsubscribe: (() => void) | null = null
@@ -242,7 +261,7 @@ export class AgentManager {
     ].filter((dir) => dir && existsSync(path.join(dir, 'bash.exe')))
 
     if (candidates.length === 0) {
-      console.warn('[Agent Manager] Git Bash not found; the bash tool will be unavailable')
+      this.logger.warn('[Agent Manager] Git Bash not found; the bash tool will be unavailable')
       return
     }
 
@@ -255,7 +274,7 @@ export class AgentManager {
 
     if (missing.length > 0) {
       process.env.PATH = [...missing, currentPath].join(path.delimiter)
-      console.log('[Agent Manager] Added Git Bash to PATH:', missing.join(', '))
+      this.logger.info('[Agent Manager] Added Git Bash to PATH:', missing.join(', '))
     }
   }
 
@@ -310,13 +329,13 @@ export class AgentManager {
 
         // Pi SDK 自带自动重试（429 / 5xx / 网络抖动），这里只记录，便于诊断
         if (event.type === 'auto_retry_start') {
-          console.warn(
+          this.logger.warn(
             `[Agent Manager] Provider retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms: ${event.errorMessage ?? ''}`
           )
           return
         }
         if (event.type === 'auto_retry_end') {
-          console.log(`[Agent Manager] Provider retry ${event.success ? 'succeeded' : 'failed'}`)
+          this.logger.info(`[Agent Manager] Provider retry ${event.success ? 'succeeded' : 'failed'}`)
           return
         }
 
@@ -350,7 +369,7 @@ export class AgentManager {
           }
         }
       } catch (error) {
-        console.warn('[Agent Manager] Failed to capture tool edit:', error)
+        this.logger.warn('[Agent Manager] Failed to capture tool edit:', error)
       }
     })
   }
@@ -363,14 +382,15 @@ export class AgentManager {
    */
   async initialize(config: AgentConfig): Promise<{ success: boolean; error?: string }> {
     let initialized = false
+    this.logger = config.logger ?? consoleAgentLogger
     try {
       const { provider, apiUrl, apiKey, selectedModel } = config.apiConfig
 
-      console.log('[Agent Manager] Initializing agent...')
-      console.log('[Agent Manager] Workspace:', config.workspaceDir)
-      console.log('[Agent Manager] Provider:', provider)
-      console.log('[Agent Manager] API URL:', apiUrl)
-      console.log('[Agent Manager] Model:', selectedModel)
+      this.logger.info('[Agent Manager] Initializing agent...')
+      this.logger.info('[Agent Manager] Workspace:', config.workspaceDir)
+      this.logger.info('[Agent Manager] Provider:', provider)
+      this.logger.info('[Agent Manager] API URL:', apiUrl)
+      this.logger.info('[Agent Manager] Model:', selectedModel)
 
       this.config = config
 
@@ -380,7 +400,7 @@ export class AgentManager {
           try {
             await withTimeout(this.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
           } catch (error) {
-            console.warn('[Agent Manager] Failed to abort previous request:', error)
+            this.logger.warn('[Agent Manager] Failed to abort previous request:', error)
           }
         }
         try {
@@ -388,7 +408,7 @@ export class AgentManager {
           this.unsubscribe = null
           this.session.dispose()
         } catch (error) {
-          console.warn('[Agent Manager] Failed to dispose previous session:', error)
+          this.logger.warn('[Agent Manager] Failed to dispose previous session:', error)
         }
         this.session = null
         this.isProcessing = false
@@ -442,7 +462,8 @@ export class AgentManager {
       const sessionOutcome = await withTimeoutResult(
         sessionPromise,
         INIT_TIMEOUT_MS,
-        'Agent session creation'
+        'Agent session creation',
+        this.logger
       )
       if (!sessionOutcome) {
         // 超时后底层创建仍可能晚到成功：等它落地并释放，避免会话/句柄泄漏
@@ -462,16 +483,16 @@ export class AgentManager {
       this.session = result.session
       this.subscribeToToolEdits()
 
-      console.log('[Agent Manager] Agent initialized successfully')
-      console.log('[Agent Manager] Using model:', `${model.provider}/${model.id}`)
-      console.log('[Agent Manager] Session file:', sessionManager.getSessionFile() ?? '(new, not persisted yet)')
+      this.logger.info('[Agent Manager] Agent initialized successfully')
+      this.logger.info('[Agent Manager] Using model:', `${model.provider}/${model.id}`)
+      this.logger.info('[Agent Manager] Session file:', sessionManager.getSessionFile() ?? '(new, not persisted yet)')
 
       initialized = true
       return { success: true }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
-      console.error('[Agent Manager] Initialization failed:', errorMessage)
-      console.error('[Agent Manager] Stack:', error instanceof Error ? error.stack : '')
+      this.logger.error('[Agent Manager] Initialization failed:', errorMessage)
+      this.logger.error('[Agent Manager] Stack:', error instanceof Error ? error.stack : '')
       return {
         success: false,
         error: `Failed to initialize agent: ${errorMessage}`
@@ -519,7 +540,7 @@ export class AgentManager {
       this.editSnapshots.clear()
       // 只认本轮新增的 assistant 消息，避免请求失败时把上一轮回复当成本轮结果
       const messageStartIndex = this.session.messages.length
-      console.log('[Agent Manager] Sending message to agent:', message.substring(0, 100))
+      this.logger.info('[Agent Manager] Sending message to agent:', message.substring(0, 100))
 
       // 记录用户消息
       this.messageHistory.push({
@@ -535,9 +556,9 @@ export class AgentManager {
         if (timeoutMs <= 0) return
         timeoutTimer = setTimeout(() => {
           timedOut = true
-          console.warn(`[Agent Manager] Request timed out after ${timeoutMs}ms; aborting`)
+          this.logger.warn(`[Agent Manager] Request timed out after ${timeoutMs}ms; aborting`)
           void session.abort().catch((error) => {
-            console.warn('[Agent Manager] Failed to abort timed-out request:', error)
+            this.logger.warn('[Agent Manager] Failed to abort timed-out request:', error)
           })
           hardStopTimer = setTimeout(() => {
             hardStopped = true
@@ -585,7 +606,7 @@ export class AgentManager {
       // Pi 在请求失败时不会抛异常，而是把错误放在 stopReason/errorMessage 中
       if (lastAssistant.stopReason === 'error') {
         const detail = lastAssistant.errorMessage || 'Agent request failed'
-        console.error('[Agent Manager] Provider error:', detail)
+        this.logger.error('[Agent Manager] Provider error:', detail)
         return { success: false, error: detail, edits, usage }
       }
       if (lastAssistant.stopReason === 'aborted') {
@@ -613,10 +634,10 @@ export class AgentManager {
         timestamp: Date.now(),
       })
 
-      console.log('[Agent Manager] Agent response received')
-      console.log('[Agent Manager] Response preview:', assistantResponse.substring(0, 200))
+      this.logger.info('[Agent Manager] Agent response received')
+      this.logger.info('[Agent Manager] Response preview:', assistantResponse.substring(0, 200))
       if (edits.length > 0) {
-        console.log('[Agent Manager] Files edited:', edits.map(e => e.path).join(', '))
+        this.logger.info('[Agent Manager] Files edited:', edits.map(e => e.path).join(', '))
       }
 
       return {
@@ -628,7 +649,7 @@ export class AgentManager {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
       if (timedOut) {
-        console.error('[Agent Manager] Request timed out:', errorMessage)
+        this.logger.error('[Agent Manager] Request timed out:', errorMessage)
         const edits = this.pendingEdits.splice(0)
         // SDK 没有响应 abort：销毁旧会话，避免迟到的流式/工具事件污染下一轮
         if (hardStopped) {
@@ -640,8 +661,8 @@ export class AgentManager {
           edits,
         }
       }
-      console.error('[Agent Manager] Chat error:', errorMessage)
-      console.error('[Agent Manager] Stack:', error instanceof Error ? error.stack : '')
+      this.logger.error('[Agent Manager] Chat error:', errorMessage)
+      this.logger.error('[Agent Manager] Stack:', error instanceof Error ? error.stack : '')
 
       return {
         success: false,
@@ -662,7 +683,7 @@ export class AgentManager {
     try {
       await withTimeout(this.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
     } catch (error) {
-      console.warn('[Agent Manager] Failed to abort request:', error)
+      this.logger.warn('[Agent Manager] Failed to abort request:', error)
     }
   }
 
@@ -682,7 +703,7 @@ export class AgentManager {
       try {
         this.session.dispose()
       } catch (error) {
-        console.warn('[Agent Manager] Failed to dispose stuck session:', error)
+        this.logger.warn('[Agent Manager] Failed to dispose stuck session:', error)
       }
       this.session = null
     }
@@ -692,10 +713,10 @@ export class AgentManager {
     try {
       const result = await this.initialize(config)
       if (!result.success) {
-        console.error('[Agent Manager] Failed to reinitialize after hard stop:', result.error)
+        this.logger.error('[Agent Manager] Failed to reinitialize after hard stop:', result.error)
       }
     } catch (error) {
-      console.error('[Agent Manager] Failed to reinitialize after hard stop:', error)
+      this.logger.error('[Agent Manager] Failed to reinitialize after hard stop:', error)
     }
   }
 
@@ -749,7 +770,7 @@ export class AgentManager {
       try {
         await withTimeout(this.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
       } catch (error) {
-        console.warn('[Agent Manager] Failed to abort before dispose:', error)
+        this.logger.warn('[Agent Manager] Failed to abort before dispose:', error)
       }
     }
     if (this.unsubscribe) {

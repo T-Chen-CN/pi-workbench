@@ -21,10 +21,18 @@ export interface FleetApiConfig {
   selectedModel: string
 }
 
+export interface FleetAgentLogger {
+  info: (...args: unknown[]) => void
+  warn: (...args: unknown[]) => void
+  error: (...args: unknown[]) => void
+  debug: (...args: unknown[]) => void
+}
+
 export interface FleetAgentInitConfig {
   workspaceDir: string
   agentDir: string
   apiConfig: FleetApiConfig
+  logger?: FleetAgentLogger
 }
 
 export interface FleetAgent {
@@ -45,6 +53,8 @@ export interface FleetManagerOptions {
   getApiConfig: () => Promise<FleetApiConfig | null>
   agentDir: string
   logDir: string
+  /** 注入给每个任务 Agent 的日志出口（agent.log） */
+  agentLogger?: FleetAgentLogger
   /** 每个工作区同时运行的任务数（默认 1），工作区之间互不排队 */
   maxConcurrent?: number
   /** 全局同时运行的任务上限（默认 4），避免多个工作区一起压满机器 */
@@ -403,6 +413,7 @@ export class FleetManager {
         workspaceDir: task.worktree,
         agentDir: taskAgentDir,
         apiConfig,
+        logger: this.options.agentLogger,
       })
       if (!initialized.success) {
         throw new Error(initialized.error || 'Failed to initialize agent')
