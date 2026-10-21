@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPanel } from '../src/components/ChatPanel'
 import { FileExplorer } from '../src/components/FileExplorer'
 import { MonacoEditor } from '../src/components/MonacoEditor'
+import { WelcomeScreen } from '../src/components/WelcomeScreen'
 import { useChatStore } from '../src/store/chatStore'
 import { useEditorStore } from '../src/store/editorStore'
 import { useI18nStore } from '../src/store/i18nStore'
@@ -23,6 +24,8 @@ vi.mock('../src/api', () => ({
     exists: vi.fn(),
     stat: vi.fn(),
     onFsChanged: vi.fn(() => () => {}),
+    fleetList: vi.fn(),
+    onFleetTaskUpdated: vi.fn(() => () => {}),
   },
 }))
 
@@ -97,6 +100,8 @@ beforeEach(() => {
   vi.mocked(piAgentAPI.isInitialized).mockResolvedValue({ success: true, initialized: false })
   vi.mocked(api.stat).mockResolvedValue({ success: true, isFile: true, isDirectory: false, size: 0 })
   vi.mocked(api.onFsChanged).mockReturnValue(() => {})
+  vi.mocked(api.fleetList).mockResolvedValue({ success: true, tasks: [] })
+  vi.mocked(api.onFleetTaskUpdated).mockReturnValue(() => {})
 })
 
 afterEach(() => {
@@ -151,6 +156,59 @@ describe('ChatPanel', () => {
       expect(code?.textContent).toContain('const answer = 42')
     })
     expect(screen.getByLabelText(translations.zh.copyCode)).toBeTruthy()
+  })
+})
+
+describe('WelcomeScreen', () => {
+  const recent = ['/work/alpha', '/work/beta', '/work/gamma']
+
+  const renderWelcome = () => {
+    const props = {
+      recentWorkspaces: recent,
+      onOpenProject: vi.fn(),
+      onOpenWorkspace: vi.fn(),
+      onOpenSettings: vi.fn(),
+      onRefreshRecent: vi.fn(),
+    }
+    render(<WelcomeScreen {...props} />)
+    return props
+  }
+
+  beforeEach(() => {
+    vi.mocked(api.apiConfigGet).mockResolvedValue({
+      success: true,
+      config: configWithKey,
+    })
+  })
+
+  it('shows every recent workspace and filters it by search', async () => {
+    const props = renderWelcome()
+    const list = within(screen.getByTestId('welcome-recent-list'))
+
+    expect(await list.findByText('alpha')).toBeTruthy()
+    expect(list.getByText('beta')).toBeTruthy()
+    expect(list.getByText('gamma')).toBeTruthy()
+    expect(screen.getByText('共 3 个项目')).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText(translations.zh.welcomeSearch), {
+      target: { value: 'beta' },
+    })
+
+    expect(list.queryByText('alpha')).toBeNull()
+    expect(list.getByText('beta')).toBeTruthy()
+    expect(screen.getByText('共 1 个项目')).toBeTruthy()
+
+    fireEvent.click(list.getByText('beta'))
+    expect(props.onOpenWorkspace).toHaveBeenCalledWith('/work/beta')
+  })
+
+  it('mirrors the eyebrow and headline when the language changes', async () => {
+    useI18nStore.getState().setLanguage('en')
+    renderWelcome()
+
+    expect(await screen.findByText('Pi Workbench —')).toBeTruthy()
+    expect(screen.getByText('Pi 工作台 —— 安静的地方，响亮的主意')).toBeTruthy()
+    expect(screen.getByText('Loud Ideas')).toBeTruthy()
   })
 })
 

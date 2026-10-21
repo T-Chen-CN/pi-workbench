@@ -45,7 +45,7 @@ export const DialogHost: React.FC = () => {
     >
       <div className="flex flex-col gap-3">
         {options.message && (
-          <p className="m-0 font-reading text-[13px] leading-relaxed text-ink-muted">
+          <p className="m-0 type-reading text-ink-muted">
             {options.message}
           </p>
         )}

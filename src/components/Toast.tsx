@@ -63,12 +63,12 @@ const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
       }`}
     >
       <Icon size={15} className={`mt-0.5 flex-shrink-0 ${icon}`} />
-      <span className="flex-1 text-xs leading-relaxed text-ink">{message.message}</span>
+      <span className="flex-1 type-value text-ink">{message.message}</span>
       <button
         type="button"
         onClick={handleClose}
         aria-label={t('close')}
-        className="flex-shrink-0 rounded p-0.5 text-ink-subtle transition-colors hover:bg-ink/10 hover:text-ink"
+        className="flex-shrink-0 rounded p-0.5 text-ink-muted transition-colors hover:bg-ink/10 hover:text-ink"
       >
         <X size={13} />
       </button>

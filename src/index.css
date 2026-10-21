@@ -17,12 +17,13 @@
   --sunken: 239 236 228;       /* inset */
   --hover: 238 234 225;
   --active: 232 227 217;
-  --line: 23 21 18;            /* 使用透明度控制强度 */
+  --line: 23 21 18;            /* 1px 墨线；需要更柔和时用 /alpha */
+  --overlay: 0 0 0;            /* 模态遮罩 */
 
   /* 墨色 */
   --ink: 23 21 18;
-  --ink-muted: 109 103 92;
-  --ink-subtle: 145 138 125;
+  --ink-muted: 97 92 82;       /* #615C52，5.89:1 on surface */
+  --ink-subtle: 145 138 125;   /* #918A7D，仅装饰/禁用 */
   --ink-inverted: 251 249 244;
 
   /* 松墨绿 */
@@ -52,10 +53,10 @@
   --hl-type: 62 93 102;
   --hl-attr: 122 75 54;
 
-  --font-ui: 'Inter Variable', 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-ui: 'Noto Sans Variable', 'Noto Sans', 'Noto Sans SC Variable', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   --font-display: 'Instrument Serif', 'Noto Serif SC Variable', 'Songti SC', 'SimSun', serif;
   --font-reading: 'Noto Serif SC Variable', 'Songti SC', 'SimSun', serif;
-  --font-mono: 'IBM Plex Mono', 'Cascadia Code', Consolas, monospace;
+  --font-mono: 'Geist Mono Variable', 'Geist Mono', 'Noto Sans SC Variable', 'Noto Sans SC', Consolas, monospace;
 }
 
 html.dark {
@@ -67,10 +68,11 @@ html.dark {
   --hover: 43 39 34;
   --active: 52 47 41;
   --line: 237 231 220;
+  --overlay: 0 0 0;
 
   --ink: 237 231 220;
-  --ink-muted: 156 148 135;
-  --ink-subtle: 115 108 96;
+  --ink-muted: 168 160 147;    /* #A8A093，6.85:1 on panel */
+  --ink-subtle: 115 108 96;    /* #736C60，仅装饰/禁用 */
   --ink-inverted: 20 19 17;
 
   --accent: 143 199 180;
@@ -162,6 +164,150 @@ body {
 
 button {
   font-family: inherit;
+}
+
+/* ------------------------------------------------------------------
+   语义文字角色
+   组件不要直接写 font-family / 字号 / 字重 / tracking；
+   只使用 type-* 角色 + 颜色 token。
+------------------------------------------------------------------- */
+@layer components {
+  .type-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    line-height: 1.2;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .type-eyebrow-cjk {
+    font-family: var(--font-reading);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.4;
+    letter-spacing: 0.12em;
+  }
+
+  .type-display {
+    font-family: var(--font-display);
+    font-size: 37px;
+    font-weight: 400;
+    line-height: 1.18;
+    letter-spacing: -0.01em;
+  }
+
+  .type-title {
+    font-family: var(--font-display);
+    font-size: 28px;
+    font-weight: 400;
+    line-height: 1.2;
+  }
+
+  .type-brand {
+    font-family: var(--font-display);
+    font-size: 24px;
+    font-weight: 400;
+    line-height: 1;
+  }
+
+  .type-subtitle {
+    font-family: var(--font-display);
+    font-size: 20px;
+    font-weight: 400;
+    line-height: 1.3;
+  }
+
+  .type-project {
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 400;
+    line-height: 1.2;
+  }
+
+  .type-reading {
+    font-family: var(--font-reading);
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 1.85;
+    letter-spacing: 0.01em;
+  }
+
+  .type-body {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 1.6;
+  }
+
+  .type-label {
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.45;
+  }
+
+  .type-value {
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    font-weight: 400;
+    line-height: 1.4;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .type-caption {
+    font-family: var(--font-ui);
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.4;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .type-wordmark {
+    font-family: var(--font-mono);
+    font-size: 8.5px;
+    font-weight: 500;
+    line-height: 1.2;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+
+  .type-data {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 400;
+    line-height: 1.4;
+  }
+
+  .type-code {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    font-weight: 400;
+    line-height: 1.65;
+  }
+
+  .type-key {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 400;
+    line-height: 1.2;
+  }
+
+  .type-stamp {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 500;
+    line-height: 1.2;
+    letter-spacing: 0.16em;
+  }
+
+  .type-stamp-sub {
+    font-family: var(--font-mono);
+    font-size: 7px;
+    font-weight: 400;
+    line-height: 1.2;
+    letter-spacing: 0.22em;
+  }
 }
 
 /* 无边框窗口：顶栏可拖拽，交互元素保持可点击 */

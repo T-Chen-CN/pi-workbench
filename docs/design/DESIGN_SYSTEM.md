@@ -60,10 +60,11 @@
 | `--sunken` | `bg-sunken` | `#EFECE4` | `#221F1B` | 输入框、代码块、终端底 |
 | `--hover` | `bg-hover` | `#EEEAE1` | `#2B2722` | hover 背景 |
 | `--active` | `bg-active` | `#E8E3D9` | `#342F29` | 选中/按下背景 |
-| `--line` | `border-line` | `rgba(23,21,18,.16)` | `rgba(237,231,220,.14)` | 分隔线、边框 |
+| `--line` | `border-line` | `#171512` | `#EDE7DC` | 1px 墨线；`/60` 为柔和分隔 |
+| `--overlay` | `bg-overlay` | `#000000` | `#000000` | 模态遮罩 |
 | `--ink` | `text-ink` | `#171512` | `#EDE7DC` | 主文字 |
-| `--ink-muted` | `text-ink-muted` | `#6D675C` | `#9C9487` | 次级文字 |
-| `--ink-subtle` | `text-ink-subtle` | `#918A7D` | `#736C60` | 路径、时间等元数据 |
+| `--ink-muted` | `text-ink-muted` | `#615C52` | `#A8A093` | 次级文字、功能性元数据（路径、计数、标签、空状态、placeholder） |
+| `--ink-subtle` | `text-ink-subtle` | `#918A7D` | `#736C60` | 仅装饰线、装饰点、禁用态；不承载信息文字 |
 | `--accent` | `bg-accent` / `text-accent` / `border-accent` | `#2F5D4E` | `#8FC7B4` | 品牌强调、链接、选中、焦点、主按钮、印章 |
 | `--accent-hover` | `bg-accent-hover` | `#24493D` | `#A9D8C8` | 强调色 hover |
 | `--accent-fg` | `text-accent-fg` | `#FBFAF4` | `#141311` | 强调色上的文字 |
@@ -77,17 +78,32 @@
 
 | 组合 | 对比度 | 结论 |
 |---|---|---|
-| `ink` / `surface` | 16.15:1 | AAA |
-| `ink-muted` / `surface` | 4.97:1 | AA |
-| `ink-subtle` / `surface` | 3.03:1 | 仅限元数据 |
-| `accent` / `surface` | 6.66:1 | AA |
+| Paper `ink` / `surface` | 16.15:1 | AAA |
+| Paper `ink` / `panel` | 17.32:1 | AAA |
+| Paper `ink-muted` / `surface` | 5.89:1 | AA |
+| Paper `ink-muted` / `panel` | 6.31:1 | AA |
+| Paper `ink-subtle` / `surface` | 3.03:1 | 仅装饰/禁用 |
+| Paper `ink-subtle` / `panel` | 3.25:1 | 仅装饰/禁用 |
+| Ink `ink` / `surface` | 15.09:1 | AAA |
+| Ink `ink` / `panel` | 14.40:1 | AAA |
+| Ink `ink-muted` / `surface` | 7.17:1 | AAA |
+| Ink `ink-muted` / `panel` | 6.85:1 | AA |
+| Ink `ink-subtle` / `surface` | 3.57:1 | 仅装饰/禁用 |
+| Ink `ink-subtle` / `panel` | 3.41:1 | 仅装饰/禁用 |
+| Paper `accent` / `surface` | 6.66:1 | AA |
+| Ink `accent` / `surface` | 9.72:1 | AAA |
 | `accent-fg` / `accent` | 7.18:1 | AAA |
-| `success` / `surface` | 5.14:1 | AA |
-| `warning` / `surface` | 4.79:1 | AA |
-| `danger` / `surface` | 5.65:1 | AA |
-| `accent` / Ink `surface` | 9.72:1 | AAA |
+| Paper `success` / `surface` | 5.14:1 | AA |
+| Paper `warning` / `surface` | 4.79:1 | AA |
+| Paper `danger` / `surface` | 5.65:1 | AA |
 
-**规则**：正文、链接、按钮文字必须 ≥4.5:1；`ink-subtle` 只允许用于非关键元数据；任何新颜色组合在合并前必须实测。
+**文字层级规则**：
+
+- 承载信息的文字——正文、链接、按钮、字段标签、路径、计数、空状态、时间、placeholder——必须 ≥4.5:1。
+- `ink-subtle` 不进入文字层级，只用于装饰线、装饰点、禁用态；不得承载唯一信息。
+- 层级优先通过字号、字体、字距和留白表达，不通过继续降低文字对比度表达。
+- UI 组件边界、有意义的图标与控件至少 3:1；焦点态使用 `accent`。
+- 任何新颜色组合在合并前必须同时实测 Paper / Ink、`surface` / `panel` 四种组合。
 
 ### 2.3 代码与语法 Token
 
@@ -117,33 +133,48 @@
 |---|---|---|---|
 | `--font-display` | `font-display` | Instrument Serif → Noto Serif SC → Songti SC → SimSun → serif | 展示标题、项目名、弹窗标题 |
 | `--font-reading` | `font-reading` | Noto Serif SC → Songti SC → SimSun → serif | 阅读型正文（欢迎页导语、Agent 回复、设置说明） |
-| `--font-ui` | 默认 `font-sans` | Inter Variable → PingFang SC → Microsoft YaHei → system-ui | 控件、文件树、按钮、界面文字 |
-| `--font-mono` | `font-mono` | IBM Plex Mono → Cascadia Code → Consolas | 路径、时间、状态、代码标签 |
+| `--font-ui` | 默认 `font-sans` | Noto Sans Variable → Noto Sans → Noto Sans SC Variable → Noto Sans SC → PingFang SC → Microsoft YaHei → system-ui | 控件、文件树、按钮、界面文字、标签与字段值 |
+| `--font-mono` | `font-mono` | Geist Mono Variable → Geist Mono → Noto Sans SC Variable → Noto Sans SC → Consolas | 路径、ID、时间、快捷键、代码 |
 
 **使用边界**：
 
 - 衬线（display / reading）用于 ≥14px 的标题和阅读段落；
-- 操作界面（按钮、输入框、文件树、状态栏、标签）保持 Inter / mono，避免小字号宋体发虚；
+- 操作界面（按钮、输入框、文件树、状态栏、标签、字段值）统一使用 UI sans；**不要用 mono 排中文标签或字段值**；
+- 中文标签不使用 uppercase 或字距；uppercase + tracking 只用于纯 Latin 眉题；
 - 中文标题必须落到思源宋体，不允许回退成系统黑体作为主要视觉。
 
 ### 3.2 字号体系
 
 | 角色 | 字号 / 行高 | 字体 | 用法 |
 |---|---|---|---|
-| Display | 56px / 1.04 | display | 欢迎页主标题 |
+| Display | 37px / 1.18 | display | 欢迎页主标题（双行） |
+| Brand | 24px / 1 | display | 顶栏字标 `Pi` |
 | H1 | 28px / 1.2 | display | 弹窗标题、空状态标题 |
-| H2 | 20px / 1.3 | display | 分区标题、项目名 |
+| H2 | 20px / 1.3 | display | 分区标题、空状态标题 |
+| Project | 17px / 1.2 | display | 项目名、列表主标题 |
 | Reading | 14px / 1.85 | reading | 欢迎页导语、Agent 回复、设置说明 |
 | Body | 13px / 1.6 | ui | 控件、文件树、按钮 |
-| Meta | 10.5px / 1.5，大写 + 0.14em 字距 | mono | 眉题、角色标签、状态 |
+| Label | 12px / 1.45，500 | ui | 分区标题、卡片标签、字段标签 |
+| Value | 12.5px / 1.4，400，tabular-nums | ui | 字段值、状态值、模型名 |
+| Data | 11.5px / 1.4 | mono | 路径、ID、时间 |
+| Caption | 11px / 1.4，tabular-nums | ui | 计数、时间、提示 |
+| Key | 10.5px / 1.2 | mono | 快捷键键帽 |
+| Eyebrow | 10.5px / 1.2，uppercase + 0.14em | mono | 纯 Latin 眉题 |
+| Wordmark | 8.5px / 1.2，uppercase + 0.2em | mono | 品牌副标 |
 | Code | 12.5px / 1.65 | mono | 编辑器、代码块 |
+| Stamp | 9px / 1.2 + 7px 副标 | mono | 印章装饰 |
+
+**字号下限**：Label 12px、Value 12.5px、Data 11.5px；不得用 8–9px 承载路径、计数、字段标签、字段值或空状态。印章等纯装饰微字可低至 7–8px，但不得承载唯一信息，且必须保证在双主题下仍可辨认。
+
+**中英混排**：中文标签与字段值一律使用 UI sans；uppercase 和字距只用于纯 Latin 眉题。mono 只承担路径、ID、时间、快捷键和代码，不承担中文标签。
 
 ### 3.3 排版规则
 
-- 中文正文不要手动加字距；只有 mono 眉题使用大写和字距。
+- 中文标签、字段值不要加 uppercase 或字距；uppercase + tracking 只用于纯 Latin 眉题。
 - 标题使用 display 字体，正文中的 `em` 强调使用 `text-accent` 斜体。
-- 长文本优先使用 `font-reading`，不要用 Inter 排大段中文。
-- 代码、路径、时间、ID、快捷键使用 mono，并保持等宽数字。
+- 长文本优先使用 `font-reading`，不要用 UI sans 排大段中文。
+- 路径、ID、时间、快捷键和代码使用 mono；字段值和状态值使用 UI sans，不要用 mono 排。
+- 数字型内容使用 `tabular-nums`，保证计数、时间和价格对齐。
 
 ---
 
@@ -184,7 +215,7 @@
 
 ## 5. 基础组件 API
 
-所有基础组件位于 `src/components/ui.tsx`。新界面必须优先复用；不要在业务组件里重新实现按钮、输入框或弹窗。
+基础控件位于 `src/components/ui.tsx`，内容模式位于 `src/components/patterns.tsx`。新界面必须优先复用；不要在业务组件里重新实现按钮、输入框、文字角色或卡片/分区模式。
 
 ### 5.1 Button
 
@@ -216,7 +247,7 @@
 - 基于原生 input/textarea，`forwardRef`。
 - 背景 `bg-sunken`，1px `border-line`，2px 圆角。
 - focus：边框转 `accent`，不额外加 ring。
-- placeholder：`text-ink-subtle`；禁用态 50% 透明度。
+- placeholder：`text-ink-muted`；禁用态 50% 透明度。
 
 ### 5.4 Select
 
@@ -260,6 +291,51 @@
 
 - `Loader2` + `animate-spin`；用于加载/思考态，不额外加文字时也必须保留可读上下文。
 
+### 5.9 语义文字与内容模式（强制）
+
+**问题背景**：设计 token 只能管理颜色和字体族；如果页面直接写字号、字重和 `font-*`，一次设计调整仍然要扫所有页面。因此本项目把“内容类型 → 设计组件”做成代码层契约。
+
+**语义文字角色**（定义在 `src/index.css`，只允许在 `ui.tsx` / `patterns.tsx` 中使用原始字体声明）：
+
+| 角色 | 用途 | 不允许 |
+|---|---|---|
+| `type-eyebrow` | 纯 Latin 眉题 | 中文、混合标签 |
+| `type-wordmark` | 品牌副标 `WORKBENCH` | 正文、标签 |
+| `type-eyebrow-cjk` | 英文界面里的中文眉题 | Latin 长句 |
+| `type-display` / `type-brand` / `type-title` / `type-subtitle` / `type-project` | 展示标题层级 | 正文、控件 |
+| `type-reading` | 14px 阅读型正文 | 高密度控件 |
+| `type-body` | 13px 控件 / 文件树文字 | 长阅读段 |
+| `type-label` | 12px / 500 分区标题、卡片标题、字段标签 | 字段值、路径 |
+| `type-value` | 12.5px / 400 字段值、状态值、模型名 | 路径、代码 |
+| `type-caption` | 11px 计数、时间、提示 | 主要标签 |
+| `type-brand` | 顶栏 `Pi` 字标 | 正文、控件 |
+| `type-data` | 11.5px 路径、ID、时间、快捷键 | 中文标签 |
+| `type-code` / `type-key` | 代码、键帽 | 普通正文 |
+| `type-stamp` / `type-stamp-sub` | 印章装饰 | 唯一信息 |
+
+**文字原语**（`src/components/ui.tsx`）：`Label`、`Value`、`Caption`、`DataText`、`Eyebrow`。
+
+**内容模式组件**（`src/components/patterns.tsx`）：
+
+| 组件 | 用途 | 变体 |
+|---|---|---|
+| `Card` | 纸卡容器 | `density="default \| compact"` |
+| `CardHeader` | 卡片标题 + 状态/操作 | `status` / `action` |
+| `SectionHeader` | 分区标题 + 计数 + 搜索/操作 | `count` / `action` |
+| `Stat` / `StatGrid` | 字段标签 + 字段值 | 2 列网格 |
+| `StatusText` | 状态文字 | `tone` + `dot` |
+| `QuickAction` | 快捷操作 | 图标 + 文案 |
+| `ListRow` | 列表行（项目、文件、任务） | `titleVariant="project \| value"` |
+| `KeyCap` | 键盘快捷键键帽 | — |
+| `SearchField` | 搜索输入 | 统一高度与图标 |
+
+**页面组合规则**：
+
+- 业务组件只组合上述模式与 `ui.tsx` 原语；不直接写 `font-*`、`text-[Npx]`、`uppercase`、`tracking-[...]`、`leading-[...]`。
+- 例外只能落在 `ui.tsx` / `patterns.tsx`，或者新增一个命名变体；不允许页面级一次性样式。
+- `tests/design-system.test.ts` 会扫描 `src/**/*.tsx`，发现业务组件中的原始字体声明直接失败。
+- 新增内容类型时，先在 `patterns.tsx` 定义组件/变体，再写页面；不要直接写页面样式。
+
 ---
 
 ## 6. 页面与交互模式
@@ -273,27 +349,32 @@
 
 ### 6.2 欢迎页
 
-- 编辑式双栏：左侧眉题 + 52–56px 衬线大标题 + 导语 + 单行提问 + 编号最近工作区；右侧 Agent 纸卡 + 印章。
-- 标题重音、提问箭头、印章全部使用 `accent` 松绿；印章使用 1.5px 绿边 + 斜置。
-- 提问行为：没有工作区时先打开目录选择器，选择后打开工作区并把问题带入聊天输入框。
-- 最近工作区最多显示 3 条；为空时显示文本入口。
+- 编辑式双栏：左侧眉题 + 37px 衬线双行标题 + 14px / 1.85 导语 + 全量最近工作区（内部滚动）；右侧 Agent 状态、最近项目、Fleet 摘要、开始使用 + 印章。
+- 眉题与标题互为镜像：中文界面眉题为英文 mono 大写，标题中文；英文界面眉题为中文 reading 小字，标题英文。标题重音使用 `accent` 松绿。
+- 最近工作区默认展示全部，标题旁显示“共 N 个项目”；搜索框过滤全部项目；列表在固定区域内滚动，滚动条常驻，快捷操作固定在列表底部，页面本身不滚动。
+- 所有功能性次级文字——分区标题、项目计数、字段标签、空状态、Fleet 状态、快捷操作——使用 `ink-muted` 与 UI sans；标签 12px / 500、字段值 12.5px / 400；路径使用 mono 11.5px。`ink-subtle` 只用于装饰和禁用态。
+- 快捷操作只保留可执行项：打开文件夹、刷新最近项目、设置。
+- 标题重音、打开箭头、印章全部使用 `accent`；印章使用 1.5px 绿边 + 斜置。
+- 欢迎页不再提供页内提问框；提问在打开工作区后由聊天面板完成，避免与“打开项目”流程重复。
+- 最近工作区为空时显示文本入口；无匹配结果时显示“没有匹配的项目”。
 
 ### 6.3 编辑器
 
 - Monaco 主题固定为 `pi-paper` / `pi-ink`，随 `resolvedTheme` 切换。
-- 字体 IBM Plex Mono 13.5px / 22px 行高；关闭 minimap；行号弱化。
+- 字体 Geist Mono 13.5px / 22px 行高；中文回退 Noto Sans SC；关闭 minimap；行号弱化。
+- Monaco / xterm 的主题对象必须使用具体色值，这是唯一允许的硬编码颜色例外；修改 `ink` / `ink-muted` token 时必须同步检查 `MonacoEditor.tsx` 与 `TerminalPanel.tsx`。行号激活色必须与 `ink-muted` 对齐。
 - 光标、选区、当前行使用松绿（Paper `#2F5D4E` / Ink `#8FC7B4`）；语法色使用第 2.3 节内容色。
-- 标签页：矩形、mono 10.5px、激活项纸面底 + 2px 绿顶线；未保存用 6px 绿点。
+- 标签页：矩形、sans 12px、激活项纸面底 + 2px 绿顶线；未保存用 6px 绿点。
 
 ### 6.4 文件树
 
-- 名称 Inter 12.5px；目录/文件使用 lucide 线性图标。
+- 名称 Noto Sans / Noto Sans SC 12.5px；目录/文件使用 lucide 线性图标。
 - 激活行：2px `accent` 左边线 + `bg-accent/[0.06]`；不要整块饱和高亮。
 - 右键菜单：纸卡 + `shadow-print`；重命名/删除使用文字 + 图标。
 
 ### 6.5 聊天（稿纸）
 
-- 不使用气泡；每条消息以 mono 大写角色标签 + 时间开头，消息之间用 1px 墨线分隔。
+- 不使用气泡；每条消息以 UI sans 11.5px 角色标签 + 时间开头，消息之间用 1px 墨线分隔。
 - 用户消息以绿色 `›` 起头；正文 `font-reading` 14px / 1.85。
 - Agent 回复使用 Markdown：标题用 display 字体，正文 reading，代码块 mono；代码块左侧 2px 绿色线，允许换行。
 - 代码块右上角提供复制按钮（hover/focus 显示）。
@@ -302,16 +383,17 @@
 ### 6.6 终端
 
 - 浅色纸面终端（Paper）/ 深色纸面（Ink）；xterm 背景与面板一致。
-- 光标与选区使用松绿；工具条为 mono 小字，不使用胶囊按钮。
+- 终端内容使用 Geist Mono，中文回退 Noto Sans SC；工具条为 UI sans 11.5px，不使用胶囊按钮。
+- 光标与选区使用松绿。
 
 ### 6.7 设置 / 命令面板 / Diff / Fleet / Toast
 
-- 设置：纸片弹窗 + 左侧分节导航（通用 / API 配置 / 快捷键 / 关于）；分节标签 mono 10px；字段使用 Field + Input/Select；主按钮绿色。
-  - 快捷键分节：动作名使用 Inter 12px，键帽使用 mono 10px + 1px `border-line` + `bg-sunken`，用 `<kbd>` 语义；按平台显示 `Ctrl` 或 `⌘`。
+- 设置：纸片弹窗 + 左侧分节导航（通用 / API 配置 / 快捷键 / 关于）；分节标签 sans 12px / 500；字段使用 Field + Input/Select；主按钮绿色。
+  - 快捷键分节：动作名使用 sans 12.5px，键帽使用 mono 10.5px + 1px `border-line` + `bg-sunken`，用 `<kbd>` 语义；按平台显示 `Ctrl` 或 `⌘`。
   - 分组：全局 / 编辑器（打开文件时）/ 聊天（工作区内）/ 浮层；仅列出实际生效的快捷键。
-- 命令面板：560px 纸片、mono 搜索、编号结果列表、选中项 2px 绿色左边线；Esc 关闭。
-- Diff：纸面审阅单；新增用 `success/10` 橄榄淡洗，删除用 `danger/10` 朱砂淡洗；统计用印章式 mono 标签。
-- Fleet：编号任务清单；状态使用 mono 文案 + 语义色（RUNNING 绿、DONE 橄榄、QUEUED 弱化、FAILED 红），不使用彩色胶囊。
+- 命令面板：560px 纸片、sans 搜索、编号结果列表、选中项 2px 绿色左边线；Esc 关闭。
+- Diff：纸面审阅单；新增用 `success/10` 橄榄淡洗，删除用 `danger/10` 朱砂淡洗；统计与行号使用 mono，说明文字使用 sans。
+- Fleet：编号任务清单；状态使用 sans 11.5px 文案 + 语义色（运行中绿、成功橄榄、排队弱化、失败红），不使用彩色胶囊。
 - Toast：纸片 + 左侧 2px 语义色线 + 错位阴影；出现位置右上，避开顶栏。
 
 ### 6.8 主题
@@ -385,10 +467,18 @@
 
 - [ ] 只使用设计 token 与 `ui.tsx` 基础组件。
 - [ ] Paper / Ink 两套截图均检查。
-- [ ] 正文与链接对比度 ≥4.5:1。
+- [ ] 所有承载信息的文字在 Paper / Ink、surface / panel 上 ≥4.5:1。
+- [ ] `ink-subtle` 只用于装饰/禁用态，不承载信息文字。
+- [ ] Label 12px / 500、Value 12.5px / 400、Data 11.5px、阅读正文 14px / 1.85。
+- [ ] 中文标签与字段值使用 UI sans，未使用 mono；uppercase/tracking 只用于纯 Latin 眉题。
+- [ ] 业务组件未直接写 `font-*`、任意字号、`uppercase`、`tracking-[...]`、`leading-[...]`。
+- [ ] 新增内容类型已落到 `patterns.tsx`，页面只做组合。
+- [ ] `tests/design-system.test.ts` 通过。
+- [ ] placeholder 使用 `ink-muted`。
 - [ ] 键盘可访问，焦点可见，图标按钮有名称。
 - [ ] 1024 / 1440 宽度无横向溢出。
 - [ ] 空状态、加载态、错误态完整。
+- [ ] 对比度自动检查通过。
 - [ ] `npm run type-check`、`npm run lint`、`npm test` 通过。
 - [ ] 如引入新设计元素，已更新本文档并获得确认。
 
@@ -416,6 +506,9 @@
 | 颜色 / 字体 / 全局样式 | `src/index.css` |
 | Token 到 Tailwind 的映射 | `tailwind.config.js` |
 | 基础组件 | `src/components/ui.tsx` |
+| 内容模式组件 | `src/components/patterns.tsx` |
+| 语义文字角色 | `src/index.css`（`.type-*`） |
+| 设计系统约束测试 | `tests/design-system.test.ts` |
 | 主题状态 | `src/store/themeStore.ts` |
 | 欢迎页 | `src/components/WelcomeScreen.tsx` |
 | 聊天稿纸 | `src/components/ChatPanel.tsx` |
@@ -431,9 +524,12 @@
 **实现约定**：
 
 - 组件保持扁平结构，不新增 `components/xxx` 子目录。
-- 新组件优先组合 `ui.tsx`，不复制样式字符串。
+- 新组件优先组合 `ui.tsx` / `patterns.tsx`，不复制样式字符串。
+- 业务组件只使用 `type-*` 语义文字类；禁止直接写 `font-*`、任意字号、`uppercase`、`tracking-[...]`、`leading-[...]`。
+- 新增内容类型时，先在 `patterns.tsx` 增加组件或命名的密度/语气变体，再在页面组合。
 - 样式类只使用本文件列出的 token 与 Tailwind 工具类。
 - 新增 token 必须同时更新 `index.css`、`tailwind.config.js` 和本文档。
+- `tests/design-system.test.ts` 是强制门槛；绕过它等同于设计规范未落地。
 
 ---
 
@@ -441,6 +537,11 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.10 | 2026-10-21 | 修复设计系统审查问题：搜索焦点可见、移除未定义 `border-line-strong`、同步 Monaco 行号色；`ui.tsx` 原语全部角色化；新增 overlay token；修正圆角/阴影/Toast 时长；Fleet 使用 `StatusText`、Settings 使用 `KeyCap`；扩展守卫检查颜色、圆角、阴影与动效 |
+| v1.9 | 2026-10-21 | 建立代码层组件管理：新增 `.type-*` 语义文字角色、`Label / Value / Caption / DataText / Eyebrow` 原语与 `patterns.tsx` 内容模式；业务组件禁止原始字体声明，新增 `tests/design-system.test.ts` 扫描约束；欢迎页、顶栏、聊天、设置、命令面板、文件树、Fleet、Diff、终端全部迁移 |
+| v1.8 | 2026-10-21 | 小字体系改为 Noto Sans + Noto Sans SC；UI 标签与字段值退出 mono，字号提升为 Label 12px / Value 12.5px；路径与数据改用 Geist Mono 11.5px；中文标签取消 uppercase/字距；编辑器与终端同步切换到 Geist Mono |
+| v1.7 | 2026-10-21 | 重定义文字层级：`ink-subtle` 退出承载信息，功能性元数据统一 `ink-muted`；Paper muted 压深至 `#615C52`，Ink muted 提亮至 `#A8A093`；Meta 下限 10.5px、路径 10px、阅读正文 14px / 1.85；补充双主题对比度矩阵与自动检查要求 |
+| v1.6 | 2026-10-21 | 欢迎页改为双语镜像标题与全量可滚动最近工作区；增加搜索、项目计数与固定快捷操作，右侧改为数据驱动的状态卡片 |
 | v1.5 | 2026-10-21 | 设置新增“快捷键”分节，按平台展示快捷键键帽与分组说明 |
 | v1.4 | 2026-10-21 | 顶栏与窗口按钮高度收到 45px，通过 `--titlebar-height` 统一控制，按钮保持正方形 |
 | v1.3 | 2026-10-21 | 窗口按钮改为 52×52 正方形，图标换成 1.25px 直边直角定制 glyph |

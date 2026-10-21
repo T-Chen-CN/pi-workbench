@@ -7,8 +7,8 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { randomUUID } from 'crypto'
-import { isAllowedStatusTransition, type FleetStore, type FleetTask } from './fleet-store'
-import type { FleetWorktree } from './fleet-worktree'
+import { isAllowedStatusTransition, type FleetStore, type FleetTask } from './fleet-store.js'
+import type { FleetWorktree } from './fleet-worktree.js'
 
 export interface FleetApiConfig {
   provider: string

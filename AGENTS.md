@@ -112,7 +112,8 @@ src/components/
 ├── Toast.tsx
 ├── WelcomeScreen.tsx
 ├── WindowControls.tsx
-└── ui.tsx
+├── ui.tsx
+└── patterns.tsx
 
 // ❌ 错误：不要创建子目录
 src/components/chat/ChatPanel.tsx  // 不要这样！
@@ -651,7 +652,7 @@ async function initAgent(config: ApiConfig) {
 
 - **唯一事实来源**：[docs/design/DESIGN_SYSTEM.md](docs/design/DESIGN_SYSTEM.md)。进行任何前端设计相关改动前必须先阅读并遵守。
 - 适用范围：颜色、字体、字号、间距、圆角、阴影、图标、动效、组件、布局、主题、空状态、提示文案。
-- 只允许使用规范中的设计 token 与 `src/components/ui.tsx` 的基础组件；禁止硬编码颜色、`gray-* / blue-* / red-*` 调色板类、`dark:` 变体、emoji 图标。
+- 只允许使用规范中的设计 token、`src/components/ui.tsx` 的基础组件与 `src/components/patterns.tsx` 的内容模式；禁止硬编码颜色、`gray-* / blue-* / red-*` 调色板类、`dark:` 变体、emoji 图标（Monaco / xterm 主题对象必须写具体色值，是唯一例外）。
 - **需要引入规范之外的设计元素时，必须先更新 `DESIGN_SYSTEM.md` 并获得项目所有者确认，再写代码；未经确认的设计例外不得合并。**
 - 每次 UI 改动需提供 Paper / Ink 两套截图，并通过对比度、键盘焦点、1024 / 1440 宽度、`type-check` / `lint` / `test` 检查。
 
@@ -677,12 +678,15 @@ async function initAgent(config: ApiConfig) {
 - 所有颜色使用语义 token，禁止硬编码色值或 gray/blue/red 调色板类：
   - 纸面：`bg-surface`（画布）/ `bg-panel`（面板）/ `bg-raised`（纸卡）/ `bg-sunken`（输入与代码）
   - 悬停与选中：`bg-hover` / `bg-active`
-  - 文字：`text-ink` / `text-ink-muted` / `text-ink-subtle`
+  - 文字：`text-ink` / `text-ink-muted`（承载信息）/ `text-ink-subtle`（仅装饰、分隔与禁用态）
   - 边框：`border-line`
   - 强调与状态：`text-accent`（松绿链接/选中）、`bg-accent`（主按钮）、`text-success`（暖橄榄）、`text-warning`、`text-danger`（朱砂红）
-- 字体：`font-display`（Instrument Serif + 思源宋体）用于 ≥18px 标题与项目名；`font-reading`（思源宋体）用于 14px 阅读型正文（欢迎页导语、Agent 回复、设置说明）；控件用默认 `font-sans`（Inter）；路径、时间、状态、代码标签用 `font-mono`（IBM Plex Mono）。
+- 字体：`font-display`（Instrument Serif + 思源宋体）用于 ≥18px 标题与项目名；`font-reading`（思源宋体）用于 14px 阅读型正文（欢迎页导语、Agent 回复、设置说明）；控件、标签与字段值用默认 `font-sans`（Noto Sans + Noto Sans SC，Label 12px / Value 12.5px）；路径、ID、时间、快捷键与代码用 `font-mono`（Geist Mono，Data 11.5px）。中文标签不要用 mono，也不要加 uppercase 或字距。
 - 形状：圆角 0–2px（`rounded-sm` / `rounded`）；纸卡阴影用 `shadow-print`；禁止渐变、玻璃拟态、柔光。
-- 新组件优先复用 `src/components/ui.tsx` 的 `Button / IconButton / Input / Select / Textarea / Field / EmptyState / Modal / Spinner`。
+- 新组件优先复用 `src/components/ui.tsx` 的 `Button / IconButton / Input / Select / Textarea / Field / EmptyState / Modal / Spinner`，以及 `src/components/patterns.tsx` 的 `Card / CardHeader / SectionHeader / Stat / StatusText / QuickAction / ListRow / KeyCap / SearchField`。
+- 文字只使用 `type-*` 语义角色（`type-label` / `type-value` / `type-data` / `type-reading` 等）；业务组件禁止直接写 `font-*`、任意字号、`uppercase`、`tracking-[...]`、`leading-[...]`。
+- 新内容类型先落到 `patterns.tsx` 的组件或命名变体，再在页面组合；禁止页面级一次性样式。
+- `tests/design-system.test.ts` 是强制门槛，绕过它等同于设计规范未落地。
 - 图标统一使用 `lucide-react`（16px 常规 / 14px 紧凑），不要使用 emoji 充当图标。
 - 间距使用 4px 网格。
 

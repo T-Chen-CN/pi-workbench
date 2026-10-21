@@ -4,7 +4,7 @@
 |---|---|
 | 文档版本 | v1.3（历史方案与实施记录） |
 | 日期 | 2026-10-20 |
-| 状态 | 已实施；正式规范见 [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md) |
+| 状态 | 历史方案与实施记录；**当前 token / 字体 / 组件以 [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md) 为准**；本文中的具体色值与字体栈不再维护 |
 | 适用范围 | 渲染进程全部界面、Monaco / xterm 主题、应用主题设置 |
 | 关联原型 | `docs/design/assets/paper-ink-welcome.png` |
 

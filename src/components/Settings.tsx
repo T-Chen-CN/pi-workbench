@@ -14,17 +14,16 @@ import { localizeError } from '../i18n/errors'
 import type { ApiConfig } from '../types/electron'
 import { isMacPlatform } from '../utils/shortcuts'
 import { Button, Field, Input, Select } from './ui'
+import { KeyCap } from './patterns'
 
 type Section = 'general' | 'api' | 'shortcuts' | 'about'
 
 const ShortcutKeys: React.FC<{ keys: string[] }> = ({ keys }) => (
-  <span className="flex flex-shrink-0 items-center gap-1 font-mono text-[10px] text-ink-muted">
+  <span className="flex flex-shrink-0 items-center gap-1 type-key text-ink-muted">
     {keys.map((key, index) => (
       <React.Fragment key={`${key}-${index}`}>
-        {index > 0 && <span className="text-ink-subtle">+</span>}
-        <kbd className="border border-line bg-sunken px-1.5 py-0.5 leading-none text-ink">
-          {key}
-        </kbd>
+        {index > 0 && <span className="text-ink-muted">+</span>}
+        <KeyCap>{key}</KeyCap>
       </React.Fragment>
     ))}
   </span>
@@ -301,7 +300,7 @@ export const Settings: React.FC<SettingsProps> = () => {
               key={id}
               type="button"
               onClick={() => setSection(id)}
-              className={`flex items-center gap-2 border-l-2 px-2.5 py-1.5 text-left font-mono text-[10px] uppercase tracking-[0.1em] transition-colors ${
+              className={`flex items-center gap-2 border-l-2 px-2.5 py-1.5 text-left type-label transition-colors ${
                 section === id
                   ? 'border-accent bg-accent/[0.06] text-ink'
                   : 'border-transparent text-ink-muted hover:bg-hover hover:text-ink'
@@ -339,7 +338,7 @@ export const Settings: React.FC<SettingsProps> = () => {
             </Field>
 
             <Field label={t('autoSave')} hint={t('autoSaveHint')}>
-              <label className="flex h-8 items-center gap-2 text-xs text-ink">
+              <label className="flex h-8 items-center gap-2 type-value text-ink">
                 <input
                   type="checkbox"
                   className="h-3 w-3 accent-[rgb(var(--accent))]"
@@ -368,7 +367,7 @@ export const Settings: React.FC<SettingsProps> = () => {
 
         {section === 'api' && (
           <div className="flex max-w-lg flex-col gap-4">
-            <p className="m-0 font-reading text-[13px] leading-[1.75] text-ink-muted">
+            <p className="m-0 type-reading text-ink-muted">
               {t('apiConfigurationDesc')}
             </p>
 
@@ -378,7 +377,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                 value={apiConfig.apiUrl}
                 onChange={(e) => setApiConfig((prev) => ({ ...prev, apiUrl: e.target.value }))}
                 placeholder="https://your-api-endpoint/v1"
-                className="font-mono"
+                className="type-code"
               />
             </Field>
 
@@ -388,7 +387,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                 value={apiConfig.apiKey}
                 onChange={(e) => setApiConfig((prev) => ({ ...prev, apiKey: e.target.value }))}
                 placeholder="sk-..."
-                className="font-mono"
+                className="type-code"
               />
             </Field>
 
@@ -438,10 +437,10 @@ export const Settings: React.FC<SettingsProps> = () => {
                 {isSaving ? t('saving') : t('saveConfiguration')}
               </Button>
               {saveStatus === 'success' && (
-                <span className="text-xs text-success">{t('savedSuccessfully')}</span>
+                <span className="type-caption text-success">{t('savedSuccessfully')}</span>
               )}
               {saveStatus === 'error' && (
-                <span className="text-xs text-danger">{t('saveFailedShort')}</span>
+                <span className="type-caption text-danger">{t('saveFailedShort')}</span>
               )}
             </div>
           </div>
@@ -449,13 +448,13 @@ export const Settings: React.FC<SettingsProps> = () => {
 
         {section === 'shortcuts' && (
           <div className="flex max-w-xl flex-col gap-5">
-            <p className="m-0 font-reading text-[13px] leading-[1.75] text-ink-muted">
+            <p className="m-0 type-reading text-ink-muted">
               {t('shortcutHint')}
             </p>
 
             {shortcutGroups.map((group) => (
               <section key={group.title}>
-                <h4 className="m-0 mb-1.5 font-mono text-[9px] uppercase tracking-[0.16em] text-ink-subtle">
+                <h4 className="m-0 mb-1.5 type-label text-ink-muted">
                   {group.title}
                 </h4>
                 <div className="border-t border-line">
@@ -465,9 +464,9 @@ export const Settings: React.FC<SettingsProps> = () => {
                       className="flex items-start justify-between gap-4 border-b border-line py-2"
                     >
                       <div className="flex min-w-0 flex-col gap-0.5">
-                        <span className="text-xs text-ink">{item.label}</span>
+                        <span className="type-value text-ink">{item.label}</span>
                         {item.note && (
-                          <span className="font-mono text-[9px] text-ink-subtle">{item.note}</span>
+                          <span className="type-caption text-ink-muted">{item.note}</span>
                         )}
                       </div>
                       <ShortcutKeys keys={item.keys} />
@@ -480,27 +479,27 @@ export const Settings: React.FC<SettingsProps> = () => {
         )}
 
         {section === 'about' && (
-          <div className="flex max-w-lg flex-col gap-3 text-xs text-ink-muted">
+          <div className="flex max-w-lg flex-col gap-3 type-caption text-ink-muted">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center border border-line bg-raised font-display text-xl text-accent">
+              <div className="flex h-10 w-10 items-center justify-center border border-line bg-raised type-subtitle text-accent">
                 Pi
               </div>
               <div>
-                <p className="m-0 text-sm font-medium text-ink">Pi Workbench</p>
-                <p className="m-0 text-ink-subtle">{t('infoVersion')}</p>
+                <p className="m-0 type-value font-medium text-ink">Pi Workbench</p>
+                <p className="m-0 text-ink-muted">{t('infoVersion')}</p>
               </div>
             </div>
             <dl className="m-0 mt-2 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2">
-              <dt className="text-ink-subtle">{t('aboutFramework')}</dt>
+              <dt className="text-ink-muted">{t('aboutFramework')}</dt>
               <dd className="m-0 text-ink">{t('infoFramework')}</dd>
-              <dt className="text-ink-subtle">{t('aboutArchitecture')}</dt>
+              <dt className="text-ink-muted">{t('aboutArchitecture')}</dt>
               <dd className="m-0 text-ink">{t('infoArchitecture')}</dd>
-              <dt className="text-ink-subtle">{t('aboutApiSupport')}</dt>
+              <dt className="text-ink-muted">{t('aboutApiSupport')}</dt>
               <dd className="m-0 text-ink">{t('infoApiSupport')}</dd>
             </dl>
 
             <div className="mt-4 border-t border-line pt-4">
-              <p className="m-0 text-xs text-ink-subtle">{t('updates')}</p>
+              <p className="m-0 type-caption text-ink-muted">{t('updates')}</p>
               <div className="mt-2 flex flex-wrap items-center gap-3">
                 {(updateState.status === 'idle' ||
                   updateState.status === 'latest' ||
@@ -530,7 +529,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                 {updateStatusText && (
                   <span
                     className={
-                      updateState.status === 'error' ? 'text-xs text-danger' : 'text-xs text-ink-muted'
+                      updateState.status === 'error' ? 'type-caption text-danger' : 'type-caption text-ink-muted'
                     }
                   >
                     {updateStatusText}

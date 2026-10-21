@@ -379,7 +379,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
           role="treeitem"
           aria-selected={active}
           aria-expanded={node.isDirectory ? !!node.isExpanded : undefined}
-          className={`flex h-7 cursor-pointer select-none items-center gap-1.5 border-l-2 pr-2 text-[12.5px] transition-colors ${
+          className={`flex h-7 cursor-pointer select-none items-center gap-1.5 border-l-2 pr-2 type-value transition-colors ${
             active
               ? 'border-accent bg-accent/[0.06] text-ink'
               : 'border-transparent text-ink-muted hover:bg-hover hover:text-ink'
@@ -393,7 +393,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
         >
           <NodeIcon
             size={14}
-            className={`flex-shrink-0 ${node.isDirectory ? 'text-ink-muted' : 'text-ink-subtle'}`}
+            className={`flex-shrink-0 ${node.isDirectory ? 'text-ink-muted' : 'text-ink-muted'}`}
           />
           <span className="truncate">{node.name}</span>
         </div>
@@ -409,11 +409,11 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
   return (
     <div className="flex h-full flex-col overflow-hidden bg-panel">
       <div className="flex h-[34px] flex-shrink-0 items-center justify-between border-b border-line px-3">
-        <h3 className="m-0 font-mono text-[9.5px] uppercase tracking-[0.16em] text-ink-subtle">
+        <h3 className="m-0 type-label text-ink-muted">
           {t('files')}
         </h3>
         <div className="flex items-center gap-1">
-          {loading && <Loader2 size={13} className="animate-spin text-ink-subtle" />}
+          {loading && <Loader2 size={13} className="animate-spin text-ink-muted" />}
           {error && (
             <span title={error} className="text-warning">
               <AlertTriangle size={13} />
@@ -437,15 +437,15 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
           >
             <button
               type="button"
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink hover:bg-hover"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink hover:bg-hover"
               onClick={() => handleRename(contextMenu.node)}
             >
-              <Pencil size={13} className="text-ink-subtle" />
+              <Pencil size={13} className="text-ink-muted" />
               {t('rename')}
             </button>
             <button
               type="button"
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-danger hover:bg-danger/10"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-danger hover:bg-danger/10"
               onClick={() => handleDelete(contextMenu.node)}
             >
               <Trash2 size={13} />
@@ -495,7 +495,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
       <div className="flex-1 overflow-y-auto py-1" role="tree">
         {error && (
           <div className="mx-2 mb-1 border border-danger/30 bg-danger/5 px-2.5 py-1.5">
-            <p className="m-0 text-[11px] leading-relaxed text-danger">{error}</p>
+            <p className="m-0 type-caption text-danger">{error}</p>
           </div>
         )}
         {tree.length === 0 && !loading ? (

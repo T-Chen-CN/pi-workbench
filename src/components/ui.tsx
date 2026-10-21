@@ -9,8 +9,8 @@ const BUTTON_BASE =
   'disabled:opacity-50 disabled:cursor-not-allowed'
 
 const BUTTON_SIZES: Record<ControlSize, string> = {
-  sm: 'h-7 px-2.5 text-xs',
-  md: 'h-8 px-3 text-[13px]',
+  sm: 'h-7 px-2.5 type-label',
+  md: 'h-8 px-3 type-label',
 }
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
@@ -20,13 +20,34 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   danger: 'border border-danger text-danger hover:bg-danger/10',
 }
 
+type TextPrimitiveProps = React.HTMLAttributes<HTMLSpanElement>
+
+export const Label: React.FC<TextPrimitiveProps> = ({ className = '', ...rest }) => (
+  <span className={`type-label ${className}`} {...rest} />
+)
+
+export const Value: React.FC<TextPrimitiveProps> = ({ className = '', ...rest }) => (
+  <span className={`type-value ${className}`} {...rest} />
+)
+
+export const Caption: React.FC<TextPrimitiveProps> = ({ className = '', ...rest }) => (
+  <span className={`type-caption ${className}`} {...rest} />
+)
+
+export const DataText: React.FC<TextPrimitiveProps> = ({ className = '', ...rest }) => (
+  <span className={`type-data ${className}`} {...rest} />
+)
+
+export const Eyebrow: React.FC<TextPrimitiveProps> = ({ className = '', ...rest }) => (
+  <span className={`type-eyebrow ${className}`} {...rest} />
+)
+
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant
   size?: ControlSize
   icon?: LucideIcon
   loading?: boolean
 }
-
 export const Button: React.FC<ButtonProps> = ({
   variant = 'secondary',
   size = 'md',
@@ -88,8 +109,8 @@ export const IconButton: React.FC<IconButtonProps> = ({
 )
 
 const CONTROL_BASE =
-  'w-full rounded-sm bg-sunken border border-line text-ink text-[13px] ' +
-  'placeholder:text-ink-subtle transition-colors focus:outline-none ' +
+  'w-full rounded-sm bg-sunken border border-line text-ink type-body ' +
+  'placeholder:text-ink-muted transition-colors focus:outline-none ' +
   'focus:border-accent ' +
   'disabled:opacity-50 disabled:cursor-not-allowed'
 
@@ -121,7 +142,7 @@ export const Select: React.FC<SelectProps> = ({ className = '', children, ...res
     <ChevronDown
       size={14}
       aria-hidden="true"
-      className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-ink-subtle"
+      className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-ink-muted"
     />
   </div>
 )
@@ -139,11 +160,11 @@ export const Field: React.FC<FieldProps> = ({ label, hint, htmlFor, children, cl
     <div className="flex items-baseline justify-between gap-2">
       <label
         htmlFor={htmlFor}
-        className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-muted"
+        className="type-label text-ink-muted"
       >
         {label}
       </label>
-      {hint && <span className="font-mono text-[10px] text-ink-subtle">{hint}</span>}
+      {hint && <span className="type-caption text-ink-muted">{hint}</span>}
     </div>
     {children}
   </div>
@@ -169,17 +190,17 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
       compact ? 'gap-2 p-4' : 'gap-3 p-8'
     }`}
   >
-    <Icon size={compact ? 16 : 20} className="text-ink-subtle" />
+    <Icon size={compact ? 16 : 20} className="text-ink-muted" />
     <div className="flex flex-col gap-1.5">
       <p
-        className={`m-0 font-display text-ink ${
-          compact ? 'text-base' : 'text-xl'
+        className={`m-0 text-ink ${
+          compact ? 'type-project' : 'type-subtitle'
         }`}
       >
         {title}
       </p>
       {description && (
-        <p className="m-0 max-w-xs font-reading text-[12.5px] leading-[1.7] text-ink-muted">
+        <p className={`m-0 max-w-xs ${compact ? 'type-body' : 'type-reading'} text-ink-muted`}>
           {description}
         </p>
       )}
@@ -226,7 +247,7 @@ export const Modal: React.FC<ModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center p-6">
-      <div className="absolute inset-0 bg-black/35" onClick={onClose} />
+      <div className="absolute inset-0 bg-overlay/35" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"
@@ -234,7 +255,7 @@ export const Modal: React.FC<ModalProps> = ({
       >
         {title && (
           <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-line px-5">
-            <h2 className="m-0 font-display text-lg text-ink">{title}</h2>
+            <h2 className="m-0 type-subtitle text-ink">{title}</h2>
             <IconButton icon={X} label={closeLabel} onClick={onClose} size="sm" />
           </div>
         )}

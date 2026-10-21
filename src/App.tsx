@@ -269,18 +269,12 @@ export default function App() {
     }
   }
 
-  /** 欢迎页提问：先选目录，再打开工作区并带入问题 */
-  const askFromWelcome = async (prompt: string) => {
+  const refreshRecentWorkspaces = async () => {
     try {
-      setError(null)
-      const result = await api.openDirectoryDialog()
-      if (result.success && !result.canceled && result.path) {
-        await openWorkspaceAt(result.path, prompt)
-      }
+      const result = await api.getRecentWorkspaces()
+      if (result.success) setRecentWorkspaces(result.workspaces)
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setError(localizeError(message))
-      console.error('Failed to open workspace from welcome prompt:', err)
+      console.error('Failed to refresh recent workspaces:', err)
     }
   }
 
@@ -338,7 +332,7 @@ export default function App() {
   )
 
   const headerLink =
-    'font-mono text-[10.5px] text-ink-muted transition-colors hover:text-ink'
+    'type-label text-ink-muted transition-colors hover:text-ink'
 
   return (
     <div className="flex h-screen flex-col bg-surface text-ink">
@@ -367,18 +361,18 @@ export default function App() {
         }}
       >
         <div className="flex min-w-0 items-center gap-2.5">
-          <span className="font-display text-2xl leading-none text-ink">Pi</span>
-          <span className="font-mono text-[8.5px] uppercase tracking-[0.2em] text-ink-subtle">
+          <span className="type-brand text-ink">Pi</span>
+          <span className="type-wordmark text-ink-muted">
             Workbench
           </span>
-          <span className="border border-line px-1.5 py-0.5 font-mono text-[8px] tracking-[0.12em] text-ink-subtle">
+          <span className="border border-line px-1.5 py-0.5 type-caption font-medium text-ink-muted">
             LOCAL
           </span>
           {workspace && (
             <>
               <div className="mx-2 h-4 w-px flex-shrink-0 bg-line" />
               <span
-                className="flex min-w-0 items-center gap-1.5 font-mono text-[10.5px] text-ink-subtle"
+                className="flex min-w-0 items-center gap-1.5 type-data text-ink-muted"
                 title={workspace}
               >
                 <Folder size={11} className="flex-shrink-0" />
@@ -414,7 +408,7 @@ export default function App() {
                 onClick={() => window.dispatchEvent(new CustomEvent('open-command-palette'))}
               >
                 {t('commandPalette')}{' '}
-                <span className="text-ink-subtle">{commandPaletteShortcut()}</span>
+                <span className="type-key text-ink-muted">{commandPaletteShortcut()}</span>
               </button>
               <button type="button" className={headerLink} onClick={() => setShowFleet(true)}>
                 {t('fleetTasks')}
@@ -462,10 +456,10 @@ export default function App() {
             return (
               <div
                 key={path}
-                className={`group flex h-8 items-center gap-2 border-r border-line px-3 font-mono text-[10.5px] ${
+                className={`group flex h-8 items-center gap-2 border-r border-line px-3 type-label ${
                   active
                     ? 'bg-panel text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
-                    : 'text-ink-subtle hover:bg-hover hover:text-ink'
+                    : 'text-ink-muted hover:bg-hover hover:text-ink'
                 }`}
               >
                 <button
@@ -482,7 +476,7 @@ export default function App() {
                   onClick={() => void closeWorkspaceTab(path)}
                   title={t('close')}
                   aria-label={t('close')}
-                  className="flex h-4 w-4 items-center justify-center text-ink-subtle hover:text-ink"
+                  className="flex h-4 w-4 items-center justify-center text-ink-muted hover:text-ink"
                 >
                   <X size={10} />
                 </button>
@@ -500,7 +494,7 @@ export default function App() {
 
       {/* Error Banner */}
       {error && (
-        <div className="flex flex-shrink-0 items-center gap-3 border-b border-danger/30 bg-danger/10 px-4 py-1.5 text-xs text-danger">
+        <div className="flex flex-shrink-0 items-center gap-3 border-b border-danger/30 bg-danger/10 px-4 py-1.5 type-caption text-danger">
           <p className="m-0 flex-1">{error}</p>
           <IconButton
             icon={X}
@@ -590,11 +584,12 @@ export default function App() {
           recentWorkspaces={recentWorkspaces}
           onOpenProject={() => void pickWorkspace()}
           onOpenWorkspace={(path) => void openWorkspaceAt(path)}
-          onAsk={(prompt) => void askFromWelcome(prompt)}
+          onOpenSettings={() => setShowSettings(true)}
+          onRefreshRecent={() => void refreshRecentWorkspaces()}
         />
       )}
 
-      <footer className="flex h-7 flex-shrink-0 items-center gap-4 border-t border-line bg-surface px-3.5 font-mono text-[9px] uppercase tracking-[0.06em] text-ink-subtle">
+      <footer className="flex h-7 flex-shrink-0 items-center gap-4 border-t border-line bg-surface px-3.5 type-caption text-ink-muted">
         <span className="text-ink-muted">PI WORKBENCH</span>
         <span>LOCAL-FIRST</span>
         {workspace && <span className="text-accent">● PI AGENT</span>}

@@ -101,7 +101,7 @@ export const IPCDebug: React.FC = () => {
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-center justify-between">
-        <h3 className="m-0 font-mono text-[9.5px] uppercase tracking-[0.16em] text-ink-subtle">
+        <h3 className="m-0 type-label text-ink-muted">
           {t('ipcDebug')}
         </h3>
         <Button variant="secondary" size="sm" loading={loading} onClick={() => void runTests()}>
@@ -111,7 +111,7 @@ export const IPCDebug: React.FC = () => {
 
       {testResults.length > 0 && (
         <div className="border border-line bg-panel p-2">
-          <h4 className="m-0 mb-1.5 flex items-center gap-2 text-[11px] font-semibold text-ink">
+          <h4 className="m-0 mb-1.5 flex items-center gap-2 type-label text-ink">
             {t('results')}
             {allPassed && <span className="text-success">✓ {t('allPassed')}</span>}
           </h4>
@@ -119,13 +119,13 @@ export const IPCDebug: React.FC = () => {
             {testResults.map((result, i) => (
               <li
                 key={i}
-                className={`px-2 py-1 font-mono text-[10px] ${
+                className={`px-2 py-1 type-data ${
                   result.status === 'ok'
                     ? 'bg-success/10 text-success'
                     : 'bg-danger/10 text-danger'
                 }`}
               >
-                <span className="font-mono font-semibold">{result.command}</span>
+                <span className="type-data font-medium">{result.command}</span>
                 <span className="mx-1.5 opacity-70">[{result.status}]</span>
                 <span className="text-ink-muted">{result.message}</span>
               </li>

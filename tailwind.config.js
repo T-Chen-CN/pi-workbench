@@ -14,6 +14,7 @@ export default {
         hover: 'rgb(var(--hover) / <alpha-value>)',
         active: 'rgb(var(--active) / <alpha-value>)',
         line: 'rgb(var(--line) / <alpha-value>)',
+        overlay: 'rgb(var(--overlay) / <alpha-value>)',
         ink: {
           DEFAULT: 'rgb(var(--ink) / <alpha-value>)',
           muted: 'rgb(var(--ink-muted) / <alpha-value>)',
@@ -41,8 +42,10 @@ export default {
       },
       fontFamily: {
         sans: [
-          'Inter Variable',
-          'Inter',
+          'Noto Sans Variable',
+          'Noto Sans',
+          'Noto Sans SC Variable',
+          'Noto Sans SC',
           'PingFang SC',
           'Microsoft YaHei',
           'system-ui',
@@ -62,8 +65,10 @@ export default {
           'serif',
         ],
         mono: [
-          'IBM Plex Mono',
-          'Cascadia Code',
+          'Geist Mono Variable',
+          'Geist Mono',
+          'Noto Sans SC Variable',
+          'Noto Sans SC',
           'Consolas',
           'monospace',
         ],
