@@ -100,11 +100,16 @@ export default {
           '0%, 100%': { opacity: '0.55' },
           '50%': { opacity: '1' },
         },
+        pulse: {
+          '0%, 100%': { opacity: '0.35' },
+          '50%': { opacity: '1' },
+        },
       },
       animation: {
         'toast-in': 'toast-in 160ms ease-out',
         'toast-out': 'toast-out 160ms ease-in forwards',
         breathe: 'breathe 2.4s ease-in-out infinite',
+        pulse: 'pulse 1.4s ease-in-out infinite',
       },
     },
   },
