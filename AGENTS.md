@@ -598,9 +598,11 @@ async function initAgent(config: ApiConfig) {
 - ❌ **禁止**使用系统数据库目录
 
 **会话存储策略**:
-- ✅ 全局会话：`{appDir}/data/sessions/{session-id}.json`
-- ✅ 工作区会话：`{workspaceDir}/.pi-workbench/sessions/{session-id}.json`
-- 区分标准：跨工作区的会话用全局，单工作区的会话用工作区目录
+- ✅ Agent 会话：`{appDir}/data/agent/sessions/*.jsonl`（Pi JSONL，按 cwd 过滤；一个工作区可同时有多个会话）
+- ✅ 打开中的会话标签与激活会话：`{workspaceDir}/.pi-workbench/chat-tabs.json`
+- ✅ 会话标题：`session_info` 条目；首轮回复后由模型生成一次，手动重命名优先
+- ✅ 同工作区多个会话可并行运行（每个会话独立 `AgentSession`，共享 `ModelRuntime` 与环境租约）
+- 会话 API：`agent:sessions:list/open/create/close/rename/delete`，流式事件带 `workspaceDir + sessionId + requestId`
 
 **日志文件位置**:
 - ✅ 所有日志：`{appDir}/logs/`

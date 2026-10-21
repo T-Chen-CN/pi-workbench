@@ -69,40 +69,59 @@ describe('editorStore', () => {
 })
 
 describe('chatStore', () => {
+  const KEY = '/ws\u0000session-1'
+
   it('appends messages with generated ids and timestamps', () => {
-    useChatStore.getState().addMessage({ role: 'user', content: 'hi' })
-    const message = useChatStore.getState().messages[0]
+    useChatStore.getState().addMessage(KEY, { role: 'user', content: 'hi' })
+    const message = useChatStore.getState().conversations[KEY].messages[0]
     expect(message.content).toBe('hi')
     expect(message.id).toBeTruthy()
     expect(typeof message.timestamp).toBe('number')
   })
 
   it('restores a persisted history', () => {
-    useChatStore.getState().setMessages([
+    useChatStore.getState().setMessages(KEY, [
       { role: 'user', content: 'q', timestamp: 1 },
       { role: 'assistant', content: 'a', timestamp: 2 },
     ])
-    expect(useChatStore.getState().messages.map((m) => m.content)).toEqual(['q', 'a'])
+    expect(
+      useChatStore.getState().conversations[KEY].messages.map((m) => m.content)
+    ).toEqual(['q', 'a'])
+  })
+
+  it('keeps conversations separate by workspace and session', () => {
+    const other = '/ws\u0000session-2'
+    useChatStore.getState().addMessage(KEY, { role: 'user', content: 'a' })
+    useChatStore.getState().addMessage(other, { role: 'user', content: 'b' })
+
+    expect(useChatStore.getState().conversations[KEY].messages[0].content).toBe('a')
+    expect(useChatStore.getState().conversations[other].messages[0].content).toBe('b')
   })
 
   it('resets state', () => {
-    useChatStore.getState().addMessage({ role: 'user', content: 'hi' })
+    useChatStore.getState().addMessage(KEY, { role: 'user', content: 'hi' })
+    useChatStore.getState().setPendingDraft('draft')
     useChatStore.getState().reset()
-    expect(useChatStore.getState().messages).toEqual([])
-    expect(useChatStore.getState().error).toBeNull()
+    expect(useChatStore.getState().conversations).toEqual({})
+    expect(useChatStore.getState().pendingDraft).toBe('')
   })
 })
 
 describe('chatStore attachments', () => {
+  const KEY = '/ws\u0000session-1'
   const fileA = { kind: 'file' as const, path: '/tmp/a.ts', name: 'a.ts' }
   const fileB = { kind: 'file' as const, path: '/tmp/b.ts', name: 'b.ts' }
 
-  it('adds attachments without duplicating the same path', () => {
-    useChatStore.getState().addAttachment(fileA)
-    useChatStore.getState().addAttachment(fileA)
-    useChatStore.getState().addAttachment(fileB)
+  beforeEach(() => {
+    useChatStore.getState().ensureConversation(KEY)
+  })
 
-    expect(useChatStore.getState().attachments).toEqual([
+  it('adds attachments without duplicating the same path', () => {
+    useChatStore.getState().addAttachment(KEY, fileA)
+    useChatStore.getState().addAttachment(KEY, fileA)
+    useChatStore.getState().addAttachment(KEY, fileB)
+
+    expect(useChatStore.getState().conversations[KEY].attachments).toEqual([
       { ...fileA, id: 'file:/tmp/a.ts' },
       { ...fileB, id: 'file:/tmp/b.ts' },
     ])
@@ -117,63 +136,67 @@ describe('chatStore attachments', () => {
       endLine: 4,
       content: 'b\nc\nd',
     }
-    useChatStore.getState().addAttachment(snippet)
-    useChatStore.getState().addAttachment({ ...snippet })
-    useChatStore.getState().addAttachment({ ...snippet, startLine: 6, endLine: 8 })
+    useChatStore.getState().addAttachment(KEY, snippet)
+    useChatStore.getState().addAttachment(KEY, { ...snippet })
+    useChatStore.getState().addAttachment(KEY, { ...snippet, startLine: 6, endLine: 8 })
 
-    expect(useChatStore.getState().attachments).toHaveLength(2)
-    expect(useChatStore.getState().attachments[0].id).toBe('snippet:/tmp/a.ts:2-4')
+    expect(useChatStore.getState().conversations[KEY].attachments).toHaveLength(2)
+    expect(useChatStore.getState().conversations[KEY].attachments[0].id).toBe(
+      'snippet:/tmp/a.ts:2-4'
+    )
   })
 
   it('removes and clears attachments', () => {
-    useChatStore.getState().addAttachment(fileA)
-    useChatStore.getState().addAttachment(fileB)
+    useChatStore.getState().addAttachment(KEY, fileA)
+    useChatStore.getState().addAttachment(KEY, fileB)
 
-    useChatStore.getState().removeAttachment('file:/tmp/a.ts')
-    expect(useChatStore.getState().attachments).toEqual([
+    useChatStore.getState().removeAttachment(KEY, 'file:/tmp/a.ts')
+    expect(useChatStore.getState().conversations[KEY].attachments).toEqual([
       { ...fileB, id: 'file:/tmp/b.ts' },
     ])
 
-    useChatStore.getState().clearAttachments()
-    expect(useChatStore.getState().attachments).toEqual([])
+    useChatStore.getState().clearAttachments(KEY)
+    expect(useChatStore.getState().conversations[KEY].attachments).toEqual([])
   })
 
   it('clears attachments on reset', () => {
-    useChatStore.getState().addAttachment({ kind: 'file', path: '/tmp/a.ts', name: 'a.ts' })
+    useChatStore.getState().addAttachment(KEY, fileA)
     useChatStore.getState().reset()
-    expect(useChatStore.getState().attachments).toEqual([])
+    expect(useChatStore.getState().conversations[KEY]).toBeUndefined()
   })
 })
 
 describe('chatStore streaming', () => {
-  it('creates, appends to and finalizes a streaming message', () => {
-    const id = useChatStore.getState().startStreamingMessage()
+  const KEY = '/ws\u0000session-1'
 
-    let message = useChatStore.getState().messages.find((m) => m.id === id)
+  it('creates, appends to and finalizes a streaming message', () => {
+    const id = useChatStore.getState().startStreamingMessage(KEY)
+
+    let message = useChatStore.getState().conversations[KEY].messages.find((m) => m.id === id)
     expect(message?.isStreaming).toBe(true)
     expect(message?.content).toBe('')
 
-    useChatStore.getState().appendToMessage(id, 'Hel')
-    useChatStore.getState().appendToMessage(id, 'lo')
+    useChatStore.getState().appendToMessage(KEY, id, 'Hel')
+    useChatStore.getState().appendToMessage(KEY, id, 'lo')
 
-    message = useChatStore.getState().messages.find((m) => m.id === id)
+    message = useChatStore.getState().conversations[KEY].messages.find((m) => m.id === id)
     expect(message?.content).toBe('Hello')
     expect(message?.isStreaming).toBe(true)
 
-    useChatStore.getState().finishStreamingMessage(id, 'Hello!')
+    useChatStore.getState().finishStreamingMessage(KEY, id, 'Hello!')
 
-    message = useChatStore.getState().messages.find((m) => m.id === id)
+    message = useChatStore.getState().conversations[KEY].messages.find((m) => m.id === id)
     expect(message?.content).toBe('Hello!')
     expect(message?.isStreaming).toBe(false)
   })
 
   it('ignores appends to unknown message ids', () => {
-    useChatStore.getState().addMessage({ role: 'user', content: 'q' })
-    useChatStore.getState().startStreamingMessage()
+    useChatStore.getState().addMessage(KEY, { role: 'user', content: 'q' })
+    useChatStore.getState().startStreamingMessage(KEY)
 
-    useChatStore.getState().appendToMessage('missing-id', 'x')
+    useChatStore.getState().appendToMessage(KEY, 'missing-id', 'x')
 
-    const messages = useChatStore.getState().messages
+    const messages = useChatStore.getState().conversations[KEY].messages
     expect(messages).toHaveLength(2)
     expect(messages[0].content).toBe('q')
     expect(messages[1].content).toBe('')

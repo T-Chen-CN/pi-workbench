@@ -8,12 +8,22 @@ const sdk = vi.hoisted(() => ({
   createAgentSession: vi.fn(),
   modelRuntimeCreate: vi.fn(),
   continueRecent: vi.fn(),
+  sessionCreate: vi.fn(),
+  sessionOpen: vi.fn(),
+  sessionFindById: vi.fn(),
+  sessionList: vi.fn(),
 }))
 
 vi.mock('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: sdk.createAgentSession,
   ModelRuntime: { create: sdk.modelRuntimeCreate },
-  SessionManager: { continueRecent: sdk.continueRecent },
+  SessionManager: {
+    continueRecent: sdk.continueRecent,
+    create: sdk.sessionCreate,
+    open: sdk.sessionOpen,
+    findById: sdk.sessionFindById,
+    list: sdk.sessionList,
+  },
 }))
 
 type SessionEvent = Record<string, unknown>
@@ -55,6 +65,28 @@ function createFakeSession(
   return session
 }
 
+function createFakeSessionManager(id = 'session-1') {
+  let name: string | undefined
+  let persisted = false
+  return {
+    getSessionId: () => id,
+    getSessionFile: () => (persisted ? `/tmp/${id}.jsonl` : null),
+    getHeader: () => ({
+      type: 'session',
+      id,
+      timestamp: new Date().toISOString(),
+      cwd: workspaceDir,
+    }),
+    getSessionName: () => name,
+    appendSessionInfo: (value: string) => {
+      name = value
+      persisted = true
+      return 'entry-1'
+    },
+    isPersisted: () => persisted,
+  }
+}
+
 function primeSdk(
   session: FakeSession,
   model: Record<string, unknown> | null = { provider: 'pi-workbench', id: 'test-model' }
@@ -62,7 +94,15 @@ function primeSdk(
   sdk.modelRuntimeCreate.mockResolvedValue({
     getModel: vi.fn(() => model),
   })
-  sdk.continueRecent.mockReturnValue({ getSessionFile: () => null })
+  sdk.continueRecent.mockImplementation(() => createFakeSessionManager())
+  sdk.sessionCreate.mockImplementation(() => createFakeSessionManager('session-new'))
+  sdk.sessionFindById.mockImplementation(
+    (_cwd: string, id: string) => `/tmp/${id}.jsonl`
+  )
+  sdk.sessionOpen.mockImplementation((file: string) =>
+    createFakeSessionManager(path.basename(file, '.jsonl'))
+  )
+  sdk.sessionList.mockResolvedValue([])
   sdk.createAgentSession.mockResolvedValue({ session })
 }
 
@@ -100,6 +140,7 @@ afterEach(async () => {
   delete process.env.PI_WORKBENCH_API_KEY
   delete process.env.ANTHROPIC_API_KEY
   delete process.env.OPENAI_API_KEY
+  vi.unstubAllGlobals()
 })
 
 describe('AgentManager initialization', () => {
@@ -541,6 +582,137 @@ describe('AgentManager session history', () => {
 
   it('returns an empty list before initialization', () => {
     expect(manager.getSessionMessages()).toEqual([])
+  })
+})
+
+describe('AgentManager sessions', () => {
+  async function until(check: () => boolean, timeoutMs = 1000): Promise<void> {
+    const start = Date.now()
+    while (Date.now() - start < timeoutMs) {
+      if (check()) return
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    throw new Error('Timed out waiting for condition')
+  }
+
+  it('creates, renames and closes independent sessions', async () => {
+    const first = createFakeSession()
+    primeSdk(first)
+    await manager.initialize(makeConfig())
+
+    const second = createFakeSession()
+    sdk.createAgentSession.mockResolvedValue({ session: second })
+
+    const created = await manager.createSession()
+    expect(created.success).toBe(true)
+    expect(created.session?.id).toBe('session-new')
+    expect(manager.getCurrentSessionId()).toBe('session-new')
+
+    const renamed = await manager.renameSession('session-new', 'Release checklist')
+    expect(renamed.success).toBe(true)
+
+    sdk.sessionList.mockResolvedValue([
+      {
+        id: 'session-old',
+        cwd: workspaceDir,
+        name: 'Older session',
+        created: new Date(1),
+        modified: new Date(2),
+        messageCount: 4,
+        firstMessage: 'old',
+        allMessagesText: '',
+        path: '/tmp/session-old.jsonl',
+      },
+    ])
+    const sessions = await manager.listSessions()
+    expect(sessions.find((session) => session.id === 'session-new')?.title).toBe(
+      'Release checklist'
+    )
+    expect(sessions.find((session) => session.id === 'session-old')?.messageCount).toBe(4)
+
+    await manager.closeSession('session-new')
+    expect(second.disposed).toBe(true)
+    expect(manager.getCurrentSessionId()).toBeNull()
+  })
+
+  it('opens an existing session by id', async () => {
+    primeSdk(createFakeSession())
+    await manager.initialize(makeConfig())
+
+    const reopened = createFakeSession()
+    reopened.messages.push({ role: 'user', content: 'restored' })
+    reopened.messages.push({ role: 'assistant', content: 'hello again' })
+    sdk.createAgentSession.mockResolvedValue({ session: reopened })
+    sdk.sessionFindById.mockReturnValue('/tmp/other-session.jsonl')
+
+    const opened = await manager.openSession('other-session')
+    expect(opened.success).toBe(true)
+    expect(opened.session?.id).toBe('other-session')
+    expect(opened.history).toEqual([
+      { role: 'user', content: 'restored', timestamp: expect.any(Number) },
+      { role: 'assistant', content: 'hello again', timestamp: expect.any(Number) },
+    ])
+  })
+
+  it('refuses to delete a session outside the session directory', async () => {
+    primeSdk(createFakeSession())
+    await manager.initialize(makeConfig())
+    sdk.sessionFindById.mockReturnValue('/tmp/outside.jsonl')
+
+    const result = await manager.deleteSession('outside')
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('outside the session directory')
+  })
+
+  it('runs two sessions concurrently without blocking each other', async () => {
+    const first = createFakeSession(async (session) => {
+      await new Promise((resolve) => setTimeout(resolve, 15))
+      session.messages.push({ role: 'user', content: 'first prompt' })
+      session.messages.push({ role: 'assistant', content: 'first answer' })
+    })
+    primeSdk(first)
+    await manager.initialize(makeConfig())
+
+    const second = createFakeSession(async (session) => {
+      session.messages.push({ role: 'user', content: 'second prompt' })
+      session.messages.push({ role: 'assistant', content: 'second answer' })
+    })
+    sdk.createAgentSession.mockResolvedValue({ session: second })
+    const created = await manager.createSession()
+    expect(created.success).toBe(true)
+
+    const [firstResult, secondResult] = await Promise.all([
+      manager.chat('session-1', 'first prompt'),
+      manager.chat('session-new', 'second prompt'),
+    ])
+
+    expect(firstResult).toMatchObject({ success: true, response: 'first answer' })
+    expect(secondResult).toMatchObject({ success: true, response: 'second answer' })
+    expect(manager.getSessionMessages('session-1')[0]?.content).toBe('first prompt')
+    expect(manager.getSessionMessages('session-new')[0]?.content).toBe('second prompt')
+  })
+
+  it('generates a model title after the first assistant turn', async () => {
+    const session = createFakeSession(async (fake) => {
+      fake.messages.push({ role: 'user', content: 'Fix the login redirect loop' })
+      fake.messages.push({ role: 'assistant', content: 'I updated the auth guard.' })
+    })
+    primeSdk(session)
+    const onSessionTitle = vi.fn()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'Fix login redirect' } }] }),
+      })
+    )
+
+    await manager.initialize(makeConfig({ onSessionTitle }))
+    const result = await manager.chat('Fix the login redirect loop')
+    expect(result.success).toBe(true)
+
+    await until(() => onSessionTitle.mock.calls.length > 0)
+    expect(onSessionTitle).toHaveBeenCalledWith('session-1', 'Fix login redirect')
   })
 })
 

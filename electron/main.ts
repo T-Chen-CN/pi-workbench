@@ -1556,6 +1556,11 @@ handleIpc('agent:initialize', async (_event, config: {
       agentDir: path.join(getAppDir(), 'data', 'agent'),
       apiConfig,
       logger: agentLogger,
+      onSessionTitle: (sessionId: string, title: string) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('agent:session-title', { workspaceDir, sessionId, title })
+        }
+      },
     })
 
     if (result.success) {
@@ -1579,52 +1584,62 @@ handleIpc('agent:initialize', async (_event, config: {
 })
 
 // Agent 聊天
-handleIpc('agent:chat', async (event, message: string, requestId?: string, workspaceDir?: string) => {
-  try {
-    if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
-      return { success: false, error: 'Workspace is not approved' }
-    }
-    const agent = workspaceDir ? agentRegistry.get(workspaceDir) : null
-    if (!agent) {
+handleIpc(
+  'agent:chat',
+  async (
+    event,
+    message: string,
+    requestId?: string,
+    workspaceDir?: string,
+    sessionId?: string
+  ) => {
+    try {
+      if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const agent = workspaceDir ? agentRegistry.get(workspaceDir) : null
+      if (!agent) {
+        return {
+          success: false,
+          error: 'Agent not initialized for this workspace. Please initialize agent first.',
+        }
+      }
+
+      console.log('[Main] Sending message to agent:', message.substring(0, 100))
+      if (workspaceDir) {
+        void pluginManager.emit(workspaceDir, 'chat:message', { message })
+      }
+
+      // 流式文本增量推送给发起请求的窗口；workspace/session/requestId 用于渲染进程路由
+      const onTextDelta = (delta: string) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('agent:stream', { requestId, workspaceDir, sessionId, delta })
+        }
+      }
+      const result = sessionId
+        ? await agent.chat(sessionId, message, { onTextDelta })
+        : await agent.chat(message, { onTextDelta })
+
+      if (result.success) {
+        console.log('[Main] Agent response received')
+      } else {
+        console.error('[Main] Agent chat error:', result.error)
+      }
+
+      return result
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      console.error('[Main] Agent chat error:', errorMessage)
       return {
         success: false,
-        error: 'Agent not initialized for this workspace. Please initialize agent first.'
+        error: `Agent error: ${errorMessage}`,
       }
     }
-
-    console.log('[Main] Sending message to agent:', message.substring(0, 100))
-    if (workspaceDir) {
-      void pluginManager.emit(workspaceDir, 'chat:message', { message })
-    }
-
-    // 流式文本增量推送给发起请求的窗口；requestId 用于渲染进程区分本次会话
-    const result = await agent.chat(message, {
-      onTextDelta: (delta: string) => {
-        if (!event.sender.isDestroyed()) {
-          event.sender.send('agent:stream', { requestId, delta })
-        }
-      },
-    })
-
-    if (result.success) {
-      console.log('[Main] Agent response received')
-    } else {
-      console.error('[Main] Agent chat error:', result.error)
-    }
-
-    return result
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    console.error('[Main] Agent chat error:', errorMessage)
-    return {
-      success: false,
-      error: `Agent error: ${errorMessage}`
-    }
   }
-})
+)
 
-// Agent 中止当前请求
-handleIpc('agent:abort', async (_event, workspaceDir?: string) => {
+// Agent 中止请求（按会话；不传 sessionId 时中止该工作区全部会话）
+handleIpc('agent:abort', async (_event, workspaceDir?: string, sessionId?: string) => {
   try {
     if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
       return { success: false, error: 'Workspace is not approved' }
@@ -1636,12 +1651,12 @@ handleIpc('agent:abort', async (_event, workspaceDir?: string) => {
     if (typeof agent.abort !== 'function') {
       return { success: false, error: 'Agent does not support abort' }
     }
-    await agent.abort()
+    await agent.abort(sessionId)
     return { success: true }
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
     }
   }
 })
@@ -1660,7 +1675,7 @@ handleIpc('agent:isInitialized', async (_event, workspaceDir?: string) => {
 })
 
 // Agent 消息历史
-handleIpc('agent:getHistory', async (_event, workspaceDir?: string) => {
+handleIpc('agent:getHistory', async (_event, workspaceDir?: string, sessionId?: string) => {
   try {
     if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
       return { success: false, error: 'Workspace is not approved' }
@@ -1672,8 +1687,8 @@ handleIpc('agent:getHistory', async (_event, workspaceDir?: string) => {
 
     // 返回持久化 Pi 会话中的可展示历史（跨重启恢复）
     const history = typeof agent.getSessionMessages === 'function'
-      ? agent.getSessionMessages()
-      : agent.getMessageHistory?.()
+      ? agent.getSessionMessages(sessionId)
+      : agent.getMessageHistory?.(sessionId)
     return { success: true, history }
   } catch (error) {
     return {
@@ -1682,6 +1697,147 @@ handleIpc('agent:getHistory', async (_event, workspaceDir?: string) => {
     }
   }
 })
+
+// 会话列表 / 打开 / 新建 / 关闭 / 重命名 / 删除
+handleIpc('agent:sessions:list', async (_event, workspaceDir: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    const sessions = typeof agent.listSessions === 'function' ? await agent.listSessions() : []
+    return { success: true, sessions, currentId: agent.getCurrentSessionId?.() ?? null }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc('agent:sessions:open', async (_event, workspaceDir: string, sessionId?: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.openSession !== 'function') {
+      return { success: false, error: 'Sessions are not supported by this agent' }
+    }
+    return await agent.openSession(sessionId)
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc('agent:sessions:create', async (_event, workspaceDir: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.createSession !== 'function') {
+      return { success: false, error: 'Sessions are not supported by this agent' }
+    }
+    return await agent.createSession()
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc('agent:sessions:close', async (_event, workspaceDir: string, sessionId: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.closeSession !== 'function') {
+      return { success: false, error: 'Sessions are not supported by this agent' }
+    }
+    await agent.closeSession(sessionId)
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc(
+  'agent:sessions:rename',
+  async (_event, workspaceDir: string, sessionId: string, name: string) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.renameSession !== 'function') {
+        return { success: false, error: 'Sessions are not supported by this agent' }
+      }
+      return await agent.renameSession(sessionId, name)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
+handleIpc('agent:sessions:delete', async (_event, workspaceDir: string, sessionId: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.deleteSession !== 'function') {
+      return { success: false, error: 'Sessions are not supported by this agent' }
+    }
+    return await agent.deleteSession(sessionId)
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+// 会话标签持久化（按工作区）
+handleIpc('agent:sessions:getTabs', async (_event, workspaceDir: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const file = path.join(workspaceDir, '.pi-workbench', 'chat-tabs.json')
+    const result = readJsonWithBackup<{ open?: string[]; active?: string | null }>(file)
+    if (!result.data) {
+      return { success: true, tabs: { open: [], active: null } }
+    }
+    const open = Array.isArray(result.data.open)
+      ? result.data.open.filter((id): id is string => typeof id === 'string')
+      : []
+    const active = typeof result.data.active === 'string' ? result.data.active : null
+    return { success: true, tabs: { open, active } }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc(
+  'agent:sessions:setTabs',
+  async (_event, workspaceDir: string, tabs: { open?: string[]; active?: string | null }) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const open = Array.isArray(tabs?.open)
+        ? tabs.open.filter((id): id is string => typeof id === 'string').slice(0, 20)
+        : []
+      const active = typeof tabs?.active === 'string' ? tabs.active : null
+      const dir = path.join(workspaceDir, '.pi-workbench')
+      await fs.mkdir(dir, { recursive: true })
+      await writeJsonAtomic(path.join(dir, 'chat-tabs.json'), { open, active })
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
 
 // Agent 清理
 handleIpc('agent:dispose', async (_event, workspaceDir?: string) => {

@@ -42,12 +42,32 @@ export interface ElectronAPI {
 
   // Pi Agent API
   agentInitialize: (config: AgentInitConfig) => Promise<AgentInitResult>
-  agentChat: (message: string, requestId?: string, workspaceDir?: string) => Promise<AgentChatResult>
-  agentAbort: (workspaceDir?: string) => Promise<AgentDisposeResult>
+  agentChat: (
+    message: string,
+    requestId?: string,
+    workspaceDir?: string,
+    sessionId?: string
+  ) => Promise<AgentChatResult>
+  agentAbort: (workspaceDir?: string, sessionId?: string) => Promise<AgentDisposeResult>
   onAgentStream: (callback: (payload: AgentStreamPayload) => void) => () => void
+  onAgentSessionTitle: (
+    callback: (payload: { workspaceDir: string; sessionId: string; title: string }) => void
+  ) => () => void
   agentIsInitialized: (workspaceDir?: string) => Promise<AgentStatusResult>
-  agentGetHistory: (workspaceDir?: string) => Promise<AgentHistoryResult>
+  agentGetHistory: (workspaceDir?: string, sessionId?: string) => Promise<AgentHistoryResult>
   agentDispose: (workspaceDir?: string) => Promise<AgentDisposeResult>
+  agentSessionsList: (workspaceDir: string) => Promise<SessionListResult>
+  agentSessionsOpen: (workspaceDir: string, sessionId?: string) => Promise<SessionOpenResult>
+  agentSessionsCreate: (workspaceDir: string) => Promise<SessionOpenResult>
+  agentSessionsClose: (workspaceDir: string, sessionId: string) => Promise<AgentDisposeResult>
+  agentSessionsRename: (
+    workspaceDir: string,
+    sessionId: string,
+    name: string
+  ) => Promise<AgentDisposeResult>
+  agentSessionsDelete: (workspaceDir: string, sessionId: string) => Promise<AgentDisposeResult>
+  agentSessionsGetTabs: (workspaceDir: string) => Promise<SessionTabsResult>
+  agentSessionsSetTabs: (workspaceDir: string, tabs: SessionTabs) => Promise<AgentDisposeResult>
 
   // Terminal
   terminalCreate: (workspaceDir: string, cols: number, rows: number) => Promise<TerminalCreateResult>
@@ -209,8 +229,44 @@ export interface AgentChatResult {
 export interface AgentStreamPayload {
   /** 发起请求时生成，用于忽略过期会话的增量 */
   requestId?: string
+  /** 产生增量的工作区与会话（多会话/多工作区路由） */
+  workspaceDir?: string
+  sessionId?: string
   /** 本次推送的文本增量 */
   delta: string
+}
+
+export interface SessionSummary {
+  id: string
+  title: string
+  messageCount: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface SessionListResult {
+  success: boolean
+  sessions?: SessionSummary[]
+  currentId?: string | null
+  error?: string
+}
+
+export interface SessionOpenResult {
+  success: boolean
+  session?: SessionSummary
+  history?: AgentHistoryResult['history']
+  error?: string
+}
+
+export interface SessionTabs {
+  open: string[]
+  active: string | null
+}
+
+export interface SessionTabsResult {
+  success: boolean
+  tabs?: SessionTabs
+  error?: string
 }
 
 export interface AgentStatusResult {

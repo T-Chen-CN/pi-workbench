@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 import { pathToFileURL } from 'url'
 import { existsSync } from 'fs'
+import { readFile, writeFile, mkdir } from 'fs/promises'
 import { createHash } from 'crypto'
 
 /**
@@ -85,6 +86,14 @@ const DEV_AGENT_ABORT = '/__pi/agent/abort'
 const DEV_AGENT_DISPOSE = '/__pi/agent/dispose'
 const DEV_AGENT_HISTORY = '/__pi/agent/history'
 const DEV_AGENT_IS_INITIALIZED = '/__pi/agent/isInitialized'
+const DEV_AGENT_SESSIONS_LIST = '/__pi/agent/sessions/list'
+const DEV_AGENT_SESSIONS_OPEN = '/__pi/agent/sessions/open'
+const DEV_AGENT_SESSIONS_CREATE = '/__pi/agent/sessions/create'
+const DEV_AGENT_SESSIONS_CLOSE = '/__pi/agent/sessions/close'
+const DEV_AGENT_SESSIONS_RENAME = '/__pi/agent/sessions/rename'
+const DEV_AGENT_SESSIONS_DELETE = '/__pi/agent/sessions/delete'
+const DEV_AGENT_SESSIONS_TABS_GET = '/__pi/agent/sessions/tabs/get'
+const DEV_AGENT_SESSIONS_TABS_SET = '/__pi/agent/sessions/tabs/set'
 
 function devAgentBridge(): Plugin {
   return {
@@ -185,7 +194,9 @@ function devAgentBridge(): Plugin {
           const body = await readJson(req)
           const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
           if (!agent) return reply(res, { success: false, error })
-          reply(res, await agent.chat(String(body.message ?? '')))
+          const message = String(body.message ?? '')
+          const sessionId = typeof body.sessionId === 'string' ? body.sessionId : undefined
+          reply(res, sessionId ? await agent.chat(sessionId, message) : await agent.chat(message))
         } catch (error) {
           reply(res, { success: false, error: error instanceof Error ? error.message : String(error) })
         }
@@ -214,9 +225,15 @@ function devAgentBridge(): Plugin {
 
           startSse()
           try {
-            const result = await agent.chat(String(body.message ?? ''), {
-              onTextDelta: (delta: string) => sendSse(res, 'delta', { delta }),
-            })
+            const message = String(body.message ?? '')
+            const sessionId = typeof body.sessionId === 'string' ? body.sessionId : undefined
+            const result = sessionId
+              ? await agent.chat(sessionId, message, {
+                  onTextDelta: (delta: string) => sendSse(res, 'delta', { delta }),
+                })
+              : await agent.chat(message, {
+                  onTextDelta: (delta: string) => sendSse(res, 'delta', { delta }),
+                })
             sendSse(res, 'done', result)
           } catch (chatError) {
             sendSse(res, 'done', {
@@ -236,7 +253,10 @@ function devAgentBridge(): Plugin {
         try {
           const body = await readJson(req)
           const { agent } = requireAgent(body.workspaceDir ?? process.cwd())
-          if (agent) await agent.abort()
+          if (agent) {
+            if (typeof body.sessionId === 'string') await agent.abort(body.sessionId)
+            else await agent.abort()
+          }
           reply(res, { success: true })
         } catch (error) {
           reply(res, { success: false, error: error instanceof Error ? error.message : String(error) })
@@ -261,11 +281,129 @@ function devAgentBridge(): Plugin {
           const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
           if (!agent) return reply(res, { success: false, error })
           const history = typeof agent.getSessionMessages === 'function'
-            ? agent.getSessionMessages()
-            : agent.getMessageHistory()
+            ? agent.getSessionMessages(body.sessionId)
+            : agent.getMessageHistory(body.sessionId)
           reply(res, { success: true, history })
         } catch (error) {
           reply(res, { success: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      })
+
+      server.middlewares.use(DEV_AGENT_SESSIONS_LIST, async (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') return next()
+        try {
+          const body = await readJson(req)
+          const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
+          if (!agent) return reply(res, { success: false, error })
+          const sessions = await agent.listSessions()
+          reply(res, { success: true, sessions, currentId: agent.getCurrentSessionId?.() ?? null })
+        } catch (caught) {
+          reply(res, { success: false, error: caught instanceof Error ? caught.message : String(caught) })
+        }
+      })
+
+      server.middlewares.use(DEV_AGENT_SESSIONS_OPEN, async (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') return next()
+        try {
+          const body = await readJson(req)
+          const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
+          if (!agent) return reply(res, { success: false, error })
+          reply(res, await agent.openSession(body.sessionId))
+        } catch (caught) {
+          reply(res, { success: false, error: caught instanceof Error ? caught.message : String(caught) })
+        }
+      })
+
+      server.middlewares.use(DEV_AGENT_SESSIONS_CREATE, async (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') return next()
+        try {
+          const body = await readJson(req)
+          const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
+          if (!agent) return reply(res, { success: false, error })
+          reply(res, await agent.createSession())
+        } catch (caught) {
+          reply(res, { success: false, error: caught instanceof Error ? caught.message : String(caught) })
+        }
+      })
+
+      server.middlewares.use(DEV_AGENT_SESSIONS_CLOSE, async (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') return next()
+        try {
+          const body = await readJson(req)
+          const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
+          if (!agent) return reply(res, { success: false, error })
+          await agent.closeSession(String(body.sessionId ?? ''))
+          reply(res, { success: true })
+        } catch (caught) {
+          reply(res, { success: false, error: caught instanceof Error ? caught.message : String(caught) })
+        }
+      })
+
+      server.middlewares.use(DEV_AGENT_SESSIONS_RENAME, async (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') return next()
+        try {
+          const body = await readJson(req)
+          const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
+          if (!agent) return reply(res, { success: false, error })
+          reply(res, await agent.renameSession(String(body.sessionId ?? ''), String(body.name ?? '')))
+        } catch (caught) {
+          reply(res, { success: false, error: caught instanceof Error ? caught.message : String(caught) })
+        }
+      })
+
+      server.middlewares.use(DEV_AGENT_SESSIONS_DELETE, async (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') return next()
+        try {
+          const body = await readJson(req)
+          const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
+          if (!agent) return reply(res, { success: false, error })
+          reply(res, await agent.deleteSession(String(body.sessionId ?? '')))
+        } catch (caught) {
+          reply(res, { success: false, error: caught instanceof Error ? caught.message : String(caught) })
+        }
+      })
+
+      const tabsPathFor = (workspaceDir: string): string =>
+        path.join(workspaceDir, '.pi-workbench', 'chat-tabs.json')
+
+      server.middlewares.use(DEV_AGENT_SESSIONS_TABS_GET, async (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') return next()
+        try {
+          const body = await readJson(req)
+          const workspaceDir = workspaceKey(body.workspaceDir ?? process.cwd())
+          try {
+            const raw = await readFile(tabsPathFor(workspaceDir), 'utf-8')
+            const parsed = JSON.parse(raw) as { open?: string[]; active?: string | null }
+            reply(res, {
+              success: true,
+              tabs: {
+                open: Array.isArray(parsed.open) ? parsed.open : [],
+                active: typeof parsed.active === 'string' ? parsed.active : null,
+              },
+            })
+          } catch {
+            reply(res, { success: true, tabs: { open: [], active: null } })
+          }
+        } catch (caught) {
+          reply(res, { success: false, error: caught instanceof Error ? caught.message : String(caught) })
+        }
+      })
+
+      server.middlewares.use(DEV_AGENT_SESSIONS_TABS_SET, async (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') return next()
+        try {
+          const body = await readJson(req)
+          const workspaceDir = workspaceKey(body.workspaceDir ?? process.cwd())
+          const tabs = body.tabs ?? {}
+          await mkdir(path.dirname(tabsPathFor(workspaceDir)), { recursive: true })
+          await writeFile(
+            tabsPathFor(workspaceDir),
+            JSON.stringify({ open: tabs.open ?? [], active: tabs.active ?? null }, null, 2),
+            'utf-8'
+          )
+          reply(res, { success: true })
+        } catch (caught) {
+          reply(res, { success: false, error: caught instanceof Error ? caught.message : String(caught) })
         }
       })
 

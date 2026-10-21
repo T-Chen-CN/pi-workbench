@@ -4,7 +4,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { api } from '../api'
-import { useChatStore } from '../store/chatStore'
+import { conversationKey, useChatStore } from '../store/chatStore'
+import { useSessionStore } from '../store/sessionStore'
 import { readThemeTokens, tokenHex } from '../theme/tokens'
 import { useI18nStore } from '../store/i18nStore'
 import { useResolvedTheme } from '../store/themeStore'
@@ -47,6 +48,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const [status, setStatus] = useState<TerminalStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   const [generation, setGeneration] = useState(0)
+  const activeSessionId = useSessionStore(
+    (state) => state.byWorkspace[workspacePath]?.active ?? null
+  )
 
   // 输出订阅（组件生命周期内只注册一次）
   useEffect(() => {
@@ -195,11 +199,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       return
     }
 
-    useChatStore.getState().addAttachment({
-      kind: 'file',
-      path: logPath,
-      name: logPath.split(/[\\/]/).pop() || 'terminal.log',
-    })
+    if (!activeSessionId) {
+      toast.error(t('noActiveSession'))
+      return
+    }
+
+    useChatStore
+      .getState()
+      .addAttachment(conversationKey(workspacePath, activeSessionId), {
+        kind: 'file',
+        path: logPath,
+        name: logPath.split(/[\\/]/).pop() || 'terminal.log',
+      })
     toast.success(t('terminalAttached'))
   }
 

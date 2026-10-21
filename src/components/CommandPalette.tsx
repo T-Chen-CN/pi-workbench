@@ -3,6 +3,7 @@ import { RefreshCw, Search, X } from 'lucide-react'
 import { api } from '../api'
 import { useI18nStore } from '../store/i18nStore'
 import { useSelectionStore } from '../store/selectionStore'
+import { useSessionStore } from '../store/sessionStore'
 import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
 import { IconButton, Spinner } from './ui'
@@ -19,6 +20,25 @@ interface CommandOutput {
 }
 
 const ATTACH_SELECTION_COMMAND_ID = 'workbench.attach-selection'
+
+const BUILTIN_COMMANDS: Array<{
+  id: string
+  titleKey:
+    | 'attachSelection'
+    | 'newSession'
+    | 'sessionList'
+    | 'renameSession'
+    | 'deleteSession'
+    | 'closeSessionTab'
+  event?: string
+}> = [
+  { id: ATTACH_SELECTION_COMMAND_ID, titleKey: 'attachSelection' },
+  { id: 'workbench.session-new', titleKey: 'newSession', event: 'session-new' },
+  { id: 'workbench.session-list', titleKey: 'sessionList', event: 'session-list' },
+  { id: 'workbench.session-rename', titleKey: 'renameSession', event: 'session-rename' },
+  { id: 'workbench.session-delete', titleKey: 'deleteSession', event: 'session-delete' },
+  { id: 'workbench.session-close', titleKey: 'closeSessionTab', event: 'session-close' },
+]
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath }) => {
   const { t } = useI18nStore()
@@ -86,15 +106,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
   }, [open, workspacePath, refresh])
 
   const commands = useMemo(() => {
-    const builtin: PluginCommandInfo = {
-      id: ATTACH_SELECTION_COMMAND_ID,
-      title: t('attachSelection'),
-      description: t('noSelection'),
+    const builtins: PluginCommandInfo[] = BUILTIN_COMMANDS.map((command) => ({
+      id: command.id,
+      title: t(command.titleKey),
       pluginId: 'workbench',
       pluginName: 'Workbench',
-    }
+    }))
     return [
-      builtin,
+      ...builtins,
       ...plugins.filter((plugin) => plugin.enabled && !plugin.error).flatMap((plugin) => plugin.commands),
     ]
   }, [plugins, t])
@@ -112,16 +131,31 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
   }, [query, open])
 
   const runCommand = async (command: PluginCommandInfo) => {
-    if (command.id === ATTACH_SELECTION_COMMAND_ID) {
-      const selection = useSelectionStore.getState().selection
-      if (!selection) {
-        setOutput({ title: command.title, text: t('selectionEmpty'), success: false })
-        toast.error(`${command.title}: ${t('selectionEmpty')}`)
+    const builtin = BUILTIN_COMMANDS.find((item) => item.id === command.id)
+    if (builtin) {
+      if (command.id === ATTACH_SELECTION_COMMAND_ID) {
+        const selection = useSelectionStore.getState().selection
+        if (!selection) {
+          setOutput({ title: command.title, text: t('selectionEmpty'), success: false })
+          toast.error(`${command.title}: ${t('selectionEmpty')}`)
+          return
+        }
+        window.dispatchEvent(new CustomEvent('attach-selection'))
+        setOutput({ title: command.title, text: t('selectionAttached'), success: true })
+        toast.success(`${command.title}: ${t('selectionAttached')}`)
         return
       }
-      window.dispatchEvent(new CustomEvent('attach-selection'))
-      setOutput({ title: command.title, text: t('selectionAttached'), success: true })
-      toast.success(`${command.title}: ${t('selectionAttached')}`)
+
+      const active = useSessionStore.getState().byWorkspace[workspacePath]?.active
+      if (!active) {
+        setOutput({ title: command.title, text: t('noActiveSession'), success: false })
+        toast.error(`${command.title}: ${t('noActiveSession')}`)
+        return
+      }
+      if (builtin.event) {
+        window.dispatchEvent(new CustomEvent(builtin.event))
+        setOutput({ title: command.title, text: command.title, success: true })
+      }
       return
     }
 
