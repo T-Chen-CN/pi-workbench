@@ -206,11 +206,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     <div
       className={
         visible
-          ? 'flex h-[172px] flex-shrink-0 flex-col border-t border-line bg-panel'
+          ? 'flex h-[172px] flex-shrink-0 flex-col border-t border-rule-divide bg-panel'
           : 'hidden'
       }
     >
-      <div className="flex h-7 flex-shrink-0 items-center justify-between border-b border-line px-3.5">
+      <div className="flex h-7 flex-shrink-0 items-center justify-between border-b border-rule-divide px-3.5">
         <div className="flex items-center gap-3 type-label text-ink-muted">
           <span className="font-medium text-ink-muted">{t('terminal')}</span>
           <span className="border-b border-accent pb-0.5 type-data text-ink">zsh</span>

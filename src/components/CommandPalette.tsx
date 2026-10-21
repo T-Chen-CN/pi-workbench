@@ -156,8 +156,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
       className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-20"
     >
       <div className="absolute inset-0 bg-overlay/50" onClick={() => setOpen(false)} />
-      <div className="relative flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden border border-line bg-panel shadow-print">
-        <div className="flex h-10 flex-shrink-0 items-center justify-between border-b border-line px-3">
+      <div className="relative flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden border border-line bg-raised shadow-print">
+        <div className="flex h-10 flex-shrink-0 items-center justify-between border-b border-rule-divide px-3">
           <h3 className="m-0 type-label text-ink-muted">
             {t('commandPalette')}
           </h3>
@@ -172,7 +172,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
           </div>
         </div>
 
-        <div className="flex flex-shrink-0 items-center gap-2 border-b border-line px-3 transition-colors focus-within:border-accent">
+        <div className="flex flex-shrink-0 items-center gap-2 border-b border-rule-divide px-3 transition-colors focus-within:border-accent">
           <Search size={15} className="text-ink-muted" />
           <input
             ref={inputRef}
@@ -197,7 +197,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
           {loading && <Spinner size={14} className="text-ink-muted" />}
         </div>
 
-        <div className="flex flex-shrink-0 flex-wrap items-center gap-1.5 border-b border-line px-3 py-1.5">
+        <div className="flex flex-shrink-0 flex-wrap items-center gap-1.5 border-b border-rule-divide px-3 py-1.5">
           <span className="type-label text-ink-muted">
             {t('plugins')}
           </span>
@@ -210,7 +210,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
               className={`inline-flex cursor-pointer items-center gap-1.5 border px-2 py-0.5 type-caption ${
                 plugin.error
                   ? 'border-danger/40 bg-danger/10 text-danger'
-                  : 'border-line bg-sunken text-ink-muted hover:text-ink'
+                  : 'border-rule-control bg-sunken text-ink-muted hover:text-ink'
               }`}
               title={plugin.error || plugin.description || plugin.id}
             >
@@ -225,7 +225,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
           ))}
         </div>
 
-        <div className="flex-shrink-0 border-b border-line px-3 py-1.5 transition-colors focus-within:border-accent">
+        <div className="flex-shrink-0 border-b border-rule-divide px-3 py-1.5 transition-colors focus-within:border-accent">
           <input
             value={args}
             onChange={(event) => setArgs(event.target.value)}
@@ -252,7 +252,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
                 type="button"
                 onClick={() => void runCommand(command)}
                 onMouseEnter={() => setSelected(index)}
-                className={`flex w-full items-start gap-3 border-b border-b-line/50 border-l-2 px-3 py-2 text-left transition-colors ${
+                className={`flex w-full items-start gap-3 border-b border-rule-divide border-l-2 px-3 py-2 text-left transition-colors ${
                   index === selected
                     ? 'border-l-accent bg-accent/[0.06]'
                     : 'border-l-transparent hover:bg-hover'
@@ -274,7 +274,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
         </div>
 
         {output && (
-          <div className="flex-shrink-0 border-t border-line">
+          <div className="flex-shrink-0 border-t border-rule-divide">
             <div className="flex items-center justify-between px-3 py-1.5">
               <span
                 className={`type-caption font-medium ${

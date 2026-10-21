@@ -124,9 +124,9 @@ export const DiffViewer: React.FC = () => {
       className="fixed inset-0 z-40 flex items-center justify-center p-6"
     >
       <div className="absolute inset-0 bg-overlay/50" onClick={handleClose} />
-      <div className="relative flex h-[85vh] w-full max-w-6xl flex-col overflow-hidden border border-line bg-panel shadow-print">
+      <div className="relative flex h-[85vh] w-full max-w-6xl flex-col overflow-hidden border border-line bg-raised shadow-print">
         {/* Header */}
-        <div className="flex flex-shrink-0 items-center justify-between gap-4 border-b border-line px-4 py-2">
+        <div className="flex flex-shrink-0 items-center justify-between gap-4 border-b border-rule-divide px-4 py-2">
           <div className="flex min-w-0 items-center gap-3">
             <h3 className="m-0 whitespace-nowrap type-label text-ink">
               {t('reviewChanges')}
@@ -161,7 +161,7 @@ export const DiffViewer: React.FC = () => {
           </div>
 
           <div className="flex flex-shrink-0 items-center gap-2">
-            <div className="flex items-center gap-0.5 border border-line bg-sunken p-0.5">
+            <div className="flex items-center gap-0.5 border border-rule-control bg-sunken p-0.5">
               <button
                 type="button"
                 onClick={() => setViewMode('split')}
@@ -215,7 +215,7 @@ export const DiffViewer: React.FC = () => {
         </div>
 
         {/* Hint */}
-        <div className="flex-shrink-0 border-b border-line px-4 py-1.5 type-caption text-ink-muted">
+        <div className="flex-shrink-0 border-b border-rule-divide px-4 py-1.5 type-caption text-ink-muted">
           {t('reviewHint')}
         </div>
 
@@ -256,7 +256,7 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
   return (
     <div className="flex h-full divide-x divide-line">
       <div className="flex flex-1 flex-col overflow-hidden">
-        <div className="flex flex-shrink-0 items-center justify-between border-b border-line bg-panel px-3 py-1.5">
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-rule-divide bg-panel px-3 py-1.5">
           <span className="truncate type-data text-ink">{diff.originalFile}</span>
           <span className="px-1.5 py-0.5 type-data text-danger">
             -{diff.removedCount}
@@ -270,7 +270,7 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
       </div>
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        <div className="flex flex-shrink-0 items-center justify-between border-b border-line bg-panel px-3 py-1.5">
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-rule-divide bg-panel px-3 py-1.5">
           <span className="truncate type-data text-ink">{diff.modifiedFile}</span>
           <span className="px-1.5 py-0.5 type-data text-success">
             +{diff.addedCount}
@@ -289,7 +289,7 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
 const UnifiedDiffView: React.FC<DiffViewProps> = ({ diff }) => {
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-shrink-0 items-center justify-center gap-2 border-b border-line bg-panel px-3 py-1.5">
+      <div className="flex flex-shrink-0 items-center justify-center gap-2 border-b border-rule-divide bg-panel px-3 py-1.5">
         <span className="truncate type-data text-ink-muted">{diff.originalFile}</span>
         <span className="text-ink-muted">→</span>
         <span className="truncate type-data text-ink">{diff.modifiedFile}</span>
@@ -326,7 +326,7 @@ const DiffLineElement: React.FC<DiffLineElementProps> = ({ line, side }) => {
   }
 
   return (
-    <div className={`flex border-b border-line/60 type-code ${bgColor}`}>
+    <div className={`flex border-b border-rule-divide type-code ${bgColor}`}>
       <span className={`w-6 flex-shrink-0 select-none py-0.5 text-center ${prefixColor}`}>
         {prefix}
       </span>

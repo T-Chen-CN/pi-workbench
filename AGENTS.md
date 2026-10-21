@@ -6,7 +6,7 @@
 **架构**: Electron 44 + React 19 + TypeScript
 **运行要求**: Node.js ≥ 22.19（Pi SDK 要求；Electron 44 内置 Node 24）  
 **当前阶段**: Phase 5 完成，Phase 6 持续优化  
-**最后更新**: 2026-10-20
+**最后更新**: 2026-10-21
 
 ---
 
@@ -680,10 +680,10 @@ async function initAgent(config: ApiConfig) {
   - 纸面：`bg-surface`（画布）/ `bg-panel`（面板）/ `bg-raised`（纸卡）/ `bg-sunken`（输入与代码）
   - 悬停与选中：`bg-hover` / `bg-active`
   - 文字：`text-ink` / `text-ink-muted`（承载信息）/ `text-ink-subtle`（仅装饰、分隔与禁用态）
-  - 边框：`border-line`
+  - 边框：`border-rule-control`（控件边界）/ `border-rule-divide`（结构分隔）/ `border-rule-hairline`（卡片外框）；满墨 `border-line` 仅用于浮层
   - 强调与状态：`text-accent`（松绿链接/选中）、`bg-accent`（主按钮）、`text-success`（暖橄榄）、`text-warning`、`text-danger`（朱砂红）
 - 字体：`font-display`（Instrument Serif + 思源宋体）用于 ≥18px 标题与项目名；`font-reading`（思源宋体）用于 14px 阅读型正文（欢迎页导语、Agent 回复、设置说明）；控件、标签与字段值用默认 `font-sans`（Noto Sans + Noto Sans SC，Label 12px / Value 12.5px）；路径、ID、时间、快捷键与代码用 `font-mono`（Geist Mono，Data 11.5px）。中文标签不要用 mono，也不要加 uppercase 或字距。
-- 形状：圆角 0–2px（`rounded-sm` / `rounded`）；纸卡阴影用 `shadow-print`；禁止渐变、玻璃拟态、柔光。
+- 形状：圆角 0–2px（`rounded-sm` / `rounded`）；页面内纸卡用 `bg-raised` + 发丝外框、不用阴影；浮层（弹窗、菜单、Toast）用 `bg-raised` + 满墨外框 + `shadow-print`；禁止渐变、玻璃拟态、柔光。
 - 新组件优先复用 `src/components/ui.tsx` 的 `Button / IconButton / Input / Select / Textarea / Field / EmptyState / Modal / Spinner`，以及 `src/components/patterns.tsx` 的 `Card / CardHeader / SectionHeader / Stat / StatusText / QuickAction / ListRow / KeyCap / SearchField`。
 - 文字只使用 `type-*` 语义角色（`type-label` / `type-value` / `type-data` / `type-reading` 等）；业务组件禁止直接写 `font-*`、任意字号、`uppercase`、`tracking-[...]`、`leading-[...]`。
 - 新内容类型先落到 `patterns.tsx` 的组件或命名变体，再在页面组合；禁止页面级一次性样式。
@@ -720,6 +720,8 @@ npm run build         # 全量构建
 ```
 
 > `npm run dev` 会通过 `predev` 自动构建 `pi-bridge` 与主进程/preload，无需手动 build。
+>
+> 修改 `tailwind.config.js`（新增颜色/工具类）后必须重启 `npm run dev`：Tailwind 配置只在服务器启动时读取，Vite 的 CSS HMR 不会生成新工具类，页面会回退到 Tailwind 默认边框色（深色主题下表现为异常发亮的硬线）。
 
 ### IPC 调试
 - 使用 `<IPCDebug />` 组件查看 IPC 调用
@@ -925,6 +927,6 @@ docs/
 
 ---
 
-**最后更新**: 2026-10-20  
+**最后更新**: 2026-10-21  
 **维护者**: Pi Workbench Team  
 **AI 友好**: 本文件专为 AI 助手设计，包含项目的所有关键约束和最佳实践

@@ -199,12 +199,12 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
       className="fixed inset-0 z-40 flex items-center justify-center p-6"
     >
       <div className="absolute inset-0 bg-overlay/50" onClick={onClose} />
-      <div className="relative flex h-[85vh] w-full max-w-3xl flex-col overflow-hidden border border-line bg-panel shadow-print">
-        <div className="flex h-11 flex-shrink-0 items-center justify-between border-b border-line px-4">
+      <div className="relative flex h-[85vh] w-full max-w-3xl flex-col overflow-hidden border border-line bg-raised shadow-print">
+        <div className="flex h-11 flex-shrink-0 items-center justify-between border-b border-rule-divide px-4">
           <div className="flex items-center gap-2">
             <Ship size={15} className="text-accent" />
             <h3 className="m-0 type-label text-ink">{t('fleetTasks')}</h3>
-            <span className="border border-line px-1.5 py-0.5 type-caption text-ink-muted">
+            <span className="border border-rule-control px-1.5 py-0.5 type-caption text-ink-muted">
               {tasks.length}
             </span>
           </div>
@@ -212,7 +212,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
         </div>
 
         {/* Create form */}
-        <div className="flex flex-shrink-0 flex-col gap-2 border-b border-line p-3">
+        <div className="flex flex-shrink-0 flex-col gap-2 border-b border-rule-divide p-3">
           <div className="flex gap-2">
             <Input
               value={name}
@@ -247,7 +247,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
             tasks.map((task) => (
               <div
                 key={task.id}
-                className="border-b border-line/60 px-4 py-2.5 transition-colors hover:bg-hover/40"
+                className="border-b border-rule-divide px-4 py-2.5 transition-colors hover:bg-hover/40"
               >
                 <div className="flex items-center gap-2.5">
                   <StatusText
@@ -326,7 +326,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
                 )}
 
                 {selectedId === task.id && (
-                  <pre className="m-0 mt-2 max-h-48 overflow-auto whitespace-pre-wrap border border-line bg-sunken p-2 type-code text-ink-muted">
+                  <pre className="m-0 mt-2 max-h-48 overflow-auto whitespace-pre-wrap border border-rule-control bg-sunken p-2 type-code text-ink-muted">
                     {task.output || task.error || t('fleetLogEmpty')}
                   </pre>
                 )}
@@ -336,7 +336,7 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
         </div>
 
         {selectedTask && (
-          <div className="flex flex-shrink-0 items-center gap-2 border-t border-line px-4 py-1.5 type-caption text-ink-muted">
+          <div className="flex flex-shrink-0 items-center gap-2 border-t border-rule-divide px-4 py-1.5 type-caption text-ink-muted">
             {busy && <Spinner size={11} />}
             <span className="truncate type-data">
               {selectedTask.worktreeRemoved ? t('fleetWorktreeRemoved') : selectedTask.worktree}

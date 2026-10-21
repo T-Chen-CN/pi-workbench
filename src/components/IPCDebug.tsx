@@ -110,7 +110,7 @@ export const IPCDebug: React.FC = () => {
       </div>
 
       {testResults.length > 0 && (
-        <div className="border border-line bg-panel p-2">
+        <div className="border border-rule-hairline bg-panel p-2">
           <h4 className="m-0 mb-1.5 flex items-center gap-2 type-label text-ink">
             {t('results')}
             {allPassed && <span className="text-success">✓ {t('allPassed')}</span>}

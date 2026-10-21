@@ -15,7 +15,7 @@ const BUTTON_SIZES: Record<ControlSize, string> = {
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary: 'bg-accent text-accent-fg hover:bg-accent-hover',
-  secondary: 'bg-transparent text-ink border border-line hover:bg-hover',
+  secondary: 'bg-transparent text-ink border border-rule-control hover:bg-hover',
   ghost: 'text-ink-muted hover:text-ink hover:bg-hover',
   danger: 'border border-danger text-danger hover:bg-danger/10',
 }
@@ -109,7 +109,7 @@ export const IconButton: React.FC<IconButtonProps> = ({
 )
 
 const CONTROL_BASE =
-  'w-full rounded-sm bg-sunken border border-line text-ink type-body ' +
+  'w-full rounded-sm bg-sunken border border-rule-control text-ink type-body ' +
   'placeholder:text-ink-muted transition-colors focus:outline-none ' +
   'focus:border-accent ' +
   'disabled:opacity-50 disabled:cursor-not-allowed'
@@ -251,17 +251,17 @@ export const Modal: React.FC<ModalProps> = ({
       <div
         role="dialog"
         aria-modal="true"
-        className={`relative flex max-h-[85vh] w-full ${MODAL_SIZES[size]} flex-col overflow-hidden border border-line bg-panel shadow-print`}
+        className={`relative flex max-h-[85vh] w-full ${MODAL_SIZES[size]} flex-col overflow-hidden border border-line bg-raised shadow-print`}
       >
         {title && (
-          <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-line px-5">
+          <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-rule-divide px-5">
             <h2 className="m-0 type-subtitle text-ink">{title}</h2>
             <IconButton icon={X} label={closeLabel} onClick={onClose} size="sm" />
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
         {footer && (
-          <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-line px-5 py-3">
+          <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-rule-divide px-5 py-3">
             {footer}
           </div>
         )}

@@ -14,6 +14,9 @@ export default {
         hover: 'rgb(var(--hover) / <alpha-value>)',
         active: 'rgb(var(--active) / <alpha-value>)',
         line: 'rgb(var(--line) / <alpha-value>)',
+        'rule-control': 'var(--rule-control)',
+        'rule-divide': 'var(--rule-divide)',
+        'rule-hairline': 'var(--rule-hairline)',
         overlay: 'rgb(var(--overlay) / <alpha-value>)',
         ink: {
           DEFAULT: 'rgb(var(--ink) / <alpha-value>)',

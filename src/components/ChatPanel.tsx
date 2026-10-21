@@ -58,7 +58,7 @@ const CodeBlock: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
         type="button"
         onClick={() => void copy()}
         aria-label={t('copyCode')}
-        className="absolute right-2 top-2 flex items-center gap-1 rounded border border-line bg-raised px-1.5 py-1 type-caption text-ink-muted opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover/code:opacity-100 group-focus-within/code:opacity-100"
+        className="absolute right-2 top-2 flex items-center gap-1 rounded border border-rule-control bg-raised px-1.5 py-1 type-caption text-ink-muted opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover/code:opacity-100 group-focus-within/code:opacity-100"
       >
         {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
         {copied ? t('copied') : t('copyCode')}
@@ -328,7 +328,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   return (
     <div className="flex h-full flex-col bg-panel">
       {/* Header */}
-      <div className="flex h-[38px] flex-shrink-0 items-center justify-between border-b border-line px-3.5">
+      <div className="flex h-[38px] flex-shrink-0 items-center justify-between border-b border-rule-divide px-3.5">
         <div className="flex items-center gap-2.5">
           <h3 className="m-0 type-label text-ink-muted">
             {t('agentChatTitle')}
@@ -343,7 +343,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="border border-line px-1.5 py-0.5 type-key text-ink-muted">
+          <span className="border border-rule-control px-1.5 py-0.5 type-key text-ink-muted">
             {commandPaletteShortcut()}
           </span>
           <IconButton
@@ -362,7 +362,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           if (msg.isStreaming && !msg.content) return null
           const isUser = msg.role === 'user'
           return (
-            <div key={msg.id} className="border-b border-line py-3 first:pt-0 last:border-b-0">
+            <div key={msg.id} className="border-b border-rule-divide py-3 first:pt-0 last:border-b-0">
               <div className="mb-1.5 flex items-baseline gap-2">
                 <Label className="text-ink">
                   {isUser ? t('roleYou') : t('piAgent')}
@@ -403,7 +403,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         })}
 
         {isLoading && !messages.some((msg) => msg.isStreaming && msg.content) && (
-          <div className="flex items-center gap-2 border-b border-line py-3 type-value text-ink-muted last:border-b-0">
+          <div className="flex items-center gap-2 border-b border-rule-divide py-3 type-value text-ink-muted last:border-b-0">
             <Spinner size={12} />
             {t('thinking')}
           </div>
@@ -426,7 +426,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             {attachments.map((attachment) => (
               <span
                 key={attachment.path}
-                className="inline-flex items-center gap-1 border border-line bg-sunken px-2 py-1 type-data text-ink-muted"
+                className="inline-flex items-center gap-1 border border-rule-control bg-sunken px-2 py-1 type-data text-ink-muted"
                 title={attachment.path}
               >
                 <FileText size={10} className="text-ink-muted" />
@@ -447,7 +447,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
         <form
           onSubmit={handleSubmit}
-          className="border border-line bg-sunken transition-colors focus-within:border-accent"
+          className="border border-rule-control bg-sunken transition-colors focus-within:border-accent"
         >
           <Textarea
             ref={inputRef}

@@ -150,8 +150,8 @@ export const FleetDiffModal: React.FC<FleetDiffModalProps> = ({
 
       {state.status === 'ready' && state.files.length > 0 && (
         <div className="flex h-[62vh] min-h-0">
-          <div className="w-56 flex-shrink-0 overflow-y-auto border-r border-line">
-            <div className="border-b border-line px-3 py-2 type-caption text-ink-muted">
+          <div className="w-56 flex-shrink-0 overflow-y-auto border-r border-rule-divide">
+            <div className="border-b border-rule-divide px-3 py-2 type-caption text-ink-muted">
               {t('fleetChangedFiles', { count: state.files.length })}
             </div>
             {state.files.map((file) => {
@@ -161,7 +161,7 @@ export const FleetDiffModal: React.FC<FleetDiffModalProps> = ({
                   key={file.path}
                   type="button"
                   onClick={() => setSelectedPath(file.path)}
-                  className={`flex w-full flex-col gap-0.5 border-b border-line/60 px-3 py-2 text-left transition-colors ${
+                  className={`flex w-full flex-col gap-0.5 border-b border-rule-divide px-3 py-2 text-left transition-colors ${
                     active ? 'bg-hover' : 'hover:bg-hover/50'
                   }`}
                 >
@@ -178,7 +178,7 @@ export const FleetDiffModal: React.FC<FleetDiffModalProps> = ({
 
           <div className="flex min-w-0 flex-1 flex-col">
             {selectedFile && (
-              <div className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-line px-3 py-1.5">
+              <div className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-rule-divide px-3 py-1.5">
                 <span className="truncate type-data text-ink" title={selectedFile.path}>
                   {selectedFile.path}
                 </span>

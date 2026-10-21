@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.5 |
+| 文档版本 | v1.12 |
 | 状态 | Active（正式规范） |
 | 最后更新 | 2026-10-21 |
 | 适用范围 | 渲染进程全部 UI、Monaco / xterm 主题、应用主题设置 |
@@ -36,7 +36,7 @@
 
 | 原则 | 含义 | 表现 |
 |---|---|---|
-| 纸（Paper） | 界面是纸面，不是面板堆叠 | 暖白底、纸卡、细墨线、错位硬阴影 |
+| 纸（Paper） | 界面是纸面，不是面板堆叠 | 暖白底、纸卡靠底色分离、分层细线、浮层错位硬阴影 |
 | 墨（Ink） | 层级靠排版与留白，不靠灰色深浅 | 近黑正文、衬线标题、等宽元数据 |
 | 松绿（Pine） | 唯一的品牌强调色 | 标题重音、链接、选中线、主按钮、印章；占比 <5% |
 
@@ -55,12 +55,15 @@
 | CSS 变量 | Tailwind 类 | Paper（默认） | Ink（深色） | 用途 |
 |---|---|---|---|---|
 | `--surface` | `bg-surface` | `#F4F1EA` | `#141311` | 应用画布、顶栏、状态栏 |
-| `--panel` | `bg-panel` | `#FBF9F4` | `#1A1815` | 面板、纸卡、编辑器、聊天 |
-| `--raised` | `bg-raised` | `#FFFDF8` | `#201D19` | 浮起的纸片、Toast、菜单 |
+| `--panel` | `bg-panel` | `#FBF9F4` | `#1A1815` | 面板、编辑器、聊天 |
+| `--raised` | `bg-raised` | `#FFFDF8` | `#201D19` | 纸卡、浮层（弹窗、菜单、Toast） |
 | `--sunken` | `bg-sunken` | `#EFECE4` | `#221F1B` | 输入框、代码块、终端底 |
 | `--hover` | `bg-hover` | `#EEEAE1` | `#2B2722` | hover 背景 |
 | `--active` | `bg-active` | `#E8E3D9` | `#342F29` | 选中/按下背景 |
-| `--line` | `border-line` | `#171512` | `#EDE7DC` | 1px 墨线；`/60` 为柔和分隔 |
+| `--line` | `border-line` | `#171512` | `#EDE7DC` | 墨线基色；通过线条角色派生，不直接用于卡片外框 |
+| `--rule-control` | `border-rule-control` | 墨 50% | 墨 50% | 控件边界：输入框、按钮、键帽、搜索框；≥3:1 |
+| `--rule-divide` | `border-rule-divide` | 墨 22% | 墨 22% | 分隔线：卡头下沿、列表行、顶栏/状态栏/面板交界 |
+| `--rule-hairline` | `border-rule-hairline` | 墨 18% | 墨 18% | 卡片外框（装饰性收口） |
 | `--overlay` | `bg-overlay` | `#000000` | `#000000` | 模态遮罩 |
 | `--ink` | `text-ink` | `#171512` | `#EDE7DC` | 主文字 |
 | `--ink-muted` | `text-ink-muted` | `#615C52` | `#A8A093` | 次级文字、功能性元数据（路径、计数、标签、空状态、placeholder） |
@@ -73,6 +76,8 @@
 | `--danger` | `text-danger` / `bg-danger` | `#A83A22` | `#E06A4A` | 错误、删除、冲突 |
 
 **透明度用法**：选中/淡洗使用颜色 token 的透明度修饰符，例如 `bg-accent/[0.06]`、`bg-success/10`、`bg-danger/10`。
+
+**线条角色**：`--rule-control` / `--rule-divide` / `--rule-hairline` 由 `--line` 以固定透明度派生（`rgb(var(--line) / α)`），在 `:root` 定义一次，随 Paper / Ink 自动切换。组件只使用 `border-rule-*`，不得再写 `border-line/50` 这类裸透明度；满墨 `border-line` 只用于浮层外框。
 
 ### 2.2 对比度基线
 
@@ -96,6 +101,10 @@
 | Paper `success` / `surface` | 5.14:1 | AA |
 | Paper `warning` / `surface` | 4.79:1 | AA |
 | Paper `danger` / `surface` | 5.65:1 | AA |
+| Paper `rule-control` / `surface` | 3.35:1 | 控件边界（≥3:1） |
+| Ink `rule-control` / `surface` | 4.54:1 | 控件边界（≥3:1） |
+
+`rule-divide`（Paper 1.60:1 / Ink 1.85:1）与 `rule-hairline`（Paper 1.46:1 / Ink 1.61:1）属于装饰线，不进入 3:1 基线，但不得充当控件边界或区域的唯一标识。
 
 **文字层级规则**：
 
@@ -103,6 +112,7 @@
 - `ink-subtle` 不进入文字层级，只用于装饰线、装饰点、禁用态；不得承载唯一信息。
 - 层级优先通过字号、字体、字距和留白表达，不通过继续降低文字对比度表达。
 - UI 组件边界、有意义的图标与控件至少 3:1；焦点态使用 `accent`。
+- 线条角色：`rule-control` 对 `surface` / `panel` ≥3:1，用于控件边界；`rule-divide` 与 `rule-hairline` 属于装饰线，不要求 3:1，但不得充当控件边界，也不得作为区域的唯一标识——区域必须同时有底色或排版层级。
 - 任何新颜色组合在合并前必须同时实测 Paper / Ink、`surface` / `panel` 四种组合。
 
 ### 2.3 代码与语法 Token
@@ -195,12 +205,14 @@
 | 弹窗、较大容器 | 4px | `rounded-lg` |
 | 圆形按钮、头像、LED | 9999px | `rounded-full` |
 
-- 常规边框统一 1px `border-line`。
+- 边框统一 1px，按角色取值：强调用 `border-accent`；控件边界用 `border-rule-control`；结构分隔用 `border-rule-divide`；卡片外框用 `border-rule-hairline`。
+- 满墨 `border-line` 只用于浮层（弹窗、菜单、命令面板、Toast）外框；不要用它画普通区域或纸卡外框。
 - 不使用大圆角卡片（>6px）；不允许胶囊形按钮（圆形图标按钮除外）。
 
 ### 4.3 阴影
 
-- 纸卡使用错位硬阴影：`shadow-print`（Paper：`5px 6px 0 rgba(23,21,18,.08)`；Ink：更深的黑色）。
+- 浮层（Modal、菜单、命令面板、Toast）使用 `bg-raised` + 1px `border-line` + `shadow-print`（Paper：`5px 6px 0 rgba(23,21,18,.08)`；Ink：更深的黑色）。
+- 页面内的纸卡（Card）不投影：区域由 `bg-raised` 底色与 `border-rule-hairline` 界定，线只收口。
 - 普通面板、按钮、输入框**不使用阴影**；层级通过纸面/墨线/背景差异表达。
 - 禁止柔光、发光、玻璃拟态。
 
@@ -245,7 +257,7 @@
 ### 5.3 Input / Textarea
 
 - 基于原生 input/textarea，`forwardRef`。
-- 背景 `bg-sunken`，1px `border-line`，2px 圆角。
+- 背景 `bg-sunken`，1px `border-rule-control`，2px 圆角。
 - focus：边框转 `accent`，不额外加 ring。
 - placeholder：`text-ink-muted`；禁用态 50% 透明度。
 
@@ -285,7 +297,7 @@
 | `size` | `sm \| md \| lg` | `md` | `max-w-md/2xl/4xl` |
 | `closeLabel` | `string` | `Close` | 关闭按钮的 aria-label |
 
-**规则**：遮罩使用 `bg-black/35`；纸卡使用 `border-line bg-panel shadow-print`；标题 `font-display`；关闭按钮使用 IconButton。
+**规则**：遮罩使用 `bg-black/35`；浮层纸卡使用 `border-line bg-raised shadow-print`，标题栏与底栏分隔使用 `border-rule-divide`；标题 `font-display`；关闭按钮使用 IconButton。
 
 ### 5.8 Spinner
 
@@ -319,7 +331,7 @@
 
 | 组件 | 用途 | 变体 |
 |---|---|---|
-| `Card` | 纸卡容器 | `density="default \| compact"` |
+| `Card` | 纸卡容器（`bg-raised` + 发丝边，无投影） | `density="default \| compact"` |
 | `CardHeader` | 卡片标题 + 状态/操作 | `status` / `action` |
 | `SectionHeader` | 分区标题 + 计数 + 搜索/操作 | `count` / `action` |
 | `Stat` / `StatGrid` | 字段标签 + 字段值 | 2 列网格 |
@@ -345,11 +357,13 @@
 - 顶栏 45px：衬线字标 `Pi` + mono `WORKBENCH` + 工作区路径；右侧文字操作（命令面板、Fleet、终端、设置）与主操作按钮。
 - 工作区标签栏 34px：矩形 mono 标签，激活项纸面底 + 2px `accent` 顶线。
 - 主区域三栏：文件树 232px / 编辑器自适应 / 聊天 336px；可拖拽、可折叠，默认宽度见上。
+- 可拖拽分隔条：1px `rule-divide`，hover / 拖拽时转 `accent`；不要用满墨 `bg-line` 画分栏线。
 - 状态栏 28px：mono 文本，左侧品牌/本地优先/Agent 状态，右侧语言、编码、主题。
 
 ### 6.2 欢迎页
 
 - 编辑式双栏：左侧眉题 + 37px 衬线双行标题 + 14px / 1.85 导语 + 全量最近工作区（内部滚动）；右侧 Agent 状态、最近项目、Fleet 摘要、开始使用 + 印章。
+- 右侧状态卡片使用 `Card`（`bg-raised` + 发丝边，无投影）；卡头标题 `text-ink`，卡头下沿与列表行为 `rule-divide`。
 - 眉题与标题互为镜像：中文界面眉题为英文 mono 大写，标题中文；英文界面眉题为中文 reading 小字，标题英文。标题重音使用 `accent` 松绿。
 - 最近工作区默认展示全部，标题旁显示“共 N 个项目”；搜索框过滤全部项目；列表在固定区域内滚动，滚动条常驻，快捷操作固定在列表底部，页面本身不滚动。
 - 所有功能性次级文字——分区标题、项目计数、字段标签、空状态、Fleet 状态、快捷操作——使用 `ink-muted` 与 UI sans；标签 12px / 500、字段值 12.5px / 400；路径使用 mono 11.5px。`ink-subtle` 只用于装饰和禁用态。
@@ -374,7 +388,7 @@
 
 ### 6.5 聊天（稿纸）
 
-- 不使用气泡；每条消息以 UI sans 11.5px 角色标签 + 时间开头，消息之间用 1px 墨线分隔。
+- 不使用气泡；每条消息以 UI sans 11.5px 角色标签 + 时间开头，消息之间用 1px `rule-divide` 分隔。
 - 用户消息以绿色 `›` 起头；正文 `font-reading` 14px / 1.85。
 - Agent 回复使用 Markdown：标题用 display 字体，正文 reading，代码块 mono；代码块左侧 2px 绿色线，允许换行。
 - 代码块右上角提供复制按钮（hover/focus 显示）。
@@ -389,7 +403,7 @@
 ### 6.7 设置 / 命令面板 / Diff / Fleet / Toast
 
 - 设置：纸片弹窗 + 左侧分节导航（通用 / API 配置 / 快捷键 / 关于）；分节标签 sans 12px / 500；字段使用 Field + Input/Select；主按钮绿色。
-  - 快捷键分节：动作名使用 sans 12.5px，键帽使用 mono 10.5px + 1px `border-line` + `bg-sunken`，用 `<kbd>` 语义；按平台显示 `Ctrl` 或 `⌘`。
+  - 快捷键分节：动作名使用 sans 12.5px，键帽使用 mono 10.5px + 1px `border-rule-control` + `bg-sunken`，用 `<kbd>` 语义；按平台显示 `Ctrl` 或 `⌘`。
   - 分组：全局 / 编辑器（打开文件时）/ 聊天（工作区内）/ 浮层；仅列出实际生效的快捷键。
 - 命令面板：560px 纸片、sans 搜索、编号结果列表、选中项 2px 绿色左边线；Esc 关闭。
 - Diff：纸面审阅单；新增用 `success/10` 橄榄淡洗，删除用 `danger/10` 朱砂淡洗；统计与行号使用 mono，说明文字使用 sans。
@@ -462,6 +476,9 @@
 - ❌ 未登记的字体、字号、间距、圆角、阴影、动效。
 - ❌ 用颜色作为唯一状态信号。
 - ❌ 在业务组件里重复实现 Button / Input / Modal。
+- ❌ 用满墨 `border-line` 画区内卡片外框或普通区域边界（只允许浮层）。
+- ❌ 给页面内的纸卡加投影（`shadow-print` 只属于浮层）。
+- ❌ 绕过线条角色直接写 `border-line/50` 等裸透明度。
 
 ### 9.2 新 UI 工作检查清单
 
@@ -473,6 +490,8 @@
 - [ ] 中文标签与字段值使用 UI sans，未使用 mono；uppercase/tracking 只用于纯 Latin 眉题。
 - [ ] 业务组件未直接写 `font-*`、任意字号、`uppercase`、`tracking-[...]`、`leading-[...]`。
 - [ ] 新增内容类型已落到 `patterns.tsx`，页面只做组合。
+- [ ] 卡片为 `bg-raised` + `border-rule-hairline` 且无投影；控件边界为 `border-rule-control` 且 ≥3:1。
+- [ ] 满墨 `border-line` 只出现在浮层（Modal、菜单、命令面板、Toast）上。
 - [ ] `tests/design-system.test.ts` 通过。
 - [ ] placeholder 使用 `ink-muted`。
 - [ ] 键盘可访问，焦点可见，图标按钮有名称。
@@ -508,6 +527,7 @@
 | 基础组件 | `src/components/ui.tsx` |
 | 内容模式组件 | `src/components/patterns.tsx` |
 | 语义文字角色 | `src/index.css`（`.type-*`） |
+| 线条角色 token | `src/index.css`（`--rule-*`）、`tailwind.config.js`（`border-rule-*`） |
 | 设计系统约束测试 | `tests/design-system.test.ts` |
 | 主题状态 | `src/store/themeStore.ts` |
 | 欢迎页 | `src/components/WelcomeScreen.tsx` |
@@ -538,6 +558,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.12 | 2026-10-21 | 线条角色化与卡片表面分离：新增 `--rule-control`（控件 50%）/ `--rule-divide`（分隔 22%）/ `--rule-hairline`（卡片外框 18%）三档；纸卡改为 `bg-raised` + 发丝边、取消区内投影，`shadow-print` 只保留给浮层；修正 `--panel` / `--raised` 用途冲突与文首版本号 |
 | v1.11 | 2026-10-21 | Monaco / xterm 主题颜色改由 `src/theme/tokens.ts` 从 CSS token 读取；移除“硬编码颜色例外”规则，守卫不再豁免这两个文件 |
 | v1.10 | 2026-10-21 | 修复设计系统审查问题：搜索焦点可见、移除未定义 `border-line-strong`、同步 Monaco 行号色；`ui.tsx` 原语全部角色化；新增 overlay token；修正圆角/阴影/Toast 时长；Fleet 使用 `StatusText`、Settings 使用 `KeyCap`；扩展守卫检查颜色、圆角、阴影与动效 |
 | v1.9 | 2026-10-21 | 建立代码层组件管理：新增 `.type-*` 语义文字角色、`Label / Value / Caption / DataText / Eyebrow` 原语与 `patterns.tsx` 内容模式；业务组件禁止原始字体声明，新增 `tests/design-system.test.ts` 扫描约束；欢迎页、顶栏、聊天、设置、命令面板、文件树、Fleet、Diff、终端全部迁移 |

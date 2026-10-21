@@ -69,7 +69,7 @@ export const WindowControls: React.FC = () => {
     'hover:bg-hover hover:text-ink active:bg-active'
 
   return (
-    <div className="app-no-drag flex h-full flex-shrink-0 items-stretch border-l border-line">
+    <div className="app-no-drag flex h-full flex-shrink-0 items-stretch border-l border-rule-divide">
       <button
         type="button"
         aria-label={t('windowMinimize')}
