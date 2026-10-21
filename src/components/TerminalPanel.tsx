@@ -77,7 +77,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
     const terminal = new Terminal({
       fontSize: 13,
-      fontFamily: '"IBM Plex Mono", "Cascadia Mono", Consolas, monospace',
+      fontFamily: '"Geist Mono Variable", "Geist Mono", "Noto Sans SC Variable", Consolas, monospace',
       cursorBlink: true,
       theme:
         resolvedTheme === 'dark'
@@ -225,25 +225,25 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       }
     >
       <div className="flex h-7 flex-shrink-0 items-center justify-between border-b border-line px-3.5">
-        <div className="flex items-center gap-3 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-subtle">
-          <span className="text-ink-muted">{t('terminal')}</span>
-          <span className="border-b border-accent pb-0.5 text-ink">zsh</span>
+        <div className="flex items-center gap-3 type-label text-ink-muted">
+          <span className="font-medium text-ink-muted">{t('terminal')}</span>
+          <span className="border-b border-accent pb-0.5 type-data text-ink">zsh</span>
           {status === 'starting' && <span>{t('terminalStarting')}</span>}
-          {status === 'error' && <span className="normal-case tracking-normal text-danger">{error}</span>}
+          {status === 'error' && <span className="text-danger">{error}</span>}
         </div>
         <div className="flex items-center gap-3">
           <button
             type="button"
             disabled={status !== 'ready'}
             onClick={() => void sendOutputToChat()}
-            className="font-mono text-[9px] text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
+            className="type-label font-normal text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
           >
             {t('sendTerminalOutput')}
           </button>
           <button
             type="button"
             onClick={restart}
-            className="font-mono text-[9px] text-ink-muted transition-colors hover:text-ink"
+            className="type-label font-normal text-ink-muted transition-colors hover:text-ink"
           >
             {t('restartTerminal')}
           </button>

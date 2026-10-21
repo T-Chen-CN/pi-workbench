@@ -6,11 +6,22 @@ import {
   Folder,
   FolderOpen,
   RefreshCw,
-  Search,
   Settings as SettingsIcon,
-  type LucideIcon,
 } from 'lucide-react'
 import { api } from '../api'
+import {
+  Card,
+  CardHeader,
+  ListRow,
+  QuickAction,
+  SearchField,
+  SectionHeader,
+  Stat,
+  StatGrid,
+  StatusText,
+  type StatusTone,
+} from './patterns'
+import { Caption, DataText, Eyebrow, Label, Value } from './ui'
 import { useI18nStore } from '../store/i18nStore'
 import type { ApiConfig, FleetTask, FleetTaskStatus } from '../types/electron'
 
@@ -33,39 +44,15 @@ const FLEET_STATUS_KEYS: Record<
   cancelled: 'fleetCancelled',
 }
 
-const FLEET_STATUS_TONES: Record<FleetTaskStatus, string> = {
-  queued: 'text-ink-subtle',
-  running: 'text-accent',
-  succeeded: 'text-success',
-  failed: 'text-danger',
-  cancelled: 'text-warning',
+const FLEET_STATUS_TONES: Record<FleetTaskStatus, StatusTone> = {
+  queued: 'muted',
+  running: 'accent',
+  succeeded: 'success',
+  failed: 'danger',
+  cancelled: 'warning',
 }
 
 const workspaceName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path
-
-const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <div className="min-w-0">
-    <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-ink-subtle">{label}</div>
-    <div className="mt-1 truncate font-mono text-[10.5px] text-ink" title={value}>
-      {value}
-    </div>
-  </div>
-)
-
-const QuickAction: React.FC<{ icon: LucideIcon; label: string; onClick: () => void }> = ({
-  icon: Icon,
-  label,
-  onClick,
-}) => (
-  <button
-    type="button"
-    onClick={onClick}
-    className="inline-flex items-center gap-1.5 border-b border-line pb-0.5 font-mono text-[9.5px] text-ink-muted transition-colors hover:border-ink hover:text-ink"
-  >
-    <Icon size={11} />
-    {label}
-  </button>
-)
 
 export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   recentWorkspaces,
@@ -172,17 +159,13 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
       <div className="relative mx-auto flex min-h-0 w-full max-w-[1360px] flex-1 flex-col px-10 pb-[18px] pt-[26px]">
         <div className="grid min-h-0 flex-1 grid-cols-[1.14fr_0.86fr] gap-[38px]">
           <section className="flex min-h-0 min-w-0 flex-col">
-            <p
-              className={
-                isChinese
-                  ? 'm-0 font-mono text-[9.5px] uppercase tracking-[0.16em] text-accent'
-                  : 'm-0 font-reading text-[11px] tracking-[0.12em] text-accent'
-              }
-            >
-              {t('welcomeEyebrow')}
-            </p>
+            {isChinese ? (
+              <Eyebrow className="m-0 text-accent">{t('welcomeEyebrow')}</Eyebrow>
+            ) : (
+              <p className="m-0 type-eyebrow-cjk text-accent">{t('welcomeEyebrow')}</p>
+            )}
 
-            <h1 className="mb-2 mt-[11px] font-display text-[37px] font-normal leading-[1.18] tracking-[-0.01em] text-ink">
+            <h1 className="mb-2 mt-[11px] type-display text-ink">
               <span className="block">{t('welcomeHeadlineA')}</span>
               <span className="block">
                 {t('welcomeHeadlineB')}
@@ -190,30 +173,24 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
               </span>
             </h1>
 
-            <p className="m-0 max-w-[520px] font-reading text-[13.5px] leading-[1.75] text-ink-muted">
+            <p className="m-0 max-w-[560px] type-reading text-ink-muted">
               {t('welcomeLede')}
             </p>
 
             <div className="mt-[23px] flex min-h-0 flex-1 flex-col">
-              <div className="flex flex-none items-baseline justify-between gap-4 border-b border-line pb-2">
-                <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-ink-subtle">
-                  {t('welcomeRecent')}
-                  <span className="ml-2.5 font-mono text-[9px] normal-case tracking-normal text-ink-subtle">
-                    {t('welcomeProjectCount', { count: filteredWorkspaces.length })}
-                  </span>
-                </span>
-
-                <div className="flex h-6 w-[180px] flex-shrink-0 items-center gap-1.5 border border-line bg-panel px-2">
-                  <Search size={11} className="flex-shrink-0 text-ink-subtle" aria-hidden="true" />
-                  <input
+              <SectionHeader
+                title={t('welcomeRecent')}
+                count={t('welcomeProjectCount', { count: filteredWorkspaces.length })}
+                action={
+                  <SearchField
                     value={query}
-                    onChange={(event) => setQuery(event.target.value)}
+                    onChange={setQuery}
                     placeholder={t('welcomeSearch')}
-                    aria-label={t('welcomeSearch')}
-                    className="min-w-0 flex-1 bg-transparent font-mono text-[9px] text-ink placeholder:text-ink-subtle focus:outline-none"
+                    ariaLabel={t('welcomeSearch')}
+                    className="w-[200px]"
                   />
-                </div>
-              </div>
+                }
+              />
 
               <div
                 data-testid="welcome-recent-list"
@@ -223,46 +200,39 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   <button
                     type="button"
                     onClick={onOpenProject}
-                    className="w-full border-b border-line py-4 text-left font-mono text-[10.5px] text-ink-subtle transition-colors hover:text-ink"
+                    className="w-full border-b border-line py-4 text-left type-value text-ink-muted transition-colors hover:text-ink"
                   >
                     {t('welcomeNoRecent')}
                   </button>
                 ) : filteredWorkspaces.length === 0 ? (
-                  <p className="m-0 py-4 font-mono text-[10.5px] text-ink-subtle">
+                  <p className="m-0 py-4 type-value text-ink-muted">
                     {t('welcomeNoMatch')}
                   </p>
                 ) : (
                   filteredWorkspaces.map((path, index) => (
-                    <button
+                    <ListRow
                       key={path}
-                      type="button"
+                      icon={Folder}
+                      title={workspaceName(path)}
+                      subtitle={path}
+                      titleAttr={path}
+                      titleVariant="project"
                       onClick={() => onOpenWorkspace(path)}
-                      className="group flex w-full items-center gap-3 border-b border-line py-2.5 text-left transition-colors hover:bg-hover"
-                    >
-                      <Folder
-                        size={14}
-                        className="flex-shrink-0 text-ink-subtle"
-                        aria-hidden="true"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-display text-[17px] leading-[1.2] text-ink transition-colors group-hover:text-accent">
-                          {workspaceName(path)}
-                        </span>
-                        <span className="block truncate font-mono text-[9px] text-ink-subtle">
-                          {path}
-                        </span>
-                      </span>
-                      {index === 0 && !query.trim() && (
-                        <span className="flex-shrink-0 font-mono text-[8px] uppercase tracking-[0.08em] text-accent">
-                          {t('welcomeRecentLatest')}
-                        </span>
-                      )}
-                      <ArrowUpRight
-                        size={12}
-                        className="flex-shrink-0 text-ink-subtle opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
-                        aria-hidden="true"
-                      />
-                    </button>
+                      trailing={
+                        <>
+                          {index === 0 && !query.trim() && (
+                            <Label className="flex-shrink-0 text-accent">
+                              {t('welcomeRecentLatest')}
+                            </Label>
+                          )}
+                          <ArrowUpRight
+                            size={12}
+                            className="flex-shrink-0 text-ink-muted opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+                            aria-hidden="true"
+                          />
+                        </>
+                      }
+                    />
                   ))
                 )}
               </div>
@@ -288,26 +258,16 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           </section>
 
           <aside className="flex min-h-0 min-w-0 flex-col gap-3">
-            <div className="border border-line bg-panel p-3.5">
-              <div className="flex items-center justify-between border-b border-line pb-2">
-                <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-ink-muted">
-                  {t('welcomeAgentLabel')}
-                </span>
-                <span
-                  className={`flex items-center gap-1.5 font-mono text-[8.5px] uppercase tracking-[0.08em] ${
-                    apiReady ? 'text-success' : 'text-warning'
-                  }`}
-                >
-                  <span
-                    className={`h-1 w-1 rounded-full ${
-                      apiReady ? 'bg-success' : 'bg-warning'
-                    }`}
-                  />
-                  {apiReady ? t('welcomeAgentLive') : t('welcomeApiMissing')}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-x-4 gap-y-3 pt-3">
+            <Card>
+              <CardHeader
+                title={t('welcomeAgentLabel')}
+                status={
+                  <StatusText tone={apiReady ? 'success' : 'warning'} dot>
+                    {apiReady ? t('welcomeAgentLive') : t('welcomeApiMissing')}
+                  </StatusText>
+                }
+              />
+              <StatGrid className="pt-3">
                 <Stat label={t('welcomeModel')} value={model} />
                 <Stat
                   label={t('welcomeApi')}
@@ -320,28 +280,22 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   value={String(recentWorkspaces.length)}
                 />
                 <Stat label={t('welcomeBackend')} value={t('welcomeLocal')} />
-              </div>
-            </div>
+              </StatGrid>
+            </Card>
 
-            <div className="border border-line bg-panel p-3.5">
-              <div className="flex items-center justify-between gap-3 border-b border-line pb-2">
-                <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-ink-muted">
-                  {t('welcomeContinue')}
-                </span>
-              </div>
+            <Card>
+              <CardHeader title={t('welcomeContinue')} />
 
               {latestWorkspace ? (
                 <div className="pt-3">
-                  <p className="m-0 truncate font-display text-[18px] leading-[1.25] text-ink">
-                    {latestName}
-                  </p>
-                  <p className="m-0 mt-1 truncate font-mono text-[9px] text-ink-subtle">
+                  <p className="m-0 truncate type-project text-ink">{latestName}</p>
+                  <DataText className="m-0 mt-1 block truncate text-ink-muted">
                     {latestWorkspace}
-                  </p>
+                  </DataText>
                   <button
                     type="button"
                     onClick={() => onOpenWorkspace(latestWorkspace)}
-                    className="mt-3 inline-flex h-7 items-center gap-1.5 border border-line px-2.5 font-mono text-[9px] text-ink-muted transition-colors hover:border-accent hover:text-accent"
+                    className="mt-3 inline-flex h-7 items-center gap-1.5 border border-line px-2.5 type-label text-ink-muted transition-colors hover:border-accent hover:text-accent"
                   >
                     {t('welcomeOpenWorkspace')}
                     <ArrowRight size={11} aria-hidden="true" />
@@ -351,27 +305,27 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 <button
                   type="button"
                   onClick={onOpenProject}
-                  className="w-full pt-3 text-left font-mono text-[10.5px] text-ink-subtle transition-colors hover:text-ink"
+                  className="w-full pt-3 text-left type-value text-ink-muted transition-colors hover:text-ink"
                 >
                   {t('welcomeNoRecent')}
                 </button>
               )}
-            </div>
+            </Card>
 
-            <div className="border border-line bg-panel p-3.5">
-              <div className="flex items-center justify-between border-b border-line pb-2">
-                <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-ink-muted">
-                  {t('welcomeFleet')}
-                </span>
-                {runningTasks > 0 && (
-                  <span className="font-mono text-[8.5px] text-ink-subtle">
-                    {t('welcomeFleetRunning', { count: runningTasks })}
-                  </span>
-                )}
-              </div>
+            <Card>
+              <CardHeader
+                title={t('welcomeFleet')}
+                status={
+                  runningTasks > 0 ? (
+                    <Caption className="text-ink-muted">
+                      {t('welcomeFleetRunning', { count: runningTasks })}
+                    </Caption>
+                  ) : undefined
+                }
+              />
 
               {fleetTasks.length === 0 ? (
-                <p className="m-0 pt-2.5 font-mono text-[9.5px] text-ink-subtle">
+                <p className="m-0 pt-2.5 type-value text-ink-muted">
                   {t('welcomeFleetEmpty')}
                 </p>
               ) : (
@@ -384,29 +338,30 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                       onClick={() => onOpenWorkspace(task.workspace)}
                       className="flex w-full items-center gap-2.5 border-b border-line py-1.5 text-left last:border-b-0"
                     >
-                      <span
-                        className={`w-[54px] flex-shrink-0 font-mono text-[8px] uppercase tracking-[0.06em] ${FLEET_STATUS_TONES[task.status]}`}
+                      <StatusText
+                        tone={FLEET_STATUS_TONES[task.status]}
+                        className="w-[64px] flex-shrink-0"
                       >
-                        ● {t(FLEET_STATUS_KEYS[task.status])}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[10.5px] text-ink">
+                        {t(FLEET_STATUS_KEYS[task.status])}
+                      </StatusText>
+                      <Value className="min-w-0 flex-1 truncate text-ink">
                         {task.name}
-                      </span>
+                      </Value>
                     </button>
                   ))}
                 </div>
               )}
-            </div>
+            </Card>
 
-            <div className="border border-line bg-panel p-3.5">
-              <div className="flex items-center justify-between border-b border-line pb-2">
-                <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-ink-muted">
-                  {t('welcomeGettingStarted')}
-                </span>
-                <span className="font-mono text-[8.5px] text-ink-subtle">
-                  {completedSteps} / {steps.length}
-                </span>
-              </div>
+            <Card>
+              <CardHeader
+                title={t('welcomeGettingStarted')}
+                status={
+                  <Caption className="text-ink-muted">
+                    {completedSteps} / {steps.length}
+                  </Caption>
+                }
+              />
 
               <div className="pt-2">
                 {steps.map((step, index) => (
@@ -418,16 +373,16 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                     className="flex w-full items-center gap-2 py-1.5 text-left disabled:cursor-default"
                   >
                     <span
-                      className={`flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center border font-mono text-[8px] ${
+                      className={`flex h-4 w-4 flex-shrink-0 items-center justify-center border type-caption ${
                         step.done
                           ? 'border-accent text-accent'
-                          : 'border-line-strong text-ink-subtle'
+                          : 'border-line text-ink-muted'
                       }`}
                     >
                       {step.done ? <Check size={10} strokeWidth={2.5} aria-hidden="true" /> : index + 1}
                     </span>
                     <span
-                      className={`text-[10.5px] ${
+                      className={`type-value ${
                         step.done ? 'text-ink' : 'text-ink-muted'
                       }`}
                     >
@@ -436,11 +391,11 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   </button>
                 ))}
               </div>
-            </div>
+            </Card>
 
-            <div className="mt-auto self-end border-[1.5px] border-accent px-3 py-1.5 text-center font-mono text-[9px] tracking-[0.16em] text-accent [transform:rotate(-2deg)]">
+            <div className="mt-auto self-end border-[1.5px] border-accent px-3 py-1.5 text-center type-stamp text-accent [transform:rotate(-2deg)]">
               {t('welcomeStampTitle')}
-              <span className="mt-0.5 block text-[7px] tracking-[0.22em]">
+              <span className="mt-0.5 block type-stamp-sub">
                 {t('welcomeStampSubtitle')}
               </span>
             </div>

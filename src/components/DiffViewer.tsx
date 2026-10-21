@@ -122,22 +122,22 @@ export const DiffViewer: React.FC = () => {
       aria-modal="true"
       className="fixed inset-0 z-40 flex items-center justify-center p-6"
     >
-      <div className="absolute inset-0 bg-black/50" onClick={handleClose} />
+      <div className="absolute inset-0 bg-overlay/50" onClick={handleClose} />
       <div className="relative flex h-[85vh] w-full max-w-6xl flex-col overflow-hidden border border-line bg-panel shadow-print">
         {/* Header */}
         <div className="flex flex-shrink-0 items-center justify-between gap-4 border-b border-line px-4 py-2">
           <div className="flex min-w-0 items-center gap-3">
-            <h3 className="m-0 whitespace-nowrap text-sm font-semibold text-ink">
+            <h3 className="m-0 whitespace-nowrap type-label text-ink">
               {t('reviewChanges')}
             </h3>
-            <span className="whitespace-nowrap border border-success/30 px-2 py-0.5 font-mono text-[10px] text-success">
+            <span className="whitespace-nowrap border border-success/30 px-2 py-0.5 type-data text-success">
               +{diff.addedCount}
             </span>
-            <span className="whitespace-nowrap border border-danger/30 px-2 py-0.5 font-mono text-[10px] text-danger">
+            <span className="whitespace-nowrap border border-danger/30 px-2 py-0.5 type-data text-danger">
               -{diff.removedCount}
             </span>
             {edits.length > 1 && (
-              <div className="flex items-center gap-1 text-xs text-ink-muted">
+              <div className="flex items-center gap-1 type-caption text-ink-muted">
                 <IconButton
                   icon={ChevronLeft}
                   label={t('previousFile')}
@@ -145,7 +145,7 @@ export const DiffViewer: React.FC = () => {
                   disabled={!canGoPrev || busy}
                   onClick={() => setCurrentIndex(currentIndex - 1)}
                 />
-                <span className="whitespace-nowrap tabular-nums">
+                <span className="whitespace-nowrap">
                   {currentIndex + 1} / {edits.length}
                 </span>
                 <IconButton
@@ -166,9 +166,9 @@ export const DiffViewer: React.FC = () => {
                 onClick={() => setViewMode('split')}
                 title={t('splitView')}
                 aria-pressed={viewMode === 'split'}
-                className={`flex items-center gap-1.5 px-2 py-1 text-xs transition-colors ${
+                className={`flex items-center gap-1.5 px-2 py-1 type-label font-normal transition-colors ${
                   viewMode === 'split'
-                    ? 'bg-raised text-ink shadow-sm'
+                    ? 'bg-raised text-ink'
                     : 'text-ink-muted hover:text-ink'
                 }`}
               >
@@ -180,9 +180,9 @@ export const DiffViewer: React.FC = () => {
                 onClick={() => setViewMode('unified')}
                 title={t('unifiedView')}
                 aria-pressed={viewMode === 'unified'}
-                className={`flex items-center gap-1.5 px-2 py-1 text-xs transition-colors ${
+                className={`flex items-center gap-1.5 px-2 py-1 type-label font-normal transition-colors ${
                   viewMode === 'unified'
-                    ? 'bg-raised text-ink shadow-sm'
+                    ? 'bg-raised text-ink'
                     : 'text-ink-muted hover:text-ink'
                 }`}
               >
@@ -214,20 +214,20 @@ export const DiffViewer: React.FC = () => {
         </div>
 
         {/* Hint */}
-        <div className="flex-shrink-0 border-b border-line px-4 py-1.5 text-[11px] text-ink-subtle">
+        <div className="flex-shrink-0 border-b border-line px-4 py-1.5 type-caption text-ink-muted">
           {t('reviewHint')}
         </div>
 
         {/* Error */}
         {error && (
-          <div className="flex-shrink-0 border-b border-danger/30 bg-danger/10 px-4 py-2 text-xs text-danger">
+          <div className="flex-shrink-0 border-b border-danger/30 bg-danger/10 px-4 py-2 type-caption text-danger">
             {error}
           </div>
         )}
 
         {/* Loading */}
         {isLoading && (
-          <div className="flex flex-1 items-center justify-center gap-2 text-sm text-ink-muted">
+          <div className="flex flex-1 items-center justify-center gap-2 type-value text-ink-muted">
             <Spinner />
             {t('comparing')}
           </div>
@@ -256,8 +256,8 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
     <div className="flex h-full divide-x divide-line">
       <div className="flex flex-1 flex-col overflow-hidden">
         <div className="flex flex-shrink-0 items-center justify-between border-b border-line bg-panel px-3 py-1.5">
-          <span className="truncate font-mono text-xs text-ink">{diff.originalFile}</span>
-          <span className="px-1.5 py-0.5 font-mono text-[10px] text-danger">
+          <span className="truncate type-data text-ink">{diff.originalFile}</span>
+          <span className="px-1.5 py-0.5 type-data text-danger">
             -{diff.removedCount}
           </span>
         </div>
@@ -270,8 +270,8 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
 
       <div className="flex flex-1 flex-col overflow-hidden">
         <div className="flex flex-shrink-0 items-center justify-between border-b border-line bg-panel px-3 py-1.5">
-          <span className="truncate font-mono text-xs text-ink">{diff.modifiedFile}</span>
-          <span className="px-1.5 py-0.5 font-mono text-[10px] text-success">
+          <span className="truncate type-data text-ink">{diff.modifiedFile}</span>
+          <span className="px-1.5 py-0.5 type-data text-success">
             +{diff.addedCount}
           </span>
         </div>
@@ -289,9 +289,9 @@ const UnifiedDiffView: React.FC<DiffViewProps> = ({ diff }) => {
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-shrink-0 items-center justify-center gap-2 border-b border-line bg-panel px-3 py-1.5">
-        <span className="truncate font-mono text-xs text-ink-muted">{diff.originalFile}</span>
-        <span className="text-ink-subtle">→</span>
-        <span className="truncate font-mono text-xs text-ink">{diff.modifiedFile}</span>
+        <span className="truncate type-data text-ink-muted">{diff.originalFile}</span>
+        <span className="text-ink-muted">→</span>
+        <span className="truncate type-data text-ink">{diff.modifiedFile}</span>
       </div>
       <div className="flex-1 overflow-y-auto">
         {diff.lines.map((line, idx) => (
@@ -310,7 +310,7 @@ interface DiffLineElementProps {
 const DiffLineElement: React.FC<DiffLineElementProps> = ({ line, side }) => {
   let bgColor = 'bg-surface'
   let prefix = ' '
-  let prefixColor = 'text-ink-subtle'
+  let prefixColor = 'text-ink-muted'
   const lineNumber =
     side === 'modified' ? line.modifiedLineNumber : line.originalLineNumber
 
@@ -325,11 +325,11 @@ const DiffLineElement: React.FC<DiffLineElementProps> = ({ line, side }) => {
   }
 
   return (
-    <div className={`flex border-b border-line/60 font-mono text-xs ${bgColor}`}>
+    <div className={`flex border-b border-line/60 type-code ${bgColor}`}>
       <span className={`w-6 flex-shrink-0 select-none py-0.5 text-center ${prefixColor}`}>
         {prefix}
       </span>
-      <span className="w-10 flex-shrink-0 select-none py-0.5 pr-2 text-right text-ink-subtle">
+      <span className="w-10 flex-shrink-0 select-none py-0.5 pr-2 text-right text-ink-muted">
         {lineNumber || '-'}
       </span>
       <span className="flex-1 break-all px-2 py-0.5 text-ink">{line.content}</span>

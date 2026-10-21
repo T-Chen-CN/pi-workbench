@@ -56,7 +56,7 @@ monaco.editor.defineTheme(EDITOR_THEME.paper, {
     'editor.background': '#FBF9F4',
     'editor.foreground': '#2B2721',
     'editorLineNumber.foreground': '#B5AE9F',
-    'editorLineNumber.activeForeground': '#6D675C',
+    'editorLineNumber.activeForeground': '#615C52',
     'editor.selectionBackground': '#2F5D4E24',
     'editor.inactiveSelectionBackground': '#17151212',
     'editor.lineHighlightBackground': '#17151209',
@@ -93,7 +93,7 @@ monaco.editor.defineTheme(EDITOR_THEME.ink, {
     'editor.background': '#1A1815',
     'editor.foreground': '#E6DFD3',
     'editorLineNumber.foreground': '#736C60',
-    'editorLineNumber.activeForeground': '#9C9487',
+    'editorLineNumber.activeForeground': '#A8A093',
     'editor.selectionBackground': '#8FC7B43D',
     'editor.inactiveSelectionBackground': '#EDE7DC14',
     'editor.lineHighlightBackground': '#EDE7DC0A',
@@ -168,7 +168,7 @@ export const MonacoEditor: React.FC = () => {
       minimap: { enabled: false },
       fontSize: 13.5,
       lineHeight: 22,
-      fontFamily: '"IBM Plex Mono", "Cascadia Code", Consolas, monospace',
+      fontFamily: '"Geist Mono Variable", "Geist Mono", "Noto Sans SC Variable", Consolas, monospace',
       lineNumbers: 'on',
       wordWrap: 'on',
       padding: { top: 10 },
@@ -430,10 +430,10 @@ export const MonacoEditor: React.FC = () => {
           return (
             <div
               key={file.path}
-              className={`group flex h-[34px] items-center gap-2 border-r border-line pl-3 pr-1.5 font-mono text-[10.5px] transition-colors ${
+              className={`group flex h-[34px] items-center gap-2 border-r border-line pl-3 pr-1.5 type-label transition-colors ${
                 active
                   ? 'bg-panel text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
-                  : 'text-ink-subtle hover:bg-hover hover:text-ink'
+                  : 'text-ink-muted hover:bg-hover hover:text-ink'
               }`}
             >
               <button
@@ -442,7 +442,7 @@ export const MonacoEditor: React.FC = () => {
                 title={file.path}
                 onClick={() => useEditorStore.setState({ currentFile: file })}
               >
-                <FileCode size={12} className={active ? 'text-accent' : 'text-ink-subtle'} />
+                <FileCode size={12} className={active ? 'text-accent' : 'text-ink-muted'} />
                 <span className="truncate">{file.name}</span>
                 {file.isDirty && (
                   <span
@@ -450,11 +450,11 @@ export const MonacoEditor: React.FC = () => {
                     title={t('unsavedChanges')}
                   />
                 )}
-                {file.isSaving && <Loader2 size={10} className="animate-spin text-ink-subtle" />}
+                {file.isSaving && <Loader2 size={10} className="animate-spin text-ink-muted" />}
               </button>
               <button
                 type="button"
-                className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-ink-subtle opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100"
+                className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-ink-muted opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100"
                 aria-label={t('close')}
                 title={t('close')}
                 onClick={() => {

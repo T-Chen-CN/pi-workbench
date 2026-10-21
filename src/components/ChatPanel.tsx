@@ -22,7 +22,7 @@ import { api } from '../api'
 import { buildContextPrompt } from '../api/chatContext'
 import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
-import { Button, EmptyState, IconButton, Spinner, Textarea } from './ui'
+import { Button, Caption, DataText, EmptyState, IconButton, Label, Spinner, Textarea } from './ui'
 
 interface ChatPanelProps {
   workspacePath: string
@@ -57,7 +57,7 @@ const CodeBlock: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
         type="button"
         onClick={() => void copy()}
         aria-label={t('copyCode')}
-        className="absolute right-2 top-2 flex items-center gap-1 rounded-md border border-line bg-raised px-1.5 py-1 text-[10px] text-ink-muted opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover/code:opacity-100 group-focus-within/code:opacity-100"
+        className="absolute right-2 top-2 flex items-center gap-1 rounded border border-line bg-raised px-1.5 py-1 type-caption text-ink-muted opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover/code:opacity-100 group-focus-within/code:opacity-100"
       >
         {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
         {copied ? t('copied') : t('copyCode')}
@@ -327,10 +327,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       {/* Header */}
       <div className="flex h-[38px] flex-shrink-0 items-center justify-between border-b border-line px-3.5">
         <div className="flex items-center gap-2.5">
-          <h3 className="m-0 font-mono text-[9.5px] uppercase tracking-[0.16em] text-ink-muted">
+          <h3 className="m-0 type-label text-ink-muted">
             {t('agentChatTitle')}
           </h3>
-          <span className="flex items-center gap-1.5 font-mono text-[9px] text-ink-subtle">
+          <span className="flex items-center gap-1.5 type-caption text-ink-muted">
             <span
               className={`h-1 w-1 rounded-full ${
                 initialized ? 'bg-success' : 'animate-pulse bg-warning'
@@ -340,7 +340,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="border border-line px-1.5 py-0.5 font-mono text-[8.5px] text-ink-subtle">
+          <span className="border border-line px-1.5 py-0.5 type-key text-ink-muted">
             ⌘K
           </span>
           <IconButton
@@ -360,19 +360,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           const isUser = msg.role === 'user'
           return (
             <div key={msg.id} className="border-b border-line py-3 first:pt-0 last:border-b-0">
-              <div className="mb-1.5 flex items-baseline gap-2 font-mono text-[8.5px] uppercase tracking-[0.14em] text-ink-subtle">
-                <span className="text-ink-muted">
+              <div className="mb-1.5 flex items-baseline gap-2">
+                <Label className="text-ink">
                   {isUser ? t('roleYou') : t('piAgent')}
-                </span>
-                <span>
+                </Label>
+                <Caption className="text-ink-muted">
                   {new Date(msg.timestamp).toLocaleTimeString(
                     language === 'zh' ? 'zh-CN' : 'en-US'
                   )}
-                </span>
+                </Caption>
               </div>
               {isUser ? (
-                <div className="flex gap-2 font-reading text-[14px] leading-[1.85] tracking-[0.01em] text-ink">
-                  <span className="font-mono text-accent">›</span>
+                <div className="flex gap-2 type-reading text-ink">
+                  <span className="type-project text-accent">›</span>
                   <span className="whitespace-pre-wrap">{msg.content}</span>
                 </div>
               ) : (
@@ -388,10 +388,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                     <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom" />
                   )}
                   {msg.usage && (
-                    <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.08em] text-ink-subtle">
+                    <Caption className="mt-1 block text-ink-muted">
                       {msg.usage.totalTokens.toLocaleString()} tokens
                       {msg.usage.cost > 0 ? ` · $${msg.usage.cost.toFixed(4)}` : ''}
-                    </div>
+                    </Caption>
                   )}
                 </div>
               )}
@@ -400,14 +400,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         })}
 
         {isLoading && !messages.some((msg) => msg.isStreaming && msg.content) && (
-          <div className="flex items-center gap-2 border-b border-line py-3 font-mono text-[10px] text-ink-muted last:border-b-0">
+          <div className="flex items-center gap-2 border-b border-line py-3 type-value text-ink-muted last:border-b-0">
             <Spinner size={12} />
             {t('thinking')}
           </div>
         )}
 
         {error && (
-          <div className="mt-3 flex items-start gap-2 border-l-2 border-danger bg-danger/5 py-2 pl-3 text-xs text-danger">
+          <div className="mt-3 flex items-start gap-2 border-l-2 border-danger bg-danger/5 py-2 pl-3 type-caption text-danger">
             <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
             <span className="leading-relaxed">{error}</span>
           </div>
@@ -423,17 +423,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             {attachments.map((attachment) => (
               <span
                 key={attachment.path}
-                className="inline-flex items-center gap-1 border border-line bg-sunken px-2 py-1 font-mono text-[10px] text-ink-muted"
+                className="inline-flex items-center gap-1 border border-line bg-sunken px-2 py-1 type-data text-ink-muted"
                 title={attachment.path}
               >
-                <FileText size={10} className="text-ink-subtle" />
+                <FileText size={10} className="text-ink-muted" />
                 {attachment.name}
                 <button
                   type="button"
                   onClick={() => removeAttachment(attachment.path)}
                   title={t('removeAttachment')}
                   aria-label={t('removeAttachment')}
-                  className="ml-0.5 p-0.5 text-ink-subtle hover:text-ink"
+                  className="ml-0.5 p-0.5 text-ink-muted hover:text-ink"
                 >
                   <X size={10} />
                 </button>
@@ -467,11 +467,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               />
               {showAttachMenu && (
                 <div className="absolute bottom-full left-0 z-10 mb-2 max-h-64 w-72 overflow-y-auto border border-line bg-raised py-1 shadow-print">
-                  <div className="px-3 py-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-ink-subtle">
+                  <div className="px-3 py-1.5 type-label text-ink-muted">
                     {t('attachContext')}
                   </div>
                   {openFiles.length === 0 ? (
-                    <div className="px-3 py-2 text-xs text-ink-subtle">{t('noOpenFiles')}</div>
+                    <div className="px-3 py-2 type-caption text-ink-muted">{t('noOpenFiles')}</div>
                   ) : (
                     openFiles.map((file) => {
                       const attached = attachments.some((item) => item.path === file.path)
@@ -484,14 +484,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                             addAttachment({ path: file.path, name: file.name })
                             setShowAttachMenu(false)
                           }}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-ink hover:bg-hover disabled:opacity-40"
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink hover:bg-hover disabled:opacity-40"
                         >
-                          <FileText size={12} className="flex-shrink-0 text-ink-subtle" />
+                          <FileText size={12} className="flex-shrink-0 text-ink-muted" />
                           <span className="flex min-w-0 flex-col">
                             <span className="truncate">{file.name}</span>
-                            <span className="truncate font-mono text-[9.5px] text-ink-subtle">
+                            <DataText className="truncate text-ink-muted">
                               {file.path}
-                            </span>
+                            </DataText>
                           </span>
                         </button>
                       )
@@ -518,7 +518,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             )}
           </div>
         </form>
-        <p className="mb-0 mt-1.5 px-0.5 font-mono text-[8.5px] uppercase tracking-[0.06em] text-ink-subtle">
+        <p className="mb-0 mt-1.5 px-0.5 type-caption text-ink-muted">
           {t('chatInputHint')}
         </p>
       </div>

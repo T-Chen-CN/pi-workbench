@@ -155,10 +155,10 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
       aria-modal="true"
       className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-20"
     >
-      <div className="absolute inset-0 bg-black/50" onClick={() => setOpen(false)} />
+      <div className="absolute inset-0 bg-overlay/50" onClick={() => setOpen(false)} />
       <div className="relative flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden border border-line bg-panel shadow-print">
         <div className="flex h-10 flex-shrink-0 items-center justify-between border-b border-line px-3">
-          <h3 className="m-0 text-[11px] font-semibold uppercase tracking-wide text-ink-subtle">
+          <h3 className="m-0 type-label text-ink-muted">
             {t('commandPalette')}
           </h3>
           <div className="flex items-center gap-1">
@@ -172,8 +172,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
           </div>
         </div>
 
-        <div className="flex flex-shrink-0 items-center gap-2 border-b border-line px-3">
-          <Search size={15} className="text-ink-subtle" />
+        <div className="flex flex-shrink-0 items-center gap-2 border-b border-line px-3 transition-colors focus-within:border-accent">
+          <Search size={15} className="text-ink-muted" />
           <input
             ref={inputRef}
             value={query}
@@ -192,22 +192,22 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
               }
             }}
             placeholder={t('pluginCommands')}
-            className="h-10 w-full bg-transparent font-mono text-[13px] text-ink placeholder:text-ink-subtle focus:outline-none"
+            className="h-10 w-full bg-transparent type-body text-ink placeholder:text-ink-muted focus:outline-none"
           />
-          {loading && <Spinner size={14} className="text-ink-subtle" />}
+          {loading && <Spinner size={14} className="text-ink-muted" />}
         </div>
 
         <div className="flex flex-shrink-0 flex-wrap items-center gap-1.5 border-b border-line px-3 py-1.5">
-          <span className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-ink-subtle">
+          <span className="type-label text-ink-muted">
             {t('plugins')}
           </span>
           {plugins.length === 0 && !loading && (
-            <span className="font-mono text-[10px] text-ink-subtle">{t('noPlugins')}</span>
+            <span className="type-caption text-ink-muted">{t('noPlugins')}</span>
           )}
           {plugins.map((plugin) => (
             <label
               key={plugin.id}
-              className={`inline-flex cursor-pointer items-center gap-1.5 border px-2 py-0.5 font-mono text-[10px] ${
+              className={`inline-flex cursor-pointer items-center gap-1.5 border px-2 py-0.5 type-caption ${
                 plugin.error
                   ? 'border-danger/40 bg-danger/10 text-danger'
                   : 'border-line bg-sunken text-ink-muted hover:text-ink'
@@ -216,7 +216,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
             >
               <input
                 type="checkbox"
-                className="h-3 w-3 accent-[rgb(var(--accent))]"
+                className="h-3 w-3 accent-accent"
                 checked={plugin.enabled}
                 onChange={() => void setEnabled(plugin)}
               />
@@ -225,24 +225,24 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
           ))}
         </div>
 
-        <div className="flex-shrink-0 border-b border-line px-3 py-1.5">
+        <div className="flex-shrink-0 border-b border-line px-3 py-1.5 transition-colors focus-within:border-accent">
           <input
             value={args}
             onChange={(event) => setArgs(event.target.value)}
             placeholder={t('commandArguments')}
-            className="w-full bg-transparent text-[11px] text-ink-muted placeholder:text-ink-subtle focus:outline-none"
+            className="w-full bg-transparent type-caption text-ink-muted placeholder:text-ink-muted focus:outline-none"
           />
         </div>
 
         {error && (
-          <div className="flex-shrink-0 border-b border-danger/30 bg-danger/10 px-3 py-1.5 text-xs text-danger">
+          <div className="flex-shrink-0 border-b border-danger/30 bg-danger/10 px-3 py-1.5 type-caption text-danger">
             {error}
           </div>
         )}
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {filtered.length === 0 ? (
-            <div className="px-3 py-8 text-center text-xs text-ink-subtle">
+            <div className="px-3 py-8 text-center type-caption text-ink-muted">
               {loading ? t('loading') : t('noPluginCommands')}
             </div>
           ) : (
@@ -258,12 +258,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
                     : 'border-l-transparent hover:bg-hover'
                 }`}
               >
-                <span className="mt-0.5 font-mono text-[9px] text-ink-subtle">
+                <span className="mt-0.5 type-data text-ink-muted">
                   {String(index + 1).padStart(2, '0')}
                 </span>
                 <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className="text-xs text-ink">{command.title}</span>
-                  <span className="font-mono text-[9.5px] text-ink-subtle">
+                  <span className="type-value text-ink">{command.title}</span>
+                  <span className="type-caption text-ink-muted">
                     {command.pluginName} · {command.id}
                     {command.description ? ` — ${command.description}` : ''}
                   </span>
@@ -277,7 +277,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
           <div className="flex-shrink-0 border-t border-line">
             <div className="flex items-center justify-between px-3 py-1.5">
               <span
-                className={`text-[11px] font-medium ${
+                className={`type-caption font-medium ${
                   output.success ? 'text-success' : 'text-danger'
                 }`}
               >
@@ -286,12 +286,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
               <button
                 type="button"
                 onClick={() => setOutput(null)}
-                className="text-[11px] text-ink-subtle hover:text-ink"
+                className="type-caption text-ink-muted hover:text-ink"
               >
                 {t('clear')}
               </button>
             </div>
-            <pre className="m-0 max-h-40 overflow-auto px-3 pb-2 font-mono text-[11px] text-ink-muted whitespace-pre-wrap">
+            <pre className="m-0 max-h-40 overflow-auto px-3 pb-2 type-code text-ink-muted whitespace-pre-wrap">
               {output.text}
             </pre>
           </div>

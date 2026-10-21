@@ -39,7 +39,7 @@ const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
 
     const timer = setTimeout(() => {
       setIsExiting(true)
-      exitTimerRef.current = setTimeout(() => onClose(message.id), 300)
+      exitTimerRef.current = setTimeout(() => onClose(message.id), 200)
     }, message.duration || 3000)
 
     return () => clearTimeout(timer)
@@ -48,7 +48,7 @@ const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
   const handleClose = () => {
     setIsExiting(true)
     if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
-    exitTimerRef.current = setTimeout(() => onClose(message.id), 300)
+    exitTimerRef.current = setTimeout(() => onClose(message.id), 200)
   }
 
   const { border, icon, Icon } = TOAST_STYLES[message.type]
@@ -58,17 +58,17 @@ const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
       role="status"
       className={`flex items-start gap-2.5 border border-line border-l-2 ${border} bg-raised px-3 py-2.5 text-ink shadow-print ${
         isExiting
-          ? 'animate-out slide-out-to-right-full duration-300'
-          : 'animate-in slide-in-from-right-full duration-300'
+          ? 'animate-out slide-out-to-right-full duration-200'
+          : 'animate-in slide-in-from-right-full duration-200'
       }`}
     >
       <Icon size={15} className={`mt-0.5 flex-shrink-0 ${icon}`} />
-      <span className="flex-1 text-xs leading-relaxed text-ink">{message.message}</span>
+      <span className="flex-1 type-value text-ink">{message.message}</span>
       <button
         type="button"
         onClick={handleClose}
         aria-label={t('close')}
-        className="flex-shrink-0 rounded p-0.5 text-ink-subtle transition-colors hover:bg-ink/10 hover:text-ink"
+        className="flex-shrink-0 rounded p-0.5 text-ink-muted transition-colors hover:bg-ink/10 hover:text-ink"
       >
         <X size={13} />
       </button>
