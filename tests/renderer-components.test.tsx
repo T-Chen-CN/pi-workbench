@@ -7,6 +7,7 @@ import { MonacoEditor } from '../src/components/MonacoEditor'
 import { WelcomeScreen } from '../src/components/WelcomeScreen'
 import { useChatStore } from '../src/store/chatStore'
 import { useEditorStore } from '../src/store/editorStore'
+import { useSelectionStore } from '../src/store/selectionStore'
 import { useI18nStore } from '../src/store/i18nStore'
 import { translations } from '../src/i18n/translations'
 import { api } from '../src/api'
@@ -48,6 +49,7 @@ vi.mock('monaco-editor', () => {
       setValue: (next: string) => {
         value = next
       },
+      getValueInRange: () => value,
       dispose: () => {},
     }
   }
@@ -68,6 +70,8 @@ vi.mock('monaco-editor', () => {
           saveViewState: () => null,
           restoreViewState: () => {},
           onDidChangeModelContent: () => ({ dispose: () => {} }),
+          onDidChangeCursorSelection: () => ({ dispose: () => {} }),
+          getSelection: () => null,
           layout: () => {},
           updateOptions: () => {},
           dispose: () => {},
@@ -93,6 +97,7 @@ const configWithKey: ApiConfig = {
 beforeEach(() => {
   useChatStore.getState().reset()
   useEditorStore.getState().reset()
+  useSelectionStore.getState().clearSelection()
   useI18nStore.getState().setLanguage('zh')
   vi.clearAllMocks()
   Element.prototype.scrollIntoView = vi.fn()
@@ -159,8 +164,42 @@ describe('ChatPanel', () => {
     expect(screen.getByLabelText(translations.zh.copyCode)).toBeTruthy()
   })
 
-  it('virtualizes long transcripts instead of rendering every message', async () => {
-    const messages = Array.from({ length: 200 }, (_, index) => ({
+  it('attaches the current editor selection as a snippet', async () => {
+    vi.mocked(api.apiConfigGet).mockResolvedValue({
+      success: true,
+      config: configWithKey,
+    })
+    vi.mocked(piAgentAPI.isInitialized).mockResolvedValue({
+      success: true,
+      initialized: true,
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+    useSelectionStore.getState().setSelection({
+      path: '/tmp/a.ts',
+      name: 'a.ts',
+      startLine: 3,
+      endLine: 5,
+      text: 'b\nc\nd',
+    })
+
+    const attachButton = screen.getByLabelText(
+      translations.zh.attachContext
+    ) as HTMLButtonElement
+    await waitFor(() => expect(attachButton.disabled).toBe(false))
+    fireEvent.click(attachButton)
+    fireEvent.click(screen.getByText(translations.zh.attachSelection))
+
+    expect(useChatStore.getState().attachments[0]).toMatchObject({
+      kind: 'snippet',
+      path: '/tmp/a.ts',
+      startLine: 3,
+      endLine: 5,
+    })
+    expect(screen.getByText('a.ts:3–5')).toBeTruthy()
+  })
+
+  it('virtualizes long transcripts instead of rendering every message', async () => {    const messages = Array.from({ length: 200 }, (_, index) => ({
       role: 'assistant' as const,
       content: `message ${index}`,
       timestamp: index + 1,

@@ -6,6 +6,7 @@ import { useEditorStore } from '../store/editorStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useSettingsStore } from '../store/settingsStore'
 import { useI18nStore } from '../store/i18nStore'
+import { useSelectionStore } from '../store/selectionStore'
 import { useResolvedTheme } from '../store/themeStore'
 import { localizeError } from '../i18n/errors'
 import { api } from '../api'
@@ -107,6 +108,7 @@ export const MonacoEditor: React.FC = () => {
   const [largeFile, setLargeFile] = useState<LargeFileInfo | null>(null)
   const [largeBannerDismissed, setLargeBannerDismissed] = useState(false)
   const largePathRef = useRef<string | null>(null)
+  const selectionSubRef = useRef<{ dispose: () => void } | null>(null)
 
   const clearFileTimers = useCallback((filePath: string): void => {
     const pendingSave = saveTimersRef.current.get(filePath)
@@ -173,6 +175,38 @@ export const MonacoEditor: React.FC = () => {
       wordWrap: 'on',
       padding: { top: 10 },
     })
+
+    // 同步当前选区，供聊天面板附加片段
+    selectionSubRef.current?.dispose()
+    selectionSubRef.current = monacoRef.current.onDidChangeCursorSelection(() => {
+      const editor = monacoRef.current
+      const file = useEditorStore.getState().currentFile
+      const editorModel = editor?.getModel()
+      const range = editor?.getSelection()
+      if (!editor || !file || !editorModel || !range) {
+        useSelectionStore.getState().clearSelection()
+        return
+      }
+      const empty =
+        range.startLineNumber === range.endLineNumber &&
+        range.startColumn === range.endColumn
+      if (empty) {
+        useSelectionStore.getState().clearSelection()
+        return
+      }
+      const endLine =
+        range.endColumn === 1 && range.endLineNumber > range.startLineNumber
+          ? range.endLineNumber - 1
+          : range.endLineNumber
+      useSelectionStore.getState().setSelection({
+        path: file.path,
+        name: file.name,
+        startLine: range.startLineNumber,
+        endLine,
+        text: editorModel.getValueInRange(range),
+      })
+    })
+
     setEditorReady(true)
   }, [currentFile, resolvedTheme, getOrCreateModel])
 
@@ -210,11 +244,18 @@ export const MonacoEditor: React.FC = () => {
     })
   }, [largeFile, editorReady])
 
+  // 切换文件后清掉不属于当前文件的选区
+  useEffect(() => {
+    useSelectionStore.getState().clearForPath(currentFile?.path ?? '')
+  }, [currentFile?.path])
+
   // 组件卸载时释放编辑器与所有 model
   useEffect(() => {
     const models = modelsRef.current
     const viewStates = viewStatesRef.current
     return () => {
+      selectionSubRef.current?.dispose()
+      selectionSubRef.current = null
       monacoRef.current?.dispose()
       monacoRef.current = null
       for (const model of models.values()) {

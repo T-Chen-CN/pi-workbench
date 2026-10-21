@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw, Search, X } from 'lucide-react'
 import { api } from '../api'
 import { useI18nStore } from '../store/i18nStore'
+import { useSelectionStore } from '../store/selectionStore'
 import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
 import { IconButton, Spinner } from './ui'
@@ -16,6 +17,8 @@ interface CommandOutput {
   text: string
   success: boolean
 }
+
+const ATTACH_SELECTION_COMMAND_ID = 'workbench.attach-selection'
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath }) => {
   const { t } = useI18nStore()
@@ -82,10 +85,19 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
     return unsubscribe
   }, [open, workspacePath, refresh])
 
-  const commands = useMemo(
-    () => plugins.filter((plugin) => plugin.enabled && !plugin.error).flatMap((plugin) => plugin.commands),
-    [plugins]
-  )
+  const commands = useMemo(() => {
+    const builtin: PluginCommandInfo = {
+      id: ATTACH_SELECTION_COMMAND_ID,
+      title: t('attachSelection'),
+      description: t('noSelection'),
+      pluginId: 'workbench',
+      pluginName: 'Workbench',
+    }
+    return [
+      builtin,
+      ...plugins.filter((plugin) => plugin.enabled && !plugin.error).flatMap((plugin) => plugin.commands),
+    ]
+  }, [plugins, t])
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -100,6 +112,19 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
   }, [query, open])
 
   const runCommand = async (command: PluginCommandInfo) => {
+    if (command.id === ATTACH_SELECTION_COMMAND_ID) {
+      const selection = useSelectionStore.getState().selection
+      if (!selection) {
+        setOutput({ title: command.title, text: t('selectionEmpty'), success: false })
+        toast.error(`${command.title}: ${t('selectionEmpty')}`)
+        return
+      }
+      window.dispatchEvent(new CustomEvent('attach-selection'))
+      setOutput({ title: command.title, text: t('selectionAttached'), success: true })
+      toast.success(`${command.title}: ${t('selectionAttached')}`)
+      return
+    }
+
     setLoading(true)
     setOutput(null)
     try {

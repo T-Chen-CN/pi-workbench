@@ -31,4 +31,13 @@ describe('buildContextPrompt', () => {
     expect(prompt).toContain('--- /tmp/a.ts ---\na')
     expect(prompt).toContain('--- /tmp/b.ts ---\nb')
   })
+
+  it('labels snippet ranges in the block header', () => {
+    const prompt = buildContextPrompt('explain', [
+      { path: '/tmp/a.ts', content: 'const a = 1', startLine: 12, endLine: 14 },
+    ])
+
+    expect(prompt).toContain('--- /tmp/a.ts (lines 12-14) ---')
+    expect(prompt).toContain('const a = 1')
+  })
 })

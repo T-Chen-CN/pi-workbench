@@ -22,9 +22,18 @@ export interface ChatMessage {
 }
 
 export interface ChatAttachment {
+  id: string
+  kind: 'file' | 'snippet'
   path: string
   name: string
+  /** 片段起止行（1-based，含端点） */
+  startLine?: number
+  endLine?: number
+  /** 片段附加时的内容快照；整文件在发送时实时读取 */
+  content?: string
 }
+
+export type NewChatAttachment = Omit<ChatAttachment, 'id'> & { id?: string }
 
 export interface ChatState {
   messages: ChatMessage[]
@@ -43,8 +52,8 @@ export interface ChatState {
   finishStreamingMessage: (id: string, content?: string) => void
   /** 给一条 assistant 消息附上 token 用量 */
   setMessageUsage: (id: string, usage: ChatUsage) => void
-  addAttachment: (attachment: ChatAttachment) => void
-  removeAttachment: (path: string) => void
+  addAttachment: (attachment: NewChatAttachment) => void
+  removeAttachment: (id: string) => void
   clearAttachments: () => void
   setDraftInput: (value: string) => void
   clearDraftInput: () => void
@@ -125,15 +134,19 @@ export const useChatStore = create<ChatState>((set) => ({
     })),
 
   addAttachment: (attachment) =>
-    set((state) => ({
-      attachments: state.attachments.some((item) => item.path === attachment.path)
-        ? state.attachments
-        : [...state.attachments, attachment],
-    })),
+    set((state) => {
+      const id =
+        attachment.id ??
+        (attachment.kind === 'snippet'
+          ? `snippet:${attachment.path}:${attachment.startLine}-${attachment.endLine}`
+          : `file:${attachment.path}`)
+      if (state.attachments.some((item) => item.id === id)) return state
+      return { attachments: [...state.attachments, { ...attachment, id }] }
+    }),
 
-  removeAttachment: (path) =>
+  removeAttachment: (id) =>
     set((state) => ({
-      attachments: state.attachments.filter((item) => item.path !== path),
+      attachments: state.attachments.filter((item) => item.id !== id),
     })),
 
   clearAttachments: () => set({ attachments: [] }),
