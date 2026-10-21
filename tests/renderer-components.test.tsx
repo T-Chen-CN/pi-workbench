@@ -212,6 +212,43 @@ describe('ChatPanel', () => {
     expect(screen.getByLabelText(translations.zh.copyCode)).toBeTruthy()
   })
 
+  it('batches streamed deltas and still renders the final response', async () => {
+    let emitDelta: ((delta: string) => void) | null = null
+    let resolveChat: ((value: { success: boolean; response?: string }) => void) | null = null
+    vi.mocked(piAgentAPI.chat).mockImplementation(
+      (_message, onDelta) =>
+        new Promise((resolve) => {
+          emitDelta = onDelta ?? null
+          resolveChat = resolve
+        })
+    )
+
+    render(<ChatPanel workspacePath="/ws" />)
+    const input = (await screen.findByPlaceholderText(
+      translations.zh.inputPlaceholder
+    )) as HTMLTextAreaElement
+    await waitFor(() => expect(input.disabled).toBe(false))
+
+    fireEvent.change(input, { target: { value: 'stream please' } })
+    fireEvent.click(screen.getByText(translations.zh.send))
+    await waitFor(() => {
+      expect(useSessionStore.getState().streaming[sessionKey]).toBe(true)
+    })
+
+    act(() => {
+      emitDelta?.('Hello ')
+      emitDelta?.('world')
+    })
+
+    // 增量按 50ms 窗口合并后才写入 store
+    await waitFor(() => expect(screen.getByText(/Hello world/)).toBeTruthy())
+
+    act(() => {
+      resolveChat?.({ success: true, response: 'Hello world!' })
+    })
+    await waitFor(() => expect(screen.getByText('Hello world!')).toBeTruthy())
+  })
+
   it('attaches the current editor selection as a snippet', async () => {
     render(<ChatPanel workspacePath="/ws" />)
     useSelectionStore.getState().setSelection({
@@ -306,6 +343,142 @@ describe('ChatPanel', () => {
     expect(
       useSessionStore.getState().byWorkspace['/ws'].open
     ).toEqual(expect.arrayContaining([session.id, second.id]))
+  })
+
+  it('marks a failed request as error and clears it on the next successful send', async () => {
+    vi.mocked(piAgentAPI.chat).mockResolvedValue({ success: false, error: 'provider down' })
+    render(<ChatPanel workspacePath="/ws" />)
+
+    const input = (await screen.findByPlaceholderText(
+      translations.zh.inputPlaceholder
+    )) as HTMLTextAreaElement
+    await waitFor(() => expect(input.disabled).toBe(false))
+
+    fireEvent.change(input, { target: { value: 'first try' } })
+    fireEvent.click(screen.getByText(translations.zh.send))
+
+    await waitFor(() => {
+      expect(useSessionStore.getState().errors[sessionKey]).toBe('provider down')
+    })
+    expect(screen.getByRole('tab', { name: /Session 1/ }).getAttribute('aria-label')).toContain(
+      translations.zh.sessionError
+    )
+
+    vi.mocked(piAgentAPI.chat).mockResolvedValue({ success: true, response: 'ok' })
+    fireEvent.change(input, { target: { value: 'second try' } })
+    fireEvent.click(screen.getByText(translations.zh.send))
+
+    await waitFor(() => {
+      expect(useSessionStore.getState().errors[sessionKey]).toBeUndefined()
+    })
+  })
+
+  it('does not mark an error when the user stops the request', async () => {
+    const captured: {
+      resolve: ((value: { success: boolean; error?: string }) => void) | null
+    } = { resolve: null }
+    vi.mocked(piAgentAPI.chat).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          captured.resolve = resolve
+        })
+    )
+    vi.mocked(piAgentAPI.abort).mockImplementation(async () => {
+      captured.resolve?.({ success: false, error: 'aborted' })
+      return { success: true }
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+    const input = (await screen.findByPlaceholderText(
+      translations.zh.inputPlaceholder
+    )) as HTMLTextAreaElement
+    await waitFor(() => expect(input.disabled).toBe(false))
+
+    fireEvent.change(input, { target: { value: 'stop me' } })
+    fireEvent.click(screen.getByText(translations.zh.send))
+    await waitFor(() => {
+      expect(useSessionStore.getState().streaming[sessionKey]).toBe(true)
+    })
+
+    fireEvent.click(screen.getByText(translations.zh.stop))
+
+    await waitFor(() => {
+      expect(useSessionStore.getState().streaming[sessionKey]).toBeUndefined()
+    })
+    expect(useSessionStore.getState().errors[sessionKey]).toBeUndefined()
+  })
+
+  it('marks a background completion as unread and clears it when the tab is activated', async () => {
+    const second: SessionSummary = {
+      id: 's2',
+      title: 'Second session',
+      messageCount: 0,
+      createdAt: 2,
+      updatedAt: 3,
+    }
+    vi.mocked(piAgentAPI.sessionsList).mockResolvedValue({
+      success: true,
+      sessions: [session, second],
+      currentId: session.id,
+    })
+    vi.mocked(piAgentAPI.sessionsGetTabs).mockResolvedValue({
+      success: true,
+      tabs: { open: [session.id], active: session.id },
+    })
+    vi.mocked(piAgentAPI.sessionsOpen).mockImplementation(
+      async (_workspace: string, sessionId?: string) =>
+        sessionId === second.id
+          ? { success: true, session: second, history: [] }
+          : { success: true, session, history: [] }
+    )
+    vi.mocked(piAgentAPI.sessionsCreate).mockResolvedValue({
+      success: true,
+      session: second,
+      history: [],
+    })
+
+    const captured: {
+      resolve: ((value: { success: boolean; response?: string }) => void) | null
+    } = { resolve: null }
+    vi.mocked(piAgentAPI.chat).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          captured.resolve = resolve
+        })
+    )
+
+    render(<ChatPanel workspacePath="/ws" />)
+    const input = (await screen.findByPlaceholderText(
+      translations.zh.inputPlaceholder
+    )) as HTMLTextAreaElement
+    await waitFor(() => expect(input.disabled).toBe(false))
+
+    fireEvent.change(input, { target: { value: 'run in background' } })
+    fireEvent.click(screen.getByText(translations.zh.send))
+    await waitFor(() => {
+      expect(useSessionStore.getState().streaming[sessionKey]).toBe(true)
+    })
+
+    // 切到第二个会话，A 在后台继续运行
+    fireEvent.click(screen.getByLabelText(translations.zh.newSession))
+    await waitFor(() => {
+      expect(useSessionStore.getState().byWorkspace['/ws'].active).toBe('s2')
+    })
+
+    captured.resolve?.({ success: true, response: 'done in background' })
+
+    await waitFor(() => {
+      expect(useSessionStore.getState().streaming[sessionKey]).toBeUndefined()
+      expect(useSessionStore.getState().unread[sessionKey]).toBe(true)
+    })
+    expect(screen.getByRole('tab', { name: /Session 1/ }).getAttribute('aria-label')).toContain(
+      translations.zh.sessionUnread
+    )
+
+    fireEvent.click(screen.getByRole('tab', { name: /Session 1/ }))
+    await waitFor(() => {
+      expect(useSessionStore.getState().unread[sessionKey]).toBeUndefined()
+    })
   })
 
   it('closes a session tab and falls back to another tab', async () => {

@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -32,6 +39,8 @@ import { api } from '../api'
 import { buildContextPrompt } from '../api/chatContext'
 import { localizeError } from '../i18n/errors'
 import { commandPaletteShortcut } from '../utils/shortcuts'
+import { createDeltaBuffer } from '../utils/streamBuffer'
+import { splitMarkdownBlocks } from '../utils/markdownBlocks'
 import { toast } from '../store/toastStore'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { useVirtualRows } from '../hooks/useVirtualRows'
@@ -105,6 +114,66 @@ const MARKDOWN_COMPONENTS: Components = {
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
 }
 
+/**
+ * 流式期间按顶层块拆分 Markdown，只有正在增长的尾块需要重新解析。
+ * 引用式链接等跨块定义在流式阶段可能不完整，结束时整体重渲染一次即可恢复。
+ */
+const MarkdownBlock = React.memo(
+  function MarkdownBlock({ content }: { content: string }) {
+    return (
+      <ReactMarkdown
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={NO_PLUGINS}
+        components={MARKDOWN_COMPONENTS}
+      >
+        {content}
+      </ReactMarkdown>
+    )
+  },
+  (prev, next) => prev.content === next.content
+)
+
+const StreamingBlocks = React.memo(function StreamingBlocks({ content }: { content: string }) {
+  const blocks = useMemo(() => splitMarkdownBlocks(content), [content])
+  return (
+    <>
+      {blocks.map((block, index) => (
+        <MarkdownBlock key={index} content={block} />
+      ))}
+    </>
+  )
+})
+
+/** 流式消息：解析降到低优先级，点击/输入可以先被处理，长输出不会堵住整个面板 */
+const StreamingMarkdown = React.memo(function StreamingMarkdown({ content }: { content: string }) {
+  const deferred = useDeferredValue(content)
+  return (
+    <>
+      <StreamingBlocks content={deferred} />
+      <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom" />
+    </>
+  )
+})
+
+/** 已完成消息：整段解析一次，保留完整 GFM 与代码高亮 */
+const MarkdownBody = React.memo(function MarkdownBody({
+  content,
+  highlight,
+}: {
+  content: string
+  highlight: boolean
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={highlight ? HIGHLIGHT_PLUGINS : NO_PLUGINS}
+      components={MARKDOWN_COMPONENTS}
+    >
+      {content}
+    </ReactMarkdown>
+  )
+})
+
 /** 单条消息；memo 保证流式追加只重渲染最后一条 */
 const ChatMessageRow = React.memo(function ChatMessageRow({
   message,
@@ -136,17 +205,13 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
         </div>
       ) : (
         <div className="chat-markdown text-ink">
-          <ReactMarkdown
-            remarkPlugins={REMARK_PLUGINS}
-            rehypePlugins={
-              message.content.length > 20_000 ? NO_PLUGINS : HIGHLIGHT_PLUGINS
-            }
-            components={MARKDOWN_COMPONENTS}
-          >
-            {message.content}
-          </ReactMarkdown>
-          {message.isStreaming && (
-            <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom" />
+          {message.isStreaming ? (
+            <StreamingMarkdown content={message.content} />
+          ) : (
+            <MarkdownBody
+              content={message.content}
+              highlight={message.content.length <= 20_000}
+            />
           )}
           {message.usage && (
             <Caption className="mt-1 block text-ink-muted">
@@ -206,6 +271,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const initSeqRef = useRef(0)
   const stickToBottomRef = useRef(true)
+  const stoppedRef = useRef(false)
   const { parentRef: transcriptRef, virtualizer } = useVirtualRows({
     count: messages.length,
     estimateSize: 96,
@@ -488,6 +554,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       useChatStore.getState().removeConversation(key)
       useSessionStore.getState().markStreaming(workspacePath, sessionId, false)
       useSessionStore.getState().markUnread(workspacePath, sessionId, false)
+      useSessionStore.getState().markError(workspacePath, sessionId, null)
+      useSessionStore.getState().markNeedsAction(workspacePath, sessionId, null)
       const next = useSessionStore.getState().closeOpen(workspacePath, sessionId)
       persistTabs()
       if (!next) {
@@ -553,6 +621,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       useChatStore.getState().removeConversation(key)
       useSessionStore.getState().markStreaming(workspacePath, session.id, false)
       useSessionStore.getState().markUnread(workspacePath, session.id, false)
+      useSessionStore.getState().markError(workspacePath, session.id, null)
+      useSessionStore.getState().markNeedsAction(workspacePath, session.id, null)
       const next = useSessionStore.getState().removeSession(workspacePath, session.id)
       persistTabs()
       if (!next) {
@@ -640,6 +710,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
     const userMessage = input.trim()
     const chat = useChatStore.getState()
+    stoppedRef.current = false
+    useSessionStore.getState().markError(workspacePath, sessionId, null)
+    useSessionStore.getState().markUnread(workspacePath, sessionId, false)
     chat.setDraftInput(key, '')
     chat.addMessage(key, { role: 'user', content: userMessage })
     setShowAttachMenu(false)
@@ -647,7 +720,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     useSessionStore.getState().markStreaming(workspacePath, sessionId, true)
 
     const assistantId = chat.startStreamingMessage(key)
+    // 高频增量先合并，避免每个 token 都触发 store 更新与整条消息重渲染
+    const deltaBuffer = createDeltaBuffer((delta) =>
+      useChatStore.getState().appendToMessage(key, assistantId, delta)
+    )
     const sessionAttachments = chat.conversations[key]?.attachments ?? []
+    let succeeded = false
 
     try {
       // 读取附件内容并注入本轮 prompt；用户气泡只显示原始文本
@@ -695,13 +773,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
       const result = await piAgentAPI.chat(
         prompt,
-        (delta) => useChatStore.getState().appendToMessage(key, assistantId, delta),
+        deltaBuffer.push,
         workspacePath,
         sessionId
       )
+      // 收尾前把剩余增量交给 store；成功时随后会被完整响应覆盖，不会重复
+      deltaBuffer.flush()
 
       if (result.success && result.response) {
+        succeeded = true
         chat.setError(key, null)
+        useSessionStore.getState().markError(workspacePath, sessionId, null)
         chat.finishStreamingMessage(key, assistantId, result.response)
         if (result.usage) chat.setMessageUsage(key, assistantId, result.usage)
         if (result.edits && result.edits.length > 0) {
@@ -712,26 +794,47 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         const errorMessage = result.error
           ? localizeError(result.error)
           : t('agentResponseFailed')
-        chat.setError(key, errorMessage)
-        chat.finishStreamingMessage(
-          key,
-          assistantId,
-          t('errorPrefix', { message: errorMessage })
-        )
+        if (stoppedRef.current) {
+          chat.setError(key, null)
+          chat.finishStreamingMessage(key, assistantId)
+        } else {
+          chat.setError(key, errorMessage)
+          useSessionStore.getState().markError(workspacePath, sessionId, errorMessage)
+          chat.finishStreamingMessage(
+            key,
+            assistantId,
+            t('errorPrefix', { message: errorMessage })
+          )
+        }
       }
     } catch (err) {
+      deltaBuffer.flush()
       const errorMsg = localizeError(err instanceof Error ? err.message : String(err))
-      chat.setError(key, errorMsg)
-      chat.finishStreamingMessage(key, assistantId, t('errorPrefix', { message: errorMsg }))
+      if (stoppedRef.current) {
+        chat.setError(key, null)
+        chat.finishStreamingMessage(key, assistantId)
+      } else {
+        chat.setError(key, errorMsg)
+        useSessionStore.getState().markError(workspacePath, sessionId, errorMsg)
+        chat.finishStreamingMessage(key, assistantId, t('errorPrefix', { message: errorMsg }))
+      }
     } finally {
+      deltaBuffer.dispose()
       useChatStore.getState().setLoading(key, false)
       useChatStore.getState().clearAttachments(key)
       useSessionStore.getState().markStreaming(workspacePath, sessionId, false)
       const activeNow = useSessionStore.getState().byWorkspace[workspacePath]?.active
-      if (activeNow && activeNow !== sessionId) {
-        useSessionStore.getState().markUnread(workspacePath, sessionId, true)
+      if (succeeded) {
+        if (activeNow && activeNow !== sessionId) {
+          useSessionStore.getState().markUnread(workspacePath, sessionId, true)
+        } else {
+          useSessionStore.getState().markUnread(workspacePath, sessionId, false)
+          inputRef.current?.focus()
+        }
       } else {
-        inputRef.current?.focus()
+        // 错误优先于未读；用户主动停止不保留错误标记
+        useSessionStore.getState().markUnread(workspacePath, sessionId, false)
+        if (activeNow === sessionId) inputRef.current?.focus()
       }
       const currentMessages = useChatStore.getState().conversations[key]?.messages.length ?? 0
       useSessionStore.getState().updateSession(workspacePath, sessionId, {
@@ -746,6 +849,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
   const handleStop = async () => {
     if (!activeSessionId) return
+    stoppedRef.current = true
     await piAgentAPI.abort(workspacePath, activeSessionId)
   }
 

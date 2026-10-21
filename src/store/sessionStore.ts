@@ -4,6 +4,9 @@ import { conversationKey } from './chatStore'
 
 export const MAX_OPEN_SESSIONS = 8
 
+/** 待操作原因；v1 只做占位，暂不产生触发 */
+export type NeedsActionReason = 'review' | 'input' | 'confirm'
+
 export interface WorkspaceSessions {
   sessions: SessionSummary[]
   open: string[]
@@ -26,6 +29,10 @@ interface SessionState {
   streaming: Record<string, boolean>
   /** conversationKey -> 后台完成未读 */
   unread: Record<string, boolean>
+  /** conversationKey -> 最近一次请求错误（保留到下次发送或成功回复） */
+  errors: Record<string, string>
+  /** conversationKey -> 待操作原因（占位，v1 不设置触发） */
+  needsAction: Record<string, NeedsActionReason>
 
   setSessions: (workspacePath: string, sessions: SessionSummary[]) => void
   setOpen: (workspacePath: string, open: string[], active: string | null) => void
@@ -42,6 +49,12 @@ interface SessionState {
   setLoading: (workspacePath: string, loading: boolean) => void
   markStreaming: (workspacePath: string, sessionId: string, streaming: boolean) => void
   markUnread: (workspacePath: string, sessionId: string, unread: boolean) => void
+  markError: (workspacePath: string, sessionId: string, message: string | null) => void
+  markNeedsAction: (
+    workspacePath: string,
+    sessionId: string,
+    reason: NeedsActionReason | null
+  ) => void
   resetWorkspace: (workspacePath: string) => void
   reset: () => void
 }
@@ -67,6 +80,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   byWorkspace: {},
   streaming: {},
   unread: {},
+  errors: {},
+  needsAction: {},
 
   setSessions: (path, sessions) =>
     set((state) => withWorkspace(state, path, { sessions })),
@@ -173,6 +188,24 @@ export const useSessionStore = create<SessionState>((set) => ({
       return { unread: unreadMap }
     }),
 
+  markError: (path, sessionId, message) =>
+    set((state) => {
+      const key = conversationKey(path, sessionId)
+      const errors = { ...state.errors }
+      if (message) errors[key] = message
+      else delete errors[key]
+      return { errors }
+    }),
+
+  markNeedsAction: (path, sessionId, reason) =>
+    set((state) => {
+      const key = conversationKey(path, sessionId)
+      const needsAction = { ...state.needsAction }
+      if (reason) needsAction[key] = reason
+      else delete needsAction[key]
+      return { needsAction }
+    }),
+
   resetWorkspace: (path) =>
     set((state) => {
       const byWorkspace = { ...state.byWorkspace }
@@ -184,8 +217,15 @@ export const useSessionStore = create<SessionState>((set) => ({
       const unread = Object.fromEntries(
         Object.entries(state.unread).filter(([key]) => !key.startsWith(prefix))
       )
-      return { byWorkspace, streaming, unread }
+      const errors = Object.fromEntries(
+        Object.entries(state.errors).filter(([key]) => !key.startsWith(prefix))
+      )
+      const needsAction = Object.fromEntries(
+        Object.entries(state.needsAction).filter(([key]) => !key.startsWith(prefix))
+      )
+      return { byWorkspace, streaming, unread, errors, needsAction }
     }),
 
-  reset: () => set({ byWorkspace: {}, streaming: {}, unread: {} }),
+  reset: () =>
+    set({ byWorkspace: {}, streaming: {}, unread: {}, errors: {}, needsAction: {} }),
 }))
