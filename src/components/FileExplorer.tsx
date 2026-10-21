@@ -408,7 +408,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-panel">
-      <div className="flex h-[34px] flex-shrink-0 items-center justify-between border-b border-line px-3">
+      <div className="flex h-[34px] flex-shrink-0 items-center justify-between border-b border-rule-divide px-3">
         <h3 className="m-0 type-label text-ink-muted">
           {t('files')}
         </h3>

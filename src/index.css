@@ -17,7 +17,10 @@
   --sunken: 239 236 228;       /* inset */
   --hover: 238 234 225;
   --active: 232 227 217;
-  --line: 23 21 18;            /* 1px 墨线；需要更柔和时用 /alpha */
+  --line: 23 21 18;            /* 墨线基色；线条角色由它派生 */
+  --rule-control: rgb(var(--line) / 0.5);   /* 控件边界，≥3:1 */
+  --rule-divide: rgb(var(--line) / 0.22);   /* 结构分隔 */
+  --rule-hairline: rgb(var(--line) / 0.18); /* 卡片外框（装饰） */
   --overlay: 0 0 0;            /* 模态遮罩 */
 
   /* 墨色 */

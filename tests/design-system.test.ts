@@ -116,4 +116,71 @@ describe('design system usage', () => {
       expect(ui).toContain(`export const ${primitive}`)
     }
   })
+
+  it('defines the line roles and maps them to Tailwind', () => {
+    const css = readFileSync(resolve(SRC, 'index.css'), 'utf-8')
+    const tailwind = readFileSync(resolve(__dirname, '../tailwind.config.js'), 'utf-8')
+    for (const role of ['rule-control', 'rule-divide', 'rule-hairline']) {
+      expect(css).toContain(`--${role}`)
+      expect(tailwind).toContain(`'${role}'`)
+    }
+  })
+
+  it('builds cards from the raised surface and a hairline border', () => {
+    const patterns = readFileSync(resolve(SRC, 'components/patterns.tsx'), 'utf-8')
+    expect(patterns).toContain('border border-rule-hairline bg-raised')
+    expect(patterns).not.toContain('shadow-print')
+    expect(patterns).toContain('border-b border-rule-divide')
+  })
+
+  it('does not bypass the line roles with raw opacity', () => {
+    const violations: string[] = []
+    for (const file of businessFiles) {
+      const source = readFileSync(file, 'utf-8')
+      for (const match of source.matchAll(/\bborder-line\/[^\s'"`]+/g)) {
+        const line = source.slice(0, match.index).split('\n').length
+        violations.push(
+          `${relative(SRC, file).replace(/\\/g, '/')}:${line} — raw line opacity: ${match[0]}`
+        )
+      }
+    }
+    expect(violations, violations.join('\n')).toEqual([])
+  })
+
+  it('reserves full-ink borders for floating layers', () => {
+    const FLOATING = new Set([
+      'App.tsx',
+      'components/ChatPanel.tsx',
+      'components/CommandPalette.tsx',
+      'components/DiffViewer.tsx',
+      'components/FileExplorer.tsx',
+      'components/FleetPanel.tsx',
+      'components/Toast.tsx',
+    ])
+    const violations: string[] = []
+    for (const file of businessFiles) {
+      const rel = relative(SRC, file).replace(/\\/g, '/')
+      if (FLOATING.has(rel)) continue
+      const source = readFileSync(file, 'utf-8')
+      for (const match of source.matchAll(/\bborder-line\b/g)) {
+        const line = source.slice(0, match.index).split('\n').length
+        violations.push(`${rel}:${line} — full-ink border outside a floating layer`)
+      }
+    }
+    expect(violations, violations.join('\n')).toEqual([])
+  })
+
+  it('does not paint full-ink backgrounds as separators', () => {
+    const violations: string[] = []
+    for (const file of businessFiles) {
+      const source = readFileSync(file, 'utf-8')
+      for (const match of source.matchAll(/\bbg-line\b/g)) {
+        const line = source.slice(0, match.index).split('\n').length
+        violations.push(
+          `${relative(SRC, file).replace(/\\/g, '/')}:${line} — full-ink separator background`
+        )
+      }
+    }
+    expect(violations, violations.join('\n')).toEqual([])
+  })
 })

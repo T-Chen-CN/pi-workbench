@@ -21,8 +21,8 @@ export interface CardProps {
 
 export const Card: React.FC<CardProps> = ({ children, className = '', density = 'default' }) => (
   <div
-    className={`border border-line bg-panel ${
-      density === 'compact' ? 'p-3' : 'p-3.5'
+    className={`rounded border border-rule-hairline bg-raised ${
+      density === 'compact' ? 'p-3' : 'p-4'
     } ${className}`}
   >
     {children}
@@ -43,9 +43,9 @@ export const CardHeader: React.FC<CardHeaderProps> = ({
   className = '',
 }) => (
   <div
-    className={`flex items-center justify-between gap-3 border-b border-line pb-2 ${className}`}
+    className={`flex items-center justify-between gap-3 border-b border-rule-divide pb-2 ${className}`}
   >
-    <Label className="text-ink-muted">{title}</Label>
+    <Label className="text-ink">{title}</Label>
     {status ?? action}
   </div>
 )
@@ -64,10 +64,10 @@ export const SectionHeader: React.FC<SectionHeaderProps> = ({
   className = '',
 }) => (
   <div
-    className={`flex flex-none items-baseline justify-between gap-4 border-b border-line pb-2 ${className}`}
+    className={`flex flex-none items-baseline justify-between gap-4 border-b border-rule-divide pb-2 ${className}`}
   >
     <span className="flex items-baseline gap-2.5">
-      <Label className="text-ink-muted">{title}</Label>
+      <Label className="text-ink">{title}</Label>
       {count !== undefined && (
         <Caption className="text-ink-muted">{count}</Caption>
       )}
@@ -133,7 +133,7 @@ export const QuickAction: React.FC<QuickActionProps> = ({
   <button
     type="button"
     onClick={onClick}
-    className={`inline-flex items-center gap-1.5 border-b border-line pb-0.5 font-normal text-ink-muted transition-colors hover:border-ink hover:text-ink type-label ${className}`}
+    className={`inline-flex items-center gap-1.5 border-b border-rule-divide pb-0.5 font-normal text-ink-muted transition-colors hover:border-ink hover:text-ink type-label ${className}`}
   >
     <Icon size={11} aria-hidden="true" />
     {label}
@@ -164,7 +164,7 @@ export const ListRow: React.FC<ListRowProps> = ({
   <button
     type="button"
     onClick={onClick}
-    className={`group flex w-full items-center gap-3 border-b border-line py-2.5 text-left transition-colors hover:bg-hover ${className}`}
+    className={`group flex w-full items-center gap-3 border-b border-rule-divide py-2.5 text-left transition-colors hover:bg-hover ${className}`}
   >
     {Icon && <Icon size={14} className="flex-shrink-0 text-ink-muted" aria-hidden="true" />}
     <span className="min-w-0 flex-1">
@@ -189,7 +189,7 @@ export const KeyCap: React.FC<{ children: React.ReactNode; className?: string }>
   className = '',
 }) => (
   <kbd
-    className={`type-key inline-flex h-5 min-w-5 items-center justify-center border border-line bg-sunken px-1 text-ink-muted ${className}`}
+    className={`type-key inline-flex h-5 min-w-5 items-center justify-center border border-rule-control bg-sunken px-1 text-ink-muted ${className}`}
   >
     {children}
   </kbd>
@@ -211,7 +211,7 @@ export const SearchField: React.FC<SearchFieldProps> = ({
   className = '',
 }) => (
   <div
-    className={`flex h-7 flex-shrink-0 items-center gap-1.5 border border-line bg-panel px-2 transition-colors focus-within:border-accent ${className}`}
+    className={`flex h-7 flex-shrink-0 items-center gap-1.5 border border-rule-control bg-panel px-2 transition-colors focus-within:border-accent ${className}`}
   >
     <Search size={12} className="flex-shrink-0 text-ink-muted" aria-hidden="true" />
     <input

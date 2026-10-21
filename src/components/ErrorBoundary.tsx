@@ -40,13 +40,13 @@ export class ErrorBoundary extends React.Component<
       return (
         <div className="flex h-screen flex-col items-center justify-center gap-4 bg-surface p-6 text-ink">
           <h1 className="type-title text-ink">{t('errorBoundaryTitle')}</h1>
-          <pre className="max-h-64 max-w-2xl overflow-auto whitespace-pre-wrap border border-line bg-sunken p-3 type-code text-danger">
+          <pre className="max-h-64 max-w-2xl overflow-auto whitespace-pre-wrap border border-rule-control bg-sunken p-3 type-code text-danger">
             {this.state.error.message}
           </pre>
           <div className="flex gap-2">
             <button
               onClick={() => this.setState({ error: null })}
-              className="border border-line bg-raised px-4 py-2 type-label text-ink transition-colors hover:bg-hover"
+              className="border border-rule-control bg-raised px-4 py-2 type-label text-ink transition-colors hover:bg-hover"
             >
               {t('tryAgain')}
             </button>

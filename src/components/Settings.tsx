@@ -293,7 +293,7 @@ export const Settings: React.FC<SettingsProps> = () => {
   return (
     <div className="flex min-h-[420px]">
       {/* Section nav */}
-      <nav className="w-40 flex-shrink-0 border-r border-line bg-surface p-2">
+      <nav className="w-40 flex-shrink-0 border-r border-rule-divide bg-surface p-2">
         <div className="flex flex-col gap-0.5">
           {navItems.map(({ id, label, icon: Icon }) => (
             <button
@@ -457,11 +457,11 @@ export const Settings: React.FC<SettingsProps> = () => {
                 <h4 className="m-0 mb-1.5 type-label text-ink-muted">
                   {group.title}
                 </h4>
-                <div className="border-t border-line">
+                <div className="border-t border-rule-divide">
                   {group.items.map((item) => (
                     <div
                       key={`${group.title}-${item.label}`}
-                      className="flex items-start justify-between gap-4 border-b border-line py-2"
+                      className="flex items-start justify-between gap-4 border-b border-rule-divide py-2"
                     >
                       <div className="flex min-w-0 flex-col gap-0.5">
                         <span className="type-value text-ink">{item.label}</span>
@@ -481,7 +481,7 @@ export const Settings: React.FC<SettingsProps> = () => {
         {section === 'about' && (
           <div className="flex max-w-lg flex-col gap-3 type-caption text-ink-muted">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center border border-line bg-raised type-subtitle text-accent">
+              <div className="flex h-10 w-10 items-center justify-center border border-rule-control bg-raised type-subtitle text-accent">
                 Pi
               </div>
               <div>
@@ -498,7 +498,7 @@ export const Settings: React.FC<SettingsProps> = () => {
               <dd className="m-0 text-ink">{t('infoApiSupport')}</dd>
             </dl>
 
-            <div className="mt-4 border-t border-line pt-4">
+            <div className="mt-4 border-t border-rule-divide pt-4">
               <p className="m-0 type-caption text-ink-muted">{t('updates')}</p>
               <div className="mt-2 flex flex-wrap items-center gap-3">
                 {(updateState.status === 'idle' ||

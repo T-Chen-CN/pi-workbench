@@ -200,7 +200,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   <button
                     type="button"
                     onClick={onOpenProject}
-                    className="w-full border-b border-line py-4 text-left type-value text-ink-muted transition-colors hover:text-ink"
+                    className="w-full border-b border-rule-divide py-4 text-left type-value text-ink-muted transition-colors hover:text-ink"
                   >
                     {t('welcomeNoRecent')}
                   </button>
@@ -237,7 +237,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 )}
               </div>
 
-              <div className="flex flex-none items-center gap-5 border-t border-line pt-2.5">
+              <div className="flex flex-none items-center gap-5 border-t border-rule-divide pt-2.5">
                 <QuickAction
                   icon={FolderOpen}
                   label={t('welcomeQuickOpen')}
@@ -257,7 +257,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
             </div>
           </section>
 
-          <aside className="flex min-h-0 min-w-0 flex-col gap-3">
+          <aside className="flex min-h-0 min-w-0 flex-col gap-4">
             <Card>
               <CardHeader
                 title={t('welcomeAgentLabel')}
@@ -295,7 +295,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   <button
                     type="button"
                     onClick={() => onOpenWorkspace(latestWorkspace)}
-                    className="mt-3 inline-flex h-7 items-center gap-1.5 border border-line px-2.5 type-label text-ink-muted transition-colors hover:border-accent hover:text-accent"
+                    className="mt-3 inline-flex h-7 items-center gap-1.5 border border-rule-control px-2.5 type-label text-ink-muted transition-colors hover:border-accent hover:text-accent"
                   >
                     {t('welcomeOpenWorkspace')}
                     <ArrowRight size={11} aria-hidden="true" />
@@ -336,7 +336,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                       type="button"
                       title={task.prompt}
                       onClick={() => onOpenWorkspace(task.workspace)}
-                      className="flex w-full items-center gap-2.5 border-b border-line py-1.5 text-left last:border-b-0"
+                      className="flex w-full items-center gap-2.5 border-b border-rule-divide py-1.5 text-left last:border-b-0"
                     >
                       <StatusText
                         tone={FLEET_STATUS_TONES[task.status]}
@@ -376,7 +376,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                       className={`flex h-4 w-4 flex-shrink-0 items-center justify-center border type-caption ${
                         step.done
                           ? 'border-accent text-accent'
-                          : 'border-line text-ink-muted'
+                          : 'border-rule-control text-ink-muted'
                       }`}
                     >
                       {step.done ? <Check size={10} strokeWidth={2.5} aria-hidden="true" /> : index + 1}

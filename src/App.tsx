@@ -350,7 +350,7 @@ export default function App() {
 
       {/* Header */}
       <header
-        className={`app-drag flex h-[var(--titlebar-height)] flex-shrink-0 select-none items-center justify-between gap-4 border-b border-line bg-surface ${
+        className={`app-drag flex h-[var(--titlebar-height)] flex-shrink-0 select-none items-center justify-between gap-4 border-b border-rule-divide bg-surface ${
           usesMacTrafficLights ? 'pl-[78px]' : 'pl-4'
         } ${usesCustomWindowControls ? 'pr-0' : 'pr-4'}`}
         onDoubleClick={(event) => {
@@ -365,12 +365,12 @@ export default function App() {
           <span className="type-wordmark text-ink-muted">
             Workbench
           </span>
-          <span className="border border-line px-1.5 py-0.5 type-caption font-medium text-ink-muted">
+          <span className="border border-rule-control px-1.5 py-0.5 type-caption font-medium text-ink-muted">
             LOCAL
           </span>
           {workspace && (
             <>
-              <div className="mx-2 h-4 w-px flex-shrink-0 bg-line" />
+              <div className="mx-2 h-4 w-px flex-shrink-0 bg-rule-divide" />
               <span
                 className="flex min-w-0 items-center gap-1.5 type-data text-ink-muted"
                 title={workspace}
@@ -449,14 +449,14 @@ export default function App() {
 
       {/* Workspace tabs */}
       {openWorkspaces.length > 0 && (
-        <div className="flex flex-shrink-0 items-center overflow-x-auto border-b border-line bg-surface px-2">
+        <div className="flex flex-shrink-0 items-center overflow-x-auto border-b border-rule-divide bg-surface px-2">
           {openWorkspaces.map((path) => {
             const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path
             const active = path === workspace
             return (
               <div
                 key={path}
-                className={`group flex h-8 items-center gap-2 border-r border-line px-3 type-label ${
+                className={`group flex h-8 items-center gap-2 border-r border-rule-divide px-3 type-label ${
                   active
                     ? 'bg-panel text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
                     : 'text-ink-muted hover:bg-hover hover:text-ink'
@@ -519,7 +519,7 @@ export default function App() {
 
       {/* Debug panel */}
       {showDebug && (
-        <div className="fixed bottom-4 right-4 z-30 max-h-80 w-96 overflow-y-auto border border-line bg-panel p-3 shadow-print">
+        <div className="fixed bottom-4 right-4 z-30 max-h-80 w-96 overflow-y-auto border border-line bg-raised p-3 shadow-print">
           <IPCDebug />
         </div>
       )}
@@ -530,7 +530,7 @@ export default function App() {
           {showSidebar && (
             <>
               <aside
-                className="flex-shrink-0 overflow-hidden border-r border-line bg-panel"
+                className="flex-shrink-0 overflow-hidden bg-panel"
                 style={{ width: sidebarWidth }}
               >
                 <FileExplorer workspacePath={workspace} />
@@ -538,7 +538,7 @@ export default function App() {
               <div
                 role="separator"
                 aria-orientation="vertical"
-                className="w-px flex-shrink-0 cursor-col-resize bg-line transition-colors hover:bg-accent"
+                className="w-px flex-shrink-0 cursor-col-resize bg-rule-divide transition-colors hover:bg-accent"
                 onPointerDown={startResize('sidebar')}
               />
             </>
@@ -567,11 +567,11 @@ export default function App() {
               <div
                 role="separator"
                 aria-orientation="vertical"
-                className="w-px flex-shrink-0 cursor-col-resize bg-line transition-colors hover:bg-accent"
+                className="w-px flex-shrink-0 cursor-col-resize bg-rule-divide transition-colors hover:bg-accent"
                 onPointerDown={startResize('chat')}
               />
               <aside
-                className="flex-shrink-0 overflow-hidden border-l border-line bg-panel"
+                className="flex-shrink-0 overflow-hidden bg-panel"
                 style={{ width: chatWidth }}
               >
                 <ChatPanel workspacePath={workspace} />
@@ -589,7 +589,7 @@ export default function App() {
         />
       )}
 
-      <footer className="flex h-7 flex-shrink-0 items-center gap-4 border-t border-line bg-surface px-3.5 type-caption text-ink-muted">
+      <footer className="flex h-7 flex-shrink-0 items-center gap-4 border-t border-rule-divide bg-surface px-3.5 type-caption text-ink-muted">
         <span className="text-ink-muted">PI WORKBENCH</span>
         <span>LOCAL-FIRST</span>
         {workspace && <span className="text-accent">● PI AGENT</span>}
