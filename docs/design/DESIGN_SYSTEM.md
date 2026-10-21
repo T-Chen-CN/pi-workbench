@@ -362,7 +362,7 @@
 
 - Monaco 主题固定为 `pi-paper` / `pi-ink`，随 `resolvedTheme` 切换。
 - 字体 Geist Mono 13.5px / 22px 行高；中文回退 Noto Sans SC；关闭 minimap；行号弱化。
-- Monaco / xterm 的主题对象必须使用具体色值，这是唯一允许的硬编码颜色例外；修改 `ink` / `ink-muted` token 时必须同步检查 `MonacoEditor.tsx` 与 `TerminalPanel.tsx`。行号激活色必须与 `ink-muted` 对齐。
+- Monaco / xterm 等第三方渲染器通过 `src/theme/tokens.ts` 的 `readThemeTokens(dark)` / `tokenHex` 从 CSS token 读取颜色，不硬编码；行号激活色使用 `ink-muted`。修改主题 token 时只需保证 `TOKEN_NAMES` 覆盖对应变量。
 - 光标、选区、当前行使用松绿（Paper `#2F5D4E` / Ink `#8FC7B4`）；语法色使用第 2.3 节内容色。
 - 标签页：矩形、sans 12px、激活项纸面底 + 2px 绿顶线；未保存用 6px 绿点。
 
@@ -514,6 +514,7 @@
 | 聊天稿纸 | `src/components/ChatPanel.tsx` |
 | 编辑器主题 | `src/components/MonacoEditor.tsx`（`pi-paper` / `pi-ink`） |
 | 终端主题 | `src/components/TerminalPanel.tsx` |
+| 第三方主题 token 桥 | `src/theme/tokens.ts`（`readThemeTokens` / `tokenHex`） |
 | 窗口外壳 / 标题栏 | `electron/main.ts`、`electron/preload.cts` |
 | 自绘窗口按钮 | `src/components/WindowControls.tsx` |
 | 拖拽区工具类 | `src/index.css`（`.app-drag` / `.app-no-drag`） |
@@ -537,6 +538,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.11 | 2026-10-21 | Monaco / xterm 主题颜色改由 `src/theme/tokens.ts` 从 CSS token 读取；移除“硬编码颜色例外”规则，守卫不再豁免这两个文件 |
 | v1.10 | 2026-10-21 | 修复设计系统审查问题：搜索焦点可见、移除未定义 `border-line-strong`、同步 Monaco 行号色；`ui.tsx` 原语全部角色化；新增 overlay token；修正圆角/阴影/Toast 时长；Fleet 使用 `StatusText`、Settings 使用 `KeyCap`；扩展守卫检查颜色、圆角、阴影与动效 |
 | v1.9 | 2026-10-21 | 建立代码层组件管理：新增 `.type-*` 语义文字角色、`Label / Value / Caption / DataText / Eyebrow` 原语与 `patterns.tsx` 内容模式；业务组件禁止原始字体声明，新增 `tests/design-system.test.ts` 扫描约束；欢迎页、顶栏、聊天、设置、命令面板、文件树、Fleet、Diff、终端全部迁移 |
 | v1.8 | 2026-10-21 | 小字体系改为 Noto Sans + Noto Sans SC；UI 标签与字段值退出 mono，字号提升为 Label 12px / Value 12.5px；路径与数据改用 Geist Mono 11.5px；中文标签取消 uppercase/字距；编辑器与终端同步切换到 Geist Mono |

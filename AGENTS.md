@@ -653,7 +653,7 @@ async function initAgent(config: ApiConfig) {
 
 - **唯一事实来源**：[docs/design/DESIGN_SYSTEM.md](docs/design/DESIGN_SYSTEM.md)。进行任何前端设计相关改动前必须先阅读并遵守。
 - 适用范围：颜色、字体、字号、间距、圆角、阴影、图标、动效、组件、布局、主题、空状态、提示文案。
-- 只允许使用规范中的设计 token、`src/components/ui.tsx` 的基础组件与 `src/components/patterns.tsx` 的内容模式；禁止硬编码颜色、`gray-* / blue-* / red-*` 调色板类、`dark:` 变体、emoji 图标（Monaco / xterm 主题对象必须写具体色值，是唯一例外）。
+- 只允许使用规范中的设计 token、`src/components/ui.tsx` 的基础组件与 `src/components/patterns.tsx` 的内容模式；禁止硬编码颜色、`gray-* / blue-* / red-*` 调色板类、`dark:` 变体、emoji 图标；Monaco / xterm 等第三方渲染器通过 `src/theme/tokens.ts` 读取 CSS token，不直接写色值。
 - **需要引入规范之外的设计元素时，必须先更新 `DESIGN_SYSTEM.md` 并获得项目所有者确认，再写代码；未经确认的设计例外不得合并。**
 - 每次 UI 改动需提供 Paper / Ink 两套截图，并通过对比度、键盘焦点、1024 / 1440 宽度、`type-check` / `lint` / `test` 检查。
 

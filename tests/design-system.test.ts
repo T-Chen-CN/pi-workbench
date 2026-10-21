@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest'
 
 const SRC = resolve(__dirname, '../src')
 const ALLOWED = new Set(['components/ui.tsx', 'components/patterns.tsx'])
-const COLOR_HEX_ALLOWED = new Set(['components/MonacoEditor.tsx', 'components/TerminalPanel.tsx'])
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -52,12 +51,11 @@ describe('design system usage', () => {
     expect(violations, violations.join('\n')).toEqual([])
   })
 
-  it('keeps hardcoded hex colors inside theme-object exceptions', () => {
+  it('does not allow hardcoded hex colors in renderer components', () => {
     const violations: string[] = []
 
     for (const file of businessFiles) {
       const rel = relative(SRC, file).replace(/\\/g, '/')
-      if (COLOR_HEX_ALLOWED.has(rel)) continue
       const source = readFileSync(file, 'utf-8')
       for (const match of source.matchAll(/#[0-9A-Fa-f]{3,8}\b/g)) {
         const line = source.slice(0, match.index).split('\n').length
