@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   AlertTriangle,
   File as FileIcon,
@@ -19,6 +19,8 @@ import { useI18nStore } from '../store/i18nStore'
 import { localizeError } from '../i18n/errors'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { toast } from '../store/toastStore'
+import { flattenVisibleTree } from '../utils/fileTree'
+import { useVirtualRows } from '../hooks/useVirtualRows'
 import { Button, EmptyState, IconButton, Input, Modal } from './ui'
 
 /** 超过该大小的文件打开前先确认，避免 Monaco 卡顿 */
@@ -82,6 +84,12 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
   const [contextMenu, setContextMenu] = useState<{ node: TreeNode; x: number; y: number } | null>(null)
   const { addOpenFile } = useEditorStore.getState()
   const currentFilePath = useEditorStore((state) => state.currentFile?.path)
+
+  const flatRows = useMemo(() => flattenVisibleTree(tree), [tree])
+  const { parentRef: treeScrollRef, virtualizer } = useVirtualRows({
+    count: flatRows.length,
+    estimateSize: 28,
+  })
 
   // 保存最新树，供异步刷新读取（避免闭包拿到旧的展开状态）
   const treeRef = useRef<TreeNode[]>([])
@@ -359,49 +367,30 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
     }
   }
 
-  const renderNode = (node: TreeNode, depth: number = 0, visited = new Set<string>()) => {
-    // Prevent infinite recursion - max depth and cycle detection
-    if (depth > 20 || visited.has(node.path)) {
-      console.warn('FileExplorer: Max depth or cycle detected', node.path)
-      return null
-    }
-
-    // Mark this path as visited for cycle detection
-    const newVisited = new Set(visited)
-    newVisited.add(node.path)
-
+  const renderRow = (node: TreeNode, depth: number) => {
     const active = currentFilePath === node.path
     const NodeIcon = node.isDirectory ? (node.isExpanded ? FolderOpen : Folder) : fileIconFor(node.name)
 
     return (
-      <div key={node.path}>
-        <div
-          role="treeitem"
-          aria-selected={active}
-          aria-expanded={node.isDirectory ? !!node.isExpanded : undefined}
-          className={`flex h-7 cursor-pointer select-none items-center gap-1.5 border-l-2 pr-2 type-value transition-colors ${
-            active
-              ? 'border-accent bg-accent/[0.06] text-ink'
-              : 'border-transparent text-ink-muted hover:bg-hover hover:text-ink'
-          }`}
-          style={{ paddingLeft: `${depth * 14 + 8}px` }}
-          onClick={() => handleFileClick(node)}
-          onContextMenu={(event) => {
-            event.preventDefault()
-            setContextMenu({ node, x: event.clientX, y: event.clientY })
-          }}
-        >
-          <NodeIcon
-            size={14}
-            className={`flex-shrink-0 ${node.isDirectory ? 'text-ink-muted' : 'text-ink-muted'}`}
-          />
-          <span className="truncate">{node.name}</span>
-        </div>
-        {node.isDirectory && node.isExpanded && node.children && (
-          <div role="group">
-            {node.children.map((child) => renderNode(child, depth + 1, newVisited))}
-          </div>
-        )}
+      <div
+        key={node.path}
+        role="treeitem"
+        aria-selected={active}
+        aria-expanded={node.isDirectory ? !!node.isExpanded : undefined}
+        className={`flex h-7 cursor-pointer select-none items-center gap-1.5 border-l-2 pr-2 type-value transition-colors ${
+          active
+            ? 'border-accent bg-accent/[0.06] text-ink'
+            : 'border-transparent text-ink-muted hover:bg-hover hover:text-ink'
+        }`}
+        style={{ paddingLeft: `${depth * 14 + 8}px` }}
+        onClick={() => handleFileClick(node)}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          setContextMenu({ node, x: event.clientX, y: event.clientY })
+        }}
+      >
+        <NodeIcon size={14} className="flex-shrink-0 text-ink-muted" />
+        <span className="truncate">{node.name}</span>
       </div>
     )
   }
@@ -492,7 +481,7 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
         </div>
       </Modal>
 
-      <div className="flex-1 overflow-y-auto py-1" role="tree">
+      <div ref={treeScrollRef} className="flex-1 overflow-y-auto py-1" role="tree">
         {error && (
           <div className="mx-2 mb-1 border border-danger/30 bg-danger/5 px-2.5 py-1.5">
             <p className="m-0 type-caption text-danger">{error}</p>
@@ -501,7 +490,30 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
         {tree.length === 0 && !loading ? (
           <EmptyState compact icon={FolderOpen} title={t('noWorkspace')} />
         ) : (
-          tree.map((node) => renderNode(node))
+          <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
+            {virtualizer.getVirtualItems().length > 0
+              ? virtualizer.getVirtualItems().map((virtualRow) => {
+                  const row = flatRows[virtualRow.index]
+                  if (!row) return null
+                  return (
+                    <div
+                      key={row.node.path}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                    >
+                      {renderRow(row.node, row.depth)}
+                    </div>
+                  )
+                })
+              : flatRows
+                  .slice(0, 40)
+                  .map((row) => renderRow(row.node, row.depth))}
+          </div>
         )}
       </div>
     </div>

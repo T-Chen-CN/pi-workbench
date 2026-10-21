@@ -78,6 +78,8 @@ export const translations = {
     close: '关闭',
     fileRemoved: '文件已被删除：{name}',
     unsavedChanges: '有未保存的修改',
+    largeFileMode: '大文件模式：已关闭换行与折叠（{size}，{lines} 行）',
+    largeFileReadOnly: '大文件只读模式：已关闭换行、折叠与编辑（{size}，{lines} 行）',
 
     // Chat Panel
     piAgent: 'Pi Agent',
@@ -393,6 +395,8 @@ export const translations = {
     close: 'Close',
     fileRemoved: 'File removed: {name}',
     unsavedChanges: 'Unsaved changes',
+    largeFileMode: 'Large file mode: wrapping and folding off ({size}, {lines} lines)',
+    largeFileReadOnly: 'Large file read-only: wrapping, folding and editing off ({size}, {lines} lines)',
 
     // Chat Panel
     piAgent: 'Pi Agent',

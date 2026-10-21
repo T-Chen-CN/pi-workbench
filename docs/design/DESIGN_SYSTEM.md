@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.13 |
+| 文档版本 | v1.14 |
 | 状态 | Active（正式规范） |
 | 最后更新 | 2026-10-21 |
 | 适用范围 | 渲染进程全部 UI、Monaco / xterm 主题、应用主题设置 |
@@ -378,6 +378,7 @@
 ### 6.3 编辑器
 
 - Monaco 主题固定为 `pi-paper` / `pi-ink`，随 `resolvedTheme` 切换；编辑器背景取 `surface`（工作中的墨池），文件标签条取 `panel`，激活标签取 `surface` 与画布连通。
+- 大文件（>2MB 或 >50k 行）关闭换行与折叠；>10MB 或 >200k 行以只读打开。标签下方显示一条 `rule-divide` 细线提示，可关闭，沿用 `type-caption`。
 - 字体 Geist Mono 13.5px / 22px 行高；中文回退 Noto Sans SC；关闭 minimap；行号弱化。
 - Monaco / xterm 等第三方渲染器通过 `src/theme/tokens.ts` 的 `readThemeTokens(dark)` / `tokenHex` 从 CSS token 读取颜色，不硬编码；行号激活色使用 `ink-muted`。修改主题 token 时只需保证 `TOKEN_NAMES` 覆盖对应变量。
 - 光标、选区、当前行使用松绿（Paper `#2F5D4E` / Ink `#8FC7B4`）；语法色使用第 2.3 节内容色。
@@ -409,7 +410,7 @@
   - 快捷键分节：动作名使用 sans 12.5px，键帽使用 mono 10.5px + 1px `border-rule-control` + `bg-sunken`，用 `<kbd>` 语义；按平台显示 `Ctrl` 或 `⌘`。
   - 分组：全局 / 编辑器（打开文件时）/ 聊天（工作区内）/ 浮层；仅列出实际生效的快捷键。
 - 命令面板：560px 纸片、sans 搜索、编号结果列表、选中项 2px 绿色左边线；Esc 关闭。
-- Diff：纸面审阅单；新增用 `success/10` 橄榄淡洗，删除用 `danger/10` 朱砂淡洗；统计与行号使用 mono，说明文字使用 sans。
+- Diff：纸面审阅单；新增用 `success/10` 橄榄淡洗，删除用 `danger/10` 朱砂淡洗；统计与行号使用 mono，说明文字使用 sans。长行横向滚动、行高固定 22px；大 Diff 使用虚拟渲染。
 - Fleet：编号任务清单；状态使用 sans 11.5px 文案 + 语义色（运行中绿、成功橄榄、排队弱化、失败红），不使用彩色胶囊。
 - Toast：纸片 + 左侧 2px 语义色线 + 错位阴影；出现位置右上，避开顶栏。
 
@@ -562,6 +563,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.14 | 2026-10-21 | 长列表性能：聊天消息、Diff 行、文件树改为虚拟渲染；Diff 长行横向滚动、行高 22px；Monaco 大文件模式（关闭换行/折叠，超大文件只读）与细线提示 |
 | v1.13 | 2026-10-21 | 工作区区域分层：外壳/侧栏/终端用 `bg-panel`，编辑器画布与激活标签用 `bg-surface`，Monaco 背景改为 surface；拖拽接缝改为 2px `--rule-seam`（等效 1px×22%），解决 125% 缩放下两侧线宽不一致 |
 | v1.12 | 2026-10-21 | 线条角色化与卡片表面分离：新增 `--rule-control`（控件 50%）/ `--rule-divide`（分隔 22%）/ `--rule-hairline`（卡片外框 18%）三档；纸卡改为 `bg-raised` + 发丝边、取消区内投影，`shadow-print` 只保留给浮层；修正 `--panel` / `--raised` 用途冲突与文首版本号 |
 | v1.11 | 2026-10-21 | Monaco / xterm 主题颜色改由 `src/theme/tokens.ts` 从 CSS token 读取；移除“硬编码颜色例外”规则，守卫不再豁免这两个文件 |

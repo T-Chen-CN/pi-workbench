@@ -14,6 +14,7 @@ import { confirmDialog } from '../store/dialogStore'
 import type { OpenFile } from '../types'
 import { EmptyState } from './ui'
 import { readThemeTokens, tokenHex } from '../theme/tokens'
+import { detectLargeFile, type LargeFileInfo } from '../utils/largeFile'
 
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   ts: 'typescript',
@@ -103,6 +104,9 @@ export const MonacoEditor: React.FC = () => {
   // 程序化 setValue 时抑制内容变化回调，避免误标脏 + 自动保存回环
   const suppressChangeRef = useRef(false)
   const [editorReady, setEditorReady] = useState(false)
+  const [largeFile, setLargeFile] = useState<LargeFileInfo | null>(null)
+  const [largeBannerDismissed, setLargeBannerDismissed] = useState(false)
+  const largePathRef = useRef<string | null>(null)
 
   const clearFileTimers = useCallback((filePath: string): void => {
     const pendingSave = saveTimersRef.current.get(filePath)
@@ -177,6 +181,34 @@ export const MonacoEditor: React.FC = () => {
     defineEditorThemes()
     monaco.editor.setTheme(resolvedTheme === 'dark' ? EDITOR_THEME.ink : EDITOR_THEME.paper)
   }, [resolvedTheme])
+
+  // 切换文件时检测一次大文件模式；编辑过程中不再重算，避免模式来回切换
+  useEffect(() => {
+    if (!currentFile) {
+      largePathRef.current = null
+      setLargeFile(null)
+      setLargeBannerDismissed(false)
+      return
+    }
+    if (largePathRef.current === currentFile.path) return
+    largePathRef.current = currentFile.path
+    const info = detectLargeFile(currentFile.content)
+    setLargeFile(info.mode === 'normal' ? null : info)
+    setLargeBannerDismissed(false)
+  }, [currentFile])
+
+  // 大文件模式：关闭换行 / 折叠，超大文件只读
+  useEffect(() => {
+    const editor = monacoRef.current
+    if (!editor) return
+    const active = largeFile !== null
+    editor.updateOptions({
+      wordWrap: active ? 'off' : 'on',
+      folding: !active,
+      occurrencesHighlight: active ? 'off' : 'singleFile',
+      readOnly: largeFile?.mode === 'readonly',
+    })
+  }, [largeFile, editorReady])
 
   // 组件卸载时释放编辑器与所有 model
   useEffect(() => {
@@ -492,6 +524,25 @@ export const MonacoEditor: React.FC = () => {
           )
         })}
       </div>
+      {largeFile && !largeBannerDismissed && (
+        <div className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-rule-divide bg-panel px-3 py-1 type-caption text-ink-muted">
+          <span>
+            {t(largeFile.mode === 'readonly' ? 'largeFileReadOnly' : 'largeFileMode', {
+              size: `${(largeFile.bytes / 1024 / 1024).toFixed(1)} MB`,
+              lines: largeFile.lines.toLocaleString(),
+            })}
+          </span>
+          <button
+            type="button"
+            aria-label={t('close')}
+            title={t('close')}
+            className="p-0.5 text-ink-muted hover:text-ink"
+            onClick={() => setLargeBannerDismissed(true)}
+          >
+            <X size={11} />
+          </button>
+        </div>
+      )}
       <div ref={editorRef} className="min-h-0 flex-1" />
     </div>
   )

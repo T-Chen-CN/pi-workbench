@@ -13,7 +13,7 @@ import {
   Square,
   X,
 } from 'lucide-react'
-import { useChatStore } from '../store/chatStore'
+import { useChatStore, type ChatMessage } from '../store/chatStore'
 import { useDiffStore } from '../store/diffStore'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
@@ -23,6 +23,7 @@ import { buildContextPrompt } from '../api/chatContext'
 import { localizeError } from '../i18n/errors'
 import { commandPaletteShortcut } from '../utils/shortcuts'
 import { toast } from '../store/toastStore'
+import { useVirtualRows } from '../hooks/useVirtualRows'
 import { Button, Caption, DataText, EmptyState, IconButton, Label, Spinner, Textarea } from './ui'
 
 interface ChatPanelProps {
@@ -34,8 +35,7 @@ const MAX_CONTEXT_FILE_CHARS = 120_000
 const MAX_CONTEXT_TOTAL_CHARS = 300_000
 
 /** 代码块：带复制按钮 */
-const CodeBlock: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
-  const { t } = useI18nStore()
+const CodeBlock: React.FC<{ children?: React.ReactNode }> = ({ children }) => {  const { t } = useI18nStore()
   const preRef = useRef<HTMLPreElement>(null)
   const [copied, setCopied] = useState(false)
 
@@ -67,6 +67,74 @@ const CodeBlock: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   )
 }
 
+const REMARK_PLUGINS = [remarkGfm]
+const HIGHLIGHT_PLUGINS = [rehypeHighlight]
+const NO_PLUGINS: [] = []
+
+const MARKDOWN_COMPONENTS: Components = {
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  ),
+  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+}
+
+/** 单条消息；memo 保证流式追加只重渲染最后一条 */
+const ChatMessageRow = React.memo(function ChatMessageRow({
+  message,
+}: {
+  message: ChatMessage
+}) {
+  const { t, language } = useI18nStore()
+
+  // 流式消息还没有内容时显示下方的 Thinking 占位
+  if (message.isStreaming && !message.content) return null
+  const isUser = message.role === 'user'
+
+  return (
+    <div
+      data-testid="chat-message"
+      className="border-b border-rule-divide py-3 first:pt-0 last:border-b-0"
+    >
+      <div className="mb-1.5 flex items-baseline gap-2">
+        <Label className="text-ink">{isUser ? t('roleYou') : t('piAgent')}</Label>
+        <Caption className="text-ink-muted">
+          {new Date(message.timestamp).toLocaleTimeString(
+            language === 'zh' ? 'zh-CN' : 'en-US'
+          )}
+        </Caption>
+      </div>
+      {isUser ? (
+        <div className="flex gap-2 type-reading text-ink">
+          <span className="type-project text-accent">›</span>
+          <span className="whitespace-pre-wrap">{message.content}</span>
+        </div>
+      ) : (
+        <div className="chat-markdown text-ink">
+          <ReactMarkdown
+            remarkPlugins={REMARK_PLUGINS}
+            // 超长消息跳过语法高亮，避免一次性高亮阻塞滚动
+            rehypePlugins={message.content.length > 20_000 ? NO_PLUGINS : HIGHLIGHT_PLUGINS}
+            components={MARKDOWN_COMPONENTS}
+          >
+            {message.content}
+          </ReactMarkdown>
+          {message.isStreaming && (
+            <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom" />
+          )}
+          {message.usage && (
+            <Caption className="mt-1 block text-ink-muted">
+              {message.usage.totalTokens.toLocaleString()} tokens
+              {message.usage.cost > 0 ? ` · $${message.usage.cost.toFixed(4)}` : ''}
+            </Caption>
+          )}
+        </div>
+      )}
+    </div>
+  )
+})
+
 export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const {
     messages,
@@ -89,7 +157,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   } = useChatStore()
 
   const openFiles = useEditorStore((state) => state.openFiles)
-  const { t, language } = useI18nStore()
+  const { t } = useI18nStore()
 
   const openEdits = useDiffStore((state) => state.openEdits)
 
@@ -97,8 +165,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [initialized, setInitialized] = useState(false)
   const [needsApiKey, setNeedsApiKey] = useState(false)
   const [showAttachMenu, setShowAttachMenu] = useState(false)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const { parentRef: transcriptRef, virtualizer } = useVirtualRows({
+    count: messages.length,
+    estimateSize: 96,
+    overscan: 8,
+  })
+  const stickToBottomRef = useRef(true)
 
   // Initialize agent on mount
   const initSeqRef = useRef(0)
@@ -183,17 +256,21 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }, [workspacePath, addMessage, setError, setLoading, setMessages, t])
 
-  // Auto-scroll to bottom
+  // 用户停留在底部时才跟随新消息；往上翻阅时不打断阅读
   useEffect(() => {
-    // 流式更新时用即时滚动，避免每个增量都触发平滑滚动动画
-    const streaming = useChatStore.getState().messages.some((message) => message.isStreaming)
-    const reduceMotion =
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    messagesEndRef.current?.scrollIntoView({
-      behavior: streaming || reduceMotion ? 'auto' : 'smooth',
+    if (!stickToBottomRef.current || messages.length === 0) return
+    const frame = requestAnimationFrame(() => {
+      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
     })
-  }, [messages])
+    return () => cancelAnimationFrame(frame)
+  }, [messages, virtualizer])
+
+  const handleTranscriptScroll = () => {
+    const element = transcriptRef.current
+    if (!element) return
+    const distance = element.scrollHeight - element.scrollTop - element.clientHeight
+    stickToBottomRef.current = distance < 64
+  }
 
   // Focus input on mount
   useEffect(() => {
@@ -292,15 +369,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }
 
-  const markdownComponents: Components = {
-    a: ({ href, children }) => (
-      <a href={href} target="_blank" rel="noopener noreferrer">
-        {children}
-      </a>
-    ),
-    pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-  }
-
   if (needsApiKey) {
     return (
       <div className="flex h-full flex-col bg-panel">
@@ -356,51 +424,44 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       </div>
 
       {/* Transcript */}
-      <div className="flex-1 overflow-y-auto px-3.5 py-3">
-        {messages.map((msg) => {
-          // 流式消息还没有内容时显示下方的 Thinking 占位
-          if (msg.isStreaming && !msg.content) return null
-          const isUser = msg.role === 'user'
-          return (
-            <div key={msg.id} className="border-b border-rule-divide py-3 first:pt-0 last:border-b-0">
-              <div className="mb-1.5 flex items-baseline gap-2">
-                <Label className="text-ink">
-                  {isUser ? t('roleYou') : t('piAgent')}
-                </Label>
-                <Caption className="text-ink-muted">
-                  {new Date(msg.timestamp).toLocaleTimeString(
-                    language === 'zh' ? 'zh-CN' : 'en-US'
-                  )}
-                </Caption>
-              </div>
-              {isUser ? (
-                <div className="flex gap-2 type-reading text-ink">
-                  <span className="type-project text-accent">›</span>
-                  <span className="whitespace-pre-wrap">{msg.content}</span>
-                </div>
-              ) : (
-                <div className="chat-markdown text-ink">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    rehypePlugins={[rehypeHighlight]}
-                    components={markdownComponents}
+      <div
+        ref={transcriptRef}
+        onScroll={handleTranscriptScroll}
+        data-testid="chat-transcript"
+        className="flex-1 overflow-y-auto px-3.5 py-3"
+      >
+        <div
+          style={{
+            height: `${virtualizer.getTotalSize()}px`,
+            width: '100%',
+            position: 'relative',
+          }}
+        >
+          {virtualizer.getVirtualItems().length > 0
+            ? virtualizer.getVirtualItems().map((virtualRow) => {
+                const msg = messages[virtualRow.index]
+                if (!msg) return null
+                return (
+                  <div
+                    key={msg.id}
+                    data-index={virtualRow.index}
+                    ref={typeof ResizeObserver !== 'undefined' ? virtualizer.measureElement : undefined}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
                   >
-                    {msg.content}
-                  </ReactMarkdown>
-                  {msg.isStreaming && (
-                    <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom" />
-                  )}
-                  {msg.usage && (
-                    <Caption className="mt-1 block text-ink-muted">
-                      {msg.usage.totalTokens.toLocaleString()} tokens
-                      {msg.usage.cost > 0 ? ` · $${msg.usage.cost.toFixed(4)}` : ''}
-                    </Caption>
-                  )}
-                </div>
-              )}
-            </div>
-          )
-        })}
+                    <ChatMessageRow message={msg} />
+                  </div>
+                )
+              })
+            : messages
+                .slice(0, 30)
+                .map((msg) => <ChatMessageRow key={msg.id} message={msg} />)}
+        </div>
 
         {isLoading && !messages.some((msg) => msg.isStreaming && msg.content) && (
           <div className="flex items-center gap-2 border-b border-rule-divide py-3 type-value text-ink-muted last:border-b-0">
@@ -415,8 +476,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             <span className="leading-relaxed">{error}</span>
           </div>
         )}
-
-        <div ref={messagesEndRef} />
       </div>
 
       {/* Composer */}
