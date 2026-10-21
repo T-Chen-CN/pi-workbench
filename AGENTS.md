@@ -606,7 +606,7 @@ async function initAgent(config: ApiConfig) {
 - ✅ 所有日志：`{appDir}/logs/`
 - ✅ 主进程日志：`{appDir}/logs/main.log`（5MB 轮转，保留 `.1`）
 - ✅ 渲染进程日志：`{appDir}/logs/renderer.log`（未捕获异常与 console.warn/error）
-- ⏳ Agent 日志：`{appDir}/logs/agent.log`（待实现；目前与主进程共用 main.log）
+- ✅ Agent 日志：`{appDir}/logs/agent.log`（5MB 轮转保留 `.1`，由主进程注入 `AgentLogger`，含工作区 Agent 与 Fleet 任务 Agent；任务本身的执行日志仍写 `fleet-{id}.log`）
 
 **Chromium profile**:
 - ✅ `app.setPath('userData', '{appDir}/data/profile')`，缓存与 localStorage 随应用目录迁移

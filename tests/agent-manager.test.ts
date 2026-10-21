@@ -103,6 +103,24 @@ afterEach(async () => {
 })
 
 describe('AgentManager initialization', () => {
+  it('routes logs to the injected logger', async () => {
+    primeSdk(createFakeSession())
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    }
+
+    const result = await manager.initialize(makeConfig({ logger }))
+
+    expect(result.success).toBe(true)
+    expect(logger.info).toHaveBeenCalledWith('[Agent Manager] Initializing agent...')
+    expect(logger.info).toHaveBeenCalledWith(
+      '[Agent Manager] Agent initialized successfully'
+    )
+  })
+
   it('writes models.json for an OpenAI-compatible endpoint without the key on disk', async () => {
     primeSdk(createFakeSession())
 

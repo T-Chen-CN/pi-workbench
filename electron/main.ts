@@ -52,6 +52,15 @@ if (!singleInstanceLock) {
 const agentRegistry = new AgentRegistry()
 let fileLogger: FileLogger | null = null
 let rendererLogger: FileLogger | null = null
+let agentFileLogger: FileLogger | null = null
+
+/** Agent 日志出口（延迟解析，文件日志在 app ready 后才创建） */
+const agentLogger = {
+  info: (...args: unknown[]) => agentFileLogger?.write('INFO', args),
+  warn: (...args: unknown[]) => agentFileLogger?.write('WARN', args),
+  error: (...args: unknown[]) => agentFileLogger?.write('ERROR', args),
+  debug: (...args: unknown[]) => agentFileLogger?.write('DEBUG', args),
+}
 
 const requireFromMain = createRequire(import.meta.url)
 let ptyModule: typeof import('node-pty') | null = null
@@ -261,6 +270,7 @@ const fleetManager = new FleetManager({
   },
   agentDir: path.join(getAppDir(), 'data', 'agent'),
   logDir: path.join(getAppDir(), 'logs'),
+  agentLogger,
   onUpdate: (task) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('fleet:task-updated', task)
@@ -440,8 +450,13 @@ app.whenReady().then(async () => {
       logDir: path.join(getAppDir(), 'logs'),
       fileName: 'renderer.log',
     })
+    agentFileLogger = new FileLogger({
+      logDir: path.join(getAppDir(), 'logs'),
+      fileName: 'agent.log',
+    })
     installConsoleTee(fileLogger)
     console.log('[Main] File logging enabled:', fileLogger.filePath)
+    console.log('[Main] Agent logging enabled:', agentFileLogger.filePath)
   } catch (error) {
     console.error('[Main] Failed to enable file logging:', error)
   }
@@ -475,6 +490,7 @@ async function shutdownApplication(): Promise<void> {
     console.log('[Main] Shutdown complete')
     fileLogger?.close()
     rendererLogger?.close()
+    agentFileLogger?.close()
   }
 }
 
@@ -1538,7 +1554,8 @@ handleIpc('agent:initialize', async (_event, config: {
     const result = await agent.initialize({
       workspaceDir,
       agentDir: path.join(getAppDir(), 'data', 'agent'),
-      apiConfig
+      apiConfig,
+      logger: agentLogger,
     })
 
     if (result.success) {

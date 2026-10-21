@@ -6,6 +6,13 @@
  */
 
 export { AgentManager } from './agent-manager.js'
-export type { AgentChatOptions, AgentChatResult, AgentConfig, AgentMessage, FileEdit } from './agent-manager.js'
+export type {
+  AgentChatOptions,
+  AgentChatResult,
+  AgentConfig,
+  AgentLogger,
+  AgentMessage,
+  FileEdit,
+} from './agent-manager.js'
 
 
