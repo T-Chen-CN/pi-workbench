@@ -21,6 +21,7 @@
   --rule-control: rgb(var(--line) / 0.5);   /* 控件边界，≥3:1 */
   --rule-divide: rgb(var(--line) / 0.22);   /* 结构分隔 */
   --rule-hairline: rgb(var(--line) / 0.18); /* 卡片外框（装饰） */
+  --rule-seam: rgb(var(--line) / 0.11);     /* 2px 拖拽接缝，等效 1px×22% */
   --overlay: 0 0 0;            /* 模态遮罩 */
 
   /* 墨色 */
