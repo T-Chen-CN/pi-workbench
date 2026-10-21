@@ -108,7 +108,7 @@
 - ✅ 任务队列与状态机（queued / running / succeeded / failed / cancelled，每个工作区默认并发 1，全局上限 4）
 - ✅ 每任务独立 Agent 实例，流式输出写入任务记录与 `fleet-{id}.log`
 - ✅ 元数据持久化：`{appDir}/data/fleet-tasks.db`（`node:sqlite`，JSON 回退）
-- ✅ Fleet 面板：创建 / 取消 / 查看日志 / 清理 worktree
+- ✅ Fleet 面板：创建 / 取消 / 查看日志 / 查看改动 / 合并回工作区 / 清理 worktree
 
 #### Phase 6: 优化和完善（持续）
 

@@ -79,6 +79,8 @@ export interface ElectronAPI {
   fleetGet: (id: string) => Promise<FleetGetResult>
   fleetCancel: (id: string, workspaceDir?: string) => Promise<FleetActionResult>
   fleetCleanup: (id: string, workspaceDir?: string) => Promise<FleetActionResult>
+  fleetDiff: (id: string, workspaceDir?: string) => Promise<FleetDiffResult>
+  fleetMerge: (id: string, workspaceDir?: string) => Promise<FleetMergeResult>
   onFleetTaskUpdated: (callback: (task: FleetTask) => void) => () => void
 
   // API Configuration management (便携式架构)
@@ -292,6 +294,7 @@ export interface FleetTask {
   error?: string
   output: string
   worktreeRemoved?: boolean
+  mergedAt?: number
 }
 
 export interface FleetCreateResult {
@@ -314,6 +317,31 @@ export interface FleetGetResult {
 
 export interface FleetActionResult {
   success: boolean
+  error?: string
+}
+
+export interface FleetFileChange {
+  path: string
+  status: 'added' | 'modified' | 'deleted'
+  oldContent: string
+  newContent: string
+  binary?: boolean
+  truncated?: boolean
+}
+
+export interface FleetDiffResult {
+  success: boolean
+  files?: FleetFileChange[]
+  error?: string
+  truncated?: boolean
+}
+
+export interface FleetMergeResult {
+  success: boolean
+  merged?: boolean
+  committed?: boolean
+  commit?: string
+  conflictFiles?: string[]
   error?: string
 }
 

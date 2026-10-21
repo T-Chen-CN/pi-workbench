@@ -8,7 +8,11 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { randomUUID } from 'crypto'
 import { isAllowedStatusTransition, type FleetStore, type FleetTask } from './fleet-store.js'
-import type { FleetWorktree } from './fleet-worktree.js'
+import type {
+  FleetWorktree,
+  WorktreeDiffResult,
+  WorktreeMergeResult,
+} from './fleet-worktree.js'
 
 export interface FleetApiConfig {
   provider: string
@@ -231,6 +235,54 @@ export class FleetManager {
     const updated = this.updateTask(id, { worktreeRemoved: true })
     if (updated) this.emit(updated)
     return { success: true }
+  }
+
+  async getDiff(
+    id: string,
+    workspaceDir?: string
+  ): Promise<WorktreeDiffResult> {
+    const task = this.options.store.get(id)
+    if (!task || (workspaceDir && !this.sameWorkspace(task.workspace, workspaceDir))) {
+      return { success: false, error: 'Task not found' }
+    }
+    if (task.status === 'queued' || task.status === 'running') {
+      return { success: false, error: 'Task is still running' }
+    }
+    if (task.worktreeRemoved) {
+      return { success: false, error: 'Worktree has been removed' }
+    }
+    return this.options.worktrees.diff(task.workspace, task.worktree)
+  }
+
+  async mergeTask(
+    id: string,
+    workspaceDir?: string
+  ): Promise<WorktreeMergeResult> {
+    const task = this.options.store.get(id)
+    if (!task || (workspaceDir && !this.sameWorkspace(task.workspace, workspaceDir))) {
+      return { success: false, error: 'Task not found' }
+    }
+    if (task.status !== 'succeeded') {
+      return { success: false, error: 'Only succeeded tasks can be merged' }
+    }
+    if (task.worktreeRemoved) {
+      return { success: false, error: 'Worktree has been removed' }
+    }
+    if (task.mergedAt) {
+      return { success: false, error: 'Task has already been merged' }
+    }
+
+    const result = await this.options.worktrees.merge(
+      task.workspace,
+      task.worktree,
+      task.branch,
+      `Merge Fleet task "${task.name}" (${task.branch})`
+    )
+    if (result.success) {
+      const updated = this.updateTask(id, { mergedAt: this.now() })
+      if (updated) this.emit(updated)
+    }
+    return result
   }
 
   /** 路径比较：统一解析绝对路径，Windows 下忽略大小写 */

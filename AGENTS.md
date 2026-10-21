@@ -641,6 +641,7 @@ async function initAgent(config: ApiConfig) {
 - ✅ 任务元数据：`{appDir}/data/fleet-tasks.db`（`node:sqlite`；不可用时回退 JSON）
 - ✅ 任务日志：`{appDir}/logs/fleet-{task-id}.log`
 - ✅ 清理 worktree 时**保留分支**，避免丢失 Agent 提交
+- ✅ 审阅与合并：查看 worktree diff；仅 `succeeded` 任务可合并，合并前要求工作区无未提交改动，冲突时自动 `merge --abort`
 - ✅ 队列每个工作区默认并发 1、全局上限 4，可通过 `FleetManager` 的 `maxConcurrent` / `maxTotalConcurrent` 调整
 - ❌ **禁止**在系统临时目录创建 worktree
 

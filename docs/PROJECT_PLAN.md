@@ -272,6 +272,7 @@ docs/               项目文档
 - 任务元数据：`{appDir}/data/fleet-tasks.db`（Electron 内置 `node:sqlite`；不可用时回退 JSON）
 - 任务日志：`{appDir}/logs/fleet-{task-id}.log`，流式输出同时写入记录
 - 清理 worktree 时保留分支，避免丢失 Agent 提交
+- 任务结果审阅：查看 worktree diff，确认后提交任务分支并合并回工作区（要求工作区干净，冲突自动回滚）
 - UI：Fleet 面板（创建 / 取消 / 查看输出 / 清理 worktree）
 
 ---

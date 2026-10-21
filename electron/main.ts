@@ -893,6 +893,20 @@ handleIpc('fleet:cleanup', async (_event, id: string, workspaceDir?: string) => 
   return fleetManager.cleanupWorktree(id, workspaceDir)
 })
 
+handleIpc('fleet:diff', async (_event, id: string, workspaceDir?: string) => {
+  if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
+    return { success: false, error: 'Workspace is not approved' }
+  }
+  return fleetManager.getDiff(id, workspaceDir)
+})
+
+handleIpc('fleet:merge', async (_event, id: string, workspaceDir?: string) => {
+  if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
+    return { success: false, error: 'Workspace is not approved' }
+  }
+  return fleetManager.mergeTask(id, workspaceDir)
+})
+
 // ---- 自动更新 ----
 
 let updateController: UpdateController | null = null

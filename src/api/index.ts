@@ -26,6 +26,8 @@ import type {
   FleetListResult,
   FleetGetResult,
   FleetActionResult,
+  FleetDiffResult,
+  FleetMergeResult,
   FleetTask,
   TerminalCreateResult,
   TerminalResult,
@@ -260,6 +262,14 @@ const mockAPI = {
     success: false,
     error: 'Fleet tasks are only available in the Electron app',
   }),
+  fleetDiff: async (): Promise<FleetDiffResult> => ({
+    success: false,
+    error: 'Fleet tasks are only available in the Electron app',
+  }),
+  fleetMerge: async (): Promise<FleetMergeResult> => ({
+    success: false,
+    error: 'Fleet tasks are only available in the Electron app',
+  }),
   onFleetTaskUpdated: (_callback: (task: FleetTask) => void) => () => {},
 
   // Terminal（Web 模式没有 PTY，返回失败而不是抛异常）
@@ -352,6 +362,8 @@ export const api = {
   fleetGet: (id: string) => electronAPI.fleetGet(id),
   fleetCancel: (id: string, workspaceDir?: string) => electronAPI.fleetCancel(id, workspaceDir),
   fleetCleanup: (id: string, workspaceDir?: string) => electronAPI.fleetCleanup(id, workspaceDir),
+  fleetDiff: (id: string, workspaceDir?: string) => electronAPI.fleetDiff(id, workspaceDir),
+  fleetMerge: (id: string, workspaceDir?: string) => electronAPI.fleetMerge(id, workspaceDir),
   onFleetTaskUpdated: (callback: (task: FleetTask) => void) =>
     electronAPI.onFleetTaskUpdated(callback),
 

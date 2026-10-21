@@ -14,7 +14,7 @@ Lightweight desktop code editor with Pi Agent integration, built with Electron +
 - **Diff viewer** — automatically shows files the agent modified during a turn
 - **Terminal** — xterm.js + node-pty, with output attachable to the agent
 - **Workspace plugins** — command and hook extensions loaded in the main process (opt-in per workspace)
-- **Fleet tasks** — background agents in isolated git worktrees with a per-workspace queue
+- **Fleet tasks** — background agents in isolated git worktrees with a per-workspace queue, diff review and one-click merge
 - **Paper & Ink UI** — light/dark themes, local fonts, consistent design tokens
 - **Crash recovery** — unsaved editor drafts are restored after an unexpected exit
 - **Auto update** — electron-updater integration for packaged Windows builds

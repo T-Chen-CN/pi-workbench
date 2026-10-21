@@ -39,6 +39,8 @@ export interface FleetTask {
   error?: string
   output: string
   worktreeRemoved?: boolean
+  /** 任务分支合并回工作区的时间 */
+  mergedAt?: number
 }
 
 export interface FleetStore {

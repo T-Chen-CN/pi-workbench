@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { FileText, Plus, Ship, X } from 'lucide-react'
+import { FileDiff, FileText, Plus, Ship, X } from 'lucide-react'
 import { api } from '../api'
 import { useI18nStore } from '../store/i18nStore'
+import { useEditorStore } from '../store/editorStore'
+import { useDialogStore, confirmDialog } from '../store/dialogStore'
 import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
 import { Button, EmptyState, IconButton, Input, Spinner, Textarea } from './ui'
 import { StatusText, type StatusTone } from './patterns'
+import { FleetDiffModal } from './FleetDiffModal'
 import type { FleetTask, FleetTaskStatus } from '../types/electron'
 
 interface FleetPanelProps {
@@ -38,6 +41,8 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [diffTaskId, setDiffTaskId] = useState<string | null>(null)
+  const [mergingId, setMergingId] = useState<string | null>(null)
   const refreshingRef = useRef(false)
   const pendingRefreshRef = useRef(false)
 
@@ -67,11 +72,14 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key !== 'Escape') return
+      // 有 diff 弹窗或确认对话框时，Esc 只关闭上层
+      if (diffTaskId || useDialogStore.getState().current) return
+      onClose()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, onClose])
+  }, [open, onClose, diffTaskId])
 
   useEffect(() => {
     if (!open) return
@@ -143,9 +151,46 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
     await refresh()
   }
 
+  const mergeTask = async (task: FleetTask) => {
+    if (useEditorStore.getState().hasDirtyFiles()) {
+      toast.error(t('fleetMergeSaveFirst'))
+      return
+    }
+
+    const confirmed = await confirmDialog({
+      title: t('fleetMerge'),
+      message: t('fleetMergeConfirm', { name: task.name }),
+      confirmLabel: t('fleetMerge'),
+    })
+    if (!confirmed) return
+
+    setMergingId(task.id)
+    try {
+      const result = await api.fleetMerge(task.id, workspacePath)
+      if (!result.success) {
+        if (result.conflictFiles && result.conflictFiles.length > 0) {
+          toast.error(t('fleetMergeConflict', { files: result.conflictFiles.join(', ') }))
+        } else {
+          toast.error(
+            t('fleetMergeFailed', {
+              error: localizeError(result.error) || t('unknownError'),
+            })
+          )
+        }
+        return
+      }
+
+      toast.success(t('fleetMergeSuccess'))
+      await refresh()
+    } finally {
+      setMergingId(null)
+    }
+  }
+
   if (!open) return null
 
   const selectedTask = tasks.find((task) => task.id === selectedId) ?? null
+  const diffTask = diffTaskId ? tasks.find((task) => task.id === diffTaskId) ?? null : null
 
   return (
     <div
@@ -217,6 +262,9 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
                     {task.branch}
                   </span>
                   <div className="flex flex-shrink-0 items-center gap-1">
+                    {task.mergedAt && (
+                      <span className="type-caption text-success">{t('fleetMerged')}</span>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -225,6 +273,31 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
                     >
                       {t('fleetViewLog')}
                     </Button>
+                    {task.status !== 'queued' &&
+                      task.status !== 'running' &&
+                      !task.worktreeRemoved && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          icon={FileDiff}
+                          onClick={() => setDiffTaskId(task.id)}
+                        >
+                          {t('fleetViewChanges')}
+                        </Button>
+                      )}
+                    {task.status === 'succeeded' &&
+                      !task.worktreeRemoved &&
+                      !task.mergedAt && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          loading={mergingId === task.id}
+                          disabled={Boolean(mergingId)}
+                          onClick={() => void mergeTask(task)}
+                        >
+                          {t('fleetMerge')}
+                        </Button>
+                      )}
                     {(task.status === 'queued' || task.status === 'running') && (
                       <Button
                         variant="ghost"
@@ -271,6 +344,14 @@ export const FleetPanel: React.FC<FleetPanelProps> = ({ workspacePath, open, onC
           </div>
         )}
       </div>
+
+      {diffTask && (
+        <FleetDiffModal
+          task={diffTask}
+          workspacePath={workspacePath}
+          onClose={() => setDiffTaskId(null)}
+        />
+      )}
     </div>
   )
 }
