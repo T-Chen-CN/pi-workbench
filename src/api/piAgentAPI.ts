@@ -5,7 +5,14 @@
  * - Web dev: goes through the Vite dev-server Agent bridge (/__pi/agent/*)
  */
 
-import type { ApiConfig, FileEdit } from '../types/electron'
+import type {
+  ApiConfig,
+  FileEdit,
+  SessionListResult,
+  SessionOpenResult,
+  SessionTabs,
+  SessionTabsResult,
+} from '../types/electron'
 
 interface AgentInitConfig {
   workspaceDir: string
@@ -59,6 +66,14 @@ const DEV_AGENT_ABORT = '/__pi/agent/abort'
 const DEV_AGENT_DISPOSE = '/__pi/agent/dispose'
 const DEV_AGENT_HISTORY = '/__pi/agent/history'
 const DEV_AGENT_IS_INITIALIZED = '/__pi/agent/isInitialized'
+const DEV_AGENT_SESSIONS_LIST = '/__pi/agent/sessions/list'
+const DEV_AGENT_SESSIONS_OPEN = '/__pi/agent/sessions/open'
+const DEV_AGENT_SESSIONS_CREATE = '/__pi/agent/sessions/create'
+const DEV_AGENT_SESSIONS_CLOSE = '/__pi/agent/sessions/close'
+const DEV_AGENT_SESSIONS_RENAME = '/__pi/agent/sessions/rename'
+const DEV_AGENT_SESSIONS_DELETE = '/__pi/agent/sessions/delete'
+const DEV_AGENT_SESSIONS_TABS_GET = '/__pi/agent/sessions/tabs/get'
+const DEV_AGENT_SESSIONS_TABS_SET = '/__pi/agent/sessions/tabs/set'
 
 function hasElectronAgent(): boolean {
   return Boolean(window.electronAPI?.agentInitialize)
@@ -86,12 +101,13 @@ function bridgeUnavailableError(error: unknown): string {
 async function streamDevChat(
   message: string,
   onDelta: (delta: string) => void,
-  workspaceDir?: string
+  workspaceDir?: string,
+  sessionId?: string
 ): Promise<AgentChatResponse> {
   const response = await fetch(DEV_AGENT_CHAT_STREAM, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, workspaceDir }),
+    body: JSON.stringify({ message, workspaceDir, sessionId }),
   })
   if (!response.ok || !response.body) {
     throw new Error(`Dev agent stream returned HTTP ${response.status}`)
@@ -158,7 +174,8 @@ export const piAgentAPI = {
   async chat(
     message: string,
     onDelta?: (delta: string) => void,
-    workspaceDir?: string
+    workspaceDir?: string,
+    sessionId?: string
   ): Promise<AgentChatResponse> {
     try {
       if (hasElectronAgent()) {
@@ -167,20 +184,26 @@ export const piAgentAPI = {
 
         if (onDelta && typeof window.electronAPI.onAgentStream === 'function') {
           unsubscribe = window.electronAPI.onAgentStream((payload) => {
-            if (payload.requestId === requestId) onDelta(payload.delta)
+            if (payload.requestId !== requestId) return
+            if (sessionId && payload.sessionId && payload.sessionId !== sessionId) return
+            onDelta(payload.delta)
           })
         }
 
         try {
-          return await window.electronAPI.agentChat(message, requestId, workspaceDir)
+          return await window.electronAPI.agentChat(message, requestId, workspaceDir, sessionId)
         } finally {
           unsubscribe?.()
         }
       }
       if (onDelta) {
-        return await streamDevChat(message, onDelta, workspaceDir)
+        return await streamDevChat(message, onDelta, workspaceDir, sessionId)
       }
-      return await callDevBridge<AgentChatResponse>(DEV_AGENT_CHAT, { message, workspaceDir })
+      return await callDevBridge<AgentChatResponse>(DEV_AGENT_CHAT, {
+        message,
+        workspaceDir,
+        sessionId,
+      })
     } catch (error) {
       console.error('[Pi Agent] Chat error:', error)
       return { success: false, error: bridgeUnavailableError(error) }
@@ -205,12 +228,15 @@ export const piAgentAPI = {
   /**
    * Restore the conversation history persisted by the agent session
    */
-  async getHistory(workspaceDir?: string): Promise<AgentHistoryResponse> {
+  async getHistory(workspaceDir?: string, sessionId?: string): Promise<AgentHistoryResponse> {
     try {
       if (hasElectronAgent()) {
-        return await window.electronAPI.agentGetHistory(workspaceDir)
+        return await window.electronAPI.agentGetHistory(workspaceDir, sessionId)
       }
-      return await callDevBridge<AgentHistoryResponse>(DEV_AGENT_HISTORY, { workspaceDir })
+      return await callDevBridge<AgentHistoryResponse>(DEV_AGENT_HISTORY, {
+        workspaceDir,
+        sessionId,
+      })
     } catch (error) {
       console.error('[Pi Agent] History error:', error)
       return { success: false, error: bridgeUnavailableError(error) }
@@ -218,16 +244,128 @@ export const piAgentAPI = {
   },
 
   /**
-   * Abort the request currently in flight
+   * Abort the request currently in flight for a session
    */
-  async abort(workspaceDir?: string): Promise<AgentResponse> {
+  async abort(workspaceDir?: string, sessionId?: string): Promise<AgentResponse> {
     try {
       if (hasElectronAgent()) {
-        return await window.electronAPI.agentAbort(workspaceDir)
+        return await window.electronAPI.agentAbort(workspaceDir, sessionId)
       }
-      return await callDevBridge<AgentResponse>(DEV_AGENT_ABORT, { workspaceDir })
+      return await callDevBridge<AgentResponse>(DEV_AGENT_ABORT, { workspaceDir, sessionId })
     } catch (error) {
       console.error('[Pi Agent] Abort error:', error)
+      return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  /** 监听模型生成的会话标题 */
+  onSessionTitle(
+    callback: (payload: { workspaceDir: string; sessionId: string; title: string }) => void
+  ): () => void {
+    if (!hasElectronAgent() || typeof window.electronAPI.onAgentSessionTitle !== 'function') {
+      return () => {}
+    }
+    return window.electronAPI.onAgentSessionTitle(callback)
+  },
+
+  async sessionsList(workspaceDir: string): Promise<SessionListResult> {
+    try {
+      if (hasElectronAgent()) return await window.electronAPI.agentSessionsList(workspaceDir)
+      return await callDevBridge<SessionListResult>(DEV_AGENT_SESSIONS_LIST, { workspaceDir })
+    } catch (error) {
+      return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  async sessionsOpen(workspaceDir: string, sessionId?: string): Promise<SessionOpenResult> {
+    try {
+      if (hasElectronAgent()) {
+        return await window.electronAPI.agentSessionsOpen(workspaceDir, sessionId)
+      }
+      return await callDevBridge<SessionOpenResult>(DEV_AGENT_SESSIONS_OPEN, {
+        workspaceDir,
+        sessionId,
+      })
+    } catch (error) {
+      return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  async sessionsCreate(workspaceDir: string): Promise<SessionOpenResult> {
+    try {
+      if (hasElectronAgent()) return await window.electronAPI.agentSessionsCreate(workspaceDir)
+      return await callDevBridge<SessionOpenResult>(DEV_AGENT_SESSIONS_CREATE, { workspaceDir })
+    } catch (error) {
+      return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  async sessionsClose(workspaceDir: string, sessionId: string): Promise<AgentResponse> {
+    try {
+      if (hasElectronAgent()) {
+        return await window.electronAPI.agentSessionsClose(workspaceDir, sessionId)
+      }
+      return await callDevBridge<AgentResponse>(DEV_AGENT_SESSIONS_CLOSE, {
+        workspaceDir,
+        sessionId,
+      })
+    } catch (error) {
+      return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  async sessionsRename(
+    workspaceDir: string,
+    sessionId: string,
+    name: string
+  ): Promise<AgentResponse> {
+    try {
+      if (hasElectronAgent()) {
+        return await window.electronAPI.agentSessionsRename(workspaceDir, sessionId, name)
+      }
+      return await callDevBridge<AgentResponse>(DEV_AGENT_SESSIONS_RENAME, {
+        workspaceDir,
+        sessionId,
+        name,
+      })
+    } catch (error) {
+      return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  async sessionsDelete(workspaceDir: string, sessionId: string): Promise<AgentResponse> {
+    try {
+      if (hasElectronAgent()) {
+        return await window.electronAPI.agentSessionsDelete(workspaceDir, sessionId)
+      }
+      return await callDevBridge<AgentResponse>(DEV_AGENT_SESSIONS_DELETE, {
+        workspaceDir,
+        sessionId,
+      })
+    } catch (error) {
+      return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  async sessionsGetTabs(workspaceDir: string): Promise<SessionTabsResult> {
+    try {
+      if (hasElectronAgent()) return await window.electronAPI.agentSessionsGetTabs(workspaceDir)
+      return await callDevBridge<SessionTabsResult>(DEV_AGENT_SESSIONS_TABS_GET, { workspaceDir })
+    } catch (error) {
+      return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  async sessionsSetTabs(workspaceDir: string, tabs: SessionTabs): Promise<AgentResponse> {
+    try {
+      if (hasElectronAgent()) {
+        return await window.electronAPI.agentSessionsSetTabs(workspaceDir, tabs)
+      }
+      return await callDevBridge<AgentResponse>(DEV_AGENT_SESSIONS_TABS_SET, {
+        workspaceDir,
+        tabs,
+      })
+    } catch (error) {
       return { success: false, error: bridgeUnavailableError(error) }
     }
   },

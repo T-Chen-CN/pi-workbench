@@ -13,6 +13,8 @@ export type {
   AgentLogger,
   AgentMessage,
   FileEdit,
+  SessionOpenResult,
+  SessionSummary,
 } from './agent-manager.js'
 
 

@@ -37,6 +37,7 @@ import { useThemeStore, useResolvedTheme, type ThemeMode } from './store/themeSt
 import { useWorkspaceStore } from './store/workspaceStore'
 import { useEditorStore } from './store/editorStore'
 import { useChatStore } from './store/chatStore'
+import { useSessionStore } from './store/sessionStore'
 import { useDiffStore } from './store/diffStore'
 import { confirmDialog } from './store/dialogStore'
 import { useSettingsStore } from './store/settingsStore'
@@ -173,9 +174,17 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  const clearWorkspaceChat = (targetPath: string) => {
+    useSessionStore.getState().resetWorkspace(targetPath)
+    const chat = useChatStore.getState()
+    const prefix = `${targetPath}\u0000`
+    for (const key of Object.keys(chat.conversations)) {
+      if (key.startsWith(prefix)) chat.removeConversation(key)
+    }
+  }
+
   const resetWorkspaceState = () => {
     useEditorStore.getState().reset()
-    useChatStore.getState().reset()
     useDiffStore.getState().clearDiff()
   }
 
@@ -235,7 +244,7 @@ export default function App() {
 
       // 欢迎页提问：打开工作区后把问题带入聊天输入框
       if (initialPrompt) {
-        useChatStore.getState().setDraftInput(initialPrompt)
+        useChatStore.getState().setPendingDraft(initialPrompt)
       }
 
       api.watchWorkspace(targetPath).catch((err) => {
@@ -285,6 +294,7 @@ export default function App() {
     // 只释放该工作区的 Agent 与会话资源
     await piAgentAPI.dispose(targetPath)
     await api.disposeWorkspace(targetPath).catch(() => undefined)
+    clearWorkspaceChat(targetPath)
     const nextWorkspace = useWorkspaceStore.getState().closeWorkspace(targetPath)
 
     if (!closingCurrent) return

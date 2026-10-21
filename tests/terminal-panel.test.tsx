@@ -2,7 +2,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TerminalPanel } from '../src/components/TerminalPanel'
-import { useChatStore } from '../src/store/chatStore'
+import { conversationKey, useChatStore } from '../src/store/chatStore'
+import { useSessionStore } from '../src/store/sessionStore'
 import { useI18nStore } from '../src/store/i18nStore'
 import { api } from '../src/api'
 import { translations } from '../src/i18n/translations'
@@ -61,6 +62,12 @@ class ResizeObserverMock {
 beforeEach(() => {
   useI18nStore.getState().setLanguage('zh')
   useChatStore.getState().reset()
+  useSessionStore.getState().reset()
+  useSessionStore.getState().setSessions('/ws', [
+    { id: 's1', title: 'Session', messageCount: 0, createdAt: 1, updatedAt: 2 },
+  ])
+  useSessionStore.getState().setOpen('/ws', ['s1'], 's1')
+  useChatStore.getState().ensureConversation(conversationKey('/ws', 's1'))
   xterm.instances.length = 0
   vi.clearAllMocks()
   vi.stubGlobal('ResizeObserver', ResizeObserverMock)
@@ -123,7 +130,9 @@ describe('TerminalPanel', () => {
 
     await waitFor(() => {
       expect(api.terminalFlush).toHaveBeenCalledWith('t1')
-      expect(useChatStore.getState().attachments[0]).toMatchObject({
+      expect(
+        useChatStore.getState().conversations[conversationKey('/ws', 's1')].attachments[0]
+      ).toMatchObject({
         kind: 'file',
         path: '/logs/t1.log',
       })

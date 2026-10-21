@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.14 |
+| 文档版本 | v1.15 |
 | 状态 | Active（正式规范） |
 | 最后更新 | 2026-10-21 |
 | 适用范围 | 渲染进程全部 UI、Monaco / xterm 主题、应用主题设置 |
@@ -398,6 +398,9 @@
 - 代码块右上角提供复制按钮（hover/focus 显示）。
 - 空状态、未配置 API、错误使用 EmptyState / 细线错误条，不使用大色块。
 - 上下文附件支持整文件与选区片段：片段 chip 显示 `文件:起止行`，内容是附加时快照（≤40k 字符）；整文件在发送时读取（≤120k 字符，合计 ≤300k）。
+- 会话标签栏（34px，位于聊天头部下方）：标签代表"已打开"会话，激活标签 `bg-surface` + 2px `accent` 顶线，运行中显示 accent 脉冲点，后台完成显示未读点；最多同时打开 8 个，关闭标签只释放运行时、保留会话文件。
+- 会话列表：聊天列内的全高抽屉，行显示标题、消息数、相对时间与"已打开"标记；当前会话用 2px `accent` 左边线 + `accent/[0.06]`；hover 显示重命名 / 删除。
+- 会话标题：首轮回复后由模型生成一次（中文 ≤16 字 / 英文 ≤8 词），存为 `session_info`；手动重命名后不再自动覆盖；无标题时回退首条用户消息。
 
 ### 6.6 终端
 
@@ -538,6 +541,7 @@
 | 主题状态 | `src/store/themeStore.ts` |
 | 欢迎页 | `src/components/WelcomeScreen.tsx` |
 | 聊天稿纸 | `src/components/ChatPanel.tsx` |
+| 会话标签栏 / 列表 | `src/components/SessionTabs.tsx`、`src/components/ChatSessionList.tsx`、`src/store/sessionStore.ts` |
 | 编辑器主题 | `src/components/MonacoEditor.tsx`（`pi-paper` / `pi-ink`） |
 | 终端主题 | `src/components/TerminalPanel.tsx` |
 | 第三方主题 token 桥 | `src/theme/tokens.ts`（`readThemeTokens` / `tokenHex`） |
@@ -564,6 +568,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.15 | 2026-10-21 | 多会话：聊天会话标签栏与会话列表抽屉、同工作区并发会话、模型自动标题与手动重命名；标签持久化到工作区 `.pi-workbench/chat-tabs.json` |
 | v1.14 | 2026-10-21 | 长列表性能：聊天消息、Diff 行、文件树改为虚拟渲染；Diff 长行横向滚动、行高 22px；Monaco 大文件模式（关闭换行/折叠，超大文件只读）与细线提示 |
 | v1.13 | 2026-10-21 | 工作区区域分层：外壳/侧栏/终端用 `bg-panel`，编辑器画布与激活标签用 `bg-surface`，Monaco 背景改为 surface；拖拽接缝改为 2px `--rule-seam`（等效 1px×22%），解决 125% 缩放下两侧线宽不一致 |
 | v1.12 | 2026-10-21 | 线条角色化与卡片表面分离：新增 `--rule-control`（控件 50%）/ `--rule-divide`（分隔 22%）/ `--rule-hairline`（卡片外框 18%）三档；纸卡改为 `bg-raised` + 发丝边、取消区内投影，`shadow-print` 只保留给浮层；修正 `--panel` / `--raised` 用途冲突与文首版本号 |

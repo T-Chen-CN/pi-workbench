@@ -75,17 +75,55 @@ contextBridge.exposeInMainWorld('electronAPI', {
       selectedModel: string
     }
   }) => ipcRenderer.invoke('agent:initialize', config),
-  agentChat: (message: string, requestId?: string, workspaceDir?: string) =>
-    ipcRenderer.invoke('agent:chat', message, requestId, workspaceDir),
-  agentAbort: (workspaceDir?: string) => ipcRenderer.invoke('agent:abort', workspaceDir),
-  onAgentStream: (callback: (payload: { requestId?: string; delta: string }) => void) => {
-    const listener = (_event: unknown, payload: { requestId?: string; delta: string }) => callback(payload)
+  agentChat: (message: string, requestId?: string, workspaceDir?: string, sessionId?: string) =>
+    ipcRenderer.invoke('agent:chat', message, requestId, workspaceDir, sessionId),
+  agentAbort: (workspaceDir?: string, sessionId?: string) =>
+    ipcRenderer.invoke('agent:abort', workspaceDir, sessionId),
+  onAgentStream: (
+    callback: (payload: {
+      requestId?: string
+      workspaceDir?: string
+      sessionId?: string
+      delta: string
+    }) => void
+  ) => {
+    const listener = (
+      _event: unknown,
+      payload: { requestId?: string; workspaceDir?: string; sessionId?: string; delta: string }
+    ) => callback(payload)
     ipcRenderer.on('agent:stream', listener)
     return () => ipcRenderer.removeListener('agent:stream', listener)
   },
+  onAgentSessionTitle: (
+    callback: (payload: { workspaceDir: string; sessionId: string; title: string }) => void
+  ) => {
+    const listener = (
+      _event: unknown,
+      payload: { workspaceDir: string; sessionId: string; title: string }
+    ) => callback(payload)
+    ipcRenderer.on('agent:session-title', listener)
+    return () => ipcRenderer.removeListener('agent:session-title', listener)
+  },
   agentIsInitialized: (workspaceDir?: string) => ipcRenderer.invoke('agent:isInitialized', workspaceDir),
-  agentGetHistory: (workspaceDir?: string) => ipcRenderer.invoke('agent:getHistory', workspaceDir),
+  agentGetHistory: (workspaceDir?: string, sessionId?: string) =>
+    ipcRenderer.invoke('agent:getHistory', workspaceDir, sessionId),
   agentDispose: (workspaceDir?: string) => ipcRenderer.invoke('agent:dispose', workspaceDir),
+  agentSessionsList: (workspaceDir: string) =>
+    ipcRenderer.invoke('agent:sessions:list', workspaceDir),
+  agentSessionsOpen: (workspaceDir: string, sessionId?: string) =>
+    ipcRenderer.invoke('agent:sessions:open', workspaceDir, sessionId),
+  agentSessionsCreate: (workspaceDir: string) =>
+    ipcRenderer.invoke('agent:sessions:create', workspaceDir),
+  agentSessionsClose: (workspaceDir: string, sessionId: string) =>
+    ipcRenderer.invoke('agent:sessions:close', workspaceDir, sessionId),
+  agentSessionsRename: (workspaceDir: string, sessionId: string, name: string) =>
+    ipcRenderer.invoke('agent:sessions:rename', workspaceDir, sessionId, name),
+  agentSessionsDelete: (workspaceDir: string, sessionId: string) =>
+    ipcRenderer.invoke('agent:sessions:delete', workspaceDir, sessionId),
+  agentSessionsGetTabs: (workspaceDir: string) =>
+    ipcRenderer.invoke('agent:sessions:getTabs', workspaceDir),
+  agentSessionsSetTabs: (workspaceDir: string, tabs: { open: string[]; active: string | null }) =>
+    ipcRenderer.invoke('agent:sessions:setTabs', workspaceDir, tabs),
 
   // 终端
   terminalCreate: (workspaceDir: string, cols: number, rows: number) =>

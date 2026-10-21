@@ -13,16 +13,27 @@ export interface AgentChatOutcome {
 
 export interface RegisteredAgent {
   initialize: (config: unknown) => Promise<{ success: boolean; error?: string }>
-  chat: (
-    message: string,
-    options?: { onTextDelta?: (delta: string) => void }
-  ) => Promise<AgentChatOutcome>
+  chat: {
+    (message: string, options?: { onTextDelta?: (delta: string) => void }): Promise<AgentChatOutcome>
+    (
+      sessionId: string,
+      message: string,
+      options?: { onTextDelta?: (delta: string) => void }
+    ): Promise<AgentChatOutcome>
+  }
   dispose: () => Promise<void> | void
-  /** 中止正在进行的请求（可选，Agent 不支持时忽略） */
-  abort?: () => Promise<void>
+  /** 中止请求（可选，Agent 不支持时忽略） */
+  abort?: (sessionId?: string) => Promise<void>
   isInitialized: () => boolean
-  getSessionMessages?: () => unknown
-  getMessageHistory?: () => unknown
+  getSessionMessages?: (sessionId?: string) => unknown
+  getMessageHistory?: (sessionId?: string) => unknown
+  listSessions?: () => Promise<unknown[]>
+  openSession?: (sessionId?: string) => Promise<unknown>
+  createSession?: () => Promise<unknown>
+  closeSession?: (sessionId: string) => Promise<void>
+  renameSession?: (sessionId: string, name: string) => Promise<unknown>
+  deleteSession?: (sessionId: string) => Promise<unknown>
+  getCurrentSessionId?: () => string | null
 }
 
 interface Entry {

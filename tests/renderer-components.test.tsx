@@ -5,9 +5,11 @@ import { ChatPanel } from '../src/components/ChatPanel'
 import { FileExplorer } from '../src/components/FileExplorer'
 import { MonacoEditor } from '../src/components/MonacoEditor'
 import { WelcomeScreen } from '../src/components/WelcomeScreen'
-import { useChatStore } from '../src/store/chatStore'
+import { useChatStore, conversationKey } from '../src/store/chatStore'
 import { useEditorStore } from '../src/store/editorStore'
 import { useSelectionStore } from '../src/store/selectionStore'
+import { useSessionStore } from '../src/store/sessionStore'
+import type { SessionSummary } from '../src/types/electron'
 import { useI18nStore } from '../src/store/i18nStore'
 import { translations } from '../src/i18n/translations'
 import { api } from '../src/api'
@@ -38,6 +40,15 @@ vi.mock('../src/api/piAgentAPI', () => ({
     abort: vi.fn(),
     dispose: vi.fn(),
     isInitialized: vi.fn(),
+    onSessionTitle: vi.fn(() => () => {}),
+    sessionsList: vi.fn(),
+    sessionsOpen: vi.fn(),
+    sessionsCreate: vi.fn(),
+    sessionsClose: vi.fn(),
+    sessionsRename: vi.fn(),
+    sessionsDelete: vi.fn(),
+    sessionsGetTabs: vi.fn(),
+    sessionsSetTabs: vi.fn(),
   },
 }))
 
@@ -94,16 +105,54 @@ const configWithKey: ApiConfig = {
   selectedModel: 'test-model',
 }
 
+const session: SessionSummary = {
+  id: 's1',
+  title: 'Session 1',
+  messageCount: 0,
+  createdAt: 1,
+  updatedAt: 2,
+}
+const sessionKey = conversationKey('/ws', 's1')
+
 beforeEach(() => {
   useChatStore.getState().reset()
   useEditorStore.getState().reset()
   useSelectionStore.getState().clearSelection()
+  useSessionStore.getState().reset()
   useI18nStore.getState().setLanguage('zh')
   vi.clearAllMocks()
   Element.prototype.scrollIntoView = vi.fn()
+  vi.mocked(api.apiConfigGet).mockResolvedValue({
+    success: true,
+    config: configWithKey,
+  })
   vi.mocked(piAgentAPI.initialize).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.getHistory).mockResolvedValue({ success: true, history: [] })
   vi.mocked(piAgentAPI.isInitialized).mockResolvedValue({ success: true, initialized: false })
+  vi.mocked(piAgentAPI.sessionsList).mockResolvedValue({
+    success: true,
+    sessions: [session],
+    currentId: session.id,
+  })
+  vi.mocked(piAgentAPI.sessionsGetTabs).mockResolvedValue({
+    success: true,
+    tabs: { open: [session.id], active: session.id },
+  })
+  vi.mocked(piAgentAPI.sessionsOpen).mockResolvedValue({
+    success: true,
+    session,
+    history: [],
+  })
+  vi.mocked(piAgentAPI.sessionsCreate).mockResolvedValue({
+    success: true,
+    session,
+    history: [],
+  })
+  vi.mocked(piAgentAPI.sessionsSetTabs).mockResolvedValue({ success: true })
+  vi.mocked(piAgentAPI.sessionsClose).mockResolvedValue({ success: true })
+  vi.mocked(piAgentAPI.sessionsRename).mockResolvedValue({ success: true })
+  vi.mocked(piAgentAPI.sessionsDelete).mockResolvedValue({ success: true })
+  vi.mocked(piAgentAPI.onSessionTitle).mockReturnValue(() => {})
   vi.mocked(api.stat).mockResolvedValue({ success: true, isFile: true, isDirectory: false, size: 0 })
   vi.mocked(api.onFsChanged).mockReturnValue(() => {})
   vi.mocked(api.fleetList).mockResolvedValue({ success: true, tasks: [] })
@@ -136,16 +185,15 @@ describe('ChatPanel', () => {
     await waitFor(() => {
       expect(screen.queryByText(translations.zh.apiConfigRequired)).toBeNull()
     })
-    expect(screen.getByText(new RegExp(translations.zh.agentChatTitle))).toBeTruthy()
+    expect(
+      screen.getByRole('heading', { name: translations.zh.agentChatTitle })
+    ).toBeTruthy()
   })
 
   it('renders assistant markdown with highlighted code blocks', async () => {
-    vi.mocked(api.apiConfigGet).mockResolvedValue({
+    vi.mocked(piAgentAPI.sessionsOpen).mockResolvedValue({
       success: true,
-      config: configWithKey,
-    })
-    vi.mocked(piAgentAPI.getHistory).mockResolvedValue({
-      success: true,
+      session,
       history: [
         {
           role: 'assistant',
@@ -165,15 +213,6 @@ describe('ChatPanel', () => {
   })
 
   it('attaches the current editor selection as a snippet', async () => {
-    vi.mocked(api.apiConfigGet).mockResolvedValue({
-      success: true,
-      config: configWithKey,
-    })
-    vi.mocked(piAgentAPI.isInitialized).mockResolvedValue({
-      success: true,
-      initialized: true,
-    })
-
     render(<ChatPanel workspacePath="/ws" />)
     useSelectionStore.getState().setSelection({
       path: '/tmp/a.ts',
@@ -183,14 +222,14 @@ describe('ChatPanel', () => {
       text: 'b\nc\nd',
     })
 
-    const attachButton = screen.getByLabelText(
+    const attachButton = (await screen.findByLabelText(
       translations.zh.attachContext
-    ) as HTMLButtonElement
+    )) as HTMLButtonElement
     await waitFor(() => expect(attachButton.disabled).toBe(false))
     fireEvent.click(attachButton)
     fireEvent.click(screen.getByText(translations.zh.attachSelection))
 
-    expect(useChatStore.getState().attachments[0]).toMatchObject({
+    expect(useChatStore.getState().conversations[sessionKey].attachments[0]).toMatchObject({
       kind: 'snippet',
       path: '/tmp/a.ts',
       startLine: 3,
@@ -199,12 +238,15 @@ describe('ChatPanel', () => {
     expect(screen.getByText('a.ts:3–5')).toBeTruthy()
   })
 
-  it('virtualizes long transcripts instead of rendering every message', async () => {    const messages = Array.from({ length: 200 }, (_, index) => ({
+  it('virtualizes long transcripts instead of rendering every message', async () => {
+    const messages = Array.from({ length: 200 }, (_, index) => ({
       role: 'assistant' as const,
       content: `message ${index}`,
       timestamp: index + 1,
     }))
-    useChatStore.getState().setMessages(messages)
+    useSessionStore.getState().setSessions('/ws', [session])
+    useSessionStore.getState().setOpen('/ws', [session.id], session.id)
+    useChatStore.getState().setMessages(sessionKey, messages)
 
     render(<ChatPanel workspacePath="/ws" />)
 
@@ -213,6 +255,85 @@ describe('ChatPanel', () => {
     })
     expect(document.querySelectorAll('[data-testid="chat-message"]').length).toBeLessThan(60)
     expect(screen.queryByText('message 199')).toBeNull()
+  })
+
+  it('creates a new session and switches between tabs', async () => {
+    const second: SessionSummary = {
+      id: 's2',
+      title: 'Second session',
+      messageCount: 1,
+      createdAt: 2,
+      updatedAt: 3,
+    }
+    vi.mocked(piAgentAPI.sessionsList).mockResolvedValue({
+      success: true,
+      sessions: [session, second],
+      currentId: session.id,
+    })
+    vi.mocked(piAgentAPI.sessionsCreate).mockResolvedValue({
+      success: true,
+      session: second,
+      history: [],
+    })
+    vi.mocked(piAgentAPI.sessionsOpen).mockImplementation(
+      async (_workspace: string, sessionId?: string) =>
+        sessionId === second.id
+          ? {
+              success: true,
+              session: second,
+              history: [{ role: 'assistant', content: 'second history', timestamp: 5 }],
+            }
+          : { success: true, session, history: [] }
+    )
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    const newButton = await screen.findByLabelText(translations.zh.newSession)
+    await waitFor(() => expect(newButton).toBeTruthy())
+    fireEvent.click(newButton)
+
+    await waitFor(() => {
+      expect(piAgentAPI.sessionsCreate).toHaveBeenCalledWith('/ws')
+    })
+    const firstTab = await screen.findByRole('tab', { name: /Session 1/ })
+    fireEvent.click(firstTab)
+    const secondTab = await screen.findByRole('tab', { name: /Second session/ })
+    fireEvent.click(secondTab)
+
+    await waitFor(() => {
+      expect(screen.getByText('second history')).toBeTruthy()
+    })
+    expect(
+      useSessionStore.getState().byWorkspace['/ws'].open
+    ).toEqual(expect.arrayContaining([session.id, second.id]))
+  })
+
+  it('closes a session tab and falls back to another tab', async () => {
+    const second: SessionSummary = {
+      id: 's2',
+      title: 'Second session',
+      messageCount: 0,
+      createdAt: 2,
+      updatedAt: 3,
+    }
+    vi.mocked(piAgentAPI.sessionsList).mockResolvedValue({
+      success: true,
+      sessions: [session, second],
+      currentId: session.id,
+    })
+    vi.mocked(piAgentAPI.sessionsGetTabs).mockResolvedValue({
+      success: true,
+      tabs: { open: ['s1', 's2'], active: 's1' },
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+    const closeButtons = await screen.findAllByLabelText(translations.zh.closeSessionTab)
+    fireEvent.click(closeButtons[0])
+
+    await waitFor(() => {
+      expect(piAgentAPI.sessionsClose).toHaveBeenCalledWith('/ws', 's1')
+    })
+    expect(useSessionStore.getState().byWorkspace['/ws'].active).toBe('s2')
   })
 })
 

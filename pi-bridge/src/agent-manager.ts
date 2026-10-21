@@ -10,7 +10,6 @@ import {
   ModelRuntime,
   SessionManager,
   type AgentSession,
-  type CreateAgentSessionResult,
 } from '@earendil-works/pi-coding-agent'
 import * as path from 'path'
 import * as fs from 'fs/promises'
@@ -29,6 +28,8 @@ const ABORT_GRACE_MS = 10_000
 const ABORT_TIMEOUT_MS = 5_000
 /** 初始化（模型运行时 + 会话创建）超时 */
 const INIT_TIMEOUT_MS = 30_000
+/** 会话标题生成超时 */
+const TITLE_TIMEOUT_MS = 15_000
 /** 与 src/api/chatContext.ts 的标记保持一致 */
 const CONTEXT_BLOCK_START = '<pi-workbench-context>'
 const CONTEXT_BLOCK_END = '</pi-workbench-context>'
@@ -149,6 +150,41 @@ export interface AgentConfig {
   }
   /** 日志出口；主进程注入 agent.log，未注入时退回 console */
   logger?: AgentLogger
+  /** 模型生成会话标题后回调（主进程转发给渲染层） */
+  onSessionTitle?: (sessionId: string, title: string) => void
+}
+
+export interface SessionSummary {
+  id: string
+  title: string
+  messageCount: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface SessionOpenResult {
+  success: boolean
+  session?: SessionSummary
+  history?: AgentMessage[]
+  error?: string
+}
+
+interface SessionRuntime {
+  id: string
+  sessionManager: SessionManager
+  session: AgentSession
+  unsubscribe: (() => void) | null
+  isProcessing: boolean
+  onTextDelta: ((delta: string) => void) | null
+  editSnapshots: Map<string, { path: string; oldContent: string }>
+  pendingEdits: FileEdit[]
+  messageHistory: AgentMessage[]
+  createdAt: number
+  updatedAt: number
+  /** 自动标题只尝试一次 */
+  titleAttempted: boolean
+  /** 未落盘新会话的临时标题 */
+  pendingTitle: string | null
 }
 
 export interface AgentMessage {
@@ -199,21 +235,14 @@ export interface AgentChatOptions {
  * 3. 捕获 Agent 的文件修改，供 Diff 查看器展示
  */
 export class AgentManager {
-  private session: AgentSession | null = null
   private config: AgentConfig | null = null
   private logger: AgentLogger = consoleAgentLogger
-  private messageHistory: AgentMessage[] = []
-  private isProcessing = false
-  private unsubscribe: (() => void) | null = null
-  /** 是否持有 process.env 中的供应商密钥租约 */
+  private modelRuntime: ModelRuntime | null = null
+  private agentDir = ''
+  private sessionDir = ''
   private envLease = false
-
-  /** toolCallId -> 执行前的文件快照 */
-  private editSnapshots = new Map<string, { path: string; oldContent: string }>()
-  /** 本轮对话产生的文件修改 */
-  private pendingEdits: FileEdit[] = []
-  /** 本轮对话的流式回调（chat 期间有效） */
-  private onTextDelta: ((delta: string) => void) | null = null
+  private runtimes = new Map<string, SessionRuntime>()
+  private lastSessionId: string | null = null
 
   /**
    * 将用户配置的 URL / 模型写入 Pi 的 models.json，
@@ -314,15 +343,13 @@ export class AgentManager {
    * 订阅工具执行事件，记录 write/edit 前后的文件内容。
    * Pi 的 write / edit 工具参数分别为 { path, content } 和 { path, edits }。
    */
-  private subscribeToToolEdits(): void {
-    if (!this.session) return
-
-    this.unsubscribe = this.session.subscribe((event: any) => {
+  private subscribeToToolEdits(runtime: SessionRuntime): () => void {
+    return runtime.session.subscribe((event: any) => {
       try {
         if (event.type === 'message_update') {
           const update = event.assistantMessageEvent
           if (update?.type === 'text_delta' && typeof update.delta === 'string') {
-            this.onTextDelta?.(update.delta)
+            runtime.onTextDelta?.(update.delta)
           }
           return
         }
@@ -341,7 +368,7 @@ export class AgentManager {
 
         // 一轮结束：丢弃本轮未闭合的工具快照，避免 Map 无限增长
         if (event.type === 'turn_end' || event.type === 'agent_end') {
-          this.editSnapshots.clear()
+          runtime.editSnapshots.clear()
           return
         }
 
@@ -350,18 +377,18 @@ export class AgentManager {
           const target = this.resolveToolPath(event.args?.path)
           if (!target || !this.isInsideWorkspace(target)) return
           const oldContent = existsSync(target) ? readFileSync(target, 'utf-8') : ''
-          this.editSnapshots.set(event.toolCallId, { path: target, oldContent })
+          runtime.editSnapshots.set(event.toolCallId, { path: target, oldContent })
           return
         }
 
         if (event.type === 'tool_execution_end') {
-          const snapshot = this.editSnapshots.get(event.toolCallId)
+          const snapshot = runtime.editSnapshots.get(event.toolCallId)
           if (!snapshot) return
-          this.editSnapshots.delete(event.toolCallId)
+          runtime.editSnapshots.delete(event.toolCallId)
 
           const newContent = existsSync(snapshot.path) ? readFileSync(snapshot.path, 'utf-8') : ''
           if (newContent !== snapshot.oldContent) {
-            this.pendingEdits.push({
+            runtime.pendingEdits.push({
               path: snapshot.path,
               oldContent: snapshot.oldContent,
               newContent,
@@ -375,15 +402,20 @@ export class AgentManager {
   }
 
   /**
-   * 初始化 Agent 会话
-   *
-   * @param config Agent 配置
-   * @returns 初始化结果
+   * 初始化共享运行时（models.json / ModelRuntime / 环境租约），并打开最近会话。
+   * 多会话共用同一模型运行时；每个会话是独立的 SessionRuntime。
    */
   async initialize(config: AgentConfig): Promise<{ success: boolean; error?: string }> {
     let initialized = false
     this.logger = config.logger ?? consoleAgentLogger
     try {
+      await this.disposeAllRuntimes()
+      if (this.envLease) {
+        releaseProviderEnv()
+        this.envLease = false
+      }
+
+      this.config = config
       const { provider, apiUrl, apiKey, selectedModel } = config.apiConfig
 
       this.logger.info('[Agent Manager] Initializing agent...')
@@ -392,100 +424,40 @@ export class AgentManager {
       this.logger.info('[Agent Manager] API URL:', apiUrl)
       this.logger.info('[Agent Manager] Model:', selectedModel)
 
-      this.config = config
-
-      // 重新初始化时释放旧会话：先中止进行中的请求，再释放会话与环境租约
-      if (this.session) {
-        if (this.isProcessing) {
-          try {
-            await withTimeout(this.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
-          } catch (error) {
-            this.logger.warn('[Agent Manager] Failed to abort previous request:', error)
-          }
-        }
-        try {
-          this.unsubscribe?.()
-          this.unsubscribe = null
-          this.session.dispose()
-        } catch (error) {
-          this.logger.warn('[Agent Manager] Failed to dispose previous session:', error)
-        }
-        this.session = null
-        this.isProcessing = false
-      }
-      if (this.envLease) {
-        releaseProviderEnv()
-        this.envLease = false
-      }
-
-      const agentDir = config.agentDir || path.join(config.workspaceDir, '.pi-workbench', 'agent')
-      const modelsPath = await this.writeModelsConfig(agentDir, config)
-
-      // Windows: 确保 bash 工具能找到 Git Bash
+      this.agentDir =
+        config.agentDir || path.join(config.workspaceDir, '.pi-workbench', 'agent')
+      const modelsPath = await this.writeModelsConfig(this.agentDir, config)
       this.ensureBashOnPath()
 
-      // API Key 通过环境变量提供给 models.json（不写入磁盘）；多实例共享，引用计数释放
       acquireProviderEnv(apiKey, provider)
       this.envLease = true
 
-      // 使用 models.json 构建运行时，并显式选中用户配置的模型
-      const modelRuntime = await withTimeout(
+      this.modelRuntime = await withTimeout(
         ModelRuntime.create({
           modelsPath,
-          authPath: path.join(agentDir, 'auth.json'),
+          authPath: path.join(this.agentDir, 'auth.json'),
           refreshOnCreate: false,
         }),
         INIT_TIMEOUT_MS,
         'Agent model runtime'
       )
 
-      const model = modelRuntime.getModel(WORKBENCH_PROVIDER_ID, selectedModel)
+      const model = this.modelRuntime.getModel(WORKBENCH_PROVIDER_ID, selectedModel)
       if (!model) {
-        return {
-          success: false,
-          error: `Model "${selectedModel}" not found. Please fetch models again in Settings.`,
-        }
+        throw new Error(`Model "${selectedModel}" not found. Please fetch models again in Settings.`)
       }
 
-      // 同一工作区恢复最近的会话（跨重启保留上下文）
-      const sessionDir = path.join(agentDir, 'sessions')
-      const sessionManager = SessionManager.continueRecent(config.workspaceDir, sessionDir)
-
-      // 创建 Pi Coding Agent 会话（自带 read/write/edit/bash 工具）
-      const sessionPromise = createAgentSession({
-        cwd: config.workspaceDir,
-        agentDir,
-        modelRuntime,
-        model,
-        sessionManager,
-      })
-      const sessionOutcome = await withTimeoutResult(
-        sessionPromise,
-        INIT_TIMEOUT_MS,
-        'Agent session creation',
-        this.logger
-      )
-      if (!sessionOutcome) {
-        // 超时后底层创建仍可能晚到成功：等它落地并释放，避免会话/句柄泄漏
-        void sessionPromise
-          .then((late) => {
-            try {
-              late.session?.dispose()
-            } catch {
-              // ignore
-            }
-          })
-          .catch(() => undefined)
-        throw new Error(`Agent session creation timed out after ${INIT_TIMEOUT_MS}ms`)
-      }
-      const result: CreateAgentSessionResult = sessionOutcome.value
-
-      this.session = result.session
-      this.subscribeToToolEdits()
+      this.sessionDir = path.join(this.agentDir, 'sessions')
+      const sessionManager = SessionManager.continueRecent(config.workspaceDir, this.sessionDir)
+      const runtime = await this.createRuntime(sessionManager)
+      this.lastSessionId = runtime.id
 
       this.logger.info('[Agent Manager] Agent initialized successfully')
       this.logger.info('[Agent Manager] Using model:', `${model.provider}/${model.id}`)
-      this.logger.info('[Agent Manager] Session file:', sessionManager.getSessionFile() ?? '(new, not persisted yet)')
+      this.logger.info(
+        '[Agent Manager] Session file:',
+        sessionManager.getSessionFile() ?? '(new, not persisted yet)'
+      )
 
       initialized = true
       return { success: true }
@@ -495,243 +467,128 @@ export class AgentManager {
       this.logger.error('[Agent Manager] Stack:', error instanceof Error ? error.stack : '')
       return {
         success: false,
-        error: `Failed to initialize agent: ${errorMessage}`
+        error: `Failed to initialize agent: ${errorMessage}`,
       }
     } finally {
-      // 初始化失败（含模型不存在等提前返回）时立即归还环境租约
-      if (!initialized && this.envLease) {
-        releaseProviderEnv()
-        this.envLease = false
+      if (!initialized) {
+        this.runtimes.clear()
+        this.modelRuntime = null
+        if (this.envLease) {
+          releaseProviderEnv()
+          this.envLease = false
+        }
       }
     }
   }
 
-  /**
-   * 发送消息给 Agent
-   *
-   * @param message 用户消息
-   * @returns Agent 响应（含本轮文件修改）
-   */
-  async chat(message: string, options?: AgentChatOptions): Promise<AgentChatResult> {
-    if (!this.session) {
-      return {
-        success: false,
-        error: 'Agent not initialized. Please initialize first.',
-      }
-    }
-
-    if (this.isProcessing) {
-      return {
-        success: false,
-        error: 'Agent is currently processing another request.',
-      }
-    }
-
-    const timeoutMs = options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-    let timeoutTimer: NodeJS.Timeout | null = null
-    let hardStopTimer: NodeJS.Timeout | null = null
-    let timedOut = false
-    let hardStopped = false
-
-    try {
-      this.isProcessing = true
-      this.onTextDelta = options?.onTextDelta ?? null
-      this.pendingEdits = []
-      this.editSnapshots.clear()
-      // 只认本轮新增的 assistant 消息，避免请求失败时把上一轮回复当成本轮结果
-      const messageStartIndex = this.session.messages.length
-      this.logger.info('[Agent Manager] Sending message to agent:', message.substring(0, 100))
-
-      // 记录用户消息
-      this.messageHistory.push({
-        role: 'user',
-        content: message,
-        timestamp: Date.now(),
-      })
-
-      // 发送用户消息并等待 Agent 完成；超时先 abort，宽限期后仍未结束则强制收尾
-      const session = this.session
-      const promptPromise = session.prompt(message)
-      const timeoutPromise = new Promise<never>((_resolve, reject) => {
-        if (timeoutMs <= 0) return
-        timeoutTimer = setTimeout(() => {
-          timedOut = true
-          this.logger.warn(`[Agent Manager] Request timed out after ${timeoutMs}ms; aborting`)
-          void session.abort().catch((error) => {
-            this.logger.warn('[Agent Manager] Failed to abort timed-out request:', error)
-          })
-          hardStopTimer = setTimeout(() => {
-            hardStopped = true
-            reject(new Error(`Agent request did not stop within ${ABORT_GRACE_MS}ms after abort`))
-          }, ABORT_GRACE_MS)
-          hardStopTimer.unref?.()
-        }, timeoutMs)
-        timeoutTimer.unref?.()
-      })
-      await Promise.race([promptPromise, timeoutPromise])
-
-      // 正常完成时清掉计时器；超时路径由 finally 统一清理
-      if (timeoutTimer) clearTimeout(timeoutTimer)
-      if (hardStopTimer) clearTimeout(hardStopTimer)
-
-      // 收集本轮文件修改（在读取回复前取出，确保不串到下一轮）
-      const edits = this.pendingEdits.splice(0)
-
-      if (timedOut) {
-        return {
-          success: false,
-          error: `Agent request timed out after ${Math.round(timeoutMs / 1000)}s`,
-          edits,
-        }
-      }
-
-      // 获取 Agent 的最新消息
-      const messages = this.session.messages
-
-      // 只从本轮开始的位置往后找最后一条 assistant 消息
-      let lastAssistant: any = null
-      for (let i = messages.length - 1; i >= messageStartIndex; i--) {
-        if (messages[i].role === 'assistant') {
-          lastAssistant = messages[i]
-          break
-        }
-      }
-
-      if (!lastAssistant) {
-        return { success: false, error: 'Agent did not produce a response.', edits }
-      }
-
-      const usage = this.readUsage(lastAssistant)
-
-      // Pi 在请求失败时不会抛异常，而是把错误放在 stopReason/errorMessage 中
-      if (lastAssistant.stopReason === 'error') {
-        const detail = lastAssistant.errorMessage || 'Agent request failed'
-        this.logger.error('[Agent Manager] Provider error:', detail)
-        return { success: false, error: detail, edits, usage }
-      }
-      if (lastAssistant.stopReason === 'aborted') {
-        return { success: false, error: 'Agent request was aborted.', edits, usage }
-      }
-
-      let assistantResponse = ''
-      if (typeof lastAssistant.content === 'string') {
-        assistantResponse = lastAssistant.content
-      } else if (Array.isArray(lastAssistant.content)) {
-        assistantResponse = lastAssistant.content
-          .filter((part: any) => part.type === 'text')
-          .map((part: any) => part.text)
-          .join('\n')
-      }
-
-      if (!assistantResponse) {
-        assistantResponse = 'Agent completed but returned no text response.'
-      }
-
-      // 记录 Assistant 响应
-      this.messageHistory.push({
-        role: 'assistant',
-        content: assistantResponse,
-        timestamp: Date.now(),
-      })
-
-      this.logger.info('[Agent Manager] Agent response received')
-      this.logger.info('[Agent Manager] Response preview:', assistantResponse.substring(0, 200))
-      if (edits.length > 0) {
-        this.logger.info('[Agent Manager] Files edited:', edits.map(e => e.path).join(', '))
-      }
-
-      return {
-        success: true,
-        response: assistantResponse,
-        edits,
-        usage,
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
-      if (timedOut) {
-        this.logger.error('[Agent Manager] Request timed out:', errorMessage)
-        const edits = this.pendingEdits.splice(0)
-        // SDK 没有响应 abort：销毁旧会话，避免迟到的流式/工具事件污染下一轮
-        if (hardStopped) {
-          await this.resetSessionAfterHardStop()
-        }
-        return {
-          success: false,
-          error: `Agent request timed out after ${Math.round(timeoutMs / 1000)}s`,
-          edits,
-        }
-      }
-      this.logger.error('[Agent Manager] Chat error:', errorMessage)
-      this.logger.error('[Agent Manager] Stack:', error instanceof Error ? error.stack : '')
-
-      return {
-        success: false,
-        error: `Agent error: ${errorMessage}`,
-        edits: this.pendingEdits.splice(0),
-      }
-    } finally {
-      if (timeoutTimer) clearTimeout(timeoutTimer)
-      if (hardStopTimer) clearTimeout(hardStopTimer)
-      this.isProcessing = false
-      this.onTextDelta = null
-    }
-  }
-
-  /** 中止当前请求（用户手动停止或超时） */
-  async abort(): Promise<void> {
-    if (!this.session) return
-    try {
-      await withTimeout(this.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
-    } catch (error) {
-      this.logger.warn('[Agent Manager] Failed to abort request:', error)
-    }
-  }
-
-  /**
-   * 硬超时后销毁旧会话并重建：迟到的流式/工具事件随订阅一起消失，
-   * 下一轮不会继承上一轮的输出或文件修改。
-   */
-  private async resetSessionAfterHardStop(): Promise<void> {
+  /** 创建（或复用）一个会话运行时 */
+  private async createRuntime(sessionManager: SessionManager): Promise<SessionRuntime> {
     const config = this.config
+    const modelRuntime = this.modelRuntime
+    if (!config || !modelRuntime) throw new Error('Agent not initialized.')
+
+    const id = sessionManager.getSessionId()
+    const existing = this.runtimes.get(id)
+    if (existing) return existing
+
+    const model = modelRuntime.getModel(WORKBENCH_PROVIDER_ID, config.apiConfig.selectedModel)
+    if (!model) throw new Error('Selected model is unavailable.')
+
+    const sessionPromise = createAgentSession({
+      cwd: config.workspaceDir,
+      agentDir: this.agentDir,
+      modelRuntime,
+      model,
+      sessionManager,
+    })
+    const sessionOutcome = await withTimeoutResult(
+      sessionPromise,
+      INIT_TIMEOUT_MS,
+      'Agent session creation',
+      this.logger
+    )
+    if (!sessionOutcome) {
+      // 超时后底层创建仍可能晚到成功：等它落地并释放，避免会话/句柄泄漏
+      void sessionPromise
+        .then((late) => {
+          try {
+            late.session?.dispose()
+          } catch {
+            // ignore
+          }
+        })
+        .catch(() => undefined)
+      throw new Error(`Agent session creation timed out after ${INIT_TIMEOUT_MS}ms`)
+    }
+
+    const header = sessionManager.getHeader()
+    const createdAt = header?.timestamp ? Date.parse(header.timestamp) : Date.now()
+    const runtime: SessionRuntime = {
+      id,
+      sessionManager,
+      session: sessionOutcome.value.session,
+      unsubscribe: null,
+      isProcessing: false,
+      onTextDelta: null,
+      editSnapshots: new Map(),
+      pendingEdits: [],
+      messageHistory: [],
+      createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
+      updatedAt: Date.now(),
+      titleAttempted: false,
+      pendingTitle: null,
+    }
+    runtime.unsubscribe = this.subscribeToToolEdits(runtime)
+    this.runtimes.set(id, runtime)
+    return runtime
+  }
+
+  private async disposeRuntime(runtime: SessionRuntime): Promise<void> {
+    if (runtime.isProcessing) {
+      try {
+        await withTimeout(runtime.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
+      } catch (error) {
+        this.logger.warn('[Agent Manager] Failed to abort before dispose:', error)
+      }
+    }
     try {
-      this.unsubscribe?.()
+      runtime.unsubscribe?.()
     } catch {
       // ignore
     }
-    this.unsubscribe = null
-    if (this.session) {
-      try {
-        this.session.dispose()
-      } catch (error) {
-        this.logger.warn('[Agent Manager] Failed to dispose stuck session:', error)
-      }
-      this.session = null
-    }
-    this.editSnapshots.clear()
-
-    if (!config) return
+    runtime.unsubscribe = null
     try {
-      const result = await this.initialize(config)
-      if (!result.success) {
-        this.logger.error('[Agent Manager] Failed to reinitialize after hard stop:', result.error)
-      }
+      runtime.session.dispose()
     } catch (error) {
-      this.logger.error('[Agent Manager] Failed to reinitialize after hard stop:', error)
+      this.logger.warn('[Agent Manager] Failed to dispose session:', error)
     }
+    this.runtimes.delete(runtime.id)
+    if (this.lastSessionId === runtime.id) this.lastSessionId = null
   }
 
-  /**
-   * 获取消息历史（本轮进程内的增量）
-   */
-  getMessageHistory(): AgentMessage[] {
-    return this.messageHistory
+  private async disposeAllRuntimes(): Promise<void> {
+    for (const runtime of [...this.runtimes.values()]) {
+      await this.disposeRuntime(runtime)
+    }
+    this.runtimes.clear()
+    this.lastSessionId = null
   }
 
-  /**
-   * 从持久化的 Pi 会话中恢复可展示的对话历史
-   */
-  getSessionMessages(): AgentMessage[] {
-    const messages = this.session?.messages ?? []
+  /** 确保某个会话已有运行时（不存在则从磁盘打开） */
+  private async ensureRuntime(sessionId: string): Promise<SessionRuntime> {
+    const existing = this.runtimes.get(sessionId)
+    if (existing) return existing
+
+    const config = this.config
+    if (!config) throw new Error('Agent not initialized.')
+    const file = SessionManager.findById(config.workspaceDir, sessionId, this.sessionDir)
+    if (!file) throw new Error('Session not found.')
+    const manager = SessionManager.open(file, this.sessionDir, config.workspaceDir)
+    return this.createRuntime(manager)
+  }
+
+  private sessionMessages(runtime: SessionRuntime): AgentMessage[] {
+    const messages = runtime.session.messages ?? []
     const result: AgentMessage[] = []
 
     for (const msg of messages) {
@@ -762,46 +619,629 @@ export class AgentManager {
     return result
   }
 
+  private runtimeSummary(runtime: SessionRuntime): SessionSummary {
+    const messages = runtime.session.messages ?? []
+    const name = runtime.pendingTitle ?? runtime.sessionManager.getSessionName()
+    let firstUser = ''
+    let messageCount = 0
+    for (const msg of messages) {
+      if (msg.role !== 'user' && msg.role !== 'assistant') continue
+      messageCount += 1
+      if (!firstUser && msg.role === 'user') {
+        const content =
+          typeof msg.content === 'string'
+            ? msg.content
+            : Array.isArray(msg.content)
+              ? msg.content
+                  .filter((part: any) => part.type === 'text')
+                  .map((part: any) => part.text)
+                  .join('\n')
+              : ''
+        firstUser = stripContextBlock(content)
+      }
+    }
+
+    return {
+      id: runtime.id,
+      title: (name?.trim() || firstUser.trim()).slice(0, 60),
+      messageCount,
+      createdAt: runtime.createdAt,
+      updatedAt: runtime.updatedAt,
+    }
+  }
+
+  /** 打开指定会话；不传则继续最近会话 */
+  async openSession(sessionId?: string): Promise<SessionOpenResult> {
+    try {
+      if (!this.modelRuntime || !this.config) {
+        return { success: false, error: 'Agent not initialized.' }
+      }
+
+      let runtime: SessionRuntime
+      if (sessionId) {
+        runtime = await this.ensureRuntime(sessionId)
+      } else if (this.lastSessionId && this.runtimes.has(this.lastSessionId)) {
+        runtime = this.runtimes.get(this.lastSessionId)!
+      } else {
+        const manager = SessionManager.continueRecent(
+          this.config.workspaceDir,
+          this.sessionDir
+        )
+        runtime = await this.createRuntime(manager)
+      }
+
+      this.lastSessionId = runtime.id
+      return {
+        success: true,
+        session: this.runtimeSummary(runtime),
+        history: this.sessionMessages(runtime),
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
+  /** 新建会话（第一条消息前不落盘） */
+  async createSession(): Promise<SessionOpenResult> {
+    try {
+      if (!this.modelRuntime || !this.config) {
+        return { success: false, error: 'Agent not initialized.' }
+      }
+      const manager = SessionManager.create(this.config.workspaceDir, this.sessionDir)
+      const runtime = await this.createRuntime(manager)
+      this.lastSessionId = runtime.id
+      return {
+        success: true,
+        session: this.runtimeSummary(runtime),
+        history: [],
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
+  /** 列出当前工作区的全部会话（合并内存中尚未落盘的新会话） */
+  async listSessions(): Promise<SessionSummary[]> {
+    const config = this.config
+    if (!config) return []
+
+    const sessions = new Map<string, SessionSummary>()
+    try {
+      const infos = await SessionManager.list(config.workspaceDir, this.sessionDir)
+      for (const info of infos) {
+        sessions.set(info.id, {
+          id: info.id,
+          title: (info.name?.trim() || stripContextBlock(info.firstMessage ?? '').trim()).slice(
+            0,
+            60
+          ),
+          messageCount: info.messageCount,
+          createdAt: info.created.getTime(),
+          updatedAt: info.modified.getTime(),
+        })
+      }
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Failed to list sessions:', error)
+    }
+
+    for (const runtime of this.runtimes.values()) {
+      const summary = this.runtimeSummary(runtime)
+      const existing = sessions.get(summary.id)
+      if (!existing || summary.updatedAt >= existing.updatedAt) {
+        sessions.set(summary.id, summary)
+      }
+    }
+
+    return [...sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  /** 关闭会话运行时（保留会话文件） */
+  async closeSession(sessionId: string): Promise<void> {
+    const runtime = this.runtimes.get(sessionId)
+    if (!runtime) return
+    await this.disposeRuntime(runtime)
+  }
+
+  /** 重命名会话；新会话尚未落盘时先保存为待写入标题 */
+  async renameSession(sessionId: string, name: string): Promise<{ success: boolean; error?: string }> {
+    const title = name.trim().slice(0, 80)
+    if (!title) return { success: false, error: 'Session name cannot be empty.' }
+    try {
+      const runtime = this.runtimes.get(sessionId)
+      if (runtime) {
+        runtime.pendingTitle = title
+        if (runtime.sessionManager.isPersisted()) {
+          runtime.sessionManager.appendSessionInfo(title)
+          runtime.pendingTitle = null
+        }
+        runtime.updatedAt = Date.now()
+        return { success: true }
+      }
+      const config = this.config
+      if (!config) return { success: false, error: 'Agent not initialized.' }
+      const file = SessionManager.findById(config.workspaceDir, sessionId, this.sessionDir)
+      if (!file) return { success: false, error: 'Session not found.' }
+      const manager = SessionManager.open(file, this.sessionDir, config.workspaceDir)
+      manager.appendSessionInfo(title)
+      return { success: true }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
+  /** 删除会话（先释放运行时，再删除会话文件） */
+  async deleteSession(sessionId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const config = this.config
+      if (!config) return { success: false, error: 'Agent not initialized.' }
+      const file = SessionManager.findById(config.workspaceDir, sessionId, this.sessionDir)
+      await this.closeSession(sessionId)
+      if (!file) return { success: true }
+
+      const resolved = path.resolve(file)
+      const root = path.resolve(this.sessionDir)
+      if (!resolved.startsWith(root + path.sep)) {
+        return { success: false, error: 'Refusing to delete a session outside the session directory.' }
+      }
+      await fs.unlink(resolved).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error
+      })
+      return { success: true }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
+  getCurrentSessionId(): string | null {
+    return this.lastSessionId
+  }
+
   /**
-   * 清理资源
+   * 发送消息给 Agent。
+   *
+   * 支持两种调用方式：
+   * - chat(message, options)               默认使用最近打开/创建的会话（Fleet 等兼容路径）
+   * - chat(sessionId, message, options)    指定会话；不同会话可以并行
+   */
+  async chat(message: string, options?: AgentChatOptions): Promise<AgentChatResult>
+  async chat(
+    sessionId: string,
+    message: string,
+    options?: AgentChatOptions
+  ): Promise<AgentChatResult>
+  async chat(
+    sessionIdOrMessage: string,
+    messageOrOptions?: string | AgentChatOptions,
+    maybeOptions?: AgentChatOptions
+  ): Promise<AgentChatResult> {
+    const hasSessionId = typeof messageOrOptions === 'string'
+    const sessionId = hasSessionId ? sessionIdOrMessage : this.lastSessionId
+    const message = hasSessionId ? (messageOrOptions as string) : sessionIdOrMessage
+    const options = hasSessionId
+      ? maybeOptions
+      : (messageOrOptions as AgentChatOptions | undefined)
+
+    // 已有运行时时同步置位，避免 dispose 在 await 间隙漏掉正在启动的请求
+    let runtime: SessionRuntime | null = sessionId
+      ? this.runtimes.get(sessionId) ?? null
+      : this.lastSessionId
+        ? this.runtimes.get(this.lastSessionId) ?? null
+        : null
+
+    if (runtime) {
+      if (runtime.isProcessing) {
+        return {
+          success: false,
+          error: 'This session is currently processing another request.',
+        }
+      }
+      runtime.isProcessing = true
+    } else {
+      try {
+        if (sessionId) {
+          runtime = await this.ensureRuntime(sessionId)
+        } else {
+          const opened = await this.openSession()
+          if (!opened.success) {
+            return { success: false, error: opened.error || 'Agent not initialized.' }
+          }
+          runtime = this.runtimes.get(this.lastSessionId ?? '') ?? null
+        }
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
+
+      if (!runtime) {
+        return {
+          success: false,
+          error: 'Agent not initialized. Please initialize first.',
+        }
+      }
+      if (runtime.isProcessing) {
+        return {
+          success: false,
+          error: 'This session is currently processing another request.',
+        }
+      }
+      runtime.isProcessing = true
+    }
+
+    this.lastSessionId = runtime.id
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    let timeoutTimer: NodeJS.Timeout | null = null
+    let hardStopTimer: NodeJS.Timeout | null = null
+    let timedOut = false
+    let hardStopped = false
+
+    try {
+      runtime.onTextDelta = options?.onTextDelta ?? null
+      runtime.pendingEdits = []
+      runtime.editSnapshots.clear()
+      // 只认本轮新增的 assistant 消息，避免请求失败时把上一轮回复当成本轮结果
+      const messageStartIndex = runtime.session.messages.length
+      this.logger.info(
+        `[Agent Manager] Sending message to session ${runtime.id}:`,
+        message.substring(0, 100)
+      )
+
+      runtime.messageHistory.push({
+        role: 'user',
+        content: message,
+        timestamp: Date.now(),
+      })
+
+      // 发送用户消息并等待 Agent 完成；超时先 abort，宽限期后仍未结束则强制收尾
+      const session = runtime.session
+      const promptPromise = session.prompt(message)
+      const timeoutPromise = new Promise<never>((_resolve, reject) => {
+        if (timeoutMs <= 0) return
+        timeoutTimer = setTimeout(() => {
+          timedOut = true
+          this.logger.warn(`[Agent Manager] Request timed out after ${timeoutMs}ms; aborting`)
+          void session.abort().catch((error) => {
+            this.logger.warn('[Agent Manager] Failed to abort timed-out request:', error)
+          })
+          hardStopTimer = setTimeout(() => {
+            hardStopped = true
+            reject(new Error(`Agent request did not stop within ${ABORT_GRACE_MS}ms after abort`))
+          }, ABORT_GRACE_MS)
+          hardStopTimer.unref?.()
+        }, timeoutMs)
+        timeoutTimer.unref?.()
+      })
+      await Promise.race([promptPromise, timeoutPromise])
+
+      if (timeoutTimer) clearTimeout(timeoutTimer)
+      if (hardStopTimer) clearTimeout(hardStopTimer)
+
+      // 收集本轮文件修改（在读取回复前取出，确保不串到下一轮）
+      const edits = runtime.pendingEdits.splice(0)
+
+      if (timedOut) {
+        return {
+          success: false,
+          error: `Agent request timed out after ${Math.round(timeoutMs / 1000)}s`,
+          edits,
+        }
+      }
+
+      const messages = runtime.session.messages
+
+      // 只从本轮开始的位置往后找最后一条 assistant 消息
+      let lastAssistant: any = null
+      for (let i = messages.length - 1; i >= messageStartIndex; i--) {
+        if (messages[i].role === 'assistant') {
+          lastAssistant = messages[i]
+          break
+        }
+      }
+
+      if (!lastAssistant) {
+        return { success: false, error: 'Agent did not produce a response.', edits }
+      }
+
+      const usage = this.readUsage(lastAssistant)
+
+      if (lastAssistant.stopReason === 'error') {
+        const detail = lastAssistant.errorMessage || 'Agent request failed'
+        this.logger.error('[Agent Manager] Provider error:', detail)
+        return { success: false, error: detail, edits, usage }
+      }
+      if (lastAssistant.stopReason === 'aborted') {
+        return { success: false, error: 'Agent request was aborted.', edits, usage }
+      }
+
+      let assistantResponse = ''
+      if (typeof lastAssistant.content === 'string') {
+        assistantResponse = lastAssistant.content
+      } else if (Array.isArray(lastAssistant.content)) {
+        assistantResponse = lastAssistant.content
+          .filter((part: any) => part.type === 'text')
+          .map((part: any) => part.text)
+          .join('\n')
+      }
+
+      if (!assistantResponse) {
+        assistantResponse = 'Agent completed but returned no text response.'
+      }
+
+      runtime.messageHistory.push({
+        role: 'assistant',
+        content: assistantResponse,
+        timestamp: Date.now(),
+      })
+      runtime.updatedAt = Date.now()
+
+      // 未落盘的临时标题在会话首次落盘后写入
+      if (runtime.pendingTitle && runtime.sessionManager.isPersisted()) {
+        try {
+          runtime.sessionManager.appendSessionInfo(runtime.pendingTitle)
+          runtime.pendingTitle = null
+        } catch (error) {
+          this.logger.warn('[Agent Manager] Failed to persist pending session title:', error)
+        }
+      }
+
+      // 第一轮成功后异步生成标题，不阻塞聊天
+      void this.maybeGenerateTitle(runtime)
+
+      this.logger.info('[Agent Manager] Agent response received')
+      this.logger.info('[Agent Manager] Response preview:', assistantResponse.substring(0, 200))
+      if (edits.length > 0) {
+        this.logger.info('[Agent Manager] Files edited:', edits.map((e) => e.path).join(', '))
+      }
+
+      return {
+        success: true,
+        response: assistantResponse,
+        edits,
+        usage,
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      if (timedOut) {
+        this.logger.error('[Agent Manager] Request timed out:', errorMessage)
+        const edits = runtime.pendingEdits.splice(0)
+        if (hardStopped) {
+          await this.resetRuntimeAfterHardStop(runtime)
+        }
+        return {
+          success: false,
+          error: `Agent request timed out after ${Math.round(timeoutMs / 1000)}s`,
+          edits,
+        }
+      }
+      this.logger.error('[Agent Manager] Chat error:', errorMessage)
+      this.logger.error('[Agent Manager] Stack:', error instanceof Error ? error.stack : '')
+
+      return {
+        success: false,
+        error: `Agent error: ${errorMessage}`,
+        edits: runtime.pendingEdits.splice(0),
+      }
+    } finally {
+      if (timeoutTimer) clearTimeout(timeoutTimer)
+      if (hardStopTimer) clearTimeout(hardStopTimer)
+      if (this.runtimes.get(runtime.id) === runtime) {
+        runtime.isProcessing = false
+        runtime.onTextDelta = null
+      }
+    }
+  }
+
+  /** 中止某个会话的请求；不传 sessionId 时中止全部会话 */
+  async abort(sessionId?: string): Promise<void> {
+    const runtimes = sessionId
+      ? [this.runtimes.get(sessionId)].filter((runtime): runtime is SessionRuntime => Boolean(runtime))
+      : [...this.runtimes.values()]
+
+    for (const runtime of runtimes) {
+      try {
+        await withTimeout(runtime.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
+      } catch (error) {
+        this.logger.warn('[Agent Manager] Failed to abort request:', error)
+      }
+    }
+  }
+
+  /**
+   * 硬超时后销毁该会话的旧运行时并重建：迟到的流式/工具事件随订阅一起消失，
+   * 下一轮不会继承上一轮的输出或文件修改。其他会话不受影响。
+   */
+  private async resetRuntimeAfterHardStop(runtime: SessionRuntime): Promise<void> {
+    const id = runtime.id
+    await this.disposeRuntime(runtime)
+    const config = this.config
+    if (!config) return
+
+    try {
+      const file = SessionManager.findById(config.workspaceDir, id, this.sessionDir)
+      const manager = file
+        ? SessionManager.open(file, this.sessionDir, config.workspaceDir)
+        : SessionManager.create(config.workspaceDir, this.sessionDir)
+      const next = await this.createRuntime(manager)
+      this.lastSessionId = next.id
+    } catch (error) {
+      this.logger.error('[Agent Manager] Failed to reinitialize after hard stop:', error)
+    }
+  }
+
+  /** 获取某个会话在进程内的增量历史 */
+  getMessageHistory(sessionId?: string): AgentMessage[] {
+    const runtime = sessionId
+      ? this.runtimes.get(sessionId)
+      : this.lastSessionId
+        ? this.runtimes.get(this.lastSessionId)
+        : undefined
+    return runtime?.messageHistory ?? []
+  }
+
+  /** 从持久化的 Pi 会话中恢复可展示的对话历史 */
+  getSessionMessages(sessionId?: string): AgentMessage[] {
+    const runtime = sessionId
+      ? this.runtimes.get(sessionId)
+      : this.lastSessionId
+        ? this.runtimes.get(this.lastSessionId)
+        : undefined
+    return runtime ? this.sessionMessages(runtime) : []
+  }
+
+  private messageText(content: unknown): string {
+    if (typeof content === 'string') return content
+    if (Array.isArray(content)) {
+      return content
+        .filter((part: any) => part.type === 'text')
+        .map((part: any) => part.text)
+        .join('\n')
+    }
+    return ''
+  }
+
+  /** 第一轮成功后生成会话标题；每个会话只尝试一次，不阻塞聊天 */
+  private async maybeGenerateTitle(runtime: SessionRuntime): Promise<void> {
+    if (runtime.titleAttempted) return
+    runtime.titleAttempted = true
+
+    const config = this.config
+    if (!config?.onSessionTitle) return
+    if (runtime.sessionManager.getSessionName() || runtime.pendingTitle) return
+
+    const messages = runtime.session.messages ?? []
+    const firstUser = messages.find((msg: any) => msg.role === 'user') as any
+    const firstAssistant = messages.find((msg: any) => msg.role === 'assistant') as any
+    if (!firstUser || !firstAssistant) return
+
+    const userText = stripContextBlock(this.messageText(firstUser.content)).trim()
+    const assistantText = this.messageText(firstAssistant.content).trim()
+    if (!userText || !assistantText) return
+
+    const prompt = [
+      '你是一个会话命名器。根据下面的对话生成一个简短标题。',
+      '要求：只输出标题本身，不加引号、不加标点、不要解释；使用对话的主要语言；中文不超过 16 个字，英文不超过 8 个词。',
+      '',
+      `用户：${userText.slice(0, 800)}`,
+      `助手：${assistantText.slice(0, 800)}`,
+    ].join('\n')
+
+    const raw = await this.requestTitle(prompt)
+    if (!raw) return
+
+    const title = raw
+      .split(/\r?\n/)[0]
+      .replace(/^(标题|title)\s*[:：]\s*/i, '')
+      .replace(/^["'“”‘’\s]+|["'“”‘’\s]+$/g, '')
+      .trim()
+      .slice(0, 40)
+    if (!title) return
+
+    // 生成期间用户可能已手动重命名、删除会话或切换走
+    if (!this.runtimes.has(runtime.id)) return
+    if (runtime.sessionManager.getSessionName() || runtime.pendingTitle) return
+
+    try {
+      runtime.sessionManager.appendSessionInfo(title)
+      runtime.updatedAt = Date.now()
+      config.onSessionTitle?.(runtime.id, title)
+      this.logger.info('[Agent Manager] Generated session title:', title)
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Failed to persist session title:', error)
+    }
+  }
+
+  /** 用配置的供应商生成一个短标题（OpenAI 兼容 / Anthropic） */
+  private async requestTitle(prompt: string): Promise<string | null> {
+    const config = this.config
+    if (!config) return null
+    const { provider, apiUrl, apiKey, selectedModel } = config.apiConfig
+    const base = apiUrl.replace(/\/+$/, '')
+    if (!base) return null
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS)
+    try {
+      if (provider === 'anthropic') {
+        const response = await fetch(`${base}/messages`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: selectedModel,
+            max_tokens: 64,
+            temperature: 0.2,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          signal: controller.signal,
+        })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const data = (await response.json()) as any
+        return typeof data?.content?.[0]?.text === 'string' ? data.content[0].text : null
+      }
+
+      const response = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          max_tokens: 64,
+          temperature: 0.2,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+        signal: controller.signal,
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const data = (await response.json()) as any
+      const content = data?.choices?.[0]?.message?.content
+      return typeof content === 'string' ? content : null
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Title generation failed:', error)
+      return null
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
+   * 清理所有会话与共享资源
    */
   async dispose() {
-    if (this.session && this.isProcessing) {
-      try {
-        await withTimeout(this.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
-      } catch (error) {
-        this.logger.warn('[Agent Manager] Failed to abort before dispose:', error)
-      }
-    }
-    if (this.unsubscribe) {
-      try {
-        this.unsubscribe()
-      } catch {
-        // ignore
-      }
-      this.unsubscribe = null
-    }
-    if (this.session) {
-      this.session.dispose()
-      this.session = null
-    }
+    await this.disposeAllRuntimes()
     if (this.envLease) {
       releaseProviderEnv()
       this.envLease = false
     }
     this.config = null
-    this.messageHistory = []
-    this.pendingEdits = []
-    this.editSnapshots.clear()
-    this.onTextDelta = null
-    this.isProcessing = false
+    this.modelRuntime = null
+    this.sessionDir = ''
+    this.agentDir = ''
+    this.lastSessionId = null
   }
 
   /**
    * 检查 Agent 是否已初始化
    */
   isInitialized(): boolean {
-    return this.session !== null
+    return this.modelRuntime !== null
   }
 
   /**
