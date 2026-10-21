@@ -94,24 +94,44 @@ describe('chatStore', () => {
 })
 
 describe('chatStore attachments', () => {
+  const fileA = { kind: 'file' as const, path: '/tmp/a.ts', name: 'a.ts' }
+  const fileB = { kind: 'file' as const, path: '/tmp/b.ts', name: 'b.ts' }
+
   it('adds attachments without duplicating the same path', () => {
-    useChatStore.getState().addAttachment({ path: '/tmp/a.ts', name: 'a.ts' })
-    useChatStore.getState().addAttachment({ path: '/tmp/a.ts', name: 'a.ts' })
-    useChatStore.getState().addAttachment({ path: '/tmp/b.ts', name: 'b.ts' })
+    useChatStore.getState().addAttachment(fileA)
+    useChatStore.getState().addAttachment(fileA)
+    useChatStore.getState().addAttachment(fileB)
 
     expect(useChatStore.getState().attachments).toEqual([
-      { path: '/tmp/a.ts', name: 'a.ts' },
-      { path: '/tmp/b.ts', name: 'b.ts' },
+      { ...fileA, id: 'file:/tmp/a.ts' },
+      { ...fileB, id: 'file:/tmp/b.ts' },
     ])
   })
 
-  it('removes and clears attachments', () => {
-    useChatStore.getState().addAttachment({ path: '/tmp/a.ts', name: 'a.ts' })
-    useChatStore.getState().addAttachment({ path: '/tmp/b.ts', name: 'b.ts' })
+  it('deduplicates snippets by path and range', () => {
+    const snippet = {
+      kind: 'snippet' as const,
+      path: '/tmp/a.ts',
+      name: 'a.ts',
+      startLine: 2,
+      endLine: 4,
+      content: 'b\nc\nd',
+    }
+    useChatStore.getState().addAttachment(snippet)
+    useChatStore.getState().addAttachment({ ...snippet })
+    useChatStore.getState().addAttachment({ ...snippet, startLine: 6, endLine: 8 })
 
-    useChatStore.getState().removeAttachment('/tmp/a.ts')
+    expect(useChatStore.getState().attachments).toHaveLength(2)
+    expect(useChatStore.getState().attachments[0].id).toBe('snippet:/tmp/a.ts:2-4')
+  })
+
+  it('removes and clears attachments', () => {
+    useChatStore.getState().addAttachment(fileA)
+    useChatStore.getState().addAttachment(fileB)
+
+    useChatStore.getState().removeAttachment('file:/tmp/a.ts')
     expect(useChatStore.getState().attachments).toEqual([
-      { path: '/tmp/b.ts', name: 'b.ts' },
+      { ...fileB, id: 'file:/tmp/b.ts' },
     ])
 
     useChatStore.getState().clearAttachments()
@@ -119,7 +139,7 @@ describe('chatStore attachments', () => {
   })
 
   it('clears attachments on reset', () => {
-    useChatStore.getState().addAttachment({ path: '/tmp/a.ts', name: 'a.ts' })
+    useChatStore.getState().addAttachment({ kind: 'file', path: '/tmp/a.ts', name: 'a.ts' })
     useChatStore.getState().reset()
     expect(useChatStore.getState().attachments).toEqual([])
   })

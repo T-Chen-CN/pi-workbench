@@ -10,13 +10,22 @@ export const CONTEXT_BLOCK_END = '</pi-workbench-context>'
 export interface ContextFile {
   path: string
   content: string
+  /** 片段起止行；省略表示整文件 */
+  startLine?: number
+  endLine?: number
 }
 
 export function buildContextPrompt(message: string, files: ContextFile[]): string {
   if (files.length === 0) return message
 
   const blocks = files
-    .map((file) => `--- ${file.path} ---\n${file.content}`)
+    .map((file) => {
+      const range =
+        file.startLine !== undefined && file.endLine !== undefined
+          ? ` (lines ${file.startLine}-${file.endLine})`
+          : ''
+      return `--- ${file.path}${range} ---\n${file.content}`
+    })
     .join('\n\n')
 
   return `${CONTEXT_BLOCK_START}\n${blocks}\n${CONTEXT_BLOCK_END}\n\n${message}`

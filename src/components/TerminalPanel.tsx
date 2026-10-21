@@ -196,6 +196,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     }
 
     useChatStore.getState().addAttachment({
+      kind: 'file',
       path: logPath,
       name: logPath.split(/[\\/]/).pop() || 'terminal.log',
     })

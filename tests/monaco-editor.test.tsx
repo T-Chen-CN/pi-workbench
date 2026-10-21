@@ -3,6 +3,7 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MonacoEditor } from '../src/components/MonacoEditor'
 import { useEditorStore } from '../src/store/editorStore'
+import { useSelectionStore } from '../src/store/selectionStore'
 import { useWorkspaceStore } from '../src/store/workspaceStore'
 import { api } from '../src/api'
 
@@ -10,6 +11,7 @@ interface FakeModel {
   uri?: { path?: string }
   getValue: () => string
   setValue: (next: string) => void
+  getValueInRange: () => string
   dispose: ReturnType<typeof vi.fn>
 }
 
@@ -44,6 +46,7 @@ function createFakeModel(initialValue: string, uri?: { path?: string }): FakeMod
     setValue: (next: string) => {
       value = next
     },
+    getValueInRange: () => value,
     dispose: vi.fn(),
   }
 }
@@ -51,6 +54,7 @@ function createFakeModel(initialValue: string, uri?: { path?: string }): FakeMod
 function createFakeEditor(initialModel: FakeModel) {
   let model = initialModel
   let listener: (() => void) | null = null
+  let selectionListener: (() => void) | null = null
 
   return {
     getModel: () => model,
@@ -59,10 +63,20 @@ function createFakeEditor(initialModel: FakeModel) {
     }),
     getValue: () => model.getValue(),
     setValue: vi.fn((next: string) => model.setValue(next)),
+    getSelection: vi.fn(() => ({
+      startLineNumber: 2,
+      endLineNumber: 3,
+      startColumn: 1,
+      endColumn: 4,
+    })),
     saveViewState: vi.fn(() => ({ scrollTop: 0 })),
     restoreViewState: vi.fn(),
     onDidChangeModelContent: vi.fn((callback: () => void) => {
       listener = callback
+      return { dispose: vi.fn() }
+    }),
+    onDidChangeCursorSelection: vi.fn((callback: () => void) => {
+      selectionListener = callback
       return { dispose: vi.fn() }
     }),
     layout: vi.fn(),
@@ -71,6 +85,9 @@ function createFakeEditor(initialModel: FakeModel) {
     emitChange(next?: string) {
       if (next !== undefined) model.setValue(next)
       listener?.()
+    },
+    emitSelection() {
+      selectionListener?.()
     },
   }
 }
@@ -87,6 +104,7 @@ function makeFile(path: string, content: string) {
 
 beforeEach(() => {
   useEditorStore.getState().reset()
+  useSelectionStore.getState().clearSelection()
   mocks.create.mockReset()
   mocks.createModel.mockReset()
   mocks.getModel.mockReset()
@@ -117,6 +135,24 @@ describe('MonacoEditor', () => {
 
     expect(mocks.create).toHaveBeenCalledTimes(1)
     expect(useEditorStore.getState().currentFile?.path).toBe('/tmp/a.ts')
+  })
+
+  it('publishes the current editor selection for snippet attachments', () => {
+    render(<MonacoEditor />)
+    act(() => {
+      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a\nb\nc'))
+    })
+
+    const editor = mocks.create.mock.results[0].value
+    act(() => editor.emitSelection())
+
+    expect(useSelectionStore.getState().selection).toMatchObject({
+      path: '/tmp/a.ts',
+      name: 'a.ts',
+      startLine: 2,
+      endLine: 3,
+      text: 'a\nb\nc',
+    })
   })
 
   it('enters large-file mode for files above 2MB', async () => {

@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react'
 import { useChatStore, type ChatMessage } from '../store/chatStore'
+import { useSelectionStore } from '../store/selectionStore'
 import { useDiffStore } from '../store/diffStore'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
@@ -32,6 +33,7 @@ interface ChatPanelProps {
 
 /** 单个附件与单条消息的上下文字符上限 */
 const MAX_CONTEXT_FILE_CHARS = 120_000
+const MAX_CONTEXT_SNIPPET_CHARS = 40_000
 const MAX_CONTEXT_TOTAL_CHARS = 300_000
 
 /** 代码块：带复制按钮 */
@@ -157,6 +159,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   } = useChatStore()
 
   const openFiles = useEditorStore((state) => state.openFiles)
+  const selection = useSelectionStore((state) => state.selection)
   const { t } = useI18nStore()
 
   const openEdits = useDiffStore((state) => state.openEdits)
@@ -256,6 +259,28 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }, [workspacePath, addMessage, setError, setLoading, setMessages, t])
 
+  // 命令面板：把当前选区附加到对话
+  useEffect(() => {
+    const onAttachSelection = () => {
+      const current = useSelectionStore.getState().selection
+      if (!current) {
+        toast.error(t('selectionEmpty'))
+        return
+      }
+      addAttachment({
+        kind: 'snippet',
+        path: current.path,
+        name: current.name,
+        startLine: current.startLine,
+        endLine: current.endLine,
+        content: current.text,
+      })
+      toast.success(t('selectionAttached'))
+    }
+    window.addEventListener('attach-selection', onAttachSelection)
+    return () => window.removeEventListener('attach-selection', onAttachSelection)
+  }, [addAttachment, t])
+
   // 用户停留在底部时才跟随新消息；往上翻阅时不打断阅读
   useEffect(() => {
     if (!stickToBottomRef.current || messages.length === 0) return
@@ -305,24 +330,45 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     const assistantId = startStreamingMessage()
     try {
       // 读取附件内容并注入本轮 prompt；用户气泡只显示原始文本
-      const contextFiles: Array<{ path: string; content: string }> = []
+      const contextFiles: Array<{
+        path: string
+        content: string
+        startLine?: number
+        endLine?: number
+      }> = []
       let totalChars = 0
       for (const attachment of attachments) {
-        const file = await api.readFile(attachment.path)
-        if (!file.success || typeof file.content !== 'string') {
-          toast.error(`${t('contextReadFailed')}: ${attachment.name}`)
-          continue
+        let content: string
+        if (attachment.kind === 'snippet') {
+          content = attachment.content ?? ''
+          if (!content) continue
+          if (content.length > MAX_CONTEXT_SNIPPET_CHARS) {
+            toast.error(`${t('contextTooLarge')}: ${attachment.name}`)
+            continue
+          }
+        } else {
+          const file = await api.readFile(attachment.path)
+          if (!file.success || typeof file.content !== 'string') {
+            toast.error(`${t('contextReadFailed')}: ${attachment.name}`)
+            continue
+          }
+          if (file.content.length > MAX_CONTEXT_FILE_CHARS) {
+            toast.error(`${t('contextTooLarge')}: ${attachment.name}`)
+            continue
+          }
+          content = file.content
         }
-        if (file.content.length > MAX_CONTEXT_FILE_CHARS) {
-          toast.error(`${t('contextTooLarge')}: ${attachment.name}`)
-          continue
-        }
-        if (totalChars + file.content.length > MAX_CONTEXT_TOTAL_CHARS) {
+        if (totalChars + content.length > MAX_CONTEXT_TOTAL_CHARS) {
           toast.error(t('contextTotalTooLarge'))
           break
         }
-        totalChars += file.content.length
-        contextFiles.push({ path: attachment.path, content: file.content })
+        totalChars += content.length
+        contextFiles.push({
+          path: attachment.path,
+          content,
+          startLine: attachment.startLine,
+          endLine: attachment.endLine,
+        })
       }
       const prompt = buildContextPrompt(userMessage, contextFiles)
 
@@ -482,25 +528,35 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       <div className="flex-shrink-0 p-2.5">
         {attachments.length > 0 && (
           <div className="mb-1.5 flex flex-wrap gap-1.5">
-            {attachments.map((attachment) => (
-              <span
-                key={attachment.path}
-                className="inline-flex items-center gap-1 border border-rule-control bg-sunken px-2 py-1 type-data text-ink-muted"
-                title={attachment.path}
-              >
-                <FileText size={10} className="text-ink-muted" />
-                {attachment.name}
-                <button
-                  type="button"
-                  onClick={() => removeAttachment(attachment.path)}
-                  title={t('removeAttachment')}
-                  aria-label={t('removeAttachment')}
-                  className="ml-0.5 p-0.5 text-ink-muted hover:text-ink"
+            {attachments.map((attachment) => {
+              const label =
+                attachment.kind === 'snippet'
+                  ? `${attachment.name}:${attachment.startLine}–${attachment.endLine}`
+                  : attachment.name
+              return (
+                <span
+                  key={attachment.id}
+                  className="inline-flex items-center gap-1 border border-rule-control bg-sunken px-2 py-1 type-data text-ink-muted"
+                  title={
+                    attachment.kind === 'snippet'
+                      ? `${attachment.path}:${attachment.startLine}-${attachment.endLine}`
+                      : attachment.path
+                  }
                 >
-                  <X size={10} />
-                </button>
-              </span>
-            ))}
+                  <FileText size={10} className="text-ink-muted" />
+                  {label}
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(attachment.id)}
+                    title={t('removeAttachment')}
+                    aria-label={t('removeAttachment')}
+                    className="ml-0.5 p-0.5 text-ink-muted hover:text-ink"
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              )
+            })}
           </div>
         )}
 
@@ -532,18 +588,48 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                   <div className="px-3 py-1.5 type-label text-ink-muted">
                     {t('attachContext')}
                   </div>
-                  {openFiles.length === 0 ? (
+                  <button
+                    type="button"
+                    disabled={!selection}
+                    onClick={() => {
+                      if (!selection) return
+                      addAttachment({
+                        kind: 'snippet',
+                        path: selection.path,
+                        name: selection.name,
+                        startLine: selection.startLine,
+                        endLine: selection.endLine,
+                        content: selection.text,
+                      })
+                      setShowAttachMenu(false)
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink hover:bg-hover disabled:opacity-40"
+                  >
+                    <FileText size={12} className="flex-shrink-0 text-ink-muted" />
+                    <span className="flex min-w-0 flex-col">
+                      <span>{t('attachSelection')}</span>
+                      <DataText className="truncate text-ink-muted">
+                        {selection
+                          ? `${selection.name}:${selection.startLine}–${selection.endLine}`
+                          : t('noSelection')}
+                      </DataText>
+                    </span>
+                  </button>
+                  <div className="my-1 border-t border-rule-divide" />
+                  {openFiles.length === 0 && !selection ? (
                     <div className="px-3 py-2 type-caption text-ink-muted">{t('noOpenFiles')}</div>
                   ) : (
                     openFiles.map((file) => {
-                      const attached = attachments.some((item) => item.path === file.path)
+                      const attached = attachments.some(
+                        (item) => item.kind === 'file' && item.path === file.path
+                      )
                       return (
                         <button
                           key={file.path}
                           type="button"
                           disabled={attached}
                           onClick={() => {
-                            addAttachment({ path: file.path, name: file.name })
+                            addAttachment({ kind: 'file', path: file.path, name: file.name })
                             setShowAttachMenu(false)
                           }}
                           className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink hover:bg-hover disabled:opacity-40"
