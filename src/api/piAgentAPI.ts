@@ -6,6 +6,7 @@
  */
 
 import type {
+  AgentStreamEvent,
   ApiConfig,
   FileEdit,
   SessionListResult,
@@ -13,6 +14,13 @@ import type {
   SessionTabs,
   SessionTabsResult,
 } from '../types/electron'
+
+export interface AgentChatStreamHandlers {
+  /** 仅接收文本增量（兼容旧调用方） */
+  onTextDelta?: (delta: string) => void
+  /** 接收按顺序排列的文本 / 思考 / 工具事件 */
+  onTrace?: (event: AgentStreamEvent) => void
+}
 
 interface AgentInitConfig {
   workspaceDir: string
@@ -97,10 +105,10 @@ function bridgeUnavailableError(error: unknown): string {
     'Run the Electron app (npm run dev) or the Vite dev server to use the agent.'
 }
 
-/** 读取 Web dev 桥的 SSE 流：delta 事件增量回调，done 事件返回最终结果 */
+/** 读取 Web dev 桥的 SSE 流：trace 事件回调，done 事件返回最终结果 */
 async function streamDevChat(
   message: string,
-  onDelta: (delta: string) => void,
+  handlers: AgentChatStreamHandlers,
   workspaceDir?: string,
   sessionId?: string
 ): Promise<AgentChatResponse> {
@@ -118,6 +126,11 @@ async function streamDevChat(
   let buffer = ''
   let final: AgentChatResponse | null = null
 
+  const emitTrace = (event: AgentStreamEvent): void => {
+    handlers.onTrace?.(event)
+    if (event.type === 'text_delta') handlers.onTextDelta?.(event.delta)
+  }
+
   const consume = (chunk: string): void => {
     let event = 'message'
     const dataLines: string[] = []
@@ -127,8 +140,11 @@ async function streamDevChat(
     }
     if (dataLines.length === 0) return
     const payload = JSON.parse(dataLines.join('\n'))
-    if (event === 'delta' && typeof payload.delta === 'string') {
-      onDelta(payload.delta)
+    if (event === 'trace' && typeof payload?.type === 'string') {
+      emitTrace(payload as AgentStreamEvent)
+    } else if (event === 'delta' && typeof payload.delta === 'string') {
+      // 兼容旧版 Web dev 桥
+      emitTrace({ type: 'text_delta', delta: payload.delta })
     } else if (event === 'done') {
       final = payload as AgentChatResponse
     }
@@ -169,24 +185,34 @@ export const piAgentAPI = {
 
   /**
    * Send a chat message to the agent.
-   * In Electron, text deltas are forwarded to `onDelta` while the run streams.
+   * In Electron, trace events（文本 / 思考 / 工具）are forwarded while the run streams.
+   * 第二参数既可以是旧的文本回调，也可以是完整的 handlers 对象。
    */
   async chat(
     message: string,
-    onDelta?: (delta: string) => void,
+    handlersOrDelta?: AgentChatStreamHandlers | ((delta: string) => void),
     workspaceDir?: string,
     sessionId?: string
   ): Promise<AgentChatResponse> {
+    const handlers: AgentChatStreamHandlers =
+      typeof handlersOrDelta === 'function'
+        ? { onTextDelta: handlersOrDelta }
+        : handlersOrDelta ?? {}
+    const wantsStream = Boolean(handlers.onTextDelta || handlers.onTrace)
+
     try {
       if (hasElectronAgent()) {
         const requestId = `chat-${Date.now()}-${Math.random().toString(36).slice(2)}`
         let unsubscribe: (() => void) | null = null
 
-        if (onDelta && typeof window.electronAPI.onAgentStream === 'function') {
+        if (wantsStream && typeof window.electronAPI.onAgentStream === 'function') {
           unsubscribe = window.electronAPI.onAgentStream((payload) => {
             if (payload.requestId !== requestId) return
             if (sessionId && payload.sessionId && payload.sessionId !== sessionId) return
-            onDelta(payload.delta)
+            const { requestId: _requestId, workspaceDir: _workspaceDir, sessionId: _sessionId, ...event } =
+              payload
+            handlers.onTrace?.(event)
+            if (event.type === 'text_delta') handlers.onTextDelta?.(event.delta)
           })
         }
 
@@ -196,8 +222,8 @@ export const piAgentAPI = {
           unsubscribe?.()
         }
       }
-      if (onDelta) {
-        return await streamDevChat(message, onDelta, workspaceDir, sessionId)
+      if (wantsStream) {
+        return await streamDevChat(message, handlers, workspaceDir, sessionId)
       }
       return await callDevBridge<AgentChatResponse>(DEV_AGENT_CHAT, {
         message,

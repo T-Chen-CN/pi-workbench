@@ -1610,15 +1610,15 @@ handleIpc(
         void pluginManager.emit(workspaceDir, 'chat:message', { message })
       }
 
-      // 流式文本增量推送给发起请求的窗口；workspace/session/requestId 用于渲染进程路由
-      const onTextDelta = (delta: string) => {
+      // 流式事件统一走 agent:stream（文本 / 思考 / 工具），带路由字段供渲染层过滤
+      const onTrace = (trace: { type: string; [key: string]: unknown }) => {
         if (!event.sender.isDestroyed()) {
-          event.sender.send('agent:stream', { requestId, workspaceDir, sessionId, delta })
+          event.sender.send('agent:stream', { requestId, workspaceDir, sessionId, ...trace })
         }
       }
       const result = sessionId
-        ? await agent.chat(sessionId, message, { onTextDelta })
-        : await agent.chat(message, { onTextDelta })
+        ? await agent.chat(sessionId, message, { onTrace })
+        : await agent.chat(message, { onTrace })
 
       if (result.success) {
         console.log('[Main] Agent response received')

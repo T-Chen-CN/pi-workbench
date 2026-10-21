@@ -1,18 +1,6 @@
-import React, {
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
-import ReactMarkdown, { type Components } from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
-  Check,
-  Copy,
   FileText,
   History,
   Paperclip,
@@ -39,13 +27,14 @@ import { api } from '../api'
 import { buildContextPrompt } from '../api/chatContext'
 import { localizeError } from '../i18n/errors'
 import { commandPaletteShortcut } from '../utils/shortcuts'
-import { createDeltaBuffer } from '../utils/streamBuffer'
-import { splitMarkdownBlocks } from '../utils/markdownBlocks'
+import { createTraceBuffer } from '../utils/streamBuffer'
 import { toast } from '../store/toastStore'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { useVirtualRows } from '../hooks/useVirtualRows'
 import { SessionTabs } from './SessionTabs'
 import { ChatSessionList } from './ChatSessionList'
+import { AgentParts } from './AgentTrace'
+import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
 import {
   Button,
   Caption,
@@ -67,122 +56,19 @@ const MAX_CONTEXT_FILE_CHARS = 120_000
 const MAX_CONTEXT_SNIPPET_CHARS = 40_000
 const MAX_CONTEXT_TOTAL_CHARS = 300_000
 
-/** 代码块：带复制按钮 */
-const CodeBlock: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
-  const { t } = useI18nStore()
-  const preRef = useRef<HTMLPreElement>(null)
-  const [copied, setCopied] = useState(false)
-
-  const copy = async () => {
-    const text = preRef.current?.textContent ?? ''
-    if (!text) return
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch (error) {
-      console.error('Failed to copy code:', error)
-    }
-  }
-
-  return (
-    <div className="group/code relative">
-      <pre ref={preRef}>{children}</pre>
-      <button
-        type="button"
-        onClick={() => void copy()}
-        aria-label={t('copyCode')}
-        className="absolute right-2 top-2 flex items-center gap-1 rounded border border-rule-control bg-raised px-1.5 py-1 type-caption text-ink-muted opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover/code:opacity-100 group-focus-within/code:opacity-100"
-      >
-        {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
-        {copied ? t('copied') : t('copyCode')}
-      </button>
-    </div>
-  )
-}
-
-const REMARK_PLUGINS = [remarkGfm]
-const HIGHLIGHT_PLUGINS = [rehypeHighlight]
-const NO_PLUGINS: [] = []
-
-const MARKDOWN_COMPONENTS: Components = {
-  a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  ),
-  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-}
-
-/**
- * 流式期间按顶层块拆分 Markdown，只有正在增长的尾块需要重新解析。
- * 引用式链接等跨块定义在流式阶段可能不完整，结束时整体重渲染一次即可恢复。
- */
-const MarkdownBlock = React.memo(
-  function MarkdownBlock({ content }: { content: string }) {
-    return (
-      <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={NO_PLUGINS}
-        components={MARKDOWN_COMPONENTS}
-      >
-        {content}
-      </ReactMarkdown>
-    )
-  },
-  (prev, next) => prev.content === next.content
-)
-
-const StreamingBlocks = React.memo(function StreamingBlocks({ content }: { content: string }) {
-  const blocks = useMemo(() => splitMarkdownBlocks(content), [content])
-  return (
-    <>
-      {blocks.map((block, index) => (
-        <MarkdownBlock key={index} content={block} />
-      ))}
-    </>
-  )
-})
-
-/** 流式消息：解析降到低优先级，点击/输入可以先被处理，长输出不会堵住整个面板 */
-const StreamingMarkdown = React.memo(function StreamingMarkdown({ content }: { content: string }) {
-  const deferred = useDeferredValue(content)
-  return (
-    <>
-      <StreamingBlocks content={deferred} />
-      <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom" />
-    </>
-  )
-})
-
-/** 已完成消息：整段解析一次，保留完整 GFM 与代码高亮 */
-const MarkdownBody = React.memo(function MarkdownBody({
-  content,
-  highlight,
-}: {
-  content: string
-  highlight: boolean
-}) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={REMARK_PLUGINS}
-      rehypePlugins={highlight ? HIGHLIGHT_PLUGINS : NO_PLUGINS}
-      components={MARKDOWN_COMPONENTS}
-    >
-      {content}
-    </ReactMarkdown>
-  )
-})
-
 /** 单条消息；memo 保证流式追加只重渲染最后一条 */
 const ChatMessageRow = React.memo(function ChatMessageRow({
   message,
+  diffToolIds,
+  onOpenDiff,
 }: {
   message: ChatMessage
+  diffToolIds?: Set<string>
+  onOpenDiff?: (toolCallId: string) => void
 }) {
   const { t, language } = useI18nStore()
 
-  if (message.isStreaming && !message.content) return null
+  if (message.isStreaming && !message.content && !message.parts?.length) return null
   const isUser = message.role === 'user'
 
   return (
@@ -204,14 +90,25 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
           <span className="whitespace-pre-wrap">{message.content}</span>
         </div>
       ) : (
-        <div className="chat-markdown text-ink">
-          {message.isStreaming ? (
-            <StreamingMarkdown content={message.content} />
-          ) : (
-            <MarkdownBody
-              content={message.content}
-              highlight={message.content.length <= 20_000}
+        <div className="text-ink">
+          {message.parts?.length ? (
+            <AgentParts
+              parts={message.parts}
+              isStreaming={Boolean(message.isStreaming)}
+              diffToolIds={diffToolIds}
+              onOpenDiff={onOpenDiff}
             />
+          ) : (
+            <div className="chat-markdown text-ink">
+              {message.isStreaming ? (
+                <StreamingMarkdown content={message.content} />
+              ) : (
+                <MarkdownBody
+                  content={message.content}
+                  highlight={message.content.length <= 20_000}
+                />
+              )}
+            </div>
           )}
           {message.usage && (
             <Caption className="mt-1 block text-ink-muted">
@@ -262,6 +159,20 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const openFiles = useEditorStore((state) => state.openFiles)
   const selection = useSelectionStore((state) => state.selection)
   const openEdits = useDiffStore((state) => state.openEdits)
+  const diffEdits = useDiffStore((state) => state.edits)
+  const diffToolIds = useMemo(
+    () =>
+      new Set(
+        diffEdits
+          .map((edit) => edit.toolCallId)
+          .filter((id): id is string => Boolean(id))
+      ),
+    [diffEdits]
+  )
+  const openToolDiff = useCallback((toolCallId: string) => {
+    const edit = useDiffStore.getState().edits.find((item) => item.toolCallId === toolCallId)
+    if (edit) useDiffStore.getState().openEdits([edit])
+  }, [])
 
   const [initialized, setInitialized] = useState(false)
   const [needsApiKey, setNeedsApiKey] = useState(false)
@@ -720,10 +631,32 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     useSessionStore.getState().markStreaming(workspacePath, sessionId, true)
 
     const assistantId = chat.startStreamingMessage(key)
-    // 高频增量先合并，避免每个 token 都触发 store 更新与整条消息重渲染
-    const deltaBuffer = createDeltaBuffer((delta) =>
-      useChatStore.getState().appendToMessage(key, assistantId, delta)
-    )
+    // 文本 / 思考 / 工具事件共用一条有序缓冲，50ms 合并，保证 parts 顺序
+    const traceBuffer = createTraceBuffer((events) => {
+      const store = useChatStore.getState()
+      for (const event of events) {
+        switch (event.type) {
+          case 'text_delta':
+            store.appendTextPart(key, assistantId, event.delta)
+            break
+          case 'thinking_delta':
+            store.appendThinkingPart(key, assistantId, event.delta)
+            break
+          case 'thinking_redacted':
+            store.appendThinkingPart(key, assistantId, '', { redacted: true })
+            break
+          case 'tool_start':
+            store.startToolPart(key, assistantId, event)
+            break
+          case 'tool_update':
+            store.updateToolPart(key, assistantId, event)
+            break
+          case 'tool_end':
+            store.endToolPart(key, assistantId, event)
+            break
+        }
+      }
+    })
     const sessionAttachments = chat.conversations[key]?.attachments ?? []
     let succeeded = false
 
@@ -773,12 +706,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
       const result = await piAgentAPI.chat(
         prompt,
-        deltaBuffer.push,
+        { onTrace: traceBuffer.push },
         workspacePath,
         sessionId
       )
-      // 收尾前把剩余增量交给 store；成功时随后会被完整响应覆盖，不会重复
-      deltaBuffer.flush()
+      // 收尾前按到达顺序输出剩余事件；有 parts 时不会再用最终文本覆盖
+      traceBuffer.flush()
 
       if (result.success && result.response) {
         succeeded = true
@@ -800,15 +733,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         } else {
           chat.setError(key, errorMessage)
           useSessionStore.getState().markError(workspacePath, sessionId, errorMessage)
-          chat.finishStreamingMessage(
-            key,
-            assistantId,
-            t('errorPrefix', { message: errorMessage })
-          )
+          chat.finishStreamingMessage(key, assistantId)
         }
       }
     } catch (err) {
-      deltaBuffer.flush()
+      traceBuffer.flush()
       const errorMsg = localizeError(err instanceof Error ? err.message : String(err))
       if (stoppedRef.current) {
         chat.setError(key, null)
@@ -816,10 +745,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       } else {
         chat.setError(key, errorMsg)
         useSessionStore.getState().markError(workspacePath, sessionId, errorMsg)
-        chat.finishStreamingMessage(key, assistantId, t('errorPrefix', { message: errorMsg }))
+        chat.finishStreamingMessage(key, assistantId)
       }
     } finally {
-      deltaBuffer.dispose()
+      traceBuffer.dispose()
       useChatStore.getState().setLoading(key, false)
       useChatStore.getState().clearAttachments(key)
       useSessionStore.getState().markStreaming(workspacePath, sessionId, false)
@@ -984,13 +913,24 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                           transform: `translateY(${virtualRow.start}px)`,
                         }}
                       >
-                        <ChatMessageRow message={msg} />
+                        <ChatMessageRow
+                          message={msg}
+                          diffToolIds={diffToolIds}
+                          onOpenDiff={openToolDiff}
+                        />
                       </div>
                     )
                   })
                 : messages
                     .slice(0, 30)
-                    .map((msg) => <ChatMessageRow key={msg.id} message={msg} />)}
+                    .map((msg) => (
+                      <ChatMessageRow
+                        key={msg.id}
+                        message={msg}
+                        diffToolIds={diffToolIds}
+                        onOpenDiff={openToolDiff}
+                      />
+                    ))}
             </div>
           )}
 

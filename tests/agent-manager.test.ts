@@ -446,6 +446,97 @@ describe('AgentManager chat', () => {
     expect(chunks).toEqual(['a'])
   })
 
+  it('forwards ordered thinking, text and tool trace events', async () => {
+    const session = createFakeSession(async (s) => {
+      s.emit({ type: 'message_start', message: { role: 'assistant' } })
+      s.emit({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'plan' },
+      })
+      s.emit({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'answer' },
+      })
+      s.emit({
+        type: 'tool_execution_start',
+        toolName: 'read',
+        toolCallId: 'call-1',
+        args: { path: 'a.ts' },
+      })
+      s.emit({
+        type: 'tool_execution_end',
+        toolName: 'read',
+        toolCallId: 'call-1',
+        result: { content: [{ type: 'text', text: 'file body' }] },
+        isError: false,
+        durationMs: 12,
+      })
+      s.messages.push({ role: 'assistant', content: 'answer' })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const events: Array<Record<string, unknown>> = []
+    await manager.chat('go', { onTrace: (event) => events.push(event) })
+
+    expect(events.map((event) => event.type)).toEqual([
+      'thinking_delta',
+      'text_delta',
+      'tool_start',
+      'tool_end',
+    ])
+    expect(events[2]).toMatchObject({
+      type: 'tool_start',
+      toolCallId: 'call-1',
+      toolName: 'read',
+      argsSummary: 'a.ts',
+    })
+    expect(events[3]).toMatchObject({
+      type: 'tool_end',
+      toolCallId: 'call-1',
+      status: 'success',
+      durationMs: 12,
+      resultPreview: 'file body',
+    })
+  })
+
+  it('falls back to thinking_end content and marks empty thinking as redacted', async () => {
+    const session = createFakeSession(async (s) => {
+      s.emit({ type: 'message_start', message: { role: 'assistant' } })
+      s.emit({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_start', contentIndex: 0 },
+      })
+      s.emit({
+        type: 'message_update',
+        assistantMessageEvent: {
+          type: 'thinking_end',
+          contentIndex: 0,
+          content: 'only at end',
+        },
+      })
+      s.emit({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_start', contentIndex: 1 },
+      })
+      s.emit({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_end', contentIndex: 1, content: '' },
+      })
+      s.messages.push({ role: 'assistant', content: 'done' })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const events: Array<Record<string, unknown>> = []
+    await manager.chat('go', { onTrace: (event) => events.push(event) })
+
+    expect(events).toEqual([
+      { type: 'thinking_delta', delta: 'only at end' },
+      { type: 'thinking_redacted' },
+    ])
+  })
+
   it('rejects concurrent requests while one is in flight', async () => {
     let releasePrompt: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
@@ -489,7 +580,12 @@ describe('AgentManager edit capture', () => {
     const result = await manager.chat('update notes')
 
     expect(result.edits).toEqual([
-      { path: target, oldContent: '', newContent: 'new content' },
+      {
+        path: target,
+        oldContent: '',
+        newContent: 'new content',
+        toolCallId: 'call-1',
+      },
     ])
   })
 
@@ -560,8 +656,63 @@ describe('AgentManager session history', () => {
 
     expect(manager.getSessionMessages()).toEqual([
       { role: 'user', content: 'question', timestamp: expect.any(Number) },
-      { role: 'assistant', content: 'part one\npart two', timestamp: 5 },
+      {
+        role: 'assistant',
+        content: 'part one\npart two',
+        parts: [
+          { type: 'text', id: 'text-1', text: 'part one' },
+          { type: 'text', id: 'text-2', text: 'part two' },
+        ],
+        timestamp: 5,
+      },
     ])
+  })
+
+  it('aggregates thinking, text and tool calls into one ordered assistant turn', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    session.messages.push(
+      { role: 'user', content: 'inspect' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'plan' },
+          { type: 'text', text: 'before' },
+          { type: 'toolCall', id: 'call-1', name: 'read', arguments: { path: 'a.ts' } },
+        ],
+        timestamp: 5,
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        toolName: 'read',
+        content: [{ type: 'text', text: 'file body' }],
+        isError: false,
+        timestamp: 6,
+        durationMs: 9,
+      },
+      { role: 'assistant', content: [{ type: 'text', text: 'after' }], timestamp: 7 }
+    )
+
+    const history = manager.getSessionMessages()
+    const assistant = history.find((message) => message.role === 'assistant')
+    expect(assistant?.content).toBe('before\nafter')
+    expect(assistant?.parts?.map((part) => part.type)).toEqual([
+      'thinking',
+      'text',
+      'tool',
+      'text',
+    ])
+    expect(assistant?.parts?.[2]).toMatchObject({
+      type: 'tool',
+      toolCallId: 'call-1',
+      toolName: 'read',
+      status: 'success',
+      durationMs: 9,
+      resultPreview: 'file body',
+    })
   })
 
   it('strips attached context blocks from restored user messages', async () => {
@@ -650,7 +801,12 @@ describe('AgentManager sessions', () => {
     expect(opened.session?.id).toBe('other-session')
     expect(opened.history).toEqual([
       { role: 'user', content: 'restored', timestamp: expect.any(Number) },
-      { role: 'assistant', content: 'hello again', timestamp: expect.any(Number) },
+      {
+        role: 'assistant',
+        content: 'hello again',
+        parts: [{ type: 'text', id: 'text-1', text: 'hello again' }],
+        timestamp: expect.any(Number),
+      },
     ])
   })
 

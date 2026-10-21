@@ -216,7 +216,63 @@ export interface FileEdit {
   path: string
   oldContent: string
   newContent: string
+  /** 触发该修改的工具调用；用于在工具步骤里打开对应 Diff */
+  toolCallId?: string
 }
+
+/** 助手消息中的有序过程 / 正文片段 */
+export type AgentTracePart =
+  | { type: 'text'; id: string; text: string }
+  | {
+      type: 'thinking'
+      id: string
+      text: string
+      redacted?: boolean
+      durationMs?: number
+    }
+  | {
+      type: 'tool'
+      id: string
+      toolCallId: string
+      toolName: string
+      argsSummary: string
+      status: 'running' | 'success' | 'error'
+      isError?: boolean
+      durationMs?: number
+      resultPreview?: string
+      filePath?: string
+    }
+
+/** 主进程归一化后的流式事件（不含路由字段） */
+export type AgentStreamEvent =
+  | { type: 'text_delta'; delta: string }
+  | { type: 'thinking_delta'; delta: string }
+  | { type: 'thinking_redacted' }
+  | {
+      type: 'tool_start'
+      toolCallId: string
+      toolName: string
+      argsSummary: string
+      startedAt: number
+    }
+  | { type: 'tool_update'; toolCallId: string; resultPreview?: string }
+  | {
+      type: 'tool_end'
+      toolCallId: string
+      toolName: string
+      status: 'success' | 'error'
+      durationMs?: number
+      resultPreview?: string
+      filePath?: string
+    }
+
+export type AgentStreamPayload = {
+  /** 发起请求时生成，用于忽略过期会话的增量 */
+  requestId?: string
+  /** 产生增量的工作区与会话（多会话/多工作区路由） */
+  workspaceDir?: string
+  sessionId?: string
+} & AgentStreamEvent
 
 export interface AgentChatResult {
   success: boolean
@@ -224,16 +280,6 @@ export interface AgentChatResult {
   error?: string
   /** Agent 本轮修改过的文件（用于 Diff 展示） */
   edits?: FileEdit[]
-}
-
-export interface AgentStreamPayload {
-  /** 发起请求时生成，用于忽略过期会话的增量 */
-  requestId?: string
-  /** 产生增量的工作区与会话（多会话/多工作区路由） */
-  workspaceDir?: string
-  sessionId?: string
-  /** 本次推送的文本增量 */
-  delta: string
 }
 
 export interface SessionSummary {
@@ -280,6 +326,7 @@ export interface AgentHistoryResult {
   history?: Array<{
     role: 'user' | 'assistant'
     content: string
+    parts?: AgentTracePart[]
     timestamp: number
   }>
   error?: string

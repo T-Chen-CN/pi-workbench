@@ -359,6 +359,12 @@ button {
   word-break: break-word;
 }
 
+/* 思考过程：比正文低一级，仍然沿用 Markdown 的块级排版 */
+.chat-markdown.agent-trace-markdown {
+  font-size: 13px;
+  line-height: 1.7;
+}
+
 .chat-markdown > *:first-child {
   margin-top: 0;
 }

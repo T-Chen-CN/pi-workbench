@@ -14,11 +14,20 @@ export interface AgentChatOutcome {
 export interface RegisteredAgent {
   initialize: (config: unknown) => Promise<{ success: boolean; error?: string }>
   chat: {
-    (message: string, options?: { onTextDelta?: (delta: string) => void }): Promise<AgentChatOutcome>
+    (
+      message: string,
+      options?: {
+        onTextDelta?: (delta: string) => void
+        onTrace?: (event: { type: string; [key: string]: unknown }) => void
+      }
+    ): Promise<AgentChatOutcome>
     (
       sessionId: string,
       message: string,
-      options?: { onTextDelta?: (delta: string) => void }
+      options?: {
+        onTextDelta?: (delta: string) => void
+        onTrace?: (event: { type: string; [key: string]: unknown }) => void
+      }
     ): Promise<AgentChatOutcome>
   }
   dispose: () => Promise<void> | void

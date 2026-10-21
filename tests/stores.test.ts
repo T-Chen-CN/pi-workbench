@@ -186,8 +186,88 @@ describe('chatStore streaming', () => {
     useChatStore.getState().finishStreamingMessage(KEY, id, 'Hello!')
 
     message = useChatStore.getState().conversations[KEY].messages.find((m) => m.id === id)
-    expect(message?.content).toBe('Hello!')
+    expect(message?.content).toBe('Hello')
+    expect(message?.parts).toEqual([{ type: 'text', id: 'text-1', text: 'Hello' }])
     expect(message?.isStreaming).toBe(false)
+  })
+
+  it('keeps interleaved text, tool and thinking parts in order', () => {
+    const id = useChatStore.getState().startStreamingMessage(KEY)
+
+    useChatStore.getState().appendTextPart(KEY, id, 'before')
+    useChatStore.getState().startToolPart(KEY, id, {
+      type: 'tool_start',
+      toolCallId: 'call-1',
+      toolName: 'read',
+      argsSummary: 'a.ts',
+      startedAt: 1,
+    })
+    useChatStore.getState().endToolPart(KEY, id, {
+      type: 'tool_end',
+      toolCallId: 'call-1',
+      toolName: 'read',
+      status: 'success',
+      durationMs: 12,
+      resultPreview: 'contents',
+    })
+    useChatStore.getState().appendTextPart(KEY, id, 'after')
+    useChatStore.getState().appendThinkingPart(KEY, id, 'hmm')
+    useChatStore.getState().finishStreamingMessage(KEY, id)
+
+    const message = useChatStore
+      .getState()
+      .conversations[KEY].messages.find((item) => item.id === id)
+    expect(message?.parts?.map((part) => part.type)).toEqual([
+      'text',
+      'tool',
+      'text',
+      'thinking',
+    ])
+    expect(message?.content).toBe('before\nafter')
+    expect(message?.parts?.[1]).toMatchObject({
+      type: 'tool',
+      status: 'success',
+      durationMs: 12,
+      resultPreview: 'contents',
+    })
+  })
+
+  it('marks unfinished tools as error when the stream ends', () => {
+    const id = useChatStore.getState().startStreamingMessage(KEY)
+    useChatStore.getState().startToolPart(KEY, id, {
+      type: 'tool_start',
+      toolCallId: 'call-2',
+      toolName: 'bash',
+      argsSummary: 'npm test',
+      startedAt: 1,
+    })
+
+    useChatStore.getState().finishStreamingMessage(KEY, id)
+
+    const message = useChatStore
+      .getState()
+      .conversations[KEY].messages.find((item) => item.id === id)
+    expect(message?.parts?.[0]).toMatchObject({ type: 'tool', status: 'error', isError: true })
+  })
+
+  it('restores history parts and falls back to a text part for legacy messages', () => {
+    useChatStore.getState().setMessages(KEY, [
+      { role: 'user', content: 'q', timestamp: 1 },
+      {
+        role: 'assistant',
+        content: 'answer',
+        timestamp: 2,
+        parts: [
+          { type: 'thinking', id: 'thinking-1', text: 'plan' },
+          { type: 'text', id: 'text-1', text: 'answer' },
+        ],
+      },
+      { role: 'assistant', content: 'legacy', timestamp: 3 },
+    ])
+
+    const messages = useChatStore.getState().conversations[KEY].messages
+    expect(messages[1].parts?.map((part) => part.type)).toEqual(['thinking', 'text'])
+    expect(messages[2].parts).toEqual([{ type: 'text', id: 'text-3', text: 'legacy' }])
   })
 
   it('ignores appends to unknown message ids', () => {

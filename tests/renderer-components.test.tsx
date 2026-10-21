@@ -9,7 +9,7 @@ import { useChatStore, conversationKey } from '../src/store/chatStore'
 import { useEditorStore } from '../src/store/editorStore'
 import { useSelectionStore } from '../src/store/selectionStore'
 import { useSessionStore } from '../src/store/sessionStore'
-import type { SessionSummary } from '../src/types/electron'
+import type { AgentStreamEvent, SessionSummary } from '../src/types/electron'
 import { useI18nStore } from '../src/store/i18nStore'
 import { translations } from '../src/i18n/translations'
 import { api } from '../src/api'
@@ -212,13 +212,14 @@ describe('ChatPanel', () => {
     expect(screen.getByLabelText(translations.zh.copyCode)).toBeTruthy()
   })
 
-  it('batches streamed deltas and still renders the final response', async () => {
-    let emitDelta: ((delta: string) => void) | null = null
+  it('batches streamed deltas and keeps the streamed parts at completion', async () => {
+    let emitTrace: ((event: AgentStreamEvent) => void) | null = null
     let resolveChat: ((value: { success: boolean; response?: string }) => void) | null = null
     vi.mocked(piAgentAPI.chat).mockImplementation(
-      (_message, onDelta) =>
+      (_message, handlers) =>
         new Promise((resolve) => {
-          emitDelta = onDelta ?? null
+          emitTrace =
+            typeof handlers === 'object' && handlers ? handlers.onTrace ?? null : null
           resolveChat = resolve
         })
     )
@@ -236,8 +237,8 @@ describe('ChatPanel', () => {
     })
 
     act(() => {
-      emitDelta?.('Hello ')
-      emitDelta?.('world')
+      emitTrace?.({ type: 'text_delta', delta: 'Hello ' })
+      emitTrace?.({ type: 'text_delta', delta: 'world' })
     })
 
     // 增量按 50ms 窗口合并后才写入 store
@@ -246,7 +247,95 @@ describe('ChatPanel', () => {
     act(() => {
       resolveChat?.({ success: true, response: 'Hello world!' })
     })
-    await waitFor(() => expect(screen.getByText('Hello world!')).toBeTruthy())
+    await waitFor(() => {
+      const message = useChatStore
+        .getState()
+        .conversations[sessionKey].messages.find((item) => item.role === 'assistant')
+      expect(message?.parts?.filter((part) => part.type === 'text')).toHaveLength(1)
+    })
+    expect(screen.getByText(/Hello world/)).toBeTruthy()
+  })
+
+  it('renders a collapsed process group and expands thinking on demand', async () => {
+    useSessionStore.getState().setSessions('/ws', [session])
+    useSessionStore.getState().setOpen('/ws', [session.id], session.id)
+    useChatStore.getState().setMessages(sessionKey, [
+      { role: 'user', content: 'inspect', timestamp: 1 },
+      {
+        role: 'assistant',
+        content: 'final answer',
+        timestamp: 2,
+        parts: [
+          { type: 'thinking', id: 'thinking-1', text: 'private reasoning' },
+          {
+            type: 'tool',
+            id: 'call-1',
+            toolCallId: 'call-1',
+            toolName: 'read',
+            argsSummary: 'a.ts',
+            status: 'success',
+            durationMs: 12,
+            resultPreview: 'file body',
+          },
+          { type: 'text', id: 'text-1', text: 'final answer' },
+        ],
+      },
+    ])
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    await waitFor(() => expect(screen.getByText('final answer')).toBeTruthy())
+    expect(screen.queryByText('private reasoning')).toBeNull()
+
+    const trigger = screen.getByRole('button', { name: /过程/ })
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(trigger)
+
+    await waitFor(() => {
+      expect(screen.getByText('private reasoning')).toBeTruthy()
+      expect(screen.getByText('读取')).toBeTruthy()
+      expect(screen.getByText('a.ts')).toBeTruthy()
+    })
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+
+    expect(screen.queryByText('file body')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /读取/ }))
+    await waitFor(() => expect(screen.getByText('file body')).toBeTruthy())
+  })
+
+  it('keeps a manually expanded process group open when text keeps streaming', async () => {
+    useSessionStore.getState().setSessions('/ws', [session])
+    useSessionStore.getState().setOpen('/ws', [session.id], session.id)
+    useChatStore.getState().setMessages(sessionKey, [
+      {
+        role: 'assistant',
+        content: '',
+        timestamp: 1,
+        isStreaming: true,
+        parts: [{ type: 'thinking', id: 'thinking-1', text: 'live thinking' }],
+      },
+    ])
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    const trigger = await screen.findByRole('button', {
+      name: new RegExp(translations.zh.thinkingInProgress),
+    })
+    fireEvent.click(trigger)
+    await waitFor(() => expect(screen.getByText('live thinking')).toBeTruthy())
+
+    const messageId = useChatStore.getState().conversations[sessionKey].messages[0].id
+    act(() => {
+      useChatStore.getState().appendTextPart(sessionKey, messageId, 'answer')
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('live thinking')).toBeTruthy()
+      expect(screen.getByText('answer')).toBeTruthy()
+    })
+    expect(
+      screen.getByRole('button', { name: /过程/ }).getAttribute('aria-expanded')
+    ).toBe('true')
   })
 
   it('attaches the current editor selection as a snippet', async () => {

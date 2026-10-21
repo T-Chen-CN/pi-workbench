@@ -138,6 +138,124 @@ function stripContextBlock(content: string): string {
   return [before, after].filter(Boolean).join('\n\n') || '(attached files)'
 }
 
+/** 工具步骤展示限额；完整结果仍保留在 Pi JSONL 中 */
+const TOOL_ARGS_LIMIT = 1_000
+const TOOL_RESULT_LIMIT = 2_000
+
+function truncateText(text: string, max: number, preferTail = false): string {
+  if (text.length <= max) return text
+  return preferTail ? `…${text.slice(-max)}` : `${text.slice(0, max)}…`
+}
+
+function stringifyToolArgs(args: unknown): string {
+  try {
+    return truncateText(JSON.stringify(args ?? {}), 500)
+  } catch {
+    return ''
+  }
+}
+
+/** 生成不包含大字段（尤其 write.content）的参数摘要 */
+function summarizeToolArgs(toolName: string, args: any): string {
+  const value = args ?? {}
+  switch (toolName) {
+    case 'read':
+    case 'ls':
+      return typeof value.path === 'string' ? value.path : stringifyToolArgs(value)
+    case 'write': {
+      const size = typeof value.content === 'string' ? value.content.length : 0
+      return `${value.path ?? ''}${size > 0 ? ` · ${size} 字符` : ''}`
+    }
+    case 'edit': {
+      const count = Array.isArray(value.edits) ? value.edits.length : 0
+      return `${value.path ?? ''}${count > 0 ? ` · ${count} 处` : ''}`
+    }
+    case 'bash':
+    case 'powershell':
+      return truncateText(String(value.command ?? ''), TOOL_ARGS_LIMIT)
+    case 'grep':
+    case 'find':
+      return [value.pattern, value.path ?? value.glob]
+        .filter((part) => typeof part === 'string' && part.length > 0)
+        .join(' · ')
+    default:
+      return stringifyToolArgs(value)
+  }
+}
+
+/** 从工具结果中提取可展示的文本预览，图片只显示占位 */
+function summarizeToolResult(result: any, preferTail = false): string {
+  if (!result) return ''
+  if (typeof result === 'string') {
+    return truncateText(result, TOOL_RESULT_LIMIT, preferTail)
+  }
+  const content = Array.isArray(result.content) ? result.content : []
+  const text = content
+    .map((part: any) => {
+      if (part?.type === 'text' && typeof part.text === 'string') return part.text
+      if (part?.type === 'image') return '[图片]'
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
+  if (text) return truncateText(text, TOOL_RESULT_LIMIT, preferTail)
+  if (result.details != null) {
+    try {
+      return truncateText(JSON.stringify(result.details), TOOL_RESULT_LIMIT, preferTail)
+    } catch {
+      return ''
+    }
+  }
+  return ''
+}
+
+/** 可展示的工具步骤 */
+export type AgentTracePart =
+  | { type: 'text'; id: string; text: string }
+  | {
+      type: 'thinking'
+      id: string
+      text: string
+      redacted?: boolean
+      durationMs?: number
+    }
+  | {
+      type: 'tool'
+      id: string
+      toolCallId: string
+      toolName: string
+      argsSummary: string
+      status: 'running' | 'success' | 'error'
+      isError?: boolean
+      durationMs?: number
+      resultPreview?: string
+      filePath?: string
+    }
+
+/** 主进程归一化后的流式事件；文本、思考和工具共用同一条有序通道 */
+export type AgentTraceEvent =
+  | { type: 'text_delta'; delta: string }
+  | { type: 'thinking_delta'; delta: string }
+  | { type: 'thinking_redacted' }
+  | {
+      type: 'tool_start'
+      toolCallId: string
+      toolName: string
+      argsSummary: string
+      startedAt: number
+    }
+  | { type: 'tool_update'; toolCallId: string; resultPreview?: string }
+  | {
+      type: 'tool_end'
+      toolCallId: string
+      toolName: string
+      status: 'success' | 'error'
+      durationMs?: number
+      resultPreview?: string
+      filePath?: string
+    }
+
+
 export interface AgentConfig {
   workspaceDir: string
   /** Agent 数据目录（默认为 {workspace}/.pi-workbench/agent） */
@@ -176,6 +294,11 @@ interface SessionRuntime {
   unsubscribe: (() => void) | null
   isProcessing: boolean
   onTextDelta: ((delta: string) => void) | null
+  onTrace: ((event: AgentTraceEvent) => void) | null
+  /** 当前 assistant 消息中已经收到过增量的 thinking 块 */
+  thinkingDeltaSeen: Set<number>
+  /** write/edit 工具开始时的目标路径，供 tool_end 附带 */
+  toolFiles: Map<string, string>
   editSnapshots: Map<string, { path: string; oldContent: string }>
   pendingEdits: FileEdit[]
   messageHistory: AgentMessage[]
@@ -190,6 +313,7 @@ interface SessionRuntime {
 export interface AgentMessage {
   role: 'user' | 'assistant'
   content: string
+  parts?: AgentTracePart[]
   timestamp: number
 }
 
@@ -197,6 +321,8 @@ export interface FileEdit {
   path: string
   oldContent: string
   newContent: string
+  /** 触发该修改的工具调用；用于在工具步骤里打开对应 Diff */
+  toolCallId?: string
 }
 
 export interface AgentUsage {
@@ -220,8 +346,10 @@ export interface AgentChatResult {
 }
 
 export interface AgentChatOptions {
-  /** 接收流式文本增量（模型逐段输出时调用） */
+  /** 接收流式文本增量（兼容 Fleet 等只关心文本的调用方） */
   onTextDelta?: (delta: string) => void
+  /** 接收归一化的文本 / 思考 / 工具事件；与 onTextDelta 可同时使用 */
+  onTrace?: (event: AgentTraceEvent) => void
   /** 单轮请求超时（毫秒），0 表示不超时；默认 10 分钟 */
   timeoutMs?: number
 }
@@ -339,17 +467,48 @@ export class AgentManager {
     return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
   }
 
+  /** write/edit 的工具行可附带文件路径；其他工具不暴露文件 */
+  private toolFilePath(toolName: string, args: any): string | undefined {
+    if (toolName !== 'write' && toolName !== 'edit') return undefined
+    const target = this.resolveToolPath(args?.path)
+    if (!target || !this.isInsideWorkspace(target)) return undefined
+    return target
+  }
+
   /**
-   * 订阅工具执行事件，记录 write/edit 前后的文件内容。
+   * 订阅会话事件：转发文本 / 思考 / 工具步骤，并记录 write/edit 前后内容。
    * Pi 的 write / edit 工具参数分别为 { path, content } 和 { path, edits }。
    */
-  private subscribeToToolEdits(runtime: SessionRuntime): () => void {
+  private subscribeToSessionEvents(runtime: SessionRuntime): () => void {
     return runtime.session.subscribe((event: any) => {
       try {
+        if (event.type === 'message_start' && event.message?.role === 'assistant') {
+          runtime.thinkingDeltaSeen.clear()
+          return
+        }
+
         if (event.type === 'message_update') {
           const update = event.assistantMessageEvent
           if (update?.type === 'text_delta' && typeof update.delta === 'string') {
             runtime.onTextDelta?.(update.delta)
+            runtime.onTrace?.({ type: 'text_delta', delta: update.delta })
+          } else if (update?.type === 'thinking_start') {
+            if (typeof update.contentIndex === 'number') {
+              runtime.thinkingDeltaSeen.delete(update.contentIndex)
+            }
+          } else if (update?.type === 'thinking_delta' && typeof update.delta === 'string') {
+            if (typeof update.contentIndex === 'number') {
+              runtime.thinkingDeltaSeen.add(update.contentIndex)
+            }
+            runtime.onTrace?.({ type: 'thinking_delta', delta: update.delta })
+          } else if (update?.type === 'thinking_end') {
+            const index = typeof update.contentIndex === 'number' ? update.contentIndex : -1
+            // 部分供应商只在 end 给出完整内容，或返回脱敏后的空内容
+            if (!runtime.thinkingDeltaSeen.has(index)) {
+              const content = typeof update.content === 'string' ? update.content : ''
+              if (content) runtime.onTrace?.({ type: 'thinking_delta', delta: content })
+              else runtime.onTrace?.({ type: 'thinking_redacted' })
+            }
           }
           return
         }
@@ -362,19 +521,32 @@ export class AgentManager {
           return
         }
         if (event.type === 'auto_retry_end') {
-          this.logger.info(`[Agent Manager] Provider retry ${event.success ? 'succeeded' : 'failed'}`)
+          this.logger.info(`[Agent Manager] Auto retry ${event.success ? 'succeeded' : 'failed'}`)
           return
         }
 
         // 一轮结束：丢弃本轮未闭合的工具快照，避免 Map 无限增长
         if (event.type === 'turn_end' || event.type === 'agent_end') {
           runtime.editSnapshots.clear()
+          runtime.toolFiles.clear()
+          runtime.thinkingDeltaSeen.clear()
           return
         }
 
         if (event.type === 'tool_execution_start') {
+          const args = event.args ?? {}
+          const filePath = this.toolFilePath(event.toolName, args)
+          if (filePath) runtime.toolFiles.set(event.toolCallId, filePath)
+          runtime.onTrace?.({
+            type: 'tool_start',
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            argsSummary: summarizeToolArgs(event.toolName, args),
+            startedAt: Date.now(),
+          })
+
           if (event.toolName !== 'write' && event.toolName !== 'edit') return
-          const target = this.resolveToolPath(event.args?.path)
+          const target = this.resolveToolPath(args.path)
           if (!target || !this.isInsideWorkspace(target)) return
           const oldContent = existsSync(target) ? readFileSync(target, 'utf-8') : ''
           runtime.editSnapshots.set(event.toolCallId, { path: target, oldContent })
@@ -383,20 +555,39 @@ export class AgentManager {
 
         if (event.type === 'tool_execution_end') {
           const snapshot = runtime.editSnapshots.get(event.toolCallId)
-          if (!snapshot) return
+          const filePath = snapshot?.path ?? runtime.toolFiles.get(event.toolCallId)
           runtime.editSnapshots.delete(event.toolCallId)
+          runtime.toolFiles.delete(event.toolCallId)
 
-          const newContent = existsSync(snapshot.path) ? readFileSync(snapshot.path, 'utf-8') : ''
-          if (newContent !== snapshot.oldContent) {
-            runtime.pendingEdits.push({
-              path: snapshot.path,
-              oldContent: snapshot.oldContent,
-              newContent,
-            })
+          if (snapshot) {
+            const newContent = existsSync(snapshot.path)
+              ? readFileSync(snapshot.path, 'utf-8')
+              : ''
+            if (newContent !== snapshot.oldContent) {
+              runtime.pendingEdits.push({
+                path: snapshot.path,
+                oldContent: snapshot.oldContent,
+                newContent,
+                toolCallId: event.toolCallId,
+              })
+            }
           }
+
+          runtime.onTrace?.({
+            type: 'tool_end',
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            status: event.isError ? 'error' : 'success',
+            durationMs: event.durationMs,
+            resultPreview: summarizeToolResult(
+              event.result,
+              event.toolName === 'bash' || event.toolName === 'powershell'
+            ),
+            filePath,
+          })
         }
       } catch (error) {
-        this.logger.warn('[Agent Manager] Failed to capture tool edit:', error)
+        this.logger.warn('[Agent Manager] Failed to process session event:', error)
       }
     })
   }
@@ -530,6 +721,9 @@ export class AgentManager {
       unsubscribe: null,
       isProcessing: false,
       onTextDelta: null,
+      onTrace: null,
+      thinkingDeltaSeen: new Set(),
+      toolFiles: new Map(),
       editSnapshots: new Map(),
       pendingEdits: [],
       messageHistory: [],
@@ -538,7 +732,7 @@ export class AgentManager {
       titleAttempted: false,
       pendingTitle: null,
     }
-    runtime.unsubscribe = this.subscribeToToolEdits(runtime)
+    runtime.unsubscribe = this.subscribeToSessionEvents(runtime)
     this.runtimes.set(id, runtime)
     return runtime
   }
@@ -587,35 +781,116 @@ export class AgentManager {
     return this.createRuntime(manager)
   }
 
+  /**
+   * 把一个用户轮次内的 assistant / toolResult 消息聚合成一条带 parts 的 assistant 消息。
+   * parts 保留 thinking、text、tool 的真实顺序，供前端时间线渲染。
+   */
   private sessionMessages(runtime: SessionRuntime): AgentMessage[] {
     const messages = runtime.session.messages ?? []
     const result: AgentMessage[] = []
+    let turn: { parts: AgentTracePart[]; timestamp?: number } | null = null
+    let partSeq = 0
 
-    for (const msg of messages) {
-      if (msg.role !== 'user' && msg.role !== 'assistant') continue
+    const nextId = (prefix: string) => `${prefix}-${++partSeq}`
 
-      let content = ''
-      if (typeof msg.content === 'string') {
-        content = msg.content
-      } else if (Array.isArray(msg.content)) {
-        content = msg.content
-          .filter((part: any) => part.type === 'text')
-          .map((part: any) => part.text)
-          .join('\n')
+    const flushTurn = () => {
+      if (!turn || turn.parts.length === 0) {
+        turn = null
+        partSeq = 0
+        return
       }
-      if (!content) continue
-
-      if (msg.role === 'user') {
-        content = stripContextBlock(content)
-      }
-
+      const content = turn.parts
+        .filter((part): part is Extract<AgentTracePart, { type: 'text' }> => part.type === 'text')
+        .map((part) => part.text)
+        .join('\n')
       result.push({
-        role: msg.role,
+        role: 'assistant',
         content,
-        timestamp: typeof msg.timestamp === 'number' ? msg.timestamp : Date.now(),
+        parts: turn.parts,
+        timestamp: turn.timestamp ?? Date.now(),
       })
+      turn = null
+      partSeq = 0
     }
 
+    for (const msg of messages as any[]) {
+      if (msg.role === 'user') {
+        flushTurn()
+        const raw =
+          typeof msg.content === 'string'
+            ? msg.content
+            : Array.isArray(msg.content)
+              ? msg.content
+                  .filter((part: any) => part?.type === 'text')
+                  .map((part: any) => part.text)
+                  .join('\n')
+              : ''
+        result.push({
+          role: 'user',
+          content: stripContextBlock(raw),
+          timestamp: typeof msg.timestamp === 'number' ? msg.timestamp : Date.now(),
+        })
+        continue
+      }
+
+      if (msg.role === 'assistant') {
+        if (!turn) turn = { parts: [] }
+        if (turn.timestamp === undefined) {
+          turn.timestamp = typeof msg.timestamp === 'number' ? msg.timestamp : Date.now()
+        }
+
+        if (typeof msg.content === 'string') {
+          if (msg.content) {
+            turn.parts.push({ type: 'text', id: nextId('text'), text: msg.content })
+          }
+        } else if (Array.isArray(msg.content)) {
+          for (const part of msg.content) {
+            if (!part) continue
+            if (part.type === 'text' && typeof part.text === 'string') {
+              turn.parts.push({ type: 'text', id: nextId('text'), text: part.text })
+            } else if (part.type === 'thinking') {
+              turn.parts.push({
+                type: 'thinking',
+                id: nextId('thinking'),
+                text: typeof part.thinking === 'string' ? part.thinking : '',
+                redacted: part.redacted === true,
+              })
+            } else if (part.type === 'toolCall') {
+              const toolName = String(part.name ?? 'tool')
+              const toolCallId = String(part.id ?? nextId('tool'))
+              turn.parts.push({
+                type: 'tool',
+                id: toolCallId,
+                toolCallId,
+                toolName,
+                argsSummary: summarizeToolArgs(toolName, part.arguments ?? {}),
+                status: 'running',
+                filePath: this.toolFilePath(toolName, part.arguments ?? {}),
+              })
+            }
+          }
+        }
+        continue
+      }
+
+      if (msg.role === 'toolResult') {
+        if (!turn) continue
+        const toolPart = turn.parts.find(
+          (part): part is Extract<AgentTracePart, { type: 'tool' }> =>
+            part.type === 'tool' && part.toolCallId === msg.toolCallId
+        )
+        if (!toolPart) continue
+        toolPart.status = msg.isError ? 'error' : 'success'
+        toolPart.isError = Boolean(msg.isError)
+        if (typeof msg.durationMs === 'number') toolPart.durationMs = msg.durationMs
+        toolPart.resultPreview = summarizeToolResult(
+          { content: msg.content, details: msg.details },
+          msg.toolName === 'bash' || msg.toolName === 'powershell'
+        )
+      }
+    }
+
+    flushTurn()
     return result
   }
 
@@ -890,6 +1165,7 @@ export class AgentManager {
 
     try {
       runtime.onTextDelta = options?.onTextDelta ?? null
+      runtime.onTrace = options?.onTrace ?? null
       runtime.pendingEdits = []
       runtime.editSnapshots.clear()
       // 只认本轮新增的 assistant 消息，避免请求失败时把上一轮回复当成本轮结果
@@ -980,11 +1256,15 @@ export class AgentManager {
         assistantResponse = 'Agent completed but returned no text response.'
       }
 
-      runtime.messageHistory.push({
-        role: 'assistant',
-        content: assistantResponse,
-        timestamp: Date.now(),
-      })
+      const aggregated = this.sessionMessages(runtime)
+      const lastTurn = [...aggregated].reverse().find((entry) => entry.role === 'assistant')
+      runtime.messageHistory.push(
+        lastTurn ?? {
+          role: 'assistant',
+          content: assistantResponse,
+          timestamp: Date.now(),
+        }
+      )
       runtime.updatedAt = Date.now()
 
       // 未落盘的临时标题在会话首次落盘后写入
@@ -1040,6 +1320,7 @@ export class AgentManager {
       if (this.runtimes.get(runtime.id) === runtime) {
         runtime.isProcessing = false
         runtime.onTextDelta = null
+        runtime.onTrace = null
       }
     }
   }
