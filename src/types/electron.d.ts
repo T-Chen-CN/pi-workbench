@@ -175,6 +175,12 @@ export interface ElectronAPI {
     sessionId: string,
     toolCallId: string
   ) => Promise<{ success: boolean; path?: string; error?: string }>
+  agentExportSession: (
+    workspaceDir: string,
+    sessionId: string,
+    format: ExportSessionFormat,
+    language?: 'zh' | 'en'
+  ) => Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }>
   agentSessionSetModel: (
     workspaceDir: string,
     sessionId: string,
@@ -454,6 +460,9 @@ export interface PendingMessageRecord {
 }
 
 export type PendingMessagesMap = Record<string, PendingMessageRecord[]>
+
+/** 会话导出格式（R-10） */
+export type ExportSessionFormat = 'md' | 'html' | 'jsonl'
 
 /** 工具结果全量查看（R-20） */
 export interface ToolResultMeta {

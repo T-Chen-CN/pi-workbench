@@ -14,7 +14,7 @@ import { useI18nStore } from '../store/i18nStore'
 import { useSessionStore } from '../store/sessionStore'
 import { Caption, DataText, EmptyState, IconButton } from './ui'
 import { SearchField } from './patterns'
-import type { SessionSummary } from '../types/electron'
+import type { ExportSessionFormat, SessionSummary } from '../types/electron'
 
 interface ChatSessionListProps {
   workspacePath: string
@@ -31,7 +31,7 @@ interface ChatSessionListProps {
   onDelete: (session: SessionSummary) => void
   onTogglePin?: (session: SessionSummary) => void
   onToggleArchive?: (session: SessionSummary) => void
-  onExport?: (session: SessionSummary) => void
+  onExport?: (session: SessionSummary, format: ExportSessionFormat) => void
 }
 
 function relativeTime(timestamp: number, language: 'zh' | 'en'): string {
@@ -72,6 +72,7 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
   const openIds = state?.open ?? []
   const activeId = state?.active ?? null
   const [query, setQuery] = useState('')
+  const [exportMenuId, setExportMenuId] = useState<string | null>(null)
 
   const visibleSessions = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -187,12 +188,37 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                     size="sm"
                     onClick={() => onToggleArchive(session)}
                   />
-                  <IconButton
-                    icon={Download}
-                    label={t('exportSession')}
-                    size="sm"
-                    onClick={() => onExport(session)}
-                  />
+                  <span className="relative">
+                    <IconButton
+                      icon={Download}
+                      label={t('exportSession')}
+                      size="sm"
+                      onClick={() =>
+                        setExportMenuId(exportMenuId === session.id ? null : session.id)
+                      }
+                    />
+                    {exportMenuId === session.id && (
+                      <div className="absolute right-0 top-full z-20 mt-1 w-40 border border-line bg-raised shadow-print">
+                        {(['md', 'html', 'jsonl'] as const).map((format) => (
+                          <button
+                            key={format}
+                            type="button"
+                            onClick={() => {
+                              setExportMenuId(null)
+                              onExport(session, format)
+                            }}
+                            className="block w-full px-3 py-1.5 text-left type-value text-ink transition-colors hover:bg-hover"
+                          >
+                            {format === 'md'
+                              ? t('exportMarkdown')
+                              : format === 'html'
+                                ? t('exportHtml')
+                                : t('exportJsonl')}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </span>
                   <IconButton
                     icon={Pencil}
                     label={t('renameSession')}

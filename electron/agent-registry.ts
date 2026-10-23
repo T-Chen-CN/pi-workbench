@@ -131,6 +131,18 @@ export interface RegisteredAgent {
     sessionId: string,
     toolCallId: string
   ) => Promise<{ success: boolean; text?: string; toolName?: string; error?: string }>
+  /** 会话导出（R-10） */
+  exportSessionMarkdown?: (
+    sessionId: string,
+    language?: 'zh' | 'en'
+  ) => Promise<{ success: boolean; title?: string; content?: string; error?: string }>
+  exportSessionHtml?: (
+    sessionId: string,
+    language?: 'zh' | 'en'
+  ) => Promise<{ success: boolean; title?: string; content?: string; error?: string }>
+  getSessionJsonlPath?: (
+    sessionId: string
+  ) => Promise<{ success: boolean; title?: string; path?: string; error?: string }>
   /** 会话模型与思考级别 */
   getSessionSettings?: (sessionId: string) => Promise<{
     success: boolean

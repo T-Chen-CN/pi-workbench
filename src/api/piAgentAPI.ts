@@ -14,6 +14,7 @@ import type {
   CheckpointSummary,
   ContextUsageInfo,
   ConversationBranchGroup,
+  ExportSessionFormat,
   SessionStatsInfo,
   FileEdit,
   SessionListResult,
@@ -699,6 +700,28 @@ export const piAgentAPI = {
     }
     try {
       return await window.electronAPI.agentToolResultOpen(workspaceDir, sessionId, toolCallId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 导出会话（R-10）：Markdown / HTML / 原始 JSONL */
+  async exportSession(
+    workspaceDir: string,
+    sessionId: string,
+    format: ExportSessionFormat,
+    language?: 'zh' | 'en'
+  ): Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentExportSession !== 'function') {
+      return { success: false, error: 'Session export is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentExportSession(
+        workspaceDir,
+        sessionId,
+        format,
+        language
+      )
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

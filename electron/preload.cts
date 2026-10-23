@@ -192,6 +192,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ) => ipcRenderer.invoke('agent:tool-result:image', workspaceDir, sessionId, toolCallId, index),
   agentToolResultOpen: (workspaceDir: string, sessionId: string, toolCallId: string) =>
     ipcRenderer.invoke('agent:tool-result:open', workspaceDir, sessionId, toolCallId),
+  agentExportSession: (
+    workspaceDir: string,
+    sessionId: string,
+    format: 'md' | 'html' | 'jsonl',
+    language?: 'zh' | 'en'
+  ) =>
+    ipcRenderer.invoke('agent:export-session', workspaceDir, sessionId, format, language),
   agentSessionSetModel: (workspaceDir: string, sessionId: string, modelId: string) =>
     ipcRenderer.invoke('agent:session:setModel', workspaceDir, sessionId, modelId),
   agentSessionSetThinking: (workspaceDir: string, sessionId: string, level: string) =>

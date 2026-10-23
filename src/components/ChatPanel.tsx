@@ -410,7 +410,7 @@ function upsertSession(
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
-  const { t } = useI18nStore()
+  const { t, language } = useI18nStore()
   const sessionsState = useSessionStore((state) => state.byWorkspace[workspacePath])
   const sessions = sessionsState?.sessions ?? EMPTY_SESSIONS
   const activeSessionId = sessionsState?.active ?? null
@@ -1679,28 +1679,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     void persistSessionMeta({ ...sessionMeta, archived })
   }
 
-  /** 导出会话为 Markdown */
-  const exportSession = async (session: SessionSummary) => {
-    const history = await piAgentAPI.getHistory(workspacePath, session.id)
-    const messages = history.success ? history.history ?? [] : []
-    if (messages.length === 0) {
-      toast.error(t('exportEmpty'))
-      return
-    }
-    const markdown = [
-      `# ${session.title || session.id}`,
-      '',
-      ...messages.map(
-        (message) =>
-          `## ${message.role === 'user' ? t('roleYou') : 'Pi'}\n\n${message.content}`
-      ),
-    ].join('\n\n')
-    const fileName = `${(session.title || 'session').replace(/[\\/:*?"<>|]/g, '_')}.md`
-    if (typeof api.saveTextFile !== 'function') return
-    const result = await api.saveTextFile(fileName, markdown)
-    if (result.success) {
+  /** 导出会话（R-10）：Markdown / HTML / 原始 JSONL，由主进程写盘 */
+  const exportSession = async (
+    session: SessionSummary,
+    format: import('../types/electron').ExportSessionFormat = 'md'
+  ) => {
+    const result = await piAgentAPI.exportSession(workspacePath, session.id, format, language)
+    if (result.success && !result.canceled) {
       toast.info(t('exportDone'))
-    } else if (!('canceled' in result) || !result.canceled) {
+    } else if (!result.success) {
       toast.error(t('exportFailed', { error: localizeError(result.error ?? '') }))
     }
   }
@@ -2656,7 +2643,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         onDelete={(session) => void handleDeleteSession(session)}
         onTogglePin={togglePin}
         onToggleArchive={toggleArchive}
-        onExport={(session) => void exportSession(session)}
+        onExport={(session, format) => void exportSession(session, format)}
       />
 
       {toolResultView && (

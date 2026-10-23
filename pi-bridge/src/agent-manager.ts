@@ -210,6 +210,61 @@ function messageText(message: unknown): string {
     .join('\n')
 }
 
+/** 会话导出（R-10）的结构标签 */
+const EXPORT_LABELS = {
+  zh: {
+    you: '你',
+    assistant: 'Pi',
+    thinking: '思考过程',
+    tool: '工具调用',
+    args: '参数',
+    result: '完整结果',
+    image: '图片',
+    exportedAt: '导出时间',
+  },
+  en: {
+    you: 'You',
+    assistant: 'Pi',
+    thinking: 'Thinking',
+    tool: 'Tool call',
+    args: 'Arguments',
+    result: 'Full result',
+    image: 'Image',
+    exportedAt: 'Exported',
+  },
+} as const
+
+export type ExportLanguage = 'zh' | 'en'
+
+type ExportToolPart = {
+  type: 'tool'
+  name: string
+  args: string
+  result: string
+  isError: boolean
+  images: Array<{ data: string; mimeType: string }>
+}
+type ExportPart =
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; text: string }
+  | ExportToolPart
+type ExportTurn = { user: { text: string; timestamp: number }; parts: ExportPart[] }
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/** 生成不会与内容冲突的 Markdown 代码围栏 */
+function markdownFence(text: string): string {
+  const runs = text.match(/`{3,}/g) ?? []
+  const longest = runs.reduce((max, run) => Math.max(max, run.length), 2)
+  return '`'.repeat(Math.max(3, longest + 1))
+}
+
 /** 工具步骤展示限额；完整结果仍保留在 Pi JSONL 中 */
 const TOOL_ARGS_LIMIT = 1_000
 const TOOL_RESULT_LIMIT = 2_000
@@ -1376,6 +1431,285 @@ export class AgentManager {
       }
     }
     return null
+  }
+
+  /** 会话导出为 Markdown（R-10）：正文、思考与工具调用/完整结果，长过程默认收起 */
+  async exportSessionMarkdown(
+    sessionId: string,
+    language: ExportLanguage = 'zh'
+  ): Promise<{ success: boolean; title?: string; content?: string; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const exported = this.buildMarkdownExport(runtime, language === 'en' ? 'en' : 'zh')
+      return { success: true, ...exported }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 会话导出为自带样式的离线 HTML（R-10） */
+  async exportSessionHtml(
+    sessionId: string,
+    language: ExportLanguage = 'zh'
+  ): Promise<{ success: boolean; title?: string; content?: string; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const exported = this.buildHtmlExport(runtime, language === 'en' ? 'en' : 'zh')
+      return { success: true, ...exported }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 原始 JSONL 会话文件路径（R-10）；未落盘的新会话没有文件 */
+  async getSessionJsonlPath(
+    sessionId: string
+  ): Promise<{ success: boolean; title?: string; path?: string; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const file = runtime.sessionManager.getSessionFile()
+      if (!file) return { success: false, error: 'This session has not been saved yet.' }
+      return { success: true, title: this.exportTitle(runtime), path: file }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  private exportTitle(runtime: SessionRuntime): string {
+    return this.runtimeSummary(runtime).title || runtime.id
+  }
+
+  private exportTurns(runtime: SessionRuntime): ExportTurn[] {
+    const messages = (runtime.session.messages ?? []) as any[]
+    const results = new Map<string, any>()
+    for (const message of messages) {
+      if (message?.role === 'toolResult' && typeof message.toolCallId === 'string') {
+        results.set(message.toolCallId, message)
+      }
+    }
+
+    const turns: ExportTurn[] = []
+    for (const message of messages) {
+      if (message?.role === 'user') {
+        turns.push({
+          user: {
+            text: stripContextBlock(messageText(message)),
+            timestamp: typeof message.timestamp === 'number' ? message.timestamp : Date.now(),
+          },
+          parts: [],
+        })
+        continue
+      }
+      const turn = turns[turns.length - 1]
+      if (!turn || message?.role !== 'assistant') continue
+      const content: any[] =
+        typeof message.content === 'string'
+          ? [{ type: 'text', text: message.content }]
+          : Array.isArray(message.content)
+            ? message.content
+            : []
+      for (const part of content) {
+        if (part?.type === 'text' && typeof part.text === 'string' && part.text) {
+          turn.parts.push({ type: 'text', text: part.text })
+        } else if (
+          part?.type === 'thinking' &&
+          !part.redacted &&
+          typeof part.thinking === 'string' &&
+          part.thinking
+        ) {
+          turn.parts.push({ type: 'thinking', text: part.thinking })
+        } else if (part?.type === 'toolCall') {
+          const raw = typeof part.id === 'string' ? results.get(part.id) : undefined
+          const payload = raw ? this.payloadFromMessage(raw) : null
+          turn.parts.push({
+            type: 'tool',
+            name: String(part.name ?? 'tool'),
+            args: this.serializeToolArgs(part.arguments),
+            result: payload?.text ?? '',
+            isError: Boolean(raw?.isError),
+            images: payload?.images ?? [],
+          })
+        }
+      }
+    }
+    return turns
+  }
+
+  private serializeToolArgs(args: unknown): string {
+    try {
+      return JSON.stringify(args ?? {}, null, 2)
+    } catch {
+      return String(args ?? '')
+    }
+  }
+
+  private buildMarkdownExport(
+    runtime: SessionRuntime,
+    language: ExportLanguage
+  ): { title: string; content: string } {
+    const labels = EXPORT_LABELS[language]
+    const title = this.exportTitle(runtime)
+    const lines: string[] = [
+      `# ${title}`,
+      '',
+      `> ${labels.exportedAt}: ${new Date().toISOString()}`,
+      '',
+    ]
+
+    for (const turn of this.exportTurns(runtime)) {
+      if (turn.user.text) lines.push(`## ${labels.you}`, '', turn.user.text, '')
+      lines.push(`## ${labels.assistant}`, '')
+      for (const part of turn.parts) {
+        if (part.type === 'text') {
+          lines.push(part.text, '')
+          continue
+        }
+        if (part.type === 'thinking') {
+          lines.push(
+            '<details>',
+            `<summary>${labels.thinking}</summary>`,
+            '',
+            part.text,
+            '',
+            '</details>',
+            ''
+          )
+          continue
+        }
+        const fence = markdownFence(`${part.args}\n${part.result}`)
+        lines.push(
+          '<details>',
+          `<summary>${labels.tool} · ${part.name}${part.isError ? ' ✗' : ''}</summary>`,
+          '',
+          `**${labels.args}**`,
+          '',
+          `${fence}json`,
+          part.args,
+          fence,
+          '',
+          `**${labels.result}**`,
+          '',
+          `${fence}text`,
+          part.result,
+          fence
+        )
+        for (const image of part.images) {
+          lines.push('', `![${labels.image}](data:${image.mimeType};base64,${image.data})`)
+        }
+        lines.push('', '</details>', '')
+      }
+    }
+
+    return { title, content: lines.join('\n') }
+  }
+
+  private buildHtmlExport(
+    runtime: SessionRuntime,
+    language: ExportLanguage
+  ): { title: string; content: string } {
+    const labels = EXPORT_LABELS[language]
+    const title = this.exportTitle(runtime)
+    const body: string[] = [
+      `<h1>${escapeHtml(title)}</h1>`,
+      `<p class="meta">${labels.exportedAt}: ${escapeHtml(new Date().toISOString())}</p>`,
+    ]
+
+    for (const turn of this.exportTurns(runtime)) {
+      body.push('<section class="turn">')
+      if (turn.user.text) {
+        body.push(`<h2>${labels.you}</h2>`, `<pre class="text">${escapeHtml(turn.user.text)}</pre>`)
+      }
+      body.push(`<h2>${labels.assistant}</h2>`)
+      for (const part of turn.parts) {
+        if (part.type === 'text') {
+          body.push(`<pre class="text">${escapeHtml(part.text)}</pre>`)
+          continue
+        }
+        if (part.type === 'thinking') {
+          body.push(
+            '<details>',
+            `<summary>${labels.thinking}</summary>`,
+            `<pre>${escapeHtml(part.text)}</pre>`,
+            '</details>'
+          )
+          continue
+        }
+        body.push(
+          '<details>',
+          `<summary>${labels.tool} · ${escapeHtml(part.name)}${part.isError ? ' ✗' : ''}</summary>`,
+          `<h3>${labels.args}</h3>`,
+          `<pre>${escapeHtml(part.args)}</pre>`,
+          `<h3>${labels.result}</h3>`,
+          `<pre>${escapeHtml(part.result)}</pre>`
+        )
+        for (const image of part.images) {
+          body.push(
+            `<img alt="${labels.image}" src="data:${image.mimeType};base64,${image.data}" />`
+          )
+        }
+        body.push('</details>')
+      }
+      body.push('</section>')
+    }
+
+    const content = `<!doctype html>
+<html lang="${language === 'en' ? 'en' : 'zh-CN'}">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${escapeHtml(title)}</title>
+<style>
+:root { color-scheme: light; }
+body { margin: 0; background: #f7f5ef; color: #26251f; font: 15px/1.7 -apple-system, "Segoe UI", "Noto Sans SC", sans-serif; }
+main { max-width: 860px; margin: 0 auto; padding: 48px 24px; }
+h1 { font: 400 32px/1.2 Georgia, "Noto Serif SC", serif; margin: 0 0 8px; }
+h2 { font: 400 24px/1.3 Georgia, "Noto Serif SC", serif; margin: 36px 0 12px; border-bottom: 1px solid #ddd8c8; padding-bottom: 6px; }
+h3 { font-size: 13px; color: #7a766a; margin: 12px 0 4px; text-transform: uppercase; letter-spacing: .04em; }
+.meta { color: #7a766a; font-size: 12px; margin: 0 0 32px; }
+pre { white-space: pre-wrap; word-break: break-word; background: #efece2; border: 1px solid #ddd8c8; padding: 10px 12px; font: 12.5px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; overflow: auto; }
+pre.text { background: transparent; border: 0; padding: 0; font: inherit; }
+details { border-left: 2px solid #ddd8c8; padding-left: 12px; margin: 12px 0; }
+summary { cursor: pointer; color: #4f6b5a; font-size: 13px; }
+img { max-width: 100%; height: auto; border: 1px solid #ddd8c8; margin: 8px 0; }
+</style>
+</head>
+<body>
+<main>
+${body.join('\n')}
+</main>
+</body>
+</html>
+`
+    return { title, content }
+  }
+
+  private payloadFromMessage(message: any): {
+    toolName: string
+    text: string
+    images: Array<{ data: string; mimeType: string }>
+  } {
+    const content: any[] = Array.isArray(message.content)
+      ? message.content
+      : typeof message.content === 'string'
+        ? [{ type: 'text', text: message.content }]
+        : []
+    const texts: string[] = []
+    const images: Array<{ data: string; mimeType: string }> = []
+    for (const part of content) {
+      if (part?.type === 'text' && typeof part.text === 'string') {
+        texts.push(part.text)
+      } else if (part?.type === 'image' && typeof part.data === 'string') {
+        images.push({
+          data: part.data,
+          mimeType: typeof part.mimeType === 'string' ? part.mimeType : 'image/png',
+        })
+      }
+    }
+    return {
+      toolName: typeof message.toolName === 'string' ? message.toolName : 'tool',
+      text: texts.join('\n'),
+      images,
+    }
   }
 
   /** 会话累计用量与成本 */
