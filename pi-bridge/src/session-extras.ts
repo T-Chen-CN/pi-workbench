@@ -9,6 +9,7 @@
 
 import * as fs from 'fs/promises'
 import * as path from 'path'
+import { normalizeSessionPermission, type SessionPermission } from './approval-policy.js'
 import { isStructuredPlan, type StructuredPlan } from './plan.js'
 
 export interface ToolEditRecord {
@@ -25,10 +26,19 @@ export interface SessionExtras {
   branchLeaves: Record<string, string>
   /** 结构化计划（R-04）；不进入模型上下文，压缩后仍保留 */
   plan: StructuredPlan | null
+  /** 会话权限（AF-02）；null 表示尚未固化，首次打开时从全局默认档生成 */
+  permission: SessionPermission | null
 }
 
 export function emptyExtras(): SessionExtras {
-  return { version: 1, thinkingDurations: {}, toolEdits: {}, branchLeaves: {}, plan: null }
+  return {
+    version: 1,
+    thinkingDurations: {},
+    toolEdits: {},
+    branchLeaves: {},
+    plan: null,
+    permission: null,
+  }
 }
 
 export class SessionExtrasStore {
@@ -52,6 +62,10 @@ export class SessionExtrasStore {
         branchLeaves:
           raw.branchLeaves && typeof raw.branchLeaves === 'object' ? raw.branchLeaves : {},
         plan: isStructuredPlan(raw.plan) ? raw.plan : null,
+        permission:
+          raw.permission && typeof raw.permission === 'object'
+            ? normalizeSessionPermission(raw.permission)
+            : null,
       }
     } catch {
       return emptyExtras()
@@ -64,5 +78,12 @@ export class SessionExtrasStore {
     const temp = `${target}.tmp`
     await fs.writeFile(temp, JSON.stringify(extras), 'utf-8')
     await fs.rename(temp, target)
+  }
+
+  /** 会话删除时一并清理 sidecar，避免遗留权限与历史记录 */
+  async delete(sessionId: string): Promise<void> {
+    await fs.unlink(this.pathFor(sessionId)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error
+    })
   }
 }

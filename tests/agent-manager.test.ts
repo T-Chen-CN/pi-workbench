@@ -1177,12 +1177,9 @@ describe('tool approvals', () => {
     expect(result.reason).toContain('not now')
   })
 
-  it('remembers allow-for-session decisions', async () => {
+  it('remembers always-allow within the session', async () => {
     primeSdk(createFakeSession())
-    const requestApproval = vi
-      .fn()
-      .mockResolvedValueOnce({ action: 'allow-session' })
-      .mockResolvedValue({ action: 'deny' })
+    const requestApproval = vi.fn().mockResolvedValue({ action: 'allow-always' })
     await manager.initialize(makeConfig({ requestApproval }))
 
     const handler = toolCallHandler()
@@ -1191,14 +1188,15 @@ describe('tool approvals', () => {
     expect(requestApproval).toHaveBeenCalledTimes(1)
   })
 
-  it('persists always-allow decisions through the host callback', async () => {
+  it('persists always-allow into the session permission', async () => {
     primeSdk(createFakeSession())
     const requestApproval = vi.fn().mockResolvedValue({ action: 'allow-always' })
-    const onPermissionAlwaysAllow = vi.fn()
-    await manager.initialize(makeConfig({ requestApproval, onPermissionAlwaysAllow }))
+    await manager.initialize(makeConfig({ requestApproval }))
 
     await expect(toolCallHandler()(writeCall)).resolves.toBeUndefined()
-    expect(onPermissionAlwaysAllow).toHaveBeenCalledWith('write')
+    const settings = await manager.getSessionSettings('session-1')
+    expect(settings.success).toBe(true)
+    expect(settings.permission).toEqual({ mode: 'ask', grants: ['write'] })
   })
 
   it('fails closed when no approval channel is available', async () => {
@@ -1210,19 +1208,53 @@ describe('tool approvals', () => {
     expect(result.reason).toContain('No approval channel')
   })
 
-  it('honours a deny policy without asking', async () => {
+  it('honours a read-only default without asking', async () => {
     primeSdk(createFakeSession())
     const requestApproval = vi.fn()
     await manager.initialize(
       makeConfig({
         requestApproval,
-        getPermissionPolicy: () => ({ read: 'allow', write: 'deny', command: 'deny', other: 'deny' }),
+        getDefaultPermissionLevel: () => 'readonly',
       })
     )
 
     const result = await toolCallHandler()(writeCall)
     expect(result).toMatchObject({ block: true })
     expect(result.reason).toContain('blocked by the current permission policy')
+    expect(requestApproval).not.toHaveBeenCalled()
+  })
+
+  it('seeds the session permission from the default level', async () => {
+    primeSdk(createFakeSession())
+    await manager.initialize(makeConfig({ getDefaultPermissionLevel: () => 'auto' }))
+
+    const settings = await manager.getSessionSettings('session-1')
+    expect(settings.permission).toEqual({ mode: 'auto', grants: [] })
+  })
+
+  it('applies permission changes to the next tool call', async () => {
+    primeSdk(createFakeSession())
+    const requestApproval = vi.fn()
+    await manager.initialize(
+      makeConfig({
+        requestApproval,
+        getDefaultPermissionLevel: () => 'readonly',
+      })
+    )
+
+    const handler = toolCallHandler()
+    await expect(handler(writeCall)).resolves.toMatchObject({ block: true })
+
+    const changed = await manager.setSessionPermission('session-1', {
+      mode: 'ask',
+      grants: ['write'],
+    })
+    expect(changed).toMatchObject({
+      success: true,
+      permission: { mode: 'ask', grants: ['write'] },
+    })
+
+    await expect(handler({ ...writeCall, toolCallId: 'c-write-2' })).resolves.toBeUndefined()
     expect(requestApproval).not.toHaveBeenCalled()
   })
 })
@@ -1241,23 +1273,30 @@ describe('plan mode', () => {
     return handler
   }
 
-  it('restricts the tool set in plan mode and restores it in act mode', async () => {
+  it('switches the tool set with the session mode', async () => {
     const session = createFakeSession()
     primeSdk(session)
     await manager.initialize(makeConfig())
 
-    await manager.setSessionMode('session-1', 'plan')
+    // 询问模式恢复会话初始工具集（含 Pi 可能加载的额外工具）
+    const askTools = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls']
+    expect(session.activeTools).toEqual(askTools)
+
+    await manager.setSessionPermission('session-1', { mode: 'plan', grants: [] })
     expect(session.activeTools).toEqual(['read', 'grep', 'find', 'ls', 'submit_plan'])
 
-    await manager.setSessionMode('session-1', 'act')
-    expect(session.activeTools).toEqual(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'])
+    await manager.setSessionPermission('session-1', { mode: 'readonly', grants: [] })
+    expect(session.activeTools).toEqual(['read', 'grep', 'find', 'ls'])
+
+    await manager.setSessionPermission('session-1', { mode: 'ask', grants: [] })
+    expect(session.activeTools).toEqual(askTools)
   })
 
   it('blocks non-read tools while in plan mode', async () => {
     const session = createFakeSession()
     primeSdk(session)
     await manager.initialize(makeConfig())
-    await manager.setSessionMode('session-1', 'plan')
+    await manager.setSessionPermission('session-1', { mode: 'plan', grants: [] })
 
     const handler = toolCallHandler()
     const blocked = await handler({
@@ -1280,7 +1319,7 @@ describe('plan mode', () => {
     })
     primeSdk(session)
     await manager.initialize(makeConfig())
-    await manager.setSessionMode('session-1', 'plan')
+    await manager.setSessionPermission('session-1', { mode: 'plan', grants: [] })
 
     await manager.chat('add a feature')
 
@@ -1960,12 +1999,23 @@ describe('structured plans', () => {
   it('approves the plan and starts its first step', async () => {
     await setupPlanSession()
 
-    const result = await manager.approvePlan('session-1', 'plan-1')
+    const result = await manager.approvePlan('session-1', 'plan-1', 'ask')
 
     expect(result.success).toBe(true)
     expect(result.plan?.status).toBe('approved')
     expect(result.plan?.steps[0].status).toBe('in_progress')
     expect(result.plan?.steps[1].status).toBe('pending')
+    expect(result.permission).toEqual({ mode: 'ask', grants: [] })
+  })
+
+  it('moves the session into the chosen execution mode when approving', async () => {
+    await setupPlanSession()
+
+    const result = await manager.approvePlan('session-1', 'plan-1', 'auto')
+    expect(result.permission).toEqual({ mode: 'auto', grants: [] })
+
+    const settings = await manager.getSessionSettings('session-1')
+    expect(settings.permission).toEqual({ mode: 'auto', grants: [] })
   })
 
   it('rejects a proposed plan and refuses a second decision', async () => {
@@ -1975,7 +2025,7 @@ describe('structured plans', () => {
     expect(rejected.success).toBe(true)
     expect(rejected.plan?.status).toBe('rejected')
 
-    await expect(manager.approvePlan('session-1', 'plan-1')).resolves.toMatchObject({
+    await expect(manager.approvePlan('session-1', 'plan-1', 'ask')).resolves.toMatchObject({
       success: false,
     })
   })
@@ -1994,6 +2044,7 @@ describe('session model and thinking controls', () => {
       success: true,
       modelId: 'test-model',
       thinkingLevel: 'medium',
+      permission: { mode: 'ask', grants: [] },
     })
 
     await expect(manager.setSessionModel('session-1', 'other-model')).resolves.toEqual({

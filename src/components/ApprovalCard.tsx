@@ -21,7 +21,7 @@ const CATEGORY_LABEL_KEYS: Record<ToolCategory, TranslationKey> = {
 
 /**
  * 工具审批卡（AF-01）：展示工具名、参数摘要与影响范围，
- * 提供允许一次 / 本会话允许 / 始终允许 / 拒绝四条路径。
+ * 提供允许一次 / 始终允许（仅本会话）/ 拒绝三条路径。
  */
 export const ApprovalCard: React.FC<ApprovalCardProps> = ({ request, onRespond, disabled }) => {
   const t = useI18nStore((state) => state.t)
@@ -116,17 +116,10 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({ request, onRespond, 
           </Button>
           <Button
             size="sm"
-            variant="secondary"
-            disabled={disabled || busy}
-            onClick={() => void respond({ action: 'allow-session' })}
-          >
-            {t('approvalAllowSession')}
-          </Button>
-          <Button
-            size="sm"
             variant="ghost"
             disabled={disabled || busy}
             onClick={() => void respond({ action: 'allow-always' })}
+            title={t('approvalAllowAlways')}
           >
             {t('approvalAllowAlways')}
           </Button>

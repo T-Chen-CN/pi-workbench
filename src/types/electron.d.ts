@@ -73,11 +73,6 @@ export interface ElectronAPI {
   agentSessionsDelete: (workspaceDir: string, sessionId: string) => Promise<AgentDisposeResult>
   agentSessionsGetTabs: (workspaceDir: string) => Promise<SessionTabsResult>
   agentSessionsSetTabs: (workspaceDir: string, tabs: SessionTabs) => Promise<AgentDisposeResult>
-  agentSessionsSetMode: (
-    workspaceDir: string,
-    sessionId: string,
-    mode: SessionMode
-  ) => Promise<{ success: boolean; error?: string }>
   onNotifyClick: (
     callback: (payload: { workspaceDir: string; sessionId: string }) => void
   ) => () => void
@@ -130,7 +125,18 @@ export interface ElectronAPI {
   agentSessionSettings: (
     workspaceDir: string,
     sessionId: string
-  ) => Promise<{ success: boolean; modelId?: string; thinkingLevel?: string; error?: string }>
+  ) => Promise<{
+    success: boolean
+    modelId?: string
+    thinkingLevel?: string
+    permission?: SessionPermission
+    error?: string
+  }>
+  agentSessionSetPermission: (
+    workspaceDir: string,
+    sessionId: string,
+    permission: SessionPermission
+  ) => Promise<{ success: boolean; permission?: SessionPermission; error?: string }>
   agentSessionStats: (
     workspaceDir: string,
     sessionId: string
@@ -154,8 +160,14 @@ export interface ElectronAPI {
   agentPlanApprove: (
     workspaceDir: string,
     sessionId: string,
-    planId: string
-  ) => Promise<{ success: boolean; plan?: StructuredPlan; error?: string }>
+    planId: string,
+    targetMode: 'ask' | 'auto'
+  ) => Promise<{
+    success: boolean
+    plan?: StructuredPlan
+    permission?: SessionPermission
+    error?: string
+  }>
   agentPlanReject: (
     workspaceDir: string,
     sessionId: string,
@@ -410,6 +422,18 @@ export interface PermissionPolicy {
   other: PermissionAction
 }
 
+/** 默认权限档位（AF-02）：全局只提供新会话的默认档 */
+export type PermissionLevel = 'readonly' | 'ask' | 'auto'
+
+/** 会话模式：权限档位 + 计划工作流；计划可选但不作为默认档 */
+export type SessionMode = PermissionLevel | 'plan'
+
+export interface SessionPermission {
+  mode: SessionMode
+  /** 会话内额外允许的类别；只在 ask 模式下有效 */
+  grants: ToolCategory[]
+}
+
 export interface ApprovalRequestPayload {
   requestId: string
   workspaceDir: string
@@ -430,12 +454,8 @@ export interface ApprovalRequestPayload {
 
 export type ApprovalDecision =
   | { action: 'allow-once' }
-  | { action: 'allow-session' }
   | { action: 'allow-always' }
   | { action: 'deny'; reason?: string }
-
-/** 会话模式：plan 只读探索并给出计划，act 可修改文件与执行命令 */
-export type SessionMode = 'plan' | 'act'
 
 /** 上下文窗口占用 */
 export interface ContextUsageInfo {

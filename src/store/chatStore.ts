@@ -5,9 +5,17 @@ import type {
   ContextUsageInfo,
   ConversationBranchGroup,
   FileEdit,
+  SessionPermission,
   SessionStatsInfo,
   StructuredPlan,
 } from '../types/electron'
+
+/** 会话级设置：模型、思考级别与权限 */
+export interface SessionSettings {
+  modelId?: string
+  thinkingLevel?: string
+  permission?: SessionPermission
+}
 
 export interface ChatUsage {
   input: number
@@ -75,14 +83,12 @@ export interface ConversationState {
   error: string | null
   attachments: ChatAttachment[]
   draftInput: string
-  /** Plan 只读 / Act 可写；默认 Act */
-  mode: 'plan' | 'act'
   /** 运行中排队的待发送消息 */
   pending: PendingMessage[]
   /** 最近一次读取的上下文占用 */
   contextUsage: ContextUsageInfo | null
   /** 会话级模型与思考级别 */
-  sessionSettings: { modelId?: string; thinkingLevel?: string } | null
+  sessionSettings: SessionSettings | null
   /** 供应商自动重试状态 */
   retryStatus: {
     attempt: number
@@ -102,7 +108,6 @@ const EMPTY_CONVERSATION: ConversationState = {
   error: null,
   attachments: [],
   draftInput: '',
-  mode: 'act',
   pending: [],
   contextUsage: null,
   sessionSettings: null,
@@ -151,14 +156,13 @@ interface ChatState {
   clearAttachments: (key: string) => void
   setDraftInput: (key: string, value: string) => void
   clearDraftInput: (key: string) => void
-  setMode: (key: string, mode: 'plan' | 'act') => void
   addPending: (key: string, text: string) => PendingMessage
   setPending: (key: string, items: PendingMessage[]) => void
   removePending: (key: string, id: string) => void
   setContextUsage: (key: string, usage: ContextUsageInfo | null) => void
   setSessionSettings: (
     key: string,
-    settings: { modelId?: string; thinkingLevel?: string } | null
+    settings: SessionSettings | null
   ) => void
   setRetryStatus: (
     key: string,
@@ -514,9 +518,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) =>
       updateExisting(state, key, (current) => ({ ...current, draftInput: '' }))
     ),
-
-  setMode: (key, mode) =>
-    set((state) => updateExisting(state, key, (current) => ({ ...current, mode }))),
 
   addPending: (key, text) => {
     const item: PendingMessage = {

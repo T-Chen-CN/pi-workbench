@@ -74,6 +74,33 @@ describe('SessionExtrasStore', () => {
     await expect(store.load('no-plan')).resolves.toEqual(emptyExtras())
   })
 
+  it('round-trips the session permission and removes it with the session', async () => {
+    const store = new SessionExtrasStore(tmpRoot)
+    const extras = emptyExtras()
+    extras.permission = { mode: 'ask', grants: ['write'] }
+    await store.save('session-perm', extras)
+
+    await expect(store.load('session-perm')).resolves.toMatchObject({
+      permission: { mode: 'ask', grants: ['write'] },
+    })
+
+    await store.delete('session-perm')
+    await expect(store.load('session-perm')).resolves.toEqual(emptyExtras())
+    await expect(store.delete('session-perm')).resolves.toBeUndefined()
+  })
+
+  it('normalizes invalid stored permissions', async () => {
+    const store = new SessionExtrasStore(tmpRoot)
+    await fs.writeFile(
+      path.join(tmpRoot, 'bad-perm.json'),
+      JSON.stringify({ version: 1, permission: { level: 'nonsense', grants: ['write'] } }),
+      'utf-8'
+    )
+    await expect(store.load('bad-perm')).resolves.toMatchObject({
+      permission: { mode: 'ask', grants: ['write'] },
+    })
+  })
+
   it('ignores corrupt files', async () => {
     const store = new SessionExtrasStore(tmpRoot)
     await fs.writeFile(path.join(tmpRoot, 'broken.json'), '{oops', 'utf-8')

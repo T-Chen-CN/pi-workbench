@@ -54,11 +54,11 @@ vi.mock('../src/api/piAgentAPI', () => ({
     sessionsDelete: vi.fn(),
     sessionsGetTabs: vi.fn(),
     sessionsSetTabs: vi.fn(),
-    sessionsSetMode: vi.fn(),
     steer: vi.fn(),
     getContextUsage: vi.fn(),
     compactContext: vi.fn(),
     getSessionSettings: vi.fn(),
+    setSessionPermission: vi.fn(),
     getSessionStats: vi.fn(),
     getModelCapabilities: vi.fn(),
     listPromptResources: vi.fn(),
@@ -187,13 +187,13 @@ beforeEach(() => {
     history: [],
   })
   vi.mocked(piAgentAPI.sessionsSetTabs).mockResolvedValue({ success: true })
-  vi.mocked(piAgentAPI.sessionsSetMode).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.getContextUsage).mockResolvedValue({ success: true, usage: undefined })
   vi.mocked(piAgentAPI.compactContext).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.getSessionSettings).mockResolvedValue({
     success: true,
     modelId: 'test-model',
     thinkingLevel: 'medium',
+    permission: { mode: 'ask', grants: [] },
   })
   vi.mocked(piAgentAPI.getSessionStats).mockResolvedValue({
     success: true,
@@ -501,6 +501,26 @@ describe('ChatPanel', () => {
     fireEvent.click(await screen.findByRole('menuitemradio', { name: /^高/ }))
     await waitFor(() =>
       expect(piAgentAPI.setSessionThinking).toHaveBeenCalledWith('/ws', 's1', 'high')
+    )
+  })
+
+  it('changes session permission from the status line menu', async () => {
+    vi.mocked(piAgentAPI.setSessionPermission).mockResolvedValue({
+      success: true,
+      permission: { mode: 'readonly', grants: [] },
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    fireEvent.click(await screen.findByLabelText(translations.zh.sessionModeLabel))
+    fireEvent.click(
+      await screen.findByRole('menuitemradio', { name: translations.zh.permissionLevelReadonly })
+    )
+    await waitFor(() =>
+      expect(piAgentAPI.setSessionPermission).toHaveBeenCalledWith('/ws', 's1', {
+        mode: 'readonly',
+        grants: [],
+      })
     )
   })
 
@@ -1198,8 +1218,10 @@ describe('structured plan card', () => {
     expect(screen.getByText(/touches tests/)).toBeTruthy()
     expect(screen.queryByRole('textbox')).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: translations.zh.planApprove }))
-    expect(onApprove).toHaveBeenCalledWith(plan)
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.planApproveAuto }))
+    expect(onApprove).toHaveBeenCalledWith(plan, 'auto')
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.planApproveAsk }))
+    expect(onApprove).toHaveBeenCalledWith(plan, 'ask')
   })
 
   it('hides actions once the plan is approved', () => {
@@ -1219,7 +1241,7 @@ describe('structured plan card', () => {
       />
     )
 
-    expect(screen.queryByRole('button', { name: translations.zh.planApprove })).toBeNull()
+    expect(screen.queryByRole('button', { name: translations.zh.planApproveAsk })).toBeNull()
   })
 })
 

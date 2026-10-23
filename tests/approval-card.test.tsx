@@ -43,13 +43,7 @@ describe('ApprovalCard', () => {
     expect(onRespond).toHaveBeenCalledWith('req-1', { action: 'allow-once' })
   })
 
-  it('responds with allow for session and always', () => {
-    const sessionRespond = vi.fn()
-    const first = render(<ApprovalCard request={request} onRespond={sessionRespond} />)
-    fireEvent.click(screen.getByText(translations.zh.approvalAllowSession))
-    expect(sessionRespond).toHaveBeenCalledWith('req-1', { action: 'allow-session' })
-    first.unmount()
-
+  it('responds with always allow for this session', () => {
     const alwaysRespond = vi.fn()
     render(<ApprovalCard request={request} onRespond={alwaysRespond} />)
     fireEvent.click(screen.getByText(translations.zh.approvalAllowAlways))

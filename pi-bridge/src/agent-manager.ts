@@ -22,12 +22,18 @@ import * as fs from 'fs/promises'
 import { existsSync, readFileSync } from 'fs'
 import { writeJsonAtomicSync } from './atomic-json.js'
 import {
+  DEFAULT_PERMISSION_LEVEL,
   buildApprovalDetails,
   categorizeTool,
-  normalizePermissionPolicy,
+  isPermissionLevel,
+  normalizeSessionPermission,
+  resolvePermissionPolicy,
   type ApprovalDecision,
   type ApprovalRequestPayload,
-  type PermissionPolicy,
+  type PermissionLevel,
+  type SessionMode,
+  type SessionPermission,
+  type ToolCategory,
 } from './approval-policy.js'
 import {
   CheckpointStore,
@@ -133,20 +139,24 @@ const CONTEXT_BLOCK_END = '</pi-workbench-context>'
 /** Plan 模式的提示块；历史恢复时整块剥离，不展示给用户 */
 const PLAN_BLOCK_START = '<pi-workbench-plan-mode>'
 const PLAN_BLOCK_END = '</pi-workbench-plan-mode>'
-/** Plan 模式可用的只读工具（另加 submit_plan） */
-const PLAN_MODE_TOOLS = ['read', 'grep', 'find', 'ls', 'submit_plan']
-/** Act 模式在无法恢复原工具集时使用的内置工具（另加 update_plan_step） */
+/** 只读模式可用工具 */
+const READ_ONLY_TOOLS = ['read', 'grep', 'find', 'ls']
+/** 计划模式：只读工具 + 结构化计划提交 */
+const PLAN_MODE_TOOLS = [...READ_ONLY_TOOLS, 'submit_plan']
+/** 询问 / 完全模式的工具集（另加 update_plan_step） */
 const DEFAULT_MODE_TOOLS = [
-  'read',
-  'grep',
-  'find',
-  'ls',
+  ...READ_ONLY_TOOLS,
   'write',
   'edit',
   'bash',
   'powershell',
   'update_plan_step',
 ]
+function sessionModeTools(mode: SessionMode, baseTools: string[]): string[] {
+  if (mode === 'readonly') return READ_ONLY_TOOLS
+  if (mode === 'plan') return PLAN_MODE_TOOLS
+  return baseTools.length > 0 ? baseTools : DEFAULT_MODE_TOOLS
+}
 const PLAN_MODE_INSTRUCTION = [
   'You are in Plan mode. Only read-only tools (read, grep, find, ls) and submit_plan are available;',
   'you cannot modify files or run commands.',
@@ -156,8 +166,7 @@ const PLAN_MODE_INSTRUCTION = [
   'After submit_plan succeeds, reply with one short sentence.',
 ].join(' ')
 
-/** 会话运行模式：plan 仅只读探索并给出计划，act 可修改文件与执行命令 */
-export type SessionMode = 'plan' | 'act'
+export type { SessionMode }
 
 function wrapPlanPrompt(message: string): string {
   return `${PLAN_BLOCK_START}\n${PLAN_MODE_INSTRUCTION}\n${PLAN_BLOCK_END}\n\n${message}`
@@ -510,12 +519,10 @@ export interface AgentConfig {
   logger?: AgentLogger
   /** 模型生成会话标题后回调（主进程转发给渲染层） */
   onSessionTitle?: (sessionId: string, title: string) => void
-  /** 当前权限策略（每次工具调用时读取，改设置后无需重建 Agent） */
-  getPermissionPolicy?: () => unknown
+  /** 新会话的默认权限档位；只在创建会话运行时读取一次，之后会话自行持有权限 */
+  getDefaultPermissionLevel?: () => unknown
   /** 请求用户审批；未提供时按拒绝处理（fail-closed） */
   requestApproval?: (request: ApprovalRequestPayload) => Promise<ApprovalDecision>
-  /** 用户选择“始终允许”时回调，由主进程持久化策略 */
-  onPermissionAlwaysAllow?: (category: ApprovalRequestPayload['category']) => void
   /** 检查点存储目录；未提供时不记录检查点 */
   checkpointDir?: string
 }
@@ -600,12 +607,8 @@ interface SessionRuntime {
   titleAttempted: boolean
   /** 未落盘新会话的临时标题 */
   pendingTitle: string | null
-  /** 本会话内已获准的类别（“本会话允许”） */
-  sessionAllow: Set<string>
-  /** 当前模式；审批钩子与 chat 都会读取 */
-  modeState: { current: SessionMode }
-  /** 进入 Plan 前的工具集，切回 Act 时恢复 */
-  activeToolsBeforePlan: string[] | null
+  /** 会话初始工具集；从只读/计划模式切回询问或完全时恢复 */
+  baseTools: string[]
   /** 本轮检查点；轮次结束后落盘 */
   currentCheckpoint: CheckpointRecord | null
   /** 会话附加数据（思考时长 / 历史工具 Diff） */
@@ -1114,33 +1117,48 @@ export class AgentManager {
     }
   }
 
+  /** 新会话的默认权限档位；设置页只改这里对未来会话生效 */
+  private defaultPermissionLevel(): PermissionLevel {
+    const raw = this.config?.getDefaultPermissionLevel?.()
+    return isPermissionLevel(raw) ? raw : DEFAULT_PERMISSION_LEVEL
+  }
+
+  /** 按会话模式切换可用工具集 */
+  private applySessionModeTools(runtime: SessionRuntime, mode: SessionMode): void {
+    try {
+      runtime.session.setActiveToolsByName(sessionModeTools(mode, runtime.baseTools))
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Failed to apply session mode tools:', error)
+    }
+  }
+
   /**
-   * 工具审批扩展：在工具执行前按策略放行、拒绝或挂起等待用户。
+   * 工具审批扩展：在工具执行前按会话模式放行、拒绝或挂起等待用户。
    * 以 inline extension 的方式注册 tool_call 钩子，不落盘，也不属于工作台插件系统。
    */
   private createApprovalExtension(
     sessionId: string,
-    sessionAllow: Set<string>,
-    getMode: () => SessionMode
+    getPermission: () => SessionPermission,
+    onAlwaysAllow: (category: ToolCategory) => void | Promise<void>
   ): ExtensionFactory {
     return (pi) => {
       pi.on('tool_call', async (event: any) => {
         const toolName = String(event?.toolName ?? '')
         const args = event?.input ?? event?.args ?? {}
         const category = categorizeTool(toolName)
+        const permission = normalizeSessionPermission(getPermission())
 
         // Plan 模式只允许只读工具；即使工具集被意外放宽也要拦住
-        if (getMode() === 'plan' && category !== 'read') {
+        if (permission.mode === 'plan' && category !== 'read') {
           return {
             block: true,
             reason:
-              'Plan mode is read-only. Switch to Act mode before modifying files or running commands.',
+              'Plan mode is read-only. Switch to Ask or Auto mode before modifying files or running commands.',
           }
         }
 
-        const policy: PermissionPolicy = normalizePermissionPolicy(this.config?.getPermissionPolicy?.())
-        let action = policy[category]
-        if (sessionAllow.has(category) && action !== 'deny') action = 'allow'
+        const policy = resolvePermissionPolicy(permission)
+        const action = policy[category]
 
         if (action === 'allow') return undefined
         if (action === 'deny') {
@@ -1168,17 +1186,8 @@ export class AgentManager {
         this.logger.info(`[Agent Manager] Tool approval for ${toolName}: ${decision.action}`)
 
         if (decision.action === 'allow-once') return undefined
-        if (decision.action === 'allow-session') {
-          sessionAllow.add(category)
-          return undefined
-        }
         if (decision.action === 'allow-always') {
-          sessionAllow.add(category)
-          try {
-            this.config?.onPermissionAlwaysAllow?.(category)
-          } catch (error) {
-            this.logger.warn('[Agent Manager] Failed to persist always-allow:', error)
-          }
+          await onAlwaysAllow(category)
           return undefined
         }
 
@@ -1426,11 +1435,20 @@ export class AgentManager {
     }
   }
 
-  /** 批准计划：状态改为 approved，第一步标记为进行中（任务列表随之驱动） */
+  /** 批准计划并原子切换到目标执行模式（询问 / 完全），返回新会话模式 */
   async approvePlan(
     sessionId: string,
-    planId: string
-  ): Promise<{ success: boolean; plan?: StructuredPlan; error?: string }> {
+    planId: string,
+    targetMode: PermissionLevel
+  ): Promise<{
+    success: boolean
+    plan?: StructuredPlan
+    permission?: SessionPermission
+    error?: string
+  }> {
+    if (targetMode !== 'ask' && targetMode !== 'auto') {
+      return { success: false, error: 'Invalid execute mode.' }
+    }
     try {
       const runtime = await this.ensureRuntime(sessionId)
       if (runtime.isProcessing) {
@@ -1445,8 +1463,13 @@ export class AgentManager {
       const first = plan.steps.find((step) => step.status === 'pending')
       if (first) first.status = 'in_progress'
       plan.updatedAt = Date.now()
+
+      const permission: SessionPermission = { mode: targetMode, grants: [] }
+      runtime.extras.permission = permission
+      this.applySessionModeTools(runtime, targetMode)
       this.persistExtras(runtime)
-      return { success: true, plan }
+      await runtime.extrasSave
+      return { success: true, plan, permission }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -2086,11 +2109,12 @@ ${body.join('\n')}
     }
   }
 
-  /** 读取会话当前的模型与思考级别 */
+  /** 读取会话当前的模型、思考级别与权限 */
   async getSessionSettings(sessionId: string): Promise<{
     success: boolean
     modelId?: string
     thinkingLevel?: string
+    permission?: SessionPermission
     error?: string
   }> {
     try {
@@ -2099,7 +2123,34 @@ ${body.join('\n')}
         success: true,
         modelId: runtime.session.model?.id,
         thinkingLevel: runtime.session.thinkingLevel,
+        permission: normalizeSessionPermission(runtime.extras.permission),
       }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 修改会话模式（模式 + 额外授权），立即落盘到会话 sidecar */
+  async setSessionPermission(
+    sessionId: string,
+    permission: unknown
+  ): Promise<{ success: boolean; permission?: SessionPermission; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const permissionBefore = normalizeSessionPermission(runtime.extras.permission)
+      const nextPermission = normalizeSessionPermission(permission)
+      runtime.extras.permission = nextPermission
+      if (permissionBefore.mode !== nextPermission.mode) {
+        this.applySessionModeTools(runtime, nextPermission.mode)
+      }
+      this.persistExtras(runtime)
+      await runtime.extrasSave
+      this.logger.info(
+        `[Agent Manager] Session ${sessionId} mode -> ${nextPermission.mode}${
+          nextPermission.grants.length > 0 ? ` (+${nextPermission.grants.join(',')})` : ''
+        }`
+      )
+      return { success: true, permission: nextPermission }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -2312,38 +2363,6 @@ ${body.join('\n')}
     }
   }
 
-  /** 切换会话模式；Plan 期间只保留只读工具 */
-  async setSessionMode(
-    sessionId: string,
-    mode: SessionMode
-  ): Promise<{ success: boolean; error?: string }> {
-    if (mode !== 'plan' && mode !== 'act') {
-      return { success: false, error: 'Invalid session mode.' }
-    }
-    try {
-      const runtime = await this.ensureRuntime(sessionId)
-      if (runtime.modeState.current === mode) return { success: true }
-
-      if (mode === 'plan') {
-        runtime.activeToolsBeforePlan = runtime.session.getActiveToolNames()
-        runtime.session.setActiveToolsByName(PLAN_MODE_TOOLS)
-      } else {
-        const restore =
-          runtime.activeToolsBeforePlan && runtime.activeToolsBeforePlan.length > 0
-            ? runtime.activeToolsBeforePlan
-            : DEFAULT_MODE_TOOLS
-        runtime.session.setActiveToolsByName(restore)
-        runtime.activeToolsBeforePlan = null
-      }
-
-      runtime.modeState.current = mode
-      this.logger.info(`[Agent Manager] Session ${sessionId} mode -> ${mode}`)
-      return { success: true }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
-  }
-
   /** 创建（或复用）一个会话运行时 */
   private async createRuntime(sessionManager: SessionManager): Promise<SessionRuntime> {
     const config = this.config
@@ -2357,20 +2376,45 @@ ${body.join('\n')}
     const model = modelRuntime.getModel(WORKBENCH_PROVIDER_ID, config.apiConfig.selectedModel)
     if (!model) throw new Error('Selected model is unavailable.')
 
-    const sessionAllow = new Set<string>()
-    const modeState = { current: 'act' as SessionMode }
     const planContext: { runtime: SessionRuntime | null } = { runtime: null }
+    const runtimeRef: { current: SessionRuntime | null } = { current: null }
     const extras = this.extrasStore ? await this.extrasStore.load(id) : emptyExtras()
+    // 模式只在会话诞生时从全局默认档取一次，此后会话自行持有并落盘
+    const seededPermission = extras.permission === null
+    if (seededPermission) {
+      extras.permission = { mode: this.defaultPermissionLevel(), grants: [] }
+    }
+    const fallbackPermission = normalizeSessionPermission(extras.permission)
     const settingsManager = SettingsManager.create(config.workspaceDir, this.agentDir)
     const resourceLoader = new DefaultResourceLoader({
       cwd: config.workspaceDir,
       agentDir: this.agentDir,
       settingsManager,
       extensionFactories: [
-        this.createApprovalExtension(id, sessionAllow, () => modeState.current),
+        this.createApprovalExtension(
+          id,
+          () =>
+            runtimeRef.current
+              ? normalizeSessionPermission(runtimeRef.current.extras.permission)
+              : fallbackPermission,
+          (category) => {
+            const runtime = runtimeRef.current
+            if (!runtime) return
+            const current = normalizeSessionPermission(runtime.extras.permission)
+            if (current.mode !== 'ask' || current.grants.includes(category)) return
+            runtime.extras.permission = {
+              mode: current.mode,
+              grants: [...current.grants, category],
+            }
+            this.persistExtras(runtime)
+            return runtime.extrasSave
+          }
+        ),
         this.createPlanExtension({
           getRuntime: () => planContext.runtime,
-          getMode: () => modeState.current,
+          getMode: () =>
+            normalizeSessionPermission(runtimeRef.current?.extras.permission ?? fallbackPermission)
+              .mode,
         }),
       ],
     })
@@ -2407,6 +2451,7 @@ ${body.join('\n')}
 
     const header = sessionManager.getHeader()
     const createdAt = header?.timestamp ? Date.parse(header.timestamp) : Date.now()
+    const baseTools = sessionOutcome.value.session.getActiveToolNames()
     const runtime: SessionRuntime = {
       id,
       sessionManager,
@@ -2425,9 +2470,7 @@ ${body.join('\n')}
       updatedAt: Date.now(),
       titleAttempted: false,
       pendingTitle: null,
-      sessionAllow,
-      modeState,
-      activeToolsBeforePlan: null,
+      baseTools,
       currentCheckpoint: null,
       extras,
       extrasSave: Promise.resolve(),
@@ -2436,7 +2479,10 @@ ${body.join('\n')}
     }
     runtime.unsubscribe = this.subscribeToSessionEvents(runtime)
     planContext.runtime = runtime
+    runtimeRef.current = runtime
+    this.applySessionModeTools(runtime, fallbackPermission.mode)
     this.runtimes.set(id, runtime)
+    if (seededPermission) this.persistExtras(runtime)
     return runtime
   }
 
@@ -2447,6 +2493,12 @@ ${body.join('\n')}
       } catch (error) {
         this.logger.warn('[Agent Manager] Failed to abort before dispose:', error)
       }
+    }
+    // 等 sidecar 落盘完成，避免删除会话时与最后一次保存竞争
+    try {
+      await runtime.extrasSave
+    } catch {
+      // persistExtras 已记录失败
     }
     try {
       runtime.unsubscribe?.()
@@ -2781,6 +2833,11 @@ ${body.join('\n')}
       if (!config) return { success: false, error: 'Agent not initialized.' }
       const file = SessionManager.findById(config.workspaceDir, sessionId, this.sessionDir)
       await this.closeSession(sessionId)
+      if (this.extrasStore) {
+        await this.extrasStore.delete(sessionId).catch((error) => {
+          this.logger.warn('[Agent Manager] Failed to delete session extras:', error)
+        })
+      }
       if (!file) return { success: true }
 
       const resolved = path.resolve(file)
@@ -2923,7 +2980,10 @@ ${body.join('\n')}
       // 发送用户消息并等待 Agent 完成；超时先 abort，宽限期后仍未结束则强制收尾
       const session = runtime.session
       const planBefore = runtime.extras.plan?.id ?? null
-      const promptText = runtime.modeState.current === 'plan' ? wrapPlanPrompt(message) : message
+      const promptText =
+        normalizeSessionPermission(runtime.extras.permission).mode === 'plan'
+          ? wrapPlanPrompt(message)
+          : message
       const images = chatImages.map((image) => ({
         type: 'image' as const,
         data: image.data,

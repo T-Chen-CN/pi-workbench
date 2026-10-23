@@ -22,7 +22,6 @@ import type {
   FileEdit,
   SessionListResult,
   SessionOpenResult,
-  SessionMode,
   SessionTabs,
   SessionTabsResult,
   StructuredPlan,
@@ -420,21 +419,6 @@ export const piAgentAPI = {
     }
   },
 
-  async sessionsSetMode(
-    workspaceDir: string,
-    sessionId: string,
-    mode: SessionMode
-  ): Promise<AgentResponse> {
-    try {
-      if (hasElectronAgent()) {
-        return await window.electronAPI.agentSessionsSetMode(workspaceDir, sessionId, mode)
-      }
-      return { success: false, error: 'Session modes are not available in this environment' }
-    } catch (error) {
-      return { success: false, error: bridgeUnavailableError(error) }
-    }
-  },
-
   /** 桌面通知点击：定位到对应工作区与会话 */
   onNotifyClick(
     callback: (payload: { workspaceDir: string; sessionId: string }) => void
@@ -545,16 +529,46 @@ export const piAgentAPI = {
     }
   },
 
-  /** 会话级模型与思考级别 */
+  /** 会话级模型、思考级别与权限 */
   async getSessionSettings(
     workspaceDir: string,
     sessionId: string
-  ): Promise<{ success: boolean; modelId?: string; thinkingLevel?: string; error?: string }> {
+  ): Promise<{
+    success: boolean
+    modelId?: string
+    thinkingLevel?: string
+    permission?: import('../types/electron').SessionPermission
+    error?: string
+  }> {
     if (!hasElectronAgent() || typeof window.electronAPI.agentSessionSettings !== 'function') {
       return { success: false, error: 'Session settings are not available in this environment' }
     }
     try {
       return await window.electronAPI.agentSessionSettings(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 修改会话权限（档位 + 额外授权），立即落盘 */
+  async setSessionPermission(
+    workspaceDir: string,
+    sessionId: string,
+    permission: import('../types/electron').SessionPermission
+  ): Promise<{
+    success: boolean
+    permission?: import('../types/electron').SessionPermission
+    error?: string
+  }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentSessionSetPermission !== 'function') {
+      return { success: false, error: 'Session permissions are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentSessionSetPermission(
+        workspaceDir,
+        sessionId,
+        permission
+      )
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -659,13 +673,24 @@ export const piAgentAPI = {
   async approvePlan(
     workspaceDir: string,
     sessionId: string,
-    planId: string
-  ): Promise<{ success: boolean; plan?: StructuredPlan; error?: string }> {
+    planId: string,
+    targetMode: 'ask' | 'auto'
+  ): Promise<{
+    success: boolean
+    plan?: StructuredPlan
+    permission?: import('../types/electron').SessionPermission
+    error?: string
+  }> {
     if (!hasElectronAgent() || typeof window.electronAPI.agentPlanApprove !== 'function') {
       return { success: false, error: 'Plans are not available in this environment' }
     }
     try {
-      return await window.electronAPI.agentPlanApprove(workspaceDir, sessionId, planId)
+      return await window.electronAPI.agentPlanApprove(
+        workspaceDir,
+        sessionId,
+        planId,
+        targetMode
+      )
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
