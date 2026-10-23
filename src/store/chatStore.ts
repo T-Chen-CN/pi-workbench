@@ -67,8 +67,6 @@ export type NewChatAttachment = Omit<ChatAttachment, 'id'> & { id?: string }
 export interface PendingMessage {
   id: string
   text: string
-  /** queue：本轮结束后发送；steer：注入当前轮 */
-  behavior: 'queue' | 'steer'
 }
 
 export interface ConversationState {
@@ -154,10 +152,9 @@ interface ChatState {
   setDraftInput: (key: string, value: string) => void
   clearDraftInput: (key: string) => void
   setMode: (key: string, mode: 'plan' | 'act') => void
-  addPending: (key: string, text: string, behavior: PendingMessage['behavior']) => PendingMessage
+  addPending: (key: string, text: string) => PendingMessage
   setPending: (key: string, items: PendingMessage[]) => void
   removePending: (key: string, id: string) => void
-  setPendingBehavior: (key: string, id: string, behavior: PendingMessage['behavior']) => void
   setContextUsage: (key: string, usage: ContextUsageInfo | null) => void
   setSessionSettings: (
     key: string,
@@ -521,11 +518,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setMode: (key, mode) =>
     set((state) => updateExisting(state, key, (current) => ({ ...current, mode }))),
 
-  addPending: (key, text, behavior) => {
+  addPending: (key, text) => {
     const item: PendingMessage = {
       id: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text,
-      behavior,
     }
     set((state) =>
       updateExisting(state, key, (current) => ({
@@ -549,16 +545,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       updateExisting(state, key, (current) => ({
         ...current,
         pending: current.pending.filter((item) => item.id !== id),
-      }))
-    ),
-
-  setPendingBehavior: (key, id, behavior) =>
-    set((state) =>
-      updateExisting(state, key, (current) => ({
-        ...current,
-        pending: current.pending.map((item) =>
-          item.id === id ? { ...item, behavior } : item
-        ),
       }))
     ),
 
