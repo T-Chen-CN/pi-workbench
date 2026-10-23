@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   AlertCircle,
   ArrowDown,
@@ -267,6 +268,15 @@ const MessageImages: React.FC<{
   const { t } = useI18nStore()
   const [preview, setPreview] = useState<number | null>(null)
 
+  useEffect(() => {
+    if (preview === null) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPreview(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [preview])
+
   return (
     <>
       <div className="mt-1.5 flex flex-wrap gap-2">
@@ -286,18 +296,36 @@ const MessageImages: React.FC<{
           </button>
         ))}
       </div>
-      {preview !== null && images[preview] && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/70 p-6"
-          onClick={() => setPreview(null)}
-        >
-          <img
-            src={`data:${images[preview].mimeType};base64,${images[preview].data}`}
-            alt=""
-            className="max-h-full max-w-full object-contain"
-          />
-        </div>
-      )}
+      {preview !== null &&
+        images[preview] &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('imagePreviewLabel', { index: preview + 1 })}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/80 p-6"
+            onClick={() => setPreview(null)}
+          >
+            <img
+              src={`data:${images[preview].mimeType};base64,${images[preview].data}`}
+              alt=""
+              onClick={(event) => event.stopPropagation()}
+              className="max-h-full max-w-full object-contain"
+            />
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                setPreview(null)
+              }}
+              aria-label={t('close')}
+              className="absolute right-4 top-4 border border-rule-control bg-raised p-1.5 text-ink transition-colors hover:text-accent"
+            >
+              <X size={16} />
+            </button>
+          </div>,
+          document.body
+        )}
     </>
   )
 }

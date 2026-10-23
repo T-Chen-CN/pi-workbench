@@ -282,9 +282,17 @@ describe('ChatPanel', () => {
 
     render(<ChatPanel workspacePath="/ws" />)
 
-    expect(await screen.findByRole('button', { name: '查看图片 1' })).toBeTruthy()
+    const thumbnail = await screen.findByRole('button', { name: '查看图片 1' })
     const thumb = document.querySelector('img[src^="data:image/png;base64,"]')
     expect(thumb).toBeTruthy()
+
+    fireEvent.click(thumbnail)
+    const dialog = await screen.findByRole('dialog', { name: '查看图片 1' })
+    // 预览层挂在 body 上，不受聊天列表 transform / overflow 限制
+    expect(dialog.parentElement).toBe(document.body)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
   it('restores pending messages persisted before restart', async () => {
