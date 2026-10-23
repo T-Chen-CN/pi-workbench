@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
+  ArrowDown,
   ChevronRight,
   Copy,
   FileText,
@@ -436,6 +437,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([])
   const [sessionMeta, setSessionMeta] = useState<SessionMeta>({ pinned: [], archived: [] })
   const [showArchived, setShowArchived] = useState(false)
+  const [showScrollButton, setShowScrollButton] = useState(false)
+  const [newMessageCount, setNewMessageCount] = useState(0)
+  const lastMessageCountRef = useRef(0)
   const [mention, setMention] = useState<{
     start: number
     query: string
@@ -722,7 +726,39 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     if (!element) return
     const distance = element.scrollHeight - element.scrollTop - element.clientHeight
     stickToBottomRef.current = distance < 64
+    setShowScrollButton(distance > 120)
+    if (distance < 64) setNewMessageCount(0)
   }
+
+  /** 回到底部并恢复跟随 */
+  const scrollToBottom = () => {
+    if (messages.length > 0) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
+    }
+    stickToBottomRef.current = true
+    setShowScrollButton(false)
+    setNewMessageCount(0)
+  }
+
+  useEffect(() => {
+    const previous = lastMessageCountRef.current
+    lastMessageCountRef.current = messages.length
+    if (messages.length > previous && previous > 0 && !stickToBottomRef.current) {
+      setNewMessageCount((count) => count + (messages.length - previous))
+    }
+  }, [messages.length])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.altKey && event.key === 'ArrowDown') {
+        event.preventDefault()
+        scrollToBottom()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length])
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -1849,6 +1885,22 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       )}
 
       {/* Composer */}
+      {activeSessionId && (
+        <div className="relative h-0 flex-shrink-0">
+          {showScrollButton && (
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              className="absolute bottom-2 right-4 z-10 flex items-center gap-1 border border-line bg-raised px-2 py-1 type-caption text-ink-muted shadow-print transition-colors hover:text-ink"
+            >
+              <ArrowDown size={12} />
+              {newMessageCount > 0
+                ? t('newMessages', { count: newMessageCount })
+                : t('scrollToBottom')}
+            </button>
+          )}
+        </div>
+      )}
       {activeSessionId && (
         <div className="flex-shrink-0 p-2.5">
           {retryStatus && (

@@ -165,6 +165,8 @@ export const translations = {
     budgetUsd: '会话预算（美元）',
     budgetUsdHint: '累计成本达到预算时提醒；0 表示不提醒',
     budgetExceeded: '本次会话成本 $ {cost} 已达到预算 $ {budget}',
+    scrollToBottom: '回到底部',
+    newMessages: '有新消息（{count}）',
     slashHelp:
       '可用命令：/plan 计划模式 · /act 执行模式 · /compact 压缩上下文 · /clear 新建会话 · /model <名称> 切换模型',
     slashClearConfirm: '清空意味着开始一个新会话；当前对话会保留在会话列表中。继续？',
@@ -643,6 +645,8 @@ export const translations = {
     budgetUsd: 'Session budget (USD)',
     budgetUsdHint: 'Warn when cumulative cost reaches the budget; 0 disables the warning',
     budgetExceeded: 'Session cost ${cost} has reached the ${budget} budget',
+    scrollToBottom: 'Back to bottom',
+    newMessages: '{count} new message(s)',
     slashHelp:
       'Commands: /plan plan mode · /act act mode · /compact compact context · /clear start a new session · /model <name> switch model',
     slashClearConfirm:
