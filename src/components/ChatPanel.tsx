@@ -3298,7 +3298,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                     onClose={closeStatusMenu}
                     role="dialog"
                     label={t('contextUsageLabel')}
-                    className="w-80"
+                    className="w-64"
                   >
                     <div className="px-3 pb-2 pt-2.5">
                       <div className="flex items-baseline justify-between gap-2">
