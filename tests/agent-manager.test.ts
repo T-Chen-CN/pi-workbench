@@ -1649,6 +1649,61 @@ describe('conversation branches', () => {
   })
 })
 
+describe('model capabilities', () => {
+  it('reports catalog metadata and marks unavailable models', async () => {
+    const session = createFakeSession()
+    const models: Record<string, Record<string, unknown>> = {
+      'deepseek-flash': {
+        provider: 'pi-workbench',
+        id: 'deepseek-flash',
+        reasoning: true,
+        input: ['text', 'image'],
+        contextWindow: 128_000,
+        maxTokens: 8_192,
+        thinkingLevelMap: { high: null },
+      },
+    }
+    sdk.modelRuntimeCreate.mockResolvedValue({
+      getModel: vi.fn((_provider: string, id: string) => models[id]),
+    })
+    sdk.continueRecent.mockImplementation(() => createFakeSessionManager())
+    sdk.createAgentSession.mockResolvedValue({ session })
+
+    await manager.initialize(
+      makeConfig({
+        apiConfig: {
+          provider: 'openai',
+          apiUrl: 'https://api.example.com/v1/',
+          apiKey: 'sk-secret',
+          selectedModel: 'deepseek-flash',
+          availableModels: ['deepseek-flash', 'deepseek-v4-pro'],
+        },
+      })
+    )
+
+    const result = await manager.getModelCapabilities()
+
+    expect(result.success).toBe(true)
+    expect(result.models?.[0]).toMatchObject({
+      id: 'deepseek-flash',
+      available: true,
+      source: 'catalog',
+      contextWindow: 128_000,
+      reasoning: true,
+      vision: true,
+    })
+    expect(result.models?.[0].thinkingLevels).not.toContain('high')
+    expect(result.models?.[1]).toMatchObject({ id: 'deepseek-v4-pro', available: false })
+
+    const modelsJson = JSON.parse(
+      await fs.readFile(path.join(agentDir, 'models.json'), 'utf-8')
+    )
+    expect(
+      modelsJson.providers['pi-workbench'].models.map((model: { id: string }) => model.id)
+    ).toEqual(['deepseek-flash', 'deepseek-v4-pro'])
+  })
+})
+
 describe('session model and thinking controls', () => {
   it('reports and updates the model and thinking level', async () => {
     const session = createFakeSession()

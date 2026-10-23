@@ -58,6 +58,7 @@ vi.mock('../src/api/piAgentAPI', () => ({
     compactContext: vi.fn(),
     getSessionSettings: vi.fn(),
     getSessionStats: vi.fn(),
+    getModelCapabilities: vi.fn(),
     getToolEdit: vi.fn(),
     getToolResultMeta: vi.fn(),
     readToolResultChunk: vi.fn(),
@@ -186,6 +187,7 @@ beforeEach(() => {
     success: true,
     stats: { tokens: 0, input: 0, output: 0, cost: 0, toolCalls: 0, messages: 0 },
   })
+  vi.mocked(piAgentAPI.getModelCapabilities).mockResolvedValue({ success: true, models: [] })
   vi.mocked(piAgentAPI.getToolEdit).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.getToolResultMeta).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.readToolResultChunk).mockResolvedValue({ success: false })
@@ -259,6 +261,32 @@ describe('ChatPanel', () => {
     render(<ChatPanel workspacePath="/ws" />)
 
     expect(await screen.findByText('resume this turn')).toBeTruthy()
+  })
+
+  it('shows model capabilities and disables unsupported thinking', async () => {
+    vi.mocked(piAgentAPI.getModelCapabilities).mockResolvedValue({
+      success: true,
+      models: [
+        {
+          id: 'test-model',
+          available: true,
+          source: 'catalog',
+          contextWindow: 128_000,
+          maxTokens: 8_192,
+          reasoning: false,
+          vision: false,
+          thinkingLevels: [],
+        },
+      ],
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    expect(await screen.findByText(/128k 上下文/)).toBeTruthy()
+    expect(screen.getByText(/不支持思考/)).toBeTruthy()
+    expect(
+      (screen.getByLabelText(translations.zh.thinkingLabel) as HTMLSelectElement).disabled
+    ).toBe(true)
   })
 
   it('shows reply branches and switches to another reply', async () => {

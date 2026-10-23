@@ -143,6 +143,22 @@ export interface RegisteredAgent {
   getSessionJsonlPath?: (
     sessionId: string
   ) => Promise<{ success: boolean; title?: string; path?: string; error?: string }>
+  /** 模型能力提示（R-06） */
+  getModelCapabilities?: () => Promise<{
+    success: boolean
+    models?: Array<{
+      id: string
+      available: boolean
+      source: 'catalog' | 'default'
+      contextWindow: number | null
+      maxTokens: number | null
+      reasoning: boolean | null
+      vision: boolean | null
+      thinkingLevels: string[]
+    }>
+    selected?: string
+    error?: string
+  }>
   /** 会话模型与思考级别 */
   getSessionSettings?: (sessionId: string) => Promise<{
     success: boolean

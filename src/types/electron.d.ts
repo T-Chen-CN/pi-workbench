@@ -135,6 +135,9 @@ export interface ElectronAPI {
     workspaceDir: string,
     sessionId: string
   ) => Promise<{ success: boolean; stats?: SessionStatsInfo; error?: string }>
+  agentModelCapabilities: (
+    workspaceDir: string
+  ) => Promise<{ success: boolean; models?: ModelCapabilityInfo[]; selected?: string; error?: string }>
   agentToolDiff: (
     workspaceDir: string,
     sessionId: string,
@@ -472,6 +475,19 @@ export interface ToolResultMeta {
   bytes: number
   lines: number
   imageCount: number
+}
+
+/** 模型能力提示（R-06） */
+export interface ModelCapabilityInfo {
+  id: string
+  available: boolean
+  /** catalog：应用内置已知元数据；default：供应商未声明（显示未知） */
+  source: 'catalog' | 'default'
+  contextWindow: number | null
+  maxTokens: number | null
+  reasoning: boolean | null
+  vision: boolean | null
+  thinkingLevels: string[]
 }
 
 /** 会话累计用量与成本 */
