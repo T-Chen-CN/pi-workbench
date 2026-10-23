@@ -1,6 +1,6 @@
 # Pi Workbench 待开发功能方案（Roadmap）
 
-> **状态**: 唯一待办清单（2026-10-23 建立）
+> **状态**: 排期项已完成（2026-10-23）；E-03 延后，B 类边界维持不做
 > **基线**: v0.2.2 · `main` · 质量门禁全绿
 > **取代**: 原 `AGENT_FRONTEND_BACKLOG.md` 已并入本文并移除
 > **相关**: [项目状态](./STATUS.md)、[项目方案](../PROJECT_PLAN.md)、[Agent 过程轨迹方案](../architecture/AGENT_TRACE.md)、[设计系统](../design/DESIGN_SYSTEM.md)
@@ -392,6 +392,7 @@
 | 2026-10-23 | E-08 历史工具行 Diff | 同样在 sidecar 保存 write/edit 的前后内容；历史工具行标记 `hasDiff`，点击“查看修改”按需从主进程取回 Diff 打开，不依赖当前 Diff 队列。 |
 | 2026-10-23 | E-04 工作区 SQLite | `electron/workspace-store.ts`：node:sqlite 记录工作区打开时间 / 次数，失败回退 JSON；最近工作区按 DB 顺序合并 settings 列表；打开工作区时自动记录。 |
 | 2026-10-23 | E-05 Monaco 分包 | Vite 插件把工作台未使用的语言分词器替换为空模块，只保留 TS/JS/JSON/Markdown/HTML/CSS/Python/Rust/Go/Ruby：monaco chunk 4560KB → 4169KB（gzip 1176KB → 1081KB）。曾尝试把语言定义拆成独立 chunk，因循环 chunk 导致运行时 `Cannot access 'r' before initialization`，已回退。构建产物经 `vite preview` 验证：打开 JSON 文件、worker 加载与编辑器渲染正常。 |
+| 2026-10-23 | 本轮汇总 | P0–P3 排期项全部落地：AF-01~AF-18、E-01/02/04/05/06/07/08。质量门禁：`type-check`、`lint`、`test`（46 文件 415 用例）、`build` 全绿；产物经 vite preview 冒烟（工作区打开、编辑器与 worker 加载）。真机端到端（真实供应商 + Electron 窗口交互）尚未执行。 |
 
 ---
 
