@@ -1227,6 +1227,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         if (result.usage) chat.setMessageUsage(key, assistantId, result.usage)
         if (result.edits && result.edits.length > 0) {
           chat.setMessageEdits(key, assistantId, result.edits)
+          // Agent 直接写盘，不经过编辑器 IPC；通知文件树主动刷新
+          window.dispatchEvent(new CustomEvent('pi:refresh-files'))
           toast.info(t('agentModifiedFiles', { count: result.edits.length }))
         }
       } else {
@@ -1536,6 +1538,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
     toast.info(t('restoreCheckpointDone', { count: result.restoredFiles ?? 0 }))
     setShowCheckpoints(false)
+    if (options.files) {
+      window.dispatchEvent(new CustomEvent('pi:refresh-files'))
+    }
 
     if (options.conversation) {
       const history = await piAgentAPI.getHistory(workspacePath, activeSessionId)
