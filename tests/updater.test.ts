@@ -178,7 +178,7 @@ describe('UpdateController', () => {
     })
 
     expect(controller.install().success).toBe(true)
-    expect(fake.quitAndInstall).toHaveBeenCalledTimes(1)
+    expect(fake.quitAndInstall).toHaveBeenCalledWith(true, true)
   })
 
   it('checks macOS releases through GitHub and never auto-installs', async () => {
