@@ -38,6 +38,7 @@ import { commandPaletteShortcut } from '../utils/shortcuts'
 import { createTraceBuffer } from '../utils/streamBuffer'
 import { revertFileEdit } from '../utils/revertFile'
 import { extractSymbols, sliceSymbol, type ExtractedSymbol } from '../utils/symbols'
+import { buildChatSuggestions, type WorkspaceType } from '../utils/suggestions'
 import { toast } from '../store/toastStore'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { useVirtualRows } from '../hooks/useVirtualRows'
@@ -468,6 +469,60 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
   const openFiles = useEditorStore((state) => state.openFiles)
   const currentEditorFile = useEditorStore((state) => state.currentFile)
+  /** 工作区类型（R-15）：按项目标记文件推断，仅用于空会话建议 */
+  const [workspaceType, setWorkspaceType] = useState<WorkspaceType>('unknown')
+
+  useEffect(() => {
+    let cancelled = false
+    const markers: Array<[string, WorkspaceType]> = [
+      ['package.json', 'node'],
+      ['pyproject.toml', 'python'],
+      ['requirements.txt', 'python'],
+      ['Cargo.toml', 'rust'],
+      ['go.mod', 'go'],
+    ]
+    void (async () => {
+      for (const [marker, type] of markers) {
+        const result = await api.exists(`${workspacePath}/${marker}`)
+        if (cancelled) return
+        if (result.success && result.exists) {
+          setWorkspaceType(type)
+          return
+        }
+      }
+      if (!cancelled) setWorkspaceType('unknown')
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [workspacePath])
+
+  const recentFiles = useMemo(() => {
+    const normalize = (value: string) => value.replace(/\\/g, '/')
+    const root = normalize(workspacePath).replace(/\/+$/, '')
+    const ordered = [
+      ...(currentEditorFile ? [currentEditorFile.path] : []),
+      ...[...openFiles].reverse().map((file) => file.path),
+    ]
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const path of ordered) {
+      const normalized = normalize(path)
+      const relative = normalized.startsWith(`${root}/`)
+        ? normalized.slice(root.length + 1)
+        : normalized
+      if (seen.has(relative)) continue
+      seen.add(relative)
+      result.push(relative)
+      if (result.length >= 3) break
+    }
+    return result
+  }, [openFiles, currentEditorFile, workspacePath])
+
+  const emptySuggestions = useMemo(
+    () => buildChatSuggestions({ workspaceType, recentFiles, translate: t }),
+    [workspaceType, recentFiles, t]
+  )
   const selection = useSelectionStore((state) => state.selection)
   const approvalRequests = useApprovalStore((state) => state.requests)
   const pendingApprovals = useMemo(
@@ -2197,13 +2252,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               />
               {initialized && activeKey && (
                 <div className="flex max-w-md flex-wrap justify-center gap-1.5">
-                  {[
-                    { label: t('suggestExplain'), prompt: t('suggestExplainPrompt') },
-                    { label: t('suggestTodos'), prompt: t('suggestTodosPrompt') },
-                    { label: t('suggestTests'), prompt: t('suggestTestsPrompt') },
-                  ].map((suggestion) => (
+                  {emptySuggestions.map((suggestion) => (
                     <button
-                      key={suggestion.label}
+                      key={suggestion.id}
                       type="button"
                       onClick={() => {
                         useChatStore.getState().setDraftInput(activeKey, suggestion.prompt)
