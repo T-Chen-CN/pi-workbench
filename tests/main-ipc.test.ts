@@ -80,7 +80,7 @@ let appDir: string
 let workDir: string
 
 beforeAll(async () => {
-  appDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-app-'))
+  appDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-app-')))
   mocks.state.appDir = appDir
   // 真实应用启动时会先创建 config/，这里模拟同样的前置状态
   await fs.mkdir(path.join(appDir, 'config'), { recursive: true })
@@ -95,8 +95,10 @@ afterAll(async () => {
 beforeEach(async () => {
   await fs.rm(path.join(appDir, 'config'), { recursive: true, force: true })
   await fs.mkdir(path.join(appDir, 'config'), { recursive: true })
-  workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-ipc-'))
+  workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-ipc-')))
   // 模拟用户通过原生目录选择器打开工作区（主进程据此批准工作区根）
+  // 主进程会 realpath 规范化路径（macOS /var → /private/var，Windows 8.3 短名），
+  // 测试里同样先规范化，避免断言比较两种写法。
   mocks.state.pickedPath = workDir
   await call('dialog:openDirectory')
 })
