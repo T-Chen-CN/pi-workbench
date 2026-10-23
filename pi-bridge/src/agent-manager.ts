@@ -935,6 +935,60 @@ export class AgentManager {
     }
   }
 
+  /** 读取会话当前的模型与思考级别 */
+  async getSessionSettings(sessionId: string): Promise<{
+    success: boolean
+    modelId?: string
+    thinkingLevel?: string
+    error?: string
+  }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      return {
+        success: true,
+        modelId: runtime.session.model?.id,
+        thinkingLevel: runtime.session.thinkingLevel,
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 切换当前会话的模型（写入 model_change，重开会话后保留） */
+  async setSessionModel(
+    sessionId: string,
+    modelId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!this.modelRuntime) return { success: false, error: 'Agent not initialized.' }
+      const model = this.modelRuntime.getModel(WORKBENCH_PROVIDER_ID, modelId)
+      if (!model) return { success: false, error: `Model "${modelId}" is unavailable.` }
+      const runtime = await this.ensureRuntime(sessionId)
+      await runtime.session.setModel(model)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 切换思考级别 */
+  async setSessionThinking(
+    sessionId: string,
+    level: string
+  ): Promise<{ success: boolean; error?: string }> {
+    const allowed = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+    if (!allowed.includes(level)) {
+      return { success: false, error: `Unknown thinking level "${level}".` }
+    }
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      runtime.session.setThinkingLevel(level as any)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   /** 读取当前上下文占用（会话空闲时也有效） */
   async getContextUsage(
     sessionId: string

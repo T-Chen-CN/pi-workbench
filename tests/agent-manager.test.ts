@@ -67,6 +67,10 @@ interface FakeSession {
     cancelled: boolean
   }>
   getUserMessagesForForking: () => Array<{ entryId: string; text: string }>
+  model: { provider: string; id: string } | undefined
+  thinkingLevel: string
+  setModel: (model: { provider: string; id: string }) => Promise<void>
+  setThinkingLevel: (level: string) => void
 }
 
 function createFakeSession(
@@ -95,6 +99,14 @@ function createFakeSession(
       { entryId: 'u1', text: 'first question' },
       { entryId: 'u2', text: 'second question' },
     ],
+    model: { provider: 'pi-workbench', id: 'test-model' },
+    thinkingLevel: 'medium',
+    setModel: async (model) => {
+      session.model = model
+    },
+    setThinkingLevel: (level) => {
+      session.thinkingLevel = level
+    },
     subscribe: (listener) => {
       listeners.add(listener)
       return () => {
@@ -1416,5 +1428,42 @@ describe('retry and edit-resend', () => {
 
     release()
     await pendingChat
+  })
+})
+
+describe('session model and thinking controls', () => {
+  it('reports and updates the model and thinking level', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    sdk.modelRuntimeCreate.mockResolvedValue({
+      getModel: vi.fn((_provider: string, id: string) => ({ provider: 'pi-workbench', id })),
+    })
+    await manager.initialize(makeConfig())
+
+    await expect(manager.getSessionSettings('session-1')).resolves.toEqual({
+      success: true,
+      modelId: 'test-model',
+      thinkingLevel: 'medium',
+    })
+
+    await expect(manager.setSessionModel('session-1', 'other-model')).resolves.toEqual({
+      success: true,
+    })
+    expect(session.model?.id).toBe('other-model')
+
+    await expect(manager.setSessionThinking('session-1', 'high')).resolves.toEqual({
+      success: true,
+    })
+    expect(session.thinkingLevel).toBe('high')
+  })
+
+  it('rejects unknown thinking levels', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const result = await manager.setSessionThinking('session-1', 'turbo')
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Unknown thinking level')
   })
 })

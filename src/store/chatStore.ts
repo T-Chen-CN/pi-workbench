@@ -59,6 +59,8 @@ export interface ConversationState {
   pending: PendingMessage[]
   /** 最近一次读取的上下文占用 */
   contextUsage: ContextUsageInfo | null
+  /** 会话级模型与思考级别 */
+  sessionSettings: { modelId?: string; thinkingLevel?: string } | null
 }
 
 const EMPTY_CONVERSATION: ConversationState = {
@@ -70,6 +72,7 @@ const EMPTY_CONVERSATION: ConversationState = {
   mode: 'act',
   pending: [],
   contextUsage: null,
+  sessionSettings: null,
 }
 
 /** 会话在 store 中的键：工作区 + 会话，避免跨工作区串数据 */
@@ -116,6 +119,10 @@ interface ChatState {
   removePending: (key: string, id: string) => void
   setPendingBehavior: (key: string, id: string, behavior: PendingMessage['behavior']) => void
   setContextUsage: (key: string, usage: ContextUsageInfo | null) => void
+  setSessionSettings: (
+    key: string,
+    settings: { modelId?: string; thinkingLevel?: string } | null
+  ) => void
   removeMessage: (key: string, id: string) => void
   truncateLastTurn: (key: string) => void
   setMessages: (key: string, messages: Array<Omit<ChatMessage, 'id'>>) => void
@@ -476,6 +483,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setContextUsage: (key, usage) =>
     set((state) => updateExisting(state, key, (current) => ({ ...current, contextUsage: usage }))),
+
+  setSessionSettings: (key, settings) =>
+    set((state) =>
+      updateExisting(state, key, (current) => ({ ...current, sessionSettings: settings }))
+    ),
 
   removeMessage: (key, id) =>
     set((state) =>

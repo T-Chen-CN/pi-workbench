@@ -160,6 +160,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ) => ipcRenderer.invoke('agent:checkpoints:restore', workspaceDir, sessionId, checkpointId, options),
   agentRewind: (workspaceDir: string, sessionId: string, newText?: string) =>
     ipcRenderer.invoke('agent:rewind', workspaceDir, sessionId, newText),
+  agentSessionSettings: (workspaceDir: string, sessionId: string) =>
+    ipcRenderer.invoke('agent:session:settings', workspaceDir, sessionId),
+  agentSessionSetModel: (workspaceDir: string, sessionId: string, modelId: string) =>
+    ipcRenderer.invoke('agent:session:setModel', workspaceDir, sessionId, modelId),
+  agentSessionSetThinking: (workspaceDir: string, sessionId: string, level: string) =>
+    ipcRenderer.invoke('agent:session:setThinking', workspaceDir, sessionId, level),
   onNotifyClick: (
     callback: (payload: { workspaceDir: string; sessionId: string }) => void
   ) => {

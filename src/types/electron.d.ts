@@ -113,6 +113,20 @@ export interface ElectronAPI {
     sessionId: string,
     newText?: string
   ) => Promise<{ success: boolean; text?: string; error?: string }>
+  agentSessionSettings: (
+    workspaceDir: string,
+    sessionId: string
+  ) => Promise<{ success: boolean; modelId?: string; thinkingLevel?: string; error?: string }>
+  agentSessionSetModel: (
+    workspaceDir: string,
+    sessionId: string,
+    modelId: string
+  ) => Promise<{ success: boolean; error?: string }>
+  agentSessionSetThinking: (
+    workspaceDir: string,
+    sessionId: string,
+    level: string
+  ) => Promise<{ success: boolean; error?: string }>
   onAgentApprovalRequest: (callback: (payload: ApprovalRequestPayload) => void) => () => void
   agentRespondApproval: (
     requestId: string,

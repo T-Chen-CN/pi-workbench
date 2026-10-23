@@ -48,6 +48,7 @@ import {
   EmptyState,
   IconButton,
   Label,
+  Select,
   Spinner,
   Textarea,
 } from './ui'
@@ -67,6 +68,8 @@ function formatTokenCount(value: number): string {
   if (value < 1000) return String(value)
   return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`
 }
+
+const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
 /** 单条消息；memo 保证流式追加只重渲染最后一条 */
 const ChatMessageRow = React.memo(function ChatMessageRow({
@@ -202,6 +205,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const pendingMessages = conversation?.pending ?? []
   const contextUsage = conversation?.contextUsage ?? null
   const contextPercent = contextUsage?.percent ?? null
+  const sessionSettings = conversation?.sessionSettings ?? null
+  const [availableModels, setAvailableModels] = useState<string[]>([])
   let lastUserMessageId: string | null = null
   for (let index = messages.length - 1; index >= 0; index--) {
     if (messages[index].role === 'user') {
@@ -942,10 +947,65 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     [workspacePath]
   )
 
+  /** 读取会话级模型与思考级别 */
+  const refreshSessionSettings = useCallback(
+    async (sessionId: string) => {
+      const key = conversationKey(workspacePath, sessionId)
+      const result = await piAgentAPI.getSessionSettings(workspacePath, sessionId)
+      if (result.success) {
+        useChatStore.getState().setSessionSettings(key, {
+          modelId: result.modelId,
+          thinkingLevel: result.thinkingLevel,
+        })
+      }
+    },
+    [workspacePath]
+  )
+
   useEffect(() => {
     if (!initialized || !activeSessionId) return
     void refreshContextUsage(activeSessionId)
-  }, [initialized, activeSessionId, configVersion, refreshContextUsage])
+    void refreshSessionSettings(activeSessionId)
+  }, [initialized, activeSessionId, configVersion, refreshContextUsage, refreshSessionSettings])
+
+  useEffect(() => {
+    let cancelled = false
+    void api.apiConfigGet().then((result) => {
+      if (cancelled || !result.success) return
+      setAvailableModels(result.config?.availableModels ?? [])
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [configVersion])
+
+  const handleModelChange = async (modelId: string) => {
+    if (!activeSessionId || !activeKey || !modelId || isLoading) return
+    const previous = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
+    useChatStore
+      .getState()
+      .setSessionSettings(activeKey, { ...previous, modelId })
+    const result = await piAgentAPI.setSessionModel(workspacePath, activeSessionId, modelId)
+    if (!result.success) {
+      useChatStore.getState().setSessionSettings(activeKey, previous)
+      toast.error(t('modelSwitchFailed', { error: localizeError(result.error ?? '') }))
+      return
+    }
+    void refreshContextUsage(activeSessionId)
+  }
+
+  const handleThinkingChange = async (level: string) => {
+    if (!activeSessionId || !activeKey || !level || isLoading) return
+    const previous = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
+    useChatStore
+      .getState()
+      .setSessionSettings(activeKey, { ...previous, thinkingLevel: level })
+    const result = await piAgentAPI.setSessionThinking(workspacePath, activeSessionId, level)
+    if (!result.success) {
+      useChatStore.getState().setSessionSettings(activeKey, previous)
+      toast.error(t('thinkingSwitchFailed', { error: localizeError(result.error ?? '') }))
+    }
+  }
 
   /** 手动压缩上下文；运行中不允许 */
   const handleCompact = async () => {
@@ -1373,6 +1433,39 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               >
                 {t('compactContext')}
               </button>
+            </div>
+          )}
+          {sessionSettings && (
+            <div className="mb-2 flex items-center gap-2">
+              <Select
+                aria-label={t('modelLabel')}
+                value={sessionSettings.modelId ?? ''}
+                disabled={isLoading}
+                onChange={(event) => void handleModelChange(event.target.value)}
+                className="h-6 w-44"
+              >
+                {availableModels.length === 0 && sessionSettings.modelId && (
+                  <option value={sessionSettings.modelId}>{sessionSettings.modelId}</option>
+                )}
+                {availableModels.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </Select>
+              <Select
+                aria-label={t('thinkingLabel')}
+                value={sessionSettings.thinkingLevel ?? 'medium'}
+                disabled={isLoading}
+                onChange={(event) => void handleThinkingChange(event.target.value)}
+                className="h-6 w-28"
+              >
+                {THINKING_LEVELS.map((level) => (
+                  <option key={level} value={level}>
+                    {level}
+                  </option>
+                ))}
+              </Select>
             </div>
           )}
           {pendingMessages.length > 0 && (

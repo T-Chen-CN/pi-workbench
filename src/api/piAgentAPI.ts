@@ -491,6 +491,51 @@ export const piAgentAPI = {
     }
   },
 
+  /** 会话级模型与思考级别 */
+  async getSessionSettings(
+    workspaceDir: string,
+    sessionId: string
+  ): Promise<{ success: boolean; modelId?: string; thinkingLevel?: string; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentSessionSettings !== 'function') {
+      return { success: false, error: 'Session settings are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentSessionSettings(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  async setSessionModel(
+    workspaceDir: string,
+    sessionId: string,
+    modelId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentSessionSetModel !== 'function') {
+      return { success: false, error: 'Model switching is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentSessionSetModel(workspaceDir, sessionId, modelId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  async setSessionThinking(
+    workspaceDir: string,
+    sessionId: string,
+    level: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentSessionSetThinking !== 'function') {
+      return { success: false, error: 'Thinking control is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentSessionSetThinking(workspaceDir, sessionId, level)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
   /** 检查点列表 */
   async listCheckpoints(
     workspaceDir: string,

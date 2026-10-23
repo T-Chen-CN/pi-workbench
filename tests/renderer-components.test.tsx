@@ -53,6 +53,12 @@ vi.mock('../src/api/piAgentAPI', () => ({
     steer: vi.fn(),
     getContextUsage: vi.fn(),
     compactContext: vi.fn(),
+    getSessionSettings: vi.fn(),
+    setSessionModel: vi.fn(),
+    setSessionThinking: vi.fn(),
+    rewindLastUser: vi.fn(),
+    listCheckpoints: vi.fn(),
+    restoreCheckpoint: vi.fn(),
     onApprovalRequest: vi.fn(() => () => {}),
     respondApproval: vi.fn(),
     onNotifyClick: vi.fn(() => () => {}),
@@ -159,6 +165,12 @@ beforeEach(() => {
   vi.mocked(piAgentAPI.sessionsSetMode).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.getContextUsage).mockResolvedValue({ success: true, usage: undefined })
   vi.mocked(piAgentAPI.compactContext).mockResolvedValue({ success: true })
+  vi.mocked(piAgentAPI.getSessionSettings).mockResolvedValue({
+    success: true,
+    modelId: 'test-model',
+    thinkingLevel: 'medium',
+  })
+  vi.mocked(piAgentAPI.listCheckpoints).mockResolvedValue({ success: true, checkpoints: [] })
   vi.mocked(piAgentAPI.steer).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.respondApproval).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.sessionsClose).mockResolvedValue({ success: true })

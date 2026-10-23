@@ -2140,6 +2140,63 @@ handleIpc(
   }
 )
 
+handleIpc('agent:session:settings', async (_event, workspaceDir: string, sessionId: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.getSessionSettings !== 'function') {
+      return { success: false, error: 'Session settings are not supported by this agent' }
+    }
+    return await agent.getSessionSettings(sessionId)
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc(
+  'agent:session:setModel',
+  async (_event, workspaceDir: string, sessionId: string, modelId: string) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      if (typeof modelId !== 'string' || !modelId) {
+        return { success: false, error: 'Invalid model id' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.setSessionModel !== 'function') {
+        return { success: false, error: 'Model switching is not supported by this agent' }
+      }
+      return await agent.setSessionModel(sessionId, modelId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
+handleIpc(
+  'agent:session:setThinking',
+  async (_event, workspaceDir: string, sessionId: string, level: string) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.setSessionThinking !== 'function') {
+        return { success: false, error: 'Thinking control is not supported by this agent' }
+      }
+      return await agent.setSessionThinking(sessionId, level)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
 handleIpc(
   'agent:sessions:rename',
   async (_event, workspaceDir: string, sessionId: string, name: string) => {

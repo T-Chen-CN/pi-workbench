@@ -78,6 +78,18 @@ export interface RegisteredAgent {
     sessionId: string,
     newText?: string
   ) => Promise<{ success: boolean; text?: string; error?: string }>
+  /** 会话模型与思考级别 */
+  getSessionSettings?: (sessionId: string) => Promise<{
+    success: boolean
+    modelId?: string
+    thinkingLevel?: string
+    error?: string
+  }>
+  setSessionModel?: (sessionId: string, modelId: string) => Promise<{ success: boolean; error?: string }>
+  setSessionThinking?: (
+    sessionId: string,
+    level: string
+  ) => Promise<{ success: boolean; error?: string }>
   getCurrentSessionId?: () => string | null
 }
 
