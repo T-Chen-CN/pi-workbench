@@ -1871,6 +1871,39 @@ handleIpc(
   }
 )
 
+// 上下文占用与压缩
+handleIpc('agent:context:usage', async (_event, workspaceDir: string, sessionId: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.getContextUsage !== 'function') {
+      return { success: false, error: 'Context usage is not supported by this agent' }
+    }
+    return await agent.getContextUsage(sessionId)
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc('agent:context:compact', async (_event, workspaceDir: string, sessionId: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.compactContext !== 'function') {
+      return { success: false, error: 'Compaction is not supported by this agent' }
+    }
+    return await agent.compactContext(sessionId)
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
 // 运行中插话：把消息注入当前轮
 handleIpc('agent:steer', async (_event, workspaceDir: string, sessionId: string, message: string) => {
   try {

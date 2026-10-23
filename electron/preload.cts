@@ -146,6 +146,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:sessions:setMode', workspaceDir, sessionId, mode),
   agentSteer: (workspaceDir: string, sessionId: string, message: string) =>
     ipcRenderer.invoke('agent:steer', workspaceDir, sessionId, message),
+  agentContextUsage: (workspaceDir: string, sessionId: string) =>
+    ipcRenderer.invoke('agent:context:usage', workspaceDir, sessionId),
+  agentCompactContext: (workspaceDir: string, sessionId: string) =>
+    ipcRenderer.invoke('agent:context:compact', workspaceDir, sessionId),
   onNotifyClick: (
     callback: (payload: { workspaceDir: string; sessionId: string }) => void
   ) => {

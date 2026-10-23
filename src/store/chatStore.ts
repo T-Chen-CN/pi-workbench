@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AgentStreamEvent, AgentTracePart } from '../types/electron'
+import type { AgentStreamEvent, AgentTracePart, ContextUsageInfo } from '../types/electron'
 
 export interface ChatUsage {
   input: number
@@ -57,6 +57,8 @@ export interface ConversationState {
   mode: 'plan' | 'act'
   /** 运行中排队的待发送消息 */
   pending: PendingMessage[]
+  /** 最近一次读取的上下文占用 */
+  contextUsage: ContextUsageInfo | null
 }
 
 const EMPTY_CONVERSATION: ConversationState = {
@@ -67,6 +69,7 @@ const EMPTY_CONVERSATION: ConversationState = {
   draftInput: '',
   mode: 'act',
   pending: [],
+  contextUsage: null,
 }
 
 /** 会话在 store 中的键：工作区 + 会话，避免跨工作区串数据 */
@@ -112,6 +115,7 @@ interface ChatState {
   addPending: (key: string, text: string, behavior: PendingMessage['behavior']) => PendingMessage
   removePending: (key: string, id: string) => void
   setPendingBehavior: (key: string, id: string, behavior: PendingMessage['behavior']) => void
+  setContextUsage: (key: string, usage: ContextUsageInfo | null) => void
   setMessages: (key: string, messages: Array<Omit<ChatMessage, 'id'>>) => void
   setLoading: (key: string, loading: boolean) => void
   setError: (key: string, error: string | null) => void
@@ -467,6 +471,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ),
       }))
     ),
+
+  setContextUsage: (key, usage) =>
+    set((state) => updateExisting(state, key, (current) => ({ ...current, contextUsage: usage }))),
 
   setMessages: (key, messages) =>
     set((state) => ({

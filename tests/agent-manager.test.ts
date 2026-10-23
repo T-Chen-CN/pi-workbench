@@ -51,6 +51,18 @@ interface FakeSession {
   getActiveToolNames: () => string[]
   setActiveToolsByName: (names: string[]) => void
   getAllTools: () => Array<{ name: string }>
+  contextUsage: { tokens: number | null; contextWindow: number; percent: number | null } | undefined
+  getContextUsage: () => {
+    tokens: number | null
+    contextWindow: number
+    percent: number | null
+  } | undefined
+  compact: () => Promise<{
+    summary: string
+    firstKeptEntryId: string
+    tokensBefore: number
+    estimatedTokensAfter?: number
+  }>
 }
 
 function createFakeSession(
@@ -66,6 +78,14 @@ function createFakeSession(
       session.activeTools = [...names]
     },
     getAllTools: () => session.activeTools.map((name) => ({ name })),
+    contextUsage: { tokens: 12_000, contextWindow: 96_000, percent: 12.5 },
+    getContextUsage: () => session.contextUsage,
+    compact: async () => ({
+      summary: 'summary',
+      firstKeptEntryId: 'entry-1',
+      tokensBefore: 12_000,
+      estimatedTokensAfter: 3_000,
+    }),
     subscribe: (listener) => {
       listeners.add(listener)
       return () => {
@@ -1150,5 +1170,53 @@ describe('running-turn steering', () => {
       success: false,
       error: 'Message is empty.',
     })
+  })
+})
+
+describe('context usage and compaction', () => {
+  it('returns the current context usage', async () => {
+    const session = createFakeSession()
+    session.contextUsage = { tokens: 40_000, contextWindow: 96_000, percent: 41.7 }
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await expect(manager.getContextUsage('session-1')).resolves.toEqual({
+      success: true,
+      usage: { tokens: 40_000, contextWindow: 96_000, percent: 41.7 },
+    })
+  })
+
+  it('compacts an idle session and reports token counts', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await expect(manager.compactContext('session-1')).resolves.toEqual({
+      success: true,
+      tokensBefore: 12_000,
+      estimatedTokensAfter: 3_000,
+    })
+  })
+
+  it('refuses to compact while a turn is running', async () => {
+    let release = () => {}
+    const session = createFakeSession(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const pendingChat = manager.chat('start')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const result = await manager.compactContext('session-1')
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Session is running')
+
+    release()
+    await pendingChat
   })
 })

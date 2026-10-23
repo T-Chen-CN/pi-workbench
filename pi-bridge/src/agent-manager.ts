@@ -820,6 +820,53 @@ export class AgentManager {
     }
   }
 
+  /** 读取当前上下文占用（会话空闲时也有效） */
+  async getContextUsage(
+    sessionId: string
+  ): Promise<{ success: boolean; usage?: { tokens: number | null; contextWindow: number; percent: number | null }; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const usage = runtime.session.getContextUsage()
+      return {
+        success: true,
+        usage: usage
+          ? {
+              tokens: usage.tokens ?? null,
+              contextWindow: usage.contextWindow,
+              percent: usage.percent ?? null,
+            }
+          : undefined,
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 手动压缩上下文；运行中不压缩，避免打断当前轮 */
+  async compactContext(
+    sessionId: string
+  ): Promise<{
+    success: boolean
+    tokensBefore?: number
+    estimatedTokensAfter?: number
+    error?: string
+  }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      if (runtime.isProcessing) {
+        return { success: false, error: 'Session is running; wait for it to finish before compacting.' }
+      }
+      const result = await runtime.session.compact()
+      return {
+        success: true,
+        tokensBefore: result.tokensBefore,
+        estimatedTokensAfter: result.estimatedTokensAfter,
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   /** 运行中插话：把消息注入当前轮（steer），不等待本轮结束 */
   async steer(sessionId: string, message: string): Promise<{ success: boolean; error?: string }> {
     const text = message.trim()

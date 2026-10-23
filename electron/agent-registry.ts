@@ -49,6 +49,19 @@ export interface RegisteredAgent {
   ) => Promise<{ success: boolean; error?: string }>
   /** 运行中插话（steer） */
   steer?: (sessionId: string, message: string) => Promise<{ success: boolean; error?: string }>
+  /** 上下文占用 */
+  getContextUsage?: (sessionId: string) => Promise<{
+    success: boolean
+    usage?: { tokens: number | null; contextWindow: number; percent: number | null }
+    error?: string
+  }>
+  /** 手动压缩上下文 */
+  compactContext?: (sessionId: string) => Promise<{
+    success: boolean
+    tokensBefore?: number
+    estimatedTokensAfter?: number
+    error?: string
+  }>
   getCurrentSessionId?: () => string | null
 }
 

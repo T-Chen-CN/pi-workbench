@@ -35,6 +35,7 @@ import { useVirtualRows } from '../hooks/useVirtualRows'
 import { SessionTabs } from './SessionTabs'
 import { ChatSessionList } from './ChatSessionList'
 import { ApprovalCard } from './ApprovalCard'
+import { Meter } from './patterns'
 import { AgentParts } from './AgentTrace'
 import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
 import {
@@ -58,8 +59,13 @@ const MAX_CONTEXT_FILE_CHARS = 120_000
 const MAX_CONTEXT_SNIPPET_CHARS = 40_000
 const MAX_CONTEXT_TOTAL_CHARS = 300_000
 
-/** 单条消息；memo 保证流式追加只重渲染最后一条 */
-const ChatMessageRow = React.memo(function ChatMessageRow({
+/** 1.2k / 12k / 96k */
+function formatTokenCount(value: number): string {
+  if (value < 1000) return String(value)
+  return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`
+}
+
+/** 单条消息；memo 保证流式追加只重渲染最后一条 */const ChatMessageRow = React.memo(function ChatMessageRow({
   message,
   diffToolIds,
   onOpenDiff,
@@ -155,6 +161,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const messages = conversation?.messages ?? EMPTY_MESSAGES
   const isLoading = conversation?.isLoading ?? false
   const pendingMessages = conversation?.pending ?? []
+  const contextUsage = conversation?.contextUsage ?? null
+  const contextPercent = contextUsage?.percent ?? null
   const error = conversation?.error ?? null
   const attachments = conversation?.attachments ?? []
   const input = conversation?.draftInput ?? ''
@@ -806,6 +814,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       useChatStore.getState().setLoading(key, false)
       useChatStore.getState().clearAttachments(key)
       useSessionStore.getState().markStreaming(workspacePath, sessionId, false)
+      void refreshContextUsage(sessionId)
 
       // 本轮结束：自动发送下一条排队消息（用户主动停止时不自动发送）
       const queued = useChatStore
@@ -864,6 +873,37 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     if (!activeSessionId || !activeKey || isLoading) return
     await handleModeChange('act')
     void handleSubmit(undefined, 'Execute the plan above step by step.')
+  }
+
+  /** 读取上下文占用（每轮结束与会话切换后刷新） */
+  const refreshContextUsage = useCallback(
+    async (sessionId: string) => {
+      const key = conversationKey(workspacePath, sessionId)
+      const result = await piAgentAPI.getContextUsage(workspacePath, sessionId)
+      if (result.success) {
+        useChatStore.getState().setContextUsage(key, result.usage ?? null)
+      }
+    },
+    [workspacePath]
+  )
+
+  useEffect(() => {
+    if (!initialized || !activeSessionId) return
+    void refreshContextUsage(activeSessionId)
+  }, [initialized, activeSessionId, configVersion, refreshContextUsage])
+
+  /** 手动压缩上下文；运行中不允许 */
+  const handleCompact = async () => {
+    if (!activeSessionId || isLoading) return
+    const confirmed = await confirmDialog({ message: t('compactConfirm') })
+    if (!confirmed) return
+    const result = await piAgentAPI.compactContext(workspacePath, activeSessionId)
+    if (result.success) {
+      toast.info(t('compactDone'))
+      void refreshContextUsage(activeSessionId)
+    } else {
+      toast.error(t('compactFailed', { error: localizeError(result.error ?? '') }))
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -1058,6 +1098,39 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       {/* Composer */}
       {activeSessionId && (
         <div className="flex-shrink-0 p-2.5">
+          {contextUsage && contextPercent != null && (
+            <div className="mb-2 flex items-center gap-2">
+              <Meter
+                value={contextPercent}
+                label={t('contextUsageLabel')}
+                tone={
+                  contextPercent >= 95 ? 'danger' : contextPercent >= 80 ? 'warning' : 'accent'
+                }
+                className="flex-1"
+              />
+              <DataText
+                className={
+                  contextPercent >= 95
+                    ? 'text-danger'
+                    : contextPercent >= 80
+                      ? 'text-warning'
+                      : 'text-ink-muted'
+                }
+              >
+                {contextPercent}% ·{' '}
+                {contextUsage.tokens != null ? formatTokenCount(contextUsage.tokens) : '—'} /{' '}
+                {formatTokenCount(contextUsage.contextWindow)}
+              </DataText>
+              <button
+                type="button"
+                disabled={isLoading}
+                onClick={() => void handleCompact()}
+                className="type-caption text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
+              >
+                {t('compactContext')}
+              </button>
+            </div>
+          )}
           {pendingMessages.length > 0 && (
             <div className="mb-2 flex flex-col gap-1.5">
               {pendingMessages.map((item) => (

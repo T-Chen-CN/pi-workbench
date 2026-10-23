@@ -10,6 +10,7 @@ import type {
   ApiConfig,
   ApprovalDecision,
   ApprovalRequestPayload,
+  ContextUsageInfo,
   FileEdit,
   SessionListResult,
   SessionOpenResult,
@@ -433,6 +434,41 @@ export const piAgentAPI = {
     }
     try {
       return await window.electronAPI.agentSteer(workspaceDir, sessionId, message)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 读取上下文窗口占用 */
+  async getContextUsage(
+    workspaceDir: string,
+    sessionId: string
+  ): Promise<{ success: boolean; usage?: ContextUsageInfo; error?: string }> {
+    if (!hasElectronAgent()) {
+      return { success: false, error: 'Context usage is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentContextUsage(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 手动压缩上下文 */
+  async compactContext(
+    workspaceDir: string,
+    sessionId: string
+  ): Promise<{
+    success: boolean
+    tokensBefore?: number
+    estimatedTokensAfter?: number
+    error?: string
+  }> {
+    if (!hasElectronAgent()) {
+      return { success: false, error: 'Compaction is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentCompactContext(workspaceDir, sessionId)
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

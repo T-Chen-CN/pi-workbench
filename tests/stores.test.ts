@@ -425,3 +425,17 @@ describe('chatStore pending messages', () => {
     expect(useChatStore.getState().conversations['pending-key'].pending).toHaveLength(1)
   })
 })
+
+describe('chatStore context usage', () => {
+  it('stores and clears context usage per conversation', () => {
+    useChatStore.getState().ensureConversation('context-key')
+    useChatStore.getState().setContextUsage('context-key', {
+      tokens: 40000,
+      contextWindow: 96000,
+      percent: 41.7,
+    })
+    expect(useChatStore.getState().conversations['context-key'].contextUsage?.percent).toBe(41.7)
+    useChatStore.getState().setContextUsage('context-key', null)
+    expect(useChatStore.getState().conversations['context-key'].contextUsage).toBeNull()
+  })
+})

@@ -85,6 +85,19 @@ export interface ElectronAPI {
     sessionId: string,
     message: string
   ) => Promise<{ success: boolean; error?: string }>
+  agentContextUsage: (
+    workspaceDir: string,
+    sessionId: string
+  ) => Promise<{ success: boolean; usage?: ContextUsageInfo; error?: string }>
+  agentCompactContext: (
+    workspaceDir: string,
+    sessionId: string
+  ) => Promise<{
+    success: boolean
+    tokensBefore?: number
+    estimatedTokensAfter?: number
+    error?: string
+  }>
   onAgentApprovalRequest: (callback: (payload: ApprovalRequestPayload) => void) => () => void
   agentRespondApproval: (
     requestId: string,
@@ -273,6 +286,13 @@ export type ApprovalDecision =
 
 /** 会话模式：plan 只读探索并给出计划，act 可修改文件与执行命令 */
 export type SessionMode = 'plan' | 'act'
+
+/** 上下文窗口占用 */
+export interface ContextUsageInfo {
+  tokens: number | null
+  contextWindow: number
+  percent: number | null
+}
 
 export interface FileEdit {
   path: string
