@@ -6,6 +6,7 @@
  */
 
 import type {
+  AgentImagePayload,
   AgentStreamEvent,
   ApiConfig,
   ApprovalDecision,
@@ -116,12 +117,13 @@ async function streamDevChat(
   message: string,
   handlers: AgentChatStreamHandlers,
   workspaceDir?: string,
-  sessionId?: string
+  sessionId?: string,
+  images?: AgentImagePayload[]
 ): Promise<AgentChatResponse> {
   const response = await fetch(DEV_AGENT_CHAT_STREAM, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, workspaceDir, sessionId }),
+    body: JSON.stringify({ message, workspaceDir, sessionId, images }),
   })
   if (!response.ok || !response.body) {
     throw new Error(`Dev agent stream returned HTTP ${response.status}`)
@@ -198,7 +200,8 @@ export const piAgentAPI = {
     message: string,
     handlersOrDelta?: AgentChatStreamHandlers | ((delta: string) => void),
     workspaceDir?: string,
-    sessionId?: string
+    sessionId?: string,
+    images?: AgentImagePayload[]
   ): Promise<AgentChatResponse> {
     const handlers: AgentChatStreamHandlers =
       typeof handlersOrDelta === 'function'
@@ -223,18 +226,25 @@ export const piAgentAPI = {
         }
 
         try {
-          return await window.electronAPI.agentChat(message, requestId, workspaceDir, sessionId)
+          return await window.electronAPI.agentChat(
+            message,
+            requestId,
+            workspaceDir,
+            sessionId,
+            images
+          )
         } finally {
           unsubscribe?.()
         }
       }
       if (wantsStream) {
-        return await streamDevChat(message, handlers, workspaceDir, sessionId)
+        return await streamDevChat(message, handlers, workspaceDir, sessionId, images)
       }
       return await callDevBridge<AgentChatResponse>(DEV_AGENT_CHAT, {
         message,
         workspaceDir,
         sessionId,
+        images,
       })
     } catch (error) {
       console.error('[Pi Agent] Chat error:', error)

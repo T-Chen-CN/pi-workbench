@@ -43,7 +43,10 @@ interface FakeSession {
   disposed: boolean
   subscribe: (listener: (event: SessionEvent) => void) => () => void
   prompt: (message: string) => Promise<void>
-  lastPromptOptions?: { streamingBehavior?: string }
+  lastPromptOptions?: {
+    streamingBehavior?: string
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>
+  }
   abort: () => Promise<void>
   dispose: () => void
   emit: (event: SessionEvent) => void
@@ -125,7 +128,13 @@ function createFakeSession(
         listeners.delete(listener)
       }
     },
-    prompt: async (message, options?: { streamingBehavior?: string }) => {
+    prompt: async (
+      message,
+      options?: {
+        streamingBehavior?: string
+        images?: Array<{ type: 'image'; data: string; mimeType: string }>
+      }
+    ) => {
       session.lastPromptOptions = options
       await onPrompt?.(session, message)
     },
@@ -345,6 +354,33 @@ describe('AgentManager chat', () => {
       'hi',
       'Hello from the agent',
     ])
+  })
+
+  it('passes image attachments to the session prompt', async () => {
+    const session = createFakeSession(async (s, message) => {
+      s.messages.push({ role: 'user', content: message })
+      s.messages.push({ role: 'assistant', content: 'seen' })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const image = { data: 'aGVsbG8=', mimeType: 'image/png' }
+    await manager.chat('describe', { images: [image] })
+
+    expect(session.lastPromptOptions?.images).toEqual([{ type: 'image', ...image }])
+  })
+
+  it('omits images when none are valid', async () => {
+    const session = createFakeSession(async (s, message) => {
+      s.messages.push({ role: 'user', content: message })
+      s.messages.push({ role: 'assistant', content: 'ok' })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await manager.chat('hi', { images: [{ data: '', mimeType: 'image/png' }] })
+
+    expect(session.lastPromptOptions).toBeUndefined()
   })
 
   it('joins text parts of array-content responses', async () => {

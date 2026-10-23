@@ -50,7 +50,8 @@ export interface ElectronAPI {
     message: string,
     requestId?: string,
     workspaceDir?: string,
-    sessionId?: string
+    sessionId?: string,
+    images?: AgentImagePayload[]
   ) => Promise<AgentChatResult>
   agentAbort: (workspaceDir?: string, sessionId?: string) => Promise<AgentDisposeResult>
   onAgentStream: (callback: (payload: AgentStreamPayload) => void) => () => void
@@ -312,6 +313,12 @@ export interface AgentInitConfig {
 export interface AgentInitResult {
   success: boolean
   error?: string
+}
+
+/** 发送给 Agent 的图像附件（base64，不含 data: 前缀） */
+export interface AgentImagePayload {
+  data: string
+  mimeType: string
 }
 
 // 工具审批（AF-01）
