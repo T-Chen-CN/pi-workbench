@@ -361,6 +361,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           toolName: event.toolName,
           argsSummary: event.argsSummary,
           status: 'running',
+          parentToolCallId: event.parentToolCallId,
         }
         const existing = parts.findIndex(
           (item) => item.type === 'tool' && item.toolCallId === event.toolCallId
@@ -413,6 +414,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             durationMs: event.durationMs,
             resultPreview: event.resultPreview,
             filePath: event.filePath,
+            parentToolCallId: event.parentToolCallId,
           })
         }
         return { ...message, parts }

@@ -17,6 +17,7 @@ type AgentStreamPayload = {
     | 'compaction_end'
   delta?: string
   toolCallId?: string
+  parentToolCallId?: string
   toolName?: string
   argsSummary?: string
   startedAt?: number

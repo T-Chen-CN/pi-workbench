@@ -1563,6 +1563,57 @@ describe('retry and edit-resend', () => {
   })
 })
 
+describe('agent trace events', () => {
+  it('forwards nested tool calls with their parent tool call id', async () => {
+    const session = createFakeSession(async (s) => {
+      s.messages.push({ role: 'user', content: 'hi' })
+      s.emit({
+        type: 'tool_execution_start',
+        toolCallId: 'parent-call',
+        toolName: 'read',
+        args: { path: 'a.ts' },
+      })
+      s.emit({
+        type: 'tool_execution_start',
+        toolCallId: 'child-call',
+        toolName: 'grep',
+        args: { pattern: 'x' },
+        parentToolCallId: 'parent-call',
+      })
+      s.emit({
+        type: 'tool_execution_end',
+        toolCallId: 'child-call',
+        toolName: 'grep',
+        isError: false,
+        result: { content: 'ok' },
+        durationMs: 5,
+        parentToolCallId: 'parent-call',
+      })
+      s.messages.push({ role: 'assistant', content: 'done' })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const events: Array<Record<string, unknown>> = []
+    await manager.chat('hi', { onTrace: (event) => events.push(event) })
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_start',
+        toolCallId: 'child-call',
+        parentToolCallId: 'parent-call',
+      })
+    )
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'tool_end',
+        toolCallId: 'child-call',
+        parentToolCallId: 'parent-call',
+      })
+    )
+  })
+})
+
 describe('conversation branches', () => {
   const entries = [
     treeEntry('u1', null, 'user', 'first question', 1000),

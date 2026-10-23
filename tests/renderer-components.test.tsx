@@ -7,6 +7,7 @@ import { MonacoEditor } from '../src/components/MonacoEditor'
 import { WelcomeScreen } from '../src/components/WelcomeScreen'
 import { ToolResultViewer } from '../src/components/ToolResultViewer'
 import { MarkdownBody } from '../src/components/AgentMarkdown'
+import { AgentParts } from '../src/components/AgentTrace'
 import { useWorkspaceStore } from '../src/store/workspaceStore'
 import { useChatStore, conversationKey } from '../src/store/chatStore'
 import { useEditorStore } from '../src/store/editorStore'
@@ -922,6 +923,37 @@ describe('path references', () => {
         line: 42,
       })
     })
+  })
+})
+
+describe('AgentParts sub-agent activity', () => {
+  it('indents nested tool calls and marks them as sub-agent activity', async () => {
+    const parts = [
+      {
+        type: 'tool' as const,
+        id: 'parent',
+        toolCallId: 'parent',
+        toolName: 'read',
+        argsSummary: 'a.ts',
+        status: 'success' as const,
+      },
+      {
+        type: 'tool' as const,
+        id: 'child',
+        toolCallId: 'child',
+        toolName: 'grep',
+        argsSummary: 'foo',
+        status: 'success' as const,
+        parentToolCallId: 'parent',
+      },
+    ]
+
+    render(<AgentParts parts={parts} isStreaming={false} />)
+    fireEvent.click(
+      screen.getByRole('button', { name: new RegExp(translations.zh.thoughtProcess) })
+    )
+
+    expect(await screen.findByText(translations.zh.subAgent)).toBeTruthy()
   })
 })
 

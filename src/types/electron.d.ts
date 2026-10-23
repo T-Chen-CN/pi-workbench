@@ -555,6 +555,8 @@ export type AgentTracePart =
       filePath?: string
       /** 历史工具行有保存的 Diff */
       hasDiff?: boolean
+      /** 嵌套调用的父级工具调用（R-16） */
+      parentToolCallId?: string
     }
 
 /** 主进程归一化后的流式事件（不含路由字段） */
@@ -568,8 +570,14 @@ export type AgentStreamEvent =
       toolName: string
       argsSummary: string
       startedAt: number
+      parentToolCallId?: string
     }
-  | { type: 'tool_update'; toolCallId: string; resultPreview?: string }
+  | {
+      type: 'tool_update'
+      toolCallId: string
+      resultPreview?: string
+      parentToolCallId?: string
+    }
   | {
       type: 'tool_end'
       toolCallId: string
@@ -578,6 +586,7 @@ export type AgentStreamEvent =
       durationMs?: number
       resultPreview?: string
       filePath?: string
+      parentToolCallId?: string
     }
   | {
       type: 'retry_start'

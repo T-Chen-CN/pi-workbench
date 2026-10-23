@@ -28,7 +28,7 @@
 | R-10 | ✅ 导出 Markdown / HTML / JSONL | P2 | AF-13 剩余 | 会话 JSONL、HTML 生成 |
 | R-13 | ✅ 提示模板与技能命令 | P2 | AF-14 剩余 | Pi prompt templates / skills |
 | R-15 | ✅ 空状态建议个性化 | P3 | AF-18 剩余 | 最近操作记录 |
-| R-16 | 子 Agent 活动视图 | P3 | AF-17 剩余 | 工具轨迹、嵌套调用 |
+| R-16 | ✅ 子 Agent 活动视图 | P3 | AF-17 剩余 | 工具轨迹、嵌套调用 |
 | R-19 | 重试倒计时实时化 | P3 | AF-11 剩余 | 重试事件 |
 | R-20 | ✅ 工具结果全量查看器 | P2 | B-01 升级 | 会话 sidecar、工具结果存储 |
 | V-01 | macOS 手动验收 | 发布前 | 平台差异 | dmg 构建 |
@@ -128,12 +128,14 @@
 - **完成情况**：新增 `src/utils/suggestions.ts` 本地规则：工作区按 `package.json` / `pyproject.toml` / `requirements.txt` / `Cargo.toml` / `go.mod` 推断类型；最近文件取当前文件与已打开标签（按最近打开排序、去重、相对路径）。有最近文件时优先给出“解释 {文件}”“审查 {文件}”，随后是按工作区类型定制的测试建议，最后是不变的查找未完成工作；最多三条，点击只填入输入框。
 - **验证**：`type-check` / `lint` / `npm test`（47 文件 455 用例）/ `npm run build` 通过；新增规则单测与 ChatPanel 类型化建议渲染测试。不同真实工作区的效果留待界面手动确认。
 
-### R-16 子 Agent 活动视图
+### R-16 子 Agent 活动视图 ✅（2026-10-24）
 
 - 现状：顶栏活动数汇总会话与 Fleet 任务；子 Agent（嵌套工具调用）不可见。
 - 目标：把嵌套调用作为层级展示，能区分主 Agent 与子 Agent 的状态。
 - 技术：工具事件已带 `parentToolCallId`，补充层级 UI 与过滤。
 - 验收：触发嵌套调用时活动视图显示父子关系。
+- **完成情况**：bridge 在 `tool_start` / `tool_update` / `tool_end` 转发 `parentToolCallId`；工具片段保存该字段，聊天过程视图对属于同一轮工具调用的嵌套调用缩进显示并标注“子 Agent”，主 Agent 与子 Agent 状态（运行 / 成功 / 失败 / 耗时）沿用原有行样式。
+- **验证**：`type-check` / `lint` / `npm test`（47 文件 458 用例）/ `npm run build` 通过；新增 bridge 嵌套事件、store 字段保留与过程视图缩进测试。真实嵌套调用留待界面手动确认。
 
 ### R-19 重试倒计时实时化
 
