@@ -4,6 +4,7 @@ import {
   FileText,
   History,
   Paperclip,
+  RotateCcw,
   Send,
   Settings2,
   Square,
@@ -48,7 +49,7 @@ import {
   Spinner,
   Textarea,
 } from './ui'
-import type { SessionSummary } from '../types/electron'
+import type { SessionSummary, CheckpointSummary } from '../types/electron'
 
 interface ChatPanelProps {
   workspacePath: string
@@ -200,6 +201,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [fatalError, setFatalError] = useState<string | null>(null)
   const [showAttachMenu, setShowAttachMenu] = useState(false)
   const [pendingBehavior, setPendingBehavior] = useState<'queue' | 'steer'>('queue')
+  const [showCheckpoints, setShowCheckpoints] = useState(false)
+  const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([])
   const [configVersion, setConfigVersion] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const forceSendRef = useRef(false)
@@ -906,6 +909,54 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }
 
+  /** 读取检查点列表（当前会话） */
+  const loadCheckpoints = async () => {
+    if (!activeSessionId) return
+    const result = await piAgentAPI.listCheckpoints(workspacePath, activeSessionId)
+    if (result.success) setCheckpoints(result.checkpoints ?? [])
+  }
+
+  /** 回退到检查点；对话回退后重新加载历史 */
+  const handleRestoreCheckpoint = async (
+    checkpointId: string,
+    options: { files?: boolean; conversation?: boolean }
+  ) => {
+    if (!activeSessionId) return
+    const action =
+      options.files && options.conversation
+        ? t('restoreBoth')
+        : options.files
+          ? t('restoreCode')
+          : t('restoreConversation')
+    const confirmed = await confirmDialog({
+      message: t('restoreCheckpointConfirm', { action }),
+      danger: Boolean(options.files),
+    })
+    if (!confirmed) return
+
+    const result = await piAgentAPI.restoreCheckpoint(
+      workspacePath,
+      activeSessionId,
+      checkpointId,
+      options
+    )
+    if (!result.success) {
+      toast.error(t('restoreCheckpointFailed', { error: localizeError(result.error ?? '') }))
+      return
+    }
+    toast.info(t('restoreCheckpointDone', { count: result.restoredFiles ?? 0 }))
+    setShowCheckpoints(false)
+
+    if (options.conversation) {
+      const history = await piAgentAPI.getHistory(workspacePath, activeSessionId)
+      if (history.success) {
+        const key = conversationKey(workspacePath, activeSessionId)
+        useChatStore.getState().setMessages(key, history.history ?? [])
+        void refreshContextUsage(activeSessionId)
+      }
+    }
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -979,6 +1030,84 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           <span className="border border-rule-control px-1.5 py-0.5 type-key text-ink-muted">
             {commandPaletteShortcut()}
           </span>
+          <div className="relative">
+            <IconButton
+              icon={RotateCcw}
+              label={t('checkpoints')}
+              size="sm"
+              active={showCheckpoints}
+              onClick={() => {
+                const next = !showCheckpoints
+                setShowCheckpoints(next)
+                if (next) void loadCheckpoints()
+              }}
+            />
+            {showCheckpoints && (
+              <div className="absolute right-0 top-full z-20 mt-1 w-80 border border-line bg-raised shadow-print">
+                <div className="border-b border-rule-divide px-3 py-1.5 type-label text-ink-muted">
+                  {t('checkpoints')}
+                </div>
+                {checkpoints.length === 0 ? (
+                  <div className="px-3 py-2 type-caption text-ink-muted">
+                    {t('checkpointsEmpty')}
+                  </div>
+                ) : (
+                  checkpoints.map((checkpoint) => (
+                    <div
+                      key={checkpoint.id}
+                      className="flex flex-col gap-1.5 border-b border-rule-divide px-3 py-2 last:border-b-0"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="type-value text-ink">
+                          {new Date(checkpoint.createdAt).toLocaleTimeString()}
+                        </span>
+                        <span className="type-caption text-ink-muted">
+                          {t('checkpointFiles', { count: checkpoint.fileCount })}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleRestoreCheckpoint(checkpoint.id, { files: true })
+                          }
+                          className="border border-rule-control px-1.5 py-0.5 type-caption text-ink-muted transition-colors hover:text-ink"
+                        >
+                          {t('restoreCode')}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isLoading}
+                          onClick={() =>
+                            void handleRestoreCheckpoint(checkpoint.id, { conversation: true })
+                          }
+                          className="border border-rule-control px-1.5 py-0.5 type-caption text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
+                        >
+                          {t('restoreConversation')}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isLoading}
+                          onClick={() =>
+                            void handleRestoreCheckpoint(checkpoint.id, {
+                              files: true,
+                              conversation: true,
+                            })
+                          }
+                          className="border border-rule-control px-1.5 py-0.5 type-caption text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
+                        >
+                          {t('restoreBoth')}
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+                <div className="px-3 py-1.5 type-caption text-ink-muted">
+                  {t('checkpointBashHint')}
+                </div>
+              </div>
+            )}
+          </div>
           <IconButton
             icon={Settings2}
             label={t('settings')}

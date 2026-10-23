@@ -98,6 +98,16 @@ export interface ElectronAPI {
     estimatedTokensAfter?: number
     error?: string
   }>
+  agentCheckpointsList: (
+    workspaceDir: string,
+    sessionId?: string
+  ) => Promise<{ success: boolean; checkpoints?: CheckpointSummary[]; error?: string }>
+  agentCheckpointsRestore: (
+    workspaceDir: string,
+    sessionId: string,
+    checkpointId: string,
+    options: { files?: boolean; conversation?: boolean }
+  ) => Promise<{ success: boolean; restoredFiles?: number; error?: string }>
   onAgentApprovalRequest: (callback: (payload: ApprovalRequestPayload) => void) => () => void
   agentRespondApproval: (
     requestId: string,
@@ -292,6 +302,14 @@ export interface ContextUsageInfo {
   tokens: number | null
   contextWindow: number
   percent: number | null
+}
+
+/** 检查点摘要 */
+export interface CheckpointSummary {
+  id: string
+  sessionId: string
+  createdAt: number
+  fileCount: number
 }
 
 export interface FileEdit {

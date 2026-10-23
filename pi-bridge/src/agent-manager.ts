@@ -26,6 +26,11 @@ import {
   type ApprovalRequestPayload,
   type PermissionPolicy,
 } from './approval-policy.js'
+import {
+  CheckpointStore,
+  type CheckpointRecord,
+  type CheckpointSummary,
+} from './checkpoint-store.js'
 
 /** 写入 models.json 的自定义供应商 ID */
 const WORKBENCH_PROVIDER_ID = 'pi-workbench'
@@ -319,6 +324,8 @@ export interface AgentConfig {
   requestApproval?: (request: ApprovalRequestPayload) => Promise<ApprovalDecision>
   /** 用户选择“始终允许”时回调，由主进程持久化策略 */
   onPermissionAlwaysAllow?: (category: ApprovalRequestPayload['category']) => void
+  /** 检查点存储目录；未提供时不记录检查点（例如 Fleet 任务） */
+  checkpointDir?: string
 }
 
 export interface SessionSummary {
@@ -348,7 +355,7 @@ interface SessionRuntime {
   thinkingDeltaSeen: Set<number>
   /** write/edit 工具开始时的目标路径，供 tool_end 附带 */
   toolFiles: Map<string, string>
-  editSnapshots: Map<string, { path: string; oldContent: string }>
+  editSnapshots: Map<string, { path: string; oldContent: string; existed: boolean }>
   pendingEdits: FileEdit[]
   messageHistory: AgentMessage[]
   createdAt: number
@@ -363,6 +370,8 @@ interface SessionRuntime {
   modeState: { current: SessionMode }
   /** 进入 Plan 前的工具集，切回 Act 时恢复 */
   activeToolsBeforePlan: string[] | null
+  /** 本轮检查点；轮次结束后落盘 */
+  currentCheckpoint: CheckpointRecord | null
 }
 
 export interface AgentMessage {
@@ -422,6 +431,7 @@ export class AgentManager {
   private logger: AgentLogger = consoleAgentLogger
   private modelRuntime: ModelRuntime | null = null
   private agentDir = ''
+  private checkpointStore: CheckpointStore | null = null
   private sessionDir = ''
   private envLease = false
   private runtimes = new Map<string, SessionRuntime>()
@@ -603,8 +613,9 @@ export class AgentManager {
           if (event.toolName !== 'write' && event.toolName !== 'edit') return
           const target = this.resolveToolPath(args.path)
           if (!target || !this.isInsideWorkspace(target)) return
-          const oldContent = existsSync(target) ? readFileSync(target, 'utf-8') : ''
-          runtime.editSnapshots.set(event.toolCallId, { path: target, oldContent })
+          const existed = existsSync(target)
+          const oldContent = existed ? readFileSync(target, 'utf-8') : ''
+          runtime.editSnapshots.set(event.toolCallId, { path: target, oldContent, existed })
           return
         }
 
@@ -625,6 +636,15 @@ export class AgentManager {
                 newContent,
                 toolCallId: event.toolCallId,
               })
+              if (
+                runtime.currentCheckpoint &&
+                !runtime.currentCheckpoint.files.some((file) => file.path === snapshot.path)
+              ) {
+                runtime.currentCheckpoint.files.push({
+                  path: snapshot.path,
+                  oldContent: snapshot.existed ? snapshot.oldContent : null,
+                })
+              }
             }
           }
 
@@ -672,6 +692,9 @@ export class AgentManager {
 
       this.agentDir =
         config.agentDir || path.join(config.workspaceDir, '.pi-workbench', 'agent')
+      this.checkpointStore = config.checkpointDir
+        ? new CheckpointStore(config.checkpointDir, config.workspaceDir)
+        : null
       const modelsPath = await this.writeModelsConfig(this.agentDir, config)
       this.ensureBashOnPath()
 
@@ -817,6 +840,71 @@ export class AgentManager {
     } catch (error) {
       this.logger.warn('[Agent Manager] Approval failed or timed out:', error)
       return { action: 'deny', reason: 'The approval request timed out.' }
+    }
+  }
+
+  /** 列出检查点（最近的在前） */
+  async listCheckpoints(
+    sessionId?: string
+  ): Promise<{ success: boolean; checkpoints?: CheckpointSummary[]; error?: string }> {
+    if (!this.checkpointStore) return { success: true, checkpoints: [] }
+    try {
+      return { success: true, checkpoints: await this.checkpointStore.list(sessionId) }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /**
+   * 回退到检查点：可只恢复文件、只恢复对话，或两者都恢复。
+   * 只覆盖 write/edit 造成的修改；bash 等外部副作用不在检查点范围内。
+   */
+  async restoreCheckpoint(
+    sessionId: string,
+    checkpointId: string,
+    options: { files?: boolean; conversation?: boolean }
+  ): Promise<{ success: boolean; restoredFiles?: number; error?: string }> {
+    if (!this.checkpointStore) {
+      return { success: false, error: 'Checkpoints are not enabled for this workspace.' }
+    }
+    try {
+      const record = await this.checkpointStore.load(checkpointId)
+      if (!record || record.sessionId !== sessionId) {
+        return { success: false, error: 'Checkpoint not found.' }
+      }
+      const runtime = await this.ensureRuntime(sessionId)
+      if (runtime.isProcessing) {
+        return { success: false, error: 'Session is running; stop it before restoring.' }
+      }
+
+      let restoredFiles = 0
+      if (options.files) {
+        for (const file of record.files) {
+          const target = this.resolveToolPath(file.path)
+          if (!target || !this.isInsideWorkspace(target)) {
+            this.logger.warn('[Agent Manager] Skipped checkpoint file outside workspace:', file.path)
+            continue
+          }
+          if (file.oldContent === null) {
+            await fs.rm(target, { force: true })
+          } else {
+            await fs.mkdir(path.dirname(target), { recursive: true })
+            await fs.writeFile(target, file.oldContent, 'utf-8')
+          }
+          restoredFiles++
+        }
+      }
+
+      if (options.conversation && record.leafId) {
+        const result = await runtime.session.navigateTree(record.leafId, { summarize: false })
+        if (result.cancelled) {
+          return { success: false, error: 'Conversation restore was cancelled.' }
+        }
+      }
+
+      return { success: true, restoredFiles }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   }
 
@@ -993,6 +1081,7 @@ export class AgentManager {
       sessionAllow,
       modeState,
       activeToolsBeforePlan: null,
+      currentCheckpoint: null,
     }
     runtime.unsubscribe = this.subscribeToSessionEvents(runtime)
     this.runtimes.set(id, runtime)
@@ -1430,6 +1519,18 @@ export class AgentManager {
       runtime.onTrace = options?.onTrace ?? null
       runtime.pendingEdits = []
       runtime.editSnapshots.clear()
+      // 检查点：记录本轮开始时的会话位置；文件旧内容在 write/edit 执行时补充
+      runtime.currentCheckpoint = this.checkpointStore
+        ? {
+            version: 1,
+            id: `cp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            sessionId: runtime.id,
+            workspaceDir: runtime.sessionManager.getCwd(),
+            createdAt: Date.now(),
+            leafId: runtime.sessionManager.getLeafId(),
+            files: [],
+          }
+        : null
       // 只认本轮新增的 assistant 消息，避免请求失败时把上一轮回复当成本轮结果
       const messageStartIndex = runtime.session.messages.length
       this.logger.info(
@@ -1584,6 +1685,18 @@ export class AgentManager {
         runtime.isProcessing = false
         runtime.onTextDelta = null
         runtime.onTrace = null
+
+        // 检查点落盘：只保存本轮确实修改过的文件
+        const checkpoint = runtime.currentCheckpoint
+        runtime.currentCheckpoint = null
+        if (checkpoint && checkpoint.files.length > 0 && this.checkpointStore) {
+          try {
+            await this.checkpointStore.save(checkpoint)
+            await this.checkpointStore.prune()
+          } catch (error) {
+            this.logger.warn('[Agent Manager] Failed to save checkpoint:', error)
+          }
+        }
       }
     }
   }

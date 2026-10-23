@@ -10,6 +10,7 @@ import type {
   ApiConfig,
   ApprovalDecision,
   ApprovalRequestPayload,
+  CheckpointSummary,
   ContextUsageInfo,
   FileEdit,
   SessionListResult,
@@ -469,6 +470,43 @@ export const piAgentAPI = {
     }
     try {
       return await window.electronAPI.agentCompactContext(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 检查点列表 */
+  async listCheckpoints(
+    workspaceDir: string,
+    sessionId?: string
+  ): Promise<{ success: boolean; checkpoints?: CheckpointSummary[]; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentCheckpointsList !== 'function') {
+      return { success: true, checkpoints: [] }
+    }
+    try {
+      return await window.electronAPI.agentCheckpointsList(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 回退到检查点 */
+  async restoreCheckpoint(
+    workspaceDir: string,
+    sessionId: string,
+    checkpointId: string,
+    options: { files?: boolean; conversation?: boolean }
+  ): Promise<{ success: boolean; restoredFiles?: number; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentCheckpointsRestore !== 'function') {
+      return { success: false, error: 'Checkpoints are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentCheckpointsRestore(
+        workspaceDir,
+        sessionId,
+        checkpointId,
+        options
+      )
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

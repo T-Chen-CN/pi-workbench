@@ -62,6 +62,17 @@ export interface RegisteredAgent {
     estimatedTokensAfter?: number
     error?: string
   }>
+  /** 检查点列表与回退 */
+  listCheckpoints?: (sessionId?: string) => Promise<{
+    success: boolean
+    checkpoints?: Array<{ id: string; sessionId: string; createdAt: number; fileCount: number }>
+    error?: string
+  }>
+  restoreCheckpoint?: (
+    sessionId: string,
+    checkpointId: string,
+    options: { files?: boolean; conversation?: boolean }
+  ) => Promise<{ success: boolean; restoredFiles?: number; error?: string }>
   getCurrentSessionId?: () => string | null
 }
 

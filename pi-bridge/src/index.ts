@@ -35,5 +35,10 @@ export type {
   PermissionPolicy,
   ToolCategory,
 } from './approval-policy.js'
+export type {
+  CheckpointFile,
+  CheckpointRecord,
+  CheckpointSummary,
+} from './checkpoint-store.js'
 
 

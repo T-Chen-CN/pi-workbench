@@ -1748,6 +1748,7 @@ handleIpc('agent:initialize', async (_event, config: {
     const result = await agent.initialize({
       workspaceDir,
       agentDir: path.join(getAppDir(), 'data', 'agent'),
+      checkpointDir: path.join(getAppDir(), 'data', 'checkpoints'),
       apiConfig,
       logger: agentLogger,
       onSessionTitle: (sessionId: string, title: string) => {
@@ -1903,6 +1904,51 @@ handleIpc('agent:context:compact', async (_event, workspaceDir: string, sessionI
     return { success: false, error: error instanceof Error ? error.message : String(error) }
   }
 })
+
+// 检查点：列出与回退
+handleIpc('agent:checkpoints:list', async (_event, workspaceDir: string, sessionId?: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.listCheckpoints !== 'function') {
+      return { success: true, checkpoints: [] }
+    }
+    return await agent.listCheckpoints(sessionId)
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc(
+  'agent:checkpoints:restore',
+  async (
+    _event,
+    workspaceDir: string,
+    sessionId: string,
+    checkpointId: string,
+    options: { files?: boolean; conversation?: boolean }
+  ) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.restoreCheckpoint !== 'function') {
+        return { success: false, error: 'Checkpoints are not supported by this agent' }
+      }
+      return await agent.restoreCheckpoint(sessionId, checkpointId, {
+        files: Boolean(options?.files),
+        conversation: Boolean(options?.conversation),
+      })
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
 
 // 运行中插话：把消息注入当前轮
 handleIpc('agent:steer', async (_event, workspaceDir: string, sessionId: string, message: string) => {
