@@ -148,6 +148,13 @@ export interface ElectronAPI {
     workspaceDir: string,
     meta: SessionMeta
   ) => Promise<{ success: boolean; error?: string }>
+  chatPendingGet: (
+    workspaceDir: string
+  ) => Promise<{ success: boolean; sessions?: PendingMessagesMap; error?: string }>
+  chatPendingSet: (
+    workspaceDir: string,
+    sessions: PendingMessagesMap
+  ) => Promise<{ success: boolean; error?: string }>
   saveTextFile: (
     suggestedName: string,
     content: string
@@ -381,6 +388,15 @@ export interface SessionMeta {
   pinned: string[]
   archived: string[]
 }
+
+/** 排队消息（按会话分组持久化） */
+export interface PendingMessageRecord {
+  id: string
+  text: string
+  behavior: 'queue' | 'steer'
+}
+
+export type PendingMessagesMap = Record<string, PendingMessageRecord[]>
 
 /** 会话累计用量与成本 */
 export interface SessionStatsInfo {

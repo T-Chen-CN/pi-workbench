@@ -406,6 +406,57 @@ describe('workspace lifecycle handlers', () => {
   })
 })
 
+describe('pending message handlers', () => {
+  it('persists pending messages with sanitized values', async () => {
+    const stored = {
+      'session-1': [
+        { id: 'p1', text: 'next turn', behavior: 'queue' },
+        { id: 'p2', text: 'inject now', behavior: 'invalid' },
+        { id: 'p3', text: '   ', behavior: 'queue' },
+      ],
+      '': [{ id: 'p4', text: 'no session', behavior: 'queue' }],
+    }
+
+    await expect(call('chat:pending:set', workDir, stored)).resolves.toMatchObject({
+      success: true,
+    })
+
+    await expect(call('chat:pending:get', workDir)).resolves.toEqual({
+      success: true,
+      sessions: {
+        'session-1': [
+          { id: 'p1', text: 'next turn', behavior: 'queue' },
+          { id: 'p2', text: 'inject now', behavior: 'queue' },
+        ],
+      },
+    })
+
+    const file = path.join(workDir, '.pi-workbench', 'pending-messages.json')
+    expect(JSON.parse(await fs.readFile(file, 'utf-8'))).toEqual({
+      sessions: {
+        'session-1': [
+          { id: 'p1', text: 'next turn', behavior: 'queue' },
+          { id: 'p2', text: 'inject now', behavior: 'queue' },
+        ],
+      },
+    })
+  })
+
+  it('rejects untrusted workspaces for pending messages', async () => {
+    const untrusted = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-pending-'))
+    try {
+      await expect(call('chat:pending:get', untrusted)).resolves.toMatchObject({
+        success: false,
+      })
+      await expect(call('chat:pending:set', untrusted, {})).resolves.toMatchObject({
+        success: false,
+      })
+    } finally {
+      await fs.rm(untrusted, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('API configuration handlers', () => {
   it('encrypts the API key on disk and decrypts it on read', async () => {
     const config = {

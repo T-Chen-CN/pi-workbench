@@ -29,6 +29,8 @@ vi.mock('../src/api', () => ({
     onFsChanged: vi.fn(() => () => {}),
     fleetList: vi.fn(),
     onFleetTaskUpdated: vi.fn(() => () => {}),
+    getPendingMessages: vi.fn(),
+    setPendingMessages: vi.fn(),
   },
 }))
 
@@ -179,6 +181,8 @@ beforeEach(() => {
   })
   vi.mocked(piAgentAPI.getToolEdit).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.listCheckpoints).mockResolvedValue({ success: true, checkpoints: [] })
+  vi.mocked(api.getPendingMessages).mockResolvedValue({ success: true, sessions: {} })
+  vi.mocked(api.setPendingMessages).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.steer).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.respondApproval).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.sessionsClose).mockResolvedValue({ success: true })
@@ -220,6 +224,17 @@ describe('ChatPanel', () => {
     expect(
       screen.getByRole('heading', { name: translations.zh.agentChatTitle })
     ).toBeTruthy()
+  })
+
+  it('restores pending messages persisted before restart', async () => {
+    vi.mocked(api.getPendingMessages).mockResolvedValue({
+      success: true,
+      sessions: { s1: [{ id: 'p1', text: 'resume this turn', behavior: 'queue' }] },
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    expect(await screen.findByText('resume this turn')).toBeTruthy()
   })
 
   it('renders assistant markdown with highlighted code blocks', async () => {

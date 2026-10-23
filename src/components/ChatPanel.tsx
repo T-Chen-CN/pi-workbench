@@ -57,7 +57,12 @@ import {
   Spinner,
   Textarea,
 } from './ui'
-import type { SessionSummary, CheckpointSummary, SessionMeta } from '../types/electron'
+import type {
+  SessionSummary,
+  CheckpointSummary,
+  SessionMeta,
+  PendingMessagesMap,
+} from '../types/electron'
 
 interface ChatPanelProps {
   workspacePath: string
@@ -474,6 +479,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const forceSendRef = useRef(false)
   const budgetWarnedRef = useRef(false)
   const initSeqRef = useRef(0)
+  const pendingHydratedRef = useRef(false)
   const stickToBottomRef = useRef(true)
   const stoppedRef = useRef(false)
   const { parentRef: transcriptRef, virtualizer } = useVirtualRows({
@@ -747,6 +753,22 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           }
         }
 
+        // 恢复上次未发送的排队消息（R-02）；每个工作区只恢复一次
+        if (!pendingHydratedRef.current) {
+          const storedPending = await api.getPendingMessages(workspacePath)
+          if (seq !== initSeqRef.current) return
+          if (storedPending.success && storedPending.sessions) {
+            const chat = useChatStore.getState()
+            for (const [storedSessionId, items] of Object.entries(storedPending.sessions)) {
+              if (items.length === 0) continue
+              const key = conversationKey(workspacePath, storedSessionId)
+              chat.ensureConversation(key)
+              chat.setPending(key, items)
+            }
+          }
+          pendingHydratedRef.current = true
+        }
+
         setInitialized(true)
         persistTabs()
 
@@ -779,6 +801,47 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       offTitle()
     }
   }, [workspacePath, loadHistory, persistTabs, t, configVersion])
+
+  // 排队消息变化时写入工作区（R-02）；关闭标签或删除会话后快照里自然不再包含它
+  useEffect(() => {
+    const prefix = `${workspacePath}\u0000`
+    const snapshot = (
+      conversations: Record<
+        string,
+        { pending: Array<{ id: string; text: string; behavior: 'queue' | 'steer' }> }
+      >
+    ): PendingMessagesMap => {
+      const sessions: PendingMessagesMap = {}
+      for (const [key, conversation] of Object.entries(conversations)) {
+        if (!key.startsWith(prefix) || conversation.pending.length === 0) continue
+        sessions[key.slice(prefix.length)] = conversation.pending.map(({ id, text, behavior }) => ({
+          id,
+          text,
+          behavior,
+        }))
+      }
+      return sessions
+    }
+    let timer: number | null = null
+    const unsubscribe = useChatStore.subscribe((state, previous) => {
+      if (!pendingHydratedRef.current) return
+      if (JSON.stringify(snapshot(state.conversations)) === JSON.stringify(snapshot(previous.conversations))) {
+        return
+      }
+      if (timer !== null) window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        timer = null
+        void api.setPendingMessages(
+          workspacePath,
+          snapshot(useChatStore.getState().conversations)
+        )
+      }, 300)
+    })
+    return () => {
+      unsubscribe()
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [workspacePath])
 
   // 激活会话切换时回到最新位置
   useEffect(() => {
