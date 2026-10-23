@@ -254,6 +254,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [pendingBehavior, setPendingBehavior] = useState<'queue' | 'steer'>('queue')
   const [showCheckpoints, setShowCheckpoints] = useState(false)
   const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([])
+  const [mention, setMention] = useState<{
+    start: number
+    query: string
+    results: string[]
+  } | null>(null)
+  const mentionTimer = useRef<number | null>(null)
   const [configVersion, setConfigVersion] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const forceSendRef = useRef(false)
@@ -272,6 +278,67 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     },
     [activeKey]
   )
+
+  /** @ 文件搜索（防抖），结果落到 mention 弹层 */
+  const searchMention = useCallback(
+    (query: string, start: number) => {
+      if (mentionTimer.current) window.clearTimeout(mentionTimer.current)
+      mentionTimer.current = window.setTimeout(async () => {
+        const result = await api.searchWorkspaceFiles(workspacePath, query, 12)
+        if (!result.success) return
+        setMention((current) =>
+          current && current.start === start
+            ? { ...current, results: result.files ?? [] }
+            : current
+        )
+      }, 120)
+    },
+    [workspacePath]
+  )
+
+  const handleDraftChange = (value: string, caret: number) => {
+    setDraft(value)
+    const before = value.slice(0, caret)
+    const match = before.match(/(^|\s)@([\w./\\-]{0,60})$/)
+    if (!match) {
+      setMention(null)
+      return
+    }
+    const start = caret - match[2].length - 1
+    setMention({ start, query: match[2], results: [] })
+    searchMention(match[2], start)
+  }
+
+  /** 选择 @ 文件：插入引用文本并作为附件附加 */
+  const addMention = (relative: string) => {
+    if (!activeKey || !mention) return
+    const value = useChatStore.getState().conversations[activeKey]?.draftInput ?? ''
+    const tokenEnd = mention.start + 1 + mention.query.length
+    const next = `${value.slice(0, mention.start)}@${relative} ${value.slice(tokenEnd)}`
+    useChatStore.getState().setDraftInput(activeKey, next)
+    useChatStore.getState().addAttachment(activeKey, {
+      kind: 'file',
+      path: `${workspacePath}/${relative}`,
+      name: relative.split('/').pop() || relative,
+    })
+    setMention(null)
+    inputRef.current?.focus()
+  }
+
+  /** 拖入文件作为附件 */
+  const handleDropFiles = (event: React.DragEvent) => {
+    event.preventDefault()
+    if (!activeKey) return
+    for (const file of Array.from(event.dataTransfer.files)) {
+      const target = api.getPathForFile(file)
+      if (!target) continue
+      useChatStore.getState().addAttachment(activeKey, {
+        kind: 'file',
+        path: target,
+        name: file.name,
+      })
+    }
+  }
 
   const persistTabs = useCallback(() => {
     const state = useSessionStore.getState().byWorkspace[workspacePath]
@@ -1584,14 +1651,34 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             </div>
           )}
 
+          {mention && mention.results.length > 0 && (
+            <div className="mb-1 max-h-52 overflow-y-auto border border-line bg-raised shadow-print">
+              {mention.results.map((file) => (
+                <button
+                  key={file}
+                  type="button"
+                  onClick={() => addMention(file)}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-data text-ink transition-colors hover:bg-hover"
+                >
+                  <FileText size={11} className="flex-shrink-0 text-ink-muted" />
+                  <span className="truncate">{file}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           <form
             onSubmit={handleSubmit}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={handleDropFiles}
             className="border border-rule-control bg-sunken transition-colors focus-within:border-accent"
           >
             <Textarea
               ref={inputRef}
               value={input}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(event) =>
+                handleDraftChange(event.target.value, event.target.selectionStart ?? 0)
+              }
               onKeyDown={handleKeyDown}
               placeholder={t('inputPlaceholder')}
               disabled={!initialized}

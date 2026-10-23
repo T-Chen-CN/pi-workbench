@@ -127,6 +127,12 @@ export interface ElectronAPI {
     sessionId: string,
     level: string
   ) => Promise<{ success: boolean; error?: string }>
+  searchWorkspaceFiles: (
+    workspaceDir: string,
+    query: string,
+    limit?: number
+  ) => Promise<{ success: boolean; files?: string[]; error?: string }>
+  getPathForFile: (file: File) => string
   onAgentApprovalRequest: (callback: (payload: ApprovalRequestPayload) => void) => () => void
   agentRespondApproval: (
     requestId: string,

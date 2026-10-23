@@ -333,6 +333,12 @@ export const api = {
   // File system operations
   openDirectoryDialog: () => electronAPI.openDirectoryDialog(),
   listDirectory: (path: string) => electronAPI.listDirectory(path),
+  searchWorkspaceFiles: (workspaceDir: string, query: string, limit?: number) =>
+    typeof electronAPI.searchWorkspaceFiles === 'function'
+      ? electronAPI.searchWorkspaceFiles(workspaceDir, query, limit)
+      : Promise.resolve({ success: true, files: [] as string[] }),
+  getPathForFile: (file: File) =>
+    typeof electronAPI.getPathForFile === 'function' ? electronAPI.getPathForFile(file) : '',
   readFile: (path: string) => electronAPI.readFile(path),
   writeFile: (path: string, content: string) => electronAPI.writeFile(path, content),
   exists: (path: string) => electronAPI.exists(path),

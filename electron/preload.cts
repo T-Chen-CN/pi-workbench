@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 type AgentStreamPayload = {
   requestId?: string
@@ -166,6 +166,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:session:setModel', workspaceDir, sessionId, modelId),
   agentSessionSetThinking: (workspaceDir: string, sessionId: string, level: string) =>
     ipcRenderer.invoke('agent:session:setThinking', workspaceDir, sessionId, level),
+  searchWorkspaceFiles: (workspaceDir: string, query: string, limit?: number) =>
+    ipcRenderer.invoke('workspace:searchFiles', workspaceDir, query, limit),
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   onNotifyClick: (
     callback: (payload: { workspaceDir: string; sessionId: string }) => void
   ) => {

@@ -1254,6 +1254,65 @@ handleIpc('app:saveSettings', async (_event, settings: any) => {
   }
 })
 
+// 文件引用：在工作区内按文件名 / 路径片段搜索（跳过依赖与构建目录）
+handleIpc(
+  'workspace:searchFiles',
+  async (_event, workspaceDir: string, query: string, limit = 20) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const needle = String(query ?? '').trim().toLowerCase()
+      const maxResults = Math.min(50, Math.max(1, Number(limit) || 20))
+      const ignored = new Set([
+        'node_modules',
+        '.git',
+        '.pi-workbench',
+        '.pi-worktrees',
+        '.atelier',
+        'dist',
+        'dist-electron',
+        'cache',
+        'logs',
+        'release',
+      ])
+      const results: string[] = []
+      let visited = 0
+      const maxVisited = 6000
+
+      async function walk(dir: string, depth: number): Promise<void> {
+        if (results.length >= maxResults || visited >= maxVisited || depth > 8) return
+        let entries
+        try {
+          entries = await fs.readdir(dir, { withFileTypes: true })
+        } catch {
+          return
+        }
+        for (const entry of entries) {
+          if (results.length >= maxResults || visited >= maxVisited) return
+          if (entry.name.startsWith('.') && entry.name !== '.env') continue
+          if (entry.isDirectory()) {
+            if (ignored.has(entry.name)) continue
+            await walk(path.join(dir, entry.name), depth + 1)
+            continue
+          }
+          if (!entry.isFile()) continue
+          visited++
+          const relative = path.relative(workspaceDir, path.join(dir, entry.name)).split(path.sep).join('/')
+          if (!needle || relative.toLowerCase().includes(needle)) {
+            results.push(relative)
+          }
+        }
+      }
+
+      await walk(workspaceDir, 0)
+      return { success: true, files: results }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
 // 自绘窗口按钮（Windows / Linux；macOS 保留原生红绿灯）
 handleIpc('window:minimize', () => {
   mainWindow?.minimize()

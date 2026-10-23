@@ -417,6 +417,7 @@
 - 检查点菜单：聊天头部 `RotateCcw` 图标按钮打开的浮层（`bg-raised` + 满墨边 + `shadow-print`，宽 320px）；每行显示时间（`type-value`）与“修改 N 个文件”（`type-caption`），操作按钮为发丝边文本按钮（恢复代码 / 恢复对话 / 两者都恢复），底部一句说明命令副作用不可回退。
 - 消息操作：悬停或键盘聚焦时在消息头部右侧显示 14px 图标按钮（复制 / 重新生成 / 编辑），默认 `opacity-0`，`group-hover` 与 `focus-within` 时显现；只对最后一条助手回复和最后一条用户消息提供重复生成与编辑入口。
 - 模型与思考：输入区上方一行两个紧凑 `Select`（模型 176px / 思考 112px，高度 24px），值来自会话级设置；切换失败时回滚并 Toast。
+- 文件引用：Markdown 行内代码中的 `path[:line]` 使用 `type-data` 样式，hover 变 `accent` 并加下划线，点击打开编辑器；`@` 搜索弹层为 `bg-raised` + 满墨边 + `shadow-print` 的列表（单行 `type-data`，hover `bg-hover`），拖入文件直接进入附件区。
 
 ### 6.6 终端
 
