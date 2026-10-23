@@ -5,7 +5,7 @@
 **项目**: Pi Workbench  
 **架构**: Electron 44 + React 19 + TypeScript
 **运行要求**: Node.js ≥ 22.19（Pi SDK 要求；Electron 44 内置 Node 24）  
-**当前阶段**: Phase 5 完成，Phase 6 持续优化  
+**当前阶段**: Phase 6 持续优化
 **最后更新**: 2026-10-24
 
 ---
@@ -27,7 +27,6 @@
 - ✅ Phase 2 完成：工作区与对话体验（流式输出、修改审阅、上下文选择、多工作区）
 - ✅ Phase 3 完成：终端集成（xterm + node-pty，输出可附加给 Agent）
 - ✅ Phase 4 完成：工作台插件系统（命令 / 钩子 / 命令面板，示例 Git 插件）
-- ✅ Phase 5 完成：Fleet 后台任务（worktree 隔离、队列、任务级 Agent、日志）
 - 🟡 Phase 6 持续：性能、快捷键、主题、崩溃恢复、自动更新等
 
 ---
@@ -104,7 +103,6 @@ src/components/
 ├── DiffViewer.tsx
 ├── ErrorBoundary.tsx
 ├── FileExplorer.tsx
-├── FleetPanel.tsx
 ├── IPCDebug.tsx
 ├── MonacoEditor.tsx
 ├── Settings.tsx
@@ -610,7 +608,7 @@ async function initAgent(config: ApiConfig) {
 - ✅ 所有日志：`{appDir}/logs/`
 - ✅ 主进程日志：`{appDir}/logs/main.log`（5MB 轮转，保留 `.1`）
 - ✅ 渲染进程日志：`{appDir}/logs/renderer.log`（未捕获异常与 console.warn/error）
-- ✅ Agent 日志：`{appDir}/logs/agent.log`（5MB 轮转保留 `.1`，由主进程注入 `AgentLogger`，含工作区 Agent 与 Fleet 任务 Agent；任务本身的执行日志仍写 `fleet-{id}.log`）
+- ✅ Agent 日志：`{appDir}/logs/agent.log`（5MB 轮转保留 `.1`，由主进程注入 `AgentLogger`，含工作区 Agent）
 
 **Chromium profile**:
 - ✅ `app.setPath('userData', '{appDir}/data/profile')`，缓存与 localStorage 随应用目录迁移
@@ -667,17 +665,6 @@ async function initAgent(config: ApiConfig) {
 - ✅ 启用禁用与热重载（`config.json` 的 `enabledPlugins` + `pluginsConfigured`）
 - ❌ 不向渲染进程加载插件 JS（生产 CSP `script-src 'self'`）
 - ❌ 不接入 Pi SDK extensions / custom tools
-
-### Fleet 任务约束
-
-**Worktree 存储位置**:
-- ✅ Worktree 目录：`{workspaceDir}/.pi-worktrees/{name}-{taskId}/`，分支 `pi-fleet/...`
-- ✅ 任务元数据：`{appDir}/data/fleet-tasks.db`（`node:sqlite`；不可用时回退 JSON）
-- ✅ 任务日志：`{appDir}/logs/fleet-{task-id}.log`
-- ✅ 清理 worktree 时**保留分支**，避免丢失 Agent 提交
-- ✅ 审阅与合并：查看 worktree diff；仅 `succeeded` 任务可合并，合并前要求工作区无未提交改动，冲突时自动 `merge --abort`
-- ✅ 队列每个工作区默认并发 1、全局上限 4，可通过 `FleetManager` 的 `maxConcurrent` / `maxTotalConcurrent` 调整
-- ❌ **禁止**在系统临时目录创建 worktree
 
 ---
 
@@ -891,7 +878,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 
 **允许创建报告的情况**（必须满足以下条件之一）：
 1. **用户明确说**："生成报告"、"写成文档"、"需要审查记录"、"创建文档"
-2. **架构重大决策**：多 worktree 的协调、技术选型改变、大型重构
+2. **架构重大决策**：多工作区 / 多 Agent 的协调、技术选型改变、大型重构
 3. **安全审计**：安全漏洞、权限问题、数据处理风险
 4. **里程碑归档**：阶段完成总结（仅在用户明确指示时）
 

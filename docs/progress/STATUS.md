@@ -12,7 +12,7 @@
 - ✅ **Phase 2: 工作区与对话体验** — 流式输出、修改审阅、上下文选择、多工作区标签
 - ✅ **Phase 3: 终端集成** — xterm.js + node-pty，输出可附加给 Agent
 - ✅ **Phase 4: 工作台插件系统** — 命令/钩子、启用禁用、热重载、命令面板
-- ✅ **Phase 5: Fleet 后台任务** — worktree 隔离、任务队列、每任务 Agent、监控与日志
+- ➖ **Phase 5: Fleet 后台任务（2026-10-24 移除）** — 原 worktree 隔离与任务队列已删除
 - 🟡 **Phase 6: 优化与完善** — 持续（分包 / CSP / 测试已完成）
 
 ## 当前版本
@@ -20,7 +20,7 @@
 - **版本**: 0.3.1
 - **框架**: Electron 44 + React 19 + TypeScript
 - **Agent**: `@earendil-works/pi-coding-agent` 1.3.0
-- **状态**: Phase 5 完成，Phase 6 持续优化
+- **状态**: Phase 6 持续优化
 
 ## 功能清单
 
@@ -102,13 +102,9 @@
 - ✅ 命令面板（Ctrl+Shift+P）：执行命令、传参、查看输出、管理插件
 - ✅ Git 示例插件（`examples/plugins/git-tools`）
 
-#### Phase 5: Fleet 任务系统（完成）
+#### Phase 5: Fleet 任务系统（2026-10-24 移除）
 
-- ✅ Git worktree 创建 / 清理（`{workspace}/.pi-worktrees/`，分支保留）
-- ✅ 任务队列与状态机（queued / running / succeeded / failed / cancelled，每个工作区默认并发 1，全局上限 4）
-- ✅ 每任务独立 Agent 实例，流式输出写入任务记录与 `fleet-{id}.log`
-- ✅ 元数据持久化：`{appDir}/data/fleet-tasks.db`（`node:sqlite`，JSON 回退）
-- ✅ Fleet 面板：创建 / 取消 / 查看日志 / 查看改动 / 合并回工作区 / 清理 worktree
+- ➖ 已整体移除；旧版本遗留的 `.pi-worktrees` 与 `pi-fleet/*` 分支需手动清理。
 
 #### Phase 6: 优化和完善（持续）
 
@@ -178,6 +174,7 @@
 - ✅ 2026-10-24 方案收尾：BACKLOG P1–P3 全部开发项经项目所有者手动验收通过（结构化计划、模板 / 技能审批、三格式导出、工具结果查看器、排队恢复、分支切换、压缩分隔线、行号跳转、个性化建议、子 Agent、重试倒计时、图片附件与消息内全窗口预览）；V-01 / V-02 平台验收与版本发布继续暂缓
 - ✅ 2026-10-24 发布 v0.3.0：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附带 `latest.yml` / `latest-mac.yml` / `latest-linux.yml`；同时修复快捷键测试依赖宿主平台、导致 macOS 构建失败的问题
 - ✅ 2026-10-24 发布 v0.3.1：Windows 自动更新改为清单式删除——升级只替换程序文件，保留 `config` / `data` / `logs` / `cache`；卸载才清理数据目录。首个带该修复的版本仍需手动安装
+- ✅ 2026-10-24 移除 Fleet 后台任务：删除界面、IPC、任务队列、worktree 管理与存储代码；当前构建不再包含 Fleet 模块，旧任务数据与 `pi-fleet/*` 分支保留在磁盘上待手动清理。type-check / lint / 470 用例 / build 通过
 - ✅ 大文件模式与虚滚动（2026-10-21：聊天 / Diff / 文件树虚拟滚动，>2MB 关闭换行折叠，>10MB 只读）
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 

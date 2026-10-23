@@ -516,7 +516,7 @@ export interface AgentConfig {
   requestApproval?: (request: ApprovalRequestPayload) => Promise<ApprovalDecision>
   /** 用户选择“始终允许”时回调，由主进程持久化策略 */
   onPermissionAlwaysAllow?: (category: ApprovalRequestPayload['category']) => void
-  /** 检查点存储目录；未提供时不记录检查点（例如 Fleet 任务） */
+  /** 检查点存储目录；未提供时不记录检查点 */
   checkpointDir?: string
 }
 
@@ -666,7 +666,7 @@ export interface AgentChatResult {
 }
 
 export interface AgentChatOptions {
-  /** 接收流式文本增量（兼容 Fleet 等只关心文本的调用方） */
+  /** 接收流式文本增量（兼容只关心文本的调用方） */
   onTextDelta?: (delta: string) => void
   /** 接收归一化的文本 / 思考 / 工具事件；与 onTextDelta 可同时使用 */
   onTrace?: (event: AgentTraceEvent) => void
@@ -2808,7 +2808,7 @@ ${body.join('\n')}
    * 发送消息给 Agent。
    *
    * 支持两种调用方式：
-   * - chat(message, options)               默认使用最近打开/创建的会话（Fleet 等兼容路径）
+   * - chat(message, options)               默认使用最近打开/创建的会话（简化的兼容调用方式）
    * - chat(sessionId, message, options)    指定会话；不同会话可以并行
    */
   async chat(message: string, options?: AgentChatOptions): Promise<AgentChatResult>

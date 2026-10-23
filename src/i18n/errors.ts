@@ -7,7 +7,6 @@ import type { TranslationKey } from './translations'
  */
 const EXACT: Record<string, TranslationKey> = {
   'Path is outside the open workspace': 'errPathOutsideWorkspace',
-  'Task not found': 'errTaskNotFound',
   'Workspace not initialized': 'errWorkspaceNotInitialized',
   'Workspace is not approved': 'errWorkspaceNotApproved',
   'Agent not initialized for this workspace': 'errAgentNotInitialized',

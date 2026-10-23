@@ -19,11 +19,10 @@ import {
   Stat,
   StatGrid,
   StatusText,
-  type StatusTone,
 } from './patterns'
-import { Caption, DataText, Eyebrow, Label, Value } from './ui'
+import { Caption, DataText, Eyebrow, Label } from './ui'
 import { useI18nStore } from '../store/i18nStore'
-import type { ApiConfig, FleetTask, FleetTaskStatus } from '../types/electron'
+import type { ApiConfig } from '../types/electron'
 
 interface WelcomeScreenProps {
   recentWorkspaces: string[]
@@ -31,25 +30,6 @@ interface WelcomeScreenProps {
   onOpenWorkspace: (path: string) => void
   onOpenSettings: () => void
   onRefreshRecent: () => void
-}
-
-const FLEET_STATUS_KEYS: Record<
-  FleetTaskStatus,
-  'fleetQueued' | 'fleetRunning' | 'fleetSucceeded' | 'fleetFailed' | 'fleetCancelled'
-> = {
-  queued: 'fleetQueued',
-  running: 'fleetRunning',
-  succeeded: 'fleetSucceeded',
-  failed: 'fleetFailed',
-  cancelled: 'fleetCancelled',
-}
-
-const FLEET_STATUS_TONES: Record<FleetTaskStatus, StatusTone> = {
-  queued: 'muted',
-  running: 'accent',
-  succeeded: 'success',
-  failed: 'danger',
-  cancelled: 'warning',
 }
 
 const workspaceName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path
@@ -64,7 +44,6 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   const { t, language } = useI18nStore()
   const [query, setQuery] = useState('')
   const [apiConfig, setApiConfig] = useState<ApiConfig | null>(null)
-  const [fleetTasks, setFleetTasks] = useState<FleetTask[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -89,40 +68,6 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
     }
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-
-    const loadFleet = async () => {
-      if (recentWorkspaces.length === 0) {
-        if (!cancelled) setFleetTasks([])
-        return
-      }
-
-      try {
-        const results = await Promise.all(
-          recentWorkspaces.slice(0, 6).map((path) => api.fleetList(path))
-        )
-        if (cancelled) return
-        const tasks = results.flatMap((result) => (result.success ? result.tasks : []))
-        tasks.sort((a, b) => b.updatedAt - a.updatedAt)
-        setFleetTasks(tasks)
-      } catch (error) {
-        console.error('[WelcomeScreen] Failed to load Fleet tasks:', error)
-        if (!cancelled) setFleetTasks([])
-      }
-    }
-
-    void loadFleet()
-    const timer = window.setInterval(() => void loadFleet(), 5000)
-    const unsubscribe = api.onFleetTaskUpdated(() => void loadFleet())
-
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-      unsubscribe()
-    }
-  }, [recentWorkspaces])
-
   const filteredWorkspaces = useMemo(() => {
     const needle = query.trim().toLowerCase()
     if (!needle) return recentWorkspaces
@@ -139,9 +84,6 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
     apiConfig?.apiUrl && apiConfig.apiKey && apiConfig.selectedModel
   )
   const model = apiConfig?.selectedModel?.trim() || t('welcomeModelUnset')
-  const runningTasks = fleetTasks.filter(
-    (task) => task.status === 'queued' || task.status === 'running'
-  ).length
 
   const steps = [
     { label: t('welcomeStepApi'), done: apiReady, action: onOpenSettings },
@@ -309,47 +251,6 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 >
                   {t('welcomeNoRecent')}
                 </button>
-              )}
-            </Card>
-
-            <Card>
-              <CardHeader
-                title={t('welcomeFleet')}
-                status={
-                  runningTasks > 0 ? (
-                    <Caption className="text-ink-muted">
-                      {t('welcomeFleetRunning', { count: runningTasks })}
-                    </Caption>
-                  ) : undefined
-                }
-              />
-
-              {fleetTasks.length === 0 ? (
-                <p className="m-0 pt-2.5 type-value text-ink-muted">
-                  {t('welcomeFleetEmpty')}
-                </p>
-              ) : (
-                <div className="pt-1">
-                  {fleetTasks.slice(0, 2).map((task) => (
-                    <button
-                      key={task.id}
-                      type="button"
-                      title={task.prompt}
-                      onClick={() => onOpenWorkspace(task.workspace)}
-                      className="flex w-full items-center gap-2.5 border-b border-rule-divide py-1.5 text-left last:border-b-0"
-                    >
-                      <StatusText
-                        tone={FLEET_STATUS_TONES[task.status]}
-                        className="w-[64px] flex-shrink-0"
-                      >
-                        {t(FLEET_STATUS_KEYS[task.status])}
-                      </StatusText>
-                      <Value className="min-w-0 flex-1 truncate text-ink">
-                        {task.name}
-                      </Value>
-                    </button>
-                  ))}
-                </div>
               )}
             </Card>
 

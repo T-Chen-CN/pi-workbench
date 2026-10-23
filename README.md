@@ -2,7 +2,7 @@
 
 Lightweight desktop code editor with Pi Agent integration, built with Electron + React.
 
-**Version**: 0.3.1 · **Status**: Phase 5 complete · Phase 6 ongoing · **Updated**: 2026-10-24
+**Version**: 0.3.1 · **Status**: Phase 6 ongoing · **Updated**: 2026-10-24
 
 ---
 
@@ -14,7 +14,6 @@ Lightweight desktop code editor with Pi Agent integration, built with Electron +
 - **Diff viewer** — automatically shows files the agent modified during a turn
 - **Terminal** — xterm.js + node-pty, with output attachable to the agent
 - **Workspace plugins** — command and hook extensions loaded in the main process (opt-in per workspace)
-- **Fleet tasks** — background agents in isolated git worktrees with a per-workspace queue, diff review and one-click merge
 - **Paper & Ink UI** — light/dark themes, local fonts, consistent design tokens
 - **Crash recovery** — unsaved editor drafts are restored after an unexpected exit
 - **Auto update** — silent check on launch; Windows / Linux download automatically but only install on request; macOS checks and links to the release page

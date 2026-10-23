@@ -32,8 +32,6 @@ vi.mock('../src/api', () => ({
     exists: vi.fn(),
     stat: vi.fn(),
     onFsChanged: vi.fn(() => () => {}),
-    fleetList: vi.fn(),
-    onFleetTaskUpdated: vi.fn(() => () => {}),
     getPendingMessages: vi.fn(),
     setPendingMessages: vi.fn(),
   },
@@ -227,8 +225,6 @@ beforeEach(() => {
   vi.mocked(api.stat).mockResolvedValue({ success: true, isFile: true, isDirectory: false, size: 0 })
   vi.mocked(api.exists).mockResolvedValue({ success: true, exists: false })
   vi.mocked(api.onFsChanged).mockReturnValue(() => {})
-  vi.mocked(api.fleetList).mockResolvedValue({ success: true, tasks: [] })
-  vi.mocked(api.onFleetTaskUpdated).mockReturnValue(() => {})
 })
 
 afterEach(() => {

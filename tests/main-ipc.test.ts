@@ -89,7 +89,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  // Fleet 的 SQLite 连接在主进程模块里保持打开，Windows 上可能暂时无法删除目录
+  // workspaceStore 的 SQLite 连接在主进程模块里保持打开，Windows 上可能暂时无法删除目录
   await fs.rm(appDir, { recursive: true, force: true }).catch(() => undefined)
 })
 
@@ -157,14 +157,13 @@ describe('filesystem IPC handlers', () => {
     await expect(fs.stat(workDir)).resolves.toBeTruthy()
   })
 
-  it('rejects terminal, plugin and fleet calls for unapproved workspaces', async () => {
+  it('rejects terminal and plugin calls for unapproved workspaces', async () => {
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-outside-'))
     try {
       await expect(call('terminal:create', outside, 80, 24)).resolves.toMatchObject({
         success: false,
       })
       await expect(call('plugins:list', outside)).resolves.toMatchObject({ success: false })
-      await expect(call('fleet:list', outside)).resolves.toMatchObject({ success: false })
     } finally {
       await fs.rm(outside, { recursive: true, force: true })
     }
