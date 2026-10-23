@@ -9,6 +9,7 @@
 
 import * as fs from 'fs/promises'
 import * as path from 'path'
+import { isStructuredPlan, type StructuredPlan } from './plan.js'
 
 export interface ToolEditRecord {
   path: string
@@ -22,10 +23,12 @@ export interface SessionExtras {
   toolEdits: Record<string, ToolEditRecord>
   /** 分支切换（R-03）：assistant 入口 → 该分支上次停留的叶子，切回时可恢复完整后续 */
   branchLeaves: Record<string, string>
+  /** 结构化计划（R-04）；不进入模型上下文，压缩后仍保留 */
+  plan: StructuredPlan | null
 }
 
 export function emptyExtras(): SessionExtras {
-  return { version: 1, thinkingDurations: {}, toolEdits: {}, branchLeaves: {} }
+  return { version: 1, thinkingDurations: {}, toolEdits: {}, branchLeaves: {}, plan: null }
 }
 
 export class SessionExtrasStore {
@@ -48,6 +51,7 @@ export class SessionExtrasStore {
         toolEdits: raw.toolEdits && typeof raw.toolEdits === 'object' ? raw.toolEdits : {},
         branchLeaves:
           raw.branchLeaves && typeof raw.branchLeaves === 'object' ? raw.branchLeaves : {},
+        plan: isStructuredPlan(raw.plan) ? raw.plan : null,
       }
     } catch {
       return emptyExtras()

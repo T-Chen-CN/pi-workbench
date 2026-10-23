@@ -185,6 +185,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:models:capabilities', workspaceDir),
   agentPromptResources: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('agent:prompt-resources', workspaceDir, sessionId),
+  agentPlanGet: (workspaceDir: string, sessionId: string) =>
+    ipcRenderer.invoke('agent:plan:get', workspaceDir, sessionId),
+  agentPlanApprove: (workspaceDir: string, sessionId: string, planId: string) =>
+    ipcRenderer.invoke('agent:plan:approve', workspaceDir, sessionId, planId),
+  agentPlanReject: (workspaceDir: string, sessionId: string, planId: string) =>
+    ipcRenderer.invoke('agent:plan:reject', workspaceDir, sessionId, planId),
   agentToolDiff: (workspaceDir: string, sessionId: string, toolCallId: string) =>
     ipcRenderer.invoke('agent:tool-diff', workspaceDir, sessionId, toolCallId),
   agentToolResultMeta: (workspaceDir: string, sessionId: string, toolCallId: string) =>

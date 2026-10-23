@@ -147,6 +147,20 @@ export interface ElectronAPI {
     skills?: SkillInfo[]
     error?: string
   }>
+  agentPlanGet: (
+    workspaceDir: string,
+    sessionId: string
+  ) => Promise<{ success: boolean; plan?: StructuredPlan | null; error?: string }>
+  agentPlanApprove: (
+    workspaceDir: string,
+    sessionId: string,
+    planId: string
+  ) => Promise<{ success: boolean; plan?: StructuredPlan; error?: string }>
+  agentPlanReject: (
+    workspaceDir: string,
+    sessionId: string,
+    planId: string
+  ) => Promise<{ success: boolean; plan?: StructuredPlan; error?: string }>
   agentToolDiff: (
     workspaceDir: string,
     sessionId: string,
@@ -514,6 +528,27 @@ export interface SkillInfo {
   disableModelInvocation: boolean
 }
 
+/** 结构化计划（R-04） */
+export type PlanStepStatus = 'pending' | 'in_progress' | 'done' | 'skipped'
+export type PlanStatus = 'proposed' | 'approved' | 'rejected'
+
+export interface PlanStep {
+  id: string
+  title: string
+  files: string[]
+  risk?: string
+  status: PlanStepStatus
+}
+
+export interface StructuredPlan {
+  id: string
+  summary: string
+  steps: PlanStep[]
+  status: PlanStatus
+  createdAt: number
+  updatedAt: number
+}
+
 /** 会话累计用量与成本 */
 export interface SessionStatsInfo {
   tokens: number
@@ -557,6 +592,12 @@ export type AgentTracePart =
       hasDiff?: boolean
       /** 嵌套调用的父级工具调用（R-16） */
       parentToolCallId?: string
+    }
+  | {
+      /** Plan 模式提交的结构化计划（R-04），只读展示 */
+      type: 'plan'
+      id: string
+      plan: StructuredPlan
     }
 
 /** 主进程归一化后的流式事件（不含路由字段） */
@@ -603,6 +644,8 @@ export type AgentStreamEvent =
       tokensBefore?: number
       error?: string
     }
+  | { type: 'plan_submitted'; plan: StructuredPlan }
+  | { type: 'plan_updated'; plan: StructuredPlan }
 
 export type AgentStreamPayload = {
   /** 发起请求时生成，用于忽略过期会话的增量 */
@@ -618,6 +661,8 @@ export interface AgentChatResult {
   error?: string
   /** Agent 本轮修改过的文件（用于 Diff 展示） */
   edits?: FileEdit[]
+  /** 本轮 Plan 模式新提交的结构化计划（R-04） */
+  plan?: StructuredPlan
 }
 
 export interface SessionSummary {

@@ -50,6 +50,30 @@ describe('SessionExtrasStore', () => {
     await expect(store.load('old')).resolves.toEqual(emptyExtras())
   })
 
+  it('round-trips the structured plan and defaults to null', async () => {
+    const store = new SessionExtrasStore(tmpRoot)
+    const extras = emptyExtras()
+    extras.plan = {
+      id: 'plan-1',
+      summary: 'Do the thing',
+      status: 'approved',
+      createdAt: 1,
+      updatedAt: 2,
+      steps: [{ id: 'step-1', title: 'First', files: ['a.ts'], status: 'in_progress' }],
+    }
+    await store.save('session-plan', extras)
+
+    const loaded = await store.load('session-plan')
+    expect(loaded.plan?.steps[0].title).toBe('First')
+
+    await fs.writeFile(
+      path.join(tmpRoot, 'no-plan.json'),
+      JSON.stringify({ version: 1, thinkingDurations: {}, toolEdits: {} }),
+      'utf-8'
+    )
+    await expect(store.load('no-plan')).resolves.toEqual(emptyExtras())
+  })
+
   it('ignores corrupt files', async () => {
     const store = new SessionExtrasStore(tmpRoot)
     await fs.writeFile(path.join(tmpRoot, 'broken.json'), '{oops', 'utf-8')

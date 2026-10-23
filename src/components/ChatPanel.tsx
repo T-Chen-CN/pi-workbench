@@ -69,6 +69,7 @@ import type {
   ModelCapabilityInfo,
   PromptTemplateInfo,
   SkillInfo,
+  StructuredPlan,
 } from '../types/electron'
 
 interface ChatPanelProps {
@@ -265,6 +266,9 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onEdit,
   onSwitchBranch,
   onOpenToolResult,
+  canActOnPlan,
+  onApprovePlan,
+  onRejectPlan,
   conversationKey,
 }: {
   message: ChatMessage
@@ -275,6 +279,9 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onEdit?: () => void
   onSwitchBranch?: (entryId: string) => void
   onOpenToolResult?: (toolCallId: string, toolName: string) => void
+  canActOnPlan?: boolean
+  onApprovePlan?: (plan: StructuredPlan) => void
+  onRejectPlan?: (plan: StructuredPlan) => void
   conversationKey?: string
 }) {
   const { t, language } = useI18nStore()
@@ -377,6 +384,9 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
               diffToolIds={diffToolIds}
               onOpenDiff={onOpenDiff}
               onOpenToolResult={onOpenToolResult}
+              canActOnPlan={canActOnPlan}
+              onApprovePlan={onApprovePlan}
+              onRejectPlan={onRejectPlan}
             />
           ) : (
             <div className="chat-markdown text-ink">
@@ -467,6 +477,32 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const attachments = conversation?.attachments ?? []
   const input = conversation?.draftInput ?? ''
   const mode = conversation?.mode ?? 'act'
+
+  /** 最新一份待批准的计划（R-04）及其所在消息，用于只读计划卡的操作 */
+  const latestProposedPlan = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const parts = messages[index].parts ?? []
+      for (let partIndex = parts.length - 1; partIndex >= 0; partIndex--) {
+        const part = parts[partIndex]
+        if (part.type === 'plan' && part.plan.status === 'proposed') {
+          return { plan: part.plan, messageId: messages[index].id }
+        }
+      }
+    }
+    return null
+  }, [messages])
+
+  /** 最近一份已批准的计划：驱动“本轮任务” */
+  const activePlan = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const parts = messages[index].parts ?? []
+      for (let partIndex = parts.length - 1; partIndex >= 0; partIndex--) {
+        const part = parts[partIndex]
+        if (part.type === 'plan' && part.plan.status === 'approved') return part.plan
+      }
+    }
+    return null
+  }, [messages])
 
   const openFiles = useEditorStore((state) => state.openFiles)
   const currentEditorFile = useEditorStore((state) => state.currentFile)
@@ -876,8 +912,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         useChatStore.getState().setMessages(key, history ?? [])
       }
       void refreshBranches(session.id)
+      // 恢复最近一份结构化计划（R-04），已在消息中时不重复追加
+      void piAgentAPI.getPlan(workspacePath, session.id).then((result) => {
+        if (result.success && result.plan) {
+          useChatStore
+            .getState()
+            .appendPlanMessage(conversationKey(workspacePath, session.id), result.plan)
+        }
+      })
     },
-    [ensureConversation, refreshBranches]
+    [ensureConversation, refreshBranches, workspacePath]
   )
 
   useEffect(() => {
@@ -1589,6 +1633,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             })
             break
           }
+          case 'plan_submitted':
+            store.appendPlanPart(key, assistantId, event.plan)
+            break
+          case 'plan_updated':
+            store.applyPlanUpdate(key, event.plan)
+            break
         }
       }
     })
@@ -1673,6 +1723,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         }
         // 重新生成会产生新的回复分支（R-03）
         void refreshBranches(sessionId)
+        // trace 丢失时用结果里的计划兜底（R-04）
+        if (result.plan) {
+          useChatStore.getState().appendPlanPart(key, assistantId, result.plan)
+        }
       } else {
         const errorMessage = result.error
           ? localizeError(result.error)
@@ -1758,9 +1812,41 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }
 
-  /** Plan 模式下批准计划：切回 Act 并让 Agent 执行 */
+  /** 计划卡拒绝：保留只读计划，不进入执行（R-04） */
+  const handleRejectPlan = async (plan: StructuredPlan) => {
+    if (!activeSessionId || !activeKey || isLoading) return
+    const result = await piAgentAPI.rejectPlan(workspacePath, activeSessionId, plan.id)
+    if (!result.success || !result.plan) {
+      toast.error(t('planRejectFailed', { error: localizeError(result.error ?? '') }))
+      return
+    }
+    useChatStore.getState().applyPlanUpdate(activeKey, result.plan)
+    toast.info(t('planRejected'))
+  }
+
+  /** 计划卡批准：标记第一步进行中 → 切回 Act → 按结构化步骤执行（R-04） */
+  const handleApprovePlan = async (plan: StructuredPlan) => {
+    if (!activeSessionId || !activeKey || isLoading) return
+    const result = await piAgentAPI.approvePlan(workspacePath, activeSessionId, plan.id)
+    if (!result.success || !result.plan) {
+      toast.error(t('planApproveFailed', { error: localizeError(result.error ?? '') }))
+      return
+    }
+    useChatStore.getState().applyPlanUpdate(activeKey, result.plan)
+    await handleModeChange('act')
+    const steps = result.plan.steps
+      .map((step, index) => `${index + 1}. ${step.title}`)
+      .join('\n')
+    void handleSubmit(undefined, t('planExecutePrompt', { steps }))
+  }
+
+  /** Plan 模式下批准计划：优先使用结构化计划，回退到自由文本流程 */
   const handleExecutePlan = async () => {
     if (!activeSessionId || !activeKey || isLoading) return
+    if (latestProposedPlan) {
+      await handleApprovePlan(latestProposedPlan.plan)
+      return
+    }
     await handleModeChange('act')
     void handleSubmit(undefined, 'Execute the plan above step by step.')
   }
@@ -2317,6 +2403,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                           onCopy={handleCopyMessage}
                           onSwitchBranch={handleSwitchBranch}
                           onOpenToolResult={handleOpenToolResult}
+                          canActOnPlan={
+                            !isLoading && msg.id === latestProposedPlan?.messageId
+                          }
+                          onApprovePlan={handleApprovePlan}
+                          onRejectPlan={handleRejectPlan}
                           onRetry={
                             !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
                               ? () => void handleRetryMessage(msg)
@@ -2343,6 +2434,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                         onCopy={handleCopyMessage}
                         onSwitchBranch={handleSwitchBranch}
                         onOpenToolResult={handleOpenToolResult}
+                        canActOnPlan={
+                          !isLoading && msg.id === latestProposedPlan?.messageId
+                        }
+                        onApprovePlan={handleApprovePlan}
+                        onRejectPlan={handleRejectPlan}
                         onRetry={
                           !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
                             ? () => void handleRetryMessage(msg)
@@ -2431,10 +2527,27 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               )}
             </div>
           )}
-          {lastAssistantMessage?.parts?.some((part) => part.type === 'tool') && (
-            <div className="mb-2">
-              <TurnTaskList parts={lastAssistantMessage.parts ?? []} />
+          {activePlan ? (
+            <div className="mb-2 flex items-center justify-between gap-2 border border-rule-hairline bg-raised px-3 py-2">
+              <Caption className="text-ink-muted">
+                {t('planProgress', {
+                  done: activePlan.steps.filter((step) => step.status === 'done').length,
+                  total: activePlan.steps.length,
+                })}
+              </Caption>
+              <span className="min-w-0 truncate type-caption text-ink">
+                {(
+                  activePlan.steps.find((step) => step.status === 'in_progress') ??
+                  activePlan.steps.find((step) => step.status === 'pending')
+                )?.title ?? ''}
+              </span>
             </div>
+          ) : (
+            lastAssistantMessage?.parts?.some((part) => part.type === 'tool') && (
+              <div className="mb-2">
+                <TurnTaskList parts={lastAssistantMessage.parts ?? []} />
+              </div>
+            )
           )}
           {(contextUsage || sessionStats) && (
             <div className="mb-2 flex items-center gap-2">
@@ -2615,7 +2728,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               ))}
             </div>
           )}
-          {mode === 'plan' && !isLoading && messages.some((msg) => msg.role === 'assistant') && (
+          {mode === 'plan' &&
+            !isLoading &&
+            !latestProposedPlan &&
+            messages.some((msg) => msg.role === 'assistant') && (
             <div className="mb-2 flex items-center justify-between gap-2 border border-rule-hairline bg-raised px-3 py-2">
               <span className="type-caption text-ink-muted">{t('planModeHint')}</span>
               <Button size="sm" variant="primary" onClick={() => void handleExecutePlan()}>

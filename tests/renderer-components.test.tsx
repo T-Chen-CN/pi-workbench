@@ -63,6 +63,9 @@ vi.mock('../src/api/piAgentAPI', () => ({
     getSessionStats: vi.fn(),
     getModelCapabilities: vi.fn(),
     listPromptResources: vi.fn(),
+    getPlan: vi.fn(),
+    approvePlan: vi.fn(),
+    rejectPlan: vi.fn(),
     getToolEdit: vi.fn(),
     getToolResultMeta: vi.fn(),
     readToolResultChunk: vi.fn(),
@@ -197,6 +200,7 @@ beforeEach(() => {
     templates: [],
     skills: [],
   })
+  vi.mocked(piAgentAPI.getPlan).mockResolvedValue({ success: true, plan: null })
   vi.mocked(piAgentAPI.getToolEdit).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.getToolResultMeta).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.readToolResultChunk).mockResolvedValue({ success: false })
@@ -954,6 +958,62 @@ describe('AgentParts sub-agent activity', () => {
     )
 
     expect(await screen.findByText(translations.zh.subAgent)).toBeTruthy()
+  })
+})
+
+describe('structured plan card', () => {
+  const plan = {
+    id: 'plan-1',
+    summary: 'Ship the feature',
+    status: 'proposed' as const,
+    createdAt: 1,
+    updatedAt: 1,
+    steps: [
+      { id: 'step-1', title: 'Read the code', files: ['src/a.ts'], status: 'pending' as const },
+      { id: 'step-2', title: 'Apply the fix', files: [], risk: 'touches tests', status: 'pending' as const },
+    ],
+  }
+
+  it('renders steps read-only and lets the user approve', async () => {
+    const onApprove = vi.fn()
+
+    render(
+      <AgentParts
+        parts={[{ type: 'plan', id: 'plan-part', plan }]}
+        isStreaming={false}
+        canActOnPlan
+        onApprovePlan={onApprove}
+        onRejectPlan={() => {}}
+      />
+    )
+
+    expect(screen.getByText(translations.zh.planCardTitle)).toBeTruthy()
+    expect(screen.getByText('Read the code')).toBeTruthy()
+    expect(screen.getByText(/touches tests/)).toBeTruthy()
+    expect(screen.queryByRole('textbox')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.planApprove }))
+    expect(onApprove).toHaveBeenCalledWith(plan)
+  })
+
+  it('hides actions once the plan is approved', () => {
+    render(
+      <AgentParts
+        parts={[
+          {
+            type: 'plan',
+            id: 'plan-part',
+            plan: { ...plan, status: 'approved' },
+          },
+        ]}
+        isStreaming={false}
+        canActOnPlan
+        onApprovePlan={() => {}}
+        onRejectPlan={() => {}}
+      />
+    )
+
+    expect(screen.queryByRole('button', { name: translations.zh.planApprove })).toBeNull()
   })
 })
 
