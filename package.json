@@ -127,7 +127,8 @@
       ],
       "category": "public.app-category.developer-tools",
       "icon": "app-icon.png",
-      "identity": null
+      "identity": null,
+      "x64ArchFiles": "Contents/Resources/app.asar.unpacked/node_modules/**"
     },
     "linux": {
       "target": "AppImage",
