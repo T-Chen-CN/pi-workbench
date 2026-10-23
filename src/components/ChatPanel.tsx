@@ -1768,13 +1768,34 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           className="flex-1 overflow-y-auto px-3.5 py-3"
         >
           {messages.length === 0 && !isLoading ? (
-            <div className="flex h-full items-center justify-center">
+            <div className="flex h-full flex-col items-center justify-center gap-3">
               <EmptyState
                 compact
                 icon={History}
                 title={t('agentChatTitle')}
                 description={initialized ? t('agentReadyStatus') : t('agentInitializingStatus')}
               />
+              {initialized && activeKey && (
+                <div className="flex max-w-md flex-wrap justify-center gap-1.5">
+                  {[
+                    { label: t('suggestExplain'), prompt: t('suggestExplainPrompt') },
+                    { label: t('suggestTodos'), prompt: t('suggestTodosPrompt') },
+                    { label: t('suggestTests'), prompt: t('suggestTestsPrompt') },
+                  ].map((suggestion) => (
+                    <button
+                      key={suggestion.label}
+                      type="button"
+                      onClick={() => {
+                        useChatStore.getState().setDraftInput(activeKey, suggestion.prompt)
+                        inputRef.current?.focus()
+                      }}
+                      className="border border-rule-control px-2 py-1 type-caption text-ink-muted transition-colors hover:bg-hover hover:text-ink"
+                    >
+                      {suggestion.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             <div

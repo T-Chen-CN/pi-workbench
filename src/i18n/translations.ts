@@ -169,6 +169,12 @@ export const translations = {
     newMessages: '有新消息（{count}）',
     activityCount: '活动 {count}',
     activeFleetTasks: '后台任务 {count} 个',
+    suggestExplain: '解释这个项目',
+    suggestExplainPrompt: '请简要解释这个项目的结构、主要模块和技术栈。',
+    suggestTodos: '找出未完成的工作',
+    suggestTodosPrompt: '查看 TODO / FIXME 与未完成的实现，列出下一步建议。',
+    suggestTests: '运行测试',
+    suggestTestsPrompt: '运行项目的测试并总结失败原因与修复建议。',
     slashHelp:
       '可用命令：/plan 计划模式 · /act 执行模式 · /compact 压缩上下文 · /clear 新建会话 · /model <名称> 切换模型',
     slashClearConfirm: '清空意味着开始一个新会话；当前对话会保留在会话列表中。继续？',
@@ -651,6 +657,12 @@ export const translations = {
     newMessages: '{count} new message(s)',
     activityCount: 'Activity {count}',
     activeFleetTasks: '{count} background task(s)',
+    suggestExplain: 'Explain this project',
+    suggestExplainPrompt: 'Briefly explain this project structure, main modules and tech stack.',
+    suggestTodos: 'Find unfinished work',
+    suggestTodosPrompt: 'Look for TODOs / FIXMEs and unfinished implementations, then suggest next steps.',
+    suggestTests: 'Run tests',
+    suggestTestsPrompt: 'Run the test suite and summarize failures with fix suggestions.',
     slashHelp:
       'Commands: /plan plan mode · /act act mode · /compact compact context · /clear start a new session · /model <name> switch model',
     slashClearConfirm:
