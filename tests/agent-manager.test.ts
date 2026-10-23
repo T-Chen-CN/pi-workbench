@@ -1496,3 +1496,41 @@ describe('provider retry events', () => {
     expect(traces).toContainEqual({ type: 'retry_end', success: true })
   })
 })
+
+describe('tool streaming', () => {
+  it('forwards partial tool output as tool_update events', async () => {
+    const traces: Array<Record<string, unknown>> = []
+    const session = createFakeSession(async (fake) => {
+      fake.emit({
+        type: 'tool_execution_start',
+        toolCallId: 'c1',
+        toolName: 'bash',
+        args: { command: 'npm test' },
+      })
+      fake.emit({
+        type: 'tool_execution_update',
+        toolCallId: 'c1',
+        toolName: 'bash',
+        partialResult: { content: [{ type: 'text', text: 'running tests...' }] },
+      })
+      fake.emit({
+        type: 'tool_execution_end',
+        toolCallId: 'c1',
+        toolName: 'bash',
+        isError: false,
+        durationMs: 10,
+        result: { content: [{ type: 'text', text: 'all passed' }] },
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await manager.chat('run tests', { onTrace: (event) => traces.push(event) })
+
+    expect(traces).toContainEqual({
+      type: 'tool_update',
+      toolCallId: 'c1',
+      resultPreview: 'running tests...',
+    })
+  })
+})

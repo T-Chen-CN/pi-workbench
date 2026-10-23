@@ -635,6 +635,21 @@ export class AgentManager {
           return
         }
 
+        if (event.type === 'tool_execution_update') {
+          const preview = summarizeToolResult(
+            event.partialResult,
+            event.toolName === 'bash' || event.toolName === 'powershell'
+          )
+          if (preview) {
+            runtime.onTrace?.({
+              type: 'tool_update',
+              toolCallId: event.toolCallId,
+              resultPreview: preview,
+            })
+          }
+          return
+        }
+
         if (event.type === 'tool_execution_end') {
           const snapshot = runtime.editSnapshots.get(event.toolCallId)
           const filePath = snapshot?.path ?? runtime.toolFiles.get(event.toolCallId)
