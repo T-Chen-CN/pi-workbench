@@ -26,6 +26,7 @@ import { DraftStore } from './draft-store.js'
 import type { UpdateController, UpdateState } from './updater.js'
 import { ApprovalBroker, sanitizeApprovalDecision } from './approval-broker.js'
 import { NotificationRouter } from './notifications.js'
+import { createWorkspaceStore } from './workspace-store.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
 
@@ -305,6 +306,7 @@ async function seedTrustedWorkspacesFromSettings(): Promise<void> {
 }
 
 const fleetStore = createFleetStore(path.join(getAppDir(), 'data', 'fleet-tasks.db'))
+const workspaceStore = createWorkspaceStore(path.join(getAppDir(), 'data', 'workspaces.db'))
 const draftStore = new DraftStore(path.join(getAppDir(), 'cache', 'drafts'))
 const fleetManager = new FleetManager({
   store: fleetStore,
@@ -593,6 +595,7 @@ async function shutdownApplication(): Promise<void> {
     terminalManager.closeAll()
     pluginManager.disposeAll()
     approvalBroker.dispose()
+    workspaceStore.close()
     await Promise.allSettled([fleetManager.disposeAll(), agentRegistry.disposeAll()])
   } catch (error) {
     console.error('[Main] Shutdown cleanup failed:', error)
@@ -1344,8 +1347,20 @@ handleIpc('window:isMaximized', () => ({
 handleIpc('app:getRecentWorkspaces', async () => {
   try {
     const settings = await loadSettingsFile()
-    const workspaces: string[] = Array.isArray(settings.recentWorkspaces) ? settings.recentWorkspaces : []
-    return { success: true, workspaces }
+    const fromSettings: string[] = Array.isArray(settings.recentWorkspaces)
+      ? settings.recentWorkspaces.filter(
+          (item: unknown): item is string =>
+            typeof item === 'string' && isTrustedWorkspacePath(item)
+        )
+      : []
+    const fromStore = workspaceStore.listRecent(30)
+    const merged: string[] = []
+    for (const workspacePath of [...fromStore, ...fromSettings]) {
+      if (!isTrustedWorkspacePath(workspacePath)) continue
+      if (!merged.includes(workspacePath)) merged.push(workspacePath)
+      if (merged.length >= 10) break
+    }
+    return { success: true, workspaces: merged }
   } catch (error) {
     return {
       success: false,
@@ -1360,6 +1375,7 @@ handleIpc('app:addRecentWorkspace', async (_event, workspacePath: string) => {
     if (!isTrustedWorkspacePath(workspacePath)) {
       return { success: false, workspaces: [], error: 'Workspace is not approved' }
     }
+    workspaceStore.recordOpen(workspacePath)
     const settings = await loadSettingsFile()
     const existing: string[] = Array.isArray(settings.recentWorkspaces) ? settings.recentWorkspaces : []
     const workspaces = [workspacePath, ...existing.filter((p) => p !== workspacePath)].slice(0, 10)
@@ -1381,9 +1397,10 @@ handleIpc('workspace:init', async (_event, workspacePath: string) => {
     if (!isTrustedWorkspacePath(workspacePath)) {
       return {
         success: false,
-        error: 'Workspace is not approved. Open it with the Open Project dialog.'
+        error: 'Workspace is not approved. Open it with the Open Project dialog.',
       }
     }
+    workspaceStore.recordOpen(workspacePath)
 
     const configDir = path.join(workspacePath, '.pi-workbench')
     const pluginsDir = path.join(configDir, 'plugins')
