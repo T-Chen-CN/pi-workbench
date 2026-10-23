@@ -84,9 +84,9 @@ export interface AgentPartsProps {
   onOpenDiff?: (toolCallId: string) => void
   /** 查看工具结果的完整输出（R-20） */
   onOpenToolResult?: (toolCallId: string, toolName: string) => void
-  /** 计划卡操作（R-04）：只读展示，仅允许批准 / 拒绝 */
+  /** 计划卡操作（R-04）：只读展示，仅允许批准并执行 / 完全执行 / 拒绝 */
   canActOnPlan?: boolean
-  onApprovePlan?: (plan: StructuredPlan) => void
+  onApprovePlan?: (plan: StructuredPlan, targetMode: 'ask' | 'auto') => void
   onRejectPlan?: (plan: StructuredPlan) => void
 }
 
@@ -178,11 +178,11 @@ function stepStatusClass(status: StructuredPlan['steps'][number]['status']): str
   }
 }
 
-/** 结构化计划卡（R-04）：步骤只读，只能批准或拒绝 */
+/** 结构化计划卡（R-04）：步骤只读，可拒绝、同意并执行或完全执行 */
 const PlanCard: React.FC<{
   plan: StructuredPlan
   canAct: boolean
-  onApprove?: (plan: StructuredPlan) => void
+  onApprove?: (plan: StructuredPlan, targetMode: 'ask' | 'auto') => void
   onReject?: (plan: StructuredPlan) => void
 }> = ({ plan, canAct, onApprove, onReject }) => {
   const { t } = useI18nStore()
@@ -231,9 +231,14 @@ const PlanCard: React.FC<{
             </Button>
           )}
           {onApprove && (
-            <Button size="sm" variant="primary" onClick={() => onApprove(plan)}>
-              {t('planApprove')}
-            </Button>
+            <>
+              <Button size="sm" variant="secondary" onClick={() => onApprove(plan, 'auto')}>
+                {t('planApproveAuto')}
+              </Button>
+              <Button size="sm" variant="primary" onClick={() => onApprove(plan, 'ask')}>
+                {t('planApproveAsk')}
+              </Button>
+            </>
           )}
         </div>
       )}

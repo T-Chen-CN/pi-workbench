@@ -27,7 +27,6 @@ export interface ApprovalRequestPayload {
 
 export type ApprovalDecision =
   | { action: 'allow-once' }
-  | { action: 'allow-session' }
   | { action: 'allow-always' }
   | { action: 'deny'; reason?: string }
 
@@ -47,7 +46,6 @@ export function sanitizeApprovalDecision(input: unknown): ApprovalDecision | nul
   const value = input as Record<string, unknown>
   switch (value.action) {
     case 'allow-once':
-    case 'allow-session':
     case 'allow-always':
       return { action: value.action }
     case 'deny': {

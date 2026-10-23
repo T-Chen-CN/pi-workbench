@@ -580,6 +580,7 @@ app.whenReady().then(async () => {
 
   await initAppDirectories()
   appSettingsCache = await loadSettingsFile()
+  await migratePermissionLevel()
   await seedTrustedWorkspacesFromSettings()
   createWindow()
 
@@ -1146,6 +1147,8 @@ const DEFAULT_SETTINGS = {
   autoSave: true,
   autoSaveDelay: 2000,
   runWhileBusy: 'queue',
+  /** 新会话的默认权限档位；会话创建后自行持有权限，不再受此值影响 */
+  permissionLevel: 'ask',
   recentWorkspaces: [] as string[],
 }
 
@@ -1169,20 +1172,40 @@ async function saveSettingsFile(settings: any): Promise<void> {
   await writeJsonAtomic(settingsPath, settings)
 }
 
-/** “始终允许”某个类别：写回 settings.json，并更新内存副本 */
-async function persistAlwaysAllow(category: string): Promise<void> {
+function normalizePermissionLevel(value: unknown): 'readonly' | 'ask' | 'auto' | null {
+  return value === 'readonly' || value === 'ask' || value === 'auto' ? value : null
+}
+
+/**
+ * 旧版 settings.json 只有 permissions 四类对象。启动时一次性迁移为 permissionLevel：
+ * 取不宽于旧策略的最宽松档位，迁移只会变严不会变松。之后旧字段保留但不再读取。
+ */
+async function migratePermissionLevel(): Promise<void> {
+  const settingsPath = path.join(getAppDir(), 'config', 'settings.json')
+  const result = readJsonWithBackup<Record<string, unknown>>(settingsPath)
+  const raw = result.data
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return
+  if (normalizePermissionLevel(raw.permissionLevel)) return
+
+  let level: 'readonly' | 'ask' | 'auto' = 'ask'
   try {
-    const settings = await loadSettingsFile()
-    const permissions = {
-      ...(settings.permissions && typeof settings.permissions === 'object' ? settings.permissions : {}),
-      [category]: 'allow',
+    const bridgePath = path.join(__dirname, '..', 'pi-bridge', 'dist', 'index.js')
+    const { derivePermissionLevelFromPolicy } = await import(pathToFileURL(bridgePath).href)
+    if (raw.permissions && typeof raw.permissions === 'object') {
+      level = derivePermissionLevelFromPolicy(raw.permissions)
     }
-    const next = { ...settings, permissions }
-    await saveSettingsFile(next)
-    appSettingsCache = { ...appSettingsCache, ...next }
-    console.log('[Main] Permission updated to allow:', category)
   } catch (error) {
-    console.error('[Main] Failed to persist always-allow permission:', error)
+    console.warn('[Main] Failed to derive legacy permission level:', error)
+  }
+
+  try {
+    const next = { ...raw, permissionLevel: level }
+    await saveSettingsFile(next)
+    appSettingsCache = { ...appSettingsCache, permissionLevel: level }
+    console.log('[Main] Migrated permission level:', level)
+  } catch (error) {
+    console.error('[Main] Failed to persist migrated permission level:', error)
+    appSettingsCache = { ...appSettingsCache, permissionLevel: level }
   }
 }
 
@@ -1206,6 +1229,15 @@ handleIpc('app:saveSettings', async (_event, settings: any) => {
         (workspacePath: unknown): boolean =>
           typeof workspacePath === 'string' && isTrustedWorkspacePath(workspacePath)
       )
+    }
+    // 权限档位只接受三个合法值；缺失时保留现有值（旧前端不会发送该字段）
+    const level = normalizePermissionLevel(sanitized.permissionLevel)
+    if (level) {
+      sanitized.permissionLevel = level
+    } else {
+      const currentLevel = normalizePermissionLevel(appSettingsCache.permissionLevel)
+      if (currentLevel) sanitized.permissionLevel = currentLevel
+      else delete sanitized.permissionLevel
     }
     await saveSettingsFile(sanitized)
     appSettingsCache = { ...appSettingsCache, ...sanitized }
@@ -1827,12 +1859,9 @@ handleIpc('agent:initialize', async (_event, config: {
           mainWindow.webContents.send('agent:session-title', { workspaceDir, sessionId, title })
         }
       },
-      // 工具审批：策略随设置实时读取；无审批通道时 Agent 侧按拒绝处理
-      getPermissionPolicy: () => appSettingsCache.permissions,
+      // 会话权限：全局只提供新会话的默认档位；无审批通道时 Agent 侧按拒绝处理
+      getDefaultPermissionLevel: () => appSettingsCache.permissionLevel,
       requestApproval: (request: unknown) => approvalBroker.request(request as any),
-      onPermissionAlwaysAllow: (category: string) => {
-        void persistAlwaysAllow(category)
-      },
     })
 
     if (result.success) {
@@ -2403,28 +2432,6 @@ handleIpc('agent:sessions:close', async (_event, workspaceDir: string, sessionId
   }
 })
 
-handleIpc(
-  'agent:sessions:setMode',
-  async (_event, workspaceDir: string, sessionId: string, mode: 'plan' | 'act') => {
-    try {
-      if (!isTrustedWorkspacePath(workspaceDir)) {
-        return { success: false, error: 'Workspace is not approved' }
-      }
-      if (mode !== 'plan' && mode !== 'act') {
-        return { success: false, error: 'Invalid session mode' }
-      }
-      const agent = agentRegistry.get(workspaceDir)
-      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
-      if (typeof agent.setSessionMode !== 'function') {
-        return { success: false, error: 'Sessions are not supported by this agent' }
-      }
-      return await agent.setSessionMode(sessionId, mode)
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
-  }
-)
-
 // 历史工具 Diff（会话 sidecar）
 handleIpc(
   'agent:tool-diff',
@@ -2682,17 +2689,26 @@ handleIpc('agent:plan:get', async (_event, workspaceDir: string, sessionId: stri
 
 handleIpc(
   'agent:plan:approve',
-  async (_event, workspaceDir: string, sessionId: string, planId: string) => {
+  async (
+    _event,
+    workspaceDir: string,
+    sessionId: string,
+    planId: string,
+    targetMode: 'ask' | 'auto'
+  ) => {
     try {
       if (!isTrustedWorkspacePath(workspaceDir)) {
         return { success: false, error: 'Workspace is not approved' }
+      }
+      if (targetMode !== 'ask' && targetMode !== 'auto') {
+        return { success: false, error: 'Invalid execute mode' }
       }
       const agent = agentRegistry.get(workspaceDir)
       if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
       if (typeof agent.approvePlan !== 'function') {
         return { success: false, error: 'Plans are not supported by this agent' }
       }
-      return await agent.approvePlan(sessionId, planId)
+      return await agent.approvePlan(sessionId, planId, targetMode)
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -2749,6 +2765,25 @@ handleIpc('agent:session:settings', async (_event, workspaceDir: string, session
     return { success: false, error: error instanceof Error ? error.message : String(error) }
   }
 })
+
+handleIpc(
+  'agent:session:setPermission',
+  async (_event, workspaceDir: string, sessionId: string, permission: unknown) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.setSessionPermission !== 'function') {
+        return { success: false, error: 'Session permissions are not supported by this agent' }
+      }
+      return await agent.setSessionPermission(sessionId, permission)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
 
 handleIpc(
   'agent:session:setModel',

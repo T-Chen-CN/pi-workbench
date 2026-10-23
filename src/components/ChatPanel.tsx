@@ -15,6 +15,7 @@ import {
   RotateCcw,
   Send,
   Settings2,
+  ShieldCheck,
   Square,
   X,
 } from 'lucide-react'
@@ -83,6 +84,9 @@ import type {
   PromptTemplateInfo,
   SkillInfo,
   StructuredPlan,
+  SessionMode,
+  SessionPermission,
+  ToolCategory,
 } from '../types/electron'
 
 interface ChatPanelProps {
@@ -117,6 +121,25 @@ const THINKING_LABEL_KEYS: Record<(typeof THINKING_LEVELS)[number], TranslationK
   xhigh: 'thinkingXhigh',
   max: 'thinkingMax',
 }
+
+/** 会话模式与额外授权的显示文案 */
+const SESSION_MODE_LABEL_KEYS: Record<SessionMode, TranslationKey> = {
+  readonly: 'permissionLevelReadonly',
+  plan: 'permissionLevelPlan',
+  ask: 'permissionLevelAsk',
+  auto: 'permissionLevelAuto',
+}
+
+const PERMISSION_GRANT_LABEL_KEYS: Record<ToolCategory, TranslationKey> = {
+  read: 'approvalCategoryRead',
+  write: 'approvalCategoryWrite',
+  command: 'approvalCategoryCommand',
+  other: 'approvalCategoryOther',
+}
+
+const DEFAULT_SESSION_PERMISSION: SessionPermission = { mode: 'ask', grants: [] }
+
+const SESSION_MODE_ORDER: SessionMode[] = ['readonly', 'plan', 'ask', 'auto']
 
 /** 本轮任务列表（AF-12）：由助手消息里的工具步骤派生 */
 const TurnTaskList: React.FC<{ parts: import('../types/electron').AgentTracePart[] }> = ({
@@ -368,7 +391,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onSwitchBranch?: (entryId: string) => void
   onOpenToolResult?: (toolCallId: string, toolName: string) => void
   canActOnPlan?: boolean
-  onApprovePlan?: (plan: StructuredPlan) => void
+  onApprovePlan?: (plan: StructuredPlan, targetMode: 'ask' | 'auto') => void
   onRejectPlan?: (plan: StructuredPlan) => void
   conversationKey?: string
 }) {
@@ -564,6 +587,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       ? Math.max(0, contextUsage.contextWindow - contextUsage.tokens)
       : null
   const sessionSettings = conversation?.sessionSettings ?? null
+  const sessionPermission = sessionSettings?.permission ?? DEFAULT_SESSION_PERMISSION
   const sessionStats = conversation?.sessionStats ?? null
   const retryStatus = conversation?.retryStatus ?? null
   let lastAssistantMessage: ChatMessage | null = null
@@ -589,7 +613,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const error = conversation?.error ?? null
   const attachments = conversation?.attachments ?? []
   const input = conversation?.draftInput ?? ''
-  const mode = conversation?.mode ?? 'act'
 
   /** 最新一份待批准的计划（R-04）及其所在消息，用于只读计划卡的操作 */
   const latestProposedPlan = useMemo(() => {
@@ -718,13 +741,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [attachMode, setAttachMode] = useState<'files' | 'symbols'>('files')
   const [stopping, setStopping] = useState(false)
   /** 输入区状态行当前展开的分段菜单 */
-  const [statusMenu, setStatusMenu] = useState<'model' | 'thinking' | 'context' | null>(null)
+  const [statusMenu, setStatusMenu] = useState<
+    'permission' | 'model' | 'thinking' | 'context' | null
+  >(null)
   const closeStatusMenu = useCallback(() => setStatusMenu(null), [])
   /** 状态行放不下时收起 token 数字，只留进度条与百分比 */
   const statusStripRef = useRef<HTMLDivElement>(null)
   const contextTokensRef = useRef<HTMLSpanElement>(null)
   const contextTokensWidthRef = useRef(0)
   const [showContextTokens, setShowContextTokens] = useState(true)
+  /** 窄宽度下把权限档位文字收成图标，保留可读的 aria-label / title */
+  const permissionLabelRef = useRef<HTMLSpanElement>(null)
+  const permissionLabelWidthRef = useRef(0)
+  const [showPermissionLabel, setShowPermissionLabel] = useState(true)
   useEffect(() => {
     setStatusMenu(null)
   }, [activeSessionId])
@@ -924,6 +953,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             .join(' · ')
     : null
 
+  /** 文案或档位变化后重新测量，避免沿用旧宽度一直把文字收着 */
+  useEffect(() => {
+    permissionLabelWidthRef.current = 0
+    setShowPermissionLabel(true)
+  }, [language, sessionPermission.mode])
+
   /**
    * 状态行 token 数字自适应：按各段实际宽度判断是否放得下。
    * 放不下就隐藏 token 数字（百分比与进度条始终保留），空间恢复后再显示。
@@ -937,6 +972,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       let needed = children.reduce((sum, child) => sum + child.getBoundingClientRect().width, 0)
       if (children.length > 1) needed += gap * (children.length - 1)
 
+      if (showPermissionLabel) {
+        const label = permissionLabelRef.current
+        if (label) {
+          const parent = label.parentElement
+          const parentGap = parent
+            ? Number.parseFloat(getComputedStyle(parent).columnGap) || 0
+            : 0
+          permissionLabelWidthRef.current = label.getBoundingClientRect().width + parentGap
+        }
+      }
+
       if (showContextTokens) {
         const tokens = contextTokensRef.current
         if (tokens) {
@@ -946,8 +992,26 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             : 0
           contextTokensWidthRef.current = tokens.getBoundingClientRect().width + parentGap
         }
-        if (needed > strip.clientWidth + 0.5) setShowContextTokens(false)
-      } else if (
+      }
+
+      if (needed > strip.clientWidth + 0.5) {
+        // 放不下时先收起上下文 token 数字，再把权限档位文字收成图标
+        if (showContextTokens) setShowContextTokens(false)
+        else if (showPermissionLabel) setShowPermissionLabel(false)
+        return
+      }
+
+      if (
+        !showPermissionLabel &&
+        permissionLabelWidthRef.current > 0 &&
+        needed + permissionLabelWidthRef.current <= strip.clientWidth
+      ) {
+        setShowPermissionLabel(true)
+        return
+      }
+
+      if (
+        !showContextTokens &&
         contextTokensWidthRef.current > 0 &&
         needed + contextTokensWidthRef.current <= strip.clientWidth
       ) {
@@ -959,7 +1023,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     const observer = new ResizeObserver(measure)
     observer.observe(strip)
     return () => observer.disconnect()
-  }, [showContextTokens, sessionSettings, contextUsage, contextPercentRounded])
+  }, [
+    showContextTokens,
+    showPermissionLabel,
+    sessionSettings,
+    contextUsage,
+    contextPercentRounded,
+    language,
+    sessionPermission.mode,
+  ])
 
   /** 附加单个符号（函数 / 类等）作为上下文 */
   const attachSymbol = (symbol: ExtractedSymbol) => {
@@ -1650,10 +1722,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         toast.info(t('slashHelp'))
         return true
       case '/plan':
-        await handleModeChange('plan')
+        handleSessionModeChange('plan')
         return true
       case '/act':
-        await handleModeChange('act')
+        handleSessionModeChange('ask')
         return true
       case '/compact':
         await handleCompact()
@@ -2015,19 +2087,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }
 
-  /** 切换 Plan / Act；失败时回滚本地状态 */
-  const handleModeChange = async (next: 'plan' | 'act') => {
-    const sessionId = activeSessionId
-    const key = activeKey
-    if (!sessionId || !key || next === mode || isLoading) return
-    useChatStore.getState().setMode(key, next)
-    const result = await piAgentAPI.sessionsSetMode(workspacePath, sessionId, next)
-    if (!result.success) {
-      useChatStore.getState().setMode(key, mode)
-      toast.error(t('modeSwitchFailed', { error: localizeError(result.error ?? '') }))
-    }
-  }
-
   /** 计划卡拒绝：保留只读计划，不进入执行（R-04） */
   const handleRejectPlan = async (plan: StructuredPlan) => {
     if (!activeSessionId || !activeKey || isLoading) return
@@ -2040,30 +2099,40 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     toast.info(t('planRejected'))
   }
 
-  /** 计划卡批准：标记第一步进行中 → 切回 Act → 按结构化步骤执行（R-04） */
-  const handleApprovePlan = async (plan: StructuredPlan) => {
+  /** 计划批准：主进程原子完成“批准 + 切换到执行模式”，再按步骤执行 */
+  const handleApprovePlan = async (plan: StructuredPlan, targetMode: 'ask' | 'auto') => {
     if (!activeSessionId || !activeKey || isLoading) return
-    const result = await piAgentAPI.approvePlan(workspacePath, activeSessionId, plan.id)
+    const result = await piAgentAPI.approvePlan(
+      workspacePath,
+      activeSessionId,
+      plan.id,
+      targetMode
+    )
     if (!result.success || !result.plan) {
       toast.error(t('planApproveFailed', { error: localizeError(result.error ?? '') }))
       return
     }
     useChatStore.getState().applyPlanUpdate(activeKey, result.plan)
-    await handleModeChange('act')
+    const previous = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
+    if (result.permission) {
+      useChatStore
+        .getState()
+        .setSessionSettings(activeKey, { ...previous, permission: result.permission })
+    }
     const steps = result.plan.steps
       .map((step, index) => `${index + 1}. ${step.title}`)
       .join('\n')
     void handleSubmit(undefined, t('planExecutePrompt', { steps }))
   }
 
-  /** Plan 模式下批准计划：优先使用结构化计划，回退到自由文本流程 */
-  const handleExecutePlan = async () => {
+  /** 计划模式的兜底执行：优先结构化计划，回退到自由文本流程 */
+  const handleExecutePlan = async (targetMode: 'ask' | 'auto') => {
     if (!activeSessionId || !activeKey || isLoading) return
     if (latestProposedPlan) {
-      await handleApprovePlan(latestProposedPlan.plan)
+      await handleApprovePlan(latestProposedPlan.plan, targetMode)
       return
     }
-    await handleModeChange('act')
+    if (!(await applySessionPermission({ mode: targetMode, grants: [] }))) return
     void handleSubmit(undefined, 'Execute the plan above step by step.')
   }
 
@@ -2088,6 +2157,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         useChatStore.getState().setSessionSettings(key, {
           modelId: result.modelId,
           thinkingLevel: result.thinkingLevel,
+          permission: result.permission,
         })
       }
     },
@@ -2182,6 +2252,36 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       useChatStore.getState().setSessionSettings(activeKey, previous)
       toast.error(t('thinkingSwitchFailed', { error: localizeError(result.error ?? '') }))
     }
+  }
+
+  /** 修改会话模式：模式或额外授权，成功后同步状态行 */
+  const applySessionPermission = async (next: SessionPermission): Promise<boolean> => {
+    const sessionId = activeSessionId
+    const key = activeKey
+    if (!sessionId || !key) return false
+    const previous = useChatStore.getState().conversations[key]?.sessionSettings ?? null
+    useChatStore.getState().setSessionSettings(key, { ...previous, permission: next })
+    const result = await piAgentAPI.setSessionPermission(workspacePath, sessionId, next)
+    if (!result.success || !result.permission) {
+      useChatStore.getState().setSessionSettings(key, previous)
+      toast.error(t('permissionSetFailed', { error: localizeError(result.error ?? '') }))
+      return false
+    }
+    useChatStore
+      .getState()
+      .setSessionSettings(key, { ...previous, permission: result.permission })
+    return true
+  }
+
+  /** 切换模式会清空本会话的额外授权（后端同样会归一化） */
+  const handleSessionModeChange = (nextMode: SessionMode) => {
+    if (isLoading) return
+    void applySessionPermission({ mode: nextMode, grants: [] })
+  }
+
+  const handleResetPermissionGrants = () => {
+    const permission = sessionSettings?.permission ?? DEFAULT_SESSION_PERMISSION
+    void applySessionPermission({ mode: permission.mode, grants: [] })
   }
 
   /** 手动压缩上下文；运行中不允许 */
@@ -2389,6 +2489,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     useApprovalStore.getState().remove(requestId)
     if (request) {
       useSessionStore.getState().markNeedsAction(request.workspaceDir, request.sessionId, null)
+      // “始终允许”写入会话权限；重新读取以同步状态行里的授权提示
+      if (decision.action === 'allow-always' && request.workspaceDir === workspacePath) {
+        void refreshSessionSettings(request.sessionId)
+      }
     }
   }
 
@@ -2818,15 +2922,20 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               ))}
             </div>
           )}
-          {mode === 'plan' &&
+          {sessionPermission.mode === 'plan' &&
             !isLoading &&
             !latestProposedPlan &&
             messages.some((msg) => msg.role === 'assistant') && (
-            <div className="mb-2 flex items-center justify-between gap-2 border border-rule-hairline bg-raised px-3 py-2">
+            <div className="mb-2 flex flex-col gap-2 border border-rule-hairline bg-raised px-3 py-2">
               <span className="type-caption text-ink-muted">{t('planModeHint')}</span>
-              <Button size="sm" variant="primary" onClick={() => void handleExecutePlan()}>
-                {t('planExecute')}
-              </Button>
+              <div className="ml-auto flex flex-shrink-0 items-center gap-1.5">
+                <Button size="sm" variant="ghost" onClick={() => void handleExecutePlan('auto')}>
+                  {t('planApproveAuto')}
+                </Button>
+                <Button size="sm" variant="primary" onClick={() => void handleExecutePlan('ask')}>
+                  {t('planApproveAsk')}
+                </Button>
+              </div>
             </div>
           )}
           {pendingApprovals.length > 0 && (
@@ -3088,23 +3197,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                     )}
                   </div>
                 )}
-                <div className="ml-1 flex items-center gap-0.5">
-                  {(['act', 'plan'] as const).map((value) => (
-                    <button
-                      key={value}
-                      type="button"
-                      disabled={!initialized || isLoading}
-                      onClick={() => void handleModeChange(value)}
-                      className={`h-6 rounded-sm px-2 type-caption transition-colors disabled:opacity-40 ${
-                        mode === value
-                          ? 'bg-active text-ink'
-                          : 'text-ink-muted hover:bg-hover hover:text-ink'
-                      }`}
-                    >
-                      {value === 'act' ? t('modeAct') : t('modePlan')}
-                    </button>
-                  ))}
-                </div>
               </div>
               {isLoading && !input.trim() ? (
                 <Button
@@ -3135,6 +3227,89 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               ref={statusStripRef}
               className="mt-1 flex min-w-0 items-center gap-1 whitespace-nowrap"
             >
+              {sessionSettings && (
+                <span className="relative flex flex-shrink-0 items-center">
+                  <button
+                    type="button"
+                    aria-haspopup="menu"
+                    aria-expanded={statusMenu === 'permission'}
+                    aria-label={t('sessionModeLabel')}
+                    disabled={!initialized || isLoading}
+                    title={
+                      showPermissionLabel
+                        ? undefined
+                        : t(SESSION_MODE_LABEL_KEYS[sessionPermission.mode])
+                    }
+                    onClick={() =>
+                      setStatusMenu((current) => (current === 'permission' ? null : 'permission'))
+                    }
+                    className={`flex h-6 items-center gap-1 rounded-sm px-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                      statusMenu === 'permission'
+                        ? 'bg-hover text-ink'
+                        : 'text-ink-muted hover:bg-hover hover:text-ink'
+                    }`}
+                  >
+                    <ShieldCheck size={12} aria-hidden="true" />
+                    {showPermissionLabel && (
+                      <span ref={permissionLabelRef} className="type-caption">
+                        {t(SESSION_MODE_LABEL_KEYS[sessionPermission.mode])}
+                      </span>
+                    )}
+                    <ChevronDown
+                      size={10}
+                      aria-hidden="true"
+                      className={`transition-transform ${
+                        statusMenu === 'permission' ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+                  <PopoverMenu
+                    open={statusMenu === 'permission'}
+                    onClose={closeStatusMenu}
+                    label={t('sessionModeLabel')}
+                    className="w-44 py-1"
+                  >
+                    {SESSION_MODE_ORDER.map((mode) => (
+                      <MenuOption
+                        key={mode}
+                        selected={mode === sessionPermission.mode}
+                        onSelect={() => {
+                          closeStatusMenu()
+                          handleSessionModeChange(mode)
+                        }}
+                      >
+                        {t(SESSION_MODE_LABEL_KEYS[mode])}
+                      </MenuOption>
+                    ))}
+                    {sessionPermission.grants.length > 0 && (
+                      <>
+                        <div className="mt-1 border-t border-rule-divide px-2.5 pb-1 pt-2">
+                          <span className="block type-caption text-ink-muted">
+                            {t('permissionGrants', {
+                              categories: sessionPermission.grants
+                                .map((category) => t(PERMISSION_GRANT_LABEL_KEYS[category]))
+                                .join(t('listSeparator')),
+                            })}
+                          </span>
+                        </div>
+                        <MenuOption
+                          onSelect={() => {
+                            closeStatusMenu()
+                            handleResetPermissionGrants()
+                          }}
+                        >
+                          {t('permissionResetGrants')}
+                        </MenuOption>
+                      </>
+                    )}
+                  </PopoverMenu>
+                </span>
+              )}
+              {sessionSettings && (
+                <span className="text-ink-subtle" aria-hidden="true">
+                  ·
+                </span>
+              )}
               {sessionSettings && (
                 <span className="relative flex min-w-24 items-center">
                   <button

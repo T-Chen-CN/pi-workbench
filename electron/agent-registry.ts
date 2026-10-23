@@ -27,6 +27,12 @@ export interface StructuredPlanPayload {
   }>
 }
 
+/** 会话模式（AF-02）；与 pi-bridge 的 SessionPermission 对应 */
+export interface SessionPermissionPayload {
+  mode: 'readonly' | 'plan' | 'ask' | 'auto'
+  grants: Array<'read' | 'write' | 'command' | 'other'>
+}
+
 export interface RegisteredAgent {
   initialize: (config: unknown) => Promise<{ success: boolean; error?: string }>
   chat: {
@@ -58,11 +64,6 @@ export interface RegisteredAgent {
   closeSession?: (sessionId: string) => Promise<void>
   renameSession?: (sessionId: string, name: string) => Promise<unknown>
   deleteSession?: (sessionId: string) => Promise<unknown>
-  /** 切换会话模式（Plan 只读 / Act 可写） */
-  setSessionMode?: (
-    sessionId: string,
-    mode: 'plan' | 'act'
-  ) => Promise<{ success: boolean; error?: string }>
   /** 运行中插话（steer） */
   steer?: (sessionId: string, message: string) => Promise<{ success: boolean; error?: string }>
   /** 上下文占用 */
@@ -198,9 +199,14 @@ export interface RegisteredAgent {
     plan?: StructuredPlanPayload | null
     error?: string
   }>
-  approvePlan?: (sessionId: string, planId: string) => Promise<{
+  approvePlan?: (
+    sessionId: string,
+    planId: string,
+    targetMode: 'ask' | 'auto'
+  ) => Promise<{
     success: boolean
     plan?: StructuredPlanPayload
+    permission?: SessionPermissionPayload
     error?: string
   }>
   rejectPlan?: (sessionId: string, planId: string) => Promise<{
@@ -208,11 +214,12 @@ export interface RegisteredAgent {
     plan?: StructuredPlanPayload
     error?: string
   }>
-  /** 会话模型与思考级别 */
+  /** 会话模型、思考级别与权限 */
   getSessionSettings?: (sessionId: string) => Promise<{
     success: boolean
     modelId?: string
     thinkingLevel?: string
+    permission?: SessionPermissionPayload
     error?: string
   }>
   setSessionModel?: (sessionId: string, modelId: string) => Promise<{ success: boolean; error?: string }>
@@ -220,6 +227,11 @@ export interface RegisteredAgent {
     sessionId: string,
     level: string
   ) => Promise<{ success: boolean; error?: string }>
+  /** 修改会话模式（模式 + 额外授权） */
+  setSessionPermission?: (
+    sessionId: string,
+    permission: unknown
+  ) => Promise<{ success: boolean; permission?: SessionPermissionPayload; error?: string }>
   /** 历史工具调用的文件 Diff（会话 sidecar） */
   getToolEdit?: (
     sessionId: string,

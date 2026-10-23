@@ -12,8 +12,7 @@ import {
 import { useI18nStore } from '../store/i18nStore'
 import { useThemeStore, type ThemeMode } from '../store/themeStore'
 import {
-  TOOL_CATEGORIES,
-  isPermissionAction,
+  isPermissionLevel,
   useSettingsStore,
   clampAutoSaveDelay,
   MIN_AUTO_SAVE_DELAY,
@@ -25,12 +24,10 @@ import { useUpdaterStore } from '../store/updaterStore'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
-import type { ApiConfig, AppInfo } from '../types/electron'
+import type { ApiConfig, AppInfo, PermissionLevel } from '../types/electron'
 import { isMacPlatform } from '../utils/shortcuts'
 import { Button, Field, Input, Select } from './ui'
 import { KeyCap, Meter } from './patterns'
-import type { PermissionAction, ToolCategory } from '../types/electron'
-import type { TranslationKey } from '../i18n/translations'
 import {
   DEFAULT_KEYBINDINGS,
   eventToShortcut,
@@ -38,13 +35,6 @@ import {
   formatShortcut,
   type ShortcutId,
 } from '../utils/keybindings'
-
-const PERMISSION_LABEL_KEYS: Record<ToolCategory, TranslationKey> = {
-  read: 'permissionRead',
-  write: 'permissionWrite',
-  command: 'permissionCommand',
-  other: 'permissionOther',
-}
 
 export type SettingsSection = 'general' | 'api' | 'permissions' | 'shortcuts' | 'about'
 
@@ -70,14 +60,14 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
   const {
     autoSave,
     autoSaveDelay,
-    permissions,
+    permissionLevel,
     notifications,
     budgetUsd,
     runWhileBusy,
     keybindings,
     setAutoSave,
     setAutoSaveDelay,
-    setPermission,
+    setPermissionLevel,
     setNotificationPrefs,
     setBudgetUsd,
     setRunWhileBusy,
@@ -203,11 +193,10 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     void persistSettings({ autoSaveDelay: next })
   }
 
-  const handlePermissionChange = (category: ToolCategory, action: string) => {
-    if (!isPermissionAction(action)) return
-    const next = { ...permissions, [category]: action as PermissionAction }
-    setPermission(category, action)
-    void persistSettings({ permissions: next })
+  const handlePermissionLevelChange = (level: string) => {
+    if (!isPermissionLevel(level)) return
+    setPermissionLevel(level)
+    void persistSettings({ permissionLevel: level })
   }
 
   const handleNotificationChange = (patch: Partial<NotificationPrefs>) => {
@@ -652,23 +641,25 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
         {section === 'permissions' && (
           <div className="flex max-w-xl flex-col gap-5">
             <p className="m-0 type-reading text-ink-muted">{t('permissionsHint')}</p>
-            {TOOL_CATEGORIES.map((category) => (
-              <Field
-                key={category}
-                label={t(PERMISSION_LABEL_KEYS[category])}
-                htmlFor={`permission-${category}`}
+            <Field label={t('permissionLevelLabel')} htmlFor="permission-level">
+              <Select
+                id="permission-level"
+                value={permissionLevel}
+                onChange={(event) => handlePermissionLevelChange(event.target.value)}
               >
-                <Select
-                  id={`permission-${category}`}
-                  value={permissions[category]}
-                  onChange={(event) => handlePermissionChange(category, event.target.value)}
-                >
-                  <option value="allow">{t('permissionAllow')}</option>
-                  <option value="ask">{t('permissionAsk')}</option>
-                  <option value="deny">{t('permissionDeny')}</option>
-                </Select>
-              </Field>
-            ))}
+                {(['readonly', 'ask', 'auto'] as PermissionLevel[]).map((level) => (
+                  <option key={level} value={level}>
+                    {t(
+                      level === 'readonly'
+                        ? 'permissionLevelReadonly'
+                        : level === 'ask'
+                          ? 'permissionLevelAsk'
+                          : 'permissionLevelAuto'
+                    )}
+                  </option>
+                ))}
+              </Select>
+            </Field>
           </div>
         )}
 

@@ -155,8 +155,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:sessions:getTabs', workspaceDir),
   agentSessionsSetTabs: (workspaceDir: string, tabs: { open: string[]; active: string | null }) =>
     ipcRenderer.invoke('agent:sessions:setTabs', workspaceDir, tabs),
-  agentSessionsSetMode: (workspaceDir: string, sessionId: string, mode: 'plan' | 'act') =>
-    ipcRenderer.invoke('agent:sessions:setMode', workspaceDir, sessionId, mode),
   agentSteer: (workspaceDir: string, sessionId: string, message: string) =>
     ipcRenderer.invoke('agent:steer', workspaceDir, sessionId, message),
   agentContextUsage: (workspaceDir: string, sessionId: string) =>
@@ -179,6 +177,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:branches:switch', workspaceDir, sessionId, entryId),
   agentSessionSettings: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('agent:session:settings', workspaceDir, sessionId),
+  agentSessionSetPermission: (
+    workspaceDir: string,
+    sessionId: string,
+    permission: unknown
+  ) => ipcRenderer.invoke('agent:session:setPermission', workspaceDir, sessionId, permission),
   agentSessionStats: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('agent:session:stats', workspaceDir, sessionId),
   agentModelCapabilities: (workspaceDir: string) =>
@@ -187,8 +190,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:prompt-resources', workspaceDir, sessionId),
   agentPlanGet: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('agent:plan:get', workspaceDir, sessionId),
-  agentPlanApprove: (workspaceDir: string, sessionId: string, planId: string) =>
-    ipcRenderer.invoke('agent:plan:approve', workspaceDir, sessionId, planId),
+  agentPlanApprove: (
+    workspaceDir: string,
+    sessionId: string,
+    planId: string,
+    targetMode: 'ask' | 'auto'
+  ) => ipcRenderer.invoke('agent:plan:approve', workspaceDir, sessionId, planId, targetMode),
   agentPlanReject: (workspaceDir: string, sessionId: string, planId: string) =>
     ipcRenderer.invoke('agent:plan:reject', workspaceDir, sessionId, planId),
   agentToolDiff: (workspaceDir: string, sessionId: string, toolCallId: string) =>

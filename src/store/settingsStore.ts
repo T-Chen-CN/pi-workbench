@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { PermissionAction, PermissionPolicy, ToolCategory } from '../types/electron'
+import type { PermissionLevel } from '../types/electron'
 import {
   DEFAULT_KEYBINDINGS,
   normalizeKeybindings,
@@ -15,14 +15,14 @@ export type RunWhileBusy = 'queue' | 'steer'
 
 export const DEFAULT_RUN_WHILE_BUSY: RunWhileBusy = 'queue'
 
-export const DEFAULT_PERMISSION_POLICY: PermissionPolicy = {
-  read: 'allow',
-  write: 'ask',
-  command: 'ask',
-  other: 'ask',
-}
+/** 新会话的默认权限档位；会话创建后自行持有权限 */
+export const DEFAULT_PERMISSION_LEVEL: PermissionLevel = 'ask'
 
-export const TOOL_CATEGORIES: ToolCategory[] = ['read', 'write', 'command', 'other']
+export const PERMISSION_LEVELS: PermissionLevel[] = ['readonly', 'ask', 'auto']
+
+export function isPermissionLevel(value: unknown): value is PermissionLevel {
+  return value === 'readonly' || value === 'ask' || value === 'auto'
+}
 
 export interface NotificationPrefs {
   enabled: boolean
@@ -47,20 +47,6 @@ export function normalizeNotificationPrefs(input: unknown): NotificationPrefs {
   return result
 }
 
-export function isPermissionAction(value: unknown): value is PermissionAction {
-  return value === 'allow' || value === 'ask' || value === 'deny'
-}
-
-export function normalizePermissionPolicy(input: unknown): PermissionPolicy {
-  const source = (input ?? {}) as Record<string, unknown>
-  const result = { ...DEFAULT_PERMISSION_POLICY }
-  for (const category of TOOL_CATEGORIES) {
-    const value = source[category]
-    if (isPermissionAction(value)) result[category] = value
-  }
-  return result
-}
-
 export function clampAutoSaveDelay(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_AUTO_SAVE_DELAY
   return Math.min(MAX_AUTO_SAVE_DELAY, Math.max(MIN_AUTO_SAVE_DELAY, Math.round(value)))
@@ -69,7 +55,7 @@ export function clampAutoSaveDelay(value: number): number {
 interface SettingsState {
   autoSave: boolean
   autoSaveDelay: number
-  permissions: PermissionPolicy
+  permissionLevel: PermissionLevel
   notifications: NotificationPrefs
   /** 会话成本预算（美元，0 表示不提醒） */
   budgetUsd: number
@@ -77,7 +63,7 @@ interface SettingsState {
   keybindings: Record<ShortcutId, string>
   setAutoSave: (enabled: boolean) => void
   setAutoSaveDelay: (delayMs: number) => void
-  setPermission: (category: ToolCategory, action: PermissionAction) => void
+  setPermissionLevel: (level: PermissionLevel) => void
   setNotificationPrefs: (patch: Partial<NotificationPrefs>) => void
   setBudgetUsd: (value: number) => void
   setRunWhileBusy: (mode: RunWhileBusy) => void
@@ -86,7 +72,7 @@ interface SettingsState {
   hydrate: (settings: {
     autoSave?: unknown
     autoSaveDelay?: unknown
-    permissions?: unknown
+    permissionLevel?: unknown
     notifications?: unknown
     budgetUsd?: unknown
     runWhileBusy?: unknown
@@ -98,7 +84,7 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>((set) => ({
   autoSave: true,
   autoSaveDelay: DEFAULT_AUTO_SAVE_DELAY,
-  permissions: { ...DEFAULT_PERMISSION_POLICY },
+  permissionLevel: DEFAULT_PERMISSION_LEVEL,
   notifications: { ...DEFAULT_NOTIFICATION_PREFS },
   budgetUsd: 0,
   runWhileBusy: DEFAULT_RUN_WHILE_BUSY,
@@ -108,8 +94,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
 
   setAutoSaveDelay: (delayMs) => set({ autoSaveDelay: clampAutoSaveDelay(delayMs) }),
 
-  setPermission: (category, action) =>
-    set((state) => ({ permissions: { ...state.permissions, [category]: action } })),
+  setPermissionLevel: (level) =>
+    set({ permissionLevel: isPermissionLevel(level) ? level : DEFAULT_PERMISSION_LEVEL }),
 
   setNotificationPrefs: (patch) =>
     set((state) => ({ notifications: { ...state.notifications, ...patch } })),
@@ -132,10 +118,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         typeof settings.autoSaveDelay === 'number'
           ? clampAutoSaveDelay(settings.autoSaveDelay)
           : state.autoSaveDelay,
-      permissions:
-        settings.permissions === undefined
-          ? state.permissions
-          : normalizePermissionPolicy(settings.permissions),
+      permissionLevel: isPermissionLevel(settings.permissionLevel)
+        ? settings.permissionLevel
+        : state.permissionLevel,
       notifications:
         settings.notifications === undefined
           ? state.notifications
