@@ -88,6 +88,7 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "./scripts/after-pack-manifest.js",
     "asarUnpack": [
       "node_modules/node-pty/**"
     ],
@@ -111,6 +112,7 @@
       "perMachine": false,
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh",
       "installerIcon": "app-icon.ico",
       "uninstallerIcon": "app-icon.ico",
       "createDesktopShortcut": "always",

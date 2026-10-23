@@ -9,7 +9,9 @@ pnpm-lock.yaml
 /dist
 /dist-electron
 /pi-bridge/dist
-/build
+# build/ 是 electron-builder 的 buildResources 目录；只保留 NSIS 自定义脚本
+/build/*
+!/build/installer.nsh
 /out
 *.dmg
 *.exe

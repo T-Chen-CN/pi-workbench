@@ -143,6 +143,18 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
   - macOS 应用未签名，**不能自动安装更新**，应用只检查版本并打开 Release 页面，用户下载 dmg 后拖入 Applications 覆盖安装；
   - Linux AppImage 可正常自动更新（要求 AppImage 文件所在目录可写）。
 - 更新行为：启动 12 秒后静默检查；Windows / Linux 自动下载、不自动安装；下载完成后弹窗，拒绝则下次启动再提示。
+- **Windows 更新时的文件删除由自定义 NSIS 卸载器接管**（`build/installer.nsh` 的 `customRemoveFiles`）：
+  - 打包时 `scripts/after-pack-manifest.js`（`afterPack`）把安装器自己的文件写成清单，放在
+    `resources/installer-manifest.files.txt` / `installer-manifest.dirs.txt`（相对路径、CRLF）；
+  - 更新时只删除清单内的程序文件，`config/`、`data/`、`logs/`、`cache/` 原地保留（`cache/` 里还有
+    正在运行的更新安装包）；清单缺失时不删除任何文件；
+  - 真正卸载时才额外删除数据目录，以及安装器生成、不在清单内的文件
+    （`Uninstall Pi Workbench.exe`、`uninstallerIcon.ico`、`resources/app-update.yml`、
+    `resources/elevate.exe`、`.write-probe`）。
+  - **新增运行时数据目录时，必须同时加入 `scripts/lib/installer-manifest.js` 的
+    `PROTECTED_TOP_LEVEL` 和 `build/installer.nsh` 的卸载分支**；写在安装目录其他位置的文件会被当作
+    程序文件在更新时删除。
+  - 首个带该脚本的版本需要手动安装（旧版卸载器不受新脚本控制），此后自动更新才会保住数据。
 - 产物文件名必须与更新清单一致：`win` / `mac` / `linux` 都配置了无空格的 `artifactName`。GitHub 会把资产名里的空格替换成点，若使用默认命名，`latest.yml` 中的连字符文件名会 404，自动更新直接失效。
 - 安装包缓存：`{appDir}/cache/{updaterCacheDirName}`（自定义 AppAdapter 覆盖 electron-updater 的系统缓存目录）。
 - CI 与打包冒烟使用 `--publish never`，不会误发布。

@@ -6,7 +6,7 @@
 **架构**: Electron 44 + React 19 + TypeScript
 **运行要求**: Node.js ≥ 22.19（Pi SDK 要求；Electron 44 内置 Node 24）  
 **当前阶段**: Phase 5 完成，Phase 6 持续优化  
-**最后更新**: 2026-10-23
+**最后更新**: 2026-10-24
 
 ---
 
@@ -631,6 +631,15 @@ async function initAgent(config: ApiConfig) {
 - ✅ 没有可用更新时清理过期缓存
 - ✅ 更新事件写入 `{appDir}/logs/main.log`
 
+**Windows 更新与数据保护**:
+- ✅ 更新时的删除逻辑由 `build/installer.nsh` 的 `customRemoveFiles` 接管：只删除
+  `resources/installer-manifest.files.txt` / `installer-manifest.dirs.txt` 清单内的程序文件
+- ✅ 清单由 `scripts/after-pack-manifest.js`（electron-builder `afterPack`）生成；清单缺失时更新不删除任何文件
+- ✅ 受保护目录：`config/`、`data/`、`logs/`、`cache/`（含运行中的更新安装包）
+- ✅ 真正卸载时删除清单文件、数据目录与安装器生成的文件（卸载器、图标、`app-update.yml`、`elevate.exe`、`.write-probe`）
+- ❌ 禁止在安装目录的其他位置保存运行时数据（不在清单外保护范围，更新会被删除）
+- ❌ 新增数据目录时必须同步更新 `PROTECTED_TOP_LEVEL` 与卸载分支，否则更新会清理该目录
+
 **发布**:
 - ✅ 更新源为 GitHub Releases（公开仓库 `T-Chen-CN/pi-workbench`）
 - ✅ 推送 `v*` 标签触发三平台构建（Windows NSIS / macOS universal dmg / Linux AppImage）
@@ -955,6 +964,6 @@ docs/
 
 ---
 
-**最后更新**: 2026-10-23  
+**最后更新**: 2026-10-24  
 **维护者**: Pi Workbench Team  
 **AI 友好**: 本文件专为 AI 助手设计，包含项目的所有关键约束和最佳实践
