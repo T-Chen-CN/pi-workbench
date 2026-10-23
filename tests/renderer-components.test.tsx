@@ -6,6 +6,8 @@ import { FileExplorer } from '../src/components/FileExplorer'
 import { MonacoEditor } from '../src/components/MonacoEditor'
 import { WelcomeScreen } from '../src/components/WelcomeScreen'
 import { ToolResultViewer } from '../src/components/ToolResultViewer'
+import { MarkdownBody } from '../src/components/AgentMarkdown'
+import { useWorkspaceStore } from '../src/store/workspaceStore'
 import { useChatStore, conversationKey } from '../src/store/chatStore'
 import { useEditorStore } from '../src/store/editorStore'
 import { useSelectionStore } from '../src/store/selectionStore'
@@ -848,6 +850,24 @@ describe('MonacoEditor', () => {
     await waitFor(() => {
       const file = useEditorStore.getState().openFiles.find((item) => item.path === '/ws/a.ts')
       expect(file?.content).toBe('updated-a')
+    })
+  })
+})
+
+describe('path references', () => {
+  it('opens a path:line reference and requests the referenced line', async () => {
+    useWorkspaceStore.getState().setWorkspace('/ws')
+    vi.mocked(api.exists).mockResolvedValue({ success: true, exists: true })
+    vi.mocked(api.readFile).mockResolvedValue({ success: true, content: 'a\nb\n' })
+
+    render(<MarkdownBody content={'See `src/a.ts:42` for details'} highlight={false} />)
+    fireEvent.click(await screen.findByText('src/a.ts:42'))
+
+    await waitFor(() => {
+      expect(useEditorStore.getState().pendingReveal).toEqual({
+        path: '/ws/src/a.ts',
+        line: 42,
+      })
     })
   })
 })

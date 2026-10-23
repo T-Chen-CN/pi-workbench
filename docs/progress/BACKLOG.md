@@ -24,7 +24,7 @@
 | R-05 | ✅ 自动压缩分隔线 | P2 | AF-05 剩余 | `compaction_start/end` 事件 |
 | R-06 | ✅ 模型能力提示 | P2 | AF-08 剩余 | 模型元数据 |
 | R-08 | ✅ 图片 / 截图附件 | P1 | AF-09 剩余 | `PromptOptions.images` |
-| R-09 | `path:line` 跳转行 | P2 | AF-09 剩余 | Monaco revealLine |
+| R-09 | ✅ `path:line` 跳转行 | P2 | AF-09 剩余 | Monaco revealLine |
 | R-10 | ✅ 导出 Markdown / HTML / JSONL | P2 | AF-13 剩余 | 会话 JSONL、HTML 生成 |
 | R-13 | 提示模板与技能命令 | P2 | AF-14 剩余 | Pi prompt templates / skills |
 | R-15 | 空状态建议个性化 | P3 | AF-18 剩余 | 最近操作记录 |
@@ -92,12 +92,14 @@
 - **完成情况**：粘贴 / 拖入图片进入附件条（缩略图 + 移除），限制 PNG/JPEG/WebP/GIF、单张 5MB、最多 4 张；图像走 `PromptOptions.images`，不注入文本上下文；主进程与 pi-bridge 双层校验。“纯文本模型明确提示”并入 R-06（模型能力标注）统一处理。
 - **验证**：`type-check` / `lint` / `npm test`（46 文件 422 用例）/ `npm run build` 通过；新增 bridge 图像断言与 store 图像唯一 ID 测试。真实模型视觉验收随 R-06 的模型能力提示一起做。
 
-### R-09 `path:line` 跳转行
+### R-09 `path:line` 跳转行 ✅（2026-10-24）
 
 - 现状：点击输出中的 `path:line` 只打开文件，不定位到行。
 - 目标：打开后滚动到指定行并高亮。
 - 技术：编辑器打开请求携带 `line`，Monaco `revealLineInCenter` + 光标定位；跨工作区路径仍按当前工作区解析。
 - 验收：点击 `src/a.ts:42` 打开文件并定位第 42 行。
+- **完成情况**：`editorStore` 新增 `pendingReveal` / `revealLine` / `consumeReveal`；点击 Markdown 中的 `path:line` 在打开文件后登记目标行，Monaco 就绪（含首次打开、已打开标签）时 `revealLineInCenter` + 光标定位 + 聚焦，行号超出文件长度时夹到末行；相对路径仍按当前工作区解析。
+- **验证**：`type-check` / `lint` / `npm test`（46 文件 447 用例）/ `npm run build` 通过；新增 store 定位状态与 Markdown 路径点击测试。真实 Monaco 滚动高亮留待界面手动确认。
 
 ### R-10 导出 Markdown / HTML / JSONL ✅（2026-10-24）
 

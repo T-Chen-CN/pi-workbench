@@ -18,7 +18,7 @@ const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({
   const open = async () => {
     const workspace = useWorkspaceStore.getState().workspacePath
     if (!workspace) return
-    const { path: filePart } = splitPathLine(value)
+    const { path: filePart, line } = splitPathLine(value)
     const target = /^[A-Za-z]:[\\/]/.test(filePart) || filePart.startsWith('/')
       ? filePart
       : `${workspace}/${filePart}`
@@ -34,6 +34,8 @@ const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({
         isDirty: false,
         isSaving: false,
       })
+      // 带行号时滚动到该行并高亮（R-09）
+      if (line) useEditorStore.getState().revealLine(target, line)
     } catch (error) {
       console.error('Failed to open referenced file:', error)
     }

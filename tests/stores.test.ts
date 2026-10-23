@@ -15,6 +15,16 @@ beforeEach(() => {
 })
 
 describe('editorStore', () => {
+  it('stores a pending reveal and consumes it', () => {
+    useEditorStore.getState().revealLine('/ws/a.ts', 42.7)
+    expect(useEditorStore.getState().pendingReveal).toEqual({
+      path: '/ws/a.ts',
+      line: 42,
+    })
+    useEditorStore.getState().consumeReveal()
+    expect(useEditorStore.getState().pendingReveal).toBeNull()
+  })
+
   const file = {
     path: '/tmp/a.ts',
     name: 'a.ts',
