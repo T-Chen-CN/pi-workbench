@@ -40,6 +40,13 @@ import { revertFileEdit } from '../utils/revertFile'
 import { extractSymbols, sliceSymbol, type ExtractedSymbol } from '../utils/symbols'
 import { buildChatSuggestions, type WorkspaceType } from '../utils/suggestions'
 import { retrySecondsRemaining } from '../utils/retryCountdown'
+import {
+  ImagePrepareError,
+  MAX_IMAGE_COUNT,
+  MAX_IMAGE_OUTPUT_BYTES,
+  MAX_TOTAL_IMAGE_BASE64_CHARS,
+  prepareImageFile,
+} from '../utils/imageAttachment'
 import { toast } from '../store/toastStore'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { useVirtualRows } from '../hooks/useVirtualRows'
@@ -80,10 +87,6 @@ interface ChatPanelProps {
 const MAX_CONTEXT_FILE_CHARS = 120_000
 const MAX_CONTEXT_SNIPPET_CHARS = 40_000
 const MAX_CONTEXT_TOTAL_CHARS = 300_000
-/** 图像附件：最多 4 张、单张 5MB，仅常见位图格式 */
-const MAX_IMAGE_COUNT = 4
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024
-const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
@@ -465,6 +468,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [availableModels, setAvailableModels] = useState<string[]>([])
   /** 模型能力提示（R-06） */
   const [modelCapabilities, setModelCapabilities] = useState<ModelCapabilityInfo[]>([])
+  /** 设置中勾选的支持图片模型，用于能力接口尚未返回时的兜底 */
+  const [configuredImageModels, setConfiguredImageModels] = useState<string[]>([])
   let lastUserMessageId: string | null = null
   for (let index = messages.length - 1; index >= 0; index--) {
     if (messages[index].role === 'user') {
@@ -616,6 +621,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [showArchived, setShowArchived] = useState(false)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [newMessageCount, setNewMessageCount] = useState(0)
+  /** 正在预处理（缩放 / 编码）的图片数量 */
+  const [imageProcessing, setImageProcessing] = useState(0)
   /** 重试倒计时的本地时钟（R-19） */
   const [retryNow, setRetryNow] = useState(() => Date.now())
   const lastMessageCountRef = useRef(0)
@@ -774,6 +781,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
   const selectedModelCapability =
     modelCapabilities.find((item) => item.id === sessionSettings?.modelId) ?? null
+  const imagesAllowed = selectedModelCapability
+    ? selectedModelCapability.vision === true
+    : Boolean(
+        sessionSettings?.modelId && configuredImageModels.includes(sessionSettings.modelId)
+      )
 
   /** 附加单个符号（函数 / 类等）作为上下文 */
   const attachSymbol = (symbol: ExtractedSymbol) => {
@@ -790,50 +802,64 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     setAttachMode('files')
   }
 
-  /** 图像附件：读取为 base64 后进入附件区（不写入上下文文本） */
+  /** 图像附件：统一预处理（长边 2048）后进入附件区，不写入上下文文本 */
   const addImageFiles = (files: File[]): void => {
-    if (!activeKey) return
-    if (selectedModelCapability && selectedModelCapability.vision !== true) {
-      toast.error(
-        selectedModelCapability.vision === false
-          ? t('modelNoVisionBlocked')
-          : t('modelVisionUnknownBlocked')
-      )
+    const key = activeKey
+    if (!key) return
+    if (!imagesAllowed) {
+      toast.error(t('modelImageDisabled'))
       return
     }
-    const current = useChatStore.getState().conversations[activeKey]?.attachments ?? []
-    let imageCount = current.filter((attachment) => attachment.kind === 'image').length
-    for (const file of files) {
-      if (!file.type.startsWith('image/')) continue
-      if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
-        toast.error(t('imageUnsupported'))
-        continue
+    const imageFiles = files.filter((file) => file.type.startsWith('image/'))
+    if (imageFiles.length === 0) return
+
+    void (async () => {
+      setImageProcessing((count) => count + 1)
+      try {
+        const existing = useChatStore.getState().conversations[key]?.attachments ?? []
+        let imageCount = existing.filter((attachment) => attachment.kind === 'image').length
+        let totalChars = existing.reduce(
+          (total, attachment) =>
+            attachment.kind === 'image' ? total + (attachment.data?.length ?? 0) : total,
+          0
+        )
+
+        for (const file of imageFiles) {
+          if (imageCount >= MAX_IMAGE_COUNT) {
+            toast.error(t('imageLimit', { count: MAX_IMAGE_COUNT }))
+            break
+          }
+          try {
+            const prepared = await prepareImageFile(file)
+            if (totalChars + prepared.data.length > MAX_TOTAL_IMAGE_BASE64_CHARS) {
+              toast.error(t('imageTotalTooLarge'))
+              break
+            }
+            useChatStore.getState().addAttachment(key, {
+              kind: 'image',
+              path: '',
+              name:
+                prepared.name ||
+                `image-${Date.now()}.${prepared.mimeType.split('/')[1] || 'png'}`,
+              mimeType: prepared.mimeType,
+              data: prepared.data,
+              size: prepared.size,
+            })
+            imageCount += 1
+            totalChars += prepared.data.length
+          } catch (error) {
+            const code = error instanceof ImagePrepareError ? error.code : 'encodeFailed'
+            if (code === 'unsupported') toast.error(t('imageUnsupported'))
+            else if (code === 'tooLarge') {
+              toast.error(t('imageTooLarge', { size: formatBytes(MAX_IMAGE_OUTPUT_BYTES) }))
+            } else if (code === 'tooManyPixels') toast.error(t('imageTooManyPixels'))
+            else toast.error(t('imageEncodeFailed'))
+          }
+        }
+      } finally {
+        setImageProcessing((count) => Math.max(0, count - 1))
       }
-      if (file.size > MAX_IMAGE_BYTES) {
-        toast.error(t('imageTooLarge', { size: formatBytes(MAX_IMAGE_BYTES) }))
-        continue
-      }
-      if (imageCount >= MAX_IMAGE_COUNT) {
-        toast.error(t('imageLimit', { count: MAX_IMAGE_COUNT }))
-        break
-      }
-      imageCount++
-      const reader = new FileReader()
-      reader.onload = () => {
-        const result = String(reader.result ?? '')
-        const comma = result.indexOf(',')
-        if (comma < 0) return
-        useChatStore.getState().addAttachment(activeKey, {
-          kind: 'image',
-          path: '',
-          name: file.name || `image-${Date.now()}.${file.type.split('/')[1] || 'png'}`,
-          mimeType: file.type,
-          data: result.slice(comma + 1),
-          size: file.size,
-        })
-      }
-      reader.readAsDataURL(file)
-    }
+    })()
   }
 
   /** 粘贴截图作为图像附件 */
@@ -945,6 +971,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           setNeedsApiKey(true)
           return
         }
+        setConfiguredImageModels(
+          Array.isArray(configResult.config.imageModels) ? configResult.config.imageModels : []
+        )
 
         const initResult = await piAgentAPI.initialize({
           workspaceDir: workspacePath,
@@ -1536,20 +1565,22 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       if (await handleSlashCommand(userMessage)) return
     }
 
-    const hasImageAttachments = (chat.conversations[key]?.attachments ?? []).some(
+    const imageAttachments = (chat.conversations[key]?.attachments ?? []).filter(
       (attachment) => attachment.kind === 'image'
     )
-    if (
-      hasImageAttachments &&
-      selectedModelCapability &&
-      selectedModelCapability.vision !== true
-    ) {
-      toast.error(
-        selectedModelCapability.vision === false
-          ? t('modelNoVisionBlocked')
-          : t('modelVisionUnknownBlocked')
+    if (imageAttachments.length > 0) {
+      if (!imagesAllowed) {
+        toast.error(t('modelImageDisabled'))
+        return
+      }
+      const totalChars = imageAttachments.reduce(
+        (total, attachment) => total + (attachment.data?.length ?? 0),
+        0
       )
-      return
+      if (totalChars > MAX_TOTAL_IMAGE_BASE64_CHARS) {
+        toast.error(t('imageTotalTooLarge'))
+        return
+      }
     }
 
     // 运行中：进入待发送队列；steer 立即注入当前轮
@@ -2750,6 +2781,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               ))}
             </div>
           )}
+          {imageProcessing > 0 && (
+            <div className="mb-1.5 flex items-center gap-1.5 type-caption text-ink-muted">
+              <Spinner size={10} />
+              {t('imageOptimizing')}
+            </div>
+          )}
           {attachments.length > 0 && (
             <div className="mb-1.5 flex flex-wrap gap-1.5">
               {attachments.map((attachment) => {
@@ -3038,7 +3075,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                 variant="primary"
                 size="sm"
                 icon={Send}
-                disabled={!initialized || !input.trim()}
+                disabled={!initialized || !input.trim() || imageProcessing > 0}
               >
                 {t('send')}
               </Button>

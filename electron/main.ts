@@ -1660,7 +1660,15 @@ const DEFAULT_API_CONFIG = {
   apiKey: '',
   availableModels: [] as string[],
   selectedModel: '',
+  /** 已知支持图片的模型；仅用于旧配置迁移时的预勾选 */
+  imageModels: ['deepseek-flash'] as string[],
 }
+
+/** 图片附件通用上限：与渲染层、pi-bridge 保持一致 */
+const MAX_CHAT_IMAGES = 20
+const MAX_IMAGE_BASE64_CHARS = Math.ceil((10 * 1024 * 1024 * 4) / 3)
+const MAX_TOTAL_IMAGE_BASE64_CHARS = 48 * 1024 * 1024
+const CHAT_IMAGE_MIME = /^image\/(png|jpe?g|webp|gif)$/i
 
 // Helper function to load API Config
 async function loadApiConfig(): Promise<any> {
@@ -1700,6 +1708,9 @@ async function loadApiConfig(): Promise<any> {
     }
 
     config.apiKey = decryptApiKey(config.apiKey)
+    config.imageModels = Array.isArray(config.imageModels)
+      ? config.imageModels.filter((id: unknown): id is string => typeof id === 'string')
+      : [...DEFAULT_API_CONFIG.imageModels]
     activeProviderApiKey = typeof config.apiKey === 'string' ? config.apiKey : ''
     return config
   } catch (error) {
@@ -1729,6 +1740,24 @@ handleIpc('apiConfig:save', async (_event, config: any) => {
 
     const stored = {
       ...config,
+      availableModels: Array.isArray(config?.availableModels)
+        ? [
+            ...new Set(
+              config.availableModels.filter(
+                (id: unknown): id is string => typeof id === 'string' && id.length > 0
+              )
+            ),
+          ]
+        : [],
+      imageModels: Array.isArray(config?.imageModels)
+        ? [
+            ...new Set(
+              config.imageModels.filter(
+                (id: unknown): id is string => typeof id === 'string' && id.length > 0
+              )
+            ),
+          ]
+        : [...DEFAULT_API_CONFIG.imageModels],
       apiKey: encryptApiKey(String(config?.apiKey ?? '')),
     }
     await writeJsonAtomic(configPath, stored)
@@ -1818,12 +1847,17 @@ function agentConfigKey(apiConfig: {
   apiUrl: string
   apiKey: string
   selectedModel: string
+  availableModels?: string[]
+  imageModels?: string[]
 }): string {
   return JSON.stringify({
     provider: apiConfig.provider,
     apiUrl: apiConfig.apiUrl,
     selectedModel: apiConfig.selectedModel,
     apiKey: apiConfig.apiKey,
+    availableModels: apiConfig.availableModels ?? [],
+    // 图片能力勾选决定 models.json 的 input，变化时必须重建 Agent
+    imageModels: [...(apiConfig.imageModels ?? [])].sort(),
   })
 }
 
@@ -1835,6 +1869,8 @@ handleIpc('agent:initialize', async (_event, config: {
     apiUrl: string
     apiKey: string
     selectedModel: string
+    availableModels?: string[]
+    imageModels?: string[]
   }
 }) => {
   try {
@@ -2070,20 +2106,38 @@ handleIpc(
         }
       }
 
-      // 图像附件：只接受常见位图格式，最多 4 张、单张 base64 ≤ 8MB
-      const safeImages = Array.isArray(images)
-        ? images
-            .filter(
-              (image): image is { data: string; mimeType: string } =>
-                Boolean(image) &&
-                typeof (image as any).data === 'string' &&
-                typeof (image as any).mimeType === 'string' &&
-                /^image\/(png|jpe?g|webp|gif)$/i.test((image as any).mimeType)
-            )
-            .filter((image) => image.data.length > 0 && image.data.length <= 8_000_000)
-            .slice(0, 4)
-            .map((image) => ({ data: image.data, mimeType: image.mimeType }))
-        : []
+      // 图像附件：格式 / 张数 / 单张与总大小统一校验，超限明确报错而不是静默丢弃
+      const safeImages: Array<{ data: string; mimeType: string }> = []
+      if (images !== undefined && images !== null) {
+        if (!Array.isArray(images)) {
+          return { success: false, error: 'Images must be an array.' }
+        }
+        if (images.length > MAX_CHAT_IMAGES) {
+          return {
+            success: false,
+            error: `At most ${MAX_CHAT_IMAGES} images can be sent at once.`,
+          }
+        }
+        let totalChars = 0
+        for (const image of images) {
+          const data = (image as { data?: unknown } | null)?.data
+          const mimeType = (image as { mimeType?: unknown } | null)?.mimeType
+          if (typeof data !== 'string' || data.length === 0) {
+            return { success: false, error: 'Invalid image payload.' }
+          }
+          if (typeof mimeType !== 'string' || !CHAT_IMAGE_MIME.test(mimeType)) {
+            return { success: false, error: 'Unsupported image format.' }
+          }
+          if (data.length > MAX_IMAGE_BASE64_CHARS) {
+            return { success: false, error: 'Each image must be at most 10 MB.' }
+          }
+          totalChars += data.length
+          if (totalChars > MAX_TOTAL_IMAGE_BASE64_CHARS) {
+            return { success: false, error: 'Images exceed the total size limit.' }
+          }
+          safeImages.push({ data, mimeType })
+        }
+      }
 
       console.log('[Main] Sending message to agent:', message.substring(0, 100))
       if (workspaceDir) {

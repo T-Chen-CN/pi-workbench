@@ -307,7 +307,15 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await manager.dispose()
-  await fs.rm(tmpRoot, { recursive: true, force: true })
+  // Windows 上 extras 的异步落盘可能与清理竞争，稍等后重试
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rm(tmpRoot, { recursive: true, force: true })
+      break
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
   delete process.env.PI_WORKBENCH_API_KEY
   delete process.env.ANTHROPIC_API_KEY
   delete process.env.OPENAI_API_KEY
@@ -349,7 +357,7 @@ describe('AgentManager initialization', () => {
       baseUrl: 'https://api.example.com/v1',
       api: 'openai-completions',
       apiKey: '$PI_WORKBENCH_API_KEY',
-      models: [{ id: 'test-model' }],
+      models: [{ id: 'test-model', input: ['text'] }],
     })
     expect(raw).not.toContain('sk-secret')
     expect(process.env.PI_WORKBENCH_API_KEY).toBe('sk-secret')
@@ -1752,9 +1760,106 @@ describe('model capabilities', () => {
     const modelsJson = JSON.parse(
       await fs.readFile(path.join(agentDir, 'models.json'), 'utf-8')
     )
+    const entries = modelsJson.providers['pi-workbench'].models
+    expect(entries.map((model: { id: string }) => model.id)).toEqual([
+      'deepseek-flash',
+      'deepseek-v4-pro',
+    ])
+    expect(entries.find((model: { id: string }) => model.id === 'deepseek-flash').input).toEqual([
+      'text',
+      'image',
+    ])
+    expect(entries.find((model: { id: string }) => model.id === 'deepseek-v4-pro').input).toEqual([
+      'text',
+    ])
+  })
+
+  it('follows the user image checkboxes in models.json', async () => {
+    const session = createFakeSession()
+    const models: Record<string, Record<string, unknown>> = {
+      'deepseek-flash': {
+        provider: 'pi-workbench',
+        id: 'deepseek-flash',
+        reasoning: true,
+        input: ['text', 'image'],
+        contextWindow: 128_000,
+        maxTokens: 8_192,
+      },
+      'custom-vision-model': {
+        provider: 'pi-workbench',
+        id: 'custom-vision-model',
+        reasoning: false,
+        input: ['text', 'image'],
+        contextWindow: 64_000,
+        maxTokens: 4_096,
+      },
+    }
+    sdk.modelRuntimeCreate.mockResolvedValue({
+      getModel: vi.fn((_provider: string, id: string) => models[id]),
+    })
+    sdk.continueRecent.mockImplementation(() => createFakeSessionManager())
+    sdk.createAgentSession.mockResolvedValue({ session })
+
+    await manager.initialize(
+      makeConfig({
+        apiConfig: {
+          provider: 'openai',
+          apiUrl: 'https://api.example.com/v1/',
+          apiKey: 'sk-secret',
+          selectedModel: 'custom-vision-model',
+          availableModels: ['deepseek-flash', 'custom-vision-model'],
+          imageModels: ['custom-vision-model'],
+        },
+      })
+    )
+
+    const capabilities = await manager.getModelCapabilities()
     expect(
-      modelsJson.providers['pi-workbench'].models.map((model: { id: string }) => model.id)
-    ).toEqual(['deepseek-flash', 'deepseek-v4-pro'])
+      capabilities.models?.find((model) => model.id === 'deepseek-flash')?.vision
+    ).toBe(false)
+    expect(
+      capabilities.models?.find((model) => model.id === 'custom-vision-model')?.vision
+    ).toBe(true)
+
+    const modelsJson = JSON.parse(
+      await fs.readFile(path.join(agentDir, 'models.json'), 'utf-8')
+    )
+    const entries = modelsJson.providers['pi-workbench'].models
+    expect(entries.find((model: { id: string }) => model.id === 'deepseek-flash').input).toEqual([
+      'text',
+    ])
+    expect(
+      entries.find((model: { id: string }) => model.id === 'custom-vision-model').input
+    ).toEqual(['text', 'image'])
+  })
+})
+
+describe('image attachment validation', () => {
+  it('rejects too many or unsupported images before sending', async () => {
+    const tooMany = Array.from({ length: 21 }, () => ({
+      data: 'aGVsbG8=',
+      mimeType: 'image/png',
+    }))
+    await expect(manager.chat('hi', { images: tooMany })).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('At most'),
+    })
+
+    await expect(
+      manager.chat('hi', { images: [{ data: 'aGVsbG8=', mimeType: 'image/tiff' }] })
+    ).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('Unsupported'),
+    })
+  })
+
+  it('lets valid images through to the normal initialization check', async () => {
+    await expect(
+      manager.chat('hi', { images: [{ data: 'aGVsbG8=', mimeType: 'image/png' }] })
+    ).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('not initialized'),
+    })
   })
 })
 
