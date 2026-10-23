@@ -416,6 +416,7 @@
 - 上下文占用：输入区上方的 1px 细条（`Meter`，`tone` 随占用切换 accent / warning / danger）+ `type-data` 计数「42% · 40k / 96k」+ `type-caption` 文本按钮“压缩上下文”；细条不使用发光或渐变。
 - 检查点菜单：聊天头部 `RotateCcw` 图标按钮打开的浮层（`bg-raised` + 满墨边 + `shadow-print`，宽 320px）；每行显示时间（`type-value`）与“修改 N 个文件”（`type-caption`），操作按钮为发丝边文本按钮（恢复代码 / 恢复对话 / 两者都恢复），底部一句说明命令副作用不可回退。
 - 消息操作：悬停或键盘聚焦时在消息头部右侧显示 14px 图标按钮（复制 / 重新生成 / 编辑），默认 `opacity-0`，`group-hover` 与 `focus-within` 时显现；只对最后一条助手回复和最后一条用户消息提供重复生成与编辑入口。
+- 快捷键可达：设置“快捷键”页顶部为“可自定义”区，每行左侧 `type-value` 命令名、右侧 `KeyCap` 组合键与 ghost 按钮“修改”；捕获中显示 `warning` 提示文案，冲突用 Toast 报错，页头提供“恢复默认”。
 - 模型与思考：输入区上方一行两个紧凑 `Select`（模型 176px / 思考 112px，高度 24px），值来自会话级设置；切换失败时回滚并 Toast。
 - 文件引用：Markdown 行内代码中的 `path[:line]` 使用 `type-data` 样式，hover 变 `accent` 并加下划线，点击打开编辑器；`@` 搜索弹层为 `bg-raised` + 满墨边 + `shadow-print` 的列表（单行 `type-data`，hover `bg-hover`），拖入文件直接进入附件区。
 - 符号附加：附件菜单右上角提供“附加符号 / 附加文件”切换；符号列表每行显示 kind（`type-caption`）、名称（`type-value`，单行截断）与行范围（`type-data`），空态一句“未识别到符号，可改用整文件”。

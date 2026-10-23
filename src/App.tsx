@@ -48,6 +48,7 @@ import { useApprovalStore } from './store/approvalStore'
 import { useUpdaterStore } from './store/updaterStore'
 import { localizeError } from './i18n/errors'
 import { commandPaletteShortcut } from './utils/shortcuts'
+import { matchShortcut } from './utils/keybindings'
 
 const MonacoEditor = lazy(() =>
   import('./components/MonacoEditor').then((module) => ({ default: module.MonacoEditor }))
@@ -216,17 +217,18 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [])
 
-  // Ctrl/Cmd+, 打开设置
+  // Ctrl/Cmd+, 打开设置（可在设置中改键）
+  const settingsShortcut = useSettingsStore((state) => state.keybindings.settings)
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key === ',') {
+      if (matchShortcut(event, settingsShortcut)) {
         event.preventDefault()
         openSettings()
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [openSettings])
+  }, [openSettings, settingsShortcut])
 
   const clearWorkspaceChat = (targetPath: string) => {
     useSessionStore.getState().resetWorkspace(targetPath)

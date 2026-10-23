@@ -30,6 +30,13 @@ import { Button, Field, Input, Select } from './ui'
 import { KeyCap, Meter } from './patterns'
 import type { PermissionAction, ToolCategory } from '../types/electron'
 import type { TranslationKey } from '../i18n/translations'
+import {
+  DEFAULT_KEYBINDINGS,
+  eventToShortcut,
+  findConflict,
+  formatShortcut,
+  type ShortcutId,
+} from '../utils/keybindings'
 
 const PERMISSION_LABEL_KEYS: Record<ToolCategory, TranslationKey> = {
   read: 'permissionRead',
@@ -65,12 +72,16 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     permissions,
     notifications,
     budgetUsd,
+    keybindings,
     setAutoSave,
     setAutoSaveDelay,
     setPermission,
     setNotificationPrefs,
     setBudgetUsd,
+    setKeybinding,
+    resetKeybindings,
   } = useSettingsStore()
+  const [capturingShortcut, setCapturingShortcut] = useState<ShortcutId | null>(null)
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const isMac = isMacPlatform()
   const mod = isMac ? '⌘' : 'Ctrl'
@@ -205,6 +216,41 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     const next = Number.isFinite(value) ? Math.max(0, value) : 0
     setBudgetUsd(next)
     void persistSettings({ budgetUsd: next })
+  }
+
+  const shortcutName = (id: ShortcutId) =>
+    id === 'commandPalette' ? t('shortcutCommandPalette') : t('shortcutSettings')
+
+  // 捕获新的快捷键；Esc 取消，冲突时提示且不写入
+  useEffect(() => {
+    if (!capturingShortcut) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.key === 'Escape') {
+        setCapturingShortcut(null)
+        return
+      }
+      const combo = eventToShortcut(event)
+      if (!combo) return
+      const conflict = findConflict(keybindings, combo, capturingShortcut)
+      if (conflict) {
+        toast.error(t('shortcutConflict', { name: shortcutName(conflict) }))
+        return
+      }
+      const next = { ...keybindings, [capturingShortcut]: combo }
+      setKeybinding(capturingShortcut, combo)
+      void persistSettings({ keybindings: next })
+      setCapturingShortcut(null)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [capturingShortcut, keybindings])
+
+  const handleResetShortcuts = () => {
+    resetKeybindings()
+    void persistSettings({ keybindings: DEFAULT_KEYBINDINGS })
   }
 
   const loadApiConfig = useCallback(async () => {
@@ -572,6 +618,45 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
             <p className="m-0 type-reading text-ink-muted">
               {t('shortcutHint')}
             </p>
+
+            <section>
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <h4 className="m-0 type-label text-ink-muted">{t('shortcutCustomGroup')}</h4>
+                <button
+                  type="button"
+                  onClick={handleResetShortcuts}
+                  className="type-caption text-ink-muted transition-colors hover:text-ink"
+                >
+                  {t('shortcutResetAll')}
+                </button>
+              </div>
+              <div className="border-t border-rule-divide">
+                {(['commandPalette', 'settings'] as ShortcutId[]).map((id) => (
+                  <div
+                    key={id}
+                    className="flex items-center justify-between gap-4 border-b border-rule-divide py-2"
+                  >
+                    <span className="type-value text-ink">{shortcutName(id)}</span>
+                    <div className="flex items-center gap-2">
+                      {capturingShortcut === id ? (
+                        <span className="type-caption text-warning">{t('shortcutCapture')}</span>
+                      ) : (
+                        <KeyCap>{formatShortcut(keybindings[id])}</KeyCap>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setCapturingShortcut(capturingShortcut === id ? null : id)
+                        }
+                      >
+                        {capturingShortcut === id ? t('cancel') : t('shortcutCustomize')}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
 
             {shortcutGroups.map((group) => (
               <section key={group.title}>

@@ -1,5 +1,10 @@
 import { create } from 'zustand'
 import type { PermissionAction, PermissionPolicy, ToolCategory } from '../types/electron'
+import {
+  DEFAULT_KEYBINDINGS,
+  normalizeKeybindings,
+  type ShortcutId,
+} from '../utils/keybindings'
 
 export const MIN_AUTO_SAVE_DELAY = 500
 export const MAX_AUTO_SAVE_DELAY = 10_000
@@ -63,17 +68,21 @@ interface SettingsState {
   notifications: NotificationPrefs
   /** 会话成本预算（美元，0 表示不提醒） */
   budgetUsd: number
+  keybindings: Record<ShortcutId, string>
   setAutoSave: (enabled: boolean) => void
   setAutoSaveDelay: (delayMs: number) => void
   setPermission: (category: ToolCategory, action: PermissionAction) => void
   setNotificationPrefs: (patch: Partial<NotificationPrefs>) => void
   setBudgetUsd: (value: number) => void
+  setKeybinding: (id: ShortcutId, combo: string) => void
+  resetKeybindings: () => void
   hydrate: (settings: {
     autoSave?: unknown
     autoSaveDelay?: unknown
     permissions?: unknown
     notifications?: unknown
     budgetUsd?: unknown
+    keybindings?: unknown
   }) => void
 }
 
@@ -84,6 +93,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   permissions: { ...DEFAULT_PERMISSION_POLICY },
   notifications: { ...DEFAULT_NOTIFICATION_PREFS },
   budgetUsd: 0,
+  keybindings: { ...DEFAULT_KEYBINDINGS },
 
   setAutoSave: (enabled) => set({ autoSave: enabled }),
 
@@ -97,6 +107,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
 
   setBudgetUsd: (value) =>
     set({ budgetUsd: Number.isFinite(value) ? Math.max(0, value) : 0 }),
+
+  setKeybinding: (id, combo) =>
+    set((state) => ({ keybindings: { ...state.keybindings, [id]: combo.toLowerCase() } })),
+
+  resetKeybindings: () => set({ keybindings: { ...DEFAULT_KEYBINDINGS } }),
 
   hydrate: (settings) =>
     set((state) => ({
@@ -118,5 +133,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         typeof settings.budgetUsd === 'number' && Number.isFinite(settings.budgetUsd)
           ? Math.max(0, settings.budgetUsd)
           : state.budgetUsd,
+      keybindings:
+        settings.keybindings === undefined
+          ? state.keybindings
+          : normalizeKeybindings(settings.keybindings),
     })),
 }))
