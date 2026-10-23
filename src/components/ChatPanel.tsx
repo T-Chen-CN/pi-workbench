@@ -157,6 +157,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const error = conversation?.error ?? null
   const attachments = conversation?.attachments ?? []
   const input = conversation?.draftInput ?? ''
+  const mode = conversation?.mode ?? 'act'
 
   const openFiles = useEditorStore((state) => state.openFiles)
   const selection = useSelectionStore((state) => state.selection)
@@ -623,14 +624,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     return () => window.removeEventListener('attach-selection', onAttachSelection)
   }, [activeKey, t])
 
-  const handleSubmit = async (e?: React.FormEvent) => {
+  const handleSubmit = async (e?: React.FormEvent, override?: string) => {
     e?.preventDefault()
 
     const sessionId = activeSessionId
     const key = activeKey
-    if (!sessionId || !key || !input.trim() || isLoading) return
+    const userMessage = (override ?? input).trim()
+    if (!sessionId || !key || !userMessage || isLoading) return
 
-    const userMessage = input.trim()
     const chat = useChatStore.getState()
     stoppedRef.current = false
     useSessionStore.getState().markError(workspacePath, sessionId, null)
@@ -791,6 +792,26 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     if (!activeSessionId) return
     stoppedRef.current = true
     await piAgentAPI.abort(workspacePath, activeSessionId)
+  }
+
+  /** 切换 Plan / Act；失败时回滚本地状态 */
+  const handleModeChange = async (next: 'plan' | 'act') => {
+    const sessionId = activeSessionId
+    const key = activeKey
+    if (!sessionId || !key || next === mode || isLoading) return
+    useChatStore.getState().setMode(key, next)
+    const result = await piAgentAPI.sessionsSetMode(workspacePath, sessionId, next)
+    if (!result.success) {
+      useChatStore.getState().setMode(key, mode)
+      toast.error(t('modeSwitchFailed', { error: localizeError(result.error ?? '') }))
+    }
+  }
+
+  /** Plan 模式下批准计划：切回 Act 并让 Agent 执行 */
+  const handleExecutePlan = async () => {
+    if (!activeSessionId || !activeKey || isLoading) return
+    await handleModeChange('act')
+    void handleSubmit(undefined, 'Execute the plan above step by step.')
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -985,6 +1006,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       {/* Composer */}
       {activeSessionId && (
         <div className="flex-shrink-0 p-2.5">
+          {mode === 'plan' && !isLoading && messages.some((msg) => msg.role === 'assistant') && (
+            <div className="mb-2 flex items-center justify-between gap-2 border border-rule-hairline bg-raised px-3 py-2">
+              <span className="type-caption text-ink-muted">{t('planModeHint')}</span>
+              <Button size="sm" variant="primary" onClick={() => void handleExecutePlan()}>
+                {t('planExecute')}
+              </Button>
+            </div>
+          )}
           {pendingApprovals.length > 0 && (
             <div className="mb-2 flex flex-col gap-2">
               {pendingApprovals.map((request) => (
@@ -1129,6 +1158,23 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                     )}
                   </div>
                 )}
+              </div>
+              <div className="ml-1 flex items-center border border-rule-control">
+                {(['act', 'plan'] as const).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    disabled={!initialized || isLoading}
+                    onClick={() => void handleModeChange(value)}
+                    className={`px-2 py-1 type-caption transition-colors disabled:opacity-40 ${
+                      mode === value
+                        ? 'bg-active text-ink'
+                        : 'text-ink-muted hover:bg-hover hover:text-ink'
+                    }`}
+                  >
+                    {value === 'act' ? t('modeAct') : t('modePlan')}
+                  </button>
+                ))}
               </div>
               {isLoading ? (
                 <Button variant="danger" size="sm" icon={Square} onClick={() => void handleStop()}>

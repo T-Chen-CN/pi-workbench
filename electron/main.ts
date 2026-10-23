@@ -1918,6 +1918,28 @@ handleIpc('agent:sessions:close', async (_event, workspaceDir: string, sessionId
 })
 
 handleIpc(
+  'agent:sessions:setMode',
+  async (_event, workspaceDir: string, sessionId: string, mode: 'plan' | 'act') => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      if (mode !== 'plan' && mode !== 'act') {
+        return { success: false, error: 'Invalid session mode' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.setSessionMode !== 'function') {
+        return { success: false, error: 'Sessions are not supported by this agent' }
+      }
+      return await agent.setSessionMode(sessionId, mode)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
+handleIpc(
   'agent:sessions:rename',
   async (_event, workspaceDir: string, sessionId: string, name: string) => {
     try {

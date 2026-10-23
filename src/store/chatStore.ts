@@ -46,6 +46,8 @@ export interface ConversationState {
   error: string | null
   attachments: ChatAttachment[]
   draftInput: string
+  /** Plan 只读 / Act 可写；默认 Act */
+  mode: 'plan' | 'act'
 }
 
 const EMPTY_CONVERSATION: ConversationState = {
@@ -54,6 +56,7 @@ const EMPTY_CONVERSATION: ConversationState = {
   error: null,
   attachments: [],
   draftInput: '',
+  mode: 'act',
 }
 
 /** 会话在 store 中的键：工作区 + 会话，避免跨工作区串数据 */
@@ -95,6 +98,7 @@ interface ChatState {
   clearAttachments: (key: string) => void
   setDraftInput: (key: string, value: string) => void
   clearDraftInput: (key: string) => void
+  setMode: (key: string, mode: 'plan' | 'act') => void
   setMessages: (key: string, messages: Array<Omit<ChatMessage, 'id'>>) => void
   setLoading: (key: string, loading: boolean) => void
   setError: (key: string, error: string | null) => void
@@ -414,6 +418,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) =>
       updateExisting(state, key, (current) => ({ ...current, draftInput: '' }))
     ),
+
+  setMode: (key, mode) =>
+    set((state) => updateExisting(state, key, (current) => ({ ...current, mode }))),
 
   setMessages: (key, messages) =>
     set((state) => ({

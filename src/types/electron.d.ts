@@ -72,6 +72,11 @@ export interface ElectronAPI {
   agentSessionsDelete: (workspaceDir: string, sessionId: string) => Promise<AgentDisposeResult>
   agentSessionsGetTabs: (workspaceDir: string) => Promise<SessionTabsResult>
   agentSessionsSetTabs: (workspaceDir: string, tabs: SessionTabs) => Promise<AgentDisposeResult>
+  agentSessionsSetMode: (
+    workspaceDir: string,
+    sessionId: string,
+    mode: SessionMode
+  ) => Promise<{ success: boolean; error?: string }>
   onAgentApprovalRequest: (callback: (payload: ApprovalRequestPayload) => void) => () => void
   agentRespondApproval: (
     requestId: string,
@@ -257,6 +262,9 @@ export type ApprovalDecision =
   | { action: 'allow-session' }
   | { action: 'allow-always' }
   | { action: 'deny'; reason?: string }
+
+/** 会话模式：plan 只读探索并给出计划，act 可修改文件与执行命令 */
+export type SessionMode = 'plan' | 'act'
 
 export interface FileEdit {
   path: string

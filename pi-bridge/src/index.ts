@@ -15,6 +15,7 @@ export type {
   AgentTraceEvent,
   AgentTracePart,
   FileEdit,
+  SessionMode,
   SessionOpenResult,
   SessionSummary,
 } from './agent-manager.js'

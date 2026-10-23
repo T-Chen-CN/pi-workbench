@@ -46,6 +46,27 @@ const TITLE_TIMEOUT_MS = 15_000
 /** 与 src/api/chatContext.ts 的标记保持一致 */
 const CONTEXT_BLOCK_START = '<pi-workbench-context>'
 const CONTEXT_BLOCK_END = '</pi-workbench-context>'
+/** Plan 模式的提示块；历史恢复时整块剥离，不展示给用户 */
+const PLAN_BLOCK_START = '<pi-workbench-plan-mode>'
+const PLAN_BLOCK_END = '</pi-workbench-plan-mode>'
+/** Plan 模式可用的只读工具 */
+const PLAN_MODE_TOOLS = ['read', 'grep', 'find', 'ls']
+/** Act 模式在无法恢复原工具集时使用的内置工具 */
+const DEFAULT_MODE_TOOLS = ['read', 'grep', 'find', 'ls', 'write', 'edit', 'bash', 'powershell']
+const PLAN_MODE_INSTRUCTION = [
+  'You are in Plan mode. Only read-only tools (read, grep, find, ls) are available;',
+  'you cannot modify files or run commands.',
+  'Explore the repository as needed, then reply with a concise, numbered implementation plan:',
+  'what you will change, which files are involved, and any risks or side effects.',
+  'Do not claim that changes were made.',
+].join(' ')
+
+/** 会话运行模式：plan 仅只读探索并给出计划，act 可修改文件与执行命令 */
+export type SessionMode = 'plan' | 'act'
+
+function wrapPlanPrompt(message: string): string {
+  return `${PLAN_BLOCK_START}\n${PLAN_MODE_INSTRUCTION}\n${PLAN_BLOCK_END}\n\n${message}`
+}
 
 export interface AgentLogger {
   info: (...args: unknown[]) => void
@@ -140,14 +161,23 @@ async function withTimeoutResult<T>(
   }
 }
 
-/** 恢复历史时去掉附件上下文块，避免聊天面板展示整段文件内容 */
+/** 恢复历史时去掉附件上下文块与 Plan 模式提示块，避免聊天面板展示内部指令 */
 function stripContextBlock(content: string): string {
-  const start = content.indexOf(CONTEXT_BLOCK_START)
-  const end = content.indexOf(CONTEXT_BLOCK_END)
-  if (start === -1 || end <= start) return content
+  let text = content
+  const planStart = text.indexOf(PLAN_BLOCK_START)
+  const planEnd = text.indexOf(PLAN_BLOCK_END)
+  if (planStart !== -1 && planEnd > planStart) {
+    const before = text.slice(0, planStart).trim()
+    const after = text.slice(planEnd + PLAN_BLOCK_END.length).trim()
+    text = [before, after].filter(Boolean).join('\n\n')
+  }
 
-  const before = content.slice(0, start).trim()
-  const after = content.slice(end + CONTEXT_BLOCK_END.length).trim()
+  const start = text.indexOf(CONTEXT_BLOCK_START)
+  const end = text.indexOf(CONTEXT_BLOCK_END)
+  if (start === -1 || end <= start) return text
+
+  const before = text.slice(0, start).trim()
+  const after = text.slice(end + CONTEXT_BLOCK_END.length).trim()
   return [before, after].filter(Boolean).join('\n\n') || '(attached files)'
 }
 
@@ -329,6 +359,10 @@ interface SessionRuntime {
   pendingTitle: string | null
   /** 本会话内已获准的类别（“本会话允许”） */
   sessionAllow: Set<string>
+  /** 当前模式；审批钩子与 chat 都会读取 */
+  modeState: { current: SessionMode }
+  /** 进入 Plan 前的工具集，切回 Act 时恢复 */
+  activeToolsBeforePlan: string[] | null
 }
 
 export interface AgentMessage {
@@ -697,12 +731,26 @@ export class AgentManager {
    * 工具审批扩展：在工具执行前按策略放行、拒绝或挂起等待用户。
    * 以 inline extension 的方式注册 tool_call 钩子，不落盘，也不属于工作台插件系统。
    */
-  private createApprovalExtension(sessionId: string, sessionAllow: Set<string>): ExtensionFactory {
+  private createApprovalExtension(
+    sessionId: string,
+    sessionAllow: Set<string>,
+    getMode: () => SessionMode
+  ): ExtensionFactory {
     return (pi) => {
       pi.on('tool_call', async (event: any) => {
         const toolName = String(event?.toolName ?? '')
         const args = event?.input ?? event?.args ?? {}
         const category = categorizeTool(toolName)
+
+        // Plan 模式只允许只读工具；即使工具集被意外放宽也要拦住
+        if (getMode() === 'plan' && category !== 'read') {
+          return {
+            block: true,
+            reason:
+              'Plan mode is read-only. Switch to Act mode before modifying files or running commands.',
+          }
+        }
+
         const policy: PermissionPolicy = normalizePermissionPolicy(this.config?.getPermissionPolicy?.())
         let action = policy[category]
         if (sessionAllow.has(category) && action !== 'deny') action = 'allow'
@@ -772,6 +820,38 @@ export class AgentManager {
     }
   }
 
+  /** 切换会话模式；Plan 期间只保留只读工具 */
+  async setSessionMode(
+    sessionId: string,
+    mode: SessionMode
+  ): Promise<{ success: boolean; error?: string }> {
+    if (mode !== 'plan' && mode !== 'act') {
+      return { success: false, error: 'Invalid session mode.' }
+    }
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      if (runtime.modeState.current === mode) return { success: true }
+
+      if (mode === 'plan') {
+        runtime.activeToolsBeforePlan = runtime.session.getActiveToolNames()
+        runtime.session.setActiveToolsByName(PLAN_MODE_TOOLS)
+      } else {
+        const restore =
+          runtime.activeToolsBeforePlan && runtime.activeToolsBeforePlan.length > 0
+            ? runtime.activeToolsBeforePlan
+            : DEFAULT_MODE_TOOLS
+        runtime.session.setActiveToolsByName(restore)
+        runtime.activeToolsBeforePlan = null
+      }
+
+      runtime.modeState.current = mode
+      this.logger.info(`[Agent Manager] Session ${sessionId} mode -> ${mode}`)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   /** 创建（或复用）一个会话运行时 */
   private async createRuntime(sessionManager: SessionManager): Promise<SessionRuntime> {
     const config = this.config
@@ -786,12 +866,15 @@ export class AgentManager {
     if (!model) throw new Error('Selected model is unavailable.')
 
     const sessionAllow = new Set<string>()
+    const modeState = { current: 'act' as SessionMode }
     const settingsManager = SettingsManager.create(config.workspaceDir, this.agentDir)
     const resourceLoader = new DefaultResourceLoader({
       cwd: config.workspaceDir,
       agentDir: this.agentDir,
       settingsManager,
-      extensionFactories: [this.createApprovalExtension(id, sessionAllow)],
+      extensionFactories: [
+        this.createApprovalExtension(id, sessionAllow, () => modeState.current),
+      ],
     })
     await resourceLoader.reload()
 
@@ -844,6 +927,8 @@ export class AgentManager {
       titleAttempted: false,
       pendingTitle: null,
       sessionAllow,
+      modeState,
+      activeToolsBeforePlan: null,
     }
     runtime.unsubscribe = this.subscribeToSessionEvents(runtime)
     this.runtimes.set(id, runtime)
@@ -1296,7 +1381,8 @@ export class AgentManager {
 
       // 发送用户消息并等待 Agent 完成；超时先 abort，宽限期后仍未结束则强制收尾
       const session = runtime.session
-      const promptPromise = session.prompt(message)
+      const promptText = runtime.modeState.current === 'plan' ? wrapPlanPrompt(message) : message
+      const promptPromise = session.prompt(promptText)
       const timeoutPromise = new Promise<never>((_resolve, reject) => {
         if (timeoutMs <= 0) return
         timeoutTimer = setTimeout(() => {

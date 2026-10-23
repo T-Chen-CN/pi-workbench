@@ -379,3 +379,17 @@ describe('diffStore review queue', () => {
     expect(useDiffStore.getState().isOpen).toBe(false)
   })
 })
+
+describe('chatStore session mode', () => {
+  it('defaults to act and updates per conversation', () => {
+    useChatStore.getState().ensureConversation('mode-key')
+    expect(useChatStore.getState().conversations['mode-key'].mode).toBe('act')
+
+    useChatStore.getState().setMode('mode-key', 'plan')
+    expect(useChatStore.getState().conversations['mode-key'].mode).toBe('plan')
+
+    // 不存在的会话不会被创建
+    useChatStore.getState().setMode('missing-key', 'plan')
+    expect(useChatStore.getState().conversations['missing-key']).toBeUndefined()
+  })
+})

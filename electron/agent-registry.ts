@@ -42,6 +42,11 @@ export interface RegisteredAgent {
   closeSession?: (sessionId: string) => Promise<void>
   renameSession?: (sessionId: string, name: string) => Promise<unknown>
   deleteSession?: (sessionId: string) => Promise<unknown>
+  /** 切换会话模式（Plan 只读 / Act 可写） */
+  setSessionMode?: (
+    sessionId: string,
+    mode: 'plan' | 'act'
+  ) => Promise<{ success: boolean; error?: string }>
   getCurrentSessionId?: () => string | null
 }
 

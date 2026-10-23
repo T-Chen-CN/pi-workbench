@@ -46,6 +46,10 @@ interface FakeSession {
   abort: () => Promise<void>
   dispose: () => void
   emit: (event: SessionEvent) => void
+  activeTools: string[]
+  getActiveToolNames: () => string[]
+  setActiveToolsByName: (names: string[]) => void
+  getAllTools: () => Array<{ name: string }>
 }
 
 function createFakeSession(
@@ -55,6 +59,12 @@ function createFakeSession(
   const session: FakeSession = {
     messages: [],
     disposed: false,
+    activeTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'],
+    getActiveToolNames: () => [...session.activeTools],
+    setActiveToolsByName: (names) => {
+      session.activeTools = [...names]
+    },
+    getAllTools: () => session.activeTools.map((name) => ({ name })),
     subscribe: (listener) => {
       listeners.add(listener)
       return () => {
@@ -1029,5 +1039,70 @@ describe('tool approvals', () => {
     expect(result).toMatchObject({ block: true })
     expect(result.reason).toContain('blocked by the current permission policy')
     expect(requestApproval).not.toHaveBeenCalled()
+  })
+})
+
+describe('plan mode', () => {
+  function toolCallHandler(): (event: any) => Promise<any> {
+    const loader = sdk.loaders[sdk.loaders.length - 1]
+    const factories = loader?.options?.extensionFactories ?? []
+    let handler: ((event: any) => Promise<any>) | null = null
+    factories[0]({
+      on: (event: string, fn: (payload: any) => Promise<any>) => {
+        if (event === 'tool_call') handler = fn
+      },
+    })
+    if (!handler) throw new Error('tool_call handler was not registered')
+    return handler
+  }
+
+  it('restricts the tool set in plan mode and restores it in act mode', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await manager.setSessionMode('session-1', 'plan')
+    expect(session.activeTools).toEqual(['read', 'grep', 'find', 'ls'])
+
+    await manager.setSessionMode('session-1', 'act')
+    expect(session.activeTools).toEqual(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'])
+  })
+
+  it('blocks non-read tools while in plan mode', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+    await manager.setSessionMode('session-1', 'plan')
+
+    const handler = toolCallHandler()
+    const blocked = await handler({
+      toolName: 'write',
+      input: { path: 'a.ts', content: 'x' },
+      toolCallId: 'c1',
+    })
+    expect(blocked).toMatchObject({ block: true })
+    expect(blocked.reason).toContain('Plan mode is read-only')
+
+    await expect(
+      handler({ toolName: 'read', input: { path: 'a.ts' }, toolCallId: 'c2' })
+    ).resolves.toBeUndefined()
+  })
+
+  it('wraps prompts with the plan instruction and strips it from history', async () => {
+    const prompts: string[] = []
+    const session = createFakeSession(async (_session, message) => {
+      prompts.push(message)
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+    await manager.setSessionMode('session-1', 'plan')
+
+    await manager.chat('add a feature')
+
+    expect(prompts[0]).toContain('<pi-workbench-plan-mode>')
+    expect(prompts[0]).toContain('Plan mode')
+    expect(prompts[0]).toContain('add a feature')
+    const history = manager.getMessageHistory('session-1') as Array<{ content: string }>
+    expect(history.some((message) => message.content.includes('pi-workbench-plan-mode'))).toBe(false)
   })
 })

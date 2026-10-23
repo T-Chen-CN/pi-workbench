@@ -13,6 +13,7 @@ import type {
   FileEdit,
   SessionListResult,
   SessionOpenResult,
+  SessionMode,
   SessionTabs,
   SessionTabsResult,
 } from '../types/electron'
@@ -393,6 +394,21 @@ export const piAgentAPI = {
         workspaceDir,
         tabs,
       })
+    } catch (error) {
+      return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  async sessionsSetMode(
+    workspaceDir: string,
+    sessionId: string,
+    mode: SessionMode
+  ): Promise<AgentResponse> {
+    try {
+      if (hasElectronAgent()) {
+        return await window.electronAPI.agentSessionsSetMode(workspaceDir, sessionId, mode)
+      }
+      return { success: false, error: 'Session modes are not available in this environment' }
     } catch (error) {
       return { success: false, error: bridgeUnavailableError(error) }
     }
