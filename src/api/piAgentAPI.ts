@@ -618,6 +618,24 @@ export const piAgentAPI = {
     return window.electronAPI.onAgentApprovalRequest(callback)
   },
 
+  /** 审批在用户操作之外结束时（超时 / 中止）通知渲染层 */
+  onApprovalResolved(
+    callback: (payload: {
+      requestId: string
+      workspaceDir: string
+      sessionId: string
+      decision: ApprovalDecision
+    }) => void
+  ): () => void {
+    if (
+      !hasElectronAgent() ||
+      typeof window.electronAPI.onAgentApprovalResolved !== 'function'
+    ) {
+      return () => {}
+    }
+    return window.electronAPI.onAgentApprovalResolved(callback)
+  },
+
   async respondApproval(
     requestId: string,
     decision: ApprovalDecision

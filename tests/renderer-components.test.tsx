@@ -60,6 +60,7 @@ vi.mock('../src/api/piAgentAPI', () => ({
     listCheckpoints: vi.fn(),
     restoreCheckpoint: vi.fn(),
     onApprovalRequest: vi.fn(() => () => {}),
+    onApprovalResolved: vi.fn(() => () => {}),
     respondApproval: vi.fn(),
     onNotifyClick: vi.fn(() => () => {}),
   },

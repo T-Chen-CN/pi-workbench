@@ -186,12 +186,25 @@ export default function App() {
 
   // 工具审批请求是全局的：切到别的会话时也要能收到通知与入队
   useEffect(() => {
-    const off = piAgentAPI.onApprovalRequest((request) => {
+    const offRequest = piAgentAPI.onApprovalRequest((request) => {
       useApprovalStore.getState().add(request)
       useSessionStore.getState().markNeedsAction(request.workspaceDir, request.sessionId, 'input')
     })
+    // 超时 / 中止等非用户操作结束时，主进程会通知移除卡片
+    const offResolved = piAgentAPI.onApprovalResolved(({ requestId, workspaceDir, sessionId }) => {
+      useApprovalStore.getState().remove(requestId)
+      const remaining = useApprovalStore
+        .getState()
+        .requests.some(
+          (item) => item.workspaceDir === workspaceDir && item.sessionId === sessionId
+        )
+      if (!remaining) {
+        useSessionStore.getState().markNeedsAction(workspaceDir, sessionId, null)
+      }
+    })
     return () => {
-      off()
+      offRequest()
+      offResolved()
       useApprovalStore.getState().reset()
     }
   }, [])

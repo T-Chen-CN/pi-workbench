@@ -162,6 +162,14 @@ export interface ElectronAPI {
     requestId: string,
     decision: ApprovalDecision
   ) => Promise<{ success: boolean; error?: string }>
+  onAgentApprovalResolved: (
+    callback: (payload: {
+      requestId: string
+      workspaceDir: string
+      sessionId: string
+      decision: ApprovalDecision
+    }) => void
+  ) => () => void
 
   // Terminal
   terminalCreate: (workspaceDir: string, cols: number, rows: number) => Promise<TerminalCreateResult>

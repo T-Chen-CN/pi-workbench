@@ -60,10 +60,40 @@ export function sanitizeApprovalDecision(input: unknown): ApprovalDecision | nul
   }
 }
 
+export interface ApprovalResolution {
+  requestId: string
+  workspaceDir: string
+  sessionId: string
+  decision: ApprovalDecision
+}
+
 export class ApprovalBroker {
   private pending = new Map<string, PendingApproval>()
 
-  constructor(private readonly send: (payload: ApprovalRequestPayload) => void) {}
+  constructor(
+    private readonly send: (payload: ApprovalRequestPayload) => void,
+    /** 请求在用户操作之外结束时（超时 / 取消 / 中止）通知渲染层移除卡片 */
+    private readonly onResolved?: (resolution: ApprovalResolution) => void
+  ) {}
+
+  private finish(requestId: string, decision: ApprovalDecision): boolean {
+    const pending = this.pending.get(requestId)
+    if (!pending) return false
+    this.pending.delete(requestId)
+    clearTimeout(pending.timer)
+    pending.resolve(decision)
+    try {
+      this.onResolved?.({
+        requestId,
+        workspaceDir: pending.request.workspaceDir,
+        sessionId: pending.request.sessionId,
+        decision,
+      })
+    } catch (error) {
+      console.warn('[Approval] Failed to notify resolution:', error)
+    }
+    return true
+  }
 
   /** 发起审批；返回的 Promise 只会以 allow-* 或 deny 收尾 */
   request(request: ApprovalRequestPayload): Promise<ApprovalDecision> {
@@ -75,6 +105,16 @@ export class ApprovalBroker {
       const timer = setTimeout(() => {
         this.pending.delete(request.requestId)
         resolve({ action: 'deny', reason: 'The approval request timed out.' })
+        try {
+          this.onResolved?.({
+            requestId: request.requestId,
+            workspaceDir: request.workspaceDir,
+            sessionId: request.sessionId,
+            decision: { action: 'deny', reason: 'The approval request timed out.' },
+          })
+        } catch (error) {
+          console.warn('[Approval] Failed to notify timeout:', error)
+        }
       }, timeoutMs)
       timer.unref?.()
 
@@ -93,12 +133,7 @@ export class ApprovalBroker {
 
   /** 用户响应；找不到请求（已超时或已取消）返回 false */
   respond(requestId: string, decision: ApprovalDecision): boolean {
-    const pending = this.pending.get(requestId)
-    if (!pending) return false
-    this.pending.delete(requestId)
-    clearTimeout(pending.timer)
-    pending.resolve(decision)
-    return true
+    return this.finish(requestId, decision)
   }
 
   /** 工作区关闭 / Agent 释放时，取消该工作区所有待审批请求 */
@@ -112,19 +147,16 @@ export class ApprovalBroker {
   }
 
   private cancelWhere(predicate: (request: ApprovalRequestPayload) => boolean, reason: string): void {
-    for (const [requestId, pending] of this.pending) {
-      if (!predicate(pending.request)) continue
-      this.pending.delete(requestId)
-      clearTimeout(pending.timer)
-      pending.resolve({ action: 'deny', reason })
+    for (const requestId of [...this.pending.keys()]) {
+      const pending = this.pending.get(requestId)
+      if (!pending || !predicate(pending.request)) continue
+      this.finish(requestId, { action: 'deny', reason })
     }
   }
 
   dispose(reason = 'The application is shutting down.'): void {
-    for (const [requestId, pending] of this.pending) {
-      this.pending.delete(requestId)
-      clearTimeout(pending.timer)
-      pending.resolve({ action: 'deny', reason })
+    for (const requestId of [...this.pending.keys()]) {
+      this.finish(requestId, { action: 'deny', reason })
     }
   }
 
