@@ -349,7 +349,9 @@ export class UpdateController {
     }
     try {
       this.logger.info('[Updater] Installing update', this.state.version)
-      this.getUpdater().quitAndInstall(false, true)
+      // assisted（oneClick=false）安装器只有 isSilent=true 才会带 /S；
+      // 否则用户点过“重启并安装”后还会看到第二次安装向导。
+      this.getUpdater().quitAndInstall(true, true)
       return { success: true }
     } catch (error) {
       const message = errorMessage(error)

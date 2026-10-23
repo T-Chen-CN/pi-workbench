@@ -131,7 +131,7 @@
 - ✅ 2026-10-22 流式渲染性能：增量按 50ms 窗口合并写入 store；流式 Markdown 按顶层块 memo 渲染，解析降为低优先级（`useDeferredValue`），流式期间关闭代码高亮；长输出不再阻塞会话切换 / 新建会话，结束后整体重渲染一次恢复完整 GFM 与高亮
 - ✅ 2026-10-22 Agent 过程轨迹：thinking / text / tool 改为有序 parts；相邻过程组合并为默认收起的过程组，只有用户手动展开后才保持展开；工具步骤显示状态、耗时、参数与结果预览，write/edit 可打开对应 Diff；历史恢复保留思考与工具步骤；文本、思考、工具共用有序事件缓冲
 - ✅ 2026-10-23 更新功能完善：修复“已是最新版本”误报，改为使用 `isUpdateAvailable`；启动 12 秒后静默检查、Windows/Linux 自动下载但绝不自动安装、下载完成弹窗（拒绝后下次启动再提示）；全局 `updaterStore`，状态栏显示版本号 / 更新提示 / 下载进度；安装包缓存改为 `{appDir}/cache`（自定义 AppAdapter）；macOS 数据目录改为 `~/Library/Application Support/pi-workbench`，更新只检查并引导手动下载；Windows 安装目录不可写时启动提示；版本号来自 `app.getVersion()`；命令面板加入“检查更新”；发布工作流扩展为 Windows/macOS/Linux 三平台并校验标签版本
-- ✅ 2026-10-23 发布 v0.2.0 / v0.2.1：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage）；修复 GitHub 资产名中的空格被替换为点、导致 `latest.yml` 404 的问题（显式 `artifactName`）
+- ✅ 2026-10-23 发布 v0.2.0 / v0.2.1 / v0.2.2：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage）；修复 GitHub 资产名中的空格被替换为点、导致 `latest.yml` 404 的问题（显式 `artifactName`）；“重启并安装”改为静默安装，避免第二次弹出安装向导
 - ⏳ 剩余：大文件/虚拟滚动等性能优化
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
