@@ -422,10 +422,23 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       ),
     [diffEdits]
   )
-  const openToolDiff = useCallback((toolCallId: string) => {
-    const edit = useDiffStore.getState().edits.find((item) => item.toolCallId === toolCallId)
-    if (edit) useDiffStore.getState().openEdits([edit])
-  }, [])
+  const openToolDiff = useCallback(
+    async (toolCallId: string) => {
+      const edit = useDiffStore.getState().edits.find((item) => item.toolCallId === toolCallId)
+      if (edit) {
+        useDiffStore.getState().openEdits([edit])
+        return
+      }
+      if (!activeSessionId) return
+      const result = await piAgentAPI.getToolEdit(workspacePath, activeSessionId, toolCallId)
+      if (!result.success || !result.edit) {
+        toast.error(t('historicalDiffMissing'))
+        return
+      }
+      useDiffStore.getState().openEdits([{ ...result.edit, toolCallId }])
+    },
+    [activeSessionId, workspacePath, t]
+  )
 
   const [initialized, setInitialized] = useState(false)
   const [needsApiKey, setNeedsApiKey] = useState(false)

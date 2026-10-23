@@ -551,6 +551,26 @@ export const piAgentAPI = {
     }
   },
 
+  /** 历史工具调用的文件 Diff */
+  async getToolEdit(
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string
+  ): Promise<{
+    success: boolean
+    edit?: { path: string; oldContent: string; newContent: string }
+    error?: string
+  }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentToolDiff !== 'function') {
+      return { success: false, error: 'Historical diffs are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentToolDiff(workspaceDir, sessionId, toolCallId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
   /** 检查点列表 */
   async listCheckpoints(
     workspaceDir: string,

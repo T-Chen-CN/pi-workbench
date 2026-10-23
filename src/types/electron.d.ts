@@ -121,6 +121,15 @@ export interface ElectronAPI {
     workspaceDir: string,
     sessionId: string
   ) => Promise<{ success: boolean; stats?: SessionStatsInfo; error?: string }>
+  agentToolDiff: (
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string
+  ) => Promise<{
+    success: boolean
+    edit?: { path: string; oldContent: string; newContent: string }
+    error?: string
+  }>
   agentSessionSetModel: (
     workspaceDir: string,
     sessionId: string,
@@ -397,6 +406,8 @@ export type AgentTracePart =
       durationMs?: number
       resultPreview?: string
       filePath?: string
+      /** 历史工具行有保存的 Diff */
+      hasDiff?: boolean
     }
 
 /** 主进程归一化后的流式事件（不含路由字段） */

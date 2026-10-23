@@ -519,7 +519,13 @@ export default defineConfig({
             }
             return
           }
-          if (id.includes('monaco-editor')) return 'monaco'
+          if (id.includes('monaco-editor')) {
+            // 语言定义（分词器）与编辑器内核分开加载，降低单个 chunk 体积
+            if (id.includes('/vs/languages/definitions/')) {
+              return 'monaco-languages'
+            }
+            return 'monaco'
+          }
           if (
             id.includes('react-markdown') ||
             id.includes('remark-') ||

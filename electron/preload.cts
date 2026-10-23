@@ -164,6 +164,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:session:settings', workspaceDir, sessionId),
   agentSessionStats: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('agent:session:stats', workspaceDir, sessionId),
+  agentToolDiff: (workspaceDir: string, sessionId: string, toolCallId: string) =>
+    ipcRenderer.invoke('agent:tool-diff', workspaceDir, sessionId, toolCallId),
   agentSessionSetModel: (workspaceDir: string, sessionId: string, modelId: string) =>
     ipcRenderer.invoke('agent:session:setModel', workspaceDir, sessionId, modelId),
   agentSessionSetThinking: (workspaceDir: string, sessionId: string, level: string) =>

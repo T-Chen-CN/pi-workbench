@@ -175,6 +175,7 @@ export const translations = {
     suggestTodosPrompt: '查看 TODO / FIXME 与未完成的实现，列出下一步建议。',
     suggestTests: '运行测试',
     suggestTestsPrompt: '运行项目的测试并总结失败原因与修复建议。',
+    historicalDiffMissing: '该工具调用没有保存可查看的 Diff',
     slashHelp:
       '可用命令：/plan 计划模式 · /act 执行模式 · /compact 压缩上下文 · /clear 新建会话 · /model <名称> 切换模型',
     slashClearConfirm: '清空意味着开始一个新会话；当前对话会保留在会话列表中。继续？',
@@ -668,6 +669,7 @@ export const translations = {
     suggestTodosPrompt: 'Look for TODOs / FIXMEs and unfinished implementations, then suggest next steps.',
     suggestTests: 'Run tests',
     suggestTestsPrompt: 'Run the test suite and summarize failures with fix suggestions.',
+    historicalDiffMissing: 'No saved diff is available for this tool call',
     slashHelp:
       'Commands: /plan plan mode · /act act mode · /compact compact context · /clear start a new session · /model <name> switch model',
     slashClearConfirm:

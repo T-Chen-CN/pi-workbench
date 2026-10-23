@@ -40,5 +40,6 @@ export type {
   CheckpointRecord,
   CheckpointSummary,
 } from './checkpoint-store.js'
+export type { SessionExtras, ToolEditRecord } from './session-extras.js'
 
 

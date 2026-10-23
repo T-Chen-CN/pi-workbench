@@ -31,6 +31,12 @@ import {
   type CheckpointRecord,
   type CheckpointSummary,
 } from './checkpoint-store.js'
+import {
+  SessionExtrasStore,
+  emptyExtras,
+  type SessionExtras,
+  type ToolEditRecord,
+} from './session-extras.js'
 
 /** 写入 models.json 的自定义供应商 ID */
 const WORKBENCH_PROVIDER_ID = 'pi-workbench'
@@ -278,6 +284,8 @@ export type AgentTracePart =
       durationMs?: number
       resultPreview?: string
       filePath?: string
+      /** 历史工具行是否有保存下来的 Diff 可查看 */
+      hasDiff?: boolean
     }
 
 /** 主进程归一化后的流式事件；文本、思考和工具共用同一条有序通道 */
@@ -380,6 +388,11 @@ interface SessionRuntime {
   activeToolsBeforePlan: string[] | null
   /** 本轮检查点；轮次结束后落盘 */
   currentCheckpoint: CheckpointRecord | null
+  /** 会话附加数据（思考时长 / 历史工具 Diff） */
+  extras: SessionExtras
+  extrasSave: Promise<void>
+  thinkingStart: number | null
+  thinkingDurationsThisMessage: number[]
 }
 
 export interface AgentMessage {
@@ -440,6 +453,7 @@ export class AgentManager {
   private modelRuntime: ModelRuntime | null = null
   private agentDir = ''
   private checkpointStore: CheckpointStore | null = null
+  private extrasStore: SessionExtrasStore | null = null
   private sessionDir = ''
   private envLease = false
   private runtimes = new Map<string, SessionRuntime>()
@@ -548,6 +562,19 @@ export class AgentManager {
     return target
   }
 
+  /** 串行保存会话附加数据，避免并发覆盖 */
+  private persistExtras(runtime: SessionRuntime): void {
+    if (!this.extrasStore) return
+    const store = this.extrasStore
+    const id = runtime.id
+    runtime.extrasSave = runtime.extrasSave
+      .catch(() => undefined)
+      .then(() => store.save(id, runtime.extras))
+      .catch((error) => {
+        this.logger.warn('[Agent Manager] Failed to save session extras:', error)
+      })
+  }
+
   /**
    * 订阅会话事件：转发文本 / 思考 / 工具步骤，并记录 write/edit 前后内容。
    * Pi 的 write / edit 工具参数分别为 { path, content } 和 { path, edits }。
@@ -557,6 +584,22 @@ export class AgentManager {
       try {
         if (event.type === 'message_start' && event.message?.role === 'assistant') {
           runtime.thinkingDeltaSeen.clear()
+          runtime.thinkingDurationsThisMessage = []
+          runtime.thinkingStart = null
+          return
+        }
+
+        if (event.type === 'message_end' && event.message?.role === 'assistant') {
+          const timestamp = event.message?.timestamp
+          if (
+            typeof timestamp === 'number' &&
+            runtime.thinkingDurationsThisMessage.length > 0
+          ) {
+            runtime.extras.thinkingDurations[String(timestamp)] = [
+              ...runtime.thinkingDurationsThisMessage,
+            ]
+            this.persistExtras(runtime)
+          }
           return
         }
 
@@ -569,6 +612,7 @@ export class AgentManager {
             if (typeof update.contentIndex === 'number') {
               runtime.thinkingDeltaSeen.delete(update.contentIndex)
             }
+            runtime.thinkingStart = Date.now()
           } else if (update?.type === 'thinking_delta' && typeof update.delta === 'string') {
             if (typeof update.contentIndex === 'number') {
               runtime.thinkingDeltaSeen.add(update.contentIndex)
@@ -576,6 +620,12 @@ export class AgentManager {
             runtime.onTrace?.({ type: 'thinking_delta', delta: update.delta })
           } else if (update?.type === 'thinking_end') {
             const index = typeof update.contentIndex === 'number' ? update.contentIndex : -1
+            if (runtime.thinkingStart !== null) {
+              runtime.thinkingDurationsThisMessage.push(
+                Math.max(0, Date.now() - runtime.thinkingStart)
+              )
+              runtime.thinkingStart = null
+            }
             // 部分供应商只在 end 给出完整内容，或返回脱敏后的空内容
             if (!runtime.thinkingDeltaSeen.has(index)) {
               const content = typeof update.content === 'string' ? update.content : ''
@@ -676,6 +726,12 @@ export class AgentManager {
                   oldContent: snapshot.existed ? snapshot.oldContent : null,
                 })
               }
+              runtime.extras.toolEdits[event.toolCallId] = {
+                path: snapshot.path,
+                oldContent: snapshot.oldContent,
+                newContent,
+              }
+              this.persistExtras(runtime)
             }
           }
 
@@ -726,6 +782,7 @@ export class AgentManager {
       this.checkpointStore = config.checkpointDir
         ? new CheckpointStore(config.checkpointDir, config.workspaceDir)
         : null
+      this.extrasStore = new SessionExtrasStore(path.join(this.agentDir, 'session-extras'))
       const modelsPath = await this.writeModelsConfig(this.agentDir, config)
       this.ensureBashOnPath()
 
@@ -966,6 +1023,21 @@ export class AgentManager {
     }
   }
 
+  /** 读取历史工具调用的文件 Diff（来自会话 sidecar） */
+  async getToolEdit(
+    sessionId: string,
+    toolCallId: string
+  ): Promise<{ success: boolean; edit?: ToolEditRecord; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const edit = runtime.extras.toolEdits[toolCallId]
+      if (!edit) return { success: false, error: 'No saved diff for this tool call.' }
+      return { success: true, edit }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   /** 会话累计用量与成本 */
   async getSessionStats(sessionId: string): Promise<{
     success: boolean
@@ -1163,6 +1235,7 @@ export class AgentManager {
 
     const sessionAllow = new Set<string>()
     const modeState = { current: 'act' as SessionMode }
+    const extras = this.extrasStore ? await this.extrasStore.load(id) : emptyExtras()
     const settingsManager = SettingsManager.create(config.workspaceDir, this.agentDir)
     const resourceLoader = new DefaultResourceLoader({
       cwd: config.workspaceDir,
@@ -1226,6 +1299,10 @@ export class AgentManager {
       modeState,
       activeToolsBeforePlan: null,
       currentCheckpoint: null,
+      extras,
+      extrasSave: Promise.resolve(),
+      thinkingStart: null,
+      thinkingDurationsThisMessage: [],
     }
     runtime.unsubscribe = this.subscribeToSessionEvents(runtime)
     this.runtimes.set(id, runtime)
@@ -1339,17 +1416,22 @@ export class AgentManager {
             turn.parts.push({ type: 'text', id: nextId('text'), text: msg.content })
           }
         } else if (Array.isArray(msg.content)) {
+          let thinkingIndex = 0
           for (const part of msg.content) {
             if (!part) continue
             if (part.type === 'text' && typeof part.text === 'string') {
               turn.parts.push({ type: 'text', id: nextId('text'), text: part.text })
             } else if (part.type === 'thinking') {
+              const durations =
+                runtime.extras.thinkingDurations[String(msg.timestamp)] ?? []
               turn.parts.push({
                 type: 'thinking',
                 id: nextId('thinking'),
                 text: typeof part.thinking === 'string' ? part.thinking : '',
                 redacted: part.redacted === true,
+                durationMs: durations[thinkingIndex],
               })
+              thinkingIndex++
             } else if (part.type === 'toolCall') {
               const toolName = String(part.name ?? 'tool')
               const toolCallId = String(part.id ?? nextId('tool'))
@@ -1361,6 +1443,7 @@ export class AgentManager {
                 argsSummary: summarizeToolArgs(toolName, part.arguments ?? {}),
                 status: 'running',
                 filePath: this.toolFilePath(toolName, part.arguments ?? {}),
+                hasDiff: Boolean(runtime.extras.toolEdits[toolCallId]),
               })
             }
           }

@@ -2276,6 +2276,26 @@ handleIpc(
   }
 )
 
+// 历史工具 Diff（会话 sidecar）
+handleIpc(
+  'agent:tool-diff',
+  async (_event, workspaceDir: string, sessionId: string, toolCallId: string) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.getToolEdit !== 'function') {
+        return { success: false, error: 'Historical diffs are not supported by this agent' }
+      }
+      return await agent.getToolEdit(sessionId, toolCallId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
 handleIpc('agent:session:stats', async (_event, workspaceDir: string, sessionId: string) => {
   try {
     if (!isTrustedWorkspacePath(workspaceDir)) {

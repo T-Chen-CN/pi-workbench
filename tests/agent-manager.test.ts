@@ -1566,3 +1566,65 @@ describe('session stats', () => {
     })
   })
 })
+
+describe('session extras', () => {
+  it('records thinking duration and attaches it to history', async () => {
+    const session = createFakeSession()
+    session.messages.push({
+      role: 'assistant',
+      timestamp: 111,
+      content: [
+        { type: 'thinking', thinking: 'pondering' },
+        { type: 'text', text: 'done' },
+      ],
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    session.emit({ type: 'message_start', message: { role: 'assistant' } })
+    session.emit({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'thinking_start', contentIndex: 0 },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    session.emit({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'thinking_end', contentIndex: 0, content: 'pondering' },
+    })
+    session.emit({ type: 'message_end', message: { role: 'assistant', timestamp: 111 } })
+
+    const history = manager.getSessionMessages('session-1')
+    const thinking = history[0]?.parts?.find((part) => part.type === 'thinking')
+    expect(thinking).toMatchObject({ type: 'thinking' })
+    expect((thinking as { durationMs?: number }).durationMs ?? 0).toBeGreaterThan(0)
+  })
+
+  it('keeps historical tool diffs available for later review', async () => {
+    const checkpointDir = path.join(tmpRoot, 'checkpoints')
+    const filePath = path.join(workspaceDir, 'hist.txt')
+    const session = createFakeSession(async (fake) => {
+      fake.emit({
+        type: 'tool_execution_start',
+        toolCallId: 'hist-1',
+        toolName: 'write',
+        args: { path: filePath, content: 'new' },
+      })
+      await fs.writeFile(filePath, 'new', 'utf-8')
+      fake.emit({
+        type: 'tool_execution_end',
+        toolCallId: 'hist-1',
+        toolName: 'write',
+        isError: false,
+        durationMs: 2,
+        result: {},
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig({ checkpointDir }))
+    await manager.chat('write')
+
+    const result = await manager.getToolEdit('session-1', 'hist-1')
+    expect(result.success).toBe(true)
+    expect(result.edit).toMatchObject({ path: filePath, newContent: 'new' })
+  })
+})
