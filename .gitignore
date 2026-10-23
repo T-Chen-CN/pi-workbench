@@ -20,6 +20,7 @@ pnpm-lock.yaml
 # Development
 .vscode/
 .idea/
+.tmp/
 *.swp
 *.swo
 *~
