@@ -16,7 +16,9 @@ async function readText(filePath: string): Promise<string> {
 }
 
 beforeEach(async () => {
-  repo = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-fleet-worktree-'))
+  // git worktree list 输出的是规范化路径（macOS /var → /private/var，
+  // Windows 8.3 短名会展开），测试目录同样先规范化再比较。
+  repo = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'pi-fleet-worktree-')))
   git(['init'])
   git(['config', 'user.email', 'test@example.com'])
   git(['config', 'user.name', 'Test User'])
