@@ -2,7 +2,7 @@
 
 Lightweight desktop code editor with Pi Agent integration, built with Electron + React.
 
-**Version**: 0.2.2 · **Status**: Phase 5 complete · Phase 6 ongoing · **Updated**: 2026-10-23
+**Version**: 0.3.0 · **Status**: Phase 5 complete · Phase 6 ongoing · **Updated**: 2026-10-24
 
 ---
 
