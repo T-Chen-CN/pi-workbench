@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Settings } from '../src/components/Settings'
 import { useI18nStore } from '../src/store/i18nStore'
 import { INITIAL_UPDATE_STATE, useUpdaterStore } from '../src/store/updaterStore'
+import { api } from '../src/api'
+import { translations } from '../src/i18n/translations'
 import type { UpdateState } from '../src/types/electron'
 
 vi.mock('../src/api', () => ({
@@ -63,6 +65,40 @@ afterEach(() => {
     state: INITIAL_UPDATE_STATE,
     deferredVersion: null,
     promptRequested: false,
+  })
+})
+
+describe('settings provider image capability', () => {
+  it('persists the models checked as image-capable', async () => {
+    vi.mocked(api.apiConfigGet).mockResolvedValue({
+      success: true,
+      config: {
+        provider: 'custom',
+        apiUrl: 'https://api.example.com/v1',
+        apiKey: 'sk-test',
+        availableModels: ['deepseek-flash', 'text-only-model'],
+        selectedModel: 'deepseek-flash',
+        imageModels: ['deepseek-flash'],
+      },
+    })
+
+    render(<Settings initialSection="api" />)
+
+    const flash = (await screen.findByRole('checkbox', {
+      name: 'deepseek-flash',
+    })) as HTMLInputElement
+    expect(flash.checked).toBe(true)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'text-only-model' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: translations.zh.saveConfiguration })
+    )
+
+    await waitFor(() => expect(api.apiConfigSave).toHaveBeenCalled())
+    const saved = vi.mocked(api.apiConfigSave).mock.calls[0][0] as {
+      imageModels: string[]
+    }
+    expect(saved.imageModels).toEqual(['deepseek-flash', 'text-only-model'])
   })
 })
 

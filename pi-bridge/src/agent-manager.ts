@@ -72,6 +72,45 @@ const KNOWN_MODEL_METADATA: Record<
 /** 思考级别与 setSessionThinking 的允许值一致 */
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
+/** 图片附件通用上限：与渲染层、主进程保持一致 */
+const MAX_CHAT_IMAGES = 20
+const MAX_IMAGE_BASE64_CHARS = Math.ceil((10 * 1024 * 1024 * 4) / 3)
+const MAX_TOTAL_IMAGE_BASE64_CHARS = 48 * 1024 * 1024
+const CHAT_IMAGE_MIME = /^image\/(png|jpe?g|webp|gif)$/i
+
+/** 校验并归一化聊天图片；超限明确报错，不做静默过滤 */
+function validateChatImages(value: unknown): {
+  images: Array<{ data: string; mimeType: string }>
+  error?: string
+} {
+  if (value === undefined || value === null) return { images: [] }
+  if (!Array.isArray(value)) return { images: [], error: 'Images must be an array.' }
+  if (value.length > MAX_CHAT_IMAGES) {
+    return { images: [], error: `At most ${MAX_CHAT_IMAGES} images can be sent at once.` }
+  }
+  const images: Array<{ data: string; mimeType: string }> = []
+  let totalChars = 0
+  for (const image of value) {
+    const data = (image as { data?: unknown } | null)?.data
+    const mimeType = (image as { mimeType?: unknown } | null)?.mimeType
+    if (typeof data !== 'string' || data.length === 0) {
+      return { images: [], error: 'Invalid image payload.' }
+    }
+    if (typeof mimeType !== 'string' || !CHAT_IMAGE_MIME.test(mimeType)) {
+      return { images: [], error: 'Unsupported image format.' }
+    }
+    if (data.length > MAX_IMAGE_BASE64_CHARS) {
+      return { images: [], error: 'Each image must be at most 10 MB.' }
+    }
+    totalChars += data.length
+    if (totalChars > MAX_TOTAL_IMAGE_BASE64_CHARS) {
+      return { images: [], error: 'Images exceed the total size limit.' }
+    }
+    images.push({ data, mimeType })
+  }
+  return { images }
+}
+
 /** 写入 models.json 的自定义供应商 ID */
 const WORKBENCH_PROVIDER_ID = 'pi-workbench'
 /** models.json 中引用的环境变量名（避免把 API Key 写进磁盘） */
@@ -464,6 +503,8 @@ export interface AgentConfig {
     selectedModel: string
     /** 供应商返回的可选模型列表；用于写入 models.json 与能力提示 */
     availableModels?: string[]
+    /** 用户勾选为“支持图片”的模型；未提供时按内置已知信息兜底 */
+    imageModels?: string[]
   }
   /** 日志出口；主进程注入 agent.log，未注入时退回 console */
   logger?: AgentLogger
@@ -670,6 +711,10 @@ export class AgentManager {
     ]
 
     const modelsPath = path.join(agentDir, 'models.json')
+    const imageModels = Array.isArray(config.apiConfig.imageModels)
+      ? config.apiConfig.imageModels
+      : modelIds.filter((id) => KNOWN_MODEL_METADATA[id]?.input?.includes('image'))
+    const imageSet = new Set(imageModels)
     const modelsConfig = {
       $schema: 'https://pi.dev/schemas/models.schema.json',
       providers: {
@@ -677,7 +722,12 @@ export class AgentManager {
           baseUrl: apiUrl.replace(/\/+$/, ''),
           api: provider === 'anthropic' ? 'anthropic-messages' : 'openai-completions',
           apiKey: `$${API_KEY_ENV}`,
-          models: modelIds.map((id) => ({ id, ...(KNOWN_MODEL_METADATA[id] ?? {}) })),
+          models: modelIds.map((id) => ({
+            id,
+            ...(KNOWN_MODEL_METADATA[id] ?? {}),
+            // Pi SDK 按 input 决定是否把图片传给模型；以用户勾选为准
+            input: imageSet.has(id) ? ['text', 'image'] : ['text'],
+          })),
         },
       },
     }
@@ -2091,6 +2141,10 @@ ${body.join('\n')}
       ]
 
       const listed = config.apiConfig.availableModels ?? []
+      const declaredImages = Array.isArray(config.apiConfig.imageModels)
+        ? config.apiConfig.imageModels
+        : ids.filter((id) => KNOWN_MODEL_METADATA[id]?.input?.includes('image'))
+      const imageSet = new Set(declaredImages)
       const models = ids.map((id): ModelCapabilityInfo => {
         const model = this.modelRuntime!.getModel(WORKBENCH_PROVIDER_ID, id)
         const known = KNOWN_MODEL_METADATA[id]
@@ -2105,7 +2159,7 @@ ${body.join('\n')}
             contextWindow: known?.contextWindow ?? null,
             maxTokens: known?.maxTokens ?? null,
             reasoning: known?.reasoning ?? null,
-            vision: known?.input?.includes('image') ?? null,
+            vision: imageSet.has(id),
             thinkingLevels: [],
           }
         }
@@ -2117,7 +2171,7 @@ ${body.join('\n')}
           contextWindow: known ? model.contextWindow : null,
           maxTokens: known ? model.maxTokens : null,
           reasoning: known ? supportsThinking : null,
-          vision: known ? Array.isArray(model.input) && model.input.includes('image') : null,
+          vision: imageSet.has(id),
           thinkingLevels:
             known && supportsThinking
               ? THINKING_LEVELS.filter(
@@ -2761,6 +2815,12 @@ ${body.join('\n')}
       ? maybeOptions
       : (messageOrOptions as AgentChatOptions | undefined)
 
+    const imageCheck = validateChatImages(options?.images)
+    if (imageCheck.error) {
+      return { success: false, error: imageCheck.error }
+    }
+    const chatImages = imageCheck.images
+
     // 已有运行时时同步置位，避免 dispose 在 await 间隙漏掉正在启动的请求
     let runtime: SessionRuntime | null = sessionId
       ? this.runtimes.get(sessionId) ?? null
@@ -2850,19 +2910,11 @@ ${body.join('\n')}
       const session = runtime.session
       const planBefore = runtime.extras.plan?.id ?? null
       const promptText = runtime.modeState.current === 'plan' ? wrapPlanPrompt(message) : message
-      const images = Array.isArray(options?.images)
-        ? options.images
-            .filter(
-              (image) =>
-                image &&
-                typeof image.data === 'string' &&
-                image.data.length > 0 &&
-                typeof image.mimeType === 'string' &&
-                image.mimeType.startsWith('image/')
-            )
-            .slice(0, 4)
-            .map((image) => ({ type: 'image' as const, data: image.data, mimeType: image.mimeType }))
-        : []
+      const images = chatImages.map((image) => ({
+        type: 'image' as const,
+        data: image.data,
+        mimeType: image.mimeType,
+      }))
       const promptPromise = session.prompt(
         promptText,
         images.length > 0 ? { images } : undefined

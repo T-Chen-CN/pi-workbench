@@ -94,6 +94,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     apiKey: '',
     availableModels: [],
     selectedModel: '',
+    imageModels: [],
   })
 
   const [isSaving, setIsSaving] = useState(false)
@@ -258,7 +259,11 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
       const result = await api.apiConfigGet()
       if (result.success && result.config) {
         // 只支持 OpenAI 兼容渠道，旧配置一律按兼容模式处理
-        setApiConfig({ ...result.config, provider: 'custom' })
+        setApiConfig({
+          ...result.config,
+          provider: 'custom',
+          imageModels: result.config.imageModels ?? [],
+        })
       }
     } catch (error) {
       console.error('[Settings] Failed to load API config:', error)
@@ -306,6 +311,18 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     } finally {
       setIsFetchingModels(false)
     }
+  }
+
+  const toggleImageModel = (model: string, checked: boolean) => {
+    setApiConfig((prev) => {
+      const current = prev.imageModels ?? []
+      return {
+        ...prev,
+        imageModels: checked
+          ? [...new Set([...current, model])]
+          : current.filter((item) => item !== model),
+      }
+    })
   }
 
   const handleSaveConfig = async () => {
@@ -568,6 +585,29 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                   ))
                 )}
               </Select>
+            </Field>
+
+            <Field label={t('modelImageSupport')} hint={t('modelImageSupportHint')}>
+              {apiConfig.availableModels.length === 0 ? (
+                <span className="type-caption text-ink-muted">{t('noModelsAvailable')}</span>
+              ) : (
+                <div className="max-h-48 overflow-y-auto border border-rule-hairline bg-raised">
+                  {apiConfig.availableModels.map((model) => (
+                    <label
+                      key={model}
+                      className="flex items-center gap-2 border-b border-rule-divide px-3 py-1.5 last:border-b-0 type-value text-ink"
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-3 w-3 flex-shrink-0 accent-[rgb(var(--accent))]"
+                        checked={(apiConfig.imageModels ?? []).includes(model)}
+                        onChange={(event) => toggleImageModel(model, event.target.checked)}
+                      />
+                      <span className="min-w-0 truncate type-data">{model}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
             </Field>
 
             <div className="mt-1 flex items-center gap-3">

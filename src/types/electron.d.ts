@@ -384,6 +384,8 @@ export interface ApiConfig {
   apiKey: string
   availableModels: string[]
   selectedModel: string
+  /** 用户勾选为“支持图片”的模型（R-08 优化）；缺省时由主进程填充内置默认值 */
+  imageModels?: string[]
 }
 
 export interface AgentInitConfig {
