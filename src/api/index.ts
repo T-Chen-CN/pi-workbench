@@ -33,7 +33,10 @@ import type {
   TerminalResult,
   UpdateCheckResult,
   UpdateActionResult,
-  UpdateStatus,
+  UpdateState,
+  UpdateStateResult,
+  AppInfoResult,
+  AppActiveWorkResult,
   DraftListResult,
   DraftResult,
 } from '../types/electron'
@@ -41,6 +44,13 @@ import type {
 // Mock API for browser development
 const MOCK_CONFIG_KEY = 'pi-workbench-api-config'
 const MOCK_SETTINGS_KEY = 'pi-workbench-settings'
+
+const mockUpdateState: UpdateState = {
+  status: 'unsupported',
+  currentVersion: '0.0.0-web',
+  platform: 'web',
+  canAutoInstall: false,
+}
 
 const mockAPI = {
   platform: 'web',
@@ -100,17 +110,42 @@ const mockAPI = {
   logRenderer: async () => ({ success: true }),
   updateCheck: async (): Promise<UpdateCheckResult> => ({
     success: false,
-    error: 'Updates are only available in the Electron app',
+    state: mockUpdateState,
+    error: 'ERR_UPDATE_NOT_PACKAGED',
   }),
   updateDownload: async (): Promise<UpdateActionResult> => ({
     success: false,
-    error: 'Updates are only available in the Electron app',
+    error: 'ERR_UPDATE_NOT_PACKAGED',
   }),
   updateInstall: async (): Promise<UpdateActionResult> => ({
     success: false,
-    error: 'Updates are only available in the Electron app',
+    error: 'ERR_UPDATE_NOT_PACKAGED',
   }),
-  onUpdateStatus: (_callback: (status: UpdateStatus) => void) => () => {},
+  updateGetState: async (): Promise<UpdateStateResult> => ({
+    success: true,
+    state: mockUpdateState,
+  }),
+  updateOpenDownload: async (): Promise<UpdateActionResult> => ({
+    success: false,
+    error: 'ERR_UPDATE_NOT_PACKAGED',
+  }),
+  onUpdateStatus: (_callback: (status: UpdateState) => void) => () => {},
+  appGetInfo: async (): Promise<AppInfoResult> => ({
+    success: true,
+    info: {
+      version: '0.0.0-web',
+      electron: '-',
+      chrome: '-',
+      node: '-',
+      platform: 'web',
+      arch: '-',
+      appDir: '/mock/app/dir',
+    },
+  }),
+  appHasActiveWork: async (): Promise<AppActiveWorkResult> => ({
+    success: true,
+    terminal: false,
+  }),
   getSettings: async (): Promise<GetSettingsResult> => {
     const defaults = {
       language: 'zh',
@@ -315,7 +350,11 @@ export const api = {
   updateCheck: () => electronAPI.updateCheck(),
   updateDownload: () => electronAPI.updateDownload(),
   updateInstall: () => electronAPI.updateInstall(),
-  onUpdateStatus: (callback: (status: UpdateStatus) => void) => electronAPI.onUpdateStatus(callback),
+  updateGetState: () => electronAPI.updateGetState(),
+  updateOpenDownload: () => electronAPI.updateOpenDownload(),
+  onUpdateStatus: (callback: (status: UpdateState) => void) => electronAPI.onUpdateStatus(callback),
+  appGetInfo: () => electronAPI.appGetInfo(),
+  appHasActiveWork: () => electronAPI.appHasActiveWork(),
   getSettings: () => electronAPI.getSettings(),
   saveSettings: (settings: any) => electronAPI.saveSettings(settings),
   getRecentWorkspaces: () => electronAPI.getRecentWorkspaces(),

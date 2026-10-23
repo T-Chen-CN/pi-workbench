@@ -132,12 +132,20 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
 
 ## 4.1 发布与自动更新（GitHub Releases）
 
-- 发布前先把 `package.json` 的 `version` 提升到目标版本。
-- 推送 `v*` 标签（例如 `git tag v0.1.1 && git push origin v0.1.1`）会触发
-  `.github/workflows/release.yml`：在 Windows runner 上构建 NSIS 安装包并上传到 GitHub Release。
-- 打包版本通过 `electron-updater` 检查 GitHub Release；CI 与打包冒烟使用
-  `--publish never`，不会误发布。
-- 本地验证打包：`npx electron-builder --win --dir --publish never`。
+- 发布前先把 `package.json` 的 `version` 提升到目标版本（当前 `0.2.0`）。
+- 推送 `v*` 标签（例如 `git tag v0.2.0 && git push origin v0.2.0`）会触发
+  `.github/workflows/release.yml`：
+  1. `verify-version` 校验标签与 `package.json` 版本一致，不一致直接失败；
+  2. `build` 在 Windows / macOS / Linux 三个 runner 上构建 NSIS、universal dmg、AppImage；
+  3. `publish` 汇总产物并上传到同一个 GitHub Release（含 `latest.yml` / `latest-linux.yml` / blockmap）。
+- 当前**不签名、不公证**：
+  - Windows 用户首次运行安装包可能看到 SmartScreen 提示；
+  - macOS 应用未签名，**不能自动安装更新**，应用只检查版本并打开 Release 页面，用户下载 dmg 后拖入 Applications 覆盖安装；
+  - Linux AppImage 可正常自动更新（要求 AppImage 文件所在目录可写）。
+- 更新行为：启动 12 秒后静默检查；Windows / Linux 自动下载、不自动安装；下载完成后弹窗，拒绝则下次启动再提示。
+- 安装包缓存：`{appDir}/cache/{updaterCacheDirName}`（自定义 AppAdapter 覆盖 electron-updater 的系统缓存目录）。
+- CI 与打包冒烟使用 `--publish never`，不会误发布。
+- 本地验证打包：`npx electron-builder --win --dir --publish never`（macOS / Linux 需在对应系统上执行）。
 - CI 的 `package-smoke` job 每次 push / PR 都会执行一次未压缩打包，防止打包配置回归。
 
 ---
@@ -157,19 +165,24 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时执行：`npm ci` → type-ch
 
 ## 6. 便携式数据目录
 
-应用在可执行文件所在目录（开发模式为项目根目录）创建并维护：
+Windows / Linux（AppImage 放在 `.AppImage` 文件旁边）在可执行文件所在目录创建并维护：
 
 ```
 {appDir}/
 ├── config/          # settings.json, api-config.json（API Key 经 safeStorage 加密）
-├── cache/           # 临时文件、Web dev 模式 Agent 数据
-├── data/            # Agent 模型配置与会话（data/agent/）
-└── logs/            # 预留
+├── cache/           # 临时文件、Web dev 模式 Agent 数据、更新安装包缓存（cache/{updaterCacheDirName}）
+├── data/            # Agent 模型配置与会话（data/agent/）、Chromium profile（data/profile）
+└── logs/            # main.log / renderer.log / agent.log
 ```
+
+Windows 安装目录必须可写：如果安装到 `C:\Program Files` 等位置，启动时会弹窗提示重新安装到用户可写目录。
+
+**macOS 例外**：应用包内不可写且会被更新替换，打包版数据目录为
+`~/Library/Application Support/pi-workbench`（同上结构）。这是经项目所有者确认的便携式例外。
 
 工作区级数据：`{workspace}/.pi-workbench/`
 
-卸载 / 迁移时整体拷贝应用目录即可。
+卸载 / 迁移时整体拷贝应用目录即可（macOS 为上述 Application Support 目录）。
 
 ---
 

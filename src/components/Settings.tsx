@@ -1,5 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { Info, KeyRound, Keyboard, RefreshCw, Save, SlidersHorizontal } from 'lucide-react'
+import {
+  ExternalLink,
+  Info,
+  KeyRound,
+  Keyboard,
+  RefreshCw,
+  Save,
+  SlidersHorizontal,
+} from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useThemeStore, type ThemeMode } from '../store/themeStore'
 import {
@@ -8,15 +16,16 @@ import {
   MIN_AUTO_SAVE_DELAY,
   MAX_AUTO_SAVE_DELAY,
 } from '../store/settingsStore'
+import { useUpdaterStore } from '../store/updaterStore'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
-import type { ApiConfig } from '../types/electron'
+import type { ApiConfig, AppInfo } from '../types/electron'
 import { isMacPlatform } from '../utils/shortcuts'
 import { Button, Field, Input, Select } from './ui'
-import { KeyCap } from './patterns'
+import { KeyCap, Meter } from './patterns'
 
-type Section = 'general' | 'api' | 'shortcuts' | 'about'
+export type SettingsSection = 'general' | 'api' | 'shortcuts' | 'about'
 
 const ShortcutKeys: React.FC<{ keys: string[] }> = ({ keys }) => (
   <span className="flex flex-shrink-0 items-center gap-1 type-key text-ink-muted">
@@ -31,13 +40,14 @@ const ShortcutKeys: React.FC<{ keys: string[] }> = ({ keys }) => (
 
 interface SettingsProps {
   onClose?: () => void
+  initialSection?: SettingsSection
 }
 
-export const Settings: React.FC<SettingsProps> = () => {
+export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }) => {
   const { language, setLanguage, t } = useI18nStore()
   const { mode, setMode } = useThemeStore()
   const { autoSave, autoSaveDelay, setAutoSave, setAutoSaveDelay } = useSettingsStore()
-  const [section, setSection] = useState<Section>('general')
+  const [section, setSection] = useState<SettingsSection>(initialSection)
   const isMac = isMacPlatform()
   const mod = isMac ? '⌘' : 'Ctrl'
   const shift = isMac ? '⇧' : 'Shift'
@@ -55,66 +65,69 @@ export const Settings: React.FC<SettingsProps> = () => {
   const [isFetchingModels, setIsFetchingModels] = useState(false)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle')
 
-  type UpdateState = {
-    status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'latest' | 'error'
-    version?: string
-    percent?: number
-    error?: string
-  }
-  const [updateState, setUpdateState] = useState<UpdateState>({ status: 'idle' })
+  const update = useUpdaterStore((store) => store.state)
+  const applyUpdateState = useUpdaterStore((store) => store.applyState)
+  const requestInstallPrompt = useUpdaterStore((store) => store.requestPrompt)
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
 
   useEffect(() => {
-    return api.onUpdateStatus((status) => {
-      if (status.type === 'checking') {
-        setUpdateState({ status: 'checking' })
-      } else if (status.type === 'available') {
-        setUpdateState({ status: 'available', version: status.version })
-      } else if (status.type === 'not-available') {
-        setUpdateState({ status: 'latest' })
-      } else if (status.type === 'error') {
-        setUpdateState({ status: 'error', error: status.message })
-      } else if (status.type === 'download-progress') {
-        setUpdateState({ status: 'downloading', percent: Math.round(status.percent) })
-      } else if (status.type === 'downloaded') {
-        setUpdateState({ status: 'downloaded', version: status.version })
-      }
-    })
+    api
+      .appGetInfo()
+      .then((result) => {
+        if (result.success) setAppInfo(result.info)
+      })
+      .catch((error) => console.error('[Settings] Failed to load app info:', error))
   }, [])
 
   const handleCheckUpdate = async () => {
-    setUpdateState({ status: 'checking' })
-    const result = await api.updateCheck()
-    if (!result.success) {
-      setUpdateState({ status: 'error', error: result.error })
-    } else if (result.update) {
-      setUpdateState({ status: 'available', version: result.update.version })
-    } else {
-      setUpdateState({ status: 'latest' })
+    try {
+      const result = await api.updateCheck()
+      applyUpdateState(result.state)
+      if (!result.success) {
+        toast.error(
+          t('updateFailed', { error: localizeError(result.error) || t('unknownError') })
+        )
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      toast.error(t('updateFailed', { error: localizeError(message) || t('unknownError') }))
     }
   }
 
   const handleDownloadUpdate = async () => {
-    setUpdateState({ status: 'downloading', percent: 0 })
     const result = await api.updateDownload()
     if (!result.success) {
-      setUpdateState({ status: 'error', error: result.error })
+      toast.error(
+        t('updateFailed', { error: localizeError(result.error) || t('unknownError') })
+      )
+    }
+  }
+
+  const handleOpenDownload = async () => {
+    const result = await api.updateOpenDownload()
+    if (!result.success) {
+      toast.error(
+        t('updateFailed', { error: localizeError(result.error) || t('unknownError') })
+      )
     }
   }
 
   const updateStatusText = (() => {
-    switch (updateState.status) {
+    switch (update.status) {
+      case 'unsupported':
+        return t('updateUnsupported')
       case 'checking':
         return t('checkingUpdates')
       case 'available':
-        return t('updateAvailable', { version: updateState.version ?? '' })
+        return t('updateAvailable', { version: update.version ?? '' })
       case 'downloading':
-        return t('updateDownloading', { percent: updateState.percent ?? 0 })
+        return t('updateDownloading', { percent: update.percent ?? 0 })
       case 'downloaded':
         return t('updateDownloaded')
-      case 'latest':
+      case 'not-available':
         return t('updateLatest')
       case 'error':
-        return t('updateFailed', { error: localizeError(updateState.error) || t('unknownError') })
+        return t('updateFailed', { error: localizeError(update.message) || t('unknownError') })
       default:
         return ''
     }
@@ -240,7 +253,7 @@ export const Settings: React.FC<SettingsProps> = () => {
     }
   }
 
-  const navItems: Array<{ id: Section; label: string; icon: typeof Info }> = [
+  const navItems: Array<{ id: SettingsSection; label: string; icon: typeof Info }> = [
     { id: 'general', label: t('general'), icon: SlidersHorizontal },
     { id: 'api', label: t('apiConfiguration'), icon: KeyRound },
     { id: 'shortcuts', label: t('shortcuts'), icon: Keyboard },
@@ -486,10 +499,19 @@ export const Settings: React.FC<SettingsProps> = () => {
               </div>
               <div>
                 <p className="m-0 type-value font-medium text-ink">Pi Workbench</p>
-                <p className="m-0 text-ink-muted">{t('infoVersion')}</p>
+                <p className="m-0 text-ink-muted">
+                  {t('aboutVersion', {
+                    version: appInfo?.version ?? update.currentVersion ?? '',
+                  })}
+                </p>
               </div>
             </div>
             <dl className="m-0 mt-2 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2">
+              <dt className="text-ink-muted">{t('aboutRuntime')}</dt>
+              <dd className="m-0 text-ink">
+                Electron {appInfo?.electron ?? '—'} · Chromium {appInfo?.chrome ?? '—'} · Node{' '}
+                {appInfo?.node ?? '—'}
+              </dd>
               <dt className="text-ink-muted">{t('aboutFramework')}</dt>
               <dd className="m-0 text-ink">{t('infoFramework')}</dd>
               <dt className="text-ink-muted">{t('aboutArchitecture')}</dt>
@@ -499,16 +521,27 @@ export const Settings: React.FC<SettingsProps> = () => {
             </dl>
 
             <div className="mt-4 border-t border-rule-divide pt-4">
-              <p className="m-0 type-caption text-ink-muted">{t('updates')}</p>
+              <div className="flex items-baseline justify-between gap-3">
+                <p className="m-0 type-caption text-ink-muted">{t('updates')}</p>
+                <span className="type-data text-ink-muted">
+                  v{update.currentVersion || appInfo?.version || '—'}
+                </span>
+              </div>
+
               <div className="mt-2 flex flex-wrap items-center gap-3">
-                {(updateState.status === 'idle' ||
-                  updateState.status === 'latest' ||
-                  updateState.status === 'error') && (
-                  <Button size="sm" icon={RefreshCw} onClick={() => void handleCheckUpdate()}>
-                    {t('checkForUpdates')}
-                  </Button>
-                )}
-                {updateState.status === 'available' && (
+                {update.status !== 'unsupported' &&
+                  update.status !== 'downloading' &&
+                  update.status !== 'downloaded' && (
+                    <Button
+                      size="sm"
+                      icon={RefreshCw}
+                      loading={update.status === 'checking'}
+                      onClick={() => void handleCheckUpdate()}
+                    >
+                      {update.status === 'checking' ? t('checkingUpdates') : t('checkForUpdates')}
+                    </Button>
+                  )}
+                {update.status === 'available' && update.canAutoInstall && (
                   <Button
                     variant="primary"
                     size="sm"
@@ -517,11 +550,22 @@ export const Settings: React.FC<SettingsProps> = () => {
                     {t('downloadUpdate')}
                   </Button>
                 )}
-                {updateState.status === 'downloaded' && (
+                {update.status === 'available' && !update.canAutoInstall && (
                   <Button
                     variant="primary"
                     size="sm"
-                    onClick={() => void api.updateInstall()}
+                    icon={ExternalLink}
+                    onClick={() => void handleOpenDownload()}
+                  >
+                    {t('updateOpenDownload')}
+                  </Button>
+                )}
+                {update.status === 'downloaded' && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={RefreshCw}
+                    onClick={requestInstallPrompt}
                   >
                     {t('restartToInstall')}
                   </Button>
@@ -529,13 +573,40 @@ export const Settings: React.FC<SettingsProps> = () => {
                 {updateStatusText && (
                   <span
                     className={
-                      updateState.status === 'error' ? 'type-caption text-danger' : 'type-caption text-ink-muted'
+                      update.status === 'error'
+                        ? 'type-caption text-danger'
+                        : 'type-caption text-ink-muted'
                     }
                   >
                     {updateStatusText}
                   </span>
                 )}
               </div>
+
+              {update.status === 'downloading' && (
+                <div className="mt-2 flex max-w-[280px] items-center gap-2">
+                  <Meter
+                    value={update.percent ?? 0}
+                    label={t('updates')}
+                    className="flex-1"
+                  />
+                  <span className="type-caption text-ink-muted">{update.percent ?? 0}%</span>
+                </div>
+              )}
+
+              {update.status === 'available' && !update.canAutoInstall && (
+                <p className="m-0 mt-2 type-caption text-ink-muted">{t('updateMacManualHint')}</p>
+              )}
+
+              {update.releaseNotes &&
+                (update.status === 'available' || update.status === 'downloaded') && (
+                  <div className="mt-3 flex flex-col gap-1.5">
+                    <span className="type-label text-ink-muted">{t('updateNotes')}</span>
+                    <div className="max-h-40 overflow-y-auto whitespace-pre-wrap border border-rule-hairline bg-sunken p-2.5 type-caption text-ink-muted">
+                      {update.releaseNotes}
+                    </div>
+                  </div>
+                )}
             </div>
           </div>
         )}

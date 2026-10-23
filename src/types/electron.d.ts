@@ -19,7 +19,11 @@ export interface ElectronAPI {
   updateCheck: () => Promise<UpdateCheckResult>
   updateDownload: () => Promise<UpdateActionResult>
   updateInstall: () => Promise<UpdateActionResult>
-  onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
+  updateGetState: () => Promise<UpdateStateResult>
+  updateOpenDownload: () => Promise<UpdateActionResult>
+  onUpdateStatus: (callback: (status: UpdateState) => void) => () => void
+  appGetInfo: () => Promise<AppInfoResult>
+  appHasActiveWork: () => Promise<AppActiveWorkResult>
   getSettings: () => Promise<GetSettingsResult>
   saveSettings: (settings: any) => Promise<SaveSettingsResult>
   getRecentWorkspaces: () => Promise<RecentWorkspacesResult>
@@ -489,9 +493,33 @@ export interface DraftListResult {
   error?: string
 }
 
+export type UpdateStatusKind =
+  | 'unsupported'
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'not-available'
+  | 'error'
+
+export interface UpdateState {
+  status: UpdateStatusKind
+  currentVersion: string
+  platform: string
+  /** Windows / Linux 可自动下载并安装；macOS 需手动下载 */
+  canAutoInstall: boolean
+  version?: string
+  percent?: number
+  releaseNotes?: string
+  message?: string
+  checkedAt?: number
+  downloadUrl?: string
+}
+
 export interface UpdateCheckResult {
   success: boolean
-  update?: { version: string }
+  state: UpdateState
   error?: string
 }
 
@@ -500,13 +528,31 @@ export interface UpdateActionResult {
   error?: string
 }
 
-export type UpdateStatus =
-  | { type: 'checking' }
-  | { type: 'available'; version: string; releaseNotes?: string }
-  | { type: 'not-available'; version?: string }
-  | { type: 'error'; message: string }
-  | { type: 'download-progress'; percent: number; transferred: number; total: number }
-  | { type: 'downloaded'; version: string }
+export interface UpdateStateResult {
+  success: boolean
+  state: UpdateState
+  error?: string
+}
+
+export interface AppInfo {
+  version: string
+  electron: string
+  chrome: string
+  node: string
+  platform: string
+  arch: string
+  appDir: string
+}
+
+export interface AppInfoResult {
+  success: boolean
+  info: AppInfo
+}
+
+export interface AppActiveWorkResult {
+  success: boolean
+  terminal: boolean
+}
 
 declare global {
   interface Window {

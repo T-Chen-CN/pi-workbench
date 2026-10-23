@@ -9,8 +9,40 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: windows-latest
+  verify-version:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # 标签与 package.json 版本必须一致，否则 latest.yml 的版本会和应用自报版本错位
+      - name: Check tag matches package.json
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            const tag = process.env.GITHUB_REF_NAME.replace(/^v/, '');
+            if (pkg.version !== tag) {
+              console.error('Tag ' + process.env.GITHUB_REF_NAME + ' does not match package.json version ' + pkg.version);
+              process.exit(1);
+            }
+          "
+
+  build:
+    needs: verify-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+          - os: macos-latest
+            platform: mac
+          - os: ubuntu-24.04
+            platform: linux
+    runs-on: ${{ matrix.os }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -25,5 +57,41 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - name: Build and publish Windows installers
-        run: npx electron-builder --win --publish always
+
+      - name: Build installers (no publish)
+        run: npx electron-builder --${{ matrix.platform }} --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.platform }}
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/*.dmg
+            release/*.AppImage
+            release/*.AppImage.blockmap
+            release/*.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME"
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+
+      - name: Upload installers and update manifests
+        run: |
+          find artifacts -type f -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --clobber

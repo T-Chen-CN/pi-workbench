@@ -195,6 +195,33 @@ export const KeyCap: React.FC<{ children: React.ReactNode; className?: string }>
   </kbd>
 )
 
+export interface MeterProps {
+  /** 0–100 */
+  value: number
+  label?: string
+  className?: string
+}
+
+/** 细线进度条：用于下载进度等线性过程，不使用动画或发光 */
+export const Meter: React.FC<MeterProps> = ({ value, label, className = '' }) => {
+  const percent = Math.max(0, Math.min(100, Math.round(value)))
+  return (
+    <span
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+      aria-label={label}
+      className={`block h-1 w-full overflow-hidden bg-sunken ${className}`}
+    >
+      <span
+        className="block h-full bg-accent transition-all duration-150"
+        style={{ width: `${percent}%` }}
+      />
+    </span>
+  )
+}
+
 export interface SearchFieldProps {
   value: string
   onChange: (value: string) => void

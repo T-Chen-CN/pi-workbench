@@ -15,6 +15,12 @@ const EXACT: Record<string, TranslationKey> = {
   'Please enter a valid API URL': 'errInvalidApiUrl',
   'API URL must start with http:// or https://': 'errApiUrlScheme',
   'API key not configured. Please set it in Settings.': 'errApiKeyNotConfigured',
+  ERR_UPDATE_NOT_PACKAGED: 'errUpdateNotPackaged',
+  ERR_UPDATE_NO_RELEASE: 'errUpdateNoRelease',
+  ERR_UPDATE_NETWORK: 'errUpdateNetwork',
+  ERR_UPDATE_RATE_LIMIT: 'errUpdateRateLimit',
+  ERR_UPDATE_MANUAL: 'errUpdateManual',
+  ERR_UPDATE_NOT_DOWNLOADED: 'errUpdateNotDownloaded',
 }
 
 const PREFIXES: Array<[string, TranslationKey]> = [

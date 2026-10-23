@@ -6,6 +6,7 @@ import { useSelectionStore } from '../store/selectionStore'
 import { useSessionStore } from '../store/sessionStore'
 import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
+import { useUpdaterStore } from '../store/updaterStore'
 import { IconButton, Spinner } from './ui'
 import type { PluginCommandInfo, PluginInfo } from '../types/electron'
 
@@ -20,6 +21,7 @@ interface CommandOutput {
 }
 
 const ATTACH_SELECTION_COMMAND_ID = 'workbench.attach-selection'
+const CHECK_UPDATES_COMMAND_ID = 'workbench.check-updates'
 
 const BUILTIN_COMMANDS: Array<{
   id: string
@@ -30,9 +32,11 @@ const BUILTIN_COMMANDS: Array<{
     | 'renameSession'
     | 'deleteSession'
     | 'closeSessionTab'
+    | 'checkForUpdates'
   event?: string
 }> = [
   { id: ATTACH_SELECTION_COMMAND_ID, titleKey: 'attachSelection' },
+  { id: CHECK_UPDATES_COMMAND_ID, titleKey: 'checkForUpdates' },
   { id: 'workbench.session-new', titleKey: 'newSession', event: 'session-new' },
   { id: 'workbench.session-list', titleKey: 'sessionList', event: 'session-list' },
   { id: 'workbench.session-rename', titleKey: 'renameSession', event: 'session-rename' },
@@ -143,6 +147,26 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
         window.dispatchEvent(new CustomEvent('attach-selection'))
         setOutput({ title: command.title, text: t('selectionAttached'), success: true })
         toast.success(`${command.title}: ${t('selectionAttached')}`)
+        return
+      }
+
+      if (command.id === CHECK_UPDATES_COMMAND_ID) {
+        const result = await api.updateCheck()
+        useUpdaterStore.getState().applyState(result.state)
+        if (!result.success) {
+          const message = localizeError(result.error) || t('unknownError')
+          setOutput({ title: command.title, text: message, success: false })
+          toast.error(t('updateFailed', { error: message }))
+          return
+        }
+        const status =
+          result.state.status === 'available'
+            ? t('updateAvailable', { version: result.state.version ?? '' })
+            : result.state.status === 'not-available'
+              ? t('updateLatest')
+              : t('checkingUpdates')
+        setOutput({ title: command.title, text: status, success: true })
+        toast.success(status)
         return
       }
 
