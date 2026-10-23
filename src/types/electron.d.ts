@@ -390,6 +390,14 @@ export type AgentStreamEvent =
       resultPreview?: string
       filePath?: string
     }
+  | {
+      type: 'retry_start'
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      message?: string
+    }
+  | { type: 'retry_end'; success: boolean }
 
 export type AgentStreamPayload = {
   /** 发起请求时生成，用于忽略过期会话的增量 */

@@ -314,6 +314,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const contextUsage = conversation?.contextUsage ?? null
   const contextPercent = contextUsage?.percent ?? null
   const sessionSettings = conversation?.sessionSettings ?? null
+  const retryStatus = conversation?.retryStatus ?? null
+  let lastAssistantMessage: ChatMessage | null = null
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index].role === 'assistant') {
+      lastAssistantMessage = messages[index]
+      break
+    }
+  }
   const [availableModels, setAvailableModels] = useState<string[]>([])
   let lastUserMessageId: string | null = null
   for (let index = messages.length - 1; index >= 0; index--) {
@@ -950,6 +958,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           case 'tool_end':
             store.endToolPart(key, assistantId, event)
             break
+          case 'retry_start':
+            store.setRetryStatus(key, {
+              attempt: event.attempt,
+              maxAttempts: event.maxAttempts,
+              delayMs: event.delayMs,
+              message: event.message,
+            })
+            break
+          case 'retry_end':
+            if (event.success) store.setRetryStatus(key, null)
+            break
         }
       }
     })
@@ -1048,6 +1067,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       useChatStore.getState().setLoading(key, false)
       useChatStore.getState().clearAttachments(key)
       useSessionStore.getState().markStreaming(workspacePath, sessionId, false)
+      useChatStore.getState().setRetryStatus(key, null)
       void refreshContextUsage(sessionId)
 
       // 本轮结束：自动发送下一条排队消息（用户主动停止时不自动发送）
@@ -1569,7 +1589,25 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           {(error || fatalError) && (
             <div className="mt-3 flex items-start gap-2 border-l-2 border-danger bg-danger/5 py-2 pl-3 type-caption text-danger">
               <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
-              <span className="leading-relaxed">{fatalError || error}</span>
+              <span className="min-w-0 flex-1 leading-relaxed">{fatalError || error}</span>
+              <span className="flex flex-shrink-0 items-center gap-2">
+                {lastAssistantMessage && !isLoading && (
+                  <button
+                    type="button"
+                    onClick={() => void handleRetryMessage(lastAssistantMessage!)}
+                    className="text-ink-muted transition-colors hover:text-ink"
+                  >
+                    {t('retryMessage')}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))}
+                  className="text-ink-muted transition-colors hover:text-ink"
+                >
+                  {t('goToSettings')}
+                </button>
+              </span>
             </div>
           )}
         </div>
@@ -1578,6 +1616,21 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       {/* Composer */}
       {activeSessionId && (
         <div className="flex-shrink-0 p-2.5">
+          {retryStatus && (
+            <div className="mb-2 flex items-center gap-2 type-caption text-warning">
+              <Spinner size={10} />
+              <span>
+                {t('retryInProgress', {
+                  attempt: retryStatus.attempt,
+                  max: retryStatus.maxAttempts,
+                  seconds: Math.max(1, Math.round(retryStatus.delayMs / 1000)),
+                })}
+              </span>
+              {retryStatus.message && (
+                <span className="min-w-0 truncate text-ink-muted">{retryStatus.message}</span>
+              )}
+            </div>
+          )}
           {contextUsage && contextPercent != null && (
             <div className="mb-2 flex items-center gap-2">
               <Meter

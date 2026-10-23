@@ -1467,3 +1467,32 @@ describe('session model and thinking controls', () => {
     expect(result.error).toContain('Unknown thinking level')
   })
 })
+
+describe('provider retry events', () => {
+  it('forwards auto-retry starts and ends to the renderer', async () => {
+    const traces: Array<Record<string, unknown>> = []
+    const session = createFakeSession(async (fake) => {
+      fake.emit({
+        type: 'auto_retry_start',
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs: 2000,
+        errorMessage: '429 Too Many Requests',
+      })
+      fake.emit({ type: 'auto_retry_end', success: true })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await manager.chat('hi', { onTrace: (event) => traces.push(event) })
+
+    expect(traces).toContainEqual({
+      type: 'retry_start',
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2000,
+      message: '429 Too Many Requests',
+    })
+    expect(traces).toContainEqual({ type: 'retry_end', success: true })
+  })
+})

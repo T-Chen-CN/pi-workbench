@@ -63,6 +63,13 @@ export interface ConversationState {
   contextUsage: ContextUsageInfo | null
   /** 会话级模型与思考级别 */
   sessionSettings: { modelId?: string; thinkingLevel?: string } | null
+  /** 供应商自动重试状态 */
+  retryStatus: {
+    attempt: number
+    maxAttempts: number
+    delayMs: number
+    message?: string
+  } | null
 }
 
 const EMPTY_CONVERSATION: ConversationState = {
@@ -75,6 +82,7 @@ const EMPTY_CONVERSATION: ConversationState = {
   pending: [],
   contextUsage: null,
   sessionSettings: null,
+  retryStatus: null,
 }
 
 /** 会话在 store 中的键：工作区 + 会话，避免跨工作区串数据 */
@@ -126,6 +134,15 @@ interface ChatState {
   setSessionSettings: (
     key: string,
     settings: { modelId?: string; thinkingLevel?: string } | null
+  ) => void
+  setRetryStatus: (
+    key: string,
+    status: {
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      message?: string
+    } | null
   ) => void
   removeMessage: (key: string, id: string) => void
   truncateLastTurn: (key: string) => void
@@ -503,6 +520,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) =>
       updateExisting(state, key, (current) => ({ ...current, sessionSettings: settings }))
     ),
+
+  setRetryStatus: (key, status) =>
+    set((state) => updateExisting(state, key, (current) => ({ ...current, retryStatus: status }))),
 
   removeMessage: (key, id) =>
     set((state) =>

@@ -302,6 +302,14 @@ export type AgentTraceEvent =
       resultPreview?: string
       filePath?: string
     }
+  | {
+      type: 'retry_start'
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      message?: string
+    }
+  | { type: 'retry_end'; success: boolean }
 
 
 export interface AgentConfig {
@@ -578,15 +586,23 @@ export class AgentManager {
           return
         }
 
-        // Pi SDK 自带自动重试（429 / 5xx / 网络抖动），这里只记录，便于诊断
+        // Pi SDK 自带自动重试（429 / 5xx / 网络抖动），记录并转发给渲染层
         if (event.type === 'auto_retry_start') {
           this.logger.warn(
             `[Agent Manager] Provider retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms: ${event.errorMessage ?? ''}`
           )
+          runtime.onTrace?.({
+            type: 'retry_start',
+            attempt: Number(event.attempt) || 0,
+            maxAttempts: Number(event.maxAttempts) || 0,
+            delayMs: Number(event.delayMs) || 0,
+            message: typeof event.errorMessage === 'string' ? event.errorMessage : undefined,
+          })
           return
         }
         if (event.type === 'auto_retry_end') {
           this.logger.info(`[Agent Manager] Auto retry ${event.success ? 'succeeded' : 'failed'}`)
+          runtime.onTrace?.({ type: 'retry_end', success: Boolean(event.success) })
           return
         }
 
