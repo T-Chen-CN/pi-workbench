@@ -350,6 +350,7 @@ export interface GetSettingsResult {
     theme: string
     autoSave: boolean
     autoSaveDelay: number
+    runWhileBusy?: 'queue' | 'steer'
     [key: string]: any
   }
   error?: string
@@ -484,7 +485,6 @@ export interface ConversationBranchGroup {
 export interface PendingMessageRecord {
   id: string
   text: string
-  behavior: 'queue' | 'steer'
 }
 
 export type PendingMessagesMap = Record<string, PendingMessageRecord[]>

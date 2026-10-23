@@ -458,32 +458,26 @@ describe('sessionStore pending activation', () => {
 })
 
 describe('chatStore pending messages', () => {
-  it('queues, updates and removes pending messages', () => {
+  it('queues and removes pending messages', () => {
     useChatStore.getState().ensureConversation('pending-key')
-    const first = useChatStore.getState().addPending('pending-key', 'first', 'queue')
-    const second = useChatStore.getState().addPending('pending-key', 'second', 'steer')
+    const first = useChatStore.getState().addPending('pending-key', 'first')
+    const second = useChatStore.getState().addPending('pending-key', 'second')
 
     expect(useChatStore.getState().conversations['pending-key'].pending).toHaveLength(2)
 
-    useChatStore.getState().setPendingBehavior('pending-key', first.id, 'steer')
-    expect(
-      useChatStore.getState().conversations['pending-key'].pending.find((item) => item.id === first.id)
-        ?.behavior
-    ).toBe('steer')
-
     useChatStore.getState().removePending('pending-key', second.id)
-    expect(useChatStore.getState().conversations['pending-key'].pending).toHaveLength(1)
+    expect(useChatStore.getState().conversations['pending-key'].pending).toEqual([first])
   })
 
   it('restores pending messages from persisted records', () => {
     useChatStore.getState().ensureConversation('restore-key')
     useChatStore.getState().setPending('restore-key', [
-      { id: 'p1', text: 'resume this', behavior: 'queue' },
-      { id: 'p2', text: 'inject that', behavior: 'steer' },
+      { id: 'p1', text: 'resume this' },
+      { id: 'p2', text: 'inject that' },
     ])
     expect(useChatStore.getState().conversations['restore-key'].pending).toEqual([
-      { id: 'p1', text: 'resume this', behavior: 'queue' },
-      { id: 'p2', text: 'inject that', behavior: 'steer' },
+      { id: 'p1', text: 'resume this' },
+      { id: 'p2', text: 'inject that' },
     ])
   })
 })

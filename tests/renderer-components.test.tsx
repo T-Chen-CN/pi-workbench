@@ -13,6 +13,7 @@ import { useChatStore, conversationKey } from '../src/store/chatStore'
 import { useEditorStore } from '../src/store/editorStore'
 import { useSelectionStore } from '../src/store/selectionStore'
 import { useSessionStore } from '../src/store/sessionStore'
+import { useSettingsStore } from '../src/store/settingsStore'
 import type { AgentStreamEvent, SessionSummary } from '../src/types/electron'
 import { useI18nStore } from '../src/store/i18nStore'
 import { translations } from '../src/i18n/translations'
@@ -157,6 +158,7 @@ beforeEach(() => {
   useEditorStore.getState().reset()
   useSelectionStore.getState().clearSelection()
   useSessionStore.getState().reset()
+  useSettingsStore.getState().setRunWhileBusy('queue')
   useI18nStore.getState().setLanguage('zh')
   vi.clearAllMocks()
   Element.prototype.scrollIntoView = vi.fn()
@@ -303,12 +305,96 @@ describe('ChatPanel', () => {
   it('restores pending messages persisted before restart', async () => {
     vi.mocked(api.getPendingMessages).mockResolvedValue({
       success: true,
-      sessions: { s1: [{ id: 'p1', text: 'resume this turn', behavior: 'queue' }] },
+      sessions: { s1: [{ id: 'p1', text: 'resume this turn' }] },
     })
 
     render(<ChatPanel workspacePath="/ws" />)
 
     expect(await screen.findByText('resume this turn')).toBeTruthy()
+  })
+
+  it('shows the stop button while running with an empty input', async () => {
+    render(<ChatPanel workspacePath="/ws" />)
+    await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+
+    act(() => {
+      useChatStore.getState().ensureConversation(sessionKey)
+      useChatStore.getState().setLoading(sessionKey, true)
+    })
+
+    expect(
+      await screen.findByRole('button', { name: translations.zh.stop })
+    ).toBeTruthy()
+    expect(screen.queryByRole('button', { name: translations.zh.send })).toBeNull()
+  })
+
+  it('shows the send button while running when there is a draft', async () => {
+    render(<ChatPanel workspacePath="/ws" />)
+    const textarea = await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+
+    act(() => {
+      useChatStore.getState().ensureConversation(sessionKey)
+      useChatStore.getState().setLoading(sessionKey, true)
+    })
+    fireEvent.change(textarea, { target: { value: 'draft' } })
+
+    expect(
+      await screen.findByRole('button', { name: translations.zh.send })
+    ).toBeTruthy()
+    expect(screen.queryByRole('button', { name: translations.zh.stop })).toBeNull()
+  })
+
+  it('queues a message sent while running by default', async () => {
+    render(<ChatPanel workspacePath="/ws" />)
+    const textarea = await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+
+    act(() => {
+      useChatStore.getState().ensureConversation(sessionKey)
+      useChatStore.getState().setLoading(sessionKey, true)
+    })
+    fireEvent.change(textarea, { target: { value: 'queue this' } })
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.send }))
+
+    expect(await screen.findByText(translations.zh.pendingNextTurn)).toBeTruthy()
+    expect(useChatStore.getState().conversations[sessionKey].pending[0]?.text).toBe(
+      'queue this'
+    )
+    expect(piAgentAPI.steer).not.toHaveBeenCalled()
+  })
+
+  it('inserts a message into the current turn when configured', async () => {
+    useSettingsStore.getState().setRunWhileBusy('steer')
+    render(<ChatPanel workspacePath="/ws" />)
+    const textarea = await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+
+    act(() => {
+      useChatStore.getState().ensureConversation(sessionKey)
+      useChatStore.getState().setLoading(sessionKey, true)
+    })
+    fireEvent.change(textarea, { target: { value: 'insert this' } })
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.send }))
+
+    await waitFor(() =>
+      expect(piAgentAPI.steer).toHaveBeenCalledWith('/ws', 's1', 'insert this')
+    )
+    expect(useChatStore.getState().conversations[sessionKey].pending).toHaveLength(0)
+  })
+
+  it('inserts a pending message into the current turn on demand', async () => {
+    useChatStore.getState().ensureConversation(sessionKey)
+    useChatStore.getState().addPending(sessionKey, 'send me now')
+    render(<ChatPanel workspacePath="/ws" />)
+    await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+
+    act(() => useChatStore.getState().setLoading(sessionKey, true))
+    fireEvent.click(await screen.findByRole('button', { name: translations.zh.insertNow }))
+
+    await waitFor(() =>
+      expect(piAgentAPI.steer).toHaveBeenCalledWith('/ws', 's1', 'send me now')
+    )
+    await waitFor(() =>
+      expect(useChatStore.getState().conversations[sessionKey].pending).toHaveLength(0)
+    )
   })
 
   it('suggests running tests with the detected workspace type', async () => {

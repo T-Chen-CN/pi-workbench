@@ -10,6 +10,11 @@ export const MIN_AUTO_SAVE_DELAY = 500
 export const MAX_AUTO_SAVE_DELAY = 10_000
 export const DEFAULT_AUTO_SAVE_DELAY = 2000
 
+/** 任务运行时发送消息的默认处理方式 */
+export type RunWhileBusy = 'queue' | 'steer'
+
+export const DEFAULT_RUN_WHILE_BUSY: RunWhileBusy = 'queue'
+
 export const DEFAULT_PERMISSION_POLICY: PermissionPolicy = {
   read: 'allow',
   write: 'ask',
@@ -68,12 +73,14 @@ interface SettingsState {
   notifications: NotificationPrefs
   /** 会话成本预算（美元，0 表示不提醒） */
   budgetUsd: number
+  runWhileBusy: RunWhileBusy
   keybindings: Record<ShortcutId, string>
   setAutoSave: (enabled: boolean) => void
   setAutoSaveDelay: (delayMs: number) => void
   setPermission: (category: ToolCategory, action: PermissionAction) => void
   setNotificationPrefs: (patch: Partial<NotificationPrefs>) => void
   setBudgetUsd: (value: number) => void
+  setRunWhileBusy: (mode: RunWhileBusy) => void
   setKeybinding: (id: ShortcutId, combo: string) => void
   resetKeybindings: () => void
   hydrate: (settings: {
@@ -82,6 +89,7 @@ interface SettingsState {
     permissions?: unknown
     notifications?: unknown
     budgetUsd?: unknown
+    runWhileBusy?: unknown
     keybindings?: unknown
   }) => void
 }
@@ -93,6 +101,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   permissions: { ...DEFAULT_PERMISSION_POLICY },
   notifications: { ...DEFAULT_NOTIFICATION_PREFS },
   budgetUsd: 0,
+  runWhileBusy: DEFAULT_RUN_WHILE_BUSY,
   keybindings: { ...DEFAULT_KEYBINDINGS },
 
   setAutoSave: (enabled) => set({ autoSave: enabled }),
@@ -107,6 +116,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
 
   setBudgetUsd: (value) =>
     set({ budgetUsd: Number.isFinite(value) ? Math.max(0, value) : 0 }),
+
+  setRunWhileBusy: (mode) => set({ runWhileBusy: mode === 'steer' ? 'steer' : 'queue' }),
 
   setKeybinding: (id, combo) =>
     set((state) => ({ keybindings: { ...state.keybindings, [id]: combo.toLowerCase() } })),
@@ -133,6 +144,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         typeof settings.budgetUsd === 'number' && Number.isFinite(settings.budgetUsd)
           ? Math.max(0, settings.budgetUsd)
           : state.budgetUsd,
+      runWhileBusy:
+        settings.runWhileBusy === 'steer' || settings.runWhileBusy === 'queue'
+          ? settings.runWhileBusy
+          : state.runWhileBusy,
       keybindings:
         settings.keybindings === undefined
           ? state.keybindings

@@ -19,6 +19,7 @@ import {
   MIN_AUTO_SAVE_DELAY,
   MAX_AUTO_SAVE_DELAY,
   type NotificationPrefs,
+  type RunWhileBusy,
 } from '../store/settingsStore'
 import { useUpdaterStore } from '../store/updaterStore'
 import { api } from '../api'
@@ -72,12 +73,14 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     permissions,
     notifications,
     budgetUsd,
+    runWhileBusy,
     keybindings,
     setAutoSave,
     setAutoSaveDelay,
     setPermission,
     setNotificationPrefs,
     setBudgetUsd,
+    setRunWhileBusy,
     setKeybinding,
     resetKeybindings,
   } = useSettingsStore()
@@ -217,6 +220,12 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     const next = Number.isFinite(value) ? Math.max(0, value) : 0
     setBudgetUsd(next)
     void persistSettings({ budgetUsd: next })
+  }
+
+  const handleRunWhileBusyChange = (value: string) => {
+    const next: RunWhileBusy = value === 'steer' ? 'steer' : 'queue'
+    setRunWhileBusy(next)
+    void persistSettings({ runWhileBusy: next })
   }
 
   const shortcutName = (id: ShortcutId) =>
@@ -482,6 +491,16 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                 ))}
               </Select>
             </Field>
+            <Field label={t('runWhileBusy')} hint={t('runWhileBusyHint')}>
+              <Select
+                value={runWhileBusy}
+                onChange={(event) => handleRunWhileBusyChange(event.target.value)}
+              >
+                <option value="queue">{t('runWhileBusyQueue')}</option>
+                <option value="steer">{t('runWhileBusySteer')}</option>
+              </Select>
+            </Field>
+
             <Field label={t('budgetUsd')} hint={t('budgetUsdHint')}>
               <Input
                 type="number"

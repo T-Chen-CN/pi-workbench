@@ -407,7 +407,7 @@ describe('workspace lifecycle handlers', () => {
 })
 
 describe('pending message handlers', () => {
-  it('persists pending messages with sanitized values', async () => {
+  it('persists pending messages and ignores legacy behavior fields', async () => {
     const stored = {
       'session-1': [
         { id: 'p1', text: 'next turn', behavior: 'queue' },
@@ -425,8 +425,8 @@ describe('pending message handlers', () => {
       success: true,
       sessions: {
         'session-1': [
-          { id: 'p1', text: 'next turn', behavior: 'queue' },
-          { id: 'p2', text: 'inject now', behavior: 'queue' },
+          { id: 'p1', text: 'next turn' },
+          { id: 'p2', text: 'inject now' },
         ],
       },
     })
@@ -435,8 +435,8 @@ describe('pending message handlers', () => {
     expect(JSON.parse(await fs.readFile(file, 'utf-8'))).toEqual({
       sessions: {
         'session-1': [
-          { id: 'p1', text: 'next turn', behavior: 'queue' },
-          { id: 'p2', text: 'inject now', behavior: 'queue' },
+          { id: 'p1', text: 'next turn' },
+          { id: 'p2', text: 'inject now' },
         ],
       },
     })

@@ -1234,6 +1234,7 @@ const DEFAULT_SETTINGS = {
   theme: 'light',
   autoSave: true,
   autoSaveDelay: 2000,
+  runWhileBusy: 'queue',
   recentWorkspaces: [] as string[],
 }
 
@@ -1994,7 +1995,8 @@ handleIpc(
 )
 
 // 排队消息持久化（R-02）：按会话分组存 .pi-workbench/pending-messages.json
-type PendingMessageRecord = { id: string; text: string; behavior: 'queue' | 'steer' }
+// 旧版本可能带 behavior 字段，读取时忽略；排队消息统一表示“下一轮发送”。
+type PendingMessageRecord = { id: string; text: string }
 
 function sanitizePendingSessions(value: unknown): Record<string, PendingMessageRecord[]> {
   const sessions: Record<string, PendingMessageRecord[]> = {}
@@ -2016,7 +2018,6 @@ function sanitizePendingSessions(value: unknown): Record<string, PendingMessageR
             ? record.id
             : `pending-${items.length + 1}`,
         text,
-        behavior: record.behavior === 'steer' ? 'steer' : 'queue',
       })
     }
     if (items.length > 0) sessions[sessionId] = items
