@@ -40,6 +40,28 @@ import {
   type ToolEditRecord,
 } from './session-extras.js'
 
+/** 已知模型的能力元数据；自定义端点不会返回这些信息（R-06） */
+const KNOWN_MODEL_METADATA: Record<
+  string,
+  {
+    contextWindow?: number
+    maxTokens?: number
+    reasoning?: boolean
+    input?: Array<'text' | 'image'>
+  }
+> = {
+  // 2026-10-24 由项目所有者确认：DeepSeek flash 支持图像输入；上下文 128K
+  'deepseek-flash': {
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+    reasoning: true,
+    input: ['text', 'image'],
+  },
+}
+
+/** 思考级别与 setSessionThinking 的允许值一致 */
+const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
 /** 写入 models.json 的自定义供应商 ID */
 const WORKBENCH_PROVIDER_ID = 'pi-workbench'
 /** models.json 中引用的环境变量名（避免把 API Key 写进磁盘） */
@@ -409,6 +431,8 @@ export interface AgentConfig {
     apiUrl: string
     apiKey: string
     selectedModel: string
+    /** 供应商返回的可选模型列表；用于写入 models.json 与能力提示 */
+    availableModels?: string[]
   }
   /** 日志出口；主进程注入 agent.log，未注入时退回 console */
   logger?: AgentLogger
@@ -430,6 +454,19 @@ export interface SessionSummary {
   messageCount: number
   createdAt: number
   updatedAt: number
+}
+
+/** 模型能力提示（R-06）；null 表示供应商未声明，界面显示“未知” */
+export interface ModelCapabilityInfo {
+  id: string
+  available: boolean
+  /** catalog：应用内置已知元数据；default：供应商未声明，使用 SDK 默认值 */
+  source: 'catalog' | 'default'
+  contextWindow: number | null
+  maxTokens: number | null
+  reasoning: boolean | null
+  vision: boolean | null
+  thinkingLevels: string[]
 }
 
 export interface SessionOpenResult {
@@ -573,6 +610,14 @@ export class AgentManager {
   private async writeModelsConfig(agentDir: string, config: AgentConfig): Promise<string> {
     const { provider, apiUrl, selectedModel } = config.apiConfig
 
+    const modelIds = [
+      ...new Set(
+        [selectedModel, ...(config.apiConfig.availableModels ?? [])].filter(
+          (id): id is string => typeof id === 'string' && id.length > 0
+        )
+      ),
+    ]
+
     const modelsPath = path.join(agentDir, 'models.json')
     const modelsConfig = {
       $schema: 'https://pi.dev/schemas/models.schema.json',
@@ -581,7 +626,7 @@ export class AgentManager {
           baseUrl: apiUrl.replace(/\/+$/, ''),
           api: provider === 'anthropic' ? 'anthropic-messages' : 'openai-completions',
           apiKey: `$${API_KEY_ENV}`,
-          models: [{ id: selectedModel }],
+          models: modelIds.map((id) => ({ id, ...(KNOWN_MODEL_METADATA[id] ?? {}) })),
         },
       },
     }
@@ -1801,6 +1846,69 @@ ${body.join('\n')}
       const runtime = await this.ensureRuntime(sessionId)
       await runtime.session.setModel(model)
       return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 模型能力提示（R-06）：上下文窗口、思考与图像输入 */
+  async getModelCapabilities(): Promise<{
+    success: boolean
+    models?: ModelCapabilityInfo[]
+    selected?: string
+    error?: string
+  }> {
+    try {
+      if (!this.modelRuntime || !this.config) {
+        return { success: false, error: 'Agent not initialized.' }
+      }
+      const config = this.config
+      const ids = [
+        ...new Set(
+          [config.apiConfig.selectedModel, ...(config.apiConfig.availableModels ?? [])].filter(
+            (id): id is string => typeof id === 'string' && id.length > 0
+          )
+        ),
+      ]
+
+      const listed = config.apiConfig.availableModels ?? []
+      const models = ids.map((id): ModelCapabilityInfo => {
+        const model = this.modelRuntime!.getModel(WORKBENCH_PROVIDER_ID, id)
+        const known = KNOWN_MODEL_METADATA[id]
+        const source = known ? 'catalog' : 'default'
+        // 供应商返回过模型列表时以它为准，避免把已下线的模型标成可用
+        const available = Boolean(model) && (listed.length === 0 || listed.includes(id))
+        if (!model || !available) {
+          return {
+            id,
+            available: false,
+            source,
+            contextWindow: known?.contextWindow ?? null,
+            maxTokens: known?.maxTokens ?? null,
+            reasoning: known?.reasoning ?? null,
+            vision: known?.input?.includes('image') ?? null,
+            thinkingLevels: [],
+          }
+        }
+        const supportsThinking = Boolean(model.reasoning)
+        return {
+          id,
+          available: true,
+          source,
+          contextWindow: known ? model.contextWindow : null,
+          maxTokens: known ? model.maxTokens : null,
+          reasoning: known ? supportsThinking : null,
+          vision: known ? Array.isArray(model.input) && model.input.includes('image') : null,
+          thinkingLevels:
+            known && supportsThinking
+              ? THINKING_LEVELS.filter(
+                  (level) => model.thinkingLevelMap?.[level] !== null
+                ).map((level) => String(level))
+              : [],
+        }
+      })
+
+      return { success: true, models, selected: config.apiConfig.selectedModel }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

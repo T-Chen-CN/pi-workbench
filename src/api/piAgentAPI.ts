@@ -15,6 +15,7 @@ import type {
   ContextUsageInfo,
   ConversationBranchGroup,
   ExportSessionFormat,
+  ModelCapabilityInfo,
   SessionStatsInfo,
   FileEdit,
   SessionListResult,
@@ -594,6 +595,23 @@ export const piAgentAPI = {
     }
     try {
       return await window.electronAPI.agentSessionStats(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 模型能力提示（R-06） */
+  async getModelCapabilities(workspaceDir: string): Promise<{
+    success: boolean
+    models?: ModelCapabilityInfo[]
+    selected?: string
+    error?: string
+  }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentModelCapabilities !== 'function') {
+      return { success: true, models: [] }
+    }
+    try {
+      return await window.electronAPI.agentModelCapabilities(workspaceDir)
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

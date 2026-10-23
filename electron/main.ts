@@ -2662,6 +2662,23 @@ handleIpc(
   }
 )
 
+// 模型能力提示（R-06）：上下文窗口、思考与图像输入
+handleIpc('agent:models:capabilities', async (_event, workspaceDir: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.getModelCapabilities !== 'function') {
+      return { success: false, error: 'Model capabilities are not supported by this agent' }
+    }
+    return await agent.getModelCapabilities()
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
 handleIpc('agent:session:stats', async (_event, workspaceDir: string, sessionId: string) => {
   try {
     if (!isTrustedWorkspacePath(workspaceDir)) {

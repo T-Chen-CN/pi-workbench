@@ -64,6 +64,7 @@ import type {
   CheckpointSummary,
   SessionMeta,
   PendingMessagesMap,
+  ModelCapabilityInfo,
 } from '../types/electron'
 
 interface ChatPanelProps {
@@ -448,6 +449,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }
   const [availableModels, setAvailableModels] = useState<string[]>([])
+  /** 模型能力提示（R-06） */
+  const [modelCapabilities, setModelCapabilities] = useState<ModelCapabilityInfo[]>([])
   let lastUserMessageId: string | null = null
   for (let index = messages.length - 1; index >= 0; index--) {
     if (messages[index].role === 'user') {
@@ -599,6 +602,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     [currentEditorFile]
   )
 
+  const selectedModelCapability =
+    modelCapabilities.find((item) => item.id === sessionSettings?.modelId) ?? null
+
   /** 附加单个符号（函数 / 类等）作为上下文 */
   const attachSymbol = (symbol: ExtractedSymbol) => {
     if (!activeKey || !currentEditorFile) return
@@ -617,6 +623,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   /** 图像附件：读取为 base64 后进入附件区（不写入上下文文本） */
   const addImageFiles = (files: File[]): void => {
     if (!activeKey) return
+    if (selectedModelCapability && selectedModelCapability.vision !== true) {
+      toast.error(
+        selectedModelCapability.vision === false
+          ? t('modelNoVisionBlocked')
+          : t('modelVisionUnknownBlocked')
+      )
+      return
+    }
     const current = useChatStore.getState().conversations[activeKey]?.attachments ?? []
     let imageCount = current.filter((attachment) => attachment.kind === 'image').length
     for (const file of files) {
@@ -1305,6 +1319,22 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       if (await handleSlashCommand(userMessage)) return
     }
 
+    const hasImageAttachments = (chat.conversations[key]?.attachments ?? []).some(
+      (attachment) => attachment.kind === 'image'
+    )
+    if (
+      hasImageAttachments &&
+      selectedModelCapability &&
+      selectedModelCapability.vision !== true
+    ) {
+      toast.error(
+        selectedModelCapability.vision === false
+          ? t('modelNoVisionBlocked')
+          : t('modelVisionUnknownBlocked')
+      )
+      return
+    }
+
     // 运行中：进入待发送队列；steer 立即注入当前轮
     if (isLoading && !forceSendRef.current) {
       chat.setDraftInput(key, '')
@@ -1634,6 +1664,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }, [configVersion])
 
+  useEffect(() => {
+    if (!initialized) return
+    let cancelled = false
+    void piAgentAPI.getModelCapabilities(workspacePath).then((result) => {
+      if (cancelled) return
+      if (result.success && result.models) setModelCapabilities(result.models)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [initialized, workspacePath, configVersion])
+
   const handleModelChange = async (modelId: string) => {
     if (!activeSessionId || !activeKey || !modelId || isLoading) return
     const previous = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
@@ -1651,6 +1693,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
   const handleThinkingChange = async (level: string) => {
     if (!activeSessionId || !activeKey || !level || isLoading) return
+    if (selectedModelCapability?.reasoning === false) {
+      toast.error(t('modelThinkingUnavailable'))
+      return
+    }
     const previous = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
     useChatStore
       .getState()
@@ -2269,7 +2315,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             </div>
           )}
           {sessionSettings && (
-            <div className="mb-2 flex items-center gap-2">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
               <Select
                 aria-label={t('modelLabel')}
                 value={sessionSettings.modelId ?? ''}
@@ -2280,25 +2326,58 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                 {availableModels.length === 0 && sessionSettings.modelId && (
                   <option value={sessionSettings.modelId}>{sessionSettings.modelId}</option>
                 )}
-                {availableModels.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
+                {availableModels.map((model) => {
+                  const capability = modelCapabilities.find((item) => item.id === model)
+                  const unavailable = capability?.available === false
+                  return (
+                    <option key={model} value={model} disabled={unavailable}>
+                      {unavailable ? `${model}${t('modelUnavailable')}` : model}
+                    </option>
+                  )
+                })}
               </Select>
               <Select
                 aria-label={t('thinkingLabel')}
                 value={sessionSettings.thinkingLevel ?? 'medium'}
-                disabled={isLoading}
+                disabled={isLoading || selectedModelCapability?.reasoning === false}
                 onChange={(event) => void handleThinkingChange(event.target.value)}
                 className="h-6 w-28"
               >
-                {THINKING_LEVELS.map((level) => (
-                  <option key={level} value={level}>
-                    {level}
-                  </option>
-                ))}
+                {THINKING_LEVELS.map((level) => {
+                  const supported =
+                    !selectedModelCapability ||
+                    selectedModelCapability.thinkingLevels.length === 0 ||
+                    selectedModelCapability.thinkingLevels.includes(level)
+                  return (
+                    <option key={level} value={level} disabled={!supported}>
+                      {level}
+                    </option>
+                  )
+                })}
               </Select>
+              {selectedModelCapability && (
+                <Caption className="text-ink-muted">
+                  {selectedModelCapability.available === false
+                    ? t('modelUnavailableHint')
+                    : selectedModelCapability.source === 'default'
+                      ? t('modelCapabilityUnknown')
+                      : [
+                          selectedModelCapability.contextWindow
+                            ? t('modelContextWindow', {
+                                tokens: formatTokenCount(selectedModelCapability.contextWindow),
+                              })
+                            : null,
+                          selectedModelCapability.reasoning
+                            ? t('modelSupportsThinking')
+                            : t('modelNoThinking'),
+                          selectedModelCapability.vision
+                            ? t('modelSupportsVision')
+                            : t('modelNoVision'),
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                </Caption>
+              )}
             </div>
           )}
           {pendingMessages.length > 0 && (
