@@ -142,6 +142,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:sessions:getTabs', workspaceDir),
   agentSessionsSetTabs: (workspaceDir: string, tabs: { open: string[]; active: string | null }) =>
     ipcRenderer.invoke('agent:sessions:setTabs', workspaceDir, tabs),
+  onAgentApprovalRequest: (
+    callback: (payload: {
+      requestId: string
+      workspaceDir: string
+      sessionId: string
+      toolCallId: string
+      toolName: string
+      category: 'read' | 'write' | 'command' | 'other'
+      summary: string
+      details: { path?: string; command?: string; preview?: string; editCount?: number }
+      createdAt: number
+      expiresAt: number
+    }) => void
+  ) => {
+    const listener = (_event: unknown, payload: any) => callback(payload)
+    ipcRenderer.on('agent:approval-request', listener)
+    return () => ipcRenderer.removeListener('agent:approval-request', listener)
+  },
+  agentRespondApproval: (requestId: string, decision: unknown) =>
+    ipcRenderer.invoke('agent:approval:respond', requestId, decision),
 
   // 终端
   terminalCreate: (workspaceDir: string, cols: number, rows: number) =>

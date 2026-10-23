@@ -400,7 +400,7 @@
 - 空状态、未配置 API、错误使用 EmptyState / 细线错误条，不使用大色块。
 - 上下文附件支持整文件与选区片段：片段 chip 显示 `文件:起止行`，内容是附加时快照（≤40k 字符）；整文件在发送时读取（≤120k 字符，合计 ≤300k）。
 - 会话标签栏（34px，位于聊天头部下方）：标签代表"已打开"会话，激活标签 `bg-surface` + 2px `accent` 顶线；最多同时打开 8 个，关闭标签只释放运行时、保留会话文件。
-- 标签状态按优先级只显示一个标记：**运行中**（`accent` 实心点 + 1.4s 脉冲）> **错误**（`danger` 感叹号图标；保留到下次发送或成功回复）> **待操作**（`warning` 空心环 + 中心点 + 2px 硬边外环，2.4s 呼吸；v1 仅状态占位、暂无触发）> **未读**（`success` 实心点，静态；激活标签时清除）> **已读**（无标记）。
+- 标签状态按优先级只显示一个标记：**运行中**（`accent` 实心点 + 1.4s 脉冲）> **错误**（`danger` 感叹号图标；保留到下次发送或成功回复）> **待操作**（`warning` 空心环 + 中心点 + 2px 硬边外环，2.4s 呼吸；工具审批等待时触发）> **未读**（`success` 实心点，静态；激活标签时清除）> **已读**（无标记）。
 - 草稿是独立标记：标题旁 9px `Pencil` 图标（`ink-subtle`），可与任意主状态并存，不占状态槽。
 - 标签的 `title` / `aria-label` 必须包含状态与草稿文案，运行中同时设置 `aria-busy`；状态不能只靠颜色或动效传达。
 - 会话列表：聊天列内的全高抽屉，行显示标题、消息数、相对时间与"已打开"标记；当前会话用 2px `accent` 左边线 + `accent/[0.06]`；hover 显示重命名 / 删除。
@@ -410,6 +410,7 @@
 - 思考正文：`.chat-markdown.agent-trace-markdown`（reading 13px / 1.7）+ `text-ink-muted`，Markdown 渲染但流式期间关闭代码高亮。
 - 工具行：状态图标（`accent` spinner / `success` Check / `danger` AlertCircle）+ `type-label` 工具名 + `type-data` 目标 + `type-caption` 耗时；展开后的参数与结果使用 `type-data`，结果块使用 `bg-sunken` + `rule-hairline`，最大高度约 240px 内部滚动；write/edit 有对应 Diff 时提供“查看修改”。
 - 过程组收起时不挂载内容 DOM；触发器使用 `aria-expanded` / `aria-controls`，运行中的内容加 `aria-busy`；失败与状态必须有文字，不能只靠颜色或动效传达。
+- 工具审批卡：位于输入框上方，`bg-raised` + `border-rule-hairline`，不设阴影。标题行 `warning` ShieldAlert + `type-label`；工具与参数摘要用 `type-value`，类别与路径用 `type-caption` / `type-data`。命令与写入预览放在 `bg-sunken` + `rule-hairline` 的 mono 块中（命令 ≤400 字符、预览 ≤280 字符），不展示完整文件内容。底部按钮依次为允许一次（primary）/ 本会话允许（secondary）/ 始终允许（ghost）/ 拒绝（danger，右对齐）；拒绝进入二次确认并可选填原因。
 
 ### 6.6 终端
 

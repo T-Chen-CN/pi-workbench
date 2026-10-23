@@ -176,6 +176,13 @@ function devAgentBridge(): Plugin {
             workspaceDir,
             agentDir: agentDirFor(workspaceDir),
             apiConfig: body.apiConfig,
+            // Web dev 桥没有审批 UI：开发环境显式允许全部工具
+            getPermissionPolicy: () => ({
+              read: 'allow',
+              write: 'allow',
+              command: 'allow',
+              other: 'allow',
+            }),
           })
           if (result.success) {
             agents.set(workspaceDir, agentManager)

@@ -6,11 +6,14 @@ import {
   Keyboard,
   RefreshCw,
   Save,
+  ShieldCheck,
   SlidersHorizontal,
 } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useThemeStore, type ThemeMode } from '../store/themeStore'
 import {
+  TOOL_CATEGORIES,
+  isPermissionAction,
   useSettingsStore,
   clampAutoSaveDelay,
   MIN_AUTO_SAVE_DELAY,
@@ -24,8 +27,17 @@ import type { ApiConfig, AppInfo } from '../types/electron'
 import { isMacPlatform } from '../utils/shortcuts'
 import { Button, Field, Input, Select } from './ui'
 import { KeyCap, Meter } from './patterns'
+import type { PermissionAction, ToolCategory } from '../types/electron'
+import type { TranslationKey } from '../i18n/translations'
 
-export type SettingsSection = 'general' | 'api' | 'shortcuts' | 'about'
+const PERMISSION_LABEL_KEYS: Record<ToolCategory, TranslationKey> = {
+  read: 'permissionRead',
+  write: 'permissionWrite',
+  command: 'permissionCommand',
+  other: 'permissionOther',
+}
+
+export type SettingsSection = 'general' | 'api' | 'permissions' | 'shortcuts' | 'about'
 
 const ShortcutKeys: React.FC<{ keys: string[] }> = ({ keys }) => (
   <span className="flex flex-shrink-0 items-center gap-1 type-key text-ink-muted">
@@ -46,7 +58,8 @@ interface SettingsProps {
 export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }) => {
   const { language, setLanguage, t } = useI18nStore()
   const { mode, setMode } = useThemeStore()
-  const { autoSave, autoSaveDelay, setAutoSave, setAutoSaveDelay } = useSettingsStore()
+  const { autoSave, autoSaveDelay, permissions, setAutoSave, setAutoSaveDelay, setPermission } =
+    useSettingsStore()
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const isMac = isMacPlatform()
   const mod = isMac ? '⌘' : 'Ctrl'
@@ -164,6 +177,13 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     void persistSettings({ autoSaveDelay: next })
   }
 
+  const handlePermissionChange = (category: ToolCategory, action: string) => {
+    if (!isPermissionAction(action)) return
+    const next = { ...permissions, [category]: action as PermissionAction }
+    setPermission(category, action)
+    void persistSettings({ permissions: next })
+  }
+
   const loadApiConfig = useCallback(async () => {
     try {
       const result = await api.apiConfigGet()
@@ -256,6 +276,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
   const navItems: Array<{ id: SettingsSection; label: string; icon: typeof Info }> = [
     { id: 'general', label: t('general'), icon: SlidersHorizontal },
     { id: 'api', label: t('apiConfiguration'), icon: KeyRound },
+    { id: 'permissions', label: t('permissions'), icon: ShieldCheck },
     { id: 'shortcuts', label: t('shortcuts'), icon: Keyboard },
     { id: 'about', label: t('about'), icon: Info },
   ]
@@ -456,6 +477,29 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                 <span className="type-caption text-danger">{t('saveFailedShort')}</span>
               )}
             </div>
+          </div>
+        )}
+
+        {section === 'permissions' && (
+          <div className="flex max-w-xl flex-col gap-5">
+            <p className="m-0 type-reading text-ink-muted">{t('permissionsHint')}</p>
+            {TOOL_CATEGORIES.map((category) => (
+              <Field
+                key={category}
+                label={t(PERMISSION_LABEL_KEYS[category])}
+                htmlFor={`permission-${category}`}
+              >
+                <Select
+                  id={`permission-${category}`}
+                  value={permissions[category]}
+                  onChange={(event) => handlePermissionChange(category, event.target.value)}
+                >
+                  <option value="allow">{t('permissionAllow')}</option>
+                  <option value="ask">{t('permissionAsk')}</option>
+                  <option value="deny">{t('permissionDeny')}</option>
+                </Select>
+              </Field>
+            ))}
           </div>
         )}
 

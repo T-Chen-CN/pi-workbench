@@ -7,14 +7,25 @@
 
 import {
   createAgentSession,
+  DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
+  SettingsManager,
   type AgentSession,
+  type ExtensionFactory,
 } from '@earendil-works/pi-coding-agent'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { existsSync, readFileSync } from 'fs'
 import { writeJsonAtomicSync } from './atomic-json.js'
+import {
+  buildApprovalDetails,
+  categorizeTool,
+  normalizePermissionPolicy,
+  type ApprovalDecision,
+  type ApprovalRequestPayload,
+  type PermissionPolicy,
+} from './approval-policy.js'
 
 /** 写入 models.json 的自定义供应商 ID */
 const WORKBENCH_PROVIDER_ID = 'pi-workbench'
@@ -28,6 +39,8 @@ const ABORT_GRACE_MS = 10_000
 const ABORT_TIMEOUT_MS = 5_000
 /** 初始化（模型运行时 + 会话创建）超时 */
 const INIT_TIMEOUT_MS = 30_000
+/** 单次工具审批的等待上限；超时按拒绝处理（fail-closed） */
+const APPROVAL_TIMEOUT_MS = 120_000
 /** 会话标题生成超时 */
 const TITLE_TIMEOUT_MS = 15_000
 /** 与 src/api/chatContext.ts 的标记保持一致 */
@@ -270,6 +283,12 @@ export interface AgentConfig {
   logger?: AgentLogger
   /** 模型生成会话标题后回调（主进程转发给渲染层） */
   onSessionTitle?: (sessionId: string, title: string) => void
+  /** 当前权限策略（每次工具调用时读取，改设置后无需重建 Agent） */
+  getPermissionPolicy?: () => unknown
+  /** 请求用户审批；未提供时按拒绝处理（fail-closed） */
+  requestApproval?: (request: ApprovalRequestPayload) => Promise<ApprovalDecision>
+  /** 用户选择“始终允许”时回调，由主进程持久化策略 */
+  onPermissionAlwaysAllow?: (category: ApprovalRequestPayload['category']) => void
 }
 
 export interface SessionSummary {
@@ -308,6 +327,8 @@ interface SessionRuntime {
   titleAttempted: boolean
   /** 未落盘新会话的临时标题 */
   pendingTitle: string | null
+  /** 本会话内已获准的类别（“本会话允许”） */
+  sessionAllow: Set<string>
 }
 
 export interface AgentMessage {
@@ -672,6 +693,85 @@ export class AgentManager {
     }
   }
 
+  /**
+   * 工具审批扩展：在工具执行前按策略放行、拒绝或挂起等待用户。
+   * 以 inline extension 的方式注册 tool_call 钩子，不落盘，也不属于工作台插件系统。
+   */
+  private createApprovalExtension(sessionId: string, sessionAllow: Set<string>): ExtensionFactory {
+    return (pi) => {
+      pi.on('tool_call', async (event: any) => {
+        const toolName = String(event?.toolName ?? '')
+        const args = event?.input ?? event?.args ?? {}
+        const category = categorizeTool(toolName)
+        const policy: PermissionPolicy = normalizePermissionPolicy(this.config?.getPermissionPolicy?.())
+        let action = policy[category]
+        if (sessionAllow.has(category) && action !== 'deny') action = 'allow'
+
+        if (action === 'allow') return undefined
+        if (action === 'deny') {
+          this.logger.info(`[Agent Manager] Blocked tool ${toolName} by policy (${category})`)
+          return {
+            block: true,
+            reason: `Tool "${toolName}" is blocked by the current permission policy.`,
+          }
+        }
+
+        const request: ApprovalRequestPayload = {
+          requestId: `approval-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+          workspaceDir: this.config?.workspaceDir ?? '',
+          sessionId,
+          toolCallId: String(event?.toolCallId ?? ''),
+          toolName,
+          category,
+          summary: summarizeToolArgs(toolName, args),
+          details: buildApprovalDetails(toolName, args),
+          createdAt: Date.now(),
+          expiresAt: Date.now() + APPROVAL_TIMEOUT_MS,
+        }
+
+        const decision = await this.requestToolApproval(request)
+        this.logger.info(`[Agent Manager] Tool approval for ${toolName}: ${decision.action}`)
+
+        if (decision.action === 'allow-once') return undefined
+        if (decision.action === 'allow-session') {
+          sessionAllow.add(category)
+          return undefined
+        }
+        if (decision.action === 'allow-always') {
+          sessionAllow.add(category)
+          try {
+            this.config?.onPermissionAlwaysAllow?.(category)
+          } catch (error) {
+            this.logger.warn('[Agent Manager] Failed to persist always-allow:', error)
+          }
+          return undefined
+        }
+
+        const reason = decision.reason?.trim()
+        return {
+          block: true,
+          reason: reason
+            ? `The user denied this tool call: ${reason}`
+            : 'The user denied this tool call.',
+        }
+      })
+    }
+  }
+
+  /** 向宿主请求审批；没有审批通道或超时都按拒绝处理 */
+  private async requestToolApproval(request: ApprovalRequestPayload): Promise<ApprovalDecision> {
+    const handler = this.config?.requestApproval
+    if (!handler) {
+      return { action: 'deny', reason: 'No approval channel is available in this environment.' }
+    }
+    try {
+      return await withTimeout(handler(request), APPROVAL_TIMEOUT_MS, 'Tool approval')
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Approval failed or timed out:', error)
+      return { action: 'deny', reason: 'The approval request timed out.' }
+    }
+  }
+
   /** 创建（或复用）一个会话运行时 */
   private async createRuntime(sessionManager: SessionManager): Promise<SessionRuntime> {
     const config = this.config
@@ -685,12 +785,24 @@ export class AgentManager {
     const model = modelRuntime.getModel(WORKBENCH_PROVIDER_ID, config.apiConfig.selectedModel)
     if (!model) throw new Error('Selected model is unavailable.')
 
+    const sessionAllow = new Set<string>()
+    const settingsManager = SettingsManager.create(config.workspaceDir, this.agentDir)
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: config.workspaceDir,
+      agentDir: this.agentDir,
+      settingsManager,
+      extensionFactories: [this.createApprovalExtension(id, sessionAllow)],
+    })
+    await resourceLoader.reload()
+
     const sessionPromise = createAgentSession({
       cwd: config.workspaceDir,
       agentDir: this.agentDir,
       modelRuntime,
       model,
       sessionManager,
+      settingsManager,
+      resourceLoader,
     })
     const sessionOutcome = await withTimeoutResult(
       sessionPromise,
@@ -731,6 +843,7 @@ export class AgentManager {
       updatedAt: Date.now(),
       titleAttempted: false,
       pendingTitle: null,
+      sessionAllow,
     }
     runtime.unsubscribe = this.subscribeToSessionEvents(runtime)
     this.runtimes.set(id, runtime)

@@ -16,6 +16,7 @@ import { createFleetStore } from './fleet-store.js'
 import { FleetManager } from './fleet-manager.js'
 import { DraftStore } from './draft-store.js'
 import type { UpdateController, UpdateState } from './updater.js'
+import { ApprovalBroker, sanitizeApprovalDecision } from './approval-broker.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
 
@@ -53,6 +54,15 @@ const agentRegistry = new AgentRegistry()
 let fileLogger: FileLogger | null = null
 let rendererLogger: FileLogger | null = null
 let agentFileLogger: FileLogger | null = null
+/** settings.json 的内存副本；权限策略随工具调用实时读取 */
+let appSettingsCache: Record<string, any> = {}
+
+/** 工具审批：挂起 Agent 的工具调用，等待渲染层响应或超时 */
+const approvalBroker = new ApprovalBroker((payload) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('agent:approval-request', payload)
+  }
+})
 
 /** Agent 日志出口（延迟解析，文件日志在 app ready 后才创建） */
 const agentLogger = {
@@ -503,6 +513,7 @@ app.whenReady().then(async () => {
   }
 
   await initAppDirectories()
+  appSettingsCache = await loadSettingsFile()
   await seedTrustedWorkspacesFromSettings()
   createWindow()
 
@@ -535,6 +546,7 @@ async function shutdownApplication(): Promise<void> {
     closeAllWorkspaceWatchers()
     terminalManager.closeAll()
     pluginManager.disposeAll()
+    approvalBroker.dispose()
     await Promise.allSettled([fleetManager.disposeAll(), agentRegistry.disposeAll()])
   } catch (error) {
     console.error('[Main] Shutdown cleanup failed:', error)
@@ -1147,6 +1159,23 @@ async function saveSettingsFile(settings: any): Promise<void> {
   await writeJsonAtomic(settingsPath, settings)
 }
 
+/** “始终允许”某个类别：写回 settings.json，并更新内存副本 */
+async function persistAlwaysAllow(category: string): Promise<void> {
+  try {
+    const settings = await loadSettingsFile()
+    const permissions = {
+      ...(settings.permissions && typeof settings.permissions === 'object' ? settings.permissions : {}),
+      [category]: 'allow',
+    }
+    const next = { ...settings, permissions }
+    await saveSettingsFile(next)
+    appSettingsCache = { ...appSettingsCache, ...next }
+    console.log('[Main] Permission updated to allow:', category)
+  } catch (error) {
+    console.error('[Main] Failed to persist always-allow permission:', error)
+  }
+}
+
 handleIpc('app:getSettings', async () => {
   try {
     return { success: true, settings: await loadSettingsFile() }
@@ -1169,6 +1198,7 @@ handleIpc('app:saveSettings', async (_event, settings: any) => {
       )
     }
     await saveSettingsFile(sanitized)
+    appSettingsCache = { ...appSettingsCache, ...sanitized }
     return { success: true }
   } catch (error) {
     return {
@@ -1679,6 +1709,12 @@ handleIpc('agent:initialize', async (_event, config: {
           mainWindow.webContents.send('agent:session-title', { workspaceDir, sessionId, title })
         }
       },
+      // 工具审批：策略随设置实时读取；无审批通道时 Agent 侧按拒绝处理
+      getPermissionPolicy: () => appSettingsCache.permissions,
+      requestApproval: (request: unknown) => approvalBroker.request(request as any),
+      onPermissionAlwaysAllow: (category: string) => {
+        void persistAlwaysAllow(category)
+      },
     })
 
     if (result.success) {
@@ -1874,6 +1910,7 @@ handleIpc('agent:sessions:close', async (_event, workspaceDir: string, sessionId
       return { success: false, error: 'Sessions are not supported by this agent' }
     }
     await agent.closeSession(sessionId)
+    approvalBroker.cancelForSession(sessionId)
     return { success: true }
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -1965,6 +2002,7 @@ handleIpc('agent:dispose', async (_event, workspaceDir?: string) => {
     }
     if (workspaceDir) {
       await agentRegistry.dispose(workspaceDir)
+      approvalBroker.cancelForWorkspace(workspaceDir)
       console.log('[Main] Agent disposed:', workspaceDir)
     }
     return { success: true }
@@ -1974,4 +2012,20 @@ handleIpc('agent:dispose', async (_event, workspaceDir?: string) => {
       error: error instanceof Error ? error.message : String(error)
     }
   }
+})
+
+// 工具审批响应：渲染层选择“允许一次 / 本会话 / 始终 / 拒绝”
+handleIpc('agent:approval:respond', async (_event, requestId: unknown, decision: unknown) => {
+  if (typeof requestId !== 'string' || !requestId) {
+    return { success: false, error: 'Invalid approval request id' }
+  }
+  const sanitized = sanitizeApprovalDecision(decision)
+  if (!sanitized) {
+    return { success: false, error: 'Invalid approval decision' }
+  }
+  const delivered = approvalBroker.respond(requestId, sanitized)
+  if (!delivered) {
+    return { success: false, error: 'Approval request is no longer pending' }
+  }
+  return { success: true }
 })

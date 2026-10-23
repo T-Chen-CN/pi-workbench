@@ -12,11 +12,21 @@ const sdk = vi.hoisted(() => ({
   sessionOpen: vi.fn(),
   sessionFindById: vi.fn(),
   sessionList: vi.fn(),
+  loaders: [] as Array<{ options: any }>,
 }))
 
 vi.mock('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: sdk.createAgentSession,
   ModelRuntime: { create: sdk.modelRuntimeCreate },
+  DefaultResourceLoader: class {
+    options: any
+    constructor(options: any) {
+      this.options = options
+      sdk.loaders.push(this)
+    }
+    async reload() {}
+  },
+  SettingsManager: { create: () => ({}) },
   SessionManager: {
     continueRecent: sdk.continueRecent,
     create: sdk.sessionCreate,
@@ -127,6 +137,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 
 beforeEach(async () => {
   vi.clearAllMocks()
+  sdk.loaders.length = 0
   tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-agent-test-'))
   workspaceDir = path.join(tmpRoot, 'workspace')
   agentDir = path.join(tmpRoot, 'agent')
@@ -919,5 +930,104 @@ describe('AgentManager dispose', () => {
 
     expect(process.env.OPENAI_API_KEY).toBe('previous-key')
     expect(process.env.PI_WORKBENCH_API_KEY).toBeUndefined()
+  })
+})
+
+describe('tool approvals', () => {
+  function toolCallHandler(): (event: any) => Promise<any> {
+    const loader = sdk.loaders[sdk.loaders.length - 1]
+    const factories = loader?.options?.extensionFactories ?? []
+    expect(factories).toHaveLength(1)
+    let handler: ((event: any) => Promise<any>) | null = null
+    factories[0]({
+      on: (event: string, fn: (payload: any) => Promise<any>) => {
+        if (event === 'tool_call') handler = fn
+      },
+    })
+    if (!handler) throw new Error('tool_call handler was not registered')
+    return handler
+  }
+
+  const readCall = { toolName: 'read', input: { path: 'a.ts' }, toolCallId: 'c-read' }
+  const writeCall = {
+    toolName: 'write',
+    input: { path: 'a.ts', content: 'hello' },
+    toolCallId: 'c-write',
+  }
+
+  it('lets read-only tools through with the default policy', async () => {
+    primeSdk(createFakeSession())
+    const requestApproval = vi.fn()
+    await manager.initialize(makeConfig({ requestApproval }))
+
+    await expect(toolCallHandler()(readCall)).resolves.toBeUndefined()
+    expect(requestApproval).not.toHaveBeenCalled()
+  })
+
+  it('asks before writing and passes the denial reason back to the model', async () => {
+    primeSdk(createFakeSession())
+    const requestApproval = vi.fn().mockResolvedValue({ action: 'deny', reason: 'not now' })
+    await manager.initialize(makeConfig({ requestApproval }))
+
+    const result = await toolCallHandler()(writeCall)
+
+    expect(requestApproval).toHaveBeenCalledTimes(1)
+    expect(requestApproval.mock.calls[0][0]).toMatchObject({
+      toolName: 'write',
+      category: 'write',
+      sessionId: 'session-1',
+      summary: expect.stringContaining('a.ts'),
+    })
+    expect(result).toMatchObject({ block: true })
+    expect(result.reason).toContain('not now')
+  })
+
+  it('remembers allow-for-session decisions', async () => {
+    primeSdk(createFakeSession())
+    const requestApproval = vi
+      .fn()
+      .mockResolvedValueOnce({ action: 'allow-session' })
+      .mockResolvedValue({ action: 'deny' })
+    await manager.initialize(makeConfig({ requestApproval }))
+
+    const handler = toolCallHandler()
+    await expect(handler(writeCall)).resolves.toBeUndefined()
+    await expect(handler({ ...writeCall, toolCallId: 'c-write-2' })).resolves.toBeUndefined()
+    expect(requestApproval).toHaveBeenCalledTimes(1)
+  })
+
+  it('persists always-allow decisions through the host callback', async () => {
+    primeSdk(createFakeSession())
+    const requestApproval = vi.fn().mockResolvedValue({ action: 'allow-always' })
+    const onPermissionAlwaysAllow = vi.fn()
+    await manager.initialize(makeConfig({ requestApproval, onPermissionAlwaysAllow }))
+
+    await expect(toolCallHandler()(writeCall)).resolves.toBeUndefined()
+    expect(onPermissionAlwaysAllow).toHaveBeenCalledWith('write')
+  })
+
+  it('fails closed when no approval channel is available', async () => {
+    primeSdk(createFakeSession())
+    await manager.initialize(makeConfig())
+
+    const result = await toolCallHandler()(writeCall)
+    expect(result).toMatchObject({ block: true })
+    expect(result.reason).toContain('No approval channel')
+  })
+
+  it('honours a deny policy without asking', async () => {
+    primeSdk(createFakeSession())
+    const requestApproval = vi.fn()
+    await manager.initialize(
+      makeConfig({
+        requestApproval,
+        getPermissionPolicy: () => ({ read: 'allow', write: 'deny', command: 'deny', other: 'deny' }),
+      })
+    )
+
+    const result = await toolCallHandler()(writeCall)
+    expect(result).toMatchObject({ block: true })
+    expect(result.reason).toContain('blocked by the current permission policy')
+    expect(requestApproval).not.toHaveBeenCalled()
   })
 })

@@ -72,6 +72,11 @@ export interface ElectronAPI {
   agentSessionsDelete: (workspaceDir: string, sessionId: string) => Promise<AgentDisposeResult>
   agentSessionsGetTabs: (workspaceDir: string) => Promise<SessionTabsResult>
   agentSessionsSetTabs: (workspaceDir: string, tabs: SessionTabs) => Promise<AgentDisposeResult>
+  onAgentApprovalRequest: (callback: (payload: ApprovalRequestPayload) => void) => () => void
+  agentRespondApproval: (
+    requestId: string,
+    decision: ApprovalDecision
+  ) => Promise<{ success: boolean; error?: string }>
 
   // Terminal
   terminalCreate: (workspaceDir: string, cols: number, rows: number) => Promise<TerminalCreateResult>
@@ -215,6 +220,43 @@ export interface AgentInitResult {
   success: boolean
   error?: string
 }
+
+// 工具审批（AF-01）
+
+export type ToolCategory = 'read' | 'write' | 'command' | 'other'
+
+export type PermissionAction = 'allow' | 'ask' | 'deny'
+
+export interface PermissionPolicy {
+  read: PermissionAction
+  write: PermissionAction
+  command: PermissionAction
+  other: PermissionAction
+}
+
+export interface ApprovalRequestPayload {
+  requestId: string
+  workspaceDir: string
+  sessionId: string
+  toolCallId: string
+  toolName: string
+  category: ToolCategory
+  summary: string
+  details: {
+    path?: string
+    command?: string
+    preview?: string
+    editCount?: number
+  }
+  createdAt: number
+  expiresAt: number
+}
+
+export type ApprovalDecision =
+  | { action: 'allow-once' }
+  | { action: 'allow-session' }
+  | { action: 'allow-always' }
+  | { action: 'deny'; reason?: string }
 
 export interface FileEdit {
   path: string

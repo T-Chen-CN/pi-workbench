@@ -33,6 +33,13 @@ export interface FleetAgentInitConfig {
   agentDir: string
   apiConfig: FleetApiConfig
   logger?: FleetAgentLogger
+  /** 无界面后台任务的权限策略（Fleet 显式全部允许） */
+  getPermissionPolicy?: () => {
+    read: 'allow' | 'ask' | 'deny'
+    write: 'allow' | 'ask' | 'deny'
+    command: 'allow' | 'ask' | 'deny'
+    other: 'allow' | 'ask' | 'deny'
+  }
 }
 
 export interface FleetAgent {
@@ -414,6 +421,13 @@ export class FleetManager {
         agentDir: taskAgentDir,
         apiConfig,
         logger: this.options.agentLogger,
+        // Fleet 是无界面的后台任务：显式允许全部工具，避免审批无人响应而阻塞
+        getPermissionPolicy: () => ({
+          read: 'allow',
+          write: 'allow',
+          command: 'allow',
+          other: 'allow',
+        }),
       })
       if (!initialized.success) {
         throw new Error(initialized.error || 'Failed to initialize agent')

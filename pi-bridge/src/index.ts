@@ -18,5 +18,21 @@ export type {
   SessionOpenResult,
   SessionSummary,
 } from './agent-manager.js'
+export {
+  DEFAULT_PERMISSION_POLICY,
+  TOOL_CATEGORIES,
+  buildApprovalDetails,
+  categorizeTool,
+  isAllowDecision,
+  normalizePermissionPolicy,
+} from './approval-policy.js'
+export type {
+  ApprovalDecision,
+  ApprovalDetails,
+  ApprovalRequestPayload,
+  PermissionAction,
+  PermissionPolicy,
+  ToolCategory,
+} from './approval-policy.js'
 
 

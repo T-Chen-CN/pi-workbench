@@ -8,6 +8,8 @@
 import type {
   AgentStreamEvent,
   ApiConfig,
+  ApprovalDecision,
+  ApprovalRequestPayload,
   FileEdit,
   SessionListResult,
   SessionOpenResult,
@@ -393,6 +395,30 @@ export const piAgentAPI = {
       })
     } catch (error) {
       return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  /**
+   * 监听工具审批请求（仅 Electron；Web dev 桥没有审批通道）
+   */
+  onApprovalRequest(callback: (payload: ApprovalRequestPayload) => void): () => void {
+    if (!hasElectronAgent() || typeof window.electronAPI.onAgentApprovalRequest !== 'function') {
+      return () => {}
+    }
+    return window.electronAPI.onAgentApprovalRequest(callback)
+  },
+
+  async respondApproval(
+    requestId: string,
+    decision: ApprovalDecision
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentRespondApproval !== 'function') {
+      return { success: false, error: 'Approvals are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentRespondApproval(requestId, decision)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   },
 

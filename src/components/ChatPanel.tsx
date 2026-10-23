@@ -22,6 +22,7 @@ import { useDiffStore } from '../store/diffStore'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useSelectionStore } from '../store/selectionStore'
+import { useApprovalStore } from '../store/approvalStore'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
 import { buildContextPrompt } from '../api/chatContext'
@@ -33,6 +34,7 @@ import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { useVirtualRows } from '../hooks/useVirtualRows'
 import { SessionTabs } from './SessionTabs'
 import { ChatSessionList } from './ChatSessionList'
+import { ApprovalCard } from './ApprovalCard'
 import { AgentParts } from './AgentTrace'
 import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
 import {
@@ -158,6 +160,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
   const openFiles = useEditorStore((state) => state.openFiles)
   const selection = useSelectionStore((state) => state.selection)
+  const approvalRequests = useApprovalStore((state) => state.requests)
+  const pendingApprovals = useMemo(
+    () =>
+      approvalRequests.filter(
+        (request) =>
+          request.workspaceDir === workspacePath && request.sessionId === activeSessionId
+      ),
+    [approvalRequests, workspacePath, activeSessionId]
+  )
   const openEdits = useDiffStore((state) => state.openEdits)
   const diffEdits = useDiffStore((state) => state.edits)
   const diffToolIds = useMemo(
@@ -789,6 +800,27 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }
 
+  /** 审批响应：成功即从队列移除并清除会话的待操作标记 */
+  const handleApprovalResponse = async (
+    requestId: string,
+    decision: import('../types/electron').ApprovalDecision
+  ) => {
+    const result = await piAgentAPI.respondApproval(requestId, decision)
+    if (!result.success) {
+      toast.error(
+        t('approvalRespondFailed', { error: localizeError(result.error ?? '') })
+      )
+      return
+    }
+    const request = useApprovalStore
+      .getState()
+      .requests.find((item) => item.requestId === requestId)
+    useApprovalStore.getState().remove(requestId)
+    if (request) {
+      useSessionStore.getState().markNeedsAction(request.workspaceDir, request.sessionId, null)
+    }
+  }
+
   if (needsApiKey) {
     return (
       <div className="flex h-full flex-col bg-panel">
@@ -953,6 +985,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       {/* Composer */}
       {activeSessionId && (
         <div className="flex-shrink-0 p-2.5">
+          {pendingApprovals.length > 0 && (
+            <div className="mb-2 flex flex-col gap-2">
+              {pendingApprovals.map((request) => (
+                <ApprovalCard
+                  key={request.requestId}
+                  request={request}
+                  onRespond={handleApprovalResponse}
+                />
+              ))}
+            </div>
+          )}
           {attachments.length > 0 && (
             <div className="mb-1.5 flex flex-wrap gap-1.5">
               {attachments.map((attachment) => {

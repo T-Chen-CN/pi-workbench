@@ -43,6 +43,7 @@ import { useSessionStore } from './store/sessionStore'
 import { useDiffStore } from './store/diffStore'
 import { confirmDialog } from './store/dialogStore'
 import { useSettingsStore } from './store/settingsStore'
+import { useApprovalStore } from './store/approvalStore'
 import { useUpdaterStore } from './store/updaterStore'
 import { localizeError } from './i18n/errors'
 import { commandPaletteShortcut } from './utils/shortcuts'
@@ -167,6 +168,18 @@ export default function App() {
       })
       .catch((err) => console.error('Failed to load app settings:', err))
   }, [setLanguage, setMode])
+
+  // 工具审批请求是全局的：切到别的会话时也要能收到通知与入队
+  useEffect(() => {
+    const off = piAgentAPI.onApprovalRequest((request) => {
+      useApprovalStore.getState().add(request)
+      useSessionStore.getState().markNeedsAction(request.workspaceDir, request.sessionId, 'input')
+    })
+    return () => {
+      off()
+      useApprovalStore.getState().reset()
+    }
+  }, [])
 
   // 加载最近打开的工作区
   useEffect(() => {

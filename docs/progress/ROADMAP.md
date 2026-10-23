@@ -61,7 +61,7 @@
 
 ## 4. P0 目标详情
 
-### AF-01 工具审批与权限模式
+### AF-01 工具审批与权限模式（✅ 2026-10-23）
 
 **现状**
 
@@ -360,6 +360,14 @@
 - [Cloudflare Agents — Human-in-the-loop patterns](https://developers.cloudflare.com/agents/concepts/agentic-patterns/human-in-the-loop/)
 - [Kanopy Labs — Agentic UI Patterns](https://kanopylabs.com/blog/agentic-ui-patterns-designing-ai-agent-interfaces)
 - [OpenClaw — Session compaction](https://docs.openclaw.ai/reference/session-management-compaction/compaction)
+
+---
+
+## 12. 进度记录
+
+| 日期 | 项目 | 实现与验证 |
+| --- | --- | --- |
+| 2026-10-23 | AF-01 工具审批与权限模式 | `pi-bridge` 审批策略与 `tool_call` 钩子、主进程 `ApprovalBroker`、渲染层审批卡与权限设置；单测覆盖策略、broker、store、组件与扩展钩子。端到端真机验证依赖已配置的供应商，尚未执行。 |
 
 ---
 
