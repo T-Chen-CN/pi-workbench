@@ -71,7 +71,7 @@ jobs:
             release/*.dmg
             release/*.AppImage
             release/*.AppImage.blockmap
-            release/*.yml
+            release/latest*.yml
 
   publish:
     needs: build

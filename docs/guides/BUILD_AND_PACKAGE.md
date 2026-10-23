@@ -132,8 +132,8 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
 
 ## 4.1 发布与自动更新（GitHub Releases）
 
-- 发布前先把 `package.json` 的 `version` 提升到目标版本（当前 `0.2.0`）。
-- 推送 `v*` 标签（例如 `git tag v0.2.0 && git push origin v0.2.0`）会触发
+- 发布前先把 `package.json` 的 `version` 提升到目标版本（当前 `0.2.1`）。
+- 推送 `v*` 标签（例如 `git tag v0.2.1 && git push origin v0.2.1`）会触发
   `.github/workflows/release.yml`：
   1. `verify-version` 校验标签与 `package.json` 版本一致，不一致直接失败；
   2. `build` 在 Windows / macOS / Linux 三个 runner 上构建 NSIS、universal dmg、AppImage；
@@ -143,6 +143,7 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
   - macOS 应用未签名，**不能自动安装更新**，应用只检查版本并打开 Release 页面，用户下载 dmg 后拖入 Applications 覆盖安装；
   - Linux AppImage 可正常自动更新（要求 AppImage 文件所在目录可写）。
 - 更新行为：启动 12 秒后静默检查；Windows / Linux 自动下载、不自动安装；下载完成后弹窗，拒绝则下次启动再提示。
+- 产物文件名必须与更新清单一致：`win` / `mac` / `linux` 都配置了无空格的 `artifactName`。GitHub 会把资产名里的空格替换成点，若使用默认命名，`latest.yml` 中的连字符文件名会 404，自动更新直接失效。
 - 安装包缓存：`{appDir}/cache/{updaterCacheDirName}`（自定义 AppAdapter 覆盖 electron-updater 的系统缓存目录）。
 - CI 与打包冒烟使用 `--publish never`，不会误发布。
 - 本地验证打包：`npx electron-builder --win --dir --publish never`（macOS / Linux 需在对应系统上执行）。
