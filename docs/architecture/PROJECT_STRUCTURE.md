@@ -37,8 +37,6 @@ pi-workbench/
 │   │   ├── DiffViewer.tsx        # Split / Unified Diff 查看器
 │   │   ├── ErrorBoundary.tsx     # 渲染错误兜底
 │   │   ├── FileExplorer.tsx      # 文件树、新建/重命名/删除、目录监听刷新
-│   │   ├── FleetDiffModal.tsx    # Fleet 任务改动审阅
-│   │   ├── FleetPanel.tsx        # Fleet 任务创建 / 取消 / 日志 / 合并
 │   │   ├── IPCDebug.tsx          # 开发调试面板
 │   │   ├── MonacoEditor.tsx      # Monaco、每文件 model、自动保存、草稿、外部变更同步
 │   │   ├── Settings.tsx          # 通用 / API / 工作区 / 快捷键 / 关于
@@ -168,7 +166,6 @@ ChatPanel.handleSubmit
 | `agent:stream` | main → renderer | 流式文本增量 |
 | `terminal:create` / `write` / `resize` / `close` | invoke | 终端 PTY |
 | `plugins:list` / `invoke` / `reload` / `setEnabled` | invoke | 工作台插件 |
-| `fleet:create` / `list` / `get` / `cancel` / `cleanup` / `diff` / `merge` | invoke | Fleet 后台任务 |
 | `draft:save` / `delete` / `list` / `clear` | invoke | 崩溃恢复草稿 |
 | `log:renderer` | invoke | 渲染进程日志 |
 | `update:check` / `download` / `install` | invoke | 自动更新 |

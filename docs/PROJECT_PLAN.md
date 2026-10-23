@@ -2,7 +2,7 @@
 
 **版本**: 0.3.1
 **最后更新**: 2026-10-24
-**当前阶段**: Phase 5 完成，Phase 6 持续优化
+**当前阶段**: Phase 6 持续优化
 
 ---
 
@@ -39,7 +39,7 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 | Phase 2：工作区与对话体验 | ✅ 完成 |
 | Phase 3：终端集成 | ✅ 完成 |
 | Phase 4：工作台插件系统 | ✅ 完成 |
-| Phase 5：Fleet 后台任务 | ✅ 完成 |
+| Phase 5：Fleet 后台任务（2026-10-24 移除） | ➖ 已移除 |
 | Phase 6：优化与完善 | 🟡 持续 |
 
 **已可用的端到端能力**：配置供应商 → 拉取真实模型 → 打开工作区 → Agent 对话（read/write/edit/bash）
@@ -91,7 +91,6 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 - 多工作区标签页，各工作区独立 Agent 实例
 - 工作台插件系统（主进程加载、命令 / 钩子、启用禁用与热重载、命令面板）
 - GitHub 风格的 Git 示例插件（`examples/plugins/git-tools`）
-- Fleet 后台任务：Git worktree 隔离、任务队列、每任务独立 Agent、状态与日志
 - 生产构建注入 Content-Security-Policy（开发模式不受影响）
 - Vitest 单测（store / diff / logger / AgentManager / IPC）、ESLint、Prettier、GitHub Actions CI
 
@@ -165,8 +164,6 @@ Main Process (Node 24, Electron 44)
 | 主进程日志 | `{appDir}/logs/main.log` | 5 MB 轮转，保留 `main.log.1`；渲染进程日志见 `logs/renderer.log` |
 | Chromium profile | `{appDir}/data/profile/` | `app.setPath('userData', ...)`，缓存与 localStorage 随应用目录迁移 |
 | 终端输出 | `{workspace}/.pi-workbench/terminal-{id}.log` | 每个终端独立文件；5MB 轮转；可附加给 Agent |
-| Fleet 任务 | `{appDir}/data/fleet-tasks.db` | `node:sqlite`（不可用时回退 `fleet-tasks.json`） |
-| Fleet 日志 | `{appDir}/logs/fleet-{task-id}.log` | 任务开始 / 流式输出 / 结束 |
 
 **禁止**：`app.getPath('userData')` / `appData` / `.env` / 系统临时目录。
 
@@ -178,7 +175,7 @@ Main Process (Node 24, Electron 44)
 electron/           主进程（main.ts、preload.cts、两套 tsconfig）
 src/
   components/       15 个扁平组件（ChatPanel、CommandPalette、DialogHost、DiffViewer、
-                    ErrorBoundary、FileExplorer、FleetPanel、IPCDebug、MonacoEditor、
+                    ErrorBoundary、FileExplorer、IPCDebug、MonacoEditor、
                     Settings、TerminalPanel、Toast、WelcomeScreen、WindowControls、ui）
   store/            9 个独立 store（chat、dialog、diff、editor、i18n、settings、theme、toast、workspace）
   api/              IPC 封装、Agent API（Electron IPC / Web SSE）、渲染日志、diff 算法
@@ -236,7 +233,7 @@ docs/               项目文档
 
 待完成：
 
-- 工作区元数据存储：先 JSON，SQLite 待 Fleet 规模再评估
+- 工作区元数据存储：先 JSON，SQLite 按工作区规模再评估
 
 ### 模块 6：终端（已实现）
 
@@ -260,23 +257,11 @@ docs/               项目文档
 - 无沙箱，仅限个人可信插件；不向渲染进程加载插件 JS
 - 示例插件：`examples/plugins/git-tools`（status / log / commit all）
 
-### 模块 8：Fleet 任务（已实现）
-
-- Git worktree：`{workspace}/.pi-worktrees/{name}-{taskId}`，分支 `pi-fleet/...`
-- 任务队列：每个工作区默认并发 1（全局上限 4），工作区之间互不排队
-- 每个任务独立 Agent 实例，运行在 worktree 目录，结束后释放
-- 状态机：queued → running → succeeded / failed / cancelled
-- 任务元数据：`{appDir}/data/fleet-tasks.db`（Electron 内置 `node:sqlite`；不可用时回退 JSON）
-- 任务日志：`{appDir}/logs/fleet-{task-id}.log`，流式输出同时写入记录
-- 清理 worktree 时保留分支，避免丢失 Agent 提交
-- 任务结果审阅：查看 worktree diff，确认后提交任务分支并合并回工作区（要求工作区干净，冲突自动回滚）
-- UI：Fleet 面板（创建 / 取消 / 查看输出 / 清理 worktree）
-
 ---
 
 ## 八、开发路线图
 
-### 推进约定（Phase 2–5）
+### 推进约定（Phase 2–6）
 
 - 每个阶段使用 `feat/phase-N-*` 分支，质量门禁（type-check → test → lint → build → 打包冒烟）通过后合并到 main 并推送
 - 阶段内按依赖顺序交付，独立功能单元完成即提交，保持 main 始终可用
@@ -324,15 +309,9 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 > 插件只扩展工作台本身，不扩展 Pi Agent，也不加载 Pi SDK extensions。
 > v1 只加载主进程 CommonJS 插件，不向渲染进程注入任意 JS（受生产 CSP 约束）。
 
-### ✅ Phase 5：Fleet 后台任务（完成）
+### ➖ Phase 5：Fleet 后台任务（2026-10-24 移除）
 
-- [x] Git worktree 管理（创建 / 清理，分支保留）
-- [x] 任务队列与状态机（queued / running / succeeded / failed / cancelled）
-- [x] 每任务独立 Agent 实例
-- [x] 任务监控与日志（Fleet 面板、`fleet-{id}.log`）
-- [x] 任务元数据持久化（`node:sqlite`，JSON 回退）
-
-**验收**：从 Fleet 面板创建任务 → worktree 中运行 Agent → 状态与输出实时更新 → 可取消、查看日志、清理 worktree。
+该功能已整体移除：工作区不再创建 `.pi-worktrees`、任务队列和后台 Agent。旧版本遗留的 worktree 与 `pi-fleet/*` 分支需手动清理。
 
 ### Phase 6：优化与完善（持续记录）
 
@@ -344,13 +323,13 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 - [x] 主题系统（Paper & Ink，Paper / Ink 双主题）
 - [x] 崩溃恢复（编辑器草稿写入 `cache/drafts/`，启动时提示恢复）
 - [x] CSP 与安全加固（生产构建已注入 CSP）
-- [x] 代码审查回归修复（编辑器初始化/自动保存、Web 终端降级、错误边界、监听批量事件、语言持久化、Fleet 崩溃恢复）
+- [x] 代码审查回归修复（编辑器初始化/自动保存、Web 终端降级、错误边界、监听批量事件、语言持久化）
 - [x] 渲染层测试（jsdom + React Testing Library：编辑器创建 / 自动保存）
 - [x] 自动更新（electron-updater，打包版本可用）
 - [x] 渲染进程日志（`logs/renderer.log`）
 - [x] P3 体验收尾（Toast 动画、快捷键文案、编辑器/终端主题 token 化、应用内对话框、自动保存设置、插件重复 id 与配置竞争修复）
-- [x] 后端可靠性加固（原子写配置、可信路径、Agent/Fleet 中止与恢复、按工作区监听）
-- [x] 测试覆盖率提升（store / logger / AgentManager / IPC / 终端 / 插件 / Fleet / 渲染组件）
+- [x] 后端可靠性加固（原子写配置、可信路径、Agent 中止与恢复、按工作区监听）
+- [x] 测试覆盖率提升（store / logger / AgentManager / IPC / 终端 / 插件 / 渲染组件）
 
 ---
 
@@ -374,7 +353,7 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 
 ```bash
 npm run type-check   # TypeScript 严格模式
-npm test             # Vitest（store / diff / logger / AgentManager / IPC / 终端 / 插件 / Fleet）
+npm test             # Vitest（store / diff / logger / AgentManager / IPC / 终端 / 插件 / 渲染组件）
 npm run lint         # ESLint + react-hooks
 npm run build        # renderer → bridge → main（顺序不可颠倒）
 npm run package:win  # NSIS 安装包
@@ -391,13 +370,12 @@ npm run package:win  # NSIS 安装包
 ### 短期（1 个月内）
 
 - [x] 发布可用的 Windows 安装包（NSIS；v0.2.2，2026-10-23）
-- [x] Phase 2-5 已全部完成
+- [x] Phase 2-4 已全部完成；Phase 5 已移除
 
 ### 中期（3 个月内）
 
 - [x] 跨平台打包与自动更新（Windows / macOS / Linux，2026-10-23）
 - [x] 上下文片段（编辑器选区，2026-10-21）
-- [x] Fleet 并发调度策略（每工作区默认 1、全局上限 4，可配置）
 
 ### 长期（6-12 个月）
 
