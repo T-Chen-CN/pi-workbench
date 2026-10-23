@@ -266,6 +266,27 @@ describe('ChatPanel', () => {
     expect(await screen.findByText('上下文已压缩 · 自动')).toBeTruthy()
   })
 
+  it('shows image thumbnails on user messages restored from history', async () => {
+    vi.mocked(piAgentAPI.sessionsOpen).mockResolvedValue({
+      success: true,
+      session,
+      history: [
+        {
+          role: 'user',
+          content: '看看这张图',
+          timestamp: 1_000,
+          images: [{ data: 'aGVsbG8=', mimeType: 'image/png' }],
+        },
+      ],
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    expect(await screen.findByRole('button', { name: '查看图片 1' })).toBeTruthy()
+    const thumb = document.querySelector('img[src^="data:image/png;base64,"]')
+    expect(thumb).toBeTruthy()
+  })
+
   it('restores pending messages persisted before restart', async () => {
     vi.mocked(api.getPendingMessages).mockResolvedValue({
       success: true,

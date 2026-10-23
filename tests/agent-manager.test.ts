@@ -1835,6 +1835,29 @@ describe('model capabilities', () => {
 })
 
 describe('image attachment validation', () => {
+  it('keeps user images in session history', async () => {
+    const session = createFakeSession()
+    session.messages = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'look at this' },
+          { type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' },
+        ],
+        timestamp: 1,
+      },
+    ]
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const history = manager.getSessionMessages('session-1')
+    expect(history[0]).toMatchObject({
+      role: 'user',
+      content: 'look at this',
+      images: [{ data: 'aGVsbG8=', mimeType: 'image/png' }],
+    })
+  })
+
   it('rejects too many or unsupported images before sending', async () => {
     const tooMany = Array.from({ length: 21 }, () => ({
       data: 'aGVsbG8=',
