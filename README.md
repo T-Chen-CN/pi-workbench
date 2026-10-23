@@ -123,6 +123,7 @@ Workspace data: `{workspace}/.pi-workbench/`
 - [Build & packaging](docs/guides/BUILD_AND_PACKAGE.md)
 - [Agent testing checklist](docs/guides/AGENT-TESTING.md)
 - [Status](docs/progress/STATUS.md)
+- [Roadmap (pending work)](docs/progress/ROADMAP.md)
 - [Phase 1 report](docs/progress/PHASE-1-COMPLETE.md)
 
 Chinese README: [README_ZH.md](README_ZH.md)

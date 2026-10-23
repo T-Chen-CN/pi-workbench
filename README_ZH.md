@@ -134,6 +134,7 @@ docs/            项目文档
 - [构建与打包](docs/guides/BUILD_AND_PACKAGE.md)
 - [Agent 测试清单](docs/guides/AGENT-TESTING.md)
 - [项目状态](docs/progress/STATUS.md)
+- [待开发功能方案](docs/progress/ROADMAP.md)
 - [Phase 1 完成报告](docs/progress/PHASE-1-COMPLETE.md)
 
 English README: [README.md](README.md)

@@ -822,6 +822,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 - **设计规范**: [docs/design/DESIGN_SYSTEM.md](docs/design/DESIGN_SYSTEM.md) - 前端设计唯一事实来源（强制）
 - **构建指南**: [docs/guides/BUILD_AND_PACKAGE.md](docs/guides/BUILD_AND_PACKAGE.md) - 打包发布流程
 - **功能状态**: [docs/progress/STATUS.md](docs/progress/STATUS.md) - 当前进度追踪
+- **待开发方案**: [docs/progress/ROADMAP.md](docs/progress/ROADMAP.md) - 全部待办项与里程碑（唯一清单）
 
 ---
 
