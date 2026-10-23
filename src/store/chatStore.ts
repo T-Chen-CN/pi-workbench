@@ -36,7 +36,7 @@ export interface ChatMessage {
 
 export interface ChatAttachment {
   id: string
-  kind: 'file' | 'snippet'
+  kind: 'file' | 'snippet' | 'image'
   path: string
   name: string
   /** 片段起止行（1-based，含端点） */
@@ -44,6 +44,11 @@ export interface ChatAttachment {
   endLine?: number
   /** 片段附加时的内容快照；整文件在发送时实时读取 */
   content?: string
+  /** 图像附件：base64（不含 data: 前缀）与 MIME */
+  mimeType?: string
+  data?: string
+  /** 图像字节数（用于展示与限制） */
+  size?: number
 }
 
 export type NewChatAttachment = Omit<ChatAttachment, 'id'> & { id?: string }
@@ -455,7 +460,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           attachment.id ??
           (attachment.kind === 'snippet'
             ? `snippet:${attachment.path}:${attachment.startLine}-${attachment.endLine}`
-            : `file:${attachment.path}`)
+            : attachment.kind === 'image'
+              ? `image:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+              : `file:${attachment.path}`)
         if (current.attachments.some((item) => item.id === id)) return current
         return {
           ...current,

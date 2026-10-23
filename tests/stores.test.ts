@@ -128,6 +128,24 @@ describe('chatStore attachments', () => {
     ])
   })
 
+  it('gives every image attachment a unique id', () => {
+    const image = {
+      kind: 'image' as const,
+      path: '',
+      name: 'shot.png',
+      mimeType: 'image/png',
+      data: 'aGVsbG8=',
+      size: 5,
+    }
+    useChatStore.getState().addAttachment(KEY, image)
+    useChatStore.getState().addAttachment(KEY, image)
+
+    const attachments = useChatStore.getState().conversations[KEY].attachments
+    expect(attachments).toHaveLength(2)
+    expect(attachments[0].id).not.toBe(attachments[1].id)
+    expect(attachments[0].mimeType).toBe('image/png')
+  })
+
   it('deduplicates snippets by path and range', () => {
     const snippet = {
       kind: 'snippet' as const,

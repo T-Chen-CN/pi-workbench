@@ -103,8 +103,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       selectedModel: string
     }
   }) => ipcRenderer.invoke('agent:initialize', config),
-  agentChat: (message: string, requestId?: string, workspaceDir?: string, sessionId?: string) =>
-    ipcRenderer.invoke('agent:chat', message, requestId, workspaceDir, sessionId),
+  agentChat: (
+    message: string,
+    requestId?: string,
+    workspaceDir?: string,
+    sessionId?: string,
+    images?: Array<{ data: string; mimeType: string }>
+  ) => ipcRenderer.invoke('agent:chat', message, requestId, workspaceDir, sessionId, images),
   agentAbort: (workspaceDir?: string, sessionId?: string) =>
     ipcRenderer.invoke('agent:abort', workspaceDir, sessionId),
   onAgentStream: (callback: (payload: AgentStreamPayload) => void) => {

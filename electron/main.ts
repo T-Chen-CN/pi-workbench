@@ -1993,7 +1993,8 @@ handleIpc(
     message: string,
     requestId?: string,
     workspaceDir?: string,
-    sessionId?: string
+    sessionId?: string,
+    images?: unknown
   ) => {
     const startedAt = Date.now()
     try {
@@ -2008,6 +2009,21 @@ handleIpc(
         }
       }
 
+      // 图像附件：只接受常见位图格式，最多 4 张、单张 base64 ≤ 8MB
+      const safeImages = Array.isArray(images)
+        ? images
+            .filter(
+              (image): image is { data: string; mimeType: string } =>
+                Boolean(image) &&
+                typeof (image as any).data === 'string' &&
+                typeof (image as any).mimeType === 'string' &&
+                /^image\/(png|jpe?g|webp|gif)$/i.test((image as any).mimeType)
+            )
+            .filter((image) => image.data.length > 0 && image.data.length <= 8_000_000)
+            .slice(0, 4)
+            .map((image) => ({ data: image.data, mimeType: image.mimeType }))
+        : []
+
       console.log('[Main] Sending message to agent:', message.substring(0, 100))
       if (workspaceDir) {
         void pluginManager.emit(workspaceDir, 'chat:message', { message })
@@ -2019,9 +2035,10 @@ handleIpc(
           event.sender.send('agent:stream', { requestId, workspaceDir, sessionId, ...trace })
         }
       }
+      const chatOptions = safeImages.length > 0 ? { onTrace, images: safeImages } : { onTrace }
       const result = sessionId
-        ? await agent.chat(sessionId, message, { onTrace })
-        : await agent.chat(message, { onTrace })
+        ? await agent.chat(sessionId, message, chatOptions)
+        : await agent.chat(message, chatOptions)
 
       if (result.success) {
         console.log('[Main] Agent response received')

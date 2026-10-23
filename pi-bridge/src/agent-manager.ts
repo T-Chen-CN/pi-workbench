@@ -437,6 +437,8 @@ export interface AgentChatOptions {
   onTrace?: (event: AgentTraceEvent) => void
   /** 单轮请求超时（毫秒），0 表示不超时；默认 10 分钟 */
   timeoutMs?: number
+  /** 图像附件（base64，不含 data: 前缀） */
+  images?: Array<{ data: string; mimeType: string }>
 }
 
 /**
@@ -1774,7 +1776,23 @@ export class AgentManager {
       // 发送用户消息并等待 Agent 完成；超时先 abort，宽限期后仍未结束则强制收尾
       const session = runtime.session
       const promptText = runtime.modeState.current === 'plan' ? wrapPlanPrompt(message) : message
-      const promptPromise = session.prompt(promptText)
+      const images = Array.isArray(options?.images)
+        ? options.images
+            .filter(
+              (image) =>
+                image &&
+                typeof image.data === 'string' &&
+                image.data.length > 0 &&
+                typeof image.mimeType === 'string' &&
+                image.mimeType.startsWith('image/')
+            )
+            .slice(0, 4)
+            .map((image) => ({ type: 'image' as const, data: image.data, mimeType: image.mimeType }))
+        : []
+      const promptPromise = session.prompt(
+        promptText,
+        images.length > 0 ? { images } : undefined
+      )
       const timeoutPromise = new Promise<never>((_resolve, reject) => {
         if (timeoutMs <= 0) return
         timeoutTimer = setTimeout(() => {

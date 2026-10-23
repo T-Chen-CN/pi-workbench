@@ -67,6 +67,16 @@ interface ChatPanelProps {
 const MAX_CONTEXT_FILE_CHARS = 120_000
 const MAX_CONTEXT_SNIPPET_CHARS = 40_000
 const MAX_CONTEXT_TOTAL_CHARS = 300_000
+/** 图像附件：最多 4 张、单张 5MB，仅常见位图格式 */
+const MAX_IMAGE_COUNT = 4
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${bytes} B`
+}
 
 /** 1.2k / 12k / 96k */
 function formatTokenCount(value: number): string {
@@ -546,11 +556,64 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     setAttachMode('files')
   }
 
+  /** 图像附件：读取为 base64 后进入附件区（不写入上下文文本） */
+  const addImageFiles = (files: File[]): void => {
+    if (!activeKey) return
+    const current = useChatStore.getState().conversations[activeKey]?.attachments ?? []
+    let imageCount = current.filter((attachment) => attachment.kind === 'image').length
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue
+      if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+        toast.error(t('imageUnsupported'))
+        continue
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        toast.error(t('imageTooLarge', { size: formatBytes(MAX_IMAGE_BYTES) }))
+        continue
+      }
+      if (imageCount >= MAX_IMAGE_COUNT) {
+        toast.error(t('imageLimit', { count: MAX_IMAGE_COUNT }))
+        break
+      }
+      imageCount++
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = String(reader.result ?? '')
+        const comma = result.indexOf(',')
+        if (comma < 0) return
+        useChatStore.getState().addAttachment(activeKey, {
+          kind: 'image',
+          path: '',
+          name: file.name || `image-${Date.now()}.${file.type.split('/')[1] || 'png'}`,
+          mimeType: file.type,
+          data: result.slice(comma + 1),
+          size: file.size,
+        })
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  /** 粘贴截图作为图像附件 */
+  const handlePaste = (event: React.ClipboardEvent) => {
+    const files = Array.from(event.clipboardData?.files ?? []).filter((file) =>
+      file.type.startsWith('image/')
+    )
+    if (files.length === 0) return
+    event.preventDefault()
+    addImageFiles(files)
+  }
+
   /** 拖入文件作为附件 */
   const handleDropFiles = (event: React.DragEvent) => {
     event.preventDefault()
     if (!activeKey) return
+    const images: File[] = []
     for (const file of Array.from(event.dataTransfer.files)) {
+      if (file.type.startsWith('image/')) {
+        images.push(file)
+        continue
+      }
       const target = api.getPathForFile(file)
       if (!target) continue
       useChatStore.getState().addAttachment(activeKey, {
@@ -559,6 +622,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         name: file.name,
       })
     }
+    if (images.length > 0) addImageFiles(images)
   }
 
   const persistTabs = useCallback(() => {
@@ -1176,6 +1240,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       }> = []
       let totalChars = 0
       for (const attachment of sessionAttachments) {
+        if (attachment.kind === 'image') continue
         let content: string
         if (attachment.kind === 'snippet') {
           content = attachment.content ?? ''
@@ -1210,11 +1275,21 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       }
       const prompt = buildContextPrompt(userMessage, contextFiles)
 
+      const imageAttachments = sessionAttachments
+        .filter(
+          (attachment): attachment is typeof attachment & { data: string; mimeType: string } =>
+            attachment.kind === 'image' &&
+            typeof attachment.data === 'string' &&
+            typeof attachment.mimeType === 'string'
+        )
+        .map((attachment) => ({ data: attachment.data, mimeType: attachment.mimeType }))
+
       const result = await piAgentAPI.chat(
         prompt,
         { onTrace: traceBuffer.push },
         workspacePath,
-        sessionId
+        sessionId,
+        imageAttachments.length > 0 ? imageAttachments : undefined
       )
       // 收尾前按到达顺序输出剩余事件；有 parts 时不会再用最终文本覆盖
       traceBuffer.flush()
@@ -2138,6 +2213,33 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           {attachments.length > 0 && (
             <div className="mb-1.5 flex flex-wrap gap-1.5">
               {attachments.map((attachment) => {
+                if (attachment.kind === 'image') {
+                  return (
+                    <span
+                      key={attachment.id}
+                      className="inline-flex items-center gap-1 border border-rule-control bg-sunken p-1 type-data text-ink-muted"
+                      title={`${attachment.name} · ${formatBytes(attachment.size ?? 0)}`}
+                    >
+                      <img
+                        src={`data:${attachment.mimeType};base64,${attachment.data}`}
+                        alt={attachment.name}
+                        className="h-10 w-10 rounded-sm object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          activeKey &&
+                          useChatStore.getState().removeAttachment(activeKey, attachment.id)
+                        }
+                        title={t('removeAttachment')}
+                        aria-label={t('removeAttachment')}
+                        className="p-0.5 text-ink-muted hover:text-ink"
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  )
+                }
                 const label =
                   attachment.kind === 'snippet'
                     ? `${attachment.name}:${attachment.startLine}–${attachment.endLine}`
@@ -2201,6 +2303,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                 handleDraftChange(event.target.value, event.target.selectionStart ?? 0)
               }
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
               placeholder={t('inputPlaceholder')}
               disabled={!initialized}
               rows={3}
