@@ -1605,6 +1605,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       toast.error(
         t('approvalRespondFailed', { error: localizeError(result.error ?? '') })
       )
+      // 请求可能已超时 / 被中止；无论如何都移除卡片，避免残留
+      const stale = useApprovalStore
+        .getState()
+        .requests.find((item) => item.requestId === requestId)
+      useApprovalStore.getState().remove(requestId)
+      if (stale) {
+        useSessionStore.getState().markNeedsAction(stale.workspaceDir, stale.sessionId, null)
+      }
       return
     }
     const request = useApprovalStore

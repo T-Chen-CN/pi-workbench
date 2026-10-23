@@ -97,19 +97,26 @@ const notificationRouter = new NotificationRouter(
 )
 
 /** 工具审批：挂起 Agent 的工具调用，等待渲染层响应或超时 */
-const approvalBroker = new ApprovalBroker((payload) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('agent:approval-request', payload)
+const approvalBroker = new ApprovalBroker(
+  (payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('agent:approval-request', payload)
+    }
+    const text = notificationText()
+    notificationRouter.notify({
+      kind: 'approval',
+      workspaceDir: payload.workspaceDir,
+      sessionId: payload.sessionId,
+      title: text.approval,
+      body: `${payload.toolName} · ${payload.summary}`,
+    })
+  },
+  (resolution) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('agent:approval-resolved', resolution)
+    }
   }
-  const text = notificationText()
-  notificationRouter.notify({
-    kind: 'approval',
-    workspaceDir: payload.workspaceDir,
-    sessionId: payload.sessionId,
-    title: text.approval,
-    body: `${payload.toolName} · ${payload.summary}`,
-  })
-})
+)
 
 /** Agent 日志出口（延迟解析，文件日志在 app ready 后才创建） */
 const agentLogger = {
@@ -2160,6 +2167,9 @@ handleIpc('agent:abort', async (_event, workspaceDir?: string, sessionId?: strin
       return { success: false, error: 'Agent does not support abort' }
     }
     await agent.abort(sessionId)
+    // 中止后挂起的审批已无意义，通知渲染层移除卡片
+    if (sessionId) approvalBroker.cancelForSession(sessionId)
+    else if (workspaceDir) approvalBroker.cancelForWorkspace(workspaceDir)
     return { success: true }
   } catch (error) {
     return {

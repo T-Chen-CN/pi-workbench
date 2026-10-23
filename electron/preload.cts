@@ -209,6 +209,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   agentRespondApproval: (requestId: string, decision: unknown) =>
     ipcRenderer.invoke('agent:approval:respond', requestId, decision),
+  onAgentApprovalResolved: (
+    callback: (payload: {
+      requestId: string
+      workspaceDir: string
+      sessionId: string
+      decision: unknown
+    }) => void
+  ) => {
+    const listener = (_event: unknown, payload: any) => callback(payload)
+    ipcRenderer.on('agent:approval-resolved', listener)
+    return () => ipcRenderer.removeListener('agent:approval-resolved', listener)
+  },
 
   // 终端
   terminalCreate: (workspaceDir: string, cols: number, rows: number) =>

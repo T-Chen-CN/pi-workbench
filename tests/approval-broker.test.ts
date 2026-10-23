@@ -105,3 +105,46 @@ describe('sanitizeApprovalDecision', () => {
     expect(sanitizeApprovalDecision('allow-once')).toBeNull()
   })
 })
+
+describe('ApprovalBroker resolutions', () => {
+  it('notifies the renderer when the user responds', async () => {
+    const resolved = vi.fn()
+    const broker = new ApprovalBroker(() => {}, resolved)
+    const pending = broker.request(makeRequest())
+    broker.respond('req-1', { action: 'allow-once' })
+    await pending
+    expect(resolved).toHaveBeenCalledWith({
+      requestId: 'req-1',
+      workspaceDir: 'F:/work',
+      sessionId: 'session-1',
+      decision: { action: 'allow-once' },
+    })
+  })
+
+  it('notifies on timeout so stale cards can be removed', async () => {
+    vi.useFakeTimers()
+    const resolved = vi.fn()
+    const broker = new ApprovalBroker(() => {}, resolved)
+    const pending = broker.request(makeRequest({ expiresAt: Date.now() + 5_000 }))
+    await vi.advanceTimersByTimeAsync(5_001)
+    await pending
+    expect(resolved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: 'req-1',
+        decision: { action: 'deny', reason: 'The approval request timed out.' },
+      })
+    )
+    vi.useRealTimers()
+  })
+
+  it('notifies when cancelled with the session', async () => {
+    const resolved = vi.fn()
+    const broker = new ApprovalBroker(() => {}, resolved)
+    const pending = broker.request(makeRequest())
+    broker.cancelForSession('session-1')
+    await pending
+    expect(resolved).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: 'req-1' })
+    )
+  })
+})
