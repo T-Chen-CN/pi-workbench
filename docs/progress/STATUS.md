@@ -17,7 +17,7 @@
 
 ## 当前版本
 
-- **版本**: 0.2.2
+- **版本**: 0.3.0
 - **框架**: Electron 44 + React 19 + TypeScript
 - **Agent**: `@earendil-works/pi-coding-agent` 1.3.0
 - **状态**: Phase 5 完成，Phase 6 持续优化
