@@ -46,14 +46,28 @@ export class NotificationRouter {
       sessionId: string
     }) => void,
     private readonly getPrefs: () => unknown,
-    private readonly isAppFocused: () => boolean
+    private readonly isAppFocused: () => boolean,
+    private readonly log?: {
+      info: (message: string) => void
+      warn: (message: string) => void
+    }
   ) {}
 
   /** 前台不打扰；按事件类型开关过滤。返回是否真的发出了通知 */
   notify(event: SessionNotification): boolean {
-    if (this.isAppFocused()) return false
+    if (this.isAppFocused()) {
+      this.log?.info(`[Notifications] skipped "${event.kind}": app is focused`)
+      return false
+    }
     const prefs = normalizeNotificationPrefs(this.getPrefs())
-    if (!prefs.enabled || !prefs[event.kind]) return false
+    if (!prefs.enabled) {
+      this.log?.info(`[Notifications] skipped "${event.kind}": notifications disabled`)
+      return false
+    }
+    if (!prefs[event.kind]) {
+      this.log?.info(`[Notifications] skipped "${event.kind}": event type disabled`)
+      return false
+    }
     try {
       this.deliver({
         title: event.title,
@@ -61,9 +75,10 @@ export class NotificationRouter {
         workspaceDir: event.workspaceDir,
         sessionId: event.sessionId,
       })
+      this.log?.info(`[Notifications] delivered "${event.kind}"`)
       return true
     } catch (error) {
-      console.warn('[Notifications] Failed to show notification:', error)
+      this.log?.warn(`[Notifications] failed to show "${event.kind}": ${String(error)}`)
       return false
     }
   }

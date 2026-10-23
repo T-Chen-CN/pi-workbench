@@ -59,6 +59,16 @@ if (!singleInstanceLock) {
   })
 }
 
+// Windows 通知需要 AppUserModelID；开发版没有安装快捷方式，用可执行文件路径兜底，
+// 否则 Notification 会被系统静默丢弃。
+if (process.platform === 'win32') {
+  try {
+    app.setAppUserModelId(app.isPackaged ? 'com.piworkbench.app' : process.execPath)
+  } catch (error) {
+    console.warn('[Main] Failed to set AppUserModelId:', error)
+  }
+}
+
 /** 每个打开的工作区一个 Agent 实例 */
 const agentRegistry = new AgentRegistry()
 let fileLogger: FileLogger | null = null
@@ -75,25 +85,56 @@ function notificationText() {
     : { approval: 'Approval required', complete: 'Session finished', error: 'Session failed' }
 }
 
+/** 正在显示的系统通知；必须保持引用，否则对象被 GC 后 click 事件不会触发 */
+const activeNotifications = new Set<Notification>()
+
 /** 桌面通知：仅应用不在前台时发送；点击回到对应工作区与会话 */
 const notificationRouter = new NotificationRouter(
   (payload) => {
-    if (!Notification.isSupported()) return
+    if (!Notification.isSupported()) {
+      console.warn('[Notifications] Notification.isSupported() = false; skipping')
+      return
+    }
     const notification = new Notification({ title: payload.title, body: payload.body })
+    activeNotifications.add(notification)
+    const cleanup = () => {
+      activeNotifications.delete(notification)
+    }
+    notification.on('close', cleanup)
+    notification.on('failed', (_event, error) => {
+      cleanup()
+      console.warn('[Notifications] Notification failed:', error)
+    })
     notification.on('click', () => {
+      cleanup()
+      console.log('[Notifications] notification clicked')
       if (!mainWindow || mainWindow.isDestroyed()) return
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.show()
+      if (typeof mainWindow.moveTop === 'function') mainWindow.moveTop()
       mainWindow.focus()
+      // Windows 对后台进程抢前台有限制：短暂置顶再取消可把窗口带到前台
+      if (process.platform === 'win32') {
+        mainWindow.setAlwaysOnTop(true)
+        mainWindow.setAlwaysOnTop(false)
+        mainWindow.focus()
+      }
       mainWindow.webContents.send('app:notify-click', {
         workspaceDir: payload.workspaceDir,
         sessionId: payload.sessionId,
       })
+      setTimeout(() => {
+        console.log('[Notifications] focus after click:', mainWindow?.isFocused())
+      }, 300)
     })
     notification.show()
   },
   () => appSettingsCache.notifications,
-  () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused())
+  () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()),
+  {
+    info: (message) => console.log(message),
+    warn: (message) => console.warn(message),
+  }
 )
 
 /** 工具审批：挂起 Agent 的工具调用，等待渲染层响应或超时 */

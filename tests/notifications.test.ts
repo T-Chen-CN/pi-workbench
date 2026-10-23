@@ -70,3 +70,22 @@ describe('NotificationRouter', () => {
     expect(router.notify(event)).toBe(false)
   })
 })
+
+describe('NotificationRouter logging', () => {
+  it('logs skip reasons and delivered notifications', () => {
+    const info = vi.fn()
+    const deliver = vi.fn()
+    const log = { info, warn: vi.fn() }
+
+    new NotificationRouter(deliver, () => undefined, () => true, log).notify(event)
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('app is focused'))
+
+    const unfocused = new NotificationRouter(deliver, () => ({ enabled: false }), () => false, log)
+    unfocused.notify(event)
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('notifications disabled'))
+
+    const delivered = new NotificationRouter(deliver, () => undefined, () => false, log)
+    expect(delivered.notify(event)).toBe(true)
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('delivered "approval"'))
+  })
+})

@@ -142,16 +142,23 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
   useEffect(() => {
     if (!workspacePath) return
     let timer: ReturnType<typeof setTimeout> | null = null
-    const unsubscribe = api.onFsChanged((payload) => {
-      if (payload.type !== 'rename') return
+    const scheduleRefresh = () => {
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = null
         void loadRootDirectory(workspacePath)
       }, 200)
+    }
+    const unsubscribe = api.onFsChanged((payload) => {
+      if (payload.type !== 'rename') return
+      scheduleRefresh()
     })
+    // Agent 直接写盘时，渲染层在收到本轮修改后主动要求刷新
+    const onManualRefresh = () => scheduleRefresh()
+    window.addEventListener('pi:refresh-files', onManualRefresh)
     return () => {
       unsubscribe()
+      window.removeEventListener('pi:refresh-files', onManualRefresh)
       if (timer) clearTimeout(timer)
     }
   }, [workspacePath, loadRootDirectory])
