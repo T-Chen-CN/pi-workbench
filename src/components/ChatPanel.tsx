@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   ArrowDown,
+  ChevronLeft,
   ChevronRight,
   Copy,
   FileText,
@@ -256,6 +257,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onCopy,
   onRetry,
   onEdit,
+  onSwitchBranch,
   conversationKey,
 }: {
   message: ChatMessage
@@ -264,6 +266,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onCopy?: (text: string) => void
   onRetry?: () => void
   onEdit?: () => void
+  onSwitchBranch?: (entryId: string) => void
   conversationKey?: string
 }) {
   const { t, language } = useI18nStore()
@@ -284,6 +287,35 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
             language === 'zh' ? 'zh-CN' : 'en-US'
           )}
         </Caption>
+        {message.branch && message.branch.entryIds.length > 1 && (
+          <span className="flex items-center gap-0.5">
+            <IconButton
+              icon={ChevronLeft}
+              label={t('previousBranch')}
+              size="sm"
+              disabled={message.branch.activeIndex <= 0}
+              onClick={() => {
+                const branch = message.branch
+                if (branch) onSwitchBranch?.(branch.entryIds[branch.activeIndex - 1])
+              }}
+            />
+            <Caption className="text-ink-muted">
+              {message.branch.activeIndex + 1}/{message.branch.entryIds.length}
+            </Caption>
+            <IconButton
+              icon={ChevronRight}
+              label={t('nextBranch')}
+              size="sm"
+              disabled={
+                message.branch.activeIndex >= message.branch.entryIds.length - 1
+              }
+              onClick={() => {
+                const branch = message.branch
+                if (branch) onSwitchBranch?.(branch.entryIds[branch.activeIndex + 1])
+              }}
+            />
+          </span>
+        )}
         {hasActions && (
           <span className="ml-auto flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
             {onCopy && (
@@ -652,6 +684,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     return key
   }, [workspacePath])
 
+  /** 重新读取回复分支分组（R-03），每次加载 / 生成后刷新 */
+  const refreshBranches = useCallback(
+    async (sessionId: string) => {
+      const result = await piAgentAPI.listBranches(workspacePath, sessionId).catch(() => null)
+      if (!result?.success || !result.groups) return
+      useChatStore
+        .getState()
+        .setMessageBranches(conversationKey(workspacePath, sessionId), result.groups)
+    },
+    [workspacePath]
+  )
+
   const loadHistory = useCallback(
     (
       session: SessionSummary | undefined,
@@ -663,8 +707,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       if (!existing || existing.messages.length === 0) {
         useChatStore.getState().setMessages(key, history ?? [])
       }
+      void refreshBranches(session.id)
     },
-    [ensureConversation]
+    [ensureConversation, refreshBranches]
   )
 
   useEffect(() => {
@@ -1369,6 +1414,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           window.dispatchEvent(new CustomEvent('pi:refresh-files'))
           toast.info(t('agentModifiedFiles', { count: result.edits.length }))
         }
+        // 重新生成会产生新的回复分支（R-03）
+        void refreshBranches(sessionId)
       } else {
         const errorMessage = result.error
           ? localizeError(result.error)
@@ -1712,6 +1759,22 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     await handleSubmit(undefined, result.text, { skipUserMessage: true })
   }
 
+  /** 切换同一问题的另一条回复（R-03）：只移动会话树，不动工作区文件 */
+  const handleSwitchBranch = useCallback(
+    async (entryId: string) => {
+      if (!activeSessionId || !activeKey || isLoading) return
+      const result = await piAgentAPI.switchBranch(workspacePath, activeSessionId, entryId)
+      if (!result.success || !result.history) {
+        toast.error(t('branchSwitchFailed', { error: localizeError(result.error ?? '') }))
+        return
+      }
+      useChatStore.getState().setMessages(activeKey, result.history)
+      await refreshBranches(activeSessionId)
+      stickToBottomRef.current = true
+    },
+    [activeSessionId, activeKey, isLoading, workspacePath, refreshBranches, t]
+  )
+
   /** 编辑最后一条用户消息并重发 */
   const handleEditMessage = async (message: ChatMessage) => {
     if (!activeSessionId || !activeKey || isLoading) return
@@ -1996,6 +2059,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                           diffToolIds={diffToolIds}
                           onOpenDiff={openToolDiff}
                           onCopy={handleCopyMessage}
+                          onSwitchBranch={handleSwitchBranch}
                           onRetry={
                             !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
                               ? () => void handleRetryMessage(msg)
@@ -2020,6 +2084,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                         diffToolIds={diffToolIds}
                         onOpenDiff={openToolDiff}
                         onCopy={handleCopyMessage}
+                        onSwitchBranch={handleSwitchBranch}
                         onRetry={
                           !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
                             ? () => void handleRetryMessage(msg)

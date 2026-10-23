@@ -20,10 +20,12 @@ export interface SessionExtras {
   version: 1
   thinkingDurations: Record<string, number[]>
   toolEdits: Record<string, ToolEditRecord>
+  /** 分支切换（R-03）：assistant 入口 → 该分支上次停留的叶子，切回时可恢复完整后续 */
+  branchLeaves: Record<string, string>
 }
 
 export function emptyExtras(): SessionExtras {
-  return { version: 1, thinkingDurations: {}, toolEdits: {} }
+  return { version: 1, thinkingDurations: {}, toolEdits: {}, branchLeaves: {} }
 }
 
 export class SessionExtrasStore {
@@ -44,6 +46,8 @@ export class SessionExtrasStore {
             ? raw.thinkingDurations
             : {},
         toolEdits: raw.toolEdits && typeof raw.toolEdits === 'object' ? raw.toolEdits : {},
+        branchLeaves:
+          raw.branchLeaves && typeof raw.branchLeaves === 'object' ? raw.branchLeaves : {},
       }
     } catch {
       return emptyExtras()

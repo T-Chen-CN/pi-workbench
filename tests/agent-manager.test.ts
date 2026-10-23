@@ -152,6 +152,22 @@ function createFakeSession(
 function createFakeSessionManager(id = 'session-1') {
   let name: string | undefined
   let persisted = false
+  const entries = [
+    {
+      id: 'u1',
+      parentId: null,
+      type: 'message',
+      message: { role: 'user', content: 'first question', timestamp: 1000 },
+      timestamp: new Date(1000).toISOString(),
+    },
+    {
+      id: 'u2',
+      parentId: 'u1',
+      type: 'message',
+      message: { role: 'user', content: 'second question', timestamp: 2000 },
+      timestamp: new Date(2000).toISOString(),
+    },
+  ]
   return {
     getSessionId: () => id,
     getCwd: () => workspaceDir,
@@ -163,13 +179,78 @@ function createFakeSessionManager(id = 'session-1') {
       cwd: workspaceDir,
     }),
     getSessionName: () => name,
-  getLeafId: () => 'leaf-1',
+    getLeafId: () => 'leaf-1',
+    getEntry: (entryId: string) => entries.find((entry) => entry.id === entryId),
+    getBranch: () => entries,
+    getTree: () => [{ entry: entries[0], children: [{ entry: entries[1], children: [] }] }],
+    branch: () => {},
     appendSessionInfo: (value: string) => {
       name = value
       persisted = true
       return 'entry-1'
     },
     isPersisted: () => persisted,
+  }
+}
+
+type FakeTreeEntry = {
+  id: string
+  parentId: string | null
+  type: 'message'
+  message: { role: 'user' | 'assistant'; content: string; timestamp: number }
+  timestamp: string
+}
+
+function treeEntry(
+  id: string,
+  parentId: string | null,
+  role: 'user' | 'assistant',
+  content: string,
+  timestamp: number
+): FakeTreeEntry {
+  return {
+    id,
+    parentId,
+    type: 'message',
+    message: { role, content, timestamp },
+    timestamp: new Date(timestamp).toISOString(),
+  }
+}
+
+/** 可切换分支的会话管理器：u1 下有两个助手回复 a1 / a2 */
+function createTreeSessionManager(id: string, entries: FakeTreeEntry[], leafId: string) {
+  const base = createFakeSessionManager(id)
+  let leaf = leafId
+  return {
+    ...base,
+    getLeafId: () => leaf,
+    getEntry: (entryId: string) => entries.find((entry) => entry.id === entryId),
+    getBranch: (fromId?: string) => {
+      const pathEntries: FakeTreeEntry[] = []
+      let current = entries.find((entry) => entry.id === (fromId ?? leaf))
+      let guard = 0
+      while (current && guard < 1000) {
+        pathEntries.unshift(current)
+        const parentId: string | null = current.parentId
+        current = parentId ? entries.find((entry) => entry.id === parentId) : undefined
+        guard += 1
+      }
+      return pathEntries
+    },
+    getTree: () => {
+      const nodes = entries.map((entry) => ({ entry, children: [] as unknown[] }))
+      const byId = new Map(nodes.map((node) => [node.entry.id, node]))
+      for (const node of nodes) {
+        if (node.entry.parentId) {
+          const parent = byId.get(node.entry.parentId)
+          if (parent) (parent.children as unknown[]).push(node)
+        }
+      }
+      return nodes.filter((node) => !node.entry.parentId)
+    },
+    branch: (entryId: string) => {
+      leaf = entryId
+    },
   }
 }
 
@@ -1471,6 +1552,95 @@ describe('retry and edit-resend', () => {
     const pendingChat = manager.chat('start')
     await new Promise((resolve) => setTimeout(resolve, 0))
     const result = await manager.rewindToLastUser('session-1')
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Session is running')
+
+    release()
+    await pendingChat
+  })
+})
+
+describe('conversation branches', () => {
+  const entries = [
+    treeEntry('u1', null, 'user', 'first question', 1000),
+    treeEntry('a1', 'u1', 'assistant', 'first answer', 1100),
+    treeEntry('a2', 'u1', 'assistant', 'second answer', 1200),
+  ]
+
+  function setupBranchSession(leafId = 'a2') {
+    const session = createFakeSession()
+    const treeManager = createTreeSessionManager('session-1', entries, leafId)
+    primeSdk(session)
+    sdk.continueRecent.mockImplementation(() => treeManager)
+    return { session, treeManager }
+  }
+
+  it('lists reply branches for the current branch', async () => {
+    const { session } = setupBranchSession()
+    session.messages = [
+      { role: 'user', content: 'first question', timestamp: 1000 },
+      { role: 'assistant', content: 'second answer', timestamp: 1200 },
+    ]
+    await manager.initialize(makeConfig())
+
+    const result = await manager.listBranches('session-1')
+
+    expect(result.success).toBe(true)
+    expect(result.groups).toEqual([
+      {
+        userTimestamp: 1000,
+        activeIndex: 1,
+        branches: [
+          { entryId: 'a1', preview: 'first answer' },
+          { entryId: 'a2', preview: 'second answer' },
+        ],
+      },
+    ])
+  })
+
+  it('switches to the selected reply and returns its history', async () => {
+    const { session, treeManager } = setupBranchSession()
+    session.messages = [
+      { role: 'user', content: 'first question', timestamp: 1000 },
+      { role: 'assistant', content: 'second answer', timestamp: 1200 },
+    ]
+    vi.mocked(session.navigateTree).mockImplementation(async (entryId: string) => {
+      treeManager.branch(entryId)
+      session.messages = [
+        { role: 'user', content: 'first question', timestamp: 1000 },
+        { role: 'assistant', content: 'first answer', timestamp: 1100 },
+      ]
+      return { cancelled: false }
+    })
+    await manager.initialize(makeConfig())
+
+    const result = await manager.switchBranch('session-1', 'a1')
+
+    expect(session.navigateTree).toHaveBeenCalledWith('a1')
+    expect(result.success).toBe(true)
+    expect(result.history?.map((message) => message.content)).toEqual([
+      'first question',
+      'first answer',
+    ])
+    expect(treeManager.getLeafId()).toBe('a1')
+  })
+
+  it('refuses to switch while the session is running', async () => {
+    let release = () => {}
+    const session = createFakeSession(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    const treeManager = createTreeSessionManager('session-1', entries, 'a2')
+    primeSdk(session)
+    sdk.continueRecent.mockImplementation(() => treeManager)
+    await manager.initialize(makeConfig())
+
+    const pendingChat = manager.chat('start')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const result = await manager.switchBranch('session-1', 'a1')
     expect(result.success).toBe(false)
     expect(result.error).toContain('Session is running')
 

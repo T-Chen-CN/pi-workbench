@@ -3,6 +3,7 @@ import type {
   AgentStreamEvent,
   AgentTracePart,
   ContextUsageInfo,
+  ConversationBranchGroup,
   FileEdit,
   SessionStatsInfo,
 } from '../types/electron'
@@ -32,6 +33,12 @@ export interface ChatMessage {
   usage?: ChatUsage
   /** 本轮 Agent 修改过的文件（用于消息内的变更卡） */
   edits?: FileEdit[]
+  /** 同一用户消息下的回复分支（R-03） */
+  branch?: {
+    userTimestamp: number
+    activeIndex: number
+    entryIds: string[]
+  }
 }
 
 export interface ChatAttachment {
@@ -161,6 +168,8 @@ interface ChatState {
   ) => void
   setSessionStats: (key: string, stats: SessionStatsInfo | null) => void
   removeMessage: (key: string, id: string) => void
+  /** 应用回复分支分组（R-03），按用户消息时间戳匹配到其后的助手消息 */
+  setMessageBranches: (key: string, groups: ConversationBranchGroup[]) => void
   truncateLastTurn: (key: string) => void
   setMessages: (key: string, messages: Array<Omit<ChatMessage, 'id'>>) => void
   setLoading: (key: string, loading: boolean) => void
@@ -552,6 +561,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setSessionStats: (key, stats) =>
     set((state) => updateExisting(state, key, (current) => ({ ...current, sessionStats: stats }))),
+
+  setMessageBranches: (key, groups) =>
+    set((state) =>
+      updateExisting(state, key, (current) => {
+        if (current.messages.length === 0) return current
+        const byTimestamp = new Map(groups.map((group) => [group.userTimestamp, group]))
+        let userTimestamp: number | null = null
+        const messages = current.messages.map((message) => {
+          if (message.role === 'user') {
+            userTimestamp = message.timestamp
+            return message
+          }
+          const group = userTimestamp !== null ? byTimestamp.get(userTimestamp) : undefined
+          if (!group) {
+            if (!message.branch) return message
+            const next = { ...message }
+            delete next.branch
+            return next
+          }
+          return {
+            ...message,
+            branch: {
+              userTimestamp: group.userTimestamp,
+              activeIndex: group.activeIndex,
+              entryIds: group.branches.map((option) => option.entryId),
+            },
+          }
+        })
+        return { ...current, messages }
+      })
+    ),
 
   removeMessage: (key, id) =>
     set((state) =>

@@ -114,6 +114,19 @@ export interface ElectronAPI {
     sessionId: string,
     newText?: string
   ) => Promise<{ success: boolean; text?: string; error?: string }>
+  agentBranchesList: (
+    workspaceDir: string,
+    sessionId: string
+  ) => Promise<{ success: boolean; groups?: ConversationBranchGroup[]; error?: string }>
+  agentBranchesSwitch: (
+    workspaceDir: string,
+    sessionId: string,
+    entryId: string
+  ) => Promise<{
+    success: boolean
+    history?: AgentHistoryResult['history']
+    error?: string
+  }>
   agentSessionSettings: (
     workspaceDir: string,
     sessionId: string
@@ -387,6 +400,19 @@ export interface CheckpointSummary {
 export interface SessionMeta {
   pinned: string[]
   archived: string[]
+}
+
+/** 同一条用户消息下的可切换回复（R-03） */
+export interface ConversationBranchOption {
+  entryId: string
+  preview: string
+}
+
+export interface ConversationBranchGroup {
+  /** 该轮用户消息的时间戳，与历史消息的 timestamp 对应 */
+  userTimestamp: number
+  activeIndex: number
+  branches: ConversationBranchOption[]
 }
 
 /** 排队消息（按会话分组持久化） */

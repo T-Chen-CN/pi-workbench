@@ -13,6 +13,7 @@ import type {
   ApprovalRequestPayload,
   CheckpointSummary,
   ContextUsageInfo,
+  ConversationBranchGroup,
   SessionStatsInfo,
   FileEdit,
   SessionListResult,
@@ -497,6 +498,41 @@ export const piAgentAPI = {
     }
     try {
       return await window.electronAPI.agentRewind(workspaceDir, sessionId, newText)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 列出同一用户消息下的多条回复（R-03） */
+  async listBranches(
+    workspaceDir: string,
+    sessionId: string
+  ): Promise<{ success: boolean; groups?: ConversationBranchGroup[]; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentBranchesList !== 'function') {
+      return { success: true, groups: [] }
+    }
+    try {
+      return await window.electronAPI.agentBranchesList(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 切换到指定回复分支 */
+  async switchBranch(
+    workspaceDir: string,
+    sessionId: string,
+    entryId: string
+  ): Promise<{
+    success: boolean
+    history?: import('../types/electron').AgentHistoryResult['history']
+    error?: string
+  }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentBranchesSwitch !== 'function') {
+      return { success: false, error: 'Branch switching is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentBranchesSwitch(workspaceDir, sessionId, entryId)
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

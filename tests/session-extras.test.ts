@@ -32,6 +32,24 @@ describe('SessionExtrasStore', () => {
     expect(loaded.toolEdits['call-1'].newContent).toBe('new')
   })
 
+  it('round-trips branch leaves and tolerates older extras files', async () => {
+    const store = new SessionExtrasStore(tmpRoot)
+    const extras = emptyExtras()
+    extras.branchLeaves['a1'] = 'leaf-9'
+    await store.save('session-2', extras)
+
+    await expect(store.load('session-2')).resolves.toMatchObject({
+      branchLeaves: { a1: 'leaf-9' },
+    })
+
+    await fs.writeFile(
+      path.join(tmpRoot, 'old.json'),
+      JSON.stringify({ version: 1, thinkingDurations: {}, toolEdits: {} }),
+      'utf-8'
+    )
+    await expect(store.load('old')).resolves.toEqual(emptyExtras())
+  })
+
   it('ignores corrupt files', async () => {
     const store = new SessionExtrasStore(tmpRoot)
     await fs.writeFile(path.join(tmpRoot, 'broken.json'), '{oops', 'utf-8')

@@ -61,6 +61,8 @@ vi.mock('../src/api/piAgentAPI', () => ({
     setSessionModel: vi.fn(),
     setSessionThinking: vi.fn(),
     rewindLastUser: vi.fn(),
+    listBranches: vi.fn(),
+    switchBranch: vi.fn(),
     listCheckpoints: vi.fn(),
     restoreCheckpoint: vi.fn(),
     onApprovalRequest: vi.fn(() => () => {}),
@@ -181,6 +183,8 @@ beforeEach(() => {
   })
   vi.mocked(piAgentAPI.getToolEdit).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.listCheckpoints).mockResolvedValue({ success: true, checkpoints: [] })
+  vi.mocked(piAgentAPI.listBranches).mockResolvedValue({ success: true, groups: [] })
+  vi.mocked(piAgentAPI.switchBranch).mockResolvedValue({ success: false })
   vi.mocked(api.getPendingMessages).mockResolvedValue({ success: true, sessions: {} })
   vi.mocked(api.setPendingMessages).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.steer).mockResolvedValue({ success: true })
@@ -235,6 +239,46 @@ describe('ChatPanel', () => {
     render(<ChatPanel workspacePath="/ws" />)
 
     expect(await screen.findByText('resume this turn')).toBeTruthy()
+  })
+
+  it('shows reply branches and switches to another reply', async () => {
+    vi.mocked(piAgentAPI.sessionsOpen).mockResolvedValue({
+      success: true,
+      session,
+      history: [
+        { role: 'user', content: 'question', timestamp: 1000 },
+        { role: 'assistant', content: 'first answer', timestamp: 1100 },
+      ],
+    })
+    vi.mocked(piAgentAPI.listBranches).mockResolvedValue({
+      success: true,
+      groups: [
+        {
+          userTimestamp: 1000,
+          activeIndex: 0,
+          branches: [
+            { entryId: 'a1', preview: 'first answer' },
+            { entryId: 'a2', preview: 'second answer' },
+          ],
+        },
+      ],
+    })
+    vi.mocked(piAgentAPI.switchBranch).mockResolvedValue({
+      success: true,
+      history: [
+        { role: 'user', content: 'question', timestamp: 1000 },
+        { role: 'assistant', content: 'second answer', timestamp: 1200 },
+      ],
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    expect(await screen.findByText('1/2')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText(translations.zh.nextBranch))
+    await waitFor(() =>
+      expect(piAgentAPI.switchBranch).toHaveBeenCalledWith('/ws', 's1', 'a2')
+    )
+    expect(await screen.findByText('second answer')).toBeTruthy()
   })
 
   it('renders assistant markdown with highlighted code blocks', async () => {
