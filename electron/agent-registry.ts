@@ -92,6 +92,45 @@ export interface RegisteredAgent {
     sessionId: string,
     entryId: string
   ) => Promise<{ success: boolean; history?: unknown; error?: string }>
+  /** 工具结果全量查看（R-20） */
+  getToolResultMeta?: (
+    sessionId: string,
+    toolCallId: string
+  ) => Promise<{
+    success: boolean
+    meta?: {
+      toolName: string
+      kind: 'text' | 'image'
+      chars: number
+      bytes: number
+      lines: number
+      imageCount: number
+    }
+    error?: string
+  }>
+  readToolResultChunk?: (
+    sessionId: string,
+    toolCallId: string,
+    offset?: number,
+    limit?: number
+  ) => Promise<{
+    success: boolean
+    text?: string
+    offset?: number
+    nextOffset?: number
+    chars?: number
+    done?: boolean
+    error?: string
+  }>
+  getToolResultImage?: (
+    sessionId: string,
+    toolCallId: string,
+    index?: number
+  ) => Promise<{ success: boolean; data?: string; mimeType?: string; error?: string }>
+  getToolResultText?: (
+    sessionId: string,
+    toolCallId: string
+  ) => Promise<{ success: boolean; text?: string; toolName?: string; error?: string }>
   /** 会话模型与思考级别 */
   getSessionSettings?: (sessionId: string) => Promise<{
     success: boolean

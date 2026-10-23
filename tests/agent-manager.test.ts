@@ -1753,6 +1753,85 @@ describe('tool streaming', () => {
   })
 })
 
+describe('tool results', () => {
+  const text = 'line-1\nline-2\nline-3'
+
+  it('reports metadata and pages through long text', async () => {
+    const session = createFakeSession()
+    session.messages = [
+      {
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        toolName: 'bash',
+        content: [{ type: 'text', text }],
+        isError: false,
+        timestamp: 1,
+      },
+    ]
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const meta = await manager.getToolResultMeta('session-1', 'call-1')
+    expect(meta.success).toBe(true)
+    expect(meta.meta).toMatchObject({
+      toolName: 'bash',
+      kind: 'text',
+      chars: text.length,
+      lines: 3,
+      imageCount: 0,
+    })
+
+    const first = await manager.readToolResultChunk('session-1', 'call-1', 0, 5)
+    expect(first.success).toBe(true)
+    expect(first.text).toBe('line-')
+    expect(first.done).toBe(false)
+
+    const rest = await manager.readToolResultChunk(
+      'session-1',
+      'call-1',
+      first.nextOffset ?? 0,
+      1_000
+    )
+    expect(rest.done).toBe(true)
+    expect(`${first.text ?? ''}${rest.text ?? ''}`).toBe(text)
+
+    const full = await manager.getToolResultText('session-1', 'call-1')
+    expect(full.text).toBe(text)
+  })
+
+  it('reports image results and returns their data', async () => {
+    const session = createFakeSession()
+    session.messages = [
+      {
+        role: 'toolResult',
+        toolCallId: 'call-image',
+        toolName: 'screenshot',
+        content: [{ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' }],
+        isError: false,
+        timestamp: 2,
+      },
+    ]
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const meta = await manager.getToolResultMeta('session-1', 'call-image')
+    expect(meta.meta).toMatchObject({ kind: 'image', imageCount: 1, chars: 0, lines: 0 })
+
+    const image = await manager.getToolResultImage('session-1', 'call-image', 0)
+    expect(image).toMatchObject({ success: true, data: 'aGVsbG8=', mimeType: 'image/png' })
+  })
+
+  it('reports an error for unknown tool calls', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await expect(manager.getToolResultMeta('session-1', 'missing')).resolves.toMatchObject({
+      success: false,
+    })
+  })
+})
+
 describe('session stats', () => {
   it('reports cumulative tokens, cost and tool calls', async () => {
     const session = createFakeSession()

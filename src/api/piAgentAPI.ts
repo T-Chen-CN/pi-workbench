@@ -21,6 +21,7 @@ import type {
   SessionMode,
   SessionTabs,
   SessionTabsResult,
+  ToolResultMeta,
 } from '../types/electron'
 
 export interface AgentChatStreamHandlers {
@@ -612,6 +613,92 @@ export const piAgentAPI = {
     }
     try {
       return await window.electronAPI.agentToolDiff(workspaceDir, sessionId, toolCallId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 工具结果元数据（R-20） */
+  async getToolResultMeta(
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string
+  ): Promise<{ success: boolean; meta?: ToolResultMeta; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentToolResultMeta !== 'function') {
+      return { success: false, error: 'Tool results are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentToolResultMeta(workspaceDir, sessionId, toolCallId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 分页读取工具结果文本 */
+  async readToolResultChunk(
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string,
+    offset: number,
+    limit?: number
+  ): Promise<{
+    success: boolean
+    text?: string
+    offset?: number
+    nextOffset?: number
+    chars?: number
+    done?: boolean
+    error?: string
+  }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentToolResultChunk !== 'function') {
+      return { success: false, error: 'Tool results are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentToolResultChunk(
+        workspaceDir,
+        sessionId,
+        toolCallId,
+        offset,
+        limit
+      )
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 读取工具结果中的图片 */
+  async getToolResultImage(
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string,
+    index = 0
+  ): Promise<{ success: boolean; data?: string; mimeType?: string; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentToolResultImage !== 'function') {
+      return { success: false, error: 'Tool results are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentToolResultImage(
+        workspaceDir,
+        sessionId,
+        toolCallId,
+        index
+      )
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 完整结果导出到缓存并用系统编辑器打开 */
+  async openToolResultExternally(
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string
+  ): Promise<{ success: boolean; path?: string; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentToolResultOpen !== 'function') {
+      return { success: false, error: 'Tool results are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentToolResultOpen(workspaceDir, sessionId, toolCallId)
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

@@ -175,6 +175,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:session:stats', workspaceDir, sessionId),
   agentToolDiff: (workspaceDir: string, sessionId: string, toolCallId: string) =>
     ipcRenderer.invoke('agent:tool-diff', workspaceDir, sessionId, toolCallId),
+  agentToolResultMeta: (workspaceDir: string, sessionId: string, toolCallId: string) =>
+    ipcRenderer.invoke('agent:tool-result:meta', workspaceDir, sessionId, toolCallId),
+  agentToolResultChunk: (
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string,
+    offset?: number,
+    limit?: number
+  ) => ipcRenderer.invoke('agent:tool-result:chunk', workspaceDir, sessionId, toolCallId, offset, limit),
+  agentToolResultImage: (
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string,
+    index?: number
+  ) => ipcRenderer.invoke('agent:tool-result:image', workspaceDir, sessionId, toolCallId, index),
+  agentToolResultOpen: (workspaceDir: string, sessionId: string, toolCallId: string) =>
+    ipcRenderer.invoke('agent:tool-result:open', workspaceDir, sessionId, toolCallId),
   agentSessionSetModel: (workspaceDir: string, sessionId: string, modelId: string) =>
     ipcRenderer.invoke('agent:session:setModel', workspaceDir, sessionId, modelId),
   agentSessionSetThinking: (workspaceDir: string, sessionId: string, level: string) =>

@@ -44,6 +44,7 @@ import { useVirtualRows } from '../hooks/useVirtualRows'
 import { SessionTabs } from './SessionTabs'
 import { ChatSessionList } from './ChatSessionList'
 import { ApprovalCard } from './ApprovalCard'
+import { ToolResultViewer } from './ToolResultViewer'
 import { Meter } from './patterns'
 import { AgentParts } from './AgentTrace'
 import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
@@ -258,6 +259,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onRetry,
   onEdit,
   onSwitchBranch,
+  onOpenToolResult,
   conversationKey,
 }: {
   message: ChatMessage
@@ -267,6 +269,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onRetry?: () => void
   onEdit?: () => void
   onSwitchBranch?: (entryId: string) => void
+  onOpenToolResult?: (toolCallId: string, toolName: string) => void
   conversationKey?: string
 }) {
   const { t, language } = useI18nStore()
@@ -358,6 +361,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
               isStreaming={Boolean(message.isStreaming)}
               diffToolIds={diffToolIds}
               onOpenDiff={onOpenDiff}
+              onOpenToolResult={onOpenToolResult}
             />
           ) : (
             <div className="chat-markdown text-ink">
@@ -494,6 +498,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [attachMode, setAttachMode] = useState<'files' | 'symbols'>('files')
   const [pendingBehavior, setPendingBehavior] = useState<'queue' | 'steer'>('queue')
   const [showCheckpoints, setShowCheckpoints] = useState(false)
+  /** 工具结果全量查看（R-20） */
+  const [toolResultView, setToolResultView] = useState<{
+    toolCallId: string
+    toolName: string
+    sessionId: string
+  } | null>(null)
   const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([])
   const [sessionMeta, setSessionMeta] = useState<SessionMeta>({ pinned: [], archived: [] })
   const [showArchived, setShowArchived] = useState(false)
@@ -905,6 +915,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     })
     return () => cancelAnimationFrame(frame)
   }, [messages, virtualizer, activeKey])
+
+  /** 打开工具结果全量查看器（只读） */
+  const handleOpenToolResult = useCallback(
+    (toolCallId: string, toolName: string) => {
+      if (!activeSessionId) return
+      setToolResultView({ toolCallId, toolName, sessionId: activeSessionId })
+    },
+    [activeSessionId]
+  )
 
   const handleTranscriptScroll = () => {
     const element = transcriptRef.current
@@ -2060,6 +2079,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                           onOpenDiff={openToolDiff}
                           onCopy={handleCopyMessage}
                           onSwitchBranch={handleSwitchBranch}
+                          onOpenToolResult={handleOpenToolResult}
                           onRetry={
                             !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
                               ? () => void handleRetryMessage(msg)
@@ -2085,6 +2105,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                         onOpenDiff={openToolDiff}
                         onCopy={handleCopyMessage}
                         onSwitchBranch={handleSwitchBranch}
+                        onOpenToolResult={handleOpenToolResult}
                         onRetry={
                           !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
                             ? () => void handleRetryMessage(msg)
@@ -2637,6 +2658,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         onToggleArchive={toggleArchive}
         onExport={(session) => void exportSession(session)}
       />
+
+      {toolResultView && (
+        <ToolResultViewer
+          key={`${toolResultView.sessionId}:${toolResultView.toolCallId}`}
+          workspacePath={workspacePath}
+          sessionId={toolResultView.sessionId}
+          toolCallId={toolResultView.toolCallId}
+          toolName={toolResultView.toolName}
+          onClose={() => setToolResultView(null)}
+        />
+      )}
     </div>
   )
 }
