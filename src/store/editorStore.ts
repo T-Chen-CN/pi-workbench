@@ -2,8 +2,12 @@ import { create } from 'zustand'
 import { OpenFile, EditorState } from '../types'
 
 interface EditorStore extends EditorState {
+  /** 待定位的文件与行号（R-09），编辑器就绪后消费 */
+  pendingReveal: { path: string; line: number } | null
   setCurrentFile: (file: OpenFile | null) => void
   addOpenFile: (file: OpenFile) => void
+  revealLine: (path: string, line: number) => void
+  consumeReveal: () => void
   removeOpenFile: (path: string) => void
   updateOpenFile: (path: string, changes: Partial<OpenFile>) => void
   markDirty: (path: string) => void
@@ -16,8 +20,14 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   currentFile: null,
   openFiles: [],
   unsavedChanges: new Set(),
+  pendingReveal: null,
 
   setCurrentFile: (file) => set({ currentFile: file }),
+
+  revealLine: (path, line) =>
+    set({ pendingReveal: { path, line: Math.max(1, Math.floor(line)) } }),
+
+  consumeReveal: () => set({ pendingReveal: null }),
 
   addOpenFile: (file) =>
     set((state) => {
@@ -101,6 +111,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       currentFile: null,
       openFiles: [],
       unsavedChanges: new Set(),
+      pendingReveal: null,
     }),
 
   hasDirtyFiles: () => {

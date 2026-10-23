@@ -95,7 +95,15 @@ export const MonacoEditor: React.FC = () => {
   const resolvedTheme = useResolvedTheme()
   const editorRef = useRef<HTMLDivElement>(null)
   const monacoRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
-  const { currentFile, openFiles, updateOpenFile, markClean, removeOpenFile } = useEditorStore()
+  const {
+    currentFile,
+    openFiles,
+    updateOpenFile,
+    markClean,
+    removeOpenFile,
+    pendingReveal,
+    consumeReveal,
+  } = useEditorStore()
   const saveTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
   const draftTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
   // 每个文件一个 model：切换标签时保留撤销栈、光标与滚动位置
@@ -284,6 +292,21 @@ export const MonacoEditor: React.FC = () => {
     monaco.editor.setModelLanguage(model, detectLanguage(currentFile.name))
     activePathRef.current = currentFile.path
   }, [currentFile, editorReady, getOrCreateModel])
+
+  // 打开带行号的路径后滚动到该行并高亮（R-09）
+  useEffect(() => {
+    const editor = monacoRef.current
+    if (!editor || !pendingReveal || !currentFile || pendingReveal.path !== currentFile.path) {
+      return
+    }
+    const model = editor.getModel()
+    const lineCount = model?.getLineCount() ?? pendingReveal.line
+    const line = Math.max(1, Math.min(pendingReveal.line, lineCount))
+    editor.revealLineInCenter(line)
+    editor.setPosition({ lineNumber: line, column: 1 })
+    editor.focus()
+    consumeReveal()
+  }, [pendingReveal, currentFile, editorReady, consumeReveal])
 
   // 标签关闭后释放对应 model，避免撤销栈和内容长期占用内存
   useEffect(() => {
