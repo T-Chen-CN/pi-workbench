@@ -27,7 +27,14 @@ import { localizeError } from '../i18n/errors'
 import type { ApiConfig, AppInfo, PermissionLevel } from '../types/electron'
 import { isMacPlatform } from '../utils/shortcuts'
 import { Button, Field, Input, Select } from './ui'
-import { KeyCap, Meter } from './patterns'
+import { KeyCap, LegendRow, Meter } from './patterns'
+import {
+  SESSION_MODE_DESCRIPTION_KEY,
+  SESSION_MODE_ICON,
+  SESSION_MODE_ICON_CLASS,
+  SESSION_MODE_LABEL_KEY,
+  SESSION_MODE_ORDER,
+} from '../utils/sessionModePresentation'
 import {
   DEFAULT_KEYBINDINGS,
   eventToShortcut,
@@ -660,6 +667,24 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                 ))}
               </Select>
             </Field>
+            <div className="flex flex-col">
+              <h4 className="m-0 mb-1.5 type-label text-ink-muted">{t('modeLegendTitle')}</h4>
+              <div className="border-t border-rule-divide">
+                {SESSION_MODE_ORDER.map((mode) => {
+                  const ModeIcon = SESSION_MODE_ICON[mode]
+                  return (
+                    <LegendRow
+                      key={mode}
+                      icon={ModeIcon}
+                      iconClassName={SESSION_MODE_ICON_CLASS[mode]}
+                      title={t(SESSION_MODE_LABEL_KEY[mode])}
+                      description={t(SESSION_MODE_DESCRIPTION_KEY[mode])}
+                      meta={mode === 'plan' ? t('modeSessionOnly') : t('modeDefaultAllowed')}
+                    />
+                  )
+                })}
+              </div>
+            </div>
           </div>
         )}
 

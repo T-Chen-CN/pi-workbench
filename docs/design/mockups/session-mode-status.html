@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>会话模式与上下文环 · 静态预览</title>
+<style>
+  :root {
+    --surface: #f4f1ea;
+    --panel: #fbf9f4;
+    --raised: #fffdf8;
+    --sunken: #efece4;
+    --hover: #eeeae1;
+    --active: #e8e3d9;
+    --line: 23 21 18;
+    --rule-control: rgb(23 21 18 / 0.5);
+    --rule-divide: rgb(23 21 18 / 0.22);
+    --rule-hairline: rgb(23 21 18 / 0.18);
+    --ink: #171512;
+    --ink-muted: #615c52;
+    --ink-subtle: #918a7d;
+    --accent: #2f5d4e;
+    --accent-hover: #24493d;
+    --accent-fg: #fbfaf4;
+    --success: #5e6b2e;
+    --warning: #9a5b1f;
+    --danger: #a83a22;
+    --print-shadow: 5px 6px 0 rgb(23 21 18 / 0.08);
+    --font-ui: "Noto Sans Variable", "Noto Sans", "Noto Sans SC Variable", "Noto Sans SC",
+      "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    --font-display: "Instrument Serif", "Noto Serif SC Variable", "Songti SC", SimSun, serif;
+    --font-mono: "Geist Mono Variable", "Geist Mono", Consolas, monospace;
+  }
+
+  body.dark {
+    --surface: #141311;
+    --panel: #1a1815;
+    --raised: #201d19;
+    --sunken: #221f1b;
+    --hover: #2b2722;
+    --active: #342f29;
+    --line: 237 231 220;
+    --rule-control: rgb(237 231 220 / 0.5);
+    --rule-divide: rgb(237 231 220 / 0.22);
+    --rule-hairline: rgb(237 231 220 / 0.18);
+    --ink: #ede7dc;
+    --ink-muted: #a8a093;
+    --ink-subtle: #736c60;
+    --accent: #8fc7b4;
+    --accent-hover: #a9d8c8;
+    --accent-fg: #141311;
+    --success: #a8bf7a;
+    --warning: #d6b26e;
+    --danger: #e06a4a;
+    --print-shadow: 5px 6px 0 rgb(0 0 0 / 0.4);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+
+  body {
+    background: var(--surface);
+    color: var(--ink);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    padding: 40px 48px 64px;
+  }
+
+  .page { max-width: 1080px; margin: 0 auto; }
+
+  .page-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--rule-divide);
+    margin-bottom: 32px;
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-size: 28px;
+    line-height: 1.2;
+    font-weight: 400;
+    margin: 0 0 6px;
+  }
+
+  .lead { margin: 0; color: var(--ink-muted); font-size: 12.5px; max-width: 72ch; }
+
+  .theme-switch {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--rule-control);
+    flex-shrink: 0;
+  }
+
+  .theme-switch button {
+    height: 28px;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    color: var(--ink-muted);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background-color 150ms ease-out, color 150ms ease-out;
+  }
+
+  .theme-switch button:hover { background: var(--hover); color: var(--ink); }
+  .theme-switch button.active { background: var(--active); color: var(--ink); }
+
+  h2 {
+    font-family: var(--font-display);
+    font-size: 20px;
+    line-height: 1.3;
+    font-weight: 400;
+    margin: 36px 0 8px;
+  }
+
+  h2:first-of-type { margin-top: 0; }
+
+  .section-note {
+    color: var(--ink-muted);
+    font-size: 12.5px;
+    max-width: 76ch;
+    margin: 0 0 16px;
+  }
+
+  .section-note strong { color: var(--ink); font-weight: 500; }
+
+  .canvas {
+    background: var(--panel);
+    border: 1px solid var(--rule-hairline);
+    padding: 24px;
+  }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .specimen {
+    background: var(--panel);
+    border: 1px solid var(--rule-hairline);
+    padding: 16px;
+    min-width: 0;
+  }
+
+  .specimen-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .specimen-title { font-size: 12px; font-weight: 500; color: var(--ink); }
+  .specimen-sub { font-size: 11px; color: var(--ink-muted); margin: 2px 0 0; }
+
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 6px;
+    border: 1px solid var(--rule-control);
+    font-size: 10.5px;
+    color: var(--ink-muted);
+    white-space: nowrap;
+  }
+
+  .icon { width: 12px; height: 12px; flex-shrink: 0; }
+  .icon-14 { width: 14px; height: 14px; }
+  .chev { width: 10px; height: 10px; flex-shrink: 0; color: var(--ink-muted); }
+
+  .tone-neutral { color: var(--ink-muted); }
+  .tone-accent { color: var(--accent); }
+  .tone-warning { color: var(--warning); }
+  .tone-danger { color: var(--danger); }
+
+  /* ---- status strip ---- */
+  .chat-panel {
+    width: 316px;
+    max-width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--rule-hairline);
+    padding: 12px;
+  }
+
+  .faux-input {
+    height: 54px;
+    border: 1px solid var(--rule-control);
+    background: var(--sunken);
+    border-radius: 2px;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: flex-end;
+    padding: 8px;
+    color: var(--ink-subtle);
+    font-size: 11px;
+  }
+
+  .status-strip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 24px;
+    white-space: nowrap;
+  }
+
+  .segment {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 4px;
+    border: 0;
+    border-radius: 2px;
+    background: transparent;
+    color: var(--ink-muted);
+    font-family: inherit;
+    cursor: pointer;
+    transition: background-color 150ms ease-out, color 150ms ease-out;
+  }
+
+  .segment:hover { background: var(--hover); color: var(--ink); }
+
+  .mode-label { font-size: 11px; color: var(--ink-muted); }
+  .model { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); max-width: 112px; overflow: hidden; text-overflow: ellipsis; }
+  .caption { font-size: 11px; color: var(--ink-muted); }
+  .percent { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); }
+  .tokens { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-muted); }
+  .dot { color: var(--ink-subtle); font-size: 11px; }
+  .dash { color: var(--ink-muted); font-family: var(--font-mono); font-size: 11.5px; }
+
+  .ring-svg { flex-shrink: 0; display: block; }
+  .ring-track { stroke: rgb(var(--line) / 0.22); }
+
+  /* ---- mode chips ---- */
+  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .mode-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 6px;
+    border: 1px solid var(--rule-hairline);
+    border-radius: 2px;
+    font-size: 11px;
+    color: var(--ink-muted);
+    background: var(--raised);
+  }
+
+  /* ---- menu ---- */
+  .menu-stage {
+    position: relative;
+    min-height: 250px;
+    padding-top: 8px;
+  }
+
+  .menu {
+    width: 176px;
+    background: var(--raised);
+    border: 1px solid var(--line);
+    box-shadow: var(--print-shadow);
+    padding: 4px 0;
+  }
+
+  .menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    height: 28px;
+    padding: 0 10px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font-family: inherit;
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .menu-item:hover { background: var(--hover); }
+  .menu-item.selected { background: var(--hover); }
+  .menu-item .label { flex: 1; min-width: 0; }
+  .menu-item .check { width: 12px; height: 12px; color: var(--accent); opacity: 0; flex-shrink: 0; }
+  .menu-item.selected .check { opacity: 1; }
+
+  .menu-divide { margin: 4px 0; border-top: 1px solid var(--rule-divide); }
+  .menu-footnote { padding: 4px 10px 2px; font-size: 11px; color: var(--ink-muted); line-height: 1.4; }
+  .menu-reset { color: var(--ink); }
+
+  .menu-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    margin-top: 8px;
+    padding: 0 4px;
+    border-radius: 2px;
+    background: var(--hover);
+    color: var(--ink);
+    font-size: 11px;
+  }
+
+  /* ---- rings ---- */
+  .ring-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .ring-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 8px;
+    background: var(--raised);
+    border: 1px solid var(--rule-hairline);
+  }
+
+  .ring-cell .ring-line { display: flex; align-items: center; gap: 6px; }
+  .ring-cell .ring-name { font-size: 10.5px; color: var(--ink-muted); }
+  .ring-cell .ring-value { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); }
+
+  .ring-sizes {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  .size-block { background: var(--panel); border: 1px solid var(--rule-hairline); padding: 16px; }
+  .size-title { font-size: 12px; font-weight: 500; margin-bottom: 12px; }
+
+  /* ---- legend ---- */
+  .legend { display: flex; flex-direction: column; gap: 2px; }
+  .legend-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--raised);
+    border: 1px solid var(--rule-hairline);
+  }
+  .legend-row .icon-14 { margin-top: 2px; }
+  .legend-name { font-size: 12.5px; color: var(--ink); min-width: 40px; }
+  .legend-desc { font-size: 11.5px; color: var(--ink-muted); }
+  .legend-meta { margin-left: auto; font-size: 10.5px; color: var(--ink-subtle); white-space: nowrap; }
+
+  .footnote {
+    margin-top: 40px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule-divide);
+    color: var(--ink-muted);
+    font-size: 11.5px;
+  }
+
+  @media (max-width: 820px) {
+    body { padding: 24px 20px 48px; }
+    .grid-2, .ring-grid, .ring-sizes { grid-template-columns: 1fr; }
+    .page-head { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/>
+    <circle cx="12" cy="12" r="3"/>
+  </symbol>
+  <symbol id="i-list-checks" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M13 5h8"/><path d="M13 12h8"/><path d="M13 19h8"/>
+    <path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/>
+  </symbol>
+  <symbol id="i-shield-question" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>
+    <path d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3"/>
+    <path d="M12 17h.01"/>
+  </symbol>
+  <symbol id="i-shield-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m2 2 20 20"/>
+    <path d="M5 5a1 1 0 0 0-1 1v7c0 5 3.5 7.5 7.67 8.94a1 1 0 0 0 .67.01c2.35-.82 4.48-1.97 5.9-3.71"/>
+    <path d="M9.309 3.652A12.252 12.252 0 0 0 11.24 2.28a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1v7a9.784 9.784 0 0 1-.08 1.264"/>
+  </symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m6 9 6 6 6-6"/>
+  </symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 6 9 17l-5-5"/>
+  </symbol>
+</svg>
+
+<div class="page">
+  <header class="page-head">
+    <div>
+      <h1>会话模式与上下文环</h1>
+      <p class="lead">静态预览，未修改应用代码。颜色取自 <code>src/index.css</code> 的语义 token；状态行按聊天面板实际宽度 316px 呈现。可切换 Paper / Ink 对比。</p>
+    </div>
+    <div class="theme-switch" role="group" aria-label="主题">
+      <button type="button" class="active" data-theme="paper">Paper</button>
+      <button type="button" data-theme="ink">Ink</button>
+    </div>
+  </header>
+
+  <h2>一、模式触发器</h2>
+  <p class="section-note">四种模式并排对比。<strong>图标着色，文字保持中性</strong>，颜色不是唯一信号；真正落到状态行时只显示当前模式。</p>
+  <div class="canvas">
+    <div class="chip-row" style="margin-bottom:16px">
+      <span class="mode-chip"><svg class="icon tone-neutral"><use href="#i-eye"/></svg><span>只读</span></span>
+      <span class="mode-chip"><svg class="icon tone-accent"><use href="#i-list-checks"/></svg><span>计划</span></span>
+      <span class="mode-chip"><svg class="icon tone-warning"><use href="#i-shield-question"/></svg><span>询问</span></span>
+      <span class="mode-chip"><svg class="icon tone-danger"><use href="#i-shield-off"/></svg><span>完全</span></span>
+    </div>
+    <div class="grid-2">
+      <div>
+        <div class="specimen-head"><span class="specimen-title">方案 A · 语义色</span><span class="tag">推荐</span></div>
+        <div class="chat-panel">
+          <div class="faux-input">输入消息…</div>
+          <div class="status-strip">
+            <button class="segment"><svg class="icon tone-warning"><use href="#i-shield-question"/></svg><span class="mode-label">询问</span><svg class="chev"><use href="#i-chevron"/></svg></button>
+            <span class="dot">·</span>
+            <button class="segment"><span class="model">deepseek-flash</span><svg class="chev"><use href="#i-chevron"/></svg></button>
+            <span class="dot">·</span>
+            <button class="segment"><span class="caption">思考 中</span><svg class="chev"><use href="#i-chevron"/></svg></button>
+            <span class="dot">·</span>
+            <button class="segment">
+              <svg class="ring-svg tone-accent" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                <circle class="ring-track" cx="7" cy="7" r="6" fill="none" stroke-width="2"/>
+                <circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="37.7" stroke-dashoffset="35.8" transform="rotate(-90 7 7)"/>
+              </svg>
+              <span class="percent">5%</span>
+              <span class="tokens">4.7k / 128k</span>
+              <svg class="chev"><use href="#i-chevron"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="specimen-head"><span class="specimen-title">方案 B · 克制</span><span class="tag">备选</span></div>
+        <div class="chat-panel">
+          <div class="faux-input">输入消息…</div>
+          <div class="status-strip">
+            <button class="segment"><svg class="icon tone-neutral"><use href="#i-shield-question"/></svg><span class="mode-label">询问</span><svg class="chev"><use href="#i-chevron"/></svg></button>
+            <span class="dot">·</span>
+            <button class="segment"><span class="model">deepseek-flash</span><svg class="chev"><use href="#i-chevron"/></svg></button>
+            <span class="dot">·</span>
+            <button class="segment"><span class="caption">思考 中</span><svg class="chev"><use href="#i-chevron"/></svg></button>
+            <span class="dot">·</span>
+            <button class="segment">
+              <svg class="ring-svg tone-accent" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                <circle class="ring-track" cx="7" cy="7" r="6" fill="none" stroke-width="2"/>
+                <circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="37.7" stroke-dashoffset="35.8" transform="rotate(-90 7 7)"/>
+              </svg>
+              <span class="percent">5%</span>
+              <span class="tokens">4.7k / 128k</span>
+              <svg class="chev"><use href="#i-chevron"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>二、模式菜单</h2>
+  <p class="section-note">菜单里四个模式全部出现。方案 A 用语义色区分；方案 B 只有“计划”着色，其余中性，选中态继续由勾选和行底色承担。</p>
+  <div class="canvas">
+    <div class="grid-2">
+      <div class="specimen">
+        <div class="specimen-head"><span class="specimen-title">方案 A · 语义色</span><span class="tag">推荐</span></div>
+        <div class="menu-stage">
+          <div class="menu" role="menu" aria-label="模式">
+            <button class="menu-item"><svg class="icon-14 tone-neutral"><use href="#i-eye"/></svg><span class="label">只读</span><svg class="check"><use href="#i-check"/></svg></button>
+            <button class="menu-item"><svg class="icon-14 tone-accent"><use href="#i-list-checks"/></svg><span class="label">计划</span><svg class="check"><use href="#i-check"/></svg></button>
+            <button class="menu-item selected"><svg class="icon-14 tone-warning"><use href="#i-shield-question"/></svg><span class="label">询问</span><svg class="check"><use href="#i-check"/></svg></button>
+            <button class="menu-item"><svg class="icon-14 tone-danger"><use href="#i-shield-off"/></svg><span class="label">完全</span><svg class="check"><use href="#i-check"/></svg></button>
+            <div class="menu-divide"></div>
+            <div class="menu-footnote">本会话额外允许：修改文件、执行命令</div>
+            <button class="menu-item menu-reset"><span class="label">重置额外允许</span></button>
+          </div>
+          <div class="menu-trigger"><svg class="icon tone-warning"><use href="#i-shield-question"/></svg><span>询问</span><svg class="chev"><use href="#i-chevron"/></svg></div>
+        </div>
+      </div>
+      <div class="specimen">
+        <div class="specimen-head"><span class="specimen-title">方案 B · 克制</span><span class="tag">备选</span></div>
+        <div class="menu-stage">
+          <div class="menu" role="menu" aria-label="模式">
+            <button class="menu-item"><svg class="icon-14 tone-neutral"><use href="#i-eye"/></svg><span class="label">只读</span><svg class="check"><use href="#i-check"/></svg></button>
+            <button class="menu-item"><svg class="icon-14 tone-accent"><use href="#i-list-checks"/></svg><span class="label">计划</span><svg class="check"><use href="#i-check"/></svg></button>
+            <button class="menu-item selected"><svg class="icon-14 tone-neutral"><use href="#i-shield-question"/></svg><span class="label">询问</span><svg class="check"><use href="#i-check"/></svg></button>
+            <button class="menu-item"><svg class="icon-14 tone-neutral"><use href="#i-shield-off"/></svg><span class="label">完全</span><svg class="check"><use href="#i-check"/></svg></button>
+            <div class="menu-divide"></div>
+            <div class="menu-footnote">本会话额外允许：修改文件、执行命令</div>
+            <button class="menu-item menu-reset"><span class="label">重置额外允许</span></button>
+          </div>
+          <div class="menu-trigger"><svg class="icon tone-neutral"><use href="#i-shield-question"/></svg><span>询问</span><svg class="chev"><use href="#i-chevron"/></svg></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>三、上下文环</h2>
+  <p class="section-note">用圆环替代线性横条；百分比继续放在环右侧，承担精确值与读屏信息。阈值颜色不变：&lt;80% 松绿、80–94% 琥珀、≥95% 朱砂。</p>
+  <div class="canvas">
+    <div class="ring-grid" id="ring-grid"></div>
+    <div class="ring-sizes">
+      <div class="size-block">
+        <div class="size-title">14px 环 · 状态行推荐尺寸</div>
+        <div class="ring-grid" data-size="14"></div>
+      </div>
+      <div class="size-block">
+        <div class="size-title">16px 环 · 备选尺寸</div>
+        <div class="ring-grid" data-size="16"></div>
+      </div>
+    </div>
+    <div style="margin-top:16px">
+      <div class="specimen-title" style="margin-bottom:10px">放进状态行的样子（316px）</div>
+      <div class="chat-panel">
+        <div class="faux-input">输入消息…</div>
+        <div class="status-strip">
+          <button class="segment"><svg class="icon tone-warning"><use href="#i-shield-question"/></svg><span class="mode-label">询问</span><svg class="chev"><use href="#i-chevron"/></svg></button>
+          <span class="dot">·</span>
+          <button class="segment"><span class="model">deepseek-flash</span><svg class="chev"><use href="#i-chevron"/></svg></button>
+          <span class="dot">·</span>
+          <button class="segment"><span class="caption">思考 中</span><svg class="chev"><use href="#i-chevron"/></svg></button>
+          <span class="dot">·</span>
+          <button class="segment">
+            <svg class="ring-svg tone-warning" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+              <circle class="ring-track" cx="7" cy="7" r="6" fill="none" stroke-width="2"/>
+              <circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="37.7" stroke-dashoffset="5.7" transform="rotate(-90 7 7)"/>
+            </svg>
+            <span class="percent" style="color:var(--warning)">86%</span>
+            <span class="tokens">110k / 128k</span>
+            <svg class="chev"><use href="#i-chevron"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>四、设置页图例（可选）</h2>
+  <p class="section-note">原生 <code>Select</code> 无法给选项上色；如果要在设置页解释四种模式，可以在选择器下方放这样一段图例。注意“计划”只能会话内选择，不作为默认值。</p>
+  <div class="canvas">
+    <div class="legend">
+      <div class="legend-row"><svg class="icon-14 tone-neutral"><use href="#i-eye"/></svg><span class="legend-name">只读</span><span class="legend-desc">只允许读取，写文件与执行命令直接拒绝。</span><span class="legend-meta">可设为默认</span></div>
+      <div class="legend-row"><svg class="icon-14 tone-accent"><use href="#i-list-checks"/></svg><span class="legend-name">计划</span><span class="legend-desc">只读探索并产出结构化计划；批准时选择执行方式。</span><span class="legend-meta">仅会话内</span></div>
+      <div class="legend-row"><svg class="icon-14 tone-warning"><use href="#i-shield-question"/></svg><span class="legend-name">询问</span><span class="legend-desc">写文件与执行命令前逐次确认；始终允许只作用于本会话。</span><span class="legend-meta">可设为默认</span></div>
+      <div class="legend-row"><svg class="icon-14 tone-danger"><use href="#i-shield-off"/></svg><span class="legend-name">完全</span><span class="legend-desc">不再询问，所有工具直接放行。</span><span class="legend-meta">可设为默认</span></div>
+    </div>
+  </div>
+
+  <p class="footnote">静态预览文件：<code>docs/design/mockups/session-mode-status.html</code>。方案 A / B 与 14px / 16px 环都只是候选，确认前不会改应用代码。</p>
+</div>
+
+<script>
+  const THEME_BUTTONS = document.querySelectorAll('.theme-switch button')
+  THEME_BUTTONS.forEach((button) => {
+    button.addEventListener('click', () => {
+      const ink = button.dataset.theme === 'ink'
+      document.body.classList.toggle('dark', ink)
+      THEME_BUTTONS.forEach((item) => item.classList.toggle('active', item === button))
+      renderRings()
+    })
+  })
+
+  const TONES = {
+    accent: 'var(--accent)',
+    warning: 'var(--warning)',
+    danger: 'var(--danger)',
+    neutral: 'var(--ink-muted)',
+  }
+
+  function ringMarkup(value, size, tone) {
+    const radius = (size - 2) / 2
+    const circumference = 2 * Math.PI * radius
+    const offset = value == null ? circumference : circumference * (1 - value / 100)
+    const track = `<circle cx="${size / 2}" cy="${size / 2}" r="${radius}" fill="none" stroke="rgb(var(--line) / 0.22)" stroke-width="2"/>`
+    const arc =
+      value == null
+        ? ''
+        : `<circle cx="${size / 2}" cy="${size / 2}" r="${radius}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="${circumference.toFixed(2)}" stroke-dashoffset="${offset.toFixed(2)}" transform="rotate(-90 ${size / 2} ${size / 2})"/>`
+    return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="color:${TONES[tone]}" aria-hidden="true">${track}${arc}</svg>`
+  }
+
+  function toneFor(value) {
+    if (value == null) return 'neutral'
+    if (value >= 95) return 'danger'
+    if (value >= 80) return 'warning'
+    return 'accent'
+  }
+
+  function renderRings() {
+    const grids = document.querySelectorAll('.ring-grid')
+    grids.forEach((grid, index) => {
+      const size = Number(grid.dataset.size) || (index === 0 ? 14 : 14)
+      if (grid.dataset.rendered === 'true') return
+      const values = [5, 50, 86, 96, null]
+      grid.innerHTML = values
+        .map((value) => {
+          const tone = toneFor(value)
+          const label = value == null ? '未知' : `${value}%`
+          const display = value == null ? '—' : `${value}%`
+          return `<div class="ring-cell">
+            <div class="ring-line">${ringMarkup(value, size, tone)}<span class="ring-value">${display}</span></div>
+            <span class="ring-name">${label}${value != null && value >= 95 ? ' · 危险' : value != null && value >= 80 ? ' · 偏高' : ''}</span>
+          </div>`
+        })
+        .join('')
+      grid.dataset.rendered = 'true'
+    })
+  }
+
+  renderRings()
+</script>
+</body>
+</html>
