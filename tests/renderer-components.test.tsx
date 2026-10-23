@@ -447,12 +447,15 @@ describe('ChatPanel', () => {
     expect(within(trigger).getByText('4%')).toBeTruthy()
 
     fireEvent.click(trigger)
-    expect(await screen.findByText('已用 4%')).toBeTruthy()
-    expect(screen.getByText('4.8k / 128k tok')).toBeTruthy()
-    expect(screen.getByText('123k tok')).toBeTruthy()
-    expect(screen.getByText('12k tok · $0.03')).toBeTruthy()
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('已用 4%')).toBeTruthy()
+    expect(within(dialog).getByText('4.8k / 128k tok')).toBeTruthy()
+    expect(within(dialog).getByText('123k tok')).toBeTruthy()
+    expect(within(dialog).getByText('12k tok · $0.03')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: translations.zh.compactContext }))
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: translations.zh.compactContext })
+    )
     await waitFor(() => expect(piAgentAPI.compactContext).toHaveBeenCalledWith('/ws', 's1'))
   })
 

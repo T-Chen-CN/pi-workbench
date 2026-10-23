@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   AlertCircle,
@@ -720,6 +720,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   /** 输入区状态行当前展开的分段菜单 */
   const [statusMenu, setStatusMenu] = useState<'model' | 'thinking' | 'context' | null>(null)
   const closeStatusMenu = useCallback(() => setStatusMenu(null), [])
+  /** 状态行放不下时收起 token 数字，只留进度条与百分比 */
+  const statusStripRef = useRef<HTMLDivElement>(null)
+  const contextTokensRef = useRef<HTMLSpanElement>(null)
+  const contextTokensWidthRef = useRef(0)
+  const [showContextTokens, setShowContextTokens] = useState(true)
   useEffect(() => {
     setStatusMenu(null)
   }, [activeSessionId])
@@ -918,6 +923,43 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             .filter(Boolean)
             .join(' · ')
     : null
+
+  /**
+   * 状态行 token 数字自适应：按各段实际宽度判断是否放得下。
+   * 放不下就隐藏 token 数字（百分比与进度条始终保留），空间恢复后再显示。
+   */
+  useLayoutEffect(() => {
+    const strip = statusStripRef.current
+    if (!strip) return
+    const measure = () => {
+      const gap = Number.parseFloat(getComputedStyle(strip).columnGap) || 0
+      const children = Array.from(strip.children) as HTMLElement[]
+      let needed = children.reduce((sum, child) => sum + child.getBoundingClientRect().width, 0)
+      if (children.length > 1) needed += gap * (children.length - 1)
+
+      if (showContextTokens) {
+        const tokens = contextTokensRef.current
+        if (tokens) {
+          const parent = tokens.parentElement
+          const parentGap = parent
+            ? Number.parseFloat(getComputedStyle(parent).columnGap) || 0
+            : 0
+          contextTokensWidthRef.current = tokens.getBoundingClientRect().width + parentGap
+        }
+        if (needed > strip.clientWidth + 0.5) setShowContextTokens(false)
+      } else if (
+        contextTokensWidthRef.current > 0 &&
+        needed + contextTokensWidthRef.current <= strip.clientWidth
+      ) {
+        setShowContextTokens(true)
+      }
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(strip)
+    return () => observer.disconnect()
+  }, [showContextTokens, sessionSettings, contextUsage, contextPercentRounded])
 
   /** 附加单个符号（函数 / 类等）作为上下文 */
   const attachSymbol = (symbol: ExtractedSymbol) => {
@@ -3105,9 +3147,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             </div>
           </form>
           {(sessionSettings || contextUsage) && (
-            <div className="mt-1 flex min-w-0 items-center gap-1">
+            <div
+              ref={statusStripRef}
+              className="mt-1 flex min-w-0 items-center gap-1 whitespace-nowrap"
+            >
               {sessionSettings && (
-                <span className="relative flex min-w-0 items-center">
+                <span className="relative flex min-w-24 items-center">
                   <button
                     type="button"
                     aria-haspopup="menu"
@@ -3285,6 +3330,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                     >
                       {contextPercentRounded != null ? `${contextPercentRounded}%` : '—'}
                     </span>
+                    {showContextTokens && (
+                      <span
+                        ref={contextTokensRef}
+                        className="flex-shrink-0 type-data text-ink-muted"
+                      >
+                        {contextTokensText} tok
+                      </span>
+                    )}
                     <ChevronDown
                       size={10}
                       aria-hidden="true"
