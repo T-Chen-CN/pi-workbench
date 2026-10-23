@@ -22,13 +22,6 @@ import type {
   RecentWorkspacesResult,
   PluginsListResult,
   PluginCommandResult,
-  FleetCreateResult,
-  FleetListResult,
-  FleetGetResult,
-  FleetActionResult,
-  FleetDiffResult,
-  FleetMergeResult,
-  FleetTask,
   TerminalCreateResult,
   TerminalResult,
   UpdateCheckResult,
@@ -280,34 +273,6 @@ const mockAPI = {
   pluginsSetEnabled: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
   onPluginsChanged: (_callback: (payload: { workspaceDir: string }) => void) => () => {},
 
-  // Fleet tasks（Web 模式不可用）
-  fleetCreate: async (): Promise<FleetCreateResult> => ({
-    success: false,
-    error: 'Fleet tasks are only available in the Electron app',
-  }),
-  fleetList: async (): Promise<FleetListResult> => ({ success: true, tasks: [] }),
-  fleetGet: async (): Promise<FleetGetResult> => ({
-    success: false,
-    error: 'Fleet tasks are only available in the Electron app',
-  }),
-  fleetCancel: async (): Promise<FleetActionResult> => ({
-    success: false,
-    error: 'Fleet tasks are only available in the Electron app',
-  }),
-  fleetCleanup: async (): Promise<FleetActionResult> => ({
-    success: false,
-    error: 'Fleet tasks are only available in the Electron app',
-  }),
-  fleetDiff: async (): Promise<FleetDiffResult> => ({
-    success: false,
-    error: 'Fleet tasks are only available in the Electron app',
-  }),
-  fleetMerge: async (): Promise<FleetMergeResult> => ({
-    success: false,
-    error: 'Fleet tasks are only available in the Electron app',
-  }),
-  onFleetTaskUpdated: (_callback: (task: FleetTask) => void) => () => {},
-
   // Terminal（Web 模式没有 PTY，返回失败而不是抛异常）
   terminalCreate: async (): Promise<TerminalCreateResult> => ({
     success: false,
@@ -420,18 +385,6 @@ export const api = {
     electronAPI.pluginsSetEnabled(workspaceDir, pluginId, enabled),
   onPluginsChanged: (callback: (payload: { workspaceDir: string }) => void) =>
     electronAPI.onPluginsChanged(callback),
-
-  // Fleet tasks
-  fleetCreate: (workspaceDir: string, name: string, prompt: string) =>
-    electronAPI.fleetCreate(workspaceDir, name, prompt),
-  fleetList: (workspaceDir: string) => electronAPI.fleetList(workspaceDir),
-  fleetGet: (id: string) => electronAPI.fleetGet(id),
-  fleetCancel: (id: string, workspaceDir?: string) => electronAPI.fleetCancel(id, workspaceDir),
-  fleetCleanup: (id: string, workspaceDir?: string) => electronAPI.fleetCleanup(id, workspaceDir),
-  fleetDiff: (id: string, workspaceDir?: string) => electronAPI.fleetDiff(id, workspaceDir),
-  fleetMerge: (id: string, workspaceDir?: string) => electronAPI.fleetMerge(id, workspaceDir),
-  onFleetTaskUpdated: (callback: (task: FleetTask) => void) =>
-    electronAPI.onFleetTaskUpdated(callback),
 
   // Terminal
   terminalCreate: (workspaceDir: string, cols: number, rows: number) =>

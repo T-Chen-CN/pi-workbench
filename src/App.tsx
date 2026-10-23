@@ -28,7 +28,6 @@ import { UpdateDialog } from './components/UpdateDialog'
 import { UpdateStatusIndicator } from './components/UpdateStatusIndicator'
 import { TerminalPanel } from './components/TerminalPanel'
 import { CommandPalette } from './components/CommandPalette'
-import { FleetPanel } from './components/FleetPanel'
 import { ToastContainer } from './components/Toast'
 import { DialogHost } from './components/DialogHost'
 import { WelcomeScreen } from './components/WelcomeScreen'
@@ -75,9 +74,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
   const [showTerminal, setShowTerminal] = useState(false)
-  const [showFleet, setShowFleet] = useState(false)
   const [showActivity, setShowActivity] = useState(false)
-  const [fleetActive, setFleetActive] = useState(0)
   const [showSidebar, setShowSidebar] = useState(true)
   const [showChat, setShowChat] = useState(true)
   const [sidebarWidth, setSidebarWidth] = useState(232)
@@ -94,7 +91,7 @@ export default function App() {
           (session) => streamingMap[`${workspace}\u0000${session.id}`]
         )
       : []
-  const activeCount = streamingSessions.length + fleetActive
+  const activeCount = streamingSessions.length
   const { t, setLanguage, language } = useI18nStore()
   const { setMode } = useThemeStore()
   const resolvedTheme = useResolvedTheme()
@@ -351,34 +348,6 @@ export default function App() {
     return () => off()
   }, [])
 
-  // 统一活动：统计后台 Fleet 任务（每 5 秒刷新一次）
-  useEffect(() => {
-    if (!workspace) {
-      setFleetActive(0)
-      return
-    }
-    let cancelled = false
-    const refresh = async () => {
-      try {
-        const result = await api.fleetList(workspace)
-        if (cancelled || !result.success) return
-        setFleetActive(
-          (result.tasks ?? []).filter(
-            (task) => task.status === 'running' || task.status === 'queued'
-          ).length
-        )
-      } catch {
-        // 忽略轮询错误
-      }
-    }
-    void refresh()
-    const timer = window.setInterval(() => void refresh(), 5000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [workspace])
-
   const pickWorkspace = async () => {
     try {
       setError(null)
@@ -572,26 +541,10 @@ export default function App() {
                           ))}
                         </div>
                       )}
-                      {fleetActive > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowFleet(true)
-                            setShowActivity(false)
-                          }}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink transition-colors hover:bg-hover"
-                        >
-                          <span className="h-1 w-1 flex-shrink-0 rounded-full bg-warning" />
-                          {t('activeFleetTasks', { count: fleetActive })}
-                        </button>
-                      )}
                     </div>
                   )}
                 </div>
               )}
-              <button type="button" className={headerLink} onClick={() => setShowFleet(true)}>
-                {t('fleetTasks')}
-              </button>
               <button
                 type="button"
                 className={headerLink}
@@ -688,13 +641,6 @@ export default function App() {
       <DialogHost />
       <ToastContainer messages={toastMessages} onClose={removeToast} />
       {workspace && <CommandPalette workspacePath={workspace} />}
-      {workspace && (
-        <FleetPanel
-          workspacePath={workspace}
-          open={showFleet}
-          onClose={() => setShowFleet(false)}
-        />
-      )}
       <DiffViewer />
 
       {/* Debug panel */}

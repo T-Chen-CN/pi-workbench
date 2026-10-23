@@ -20,9 +20,6 @@ import { readJsonWithBackup, writeJsonAtomic } from './atomic-json.js'
 import { AgentRegistry } from './agent-registry.js'
 import { TerminalManager } from './terminal-manager.js'
 import { PluginManager } from './plugin-manager.js'
-import { FleetWorktree } from './fleet-worktree.js'
-import { createFleetStore } from './fleet-store.js'
-import { FleetManager } from './fleet-manager.js'
 import { DraftStore } from './draft-store.js'
 import type { UpdateController, UpdateState } from './updater.js'
 import { ApprovalBroker, sanitizeApprovalDecision } from './approval-broker.js'
@@ -42,7 +39,7 @@ interface WorkspaceWatchEntry {
 }
 const workspaceWatchers = new Map<string, WorkspaceWatchEntry>()
 
-// 只允许一个实例：避免两个进程同时写同一份配置和 Fleet 数据库。
+// 只允许一个实例：避免两个进程同时写同一份配置和数据库。
 const singleInstanceLock =
   typeof app.requestSingleInstanceLock === 'function' ? app.requestSingleInstanceLock() : true
 if (!singleInstanceLock) {
@@ -354,36 +351,8 @@ async function seedTrustedWorkspacesFromSettings(): Promise<void> {
   }
 }
 
-const fleetStore = createFleetStore(path.join(getAppDir(), 'data', 'fleet-tasks.db'))
 const workspaceStore = createWorkspaceStore(path.join(getAppDir(), 'data', 'workspaces.db'))
 const draftStore = new DraftStore(path.join(getAppDir(), 'cache', 'drafts'))
-const fleetManager = new FleetManager({
-  store: fleetStore,
-  worktrees: new FleetWorktree(),
-  createAgent: async () => {
-    const bridgePath = path.join(__dirname, '..', 'pi-bridge', 'dist', 'index.js')
-    const { AgentManager } = await import(pathToFileURL(bridgePath).href)
-    return new AgentManager()
-  },
-  getApiConfig: async () => {
-    const config = await loadApiConfig()
-    if (!config?.apiKey) return null
-    return {
-      provider: config.provider,
-      apiUrl: config.apiUrl,
-      apiKey: config.apiKey,
-      selectedModel: config.selectedModel,
-    }
-  },
-  agentDir: path.join(getAppDir(), 'data', 'agent'),
-  logDir: path.join(getAppDir(), 'logs'),
-  agentLogger,
-  onUpdate: (task) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('fleet:task-updated', task)
-    }
-  },
-})
 
 // 便携式架构：获取应用目录
 function getAppDir(): string {
@@ -624,15 +593,6 @@ app.whenReady().then(async () => {
   setTimeout(() => {
     void ensureUpdateController().then((controller) => controller?.check())
   }, UPDATE_CHECK_DELAY_MS)
-
-  // 应用 ready、safeStorage 可用之后再恢复上次排队的 Fleet 任务
-  void fleetManager.resumeQueued().then((result) => {
-    if (result.reason) {
-      console.log('[Main] Fleet queue not resumed:', result.reason)
-    } else if (result.resumed > 0) {
-      console.log(`[Main] Resumed ${result.resumed} Fleet task(s)`)
-    }
-  })
 })
 
 let shuttingDown = false
@@ -645,7 +605,7 @@ async function shutdownApplication(): Promise<void> {
     pluginManager.disposeAll()
     approvalBroker.dispose()
     workspaceStore.close()
-    await Promise.allSettled([fleetManager.disposeAll(), agentRegistry.disposeAll()])
+    await Promise.allSettled([agentRegistry.disposeAll()])
   } catch (error) {
     console.error('[Main] Shutdown cleanup failed:', error)
   } finally {
@@ -1035,55 +995,6 @@ handleIpc(
     }
   }
 )
-
-// ---- Fleet 后台任务 ----
-
-handleIpc('fleet:create', async (_event, workspaceDir: string, name: string, prompt: string) => {
-  if (!isTrustedWorkspacePath(workspaceDir)) {
-    return { success: false, error: 'Workspace is not approved' }
-  }
-  return fleetManager.createTask(workspaceDir, name, prompt)
-})
-
-handleIpc('fleet:list', async (_event, workspaceDir: string) => {
-  if (!isTrustedWorkspacePath(workspaceDir)) {
-    return { success: false, tasks: [], error: 'Workspace is not approved' }
-  }
-  return { success: true, tasks: fleetManager.list(workspaceDir) }
-})
-
-handleIpc('fleet:get', async (_event, id: string) => {
-  const task = fleetManager.get(id)
-  return task ? { success: true, task } : { success: false, error: 'Task not found' }
-})
-
-handleIpc('fleet:cancel', async (_event, id: string, workspaceDir?: string) => {
-  if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
-    return { success: false, error: 'Workspace is not approved' }
-  }
-  return fleetManager.cancel(id, workspaceDir)
-})
-
-handleIpc('fleet:cleanup', async (_event, id: string, workspaceDir?: string) => {
-  if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
-    return { success: false, error: 'Workspace is not approved' }
-  }
-  return fleetManager.cleanupWorktree(id, workspaceDir)
-})
-
-handleIpc('fleet:diff', async (_event, id: string, workspaceDir?: string) => {
-  if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
-    return { success: false, error: 'Workspace is not approved' }
-  }
-  return fleetManager.getDiff(id, workspaceDir)
-})
-
-handleIpc('fleet:merge', async (_event, id: string, workspaceDir?: string) => {
-  if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
-    return { success: false, error: 'Workspace is not approved' }
-  }
-  return fleetManager.mergeTask(id, workspaceDir)
-})
 
 // ---- 自动更新 ----
 
@@ -1763,8 +1674,6 @@ handleIpc('apiConfig:save', async (_event, config: any) => {
     }
     await writeJsonAtomic(configPath, stored)
     activeProviderApiKey = String(config?.apiKey ?? '')
-    // 配置好 Key 之后，恢复因缺少 Key 而停在队列中的 Fleet 任务
-    void fleetManager.resumeQueued()
 
     return { success: true }
   } catch (error) {

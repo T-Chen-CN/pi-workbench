@@ -156,7 +156,6 @@ describe('design system usage', () => {
       'components/CommandPalette.tsx',
       'components/DiffViewer.tsx',
       'components/FileExplorer.tsx',
-      'components/FleetPanel.tsx',
       'components/Toast.tsx',
     ])
     const violations: string[] = []
