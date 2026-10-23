@@ -986,6 +986,52 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }
 
+  /** 斜杠命令（AF-14）：在发送前拦截 */
+  const handleSlashCommand = async (inputValue: string): Promise<boolean> => {
+    const [rawCommand, ...rest] = inputValue.trim().split(/\s+/)
+    const command = rawCommand.toLowerCase()
+    if (!command.startsWith('/')) return false
+    const argument = rest.join(' ').trim()
+
+    switch (command) {
+      case '/help':
+        toast.info(t('slashHelp'))
+        return true
+      case '/plan':
+        await handleModeChange('plan')
+        return true
+      case '/act':
+        await handleModeChange('act')
+        return true
+      case '/compact':
+        await handleCompact()
+        return true
+      case '/clear':
+        if (await confirmDialog({ message: t('slashClearConfirm'), danger: true })) {
+          await handleNewSession()
+        }
+        return true
+      case '/model': {
+        if (!argument) {
+          toast.info(t('slashCurrentModel', { model: sessionSettings?.modelId ?? '—' }))
+          return true
+        }
+        const match = availableModels.find(
+          (model) => model.toLowerCase() === argument.toLowerCase()
+        )
+        if (!match) {
+          toast.error(t('slashUnknownModel', { model: argument }))
+          return true
+        }
+        await handleModelChange(match)
+        return true
+      }
+      default:
+        toast.error(t('slashUnknownCommand', { command }))
+        return true
+    }
+  }
+
   const handleSubmit = async (
     e?: React.FormEvent,
     override?: string,
@@ -999,6 +1045,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     if (!sessionId || !key || !userMessage) return
 
     const chat = useChatStore.getState()
+
+    // 斜杠命令不进入对话
+    if (!options?.skipUserMessage && userMessage.startsWith('/')) {
+      chat.setDraftInput(key, '')
+      if (await handleSlashCommand(userMessage)) return
+    }
 
     // 运行中：进入待发送队列；steer 立即注入当前轮
     if (isLoading && !forceSendRef.current) {

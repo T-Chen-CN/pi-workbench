@@ -162,6 +162,12 @@ export const translations = {
     exportFailed: '导出失败：{error}',
     exportEmpty: '该会话没有可导出的消息',
     sessionMetaFailed: '保存会话状态失败：{error}',
+    slashHelp:
+      '可用命令：/plan 计划模式 · /act 执行模式 · /compact 压缩上下文 · /clear 新建会话 · /model <名称> 切换模型',
+    slashClearConfirm: '清空意味着开始一个新会话；当前对话会保留在会话列表中。继续？',
+    slashCurrentModel: '当前模型：{model}',
+    slashUnknownModel: '找不到模型：{model}',
+    slashUnknownCommand: '未知命令：{command}（输入 /help 查看可用命令）',
     contextUsageLabel: '上下文占用',
     compactContext: '压缩上下文',
     compactConfirm: '压缩会总结较早的对话并释放上下文，之后细节可能不再完整。继续？',
@@ -631,6 +637,13 @@ export const translations = {
     exportFailed: 'Export failed: {error}',
     exportEmpty: 'This session has no messages to export',
     sessionMetaFailed: 'Failed to save session state: {error}',
+    slashHelp:
+      'Commands: /plan plan mode · /act act mode · /compact compact context · /clear start a new session · /model <name> switch model',
+    slashClearConfirm:
+      'Clearing starts a new session; the current conversation stays in the session list. Continue?',
+    slashCurrentModel: 'Current model: {model}',
+    slashUnknownModel: 'Unknown model: {model}',
+    slashUnknownCommand: 'Unknown command: {command} (type /help for available commands)',
     contextUsageLabel: 'Context usage',
     compactContext: 'Compact context',
     compactConfirm:
