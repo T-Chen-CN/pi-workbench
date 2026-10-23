@@ -61,6 +61,7 @@ vi.mock('../src/api/piAgentAPI', () => ({
     getSessionSettings: vi.fn(),
     getSessionStats: vi.fn(),
     getModelCapabilities: vi.fn(),
+    listPromptResources: vi.fn(),
     getToolEdit: vi.fn(),
     getToolResultMeta: vi.fn(),
     readToolResultChunk: vi.fn(),
@@ -190,6 +191,11 @@ beforeEach(() => {
     stats: { tokens: 0, input: 0, output: 0, cost: 0, toolCalls: 0, messages: 0 },
   })
   vi.mocked(piAgentAPI.getModelCapabilities).mockResolvedValue({ success: true, models: [] })
+  vi.mocked(piAgentAPI.listPromptResources).mockResolvedValue({
+    success: true,
+    templates: [],
+    skills: [],
+  })
   vi.mocked(piAgentAPI.getToolEdit).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.getToolResultMeta).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.readToolResultChunk).mockResolvedValue({ success: false })
@@ -263,6 +269,33 @@ describe('ChatPanel', () => {
     render(<ChatPanel workspacePath="/ws" />)
 
     expect(await screen.findByText('resume this turn')).toBeTruthy()
+  })
+
+  it('lists prompt templates and skills in the slash menu', async () => {
+    vi.mocked(piAgentAPI.listPromptResources).mockResolvedValue({
+      success: true,
+      templates: [{ name: 'review', description: 'Review changes', scope: 'user' }],
+      skills: [
+        {
+          name: 'deploy',
+          description: 'Deploy app',
+          scope: 'project',
+          disableModelInvocation: false,
+        },
+      ],
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+    await screen.findByRole('heading', { name: translations.zh.agentChatTitle })
+
+    const textarea = screen.getByPlaceholderText(translations.zh.inputPlaceholder)
+    fireEvent.change(textarea, { target: { value: '/' } })
+
+    expect(await screen.findByText('/review')).toBeTruthy()
+    expect(screen.getByText('/skill:deploy')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('/review'))
+    await waitFor(() => expect((textarea as HTMLTextAreaElement).value).toBe('/review '))
   })
 
   it('shows model capabilities and disables unsupported thinking', async () => {

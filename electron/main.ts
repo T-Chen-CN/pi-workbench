@@ -2679,6 +2679,26 @@ handleIpc('agent:models:capabilities', async (_event, workspaceDir: string) => {
   }
 })
 
+// 提示模板与技能（R-13）
+handleIpc(
+  'agent:prompt-resources',
+  async (_event, workspaceDir: string, sessionId: string) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.listPromptResources !== 'function') {
+        return { success: false, error: 'Prompt resources are not supported by this agent' }
+      }
+      return await agent.listPromptResources(sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
 handleIpc('agent:session:stats', async (_event, workspaceDir: string, sessionId: string) => {
   try {
     if (!isTrustedWorkspacePath(workspaceDir)) {

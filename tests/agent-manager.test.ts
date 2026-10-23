@@ -12,6 +12,7 @@ const sdk = vi.hoisted(() => ({
   sessionOpen: vi.fn(),
   sessionFindById: vi.fn(),
   sessionList: vi.fn(),
+  reload: vi.fn(),
   loaders: [] as Array<{ options: any }>,
 }))
 
@@ -24,7 +25,9 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
       this.options = options
       sdk.loaders.push(this)
     }
-    async reload() {}
+    async reload() {
+      sdk.reload()
+    }
   },
   SettingsManager: { create: () => ({}) },
   SessionManager: {
@@ -1701,6 +1704,36 @@ describe('model capabilities', () => {
     expect(
       modelsJson.providers['pi-workbench'].models.map((model: { id: string }) => model.id)
     ).toEqual(['deepseek-flash', 'deepseek-v4-pro'])
+  })
+})
+
+describe('prompt resources', () => {
+  it('reloads and lists prompt templates and skills', async () => {
+    const session = createFakeSession()
+    ;(session as unknown as { promptTemplates: unknown[] }).promptTemplates = [
+      {
+        name: 'review',
+        description: 'Review changes',
+        argumentHint: '<path>',
+        sourceInfo: { scope: 'project' },
+      },
+    ]
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const result = await manager.listPromptResources('session-1')
+
+    expect(result.success).toBe(true)
+    expect(result.templates).toEqual([
+      {
+        name: 'review',
+        description: 'Review changes',
+        argumentHint: '<path>',
+        scope: 'project',
+      },
+    ])
+    expect(result.skills).toEqual([])
+    expect(sdk.reload).toHaveBeenCalled()
   })
 })
 

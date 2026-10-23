@@ -13,6 +13,7 @@ import {
   SettingsManager,
   type AgentSession,
   type ExtensionFactory,
+  type ResourceLoader,
   type SessionEntry,
   type SessionTreeNode,
 } from '@earendil-works/pi-coding-agent'
@@ -469,6 +470,22 @@ export interface ModelCapabilityInfo {
   thinkingLevels: string[]
 }
 
+/** Pi 提示模板（R-13），通过 `/name` 在对话中展开 */
+export interface PromptTemplateInfo {
+  name: string
+  description: string
+  argumentHint?: string
+  scope: 'user' | 'project' | 'temporary'
+}
+
+/** Pi 技能（R-13），通过 `/skill:name` 调用 */
+export interface SkillInfo {
+  name: string
+  description: string
+  scope: 'user' | 'project' | 'temporary'
+  disableModelInvocation: boolean
+}
+
 export interface SessionOpenResult {
   success: boolean
   session?: SessionSummary
@@ -493,6 +510,8 @@ interface SessionRuntime {
   id: string
   sessionManager: SessionManager
   session: AgentSession
+  /** 提示模板 / 技能等资源的加载器（R-13） */
+  resourceLoader: ResourceLoader | null
   unsubscribe: (() => void) | null
   isProcessing: boolean
   onTextDelta: ((delta: string) => void) | null
@@ -1914,6 +1933,47 @@ ${body.join('\n')}
     }
   }
 
+  /** 列出提示模板与技能（R-13）；读取前重新扫描文件，新增模板无需重启 */
+  async listPromptResources(sessionId: string): Promise<{
+    success: boolean
+    templates?: PromptTemplateInfo[]
+    skills?: SkillInfo[]
+    error?: string
+  }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      if (runtime.resourceLoader) {
+        try {
+          await runtime.resourceLoader.reload()
+        } catch (error) {
+          this.logger.warn('[Agent Manager] Failed to reload prompt resources:', error)
+        }
+      }
+
+      const loaderPrompts = runtime.resourceLoader?.getPrompts?.().prompts
+      const prompts = loaderPrompts ?? runtime.session.promptTemplates ?? []
+      const skills = runtime.resourceLoader?.getSkills?.().skills ?? []
+
+      return {
+        success: true,
+        templates: prompts.map((template) => ({
+          name: template.name,
+          description: template.description ?? '',
+          argumentHint: template.argumentHint,
+          scope: template.sourceInfo?.scope ?? 'user',
+        })),
+        skills: skills.map((skill) => ({
+          name: skill.name,
+          description: skill.description ?? '',
+          scope: skill.sourceInfo?.scope ?? 'user',
+          disableModelInvocation: Boolean(skill.disableModelInvocation),
+        })),
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   /** 切换思考级别 */
   async setSessionThinking(
     sessionId: string,
@@ -2090,6 +2150,7 @@ ${body.join('\n')}
       id,
       sessionManager,
       session: sessionOutcome.value.session,
+      resourceLoader,
       unsubscribe: null,
       isProcessing: false,
       onTextDelta: null,

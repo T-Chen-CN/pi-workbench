@@ -8,9 +8,10 @@ import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
 import { useUpdaterStore } from '../store/updaterStore'
 import { useSettingsStore } from '../store/settingsStore'
+import { piAgentAPI } from '../api/piAgentAPI'
 import { matchShortcut } from '../utils/keybindings'
 import { IconButton, Spinner } from './ui'
-import type { PluginCommandInfo, PluginInfo } from '../types/electron'
+import type { PluginCommandInfo, PluginInfo, PromptTemplateInfo, SkillInfo } from '../types/electron'
 
 interface CommandPaletteProps {
   workspacePath: string
@@ -50,6 +51,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
   const { t } = useI18nStore()
   const [open, setOpen] = useState(false)
   const [plugins, setPlugins] = useState<PluginInfo[]>([])
+  /** 与斜杠菜单共用的提示模板 / 技能数据源（R-13） */
+  const [resources, setResources] = useState<{
+    templates: PromptTemplateInfo[]
+    skills: SkillInfo[]
+  }>({ templates: [], skills: [] })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -67,6 +73,15 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
         setPlugins(result.plugins)
       } else {
         setError(t('loadPluginsFailed', { error: localizeError(result.error) || t('unknownError') }))
+      }
+
+      const active = useSessionStore.getState().byWorkspace[workspacePath]?.active
+      if (active) {
+        const prompts = await piAgentAPI.listPromptResources(workspacePath, active)
+        setResources({
+          templates: prompts.success ? prompts.templates ?? [] : [],
+          skills: prompts.success ? prompts.skills ?? [] : [],
+        })
       }
     } catch (err) {
       setError(localizeError(err instanceof Error ? err.message : String(err)))
@@ -119,11 +134,28 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
       pluginId: 'workbench',
       pluginName: 'Workbench',
     }))
+    const resourceCommands: PluginCommandInfo[] = [
+      ...resources.templates.map((template) => ({
+        id: `template:${template.name}`,
+        title: `/${template.name}`,
+        description: template.description,
+        pluginId: 'pi-templates',
+        pluginName: t('slashTemplate'),
+      })),
+      ...resources.skills.map((skill) => ({
+        id: `skill:${skill.name}`,
+        title: `/skill:${skill.name}`,
+        description: skill.description,
+        pluginId: 'pi-skills',
+        pluginName: t('slashSkill'),
+      })),
+    ]
     return [
       ...builtins,
+      ...resourceCommands,
       ...plugins.filter((plugin) => plugin.enabled && !plugin.error).flatMap((plugin) => plugin.commands),
     ]
-  }, [plugins, t])
+  }, [plugins, resources, t])
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -138,6 +170,28 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
   }, [query, open])
 
   const runCommand = async (command: PluginCommandInfo) => {
+    // 模板 / 技能：插入到聊天输入框，由 Pi SDK 展开（仍走审批）
+    if (command.id.startsWith('template:')) {
+      window.dispatchEvent(
+        new CustomEvent('pi:insert-slash', {
+          detail: { insert: `/${command.id.slice('template:'.length)} ` },
+        })
+      )
+      setOutput({ title: command.title, text: command.title, success: true })
+      setOpen(false)
+      return
+    }
+    if (command.id.startsWith('skill:')) {
+      window.dispatchEvent(
+        new CustomEvent('pi:insert-slash', {
+          detail: { insert: `/skill:${command.id.slice('skill:'.length)} ` },
+        })
+      )
+      setOutput({ title: command.title, text: command.title, success: true })
+      setOpen(false)
+      return
+    }
+
     const builtin = BUILTIN_COMMANDS.find((item) => item.id === command.id)
     if (builtin) {
       if (command.id === ATTACH_SELECTION_COMMAND_ID) {
