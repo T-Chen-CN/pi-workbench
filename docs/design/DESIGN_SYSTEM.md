@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.19 |
+| 文档版本 | v1.20 |
 | 状态 | Active（正式规范） |
-| 最后更新 | 2026-10-23 |
+| 最后更新 | 2026-10-24 |
 | 适用范围 | 渲染进程全部 UI、Monaco / xterm 主题、应用主题设置 |
 | 唯一事实来源 | 本文件。所有前端设计相关实现以此为准 |
 | 历史方案 | [PAPER_INK.md](./PAPER_INK.md)（方案、决策与实施记录） |
@@ -266,7 +266,7 @@
 ### 5.4 Select
 
 - 原生 select + 右侧 `ChevronDown` 图标；背景/边框与 Input 一致。
-- 保持原生键盘行为；不要用自定义下拉替代，除非设计规范更新。
+- 保持原生键盘行为；不要用自定义下拉替代——唯一例外是聊天输入区的状态行分段菜单（见 6.5）。
 
 ### 5.5 Field
 
@@ -351,6 +351,26 @@
 - `tests/design-system.test.ts` 会扫描 `src/**/*.tsx`，发现业务组件中的原始字体声明直接失败。
 - 新增内容类型时，先在 `patterns.tsx` 定义组件/变体，再写页面；不要直接写页面样式。
 
+### 5.10 PopoverMenu / MenuOption
+
+锚定浮层与选项行，位于 `src/components/ui.tsx`。用于“点哪一段、就在哪一段上方展开”的紧凑菜单。
+
+| 组件 | Prop | 说明 |
+|---|---|---|
+| `PopoverMenu` | `open` / `onClose` / `label` | 是否展开、关闭回调、`aria-label` |
+| | `role="menu \| dialog"` | `menu` 支持 ↑↓ / Home / End 导航；`dialog` 为自由面板（如上下文明细） |
+| `MenuOption` | `selected` / `disabled` / `onSelect` | 当前项 `accent` 勾选；禁用项置灰且不可聚焦 |
+| | `variant="value \| data"` | 中文标签用 `value`；模型名、ID 用 `data`（mono） |
+| | `meta` / `title` | 右侧次要说明 / 悬停说明 |
+
+**规则**：
+
+- 触发器与 `PopoverMenu` 必须放在同一个 `relative` 容器内，菜单 `bottom-full` 向上展开，间距 4px（`mb-1`）；不做需要鼠标移动的居中弹窗。
+- 菜单优先与触发器左缘对齐；超出最近裁剪容器的右缘时，自动向左收进容器内（左右各留 4px），不依赖固定的左/右对齐参数。
+- 浮层使用 `bg-raised` + 1px `border-line` + `shadow-print`；圆角不超过 2px。
+- `role="menu"` 打开时聚焦当前项，Esc 关闭并把焦点还给触发器；点击外部关闭但不抢回焦点。
+- 菜单宽度使用 Tailwind 标准宽度（`w-36` / `w-56` / `w-64`），不以内容撑开导致面板变形。
+
 ---
 
 ## 6. 页面与交互模式
@@ -413,11 +433,13 @@
 - 工具审批卡：位于输入框上方，`bg-raised` + `border-rule-hairline`，不设阴影。标题行 `warning` ShieldAlert + `type-label`；工具与参数摘要用 `type-value`，类别与路径用 `type-caption` / `type-data`。命令与写入预览放在 `bg-sunken` + `rule-hairline` 的 mono 块中（命令 ≤400 字符、预览 ≤280 字符），不展示完整文件内容。底部按钮依次为允许一次（primary）/ 本会话允许（secondary）/ 始终允许（ghost）/ 拒绝（danger，右对齐）；拒绝进入二次确认并可选填原因。
 - Plan / Act 切换：输入区左下角两段式控件（`type-caption`，激活 `bg-active text-ink`，无圆角胶囊）；Plan 模式只读，助手回复后输入框上方出现执行条（`bg-raised` + 发丝边 + `type-caption` 提示 + primary 按钮“执行计划”）。
 - 待发送消息：输入框上方的发丝边纸卡列表，`type-caption` 行为标签（排队 / 插话，运行中可点击切换）+ `type-value` 单行截断正文 + 移除按钮；空闲时额外显示发送按钮。运行中右下角同时出现“排队 / 插话”切换与停止按钮，发送按钮始终可用。
-- 上下文占用：输入区上方的 1px 细条（`Meter`，`tone` 随占用切换 accent / warning / danger）+ `type-data` 计数「42% · 40k / 96k」+ `type-caption` 文本按钮“压缩上下文”；细条不使用发光或渐变。
+- 输入区状态行：输入框下方一行分段触发器（模型 · 思考 · 上下文）。每段 24px 高、`rounded-sm`，hover / 展开 `bg-hover`，chevron 展开时旋转 180°；模型名与百分比用 `type-data`，思考标签用 `type-caption`。模型名超长截断，整行不换行、不横向溢出。
+- 状态行菜单：三段各自锚定、就地向上展开（`PopoverMenu`，距触发器 4px；`bg-raised` + 满墨边 + `shadow-print`；模型 224px / 思考 144px / 上下文 256px，菜单超出面板时自动收进面板内）。选项用 `MenuOption`：当前项 `accent` 勾选，不可用项置灰；模型菜单底部脚注显示上下文窗口与能力，思考菜单在中文级别旁附英文枚举；键盘 ↑↓ / Enter / Esc，Esc 后焦点回到触发器。运行中模型与思考触发器禁用，上下文面板仍可查看。
+- 上下文面板（A 档）：已用百分比（取整）+ token / 窗口、`Meter`、剩余、本会话累计（token · 费用）与“压缩上下文”行。不做分类估算；压缩后尚未回复时 token 显示占位并提示“待下一次回复后更新”。“压缩上下文”只在此面板提供一个入口，状态行保持纯信息。
+- 状态行 token 自适应：上下文段始终显示 `Meter` 与整数百分比；宽度足够时在其后追加 `token / 窗口`，放不下时整段隐藏（按实际测量各段宽度，不使用固定断点），面板内始终保留完整数字。
 - 检查点菜单：聊天头部 `RotateCcw` 图标按钮打开的浮层（`bg-raised` + 满墨边 + `shadow-print`，宽 320px）；每行显示时间（`type-value`）与“修改 N 个文件”（`type-caption`），操作按钮为发丝边文本按钮（恢复代码 / 恢复对话 / 两者都恢复），底部一句说明命令副作用不可回退。
 - 消息操作：悬停或键盘聚焦时在消息头部右侧显示 14px 图标按钮（复制 / 重新生成 / 编辑），默认 `opacity-0`，`group-hover` 与 `focus-within` 时显现；只对最后一条助手回复和最后一条用户消息提供重复生成与编辑入口。
 - 快捷键可达：设置“快捷键”页顶部为“可自定义”区，每行左侧 `type-value` 命令名、右侧 `KeyCap` 组合键与 ghost 按钮“修改”；捕获中显示 `warning` 提示文案，冲突用 Toast 报错，页头提供“恢复默认”。
-- 模型与思考：输入区上方一行两个紧凑 `Select`（模型 176px / 思考 112px，高度 24px），值来自会话级设置；切换失败时回滚并 Toast。
 - 文件引用：Markdown 行内代码中的 `path[:line]` 使用 `type-data` 样式，hover 变 `accent` 并加下划线，点击打开编辑器；`@` 搜索弹层为 `bg-raised` + 满墨边 + `shadow-print` 的列表（单行 `type-data`，hover `bg-hover`），拖入文件直接进入附件区。
 - 符号附加：附件菜单右上角提供“附加符号 / 附加文件”切换；符号列表每行显示 kind（`type-caption`）、名称（`type-value`，单行截断）与行范围（`type-data`），空态一句“未识别到符号，可改用整文件”。
 - 内联变更卡：助手消息下方的 `bg-raised` + 发丝边卡片；标题行“本轮修改了 N 个文件”（`type-label`）+ 右侧“全部还原”（`type-caption`）；每行文件名为单行截断的 `type-data`，右侧“查看修改 / 还原此文件”文本按钮；还原按钮 hover 变 `danger`。
@@ -590,6 +612,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.20 | 2026-10-24 | 聊天输入区状态行：模型 / 思考 / 上下文三段改为就地向上展开的分段菜单（新增 `PopoverMenu` / `MenuOption`）；上下文面板（A 档）显示已用百分比、token / 窗口、剩余、本会话累计与压缩入口，宽度 256px；状态行的 token 数字按可用宽度自适应显隐；移除常驻 `Select` 与重复的快捷键提示 |
 | v1.19 | 2026-10-23 | 新增 `Meter` 线性进度组件（下载进度）；状态栏增加版本号与更新提示；更新安装弹窗复用 `Modal`，更新说明使用 `bg-sunken` + 发丝边 |
 | v1.18 | 2026-10-22 | 动效始终播放，不再跟随 `prefers-reduced-motion` |
 | v1.17 | 2026-10-22 | Agent 过程轨迹：thinking/text/tool 有序 parts；相邻过程组合并为默认收起的过程组；工具步骤状态、耗时与结果预览；思考正文降低一级排版；补充展开/收起规则与无障碍要求 |

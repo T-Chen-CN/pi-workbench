@@ -1,13 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   AlertCircle,
   ArrowDown,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Copy,
   FileText,
   History,
+  Minimize2,
   Paperclip,
   Pencil,
   RotateCcw,
@@ -65,10 +67,13 @@ import {
   EmptyState,
   IconButton,
   Label,
-  Select,
+  MenuOption,
+  PopoverMenu,
   Spinner,
   Textarea,
+  Value,
 } from './ui'
+import type { TranslationKey } from '../i18n/translations'
 import type {
   SessionSummary,
   CheckpointSummary,
@@ -102,6 +107,16 @@ function formatTokenCount(value: number): string {
 }
 
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+const THINKING_LABEL_KEYS: Record<(typeof THINKING_LEVELS)[number], TranslationKey> = {
+  off: 'thinkingOff',
+  minimal: 'thinkingMinimal',
+  low: 'thinkingLow',
+  medium: 'thinkingMedium',
+  high: 'thinkingHigh',
+  xhigh: 'thinkingXhigh',
+  max: 'thinkingMax',
+}
 
 /** 本轮任务列表（AF-12）：由助手消息里的工具步骤派生 */
 const TurnTaskList: React.FC<{ parts: import('../types/electron').AgentTracePart[] }> = ({
@@ -530,6 +545,24 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const pendingMessages = conversation?.pending ?? []
   const contextUsage = conversation?.contextUsage ?? null
   const contextPercent = contextUsage?.percent ?? null
+  const contextPercentRounded = contextPercent == null ? null : Math.round(contextPercent)
+  const contextTone: 'accent' | 'warning' | 'danger' =
+    contextPercent == null
+      ? 'accent'
+      : contextPercent >= 95
+        ? 'danger'
+        : contextPercent >= 80
+          ? 'warning'
+          : 'accent'
+  const contextTokensText = contextUsage
+    ? `${
+        contextUsage.tokens != null ? formatTokenCount(contextUsage.tokens) : '—'
+      } / ${formatTokenCount(contextUsage.contextWindow)}`
+    : '—'
+  const contextRemaining =
+    contextUsage && contextUsage.tokens != null
+      ? Math.max(0, contextUsage.contextWindow - contextUsage.tokens)
+      : null
   const sessionSettings = conversation?.sessionSettings ?? null
   const sessionStats = conversation?.sessionStats ?? null
   const retryStatus = conversation?.retryStatus ?? null
@@ -684,6 +717,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [showAttachMenu, setShowAttachMenu] = useState(false)
   const [attachMode, setAttachMode] = useState<'files' | 'symbols'>('files')
   const [pendingBehavior, setPendingBehavior] = useState<'queue' | 'steer'>('queue')
+  /** 输入区状态行当前展开的分段菜单 */
+  const [statusMenu, setStatusMenu] = useState<'model' | 'thinking' | 'context' | null>(null)
+  const closeStatusMenu = useCallback(() => setStatusMenu(null), [])
+  /** 状态行放不下时收起 token 数字，只留进度条与百分比 */
+  const statusStripRef = useRef<HTMLDivElement>(null)
+  const contextTokensRef = useRef<HTMLSpanElement>(null)
+  const contextTokensWidthRef = useRef(0)
+  const [showContextTokens, setShowContextTokens] = useState(true)
+  useEffect(() => {
+    setStatusMenu(null)
+  }, [activeSessionId])
   const [showCheckpoints, setShowCheckpoints] = useState(false)
   /** 工具结果全量查看（R-20） */
   const [toolResultView, setToolResultView] = useState<{
@@ -861,6 +905,61 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     : Boolean(
         sessionSettings?.modelId && configuredImageModels.includes(sessionSettings.modelId)
       )
+  /** 模型菜单底部的能力脚注 */
+  const modelCapabilityText = selectedModelCapability
+    ? selectedModelCapability.available === false
+      ? t('modelUnavailableHint')
+      : selectedModelCapability.source === 'default'
+        ? t('modelCapabilityUnknown')
+        : [
+            selectedModelCapability.contextWindow
+              ? t('modelContextWindow', {
+                  tokens: formatTokenCount(selectedModelCapability.contextWindow),
+                })
+              : null,
+            selectedModelCapability.reasoning ? t('modelSupportsThinking') : t('modelNoThinking'),
+            selectedModelCapability.vision ? t('modelSupportsVision') : t('modelNoVision'),
+          ]
+            .filter(Boolean)
+            .join(' · ')
+    : null
+
+  /**
+   * 状态行 token 数字自适应：按各段实际宽度判断是否放得下。
+   * 放不下就隐藏 token 数字（百分比与进度条始终保留），空间恢复后再显示。
+   */
+  useLayoutEffect(() => {
+    const strip = statusStripRef.current
+    if (!strip) return
+    const measure = () => {
+      const gap = Number.parseFloat(getComputedStyle(strip).columnGap) || 0
+      const children = Array.from(strip.children) as HTMLElement[]
+      let needed = children.reduce((sum, child) => sum + child.getBoundingClientRect().width, 0)
+      if (children.length > 1) needed += gap * (children.length - 1)
+
+      if (showContextTokens) {
+        const tokens = contextTokensRef.current
+        if (tokens) {
+          const parent = tokens.parentElement
+          const parentGap = parent
+            ? Number.parseFloat(getComputedStyle(parent).columnGap) || 0
+            : 0
+          contextTokensWidthRef.current = tokens.getBoundingClientRect().width + parentGap
+        }
+        if (needed > strip.clientWidth + 0.5) setShowContextTokens(false)
+      } else if (
+        contextTokensWidthRef.current > 0 &&
+        needed + contextTokensWidthRef.current <= strip.clientWidth
+      ) {
+        setShowContextTokens(true)
+      }
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(strip)
+    return () => observer.disconnect()
+  }, [showContextTokens, sessionSettings, contextUsage, contextPercentRounded])
 
   /** 附加单个符号（函数 / 类等）作为上下文 */
   const attachSymbol = (symbol: ExtractedSymbol) => {
@@ -2665,125 +2764,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               </div>
             )
           )}
-          {(contextUsage || sessionStats) && (
-            <div className="mb-2 flex items-center gap-2">
-              {contextUsage && contextPercent != null && (
-                <Meter
-                  value={contextPercent}
-                  label={t('contextUsageLabel')}
-                  tone={
-                    contextPercent >= 95
-                      ? 'danger'
-                      : contextPercent >= 80
-                        ? 'warning'
-                        : 'accent'
-                  }
-                  className="flex-1"
-                />
-              )}
-              <DataText
-                className={
-                  contextPercent != null && contextPercent >= 95
-                    ? 'text-danger'
-                    : contextPercent != null && contextPercent >= 80
-                      ? 'text-warning'
-                      : 'text-ink-muted'
-                }
-              >
-                {[
-                  contextUsage && contextPercent != null
-                    ? `${contextPercent}% · ${
-                        contextUsage.tokens != null
-                          ? formatTokenCount(contextUsage.tokens)
-                          : '—'
-                      } / ${formatTokenCount(contextUsage.contextWindow)}`
-                    : '',
-                  sessionStats
-                    ? `${formatTokenCount(sessionStats.tokens)} tok`
-                    : '',
-                  sessionStats && sessionStats.cost > 0
-                    ? `$${sessionStats.cost.toFixed(2)}`
-                    : '',
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </DataText>
-              <button
-                type="button"
-                disabled={isLoading}
-                onClick={() => void handleCompact()}
-                className="type-caption text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
-              >
-                {t('compactContext')}
-              </button>
-            </div>
-          )}
-          {sessionSettings && (
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <Select
-                aria-label={t('modelLabel')}
-                value={sessionSettings.modelId ?? ''}
-                disabled={isLoading}
-                onChange={(event) => void handleModelChange(event.target.value)}
-                className="h-6 w-44"
-              >
-                {availableModels.length === 0 && sessionSettings.modelId && (
-                  <option value={sessionSettings.modelId}>{sessionSettings.modelId}</option>
-                )}
-                {availableModels.map((model) => {
-                  const capability = modelCapabilities.find((item) => item.id === model)
-                  const unavailable = capability?.available === false
-                  return (
-                    <option key={model} value={model} disabled={unavailable}>
-                      {unavailable ? `${model}${t('modelUnavailable')}` : model}
-                    </option>
-                  )
-                })}
-              </Select>
-              <Select
-                aria-label={t('thinkingLabel')}
-                value={sessionSettings.thinkingLevel ?? 'medium'}
-                disabled={isLoading || selectedModelCapability?.reasoning === false}
-                onChange={(event) => void handleThinkingChange(event.target.value)}
-                className="h-6 w-28"
-              >
-                {THINKING_LEVELS.map((level) => {
-                  const supported =
-                    !selectedModelCapability ||
-                    selectedModelCapability.thinkingLevels.length === 0 ||
-                    selectedModelCapability.thinkingLevels.includes(level)
-                  return (
-                    <option key={level} value={level} disabled={!supported}>
-                      {level}
-                    </option>
-                  )
-                })}
-              </Select>
-              {selectedModelCapability && (
-                <Caption className="text-ink-muted">
-                  {selectedModelCapability.available === false
-                    ? t('modelUnavailableHint')
-                    : selectedModelCapability.source === 'default'
-                      ? t('modelCapabilityUnknown')
-                      : [
-                          selectedModelCapability.contextWindow
-                            ? t('modelContextWindow', {
-                                tokens: formatTokenCount(selectedModelCapability.contextWindow),
-                              })
-                            : null,
-                          selectedModelCapability.reasoning
-                            ? t('modelSupportsThinking')
-                            : t('modelNoThinking'),
-                          selectedModelCapability.vision
-                            ? t('modelSupportsVision')
-                            : t('modelNoVision'),
-                        ]
-                          .filter(Boolean)
-                          .join(' · ')}
-                </Caption>
-              )}
-            </div>
-          )}
           {pendingMessages.length > 0 && (
             <div className="mb-2 flex flex-col gap-1.5">
               {pendingMessages.map((item) => (
@@ -3166,9 +3146,281 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               </Button>
             </div>
           </form>
-          <p className="mb-0 mt-1.5 px-0.5 type-caption text-ink-muted">
-            {t('chatInputHint')}
-          </p>
+          {(sessionSettings || contextUsage) && (
+            <div
+              ref={statusStripRef}
+              className="mt-1 flex min-w-0 items-center gap-1 whitespace-nowrap"
+            >
+              {sessionSettings && (
+                <span className="relative flex min-w-24 items-center">
+                  <button
+                    type="button"
+                    aria-haspopup="menu"
+                    aria-expanded={statusMenu === 'model'}
+                    aria-label={t('modelLabel')}
+                    disabled={isLoading}
+                    onClick={() =>
+                      setStatusMenu((current) => (current === 'model' ? null : 'model'))
+                    }
+                    className={`flex h-6 min-w-0 items-center gap-1 rounded-sm px-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                      statusMenu === 'model'
+                        ? 'bg-hover text-ink'
+                        : 'text-ink-muted hover:bg-hover hover:text-ink'
+                    }`}
+                  >
+                    <span className="max-w-28 truncate type-data text-ink">
+                      {sessionSettings.modelId ?? '—'}
+                    </span>
+                    <ChevronDown
+                      size={10}
+                      aria-hidden="true"
+                      className={`transition-transform ${
+                        statusMenu === 'model' ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+                  <PopoverMenu
+                    open={statusMenu === 'model'}
+                    onClose={closeStatusMenu}
+                    label={t('modelLabel')}
+                    className="w-56 py-1"
+                  >
+                    {availableModels.length === 0 && sessionSettings.modelId && (
+                      <MenuOption variant="data" selected onSelect={closeStatusMenu}>
+                        {sessionSettings.modelId}
+                      </MenuOption>
+                    )}
+                    {availableModels.length > 0 &&
+                      sessionSettings.modelId &&
+                      !availableModels.includes(sessionSettings.modelId) && (
+                        <MenuOption variant="data" selected onSelect={closeStatusMenu}>
+                          {sessionSettings.modelId}
+                        </MenuOption>
+                      )}
+                    {availableModels.map((model) => {
+                      const capability = modelCapabilities.find((item) => item.id === model)
+                      const unavailable = capability?.available === false
+                      return (
+                        <MenuOption
+                          key={model}
+                          variant="data"
+                          selected={model === sessionSettings.modelId}
+                          disabled={unavailable}
+                          meta={unavailable ? t('modelUnavailable') : undefined}
+                          title={unavailable ? t('modelUnavailableHint') : undefined}
+                          onSelect={() => {
+                            closeStatusMenu()
+                            void handleModelChange(model)
+                          }}
+                        >
+                          {model}
+                        </MenuOption>
+                      )
+                    })}
+                    {modelCapabilityText && (
+                      <div className="mt-1 border-t border-rule-divide px-2.5 pb-1 pt-2">
+                        <Caption className="block text-ink-muted">{modelCapabilityText}</Caption>
+                      </div>
+                    )}
+                  </PopoverMenu>
+                </span>
+              )}
+              {sessionSettings && (
+                <span className="text-ink-subtle" aria-hidden="true">
+                  ·
+                </span>
+              )}
+              {sessionSettings && (
+                <span className="relative flex flex-shrink-0 items-center">
+                  <button
+                    type="button"
+                    aria-haspopup="menu"
+                    aria-expanded={statusMenu === 'thinking'}
+                    aria-label={t('thinkingLabel')}
+                    disabled={isLoading || selectedModelCapability?.reasoning === false}
+                    title={
+                      selectedModelCapability?.reasoning === false
+                        ? t('modelThinkingUnavailable')
+                        : undefined
+                    }
+                    onClick={() =>
+                      setStatusMenu((current) => (current === 'thinking' ? null : 'thinking'))
+                    }
+                    className={`flex h-6 items-center gap-1 rounded-sm px-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                      statusMenu === 'thinking'
+                        ? 'bg-hover text-ink'
+                        : 'text-ink-muted hover:bg-hover hover:text-ink'
+                    }`}
+                  >
+                    <span className="type-caption">
+                      {t('thinkingLabel')} {t(THINKING_LABEL_KEYS[(sessionSettings.thinkingLevel ?? 'medium') as (typeof THINKING_LEVELS)[number]] ?? 'thinkingMedium')}
+                    </span>
+                    <ChevronDown
+                      size={10}
+                      aria-hidden="true"
+                      className={`transition-transform ${
+                        statusMenu === 'thinking' ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+                  <PopoverMenu
+                    open={statusMenu === 'thinking'}
+                    onClose={closeStatusMenu}
+                    label={t('thinkingLabel')}
+                    className="w-36 py-1"
+                  >
+                    {THINKING_LEVELS.map((level) => {
+                      const supported =
+                        !selectedModelCapability ||
+                        selectedModelCapability.thinkingLevels.length === 0 ||
+                        selectedModelCapability.thinkingLevels.includes(level)
+                      return (
+                        <MenuOption
+                          key={level}
+                          selected={level === (sessionSettings.thinkingLevel ?? 'medium')}
+                          disabled={!supported}
+                          meta={<span className="type-data">{level}</span>}
+                          onSelect={() => {
+                            closeStatusMenu()
+                            void handleThinkingChange(level)
+                          }}
+                        >
+                          {t(THINKING_LABEL_KEYS[level])}
+                        </MenuOption>
+                      )
+                    })}
+                  </PopoverMenu>
+                </span>
+              )}
+              {sessionSettings && contextUsage && (
+                <span className="text-ink-subtle" aria-hidden="true">
+                  ·
+                </span>
+              )}
+              {contextUsage && (
+                <span className="relative flex flex-shrink-0 items-center">
+                  <button
+                    type="button"
+                    aria-haspopup="menu"
+                    aria-expanded={statusMenu === 'context'}
+                    aria-label={t('contextUsageLabel')}
+                    onClick={() =>
+                      setStatusMenu((current) => (current === 'context' ? null : 'context'))
+                    }
+                    className={`flex h-6 items-center gap-1 rounded-sm px-1 transition-colors ${
+                      statusMenu === 'context'
+                        ? 'bg-hover text-ink'
+                        : 'text-ink-muted hover:bg-hover hover:text-ink'
+                    }`}
+                  >
+                    <Meter
+                      value={contextPercent ?? 0}
+                      label={t('contextUsageLabel')}
+                      tone={contextTone}
+                      className="w-10"
+                    />
+                    <span
+                      className={`type-data ${
+                        contextPercent != null && contextPercent >= 95
+                          ? 'text-danger'
+                          : contextPercent != null && contextPercent >= 80
+                            ? 'text-warning'
+                            : 'text-ink'
+                      }`}
+                    >
+                      {contextPercentRounded != null ? `${contextPercentRounded}%` : '—'}
+                    </span>
+                    {showContextTokens && (
+                      <span
+                        ref={contextTokensRef}
+                        className="flex-shrink-0 type-data text-ink-muted"
+                      >
+                        {contextTokensText} tok
+                      </span>
+                    )}
+                    <ChevronDown
+                      size={10}
+                      aria-hidden="true"
+                      className={`transition-transform ${
+                        statusMenu === 'context' ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+                  <PopoverMenu
+                    open={statusMenu === 'context'}
+                    onClose={closeStatusMenu}
+                    role="dialog"
+                    label={t('contextUsageLabel')}
+                    className="w-64"
+                  >
+                    <div className="px-3 pb-2 pt-2.5">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <Label className="text-ink">{t('contextUsageLabel')}</Label>
+                        <Caption className="text-ink-muted">{t('contextScope')}</Caption>
+                      </div>
+                      <div className="mt-1.5 flex items-baseline justify-between gap-2">
+                        <Value className="text-ink">
+                          {contextPercentRounded != null
+                            ? t('contextUsed', { percent: contextPercentRounded })
+                            : '—'}
+                        </Value>
+                        <DataText className="text-ink-muted">{contextTokensText} tok</DataText>
+                      </div>
+                      <Meter
+                        value={contextPercent ?? 0}
+                        label={t('contextUsageLabel')}
+                        tone={contextTone}
+                        className="mt-2"
+                      />
+                      <div className="mt-2.5 flex gap-6 border-t border-rule-divide pt-2.5">
+                        <div className="flex flex-col gap-0.5">
+                          <Caption className="text-ink-muted">{t('contextRemaining')}</Caption>
+                          <DataText className="text-ink">
+                            {contextRemaining != null
+                              ? `${formatTokenCount(contextRemaining)} tok`
+                              : '—'}
+                          </DataText>
+                        </div>
+                        <div className="flex flex-col gap-0.5">
+                          <Caption className="text-ink-muted">{t('contextSessionTotal')}</Caption>
+                          <DataText className="text-ink">
+                            {sessionStats
+                              ? `${formatTokenCount(sessionStats.tokens)} tok${
+                                  sessionStats.cost > 0
+                                    ? ` · $${sessionStats.cost.toFixed(2)}`
+                                    : ''
+                                }`
+                              : '—'}
+                          </DataText>
+                        </div>
+                      </div>
+                      {contextUsage.tokens == null && (
+                        <Caption className="mt-2 block text-ink-muted">
+                          {t('contextUnknownHint')}
+                        </Caption>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isLoading}
+                      onClick={() => {
+                        closeStatusMenu()
+                        void handleCompact()
+                      }}
+                      className="flex w-full items-center gap-2 border-t border-rule-divide px-3 py-2 text-left type-value text-ink transition-colors enabled:hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Minimize2
+                        size={13}
+                        aria-hidden="true"
+                        className="flex-shrink-0 text-ink-muted"
+                      />
+                      {t('compactContext')}
+                    </button>
+                  </PopoverMenu>
+                </span>
+              )}
+            </div>
+          )}
         </div>
       )}
 
