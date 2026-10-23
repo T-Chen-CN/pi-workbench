@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AgentStreamEvent, AgentTracePart, ContextUsageInfo } from '../types/electron'
+import type { AgentStreamEvent, AgentTracePart, ContextUsageInfo, FileEdit } from '../types/electron'
 
 export interface ChatUsage {
   input: number
@@ -24,6 +24,8 @@ export interface ChatMessage {
   isStreaming?: boolean
   /** 本轮模型调用的 token 用量 */
   usage?: ChatUsage
+  /** 本轮 Agent 修改过的文件（用于消息内的变更卡） */
+  edits?: FileEdit[]
 }
 
 export interface ChatAttachment {
@@ -109,6 +111,8 @@ interface ChatState {
   appendToMessage: (key: string, id: string, delta: string) => void
   finishStreamingMessage: (key: string, id: string, content?: string) => void
   setMessageUsage: (key: string, id: string, usage: ChatUsage) => void
+  setMessageEdits: (key: string, id: string, edits: FileEdit[]) => void
+  removeMessageEdit: (key: string, id: string, path: string) => void
   addAttachment: (key: string, attachment: NewChatAttachment) => void
   removeAttachment: (key: string, id: string) => void
   clearAttachments: (key: string) => void
@@ -404,6 +408,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setMessageUsage: (key, id, usage) =>
     set((state) =>
       updateMessage(state, key, id, (message) => ({ ...message, usage }))
+    ),
+
+  setMessageEdits: (key, id, edits) =>
+    set((state) => updateMessage(state, key, id, (message) => ({ ...message, edits }))),
+
+  removeMessageEdit: (key, id, path) =>
+    set((state) =>
+      updateMessage(state, key, id, (message) => ({
+        ...message,
+        edits: (message.edits ?? []).filter((edit) => edit.path !== path),
+      }))
     ),
 
   addAttachment: (key, attachment) =>

@@ -32,6 +32,7 @@ import { buildContextPrompt } from '../api/chatContext'
 import { localizeError } from '../i18n/errors'
 import { commandPaletteShortcut } from '../utils/shortcuts'
 import { createTraceBuffer } from '../utils/streamBuffer'
+import { revertFileEdit } from '../utils/revertFile'
 import { toast } from '../store/toastStore'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { useVirtualRows } from '../hooks/useVirtualRows'
@@ -71,6 +72,104 @@ function formatTokenCount(value: number): string {
 
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
+/** 一轮修改的内联变更卡（AF-10）：逐文件查看 / 还原 */
+const TurnEditSummary: React.FC<{
+  edits: import('../types/electron').FileEdit[]
+  messageKey: string
+  messageId: string
+}> = ({ edits, messageKey, messageId }) => {
+  const { t } = useI18nStore()
+  const [busy, setBusy] = useState(false)
+
+  const describeFailure = (
+    result: Awaited<ReturnType<typeof revertFileEdit>>,
+    target: string
+  ): string => {
+    if (result.ok) return ''
+    if (result.reason === 'dirty') return t('revertBlockedDirty')
+    if (result.reason === 'conflict') return t('revertConflict')
+    return `${t('revertFailed')}: ${localizeError(result.error ?? '') || target}`
+  }
+
+  const revertOne = async (edit: import('../types/electron').FileEdit): Promise<boolean> => {
+    const result = await revertFileEdit(edit)
+    if (!result.ok) {
+      toast.error(describeFailure(result, edit.path))
+      return false
+    }
+    useChatStore.getState().removeMessageEdit(messageKey, messageId, edit.path)
+    return true
+  }
+
+  const handleRevert = async (edit: import('../types/electron').FileEdit) => {
+    if (!(await confirmDialog({ message: t('revertConfirm'), danger: true }))) return
+    setBusy(true)
+    try {
+      if (await revertOne(edit)) toast.success(t('reverted'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleRevertAll = async () => {
+    if (!(await confirmDialog({ message: t('revertAllConfirm'), danger: true }))) return
+    setBusy(true)
+    try {
+      let reverted = 0
+      for (const edit of edits) {
+        if (await revertOne(edit)) reverted++
+      }
+      if (reverted > 0) toast.success(t('reverted'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (edits.length === 0) return null
+  const fileName = (target: string) => target.split(/[\\/]/).pop() || target
+
+  return (
+    <div className="mt-2 border border-rule-hairline bg-raised">
+      <div className="flex items-center justify-between gap-2 border-b border-rule-divide px-3 py-1.5">
+        <span className="type-label text-ink">{t('turnChanges', { count: edits.length })}</span>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void handleRevertAll()}
+          className="type-caption text-ink-muted transition-colors hover:text-danger disabled:opacity-40"
+        >
+          {t('revertAll')}
+        </button>
+      </div>
+      {edits.map((edit) => (
+        <div
+          key={edit.path}
+          className="flex items-center gap-2 border-b border-rule-divide px-3 py-1 last:border-b-0"
+        >
+          <span className="min-w-0 flex-1 truncate type-data text-ink-muted" title={edit.path}>
+            {fileName(edit.path)}
+          </span>
+          <button
+            type="button"
+            onClick={() => useDiffStore.getState().openEdits([edit])}
+            className="type-caption text-ink-muted transition-colors hover:text-ink"
+          >
+            {t('viewChanges')}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void handleRevert(edit)}
+            className="type-caption text-ink-muted transition-colors hover:text-danger disabled:opacity-40"
+          >
+            {t('revertFile')}
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** 单条消息；memo 保证流式追加只重渲染最后一条 */
 const ChatMessageRow = React.memo(function ChatMessageRow({
   message,
@@ -79,6 +178,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onCopy,
   onRetry,
   onEdit,
+  conversationKey,
 }: {
   message: ChatMessage
   diffToolIds?: Set<string>
@@ -86,6 +186,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onCopy?: (text: string) => void
   onRetry?: () => void
   onEdit?: () => void
+  conversationKey?: string
 }) {
   const { t, language } = useI18nStore()
 
@@ -166,6 +267,13 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
               {message.usage.cost > 0 ? ` · $${message.usage.cost.toFixed(4)}` : ''}
             </Caption>
           )}
+          {message.edits && message.edits.length > 0 && conversationKey && (
+            <TurnEditSummary
+              edits={message.edits}
+              messageKey={conversationKey}
+              messageId={message.id}
+            />
+          )}
         </div>
       )}
     </div>
@@ -231,7 +339,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       ),
     [approvalRequests, workspacePath, activeSessionId]
   )
-  const openEdits = useDiffStore((state) => state.openEdits)
   const diffEdits = useDiffStore((state) => state.edits)
   const diffToolIds = useMemo(
     () =>
@@ -909,7 +1016,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         chat.finishStreamingMessage(key, assistantId, result.response)
         if (result.usage) chat.setMessageUsage(key, assistantId, result.usage)
         if (result.edits && result.edits.length > 0) {
-          openEdits(result.edits)
+          chat.setMessageEdits(key, assistantId, result.edits)
           toast.info(t('agentModifiedFiles', { count: result.edits.length }))
         }
       } else {
@@ -1409,6 +1516,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                       >
                         <ChatMessageRow
                           message={msg}
+                          conversationKey={activeKey ?? undefined}
                           diffToolIds={diffToolIds}
                           onOpenDiff={openToolDiff}
                           onCopy={handleCopyMessage}
@@ -1432,6 +1540,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                       <ChatMessageRow
                         key={msg.id}
                         message={msg}
+                        conversationKey={activeKey ?? undefined}
                         diffToolIds={diffToolIds}
                         onOpenDiff={openToolDiff}
                         onCopy={handleCopyMessage}

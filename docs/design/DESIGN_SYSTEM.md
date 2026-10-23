@@ -418,6 +418,7 @@
 - 消息操作：悬停或键盘聚焦时在消息头部右侧显示 14px 图标按钮（复制 / 重新生成 / 编辑），默认 `opacity-0`，`group-hover` 与 `focus-within` 时显现；只对最后一条助手回复和最后一条用户消息提供重复生成与编辑入口。
 - 模型与思考：输入区上方一行两个紧凑 `Select`（模型 176px / 思考 112px，高度 24px），值来自会话级设置；切换失败时回滚并 Toast。
 - 文件引用：Markdown 行内代码中的 `path[:line]` 使用 `type-data` 样式，hover 变 `accent` 并加下划线，点击打开编辑器；`@` 搜索弹层为 `bg-raised` + 满墨边 + `shadow-print` 的列表（单行 `type-data`，hover `bg-hover`），拖入文件直接进入附件区。
+- 内联变更卡：助手消息下方的 `bg-raised` + 发丝边卡片；标题行“本轮修改了 N 个文件”（`type-label`）+ 右侧“全部还原”（`type-caption`）；每行文件名为单行截断的 `type-data`，右侧“查看修改 / 还原此文件”文本按钮；还原按钮 hover 变 `danger`。
 
 ### 6.6 终端
 

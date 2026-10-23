@@ -462,3 +462,22 @@ describe('chatStore message editing helpers', () => {
     ).toEqual(['first', 'answer'])
   })
 })
+
+describe('chatStore turn edits', () => {
+  it('attaches and removes edited files on a message', () => {
+    useChatStore.getState().ensureConversation('edits-key')
+    useChatStore.getState().addMessage('edits-key', { role: 'assistant', content: 'done' })
+    const id = useChatStore.getState().conversations['edits-key'].messages[0].id
+
+    useChatStore.getState().setMessageEdits('edits-key', id, [
+      { path: 'F:/work/a.ts', oldContent: 'a', newContent: 'b' },
+      { path: 'F:/work/b.ts', oldContent: 'c', newContent: 'd' },
+    ])
+    expect(useChatStore.getState().conversations['edits-key'].messages[0].edits).toHaveLength(2)
+
+    useChatStore.getState().removeMessageEdit('edits-key', id, 'F:/work/a.ts')
+    expect(
+      useChatStore.getState().conversations['edits-key'].messages[0].edits?.map((edit) => edit.path)
+    ).toEqual(['F:/work/b.ts'])
+  })
+})

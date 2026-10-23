@@ -2,12 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Check, ChevronLeft, ChevronRight, Columns2, Rows3, X } from 'lucide-react'
 import { useDiffStore } from '../store/diffStore'
 import { useI18nStore } from '../store/i18nStore'
-import { useEditorStore } from '../store/editorStore'
-import { api } from '../api'
 import { toast } from '../store/toastStore'
 import { confirmDialog } from '../store/dialogStore'
 import { localizeError } from '../i18n/errors'
 import { computeDiff, DiffLineType, DiffResult, type DiffLine } from '../api/diff'
+import { revertFileEdit } from '../utils/revertFile'
 import type { FileEdit } from '../types/electron'
 import { useVirtualRows } from '../hooks/useVirtualRows'
 import { Button, IconButton, Spinner } from './ui'
@@ -55,30 +54,18 @@ export const DiffViewer: React.FC = () => {
     clearDiff()
   }
 
-  /** 把文件恢复为 Agent 修改前的内容；文件被外部改动过时拒绝覆盖 */
+  /** 把文件恢复为 Agent 修改前的内容；冲突与脏文件拒绝覆盖 */
   const revertFile = async (target: FileEdit): Promise<boolean> => {
-    const openFile = useEditorStore.getState().openFiles.find((file) => file.path === target.path)
-    if (openFile?.isDirty) {
-      toast.error(t('revertBlockedDirty'))
-      return false
-    }
-
-    const current = await api.readFile(target.path)
-    if (!current.success || typeof current.content !== 'string') {
-      toast.error(`${t('revertFailed')}: ${localizeError(current.error) || target.path}`)
-      return false
-    }
-    if (current.content !== target.newContent) {
-      toast.error(t('revertConflict'))
-      return false
-    }
-
-    const written = await api.writeFile(target.path, target.oldContent)
-    if (!written.success) {
-      toast.error(`${t('revertFailed')}: ${localizeError(written.error) || target.path}`)
-      return false
-    }
-    return true
+    const result = await revertFileEdit(target)
+    if (result.ok) return true
+    const detail =
+      result.reason === 'dirty'
+        ? t('revertBlockedDirty')
+        : result.reason === 'conflict'
+          ? t('revertConflict')
+          : `${t('revertFailed')}: ${localizeError(result.error ?? '') || target.path}`
+    toast.error(detail)
+    return false
   }
 
   const handleKeep = () => {
