@@ -97,7 +97,7 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 
 ### 🔄 进行中 / 计划中
 
-待开发功能统一记录在 [后续开发清单（BACKLOG.md）](./progress/BACKLOG.md)；v1 计划与交付结果见 [ROADMAP.md](./progress/ROADMAP.md)（已归档）。本文件不再重复维护待办清单。
+后续开发记录在 [后续开发清单（BACKLOG.md）](./progress/BACKLOG.md)（P1–P3 已收尾）；v1 计划与交付结果见 [ROADMAP.md](./progress/ROADMAP.md)（已归档）。本文件不再重复维护待办清单。
 
 ---
 
@@ -403,7 +403,7 @@ npm run package:win  # NSIS 安装包
 
 - [x] Phase 6 打磨：主题、崩溃恢复、自动更新、性能（虚拟滚动 / 大文件模式）
 
-> 尚未完成的目标统一记录在 [BACKLOG.md](./progress/BACKLOG.md)；v1 已完成部分见 [ROADMAP.md](./progress/ROADMAP.md)。
+> 后续开发目标记录在 [BACKLOG.md](./progress/BACKLOG.md)（P1–P3 已收尾）；v1 已完成部分见 [ROADMAP.md](./progress/ROADMAP.md)。
 
 ---
 

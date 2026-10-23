@@ -50,7 +50,7 @@ npm run build        # 全量构建
 
 ### 📊 项目信息
 - **[项目状态](./progress/STATUS.md)** — 当前功能状态与进度
-- **[后续开发清单](./progress/BACKLOG.md)** — 当前未完成的开发项、平台验收与停放项（唯一待办）
+- **[后续开发清单](./progress/BACKLOG.md)** — P1–P3 已收尾；保留平台验收与停放项
 - **[v1 功能开发方案](./progress/ROADMAP.md)** — 已交付范围、验证记录与归档说明
 - **[Phase 1 完成报告](./progress/PHASE-1-COMPLETE.md)** — Agent 集成实现细节
 
