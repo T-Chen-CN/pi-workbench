@@ -456,6 +456,60 @@ describe('chatStore pending messages', () => {
   })
 })
 
+describe('chatStore branches', () => {
+  it('attaches branch options to the reply that follows a user message', () => {
+    const key = '/ws\u0000branches'
+    useChatStore.getState().ensureConversation(key)
+    useChatStore.getState().setMessages(key, [
+      { role: 'user', content: 'question', timestamp: 1000 },
+      { role: 'assistant', content: 'answer', timestamp: 1100 },
+    ])
+
+    useChatStore.getState().setMessageBranches(key, [
+      {
+        userTimestamp: 1000,
+        activeIndex: 1,
+        branches: [
+          { entryId: 'a1', preview: 'first' },
+          { entryId: 'a2', preview: 'second' },
+        ],
+      },
+    ])
+
+    const messages = useChatStore.getState().conversations[key].messages
+    expect(messages[0].branch).toBeUndefined()
+    expect(messages[1].branch).toEqual({
+      userTimestamp: 1000,
+      activeIndex: 1,
+      entryIds: ['a1', 'a2'],
+    })
+  })
+
+  it('clears branch options when the group disappears', () => {
+    const key = '/ws\u0000branches-clear'
+    useChatStore.getState().ensureConversation(key)
+    useChatStore.getState().setMessages(key, [
+      { role: 'user', content: 'question', timestamp: 1000 },
+      { role: 'assistant', content: 'answer', timestamp: 1100 },
+    ])
+    useChatStore.getState().setMessageBranches(key, [
+      {
+        userTimestamp: 1000,
+        activeIndex: 0,
+        branches: [
+          { entryId: 'a1', preview: 'first' },
+          { entryId: 'a2', preview: 'second' },
+        ],
+      },
+    ])
+    useChatStore.getState().setMessageBranches(key, [])
+
+    expect(
+      useChatStore.getState().conversations[key].messages[1].branch
+    ).toBeUndefined()
+  })
+})
+
 describe('chatStore context usage', () => {
   it('stores and clears context usage per conversation', () => {
     useChatStore.getState().ensureConversation('context-key')

@@ -13,6 +13,8 @@ import {
   SettingsManager,
   type AgentSession,
   type ExtensionFactory,
+  type SessionEntry,
+  type SessionTreeNode,
 } from '@earendil-works/pi-coding-agent'
 import * as path from 'path'
 import * as fs from 'fs/promises'
@@ -192,6 +194,22 @@ function stripContextBlock(content: string): string {
   return [before, after].filter(Boolean).join('\n\n') || '(attached files)'
 }
 
+/** 提取消息文本；内容可能是字符串或文本块数组 */
+function messageText(message: unknown): string {
+  const content = (message as { content?: unknown } | null)?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter(
+      (part): part is { type: 'text'; text: string } =>
+        Boolean(part) &&
+        (part as { type?: unknown }).type === 'text' &&
+        typeof (part as { text?: unknown }).text === 'string'
+    )
+    .map((part) => part.text)
+    .join('\n')
+}
+
 /** 工具步骤展示限额；完整结果仍保留在 Pi JSONL 中 */
 const TOOL_ARGS_LIMIT = 1_000
 const TOOL_RESULT_LIMIT = 2_000
@@ -357,6 +375,19 @@ export interface SessionOpenResult {
   session?: SessionSummary
   history?: AgentMessage[]
   error?: string
+}
+
+/** 同一条用户消息下的可切换回复（R-03） */
+export interface ConversationBranchOption {
+  entryId: string
+  preview: string
+}
+
+export interface ConversationBranchGroup {
+  /** 该轮用户消息的时间戳，与历史消息的 timestamp 对应 */
+  userTimestamp: number
+  activeIndex: number
+  branches: ConversationBranchOption[]
 }
 
 interface SessionRuntime {
@@ -946,18 +977,177 @@ export class AgentManager {
       if (runtime.isProcessing) {
         return { success: false, error: 'Session is running; stop it before retrying.' }
       }
-      const users = runtime.session.getUserMessagesForForking()
-      const last = users[users.length - 1]
-      if (!last) return { success: false, error: 'No user message to retry.' }
-      const result = await runtime.session.navigateTree(last.entryId, { summarize: false })
+      const branch = runtime.sessionManager.getBranch()
+      let last: SessionEntry | undefined
+      for (const entry of branch) {
+        if (entry.type === 'message' && entry.message.role === 'user') last = entry
+      }
+      if (!last || last.type !== 'message') {
+        return { success: false, error: 'No user message to retry.' }
+      }
+      const result = await runtime.session.navigateTree(last.id, { summarize: false })
       if (result.cancelled) {
         return { success: false, error: 'Rewind was cancelled.' }
       }
-      const text = (newText ?? last.text).trim()
+      const text = (newText ?? messageText(last.message)).trim()
       return { success: true, text }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
+  }
+
+  /** 列出当前分支中拥有多个回复的轮次（R-03） */
+  async listBranches(
+    sessionId: string
+  ): Promise<{ success: boolean; groups?: ConversationBranchGroup[]; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      return { success: true, groups: this.branchGroups(runtime) }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /**
+   * 切换到同一条用户消息下的另一条回复。
+   * 只移动会话树的叶子，不触碰工作区文件；切回时优先回到该分支上次停留的位置。
+   */
+  async switchBranch(
+    sessionId: string,
+    entryId: string
+  ): Promise<{ success: boolean; history?: AgentMessage[]; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      if (runtime.isProcessing) {
+        return { success: false, error: 'Session is running; stop it before switching branches.' }
+      }
+      const manager = runtime.sessionManager
+      const target = manager.getEntry(entryId)
+      if (!target || target.type !== 'message' || target.message.role !== 'assistant') {
+        return { success: false, error: 'Branch entry not found.' }
+      }
+      const parent = target.parentId ? manager.getEntry(target.parentId) : undefined
+      if (!parent || parent.type !== 'message' || parent.message.role !== 'user') {
+        return { success: false, error: 'Only replies to a user message can be switched.' }
+      }
+
+      const nodes = this.sessionTreeNodes(manager.getTree())
+      const siblings = (nodes.get(parent.id)?.children ?? []).filter(
+        (child) =>
+          child.entry.type === 'message' && child.entry.message.role === 'assistant'
+      )
+      if (!siblings.some((child) => child.entry.id === entryId)) {
+        return { success: false, error: 'Branch entry not found.' }
+      }
+
+      const branchIds = new Set(manager.getBranch().map((entry) => entry.id))
+      const activeSibling = siblings.find((child) => branchIds.has(child.entry.id))
+      const currentLeaf = manager.getLeafId()
+      if (activeSibling && currentLeaf) {
+        runtime.extras.branchLeaves[activeSibling.entry.id] = currentLeaf
+      }
+
+      const remembered = runtime.extras.branchLeaves[entryId]
+      const targetLeaf =
+        remembered && this.isAncestorOrSelf(manager, entryId, remembered)
+          ? remembered
+          : this.deepestLeaf(nodes.get(entryId))
+      if (!targetLeaf) return { success: false, error: 'Branch entry not found.' }
+
+      const result = await runtime.session.navigateTree(targetLeaf)
+      if (result.cancelled) {
+        return { success: false, error: 'Branch switch was cancelled.' }
+      }
+      this.persistExtras(runtime)
+      return { success: true, history: this.sessionMessages(runtime) }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  private sessionTreeNodes(tree: SessionTreeNode[]): Map<string, SessionTreeNode> {
+    const nodes = new Map<string, SessionTreeNode>()
+    const visit = (list: SessionTreeNode[]) => {
+      for (const node of list) {
+        nodes.set(node.entry.id, node)
+        visit(node.children)
+      }
+    }
+    visit(tree)
+    return nodes
+  }
+
+  private branchGroups(runtime: SessionRuntime): ConversationBranchGroup[] {
+    const manager = runtime.sessionManager
+    const branch = manager.getBranch()
+    const branchIds = new Set(branch.map((entry) => entry.id))
+    const nodes = this.sessionTreeNodes(manager.getTree())
+    const groups: ConversationBranchGroup[] = []
+
+    for (const entry of branch) {
+      if (entry.type !== 'message' || entry.message.role !== 'user') continue
+      const node = nodes.get(entry.id)
+      if (!node) continue
+      const replies = node.children.filter(
+        (child) =>
+          child.entry.type === 'message' && child.entry.message.role === 'assistant'
+      )
+      if (replies.length < 2) continue
+      const activeIndex = replies.findIndex((child) => branchIds.has(child.entry.id))
+      const timestamp = (entry.message as { timestamp?: unknown }).timestamp
+      groups.push({
+        userTimestamp:
+          typeof timestamp === 'number' ? timestamp : Date.parse(entry.timestamp) || Date.now(),
+        activeIndex: activeIndex >= 0 ? activeIndex : 0,
+        branches: replies.map((child) => ({
+          entryId: child.entry.id,
+          preview:
+            child.entry.type === 'message'
+              ? messageText(child.entry.message).replace(/\s+/g, ' ').trim().slice(0, 80)
+              : '',
+        })),
+      })
+    }
+    return groups
+  }
+
+  /** entryId 是否为 targetId 的祖先（含自身） */
+  private isAncestorOrSelf(
+    manager: SessionManager,
+    entryId: string,
+    targetId: string
+  ): boolean {
+    let current = manager.getEntry(targetId)
+    let guard = 0
+    while (current && guard < 10_000) {
+      if (current.id === entryId) return true
+      current = current.parentId ? manager.getEntry(current.parentId) : undefined
+      guard += 1
+    }
+    return false
+  }
+
+  private deepestLeaf(node: SessionTreeNode | undefined): string | undefined {
+    if (!node) return undefined
+    let current = node
+    while (current.children.length > 0) {
+      let best = current.children[0]
+      let bestDepth = -1
+      for (const child of current.children) {
+        const depth = this.treeDepth(child)
+        if (depth >= bestDepth) {
+          best = child
+          bestDepth = depth
+        }
+      }
+      current = best
+    }
+    return current.entry.id
+  }
+
+  private treeDepth(node: SessionTreeNode): number {
+    if (node.children.length === 0) return 0
+    return 1 + Math.max(...node.children.map((child) => this.treeDepth(child)))
   }
 
   /** 列出检查点（最近的在前） */

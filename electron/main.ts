@@ -2251,6 +2251,45 @@ handleIpc(
   }
 )
 
+// 分支切换（R-03）：列出同一用户消息下的多条回复，或切换到指定回复
+handleIpc('agent:branches:list', async (_event, workspaceDir: string, sessionId: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.listBranches !== 'function') {
+      return { success: false, error: 'Branches are not supported by this agent' }
+    }
+    return await agent.listBranches(sessionId)
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc(
+  'agent:branches:switch',
+  async (_event, workspaceDir: string, sessionId: string, entryId: string) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      if (typeof entryId !== 'string' || !entryId) {
+        return { success: false, error: 'Branch entry is required' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.switchBranch !== 'function') {
+        return { success: false, error: 'Branches are not supported by this agent' }
+      }
+      return await agent.switchBranch(sessionId, entryId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
 // 运行中插话：把消息注入当前轮
 handleIpc('agent:steer', async (_event, workspaceDir: string, sessionId: string, message: string) => {
   try {

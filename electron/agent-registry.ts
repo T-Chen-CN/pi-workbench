@@ -78,6 +78,20 @@ export interface RegisteredAgent {
     sessionId: string,
     newText?: string
   ) => Promise<{ success: boolean; text?: string; error?: string }>
+  /** 回复分支列表与切换（R-03） */
+  listBranches?: (sessionId: string) => Promise<{
+    success: boolean
+    groups?: Array<{
+      userTimestamp: number
+      activeIndex: number
+      branches: Array<{ entryId: string; preview: string }>
+    }>
+    error?: string
+  }>
+  switchBranch?: (
+    sessionId: string,
+    entryId: string
+  ) => Promise<{ success: boolean; history?: unknown; error?: string }>
   /** 会话模型与思考级别 */
   getSessionSettings?: (sessionId: string) => Promise<{
     success: boolean
