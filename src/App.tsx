@@ -8,6 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import {
+  Activity,
   Bug,
   Folder,
   FolderOpen,
@@ -74,12 +75,25 @@ export default function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
   const [showTerminal, setShowTerminal] = useState(false)
   const [showFleet, setShowFleet] = useState(false)
+  const [showActivity, setShowActivity] = useState(false)
+  const [fleetActive, setFleetActive] = useState(0)
   const [showSidebar, setShowSidebar] = useState(true)
   const [showChat, setShowChat] = useState(true)
   const [sidebarWidth, setSidebarWidth] = useState(232)
   const [chatWidth, setChatWidth] = useState(336)
   const toastMessages = useToastStore((state) => state.messages)
   const removeToast = useToastStore((state) => state.remove)
+  const sessionState = useSessionStore((state) =>
+    workspace ? state.byWorkspace[workspace] : undefined
+  )
+  const streamingMap = useSessionStore((state) => state.streaming)
+  const streamingSessions =
+    workspace && sessionState
+      ? sessionState.sessions.filter(
+          (session) => streamingMap[`${workspace}\u0000${session.id}`]
+        )
+      : []
+  const activeCount = streamingSessions.length + fleetActive
   const { t, setLanguage, language } = useI18nStore()
   const { setMode } = useThemeStore()
   const resolvedTheme = useResolvedTheme()
@@ -322,6 +336,34 @@ export default function App() {
     return () => off()
   }, [])
 
+  // 统一活动：统计后台 Fleet 任务（每 5 秒刷新一次）
+  useEffect(() => {
+    if (!workspace) {
+      setFleetActive(0)
+      return
+    }
+    let cancelled = false
+    const refresh = async () => {
+      try {
+        const result = await api.fleetList(workspace)
+        if (cancelled || !result.success) return
+        setFleetActive(
+          (result.tasks ?? []).filter(
+            (task) => task.status === 'running' || task.status === 'queued'
+          ).length
+        )
+      } catch {
+        // 忽略轮询错误
+      }
+    }
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [workspace])
+
   const pickWorkspace = async () => {
     try {
       setError(null)
@@ -481,6 +523,57 @@ export default function App() {
                 {t('commandPalette')}{' '}
                 <span className="type-key text-ink-muted">{commandPaletteShortcut()}</span>
               </button>
+              {workspace && activeCount > 0 && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    className={headerLink}
+                    onClick={() => setShowActivity((value) => !value)}
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      <Activity size={11} />
+                      {t('activityCount', { count: activeCount })}
+                    </span>
+                  </button>
+                  {showActivity && (
+                    <div className="absolute right-0 top-full z-30 mt-1 w-64 border border-line bg-raised shadow-print">
+                      {streamingSessions.length > 0 && (
+                        <div className="border-b border-rule-divide py-1">
+                          {streamingSessions.map((session) => (
+                            <button
+                              key={session.id}
+                              type="button"
+                              onClick={() => {
+                                useSessionStore.getState().setActive(workspace, session.id)
+                                setShowActivity(false)
+                              }}
+                              className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink transition-colors hover:bg-hover"
+                            >
+                              <span className="h-1 w-1 flex-shrink-0 animate-pulse rounded-full bg-accent" />
+                              <span className="truncate">
+                                {session.title || t('untitledSession')}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {fleetActive > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowFleet(true)
+                            setShowActivity(false)
+                          }}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink transition-colors hover:bg-hover"
+                        >
+                          <span className="h-1 w-1 flex-shrink-0 rounded-full bg-warning" />
+                          {t('activeFleetTasks', { count: fleetActive })}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               <button type="button" className={headerLink} onClick={() => setShowFleet(true)}>
                 {t('fleetTasks')}
               </button>
