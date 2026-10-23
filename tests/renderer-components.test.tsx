@@ -213,6 +213,7 @@ beforeEach(() => {
   vi.mocked(piAgentAPI.sessionsDelete).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.onSessionTitle).mockReturnValue(() => {})
   vi.mocked(api.stat).mockResolvedValue({ success: true, isFile: true, isDirectory: false, size: 0 })
+  vi.mocked(api.exists).mockResolvedValue({ success: true, exists: false })
   vi.mocked(api.onFsChanged).mockReturnValue(() => {})
   vi.mocked(api.fleetList).mockResolvedValue({ success: true, tasks: [] })
   vi.mocked(api.onFleetTaskUpdated).mockReturnValue(() => {})
@@ -269,6 +270,25 @@ describe('ChatPanel', () => {
     render(<ChatPanel workspacePath="/ws" />)
 
     expect(await screen.findByText('resume this turn')).toBeTruthy()
+  })
+
+  it('suggests running tests with the detected workspace type', async () => {
+    vi.mocked(api.exists).mockImplementation(async (path: string) => ({
+      success: true,
+      exists: path === '/ws/package.json',
+    }))
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    const button = await screen.findByRole('button', { name: translations.zh.suggestTests })
+    fireEvent.click(button)
+
+    const textarea = screen.getByPlaceholderText(
+      translations.zh.inputPlaceholder
+    ) as HTMLTextAreaElement
+    await waitFor(() =>
+      expect(textarea.value).toBe(translations.zh.suggestTestsNodePrompt)
+    )
   })
 
   it('lists prompt templates and skills in the slash menu', async () => {
