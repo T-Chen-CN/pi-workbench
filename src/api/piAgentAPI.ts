@@ -475,6 +475,22 @@ export const piAgentAPI = {
     }
   },
 
+  /** 回退到最后一条用户消息（重试 / 编辑重发） */
+  async rewindLastUser(
+    workspaceDir: string,
+    sessionId: string,
+    newText?: string
+  ): Promise<{ success: boolean; text?: string; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentRewind !== 'function') {
+      return { success: false, error: 'Retry is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentRewind(workspaceDir, sessionId, newText)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
   /** 检查点列表 */
   async listCheckpoints(
     workspaceDir: string,

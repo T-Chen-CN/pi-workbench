@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
+  Copy,
   FileText,
   History,
   Paperclip,
+  Pencil,
   RotateCcw,
   Send,
   Settings2,
@@ -66,24 +68,32 @@ function formatTokenCount(value: number): string {
   return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`
 }
 
-/** 单条消息；memo 保证流式追加只重渲染最后一条 */const ChatMessageRow = React.memo(function ChatMessageRow({
+/** 单条消息；memo 保证流式追加只重渲染最后一条 */
+const ChatMessageRow = React.memo(function ChatMessageRow({
   message,
   diffToolIds,
   onOpenDiff,
+  onCopy,
+  onRetry,
+  onEdit,
 }: {
   message: ChatMessage
   diffToolIds?: Set<string>
   onOpenDiff?: (toolCallId: string) => void
+  onCopy?: (text: string) => void
+  onRetry?: () => void
+  onEdit?: () => void
 }) {
   const { t, language } = useI18nStore()
 
   if (message.isStreaming && !message.content && !message.parts?.length) return null
   const isUser = message.role === 'user'
+  const hasActions = Boolean(onCopy || onRetry || onEdit)
 
   return (
     <div
       data-testid="chat-message"
-      className="border-b border-rule-divide py-3 first:pt-0 last:border-b-0"
+      className="group border-b border-rule-divide py-3 first:pt-0 last:border-b-0"
     >
       <div className="mb-1.5 flex items-baseline gap-2">
         <Label className="text-ink">{isUser ? t('roleYou') : t('piAgent')}</Label>
@@ -92,6 +102,34 @@ function formatTokenCount(value: number): string {
             language === 'zh' ? 'zh-CN' : 'en-US'
           )}
         </Caption>
+        {hasActions && (
+          <span className="ml-auto flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+            {onCopy && (
+              <IconButton
+                icon={Copy}
+                label={t('copyMessage')}
+                size="sm"
+                onClick={() => onCopy(message.content)}
+              />
+            )}
+            {onRetry && (
+              <IconButton
+                icon={RotateCcw}
+                label={t('retryMessage')}
+                size="sm"
+                onClick={onRetry}
+              />
+            )}
+            {onEdit && (
+              <IconButton
+                icon={Pencil}
+                label={t('editMessage')}
+                size="sm"
+                onClick={onEdit}
+              />
+            )}
+          </span>
+        )}
       </div>
       {isUser ? (
         <div className="flex gap-2 type-reading text-ink">
@@ -164,6 +202,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const pendingMessages = conversation?.pending ?? []
   const contextUsage = conversation?.contextUsage ?? null
   const contextPercent = contextUsage?.percent ?? null
+  let lastUserMessageId: string | null = null
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index].role === 'user') {
+      lastUserMessageId = messages[index].id
+      break
+    }
+  }
+  const lastMessageId = messages.length > 0 ? messages[messages.length - 1].id : null
   const error = conversation?.error ?? null
   const attachments = conversation?.attachments ?? []
   const input = conversation?.draftInput ?? ''
@@ -667,7 +713,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }
 
-  const handleSubmit = async (e?: React.FormEvent, override?: string) => {
+  const handleSubmit = async (
+    e?: React.FormEvent,
+    override?: string,
+    options?: { skipUserMessage?: boolean }
+  ) => {
     e?.preventDefault()
 
     const sessionId = activeSessionId
@@ -690,7 +740,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     useSessionStore.getState().markError(workspacePath, sessionId, null)
     useSessionStore.getState().markUnread(workspacePath, sessionId, false)
     chat.setDraftInput(key, '')
-    chat.addMessage(key, { role: 'user', content: userMessage })
+    if (!options?.skipUserMessage) {
+      chat.addMessage(key, { role: 'user', content: userMessage })
+    }
     setShowAttachMenu(false)
     chat.setLoading(key, true)
     useSessionStore.getState().markStreaming(workspacePath, sessionId, true)
@@ -957,6 +1009,47 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }
 
+  /** 复制整条消息 */
+  const handleCopyMessage = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.info(t('copied'))
+    } catch (error) {
+      toast.error(t('copyFailed', { error: String(error) }))
+    }
+  }
+
+  /** 重新生成：回退到最后一条用户消息并重新发送 */
+  const handleRetryMessage = async (message: ChatMessage) => {
+    if (!activeSessionId || !activeKey || isLoading) return
+    const result = await piAgentAPI.rewindLastUser(workspacePath, activeSessionId)
+    if (!result.success || !result.text) {
+      toast.error(t('retryFailed', { error: localizeError(result.error ?? '') }))
+      return
+    }
+    useChatStore.getState().removeMessage(activeKey, message.id)
+    await handleSubmit(undefined, result.text, { skipUserMessage: true })
+  }
+
+  /** 编辑最后一条用户消息并重发 */
+  const handleEditMessage = async (message: ChatMessage) => {
+    if (!activeSessionId || !activeKey || isLoading) return
+    const next = await promptDialog({
+      title: t('editMessage'),
+      message: t('editMessagePrompt'),
+      defaultValue: message.content,
+      confirmLabel: t('send'),
+    })
+    if (!next || !next.trim()) return
+    const result = await piAgentAPI.rewindLastUser(workspacePath, activeSessionId, next.trim())
+    if (!result.success) {
+      toast.error(t('retryFailed', { error: localizeError(result.error ?? '') }))
+      return
+    }
+    useChatStore.getState().truncateLastTurn(activeKey)
+    await handleSubmit(undefined, next.trim())
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -1191,6 +1284,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                           message={msg}
                           diffToolIds={diffToolIds}
                           onOpenDiff={openToolDiff}
+                          onCopy={handleCopyMessage}
+                          onRetry={
+                            !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
+                              ? () => void handleRetryMessage(msg)
+                              : undefined
+                          }
+                          onEdit={
+                            !isLoading && msg.id === lastUserMessageId
+                              ? () => void handleEditMessage(msg)
+                              : undefined
+                          }
                         />
                       </div>
                     )
@@ -1203,6 +1307,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                         message={msg}
                         diffToolIds={diffToolIds}
                         onOpenDiff={openToolDiff}
+                        onCopy={handleCopyMessage}
+                        onRetry={
+                          !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
+                            ? () => void handleRetryMessage(msg)
+                            : undefined
+                        }
+                        onEdit={
+                          !isLoading && msg.id === lastUserMessageId
+                            ? () => void handleEditMessage(msg)
+                            : undefined
+                        }
                       />
                     ))}
             </div>

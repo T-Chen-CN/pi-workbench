@@ -116,6 +116,8 @@ interface ChatState {
   removePending: (key: string, id: string) => void
   setPendingBehavior: (key: string, id: string, behavior: PendingMessage['behavior']) => void
   setContextUsage: (key: string, usage: ContextUsageInfo | null) => void
+  removeMessage: (key: string, id: string) => void
+  truncateLastTurn: (key: string) => void
   setMessages: (key: string, messages: Array<Omit<ChatMessage, 'id'>>) => void
   setLoading: (key: string, loading: boolean) => void
   setError: (key: string, error: string | null) => void
@@ -474,6 +476,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setContextUsage: (key, usage) =>
     set((state) => updateExisting(state, key, (current) => ({ ...current, contextUsage: usage }))),
+
+  removeMessage: (key, id) =>
+    set((state) =>
+      updateExisting(state, key, (current) => ({
+        ...current,
+        messages: current.messages.filter((message) => message.id !== id),
+      }))
+    ),
+
+  /** 删除最后一条用户消息及其后的全部消息（编辑重发前调用） */
+  truncateLastTurn: (key) =>
+    set((state) =>
+      updateExisting(state, key, (current) => {
+        let lastUser = -1
+        for (let index = current.messages.length - 1; index >= 0; index--) {
+          if (current.messages[index].role === 'user') {
+            lastUser = index
+            break
+          }
+        }
+        if (lastUser < 0) return current
+        return { ...current, messages: current.messages.slice(0, lastUser) }
+      })
+    ),
 
   setMessages: (key, messages) =>
     set((state) => ({

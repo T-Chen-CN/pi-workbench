@@ -108,6 +108,11 @@ export interface ElectronAPI {
     checkpointId: string,
     options: { files?: boolean; conversation?: boolean }
   ) => Promise<{ success: boolean; restoredFiles?: number; error?: string }>
+  agentRewind: (
+    workspaceDir: string,
+    sessionId: string,
+    newText?: string
+  ) => Promise<{ success: boolean; text?: string; error?: string }>
   onAgentApprovalRequest: (callback: (payload: ApprovalRequestPayload) => void) => () => void
   agentRespondApproval: (
     requestId: string,

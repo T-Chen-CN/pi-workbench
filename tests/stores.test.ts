@@ -439,3 +439,26 @@ describe('chatStore context usage', () => {
     expect(useChatStore.getState().conversations['context-key'].contextUsage).toBeNull()
   })
 })
+
+describe('chatStore message editing helpers', () => {
+  it('removes a message by id', () => {
+    useChatStore.getState().ensureConversation('edit-key')
+    useChatStore.getState().addMessage('edit-key', { role: 'user', content: 'hi' })
+    const id = useChatStore.getState().conversations['edit-key'].messages[0].id
+    useChatStore.getState().removeMessage('edit-key', id)
+    expect(useChatStore.getState().conversations['edit-key'].messages).toHaveLength(0)
+  })
+
+  it('truncates the last user turn', () => {
+    useChatStore.getState().ensureConversation('turn-key')
+    useChatStore.getState().addMessage('turn-key', { role: 'user', content: 'first' })
+    useChatStore.getState().addMessage('turn-key', { role: 'assistant', content: 'answer' })
+    useChatStore.getState().addMessage('turn-key', { role: 'user', content: 'second' })
+    useChatStore.getState().addMessage('turn-key', { role: 'assistant', content: 'answer 2' })
+
+    useChatStore.getState().truncateLastTurn('turn-key')
+    expect(
+      useChatStore.getState().conversations['turn-key'].messages.map((message) => message.content)
+    ).toEqual(['first', 'answer'])
+  })
+})

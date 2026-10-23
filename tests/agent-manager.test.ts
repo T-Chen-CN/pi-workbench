@@ -66,6 +66,7 @@ interface FakeSession {
   navigateTree: (targetId: string, options?: { summarize?: boolean }) => Promise<{
     cancelled: boolean
   }>
+  getUserMessagesForForking: () => Array<{ entryId: string; text: string }>
 }
 
 function createFakeSession(
@@ -90,6 +91,10 @@ function createFakeSession(
       estimatedTokensAfter: 3_000,
     }),
     navigateTree: vi.fn(async () => ({ cancelled: false })),
+    getUserMessagesForForking: () => [
+      { entryId: 'u1', text: 'first question' },
+      { entryId: 'u2', text: 'second question' },
+    ],
     subscribe: (listener) => {
       listeners.add(listener)
       return () => {
@@ -1363,6 +1368,52 @@ describe('checkpoints', () => {
     const result = await manager.restoreCheckpoint('session-1', id, { files: true })
     expect(result.success).toBe(false)
     expect(result.error).toContain('Session is running')
+    release()
+    await pendingChat
+  })
+})
+
+describe('retry and edit-resend', () => {
+  it('rewinds to the last user message and returns its text', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await expect(manager.rewindToLastUser('session-1')).resolves.toEqual({
+      success: true,
+      text: 'second question',
+    })
+    expect(session.navigateTree).toHaveBeenCalledWith('u2', { summarize: false })
+  })
+
+  it('uses the edited text when provided', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await expect(manager.rewindToLastUser('session-1', 'edited question')).resolves.toEqual({
+      success: true,
+      text: 'edited question',
+    })
+  })
+
+  it('refuses to rewind while the session is running', async () => {
+    let release = () => {}
+    const session = createFakeSession(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const pendingChat = manager.chat('start')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const result = await manager.rewindToLastUser('session-1')
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Session is running')
+
     release()
     await pendingChat
   })

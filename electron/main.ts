@@ -1950,6 +1950,29 @@ handleIpc(
   }
 )
 
+// 重试 / 编辑重发：回退到最后一条用户消息
+handleIpc(
+  'agent:rewind',
+  async (_event, workspaceDir: string, sessionId: string, newText?: string) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.rewindToLastUser !== 'function') {
+        return { success: false, error: 'Rewind is not supported by this agent' }
+      }
+      return await agent.rewindToLastUser(
+        sessionId,
+        typeof newText === 'string' ? newText : undefined
+      )
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
 // 运行中插话：把消息注入当前轮
 handleIpc('agent:steer', async (_event, workspaceDir: string, sessionId: string, message: string) => {
   try {

@@ -158,6 +158,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     checkpointId: string,
     options: { files?: boolean; conversation?: boolean }
   ) => ipcRenderer.invoke('agent:checkpoints:restore', workspaceDir, sessionId, checkpointId, options),
+  agentRewind: (workspaceDir: string, sessionId: string, newText?: string) =>
+    ipcRenderer.invoke('agent:rewind', workspaceDir, sessionId, newText),
   onNotifyClick: (
     callback: (payload: { workspaceDir: string; sessionId: string }) => void
   ) => {

@@ -73,6 +73,11 @@ export interface RegisteredAgent {
     checkpointId: string,
     options: { files?: boolean; conversation?: boolean }
   ) => Promise<{ success: boolean; restoredFiles?: number; error?: string }>
+  /** 回退到最后一条用户消息（重试 / 编辑重发） */
+  rewindToLastUser?: (
+    sessionId: string,
+    newText?: string
+  ) => Promise<{ success: boolean; text?: string; error?: string }>
   getCurrentSessionId?: () => string | null
 }
 

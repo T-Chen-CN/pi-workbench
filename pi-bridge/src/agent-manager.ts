@@ -843,6 +843,33 @@ export class AgentManager {
     }
   }
 
+  /**
+   * 回退到最后一条用户消息之前，用于重试 / 编辑重发。
+   * 返回重新发送的文本（编辑时用 newText 覆盖）。
+   */
+  async rewindToLastUser(
+    sessionId: string,
+    newText?: string
+  ): Promise<{ success: boolean; text?: string; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      if (runtime.isProcessing) {
+        return { success: false, error: 'Session is running; stop it before retrying.' }
+      }
+      const users = runtime.session.getUserMessagesForForking()
+      const last = users[users.length - 1]
+      if (!last) return { success: false, error: 'No user message to retry.' }
+      const result = await runtime.session.navigateTree(last.entryId, { summarize: false })
+      if (result.cancelled) {
+        return { success: false, error: 'Rewind was cancelled.' }
+      }
+      const text = (newText ?? last.text).trim()
+      return { success: true, text }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   /** 列出检查点（最近的在前） */
   async listCheckpoints(
     sessionId?: string
