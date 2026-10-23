@@ -182,6 +182,10 @@ const WorkGroup: React.FC<WorkGroupProps> = ({
   }
 
   const running = Boolean(runningTool) || thinkingActive
+  const toolCallIds = new Set(
+    parts.filter((part): part is Extract<WorkPart, { type: 'tool' }> => part.type === 'tool')
+      .map((part) => part.toolCallId)
+  )
 
   return (
     <div className="py-1">
@@ -230,6 +234,9 @@ const WorkGroup: React.FC<WorkGroupProps> = ({
                   Boolean(part.hasDiff) || (diffToolIds?.has(part.toolCallId) ?? false)
                 }
                 onOpenDiff={onOpenDiff}
+                nested={Boolean(
+                  part.parentToolCallId && toolCallIds.has(part.parentToolCallId)
+                )}
                 onOpenResult={
                   part.status !== 'running' && onOpenToolResult
                     ? () => onOpenToolResult(part.toolCallId, part.toolName)
@@ -276,11 +283,13 @@ const ToolRow = React.memo(function ToolRow({
   hasDiff,
   onOpenDiff,
   onOpenResult,
+  nested = false,
 }: {
   part: Extract<AgentTracePart, { type: 'tool' }>
   hasDiff: boolean
   onOpenDiff?: (toolCallId: string) => void
   onOpenResult?: () => void
+  nested?: boolean
 }) {
   const { t } = useI18nStore()
   const [open, setOpen] = useState(false)
@@ -305,7 +314,12 @@ const ToolRow = React.memo(function ToolRow({
     )
 
   return (
-    <div className="py-0.5">
+    <div
+      className={
+        nested ? 'ml-4 border-l border-rule-hairline py-0.5 pl-2' : 'py-0.5'
+      }
+      data-nested={nested || undefined}
+    >
       <button
         type="button"
         aria-expanded={open}
@@ -316,6 +330,11 @@ const ToolRow = React.memo(function ToolRow({
         className="flex w-full items-center gap-1.5 text-left type-label text-ink-muted hover:text-ink disabled:cursor-default"
       >
         {icon}
+        {nested && (
+          <span className="flex-shrink-0 type-caption text-ink-subtle">
+            {t('subAgent')}
+          </span>
+        )}
         <span className="flex-shrink-0 text-ink">
           {label}
           {part.status === 'running' ? '…' : ''}

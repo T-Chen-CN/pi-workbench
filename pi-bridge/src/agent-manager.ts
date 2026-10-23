@@ -395,8 +395,15 @@ export type AgentTraceEvent =
       toolName: string
       argsSummary: string
       startedAt: number
+      /** 嵌套调用（子 Agent）的父级工具调用（R-16） */
+      parentToolCallId?: string
     }
-  | { type: 'tool_update'; toolCallId: string; resultPreview?: string }
+  | {
+      type: 'tool_update'
+      toolCallId: string
+      resultPreview?: string
+      parentToolCallId?: string
+    }
   | {
       type: 'tool_end'
       toolCallId: string
@@ -405,6 +412,7 @@ export type AgentTraceEvent =
       durationMs?: number
       resultPreview?: string
       filePath?: string
+      parentToolCallId?: string
     }
   | {
       type: 'retry_start'
@@ -863,6 +871,7 @@ export class AgentManager {
             toolName: event.toolName,
             argsSummary: summarizeToolArgs(event.toolName, args),
             startedAt: Date.now(),
+            parentToolCallId: event.parentToolCallId,
           })
 
           if (event.toolName !== 'write' && event.toolName !== 'edit') return
@@ -884,6 +893,7 @@ export class AgentManager {
               type: 'tool_update',
               toolCallId: event.toolCallId,
               resultPreview: preview,
+              parentToolCallId: event.parentToolCallId,
             })
           }
           return
@@ -935,6 +945,7 @@ export class AgentManager {
               event.toolName === 'bash' || event.toolName === 'powershell'
             ),
             filePath,
+            parentToolCallId: event.parentToolCallId,
           })
         }
       } catch (error) {

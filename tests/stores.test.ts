@@ -261,6 +261,28 @@ describe('chatStore streaming', () => {
     })
   })
 
+  it('keeps parent tool call ids on nested tool parts', () => {
+    const id = useChatStore.getState().startStreamingMessage(KEY)
+
+    useChatStore.getState().startToolPart(KEY, id, {
+      type: 'tool_start',
+      toolCallId: 'child-call',
+      toolName: 'grep',
+      argsSummary: 'x',
+      startedAt: 1,
+      parentToolCallId: 'parent-call',
+    })
+
+    const message = useChatStore
+      .getState()
+      .conversations[KEY].messages.find((item) => item.id === id)
+    expect(message?.parts?.[0]).toMatchObject({
+      type: 'tool',
+      toolCallId: 'child-call',
+      parentToolCallId: 'parent-call',
+    })
+  })
+
   it('marks unfinished tools as error when the stream ends', () => {
     const id = useChatStore.getState().startStreamingMessage(KEY)
     useChatStore.getState().startToolPart(KEY, id, {
