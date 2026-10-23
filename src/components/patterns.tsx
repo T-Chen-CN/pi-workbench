@@ -184,6 +184,34 @@ export const ListRow: React.FC<ListRowProps> = ({
   </button>
 )
 
+export interface LegendRowProps {
+  icon: LucideIcon
+  iconClassName?: string
+  title: string
+  description: string
+  meta?: string
+}
+
+/** 非交互图例行：用于解释模式等固定选项 */
+export const LegendRow: React.FC<LegendRowProps> = ({
+  icon: Icon,
+  iconClassName = 'text-ink-muted',
+  title,
+  description,
+  meta,
+}) => (
+  <div className="flex items-start gap-2.5 border-b border-rule-divide py-2.5 last:border-b-0">
+    <Icon size={14} className={`mt-0.5 flex-shrink-0 ${iconClassName}`} aria-hidden="true" />
+    <div className="min-w-0 flex-1">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="type-label text-ink">{title}</span>
+        {meta && <span className="flex-shrink-0 type-caption text-ink-subtle">{meta}</span>}
+      </div>
+      <span className="mt-0.5 block type-caption text-ink-muted">{description}</span>
+    </div>
+  </div>
+)
+
 export const KeyCap: React.FC<{ children: React.ReactNode; className?: string }> = ({
   children,
   className = '',
@@ -223,6 +251,72 @@ export const Meter: React.FC<MeterProps> = ({ value, label, tone = 'accent', cla
         style={{ width: `${percent}%` }}
       />
     </span>
+  )
+}
+
+export interface RingMeterProps {
+  /** 0–100；null 表示未知，仅绘制轨道 */
+  value: number | null
+  size?: number
+  strokeWidth?: number
+  /** 进度色：默认 accent；接近上限时用 warning / danger */
+  tone?: 'accent' | 'warning' | 'danger'
+  label?: string
+  className?: string
+}
+
+/** 圆环进度：用于状态行的上下文占用，尺寸与图标同尺度 */
+export const RingMeter: React.FC<RingMeterProps> = ({
+  value,
+  size = 14,
+  strokeWidth = 2,
+  tone = 'accent',
+  label,
+  className = '',
+}) => {
+  const percent = value == null ? null : Math.max(0, Math.min(100, Math.round(value)))
+  const radius = (size - strokeWidth) / 2
+  const circumference = 2 * Math.PI * radius
+  const offset = percent == null ? circumference : circumference * (1 - percent / 100)
+  const toneClass =
+    tone === 'danger' ? 'text-danger' : tone === 'warning' ? 'text-warning' : 'text-accent'
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent ?? undefined}
+      aria-label={label}
+      data-testid="ring-meter"
+      className={`block flex-shrink-0 ${toneClass} ${className}`}
+    >
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={strokeWidth}
+        className="text-rule-divide"
+      />
+      {percent != null && (
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+      )}
+    </svg>
   )
 }
 

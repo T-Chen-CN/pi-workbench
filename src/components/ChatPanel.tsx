@@ -15,7 +15,6 @@ import {
   RotateCcw,
   Send,
   Settings2,
-  ShieldCheck,
   Square,
   X,
 } from 'lucide-react'
@@ -38,6 +37,12 @@ import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
 import { buildContextPrompt } from '../api/chatContext'
 import { localizeError } from '../i18n/errors'
+import {
+  SESSION_MODE_ICON,
+  SESSION_MODE_ICON_CLASS,
+  SESSION_MODE_LABEL_KEY,
+  SESSION_MODE_ORDER,
+} from '../utils/sessionModePresentation'
 import { commandPaletteShortcut } from '../utils/shortcuts'
 import { createTraceBuffer } from '../utils/streamBuffer'
 import { revertFileEdit } from '../utils/revertFile'
@@ -58,7 +63,7 @@ import { SessionTabs } from './SessionTabs'
 import { ChatSessionList } from './ChatSessionList'
 import { ApprovalCard } from './ApprovalCard'
 import { ToolResultViewer } from './ToolResultViewer'
-import { Meter } from './patterns'
+import { Meter, RingMeter } from './patterns'
 import { AgentParts } from './AgentTrace'
 import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
 import {
@@ -122,14 +127,6 @@ const THINKING_LABEL_KEYS: Record<(typeof THINKING_LEVELS)[number], TranslationK
   max: 'thinkingMax',
 }
 
-/** 会话模式与额外授权的显示文案 */
-const SESSION_MODE_LABEL_KEYS: Record<SessionMode, TranslationKey> = {
-  readonly: 'permissionLevelReadonly',
-  plan: 'permissionLevelPlan',
-  ask: 'permissionLevelAsk',
-  auto: 'permissionLevelAuto',
-}
-
 const PERMISSION_GRANT_LABEL_KEYS: Record<ToolCategory, TranslationKey> = {
   read: 'approvalCategoryRead',
   write: 'approvalCategoryWrite',
@@ -138,8 +135,6 @@ const PERMISSION_GRANT_LABEL_KEYS: Record<ToolCategory, TranslationKey> = {
 }
 
 const DEFAULT_SESSION_PERMISSION: SessionPermission = { mode: 'ask', grants: [] }
-
-const SESSION_MODE_ORDER: SessionMode[] = ['readonly', 'plan', 'ask', 'auto']
 
 /** 本轮任务列表（AF-12）：由助手消息里的工具步骤派生 */
 const TurnTaskList: React.FC<{ parts: import('../types/electron').AgentTracePart[] }> = ({
@@ -588,6 +583,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       : null
   const sessionSettings = conversation?.sessionSettings ?? null
   const sessionPermission = sessionSettings?.permission ?? DEFAULT_SESSION_PERMISSION
+  const SessionModeIcon = SESSION_MODE_ICON[sessionPermission.mode]
   const sessionStats = conversation?.sessionStats ?? null
   const retryStatus = conversation?.retryStatus ?? null
   let lastAssistantMessage: ChatMessage | null = null
@@ -3238,7 +3234,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                     title={
                       showPermissionLabel
                         ? undefined
-                        : t(SESSION_MODE_LABEL_KEYS[sessionPermission.mode])
+                        : t(SESSION_MODE_LABEL_KEY[sessionPermission.mode])
                     }
                     onClick={() =>
                       setStatusMenu((current) => (current === 'permission' ? null : 'permission'))
@@ -3249,10 +3245,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                         : 'text-ink-muted hover:bg-hover hover:text-ink'
                     }`}
                   >
-                    <ShieldCheck size={12} aria-hidden="true" />
+                    <SessionModeIcon
+                      size={12}
+                      className={SESSION_MODE_ICON_CLASS[sessionPermission.mode]}
+                      aria-hidden="true"
+                    />
                     {showPermissionLabel && (
                       <span ref={permissionLabelRef} className="type-caption">
-                        {t(SESSION_MODE_LABEL_KEYS[sessionPermission.mode])}
+                        {t(SESSION_MODE_LABEL_KEY[sessionPermission.mode])}
                       </span>
                     )}
                     <ChevronDown
@@ -3269,18 +3269,28 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                     label={t('sessionModeLabel')}
                     className="w-44 py-1"
                   >
-                    {SESSION_MODE_ORDER.map((mode) => (
-                      <MenuOption
-                        key={mode}
-                        selected={mode === sessionPermission.mode}
-                        onSelect={() => {
-                          closeStatusMenu()
-                          handleSessionModeChange(mode)
-                        }}
-                      >
-                        {t(SESSION_MODE_LABEL_KEYS[mode])}
-                      </MenuOption>
-                    ))}
+                    {SESSION_MODE_ORDER.map((mode) => {
+                      const ModeIcon = SESSION_MODE_ICON[mode]
+                      return (
+                        <MenuOption
+                          key={mode}
+                          selected={mode === sessionPermission.mode}
+                          onSelect={() => {
+                            closeStatusMenu()
+                            handleSessionModeChange(mode)
+                          }}
+                        >
+                          <span className="flex items-center gap-2">
+                            <ModeIcon
+                              size={14}
+                              className={SESSION_MODE_ICON_CLASS[mode]}
+                              aria-hidden="true"
+                            />
+                            <span>{t(SESSION_MODE_LABEL_KEY[mode])}</span>
+                          </span>
+                        </MenuOption>
+                      )
+                    })}
                     {sessionPermission.grants.length > 0 && (
                       <>
                         <div className="mt-1 border-t border-rule-divide px-2.5 pb-1 pt-2">
@@ -3472,11 +3482,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                         : 'text-ink-muted hover:bg-hover hover:text-ink'
                     }`}
                   >
-                    <Meter
-                      value={contextPercent ?? 0}
-                      label={t('contextUsageLabel')}
+                    <RingMeter
+                      value={contextPercent}
+                      size={14}
+                      strokeWidth={2}
                       tone={contextTone}
-                      className="w-10"
+                      label={t('contextUsageLabel')}
                     />
                     <span
                       className={`type-data ${

@@ -142,3 +142,17 @@ describe('settings update section', () => {
     expect(screen.queryByText('下载更新')).toBeNull()
   })
 })
+
+describe('settings mode legend', () => {
+  it('lists all four session modes and marks plan as session-only', () => {
+    render(<Settings initialSection="permissions" />)
+
+    expect(screen.getByText(translations.zh.modeLegendTitle)).toBeTruthy()
+    expect(screen.getByText(translations.zh.modeReadonlyDesc)).toBeTruthy()
+    expect(screen.getByText(translations.zh.modePlanDesc)).toBeTruthy()
+    expect(screen.getByText(translations.zh.modeAskDesc)).toBeTruthy()
+    expect(screen.getByText(translations.zh.modeAutoDesc)).toBeTruthy()
+    expect(screen.getByText(translations.zh.modeSessionOnly)).toBeTruthy()
+    expect(screen.getAllByText(translations.zh.modeDefaultAllowed)).toHaveLength(3)
+  })
+})

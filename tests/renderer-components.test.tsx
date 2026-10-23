@@ -547,6 +547,7 @@ describe('ChatPanel', () => {
       name: translations.zh.contextUsageLabel,
     })
     expect(within(trigger).getByText('4%')).toBeTruthy()
+    expect(within(trigger).getByTestId('ring-meter')).toBeTruthy()
 
     fireEvent.click(trigger)
     const dialog = await screen.findByRole('dialog')
