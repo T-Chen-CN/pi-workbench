@@ -33,6 +33,17 @@ export default tseslint.config(
     },
   },
   {
+    // 构建期脚本（Node ESM）
+    files: ['scripts/**/*.js'],
+    languageOptions: {
+      sourceType: 'module',
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+      },
+    },
+  },
+  {
     // 工作台插件是按 CommonJS 加载的示例代码
     files: ['examples/plugins/**/*.js'],
     languageOptions: {
