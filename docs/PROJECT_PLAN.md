@@ -97,10 +97,7 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 
 ### 🔄 进行中 / 计划中
 
-| 能力 | 阶段 |
-|---|---|
-| 上下文片段 / 符号级选择（v1 已支持整文件附加） | Phase 2（待增强） |
-| 性能、撤销/重做、快捷键、主题、自动更新 | Phase 6 |
+待开发功能统一记录在 [待开发功能方案（ROADMAP.md）](./progress/ROADMAP.md)：AF-01 ~ AF-18（Agent 前端能力）、E-01 ~ E-05（工程与产品缺口）。本文件不再重复维护待办清单。
 
 ---
 
@@ -165,7 +162,7 @@ Main Process (Node 24, Electron 44)
 | Agent 会话 | `{appDir}/data/agent/sessions/<cwd>/` | Pi SessionManager 管理，跨重启恢复 |
 | 工作区配置 | `{workspace}/.pi-workbench/config.json` | `workspace:init` 创建 |
 | Web dev Agent 数据 | `{appDir}/cache/temp/web-agent/` | 可随时删除 |
-| 主进程日志 | `{appDir}/logs/main.log` | 5 MB 轮转，保留 `main.log.1`；渲染进程日志待补 |
+| 主进程日志 | `{appDir}/logs/main.log` | 5 MB 轮转，保留 `main.log.1`；渲染进程日志见 `logs/renderer.log` |
 | Chromium profile | `{appDir}/data/profile/` | `app.setPath('userData', ...)`，缓存与 localStorage 随应用目录迁移 |
 | 终端输出 | `{workspace}/.pi-workbench/terminal-{id}.log` | 每个终端独立文件；5MB 轮转；可附加给 Agent |
 | Fleet 任务 | `{appDir}/data/fleet-tasks.db` | `node:sqlite`（不可用时回退 `fleet-tasks.json`） |
@@ -227,7 +224,7 @@ docs/               项目文档
 - AgentManager 在 write/edit 工具执行前后读取文件内容，`chat()` 返回 `edits`
 - ChatPanel 计算 Diff 并打开查看器
 
-**待增强**：写入前审批（当前为事后审阅，修改已直接落盘）。
+**待增强**：写入前审批（当前为事后审阅，修改已直接落盘）。见 [ROADMAP.md](./progress/ROADMAP.md) AF-01。
 
 ### 模块 5：工作区管理（已实现）
 
@@ -303,7 +300,7 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 - [x] 主进程文件日志（`main.log`，5 MB 轮转）
 - [x] 流式输出（Electron 流式增量；Web dev 仍整轮返回）
 - [x] Agent 修改审阅（多文件队列，逐项保留 / 还原；事后审阅）
-- [x] 上下文选择 v1（附加已打开的文件；片段 / 符号级待增强）
+- [x] 上下文选择 v1（附加已打开的文件）；上下文片段（编辑器选区，2026-10-21）
 - [x] 多工作区并行 + 工作区级 Agent 实例
 
 **验收**：对话流式渲染；修改可审阅并逐项保留/还原；已打开的文件可附加为上下文；多工作区标签切换时 Agent 与会话正确隔离；重启恢复上次会话。切换工作区会重置编辑器标签页。
@@ -323,7 +320,6 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 - [x] 插件启用/禁用与热重载（目录监听 + 手动重新加载）
 - [x] Git 示例插件（`examples/plugins/git-tools`）
 - [x] 命令面板（Ctrl+Shift+P）执行插件命令、查看输出、管理插件
-- [ ] （可选）面板级 UI 贡献与菜单/状态项（v1 未实现）
 
 > 插件只扩展工作台本身，不扩展 Pi Agent，也不加载 Pi SDK extensions。
 > v1 只加载主进程 CommonJS 插件，不向渲染进程注入任意 JS（受生产 CSP 约束）。
@@ -338,13 +334,13 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 
 **验收**：从 Fleet 面板创建任务 → worktree 中运行 Agent → 状态与输出实时更新 → 可取消、查看日志、清理 worktree。
 
-### ⏳ Phase 6：优化与完善（持续）
+### Phase 6：优化与完善（持续记录）
 
 - [x] Monaco 懒加载（欢迎页/首屏不再加载编辑器 chunk，打开工作区时按需加载）
-- [ ] 性能（大文件、大项目、虚拟滚动；Monaco 首屏块仍较大）
+- [x] 性能（大文件模式、聊天 / Diff / 文件树虚拟滚动；2026-10-21）
 - [x] 构建分包（Monaco / React / vendor 独立 chunk）
 - [x] 撤销/重做（Monaco 每个文件独立 model，撤销栈按文件隔离）
-- [x] 快捷键 / 命令面板（Ctrl+, / Ctrl+Shift+P / Ctrl+S；自定义快捷键待增强）
+- [x] 快捷键 / 命令面板（Ctrl+, / Ctrl+Shift+P / Ctrl+S）
 - [x] 主题系统（Paper & Ink，Paper / Ink 双主题）
 - [x] 崩溃恢复（编辑器草稿写入 `cache/drafts/`，启动时提示恢复）
 - [x] CSP 与安全加固（生产构建已注入 CSP）
@@ -394,19 +390,20 @@ npm run package:win  # NSIS 安装包
 
 ### 短期（1 个月内）
 
-- 发布可用的 Windows 安装包（NSIS）
-- Phase 2-5 已全部完成
+- [x] 发布可用的 Windows 安装包（NSIS；v0.2.2，2026-10-23）
+- [x] Phase 2-5 已全部完成
 
 ### 中期（3 个月内）
 
-- 跨平台打包与自动更新
-- 上下文片段 / 符号级选择
-- Fleet 并发调度策略
+- [x] 跨平台打包与自动更新（Windows / macOS / Linux，2026-10-23）
+- [x] 上下文片段（编辑器选区，2026-10-21）
+- [x] Fleet 并发调度策略（每工作区默认 1、全局上限 4，可配置）
 
 ### 长期（6-12 个月）
 
-- Phase 6 打磨：性能、快捷键、主题、崩溃恢复
-- 工作台插件生态（面板级 UI、状态项）
+- [x] Phase 6 打磨：主题、崩溃恢复、自动更新、性能（虚拟滚动 / 大文件模式）
+
+> 尚未完成的目标统一记录在 [ROADMAP.md](./progress/ROADMAP.md)。
 
 ---
 

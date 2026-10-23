@@ -53,7 +53,7 @@
 - 供应商错误（401、限流等）原样透传到聊天面板
 - preload 采用 CommonJS 编译（sandbox 兼容），并提供启动自检
 - 纯 Web 开发模式：Vite 中间件提供模型拉取代理与 Agent 桥接
-- 已知限制：无流式输出（见 Phase 1 报告）
+- 已知限制：无流式输出（Phase 2 已解决，见下文“流式输出”）
 
 详细报告：[Phase 1 完成报告](./PHASE-1-COMPLETE.md)
 
@@ -71,20 +71,21 @@
 - 工程化：Vitest 单元测试、ESLint、Prettier、GitHub Actions CI
 - `pi-bridge/dist` 移出版本库（构建时生成）
 
-### ⏳ 待实现
+### 🗂️ Phase 2–5 记录
 
 #### Phase 2: 工作区与对话体验（完成）
 
 - ✅ 最近打开列表（JSON，`config/settings.json`）
 - ✅ 工作区生命周期（初始化 / 切换清理 / 关闭）
 - ✅ 会话持久化与恢复（Pi 会话 + UI 历史）
-- ✅ 主进程文件日志（`{appDir}/logs/main.log`，5MB 轮转并保留 `.1` 备份；渲染进程日志待补）
+- ✅ 主进程文件日志（`{appDir}/logs/main.log`，5MB 轮转并保留 `.1` 备份；渲染进程日志 2026-10-21 补齐为 `{appDir}/logs/renderer.log`）
 - ✅ 流式输出（Electron：主进程推送 `text_delta` 增量；Web dev 模式仍整轮返回）
 - ✅ Agent 修改审阅：本轮全部文件修改进入队列，可逐项保留或还原为修改前内容（修改已落盘，属事后审阅）
 - ✅ 上下文选择（v1）：可把已打开的文件附加到下一条消息；单文件 120k / 单条消息 300k 字符上限，恢复历史时自动剥离文件内容
 - ✅ 多工作区并行：标签页切换，各工作区独立 Agent 实例（配置变化时重建，关闭时释放）
-- ⏳ 上下文片段 / 符号级选择
-- ⏳ 工作区数据库（SQLite，`{appDir}/data/workspaces.db`，视 Fleet 规模再评估）
+- ✅ 上下文片段（2026-10-21）：编辑器选区可附加为 `文件:起止行` 片段，支持附件菜单与命令面板
+
+> 剩余待开发项（含符号级选择、自定义快捷键、插件面板级 UI 等）统一见 [ROADMAP.md](./ROADMAP.md)。
 
 #### Phase 3: 终端集成（完成）
 
@@ -100,7 +101,6 @@
 - ✅ 启用禁用（`config.json` 持久化）与热重载（目录监听 + 手动）
 - ✅ 命令面板（Ctrl+Shift+P）：执行命令、传参、查看输出、管理插件
 - ✅ Git 示例插件（`examples/plugins/git-tools`）
-- ⏳ 面板级 UI / 菜单 / 状态项（v1 未实现）
 
 #### Phase 5: Fleet 任务系统（完成）
 
@@ -132,7 +132,7 @@
 - ✅ 2026-10-22 Agent 过程轨迹：thinking / text / tool 改为有序 parts；相邻过程组合并为默认收起的过程组，只有用户手动展开后才保持展开；工具步骤显示状态、耗时、参数与结果预览，write/edit 可打开对应 Diff；历史恢复保留思考与工具步骤；文本、思考、工具共用有序事件缓冲
 - ✅ 2026-10-23 更新功能完善：修复“已是最新版本”误报，改为使用 `isUpdateAvailable`；启动 12 秒后静默检查、Windows/Linux 自动下载但绝不自动安装、下载完成弹窗（拒绝后下次启动再提示）；全局 `updaterStore`，状态栏显示版本号 / 更新提示 / 下载进度；安装包缓存改为 `{appDir}/cache`（自定义 AppAdapter）；macOS 数据目录改为 `~/Library/Application Support/pi-workbench`，更新只检查并引导手动下载；Windows 安装目录不可写时启动提示；版本号来自 `app.getVersion()`；命令面板加入“检查更新”；发布工作流扩展为 Windows/macOS/Linux 三平台并校验标签版本
 - ✅ 2026-10-23 发布 v0.2.0 / v0.2.1 / v0.2.2：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage）；修复 GitHub 资产名中的空格被替换为点、导致 `latest.yml` 404 的问题（显式 `artifactName`）；“重启并安装”改为静默安装，避免第二次弹出安装向导
-- ⏳ 剩余：大文件/虚拟滚动等性能优化
+- ✅ 大文件模式与虚滚动（2026-10-21：聊天 / Diff / 文件树虚拟滚动，>2MB 关闭换行折叠，>10MB 只读）
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
 ## 最近提交

@@ -1,9 +1,12 @@
 # 🎨 CSS 到 TailwindCSS 迁移计划
 
-**状态**: 📋 规划中  
+**状态**: ✅ 已完成（2026-10-20；执行结果见 [CSS_MIGRATION_COMPLETED.md](../reports/CSS_MIGRATION_COMPLETED.md)）  
 **优先级**: 🟡 中  
 **预计工作量**: 4-8 小时  
-**目标完成**: 下一个开发冲刺
+**目标完成**: 已完成
+
+> 本文保留为原始计划。组件级 `.css` 已全部删除并迁移到 Tailwind 与设计 token；
+> `src/index.css` 刻意保留，作为 `@tailwind` 入口与 Paper / Ink token 的载体。
 
 ---
 
@@ -71,10 +74,10 @@ TailwindCSS 配置:
 ### 阶段 1: 分析和规划 (1-2 小时)
 
 **任务**:
-- [ ] 审计所有 CSS 类的使用情况
-- [ ] 创建 Tailwind 类名映射表
-- [ ] 识别特殊样式需要保留
-- [ ] 制定迁移顺序
+- [x] 审计所有 CSS 类的使用情况
+- [x] 创建 Tailwind 类名映射表
+- [x] 识别特殊样式需要保留
+- [x] 制定迁移顺序
 
 **输出物**:
 - CSS 类使用统计表
@@ -152,11 +155,11 @@ export default function App() {
 ```
 
 **迁移清单**:
-- [ ] App 布局 (.app)
-- [ ] Header (.header)
-- [ ] Main (.main)
-- [ ] Workspace (.workspace)
-- [ ] Sidebar (.sidebar)
+- [x] App 布局 (.app)
+- [x] Header (.header)
+- [x] Main (.main)
+- [x] Workspace (.workspace)
+- [x] Sidebar (.sidebar)
 
 **验证方式**:
 ```bash
@@ -213,12 +216,12 @@ grep "^\." src/styles/ChatPanel.css | wc -l  # 28 个类
 ### 阶段 4: 验证和清理 (30 分钟 - 1 小时)
 
 **任务清单**:
-- [ ] 全屏浏览器测试（不同分辨率）
-- [ ] 深色模式验证
-- [ ] 响应式设计测试
-- [ ] 性能检查（CSS 文件大小）
-- [ ] 删除所有 .css 文件
-- [ ] 删除 CSS 导入语句
+- [x] 全屏浏览器测试（不同分辨率）
+- [x] 深色模式验证
+- [x] 响应式设计测试
+- [x] 性能检查（CSS 文件大小）
+- [x] 删除所有 .css 文件（组件级已删除；`src/index.css` 作为 @tailwind 入口与 token 载体保留）
+- [x] 删除 CSS 导入语句（仅保留 `index.css` 与第三方组件 CSS）
 
 **验证命令**:
 ```bash
@@ -342,23 +345,23 @@ git push origin refactor/css-to-tailwind
 
 ### 完成指标
 ```
-[ ] 阶段 1: CSS 审计和规划
-[ ] 阶段 2: 基础布局迁移
-[ ] 阶段 3: 组件迁移
-  [ ] ChatPanel
-  [ ] DiffViewer
-  [ ] Settings
-[ ] 阶段 4: 验证和清理
+[x] 阶段 1: CSS 审计和规划
+[x] 阶段 2: 基础布局迁移
+[x] 阶段 3: 组件迁移
+  [x] ChatPanel
+  [x] DiffViewer
+  [x] Settings
+[x] 阶段 4: 验证和清理
 ```
 
 ### 质量检查
 ```
-[ ] 视觉一致性 100%
-[ ] 暗色模式正常
-[ ] 响应式设计正常
-[ ] TypeScript 无错误
-[ ] npm run build 成功
-[ ] npm run dev 正常启动
+[x] 视觉一致性 100%
+[x] 暗色模式正常
+[x] 响应式设计正常
+[x] TypeScript 无错误
+[x] npm run build 成功
+[x] npm run dev 正常启动
 ```
 
 ---

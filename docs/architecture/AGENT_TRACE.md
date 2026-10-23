@@ -3,7 +3,7 @@
 > **状态**: 已实现（v1，2026-10-22）
 > **日期**: 2026-10-22
 > **范围**: `pi-bridge`、Electron IPC、Web dev 桥、`chatStore`、聊天渲染层、设计系统 v1.17
-> **关联**: [设计系统](../design/DESIGN_SYSTEM.md)、[项目结构](./PROJECT_STRUCTURE.md)、[Agent 前端开发目标](../progress/AGENT_FRONTEND_BACKLOG.md)（审批、计划、检查点等后续项）
+> **关联**: [设计系统](../design/DESIGN_SYSTEM.md)、[项目结构](./PROJECT_STRUCTURE.md)、[待开发功能方案](../progress/ROADMAP.md)（审批、计划、检查点等后续项）
 
 ---
 
