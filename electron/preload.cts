@@ -45,11 +45,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateCheck: () => ipcRenderer.invoke('update:check'),
   updateDownload: () => ipcRenderer.invoke('update:download'),
   updateInstall: () => ipcRenderer.invoke('update:install'),
+  updateGetState: () => ipcRenderer.invoke('update:getState'),
+  updateOpenDownload: () => ipcRenderer.invoke('update:openDownload'),
   onUpdateStatus: (callback: (status: unknown) => void) => {
     const listener = (_event: unknown, status: unknown) => callback(status)
     ipcRenderer.on('update:status', listener)
     return () => ipcRenderer.removeListener('update:status', listener)
   },
+
+  // 应用信息与运行状态
+  appGetInfo: () => ipcRenderer.invoke('app:getInfo'),
+  appHasActiveWork: () => ipcRenderer.invoke('app:hasActiveWork'),
 
   // 渲染进程日志（写入 {appDir}/logs/renderer.log）
   logRenderer: (level: string, args: unknown[]) => ipcRenderer.invoke('log:renderer', level, args),

@@ -22,7 +22,9 @@ import { FileExplorer } from './components/FileExplorer'
 import { ChatPanel } from './components/ChatPanel'
 import { DiffViewer } from './components/DiffViewer'
 import { IPCDebug } from './components/IPCDebug'
-import { Settings } from './components/Settings'
+import { Settings, type SettingsSection } from './components/Settings'
+import { UpdateDialog } from './components/UpdateDialog'
+import { UpdateStatusIndicator } from './components/UpdateStatusIndicator'
 import { TerminalPanel } from './components/TerminalPanel'
 import { CommandPalette } from './components/CommandPalette'
 import { FleetPanel } from './components/FleetPanel'
@@ -41,6 +43,7 @@ import { useSessionStore } from './store/sessionStore'
 import { useDiffStore } from './store/diffStore'
 import { confirmDialog } from './store/dialogStore'
 import { useSettingsStore } from './store/settingsStore'
+import { useUpdaterStore } from './store/updaterStore'
 import { localizeError } from './i18n/errors'
 import { commandPaletteShortcut } from './utils/shortcuts'
 
@@ -67,6 +70,7 @@ export default function App() {
   const openingWorkspaceRef = useRef(false)
   const [showDebug, setShowDebug] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
   const [showTerminal, setShowTerminal] = useState(false)
   const [showFleet, setShowFleet] = useState(false)
   const [showSidebar, setShowSidebar] = useState(true)
@@ -106,11 +110,34 @@ export default function App() {
   })()
 
   // 允许子组件（如 ChatPanel）请求打开设置面板
-  useEffect(() => {
-    const openSettings = () => setShowSettings(true)
-    window.addEventListener('open-settings', openSettings)
-    return () => window.removeEventListener('open-settings', openSettings)
+  const openSettings = useCallback((section: SettingsSection = 'general') => {
+    setSettingsSection(section)
+    setShowSettings(true)
   }, [])
+
+  useEffect(() => {
+    const openSettingsEvent = () => openSettings()
+    window.addEventListener('open-settings', openSettingsEvent)
+    return () => window.removeEventListener('open-settings', openSettingsEvent)
+  }, [openSettings])
+
+  // 更新状态由 App 统一订阅，设置页、状态栏和安装弹窗共享同一份状态
+  const applyUpdateState = useUpdaterStore((store) => store.applyState)
+  useEffect(() => {
+    let active = true
+    api
+      .updateGetState()
+      .then((result) => {
+        if (active && result.success) applyUpdateState(result.state)
+      })
+      .catch((err) => console.error('Failed to load update state:', err))
+
+    const unsubscribe = api.onUpdateStatus((state) => applyUpdateState(state))
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [applyUpdateState])
 
   // 窗口标题、文档语言与主题跟随设置
   useEffect(() => {
@@ -167,12 +194,12 @@ export default function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key === ',') {
         event.preventDefault()
-        setShowSettings(true)
+        openSettings()
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [openSettings])
 
   const clearWorkspaceChat = (targetPath: string) => {
     useSessionStore.getState().resetWorkspace(targetPath)
@@ -354,7 +381,10 @@ export default function App() {
           size="lg"
           closeLabel={t('close')}
         >
-          <Settings onClose={() => setShowSettings(false)} />
+          <Settings
+            onClose={() => setShowSettings(false)}
+            initialSection={settingsSection}
+          />
         </Modal>
       )}
 
@@ -441,7 +471,7 @@ export default function App() {
               onClick={() => setShowDebug((value) => !value)}
             />
           )}
-          <button type="button" className={headerLink} onClick={() => setShowSettings(true)}>
+          <button type="button" className={headerLink} onClick={() => openSettings()}>
             {t('settings')}
           </button>
           <Button
@@ -515,6 +545,7 @@ export default function App() {
         </div>
       )}
 
+      <UpdateDialog />
       <DialogHost />
       <ToastContainer messages={toastMessages} onClose={removeToast} />
       {workspace && <CommandPalette workspacePath={workspace} />}
@@ -594,7 +625,7 @@ export default function App() {
           recentWorkspaces={recentWorkspaces}
           onOpenProject={() => void pickWorkspace()}
           onOpenWorkspace={(path) => void openWorkspaceAt(path)}
-          onOpenSettings={() => setShowSettings(true)}
+          onOpenSettings={() => openSettings()}
           onRefreshRecent={() => void refreshRecentWorkspaces()}
         />
       )}
@@ -604,6 +635,7 @@ export default function App() {
         <span>LOCAL-FIRST</span>
         {workspace && <span className="text-accent">● PI AGENT</span>}
         <div className="ml-auto flex items-center gap-4">
+          <UpdateStatusIndicator onOpenSettings={() => openSettings('about')} />
           {currentFile && <span>{fileLanguage}</span>}
           <span>UTF-8</span>
           <span>{resolvedTheme === 'dark' ? 'INK' : 'PAPER'}</span>

@@ -6,7 +6,7 @@
 **架构**: Electron 44 + React 19 + TypeScript
 **运行要求**: Node.js ≥ 22.19（Pi SDK 要求；Electron 44 内置 Node 24）  
 **当前阶段**: Phase 5 完成，Phase 6 持续优化  
-**最后更新**: 2026-10-21
+**最后更新**: 2026-10-23
 
 ---
 
@@ -251,19 +251,20 @@ const fullPath = `${dirPath}/${fileName}`  // Windows 会失败！
 #### 获取应用目录
 
 ```typescript
-// ✅ 正确：基于可执行文件路径（便携式）
+// ✅ 正确：基于可执行文件路径（便携式；macOS 例外见下）
 import { app } from 'electron'
 import path from 'path'
 
-// 开发模式和生产模式的统一处理
 function getAppDir(): string {
-  if (app.isPackaged) {
-    // 生产模式：可执行文件所在目录
-    return path.dirname(app.getPath('exe'))
-  } else {
-    // 开发模式：项目根目录（app.getAppPath() 比 process.cwd() 更稳定）
-    return app.getAppPath()
+  // AppImage：可执行文件在只读挂载点，数据放在 .AppImage 旁边
+  if (process.env.APPIMAGE) return path.dirname(process.env.APPIMAGE)
+  if (!app.isPackaged) return app.getAppPath() // 开发模式
+  if (process.platform === 'darwin') {
+    // macOS 应用包内不可写，且更新会整体替换 .app。
+    // 经项目所有者确认，macOS 使用系统标准数据目录作为例外。
+    return path.join(app.getPath('appData'), 'pi-workbench')
   }
+  return path.dirname(app.getPath('exe')) // Windows / Linux 生产模式
 }
 
 const appDir = getAppDir()
@@ -272,15 +273,16 @@ const cacheDir = path.join(appDir, 'cache')      // 缓存目录
 const dataDir = path.join(appDir, 'data')        // 数据目录
 const logsDir = path.join(appDir, 'logs')        // 日志目录
 
-// ❌ 错误：使用系统标准路径（违反便携式约束！）
+// ❌ 错误：使用系统标准路径（除 macOS 已确认的例外）
 const userData = app.getPath('userData')         // 不要使用！
 // Windows: C:\Users\xxx\AppData\Roaming\pi-workbench
 // macOS: ~/Library/Application Support/pi-workbench
 
-const appData = app.getPath('appData')           // 不要使用！
 const home = app.getPath('home')                 // 不要使用！
 const documents = app.getPath('documents')       // 不要使用！
 ```
+
+> **macOS 例外（2026-10-23 经项目所有者确认）**：macOS 应用包内不可写、且自动更新会替换整个 `.app`，因此打包版的数据目录使用 `~/Library/Application Support/pi-workbench`。Windows / Linux 仍严格遵循便携式约束。不要在 macOS 上按“禁止系统路径”改回应用包内。
 
 #### 路径分类和用途
 
@@ -614,6 +616,27 @@ async function initAgent(config: ApiConfig) {
 - ✅ `app.setPath('userData', '{appDir}/data/profile')`，缓存与 localStorage 随应用目录迁移
 - ✅ 语言偏好等应用设置仍写 `{appDir}/config/settings.json`（渲染进程不使用 localStorage 保存设置）
 
+### 自动更新约束
+
+**行为**:
+- ✅ 启动 12 秒后静默检查一次；检查失败只写 `main.log`，不打扰用户
+- ✅ Windows / Linux 发现新版本后**自动下载**，但**绝不自动安装**（`autoInstallOnAppQuit = false`）
+- ✅ 下载完成弹窗，用户选择“重启并安装”或“稍后”；拒绝后下次启动重新检查并再弹
+- ✅ macOS 未签名，只检查版本（GitHub Releases API），弹窗引导到 Release 页面手动下载 dmg
+- ❌ 不提供“跳过此版本”，不做预发布通道（`allowPrerelease = false`）
+- ❌ 不自动重启、不静默安装
+
+**缓存与路径**:
+- ✅ 安装包缓存：`{appDir}/cache/{updaterCacheDirName}`（通过自定义 `AppAdapter` 覆盖 electron-updater 的系统缓存目录）
+- ✅ 没有可用更新时清理过期缓存
+- ✅ 更新事件写入 `{appDir}/logs/main.log`
+
+**发布**:
+- ✅ 更新源为 GitHub Releases（公开仓库 `T-Chen-CN/pi-workbench`）
+- ✅ 推送 `v*` 标签触发三平台构建（Windows NSIS / macOS universal dmg / Linux AppImage）
+- ✅ 标签必须与 `package.json` 的 `version` 一致，否则 Release 流水线失败
+- ✅ 当前不签名、不公证；macOS 用户需手动覆盖安装，Windows 可能出现 SmartScreen 提示
+
 ### 插件系统约束
 
 **插件定位**:
@@ -930,6 +953,6 @@ docs/
 
 ---
 
-**最后更新**: 2026-10-21  
+**最后更新**: 2026-10-23  
 **维护者**: Pi Workbench Team  
 **AI 友好**: 本文件专为 AI 助手设计，包含项目的所有关键约束和最佳实践

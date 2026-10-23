@@ -15,7 +15,7 @@ import { FleetWorktree } from './fleet-worktree.js'
 import { createFleetStore } from './fleet-store.js'
 import { FleetManager } from './fleet-manager.js'
 import { DraftStore } from './draft-store.js'
-import type { UpdateController } from './updater.js'
+import type { UpdateController, UpdateState } from './updater.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
 
@@ -284,13 +284,17 @@ function getAppDir(): string {
   if (process.env.APPIMAGE) {
     return path.dirname(process.env.APPIMAGE)
   }
-  if (app.isPackaged) {
-    // 生产模式：可执行文件所在目录
-    return path.dirname(app.getPath('exe'))
-  } else {
+  if (!app.isPackaged) {
     // 开发模式：项目根目录（比 process.cwd() 更稳定，不依赖启动目录）
     return app.getAppPath()
   }
+  if (process.platform === 'darwin') {
+    // macOS 应用包内不可写，且会被更新整体替换。
+    // 经项目所有者确认，macOS 使用系统标准数据目录作为便携式约束的例外。
+    return path.join(app.getPath('appData'), 'pi-workbench')
+  }
+  // 生产模式：可执行文件所在目录
+  return path.dirname(app.getPath('exe'))
 }
 
 // Chromium 的 profile（localStorage、缓存等）也放进应用目录，保证整体可迁移
@@ -324,6 +328,43 @@ async function initAppDirectories() {
   }
 
   console.log('应用目录已初始化:', appDir)
+}
+
+/**
+ * 安装目录不可写时给出明确提示。
+ * 应用把 config / data / logs / 更新缓存都放在安装目录；装到 Program Files
+ * 这类位置时写入会失败，用户会误以为设置没保存。
+ */
+async function ensureAppDirWritable(): Promise<void> {
+  const probePath = path.join(getAppDir(), '.write-probe')
+  let writable = true
+  try {
+    await fs.writeFile(probePath, 'ok', 'utf-8')
+    await fs.unlink(probePath)
+  } catch {
+    writable = false
+  }
+  if (writable) return
+
+  console.error('[Main] App directory is not writable:', getAppDir())
+  const zh = app.getLocale?.().toLowerCase().startsWith('zh') ?? true
+  try {
+    await dialog.showMessageBox({
+      type: 'warning',
+      buttons: [zh ? '知道了' : 'OK'],
+      defaultId: 0,
+      noLink: true,
+      title: zh ? '安装目录不可写' : 'Install folder is not writable',
+      message: zh
+        ? '当前安装目录无法写入，设置、会话和更新都会保存失败。'
+        : 'The install folder is not writable; settings, sessions, and updates cannot be saved.',
+      detail: zh
+        ? `安装位置：${getAppDir()}\n请卸载后重新安装到用户可写目录（例如用户文件夹下的 Programs），或把应用移动到有写权限的位置。`
+        : `Location: ${getAppDir()}\nUninstall and reinstall into a folder your user can write to (for example Programs under your home folder), or move the app to a writable location.`,
+    })
+  } catch (error) {
+    console.error('[Main] Failed to show install folder warning:', error)
+  }
 }
 
 function createWindow() {
@@ -464,6 +505,17 @@ app.whenReady().then(async () => {
   await initAppDirectories()
   await seedTrustedWorkspacesFromSettings()
   createWindow()
+
+  // Windows / Linux 的配置、数据和更新缓存都写在安装目录：安装到 Program Files
+  // 这类只读位置时提前告知，避免用户以为设置没有保存。
+  if (app.isPackaged && process.platform !== 'darwin') {
+    void ensureAppDirWritable()
+  }
+
+  // 启动后静默检查更新：Windows / Linux 发现新版本会自动下载，但不会自动安装。
+  setTimeout(() => {
+    void ensureUpdateController().then((controller) => controller?.check())
+  }, UPDATE_CHECK_DELAY_MS)
 
   // 应用 ready、safeStorage 可用之后再恢复上次排队的 Fleet 任务
   void fleetManager.resumeQueued().then((result) => {
@@ -925,7 +977,31 @@ handleIpc('fleet:merge', async (_event, id: string, workspaceDir?: string) => {
 
 // ---- 自动更新 ----
 
+/** 启动后延迟检查，避免和窗口首屏、插件加载抢网络 */
+const UPDATE_CHECK_DELAY_MS = 12_000
+
 let updateController: UpdateController | null = null
+
+function unsupportedUpdateState(): UpdateState {
+  return {
+    status: 'unsupported',
+    currentVersion: app.getVersion(),
+    platform: process.platform,
+    canAutoInstall: false,
+  }
+}
+
+function sendUpdateState(state: UpdateState): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update:status', state)
+  }
+}
+
+const updateLogger = {
+  info: (...args: unknown[]) => fileLogger?.write('INFO', args),
+  warn: (...args: unknown[]) => fileLogger?.write('WARN', args),
+  error: (...args: unknown[]) => fileLogger?.write('ERROR', args),
+}
 
 /**
  * electron-updater 只在打包版本有意义；懒加载避免开发/测试环境引入其运行时。
@@ -935,10 +1011,13 @@ async function ensureUpdateController(): Promise<UpdateController | null> {
   if (updateController) return updateController
   try {
     const { UpdateController: Controller } = await import('./updater.js')
-    updateController = new Controller((status) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('update:status', status)
-      }
+    updateController = new Controller({
+      appDir: getAppDir(),
+      emit: sendUpdateState,
+      currentVersion: app.getVersion(),
+      platform: process.platform,
+      supported: true,
+      logger: updateLogger,
     })
     return updateController
   } catch (error) {
@@ -950,7 +1029,11 @@ async function ensureUpdateController(): Promise<UpdateController | null> {
 handleIpc('update:check', async () => {
   const controller = await ensureUpdateController()
   if (!controller) {
-    return { success: false, error: 'Updates are only available in packaged builds.' }
+    return {
+      success: false,
+      state: unsupportedUpdateState(),
+      error: 'ERR_UPDATE_NOT_PACKAGED',
+    }
   }
   return controller.check()
 })
@@ -958,7 +1041,7 @@ handleIpc('update:check', async () => {
 handleIpc('update:download', async () => {
   const controller = await ensureUpdateController()
   if (!controller) {
-    return { success: false, error: 'Updates are only available in packaged builds.' }
+    return { success: false, error: 'ERR_UPDATE_NOT_PACKAGED' }
   }
   return controller.download()
 })
@@ -966,10 +1049,45 @@ handleIpc('update:download', async () => {
 handleIpc('update:install', async () => {
   const controller = await ensureUpdateController()
   if (!controller) {
-    return { success: false, error: 'Updates are only available in packaged builds.' }
+    return { success: false, error: 'ERR_UPDATE_NOT_PACKAGED' }
   }
   return controller.install()
 })
+
+handleIpc('update:getState', async () => {
+  const controller = await ensureUpdateController()
+  if (!controller) {
+    return { success: true, state: unsupportedUpdateState() }
+  }
+  return { success: true, state: controller.getState() }
+})
+
+handleIpc('update:openDownload', async () => {
+  const controller = await ensureUpdateController()
+  if (!controller) {
+    return { success: false, error: 'ERR_UPDATE_NOT_PACKAGED' }
+  }
+  return controller.openDownloadPage()
+})
+
+handleIpc('app:getInfo', () => ({
+  success: true,
+  info: {
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    platform: process.platform,
+    arch: process.arch,
+    appDir: getAppDir(),
+  },
+}))
+
+// 重启安装前提示：终端仍在持续输出时认为有任务在运行
+handleIpc('app:hasActiveWork', () => ({
+  success: true,
+  terminal: terminalManager.hasRecentActivity(3000),
+}))
 
 // ---- 渲染进程日志 ----
 

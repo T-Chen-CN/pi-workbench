@@ -57,6 +57,8 @@ interface TerminalEntry {
   logPath: string | null
   /** 当前日志文件大小，用于轮转 */
   logBytes: number
+  /** 最近一次输出时间，用于判断终端是否仍在执行任务 */
+  lastActivityAt: number
 }
 
 const FLUSH_DELAY_MS = 500
@@ -123,6 +125,7 @@ export class TerminalManager {
         pending: '',
         logPath,
         logBytes: 0,
+        lastActivityAt: 0,
       }
 
       // 同一工作区的终端共用一个日志文件：追加会话标记而不是清空历史
@@ -148,6 +151,7 @@ export class TerminalManager {
 
       pty.onData((data) => {
         entry.pending += data
+        entry.lastActivityAt = Date.now()
         this.scheduleFlush(entry)
         this.options.onData?.(id, data)
       })
@@ -199,6 +203,18 @@ export class TerminalManager {
     for (const id of [...this.terminals.keys()]) {
       this.close(id)
     }
+  }
+
+  /**
+   * 最近一段时间内是否有终端输出。
+   * 用于重启安装更新前提示：停在提示符的终端不算运行中任务，持续输出的才算。
+   */
+  hasRecentActivity(withinMs = 3000): boolean {
+    const threshold = Date.now() - withinMs
+    for (const entry of this.terminals.values()) {
+      if (entry.lastActivityAt >= threshold) return true
+    }
+    return false
   }
 
   /** 关闭某个工作区的全部终端（关闭工作区标签时调用） */

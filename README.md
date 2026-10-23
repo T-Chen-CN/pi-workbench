@@ -17,12 +17,12 @@ Lightweight desktop code editor with Pi Agent integration, built with Electron +
 - **Fleet tasks** — background agents in isolated git worktrees with a per-workspace queue, diff review and one-click merge
 - **Paper & Ink UI** — light/dark themes, local fonts, consistent design tokens
 - **Crash recovery** — unsaved editor drafts are restored after an unexpected exit
-- **Auto update** — electron-updater integration for packaged Windows builds
+- **Auto update** — silent check on launch; Windows / Linux download automatically but only install on request; macOS checks and links to the release page
 - **Flexible providers** — Anthropic, OpenAI, or any OpenAI-compatible endpoint (DeepSeek, gateways…)
 - **Model discovery** — fetch the real model list from the provider and pick one
 - **Secure config** — API keys encrypted at rest with Electron `safeStorage`
 - **Session persistence** — conversations resume across restarts per workspace
-- **Self-contained data** — all data lives next to the executable (`config/`, `cache/`, `data/`, `logs/`)
+- **Self-contained data** — all data lives next to the executable (`config/`, `cache/`, `data/`, `logs/`); on macOS it lives in `~/Library/Application Support/pi-workbench` because the app bundle is read-only
 - **Bilingual UI** — Chinese / English
 
 ---

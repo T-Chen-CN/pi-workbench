@@ -105,6 +105,7 @@ describe('design system usage', () => {
       'ListRow',
       'KeyCap',
       'SearchField',
+      'Meter',
     ]) {
       expect(patterns).toContain(`export const ${component}`)
     }

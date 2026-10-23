@@ -1,6 +1,6 @@
 {
   "name": "pi-workbench",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lightweight desktop code editor with Pi Agent integration",
   "main": "dist-electron/main.js",
   "type": "module",
@@ -117,8 +117,17 @@
       "license": "LICENSE"
     },
     "mac": {
-      "target": "dmg",
-      "icon": "app-icon.png"
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "app-icon.png",
+      "identity": null
     },
     "linux": {
       "target": "AppImage",

@@ -1,23 +1,53 @@
 /**
- * 自动更新（electron-updater）。
+ * 自动更新控制器。
  *
- * 只在打包版本中启用；开发模式直接返回“不支持”，避免误触发。
- * 下载由用户显式触发，下载完成后再由用户选择重启安装。
+ * 只处理打包版本：
+ * - Windows / Linux 使用 electron-updater：检查后自动下载，但绝不自动安装
+ * - macOS 未签名，只能检查版本并引导用户前往 GitHub Release 手动下载
+ *
+ * 安装包缓存放进 `{appDir}/cache/<updaterCacheDirName>`：electron-updater 默认把
+ * 缓存放在系统目录（LOCALAPPDATA / ~/Library/Caches / ~/.cache），这里通过自定义
+ * AppAdapter 覆盖 baseCachePath，保持便携式约束。
  */
-import { app } from 'electron'
-import { autoUpdater } from 'electron-updater'
+import { app, net, shell } from 'electron'
+import * as fs from 'fs'
+import * as path from 'path'
+// electron-updater 是 CommonJS 模块：主进程以 ESM 运行，命名导入在 Node 的
+// CJS 互操作下不可靠，必须走默认导入再取属性。
+// 注意：autoUpdater 是惰性 getter，只有在真正创建更新器时才能访问，
+// 否则会在测试/非 Electron 环境里提前实例化。
+import electronUpdater from 'electron-updater'
 
-export type UpdateStatus =
-  | { type: 'checking' }
-  | { type: 'available'; version: string; releaseNotes?: string }
-  | { type: 'not-available'; version?: string }
-  | { type: 'error'; message: string }
-  | { type: 'download-progress'; percent: number; transferred: number; total: number }
-  | { type: 'downloaded'; version: string }
+export type UpdateStatusKind =
+  | 'unsupported'
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'not-available'
+  | 'error'
+
+export interface UpdateState {
+  status: UpdateStatusKind
+  currentVersion: string
+  platform: NodeJS.Platform
+  /** 可自动下载并安装（Windows / Linux）；macOS 为 false */
+  canAutoInstall: boolean
+  /** 新版本号（available / downloading / downloaded / not-available） */
+  version?: string
+  percent?: number
+  releaseNotes?: string
+  /** 面向用户的错误码或原始错误信息 */
+  message?: string
+  checkedAt?: number
+  /** macOS 手动下载地址 */
+  downloadUrl?: string
+}
 
 export interface UpdateCheckResult {
   success: boolean
-  update?: { version: string }
+  state: UpdateState
   error?: string
 }
 
@@ -26,99 +56,524 @@ export interface UpdateActionResult {
   error?: string
 }
 
+export interface UpdateLogger {
+  info: (...args: unknown[]) => void
+  warn: (...args: unknown[]) => void
+  error: (...args: unknown[]) => void
+  debug?: (...args: unknown[]) => void
+}
+
+export interface PublishTarget {
+  owner: string
+  repo: string
+  updaterCacheDirName: string
+}
+
+interface GithubRelease {
+  tag_name?: string
+  body?: string | null
+  html_url?: string
+  draft?: boolean
+  prerelease?: boolean
+}
+
+interface UpdateInfoLike {
+  version?: string
+  releaseNotes?: unknown
+}
+
+interface DownloadProgressLike {
+  percent?: number
+}
+
+interface AppAdapterLike {
+  readonly version: string
+  readonly name: string
+  readonly isPackaged: boolean
+  readonly appUpdateConfigPath: string
+  readonly userDataPath: string
+  readonly baseCachePath: string
+  whenReady: () => Promise<void>
+  relaunch: () => void
+  quit: () => void
+  onQuit: (handler: (exitCode: number) => void) => void
+}
+
+interface UpdaterLike {
+  autoDownload: boolean
+  autoInstallOnAppQuit: boolean
+  allowPrerelease: boolean
+  allowDowngrade: boolean
+  logger: UpdateLogger
+  on: (event: string, listener: (...args: any[]) => void) => unknown
+  checkForUpdates: () => Promise<{
+    isUpdateAvailable?: boolean
+    updateInfo?: UpdateInfoLike
+    downloadPromise?: Promise<unknown> | null
+  } | null>
+  downloadUpdate: () => Promise<unknown>
+  quitAndInstall: (isSilent?: boolean, isForceRunAfter?: boolean) => void
+}
+
+export interface UpdateControllerOptions {
+  appDir: string
+  emit: (state: UpdateState) => void
+  currentVersion?: string
+  platform?: NodeJS.Platform
+  supported?: boolean
+  resourcesPath?: string
+  logger?: UpdateLogger
+  openExternal?: (url: string) => Promise<void>
+  publishTarget?: PublishTarget
+  fetchRelease?: () => Promise<GithubRelease>
+  createUpdater?: () => UpdaterLike
+}
+
+export const UPDATE_ERROR = {
+  notPackaged: 'ERR_UPDATE_NOT_PACKAGED',
+  manualDownload: 'ERR_UPDATE_MANUAL',
+  notDownloaded: 'ERR_UPDATE_NOT_DOWNLOADED',
+  noRelease: 'ERR_UPDATE_NO_RELEASE',
+  network: 'ERR_UPDATE_NETWORK',
+  rateLimit: 'ERR_UPDATE_RATE_LIMIT',
+} as const
+
+const DEFAULT_PUBLISH_TARGET: PublishTarget = {
+  owner: 'T-Chen-CN',
+  repo: 'pi-workbench',
+  updaterCacheDirName: 'pi-workbench-updater',
+}
+
+/** 把 `1.2.3` / `v1.2.3` / `1.2.3-beta.1` 解析成数字三元组 */
+export function parseVersion(value: string): [number, number, number] | null {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(value.trim())
+  if (!match) return null
+  return [Number(match[1]), Number(match[2]), Number(match[3])]
+}
+
+export function isNewerVersion(candidate: string, current: string): boolean {
+  const next = parseVersion(candidate)
+  const now = parseVersion(current)
+  if (!next || !now) return false
+  for (let index = 0; index < 3; index += 1) {
+    if (next[index] > now[index]) return true
+    if (next[index] < now[index]) return false
+  }
+  return false
+}
+
+/** GitHub 的 release notes 可能是字符串或按版本分组的数组，统一成纯文本 */
+export function normalizeReleaseNotes(notes: unknown): string | undefined {
+  const plain = (value: string) =>
+    value
+      .replace(/<[^>]+>/g, '')
+      .replace(/\r\n/g, '\n')
+      .trim()
+
+  if (typeof notes === 'string') {
+    const text = plain(notes)
+    return text || undefined
+  }
+  if (Array.isArray(notes)) {
+    const parts = notes
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return ''
+        const record = entry as { version?: unknown; note?: unknown }
+        const version = typeof record.version === 'string' ? record.version : ''
+        const note = typeof record.note === 'string' ? plain(record.note) : ''
+        if (!note) return ''
+        return version ? `${version}\n${note}` : note
+      })
+      .filter(Boolean)
+    return parts.length > 0 ? parts.join('\n\n') : undefined
+  }
+  return undefined
+}
+
+/** 把底层错误归类成渲染进程可翻译的错误码 */
+export function classifyUpdateError(message: string): string {
+  const normalized = message.toLowerCase()
+  if (
+    normalized.includes('no published versions') ||
+    normalized.includes('no published') ||
+    normalized.includes('http error 404') ||
+    normalized.includes('404') ||
+    normalized.includes('not found')
+  ) {
+    return UPDATE_ERROR.noRelease
+  }
+  if (normalized.includes('rate limit') || normalized.includes('403')) {
+    return UPDATE_ERROR.rateLimit
+  }
+  if (
+    normalized.includes('enotfound') ||
+    normalized.includes('econnrefused') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('etimedout') ||
+    normalized.includes('network') ||
+    normalized.includes('timeout') ||
+    normalized.includes('getaddrinfo')
+  ) {
+    return UPDATE_ERROR.network
+  }
+  return message
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function readPublishTarget(resourcesPath: string): PublishTarget {
+  try {
+    const content = fs.readFileSync(path.join(resourcesPath, 'app-update.yml'), 'utf-8')
+    const read = (key: string) =>
+      new RegExp(`^${key}:\\s*(.+)$`, 'm').exec(content)?.[1]?.trim()
+    const owner = read('owner')
+    const repo = read('repo')
+    const updaterCacheDirName = read('updaterCacheDirName')
+    if (owner && repo) {
+      return {
+        owner,
+        repo,
+        updaterCacheDirName: updaterCacheDirName || DEFAULT_PUBLISH_TARGET.updaterCacheDirName,
+      }
+    }
+  } catch {
+    // 开发环境或缺少 app-update.yml 时使用仓库默认值
+  }
+  return DEFAULT_PUBLISH_TARGET
+}
+
 export class UpdateController {
-  private initialized = false
+  private readonly appDir: string
+  private readonly emit: (state: UpdateState) => void
+  private readonly currentVersion: string
+  private readonly platform: NodeJS.Platform
+  private readonly supported: boolean
+  private readonly resourcesPath: string
+  private readonly logger: UpdateLogger
+  private readonly openExternal: (url: string) => Promise<void>
+  private readonly publishTarget: PublishTarget
+  private readonly fetchRelease: () => Promise<GithubRelease>
+  private readonly createUpdater: (() => UpdaterLike) | null
 
-  constructor(private readonly emitStatus: (status: UpdateStatus) => void) {}
+  private state: UpdateState
+  private updater: UpdaterLike | null = null
+  private checkPromise: Promise<UpdateCheckResult> | null = null
+  private downloadPromise: Promise<UpdateActionResult> | null = null
 
-  get supported(): boolean {
-    return app.isPackaged
+  constructor(options: UpdateControllerOptions) {
+    this.appDir = options.appDir
+    this.emit = options.emit
+    this.currentVersion = options.currentVersion ?? app.getVersion()
+    this.platform = options.platform ?? process.platform
+    this.supported = options.supported ?? app.isPackaged
+    this.resourcesPath = options.resourcesPath ?? process.resourcesPath
+    this.logger = options.logger ?? console
+    this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url))
+    this.publishTarget = options.publishTarget ?? readPublishTarget(this.resourcesPath)
+    this.createUpdater = options.createUpdater ?? null
+    this.fetchRelease =
+      options.fetchRelease ??
+      (() => this.fetchLatestGithubRelease())
+
+    this.state = {
+      status: this.supported ? 'idle' : 'unsupported',
+      currentVersion: this.currentVersion,
+      platform: this.platform,
+      canAutoInstall: this.supported && this.platform !== 'darwin',
+      downloadUrl: this.releasePageUrl(),
+    }
   }
 
-  private ensureInitialized(): void {
-    if (this.initialized) return
-    this.initialized = true
-
-    autoUpdater.autoDownload = false
-    autoUpdater.autoInstallOnAppQuit = true
-
-    autoUpdater.on('checking-for-update', () => {
-      this.emitStatus({ type: 'checking' })
-    })
-    autoUpdater.on('update-available', (info) => {
-      this.emitStatus({
-        type: 'available',
-        version: info.version,
-        releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : undefined,
-      })
-    })
-    autoUpdater.on('update-not-available', (info) => {
-      this.emitStatus({ type: 'not-available', version: info?.version })
-    })
-    autoUpdater.on('error', (error) => {
-      this.emitStatus({
-        type: 'error',
-        message: error instanceof Error ? error.message : String(error),
-      })
-    })
-    autoUpdater.on('download-progress', (progress) => {
-      this.emitStatus({
-        type: 'download-progress',
-        percent: progress.percent,
-        transferred: progress.transferred,
-        total: progress.total,
-      })
-    })
-    autoUpdater.on('update-downloaded', (info) => {
-      this.emitStatus({ type: 'downloaded', version: info.version })
-    })
+  getState(): UpdateState {
+    return this.state
   }
 
+  /** 检查更新。Windows / Linux 会在发现新版本后自动下载（autoDownload=true）。 */
   async check(): Promise<UpdateCheckResult> {
     if (!this.supported) {
-      return { success: false, error: 'Updates are only available in packaged builds.' }
+      return { success: false, state: this.state, error: UPDATE_ERROR.notPackaged }
     }
-    this.ensureInitialized()
-    try {
-      const result = await autoUpdater.checkForUpdates()
-      const version = result?.updateInfo?.version
-      return version ? { success: true, update: { version } } : { success: true }
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      }
+    // 正在下载时重复检查会打断进度事件，直接返回当前状态
+    if (this.state.status === 'downloading') {
+      return { success: true, state: this.state }
     }
+    if (this.checkPromise) return this.checkPromise
+
+    this.checkPromise = this.runCheck().finally(() => {
+      this.checkPromise = null
+    })
+    return this.checkPromise
   }
 
+  /** 手动重试下载（自动下载失败时使用） */
   async download(): Promise<UpdateActionResult> {
     if (!this.supported) {
-      return { success: false, error: 'Updates are only available in packaged builds.' }
+      return { success: false, error: UPDATE_ERROR.notPackaged }
     }
-    this.ensureInitialized()
+    if (this.platform === 'darwin') {
+      return { success: false, error: UPDATE_ERROR.manualDownload }
+    }
+    if (this.state.status === 'downloaded') {
+      return { success: true }
+    }
+    if (this.downloadPromise) return this.downloadPromise
+
+    this.downloadPromise = (async () => {
+      try {
+        await this.getUpdater().downloadUpdate()
+        return { success: true }
+      } catch (error) {
+        const message = classifyUpdateError(errorMessage(error))
+        this.logger.error('[Updater] Download failed:', message)
+        this.setState({ status: 'error', message })
+        return { success: false, error: message }
+      } finally {
+        this.downloadPromise = null
+      }
+    })()
+    return this.downloadPromise
+  }
+
+  /** 退出并安装已下载的更新。调用前渲染进程负责确认运行中的任务。 */
+  install(): UpdateActionResult {
+    if (!this.supported) {
+      return { success: false, error: UPDATE_ERROR.notPackaged }
+    }
+    if (this.platform === 'darwin') {
+      return { success: false, error: UPDATE_ERROR.manualDownload }
+    }
+    if (this.state.status !== 'downloaded') {
+      return { success: false, error: UPDATE_ERROR.notDownloaded }
+    }
     try {
-      await autoUpdater.downloadUpdate()
+      this.logger.info('[Updater] Installing update', this.state.version)
+      this.getUpdater().quitAndInstall(false, true)
       return { success: true }
     } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      }
+      const message = errorMessage(error)
+      this.logger.error('[Updater] Install failed:', message)
+      return { success: false, error: message }
     }
   }
 
-  install(): UpdateActionResult {
-    if (!this.supported) {
-      return { success: false, error: 'Updates are only available in packaged builds.' }
-    }
+  /** macOS：打开 GitHub Release 页面手动下载 */
+  async openDownloadPage(): Promise<UpdateActionResult> {
     try {
-      autoUpdater.quitAndInstall()
+      await this.openExternal(this.state.downloadUrl ?? this.releasePageUrl())
       return { success: true }
     } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      }
+      return { success: false, error: errorMessage(error) }
     }
+  }
+
+  private async runCheck(): Promise<UpdateCheckResult> {
+    this.setState({ status: 'checking', message: undefined })
+    try {
+      const result =
+        this.platform === 'darwin' ? await this.checkGithubRelease() : await this.checkUpdater()
+      return result
+    } catch (error) {
+      const message = classifyUpdateError(errorMessage(error))
+      this.logger.warn('[Updater] Check failed:', message)
+      this.setState({ status: 'error', message, checkedAt: Date.now() })
+      return { success: false, state: this.state, error: message }
+    }
+  }
+
+  private async checkUpdater(): Promise<UpdateCheckResult> {
+    const updater = this.getUpdater()
+    const result = await updater.checkForUpdates()
+
+    // autoDownload 会返回下载 Promise；失败时 electron-updater 已通过 error 事件
+    // 通知界面，这里必须挂一个 catch，否则会成为未处理的 rejection。
+    result?.downloadPromise?.catch(() => undefined)
+
+    // 事件通常已经更新了状态；这里用 isUpdateAvailable 兜底，避免把“无更新”
+    // 误判成“有新版本”（checkForUpdates 无更新时也会返回 updateInfo）。
+    if (!result || result.isUpdateAvailable === false) {
+      this.clearStaleCache()
+      const version = result?.updateInfo?.version
+      this.setState({ status: 'not-available', version, checkedAt: Date.now() })
+      return { success: true, state: this.state }
+    }
+
+    if (this.state.status === 'checking') {
+      this.setState({
+        status: 'available',
+        version: result.updateInfo?.version,
+        releaseNotes: normalizeReleaseNotes(result.updateInfo?.releaseNotes),
+        checkedAt: Date.now(),
+      })
+    }
+    return { success: true, state: this.state }
+  }
+
+  private async checkGithubRelease(): Promise<UpdateCheckResult> {
+    const release = await this.fetchRelease()
+    const latest = (release.tag_name ?? '').replace(/^v/, '')
+    if (!latest) {
+      const message = UPDATE_ERROR.noRelease
+      this.setState({ status: 'error', message, checkedAt: Date.now() })
+      return { success: false, state: this.state, error: message }
+    }
+
+    if (isNewerVersion(latest, this.currentVersion)) {
+      this.logger.info('[Updater] New macOS release available:', latest)
+      this.setState({
+        status: 'available',
+        version: latest,
+        releaseNotes: normalizeReleaseNotes(release.body),
+        downloadUrl: release.html_url ?? this.releasePageUrl(),
+        checkedAt: Date.now(),
+      })
+    } else {
+      this.setState({ status: 'not-available', version: latest, checkedAt: Date.now() })
+    }
+    return { success: true, state: this.state }
+  }
+
+  private async fetchLatestGithubRelease(): Promise<GithubRelease> {
+    const url = `https://api.github.com/repos/${this.publishTarget.owner}/${this.publishTarget.repo}/releases/latest`
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10_000)
+    try {
+      const response = await net.fetch(url, {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'pi-workbench-updater',
+        },
+        signal: controller.signal,
+      })
+      if (response.status === 404) {
+        throw new Error(UPDATE_ERROR.noRelease)
+      }
+      if (response.status === 403) {
+        throw new Error(UPDATE_ERROR.rateLimit)
+      }
+      if (!response.ok) {
+        throw new Error(`GitHub release request failed: HTTP ${response.status}`)
+      }
+      return (await response.json()) as GithubRelease
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error(UPDATE_ERROR.network)
+      }
+      throw error
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  private getUpdater(): UpdaterLike {
+    if (this.updater) return this.updater
+
+    const updater = this.createUpdater
+      ? this.createUpdater()
+      : this.createDefaultUpdater()
+
+    updater.autoDownload = true
+    updater.autoInstallOnAppQuit = false
+    updater.allowPrerelease = false
+    updater.allowDowngrade = false
+    updater.logger = this.logger
+    this.attachEvents(updater)
+    this.updater = updater
+    return updater
+  }
+
+  private createDefaultUpdater(): UpdaterLike {
+    const adapter: AppAdapterLike = {
+      version: this.currentVersion,
+      name: app.getName(),
+      isPackaged: this.supported,
+      // 打包后 app-update.yml 由 electron-builder 生成
+      appUpdateConfigPath: path.join(this.resourcesPath, 'app-update.yml'),
+      userDataPath: app.getPath('userData'),
+      // 覆盖 electron-updater 的系统缓存目录，保持便携式
+      baseCachePath: path.join(this.appDir, 'cache'),
+      whenReady: () => app.whenReady(),
+      relaunch: () => app.relaunch(),
+      quit: () => app.quit(),
+      onQuit: (handler) => {
+        app.once('quit', () => handler(0))
+      },
+    }
+
+    // 必须复用 electron-updater 的单例：用 `new NsisUpdater(options, adapter)`
+    // 构造时，electron-updater 会把内置 HTTP 执行器置空，检查更新会直接失败。
+    // 单例已按平台选择好 updater 类型，这里只替换 app 适配器以改缓存目录。
+    const autoUpdater = electronUpdater.autoUpdater
+    ;(autoUpdater as unknown as { app: AppAdapterLike }).app = adapter
+    this.logger.info('[Updater] Update cache base:', adapter.baseCachePath)
+    return autoUpdater as unknown as UpdaterLike
+  }
+
+  private attachEvents(updater: UpdaterLike): void {
+    updater.on('checking-for-update', () => {
+      this.setState({ status: 'checking' })
+    })
+
+    updater.on('update-available', (info: UpdateInfoLike) => {
+      this.logger.info('[Updater] Update available:', info?.version)
+      this.setState({
+        status: 'available',
+        version: info?.version,
+        releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
+        checkedAt: Date.now(),
+      })
+    })
+
+    updater.on('update-not-available', (info: UpdateInfoLike) => {
+      this.logger.info('[Updater] No update available')
+      this.clearStaleCache()
+      this.setState({
+        status: 'not-available',
+        version: info?.version,
+        checkedAt: Date.now(),
+      })
+    })
+
+    updater.on('download-progress', (progress: DownloadProgressLike) => {
+      this.setState({
+        status: 'downloading',
+        percent: Math.max(0, Math.min(100, Math.round(progress?.percent ?? 0))),
+      })
+    })
+
+    updater.on('update-downloaded', (info: UpdateInfoLike) => {
+      this.logger.info('[Updater] Update downloaded:', info?.version)
+      this.setState({
+        status: 'downloaded',
+        version: info?.version ?? this.state.version,
+        percent: 100,
+      })
+    })
+
+    updater.on('error', (error: unknown) => {
+      const message = classifyUpdateError(errorMessage(error))
+      this.logger.error('[Updater] Updater error:', message)
+      this.setState({ status: 'error', message })
+    })
+  }
+
+  /** 没有可用更新时，旧的待安装包已经过期，删掉以释放空间 */
+  private clearStaleCache(): void {
+    const cacheDir = path.join(this.appDir, 'cache', this.publishTarget.updaterCacheDirName)
+    try {
+      fs.rmSync(cacheDir, { recursive: true, force: true })
+    } catch (error) {
+      this.logger.warn('[Updater] Failed to clear stale update cache:', errorMessage(error))
+    }
+  }
+
+  private setState(next: Partial<UpdateState> & { status: UpdateStatusKind }): void {
+    this.state = { ...this.state, ...next }
+    this.emit(this.state)
+  }
+
+  private releasePageUrl(): string {
+    return `https://github.com/${this.publishTarget.owner}/${this.publishTarget.repo}/releases/latest`
   }
 }
