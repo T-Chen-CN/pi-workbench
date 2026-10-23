@@ -966,6 +966,38 @@ export class AgentManager {
     }
   }
 
+  /** 会话累计用量与成本 */
+  async getSessionStats(sessionId: string): Promise<{
+    success: boolean
+    stats?: {
+      tokens: number
+      input: number
+      output: number
+      cost: number
+      toolCalls: number
+      messages: number
+    }
+    error?: string
+  }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const stats = runtime.session.getSessionStats()
+      return {
+        success: true,
+        stats: {
+          tokens: stats.tokens.total,
+          input: stats.tokens.input,
+          output: stats.tokens.output,
+          cost: stats.cost,
+          toolCalls: stats.toolCalls,
+          messages: stats.totalMessages,
+        },
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   /** 读取会话当前的模型与思考级别 */
   async getSessionSettings(sessionId: string): Promise<{
     success: boolean

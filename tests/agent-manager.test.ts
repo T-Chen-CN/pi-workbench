@@ -66,6 +66,12 @@ interface FakeSession {
   navigateTree: (targetId: string, options?: { summarize?: boolean }) => Promise<{
     cancelled: boolean
   }>
+  getSessionStats: () => {
+    tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
+    cost: number
+    toolCalls: number
+    totalMessages: number
+  }
   getUserMessagesForForking: () => Array<{ entryId: string; text: string }>
   model: { provider: string; id: string } | undefined
   thinkingLevel: string
@@ -95,6 +101,12 @@ function createFakeSession(
       estimatedTokensAfter: 3_000,
     }),
     navigateTree: vi.fn(async () => ({ cancelled: false })),
+    getSessionStats: () => ({
+      tokens: { input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, total: 1500 },
+      cost: 0.42,
+      toolCalls: 3,
+      totalMessages: 8,
+    }),
     getUserMessagesForForking: () => [
       { entryId: 'u1', text: 'first question' },
       { entryId: 'u2', text: 'second question' },
@@ -1531,6 +1543,26 @@ describe('tool streaming', () => {
       type: 'tool_update',
       toolCallId: 'c1',
       resultPreview: 'running tests...',
+    })
+  })
+})
+
+describe('session stats', () => {
+  it('reports cumulative tokens, cost and tool calls', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await expect(manager.getSessionStats('session-1')).resolves.toEqual({
+      success: true,
+      stats: {
+        tokens: 1500,
+        input: 1000,
+        output: 500,
+        cost: 0.42,
+        toolCalls: 3,
+        messages: 8,
+      },
     })
   })
 })

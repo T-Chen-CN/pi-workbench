@@ -2276,6 +2276,22 @@ handleIpc(
   }
 )
 
+handleIpc('agent:session:stats', async (_event, workspaceDir: string, sessionId: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.getSessionStats !== 'function') {
+      return { success: false, error: 'Session stats are not supported by this agent' }
+    }
+    return await agent.getSessionStats(sessionId)
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
 handleIpc('agent:session:settings', async (_event, workspaceDir: string, sessionId: string) => {
   try {
     if (!isTrustedWorkspacePath(workspaceDir)) {

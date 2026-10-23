@@ -27,6 +27,7 @@ import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useApprovalStore } from '../store/approvalStore'
+import { useSettingsStore } from '../store/settingsStore'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
 import { buildContextPrompt } from '../api/chatContext'
@@ -375,6 +376,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const contextUsage = conversation?.contextUsage ?? null
   const contextPercent = contextUsage?.percent ?? null
   const sessionSettings = conversation?.sessionSettings ?? null
+  const sessionStats = conversation?.sessionStats ?? null
   const retryStatus = conversation?.retryStatus ?? null
   let lastAssistantMessage: ChatMessage | null = null
   for (let index = messages.length - 1; index >= 0; index--) {
@@ -443,6 +445,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [configVersion, setConfigVersion] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const forceSendRef = useRef(false)
+  const budgetWarnedRef = useRef(false)
   const initSeqRef = useRef(0)
   const stickToBottomRef = useRef(true)
   const stoppedRef = useRef(false)
@@ -1060,6 +1063,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       return
     }
     forceSendRef.current = false
+    budgetWarnedRef.current = false
 
     stoppedRef.current = false
     useSessionStore.getState().markError(workspacePath, sessionId, null)
@@ -1207,6 +1211,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       useSessionStore.getState().markStreaming(workspacePath, sessionId, false)
       useChatStore.getState().setRetryStatus(key, null)
       void refreshContextUsage(sessionId)
+      void refreshSessionStats(sessionId)
 
       // 本轮结束：自动发送下一条排队消息（用户主动停止时不自动发送）
       const queued = useChatStore
@@ -1294,11 +1299,40 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     [workspacePath]
   )
 
+  /** 读取会话累计用量并检查预算 */
+  const refreshSessionStats = useCallback(
+    async (sessionId: string) => {
+      const key = conversationKey(workspacePath, sessionId)
+      const result = await piAgentAPI.getSessionStats(workspacePath, sessionId)
+      if (!result.success || !result.stats) return
+      useChatStore.getState().setSessionStats(key, result.stats)
+      const budget = useSettingsStore.getState().budgetUsd
+      if (budget > 0 && result.stats.cost >= budget && !budgetWarnedRef.current) {
+        budgetWarnedRef.current = true
+        toast.warning(
+          t('budgetExceeded', {
+            cost: result.stats.cost.toFixed(2),
+            budget: budget.toFixed(2),
+          })
+        )
+      }
+    },
+    [workspacePath, t]
+  )
+
   useEffect(() => {
     if (!initialized || !activeSessionId) return
     void refreshContextUsage(activeSessionId)
     void refreshSessionSettings(activeSessionId)
-  }, [initialized, activeSessionId, configVersion, refreshContextUsage, refreshSessionSettings])
+    void refreshSessionStats(activeSessionId)
+  }, [
+    initialized,
+    activeSessionId,
+    configVersion,
+    refreshContextUsage,
+    refreshSessionSettings,
+    refreshSessionStats,
+  ])
 
   useEffect(() => {
     let cancelled = false
@@ -1837,28 +1871,48 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               <TurnTaskList parts={lastAssistantMessage.parts ?? []} />
             </div>
           )}
-          {contextUsage && contextPercent != null && (
+          {(contextUsage || sessionStats) && (
             <div className="mb-2 flex items-center gap-2">
-              <Meter
-                value={contextPercent}
-                label={t('contextUsageLabel')}
-                tone={
-                  contextPercent >= 95 ? 'danger' : contextPercent >= 80 ? 'warning' : 'accent'
-                }
-                className="flex-1"
-              />
+              {contextUsage && contextPercent != null && (
+                <Meter
+                  value={contextPercent}
+                  label={t('contextUsageLabel')}
+                  tone={
+                    contextPercent >= 95
+                      ? 'danger'
+                      : contextPercent >= 80
+                        ? 'warning'
+                        : 'accent'
+                  }
+                  className="flex-1"
+                />
+              )}
               <DataText
                 className={
-                  contextPercent >= 95
+                  contextPercent != null && contextPercent >= 95
                     ? 'text-danger'
-                    : contextPercent >= 80
+                    : contextPercent != null && contextPercent >= 80
                       ? 'text-warning'
                       : 'text-ink-muted'
                 }
               >
-                {contextPercent}% ·{' '}
-                {contextUsage.tokens != null ? formatTokenCount(contextUsage.tokens) : '—'} /{' '}
-                {formatTokenCount(contextUsage.contextWindow)}
+                {[
+                  contextUsage && contextPercent != null
+                    ? `${contextPercent}% · ${
+                        contextUsage.tokens != null
+                          ? formatTokenCount(contextUsage.tokens)
+                          : '—'
+                      } / ${formatTokenCount(contextUsage.contextWindow)}`
+                    : '',
+                  sessionStats
+                    ? `${formatTokenCount(sessionStats.tokens)} tok`
+                    : '',
+                  sessionStats && sessionStats.cost > 0
+                    ? `$${sessionStats.cost.toFixed(2)}`
+                    : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
               </DataText>
               <button
                 type="button"

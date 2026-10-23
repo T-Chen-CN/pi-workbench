@@ -162,6 +162,9 @@ export const translations = {
     exportFailed: '导出失败：{error}',
     exportEmpty: '该会话没有可导出的消息',
     sessionMetaFailed: '保存会话状态失败：{error}',
+    budgetUsd: '会话预算（美元）',
+    budgetUsdHint: '累计成本达到预算时提醒；0 表示不提醒',
+    budgetExceeded: '本次会话成本 $ {cost} 已达到预算 $ {budget}',
     slashHelp:
       '可用命令：/plan 计划模式 · /act 执行模式 · /compact 压缩上下文 · /clear 新建会话 · /model <名称> 切换模型',
     slashClearConfirm: '清空意味着开始一个新会话；当前对话会保留在会话列表中。继续？',
@@ -637,6 +640,9 @@ export const translations = {
     exportFailed: 'Export failed: {error}',
     exportEmpty: 'This session has no messages to export',
     sessionMetaFailed: 'Failed to save session state: {error}',
+    budgetUsd: 'Session budget (USD)',
+    budgetUsdHint: 'Warn when cumulative cost reaches the budget; 0 disables the warning',
+    budgetExceeded: 'Session cost ${cost} has reached the ${budget} budget',
     slashHelp:
       'Commands: /plan plan mode · /act act mode · /compact compact context · /clear start a new session · /model <name> switch model',
     slashClearConfirm:

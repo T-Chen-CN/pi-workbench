@@ -61,15 +61,19 @@ interface SettingsState {
   autoSaveDelay: number
   permissions: PermissionPolicy
   notifications: NotificationPrefs
+  /** 会话成本预算（美元，0 表示不提醒） */
+  budgetUsd: number
   setAutoSave: (enabled: boolean) => void
   setAutoSaveDelay: (delayMs: number) => void
   setPermission: (category: ToolCategory, action: PermissionAction) => void
   setNotificationPrefs: (patch: Partial<NotificationPrefs>) => void
+  setBudgetUsd: (value: number) => void
   hydrate: (settings: {
     autoSave?: unknown
     autoSaveDelay?: unknown
     permissions?: unknown
     notifications?: unknown
+    budgetUsd?: unknown
   }) => void
 }
 
@@ -79,6 +83,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   autoSaveDelay: DEFAULT_AUTO_SAVE_DELAY,
   permissions: { ...DEFAULT_PERMISSION_POLICY },
   notifications: { ...DEFAULT_NOTIFICATION_PREFS },
+  budgetUsd: 0,
 
   setAutoSave: (enabled) => set({ autoSave: enabled }),
 
@@ -89,6 +94,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
 
   setNotificationPrefs: (patch) =>
     set((state) => ({ notifications: { ...state.notifications, ...patch } })),
+
+  setBudgetUsd: (value) =>
+    set({ budgetUsd: Number.isFinite(value) ? Math.max(0, value) : 0 }),
 
   hydrate: (settings) =>
     set((state) => ({
@@ -106,5 +114,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         settings.notifications === undefined
           ? state.notifications
           : normalizeNotificationPrefs(settings.notifications),
+      budgetUsd:
+        typeof settings.budgetUsd === 'number' && Number.isFinite(settings.budgetUsd)
+          ? Math.max(0, settings.budgetUsd)
+          : state.budgetUsd,
     })),
 }))

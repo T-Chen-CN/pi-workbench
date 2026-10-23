@@ -64,10 +64,12 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     autoSaveDelay,
     permissions,
     notifications,
+    budgetUsd,
     setAutoSave,
     setAutoSaveDelay,
     setPermission,
     setNotificationPrefs,
+    setBudgetUsd,
   } = useSettingsStore()
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const isMac = isMacPlatform()
@@ -197,6 +199,12 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     const next = { ...notifications, ...patch }
     setNotificationPrefs(patch)
     void persistSettings({ notifications: next })
+  }
+
+  const handleBudgetChange = (value: number) => {
+    const next = Number.isFinite(value) ? Math.max(0, value) : 0
+    setBudgetUsd(next)
+    void persistSettings({ budgetUsd: next })
   }
 
   const loadApiConfig = useCallback(async () => {
@@ -411,6 +419,16 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                 ))}
               </Select>
             </Field>
+            <Field label={t('budgetUsd')} hint={t('budgetUsdHint')}>
+              <Input
+                type="number"
+                min={0}
+                step={0.5}
+                value={String(budgetUsd)}
+                onChange={(event) => handleBudgetChange(Number(event.target.value))}
+              />
+            </Field>
+
             <Field label={t('notifications')} hint={t('notificationsHint')}>
               <div className="flex flex-col gap-2 type-value text-ink">
                 {([

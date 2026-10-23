@@ -90,6 +90,19 @@ export interface RegisteredAgent {
     sessionId: string,
     level: string
   ) => Promise<{ success: boolean; error?: string }>
+  /** 会话累计用量与成本 */
+  getSessionStats?: (sessionId: string) => Promise<{
+    success: boolean
+    stats?: {
+      tokens: number
+      input: number
+      output: number
+      cost: number
+      toolCalls: number
+      messages: number
+    }
+    error?: string
+  }>
   getCurrentSessionId?: () => string | null
 }
 

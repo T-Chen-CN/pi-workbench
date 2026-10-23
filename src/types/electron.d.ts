@@ -117,6 +117,10 @@ export interface ElectronAPI {
     workspaceDir: string,
     sessionId: string
   ) => Promise<{ success: boolean; modelId?: string; thinkingLevel?: string; error?: string }>
+  agentSessionStats: (
+    workspaceDir: string,
+    sessionId: string
+  ) => Promise<{ success: boolean; stats?: SessionStatsInfo; error?: string }>
   agentSessionSetModel: (
     workspaceDir: string,
     sessionId: string,
@@ -352,6 +356,16 @@ export interface CheckpointSummary {
 export interface SessionMeta {
   pinned: string[]
   archived: string[]
+}
+
+/** 会话累计用量与成本 */
+export interface SessionStatsInfo {
+  tokens: number
+  input: number
+  output: number
+  cost: number
+  toolCalls: number
+  messages: number
 }
 
 export interface FileEdit {

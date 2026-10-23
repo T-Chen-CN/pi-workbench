@@ -1,5 +1,11 @@
 import { create } from 'zustand'
-import type { AgentStreamEvent, AgentTracePart, ContextUsageInfo, FileEdit } from '../types/electron'
+import type {
+  AgentStreamEvent,
+  AgentTracePart,
+  ContextUsageInfo,
+  FileEdit,
+  SessionStatsInfo,
+} from '../types/electron'
 
 export interface ChatUsage {
   input: number
@@ -70,6 +76,8 @@ export interface ConversationState {
     delayMs: number
     message?: string
   } | null
+  /** 会话累计用量与成本 */
+  sessionStats: SessionStatsInfo | null
 }
 
 const EMPTY_CONVERSATION: ConversationState = {
@@ -83,6 +91,7 @@ const EMPTY_CONVERSATION: ConversationState = {
   contextUsage: null,
   sessionSettings: null,
   retryStatus: null,
+  sessionStats: null,
 }
 
 /** 会话在 store 中的键：工作区 + 会话，避免跨工作区串数据 */
@@ -144,6 +153,7 @@ interface ChatState {
       message?: string
     } | null
   ) => void
+  setSessionStats: (key: string, stats: SessionStatsInfo | null) => void
   removeMessage: (key: string, id: string) => void
   truncateLastTurn: (key: string) => void
   setMessages: (key: string, messages: Array<Omit<ChatMessage, 'id'>>) => void
@@ -523,6 +533,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setRetryStatus: (key, status) =>
     set((state) => updateExisting(state, key, (current) => ({ ...current, retryStatus: status }))),
+
+  setSessionStats: (key, stats) =>
+    set((state) => updateExisting(state, key, (current) => ({ ...current, sessionStats: stats }))),
 
   removeMessage: (key, id) =>
     set((state) =>

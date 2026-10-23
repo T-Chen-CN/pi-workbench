@@ -12,6 +12,7 @@ import type {
   ApprovalRequestPayload,
   CheckpointSummary,
   ContextUsageInfo,
+  SessionStatsInfo,
   FileEdit,
   SessionListResult,
   SessionOpenResult,
@@ -510,8 +511,7 @@ export const piAgentAPI = {
     workspaceDir: string,
     sessionId: string,
     modelId: string
-  ): Promise<{ success: boolean; error?: string }> {
-    if (!hasElectronAgent() || typeof window.electronAPI.agentSessionSetModel !== 'function') {
+  ): Promise<{ success: boolean; error?: string }> {    if (!hasElectronAgent() || typeof window.electronAPI.agentSessionSetModel !== 'function') {
       return { success: false, error: 'Model switching is not available in this environment' }
     }
     try {
@@ -531,6 +531,21 @@ export const piAgentAPI = {
     }
     try {
       return await window.electronAPI.agentSessionSetThinking(workspaceDir, sessionId, level)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 会话累计用量与成本 */
+  async getSessionStats(
+    workspaceDir: string,
+    sessionId: string
+  ): Promise<{ success: boolean; stats?: SessionStatsInfo; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentSessionStats !== 'function') {
+      return { success: false, error: 'Session stats are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentSessionStats(workspaceDir, sessionId)
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
