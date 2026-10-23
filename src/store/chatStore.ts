@@ -19,7 +19,8 @@ export interface ChatUsage {
 
 export interface ChatMessage {
   id: string
-  role: 'user' | 'assistant'
+  /** system：上下文压缩等分隔提示，不属于对话内容 */
+  role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: number
   /** 按发生顺序排列的文本 / 思考 / 工具片段（assistant） */

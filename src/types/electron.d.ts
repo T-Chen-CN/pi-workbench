@@ -547,6 +547,13 @@ export type AgentStreamEvent =
       message?: string
     }
   | { type: 'retry_end'; success: boolean }
+  | { type: 'compaction_start'; reason: 'manual' | 'threshold' | 'overflow' }
+  | {
+      type: 'compaction_end'
+      reason: 'manual' | 'threshold' | 'overflow'
+      tokensBefore?: number
+      error?: string
+    }
 
 export type AgentStreamPayload = {
   /** 发起请求时生成，用于忽略过期会话的增量 */

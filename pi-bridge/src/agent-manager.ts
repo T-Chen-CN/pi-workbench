@@ -391,6 +391,13 @@ export type AgentTraceEvent =
       message?: string
     }
   | { type: 'retry_end'; success: boolean }
+  | { type: 'compaction_start'; reason: 'manual' | 'threshold' | 'overflow' }
+  | {
+      type: 'compaction_end'
+      reason: 'manual' | 'threshold' | 'overflow'
+      tokensBefore?: number
+      error?: string
+    }
 
 
 export interface AgentConfig {
@@ -752,6 +759,25 @@ export class AgentManager {
         if (event.type === 'auto_retry_end') {
           this.logger.info(`[Agent Manager] Auto retry ${event.success ? 'succeeded' : 'failed'}`)
           runtime.onTrace?.({ type: 'retry_end', success: Boolean(event.success) })
+          return
+        }
+
+        // 上下文压缩：转发开始 / 结束，渲染层据此插入分隔线（R-05）
+        if (event.type === 'compaction_start') {
+          runtime.onTrace?.({ type: 'compaction_start', reason: event.reason })
+          return
+        }
+        if (event.type === 'compaction_end') {
+          runtime.onTrace?.({
+            type: 'compaction_end',
+            reason: event.reason,
+            tokensBefore:
+              typeof event.result?.tokensBefore === 'number'
+                ? event.result.tokensBefore
+                : undefined,
+            error:
+              typeof event.errorMessage === 'string' ? event.errorMessage : undefined,
+          })
           return
         }
 
