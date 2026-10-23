@@ -1832,6 +1832,70 @@ describe('tool results', () => {
   })
 })
 
+describe('session export', () => {
+  async function setupExportSession() {
+    const session = createFakeSession()
+    const longResult = 'x'.repeat(5_000)
+    session.messages = [
+      { role: 'user', content: 'Fix the build', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'inspect logs' },
+          { type: 'text', text: 'Running the build' },
+          { type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'npm test' } },
+        ],
+        timestamp: 1100,
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        toolName: 'bash',
+        content: [{ type: 'text', text: longResult }],
+        isError: false,
+        timestamp: 1200,
+      },
+    ]
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+    return longResult
+  }
+
+  it('exports markdown with full tool output in collapsed details', async () => {
+    const longResult = await setupExportSession()
+
+    const result = await manager.exportSessionMarkdown('session-1')
+
+    expect(result.success).toBe(true)
+    expect(result.title).toBe('Fix the build')
+    expect(result.content).toContain('Fix the build')
+    expect(result.content).toContain('Running the build')
+    expect(result.content).toContain('<details>')
+    expect(result.content).toContain('工具调用 · bash')
+    expect(result.content).toContain(longResult)
+  })
+
+  it('exports a standalone HTML document', async () => {
+    const longResult = await setupExportSession()
+
+    const result = await manager.exportSessionHtml('session-1', 'en')
+
+    expect(result.success).toBe(true)
+    expect(result.content).toContain('<!doctype html>')
+    expect(result.content).toContain('Tool call · bash')
+    expect(result.content).toContain('inspect logs')
+    expect(result.content).toContain(longResult)
+  })
+
+  it('reports an error when the session has no JSONL file yet', async () => {
+    await setupExportSession()
+
+    await expect(manager.getSessionJsonlPath('session-1')).resolves.toMatchObject({
+      success: false,
+    })
+  })
+})
+
 describe('session stats', () => {
   it('reports cumulative tokens, cost and tool calls', async () => {
     const session = createFakeSession()

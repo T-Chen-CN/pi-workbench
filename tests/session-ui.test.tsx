@@ -160,6 +160,16 @@ describe('ChatSessionList', () => {
     expect(props.onDelete).toHaveBeenCalledWith(sessions[0])
   })
 
+  it('offers markdown, HTML and raw JSONL export', () => {
+    const onExport = vi.fn()
+    renderList({ onExport })
+
+    fireEvent.click(screen.getAllByLabelText(translations.zh.exportSession)[0])
+    fireEvent.click(screen.getByText(translations.zh.exportHtml))
+
+    expect(onExport).toHaveBeenCalledWith(sessions[0], 'html')
+  })
+
   it('shows an empty state when there are no sessions', () => {
     renderList({ sessions: [] })
     expect(screen.getByText(translations.zh.sessionsEmpty)).toBeTruthy()

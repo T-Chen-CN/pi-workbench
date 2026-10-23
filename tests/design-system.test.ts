@@ -152,6 +152,7 @@ describe('design system usage', () => {
     const FLOATING = new Set([
       'App.tsx',
       'components/ChatPanel.tsx',
+      'components/ChatSessionList.tsx',
       'components/CommandPalette.tsx',
       'components/DiffViewer.tsx',
       'components/FileExplorer.tsx',

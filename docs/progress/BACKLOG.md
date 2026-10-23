@@ -25,7 +25,7 @@
 | R-06 | 模型能力提示 | P2 | AF-08 剩余 | 模型元数据 |
 | R-08 | ✅ 图片 / 截图附件 | P1 | AF-09 剩余 | `PromptOptions.images` |
 | R-09 | `path:line` 跳转行 | P2 | AF-09 剩余 | Monaco revealLine |
-| R-10 | 导出 Markdown / HTML / JSONL | P2 | AF-13 剩余 | 会话 JSONL、HTML 生成 |
+| R-10 | ✅ 导出 Markdown / HTML / JSONL | P2 | AF-13 剩余 | 会话 JSONL、HTML 生成 |
 | R-13 | 提示模板与技能命令 | P2 | AF-14 剩余 | Pi prompt templates / skills |
 | R-15 | 空状态建议个性化 | P3 | AF-18 剩余 | 最近操作记录 |
 | R-16 | 子 Agent 活动视图 | P3 | AF-17 剩余 | 工具轨迹、嵌套调用 |
@@ -95,12 +95,14 @@
 - 技术：编辑器打开请求携带 `line`，Monaco `revealLineInCenter` + 光标定位；跨工作区路径仍按当前工作区解析。
 - 验收：点击 `src/a.ts:42` 打开文件并定位第 42 行。
 
-### R-10 导出 Markdown / HTML / JSONL
+### R-10 导出 Markdown / HTML / JSONL ✅（2026-10-24）
 
 - 现状：会话导出仅支持 Markdown。
 - 目标：同一入口同时支持 Markdown、带样式的 HTML 与原始 JSONL；Markdown / HTML 导出**全量内容**（用户与助手正文、思考、工具调用与完整结果），长过程默认收起。
 - 技术：Markdown 与 HTML 由渲染层从会话消息生成；思考与工具过程包在默认收起的 `<details>` 区块中（GitHub / VS Code 预览可直接折叠，不做额外交互设计）；HTML 内联样式、可离线打开，图片类结果以 base64 内嵌；JSONL 直接复制 Pi 会话原始文件，不清洗内部上下文块或 Plan 包装；保存走系统对话框，导出菜单选择格式。
 - 验收：三种格式均可导出；Markdown / HTML 包含完整思考与工具过程且默认收起，展开后内容完整；HTML 离线可读；JSONL 与原始会话文件一致、可被 Pi 重新导入。
+- **完成情况**：导出改由主进程完成（内容经 bridge 在进程内生成，不经过渲染层二次传输）：Markdown / HTML 包含正文、思考、工具参数与完整结果，思考与工具分别包在默认收起的 `<details>` 中，图片以 base64 内嵌；HTML 内联 Paper 风格样式，可离线打开；JSONL 直接复制原始会话文件。会话抽屉的导出按钮改为格式菜单（Markdown / HTML / 原始 JSONL），保存走系统对话框，默认文件名基于会话标题。
+- **验证**：`type-check` / `lint` / `npm test`（46 文件 441 用例）/ `npm run build` 通过；新增 bridge Markdown / HTML 完整输出测试与导出菜单测试。真实文件保存与 Pi 重新导入留待界面手动确认。
 
 ### R-13 提示模板与技能命令
 
