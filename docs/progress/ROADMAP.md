@@ -299,7 +299,7 @@
 - **AF-17 统一活动 / 子 Agent（✅ 2026-10-23）**：顶栏“活动 N”汇总当前工作区运行中的会话与 Fleet 后台任务（每 5 秒轮询）；点会话跳到对应标签，点后台任务打开 Fleet 面板。子 Agent 的独立活动视图未做。
 - **AF-18 空状态与建议（✅ 2026-10-23）**：空会话提供三条起步建议（解释项目 / 找未完成工作 / 运行测试），点击填入输入框；欢迎页建议未改动。
 - **E-04 工作区 SQLite（✅ 2026-10-23）**：新增 `{appDir}/data/workspaces.db`（node:sqlite，失败回退 JSON），记录工作区打开时间与次数；最近工作区按数据库顺序合并 settings.json 旧列表返回，settings 列表继续写穿以兼容旧版本。
-- **E-05 Monaco 首屏分包**：当前 Monaco chunk 4.56MB（已懒加载，不阻塞首屏）；可按语言 / 功能继续拆分或改用 CDN-less 按需加载。
+- **E-05 Monaco 首屏分包（✅ 2026-10-23）**：Vite 插件仅保留 10 种实际使用的语言分词器，monaco chunk 4560KB → 4169KB（gzip 1176KB → 1081KB）；仍为懒加载。按语言拆 chunk 会产生循环 chunk 与运行时错误，已放弃。
 - **E-07 历史 thinking 时长（✅ 2026-10-23）**：会话 sidecar 按 assistant 消息记录各段思考时长，历史恢复时照常显示。
 - **E-08 历史工具行 Diff（✅ 2026-10-23）**：sidecar 保存 write / edit 的前后内容，历史工具行通过 `hasDiff` 标记并可打开对应 Diff。
 
@@ -391,6 +391,7 @@
 | 2026-10-23 | E-07 历史 thinking 时长 | 会话 sidecar 记录每个 assistant 消息内各段思考的时长，历史恢复时读取并显示；与实时流式时长口径一致。 |
 | 2026-10-23 | E-08 历史工具行 Diff | 同样在 sidecar 保存 write/edit 的前后内容；历史工具行标记 `hasDiff`，点击“查看修改”按需从主进程取回 Diff 打开，不依赖当前 Diff 队列。 |
 | 2026-10-23 | E-04 工作区 SQLite | `electron/workspace-store.ts`：node:sqlite 记录工作区打开时间 / 次数，失败回退 JSON；最近工作区按 DB 顺序合并 settings 列表；打开工作区时自动记录。 |
+| 2026-10-23 | E-05 Monaco 分包 | Vite 插件把工作台未使用的语言分词器替换为空模块，只保留 TS/JS/JSON/Markdown/HTML/CSS/Python/Rust/Go/Ruby：monaco chunk 4560KB → 4169KB（gzip 1176KB → 1081KB）。曾尝试把语言定义拆成独立 chunk，因循环 chunk 导致运行时 `Cannot access 'r' before initialization`，已回退。构建产物经 `vite preview` 验证：打开 JSON 文件、worker 加载与编辑器渲染正常。 |
 
 ---
 
