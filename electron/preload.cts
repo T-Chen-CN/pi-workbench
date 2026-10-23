@@ -166,6 +166,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:session:setModel', workspaceDir, sessionId, modelId),
   agentSessionSetThinking: (workspaceDir: string, sessionId: string, level: string) =>
     ipcRenderer.invoke('agent:session:setThinking', workspaceDir, sessionId, level),
+  agentSessionsMetaGet: (workspaceDir: string) =>
+    ipcRenderer.invoke('agent:sessions:meta:get', workspaceDir),
+  agentSessionsMetaSet: (
+    workspaceDir: string,
+    meta: { pinned?: string[]; archived?: string[] }
+  ) => ipcRenderer.invoke('agent:sessions:meta:set', workspaceDir, meta),
+  saveTextFile: (suggestedName: string, content: string) =>
+    ipcRenderer.invoke('app:saveTextFile', suggestedName, content),
   searchWorkspaceFiles: (workspaceDir: string, query: string, limit?: number) =>
     ipcRenderer.invoke('workspace:searchFiles', workspaceDir, query, limit),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),

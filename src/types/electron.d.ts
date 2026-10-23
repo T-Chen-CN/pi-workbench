@@ -127,6 +127,17 @@ export interface ElectronAPI {
     sessionId: string,
     level: string
   ) => Promise<{ success: boolean; error?: string }>
+  agentSessionsMetaGet: (
+    workspaceDir: string
+  ) => Promise<{ success: boolean; meta?: SessionMeta; error?: string }>
+  agentSessionsMetaSet: (
+    workspaceDir: string,
+    meta: SessionMeta
+  ) => Promise<{ success: boolean; error?: string }>
+  saveTextFile: (
+    suggestedName: string,
+    content: string
+  ) => Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }>
   searchWorkspaceFiles: (
     workspaceDir: string,
     query: string,
@@ -335,6 +346,12 @@ export interface CheckpointSummary {
   sessionId: string
   createdAt: number
   fileCount: number
+}
+
+/** 会话置顶 / 归档元数据 */
+export interface SessionMeta {
+  pinned: string[]
+  archived: string[]
 }
 
 export interface FileEdit {

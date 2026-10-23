@@ -1843,6 +1843,83 @@ handleIpc('agent:initialize', async (_event, config: {
   }
 })
 
+// 会话元数据：置顶 / 归档（按工作区存 .pi-workbench/sessions-meta.json）
+handleIpc('agent:sessions:meta:get', async (_event, workspaceDir: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const metaPath = path.join(workspaceDir, '.pi-workbench', 'sessions-meta.json')
+    const result = readJsonWithBackup<{ pinned?: unknown; archived?: unknown }>(metaPath)
+    const sanitize = (value: unknown): string[] =>
+      Array.isArray(value)
+        ? value.filter((id): id is string => typeof id === 'string').slice(0, 500)
+        : []
+    return {
+      success: true,
+      meta: {
+        pinned: sanitize(result.data?.pinned),
+        archived: sanitize(result.data?.archived),
+      },
+    }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc(
+  'agent:sessions:meta:set',
+  async (_event, workspaceDir: string, meta: { pinned?: unknown; archived?: unknown }) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const sanitize = (value: unknown): string[] =>
+        Array.isArray(value)
+          ? [...new Set(value.filter((id): id is string => typeof id === 'string'))].slice(0, 500)
+          : []
+      const dir = path.join(workspaceDir, '.pi-workbench')
+      await fs.mkdir(dir, { recursive: true })
+      await writeJsonAtomic(path.join(dir, 'sessions-meta.json'), {
+        pinned: sanitize(meta?.pinned),
+        archived: sanitize(meta?.archived),
+      })
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
+// 导出文本：弹出保存对话框后写入用户选择的位置
+handleIpc('app:saveTextFile', async (_event, suggestedName: string, content: string) => {
+  try {
+    if (typeof content !== 'string') {
+      return { success: false, error: 'Nothing to save' }
+    }
+    const safeName =
+      typeof suggestedName === 'string' && suggestedName.trim()
+        ? path.basename(suggestedName.trim())
+        : 'export.txt'
+    const options = {
+      defaultPath: path.join(app.getPath('documents'), safeName),
+      filters: [
+        { name: 'Markdown', extensions: ['md'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    }
+    const result =
+      mainWindow && !mainWindow.isDestroyed()
+        ? await dialog.showSaveDialog(mainWindow, options)
+        : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return { success: false, canceled: true }
+    await fs.writeFile(result.filePath, content, 'utf-8')
+    return { success: true, path: result.filePath }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
 // Agent 聊天
 handleIpc(
   'agent:chat',

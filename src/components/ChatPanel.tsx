@@ -55,7 +55,7 @@ import {
   Spinner,
   Textarea,
 } from './ui'
-import type { SessionSummary, CheckpointSummary } from '../types/electron'
+import type { SessionSummary, CheckpointSummary, SessionMeta } from '../types/electron'
 
 interface ChatPanelProps {
   workspacePath: string
@@ -432,6 +432,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [pendingBehavior, setPendingBehavior] = useState<'queue' | 'steer'>('queue')
   const [showCheckpoints, setShowCheckpoints] = useState(false)
   const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([])
+  const [sessionMeta, setSessionMeta] = useState<SessionMeta>({ pinned: [], archived: [] })
+  const [showArchived, setShowArchived] = useState(false)
   const [mention, setMention] = useState<{
     start: number
     query: string
@@ -1299,6 +1301,69 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }
 
+  /** 会话置顶 / 归档元数据 */
+  useEffect(() => {
+    let cancelled = false
+    if (typeof api.getSessionMeta !== 'function') return
+    void api.getSessionMeta(workspacePath).then((result) => {
+      if (cancelled || !result.success || !result.meta) return
+      setSessionMeta(result.meta)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [workspacePath, configVersion])
+
+  const persistSessionMeta = async (next: SessionMeta) => {
+    setSessionMeta(next)
+    if (typeof api.setSessionMeta !== 'function') return
+    const result = await api.setSessionMeta(workspacePath, next)
+    if (!result.success) {
+      const detail = 'error' in result && typeof result.error === 'string' ? result.error : ''
+      toast.error(t('sessionMetaFailed', { error: localizeError(detail) }))
+    }
+  }
+
+  const togglePin = (session: SessionSummary) => {
+    const pinned = sessionMeta.pinned.includes(session.id)
+      ? sessionMeta.pinned.filter((id) => id !== session.id)
+      : [...sessionMeta.pinned, session.id]
+    void persistSessionMeta({ ...sessionMeta, pinned })
+  }
+
+  const toggleArchive = (session: SessionSummary) => {
+    const archived = sessionMeta.archived.includes(session.id)
+      ? sessionMeta.archived.filter((id) => id !== session.id)
+      : [...sessionMeta.archived, session.id]
+    void persistSessionMeta({ ...sessionMeta, archived })
+  }
+
+  /** 导出会话为 Markdown */
+  const exportSession = async (session: SessionSummary) => {
+    const history = await piAgentAPI.getHistory(workspacePath, session.id)
+    const messages = history.success ? history.history ?? [] : []
+    if (messages.length === 0) {
+      toast.error(t('exportEmpty'))
+      return
+    }
+    const markdown = [
+      `# ${session.title || session.id}`,
+      '',
+      ...messages.map(
+        (message) =>
+          `## ${message.role === 'user' ? t('roleYou') : 'Pi'}\n\n${message.content}`
+      ),
+    ].join('\n\n')
+    const fileName = `${(session.title || 'session').replace(/[\\/:*?"<>|]/g, '_')}.md`
+    if (typeof api.saveTextFile !== 'function') return
+    const result = await api.saveTextFile(fileName, markdown)
+    if (result.success) {
+      toast.info(t('exportDone'))
+    } else if (!('canceled' in result) || !result.canceled) {
+      toast.error(t('exportFailed', { error: localizeError(result.error ?? '') }))
+    }
+  }
+
   /** 读取检查点列表（当前会话） */
   const loadCheckpoints = async () => {
     if (!activeSessionId) return
@@ -2123,11 +2188,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         workspacePath={workspacePath}
         open={panelOpen}
         sessions={sessions}
+        pinnedIds={sessionMeta.pinned}
+        archivedIds={sessionMeta.archived}
+        showArchived={showArchived}
+        onToggleShowArchived={() => setShowArchived((value) => !value)}
         onClose={() => useSessionStore.getState().setPanelOpen(workspacePath, false)}
         onSelect={(session) => void handleSelectSession(session)}
         onNew={() => void handleNewSession()}
         onRename={(session) => void handleRenameSession(session)}
         onDelete={(session) => void handleDeleteSession(session)}
+        onTogglePin={togglePin}
+        onToggleArchive={toggleArchive}
+        onExport={(session) => void exportSession(session)}
       />
     </div>
   )
