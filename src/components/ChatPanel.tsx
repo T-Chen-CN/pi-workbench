@@ -39,6 +39,7 @@ import { createTraceBuffer } from '../utils/streamBuffer'
 import { revertFileEdit } from '../utils/revertFile'
 import { extractSymbols, sliceSymbol, type ExtractedSymbol } from '../utils/symbols'
 import { buildChatSuggestions, type WorkspaceType } from '../utils/suggestions'
+import { retrySecondsRemaining } from '../utils/retryCountdown'
 import { toast } from '../store/toastStore'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { useVirtualRows } from '../hooks/useVirtualRows'
@@ -579,6 +580,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [showArchived, setShowArchived] = useState(false)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [newMessageCount, setNewMessageCount] = useState(0)
+  /** 重试倒计时的本地时钟（R-19） */
+  const [retryNow, setRetryNow] = useState(() => Date.now())
   const lastMessageCountRef = useRef(0)
   const [mention, setMention] = useState<{
     start: number
@@ -1011,6 +1014,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       offTitle()
     }
   }, [workspacePath, loadHistory, persistTabs, t, configVersion])
+
+  // 自动重试期间每 250ms 刷新倒计时；重试结束或失败时状态清空、计时器释放
+  useEffect(() => {
+    if (!retryStatus) return
+    setRetryNow(Date.now())
+    const timer = window.setInterval(() => setRetryNow(Date.now()), 250)
+    return () => window.clearInterval(timer)
+  }, [retryStatus])
 
   // 排队消息变化时写入工作区（R-02）；关闭标签或删除会话后快照里自然不再包含它
   useEffect(() => {
@@ -1551,7 +1562,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             })
             break
           case 'retry_end':
-            if (event.success) store.setRetryStatus(key, null)
+            // 成功或失败都立即结束倒计时，失败原因由错误条展示（R-19）
+            store.setRetryStatus(key, null)
             break
           case 'compaction_start':
             break
@@ -2403,11 +2415,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             <div className="mb-2 flex items-center gap-2 type-caption text-warning">
               <Spinner size={10} />
               <span>
-                {t('retryInProgress', {
-                  attempt: retryStatus.attempt,
-                  max: retryStatus.maxAttempts,
-                  seconds: Math.max(1, Math.round(retryStatus.delayMs / 1000)),
-                })}
+                {retrySecondsRemaining(retryStatus, retryNow) > 0
+                  ? t('retryInProgress', {
+                      attempt: retryStatus.attempt,
+                      max: retryStatus.maxAttempts,
+                      seconds: retrySecondsRemaining(retryStatus, retryNow),
+                    })
+                  : t('retryStarting', {
+                      attempt: retryStatus.attempt,
+                      max: retryStatus.maxAttempts,
+                    })}
               </span>
               {retryStatus.message && (
                 <span className="min-w-0 truncate text-ink-muted">{retryStatus.message}</span>

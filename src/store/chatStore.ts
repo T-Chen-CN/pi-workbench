@@ -88,6 +88,8 @@ export interface ConversationState {
     maxAttempts: number
     delayMs: number
     message?: string
+    /** 收到 retry_start 的本地时间，用于实时倒计时（R-19） */
+    receivedAt?: number
   } | null
   /** 会话累计用量与成本 */
   sessionStats: SessionStatsInfo | null
@@ -560,7 +562,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     ),
 
   setRetryStatus: (key, status) =>
-    set((state) => updateExisting(state, key, (current) => ({ ...current, retryStatus: status }))),
+    set((state) =>
+      updateExisting(state, key, (current) => ({
+        ...current,
+        retryStatus: status ? { ...status, receivedAt: Date.now() } : null,
+      }))
+    ),
 
   setSessionStats: (key, stats) =>
     set((state) => updateExisting(state, key, (current) => ({ ...current, sessionStats: stats }))),
