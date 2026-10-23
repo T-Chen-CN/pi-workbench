@@ -34,6 +34,7 @@ import { localizeError } from '../i18n/errors'
 import { commandPaletteShortcut } from '../utils/shortcuts'
 import { createTraceBuffer } from '../utils/streamBuffer'
 import { revertFileEdit } from '../utils/revertFile'
+import { extractSymbols, sliceSymbol, type ExtractedSymbol } from '../utils/symbols'
 import { toast } from '../store/toastStore'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { useVirtualRows } from '../hooks/useVirtualRows'
@@ -397,6 +398,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const mode = conversation?.mode ?? 'act'
 
   const openFiles = useEditorStore((state) => state.openFiles)
+  const currentEditorFile = useEditorStore((state) => state.currentFile)
   const selection = useSelectionStore((state) => state.selection)
   const approvalRequests = useApprovalStore((state) => state.requests)
   const pendingApprovals = useMemo(
@@ -426,6 +428,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [needsApiKey, setNeedsApiKey] = useState(false)
   const [fatalError, setFatalError] = useState<string | null>(null)
   const [showAttachMenu, setShowAttachMenu] = useState(false)
+  const [attachMode, setAttachMode] = useState<'files' | 'symbols'>('files')
   const [pendingBehavior, setPendingBehavior] = useState<'queue' | 'steer'>('queue')
   const [showCheckpoints, setShowCheckpoints] = useState(false)
   const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([])
@@ -498,6 +501,27 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     })
     setMention(null)
     inputRef.current?.focus()
+  }
+
+  const currentSymbols = useMemo(
+    () =>
+      currentEditorFile ? extractSymbols(currentEditorFile.content, currentEditorFile.name) : [],
+    [currentEditorFile]
+  )
+
+  /** 附加单个符号（函数 / 类等）作为上下文 */
+  const attachSymbol = (symbol: ExtractedSymbol) => {
+    if (!activeKey || !currentEditorFile) return
+    useChatStore.getState().addAttachment(activeKey, {
+      kind: 'snippet',
+      path: currentEditorFile.path,
+      name: `${currentEditorFile.name}#${symbol.name}`,
+      startLine: symbol.startLine,
+      endLine: symbol.endLine,
+      content: sliceSymbol(currentEditorFile.content, symbol),
+    })
+    setShowAttachMenu(false)
+    setAttachMode('files')
   }
 
   /** 拖入文件作为附件 */
@@ -1919,13 +1943,54 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                   label={t('attachContext')}
                   size="sm"
                   disabled={!initialized || isLoading}
-                  onClick={() => setShowAttachMenu((open) => !open)}
+                  onClick={() => {
+                    setShowAttachMenu((open) => !open)
+                    setAttachMode('files')
+                  }}
                 />
                 {showAttachMenu && activeKey && (
                   <div className="absolute bottom-full left-0 z-10 mb-2 max-h-64 w-72 overflow-y-auto border border-line bg-raised py-1 shadow-print">
-                    <div className="px-3 py-1.5 type-label text-ink-muted">
-                      {t('attachContext')}
+                    <div className="flex items-center justify-between gap-2 px-3 py-1.5">
+                      <span className="type-label text-ink-muted">{t('attachContext')}</span>
+                      {currentEditorFile && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAttachMode((mode) => (mode === 'files' ? 'symbols' : 'files'))
+                          }
+                          className="type-caption text-ink-muted transition-colors hover:text-ink"
+                        >
+                          {attachMode === 'symbols' ? t('attachFile') : t('attachSymbol')}
+                        </button>
+                      )}
                     </div>
+                    {attachMode === 'symbols' ? (
+                      currentSymbols.length === 0 ? (
+                        <div className="px-3 py-2 type-caption text-ink-muted">
+                          {t('noSymbols')}
+                        </div>
+                      ) : (
+                        currentSymbols.map((symbol) => (
+                          <button
+                            key={`${symbol.name}-${symbol.startLine}`}
+                            type="button"
+                            onClick={() => attachSymbol(symbol)}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-hover"
+                          >
+                            <span className="flex-shrink-0 type-caption text-ink-muted">
+                              {symbol.kind}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate type-value text-ink">
+                              {symbol.name}
+                            </span>
+                            <DataText className="flex-shrink-0 text-ink-muted">
+                              L{symbol.startLine}–L{symbol.endLine}
+                            </DataText>
+                          </button>
+                        ))
+                      )
+                    ) : (
+                      <>
                     <button
                       type="button"
                       disabled={!selection}
@@ -1991,6 +2056,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                           </button>
                         )
                       })
+                    )}
+                      </>
                     )}
                   </div>
                 )}
