@@ -420,6 +420,7 @@
 - 文件引用：Markdown 行内代码中的 `path[:line]` 使用 `type-data` 样式，hover 变 `accent` 并加下划线，点击打开编辑器；`@` 搜索弹层为 `bg-raised` + 满墨边 + `shadow-print` 的列表（单行 `type-data`，hover `bg-hover`），拖入文件直接进入附件区。
 - 内联变更卡：助手消息下方的 `bg-raised` + 发丝边卡片；标题行“本轮修改了 N 个文件”（`type-label`）+ 右侧“全部还原”（`type-caption`）；每行文件名为单行截断的 `type-data`，右侧“查看修改 / 还原此文件”文本按钮；还原按钮 hover 变 `danger`。
 - 重试与错误：重试提示为输入区上方的 `type-caption text-warning` 一行（Spinner + 次数/等待 + 错误摘要）；错误条保持左侧 2px `danger` 线，右侧提供 `type-caption` 文本按钮“重新生成 / 打开设置”。
+- 本轮任务：输入区上方的发丝边折叠条（`bg-raised`），标题行“本轮任务 + done/total”，展开后逐行显示 `accent` / `success` / `danger` 状态点、工具名与参数；不使用进度条填充。
 
 ### 6.6 终端
 

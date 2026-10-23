@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
+  ChevronRight,
   Copy,
   FileText,
   History,
@@ -71,6 +72,65 @@ function formatTokenCount(value: number): string {
 }
 
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/** 本轮任务列表（AF-12）：由助手消息里的工具步骤派生 */
+const TurnTaskList: React.FC<{ parts: import('../types/electron').AgentTracePart[] }> = ({
+  parts,
+}) => {
+  const { t } = useI18nStore()
+  const [open, setOpen] = useState(false)
+  const tools = parts.filter(
+    (part): part is Extract<import('../types/electron').AgentTracePart, { type: 'tool' }> =>
+      part.type === 'tool'
+  )
+  if (tools.length === 0) return null
+  const done = tools.filter((tool) => tool.status !== 'running').length
+  const running = done < tools.length
+
+  return (
+    <div className="border border-rule-hairline bg-raised">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+      >
+        <ChevronRight
+          size={12}
+          className={`flex-shrink-0 text-ink-muted transition-transform ${open ? 'rotate-90' : ''}`}
+        />
+        <span className="type-label text-ink">{t('currentTasks')}</span>
+        <span className="type-caption text-ink-muted">
+          {t('taskProgress', { done, total: tools.length })}
+        </span>
+        {running && <Spinner size={10} />}
+      </button>
+      {open && (
+        <div className="border-t border-rule-divide">
+          {tools.map((tool) => (
+            <div
+              key={tool.id}
+              className="flex items-center gap-2 border-b border-rule-divide px-3 py-1 last:border-b-0"
+            >
+              <span
+                className={`h-1 w-1 flex-shrink-0 rounded-full ${
+                  tool.status === 'running'
+                    ? 'animate-pulse bg-accent'
+                    : tool.isError || tool.status === 'error'
+                      ? 'bg-danger'
+                      : 'bg-success'
+                }`}
+              />
+              <span className="type-label text-ink">{tool.toolName}</span>
+              <span className="min-w-0 flex-1 truncate type-data text-ink-muted">
+                {tool.argsSummary}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 /** 一轮修改的内联变更卡（AF-10）：逐文件查看 / 还原 */
 const TurnEditSummary: React.FC<{
@@ -1629,6 +1689,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               {retryStatus.message && (
                 <span className="min-w-0 truncate text-ink-muted">{retryStatus.message}</span>
               )}
+            </div>
+          )}
+          {lastAssistantMessage?.parts?.some((part) => part.type === 'tool') && (
+            <div className="mb-2">
+              <TurnTaskList parts={lastAssistantMessage.parts ?? []} />
             </div>
           )}
           {contextUsage && contextPercent != null && (
