@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_KEYBINDINGS,
   eventToShortcut,
@@ -20,7 +20,12 @@ function keyEvent(init: Partial<KeyboardEvent>): KeyboardEvent {
 }
 
 describe('matchShortcut', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   it('matches mod+shift+p on Windows/Linux semantics', () => {
+    vi.stubGlobal('navigator', { platform: 'Win32', userAgent: 'Windows' })
     const event = keyEvent({ key: 'P', ctrlKey: true, shiftKey: true })
     expect(matchShortcut(event, 'mod+shift+p')).toBe(true)
     expect(matchShortcut(event, 'mod+p')).toBe(false)
@@ -28,7 +33,16 @@ describe('matchShortcut', () => {
     expect(matchShortcut(keyEvent({ key: ',', ctrlKey: true }), 'mod+,')).toBe(true)
   })
 
+  it('uses Command instead of Control on macOS', () => {
+    vi.stubGlobal('navigator', { platform: 'MacIntel', userAgent: 'Macintosh' })
+    expect(
+      matchShortcut(keyEvent({ key: 'p', metaKey: true, shiftKey: true }), 'mod+shift+p')
+    ).toBe(true)
+    expect(matchShortcut(keyEvent({ key: 'p', ctrlKey: true }), 'mod+p')).toBe(false)
+  })
+
   it('rejects malformed combinations', () => {
+    vi.stubGlobal('navigator', { platform: 'Win32', userAgent: 'Windows' })
     expect(matchShortcut(keyEvent({ key: 'p', ctrlKey: true }), 'p')).toBe(false)
   })
 })

@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Pi Workbench · Composer 重排静态稿</title>
+<style>
+  :root {
+    --font-ui: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    --font-mono: "Geist Mono", Consolas, "Courier New", monospace;
+    --font-display: "Instrument Serif", "Noto Serif SC", "Songti SC", SimSun, serif;
+    --font-reading: "Noto Serif SC", "Songti SC", SimSun, serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 40px 32px 56px;
+    background: #e9e5db;
+    color: #171512;
+    font-family: var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  header.page {
+    max-width: 1040px;
+    margin: 0 auto 28px;
+  }
+  .page h1 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 30px;
+    letter-spacing: .01em;
+    margin: 0 0 6px;
+  }
+  .page p.sub {
+    margin: 0;
+    font-family: var(--font-reading);
+    font-size: 13.5px;
+    line-height: 1.7;
+    color: #615c52;
+  }
+
+  .stage {
+    max-width: 1040px;
+    margin: 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 32px;
+    align-items: flex-start;
+  }
+
+  figure.frame { margin: 0; }
+  figcaption {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: .08em;
+    color: #615c52;
+    margin-bottom: 8px;
+  }
+
+  /* ---------- app theme scoping ---------- */
+  .app {
+    width: 470px;
+    height: 610px;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid rgba(23,21,18,.22);
+    border-radius: 2px;
+    background: rgb(251 249 244);           /* panel */
+    color: rgb(23 21 18);                   /* ink */
+    box-shadow: 0 1px 0 rgba(23,21,18,.04);
+
+    --surface: rgb(244 241 234);
+    --panel: rgb(251 249 244);
+    --raised: rgb(255 253 248);
+    --sunken: rgb(239 236 228);
+    --hover: rgb(238 234 225);
+    --active: rgb(232 227 217);
+    --line: rgb(23 21 18);
+    --ink: rgb(23 21 18);
+    --ink-muted: rgb(97 92 82);
+    --ink-subtle: rgb(145 138 125);
+    --accent: rgb(47 93 78);
+    --accent-fg: rgb(251 249 244);
+    --rule-control: rgba(23,21,18,.5);
+    --rule-divide: rgba(23,21,18,.22);
+    --rule-hairline: rgba(23,21,18,.18);
+    --success: rgb(94 107 46);
+  }
+
+  .app.ink {
+    background: rgb(26 24 21);
+    color: rgb(237 231 220);
+    border-color: rgba(237,231,220,.24);
+    box-shadow: none;
+
+    --surface: rgb(20 19 17);
+    --panel: rgb(26 24 21);
+    --raised: rgb(32 29 25);
+    --sunken: rgb(34 31 27);
+    --hover: rgb(43 39 34);
+    --active: rgb(52 47 41);
+    --line: rgb(237 231 220);
+    --ink: rgb(237 231 220);
+    --ink-muted: rgb(168 160 147);
+    --ink-subtle: rgb(115 108 96);
+    --accent: rgb(143 199 180);
+    --accent-fg: rgb(20 19 17);
+    --rule-control: rgba(237,231,220,.5);
+    --rule-divide: rgba(237,231,220,.22);
+    --rule-hairline: rgba(237,231,220,.18);
+    --success: rgb(168 191 122);
+  }
+
+  /* ---------- panel header ---------- */
+  .chat-head {
+    height: 44px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--rule-divide);
+  }
+  .chat-title { font-size: 12px; font-weight: 500; }
+  .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: rgb(94 107 46);
+    display: inline-block;
+  }
+  .app.ink .dot { background: rgb(168 191 122); }
+  .chat-state { font-size: 11px; color: var(--ink-muted); }
+  .chat-head .spacer { flex: 1; }
+  kbd {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--ink-muted);
+    border: 1px solid var(--rule-control);
+    border-radius: 1px;
+    padding: 1px 5px;
+    background: var(--sunken);
+  }
+
+  /* ---------- messages ---------- */
+  .messages {
+    flex: 1 1 auto;
+    overflow: hidden;
+    padding: 16px 14px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .msg-user {
+    align-self: flex-end;
+    max-width: 82%;
+    background: var(--raised);
+    border: 1px solid var(--rule-hairline);
+    border-radius: 2px;
+    padding: 7px 10px;
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--ink);
+  }
+  .msg-agent {
+    font-family: var(--font-reading);
+    font-size: 14px;
+    line-height: 1.85;
+    color: var(--ink);
+    max-width: 100%;
+  }
+  .msg-agent .muted { color: var(--ink-muted); }
+
+  /* ---------- composer ---------- */
+  .composer {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--rule-divide);
+    padding: 10px 12px 12px;
+    position: relative;
+  }
+
+  .input-box {
+    border: 1px solid var(--rule-control);
+    border-radius: 1px;
+    background: var(--sunken);
+  }
+
+  .input-area {
+    padding: 10px 12px 2px;
+    min-height: 64px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--ink-subtle);
+    user-select: none;
+  }
+
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px 8px;
+  }
+  .actions .grow { flex: 1 1 auto; }
+
+  .icon-btn {
+    width: 26px; height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    border-radius: 1px;
+    background: transparent;
+    color: var(--ink-muted);
+    cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--hover); color: var(--ink); }
+
+  .seg {
+    display: inline-flex;
+    border: 1px solid var(--rule-control);
+    border-radius: 1px;
+    overflow: hidden;
+  }
+  .seg button {
+    font-family: var(--font-ui);
+    font-size: 11px;
+    line-height: 1;
+    padding: 6px 11px;
+    border: 0;
+    background: transparent;
+    color: var(--ink-muted);
+    cursor: pointer;
+  }
+  .seg button + button { border-left: 1px solid var(--rule-control); }
+  .seg button.on { background: var(--active); color: var(--ink); }
+
+  .send-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 12px;
+    border: 1px solid var(--accent);
+    border-radius: 2px;
+    background: var(--accent);
+    color: var(--accent-fg);
+    font-family: var(--font-ui);
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .send-btn.off {
+    background: transparent;
+    color: var(--ink-subtle);
+    border-color: var(--rule-control);
+    cursor: default;
+  }
+
+  /* ---------- status strip ---------- */
+  .status {
+    margin-top: 7px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .status .meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1 1 auto;
+    border: 0;
+    background: transparent;
+    padding: 2px 0;
+    color: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    cursor: pointer;
+  }
+  .status .meta:hover .model { color: var(--ink); }
+  .status .model { color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+  .status .sep { color: var(--ink-subtle); flex: 0 0 auto; }
+  .status .thought {
+    font-family: var(--font-ui);
+    flex: 0 0 auto;
+  }
+  .meter-mini {
+    flex: 0 0 auto;
+    width: 44px; height: 3px;
+    background: var(--sunken);
+    overflow: hidden;
+  }
+  .meter-mini i {
+    display: block;
+    height: 100%;
+    width: 4%;
+    background: var(--accent);
+  }
+  .status .pct { flex: 0 0 auto; }
+  .link-btn {
+    flex: 0 0 auto;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    font-family: var(--font-ui);
+    font-size: 11px;
+    color: var(--ink-muted);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .link-btn:hover { color: var(--ink); }
+
+  /* ---------- popover ---------- */
+  .popover {
+    position: absolute;
+    left: 12px;
+    bottom: 151px;
+    width: 306px;
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    box-shadow: 0 10px 28px rgba(0,0,0,.32);
+    padding: 12px 14px 13px;
+    z-index: 5;
+  }
+  .pop-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .pop-head .t { font-size: 12px; font-weight: 500; color: var(--ink); }
+  .pop-head .hint { font-size: 11px; color: var(--ink-muted); }
+
+  .field { margin-bottom: 10px; }
+  .field label {
+    display: block;
+    font-size: 11px;
+    color: var(--ink-muted);
+    margin-bottom: 4px;
+  }
+  .select {
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 9px 0 10px;
+    border: 1px solid var(--rule-control);
+    border-radius: 1px;
+    background: var(--sunken);
+    font-size: 12.5px;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .select .mono { font-family: var(--font-mono); font-size: 11.5px; }
+
+  .usage {
+    margin: 12px 0 8px;
+    padding-top: 10px;
+    border-top: 1px solid var(--rule-divide);
+  }
+  .usage .row1 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: var(--ink-muted);
+  }
+  .meter {
+    height: 4px;
+    background: var(--sunken);
+    overflow: hidden;
+    margin-bottom: 7px;
+  }
+  .meter i { display: block; height: 100%; width: 4%; background: var(--accent); }
+  .usage .row2 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--ink);
+  }
+  .usage .row2 .link-btn { font-family: var(--font-ui); }
+
+  .capability {
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--ink-muted);
+    border-top: 1px solid var(--rule-divide);
+    padding-top: 9px;
+  }
+
+  /* ---------- notes ---------- */
+  .notes {
+    max-width: 1040px;
+    margin: 32px auto 0;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+  }
+  .notes h3 {
+    font-size: 12px;
+    font-weight: 500;
+    margin: 0 0 5px;
+  }
+  .notes p {
+    margin: 0;
+    font-family: var(--font-reading);
+    font-size: 13px;
+    line-height: 1.75;
+    color: #4c473e;
+  }
+  .notes .num {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: #8a8275;
+    margin-right: 6px;
+  }
+</style>
+</head>
+<body>
+
+<header class="page">
+  <h1>Composer 重排 · 静态稿</h1>
+  <p class="sub">仅示意布局与视觉层级；元信息收为一条状态行，模型与思考深度进入“会话设置”浮层。未改动应用代码。</p>
+</header>
+
+<main class="stage">
+
+  <!-- ================= PAPER ================= -->
+  <figure class="frame">
+    <figcaption>PAPER · 默认</figcaption>
+    <div class="app">
+      <div class="chat-head">
+        <span class="chat-title">Pi Agent 对话</span>
+        <span class="dot"></span>
+        <span class="chat-state">就绪</span>
+        <span class="spacer"></span>
+        <kbd>Ctrl+Shift+P</kbd>
+      </div>
+
+      <div class="messages">
+        <div class="msg-user">你能看到这个图吗？</div>
+        <div class="msg-agent">可以看到。输入区上方堆了四行元信息，百分比还是原始浮点数。把它收成一条状态行，点开再展开设置就好。</div>
+      </div>
+
+      <div class="composer">
+        <div class="input-box">
+          <div class="input-area">输入消息…</div>
+          <div class="actions">
+            <button class="icon-btn" aria-label="附加上下文">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m16 6-8.4 8.4a2 2 0 0 0 2.8 2.8l8.4-8.4a4 4 0 0 0-5.6-5.6L4.6 11.8a6 6 0 0 0 8.4 8.4l7.6-7.6"/></svg>
+            </button>
+            <div class="seg">
+              <button class="on">执行</button>
+              <button>计划</button>
+            </div>
+            <span class="grow"></span>
+            <button class="send-btn off">
+              发送
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="status">
+          <button class="meta" title="会话设置">
+            <span class="model">deepseek.flash</span>
+            <span class="sep">·</span>
+            <span class="thought">思考 中</span>
+            <span class="sep">·</span>
+            <span class="meter-mini"><i></i></span>
+            <span class="pct">4%</span>
+            <span class="sep">·</span>
+            <span>4.8k / 128k</span>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 auto;opacity:.7"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <button class="link-btn">压缩上下文</button>
+        </div>
+      </div>
+    </div>
+  </figure>
+
+  <!-- ================= INK ================= -->
+  <figure class="frame">
+    <figcaption>INK · 深色 · 会话设置展开</figcaption>
+    <div class="app ink">
+      <div class="chat-head">
+        <span class="chat-title">Pi Agent 对话</span>
+        <span class="dot"></span>
+        <span class="chat-state">就绪</span>
+        <span class="spacer"></span>
+        <kbd>Ctrl+Shift+P</kbd>
+      </div>
+
+      <div class="messages">
+        <div class="msg-user">你能看到这个图吗？</div>
+        <div class="msg-agent">可以看到。输入区上方堆了四行元信息，百分比还是原始浮点数。把它收成一条状态行，点开再展开设置就好。</div>
+      </div>
+
+      <div class="composer">
+
+        <div class="popover">
+          <div class="pop-head">
+            <span class="t">会话设置</span>
+            <span class="hint">仅当前会话</span>
+          </div>
+
+          <div class="field">
+            <label>模型</label>
+            <div class="select">
+              <span class="mono">deepseek.flash</span>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+          </div>
+
+          <div class="field" style="margin-bottom:0">
+            <label>思考深度</label>
+            <div class="select">
+              <span>中 <span style="color:var(--ink-muted);font-family:var(--font-mono);font-size:11px">medium</span></span>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+          </div>
+
+          <div class="usage">
+            <div class="row1"><span>上下文占用</span><span>4%</span></div>
+            <div class="meter"><i></i></div>
+            <div class="row2">
+              <span>4.8k / 128k tok</span>
+              <button class="link-btn">压缩上下文</button>
+            </div>
+          </div>
+
+          <div class="capability">128k 上下文 · 支持思考 · 支持图像</div>
+        </div>
+
+        <div class="input-box">
+          <div class="input-area">输入消息…</div>
+          <div class="actions">
+            <button class="icon-btn" aria-label="附加上下文">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m16 6-8.4 8.4a2 2 0 0 0 2.8 2.8l8.4-8.4a4 4 0 0 0-5.6-5.6L4.6 11.8a6 6 0 0 0 8.4 8.4l7.6-7.6"/></svg>
+            </button>
+            <div class="seg">
+              <button class="on">执行</button>
+              <button>计划</button>
+            </div>
+            <span class="grow"></span>
+            <button class="send-btn">
+              发送
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="status">
+          <button class="meta" title="会话设置">
+            <span class="model">deepseek.flash</span>
+            <span class="sep">·</span>
+            <span class="thought">思考 中</span>
+            <span class="sep">·</span>
+            <span class="meter-mini"><i></i></span>
+            <span class="pct">4%</span>
+            <span class="sep">·</span>
+            <span>4.8k / 128k</span>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 auto;opacity:.7"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <button class="link-btn">压缩上下文</button>
+        </div>
+      </div>
+    </div>
+  </figure>
+
+</main>
+
+<section class="notes">
+  <div>
+    <h3><span class="num">01</span>一条状态行</h3>
+    <p>模型、思考深度、上下文占用压成一行等宽小字；百分比取整，token 只出现一次。整行 <code>nowrap</code> + 省略号，窄面板不再折行出孤字。</p>
+  </div>
+  <div>
+    <h3><span class="num">02</span>设置进浮层</h3>
+    <p>点状态行打开“会话设置”：模型、思考深度回到 32px 标准控件，能力说明降为浮层里的脚注，不再与输入框争夺空间。</p>
+  </div>
+  <div>
+    <h3><span class="num">03</span>动作行归位</h3>
+    <p>左侧附件 + 模式切换，右侧发送，统一 26px 行高与 2px 圆角；去掉重复的快捷键提示，仅保留 placeholder 一处。</p>
+  </div>
+</section>
+
+</body>
+</html>
