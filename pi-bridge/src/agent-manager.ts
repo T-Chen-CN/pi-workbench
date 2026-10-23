@@ -35,6 +35,15 @@ import {
   type CheckpointSummary,
 } from './checkpoint-store.js'
 import {
+  normalizePlanSteps,
+  type PlanStep,
+  type PlanStepStatus,
+  type PlanStatus,
+  type StructuredPlan,
+} from './plan.js'
+
+export type { PlanStep, PlanStepStatus, PlanStatus, StructuredPlan }
+import {
   SessionExtrasStore,
   emptyExtras,
   type SessionExtras,
@@ -85,16 +94,27 @@ const CONTEXT_BLOCK_END = '</pi-workbench-context>'
 /** Plan 模式的提示块；历史恢复时整块剥离，不展示给用户 */
 const PLAN_BLOCK_START = '<pi-workbench-plan-mode>'
 const PLAN_BLOCK_END = '</pi-workbench-plan-mode>'
-/** Plan 模式可用的只读工具 */
-const PLAN_MODE_TOOLS = ['read', 'grep', 'find', 'ls']
-/** Act 模式在无法恢复原工具集时使用的内置工具 */
-const DEFAULT_MODE_TOOLS = ['read', 'grep', 'find', 'ls', 'write', 'edit', 'bash', 'powershell']
+/** Plan 模式可用的只读工具（另加 submit_plan） */
+const PLAN_MODE_TOOLS = ['read', 'grep', 'find', 'ls', 'submit_plan']
+/** Act 模式在无法恢复原工具集时使用的内置工具（另加 update_plan_step） */
+const DEFAULT_MODE_TOOLS = [
+  'read',
+  'grep',
+  'find',
+  'ls',
+  'write',
+  'edit',
+  'bash',
+  'powershell',
+  'update_plan_step',
+]
 const PLAN_MODE_INSTRUCTION = [
-  'You are in Plan mode. Only read-only tools (read, grep, find, ls) are available;',
+  'You are in Plan mode. Only read-only tools (read, grep, find, ls) and submit_plan are available;',
   'you cannot modify files or run commands.',
-  'Explore the repository as needed, then reply with a concise, numbered implementation plan:',
-  'what you will change, which files are involved, and any risks or side effects.',
-  'Do not claim that changes were made.',
+  'Explore the repository as needed, then call submit_plan exactly once with a concise structured plan:',
+  'each step needs a short title, the files it will touch, and a risk note where relevant.',
+  'Do not write the plan as free-form text and do not claim that changes were made.',
+  'After submit_plan succeeds, reply with one short sentence.',
 ].join(' ')
 
 /** 会话运行模式：plan 仅只读探索并给出计划，act 可修改文件与执行命令 */
@@ -429,6 +449,8 @@ export type AgentTraceEvent =
       tokensBefore?: number
       error?: string
     }
+  | { type: 'plan_submitted'; plan: StructuredPlan }
+  | { type: 'plan_updated'; plan: StructuredPlan }
 
 
 export interface AgentConfig {
@@ -596,6 +618,8 @@ export interface AgentChatResult {
   edits?: FileEdit[]
   /** 本轮模型调用的 token 用量 */
   usage?: AgentUsage
+  /** 本轮 Plan 模式新提交的结构化计划（R-04） */
+  plan?: StructuredPlan
 }
 
 export interface AgentChatOptions {
@@ -1117,6 +1141,112 @@ export class AgentManager {
     }
   }
 
+  /** Plan 模式的结构化计划工具（R-04） */
+  private createPlanExtension(context: {
+    getRuntime: () => SessionRuntime | null
+    getMode: () => SessionMode
+  }): ExtensionFactory {
+    const result = (text: string) => ({ content: [{ type: 'text' as const, text }], details: undefined })
+    const persistExtras = (runtime: SessionRuntime) => this.persistExtras(runtime)
+
+    return (pi) => {
+      pi.registerTool({
+        name: 'submit_plan',
+        label: 'Submit plan',
+        description:
+          'Submit one structured implementation plan for the user to approve. Plan mode only.',
+        promptSnippet: 'submit_plan: submit a structured implementation plan (Plan mode)',
+        promptGuidelines: [
+          'In Plan mode, call submit_plan exactly once after exploring; do not write the plan as free-form text.',
+        ],
+        parameters: {
+          type: 'object',
+          properties: {
+            summary: { type: 'string', description: 'One-sentence summary of the plan' },
+            steps: {
+              type: 'array',
+              minItems: 1,
+              items: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string', description: 'Short step title' },
+                  files: { type: 'array', items: { type: 'string' } },
+                  risk: { type: 'string', description: 'Optional risk or side effect' },
+                },
+                required: ['title'],
+              },
+            },
+          },
+          required: ['steps'],
+        } as any,
+        async execute(_toolCallId: string, params: any) {
+          const runtime = context.getRuntime()
+          if (!runtime) throw new Error('Plan state is unavailable.')
+          if (context.getMode() !== 'plan') {
+            throw new Error('submit_plan is only available in Plan mode.')
+          }
+          const steps = normalizePlanSteps(params?.steps)
+          if (steps.length === 0) {
+            throw new Error('A plan needs at least one step with a title.')
+          }
+          const now = Date.now()
+          const plan: StructuredPlan = {
+            id: `plan-${now}`,
+            summary:
+              typeof params?.summary === 'string' ? params.summary.trim().slice(0, 500) : '',
+            steps,
+            status: 'proposed',
+            createdAt: now,
+            updatedAt: now,
+          }
+          runtime.extras.plan = plan
+          persistExtras(runtime)
+          runtime.onTrace?.({ type: 'plan_submitted', plan })
+          return result(
+            `Plan submitted with ${plan.steps.length} step(s). Waiting for the user to approve or reject it.`
+          )
+        },
+      })
+
+      pi.registerTool({
+        name: 'update_plan_step',
+        label: 'Update plan step',
+        description: 'Mark a step of the approved plan as in_progress, done, pending or skipped.',
+        promptSnippet: 'update_plan_step: update the status of an approved plan step',
+        promptGuidelines: [
+          'When executing an approved plan, call update_plan_step with in_progress before starting a step and done after finishing it.',
+        ],
+        parameters: {
+          type: 'object',
+          properties: {
+            stepId: { type: 'string', description: 'Step id from the approved plan' },
+            status: {
+              type: 'string',
+              enum: ['pending', 'in_progress', 'done', 'skipped'],
+            },
+          },
+          required: ['stepId', 'status'],
+        } as any,
+        async execute(_toolCallId: string, params: any) {
+          const runtime = context.getRuntime()
+          const plan = runtime?.extras.plan
+          if (!runtime || !plan) throw new Error('There is no active plan to update.')
+          const step = plan.steps.find((item) => item.id === params?.stepId)
+          if (!step) throw new Error(`Unknown plan step "${String(params?.stepId ?? '')}".`)
+          const status = String(params?.status ?? '')
+          if (!['pending', 'in_progress', 'done', 'skipped'].includes(status)) {
+            throw new Error('Invalid plan step status.')
+          }
+          step.status = status as PlanStepStatus
+          plan.updatedAt = Date.now()
+          persistExtras(runtime)
+          runtime.onTrace?.({ type: 'plan_updated', plan })
+          return result(`Step ${step.id} is now ${status}.`)
+        },
+      })
+    }
+  }
+
   /** 向宿主请求审批；没有审批通道或超时都按拒绝处理 */
   private async requestToolApproval(request: ApprovalRequestPayload): Promise<ApprovalDecision> {
     const handler = this.config?.requestApproval
@@ -1227,6 +1357,65 @@ export class AgentManager {
       }
       this.persistExtras(runtime)
       return { success: true, history: this.sessionMessages(runtime) }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 读取当前结构化计划（R-04） */
+  async getPlan(
+    sessionId: string
+  ): Promise<{ success: boolean; plan?: StructuredPlan | null; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      return { success: true, plan: runtime.extras.plan }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 批准计划：状态改为 approved，第一步标记为进行中（任务列表随之驱动） */
+  async approvePlan(
+    sessionId: string,
+    planId: string
+  ): Promise<{ success: boolean; plan?: StructuredPlan; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      if (runtime.isProcessing) {
+        return { success: false, error: 'Session is running; stop it before approving the plan.' }
+      }
+      const plan = runtime.extras.plan
+      if (!plan || plan.id !== planId) return { success: false, error: 'Plan not found.' }
+      if (plan.status !== 'proposed') {
+        return { success: false, error: 'This plan is no longer awaiting approval.' }
+      }
+      plan.status = 'approved'
+      const first = plan.steps.find((step) => step.status === 'pending')
+      if (first) first.status = 'in_progress'
+      plan.updatedAt = Date.now()
+      this.persistExtras(runtime)
+      return { success: true, plan }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 拒绝计划：保留展示但不可再执行，直到下一份计划提交 */
+  async rejectPlan(
+    sessionId: string,
+    planId: string
+  ): Promise<{ success: boolean; plan?: StructuredPlan; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const plan = runtime.extras.plan
+      if (!plan || plan.id !== planId) return { success: false, error: 'Plan not found.' }
+      if (plan.status !== 'proposed') {
+        return { success: false, error: 'This plan is no longer awaiting approval.' }
+      }
+      plan.status = 'rejected'
+      plan.updatedAt = Date.now()
+      this.persistExtras(runtime)
+      return { success: true, plan }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -2114,6 +2303,7 @@ ${body.join('\n')}
 
     const sessionAllow = new Set<string>()
     const modeState = { current: 'act' as SessionMode }
+    const planContext: { runtime: SessionRuntime | null } = { runtime: null }
     const extras = this.extrasStore ? await this.extrasStore.load(id) : emptyExtras()
     const settingsManager = SettingsManager.create(config.workspaceDir, this.agentDir)
     const resourceLoader = new DefaultResourceLoader({
@@ -2122,6 +2312,10 @@ ${body.join('\n')}
       settingsManager,
       extensionFactories: [
         this.createApprovalExtension(id, sessionAllow, () => modeState.current),
+        this.createPlanExtension({
+          getRuntime: () => planContext.runtime,
+          getMode: () => modeState.current,
+        }),
       ],
     })
     await resourceLoader.reload()
@@ -2185,6 +2379,7 @@ ${body.join('\n')}
       thinkingDurationsThisMessage: [],
     }
     runtime.unsubscribe = this.subscribeToSessionEvents(runtime)
+    planContext.runtime = runtime
     this.runtimes.set(id, runtime)
     return runtime
   }
@@ -2653,6 +2848,7 @@ ${body.join('\n')}
 
       // 发送用户消息并等待 Agent 完成；超时先 abort，宽限期后仍未结束则强制收尾
       const session = runtime.session
+      const planBefore = runtime.extras.plan?.id ?? null
       const promptText = runtime.modeState.current === 'plan' ? wrapPlanPrompt(message) : message
       const images = Array.isArray(options?.images)
         ? options.images
@@ -2778,6 +2974,11 @@ ${body.join('\n')}
         response: assistantResponse,
         edits,
         usage,
+        // 本轮新提交的计划（R-04），保证 trace 丢失时前端也能拿到
+        plan:
+          runtime.extras.plan && runtime.extras.plan.id !== planBefore
+            ? runtime.extras.plan
+            : undefined,
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)

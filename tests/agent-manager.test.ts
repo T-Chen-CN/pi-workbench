@@ -1124,7 +1124,7 @@ describe('tool approvals', () => {
   function toolCallHandler(): (event: any) => Promise<any> {
     const loader = sdk.loaders[sdk.loaders.length - 1]
     const factories = loader?.options?.extensionFactories ?? []
-    expect(factories).toHaveLength(1)
+    expect(factories.length).toBeGreaterThanOrEqual(1)
     let handler: ((event: any) => Promise<any>) | null = null
     factories[0]({
       on: (event: string, fn: (payload: any) => Promise<any>) => {
@@ -1239,7 +1239,7 @@ describe('plan mode', () => {
     await manager.initialize(makeConfig())
 
     await manager.setSessionMode('session-1', 'plan')
-    expect(session.activeTools).toEqual(['read', 'grep', 'find', 'ls'])
+    expect(session.activeTools).toEqual(['read', 'grep', 'find', 'ls', 'submit_plan'])
 
     await manager.setSessionMode('session-1', 'act')
     expect(session.activeTools).toEqual(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'])
@@ -1785,6 +1785,71 @@ describe('prompt resources', () => {
     ])
     expect(result.skills).toEqual([])
     expect(sdk.reload).toHaveBeenCalled()
+  })
+})
+
+describe('structured plans', () => {
+  const plan = {
+    id: 'plan-1',
+    summary: 'Ship the feature',
+    status: 'proposed' as const,
+    createdAt: 1,
+    updatedAt: 1,
+    steps: [
+      { id: 'step-1', title: 'First', files: ['src/a.ts'], status: 'pending' as const },
+      { id: 'step-2', title: 'Second', files: [], status: 'pending' as const },
+    ],
+  }
+
+  async function setupPlanSession() {
+    await fs.mkdir(path.join(agentDir, 'session-extras'), { recursive: true })
+    await fs.writeFile(
+      path.join(agentDir, 'session-extras', 'session-1.json'),
+      JSON.stringify({
+        version: 1,
+        thinkingDurations: {},
+        toolEdits: {},
+        branchLeaves: {},
+        plan,
+      }),
+      'utf-8'
+    )
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+  }
+
+  it('returns the persisted plan', async () => {
+    await setupPlanSession()
+
+    const result = await manager.getPlan('session-1')
+
+    expect(result.success).toBe(true)
+    expect(result.plan?.id).toBe('plan-1')
+    expect(result.plan?.status).toBe('proposed')
+  })
+
+  it('approves the plan and starts its first step', async () => {
+    await setupPlanSession()
+
+    const result = await manager.approvePlan('session-1', 'plan-1')
+
+    expect(result.success).toBe(true)
+    expect(result.plan?.status).toBe('approved')
+    expect(result.plan?.steps[0].status).toBe('in_progress')
+    expect(result.plan?.steps[1].status).toBe('pending')
+  })
+
+  it('rejects a proposed plan and refuses a second decision', async () => {
+    await setupPlanSession()
+
+    const rejected = await manager.rejectPlan('session-1', 'plan-1')
+    expect(rejected.success).toBe(true)
+    expect(rejected.plan?.status).toBe('rejected')
+
+    await expect(manager.approvePlan('session-1', 'plan-1')).resolves.toMatchObject({
+      success: false,
+    })
   })
 })
 

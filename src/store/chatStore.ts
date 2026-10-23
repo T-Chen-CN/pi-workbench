@@ -6,6 +6,7 @@ import type {
   ConversationBranchGroup,
   FileEdit,
   SessionStatsInfo,
+  StructuredPlan,
 } from '../types/electron'
 
 export interface ChatUsage {
@@ -173,6 +174,12 @@ interface ChatState {
   removeMessage: (key: string, id: string) => void
   /** 应用回复分支分组（R-03），按用户消息时间戳匹配到其后的助手消息 */
   setMessageBranches: (key: string, groups: ConversationBranchGroup[]) => void
+  /** 在指定助手消息中插入 / 更新结构化计划卡（R-04） */
+  appendPlanPart: (key: string, messageId: string, plan: StructuredPlan) => void
+  /** 按计划 id 更新所有计划卡（R-04） */
+  applyPlanUpdate: (key: string, plan: StructuredPlan) => void
+  /** 历史恢复时追加一份计划消息（R-04） */
+  appendPlanMessage: (key: string, plan: StructuredPlan) => void
   truncateLastTurn: (key: string) => void
   setMessages: (key: string, messages: Array<Omit<ChatMessage, 'id'>>) => void
   setLoading: (key: string, loading: boolean) => void
@@ -600,6 +607,71 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
         })
         return { ...current, messages }
+      })
+    ),
+
+  appendPlanPart: (key, messageId, plan) =>
+    set((state) =>
+      updateMessage(state, key, messageId, (message) => {
+        const next = closeThinking(message)
+        const parts = next.parts ? [...next.parts] : []
+        const existing = parts.findIndex(
+          (part) => part.type === 'plan' && part.plan.id === plan.id
+        )
+        const planPart: AgentTracePart = {
+          type: 'plan',
+          id: `plan-part-${plan.id}`,
+          plan,
+        }
+        if (existing >= 0) parts[existing] = planPart
+        else parts.push(planPart)
+        return { ...next, parts }
+      })
+    ),
+
+  applyPlanUpdate: (key, plan) =>
+    set((state) =>
+      updateExisting(state, key, (current) => {
+        let changed = false
+        const messages = current.messages.map((message) => {
+          if (!message.parts?.some((part) => part.type === 'plan' && part.plan.id === plan.id)) {
+            return message
+          }
+          changed = true
+          return {
+            ...message,
+            parts: message.parts.map((part) =>
+              part.type === 'plan' && part.plan.id === plan.id ? { ...part, plan } : part
+            ),
+          }
+        })
+        return changed ? { ...current, messages } : current
+      })
+    ),
+
+  appendPlanMessage: (key, plan) =>
+    set((state) =>
+      updateExisting(state, key, (current) => {
+        if (
+          current.messages.some((message) =>
+            message.parts?.some((part) => part.type === 'plan' && part.plan.id === plan.id)
+          )
+        ) {
+          return current
+        }
+        return {
+          ...current,
+          messages: [
+            ...current.messages,
+            {
+              id: `msg-plan-${plan.id}`,
+              role: 'assistant',
+              content: '',
+              timestamp: plan.createdAt,
+              parts: [{ type: 'plan', id: `plan-part-${plan.id}`, plan }],
+            },
+          ],
+        }
       })
     ),
 

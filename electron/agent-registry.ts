@@ -11,6 +11,22 @@ export interface AgentChatOutcome {
   edits?: unknown[]
 }
 
+/** 结构化计划（R-04）；与 pi-bridge 的 StructuredPlan 对应 */
+export interface StructuredPlanPayload {
+  id: string
+  summary: string
+  status: 'proposed' | 'approved' | 'rejected'
+  createdAt: number
+  updatedAt: number
+  steps: Array<{
+    id: string
+    title: string
+    files: string[]
+    risk?: string
+    status: 'pending' | 'in_progress' | 'done' | 'skipped'
+  }>
+}
+
 export interface RegisteredAgent {
   initialize: (config: unknown) => Promise<{ success: boolean; error?: string }>
   chat: {
@@ -174,6 +190,22 @@ export interface RegisteredAgent {
       scope: 'user' | 'project' | 'temporary'
       disableModelInvocation: boolean
     }>
+    error?: string
+  }>
+  /** 结构化计划（R-04） */
+  getPlan?: (sessionId: string) => Promise<{
+    success: boolean
+    plan?: StructuredPlanPayload | null
+    error?: string
+  }>
+  approvePlan?: (sessionId: string, planId: string) => Promise<{
+    success: boolean
+    plan?: StructuredPlanPayload
+    error?: string
+  }>
+  rejectPlan?: (sessionId: string, planId: string) => Promise<{
+    success: boolean
+    plan?: StructuredPlanPayload
     error?: string
   }>
   /** 会话模型与思考级别 */

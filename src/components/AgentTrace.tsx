@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from 'react'
-import { AlertCircle, Check, ChevronRight, Loader2 } from 'lucide-react'
-import type { AgentTracePart } from '../types/electron'
+import { AlertCircle, Check, ChevronRight, ListChecks, Loader2 } from 'lucide-react'
+import type { AgentTracePart, StructuredPlan } from '../types/electron'
 import { useI18nStore } from '../store/i18nStore'
 import type { TranslationKey, TranslationParams } from '../i18n/translations'
 import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
-import { Caption, DataText } from './ui'
+import { Button, Caption, DataText, Label } from './ui'
 
 type Translator = (key: TranslationKey, params?: TranslationParams) => string
 
@@ -17,6 +17,7 @@ type RenderGroup =
       part: Extract<AgentTracePart, { type: 'text' }>
     }
   | { type: 'work'; key: string; parts: WorkPart[] }
+  | { type: 'plan'; key: string; part: Extract<AgentTracePart, { type: 'plan' }> }
 
 function buildGroups(parts: AgentTracePart[]): RenderGroup[] {
   const groups: RenderGroup[] = []
@@ -32,6 +33,9 @@ function buildGroups(parts: AgentTracePart[]): RenderGroup[] {
     if (part.type === 'text') {
       flushWork()
       groups.push({ type: 'text', key: `text-${part.id}`, part })
+    } else if (part.type === 'plan') {
+      flushWork()
+      groups.push({ type: 'plan', key: `plan-${part.plan.id}`, part })
     } else {
       work.push(part)
     }
@@ -80,6 +84,10 @@ export interface AgentPartsProps {
   onOpenDiff?: (toolCallId: string) => void
   /** 查看工具结果的完整输出（R-20） */
   onOpenToolResult?: (toolCallId: string, toolName: string) => void
+  /** 计划卡操作（R-04）：只读展示，仅允许批准 / 拒绝 */
+  canActOnPlan?: boolean
+  onApprovePlan?: (plan: StructuredPlan) => void
+  onRejectPlan?: (plan: StructuredPlan) => void
 }
 
 export const AgentParts: React.FC<AgentPartsProps> = React.memo(function AgentParts({
@@ -88,6 +96,9 @@ export const AgentParts: React.FC<AgentPartsProps> = React.memo(function AgentPa
   diffToolIds,
   onOpenDiff,
   onOpenToolResult,
+  canActOnPlan = false,
+  onApprovePlan,
+  onRejectPlan,
 }) {
   const groups = useMemo(() => buildGroups(parts), [parts])
 
@@ -109,6 +120,17 @@ export const AgentParts: React.FC<AgentPartsProps> = React.memo(function AgentPa
             </div>
           )
         }
+        if (group.type === 'plan') {
+          return (
+            <PlanCard
+              key={group.key}
+              plan={group.part.plan}
+              canAct={canActOnPlan}
+              onApprove={onApprovePlan}
+              onReject={onRejectPlan}
+            />
+          )
+        }
         return (
           <WorkGroup
             key={group.key}
@@ -123,6 +145,101 @@ export const AgentParts: React.FC<AgentPartsProps> = React.memo(function AgentPa
     </>
   )
 })
+
+function planStatusLabel(t: Translator, status: StructuredPlan['status']): string {
+  if (status === 'approved') return t('planStatusApproved')
+  if (status === 'rejected') return t('planStatusRejected')
+  return t('planStatusProposed')
+}
+
+function stepStatusLabel(t: Translator, status: StructuredPlan['steps'][number]['status']): string {
+  switch (status) {
+    case 'in_progress':
+      return t('planStepInProgress')
+    case 'done':
+      return t('planStepDone')
+    case 'skipped':
+      return t('planStepSkipped')
+    default:
+      return t('planStepPending')
+  }
+}
+
+function stepStatusClass(status: StructuredPlan['steps'][number]['status']): string {
+  switch (status) {
+    case 'in_progress':
+      return 'text-accent'
+    case 'done':
+      return 'text-success'
+    case 'skipped':
+      return 'text-ink-subtle'
+    default:
+      return 'text-ink-muted'
+  }
+}
+
+/** 结构化计划卡（R-04）：步骤只读，只能批准或拒绝 */
+const PlanCard: React.FC<{
+  plan: StructuredPlan
+  canAct: boolean
+  onApprove?: (plan: StructuredPlan) => void
+  onReject?: (plan: StructuredPlan) => void
+}> = ({ plan, canAct, onApprove, onReject }) => {
+  const { t } = useI18nStore()
+
+  return (
+    <div className="my-2 border border-rule-hairline bg-raised">
+      <div className="flex items-center gap-2 border-b border-rule-divide px-3 py-2">
+        <ListChecks size={14} className="flex-shrink-0 text-accent" />
+        <Label className="text-ink">{t('planCardTitle')}</Label>
+        <Caption className="ml-auto text-ink-muted">{planStatusLabel(t, plan.status)}</Caption>
+      </div>
+      {plan.summary && (
+        <p className="m-0 border-b border-rule-divide px-3 py-2 type-value text-ink-muted">
+          {plan.summary}
+        </p>
+      )}
+      <ol className="m-0 list-none p-0">
+        {plan.steps.map((step, index) => (
+          <li
+            key={step.id}
+            className="flex items-start gap-2 border-b border-rule-divide px-3 py-2 last:border-b-0"
+          >
+            <span className="w-5 flex-shrink-0 text-right type-data text-ink-subtle">
+              {index + 1}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="type-value text-ink">{step.title}</div>
+              {step.files.length > 0 && (
+                <div className="type-data text-ink-muted">{step.files.join(' · ')}</div>
+              )}
+              {step.risk && (
+                <Caption className="text-warning">{t('planRisk', { risk: step.risk })}</Caption>
+              )}
+            </div>
+            <span className={`flex-shrink-0 type-caption ${stepStatusClass(step.status)}`}>
+              {stepStatusLabel(t, step.status)}
+            </span>
+          </li>
+        ))}
+      </ol>
+      {canAct && plan.status === 'proposed' && (onApprove || onReject) && (
+        <div className="flex justify-end gap-2 border-t border-rule-divide px-3 py-2">
+          {onReject && (
+            <Button size="sm" variant="ghost" onClick={() => onReject(plan)}>
+              {t('planReject')}
+            </Button>
+          )}
+          {onApprove && (
+            <Button size="sm" variant="primary" onClick={() => onApprove(plan)}>
+              {t('planApprove')}
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 interface WorkGroupProps {
   parts: WorkPart[]

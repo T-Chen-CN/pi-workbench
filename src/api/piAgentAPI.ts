@@ -25,6 +25,7 @@ import type {
   SessionMode,
   SessionTabs,
   SessionTabsResult,
+  StructuredPlan,
   ToolResultMeta,
 } from '../types/electron'
 
@@ -61,6 +62,7 @@ interface AgentChatResponse {
   error?: string
   edits?: FileEdit[]
   usage?: AgentUsage
+  plan?: StructuredPlan
 }
 
 interface AgentHistoryResponse {
@@ -634,6 +636,51 @@ export const piAgentAPI = {
     }
     try {
       return await window.electronAPI.agentPromptResources(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 结构化计划（R-04） */
+  async getPlan(
+    workspaceDir: string,
+    sessionId: string
+  ): Promise<{ success: boolean; plan?: StructuredPlan | null; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentPlanGet !== 'function') {
+      return { success: true, plan: null }
+    }
+    try {
+      return await window.electronAPI.agentPlanGet(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  async approvePlan(
+    workspaceDir: string,
+    sessionId: string,
+    planId: string
+  ): Promise<{ success: boolean; plan?: StructuredPlan; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentPlanApprove !== 'function') {
+      return { success: false, error: 'Plans are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentPlanApprove(workspaceDir, sessionId, planId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  async rejectPlan(
+    workspaceDir: string,
+    sessionId: string,
+    planId: string
+  ): Promise<{ success: boolean; plan?: StructuredPlan; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentPlanReject !== 'function') {
+      return { success: false, error: 'Plans are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentPlanReject(workspaceDir, sessionId, planId)
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

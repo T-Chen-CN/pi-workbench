@@ -2699,6 +2699,61 @@ handleIpc(
   }
 )
 
+// 结构化计划（R-04）：读取 / 批准 / 拒绝
+handleIpc('agent:plan:get', async (_event, workspaceDir: string, sessionId: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.getPlan !== 'function') {
+      return { success: false, error: 'Plans are not supported by this agent' }
+    }
+    return await agent.getPlan(sessionId)
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc(
+  'agent:plan:approve',
+  async (_event, workspaceDir: string, sessionId: string, planId: string) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.approvePlan !== 'function') {
+        return { success: false, error: 'Plans are not supported by this agent' }
+      }
+      return await agent.approvePlan(sessionId, planId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
+handleIpc(
+  'agent:plan:reject',
+  async (_event, workspaceDir: string, sessionId: string, planId: string) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.rejectPlan !== 'function') {
+        return { success: false, error: 'Plans are not supported by this agent' }
+      }
+      return await agent.rejectPlan(sessionId, planId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
 handleIpc('agent:session:stats', async (_event, workspaceDir: string, sessionId: string) => {
   try {
     if (!isTrustedWorkspacePath(workspaceDir)) {

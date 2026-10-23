@@ -542,6 +542,44 @@ describe('chatStore branches', () => {
   })
 })
 
+describe('chatStore structured plans', () => {
+  const key = '/ws\u0000plan'
+  const plan = {
+    id: 'plan-1',
+    summary: 'Ship it',
+    status: 'proposed' as const,
+    createdAt: 1,
+    updatedAt: 1,
+    steps: [
+      { id: 'step-1', title: 'First', files: ['a.ts'], status: 'pending' as const },
+    ],
+  }
+
+  it('appends a plan part and updates it in place', () => {
+    useChatStore.getState().ensureConversation(key)
+    const messageId = useChatStore.getState().startStreamingMessage(key)
+    useChatStore.getState().appendPlanPart(key, messageId, plan)
+
+    const approved = { ...plan, status: 'approved' as const }
+    useChatStore.getState().applyPlanUpdate(key, approved)
+
+    const message = useChatStore
+      .getState()
+      .conversations[key].messages.find((item) => item.id === messageId)
+    expect(message?.parts).toHaveLength(1)
+    expect(message?.parts?.[0]).toMatchObject({ type: 'plan', plan: { status: 'approved' } })
+  })
+
+  it('restores the plan as a dedicated message only once', () => {
+    useChatStore.getState().ensureConversation(key)
+    useChatStore.getState().appendPlanMessage(key, plan)
+    useChatStore.getState().appendPlanMessage(key, plan)
+
+    const messages = useChatStore.getState().conversations[key].messages
+    expect(messages.filter((message) => message.id === `msg-plan-${plan.id}`)).toHaveLength(1)
+  })
+})
+
 describe('chatStore retry status', () => {
   it('stamps retry status with the local receive time and clears it', () => {
     const key = '/ws\u0000retry'

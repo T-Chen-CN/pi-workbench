@@ -43,10 +43,13 @@ export function normalizePermissionPolicy(input: unknown): PermissionPolicy {
 
 export function categorizeTool(toolName: string): ToolCategory {
   switch (toolName) {
+    // 计划工具只更新会话内的计划状态，不触碰文件或命令
     case 'read':
     case 'grep':
     case 'find':
     case 'ls':
+    case 'submit_plan':
+    case 'update_plan_step':
       return 'read'
     case 'write':
     case 'edit':
