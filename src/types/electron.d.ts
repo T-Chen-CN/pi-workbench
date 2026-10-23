@@ -138,6 +138,15 @@ export interface ElectronAPI {
   agentModelCapabilities: (
     workspaceDir: string
   ) => Promise<{ success: boolean; models?: ModelCapabilityInfo[]; selected?: string; error?: string }>
+  agentPromptResources: (
+    workspaceDir: string,
+    sessionId: string
+  ) => Promise<{
+    success: boolean
+    templates?: PromptTemplateInfo[]
+    skills?: SkillInfo[]
+    error?: string
+  }>
   agentToolDiff: (
     workspaceDir: string,
     sessionId: string,
@@ -488,6 +497,21 @@ export interface ModelCapabilityInfo {
   reasoning: boolean | null
   vision: boolean | null
   thinkingLevels: string[]
+}
+
+/** 提示模板与技能（R-13） */
+export interface PromptTemplateInfo {
+  name: string
+  description: string
+  argumentHint?: string
+  scope: 'user' | 'project' | 'temporary'
+}
+
+export interface SkillInfo {
+  name: string
+  description: string
+  scope: 'user' | 'project' | 'temporary'
+  disableModelInvocation: boolean
 }
 
 /** 会话累计用量与成本 */

@@ -159,6 +159,23 @@ export interface RegisteredAgent {
     selected?: string
     error?: string
   }>
+  /** 提示模板与技能（R-13） */
+  listPromptResources?: (sessionId: string) => Promise<{
+    success: boolean
+    templates?: Array<{
+      name: string
+      description: string
+      argumentHint?: string
+      scope: 'user' | 'project' | 'temporary'
+    }>
+    skills?: Array<{
+      name: string
+      description: string
+      scope: 'user' | 'project' | 'temporary'
+      disableModelInvocation: boolean
+    }>
+    error?: string
+  }>
   /** 会话模型与思考级别 */
   getSessionSettings?: (sessionId: string) => Promise<{
     success: boolean

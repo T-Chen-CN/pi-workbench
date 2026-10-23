@@ -65,6 +65,8 @@ import type {
   SessionMeta,
   PendingMessagesMap,
   ModelCapabilityInfo,
+  PromptTemplateInfo,
+  SkillInfo,
 } from '../types/electron'
 
 interface ChatPanelProps {
@@ -529,6 +531,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     results: string[]
   } | null>(null)
   const mentionTimer = useRef<number | null>(null)
+  /** 提示模板与技能（R-13） */
+  const [promptResources, setPromptResources] = useState<{
+    templates: PromptTemplateInfo[]
+    skills: SkillInfo[]
+  }>({ templates: [], skills: [] })
   const [configVersion, setConfigVersion] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const forceSendRef = useRef(false)
@@ -596,8 +603,77 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     inputRef.current?.focus()
   }
 
-  const currentSymbols = useMemo(
-    () =>
+  /** 斜杠菜单：内置命令 + Pi 提示模板 + 技能（R-13） */
+  const slashActive =
+    initialized && input.startsWith('/') && !input.includes(' ') && !input.includes('\n')
+  const slashQuery = slashActive ? input.slice(1).toLowerCase() : ''
+  const slashItems = useMemo(() => {
+    if (!slashActive) return []
+    const builtIns = [
+      { id: 'help', insert: '/help ', label: '/help', description: t('slashCommandHelp') },
+      { id: 'plan', insert: '/plan', label: '/plan', description: t('slashCommandPlan') },
+      { id: 'act', insert: '/act', label: '/act', description: t('slashCommandAct') },
+      {
+        id: 'compact',
+        insert: '/compact',
+        label: '/compact',
+        description: t('slashCommandCompact'),
+      },
+      { id: 'clear', insert: '/clear ', label: '/clear', description: t('slashCommandClear') },
+      { id: 'model', insert: '/model ', label: '/model', description: t('slashCommandModel') },
+    ]
+    const templates = promptResources.templates.map((template) => ({
+      id: `template:${template.name}`,
+      insert: `/${template.name} `,
+      label: `/${template.name}`,
+      description: template.description || t('slashTemplate'),
+    }))
+    const skills = promptResources.skills.map((skill) => ({
+      id: `skill:${skill.name}`,
+      insert: `/skill:${skill.name} `,
+      label: `/skill:${skill.name}`,
+      description: skill.description || t('slashSkill'),
+    }))
+    return [...builtIns, ...templates, ...skills].filter((item) =>
+      item.label.slice(1).toLowerCase().startsWith(slashQuery)
+    )
+  }, [slashActive, slashQuery, promptResources, t])
+
+  const insertSlashItem = (insert: string) => {
+    if (!activeKey) return
+    useChatStore.getState().setDraftInput(activeKey, insert)
+    inputRef.current?.focus()
+  }
+
+  // 打开斜杠菜单时重新扫描模板 / 技能文件，新增文件无需重启
+  useEffect(() => {
+    if (!slashActive || !activeSessionId) return
+    let cancelled = false
+    void piAgentAPI.listPromptResources(workspacePath, activeSessionId).then((result) => {
+      if (cancelled) return
+      if (result.success) {
+        setPromptResources({ templates: result.templates ?? [], skills: result.skills ?? [] })
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [slashActive, workspacePath, activeSessionId])
+
+  // 命令面板插入模板 / 技能时写入输入框（R-13）
+  useEffect(() => {
+    const onInsert = (event: Event) => {
+      if (!activeKey) return
+      const insert = (event as CustomEvent<{ insert?: unknown }>).detail?.insert
+      if (typeof insert !== 'string' || !insert) return
+      useChatStore.getState().setDraftInput(activeKey, insert)
+      inputRef.current?.focus()
+    }
+    window.addEventListener('pi:insert-slash', onInsert)
+    return () => window.removeEventListener('pi:insert-slash', onInsert)
+  }, [activeKey])
+
+  const currentSymbols = useMemo(() =>
       currentEditorFile ? extractSymbols(currentEditorFile.content, currentEditorFile.name) : [],
     [currentEditorFile]
   )
@@ -1293,9 +1369,40 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         await handleModelChange(match)
         return true
       }
-      default:
+      default: {
+        // 提示模板 / 技能交给 Pi SDK 展开（仍走现有审批）
+        let resources = promptResources
+        if (
+          resources.templates.length === 0 &&
+          resources.skills.length === 0 &&
+          activeSessionId
+        ) {
+          const fetched = await piAgentAPI.listPromptResources(workspacePath, activeSessionId)
+          if (fetched.success) {
+            resources = {
+              templates: fetched.templates ?? [],
+              skills: fetched.skills ?? [],
+            }
+            setPromptResources(resources)
+          }
+        }
+        const name = command.slice(1)
+        if (
+          resources.templates.some(
+            (template) => template.name.toLowerCase() === name.toLowerCase()
+          )
+        ) {
+          return false
+        }
+        if (command.startsWith('/skill:')) {
+          const skillName = command.slice('/skill:'.length).toLowerCase()
+          if (resources.skills.some((skill) => skill.name.toLowerCase() === skillName)) {
+            return false
+          }
+        }
         toast.error(t('slashUnknownCommand', { command }))
         return true
+      }
     }
   }
 
@@ -2520,6 +2627,24 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                   </span>
                 )
               })}
+            </div>
+          )}
+
+          {slashActive && slashItems.length > 0 && (
+            <div className="mb-1 max-h-60 overflow-y-auto border border-line bg-raised shadow-print">
+              {slashItems.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => insertSlashItem(item.insert)}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-hover"
+                >
+                  <span className="flex-shrink-0 type-data text-ink">{item.label}</span>
+                  <span className="min-w-0 truncate type-caption text-ink-muted">
+                    {item.description}
+                  </span>
+                </button>
+              ))}
             </div>
           )}
 

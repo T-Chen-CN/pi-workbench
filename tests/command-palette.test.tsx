@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CommandPalette } from '../src/components/CommandPalette'
 import { useI18nStore } from '../src/store/i18nStore'
 import { useSelectionStore } from '../src/store/selectionStore'
+import { useSessionStore } from '../src/store/sessionStore'
 import { api } from '../src/api'
+import { piAgentAPI } from '../src/api/piAgentAPI'
 import { translations } from '../src/i18n/translations'
 import type { PluginInfo } from '../src/types/electron'
 
@@ -15,6 +17,12 @@ vi.mock('../src/api', () => ({
     pluginsReload: vi.fn(),
     pluginsSetEnabled: vi.fn(),
     onPluginsChanged: vi.fn(() => () => {}),
+  },
+}))
+
+vi.mock('../src/api/piAgentAPI', () => ({
+  piAgentAPI: {
+    listPromptResources: vi.fn(),
   },
 }))
 
@@ -36,7 +44,13 @@ const plugin: PluginInfo = {
 beforeEach(() => {
   useI18nStore.getState().setLanguage('zh')
   useSelectionStore.getState().clearSelection()
+  useSessionStore.getState().reset()
   vi.clearAllMocks()
+  vi.mocked(piAgentAPI.listPromptResources).mockResolvedValue({
+    success: true,
+    templates: [],
+    skills: [],
+  })
   vi.mocked(api.pluginsList).mockResolvedValue({ success: true, plugins: [plugin] })
   vi.mocked(api.pluginsInvoke).mockResolvedValue({ success: true, output: 'clean' })
   vi.mocked(api.onPluginsChanged).mockReturnValue(() => {})
@@ -72,6 +86,28 @@ describe('CommandPalette', () => {
 
     fireEvent.change(input, { target: { value: 'no-such-command' } })
     expect(screen.getByText(translations.zh.noPluginCommands)).toBeTruthy()
+  })
+
+  it('inserts prompt templates and skills into the chat input', async () => {
+    useSessionStore.getState().setSessions('/ws', [])
+    useSessionStore.getState().setOpen('/ws', ['s1'], 's1')
+    vi.mocked(piAgentAPI.listPromptResources).mockResolvedValue({
+      success: true,
+      templates: [{ name: 'review', description: 'Review changes', scope: 'user' }],
+      skills: [],
+    })
+    const listener = vi.fn()
+    window.addEventListener('pi:insert-slash', listener)
+
+    render(<CommandPalette workspacePath="/ws" />)
+    openPalette()
+
+    fireEvent.click(await screen.findByText('/review'))
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    const event = listener.mock.calls[0][0] as CustomEvent<{ insert: string }>
+    expect(event.detail.insert).toBe('/review ')
+    window.removeEventListener('pi:insert-slash', listener)
   })
 
   it('runs the selected command with Enter', async () => {

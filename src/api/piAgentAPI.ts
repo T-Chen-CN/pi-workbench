@@ -16,7 +16,9 @@ import type {
   ConversationBranchGroup,
   ExportSessionFormat,
   ModelCapabilityInfo,
+  PromptTemplateInfo,
   SessionStatsInfo,
+  SkillInfo,
   FileEdit,
   SessionListResult,
   SessionOpenResult,
@@ -612,6 +614,26 @@ export const piAgentAPI = {
     }
     try {
       return await window.electronAPI.agentModelCapabilities(workspaceDir)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 提示模板与技能（R-13） */
+  async listPromptResources(
+    workspaceDir: string,
+    sessionId: string
+  ): Promise<{
+    success: boolean
+    templates?: PromptTemplateInfo[]
+    skills?: SkillInfo[]
+    error?: string
+  }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentPromptResources !== 'function') {
+      return { success: true, templates: [], skills: [] }
+    }
+    try {
+      return await window.electronAPI.agentPromptResources(workspaceDir, sessionId)
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

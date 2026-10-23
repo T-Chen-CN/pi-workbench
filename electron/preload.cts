@@ -182,6 +182,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:session:stats', workspaceDir, sessionId),
   agentModelCapabilities: (workspaceDir: string) =>
     ipcRenderer.invoke('agent:models:capabilities', workspaceDir),
+  agentPromptResources: (workspaceDir: string, sessionId: string) =>
+    ipcRenderer.invoke('agent:prompt-resources', workspaceDir, sessionId),
   agentToolDiff: (workspaceDir: string, sessionId: string, toolCallId: string) =>
     ipcRenderer.invoke('agent:tool-diff', workspaceDir, sessionId, toolCallId),
   agentToolResultMeta: (workspaceDir: string, sessionId: string, toolCallId: string) =>

@@ -26,7 +26,7 @@
 | R-08 | ✅ 图片 / 截图附件 | P1 | AF-09 剩余 | `PromptOptions.images` |
 | R-09 | ✅ `path:line` 跳转行 | P2 | AF-09 剩余 | Monaco revealLine |
 | R-10 | ✅ 导出 Markdown / HTML / JSONL | P2 | AF-13 剩余 | 会话 JSONL、HTML 生成 |
-| R-13 | 提示模板与技能命令 | P2 | AF-14 剩余 | Pi prompt templates / skills |
+| R-13 | ✅ 提示模板与技能命令 | P2 | AF-14 剩余 | Pi prompt templates / skills |
 | R-15 | 空状态建议个性化 | P3 | AF-18 剩余 | 最近操作记录 |
 | R-16 | 子 Agent 活动视图 | P3 | AF-17 剩余 | 工具轨迹、嵌套调用 |
 | R-19 | 重试倒计时实时化 | P3 | AF-11 剩余 | 重试事件 |
@@ -110,12 +110,14 @@
 - **完成情况**：导出改由主进程完成（内容经 bridge 在进程内生成，不经过渲染层二次传输）：Markdown / HTML 包含正文、思考、工具参数与完整结果，思考与工具分别包在默认收起的 `<details>` 中，图片以 base64 内嵌；HTML 内联 Paper 风格样式，可离线打开；JSONL 直接复制原始会话文件。会话抽屉的导出按钮改为格式菜单（Markdown / HTML / 原始 JSONL），保存走系统对话框，默认文件名基于会话标题。
 - **验证**：`type-check` / `lint` / `npm test`（46 文件 441 用例）/ `npm run build` 通过；新增 bridge Markdown / HTML 完整输出测试与导出菜单测试。真实文件保存与 Pi 重新导入留待界面手动确认。
 
-### R-13 提示模板与技能命令
+### R-13 提示模板与技能命令 ✅（2026-10-24）
 
 - 现状：斜杠命令为内置固定集合。
 - 目标：接入 Pi prompt templates 与 skills，在斜杠菜单中可搜索并插入。
 - 技术：读取 SDK 的 prompt templates / skills 列表，命令面板与斜杠菜单共用数据源；模板或技能触发工具执行时，仍按现有审批策略与权限模式处理，不绕过审批。
 - 验收：新增一个模板文件后无需重启即可在菜单看到并展开；技能触发的工具调用会弹出审批（按策略）。
+- **完成情况**：bridge 新增 `listPromptResources`：读取前调用 `resourceLoader.reload()`，返回模板（名称 / 描述 / 参数提示 / 作用域）与技能（名称 / 描述 / 作用域），新增文件无需重启。斜杠菜单在输入 `/` 时显示内置命令、模板（`/<名称>`）与技能（`/skill:<名称>`）并按前缀过滤，点击插入输入框；发送时模板 / 技能交给 Pi SDK 展开，仍经过现有工具审批。命令面板通过同一 IPC 获取模板 / 技能并插入聊天输入框。
+- **验证**：`type-check` / `lint` / `npm test`（46 文件 450 用例）/ `npm run build` 通过；新增 bridge 资源读取与斜杠菜单、命令面板插入测试。技能触发审批的真实链路随现有审批机制留待手动确认。
 
 ### R-15 空状态建议个性化
 
