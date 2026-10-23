@@ -85,6 +85,11 @@ vi.mock('../src/api/piAgentAPI', () => ({
   },
 }))
 
+vi.mock('../src/store/dialogStore', () => ({
+  confirmDialog: vi.fn(async () => true),
+  promptDialog: vi.fn(async () => null),
+}))
+
 vi.mock('monaco-editor', () => {
   const createModel = (initialValue: string) => {
     let value = initialValue
@@ -352,7 +357,7 @@ describe('ChatPanel', () => {
     await waitFor(() => expect((textarea as HTMLTextAreaElement).value).toBe('/review '))
   })
 
-  it('shows model capabilities and disables unsupported thinking', async () => {
+  it('shows model capabilities in the model menu and disables unsupported thinking', async () => {
     vi.mocked(piAgentAPI.getModelCapabilities).mockResolvedValue({
       success: true,
       models: [
@@ -371,11 +376,98 @@ describe('ChatPanel', () => {
 
     render(<ChatPanel workspacePath="/ws" />)
 
+    expect(
+      (await screen.findByLabelText(translations.zh.thinkingLabel) as HTMLButtonElement).disabled
+    ).toBe(true)
+
+    fireEvent.click(screen.getByLabelText(translations.zh.modelLabel))
     expect(await screen.findByText(/128k 上下文/)).toBeTruthy()
     expect(screen.getByText(/不支持思考/)).toBeTruthy()
-    expect(
-      (screen.getByLabelText(translations.zh.thinkingLabel) as HTMLSelectElement).disabled
-    ).toBe(true)
+  })
+
+  it('closes a status menu with Escape and returns focus to its trigger', async () => {
+    render(<ChatPanel workspacePath="/ws" />)
+
+    const trigger = await screen.findByLabelText(translations.zh.modelLabel)
+    ;(trigger as HTMLButtonElement).focus()
+    fireEvent.click(trigger)
+
+    expect(await screen.findByRole('menuitemradio', { name: /test-model/ })).toBeTruthy()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menuitemradio')).toBeNull())
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('switches the model and thinking level from the status line menus', async () => {
+    vi.mocked(api.apiConfigGet).mockResolvedValue({
+      success: true,
+      config: { ...configWithKey, availableModels: ['test-model', 'alt-model'] },
+    })
+    vi.mocked(piAgentAPI.setSessionModel).mockResolvedValue({ success: true })
+    vi.mocked(piAgentAPI.setSessionThinking).mockResolvedValue({ success: true })
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    fireEvent.click(await screen.findByLabelText(translations.zh.modelLabel))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /alt-model/ }))
+    await waitFor(() =>
+      expect(piAgentAPI.setSessionModel).toHaveBeenCalledWith('/ws', 's1', 'alt-model')
+    )
+
+    fireEvent.click(screen.getByLabelText(translations.zh.thinkingLabel))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /^高/ }))
+    await waitFor(() =>
+      expect(piAgentAPI.setSessionThinking).toHaveBeenCalledWith('/ws', 's1', 'high')
+    )
+  })
+
+  it('shows context details in the context popover and compacts from it', async () => {
+    vi.mocked(piAgentAPI.getContextUsage).mockResolvedValue({
+      success: true,
+      usage: { tokens: 4_820, contextWindow: 128_000, percent: 3.766406249999997 },
+    })
+    vi.mocked(piAgentAPI.getSessionStats).mockResolvedValue({
+      success: true,
+      stats: {
+        tokens: 12_400,
+        input: 10_000,
+        output: 2_400,
+        cost: 0.03,
+        toolCalls: 2,
+        messages: 4,
+      },
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    const trigger = await screen.findByRole('button', {
+      name: translations.zh.contextUsageLabel,
+    })
+    expect(within(trigger).getByText('4%')).toBeTruthy()
+
+    fireEvent.click(trigger)
+    expect(await screen.findByText('已用 4%')).toBeTruthy()
+    expect(screen.getByText('4.8k / 128k tok')).toBeTruthy()
+    expect(screen.getByText('123k tok')).toBeTruthy()
+    expect(screen.getByText('12k tok · $0.03')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.compactContext }))
+    await waitFor(() => expect(piAgentAPI.compactContext).toHaveBeenCalledWith('/ws', 's1'))
+  })
+
+  it('marks context usage as pending right after compaction', async () => {
+    vi.mocked(piAgentAPI.getContextUsage).mockResolvedValue({
+      success: true,
+      usage: { tokens: null, contextWindow: 128_000, percent: null },
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: translations.zh.contextUsageLabel })
+    )
+    expect(await screen.findByText(translations.zh.contextUnknownHint)).toBeTruthy()
   })
 
   it('shows reply branches and switches to another reply', async () => {

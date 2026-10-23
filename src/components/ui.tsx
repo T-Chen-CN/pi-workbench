@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react'
-import { ChevronDown, Loader2, X, type LucideIcon } from 'lucide-react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Check, ChevronDown, Loader2, X, type LucideIcon } from 'lucide-react'
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
 type ControlSize = 'sm' | 'md'
@@ -145,6 +145,194 @@ export const Select: React.FC<SelectProps> = ({ className = '', children, ...res
       className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-ink-muted"
     />
   </div>
+)
+
+export interface PopoverMenuProps {
+  open: boolean
+  onClose: () => void
+  /** aria-label for the popover; also used to name the menu */
+  label: string
+  /** `menu` adds arrow-key navigation; `dialog` is a free-form panel */
+  role?: 'menu' | 'dialog'
+  className?: string
+  children: React.ReactNode
+}
+
+/**
+ * Anchored popover that opens upward from its trigger. The trigger and this
+ * popover live inside the same relatively-positioned wrapper, so the menu stays
+ * next to the control it belongs to instead of floating elsewhere. The menu is
+ * clamped inside the nearest clipping container so it never runs off a panel.
+ */
+export const PopoverMenu: React.FC<PopoverMenuProps> = ({
+  open,
+  onClose,
+  label,
+  role = 'menu',
+  className = '',
+  children,
+}) => {
+  const menuRef = useRef<HTMLDivElement>(null)
+  /** Horizontal offset from the anchor; null until measured */
+  const [offset, setOffset] = useState<number | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setOffset(null)
+      return
+    }
+    const menu = menuRef.current
+    const anchor = menu?.parentElement
+    if (!menu || !anchor) return
+
+    const anchorRect = anchor.getBoundingClientRect()
+    const width = menu.getBoundingClientRect().width
+
+    let clipLeft = 0
+    let clipRight = document.documentElement.clientWidth
+    let node: HTMLElement | null = anchor.parentElement
+    while (node) {
+      const style = getComputedStyle(node)
+      if (/(hidden|clip|auto|scroll)/.test(`${style.overflowX} ${style.overflowY}`)) {
+        const rect = node.getBoundingClientRect()
+        clipLeft = rect.left
+        clipRight = rect.right
+        break
+      }
+      node = node.parentElement
+    }
+
+    let left = anchorRect.left
+    if (left + width > clipRight - 4) {
+      left = Math.max(clipLeft + 4, anchorRect.right - width)
+    }
+    setOffset(left - anchorRect.left)
+  }, [open, role, label])
+
+  useEffect(() => {
+    if (!open) return
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    let restoreFocus = true
+
+    const isMenu = role === 'menu'
+    const items = () =>
+      Array.from(
+        menuRef.current?.querySelectorAll<HTMLButtonElement>(
+          '[role="menuitemradio"]:not([disabled])'
+        ) ?? []
+      )
+
+    const onPointerDown = (event: MouseEvent) => {
+      const menu = menuRef.current
+      if (!menu) return
+      const anchor = menu.parentElement
+      const target = event.target as Node
+      // Clicks on the trigger toggle the popover themselves.
+      if (anchor && anchor.contains(target)) return
+      restoreFocus = false
+      onClose()
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation()
+        onClose()
+        return
+      }
+      if (!isMenu) return
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+      const entries = items()
+      if (entries.length === 0) return
+      event.preventDefault()
+      const current = entries.indexOf(document.activeElement as HTMLButtonElement)
+      let next = 0
+      if (event.key === 'End') next = entries.length - 1
+      else if (event.key === 'ArrowDown') next = current < 0 ? 0 : (current + 1) % entries.length
+      else if (event.key === 'ArrowUp')
+        next = current < 0 ? entries.length - 1 : (current - 1 + entries.length) % entries.length
+      entries[next].focus()
+    }
+
+    window.addEventListener('mousedown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+
+    if (isMenu) {
+      const checked = menuRef.current?.querySelector<HTMLButtonElement>(
+        '[role="menuitemradio"][aria-checked="true"]:not([disabled])'
+      )
+      ;(checked ?? items()[0])?.focus()
+    } else {
+      menuRef.current?.focus()
+    }
+
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+      if (restoreFocus && previousFocus && document.body.contains(previousFocus)) {
+        previousFocus.focus()
+      }
+    }
+  }, [open, onClose, role])
+
+  if (!open) return null
+
+  return (
+    <div
+      ref={menuRef}
+      role={role}
+      aria-label={label}
+      tabIndex={role === 'dialog' ? -1 : undefined}
+      style={{ left: offset ?? 0 }}
+      className={`absolute bottom-full z-20 mb-1 border border-line bg-raised shadow-print focus:outline-none ${className}`}
+    >
+      {children}
+    </div>
+  )
+}
+
+export interface MenuOptionProps {
+  selected?: boolean
+  disabled?: boolean
+  onSelect: () => void
+  /** `data` renders the label in mono for ids and model names */
+  variant?: 'value' | 'data'
+  meta?: React.ReactNode
+  title?: string
+  children: React.ReactNode
+}
+
+export const MenuOption: React.FC<MenuOptionProps> = ({
+  selected = false,
+  disabled = false,
+  onSelect,
+  variant = 'value',
+  meta,
+  title,
+  children,
+}) => (
+  <button
+    type="button"
+    role="menuitemradio"
+    aria-checked={selected}
+    disabled={disabled}
+    title={title}
+    onClick={onSelect}
+    className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors enabled:hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+  >
+    <span
+      className={`min-w-0 flex-1 truncate text-ink ${
+        variant === 'data' ? 'type-data' : 'type-value'
+      }`}
+    >
+      {children}
+    </span>
+    {meta && <span className="type-caption flex-shrink-0 text-ink-muted">{meta}</span>}
+    <Check
+      size={12}
+      aria-hidden="true"
+      className={`flex-shrink-0 text-accent ${selected ? 'opacity-100' : 'opacity-0'}`}
+    />
+  </button>
 )
 
 export interface FieldProps {
