@@ -43,6 +43,7 @@ interface FakeSession {
   disposed: boolean
   subscribe: (listener: (event: SessionEvent) => void) => () => void
   prompt: (message: string) => Promise<void>
+  lastPromptOptions?: { streamingBehavior?: string }
   abort: () => Promise<void>
   dispose: () => void
   emit: (event: SessionEvent) => void
@@ -71,7 +72,8 @@ function createFakeSession(
         listeners.delete(listener)
       }
     },
-    prompt: async (message) => {
+    prompt: async (message, options?: { streamingBehavior?: string }) => {
+      session.lastPromptOptions = options
       await onPrompt?.(session, message)
     },
     abort: async () => {},
@@ -1104,5 +1106,49 @@ describe('plan mode', () => {
     expect(prompts[0]).toContain('add a feature')
     const history = manager.getMessageHistory('session-1') as Array<{ content: string }>
     expect(history.some((message) => message.content.includes('pi-workbench-plan-mode'))).toBe(false)
+  })
+})
+
+describe('running-turn steering', () => {
+  it('injects a message into the current turn with streamingBehavior steer', async () => {
+    let release = () => {}
+    let calls = 0
+    const session = createFakeSession(() => {
+      calls++
+      if (calls > 1) return Promise.resolve()
+      return new Promise<void>((resolve) => {
+        release = resolve
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const pendingChat = manager.chat('start')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const result = await manager.steer('session-1', 'also fix the tests')
+    expect(result).toEqual({ success: true })
+    expect(session.lastPromptOptions).toEqual({ streamingBehavior: 'steer' })
+
+    release()
+    await pendingChat
+  })
+
+  it('rejects steering when the session is idle', async () => {
+    primeSdk(createFakeSession())
+    await manager.initialize(makeConfig())
+    await expect(manager.steer('session-1', 'hi')).resolves.toEqual({
+      success: false,
+      error: 'Session is not running.',
+    })
+  })
+
+  it('rejects empty steering messages', async () => {
+    primeSdk(createFakeSession())
+    await manager.initialize(makeConfig())
+    await expect(manager.steer('session-1', '   ')).resolves.toEqual({
+      success: false,
+      error: 'Message is empty.',
+    })
   })
 })

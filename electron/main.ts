@@ -1871,6 +1871,26 @@ handleIpc(
   }
 )
 
+// 运行中插话：把消息注入当前轮
+handleIpc('agent:steer', async (_event, workspaceDir: string, sessionId: string, message: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    if (typeof message !== 'string' || !message.trim()) {
+      return { success: false, error: 'Message is empty' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.steer !== 'function') {
+      return { success: false, error: 'Steering is not supported by this agent' }
+    }
+    return await agent.steer(sessionId, message)
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
 // Agent 中止请求（按会话；不传 sessionId 时中止该工作区全部会话）
 handleIpc('agent:abort', async (_event, workspaceDir?: string, sessionId?: string) => {
   try {

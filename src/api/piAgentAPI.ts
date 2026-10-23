@@ -422,6 +422,22 @@ export const piAgentAPI = {
     return window.electronAPI.onNotifyClick(callback)
   },
 
+  /** 运行中插话：把消息注入当前轮 */
+  async steer(
+    workspaceDir: string,
+    sessionId: string,
+    message: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!hasElectronAgent()) {
+      return { success: false, error: 'Steering is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentSteer(workspaceDir, sessionId, message)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
   /**
    * 监听工具审批请求（仅 Electron；Web dev 桥没有审批通道）
    */

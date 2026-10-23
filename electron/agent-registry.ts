@@ -47,6 +47,8 @@ export interface RegisteredAgent {
     sessionId: string,
     mode: 'plan' | 'act'
   ) => Promise<{ success: boolean; error?: string }>
+  /** 运行中插话（steer） */
+  steer?: (sessionId: string, message: string) => Promise<{ success: boolean; error?: string }>
   getCurrentSessionId?: () => string | null
 }
 

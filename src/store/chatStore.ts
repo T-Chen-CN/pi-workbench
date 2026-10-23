@@ -40,6 +40,13 @@ export interface ChatAttachment {
 
 export type NewChatAttachment = Omit<ChatAttachment, 'id'> & { id?: string }
 
+export interface PendingMessage {
+  id: string
+  text: string
+  /** queue：本轮结束后发送；steer：注入当前轮 */
+  behavior: 'queue' | 'steer'
+}
+
 export interface ConversationState {
   messages: ChatMessage[]
   isLoading: boolean
@@ -48,6 +55,8 @@ export interface ConversationState {
   draftInput: string
   /** Plan 只读 / Act 可写；默认 Act */
   mode: 'plan' | 'act'
+  /** 运行中排队的待发送消息 */
+  pending: PendingMessage[]
 }
 
 const EMPTY_CONVERSATION: ConversationState = {
@@ -57,6 +66,7 @@ const EMPTY_CONVERSATION: ConversationState = {
   attachments: [],
   draftInput: '',
   mode: 'act',
+  pending: [],
 }
 
 /** 会话在 store 中的键：工作区 + 会话，避免跨工作区串数据 */
@@ -99,6 +109,9 @@ interface ChatState {
   setDraftInput: (key: string, value: string) => void
   clearDraftInput: (key: string) => void
   setMode: (key: string, mode: 'plan' | 'act') => void
+  addPending: (key: string, text: string, behavior: PendingMessage['behavior']) => PendingMessage
+  removePending: (key: string, id: string) => void
+  setPendingBehavior: (key: string, id: string, behavior: PendingMessage['behavior']) => void
   setMessages: (key: string, messages: Array<Omit<ChatMessage, 'id'>>) => void
   setLoading: (key: string, loading: boolean) => void
   setError: (key: string, error: string | null) => void
@@ -421,6 +434,39 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setMode: (key, mode) =>
     set((state) => updateExisting(state, key, (current) => ({ ...current, mode }))),
+
+  addPending: (key, text, behavior) => {
+    const item: PendingMessage = {
+      id: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      text,
+      behavior,
+    }
+    set((state) =>
+      updateExisting(state, key, (current) => ({
+        ...current,
+        pending: [...current.pending, item],
+      }))
+    )
+    return item
+  },
+
+  removePending: (key, id) =>
+    set((state) =>
+      updateExisting(state, key, (current) => ({
+        ...current,
+        pending: current.pending.filter((item) => item.id !== id),
+      }))
+    ),
+
+  setPendingBehavior: (key, id, behavior) =>
+    set((state) =>
+      updateExisting(state, key, (current) => ({
+        ...current,
+        pending: current.pending.map((item) =>
+          item.id === id ? { ...item, behavior } : item
+        ),
+      }))
+    ),
 
   setMessages: (key, messages) =>
     set((state) => ({

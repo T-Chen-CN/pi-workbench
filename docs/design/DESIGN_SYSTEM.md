@@ -412,6 +412,7 @@
 - 过程组收起时不挂载内容 DOM；触发器使用 `aria-expanded` / `aria-controls`，运行中的内容加 `aria-busy`；失败与状态必须有文字，不能只靠颜色或动效传达。
 - 工具审批卡：位于输入框上方，`bg-raised` + `border-rule-hairline`，不设阴影。标题行 `warning` ShieldAlert + `type-label`；工具与参数摘要用 `type-value`，类别与路径用 `type-caption` / `type-data`。命令与写入预览放在 `bg-sunken` + `rule-hairline` 的 mono 块中（命令 ≤400 字符、预览 ≤280 字符），不展示完整文件内容。底部按钮依次为允许一次（primary）/ 本会话允许（secondary）/ 始终允许（ghost）/ 拒绝（danger，右对齐）；拒绝进入二次确认并可选填原因。
 - Plan / Act 切换：输入区左下角两段式控件（`type-caption`，激活 `bg-active text-ink`，无圆角胶囊）；Plan 模式只读，助手回复后输入框上方出现执行条（`bg-raised` + 发丝边 + `type-caption` 提示 + primary 按钮“执行计划”）。
+- 待发送消息：输入框上方的发丝边纸卡列表，`type-caption` 行为标签（排队 / 插话，运行中可点击切换）+ `type-value` 单行截断正文 + 移除按钮；空闲时额外显示发送按钮。运行中右下角同时出现“排队 / 插话”切换与停止按钮，发送按钮始终可用。
 
 ### 6.6 终端
 

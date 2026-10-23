@@ -406,3 +406,22 @@ describe('sessionStore pending activation', () => {
     expect(useSessionStore.getState().pendingActivation).toBeNull()
   })
 })
+
+describe('chatStore pending messages', () => {
+  it('queues, updates and removes pending messages', () => {
+    useChatStore.getState().ensureConversation('pending-key')
+    const first = useChatStore.getState().addPending('pending-key', 'first', 'queue')
+    const second = useChatStore.getState().addPending('pending-key', 'second', 'steer')
+
+    expect(useChatStore.getState().conversations['pending-key'].pending).toHaveLength(2)
+
+    useChatStore.getState().setPendingBehavior('pending-key', first.id, 'steer')
+    expect(
+      useChatStore.getState().conversations['pending-key'].pending.find((item) => item.id === first.id)
+        ?.behavior
+    ).toBe('steer')
+
+    useChatStore.getState().removePending('pending-key', second.id)
+    expect(useChatStore.getState().conversations['pending-key'].pending).toHaveLength(1)
+  })
+})

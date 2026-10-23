@@ -154,6 +154,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   )
   const messages = conversation?.messages ?? EMPTY_MESSAGES
   const isLoading = conversation?.isLoading ?? false
+  const pendingMessages = conversation?.pending ?? []
   const error = conversation?.error ?? null
   const attachments = conversation?.attachments ?? []
   const input = conversation?.draftInput ?? ''
@@ -190,8 +191,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   const [needsApiKey, setNeedsApiKey] = useState(false)
   const [fatalError, setFatalError] = useState<string | null>(null)
   const [showAttachMenu, setShowAttachMenu] = useState(false)
+  const [pendingBehavior, setPendingBehavior] = useState<'queue' | 'steer'>('queue')
   const [configVersion, setConfigVersion] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const forceSendRef = useRef(false)
   const initSeqRef = useRef(0)
   const stickToBottomRef = useRef(true)
   const stoppedRef = useRef(false)
@@ -636,15 +639,42 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     useSessionStore.getState().clearPendingActivation()
   }, [initialized, sessions, workspacePath])
 
+  /** 运行中插话：把消息注入当前轮 */
+  const sendSteer = async (
+    sessionId: string,
+    key: string,
+    item: import('../store/chatStore').PendingMessage
+  ) => {
+    const result = await piAgentAPI.steer(workspacePath, sessionId, item.text)
+    const chat = useChatStore.getState()
+    if (result.success) {
+      chat.removePending(key, item.id)
+      chat.addMessage(key, { role: 'user', content: item.text })
+      toast.info(t('steerSent'))
+    } else {
+      toast.error(t('steerFailed', { error: localizeError(result.error ?? '') }))
+    }
+  }
+
   const handleSubmit = async (e?: React.FormEvent, override?: string) => {
     e?.preventDefault()
 
     const sessionId = activeSessionId
     const key = activeKey
     const userMessage = (override ?? input).trim()
-    if (!sessionId || !key || !userMessage || isLoading) return
+    if (!sessionId || !key || !userMessage) return
 
     const chat = useChatStore.getState()
+
+    // 运行中：进入待发送队列；steer 立即注入当前轮
+    if (isLoading && !forceSendRef.current) {
+      chat.setDraftInput(key, '')
+      const item = chat.addPending(key, userMessage, pendingBehavior)
+      if (pendingBehavior === 'steer') void sendSteer(sessionId, key, item)
+      return
+    }
+    forceSendRef.current = false
+
     stoppedRef.current = false
     useSessionStore.getState().markError(workspacePath, sessionId, null)
     useSessionStore.getState().markUnread(workspacePath, sessionId, false)
@@ -776,6 +806,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       useChatStore.getState().setLoading(key, false)
       useChatStore.getState().clearAttachments(key)
       useSessionStore.getState().markStreaming(workspacePath, sessionId, false)
+
+      // 本轮结束：自动发送下一条排队消息（用户主动停止时不自动发送）
+      const queued = useChatStore
+        .getState()
+        .conversations[key]?.pending.find((item) => item.behavior === 'queue')
+      if (queued && !stoppedRef.current) {
+        useChatStore.getState().removePending(key, queued.id)
+        forceSendRef.current = true
+        window.setTimeout(() => void handleSubmit(undefined, queued.text), 0)
+      }
       const activeNow = useSessionStore.getState().byWorkspace[workspacePath]?.active
       if (succeeded) {
         if (activeNow && activeNow !== sessionId) {
@@ -1018,6 +1058,66 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       {/* Composer */}
       {activeSessionId && (
         <div className="flex-shrink-0 p-2.5">
+          {pendingMessages.length > 0 && (
+            <div className="mb-2 flex flex-col gap-1.5">
+              {pendingMessages.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center gap-2 border border-rule-hairline bg-raised px-3 py-1.5"
+                >
+                  {isLoading ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        activeKey &&
+                        useChatStore
+                          .getState()
+                          .setPendingBehavior(
+                            activeKey,
+                            item.id,
+                            item.behavior === 'queue' ? 'steer' : 'queue'
+                          )
+                      }
+                      className="border border-rule-control px-1.5 py-0.5 type-caption text-ink-muted transition-colors hover:text-ink"
+                    >
+                      {item.behavior === 'steer' ? t('steerMode') : t('queueMode')}
+                    </button>
+                  ) : (
+                    <span className="type-caption text-ink-muted">
+                      {item.behavior === 'steer' ? t('steerMode') : t('queueMode')}
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1 truncate type-value text-ink" title={item.text}>
+                    {item.text}
+                  </span>
+                  {!isLoading && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!activeKey) return
+                        useChatStore.getState().removePending(activeKey, item.id)
+                        void handleSubmit(undefined, item.text)
+                      }}
+                      className="p-0.5 text-ink-muted transition-colors hover:text-ink"
+                      aria-label={t('send')}
+                    >
+                      <Send size={11} />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      activeKey && useChatStore.getState().removePending(activeKey, item.id)
+                    }
+                    className="p-0.5 text-ink-muted transition-colors hover:text-ink"
+                    aria-label={t('removePending')}
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           {mode === 'plan' && !isLoading && messages.some((msg) => msg.role === 'assistant') && (
             <div className="mb-2 flex items-center justify-between gap-2 border border-rule-hairline bg-raised px-3 py-2">
               <span className="type-caption text-ink-muted">{t('planModeHint')}</span>
@@ -1084,7 +1184,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={t('inputPlaceholder')}
-              disabled={!initialized || isLoading}
+              disabled={!initialized}
               rows={3}
               className="min-h-[68px] max-h-40 border-none bg-transparent px-3 py-2 focus:ring-0"
             />
@@ -1188,21 +1288,38 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                   </button>
                 ))}
               </div>
-              {isLoading ? (
+              {isLoading && (
+                <div className="mr-1 flex items-center border border-rule-control">
+                  {(['queue', 'steer'] as const).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setPendingBehavior(value)}
+                      className={`px-2 py-1 type-caption transition-colors ${
+                        pendingBehavior === value
+                          ? 'bg-active text-ink'
+                          : 'text-ink-muted hover:bg-hover hover:text-ink'
+                      }`}
+                    >
+                      {value === 'queue' ? t('queueMode') : t('steerMode')}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {isLoading && (
                 <Button variant="danger" size="sm" icon={Square} onClick={() => void handleStop()}>
                   {t('stop')}
                 </Button>
-              ) : (
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="sm"
-                  icon={Send}
-                  disabled={!initialized || !input.trim()}
-                >
-                  {t('send')}
-                </Button>
               )}
+              <Button
+                type="submit"
+                variant="primary"
+                size="sm"
+                icon={Send}
+                disabled={!initialized || !input.trim()}
+              >
+                {t('send')}
+              </Button>
             </div>
           </form>
           <p className="mb-0 mt-1.5 px-0.5 type-caption text-ink-muted">

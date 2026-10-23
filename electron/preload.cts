@@ -144,6 +144,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:sessions:setTabs', workspaceDir, tabs),
   agentSessionsSetMode: (workspaceDir: string, sessionId: string, mode: 'plan' | 'act') =>
     ipcRenderer.invoke('agent:sessions:setMode', workspaceDir, sessionId, mode),
+  agentSteer: (workspaceDir: string, sessionId: string, message: string) =>
+    ipcRenderer.invoke('agent:steer', workspaceDir, sessionId, message),
   onNotifyClick: (
     callback: (payload: { workspaceDir: string; sessionId: string }) => void
   ) => {

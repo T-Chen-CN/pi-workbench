@@ -820,6 +820,23 @@ export class AgentManager {
     }
   }
 
+  /** 运行中插话：把消息注入当前轮（steer），不等待本轮结束 */
+  async steer(sessionId: string, message: string): Promise<{ success: boolean; error?: string }> {
+    const text = message.trim()
+    if (!text) return { success: false, error: 'Message is empty.' }
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      if (!runtime.isProcessing) {
+        return { success: false, error: 'Session is not running.' }
+      }
+      await runtime.session.prompt(text, { streamingBehavior: 'steer' })
+      this.logger.info(`[Agent Manager] Steered session ${sessionId}`)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   /** 切换会话模式；Plan 期间只保留只读工具 */
   async setSessionMode(
     sessionId: string,
