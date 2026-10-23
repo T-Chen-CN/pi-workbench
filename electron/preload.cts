@@ -11,6 +11,10 @@ type AgentStreamPayload = {
     | 'tool_start'
     | 'tool_update'
     | 'tool_end'
+    | 'retry_start'
+    | 'retry_end'
+    | 'compaction_start'
+    | 'compaction_end'
   delta?: string
   toolCallId?: string
   toolName?: string
@@ -20,6 +24,9 @@ type AgentStreamPayload = {
   durationMs?: number
   resultPreview?: string
   filePath?: string
+  reason?: 'manual' | 'threshold' | 'overflow'
+  tokensBefore?: number
+  error?: string
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {

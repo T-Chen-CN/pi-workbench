@@ -1832,6 +1832,37 @@ describe('tool results', () => {
   })
 })
 
+describe('compaction events', () => {
+  it('forwards compaction start and end as trace events', async () => {
+    const session = createFakeSession(async (s) => {
+      s.messages.push({ role: 'user', content: 'hello' })
+      s.emit({ type: 'compaction_start', reason: 'threshold' })
+      s.emit({
+        type: 'compaction_end',
+        reason: 'threshold',
+        result: { tokensBefore: 5_000 },
+        aborted: false,
+        willRetry: false,
+      })
+      s.messages.push({ role: 'assistant', content: 'done' })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const events: Array<Record<string, unknown>> = []
+    await manager.chat('hi', { onTrace: (event) => events.push(event) })
+
+    expect(events).toContainEqual({ type: 'compaction_start', reason: 'threshold' })
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'compaction_end',
+        reason: 'threshold',
+        tokensBefore: 5_000,
+      })
+    )
+  })
+})
+
 describe('session export', () => {
   async function setupExportSession() {
     const session = createFakeSession()

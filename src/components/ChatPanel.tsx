@@ -274,6 +274,16 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
 }) {
   const { t, language } = useI18nStore()
 
+  if (message.role === 'system') {
+    return (
+      <div className="flex items-center gap-3 py-2">
+        <span className="h-px flex-1 bg-rule-divide" />
+        <Caption className="flex-shrink-0 text-ink-muted">{message.content}</Caption>
+        <span className="h-px flex-1 bg-rule-divide" />
+      </div>
+    )
+  }
+
   if (message.isStreaming && !message.content && !message.parts?.length) return null
   const isUser = message.role === 'user'
   const hasActions = Boolean(onCopy || onRetry || onEdit)
@@ -1351,6 +1361,30 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           case 'retry_end':
             if (event.success) store.setRetryStatus(key, null)
             break
+          case 'compaction_start':
+            break
+          case 'compaction_end': {
+            if (event.error) break
+            const kind =
+              event.reason === 'manual' ? t('compactionManual') : t('compactionAuto')
+            store.addMessage(key, {
+              role: 'system',
+              content:
+                typeof event.tokensBefore === 'number'
+                  ? t('compactionDividerTokens', {
+                      kind,
+                      tokens: event.tokensBefore.toLocaleString(),
+                    })
+                  : t('compactionDivider', { kind }),
+            })
+            // 压缩后上下文仪表立即回落
+            void piAgentAPI.getContextUsage(workspacePath, sessionId).then((result) => {
+              if (result.success) {
+                useChatStore.getState().setContextUsage(key, result.usage ?? null)
+              }
+            })
+            break
+          }
         }
       }
     })

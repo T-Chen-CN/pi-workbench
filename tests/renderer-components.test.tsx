@@ -239,6 +239,17 @@ describe('ChatPanel', () => {
     ).toBeTruthy()
   })
 
+  it('renders compaction dividers as system messages', async () => {
+    useChatStore.getState().ensureConversation(sessionKey)
+    useChatStore
+      .getState()
+      .addMessage(sessionKey, { role: 'system', content: '上下文已压缩 · 自动' })
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    expect(await screen.findByText('上下文已压缩 · 自动')).toBeTruthy()
+  })
+
   it('restores pending messages persisted before restart', async () => {
     vi.mocked(api.getPendingMessages).mockResolvedValue({
       success: true,
