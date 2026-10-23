@@ -50,7 +50,8 @@ npm run build        # 全量构建
 
 ### 📊 项目信息
 - **[项目状态](./progress/STATUS.md)** — 当前功能状态与进度
-- **[待开发功能方案](./progress/ROADMAP.md)** — 审批、计划、检查点、队列等全部待办项与里程碑（唯一清单）
+- **[后续开发清单](./progress/BACKLOG.md)** — 当前未完成的开发项、平台验收与停放项（唯一待办）
+- **[v1 功能开发方案](./progress/ROADMAP.md)** — 已交付范围、验证记录与归档说明
 - **[Phase 1 完成报告](./progress/PHASE-1-COMPLETE.md)** — Agent 集成实现细节
 
 ### 🗂️ 历史报告
@@ -65,7 +66,8 @@ npm run build        # 全量构建
 | 了解项目全貌和规划 | [PROJECT_PLAN.md](./PROJECT_PLAN.md) ⭐ |
 | 了解项目结构和进程模型 | [PROJECT_STRUCTURE.md](./architecture/PROJECT_STRUCTURE.md) |
 | 查看思考与工具轨迹方案 | [AGENT_TRACE.md](./architecture/AGENT_TRACE.md) |
-| 规划后续开发目标 | [ROADMAP.md](./progress/ROADMAP.md) |
+| 规划后续开发目标 | [BACKLOG.md](./progress/BACKLOG.md) |
+| 查看 v1 交付记录 | [ROADMAP.md](./progress/ROADMAP.md) |
 | 构建和发布应用 | [BUILD_AND_PACKAGE.md](./guides/BUILD_AND_PACKAGE.md) |
 | 验收 Agent 功能 | [AGENT-TESTING.md](./guides/AGENT-TESTING.md) |
 | 验收过程轨迹 / 工具步骤 | [AGENT_TRACE_TESTING.md](./guides/AGENT_TRACE_TESTING.md) |

@@ -1,15 +1,16 @@
-# Pi Workbench 待开发功能方案（Roadmap）
+# Pi Workbench 功能开发方案 v1（已收尾）
 
-> **状态**: 排期项已完成（2026-10-23）；E-03 延后，B 类边界维持不做
-> **基线**: v0.2.2 · `main` · 质量门禁全绿
+> **状态**: ✅ 已收尾归档（2026-10-23）；未完成项已移入 [BACKLOG.md](./BACKLOG.md)
+> **基线**: v0.2.2 · `main` · 质量门禁全绿，CI 通过
 > **取代**: 原 `AGENT_FRONTEND_BACKLOG.md` 已并入本文并移除
-> **相关**: [项目状态](./STATUS.md)、[项目方案](../PROJECT_PLAN.md)、[Agent 过程轨迹方案](../architecture/AGENT_TRACE.md)、[设计系统](../design/DESIGN_SYSTEM.md)
+> **相关**: [后续开发清单](./BACKLOG.md)、[项目状态](./STATUS.md)、[项目方案](../PROJECT_PLAN.md)、[Agent 过程轨迹方案](../architecture/AGENT_TRACE.md)、[设计系统](../design/DESIGN_SYSTEM.md)
 
 ---
 
 ## 1. 文档约定
 
-- 本文是**唯一**的待开发功能清单。`PROJECT_PLAN.md`、`STATUS.md` 只保留已完成记录，不再重复列出待办。
+- 本文是 v1 计划与交付结果的**归档记录**，不再新增待办；新的待办记入 [BACKLOG.md](./BACKLOG.md)。
+- 完成项保留当时的实现说明与限制；`STATUS.md` 只保留阶段记录，不重复列出待办。
 - 新待办先写进这里；完成一项时在本文勾选，同时把结果补进 [STATUS.md](./STATUS.md) 的对应阶段记录。
 - 编号规则：
   - `AF-xx` Agent 前端能力（源自 2026-10-22 的前端差距审查）
@@ -270,7 +271,7 @@
 - 当前 Agent 轮次的 todo / 步骤列表：状态、进度、折叠、跨压缩保留。
 - 与 Plan 模式、工具轨迹联动；不要把 Fleet 后台任务与当前任务混在一起。
 
-### E-01 符号级上下文选择（✅ 2026-10-23）
+### E-01 符号级上下文选择（✅ 2026-10-23；2026-10-24 决定维持正则实现，不再改用语言服务）
 
 - 现状：整文件附加与编辑器选区片段已实现（2026-10-21）。
 - 目标：按函数 / 类 / 符号粒度附加，菜单展示符号树或按光标位置推断。
@@ -309,7 +310,7 @@
 
 以下为 AGENT_TRACE v1 记录、经确认暂不排期的边界，验收口径见 [AGENT_TRACE_TESTING.md](../guides/AGENT_TRACE_TESTING.md) §5。
 
-- **B-01 工具结果全量查看器**：预览截断到约 2000 字符，完整内容在 Pi JSONL 但不提供 UI。
+- **B-01 工具结果全量查看器**：预览截断到约 2000 字符，完整内容在 Pi JSONL 但不提供 UI。（2026-10-24 已升级为 [BACKLOG](./BACKLOG.md) R-20，计划实现）
 - **B-02 脱敏 thinking 占位**：取决于供应商是否返回 `redacted` / 空内容。
 - **B-03 旧会话过程轨迹**：没有 `parts` 的旧会话按普通文本显示，不补造轨迹。
 
@@ -392,7 +393,16 @@
 | 2026-10-23 | E-08 历史工具行 Diff | 同样在 sidecar 保存 write/edit 的前后内容；历史工具行标记 `hasDiff`，点击“查看修改”按需从主进程取回 Diff 打开，不依赖当前 Diff 队列。 |
 | 2026-10-23 | E-04 工作区 SQLite | `electron/workspace-store.ts`：node:sqlite 记录工作区打开时间 / 次数，失败回退 JSON；最近工作区按 DB 顺序合并 settings 列表；打开工作区时自动记录。 |
 | 2026-10-23 | E-05 Monaco 分包 | Vite 插件把工作台未使用的语言分词器替换为空模块，只保留 TS/JS/JSON/Markdown/HTML/CSS/Python/Rust/Go/Ruby：monaco chunk 4560KB → 4169KB（gzip 1176KB → 1081KB）。曾尝试把语言定义拆成独立 chunk，因循环 chunk 导致运行时 `Cannot access 'r' before initialization`，已回退。构建产物经 `vite preview` 验证：打开 JSON 文件、worker 加载与编辑器渲染正常。 |
-| 2026-10-23 | 本轮汇总 | P0–P3 排期项全部落地：AF-01~AF-18、E-01/02/04/05/06/07/08。质量门禁：`type-check`、`lint`、`test`（46 文件 415 用例）、`build` 全绿；产物经 vite preview 冒烟（工作区打开、编辑器与 worker 加载）。真机端到端（真实供应商 + Electron 窗口交互）尚未执行。 |
+| 2026-10-23 | 本轮汇总 | P0–P3 排期项全部落地：AF-01~AF-18、E-01/02/04/05/06/07/08。质量门禁：`type-check`、`lint`、`test`（46 文件 419 用例）、`build` 全绿，CI 通过。真实供应商（DeepSeek deepseek-flash）下经 Electron 界面验证：工具审批允许/拒绝、检查点回退、停止清理审批卡、系统通知与点击前置、文件树自动刷新；计划模式与队列/插话由用户手动验收通过。按 v1 缩小范围或未实现的项已移入 [BACKLOG.md](./BACKLOG.md)。 |
+
+---
+
+## 13. 收尾说明
+
+- **交付范围**：AF-01~AF-18、E-01/02/04/05/06/07/08 均已实现；E-03 经项目所有者决定本期不开发。
+- **验证**：单测与构建全绿；真实供应商下完成审批、检查点、通知、文件树等界面验证；计划模式、队列/插话手动验收通过。macOS / Linux 未在对应平台验收。
+- **未完成项**：v1 中缩小范围的部分（列表见 [BACKLOG.md](./BACKLOG.md) 的“来源”列）已全部转入新清单，本文不再维护待办。
+- **质量修复记录**：审批卡生命周期（74b0a4d）、通知 AUMID + 点击聚焦 + 文件树刷新（42eb100）、CI 测试 mock 修正（29bf2b8）。
 
 ---
 

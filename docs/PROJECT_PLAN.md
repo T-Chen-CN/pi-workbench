@@ -97,7 +97,7 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 
 ### 🔄 进行中 / 计划中
 
-待开发功能统一记录在 [待开发功能方案（ROADMAP.md）](./progress/ROADMAP.md)：AF-01 ~ AF-18（Agent 前端能力）、E-01 ~ E-05（工程与产品缺口）。本文件不再重复维护待办清单。
+待开发功能统一记录在 [后续开发清单（BACKLOG.md）](./progress/BACKLOG.md)；v1 计划与交付结果见 [ROADMAP.md](./progress/ROADMAP.md)（已归档）。本文件不再重复维护待办清单。
 
 ---
 
@@ -224,7 +224,7 @@ docs/               项目文档
 - AgentManager 在 write/edit 工具执行前后读取文件内容，`chat()` 返回 `edits`
 - ChatPanel 计算 Diff 并打开查看器
 
-**待增强**：写入前审批（当前为事后审阅，修改已直接落盘）。见 [ROADMAP.md](./progress/ROADMAP.md) AF-01。
+**审批**：Agent 写文件 / 执行命令前会按权限策略请求审批（2026-10-23 实现）；Diff 审阅仍为事后审阅，修改在工具执行时已落盘。
 
 ### 模块 5：工作区管理（已实现）
 
@@ -403,7 +403,7 @@ npm run package:win  # NSIS 安装包
 
 - [x] Phase 6 打磨：主题、崩溃恢复、自动更新、性能（虚拟滚动 / 大文件模式）
 
-> 尚未完成的目标统一记录在 [ROADMAP.md](./progress/ROADMAP.md)。
+> 尚未完成的目标统一记录在 [BACKLOG.md](./progress/BACKLOG.md)；v1 已完成部分见 [ROADMAP.md](./progress/ROADMAP.md)。
 
 ---
 
