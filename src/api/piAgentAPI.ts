@@ -8,9 +8,15 @@
 import type {
   AgentStreamEvent,
   ApiConfig,
+  ApprovalDecision,
+  ApprovalRequestPayload,
+  CheckpointSummary,
+  ContextUsageInfo,
+  SessionStatsInfo,
   FileEdit,
   SessionListResult,
   SessionOpenResult,
+  SessionMode,
   SessionTabs,
   SessionTabsResult,
 } from '../types/electron'
@@ -393,6 +399,236 @@ export const piAgentAPI = {
       })
     } catch (error) {
       return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  async sessionsSetMode(
+    workspaceDir: string,
+    sessionId: string,
+    mode: SessionMode
+  ): Promise<AgentResponse> {
+    try {
+      if (hasElectronAgent()) {
+        return await window.electronAPI.agentSessionsSetMode(workspaceDir, sessionId, mode)
+      }
+      return { success: false, error: 'Session modes are not available in this environment' }
+    } catch (error) {
+      return { success: false, error: bridgeUnavailableError(error) }
+    }
+  },
+
+  /** 桌面通知点击：定位到对应工作区与会话 */
+  onNotifyClick(
+    callback: (payload: { workspaceDir: string; sessionId: string }) => void
+  ): () => void {
+    if (typeof window.electronAPI?.onNotifyClick !== 'function') return () => {}
+    return window.electronAPI.onNotifyClick(callback)
+  },
+
+  /** 运行中插话：把消息注入当前轮 */
+  async steer(
+    workspaceDir: string,
+    sessionId: string,
+    message: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!hasElectronAgent()) {
+      return { success: false, error: 'Steering is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentSteer(workspaceDir, sessionId, message)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 读取上下文窗口占用 */
+  async getContextUsage(
+    workspaceDir: string,
+    sessionId: string
+  ): Promise<{ success: boolean; usage?: ContextUsageInfo; error?: string }> {
+    if (!hasElectronAgent()) {
+      return { success: false, error: 'Context usage is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentContextUsage(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 手动压缩上下文 */
+  async compactContext(
+    workspaceDir: string,
+    sessionId: string
+  ): Promise<{
+    success: boolean
+    tokensBefore?: number
+    estimatedTokensAfter?: number
+    error?: string
+  }> {
+    if (!hasElectronAgent()) {
+      return { success: false, error: 'Compaction is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentCompactContext(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 回退到最后一条用户消息（重试 / 编辑重发） */
+  async rewindLastUser(
+    workspaceDir: string,
+    sessionId: string,
+    newText?: string
+  ): Promise<{ success: boolean; text?: string; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentRewind !== 'function') {
+      return { success: false, error: 'Retry is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentRewind(workspaceDir, sessionId, newText)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 会话级模型与思考级别 */
+  async getSessionSettings(
+    workspaceDir: string,
+    sessionId: string
+  ): Promise<{ success: boolean; modelId?: string; thinkingLevel?: string; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentSessionSettings !== 'function') {
+      return { success: false, error: 'Session settings are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentSessionSettings(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  async setSessionModel(
+    workspaceDir: string,
+    sessionId: string,
+    modelId: string
+  ): Promise<{ success: boolean; error?: string }> {    if (!hasElectronAgent() || typeof window.electronAPI.agentSessionSetModel !== 'function') {
+      return { success: false, error: 'Model switching is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentSessionSetModel(workspaceDir, sessionId, modelId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  async setSessionThinking(
+    workspaceDir: string,
+    sessionId: string,
+    level: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentSessionSetThinking !== 'function') {
+      return { success: false, error: 'Thinking control is not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentSessionSetThinking(workspaceDir, sessionId, level)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 会话累计用量与成本 */
+  async getSessionStats(
+    workspaceDir: string,
+    sessionId: string
+  ): Promise<{ success: boolean; stats?: SessionStatsInfo; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentSessionStats !== 'function') {
+      return { success: false, error: 'Session stats are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentSessionStats(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 历史工具调用的文件 Diff */
+  async getToolEdit(
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string
+  ): Promise<{
+    success: boolean
+    edit?: { path: string; oldContent: string; newContent: string }
+    error?: string
+  }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentToolDiff !== 'function') {
+      return { success: false, error: 'Historical diffs are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentToolDiff(workspaceDir, sessionId, toolCallId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 检查点列表 */
+  async listCheckpoints(
+    workspaceDir: string,
+    sessionId?: string
+  ): Promise<{ success: boolean; checkpoints?: CheckpointSummary[]; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentCheckpointsList !== 'function') {
+      return { success: true, checkpoints: [] }
+    }
+    try {
+      return await window.electronAPI.agentCheckpointsList(workspaceDir, sessionId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /** 回退到检查点 */
+  async restoreCheckpoint(
+    workspaceDir: string,
+    sessionId: string,
+    checkpointId: string,
+    options: { files?: boolean; conversation?: boolean }
+  ): Promise<{ success: boolean; restoredFiles?: number; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentCheckpointsRestore !== 'function') {
+      return { success: false, error: 'Checkpoints are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentCheckpointsRestore(
+        workspaceDir,
+        sessionId,
+        checkpointId,
+        options
+      )
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
+
+  /**
+   * 监听工具审批请求（仅 Electron；Web dev 桥没有审批通道）
+   */
+  onApprovalRequest(callback: (payload: ApprovalRequestPayload) => void): () => void {
+    if (!hasElectronAgent() || typeof window.electronAPI.onAgentApprovalRequest !== 'function') {
+      return () => {}
+    }
+    return window.electronAPI.onAgentApprovalRequest(callback)
+  },
+
+  async respondApproval(
+    requestId: string,
+    decision: ApprovalDecision
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentRespondApproval !== 'function') {
+      return { success: false, error: 'Approvals are not available in this environment' }
+    }
+    try {
+      return await window.electronAPI.agentRespondApproval(requestId, decision)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   },
 

@@ -400,16 +400,30 @@
 - 空状态、未配置 API、错误使用 EmptyState / 细线错误条，不使用大色块。
 - 上下文附件支持整文件与选区片段：片段 chip 显示 `文件:起止行`，内容是附加时快照（≤40k 字符）；整文件在发送时读取（≤120k 字符，合计 ≤300k）。
 - 会话标签栏（34px，位于聊天头部下方）：标签代表"已打开"会话，激活标签 `bg-surface` + 2px `accent` 顶线；最多同时打开 8 个，关闭标签只释放运行时、保留会话文件。
-- 标签状态按优先级只显示一个标记：**运行中**（`accent` 实心点 + 1.4s 脉冲）> **错误**（`danger` 感叹号图标；保留到下次发送或成功回复）> **待操作**（`warning` 空心环 + 中心点 + 2px 硬边外环，2.4s 呼吸；v1 仅状态占位、暂无触发）> **未读**（`success` 实心点，静态；激活标签时清除）> **已读**（无标记）。
+- 标签状态按优先级只显示一个标记：**运行中**（`accent` 实心点 + 1.4s 脉冲）> **错误**（`danger` 感叹号图标；保留到下次发送或成功回复）> **待操作**（`warning` 空心环 + 中心点 + 2px 硬边外环，2.4s 呼吸；工具审批等待时触发）> **未读**（`success` 实心点，静态；激活标签时清除）> **已读**（无标记）。
 - 草稿是独立标记：标题旁 9px `Pencil` 图标（`ink-subtle`），可与任意主状态并存，不占状态槽。
 - 标签的 `title` / `aria-label` 必须包含状态与草稿文案，运行中同时设置 `aria-busy`；状态不能只靠颜色或动效传达。
-- 会话列表：聊天列内的全高抽屉，行显示标题、消息数、相对时间与"已打开"标记；当前会话用 2px `accent` 左边线 + `accent/[0.06]`；hover 显示重命名 / 删除。
+- 会话列表：聊天列内的全高抽屉，行显示标题、消息数、相对时间与"已打开"标记；当前会话用 2px `accent` 左边线 + `accent/[0.06]`；hover 显示置顶 / 归档 / 导出 / 重命名 / 删除。顶部为 `SearchField` 与“显示已归档”开关；置顶会话排在前面并带 10px `accent` Pin，归档会话显示“已归档”标记且默认隐藏。
 - 会话标题：首轮回复后由模型生成一次（中文 ≤16 字 / 英文 ≤8 词），存为 `session_info`；手动重命名后不再自动覆盖；无标题时回退首条用户消息。
 - 过程轨迹：助手消息内的 thinking / text / tool 按发生顺序排列；相邻 thinking/tool 合并为一个**默认收起**的过程组。组标题实时显示“思考中… / 运行命令…”或完成摘要“过程 · 思考 N 秒 · N 个工具”；用户手动展开后保持展开，不随正文开始或轮次结束自动改变。
 - 过程组触发器：`type-label` + `text-ink-muted`，chevron 14px，运行中状态点为 `accent` 1.4s 脉冲；内容左侧 `rule-hairline` 发丝线 + 12px 缩进，不使用卡片、阴影或渐变。
 - 思考正文：`.chat-markdown.agent-trace-markdown`（reading 13px / 1.7）+ `text-ink-muted`，Markdown 渲染但流式期间关闭代码高亮。
-- 工具行：状态图标（`accent` spinner / `success` Check / `danger` AlertCircle）+ `type-label` 工具名 + `type-data` 目标 + `type-caption` 耗时；展开后的参数与结果使用 `type-data`，结果块使用 `bg-sunken` + `rule-hairline`，最大高度约 240px 内部滚动；write/edit 有对应 Diff 时提供“查看修改”。
+- 工具行：状态图标（`accent` spinner / `success` Check / `danger` AlertCircle）+ `type-label` 工具名 + `type-data` 目标 + `type-caption` 耗时；展开后的参数与结果使用 `type-data`，结果块使用 `bg-sunken` + `rule-hairline`，最大高度约 240px 内部滚动；执行中结果预览随 `tool_update` 实时刷新；write/edit 有对应 Diff 时提供“查看修改”。
 - 过程组收起时不挂载内容 DOM；触发器使用 `aria-expanded` / `aria-controls`，运行中的内容加 `aria-busy`；失败与状态必须有文字，不能只靠颜色或动效传达。
+- 工具审批卡：位于输入框上方，`bg-raised` + `border-rule-hairline`，不设阴影。标题行 `warning` ShieldAlert + `type-label`；工具与参数摘要用 `type-value`，类别与路径用 `type-caption` / `type-data`。命令与写入预览放在 `bg-sunken` + `rule-hairline` 的 mono 块中（命令 ≤400 字符、预览 ≤280 字符），不展示完整文件内容。底部按钮依次为允许一次（primary）/ 本会话允许（secondary）/ 始终允许（ghost）/ 拒绝（danger，右对齐）；拒绝进入二次确认并可选填原因。
+- Plan / Act 切换：输入区左下角两段式控件（`type-caption`，激活 `bg-active text-ink`，无圆角胶囊）；Plan 模式只读，助手回复后输入框上方出现执行条（`bg-raised` + 发丝边 + `type-caption` 提示 + primary 按钮“执行计划”）。
+- 待发送消息：输入框上方的发丝边纸卡列表，`type-caption` 行为标签（排队 / 插话，运行中可点击切换）+ `type-value` 单行截断正文 + 移除按钮；空闲时额外显示发送按钮。运行中右下角同时出现“排队 / 插话”切换与停止按钮，发送按钮始终可用。
+- 上下文占用：输入区上方的 1px 细条（`Meter`，`tone` 随占用切换 accent / warning / danger）+ `type-data` 计数「42% · 40k / 96k」+ `type-caption` 文本按钮“压缩上下文”；细条不使用发光或渐变。
+- 检查点菜单：聊天头部 `RotateCcw` 图标按钮打开的浮层（`bg-raised` + 满墨边 + `shadow-print`，宽 320px）；每行显示时间（`type-value`）与“修改 N 个文件”（`type-caption`），操作按钮为发丝边文本按钮（恢复代码 / 恢复对话 / 两者都恢复），底部一句说明命令副作用不可回退。
+- 消息操作：悬停或键盘聚焦时在消息头部右侧显示 14px 图标按钮（复制 / 重新生成 / 编辑），默认 `opacity-0`，`group-hover` 与 `focus-within` 时显现；只对最后一条助手回复和最后一条用户消息提供重复生成与编辑入口。
+- 快捷键可达：设置“快捷键”页顶部为“可自定义”区，每行左侧 `type-value` 命令名、右侧 `KeyCap` 组合键与 ghost 按钮“修改”；捕获中显示 `warning` 提示文案，冲突用 Toast 报错，页头提供“恢复默认”。
+- 模型与思考：输入区上方一行两个紧凑 `Select`（模型 176px / 思考 112px，高度 24px），值来自会话级设置；切换失败时回滚并 Toast。
+- 文件引用：Markdown 行内代码中的 `path[:line]` 使用 `type-data` 样式，hover 变 `accent` 并加下划线，点击打开编辑器；`@` 搜索弹层为 `bg-raised` + 满墨边 + `shadow-print` 的列表（单行 `type-data`，hover `bg-hover`），拖入文件直接进入附件区。
+- 符号附加：附件菜单右上角提供“附加符号 / 附加文件”切换；符号列表每行显示 kind（`type-caption`）、名称（`type-value`，单行截断）与行范围（`type-data`），空态一句“未识别到符号，可改用整文件”。
+- 内联变更卡：助手消息下方的 `bg-raised` + 发丝边卡片；标题行“本轮修改了 N 个文件”（`type-label`）+ 右侧“全部还原”（`type-caption`）；每行文件名为单行截断的 `type-data`，右侧“查看修改 / 还原此文件”文本按钮；还原按钮 hover 变 `danger`。
+- 重试与错误：重试提示为输入区上方的 `type-caption text-warning` 一行（Spinner + 次数/等待 + 错误摘要）；错误条保持左侧 2px `danger` 线，右侧提供 `type-caption` 文本按钮“重新生成 / 打开设置”。
+- 本轮任务：输入区上方的发丝边折叠条（`bg-raised`），标题行“本轮任务 + done/total”，展开后逐行显示 `accent` / `success` / `danger` 状态点、工具名与参数；不使用进度条填充。
+- 回到底部：输入区上方的悬浮小按钮（`bg-raised` + 满墨边 + `shadow-print`，`type-caption` + 12px `ArrowDown`），离开底部 120px 后出现；有未读新增时显示“N 条新消息”。
 
 ### 6.6 终端
 

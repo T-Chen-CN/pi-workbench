@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 type AgentStreamPayload = {
   requestId?: string
@@ -142,6 +142,73 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:sessions:getTabs', workspaceDir),
   agentSessionsSetTabs: (workspaceDir: string, tabs: { open: string[]; active: string | null }) =>
     ipcRenderer.invoke('agent:sessions:setTabs', workspaceDir, tabs),
+  agentSessionsSetMode: (workspaceDir: string, sessionId: string, mode: 'plan' | 'act') =>
+    ipcRenderer.invoke('agent:sessions:setMode', workspaceDir, sessionId, mode),
+  agentSteer: (workspaceDir: string, sessionId: string, message: string) =>
+    ipcRenderer.invoke('agent:steer', workspaceDir, sessionId, message),
+  agentContextUsage: (workspaceDir: string, sessionId: string) =>
+    ipcRenderer.invoke('agent:context:usage', workspaceDir, sessionId),
+  agentCompactContext: (workspaceDir: string, sessionId: string) =>
+    ipcRenderer.invoke('agent:context:compact', workspaceDir, sessionId),
+  agentCheckpointsList: (workspaceDir: string, sessionId?: string) =>
+    ipcRenderer.invoke('agent:checkpoints:list', workspaceDir, sessionId),
+  agentCheckpointsRestore: (
+    workspaceDir: string,
+    sessionId: string,
+    checkpointId: string,
+    options: { files?: boolean; conversation?: boolean }
+  ) => ipcRenderer.invoke('agent:checkpoints:restore', workspaceDir, sessionId, checkpointId, options),
+  agentRewind: (workspaceDir: string, sessionId: string, newText?: string) =>
+    ipcRenderer.invoke('agent:rewind', workspaceDir, sessionId, newText),
+  agentSessionSettings: (workspaceDir: string, sessionId: string) =>
+    ipcRenderer.invoke('agent:session:settings', workspaceDir, sessionId),
+  agentSessionStats: (workspaceDir: string, sessionId: string) =>
+    ipcRenderer.invoke('agent:session:stats', workspaceDir, sessionId),
+  agentToolDiff: (workspaceDir: string, sessionId: string, toolCallId: string) =>
+    ipcRenderer.invoke('agent:tool-diff', workspaceDir, sessionId, toolCallId),
+  agentSessionSetModel: (workspaceDir: string, sessionId: string, modelId: string) =>
+    ipcRenderer.invoke('agent:session:setModel', workspaceDir, sessionId, modelId),
+  agentSessionSetThinking: (workspaceDir: string, sessionId: string, level: string) =>
+    ipcRenderer.invoke('agent:session:setThinking', workspaceDir, sessionId, level),
+  agentSessionsMetaGet: (workspaceDir: string) =>
+    ipcRenderer.invoke('agent:sessions:meta:get', workspaceDir),
+  agentSessionsMetaSet: (
+    workspaceDir: string,
+    meta: { pinned?: string[]; archived?: string[] }
+  ) => ipcRenderer.invoke('agent:sessions:meta:set', workspaceDir, meta),
+  saveTextFile: (suggestedName: string, content: string) =>
+    ipcRenderer.invoke('app:saveTextFile', suggestedName, content),
+  searchWorkspaceFiles: (workspaceDir: string, query: string, limit?: number) =>
+    ipcRenderer.invoke('workspace:searchFiles', workspaceDir, query, limit),
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
+  onNotifyClick: (
+    callback: (payload: { workspaceDir: string; sessionId: string }) => void
+  ) => {
+    const listener = (_event: unknown, payload: { workspaceDir: string; sessionId: string }) =>
+      callback(payload)
+    ipcRenderer.on('app:notify-click', listener)
+    return () => ipcRenderer.removeListener('app:notify-click', listener)
+  },
+  onAgentApprovalRequest: (
+    callback: (payload: {
+      requestId: string
+      workspaceDir: string
+      sessionId: string
+      toolCallId: string
+      toolName: string
+      category: 'read' | 'write' | 'command' | 'other'
+      summary: string
+      details: { path?: string; command?: string; preview?: string; editCount?: number }
+      createdAt: number
+      expiresAt: number
+    }) => void
+  ) => {
+    const listener = (_event: unknown, payload: any) => callback(payload)
+    ipcRenderer.on('agent:approval-request', listener)
+    return () => ipcRenderer.removeListener('agent:approval-request', listener)
+  },
+  agentRespondApproval: (requestId: string, decision: unknown) =>
+    ipcRenderer.invoke('agent:approval:respond', requestId, decision),
 
   // 终端
   terminalCreate: (workspaceDir: string, cols: number, rows: number) =>

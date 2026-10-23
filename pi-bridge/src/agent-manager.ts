@@ -7,14 +7,36 @@
 
 import {
   createAgentSession,
+  DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
+  SettingsManager,
   type AgentSession,
+  type ExtensionFactory,
 } from '@earendil-works/pi-coding-agent'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { existsSync, readFileSync } from 'fs'
 import { writeJsonAtomicSync } from './atomic-json.js'
+import {
+  buildApprovalDetails,
+  categorizeTool,
+  normalizePermissionPolicy,
+  type ApprovalDecision,
+  type ApprovalRequestPayload,
+  type PermissionPolicy,
+} from './approval-policy.js'
+import {
+  CheckpointStore,
+  type CheckpointRecord,
+  type CheckpointSummary,
+} from './checkpoint-store.js'
+import {
+  SessionExtrasStore,
+  emptyExtras,
+  type SessionExtras,
+  type ToolEditRecord,
+} from './session-extras.js'
 
 /** 写入 models.json 的自定义供应商 ID */
 const WORKBENCH_PROVIDER_ID = 'pi-workbench'
@@ -28,11 +50,34 @@ const ABORT_GRACE_MS = 10_000
 const ABORT_TIMEOUT_MS = 5_000
 /** 初始化（模型运行时 + 会话创建）超时 */
 const INIT_TIMEOUT_MS = 30_000
+/** 单次工具审批的等待上限；超时按拒绝处理（fail-closed） */
+const APPROVAL_TIMEOUT_MS = 120_000
 /** 会话标题生成超时 */
 const TITLE_TIMEOUT_MS = 15_000
 /** 与 src/api/chatContext.ts 的标记保持一致 */
 const CONTEXT_BLOCK_START = '<pi-workbench-context>'
 const CONTEXT_BLOCK_END = '</pi-workbench-context>'
+/** Plan 模式的提示块；历史恢复时整块剥离，不展示给用户 */
+const PLAN_BLOCK_START = '<pi-workbench-plan-mode>'
+const PLAN_BLOCK_END = '</pi-workbench-plan-mode>'
+/** Plan 模式可用的只读工具 */
+const PLAN_MODE_TOOLS = ['read', 'grep', 'find', 'ls']
+/** Act 模式在无法恢复原工具集时使用的内置工具 */
+const DEFAULT_MODE_TOOLS = ['read', 'grep', 'find', 'ls', 'write', 'edit', 'bash', 'powershell']
+const PLAN_MODE_INSTRUCTION = [
+  'You are in Plan mode. Only read-only tools (read, grep, find, ls) are available;',
+  'you cannot modify files or run commands.',
+  'Explore the repository as needed, then reply with a concise, numbered implementation plan:',
+  'what you will change, which files are involved, and any risks or side effects.',
+  'Do not claim that changes were made.',
+].join(' ')
+
+/** 会话运行模式：plan 仅只读探索并给出计划，act 可修改文件与执行命令 */
+export type SessionMode = 'plan' | 'act'
+
+function wrapPlanPrompt(message: string): string {
+  return `${PLAN_BLOCK_START}\n${PLAN_MODE_INSTRUCTION}\n${PLAN_BLOCK_END}\n\n${message}`
+}
 
 export interface AgentLogger {
   info: (...args: unknown[]) => void
@@ -127,14 +172,23 @@ async function withTimeoutResult<T>(
   }
 }
 
-/** 恢复历史时去掉附件上下文块，避免聊天面板展示整段文件内容 */
+/** 恢复历史时去掉附件上下文块与 Plan 模式提示块，避免聊天面板展示内部指令 */
 function stripContextBlock(content: string): string {
-  const start = content.indexOf(CONTEXT_BLOCK_START)
-  const end = content.indexOf(CONTEXT_BLOCK_END)
-  if (start === -1 || end <= start) return content
+  let text = content
+  const planStart = text.indexOf(PLAN_BLOCK_START)
+  const planEnd = text.indexOf(PLAN_BLOCK_END)
+  if (planStart !== -1 && planEnd > planStart) {
+    const before = text.slice(0, planStart).trim()
+    const after = text.slice(planEnd + PLAN_BLOCK_END.length).trim()
+    text = [before, after].filter(Boolean).join('\n\n')
+  }
 
-  const before = content.slice(0, start).trim()
-  const after = content.slice(end + CONTEXT_BLOCK_END.length).trim()
+  const start = text.indexOf(CONTEXT_BLOCK_START)
+  const end = text.indexOf(CONTEXT_BLOCK_END)
+  if (start === -1 || end <= start) return text
+
+  const before = text.slice(0, start).trim()
+  const after = text.slice(end + CONTEXT_BLOCK_END.length).trim()
   return [before, after].filter(Boolean).join('\n\n') || '(attached files)'
 }
 
@@ -230,6 +284,8 @@ export type AgentTracePart =
       durationMs?: number
       resultPreview?: string
       filePath?: string
+      /** 历史工具行是否有保存下来的 Diff 可查看 */
+      hasDiff?: boolean
     }
 
 /** 主进程归一化后的流式事件；文本、思考和工具共用同一条有序通道 */
@@ -254,6 +310,14 @@ export type AgentTraceEvent =
       resultPreview?: string
       filePath?: string
     }
+  | {
+      type: 'retry_start'
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      message?: string
+    }
+  | { type: 'retry_end'; success: boolean }
 
 
 export interface AgentConfig {
@@ -270,6 +334,14 @@ export interface AgentConfig {
   logger?: AgentLogger
   /** 模型生成会话标题后回调（主进程转发给渲染层） */
   onSessionTitle?: (sessionId: string, title: string) => void
+  /** 当前权限策略（每次工具调用时读取，改设置后无需重建 Agent） */
+  getPermissionPolicy?: () => unknown
+  /** 请求用户审批；未提供时按拒绝处理（fail-closed） */
+  requestApproval?: (request: ApprovalRequestPayload) => Promise<ApprovalDecision>
+  /** 用户选择“始终允许”时回调，由主进程持久化策略 */
+  onPermissionAlwaysAllow?: (category: ApprovalRequestPayload['category']) => void
+  /** 检查点存储目录；未提供时不记录检查点（例如 Fleet 任务） */
+  checkpointDir?: string
 }
 
 export interface SessionSummary {
@@ -299,7 +371,7 @@ interface SessionRuntime {
   thinkingDeltaSeen: Set<number>
   /** write/edit 工具开始时的目标路径，供 tool_end 附带 */
   toolFiles: Map<string, string>
-  editSnapshots: Map<string, { path: string; oldContent: string }>
+  editSnapshots: Map<string, { path: string; oldContent: string; existed: boolean }>
   pendingEdits: FileEdit[]
   messageHistory: AgentMessage[]
   createdAt: number
@@ -308,6 +380,19 @@ interface SessionRuntime {
   titleAttempted: boolean
   /** 未落盘新会话的临时标题 */
   pendingTitle: string | null
+  /** 本会话内已获准的类别（“本会话允许”） */
+  sessionAllow: Set<string>
+  /** 当前模式；审批钩子与 chat 都会读取 */
+  modeState: { current: SessionMode }
+  /** 进入 Plan 前的工具集，切回 Act 时恢复 */
+  activeToolsBeforePlan: string[] | null
+  /** 本轮检查点；轮次结束后落盘 */
+  currentCheckpoint: CheckpointRecord | null
+  /** 会话附加数据（思考时长 / 历史工具 Diff） */
+  extras: SessionExtras
+  extrasSave: Promise<void>
+  thinkingStart: number | null
+  thinkingDurationsThisMessage: number[]
 }
 
 export interface AgentMessage {
@@ -367,6 +452,8 @@ export class AgentManager {
   private logger: AgentLogger = consoleAgentLogger
   private modelRuntime: ModelRuntime | null = null
   private agentDir = ''
+  private checkpointStore: CheckpointStore | null = null
+  private extrasStore: SessionExtrasStore | null = null
   private sessionDir = ''
   private envLease = false
   private runtimes = new Map<string, SessionRuntime>()
@@ -475,6 +562,19 @@ export class AgentManager {
     return target
   }
 
+  /** 串行保存会话附加数据，避免并发覆盖 */
+  private persistExtras(runtime: SessionRuntime): void {
+    if (!this.extrasStore) return
+    const store = this.extrasStore
+    const id = runtime.id
+    runtime.extrasSave = runtime.extrasSave
+      .catch(() => undefined)
+      .then(() => store.save(id, runtime.extras))
+      .catch((error) => {
+        this.logger.warn('[Agent Manager] Failed to save session extras:', error)
+      })
+  }
+
   /**
    * 订阅会话事件：转发文本 / 思考 / 工具步骤，并记录 write/edit 前后内容。
    * Pi 的 write / edit 工具参数分别为 { path, content } 和 { path, edits }。
@@ -484,6 +584,22 @@ export class AgentManager {
       try {
         if (event.type === 'message_start' && event.message?.role === 'assistant') {
           runtime.thinkingDeltaSeen.clear()
+          runtime.thinkingDurationsThisMessage = []
+          runtime.thinkingStart = null
+          return
+        }
+
+        if (event.type === 'message_end' && event.message?.role === 'assistant') {
+          const timestamp = event.message?.timestamp
+          if (
+            typeof timestamp === 'number' &&
+            runtime.thinkingDurationsThisMessage.length > 0
+          ) {
+            runtime.extras.thinkingDurations[String(timestamp)] = [
+              ...runtime.thinkingDurationsThisMessage,
+            ]
+            this.persistExtras(runtime)
+          }
           return
         }
 
@@ -496,6 +612,7 @@ export class AgentManager {
             if (typeof update.contentIndex === 'number') {
               runtime.thinkingDeltaSeen.delete(update.contentIndex)
             }
+            runtime.thinkingStart = Date.now()
           } else if (update?.type === 'thinking_delta' && typeof update.delta === 'string') {
             if (typeof update.contentIndex === 'number') {
               runtime.thinkingDeltaSeen.add(update.contentIndex)
@@ -503,6 +620,12 @@ export class AgentManager {
             runtime.onTrace?.({ type: 'thinking_delta', delta: update.delta })
           } else if (update?.type === 'thinking_end') {
             const index = typeof update.contentIndex === 'number' ? update.contentIndex : -1
+            if (runtime.thinkingStart !== null) {
+              runtime.thinkingDurationsThisMessage.push(
+                Math.max(0, Date.now() - runtime.thinkingStart)
+              )
+              runtime.thinkingStart = null
+            }
             // 部分供应商只在 end 给出完整内容，或返回脱敏后的空内容
             if (!runtime.thinkingDeltaSeen.has(index)) {
               const content = typeof update.content === 'string' ? update.content : ''
@@ -513,15 +636,23 @@ export class AgentManager {
           return
         }
 
-        // Pi SDK 自带自动重试（429 / 5xx / 网络抖动），这里只记录，便于诊断
+        // Pi SDK 自带自动重试（429 / 5xx / 网络抖动），记录并转发给渲染层
         if (event.type === 'auto_retry_start') {
           this.logger.warn(
             `[Agent Manager] Provider retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms: ${event.errorMessage ?? ''}`
           )
+          runtime.onTrace?.({
+            type: 'retry_start',
+            attempt: Number(event.attempt) || 0,
+            maxAttempts: Number(event.maxAttempts) || 0,
+            delayMs: Number(event.delayMs) || 0,
+            message: typeof event.errorMessage === 'string' ? event.errorMessage : undefined,
+          })
           return
         }
         if (event.type === 'auto_retry_end') {
           this.logger.info(`[Agent Manager] Auto retry ${event.success ? 'succeeded' : 'failed'}`)
+          runtime.onTrace?.({ type: 'retry_end', success: Boolean(event.success) })
           return
         }
 
@@ -548,8 +679,24 @@ export class AgentManager {
           if (event.toolName !== 'write' && event.toolName !== 'edit') return
           const target = this.resolveToolPath(args.path)
           if (!target || !this.isInsideWorkspace(target)) return
-          const oldContent = existsSync(target) ? readFileSync(target, 'utf-8') : ''
-          runtime.editSnapshots.set(event.toolCallId, { path: target, oldContent })
+          const existed = existsSync(target)
+          const oldContent = existed ? readFileSync(target, 'utf-8') : ''
+          runtime.editSnapshots.set(event.toolCallId, { path: target, oldContent, existed })
+          return
+        }
+
+        if (event.type === 'tool_execution_update') {
+          const preview = summarizeToolResult(
+            event.partialResult,
+            event.toolName === 'bash' || event.toolName === 'powershell'
+          )
+          if (preview) {
+            runtime.onTrace?.({
+              type: 'tool_update',
+              toolCallId: event.toolCallId,
+              resultPreview: preview,
+            })
+          }
           return
         }
 
@@ -570,6 +717,21 @@ export class AgentManager {
                 newContent,
                 toolCallId: event.toolCallId,
               })
+              if (
+                runtime.currentCheckpoint &&
+                !runtime.currentCheckpoint.files.some((file) => file.path === snapshot.path)
+              ) {
+                runtime.currentCheckpoint.files.push({
+                  path: snapshot.path,
+                  oldContent: snapshot.existed ? snapshot.oldContent : null,
+                })
+              }
+              runtime.extras.toolEdits[event.toolCallId] = {
+                path: snapshot.path,
+                oldContent: snapshot.oldContent,
+                newContent,
+              }
+              this.persistExtras(runtime)
             }
           }
 
@@ -617,6 +779,10 @@ export class AgentManager {
 
       this.agentDir =
         config.agentDir || path.join(config.workspaceDir, '.pi-workbench', 'agent')
+      this.checkpointStore = config.checkpointDir
+        ? new CheckpointStore(config.checkpointDir, config.workspaceDir)
+        : null
+      this.extrasStore = new SessionExtrasStore(path.join(this.agentDir, 'session-extras'))
       const modelsPath = await this.writeModelsConfig(this.agentDir, config)
       this.ensureBashOnPath()
 
@@ -672,6 +838,388 @@ export class AgentManager {
     }
   }
 
+  /**
+   * 工具审批扩展：在工具执行前按策略放行、拒绝或挂起等待用户。
+   * 以 inline extension 的方式注册 tool_call 钩子，不落盘，也不属于工作台插件系统。
+   */
+  private createApprovalExtension(
+    sessionId: string,
+    sessionAllow: Set<string>,
+    getMode: () => SessionMode
+  ): ExtensionFactory {
+    return (pi) => {
+      pi.on('tool_call', async (event: any) => {
+        const toolName = String(event?.toolName ?? '')
+        const args = event?.input ?? event?.args ?? {}
+        const category = categorizeTool(toolName)
+
+        // Plan 模式只允许只读工具；即使工具集被意外放宽也要拦住
+        if (getMode() === 'plan' && category !== 'read') {
+          return {
+            block: true,
+            reason:
+              'Plan mode is read-only. Switch to Act mode before modifying files or running commands.',
+          }
+        }
+
+        const policy: PermissionPolicy = normalizePermissionPolicy(this.config?.getPermissionPolicy?.())
+        let action = policy[category]
+        if (sessionAllow.has(category) && action !== 'deny') action = 'allow'
+
+        if (action === 'allow') return undefined
+        if (action === 'deny') {
+          this.logger.info(`[Agent Manager] Blocked tool ${toolName} by policy (${category})`)
+          return {
+            block: true,
+            reason: `Tool "${toolName}" is blocked by the current permission policy.`,
+          }
+        }
+
+        const request: ApprovalRequestPayload = {
+          requestId: `approval-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+          workspaceDir: this.config?.workspaceDir ?? '',
+          sessionId,
+          toolCallId: String(event?.toolCallId ?? ''),
+          toolName,
+          category,
+          summary: summarizeToolArgs(toolName, args),
+          details: buildApprovalDetails(toolName, args),
+          createdAt: Date.now(),
+          expiresAt: Date.now() + APPROVAL_TIMEOUT_MS,
+        }
+
+        const decision = await this.requestToolApproval(request)
+        this.logger.info(`[Agent Manager] Tool approval for ${toolName}: ${decision.action}`)
+
+        if (decision.action === 'allow-once') return undefined
+        if (decision.action === 'allow-session') {
+          sessionAllow.add(category)
+          return undefined
+        }
+        if (decision.action === 'allow-always') {
+          sessionAllow.add(category)
+          try {
+            this.config?.onPermissionAlwaysAllow?.(category)
+          } catch (error) {
+            this.logger.warn('[Agent Manager] Failed to persist always-allow:', error)
+          }
+          return undefined
+        }
+
+        const reason = decision.reason?.trim()
+        return {
+          block: true,
+          reason: reason
+            ? `The user denied this tool call: ${reason}`
+            : 'The user denied this tool call.',
+        }
+      })
+    }
+  }
+
+  /** 向宿主请求审批；没有审批通道或超时都按拒绝处理 */
+  private async requestToolApproval(request: ApprovalRequestPayload): Promise<ApprovalDecision> {
+    const handler = this.config?.requestApproval
+    if (!handler) {
+      return { action: 'deny', reason: 'No approval channel is available in this environment.' }
+    }
+    try {
+      return await withTimeout(handler(request), APPROVAL_TIMEOUT_MS, 'Tool approval')
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Approval failed or timed out:', error)
+      return { action: 'deny', reason: 'The approval request timed out.' }
+    }
+  }
+
+  /**
+   * 回退到最后一条用户消息之前，用于重试 / 编辑重发。
+   * 返回重新发送的文本（编辑时用 newText 覆盖）。
+   */
+  async rewindToLastUser(
+    sessionId: string,
+    newText?: string
+  ): Promise<{ success: boolean; text?: string; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      if (runtime.isProcessing) {
+        return { success: false, error: 'Session is running; stop it before retrying.' }
+      }
+      const users = runtime.session.getUserMessagesForForking()
+      const last = users[users.length - 1]
+      if (!last) return { success: false, error: 'No user message to retry.' }
+      const result = await runtime.session.navigateTree(last.entryId, { summarize: false })
+      if (result.cancelled) {
+        return { success: false, error: 'Rewind was cancelled.' }
+      }
+      const text = (newText ?? last.text).trim()
+      return { success: true, text }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 列出检查点（最近的在前） */
+  async listCheckpoints(
+    sessionId?: string
+  ): Promise<{ success: boolean; checkpoints?: CheckpointSummary[]; error?: string }> {
+    if (!this.checkpointStore) return { success: true, checkpoints: [] }
+    try {
+      return { success: true, checkpoints: await this.checkpointStore.list(sessionId) }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /**
+   * 回退到检查点：可只恢复文件、只恢复对话，或两者都恢复。
+   * 只覆盖 write/edit 造成的修改；bash 等外部副作用不在检查点范围内。
+   */
+  async restoreCheckpoint(
+    sessionId: string,
+    checkpointId: string,
+    options: { files?: boolean; conversation?: boolean }
+  ): Promise<{ success: boolean; restoredFiles?: number; error?: string }> {
+    if (!this.checkpointStore) {
+      return { success: false, error: 'Checkpoints are not enabled for this workspace.' }
+    }
+    try {
+      const record = await this.checkpointStore.load(checkpointId)
+      if (!record || record.sessionId !== sessionId) {
+        return { success: false, error: 'Checkpoint not found.' }
+      }
+      const runtime = await this.ensureRuntime(sessionId)
+      if (runtime.isProcessing) {
+        return { success: false, error: 'Session is running; stop it before restoring.' }
+      }
+
+      let restoredFiles = 0
+      if (options.files) {
+        for (const file of record.files) {
+          const target = this.resolveToolPath(file.path)
+          if (!target || !this.isInsideWorkspace(target)) {
+            this.logger.warn('[Agent Manager] Skipped checkpoint file outside workspace:', file.path)
+            continue
+          }
+          if (file.oldContent === null) {
+            await fs.rm(target, { force: true })
+          } else {
+            await fs.mkdir(path.dirname(target), { recursive: true })
+            await fs.writeFile(target, file.oldContent, 'utf-8')
+          }
+          restoredFiles++
+        }
+      }
+
+      if (options.conversation && record.leafId) {
+        const result = await runtime.session.navigateTree(record.leafId, { summarize: false })
+        if (result.cancelled) {
+          return { success: false, error: 'Conversation restore was cancelled.' }
+        }
+      }
+
+      return { success: true, restoredFiles }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 读取历史工具调用的文件 Diff（来自会话 sidecar） */
+  async getToolEdit(
+    sessionId: string,
+    toolCallId: string
+  ): Promise<{ success: boolean; edit?: ToolEditRecord; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const edit = runtime.extras.toolEdits[toolCallId]
+      if (!edit) return { success: false, error: 'No saved diff for this tool call.' }
+      return { success: true, edit }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 会话累计用量与成本 */
+  async getSessionStats(sessionId: string): Promise<{
+    success: boolean
+    stats?: {
+      tokens: number
+      input: number
+      output: number
+      cost: number
+      toolCalls: number
+      messages: number
+    }
+    error?: string
+  }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const stats = runtime.session.getSessionStats()
+      return {
+        success: true,
+        stats: {
+          tokens: stats.tokens.total,
+          input: stats.tokens.input,
+          output: stats.tokens.output,
+          cost: stats.cost,
+          toolCalls: stats.toolCalls,
+          messages: stats.totalMessages,
+        },
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 读取会话当前的模型与思考级别 */
+  async getSessionSettings(sessionId: string): Promise<{
+    success: boolean
+    modelId?: string
+    thinkingLevel?: string
+    error?: string
+  }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      return {
+        success: true,
+        modelId: runtime.session.model?.id,
+        thinkingLevel: runtime.session.thinkingLevel,
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 切换当前会话的模型（写入 model_change，重开会话后保留） */
+  async setSessionModel(
+    sessionId: string,
+    modelId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!this.modelRuntime) return { success: false, error: 'Agent not initialized.' }
+      const model = this.modelRuntime.getModel(WORKBENCH_PROVIDER_ID, modelId)
+      if (!model) return { success: false, error: `Model "${modelId}" is unavailable.` }
+      const runtime = await this.ensureRuntime(sessionId)
+      await runtime.session.setModel(model)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 切换思考级别 */
+  async setSessionThinking(
+    sessionId: string,
+    level: string
+  ): Promise<{ success: boolean; error?: string }> {
+    const allowed = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+    if (!allowed.includes(level)) {
+      return { success: false, error: `Unknown thinking level "${level}".` }
+    }
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      runtime.session.setThinkingLevel(level as any)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 读取当前上下文占用（会话空闲时也有效） */
+  async getContextUsage(
+    sessionId: string
+  ): Promise<{ success: boolean; usage?: { tokens: number | null; contextWindow: number; percent: number | null }; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const usage = runtime.session.getContextUsage()
+      return {
+        success: true,
+        usage: usage
+          ? {
+              tokens: usage.tokens ?? null,
+              contextWindow: usage.contextWindow,
+              percent: usage.percent ?? null,
+            }
+          : undefined,
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 手动压缩上下文；运行中不压缩，避免打断当前轮 */
+  async compactContext(
+    sessionId: string
+  ): Promise<{
+    success: boolean
+    tokensBefore?: number
+    estimatedTokensAfter?: number
+    error?: string
+  }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      if (runtime.isProcessing) {
+        return { success: false, error: 'Session is running; wait for it to finish before compacting.' }
+      }
+      const result = await runtime.session.compact()
+      return {
+        success: true,
+        tokensBefore: result.tokensBefore,
+        estimatedTokensAfter: result.estimatedTokensAfter,
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 运行中插话：把消息注入当前轮（steer），不等待本轮结束 */
+  async steer(sessionId: string, message: string): Promise<{ success: boolean; error?: string }> {
+    const text = message.trim()
+    if (!text) return { success: false, error: 'Message is empty.' }
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      if (!runtime.isProcessing) {
+        return { success: false, error: 'Session is not running.' }
+      }
+      await runtime.session.prompt(text, { streamingBehavior: 'steer' })
+      this.logger.info(`[Agent Manager] Steered session ${sessionId}`)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 切换会话模式；Plan 期间只保留只读工具 */
+  async setSessionMode(
+    sessionId: string,
+    mode: SessionMode
+  ): Promise<{ success: boolean; error?: string }> {
+    if (mode !== 'plan' && mode !== 'act') {
+      return { success: false, error: 'Invalid session mode.' }
+    }
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      if (runtime.modeState.current === mode) return { success: true }
+
+      if (mode === 'plan') {
+        runtime.activeToolsBeforePlan = runtime.session.getActiveToolNames()
+        runtime.session.setActiveToolsByName(PLAN_MODE_TOOLS)
+      } else {
+        const restore =
+          runtime.activeToolsBeforePlan && runtime.activeToolsBeforePlan.length > 0
+            ? runtime.activeToolsBeforePlan
+            : DEFAULT_MODE_TOOLS
+        runtime.session.setActiveToolsByName(restore)
+        runtime.activeToolsBeforePlan = null
+      }
+
+      runtime.modeState.current = mode
+      this.logger.info(`[Agent Manager] Session ${sessionId} mode -> ${mode}`)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   /** 创建（或复用）一个会话运行时 */
   private async createRuntime(sessionManager: SessionManager): Promise<SessionRuntime> {
     const config = this.config
@@ -685,12 +1233,28 @@ export class AgentManager {
     const model = modelRuntime.getModel(WORKBENCH_PROVIDER_ID, config.apiConfig.selectedModel)
     if (!model) throw new Error('Selected model is unavailable.')
 
+    const sessionAllow = new Set<string>()
+    const modeState = { current: 'act' as SessionMode }
+    const extras = this.extrasStore ? await this.extrasStore.load(id) : emptyExtras()
+    const settingsManager = SettingsManager.create(config.workspaceDir, this.agentDir)
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: config.workspaceDir,
+      agentDir: this.agentDir,
+      settingsManager,
+      extensionFactories: [
+        this.createApprovalExtension(id, sessionAllow, () => modeState.current),
+      ],
+    })
+    await resourceLoader.reload()
+
     const sessionPromise = createAgentSession({
       cwd: config.workspaceDir,
       agentDir: this.agentDir,
       modelRuntime,
       model,
       sessionManager,
+      settingsManager,
+      resourceLoader,
     })
     const sessionOutcome = await withTimeoutResult(
       sessionPromise,
@@ -731,6 +1295,14 @@ export class AgentManager {
       updatedAt: Date.now(),
       titleAttempted: false,
       pendingTitle: null,
+      sessionAllow,
+      modeState,
+      activeToolsBeforePlan: null,
+      currentCheckpoint: null,
+      extras,
+      extrasSave: Promise.resolve(),
+      thinkingStart: null,
+      thinkingDurationsThisMessage: [],
     }
     runtime.unsubscribe = this.subscribeToSessionEvents(runtime)
     this.runtimes.set(id, runtime)
@@ -844,17 +1416,22 @@ export class AgentManager {
             turn.parts.push({ type: 'text', id: nextId('text'), text: msg.content })
           }
         } else if (Array.isArray(msg.content)) {
+          let thinkingIndex = 0
           for (const part of msg.content) {
             if (!part) continue
             if (part.type === 'text' && typeof part.text === 'string') {
               turn.parts.push({ type: 'text', id: nextId('text'), text: part.text })
             } else if (part.type === 'thinking') {
+              const durations =
+                runtime.extras.thinkingDurations[String(msg.timestamp)] ?? []
               turn.parts.push({
                 type: 'thinking',
                 id: nextId('thinking'),
                 text: typeof part.thinking === 'string' ? part.thinking : '',
                 redacted: part.redacted === true,
+                durationMs: durations[thinkingIndex],
               })
+              thinkingIndex++
             } else if (part.type === 'toolCall') {
               const toolName = String(part.name ?? 'tool')
               const toolCallId = String(part.id ?? nextId('tool'))
@@ -866,6 +1443,7 @@ export class AgentManager {
                 argsSummary: summarizeToolArgs(toolName, part.arguments ?? {}),
                 status: 'running',
                 filePath: this.toolFilePath(toolName, part.arguments ?? {}),
+                hasDiff: Boolean(runtime.extras.toolEdits[toolCallId]),
               })
             }
           }
@@ -1168,6 +1746,18 @@ export class AgentManager {
       runtime.onTrace = options?.onTrace ?? null
       runtime.pendingEdits = []
       runtime.editSnapshots.clear()
+      // 检查点：记录本轮开始时的会话位置；文件旧内容在 write/edit 执行时补充
+      runtime.currentCheckpoint = this.checkpointStore
+        ? {
+            version: 1,
+            id: `cp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            sessionId: runtime.id,
+            workspaceDir: runtime.sessionManager.getCwd(),
+            createdAt: Date.now(),
+            leafId: runtime.sessionManager.getLeafId(),
+            files: [],
+          }
+        : null
       // 只认本轮新增的 assistant 消息，避免请求失败时把上一轮回复当成本轮结果
       const messageStartIndex = runtime.session.messages.length
       this.logger.info(
@@ -1183,7 +1773,8 @@ export class AgentManager {
 
       // 发送用户消息并等待 Agent 完成；超时先 abort，宽限期后仍未结束则强制收尾
       const session = runtime.session
-      const promptPromise = session.prompt(message)
+      const promptText = runtime.modeState.current === 'plan' ? wrapPlanPrompt(message) : message
+      const promptPromise = session.prompt(promptText)
       const timeoutPromise = new Promise<never>((_resolve, reject) => {
         if (timeoutMs <= 0) return
         timeoutTimer = setTimeout(() => {
@@ -1321,6 +1912,18 @@ export class AgentManager {
         runtime.isProcessing = false
         runtime.onTextDelta = null
         runtime.onTrace = null
+
+        // 检查点落盘：只保存本轮确实修改过的文件
+        const checkpoint = runtime.currentCheckpoint
+        runtime.currentCheckpoint = null
+        if (checkpoint && checkpoint.files.length > 0 && this.checkpointStore) {
+          try {
+            await this.checkpointStore.save(checkpoint)
+            await this.checkpointStore.prune()
+          } catch (error) {
+            this.logger.warn('[Agent Manager] Failed to save checkpoint:', error)
+          }
+        }
       }
     }
   }

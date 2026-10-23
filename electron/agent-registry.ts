@@ -42,6 +42,76 @@ export interface RegisteredAgent {
   closeSession?: (sessionId: string) => Promise<void>
   renameSession?: (sessionId: string, name: string) => Promise<unknown>
   deleteSession?: (sessionId: string) => Promise<unknown>
+  /** 切换会话模式（Plan 只读 / Act 可写） */
+  setSessionMode?: (
+    sessionId: string,
+    mode: 'plan' | 'act'
+  ) => Promise<{ success: boolean; error?: string }>
+  /** 运行中插话（steer） */
+  steer?: (sessionId: string, message: string) => Promise<{ success: boolean; error?: string }>
+  /** 上下文占用 */
+  getContextUsage?: (sessionId: string) => Promise<{
+    success: boolean
+    usage?: { tokens: number | null; contextWindow: number; percent: number | null }
+    error?: string
+  }>
+  /** 手动压缩上下文 */
+  compactContext?: (sessionId: string) => Promise<{
+    success: boolean
+    tokensBefore?: number
+    estimatedTokensAfter?: number
+    error?: string
+  }>
+  /** 检查点列表与回退 */
+  listCheckpoints?: (sessionId?: string) => Promise<{
+    success: boolean
+    checkpoints?: Array<{ id: string; sessionId: string; createdAt: number; fileCount: number }>
+    error?: string
+  }>
+  restoreCheckpoint?: (
+    sessionId: string,
+    checkpointId: string,
+    options: { files?: boolean; conversation?: boolean }
+  ) => Promise<{ success: boolean; restoredFiles?: number; error?: string }>
+  /** 回退到最后一条用户消息（重试 / 编辑重发） */
+  rewindToLastUser?: (
+    sessionId: string,
+    newText?: string
+  ) => Promise<{ success: boolean; text?: string; error?: string }>
+  /** 会话模型与思考级别 */
+  getSessionSettings?: (sessionId: string) => Promise<{
+    success: boolean
+    modelId?: string
+    thinkingLevel?: string
+    error?: string
+  }>
+  setSessionModel?: (sessionId: string, modelId: string) => Promise<{ success: boolean; error?: string }>
+  setSessionThinking?: (
+    sessionId: string,
+    level: string
+  ) => Promise<{ success: boolean; error?: string }>
+  /** 历史工具调用的文件 Diff（会话 sidecar） */
+  getToolEdit?: (
+    sessionId: string,
+    toolCallId: string
+  ) => Promise<{
+    success: boolean
+    edit?: { path: string; oldContent: string; newContent: string }
+    error?: string
+  }>
+  /** 会话累计用量与成本 */
+  getSessionStats?: (sessionId: string) => Promise<{
+    success: boolean
+    stats?: {
+      tokens: number
+      input: number
+      output: number
+      cost: number
+      toolCalls: number
+      messages: number
+    }
+    error?: string
+  }>
   getCurrentSessionId?: () => string | null
 }
 

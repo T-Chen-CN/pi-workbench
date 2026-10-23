@@ -12,11 +12,21 @@ const sdk = vi.hoisted(() => ({
   sessionOpen: vi.fn(),
   sessionFindById: vi.fn(),
   sessionList: vi.fn(),
+  loaders: [] as Array<{ options: any }>,
 }))
 
 vi.mock('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: sdk.createAgentSession,
   ModelRuntime: { create: sdk.modelRuntimeCreate },
+  DefaultResourceLoader: class {
+    options: any
+    constructor(options: any) {
+      this.options = options
+      sdk.loaders.push(this)
+    }
+    async reload() {}
+  },
+  SettingsManager: { create: () => ({}) },
   SessionManager: {
     continueRecent: sdk.continueRecent,
     create: sdk.sessionCreate,
@@ -33,9 +43,40 @@ interface FakeSession {
   disposed: boolean
   subscribe: (listener: (event: SessionEvent) => void) => () => void
   prompt: (message: string) => Promise<void>
+  lastPromptOptions?: { streamingBehavior?: string }
   abort: () => Promise<void>
   dispose: () => void
   emit: (event: SessionEvent) => void
+  activeTools: string[]
+  getActiveToolNames: () => string[]
+  setActiveToolsByName: (names: string[]) => void
+  getAllTools: () => Array<{ name: string }>
+  contextUsage: { tokens: number | null; contextWindow: number; percent: number | null } | undefined
+  getContextUsage: () => {
+    tokens: number | null
+    contextWindow: number
+    percent: number | null
+  } | undefined
+  compact: () => Promise<{
+    summary: string
+    firstKeptEntryId: string
+    tokensBefore: number
+    estimatedTokensAfter?: number
+  }>
+  navigateTree: (targetId: string, options?: { summarize?: boolean }) => Promise<{
+    cancelled: boolean
+  }>
+  getSessionStats: () => {
+    tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
+    cost: number
+    toolCalls: number
+    totalMessages: number
+  }
+  getUserMessagesForForking: () => Array<{ entryId: string; text: string }>
+  model: { provider: string; id: string } | undefined
+  thinkingLevel: string
+  setModel: (model: { provider: string; id: string }) => Promise<void>
+  setThinkingLevel: (level: string) => void
 }
 
 function createFakeSession(
@@ -45,13 +86,47 @@ function createFakeSession(
   const session: FakeSession = {
     messages: [],
     disposed: false,
+    activeTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'],
+    getActiveToolNames: () => [...session.activeTools],
+    setActiveToolsByName: (names) => {
+      session.activeTools = [...names]
+    },
+    getAllTools: () => session.activeTools.map((name) => ({ name })),
+    contextUsage: { tokens: 12_000, contextWindow: 96_000, percent: 12.5 },
+    getContextUsage: () => session.contextUsage,
+    compact: async () => ({
+      summary: 'summary',
+      firstKeptEntryId: 'entry-1',
+      tokensBefore: 12_000,
+      estimatedTokensAfter: 3_000,
+    }),
+    navigateTree: vi.fn(async () => ({ cancelled: false })),
+    getSessionStats: () => ({
+      tokens: { input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, total: 1500 },
+      cost: 0.42,
+      toolCalls: 3,
+      totalMessages: 8,
+    }),
+    getUserMessagesForForking: () => [
+      { entryId: 'u1', text: 'first question' },
+      { entryId: 'u2', text: 'second question' },
+    ],
+    model: { provider: 'pi-workbench', id: 'test-model' },
+    thinkingLevel: 'medium',
+    setModel: async (model) => {
+      session.model = model
+    },
+    setThinkingLevel: (level) => {
+      session.thinkingLevel = level
+    },
     subscribe: (listener) => {
       listeners.add(listener)
       return () => {
         listeners.delete(listener)
       }
     },
-    prompt: async (message) => {
+    prompt: async (message, options?: { streamingBehavior?: string }) => {
+      session.lastPromptOptions = options
       await onPrompt?.(session, message)
     },
     abort: async () => {},
@@ -70,6 +145,7 @@ function createFakeSessionManager(id = 'session-1') {
   let persisted = false
   return {
     getSessionId: () => id,
+    getCwd: () => workspaceDir,
     getSessionFile: () => (persisted ? `/tmp/${id}.jsonl` : null),
     getHeader: () => ({
       type: 'session',
@@ -78,6 +154,7 @@ function createFakeSessionManager(id = 'session-1') {
       cwd: workspaceDir,
     }),
     getSessionName: () => name,
+  getLeafId: () => 'leaf-1',
     appendSessionInfo: (value: string) => {
       name = value
       persisted = true
@@ -127,6 +204,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 
 beforeEach(async () => {
   vi.clearAllMocks()
+  sdk.loaders.length = 0
   tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-agent-test-'))
   workspaceDir = path.join(tmpRoot, 'workspace')
   agentDir = path.join(tmpRoot, 'agent')
@@ -919,5 +997,634 @@ describe('AgentManager dispose', () => {
 
     expect(process.env.OPENAI_API_KEY).toBe('previous-key')
     expect(process.env.PI_WORKBENCH_API_KEY).toBeUndefined()
+  })
+})
+
+describe('tool approvals', () => {
+  function toolCallHandler(): (event: any) => Promise<any> {
+    const loader = sdk.loaders[sdk.loaders.length - 1]
+    const factories = loader?.options?.extensionFactories ?? []
+    expect(factories).toHaveLength(1)
+    let handler: ((event: any) => Promise<any>) | null = null
+    factories[0]({
+      on: (event: string, fn: (payload: any) => Promise<any>) => {
+        if (event === 'tool_call') handler = fn
+      },
+    })
+    if (!handler) throw new Error('tool_call handler was not registered')
+    return handler
+  }
+
+  const readCall = { toolName: 'read', input: { path: 'a.ts' }, toolCallId: 'c-read' }
+  const writeCall = {
+    toolName: 'write',
+    input: { path: 'a.ts', content: 'hello' },
+    toolCallId: 'c-write',
+  }
+
+  it('lets read-only tools through with the default policy', async () => {
+    primeSdk(createFakeSession())
+    const requestApproval = vi.fn()
+    await manager.initialize(makeConfig({ requestApproval }))
+
+    await expect(toolCallHandler()(readCall)).resolves.toBeUndefined()
+    expect(requestApproval).not.toHaveBeenCalled()
+  })
+
+  it('asks before writing and passes the denial reason back to the model', async () => {
+    primeSdk(createFakeSession())
+    const requestApproval = vi.fn().mockResolvedValue({ action: 'deny', reason: 'not now' })
+    await manager.initialize(makeConfig({ requestApproval }))
+
+    const result = await toolCallHandler()(writeCall)
+
+    expect(requestApproval).toHaveBeenCalledTimes(1)
+    expect(requestApproval.mock.calls[0][0]).toMatchObject({
+      toolName: 'write',
+      category: 'write',
+      sessionId: 'session-1',
+      summary: expect.stringContaining('a.ts'),
+    })
+    expect(result).toMatchObject({ block: true })
+    expect(result.reason).toContain('not now')
+  })
+
+  it('remembers allow-for-session decisions', async () => {
+    primeSdk(createFakeSession())
+    const requestApproval = vi
+      .fn()
+      .mockResolvedValueOnce({ action: 'allow-session' })
+      .mockResolvedValue({ action: 'deny' })
+    await manager.initialize(makeConfig({ requestApproval }))
+
+    const handler = toolCallHandler()
+    await expect(handler(writeCall)).resolves.toBeUndefined()
+    await expect(handler({ ...writeCall, toolCallId: 'c-write-2' })).resolves.toBeUndefined()
+    expect(requestApproval).toHaveBeenCalledTimes(1)
+  })
+
+  it('persists always-allow decisions through the host callback', async () => {
+    primeSdk(createFakeSession())
+    const requestApproval = vi.fn().mockResolvedValue({ action: 'allow-always' })
+    const onPermissionAlwaysAllow = vi.fn()
+    await manager.initialize(makeConfig({ requestApproval, onPermissionAlwaysAllow }))
+
+    await expect(toolCallHandler()(writeCall)).resolves.toBeUndefined()
+    expect(onPermissionAlwaysAllow).toHaveBeenCalledWith('write')
+  })
+
+  it('fails closed when no approval channel is available', async () => {
+    primeSdk(createFakeSession())
+    await manager.initialize(makeConfig())
+
+    const result = await toolCallHandler()(writeCall)
+    expect(result).toMatchObject({ block: true })
+    expect(result.reason).toContain('No approval channel')
+  })
+
+  it('honours a deny policy without asking', async () => {
+    primeSdk(createFakeSession())
+    const requestApproval = vi.fn()
+    await manager.initialize(
+      makeConfig({
+        requestApproval,
+        getPermissionPolicy: () => ({ read: 'allow', write: 'deny', command: 'deny', other: 'deny' }),
+      })
+    )
+
+    const result = await toolCallHandler()(writeCall)
+    expect(result).toMatchObject({ block: true })
+    expect(result.reason).toContain('blocked by the current permission policy')
+    expect(requestApproval).not.toHaveBeenCalled()
+  })
+})
+
+describe('plan mode', () => {
+  function toolCallHandler(): (event: any) => Promise<any> {
+    const loader = sdk.loaders[sdk.loaders.length - 1]
+    const factories = loader?.options?.extensionFactories ?? []
+    let handler: ((event: any) => Promise<any>) | null = null
+    factories[0]({
+      on: (event: string, fn: (payload: any) => Promise<any>) => {
+        if (event === 'tool_call') handler = fn
+      },
+    })
+    if (!handler) throw new Error('tool_call handler was not registered')
+    return handler
+  }
+
+  it('restricts the tool set in plan mode and restores it in act mode', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await manager.setSessionMode('session-1', 'plan')
+    expect(session.activeTools).toEqual(['read', 'grep', 'find', 'ls'])
+
+    await manager.setSessionMode('session-1', 'act')
+    expect(session.activeTools).toEqual(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'])
+  })
+
+  it('blocks non-read tools while in plan mode', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+    await manager.setSessionMode('session-1', 'plan')
+
+    const handler = toolCallHandler()
+    const blocked = await handler({
+      toolName: 'write',
+      input: { path: 'a.ts', content: 'x' },
+      toolCallId: 'c1',
+    })
+    expect(blocked).toMatchObject({ block: true })
+    expect(blocked.reason).toContain('Plan mode is read-only')
+
+    await expect(
+      handler({ toolName: 'read', input: { path: 'a.ts' }, toolCallId: 'c2' })
+    ).resolves.toBeUndefined()
+  })
+
+  it('wraps prompts with the plan instruction and strips it from history', async () => {
+    const prompts: string[] = []
+    const session = createFakeSession(async (_session, message) => {
+      prompts.push(message)
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+    await manager.setSessionMode('session-1', 'plan')
+
+    await manager.chat('add a feature')
+
+    expect(prompts[0]).toContain('<pi-workbench-plan-mode>')
+    expect(prompts[0]).toContain('Plan mode')
+    expect(prompts[0]).toContain('add a feature')
+    const history = manager.getMessageHistory('session-1') as Array<{ content: string }>
+    expect(history.some((message) => message.content.includes('pi-workbench-plan-mode'))).toBe(false)
+  })
+})
+
+describe('running-turn steering', () => {
+  it('injects a message into the current turn with streamingBehavior steer', async () => {
+    let release = () => {}
+    let calls = 0
+    const session = createFakeSession(() => {
+      calls++
+      if (calls > 1) return Promise.resolve()
+      return new Promise<void>((resolve) => {
+        release = resolve
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const pendingChat = manager.chat('start')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const result = await manager.steer('session-1', 'also fix the tests')
+    expect(result).toEqual({ success: true })
+    expect(session.lastPromptOptions).toEqual({ streamingBehavior: 'steer' })
+
+    release()
+    await pendingChat
+  })
+
+  it('rejects steering when the session is idle', async () => {
+    primeSdk(createFakeSession())
+    await manager.initialize(makeConfig())
+    await expect(manager.steer('session-1', 'hi')).resolves.toEqual({
+      success: false,
+      error: 'Session is not running.',
+    })
+  })
+
+  it('rejects empty steering messages', async () => {
+    primeSdk(createFakeSession())
+    await manager.initialize(makeConfig())
+    await expect(manager.steer('session-1', '   ')).resolves.toEqual({
+      success: false,
+      error: 'Message is empty.',
+    })
+  })
+})
+
+describe('context usage and compaction', () => {
+  it('returns the current context usage', async () => {
+    const session = createFakeSession()
+    session.contextUsage = { tokens: 40_000, contextWindow: 96_000, percent: 41.7 }
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await expect(manager.getContextUsage('session-1')).resolves.toEqual({
+      success: true,
+      usage: { tokens: 40_000, contextWindow: 96_000, percent: 41.7 },
+    })
+  })
+
+  it('compacts an idle session and reports token counts', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await expect(manager.compactContext('session-1')).resolves.toEqual({
+      success: true,
+      tokensBefore: 12_000,
+      estimatedTokensAfter: 3_000,
+    })
+  })
+
+  it('refuses to compact while a turn is running', async () => {
+    let release = () => {}
+    const session = createFakeSession(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const pendingChat = manager.chat('start')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const result = await manager.compactContext('session-1')
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Session is running')
+
+    release()
+    await pendingChat
+  })
+})
+
+describe('checkpoints', () => {
+  it('records a new file created during the turn and removes it on restore', async () => {
+    const checkpointDir = path.join(tmpRoot, 'checkpoints')
+    const filePath = path.join(workspaceDir, 'a.txt')
+    const session = createFakeSession(async (fake) => {
+      fake.emit({
+        type: 'tool_execution_start',
+        toolCallId: 'c1',
+        toolName: 'write',
+        args: { path: filePath, content: 'new' },
+      })
+      await fs.writeFile(filePath, 'new', 'utf-8')
+      fake.emit({
+        type: 'tool_execution_end',
+        toolCallId: 'c1',
+        toolName: 'write',
+        isError: false,
+        durationMs: 1,
+        result: {},
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig({ checkpointDir }))
+    await manager.chat('create a file')
+
+    const listed = await manager.listCheckpoints('session-1')
+    expect(listed.success).toBe(true)
+    expect(listed.checkpoints).toHaveLength(1)
+    expect(listed.checkpoints?.[0].fileCount).toBe(1)
+
+    const id = listed.checkpoints![0].id
+    await expect(manager.restoreCheckpoint('session-1', id, { files: true })).resolves.toMatchObject(
+      { success: true, restoredFiles: 1 }
+    )
+    await expect(fs.stat(filePath)).rejects.toThrow()
+  })
+
+  it('restores the previous content of an edited file', async () => {
+    const checkpointDir = path.join(tmpRoot, 'checkpoints')
+    const filePath = path.join(workspaceDir, 'b.txt')
+    await fs.writeFile(filePath, 'old', 'utf-8')
+    const session = createFakeSession(async (fake) => {
+      fake.emit({
+        type: 'tool_execution_start',
+        toolCallId: 'c2',
+        toolName: 'edit',
+        args: { path: filePath },
+      })
+      await fs.writeFile(filePath, 'new', 'utf-8')
+      fake.emit({
+        type: 'tool_execution_end',
+        toolCallId: 'c2',
+        toolName: 'edit',
+        isError: false,
+        durationMs: 1,
+        result: {},
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig({ checkpointDir }))
+    await manager.chat('edit a file')
+
+    const listed = await manager.listCheckpoints('session-1')
+    const id = listed.checkpoints![0].id
+    await expect(manager.restoreCheckpoint('session-1', id, { files: true })).resolves.toMatchObject(
+      { success: true, restoredFiles: 1 }
+    )
+    await expect(fs.readFile(filePath, 'utf-8')).resolves.toBe('old')
+  })
+
+  it('restores the conversation to the checkpoint leaf', async () => {
+    const checkpointDir = path.join(tmpRoot, 'checkpoints')
+    const filePath = path.join(workspaceDir, 'c.txt')
+    const session = createFakeSession(async (fake) => {
+      fake.emit({
+        type: 'tool_execution_start',
+        toolCallId: 'c3',
+        toolName: 'write',
+        args: { path: filePath, content: 'x' },
+      })
+      await fs.writeFile(filePath, 'x', 'utf-8')
+      fake.emit({
+        type: 'tool_execution_end',
+        toolCallId: 'c3',
+        toolName: 'write',
+        isError: false,
+        durationMs: 1,
+        result: {},
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig({ checkpointDir }))
+    await manager.chat('write')
+
+    const id = (await manager.listCheckpoints('session-1')).checkpoints![0].id
+    const result = await manager.restoreCheckpoint('session-1', id, { conversation: true })
+    expect(result.success).toBe(true)
+    expect(session.navigateTree).toHaveBeenCalledWith('leaf-1', { summarize: false })
+  })
+
+  it('refuses to restore while the session is running', async () => {
+    const checkpointDir = path.join(tmpRoot, 'checkpoints')
+    const filePath = path.join(workspaceDir, 'd.txt')
+    const session = createFakeSession(async (fake) => {
+      fake.emit({
+        type: 'tool_execution_start',
+        toolCallId: 'c4',
+        toolName: 'write',
+        args: { path: filePath, content: 'x' },
+      })
+      await fs.writeFile(filePath, 'x', 'utf-8')
+      fake.emit({
+        type: 'tool_execution_end',
+        toolCallId: 'c4',
+        toolName: 'write',
+        isError: false,
+        durationMs: 1,
+        result: {},
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig({ checkpointDir }))
+    await manager.chat('write')
+    const id = (await manager.listCheckpoints('session-1')).checkpoints![0].id
+
+    let release = () => {}
+    session.prompt = async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+    }
+    const pendingChat = manager.chat('running')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const result = await manager.restoreCheckpoint('session-1', id, { files: true })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Session is running')
+    release()
+    await pendingChat
+  })
+})
+
+describe('retry and edit-resend', () => {
+  it('rewinds to the last user message and returns its text', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await expect(manager.rewindToLastUser('session-1')).resolves.toEqual({
+      success: true,
+      text: 'second question',
+    })
+    expect(session.navigateTree).toHaveBeenCalledWith('u2', { summarize: false })
+  })
+
+  it('uses the edited text when provided', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await expect(manager.rewindToLastUser('session-1', 'edited question')).resolves.toEqual({
+      success: true,
+      text: 'edited question',
+    })
+  })
+
+  it('refuses to rewind while the session is running', async () => {
+    let release = () => {}
+    const session = createFakeSession(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const pendingChat = manager.chat('start')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const result = await manager.rewindToLastUser('session-1')
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Session is running')
+
+    release()
+    await pendingChat
+  })
+})
+
+describe('session model and thinking controls', () => {
+  it('reports and updates the model and thinking level', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    sdk.modelRuntimeCreate.mockResolvedValue({
+      getModel: vi.fn((_provider: string, id: string) => ({ provider: 'pi-workbench', id })),
+    })
+    await manager.initialize(makeConfig())
+
+    await expect(manager.getSessionSettings('session-1')).resolves.toEqual({
+      success: true,
+      modelId: 'test-model',
+      thinkingLevel: 'medium',
+    })
+
+    await expect(manager.setSessionModel('session-1', 'other-model')).resolves.toEqual({
+      success: true,
+    })
+    expect(session.model?.id).toBe('other-model')
+
+    await expect(manager.setSessionThinking('session-1', 'high')).resolves.toEqual({
+      success: true,
+    })
+    expect(session.thinkingLevel).toBe('high')
+  })
+
+  it('rejects unknown thinking levels', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const result = await manager.setSessionThinking('session-1', 'turbo')
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Unknown thinking level')
+  })
+})
+
+describe('provider retry events', () => {
+  it('forwards auto-retry starts and ends to the renderer', async () => {
+    const traces: Array<Record<string, unknown>> = []
+    const session = createFakeSession(async (fake) => {
+      fake.emit({
+        type: 'auto_retry_start',
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs: 2000,
+        errorMessage: '429 Too Many Requests',
+      })
+      fake.emit({ type: 'auto_retry_end', success: true })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await manager.chat('hi', { onTrace: (event) => traces.push(event) })
+
+    expect(traces).toContainEqual({
+      type: 'retry_start',
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2000,
+      message: '429 Too Many Requests',
+    })
+    expect(traces).toContainEqual({ type: 'retry_end', success: true })
+  })
+})
+
+describe('tool streaming', () => {
+  it('forwards partial tool output as tool_update events', async () => {
+    const traces: Array<Record<string, unknown>> = []
+    const session = createFakeSession(async (fake) => {
+      fake.emit({
+        type: 'tool_execution_start',
+        toolCallId: 'c1',
+        toolName: 'bash',
+        args: { command: 'npm test' },
+      })
+      fake.emit({
+        type: 'tool_execution_update',
+        toolCallId: 'c1',
+        toolName: 'bash',
+        partialResult: { content: [{ type: 'text', text: 'running tests...' }] },
+      })
+      fake.emit({
+        type: 'tool_execution_end',
+        toolCallId: 'c1',
+        toolName: 'bash',
+        isError: false,
+        durationMs: 10,
+        result: { content: [{ type: 'text', text: 'all passed' }] },
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await manager.chat('run tests', { onTrace: (event) => traces.push(event) })
+
+    expect(traces).toContainEqual({
+      type: 'tool_update',
+      toolCallId: 'c1',
+      resultPreview: 'running tests...',
+    })
+  })
+})
+
+describe('session stats', () => {
+  it('reports cumulative tokens, cost and tool calls', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    await expect(manager.getSessionStats('session-1')).resolves.toEqual({
+      success: true,
+      stats: {
+        tokens: 1500,
+        input: 1000,
+        output: 500,
+        cost: 0.42,
+        toolCalls: 3,
+        messages: 8,
+      },
+    })
+  })
+})
+
+describe('session extras', () => {
+  it('records thinking duration and attaches it to history', async () => {
+    const session = createFakeSession()
+    session.messages.push({
+      role: 'assistant',
+      timestamp: 111,
+      content: [
+        { type: 'thinking', thinking: 'pondering' },
+        { type: 'text', text: 'done' },
+      ],
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    session.emit({ type: 'message_start', message: { role: 'assistant' } })
+    session.emit({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'thinking_start', contentIndex: 0 },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    session.emit({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'thinking_end', contentIndex: 0, content: 'pondering' },
+    })
+    session.emit({ type: 'message_end', message: { role: 'assistant', timestamp: 111 } })
+
+    const history = manager.getSessionMessages('session-1')
+    const thinking = history[0]?.parts?.find((part) => part.type === 'thinking')
+    expect(thinking).toMatchObject({ type: 'thinking' })
+    expect((thinking as { durationMs?: number }).durationMs ?? 0).toBeGreaterThan(0)
+  })
+
+  it('keeps historical tool diffs available for later review', async () => {
+    const checkpointDir = path.join(tmpRoot, 'checkpoints')
+    const filePath = path.join(workspaceDir, 'hist.txt')
+    const session = createFakeSession(async (fake) => {
+      fake.emit({
+        type: 'tool_execution_start',
+        toolCallId: 'hist-1',
+        toolName: 'write',
+        args: { path: filePath, content: 'new' },
+      })
+      await fs.writeFile(filePath, 'new', 'utf-8')
+      fake.emit({
+        type: 'tool_execution_end',
+        toolCallId: 'hist-1',
+        toolName: 'write',
+        isError: false,
+        durationMs: 2,
+        result: {},
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig({ checkpointDir }))
+    await manager.chat('write')
+
+    const result = await manager.getToolEdit('session-1', 'hist-1')
+    expect(result.success).toBe(true)
+    expect(result.edit).toMatchObject({ path: filePath, newContent: 'new' })
   })
 })

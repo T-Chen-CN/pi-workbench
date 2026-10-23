@@ -4,6 +4,7 @@ import { useChatStore } from '../src/store/chatStore'
 import { useToastStore, toast } from '../src/store/toastStore'
 import { useWorkspaceStore } from '../src/store/workspaceStore'
 import { useDiffStore } from '../src/store/diffStore'
+import { useSessionStore } from '../src/store/sessionStore'
 
 beforeEach(() => {
   useEditorStore.getState().reset()
@@ -377,5 +378,106 @@ describe('diffStore review queue', () => {
   it('does not open an empty review queue', () => {
     useDiffStore.getState().openEdits([])
     expect(useDiffStore.getState().isOpen).toBe(false)
+  })
+})
+
+describe('chatStore session mode', () => {
+  it('defaults to act and updates per conversation', () => {
+    useChatStore.getState().ensureConversation('mode-key')
+    expect(useChatStore.getState().conversations['mode-key'].mode).toBe('act')
+
+    useChatStore.getState().setMode('mode-key', 'plan')
+    expect(useChatStore.getState().conversations['mode-key'].mode).toBe('plan')
+
+    // 不存在的会话不会被创建
+    useChatStore.getState().setMode('missing-key', 'plan')
+    expect(useChatStore.getState().conversations['missing-key']).toBeUndefined()
+  })
+})
+
+describe('sessionStore pending activation', () => {
+  it('stores and clears the session requested by a notification click', () => {
+    useSessionStore.getState().requestActivation('F:/work', 'session-2')
+    expect(useSessionStore.getState().pendingActivation).toEqual({
+      workspaceDir: 'F:/work',
+      sessionId: 'session-2',
+    })
+    useSessionStore.getState().clearPendingActivation()
+    expect(useSessionStore.getState().pendingActivation).toBeNull()
+  })
+})
+
+describe('chatStore pending messages', () => {
+  it('queues, updates and removes pending messages', () => {
+    useChatStore.getState().ensureConversation('pending-key')
+    const first = useChatStore.getState().addPending('pending-key', 'first', 'queue')
+    const second = useChatStore.getState().addPending('pending-key', 'second', 'steer')
+
+    expect(useChatStore.getState().conversations['pending-key'].pending).toHaveLength(2)
+
+    useChatStore.getState().setPendingBehavior('pending-key', first.id, 'steer')
+    expect(
+      useChatStore.getState().conversations['pending-key'].pending.find((item) => item.id === first.id)
+        ?.behavior
+    ).toBe('steer')
+
+    useChatStore.getState().removePending('pending-key', second.id)
+    expect(useChatStore.getState().conversations['pending-key'].pending).toHaveLength(1)
+  })
+})
+
+describe('chatStore context usage', () => {
+  it('stores and clears context usage per conversation', () => {
+    useChatStore.getState().ensureConversation('context-key')
+    useChatStore.getState().setContextUsage('context-key', {
+      tokens: 40000,
+      contextWindow: 96000,
+      percent: 41.7,
+    })
+    expect(useChatStore.getState().conversations['context-key'].contextUsage?.percent).toBe(41.7)
+    useChatStore.getState().setContextUsage('context-key', null)
+    expect(useChatStore.getState().conversations['context-key'].contextUsage).toBeNull()
+  })
+})
+
+describe('chatStore message editing helpers', () => {
+  it('removes a message by id', () => {
+    useChatStore.getState().ensureConversation('edit-key')
+    useChatStore.getState().addMessage('edit-key', { role: 'user', content: 'hi' })
+    const id = useChatStore.getState().conversations['edit-key'].messages[0].id
+    useChatStore.getState().removeMessage('edit-key', id)
+    expect(useChatStore.getState().conversations['edit-key'].messages).toHaveLength(0)
+  })
+
+  it('truncates the last user turn', () => {
+    useChatStore.getState().ensureConversation('turn-key')
+    useChatStore.getState().addMessage('turn-key', { role: 'user', content: 'first' })
+    useChatStore.getState().addMessage('turn-key', { role: 'assistant', content: 'answer' })
+    useChatStore.getState().addMessage('turn-key', { role: 'user', content: 'second' })
+    useChatStore.getState().addMessage('turn-key', { role: 'assistant', content: 'answer 2' })
+
+    useChatStore.getState().truncateLastTurn('turn-key')
+    expect(
+      useChatStore.getState().conversations['turn-key'].messages.map((message) => message.content)
+    ).toEqual(['first', 'answer'])
+  })
+})
+
+describe('chatStore turn edits', () => {
+  it('attaches and removes edited files on a message', () => {
+    useChatStore.getState().ensureConversation('edits-key')
+    useChatStore.getState().addMessage('edits-key', { role: 'assistant', content: 'done' })
+    const id = useChatStore.getState().conversations['edits-key'].messages[0].id
+
+    useChatStore.getState().setMessageEdits('edits-key', id, [
+      { path: 'F:/work/a.ts', oldContent: 'a', newContent: 'b' },
+      { path: 'F:/work/b.ts', oldContent: 'c', newContent: 'd' },
+    ])
+    expect(useChatStore.getState().conversations['edits-key'].messages[0].edits).toHaveLength(2)
+
+    useChatStore.getState().removeMessageEdit('edits-key', id, 'F:/work/a.ts')
+    expect(
+      useChatStore.getState().conversations['edits-key'].messages[0].edits?.map((edit) => edit.path)
+    ).toEqual(['F:/work/b.ts'])
   })
 })

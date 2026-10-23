@@ -6,15 +6,19 @@ import {
   Keyboard,
   RefreshCw,
   Save,
+  ShieldCheck,
   SlidersHorizontal,
 } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useThemeStore, type ThemeMode } from '../store/themeStore'
 import {
+  TOOL_CATEGORIES,
+  isPermissionAction,
   useSettingsStore,
   clampAutoSaveDelay,
   MIN_AUTO_SAVE_DELAY,
   MAX_AUTO_SAVE_DELAY,
+  type NotificationPrefs,
 } from '../store/settingsStore'
 import { useUpdaterStore } from '../store/updaterStore'
 import { api } from '../api'
@@ -24,8 +28,24 @@ import type { ApiConfig, AppInfo } from '../types/electron'
 import { isMacPlatform } from '../utils/shortcuts'
 import { Button, Field, Input, Select } from './ui'
 import { KeyCap, Meter } from './patterns'
+import type { PermissionAction, ToolCategory } from '../types/electron'
+import type { TranslationKey } from '../i18n/translations'
+import {
+  DEFAULT_KEYBINDINGS,
+  eventToShortcut,
+  findConflict,
+  formatShortcut,
+  type ShortcutId,
+} from '../utils/keybindings'
 
-export type SettingsSection = 'general' | 'api' | 'shortcuts' | 'about'
+const PERMISSION_LABEL_KEYS: Record<ToolCategory, TranslationKey> = {
+  read: 'permissionRead',
+  write: 'permissionWrite',
+  command: 'permissionCommand',
+  other: 'permissionOther',
+}
+
+export type SettingsSection = 'general' | 'api' | 'permissions' | 'shortcuts' | 'about'
 
 const ShortcutKeys: React.FC<{ keys: string[] }> = ({ keys }) => (
   <span className="flex flex-shrink-0 items-center gap-1 type-key text-ink-muted">
@@ -46,7 +66,22 @@ interface SettingsProps {
 export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }) => {
   const { language, setLanguage, t } = useI18nStore()
   const { mode, setMode } = useThemeStore()
-  const { autoSave, autoSaveDelay, setAutoSave, setAutoSaveDelay } = useSettingsStore()
+  const {
+    autoSave,
+    autoSaveDelay,
+    permissions,
+    notifications,
+    budgetUsd,
+    keybindings,
+    setAutoSave,
+    setAutoSaveDelay,
+    setPermission,
+    setNotificationPrefs,
+    setBudgetUsd,
+    setKeybinding,
+    resetKeybindings,
+  } = useSettingsStore()
+  const [capturingShortcut, setCapturingShortcut] = useState<ShortcutId | null>(null)
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const isMac = isMacPlatform()
   const mod = isMac ? '⌘' : 'Ctrl'
@@ -164,6 +199,60 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     void persistSettings({ autoSaveDelay: next })
   }
 
+  const handlePermissionChange = (category: ToolCategory, action: string) => {
+    if (!isPermissionAction(action)) return
+    const next = { ...permissions, [category]: action as PermissionAction }
+    setPermission(category, action)
+    void persistSettings({ permissions: next })
+  }
+
+  const handleNotificationChange = (patch: Partial<NotificationPrefs>) => {
+    const next = { ...notifications, ...patch }
+    setNotificationPrefs(patch)
+    void persistSettings({ notifications: next })
+  }
+
+  const handleBudgetChange = (value: number) => {
+    const next = Number.isFinite(value) ? Math.max(0, value) : 0
+    setBudgetUsd(next)
+    void persistSettings({ budgetUsd: next })
+  }
+
+  const shortcutName = (id: ShortcutId) =>
+    id === 'commandPalette' ? t('shortcutCommandPalette') : t('shortcutSettings')
+
+  // 捕获新的快捷键；Esc 取消，冲突时提示且不写入
+  useEffect(() => {
+    if (!capturingShortcut) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.key === 'Escape') {
+        setCapturingShortcut(null)
+        return
+      }
+      const combo = eventToShortcut(event)
+      if (!combo) return
+      const conflict = findConflict(keybindings, combo, capturingShortcut)
+      if (conflict) {
+        toast.error(t('shortcutConflict', { name: shortcutName(conflict) }))
+        return
+      }
+      const next = { ...keybindings, [capturingShortcut]: combo }
+      setKeybinding(capturingShortcut, combo)
+      void persistSettings({ keybindings: next })
+      setCapturingShortcut(null)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [capturingShortcut, keybindings])
+
+  const handleResetShortcuts = () => {
+    resetKeybindings()
+    void persistSettings({ keybindings: DEFAULT_KEYBINDINGS })
+  }
+
   const loadApiConfig = useCallback(async () => {
     try {
       const result = await api.apiConfigGet()
@@ -256,6 +345,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
   const navItems: Array<{ id: SettingsSection; label: string; icon: typeof Info }> = [
     { id: 'general', label: t('general'), icon: SlidersHorizontal },
     { id: 'api', label: t('apiConfiguration'), icon: KeyRound },
+    { id: 'permissions', label: t('permissions'), icon: ShieldCheck },
     { id: 'shortcuts', label: t('shortcuts'), icon: Keyboard },
     { id: 'about', label: t('about'), icon: Info },
   ]
@@ -375,6 +465,47 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                 ))}
               </Select>
             </Field>
+            <Field label={t('budgetUsd')} hint={t('budgetUsdHint')}>
+              <Input
+                type="number"
+                min={0}
+                step={0.5}
+                value={String(budgetUsd)}
+                onChange={(event) => handleBudgetChange(Number(event.target.value))}
+              />
+            </Field>
+
+            <Field label={t('notifications')} hint={t('notificationsHint')}>
+              <div className="flex flex-col gap-2 type-value text-ink">
+                {([
+                  { key: 'enabled' as const, label: t('notificationsEnabled') },
+                  { key: 'approval' as const, label: t('notifyOnApproval') },
+                  { key: 'complete' as const, label: t('notifyOnComplete') },
+                  { key: 'error' as const, label: t('notifyOnError') },
+                ]).map(({ key, label }) => {
+                  const disabled = key !== 'enabled' && !notifications.enabled
+                  return (
+                    <label
+                      key={key}
+                      className={`flex items-center gap-2 ${disabled ? 'opacity-40' : ''}`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-3 w-3 accent-[rgb(var(--accent))]"
+                        checked={notifications[key]}
+                        disabled={disabled}
+                        onChange={(event) =>
+                          handleNotificationChange({
+                            [key]: event.target.checked,
+                          } as Partial<NotificationPrefs>)
+                        }
+                      />
+                      {label}
+                    </label>
+                  )
+                })}
+              </div>
+            </Field>
           </div>
         )}
 
@@ -459,11 +590,73 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
           </div>
         )}
 
+        {section === 'permissions' && (
+          <div className="flex max-w-xl flex-col gap-5">
+            <p className="m-0 type-reading text-ink-muted">{t('permissionsHint')}</p>
+            {TOOL_CATEGORIES.map((category) => (
+              <Field
+                key={category}
+                label={t(PERMISSION_LABEL_KEYS[category])}
+                htmlFor={`permission-${category}`}
+              >
+                <Select
+                  id={`permission-${category}`}
+                  value={permissions[category]}
+                  onChange={(event) => handlePermissionChange(category, event.target.value)}
+                >
+                  <option value="allow">{t('permissionAllow')}</option>
+                  <option value="ask">{t('permissionAsk')}</option>
+                  <option value="deny">{t('permissionDeny')}</option>
+                </Select>
+              </Field>
+            ))}
+          </div>
+        )}
+
         {section === 'shortcuts' && (
           <div className="flex max-w-xl flex-col gap-5">
             <p className="m-0 type-reading text-ink-muted">
               {t('shortcutHint')}
             </p>
+
+            <section>
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <h4 className="m-0 type-label text-ink-muted">{t('shortcutCustomGroup')}</h4>
+                <button
+                  type="button"
+                  onClick={handleResetShortcuts}
+                  className="type-caption text-ink-muted transition-colors hover:text-ink"
+                >
+                  {t('shortcutResetAll')}
+                </button>
+              </div>
+              <div className="border-t border-rule-divide">
+                {(['commandPalette', 'settings'] as ShortcutId[]).map((id) => (
+                  <div
+                    key={id}
+                    className="flex items-center justify-between gap-4 border-b border-rule-divide py-2"
+                  >
+                    <span className="type-value text-ink">{shortcutName(id)}</span>
+                    <div className="flex items-center gap-2">
+                      {capturingShortcut === id ? (
+                        <span className="type-caption text-warning">{t('shortcutCapture')}</span>
+                      ) : (
+                        <KeyCap>{formatShortcut(keybindings[id])}</KeyCap>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setCapturingShortcut(capturingShortcut === id ? null : id)
+                        }
+                      >
+                        {capturingShortcut === id ? t('cancel') : t('shortcutCustomize')}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
 
             {shortcutGroups.map((group) => (
               <section key={group.title}>

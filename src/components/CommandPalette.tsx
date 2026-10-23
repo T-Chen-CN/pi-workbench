@@ -7,6 +7,8 @@ import { useSessionStore } from '../store/sessionStore'
 import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
 import { useUpdaterStore } from '../store/updaterStore'
+import { useSettingsStore } from '../store/settingsStore'
+import { matchShortcut } from '../utils/keybindings'
 import { IconButton, Spinner } from './ui'
 import type { PluginCommandInfo, PluginInfo } from '../types/electron'
 
@@ -74,9 +76,10 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
   }, [workspacePath, t])
 
   // 全局快捷键与外部打开事件
+  const paletteShortcut = useSettingsStore((state) => state.keybindings.commandPalette)
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'p') {
+      if (matchShortcut(event, paletteShortcut)) {
         event.preventDefault()
         setOpen((value) => !value)
       } else if (event.key === 'Escape') {
@@ -91,7 +94,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('open-command-palette', onOpen)
     }
-  }, [])
+  }, [paletteShortcut])
 
   useEffect(() => {
     if (!open) return

@@ -1,5 +1,11 @@
 import { create } from 'zustand'
-import type { AgentStreamEvent, AgentTracePart } from '../types/electron'
+import type {
+  AgentStreamEvent,
+  AgentTracePart,
+  ContextUsageInfo,
+  FileEdit,
+  SessionStatsInfo,
+} from '../types/electron'
 
 export interface ChatUsage {
   input: number
@@ -24,6 +30,8 @@ export interface ChatMessage {
   isStreaming?: boolean
   /** 本轮模型调用的 token 用量 */
   usage?: ChatUsage
+  /** 本轮 Agent 修改过的文件（用于消息内的变更卡） */
+  edits?: FileEdit[]
 }
 
 export interface ChatAttachment {
@@ -40,12 +48,36 @@ export interface ChatAttachment {
 
 export type NewChatAttachment = Omit<ChatAttachment, 'id'> & { id?: string }
 
+export interface PendingMessage {
+  id: string
+  text: string
+  /** queue：本轮结束后发送；steer：注入当前轮 */
+  behavior: 'queue' | 'steer'
+}
+
 export interface ConversationState {
   messages: ChatMessage[]
   isLoading: boolean
   error: string | null
   attachments: ChatAttachment[]
   draftInput: string
+  /** Plan 只读 / Act 可写；默认 Act */
+  mode: 'plan' | 'act'
+  /** 运行中排队的待发送消息 */
+  pending: PendingMessage[]
+  /** 最近一次读取的上下文占用 */
+  contextUsage: ContextUsageInfo | null
+  /** 会话级模型与思考级别 */
+  sessionSettings: { modelId?: string; thinkingLevel?: string } | null
+  /** 供应商自动重试状态 */
+  retryStatus: {
+    attempt: number
+    maxAttempts: number
+    delayMs: number
+    message?: string
+  } | null
+  /** 会话累计用量与成本 */
+  sessionStats: SessionStatsInfo | null
 }
 
 const EMPTY_CONVERSATION: ConversationState = {
@@ -54,6 +86,12 @@ const EMPTY_CONVERSATION: ConversationState = {
   error: null,
   attachments: [],
   draftInput: '',
+  mode: 'act',
+  pending: [],
+  contextUsage: null,
+  sessionSettings: null,
+  retryStatus: null,
+  sessionStats: null,
 }
 
 /** 会话在 store 中的键：工作区 + 会话，避免跨工作区串数据 */
@@ -90,11 +128,34 @@ interface ChatState {
   appendToMessage: (key: string, id: string, delta: string) => void
   finishStreamingMessage: (key: string, id: string, content?: string) => void
   setMessageUsage: (key: string, id: string, usage: ChatUsage) => void
+  setMessageEdits: (key: string, id: string, edits: FileEdit[]) => void
+  removeMessageEdit: (key: string, id: string, path: string) => void
   addAttachment: (key: string, attachment: NewChatAttachment) => void
   removeAttachment: (key: string, id: string) => void
   clearAttachments: (key: string) => void
   setDraftInput: (key: string, value: string) => void
   clearDraftInput: (key: string) => void
+  setMode: (key: string, mode: 'plan' | 'act') => void
+  addPending: (key: string, text: string, behavior: PendingMessage['behavior']) => PendingMessage
+  removePending: (key: string, id: string) => void
+  setPendingBehavior: (key: string, id: string, behavior: PendingMessage['behavior']) => void
+  setContextUsage: (key: string, usage: ContextUsageInfo | null) => void
+  setSessionSettings: (
+    key: string,
+    settings: { modelId?: string; thinkingLevel?: string } | null
+  ) => void
+  setRetryStatus: (
+    key: string,
+    status: {
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      message?: string
+    } | null
+  ) => void
+  setSessionStats: (key: string, stats: SessionStatsInfo | null) => void
+  removeMessage: (key: string, id: string) => void
+  truncateLastTurn: (key: string) => void
   setMessages: (key: string, messages: Array<Omit<ChatMessage, 'id'>>) => void
   setLoading: (key: string, loading: boolean) => void
   setError: (key: string, error: string | null) => void
@@ -376,6 +437,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       updateMessage(state, key, id, (message) => ({ ...message, usage }))
     ),
 
+  setMessageEdits: (key, id, edits) =>
+    set((state) => updateMessage(state, key, id, (message) => ({ ...message, edits }))),
+
+  removeMessageEdit: (key, id, path) =>
+    set((state) =>
+      updateMessage(state, key, id, (message) => ({
+        ...message,
+        edits: (message.edits ?? []).filter((edit) => edit.path !== path),
+      }))
+    ),
+
   addAttachment: (key, attachment) =>
     set((state) =>
       updateExisting(state, key, (current) => {
@@ -413,6 +485,80 @@ export const useChatStore = create<ChatState>((set, get) => ({
   clearDraftInput: (key) =>
     set((state) =>
       updateExisting(state, key, (current) => ({ ...current, draftInput: '' }))
+    ),
+
+  setMode: (key, mode) =>
+    set((state) => updateExisting(state, key, (current) => ({ ...current, mode }))),
+
+  addPending: (key, text, behavior) => {
+    const item: PendingMessage = {
+      id: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      text,
+      behavior,
+    }
+    set((state) =>
+      updateExisting(state, key, (current) => ({
+        ...current,
+        pending: [...current.pending, item],
+      }))
+    )
+    return item
+  },
+
+  removePending: (key, id) =>
+    set((state) =>
+      updateExisting(state, key, (current) => ({
+        ...current,
+        pending: current.pending.filter((item) => item.id !== id),
+      }))
+    ),
+
+  setPendingBehavior: (key, id, behavior) =>
+    set((state) =>
+      updateExisting(state, key, (current) => ({
+        ...current,
+        pending: current.pending.map((item) =>
+          item.id === id ? { ...item, behavior } : item
+        ),
+      }))
+    ),
+
+  setContextUsage: (key, usage) =>
+    set((state) => updateExisting(state, key, (current) => ({ ...current, contextUsage: usage }))),
+
+  setSessionSettings: (key, settings) =>
+    set((state) =>
+      updateExisting(state, key, (current) => ({ ...current, sessionSettings: settings }))
+    ),
+
+  setRetryStatus: (key, status) =>
+    set((state) => updateExisting(state, key, (current) => ({ ...current, retryStatus: status }))),
+
+  setSessionStats: (key, stats) =>
+    set((state) => updateExisting(state, key, (current) => ({ ...current, sessionStats: stats }))),
+
+  removeMessage: (key, id) =>
+    set((state) =>
+      updateExisting(state, key, (current) => ({
+        ...current,
+        messages: current.messages.filter((message) => message.id !== id),
+      }))
+    ),
+
+  /** 删除最后一条用户消息及其后的全部消息（编辑重发前调用） */
+  truncateLastTurn: (key) =>
+    set((state) =>
+      updateExisting(state, key, (current) => {
+        let lastUser = -1
+        for (let index = current.messages.length - 1; index >= 0; index--) {
+          if (current.messages[index].role === 'user') {
+            lastUser = index
+            break
+          }
+        }
+        if (lastUser < 0) return current
+        return { ...current, messages: current.messages.slice(0, lastUser) }
+      })
     ),
 
   setMessages: (key, messages) =>

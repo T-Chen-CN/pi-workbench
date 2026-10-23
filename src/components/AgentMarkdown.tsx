@@ -4,7 +4,51 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { Check, Copy } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
+import { useWorkspaceStore } from '../store/workspaceStore'
+import { useEditorStore } from '../store/editorStore'
+import { api } from '../api'
 import { splitMarkdownBlocks } from '../utils/markdownBlocks'
+import { looksLikePath, splitPathLine } from '../utils/filePath'
+
+/** 点击文件路径打开编辑器（相对路径按当前工作区解析） */
+const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({
+  value,
+  children,
+}) => {
+  const open = async () => {
+    const workspace = useWorkspaceStore.getState().workspacePath
+    if (!workspace) return
+    const { path: filePart } = splitPathLine(value)
+    const target = /^[A-Za-z]:[\\/]/.test(filePart) || filePart.startsWith('/')
+      ? filePart
+      : `${workspace}/${filePart}`
+    try {
+      const exists = await api.exists(target)
+      if (!exists.success || !exists.exists) return
+      const file = await api.readFile(target)
+      if (!file.success || typeof file.content !== 'string') return
+      useEditorStore.getState().addOpenFile({
+        path: target,
+        name: target.split(/[\\/]/).pop() || target,
+        content: file.content,
+        isDirty: false,
+        isSaving: false,
+      })
+    } catch (error) {
+      console.error('Failed to open referenced file:', error)
+    }
+  }
+
+  return (
+    <code
+      className="cursor-pointer underline-offset-2 hover:text-accent hover:underline"
+      title={value}
+      onClick={() => void open()}
+    >
+      {children}
+    </code>
+  )
+}
 
 /** 代码块：带复制按钮 */
 const CodeBlock: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
@@ -50,6 +94,13 @@ const MARKDOWN_COMPONENTS: Components = {
       {children}
     </a>
   ),
+  code: ({ className, children }) => {
+    const text = typeof children === 'string' ? children : String(children ?? '')
+    if (!className && looksLikePath(text)) {
+      return <PathCode value={text}>{children}</PathCode>
+    }
+    return <code className={className}>{children}</code>
+  },
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
 }
 

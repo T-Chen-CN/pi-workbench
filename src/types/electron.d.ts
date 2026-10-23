@@ -72,6 +72,96 @@ export interface ElectronAPI {
   agentSessionsDelete: (workspaceDir: string, sessionId: string) => Promise<AgentDisposeResult>
   agentSessionsGetTabs: (workspaceDir: string) => Promise<SessionTabsResult>
   agentSessionsSetTabs: (workspaceDir: string, tabs: SessionTabs) => Promise<AgentDisposeResult>
+  agentSessionsSetMode: (
+    workspaceDir: string,
+    sessionId: string,
+    mode: SessionMode
+  ) => Promise<{ success: boolean; error?: string }>
+  onNotifyClick: (
+    callback: (payload: { workspaceDir: string; sessionId: string }) => void
+  ) => () => void
+  agentSteer: (
+    workspaceDir: string,
+    sessionId: string,
+    message: string
+  ) => Promise<{ success: boolean; error?: string }>
+  agentContextUsage: (
+    workspaceDir: string,
+    sessionId: string
+  ) => Promise<{ success: boolean; usage?: ContextUsageInfo; error?: string }>
+  agentCompactContext: (
+    workspaceDir: string,
+    sessionId: string
+  ) => Promise<{
+    success: boolean
+    tokensBefore?: number
+    estimatedTokensAfter?: number
+    error?: string
+  }>
+  agentCheckpointsList: (
+    workspaceDir: string,
+    sessionId?: string
+  ) => Promise<{ success: boolean; checkpoints?: CheckpointSummary[]; error?: string }>
+  agentCheckpointsRestore: (
+    workspaceDir: string,
+    sessionId: string,
+    checkpointId: string,
+    options: { files?: boolean; conversation?: boolean }
+  ) => Promise<{ success: boolean; restoredFiles?: number; error?: string }>
+  agentRewind: (
+    workspaceDir: string,
+    sessionId: string,
+    newText?: string
+  ) => Promise<{ success: boolean; text?: string; error?: string }>
+  agentSessionSettings: (
+    workspaceDir: string,
+    sessionId: string
+  ) => Promise<{ success: boolean; modelId?: string; thinkingLevel?: string; error?: string }>
+  agentSessionStats: (
+    workspaceDir: string,
+    sessionId: string
+  ) => Promise<{ success: boolean; stats?: SessionStatsInfo; error?: string }>
+  agentToolDiff: (
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string
+  ) => Promise<{
+    success: boolean
+    edit?: { path: string; oldContent: string; newContent: string }
+    error?: string
+  }>
+  agentSessionSetModel: (
+    workspaceDir: string,
+    sessionId: string,
+    modelId: string
+  ) => Promise<{ success: boolean; error?: string }>
+  agentSessionSetThinking: (
+    workspaceDir: string,
+    sessionId: string,
+    level: string
+  ) => Promise<{ success: boolean; error?: string }>
+  agentSessionsMetaGet: (
+    workspaceDir: string
+  ) => Promise<{ success: boolean; meta?: SessionMeta; error?: string }>
+  agentSessionsMetaSet: (
+    workspaceDir: string,
+    meta: SessionMeta
+  ) => Promise<{ success: boolean; error?: string }>
+  saveTextFile: (
+    suggestedName: string,
+    content: string
+  ) => Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }>
+  searchWorkspaceFiles: (
+    workspaceDir: string,
+    query: string,
+    limit?: number
+  ) => Promise<{ success: boolean; files?: string[]; error?: string }>
+  getPathForFile: (file: File) => string
+  onAgentApprovalRequest: (callback: (payload: ApprovalRequestPayload) => void) => () => void
+  agentRespondApproval: (
+    requestId: string,
+    decision: ApprovalDecision
+  ) => Promise<{ success: boolean; error?: string }>
 
   // Terminal
   terminalCreate: (workspaceDir: string, cols: number, rows: number) => Promise<TerminalCreateResult>
@@ -216,6 +306,77 @@ export interface AgentInitResult {
   error?: string
 }
 
+// 工具审批（AF-01）
+
+export type ToolCategory = 'read' | 'write' | 'command' | 'other'
+
+export type PermissionAction = 'allow' | 'ask' | 'deny'
+
+export interface PermissionPolicy {
+  read: PermissionAction
+  write: PermissionAction
+  command: PermissionAction
+  other: PermissionAction
+}
+
+export interface ApprovalRequestPayload {
+  requestId: string
+  workspaceDir: string
+  sessionId: string
+  toolCallId: string
+  toolName: string
+  category: ToolCategory
+  summary: string
+  details: {
+    path?: string
+    command?: string
+    preview?: string
+    editCount?: number
+  }
+  createdAt: number
+  expiresAt: number
+}
+
+export type ApprovalDecision =
+  | { action: 'allow-once' }
+  | { action: 'allow-session' }
+  | { action: 'allow-always' }
+  | { action: 'deny'; reason?: string }
+
+/** 会话模式：plan 只读探索并给出计划，act 可修改文件与执行命令 */
+export type SessionMode = 'plan' | 'act'
+
+/** 上下文窗口占用 */
+export interface ContextUsageInfo {
+  tokens: number | null
+  contextWindow: number
+  percent: number | null
+}
+
+/** 检查点摘要 */
+export interface CheckpointSummary {
+  id: string
+  sessionId: string
+  createdAt: number
+  fileCount: number
+}
+
+/** 会话置顶 / 归档元数据 */
+export interface SessionMeta {
+  pinned: string[]
+  archived: string[]
+}
+
+/** 会话累计用量与成本 */
+export interface SessionStatsInfo {
+  tokens: number
+  input: number
+  output: number
+  cost: number
+  toolCalls: number
+  messages: number
+}
+
 export interface FileEdit {
   path: string
   oldContent: string
@@ -245,6 +406,8 @@ export type AgentTracePart =
       durationMs?: number
       resultPreview?: string
       filePath?: string
+      /** 历史工具行有保存的 Diff */
+      hasDiff?: boolean
     }
 
 /** 主进程归一化后的流式事件（不含路由字段） */
@@ -269,6 +432,14 @@ export type AgentStreamEvent =
       resultPreview?: string
       filePath?: string
     }
+  | {
+      type: 'retry_start'
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      message?: string
+    }
+  | { type: 'retry_end'; success: boolean }
 
 export type AgentStreamPayload = {
   /** 发起请求时生成，用于忽略过期会话的增量 */

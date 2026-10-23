@@ -176,6 +176,13 @@ function devAgentBridge(): Plugin {
             workspaceDir,
             agentDir: agentDirFor(workspaceDir),
             apiConfig: body.apiConfig,
+            // Web dev 桥没有审批 UI：开发环境显式允许全部工具
+            getPermissionPolicy: () => ({
+              read: 'allow',
+              write: 'allow',
+              command: 'allow',
+              other: 'allow',
+            }),
           })
           if (result.success) {
             agents.set(workspaceDir, agentManager)
@@ -477,8 +484,43 @@ function contentSecurityPolicy(): Plugin {
   }
 }
 
+/**
+ * 只保留工作台实际使用的 Monaco 语言分词器。
+ * editor.main 会注册几十种语言；把未使用的 register 模块替换为空模块，
+ * 可以在不改变入口与特性装配的前提下减小 Monaco chunk。
+ */
+const KEEP_MONACO_LANGUAGES = new Set([
+  'typescript',
+  'javascript',
+  'json',
+  'markdown',
+  'html',
+  'css',
+  'python',
+  'rust',
+  'go',
+  'ruby',
+])
+const EMPTY_MONACO_MODULE = '\0monaco-language-filter:empty'
+
+function monacoLanguageFilter(): Plugin {
+  return {
+    name: 'monaco-language-filter',
+    enforce: 'pre',
+    resolveId(source) {
+      const match = source.match(/\/languages\/definitions\/([^/]+)\/register(?:\.js)?$/)
+      if (match && !KEEP_MONACO_LANGUAGES.has(match[1])) return EMPTY_MONACO_MODULE
+      return null
+    },
+    load(id) {
+      if (id === EMPTY_MONACO_MODULE) return 'export {}'
+      return null
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), devModelsProxy(), devAgentBridge(), contentSecurityPolicy()],
+  plugins: [react(), devModelsProxy(), devAgentBridge(), contentSecurityPolicy(), monacoLanguageFilter()],
   root: 'src',  // 设置根目录为 src
   resolve: {
     alias: {
@@ -512,7 +554,9 @@ export default defineConfig({
             }
             return
           }
-          if (id.includes('monaco-editor')) return 'monaco'
+          if (id.includes('monaco-editor')) {
+            return 'monaco'
+          }
           if (
             id.includes('react-markdown') ||
             id.includes('remark-') ||

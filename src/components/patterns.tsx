@@ -199,12 +199,16 @@ export interface MeterProps {
   /** 0–100 */
   value: number
   label?: string
+  /** 进度色：默认 accent；接近上限时用 warning / danger */
+  tone?: 'accent' | 'warning' | 'danger'
   className?: string
 }
 
 /** 细线进度条：用于下载进度等线性过程，不使用动画或发光 */
-export const Meter: React.FC<MeterProps> = ({ value, label, className = '' }) => {
+export const Meter: React.FC<MeterProps> = ({ value, label, tone = 'accent', className = '' }) => {
   const percent = Math.max(0, Math.min(100, Math.round(value)))
+  const toneClass =
+    tone === 'danger' ? 'bg-danger' : tone === 'warning' ? 'bg-warning' : 'bg-accent'
   return (
     <span
       role="progressbar"
@@ -215,7 +219,7 @@ export const Meter: React.FC<MeterProps> = ({ value, label, className = '' }) =>
       className={`block h-1 w-full overflow-hidden bg-sunken ${className}`}
     >
       <span
-        className="block h-full bg-accent transition-all duration-150"
+        className={`block h-full ${toneClass} transition-all duration-150`}
         style={{ width: `${percent}%` }}
       />
     </span>

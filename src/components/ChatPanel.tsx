@@ -1,9 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
+  ArrowDown,
+  ChevronRight,
+  Copy,
   FileText,
   History,
   Paperclip,
+  Pencil,
+  RotateCcw,
   Send,
   Settings2,
   Square,
@@ -22,17 +27,23 @@ import { useDiffStore } from '../store/diffStore'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useSelectionStore } from '../store/selectionStore'
+import { useApprovalStore } from '../store/approvalStore'
+import { useSettingsStore } from '../store/settingsStore'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
 import { buildContextPrompt } from '../api/chatContext'
 import { localizeError } from '../i18n/errors'
 import { commandPaletteShortcut } from '../utils/shortcuts'
 import { createTraceBuffer } from '../utils/streamBuffer'
+import { revertFileEdit } from '../utils/revertFile'
+import { extractSymbols, sliceSymbol, type ExtractedSymbol } from '../utils/symbols'
 import { toast } from '../store/toastStore'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { useVirtualRows } from '../hooks/useVirtualRows'
 import { SessionTabs } from './SessionTabs'
 import { ChatSessionList } from './ChatSessionList'
+import { ApprovalCard } from './ApprovalCard'
+import { Meter } from './patterns'
 import { AgentParts } from './AgentTrace'
 import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
 import {
@@ -42,10 +53,11 @@ import {
   EmptyState,
   IconButton,
   Label,
+  Select,
   Spinner,
   Textarea,
 } from './ui'
-import type { SessionSummary } from '../types/electron'
+import type { SessionSummary, CheckpointSummary, SessionMeta } from '../types/electron'
 
 interface ChatPanelProps {
   workspacePath: string
@@ -56,25 +68,199 @@ const MAX_CONTEXT_FILE_CHARS = 120_000
 const MAX_CONTEXT_SNIPPET_CHARS = 40_000
 const MAX_CONTEXT_TOTAL_CHARS = 300_000
 
+/** 1.2k / 12k / 96k */
+function formatTokenCount(value: number): string {
+  if (value < 1000) return String(value)
+  return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`
+}
+
+const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/** 本轮任务列表（AF-12）：由助手消息里的工具步骤派生 */
+const TurnTaskList: React.FC<{ parts: import('../types/electron').AgentTracePart[] }> = ({
+  parts,
+}) => {
+  const { t } = useI18nStore()
+  const [open, setOpen] = useState(false)
+  const tools = parts.filter(
+    (part): part is Extract<import('../types/electron').AgentTracePart, { type: 'tool' }> =>
+      part.type === 'tool'
+  )
+  if (tools.length === 0) return null
+  const done = tools.filter((tool) => tool.status !== 'running').length
+  const running = done < tools.length
+
+  return (
+    <div className="border border-rule-hairline bg-raised">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+      >
+        <ChevronRight
+          size={12}
+          className={`flex-shrink-0 text-ink-muted transition-transform ${open ? 'rotate-90' : ''}`}
+        />
+        <span className="type-label text-ink">{t('currentTasks')}</span>
+        <span className="type-caption text-ink-muted">
+          {t('taskProgress', { done, total: tools.length })}
+        </span>
+        {running && <Spinner size={10} />}
+      </button>
+      {open && (
+        <div className="border-t border-rule-divide">
+          {tools.map((tool) => (
+            <div
+              key={tool.id}
+              className="flex items-center gap-2 border-b border-rule-divide px-3 py-1 last:border-b-0"
+            >
+              <span
+                className={`h-1 w-1 flex-shrink-0 rounded-full ${
+                  tool.status === 'running'
+                    ? 'animate-pulse bg-accent'
+                    : tool.isError || tool.status === 'error'
+                      ? 'bg-danger'
+                      : 'bg-success'
+                }`}
+              />
+              <span className="type-label text-ink">{tool.toolName}</span>
+              <span className="min-w-0 flex-1 truncate type-data text-ink-muted">
+                {tool.argsSummary}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 一轮修改的内联变更卡（AF-10）：逐文件查看 / 还原 */
+const TurnEditSummary: React.FC<{
+  edits: import('../types/electron').FileEdit[]
+  messageKey: string
+  messageId: string
+}> = ({ edits, messageKey, messageId }) => {
+  const { t } = useI18nStore()
+  const [busy, setBusy] = useState(false)
+
+  const describeFailure = (
+    result: Awaited<ReturnType<typeof revertFileEdit>>,
+    target: string
+  ): string => {
+    if (result.ok) return ''
+    if (result.reason === 'dirty') return t('revertBlockedDirty')
+    if (result.reason === 'conflict') return t('revertConflict')
+    return `${t('revertFailed')}: ${localizeError(result.error ?? '') || target}`
+  }
+
+  const revertOne = async (edit: import('../types/electron').FileEdit): Promise<boolean> => {
+    const result = await revertFileEdit(edit)
+    if (!result.ok) {
+      toast.error(describeFailure(result, edit.path))
+      return false
+    }
+    useChatStore.getState().removeMessageEdit(messageKey, messageId, edit.path)
+    return true
+  }
+
+  const handleRevert = async (edit: import('../types/electron').FileEdit) => {
+    if (!(await confirmDialog({ message: t('revertConfirm'), danger: true }))) return
+    setBusy(true)
+    try {
+      if (await revertOne(edit)) toast.success(t('reverted'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleRevertAll = async () => {
+    if (!(await confirmDialog({ message: t('revertAllConfirm'), danger: true }))) return
+    setBusy(true)
+    try {
+      let reverted = 0
+      for (const edit of edits) {
+        if (await revertOne(edit)) reverted++
+      }
+      if (reverted > 0) toast.success(t('reverted'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (edits.length === 0) return null
+  const fileName = (target: string) => target.split(/[\\/]/).pop() || target
+
+  return (
+    <div className="mt-2 border border-rule-hairline bg-raised">
+      <div className="flex items-center justify-between gap-2 border-b border-rule-divide px-3 py-1.5">
+        <span className="type-label text-ink">{t('turnChanges', { count: edits.length })}</span>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void handleRevertAll()}
+          className="type-caption text-ink-muted transition-colors hover:text-danger disabled:opacity-40"
+        >
+          {t('revertAll')}
+        </button>
+      </div>
+      {edits.map((edit) => (
+        <div
+          key={edit.path}
+          className="flex items-center gap-2 border-b border-rule-divide px-3 py-1 last:border-b-0"
+        >
+          <span className="min-w-0 flex-1 truncate type-data text-ink-muted" title={edit.path}>
+            {fileName(edit.path)}
+          </span>
+          <button
+            type="button"
+            onClick={() => useDiffStore.getState().openEdits([edit])}
+            className="type-caption text-ink-muted transition-colors hover:text-ink"
+          >
+            {t('viewChanges')}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void handleRevert(edit)}
+            className="type-caption text-ink-muted transition-colors hover:text-danger disabled:opacity-40"
+          >
+            {t('revertFile')}
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** 单条消息；memo 保证流式追加只重渲染最后一条 */
 const ChatMessageRow = React.memo(function ChatMessageRow({
   message,
   diffToolIds,
   onOpenDiff,
+  onCopy,
+  onRetry,
+  onEdit,
+  conversationKey,
 }: {
   message: ChatMessage
   diffToolIds?: Set<string>
   onOpenDiff?: (toolCallId: string) => void
+  onCopy?: (text: string) => void
+  onRetry?: () => void
+  onEdit?: () => void
+  conversationKey?: string
 }) {
   const { t, language } = useI18nStore()
 
   if (message.isStreaming && !message.content && !message.parts?.length) return null
   const isUser = message.role === 'user'
+  const hasActions = Boolean(onCopy || onRetry || onEdit)
 
   return (
     <div
       data-testid="chat-message"
-      className="border-b border-rule-divide py-3 first:pt-0 last:border-b-0"
+      className="group border-b border-rule-divide py-3 first:pt-0 last:border-b-0"
     >
       <div className="mb-1.5 flex items-baseline gap-2">
         <Label className="text-ink">{isUser ? t('roleYou') : t('piAgent')}</Label>
@@ -83,6 +269,34 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
             language === 'zh' ? 'zh-CN' : 'en-US'
           )}
         </Caption>
+        {hasActions && (
+          <span className="ml-auto flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+            {onCopy && (
+              <IconButton
+                icon={Copy}
+                label={t('copyMessage')}
+                size="sm"
+                onClick={() => onCopy(message.content)}
+              />
+            )}
+            {onRetry && (
+              <IconButton
+                icon={RotateCcw}
+                label={t('retryMessage')}
+                size="sm"
+                onClick={onRetry}
+              />
+            )}
+            {onEdit && (
+              <IconButton
+                icon={Pencil}
+                label={t('editMessage')}
+                size="sm"
+                onClick={onEdit}
+              />
+            )}
+          </span>
+        )}
       </div>
       {isUser ? (
         <div className="flex gap-2 type-reading text-ink">
@@ -115,6 +329,13 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
               {message.usage.totalTokens.toLocaleString()} tokens
               {message.usage.cost > 0 ? ` · $${message.usage.cost.toFixed(4)}` : ''}
             </Caption>
+          )}
+          {message.edits && message.edits.length > 0 && conversationKey && (
+            <TurnEditSummary
+              edits={message.edits}
+              messageKey={conversationKey}
+              messageId={message.id}
+            />
           )}
         </div>
       )}
@@ -152,13 +373,45 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   )
   const messages = conversation?.messages ?? EMPTY_MESSAGES
   const isLoading = conversation?.isLoading ?? false
+  const pendingMessages = conversation?.pending ?? []
+  const contextUsage = conversation?.contextUsage ?? null
+  const contextPercent = contextUsage?.percent ?? null
+  const sessionSettings = conversation?.sessionSettings ?? null
+  const sessionStats = conversation?.sessionStats ?? null
+  const retryStatus = conversation?.retryStatus ?? null
+  let lastAssistantMessage: ChatMessage | null = null
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index].role === 'assistant') {
+      lastAssistantMessage = messages[index]
+      break
+    }
+  }
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  let lastUserMessageId: string | null = null
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index].role === 'user') {
+      lastUserMessageId = messages[index].id
+      break
+    }
+  }
+  const lastMessageId = messages.length > 0 ? messages[messages.length - 1].id : null
   const error = conversation?.error ?? null
   const attachments = conversation?.attachments ?? []
   const input = conversation?.draftInput ?? ''
+  const mode = conversation?.mode ?? 'act'
 
   const openFiles = useEditorStore((state) => state.openFiles)
+  const currentEditorFile = useEditorStore((state) => state.currentFile)
   const selection = useSelectionStore((state) => state.selection)
-  const openEdits = useDiffStore((state) => state.openEdits)
+  const approvalRequests = useApprovalStore((state) => state.requests)
+  const pendingApprovals = useMemo(
+    () =>
+      approvalRequests.filter(
+        (request) =>
+          request.workspaceDir === workspacePath && request.sessionId === activeSessionId
+      ),
+    [approvalRequests, workspacePath, activeSessionId]
+  )
   const diffEdits = useDiffStore((state) => state.edits)
   const diffToolIds = useMemo(
     () =>
@@ -169,17 +422,47 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       ),
     [diffEdits]
   )
-  const openToolDiff = useCallback((toolCallId: string) => {
-    const edit = useDiffStore.getState().edits.find((item) => item.toolCallId === toolCallId)
-    if (edit) useDiffStore.getState().openEdits([edit])
-  }, [])
+  const openToolDiff = useCallback(
+    async (toolCallId: string) => {
+      const edit = useDiffStore.getState().edits.find((item) => item.toolCallId === toolCallId)
+      if (edit) {
+        useDiffStore.getState().openEdits([edit])
+        return
+      }
+      if (!activeSessionId) return
+      const result = await piAgentAPI.getToolEdit(workspacePath, activeSessionId, toolCallId)
+      if (!result.success || !result.edit) {
+        toast.error(t('historicalDiffMissing'))
+        return
+      }
+      useDiffStore.getState().openEdits([{ ...result.edit, toolCallId }])
+    },
+    [activeSessionId, workspacePath, t]
+  )
 
   const [initialized, setInitialized] = useState(false)
   const [needsApiKey, setNeedsApiKey] = useState(false)
   const [fatalError, setFatalError] = useState<string | null>(null)
   const [showAttachMenu, setShowAttachMenu] = useState(false)
+  const [attachMode, setAttachMode] = useState<'files' | 'symbols'>('files')
+  const [pendingBehavior, setPendingBehavior] = useState<'queue' | 'steer'>('queue')
+  const [showCheckpoints, setShowCheckpoints] = useState(false)
+  const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([])
+  const [sessionMeta, setSessionMeta] = useState<SessionMeta>({ pinned: [], archived: [] })
+  const [showArchived, setShowArchived] = useState(false)
+  const [showScrollButton, setShowScrollButton] = useState(false)
+  const [newMessageCount, setNewMessageCount] = useState(0)
+  const lastMessageCountRef = useRef(0)
+  const [mention, setMention] = useState<{
+    start: number
+    query: string
+    results: string[]
+  } | null>(null)
+  const mentionTimer = useRef<number | null>(null)
   const [configVersion, setConfigVersion] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const forceSendRef = useRef(false)
+  const budgetWarnedRef = useRef(false)
   const initSeqRef = useRef(0)
   const stickToBottomRef = useRef(true)
   const stoppedRef = useRef(false)
@@ -195,6 +478,88 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     },
     [activeKey]
   )
+
+  /** @ 文件搜索（防抖），结果落到 mention 弹层 */
+  const searchMention = useCallback(
+    (query: string, start: number) => {
+      if (mentionTimer.current) window.clearTimeout(mentionTimer.current)
+      mentionTimer.current = window.setTimeout(async () => {
+        const result = await api.searchWorkspaceFiles(workspacePath, query, 12)
+        if (!result.success) return
+        setMention((current) =>
+          current && current.start === start
+            ? { ...current, results: result.files ?? [] }
+            : current
+        )
+      }, 120)
+    },
+    [workspacePath]
+  )
+
+  const handleDraftChange = (value: string, caret: number) => {
+    setDraft(value)
+    const before = value.slice(0, caret)
+    const match = before.match(/(^|\s)@([\w./\\-]{0,60})$/)
+    if (!match) {
+      setMention(null)
+      return
+    }
+    const start = caret - match[2].length - 1
+    setMention({ start, query: match[2], results: [] })
+    searchMention(match[2], start)
+  }
+
+  /** 选择 @ 文件：插入引用文本并作为附件附加 */
+  const addMention = (relative: string) => {
+    if (!activeKey || !mention) return
+    const value = useChatStore.getState().conversations[activeKey]?.draftInput ?? ''
+    const tokenEnd = mention.start + 1 + mention.query.length
+    const next = `${value.slice(0, mention.start)}@${relative} ${value.slice(tokenEnd)}`
+    useChatStore.getState().setDraftInput(activeKey, next)
+    useChatStore.getState().addAttachment(activeKey, {
+      kind: 'file',
+      path: `${workspacePath}/${relative}`,
+      name: relative.split('/').pop() || relative,
+    })
+    setMention(null)
+    inputRef.current?.focus()
+  }
+
+  const currentSymbols = useMemo(
+    () =>
+      currentEditorFile ? extractSymbols(currentEditorFile.content, currentEditorFile.name) : [],
+    [currentEditorFile]
+  )
+
+  /** 附加单个符号（函数 / 类等）作为上下文 */
+  const attachSymbol = (symbol: ExtractedSymbol) => {
+    if (!activeKey || !currentEditorFile) return
+    useChatStore.getState().addAttachment(activeKey, {
+      kind: 'snippet',
+      path: currentEditorFile.path,
+      name: `${currentEditorFile.name}#${symbol.name}`,
+      startLine: symbol.startLine,
+      endLine: symbol.endLine,
+      content: sliceSymbol(currentEditorFile.content, symbol),
+    })
+    setShowAttachMenu(false)
+    setAttachMode('files')
+  }
+
+  /** 拖入文件作为附件 */
+  const handleDropFiles = (event: React.DragEvent) => {
+    event.preventDefault()
+    if (!activeKey) return
+    for (const file of Array.from(event.dataTransfer.files)) {
+      const target = api.getPathForFile(file)
+      if (!target) continue
+      useChatStore.getState().addAttachment(activeKey, {
+        kind: 'file',
+        path: target,
+        name: file.name,
+      })
+    }
+  }
 
   const persistTabs = useCallback(() => {
     const state = useSessionStore.getState().byWorkspace[workspacePath]
@@ -374,7 +739,39 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     if (!element) return
     const distance = element.scrollHeight - element.scrollTop - element.clientHeight
     stickToBottomRef.current = distance < 64
+    setShowScrollButton(distance > 120)
+    if (distance < 64) setNewMessageCount(0)
   }
+
+  /** 回到底部并恢复跟随 */
+  const scrollToBottom = () => {
+    if (messages.length > 0) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
+    }
+    stickToBottomRef.current = true
+    setShowScrollButton(false)
+    setNewMessageCount(0)
+  }
+
+  useEffect(() => {
+    const previous = lastMessageCountRef.current
+    lastMessageCountRef.current = messages.length
+    if (messages.length > previous && previous > 0 && !stickToBottomRef.current) {
+      setNewMessageCount((count) => count + (messages.length - previous))
+    }
+  }, [messages.length])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.altKey && event.key === 'ArrowDown') {
+        event.preventDefault()
+        scrollToBottom()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length])
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -612,20 +1009,118 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     return () => window.removeEventListener('attach-selection', onAttachSelection)
   }, [activeKey, t])
 
-  const handleSubmit = async (e?: React.FormEvent) => {
+  // 桌面通知点击后激活目标会话（工作区已由 App 切换）
+  useEffect(() => {
+    const pending = useSessionStore.getState().pendingActivation
+    if (!pending || pending.workspaceDir !== workspacePath || !initialized) return
+    if (!sessions.some((session) => session.id === pending.sessionId)) {
+      useSessionStore.getState().clearPendingActivation()
+      return
+    }
+    useSessionStore.getState().setActive(workspacePath, pending.sessionId)
+    useSessionStore.getState().clearPendingActivation()
+  }, [initialized, sessions, workspacePath])
+
+  /** 运行中插话：把消息注入当前轮 */
+  const sendSteer = async (
+    sessionId: string,
+    key: string,
+    item: import('../store/chatStore').PendingMessage
+  ) => {
+    const result = await piAgentAPI.steer(workspacePath, sessionId, item.text)
+    const chat = useChatStore.getState()
+    if (result.success) {
+      chat.removePending(key, item.id)
+      chat.addMessage(key, { role: 'user', content: item.text })
+      toast.info(t('steerSent'))
+    } else {
+      toast.error(t('steerFailed', { error: localizeError(result.error ?? '') }))
+    }
+  }
+
+  /** 斜杠命令（AF-14）：在发送前拦截 */
+  const handleSlashCommand = async (inputValue: string): Promise<boolean> => {
+    const [rawCommand, ...rest] = inputValue.trim().split(/\s+/)
+    const command = rawCommand.toLowerCase()
+    if (!command.startsWith('/')) return false
+    const argument = rest.join(' ').trim()
+
+    switch (command) {
+      case '/help':
+        toast.info(t('slashHelp'))
+        return true
+      case '/plan':
+        await handleModeChange('plan')
+        return true
+      case '/act':
+        await handleModeChange('act')
+        return true
+      case '/compact':
+        await handleCompact()
+        return true
+      case '/clear':
+        if (await confirmDialog({ message: t('slashClearConfirm'), danger: true })) {
+          await handleNewSession()
+        }
+        return true
+      case '/model': {
+        if (!argument) {
+          toast.info(t('slashCurrentModel', { model: sessionSettings?.modelId ?? '—' }))
+          return true
+        }
+        const match = availableModels.find(
+          (model) => model.toLowerCase() === argument.toLowerCase()
+        )
+        if (!match) {
+          toast.error(t('slashUnknownModel', { model: argument }))
+          return true
+        }
+        await handleModelChange(match)
+        return true
+      }
+      default:
+        toast.error(t('slashUnknownCommand', { command }))
+        return true
+    }
+  }
+
+  const handleSubmit = async (
+    e?: React.FormEvent,
+    override?: string,
+    options?: { skipUserMessage?: boolean }
+  ) => {
     e?.preventDefault()
 
     const sessionId = activeSessionId
     const key = activeKey
-    if (!sessionId || !key || !input.trim() || isLoading) return
+    const userMessage = (override ?? input).trim()
+    if (!sessionId || !key || !userMessage) return
 
-    const userMessage = input.trim()
     const chat = useChatStore.getState()
+
+    // 斜杠命令不进入对话
+    if (!options?.skipUserMessage && userMessage.startsWith('/')) {
+      chat.setDraftInput(key, '')
+      if (await handleSlashCommand(userMessage)) return
+    }
+
+    // 运行中：进入待发送队列；steer 立即注入当前轮
+    if (isLoading && !forceSendRef.current) {
+      chat.setDraftInput(key, '')
+      const item = chat.addPending(key, userMessage, pendingBehavior)
+      if (pendingBehavior === 'steer') void sendSteer(sessionId, key, item)
+      return
+    }
+    forceSendRef.current = false
+    budgetWarnedRef.current = false
+
     stoppedRef.current = false
     useSessionStore.getState().markError(workspacePath, sessionId, null)
     useSessionStore.getState().markUnread(workspacePath, sessionId, false)
     chat.setDraftInput(key, '')
-    chat.addMessage(key, { role: 'user', content: userMessage })
+    if (!options?.skipUserMessage) {
+      chat.addMessage(key, { role: 'user', content: userMessage })
+    }
     setShowAttachMenu(false)
     chat.setLoading(key, true)
     useSessionStore.getState().markStreaming(workspacePath, sessionId, true)
@@ -653,6 +1148,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             break
           case 'tool_end':
             store.endToolPart(key, assistantId, event)
+            break
+          case 'retry_start':
+            store.setRetryStatus(key, {
+              attempt: event.attempt,
+              maxAttempts: event.maxAttempts,
+              delayMs: event.delayMs,
+              message: event.message,
+            })
+            break
+          case 'retry_end':
+            if (event.success) store.setRetryStatus(key, null)
             break
         }
       }
@@ -720,7 +1226,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         chat.finishStreamingMessage(key, assistantId, result.response)
         if (result.usage) chat.setMessageUsage(key, assistantId, result.usage)
         if (result.edits && result.edits.length > 0) {
-          openEdits(result.edits)
+          chat.setMessageEdits(key, assistantId, result.edits)
           toast.info(t('agentModifiedFiles', { count: result.edits.length }))
         }
       } else {
@@ -752,6 +1258,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
       useChatStore.getState().setLoading(key, false)
       useChatStore.getState().clearAttachments(key)
       useSessionStore.getState().markStreaming(workspacePath, sessionId, false)
+      useChatStore.getState().setRetryStatus(key, null)
+      void refreshContextUsage(sessionId)
+      void refreshSessionStats(sessionId)
+
+      // 本轮结束：自动发送下一条排队消息（用户主动停止时不自动发送）
+      const queued = useChatStore
+        .getState()
+        .conversations[key]?.pending.find((item) => item.behavior === 'queue')
+      if (queued && !stoppedRef.current) {
+        useChatStore.getState().removePending(key, queued.id)
+        forceSendRef.current = true
+        window.setTimeout(() => void handleSubmit(undefined, queued.text), 0)
+      }
       const activeNow = useSessionStore.getState().byWorkspace[workspacePath]?.active
       if (succeeded) {
         if (activeNow && activeNow !== sessionId) {
@@ -782,10 +1301,318 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     await piAgentAPI.abort(workspacePath, activeSessionId)
   }
 
+  /** 切换 Plan / Act；失败时回滚本地状态 */
+  const handleModeChange = async (next: 'plan' | 'act') => {
+    const sessionId = activeSessionId
+    const key = activeKey
+    if (!sessionId || !key || next === mode || isLoading) return
+    useChatStore.getState().setMode(key, next)
+    const result = await piAgentAPI.sessionsSetMode(workspacePath, sessionId, next)
+    if (!result.success) {
+      useChatStore.getState().setMode(key, mode)
+      toast.error(t('modeSwitchFailed', { error: localizeError(result.error ?? '') }))
+    }
+  }
+
+  /** Plan 模式下批准计划：切回 Act 并让 Agent 执行 */
+  const handleExecutePlan = async () => {
+    if (!activeSessionId || !activeKey || isLoading) return
+    await handleModeChange('act')
+    void handleSubmit(undefined, 'Execute the plan above step by step.')
+  }
+
+  /** 读取上下文占用（每轮结束与会话切换后刷新） */
+  const refreshContextUsage = useCallback(
+    async (sessionId: string) => {
+      const key = conversationKey(workspacePath, sessionId)
+      const result = await piAgentAPI.getContextUsage(workspacePath, sessionId)
+      if (result.success) {
+        useChatStore.getState().setContextUsage(key, result.usage ?? null)
+      }
+    },
+    [workspacePath]
+  )
+
+  /** 读取会话级模型与思考级别 */
+  const refreshSessionSettings = useCallback(
+    async (sessionId: string) => {
+      const key = conversationKey(workspacePath, sessionId)
+      const result = await piAgentAPI.getSessionSettings(workspacePath, sessionId)
+      if (result.success) {
+        useChatStore.getState().setSessionSettings(key, {
+          modelId: result.modelId,
+          thinkingLevel: result.thinkingLevel,
+        })
+      }
+    },
+    [workspacePath]
+  )
+
+  /** 读取会话累计用量并检查预算 */
+  const refreshSessionStats = useCallback(
+    async (sessionId: string) => {
+      const key = conversationKey(workspacePath, sessionId)
+      const result = await piAgentAPI.getSessionStats(workspacePath, sessionId)
+      if (!result.success || !result.stats) return
+      useChatStore.getState().setSessionStats(key, result.stats)
+      const budget = useSettingsStore.getState().budgetUsd
+      if (budget > 0 && result.stats.cost >= budget && !budgetWarnedRef.current) {
+        budgetWarnedRef.current = true
+        toast.warning(
+          t('budgetExceeded', {
+            cost: result.stats.cost.toFixed(2),
+            budget: budget.toFixed(2),
+          })
+        )
+      }
+    },
+    [workspacePath, t]
+  )
+
+  useEffect(() => {
+    if (!initialized || !activeSessionId) return
+    void refreshContextUsage(activeSessionId)
+    void refreshSessionSettings(activeSessionId)
+    void refreshSessionStats(activeSessionId)
+  }, [
+    initialized,
+    activeSessionId,
+    configVersion,
+    refreshContextUsage,
+    refreshSessionSettings,
+    refreshSessionStats,
+  ])
+
+  useEffect(() => {
+    let cancelled = false
+    void api.apiConfigGet().then((result) => {
+      if (cancelled || !result.success) return
+      setAvailableModels(result.config?.availableModels ?? [])
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [configVersion])
+
+  const handleModelChange = async (modelId: string) => {
+    if (!activeSessionId || !activeKey || !modelId || isLoading) return
+    const previous = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
+    useChatStore
+      .getState()
+      .setSessionSettings(activeKey, { ...previous, modelId })
+    const result = await piAgentAPI.setSessionModel(workspacePath, activeSessionId, modelId)
+    if (!result.success) {
+      useChatStore.getState().setSessionSettings(activeKey, previous)
+      toast.error(t('modelSwitchFailed', { error: localizeError(result.error ?? '') }))
+      return
+    }
+    void refreshContextUsage(activeSessionId)
+  }
+
+  const handleThinkingChange = async (level: string) => {
+    if (!activeSessionId || !activeKey || !level || isLoading) return
+    const previous = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
+    useChatStore
+      .getState()
+      .setSessionSettings(activeKey, { ...previous, thinkingLevel: level })
+    const result = await piAgentAPI.setSessionThinking(workspacePath, activeSessionId, level)
+    if (!result.success) {
+      useChatStore.getState().setSessionSettings(activeKey, previous)
+      toast.error(t('thinkingSwitchFailed', { error: localizeError(result.error ?? '') }))
+    }
+  }
+
+  /** 手动压缩上下文；运行中不允许 */
+  const handleCompact = async () => {
+    if (!activeSessionId || isLoading) return
+    const confirmed = await confirmDialog({ message: t('compactConfirm') })
+    if (!confirmed) return
+    const result = await piAgentAPI.compactContext(workspacePath, activeSessionId)
+    if (result.success) {
+      toast.info(t('compactDone'))
+      void refreshContextUsage(activeSessionId)
+    } else {
+      toast.error(t('compactFailed', { error: localizeError(result.error ?? '') }))
+    }
+  }
+
+  /** 会话置顶 / 归档元数据 */
+  useEffect(() => {
+    let cancelled = false
+    if (typeof api.getSessionMeta !== 'function') return
+    void api.getSessionMeta(workspacePath).then((result) => {
+      if (cancelled || !result.success || !result.meta) return
+      setSessionMeta(result.meta)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [workspacePath, configVersion])
+
+  const persistSessionMeta = async (next: SessionMeta) => {
+    setSessionMeta(next)
+    if (typeof api.setSessionMeta !== 'function') return
+    const result = await api.setSessionMeta(workspacePath, next)
+    if (!result.success) {
+      const detail = 'error' in result && typeof result.error === 'string' ? result.error : ''
+      toast.error(t('sessionMetaFailed', { error: localizeError(detail) }))
+    }
+  }
+
+  const togglePin = (session: SessionSummary) => {
+    const pinned = sessionMeta.pinned.includes(session.id)
+      ? sessionMeta.pinned.filter((id) => id !== session.id)
+      : [...sessionMeta.pinned, session.id]
+    void persistSessionMeta({ ...sessionMeta, pinned })
+  }
+
+  const toggleArchive = (session: SessionSummary) => {
+    const archived = sessionMeta.archived.includes(session.id)
+      ? sessionMeta.archived.filter((id) => id !== session.id)
+      : [...sessionMeta.archived, session.id]
+    void persistSessionMeta({ ...sessionMeta, archived })
+  }
+
+  /** 导出会话为 Markdown */
+  const exportSession = async (session: SessionSummary) => {
+    const history = await piAgentAPI.getHistory(workspacePath, session.id)
+    const messages = history.success ? history.history ?? [] : []
+    if (messages.length === 0) {
+      toast.error(t('exportEmpty'))
+      return
+    }
+    const markdown = [
+      `# ${session.title || session.id}`,
+      '',
+      ...messages.map(
+        (message) =>
+          `## ${message.role === 'user' ? t('roleYou') : 'Pi'}\n\n${message.content}`
+      ),
+    ].join('\n\n')
+    const fileName = `${(session.title || 'session').replace(/[\\/:*?"<>|]/g, '_')}.md`
+    if (typeof api.saveTextFile !== 'function') return
+    const result = await api.saveTextFile(fileName, markdown)
+    if (result.success) {
+      toast.info(t('exportDone'))
+    } else if (!('canceled' in result) || !result.canceled) {
+      toast.error(t('exportFailed', { error: localizeError(result.error ?? '') }))
+    }
+  }
+
+  /** 读取检查点列表（当前会话） */
+  const loadCheckpoints = async () => {
+    if (!activeSessionId) return
+    const result = await piAgentAPI.listCheckpoints(workspacePath, activeSessionId)
+    if (result.success) setCheckpoints(result.checkpoints ?? [])
+  }
+
+  /** 回退到检查点；对话回退后重新加载历史 */
+  const handleRestoreCheckpoint = async (
+    checkpointId: string,
+    options: { files?: boolean; conversation?: boolean }
+  ) => {
+    if (!activeSessionId) return
+    const action =
+      options.files && options.conversation
+        ? t('restoreBoth')
+        : options.files
+          ? t('restoreCode')
+          : t('restoreConversation')
+    const confirmed = await confirmDialog({
+      message: t('restoreCheckpointConfirm', { action }),
+      danger: Boolean(options.files),
+    })
+    if (!confirmed) return
+
+    const result = await piAgentAPI.restoreCheckpoint(
+      workspacePath,
+      activeSessionId,
+      checkpointId,
+      options
+    )
+    if (!result.success) {
+      toast.error(t('restoreCheckpointFailed', { error: localizeError(result.error ?? '') }))
+      return
+    }
+    toast.info(t('restoreCheckpointDone', { count: result.restoredFiles ?? 0 }))
+    setShowCheckpoints(false)
+
+    if (options.conversation) {
+      const history = await piAgentAPI.getHistory(workspacePath, activeSessionId)
+      if (history.success) {
+        const key = conversationKey(workspacePath, activeSessionId)
+        useChatStore.getState().setMessages(key, history.history ?? [])
+        void refreshContextUsage(activeSessionId)
+      }
+    }
+  }
+
+  /** 复制整条消息 */
+  const handleCopyMessage = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.info(t('copied'))
+    } catch (error) {
+      toast.error(t('copyFailed', { error: String(error) }))
+    }
+  }
+
+  /** 重新生成：回退到最后一条用户消息并重新发送 */
+  const handleRetryMessage = async (message: ChatMessage) => {
+    if (!activeSessionId || !activeKey || isLoading) return
+    const result = await piAgentAPI.rewindLastUser(workspacePath, activeSessionId)
+    if (!result.success || !result.text) {
+      toast.error(t('retryFailed', { error: localizeError(result.error ?? '') }))
+      return
+    }
+    useChatStore.getState().removeMessage(activeKey, message.id)
+    await handleSubmit(undefined, result.text, { skipUserMessage: true })
+  }
+
+  /** 编辑最后一条用户消息并重发 */
+  const handleEditMessage = async (message: ChatMessage) => {
+    if (!activeSessionId || !activeKey || isLoading) return
+    const next = await promptDialog({
+      title: t('editMessage'),
+      message: t('editMessagePrompt'),
+      defaultValue: message.content,
+      confirmLabel: t('send'),
+    })
+    if (!next || !next.trim()) return
+    const result = await piAgentAPI.rewindLastUser(workspacePath, activeSessionId, next.trim())
+    if (!result.success) {
+      toast.error(t('retryFailed', { error: localizeError(result.error ?? '') }))
+      return
+    }
+    useChatStore.getState().truncateLastTurn(activeKey)
+    await handleSubmit(undefined, next.trim())
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       void handleSubmit()
+    }
+  }
+
+  /** 审批响应：成功即从队列移除并清除会话的待操作标记 */
+  const handleApprovalResponse = async (
+    requestId: string,
+    decision: import('../types/electron').ApprovalDecision
+  ) => {
+    const result = await piAgentAPI.respondApproval(requestId, decision)
+    if (!result.success) {
+      toast.error(
+        t('approvalRespondFailed', { error: localizeError(result.error ?? '') })
+      )
+      return
+    }
+    const request = useApprovalStore
+      .getState()
+      .requests.find((item) => item.requestId === requestId)
+    useApprovalStore.getState().remove(requestId)
+    if (request) {
+      useSessionStore.getState().markNeedsAction(request.workspaceDir, request.sessionId, null)
     }
   }
 
@@ -834,6 +1661,84 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           <span className="border border-rule-control px-1.5 py-0.5 type-key text-ink-muted">
             {commandPaletteShortcut()}
           </span>
+          <div className="relative">
+            <IconButton
+              icon={RotateCcw}
+              label={t('checkpoints')}
+              size="sm"
+              active={showCheckpoints}
+              onClick={() => {
+                const next = !showCheckpoints
+                setShowCheckpoints(next)
+                if (next) void loadCheckpoints()
+              }}
+            />
+            {showCheckpoints && (
+              <div className="absolute right-0 top-full z-20 mt-1 w-80 border border-line bg-raised shadow-print">
+                <div className="border-b border-rule-divide px-3 py-1.5 type-label text-ink-muted">
+                  {t('checkpoints')}
+                </div>
+                {checkpoints.length === 0 ? (
+                  <div className="px-3 py-2 type-caption text-ink-muted">
+                    {t('checkpointsEmpty')}
+                  </div>
+                ) : (
+                  checkpoints.map((checkpoint) => (
+                    <div
+                      key={checkpoint.id}
+                      className="flex flex-col gap-1.5 border-b border-rule-divide px-3 py-2 last:border-b-0"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="type-value text-ink">
+                          {new Date(checkpoint.createdAt).toLocaleTimeString()}
+                        </span>
+                        <span className="type-caption text-ink-muted">
+                          {t('checkpointFiles', { count: checkpoint.fileCount })}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleRestoreCheckpoint(checkpoint.id, { files: true })
+                          }
+                          className="border border-rule-control px-1.5 py-0.5 type-caption text-ink-muted transition-colors hover:text-ink"
+                        >
+                          {t('restoreCode')}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isLoading}
+                          onClick={() =>
+                            void handleRestoreCheckpoint(checkpoint.id, { conversation: true })
+                          }
+                          className="border border-rule-control px-1.5 py-0.5 type-caption text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
+                        >
+                          {t('restoreConversation')}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isLoading}
+                          onClick={() =>
+                            void handleRestoreCheckpoint(checkpoint.id, {
+                              files: true,
+                              conversation: true,
+                            })
+                          }
+                          className="border border-rule-control px-1.5 py-0.5 type-caption text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
+                        >
+                          {t('restoreBoth')}
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+                <div className="px-3 py-1.5 type-caption text-ink-muted">
+                  {t('checkpointBashHint')}
+                </div>
+              </div>
+            )}
+          </div>
           <IconButton
             icon={Settings2}
             label={t('settings')}
@@ -876,13 +1781,34 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           className="flex-1 overflow-y-auto px-3.5 py-3"
         >
           {messages.length === 0 && !isLoading ? (
-            <div className="flex h-full items-center justify-center">
+            <div className="flex h-full flex-col items-center justify-center gap-3">
               <EmptyState
                 compact
                 icon={History}
                 title={t('agentChatTitle')}
                 description={initialized ? t('agentReadyStatus') : t('agentInitializingStatus')}
               />
+              {initialized && activeKey && (
+                <div className="flex max-w-md flex-wrap justify-center gap-1.5">
+                  {[
+                    { label: t('suggestExplain'), prompt: t('suggestExplainPrompt') },
+                    { label: t('suggestTodos'), prompt: t('suggestTodosPrompt') },
+                    { label: t('suggestTests'), prompt: t('suggestTestsPrompt') },
+                  ].map((suggestion) => (
+                    <button
+                      key={suggestion.label}
+                      type="button"
+                      onClick={() => {
+                        useChatStore.getState().setDraftInput(activeKey, suggestion.prompt)
+                        inputRef.current?.focus()
+                      }}
+                      className="border border-rule-control px-2 py-1 type-caption text-ink-muted transition-colors hover:bg-hover hover:text-ink"
+                    >
+                      {suggestion.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             <div
@@ -915,8 +1841,20 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                       >
                         <ChatMessageRow
                           message={msg}
+                          conversationKey={activeKey ?? undefined}
                           diffToolIds={diffToolIds}
                           onOpenDiff={openToolDiff}
+                          onCopy={handleCopyMessage}
+                          onRetry={
+                            !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
+                              ? () => void handleRetryMessage(msg)
+                              : undefined
+                          }
+                          onEdit={
+                            !isLoading && msg.id === lastUserMessageId
+                              ? () => void handleEditMessage(msg)
+                              : undefined
+                          }
                         />
                       </div>
                     )
@@ -927,8 +1865,20 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                       <ChatMessageRow
                         key={msg.id}
                         message={msg}
+                        conversationKey={activeKey ?? undefined}
                         diffToolIds={diffToolIds}
                         onOpenDiff={openToolDiff}
+                        onCopy={handleCopyMessage}
+                        onRetry={
+                          !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
+                            ? () => void handleRetryMessage(msg)
+                            : undefined
+                        }
+                        onEdit={
+                          !isLoading && msg.id === lastUserMessageId
+                            ? () => void handleEditMessage(msg)
+                            : undefined
+                        }
                       />
                     ))}
             </div>
@@ -944,7 +1894,25 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
           {(error || fatalError) && (
             <div className="mt-3 flex items-start gap-2 border-l-2 border-danger bg-danger/5 py-2 pl-3 type-caption text-danger">
               <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
-              <span className="leading-relaxed">{fatalError || error}</span>
+              <span className="min-w-0 flex-1 leading-relaxed">{fatalError || error}</span>
+              <span className="flex flex-shrink-0 items-center gap-2">
+                {lastAssistantMessage && !isLoading && (
+                  <button
+                    type="button"
+                    onClick={() => void handleRetryMessage(lastAssistantMessage!)}
+                    className="text-ink-muted transition-colors hover:text-ink"
+                  >
+                    {t('retryMessage')}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))}
+                  className="text-ink-muted transition-colors hover:text-ink"
+                >
+                  {t('goToSettings')}
+                </button>
+              </span>
             </div>
           )}
         </div>
@@ -952,7 +1920,208 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
 
       {/* Composer */}
       {activeSessionId && (
+        <div className="relative h-0 flex-shrink-0">
+          {showScrollButton && (
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              className="absolute bottom-2 right-4 z-10 flex items-center gap-1 border border-line bg-raised px-2 py-1 type-caption text-ink-muted shadow-print transition-colors hover:text-ink"
+            >
+              <ArrowDown size={12} />
+              {newMessageCount > 0
+                ? t('newMessages', { count: newMessageCount })
+                : t('scrollToBottom')}
+            </button>
+          )}
+        </div>
+      )}
+      {activeSessionId && (
         <div className="flex-shrink-0 p-2.5">
+          {retryStatus && (
+            <div className="mb-2 flex items-center gap-2 type-caption text-warning">
+              <Spinner size={10} />
+              <span>
+                {t('retryInProgress', {
+                  attempt: retryStatus.attempt,
+                  max: retryStatus.maxAttempts,
+                  seconds: Math.max(1, Math.round(retryStatus.delayMs / 1000)),
+                })}
+              </span>
+              {retryStatus.message && (
+                <span className="min-w-0 truncate text-ink-muted">{retryStatus.message}</span>
+              )}
+            </div>
+          )}
+          {lastAssistantMessage?.parts?.some((part) => part.type === 'tool') && (
+            <div className="mb-2">
+              <TurnTaskList parts={lastAssistantMessage.parts ?? []} />
+            </div>
+          )}
+          {(contextUsage || sessionStats) && (
+            <div className="mb-2 flex items-center gap-2">
+              {contextUsage && contextPercent != null && (
+                <Meter
+                  value={contextPercent}
+                  label={t('contextUsageLabel')}
+                  tone={
+                    contextPercent >= 95
+                      ? 'danger'
+                      : contextPercent >= 80
+                        ? 'warning'
+                        : 'accent'
+                  }
+                  className="flex-1"
+                />
+              )}
+              <DataText
+                className={
+                  contextPercent != null && contextPercent >= 95
+                    ? 'text-danger'
+                    : contextPercent != null && contextPercent >= 80
+                      ? 'text-warning'
+                      : 'text-ink-muted'
+                }
+              >
+                {[
+                  contextUsage && contextPercent != null
+                    ? `${contextPercent}% · ${
+                        contextUsage.tokens != null
+                          ? formatTokenCount(contextUsage.tokens)
+                          : '—'
+                      } / ${formatTokenCount(contextUsage.contextWindow)}`
+                    : '',
+                  sessionStats
+                    ? `${formatTokenCount(sessionStats.tokens)} tok`
+                    : '',
+                  sessionStats && sessionStats.cost > 0
+                    ? `$${sessionStats.cost.toFixed(2)}`
+                    : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </DataText>
+              <button
+                type="button"
+                disabled={isLoading}
+                onClick={() => void handleCompact()}
+                className="type-caption text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
+              >
+                {t('compactContext')}
+              </button>
+            </div>
+          )}
+          {sessionSettings && (
+            <div className="mb-2 flex items-center gap-2">
+              <Select
+                aria-label={t('modelLabel')}
+                value={sessionSettings.modelId ?? ''}
+                disabled={isLoading}
+                onChange={(event) => void handleModelChange(event.target.value)}
+                className="h-6 w-44"
+              >
+                {availableModels.length === 0 && sessionSettings.modelId && (
+                  <option value={sessionSettings.modelId}>{sessionSettings.modelId}</option>
+                )}
+                {availableModels.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </Select>
+              <Select
+                aria-label={t('thinkingLabel')}
+                value={sessionSettings.thinkingLevel ?? 'medium'}
+                disabled={isLoading}
+                onChange={(event) => void handleThinkingChange(event.target.value)}
+                className="h-6 w-28"
+              >
+                {THINKING_LEVELS.map((level) => (
+                  <option key={level} value={level}>
+                    {level}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          )}
+          {pendingMessages.length > 0 && (
+            <div className="mb-2 flex flex-col gap-1.5">
+              {pendingMessages.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center gap-2 border border-rule-hairline bg-raised px-3 py-1.5"
+                >
+                  {isLoading ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        activeKey &&
+                        useChatStore
+                          .getState()
+                          .setPendingBehavior(
+                            activeKey,
+                            item.id,
+                            item.behavior === 'queue' ? 'steer' : 'queue'
+                          )
+                      }
+                      className="border border-rule-control px-1.5 py-0.5 type-caption text-ink-muted transition-colors hover:text-ink"
+                    >
+                      {item.behavior === 'steer' ? t('steerMode') : t('queueMode')}
+                    </button>
+                  ) : (
+                    <span className="type-caption text-ink-muted">
+                      {item.behavior === 'steer' ? t('steerMode') : t('queueMode')}
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1 truncate type-value text-ink" title={item.text}>
+                    {item.text}
+                  </span>
+                  {!isLoading && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!activeKey) return
+                        useChatStore.getState().removePending(activeKey, item.id)
+                        void handleSubmit(undefined, item.text)
+                      }}
+                      className="p-0.5 text-ink-muted transition-colors hover:text-ink"
+                      aria-label={t('send')}
+                    >
+                      <Send size={11} />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      activeKey && useChatStore.getState().removePending(activeKey, item.id)
+                    }
+                    className="p-0.5 text-ink-muted transition-colors hover:text-ink"
+                    aria-label={t('removePending')}
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {mode === 'plan' && !isLoading && messages.some((msg) => msg.role === 'assistant') && (
+            <div className="mb-2 flex items-center justify-between gap-2 border border-rule-hairline bg-raised px-3 py-2">
+              <span className="type-caption text-ink-muted">{t('planModeHint')}</span>
+              <Button size="sm" variant="primary" onClick={() => void handleExecutePlan()}>
+                {t('planExecute')}
+              </Button>
+            </div>
+          )}
+          {pendingApprovals.length > 0 && (
+            <div className="mb-2 flex flex-col gap-2">
+              {pendingApprovals.map((request) => (
+                <ApprovalCard
+                  key={request.requestId}
+                  request={request}
+                  onRespond={handleApprovalResponse}
+                />
+              ))}
+            </div>
+          )}
           {attachments.length > 0 && (
             <div className="mb-1.5 flex flex-wrap gap-1.5">
               {attachments.map((attachment) => {
@@ -990,17 +2159,37 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             </div>
           )}
 
+          {mention && mention.results.length > 0 && (
+            <div className="mb-1 max-h-52 overflow-y-auto border border-line bg-raised shadow-print">
+              {mention.results.map((file) => (
+                <button
+                  key={file}
+                  type="button"
+                  onClick={() => addMention(file)}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-data text-ink transition-colors hover:bg-hover"
+                >
+                  <FileText size={11} className="flex-shrink-0 text-ink-muted" />
+                  <span className="truncate">{file}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           <form
             onSubmit={handleSubmit}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={handleDropFiles}
             className="border border-rule-control bg-sunken transition-colors focus-within:border-accent"
           >
             <Textarea
               ref={inputRef}
               value={input}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(event) =>
+                handleDraftChange(event.target.value, event.target.selectionStart ?? 0)
+              }
               onKeyDown={handleKeyDown}
               placeholder={t('inputPlaceholder')}
-              disabled={!initialized || isLoading}
+              disabled={!initialized}
               rows={3}
               className="min-h-[68px] max-h-40 border-none bg-transparent px-3 py-2 focus:ring-0"
             />
@@ -1011,13 +2200,54 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                   label={t('attachContext')}
                   size="sm"
                   disabled={!initialized || isLoading}
-                  onClick={() => setShowAttachMenu((open) => !open)}
+                  onClick={() => {
+                    setShowAttachMenu((open) => !open)
+                    setAttachMode('files')
+                  }}
                 />
                 {showAttachMenu && activeKey && (
                   <div className="absolute bottom-full left-0 z-10 mb-2 max-h-64 w-72 overflow-y-auto border border-line bg-raised py-1 shadow-print">
-                    <div className="px-3 py-1.5 type-label text-ink-muted">
-                      {t('attachContext')}
+                    <div className="flex items-center justify-between gap-2 px-3 py-1.5">
+                      <span className="type-label text-ink-muted">{t('attachContext')}</span>
+                      {currentEditorFile && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAttachMode((mode) => (mode === 'files' ? 'symbols' : 'files'))
+                          }
+                          className="type-caption text-ink-muted transition-colors hover:text-ink"
+                        >
+                          {attachMode === 'symbols' ? t('attachFile') : t('attachSymbol')}
+                        </button>
+                      )}
                     </div>
+                    {attachMode === 'symbols' ? (
+                      currentSymbols.length === 0 ? (
+                        <div className="px-3 py-2 type-caption text-ink-muted">
+                          {t('noSymbols')}
+                        </div>
+                      ) : (
+                        currentSymbols.map((symbol) => (
+                          <button
+                            key={`${symbol.name}-${symbol.startLine}`}
+                            type="button"
+                            onClick={() => attachSymbol(symbol)}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-hover"
+                          >
+                            <span className="flex-shrink-0 type-caption text-ink-muted">
+                              {symbol.kind}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate type-value text-ink">
+                              {symbol.name}
+                            </span>
+                            <DataText className="flex-shrink-0 text-ink-muted">
+                              L{symbol.startLine}–L{symbol.endLine}
+                            </DataText>
+                          </button>
+                        ))
+                      )
+                    ) : (
+                      <>
                     <button
                       type="button"
                       disabled={!selection}
@@ -1084,24 +2314,60 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
                         )
                       })
                     )}
+                      </>
+                    )}
                   </div>
                 )}
               </div>
-              {isLoading ? (
+              <div className="ml-1 flex items-center border border-rule-control">
+                {(['act', 'plan'] as const).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    disabled={!initialized || isLoading}
+                    onClick={() => void handleModeChange(value)}
+                    className={`px-2 py-1 type-caption transition-colors disabled:opacity-40 ${
+                      mode === value
+                        ? 'bg-active text-ink'
+                        : 'text-ink-muted hover:bg-hover hover:text-ink'
+                    }`}
+                  >
+                    {value === 'act' ? t('modeAct') : t('modePlan')}
+                  </button>
+                ))}
+              </div>
+              {isLoading && (
+                <div className="mr-1 flex items-center border border-rule-control">
+                  {(['queue', 'steer'] as const).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setPendingBehavior(value)}
+                      className={`px-2 py-1 type-caption transition-colors ${
+                        pendingBehavior === value
+                          ? 'bg-active text-ink'
+                          : 'text-ink-muted hover:bg-hover hover:text-ink'
+                      }`}
+                    >
+                      {value === 'queue' ? t('queueMode') : t('steerMode')}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {isLoading && (
                 <Button variant="danger" size="sm" icon={Square} onClick={() => void handleStop()}>
                   {t('stop')}
                 </Button>
-              ) : (
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="sm"
-                  icon={Send}
-                  disabled={!initialized || !input.trim()}
-                >
-                  {t('send')}
-                </Button>
               )}
+              <Button
+                type="submit"
+                variant="primary"
+                size="sm"
+                icon={Send}
+                disabled={!initialized || !input.trim()}
+              >
+                {t('send')}
+              </Button>
             </div>
           </form>
           <p className="mb-0 mt-1.5 px-0.5 type-caption text-ink-muted">
@@ -1114,11 +2380,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
         workspacePath={workspacePath}
         open={panelOpen}
         sessions={sessions}
+        pinnedIds={sessionMeta.pinned}
+        archivedIds={sessionMeta.archived}
+        showArchived={showArchived}
+        onToggleShowArchived={() => setShowArchived((value) => !value)}
         onClose={() => useSessionStore.getState().setPanelOpen(workspacePath, false)}
         onSelect={(session) => void handleSelectSession(session)}
         onNew={() => void handleNewSession()}
         onRename={(session) => void handleRenameSession(session)}
         onDelete={(session) => void handleDeleteSession(session)}
+        onTogglePin={togglePin}
+        onToggleArchive={toggleArchive}
+        onExport={(session) => void exportSession(session)}
       />
     </div>
   )

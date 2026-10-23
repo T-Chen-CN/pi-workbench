@@ -31,9 +31,13 @@ interface SessionState {
   unread: Record<string, boolean>
   /** conversationKey -> 最近一次请求错误（保留到下次发送或成功回复） */
   errors: Record<string, string>
-  /** conversationKey -> 待操作原因（占位，v1 不设置触发） */
+  /** conversationKey -> 待操作原因（工具审批等待时设置） */
   needsAction: Record<string, NeedsActionReason>
+  /** 通知点击后待激活的会话（工作区切换完成后由 ChatPanel 消费） */
+  pendingActivation: { workspaceDir: string; sessionId: string } | null
 
+  requestActivation: (workspaceDir: string, sessionId: string) => void
+  clearPendingActivation: () => void
   setSessions: (workspacePath: string, sessions: SessionSummary[]) => void
   setOpen: (workspacePath: string, open: string[], active: string | null) => void
   setActive: (workspacePath: string, active: string | null) => void
@@ -82,6 +86,12 @@ export const useSessionStore = create<SessionState>((set) => ({
   unread: {},
   errors: {},
   needsAction: {},
+  pendingActivation: null,
+
+  requestActivation: (workspaceDir, sessionId) =>
+    set({ pendingActivation: { workspaceDir, sessionId } }),
+
+  clearPendingActivation: () => set({ pendingActivation: null }),
 
   setSessions: (path, sessions) =>
     set((state) => withWorkspace(state, path, { sessions })),
@@ -227,5 +237,12 @@ export const useSessionStore = create<SessionState>((set) => ({
     }),
 
   reset: () =>
-    set({ byWorkspace: {}, streaming: {}, unread: {}, errors: {}, needsAction: {} }),
+    set({
+      byWorkspace: {},
+      streaming: {},
+      unread: {},
+      errors: {},
+      needsAction: {},
+      pendingActivation: null,
+    }),
 }))

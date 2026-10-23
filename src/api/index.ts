@@ -333,6 +333,24 @@ export const api = {
   // File system operations
   openDirectoryDialog: () => electronAPI.openDirectoryDialog(),
   listDirectory: (path: string) => electronAPI.listDirectory(path),
+  searchWorkspaceFiles: (workspaceDir: string, query: string, limit?: number) =>
+    typeof electronAPI.searchWorkspaceFiles === 'function'
+      ? electronAPI.searchWorkspaceFiles(workspaceDir, query, limit)
+      : Promise.resolve({ success: true, files: [] as string[] }),
+  getPathForFile: (file: File) =>
+    typeof electronAPI.getPathForFile === 'function' ? electronAPI.getPathForFile(file) : '',
+  getSessionMeta: (workspaceDir: string) =>
+    typeof electronAPI.agentSessionsMetaGet === 'function'
+      ? electronAPI.agentSessionsMetaGet(workspaceDir)
+      : Promise.resolve({ success: true, meta: { pinned: [], archived: [] } }),
+  setSessionMeta: (workspaceDir: string, meta: { pinned: string[]; archived: string[] }) =>
+    typeof electronAPI.agentSessionsMetaSet === 'function'
+      ? electronAPI.agentSessionsMetaSet(workspaceDir, meta)
+      : Promise.resolve({ success: true }),
+  saveTextFile: (suggestedName: string, content: string) =>
+    typeof electronAPI.saveTextFile === 'function'
+      ? electronAPI.saveTextFile(suggestedName, content)
+      : Promise.resolve({ success: false, error: 'Saving is not available in this environment' }),
   readFile: (path: string) => electronAPI.readFile(path),
   writeFile: (path: string, content: string) => electronAPI.writeFile(path, content),
   exists: (path: string) => electronAPI.exists(path),

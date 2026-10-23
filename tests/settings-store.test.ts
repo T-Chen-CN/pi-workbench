@@ -30,3 +30,12 @@ describe('settings store', () => {
     expect(useSettingsStore.getState().autoSaveDelay).toBe(DEFAULT_AUTO_SAVE_DELAY)
   })
 })
+
+describe('settings budget', () => {
+  it('clamps the budget to a non-negative number', () => {
+    useSettingsStore.getState().setBudgetUsd(5)
+    expect(useSettingsStore.getState().budgetUsd).toBe(5)
+    useSettingsStore.getState().setBudgetUsd(-3)
+    expect(useSettingsStore.getState().budgetUsd).toBe(0)
+  })
+})
