@@ -1956,6 +1956,66 @@ handleIpc(
   }
 )
 
+// 排队消息持久化（R-02）：按会话分组存 .pi-workbench/pending-messages.json
+type PendingMessageRecord = { id: string; text: string; behavior: 'queue' | 'steer' }
+
+function sanitizePendingSessions(value: unknown): Record<string, PendingMessageRecord[]> {
+  const sessions: Record<string, PendingMessageRecord[]> = {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return sessions
+  for (const [sessionId, list] of Object.entries(value as Record<string, unknown>)) {
+    if (Object.keys(sessions).length >= 200) break
+    if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 128) continue
+    if (!Array.isArray(list)) continue
+    const items: PendingMessageRecord[] = []
+    for (const entry of list) {
+      if (items.length >= 50) break
+      if (!entry || typeof entry !== 'object') continue
+      const record = entry as Record<string, unknown>
+      const text = typeof record.text === 'string' ? record.text.slice(0, 20000) : ''
+      if (text.trim().length === 0) continue
+      items.push({
+        id:
+          typeof record.id === 'string' && record.id.length > 0 && record.id.length <= 128
+            ? record.id
+            : `pending-${items.length + 1}`,
+        text,
+        behavior: record.behavior === 'steer' ? 'steer' : 'queue',
+      })
+    }
+    if (items.length > 0) sessions[sessionId] = items
+  }
+  return sessions
+}
+
+handleIpc('chat:pending:get', async (_event, workspaceDir: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const filePath = path.join(workspaceDir, '.pi-workbench', 'pending-messages.json')
+    const result = readJsonWithBackup<{ sessions?: unknown }>(filePath)
+    return { success: true, sessions: sanitizePendingSessions(result.data?.sessions) }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc('chat:pending:set', async (_event, workspaceDir: string, sessions: unknown) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const dir = path.join(workspaceDir, '.pi-workbench')
+    await fs.mkdir(dir, { recursive: true })
+    await writeJsonAtomic(path.join(dir, 'pending-messages.json'), {
+      sessions: sanitizePendingSessions(sessions),
+    })
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
 // 导出文本：弹出保存对话框后写入用户选择的位置
 handleIpc('app:saveTextFile', async (_event, suggestedName: string, content: string) => {
   try {

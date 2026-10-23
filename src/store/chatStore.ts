@@ -142,6 +142,7 @@ interface ChatState {
   clearDraftInput: (key: string) => void
   setMode: (key: string, mode: 'plan' | 'act') => void
   addPending: (key: string, text: string, behavior: PendingMessage['behavior']) => PendingMessage
+  setPending: (key: string, items: PendingMessage[]) => void
   removePending: (key: string, id: string) => void
   setPendingBehavior: (key: string, id: string, behavior: PendingMessage['behavior']) => void
   setContextUsage: (key: string, usage: ContextUsageInfo | null) => void
@@ -511,6 +512,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     )
     return item
   },
+
+  setPending: (key, items) =>
+    set((state) =>
+      updateExisting(state, key, (current) => ({
+        ...current,
+        pending: items.map((item) => ({ ...item })),
+      }))
+    ),
 
   removePending: (key, id) =>
     set((state) =>

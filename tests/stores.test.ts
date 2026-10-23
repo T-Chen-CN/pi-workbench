@@ -442,6 +442,18 @@ describe('chatStore pending messages', () => {
     useChatStore.getState().removePending('pending-key', second.id)
     expect(useChatStore.getState().conversations['pending-key'].pending).toHaveLength(1)
   })
+
+  it('restores pending messages from persisted records', () => {
+    useChatStore.getState().ensureConversation('restore-key')
+    useChatStore.getState().setPending('restore-key', [
+      { id: 'p1', text: 'resume this', behavior: 'queue' },
+      { id: 'p2', text: 'inject that', behavior: 'steer' },
+    ])
+    expect(useChatStore.getState().conversations['restore-key'].pending).toEqual([
+      { id: 'p1', text: 'resume this', behavior: 'queue' },
+      { id: 'p2', text: 'inject that', behavior: 'steer' },
+    ])
+  })
 })
 
 describe('chatStore context usage', () => {

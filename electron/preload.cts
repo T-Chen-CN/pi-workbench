@@ -181,6 +181,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     workspaceDir: string,
     meta: { pinned?: string[]; archived?: string[] }
   ) => ipcRenderer.invoke('agent:sessions:meta:set', workspaceDir, meta),
+  chatPendingGet: (workspaceDir: string) => ipcRenderer.invoke('chat:pending:get', workspaceDir),
+  chatPendingSet: (workspaceDir: string, sessions: unknown) =>
+    ipcRenderer.invoke('chat:pending:set', workspaceDir, sessions),
   saveTextFile: (suggestedName: string, content: string) =>
     ipcRenderer.invoke('app:saveTextFile', suggestedName, content),
   searchWorkspaceFiles: (workspaceDir: string, query: string, limit?: number) =>

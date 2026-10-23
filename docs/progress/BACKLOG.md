@@ -18,7 +18,7 @@
 
 | ID | 项目 | 优先级 | 来源 | 依赖 |
 | --- | --- | --- | --- | --- |
-| R-02 | 排队消息跨重启持久化 | P2 | AF-04 剩余 | chatStore + `.pi-workbench/` |
+| R-02 | ✅ 排队消息跨重启持久化 | P2 | AF-04 剩余 | chatStore + `.pi-workbench/` |
 | R-03 | 对话分支切换 UI（n/m） | P2 | AF-07 剩余 | Pi 会话树、fork |
 | R-04 | 任务列表基于结构化计划并跨压缩保留 | P2 | AF-12 剩余 + AF-02 升级 | Plan 模式结构化输出、compaction |
 | R-05 | 自动压缩分隔线 | P2 | AF-05 剩余 | `compaction_start/end` 事件 |
@@ -40,12 +40,14 @@
 
 ## 3. 详细条目
 
-### R-02 排队消息跨重启持久化
+### R-02 排队消息跨重启持久化 ✅（2026-10-24）
 
 - 现状：待发送消息存在 `chatStore` 内存中，会话切换保留、应用重启丢失。
 - 目标：重启后恢复每个会话的待发送消息与排队 / 插话模式。
 - 技术：写入 `{workspace}/.pi-workbench/pending-messages.json`（明文、原子写、按会话分组），App 启动时 hydrate 进 chatStore；关闭标签或删除会话时清理。
 - 验收：运行中发一条排队消息，立即关闭应用并重启，卡片恢复且可继续发送 / 删除。
+- **完成情况**：新增 `chat:pending:get/set` IPC，主进程做结构与长度清洗后经 `writeJsonAtomic` 写入；ChatPanel 在工作区初始化时恢复各会话的待发送消息，并订阅 chatStore 变化（300ms 合并）回写快照，关闭标签 / 删除会话时快照自然移除该会话。
+- **验证**：`type-check` / `lint` / `npm test`（46 文件 426 用例）/ `npm run build` 通过；新增 IPC 清洗与拒绝未授权工作区、store 恢复、ChatPanel 重启恢复渲染测试。
 
 ### R-03 对话分支切换 UI（n/m）
 

@@ -39,6 +39,7 @@ import type {
   AppActiveWorkResult,
   DraftListResult,
   DraftResult,
+  PendingMessagesMap,
 } from '../types/electron'
 
 // Mock API for browser development
@@ -346,6 +347,14 @@ export const api = {
   setSessionMeta: (workspaceDir: string, meta: { pinned: string[]; archived: string[] }) =>
     typeof electronAPI.agentSessionsMetaSet === 'function'
       ? electronAPI.agentSessionsMetaSet(workspaceDir, meta)
+      : Promise.resolve({ success: true }),
+  getPendingMessages: (workspaceDir: string) =>
+    typeof electronAPI.chatPendingGet === 'function'
+      ? electronAPI.chatPendingGet(workspaceDir)
+      : Promise.resolve({ success: true, sessions: {} as PendingMessagesMap }),
+  setPendingMessages: (workspaceDir: string, sessions: PendingMessagesMap) =>
+    typeof electronAPI.chatPendingSet === 'function'
+      ? electronAPI.chatPendingSet(workspaceDir, sessions)
       : Promise.resolve({ success: true }),
   saveTextFile: (suggestedName: string, content: string) =>
     typeof electronAPI.saveTextFile === 'function'
