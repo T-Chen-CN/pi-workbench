@@ -54,6 +54,8 @@ vi.mock('../src/api/piAgentAPI', () => ({
     getContextUsage: vi.fn(),
     compactContext: vi.fn(),
     getSessionSettings: vi.fn(),
+    getSessionStats: vi.fn(),
+    getToolEdit: vi.fn(),
     setSessionModel: vi.fn(),
     setSessionThinking: vi.fn(),
     rewindLastUser: vi.fn(),
@@ -171,6 +173,11 @@ beforeEach(() => {
     modelId: 'test-model',
     thinkingLevel: 'medium',
   })
+  vi.mocked(piAgentAPI.getSessionStats).mockResolvedValue({
+    success: true,
+    stats: { tokens: 0, input: 0, output: 0, cost: 0, toolCalls: 0, messages: 0 },
+  })
+  vi.mocked(piAgentAPI.getToolEdit).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.listCheckpoints).mockResolvedValue({ success: true, checkpoints: [] })
   vi.mocked(piAgentAPI.steer).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.respondApproval).mockResolvedValue({ success: true })

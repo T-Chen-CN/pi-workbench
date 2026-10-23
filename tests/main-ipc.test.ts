@@ -34,6 +34,7 @@ vi.mock('electron', () => ({
     getAppPath: () => mocks.state.appDir,
     getPath: () => mocks.state.appDir,
     setPath: () => {},
+    setAppUserModelId: () => {},
     whenReady: () => new Promise(() => {}),
     on: () => {},
     quit: () => {},
