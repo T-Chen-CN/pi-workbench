@@ -35,6 +35,8 @@ export interface ChatMessage {
   usage?: ChatUsage
   /** 本轮 Agent 修改过的文件（用于消息内的变更卡） */
   edits?: FileEdit[]
+  /** 用户消息附带的图片（R-08），发送后与历史恢复时展示 */
+  images?: Array<{ data: string; mimeType: string }>
   /** 同一用户消息下的回复分支（R-03） */
   branch?: {
     userTimestamp: number

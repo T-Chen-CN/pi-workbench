@@ -260,6 +260,48 @@ const TurnEditSummary: React.FC<{
 }
 
 /** 单条消息；memo 保证流式追加只重渲染最后一条 */
+/** 用户消息中的图片缩略图；点击打开大图预览（R-08） */
+const MessageImages: React.FC<{
+  images: Array<{ data: string; mimeType: string }>
+}> = ({ images }) => {
+  const { t } = useI18nStore()
+  const [preview, setPreview] = useState<number | null>(null)
+
+  return (
+    <>
+      <div className="mt-1.5 flex flex-wrap gap-2">
+        {images.map((image, index) => (
+          <button
+            key={index}
+            type="button"
+            onClick={() => setPreview(index)}
+            className="border border-rule-hairline bg-sunken p-1"
+            aria-label={t('imagePreviewLabel', { index: index + 1 })}
+          >
+            <img
+              src={`data:${image.mimeType};base64,${image.data}`}
+              alt=""
+              className="h-32 max-w-[16rem] object-contain"
+            />
+          </button>
+        ))}
+      </div>
+      {preview !== null && images[preview] && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/70 p-6"
+          onClick={() => setPreview(null)}
+        >
+          <img
+            src={`data:${images[preview].mimeType};base64,${images[preview].data}`}
+            alt=""
+            className="max-h-full max-w-full object-contain"
+          />
+        </div>
+      )}
+    </>
+  )
+}
+
 const ChatMessageRow = React.memo(function ChatMessageRow({
   message,
   diffToolIds,
@@ -376,7 +418,12 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
       {isUser ? (
         <div className="flex gap-2 type-reading text-ink">
           <span className="type-project text-accent">›</span>
-          <span className="whitespace-pre-wrap">{message.content}</span>
+          <div className="min-w-0 flex-1">
+            <span className="whitespace-pre-wrap">{message.content}</span>
+            {message.images && message.images.length > 0 && (
+              <MessageImages images={message.images} />
+            )}
+          </div>
         </div>
       ) : (
         <div className="text-ink">
@@ -1598,7 +1645,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     useSessionStore.getState().markUnread(workspacePath, sessionId, false)
     chat.setDraftInput(key, '')
     if (!options?.skipUserMessage) {
-      chat.addMessage(key, { role: 'user', content: userMessage })
+      chat.addMessage(key, {
+        role: 'user',
+        content: userMessage,
+        images:
+          imageAttachments.length > 0
+            ? imageAttachments.map((attachment) => ({
+                data: attachment.data ?? '',
+                mimeType: attachment.mimeType ?? 'image/png',
+              }))
+            : undefined,
+      })
     }
     setShowAttachMenu(false)
     chat.setLoading(key, true)

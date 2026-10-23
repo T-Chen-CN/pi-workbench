@@ -323,6 +323,7 @@ export const translations = {
     imageTooManyPixels: '图片分辨率过高，请裁剪或缩小后重试',
     imageTotalTooLarge: '图片总大小超出限制，请减少数量或尺寸',
     modelImageDisabled: '当前模型未启用图片能力，请在设置 → 供应商中勾选支持图片的模型',
+    imagePreviewLabel: '查看图片 {index}',
     contextReadFailed: '读取文件失败',
     contextTooLarge: '文件过大，已跳过',
     contextTotalTooLarge: '附件总大小超出限制，已跳过后续文件',
@@ -910,6 +911,7 @@ export const translations = {
     imageTotalTooLarge: 'Images exceed the total size limit; reduce their count or size',
     modelImageDisabled:
       'Image input is not enabled for this model. Check it under Settings → Provider.',
+    imagePreviewLabel: 'View image {index}',
     contextReadFailed: 'Failed to read file',
     contextTooLarge: 'File too large, skipped',
     contextTotalTooLarge: 'Attached files exceed the total limit; remaining files were skipped',

@@ -712,6 +712,8 @@ export interface AgentHistoryResult {
     role: 'user' | 'assistant'
     content: string
     parts?: AgentTracePart[]
+    /** 用户消息附带的图片（R-08） */
+    images?: AgentImagePayload[]
     timestamp: number
   }>
   error?: string

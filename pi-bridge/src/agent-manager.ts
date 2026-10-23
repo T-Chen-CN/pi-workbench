@@ -619,6 +619,8 @@ export interface AgentMessage {
   role: 'user' | 'assistant'
   content: string
   parts?: AgentTracePart[]
+  /** 用户消息附带的图片（R-08），用于历史恢复时展示 */
+  images?: Array<{ data: string; mimeType: string }>
   timestamp: number
 }
 
@@ -2526,9 +2528,21 @@ ${body.join('\n')}
                   .map((part: any) => part.text)
                   .join('\n')
               : ''
+        const images = Array.isArray(msg.content)
+          ? msg.content
+              .filter(
+                (part: any) => part?.type === 'image' && typeof part.data === 'string'
+              )
+              .map((part: any) => ({
+                data: part.data as string,
+                mimeType:
+                  typeof part.mimeType === 'string' ? part.mimeType : 'image/png',
+              }))
+          : []
         result.push({
           role: 'user',
           content: stripContextBlock(raw),
+          images: images.length > 0 ? images : undefined,
           timestamp: typeof msg.timestamp === 'number' ? msg.timestamp : Date.now(),
         })
         continue
