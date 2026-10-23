@@ -78,6 +78,8 @@ export interface AgentPartsProps {
   /** 有对应 Diff 可打开的工具调用 */
   diffToolIds?: Set<string>
   onOpenDiff?: (toolCallId: string) => void
+  /** 查看工具结果的完整输出（R-20） */
+  onOpenToolResult?: (toolCallId: string, toolName: string) => void
 }
 
 export const AgentParts: React.FC<AgentPartsProps> = React.memo(function AgentParts({
@@ -85,6 +87,7 @@ export const AgentParts: React.FC<AgentPartsProps> = React.memo(function AgentPa
   isStreaming,
   diffToolIds,
   onOpenDiff,
+  onOpenToolResult,
 }) {
   const groups = useMemo(() => buildGroups(parts), [parts])
 
@@ -113,6 +116,7 @@ export const AgentParts: React.FC<AgentPartsProps> = React.memo(function AgentPa
             isStreaming={isStreaming && index === groups.length - 1}
             diffToolIds={diffToolIds}
             onOpenDiff={onOpenDiff}
+            onOpenToolResult={onOpenToolResult}
           />
         )
       })}
@@ -125,6 +129,7 @@ interface WorkGroupProps {
   isStreaming: boolean
   diffToolIds?: Set<string>
   onOpenDiff?: (toolCallId: string) => void
+  onOpenToolResult?: (toolCallId: string, toolName: string) => void
 }
 
 const WorkGroup: React.FC<WorkGroupProps> = ({
@@ -132,6 +137,7 @@ const WorkGroup: React.FC<WorkGroupProps> = ({
   isStreaming,
   diffToolIds,
   onOpenDiff,
+  onOpenToolResult,
 }) => {
   const { t } = useI18nStore()
   const [open, setOpen] = useState(false)
@@ -224,6 +230,11 @@ const WorkGroup: React.FC<WorkGroupProps> = ({
                   Boolean(part.hasDiff) || (diffToolIds?.has(part.toolCallId) ?? false)
                 }
                 onOpenDiff={onOpenDiff}
+                onOpenResult={
+                  part.status !== 'running' && onOpenToolResult
+                    ? () => onOpenToolResult(part.toolCallId, part.toolName)
+                    : undefined
+                }
               />
             )
           )}
@@ -264,10 +275,12 @@ const ToolRow = React.memo(function ToolRow({
   part,
   hasDiff,
   onOpenDiff,
+  onOpenResult,
 }: {
   part: Extract<AgentTracePart, { type: 'tool' }>
   hasDiff: boolean
   onOpenDiff?: (toolCallId: string) => void
+  onOpenResult?: () => void
 }) {
   const { t } = useI18nStore()
   const [open, setOpen] = useState(false)
@@ -354,6 +367,15 @@ const ToolRow = React.memo(function ToolRow({
               className="type-label text-accent underline underline-offset-2 hover:text-ink"
             >
               {t('viewChanges')}
+            </button>
+          )}
+          {onOpenResult && (
+            <button
+              type="button"
+              onClick={onOpenResult}
+              className="type-label text-accent underline underline-offset-2 hover:text-ink"
+            >
+              {t('viewFullResult')}
             </button>
           )}
         </div>

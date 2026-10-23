@@ -441,6 +441,17 @@ export interface FileEdit {
   toolCallId?: string
 }
 
+/** 工具结果元数据（R-20）；完整内容按需从会话消息中读取 */
+export interface ToolResultMeta {
+  toolName: string
+  /** text：可分段读取；image：仅含图片结果 */
+  kind: 'text' | 'image'
+  chars: number
+  bytes: number
+  lines: number
+  imageCount: number
+}
+
 export interface AgentUsage {
   input: number
   output: number
@@ -1228,6 +1239,143 @@ export class AgentManager {
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
+  }
+
+  /** 工具结果元数据（R-20）；不复制内容，只统计大小 */
+  async getToolResultMeta(
+    sessionId: string,
+    toolCallId: string
+  ): Promise<{ success: boolean; meta?: ToolResultMeta; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const payload = this.toolResultPayload(runtime, toolCallId)
+      if (!payload) return { success: false, error: 'No result recorded for this tool call.' }
+      const imageBytes = payload.images.reduce(
+        (total, image) => total + Math.floor((image.data.length * 3) / 4),
+        0
+      )
+      return {
+        success: true,
+        meta: {
+          toolName: payload.toolName,
+          kind: payload.images.length > 0 && payload.text.length === 0 ? 'image' : 'text',
+          chars: payload.text.length,
+          bytes: Buffer.byteLength(payload.text, 'utf8') + imageBytes,
+          lines: payload.text.length === 0 ? 0 : payload.text.split('\n').length,
+          imageCount: payload.images.length,
+        },
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 分页读取工具结果文本；offset / nextOffset 以 UTF-16 字符计 */
+  async readToolResultChunk(
+    sessionId: string,
+    toolCallId: string,
+    offset = 0,
+    limit = 65_536
+  ): Promise<{
+    success: boolean
+    text?: string
+    offset?: number
+    nextOffset?: number
+    chars?: number
+    done?: boolean
+    error?: string
+  }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const payload = this.toolResultPayload(runtime, toolCallId)
+      if (!payload) return { success: false, error: 'No result recorded for this tool call.' }
+      const text = payload.text
+      const start = Math.max(0, Math.min(Math.floor(offset) || 0, text.length))
+      const size = Math.max(1, Math.min(Math.floor(limit) || 1, 1_000_000))
+      let end = Math.min(text.length, start + size)
+      // 不把代理对切成两半，避免渲染层出现乱码字符
+      if (end < text.length) {
+        const code = text.charCodeAt(end)
+        if (code >= 0xdc00 && code <= 0xdfff) end += 1
+      }
+      return {
+        success: true,
+        text: text.slice(start, end),
+        offset: start,
+        nextOffset: end,
+        chars: text.length,
+        done: end >= text.length,
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 读取工具结果中的一张图片（base64，不含 data: 前缀） */
+  async getToolResultImage(
+    sessionId: string,
+    toolCallId: string,
+    index = 0
+  ): Promise<{ success: boolean; data?: string; mimeType?: string; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const payload = this.toolResultPayload(runtime, toolCallId)
+      if (!payload || payload.images.length === 0) {
+        return { success: false, error: 'No image result recorded for this tool call.' }
+      }
+      const image = payload.images[Math.max(0, Math.min(index, payload.images.length - 1))]
+      return { success: true, data: image.data, mimeType: image.mimeType }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 导出用：读取完整结果（主进程内调用，不经过 IPC） */
+  async getToolResultText(
+    sessionId: string,
+    toolCallId: string
+  ): Promise<{ success: boolean; text?: string; toolName?: string; error?: string }> {
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      const payload = this.toolResultPayload(runtime, toolCallId)
+      if (!payload) return { success: false, error: 'No result recorded for this tool call.' }
+      return { success: true, text: payload.text, toolName: payload.toolName }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  private toolResultPayload(
+    runtime: SessionRuntime,
+    toolCallId: string
+  ): { toolName: string; text: string; images: Array<{ data: string; mimeType: string }> } | null {
+    const messages = (runtime.session.messages ?? []) as any[]
+    for (const message of messages) {
+      if (!message || message.role !== 'toolResult' || message.toolCallId !== toolCallId) continue
+      const content: any[] = Array.isArray(message.content)
+        ? message.content
+        : typeof message.content === 'string'
+          ? [{ type: 'text', text: message.content }]
+          : []
+      const texts: string[] = []
+      const images: Array<{ data: string; mimeType: string }> = []
+      for (const part of content) {
+        if (part?.type === 'text' && typeof part.text === 'string') {
+          texts.push(part.text)
+        } else if (part?.type === 'image' && typeof part.data === 'string') {
+          images.push({
+            data: part.data,
+            mimeType: typeof part.mimeType === 'string' ? part.mimeType : 'image/png',
+          })
+        }
+      }
+      return {
+        toolName: typeof message.toolName === 'string' ? message.toolName : 'tool',
+        text: texts.join('\n'),
+        images,
+      }
+    }
+    return null
   }
 
   /** 会话累计用量与成本 */

@@ -144,6 +144,37 @@ export interface ElectronAPI {
     edit?: { path: string; oldContent: string; newContent: string }
     error?: string
   }>
+  agentToolResultMeta: (
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string
+  ) => Promise<{ success: boolean; meta?: ToolResultMeta; error?: string }>
+  agentToolResultChunk: (
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string,
+    offset?: number,
+    limit?: number
+  ) => Promise<{
+    success: boolean
+    text?: string
+    offset?: number
+    nextOffset?: number
+    chars?: number
+    done?: boolean
+    error?: string
+  }>
+  agentToolResultImage: (
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string,
+    index?: number
+  ) => Promise<{ success: boolean; data?: string; mimeType?: string; error?: string }>
+  agentToolResultOpen: (
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string
+  ) => Promise<{ success: boolean; path?: string; error?: string }>
   agentSessionSetModel: (
     workspaceDir: string,
     sessionId: string,
@@ -423,6 +454,16 @@ export interface PendingMessageRecord {
 }
 
 export type PendingMessagesMap = Record<string, PendingMessageRecord[]>
+
+/** 工具结果全量查看（R-20） */
+export interface ToolResultMeta {
+  toolName: string
+  kind: 'text' | 'image'
+  chars: number
+  bytes: number
+  lines: number
+  imageCount: number
+}
 
 /** 会话累计用量与成本 */
 export interface SessionStatsInfo {

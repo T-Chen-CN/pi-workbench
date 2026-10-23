@@ -5,6 +5,7 @@ import { ChatPanel } from '../src/components/ChatPanel'
 import { FileExplorer } from '../src/components/FileExplorer'
 import { MonacoEditor } from '../src/components/MonacoEditor'
 import { WelcomeScreen } from '../src/components/WelcomeScreen'
+import { ToolResultViewer } from '../src/components/ToolResultViewer'
 import { useChatStore, conversationKey } from '../src/store/chatStore'
 import { useEditorStore } from '../src/store/editorStore'
 import { useSelectionStore } from '../src/store/selectionStore'
@@ -58,6 +59,10 @@ vi.mock('../src/api/piAgentAPI', () => ({
     getSessionSettings: vi.fn(),
     getSessionStats: vi.fn(),
     getToolEdit: vi.fn(),
+    getToolResultMeta: vi.fn(),
+    readToolResultChunk: vi.fn(),
+    getToolResultImage: vi.fn(),
+    openToolResultExternally: vi.fn(),
     setSessionModel: vi.fn(),
     setSessionThinking: vi.fn(),
     rewindLastUser: vi.fn(),
@@ -182,6 +187,10 @@ beforeEach(() => {
     stats: { tokens: 0, input: 0, output: 0, cost: 0, toolCalls: 0, messages: 0 },
   })
   vi.mocked(piAgentAPI.getToolEdit).mockResolvedValue({ success: false })
+  vi.mocked(piAgentAPI.getToolResultMeta).mockResolvedValue({ success: false })
+  vi.mocked(piAgentAPI.readToolResultChunk).mockResolvedValue({ success: false })
+  vi.mocked(piAgentAPI.getToolResultImage).mockResolvedValue({ success: false })
+  vi.mocked(piAgentAPI.openToolResultExternally).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.listCheckpoints).mockResolvedValue({ success: true, checkpoints: [] })
   vi.mocked(piAgentAPI.listBranches).mockResolvedValue({ success: true, groups: [] })
   vi.mocked(piAgentAPI.switchBranch).mockResolvedValue({ success: false })
@@ -801,5 +810,35 @@ describe('MonacoEditor', () => {
       const file = useEditorStore.getState().openFiles.find((item) => item.path === '/ws/a.ts')
       expect(file?.content).toBe('updated-a')
     })
+  })
+})
+
+describe('ToolResultViewer', () => {
+  it('loads and shows the full tool result', async () => {
+    vi.mocked(piAgentAPI.getToolResultMeta).mockResolvedValue({
+      success: true,
+      meta: { toolName: 'bash', kind: 'text', chars: 11, bytes: 11, lines: 2, imageCount: 0 },
+    })
+    vi.mocked(piAgentAPI.readToolResultChunk).mockResolvedValue({
+      success: true,
+      text: 'alpha\nbeta',
+      offset: 0,
+      nextOffset: 10,
+      chars: 10,
+      done: true,
+    })
+
+    render(
+      <ToolResultViewer
+        workspacePath="/ws"
+        sessionId="s1"
+        toolCallId="call-1"
+        toolName="bash"
+        onClose={() => {}}
+      />
+    )
+
+    expect(await screen.findByText('alpha')).toBeTruthy()
+    expect(screen.getByText('beta')).toBeTruthy()
   })
 })

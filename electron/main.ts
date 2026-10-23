@@ -5,6 +5,7 @@ import {
   dialog,
   safeStorage,
   Notification,
+  shell,
   type IpcMainInvokeEvent,
 } from 'electron'
 import * as path from 'path'
@@ -2474,6 +2475,109 @@ handleIpc(
         return { success: false, error: 'Historical diffs are not supported by this agent' }
       }
       return await agent.getToolEdit(sessionId, toolCallId)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
+// 工具结果全量查看（R-20）：只读访问会话消息中的完整结果
+handleIpc('agent:tool-result:meta', async (_event, workspaceDir: string, sessionId: string, toolCallId: string) => {
+  try {
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const agent = agentRegistry.get(workspaceDir)
+    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+    if (typeof agent.getToolResultMeta !== 'function') {
+      return { success: false, error: 'Tool results are not supported by this agent' }
+    }
+    return await agent.getToolResultMeta(sessionId, toolCallId)
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+})
+
+handleIpc(
+  'agent:tool-result:chunk',
+  async (
+    _event,
+    workspaceDir: string,
+    sessionId: string,
+    toolCallId: string,
+    offset?: number,
+    limit?: number
+  ) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.readToolResultChunk !== 'function') {
+        return { success: false, error: 'Tool results are not supported by this agent' }
+      }
+      const safeOffset = typeof offset === 'number' && Number.isFinite(offset) ? offset : 0
+      const safeLimit = typeof limit === 'number' && Number.isFinite(limit) ? limit : 65_536
+      return await agent.readToolResultChunk(sessionId, toolCallId, safeOffset, safeLimit)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
+handleIpc(
+  'agent:tool-result:image',
+  async (_event, workspaceDir: string, sessionId: string, toolCallId: string, index?: number) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.getToolResultImage !== 'function') {
+        return { success: false, error: 'Tool results are not supported by this agent' }
+      }
+      return await agent.getToolResultImage(
+        sessionId,
+        toolCallId,
+        typeof index === 'number' && Number.isFinite(index) ? index : 0
+      )
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+)
+
+// 完整结果导出到应用缓存并用系统编辑器打开（不产生第二份长期副本）
+handleIpc(
+  'agent:tool-result:open',
+  async (_event, workspaceDir: string, sessionId: string, toolCallId: string) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const agent = agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.getToolResultText !== 'function') {
+        return { success: false, error: 'Tool results are not supported by this agent' }
+      }
+      const result = await agent.getToolResultText(sessionId, toolCallId)
+      if (!result.success || typeof result.text !== 'string') return result
+
+      const safeId = toolCallId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'result'
+      const filePath = path.join(
+        getAppDir(),
+        'cache',
+        'temp',
+        `tool-result-${safeId}.txt`
+      )
+      await fs.mkdir(path.dirname(filePath), { recursive: true })
+      await fs.writeFile(filePath, result.text, 'utf-8')
+      const openError = await shell.openPath(filePath)
+      return openError
+        ? { success: false, error: openError, path: filePath }
+        : { success: true, path: filePath }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
