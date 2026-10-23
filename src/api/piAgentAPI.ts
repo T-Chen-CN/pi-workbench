@@ -414,6 +414,14 @@ export const piAgentAPI = {
     }
   },
 
+  /** 桌面通知点击：定位到对应工作区与会话 */
+  onNotifyClick(
+    callback: (payload: { workspaceDir: string; sessionId: string }) => void
+  ): () => void {
+    if (typeof window.electronAPI?.onNotifyClick !== 'function') return () => {}
+    return window.electronAPI.onNotifyClick(callback)
+  },
+
   /**
    * 监听工具审批请求（仅 Electron；Web dev 桥没有审批通道）
    */

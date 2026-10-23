@@ -144,6 +144,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:sessions:setTabs', workspaceDir, tabs),
   agentSessionsSetMode: (workspaceDir: string, sessionId: string, mode: 'plan' | 'act') =>
     ipcRenderer.invoke('agent:sessions:setMode', workspaceDir, sessionId, mode),
+  onNotifyClick: (
+    callback: (payload: { workspaceDir: string; sessionId: string }) => void
+  ) => {
+    const listener = (_event: unknown, payload: { workspaceDir: string; sessionId: string }) =>
+      callback(payload)
+    ipcRenderer.on('app:notify-click', listener)
+    return () => ipcRenderer.removeListener('app:notify-click', listener)
+  },
   onAgentApprovalRequest: (
     callback: (payload: {
       requestId: string

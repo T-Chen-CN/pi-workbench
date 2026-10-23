@@ -14,6 +14,29 @@ export const DEFAULT_PERMISSION_POLICY: PermissionPolicy = {
 
 export const TOOL_CATEGORIES: ToolCategory[] = ['read', 'write', 'command', 'other']
 
+export interface NotificationPrefs {
+  enabled: boolean
+  approval: boolean
+  complete: boolean
+  error: boolean
+}
+
+export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
+  enabled: true,
+  approval: true,
+  complete: true,
+  error: true,
+}
+
+export function normalizeNotificationPrefs(input: unknown): NotificationPrefs {
+  const source = (input ?? {}) as Record<string, unknown>
+  const result = { ...DEFAULT_NOTIFICATION_PREFS }
+  for (const key of ['enabled', 'approval', 'complete', 'error'] as const) {
+    if (typeof source[key] === 'boolean') result[key] = source[key] as boolean
+  }
+  return result
+}
+
 export function isPermissionAction(value: unknown): value is PermissionAction {
   return value === 'allow' || value === 'ask' || value === 'deny'
 }
@@ -37,13 +60,16 @@ interface SettingsState {
   autoSave: boolean
   autoSaveDelay: number
   permissions: PermissionPolicy
+  notifications: NotificationPrefs
   setAutoSave: (enabled: boolean) => void
   setAutoSaveDelay: (delayMs: number) => void
   setPermission: (category: ToolCategory, action: PermissionAction) => void
+  setNotificationPrefs: (patch: Partial<NotificationPrefs>) => void
   hydrate: (settings: {
     autoSave?: unknown
     autoSaveDelay?: unknown
     permissions?: unknown
+    notifications?: unknown
   }) => void
 }
 
@@ -52,6 +78,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   autoSave: true,
   autoSaveDelay: DEFAULT_AUTO_SAVE_DELAY,
   permissions: { ...DEFAULT_PERMISSION_POLICY },
+  notifications: { ...DEFAULT_NOTIFICATION_PREFS },
 
   setAutoSave: (enabled) => set({ autoSave: enabled }),
 
@@ -59,6 +86,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
 
   setPermission: (category, action) =>
     set((state) => ({ permissions: { ...state.permissions, [category]: action } })),
+
+  setNotificationPrefs: (patch) =>
+    set((state) => ({ notifications: { ...state.notifications, ...patch } })),
 
   hydrate: (settings) =>
     set((state) => ({
@@ -72,5 +102,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         settings.permissions === undefined
           ? state.permissions
           : normalizePermissionPolicy(settings.permissions),
+      notifications:
+        settings.notifications === undefined
+          ? state.notifications
+          : normalizeNotificationPrefs(settings.notifications),
     })),
 }))

@@ -77,6 +77,9 @@ export interface ElectronAPI {
     sessionId: string,
     mode: SessionMode
   ) => Promise<{ success: boolean; error?: string }>
+  onNotifyClick: (
+    callback: (payload: { workspaceDir: string; sessionId: string }) => void
+  ) => () => void
   onAgentApprovalRequest: (callback: (payload: ApprovalRequestPayload) => void) => () => void
   agentRespondApproval: (
     requestId: string,

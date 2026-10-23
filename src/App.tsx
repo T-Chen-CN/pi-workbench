@@ -304,6 +304,24 @@ export default function App() {
     }
   }
 
+  // 桌面通知点击：先切到对应工作区，再让 ChatPanel 激活会话
+  const openWorkspaceRef = useRef(openWorkspaceAt)
+  useEffect(() => {
+    openWorkspaceRef.current = openWorkspaceAt
+  })
+
+  useEffect(() => {
+    const off = piAgentAPI.onNotifyClick(({ workspaceDir, sessionId }) => {
+      void (async () => {
+        if (workspaceDir && workspaceDir !== useWorkspaceStore.getState().workspacePath) {
+          await openWorkspaceRef.current(workspaceDir)
+        }
+        useSessionStore.getState().requestActivation(workspaceDir, sessionId)
+      })()
+    })
+    return () => off()
+  }, [])
+
   const pickWorkspace = async () => {
     try {
       setError(null)

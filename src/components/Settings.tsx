@@ -18,6 +18,7 @@ import {
   clampAutoSaveDelay,
   MIN_AUTO_SAVE_DELAY,
   MAX_AUTO_SAVE_DELAY,
+  type NotificationPrefs,
 } from '../store/settingsStore'
 import { useUpdaterStore } from '../store/updaterStore'
 import { api } from '../api'
@@ -58,8 +59,16 @@ interface SettingsProps {
 export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }) => {
   const { language, setLanguage, t } = useI18nStore()
   const { mode, setMode } = useThemeStore()
-  const { autoSave, autoSaveDelay, permissions, setAutoSave, setAutoSaveDelay, setPermission } =
-    useSettingsStore()
+  const {
+    autoSave,
+    autoSaveDelay,
+    permissions,
+    notifications,
+    setAutoSave,
+    setAutoSaveDelay,
+    setPermission,
+    setNotificationPrefs,
+  } = useSettingsStore()
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const isMac = isMacPlatform()
   const mod = isMac ? '⌘' : 'Ctrl'
@@ -182,6 +191,12 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     const next = { ...permissions, [category]: action as PermissionAction }
     setPermission(category, action)
     void persistSettings({ permissions: next })
+  }
+
+  const handleNotificationChange = (patch: Partial<NotificationPrefs>) => {
+    const next = { ...notifications, ...patch }
+    setNotificationPrefs(patch)
+    void persistSettings({ notifications: next })
   }
 
   const loadApiConfig = useCallback(async () => {
@@ -395,6 +410,37 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                   </option>
                 ))}
               </Select>
+            </Field>
+            <Field label={t('notifications')} hint={t('notificationsHint')}>
+              <div className="flex flex-col gap-2 type-value text-ink">
+                {([
+                  { key: 'enabled' as const, label: t('notificationsEnabled') },
+                  { key: 'approval' as const, label: t('notifyOnApproval') },
+                  { key: 'complete' as const, label: t('notifyOnComplete') },
+                  { key: 'error' as const, label: t('notifyOnError') },
+                ]).map(({ key, label }) => {
+                  const disabled = key !== 'enabled' && !notifications.enabled
+                  return (
+                    <label
+                      key={key}
+                      className={`flex items-center gap-2 ${disabled ? 'opacity-40' : ''}`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-3 w-3 accent-[rgb(var(--accent))]"
+                        checked={notifications[key]}
+                        disabled={disabled}
+                        onChange={(event) =>
+                          handleNotificationChange({
+                            [key]: event.target.checked,
+                          } as Partial<NotificationPrefs>)
+                        }
+                      />
+                      {label}
+                    </label>
+                  )
+                })}
+              </div>
             </Field>
           </div>
         )}

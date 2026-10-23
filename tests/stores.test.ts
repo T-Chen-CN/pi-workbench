@@ -4,6 +4,7 @@ import { useChatStore } from '../src/store/chatStore'
 import { useToastStore, toast } from '../src/store/toastStore'
 import { useWorkspaceStore } from '../src/store/workspaceStore'
 import { useDiffStore } from '../src/store/diffStore'
+import { useSessionStore } from '../src/store/sessionStore'
 
 beforeEach(() => {
   useEditorStore.getState().reset()
@@ -391,5 +392,17 @@ describe('chatStore session mode', () => {
     // 不存在的会话不会被创建
     useChatStore.getState().setMode('missing-key', 'plan')
     expect(useChatStore.getState().conversations['missing-key']).toBeUndefined()
+  })
+})
+
+describe('sessionStore pending activation', () => {
+  it('stores and clears the session requested by a notification click', () => {
+    useSessionStore.getState().requestActivation('F:/work', 'session-2')
+    expect(useSessionStore.getState().pendingActivation).toEqual({
+      workspaceDir: 'F:/work',
+      sessionId: 'session-2',
+    })
+    useSessionStore.getState().clearPendingActivation()
+    expect(useSessionStore.getState().pendingActivation).toBeNull()
   })
 })

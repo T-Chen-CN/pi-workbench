@@ -624,6 +624,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     return () => window.removeEventListener('attach-selection', onAttachSelection)
   }, [activeKey, t])
 
+  // 桌面通知点击后激活目标会话（工作区已由 App 切换）
+  useEffect(() => {
+    const pending = useSessionStore.getState().pendingActivation
+    if (!pending || pending.workspaceDir !== workspacePath || !initialized) return
+    if (!sessions.some((session) => session.id === pending.sessionId)) {
+      useSessionStore.getState().clearPendingActivation()
+      return
+    }
+    useSessionStore.getState().setActive(workspacePath, pending.sessionId)
+    useSessionStore.getState().clearPendingActivation()
+  }, [initialized, sessions, workspacePath])
+
   const handleSubmit = async (e?: React.FormEvent, override?: string) => {
     e?.preventDefault()
 

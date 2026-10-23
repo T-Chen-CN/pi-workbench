@@ -1,4 +1,12 @@
-import { app, BrowserWindow, ipcMain, dialog, safeStorage, type IpcMainInvokeEvent } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  safeStorage,
+  Notification,
+  type IpcMainInvokeEvent,
+} from 'electron'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { fileURLToPath, pathToFileURL } from 'url'
@@ -17,6 +25,7 @@ import { FleetManager } from './fleet-manager.js'
 import { DraftStore } from './draft-store.js'
 import type { UpdateController, UpdateState } from './updater.js'
 import { ApprovalBroker, sanitizeApprovalDecision } from './approval-broker.js'
+import { NotificationRouter } from './notifications.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
 
@@ -57,11 +66,48 @@ let agentFileLogger: FileLogger | null = null
 /** settings.json 的内存副本；权限策略随工具调用实时读取 */
 let appSettingsCache: Record<string, any> = {}
 
+/** 桌面通知文案（跟随应用语言） */
+function notificationText() {
+  const zh = (appSettingsCache.language ?? 'zh') !== 'en'
+  return zh
+    ? { approval: '需要审批', complete: '会话已完成', error: '会话运行失败' }
+    : { approval: 'Approval required', complete: 'Session finished', error: 'Session failed' }
+}
+
+/** 桌面通知：仅应用不在前台时发送；点击回到对应工作区与会话 */
+const notificationRouter = new NotificationRouter(
+  (payload) => {
+    if (!Notification.isSupported()) return
+    const notification = new Notification({ title: payload.title, body: payload.body })
+    notification.on('click', () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+      mainWindow.webContents.send('app:notify-click', {
+        workspaceDir: payload.workspaceDir,
+        sessionId: payload.sessionId,
+      })
+    })
+    notification.show()
+  },
+  () => appSettingsCache.notifications,
+  () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused())
+)
+
 /** 工具审批：挂起 Agent 的工具调用，等待渲染层响应或超时 */
 const approvalBroker = new ApprovalBroker((payload) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('agent:approval-request', payload)
   }
+  const text = notificationText()
+  notificationRouter.notify({
+    kind: 'approval',
+    workspaceDir: payload.workspaceDir,
+    sessionId: payload.sessionId,
+    title: text.approval,
+    body: `${payload.toolName} · ${payload.summary}`,
+  })
 })
 
 /** Agent 日志出口（延迟解析，文件日志在 app ready 后才创建） */
@@ -1747,6 +1793,7 @@ handleIpc(
     workspaceDir?: string,
     sessionId?: string
   ) => {
+    const startedAt = Date.now()
     try {
       if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
         return { success: false, error: 'Workspace is not approved' }
@@ -1776,14 +1823,46 @@ handleIpc(
 
       if (result.success) {
         console.log('[Main] Agent response received')
+        const elapsed = Date.now() - startedAt
+        // 短任务不打扰；只有超过阈值且窗口不在前台时才通知
+        if (workspaceDir && elapsed >= 15_000) {
+          const text = notificationText()
+          notificationRouter.notify({
+            kind: 'complete',
+            workspaceDir,
+            sessionId: sessionId ?? '',
+            title: text.complete,
+            body: `${path.basename(workspaceDir)} · ${Math.round(elapsed / 1000)}s`,
+          })
+        }
       } else {
         console.error('[Main] Agent chat error:', result.error)
+        if (workspaceDir) {
+          const text = notificationText()
+          notificationRouter.notify({
+            kind: 'error',
+            workspaceDir,
+            sessionId: sessionId ?? '',
+            title: text.error,
+            body: (result.error ?? '').slice(0, 140),
+          })
+        }
       }
 
       return result
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
       console.error('[Main] Agent chat error:', errorMessage)
+      if (workspaceDir) {
+        const text = notificationText()
+        notificationRouter.notify({
+          kind: 'error',
+          workspaceDir,
+          sessionId: sessionId ?? '',
+          title: text.error,
+          body: errorMessage.slice(0, 140),
+        })
+      }
       return {
         success: false,
         error: `Agent error: ${errorMessage}`,
