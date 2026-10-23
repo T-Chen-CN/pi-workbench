@@ -542,6 +542,27 @@ describe('chatStore branches', () => {
   })
 })
 
+describe('chatStore retry status', () => {
+  it('stamps retry status with the local receive time and clears it', () => {
+    const key = '/ws\u0000retry'
+    useChatStore.getState().ensureConversation(key)
+    const before = Date.now()
+
+    useChatStore.getState().setRetryStatus(key, {
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2_000,
+    })
+
+    const status = useChatStore.getState().conversations[key].retryStatus
+    expect(status?.receivedAt).toBeGreaterThanOrEqual(before)
+    expect(status?.delayMs).toBe(2_000)
+
+    useChatStore.getState().setRetryStatus(key, null)
+    expect(useChatStore.getState().conversations[key].retryStatus).toBeNull()
+  })
+})
+
 describe('chatStore context usage', () => {
   it('stores and clears context usage per conversation', () => {
     useChatStore.getState().ensureConversation('context-key')
