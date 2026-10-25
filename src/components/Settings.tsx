@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ExternalLink,
   Info,
@@ -25,7 +25,6 @@ import { api } from '../api'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
 import type { ApiConfig, AppInfo, PermissionLevel } from '../types/electron'
-import { isMacPlatform } from '../utils/shortcuts'
 import { Button, Field, Input, Select } from './ui'
 import { KeyCap, LegendRow, Meter } from './patterns'
 import {
@@ -40,6 +39,7 @@ import {
   eventToShortcut,
   findConflict,
   formatShortcut,
+  isMacPlatform,
   type ShortcutId,
 } from '../utils/keybindings'
 
@@ -169,14 +169,19 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     }
   })()
 
-  const persistSettings = async (patch: Record<string, unknown>) => {
-    try {
-      const current = await api.getSettings()
-      const settings = current.success && current.settings ? current.settings : {}
-      await api.saveSettings({ ...settings, ...patch })
-    } catch (error) {
-      console.error('Failed to persist settings:', error)
-    }
+  // 串行写入：每次修改都先读磁盘再合并，并发保存会互相覆盖
+  const persistQueue = useRef<Promise<void>>(Promise.resolve())
+  const persistSettings = (patch: Record<string, unknown>): Promise<void> => {
+    persistQueue.current = persistQueue.current.then(async () => {
+      try {
+        const current = await api.getSettings()
+        const settings = current.success && current.settings ? current.settings : {}
+        await api.saveSettings({ ...settings, ...patch })
+      } catch (error) {
+        console.error('Failed to persist settings:', error)
+      }
+    })
+    return persistQueue.current
   }
 
   const handleLanguageChange = (next: 'zh' | 'en') => {

@@ -12,7 +12,7 @@ interface ApprovalCardProps {
   disabled?: boolean
 }
 
-const CATEGORY_LABEL_KEYS: Record<ToolCategory, TranslationKey> = {
+export const CATEGORY_LABEL_KEYS: Record<ToolCategory, TranslationKey> = {
   read: 'approvalCategoryRead',
   write: 'approvalCategoryWrite',
   command: 'approvalCategoryCommand',

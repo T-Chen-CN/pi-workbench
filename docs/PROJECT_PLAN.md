@@ -76,8 +76,8 @@ Pi Workbench 是一个轻量级 AI 辅助开发工作台（Cursor 类体验）�
 - 打开时初始化 `.pi-workbench/`
 - 最近打开列表（最多 10 个），欢迎页直接打开
 - 多工作区标签页：同时打开多个工作区，各自持有独立 Agent 实例（配置变化时重建，关闭时释放）
-- 切换/关闭时停止旧监听并重置编辑器/聊天/Diff 状态；对话通过 Pi 会话恢复
-- 编辑器/聊天/Diff 与工作区状态隔离
+- 切换标签 / 返回首页只切换可见性，保留各工作区的编辑器、聊天、终端与 Diff 运行期状态
+- 关闭工作区标签才释放 Agent、监听与终端；编辑器/会话标签与草稿留在磁盘，重新打开时恢复
 
 #### 体验与工程
 
@@ -144,10 +144,10 @@ Main Process (Node 24, Electron 44)
 
 无 Electron 主进程时，由 Vite 中间件提供：
 
-- `/__pi/fetch-models`：代理供应商模型列表（规避 CORS）
-- `/__pi/agent/{init,chat,history,dispose}`：在 Node 进程运行同一套 AgentManager
+- `/__pi/fetch-models`：代理供应商模型列表（规避 CORS，15s 超时）
+- `/__pi/agent/{init,chat,chat-stream,abort,dispose}` 与会话列表/标签端点：在 Node 进程运行同一套 AgentManager
 
-仅用于 UI / Agent 调试；生产环境必须使用 Electron。
+仅用于 UI / Agent 调试，功能少于 Electron（无审批、分支、计划、导出等）；生产环境必须使用 Electron。
 
 ---
 
@@ -158,7 +158,9 @@ Main Process (Node 24, Electron 44)
 | API 配置 | `{appDir}/config/api-config.json` | `apiKey` 为 `enc:<base64>` |
 | 应用设置 / 最近工作区 | `{appDir}/config/settings.json` | |
 | Agent 模型配置 | `{appDir}/data/agent/models.json` | 不含明文 Key |
-| Agent 会话 | `{appDir}/data/agent/sessions/<cwd>/` | Pi SessionManager 管理，跨重启恢复 |
+| Agent 会话 | `{appDir}/data/agent/sessions/*.jsonl` | 平铺文件，按 cwd 过滤，跨重启恢复 |
+| 会话 sidecar | `{appDir}/data/agent/session-extras/*.json` | 计划、权限、历史 Diff |
+| 工作区打开记录 | `{appDir}/data/workspaces.db` | SQLite；不可用时回退 JSON |
 | 工作区配置 | `{workspace}/.pi-workbench/config.json` | `workspace:init` 创建 |
 | Web dev Agent 数据 | `{appDir}/cache/temp/web-agent/` | 可随时删除 |
 | 主进程日志 | `{appDir}/logs/main.log` | 5 MB 轮转，保留 `main.log.1`；渲染进程日志见 `logs/renderer.log` |
@@ -174,10 +176,13 @@ Main Process (Node 24, Electron 44)
 ```
 electron/           主进程（main.ts、preload.cts、两套 tsconfig）
 src/
-  components/       15 个扁平组件（ChatPanel、CommandPalette、DialogHost、DiffViewer、
-                    ErrorBoundary、FileExplorer、IPCDebug、MonacoEditor、
-                    Settings、TerminalPanel、Toast、WelcomeScreen、WindowControls、ui）
-  store/            9 个独立 store（chat、dialog、diff、editor、i18n、settings、theme、toast、workspace）
+  components/       24 个扁平组件（ChatPanel、WorkspaceView、SessionTabs、ApprovalCard、
+                    ToolResultViewer、AgentTrace、AgentMarkdown、ChatSessionList、
+                    CommandPalette、DialogHost、DiffViewer、ErrorBoundary、FileExplorer、
+                    IPCDebug、MonacoEditor、Settings、TerminalPanel、Toast、UpdateDialog、
+                    UpdateStatusIndicator、WelcomeScreen、WindowControls、ui、patterns）
+  store/            13 个独立 store（approval、chat、dialog、diff、editor、i18n、selection、
+                    session、settings、theme、toast、updater、workspace）
   api/              IPC 封装、Agent API（Electron IPC / Web SSE）、渲染日志、diff 算法
   types/            Electron API 与通用类型
   i18n/             中英文文案
@@ -231,9 +236,10 @@ docs/               项目文档
 - 多工作区标签页与工作区级 Agent 注册表（`electron/agent-registry.ts`）
 - 按工作区的文件监听与终端生命周期（关闭工作区时一并释放）
 
-待完成：
+已完成：
 
-- 工作区元数据存储：先 JSON，SQLite 按工作区规模再评估
+- 工作区元数据存储：`data/workspaces.db`（node:sqlite，带 JSON 回退）
+- 插件系统：命令 / 钩子、启用禁用、热重载（无沙箱，默认禁用）
 
 ### 模块 6：终端（已实现）
 
@@ -288,7 +294,7 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 - [x] 上下文选择 v1（附加已打开的文件）；上下文片段（编辑器选区，2026-10-21）
 - [x] 多工作区并行 + 工作区级 Agent 实例
 
-**验收**：对话流式渲染；修改可审阅并逐项保留/还原；已打开的文件可附加为上下文；多工作区标签切换时 Agent 与会话正确隔离；重启恢复上次会话。切换工作区会重置编辑器标签页。
+**验收**：对话流式渲染；修改可审阅并逐项保留/还原；已打开的文件可附加为上下文；多工作区标签切换时 Agent 与会话正确隔离；重启恢复上次会话。切换工作区保留编辑器标签与运行期状态，关闭工作区标签时释放运行时。
 
 ### ✅ Phase 3：终端集成（完成）
 
@@ -343,8 +349,8 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 | Agent 集成 | pi-coding-agent SDK | 内置工具与会话管理，避免自研 Agent 循环 |
 | Agent 工具文件访问 | 主进程直连 fs | SDK 设计如此；安全边界仍在主进程 |
 | 供应商配置 | 统一 OpenAI 兼容 + models.json | 支持 DeepSeek 等任意端点 |
-| 工作区存储 | 先 JSON，SQLite 延后 | 数量小；避免原生模块成本 |
-| 插件系统 | 工作台插件宿主（规划） | 插件只扩展工作台，不扩展 Pi Agent，避免与 Pi 扩展目录耦合 |
+| 工作区存储 | SQLite（`data/workspaces.db`），JSON 回退 | 记录打开时间与次数；不可用时回退 |
+| 插件系统 | 工作台插件宿主（已实现） | 插件只扩展工作台，不扩展 Pi Agent；默认禁用、无沙箱 |
 | Web 模式 | Vite dev 中间件 | 便于 UI/Agent 调试，不进入生产 |
 
 ---

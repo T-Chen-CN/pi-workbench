@@ -1,5 +1,7 @@
 # Pi Workbench UI 方案：Paper & Ink
 
+> **归档说明（2026-10-26）**：本文件是早期视觉设计稿，部分 token（如 `--canvas` / `--inset` / `--teal`）与字体（IBM Plex Mono）已被取代。当前颜色、字体与组件规范以 [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md) 为唯一事实来源。
+
 | 项目 | 内容 |
 |---|---|
 | 文档版本 | v1.3（历史方案与实施记录） |

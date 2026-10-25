@@ -30,6 +30,11 @@ export interface SessionExtras {
   permission: SessionPermission | null
 }
 
+/** 会话 id 只允许字母、数字、下划线与连字符，禁止路径分隔符与 `..` */
+export function isSafeSessionId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value)
+}
+
 export function emptyExtras(): SessionExtras {
   return {
     version: 1,
@@ -45,6 +50,9 @@ export class SessionExtrasStore {
   constructor(private readonly baseDir: string) {}
 
   private pathFor(sessionId: string): string {
+    if (!isSafeSessionId(sessionId)) {
+      throw new Error('Invalid session id')
+    }
     return path.join(this.baseDir, `${sessionId}.json`)
   }
 

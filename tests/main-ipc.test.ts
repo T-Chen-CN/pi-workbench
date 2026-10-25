@@ -357,7 +357,6 @@ describe('workspace lifecycle handlers', () => {
     await expect(call('workspace:init', workDir)).resolves.toMatchObject({ success: true })
 
     await expect(fs.stat(path.join(workDir, '.pi-workbench', 'plugins'))).resolves.toBeTruthy()
-    await expect(fs.stat(path.join(workDir, '.pi-workbench', 'sessions'))).resolves.toBeTruthy()
 
     const configPath = path.join(workDir, '.pi-workbench', 'config.json')
     const config = JSON.parse(await fs.readFile(configPath, 'utf-8'))
@@ -376,32 +375,6 @@ describe('workspace lifecycle handlers', () => {
     await call('workspace:init', workDir)
 
     expect(JSON.parse(await fs.readFile(configPath, 'utf-8'))).toEqual(custom)
-  })
-
-  it('rejects config reads before initialization', async () => {
-    const result = await call('workspace:getConfig', workDir)
-
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('not initialized')
-  })
-
-  it('saves workspace config while preserving plugin-owned fields', async () => {
-    await call('workspace:init', workDir)
-    const config = { version: '1.1', enabledPlugins: ['git'], notes: 'custom' }
-    const expected = {
-      version: '1.1',
-      // 插件字段由 PluginManager 独占，保存普通配置时以磁盘上的值为准
-      enabledPlugins: [],
-      notes: 'custom',
-    }
-
-    await expect(call('workspace:saveConfig', workDir, config)).resolves.toMatchObject({
-      success: true,
-    })
-    await expect(call('workspace:getConfig', workDir)).resolves.toEqual({
-      success: true,
-      config: expected,
-    })
   })
 })
 
@@ -598,22 +571,20 @@ describe('API configuration handlers', () => {
 })
 
 describe('agent handlers without an initialized agent', () => {
-  it('reports not initialized and rejects chat', async () => {
-    await expect(call('agent:isInitialized')).resolves.toEqual({
-      success: true,
-      initialized: false,
-    })
-
+  it('rejects chat', async () => {
     const chat = await call('agent:chat', 'hello')
     expect(chat.success).toBe(false)
     expect(chat.error).toContain('not initialized')
   })
 
-  it('returns no history and disposes cleanly', async () => {
-    const history = await call('agent:getHistory')
-    expect(history.success).toBe(false)
-
+  it('disposes cleanly', async () => {
     await expect(call('agent:dispose')).resolves.toMatchObject({ success: true })
+  })
+
+  it('rejects unsafe session ids before touching the registry', async () => {
+    await expect(
+      call('agent:sessions:delete', workDir, '../../../config/settings')
+    ).resolves.toEqual({ success: false, error: 'Invalid session id' })
   })
 })
 

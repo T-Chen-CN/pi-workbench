@@ -41,7 +41,10 @@ function devModelsProxy(): Plugin {
             ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
             : { Authorization: `Bearer ${apiKey}` }
 
-          const response = await fetch(`${apiUrl}/models`, { headers })
+          const response = await fetch(`${apiUrl}/models`, {
+            headers,
+            signal: AbortSignal.timeout(15_000),
+          })
           if (!response.ok) {
             const text = await response.text().catch(() => '')
             return reply({
@@ -84,8 +87,6 @@ const DEV_AGENT_CHAT = '/__pi/agent/chat'
 const DEV_AGENT_CHAT_STREAM = '/__pi/agent/chat-stream'
 const DEV_AGENT_ABORT = '/__pi/agent/abort'
 const DEV_AGENT_DISPOSE = '/__pi/agent/dispose'
-const DEV_AGENT_HISTORY = '/__pi/agent/history'
-const DEV_AGENT_IS_INITIALIZED = '/__pi/agent/isInitialized'
 const DEV_AGENT_SESSIONS_LIST = '/__pi/agent/sessions/list'
 const DEV_AGENT_SESSIONS_OPEN = '/__pi/agent/sessions/open'
 const DEV_AGENT_SESSIONS_CREATE = '/__pi/agent/sessions/create'
@@ -198,7 +199,13 @@ function devAgentBridge(): Plugin {
           if (!agent) return reply(res, { success: false, error })
           const message = String(body.message ?? '')
           const sessionId = typeof body.sessionId === 'string' ? body.sessionId : undefined
-          reply(res, sessionId ? await agent.chat(sessionId, message) : await agent.chat(message))
+          const images = Array.isArray(body.images) ? body.images : undefined
+          reply(
+            res,
+            sessionId
+              ? await agent.chat(sessionId, message, images ? { images } : undefined)
+              : await agent.chat(message, images ? { images } : undefined)
+          )
         } catch (error) {
           reply(res, { success: false, error: error instanceof Error ? error.message : String(error) })
         }
@@ -229,10 +236,12 @@ function devAgentBridge(): Plugin {
           try {
             const message = String(body.message ?? '')
             const sessionId = typeof body.sessionId === 'string' ? body.sessionId : undefined
+            const images = Array.isArray(body.images) ? body.images : undefined
             const onTrace = (event: Record<string, unknown>) => sendSse(res, 'trace', event)
+            const chatOptions = images ? { onTrace, images } : { onTrace }
             const result = sessionId
-              ? await agent.chat(sessionId, message, { onTrace })
-              : await agent.chat(message, { onTrace })
+              ? await agent.chat(sessionId, message, chatOptions)
+              : await agent.chat(message, chatOptions)
             sendSse(res, 'done', result)
           } catch (chatError) {
             sendSse(res, 'done', {
@@ -257,32 +266,6 @@ function devAgentBridge(): Plugin {
             else await agent.abort()
           }
           reply(res, { success: true })
-        } catch (error) {
-          reply(res, { success: false, error: error instanceof Error ? error.message : String(error) })
-        }
-      })
-
-      server.middlewares.use(DEV_AGENT_IS_INITIALIZED, async (req: any, res: any, next: any) => {
-        if (req.method !== 'POST') return next()
-        try {
-          const body = await readJson(req)
-          const { agent } = requireAgent(body.workspaceDir ?? process.cwd())
-          reply(res, { success: true, initialized: Boolean(agent) })
-        } catch (error) {
-          reply(res, { success: false, initialized: false, error: error instanceof Error ? error.message : String(error) })
-        }
-      })
-
-      server.middlewares.use(DEV_AGENT_HISTORY, async (req: any, res: any, next: any) => {
-        if (req.method !== 'POST') return next()
-        try {
-          const body = await readJson(req)
-          const { agent, error } = requireAgent(body.workspaceDir ?? process.cwd())
-          if (!agent) return reply(res, { success: false, error })
-          const history = typeof agent.getSessionMessages === 'function'
-            ? agent.getSessionMessages(body.sessionId)
-            : agent.getMessageHistory(body.sessionId)
-          reply(res, { success: true, history })
         } catch (error) {
           reply(res, { success: false, error: error instanceof Error ? error.message : String(error) })
         }
@@ -455,7 +438,7 @@ const CONTENT_SECURITY_POLICY = [
   "font-src 'self' data:",
   "img-src 'self' data:",
   "worker-src 'self' blob:",
-  "connect-src 'self' http: https:",
+  "connect-src 'self'",
   "object-src 'none'",
   "base-uri 'self'",
 ].join('; ')
@@ -517,11 +500,6 @@ function monacoLanguageFilter(): Plugin {
 export default defineConfig({
   plugins: [react(), devModelsProxy(), devAgentBridge(), contentSecurityPolicy(), monacoLanguageFilter()],
   root: 'src',  // 设置根目录为 src
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
-  },
   server: {
     port: 5173,
     strictPort: true,

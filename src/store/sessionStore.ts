@@ -11,7 +11,6 @@ export interface WorkspaceSessions {
   sessions: SessionSummary[]
   open: string[]
   active: string | null
-  loading: boolean
   panelOpen: boolean
 }
 
@@ -19,7 +18,6 @@ const EMPTY_WORKSPACE: WorkspaceSessions = {
   sessions: [],
   open: [],
   active: null,
-  loading: false,
   panelOpen: false,
 }
 
@@ -50,7 +48,6 @@ interface SessionState {
     patch: Partial<SessionSummary>
   ) => void
   setPanelOpen: (workspacePath: string, open: boolean) => void
-  setLoading: (workspacePath: string, loading: boolean) => void
   markStreaming: (workspacePath: string, sessionId: string, streaming: boolean) => void
   markUnread: (workspacePath: string, sessionId: string, unread: boolean) => void
   markError: (workspacePath: string, sessionId: string, message: string | null) => void
@@ -178,7 +175,6 @@ export const useSessionStore = create<SessionState>((set) => ({
     }),
 
   setPanelOpen: (path, open) => set((state) => withWorkspace(state, path, { panelOpen: open })),
-  setLoading: (path, loading) => set((state) => withWorkspace(state, path, { loading })),
 
   markStreaming: (path, sessionId, streaming) =>
     set((state) => {

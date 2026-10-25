@@ -163,8 +163,6 @@ beforeEach(() => {
     config: configWithKey,
   })
   vi.mocked(piAgentAPI.initialize).mockResolvedValue({ success: true })
-  vi.mocked(piAgentAPI.getHistory).mockResolvedValue({ success: true, history: [] })
-  vi.mocked(piAgentAPI.isInitialized).mockResolvedValue({ success: true, initialized: false })
   vi.mocked(piAgentAPI.sessionsList).mockResolvedValue({
     success: true,
     sessions: [session],

@@ -51,6 +51,7 @@ import { revertFileEdit } from '../utils/revertFile'
 import { extractSymbols, sliceSymbol, type ExtractedSymbol } from '../utils/symbols'
 import { buildChatSuggestions, type WorkspaceType } from '../utils/suggestions'
 import { retrySecondsRemaining } from '../utils/retryCountdown'
+import { formatBytes } from '../utils/formatBytes'
 import {
   ImagePrepareError,
   MAX_IMAGE_COUNT,
@@ -63,7 +64,7 @@ import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { useVirtualRows } from '../hooks/useVirtualRows'
 import { SessionTabs } from './SessionTabs'
 import { ChatSessionList } from './ChatSessionList'
-import { ApprovalCard } from './ApprovalCard'
+import { ApprovalCard, CATEGORY_LABEL_KEYS } from './ApprovalCard'
 import { ToolResultViewer } from './ToolResultViewer'
 import { Meter, RingMeter } from './patterns'
 import { AgentParts } from './AgentTrace'
@@ -92,7 +93,6 @@ import type {
   StructuredPlan,
   SessionMode,
   SessionPermission,
-  ToolCategory,
 } from '../types/electron'
 
 interface ChatPanelProps {
@@ -107,12 +107,6 @@ interface ChatPanelProps {
 const MAX_CONTEXT_FILE_CHARS = 120_000
 const MAX_CONTEXT_SNIPPET_CHARS = 40_000
 const MAX_CONTEXT_TOTAL_CHARS = 300_000
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`
-  return `${bytes} B`
-}
 
 /** 1.2k / 12k / 96k */
 function formatTokenCount(value: number): string {
@@ -130,13 +124,6 @@ const THINKING_LABEL_KEYS: Record<(typeof THINKING_LEVELS)[number], TranslationK
   high: 'thinkingHigh',
   xhigh: 'thinkingXhigh',
   max: 'thinkingMax',
-}
-
-const PERMISSION_GRANT_LABEL_KEYS: Record<ToolCategory, TranslationKey> = {
-  read: 'approvalCategoryRead',
-  write: 'approvalCategoryWrite',
-  command: 'approvalCategoryCommand',
-  other: 'approvalCategoryOther',
 }
 
 const DEFAULT_SESSION_PERMISSION: SessionPermission = { mode: 'ask', grants: [] }
@@ -2160,7 +2147,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       return
     }
     if (!(await applySessionPermission({ mode: targetMode, grants: [] }))) return
-    void handleSubmit(undefined, 'Execute the plan above step by step.')
+    void handleSubmit(undefined, t('planExecuteFallback'))
   }
 
   /** 读取上下文占用（每轮结束与会话切换后刷新） */
@@ -3217,7 +3204,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                           <span className="block type-caption text-ink-muted">
                             {t('permissionGrants', {
                               categories: sessionPermission.grants
-                                .map((category) => t(PERMISSION_GRANT_LABEL_KEYS[category]))
+                                .map((category) => t(CATEGORY_LABEL_KEYS[category]))
                                 .join(t('listSeparator')),
                             })}
                           </span>

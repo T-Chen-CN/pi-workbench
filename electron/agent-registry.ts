@@ -63,7 +63,7 @@ export interface RegisteredAgent {
   createSession?: () => Promise<unknown>
   closeSession?: (sessionId: string) => Promise<void>
   renameSession?: (sessionId: string, name: string) => Promise<unknown>
-  deleteSession?: (sessionId: string) => Promise<unknown>
+  deleteSession?: (sessionId: string) => Promise<{ success: boolean; error?: string }>
   /** 运行中插话（steer） */
   steer?: (sessionId: string, message: string) => Promise<{ success: boolean; error?: string }>
   /** 上下文占用 */

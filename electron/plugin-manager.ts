@@ -411,7 +411,7 @@ export class PluginManager {
         pluginsConfigured?: unknown
       }
       // 只有用户显式配置过（pluginsConfigured=true）才把列表当作启用白名单；
-      // 否则默认全部启用。空数组表示“全部禁用”。
+      // 否则交给 isEnabled 处理，未配置时默认全部禁用。
       if (config.pluginsConfigured === true && Array.isArray(config.enabledPlugins)) {
         return config.enabledPlugins.filter((id): id is string => typeof id === 'string')
       }

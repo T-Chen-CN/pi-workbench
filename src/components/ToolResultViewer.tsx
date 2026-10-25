@@ -7,18 +7,12 @@ import { toast } from '../store/toastStore'
 import { useVirtualRows } from '../hooks/useVirtualRows'
 import { Button, Caption, IconButton, Modal, Spinner } from './ui'
 import { SearchField } from './patterns'
+import { formatBytes } from '../utils/formatBytes'
 
 /** 每次读取的字符数；分块传输避免超长结果一次性进入渲染进程 */
 const CHUNK_CHARS = 262_144
 /** 超过该大小时默认不在内嵌查看器中加载，改为外部编辑器打开 */
 const AUTO_VIEW_BYTES = 20 * 1024 * 1024
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
 
 export interface ToolResultViewerProps {
   workspacePath: string

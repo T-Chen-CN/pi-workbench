@@ -21,7 +21,12 @@ const MAX_DRAFTS_PER_WORKSPACE = 100
 
 export class DraftStore {
   constructor(private readonly rootDir: string) {
-    fs.mkdirSync(rootDir, { recursive: true })
+    try {
+      fs.mkdirSync(rootDir, { recursive: true })
+    } catch (error) {
+      // 安装目录不可写时不让主进程在模块加载阶段崩溃；后续写入会失败并由 IPC 返回错误
+      console.warn('[Drafts] Failed to create draft directory:', error)
+    }
   }
 
   private fileFor(workspace: string, filePath: string): string {

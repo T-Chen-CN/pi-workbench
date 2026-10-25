@@ -48,6 +48,7 @@ export type { PlanStep, PlanStepStatus, PlanStatus, StructuredPlan }
 import {
   SessionExtrasStore,
   emptyExtras,
+  isSafeSessionId,
   type SessionExtras,
   type ToolEditRecord,
 } from './session-extras.js'
@@ -2731,14 +2732,16 @@ ${body.join('\n')}
     try {
       const config = this.config
       if (!config) return { success: false, error: 'Agent not initialized.' }
+      if (!isSafeSessionId(sessionId)) return { success: false, error: 'Invalid session id.' }
+      // 会话 extras 以 id 为文件名，必须先确认 id 属于当前工作区，避免跨工作区删除
       const file = SessionManager.findById(config.workspaceDir, sessionId, this.sessionDir)
       await this.closeSession(sessionId)
+      if (!file) return { success: true }
       if (this.extrasStore) {
         await this.extrasStore.delete(sessionId).catch((error) => {
           this.logger.warn('[Agent Manager] Failed to delete session extras:', error)
         })
       }
-      if (!file) return { success: true }
 
       const resolved = path.resolve(file)
       const root = path.resolve(this.sessionDir)

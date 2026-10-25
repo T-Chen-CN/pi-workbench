@@ -88,8 +88,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 工作区配置管理
   initWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace:init', workspacePath),
-  getWorkspaceConfig: (workspacePath: string) => ipcRenderer.invoke('workspace:getConfig', workspacePath),
-  saveWorkspaceConfig: (workspacePath: string, config: any) => ipcRenderer.invoke('workspace:saveConfig', workspacePath, config),
   disposeWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace:dispose', workspacePath),
 
   // 崩溃恢复草稿
@@ -135,9 +133,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('agent:session-title', listener)
     return () => ipcRenderer.removeListener('agent:session-title', listener)
   },
-  agentIsInitialized: (workspaceDir?: string) => ipcRenderer.invoke('agent:isInitialized', workspaceDir),
-  agentGetHistory: (workspaceDir?: string, sessionId?: string) =>
-    ipcRenderer.invoke('agent:getHistory', workspaceDir, sessionId),
   agentDispose: (workspaceDir?: string) => ipcRenderer.invoke('agent:dispose', workspaceDir),
   agentSessionsList: (workspaceDir: string) =>
     ipcRenderer.invoke('agent:sessions:list', workspaceDir),
@@ -235,8 +230,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   chatPendingGet: (workspaceDir: string) => ipcRenderer.invoke('chat:pending:get', workspaceDir),
   chatPendingSet: (workspaceDir: string, sessions: unknown) =>
     ipcRenderer.invoke('chat:pending:set', workspaceDir, sessions),
-  saveTextFile: (suggestedName: string, content: string) =>
-    ipcRenderer.invoke('app:saveTextFile', suggestedName, content),
   searchWorkspaceFiles: (workspaceDir: string, query: string, limit?: number) =>
     ipcRenderer.invoke('workspace:searchFiles', workspaceDir, query, limit),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),

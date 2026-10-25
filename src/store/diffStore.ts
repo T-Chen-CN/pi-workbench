@@ -8,16 +8,12 @@ export interface DiffState {
   edits: FileEdit[]
   currentIndex: number
   isOpen: boolean
-  isLoading: boolean
-  error: string | null
 
   // Actions
   openEdits: (edits: FileEdit[]) => void
   setCurrentIndex: (index: number) => void
   removeEdit: (path: string) => void
   clearDiff: () => void
-  setLoading: (loading: boolean) => void
-  setError: (error: string | null) => void
 }
 
 /** 每个工作区各持有一份 Diff 状态，隐藏的工作区保留自己的审阅进度 */
@@ -26,8 +22,6 @@ export function createDiffStore(): StoreApi<DiffState> {
     edits: [],
     currentIndex: 0,
     isOpen: false,
-    isLoading: false,
-    error: null,
 
     openEdits: (edits) => {
       const merged = mergeFileEdits(edits)
@@ -35,7 +29,6 @@ export function createDiffStore(): StoreApi<DiffState> {
         edits: merged,
         currentIndex: 0,
         isOpen: merged.length > 0,
-        error: null,
       })
     },
 
@@ -57,8 +50,6 @@ export function createDiffStore(): StoreApi<DiffState> {
       }),
 
     clearDiff: () => set({ edits: [], currentIndex: 0, isOpen: false }),
-    setLoading: (loading) => set({ isLoading: loading }),
-    setError: (error) => set({ error }),
   }))
 }
 

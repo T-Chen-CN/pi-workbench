@@ -14,7 +14,6 @@ import type {
   GetSettingsResult,
   SaveSettingsResult,
   WorkspaceResult,
-  GetWorkspaceConfigResult,
   ApiConfigGetResult,
   ApiConfigSaveResult,
   FetchModelsResult,
@@ -192,20 +191,6 @@ const mockAPI = {
     console.log('[Mock] initWorkspace:', workspacePath)
     return { success: true }
   },
-  getWorkspaceConfig: async (workspacePath: string): Promise<GetWorkspaceConfigResult> => {
-    console.log('[Mock] getWorkspaceConfig:', workspacePath)
-    return {
-      success: true,
-      config: {
-        version: '1.0',
-        enabledPlugins: [],
-      }
-    }
-  },
-  saveWorkspaceConfig: async (workspacePath: string, config: any): Promise<WorkspaceResult> => {
-    console.log('[Mock] saveWorkspaceConfig:', workspacePath, config)
-    return { success: true }
-  },
   disposeWorkspace: async (workspacePath: string): Promise<WorkspaceResult> => {
     console.log('[Mock] disposeWorkspace:', workspacePath)
     return { success: true }
@@ -345,10 +330,6 @@ export const api = {
     typeof electronAPI.chatPendingSet === 'function'
       ? electronAPI.chatPendingSet(workspaceDir, sessions)
       : Promise.resolve({ success: true }),
-  saveTextFile: (suggestedName: string, content: string) =>
-    typeof electronAPI.saveTextFile === 'function'
-      ? electronAPI.saveTextFile(suggestedName, content)
-      : Promise.resolve({ success: false, error: 'Saving is not available in this environment' }),
   readFile: (path: string) => electronAPI.readFile(path),
   writeFile: (path: string, content: string) => electronAPI.writeFile(path, content),
   exists: (path: string) => electronAPI.exists(path),
@@ -384,8 +365,6 @@ export const api = {
 
   // Workspace configuration
   initWorkspace: (workspacePath: string) => electronAPI.initWorkspace(workspacePath),
-  getWorkspaceConfig: (workspacePath: string) => electronAPI.getWorkspaceConfig(workspacePath),
-  saveWorkspaceConfig: (workspacePath: string, config: any) => electronAPI.saveWorkspaceConfig(workspacePath, config),
   disposeWorkspace: (workspacePath: string) => electronAPI.disposeWorkspace(workspacePath),
   draftSave: (workspacePath: string, filePath: string, content: string) =>
     electronAPI.draftSave(workspacePath, filePath, content),

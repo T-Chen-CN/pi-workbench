@@ -83,6 +83,12 @@ function notificationText() {
     : { approval: 'Approval required', complete: 'Session finished', error: 'Session failed' }
 }
 
+/** 通知里只放一行短摘要，避免把完整命令（可能含密钥）显示在锁屏上 */
+function notificationSummary(text: string): string {
+  const single = text.replace(/\s+/g, ' ').trim()
+  return single.length > 120 ? `${single.slice(0, 117)}…` : single
+}
+
 /** 正在显示的系统通知；必须保持引用，否则对象被 GC 后 click 事件不会触发 */
 const activeNotifications = new Set<Notification>()
 
@@ -147,7 +153,7 @@ const approvalBroker = new ApprovalBroker(
       workspaceDir: payload.workspaceDir,
       sessionId: payload.sessionId,
       title: text.approval,
-      body: `${payload.toolName} · ${payload.summary}`,
+      body: `${payload.toolName} · ${notificationSummary(payload.summary)}`,
     })
   },
   (resolution) => {
@@ -391,7 +397,6 @@ async function initAppDirectories() {
     path.join(appDir, 'cache'),
     path.join(appDir, 'cache', 'temp'),
     path.join(appDir, 'data'),
-    path.join(appDir, 'data', 'sessions'),
     path.join(appDir, 'logs')
   ]
 
@@ -1276,7 +1281,6 @@ handleIpc(
         '.git',
         '.pi-workbench',
         '.pi-worktrees',
-        '.atelier',
         'dist',
         'dist-electron',
         'cache',
@@ -1408,12 +1412,10 @@ handleIpc('workspace:init', async (_event, workspacePath: string) => {
 
     const configDir = path.join(workspacePath, '.pi-workbench')
     const pluginsDir = path.join(configDir, 'plugins')
-    const sessionsDir = path.join(configDir, 'sessions')
 
     // 创建目录
     await fs.mkdir(configDir, { recursive: true })
     await fs.mkdir(pluginsDir, { recursive: true })
-    await fs.mkdir(sessionsDir, { recursive: true })
 
     // 创建默认配置
     const configPath = path.join(configDir, 'config.json')
@@ -1429,64 +1431,6 @@ handleIpc('workspace:init', async (_event, workspacePath: string) => {
     pluginManager.loadWorkspace(workspacePath)
     await pluginManager.emit(workspacePath, 'workspace:opened', { workspaceDir: workspacePath })
 
-    return { success: true }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    }
-  }
-})
-
-handleIpc('workspace:getConfig', async (_event, workspacePath: string) => {
-  try {
-    if (!isTrustedWorkspacePath(workspacePath)) {
-      return { success: false, error: 'Workspace is not approved' }
-    }
-    const configPath = path.join(workspacePath, '.pi-workbench', 'config.json')
-
-    if (!existsSync(configPath)) {
-      return { success: false, error: 'Workspace not initialized' }
-    }
-
-    const result = readJsonWithBackup<Record<string, unknown>>(configPath)
-    if (!result.data) {
-      return { success: false, error: result.error || 'Failed to parse workspace config' }
-    }
-    return { success: true, config: result.data }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    }
-  }
-})
-
-handleIpc('workspace:saveConfig', async (_event, workspacePath: string, config: any) => {
-  try {
-    if (!isTrustedWorkspacePath(workspacePath)) {
-      return { success: false, error: 'Workspace is not approved' }
-    }
-    const configPath = path.join(workspacePath, '.pi-workbench', 'config.json')
-
-    // 插件启用状态由 PluginManager 独占管理：合并保存时保留磁盘上的插件字段，
-    // 避免渲染进程拿旧配置覆盖掉期间发生的启用/禁用
-    const current = readJsonWithBackup<Record<string, unknown>>(configPath).data ?? {}
-    const incoming =
-      config && typeof config === 'object' && !Array.isArray(config)
-        ? { ...(config as Record<string, unknown>) }
-        : {}
-    const merged: Record<string, unknown> = { ...current, ...incoming }
-
-    for (const key of ['enabledPlugins', 'pluginsConfigured']) {
-      if (key in current) {
-        merged[key] = current[key]
-      } else {
-        delete merged[key]
-      }
-    }
-
-    await writeJsonAtomic(configPath, merged)
     return { success: true }
   } catch (error) {
     return {
@@ -2002,35 +1946,6 @@ handleIpc('chat:pending:set', async (_event, workspaceDir: string, sessions: unk
   }
 })
 
-// 导出文本：弹出保存对话框后写入用户选择的位置
-handleIpc('app:saveTextFile', async (_event, suggestedName: string, content: string) => {
-  try {
-    if (typeof content !== 'string') {
-      return { success: false, error: 'Nothing to save' }
-    }
-    const safeName =
-      typeof suggestedName === 'string' && suggestedName.trim()
-        ? path.basename(suggestedName.trim())
-        : 'export.txt'
-    const options = {
-      defaultPath: path.join(app.getPath('documents'), safeName),
-      filters: [
-        { name: 'Markdown', extensions: ['md'] },
-        { name: 'All files', extensions: ['*'] },
-      ],
-    }
-    const result =
-      mainWindow && !mainWindow.isDestroyed()
-        ? await dialog.showSaveDialog(mainWindow, options)
-        : await dialog.showSaveDialog(options)
-    if (result.canceled || !result.filePath) return { success: false, canceled: true }
-    await fs.writeFile(result.filePath, content, 'utf-8')
-    return { success: true, path: result.filePath }
-  } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : String(error) }
-  }
-})
-
 // Agent 聊天
 handleIpc(
   'agent:chat',
@@ -2291,43 +2206,6 @@ handleIpc('agent:abort', async (_event, workspaceDir?: string, sessionId?: strin
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
-    }
-  }
-})
-
-// Agent 状态查询
-handleIpc('agent:isInitialized', async (_event, workspaceDir?: string) => {
-  try {
-    const agent = workspaceDir ? agentRegistry.get(workspaceDir) : null
-    return { success: true, initialized: agent?.isInitialized() || false }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    }
-  }
-})
-
-// Agent 消息历史
-handleIpc('agent:getHistory', async (_event, workspaceDir?: string, sessionId?: string) => {
-  try {
-    if (workspaceDir && !isTrustedWorkspacePath(workspaceDir)) {
-      return { success: false, error: 'Workspace is not approved' }
-    }
-    const agent = workspaceDir ? agentRegistry.get(workspaceDir) : null
-    if (!agent) {
-      return { success: false, error: 'Agent not initialized for this workspace' }
-    }
-
-    // 返回持久化 Pi 会话中的可展示历史（跨重启恢复）
-    const history = typeof agent.getSessionMessages === 'function'
-      ? agent.getSessionMessages(sessionId)
-      : agent.getMessageHistory?.(sessionId)
-    return { success: true, history }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
     }
   }
 })
@@ -2815,12 +2693,18 @@ handleIpc('agent:sessions:delete', async (_event, workspaceDir: string, sessionI
     if (!isTrustedWorkspacePath(workspaceDir)) {
       return { success: false, error: 'Workspace is not approved' }
     }
+    // 会话 id 会参与 sidecar 文件名，必须在进程边界拒绝路径分隔符与 `..`
+    if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) {
+      return { success: false, error: 'Invalid session id' }
+    }
     const agent = agentRegistry.get(workspaceDir)
     if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
     if (typeof agent.deleteSession !== 'function') {
       return { success: false, error: 'Sessions are not supported by this agent' }
     }
-    return await agent.deleteSession(sessionId)
+    const result = await agent.deleteSession(sessionId)
+    if (result.success) approvalBroker.cancelForSession(sessionId)
+    return result
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) }
   }

@@ -11,13 +11,13 @@ Lightweight desktop code editor with Pi Agent integration, built with Electron +
 - **Code editor** — Monaco Editor with multi-tab editing, per-file undo history and 2s debounced auto-save
 - **File explorer** — browse, create, rename, delete; live refresh via file watching
 - **AI chat** — real Pi Agent with read / write / edit / bash tools, streaming output and token usage
-- **Diff viewer** — automatically shows files the agent modified during a turn
+- **Diff viewer** — files the agent modified appear as inline change cards in the reply; open a per-file diff on demand
 - **Terminal** — xterm.js + node-pty, with output attachable to the agent
 - **Workspace plugins** — command and hook extensions loaded in the main process (opt-in per workspace)
 - **Paper & Ink UI** — light/dark themes, local fonts, consistent design tokens
 - **Crash recovery** — unsaved editor drafts are restored after an unexpected exit
 - **Auto update** — silent check on launch; Windows / Linux download automatically but only install on request; macOS checks and links to the release page
-- **Flexible providers** — Anthropic, OpenAI, or any OpenAI-compatible endpoint (DeepSeek, gateways…)
+- **Flexible providers** — any OpenAI-compatible endpoint (DeepSeek, gateways…)
 - **Model discovery** — fetch the real model list from the provider and pick one
 - **Secure config** — API keys encrypted at rest with Electron `safeStorage`
 - **Session persistence** — conversations resume across restarts per workspace

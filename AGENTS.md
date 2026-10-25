@@ -78,7 +78,7 @@ pi-workbench/
 | 类型检查 | **TypeScript** | 5.9.3 | 严格模式 |
 | 打包 | **electron-builder** | 26.15.3 | 生成安装包 |
 | Agent SDK | **@earendil-works/pi-coding-agent** | 1.3.0 | 运行在主进程 |
-| 终端 | **@xterm/xterm + node-pty** | 5.x / 1.1 | 原生模块，打包需 `asarUnpack` |
+| 终端 | **@xterm/xterm + node-pty** | 6.x / 1.1 | 原生模块，打包需 `asarUnpack` |
 
 ### 禁止使用的技术
 
@@ -98,7 +98,11 @@ pi-workbench/
 ```typescript
 // ✅ 正确：顶层组件扁平放置，不建子目录
 src/components/
+├── AgentMarkdown.tsx
+├── AgentTrace.tsx
+├── ApprovalCard.tsx
 ├── ChatPanel.tsx
+├── ChatSessionList.tsx
 ├── CommandPalette.tsx
 ├── DialogHost.tsx
 ├── DiffViewer.tsx
@@ -106,11 +110,16 @@ src/components/
 ├── FileExplorer.tsx
 ├── IPCDebug.tsx
 ├── MonacoEditor.tsx
+├── SessionTabs.tsx
 ├── Settings.tsx
 ├── TerminalPanel.tsx
 ├── Toast.tsx
+├── ToolResultViewer.tsx
+├── UpdateDialog.tsx
+├── UpdateStatusIndicator.tsx
 ├── WelcomeScreen.tsx
 ├── WindowControls.tsx
+├── WorkspaceView.tsx
 ├── ui.tsx
 └── patterns.tsx
 
@@ -120,16 +129,20 @@ src/components/chat/ChatPanel.tsx  // 不要这样！
 
 #### Store 放置规则
 ```typescript
-// ✅ 正确：每个功能域一个独立 store（9 个）
+// ✅ 正确：每个功能域一个独立 store（13 个）
 src/store/
-├── chatStore.ts       // 聊天消息（支持历史恢复、token 用量）
+├── approvalStore.ts   // 待审批请求
+├── chatStore.ts       // 聊天消息、草稿、附件、排队消息
 ├── dialogStore.ts     // 应用内确认/输入对话框（替代 confirm/prompt）
-├── diffStore.ts       // Diff 查看器
-├── editorStore.ts     // 编辑器标签页、脏标记
-├── i18nStore.ts       // 语言切换（persist）
-├── settingsStore.ts   // 自动保存等应用级编辑偏好
+├── diffStore.ts       // Diff 查看器（按工作区隔离）
+├── editorStore.ts     // 编辑器标签页、脏标记（按工作区隔离）
+├── i18nStore.ts       // 语言切换
+├── selectionStore.ts  // 编辑器选区片段
+├── sessionStore.ts    // 会话标签与运行状态（按工作区隔离）
+├── settingsStore.ts   // 自动保存、默认模式、通知、快捷键
 ├── themeStore.ts      // Paper / Ink 主题
 ├── toastStore.ts      // 全局 Toast（组件外也可调用）
+├── updaterStore.ts    // 更新状态
 └── workspaceStore.ts  // 当前工作区 + 最近打开
 
 // ❌ 错误：不要合并 store
@@ -295,7 +308,6 @@ const logPath = path.join(appDir, 'logs', 'main.log')
 // ✅ 工作区级数据：在工作区目录（用户选择的项目目录）
 const workspaceConfig = path.join(workspacePath, '.pi-workbench', 'config.json')
 const workspacePlugins = path.join(workspacePath, '.pi-workbench', 'plugins')
-const workspaceSessions = path.join(workspacePath, '.pi-workbench', 'sessions')
 
 // ✅ 临时数据：在应用缓存目录
 const tempFile = path.join(appDir, 'cache', 'temp', `diff-${Date.now()}.txt`)
@@ -313,7 +325,6 @@ async function initAppDirectories() {
     path.join(appDir, 'cache'),
     path.join(appDir, 'cache', 'temp'),
     path.join(appDir, 'data'),
-    path.join(appDir, 'data', 'sessions'),
     path.join(appDir, 'logs')
   ]
   
@@ -338,12 +349,10 @@ app.whenReady().then(async () => {
 async function initWorkspaceConfig(workspacePath: string) {
   const configDir = path.join(workspacePath, '.pi-workbench')
   const pluginsDir = path.join(configDir, 'plugins')
-  const sessionsDir = path.join(configDir, 'sessions')
   
   // 创建目录
   await fs.mkdir(configDir, { recursive: true })
   await fs.mkdir(pluginsDir, { recursive: true })
-  await fs.mkdir(sessionsDir, { recursive: true })
   
   // 创建默认配置
   const configPath = path.join(configDir, 'config.json')
@@ -691,17 +700,15 @@ async function initAgent(config: ApiConfig) {
 ```
 ┌─────────────────────────────────────────────┐
 │  Title Bar                                  │
-├──────────┬──────────────────────────────────┤
-│          │  Editor Tabs                     │
-│  File    ├──────────────────────────────────┤
-│  Tree    │                                  │
-│          │  Monaco Editor                   │
-│  200px   │                                  │
-│          │                                  │
-├──────────┼──────────────────────────────────┤
-│          │  Chat Panel (collapsible)        │
-│          │  300px height                    │
-└──────────┴──────────────────────────────────┘
+├──────────┬───────────────────┬──────────────┤
+│          │  Editor Tabs      │              │
+│  File    ├───────────────────┤  Chat Panel  │
+│  Tree    │                   │  336px       │
+│  232px   │  Monaco Editor    │  (可收起)     │
+│          │                   │              │
+│          ├───────────────────┤              │
+│          │  Terminal (可收起) │              │
+└──────────┴───────────────────┴──────────────┘
 ```
 
 ### 视觉与组件规范（Paper & Ink）

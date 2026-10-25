@@ -170,4 +170,20 @@ describe('CommandPalette', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
   })
+
+  it('does not dispatch session commands while the home screen is shown', async () => {
+    useSessionStore.getState().setOpen('/ws', ['s1'], 's1')
+    const listener = vi.fn()
+    window.addEventListener('session-new', listener)
+
+    render(<CommandPalette workspacePath="/ws" active={false} />)
+    openPalette()
+    await screen.findByText('Git Status')
+
+    fireEvent.click(screen.getByText(translations.zh.newSession))
+
+    expect(listener).not.toHaveBeenCalled()
+    expect(screen.getByText(new RegExp(translations.zh.noActiveSession))).toBeTruthy()
+    window.removeEventListener('session-new', listener)
+  })
 })

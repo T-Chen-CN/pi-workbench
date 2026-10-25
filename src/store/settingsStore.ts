@@ -18,8 +18,6 @@ export const DEFAULT_RUN_WHILE_BUSY: RunWhileBusy = 'queue'
 /** 新会话的默认权限档位；会话创建后自行持有权限 */
 export const DEFAULT_PERMISSION_LEVEL: PermissionLevel = 'ask'
 
-export const PERMISSION_LEVELS: PermissionLevel[] = ['readonly', 'ask', 'auto']
-
 export function isPermissionLevel(value: unknown): value is PermissionLevel {
   return value === 'readonly' || value === 'ask' || value === 'auto'
 }

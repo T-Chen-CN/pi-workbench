@@ -1,6 +1,8 @@
 # 🎨 CSS 到 TailwindCSS 迁移计划
 
-**状态**: ✅ 已完成（2026-10-20；执行结果见 [CSS_MIGRATION_COMPLETED.md](../reports/CSS_MIGRATION_COMPLETED.md)）  
+**状态**: ✅ 已完成（2026-10-20；执行结果见 [CSS_MIGRATION_COMPLETED.md](./reports/CSS_MIGRATION_COMPLETED.md)）
+
+**归档说明**: 本文件为历史计划；当前样式规范以 [DESIGN_SYSTEM.md](./design/DESIGN_SYSTEM.md) 为准。
 **优先级**: 🟡 中  
 **预计工作量**: 4-8 小时  
 **目标完成**: 已完成

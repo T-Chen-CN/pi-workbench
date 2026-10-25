@@ -156,7 +156,6 @@ interface ChatState {
   removeAttachment: (key: string, id: string) => void
   clearAttachments: (key: string) => void
   setDraftInput: (key: string, value: string) => void
-  clearDraftInput: (key: string) => void
   addPending: (key: string, text: string) => PendingMessage
   setPending: (key: string, items: PendingMessage[]) => void
   removePending: (key: string, id: string) => void
@@ -188,7 +187,6 @@ interface ChatState {
   setMessages: (key: string, messages: Array<Omit<ChatMessage, 'id'>>) => void
   setLoading: (key: string, loading: boolean) => void
   setError: (key: string, error: string | null) => void
-  clearMessages: (key: string) => void
   reset: () => void
 }
 
@@ -517,11 +515,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       updateExisting(state, key, (current) => ({ ...current, draftInput: value }))
     ),
 
-  clearDraftInput: (key) =>
-    set((state) =>
-      updateExisting(state, key, (current) => ({ ...current, draftInput: '' }))
-    ),
-
   addPending: (key, text) => {
     const item: PendingMessage = {
       id: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -728,11 +721,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setError: (key, error) =>
     set((state) =>
       updateExisting(state, key, (current) => ({ ...current, error }))
-    ),
-
-  clearMessages: (key) =>
-    set((state) =>
-      updateExisting(state, key, (current) => ({ ...current, messages: [] }))
     ),
 
   reset: () => set({ conversations: {}, pendingDraft: '', pendingDraftWorkspace: null }),

@@ -1,5 +1,9 @@
 # Pi Agent 测试清单
 
+> **历史说明（2026-10-26）**：本清单记录 Phase 1 的验收步骤，部分行为已变化：
+> 关闭工作区后运行时释放，但标签与草稿会落盘并在重新打开时恢复；
+> Agent 修改以消息内变更卡展示，不再自动打开 DiffViewer。当前功能以 [STATUS.md](../progress/STATUS.md) 为准。
+
 适用于 Phase 1 完成后的验收测试。支持 Electron 与纯 Web（开发模式）两种环境。
 
 ---
@@ -114,7 +118,7 @@ npm run web:dev
 **预期**:
 - ✅ 文件真实写入工作区
 - ✅ 出现 Toast “Agent modified 1 file(s)”
-- ✅ 自动打开 DiffViewer，显示新增内容
+- ✅ 助手消息内出现本轮变更卡，点开可查看该文件的 Diff
 
 ### 11. 文件操作与监听
 

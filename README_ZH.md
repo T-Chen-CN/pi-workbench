@@ -17,12 +17,12 @@ Pi Workbench 是一个轻量级桌面应用，提供类似 Cursor IDE 的开发�
 - ✅ **代码编辑**：Monaco Editor，多标签、2 秒防抖自动保存
 - ✅ **文件管理**：浏览、新建、重命名、删除，文件监听自动刷新
 - ✅ **AI 聊天**：真实 Pi Agent（read / write / edit / bash 工具）
-- ✅ **Diff 查看**：自动展示 Agent 本轮修改过的文件
-- ✅ **多供应商**：Anthropic / OpenAI / 任意 OpenAI 兼容端点（DeepSeek 等）
+- ✅ **Diff 查看**：Agent 修改以消息内变更卡展示，可逐文件查看 Diff 并还原
+- ✅ **多供应商**：任意 OpenAI 兼容端点（DeepSeek、网关等）
 - ✅ **模型拉取**：从供应商真实获取模型列表并选择
 - ✅ **安全存储**：API Key 使用 Electron `safeStorage` 加密
 - ✅ **会话持久化**：按工作区恢复历史对话
-- ✅ **便携式**：所有数据在应用目录内
+- ✅ **便携式**：所有数据在应用目录内（macOS 打包版例外：`~/Library/Application Support/pi-workbench`）
 - ✅ **中英文国际化**
 
 ---

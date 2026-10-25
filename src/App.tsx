@@ -37,8 +37,7 @@ import { useApprovalStore } from './store/approvalStore'
 import { hasRunningWork } from './utils/runningWork'
 import { useUpdaterStore } from './store/updaterStore'
 import { localizeError } from './i18n/errors'
-import { commandPaletteShortcut } from './utils/shortcuts'
-import { matchShortcut } from './utils/keybindings'
+import { formatShortcut, matchShortcut } from './utils/keybindings'
 import { restoreEditorTabs, saveEditorTabs } from './workspace/editorTabs'
 
 export default function App() {
@@ -221,6 +220,7 @@ export default function App() {
 
   // Ctrl/Cmd+, 打开设置（可在设置中改键）
   const settingsShortcut = useSettingsStore((state) => state.keybindings.settings)
+  const paletteShortcut = useSettingsStore((state) => state.keybindings.commandPalette)
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (matchShortcut(event, settingsShortcut)) {
@@ -480,7 +480,7 @@ export default function App() {
                 onClick={() => window.dispatchEvent(new CustomEvent('open-command-palette'))}
               >
                 {t('commandPalette')}{' '}
-                <span className="type-key text-ink-muted">{commandPaletteShortcut()}</span>
+                <span className="type-key text-ink-muted">{formatShortcut(paletteShortcut)}</span>
               </button>
               {workspace && activeCount > 0 && (
                 <div className="relative">
@@ -669,7 +669,7 @@ export default function App() {
       <UpdateDialog />
       <DialogHost />
       <ToastContainer messages={toastMessages} onClose={removeToast} />
-      {workspace && <CommandPalette workspacePath={workspace} />}
+      {workspace && <CommandPalette workspacePath={workspace} active={!showHome} />}
 
       {/* Debug panel */}
       {showDebug && (
@@ -703,7 +703,12 @@ export default function App() {
       <footer className="flex h-7 flex-shrink-0 items-center gap-4 border-t border-rule-divide bg-panel px-3.5 type-caption text-ink-muted">
         <span className="text-ink-muted">PI WORKBENCH</span>
         <span>LOCAL-FIRST</span>
-        {workspace && <span className="text-accent">● PI AGENT</span>}
+        {workspace && (
+          <span className="flex items-center gap-1.5 text-accent">
+            <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" />
+            PI AGENT
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-4">
           <UpdateStatusIndicator onOpenSettings={() => openSettings('about')} />
           {currentFile && <span>{fileLanguage}</span>}

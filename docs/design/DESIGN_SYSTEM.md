@@ -54,8 +54,8 @@
 
 | CSS 变量 | Tailwind 类 | Paper（默认） | Ink（深色） | 用途 |
 |---|---|---|---|---|
-| `--surface` | `bg-surface` | `#F4F1EA` | `#141311` | 应用画布、顶栏、状态栏 |
-| `--panel` | `bg-panel` | `#FBF9F4` | `#1A1815` | 面板、编辑器、聊天 |
+| `--surface` | `bg-surface` | `#F4F1EA` | `#141311` | 编辑器画布、激活标签 |
+| `--panel` | `bg-panel` | `#FBF9F4` | `#1A1815` | 顶栏、侧栏、状态栏、终端 |
 | `--raised` | `bg-raised` | `#FFFDF8` | `#201D19` | 纸卡、浮层（弹窗、菜单、Toast） |
 | `--sunken` | `bg-sunken` | `#EFECE4` | `#221F1B` | 输入框、代码块、终端底 |
 | `--hover` | `bg-hover` | `#EEEAE1` | `#2B2722` | hover 背景 |
@@ -272,8 +272,8 @@
 
 | Prop | 类型 | 说明 |
 |---|---|---|
-| `label` | `string` | mono 10px 大写 + 0.14em 字距 |
-| `hint` | `string?` | 右侧 mono 10px 次要说明 |
+| `label` | `string` | 12px UI sans（`type-label`） |
+| `hint` | `string?` | 右侧 12px 次要说明（`type-caption`） |
 | `htmlFor` | `string?` | 关联输入框 |
 | `children` | ReactNode | 输入控件 |
 
@@ -299,7 +299,7 @@
 | `size` | `sm \| md \| lg` | `md` | `max-w-md/2xl/4xl` |
 | `closeLabel` | `string` | `Close` | 关闭按钮的 aria-label |
 
-**规则**：遮罩使用 `bg-black/35`；浮层纸卡使用 `border-line bg-raised shadow-print`，标题栏与底栏分隔使用 `border-rule-divide`；标题 `font-display`；关闭按钮使用 IconButton。
+**规则**：遮罩使用 `bg-overlay/35`；浮层纸卡使用 `border-line bg-raised shadow-print`，标题栏与底栏分隔使用 `border-rule-divide`；标题 `font-display`；关闭按钮使用 IconButton。
 
 ### 5.8 Spinner
 

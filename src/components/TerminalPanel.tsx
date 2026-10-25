@@ -49,6 +49,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const startedRef = useRef(false)
   const [status, setStatus] = useState<TerminalStatus>('idle')
   const [error, setError] = useState<string | null>(null)
+  const [shellName, setShellName] = useState('')
   const [generation, setGeneration] = useState(0)
   const activeSessionId = useSessionStore(
     (state) => state.byWorkspace[workspacePath]?.active ?? null
@@ -125,6 +126,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       if (result.success && result.id) {
         terminalIdRef.current = result.id
         terminalLogPathRef.current = result.logPath ?? null
+        setShellName(result.shell ?? '')
         setStatus('ready')
         fit.fit()
         void api.terminalResize(result.id, terminal.cols, terminal.rows)
@@ -227,7 +229,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       <div className="flex h-7 flex-shrink-0 items-center justify-between border-b border-rule-divide px-3.5">
         <div className="flex items-center gap-3 type-label text-ink-muted">
           <span className="font-medium text-ink-muted">{t('terminal')}</span>
-          <span className="border-b border-accent pb-0.5 type-data text-ink">zsh</span>
+          {shellName && (
+            <span className="border-b border-accent pb-0.5 type-data text-ink">{shellName}</span>
+          )}
           {status === 'starting' && <span>{t('terminalStarting')}</span>}
           {status === 'error' && <span className="text-danger">{error}</span>}
         </div>

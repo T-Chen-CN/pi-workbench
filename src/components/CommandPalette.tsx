@@ -15,6 +15,8 @@ import type { PluginCommandInfo, PluginInfo, PromptTemplateInfo, SkillInfo } fro
 
 interface CommandPaletteProps {
   workspacePath: string
+  /** 当前工作区是否在前台；首页时不派发会话命令 */
+  active?: boolean
 }
 
 interface CommandOutput {
@@ -47,7 +49,10 @@ const BUILTIN_COMMANDS: Array<{
   { id: 'workbench.session-close', titleKey: 'closeSessionTab', event: 'session-close' },
 ]
 
-export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath }) => {
+export const CommandPalette: React.FC<CommandPaletteProps> = ({
+  workspacePath,
+  active: workspaceActive = true,
+}) => {
   const { t } = useI18nStore()
   const [open, setOpen] = useState(false)
   const [plugins, setPlugins] = useState<PluginInfo[]>([])
@@ -227,8 +232,13 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ workspacePath })
         return
       }
 
-      const active = useSessionStore.getState().byWorkspace[workspacePath]?.active
-      if (!active) {
+      const activeSession = useSessionStore.getState().byWorkspace[workspacePath]?.active
+      if (!activeSession) {
+        setOutput({ title: command.title, text: t('noActiveSession'), success: false })
+        toast.error(`${command.title}: ${t('noActiveSession')}`)
+        return
+      }
+      if (builtin.event?.startsWith('session-') && !workspaceActive) {
         setOutput({ title: command.title, text: t('noActiveSession'), success: false })
         toast.error(`${command.title}: ${t('noActiveSession')}`)
         return

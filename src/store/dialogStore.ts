@@ -19,13 +19,11 @@ export interface PromptDialogOptions {
 
 type DialogRequest =
   | {
-      id: number
       kind: 'confirm'
       options: ConfirmDialogOptions
       resolve: (value: boolean) => void
     }
   | {
-      id: number
       kind: 'prompt'
       options: PromptDialogOptions
       resolve: (value: string | null) => void
@@ -36,8 +34,6 @@ interface DialogState {
   open: (dialog: DialogRequest) => void
   close: (result: boolean | string | null) => void
 }
-
-let nextId = 1
 
 export const useDialogStore = create<DialogState>((set, get) => ({
   current: null,
@@ -67,13 +63,13 @@ export const useDialogStore = create<DialogState>((set, get) => ({
 /** 用应用内 Modal 替代 window.confirm */
 export function confirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
   return new Promise((resolve) => {
-    useDialogStore.getState().open({ id: nextId++, kind: 'confirm', options, resolve })
+    useDialogStore.getState().open({ kind: 'confirm', options, resolve })
   })
 }
 
 /** 用应用内 Modal 替代 window.prompt */
 export function promptDialog(options: PromptDialogOptions): Promise<string | null> {
   return new Promise((resolve) => {
-    useDialogStore.getState().open({ id: nextId++, kind: 'prompt', options, resolve })
+    useDialogStore.getState().open({ kind: 'prompt', options, resolve })
   })
 }

@@ -27,6 +27,7 @@ pnpm-lock.yaml
 *.swo
 *~
 .DS_Store
+*.tsbuildinfo
 
 # Environment
 .env

@@ -106,4 +106,17 @@ describe('SessionExtrasStore', () => {
     await fs.writeFile(path.join(tmpRoot, 'broken.json'), '{oops', 'utf-8')
     await expect(store.load('broken')).resolves.toEqual(emptyExtras())
   })
+
+  it('rejects session ids that could escape the extras directory', async () => {
+    const base = path.join(tmpRoot, 'extras')
+    await fs.mkdir(base)
+    const outside = path.join(tmpRoot, 'outside.json')
+    await fs.writeFile(outside, 'keep', 'utf-8')
+    const store = new SessionExtrasStore(base)
+
+    await expect(store.delete('../outside')).rejects.toThrow('Invalid session id')
+    await expect(store.save('../outside', emptyExtras())).rejects.toThrow('Invalid session id')
+    await expect(fs.readFile(outside, 'utf-8')).resolves.toBe('keep')
+    await expect(store.load('../outside')).resolves.toEqual(emptyExtras())
+  })
 })

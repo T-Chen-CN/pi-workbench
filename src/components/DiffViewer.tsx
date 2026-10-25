@@ -9,7 +9,7 @@ import { computeDiff, DiffLineType, DiffResult, type DiffLine } from '../api/dif
 import { revertFileEdit } from '../utils/revertFile'
 import type { FileEdit } from '../types/electron'
 import { useVirtualRows } from '../hooks/useVirtualRows'
-import { Button, IconButton, Spinner } from './ui'
+import { Button, IconButton } from './ui'
 
 export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> = ({
   workspacePath,
@@ -20,8 +20,6 @@ export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> =
     edits,
     currentIndex,
     isOpen,
-    isLoading,
-    error,
     clearDiff,
     setCurrentIndex,
     removeEdit,
@@ -210,27 +208,10 @@ export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> =
           {t('reviewHint')}
         </div>
 
-        {/* Error */}
-        {error && (
-          <div className="flex-shrink-0 border-b border-danger/30 bg-danger/10 px-4 py-2 type-caption text-danger">
-            {error}
-          </div>
-        )}
-
-        {/* Loading */}
-        {isLoading && (
-          <div className="flex flex-1 items-center justify-center gap-2 type-value text-ink-muted">
-            <Spinner />
-            {t('comparing')}
-          </div>
-        )}
-
         {/* Content */}
-        {!isLoading && (
-          <div className="flex-1 overflow-hidden">
-            {viewMode === 'split' ? <SplitDiffView diff={diff} /> : <UnifiedDiffView diff={diff} />}
-          </div>
-        )}
+        <div className="flex-1 overflow-hidden">
+          {viewMode === 'split' ? <SplitDiffView diff={diff} /> : <UnifiedDiffView diff={diff} />}
+        </div>
       </div>
     </div>
   )

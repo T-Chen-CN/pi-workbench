@@ -1039,6 +1039,15 @@ describe('AgentManager sessions', () => {
     expect(result.error).toContain('outside the session directory')
   })
 
+  it('rejects session ids that could escape the sidecar directory', async () => {
+    primeSdk(createFakeSession())
+    await manager.initialize(makeConfig())
+
+    const result = await manager.deleteSession('../../../config/settings')
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Invalid session id.')
+  })
+
   it('runs two sessions concurrently without blocking each other', async () => {
     const first = createFakeSession(async (session) => {
       await new Promise((resolve) => setTimeout(resolve, 15))

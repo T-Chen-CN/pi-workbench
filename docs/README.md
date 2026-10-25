@@ -42,6 +42,9 @@ npm run build        # 全量构建
 ### 🏗️ 架构和设计
 - **[项目结构](./architecture/PROJECT_STRUCTURE.md)** — 代码组织、进程模型与数据流
 - **[Agent 过程轨迹方案](./architecture/AGENT_TRACE.md)** — 思考、工具调用与正文的 parts 时间线（已实现 v1）
+- **[设计系统](./design/DESIGN_SYSTEM.md)** — 颜色、字体、组件与交互的唯一事实来源（强制）
+- **[Paper & Ink 历史设计稿](./design/PAPER_INK.md)** — 早期视觉方案（部分 token 已过时）
+- **[设计原型](./design/mockups/)** — 输入区操作、面板开关、会话模式状态
 
 ### 🔧 开发指南
 - **[构建和打包](./guides/BUILD_AND_PACKAGE.md)** — 构建、打包与发布
@@ -55,7 +58,7 @@ npm run build        # 全量构建
 - **[Phase 1 完成报告](./progress/PHASE-1-COMPLETE.md)** — Agent 集成实现细节
 
 ### 🗂️ 历史报告
-- **[历史报告目录](./reports/README.md)** — 早期阶段归档（可按需删除）
+- **[历史报告目录](./reports/README.md)** — 早期阶段归档与代码审查记录（可按需删除）
 
 ---
 
@@ -72,6 +75,7 @@ npm run build        # 全量构建
 | 验收 Agent 功能 | [AGENT-TESTING.md](./guides/AGENT-TESTING.md) |
 | 验收过程轨迹 / 工具步骤 | [AGENT_TRACE_TESTING.md](./guides/AGENT_TRACE_TESTING.md) |
 | 查看功能状态 | [STATUS.md](./progress/STATUS.md) |
+| 查看设计规范 | [DESIGN_SYSTEM.md](./design/DESIGN_SYSTEM.md) |
 
 ---
 
@@ -119,6 +123,6 @@ npm run package:linux  # Linux
 
 ---
 
-**文档版本**: 2.1
+**文档版本**: 2.2
 **最后更新**: 2026-10-26
 **项目版本**: 0.5.0

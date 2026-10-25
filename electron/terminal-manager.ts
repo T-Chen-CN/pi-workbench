@@ -45,6 +45,8 @@ export interface TerminalCreateResult {
   id?: string
   /** 该终端输出日志文件（按终端拆分） */
   logPath?: string | null
+  /** 实际启动的 shell 名称（用于终端标题） */
+  shell?: string
   error?: string
 }
 
@@ -110,7 +112,8 @@ export class TerminalManager {
         ? this.options.envSanitizer(baseEnv)
         : sanitizeTerminalEnv(baseEnv)
 
-      const pty = this.options.spawn(this.options.shell ?? defaultShell(), this.options.shellArgs ?? [], {
+      const shell = this.options.shell ?? defaultShell()
+      const pty = this.options.spawn(shell, this.options.shellArgs ?? [], {
         name: 'xterm-256color',
         cols: clampDimension(cols, 20, 1000),
         rows: clampDimension(rows, 5, 500),
@@ -163,7 +166,7 @@ export class TerminalManager {
       })
 
       this.terminals.set(id, entry)
-      return { success: true, id, logPath }
+      return { success: true, id, logPath, shell: path.basename(shell) }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.error('[Terminal] Failed to create terminal:', message)

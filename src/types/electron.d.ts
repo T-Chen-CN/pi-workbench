@@ -36,8 +36,6 @@ export interface ElectronAPI {
 
   // Workspace configuration
   initWorkspace: (workspacePath: string) => Promise<WorkspaceResult>
-  getWorkspaceConfig: (workspacePath: string) => Promise<GetWorkspaceConfigResult>
-  saveWorkspaceConfig: (workspacePath: string, config: any) => Promise<WorkspaceResult>
   disposeWorkspace: (workspacePath: string) => Promise<WorkspaceResult>
   draftSave: (workspacePath: string, filePath: string, content: string) => Promise<DraftResult>
   draftDelete: (workspacePath: string, filePath: string) => Promise<DraftResult>
@@ -60,8 +58,6 @@ export interface ElectronAPI {
   onAgentSessionTitle: (
     callback: (payload: { workspaceDir: string; sessionId: string; title: string }) => void
   ) => () => void
-  agentIsInitialized: (workspaceDir?: string) => Promise<AgentStatusResult>
-  agentGetHistory: (workspaceDir?: string, sessionId?: string) => Promise<AgentHistoryResult>
   agentDispose: (workspaceDir?: string) => Promise<AgentDisposeResult>
   agentSessionsList: (workspaceDir: string) => Promise<SessionListResult>
   agentSessionsOpen: (workspaceDir: string, sessionId?: string) => Promise<SessionOpenResult>
@@ -235,10 +231,6 @@ export interface ElectronAPI {
     workspaceDir: string,
     sessions: PendingMessagesMap
   ) => Promise<{ success: boolean; error?: string }>
-  saveTextFile: (
-    suggestedName: string,
-    content: string
-  ) => Promise<{ success: boolean; path?: string; canceled?: boolean; error?: string }>
   searchWorkspaceFiles: (
     workspaceDir: string,
     query: string,
@@ -357,16 +349,6 @@ export interface SaveSettingsResult {
 
 export interface WorkspaceResult {
   success: boolean
-  error?: string
-}
-
-export interface GetWorkspaceConfigResult {
-  success: boolean
-  config?: {
-    version: string
-    enabledPlugins: string[]
-    [key: string]: unknown
-  }
   error?: string
 }
 
@@ -705,12 +687,6 @@ export interface EditorTabsResult {
   error?: string
 }
 
-export interface AgentStatusResult {
-  success: boolean
-  initialized?: boolean
-  error?: string
-}
-
 export interface AgentHistoryResult {
   success: boolean
   history?: Array<{
@@ -733,6 +709,8 @@ export interface TerminalCreateResult {
   success: boolean
   id?: string
   logPath?: string | null
+  /** 实际启动的 shell 名称（用于终端标题） */
+  shell?: string
   error?: string
 }
 

@@ -63,30 +63,12 @@ interface AgentChatResponse {
   plan?: StructuredPlan
 }
 
-interface AgentHistoryResponse {
-  success: boolean
-  history?: Array<{
-    role: 'user' | 'assistant'
-    content: string
-    timestamp: number
-  }>
-  error?: string
-}
-
-interface AgentStatusResponse {
-  success: boolean
-  initialized?: boolean
-  error?: string
-}
-
 /** Web 开发模式下由 Vite dev server 提供的 Agent 桥接 */
 const DEV_AGENT_INIT = '/__pi/agent/init'
 const DEV_AGENT_CHAT = '/__pi/agent/chat'
 const DEV_AGENT_CHAT_STREAM = '/__pi/agent/chat-stream'
 const DEV_AGENT_ABORT = '/__pi/agent/abort'
 const DEV_AGENT_DISPOSE = '/__pi/agent/dispose'
-const DEV_AGENT_HISTORY = '/__pi/agent/history'
-const DEV_AGENT_IS_INITIALIZED = '/__pi/agent/isInitialized'
 const DEV_AGENT_SESSIONS_LIST = '/__pi/agent/sessions/list'
 const DEV_AGENT_SESSIONS_OPEN = '/__pi/agent/sessions/open'
 const DEV_AGENT_SESSIONS_CREATE = '/__pi/agent/sessions/create'
@@ -254,39 +236,6 @@ export const piAgentAPI = {
       })
     } catch (error) {
       console.error('[Pi Agent] Chat error:', error)
-      return { success: false, error: bridgeUnavailableError(error) }
-    }
-  },
-
-  /**
-   * Whether the main process currently holds an initialized agent for this workspace
-   */
-  async isInitialized(workspaceDir?: string): Promise<AgentStatusResponse> {
-    try {
-      if (hasElectronAgent()) {
-        return await window.electronAPI.agentIsInitialized(workspaceDir)
-      }
-      return await callDevBridge<AgentStatusResponse>(DEV_AGENT_IS_INITIALIZED, { workspaceDir })
-    } catch (error) {
-      console.error('[Pi Agent] Status error:', error)
-      return { success: false, initialized: false, error: bridgeUnavailableError(error) }
-    }
-  },
-
-  /**
-   * Restore the conversation history persisted by the agent session
-   */
-  async getHistory(workspaceDir?: string, sessionId?: string): Promise<AgentHistoryResponse> {
-    try {
-      if (hasElectronAgent()) {
-        return await window.electronAPI.agentGetHistory(workspaceDir, sessionId)
-      }
-      return await callDevBridge<AgentHistoryResponse>(DEV_AGENT_HISTORY, {
-        workspaceDir,
-        sessionId,
-      })
-    } catch (error) {
-      console.error('[Pi Agent] History error:', error)
       return { success: false, error: bridgeUnavailableError(error) }
     }
   },
