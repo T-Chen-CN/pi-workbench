@@ -16,7 +16,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
 
       # 标签与 package.json 版本必须一致，否则 latest.yml 的版本会和应用自报版本错位
       - name: Check tag matches package.json
@@ -51,7 +51,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - run: npm ci

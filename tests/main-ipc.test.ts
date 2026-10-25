@@ -272,7 +272,6 @@ describe('app settings handlers', () => {
       theme: 'light',
       autoSave: true,
       autoSaveDelay: 2000,
-      recentWorkspaces: [],
     })
   })
 

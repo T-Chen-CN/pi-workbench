@@ -24,7 +24,7 @@ import { DraftStore } from './draft-store.js'
 import type { UpdateController, UpdateState } from './updater.js'
 import { ApprovalBroker, sanitizeApprovalDecision } from './approval-broker.js'
 import { NotificationRouter } from './notifications.js'
-import { createWorkspaceStore } from './workspace-store.js'
+import { createWorkspaceStore, importRecentWorkspaces } from './workspace-store.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
 
@@ -343,15 +343,31 @@ function resolveWorkspaceFile(
   return { workspace, file }
 }
 
-/** 启动时把最近打开的工作区视为已批准（它们都来自此前的目录选择器） */
-async function seedTrustedWorkspacesFromSettings(): Promise<void> {
+/** 启动时从 SQLite 恢复信任；旧版 settings.recentWorkspaces 一次性迁入后删除 */
+async function seedTrustedWorkspaces(): Promise<void> {
   try {
-    const settings = await loadSettingsFile()
-    const recent: unknown = settings.recentWorkspaces
-    if (!Array.isArray(recent)) return
-    for (const workspacePath of recent) {
-      if (typeof workspacePath === 'string') trustWorkspace(workspacePath)
+    let records = workspaceStore.list()
+    if (records.length === 0) {
+      const settings = await loadSettingsFile()
+      const recent: unknown = settings.recentWorkspaces
+      const candidates = Array.isArray(recent)
+        ? recent.filter((item): item is string => typeof item === 'string')
+        : []
+      if (candidates.length > 0) {
+        const trusted: string[] = []
+        for (const workspacePath of candidates) {
+          if (trustWorkspace(workspacePath)) trusted.push(workspacePath)
+        }
+        importRecentWorkspaces(workspaceStore, trusted)
+        const next = { ...settings }
+        delete next.recentWorkspaces
+        delete appSettingsCache.recentWorkspaces
+        appSettingsCache = { ...appSettingsCache, ...next }
+        await saveSettingsFile(next)
+        records = workspaceStore.list()
+      }
     }
+    for (const record of records) trustWorkspace(record.path)
   } catch (error) {
     console.warn('[Main] Failed to seed trusted workspaces:', error)
   }
@@ -597,7 +613,7 @@ app.whenReady().then(async () => {
   await initAppDirectories()
   appSettingsCache = await loadSettingsFile()
   await migratePermissionLevel()
-  await seedTrustedWorkspacesFromSettings()
+  await seedTrustedWorkspaces()
   createWindow()
 
   // Windows / Linux 的配置、数据和更新缓存都写在安装目录：安装到 Program Files
@@ -1165,7 +1181,6 @@ const DEFAULT_SETTINGS = {
   runWhileBusy: 'queue',
   /** 新会话的默认权限档位；会话创建后自行持有权限，不再受此值影响 */
   permissionLevel: 'ask',
-  recentWorkspaces: [] as string[],
 }
 
 async function loadSettingsFile(): Promise<any> {
@@ -1239,13 +1254,8 @@ handleIpc('app:getSettings', async () => {
 handleIpc('app:saveSettings', async (_event, settings: any) => {
   try {
     const sanitized = { ...(settings ?? {}) }
-    // 最近工作区只允许保存已批准路径，避免渲染进程借此为任意目录背书
-    if (Array.isArray(sanitized.recentWorkspaces)) {
-      sanitized.recentWorkspaces = sanitized.recentWorkspaces.filter(
-        (workspacePath: unknown): boolean =>
-          typeof workspacePath === 'string' && isTrustedWorkspacePath(workspacePath)
-      )
-    }
+    // 最近工作区由主进程的 SQLite 独占管理，渲染层不再保存该字段
+    delete sanitized.recentWorkspaces
     // 权限档位只接受三个合法值；缺失时保留现有值（旧前端不会发送该字段）
     const level = normalizePermissionLevel(sanitized.permissionLevel)
     if (level) {
@@ -1354,21 +1364,11 @@ handleIpc('window:isMaximized', () => ({
 
 handleIpc('app:getRecentWorkspaces', async () => {
   try {
-    const settings = await loadSettingsFile()
-    const fromSettings: string[] = Array.isArray(settings.recentWorkspaces)
-      ? settings.recentWorkspaces.filter(
-          (item: unknown): item is string =>
-            typeof item === 'string' && isTrustedWorkspacePath(item)
-        )
-      : []
-    const fromStore = workspaceStore.listRecent(30)
-    const merged: string[] = []
-    for (const workspacePath of [...fromStore, ...fromSettings]) {
-      if (!isTrustedWorkspacePath(workspacePath)) continue
-      if (!merged.includes(workspacePath)) merged.push(workspacePath)
-      if (merged.length >= 10) break
-    }
-    return { success: true, workspaces: merged }
+    const workspaces = workspaceStore
+      .listRecent(30)
+      .filter((workspacePath) => isTrustedWorkspacePath(workspacePath))
+      .slice(0, 10)
+    return { success: true, workspaces }
   } catch (error) {
     return {
       success: false,
@@ -1384,10 +1384,9 @@ handleIpc('app:addRecentWorkspace', async (_event, workspacePath: string) => {
       return { success: false, workspaces: [], error: 'Workspace is not approved' }
     }
     workspaceStore.recordOpen(workspacePath)
-    const settings = await loadSettingsFile()
-    const existing: string[] = Array.isArray(settings.recentWorkspaces) ? settings.recentWorkspaces : []
-    const workspaces = [workspacePath, ...existing.filter((p) => p !== workspacePath)].slice(0, 10)
-    await saveSettingsFile({ ...settings, recentWorkspaces: workspaces })
+    const workspaces = workspaceStore
+      .listRecent(10)
+      .filter((item) => isTrustedWorkspacePath(item))
     return { success: true, workspaces }
   } catch (error) {
     return {
@@ -1408,7 +1407,6 @@ handleIpc('workspace:init', async (_event, workspacePath: string) => {
         error: 'Workspace is not approved. Open it with the Open Project dialog.',
       }
     }
-    workspaceStore.recordOpen(workspacePath)
 
     const configDir = path.join(workspacePath, '.pi-workbench')
     const pluginsDir = path.join(configDir, 'plugins')
