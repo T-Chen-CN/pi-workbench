@@ -1,13 +1,9 @@
 /** 应用设置读写、权限迁移与 settings IPC */
 
 import * as path from 'path'
-import { fileURLToPath, pathToFileURL } from 'url'
-import { getAppDir } from '../app-paths.js'
+import { getAppDir, getBridgeEntryUrl } from '../app-paths.js'
 import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
 import { handleIpc } from './register.js'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
 
 const DEFAULT_SETTINGS = {
   language: 'zh',
@@ -70,8 +66,7 @@ export async function migratePermissionLevel(): Promise<void> {
 
   let level: 'readonly' | 'ask' | 'auto' = 'ask'
   try {
-    const bridgePath = path.join(__dirname, '..', 'pi-bridge', 'dist', 'index.js')
-    const { derivePermissionLevelFromPolicy } = await import(pathToFileURL(bridgePath).href)
+    const { derivePermissionLevelFromPolicy } = await import(getBridgeEntryUrl())
     if (raw.permissions && typeof raw.permissions === 'object') {
       level = derivePermissionLevelFromPolicy(raw.permissions)
     }

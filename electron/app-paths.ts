@@ -2,6 +2,7 @@
 
 import { app } from 'electron'
 import * as path from 'path'
+import { fileURLToPath, pathToFileURL } from 'url'
 
 export function getAppDir(): string {
   // AppImage：可执行文件位于只读挂载点，数据放在 .AppImage 文件旁边
@@ -19,4 +20,14 @@ export function getAppDir(): string {
   }
   // 生产模式：可执行文件所在目录
   return path.dirname(app.getPath('exe'))
+}
+
+/**
+ * pi-bridge 构建产物的入口 URL。
+ * 本模块与 main.js 同处 dist-electron（开发态在仓库根、打包后在 app.asar 根），
+ * 因此退一级就是 pi-bridge 所在目录；不要在子目录模块里自行拼相对层级。
+ */
+export function getBridgeEntryUrl(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  return pathToFileURL(path.join(here, '..', 'pi-bridge', 'dist', 'index.js')).href
 }

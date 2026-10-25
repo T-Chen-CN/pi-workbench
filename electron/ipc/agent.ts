@@ -2,9 +2,8 @@
 
 import * as fs from 'fs/promises'
 import * as path from 'path'
-import { pathToFileURL } from 'url'
 import { shell, dialog, BrowserWindow } from 'electron'
-import { getAppDir } from '../app-paths.js'
+import { getAppDir, getBridgeEntryUrl } from '../app-paths.js'
 import { isTrustedWorkspacePath } from '../workspace-trust.js'
 import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
 import { sanitizeApprovalDecision, type ApprovalBroker } from '../approval-broker.js'
@@ -108,8 +107,7 @@ handleIpc('agent:initialize', async (_event, config: {
     }
 
     // 延迟加载 AgentManager（用运行时路径解析，避免类型检查依赖未构建的 pi-bridge/dist）
-    const bridgePath = path.join(__dirname, '..', 'pi-bridge', 'dist', 'index.js')
-    const { AgentManager } = await import(pathToFileURL(bridgePath).href)
+    const { AgentManager } = await import(getBridgeEntryUrl())
     const agent = new AgentManager()
 
     // 初始化 Agent（传入完整的 apiConfig + 便携式 agent 数据目录）
