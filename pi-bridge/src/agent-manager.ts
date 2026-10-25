@@ -50,7 +50,6 @@ import {
   emptyExtras,
   isSafeSessionId,
   type SessionExtras,
-  type ToolEditRecord,
 } from './session-extras.js'
 
 /** 已知模型的能力元数据；自定义端点不会返回这些信息（R-06） */
@@ -427,8 +426,6 @@ export type AgentTracePart =
       durationMs?: number
       resultPreview?: string
       filePath?: string
-      /** 历史工具行是否有保存下来的 Diff 可查看 */
-      hasDiff?: boolean
     }
 
 /** 主进程归一化后的流式事件；文本、思考和工具共用同一条有序通道 */
@@ -969,12 +966,6 @@ export class AgentManager {
                 newContent,
                 toolCallId: event.toolCallId,
               })
-              runtime.extras.toolEdits[event.toolCallId] = {
-                path: snapshot.path,
-                oldContent: snapshot.oldContent,
-                newContent,
-              }
-              this.persistExtras(runtime)
             }
           }
 
@@ -1543,21 +1534,6 @@ export class AgentManager {
   private treeDepth(node: SessionTreeNode): number {
     if (node.children.length === 0) return 0
     return 1 + Math.max(...node.children.map((child) => this.treeDepth(child)))
-  }
-
-  /** 读取历史工具调用的文件 Diff（来自会话 sidecar） */
-  async getToolEdit(
-    sessionId: string,
-    toolCallId: string
-  ): Promise<{ success: boolean; edit?: ToolEditRecord; error?: string }> {
-    try {
-      const runtime = await this.ensureRuntime(sessionId)
-      const edit = runtime.extras.toolEdits[toolCallId]
-      if (!edit) return { success: false, error: 'No saved diff for this tool call.' }
-      return { success: true, edit }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
   }
 
   /** 工具结果元数据（R-20）；不复制内容，只统计大小 */
@@ -2539,7 +2515,6 @@ ${body.join('\n')}
                 argsSummary: summarizeToolArgs(toolName, part.arguments ?? {}),
                 status: 'running',
                 filePath: this.toolFilePath(toolName, part.arguments ?? {}),
-                hasDiff: Boolean(runtime.extras.toolEdits[toolCallId]),
               })
             }
           }

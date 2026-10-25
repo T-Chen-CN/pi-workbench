@@ -30,7 +30,7 @@ import {
 } from '../store/sessionStore'
 import { useWorkspaceScope } from '../workspace/WorkspaceScope'
 import { useWorkspaceStore } from '../store/workspaceStore'
-import { useDiffStore, diffStoreFor } from '../store/diffStore'
+import { diffStoreFor } from '../store/diffStore'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useSelectionStore } from '../store/selectionStore'
@@ -93,6 +93,7 @@ import type {
   StructuredPlan,
   SessionMode,
   SessionPermission,
+  FileEdit,
 } from '../types/electron'
 
 interface ChatPanelProps {
@@ -703,32 +704,25 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       ),
     [approvalRequests, workspacePath, activeSessionId]
   )
-  const diffEdits = useDiffStore(workspacePath, (state) => state.edits)
-  const diffToolIds = useMemo(
-    () =>
-      new Set(
-        diffEdits
-          .map((edit) => edit.toolCallId)
-          .filter((id): id is string => Boolean(id))
-      ),
-    [diffEdits]
-  )
+  const liveEditsByToolId = useMemo(() => {
+    const map = new Map<string, FileEdit>()
+    for (const message of messages) {
+      for (const edit of message.edits ?? []) {
+        if (edit.toolCallId) map.set(edit.toolCallId, edit)
+      }
+    }
+    return map
+  }, [messages])
+  const diffToolIds = useMemo(() => new Set(liveEditsByToolId.keys()), [liveEditsByToolId])
   const openToolDiff = useCallback(
-    async (toolCallId: string) => {
-      const edit = diffStore.getState().edits.find((item) => item.toolCallId === toolCallId)
-      if (edit) {
-        diffStore.getState().openEdits([edit])
-        return
-      }
-      if (!activeSessionId) return
-      const result = await piAgentAPI.getToolEdit(workspacePath, activeSessionId, toolCallId)
-      if (!result.success || !result.edit) {
-        toast.error(t('historicalDiffMissing'))
-        return
-      }
-      diffStore.getState().openEdits([{ ...result.edit, toolCallId }])
+    (toolCallId: string) => {
+      const edit =
+        liveEditsByToolId.get(toolCallId) ??
+        diffStore.getState().edits.find((item) => item.toolCallId === toolCallId)
+      if (!edit) return
+      diffStore.getState().openEdits([edit])
     },
-    [activeSessionId, workspacePath, t, diffStore]
+    [liveEditsByToolId, diffStore]
   )
 
   const [initialized, setInitialized] = useState(false)

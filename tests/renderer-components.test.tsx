@@ -65,7 +65,6 @@ vi.mock('../src/api/piAgentAPI', () => ({
     getPlan: vi.fn(),
     approvePlan: vi.fn(),
     rejectPlan: vi.fn(),
-    getToolEdit: vi.fn(),
     getToolResultMeta: vi.fn(),
     readToolResultChunk: vi.fn(),
     getToolResultImage: vi.fn(),
@@ -202,7 +201,6 @@ beforeEach(() => {
     skills: [],
   })
   vi.mocked(piAgentAPI.getPlan).mockResolvedValue({ success: true, plan: null })
-  vi.mocked(piAgentAPI.getToolEdit).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.getToolResultMeta).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.readToolResultChunk).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.getToolResultImage).mockResolvedValue({ success: false })

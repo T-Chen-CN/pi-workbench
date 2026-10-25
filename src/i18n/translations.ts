@@ -204,7 +204,6 @@ export const translations = {
     suggestTestsPythonPrompt: '运行当前项目的 pytest，定位失败的用例并修复。',
     suggestTestsRustPrompt: '运行 cargo test，定位失败的用例并修复。',
     suggestTestsGoPrompt: '运行 go test ./...，定位失败的用例并修复。',
-    historicalDiffMissing: '该工具调用没有保存可查看的 Diff',
     slashHelp:
       '可用命令：/plan 计划模式 · /act 询问模式 · /compact 压缩上下文 · /clear 新建会话 · /model <名称> 切换模型 · /<模板名> 使用提示模板 · /skill:<名称> 调用技能',
     slashClearConfirm: '清空意味着开始一个新会话；当前对话会保留在会话列表中。继续？',
@@ -751,7 +750,6 @@ export const translations = {
     suggestTestsPythonPrompt: 'Run pytest for this project, find failing cases and fix them.',
     suggestTestsRustPrompt: 'Run cargo test, find failing cases and fix them.',
     suggestTestsGoPrompt: 'Run go test ./..., find failing cases and fix them.',
-    historicalDiffMissing: 'No saved diff is available for this tool call',
     slashHelp:
       'Commands: /plan plan mode · /act ask mode · /compact compact context · /clear start a new session · /model <name> switch model · /<template> use a prompt template · /skill:<name> run a skill',
     slashClearConfirm:

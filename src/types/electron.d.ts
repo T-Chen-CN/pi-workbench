@@ -161,15 +161,6 @@ export interface ElectronAPI {
     sessionId: string,
     planId: string
   ) => Promise<{ success: boolean; plan?: StructuredPlan; error?: string }>
-  agentToolDiff: (
-    workspaceDir: string,
-    sessionId: string,
-    toolCallId: string
-  ) => Promise<{
-    success: boolean
-    edit?: { path: string; oldContent: string; newContent: string }
-    error?: string
-  }>
   agentToolResultMeta: (
     workspaceDir: string,
     sessionId: string,
@@ -566,8 +557,6 @@ export type AgentTracePart =
       durationMs?: number
       resultPreview?: string
       filePath?: string
-      /** 历史工具行有保存的 Diff */
-      hasDiff?: boolean
       /** 嵌套调用的父级工具调用（R-16） */
       parentToolCallId?: string
     }

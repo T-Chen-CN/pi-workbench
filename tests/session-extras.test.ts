@@ -20,16 +20,33 @@ describe('SessionExtrasStore', () => {
     await expect(store.load('missing')).resolves.toEqual(emptyExtras())
   })
 
-  it('round-trips durations and tool edits', async () => {
+  it('round-trips thinking durations', async () => {
     const store = new SessionExtrasStore(tmpRoot)
     const extras = emptyExtras()
     extras.thinkingDurations['111'] = [1200, 300]
-    extras.toolEdits['call-1'] = { path: 'a.ts', oldContent: 'old', newContent: 'new' }
     await store.save('session-1', extras)
 
     const loaded = await store.load('session-1')
     expect(loaded.thinkingDurations['111']).toEqual([1200, 300])
-    expect(loaded.toolEdits['call-1'].newContent).toBe('new')
+  })
+
+  it('drops legacy tool edit contents when loading an old sidecar', async () => {
+    const store = new SessionExtrasStore(tmpRoot)
+    const target = path.join(tmpRoot, 'legacy.json')
+    await fs.writeFile(
+      target,
+      JSON.stringify({
+        version: 1,
+        thinkingDurations: {},
+        toolEdits: { call: { path: 'a.ts', oldContent: 'old', newContent: 'new' } },
+      }),
+      'utf-8'
+    )
+
+    await store.load('legacy')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const raw = JSON.parse(await fs.readFile(target, 'utf-8'))
+    expect(raw).not.toHaveProperty('toolEdits')
   })
 
   it('round-trips branch leaves and tolerates older extras files', async () => {

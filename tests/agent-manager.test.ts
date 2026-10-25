@@ -1866,7 +1866,6 @@ describe('structured plans', () => {
       JSON.stringify({
         version: 1,
         thinkingDurations: {},
-        toolEdits: {},
         branchLeaves: {},
         plan,
       }),
@@ -2256,7 +2255,7 @@ describe('session extras', () => {
     expect((thinking as { durationMs?: number }).durationMs ?? 0).toBeGreaterThan(0)
   })
 
-  it('keeps historical tool diffs available for later review', async () => {
+  it('does not persist tool edit contents in session extras', async () => {
     const filePath = path.join(workspaceDir, 'hist.txt')
     const session = createFakeSession(async (fake) => {
       fake.emit({
@@ -2279,8 +2278,10 @@ describe('session extras', () => {
     await manager.initialize(makeConfig())
     await manager.chat('write')
 
-    const result = await manager.getToolEdit('session-1', 'hist-1')
-    expect(result.success).toBe(true)
-    expect(result.edit).toMatchObject({ path: filePath, newContent: 'new' })
+    const extrasPath = path.join(agentDir, 'session-extras', 'session-1.json')
+    const raw = await fs.readFile(extrasPath, 'utf-8').catch(() => null)
+    if (raw) {
+      expect(JSON.parse(raw)).not.toHaveProperty('toolEdits')
+    }
   })
 })

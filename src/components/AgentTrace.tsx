@@ -352,9 +352,7 @@ const WorkGroup: React.FC<WorkGroupProps> = ({
               <ToolRow
                 key={part.id}
                 part={part}
-                hasDiff={
-                  Boolean(part.hasDiff) || (diffToolIds?.has(part.toolCallId) ?? false)
-                }
+                hasDiff={diffToolIds?.has(part.toolCallId) ?? false}
                 onOpenDiff={onOpenDiff}
                 nested={Boolean(
                   part.parentToolCallId && toolCallIds.has(part.parentToolCallId)

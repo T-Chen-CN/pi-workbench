@@ -47,6 +47,6 @@ export type {
   SessionPermission,
   ToolCategory,
 } from './approval-policy.js'
-export type { SessionExtras, ToolEditRecord } from './session-extras.js'
+export type { SessionExtras } from './session-extras.js'
 
 

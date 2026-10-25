@@ -221,15 +221,6 @@ export interface RegisteredAgent {
     sessionId: string,
     permission: unknown
   ) => Promise<{ success: boolean; permission?: SessionPermissionPayload; error?: string }>
-  /** 历史工具调用的文件 Diff（会话 sidecar） */
-  getToolEdit?: (
-    sessionId: string,
-    toolCallId: string
-  ) => Promise<{
-    success: boolean
-    edit?: { path: string; oldContent: string; newContent: string }
-    error?: string
-  }>
   /** 会话累计用量与成本 */
   getSessionStats?: (sessionId: string) => Promise<{
     success: boolean

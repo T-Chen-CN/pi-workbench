@@ -191,8 +191,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ) => ipcRenderer.invoke('agent:plan:approve', workspaceDir, sessionId, planId, targetMode),
   agentPlanReject: (workspaceDir: string, sessionId: string, planId: string) =>
     ipcRenderer.invoke('agent:plan:reject', workspaceDir, sessionId, planId),
-  agentToolDiff: (workspaceDir: string, sessionId: string, toolCallId: string) =>
-    ipcRenderer.invoke('agent:tool-diff', workspaceDir, sessionId, toolCallId),
   agentToolResultMeta: (workspaceDir: string, sessionId: string, toolCallId: string) =>
     ipcRenderer.invoke('agent:tool-result:meta', workspaceDir, sessionId, toolCallId),
   agentToolResultChunk: (
