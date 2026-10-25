@@ -2,8 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import '../monacoEnvironment'
 import * as monaco from 'monaco-editor'
 import { FileCode, Loader2, X } from 'lucide-react'
-import { useEditorStore } from '../store/editorStore'
-import { useWorkspaceStore } from '../store/workspaceStore'
+import { useEditorStore, editorStoreFor } from '../store/editorStore'
 import { useSettingsStore } from '../store/settingsStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useSelectionStore } from '../store/selectionStore'
@@ -90,7 +89,11 @@ function defineEditorThemes(): void {
   monaco.editor.defineTheme(EDITOR_THEME.ink, buildEditorTheme(true))
 }
 
-export const MonacoEditor: React.FC = () => {
+export const MonacoEditor: React.FC<{ workspacePath: string; active?: boolean }> = ({
+  workspacePath,
+  active = true,
+}) => {
+  const store = editorStoreFor(workspacePath)
   const { t } = useI18nStore()
   const resolvedTheme = useResolvedTheme()
   const editorRef = useRef<HTMLDivElement>(null)
@@ -103,7 +106,7 @@ export const MonacoEditor: React.FC = () => {
     removeOpenFile,
     pendingReveal,
     consumeReveal,
-  } = useEditorStore()
+  } = useEditorStore(workspacePath)
   const saveTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
   const draftTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
   // 每个文件一个 model：切换标签时保留撤销栈、光标与滚动位置
@@ -188,7 +191,7 @@ export const MonacoEditor: React.FC = () => {
     selectionSubRef.current?.dispose()
     selectionSubRef.current = monacoRef.current.onDidChangeCursorSelection(() => {
       const editor = monacoRef.current
-      const file = useEditorStore.getState().currentFile
+      const file = store.getState().currentFile
       const editorModel = editor?.getModel()
       const range = editor?.getSelection()
       if (!editor || !file || !editorModel || !range) {
@@ -216,7 +219,7 @@ export const MonacoEditor: React.FC = () => {
     })
 
     setEditorReady(true)
-  }, [currentFile, resolvedTheme, getOrCreateModel])
+  }, [currentFile, resolvedTheme, getOrCreateModel, store])
 
   // 主题切换时重新读取 token 并更新编辑器配色
   useEffect(() => {
@@ -343,17 +346,14 @@ export const MonacoEditor: React.FC = () => {
   // 外部文件变化：所有已打开文件（含后台标签页）都同步磁盘内容；被外部删除时关闭标签
   useEffect(() => {
     const unsubscribe = api.onFsChanged(async (payload) => {
-      const state = useEditorStore.getState()
+      const state = store.getState()
       const target = state.openFiles.find((file) => file.path === payload.path)
       if (!target) return
 
       const existsResult = await api.exists(payload.path)
       if (existsResult.success && existsResult.exists === false) {
         clearFileTimers(payload.path)
-        const workspacePath = useWorkspaceStore.getState().workspacePath
-        if (workspacePath) {
-          void api.draftDelete(workspacePath, payload.path).catch(() => undefined)
-        }
+        void api.draftDelete(workspacePath, payload.path).catch(() => undefined)
         state.removeOpenFile(payload.path)
         toast.info(t('fileRemoved', { name: target.name }))
         return
@@ -369,11 +369,11 @@ export const MonacoEditor: React.FC = () => {
     })
 
     return unsubscribe
-  }, [clearFileTimers, t])
+  }, [clearFileTimers, t, store, workspacePath])
 
   const saveFile = useCallback(
     async (pathOverride?: string) => {
-      const targetPath = pathOverride ?? useEditorStore.getState().currentFile?.path
+      const targetPath = pathOverride ?? store.getState().currentFile?.path
       if (!targetPath) return
 
       // 手动保存时取消该文件尚未触发的自动保存，避免重复写入
@@ -384,7 +384,7 @@ export const MonacoEditor: React.FC = () => {
       }
 
       // 从 store 读取最新内容，避免闭包中的旧快照导致写回旧内容
-      const latest = useEditorStore.getState().openFiles.find((file) => file.path === targetPath)
+      const latest = store.getState().openFiles.find((file) => file.path === targetPath)
       if (!latest) return
 
       const contentToSave = latest.content
@@ -397,12 +397,11 @@ export const MonacoEditor: React.FC = () => {
         }
 
         // 写入期间用户可能继续输入：只有内容没再变化时才标记为已保存
-        const afterSave = useEditorStore.getState().openFiles.find((file) => file.path === targetPath)
+        const afterSave = store.getState().openFiles.find((file) => file.path === targetPath)
         const changedDuringSave = Boolean(afterSave && afterSave.content !== contentToSave)
-        const workspacePath = useWorkspaceStore.getState().workspacePath
 
         if (changedDuringSave) {
-          if (workspacePath && afterSave) {
+          if (afterSave) {
             void api.draftSave(workspacePath, targetPath, afterSave.content).catch(() => undefined)
           }
         } else {
@@ -427,7 +426,7 @@ export const MonacoEditor: React.FC = () => {
         updateOpenFile(targetPath, { isSaving: false })
       }
     },
-    [updateOpenFile, markClean, t]
+    [updateOpenFile, markClean, t, store, workspacePath]
   )
 
   // 监听编辑器内容变化：自动保存的防抖计时器独立于 currentFile，
@@ -441,7 +440,7 @@ export const MonacoEditor: React.FC = () => {
     const subscription = editor.onDidChangeModelContent(() => {
       if (suppressChangeRef.current) return
 
-      const state = useEditorStore.getState()
+      const state = store.getState()
       const file = state.currentFile
       if (!file) return
 
@@ -450,7 +449,6 @@ export const MonacoEditor: React.FC = () => {
       state.markDirty(file.path)
 
       // 崩溃恢复：内容变化后把未保存内容落到 cache/drafts（正常保存后删除）
-      const workspacePath = useWorkspaceStore.getState().workspacePath
       if (workspacePath) {
         const pendingDraft = draftTimers.get(file.path)
         if (pendingDraft) clearTimeout(pendingDraft)
@@ -489,18 +487,17 @@ export const MonacoEditor: React.FC = () => {
       saveTimers.clear()
 
       // 卸载前把各文件最后的未保存内容补成草稿
-      const workspacePath = useWorkspaceStore.getState().workspacePath
       for (const [filePath, timer] of draftTimers) {
         clearTimeout(timer)
         if (!workspacePath) continue
-        const file = useEditorStore.getState().openFiles.find((item) => item.path === filePath)
+        const file = store.getState().openFiles.find((item) => item.path === filePath)
         if (file?.isDirty) {
           void api.draftSave(workspacePath, filePath, file.content).catch(() => undefined)
         }
       }
       draftTimers.clear()
     }
-  }, [editorReady, saveFile])
+  }, [editorReady, saveFile, store, workspacePath])
 
   const handleSave = useCallback(
     async (e: KeyboardEvent) => {
@@ -513,9 +510,15 @@ export const MonacoEditor: React.FC = () => {
   )
 
   useEffect(() => {
+    if (!active) return
     window.addEventListener('keydown', handleSave)
     return () => window.removeEventListener('keydown', handleSave)
-  }, [handleSave])
+  }, [handleSave, active])
+
+  // 隐藏期间尺寸不变；回到前台时补一次布局，避免 Monaco 使用过期尺寸
+  useEffect(() => {
+    if (active && editorReady) monacoRef.current?.layout()
+  }, [active, editorReady])
 
   if (!currentFile) {
     return (
@@ -543,7 +546,7 @@ export const MonacoEditor: React.FC = () => {
                 type="button"
                 className="flex max-w-[220px] items-center gap-1.5 bg-transparent text-inherit"
                 title={file.path}
-                onClick={() => useEditorStore.setState({ currentFile: file })}
+                onClick={() => store.setState({ currentFile: file })}
               >
                 <FileCode size={12} className={active ? 'text-accent' : 'text-ink-muted'} />
                 <span className="truncate">{file.name}</span>
@@ -561,7 +564,7 @@ export const MonacoEditor: React.FC = () => {
                 aria-label={t('close')}
                 title={t('close')}
                 onClick={async () => {
-                  const target = useEditorStore.getState().openFiles.find((f) => f.path === file.path)
+                  const target = store.getState().openFiles.find((f) => f.path === file.path)
                   if (
                     target?.isDirty &&
                     !(await confirmDialog({
@@ -575,7 +578,6 @@ export const MonacoEditor: React.FC = () => {
                   // 取消该文件所有待触发的保存/草稿计时器
                   clearFileTimers(file.path)
 
-                  const workspacePath = useWorkspaceStore.getState().workspacePath
                   if (workspacePath) {
                     void api.draftDelete(workspacePath, file.path).catch(() => undefined)
                   }

@@ -11,7 +11,10 @@ import type { FileEdit } from '../types/electron'
 import { useVirtualRows } from '../hooks/useVirtualRows'
 import { Button, IconButton, Spinner } from './ui'
 
-export const DiffViewer: React.FC = () => {
+export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> = ({
+  workspacePath,
+  active = true,
+}) => {
   const { t } = useI18nStore()
   const {
     edits,
@@ -22,18 +25,18 @@ export const DiffViewer: React.FC = () => {
     clearDiff,
     setCurrentIndex,
     removeEdit,
-  } = useDiffStore()
+  } = useDiffStore(workspacePath)
   const [viewMode, setViewMode] = useState<'split' | 'unified'>('split')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen || !active) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') clearDiff()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isOpen, clearDiff])
+  }, [isOpen, clearDiff, active])
 
   const edit = edits[currentIndex]
   const diff = useMemo(
@@ -56,7 +59,7 @@ export const DiffViewer: React.FC = () => {
 
   /** 把文件恢复为 Agent 修改前的内容；冲突与脏文件拒绝覆盖 */
   const revertFile = async (target: FileEdit): Promise<boolean> => {
-    const result = await revertFileEdit(target)
+    const result = await revertFileEdit(target, workspacePath)
     if (result.ok) return true
     const detail =
       result.reason === 'dirty'

@@ -1,46 +1,36 @@
-import {
-  useState,
-  useEffect,
-  useCallback,
-  useRef,
-  lazy,
-  Suspense,
-  type PointerEvent as ReactPointerEvent,
-} from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Activity,
+  AlertCircle,
+  ArrowLeft,
   Bug,
   Folder,
   FolderOpen,
-  PanelLeftOpen,
-  PanelRightOpen,
+  Home,
   Plus,
   X,
 } from 'lucide-react'
 import { api } from './api'
 import { piAgentAPI } from './api/piAgentAPI'
-import { FileExplorer } from './components/FileExplorer'
-import { ChatPanel } from './components/ChatPanel'
-import { DiffViewer } from './components/DiffViewer'
 import { IPCDebug } from './components/IPCDebug'
 import { Settings, type SettingsSection } from './components/Settings'
 import { UpdateDialog } from './components/UpdateDialog'
 import { UpdateStatusIndicator } from './components/UpdateStatusIndicator'
-import { TerminalPanel } from './components/TerminalPanel'
 import { CommandPalette } from './components/CommandPalette'
 import { ToastContainer } from './components/Toast'
 import { DialogHost } from './components/DialogHost'
 import { WelcomeScreen } from './components/WelcomeScreen'
 import { WindowControls } from './components/WindowControls'
-import { Button, IconButton, Modal, Spinner } from './components/ui'
+import { WorkspaceView } from './components/WorkspaceView'
+import { Button, IconButton, Modal } from './components/ui'
 import { useToastStore, toast } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
 import { useThemeStore, useResolvedTheme, type ThemeMode } from './store/themeStore'
 import { useWorkspaceStore } from './store/workspaceStore'
-import { useEditorStore } from './store/editorStore'
+import { useEditorStore, editorStoreFor, disposeEditorStore } from './store/editorStore'
+import { disposeDiffStore } from './store/diffStore'
 import { useChatStore } from './store/chatStore'
 import { useSessionStore } from './store/sessionStore'
-import { useDiffStore } from './store/diffStore'
 import { confirmDialog } from './store/dialogStore'
 import { useSettingsStore } from './store/settingsStore'
 import { useApprovalStore } from './store/approvalStore'
@@ -49,17 +39,7 @@ import { useUpdaterStore } from './store/updaterStore'
 import { localizeError } from './i18n/errors'
 import { commandPaletteShortcut } from './utils/shortcuts'
 import { matchShortcut } from './utils/keybindings'
-
-const MonacoEditor = lazy(() =>
-  import('./components/MonacoEditor').then((module) => ({ default: module.MonacoEditor }))
-)
-
-const SIDEBAR_MIN = 180
-const SIDEBAR_MAX = 420
-const CHAT_MIN = 280
-const CHAT_MAX = 560
-
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
+import { restoreEditorTabs, saveEditorTabs } from './workspace/editorTabs'
 
 export default function App() {
   const {
@@ -74,38 +54,37 @@ export default function App() {
   const [showDebug, setShowDebug] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
-  const [showTerminal, setShowTerminal] = useState(false)
+  const [showHome, setShowHome] = useState(true)
   const [showActivity, setShowActivity] = useState(false)
-  const [showSidebar, setShowSidebar] = useState(true)
-  const [showChat, setShowChat] = useState(true)
-  const [sidebarWidth, setSidebarWidth] = useState(232)
-  const [chatWidth, setChatWidth] = useState(336)
-  const sidebarCollapseRef = useRef<HTMLButtonElement | null>(null)
-  const chatCollapseRef = useRef<HTMLButtonElement | null>(null)
-  const sidebarRailRef = useRef<HTMLButtonElement | null>(null)
-  const chatRailRef = useRef<HTMLButtonElement | null>(null)
-  const sidebarFocusIntent = useRef(false)
-  const chatFocusIntent = useRef(false)
   const toastMessages = useToastStore((state) => state.messages)
   const removeToast = useToastStore((state) => state.remove)
-  const sessionState = useSessionStore((state) =>
-    workspace ? state.byWorkspace[workspace] : undefined
-  )
+  const sessionsByWorkspace = useSessionStore((state) => state.byWorkspace)
   const streamingMap = useSessionStore((state) => state.streaming)
-  const streamingSessions =
-    workspace && sessionState
-      ? sessionState.sessions.filter(
-          (session) => streamingMap[`${workspace}\u0000${session.id}`]
-        )
-      : []
+  const errorsMap = useSessionStore((state) => state.errors)
+  const needsActionMap = useSessionStore((state) => state.needsAction)
+  const streamingSessions = openWorkspaces.flatMap((path) => {
+    const sessions = sessionsByWorkspace[path]?.sessions ?? []
+    return sessions
+      .filter((session) => streamingMap[`${path}\u0000${session.id}`])
+      .map((session) => ({ session, workspacePath: path }))
+  })
   const activeCount = streamingSessions.length
   const { t, setLanguage, language } = useI18nStore()
   const { setMode } = useThemeStore()
   const resolvedTheme = useResolvedTheme()
-  const currentFile = useEditorStore((state) => state.currentFile)
+  const currentFile = useEditorStore(workspace, (state) => state.currentFile)
   const platform = typeof window !== 'undefined' ? window.electronAPI?.platform : undefined
   const usesMacTrafficLights = platform === 'darwin'
   const usesCustomWindowControls = !!platform && platform !== 'darwin' && platform !== 'web'
+
+  /** 工作区标签上只显示一个最高优先级的状态标记 */
+  const workspaceActivity = (path: string): 'needsAction' | 'error' | 'running' | null => {
+    const prefix = `${path}\u0000`
+    if (Object.keys(needsActionMap).some((key) => key.startsWith(prefix))) return 'needsAction'
+    if (Object.keys(errorsMap).some((key) => key.startsWith(prefix))) return 'error'
+    if (Object.keys(streamingMap).some((key) => key.startsWith(prefix))) return 'running'
+    return null
+  }
 
   const fileLanguage = (() => {
     const ext = currentFile?.name.split('.').pop()?.toLowerCase()
@@ -140,41 +119,6 @@ export default function App() {
     window.addEventListener('open-settings', openSettingsEvent)
     return () => window.removeEventListener('open-settings', openSettingsEvent)
   }, [openSettings])
-
-  const collapseSidebar = useCallback(() => {
-    sidebarFocusIntent.current = true
-    setShowSidebar(false)
-  }, [])
-
-  const expandSidebar = useCallback(() => {
-    sidebarFocusIntent.current = true
-    setShowSidebar(true)
-  }, [])
-
-  const collapseChat = useCallback(() => {
-    chatFocusIntent.current = true
-    setShowChat(false)
-  }, [])
-
-  const expandChat = useCallback(() => {
-    chatFocusIntent.current = true
-    setShowChat(true)
-  }, [])
-
-  // 面板收起 / 展开后，焦点分别落到窄条按钮与面板头部按钮，避免焦点掉到 body
-  useEffect(() => {
-    if (!sidebarFocusIntent.current) return
-    sidebarFocusIntent.current = false
-    const target = showSidebar ? sidebarCollapseRef.current : sidebarRailRef.current
-    target?.focus()
-  }, [showSidebar])
-
-  useEffect(() => {
-    if (!chatFocusIntent.current) return
-    chatFocusIntent.current = false
-    const target = showChat ? chatCollapseRef.current : chatRailRef.current
-    target?.focus()
-  }, [showChat])
 
   // 更新状态由 App 统一订阅，设置页、状态栏和安装弹窗共享同一份状态
   const applyUpdateState = useUpdaterStore((store) => store.applyState)
@@ -257,17 +201,23 @@ export default function App() {
       .catch((err) => console.error('Failed to load recent workspaces:', err))
   }, [setRecentWorkspaces])
 
-  // 有未保存修改或运行中的任务时阻止关闭窗口
+  // 有未保存修改或运行中的任务时阻止关闭窗口；关闭前尽力把固定状态落盘
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {
-      if (useEditorStore.getState().hasDirtyFiles() || hasRunningWork()) {
+      const dirty = openWorkspaces.some((path) =>
+        editorStoreFor(path).getState().hasDirtyFiles()
+      )
+      if (dirty || hasRunningWork()) {
         event.preventDefault()
         event.returnValue = ''
+      }
+      for (const path of openWorkspaces) {
+        void saveEditorTabs(path)
       }
     }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
-  }, [])
+  }, [openWorkspaces])
 
   // Ctrl/Cmd+, 打开设置（可在设置中改键）
   const settingsShortcut = useSettingsStore((state) => state.keybindings.settings)
@@ -291,19 +241,8 @@ export default function App() {
     }
   }
 
-  const resetWorkspaceState = () => {
-    useEditorStore.getState().reset()
-    useDiffStore.getState().clearDiff()
-  }
-
-  const confirmSwitchWorkspace = async (): Promise<boolean> => {
-    if (!useEditorStore.getState().hasDirtyFiles()) return true
-    return confirmDialog({ message: t('discardChangesConfirm'), danger: true })
-  }
-
   const confirmCloseWorkspace = async (targetPath: string): Promise<boolean> => {
-    const closingCurrent = targetPath === workspace
-    const dirty = closingCurrent && useEditorStore.getState().hasDirtyFiles()
+    const dirty = editorStoreFor(targetPath).getState().hasDirtyFiles()
     const active = hasRunningWork(targetPath)
     if (!dirty && !active) return true
     const message = dirty
@@ -327,9 +266,13 @@ export default function App() {
     try {
       setError(null)
 
-      if (targetPath === workspace) return
-
-      if (workspace && !(await confirmSwitchWorkspace())) {
+      // 已打开：只切视图，不重新初始化、不重置任何状态
+      if (openWorkspaces.includes(targetPath)) {
+        activateWorkspace(targetPath)
+        setShowHome(false)
+        if (initialPrompt) {
+          useChatStore.getState().setPendingDraft(initialPrompt, targetPath)
+        }
         return
       }
 
@@ -340,26 +283,42 @@ export default function App() {
         return
       }
 
-      // 切换当前工作区：停止旧监听、重置 UI 状态，但保留各工作区的 Agent 实例
-      await api.unwatchWorkspace().catch(() => undefined)
-      resetWorkspaceState()
-
+      // 其他已打开工作区的视图、监听和 Agent 实例全部保持原样
       activateWorkspace(targetPath)
+      setShowHome(false)
+
+      // 恢复固定状态：上次的编辑器标签
+      const restored = await restoreEditorTabs(targetPath)
+      if (restored.skipped > 0) {
+        toast.info(t('editorTabsRestoreSkipped', { count: restored.skipped }))
+      }
 
       // 上次异常退出留下的未保存草稿：询问用户是否恢复
       try {
         const drafts = await api.draftList(targetPath)
         if (drafts.success && drafts.drafts.length > 0) {
+          const store = editorStoreFor(targetPath)
           if (await confirmDialog({ message: t('recoverDraftsConfirm', { count: drafts.drafts.length }) })) {
             for (const draft of drafts.drafts) {
-              useEditorStore.getState().addOpenFile({
-                path: draft.path,
-                name: draft.path.split(/[\\/]/).pop() || draft.path,
-                content: draft.content,
-                isDirty: true,
-                isSaving: false,
-              })
-              useEditorStore.getState().markDirty(draft.path)
+              const existing = store
+                .getState()
+                .openFiles.find((file) => file.path === draft.path)
+              if (existing) {
+                store.getState().updateOpenFile(draft.path, {
+                  content: draft.content,
+                  isDirty: true,
+                })
+                store.getState().markDirty(draft.path)
+              } else {
+                store.getState().addOpenFile({
+                  path: draft.path,
+                  name: draft.path.split(/[\\/]/).pop() || draft.path,
+                  content: draft.content,
+                  isDirty: true,
+                  isSaving: false,
+                })
+                store.getState().markDirty(draft.path)
+              }
             }
           } else {
             await api.draftClear(targetPath).catch(() => undefined)
@@ -371,7 +330,7 @@ export default function App() {
 
       // 欢迎页提问：打开工作区后把问题带入聊天输入框
       if (initialPrompt) {
-        useChatStore.getState().setPendingDraft(initialPrompt)
+        useChatStore.getState().setPendingDraft(initialPrompt, targetPath)
       }
 
       api.watchWorkspace(targetPath).catch((err) => {
@@ -400,7 +359,7 @@ export default function App() {
   useEffect(() => {
     const off = piAgentAPI.onNotifyClick(({ workspaceDir, sessionId }) => {
       void (async () => {
-        if (workspaceDir && workspaceDir !== useWorkspaceStore.getState().workspacePath) {
+        if (workspaceDir) {
           await openWorkspaceRef.current(workspaceDir)
         }
         useSessionStore.getState().requestActivation(workspaceDir, sessionId)
@@ -433,58 +392,29 @@ export default function App() {
   }
 
   const closeWorkspaceTab = async (targetPath: string) => {
-    const closingCurrent = targetPath === workspace
     if (!(await confirmCloseWorkspace(targetPath))) return
 
-    // 只释放该工作区的 Agent 与会话资源
+    // 固定状态先落盘，再释放运行时；关闭标签不删除磁盘上的固定状态
+    await saveEditorTabs(targetPath)
     await piAgentAPI.dispose(targetPath)
     await api.disposeWorkspace(targetPath).catch(() => undefined)
+    await api.unwatchWorkspace(targetPath).catch(() => undefined)
     clearWorkspaceChat(targetPath)
+
+    const wasActive = targetPath === workspace
+    const wasHome = showHome
     const nextWorkspace = useWorkspaceStore.getState().closeWorkspace(targetPath)
 
-    if (!closingCurrent) return
-
-    setError(null)
-    await api.unwatchWorkspace().catch(() => undefined)
-    resetWorkspaceState()
-
-    if (nextWorkspace) {
-      api.watchWorkspace(nextWorkspace).catch((err) => {
-        const detail = err instanceof Error ? err.message : String(err)
-        console.error('Failed to watch workspace:', err)
-        toast.error(t('watchWorkspaceFailed', { error: localizeError(detail) }))
-      })
+    if (wasActive && !wasHome && !nextWorkspace) {
+      setShowHome(true)
     }
+
+    // 视图卸载后再释放按工作区的 store
+    window.setTimeout(() => {
+      disposeEditorStore(targetPath)
+      disposeDiffStore(targetPath)
+    }, 0)
   }
-
-  const startResize = useCallback(
-    (target: 'sidebar' | 'chat') => (event: ReactPointerEvent<HTMLDivElement>) => {
-      event.preventDefault()
-      const startX = event.clientX
-      const initial = target === 'sidebar' ? sidebarWidth : chatWidth
-
-      const onMove = (moveEvent: PointerEvent) => {
-        const delta = moveEvent.clientX - startX
-        if (target === 'sidebar') {
-          setSidebarWidth(clamp(initial + delta, SIDEBAR_MIN, SIDEBAR_MAX))
-        } else {
-          setChatWidth(clamp(initial - delta, CHAT_MIN, CHAT_MAX))
-        }
-      }
-      const onUp = () => {
-        window.removeEventListener('pointermove', onMove)
-        window.removeEventListener('pointerup', onUp)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-      }
-
-      window.addEventListener('pointermove', onMove)
-      window.addEventListener('pointerup', onUp)
-      document.body.style.cursor = 'col-resize'
-      document.body.style.userSelect = 'none'
-    },
-    [sidebarWidth, chatWidth]
-  )
 
   const headerLink =
     'type-label text-ink-muted transition-colors hover:text-ink'
@@ -568,12 +498,14 @@ export default function App() {
                     <div className="absolute right-0 top-full z-30 mt-1 w-64 border border-line bg-raised shadow-print">
                       {streamingSessions.length > 0 && (
                         <div className="border-b border-rule-divide py-1">
-                          {streamingSessions.map((session) => (
+                          {streamingSessions.map(({ session, workspacePath: streamingWorkspace }) => (
                             <button
-                              key={session.id}
+                              key={`${streamingWorkspace}\u0000${session.id}`}
                               type="button"
                               onClick={() => {
-                                useSessionStore.getState().setActive(workspace, session.id)
+                                activateWorkspace(streamingWorkspace)
+                                setShowHome(false)
+                                useSessionStore.getState().setActive(streamingWorkspace, session.id)
                                 setShowActivity(false)
                               }}
                               className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink transition-colors hover:bg-hover"
@@ -582,6 +514,11 @@ export default function App() {
                               <span className="truncate">
                                 {session.title || t('untitledSession')}
                               </span>
+                              {openWorkspaces.length > 1 && (
+                                <span className="ml-auto flex-shrink-0 type-caption text-ink-muted">
+                                  {streamingWorkspace.split(/[\\/]/).filter(Boolean).pop()}
+                                </span>
+                              )}
                             </button>
                           ))}
                         </div>
@@ -590,13 +527,17 @@ export default function App() {
                   )}
                 </div>
               )}
-              <button
-                type="button"
-                className={headerLink}
-                onClick={() => setShowTerminal((value) => !value)}
-              >
-                {t('terminal')}
-              </button>
+              {!showHome && (
+                <button
+                  type="button"
+                  className={headerLink}
+                  onClick={() =>
+                    window.dispatchEvent(new CustomEvent('workspace-toggle-terminal'))
+                  }
+                >
+                  {t('terminal')}
+                </button>
+              )}
             </>
           )}
           {import.meta.env.DEV && (
@@ -611,14 +552,25 @@ export default function App() {
           <button type="button" className={headerLink} onClick={() => openSettings()}>
             {t('settings')}
           </button>
-          <Button
-            variant={workspace ? 'secondary' : 'primary'}
-            size="sm"
-            icon={workspace ? X : FolderOpen}
-            onClick={() => (workspace ? void closeWorkspaceTab(workspace) : void pickWorkspace())}
-          >
-            {workspace ? t('closeProject') : t('openProject')}
-          </Button>
+          {workspace ? (
+            <Button
+              variant={showHome ? 'primary' : 'secondary'}
+              size="sm"
+              icon={showHome ? ArrowLeft : Home}
+              onClick={() => setShowHome((value) => !value)}
+            >
+              {showHome ? t('backToWorkspace') : t('backToHome')}
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              size="sm"
+              icon={FolderOpen}
+              onClick={() => void pickWorkspace()}
+            >
+              {t('openProject')}
+            </Button>
+          )}
           </div>
           {usesCustomWindowControls && <WindowControls />}
         </div>
@@ -630,6 +582,16 @@ export default function App() {
           {openWorkspaces.map((path) => {
             const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path
             const active = path === workspace
+            const status = workspaceActivity(path)
+            const statusLabel =
+              status === 'needsAction'
+                ? t('sessionNeedsAction')
+                : status === 'error'
+                  ? t('sessionError')
+                  : status === 'running'
+                    ? t('sessionRunning')
+                    : ''
+            const accessible = statusLabel ? `${name} · ${statusLabel}` : name
             return (
               <div
                 key={path}
@@ -641,12 +603,34 @@ export default function App() {
               >
                 <button
                   type="button"
-                  onClick={() => void openWorkspaceAt(path)}
-                  title={path}
+                  onClick={() => {
+                    activateWorkspace(path)
+                    setShowHome(false)
+                  }}
+                  title={statusLabel ? `${path} · ${statusLabel}` : path}
+                  aria-label={accessible}
+                  aria-busy={status === 'running' || undefined}
                   className="flex max-w-[200px] items-center gap-1.5 bg-transparent text-inherit"
                 >
                   <Folder size={11} className="flex-shrink-0 opacity-70" />
                   <span className="truncate">{name}</span>
+                  {status === 'running' ? (
+                    <span
+                      aria-hidden="true"
+                      className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-accent"
+                    />
+                  ) : status === 'error' ? (
+                    <AlertCircle
+                      size={10}
+                      className="flex-shrink-0 text-danger"
+                      aria-hidden="true"
+                    />
+                  ) : status === 'needsAction' ? (
+                    <span
+                      aria-hidden="true"
+                      className="relative flex h-1.5 w-1.5 flex-shrink-0 items-center justify-center rounded-full border border-warning shadow-[0_0_0_2px_rgb(var(--warning)_/_0.18)] animate-breathe"
+                    />
+                  ) : null}
                 </button>
                 <button
                   type="button"
@@ -686,7 +670,6 @@ export default function App() {
       <DialogHost />
       <ToastContainer messages={toastMessages} onClose={removeToast} />
       {workspace && <CommandPalette workspacePath={workspace} />}
-      <DiffViewer />
 
       {/* Debug panel */}
       {showDebug && (
@@ -695,106 +678,27 @@ export default function App() {
         </div>
       )}
 
-      {/* Main Content */}
-      {workspace ? (
-        <main className="flex min-h-0 flex-1 bg-surface">
-          {showSidebar ? (
-            <>
-              <aside
-                id="file-panel"
-                className="flex-shrink-0 overflow-hidden bg-panel"
-                style={{ width: sidebarWidth }}
-              >
-                <FileExplorer
-                  workspacePath={workspace}
-                  onCollapse={collapseSidebar}
-                  collapseButtonRef={sidebarCollapseRef}
-                />
-              </aside>
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                className="w-0.5 flex-shrink-0 cursor-col-resize bg-rule-seam transition-colors hover:bg-accent"
-                onPointerDown={startResize('sidebar')}
-              />
-            </>
-          ) : (
-            <button
-              ref={sidebarRailRef}
-              type="button"
-              aria-label={t('expandSidebar')}
-              title={t('expandSidebar')}
-              aria-controls="file-panel"
-              aria-expanded={false}
-              onClick={expandSidebar}
-              className="flex w-[26px] flex-shrink-0 items-center justify-center self-stretch border-r border-rule-divide bg-panel text-ink-muted transition-colors hover:bg-hover hover:text-ink focus-visible:outline-offset-[-2px]"
-            >
-              <PanelLeftOpen size={14} />
-            </button>
-          )}
-
-          <section className="flex min-w-0 flex-1 flex-col">
-            <Suspense
-              fallback={
-                <div className="flex min-h-0 flex-1 items-center justify-center bg-surface">
-                  <Spinner size={14} />
-                </div>
-              }
-            >
-              <MonacoEditor />
-            </Suspense>
-            <TerminalPanel
-              key={workspace}
-              workspacePath={workspace}
-              visible={showTerminal}
-              onClose={() => setShowTerminal(false)}
+      {/* 每个打开的工作区常驻一个视图；首页只是切换可见性 */}
+      <div className="relative flex min-h-0 flex-1 bg-surface">
+        {openWorkspaces.map((path) => (
+          <WorkspaceView
+            key={path}
+            workspacePath={path}
+            active={!showHome && path === workspace}
+          />
+        ))}
+        {(showHome || !workspace) && (
+          <div className="absolute inset-0 flex flex-col overflow-hidden bg-surface">
+            <WelcomeScreen
+              recentWorkspaces={recentWorkspaces}
+              onOpenProject={() => void pickWorkspace()}
+              onOpenWorkspace={(path) => void openWorkspaceAt(path)}
+              onOpenSettings={() => openSettings()}
+              onRefreshRecent={() => void refreshRecentWorkspaces()}
             />
-          </section>
-
-          {showChat ? (
-            <>
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                className="w-0.5 flex-shrink-0 cursor-col-resize bg-rule-seam transition-colors hover:bg-accent"
-                onPointerDown={startResize('chat')}
-              />
-              <aside
-                id="chat-panel"
-                className="flex-shrink-0 overflow-hidden bg-panel"
-                style={{ width: chatWidth }}
-              >
-                <ChatPanel
-                  workspacePath={workspace}
-                  onCollapse={collapseChat}
-                  collapseButtonRef={chatCollapseRef}
-                />
-              </aside>
-            </>
-          ) : (
-            <button
-              ref={chatRailRef}
-              type="button"
-              aria-label={t('expandChat')}
-              title={t('expandChat')}
-              aria-controls="chat-panel"
-              aria-expanded={false}
-              onClick={expandChat}
-              className="flex w-[26px] flex-shrink-0 items-center justify-center self-stretch border-l border-rule-divide bg-panel text-ink-muted transition-colors hover:bg-hover hover:text-ink focus-visible:outline-offset-[-2px]"
-            >
-              <PanelRightOpen size={14} />
-            </button>
-          )}
-        </main>
-      ) : (
-        <WelcomeScreen
-          recentWorkspaces={recentWorkspaces}
-          onOpenProject={() => void pickWorkspace()}
-          onOpenWorkspace={(path) => void openWorkspaceAt(path)}
-          onOpenSettings={() => openSettings()}
-          onRefreshRecent={() => void refreshRecentWorkspaces()}
-        />
-      )}
+          </div>
+        )}
+      </div>
 
       <footer className="flex h-7 flex-shrink-0 items-center gap-4 border-t border-rule-divide bg-panel px-3.5 type-caption text-ink-muted">
         <span className="text-ink-muted">PI WORKBENCH</span>

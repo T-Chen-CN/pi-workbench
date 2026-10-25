@@ -15,7 +15,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { api } from '../api'
-import { useEditorStore } from '../store/editorStore'
+import { useEditorStore, editorStoreFor } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { localizeError } from '../i18n/errors'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
@@ -76,7 +76,15 @@ export const FileExplorer: React.FC<{
   workspacePath?: string
   onCollapse?: () => void
   collapseButtonRef?: React.Ref<HTMLButtonElement>
-}> = ({ workspacePath, onCollapse, collapseButtonRef }) => {
+  panelId?: string
+  active?: boolean
+}> = ({
+  workspacePath,
+  onCollapse,
+  collapseButtonRef,
+  panelId = 'file-panel',
+  active = true,
+}) => {
   const { t } = useI18nStore()
   const [tree, setTree] = useState<TreeNode[]>([])
   const [loading, setLoading] = useState(false)
@@ -87,8 +95,8 @@ export const FileExplorer: React.FC<{
     parentPath: null,
   })
   const [contextMenu, setContextMenu] = useState<{ node: TreeNode; x: number; y: number } | null>(null)
-  const { addOpenFile } = useEditorStore.getState()
-  const currentFilePath = useEditorStore((state) => state.currentFile?.path)
+  const editorStore = workspacePath ? editorStoreFor(workspacePath) : null
+  const currentFilePath = useEditorStore(workspacePath, (state) => state.currentFile?.path)
 
   const flatRows = useMemo(() => flattenVisibleTree(tree), [tree])
   const { parentRef: treeScrollRef, virtualizer } = useVirtualRows({
@@ -156,17 +164,22 @@ export const FileExplorer: React.FC<{
     }
     const unsubscribe = api.onFsChanged((payload) => {
       if (payload.type !== 'rename') return
+      const root = workspacePath.replace(/\\/g, '/')
+      const changed = payload.path.replace(/\\/g, '/')
+      if (changed !== root && !changed.startsWith(`${root}/`)) return
       scheduleRefresh()
     })
     // Agent 直接写盘时，渲染层在收到本轮修改后主动要求刷新
-    const onManualRefresh = () => scheduleRefresh()
+    const onManualRefresh = () => {
+      if (active) scheduleRefresh()
+    }
     window.addEventListener('pi:refresh-files', onManualRefresh)
     return () => {
       unsubscribe()
       window.removeEventListener('pi:refresh-files', onManualRefresh)
       if (timer) clearTimeout(timer)
     }
-  }, [workspacePath, loadRootDirectory])
+  }, [workspacePath, loadRootDirectory, active])
 
   const loadDirectory = async (path: string): Promise<FileEntry[]> => {
     try {
@@ -248,7 +261,7 @@ export const FileExplorer: React.FC<{
       if (!result.success || typeof result.content !== 'string') {
         throw new Error(result.error || 'Failed to read file')
       }
-      addOpenFile({
+      editorStore?.getState().addOpenFile({
         path: node.path,
         name: node.name,
         content: result.content,
@@ -285,7 +298,7 @@ export const FileExplorer: React.FC<{
       }
 
       // 关闭旧的编辑器标签（路径已失效）
-      useEditorStore.getState().removeOpenFile(node.path)
+      editorStore?.getState().removeOpenFile(node.path)
       toast.success(`${t('rename')}: ${newName}`)
       if (workspacePath) await loadRootDirectory(workspacePath)
     } catch (err) {
@@ -312,7 +325,7 @@ export const FileExplorer: React.FC<{
         throw new Error(result.error || 'Failed to delete')
       }
 
-      useEditorStore.getState().removeOpenFile(node.path)
+      editorStore?.getState().removeOpenFile(node.path)
       toast.success(`${t('delete')}: ${node.name}`)
       if (workspacePath) await loadRootDirectory(workspacePath)
     } catch (err) {
@@ -356,7 +369,7 @@ export const FileExplorer: React.FC<{
       }
 
       // Add to editor
-      addOpenFile({
+      editorStore?.getState().addOpenFile({
         path: filePath,
         name: createDialog.fileName,
         content: '',
@@ -436,7 +449,7 @@ export const FileExplorer: React.FC<{
               icon={PanelLeftClose}
               label={t('collapseSidebar')}
               size="sm"
-              aria-controls="file-panel"
+              aria-controls={panelId}
               aria-expanded
               onClick={onCollapse}
             />

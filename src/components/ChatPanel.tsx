@@ -28,7 +28,9 @@ import {
   MAX_OPEN_SESSIONS,
   useSessionStore,
 } from '../store/sessionStore'
-import { useDiffStore } from '../store/diffStore'
+import { useWorkspaceScope } from '../workspace/WorkspaceScope'
+import { useWorkspaceStore } from '../store/workspaceStore'
+import { useDiffStore, diffStoreFor } from '../store/diffStore'
 import { useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useSelectionStore } from '../store/selectionStore'
@@ -97,6 +99,8 @@ interface ChatPanelProps {
   workspacePath: string
   onCollapse?: () => void
   collapseButtonRef?: React.Ref<HTMLButtonElement>
+  panelId?: string
+  active?: boolean
 }
 
 /** 单个附件与单条消息的上下文字符上限 */
@@ -203,6 +207,8 @@ const TurnEditSummary: React.FC<{
   messageId: string
 }> = ({ edits, messageKey, messageId }) => {
   const { t } = useI18nStore()
+  const scopeWorkspace = useWorkspaceScope()
+  const workspacePath = scopeWorkspace ?? useWorkspaceStore.getState().workspacePath ?? ''
   const [busy, setBusy] = useState(false)
 
   const describeFailure = (
@@ -216,7 +222,7 @@ const TurnEditSummary: React.FC<{
   }
 
   const revertOne = async (edit: import('../types/electron').FileEdit): Promise<boolean> => {
-    const result = await revertFileEdit(edit)
+    const result = await revertFileEdit(edit, workspacePath)
     if (!result.ok) {
       toast.error(describeFailure(result, edit.path))
       return false
@@ -275,7 +281,7 @@ const TurnEditSummary: React.FC<{
           </span>
           <button
             type="button"
-            onClick={() => useDiffStore.getState().openEdits([edit])}
+            onClick={() => diffStoreFor(workspacePath).getState().openEdits([edit])}
             className="type-caption text-ink-muted transition-colors hover:text-ink"
           >
             {t('viewChanges')}
@@ -550,7 +556,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   workspacePath,
   onCollapse,
   collapseButtonRef,
+  panelId = 'chat-panel',
+  active = true,
 }) => {
+  const diffStore = diffStoreFor(workspacePath)
   const { t, language } = useI18nStore()
   const sessionsState = useSessionStore((state) => state.byWorkspace[workspacePath])
   const sessions = sessionsState?.sessions ?? EMPTY_SESSIONS
@@ -641,8 +650,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     return null
   }, [messages])
 
-  const openFiles = useEditorStore((state) => state.openFiles)
-  const currentEditorFile = useEditorStore((state) => state.currentFile)
+  const openFiles = useEditorStore(workspacePath, (state) => state.openFiles)
+  const currentEditorFile = useEditorStore(workspacePath, (state) => state.currentFile)
   /** 工作区类型（R-15）：按项目标记文件推断，仅用于空会话建议 */
   const [workspaceType, setWorkspaceType] = useState<WorkspaceType>('unknown')
 
@@ -707,7 +716,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       ),
     [approvalRequests, workspacePath, activeSessionId]
   )
-  const diffEdits = useDiffStore((state) => state.edits)
+  const diffEdits = useDiffStore(workspacePath, (state) => state.edits)
   const diffToolIds = useMemo(
     () =>
       new Set(
@@ -719,9 +728,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   )
   const openToolDiff = useCallback(
     async (toolCallId: string) => {
-      const edit = useDiffStore.getState().edits.find((item) => item.toolCallId === toolCallId)
+      const edit = diffStore.getState().edits.find((item) => item.toolCallId === toolCallId)
       if (edit) {
-        useDiffStore.getState().openEdits([edit])
+        diffStore.getState().openEdits([edit])
         return
       }
       if (!activeSessionId) return
@@ -730,9 +739,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         toast.error(t('historicalDiffMissing'))
         return
       }
-      useDiffStore.getState().openEdits([{ ...result.edit, toolCallId }])
+      diffStore.getState().openEdits([{ ...result.edit, toolCallId }])
     },
-    [activeSessionId, workspacePath, t]
+    [activeSessionId, workspacePath, t, diffStore]
   )
 
   const [initialized, setInitialized] = useState(false)
@@ -910,6 +919,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   // 命令面板插入模板 / 技能时写入输入框（R-13）
   useEffect(() => {
+    if (!active) return
     const onInsert = (event: Event) => {
       if (!activeKey) return
       const insert = (event as CustomEvent<{ insert?: unknown }>).detail?.insert
@@ -919,7 +929,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
     window.addEventListener('pi:insert-slash', onInsert)
     return () => window.removeEventListener('pi:insert-slash', onInsert)
-  }, [activeKey])
+  }, [activeKey, active])
 
   const currentSymbols = useMemo(() =>
       currentEditorFile ? extractSymbols(currentEditorFile.content, currentEditorFile.name) : [],
@@ -1304,7 +1314,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         persistTabs()
 
         const pending = useChatStore.getState().pendingDraft
-        if (pending && active) {
+        const pendingWorkspace = useChatStore.getState().pendingDraftWorkspace
+        if (
+          pending &&
+          active &&
+          (!pendingWorkspace || pendingWorkspace === workspacePath)
+        ) {
           const key = conversationKey(workspacePath, active)
           useChatStore.getState().setDraftInput(key, pending)
           useChatStore.getState().clearPendingDraft()
@@ -1433,6 +1448,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   }, [messages.length])
 
   useEffect(() => {
+    if (!active) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.altKey && event.key === 'ArrowDown') {
         event.preventDefault()
@@ -1442,7 +1458,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length])
+  }, [messages.length, active])
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -1628,14 +1644,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   // 命令面板入口
   useEffect(() => {
-    const active = sessions.find((session) => session.id === activeSessionId) ?? null
+    if (!active) return
+    const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null
     const onNew = () => void handleNewSession()
     const onList = () => useSessionStore.getState().setPanelOpen(workspacePath, true)
     const onRename = () => {
-      if (active) void handleRenameSession(active)
+      if (activeSession) void handleRenameSession(activeSession)
     }
     const onDelete = () => {
-      if (active) void handleDeleteSession(active)
+      if (activeSession) void handleDeleteSession(activeSession)
     }
     const onClose = () => {
       if (activeSessionId) void handleCloseTab(activeSessionId)
@@ -1653,6 +1670,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       window.removeEventListener('session-close', onClose)
     }
   }, [
+    active,
     activeSessionId,
     handleCloseTab,
     handleDeleteSession,
@@ -1664,6 +1682,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   // 命令面板：把当前选区附加到对话
   useEffect(() => {
+    if (!active) return
     const onAttachSelection = () => {
       const key = activeKey
       const current = useSelectionStore.getState().selection
@@ -1687,7 +1706,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
     window.addEventListener('attach-selection', onAttachSelection)
     return () => window.removeEventListener('attach-selection', onAttachSelection)
-  }, [activeKey, t])
+  }, [activeKey, t, active])
 
   // 桌面通知点击后激活目标会话（工作区已由 App 切换）
   useEffect(() => {
@@ -2463,7 +2482,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               icon={PanelRightClose}
               label={t('collapseChat')}
               size="sm"
-              aria-controls="chat-panel"
+              aria-controls={panelId}
               aria-expanded
               onClick={onCollapse}
             />
@@ -2507,7 +2526,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             icon={PanelRightClose}
             label={t('collapseChat')}
             size="sm"
-            aria-controls="chat-panel"
+            aria-controls={panelId}
             aria-expanded
             onClick={onCollapse}
           />
