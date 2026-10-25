@@ -10,6 +10,7 @@ import { editorStoreFor } from '../store/editorStore'
 import { api } from '../api'
 import { splitMarkdownBlocks } from '../utils/markdownBlocks'
 import { looksLikePath, splitPathLine } from '../utils/filePath'
+import { basename } from '../utils/filePath'
 
 /** 点击文件路径打开编辑器（相对路径按当前工作区解析） */
 const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({
@@ -32,7 +33,7 @@ const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({
       const store = editorStoreFor(workspace)
       store.getState().addOpenFile({
         path: target,
-        name: target.split(/[\\/]/).pop() || target,
+        name: basename(target) || target,
         content: file.content,
         isDirty: false,
         isSaving: false,

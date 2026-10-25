@@ -1,5 +1,6 @@
 import { api } from '../api'
 import { editorStoreFor } from '../store/editorStore'
+import { basename } from '../utils/filePath'
 
 /** 恢复时允许自动打开的最大文件，超过则跳过（Monaco 大文件模式仍会生效） */
 const MAX_RESTORE_BYTES = 10 * 1024 * 1024
@@ -90,7 +91,7 @@ export async function restoreEditorTabs(
       }
       store.getState().addOpenFile({
         path: filePath,
-        name: filePath.split(/[\\/]/).pop() || filePath,
+        name: basename(filePath) || filePath,
         content: read.content,
         isDirty: false,
         isSaving: false,

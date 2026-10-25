@@ -5,6 +5,7 @@ import type { ToolResultMeta } from '../types/electron'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
 import { useVirtualRows } from '../hooks/useVirtualRows'
+import { VirtualRows } from './VirtualRows'
 import { Button, Caption, IconButton, Modal, Spinner } from './ui'
 import { SearchField } from './patterns'
 import { formatBytes } from '../utils/formatBytes'
@@ -319,59 +320,24 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
               ref={parentRef}
               className="h-[55vh] overflow-auto border border-rule-hairline bg-sunken"
             >
-              {virtualizer.getVirtualItems().length > 0 ? (
-                <div
-                  style={{
-                    height: `${virtualizer.getTotalSize()}px`,
-                    position: 'relative',
-                    width: '100%',
-                  }}
-                >
-                  {virtualizer.getVirtualItems().map((row) => {
-                    const item = rows[row.index]
-                    if (!item) return null
-                    return (
-                      <div
-                        key={row.index}
-                        data-index={row.index}
-                        ref={virtualizer.measureElement}
-                        style={{
-                          position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          width: '100%',
-                          transform: `translateY(${row.start}px)`,
-                        }}
-                        className="flex items-start gap-2 px-2 py-0.5 type-data"
-                      >
-                        <span className="w-12 flex-shrink-0 select-none text-right text-ink-subtle">
-                          {item.lineNumber}
-                        </span>
-                        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-ink">
-                          {item.text || ' '}
-                        </span>
-                      </div>
-                    )
-                  })}
-                </div>
-              ) : (
-                // 无滚动测量环境（如 jsdom）或首帧时退化为前几行
-                <div>
-                  {rows.slice(0, 200).map((item) => (
-                    <div
-                      key={item.lineNumber}
-                      className="flex items-start gap-2 px-2 py-0.5 type-data"
-                    >
-                      <span className="w-12 flex-shrink-0 select-none text-right text-ink-subtle">
-                        {item.lineNumber}
-                      </span>
-                      <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-ink">
-                        {item.text || ' '}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <VirtualRows
+                virtualizer={virtualizer}
+                items={rows}
+                getKey={(item) => item.lineNumber}
+                measure
+                fallbackCount={200}
+                rowClassName="flex items-start gap-2 px-2 py-0.5 type-data"
+                renderItem={(item) => (
+                  <>
+                    <span className="w-12 flex-shrink-0 select-none text-right text-ink-subtle">
+                      {item.lineNumber}
+                    </span>
+                    <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-ink">
+                      {item.text || ' '}
+                    </span>
+                  </>
+                )}
+              />
             </div>
             {matches !== null && rows.length === 0 && (
               <Caption className="text-ink-muted">{t('toolResultNoMatches')}</Caption>

@@ -3,6 +3,7 @@
 import React from 'react'
 import { PanelRightClose, Settings2 } from 'lucide-react'
 import { Button, EmptyState, IconButton } from './ui'
+import { emitAppEvent } from '../utils/appEvents'
 
 export interface ChatApiKeyPromptProps {
   onCollapse?: () => void
@@ -47,7 +48,7 @@ export const ChatApiKeyPrompt: React.FC<ChatApiKeyPromptProps> = ({
                 variant="primary"
                 size="sm"
                 icon={Settings2}
-                onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))}
+                onClick={() => emitAppEvent('open-settings')}
               >
                 {t('goToSettings')}
               </Button>

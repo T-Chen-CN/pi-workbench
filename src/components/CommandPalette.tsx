@@ -12,6 +12,7 @@ import { piAgentAPI } from '../api/piAgentAPI'
 import { matchShortcut } from '../utils/keybindings'
 import { IconButton, Spinner } from './ui'
 import type { PluginCommandInfo, PluginInfo, PromptTemplateInfo, SkillInfo } from '../types/electron'
+import { emitAppEvent, onAppEvent } from '../utils/appEvents'
 
 interface CommandPaletteProps {
   workspacePath: string
@@ -109,10 +110,10 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     const onOpen = () => setOpen(true)
 
     window.addEventListener('keydown', onKeyDown)
-    window.addEventListener('open-command-palette', onOpen)
+    const offOpen = onAppEvent('open-command-palette', onOpen)
     return () => {
       window.removeEventListener('keydown', onKeyDown)
-      window.removeEventListener('open-command-palette', onOpen)
+      offOpen()
     }
   }, [paletteShortcut])
 
@@ -177,21 +178,17 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const runCommand = async (command: PluginCommandInfo) => {
     // 模板 / 技能：插入到聊天输入框，由 Pi SDK 展开（仍走审批）
     if (command.id.startsWith('template:')) {
-      window.dispatchEvent(
-        new CustomEvent('pi:insert-slash', {
-          detail: { insert: `/${command.id.slice('template:'.length)} ` },
-        })
-      )
+      emitAppEvent('pi:insert-slash', {
+        insert: `/${command.id.slice('template:'.length)} `,
+      })
       setOutput({ title: command.title, text: command.title, success: true })
       setOpen(false)
       return
     }
     if (command.id.startsWith('skill:')) {
-      window.dispatchEvent(
-        new CustomEvent('pi:insert-slash', {
-          detail: { insert: `/skill:${command.id.slice('skill:'.length)} ` },
-        })
-      )
+      emitAppEvent('pi:insert-slash', {
+        insert: `/skill:${command.id.slice('skill:'.length)} `,
+      })
       setOutput({ title: command.title, text: command.title, success: true })
       setOpen(false)
       return
@@ -206,7 +203,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           toast.error(`${command.title}: ${t('selectionEmpty')}`)
           return
         }
-        window.dispatchEvent(new CustomEvent('attach-selection'))
+        emitAppEvent('attach-selection')
         setOutput({ title: command.title, text: t('selectionAttached'), success: true })
         toast.success(`${command.title}: ${t('selectionAttached')}`)
         return
@@ -244,7 +241,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         return
       }
       if (builtin.event) {
-        window.dispatchEvent(new CustomEvent(builtin.event))
+        emitAppEvent(builtin.event as Parameters<typeof emitAppEvent>[0])
         setOutput({ title: command.title, text: command.title, success: true })
       }
       return

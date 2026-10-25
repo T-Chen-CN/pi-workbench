@@ -39,6 +39,8 @@ import { useUpdaterStore } from './store/updaterStore'
 import { localizeError } from './i18n/errors'
 import { formatShortcut, matchShortcut } from './utils/keybindings'
 import { restoreEditorTabs, saveEditorTabs } from './workspace/editorTabs'
+import { basename } from './utils/filePath'
+import { emitAppEvent, onAppEvent } from './utils/appEvents'
 
 export default function App() {
   const {
@@ -115,8 +117,7 @@ export default function App() {
 
   useEffect(() => {
     const openSettingsEvent = () => openSettings()
-    window.addEventListener('open-settings', openSettingsEvent)
-    return () => window.removeEventListener('open-settings', openSettingsEvent)
+    return onAppEvent('open-settings', openSettingsEvent)
   }, [openSettings])
 
   // 更新状态由 App 统一订阅，设置页、状态栏和安装弹窗共享同一份状态
@@ -312,7 +313,7 @@ export default function App() {
               } else {
                 store.getState().addOpenFile({
                   path: draft.path,
-                  name: draft.path.split(/[\\/]/).pop() || draft.path,
+                  name: basename(draft.path) || draft.path,
                   content: draft.content,
                   isDirty: true,
                   isSaving: false,
@@ -477,7 +478,7 @@ export default function App() {
               <button
                 type="button"
                 className={headerLink}
-                onClick={() => window.dispatchEvent(new CustomEvent('open-command-palette'))}
+                onClick={() => emitAppEvent('open-command-palette')}
               >
                 {t('commandPalette')}{' '}
                 <span className="type-key text-ink-muted">{formatShortcut(paletteShortcut)}</span>
@@ -516,7 +517,7 @@ export default function App() {
                               </span>
                               {openWorkspaces.length > 1 && (
                                 <span className="ml-auto flex-shrink-0 type-caption text-ink-muted">
-                                  {streamingWorkspace.split(/[\\/]/).filter(Boolean).pop()}
+                                  {basename(streamingWorkspace)}
                                 </span>
                               )}
                             </button>
@@ -532,7 +533,7 @@ export default function App() {
                   type="button"
                   className={headerLink}
                   onClick={() =>
-                    window.dispatchEvent(new CustomEvent('workspace-toggle-terminal'))
+                    emitAppEvent('workspace-toggle-terminal')
                   }
                 >
                   {t('terminal')}
@@ -580,7 +581,7 @@ export default function App() {
       {openWorkspaces.length > 0 && (
         <div className="flex flex-shrink-0 items-center overflow-x-auto border-b border-rule-divide bg-panel px-2">
           {openWorkspaces.map((path) => {
-            const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path
+            const name = basename(path) ?? path
             const active = path === workspace
             const status = workspaceActivity(path)
             const statusLabel =

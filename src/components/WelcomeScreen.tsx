@@ -23,6 +23,8 @@ import {
 import { Caption, DataText, Eyebrow, Label } from './ui'
 import { useI18nStore } from '../store/i18nStore'
 import type { ApiConfig } from '../types/electron'
+import { basename } from '../utils/filePath'
+import { onAppEvent } from '../utils/appEvents'
 
 interface WelcomeScreenProps {
   recentWorkspaces: string[]
@@ -32,7 +34,7 @@ interface WelcomeScreenProps {
   onRefreshRecent: () => void
 }
 
-const workspaceName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path
+const workspaceName = (path: string) => basename(path) ?? path
 
 export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   recentWorkspaces,
@@ -60,11 +62,11 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
 
     void loadConfig()
     const handleConfigSaved = () => void loadConfig()
-    window.addEventListener('api-config-saved', handleConfigSaved)
+    const offConfig = onAppEvent('api-config-saved', handleConfigSaved)
 
     return () => {
       cancelled = true
-      window.removeEventListener('api-config-saved', handleConfigSaved)
+      offConfig()
     }
   }, [])
 

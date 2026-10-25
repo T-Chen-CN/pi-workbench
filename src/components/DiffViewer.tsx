@@ -3,12 +3,10 @@ import { Check, ChevronLeft, ChevronRight, Columns2, Rows3, X } from 'lucide-rea
 import { useDiffStore } from '../store/diffStore'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
-import { confirmDialog } from '../store/dialogStore'
-import { localizeError } from '../i18n/errors'
 import { computeDiff, DiffLineType, DiffResult, type DiffLine } from '../api/diff'
-import { revertFileEdit } from '../utils/revertFile'
-import type { FileEdit } from '../types/electron'
+import { useRevertEdits } from '../hooks/useRevertEdits'
 import { useVirtualRows } from '../hooks/useVirtualRows'
+import { VirtualRows } from './VirtualRows'
 import { Button, IconButton } from './ui'
 
 export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> = ({
@@ -24,8 +22,16 @@ export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> =
     setCurrentIndex,
     removeEdit,
   } = useDiffStore(workspacePath)
+  const { busy, handleRevert, handleRevertAll } = useRevertEdits({
+    workspacePath,
+    onReverted: (target) => removeEdit(target.path),
+  })
+
+  const handleKeep = () => {
+    removeEdit(edit.path)
+    toast.info(t('keptChanges'))
+  }
   const [viewMode, setViewMode] = useState<'split' | 'unified'>('split')
-  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     if (!isOpen || !active) return
@@ -53,57 +59,6 @@ export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> =
 
   const handleClose = () => {
     clearDiff()
-  }
-
-  /** 把文件恢复为 Agent 修改前的内容；冲突与脏文件拒绝覆盖 */
-  const revertFile = async (target: FileEdit): Promise<boolean> => {
-    const result = await revertFileEdit(target, workspacePath)
-    if (result.ok) return true
-    const detail =
-      result.reason === 'dirty'
-        ? t('revertBlockedDirty')
-        : result.reason === 'conflict'
-          ? t('revertConflict')
-          : `${t('revertFailed')}: ${localizeError(result.error ?? '') || target.path}`
-    toast.error(detail)
-    return false
-  }
-
-  const handleKeep = () => {
-    removeEdit(edit.path)
-    toast.info(t('keptChanges'))
-  }
-
-  const handleRevert = async () => {
-    if (!(await confirmDialog({ message: t('revertConfirm'), danger: true }))) return
-    setBusy(true)
-    try {
-      if (await revertFile(edit)) {
-        removeEdit(edit.path)
-        toast.success(t('reverted'))
-      }
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const handleRevertAll = async () => {
-    if (!(await confirmDialog({ message: t('revertAllConfirm'), danger: true }))) return
-    setBusy(true)
-    let reverted = 0
-    try {
-      for (const target of [...edits]) {
-        if (await revertFile(target)) {
-          removeEdit(target.path)
-          reverted++
-        }
-      }
-      if (reverted > 0) {
-        toast.success(`${t('reverted')}: ${reverted}`)
-      }
-    } finally {
-      setBusy(false)
-    }
   }
 
   return (
@@ -184,7 +139,7 @@ export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> =
             <Button size="sm" icon={Check} disabled={busy} onClick={handleKeep}>
               {t('keepChanges')}
             </Button>
-            <Button variant="danger" size="sm" disabled={busy} onClick={() => void handleRevert()}>
+            <Button variant="danger" size="sm" disabled={busy} onClick={() => edit && void handleRevert(edit)}>
               {t('revertFile')}
             </Button>
             {edits.length > 1 && (
@@ -193,7 +148,7 @@ export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> =
                 size="sm"
                 disabled={busy}
                 className="text-danger hover:bg-danger/10 hover:text-danger"
-                onClick={() => void handleRevertAll()}
+                onClick={() => void handleRevertAll(edits)}
               >
                 {t('revertAll')}
               </Button>
@@ -276,33 +231,14 @@ const VirtualDiffLines: React.FC<{ lines: DiffLine[]; side: 'original' | 'modifi
 
   return (
     <div ref={parentRef} className="flex-1 overflow-auto">
-      <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
-        {virtualizer.getVirtualItems().length > 0
-          ? virtualizer.getVirtualItems().map((virtualRow) => {
-              const line = lines[virtualRow.index]
-              if (!line) return null
-              return (
-                <div
-                  key={virtualRow.key}
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    minWidth: '100%',
-                    width: 'max-content',
-                    transform: `translateY(${virtualRow.start}px)`,
-                  }}
-                >
-                  <DiffLineElement line={line} side={side} />
-                </div>
-              )
-            })
-          : lines
-              .slice(0, 80)
-              .map((line, index) => (
-                <DiffLineElement key={index} line={line} side={side} />
-              ))}
-      </div>
+      <VirtualRows
+        virtualizer={virtualizer}
+        items={lines}
+        getKey={(_line, index) => index}
+        fallbackCount={80}
+        rowStyle={{ minWidth: '100%', width: 'max-content' }}
+        renderItem={(line) => <DiffLineElement line={line} side={side} />}
+      />
     </div>
   )
 }

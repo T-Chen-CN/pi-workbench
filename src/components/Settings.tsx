@@ -42,6 +42,7 @@ import {
   isMacPlatform,
   type ShortcutId,
 } from '../utils/keybindings'
+import { emitAppEvent } from '../utils/appEvents'
 
 export type SettingsSection = 'general' | 'api' | 'permissions' | 'shortcuts' | 'about'
 
@@ -354,7 +355,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
         setSaveStatus('success')
         toast.success(t('apiConfigSaved'))
         // 通知 ChatPanel 用新配置重新初始化 Agent
-        window.dispatchEvent(new CustomEvent('api-config-saved'))
+        emitAppEvent('api-config-saved')
         setTimeout(() => setSaveStatus('idle'), 2000)
       } else {
         setSaveStatus('error')

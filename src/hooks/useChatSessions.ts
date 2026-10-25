@@ -11,6 +11,7 @@ import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
 import type { TranslationKey, TranslationParams } from '../i18n/translations'
 import type { SessionSummary } from '../types/electron'
+import { onAppEvent } from '../utils/appEvents'
 
 type Translate = (key: TranslationKey, params?: TranslationParams) => string
 
@@ -446,17 +447,13 @@ export function useChatSessions(options: ChatSessionsOptions) {
     const onClose = () => {
       if (activeSessionId) void handleCloseTab(activeSessionId)
     }
-    window.addEventListener('session-new', onNew)
-    window.addEventListener('session-list', onList)
-    window.addEventListener('session-rename', onRename)
-    window.addEventListener('session-delete', onDelete)
-    window.addEventListener('session-close', onClose)
+    const offNew = onAppEvent('session-new', onNew)
+    const offList = onAppEvent('session-list', onList)
+    const offRename = onAppEvent('session-rename', onRename)
+    const offDelete = onAppEvent('session-delete', onDelete)
+    const offClose = onAppEvent('session-close', onClose)
     return () => {
-      window.removeEventListener('session-new', onNew)
-      window.removeEventListener('session-list', onList)
-      window.removeEventListener('session-rename', onRename)
-      window.removeEventListener('session-delete', onDelete)
-      window.removeEventListener('session-close', onClose)
+      offNew(); offList(); offRename(); offDelete(); offClose()
     }
   }, [
     active,

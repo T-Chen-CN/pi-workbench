@@ -12,6 +12,7 @@ import { useResolvedTheme } from '../store/themeStore'
 import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
 import { IconButton } from './ui'
+import { basename } from '../utils/filePath'
 
 interface TerminalPanelProps {
   workspacePath: string
@@ -213,7 +214,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       .addAttachment(conversationKey(workspacePath, activeSessionId), {
         kind: 'file',
         path: logPath,
-        name: logPath.split(/[\\/]/).pop() || 'terminal.log',
+        name: basename(logPath) || 'terminal.log',
       })
     toast.success(t('terminalAttached'))
   }

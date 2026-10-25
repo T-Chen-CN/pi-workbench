@@ -22,7 +22,10 @@ import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { toast } from '../store/toastStore'
 import { flattenVisibleTree } from '../utils/fileTree'
 import { useVirtualRows } from '../hooks/useVirtualRows'
+import { VirtualRows } from './VirtualRows'
 import { Button, EmptyState, IconButton, Input, Modal } from './ui'
+import { dirname, joinPath } from '../utils/filePath'
+import { onAppEvent } from '../utils/appEvents'
 
 /** 超过该大小的文件打开前先确认，避免 Monaco 卡顿 */
 const LARGE_FILE_BYTES = 5 * 1024 * 1024
@@ -173,10 +176,10 @@ export const FileExplorer: React.FC<{
     const onManualRefresh = () => {
       if (active) scheduleRefresh()
     }
-    window.addEventListener('pi:refresh-files', onManualRefresh)
+    const offRefresh = onAppEvent('pi:refresh-files', onManualRefresh)
     return () => {
       unsubscribe()
-      window.removeEventListener('pi:refresh-files', onManualRefresh)
+      offRefresh()
       if (timer) clearTimeout(timer)
     }
   }, [workspacePath, loadRootDirectory, active])
@@ -275,11 +278,6 @@ export const FileExplorer: React.FC<{
     }
   }
 
-  const dirname = (targetPath: string): string => {
-    const index = Math.max(targetPath.lastIndexOf('/'), targetPath.lastIndexOf('\\'))
-    return index > 0 ? targetPath.slice(0, index) : targetPath
-  }
-
   const handleRename = async (node: TreeNode) => {
     setContextMenu(null)
     const newName = await promptDialog({
@@ -341,13 +339,6 @@ export const FileExplorer: React.FC<{
       // 默认在工作区根目录创建
       parentPath: workspacePath ?? null,
     })
-  }
-
-  // 简单的跨平台路径拼接（渲染进程不能使用 Node 的 path 模块）
-  const joinPath = (dir: string, name: string): string => {
-    const trimmed = dir.replace(/[\\/]+$/, '')
-    const sep = trimmed.includes('\\') ? '\\' : '/'
-    return `${trimmed}${sep}${name}`
   }
 
   const handleCreateFile = async () => {
@@ -530,30 +521,13 @@ export const FileExplorer: React.FC<{
         {tree.length === 0 && !loading ? (
           <EmptyState compact icon={FolderOpen} title={t('noWorkspace')} />
         ) : (
-          <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
-            {virtualizer.getVirtualItems().length > 0
-              ? virtualizer.getVirtualItems().map((virtualRow) => {
-                  const row = flatRows[virtualRow.index]
-                  if (!row) return null
-                  return (
-                    <div
-                      key={row.node.path}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        transform: `translateY(${virtualRow.start}px)`,
-                      }}
-                    >
-                      {renderRow(row.node, row.depth)}
-                    </div>
-                  )
-                })
-              : flatRows
-                  .slice(0, 40)
-                  .map((row) => renderRow(row.node, row.depth))}
-          </div>
+          <VirtualRows
+            virtualizer={virtualizer}
+            items={flatRows}
+            getKey={(row) => row.node.path}
+            fallbackCount={40}
+            renderItem={(row) => renderRow(row.node, row.depth)}
+          />
         )}
       </div>
     </div>

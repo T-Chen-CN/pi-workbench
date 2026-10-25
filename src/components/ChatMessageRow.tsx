@@ -7,15 +7,13 @@ import { useI18nStore } from '../store/i18nStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useWorkspaceScope } from '../workspace/WorkspaceScope'
 import { useChatStore, type ChatMessage } from '../store/chatStore'
-import { confirmDialog } from '../store/dialogStore'
-import { toast } from '../store/toastStore'
 import { diffStoreFor } from '../store/diffStore'
-import { revertFileEdit } from '../utils/revertFile'
-import { localizeError } from '../i18n/errors'
+import { useRevertEdits } from '../hooks/useRevertEdits'
 import type { AgentTracePart, FileEdit, StructuredPlan } from '../types/electron'
 import { Caption, IconButton, Label, Spinner } from './ui'
 import { AgentParts } from './AgentTrace'
 import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
+import { basename } from '../utils/filePath'
 
 /** 本轮任务列表（AF-12）：由助手消息里的工具步骤派生 */
 export const TurnTaskList: React.FC<{ parts: AgentTracePart[] }> = ({
@@ -85,54 +83,14 @@ const TurnEditSummary: React.FC<{
   const { t } = useI18nStore()
   const scopeWorkspace = useWorkspaceScope()
   const workspacePath = scopeWorkspace ?? useWorkspaceStore.getState().workspacePath ?? ''
-  const [busy, setBusy] = useState(false)
-
-  const describeFailure = (
-    result: Awaited<ReturnType<typeof revertFileEdit>>,
-    target: string
-  ): string => {
-    if (result.ok) return ''
-    if (result.reason === 'dirty') return t('revertBlockedDirty')
-    if (result.reason === 'conflict') return t('revertConflict')
-    return `${t('revertFailed')}: ${localizeError(result.error ?? '') || target}`
-  }
-
-  const revertOne = async (edit: FileEdit): Promise<boolean> => {
-    const result = await revertFileEdit(edit, workspacePath)
-    if (!result.ok) {
-      toast.error(describeFailure(result, edit.path))
-      return false
-    }
-    useChatStore.getState().removeMessageEdit(messageKey, messageId, edit.path)
-    return true
-  }
-
-  const handleRevert = async (edit: FileEdit) => {
-    if (!(await confirmDialog({ message: t('revertConfirm'), danger: true }))) return
-    setBusy(true)
-    try {
-      if (await revertOne(edit)) toast.success(t('reverted'))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const handleRevertAll = async () => {
-    if (!(await confirmDialog({ message: t('revertAllConfirm'), danger: true }))) return
-    setBusy(true)
-    try {
-      let reverted = 0
-      for (const edit of edits) {
-        if (await revertOne(edit)) reverted++
-      }
-      if (reverted > 0) toast.success(t('reverted'))
-    } finally {
-      setBusy(false)
-    }
-  }
+  const { busy, handleRevert, handleRevertAll } = useRevertEdits({
+    workspacePath,
+    onReverted: (edit) =>
+      useChatStore.getState().removeMessageEdit(messageKey, messageId, edit.path),
+  })
 
   if (edits.length === 0) return null
-  const fileName = (target: string) => target.split(/[\\/]/).pop() || target
+  const fileName = (target: string) => basename(target) || target
 
   return (
     <div className="mt-2 border border-rule-hairline bg-raised">
@@ -141,7 +99,7 @@ const TurnEditSummary: React.FC<{
         <button
           type="button"
           disabled={busy}
-          onClick={() => void handleRevertAll()}
+          onClick={() => void handleRevertAll(edits)}
           className="type-caption text-ink-muted transition-colors hover:text-danger disabled:opacity-40"
         >
           {t('revertAll')}

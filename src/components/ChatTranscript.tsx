@@ -6,7 +6,9 @@ import { useChatStore, type ChatMessage } from '../store/chatStore'
 import type { StructuredPlan } from '../types/electron'
 import type { useVirtualRows } from '../hooks/useVirtualRows'
 import { ChatMessageRow } from './ChatMessageRow'
+import { VirtualRows } from './VirtualRows'
 import { Button, EmptyState, Spinner } from './ui'
+import { emitAppEvent } from '../utils/appEvents'
 
 interface Suggestion {
   id: string
@@ -120,93 +122,37 @@ export const ChatTranscript: React.FC<ChatTranscriptProps> = ({
               )}
             </div>
           ) : (
-            <div
-              style={{
-                height: `${virtualizer.getTotalSize()}px`,
-                width: '100%',
-                position: 'relative',
-              }}
-            >
-              {virtualizer.getVirtualItems().length > 0
-                ? virtualizer.getVirtualItems().map((virtualRow) => {
-                    const msg = messages[virtualRow.index]
-                    if (!msg) return null
-                    return (
-                      <div
-                        key={msg.id}
-                        data-index={virtualRow.index}
-                        ref={
-                          typeof ResizeObserver !== 'undefined'
-                            ? virtualizer.measureElement
-                            : undefined
-                        }
-                        style={{
-                          position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          width: '100%',
-                          transform: `translateY(${virtualRow.start}px)`,
-                        }}
-                      >
-                        <ChatMessageRow
-                          message={msg}
-                          conversationKey={activeKey ?? undefined}
-                          diffToolIds={diffToolIds}
-                          onOpenDiff={openToolDiff}
-                          onCopy={handleCopyMessage}
-                          onSwitchBranch={handleSwitchBranch}
-                          onOpenToolResult={handleOpenToolResult}
-                          canActOnPlan={
-                            !isLoading && msg.id === latestProposedPlan?.messageId
-                          }
-                          onApprovePlan={handleApprovePlan}
-                          onRejectPlan={handleRejectPlan}
-                          onRetry={
-                            !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
-                              ? () => void handleRetryMessage(msg)
-                              : undefined
-                          }
-                          onEdit={
-                            !isLoading && msg.id === lastUserMessageId
-                              ? () => void handleEditMessage(msg)
-                              : undefined
-                          }
-                        />
-                      </div>
-                    )
-                  })
-                : messages
-                    .slice(0, 30)
-                    .map((msg) => (
-                      <ChatMessageRow
-                        key={msg.id}
-                        message={msg}
-                        conversationKey={activeKey ?? undefined}
-                        diffToolIds={diffToolIds}
-                        onOpenDiff={openToolDiff}
-                        onCopy={handleCopyMessage}
-                        onSwitchBranch={handleSwitchBranch}
-                        onOpenToolResult={handleOpenToolResult}
-                        canActOnPlan={
-                          !isLoading && msg.id === latestProposedPlan?.messageId
-                        }
-                        onApprovePlan={handleApprovePlan}
-                        onRejectPlan={handleRejectPlan}
-                        onRetry={
-                          !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
-                            ? () => void handleRetryMessage(msg)
-                            : undefined
-                        }
-                        onEdit={
-                          !isLoading && msg.id === lastUserMessageId
-                            ? () => void handleEditMessage(msg)
-                            : undefined
-                        }
-                      />
-                    ))}
-            </div>
+            <VirtualRows
+              virtualizer={virtualizer}
+              items={messages}
+              getKey={(msg) => msg.id}
+              measure
+              renderItem={(msg) => (
+                <ChatMessageRow
+                  message={msg}
+                  conversationKey={activeKey ?? undefined}
+                  diffToolIds={diffToolIds}
+                  onOpenDiff={openToolDiff}
+                  onCopy={handleCopyMessage}
+                  onSwitchBranch={handleSwitchBranch}
+                  onOpenToolResult={handleOpenToolResult}
+                  canActOnPlan={!isLoading && msg.id === latestProposedPlan?.messageId}
+                  onApprovePlan={handleApprovePlan}
+                  onRejectPlan={handleRejectPlan}
+                  onRetry={
+                    !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
+                      ? () => void handleRetryMessage(msg)
+                      : undefined
+                  }
+                  onEdit={
+                    !isLoading && msg.id === lastUserMessageId
+                      ? () => void handleEditMessage(msg)
+                      : undefined
+                  }
+                />
+              )}
+            />
           )}
-
           {isLoading && !messages.some((msg) => msg.isStreaming && msg.content) && (
             <div className="flex items-center gap-2 border-b border-rule-divide py-3 type-value text-ink-muted last:border-b-0">
               <Spinner size={12} />
@@ -230,7 +176,7 @@ export const ChatTranscript: React.FC<ChatTranscriptProps> = ({
                 )}
                 <button
                   type="button"
-                  onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))}
+                  onClick={() => emitAppEvent('open-settings')}
                   className="text-ink-muted transition-colors hover:text-ink"
                 >
                   {t('goToSettings')}

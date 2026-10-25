@@ -1,4 +1,5 @@
 import type { TranslationKey, TranslationParams } from '../i18n/translations'
+import { basename } from './filePath'
 
 export type WorkspaceType = 'node' | 'python' | 'rust' | 'go' | 'unknown'
 
@@ -24,7 +25,7 @@ const TEST_PROMPT_KEYS: Record<WorkspaceType, TranslationKey> = {
 }
 
 function displayName(file: string): string {
-  return file.split(/[\\/]/).pop() || file
+  return basename(file) || file
 }
 
 /**

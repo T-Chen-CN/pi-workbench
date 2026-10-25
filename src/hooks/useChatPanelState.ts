@@ -47,6 +47,7 @@ import type {
 } from '../types/electron'
 
 import type { ChatPanelProps } from '../utils/chatPanelShared'
+import { emitAppEvent, onAppEvent } from '../utils/appEvents'
 import {
   MAX_CONTEXT_FILE_CHARS,
   MAX_CONTEXT_SNIPPET_CHARS,
@@ -449,15 +450,15 @@ export function useChatPanelState(props: ChatPanelProps) {
   // 命令面板插入模板 / 技能时写入输入框（R-13）
   useEffect(() => {
     if (!active) return
-    const onInsert = (event: Event) => {
+    const onInsert = (detail: { insert: string }) => {
       if (!activeKey) return
-      const insert = (event as CustomEvent<{ insert?: unknown }>).detail?.insert
+      const insert = detail?.insert
       if (typeof insert !== 'string' || !insert) return
       useChatStore.getState().setDraftInput(activeKey, insert)
       inputRef.current?.focus()
     }
-    window.addEventListener('pi:insert-slash', onInsert)
-    return () => window.removeEventListener('pi:insert-slash', onInsert)
+    const offInsert = onAppEvent('pi:insert-slash', onInsert)
+    return () => offInsert()
   }, [activeKey, active])
 
   const currentSymbols = useMemo(() =>
@@ -679,8 +680,8 @@ export function useChatPanelState(props: ChatPanelProps) {
 
   useEffect(() => {
     const onConfigSaved = () => setConfigVersion((version) => version + 1)
-    window.addEventListener('api-config-saved', onConfigSaved)
-    return () => window.removeEventListener('api-config-saved', onConfigSaved)
+    const offConfig = onAppEvent('api-config-saved', onConfigSaved)
+    return () => offConfig()
   }, [])
 
   // 自动重试期间每 250ms 刷新倒计时；重试结束或失败时状态清空、计时器释放
@@ -838,8 +839,8 @@ export function useChatPanelState(props: ChatPanelProps) {
       })
       toast.success(t('selectionAttached'))
     }
-    window.addEventListener('attach-selection', onAttachSelection)
-    return () => window.removeEventListener('attach-selection', onAttachSelection)
+    const offAttach = onAppEvent('attach-selection', onAttachSelection)
+    return () => offAttach()
   }, [activeKey, t, active])
 
   // 桌面通知点击后激活目标会话（工作区已由 App 切换）
@@ -1164,7 +1165,7 @@ export function useChatPanelState(props: ChatPanelProps) {
         if (result.edits && result.edits.length > 0) {
           chat.setMessageEdits(key, assistantId, result.edits)
           // Agent 直接写盘，不经过编辑器 IPC；通知文件树主动刷新
-          window.dispatchEvent(new CustomEvent('pi:refresh-files'))
+          emitAppEvent('pi:refresh-files')
           toast.info(t('agentModifiedFiles', { count: result.edits.length }))
         }
         // 重新生成会产生新的回复分支（R-03）

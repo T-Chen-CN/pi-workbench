@@ -20,6 +20,7 @@ import { Spinner } from './ui'
 import { WorkspaceScopeProvider } from '../workspace/WorkspaceScope'
 import { subscribeEditorTabs } from '../workspace/editorTabs'
 import { useI18nStore } from '../store/i18nStore'
+import { onAppEvent } from '../utils/appEvents'
 
 const MonacoEditor = lazy(() =>
   import('./MonacoEditor').then((module) => ({ default: module.MonacoEditor }))
@@ -107,8 +108,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
   useEffect(() => {
     if (!active) return
     const onToggleTerminal = () => setShowTerminal((value) => !value)
-    window.addEventListener('workspace-toggle-terminal', onToggleTerminal)
-    return () => window.removeEventListener('workspace-toggle-terminal', onToggleTerminal)
+    const offToggle = onAppEvent('workspace-toggle-terminal', onToggleTerminal)
+    return () => offToggle()
   }, [active])
 
   // 标签变化防抖写入固定状态
