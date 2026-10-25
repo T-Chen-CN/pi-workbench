@@ -10,6 +10,7 @@ import {
   FileText,
   History,
   Minimize2,
+  PanelRightClose,
   Paperclip,
   Pencil,
   RotateCcw,
@@ -94,6 +95,8 @@ import type {
 
 interface ChatPanelProps {
   workspacePath: string
+  onCollapse?: () => void
+  collapseButtonRef?: React.Ref<HTMLButtonElement>
 }
 
 /** 单个附件与单条消息的上下文字符上限 */
@@ -543,7 +546,11 @@ function upsertSession(
   )
 }
 
-export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
+export const ChatPanel: React.FC<ChatPanelProps> = ({
+  workspacePath,
+  onCollapse,
+  collapseButtonRef,
+}) => {
   const { t, language } = useI18nStore()
   const sessionsState = useSessionStore((state) => state.byWorkspace[workspacePath])
   const sessions = sessionsState?.sessions ?? EMPTY_SESSIONS
@@ -2449,6 +2456,20 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   if (needsApiKey) {
     return (
       <div className="flex h-full flex-col bg-panel">
+        {onCollapse && (
+          <div className="flex h-[38px] flex-shrink-0 items-center gap-2.5 border-b border-rule-divide pl-2 pr-3.5">
+            <IconButton
+              ref={collapseButtonRef}
+              icon={PanelRightClose}
+              label={t('collapseChat')}
+              size="sm"
+              aria-controls="chat-panel"
+              aria-expanded
+              onClick={onCollapse}
+            />
+            <h3 className="m-0 type-label text-ink-muted">{t('agentChatTitle')}</h3>
+          </div>
+        )}
         <div className="flex flex-1 items-center justify-center p-4">
           <EmptyState
             icon={Settings2}
@@ -2475,7 +2496,22 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   return (
     <div className="relative flex h-full flex-col bg-panel">
       {/* Header */}
-      <div className="flex h-[38px] flex-shrink-0 items-center border-b border-rule-divide px-3.5">
+      <div
+        className={`flex h-[38px] flex-shrink-0 items-center gap-2.5 border-b border-rule-divide pr-3.5 ${
+          onCollapse ? 'pl-2' : 'pl-3.5'
+        }`}
+      >
+        {onCollapse && (
+          <IconButton
+            ref={collapseButtonRef}
+            icon={PanelRightClose}
+            label={t('collapseChat')}
+            size="sm"
+            aria-controls="chat-panel"
+            aria-expanded
+            onClick={onCollapse}
+          />
+        )}
         <div className="flex items-center gap-2.5">
           <h3 className="m-0 type-label text-ink-muted">{t('agentChatTitle')}</h3>
           <span className="flex items-center gap-1.5 type-caption text-ink-muted">

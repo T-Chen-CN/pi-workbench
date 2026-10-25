@@ -9,6 +9,7 @@ import {
   FolderOpen,
   Image,
   Loader2,
+  PanelLeftClose,
   Pencil,
   Plus,
   Trash2,
@@ -71,7 +72,11 @@ interface CreateFileDialogState {
   parentPath: string | null
 }
 
-export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePath }) => {
+export const FileExplorer: React.FC<{
+  workspacePath?: string
+  onCollapse?: () => void
+  collapseButtonRef?: React.Ref<HTMLButtonElement>
+}> = ({ workspacePath, onCollapse, collapseButtonRef }) => {
   const { t } = useI18nStore()
   const [tree, setTree] = useState<TreeNode[]>([])
   const [loading, setLoading] = useState(false)
@@ -404,7 +409,11 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-panel">
-      <div className="flex h-[34px] flex-shrink-0 items-center justify-between border-b border-rule-divide px-3">
+      <div
+        className={`flex h-[34px] flex-shrink-0 items-center justify-between border-b border-rule-divide pl-3 ${
+          onCollapse ? 'pr-2' : 'pr-3'
+        }`}
+      >
         <h3 className="m-0 type-label text-ink-muted">
           {t('files')}
         </h3>
@@ -421,6 +430,17 @@ export const FileExplorer: React.FC<{ workspacePath?: string }> = ({ workspacePa
             size="sm"
             onClick={openCreateFileDialog}
           />
+          {onCollapse && (
+            <IconButton
+              ref={collapseButtonRef}
+              icon={PanelLeftClose}
+              label={t('collapseSidebar')}
+              size="sm"
+              aria-controls="file-panel"
+              aria-expanded
+              onClick={onCollapse}
+            />
+          )}
         </div>
       </div>
 
