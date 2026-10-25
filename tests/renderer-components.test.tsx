@@ -1020,6 +1020,18 @@ describe('ChatPanel', () => {
     })
     expect(useSessionStore.getState().byWorkspace['/ws'].active).toBe('s2')
   })
+
+  it('collapses the chat panel from the header button', async () => {
+    const onCollapse = vi.fn()
+
+    render(<ChatPanel workspacePath="/ws" onCollapse={onCollapse} />)
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: translations.zh.collapseChat })
+    )
+
+    expect(onCollapse).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('WelcomeScreen', () => {
@@ -1093,6 +1105,19 @@ describe('FileExplorer', () => {
       ).toBe(true)
     })
     expect(useEditorStore.getState().currentFile?.content).toBe('')
+  })
+
+  it('collapses the file panel from the header button', async () => {
+    vi.mocked(api.listDirectory).mockResolvedValue({ success: true, items: [] })
+    const onCollapse = vi.fn()
+
+    render(<FileExplorer workspacePath="/ws" onCollapse={onCollapse} />)
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: translations.zh.collapseSidebar })
+    )
+
+    expect(onCollapse).toHaveBeenCalledTimes(1)
   })
 })
 

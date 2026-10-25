@@ -81,32 +81,39 @@ export interface IconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonEl
   size?: ControlSize
 }
 
-export const IconButton: React.FC<IconButtonProps> = ({
-  icon: Icon,
-  label,
-  variant = 'ghost',
-  active = false,
-  size = 'md',
-  className = '',
-  ...rest
-}) => (
-  <button
-    type="button"
-    aria-label={label}
-    aria-pressed={active || undefined}
-    title={label}
-    className={`${BUTTON_BASE} ${BUTTON_SIZES[size]} ${
-      active
-        ? 'bg-active text-ink'
-        : variant === 'secondary'
-          ? BUTTON_VARIANTS.secondary
-          : BUTTON_VARIANTS.ghost
-    } ${className}`}
-    {...rest}
-  >
-    <Icon size={size === 'sm' ? 14 : 16} />
-  </button>
+export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
+  (
+    {
+      icon: Icon,
+      label,
+      variant = 'ghost',
+      active = false,
+      size = 'md',
+      className = '',
+      ...rest
+    },
+    ref
+  ) => (
+    <button
+      ref={ref}
+      type="button"
+      aria-label={label}
+      aria-pressed={active || undefined}
+      title={label}
+      className={`${BUTTON_BASE} ${BUTTON_SIZES[size]} ${
+        active
+          ? 'bg-active text-ink'
+          : variant === 'secondary'
+            ? BUTTON_VARIANTS.secondary
+            : BUTTON_VARIANTS.ghost
+      } ${className}`}
+      {...rest}
+    >
+      <Icon size={size === 'sm' ? 14 : 16} />
+    </button>
+  )
 )
+IconButton.displayName = 'IconButton'
 
 const CONTROL_BASE =
   'w-full rounded-sm bg-sunken border border-rule-control text-ink type-body ' +

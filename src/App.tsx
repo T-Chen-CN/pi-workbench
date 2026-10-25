@@ -12,8 +12,8 @@ import {
   Bug,
   Folder,
   FolderOpen,
-  PanelLeft,
-  PanelRight,
+  PanelLeftOpen,
+  PanelRightOpen,
   Plus,
   X,
 } from 'lucide-react'
@@ -80,6 +80,12 @@ export default function App() {
   const [showChat, setShowChat] = useState(true)
   const [sidebarWidth, setSidebarWidth] = useState(232)
   const [chatWidth, setChatWidth] = useState(336)
+  const sidebarCollapseRef = useRef<HTMLButtonElement | null>(null)
+  const chatCollapseRef = useRef<HTMLButtonElement | null>(null)
+  const sidebarRailRef = useRef<HTMLButtonElement | null>(null)
+  const chatRailRef = useRef<HTMLButtonElement | null>(null)
+  const sidebarFocusIntent = useRef(false)
+  const chatFocusIntent = useRef(false)
   const toastMessages = useToastStore((state) => state.messages)
   const removeToast = useToastStore((state) => state.remove)
   const sessionState = useSessionStore((state) =>
@@ -134,6 +140,41 @@ export default function App() {
     window.addEventListener('open-settings', openSettingsEvent)
     return () => window.removeEventListener('open-settings', openSettingsEvent)
   }, [openSettings])
+
+  const collapseSidebar = useCallback(() => {
+    sidebarFocusIntent.current = true
+    setShowSidebar(false)
+  }, [])
+
+  const expandSidebar = useCallback(() => {
+    sidebarFocusIntent.current = true
+    setShowSidebar(true)
+  }, [])
+
+  const collapseChat = useCallback(() => {
+    chatFocusIntent.current = true
+    setShowChat(false)
+  }, [])
+
+  const expandChat = useCallback(() => {
+    chatFocusIntent.current = true
+    setShowChat(true)
+  }, [])
+
+  // 面板收起 / 展开后，焦点分别落到窄条按钮与面板头部按钮，避免焦点掉到 body
+  useEffect(() => {
+    if (!sidebarFocusIntent.current) return
+    sidebarFocusIntent.current = false
+    const target = showSidebar ? sidebarCollapseRef.current : sidebarRailRef.current
+    target?.focus()
+  }, [showSidebar])
+
+  useEffect(() => {
+    if (!chatFocusIntent.current) return
+    chatFocusIntent.current = false
+    const target = showChat ? chatCollapseRef.current : chatRailRef.current
+    target?.focus()
+  }, [showChat])
 
   // 更新状态由 App 统一订阅，设置页、状态栏和安装弹窗共享同一份状态
   const applyUpdateState = useUpdaterStore((store) => store.applyState)
@@ -503,22 +544,6 @@ export default function App() {
           <div className={`flex items-center gap-4 ${usesCustomWindowControls ? 'pr-3' : ''}`}>
           {workspace && (
             <>
-              <div className="flex items-center gap-0.5">
-                <IconButton
-                  icon={PanelLeft}
-                  label={t('toggleSidebar')}
-                  size="sm"
-                  active={showSidebar}
-                  onClick={() => setShowSidebar((value) => !value)}
-                />
-                <IconButton
-                  icon={PanelRight}
-                  label={t('toggleChat')}
-                  size="sm"
-                  active={showChat}
-                  onClick={() => setShowChat((value) => !value)}
-                />
-              </div>
               <button
                 type="button"
                 className={headerLink}
@@ -673,13 +698,18 @@ export default function App() {
       {/* Main Content */}
       {workspace ? (
         <main className="flex min-h-0 flex-1 bg-surface">
-          {showSidebar && (
+          {showSidebar ? (
             <>
               <aside
+                id="file-panel"
                 className="flex-shrink-0 overflow-hidden bg-panel"
                 style={{ width: sidebarWidth }}
               >
-                <FileExplorer workspacePath={workspace} />
+                <FileExplorer
+                  workspacePath={workspace}
+                  onCollapse={collapseSidebar}
+                  collapseButtonRef={sidebarCollapseRef}
+                />
               </aside>
               <div
                 role="separator"
@@ -688,6 +718,19 @@ export default function App() {
                 onPointerDown={startResize('sidebar')}
               />
             </>
+          ) : (
+            <button
+              ref={sidebarRailRef}
+              type="button"
+              aria-label={t('expandSidebar')}
+              title={t('expandSidebar')}
+              aria-controls="file-panel"
+              aria-expanded={false}
+              onClick={expandSidebar}
+              className="flex w-[26px] flex-shrink-0 items-center justify-center self-stretch border-r border-rule-divide bg-panel text-ink-muted transition-colors hover:bg-hover hover:text-ink focus-visible:outline-offset-[-2px]"
+            >
+              <PanelLeftOpen size={14} />
+            </button>
           )}
 
           <section className="flex min-w-0 flex-1 flex-col">
@@ -708,7 +751,7 @@ export default function App() {
             />
           </section>
 
-          {showChat && (
+          {showChat ? (
             <>
               <div
                 role="separator"
@@ -717,12 +760,30 @@ export default function App() {
                 onPointerDown={startResize('chat')}
               />
               <aside
+                id="chat-panel"
                 className="flex-shrink-0 overflow-hidden bg-panel"
                 style={{ width: chatWidth }}
               >
-                <ChatPanel workspacePath={workspace} />
+                <ChatPanel
+                  workspacePath={workspace}
+                  onCollapse={collapseChat}
+                  collapseButtonRef={chatCollapseRef}
+                />
               </aside>
             </>
+          ) : (
+            <button
+              ref={chatRailRef}
+              type="button"
+              aria-label={t('expandChat')}
+              title={t('expandChat')}
+              aria-controls="chat-panel"
+              aria-expanded={false}
+              onClick={expandChat}
+              className="flex w-[26px] flex-shrink-0 items-center justify-center self-stretch border-l border-rule-divide bg-panel text-ink-muted transition-colors hover:bg-hover hover:text-ink focus-visible:outline-offset-[-2px]"
+            >
+              <PanelRightOpen size={14} />
+            </button>
           )}
         </main>
       ) : (

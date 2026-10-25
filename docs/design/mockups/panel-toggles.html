@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>面板开关搬移 · 静态原型</title>
+<style>
+  @font-face {
+    font-family: 'Instrument Serif';
+    src: url('../../../dist/assets/instrument-serif-latin-400-normal-DnYpCC2O.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Geist Mono';
+    src: url('../../../dist/assets/geist-mono-latin-wght-normal-XN7g48iV.woff2') format('woff2');
+    font-weight: 100 900;
+    font-display: swap;
+  }
+
+  :root {
+    --surface: 244 241 234;
+    --panel: 251 249 244;
+    --raised: 255 253 248;
+    --sunken: 239 236 228;
+    --hover: 238 234 225;
+    --active: 232 227 217;
+    --line: 23 21 18;
+    --ink: 23 21 18;
+    --ink-muted: 97 92 82;
+    --ink-subtle: 145 138 125;
+    --accent: 47 93 78;
+    --accent-fg: 251 249 244;
+    --success: 94 107 46;
+    --warning: 154 91 31;
+    --danger: 168 58 34;
+    --danger-fg: 251 249 244;
+    --font-ui: 'Noto Sans SC Variable', 'Noto Sans SC', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+    --font-display: 'Instrument Serif', 'Noto Serif SC', 'Songti SC', 'SimSun', serif;
+    --font-mono: 'Geist Mono', 'Noto Sans SC', Consolas, monospace;
+  }
+  .ink {
+    --surface: 20 19 17;
+    --panel: 26 24 21;
+    --raised: 32 29 25;
+    --sunken: 34 31 27;
+    --hover: 43 39 34;
+    --active: 52 47 41;
+    --line: 237 231 220;
+    --ink: 237 231 220;
+    --ink-muted: 168 160 147;
+    --ink-subtle: 115 108 96;
+    --accent: 143 199 180;
+    --accent-fg: 20 19 17;
+    --success: 168 191 122;
+    --warning: 214 178 110;
+    --danger: 224 106 74;
+    --danger-fg: 20 19 17;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 40px 32px 90px;
+    background: #e9e6df;
+    color: #171512;
+    font-family: var(--font-ui);
+    font-size: 13px;
+  }
+  .page { max-width: 1244px; margin: 0 auto; }
+  h1 {
+    font-family: var(--font-display);
+    font-size: 34px;
+    font-weight: 400;
+    margin: 0 0 8px;
+  }
+  .lede {
+    font-size: 13px;
+    line-height: 1.8;
+    color: #615c52;
+    margin: 0 0 8px;
+    max-width: 780px;
+  }
+  h2 {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 46px 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h2 .n {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 400;
+    color: #fbf9f4;
+    background: #2f5d4e;
+    padding: 3px 6px;
+    border-radius: 2px;
+  }
+  .caption {
+    font-size: 12px;
+    line-height: 1.75;
+    color: #615c52;
+    margin: 10px 0 0;
+    max-width: 1010px;
+  }
+  .caption b { color: #171512; font-weight: 500; }
+  .sprite { display: none; }
+
+  /* ---------- 原型窗口 ---------- */
+  .frame {
+    width: 1180px;
+    height: 740px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: rgb(var(--surface));
+    color: rgb(var(--ink));
+    border: 1px solid rgb(var(--line) / .35);
+    border-radius: 2px;
+    box-shadow: 0 14px 34px rgba(23, 21, 18, .10);
+  }
+  .frame.crop {
+    height: auto;
+    box-shadow: none;
+    margin-bottom: 10px;
+  }
+
+  .icon {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* ---------- 顶栏 ---------- */
+  .topbar {
+    height: 45px;
+    flex: 0 0 45px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgb(var(--panel));
+    border-bottom: 1px solid rgb(var(--line) / .22);
+    padding-left: 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .brand-pi {
+    font-family: var(--font-display);
+    font-size: 19px;
+    line-height: 1;
+    color: rgb(var(--ink));
+  }
+  .brand-word {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: .14em;
+    color: rgb(var(--ink-muted));
+  }
+  .tag {
+    border: 1px solid rgb(var(--line) / .5);
+    padding: 2px 5px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: .06em;
+    color: rgb(var(--ink-muted));
+  }
+  .vrule { width: 1px; height: 16px; background: rgb(var(--line) / .22); margin: 0 4px; }
+  .wpath {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: rgb(var(--ink-muted));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 300px;
+  }
+  .top-actions {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    gap: 18px;
+    color: rgb(var(--ink-muted));
+    font-size: 12px;
+  }
+  .kbd { margin-left: 4px; font-family: var(--font-mono); font-size: 10px; }
+  .close-project {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid rgb(var(--line) / .35);
+    border-radius: 2px;
+    background: rgb(var(--panel));
+    color: rgb(var(--ink));
+    font-family: var(--font-ui);
+    font-size: 12px;
+  }
+  .winbtns { display: flex; height: 100%; margin-left: 2px; }
+  .winbtn {
+    width: 45px;
+    height: 45px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgb(var(--ink-muted));
+  }
+  .winbtn .icon { width: 10px; height: 10px; stroke-width: 1.25; }
+
+  /* ---------- 工作区标签 ---------- */
+  .worktabs {
+    height: 34px;
+    flex: 0 0 34px;
+    display: flex;
+    align-items: stretch;
+    background: rgb(var(--panel));
+    border-bottom: 1px solid rgb(var(--line) / .22);
+    padding: 0 6px;
+  }
+  .wtab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    background: rgb(var(--surface));
+    box-shadow: inset 0 2px 0 rgb(var(--accent));
+    border-right: 1px solid rgb(var(--line) / .22);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: rgb(var(--ink));
+  }
+  .wtab .x { font-family: var(--font-ui); font-size: 13px; color: rgb(var(--ink-muted)); }
+  .workplus {
+    width: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgb(var(--ink-muted));
+    font-size: 16px;
+  }
+
+  /* ---------- 主区域 ---------- */
+  .main { flex: 1; min-height: 0; display: flex; background: rgb(var(--surface)); }
+  .aside {
+    flex: 0 0 232px;
+    width: 232px;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: rgb(var(--panel));
+  }
+  .seam { flex: 0 0 2px; width: 2px; background: rgb(var(--line) / .11); }
+  .editor {
+    flex: 1;
+    min-width: 0;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgb(var(--surface));
+  }
+  .chat {
+    flex: 0 0 336px;
+    width: 336px;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: rgb(var(--panel));
+  }
+
+  .phead {
+    height: 34px;
+    flex: 0 0 34px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
+    border-bottom: 1px solid rgb(var(--line) / .22);
+  }
+  .ptitle { font-size: 12px; font-weight: 500; color: rgb(var(--ink-muted)); }
+  .spacer { flex: 1; }
+  .iconbtn {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 2px;
+    background: transparent;
+    color: rgb(var(--ink-muted));
+  }
+  .iconbtn.active { background: rgb(var(--active)); color: rgb(var(--ink)); }
+
+  .tree { flex: 1; min-height: 0; padding: 4px 0; overflow: hidden; }
+  .trow {
+    height: 28px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    font-size: 12.5px;
+    color: rgb(var(--ink-muted));
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .trow .icon { width: 14px; height: 14px; }
+  .trow.active {
+    border-left: 2px solid rgb(var(--accent));
+    padding-left: 6px;
+    background: rgb(var(--accent) / .06);
+    color: rgb(var(--ink));
+  }
+
+  .empty { display: flex; flex-direction: column; align-items: center; gap: 9px; }
+  .empty .empty-icon { width: 22px; height: 22px; color: rgb(var(--ink-muted)); }
+  .empty-title {
+    font-family: var(--font-display);
+    font-size: 17px;
+    color: rgb(var(--ink));
+  }
+  .empty-desc { font-size: 12px; color: rgb(var(--ink-muted)); }
+
+  /* ---------- 聊天 ---------- */
+  .chead {
+    height: 38px;
+    flex: 0 0 38px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 10px 0 8px;
+    border-bottom: 1px solid rgb(var(--line) / .22);
+  }
+  .agent-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: rgb(var(--ink-muted));
+  }
+  .dot { width: 4px; height: 4px; border-radius: 50%; background: rgb(var(--success)); }
+  .stabs {
+    height: 34px;
+    flex: 0 0 34px;
+    display: flex;
+    align-items: stretch;
+    border-bottom: 1px solid rgb(var(--line) / .22);
+  }
+  .stab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 210px;
+    padding: 0 10px 0 14px;
+    background: rgb(var(--surface));
+    box-shadow: inset 0 2px 0 rgb(var(--accent));
+    font-size: 11.5px;
+    color: rgb(var(--ink));
+  }
+  .stab .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stab .x { color: rgb(var(--ink-muted)); font-size: 13px; }
+  .stab-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; padding-right: 6px; }
+
+  .transcript {
+    flex: 1;
+    min-height: 0;
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.85;
+    color: rgb(var(--ink));
+    overflow: hidden;
+  }
+  .transcript p { margin: 0 0 9px; }
+  .role { font-size: 11.5px; color: rgb(var(--ink-muted)); margin-bottom: 3px; }
+  .role.user { color: rgb(var(--accent)); }
+  .divider { height: 1px; background: rgb(var(--line) / .22); margin: 12px 0; }
+  .muted { color: rgb(var(--ink-muted)); }
+
+  .composer {
+    flex: 0 0 auto;
+    padding: 10px 14px 8px;
+    border-top: 1px solid rgb(var(--line) / .22);
+  }
+  .inputbox {
+    min-height: 58px;
+    padding: 8px 10px;
+    background: rgb(var(--sunken));
+    border: 1px solid rgb(var(--line) / .5);
+    border-radius: 2px;
+    font-size: 12.5px;
+    color: rgb(var(--ink-muted));
+  }
+  .crow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 6px;
+    font-size: 11px;
+    color: rgb(var(--ink-muted));
+  }
+  .seg { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; border-radius: 2px; }
+  .seg .icon { width: 12px; height: 12px; }
+  .seg .chev { width: 12px; height: 12px; }
+  .send {
+    margin-left: auto;
+    height: 28px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 2px;
+    background: rgb(var(--accent));
+    color: rgb(var(--accent-fg));
+    font-family: var(--font-ui);
+    font-size: 12px;
+  }
+
+  .statusbar {
+    height: 28px;
+    flex: 0 0 28px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 14px;
+    background: rgb(var(--panel));
+    border-top: 1px solid rgb(var(--line) / .22);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: .04em;
+    color: rgb(var(--ink-muted));
+  }
+  .statusbar .agent { color: rgb(var(--accent)); }
+  .statusbar .right { margin-left: auto; display: flex; gap: 14px; }
+
+  /* ---------- 收起窄条 / 编辑器上沿按钮 ---------- */
+  .rail {
+    flex: 0 0 26px;
+    width: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    background: rgb(var(--panel));
+    color: rgb(var(--ink-muted));
+    cursor: pointer;
+  }
+  .rail.left { border-right: 1px solid rgb(var(--line) / .22); }
+  .rail.right { border-left: 1px solid rgb(var(--line) / .22); }
+  .rail:hover { background: rgb(var(--hover)); color: rgb(var(--ink)); }
+  .rail:focus-visible { outline: 1px solid rgb(var(--accent)); outline-offset: -1px; }
+
+  .edgewrap { position: absolute; top: 6px; display: flex; }
+  .edgewrap.left { left: 8px; }
+  .edgewrap.right { right: 8px; }
+  .iconbtn.edge {
+    width: 24px;
+    height: 24px;
+    background: rgb(var(--raised));
+    border: 1px solid rgb(var(--line) / .18);
+  }
+
+  /* ---------- 标注 ---------- */
+  .mark { position: relative; outline: 1px dashed rgb(var(--danger) / .8); outline-offset: 2px; border-radius: 2px; }
+  .rail.mark { outline-offset: -2px; }
+  .rail .badge { top: 6px; left: 50%; right: auto; transform: translateX(-50%); }
+  .edgewrap.mark { position: absolute; }
+  .badge {
+    position: absolute;
+    top: -10px;
+    left: -10px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgb(var(--danger));
+    color: rgb(var(--danger-fg));
+    font-family: var(--font-mono);
+    font-size: 9px;
+    border-radius: 2px;
+    z-index: 2;
+  }
+  .badge.right { left: auto; right: -10px; }
+
+  /* ---------- 槽位对比 ---------- */
+  .slotrow { display: flex; gap: 24px; }
+  .slot {
+    width: 520px;
+    border: 1px solid rgb(var(--line) / .35);
+    background: rgb(var(--panel));
+    border-radius: 2px;
+  }
+  .minihead {
+    flex: 1;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
+    border-bottom: 1px solid rgb(var(--line) / .22);
+  }
+  .slotbody { display: flex; align-items: stretch; }
+  .seamline { flex: 0 0 2px; width: 2px; background: rgb(var(--line) / .11); }
+  .slotcap { padding: 8px 12px; font-size: 11.5px; color: #615c52; }
+  .minihead .iconbtn { pointer-events: none; }
+
+  .foot {
+    margin-top: 48px;
+    padding-top: 14px;
+    border-top: 1px solid #d8d3c8;
+    font-size: 11.5px;
+    color: #7a7468;
+    line-height: 1.8;
+  }
+</style>
+</head>
+<body>
+
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-panel-left-close" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></symbol>
+  <symbol id="i-panel-right-close" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m8 9 3 3-3 3"/></symbol>
+  <symbol id="i-panel-left-open" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/></symbol>
+  <symbol id="i-panel-right-open" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m16 9-3 3 3 3"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.4-3 7.4-7 9-4-1.6-7-4.6-7-9V6Z"/></symbol>
+  <symbol id="i-minimize" viewBox="0 0 24 24"><path d="M4 12h16"/></symbol>
+  <symbol id="i-maximize" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M5 5l14 14M19 5 5 19"/></symbol>
+</svg>
+
+<div class="page">
+  <h1>面板开关搬移 · 静态原型</h1>
+  <p class="lede">
+    只有 HTML 和 CSS，没有脚本，也不需要任何服务。下面的窗口是按当前 Paper / Ink token
+    画的示意图，用来讨论两个开关的位置和收起后的恢复方式，不代表最终实现。
+    这一版已按「贴着分隔条」调整：左面板开关在文件栏最右端，聊天开关在聊天栏最左端；
+    收起态的整条窄条可点击，图标居中。
+  </p>
+
+  <!-- 0. 顶栏前后对比 -->
+  <h2><span class="n">0</span>顶栏前后对比</h2>
+
+  <div class="frame crop">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-pi">Pi</span>
+        <span class="brand-word">WORKBENCH</span>
+        <span class="tag">LOCAL</span>
+        <span class="vrule"></span>
+        <svg class="icon"><use href="#i-folder"/></svg>
+        <span class="wpath">F:\DSH\DSH二次开发-2</span>
+      </div>
+      <div class="top-actions">
+        <span class="mark"><span style="display:flex;gap:2px">
+          <span class="iconbtn active"><svg class="icon"><use href="#i-panel-left-close"/></svg></span>
+          <span class="iconbtn"><svg class="icon"><use href="#i-panel-right-close"/></svg></span>
+        </span></span>
+        <span>命令面板 <span class="kbd">Ctrl+Shift+P</span></span>
+        <span>终端</span>
+        <span>设置</span>
+        <button class="close-project"><svg class="icon" style="width:12px;height:12px"><use href="#i-x"/></svg>关闭项目</button>
+        <div class="winbtns">
+          <span class="winbtn"><svg class="icon"><use href="#i-minimize"/></svg></span>
+          <span class="winbtn"><svg class="icon"><use href="#i-maximize"/></svg></span>
+          <span class="winbtn"><svg class="icon"><use href="#i-close"/></svg></span>
+        </div>
+      </div>
+    </header>
+  </div>
+  <p class="caption">现在：两个面板开关夹在品牌区与「命令面板」之间，和视图无关的文字操作混在一起。</p>
+
+  <div class="frame crop" style="margin-top:14px">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-pi">Pi</span>
+        <span class="brand-word">WORKBENCH</span>
+        <span class="tag">LOCAL</span>
+        <span class="vrule"></span>
+        <svg class="icon"><use href="#i-folder"/></svg>
+        <span class="wpath">F:\DSH\DSH二次开发-2</span>
+      </div>
+      <div class="top-actions">
+        <span>命令面板 <span class="kbd">Ctrl+Shift+P</span></span>
+        <span>终端</span>
+        <span>设置</span>
+        <button class="close-project"><svg class="icon" style="width:12px;height:12px"><use href="#i-x"/></svg>关闭项目</button>
+        <div class="winbtns">
+          <span class="winbtn"><svg class="icon"><use href="#i-minimize"/></svg></span>
+          <span class="winbtn"><svg class="icon"><use href="#i-maximize"/></svg></span>
+          <span class="winbtn"><svg class="icon"><use href="#i-close"/></svg></span>
+        </div>
+      </div>
+    </header>
+  </div>
+  <p class="caption">之后：顶栏只留命令、终端、设置与关闭项目，面板开关回到各自的面板头部。</p>
+
+  <!-- 1. 展开态 -->
+  <h2><span class="n">1</span>展开态 · 开关落在面板头部（Paper）</h2>
+
+  <div class="frame">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-pi">Pi</span>
+        <span class="brand-word">WORKBENCH</span>
+        <span class="tag">LOCAL</span>
+        <span class="vrule"></span>
+        <svg class="icon"><use href="#i-folder"/></svg>
+        <span class="wpath">F:\DSH\DSH二次开发-2</span>
+      </div>
+      <div class="top-actions">
+        <span>命令面板 <span class="kbd">Ctrl+Shift+P</span></span>
+        <span>终端</span>
+        <span>设置</span>
+        <button class="close-project"><svg class="icon" style="width:12px;height:12px"><use href="#i-x"/></svg>关闭项目</button>
+        <div class="winbtns">
+          <span class="winbtn"><svg class="icon"><use href="#i-minimize"/></svg></span>
+          <span class="winbtn"><svg class="icon"><use href="#i-maximize"/></svg></span>
+          <span class="winbtn"><svg class="icon"><use href="#i-close"/></svg></span>
+        </div>
+      </div>
+    </header>
+
+    <div class="worktabs">
+      <div class="wtab">
+        <svg class="icon" style="width:12px;height:12px"><use href="#i-folder"/></svg>
+        <span>DSH二次开发-2</span>
+        <span class="x">×</span>
+      </div>
+      <div class="workplus">+</div>
+    </div>
+
+    <div class="main">
+      <aside class="aside">
+        <div class="phead">
+          <span class="ptitle">文件</span>
+          <span class="spacer"></span>
+          <button class="iconbtn" title="新建文件"><svg class="icon"><use href="#i-plus"/></svg></button>
+          <span class="mark"><button class="iconbtn" title="收起文件面板"><svg class="icon"><use href="#i-panel-left-close"/></svg></button><span class="badge">1</span></span>
+        </div>
+        <div class="tree">
+          <div class="trow"><svg class="icon"><use href="#i-file"/></svg><span>.gitignore</span></div>
+          <div class="trow active"><svg class="icon"><use href="#i-file"/></svg><span>AGENTS.md</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-file"/></svg><span>core.composed-config.yml</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-file"/></svg><span>notify.txt</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-file"/></svg><span>plan-check.txt</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-file"/></svg><span>README.md</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-file"/></svg><span>test.txt</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-folder"/></svg><span>.dsh</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-folder"/></svg><span>.pi-workbench</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-folder"/></svg><span>bin</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-folder"/></svg><span>profiles</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-folder"/></svg><span>runtime</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-folder"/></svg><span>tools</span></div>
+        </div>
+      </aside>
+
+      <div class="seam"></div>
+
+      <section class="editor">
+        <div class="empty">
+          <svg class="icon empty-icon"><use href="#i-file"/></svg>
+          <div class="empty-title">没有文件打开</div>
+          <div class="empty-desc">从文件树中选择文件进行编辑</div>
+        </div>
+      </section>
+
+      <div class="seam"></div>
+
+      <aside class="chat">
+        <div class="chead">
+          <span class="mark"><button class="iconbtn" title="收起聊天面板"><svg class="icon"><use href="#i-panel-right-close"/></svg></button><span class="badge right">2</span></span>
+          <span class="ptitle">Pi Agent 对话</span>
+          <span class="agent-status"><i class="dot"></i>就绪</span>
+          <span class="spacer"></span>
+        </div>
+        <div class="stabs">
+          <div class="stab"><span class="t">图片附件未收到</span><span class="x">×</span></div>
+          <div class="stab-actions">
+            <button class="iconbtn" title="新建会话"><svg class="icon"><use href="#i-plus"/></svg></button>
+            <button class="iconbtn" title="会话列表"><svg class="icon"><use href="#i-history"/></svg></button>
+          </div>
+        </div>
+        <div class="transcript">
+          <div class="role">PI AGENT · 09:42</div>
+          <p>这条讨论先收敛到三个点：</p>
+          <p>1. 文件树保持单层展开，避免深层嵌套。</p>
+          <p>2. 面板开关回到所属面板的头部。</p>
+          <p>3. 收起后保留一个窄条，整条都可点击恢复。</p>
+          <div class="divider"></div>
+          <div class="role user">› 你 · 09:44</div>
+          <p class="muted">按这个方向细化，先把方案画出来。</p>
+        </div>
+        <div class="composer">
+          <div class="inputbox">输入消息…</div>
+          <div class="crow">
+            <span class="seg"><svg class="icon"><use href="#i-shield"/></svg>完全<svg class="icon chev"><use href="#i-chevron"/></svg></span>
+            <span class="seg">deepseek-flash<svg class="icon chev"><use href="#i-chevron"/></svg></span>
+            <span class="seg">思考<svg class="icon chev"><use href="#i-chevron"/></svg></span>
+            <span class="seg">5%</span>
+            <span class="send" style="display:flex;align-items:center">发送</span>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="statusbar">
+      <span>PI WORKBENCH</span>
+      <span>LOCAL-FIRST</span>
+      <span class="agent">● PI AGENT</span>
+      <span class="right"><span>v0.4.0</span><span>UTF-8</span><span>PAPER</span></span>
+    </div>
+  </div>
+  <p class="caption">
+    ① 文件面板开关放在头部最右端、紧贴分隔条，排在「+」的右边；「文件」标题保持与树行左对齐。
+    ② 聊天开关放在头部最左端、紧贴分隔条，排在标题左边；聊天标题因此右移约 25px。
+  </p>
+
+  <!-- 2. 收起态 -->
+  <h2><span class="n">2</span>收起态 · 边缘窄条整条可点击</h2>
+
+  <div class="frame">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-pi">Pi</span>
+        <span class="brand-word">WORKBENCH</span>
+        <span class="tag">LOCAL</span>
+        <span class="vrule"></span>
+        <svg class="icon"><use href="#i-folder"/></svg>
+        <span class="wpath">F:\DSH\DSH二次开发-2</span>
+      </div>
+      <div class="top-actions">
+        <span>命令面板 <span class="kbd">Ctrl+Shift+P</span></span>
+        <span>终端</span>
+        <span>设置</span>
+        <button class="close-project"><svg class="icon" style="width:12px;height:12px"><use href="#i-x"/></svg>关闭项目</button>
+        <div class="winbtns">
+          <span class="winbtn"><svg class="icon"><use href="#i-minimize"/></svg></span>
+          <span class="winbtn"><svg class="icon"><use href="#i-maximize"/></svg></span>
+          <span class="winbtn"><svg class="icon"><use href="#i-close"/></svg></span>
+        </div>
+      </div>
+    </header>
+
+    <div class="worktabs">
+      <div class="wtab">
+        <svg class="icon" style="width:12px;height:12px"><use href="#i-folder"/></svg>
+        <span>DSH二次开发-2</span>
+        <span class="x">×</span>
+      </div>
+      <div class="workplus">+</div>
+    </div>
+
+    <div class="main">
+      <button class="rail left mark" title="展开文件面板" aria-label="展开文件面板">
+        <svg class="icon"><use href="#i-panel-left-open"/></svg>
+        <span class="badge">1</span>
+      </button>
+      <section class="editor">
+        <div class="empty">
+          <svg class="icon empty-icon"><use href="#i-file"/></svg>
+          <div class="empty-title">没有文件打开</div>
+          <div class="empty-desc">从文件树中选择文件进行编辑</div>
+        </div>
+      </section>
+      <button class="rail right mark" title="展开聊天面板" aria-label="展开聊天面板">
+        <svg class="icon"><use href="#i-panel-right-open"/></svg>
+        <span class="badge">2</span>
+      </button>
+    </div>
+
+    <div class="statusbar">
+      <span>PI WORKBENCH</span>
+      <span>LOCAL-FIRST</span>
+      <span class="agent">● PI AGENT</span>
+      <span class="right"><span>v0.4.0</span><span>UTF-8</span><span>PAPER</span></span>
+    </div>
+  </div>
+  <p class="caption">
+    ①② 面板收起后留下 26px 窄条，整条都是按钮，点击任意位置即可展开；图标在窄条正中，hover 时整条变色。
+    窄条始终存在，没有打开文件时也在，不会出现「面板关掉就找不到入口」的情况；两侧都收起时占用 52px 宽度。
+  </p>
+
+  <!-- 3. 备选 -->
+  <h2><span class="n">3</span>已否决 · 编辑器上沿按钮（仅对比）</h2>
+
+  <div class="frame">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-pi">Pi</span>
+        <span class="brand-word">WORKBENCH</span>
+        <span class="tag">LOCAL</span>
+        <span class="vrule"></span>
+        <svg class="icon"><use href="#i-folder"/></svg>
+        <span class="wpath">F:\DSH\DSH二次开发-2</span>
+      </div>
+      <div class="top-actions">
+        <span>命令面板 <span class="kbd">Ctrl+Shift+P</span></span>
+        <span>终端</span>
+        <span>设置</span>
+        <button class="close-project"><svg class="icon" style="width:12px;height:12px"><use href="#i-x"/></svg>关闭项目</button>
+        <div class="winbtns">
+          <span class="winbtn"><svg class="icon"><use href="#i-minimize"/></svg></span>
+          <span class="winbtn"><svg class="icon"><use href="#i-maximize"/></svg></span>
+          <span class="winbtn"><svg class="icon"><use href="#i-close"/></svg></span>
+        </div>
+      </div>
+    </header>
+
+    <div class="worktabs">
+      <div class="wtab">
+        <svg class="icon" style="width:12px;height:12px"><use href="#i-folder"/></svg>
+        <span>DSH二次开发-2</span>
+        <span class="x">×</span>
+      </div>
+      <div class="workplus">+</div>
+    </div>
+
+    <div class="main">
+      <section class="editor">
+        <span class="edgewrap left mark">
+          <button class="iconbtn edge" title="展开文件面板"><svg class="icon"><use href="#i-panel-left-open"/></svg></button>
+          <span class="badge">1</span>
+        </span>
+        <span class="edgewrap right mark">
+          <button class="iconbtn edge" title="展开聊天面板"><svg class="icon"><use href="#i-panel-right-open"/></svg></button>
+          <span class="badge right">2</span>
+        </span>
+        <div class="empty">
+          <svg class="icon empty-icon"><use href="#i-file"/></svg>
+          <div class="empty-title">没有文件打开</div>
+          <div class="empty-desc">从文件树中选择文件进行编辑</div>
+        </div>
+      </section>
+    </div>
+
+    <div class="statusbar">
+      <span>PI WORKBENCH</span>
+      <span>LOCAL-FIRST</span>
+      <span class="agent">● PI AGENT</span>
+      <span class="right"><span>v0.4.0</span><span>UTF-8</span><span>PAPER</span></span>
+    </div>
+  </div>
+  <p class="caption">
+    ①② 不占布局宽度，但按钮较隐蔽；且打开文件后编辑器上沿会变成 34px 标签栏，需要另行为标签栏设计落点，
+    没有文件时还要单独处理。实现成本比窄条高。
+  </p>
+
+  <!-- 4. 槽位对比 -->
+  <h2><span class="n">4</span>选定位置 · 都贴着分隔条</h2>
+
+  <div class="slotrow">
+    <div class="slot">
+      <div class="slotbody">
+        <div class="minihead">
+          <span class="ptitle">文件</span>
+          <span class="spacer"></span>
+          <button class="iconbtn"><svg class="icon"><use href="#i-plus"/></svg></button>
+          <button class="iconbtn"><svg class="icon"><use href="#i-panel-left-close"/></svg></button>
+        </div>
+        <div class="seamline"></div>
+      </div>
+      <div class="slotcap">文件面板 · 开关在最右端，「+」的右边，紧贴分隔条</div>
+    </div>
+    <div class="slot">
+      <div class="slotbody">
+        <div class="seamline"></div>
+        <div class="minihead">
+          <button class="iconbtn"><svg class="icon"><use href="#i-panel-right-close"/></svg></button>
+          <span class="ptitle">Pi Agent 对话</span>
+          <span class="agent-status"><i class="dot"></i>就绪</span>
+          <span class="spacer"></span>
+        </div>
+      </div>
+      <div class="slotcap">聊天面板 · 开关在最左端，标题的左边，紧贴分隔条</div>
+    </div>
+  </div>
+  <p class="caption">
+    两个开关对着编辑器、贴着缝，左右镜像。文件面板的「文件」标题因此保持与树行左对齐；
+    聊天标题右移约 25px，与下方会话标签的左起点不再对齐。
+  </p>
+
+  <!-- 5. Ink -->
+  <h2><span class="n">5</span>同一方案的 Ink 主题</h2>
+
+  <div class="frame ink">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-pi">Pi</span>
+        <span class="brand-word">WORKBENCH</span>
+        <span class="tag">LOCAL</span>
+        <span class="vrule"></span>
+        <svg class="icon"><use href="#i-folder"/></svg>
+        <span class="wpath">F:\DSH\DSH二次开发-2</span>
+      </div>
+      <div class="top-actions">
+        <span>命令面板 <span class="kbd">Ctrl+Shift+P</span></span>
+        <span>终端</span>
+        <span>设置</span>
+        <button class="close-project"><svg class="icon" style="width:12px;height:12px"><use href="#i-x"/></svg>关闭项目</button>
+        <div class="winbtns">
+          <span class="winbtn"><svg class="icon"><use href="#i-minimize"/></svg></span>
+          <span class="winbtn"><svg class="icon"><use href="#i-maximize"/></svg></span>
+          <span class="winbtn"><svg class="icon"><use href="#i-close"/></svg></span>
+        </div>
+      </div>
+    </header>
+
+    <div class="worktabs">
+      <div class="wtab">
+        <svg class="icon" style="width:12px;height:12px"><use href="#i-folder"/></svg>
+        <span>DSH二次开发-2</span>
+        <span class="x">×</span>
+      </div>
+      <div class="workplus">+</div>
+    </div>
+
+    <div class="main">
+      <aside class="aside">
+        <div class="phead">
+          <span class="ptitle">文件</span>
+          <span class="spacer"></span>
+          <button class="iconbtn" title="新建文件"><svg class="icon"><use href="#i-plus"/></svg></button>
+          <button class="iconbtn" title="收起文件面板"><svg class="icon"><use href="#i-panel-left-close"/></svg></button>
+        </div>
+        <div class="tree">
+          <div class="trow"><svg class="icon"><use href="#i-file"/></svg><span>.gitignore</span></div>
+          <div class="trow active"><svg class="icon"><use href="#i-file"/></svg><span>AGENTS.md</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-file"/></svg><span>core.composed-config.yml</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-file"/></svg><span>notify.txt</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-file"/></svg><span>plan-check.txt</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-file"/></svg><span>README.md</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-file"/></svg><span>test.txt</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-folder"/></svg><span>.dsh</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-folder"/></svg><span>.pi-workbench</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-folder"/></svg><span>bin</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-folder"/></svg><span>profiles</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-folder"/></svg><span>runtime</span></div>
+          <div class="trow"><svg class="icon"><use href="#i-folder"/></svg><span>tools</span></div>
+        </div>
+      </aside>
+
+      <div class="seam"></div>
+
+      <section class="editor">
+        <div class="empty">
+          <svg class="icon empty-icon"><use href="#i-file"/></svg>
+          <div class="empty-title">没有文件打开</div>
+          <div class="empty-desc">从文件树中选择文件进行编辑</div>
+        </div>
+      </section>
+
+      <div class="seam"></div>
+
+      <aside class="chat">
+        <div class="chead">
+          <button class="iconbtn" title="收起聊天面板"><svg class="icon"><use href="#i-panel-right-close"/></svg></button>
+          <span class="ptitle">Pi Agent 对话</span>
+          <span class="agent-status"><i class="dot"></i>就绪</span>
+          <span class="spacer"></span>
+        </div>
+        <div class="stabs">
+          <div class="stab"><span class="t">图片附件未收到</span><span class="x">×</span></div>
+          <div class="stab-actions">
+            <button class="iconbtn" title="新建会话"><svg class="icon"><use href="#i-plus"/></svg></button>
+            <button class="iconbtn" title="会话列表"><svg class="icon"><use href="#i-history"/></svg></button>
+          </div>
+        </div>
+        <div class="transcript">
+          <div class="role">PI AGENT · 09:42</div>
+          <p>这条讨论先收敛到三个点：</p>
+          <p>1. 文件树保持单层展开，避免深层嵌套。</p>
+          <p>2. 面板开关回到所属面板的头部。</p>
+          <p>3. 收起后保留一个窄条，整条都可点击恢复。</p>
+          <div class="divider"></div>
+          <div class="role user">› 你 · 09:44</div>
+          <p class="muted">按这个方向细化，先把方案画出来。</p>
+        </div>
+        <div class="composer">
+          <div class="inputbox">输入消息…</div>
+          <div class="crow">
+            <span class="seg"><svg class="icon"><use href="#i-shield"/></svg>完全<svg class="icon chev"><use href="#i-chevron"/></svg></span>
+            <span class="seg">deepseek-flash<svg class="icon chev"><use href="#i-chevron"/></svg></span>
+            <span class="seg">思考<svg class="icon chev"><use href="#i-chevron"/></svg></span>
+            <span class="seg">5%</span>
+            <span class="send" style="display:flex;align-items:center">发送</span>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="statusbar">
+      <span>PI WORKBENCH</span>
+      <span>LOCAL-FIRST</span>
+      <span class="agent">● PI AGENT</span>
+      <span class="right"><span>v0.4.0</span><span>UTF-8</span><span>INK</span></span>
+    </div>
+  </div>
+  <p class="caption">同一套 token 反转，开关位置不变；没有新增颜色或阴影。</p>
+
+  <div class="foot">
+    静态原型 · docs/design/mockups/panel-toggles.html · 不含脚本与服务。
+    标注颜色使用了 danger token，仅用于说明，不属于方案本身。
+  </div>
+</div>
+
+</body>
+</html>
