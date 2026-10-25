@@ -1423,146 +1423,6 @@ describe('context usage and compaction', () => {
   })
 })
 
-describe('checkpoints', () => {
-  it('records a new file created during the turn and removes it on restore', async () => {
-    const checkpointDir = path.join(tmpRoot, 'checkpoints')
-    const filePath = path.join(workspaceDir, 'a.txt')
-    const session = createFakeSession(async (fake) => {
-      fake.emit({
-        type: 'tool_execution_start',
-        toolCallId: 'c1',
-        toolName: 'write',
-        args: { path: filePath, content: 'new' },
-      })
-      await fs.writeFile(filePath, 'new', 'utf-8')
-      fake.emit({
-        type: 'tool_execution_end',
-        toolCallId: 'c1',
-        toolName: 'write',
-        isError: false,
-        durationMs: 1,
-        result: {},
-      })
-    })
-    primeSdk(session)
-    await manager.initialize(makeConfig({ checkpointDir }))
-    await manager.chat('create a file')
-
-    const listed = await manager.listCheckpoints('session-1')
-    expect(listed.success).toBe(true)
-    expect(listed.checkpoints).toHaveLength(1)
-    expect(listed.checkpoints?.[0].fileCount).toBe(1)
-
-    const id = listed.checkpoints![0].id
-    await expect(manager.restoreCheckpoint('session-1', id, { files: true })).resolves.toMatchObject(
-      { success: true, restoredFiles: 1 }
-    )
-    await expect(fs.stat(filePath)).rejects.toThrow()
-  })
-
-  it('restores the previous content of an edited file', async () => {
-    const checkpointDir = path.join(tmpRoot, 'checkpoints')
-    const filePath = path.join(workspaceDir, 'b.txt')
-    await fs.writeFile(filePath, 'old', 'utf-8')
-    const session = createFakeSession(async (fake) => {
-      fake.emit({
-        type: 'tool_execution_start',
-        toolCallId: 'c2',
-        toolName: 'edit',
-        args: { path: filePath },
-      })
-      await fs.writeFile(filePath, 'new', 'utf-8')
-      fake.emit({
-        type: 'tool_execution_end',
-        toolCallId: 'c2',
-        toolName: 'edit',
-        isError: false,
-        durationMs: 1,
-        result: {},
-      })
-    })
-    primeSdk(session)
-    await manager.initialize(makeConfig({ checkpointDir }))
-    await manager.chat('edit a file')
-
-    const listed = await manager.listCheckpoints('session-1')
-    const id = listed.checkpoints![0].id
-    await expect(manager.restoreCheckpoint('session-1', id, { files: true })).resolves.toMatchObject(
-      { success: true, restoredFiles: 1 }
-    )
-    await expect(fs.readFile(filePath, 'utf-8')).resolves.toBe('old')
-  })
-
-  it('restores the conversation to the checkpoint leaf', async () => {
-    const checkpointDir = path.join(tmpRoot, 'checkpoints')
-    const filePath = path.join(workspaceDir, 'c.txt')
-    const session = createFakeSession(async (fake) => {
-      fake.emit({
-        type: 'tool_execution_start',
-        toolCallId: 'c3',
-        toolName: 'write',
-        args: { path: filePath, content: 'x' },
-      })
-      await fs.writeFile(filePath, 'x', 'utf-8')
-      fake.emit({
-        type: 'tool_execution_end',
-        toolCallId: 'c3',
-        toolName: 'write',
-        isError: false,
-        durationMs: 1,
-        result: {},
-      })
-    })
-    primeSdk(session)
-    await manager.initialize(makeConfig({ checkpointDir }))
-    await manager.chat('write')
-
-    const id = (await manager.listCheckpoints('session-1')).checkpoints![0].id
-    const result = await manager.restoreCheckpoint('session-1', id, { conversation: true })
-    expect(result.success).toBe(true)
-    expect(session.navigateTree).toHaveBeenCalledWith('leaf-1', { summarize: false })
-  })
-
-  it('refuses to restore while the session is running', async () => {
-    const checkpointDir = path.join(tmpRoot, 'checkpoints')
-    const filePath = path.join(workspaceDir, 'd.txt')
-    const session = createFakeSession(async (fake) => {
-      fake.emit({
-        type: 'tool_execution_start',
-        toolCallId: 'c4',
-        toolName: 'write',
-        args: { path: filePath, content: 'x' },
-      })
-      await fs.writeFile(filePath, 'x', 'utf-8')
-      fake.emit({
-        type: 'tool_execution_end',
-        toolCallId: 'c4',
-        toolName: 'write',
-        isError: false,
-        durationMs: 1,
-        result: {},
-      })
-    })
-    primeSdk(session)
-    await manager.initialize(makeConfig({ checkpointDir }))
-    await manager.chat('write')
-    const id = (await manager.listCheckpoints('session-1')).checkpoints![0].id
-
-    let release = () => {}
-    session.prompt = async () => {
-      await new Promise<void>((resolve) => {
-        release = resolve
-      })
-    }
-    const pendingChat = manager.chat('running')
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    const result = await manager.restoreCheckpoint('session-1', id, { files: true })
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('Session is running')
-    release()
-    await pendingChat
-  })
-})
 
 describe('retry and edit-resend', () => {
   it('rewinds to the last user message and returns its text', async () => {
@@ -2363,7 +2223,6 @@ describe('session extras', () => {
   })
 
   it('keeps historical tool diffs available for later review', async () => {
-    const checkpointDir = path.join(tmpRoot, 'checkpoints')
     const filePath = path.join(workspaceDir, 'hist.txt')
     const session = createFakeSession(async (fake) => {
       fake.emit({
@@ -2383,7 +2242,7 @@ describe('session extras', () => {
       })
     })
     primeSdk(session)
-    await manager.initialize(makeConfig({ checkpointDir }))
+    await manager.initialize(makeConfig())
     await manager.chat('write')
 
     const result = await manager.getToolEdit('session-1', 'hist-1')
