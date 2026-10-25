@@ -94,16 +94,6 @@ export interface ElectronAPI {
     estimatedTokensAfter?: number
     error?: string
   }>
-  agentCheckpointsList: (
-    workspaceDir: string,
-    sessionId?: string
-  ) => Promise<{ success: boolean; checkpoints?: CheckpointSummary[]; error?: string }>
-  agentCheckpointsRestore: (
-    workspaceDir: string,
-    sessionId: string,
-    checkpointId: string,
-    options: { files?: boolean; conversation?: boolean }
-  ) => Promise<{ success: boolean; restoredFiles?: number; error?: string }>
   agentRewind: (
     workspaceDir: string,
     sessionId: string,
@@ -462,14 +452,6 @@ export interface ContextUsageInfo {
   tokens: number | null
   contextWindow: number
   percent: number | null
-}
-
-/** 检查点摘要 */
-export interface CheckpointSummary {
-  id: string
-  sessionId: string
-  createdAt: number
-  fileCount: number
 }
 
 /** 会话置顶 / 归档元数据 */

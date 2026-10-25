@@ -43,7 +43,6 @@ import {
   SESSION_MODE_LABEL_KEY,
   SESSION_MODE_ORDER,
 } from '../utils/sessionModePresentation'
-import { commandPaletteShortcut } from '../utils/shortcuts'
 import { createTraceBuffer } from '../utils/streamBuffer'
 import { revertFileEdit } from '../utils/revertFile'
 import { extractSymbols, sliceSymbol, type ExtractedSymbol } from '../utils/symbols'
@@ -82,7 +81,6 @@ import {
 import type { TranslationKey } from '../i18n/translations'
 import type {
   SessionSummary,
-  CheckpointSummary,
   SessionMeta,
   PendingMessagesMap,
   ModelCapabilityInfo,
@@ -753,14 +751,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   useEffect(() => {
     setStatusMenu(null)
   }, [activeSessionId])
-  const [showCheckpoints, setShowCheckpoints] = useState(false)
   /** 工具结果全量查看（R-20） */
   const [toolResultView, setToolResultView] = useState<{
     toolCallId: string
     toolName: string
     sessionId: string
   } | null>(null)
-  const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([])
   const [sessionMeta, setSessionMeta] = useState<SessionMeta>({ pinned: [], archived: [] })
   const [showArchived, setShowArchived] = useState(false)
   const [showScrollButton, setShowScrollButton] = useState(false)
@@ -2344,57 +2340,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     }
   }
 
-  /** 读取检查点列表（当前会话） */
-  const loadCheckpoints = async () => {
-    if (!activeSessionId) return
-    const result = await piAgentAPI.listCheckpoints(workspacePath, activeSessionId)
-    if (result.success) setCheckpoints(result.checkpoints ?? [])
-  }
-
-  /** 回退到检查点；对话回退后重新加载历史 */
-  const handleRestoreCheckpoint = async (
-    checkpointId: string,
-    options: { files?: boolean; conversation?: boolean }
-  ) => {
-    if (!activeSessionId) return
-    const action =
-      options.files && options.conversation
-        ? t('restoreBoth')
-        : options.files
-          ? t('restoreCode')
-          : t('restoreConversation')
-    const confirmed = await confirmDialog({
-      message: t('restoreCheckpointConfirm', { action }),
-      danger: Boolean(options.files),
-    })
-    if (!confirmed) return
-
-    const result = await piAgentAPI.restoreCheckpoint(
-      workspacePath,
-      activeSessionId,
-      checkpointId,
-      options
-    )
-    if (!result.success) {
-      toast.error(t('restoreCheckpointFailed', { error: localizeError(result.error ?? '') }))
-      return
-    }
-    toast.info(t('restoreCheckpointDone', { count: result.restoredFiles ?? 0 }))
-    setShowCheckpoints(false)
-    if (options.files) {
-      window.dispatchEvent(new CustomEvent('pi:refresh-files'))
-    }
-
-    if (options.conversation) {
-      const history = await piAgentAPI.getHistory(workspacePath, activeSessionId)
-      if (history.success) {
-        const key = conversationKey(workspacePath, activeSessionId)
-        useChatStore.getState().setMessages(key, history.history ?? [])
-        void refreshContextUsage(activeSessionId)
-      }
-    }
-  }
-
   /** 复制整条消息 */
   const handleCopyMessage = async (text: string) => {
     try {
@@ -2521,7 +2466,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
   return (
     <div className="relative flex h-full flex-col bg-panel">
       {/* Header */}
-      <div className="flex h-[38px] flex-shrink-0 items-center justify-between border-b border-rule-divide px-3.5">
+      <div className="flex h-[38px] flex-shrink-0 items-center border-b border-rule-divide px-3.5">
         <div className="flex items-center gap-2.5">
           <h3 className="m-0 type-label text-ink-muted">{t('agentChatTitle')}</h3>
           <span className="flex items-center gap-1.5 type-caption text-ink-muted">
@@ -2532,95 +2477,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
             />
             {initialized ? t('agentReadyStatus') : t('agentInitializingStatus')}
           </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="border border-rule-control px-1.5 py-0.5 type-key text-ink-muted">
-            {commandPaletteShortcut()}
-          </span>
-          <div className="relative">
-            <IconButton
-              icon={RotateCcw}
-              label={t('checkpoints')}
-              size="sm"
-              active={showCheckpoints}
-              onClick={() => {
-                const next = !showCheckpoints
-                setShowCheckpoints(next)
-                if (next) void loadCheckpoints()
-              }}
-            />
-            {showCheckpoints && (
-              <div className="absolute right-0 top-full z-20 mt-1 w-80 border border-line bg-raised shadow-print">
-                <div className="border-b border-rule-divide px-3 py-1.5 type-label text-ink-muted">
-                  {t('checkpoints')}
-                </div>
-                {checkpoints.length === 0 ? (
-                  <div className="px-3 py-2 type-caption text-ink-muted">
-                    {t('checkpointsEmpty')}
-                  </div>
-                ) : (
-                  checkpoints.map((checkpoint) => (
-                    <div
-                      key={checkpoint.id}
-                      className="flex flex-col gap-1.5 border-b border-rule-divide px-3 py-2 last:border-b-0"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="type-value text-ink">
-                          {new Date(checkpoint.createdAt).toLocaleTimeString()}
-                        </span>
-                        <span className="type-caption text-ink-muted">
-                          {t('checkpointFiles', { count: checkpoint.fileCount })}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void handleRestoreCheckpoint(checkpoint.id, { files: true })
-                          }
-                          className="border border-rule-control px-1.5 py-0.5 type-caption text-ink-muted transition-colors hover:text-ink"
-                        >
-                          {t('restoreCode')}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isLoading}
-                          onClick={() =>
-                            void handleRestoreCheckpoint(checkpoint.id, { conversation: true })
-                          }
-                          className="border border-rule-control px-1.5 py-0.5 type-caption text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
-                        >
-                          {t('restoreConversation')}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isLoading}
-                          onClick={() =>
-                            void handleRestoreCheckpoint(checkpoint.id, {
-                              files: true,
-                              conversation: true,
-                            })
-                          }
-                          className="border border-rule-control px-1.5 py-0.5 type-caption text-ink-muted transition-colors hover:text-ink disabled:opacity-40"
-                        >
-                          {t('restoreBoth')}
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-                <div className="px-3 py-1.5 type-caption text-ink-muted">
-                  {t('checkpointBashHint')}
-                </div>
-              </div>
-            )}
-          </div>
-          <IconButton
-            icon={Settings2}
-            label={t('settings')}
-            size="sm"
-            onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))}
-          />
         </div>
       </div>
 

@@ -36,11 +36,6 @@ import {
   type ToolCategory,
 } from './approval-policy.js'
 import {
-  CheckpointStore,
-  type CheckpointRecord,
-  type CheckpointSummary,
-} from './checkpoint-store.js'
-import {
   normalizePlanSteps,
   type PlanStep,
   type PlanStepStatus,
@@ -523,8 +518,6 @@ export interface AgentConfig {
   getDefaultPermissionLevel?: () => unknown
   /** 请求用户审批；未提供时按拒绝处理（fail-closed） */
   requestApproval?: (request: ApprovalRequestPayload) => Promise<ApprovalDecision>
-  /** 检查点存储目录；未提供时不记录检查点 */
-  checkpointDir?: string
 }
 
 export interface SessionSummary {
@@ -609,8 +602,6 @@ interface SessionRuntime {
   pendingTitle: string | null
   /** 会话初始工具集；从只读/计划模式切回询问或完全时恢复 */
   baseTools: string[]
-  /** 本轮检查点；轮次结束后落盘 */
-  currentCheckpoint: CheckpointRecord | null
   /** 会话附加数据（思考时长 / 历史工具 Diff） */
   extras: SessionExtras
   extrasSave: Promise<void>
@@ -692,7 +683,6 @@ export class AgentManager {
   private logger: AgentLogger = consoleAgentLogger
   private modelRuntime: ModelRuntime | null = null
   private agentDir = ''
-  private checkpointStore: CheckpointStore | null = null
   private extrasStore: SessionExtrasStore | null = null
   private sessionDir = ''
   private envLease = false
@@ -995,15 +985,6 @@ export class AgentManager {
                 newContent,
                 toolCallId: event.toolCallId,
               })
-              if (
-                runtime.currentCheckpoint &&
-                !runtime.currentCheckpoint.files.some((file) => file.path === snapshot.path)
-              ) {
-                runtime.currentCheckpoint.files.push({
-                  path: snapshot.path,
-                  oldContent: snapshot.existed ? snapshot.oldContent : null,
-                })
-              }
               runtime.extras.toolEdits[event.toolCallId] = {
                 path: snapshot.path,
                 oldContent: snapshot.oldContent,
@@ -1058,9 +1039,6 @@ export class AgentManager {
 
       this.agentDir =
         config.agentDir || path.join(config.workspaceDir, '.pi-workbench', 'agent')
-      this.checkpointStore = config.checkpointDir
-        ? new CheckpointStore(config.checkpointDir, config.workspaceDir)
-        : null
       this.extrasStore = new SessionExtrasStore(path.join(this.agentDir, 'session-extras'))
       const modelsPath = await this.writeModelsConfig(this.agentDir, config)
       this.ensureBashOnPath()
@@ -1579,71 +1557,6 @@ export class AgentManager {
   private treeDepth(node: SessionTreeNode): number {
     if (node.children.length === 0) return 0
     return 1 + Math.max(...node.children.map((child) => this.treeDepth(child)))
-  }
-
-  /** 列出检查点（最近的在前） */
-  async listCheckpoints(
-    sessionId?: string
-  ): Promise<{ success: boolean; checkpoints?: CheckpointSummary[]; error?: string }> {
-    if (!this.checkpointStore) return { success: true, checkpoints: [] }
-    try {
-      return { success: true, checkpoints: await this.checkpointStore.list(sessionId) }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
-  }
-
-  /**
-   * 回退到检查点：可只恢复文件、只恢复对话，或两者都恢复。
-   * 只覆盖 write/edit 造成的修改；bash 等外部副作用不在检查点范围内。
-   */
-  async restoreCheckpoint(
-    sessionId: string,
-    checkpointId: string,
-    options: { files?: boolean; conversation?: boolean }
-  ): Promise<{ success: boolean; restoredFiles?: number; error?: string }> {
-    if (!this.checkpointStore) {
-      return { success: false, error: 'Checkpoints are not enabled for this workspace.' }
-    }
-    try {
-      const record = await this.checkpointStore.load(checkpointId)
-      if (!record || record.sessionId !== sessionId) {
-        return { success: false, error: 'Checkpoint not found.' }
-      }
-      const runtime = await this.ensureRuntime(sessionId)
-      if (runtime.isProcessing) {
-        return { success: false, error: 'Session is running; stop it before restoring.' }
-      }
-
-      let restoredFiles = 0
-      if (options.files) {
-        for (const file of record.files) {
-          const target = this.resolveToolPath(file.path)
-          if (!target || !this.isInsideWorkspace(target)) {
-            this.logger.warn('[Agent Manager] Skipped checkpoint file outside workspace:', file.path)
-            continue
-          }
-          if (file.oldContent === null) {
-            await fs.rm(target, { force: true })
-          } else {
-            await fs.mkdir(path.dirname(target), { recursive: true })
-            await fs.writeFile(target, file.oldContent, 'utf-8')
-          }
-          restoredFiles++
-        }
-      }
-
-      if (options.conversation && record.leafId) {
-        const result = await runtime.session.navigateTree(record.leafId, { summarize: false })
-        if (result.cancelled) {
-          return { success: false, error: 'Conversation restore was cancelled.' }
-        }
-      }
-
-      return { success: true, restoredFiles }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
   }
 
   /** 读取历史工具调用的文件 Diff（来自会话 sidecar） */
@@ -2471,7 +2384,6 @@ ${body.join('\n')}
       titleAttempted: false,
       pendingTitle: null,
       baseTools,
-      currentCheckpoint: null,
       extras,
       extrasSave: Promise.resolve(),
       thinkingStart: null,
@@ -2952,18 +2864,6 @@ ${body.join('\n')}
       runtime.onTrace = options?.onTrace ?? null
       runtime.pendingEdits = []
       runtime.editSnapshots.clear()
-      // 检查点：记录本轮开始时的会话位置；文件旧内容在 write/edit 执行时补充
-      runtime.currentCheckpoint = this.checkpointStore
-        ? {
-            version: 1,
-            id: `cp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            sessionId: runtime.id,
-            workspaceDir: runtime.sessionManager.getCwd(),
-            createdAt: Date.now(),
-            leafId: runtime.sessionManager.getLeafId(),
-            files: [],
-          }
-        : null
       // 只认本轮新增的 assistant 消息，避免请求失败时把上一轮回复当成本轮结果
       const messageStartIndex = runtime.session.messages.length
       this.logger.info(
@@ -3135,18 +3035,6 @@ ${body.join('\n')}
         runtime.isProcessing = false
         runtime.onTextDelta = null
         runtime.onTrace = null
-
-        // 检查点落盘：只保存本轮确实修改过的文件
-        const checkpoint = runtime.currentCheckpoint
-        runtime.currentCheckpoint = null
-        if (checkpoint && checkpoint.files.length > 0 && this.checkpointStore) {
-          try {
-            await this.checkpointStore.save(checkpoint)
-            await this.checkpointStore.prune()
-          } catch (error) {
-            this.logger.warn('[Agent Manager] Failed to save checkpoint:', error)
-          }
-        }
       }
     }
   }

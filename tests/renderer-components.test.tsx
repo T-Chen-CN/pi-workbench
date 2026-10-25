@@ -75,8 +75,6 @@ vi.mock('../src/api/piAgentAPI', () => ({
     rewindLastUser: vi.fn(),
     listBranches: vi.fn(),
     switchBranch: vi.fn(),
-    listCheckpoints: vi.fn(),
-    restoreCheckpoint: vi.fn(),
     onApprovalRequest: vi.fn(() => () => {}),
     onApprovalResolved: vi.fn(() => () => {}),
     respondApproval: vi.fn(),
@@ -211,7 +209,6 @@ beforeEach(() => {
   vi.mocked(piAgentAPI.readToolResultChunk).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.getToolResultImage).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.openToolResultExternally).mockResolvedValue({ success: false })
-  vi.mocked(piAgentAPI.listCheckpoints).mockResolvedValue({ success: true, checkpoints: [] })
   vi.mocked(piAgentAPI.listBranches).mockResolvedValue({ success: true, groups: [] })
   vi.mocked(piAgentAPI.switchBranch).mockResolvedValue({ success: false })
   vi.mocked(api.getPendingMessages).mockResolvedValue({ success: true, sessions: {} })
