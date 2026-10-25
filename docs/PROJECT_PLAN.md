@@ -174,9 +174,10 @@ Main Process (Node 24, Electron 44)
 ## 六、项目结构
 
 ```
-electron/           主进程（main.ts、preload.cts、两套 tsconfig）
+electron/           主进程（main.ts 装配、ipc/ 域模块、preload.cts、两套 tsconfig）
 src/
-  components/       24 个扁平组件（ChatPanel、WorkspaceView、SessionTabs、ApprovalCard、
+  components/       29 个扁平组件（ChatPanel、ChatHeader、ChatTranscript、ChatMessageRow、
+                    ChatApiKeyPrompt、VirtualRows、WorkspaceView、SessionTabs、ApprovalCard、
                     ToolResultViewer、AgentTrace、AgentMarkdown、ChatSessionList、
                     CommandPalette、DialogHost、DiffViewer、ErrorBoundary、FileExplorer、
                     IPCDebug、MonacoEditor、Settings、TerminalPanel、Toast、UpdateDialog、
