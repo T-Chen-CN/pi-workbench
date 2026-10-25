@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MonacoEditor } from '../src/components/MonacoEditor'
-import { useEditorStore } from '../src/store/editorStore'
+import { editorStoreFor, resetEditorStores } from '../src/store/editorStore'
 import { useSelectionStore } from '../src/store/selectionStore'
 import { useWorkspaceStore } from '../src/store/workspaceStore'
 import { api } from '../src/api'
@@ -103,7 +103,7 @@ function makeFile(path: string, content: string) {
 }
 
 beforeEach(() => {
-  useEditorStore.getState().reset()
+  resetEditorStores()
   useSelectionStore.getState().clearSelection()
   mocks.create.mockReset()
   mocks.createModel.mockReset()
@@ -125,22 +125,22 @@ afterEach(() => {
 
 describe('MonacoEditor', () => {
   it('creates the editor once a file is opened', () => {
-    render(<MonacoEditor />)
+    render(<MonacoEditor workspacePath="/ws" />)
 
     expect(mocks.create).not.toHaveBeenCalled()
 
     act(() => {
-      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'const a = 1'))
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/a.ts', 'const a = 1'))
     })
 
     expect(mocks.create).toHaveBeenCalledTimes(1)
-    expect(useEditorStore.getState().currentFile?.path).toBe('/tmp/a.ts')
+    expect(editorStoreFor('/ws').getState().currentFile?.path).toBe('/tmp/a.ts')
   })
 
   it('publishes the current editor selection for snippet attachments', () => {
-    render(<MonacoEditor />)
+    render(<MonacoEditor workspacePath="/ws" />)
     act(() => {
-      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a\nb\nc'))
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/a.ts', 'a\nb\nc'))
     })
 
     const editor = mocks.create.mock.results[0].value
@@ -156,9 +156,9 @@ describe('MonacoEditor', () => {
   })
 
   it('enters large-file mode for files above 2MB', async () => {
-    render(<MonacoEditor />)
+    render(<MonacoEditor workspacePath="/ws" />)
     act(() => {
-      useEditorStore.getState().addOpenFile(
+      editorStoreFor('/ws').getState().addOpenFile(
         makeFile('/tmp/big.ts', 'x'.repeat(2 * 1024 * 1024 + 1))
       )
     })
@@ -170,26 +170,26 @@ describe('MonacoEditor', () => {
     )
   })
 
-  it('disposes the editor when the last file is closed', () => {    render(<MonacoEditor />)
+  it('disposes the editor when the last file is closed', () => {    render(<MonacoEditor workspacePath="/ws" />)
     act(() => {
-      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
     })
     const editor = mocks.create.mock.results[0].value
 
     act(() => {
-      useEditorStore.getState().removeOpenFile('/tmp/a.ts')
+      editorStoreFor('/ws').getState().removeOpenFile('/tmp/a.ts')
     })
 
     expect(editor.dispose).toHaveBeenCalled()
   })
 
   it('keeps a separate model per file when switching tabs', () => {
-    render(<MonacoEditor />)
+    render(<MonacoEditor workspacePath="/ws" />)
     act(() => {
-      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
     })
     act(() => {
-      useEditorStore.getState().addOpenFile(makeFile('/tmp/b.ts', 'b'))
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/b.ts', 'b'))
     })
 
     const editor = mocks.create.mock.results[0].value
@@ -205,16 +205,16 @@ describe('MonacoEditor', () => {
     vi.useFakeTimers()
     const writeSpy = vi.spyOn(api, 'writeFile').mockResolvedValue({ success: true })
 
-    render(<MonacoEditor />)
+    render(<MonacoEditor workspacePath="/ws" />)
     act(() => {
-      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
     })
     const editor = mocks.create.mock.results[0].value
 
     act(() => {
       editor.emitChange('changed')
     })
-    expect(useEditorStore.getState().currentFile?.isDirty).toBe(true)
+    expect(editorStoreFor('/ws').getState().currentFile?.isDirty).toBe(true)
 
     await act(async () => {
       vi.advanceTimersByTime(2000)
@@ -228,9 +228,9 @@ describe('MonacoEditor', () => {
     vi.useFakeTimers()
     const writeSpy = vi.spyOn(api, 'writeFile').mockResolvedValue({ success: true })
 
-    render(<MonacoEditor />)
+    render(<MonacoEditor workspacePath="/ws" />)
     act(() => {
-      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
     })
     const editor = mocks.create.mock.results[0].value
 
@@ -238,7 +238,7 @@ describe('MonacoEditor', () => {
       editor.emitChange('changed')
     })
     act(() => {
-      useEditorStore.getState().addOpenFile(makeFile('/tmp/b.ts', 'b'))
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/b.ts', 'b'))
     })
 
     await act(async () => {
@@ -253,16 +253,16 @@ describe('MonacoEditor', () => {
     vi.useFakeTimers()
     const writeSpy = vi.spyOn(api, 'writeFile').mockResolvedValue({ success: true })
 
-    render(<MonacoEditor />)
+    render(<MonacoEditor workspacePath="/ws" />)
     act(() => {
-      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
     })
     const editor = mocks.create.mock.results[0].value
     act(() => {
       editor.emitChange('a-changed')
     })
     act(() => {
-      useEditorStore.getState().addOpenFile(makeFile('/tmp/b.ts', 'b'))
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/b.ts', 'b'))
     })
     act(() => {
       editor.emitChange('b-changed')
@@ -290,9 +290,9 @@ describe('MonacoEditor', () => {
     )
     const draftSpy = vi.spyOn(api, 'draftSave').mockResolvedValue({ success: true })
 
-    render(<MonacoEditor />)
+    render(<MonacoEditor workspacePath="/ws" />)
     act(() => {
-      useEditorStore.getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
     })
     const editor = mocks.create.mock.results[0].value
 
@@ -314,7 +314,7 @@ describe('MonacoEditor', () => {
       await Promise.resolve()
     })
 
-    expect(useEditorStore.getState().currentFile?.isDirty).toBe(true)
+    expect(editorStoreFor('/ws').getState().currentFile?.isDirty).toBe(true)
     expect(draftSpy).toHaveBeenCalledWith('/ws', '/tmp/a.ts', 'second')
 
     useWorkspaceStore.setState({ workspacePath: null })

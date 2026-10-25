@@ -17,6 +17,7 @@ interface TerminalPanelProps {
   workspacePath: string
   visible: boolean
   onClose: () => void
+  active?: boolean
 }
 
 type TerminalStatus = 'idle' | 'starting' | 'ready' | 'error'
@@ -36,6 +37,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   workspacePath,
   visible,
   onClose,
+  active = true,
 }) => {
   const { t } = useI18nStore()
   const resolvedTheme = useResolvedTheme()
@@ -146,9 +148,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     terminal.options.theme = terminalTheme(resolvedTheme === 'dark')
   }, [resolvedTheme])
 
-  // 可见时适配尺寸
+  // 可见且处于活动工作区时适配尺寸
   useEffect(() => {
-    if (!visible || !termRef.current) return
+    if (!visible || !active || !termRef.current) return
 
     const fitAndResize = () => {
       fitRef.current?.fit()
@@ -168,7 +170,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       clearTimeout(timer)
       observer.disconnect()
     }
-  }, [visible])
+  }, [visible, active])
 
   const restart = () => {
     const id = terminalIdRef.current

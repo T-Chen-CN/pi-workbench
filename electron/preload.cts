@@ -155,6 +155,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:sessions:getTabs', workspaceDir),
   agentSessionsSetTabs: (workspaceDir: string, tabs: { open: string[]; active: string | null }) =>
     ipcRenderer.invoke('agent:sessions:setTabs', workspaceDir, tabs),
+  editorTabsGet: (workspaceDir: string) =>
+    ipcRenderer.invoke('workspace:editorTabs:get', workspaceDir),
+  editorTabsSet: (
+    workspaceDir: string,
+    tabs: { open: string[]; active: string | null }
+  ) => ipcRenderer.invoke('workspace:editorTabs:set', workspaceDir, tabs),
   agentSteer: (workspaceDir: string, sessionId: string, message: string) =>
     ipcRenderer.invoke('agent:steer', workspaceDir, sessionId, message),
   agentContextUsage: (workspaceDir: string, sessionId: string) =>

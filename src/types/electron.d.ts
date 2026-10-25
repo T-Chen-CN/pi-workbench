@@ -43,6 +43,8 @@ export interface ElectronAPI {
   draftDelete: (workspacePath: string, filePath: string) => Promise<DraftResult>
   draftList: (workspacePath: string) => Promise<DraftListResult>
   draftClear: (workspacePath: string) => Promise<DraftResult>
+  editorTabsGet: (workspacePath: string) => Promise<EditorTabsResult>
+  editorTabsSet: (workspacePath: string, tabs: EditorTabs) => Promise<WorkspaceResult>
 
   // Pi Agent API
   agentInitialize: (config: AgentInitConfig) => Promise<AgentInitResult>
@@ -689,6 +691,17 @@ export interface SessionTabs {
 export interface SessionTabsResult {
   success: boolean
   tabs?: SessionTabs
+  error?: string
+}
+
+export interface EditorTabs {
+  open: string[]
+  active: string | null
+}
+
+export interface EditorTabsResult {
+  success: boolean
+  tabs?: EditorTabs
   error?: string
 }
 

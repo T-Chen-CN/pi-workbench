@@ -626,3 +626,67 @@ describe('dialog handler', () => {
     expect(typeof result.path).toBe('string')
   })
 })
+
+describe('workspace editor tabs', () => {
+  it('persists workspace-relative tabs and restores absolute paths', async () => {
+    await call('workspace:init', workDir)
+    const first = path.join(workDir, 'a.ts')
+    const second = path.join(workDir, 'src', 'b.ts')
+    await fs.mkdir(path.dirname(second), { recursive: true })
+    await fs.writeFile(first, 'a')
+    await fs.writeFile(second, 'b')
+
+    await expect(
+      call('workspace:editorTabs:set', workDir, { open: [first, second], active: second })
+    ).resolves.toMatchObject({ success: true })
+
+    const raw = JSON.parse(
+      await fs.readFile(path.join(workDir, '.pi-workbench', 'editor-tabs.json'), 'utf-8')
+    ) as { open: string[]; active: string | null }
+    expect(raw.open).toEqual(['a.ts', 'src/b.ts'])
+    expect(raw.active).toBe('src/b.ts')
+
+    const result = await call('workspace:editorTabs:get', workDir)
+    expect(result.success).toBe(true)
+    expect((result.tabs as { open: string[]; active: string | null }).open).toEqual([
+      first,
+      second,
+    ])
+    expect((result.tabs as { open: string[]; active: string | null }).active).toBe(second)
+  })
+
+  it('drops paths outside the workspace and inactive active entries', async () => {
+    await call('workspace:init', workDir)
+    const inside = path.join(workDir, 'a.ts')
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-outside-tab-'))
+    const outsideFile = path.join(outside, 'x.ts')
+    await fs.writeFile(inside, 'a')
+    await fs.writeFile(outsideFile, 'x')
+
+    try {
+      await call('workspace:editorTabs:set', workDir, {
+        open: [inside, outsideFile],
+        active: outsideFile,
+      })
+      const result = await call('workspace:editorTabs:get', workDir)
+      expect((result.tabs as { open: string[]; active: string | null }).open).toEqual([inside])
+      expect((result.tabs as { open: string[]; active: string | null }).active).toBe(inside)
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects untrusted workspaces', async () => {
+    const untrusted = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-untrusted-tabs-'))
+    try {
+      await expect(call('workspace:editorTabs:get', untrusted)).resolves.toMatchObject({
+        success: false,
+      })
+      await expect(
+        call('workspace:editorTabs:set', untrusted, { open: [], active: null })
+      ).resolves.toMatchObject({ success: false })
+    } finally {
+      await fs.rm(untrusted, { recursive: true, force: true })
+    }
+  })
+})

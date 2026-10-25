@@ -4,8 +4,9 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { Check, Copy } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
+import { useWorkspaceScope } from '../workspace/WorkspaceScope'
 import { useWorkspaceStore } from '../store/workspaceStore'
-import { useEditorStore } from '../store/editorStore'
+import { editorStoreFor } from '../store/editorStore'
 import { api } from '../api'
 import { splitMarkdownBlocks } from '../utils/markdownBlocks'
 import { looksLikePath, splitPathLine } from '../utils/filePath'
@@ -15,8 +16,9 @@ const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({
   value,
   children,
 }) => {
+  const scopeWorkspace = useWorkspaceScope()
   const open = async () => {
-    const workspace = useWorkspaceStore.getState().workspacePath
+    const workspace = scopeWorkspace ?? useWorkspaceStore.getState().workspacePath
     if (!workspace) return
     const { path: filePart, line } = splitPathLine(value)
     const target = /^[A-Za-z]:[\\/]/.test(filePart) || filePart.startsWith('/')
@@ -27,7 +29,8 @@ const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({
       if (!exists.success || !exists.exists) return
       const file = await api.readFile(target)
       if (!file.success || typeof file.content !== 'string') return
-      useEditorStore.getState().addOpenFile({
+      const store = editorStoreFor(workspace)
+      store.getState().addOpenFile({
         path: target,
         name: target.split(/[\\/]/).pop() || target,
         content: file.content,
@@ -35,7 +38,7 @@ const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({
         isSaving: false,
       })
       // 带行号时滚动到该行并高亮（R-09）
-      if (line) useEditorStore.getState().revealLine(target, line)
+      if (line) store.getState().revealLine(target, line)
     } catch (error) {
       console.error('Failed to open referenced file:', error)
     }

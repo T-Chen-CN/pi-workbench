@@ -1,5 +1,5 @@
 import { api } from '../api'
-import { useEditorStore } from '../store/editorStore'
+import { editorStoreFor } from '../store/editorStore'
 import type { FileEdit } from '../types/electron'
 
 export type RevertFailureReason = 'dirty' | 'read' | 'conflict' | 'write'
@@ -12,8 +12,13 @@ export type RevertResult =
  * 把文件恢复为 Agent 修改前的内容。
  * 编辑器里有未保存改动、或文件内容已被外部改动时拒绝覆盖。
  */
-export async function revertFileEdit(target: FileEdit): Promise<RevertResult> {
-  const openFile = useEditorStore.getState().openFiles.find((file) => file.path === target.path)
+export async function revertFileEdit(
+  target: FileEdit,
+  workspacePath: string
+): Promise<RevertResult> {
+  const openFile = editorStoreFor(workspacePath)
+    .getState()
+    .openFiles.find((file) => file.path === target.path)
   if (openFile?.isDirty) {
     return { ok: false, reason: 'dirty' }
   }
