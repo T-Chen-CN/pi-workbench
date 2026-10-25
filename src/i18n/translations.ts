@@ -70,6 +70,11 @@ export const translations = {
     deleteFailed: '删除失败：{error}',
     fileNameEmpty: '文件名不能为空',
     noWorkspaceSelected: '未选择工作区',
+    sortFiles: '文件排序',
+    sortByName: '名称',
+    sortByType: '类型',
+    sortFoldersFirst: '文件夹优先',
+    sortReverse: '倒序',
 
     // Monaco Editor
     noFileOpen: '没有文件打开',
@@ -615,6 +620,11 @@ export const translations = {
     deleteFailed: 'Delete failed: {error}',
     fileNameEmpty: 'File name cannot be empty',
     noWorkspaceSelected: 'No workspace selected',
+    sortFiles: 'Sort files',
+    sortByName: 'Name',
+    sortByType: 'Type',
+    sortFoldersFirst: 'Folders first',
+    sortReverse: 'Reverse order',
 
     // Monaco Editor
     noFileOpen: 'No file open',

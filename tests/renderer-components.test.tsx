@@ -34,6 +34,8 @@ vi.mock('../src/api', () => ({
     onFsChanged: vi.fn(() => () => {}),
     getPendingMessages: vi.fn(),
     setPendingMessages: vi.fn(),
+    getSettings: vi.fn(),
+    saveSettings: vi.fn(),
   },
 }))
 
@@ -154,6 +156,11 @@ beforeEach(() => {
   useSelectionStore.getState().clearSelection()
   useSessionStore.getState().reset()
   useSettingsStore.getState().setRunWhileBusy('queue')
+  useSettingsStore.setState({
+    explorerSortBy: 'name',
+    explorerFoldersFirst: true,
+    explorerSortReverse: false,
+  })
   useI18nStore.getState().setLanguage('zh')
   vi.clearAllMocks()
   Element.prototype.scrollIntoView = vi.fn()
@@ -1114,6 +1121,89 @@ describe('FileExplorer', () => {
     )
 
     expect(onCollapse).toHaveBeenCalledTimes(1)
+  })
+
+  it('sorts by type from the header menu and persists the choice', async () => {
+    vi.mocked(api.listDirectory).mockResolvedValue({
+      success: true,
+      items: [
+        { name: 'a.txt', path: '/ws/a.txt', isDirectory: false },
+        { name: 'b.md', path: '/ws/b.md', isDirectory: false },
+        { name: 'src', path: '/ws/src', isDirectory: true },
+      ],
+    })
+    vi.mocked(api.getSettings).mockResolvedValue({ success: true })
+    vi.mocked(api.saveSettings).mockResolvedValue({ success: true })
+
+    render(<FileExplorer workspacePath="/ws" />)
+    await screen.findByText('a.txt')
+
+    const rowNames = () => screen.getAllByRole('treeitem').map((row) => row.textContent)
+    expect(rowNames()).toEqual(['src', 'a.txt', 'b.md'])
+
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.sortFiles }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: translations.zh.sortByType }))
+
+    await waitFor(() => expect(rowNames()).toEqual(['src', 'b.md', 'a.txt']))
+    expect(useSettingsStore.getState().explorerSortBy).toBe('type')
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ explorerSortBy: 'type' })
+      )
+    )
+  })
+
+  it('moves folders below files when folders-first is turned off', async () => {
+    vi.mocked(api.listDirectory).mockResolvedValue({
+      success: true,
+      items: [
+        { name: 'a.txt', path: '/ws/a.txt', isDirectory: false },
+        { name: 'src', path: '/ws/src', isDirectory: true },
+      ],
+    })
+    vi.mocked(api.getSettings).mockResolvedValue({ success: true })
+    vi.mocked(api.saveSettings).mockResolvedValue({ success: true })
+
+    render(<FileExplorer workspacePath="/ws" />)
+    await screen.findByText('a.txt')
+
+    const rowNames = () => screen.getAllByRole('treeitem').map((row) => row.textContent)
+    expect(rowNames()).toEqual(['src', 'a.txt'])
+
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.sortFiles }))
+    fireEvent.click(
+      screen.getByRole('menuitemcheckbox', { name: translations.zh.sortFoldersFirst })
+    )
+
+    await waitFor(() => expect(rowNames()).toEqual(['a.txt', 'src']))
+    expect(useSettingsStore.getState().explorerFoldersFirst).toBe(false)
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ explorerFoldersFirst: false })
+      )
+    )
+  })
+
+  it('moves keyboard focus through sort options and toggles', async () => {
+    vi.mocked(api.listDirectory).mockResolvedValue({ success: true, items: [] })
+
+    render(<FileExplorer workspacePath="/ws" />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: translations.zh.sortFiles })
+    )
+
+    const focusedText = () => document.activeElement?.textContent?.trim()
+    expect(focusedText()).toBe(translations.zh.sortByName)
+
+    for (const label of [
+      translations.zh.sortByType,
+      translations.zh.sortFoldersFirst,
+      translations.zh.sortReverse,
+      translations.zh.sortByName,
+    ]) {
+      fireEvent.keyDown(window, { key: 'ArrowDown' })
+      expect(focusedText()).toBe(label)
+    }
   })
 })
 

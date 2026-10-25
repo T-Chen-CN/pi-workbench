@@ -13,6 +13,9 @@ const DEFAULT_SETTINGS = {
   runWhileBusy: 'queue',
   /** 新会话的默认权限档位；会话创建后自行持有权限，不再受此值影响 */
   permissionLevel: 'ask',
+  explorerSortBy: 'name',
+  explorerFoldersFirst: true,
+  explorerSortReverse: false,
 }
 
 let settingsCache: Record<string, any> = {}
@@ -106,6 +109,13 @@ handleIpc('app:saveSettings', async (_event, settings: any) => {
       const currentLevel = normalizePermissionLevel(settingsCache.permissionLevel)
       if (currentLevel) sanitized.permissionLevel = currentLevel
       else delete sanitized.permissionLevel
+    }
+    // 文件树排序：只接受已知排序键与布尔开关，非法值落回默认
+    if (sanitized.explorerSortBy !== 'name' && sanitized.explorerSortBy !== 'type') {
+      delete sanitized.explorerSortBy
+    }
+    for (const key of ['explorerFoldersFirst', 'explorerSortReverse'] as const) {
+      if (typeof sanitized[key] !== 'boolean') delete sanitized[key]
     }
     await saveSettingsFile(sanitized)
     updateAppSettingsCache(sanitized)

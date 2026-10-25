@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import {
   ExternalLink,
   Info,
@@ -22,6 +22,7 @@ import {
 } from '../store/settingsStore'
 import { useUpdaterStore } from '../store/updaterStore'
 import { api } from '../api'
+import { persistAppSettings } from '../utils/persistSettings'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
 import type { ApiConfig, AppInfo, PermissionLevel } from '../types/electron'
@@ -170,64 +171,49 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     }
   })()
 
-  // 串行写入：每次修改都先读磁盘再合并，并发保存会互相覆盖
-  const persistQueue = useRef<Promise<void>>(Promise.resolve())
-  const persistSettings = (patch: Record<string, unknown>): Promise<void> => {
-    persistQueue.current = persistQueue.current.then(async () => {
-      try {
-        const current = await api.getSettings()
-        const settings = current.success && current.settings ? current.settings : {}
-        await api.saveSettings({ ...settings, ...patch })
-      } catch (error) {
-        console.error('Failed to persist settings:', error)
-      }
-    })
-    return persistQueue.current
-  }
-
   const handleLanguageChange = (next: 'zh' | 'en') => {
     setLanguage(next)
-    void persistSettings({ language: next })
+    void persistAppSettings({ language: next })
   }
 
   const handleThemeChange = (next: ThemeMode) => {
     setMode(next)
-    void persistSettings({ theme: next })
+    void persistAppSettings({ theme: next })
   }
 
   const handleAutoSaveChange = (enabled: boolean) => {
     setAutoSave(enabled)
-    void persistSettings({ autoSave: enabled })
+    void persistAppSettings({ autoSave: enabled })
   }
 
   const handleAutoSaveDelayChange = (delayMs: number) => {
     const next = clampAutoSaveDelay(delayMs)
     setAutoSaveDelay(next)
-    void persistSettings({ autoSaveDelay: next })
+    void persistAppSettings({ autoSaveDelay: next })
   }
 
   const handlePermissionLevelChange = (level: string) => {
     if (!isPermissionLevel(level)) return
     setPermissionLevel(level)
-    void persistSettings({ permissionLevel: level })
+    void persistAppSettings({ permissionLevel: level })
   }
 
   const handleNotificationChange = (patch: Partial<NotificationPrefs>) => {
     const next = { ...notifications, ...patch }
     setNotificationPrefs(patch)
-    void persistSettings({ notifications: next })
+    void persistAppSettings({ notifications: next })
   }
 
   const handleBudgetChange = (value: number) => {
     const next = Number.isFinite(value) ? Math.max(0, value) : 0
     setBudgetUsd(next)
-    void persistSettings({ budgetUsd: next })
+    void persistAppSettings({ budgetUsd: next })
   }
 
   const handleRunWhileBusyChange = (value: string) => {
     const next: RunWhileBusy = value === 'steer' ? 'steer' : 'queue'
     setRunWhileBusy(next)
-    void persistSettings({ runWhileBusy: next })
+    void persistAppSettings({ runWhileBusy: next })
   }
 
   const shortcutName = (id: ShortcutId) =>
@@ -252,7 +238,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
       }
       const next = { ...keybindings, [capturingShortcut]: combo }
       setKeybinding(capturingShortcut, combo)
-      void persistSettings({ keybindings: next })
+      void persistAppSettings({ keybindings: next })
       setCapturingShortcut(null)
     }
     window.addEventListener('keydown', onKeyDown, true)
@@ -262,7 +248,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
 
   const handleResetShortcuts = () => {
     resetKeybindings()
-    void persistSettings({ keybindings: DEFAULT_KEYBINDINGS })
+    void persistAppSettings({ keybindings: DEFAULT_KEYBINDINGS })
   }
 
   const loadApiConfig = useCallback(async () => {

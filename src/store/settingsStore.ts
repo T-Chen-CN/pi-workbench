@@ -5,6 +5,11 @@ import {
   normalizeKeybindings,
   type ShortcutId,
 } from '../utils/keybindings'
+import {
+  DEFAULT_SORT_OPTIONS,
+  isExplorerSortBy,
+  type ExplorerSortBy,
+} from '../utils/fileTree'
 
 export const MIN_AUTO_SAVE_DELAY = 500
 export const MAX_AUTO_SAVE_DELAY = 10_000
@@ -59,6 +64,10 @@ interface SettingsState {
   budgetUsd: number
   runWhileBusy: RunWhileBusy
   keybindings: Record<ShortcutId, string>
+  /** 文件树排序方式与开关，持久化到 config/settings.json */
+  explorerSortBy: ExplorerSortBy
+  explorerFoldersFirst: boolean
+  explorerSortReverse: boolean
   setAutoSave: (enabled: boolean) => void
   setAutoSaveDelay: (delayMs: number) => void
   setPermissionLevel: (level: PermissionLevel) => void
@@ -67,6 +76,9 @@ interface SettingsState {
   setRunWhileBusy: (mode: RunWhileBusy) => void
   setKeybinding: (id: ShortcutId, combo: string) => void
   resetKeybindings: () => void
+  setExplorerSortBy: (by: ExplorerSortBy) => void
+  setExplorerFoldersFirst: (enabled: boolean) => void
+  setExplorerSortReverse: (enabled: boolean) => void
   hydrate: (settings: {
     autoSave?: unknown
     autoSaveDelay?: unknown
@@ -75,6 +87,9 @@ interface SettingsState {
     budgetUsd?: unknown
     runWhileBusy?: unknown
     keybindings?: unknown
+    explorerSortBy?: unknown
+    explorerFoldersFirst?: unknown
+    explorerSortReverse?: unknown
   }) => void
 }
 
@@ -87,6 +102,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   budgetUsd: 0,
   runWhileBusy: DEFAULT_RUN_WHILE_BUSY,
   keybindings: { ...DEFAULT_KEYBINDINGS },
+  explorerSortBy: DEFAULT_SORT_OPTIONS.by,
+  explorerFoldersFirst: DEFAULT_SORT_OPTIONS.foldersFirst,
+  explorerSortReverse: DEFAULT_SORT_OPTIONS.reverse,
 
   setAutoSave: (enabled) => set({ autoSave: enabled }),
 
@@ -107,6 +125,13 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     set((state) => ({ keybindings: { ...state.keybindings, [id]: combo.toLowerCase() } })),
 
   resetKeybindings: () => set({ keybindings: { ...DEFAULT_KEYBINDINGS } }),
+
+  setExplorerSortBy: (by) =>
+    set({ explorerSortBy: isExplorerSortBy(by) ? by : DEFAULT_SORT_OPTIONS.by }),
+
+  setExplorerFoldersFirst: (enabled) => set({ explorerFoldersFirst: enabled }),
+
+  setExplorerSortReverse: (enabled) => set({ explorerSortReverse: enabled }),
 
   hydrate: (settings) =>
     set((state) => ({
@@ -135,5 +160,16 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         settings.keybindings === undefined
           ? state.keybindings
           : normalizeKeybindings(settings.keybindings),
+      explorerSortBy: isExplorerSortBy(settings.explorerSortBy)
+        ? settings.explorerSortBy
+        : state.explorerSortBy,
+      explorerFoldersFirst:
+        typeof settings.explorerFoldersFirst === 'boolean'
+          ? settings.explorerFoldersFirst
+          : state.explorerFoldersFirst,
+      explorerSortReverse:
+        typeof settings.explorerSortReverse === 'boolean'
+          ? settings.explorerSortReverse
+          : state.explorerSortReverse,
     })),
 }))

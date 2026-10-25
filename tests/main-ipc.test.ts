@@ -288,6 +288,34 @@ describe('app settings handlers', () => {
     })
   })
 
+  it('keeps valid explorer sort settings and drops malformed ones', async () => {
+    await call('app:saveSettings', {
+      explorerSortBy: 'type',
+      explorerFoldersFirst: false,
+      explorerSortReverse: true,
+    })
+
+    let result = await call('app:getSettings')
+    expect(result.settings).toMatchObject({
+      explorerSortBy: 'type',
+      explorerFoldersFirst: false,
+      explorerSortReverse: true,
+    })
+
+    await call('app:saveSettings', {
+      explorerSortBy: 'size',
+      explorerFoldersFirst: 'yes',
+      explorerSortReverse: 1,
+    })
+
+    result = await call('app:getSettings')
+    expect(result.settings).toMatchObject({
+      explorerSortBy: 'name',
+      explorerFoldersFirst: true,
+      explorerSortReverse: false,
+    })
+  })
+
   it('recovers settings from the backup when settings.json is corrupted', async () => {
     const settingsPath = path.join(appDir, 'config', 'settings.json')
     await fs.writeFile(settingsPath, '{ truncated', 'utf-8')

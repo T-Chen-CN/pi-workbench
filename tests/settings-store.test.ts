@@ -13,6 +13,9 @@ beforeEach(() => {
     autoSave: true,
     autoSaveDelay: DEFAULT_AUTO_SAVE_DELAY,
     runWhileBusy: DEFAULT_RUN_WHILE_BUSY,
+    explorerSortBy: 'name',
+    explorerFoldersFirst: true,
+    explorerSortReverse: false,
   })
 })
 
@@ -64,5 +67,51 @@ describe('settings run while busy', () => {
 
     useSettingsStore.getState().setRunWhileBusy('invalid' as 'steer')
     expect(useSettingsStore.getState().runWhileBusy).toBe('queue')
+  })
+})
+
+describe('file tree sorting preferences', () => {
+  it('defaults to name order with folders pinned first', () => {
+    useSettingsStore.setState({
+      explorerSortBy: 'name',
+      explorerFoldersFirst: true,
+      explorerSortReverse: false,
+    })
+
+    expect(useSettingsStore.getState().explorerSortBy).toBe('name')
+    expect(useSettingsStore.getState().explorerFoldersFirst).toBe(true)
+    expect(useSettingsStore.getState().explorerSortReverse).toBe(false)
+  })
+
+  it('hydrates persisted sort preferences', () => {
+    useSettingsStore.getState().hydrate({
+      explorerSortBy: 'type',
+      explorerFoldersFirst: false,
+      explorerSortReverse: true,
+    })
+
+    expect(useSettingsStore.getState().explorerSortBy).toBe('type')
+    expect(useSettingsStore.getState().explorerFoldersFirst).toBe(false)
+    expect(useSettingsStore.getState().explorerSortReverse).toBe(true)
+  })
+
+  it('ignores malformed or unknown sort preferences', () => {
+    useSettingsStore.getState().hydrate({
+      explorerSortBy: 'modified',
+      explorerFoldersFirst: 'yes',
+      explorerSortReverse: 1,
+    })
+
+    expect(useSettingsStore.getState().explorerSortBy).toBe('name')
+    expect(useSettingsStore.getState().explorerFoldersFirst).toBe(true)
+    expect(useSettingsStore.getState().explorerSortReverse).toBe(false)
+  })
+
+  it('rejects unknown sort keys from the setter', () => {
+    useSettingsStore.getState().setExplorerSortBy('type')
+    expect(useSettingsStore.getState().explorerSortBy).toBe('type')
+
+    useSettingsStore.getState().setExplorerSortBy('modified' as 'name')
+    expect(useSettingsStore.getState().explorerSortBy).toBe('name')
   })
 })

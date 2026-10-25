@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.29 |
+| 文档版本 | v1.30 |
 | 状态 | Active（正式规范） |
 | 最后更新 | 2026-10-26 |
 | 适用范围 | 渲染进程全部 UI、Monaco / xterm 主题、应用主题设置 |
@@ -361,13 +361,15 @@
 |---|---|---|
 | `PopoverMenu` | `open` / `onClose` / `label` | 是否展开、关闭回调、`aria-label` |
 | | `role="menu \| dialog"` | `menu` 支持 ↑↓ / Home / End 导航；`dialog` 为自由面板（如上下文明细） |
+| | `placement="up \| down"` | 默认向上展开；只有位于面板顶部的触发器（文件树头部）改为向下 |
 | `MenuOption` | `selected` / `disabled` / `onSelect` | 当前项 `accent` 勾选；禁用项置灰且不可聚焦 |
+| | `role="menuitemradio \| menuitemcheckbox"` | 互斥选项用 radio（默认）；独立开关用 checkbox，同样参与 ↑↓ 导航 |
 | | `variant="value \| data"` | 中文标签用 `value`；模型名、ID 用 `data`（mono） |
 | | `meta` / `title` | 右侧次要说明 / 悬停说明 |
 
 **规则**：
 
-- 触发器与 `PopoverMenu` 必须放在同一个 `relative` 容器内，菜单 `bottom-full` 向上展开，间距 4px（`mb-1`）；不做需要鼠标移动的居中弹窗。
+- 触发器与 `PopoverMenu` 必须放在同一个 `relative` 容器内，默认 `bottom-full` 向上展开、间距 4px（`mb-1`）；位于面板顶部的触发器改用 `placement="down"`，否则会被窗口上沿裁掉；不做需要鼠标移动的居中弹窗。
 - 菜单优先与触发器左缘对齐；超出最近裁剪容器的右缘时，自动向左收进容器内（左右各留 4px），不依赖固定的左/右对齐参数。
 - 浮层使用 `bg-raised` + 1px `border-line` + `shadow-print`；圆角不超过 2px。
 - `role="menu"` 打开时聚焦当前项，Esc 关闭并把焦点还给触发器；点击外部关闭但不抢回焦点。
@@ -413,7 +415,8 @@
 ### 6.4 文件树
 
 - 名称 Noto Sans / Noto Sans SC 12.5px；目录/文件使用 lucide 线性图标。
-- 头部右侧依次为加载/错误指示、新建文件与收起按钮；收起按钮使用 `PanelLeftClose`，label「收起文件面板」，紧贴分隔条。
+- 头部右侧依次为加载/错误指示、排序、新建文件与收起按钮；排序入口使用 `ArrowUpDown`，label「文件排序」；收起按钮使用 `PanelLeftClose`，label「收起文件面板」，紧贴分隔条。
+- 排序菜单（`PopoverMenu`，宽 144px，`placement="down"`）：名称 / 类型单选，「文件夹优先」「倒序」两个独立开关；默认名称 + 文件夹优先；选择排序键后关闭菜单，开关保持展开便于连续调整。偏好写入 `config/settings.json`（`explorerSortBy` / `explorerFoldersFirst` / `explorerSortReverse`）。名称使用 `Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })` 自然排序（`file2` 在 `file10` 前），倒序只翻转组内顺序，文件夹仍置顶；类型排序按扩展名分组，无扩展名文件排最后。
 - 激活行：2px `accent` 左边线 + `bg-accent/[0.06]`；不要整块饱和高亮。
 - 右键菜单：纸卡 + `shadow-print`；重命名/删除使用文字 + 图标。
 
@@ -621,6 +624,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.30 | 2026-10-26 | 文件树排序：头部新增排序菜单（名称 / 类型单选、文件夹优先 / 倒序开关），偏好持久化到 `config/settings.json`；排序改为目录优先 + `Intl.Collator` 自然排序，倒序只翻转组内顺序；`MenuOption` 新增 `menuitemcheckbox` 角色并入 ↑↓ 导航 |
 | v1.29 | 2026-10-26 | 多工作区与首页：每个打开的工作区常驻视图，切换标签/返回首页只隐藏不卸载；顶栏主操作改为「返回首页 / 返回工作区」，关闭只在标签 ×；工作区标签新增待操作 / 错误 / 运行中状态标记；关闭后固定状态（打开的文件、会话、草稿）保留并恢复 |
 | v1.28 | 2026-10-26 | 面板开关回归面板：文件树头部最右端、聊天头部最左端各一个收起按钮，顶栏移除两个开关；收起后显示 26px 全高窄条，整条可点击、图标居中，点击展开；未配置 API 的聊天空状态保留头部与收起按钮 |
 | v1.27 | 2026-10-24 | 聊天头部移除重复的快捷键提示与设置按钮，入口统一到顶栏；头部仅保留「Pi Agent 对话 · 就绪」标题与状态 |

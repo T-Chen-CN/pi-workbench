@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   AlertTriangle,
+  ArrowUpDown,
   File as FileIcon,
   FileCode,
   FileJson,
@@ -17,13 +18,21 @@ import {
 import { api } from '../api'
 import { useEditorStore, editorStoreFor } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
+import { useSettingsStore } from '../store/settingsStore'
 import { localizeError } from '../i18n/errors'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { toast } from '../store/toastStore'
-import { flattenVisibleTree } from '../utils/fileTree'
+import {
+  flattenVisibleTree,
+  sortTreeEntries,
+  sortTreeNodes,
+  type ExplorerSortBy,
+  type SortTreeOptions,
+} from '../utils/fileTree'
+import { persistAppSettings } from '../utils/persistSettings'
 import { useVirtualRows } from '../hooks/useVirtualRows'
 import { VirtualRows } from './VirtualRows'
-import { Button, EmptyState, IconButton, Input, Modal } from './ui'
+import { Button, EmptyState, IconButton, Input, MenuOption, Modal, PopoverMenu } from './ui'
 import { dirname, joinPath } from '../utils/filePath'
 import { onAppEvent } from '../utils/appEvents'
 
@@ -49,14 +58,6 @@ function mergeTree(previous: TreeNode[], incoming: TreeNode[]): TreeNode[] {
     return existing
       ? { ...node, isExpanded: existing.isExpanded, children: existing.children }
       : node
-  })
-}
-
-/** 目录优先、名称排序 */
-function sortEntries(items: FileEntry[]): TreeNode[] {
-  return [...items].sort((a, b) => {
-    if (a.isDirectory !== b.isDirectory) return b.isDirectory ? -1 : 1
-    return a.name.localeCompare(b.name)
   })
 }
 
@@ -92,12 +93,24 @@ export const FileExplorer: React.FC<{
   const [tree, setTree] = useState<TreeNode[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [sortMenuOpen, setSortMenuOpen] = useState(false)
   const [createDialog, setCreateDialog] = useState<CreateFileDialogState>({
     isOpen: false,
     fileName: '',
     parentPath: null,
   })
   const [contextMenu, setContextMenu] = useState<{ node: TreeNode; x: number; y: number } | null>(null)
+  const explorerSortBy = useSettingsStore((state) => state.explorerSortBy)
+  const explorerFoldersFirst = useSettingsStore((state) => state.explorerFoldersFirst)
+  const explorerSortReverse = useSettingsStore((state) => state.explorerSortReverse)
+  const sortOptions = useMemo<SortTreeOptions>(
+    () => ({
+      by: explorerSortBy,
+      foldersFirst: explorerFoldersFirst,
+      reverse: explorerSortReverse,
+    }),
+    [explorerSortBy, explorerFoldersFirst, explorerSortReverse]
+  )
   const editorStore = workspacePath ? editorStoreFor(workspacePath) : null
   const currentFilePath = useEditorStore(workspacePath, (state) => state.currentFile?.path)
 
@@ -113,6 +126,17 @@ export const FileExplorer: React.FC<{
     treeRef.current = tree
   }, [tree])
 
+  // 异步加载完成后读取最新排序选项，避免闭包拿到旧值
+  const sortOptionsRef = useRef<SortTreeOptions>(sortOptions)
+  useEffect(() => {
+    sortOptionsRef.current = sortOptions
+  }, [sortOptions])
+
+  // 排序偏好变化时重排已加载的树，不必重新读取磁盘
+  useEffect(() => {
+    setTree((previous) => (previous.length > 0 ? sortTreeNodes(previous, sortOptions) : previous))
+  }, [sortOptions])
+
   /** 递归刷新所有已展开目录的子节点，保持展开状态 */
   const refreshExpanded = useCallback(async function refresh(nodes: TreeNode[]): Promise<TreeNode[]> {
     return Promise.all(
@@ -120,7 +144,7 @@ export const FileExplorer: React.FC<{
         if (!node.isDirectory || !node.isExpanded) return node
         const result = await api.listDirectory(node.path)
         if (!result.success || !result.items) return node
-        const merged = mergeTree(node.children ?? [], sortEntries(result.items))
+        const merged = mergeTree(node.children ?? [], sortTreeEntries(result.items, sortOptionsRef.current))
         return { ...node, children: await refresh(merged) }
       })
     )
@@ -132,7 +156,7 @@ export const FileExplorer: React.FC<{
       setError(null)
       const dirResult = await api.listDirectory(rootPath)
       if (dirResult.success && dirResult.items) {
-        const merged = mergeTree(treeRef.current, sortEntries(dirResult.items))
+        const merged = mergeTree(treeRef.current, sortTreeEntries(dirResult.items, sortOptionsRef.current))
         setTree(await refreshExpanded(merged))
       } else {
         setError(dirResult.error || 'Failed to list workspace directory')
@@ -190,7 +214,7 @@ export const FileExplorer: React.FC<{
       if (!result.success || !result.items) {
         throw new Error(result.error || 'Failed to list directory')
       }
-      return sortEntries(result.items)
+      return sortTreeEntries(result.items, sortOptionsRef.current)
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
       toast.error(t('loadDirectoryFailed', { error: localizeError(errorMsg) }))
@@ -383,6 +407,24 @@ export const FileExplorer: React.FC<{
     }
   }
 
+  const handleSortBy = (by: ExplorerSortBy) => {
+    useSettingsStore.getState().setExplorerSortBy(by)
+    void persistAppSettings({ explorerSortBy: by })
+    setSortMenuOpen(false)
+  }
+
+  const handleFoldersFirstChange = () => {
+    const next = !useSettingsStore.getState().explorerFoldersFirst
+    useSettingsStore.getState().setExplorerFoldersFirst(next)
+    void persistAppSettings({ explorerFoldersFirst: next })
+  }
+
+  const handleSortReverseChange = () => {
+    const next = !useSettingsStore.getState().explorerSortReverse
+    useSettingsStore.getState().setExplorerSortReverse(next)
+    void persistAppSettings({ explorerSortReverse: next })
+  }
+
   const renderRow = (node: TreeNode, depth: number) => {
     const active = currentFilePath === node.path
     const NodeIcon = node.isDirectory ? (node.isExpanded ? FolderOpen : Folder) : fileIconFor(node.name)
@@ -428,6 +470,53 @@ export const FileExplorer: React.FC<{
               <AlertTriangle size={13} />
             </span>
           )}
+          <div className="relative">
+            <IconButton
+              icon={ArrowUpDown}
+              label={t('sortFiles')}
+              size="sm"
+              active={sortMenuOpen}
+              aria-pressed={undefined}
+              aria-haspopup="menu"
+              aria-expanded={sortMenuOpen}
+              onClick={() => setSortMenuOpen((open) => !open)}
+            />
+            <PopoverMenu
+              open={sortMenuOpen}
+              onClose={() => setSortMenuOpen(false)}
+              label={t('sortFiles')}
+              placement="down"
+              className="w-36 py-1"
+            >
+              <MenuOption
+                selected={explorerSortBy === 'name'}
+                onSelect={() => handleSortBy('name')}
+              >
+                {t('sortByName')}
+              </MenuOption>
+              <MenuOption
+                selected={explorerSortBy === 'type'}
+                onSelect={() => handleSortBy('type')}
+              >
+                {t('sortByType')}
+              </MenuOption>
+              <div role="separator" className="my-1 border-t border-rule-divide" />
+              <MenuOption
+                role="menuitemcheckbox"
+                selected={explorerFoldersFirst}
+                onSelect={handleFoldersFirstChange}
+              >
+                {t('sortFoldersFirst')}
+              </MenuOption>
+              <MenuOption
+                role="menuitemcheckbox"
+                selected={explorerSortReverse}
+                onSelect={handleSortReverseChange}
+              >
+                {t('sortReverse')}
+              </MenuOption>
+            </PopoverMenu>
+          </div>
           <IconButton
             icon={Plus}
             label={t('createNewFile')}

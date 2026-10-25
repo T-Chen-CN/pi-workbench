@@ -161,12 +161,14 @@ export interface PopoverMenuProps {
   label: string
   /** `menu` adds arrow-key navigation; `dialog` is a free-form panel */
   role?: 'menu' | 'dialog'
+  /** 默认向上展开；位于面板顶部的触发器改为向下展开 */
+  placement?: 'up' | 'down'
   className?: string
   children: React.ReactNode
 }
 
 /**
- * Anchored popover that opens upward from its trigger. The trigger and this
+ * Anchored popover that opens away from its trigger. The trigger and this
  * popover live inside the same relatively-positioned wrapper, so the menu stays
  * next to the control it belongs to instead of floating elsewhere. The menu is
  * clamped inside the nearest clipping container so it never runs off a panel.
@@ -176,6 +178,7 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
   onClose,
   label,
   role = 'menu',
+  placement = 'up',
   className = '',
   children,
 }) => {
@@ -225,7 +228,7 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
     const items = () =>
       Array.from(
         menuRef.current?.querySelectorAll<HTMLButtonElement>(
-          '[role="menuitemradio"]:not([disabled])'
+          '[role^="menuitem"]:not([disabled])'
         ) ?? []
       )
 
@@ -265,7 +268,7 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
 
     if (isMenu) {
       const checked = menuRef.current?.querySelector<HTMLButtonElement>(
-        '[role="menuitemradio"][aria-checked="true"]:not([disabled])'
+        '[role^="menuitem"][aria-checked="true"]:not([disabled])'
       )
       ;(checked ?? items()[0])?.focus()
     } else {
@@ -290,7 +293,9 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
       aria-label={label}
       tabIndex={role === 'dialog' ? -1 : undefined}
       style={{ left: offset ?? 0 }}
-      className={`absolute bottom-full z-20 mb-1 border border-line bg-raised shadow-print focus:outline-none ${className}`}
+      className={`absolute z-20 border border-line bg-raised shadow-print focus:outline-none ${
+        placement === 'up' ? 'bottom-full mb-1' : 'top-full mt-1'
+      } ${className}`}
     >
       {children}
     </div>
@@ -301,6 +306,8 @@ export interface MenuOptionProps {
   selected?: boolean
   disabled?: boolean
   onSelect: () => void
+  /** `radio` 用于互斥选项，`checkbox` 用于独立开关 */
+  role?: 'menuitemradio' | 'menuitemcheckbox'
   /** `data` renders the label in mono for ids and model names */
   variant?: 'value' | 'data'
   meta?: React.ReactNode
@@ -312,6 +319,7 @@ export const MenuOption: React.FC<MenuOptionProps> = ({
   selected = false,
   disabled = false,
   onSelect,
+  role = 'menuitemradio',
   variant = 'value',
   meta,
   title,
@@ -319,7 +327,7 @@ export const MenuOption: React.FC<MenuOptionProps> = ({
 }) => (
   <button
     type="button"
-    role="menuitemradio"
+    role={role}
     aria-checked={selected}
     disabled={disabled}
     title={title}
