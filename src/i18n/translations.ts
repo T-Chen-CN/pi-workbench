@@ -93,6 +93,13 @@ export const translations = {
     deleteSessionConfirm: '删除会话“{name}”？此操作不可恢复。',
     closeSessionTab: '关闭会话标签',
     closeRunningSessionConfirm: '该会话正在响应，关闭标签会中止请求。继续？',
+    closeSessionTitle: '关闭会话',
+    closeProjectTitle: '关闭项目',
+    continueClose: '继续关闭',
+    closeProjectActiveConfirm:
+      '该项目还有正在运行的会话或等待中的审批。关闭项目会中止它们。继续？',
+    closeProjectDirtyActiveConfirm:
+      '有未保存的修改，且该项目还有正在运行的会话或等待中的审批。关闭会丢失修改并中止任务。继续？',
     sessionOpened: '已打开',
     sessionsEmpty: '还没有会话',
     sessionLimitReached: '最多同时打开 {count} 个会话标签',
@@ -636,6 +643,13 @@ export const translations = {
     closeSessionTab: 'Close session tab',
     closeRunningSessionConfirm:
       'This session is still responding. Closing the tab will abort the request. Continue?',
+    closeSessionTitle: 'Close session',
+    closeProjectTitle: 'Close project',
+    continueClose: 'Close anyway',
+    closeProjectActiveConfirm:
+      'This project still has running sessions or pending approvals. Closing the project will stop them. Continue?',
+    closeProjectDirtyActiveConfirm:
+      'There are unsaved changes, and this project still has running sessions or pending approvals. Closing will discard the changes and stop them. Continue?',
     sessionOpened: 'Open',
     sessionsEmpty: 'No sessions yet',
     sessionLimitReached: 'You can keep up to {count} session tabs open',

@@ -1515,9 +1515,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ workspacePath }) => {
     async (sessionId: string) => {
       const key = conversationKey(workspacePath, sessionId)
       const streaming = useSessionStore.getState().streaming[key]
-      if (streaming) {
+      const approvalPending = useApprovalStore
+        .getState()
+        .requests.some(
+          (request) =>
+            request.workspaceDir === workspacePath && request.sessionId === sessionId
+        )
+      if (streaming || approvalPending) {
         const ok = await confirmDialog({
+          title: t('closeSessionTitle'),
           message: t('closeRunningSessionConfirm'),
+          confirmLabel: t('continueClose'),
+          cancelLabel: t('cancel'),
           danger: true,
         })
         if (!ok) return

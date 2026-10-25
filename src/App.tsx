@@ -44,6 +44,7 @@ import { useDiffStore } from './store/diffStore'
 import { confirmDialog } from './store/dialogStore'
 import { useSettingsStore } from './store/settingsStore'
 import { useApprovalStore } from './store/approvalStore'
+import { hasRunningWork } from './utils/runningWork'
 import { useUpdaterStore } from './store/updaterStore'
 import { localizeError } from './i18n/errors'
 import { commandPaletteShortcut } from './utils/shortcuts'
@@ -215,10 +216,10 @@ export default function App() {
       .catch((err) => console.error('Failed to load recent workspaces:', err))
   }, [setRecentWorkspaces])
 
-  // 有未保存修改时阻止关闭窗口
+  // 有未保存修改或运行中的任务时阻止关闭窗口
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {
-      if (useEditorStore.getState().hasDirtyFiles()) {
+      if (useEditorStore.getState().hasDirtyFiles() || hasRunningWork()) {
         event.preventDefault()
         event.returnValue = ''
       }
@@ -254,9 +255,28 @@ export default function App() {
     useDiffStore.getState().clearDiff()
   }
 
-  const confirmCloseWorkspace = async (): Promise<boolean> => {
+  const confirmSwitchWorkspace = async (): Promise<boolean> => {
     if (!useEditorStore.getState().hasDirtyFiles()) return true
     return confirmDialog({ message: t('discardChangesConfirm'), danger: true })
+  }
+
+  const confirmCloseWorkspace = async (targetPath: string): Promise<boolean> => {
+    const closingCurrent = targetPath === workspace
+    const dirty = closingCurrent && useEditorStore.getState().hasDirtyFiles()
+    const active = hasRunningWork(targetPath)
+    if (!dirty && !active) return true
+    const message = dirty
+      ? active
+        ? t('closeProjectDirtyActiveConfirm')
+        : t('discardChangesConfirm')
+      : t('closeProjectActiveConfirm')
+    return confirmDialog({
+      title: t('closeProjectTitle'),
+      message,
+      confirmLabel: t('continueClose'),
+      cancelLabel: t('cancel'),
+      danger: true,
+    })
   }
 
   const openWorkspaceAt = async (targetPath: string, initialPrompt?: string) => {
@@ -268,7 +288,7 @@ export default function App() {
 
       if (targetPath === workspace) return
 
-      if (workspace && !(await confirmCloseWorkspace())) {
+      if (workspace && !(await confirmSwitchWorkspace())) {
         return
       }
 
@@ -373,7 +393,7 @@ export default function App() {
 
   const closeWorkspaceTab = async (targetPath: string) => {
     const closingCurrent = targetPath === workspace
-    if (closingCurrent && !(await confirmCloseWorkspace())) return
+    if (!(await confirmCloseWorkspace(targetPath))) return
 
     // 只释放该工作区的 Agent 与会话资源
     await piAgentAPI.dispose(targetPath)

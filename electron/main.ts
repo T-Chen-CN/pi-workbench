@@ -521,8 +521,8 @@ function createWindow() {
     mainWindow = null
   })
 
-  // 渲染进程 beforeunload 阻止关闭时，Electron 会保持窗口打开但不给用户任何提示。
-  // 这里用原生对话框把选择权交给用户；确认放弃后才允许卸载（will-prevent-unload）。
+  // 渲染进程 beforeunload 阻止关闭时（未保存修改或运行中的会话 / 审批），
+  // Electron 会保持窗口打开但不给用户任何提示；这里用原生对话框把选择权交给用户。
   mainWindow.webContents.on('will-prevent-unload', (event) => {
     if (!mainWindow || mainWindow.isDestroyed()) return
     if (typeof dialog.showMessageBoxSync !== 'function') {
@@ -532,16 +532,20 @@ function createWindow() {
     const zh = app.getLocale?.().toLowerCase().startsWith('zh') ?? true
     const choice = dialog.showMessageBoxSync(mainWindow, {
       type: 'warning',
-      buttons: zh ? ['取消', '放弃修改并关闭'] : ['Cancel', 'Discard and close'],
+      buttons: zh ? ['取消', '继续关闭'] : ['Cancel', 'Close anyway'],
       defaultId: 0,
       cancelId: 0,
       noLink: true,
-      title: zh ? '未保存的修改' : 'Unsaved changes',
-      message: zh ? '有文件尚未保存。' : 'Some files have unsaved changes.',
-      detail: zh ? '关闭窗口会丢失这些修改。' : 'Closing the window will discard them.',
+      title: zh ? '还有未完成的工作' : 'Unfinished work',
+      message: zh
+        ? '有未保存的修改，或仍有会话 / 审批在进行。'
+        : 'There are unsaved changes, or sessions or approvals are still running.',
+      detail: zh
+        ? '关闭窗口会丢失未保存的修改，并中止运行中的会话与等待中的审批。'
+        : 'Closing will discard unsaved changes and stop running sessions and pending approvals.',
     })
     if (choice === 1) {
-      // 用户明确放弃未保存内容：清掉已加载工作区的草稿，避免下次启动又提示恢复
+      // 用户明确继续关闭：清掉已加载工作区的草稿，避免下次启动又提示恢复
       for (const loaded of pluginManager.loadedWorkspaces()) {
         const canonical = canonicalizePath(loaded)
         if (canonical) draftStore.clear(canonical)
