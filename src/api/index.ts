@@ -33,6 +33,8 @@ import type {
   DraftListResult,
   DraftResult,
   PendingMessagesMap,
+  EditorTabs,
+  EditorTabsResult,
 } from '../types/electron'
 
 // Mock API for browser development
@@ -212,6 +214,28 @@ const mockAPI = {
   draftDelete: async (): Promise<DraftResult> => ({ success: true }),
   draftList: async (): Promise<DraftListResult> => ({ success: true, drafts: [] }),
   draftClear: async (): Promise<DraftResult> => ({ success: true }),
+  editorTabsGet: async (workspacePath: string): Promise<EditorTabsResult> => {
+    try {
+      const raw = localStorage.getItem(`pi-workbench-editor-tabs:${workspacePath}`)
+      if (!raw) return { success: true, tabs: { open: [], active: null } }
+      const parsed = JSON.parse(raw) as { open?: unknown; active?: unknown }
+      return {
+        success: true,
+        tabs: {
+          open: Array.isArray(parsed.open)
+            ? parsed.open.filter((item): item is string => typeof item === 'string')
+            : [],
+          active: typeof parsed.active === 'string' ? parsed.active : null,
+        },
+      }
+    } catch {
+      return { success: true, tabs: { open: [], active: null } }
+    }
+  },
+  editorTabsSet: async (workspacePath: string, tabs: EditorTabs): Promise<WorkspaceResult> => {
+    localStorage.setItem(`pi-workbench-editor-tabs:${workspacePath}`, JSON.stringify(tabs))
+    return { success: true }
+  },
 
   apiConfigGet: async (): Promise<ApiConfigGetResult> => {
     console.log('[Mock] apiConfigGet')
@@ -369,6 +393,9 @@ export const api = {
     electronAPI.draftDelete(workspacePath, filePath),
   draftList: (workspacePath: string) => electronAPI.draftList(workspacePath),
   draftClear: (workspacePath: string) => electronAPI.draftClear(workspacePath),
+  editorTabsGet: (workspacePath: string) => electronAPI.editorTabsGet(workspacePath),
+  editorTabsSet: (workspacePath: string, tabs: EditorTabs) =>
+    electronAPI.editorTabsSet(workspacePath, tabs),
 
   // API Configuration management (portable architecture)
   apiConfigGet: () => electronAPI.apiConfigGet(),

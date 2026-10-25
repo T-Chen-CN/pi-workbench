@@ -15,6 +15,8 @@ export default tseslint.config(
       'config/**',
       'logs/**',
       '.claude/**',
+      '.worktrees/**',
+      '**/.worktrees/**',
     ],
   },
   js.configs.recommended,

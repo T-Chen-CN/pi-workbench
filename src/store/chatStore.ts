@@ -128,10 +128,11 @@ interface ChatState {
   conversations: Record<string, ConversationState>
   /** 欢迎页带入的草稿，等工作区会话初始化后写入激活会话 */
   pendingDraft: string
+  pendingDraftWorkspace: string | null
 
   ensureConversation: (key: string) => void
   removeConversation: (key: string) => void
-  setPendingDraft: (value: string) => void
+  setPendingDraft: (value: string, workspacePath?: string) => void
   clearPendingDraft: () => void
   addMessage: (key: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => void
   startStreamingMessage: (key: string) => string
@@ -261,9 +262,11 @@ function closeThinking(message: ChatMessage, now = Date.now()): ChatMessage {
 export const useChatStore = create<ChatState>((set, get) => ({
   conversations: {},
   pendingDraft: '',
+  pendingDraftWorkspace: null,
 
-  setPendingDraft: (value) => set({ pendingDraft: value }),
-  clearPendingDraft: () => set({ pendingDraft: '' }),
+  setPendingDraft: (value, workspacePath) =>
+    set({ pendingDraft: value, pendingDraftWorkspace: workspacePath ?? null }),
+  clearPendingDraft: () => set({ pendingDraft: '', pendingDraftWorkspace: null }),
 
   ensureConversation: (key) =>
     set((state) =>
@@ -732,5 +735,5 @@ export const useChatStore = create<ChatState>((set, get) => ({
       updateExisting(state, key, (current) => ({ ...current, messages: [] }))
     ),
 
-  reset: () => set({ conversations: {}, pendingDraft: '' }),
+  reset: () => set({ conversations: {}, pendingDraft: '', pendingDraftWorkspace: null }),
 }))

@@ -6,7 +6,7 @@
 **架构**: Electron 44 + React 19 + TypeScript
 **运行要求**: Node.js ≥ 22.19（Pi SDK 要求；Electron 44 内置 Node 24）  
 **当前阶段**: Phase 6 持续优化
-**最后更新**: 2026-10-24
+**最后更新**: 2026-10-26
 
 ---
 
@@ -27,6 +27,7 @@
 - ✅ Phase 2 完成：工作区与对话体验（流式输出、修改审阅、上下文选择、多工作区）
 - ✅ Phase 3 完成：终端集成（xterm + node-pty，输出可附加给 Agent）
 - ✅ Phase 4 完成：工作台插件系统（命令 / 钩子 / 命令面板，示例 Git 插件）
+- ✅ 多工作区常驻视图：每个打开的工作区保留完整运行时状态，切换标签或返回首页不重建；关闭标签只释放运行时，打开的文件与会话落盘恢复
 - 🟡 Phase 6 持续：性能、快捷键、主题、崩溃恢复、自动更新等
 
 ---
@@ -600,9 +601,17 @@ async function initAgent(config: ApiConfig) {
 **会话存储策略**:
 - ✅ Agent 会话：`{appDir}/data/agent/sessions/*.jsonl`（Pi JSONL，按 cwd 过滤；一个工作区可同时有多个会话）
 - ✅ 打开中的会话标签与激活会话：`{workspaceDir}/.pi-workbench/chat-tabs.json`
+- ✅ 打开中的编辑器标签与当前文件：`{workspaceDir}/.pi-workbench/editor-tabs.json`（只存相对路径；显式关闭工作区不清除，重新打开时恢复）
 - ✅ 会话标题：`session_info` 条目；首轮回复后由模型生成一次，手动重命名优先
 - ✅ 同工作区多个会话可并行运行（每个会话独立 `AgentSession`，共享 `ModelRuntime` 与环境租约）
 - 会话 API：`agent:sessions:list/open/create/close/rename/delete`，流式事件带 `workspaceDir + sessionId + requestId`
+
+**多工作区与状态保留**:
+- ✅ 每个打开的工作区各自挂载一套常驻视图（`WorkspaceView`）和按工作区隔离的 editor / diff store；切换标签、返回首页只切换可见性（`visibility: hidden` + `inert`），不卸载、不 reset。
+- ✅ 运行期状态全部保留：Monaco 撤销栈与滚动、聊天草稿/附件/滚动、终端进程与缓冲区、文件树展开、面板宽度与收起状态、流式输出。
+- ✅ 关闭工作区标签是唯一回收运行时的入口：确认未保存文件 / 运行中任务 → 写 `editor-tabs.json` → dispose Agent、终端与监听 → 卸载视图。`chat-tabs.json`、`editor-tabs.json` 和草稿都**不删除**。
+- ✅ 退出应用 / 重启：运行时全部回收，不自动恢复工作区标签；固定状态仍在磁盘，下次从最近项目打开工作区时恢复。
+- ✅ 固定状态范围：打开的文件（含顺序）、当前文件、打开的会话与激活项、草稿。面板宽度、终端开关、会话模式属于运行期，不落盘。
 
 **日志文件位置**:
 - ✅ 所有日志：`{appDir}/logs/`
@@ -951,6 +960,6 @@ docs/
 
 ---
 
-**最后更新**: 2026-10-24  
+**最后更新**: 2026-10-26  
 **维护者**: Pi Workbench Team  
 **AI 友好**: 本文件专为 AI 助手设计，包含项目的所有关键约束和最佳实践

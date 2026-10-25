@@ -1,28 +1,28 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useEditorStore } from '../src/store/editorStore'
+import { editorStoreFor, resetEditorStores } from '../src/store/editorStore'
 import { useChatStore } from '../src/store/chatStore'
 import { useToastStore, toast } from '../src/store/toastStore'
 import { useWorkspaceStore } from '../src/store/workspaceStore'
-import { useDiffStore } from '../src/store/diffStore'
+import { diffStoreFor, resetDiffStores } from '../src/store/diffStore'
 import { useSessionStore } from '../src/store/sessionStore'
 
 beforeEach(() => {
-  useEditorStore.getState().reset()
+  resetEditorStores()
+  resetDiffStores()
   useChatStore.getState().reset()
   useToastStore.setState({ messages: [] })
   useWorkspaceStore.setState({ workspacePath: null, openWorkspaces: [], recentWorkspaces: [] })
-  useDiffStore.getState().clearDiff()
 })
 
 describe('editorStore', () => {
   it('stores a pending reveal and consumes it', () => {
-    useEditorStore.getState().revealLine('/ws/a.ts', 42.7)
-    expect(useEditorStore.getState().pendingReveal).toEqual({
+    editorStoreFor('/ws').getState().revealLine('/ws/a.ts', 42.7)
+    expect(editorStoreFor('/ws').getState().pendingReveal).toEqual({
       path: '/ws/a.ts',
       line: 42,
     })
-    useEditorStore.getState().consumeReveal()
-    expect(useEditorStore.getState().pendingReveal).toBeNull()
+    editorStoreFor('/ws').getState().consumeReveal()
+    expect(editorStoreFor('/ws').getState().pendingReveal).toBeNull()
   })
 
   const file = {
@@ -34,48 +34,48 @@ describe('editorStore', () => {
   }
 
   it('opens files and selects the latest one', () => {
-    useEditorStore.getState().addOpenFile(file)
-    expect(useEditorStore.getState().openFiles).toHaveLength(1)
-    expect(useEditorStore.getState().currentFile?.path).toBe(file.path)
+    editorStoreFor('/ws').getState().addOpenFile(file)
+    expect(editorStoreFor('/ws').getState().openFiles).toHaveLength(1)
+    expect(editorStoreFor('/ws').getState().currentFile?.path).toBe(file.path)
   })
 
   it('updates content immutably and tracks dirty state', () => {
-    useEditorStore.getState().addOpenFile(file)
-    useEditorStore.getState().updateOpenFile(file.path, { content: 'changed' })
-    useEditorStore.getState().markDirty(file.path)
+    editorStoreFor('/ws').getState().addOpenFile(file)
+    editorStoreFor('/ws').getState().updateOpenFile(file.path, { content: 'changed' })
+    editorStoreFor('/ws').getState().markDirty(file.path)
 
-    const state = useEditorStore.getState()
+    const state = editorStoreFor('/ws').getState()
     expect(state.currentFile?.content).toBe('changed')
     expect(state.currentFile?.isDirty).toBe(true)
     expect(state.hasDirtyFiles()).toBe(true)
 
     state.markClean(file.path)
-    expect(useEditorStore.getState().hasDirtyFiles()).toBe(false)
+    expect(editorStoreFor('/ws').getState().hasDirtyFiles()).toBe(false)
   })
 
   it('switches the current file when the active tab is closed', () => {
-    useEditorStore.getState().addOpenFile(file)
-    useEditorStore.getState().addOpenFile({ ...file, path: '/tmp/b.ts', name: 'b.ts' })
-    useEditorStore.getState().removeOpenFile('/tmp/b.ts')
-    expect(useEditorStore.getState().currentFile?.path).toBe('/tmp/a.ts')
+    editorStoreFor('/ws').getState().addOpenFile(file)
+    editorStoreFor('/ws').getState().addOpenFile({ ...file, path: '/tmp/b.ts', name: 'b.ts' })
+    editorStoreFor('/ws').getState().removeOpenFile('/tmp/b.ts')
+    expect(editorStoreFor('/ws').getState().currentFile?.path).toBe('/tmp/a.ts')
   })
 
   it('clears dirty tracking when a dirty file is closed', () => {
-    useEditorStore.getState().addOpenFile(file)
-    useEditorStore.getState().markDirty(file.path)
+    editorStoreFor('/ws').getState().addOpenFile(file)
+    editorStoreFor('/ws').getState().markDirty(file.path)
 
-    useEditorStore.getState().removeOpenFile(file.path)
+    editorStoreFor('/ws').getState().removeOpenFile(file.path)
 
-    expect(useEditorStore.getState().hasDirtyFiles()).toBe(false)
-    expect(useEditorStore.getState().unsavedChanges.has(file.path)).toBe(false)
+    expect(editorStoreFor('/ws').getState().hasDirtyFiles()).toBe(false)
+    expect(editorStoreFor('/ws').getState().unsavedChanges.has(file.path)).toBe(false)
   })
 
   it('clears stale dirty tracking when reopening a file from disk', () => {
-    useEditorStore.setState({ unsavedChanges: new Set([file.path]) })
+    editorStoreFor('/ws').setState({ unsavedChanges: new Set([file.path]) })
 
-    useEditorStore.getState().addOpenFile(file)
+    editorStoreFor('/ws').getState().addOpenFile(file)
 
-    expect(useEditorStore.getState().unsavedChanges.has(file.path)).toBe(false)
+    expect(editorStoreFor('/ws').getState().unsavedChanges.has(file.path)).toBe(false)
   })
 })
 
@@ -390,12 +390,12 @@ describe('diffStore review queue', () => {
   ]
 
   it('opens a merged review queue', () => {
-    useDiffStore.getState().openEdits([
+    diffStoreFor('/ws').getState().openEdits([
       ...edits,
       { path: '/tmp/a.ts', oldContent: 'a1', newContent: 'a2' },
     ])
 
-    const state = useDiffStore.getState()
+    const state = diffStoreFor('/ws').getState()
     expect(state.isOpen).toBe(true)
     expect(state.currentIndex).toBe(0)
     expect(state.edits).toEqual([
@@ -405,29 +405,29 @@ describe('diffStore review queue', () => {
   })
 
   it('clamps navigation to the queue bounds', () => {
-    useDiffStore.getState().openEdits(edits)
-    useDiffStore.getState().setCurrentIndex(5)
-    expect(useDiffStore.getState().currentIndex).toBe(1)
-    useDiffStore.getState().setCurrentIndex(-3)
-    expect(useDiffStore.getState().currentIndex).toBe(0)
+    diffStoreFor('/ws').getState().openEdits(edits)
+    diffStoreFor('/ws').getState().setCurrentIndex(5)
+    expect(diffStoreFor('/ws').getState().currentIndex).toBe(1)
+    diffStoreFor('/ws').getState().setCurrentIndex(-3)
+    expect(diffStoreFor('/ws').getState().currentIndex).toBe(0)
   })
 
   it('removes edits and closes when the queue is empty', () => {
-    useDiffStore.getState().openEdits(edits)
-    useDiffStore.getState().setCurrentIndex(1)
+    diffStoreFor('/ws').getState().openEdits(edits)
+    diffStoreFor('/ws').getState().setCurrentIndex(1)
 
-    useDiffStore.getState().removeEdit('/tmp/b.ts')
-    expect(useDiffStore.getState().edits).toHaveLength(1)
-    expect(useDiffStore.getState().currentIndex).toBe(0)
+    diffStoreFor('/ws').getState().removeEdit('/tmp/b.ts')
+    expect(diffStoreFor('/ws').getState().edits).toHaveLength(1)
+    expect(diffStoreFor('/ws').getState().currentIndex).toBe(0)
 
-    useDiffStore.getState().removeEdit('/tmp/a.ts')
-    expect(useDiffStore.getState().edits).toEqual([])
-    expect(useDiffStore.getState().isOpen).toBe(false)
+    diffStoreFor('/ws').getState().removeEdit('/tmp/a.ts')
+    expect(diffStoreFor('/ws').getState().edits).toEqual([])
+    expect(diffStoreFor('/ws').getState().isOpen).toBe(false)
   })
 
   it('does not open an empty review queue', () => {
-    useDiffStore.getState().openEdits([])
-    expect(useDiffStore.getState().isOpen).toBe(false)
+    diffStoreFor('/ws').getState().openEdits([])
+    expect(diffStoreFor('/ws').getState().isOpen).toBe(false)
   })
 })
 

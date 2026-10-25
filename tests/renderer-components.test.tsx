@@ -10,7 +10,7 @@ import { MarkdownBody } from '../src/components/AgentMarkdown'
 import { AgentParts } from '../src/components/AgentTrace'
 import { useWorkspaceStore } from '../src/store/workspaceStore'
 import { useChatStore, conversationKey } from '../src/store/chatStore'
-import { useEditorStore } from '../src/store/editorStore'
+import { editorStoreFor, resetEditorStores } from '../src/store/editorStore'
 import { useSelectionStore } from '../src/store/selectionStore'
 import { useSessionStore } from '../src/store/sessionStore'
 import { useSettingsStore } from '../src/store/settingsStore'
@@ -151,7 +151,7 @@ const sessionKey = conversationKey('/ws', 's1')
 
 beforeEach(() => {
   useChatStore.getState().reset()
-  useEditorStore.getState().reset()
+  resetEditorStores()
   useSelectionStore.getState().clearSelection()
   useSessionStore.getState().reset()
   useSettingsStore.getState().setRunWhileBusy('queue')
@@ -1101,10 +1101,10 @@ describe('FileExplorer', () => {
 
     await waitFor(() => {
       expect(
-        useEditorStore.getState().openFiles.some((file) => file.path === '/ws/empty.txt')
+        editorStoreFor('/ws').getState().openFiles.some((file) => file.path === '/ws/empty.txt')
       ).toBe(true)
     })
-    expect(useEditorStore.getState().currentFile?.content).toBe('')
+    expect(editorStoreFor('/ws').getState().currentFile?.content).toBe('')
   })
 
   it('collapses the file panel from the header button', async () => {
@@ -1131,16 +1131,16 @@ describe('MonacoEditor', () => {
     vi.mocked(api.exists).mockResolvedValue({ success: true, exists: true })
     vi.mocked(api.readFile).mockResolvedValue({ success: true, content: 'updated-a' })
 
-    render(<MonacoEditor />)
+    render(<MonacoEditor workspacePath="/ws" />)
     act(() => {
-      useEditorStore.getState().addOpenFile({
+      editorStoreFor('/ws').getState().addOpenFile({
         path: '/ws/a.ts',
         name: 'a.ts',
         content: 'old-a',
         isDirty: false,
         isSaving: false,
       })
-      useEditorStore.getState().addOpenFile({
+      editorStoreFor('/ws').getState().addOpenFile({
         path: '/ws/b.ts',
         name: 'b.ts',
         content: 'b',
@@ -1155,7 +1155,7 @@ describe('MonacoEditor', () => {
     })
 
     await waitFor(() => {
-      const file = useEditorStore.getState().openFiles.find((item) => item.path === '/ws/a.ts')
+      const file = editorStoreFor('/ws').getState().openFiles.find((item) => item.path === '/ws/a.ts')
       expect(file?.content).toBe('updated-a')
     })
   })
@@ -1171,7 +1171,7 @@ describe('path references', () => {
     fireEvent.click(await screen.findByText('src/a.ts:42'))
 
     await waitFor(() => {
-      expect(useEditorStore.getState().pendingReveal).toEqual({
+      expect(editorStoreFor('/ws').getState().pendingReveal).toEqual({
         path: '/ws/src/a.ts',
         line: 42,
       })
