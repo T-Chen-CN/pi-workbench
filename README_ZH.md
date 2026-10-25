@@ -29,22 +29,22 @@ Pi Workbench 是一个轻量级桌面应用，提供类似 Cursor IDE 的开发�
 
 ## 🔧 技术栈
 
-| 层级 | 技术 | 版本 |
-|---|---|---|
-| 桌面框架 | Electron | 44.9.1（Node 24） |
-| 前端 | React + TypeScript | 19 / 5.9 |
-| 构建 | Vite | 5.4 |
-| 编辑器 | Monaco Editor | 0.57 |
-| 状态管理 | Zustand | 4.5 |
-| 样式 | TailwindCSS | 3.4 |
-| Agent | @earendil-works/pi-coding-agent | 1.3 |
-| 测试 | Vitest | 2.1 |
+| 层级     | 技术                            | 版本              |
+| -------- | ------------------------------- | ----------------- |
+| 桌面框架 | Electron                        | 44.9.1（Node 24） |
+| 前端     | React + TypeScript              | 19 / 5.9          |
+| 构建     | Vite                            | 5.4               |
+| 编辑器   | Monaco Editor                   | 0.57              |
+| 状态管理 | Zustand                         | 4.5               |
+| 样式     | TailwindCSS                     | 3.4               |
+| Agent    | @earendil-works/pi-coding-agent | 1.3               |
+| 测试     | Vitest                          | 2.1               |
 
 ---
 
 ## 📦 环境要求
 
-- **Node.js ≥ 22.19**（Pi SDK 要求）
+- **Node.js ≥ 24**（Electron 44 内置 Node 24；工作区记录使用 node:sqlite）
 - npm
 - Git for Windows（可选，启用 Agent 的 bash 工具）
 

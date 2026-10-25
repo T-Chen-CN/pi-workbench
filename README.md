@@ -28,7 +28,7 @@ Lightweight desktop code editor with Pi Agent integration, built with Electron +
 
 ## Requirements
 
-- **Node.js ≥ 22.19** (required by the Pi SDK; Electron 44 bundles Node 24)
+- **Node.js ≥ 24** (Electron 44 bundles Node 24; node:sqlite is used for workspace history)
 - Windows, macOS, or Linux
 - Git for Windows (optional — enables the agent's `bash` tool)
 

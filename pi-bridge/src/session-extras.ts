@@ -73,7 +73,7 @@ export class SessionExtrasStore {
       // 旧版本 sidecar 保存过完整文件内容；读取后异步重写一次，回收磁盘
       if (raw.toolEdits && !legacyToolEditsPruned.has(filePath)) {
         legacyToolEditsPruned.add(filePath)
-        void this.save(sessionId, extras).catch(() => undefined)
+        await this.save(sessionId, extras).catch(() => undefined)
       }
       return extras
     } catch {

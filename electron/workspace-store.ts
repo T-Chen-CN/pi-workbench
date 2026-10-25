@@ -24,11 +24,7 @@ export interface WorkspaceStore {
 }
 
 /** 把旧版 settings 的「最新在前」列表导入空库，保留相对顺序 */
-export function importRecentWorkspaces(
-  store: WorkspaceStore,
-  recent: string[],
-  now = Date.now()
-): void {
+export function importRecentWorkspaces(store: WorkspaceStore, recent: string[], now = Date.now()): void {
   if (store.list().length > 0) return
   const candidates = [...new Set(recent.filter((item) => typeof item === 'string' && item))]
   for (let i = candidates.length - 1; i >= 0; i--) {
@@ -36,26 +32,11 @@ export function importRecentWorkspaces(
   }
 }
 
-interface SqliteStatement {
-  run: (...params: unknown[]) => unknown
-  get: (...params: unknown[]) => unknown
-  all: (...params: unknown[]) => unknown[]
-}
-
-interface SqliteDatabase {
-  exec: (sql: string) => void
-  prepare: (sql: string) => SqliteStatement
-  close: () => void
-}
-
-interface SqliteModule {
-  DatabaseSync: new (filename: string) => SqliteDatabase
-}
-
-export function createWorkspaceStore(dbPath: string): WorkspaceStore {  fs.mkdirSync(path.dirname(dbPath), { recursive: true })
+export function createWorkspaceStore(dbPath: string): WorkspaceStore {
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true })
   const requireFromHere = createRequire(import.meta.url)
-  const sqlite = requireFromHere('node:sqlite') as SqliteModule
-  const db = new sqlite.DatabaseSync(dbPath)
+  const { DatabaseSync } = requireFromHere('node:sqlite') as typeof import('node:sqlite')
+  const db = new DatabaseSync(dbPath)
   db.exec(
     'CREATE TABLE IF NOT EXISTS workspaces (' +
       'path TEXT PRIMARY KEY, opened_at INTEGER NOT NULL, open_count INTEGER NOT NULL DEFAULT 1)'
@@ -66,9 +47,7 @@ export function createWorkspaceStore(dbPath: string): WorkspaceStore {  fs.mkdir
       'ON CONFLICT(path) DO UPDATE SET opened_at = excluded.opened_at, ' +
       'open_count = workspaces.open_count + 1'
   )
-  const listStmt = db.prepare(
-    'SELECT path, opened_at, open_count FROM workspaces ORDER BY opened_at DESC'
-  )
+  const listStmt = db.prepare('SELECT path, opened_at, open_count FROM workspaces ORDER BY opened_at DESC')
   const removeStmt = db.prepare('DELETE FROM workspaces WHERE path = ?')
 
   return {
@@ -84,7 +63,7 @@ export function createWorkspaceStore(dbPath: string): WorkspaceStore {  fs.mkdir
       return rows.map((row) => ({
         path: String(row.path),
         openedAt: Number(row.opened_at) || 0,
-        openCount: Number(row.open_count) || 1,
+        openCount: Number(row.open_count) || 1
       }))
     },
     listRecent(limit = 10) {
@@ -96,6 +75,6 @@ export function createWorkspaceStore(dbPath: string): WorkspaceStore {  fs.mkdir
     },
     close() {
       db.close()
-    },
+    }
   }
 }

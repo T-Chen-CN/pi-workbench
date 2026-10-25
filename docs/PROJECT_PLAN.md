@@ -130,7 +130,7 @@ Main Process (Node 24, Electron 44)
 | 测试 | Vitest | 2.1 |
 | 打包 | electron-builder | 26 |
 
-> **Electron 版本约束**：Pi SDK 要求 Node ≥ 22.19，Electron 28（Node 18）无法运行，必须 ≥ 39。
+> **Electron 版本约束**：构建与测试要求 Node ≥ 24（node:sqlite），Electron 28（Node 18）无法运行，必须 ≥ 39。
 
 ### 安全边界
 
@@ -159,8 +159,8 @@ Main Process (Node 24, Electron 44)
 | 应用设置 / 最近工作区 | `{appDir}/config/settings.json` | |
 | Agent 模型配置 | `{appDir}/data/agent/models.json` | 不含明文 Key |
 | Agent 会话 | `{appDir}/data/agent/sessions/*.jsonl` | 平铺文件，按 cwd 过滤，跨重启恢复 |
-| 会话 sidecar | `{appDir}/data/agent/session-extras/*.json` | 计划、权限、历史 Diff |
-| 工作区打开记录 | `{appDir}/data/workspaces.db` | SQLite；不可用时回退 JSON |
+| 会话 sidecar | `{appDir}/data/agent/session-extras/*.json` | 计划、权限 |
+| 工作区打开记录 | `{appDir}/data/workspaces.db` | SQLite 单存储，记录打开时间与次数 |
 | 工作区配置 | `{workspace}/.pi-workbench/config.json` | `workspace:init` 创建 |
 | Web dev Agent 数据 | `{appDir}/cache/temp/web-agent/` | 可随时删除 |
 | 主进程日志 | `{appDir}/logs/main.log` | 5 MB 轮转，保留 `main.log.1`；渲染进程日志见 `logs/renderer.log` |
@@ -238,7 +238,7 @@ docs/               项目文档
 
 已完成：
 
-- 工作区元数据存储：`data/workspaces.db`（node:sqlite，带 JSON 回退）
+- 工作区元数据存储：`data/workspaces.db`（node:sqlite 单存储）
 - 插件系统：命令 / 钩子、启用禁用、热重载（无沙箱，默认禁用）
 
 ### 模块 6：终端（已实现）
@@ -343,13 +343,13 @@ Electron 框架、文件管理、Monaco 编辑、Diff、聊天 UI、国际化、
 
 | 决策 | 选择 | 理由 |
 |---|---|---|
-| 桌面框架 | Electron 44 | 生态成熟；Pin Pi SDK 要求的 Node ≥ 22.19 |
+| 桌面框架 | Electron 44 | 生态成熟；Node ≥ 24（Electron 44 内置 Node 24） |
 | 状态管理 | Zustand | 轻量、无样板代码；按域拆分 store |
 | 数据位置 | 便携式应用目录 | 可整体迁移、无外部依赖 |
 | Agent 集成 | pi-coding-agent SDK | 内置工具与会话管理，避免自研 Agent 循环 |
 | Agent 工具文件访问 | 主进程直连 fs | SDK 设计如此；安全边界仍在主进程 |
 | 供应商配置 | 统一 OpenAI 兼容 + models.json | 支持 DeepSeek 等任意端点 |
-| 工作区存储 | SQLite（`data/workspaces.db`），JSON 回退 | 记录打开时间与次数；不可用时回退 |
+| 工作区存储 | SQLite（`data/workspaces.db`） | 记录打开时间与次数，单一来源 |
 | 插件系统 | 工作台插件宿主（已实现） | 插件只扩展工作台，不扩展 Pi Agent；默认禁用、无沙箱 |
 | Web 模式 | Vite dev 中间件 | 便于 UI/Agent 调试，不进入生产 |
 

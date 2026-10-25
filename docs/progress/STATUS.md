@@ -172,6 +172,7 @@
 - ✅ 2026-10-24 R-04 结构化计划：Plan 模式通过 `submit_plan` 产出只读计划卡（步骤 / 文件 / 风险），仅批准或拒绝；批准后切回 Act 并按步骤执行，`update_plan_step` 更新状态，“本轮任务”显示计划进度；计划存于 sidecar，压缩后仍保留。type-check / lint / 470 用例 / build 通过
 - ✅ 2026-10-24 图片附件优化：长边 2048 预处理（小图不重编码、截图优先 PNG、照片 JPEG），单张 10MB / 20 张 / 请求 48MiB；设置中按模型勾选图片能力并写入 `models.json` input，未勾选时明确阻止；用户消息与历史恢复均显示图片缩略图并可点击放大。type-check / lint / 483 用例 / build 通过
 - ✅ 2026-10-26 全面审查修复：会话 id 白名单与 sidecar 删除顺序（路径穿越）、删除会话取消挂起审批、DraftStore 启动容错、发布 CI 增加 type-check/lint、Vite/Vitest 配置纳入类型检查、删除 5 个死 IPC 与 10 组未用文案、移除无用依赖与死目录/类型、合并重复快捷键/大小/分类工具、终端标题显示真实 shell、设置保存串行化、首页会话命令明确报错、通知摘要压缩、CSP 收紧、文档同步。48 文件 500 用例全绿
+- ✅ 2026-10-26 架构收口：历史工具 Diff 改为仅当前进程内存（不再写 sidecar）、最近工作区改为 SQLite 单存储并迁移旧 settings 列表、构建/CI 升到 Node 24 并升级 @types/node、拆分 agent-manager / 主进程 IPC / ChatPanel（主组件约 1040 行）、收敛虚拟列表/还原/路径/事件总线与 Markdown 解析器、开启渲染进程 sandbox。type-check / lint / 502 用例 / build 通过
 - ✅ 2026-10-24 方案收尾：BACKLOG P1–P3 全部开发项经项目所有者手动验收通过（结构化计划、模板 / 技能审批、三格式导出、工具结果查看器、排队恢复、分支切换、压缩分隔线、行号跳转、个性化建议、子 Agent、重试倒计时、图片附件与消息内全窗口预览）；V-01 / V-02 平台验收与版本发布继续暂缓
 - ✅ 2026-10-24 发布 v0.3.0：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附带 `latest.yml` / `latest-mac.yml` / `latest-linux.yml`；同时修复快捷键测试依赖宿主平台、导致 macOS 构建失败的问题
 - ✅ 2026-10-24 发布 v0.3.1：Windows 自动更新改为清单式删除——升级只替换程序文件，保留 `config` / `data` / `logs` / `cache`；卸载才清理数据目录。首个带该修复的版本仍需手动安装

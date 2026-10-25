@@ -264,7 +264,7 @@ npm run build
 
 - `tool_update` 在 v1 未启用：工具结果只在结束时出现一次，没有实时输出流。→ 已排期：[ROADMAP](../progress/ROADMAP.md) E-06。
 - thinking 时长只在实时流式时计算；历史恢复通常没有时长，只显示工具数量摘要。→ 已排期：[ROADMAP](../progress/ROADMAP.md) E-07。
-- 工具行的“查看修改”只对当前轮次仍在 Diff 队列中的工具可用；历史工具行不保存 Diff 数据。→ 已排期：[ROADMAP](../progress/ROADMAP.md) E-08。
+- 工具行的“查看修改”只对当前轮次仍在 Diff 队列中的工具可用；历史工具行不保存 Diff 数据（2026-10-26 起明确不持久化）。
 - 工具结果预览截断到约 2000 字符，完整内容仍在 Pi JSONL，UI 不提供全量查看器。（B-01，暂不排期）
 - 脱敏 thinking 的占位取决于供应商是否返回 `redacted` / 空内容。（B-02，依赖供应商）
 - 旧会话没有 `parts` 时按普通文本显示，不会补造过程轨迹。（B-03，不做）

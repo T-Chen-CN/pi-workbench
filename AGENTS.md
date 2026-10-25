@@ -4,7 +4,7 @@
 
 **项目**: Pi Workbench  
 **架构**: Electron 44 + React 19 + TypeScript
-**运行要求**: Node.js ≥ 22.19（Pi SDK 要求；Electron 44 内置 Node 24）  
+**运行要求**: Node.js ≥ 24（Electron 44 内置 Node 24，node:sqlite 与构建脚本均依赖）
 **当前阶段**: Phase 6 持续优化
 **最后更新**: 2026-10-26
 
@@ -15,6 +15,7 @@
 这是一个**轻量级 AI 辅助开发工作台**，类似 Cursor IDE，使用 **Electron** 构建桌面应用，集成 **Pi Agent** 作为智能助手内核。
 
 ### 核心目标
+
 - 提供流畅的 AI 辅助编程体验
 - 支持多工作区和多 Agent 协作
 - 简洁易扩展的插件系统
@@ -22,6 +23,7 @@
 - **便携式架构**: 所有数据自包含，无外部路径依赖
 
 ### 当前状态
+
 - ✅ MVP 完成：文件管理、代码编辑、Diff 查看、聊天界面
 - ✅ Phase 1 完成：Pi Agent 真实集成
 - ✅ Phase 2 完成：工作区与对话体验（流式输出、修改审阅、上下文选择、多工作区）
@@ -55,7 +57,8 @@ pi-workbench/
 └── 配置文件          # package.json, tsconfig.json, eslint.config.js, vitest.config.ts
 ```
 
-**重要**: 
+**重要**:
+
 - 主进程和渲染进程完全分离（Electron 安全模型）
 - 所有文件系统操作必须通过 IPC 进行
 - 状态管理使用 Zustand，不是 Redux
@@ -67,18 +70,18 @@ pi-workbench/
 
 ### 必须使用的技术
 
-| 层级 | 技术 | 版本 | 说明 |
-|------|------|------|------|
-| 桌面框架 | **Electron** | 44.9.1 | ⚠️ 不是 Tauri，已从 Tauri 迁移 |
-| 前端框架 | **React** | 19.3.1 | 使用函数组件 + Hooks |
-| 构建工具 | **Vite** | 5.4.21 | HMR + 快速构建 |
-| 状态管理 | **Zustand** | 4.5.7 | ⚠️ 不是 Redux 或 Context API |
-| 编辑器 | **Monaco Editor** | 0.57.0 | VS Code 内核 |
-| 样式 | **TailwindCSS** | 3.4.19 | 原子化 CSS |
-| 类型检查 | **TypeScript** | 5.9.3 | 严格模式 |
-| 打包 | **electron-builder** | 26.15.3 | 生成安装包 |
-| Agent SDK | **@earendil-works/pi-coding-agent** | 1.3.0 | 运行在主进程 |
-| 终端 | **@xterm/xterm + node-pty** | 6.x / 1.1 | 原生模块，打包需 `asarUnpack` |
+| 层级      | 技术                                | 版本      | 说明                           |
+| --------- | ----------------------------------- | --------- | ------------------------------ |
+| 桌面框架  | **Electron**                        | 44.9.1    | ⚠️ 不是 Tauri，已从 Tauri 迁移 |
+| 前端框架  | **React**                           | 19.3.1    | 使用函数组件 + Hooks           |
+| 构建工具  | **Vite**                            | 5.4.21    | HMR + 快速构建                 |
+| 状态管理  | **Zustand**                         | 4.5.7     | ⚠️ 不是 Redux 或 Context API   |
+| 编辑器    | **Monaco Editor**                   | 0.57.0    | VS Code 内核                   |
+| 样式      | **TailwindCSS**                     | 3.4.19    | 原子化 CSS                     |
+| 类型检查  | **TypeScript**                      | 5.9.3     | 严格模式                       |
+| 打包      | **electron-builder**                | 26.15.3   | 生成安装包                     |
+| Agent SDK | **@earendil-works/pi-coding-agent** | 1.3.0     | 运行在主进程                   |
+| 终端      | **@xterm/xterm + node-pty**         | 6.x / 1.1 | 原生模块，打包需 `asarUnpack`  |
 
 ### 禁止使用的技术
 
@@ -95,13 +98,18 @@ pi-workbench/
 ### 1. 代码组织原则
 
 #### 组件放置规则
+
 ```typescript
 // ✅ 正确：顶层组件扁平放置，不建子目录
 src/components/
 ├── AgentMarkdown.tsx
 ├── AgentTrace.tsx
 ├── ApprovalCard.tsx
+├── ChatApiKeyPrompt.tsx
+├── ChatHeader.tsx
+├── ChatMessageRow.tsx
 ├── ChatPanel.tsx
+├── ChatTranscript.tsx
 ├── ChatSessionList.tsx
 ├── CommandPalette.tsx
 ├── DialogHost.tsx
@@ -115,6 +123,7 @@ src/components/
 ├── TerminalPanel.tsx
 ├── Toast.tsx
 ├── ToolResultViewer.tsx
+├── VirtualRows.tsx
 ├── UpdateDialog.tsx
 ├── UpdateStatusIndicator.tsx
 ├── WelcomeScreen.tsx
@@ -128,6 +137,7 @@ src/components/chat/ChatPanel.tsx  // 不要这样！
 ```
 
 #### Store 放置规则
+
 ```typescript
 // ✅ 正确：每个功能域一个独立 store（13 个）
 src/store/
@@ -156,11 +166,13 @@ src/store/appStore.ts  // 不要创建巨大的单一 store！
 **所有文件系统操作必须通过 IPC！**
 
 **工作区信任**：
+
 - ✅ 工作区根目录只能由主进程批准：原生目录选择器的结果，或启动时从 `config/settings.json` 载入的最近工作区
 - ✅ 文件写 / 删 / 改只允许发生在受信任工作区与应用缓存目录（`{appDir}/cache/`）内；校验使用 `realpath` 规范化 + `path.relative` 判断包含关系
-- ❌ 禁止让渲染进程通过 `workspace:init` 自行注册任意目录；`app:saveSettings` 保存的 `recentWorkspaces` 也会被过滤为已批准路径
+- ❌ 禁止让渲染进程通过 `workspace:init` 自行注册任意目录；最近工作区由主进程 SQLite 独占管理，渲染层不再保存 `recentWorkspaces`
 
 #### ✅ 正确的做法
+
 ```typescript
 // 渲染进程 (src/api/index.ts)
 export const api = {
@@ -177,12 +189,13 @@ ipcMain.handle('fs:readFile', async (_, path: string) => {
 ```
 
 #### ❌ 错误的做法
+
 ```typescript
 // ❌ 渲染进程中直接使用 Node.js API
-import fs from 'fs'  // 这会失败！渲染进程没有 Node.js 权限
+import fs from 'fs' // 这会失败！渲染进程没有 Node.js 权限
 
 // ❌ 绕过 contextBridge
-window.require('fs')  // 安全风险，已禁用 nodeIntegration
+window.require('fs') // 安全风险，已禁用 nodeIntegration
 ```
 
 ---
@@ -190,6 +203,7 @@ window.require('fs')  // 安全风险，已禁用 nodeIntegration
 ### 3. 状态管理规范
 
 #### ✅ 使用 Zustand
+
 ```typescript
 // src/store/editorStore.ts
 import { create } from 'zustand'
@@ -204,12 +218,14 @@ interface EditorState {
 export const useEditorStore = create<EditorState>((set) => ({
   openFiles: [],
   currentFileIndex: null,
-  openFile: (file) => set((state) => ({
-    openFiles: [...state.openFiles, file]
-  })),
-  closeFile: (index) => set((state) => ({
-    openFiles: state.openFiles.filter((_, i) => i !== index)
-  }))
+  openFile: (file) =>
+    set((state) => ({
+      openFiles: [...state.openFiles, file]
+    })),
+  closeFile: (index) =>
+    set((state) => ({
+      openFiles: state.openFiles.filter((_, i) => i !== index)
+    }))
 }))
 
 // 在组件中使用
@@ -217,12 +233,13 @@ const { openFiles, openFile } = useEditorStore()
 ```
 
 #### ❌ 不要使用 Redux
+
 ```typescript
 // ❌ 不要创建 Redux store
-import { createStore } from 'redux'  // 不要使用！
+import { createStore } from 'redux' // 不要使用！
 
 // ❌ 不要使用 Context API 做全局状态
-const AppContext = React.createContext()  // Zustand 更好！
+const AppContext = React.createContext() // Zustand 更好！
 ```
 
 ---
@@ -230,28 +247,26 @@ const AppContext = React.createContext()  // Zustand 更好！
 ### 4. 文件操作规范
 
 #### 不可变状态更新（重要！）
+
 ```typescript
 // ✅ 正确：使用展开运算符创建新数组
-setItems(items.map(item => 
-  item.path === targetPath 
-    ? { ...item, isExpanded: !item.isExpanded }
-    : item
-))
+setItems(items.map((item) => (item.path === targetPath ? { ...item, isExpanded: !item.isExpanded } : item)))
 
 // ❌ 错误：直接修改对象（会导致无限递归！）
-const item = items.find(i => i.path === path)
-item.isExpanded = true  // 不要这样！会触发无限重渲染
+const item = items.find((i) => i.path === path)
+item.isExpanded = true // 不要这样！会触发无限重渲染
 setItems([...items])
 ```
 
 #### 文件路径处理
+
 ```typescript
 // ✅ 正确：使用 path.join 处理跨平台路径
 import path from 'path'
 const fullPath = path.join(dirPath, fileName)
 
 // ❌ 错误：手动拼接路径
-const fullPath = `${dirPath}/${fileName}`  // Windows 会失败！
+const fullPath = `${dirPath}/${fileName}` // Windows 会失败！
 ```
 
 ---
@@ -280,18 +295,18 @@ function getAppDir(): string {
 }
 
 const appDir = getAppDir()
-const configDir = path.join(appDir, 'config')    // 配置目录
-const cacheDir = path.join(appDir, 'cache')      // 缓存目录
-const dataDir = path.join(appDir, 'data')        // 数据目录
-const logsDir = path.join(appDir, 'logs')        // 日志目录
+const configDir = path.join(appDir, 'config') // 配置目录
+const cacheDir = path.join(appDir, 'cache') // 缓存目录
+const dataDir = path.join(appDir, 'data') // 数据目录
+const logsDir = path.join(appDir, 'logs') // 日志目录
 
 // ❌ 错误：使用系统标准路径（除 macOS 已确认的例外）
-const userData = app.getPath('userData')         // 不要使用！
+const userData = app.getPath('userData') // 不要使用！
 // Windows: C:\Users\xxx\AppData\Roaming\pi-workbench
 // macOS: ~/Library/Application Support/pi-workbench
 
-const home = app.getPath('home')                 // 不要使用！
-const documents = app.getPath('documents')       // 不要使用！
+const home = app.getPath('home') // 不要使用！
+const documents = app.getPath('documents') // 不要使用！
 ```
 
 > **macOS 例外（2026-10-23 经项目所有者确认）**：macOS 应用包内不可写、且自动更新会替换整个 `.app`，因此打包版的数据目录使用 `~/Library/Application Support/pi-workbench`。Windows / Linux 仍严格遵循便携式约束。不要在 macOS 上按“禁止系统路径”改回应用包内。
@@ -301,7 +316,7 @@ const documents = app.getPath('documents')       // 不要使用！
 ```typescript
 // ✅ 应用级数据：在应用目录
 const settingsPath = path.join(appDir, 'config', 'settings.json')
-const apiConfigPath = path.join(appDir, 'config', 'api-config.json')  // API Key 使用 safeStorage 加密
+const apiConfigPath = path.join(appDir, 'config', 'api-config.json') // API Key 使用 safeStorage 加密
 const dbPath = path.join(appDir, 'data', 'workspaces.db')
 const logPath = path.join(appDir, 'logs', 'main.log')
 
@@ -319,7 +334,7 @@ const tempFile = path.join(appDir, 'cache', 'temp', `diff-${Date.now()}.txt`)
 // electron/main.ts - 应用启动时创建必要的目录
 async function initAppDirectories() {
   const appDir = getAppDir()
-  
+
   const dirs = [
     path.join(appDir, 'config'),
     path.join(appDir, 'cache'),
@@ -327,11 +342,11 @@ async function initAppDirectories() {
     path.join(appDir, 'data'),
     path.join(appDir, 'logs')
   ]
-  
+
   for (const dir of dirs) {
     await fs.mkdir(dir, { recursive: true })
   }
-  
+
   console.log('应用目录已初始化:', appDir)
 }
 
@@ -349,17 +364,17 @@ app.whenReady().then(async () => {
 async function initWorkspaceConfig(workspacePath: string) {
   const configDir = path.join(workspacePath, '.pi-workbench')
   const pluginsDir = path.join(configDir, 'plugins')
-  
+
   // 创建目录
   await fs.mkdir(configDir, { recursive: true })
   await fs.mkdir(pluginsDir, { recursive: true })
-  
+
   // 创建默认配置
   const configPath = path.join(configDir, 'config.json')
   if (!existsSync(configPath)) {
     const defaultConfig = {
       version: '1.0',
-      enabledPlugins: [],
+      enabledPlugins: []
     }
     await fs.writeFile(configPath, JSON.stringify(defaultConfig, null, 2))
   }
@@ -371,9 +386,9 @@ ipcMain.handle('workspace:init', async (_, workspacePath: string) => {
     await initWorkspaceConfig(workspacePath)
     return { success: true }
   } catch (error) {
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : String(error) 
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
     }
   }
 })
@@ -385,7 +400,7 @@ ipcMain.handle('workspace:init', async (_, workspacePath: string) => {
 // electron/main.ts - 读写应用配置
 async function loadAppSettings() {
   const settingsPath = path.join(getAppDir(), 'config', 'settings.json')
-  
+
   if (!existsSync(settingsPath)) {
     // 默认配置
     return {
@@ -394,7 +409,7 @@ async function loadAppSettings() {
       autoSave: true
     }
   }
-  
+
   const content = await fs.readFile(settingsPath, 'utf-8')
   return JSON.parse(content)
 }
@@ -429,6 +444,7 @@ ipcMain.handle('app:saveSettings', async (_, settings) => {
 ### 6. TypeScript 规范
 
 #### 类型定义位置
+
 ```typescript
 // ✅ 正确：在 src/types/ 定义全局类型
 src/types/
@@ -441,6 +457,7 @@ interface Message { ... }  // 如果其他地方也用，应该放 types/
 ```
 
 #### 严格类型检查
+
 ```typescript
 // ✅ 正确：明确的类型注解
 const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -448,7 +465,8 @@ const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
 }
 
 // ❌ 错误：使用 any
-const handleClick = (event: any) => {  // 不要使用 any！
+const handleClick = (event: any) => {
+  // 不要使用 any！
   // ...
 }
 ```
@@ -458,6 +476,7 @@ const handleClick = (event: any) => {  // 不要使用 any！
 ## 🚫 常见错误和陷阱
 
 ### 错误 1: 在渲染进程使用 Node.js API
+
 ```typescript
 // ❌ 错误
 import fs from 'fs'
@@ -468,18 +487,18 @@ const data = await window.electronAPI.readFile('file.txt')
 ```
 
 ### 错误 2: 直接修改状态对象
+
 ```typescript
 // ❌ 错误：会导致 React 无限重渲染
 item.isExpanded = true
 setItems(items)
 
 // ✅ 正确：创建新对象
-setItems(items.map(i => 
-  i === item ? { ...i, isExpanded: true } : i
-))
+setItems(items.map((i) => (i === item ? { ...i, isExpanded: true } : i)))
 ```
 
 ### 错误 3: 混淆 Tauri 和 Electron API
+
 ```typescript
 // ❌ 错误：Tauri API（已不再使用）
 import { invoke } from '@tauri-apps/api/tauri'
@@ -489,6 +508,7 @@ window.electronAPI.someMethod()
 ```
 
 ### 错误 4: 忘记防抖（Debounce）
+
 ```typescript
 // ❌ 错误：每次按键都保存文件
 onChange={(value) => {
@@ -503,16 +523,17 @@ useEffect(() => {
 ```
 
 ### 错误 5: 循环依赖的 useEffect
+
 ```typescript
 // ❌ 错误：items 变化触发 loadItems，loadItems 又改变 items
 useEffect(() => {
-  loadItems()  // 这会更新 items
-}, [items])  // items 变化又触发 useEffect → 无限循环！
+  loadItems() // 这会更新 items
+}, [items]) // items 变化又触发 useEffect → 无限循环！
 
 // ✅ 正确：只在挂载时执行一次
 useEffect(() => {
   loadItems()
-}, [])  // 空依赖数组
+}, []) // 空依赖数组
 ```
 
 ### 错误 6: 使用系统标准配置目录（违反便携式约束）
@@ -532,9 +553,7 @@ const logPath = path.join(app.getPath('home'), '.pi-workbench', 'logs')
 
 // ✅ 正确：使用应用目录
 function getAppDir() {
-  return app.isPackaged 
-    ? path.dirname(app.getPath('exe'))
-    : process.cwd()
+  return app.isPackaged ? path.dirname(app.getPath('exe')) : process.cwd()
 }
 
 const appDir = getAppDir()
@@ -545,6 +564,7 @@ const logPath = path.join(appDir, 'logs', 'app.log')
 ```
 
 **为什么这是错误的**:
+
 - 违反便携式架构原则
 - 无法整体迁移应用（配置留在系统目录）
 - 卸载后会留下数据残留
@@ -552,6 +572,7 @@ const logPath = path.join(appDir, 'logs', 'app.log')
 - 不方便备份（数据分散在不同位置）
 
 **正确的做法**:
+
 - 所有应用数据存在应用目录：`{appDir}/config/`, `{appDir}/cache/`, `{appDir}/data/`
 - 工作区数据存在工作区目录：`{workspaceDir}/.pi-workbench/`
 - 临时文件存在应用缓存：`{appDir}/cache/temp/`
@@ -563,18 +584,21 @@ const logPath = path.join(appDir, 'logs', 'app.log')
 ### Pi Agent 集成约束
 
 **运行位置**:
+
 - ✅ Pi Agent **必须**运行在 Electron 主进程中
 - ✅ 与 `electron/main.ts` 在同一进程
 - ❌ **禁止**创建子进程或 Worker 运行 Agent
 - ❌ **禁止**通过 HTTP 服务运行 Agent
 
 **文件操作约束**:
+
 - ⚠️ **现状说明**：`pi-coding-agent` 内置的 read/write/edit/bash 工具在主进程中直接操作文件系统，不经过渲染进程 IPC
 - ✅ 安全边界：Agent 只运行在主进程，渲染进程仍无 Node.js 权限
 - ✅ 应用自身（文件树、编辑器）的文件操作仍**必须**通过 IPC
 - ❌ **禁止**把 Agent 放入渲染进程或额外子进程
 
 **配置存储约束**:
+
 - ✅ API 配置存储在 `{appDir}/config/api-config.json`（API Key 使用 Electron `safeStorage` 加密，格式 `enc:<base64>`）
 - ✅ Agent 模型配置写入 `{appDir}/data/agent/models.json`（API Key 通过环境变量 `$PI_WORKBENCH_API_KEY` 插值，不落盘）
 - ✅ 模型供应商（provider / API URL / API Key / 模型）是**应用级全局配置**，所有工作区共用
@@ -583,6 +607,7 @@ const logPath = path.join(appDir, 'logs', 'app.log')
 - ❌ **禁止**将 API Key 写入源码或提交到版本控制
 
 **示例**:
+
 ```typescript
 // ✅ 正确：Agent 在主进程初始化
 // electron/main.ts
@@ -595,7 +620,7 @@ async function initAgent(config: ApiConfig) {
   await agentManager.initialize({
     workspaceDir: config.workspaceDir,
     agentDir: path.join(getAppDir(), 'data', 'agent'),
-    apiConfig: config.apiConfig, // provider / apiUrl / apiKey / selectedModel
+    apiConfig: config.apiConfig // provider / apiUrl / apiKey / selectedModel
   })
 }
 ```
@@ -603,11 +628,13 @@ async function initAgent(config: ApiConfig) {
 ### 数据库和持久化约束
 
 **SQLite 数据库位置**:
+
 - ✅ 应用级数据库：`{appDir}/data/workspaces.db`
 - ✅ 工作区数据库（可选）：`{workspaceDir}/.pi-workbench/workspace.db`
 - ❌ **禁止**使用系统数据库目录
 
 **会话存储策略**:
+
 - ✅ Agent 会话：`{appDir}/data/agent/sessions/*.jsonl`（Pi JSONL，按 cwd 过滤；一个工作区可同时有多个会话）
 - ✅ 打开中的会话标签与激活会话：`{workspaceDir}/.pi-workbench/chat-tabs.json`
 - ✅ 打开中的编辑器标签与当前文件：`{workspaceDir}/.pi-workbench/editor-tabs.json`（只存相对路径；显式关闭工作区不清除，重新打开时恢复）
@@ -616,6 +643,7 @@ async function initAgent(config: ApiConfig) {
 - 会话 API：`agent:sessions:list/open/create/close/rename/delete`，流式事件带 `workspaceDir + sessionId + requestId`
 
 **多工作区与状态保留**:
+
 - ✅ 每个打开的工作区各自挂载一套常驻视图（`WorkspaceView`）和按工作区隔离的 editor / diff store；切换标签、返回首页只切换可见性（`visibility: hidden` + `inert`），不卸载、不 reset。
 - ✅ 运行期状态全部保留：Monaco 撤销栈与滚动、聊天草稿/附件/滚动、终端进程与缓冲区、文件树展开、面板宽度与收起状态、流式输出。
 - ✅ 关闭工作区标签是唯一回收运行时的入口：确认未保存文件 / 运行中任务 → 写 `editor-tabs.json` → dispose Agent、终端与监听 → 卸载视图。`chat-tabs.json`、`editor-tabs.json` 和草稿都**不删除**。
@@ -623,18 +651,21 @@ async function initAgent(config: ApiConfig) {
 - ✅ 固定状态范围：打开的文件（含顺序）、当前文件、打开的会话与激活项、草稿。面板宽度、终端开关、会话模式属于运行期，不落盘。
 
 **日志文件位置**:
+
 - ✅ 所有日志：`{appDir}/logs/`
 - ✅ 主进程日志：`{appDir}/logs/main.log`（5MB 轮转，保留 `.1`）
 - ✅ 渲染进程日志：`{appDir}/logs/renderer.log`（未捕获异常与 console.warn/error）
 - ✅ Agent 日志：`{appDir}/logs/agent.log`（5MB 轮转保留 `.1`，由主进程注入 `AgentLogger`，含工作区 Agent）
 
 **Chromium profile**:
+
 - ✅ `app.setPath('userData', '{appDir}/data/profile')`，缓存与 localStorage 随应用目录迁移
 - ✅ 语言偏好等应用设置仍写 `{appDir}/config/settings.json`（渲染进程不使用 localStorage 保存设置）
 
 ### 自动更新约束
 
 **行为**:
+
 - ✅ 启动 12 秒后静默检查一次；检查失败只写 `main.log`，不打扰用户
 - ✅ Windows / Linux 发现新版本后**自动下载**，但**绝不自动安装**（`autoInstallOnAppQuit = false`）
 - ✅ 下载完成弹窗，用户选择“重启并安装”或“稍后”；拒绝后下次启动重新检查并再弹
@@ -643,11 +674,13 @@ async function initAgent(config: ApiConfig) {
 - ❌ 不自动重启、不静默安装
 
 **缓存与路径**:
+
 - ✅ 安装包缓存：`{appDir}/cache/{updaterCacheDirName}`（通过自定义 `AppAdapter` 覆盖 electron-updater 的系统缓存目录）
 - ✅ 没有可用更新时清理过期缓存
 - ✅ 更新事件写入 `{appDir}/logs/main.log`
 
 **Windows 更新与数据保护**:
+
 - ✅ 更新时的删除逻辑由 `build/installer.nsh` 的 `customRemoveFiles` 接管：只删除
   `resources/installer-manifest.files.txt` / `installer-manifest.dirs.txt` 清单内的程序文件
 - ✅ 清单由 `scripts/after-pack-manifest.js`（electron-builder `afterPack`）生成；清单缺失时更新不删除任何文件
@@ -657,6 +690,7 @@ async function initAgent(config: ApiConfig) {
 - ❌ 新增数据目录时必须同步更新 `PROTECTED_TOP_LEVEL` 与卸载分支，否则更新会清理该目录
 
 **发布**:
+
 - ✅ 更新源为 GitHub Releases（公开仓库 `T-Chen-CN/pi-workbench`）
 - ✅ 推送 `v*` 标签触发三平台构建（Windows NSIS / macOS universal dmg / Linux AppImage）
 - ✅ 标签必须与 `package.json` 的 `version` 一致，否则 Release 流水线失败
@@ -665,20 +699,24 @@ async function initAgent(config: ApiConfig) {
 ### 插件系统约束
 
 **插件定位**:
+
 - ✅ 插件只扩展 **Pi Workbench 本身**（命令 / 菜单 / 钩子 / 声明式 UI）
 - ❌ **禁止**把插件系统当作 Pi Agent 扩展机制（不接入 Pi SDK 的 extensions / custom tools）
 - ❌ **禁止**从系统目录加载插件
 - ❌ **禁止**从网络下载插件（安全风险）
 
 **插件加载位置**:
+
 - ✅ 工作区插件：`{workspaceDir}/.pi-workbench/plugins/`
 
 **插件沙箱**:
+
 - ⚠️ 简化版插件系统**无**沙箱隔离
 - ⚠️ 插件可以访问 Node.js API
 - ⚠️ 仅用于个人项目，不对外分发
 
 **v1 能力边界**:
+
 - ✅ 主进程 CommonJS 插件：命令（命令面板执行）与钩子（workspace:opened / file:saved / chat:message）
 - ✅ 启用禁用与热重载（`config.json` 的 `enabledPlugins` + `pluginsConfigured`）
 - ❌ 不向渲染进程加载插件 JS（生产 CSP `script-src 'self'`）
@@ -697,6 +735,7 @@ async function initAgent(config: ApiConfig) {
 - 每次 UI 改动需提供 Paper / Ink 两套截图，并通过对比度、键盘焦点、1024 / 1440 宽度、`type-check` / `lint` / `test` 检查。
 
 ### 布局结构
+
 ```
 ┌─────────────────────────────────────────────┐
 │  Title Bar                                  │
@@ -712,6 +751,7 @@ async function initAgent(config: ApiConfig) {
 ```
 
 ### 视觉与组件规范（Paper & Ink）
+
 - 视觉语言：纸面 + 墨线 + 松绿。默认 Paper 浅色，Ink 深色通过 `<html class="dark">` 切换；不要在组件里写 `dark:` 变体。
 - 所有颜色使用语义 token，禁止硬编码色值或 gray/blue/red 调色板类：
   - 纸面：`bg-surface`（编辑器画布、激活标签）/ `bg-panel`（顶栏、侧栏、状态栏、终端）/ `bg-raised`（纸卡、浮层）/ `bg-sunken`（输入与代码）
@@ -730,6 +770,7 @@ async function initAgent(config: ApiConfig) {
 - 间距使用 4px 网格。
 
 ### 交互规范
+
 - 文件点击：立即打开，不需要双击
 - 自动保存：2 秒防抖后保存
 - 错误提示：使用 Toast 组件，3 秒后自动消失
@@ -740,6 +781,7 @@ async function initAgent(config: ApiConfig) {
 ## 🔍 调试和测试
 
 ### 开发工具
+
 ```bash
 # 开发模式（推荐）
 npm run dev           # 启动 Vite + Electron
@@ -762,11 +804,13 @@ npm run build         # 全量构建
 > 修改 `tailwind.config.js`（新增颜色/工具类）后必须重启 `npm run dev`：Tailwind 配置只在服务器启动时读取，Vite 的 CSS HMR 不会生成新工具类，页面会回退到 Tailwind 默认边框色（深色主题下表现为异常发亮的硬线）。
 
 ### IPC 调试
+
 - 使用 `<IPCDebug />` 组件查看 IPC 调用
 - 主进程日志：在终端查看
 - 渲染进程日志：F12 打开 DevTools
 
 ### 常用调试技巧
+
 ```typescript
 // 调试 Zustand 状态
 useEditorStore.subscribe((state) => {
@@ -779,6 +823,7 @@ console.log('IPC result:', result)
 ```
 
 ### 渲染层测试
+
 - Vitest + `jsdom` + React Testing Library；测试文件用 `// @vitest-environment jsdom`
 - Monaco 等重型组件通过 `vi.mock` 模拟，避免真实渲染
 - 修改编辑器 / 聊天 / 文件树交互后，请补充或更新对应的渲染层测试
@@ -788,6 +833,7 @@ console.log('IPC result:', result)
 ## 📝 提交规范
 
 ### Commit Message 格式
+
 ```
 <type>(<scope>): <subject>
 
@@ -797,6 +843,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 ```
 
 ### Type 类型
+
 - `feat`: 新功能
 - `fix`: Bug 修复
 - `docs`: 文档更新
@@ -806,6 +853,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 - `chore`: 构建工具、依赖更新
 
 ### Scope 示例
+
 - `agent`: Pi Agent 相关
 - `editor`: Monaco Editor 相关
 - `file`: 文件管理相关
@@ -813,6 +861,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 - `ipc`: IPC 通信相关
 
 ### 示例 Commit
+
 ```
 feat(agent): Integrate real Pi Agent runtime
 
@@ -842,18 +891,21 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 ## ⚡ 快速参考
 
 ### 添加新的 IPC 命令
+
 1. 在 `electron/main.ts` 添加 `ipcMain.handle('command:name', ...)`
 2. 在 `electron/preload.cts` 暴露到 `contextBridge`
 3. 在 `src/types/electron.d.ts` 添加类型定义
 4. 在 `src/api/index.ts` 封装 API
 
 ### 添加新的组件
+
 1. 在 `src/components/` 创建组件文件
 2. 使用 TailwindCSS 类名编写样式
 3. 通过 Zustand store 管理状态
 4. 在 `App.tsx` 中引入使用
 
 ### 添加新的 Store
+
 1. 在 `src/store/` 创建 store 文件
 2. 使用 `create<T>()` 定义接口和实现
 3. 在组件中通过 `useXxxStore()` 使用
@@ -866,6 +918,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 **重要**: 本项目已从 **Tauri** 迁移到 **Electron**
 
 如果看到以下内容，说明是过期的：
+
 - ❌ Tauri API 调用 (`invoke`, `@tauri-apps/api`)
 - ❌ Rust 代码 (`src-tauri/`)
 - ❌ Cargo.toml
@@ -886,6 +939,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 #### 何时写报告
 
 **禁止创建报告的情况**（直接做，简单告知）：
+
 - 日常代码修复（修 bug、改 typo、格式调整）
 - 单个文件的小改动
 - 临时的分析或调查
@@ -893,6 +947,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 - **即使用户说"详细检查"，也只在下面的明确指示下才写报告**
 
 **允许创建报告的情况**（必须满足以下条件之一）：
+
 1. **用户明确说**："生成报告"、"写成文档"、"需要审查记录"、"创建文档"
 2. **架构重大决策**：多工作区 / 多 Agent 的协调、技术选型改变、大型重构
 3. **安全审计**：安全漏洞、权限问题、数据处理风险
@@ -915,10 +970,12 @@ docs/
 ```
 
 **命名规范**：
+
 - 临时报告：`{类型}-{日期}.md` 或 `{类型}-{主题}.md`（放 docs/reports/）
 - 永久文档：`{主题}.md`（放 docs/ 或其子目录）
 
 **文件生命周期**：
+
 - 临时报告（docs/reports/）：用户审查完后由用户决定删除或移到永久位置
 - 永久文档（docs/）：版本控制中保留，定期更新
 
@@ -951,18 +1008,23 @@ docs/
   - 📝 整合：合并内容到 AGENTS.md、STATUS.md 等永久文档
 
 ### 5. 防抖节流
+
 - 对频繁操作（输入、滚动）使用防抖
 
 ### 6. 错误处理
+
 - 所有异步操作都用 try-catch 包裹
 
 ### 7. 用户反馈
+
 - 操作完成后显示 Toast 通知
 
 ### 8. 性能优化
+
 - 使用 React.memo 避免不必要的重渲染
 
 ### 9. 代码复用
+
 - 提取通用逻辑到 hooks 或 utils
 
 ---

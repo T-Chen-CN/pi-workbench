@@ -24,15 +24,18 @@
 ```
 pi-workbench/
 ├── electron/                     # Electron 主进程
-│   ├── main.ts                   # 窗口、IPC、文件系统、安全存储、Agent 生命周期
+│   ├── main.ts                   # 启动、窗口与生命周期装配
 │   ├── preload.cts               # contextBridge（编译为 CommonJS preload.cjs）
+│   ├── app-paths.ts              # 便携式应用目录
+│   ├── workspace-trust.ts        # 工作区信任与路径包含
+│   ├── ipc/                      # 按域注册 IPC（files/workspace/agent/api-config/settings/system）
 │   ├── agent-registry.ts         # 按工作区登记 Agent 实例
 │   ├── approval-broker.ts        # 工具审批挂起 / 超时 / 取消
 │   ├── notifications.ts          # 桌面通知路由（前台抑制）
 │   ├── terminal-manager.ts       # PTY、输出缓冲与日志轮转
 │   ├── plugin-manager.ts         # 工作区插件加载与钩子
 │   ├── draft-store.ts            # 崩溃恢复草稿
-│   ├── workspace-store.ts        # 最近工作区元数据（SQLite + JSON 回退）
+│   ├── workspace-store.ts        # 最近工作区元数据（node:sqlite 单存储）
 │   ├── watch-batcher.ts          # 文件监听事件批量合并
 │   ├── watch-filter.ts           # 监听忽略规则
 │   ├── atomic-json.ts            # 原子写 + .bak 恢复
@@ -46,7 +49,12 @@ pi-workbench/
 │   │   ├── AgentMarkdown.tsx     # 流式 / 完整 Markdown 渲染
 │   │   ├── AgentTrace.tsx        # 思考、文本、工具步骤时间线
 │   │   ├── ApprovalCard.tsx      # 工具审批卡
-│   │   ├── ChatPanel.tsx         # 会话、流式、附件、命令、计划、用量
+│   │   ├── ChatPanel.tsx         # 会话面板入口（调用 controller hook）
+│   │   ├── ChatHeader.tsx        # 顶部与会话标签
+│   │   ├── ChatTranscript.tsx    # 虚拟化消息滚动区
+│   │   ├── ChatMessageRow.tsx    # 消息行、任务与变更摘要
+│   │   ├── ChatApiKeyPrompt.tsx  # 未配置 API Key 的提示
+│   │   ├── VirtualRows.tsx       # 共享虚拟列表渲染
 │   │   ├── ChatSessionList.tsx   # 会话抽屉（搜索、置顶、归档、导出）
 │   │   ├── CommandPalette.tsx    # 命令面板（Ctrl+Shift+P）
 │   │   ├── DialogHost.tsx        # 应用内确认 / 输入对话框
@@ -85,7 +93,7 @@ pi-workbench/
 │   │   ├── WorkspaceScope.tsx    # 让深层组件知道所属工作区
 │   │   └── editorTabs.ts         # 编辑器标签落盘
 │   ├── theme/tokens.ts           # 从 CSS 变量读取颜色（Monaco / xterm）
-│   ├── hooks/useVirtualRows.ts   # 虚拟滚动
+│   ├── hooks/                     # useVirtualRows / useChatSessions / useChatPanelState / useRevertEdits
 │   ├── utils/                    # 文件路径/树、快捷键、符号、图片、Markdown、diff 回退等
 │   ├── api/
 │   │   ├── index.ts              # IPC 封装 + Web dev mock
@@ -103,7 +111,7 @@ pi-workbench/
 │   │   ├── agent-manager.ts      # 会话/模型配置/工具编辑捕获/历史/导出
 │   │   ├── approval-policy.ts    # 会话模式与审批策略
 │   │   ├── tool-policy.ts        # 模式对应的工具集
-│   │   ├── session-extras.ts     # 会话 sidecar（计划、权限、历史 Diff）
+│   │   ├── session-extras.ts     # 会话 sidecar（计划、权限）
 │   │   ├── plan.ts               # 结构化计划
 │   │   ├── atomic-json.ts        # 原子写
 │   │   └── index.ts
@@ -156,7 +164,7 @@ App.openWorkspace
   → api.openDirectoryDialog()
   → api.initWorkspace(path)        # 创建 .pi-workbench/ 与 plugins/
   → api.watchWorkspace(path)
-  → api.addRecentWorkspace(path)   # settings.json + workspaces.db
+  → api.addRecentWorkspace(path)   # data/workspaces.db
   → WorkspaceView 常驻挂载（每个已打开工作区一份）
   → ChatPanel 读取 api-config.json → agent:initialize
   → agent:sessions:open → 恢复会话消息
@@ -182,10 +190,10 @@ ChatPanel.handleSubmit
 |---|---|---|
 | API 配置 | `{appDir}/config/api-config.json` | `apiKey` 为 `enc:<base64>`（safeStorage） |
 | 应用设置 / 最近工作区 | `{appDir}/config/settings.json` | |
-| 工作区打开记录 | `{appDir}/data/workspaces.db` | SQLite；不可用时回退 `.json` |
+| 工作区打开记录 | `{appDir}/data/workspaces.db` | SQLite 单存储，记录打开时间与次数 |
 | Agent 模型配置 | `{appDir}/data/agent/models.json` | `apiKey: "$PI_WORKBENCH_API_KEY"`，不落盘 |
 | Agent 会话 | `{appDir}/data/agent/sessions/*.jsonl` | 平铺文件，按 cwd 过滤 |
-| 会话 sidecar | `{appDir}/data/agent/session-extras/*.json` | 计划、权限、历史 Diff |
+| 会话 sidecar | `{appDir}/data/agent/session-extras/*.json` | 计划、权限 |
 | 工作区配置 | `{workspace}/.pi-workbench/config.json` | |
 | 打开中的会话 / 编辑器标签 | `{workspace}/.pi-workbench/chat-tabs.json` / `editor-tabs.json` | |
 | Web dev Agent 数据 | `{appDir}/cache/temp/web-agent/` | 仅开发模式 |
