@@ -12,32 +12,24 @@ import {
   SessionManager,
   SettingsManager,
   type AgentSession,
-  type ExtensionFactory,
   type ResourceLoader,
   type SessionEntry,
-  type SessionTreeNode,
 } from '@earendil-works/pi-coding-agent'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { existsSync, readFileSync } from 'fs'
-import { writeJsonAtomicSync } from './atomic-json.js'
 import {
   DEFAULT_PERMISSION_LEVEL,
-  buildApprovalDetails,
-  categorizeTool,
   isPermissionLevel,
   normalizeSessionPermission,
-  resolvePermissionPolicy,
   type ApprovalDecision,
   type ApprovalRequestPayload,
   type PermissionLevel,
   type SessionMode,
   type SessionPermission,
-  type ToolCategory,
 } from './approval-policy.js'
 import { resolveModeTools } from './tool-policy.js'
 import {
-  normalizePlanSteps,
   type PlanStep,
   type PlanStepStatus,
   type PlanStatus,
@@ -51,72 +43,96 @@ import {
   isSafeSessionId,
   type SessionExtras,
 } from './session-extras.js'
+import {
+  messageText as toMessageText,
+  stripContextBlock,
+  summarizeToolArgs,
+  summarizeToolResult,
+  wrapPlanPrompt,
+} from './text-utils.js'
+import {
+  buildHtmlExport,
+  buildMarkdownExport,
+  type ExportLanguage,
+  type ExportTurn,
+} from './session-export.js'
+import { validateChatImages } from './chat-images.js'
+import {
+  KNOWN_MODEL_METADATA,
+  THINKING_LEVELS,
+  WORKBENCH_PROVIDER_ID,
+  writeModelsConfig,
+} from './model-config.js'
+import {
+  acquireProviderEnv,
+  ensureBashOnPath,
+  releaseProviderEnv,
+} from './environment.js'
+import {
+  buildTitlePrompt,
+  normalizeSessionTitle,
+  requestSessionTitle,
+} from './session-title.js'
+import { buildSessionMessages } from './session-history.js'
+import {
+  describeToolResult,
+  findToolResultPayload,
+  readToolResultChunk as sliceToolResult,
+} from './tool-results.js'
+import {
+  buildBranchGroups,
+  deepestLeaf,
+  isAncestorOrSelf,
+  sessionTreeNodes,
+} from './session-branch.js'
+import { createApprovalExtension } from './approval-extension.js'
+import { createPlanExtension } from './plan-extension.js'
+import type {
+  AgentChatOptions,
+  AgentChatResult,
+  AgentConfig,
+  AgentLogger,
+  AgentMessage,
+  AgentTraceEvent,
+  AgentUsage,
+  ConversationBranchGroup,
+  FileEdit,
+  ModelCapabilityInfo,
+  PromptTemplateInfo,
+  SessionOpenResult,
+  SessionSummary,
+  SkillInfo,
+  ToolResultMeta,
+} from './types.js'
+import { withTimeout, withTimeoutResult } from './async-utils.js'
 
-/** 已知模型的能力元数据；自定义端点不会返回这些信息（R-06） */
-const KNOWN_MODEL_METADATA: Record<
-  string,
-  {
-    contextWindow?: number
-    maxTokens?: number
-    reasoning?: boolean
-    input?: Array<'text' | 'image'>
-  }
-> = {
-  // 2026-10-24 由项目所有者确认：DeepSeek flash 支持图像输入；上下文 128K
-  'deepseek-flash': {
-    contextWindow: 128_000,
-    maxTokens: 8_192,
-    reasoning: true,
-    input: ['text', 'image'],
-  },
+/** 未注入 logger 时保持原有 console 行为 */
+const consoleAgentLogger: AgentLogger = {
+  info: (...args) => console.log(...args),
+  warn: (...args) => console.warn(...args),
+  error: (...args) => console.error(...args),
+  debug: (...args) => console.debug(...args),
 }
 
-/** 思考级别与 setSessionThinking 的允许值一致 */
-const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+export type {
+  AgentChatOptions,
+  AgentChatResult,
+  AgentConfig,
+  AgentLogger,
+  AgentMessage,
+  AgentTraceEvent,
+  AgentTracePart,
+  AgentUsage,
+  ConversationBranchGroup,
+  FileEdit,
+  ModelCapabilityInfo,
+  PromptTemplateInfo,
+  SessionOpenResult,
+  SessionSummary,
+  SkillInfo,
+  ToolResultMeta,
+} from './types.js'
 
-/** 图片附件通用上限：与渲染层、主进程保持一致 */
-const MAX_CHAT_IMAGES = 20
-const MAX_IMAGE_BASE64_CHARS = Math.ceil((10 * 1024 * 1024 * 4) / 3)
-const MAX_TOTAL_IMAGE_BASE64_CHARS = 48 * 1024 * 1024
-const CHAT_IMAGE_MIME = /^image\/(png|jpe?g|webp|gif)$/i
-
-/** 校验并归一化聊天图片；超限明确报错，不做静默过滤 */
-function validateChatImages(value: unknown): {
-  images: Array<{ data: string; mimeType: string }>
-  error?: string
-} {
-  if (value === undefined || value === null) return { images: [] }
-  if (!Array.isArray(value)) return { images: [], error: 'Images must be an array.' }
-  if (value.length > MAX_CHAT_IMAGES) {
-    return { images: [], error: `At most ${MAX_CHAT_IMAGES} images can be sent at once.` }
-  }
-  const images: Array<{ data: string; mimeType: string }> = []
-  let totalChars = 0
-  for (const image of value) {
-    const data = (image as { data?: unknown } | null)?.data
-    const mimeType = (image as { mimeType?: unknown } | null)?.mimeType
-    if (typeof data !== 'string' || data.length === 0) {
-      return { images: [], error: 'Invalid image payload.' }
-    }
-    if (typeof mimeType !== 'string' || !CHAT_IMAGE_MIME.test(mimeType)) {
-      return { images: [], error: 'Unsupported image format.' }
-    }
-    if (data.length > MAX_IMAGE_BASE64_CHARS) {
-      return { images: [], error: 'Each image must be at most 10 MB.' }
-    }
-    totalChars += data.length
-    if (totalChars > MAX_TOTAL_IMAGE_BASE64_CHARS) {
-      return { images: [], error: 'Images exceed the total size limit.' }
-    }
-    images.push({ data, mimeType })
-  }
-  return { images }
-}
-
-/** 写入 models.json 的自定义供应商 ID */
-const WORKBENCH_PROVIDER_ID = 'pi-workbench'
-/** models.json 中引用的环境变量名（避免把 API Key 写进磁盘） */
-const API_KEY_ENV = 'PI_WORKBENCH_API_KEY'
 /** 单轮请求的默认超时（毫秒）；超时后自动中止，避免 Agent 永远处于忙碌状态 */
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000
 /** abort 之后等待 SDK 收尾的宽限期；超过后强制结束本轮，防止永久挂起 */
@@ -127,436 +143,8 @@ const ABORT_TIMEOUT_MS = 5_000
 const INIT_TIMEOUT_MS = 30_000
 /** 单次工具审批的等待上限；超时按拒绝处理（fail-closed） */
 const APPROVAL_TIMEOUT_MS = 120_000
-/** 会话标题生成超时 */
-const TITLE_TIMEOUT_MS = 15_000
-/** 与 src/api/chatContext.ts 的标记保持一致 */
-const CONTEXT_BLOCK_START = '<pi-workbench-context>'
-const CONTEXT_BLOCK_END = '</pi-workbench-context>'
-/** Plan 模式的提示块；历史恢复时整块剥离，不展示给用户 */
-const PLAN_BLOCK_START = '<pi-workbench-plan-mode>'
-const PLAN_BLOCK_END = '</pi-workbench-plan-mode>'
-const PLAN_MODE_INSTRUCTION = [
-  'You are in Plan mode. Only read-only tools (read, grep, find, ls) and submit_plan are available;',
-  'you cannot modify files or run commands.',
-  'Explore the repository as needed, then call submit_plan exactly once with a concise structured plan:',
-  'each step needs a short title, the files it will touch, and a risk note where relevant.',
-  'Do not write the plan as free-form text and do not claim that changes were made.',
-  'After submit_plan succeeds, reply with one short sentence.',
-].join(' ')
 
 export type { SessionMode }
-
-function wrapPlanPrompt(message: string): string {
-  return `${PLAN_BLOCK_START}\n${PLAN_MODE_INSTRUCTION}\n${PLAN_BLOCK_END}\n\n${message}`
-}
-
-export interface AgentLogger {
-  info: (...args: unknown[]) => void
-  warn: (...args: unknown[]) => void
-  error: (...args: unknown[]) => void
-  debug: (...args: unknown[]) => void
-}
-
-/** 未注入 logger 时保持原有 console 行为 */
-const consoleAgentLogger: AgentLogger = {
-  info: (...args) => console.log(...args),
-  warn: (...args) => console.warn(...args),
-  error: (...args) => console.error(...args),
-  debug: (...args) => console.debug(...args),
-}
-
-/**
- * 供应商密钥通过 process.env 提供给 Pi SDK（models.json 只存变量名）。
- * 多个 Agent 实例共享进程环境，用引用计数保证最后一个实例释放后才清理。
- */
-const providerEnvState = {
-  users: 0,
-  saved: new Map<string, string | undefined>(),
-}
-const PROVIDER_ENV_KEYS = ['PI_WORKBENCH_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const
-
-function acquireProviderEnv(apiKey: string, provider: string): void {
-  if (providerEnvState.users === 0) {
-    providerEnvState.saved.clear()
-    for (const key of PROVIDER_ENV_KEYS) {
-      providerEnvState.saved.set(key, process.env[key])
-      delete process.env[key]
-    }
-  }
-  providerEnvState.users++
-
-  process.env[API_KEY_ENV] = apiKey
-  if (provider === 'anthropic') {
-    process.env.ANTHROPIC_API_KEY = apiKey
-  } else if (provider === 'openai') {
-    process.env.OPENAI_API_KEY = apiKey
-  }
-}
-
-function releaseProviderEnv(): void {
-  if (providerEnvState.users === 0) return
-  providerEnvState.users--
-  if (providerEnvState.users > 0) return
-
-  for (const [key, value] of providerEnvState.saved) {
-    if (value === undefined) {
-      delete process.env[key]
-    } else {
-      process.env[key] = value
-    }
-  }
-  providerEnvState.saved.clear()
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  let timer: NodeJS.Timeout | null = null
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
-    timer.unref?.()
-  })
-  try {
-    return await Promise.race([promise, timeout])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-}
-
-/** 超时返回 null，便于调用方处理“迟到的成功结果” */
-async function withTimeoutResult<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string,
-  logger: AgentLogger
-): Promise<{ value: T } | null> {
-  let timer: NodeJS.Timeout | null = null
-  const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => {
-      logger.warn(`[Agent Manager] ${label} timed out after ${timeoutMs}ms`)
-      resolve(null)
-    }, timeoutMs)
-    timer.unref?.()
-  })
-  try {
-    return await Promise.race([promise.then((value) => ({ value })), timeout])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-}
-
-/** 恢复历史时去掉附件上下文块与 Plan 模式提示块，避免聊天面板展示内部指令 */
-function stripContextBlock(content: string): string {
-  let text = content
-  const planStart = text.indexOf(PLAN_BLOCK_START)
-  const planEnd = text.indexOf(PLAN_BLOCK_END)
-  if (planStart !== -1 && planEnd > planStart) {
-    const before = text.slice(0, planStart).trim()
-    const after = text.slice(planEnd + PLAN_BLOCK_END.length).trim()
-    text = [before, after].filter(Boolean).join('\n\n')
-  }
-
-  const start = text.indexOf(CONTEXT_BLOCK_START)
-  const end = text.indexOf(CONTEXT_BLOCK_END)
-  if (start === -1 || end <= start) return text
-
-  const before = text.slice(0, start).trim()
-  const after = text.slice(end + CONTEXT_BLOCK_END.length).trim()
-  return [before, after].filter(Boolean).join('\n\n') || '(attached files)'
-}
-
-/** 提取消息文本；内容可能是字符串或文本块数组 */
-function messageText(message: unknown): string {
-  const content = (message as { content?: unknown } | null)?.content
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content
-    .filter(
-      (part): part is { type: 'text'; text: string } =>
-        Boolean(part) &&
-        (part as { type?: unknown }).type === 'text' &&
-        typeof (part as { text?: unknown }).text === 'string'
-    )
-    .map((part) => part.text)
-    .join('\n')
-}
-
-/** 会话导出（R-10）的结构标签 */
-const EXPORT_LABELS = {
-  zh: {
-    you: '你',
-    assistant: 'Pi',
-    thinking: '思考过程',
-    tool: '工具调用',
-    args: '参数',
-    result: '完整结果',
-    image: '图片',
-    exportedAt: '导出时间',
-  },
-  en: {
-    you: 'You',
-    assistant: 'Pi',
-    thinking: 'Thinking',
-    tool: 'Tool call',
-    args: 'Arguments',
-    result: 'Full result',
-    image: 'Image',
-    exportedAt: 'Exported',
-  },
-} as const
-
-export type ExportLanguage = 'zh' | 'en'
-
-type ExportToolPart = {
-  type: 'tool'
-  name: string
-  args: string
-  result: string
-  isError: boolean
-  images: Array<{ data: string; mimeType: string }>
-}
-type ExportPart =
-  | { type: 'text'; text: string }
-  | { type: 'thinking'; text: string }
-  | ExportToolPart
-type ExportTurn = { user: { text: string; timestamp: number }; parts: ExportPart[] }
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-/** 生成不会与内容冲突的 Markdown 代码围栏 */
-function markdownFence(text: string): string {
-  const runs = text.match(/`{3,}/g) ?? []
-  const longest = runs.reduce((max, run) => Math.max(max, run.length), 2)
-  return '`'.repeat(Math.max(3, longest + 1))
-}
-
-/** 工具步骤展示限额；完整结果仍保留在 Pi JSONL 中 */
-const TOOL_ARGS_LIMIT = 1_000
-const TOOL_RESULT_LIMIT = 2_000
-
-function truncateText(text: string, max: number, preferTail = false): string {
-  if (text.length <= max) return text
-  return preferTail ? `…${text.slice(-max)}` : `${text.slice(0, max)}…`
-}
-
-function stringifyToolArgs(args: unknown): string {
-  try {
-    return truncateText(JSON.stringify(args ?? {}), 500)
-  } catch {
-    return ''
-  }
-}
-
-/** 生成不包含大字段（尤其 write.content）的参数摘要 */
-function summarizeToolArgs(toolName: string, args: any): string {
-  const value = args ?? {}
-  switch (toolName) {
-    case 'read':
-    case 'ls':
-      return typeof value.path === 'string' ? value.path : stringifyToolArgs(value)
-    case 'write': {
-      const size = typeof value.content === 'string' ? value.content.length : 0
-      return `${value.path ?? ''}${size > 0 ? ` · ${size} 字符` : ''}`
-    }
-    case 'edit': {
-      const count = Array.isArray(value.edits) ? value.edits.length : 0
-      return `${value.path ?? ''}${count > 0 ? ` · ${count} 处` : ''}`
-    }
-    case 'bash':
-    case 'powershell':
-      return truncateText(String(value.command ?? ''), TOOL_ARGS_LIMIT)
-    case 'grep':
-    case 'find':
-      return [value.pattern, value.path ?? value.glob]
-        .filter((part) => typeof part === 'string' && part.length > 0)
-        .join(' · ')
-    default:
-      return stringifyToolArgs(value)
-  }
-}
-
-/** 从工具结果中提取可展示的文本预览，图片只显示占位 */
-function summarizeToolResult(result: any, preferTail = false): string {
-  if (!result) return ''
-  if (typeof result === 'string') {
-    return truncateText(result, TOOL_RESULT_LIMIT, preferTail)
-  }
-  const content = Array.isArray(result.content) ? result.content : []
-  const text = content
-    .map((part: any) => {
-      if (part?.type === 'text' && typeof part.text === 'string') return part.text
-      if (part?.type === 'image') return '[图片]'
-      return ''
-    })
-    .filter(Boolean)
-    .join('\n')
-  if (text) return truncateText(text, TOOL_RESULT_LIMIT, preferTail)
-  if (result.details != null) {
-    try {
-      return truncateText(JSON.stringify(result.details), TOOL_RESULT_LIMIT, preferTail)
-    } catch {
-      return ''
-    }
-  }
-  return ''
-}
-
-/** 可展示的工具步骤 */
-export type AgentTracePart =
-  | { type: 'text'; id: string; text: string }
-  | {
-      type: 'thinking'
-      id: string
-      text: string
-      redacted?: boolean
-      durationMs?: number
-    }
-  | {
-      type: 'tool'
-      id: string
-      toolCallId: string
-      toolName: string
-      argsSummary: string
-      status: 'running' | 'success' | 'error'
-      isError?: boolean
-      durationMs?: number
-      resultPreview?: string
-      filePath?: string
-    }
-
-/** 主进程归一化后的流式事件；文本、思考和工具共用同一条有序通道 */
-export type AgentTraceEvent =
-  | { type: 'text_delta'; delta: string }
-  | { type: 'thinking_delta'; delta: string }
-  | { type: 'thinking_redacted' }
-  | {
-      type: 'tool_start'
-      toolCallId: string
-      toolName: string
-      argsSummary: string
-      startedAt: number
-      /** 嵌套调用（子 Agent）的父级工具调用（R-16） */
-      parentToolCallId?: string
-    }
-  | {
-      type: 'tool_update'
-      toolCallId: string
-      resultPreview?: string
-      parentToolCallId?: string
-    }
-  | {
-      type: 'tool_end'
-      toolCallId: string
-      toolName: string
-      status: 'success' | 'error'
-      durationMs?: number
-      resultPreview?: string
-      filePath?: string
-      parentToolCallId?: string
-    }
-  | {
-      type: 'retry_start'
-      attempt: number
-      maxAttempts: number
-      delayMs: number
-      message?: string
-    }
-  | { type: 'retry_end'; success: boolean }
-  | { type: 'compaction_start'; reason: 'manual' | 'threshold' | 'overflow' }
-  | {
-      type: 'compaction_end'
-      reason: 'manual' | 'threshold' | 'overflow'
-      tokensBefore?: number
-      error?: string
-    }
-  | { type: 'plan_submitted'; plan: StructuredPlan }
-  | { type: 'plan_updated'; plan: StructuredPlan }
-
-
-export interface AgentConfig {
-  workspaceDir: string
-  /** Agent 数据目录（默认为 {workspace}/.pi-workbench/agent） */
-  agentDir?: string
-  apiConfig: {
-    provider: string
-    apiUrl: string
-    apiKey: string
-    selectedModel: string
-    /** 供应商返回的可选模型列表；用于写入 models.json 与能力提示 */
-    availableModels?: string[]
-    /** 用户勾选为“支持图片”的模型；未提供时按内置已知信息兜底 */
-    imageModels?: string[]
-  }
-  /** 日志出口；主进程注入 agent.log，未注入时退回 console */
-  logger?: AgentLogger
-  /** 模型生成会话标题后回调（主进程转发给渲染层） */
-  onSessionTitle?: (sessionId: string, title: string) => void
-  /** 新会话的默认权限档位；只在创建会话运行时读取一次，之后会话自行持有权限 */
-  getDefaultPermissionLevel?: () => unknown
-  /** 请求用户审批；未提供时按拒绝处理（fail-closed） */
-  requestApproval?: (request: ApprovalRequestPayload) => Promise<ApprovalDecision>
-}
-
-export interface SessionSummary {
-  id: string
-  title: string
-  messageCount: number
-  createdAt: number
-  updatedAt: number
-}
-
-/** 模型能力提示（R-06）；null 表示供应商未声明，界面显示“未知” */
-export interface ModelCapabilityInfo {
-  id: string
-  available: boolean
-  /** catalog：应用内置已知元数据；default：供应商未声明，使用 SDK 默认值 */
-  source: 'catalog' | 'default'
-  contextWindow: number | null
-  maxTokens: number | null
-  reasoning: boolean | null
-  vision: boolean | null
-  thinkingLevels: string[]
-}
-
-/** Pi 提示模板（R-13），通过 `/name` 在对话中展开 */
-export interface PromptTemplateInfo {
-  name: string
-  description: string
-  argumentHint?: string
-  scope: 'user' | 'project' | 'temporary'
-}
-
-/** Pi 技能（R-13），通过 `/skill:name` 调用 */
-export interface SkillInfo {
-  name: string
-  description: string
-  scope: 'user' | 'project' | 'temporary'
-  disableModelInvocation: boolean
-}
-
-export interface SessionOpenResult {
-  success: boolean
-  session?: SessionSummary
-  history?: AgentMessage[]
-  error?: string
-}
-
-/** 同一条用户消息下的可切换回复（R-03） */
-export interface ConversationBranchOption {
-  entryId: string
-  preview: string
-}
-
-export interface ConversationBranchGroup {
-  /** 该轮用户消息的时间戳，与历史消息的 timestamp 对应 */
-  userTimestamp: number
-  activeIndex: number
-  branches: ConversationBranchOption[]
-}
 
 interface SessionRuntime {
   id: string
@@ -590,67 +178,6 @@ interface SessionRuntime {
   thinkingDurationsThisMessage: number[]
 }
 
-export interface AgentMessage {
-  role: 'user' | 'assistant'
-  content: string
-  parts?: AgentTracePart[]
-  /** 用户消息附带的图片（R-08），用于历史恢复时展示 */
-  images?: Array<{ data: string; mimeType: string }>
-  timestamp: number
-}
-
-export interface FileEdit {
-  path: string
-  oldContent: string
-  newContent: string
-  /** 触发该修改的工具调用；用于在工具步骤里打开对应 Diff */
-  toolCallId?: string
-}
-
-/** 工具结果元数据（R-20）；完整内容按需从会话消息中读取 */
-export interface ToolResultMeta {
-  toolName: string
-  /** text：可分段读取；image：仅含图片结果 */
-  kind: 'text' | 'image'
-  chars: number
-  bytes: number
-  lines: number
-  imageCount: number
-}
-
-export interface AgentUsage {
-  input: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
-  totalTokens: number
-  /** 供应商回报的累计费用（可能为 0） */
-  cost: number
-}
-
-export interface AgentChatResult {
-  success: boolean
-  response?: string
-  error?: string
-  /** Agent 在本轮对话中修改过的文件（用于 Diff 展示） */
-  edits?: FileEdit[]
-  /** 本轮模型调用的 token 用量 */
-  usage?: AgentUsage
-  /** 本轮 Plan 模式新提交的结构化计划（R-04） */
-  plan?: StructuredPlan
-}
-
-export interface AgentChatOptions {
-  /** 接收流式文本增量（兼容只关心文本的调用方） */
-  onTextDelta?: (delta: string) => void
-  /** 接收归一化的文本 / 思考 / 工具事件；与 onTextDelta 可同时使用 */
-  onTrace?: (event: AgentTraceEvent) => void
-  /** 单轮请求超时（毫秒），0 表示不超时；默认 10 分钟 */
-  timeoutMs?: number
-  /** 图像附件（base64，不含 data: 前缀） */
-  images?: Array<{ data: string; mimeType: string }>
-}
-
 /**
  * Agent Manager 类
  *
@@ -669,86 +196,6 @@ export class AgentManager {
   private envLease = false
   private runtimes = new Map<string, SessionRuntime>()
   private lastSessionId: string | null = null
-
-  /**
-   * 将用户配置的 URL / 模型写入 Pi 的 models.json，
-   * 这样任何 OpenAI 兼容端点（DeepSeek、中转站等）都能被 Pi Agent 使用。
-   * API Key 通过环境变量引用，不落盘。
-   */
-  private async writeModelsConfig(agentDir: string, config: AgentConfig): Promise<string> {
-    const { provider, apiUrl, selectedModel } = config.apiConfig
-
-    const modelIds = [
-      ...new Set(
-        [selectedModel, ...(config.apiConfig.availableModels ?? [])].filter(
-          (id): id is string => typeof id === 'string' && id.length > 0
-        )
-      ),
-    ]
-
-    const modelsPath = path.join(agentDir, 'models.json')
-    const imageModels = Array.isArray(config.apiConfig.imageModels)
-      ? config.apiConfig.imageModels
-      : modelIds.filter((id) => KNOWN_MODEL_METADATA[id]?.input?.includes('image'))
-    const imageSet = new Set(imageModels)
-    const modelsConfig = {
-      $schema: 'https://pi.dev/schemas/models.schema.json',
-      providers: {
-        [WORKBENCH_PROVIDER_ID]: {
-          baseUrl: apiUrl.replace(/\/+$/, ''),
-          api: provider === 'anthropic' ? 'anthropic-messages' : 'openai-completions',
-          apiKey: `$${API_KEY_ENV}`,
-          models: modelIds.map((id) => ({
-            id,
-            ...(KNOWN_MODEL_METADATA[id] ?? {}),
-            // Pi SDK 按 input 决定是否把图片传给模型；以用户勾选为准
-            input: imageSet.has(id) ? ['text', 'image'] : ['text'],
-          })),
-        },
-      },
-    }
-
-    await fs.mkdir(agentDir, { recursive: true })
-    writeJsonAtomicSync(modelsPath, modelsConfig)
-    return modelsPath
-  }
-
-  /**
-   * Windows 上 Pi 的 bash 工具需要 Git Bash：它只查 Program Files 和 PATH。
-   * 若 Git 安装在用户目录（常见于 per-user 安装），这里把 bash.exe 所在目录补进 PATH。
-   */
-  private ensureBashOnPath(): void {
-    if (process.platform !== 'win32') return
-
-    const localAppData = process.env.LOCALAPPDATA ?? ''
-    const programFiles = process.env.ProgramFiles ?? ''
-    const programFilesX86 = process.env['ProgramFiles(x86)'] ?? ''
-
-    const candidates = [
-      path.join(localAppData, 'Programs', 'Git', 'bin'),
-      path.join(localAppData, 'Programs', 'Git', 'usr', 'bin'),
-      path.join(programFiles, 'Git', 'bin'),
-      path.join(programFilesX86, 'Git', 'bin'),
-      'C:\\Program Files\\Git\\bin',
-    ].filter((dir) => dir && existsSync(path.join(dir, 'bash.exe')))
-
-    if (candidates.length === 0) {
-      this.logger.warn('[Agent Manager] Git Bash not found; the bash tool will be unavailable')
-      return
-    }
-
-    const currentPath = process.env.PATH ?? ''
-    const existing = currentPath
-      .split(path.delimiter)
-      .map((entry) => entry.toLowerCase())
-      .filter(Boolean)
-    const missing = candidates.filter((dir) => !existing.includes(dir.toLowerCase()))
-
-    if (missing.length > 0) {
-      process.env.PATH = [...missing, currentPath].join(path.delimiter)
-      this.logger.info('[Agent Manager] Added Git Bash to PATH:', missing.join(', '))
-    }
-  }
 
   /** 从 assistant 消息中提取 usage（Pi 保证 assistant 消息带 usage） */
   private readUsage(message: any): AgentUsage | undefined {
@@ -1015,8 +462,8 @@ export class AgentManager {
       this.agentDir =
         config.agentDir || path.join(config.workspaceDir, '.pi-workbench', 'agent')
       this.extrasStore = new SessionExtrasStore(path.join(this.agentDir, 'session-extras'))
-      const modelsPath = await this.writeModelsConfig(this.agentDir, config)
-      this.ensureBashOnPath()
+      const modelsPath = await writeModelsConfig(this.agentDir, config.apiConfig)
+      ensureBashOnPath(this.logger)
 
       acquireProviderEnv(apiKey, provider)
       this.envLease = true
@@ -1087,182 +534,6 @@ export class AgentManager {
     }
   }
 
-  /**
-   * 工具审批扩展：在工具执行前按会话模式放行、拒绝或挂起等待用户。
-   * 以 inline extension 的方式注册 tool_call 钩子，不落盘，也不属于工作台插件系统。
-   */
-  private createApprovalExtension(
-    sessionId: string,
-    getPermission: () => SessionPermission,
-    onAlwaysAllow: (category: ToolCategory) => void | Promise<void>
-  ): ExtensionFactory {
-    return (pi) => {
-      pi.on('tool_call', async (event: any) => {
-        const toolName = String(event?.toolName ?? '')
-        const args = event?.input ?? event?.args ?? {}
-        const category = categorizeTool(toolName)
-        const permission = normalizeSessionPermission(getPermission())
-
-        // Plan 模式只允许只读工具；即使工具集被意外放宽也要拦住
-        if (permission.mode === 'plan' && category !== 'read') {
-          return {
-            block: true,
-            reason:
-              'Plan mode is read-only. Switch to Ask or Auto mode before modifying files or running commands.',
-          }
-        }
-
-        const policy = resolvePermissionPolicy(permission)
-        const action = policy[category]
-
-        if (action === 'allow') return undefined
-        if (action === 'deny') {
-          this.logger.info(`[Agent Manager] Blocked tool ${toolName} by policy (${category})`)
-          return {
-            block: true,
-            reason: `Tool "${toolName}" is blocked by the current permission policy.`,
-          }
-        }
-
-        const request: ApprovalRequestPayload = {
-          requestId: `approval-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-          workspaceDir: this.config?.workspaceDir ?? '',
-          sessionId,
-          toolCallId: String(event?.toolCallId ?? ''),
-          toolName,
-          category,
-          summary: summarizeToolArgs(toolName, args),
-          details: buildApprovalDetails(toolName, args),
-          createdAt: Date.now(),
-          expiresAt: Date.now() + APPROVAL_TIMEOUT_MS,
-        }
-
-        const decision = await this.requestToolApproval(request)
-        this.logger.info(`[Agent Manager] Tool approval for ${toolName}: ${decision.action}`)
-
-        if (decision.action === 'allow-once') return undefined
-        if (decision.action === 'allow-always') {
-          await onAlwaysAllow(category)
-          return undefined
-        }
-
-        const reason = decision.reason?.trim()
-        return {
-          block: true,
-          reason: reason
-            ? `The user denied this tool call: ${reason}`
-            : 'The user denied this tool call.',
-        }
-      })
-    }
-  }
-
-  /** Plan 模式的结构化计划工具（R-04） */
-  private createPlanExtension(context: {
-    getRuntime: () => SessionRuntime | null
-    getMode: () => SessionMode
-  }): ExtensionFactory {
-    const result = (text: string) => ({ content: [{ type: 'text' as const, text }], details: undefined })
-    const persistExtras = (runtime: SessionRuntime) => this.persistExtras(runtime)
-
-    return (pi) => {
-      pi.registerTool({
-        name: 'submit_plan',
-        label: 'Submit plan',
-        description:
-          'Submit one structured implementation plan for the user to approve. Plan mode only.',
-        promptSnippet: 'submit_plan: submit a structured implementation plan (Plan mode)',
-        promptGuidelines: [
-          'In Plan mode, call submit_plan exactly once after exploring; do not write the plan as free-form text.',
-        ],
-        parameters: {
-          type: 'object',
-          properties: {
-            summary: { type: 'string', description: 'One-sentence summary of the plan' },
-            steps: {
-              type: 'array',
-              minItems: 1,
-              items: {
-                type: 'object',
-                properties: {
-                  title: { type: 'string', description: 'Short step title' },
-                  files: { type: 'array', items: { type: 'string' } },
-                  risk: { type: 'string', description: 'Optional risk or side effect' },
-                },
-                required: ['title'],
-              },
-            },
-          },
-          required: ['steps'],
-        } as any,
-        async execute(_toolCallId: string, params: any) {
-          const runtime = context.getRuntime()
-          if (!runtime) throw new Error('Plan state is unavailable.')
-          if (context.getMode() !== 'plan') {
-            throw new Error('submit_plan is only available in Plan mode.')
-          }
-          const steps = normalizePlanSteps(params?.steps)
-          if (steps.length === 0) {
-            throw new Error('A plan needs at least one step with a title.')
-          }
-          const now = Date.now()
-          const plan: StructuredPlan = {
-            id: `plan-${now}`,
-            summary:
-              typeof params?.summary === 'string' ? params.summary.trim().slice(0, 500) : '',
-            steps,
-            status: 'proposed',
-            createdAt: now,
-            updatedAt: now,
-          }
-          runtime.extras.plan = plan
-          persistExtras(runtime)
-          runtime.onTrace?.({ type: 'plan_submitted', plan })
-          return result(
-            `Plan submitted with ${plan.steps.length} step(s). Waiting for the user to approve or reject it.`
-          )
-        },
-      })
-
-      pi.registerTool({
-        name: 'update_plan_step',
-        label: 'Update plan step',
-        description: 'Mark a step of the approved plan as in_progress, done, pending or skipped.',
-        promptSnippet: 'update_plan_step: update the status of an approved plan step',
-        promptGuidelines: [
-          'When executing an approved plan, call update_plan_step with in_progress before starting a step and done after finishing it.',
-        ],
-        parameters: {
-          type: 'object',
-          properties: {
-            stepId: { type: 'string', description: 'Step id from the approved plan' },
-            status: {
-              type: 'string',
-              enum: ['pending', 'in_progress', 'done', 'skipped'],
-            },
-          },
-          required: ['stepId', 'status'],
-        } as any,
-        async execute(_toolCallId: string, params: any) {
-          const runtime = context.getRuntime()
-          const plan = runtime?.extras.plan
-          if (!runtime || !plan) throw new Error('There is no active plan to update.')
-          const step = plan.steps.find((item) => item.id === params?.stepId)
-          if (!step) throw new Error(`Unknown plan step "${String(params?.stepId ?? '')}".`)
-          const status = String(params?.status ?? '')
-          if (!['pending', 'in_progress', 'done', 'skipped'].includes(status)) {
-            throw new Error('Invalid plan step status.')
-          }
-          step.status = status as PlanStepStatus
-          plan.updatedAt = Date.now()
-          persistExtras(runtime)
-          runtime.onTrace?.({ type: 'plan_updated', plan })
-          return result(`Step ${step.id} is now ${status}.`)
-        },
-      })
-    }
-  }
-
   /** 向宿主请求审批；没有审批通道或超时都按拒绝处理 */
   private async requestToolApproval(request: ApprovalRequestPayload): Promise<ApprovalDecision> {
     const handler = this.config?.requestApproval
@@ -1302,7 +573,7 @@ export class AgentManager {
       if (result.cancelled) {
         return { success: false, error: 'Rewind was cancelled.' }
       }
-      const text = (newText ?? messageText(last.message)).trim()
+      const text = (newText ?? toMessageText(last.message)).trim()
       return { success: true, text }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -1315,7 +586,7 @@ export class AgentManager {
   ): Promise<{ success: boolean; groups?: ConversationBranchGroup[]; error?: string }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      return { success: true, groups: this.branchGroups(runtime) }
+      return { success: true, groups: buildBranchGroups(runtime.sessionManager) }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -1344,7 +615,7 @@ export class AgentManager {
         return { success: false, error: 'Only replies to a user message can be switched.' }
       }
 
-      const nodes = this.sessionTreeNodes(manager.getTree())
+      const nodes = sessionTreeNodes(manager.getTree())
       const siblings = (nodes.get(parent.id)?.children ?? []).filter(
         (child) =>
           child.entry.type === 'message' && child.entry.message.role === 'assistant'
@@ -1362,9 +633,9 @@ export class AgentManager {
 
       const remembered = runtime.extras.branchLeaves[entryId]
       const targetLeaf =
-        remembered && this.isAncestorOrSelf(manager, entryId, remembered)
+        remembered && isAncestorOrSelf(manager, entryId, remembered)
           ? remembered
-          : this.deepestLeaf(nodes.get(entryId))
+          : deepestLeaf(nodes.get(entryId))
       if (!targetLeaf) return { success: false, error: 'Branch entry not found.' }
 
       const result = await runtime.session.navigateTree(targetLeaf)
@@ -1451,91 +722,6 @@ export class AgentManager {
     }
   }
 
-  private sessionTreeNodes(tree: SessionTreeNode[]): Map<string, SessionTreeNode> {
-    const nodes = new Map<string, SessionTreeNode>()
-    const visit = (list: SessionTreeNode[]) => {
-      for (const node of list) {
-        nodes.set(node.entry.id, node)
-        visit(node.children)
-      }
-    }
-    visit(tree)
-    return nodes
-  }
-
-  private branchGroups(runtime: SessionRuntime): ConversationBranchGroup[] {
-    const manager = runtime.sessionManager
-    const branch = manager.getBranch()
-    const branchIds = new Set(branch.map((entry) => entry.id))
-    const nodes = this.sessionTreeNodes(manager.getTree())
-    const groups: ConversationBranchGroup[] = []
-
-    for (const entry of branch) {
-      if (entry.type !== 'message' || entry.message.role !== 'user') continue
-      const node = nodes.get(entry.id)
-      if (!node) continue
-      const replies = node.children.filter(
-        (child) =>
-          child.entry.type === 'message' && child.entry.message.role === 'assistant'
-      )
-      if (replies.length < 2) continue
-      const activeIndex = replies.findIndex((child) => branchIds.has(child.entry.id))
-      const timestamp = (entry.message as { timestamp?: unknown }).timestamp
-      groups.push({
-        userTimestamp:
-          typeof timestamp === 'number' ? timestamp : Date.parse(entry.timestamp) || Date.now(),
-        activeIndex: activeIndex >= 0 ? activeIndex : 0,
-        branches: replies.map((child) => ({
-          entryId: child.entry.id,
-          preview:
-            child.entry.type === 'message'
-              ? messageText(child.entry.message).replace(/\s+/g, ' ').trim().slice(0, 80)
-              : '',
-        })),
-      })
-    }
-    return groups
-  }
-
-  /** entryId 是否为 targetId 的祖先（含自身） */
-  private isAncestorOrSelf(
-    manager: SessionManager,
-    entryId: string,
-    targetId: string
-  ): boolean {
-    let current = manager.getEntry(targetId)
-    let guard = 0
-    while (current && guard < 10_000) {
-      if (current.id === entryId) return true
-      current = current.parentId ? manager.getEntry(current.parentId) : undefined
-      guard += 1
-    }
-    return false
-  }
-
-  private deepestLeaf(node: SessionTreeNode | undefined): string | undefined {
-    if (!node) return undefined
-    let current = node
-    while (current.children.length > 0) {
-      let best = current.children[0]
-      let bestDepth = -1
-      for (const child of current.children) {
-        const depth = this.treeDepth(child)
-        if (depth >= bestDepth) {
-          best = child
-          bestDepth = depth
-        }
-      }
-      current = best
-    }
-    return current.entry.id
-  }
-
-  private treeDepth(node: SessionTreeNode): number {
-    if (node.children.length === 0) return 0
-    return 1 + Math.max(...node.children.map((child) => this.treeDepth(child)))
-  }
-
   /** 工具结果元数据（R-20）；不复制内容，只统计大小 */
   async getToolResultMeta(
     sessionId: string,
@@ -1543,23 +729,9 @@ export class AgentManager {
   ): Promise<{ success: boolean; meta?: ToolResultMeta; error?: string }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      const payload = this.toolResultPayload(runtime, toolCallId)
+      const payload = findToolResultPayload(runtime.session.messages ?? [], toolCallId)
       if (!payload) return { success: false, error: 'No result recorded for this tool call.' }
-      const imageBytes = payload.images.reduce(
-        (total, image) => total + Math.floor((image.data.length * 3) / 4),
-        0
-      )
-      return {
-        success: true,
-        meta: {
-          toolName: payload.toolName,
-          kind: payload.images.length > 0 && payload.text.length === 0 ? 'image' : 'text',
-          chars: payload.text.length,
-          bytes: Buffer.byteLength(payload.text, 'utf8') + imageBytes,
-          lines: payload.text.length === 0 ? 0 : payload.text.split('\n').length,
-          imageCount: payload.images.length,
-        },
-      }
+      return { success: true, meta: describeToolResult(payload) }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -1582,25 +754,9 @@ export class AgentManager {
   }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      const payload = this.toolResultPayload(runtime, toolCallId)
+      const payload = findToolResultPayload(runtime.session.messages ?? [], toolCallId)
       if (!payload) return { success: false, error: 'No result recorded for this tool call.' }
-      const text = payload.text
-      const start = Math.max(0, Math.min(Math.floor(offset) || 0, text.length))
-      const size = Math.max(1, Math.min(Math.floor(limit) || 1, 1_000_000))
-      let end = Math.min(text.length, start + size)
-      // 不把代理对切成两半，避免渲染层出现乱码字符
-      if (end < text.length) {
-        const code = text.charCodeAt(end)
-        if (code >= 0xdc00 && code <= 0xdfff) end += 1
-      }
-      return {
-        success: true,
-        text: text.slice(start, end),
-        offset: start,
-        nextOffset: end,
-        chars: text.length,
-        done: end >= text.length,
-      }
+      return { success: true, ...sliceToolResult(payload.text, offset, limit) }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -1614,7 +770,7 @@ export class AgentManager {
   ): Promise<{ success: boolean; data?: string; mimeType?: string; error?: string }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      const payload = this.toolResultPayload(runtime, toolCallId)
+      const payload = findToolResultPayload(runtime.session.messages ?? [], toolCallId)
       if (!payload || payload.images.length === 0) {
         return { success: false, error: 'No image result recorded for this tool call.' }
       }
@@ -1632,45 +788,12 @@ export class AgentManager {
   ): Promise<{ success: boolean; text?: string; toolName?: string; error?: string }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      const payload = this.toolResultPayload(runtime, toolCallId)
+      const payload = findToolResultPayload(runtime.session.messages ?? [], toolCallId)
       if (!payload) return { success: false, error: 'No result recorded for this tool call.' }
       return { success: true, text: payload.text, toolName: payload.toolName }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
-  }
-
-  private toolResultPayload(
-    runtime: SessionRuntime,
-    toolCallId: string
-  ): { toolName: string; text: string; images: Array<{ data: string; mimeType: string }> } | null {
-    const messages = (runtime.session.messages ?? []) as any[]
-    for (const message of messages) {
-      if (!message || message.role !== 'toolResult' || message.toolCallId !== toolCallId) continue
-      const content: any[] = Array.isArray(message.content)
-        ? message.content
-        : typeof message.content === 'string'
-          ? [{ type: 'text', text: message.content }]
-          : []
-      const texts: string[] = []
-      const images: Array<{ data: string; mimeType: string }> = []
-      for (const part of content) {
-        if (part?.type === 'text' && typeof part.text === 'string') {
-          texts.push(part.text)
-        } else if (part?.type === 'image' && typeof part.data === 'string') {
-          images.push({
-            data: part.data,
-            mimeType: typeof part.mimeType === 'string' ? part.mimeType : 'image/png',
-          })
-        }
-      }
-      return {
-        toolName: typeof message.toolName === 'string' ? message.toolName : 'tool',
-        text: texts.join('\n'),
-        images,
-      }
-    }
-    return null
   }
 
   /** 会话导出为 Markdown（R-10）：正文、思考与工具调用/完整结果，长过程默认收起 */
@@ -1680,7 +803,11 @@ export class AgentManager {
   ): Promise<{ success: boolean; title?: string; content?: string; error?: string }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      const exported = this.buildMarkdownExport(runtime, language === 'en' ? 'en' : 'zh')
+      const exported = buildMarkdownExport(
+        this.exportTitle(runtime),
+        this.exportTurns(runtime),
+        language === 'en' ? 'en' : 'zh'
+      )
       return { success: true, ...exported }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -1694,7 +821,11 @@ export class AgentManager {
   ): Promise<{ success: boolean; title?: string; content?: string; error?: string }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      const exported = this.buildHtmlExport(runtime, language === 'en' ? 'en' : 'zh')
+      const exported = buildHtmlExport(
+        this.exportTitle(runtime),
+        this.exportTurns(runtime),
+        language === 'en' ? 'en' : 'zh'
+      )
       return { success: true, ...exported }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -1733,7 +864,7 @@ export class AgentManager {
       if (message?.role === 'user') {
         turns.push({
           user: {
-            text: stripContextBlock(messageText(message)),
+            text: stripContextBlock(toMessageText(message)),
             timestamp: typeof message.timestamp === 'number' ? message.timestamp : Date.now(),
           },
           parts: [],
@@ -1781,146 +912,6 @@ export class AgentManager {
     } catch {
       return String(args ?? '')
     }
-  }
-
-  private buildMarkdownExport(
-    runtime: SessionRuntime,
-    language: ExportLanguage
-  ): { title: string; content: string } {
-    const labels = EXPORT_LABELS[language]
-    const title = this.exportTitle(runtime)
-    const lines: string[] = [
-      `# ${title}`,
-      '',
-      `> ${labels.exportedAt}: ${new Date().toISOString()}`,
-      '',
-    ]
-
-    for (const turn of this.exportTurns(runtime)) {
-      if (turn.user.text) lines.push(`## ${labels.you}`, '', turn.user.text, '')
-      lines.push(`## ${labels.assistant}`, '')
-      for (const part of turn.parts) {
-        if (part.type === 'text') {
-          lines.push(part.text, '')
-          continue
-        }
-        if (part.type === 'thinking') {
-          lines.push(
-            '<details>',
-            `<summary>${labels.thinking}</summary>`,
-            '',
-            part.text,
-            '',
-            '</details>',
-            ''
-          )
-          continue
-        }
-        const fence = markdownFence(`${part.args}\n${part.result}`)
-        lines.push(
-          '<details>',
-          `<summary>${labels.tool} · ${part.name}${part.isError ? ' ✗' : ''}</summary>`,
-          '',
-          `**${labels.args}**`,
-          '',
-          `${fence}json`,
-          part.args,
-          fence,
-          '',
-          `**${labels.result}**`,
-          '',
-          `${fence}text`,
-          part.result,
-          fence
-        )
-        for (const image of part.images) {
-          lines.push('', `![${labels.image}](data:${image.mimeType};base64,${image.data})`)
-        }
-        lines.push('', '</details>', '')
-      }
-    }
-
-    return { title, content: lines.join('\n') }
-  }
-
-  private buildHtmlExport(
-    runtime: SessionRuntime,
-    language: ExportLanguage
-  ): { title: string; content: string } {
-    const labels = EXPORT_LABELS[language]
-    const title = this.exportTitle(runtime)
-    const body: string[] = [
-      `<h1>${escapeHtml(title)}</h1>`,
-      `<p class="meta">${labels.exportedAt}: ${escapeHtml(new Date().toISOString())}</p>`,
-    ]
-
-    for (const turn of this.exportTurns(runtime)) {
-      body.push('<section class="turn">')
-      if (turn.user.text) {
-        body.push(`<h2>${labels.you}</h2>`, `<pre class="text">${escapeHtml(turn.user.text)}</pre>`)
-      }
-      body.push(`<h2>${labels.assistant}</h2>`)
-      for (const part of turn.parts) {
-        if (part.type === 'text') {
-          body.push(`<pre class="text">${escapeHtml(part.text)}</pre>`)
-          continue
-        }
-        if (part.type === 'thinking') {
-          body.push(
-            '<details>',
-            `<summary>${labels.thinking}</summary>`,
-            `<pre>${escapeHtml(part.text)}</pre>`,
-            '</details>'
-          )
-          continue
-        }
-        body.push(
-          '<details>',
-          `<summary>${labels.tool} · ${escapeHtml(part.name)}${part.isError ? ' ✗' : ''}</summary>`,
-          `<h3>${labels.args}</h3>`,
-          `<pre>${escapeHtml(part.args)}</pre>`,
-          `<h3>${labels.result}</h3>`,
-          `<pre>${escapeHtml(part.result)}</pre>`
-        )
-        for (const image of part.images) {
-          body.push(
-            `<img alt="${labels.image}" src="data:${image.mimeType};base64,${image.data}" />`
-          )
-        }
-        body.push('</details>')
-      }
-      body.push('</section>')
-    }
-
-    const content = `<!doctype html>
-<html lang="${language === 'en' ? 'en' : 'zh-CN'}">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${escapeHtml(title)}</title>
-<style>
-:root { color-scheme: light; }
-body { margin: 0; background: #f7f5ef; color: #26251f; font: 15px/1.7 -apple-system, "Segoe UI", "Noto Sans SC", sans-serif; }
-main { max-width: 860px; margin: 0 auto; padding: 48px 24px; }
-h1 { font: 400 32px/1.2 Georgia, "Noto Serif SC", serif; margin: 0 0 8px; }
-h2 { font: 400 24px/1.3 Georgia, "Noto Serif SC", serif; margin: 36px 0 12px; border-bottom: 1px solid #ddd8c8; padding-bottom: 6px; }
-h3 { font-size: 13px; color: #7a766a; margin: 12px 0 4px; text-transform: uppercase; letter-spacing: .04em; }
-.meta { color: #7a766a; font-size: 12px; margin: 0 0 32px; }
-pre { white-space: pre-wrap; word-break: break-word; background: #efece2; border: 1px solid #ddd8c8; padding: 10px 12px; font: 12.5px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; overflow: auto; }
-pre.text { background: transparent; border: 0; padding: 0; font: inherit; }
-details { border-left: 2px solid #ddd8c8; padding-left: 12px; margin: 12px 0; }
-summary { cursor: pointer; color: #4f6b5a; font-size: 13px; }
-img { max-width: 100%; height: auto; border: 1px solid #ddd8c8; margin: 8px 0; }
-</style>
-</head>
-<body>
-<main>
-${body.join('\n')}
-</main>
-</body>
-</html>
-`
-    return { title, content }
   }
 
   private payloadFromMessage(message: any): {
@@ -2266,7 +1257,12 @@ ${body.join('\n')}
       agentDir: this.agentDir,
       settingsManager,
       extensionFactories: [
-        this.createApprovalExtension(
+        createApprovalExtension(
+          {
+            workspaceDir: this.config?.workspaceDir ?? '',
+            logger: this.logger,
+            requestApproval: (request) => this.requestToolApproval(request),
+          },
           id,
           () =>
             runtimeRef.current
@@ -2285,8 +1281,9 @@ ${body.join('\n')}
             return runtime.extrasSave
           }
         ),
-        this.createPlanExtension({
+        createPlanExtension({
           getRuntime: () => planContext.runtime,
+          persistExtras: (runtime) => this.persistExtras(runtime as SessionRuntime),
           getMode: () =>
             normalizeSessionPermission(runtimeRef.current?.extras.permission ?? fallbackPermission)
               .mode,
@@ -2418,129 +1415,10 @@ ${body.join('\n')}
    * parts 保留 thinking、text、tool 的真实顺序，供前端时间线渲染。
    */
   private sessionMessages(runtime: SessionRuntime): AgentMessage[] {
-    const messages = runtime.session.messages ?? []
-    const result: AgentMessage[] = []
-    let turn: { parts: AgentTracePart[]; timestamp?: number } | null = null
-    let partSeq = 0
-
-    const nextId = (prefix: string) => `${prefix}-${++partSeq}`
-
-    const flushTurn = () => {
-      if (!turn || turn.parts.length === 0) {
-        turn = null
-        partSeq = 0
-        return
-      }
-      const content = turn.parts
-        .filter((part): part is Extract<AgentTracePart, { type: 'text' }> => part.type === 'text')
-        .map((part) => part.text)
-        .join('\n')
-      result.push({
-        role: 'assistant',
-        content,
-        parts: turn.parts,
-        timestamp: turn.timestamp ?? Date.now(),
-      })
-      turn = null
-      partSeq = 0
-    }
-
-    for (const msg of messages as any[]) {
-      if (msg.role === 'user') {
-        flushTurn()
-        const raw =
-          typeof msg.content === 'string'
-            ? msg.content
-            : Array.isArray(msg.content)
-              ? msg.content
-                  .filter((part: any) => part?.type === 'text')
-                  .map((part: any) => part.text)
-                  .join('\n')
-              : ''
-        const images = Array.isArray(msg.content)
-          ? msg.content
-              .filter(
-                (part: any) => part?.type === 'image' && typeof part.data === 'string'
-              )
-              .map((part: any) => ({
-                data: part.data as string,
-                mimeType:
-                  typeof part.mimeType === 'string' ? part.mimeType : 'image/png',
-              }))
-          : []
-        result.push({
-          role: 'user',
-          content: stripContextBlock(raw),
-          images: images.length > 0 ? images : undefined,
-          timestamp: typeof msg.timestamp === 'number' ? msg.timestamp : Date.now(),
-        })
-        continue
-      }
-
-      if (msg.role === 'assistant') {
-        if (!turn) turn = { parts: [] }
-        if (turn.timestamp === undefined) {
-          turn.timestamp = typeof msg.timestamp === 'number' ? msg.timestamp : Date.now()
-        }
-
-        if (typeof msg.content === 'string') {
-          if (msg.content) {
-            turn.parts.push({ type: 'text', id: nextId('text'), text: msg.content })
-          }
-        } else if (Array.isArray(msg.content)) {
-          let thinkingIndex = 0
-          for (const part of msg.content) {
-            if (!part) continue
-            if (part.type === 'text' && typeof part.text === 'string') {
-              turn.parts.push({ type: 'text', id: nextId('text'), text: part.text })
-            } else if (part.type === 'thinking') {
-              const durations =
-                runtime.extras.thinkingDurations[String(msg.timestamp)] ?? []
-              turn.parts.push({
-                type: 'thinking',
-                id: nextId('thinking'),
-                text: typeof part.thinking === 'string' ? part.thinking : '',
-                redacted: part.redacted === true,
-                durationMs: durations[thinkingIndex],
-              })
-              thinkingIndex++
-            } else if (part.type === 'toolCall') {
-              const toolName = String(part.name ?? 'tool')
-              const toolCallId = String(part.id ?? nextId('tool'))
-              turn.parts.push({
-                type: 'tool',
-                id: toolCallId,
-                toolCallId,
-                toolName,
-                argsSummary: summarizeToolArgs(toolName, part.arguments ?? {}),
-                status: 'running',
-                filePath: this.toolFilePath(toolName, part.arguments ?? {}),
-              })
-            }
-          }
-        }
-        continue
-      }
-
-      if (msg.role === 'toolResult') {
-        if (!turn) continue
-        const toolPart = turn.parts.find(
-          (part): part is Extract<AgentTracePart, { type: 'tool' }> =>
-            part.type === 'tool' && part.toolCallId === msg.toolCallId
-        )
-        if (!toolPart) continue
-        toolPart.status = msg.isError ? 'error' : 'success'
-        toolPart.isError = Boolean(msg.isError)
-        if (typeof msg.durationMs === 'number') toolPart.durationMs = msg.durationMs
-        toolPart.resultPreview = summarizeToolResult(
-          { content: msg.content, details: msg.details },
-          msg.toolName === 'bash' || msg.toolName === 'powershell'
-        )
-      }
-    }
-
-    flushTurn()
-    return result
+    return buildSessionMessages(runtime.session.messages ?? [], {
+      thinkingDurations: runtime.extras.thinkingDurations,
+      toolFilePath: (toolName: string, args: any) => this.toolFilePath(toolName, args),
+    })
   }
 
   private runtimeSummary(runtime: SessionRuntime): SessionSummary {
@@ -3091,23 +1969,12 @@ ${body.join('\n')}
     const assistantText = this.messageText(firstAssistant.content).trim()
     if (!userText || !assistantText) return
 
-    const prompt = [
-      '你是一个会话命名器。根据下面的对话生成一个简短标题。',
-      '要求：只输出标题本身，不加引号、不加标点、不要解释；使用对话的主要语言；中文不超过 16 个字，英文不超过 8 个词。',
-      '',
-      `用户：${userText.slice(0, 800)}`,
-      `助手：${assistantText.slice(0, 800)}`,
-    ].join('\n')
+    const prompt = buildTitlePrompt(userText, assistantText)
 
-    const raw = await this.requestTitle(prompt)
+    const raw = await requestSessionTitle(config.apiConfig, prompt, this.logger)
     if (!raw) return
 
-    const title = raw
-      .split(/\r?\n/)[0]
-      .replace(/^(标题|title)\s*[:：]\s*/i, '')
-      .replace(/^["'“”‘’\s]+|["'“”‘’\s]+$/g, '')
-      .trim()
-      .slice(0, 40)
+    const title = normalizeSessionTitle(raw)
     if (!title) return
 
     // 生成期间用户可能已手动重命名、删除会话或切换走
@@ -3121,64 +1988,6 @@ ${body.join('\n')}
       this.logger.info('[Agent Manager] Generated session title:', title)
     } catch (error) {
       this.logger.warn('[Agent Manager] Failed to persist session title:', error)
-    }
-  }
-
-  /** 用配置的供应商生成一个短标题（OpenAI 兼容 / Anthropic） */
-  private async requestTitle(prompt: string): Promise<string | null> {
-    const config = this.config
-    if (!config) return null
-    const { provider, apiUrl, apiKey, selectedModel } = config.apiConfig
-    const base = apiUrl.replace(/\/+$/, '')
-    if (!base) return null
-
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS)
-    try {
-      if (provider === 'anthropic') {
-        const response = await fetch(`${base}/messages`, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
-            model: selectedModel,
-            max_tokens: 64,
-            temperature: 0.2,
-            messages: [{ role: 'user', content: prompt }],
-          }),
-          signal: controller.signal,
-        })
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const data = (await response.json()) as any
-        return typeof data?.content?.[0]?.text === 'string' ? data.content[0].text : null
-      }
-
-      const response = await fetch(`${base}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: selectedModel,
-          max_tokens: 64,
-          temperature: 0.2,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-        signal: controller.signal,
-      })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const data = (await response.json()) as any
-      const content = data?.choices?.[0]?.message?.content
-      return typeof content === 'string' ? content : null
-    } catch (error) {
-      this.logger.warn('[Agent Manager] Title generation failed:', error)
-      return null
-    } finally {
-      clearTimeout(timer)
     }
   }
 
