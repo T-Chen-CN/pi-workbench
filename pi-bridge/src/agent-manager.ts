@@ -35,6 +35,7 @@ import {
   type SessionPermission,
   type ToolCategory,
 } from './approval-policy.js'
+import { resolveModeTools } from './tool-policy.js'
 import {
   normalizePlanSteps,
   type PlanStep,
@@ -134,24 +135,6 @@ const CONTEXT_BLOCK_END = '</pi-workbench-context>'
 /** Plan 模式的提示块；历史恢复时整块剥离，不展示给用户 */
 const PLAN_BLOCK_START = '<pi-workbench-plan-mode>'
 const PLAN_BLOCK_END = '</pi-workbench-plan-mode>'
-/** 只读模式可用工具 */
-const READ_ONLY_TOOLS = ['read', 'grep', 'find', 'ls']
-/** 计划模式：只读工具 + 结构化计划提交 */
-const PLAN_MODE_TOOLS = [...READ_ONLY_TOOLS, 'submit_plan']
-/** 询问 / 完全模式的工具集（另加 update_plan_step） */
-const DEFAULT_MODE_TOOLS = [
-  ...READ_ONLY_TOOLS,
-  'write',
-  'edit',
-  'bash',
-  'powershell',
-  'update_plan_step',
-]
-function sessionModeTools(mode: SessionMode, baseTools: string[]): string[] {
-  if (mode === 'readonly') return READ_ONLY_TOOLS
-  if (mode === 'plan') return PLAN_MODE_TOOLS
-  return baseTools.length > 0 ? baseTools : DEFAULT_MODE_TOOLS
-}
 const PLAN_MODE_INSTRUCTION = [
   'You are in Plan mode. Only read-only tools (read, grep, find, ls) and submit_plan are available;',
   'you cannot modify files or run commands.',
@@ -600,8 +583,8 @@ interface SessionRuntime {
   titleAttempted: boolean
   /** 未落盘新会话的临时标题 */
   pendingTitle: string | null
-  /** 会话初始工具集；从只读/计划模式切回询问或完全时恢复 */
-  baseTools: string[]
+  /** 会话注册的全部工具；模式在此之上计算激活集，不受历史影响 */
+  registeredTools: string[]
   /** 会话附加数据（思考时长 / 历史工具 Diff） */
   extras: SessionExtras
   extrasSave: Promise<void>
@@ -1101,10 +1084,12 @@ export class AgentManager {
     return isPermissionLevel(raw) ? raw : DEFAULT_PERMISSION_LEVEL
   }
 
-  /** 按会话模式切换可用工具集 */
+  /** 按会话模式切换可用工具集；模式是唯一事实源，不依赖会话历史 */
   private applySessionModeTools(runtime: SessionRuntime, mode: SessionMode): void {
     try {
-      runtime.session.setActiveToolsByName(sessionModeTools(mode, runtime.baseTools))
+      runtime.session.setActiveToolsByName(
+        resolveModeTools(mode, runtime.registeredTools)
+      )
     } catch (error) {
       this.logger.warn('[Agent Manager] Failed to apply session mode tools:', error)
     }
@@ -2364,7 +2349,10 @@ ${body.join('\n')}
 
     const header = sessionManager.getHeader()
     const createdAt = header?.timestamp ? Date.parse(header.timestamp) : Date.now()
-    const baseTools = sessionOutcome.value.session.getActiveToolNames()
+    const registeredTools = sessionOutcome.value.session
+      .getAllTools()
+      .filter((tool) => tool.exposure !== 'hidden')
+      .map((tool) => tool.name)
     const runtime: SessionRuntime = {
       id,
       sessionManager,
@@ -2383,7 +2371,7 @@ ${body.join('\n')}
       updatedAt: Date.now(),
       titleAttempted: false,
       pendingTitle: null,
-      baseTools,
+      registeredTools,
       extras,
       extrasSave: Promise.resolve(),
       thinkingStart: null,

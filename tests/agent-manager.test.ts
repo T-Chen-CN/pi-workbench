@@ -54,9 +54,10 @@ interface FakeSession {
   dispose: () => void
   emit: (event: SessionEvent) => void
   activeTools: string[]
+  registeredTools: string[]
   getActiveToolNames: () => string[]
   setActiveToolsByName: (names: string[]) => void
-  getAllTools: () => Array<{ name: string }>
+  getAllTools: () => Array<{ name: string; exposure: string }>
   contextUsage: { tokens: number | null; contextWindow: number; percent: number | null } | undefined
   getContextUsage: () => {
     tokens: number | null
@@ -93,11 +94,23 @@ function createFakeSession(
     messages: [],
     disposed: false,
     activeTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'],
+    registeredTools: [
+      'read',
+      'bash',
+      'edit',
+      'write',
+      'grep',
+      'find',
+      'ls',
+      'submit_plan',
+      'update_plan_step',
+    ],
     getActiveToolNames: () => [...session.activeTools],
     setActiveToolsByName: (names) => {
       session.activeTools = [...names]
     },
-    getAllTools: () => session.activeTools.map((name) => ({ name })),
+    getAllTools: () =>
+      session.registeredTools.map((name) => ({ name, exposure: 'direct' })),
     contextUsage: { tokens: 12_000, contextWindow: 96_000, percent: 12.5 },
     getContextUsage: () => session.contextUsage,
     compact: async () => ({
@@ -1278,8 +1291,17 @@ describe('plan mode', () => {
     primeSdk(session)
     await manager.initialize(makeConfig())
 
-    // 询问模式恢复会话初始工具集（含 Pi 可能加载的额外工具）
-    const askTools = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls']
+    // 执行模式使用所有已注册工具，但排除 plan-only 的 submit_plan
+    const askTools = [
+      'read',
+      'bash',
+      'edit',
+      'write',
+      'grep',
+      'find',
+      'ls',
+      'update_plan_step',
+    ]
     expect(session.activeTools).toEqual(askTools)
 
     await manager.setSessionPermission('session-1', { mode: 'plan', grants: [] })
@@ -1844,6 +1866,7 @@ describe('structured plans', () => {
     const session = createFakeSession()
     primeSdk(session)
     await manager.initialize(makeConfig())
+    return session
   }
 
   it('returns the persisted plan', async () => {
@@ -1869,13 +1892,15 @@ describe('structured plans', () => {
   })
 
   it('moves the session into the chosen execution mode when approving', async () => {
-    await setupPlanSession()
+    const session = await setupPlanSession()
 
     const result = await manager.approvePlan('session-1', 'plan-1', 'auto')
     expect(result.permission).toEqual({ mode: 'auto', grants: [] })
 
     const settings = await manager.getSessionSettings('session-1')
     expect(settings.permission).toEqual({ mode: 'auto', grants: [] })
+    expect(session.activeTools).toContain('update_plan_step')
+    expect(session.activeTools).not.toContain('submit_plan')
   })
 
   it('rejects a proposed plan and refuses a second decision', async () => {
