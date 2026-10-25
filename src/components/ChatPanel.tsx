@@ -713,16 +713,26 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
     return map
   }, [messages])
-  const diffToolIds = useMemo(() => new Set(liveEditsByToolId.keys()), [liveEditsByToolId])
+  const liveEditsRef = useRef(liveEditsByToolId)
+  liveEditsRef.current = liveEditsByToolId
+  // 只在工具 id 集合变化时换新 Set，避免流式输出让所有消息行 memo 失效
+  const diffToolSignature = useMemo(
+    () => [...liveEditsByToolId.keys()].join('\n'),
+    [liveEditsByToolId]
+  )
+  const diffToolIds = useMemo(
+    () => new Set(diffToolSignature ? diffToolSignature.split('\n') : []),
+    [diffToolSignature]
+  )
   const openToolDiff = useCallback(
     (toolCallId: string) => {
       const edit =
-        liveEditsByToolId.get(toolCallId) ??
+        liveEditsRef.current.get(toolCallId) ??
         diffStore.getState().edits.find((item) => item.toolCallId === toolCallId)
       if (!edit) return
       diffStore.getState().openEdits([edit])
     },
-    [liveEditsByToolId, diffStore]
+    [diffStore]
   )
 
   const [initialized, setInitialized] = useState(false)
@@ -776,12 +786,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   }>({ templates: [], skills: [] })
   const [configVersion, setConfigVersion] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const forceSendRef = useRef(false)
-  const budgetWarnedRef = useRef(false)
+  /** 以下运行期标记按会话区分，避免同工作区并行会话互相影响 */
+  const forceSendKeysRef = useRef(new Set<string>())
+  const budgetWarnedKeysRef = useRef(new Set<string>())
   const initSeqRef = useRef(0)
   const pendingHydratedRef = useRef(false)
   const stickToBottomRef = useRef(true)
-  const stoppedRef = useRef(false)
+  const stoppedKeysRef = useRef(new Set<string>())
   const { parentRef: transcriptRef, virtualizer } = useVirtualRows({
     count: messages.length,
     estimateSize: 96,
@@ -1354,11 +1365,26 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       return sessions
     }
     let timer: number | null = null
+    // 只比较 pending 数组引用；草稿输入与流式输出不会触发全量序列化
+    const pendingChanged = (
+      state: { conversations: Record<string, { pending: unknown[] }> },
+      previous: { conversations: Record<string, { pending: unknown[] }> }
+    ): boolean => {
+      const keys = new Set([
+        ...Object.keys(state.conversations),
+        ...Object.keys(previous.conversations),
+      ])
+      for (const key of keys) {
+        if (!key.startsWith(prefix)) continue
+        if (state.conversations[key]?.pending !== previous.conversations[key]?.pending) {
+          return true
+        }
+      }
+      return false
+    }
     const unsubscribe = useChatStore.subscribe((state, previous) => {
       if (!pendingHydratedRef.current) return
-      if (JSON.stringify(snapshot(state.conversations)) === JSON.stringify(snapshot(previous.conversations))) {
-        return
-      }
+      if (!pendingChanged(state, previous)) return
       if (timer !== null) window.clearTimeout(timer)
       timer = window.setTimeout(() => {
         timer = null
@@ -1834,7 +1860,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
 
     // 运行中：按设置默认值排队到下一轮，或立即插入当前轮
-    if (isLoading && !forceSendRef.current) {
+    if (isLoading && !forceSendKeysRef.current.has(key)) {
       chat.setDraftInput(key, '')
       const item = chat.addPending(key, userMessage)
       if (useSettingsStore.getState().runWhileBusy === 'steer') {
@@ -1842,10 +1868,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       }
       return
     }
-    forceSendRef.current = false
-    budgetWarnedRef.current = false
+    forceSendKeysRef.current.delete(key)
+    budgetWarnedKeysRef.current.delete(key)
 
-    stoppedRef.current = false
+    stoppedKeysRef.current.delete(key)
     useSessionStore.getState().markError(workspacePath, sessionId, null)
     useSessionStore.getState().markUnread(workspacePath, sessionId, false)
     chat.setDraftInput(key, '')
@@ -2024,7 +2050,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         const errorMessage = result.error
           ? localizeError(result.error)
           : t('agentResponseFailed')
-        if (stoppedRef.current) {
+        if (stoppedKeysRef.current.has(key)) {
           chat.setError(key, null)
           chat.finishStreamingMessage(key, assistantId)
         } else {
@@ -2036,7 +2062,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     } catch (err) {
       traceBuffer.flush()
       const errorMsg = localizeError(err instanceof Error ? err.message : String(err))
-      if (stoppedRef.current) {
+      if (stoppedKeysRef.current.has(key)) {
         chat.setError(key, null)
         chat.finishStreamingMessage(key, assistantId)
       } else {
@@ -2055,9 +2081,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       // 本轮结束：自动发送下一条待发送消息（用户主动停止时不自动发送）
       const queued = useChatStore.getState().conversations[key]?.pending[0]
-      if (queued && !stoppedRef.current) {
+      if (queued && !stoppedKeysRef.current.has(key)) {
         useChatStore.getState().removePending(key, queued.id)
-        forceSendRef.current = true
+        forceSendKeysRef.current.add(key)
         window.setTimeout(() => void handleSubmit(undefined, queued.text), 0)
       }
       const activeNow = useSessionStore.getState().byWorkspace[workspacePath]?.active
@@ -2084,10 +2110,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
   }
 
+  /** 供稳定的行回调调用，避免把整个 handleSubmit 暴露给消息行 */
+  const submitRef = useRef(handleSubmit)
+  submitRef.current = handleSubmit
+
   const handleStop = async () => {
     if (!activeSessionId || stopping) return
     setStopping(true)
-    stoppedRef.current = true
+    stoppedKeysRef.current.add(conversationKey(workspacePath, activeSessionId))
     try {
       await piAgentAPI.abort(workspacePath, activeSessionId)
     } finally {
@@ -2096,42 +2126,48 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   }
 
   /** 计划卡拒绝：保留只读计划，不进入执行（R-04） */
-  const handleRejectPlan = async (plan: StructuredPlan) => {
-    if (!activeSessionId || !activeKey || isLoading) return
-    const result = await piAgentAPI.rejectPlan(workspacePath, activeSessionId, plan.id)
-    if (!result.success || !result.plan) {
-      toast.error(t('planRejectFailed', { error: localizeError(result.error ?? '') }))
-      return
-    }
-    useChatStore.getState().applyPlanUpdate(activeKey, result.plan)
-    toast.info(t('planRejected'))
-  }
+  const handleRejectPlan = useCallback(
+    async (plan: StructuredPlan) => {
+      if (!activeSessionId || !activeKey || isLoading) return
+      const result = await piAgentAPI.rejectPlan(workspacePath, activeSessionId, plan.id)
+      if (!result.success || !result.plan) {
+        toast.error(t('planRejectFailed', { error: localizeError(result.error ?? '') }))
+        return
+      }
+      useChatStore.getState().applyPlanUpdate(activeKey, result.plan)
+      toast.info(t('planRejected'))
+    },
+    [activeSessionId, activeKey, isLoading, workspacePath, t]
+  )
 
   /** 计划批准：主进程原子完成“批准 + 切换到执行模式”，再按步骤执行 */
-  const handleApprovePlan = async (plan: StructuredPlan, targetMode: 'ask' | 'auto') => {
-    if (!activeSessionId || !activeKey || isLoading) return
-    const result = await piAgentAPI.approvePlan(
-      workspacePath,
-      activeSessionId,
-      plan.id,
-      targetMode
-    )
-    if (!result.success || !result.plan) {
-      toast.error(t('planApproveFailed', { error: localizeError(result.error ?? '') }))
-      return
-    }
-    useChatStore.getState().applyPlanUpdate(activeKey, result.plan)
-    const previous = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
-    if (result.permission) {
-      useChatStore
-        .getState()
-        .setSessionSettings(activeKey, { ...previous, permission: result.permission })
-    }
-    const steps = result.plan.steps
-      .map((step, index) => `${index + 1}. ${step.title}`)
-      .join('\n')
-    void handleSubmit(undefined, t('planExecutePrompt', { steps }))
-  }
+  const handleApprovePlan = useCallback(
+    async (plan: StructuredPlan, targetMode: 'ask' | 'auto') => {
+      if (!activeSessionId || !activeKey || isLoading) return
+      const result = await piAgentAPI.approvePlan(
+        workspacePath,
+        activeSessionId,
+        plan.id,
+        targetMode
+      )
+      if (!result.success || !result.plan) {
+        toast.error(t('planApproveFailed', { error: localizeError(result.error ?? '') }))
+        return
+      }
+      useChatStore.getState().applyPlanUpdate(activeKey, result.plan)
+      const previous = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
+      if (result.permission) {
+        useChatStore
+          .getState()
+          .setSessionSettings(activeKey, { ...previous, permission: result.permission })
+      }
+      const steps = result.plan.steps
+        .map((step, index) => `${index + 1}. ${step.title}`)
+        .join('\n')
+      void submitRef.current(undefined, t('planExecutePrompt', { steps }))
+    },
+    [activeSessionId, activeKey, isLoading, workspacePath, t]
+  )
 
   /** 计划模式的兜底执行：优先结构化计划，回退到自由文本流程 */
   const handleExecutePlan = async (targetMode: 'ask' | 'auto') => {
@@ -2180,8 +2216,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       if (!result.success || !result.stats) return
       useChatStore.getState().setSessionStats(key, result.stats)
       const budget = useSettingsStore.getState().budgetUsd
-      if (budget > 0 && result.stats.cost >= budget && !budgetWarnedRef.current) {
-        budgetWarnedRef.current = true
+      if (budget > 0 && result.stats.cost >= budget && !budgetWarnedKeysRef.current.has(key)) {
+        budgetWarnedKeysRef.current.add(key)
         toast.warning(
           t('budgetExceeded', {
             cost: result.stats.cost.toFixed(2),
@@ -2357,26 +2393,32 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   }
 
   /** 复制整条消息 */
-  const handleCopyMessage = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      toast.info(t('copied'))
-    } catch (error) {
-      toast.error(t('copyFailed', { error: String(error) }))
-    }
-  }
+  const handleCopyMessage = useCallback(
+    async (text: string) => {
+      try {
+        await navigator.clipboard.writeText(text)
+        toast.info(t('copied'))
+      } catch (error) {
+        toast.error(t('copyFailed', { error: String(error) }))
+      }
+    },
+    [t]
+  )
 
   /** 重新生成：回退到最后一条用户消息并重新发送 */
-  const handleRetryMessage = async (message: ChatMessage) => {
-    if (!activeSessionId || !activeKey || isLoading) return
-    const result = await piAgentAPI.rewindLastUser(workspacePath, activeSessionId)
-    if (!result.success || !result.text) {
-      toast.error(t('retryFailed', { error: localizeError(result.error ?? '') }))
-      return
-    }
-    useChatStore.getState().removeMessage(activeKey, message.id)
-    await handleSubmit(undefined, result.text, { skipUserMessage: true })
-  }
+  const handleRetryMessage = useCallback(
+    async (message: ChatMessage) => {
+      if (!activeSessionId || !activeKey || isLoading) return
+      const result = await piAgentAPI.rewindLastUser(workspacePath, activeSessionId)
+      if (!result.success || !result.text) {
+        toast.error(t('retryFailed', { error: localizeError(result.error ?? '') }))
+        return
+      }
+      useChatStore.getState().removeMessage(activeKey, message.id)
+      await submitRef.current(undefined, result.text, { skipUserMessage: true })
+    },
+    [activeSessionId, activeKey, isLoading, workspacePath, t]
+  )
 
   /** 切换同一问题的另一条回复（R-03）：只移动会话树，不动工作区文件 */
   const handleSwitchBranch = useCallback(
@@ -2395,23 +2437,26 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   )
 
   /** 编辑最后一条用户消息并重发 */
-  const handleEditMessage = async (message: ChatMessage) => {
-    if (!activeSessionId || !activeKey || isLoading) return
-    const next = await promptDialog({
-      title: t('editMessage'),
-      message: t('editMessagePrompt'),
-      defaultValue: message.content,
-      confirmLabel: t('send'),
-    })
-    if (!next || !next.trim()) return
-    const result = await piAgentAPI.rewindLastUser(workspacePath, activeSessionId, next.trim())
-    if (!result.success) {
-      toast.error(t('retryFailed', { error: localizeError(result.error ?? '') }))
-      return
-    }
-    useChatStore.getState().truncateLastTurn(activeKey)
-    await handleSubmit(undefined, next.trim())
-  }
+  const handleEditMessage = useCallback(
+    async (message: ChatMessage) => {
+      if (!activeSessionId || !activeKey || isLoading) return
+      const next = await promptDialog({
+        title: t('editMessage'),
+        message: t('editMessagePrompt'),
+        defaultValue: message.content,
+        confirmLabel: t('send'),
+      })
+      if (!next || !next.trim()) return
+      const result = await piAgentAPI.rewindLastUser(workspacePath, activeSessionId, next.trim())
+      if (!result.success) {
+        toast.error(t('retryFailed', { error: localizeError(result.error ?? '') }))
+        return
+      }
+      useChatStore.getState().truncateLastTurn(activeKey)
+      await submitRef.current(undefined, next.trim())
+    },
+    [activeSessionId, activeKey, isLoading, workspacePath, t]
+  )
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
