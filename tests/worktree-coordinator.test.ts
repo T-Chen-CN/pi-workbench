@@ -106,9 +106,12 @@ describe('WorktreeCoordinator', () => {
 
     const bound = await coordinator!.bind('session-auto', 'auto')
     expect(bound.success).toBe(true)
-    expect(coordinator!.getSessionRoot('session-auto')).toBe(external)
+    // Paths are canonicalised (realpath): macOS temp dirs sit behind /var -> /private/var,
+    // and Windows temp dirs may use 8.3 short names, so compare real paths.
+    const canonicalExternal = await fs.realpath(external)
+    expect(coordinator!.getSessionRoot('session-auto')).toBe(canonicalExternal)
     const views = await coordinator!.listWorktrees('session-auto')
-    expect(views.find((item) => item.path === external)?.branch).toBe('feature-free')
+    expect(views.find((item) => item.path === canonicalExternal)?.branch).toBe('feature-free')
   })
 
   it('returns the commit body separately from the subject', async () => {
