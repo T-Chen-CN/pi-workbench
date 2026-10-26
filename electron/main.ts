@@ -27,6 +27,10 @@ import { registerGitIpc } from './ipc/git.js'
 import { registerWorkspaceIpc, closeAllWorkspaceWatchers } from './ipc/workspace.js'
 import { getActiveProviderApiKey } from './ipc/api-config.js'
 import {
+  WEB_SEARCH_KEY_ENV_PREFIX,
+  initializeWebSearch,
+} from './ipc/web-search.js'
+import {
   completeGithubOAuth,
   isGithubCallbackUrl,
   GITHUB_PROTOCOL,
@@ -267,6 +271,9 @@ const terminalManager = new TerminalManager({
   envSanitizer: (env) => {
     const sanitized = { ...env }
     delete sanitized.PI_WORKBENCH_API_KEY
+    for (const name of Object.keys(sanitized)) {
+      if (name.startsWith(WEB_SEARCH_KEY_ENV_PREFIX)) delete sanitized[name]
+    }
     const activeKey = getActiveProviderApiKey()
     if (activeKey) {
       for (const key of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
@@ -631,6 +638,8 @@ app.whenReady().then(async () => {
   setAppSettingsCache(await loadSettingsFile())
   await migratePermissionLevel()
   await seedTrustedWorkspaces()
+  // 联网搜索是应用基础能力：启动时把配置落到 Agent 目录并注入 Key 环境变量
+  await initializeWebSearch()
   createWindow()
 
   const initialGithubCallback = process.argv.find((arg) => isGithubCallbackUrl(arg))

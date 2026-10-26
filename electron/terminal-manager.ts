@@ -67,11 +67,18 @@ const FLUSH_DELAY_MS = 500
 const MAX_LOG_BYTES = 5 * 1024 * 1024
 /** 终端子进程不应继承 Agent 的供应商密钥 */
 const SENSITIVE_ENV_KEYS = ['PI_WORKBENCH_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']
+/** 联网搜索按供应商注入的密钥，前缀整体剔除 */
+const SENSITIVE_ENV_PREFIXES = ['PI_WORKBENCH_WEB_SEARCH_KEY']
 
 export function sanitizeTerminalEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const sanitized: NodeJS.ProcessEnv = { ...env }
   for (const key of SENSITIVE_ENV_KEYS) {
     delete sanitized[key]
+  }
+  for (const key of Object.keys(sanitized)) {
+    if (SENSITIVE_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      delete sanitized[key]
+    }
   }
   return sanitized
 }

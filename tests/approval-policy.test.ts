@@ -14,7 +14,18 @@ import {
 
 describe('categorizeTool', () => {
   it('groups read-only tools', () => {
-    for (const name of ['read', 'grep', 'find', 'ls', 'submit_plan', 'update_plan_step']) {
+    for (const name of [
+      'read',
+      'grep',
+      'find',
+      'ls',
+      'submit_plan',
+      'update_plan_step',
+      'web_search',
+      'fetch_content',
+      'get_search_content',
+      'source_check',
+    ]) {
       expect(categorizeTool(name)).toBe('read')
     }
   })

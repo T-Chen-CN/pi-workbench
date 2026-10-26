@@ -202,6 +202,8 @@ export class AgentManager {
   /** 轮次边界待应用的工作树切换 */
   private pendingRoots = new Map<string, { root: string; branch?: string }>()
   private rebinding = new Set<string>()
+  /** 上一次创建会话时使用的联网配置版本 */
+  private lastWebAccessVersion: string | null = null
 
   /** 从 assistant 消息中提取 usage（Pi 保证 assistant 消息带 usage） */
   private readUsage(message: any): AgentUsage | undefined {
@@ -460,6 +462,7 @@ export class AgentManager {
     this.logger = config.logger ?? consoleAgentLogger
     try {
       await this.disposeAllRuntimes()
+      this.lastWebAccessVersion = null
       if (this.envLease) {
         releaseProviderEnv()
         this.envLease = false
@@ -1272,6 +1275,9 @@ export class AgentManager {
       cwd: root,
       agentDir: this.agentDir,
       settingsManager,
+      additionalExtensionPaths: config.webAccessExtensionPaths?.length
+        ? config.webAccessExtensionPaths
+        : undefined,
       extensionFactories: [
         createApprovalExtension(
           {
@@ -1315,6 +1321,17 @@ export class AgentManager {
       ],
     })
     await resourceLoader.reload()
+
+    // Pi 按 cwd 缓存扩展工厂；联网配置变化后需要再 reload 一次才会重新读取扩展配置
+    const webAccessVersion = config.getWebAccessConfigVersion?.() ?? ''
+    if (
+      webAccessVersion &&
+      this.lastWebAccessVersion !== null &&
+      this.lastWebAccessVersion !== webAccessVersion
+    ) {
+      await resourceLoader.reload()
+    }
+    if (webAccessVersion) this.lastWebAccessVersion = webAccessVersion
 
     const sessionPromise = createAgentSession({
       cwd: root,

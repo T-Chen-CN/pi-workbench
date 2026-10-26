@@ -698,7 +698,7 @@ export default function App() {
               recentWorkspaces={recentWorkspaces}
               onOpenProject={() => void pickWorkspace()}
               onOpenWorkspace={(path) => void openWorkspaceAt(path)}
-              onOpenSettings={() => openSettings()}
+              onOpenSettings={(section) => openSettings(section)}
               onRefreshRecent={() => void refreshRecentWorkspaces()}
             />
           </div>

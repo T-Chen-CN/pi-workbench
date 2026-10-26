@@ -13,6 +13,11 @@ vi.mock('../src/api', () => ({
     apiConfigGet: vi.fn(async () => ({ success: false })),
     apiConfigSave: vi.fn(async () => ({ success: true })),
     apiConfigFetchModels: vi.fn(async () => ({ success: true, models: [] })),
+    webSearchGet: vi.fn(async () => ({
+      success: true,
+      config: { provider: null, endpoint: 'china', keys: {} },
+    })),
+    webSearchSave: vi.fn(async () => ({ success: true })),
     appGetInfo: vi.fn(async () => ({
       success: true,
       info: {

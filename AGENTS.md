@@ -633,6 +633,29 @@ async function initAgent(config: ApiConfig) {
 }
 ```
 
+### 内置联网能力约束
+
+**定位**:
+
+- ✅ 联网是**应用基础能力**，与文件树、编辑器、终端同级；`pi-web-access` 只是实现载体
+- ✅ 组件以固定版本随安装包分发（`package.json` 锁定，见 `THIRD_PARTY_NOTICES.md`）
+- ✅ 由 `AgentManager` 通过 `additionalExtensionPaths` 在每次创建会话时无条件加载
+- ❌ 不写入 `data/agent/settings.json` 的 `packages`、不经过 Pi 的 npm 包管理器、不进入 `.pi-workbench/plugins`、不提供启用 / 禁用开关
+
+**配置**:
+
+- ✅ 用户配置存 `{appDir}/config/web-search.json`（Key 用 `safeStorage` 加密，`enc:` 前缀）
+- ✅ 下发给扩展的 `{appDir}/data/agent/web-search.json` 只写 `$PI_WORKBENCH_WEB_SEARCH_KEY_<PROVIDER>`，Key 本体按供应商分别通过环境变量注入
+- ✅ 同一时刻只启用一家 provider；切换时保留已保存的 Key
+- ✅ 变量 `toolActivation: "eager"` / `toolExposure: "direct"`：工具常驻声明，激活集由会话模式白名单决定
+- ❌ 禁止把 Key 明文写入配置、日志或工作区
+
+**工具与权限**:
+
+- ✅ `web_search` / `fetch_content` / `get_search_content` / `source_check` 归入 `read` 类，只读与计划模式可用
+- ✅ `PI_WORKBENCH_WEB_SEARCH_KEY_*` 必须同时加入 `electron/terminal-manager.ts` 的敏感前缀与 `main.ts` 的 `envSanitizer`
+- ✅ 扩展按 cwd 缓存工厂；联网配置变化后，`AgentManager` 会再 `reload()` 一次以读取新配置
+
 ### 数据库和持久化约束
 
 **SQLite 数据库位置**:

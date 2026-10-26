@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import {
   ExternalLink,
   GitPullRequest,
+  Globe,
   Info,
   KeyRound,
   Keyboard,
@@ -29,6 +30,7 @@ import { localizeError } from '../i18n/errors'
 import type { ApiConfig, AppInfo, PermissionLevel } from '../types/electron'
 import { Button, Field, Input, Select } from './ui'
 import { GithubSettings } from './GithubSettings'
+import { WebSearchSettings } from './WebSearchSettings'
 import { KeyCap, LegendRow, Meter } from './patterns'
 import {
   SESSION_MODE_DESCRIPTION_KEY,
@@ -47,7 +49,14 @@ import {
 } from '../utils/keybindings'
 import { emitAppEvent } from '../utils/appEvents'
 
-export type SettingsSection = 'general' | 'api' | 'github' | 'permissions' | 'shortcuts' | 'about'
+export type SettingsSection =
+  | 'general'
+  | 'api'
+  | 'websearch'
+  | 'github'
+  | 'permissions'
+  | 'shortcuts'
+  | 'about'
 
 const ShortcutKeys: React.FC<{ keys: string[] }> = ({ keys }) => (
   <span className="flex flex-shrink-0 items-center gap-1 type-key text-ink-muted">
@@ -361,6 +370,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
   const navItems: Array<{ id: SettingsSection; label: string; icon: typeof Info }> = [
     { id: 'general', label: t('general'), icon: SlidersHorizontal },
     { id: 'api', label: t('apiConfiguration'), icon: KeyRound },
+    { id: 'websearch', label: t('webSearch'), icon: Globe },
     { id: 'github', label: t('githubIntegration'), icon: GitPullRequest },
     { id: 'permissions', label: t('permissions'), icon: ShieldCheck },
     { id: 'shortcuts', label: t('shortcuts'), icon: Keyboard },
@@ -537,6 +547,8 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
         )}
 
         {section === 'github' && <GithubSettings />}
+
+        {section === 'websearch' && <WebSearchSettings />}
 
         {section === 'api' && (
           <div className="flex max-w-lg flex-col gap-4">

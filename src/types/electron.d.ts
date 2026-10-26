@@ -520,6 +520,10 @@ export interface ElectronAPI {
   apiConfigGet: () => Promise<ApiConfigGetResult>
   apiConfigSave: (config: ApiConfig) => Promise<ApiConfigSaveResult>
   apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: ApiProvider) => Promise<FetchModelsResult>
+
+  // Web search (内置联网能力)
+  webSearchGet: () => Promise<WebSearchGetResult>
+  webSearchSave: (config: WebSearchConfig) => Promise<WebSearchSaveResult>
 }
 
 export interface OpenDirectoryResult {
@@ -604,6 +608,40 @@ export interface ApiConfig {
   selectedModel: string
   /** 用户勾选为“支持图片”的模型（R-08 优化）；缺省时由主进程填充内置默认值 */
   imageModels?: string[]
+}
+
+// 联网搜索（内置能力）
+export type WebSearchProviderId =
+  | 'tavily'
+  | 'exa'
+  | 'brave'
+  | 'firecrawl'
+  | 'perplexity'
+  | 'parallel'
+  | 'jina'
+  | 'bocha'
+  | 'zai'
+  | 'duckduckgo'
+
+export type WebSearchEndpoint = 'global' | 'china'
+
+export interface WebSearchConfig {
+  /** null 表示尚未选择来源 */
+  provider: WebSearchProviderId | null
+  endpoint: WebSearchEndpoint
+  /** 按供应商保存的 Key；切换供应商时保留 */
+  keys: Partial<Record<WebSearchProviderId, string>>
+}
+
+export interface WebSearchGetResult {
+  success: boolean
+  config?: WebSearchConfig
+  error?: string
+}
+
+export interface WebSearchSaveResult {
+  success: boolean
+  error?: string
 }
 
 export interface AgentInitConfig {
