@@ -98,11 +98,12 @@ export class TerminalManager {
     this.options = options
   }
 
-  create(workspaceDir: string, cols: number, rows: number): TerminalCreateResult {
+  create(workspaceDir: string, cols: number, rows: number, cwd?: string): TerminalCreateResult {
     if (!workspaceDir) {
       return { success: false, error: 'Workspace path is required' }
     }
 
+    const spawnCwd = cwd || workspaceDir
     const id = `term-${this.nextId++}`
     const logPath = this.options.logPathFor?.(workspaceDir, id) ?? null
 
@@ -117,7 +118,7 @@ export class TerminalManager {
         name: 'xterm-256color',
         cols: clampDimension(cols, 20, 1000),
         rows: clampDimension(rows, 5, 500),
-        cwd: workspaceDir,
+        cwd: spawnCwd,
         env: spawnEnv,
       })
 

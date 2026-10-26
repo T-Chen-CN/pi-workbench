@@ -59,7 +59,7 @@ import {
 } from '../utils/chatPanelShared'
 
 export function useChatPanelState(props: ChatPanelProps) {
-  const { workspacePath, active = true } = props
+  const { workspacePath, viewRoot, active = true } = props
 
   const diffStore = diffStoreFor(workspacePath)
   const { t, language } = useI18nStore()
@@ -152,8 +152,8 @@ export function useChatPanelState(props: ChatPanelProps) {
     return null
   }, [messages])
 
-  const openFiles = useEditorStore(workspacePath, (state) => state.openFiles)
-  const currentEditorFile = useEditorStore(workspacePath, (state) => state.currentFile)
+  const openFiles = useEditorStore(viewRoot ?? workspacePath, (state) => state.openFiles)
+  const currentEditorFile = useEditorStore(viewRoot ?? workspacePath, (state) => state.currentFile)
   /** 工作区类型（R-15）：按项目标记文件推断，仅用于空会话建议 */
   const [workspaceType, setWorkspaceType] = useState<WorkspaceType>('unknown')
 
@@ -349,7 +349,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     (query: string, start: number) => {
       if (mentionTimer.current) window.clearTimeout(mentionTimer.current)
       mentionTimer.current = window.setTimeout(async () => {
-        const result = await api.searchWorkspaceFiles(workspacePath, query, 12)
+        const result = await api.searchWorkspaceFiles(viewRoot ?? workspacePath, query, 12)
         if (!result.success) return
         setMention((current) =>
           current && current.start === start
@@ -358,7 +358,7 @@ export function useChatPanelState(props: ChatPanelProps) {
         )
       }, 120)
     },
-    [workspacePath]
+    [workspacePath, viewRoot]
   )
 
   const handleDraftChange = (value: string, caret: number) => {

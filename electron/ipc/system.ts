@@ -3,7 +3,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { handleIpc } from './register.js'
 import { getAppDir } from '../app-paths.js'
-import { isTrustedWorkspacePath, canonicalizePath } from '../workspace-trust.js'
+import { isTrustedWorkspacePath, canonicalizePath, isPathInsideRoot } from '../workspace-trust.js'
 import type { TerminalManager } from '../terminal-manager.js'
 import type { PluginManager } from '../plugin-manager.js'
 import type { FileLogger, LogLevel } from '../logger.js'
@@ -32,13 +32,24 @@ export function registerSystemIpc(context: SystemIpcContext): void {
   const mainWindow = () => context.getMainWindow()
 
   // ---- 终端（PTY） ----
-  handleIpc('terminal:create', async (_event, workspaceDir: string, cols: number, rows: number) => {
-    if (!isTrustedWorkspacePath(workspaceDir)) {
-      return { success: false, error: 'Workspace is not approved' }
+  handleIpc(
+    'terminal:create',
+    async (_event, workspaceDir: string, cols: number, rows: number, cwd?: string) => {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      const trusted = canonicalizePath(workspaceDir) ?? workspaceDir
+      let spawnCwd = trusted
+      if (typeof cwd === 'string' && cwd) {
+        const target = canonicalizePath(cwd)
+        if (!target || !isPathInsideRoot(trusted, target)) {
+          return { success: false, error: 'Terminal cwd is outside the workspace' }
+        }
+        spawnCwd = target
+      }
+      return context.terminalManager.create(trusted, cols, rows, spawnCwd)
     }
-    const trusted = canonicalizePath(workspaceDir) ?? workspaceDir
-    return context.terminalManager.create(trusted, cols, rows)
-  })
+  )
 
   handleIpc('terminal:write', async (_event, id: string, data: string) => ({
     success: context.terminalManager.write(id, data),

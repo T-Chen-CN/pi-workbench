@@ -89,11 +89,13 @@ function defineEditorThemes(): void {
   monaco.editor.defineTheme(EDITOR_THEME.ink, buildEditorTheme(true))
 }
 
-export const MonacoEditor: React.FC<{ workspacePath: string; active?: boolean }> = ({
-  workspacePath,
-  active = true,
-}) => {
-  const store = editorStoreFor(workspacePath)
+export const MonacoEditor: React.FC<{
+  workspacePath: string
+  viewRoot?: string
+  active?: boolean
+}> = ({ workspacePath, viewRoot, active = true }) => {
+  const root = viewRoot ?? workspacePath
+  const store = editorStoreFor(root)
   const { t } = useI18nStore()
   const resolvedTheme = useResolvedTheme()
   const editorRef = useRef<HTMLDivElement>(null)
@@ -106,7 +108,7 @@ export const MonacoEditor: React.FC<{ workspacePath: string; active?: boolean }>
     removeOpenFile,
     pendingReveal,
     consumeReveal,
-  } = useEditorStore(workspacePath)
+  } = useEditorStore(root)
   const saveTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
   const draftTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
   // 每个文件一个 model：切换标签时保留撤销栈、光标与滚动位置

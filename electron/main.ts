@@ -23,8 +23,14 @@ import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
 import { registerFilesIpc } from './ipc/files.js'
 import { registerAgentIpc } from './ipc/agent.js'
+import { registerGitIpc } from './ipc/git.js'
 import { registerWorkspaceIpc, closeAllWorkspaceWatchers } from './ipc/workspace.js'
 import { getActiveProviderApiKey } from './ipc/api-config.js'
+import {
+  completeGithubOAuth,
+  isGithubCallbackUrl,
+  GITHUB_PROTOCOL,
+} from './github-oauth.js'
 import {
   getAppSettingsCache,
   loadSettingsFile,
@@ -56,6 +62,47 @@ app.setPath('userData', userDataDir)
 
 let mainWindow: BrowserWindow | null = null
 configureIpcWindow(() => mainWindow)
+
+// GitHub OAuth 回调使用自定义协议；开发版需要带上脚本参数才能在 Windows 上回到 Electron
+try {
+  if (process.defaultApp && process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient(GITHUB_PROTOCOL, process.execPath, [
+      path.resolve(process.argv[1]),
+    ])
+  } else {
+    app.setAsDefaultProtocolClient(GITHUB_PROTOCOL)
+  }
+} catch (error) {
+  console.warn('[Main] Failed to register GitHub OAuth protocol:', error)
+}
+
+let pendingGithubAuthResult: Awaited<ReturnType<typeof completeGithubOAuth>> | null = null
+
+function flushGithubAuthResult(): void {
+  if (!pendingGithubAuthResult) return
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.webContents.isLoading()) return
+  mainWindow.webContents.send('github:auth:complete', pendingGithubAuthResult)
+  pendingGithubAuthResult = null
+}
+
+async function handleGithubCallback(url: string): Promise<void> {
+  if (!isGithubCallbackUrl(url)) return
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  }
+  const result = await completeGithubOAuth(url)
+  pendingGithubAuthResult = result
+  flushGithubAuthResult()
+}
+
+app.on('open-url', (event, url) => {
+  if (!isGithubCallbackUrl(url)) return
+  event.preventDefault()
+  void handleGithubCallback(url)
+})
 /** 每个被监听的工作区一个 watcher；切换工作区不再挤掉其他工作区 */
 // 只允许一个实例：避免两个进程同时写同一份配置和数据库。
 const singleInstanceLock =
@@ -68,7 +115,9 @@ if (!singleInstanceLock) {
     app.quit()
   }
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
+    const callbackUrl = argv.find((arg) => isGithubCallbackUrl(arg))
+    if (callbackUrl) void handleGithubCallback(callbackUrl)
     if (!mainWindow || mainWindow.isDestroyed()) return
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.focus()
@@ -308,6 +357,12 @@ registerWorkspaceIpc({
   workspaceStore,
 })
 
+registerGitIpc({
+  agentRegistry,
+  getMainWindow: () => mainWindow,
+  logger: agentLogger,
+})
+
 registerSystemIpc({
   getMainWindow: () => mainWindow,
   terminalManager,
@@ -463,6 +518,10 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 
+  mainWindow.webContents.on('did-finish-load', () => {
+    flushGithubAuthResult()
+  })
+
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -573,6 +632,9 @@ app.whenReady().then(async () => {
   await migratePermissionLevel()
   await seedTrustedWorkspaces()
   createWindow()
+
+  const initialGithubCallback = process.argv.find((arg) => isGithubCallbackUrl(arg))
+  if (initialGithubCallback) void handleGithubCallback(initialGithubCallback)
 
   // Windows / Linux 的配置、数据和更新缓存都写在安装目录：安装到 Program Files
   // 这类只读位置时提前告知，避免用户以为设置没有保存。

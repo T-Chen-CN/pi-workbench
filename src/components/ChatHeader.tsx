@@ -6,6 +6,7 @@ import { useSessionStore } from '../store/sessionStore'
 import type { SessionSummary } from '../types/electron'
 import { IconButton } from './ui'
 import { SessionTabs } from './SessionTabs'
+import { WorktreeBar } from './WorktreeBar'
 
 export interface ChatHeaderProps {
   onCollapse?: () => void
@@ -62,6 +63,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           </span>
         </div>
       </div>
+
+      <WorktreeBar workspacePath={workspacePath} />
 
       <SessionTabs
         workspacePath={workspacePath}

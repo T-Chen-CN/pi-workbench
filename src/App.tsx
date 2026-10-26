@@ -117,7 +117,8 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    const openSettingsEvent = () => openSettings()
+    const openSettingsEvent = (detail?: { section?: SettingsSection }) =>
+      openSettings(detail?.section ?? 'general')
     return onAppEvent('open-settings', openSettingsEvent)
   }, [openSettings])
 

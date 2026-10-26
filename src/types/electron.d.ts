@@ -1,3 +1,127 @@
+export interface GitRepoInfo {
+  root: string
+  gitDir: string
+  commonDir: string
+  bare: boolean
+  linkedWorktree: boolean
+  branch: string | null
+  head: string | null
+  detached: boolean
+  remoteUrl: string | null
+  github: { owner: string; repo: string } | null
+}
+
+export interface GitWorktreeView {
+  id: string
+  path: string
+  relativePath: string
+  branch: string | null
+  base: string
+  managed: boolean
+  isMain: boolean
+  boundSessionCount: number
+  boundToActiveSession: boolean
+  dirtyCount: number
+  ahead: number
+  behind: number
+}
+
+export interface GitBranchInfo {
+  name: string
+  fullName: string
+  sha: string
+  upstream: string | null
+  current: boolean
+  remote: boolean
+}
+
+export interface GitStatusInfo {
+  branch: string | null
+  upstream: string | null
+  ahead: number
+  behind: number
+  detached: boolean
+  clean: boolean
+  files: Array<{ status: string; path: string }>
+}
+
+export interface GitCommitInfo {
+  sha: string
+  shortSha: string
+  author: string
+  email: string
+  date: string
+  subject: string
+  refs: string
+  parents: string[]
+}
+
+export interface GitCommitDetail {
+  commit: GitCommitInfo
+  /** 提交信息中标题之后的正文，可能为空 */
+  body: string
+  files: Array<{ status: string; path: string }>
+  patch: string
+  truncated: boolean
+}
+
+export interface GithubPrStatus {
+  available: boolean
+  reason?: string
+  pull?: {
+    number: number
+    title: string
+    url: string
+    state: string
+    draft: boolean
+  }
+  checks?: {
+    state: 'success' | 'failure' | 'pending' | 'none'
+    total: number
+    failing: string[]
+  }
+}
+
+export interface GithubAuthUser {
+  login: string
+  name: string | null
+  avatarUrl: string | null
+}
+
+export interface GithubAuthConfigResult {
+  success: boolean
+  /** 本地是否配置了 OAuth App（client id/secret） */
+  appConfigured?: boolean
+  /** 是否已经保存了 token */
+  linked?: boolean
+  error?: string
+}
+
+export interface GithubAuthStartResult {
+  success: boolean
+  authUrl?: string
+  error?: string
+}
+
+export interface GithubAuthCompletePayload {
+  success: boolean
+  user?: GithubAuthUser | null
+  error?: string
+}
+
+export interface GithubAuthStatusResult {
+  success: boolean
+  configured?: boolean
+  user?: GithubAuthUser | null
+  error?: string
+}
+
+export interface GitSessionBinding {
+  key: string
+  path: string
+  branch: string | null
+}
+
 export interface ElectronAPI {
   platform: string
   // File system operations
@@ -61,7 +185,7 @@ export interface ElectronAPI {
   agentDispose: (workspaceDir?: string) => Promise<AgentDisposeResult>
   agentSessionsList: (workspaceDir: string) => Promise<SessionListResult>
   agentSessionsOpen: (workspaceDir: string, sessionId?: string) => Promise<SessionOpenResult>
-  agentSessionsCreate: (workspaceDir: string) => Promise<SessionOpenResult>
+  agentSessionsCreate: (workspaceDir: string, root?: string) => Promise<SessionOpenResult>
   agentSessionsClose: (workspaceDir: string, sessionId: string) => Promise<AgentDisposeResult>
   agentSessionsRename: (
     workspaceDir: string,
@@ -243,13 +367,113 @@ export interface ElectronAPI {
   ) => () => void
 
   // Terminal
-  terminalCreate: (workspaceDir: string, cols: number, rows: number) => Promise<TerminalCreateResult>
+  terminalCreate: (
+    workspaceDir: string,
+    cols: number,
+    rows: number,
+    cwd?: string
+  ) => Promise<TerminalCreateResult>
   terminalWrite: (id: string, data: string) => Promise<TerminalResult>
   terminalResize: (id: string, cols: number, rows: number) => Promise<TerminalResult>
   terminalClose: (id: string) => Promise<TerminalResult>
   terminalFlush: (id: string) => Promise<TerminalResult>
   onTerminalData: (callback: (payload: { id: string; data: string }) => void) => () => void
   onTerminalExit: (callback: (payload: { id: string; exitCode: number }) => void) => () => void
+
+  // Git worktrees / read-only history / GitHub status
+  gitRepoInfo: (workspaceDir: string) => Promise<{
+    success: boolean
+    repo?: GitRepoInfo | null
+    worktrees?: GitWorktreeView[]
+    error?: string
+  }>
+  gitListWorktrees: (
+    workspaceDir: string,
+    activeSessionId?: string
+  ) => Promise<{ success: boolean; worktrees?: GitWorktreeView[]; error?: string }>
+  gitBranches: (
+    workspaceDir: string
+  ) => Promise<{ success: boolean; branches?: GitBranchInfo[]; error?: string }>
+  gitStatus: (
+    workspaceDir: string,
+    worktreePath?: string
+  ) => Promise<{ success: boolean; status?: GitStatusInfo; error?: string }>
+  gitSessionBinding: (
+    workspaceDir: string,
+    sessionId: string
+  ) => Promise<{ success: boolean; binding?: GitSessionBinding; error?: string }>
+  gitBindWorktree: (
+    workspaceDir: string,
+    sessionId: string,
+    target: string,
+    base?: string
+  ) => Promise<{
+    success: boolean
+    worktree?: GitWorktreeView
+    sharedWith?: number
+    switched?: { success: boolean; scheduled?: boolean; error?: string }
+    error?: string
+  }>
+  gitReleaseSession: (
+    workspaceDir: string,
+    sessionId: string
+  ) => Promise<{
+    success: boolean
+    removed?: boolean
+    dirty?: boolean
+    worktreePath?: string
+    error?: string
+  }>
+  gitCleanupOrphans: (
+    workspaceDir: string
+  ) => Promise<{
+    success: boolean
+    removed?: string[]
+    dirty?: string[]
+    external?: string[]
+    error?: string
+  }>
+  gitLog: (
+    workspaceDir: string,
+    limit?: number,
+    branch?: string
+  ) => Promise<{ success: boolean; commits?: GitCommitInfo[]; error?: string }>
+  gitCommitDetail: (
+    workspaceDir: string,
+    sha: string
+  ) => Promise<{ success: boolean; detail?: GitCommitDetail; error?: string }>
+  gitDiff: (
+    workspaceDir: string,
+    from: string,
+    to: string
+  ) => Promise<{ success: boolean; patch?: string; error?: string }>
+  gitCheckout: (
+    workspaceDir: string,
+    worktreePath: string,
+    branch: string
+  ) => Promise<{ success: boolean; error?: string }>
+  gitMerge: (
+    workspaceDir: string,
+    worktreePath: string,
+    branch: string,
+    strategy?: 'merge' | 'squash' | 'rebase'
+  ) => Promise<{ success: boolean; error?: string }>
+  gitGithubTokenStatus: () => Promise<{ success: boolean; configured?: boolean }>
+  githubAuthConfig: () => Promise<GithubAuthConfigResult>
+  githubAuthStart: () => Promise<GithubAuthStartResult>
+  githubAuthStatus: () => Promise<GithubAuthStatusResult>
+  githubAuthLogout: () => Promise<{ success: boolean; error?: string }>
+  onGithubAuthComplete: (
+    callback: (payload: GithubAuthCompletePayload) => void
+  ) => () => void
+  gitSetGithubToken: (token: string) => Promise<{ success: boolean; error?: string }>
+  gitPrStatus: (
+    workspaceDir: string,
+    worktreePath?: string
+  ) => Promise<{ success: boolean; status?: GithubPrStatus; error?: string }>
+  onAgentSessionRootChanged: (
+    callback: (payload: { workspaceDir: string; sessionId: string; root: string }) => void
+  ) => () => void
 
   // Workbench plugins
   pluginsList: (workspaceDir: string) => Promise<PluginsListResult>
@@ -668,6 +892,8 @@ export interface SessionTabsResult {
 export interface EditorTabs {
   open: string[]
   active: string | null
+  /** 标签所属的工作树根；主工作树时省略 */
+  root?: string
 }
 
 export interface EditorTabsResult {

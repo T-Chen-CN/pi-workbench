@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
   ExternalLink,
+  GitPullRequest,
   Info,
   KeyRound,
   Keyboard,
@@ -27,6 +28,7 @@ import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
 import type { ApiConfig, AppInfo, PermissionLevel } from '../types/electron'
 import { Button, Field, Input, Select } from './ui'
+import { GithubSettings } from './GithubSettings'
 import { KeyCap, LegendRow, Meter } from './patterns'
 import {
   SESSION_MODE_DESCRIPTION_KEY,
@@ -45,7 +47,7 @@ import {
 } from '../utils/keybindings'
 import { emitAppEvent } from '../utils/appEvents'
 
-export type SettingsSection = 'general' | 'api' | 'permissions' | 'shortcuts' | 'about'
+export type SettingsSection = 'general' | 'api' | 'github' | 'permissions' | 'shortcuts' | 'about'
 
 const ShortcutKeys: React.FC<{ keys: string[] }> = ({ keys }) => (
   <span className="flex flex-shrink-0 items-center gap-1 type-key text-ink-muted">
@@ -359,6 +361,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
   const navItems: Array<{ id: SettingsSection; label: string; icon: typeof Info }> = [
     { id: 'general', label: t('general'), icon: SlidersHorizontal },
     { id: 'api', label: t('apiConfiguration'), icon: KeyRound },
+    { id: 'github', label: t('githubIntegration'), icon: GitPullRequest },
     { id: 'permissions', label: t('permissions'), icon: ShieldCheck },
     { id: 'shortcuts', label: t('shortcuts'), icon: Keyboard },
     { id: 'about', label: t('about'), icon: Info },
@@ -532,6 +535,8 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
             </Field>
           </div>
         )}
+
+        {section === 'github' && <GithubSettings />}
 
         {section === 'api' && (
           <div className="flex max-w-lg flex-col gap-4">

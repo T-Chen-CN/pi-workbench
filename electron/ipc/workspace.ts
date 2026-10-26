@@ -18,6 +18,7 @@ import {
   trustWorkspace,
 } from '../workspace-trust.js'
 import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
+import { disposeCoordinator } from '../worktree-coordinator.js'
 
 interface WorkspaceWatchEntry {
   watcher: FSWatcher
@@ -219,6 +220,7 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
       closeWorkspaceWatcher(workspacePath)
       context.terminalManager.closeWorkspace(canonicalizePath(workspacePath) ?? workspacePath)
       context.pluginManager.unload(workspacePath)
+      disposeCoordinator(workspacePath)
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -236,7 +238,11 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
         return { success: false, error: 'Workspace is not approved' }
       }
       const file = path.join(workspaceRoot, '.pi-workbench', 'editor-tabs.json')
-      const result = readJsonWithBackup<{ open?: unknown; active?: unknown }>(file)
+      const result = readJsonWithBackup<{
+        open?: unknown
+        active?: unknown
+        root?: unknown
+      }>(file)
       if (!result.data) {
         return { success: true, tabs: { open: [], active: null } }
       }
@@ -256,7 +262,11 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
         : null
       const active =
         activeTarget && open.includes(activeTarget) ? activeTarget : open[open.length - 1] ?? null
-      return { success: true, tabs: { open, active } }
+      const rawRoot = typeof result.data.root === 'string' ? result.data.root : null
+      const rootTarget = rawRoot ? canonicalizePath(rawRoot) : null
+      const root =
+        rootTarget && isPathInsideRoot(workspaceRoot, rootTarget) ? rootTarget : undefined
+      return { success: true, tabs: { open, active, root } }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -264,7 +274,11 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
 
   handleIpc(
     'workspace:editorTabs:set',
-    async (_event, workspaceDir: string, tabs: { open?: unknown; active?: unknown }) => {
+    async (
+      _event,
+      workspaceDir: string,
+      tabs: { open?: unknown; active?: unknown; root?: unknown }
+    ) => {
       try {
         if (!isTrustedWorkspacePath(workspaceDir)) {
           return { success: false, error: 'Workspace is not approved' }
@@ -295,10 +309,15 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
         }
         const dir = path.join(workspaceRoot, '.pi-workbench')
         await fs.mkdir(dir, { recursive: true })
+        const rawRoot = typeof tabs?.root === 'string' ? tabs.root : null
+        const rootTarget = rawRoot ? canonicalizePath(rawRoot) : null
+        const root =
+          rootTarget && isPathInsideRoot(workspaceRoot, rootTarget) ? rootTarget : null
         await writeJsonAtomic(path.join(dir, 'editor-tabs.json'), {
           version: 1,
           open,
           active,
+          root,
         })
         return { success: true }
       } catch (error) {

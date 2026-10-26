@@ -16,6 +16,8 @@ import { basename } from '../utils/filePath'
 
 interface TerminalPanelProps {
   workspacePath: string
+  /** 终端工作目录；跟随当前会话的工作树，默认工作区根 */
+  cwd?: string
   visible: boolean
   onClose: () => void
   active?: boolean
@@ -36,6 +38,7 @@ function terminalTheme(isDark: boolean) {
 
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   workspacePath,
+  cwd,
   visible,
   onClose,
   active = true,
@@ -115,11 +118,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
     let cancelled = false
     void (async () => {
-      const result = await api.terminalCreate(
-        workspacePath,
-        terminal.cols || 80,
-        terminal.rows || 24
-      )
+      const result = cwd
+        ? await api.terminalCreate(workspacePath, terminal.cols || 80, terminal.rows || 24, cwd)
+        : await api.terminalCreate(workspacePath, terminal.cols || 80, terminal.rows || 24)
       if (cancelled) {
         if (result.id) void api.terminalClose(result.id)
         return
@@ -142,7 +143,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     return () => {
       cancelled = true
     }
-  }, [visible, workspacePath, generation, t, resolvedTheme])
+  }, [visible, workspacePath, cwd, generation, t, resolvedTheme])
 
   // 主题切换时同步终端配色
   useEffect(() => {

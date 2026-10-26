@@ -53,6 +53,11 @@ export interface RegisteredAgent {
     ): Promise<AgentChatOutcome>
   }
   dispose: () => Promise<void> | void
+  /** 运行中切换会话工作树；空闲时立即重建，运行中排队到轮次边界 */
+  requestSessionRoot?: (
+    sessionId: string,
+    root: string
+  ) => Promise<{ success: boolean; scheduled?: boolean; error?: string }>
   /** 中止请求（可选，Agent 不支持时忽略） */
   abort?: (sessionId?: string) => Promise<void>
   isInitialized: () => boolean
@@ -60,7 +65,7 @@ export interface RegisteredAgent {
   getMessageHistory?: (sessionId?: string) => unknown
   listSessions?: () => Promise<unknown[]>
   openSession?: (sessionId?: string) => Promise<unknown>
-  createSession?: () => Promise<unknown>
+  createSession?: (root?: string) => Promise<unknown>
   closeSession?: (sessionId: string) => Promise<void>
   renameSession?: (sessionId: string, name: string) => Promise<unknown>
   deleteSession?: (sessionId: string) => Promise<{ success: boolean; error?: string }>
