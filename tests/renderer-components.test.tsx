@@ -24,6 +24,10 @@ import type { ApiConfig } from '../src/types/electron'
 vi.mock('../src/api', () => ({
   api: {
     apiConfigGet: vi.fn(),
+    webSearchGet: vi.fn(async () => ({
+      success: true,
+      config: { provider: null, endpoint: 'china', keys: {} },
+    })),
     readFile: vi.fn(),
     listDirectory: vi.fn(),
     writeFile: vi.fn(),
@@ -1087,6 +1091,27 @@ describe('WelcomeScreen', () => {
     expect(await screen.findByText('Pi Workbench —')).toBeTruthy()
     expect(screen.getByText('Pi 工作台 —— 安静的地方，响亮的主意')).toBeTruthy()
     expect(screen.getByText('Loud Ideas')).toBeTruthy()
+  })
+
+  it('puts web search configuration between API and opening a project', async () => {
+    vi.mocked(api.webSearchGet).mockResolvedValue({
+      success: true,
+      config: { provider: 'bocha', endpoint: 'china', keys: { bocha: 'sk-test' } },
+    })
+
+    renderWelcome()
+
+    const apiStep = await screen.findByText(translations.zh.welcomeStepApi)
+    const webStep = screen.getByText(translations.zh.welcomeStepWebSearch)
+    const projectStep = screen.getByText(translations.zh.welcomeStepProject)
+
+    expect(
+      apiStep.compareDocumentPosition(webStep) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      webStep.compareDocumentPosition(projectStep) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(screen.getByText(translations.zh.webSearchProviderBocha)).toBeTruthy()
   })
 })
 

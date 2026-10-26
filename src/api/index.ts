@@ -18,6 +18,9 @@ import type {
   ApiConfigSaveResult,
   FetchModelsResult,
   ApiProvider,
+  WebSearchConfig,
+  WebSearchGetResult,
+  WebSearchSaveResult,
   RecentWorkspacesResult,
   PluginsListResult,
   PluginCommandResult,
@@ -38,6 +41,7 @@ import type {
 
 // Mock API for browser development
 const MOCK_CONFIG_KEY = 'pi-workbench-api-config'
+const MOCK_WEB_SEARCH_KEY = 'pi-workbench-web-search-config'
 const MOCK_SETTINGS_KEY = 'pi-workbench-settings'
 
 const mockUpdateState: UpdateState = {
@@ -272,6 +276,23 @@ const mockAPI = {
     }
   },
 
+  // 纯 Web 模式下联网配置只存在浏览器里，不参与实际搜索
+  webSearchGet: async (): Promise<WebSearchGetResult> => {
+    try {
+      const saved = localStorage.getItem(MOCK_WEB_SEARCH_KEY)
+      if (saved) {
+        return { success: true, config: JSON.parse(saved) as WebSearchConfig }
+      }
+    } catch (error) {
+      console.warn('[Mock] Failed to read web search config:', error)
+    }
+    return { success: true, config: { provider: null, endpoint: 'china', keys: {} } }
+  },
+  webSearchSave: async (config: WebSearchConfig): Promise<WebSearchSaveResult> => {
+    localStorage.setItem(MOCK_WEB_SEARCH_KEY, JSON.stringify(config))
+    return { success: true }
+  },
+
   // Workbench plugins（Web 模式没有主进程，返回空列表）
   pluginsList: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
   pluginsInvoke: async (): Promise<PluginCommandResult> => ({
@@ -428,6 +449,10 @@ export const api = {
   apiConfigSave: (config: any) => electronAPI.apiConfigSave(config),
   apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: ApiProvider) =>
     electronAPI.apiConfigFetchModels(apiUrl, apiKey, provider),
+
+  // Web search (内置联网能力)
+  webSearchGet: () => electronAPI.webSearchGet(),
+  webSearchSave: (config: WebSearchConfig) => electronAPI.webSearchSave(config),
 
   // Workbench plugins
   pluginsList: (workspaceDir: string) => electronAPI.pluginsList(workspaceDir),

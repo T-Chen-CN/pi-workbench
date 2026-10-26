@@ -111,6 +111,10 @@ export interface AgentConfig {
   resolveSessionRoot?: (sessionId: string) => string | undefined
   /** 会话是否属于当前工作区（用于 listAll 结果过滤） */
   isSessionOfWorkspace?: (sessionId: string, headerCwd: string) => boolean
+  /** 内置联网扩展（pi-web-access）的加载路径；缺省表示不加载 */
+  webAccessExtensionPaths?: string[]
+  /** 当前联网配置版本；变化时新会话会重新加载扩展以读取新配置 */
+  getWebAccessConfigVersion?: () => string
   /** 注入给 Agent 的工作树上下文（每轮追加为隐藏的 custom message） */
   getWorktreeContext?: (sessionId: string) => string | Promise<string>
   /** Agent 通过 switch_worktree 请求切换；主进程负责创建/绑定并返回新根 */

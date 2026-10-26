@@ -1,13 +1,23 @@
 /** 应用内事件：替代散落的 window CustomEvent 字符串 */
 
 export interface AppEventMap {
-  'open-settings': { section?: 'general' | 'api' | 'github' | 'permissions' | 'shortcuts' | 'about' }
+  'open-settings': {
+    section?:
+      | 'general'
+      | 'api'
+      | 'websearch'
+      | 'github'
+      | 'permissions'
+      | 'shortcuts'
+      | 'about'
+  }
   'open-command-palette': void
   'workspace-toggle-terminal': void
   'pi:refresh-files': void
   'pi:insert-slash': { insert: string }
   'attach-selection': void
   'api-config-saved': void
+  'web-search-saved': void
   'session-new': void
   'session-list': void
   'session-rename': void

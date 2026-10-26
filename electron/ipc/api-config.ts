@@ -3,9 +3,9 @@
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import { existsSync } from 'fs'
-import { safeStorage } from 'electron'
 import { getAppDir } from '../app-paths.js'
 import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
+import { decryptSecret, encryptSecret } from '../secret-crypto.js'
 import { handleIpc } from './register.js'
 
 let activeProviderApiKey = ''
@@ -15,37 +15,8 @@ export function getActiveProviderApiKey(): string {
   return activeProviderApiKey
 }
 
-/**
- * API Key 静态加密（Electron safeStorage：Windows DPAPI / macOS Keychain / Linux libsecret）。
- * 文件仍保存在便携式目录中，只有加密所用的系统密钥来自操作系统。
- * 系统不支持加密时回退为明文，并打印警告。
- */
-function encryptApiKey(apiKey: string): string {
-  if (!apiKey) return ''
-  try {
-    if (safeStorage.isEncryptionAvailable()) {
-      return 'enc:' + safeStorage.encryptString(apiKey).toString('base64')
-    }
-  } catch (error) {
-    console.warn('[Main] safeStorage encryption failed:', error)
-  }
-  console.warn('[Main] safeStorage unavailable — API key will be stored in plain text')
-  return apiKey
-}
-
-function decryptApiKey(stored: string): string {
-  if (!stored) return ''
-  if (!stored.startsWith('enc:')) {
-    // 兼容旧版明文配置
-    return stored
-  }
-  try {
-    return safeStorage.decryptString(Buffer.from(stored.slice(4), 'base64'))
-  } catch (error) {
-    console.error('[Main] Failed to decrypt stored API key:', error)
-    return ''
-  }
-}
+const encryptApiKey = encryptSecret
+const decryptApiKey = decryptSecret
 
 /** 只支持 OpenAI 兼容渠道；provider 字段保留给 AgentManager 兼容旧结构 */
 const DEFAULT_API_CONFIG = {

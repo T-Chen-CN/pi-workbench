@@ -14,6 +14,11 @@ const REGISTERED = [
   'edit',
   'bash',
   'powershell',
+  // 内置联网扩展先于内联扩展加载，注册顺序据此排列
+  'web_search',
+  'fetch_content',
+  'get_search_content',
+  'source_check',
   'submit_plan',
   'update_plan_step',
 ]
@@ -30,6 +35,20 @@ describe('resolveModeTools', () => {
     expect(tools).toEqual([...PLAN_MODE_TOOLS])
     expect(tools).not.toContain('write')
     expect(tools).not.toContain('bash')
+  })
+
+  it('keeps web tools available in readonly and plan modes', () => {
+    for (const mode of ['readonly', 'plan'] as const) {
+      const tools = resolveModeTools(mode, REGISTERED, 'win32')
+      expect(tools).toEqual(
+        expect.arrayContaining([
+          'web_search',
+          'fetch_content',
+          'get_search_content',
+          'source_check',
+        ])
+      )
+    }
   })
 
   it('exposes all registered tools except plan-only tools in ask and auto', () => {

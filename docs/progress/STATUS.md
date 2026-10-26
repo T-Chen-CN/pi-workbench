@@ -4,7 +4,7 @@
 
 ## 最新状态
 
-**更新时间**: 2026-10-26
+**更新时间**: 2026-10-27
 
 - ✅ **Phase 0: MVP** — Electron 框架、文件管理、编辑器、Diff、国际化
 - ✅ **便携式架构** — 所有应用数据自包含在应用目录内
@@ -186,6 +186,7 @@
 - ✅ 2026-10-26 发布 v0.5.0：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含面板折叠回归面板头、工具可用性对齐会话模式、多工作区常驻视图与返回首页
 - ✅ 2026-10-26 发布 v0.5.1：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含渲染进程 sandbox、SQLite 单一最近工作区存储、主进程 IPC 与 AgentManager 拆分、ChatPanel 拆分、工具 Diff 仅内存、会话删除加固与文件树排序
 - ✅ 2026-10-26 发布 v0.5.2：Windows 更新缓存移至 `%LOCALAPPDATA%\Pi-Workbench-Update`（安装完成后清理）、安装器显式 `/D` 装回原目录；Pi SDK 目录与旧默认 userData 回收进安装目录，消除 `~/.pi`、`%APPDATA%\pi-workbench`、`%LOCALAPPDATA%\pi-workbench-updater` 等外部残留
+- ✅ 2026-10-27 内置联网搜索：pi-web-access 0.45.0 随包分发，AgentManager 无条件加载；设置页新增「联网搜索」分区（十家 provider 单选、Key 加密保存在 `config/web-search.json`、智谱端点可选、切换保留旧 Key）；首页「开始使用」改为 API → 联网搜索 → 打开项目三步；只读与计划模式可使用联网工具；新增 `THIRD_PARTY_NOTICES.md` 与相关单测。type-check / lint / 597 用例 / build 通过
 - ✅ 大文件模式与虚滚动（2026-10-21：聊天 / Diff / 文件树虚拟滚动，>2MB 关闭换行折叠，>10MB 只读）
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
@@ -195,4 +196,4 @@
 
 ---
 
-**更新时间**: 2026-10-26
+**更新时间**: 2026-10-27

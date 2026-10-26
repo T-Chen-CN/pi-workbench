@@ -141,13 +141,17 @@ export function derivePermissionLevelFromPolicy(input: unknown): PermissionLevel
 
 export function categorizeTool(toolName: string): ToolCategory {
   switch (toolName) {
-    // 计划工具只更新会话内的计划状态，不触碰文件或命令
+    // 只读工具：计划工具只更新会话内状态，联网工具只读取外部信息
     case 'read':
     case 'grep':
     case 'find':
     case 'ls':
     case 'submit_plan':
     case 'update_plan_step':
+    case 'web_search':
+    case 'fetch_content':
+    case 'get_search_content':
+    case 'source_check':
       return 'read'
     case 'write':
     case 'edit':

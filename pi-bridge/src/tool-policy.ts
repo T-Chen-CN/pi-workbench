@@ -6,8 +6,20 @@
  */
 import type { SessionMode } from './approval-policy.js'
 
-/** 只读模式可用工具 */
-export const READ_ONLY_TOOLS = ['read', 'grep', 'find', 'ls'] as const
+/**
+ * 只读模式可用工具。
+ * 联网工具只读地访问外部信息，不修改本地状态，因此只读与计划模式都允许使用。
+ */
+export const READ_ONLY_TOOLS = [
+  'read',
+  'grep',
+  'find',
+  'ls',
+  'web_search',
+  'fetch_content',
+  'get_search_content',
+  'source_check',
+] as const
 
 /** 只在 Plan 模式有效的工具；执行模式必须排除 */
 export const PLAN_ONLY_TOOLS = ['submit_plan'] as const

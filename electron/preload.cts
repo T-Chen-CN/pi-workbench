@@ -379,6 +379,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   apiConfigSave: (config: any) => ipcRenderer.invoke('apiConfig:save', config),
   apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: string) =>
     ipcRenderer.invoke('apiConfig:fetchModels', apiUrl, apiKey, provider),
+
+  // 联网搜索（内置能力）
+  webSearchGet: () => ipcRenderer.invoke('webSearch:get'),
+  webSearchSave: (config: any) => ipcRenderer.invoke('webSearch:save', config),
 })
 
 

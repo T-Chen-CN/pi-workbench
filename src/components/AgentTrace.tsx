@@ -61,6 +61,14 @@ function toolLabel(t: Translator, name: string): string {
       return t('toolFind')
     case 'ls':
       return t('toolLs')
+    case 'web_search':
+      return t('toolWebSearch')
+    case 'fetch_content':
+      return t('toolWebFetch')
+    case 'get_search_content':
+      return t('toolWebSearchContent')
+    case 'source_check':
+      return t('toolSourceCheck')
     default:
       return name
   }

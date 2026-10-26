@@ -10,6 +10,10 @@ import { sanitizeApprovalDecision, type ApprovalBroker } from '../approval-broke
 import type { AgentRegistry } from '../agent-registry.js'
 import type { PluginManager } from '../plugin-manager.js'
 import { getCoordinator } from '../worktree-coordinator.js'
+import {
+  currentWebSearchConfigVersion,
+  webAccessExtensionPaths,
+} from './web-search.js'
 import { handleIpc } from './register.js'
 
 const MAX_CHAT_IMAGES = 20
@@ -117,6 +121,9 @@ handleIpc('agent:initialize', async (_event, config: {
       workspaceDir,
       agentDir: path.join(getAppDir(), 'data', 'agent'),
       apiConfig,
+      // 联网是应用基础能力：扩展随包内置，由 Agent 在每次创建会话时加载
+      webAccessExtensionPaths: webAccessExtensionPaths(),
+      getWebAccessConfigVersion: () => currentWebSearchConfigVersion(),
       logger: context.logger,
       onSessionTitle: (sessionId: string, title: string) => {
         const win = mainWindow()

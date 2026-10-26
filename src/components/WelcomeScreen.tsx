@@ -22,15 +22,17 @@ import {
 } from './patterns'
 import { Caption, DataText, Eyebrow, Label } from './ui'
 import { useI18nStore } from '../store/i18nStore'
-import type { ApiConfig } from '../types/electron'
+import type { ApiConfig, WebSearchConfig } from '../types/electron'
 import { basename } from '../utils/filePath'
 import { onAppEvent } from '../utils/appEvents'
+import { findWebSearchProvider } from '../utils/webSearchProviders'
+import type { SettingsSection } from './Settings'
 
 interface WelcomeScreenProps {
   recentWorkspaces: string[]
   onOpenProject: () => void
   onOpenWorkspace: (path: string) => void
-  onOpenSettings: () => void
+  onOpenSettings: (section?: SettingsSection) => void
   onRefreshRecent: () => void
 }
 
@@ -46,6 +48,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   const { t, language } = useI18nStore()
   const [query, setQuery] = useState('')
   const [apiConfig, setApiConfig] = useState<ApiConfig | null>(null)
+  const [webSearchConfig, setWebSearchConfig] = useState<WebSearchConfig | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -58,15 +61,24 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
         console.error('[WelcomeScreen] Failed to load API config:', error)
         if (!cancelled) setApiConfig(null)
       }
+      try {
+        const result = await api.webSearchGet()
+        if (!cancelled && result.success) setWebSearchConfig(result.config ?? null)
+      } catch (error) {
+        console.error('[WelcomeScreen] Failed to load web search config:', error)
+        if (!cancelled) setWebSearchConfig(null)
+      }
     }
 
     void loadConfig()
     const handleConfigSaved = () => void loadConfig()
     const offConfig = onAppEvent('api-config-saved', handleConfigSaved)
+    const offWebSearch = onAppEvent('web-search-saved', handleConfigSaved)
 
     return () => {
       cancelled = true
       offConfig()
+      offWebSearch()
     }
   }, [])
 
@@ -87,8 +99,18 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   )
   const model = apiConfig?.selectedModel?.trim() || t('welcomeModelUnset')
 
+  const webSearchProvider = webSearchConfig?.provider
+    ? findWebSearchProvider(webSearchConfig.provider)
+    : undefined
+  const webSearchReady = Boolean(webSearchConfig?.provider)
+
   const steps = [
-    { label: t('welcomeStepApi'), done: apiReady, action: onOpenSettings },
+    { label: t('welcomeStepApi'), done: apiReady, action: () => onOpenSettings('api') },
+    {
+      label: t('welcomeStepWebSearch'),
+      done: webSearchReady,
+      action: () => onOpenSettings('websearch'),
+    },
     {
       label: t('welcomeStepProject'),
       done: recentWorkspaces.length > 0,
@@ -220,10 +242,22 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   }
                 />
                 <Stat
+                  label={t('welcomeWebSearch')}
+                  value={
+                    webSearchProvider
+                      ? t(webSearchProvider.labelKey)
+                      : t('welcomeWebSearchNotConfigured')
+                  }
+                />
+                <Stat
                   label={t('welcomeProjects')}
                   value={String(recentWorkspaces.length)}
                 />
-                <Stat label={t('welcomeBackend')} value={t('welcomeLocal')} />
+                <Stat
+                  label={t('welcomeBackend')}
+                  value={t('welcomeLocal')}
+                  className="col-span-2"
+                />
               </StatGrid>
             </Card>
 
