@@ -9,6 +9,7 @@ import {
   Copy,
   FolderGit2,
   GitBranch,
+  GitMerge,
   GitPullRequest,
   Monitor,
   RefreshCw,
@@ -38,6 +39,8 @@ const GRAPH_PAD_RIGHT = 2
 const ROW_HEIGHT = 30
 const ROW_HEIGHT_NARROW = 44
 const NARROW_BREAKPOINT = 420
+/** 行内最多显示几个 ref 徽章，其余折叠成 +N */
+const MAX_VISIBLE_REFS = 2
 const COMMIT_LIMIT = 200
 /** 改动行数到这个量时圆环半满，和 GitLens 的 Changes 列观感一致 */
 const CHANGE_SCALE = 400
@@ -82,22 +85,25 @@ function refBadgeIcon(kind: GitRefChip['kind']) {
   return GitBranch
 }
 
-const RefBadge: React.FC<{ chip: GitRefChip; filled?: boolean; shrinkable?: boolean }> = ({
+const RefBadge: React.FC<{ chip: GitRefChip; shrinkable?: boolean }> = ({
   chip,
-  filled = false,
   shrinkable = false,
 }) => {
   const Icon = refBadgeIcon(chip.kind)
+  const tone =
+    chip.kind === 'head'
+      ? 'border border-transparent bg-accent text-accent-fg'
+      : chip.kind === 'tag'
+        ? 'border border-warning/45 bg-warning/[0.08] text-warning'
+        : chip.kind === 'branch'
+          ? 'border border-accent/45 bg-accent/[0.06] text-accent'
+          : 'border border-rule-hairline bg-raised text-ink-muted'
   return (
     <span
       title={chip.title}
       className={`inline-flex h-4 items-center gap-0.5 rounded-sm px-1 type-caption ${
-        shrinkable ? 'min-w-0 shrink' : 'max-w-[140px] flex-none'
-      } ${
-        filled
-          ? 'bg-accent text-accent-fg'
-          : 'border border-rule-hairline bg-raised text-ink-muted'
-      }`}
+        shrinkable ? 'min-w-0 max-w-[120px] shrink' : 'max-w-[140px] flex-none'
+      } ${tone}`}
     >
       <Icon size={10} className="flex-none" />
       <span className="truncate">{chip.label}</span>
@@ -623,6 +629,8 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     const graphRow = graph.rows[index]
     if (!graphRow) return null
     const chips = visibleRefs(commit)
+    const shownRefs = chips.length > MAX_VISIBLE_REFS ? chips.slice(0, 1) : chips
+    const hiddenRefs = chips.slice(shownRefs.length)
     const selected = selectedSha === commit.sha
     const relative = formatRelativeTime(commit.date, language)
     const author = authorLabel(commit)
@@ -652,6 +660,14 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
         {narrow ? (
           <span className="flex min-w-0 flex-col justify-center gap-0.5">
             <span className="relative flex min-w-0 items-center gap-1">
+              {commit.parents.length > 1 && (
+                <span
+                  className="flex flex-none items-center text-ink-muted"
+                  title={t('gitMergeCommit')}
+                >
+                  <GitMerge size={11} />
+                </span>
+              )}
               <span className="min-w-0 flex-1 truncate type-value text-ink">{commit.subject}</span>
               <span className="flex-none type-caption text-ink-subtle">{relative}</span>
               <span
@@ -661,19 +677,45 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
               </span>
             </span>
             <span className="flex min-w-0 items-center gap-1 type-caption text-ink-muted">
-              {chips.map((chip) => (
-                <RefBadge key={`${chip.kind}:${chip.title}`} chip={chip} filled shrinkable />
+              {shownRefs.map((chip) => (
+                <RefBadge key={`${chip.kind}:${chip.title}`} chip={chip} shrinkable />
               ))}
+              {hiddenRefs.length > 0 && (
+                <span
+                  title={hiddenRefs.map((chip) => chip.title).join(', ')}
+                  className="inline-flex h-4 flex-none items-center rounded-sm border border-rule-hairline bg-raised px-1 type-caption text-ink-subtle"
+                >
+                  +{hiddenRefs.length}
+                </span>
+              )}
               <span className="flex-none type-data text-ink-subtle">{commit.shortSha}</span>
             </span>
           </span>
         ) : (
           <>
             <span className="flex min-w-0 items-center gap-1 overflow-hidden pl-0.5">
-              {chips.map((chip) => (
-                <RefBadge key={`${chip.kind}:${chip.title}`} chip={chip} />
+              {commit.parents.length > 1 && (
+                <span
+                  className="flex flex-none items-center text-ink-muted"
+                  title={t('gitMergeCommit')}
+                >
+                  <GitMerge size={11} />
+                </span>
+              )}
+              {shownRefs.map((chip) => (
+                <RefBadge key={`${chip.kind}:${chip.title}`} chip={chip} shrinkable />
               ))}
-              <span className="truncate type-value text-ink">{commit.subject}</span>
+              {hiddenRefs.length > 0 && (
+                <span
+                  title={hiddenRefs.map((chip) => chip.title).join(', ')}
+                  className="inline-flex h-4 flex-none items-center rounded-sm border border-rule-hairline bg-raised px-1 type-caption text-ink-subtle"
+                >
+                  +{hiddenRefs.length}
+                </span>
+              )}
+              <span className="min-w-[60px] flex-1 truncate type-value text-ink">
+                {commit.subject}
+              </span>
             </span>
             <span className="truncate pl-0.5 type-caption text-ink-muted">{author}</span>
             <span className="flex items-center pl-0.5">
