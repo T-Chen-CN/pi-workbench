@@ -320,7 +320,9 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
   })
   const [filters, setFilters] = useState({ branches: true, remotes: true, tags: true })
   const [worktreesOpen, setWorktreesOpen] = useState(false)
+  const [resizeGuide, setResizeGuide] = useState<number | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const tableRef = useRef<HTMLDivElement>(null)
 
   const activeSessionId = useSessionStore(
     (state) => state.byWorkspace[workspacePath]?.active ?? null
@@ -550,16 +552,27 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     (key: ColumnKey) => (event: React.PointerEvent<HTMLElement>) => {
       event.preventDefault()
       event.stopPropagation()
+      const table = tableRef.current
+      const tableLeft = table?.getBoundingClientRect().left ?? 0
+      const handleRect = event.currentTarget.getBoundingClientRect()
+      // 手柄以列边界为中心，取它的中心作为参考线的起点
+      const startBoundary = handleRect.left + handleRect.width / 2
       const startX = event.clientX
       const startWidth = columnWidths[key]
       const limits = COLUMN_LIMITS[key]
+      setResizeGuide(startBoundary - tableLeft)
+
       const onMove = (move: PointerEvent) => {
-        const next = clamp(startWidth - (move.clientX - startX), limits.min, limits.max)
-        setColumnWidths((current) => ({ ...current, [key]: next }))
+        // 边界跟随指针，但夹在列的最小/最大宽度内，参考线取夹住后的实际位置
+        const dx = clamp(move.clientX - startX, startWidth - limits.max, startWidth - limits.min)
+        setColumnWidths((current) => ({ ...current, [key]: startWidth - dx }))
+        setResizeGuide(startBoundary + dx - tableLeft)
       }
       const onUp = () => {
+        setResizeGuide(null)
         window.removeEventListener('pointermove', onMove)
         window.removeEventListener('pointerup', onUp)
+        window.removeEventListener('pointercancel', onUp)
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
       }
@@ -567,6 +580,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
       document.body.style.userSelect = 'none'
       window.addEventListener('pointermove', onMove)
       window.addEventListener('pointerup', onUp)
+      window.addEventListener('pointercancel', onUp)
     },
     [columnWidths]
   )
@@ -661,12 +675,12 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
               ))}
               <span className="truncate type-value text-ink">{commit.subject}</span>
             </span>
-            <span className="truncate type-caption text-ink-muted">{author}</span>
-            <span className="flex items-center">
+            <span className="truncate pl-0.5 type-caption text-ink-muted">{author}</span>
+            <span className="flex items-center pl-0.5">
               <ChangeRing stats={stats[commit.sha]} title={ringTitle(commit.sha)} />
             </span>
-            <span className="truncate type-caption text-ink-muted">{relative}</span>
-            <span className="truncate type-data text-ink-subtle">{commit.shortSha}</span>
+            <span className="truncate pl-0.5 type-caption text-ink-muted">{relative}</span>
+            <span className="truncate pl-0.5 type-data text-ink-subtle">{commit.shortSha}</span>
             <span className={`flex flex-none items-center gap-0.5 ${actionVisibility(commit)}`}>
               {renderActionButtons(commit)}
             </span>
@@ -831,59 +845,63 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
           </button>
           {worktreeList}
           {prRow}
-          <div
-            className="grid h-[26px] flex-none items-center border-b border-rule-divide bg-panel pr-2 text-ink-subtle type-caption"
-            style={{ gridTemplateColumns: rowGrid }}
-          >
-            <span aria-hidden="true" />
-            <span className="truncate pl-0.5">{t('gitCommitColumn')}</span>
-            <span className="relative flex h-full items-center pl-0.5">
-              <span className="truncate">{t('gitAuthorColumn')}</span>
-              <span
-                role="separator"
-                aria-orientation="vertical"
-                className="absolute -left-0.5 top-0 h-full w-1.5 cursor-col-resize before:absolute before:bottom-1 before:left-1/2 before:top-1 before:w-px before:-translate-x-1/2 before:bg-transparent before:content-[''] hover:before:bg-accent"
-                onPointerDown={beginResize('author')}
-              />
-            </span>
-            <span className="relative flex h-full items-center pl-0.5">
-              <span className="truncate">{t('gitChangesColumn')}</span>
-              <span
-                role="separator"
-                aria-orientation="vertical"
-                className="absolute -left-0.5 top-0 h-full w-1.5 cursor-col-resize before:absolute before:bottom-1 before:left-1/2 before:top-1 before:w-px before:-translate-x-1/2 before:bg-transparent before:content-[''] hover:before:bg-accent"
-                onPointerDown={beginResize('ring')}
-              />
-            </span>
-            <span className="relative flex h-full items-center pl-0.5">
-              <span className="truncate">{t('gitDateColumn')}</span>
-              <span
-                role="separator"
-                aria-orientation="vertical"
-                className="absolute -left-0.5 top-0 h-full w-1.5 cursor-col-resize before:absolute before:bottom-1 before:left-1/2 before:top-1 before:w-px before:-translate-x-1/2 before:bg-transparent before:content-[''] hover:before:bg-accent"
-                onPointerDown={beginResize('date')}
-              />
-            </span>
-            <span className="relative flex h-full items-center pl-0.5">
-              <span className="truncate">{t('gitShaColumn')}</span>
-              <span
-                role="separator"
-                aria-orientation="vertical"
-                className="absolute -left-0.5 top-0 h-full w-1.5 cursor-col-resize before:absolute before:bottom-1 before:left-1/2 before:top-1 before:w-px before:-translate-x-1/2 before:bg-transparent before:content-[''] hover:before:bg-accent"
-                onPointerDown={beginResize('sha')}
-              />
-            </span>
-            <span aria-hidden="true" />
-          </div>
         </>
       )}
 
-      <div className="relative min-h-0 flex-1 overflow-auto">
-        <div
-          className="sticky top-0 z-[1] grid items-center border-l-2 border-transparent bg-panel"
-          style={{ gridTemplateColumns: rowGrid, height: ROW_HEIGHT }}
-          title={t('gitWorkingTreeSummary', { count: dirtyCount })}
-        >
+      <div ref={tableRef} className="relative flex min-h-0 flex-1">
+        <div className="min-h-0 flex-1 overflow-auto">
+          {!narrow && (
+            <div
+              className="sticky top-0 z-[3] grid h-[26px] items-center border-b border-l-2 border-l-transparent border-rule-divide bg-panel pr-2 text-ink-subtle type-caption"
+              style={{ gridTemplateColumns: rowGrid }}
+            >
+              <span aria-hidden="true" />
+              <span className="truncate pl-0.5">{t('gitCommitColumn')}</span>
+              <span className="relative flex h-full items-center pl-0.5">
+                <span className="truncate">{t('gitAuthorColumn')}</span>
+                <span
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="absolute -left-1 top-0 h-full w-2 cursor-col-resize before:absolute before:bottom-1 before:left-1/2 before:top-1 before:w-px before:-translate-x-1/2 before:bg-transparent before:content-[''] hover:before:bg-accent"
+                  onPointerDown={beginResize('author')}
+                />
+              </span>
+              <span className="relative flex h-full items-center pl-0.5">
+                <span className="truncate">{t('gitChangesColumn')}</span>
+                <span
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="absolute -left-1 top-0 h-full w-2 cursor-col-resize before:absolute before:bottom-1 before:left-1/2 before:top-1 before:w-px before:-translate-x-1/2 before:bg-transparent before:content-[''] hover:before:bg-accent"
+                  onPointerDown={beginResize('ring')}
+                />
+              </span>
+              <span className="relative flex h-full items-center pl-0.5">
+                <span className="truncate">{t('gitDateColumn')}</span>
+                <span
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="absolute -left-1 top-0 h-full w-2 cursor-col-resize before:absolute before:bottom-1 before:left-1/2 before:top-1 before:w-px before:-translate-x-1/2 before:bg-transparent before:content-[''] hover:before:bg-accent"
+                  onPointerDown={beginResize('date')}
+                />
+              </span>
+              <span className="relative flex h-full items-center pl-0.5">
+                <span className="truncate">{t('gitShaColumn')}</span>
+                <span
+                  role="separator"
+                  aria-orientation="vertical"
+                  className="absolute -left-1 top-0 h-full w-2 cursor-col-resize before:absolute before:bottom-1 before:left-1/2 before:top-1 before:w-px before:-translate-x-1/2 before:bg-transparent before:content-[''] hover:before:bg-accent"
+                  onPointerDown={beginResize('sha')}
+                />
+              </span>
+              <span aria-hidden="true" />
+            </div>
+          )}
+
+          <div
+            className="sticky z-[2] grid items-center border-l-2 border-transparent bg-panel"
+            style={{ gridTemplateColumns: rowGrid, height: ROW_HEIGHT, top: narrow ? 0 : 26 }}
+            title={t('gitWorkingTreeSummary', { count: dirtyCount })}
+          >
           <span className="flex h-full items-center overflow-hidden">
             <WipNodeSvg
               width={graphWidth}
@@ -919,6 +937,15 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
           <div className="px-2.5 py-2 type-caption text-ink-muted">
             {error ?? t('gitNoCommits')}
           </div>
+        )}
+        </div>
+
+        {resizeGuide !== null && (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 z-20 w-px bg-accent"
+            style={{ left: resizeGuide }}
+          />
         )}
       </div>
 
