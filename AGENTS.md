@@ -311,6 +311,14 @@ const documents = app.getPath('documents') // 不要使用！
 
 > **macOS 例外（2026-10-23 经项目所有者确认）**：macOS 应用包内不可写、且自动更新会替换整个 `.app`，因此打包版的数据目录使用 `~/Library/Application Support/pi-workbench`。Windows / Linux 仍严格遵循便携式约束。不要在 macOS 上按“禁止系统路径”改回应用包内。
 
+#### 启动期路径约束（必须遵守）
+
+- ✅ `app.setPath('userData', '{appDir}/data/profile')` 必须在 `app.requestSingleInstanceLock()` **之前**执行；否则单实例锁会先在默认 userData（`%APPDATA%\pi-workbench`）创建目录与锁文件。
+- ✅ Pi SDK 的全局目录必须通过 `PI_CODING_AGENT_DIR` / `PI_CODING_AGENT_SESSION_DIR` 指向 `{appDir}/data/agent`，且必须在任何 Pi SDK 模块加载之前设置（`electron/app-paths.ts` 在模块加载时完成，`main.ts` 第一个导入它）。禁止使用 `~/.pi`。
+- ✅ 启动时回收/清理旧版本遗留：`~/.pi` 合并进 `{appDir}/data/agent` 后删除（检测到独立 Pi CLI 时保留）；删除旧默认 userData 与安装器在 LOCALAPPDATA 的差分副本。实现见 `electron/legacy-paths.ts`，仅打包版执行。
+- ✅ electron-builder 安装器会把自身复制到 `%LOCALAPPDATA%\{updaterCacheDirName}\installer.exe`；`customInstall` 在安装完成后删除它，启动清理兜底。
+- ❌ 禁止在 `~/.pi`、`%APPDATA%`、`%LOCALAPPDATA%` 等系统目录保存应用数据；唯一例外见“自动更新约束”的更新包缓存。
+
 #### 路径分类和用途
 
 ```typescript
@@ -686,6 +694,7 @@ async function initAgent(config: ApiConfig) {
 
 - ✅ 更新安装器从 `%LOCALAPPDATA%\Pi-Workbench-Update` 启动（不在安装目录内），避免被卸载器的按路径进程检测误杀
 - ✅ 安装完成标记与清理：`customInstall` 写 `<缓存根>.flag`，应用启动时删除缓存根与标记；真正卸载时一并清理
+- ✅ 安装器在 `%LOCALAPPDATA%\pi-workbench-updater` 的差分副本由 `customInstall` 删除，启动清理兜底（我们的缓存不在那里，副本不会被读取）
 - ✅ 更新时的删除逻辑由 `build/installer.nsh` 的 `customRemoveFiles` 接管：只删除
   `resources/installer-manifest.files.txt` / `installer-manifest.dirs.txt` 清单内的程序文件
 - ✅ 清单由 `scripts/after-pack-manifest.js`（electron-builder `afterPack`）生成；清单缺失时更新不删除任何文件

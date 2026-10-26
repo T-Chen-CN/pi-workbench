@@ -1,3 +1,4 @@
+import { getAppDir, piAgentDir } from './app-paths.js'
 import {
   app,
   BrowserWindow,
@@ -6,6 +7,7 @@ import {
 } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs/promises'
+import * as os from 'os'
 import { fileURLToPath } from 'url'
 import { createRequire } from 'module'
 import { mkdirSync } from 'fs'
@@ -17,7 +19,6 @@ import { DraftStore } from './draft-store.js'
 import { ApprovalBroker } from './approval-broker.js'
 import { NotificationRouter } from './notifications.js'
 import { createWorkspaceStore, importRecentWorkspaces } from './workspace-store.js'
-import { getAppDir } from './app-paths.js'
 import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
 import { registerFilesIpc } from './ipc/files.js'
@@ -41,6 +42,17 @@ import {
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+// Chromium 的 profile 与单实例锁都必须落在应用目录。
+// app.setPath('userData') 必须早于 requestSingleInstanceLock：否则单实例锁会在
+// Electron 默认 userData（%APPDATA%\pi-workbench）下创建目录和锁文件。
+const userDataDir = path.join(getAppDir(), 'data', 'profile')
+try {
+  mkdirSync(userDataDir, { recursive: true })
+} catch {
+  // 目录创建失败时仍让 Electron 使用默认路径，避免启动失败
+}
+app.setPath('userData', userDataDir)
 
 let mainWindow: BrowserWindow | null = null
 configureIpcWindow(() => mainWindow)
@@ -305,15 +317,6 @@ registerSystemIpc({
 })
 
 
-// Chromium 的 profile（localStorage、缓存等）也放进应用目录，保证整体可迁移
-const userDataDir = path.join(getAppDir(), 'data', 'profile')
-try {
-  mkdirSync(userDataDir, { recursive: true })
-} catch {
-  // 目录创建失败时仍让 Electron 使用默认路径，避免启动失败
-}
-app.setPath('userData', userDataDir)
-
 // 初始化应用目录结构
 async function initAppDirectories() {
   const appDir = getAppDir()
@@ -342,6 +345,17 @@ async function initAppDirectories() {
   }
 
   console.log('应用目录已初始化:', appDir)
+}
+
+/** electron-updater 在不同平台的默认缓存基目录（用于清理旧版本残留） */
+function resolveSystemCachePath(): string {
+  if (process.platform === 'win32') {
+    return process.env.LOCALAPPDATA ?? app.getPath('appData')
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Caches')
+  }
+  return process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), '.cache')
 }
 
 /**
@@ -522,6 +536,24 @@ app.whenReady().then(async () => {
   }
 
   await initAppDirectories()
+
+  // 回收旧版本遗留在系统目录中的内容：Pi SDK 的 ~/.pi、默认 userData、安装器副本。
+  // 只在打包版执行；迁移/清理都是幂等的，失败只记日志。
+  if (app.isPackaged) {
+    void (async () => {
+      const { migratePiAgentHome, cleanupLegacySystemPaths } = await import('./legacy-paths.js')
+      migratePiAgentHome({ homeDir: os.homedir(), agentDir: piAgentDir, logger: console })
+      await cleanupLegacySystemPaths({
+        appDir: getAppDir(),
+        platform: process.platform,
+        appDataPath: app.getPath('appData'),
+        userDataPath: app.getPath('userData'),
+        localAppDataPath: process.env.LOCALAPPDATA,
+        cachePath: resolveSystemCachePath(),
+        logger: console,
+      })
+    })().catch((error) => console.warn('[Main] Legacy path cleanup failed:', error))
+  }
 
   // 安装完成后的首次启动：安装器已写入标记，清空安装目录之外的更新缓存。
   // 安装器可能仍在退出、文件暂时被占用，清理内部会重试，失败则留给下次启动。

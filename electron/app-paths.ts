@@ -31,3 +31,14 @@ export function getBridgeEntryUrl(): string {
   const here = path.dirname(fileURLToPath(import.meta.url))
   return pathToFileURL(path.join(here, '..', 'pi-bridge', 'dist', 'index.js')).href
 }
+
+/**
+ * Pi SDK 的全局 agent 目录。
+ *
+ * SDK 的 getAgentDir() 默认是 `~/.pi/agent`；必须在任何 SDK 模块加载之前通过
+ * 环境变量固定到应用目录，否则崩溃日志、扩展加载器、认证存储等默认入口会在
+ * 用户主目录下创建文件。本模块是主进程最先加载的模块之一，赋值在这里生效。
+ */
+export const piAgentDir = path.join(getAppDir(), 'data', 'agent')
+process.env.PI_CODING_AGENT_DIR = piAgentDir
+process.env.PI_CODING_AGENT_SESSION_DIR = path.join(piAgentDir, 'sessions')
