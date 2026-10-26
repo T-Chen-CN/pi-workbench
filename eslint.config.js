@@ -17,6 +17,7 @@ export default tseslint.config(
       '.claude/**',
       '.worktrees/**',
       '**/.worktrees/**',
+      '.tmp/**',
     ],
   },
   js.configs.recommended,
@@ -36,7 +37,7 @@ export default tseslint.config(
   },
   {
     // 构建期脚本（Node ESM）
-    files: ['scripts/**/*.js'],
+    files: ['scripts/**/*.js', 'docs/**/*.mjs'],
     languageOptions: {
       sourceType: 'module',
       globals: {

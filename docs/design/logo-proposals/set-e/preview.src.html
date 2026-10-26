@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pi Workbench — 标志方案（印面）</title>
+<style>
+  @font-face {
+    font-family: 'Instrument Serif';
+    src: url(data:font/woff2;base64,{{FONT_DISPLAY}}) format('woff2');
+    font-weight: 400; font-style: normal; font-display: block;
+  }
+  @font-face {
+    font-family: 'Geist Mono';
+    src: url(data:font/woff2;base64,{{FONT_MONO}}) format('woff2');
+    font-weight: 100 900; font-style: normal; font-display: block;
+  }
+  .theme-paper {
+    --surface: #F4F1EA; --panel: #FBF9F4; --raised: #FFFDF8; --sunken: #EFECE4;
+    --ink: #171512; --ink-muted: #615C52; --ink-subtle: #918A7D;
+    --rule: rgba(23,21,18,.22); --hairline: rgba(23,21,18,.18);
+    --accent: #2F5D4E; --accent-fg: #FBFAF4;
+  }
+  .theme-ink {
+    --surface: #141311; --panel: #1A1815; --raised: #201D19; --sunken: #221F1B;
+    --ink: #EDE7DC; --ink-muted: #A8A093; --ink-subtle: #736C60;
+    --rule: rgba(237,231,220,.22); --hairline: rgba(237,231,220,.18);
+    --accent: #8FC7B4; --accent-fg: #141311;
+  }
+  .theme-paper, .theme-ink { color: var(--ink); }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--surface); color: var(--ink);
+    font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+    font-size: 13px; line-height: 1.6; -webkit-font-smoothing: antialiased;
+    transition: background-color 160ms ease-out, color 160ms ease-out;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 56px 48px 96px; }
+  .eyebrow { font-family: 'Geist Mono', Consolas, monospace; font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-muted); }
+  h1 { margin: 14px 0 0; font-family: 'Instrument Serif', 'Songti SC', serif; font-weight: 400; font-size: 42px; line-height: 1.15; letter-spacing: -.01em; }
+  h1 em { font-style: italic; color: var(--accent); }
+  .lede { margin: 18px 0 0; max-width: 68ch; font-family: 'Songti SC', 'SimSun', serif; font-size: 14px; line-height: 1.85; color: var(--ink-muted); }
+  .masthead { display: flex; align-items: flex-start; justify-content: space-between; gap: 32px; }
+  .switcher { display: flex; gap: 8px; flex-shrink: 0; padding-top: 6px; }
+  .switcher button { font-family: 'Geist Mono', Consolas, monospace; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; background: transparent; color: var(--ink-muted); border: 1px solid var(--rule); padding: 5px 10px; cursor: pointer; }
+  .switcher button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+
+  .section { margin-top: 56px; }
+  .section-head { display: flex; align-items: center; gap: 16px; }
+  .section-head .label { font-family: 'Geist Mono', Consolas, monospace; font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-muted); white-space: nowrap; }
+  .section-head .rule { flex: 1; height: 1px; background: var(--rule); }
+  .section-note { margin: 12px 0 20px; max-width: 74ch; font-size: 12.5px; line-height: 1.75; color: var(--ink-muted); }
+
+  /* 锁定：印面按 cap 中心对齐 */
+  .lockup { display: flex; align-items: baseline; gap: 12px; }
+  .lockup .seal { width: 60px; height: 60px; display: block; flex-shrink: 0; }
+  .lockup .seal svg { display: block; width: 100%; height: 100%; }
+  .lockup .textline { display: flex; align-items: baseline; gap: 14px; }
+  .lockup .word { font-family: 'Geist Mono', Consolas, monospace; font-size: 24px; line-height: 1; letter-spacing: .18em; text-transform: uppercase; color: var(--ink-muted); }
+  .lockup .divider { width: 1px; height: 1em; background: var(--rule); align-self: center; }
+  .lockup .sig { font-family: 'Geist Mono', Consolas, monospace; font-size: 15px; line-height: 1; letter-spacing: .1em; color: var(--ink-muted); }
+
+  .align-check { position: relative; border: 1px solid var(--hairline); background: var(--surface); padding: 44px 40px; }
+  .align-check .guide { position: absolute; left: 24px; right: 24px; border-top: 1px dashed var(--accent); pointer-events: none; }
+  .align-check .guide span { position: absolute; right: 0; top: -18px; font-family: 'Geist Mono', Consolas, monospace; font-size: 10px; color: var(--accent); }
+  .align-check .guide.seal-line span { right: auto; left: 0; }
+  .align-check .guide.text-line span { right: 0; }
+
+  .hero { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--hairline); }
+  .hero .cell { padding: 64px 40px; display: flex; align-items: center; justify-content: center; background: var(--surface); }
+  .hero .cell + .cell { border-left: 1px solid var(--hairline); }
+  @media (max-width: 900px) { .hero { grid-template-columns: 1fr; } .hero .cell + .cell { border-left: 0; border-top: 1px solid var(--hairline); } }
+
+  .stack { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .stack .seal { width: 80px; height: 80px; display: block; }
+  .stack .seal svg { display: block; width: 100%; height: 100%; }
+  .stack .word { font-family: 'Geist Mono', Consolas, monospace; font-size: 20px; line-height: 1; letter-spacing: .2em; text-transform: uppercase; color: var(--ink-muted); }
+  .stack .sig { font-family: 'Geist Mono', Consolas, monospace; font-size: 12px; letter-spacing: .1em; color: var(--ink-muted); }
+
+  .two { display: grid; grid-template-columns: auto 1fr; gap: 48px; align-items: center; }
+  @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
+
+  .spec { display: grid; grid-template-columns: 132px 1fr; gap: 12px 24px; font-size: 12.5px; color: var(--ink-muted); padding: 20px 24px; border: 1px solid var(--hairline); background: var(--raised); }
+  .spec dt { font-family: 'Geist Mono', Consolas, monospace; font-size: 11.5px; color: var(--ink); }
+  .spec dd { margin: 0; }
+
+  .icons { display: flex; align-items: flex-end; gap: 26px; flex-wrap: wrap; }
+  .icons .item { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .icons .item .box { background: var(--surface); border: 1px solid var(--hairline); padding: 6px; }
+  .icons .item svg { display: block; }
+  .icons .item .cap { font-family: 'Geist Mono', Consolas, monospace; font-size: 10.5px; color: var(--ink-subtle); text-align: center; }
+  .icons .item.zoom canvas { display: block; width: 128px; height: 128px; image-rendering: pixelated; }
+
+  .contexts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .contexts { grid-template-columns: 1fr; } }
+  .ctx { border: 1px solid var(--hairline); background: var(--raised); }
+  .ctx .body { padding: 20px; background: var(--surface); display: flex; align-items: center; justify-content: center; min-height: 140px; }
+  .ctx .cap { padding: 10px 14px; border-top: 1px solid var(--rule); font-family: 'Geist Mono', Consolas, monospace; font-size: 10.5px; color: var(--ink-subtle); }
+
+  .titlebar { width: 100%; height: 45px; display: flex; align-items: center; gap: 10px; padding: 0 14px; background: var(--panel); border: 1px solid var(--rule); }
+  .titlebar .brand { display: flex; align-items: baseline; gap: 7px; }
+  .titlebar .seal { width: 20px; height: 20px; display: block; flex-shrink: 0; }
+  .titlebar .seal svg { display: block; width: 100%; height: 100%; }
+  .titlebar .textline { display: flex; align-items: baseline; gap: 8px; }
+  .titlebar .word { font-family: 'Geist Mono', Consolas, monospace; font-size: 8.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--ink-muted); }
+  .titlebar .divider { width: 1px; height: 14px; background: var(--rule); align-self: center; }
+  .titlebar .sig { font-family: 'Geist Mono', Consolas, monospace; font-size: 8.5px; letter-spacing: .08em; color: var(--ink-muted); }
+  .titlebar .local { align-self: center; margin-left: auto; font-family: 'Geist Mono', Consolas, monospace; font-size: 9px; letter-spacing: .08em; color: var(--ink-muted); border: 1px solid var(--rule); padding: 2px 5px; }
+
+  .avatar { width: 108px; height: 108px; border-radius: 50%; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+  .avatar svg { display: block; width: 100%; height: 100%; }
+
+  .readme { width: 100%; padding: 24px 26px; background: var(--panel); border: 1px solid var(--rule); display: flex; align-items: center; gap: 12px; }
+  .readme .brand { display: flex; align-items: baseline; gap: 12px; }
+  .readme .seal { width: 40px; height: 40px; display: block; }
+  .readme .seal svg { display: block; width: 100%; height: 100%; }
+  .readme .textline { display: flex; align-items: baseline; gap: 10px; }
+  .readme .word { font-family: 'Geist Mono', Consolas, monospace; font-size: 12px; letter-spacing: .2em; text-transform: uppercase; color: var(--ink-muted); }
+  .readme .sig { align-self: center; margin-left: auto; font-family: 'Geist Mono', Consolas, monospace; font-size: 10px; letter-spacing: .1em; color: var(--ink-muted); }
+
+  .notes { display: grid; gap: 0; border-top: 1px solid var(--hairline); }
+  .note { display: grid; grid-template-columns: 120px 1fr; gap: 24px; padding: 16px 0; border-bottom: 1px solid var(--hairline); }
+  .note dt { font-family: 'Geist Mono', Consolas, monospace; font-size: 11.5px; letter-spacing: .08em; color: var(--ink-muted); }
+  .note dd { margin: 0; font-size: 12.5px; line-height: 1.75; color: var(--ink-muted); max-width: 78ch; }
+
+  footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule); font-family: 'Geist Mono', Consolas, monospace; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-subtle); display: flex; justify-content: space-between; gap: 16px; }
+</style>
+</head>
+<body class="theme-paper">
+<div class="wrap">
+
+  <header class="masthead">
+    <div>
+      <div class="eyebrow">Identity · Pi Workbench · 2026-10-26</div>
+      <h1>Pi Workbench <em>标志方案</em></h1>
+      <p class="lede">
+        标志由三件东西组成：松绿印面上的纸色 π、名字 WORKBENCH、落款 TChen。印面就是应用图标本身，
+        所以顶栏、文档、头像看到的都是同一枚东西。完整名字 Pi Workbench 只在窗口标题、关于页这类需要点名的地方出现。
+      </p>
+    </div>
+    <div class="switcher" role="group" aria-label="切换主题">
+      <button type="button" data-theme="theme-paper" aria-pressed="true">Paper</button>
+      <button type="button" data-theme="theme-ink" aria-pressed="false">Ink</button>
+    </div>
+  </header>
+
+  <section class="section">
+    <div class="section-head"><span class="label">主锁定 · Horizontal</span><span class="rule"></span></div>
+    <p class="section-note">印面、WORKBENCH、TChen 依次排开。印面的底边与 WORKBENCH 的基线对齐——像一枚章压在字行上；印面因此比文字高出一截，这是刻意的。</p>
+    <div class="hero">
+      <div class="cell theme-paper">
+        <div class="lockup">
+          <span class="seal">{{SVG:icon-simple}}</span>
+          <span class="textline">
+            <span class="word">Workbench</span>
+            <span class="divider"></span>
+            <span class="sig">TChen</span>
+          </span>
+        </div>
+      </div>
+      <div class="cell theme-ink">
+        <div class="lockup">
+          <span class="seal">{{SVG:icon-simple}}</span>
+          <span class="textline">
+            <span class="word">Workbench</span>
+            <span class="divider"></span>
+            <span class="sig">TChen</span>
+          </span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><span class="label">对齐检查 · Alignment</span><span class="rule"></span></div>
+    <p class="section-note">两条虚线分别是印面的底边和 WORKBENCH 的基线；它们应该重合。这条线由页面脚本按真实盒模型量出来，不是画上去的示意。</p>
+    <div class="align-check theme-paper" id="align-check">
+      <div class="lockup">
+        <span class="seal">{{SVG:icon-simple}}</span>
+        <span class="textline">
+          <span class="word">Workbench</span>
+          <span class="divider"></span>
+          <span class="sig">TChen</span>
+        </span>
+      </div>
+    </div>
+    <p class="section-note" id="align-readout" style="margin-top:10px"></p>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><span class="label">对齐与比例 · Spec</span><span class="rule"></span></div>
+    <p class="section-note">下面的数字是顶栏里的实际值，其他场合按比例整体缩放。</p>
+    <dl class="spec">
+      <dt>印面</dt><dd>顶栏 20px；主锁定 60px。底边与 WORKBENCH 的基线对齐</dd>
+      <dt>WORKBENCH</dt><dd>Geist Mono 8.5px（顶栏）/ 24px（主锁定），字距 0.2em，全大写，muted</dd>
+      <dt>TChen</dt><dd>与 WORKBENCH 同号，字距 0.08em；前面 1px 竖线，左右各 8px（主锁定 14px）</dd>
+      <dt>间距</dt><dd>印面与文字 7px（顶栏）/ 12px（主锁定），约为印面高度的 0.2–0.35 倍</dd>
+      <dt>全名</dt><dd>“Pi Workbench”只出现在窗口标题、关于页、README 标题，不进入标志</dd>
+    </dl>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><span class="label">竖排锁定 · Stacked</span><span class="rule"></span></div>
+    <p class="section-note">用于文档、关于页、启动画面：印面在上，名字与署名居中叠放。</p>
+    <div class="two">
+      <div class="stack theme-paper">
+        <span class="seal">{{SVG:icon-simple}}</span>
+        <span class="word">Workbench</span>
+        <span class="sig">TChen</span>
+      </div>
+      <dl class="spec" style="margin:0">
+        <dt>印面</dt><dd>80px，等比缩放自图标稿</dd>
+        <dt>WORKBENCH</dt><dd>20px，字距 0.2em；与印面间距 10px</dd>
+        <dt>TChen</dt><dd>12px，居中，与名字间距 10px</dd>
+      </dl>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><span class="label">应用图标 · Split artwork</span><span class="rule"></span></div>
+    <p class="section-note">256 用带署名的稿；128、64、48、32、16 一律用简化稿（π 放大到 56%）。倒数第二格是 256 稿缩到 40px 的反例——署名会糊成一条灰线，所以不做全尺寸统一；最后是 16px 栅格化后放大 8 倍的实际样子。</p>
+    <div class="icons theme-paper">
+      <div class="item"><div class="box"><span style="display:flex;width:256px;height:256px">{{SVG:icon-signature}}</span></div><span class="cap">256 · 带署名</span></div>
+      <div class="item"><div class="box"><span style="display:flex;width:128px;height:128px">{{SVG:icon-simple}}</span></div><span class="cap">128 · 简化</span></div>
+      <div class="item"><div class="box"><span style="display:flex;width:64px;height:64px">{{SVG:icon-simple}}</span></div><span class="cap">64</span></div>
+      <div class="item"><div class="box"><span style="display:flex;width:32px;height:32px">{{SVG:icon-simple}}</span></div><span class="cap">32</span></div>
+      <div class="item"><div class="box"><span style="display:flex;width:16px;height:16px">{{SVG:icon-simple}}</span></div><span class="cap">16</span></div>
+      <div class="item"><div class="box"><span style="display:flex;width:40px;height:40px">{{SVG:icon-signature}}</span></div><span class="cap">署名稿缩到 40（反例）</span></div>
+      <div class="item zoom" data-zoom="16"><span style="display:flex;width:40px;height:40px">{{SVG:icon-simple}}</span><span class="cap">16 ×8</span></div>
+    </div>
+    <p class="section-note" style="margin:24px 0 12px">圆角：5.7% 偏印刷纸卡，12.5% 居中，19.8% 接近系统图标。现在采用 19.8%。</p>
+    <div class="icons theme-paper">
+      <div class="item"><div class="box"><span style="display:flex;width:96px;height:96px">{{SVG:icon-radius-44}}</span></div><span class="cap">rx 44 · 5.7%</span></div>
+      <div class="item"><div class="box"><span style="display:flex;width:96px;height:96px">{{SVG:icon-radius-96}}</span></div><span class="cap">rx 96 · 12.5%</span></div>
+      <div class="item"><div class="box"><span style="display:flex;width:96px;height:96px">{{SVG:icon-simple}}</span></div><span class="cap">rx 152 · 19.8% · 采用</span></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><span class="label">场景 · In use</span><span class="rule"></span></div>
+    <div class="contexts">
+      <div class="ctx theme-paper">
+        <div class="body">
+          <div class="titlebar">
+            <span class="brand">
+              <span class="seal">{{SVG:icon-simple}}</span>
+              <span class="textline">
+                <span class="word">Workbench</span>
+                <span class="divider"></span>
+                <span class="sig">TChen</span>
+              </span>
+            </span>
+            <span class="local">LOCAL</span>
+          </div>
+        </div>
+        <div class="cap">应用顶栏 · Paper</div>
+      </div>
+      <div class="ctx theme-ink">
+        <div class="body">
+          <div class="titlebar">
+            <span class="brand">
+              <span class="seal">{{SVG:icon-simple}}</span>
+              <span class="textline">
+                <span class="word">Workbench</span>
+                <span class="divider"></span>
+                <span class="sig">TChen</span>
+              </span>
+            </span>
+            <span class="local">LOCAL</span>
+          </div>
+        </div>
+        <div class="cap">应用顶栏 · Ink</div>
+      </div>
+      <div class="ctx theme-paper">
+        <div class="body"><div class="avatar">{{SVG:icon-signature}}</div></div>
+        <div class="cap">头像 / 应用图标 · 圆形裁切</div>
+      </div>
+      <div class="ctx theme-ink">
+        <div class="body">
+          <div class="readme">
+            <span class="brand">
+              <span class="seal">{{SVG:icon-simple}}</span>
+              <span class="textline"><span class="word">Workbench</span></span>
+            </span>
+            <span class="sig">TChen</span>
+          </div>
+        </div>
+        <div class="cap">README / 关于页头部</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><span class="label">规则 · Notes</span><span class="rule"></span></div>
+    <dl class="notes">
+      <div class="note">
+        <dt>对齐</dt>
+        <dd>印面底边压在文字基线上，章与字母落在同一条线；不要按中心对齐（印面会下探到字行以下），也不要按行盒底对齐（会低于基线一截）。</dd>
+      </div>
+      <div class="note">
+        <dt>印面</dt>
+        <dd>印面就是应用图标本身：松绿底、纸色 π，圆角 19.8%（152/768）。顶栏、文档、头像都用同一件东西，不另画一版。π 取自 Noto Serif 的真实轮廓（OFL），不做拉伸。</dd>
+      </div>
+      <div class="note">
+        <dt>署名</dt>
+        <dd>TChen 永远排在 WORKBENCH 之后，用 Geist Mono、降低一档对比度、前面加 1px 竖线；不放大、不用衬线、不单独作为标志使用。</dd>
+      </div>
+      <div class="note">
+        <dt>图标分稿</dt>
+        <dd>256 带署名；128 及以下用简化稿。反例在尺寸区里，可以看到署名缩到 40px 会变成灰线。</dd>
+      </div>
+      <div class="note">
+        <dt>留白与单色</dt>
+        <dd>四周最小留白等于印面高度的一半；单色版把松绿底换成墨色、π 与署名反白，不做描边、投影、渐变。</dd>
+      </div>
+    </dl>
+  </section>
+
+  <footer>
+    <span>Pi Workbench · identity</span>
+    <span>docs/design/logo-proposals/set-e</span>
+  </footer>
+</div>
+
+<script>
+  document.querySelectorAll('.switcher button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.body.className = btn.dataset.theme;
+      document.querySelectorAll('.switcher button').forEach((b) => {
+        b.setAttribute('aria-pressed', String(b === btn));
+      });
+    });
+  });
+
+  async function rasterize(el) {
+    try {
+      const svg = el.querySelector('svg');
+      if (!svg) return;
+      const px = Number(el.dataset.zoom) || 16;
+      const clone = svg.cloneNode(true);
+      const originals = [svg, ...svg.querySelectorAll('*')];
+      const clones = [clone, ...clone.querySelectorAll('*')];
+      originals.forEach((node, i) => {
+        const raw = node.getAttribute && node.getAttribute('fill');
+        if (raw && (raw.indexOf('currentColor') !== -1 || raw.indexOf('var(') !== -1)) {
+          clones[i].setAttribute('fill', getComputedStyle(node).fill);
+        }
+      });
+      clone.setAttribute('width', px);
+      clone.setAttribute('height', px);
+      clone.removeAttribute('class');
+      const src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+      const img = new Image();
+      await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = src; });
+      const small = document.createElement('canvas');
+      small.width = px; small.height = px;
+      small.getContext('2d').drawImage(img, 0, 0, px, px);
+      const big = document.createElement('canvas');
+      const scale = 8;
+      big.width = px * scale; big.height = px * scale;
+      const ctx = big.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(small, 0, 0, px * scale, px * scale);
+      el.replaceChildren(big);
+    } catch (error) {
+      console.warn('rasterize failed', error);
+    }
+  }
+  document.querySelectorAll('[data-zoom]').forEach((el) => void rasterize(el));
+
+  (function drawGuides() {
+    const box = document.getElementById('align-check');
+    if (!box) return;
+    const seal = box.querySelector('.seal');
+    const word = box.querySelector('.word');
+    const br = box.getBoundingClientRect();
+    const probe = document.createElement('span');
+    probe.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline;';
+    word.appendChild(probe);
+    const sb = seal.getBoundingClientRect().bottom - br.top;
+    const wb = probe.getBoundingClientRect().top - br.top;
+    probe.remove();
+    for (const [y, cls, label] of [[sb, 'seal-line', '印面底边'], [wb, 'text-line', '文字基线']]) {
+      const line = document.createElement('div');
+      line.className = 'guide ' + cls;
+      line.style.top = y + 'px';
+      line.innerHTML = '<span>' + label + '</span>';
+      box.appendChild(line);
+    }
+    const readout = document.getElementById('align-readout');
+    if (readout) readout.textContent = '印面底边 ' + sb.toFixed(1) + 'px，文字基线 ' + wb.toFixed(1) + 'px，差 ' + Math.abs(sb - wb).toFixed(1) + 'px。';
+  })();
+</script>
+</body>
+</html>
