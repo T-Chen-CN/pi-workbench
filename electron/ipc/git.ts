@@ -18,6 +18,7 @@ import {
 import {
   checkout,
   commitDetail,
+  createBranch,
   fetchGithubStatus,
   fileDiffBetween,
   getRepoInfo,
@@ -25,6 +26,7 @@ import {
   isPathInWorkspace,
   listBranches,
   listWorktrees,
+  logCommitStats,
   logCommits,
   mergeBranch,
   type GitRepoInfo,
@@ -201,18 +203,51 @@ export function registerGitIpc(context: GitIpcContext): void {
     }
   })
 
-  handleIpc('git:log', async (_event, workspaceDir: string, limit?: number, branch?: string) => {
-    try {
-      const root = await resolveRepoRoot(workspaceDir)
-      if (!root) return { success: false, error: 'Not a git repository' }
-      return {
-        success: true,
-        commits: await logCommits(root, limit ?? 80, branch),
+  handleIpc(
+    'git:log',
+    async (_event, workspaceDir: string, limit?: number, branch?: string, all?: boolean) => {
+      try {
+        const root = await resolveRepoRoot(workspaceDir)
+        if (!root) return { success: false, error: 'Not a git repository' }
+        return {
+          success: true,
+          commits: await logCommits(root, limit ?? 80, branch, all === true),
+        }
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) }
       }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
-  })
+  )
+
+  handleIpc(
+    'git:commitStats',
+    async (_event, workspaceDir: string, limit?: number, branch?: string, all?: boolean) => {
+      try {
+        const root = await resolveRepoRoot(workspaceDir)
+        if (!root) return { success: false, error: 'Not a git repository' }
+        return {
+          success: true,
+          stats: await logCommitStats(root, limit ?? 80, branch, all === true),
+        }
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+  )
+
+  handleIpc(
+    'git:createBranch',
+    async (_event, workspaceDir: string, sha: string, name: string) => {
+      try {
+        const root = await resolveRepoRoot(workspaceDir)
+        if (!root) return { success: false, error: 'Not a git repository' }
+        await createBranch(root, name, sha)
+        return { success: true }
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+  )
 
   handleIpc('git:commitDetail', async (_event, workspaceDir: string, sha: string) => {
     try {

@@ -120,4 +120,47 @@ describe('git IPC commit detail', () => {
 
     expect(vi.mocked(getRepoInfo)).toHaveBeenCalledTimes(1)
   })
+
+  it('按 sha 返回提交的改动统计', async () => {
+    const head = git(['rev-parse', 'HEAD']).trim()
+    const result = await invoke('git:commitStats', workspace, 10)
+
+    expect(result.success).toBe(true)
+    expect(result.stats[head]).toMatchObject({
+      additions: 1,
+      deletions: 0,
+      addedFiles: 1,
+      modifiedFiles: 0,
+      deletedFiles: 0,
+    })
+  })
+
+  it('全分支模式返回其他分支上的提交', async () => {
+    git(['checkout', '-b', 'side'])
+    await fs.writeFile(path.join(workspace, 'c.txt'), 'three\n')
+    git(['add', '.'])
+    git(['commit', '-m', 'side'])
+    git(['checkout', 'main'])
+
+    const log = await invoke('git:log', workspace, 10, undefined, true)
+    expect(log.success).toBe(true)
+    expect(log.commits.map((item: { subject: string }) => item.subject)).toEqual(
+      expect.arrayContaining(['side', 'second', 'init'])
+    )
+  })
+
+  it('可以在指定提交上创建分支', async () => {
+    const previous = git(['rev-parse', 'HEAD~1']).trim()
+    const result = await invoke('git:createBranch', workspace, previous, 'feature/from-test')
+
+    expect(result.success).toBe(true)
+    expect(git(['branch', '--list', 'feature/from-test']).trim()).toContain('feature/from-test')
+  })
+
+  it('非法分支名会被拒绝', async () => {
+    const head = git(['rev-parse', 'HEAD']).trim()
+    const result = await invoke('git:createBranch', workspace, head, 'bad name')
+
+    expect(result.success).toBe(false)
+  })
 })

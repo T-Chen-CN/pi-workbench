@@ -9,6 +9,8 @@ export interface GitRepoInfo {
   detached: boolean
   remoteUrl: string | null
   github: { owner: string; repo: string } | null
+  /** git config user.email；用于把当前用户的提交标成「你」 */
+  userEmail: string | null
 }
 
 export interface GitWorktreeView {
@@ -54,6 +56,14 @@ export interface GitCommitInfo {
   subject: string
   refs: string
   parents: string[]
+}
+
+export interface GitCommitStats {
+  additions: number
+  deletions: number
+  addedFiles: number
+  modifiedFiles: number
+  deletedFiles: number
 }
 
 export interface GitCommitDetail {
@@ -436,8 +446,24 @@ export interface ElectronAPI {
   gitLog: (
     workspaceDir: string,
     limit?: number,
-    branch?: string
+    branch?: string,
+    all?: boolean
   ) => Promise<{ success: boolean; commits?: GitCommitInfo[]; error?: string }>
+  gitCommitStats: (
+    workspaceDir: string,
+    limit?: number,
+    branch?: string,
+    all?: boolean
+  ) => Promise<{
+    success: boolean
+    stats?: Record<string, GitCommitStats>
+    error?: string
+  }>
+  gitCreateBranch: (
+    workspaceDir: string,
+    sha: string,
+    name: string
+  ) => Promise<{ success: boolean; error?: string }>
   gitCommitDetail: (
     workspaceDir: string,
     sha: string

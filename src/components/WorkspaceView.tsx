@@ -17,6 +17,7 @@ import { ChatPanel } from './ChatPanel'
 import { DiffViewer } from './DiffViewer'
 import { TerminalPanel } from './TerminalPanel'
 import { GitView } from './GitView'
+import { CommitDetailView } from './CommitDetailView'
 import { Spinner } from './ui'
 import { WorkspaceScopeProvider } from '../workspace/WorkspaceScope'
 import { subscribeEditorTabs } from '../workspace/editorTabs'
@@ -31,8 +32,11 @@ const MonacoEditor = lazy(() =>
 
 const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 420
+const GIT_SIDEBAR_MAX = 720
 const CHAT_MIN = 280
 const CHAT_MAX = 560
+
+type SidebarTab = 'files' | 'git'
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
@@ -50,9 +54,14 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
   const [showSidebar, setShowSidebar] = useState(true)
   const [showChat, setShowChat] = useState(true)
   const [showTerminal, setShowTerminal] = useState(false)
-  const [sidebarWidth, setSidebarWidth] = useState(232)
+  // 侧栏宽度按标签分别记忆：文件树保持原宽度，Git 提交图可以拉宽到 720
+  const [sidebarWidths, setSidebarWidths] = useState<Record<SidebarTab, number>>({
+    files: 232,
+    git: 560,
+  })
   const [chatWidth, setChatWidth] = useState(336)
-  const [sidebarTab, setSidebarTab] = useState<'files' | 'git'>('files')
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('files')
+  const [containerWidth, setContainerWidth] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const sidebarCollapseRef = useRef<HTMLButtonElement | null>(null)
   const chatCollapseRef = useRef<HTMLButtonElement | null>(null)
@@ -71,6 +80,22 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
       ? state.byWorkspace[workspacePath]?.bindings[activeSessionId]?.path ?? workspacePath
       : workspacePath
   )
+  const detailOpen = useGitStore(
+    (state) => state.byWorkspace[workspacePath]?.detailOpen ?? false
+  )
+  const closeCommitDetail = useGitStore((state) => state.closeCommitDetail)
+
+  /** Git 标签允许更宽；窗口不够时上限随容器和聊天列收缩 */
+  const maxSidebarWidth = useCallback(
+    (tab: SidebarTab) => {
+      const total = containerWidth || containerRef.current?.clientWidth || window.innerWidth
+      const reserved = 260 + (showChat ? chatWidth : 0)
+      const limit = tab === 'git' ? GIT_SIDEBAR_MAX : SIDEBAR_MAX
+      return Math.max(SIDEBAR_MIN, Math.min(limit, total - reserved))
+    },
+    [containerWidth, showChat, chatWidth]
+  )
+  const sidebarWidth = Math.min(sidebarWidths[sidebarTab], maxSidebarWidth(sidebarTab))
 
   const collapseSidebar = useCallback(() => {
     sidebarFocusIntent.current = true
@@ -116,6 +141,20 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
     }
   }, [active])
 
+  // 容器宽度变化时重新计算侧栏上限（窗口缩放、聊天列收起/展开）
+  useEffect(() => {
+    const element = containerRef.current
+    if (!element) return
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry) setContainerWidth(entry.contentRect.width)
+    })
+    observer.observe(element)
+    setContainerWidth(element.clientWidth)
+    return () => observer.disconnect()
+  }, [])
+
   // 顶栏“终端”按钮作用于当前工作区
   useEffect(() => {
     if (!active) return
@@ -131,12 +170,16 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
     (target: 'sidebar' | 'chat') => (event: ReactPointerEvent<HTMLDivElement>) => {
       event.preventDefault()
       const startX = event.clientX
-      const initial = target === 'sidebar' ? sidebarWidth : chatWidth
+      const initial =
+        target === 'sidebar'
+          ? Math.min(sidebarWidths[sidebarTab], maxSidebarWidth(sidebarTab))
+          : chatWidth
 
       const onMove = (moveEvent: PointerEvent) => {
         const delta = moveEvent.clientX - startX
         if (target === 'sidebar') {
-          setSidebarWidth(clamp(initial + delta, SIDEBAR_MIN, SIDEBAR_MAX))
+          const width = clamp(initial + delta, SIDEBAR_MIN, maxSidebarWidth(sidebarTab))
+          setSidebarWidths((current) => ({ ...current, [sidebarTab]: width }))
         } else {
           setChatWidth(clamp(initial - delta, CHAT_MIN, CHAT_MAX))
         }
@@ -152,7 +195,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
     },
-    [sidebarWidth, chatWidth]
+    [sidebarWidths, sidebarTab, maxSidebarWidth, chatWidth]
   )
 
   return (
@@ -234,15 +277,24 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
         )}
 
         <section className="flex min-w-0 flex-1 flex-col">
-          <Suspense
-            fallback={
-              <div className="flex min-h-0 flex-1 items-center justify-center bg-surface">
-                <Spinner size={14} />
-              </div>
-            }
-          >
-            <MonacoEditor workspacePath={workspacePath} viewRoot={viewRoot} active={active} />
-          </Suspense>
+          <div className="relative flex min-h-0 min-w-0 flex-1">
+            <Suspense
+              fallback={
+                <div className="flex min-h-0 flex-1 items-center justify-center bg-surface">
+                  <Spinner size={14} />
+                </div>
+              }
+            >
+              <MonacoEditor workspacePath={workspacePath} viewRoot={viewRoot} active={active} />
+            </Suspense>
+            {detailOpen && (
+              <CommitDetailView
+                workspacePath={workspacePath}
+                active={active}
+                onClose={() => closeCommitDetail(workspacePath)}
+              />
+            )}
+          </div>
           <TerminalPanel
             workspacePath={workspacePath}
             cwd={viewRoot}

@@ -313,6 +313,8 @@ const mockAPI = {
   gitReleaseSession: async () => ({ success: true, removed: false, dirty: false }),
   gitCleanupOrphans: async () => ({ success: true, removed: [], dirty: [], external: [] }),
   gitLog: async () => ({ success: true, commits: [] }),
+  gitCommitStats: async () => ({ success: true, stats: {} }),
+  gitCreateBranch: async () => ({ success: false, error: 'Git is only available in the Electron app' }),
   gitCommitDetail: async () => ({ success: false, error: 'Git is only available in the Electron app' }),
   gitDiff: async () => ({ success: true, patch: '' }),
   gitCheckout: async () => ({ success: false, error: 'Git is only available in the Electron app' }),
@@ -451,8 +453,12 @@ export const api = {
   gitReleaseSession: (workspaceDir: string, sessionId: string) =>
     electronAPI.gitReleaseSession(workspaceDir, sessionId),
   gitCleanupOrphans: (workspaceDir: string) => electronAPI.gitCleanupOrphans(workspaceDir),
-  gitLog: (workspaceDir: string, limit?: number, branch?: string) =>
-    electronAPI.gitLog(workspaceDir, limit, branch),
+  gitLog: (workspaceDir: string, limit?: number, branch?: string, all?: boolean) =>
+    electronAPI.gitLog(workspaceDir, limit, branch, all),
+  gitCommitStats: (workspaceDir: string, limit?: number, branch?: string, all?: boolean) =>
+    electronAPI.gitCommitStats(workspaceDir, limit, branch, all),
+  gitCreateBranch: (workspaceDir: string, sha: string, name: string) =>
+    electronAPI.gitCreateBranch(workspaceDir, sha, name),
   gitCommitDetail: (workspaceDir: string, sha: string) =>
     electronAPI.gitCommitDetail(workspaceDir, sha),
   gitDiff: (workspaceDir: string, from: string, to: string) =>

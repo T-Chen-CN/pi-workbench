@@ -306,8 +306,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('git:releaseSession', workspaceDir, sessionId),
   gitCleanupOrphans: (workspaceDir: string) =>
     ipcRenderer.invoke('git:cleanupOrphans', workspaceDir),
-  gitLog: (workspaceDir: string, limit?: number, branch?: string) =>
-    ipcRenderer.invoke('git:log', workspaceDir, limit, branch),
+  gitLog: (workspaceDir: string, limit?: number, branch?: string, all?: boolean) =>
+    ipcRenderer.invoke('git:log', workspaceDir, limit, branch, all),
+  gitCommitStats: (workspaceDir: string, limit?: number, branch?: string, all?: boolean) =>
+    ipcRenderer.invoke('git:commitStats', workspaceDir, limit, branch, all),
+  gitCreateBranch: (workspaceDir: string, sha: string, name: string) =>
+    ipcRenderer.invoke('git:createBranch', workspaceDir, sha, name),
   gitCommitDetail: (workspaceDir: string, sha: string) =>
     ipcRenderer.invoke('git:commitDetail', workspaceDir, sha),
   gitDiff: (workspaceDir: string, from: string, to: string) =>

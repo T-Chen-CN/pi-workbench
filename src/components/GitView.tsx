@@ -1,14 +1,18 @@
-/** 只读 Git 视图：分支、工作树、提交历史、diff 与 GitHub 状态 */
+/** Git 面板：全分支提交图、工作树更改入口与提交索引 */
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CheckCircle2,
+  ChevronDown,
+  Cloud,
   Clock,
+  Copy,
   FolderGit2,
   GitBranch,
   GitPullRequest,
-  GitCommitHorizontal,
+  Monitor,
   RefreshCw,
+  Tag,
   XCircle,
 } from 'lucide-react'
 import { api } from '../api'
@@ -16,19 +20,29 @@ import { useSessionStore } from '../store/sessionStore'
 import { useGitStore } from '../store/gitStore'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
-import { Button, IconButton, Spinner } from './ui'
+import { promptDialog } from '../store/dialogStore'
+import { IconButton, Spinner } from './ui'
 import { emitAppEvent } from '../utils/appEvents'
 import { buildCommitGraph, type GraphRow } from '../utils/commitGraph'
-import type { GitCommitInfo, GitWorktreeView } from '../types/electron'
+import { parseGitRefs, type GitRefChip } from '../utils/gitRefs'
+import { formatRelativeTime } from '../utils/relativeTime'
+import type {
+  GitCommitInfo,
+  GitCommitStats,
+  GitWorktreeView,
+} from '../types/electron'
 
-const NO_WORKTREES: GitWorktreeView[] = []
-const NO_BRANCHES: Array<{ name: string; fullName: string; current: boolean; remote: boolean }> = []
-const NO_COMMITS: GitCommitInfo[] = []
+const LANE_WIDTH = 12
+const GRAPH_PAD_LEFT = 6
+const GRAPH_PAD_RIGHT = 2
+const ROW_HEIGHT = 30
+const ROW_HEIGHT_NARROW = 44
+const NARROW_BREAKPOINT = 420
+const COMMIT_LIMIT = 200
+/** 改动行数到这个量时圆环半满，和 GitLens 的 Changes 列观感一致 */
+const CHANGE_SCALE = 400
 
-/** 行高固定，提交图按它计算每条 lane 的坐标；两行标题 + 元信息行需要 60px */
-const ROW_HEIGHT = 60
-const LANE_WIDTH = 14
-const GRAPH_PAD = 6
+const LANE_VARS = ['--accent', '--success', '--warning', '--danger', '--ink-muted'] as const
 const LANE_CLASSES = [
   'stroke-accent',
   'stroke-success',
@@ -37,57 +51,111 @@ const LANE_CLASSES = [
   'stroke-ink-muted',
 ] as const
 
+const COLUMN_LIMITS = {
+  author: { min: 40, max: 140 },
+  ring: { min: 26, max: 56 },
+  date: { min: 56, max: 150 },
+  sha: { min: 44, max: 110 },
+} as const
+
+const EMPTY_WORKTREES: GitWorktreeView[] = []
+const EMPTY_COMMITS: GitCommitInfo[] = []
+const EMPTY_STATS: Record<string, GitCommitStats> = {}
+
+type ColumnKey = keyof typeof COLUMN_LIMITS
+type ColumnWidths = Record<ColumnKey, number>
+
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
+
 function laneClass(lane: number): string {
   return LANE_CLASSES[lane % LANE_CLASSES.length]
 }
 
-function commitRefLabels(refs: string): string[] {
-  const labels = refs
-    .split(',')
-    .map((ref) => ref.trim())
-    .filter(Boolean)
-    .map((ref) => ref.replace(/^HEAD -> /, ''))
-  return [...new Set(labels)].slice(0, 4)
+function laneVar(lane: number): string {
+  return LANE_VARS[lane % LANE_VARS.length]
 }
 
-function formatCommitDate(value: string): string {
-  if (!value) return ''
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString()
+function refBadgeIcon(kind: GitRefChip['kind']) {
+  if (kind === 'tag') return Tag
+  if (kind === 'remote') return Cloud
+  if (kind === 'head') return Monitor
+  return GitBranch
 }
 
-/** 单行提交图的线条与节点；所有行叠在同一个坐标空间里 */
-const GraphRowSvg: React.FC<{ row: GraphRow; index: number }> = ({ row, index }) => {
-  const x = (lane: number) => GRAPH_PAD + lane * LANE_WIDTH + LANE_WIDTH / 2
-  const yTop = index * ROW_HEIGHT
-  const yMid = yTop + ROW_HEIGHT / 2
-  const yBottom = yTop + ROW_HEIGHT
-  const totalLanes = Math.max(row.before.length, row.after.length)
+const RefBadge: React.FC<{ chip: GitRefChip; filled?: boolean; shrinkable?: boolean }> = ({
+  chip,
+  filled = false,
+  shrinkable = false,
+}) => {
+  const Icon = refBadgeIcon(chip.kind)
+  return (
+    <span
+      title={chip.title}
+      className={`inline-flex h-4 items-center gap-0.5 rounded-sm px-1 type-caption ${
+        shrinkable ? 'min-w-0 shrink' : 'max-w-[140px] flex-none'
+      } ${
+        filled
+          ? 'bg-accent text-accent-fg'
+          : 'border border-rule-hairline bg-raised text-ink-muted'
+      }`}
+    >
+      <Icon size={10} className="flex-none" />
+      <span className="truncate">{chip.label}</span>
+    </span>
+  )
+}
+
+const GraphRowSvg: React.FC<{
+  row: GraphRow
+  width: number
+  height: number
+  radius: number
+  strokeWidth: number
+  dashedTop?: boolean
+}> = ({ row, width, height, radius, strokeWidth, dashedTop = false }) => {
+  const laneX = (lane: number) => GRAPH_PAD_LEFT + lane * LANE_WIDTH + LANE_WIDTH / 2
+  const yMid = height / 2
+  const total = Math.max(row.before.length, row.after.length, row.lane + 1)
+  const strokeProps = (lane: number) => ({
+    className: laneClass(lane),
+    strokeWidth,
+    fill: 'none' as const,
+    strokeLinecap: 'round' as const,
+  })
   const parts: React.ReactNode[] = []
 
-  for (let lane = 0; lane < totalLanes; lane += 1) {
+  for (let lane = 0; lane < total; lane += 1) {
     if (row.incoming.includes(lane)) continue
-    if (row.before[lane]) {
-      parts.push(
-        <path
-          key={`lane-${lane}`}
-          d={`M ${x(lane)} ${yTop} L ${x(lane)} ${yBottom}`}
-          className={laneClass(lane)}
-          fill="none"
-          strokeWidth={1.5}
-        />
-      )
-    }
+    if (!row.before[lane]) continue
+    parts.push(
+      <path
+        key={`lane-${lane}`}
+        d={`M ${laneX(lane)} 0 L ${laneX(lane)} ${height}`}
+        {...strokeProps(lane)}
+      />
+    )
+  }
+
+  if (dashedTop) {
+    parts.push(
+      <path
+        key="dash-top"
+        d={`M ${laneX(row.lane)} 0 L ${laneX(row.lane)} ${yMid}`}
+        className="stroke-accent"
+        strokeWidth={strokeWidth}
+        fill="none"
+        strokeDasharray="2 3"
+        strokeLinecap="round"
+      />
+    )
   }
 
   if (row.incoming.includes(row.lane)) {
     parts.push(
       <path
-        key="node-top"
-        d={`M ${x(row.lane)} ${yTop} L ${x(row.lane)} ${yMid}`}
-        className={laneClass(row.lane)}
-        fill="none"
-        strokeWidth={1.5}
+        key="node-in"
+        d={`M ${laneX(row.lane)} 0 L ${laneX(row.lane)} ${yMid}`}
+        {...strokeProps(row.lane)}
       />
     )
   }
@@ -97,10 +165,8 @@ const GraphRowSvg: React.FC<{ row: GraphRow; index: number }> = ({ row, index })
     parts.push(
       <path
         key={`incoming-${lane}`}
-        d={`M ${x(lane)} ${yTop} C ${x(lane)} ${yMid}, ${x(row.lane)} ${yMid}, ${x(row.lane)} ${yMid}`}
-        className={laneClass(lane)}
-        fill="none"
-        strokeWidth={1.5}
+        d={`M ${laneX(lane)} 0 C ${laneX(lane)} ${yMid / 2}, ${laneX(row.lane)} ${yMid / 2}, ${laneX(row.lane)} ${yMid}`}
+        {...strokeProps(lane)}
       />
     )
   }
@@ -108,54 +174,160 @@ const GraphRowSvg: React.FC<{ row: GraphRow; index: number }> = ({ row, index })
   for (const edge of row.parentEdges) {
     const d =
       edge.from === edge.to
-        ? `M ${x(edge.from)} ${yMid} L ${x(edge.to)} ${yBottom}`
-        : `M ${x(edge.from)} ${yMid} C ${x(edge.from)} ${yBottom}, ${x(edge.to)} ${yBottom}, ${x(edge.to)} ${yBottom}`
-    parts.push(
-      <path
-        key={`parent-${edge.from}-${edge.to}`}
-        d={d}
-        className={laneClass(edge.to)}
-        fill="none"
-        strokeWidth={1.5}
-      />
-    )
+        ? `M ${laneX(edge.from)} ${yMid} L ${laneX(edge.to)} ${height}`
+        : `M ${laneX(edge.from)} ${yMid} C ${laneX(edge.from)} ${(yMid + height) / 2}, ${laneX(edge.to)} ${(yMid + height) / 2}, ${laneX(edge.to)} ${height}`
+    parts.push(<path key={`parent-${edge.from}-${edge.to}`} d={d} {...strokeProps(edge.to)} />)
   }
 
   return (
-    <>
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true" className="flex-none">
       {parts}
       <circle
-        cx={x(row.lane)}
+        cx={laneX(row.lane)}
         cy={yMid}
-        r={row.parentEdges.length > 1 ? 4 : 3.5}
-        className={laneClass(row.lane)}
-        fill="rgb(var(--surface))"
-        strokeWidth={1.75}
+        r={radius}
+        fill={`rgb(var(${laneVar(row.lane)}))`}
+        stroke="rgb(var(--panel))"
+        strokeWidth={2}
       />
-    </>
+    </svg>
   )
 }
 
-function checkTone(state: string | undefined): string {
-  if (state === 'success') return 'text-success'
-  if (state === 'failure') return 'text-danger'
-  if (state === 'pending') return 'text-warning'
-  return 'text-ink-muted'
+const WipNodeSvg: React.FC<{ width: number; height: number; radius: number }> = ({
+  width,
+  height,
+  radius,
+}) => {
+  const x = GRAPH_PAD_LEFT + LANE_WIDTH / 2
+  const yMid = height / 2
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true" className="flex-none">
+      <path
+        d={`M ${x} ${yMid} L ${x} ${height}`}
+        className="stroke-accent"
+        strokeWidth={2}
+        strokeDasharray="2 3"
+        fill="none"
+        strokeLinecap="round"
+      />
+      <circle
+        cx={x}
+        cy={yMid}
+        r={radius}
+        fill="rgb(var(--panel))"
+        stroke="rgb(var(--accent))"
+        strokeWidth={2}
+        strokeDasharray="2.6 2.4"
+      />
+    </svg>
+  )
 }
 
+/** 提交变更环：绿=新增行、红=删除行，弧长按改动量饱和填充，灰色为底环 */
+const ChangeRing: React.FC<{ stats?: GitCommitStats; title: string }> = ({ stats, title }) => {
+  const additions = stats?.additions ?? 0
+  const deletions = stats?.deletions ?? 0
+  const total = additions + deletions
+  const size = 18
+  const center = size / 2
+  const radius = 6
+  const circumference = 2 * Math.PI * radius
+  const track = (
+    <circle
+      cx={center}
+      cy={center}
+      r={radius}
+      fill="none"
+      stroke="rgb(var(--rule-hairline))"
+      strokeWidth={2.8}
+    />
+  )
+  let arcs: React.ReactNode = null
+  if (total > 0) {
+    const fill = total / (total + CHANGE_SCALE)
+    const arc = circumference * fill
+    const green = (arc * additions) / total
+    const red = arc - green
+    arcs = (
+      <>
+        {green > 0.2 && (
+          <circle
+            cx={center}
+            cy={center}
+            r={radius}
+            fill="none"
+            stroke="rgb(var(--success))"
+            strokeWidth={2.8}
+            strokeDasharray={`${green} ${circumference - green}`}
+            transform={`rotate(-90 ${center} ${center})`}
+          />
+        )}
+        {red > 0.2 && (
+          <circle
+            cx={center}
+            cy={center}
+            r={radius}
+            fill="none"
+            stroke="rgb(var(--danger))"
+            strokeWidth={2.8}
+            strokeDasharray={`${red} ${circumference - red}`}
+            strokeDashoffset={-green}
+            transform={`rotate(-90 ${center} ${center})`}
+          />
+        )}
+      </>
+    )
+  }
+  return (
+    <span title={title} className="flex flex-none items-center">
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
+        {track}
+        {arcs}
+      </svg>
+    </span>
+  )
+}
+
+const FilterChip: React.FC<{
+  active: boolean
+  onClick: () => void
+  children: React.ReactNode
+}> = ({ active, onClick, children }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    aria-pressed={active}
+    className={`h-5 flex-none rounded-sm border px-1.5 type-caption transition-colors ${
+      active
+        ? 'border-rule-control bg-active text-ink'
+        : 'border-transparent text-ink-muted hover:bg-hover hover:text-ink'
+    }`}
+  >
+    {children}
+  </button>
+)
+
 export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => {
-  const { t } = useI18nStore()
-  /** null 表示校验尚未返回，避免挂载瞬间闪出“未关联” */
+  const { t, language } = useI18nStore()
   const [githubLinked, setGithubLinked] = useState<boolean | null>(null)
+  const [panelWidth, setPanelWidth] = useState(0)
+  const [columnWidths, setColumnWidths] = useState<ColumnWidths>({
+    author: 54,
+    ring: 34,
+    date: 82,
+    sha: 58,
+  })
+  const [filters, setFilters] = useState({ branches: true, remotes: true, tags: true })
+  const [worktreesOpen, setWorktreesOpen] = useState(false)
+  const panelRef = useRef<HTMLDivElement>(null)
+
   const activeSessionId = useSessionStore(
     (state) => state.byWorkspace[workspacePath]?.active ?? null
   )
   const repo = useGitStore((state) => state.byWorkspace[workspacePath]?.repo ?? null)
   const worktrees = useGitStore(
-    (state) => state.byWorkspace[workspacePath]?.worktrees ?? NO_WORKTREES
-  )
-  const branches = useGitStore(
-    (state) => state.byWorkspace[workspacePath]?.branches ?? NO_BRANCHES
+    (state) => state.byWorkspace[workspacePath]?.worktrees ?? EMPTY_WORKTREES
   )
   const binding = useGitStore((state) =>
     activeSessionId
@@ -163,27 +335,64 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
       : null
   )
   const commits = useGitStore(
-    (state) => state.byWorkspace[workspacePath]?.commits ?? NO_COMMITS
+    (state) => state.byWorkspace[workspacePath]?.commits ?? EMPTY_COMMITS
   )
-  const graph = useMemo(() => buildCommitGraph(commits), [commits])
-  const graphWidth = GRAPH_PAD + graph.laneCount * LANE_WIDTH + 4
-  const detail = useGitStore(
-    (state) => state.byWorkspace[workspacePath]?.commitDetail ?? null
-  )
+  const stats = useGitStore((state) => state.byWorkspace[workspacePath]?.stats ?? EMPTY_STATS)
+  const detail = useGitStore((state) => state.byWorkspace[workspacePath]?.commitDetail ?? null)
   const detailPending = useGitStore(
     (state) => state.byWorkspace[workspacePath]?.detailPending ?? null
   )
   const pr = useGitStore((state) => state.byWorkspace[workspacePath]?.pr ?? null)
+  const error = useGitStore((state) => state.byWorkspace[workspacePath]?.error ?? null)
   const load = useGitStore((state) => state.load)
   const loadCommits = useGitStore((state) => state.loadCommits)
-  const loadCommitDetail = useGitStore((state) => state.loadCommitDetail)
+  const loadCommitStats = useGitStore((state) => state.loadCommitStats)
   const loadPr = useGitStore((state) => state.loadPr)
+  const refreshWorktrees = useGitStore((state) => state.refreshWorktrees)
   const switchWorktree = useGitStore((state) => state.switchWorktree)
+  const openCommitDetail = useGitStore((state) => state.openCommitDetail)
+  const createBranchAtCommit = useGitStore((state) => state.createBranch)
+
+  const graph = useMemo(() => buildCommitGraph(commits), [commits])
+  const graphWidth = GRAPH_PAD_LEFT + graph.laneCount * LANE_WIDTH + GRAPH_PAD_RIGHT
+  const narrow = panelWidth > 0 && panelWidth < NARROW_BREAKPOINT
+  const rowHeight = narrow ? ROW_HEIGHT_NARROW : ROW_HEIGHT
+  const nodeRadius = narrow ? 6.5 : 4.5
+  const graphStrokeWidth = narrow ? 2.4 : 2
+  const rowGrid = narrow
+    ? `${graphWidth}px minmax(0,1fr)`
+    : `${graphWidth}px minmax(0,1fr) ${columnWidths.author}px ${columnWidths.ring}px ${columnWidths.date}px ${columnWidths.sha}px 36px`
+
+  const currentWorktree =
+    worktrees.find((worktree) => worktree.path === binding?.path) ??
+    worktrees.find((worktree) => worktree.isMain) ??
+    null
+  const dirtyCount = currentWorktree?.dirtyCount ?? 0
+  const ahead = currentWorktree?.ahead ?? 0
+  const behind = currentWorktree?.behind ?? 0
+  const currentBranch =
+    currentWorktree?.branch ?? repo?.branch ?? '—'
+  const allRefsOn = filters.branches && filters.remotes && filters.tags
+  const selectedSha = detailPending ?? detail?.commit.sha ?? null
+
+  useEffect(() => {
+    const element = panelRef.current
+    if (!element) return
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry) setPanelWidth(entry.contentRect.width)
+    })
+    observer.observe(element)
+    setPanelWidth(element.clientWidth)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     void load(workspacePath, activeSessionId)
-    void loadCommits(workspacePath, 80)
-  }, [workspacePath, activeSessionId, load, loadCommits])
+    void loadCommits(workspacePath, COMMIT_LIMIT, undefined, true)
+    void loadCommitStats(workspacePath, COMMIT_LIMIT, undefined, true)
+  }, [workspacePath, activeSessionId, load, loadCommits, loadCommitStats])
 
   useEffect(() => {
     void loadPr(workspacePath, binding?.path)
@@ -224,249 +433,511 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     }
   }, [])
 
-  const refresh = () => {
+  const refresh = useCallback(() => {
     void load(workspacePath, activeSessionId)
-    void loadCommits(workspacePath, 80, currentBranch === '—' ? undefined : currentBranch)
+    void loadCommits(workspacePath, COMMIT_LIMIT, undefined, true)
+    void loadCommitStats(workspacePath, COMMIT_LIMIT, undefined, true)
+    void refreshWorktrees(workspacePath, activeSessionId)
     void loadPr(workspacePath, binding?.path)
+  }, [
+    workspacePath,
+    activeSessionId,
+    binding?.path,
+    load,
+    loadCommits,
+    loadCommitStats,
+    loadPr,
+    refreshWorktrees,
+  ])
+
+  const selectWorktree = useCallback(
+    async (worktree: GitWorktreeView) => {
+      if (!activeSessionId) {
+        toast.info(t('worktreeNeedSession'))
+        return
+      }
+      const result = await switchWorktree(workspacePath, activeSessionId, worktree.path)
+      if (!result.success) toast.error(result.error ?? t('worktreeSwitchFailed'))
+      else if (result.scheduled) toast.info(t('worktreeSwitchScheduled'))
+      else toast.success(t('worktreeSwitched'))
+      setWorktreesOpen(false)
+    },
+    [activeSessionId, switchWorktree, workspacePath, t]
+  )
+
+  const copySha = useCallback(
+    async (sha: string) => {
+      try {
+        await navigator.clipboard.writeText(sha)
+        toast.success(t('gitCopiedSha'))
+      } catch {
+        toast.error(t('gitCopyFailed'))
+      }
+    },
+    [t]
+  )
+
+  const createBranchHere = useCallback(
+    async (sha: string) => {
+      const name = await promptDialog({
+        title: t('gitNewBranchTitle'),
+        message: t('gitNewBranchMessage', { sha: sha.slice(0, 7) }),
+        placeholder: t('gitNewBranchPlaceholder'),
+        confirmLabel: t('gitCreateAction'),
+      })
+      const trimmed = name?.trim()
+      if (!trimmed) return
+      const result = await createBranchAtCommit(workspacePath, sha, trimmed)
+      if (result.success) {
+        toast.success(t('gitBranchCreated', { name: trimmed }))
+        refresh()
+      } else {
+        toast.error(result.error ?? t('gitCreateAction'))
+      }
+    },
+    [createBranchAtCommit, refresh, t, workspacePath]
+  )
+
+  const authorLabel = useCallback(
+    (commit: GitCommitInfo) =>
+      commit.email && repo?.userEmail && commit.email.toLowerCase() === repo.userEmail.toLowerCase()
+        ? t('gitYou')
+        : commit.author,
+    [repo?.userEmail, t]
+  )
+
+  const visibleRefs = useCallback(
+    (commit: GitCommitInfo) =>
+      parseGitRefs(commit.refs).filter((chip) => {
+        if (chip.kind === 'tag') return filters.tags
+        if (chip.kind === 'remote') return filters.remotes
+        return filters.branches
+      }),
+    [filters]
+  )
+
+  const ringTitle = useCallback(
+    (commitSha: string) => {
+      const entry = stats[commitSha]
+      if (!entry || entry.additions + entry.deletions === 0) return t('gitRingEmpty')
+      return t('gitRingTitle', {
+        added: entry.addedFiles,
+        modified: entry.modifiedFiles,
+        deleted: entry.deletedFiles,
+        additions: entry.additions.toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US'),
+        deletions: entry.deletions.toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US'),
+      })
+    },
+    [stats, t, language]
+  )
+
+  const dayLabel = useMemo(() => {
+    const iso = commits[0]?.date
+    if (!iso) return ''
+    const target = new Date(iso)
+    const now = new Date()
+    if (target.toDateString() === now.toDateString()) return t('gitToday')
+    const yesterday = new Date(now)
+    yesterday.setDate(now.getDate() - 1)
+    if (target.toDateString() === yesterday.toDateString()) return t('gitYesterday')
+    return target.toLocaleDateString(language === 'zh' ? 'zh-CN' : 'en-US', {
+      month: 'long',
+      day: 'numeric',
+    })
+  }, [commits, language, t])
+
+  const beginResize = useCallback(
+    (key: ColumnKey) => (event: React.PointerEvent<HTMLElement>) => {
+      event.preventDefault()
+      event.stopPropagation()
+      const startX = event.clientX
+      const startWidth = columnWidths[key]
+      const limits = COLUMN_LIMITS[key]
+      const onMove = (move: PointerEvent) => {
+        const next = clamp(startWidth - (move.clientX - startX), limits.min, limits.max)
+        setColumnWidths((current) => ({ ...current, [key]: next }))
+      }
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+      }
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+    },
+    [columnWidths]
+  )
+
+  const renderActionButtons = (commit: GitCommitInfo) => (
+    <>
+      <span
+        role="button"
+        tabIndex={-1}
+        title={t('gitCopySha')}
+        onClick={(event) => {
+          event.stopPropagation()
+          void copySha(commit.sha)
+        }}
+        className="flex h-5 w-5 items-center justify-center rounded-sm text-ink-muted hover:bg-hover hover:text-ink"
+      >
+        <Copy size={12} />
+      </span>
+      <span
+        role="button"
+        tabIndex={-1}
+        title={t('gitCreateBranchHere')}
+        onClick={(event) => {
+          event.stopPropagation()
+          void createBranchHere(commit.sha)
+        }}
+        className="flex h-5 w-5 items-center justify-center rounded-sm text-ink-muted hover:bg-hover hover:text-ink"
+      >
+        <GitBranch size={12} />
+      </span>
+    </>
+  )
+
+  const actionVisibility = (commit: GitCommitInfo) =>
+    selectedSha === commit.sha
+      ? 'opacity-100'
+      : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'
+
+  const renderRow = (commit: GitCommitInfo, index: number) => {
+    const graphRow = graph.rows[index]
+    if (!graphRow) return null
+    const chips = visibleRefs(commit)
+    const selected = selectedSha === commit.sha
+    const relative = formatRelativeTime(commit.date, language)
+    const author = authorLabel(commit)
+    return (
+      <button
+        key={commit.sha}
+        type="button"
+        onClick={() => void openCommitDetail(workspacePath, commit.sha)}
+        aria-label={`${commit.subject} ${author}`}
+        style={{ gridTemplateColumns: rowGrid, height: rowHeight }}
+        className={`group relative grid w-full items-center border-l-2 pr-2 text-left transition-colors ${
+          selected
+            ? 'border-accent bg-accent/[0.07]'
+            : 'border-transparent hover:bg-hover focus-visible:bg-hover'
+        }`}
+      >
+        <span className="flex h-full items-center overflow-hidden">
+          <GraphRowSvg
+            row={graphRow}
+            width={graphWidth}
+            height={rowHeight}
+            radius={nodeRadius}
+            strokeWidth={graphStrokeWidth}
+            dashedTop={index === 0}
+          />
+        </span>
+        {narrow ? (
+          <span className="flex min-w-0 flex-col justify-center gap-0.5">
+            <span className="relative flex min-w-0 items-center gap-1">
+              <span className="min-w-0 flex-1 truncate type-value text-ink">{commit.subject}</span>
+              <span className="flex-none type-caption text-ink-subtle">{relative}</span>
+              <span
+                className={`absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-sm bg-panel px-0.5 ${actionVisibility(commit)}`}
+              >
+                {renderActionButtons(commit)}
+              </span>
+            </span>
+            <span className="flex min-w-0 items-center gap-1 type-caption text-ink-muted">
+              {chips.map((chip) => (
+                <RefBadge key={`${chip.kind}:${chip.title}`} chip={chip} filled shrinkable />
+              ))}
+              <span className="flex-none type-data text-ink-subtle">{commit.shortSha}</span>
+            </span>
+          </span>
+        ) : (
+          <>
+            <span className="flex min-w-0 items-center gap-1 overflow-hidden pl-0.5">
+              {chips.map((chip) => (
+                <RefBadge key={`${chip.kind}:${chip.title}`} chip={chip} />
+              ))}
+              <span className="truncate type-value text-ink">{commit.subject}</span>
+            </span>
+            <span className="truncate type-caption text-ink-muted">{author}</span>
+            <span className="flex items-center">
+              <ChangeRing stats={stats[commit.sha]} title={ringTitle(commit.sha)} />
+            </span>
+            <span className="truncate type-caption text-ink-muted">{relative}</span>
+            <span className="truncate type-data text-ink-subtle">{commit.shortSha}</span>
+            <span className={`flex flex-none items-center gap-0.5 ${actionVisibility(commit)}`}>
+              {renderActionButtons(commit)}
+            </span>
+          </>
+        )}
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-0 right-0 border-b border-rule-hairline"
+          style={{ left: graphWidth }}
+        />
+      </button>
+    )
   }
 
-  const selectWorktree = async (worktree: GitWorktreeView) => {
-    if (!activeSessionId) {
-      toast.info(t('worktreeNeedSession'))
-      return
-    }
-    const result = await switchWorktree(workspacePath, activeSessionId, worktree.path)
-    if (!result.success) toast.error(result.error ?? t('worktreeSwitchFailed'))
-    else if (result.scheduled) toast.info(t('worktreeSwitchScheduled'))
-    else toast.success(t('worktreeSwitched'))
-  }
-
-  const currentBranch =
-    worktrees.find((item) => item.path === binding?.path)?.branch ??
-    repo?.branch ??
-    '—'
-
-  useEffect(() => {
-    if (!currentBranch || currentBranch === '—') return
-    void loadCommits(workspacePath, 80, currentBranch)
-  }, [currentBranch, workspacePath, loadCommits])
-
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-panel">
-      <div className="flex h-[34px] flex-shrink-0 items-center gap-1.5 border-b border-rule-divide px-2.5">
-        <GitBranch size={13} className="text-ink-muted" />
-        <span className="min-w-0 flex-1 truncate type-value text-ink">{currentBranch}</span>
-        {pr?.checks && pr.checks.state !== 'none' && (
-          <span className={`flex items-center gap-0.5 type-caption ${checkTone(pr.checks.state)}`}>
-            {pr.checks.state === 'success' ? (
-              <CheckCircle2 size={12} />
-            ) : pr.checks.state === 'pending' ? (
-              <Clock size={12} />
-            ) : (
-              <XCircle size={12} />
-            )}
-            {pr.checks.total}
+  const prRow =
+    pr?.pull && pr.available ? (
+      <div className="flex h-[26px] flex-none items-center gap-1.5 border-b border-rule-hairline px-2.5 type-caption">
+        <GitPullRequest size={11} className="flex-none text-ink-muted" />
+        <a
+          href={pr.pull.url}
+          target="_blank"
+          rel="noreferrer"
+          title={pr.pull.title}
+          className="min-w-0 truncate text-accent hover:underline"
+        >
+          #{pr.pull.number} {pr.pull.title}
+        </a>
+        {pr.checks && pr.checks.state !== 'none' && (
+          <span
+            className={`ml-auto flex-none ${
+              pr.checks.state === 'success'
+                ? 'text-success'
+                : pr.checks.state === 'pending'
+                  ? 'text-warning'
+                  : 'text-danger'
+            }`}
+          >
+            {pr.checks.state}
           </span>
         )}
-        <IconButton
-          icon={RefreshCw}
-          label={t('gitRefresh')}
-          size="sm"
-          onClick={refresh}
-        />
       </div>
+    ) : null
 
-      <div className="min-h-0 flex-1 overflow-auto">
-        {pr?.pull && (
-          <div className="border-b border-rule-divide px-2.5 py-2">
-            <div className="type-label text-ink-muted">{t('gitPullRequest')}</div>
-            <a
-              href={pr.pull.url}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-0.5 block truncate type-value text-accent"
-              title={pr.pull.title}
-            >
-              #{pr.pull.number} {pr.pull.title}
-            </a>
-            <div className={`mt-0.5 type-caption ${checkTone(pr.checks?.state)}`}>
-              {t('gitChecks')}: {pr.checks?.state ?? 'none'}
-            </div>
-          </div>
-        )}
-
-        <section className="border-b border-rule-divide px-2.5 py-2">
-          <div className="flex items-center gap-1 type-label text-ink-muted">
-            <FolderGit2 size={12} />
-            {t('gitWorktrees')}
-          </div>
-          <div className="mt-1 flex flex-col">
-            {worktrees.map((worktree) => {
-              const current = worktree.path === binding?.path
-              return (
-                <div
-                  key={worktree.id}
-                  className="flex items-center gap-1.5 py-1"
-                  title={worktree.path}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate type-value text-ink">
-                      {worktree.branch ?? worktree.relativePath}
-                    </span>
-                    <span className="block truncate type-caption text-ink-muted">
-                      {worktree.isMain ? t('mainWorktree') : worktree.relativePath}
-                      {worktree.boundSessionCount > 0
-                        ? ` · ${t('gitInUse')}`
-                        : ` · ${t('gitIdle')}`}
-                      {worktree.dirtyCount > 0 ? ` · ${worktree.dirtyCount}` : ''}
-                    </span>
-                  </span>
-                  {current ? (
-                    <span className="type-caption text-accent">{t('gitInUse')}</span>
-                  ) : (
-                    <Button size="sm" variant="ghost" onClick={() => void selectWorktree(worktree)}>
-                      {t('gitUseWorktree')}
-                    </Button>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </section>
-
-        <section className="border-b border-rule-divide px-2.5 py-2">
-          <div className="flex items-center gap-1 type-label text-ink-muted">
-            <GitBranch size={12} />
-            {t('gitBranches')}
-          </div>
-          <div className="mt-1 flex flex-col">
-            {branches.slice(0, 60).map((branch) => (
-              <div key={branch.fullName} className="flex items-center gap-1.5 py-0.5">
-                <span className="min-w-0 flex-1 truncate type-value text-ink">
-                  {branch.name}
-                </span>
-                {branch.current && (
-                  <span className="type-caption text-accent">{t('gitInUse')}</span>
-                )}
-                {branch.remote && <span className="type-caption text-ink-subtle">remote</span>}
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="px-2.5 py-2">
-          <div className="flex items-center gap-1 type-label text-ink-muted">
-            <GitCommitHorizontal size={12} />
-            {t('gitCommits')}
-          </div>
-          {commits.length === 0 ? (
-            <div className="mt-1 type-caption text-ink-muted">{t('gitNoCommits')}</div>
-          ) : (
-            <div className="relative mt-1" style={{ height: commits.length * ROW_HEIGHT }}>
-              <svg
-                className="pointer-events-none absolute left-0 top-0"
-                width={graphWidth}
-                height={commits.length * ROW_HEIGHT}
-                aria-hidden
+  const worktreeList = worktreesOpen ? (
+    <div className="max-h-40 flex-none overflow-auto border-b border-rule-divide">
+      {worktrees.map((worktree) => {
+        const current = binding ? worktree.path === binding.path : worktree.isMain
+        return (
+          <div
+            key={worktree.id}
+            className="flex items-center gap-1.5 px-2.5 py-1 type-caption text-ink-muted"
+            title={worktree.path}
+          >
+            <span className="min-w-0 flex-1 truncate type-value text-ink">
+              {worktree.branch ?? worktree.relativePath}
+            </span>
+            {current ? (
+              <span className="flex-none text-accent">{t('gitInUse')}</span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void selectWorktree(worktree)}
+                className="flex-none rounded-sm px-1 text-accent hover:bg-hover"
               >
-                {graph.rows.map((row, index) => (
-                  <GraphRowSvg key={row.sha} row={row} index={index} />
-                ))}
-              </svg>
-              {commits.map((commit) => {
-                const refs = commitRefLabels(commit.refs)
-                return (
-                  <button
-                    key={commit.sha}
-                    type="button"
-                    onClick={() => void loadCommitDetail(workspacePath, commit.sha)}
-                    style={{ height: ROW_HEIGHT, paddingLeft: graphWidth + 6 }}
-                    className={`flex w-full flex-col justify-center gap-0.5 border-b border-rule-hairline pr-1 text-left transition-colors last:border-b-0 hover:bg-hover ${
-                      detail?.commit.sha === commit.sha || detailPending === commit.sha
-                        ? 'bg-active'
-                        : ''
-                    }`}
-                  >
-                    <span className="line-clamp-2 type-value text-ink">{commit.subject}</span>
-                    <span className="flex w-full items-center gap-1">
-                      <span className="min-w-0 flex-1 truncate type-caption text-ink-muted">
-                        {commit.shortSha} · {commit.author}
-                      </span>
-                      {refs.slice(0, 2).map((ref) => (
-                        <span
-                          key={ref}
-                          className="max-w-[80px] flex-shrink-0 truncate rounded-sm border border-rule-hairline px-1 type-caption text-ink-muted"
-                          title={ref}
-                        >
-                          {ref}
-                        </span>
-                      ))}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          )}
-        </section>
+                {t('gitUseWorktree')}
+              </button>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  ) : null
 
-        {detailPending && detailPending !== detail?.commit.sha && (
-          <section className="flex items-center gap-1.5 border-t border-rule-divide px-2.5 py-2">
+  return (
+    <div ref={panelRef} className="flex h-full min-h-0 flex-col bg-panel">
+      {narrow ? (
+        <>
+          <div className="flex h-[34px] flex-none items-center gap-1.5 border-b border-rule-divide px-2">
+          <span className="h-2 w-2 flex-none rounded-full bg-accent" aria-hidden="true" />
+          <span className="min-w-0 truncate type-label text-ink">{t('gitWorkingTree')}</span>
+          <span className="ml-auto flex-none type-caption text-ink-subtle">{dayLabel}</span>
+          <IconButton
+            icon={FolderGit2}
+            label={t('gitWorktrees')}
+            size="sm"
+            active={worktreesOpen}
+            onClick={() => setWorktreesOpen((value) => !value)}
+          />
+          <IconButton icon={RefreshCw} label={t('gitRefresh')} size="sm" onClick={refresh} />
+          </div>
+          {worktreeList}
+          {prRow}
+        </>
+      ) : (
+        <>
+          <div className="flex h-[32px] flex-none items-center gap-1.5 border-b border-rule-divide px-2.5">
+            <span className="flex-none type-data text-ink-muted">
+              ↑{ahead} ↓{behind}
+            </span>
+            <span className="h-3 w-px flex-none bg-rule-divide" aria-hidden="true" />
+            <FilterChip
+              active={allRefsOn}
+              onClick={() => setFilters({ branches: true, remotes: true, tags: true })}
+            >
+              {t('gitAllBranches')}
+            </FilterChip>
+            <FilterChip
+              active={filters.branches}
+              onClick={() => setFilters((current) => ({ ...current, branches: !current.branches }))}
+            >
+              {t('gitLocalRefs')}
+            </FilterChip>
+            <FilterChip
+              active={filters.remotes}
+              onClick={() => setFilters((current) => ({ ...current, remotes: !current.remotes }))}
+            >
+              {t('gitRemoteRefs')}
+            </FilterChip>
+            <FilterChip
+              active={filters.tags}
+              onClick={() => setFilters((current) => ({ ...current, tags: !current.tags }))}
+            >
+              {t('gitTags')}
+            </FilterChip>
+            <span className="min-w-0 flex-1" />
+            {pr?.checks && pr.checks.state !== 'none' && (
+              <span
+                className={`flex flex-none items-center gap-0.5 type-caption ${
+                  pr.checks.state === 'success'
+                    ? 'text-success'
+                    : pr.checks.state === 'pending'
+                      ? 'text-warning'
+                      : 'text-danger'
+                }`}
+              >
+                {pr.checks.state === 'success' ? (
+                  <CheckCircle2 size={12} />
+                ) : pr.checks.state === 'pending' ? (
+                  <Clock size={12} />
+                ) : (
+                  <XCircle size={12} />
+                )}
+                {pr.checks.total}
+              </span>
+            )}
+            <IconButton icon={RefreshCw} label={t('gitRefresh')} size="sm" onClick={refresh} />
+          </div>
+          <button
+            type="button"
+            onClick={() => setWorktreesOpen((value) => !value)}
+            aria-expanded={worktreesOpen}
+            className="flex h-[27px] w-full flex-none items-center gap-1.5 border-b border-rule-hairline bg-panel px-2.5 type-caption text-ink-muted hover:bg-hover"
+          >
+            <FolderGit2 size={11} className="flex-none" />
+            <span className="flex-none">{t('gitWorktrees')}</span>
+            <span className="flex-none type-data">{worktrees.length}</span>
+            <span className="min-w-0 truncate text-accent">{currentBranch}</span>
+            <ChevronDown
+              size={11}
+              className={`ml-auto flex-none transition-transform ${worktreesOpen ? 'rotate-180' : ''}`}
+            />
+          </button>
+          {worktreeList}
+          {prRow}
+          <div
+            className="grid h-[26px] flex-none items-center border-b border-rule-divide bg-panel pr-2 text-ink-subtle type-caption"
+            style={{ gridTemplateColumns: rowGrid }}
+          >
+            <span aria-hidden="true" />
+            <span className="truncate pl-0.5">{t('gitCommitColumn')}</span>
+            <span className="relative flex h-full items-center pl-0.5">
+              <span className="truncate">{t('gitAuthorColumn')}</span>
+              <span
+                role="separator"
+                aria-orientation="vertical"
+                className="absolute -left-0.5 top-0 h-full w-1.5 cursor-col-resize before:absolute before:bottom-1 before:left-1/2 before:top-1 before:w-px before:-translate-x-1/2 before:bg-transparent before:content-[''] hover:before:bg-accent"
+                onPointerDown={beginResize('author')}
+              />
+            </span>
+            <span className="relative flex h-full items-center pl-0.5">
+              <span className="truncate">{t('gitChangesColumn')}</span>
+              <span
+                role="separator"
+                aria-orientation="vertical"
+                className="absolute -left-0.5 top-0 h-full w-1.5 cursor-col-resize before:absolute before:bottom-1 before:left-1/2 before:top-1 before:w-px before:-translate-x-1/2 before:bg-transparent before:content-[''] hover:before:bg-accent"
+                onPointerDown={beginResize('ring')}
+              />
+            </span>
+            <span className="relative flex h-full items-center pl-0.5">
+              <span className="truncate">{t('gitDateColumn')}</span>
+              <span
+                role="separator"
+                aria-orientation="vertical"
+                className="absolute -left-0.5 top-0 h-full w-1.5 cursor-col-resize before:absolute before:bottom-1 before:left-1/2 before:top-1 before:w-px before:-translate-x-1/2 before:bg-transparent before:content-[''] hover:before:bg-accent"
+                onPointerDown={beginResize('date')}
+              />
+            </span>
+            <span className="relative flex h-full items-center pl-0.5">
+              <span className="truncate">{t('gitShaColumn')}</span>
+              <span
+                role="separator"
+                aria-orientation="vertical"
+                className="absolute -left-0.5 top-0 h-full w-1.5 cursor-col-resize before:absolute before:bottom-1 before:left-1/2 before:top-1 before:w-px before:-translate-x-1/2 before:bg-transparent before:content-[''] hover:before:bg-accent"
+                onPointerDown={beginResize('sha')}
+              />
+            </span>
+            <span aria-hidden="true" />
+          </div>
+        </>
+      )}
+
+      <div className="relative min-h-0 flex-1 overflow-auto">
+        <div
+          className="sticky top-0 z-[1] grid items-center border-l-2 border-transparent bg-panel"
+          style={{ gridTemplateColumns: rowGrid, height: ROW_HEIGHT }}
+          title={t('gitWorkingTreeSummary', { count: dirtyCount })}
+        >
+          <span className="flex h-full items-center overflow-hidden">
+            <WipNodeSvg
+              width={graphWidth}
+              height={ROW_HEIGHT}
+              radius={narrow ? 6.5 : 5.5}
+            />
+          </span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="inline-flex h-[18px] flex-none items-center gap-1 rounded-sm border border-rule-hairline bg-raised px-1.5 type-data text-ink-muted">
+              <FolderGit2 size={11} className="flex-none text-accent" />
+              <span className="text-ink-subtle">+</span>
+              <span className="text-ink">{dirtyCount}</span>
+            </span>
+            {!narrow && <span className="truncate type-label text-ink">{t('gitWorkingTree')}</span>}
+          </span>
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute bottom-0 right-0 border-b border-rule-hairline"
+            style={{ left: graphWidth }}
+          />
+        </div>
+
+        {commits.map((commit, index) => renderRow(commit, index))}
+
+        {detailPending && !detail && (
+          <div className="flex items-center gap-1.5 border-b border-rule-hairline px-2.5 py-1.5">
             <Spinner size={12} className="text-ink-muted" />
             <span className="type-data text-ink-subtle">{detailPending.slice(0, 7)}</span>
-          </section>
+          </div>
         )}
 
-        {detail && (
-          <section className="border-t border-rule-divide px-2.5 py-2">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="min-w-0 truncate type-label text-ink-muted" title={detail.commit.sha}>
-                {detail.commit.shortSha} · {detail.commit.author}
-              </span>
-              <span className="flex-shrink-0 type-caption text-ink-subtle">
-                {formatCommitDate(detail.commit.date)}
-              </span>
-            </div>
-            <div className="mt-1 type-value text-ink">{detail.commit.subject}</div>
-            {detail.body && (
-              <div className="mt-1.5 whitespace-pre-wrap break-words type-reading text-ink">
-                {detail.body}
-              </div>
-            )}
-            <div className="mt-2 flex flex-col gap-0.5 border-t border-rule-hairline pt-2">
-              {detail.files.map((file) => (
-                <div
-                  key={`${file.status}:${file.path}`}
-                  className="truncate type-caption text-ink-muted"
-                >
-                  <span className="text-accent">{file.status}</span> {file.path}
-                </div>
-              ))}
-            </div>
-            <pre className="mt-2 max-h-[360px] overflow-auto whitespace-pre-wrap break-words bg-sunken p-2 type-data text-ink-muted">
-              {detail.patch || ''}
-            </pre>
-            {detail.truncated && (
-              <div className="mt-1 type-caption text-warning">diff truncated</div>
-            )}
-          </section>
-        )}
-
-        {githubLinked === false && (
-          <section className="border-t border-rule-divide px-2.5 py-2">
-            <div className="type-caption text-ink-muted">{t('githubNotLinked')}</div>
-            <div className="mt-1">
-              <Button
-                size="sm"
-                variant="secondary"
-                icon={GitPullRequest}
-                onClick={() => emitAppEvent('open-settings', { section: 'github' })}
-              >
-                {t('githubLink')}
-              </Button>
-            </div>
-          </section>
+        {commits.length === 0 && (
+          <div className="px-2.5 py-2 type-caption text-ink-muted">
+            {error ?? t('gitNoCommits')}
+          </div>
         )}
       </div>
+
+      {githubLinked === false && (
+        <div className="flex flex-none items-center gap-1.5 border-t border-rule-divide px-2.5 py-1.5">
+          <span className="min-w-0 flex-1 truncate type-caption text-ink-muted">
+            {t('githubNotLinked')}
+          </span>
+          <button
+            type="button"
+            onClick={() => emitAppEvent('open-settings', { section: 'github' })}
+            className="flex flex-none items-center gap-1 rounded-sm px-1 type-caption text-accent hover:bg-hover"
+          >
+            <GitPullRequest size={11} />
+            {t('githubLink')}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
+
