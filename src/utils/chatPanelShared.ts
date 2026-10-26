@@ -5,6 +5,8 @@ import type { SessionPermission, SessionSummary } from '../types/electron'
 
 export interface ChatPanelProps {
   workspacePath: string
+  /** 当前会话的工作树根；文件搜索、附加打开文件以它为基准 */
+  viewRoot?: string
   onCollapse?: () => void
   collapseButtonRef?: React.Ref<HTMLButtonElement>
   panelId?: string

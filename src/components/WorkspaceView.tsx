@@ -16,10 +16,13 @@ import { FileExplorer } from './FileExplorer'
 import { ChatPanel } from './ChatPanel'
 import { DiffViewer } from './DiffViewer'
 import { TerminalPanel } from './TerminalPanel'
+import { GitView } from './GitView'
 import { Spinner } from './ui'
 import { WorkspaceScopeProvider } from '../workspace/WorkspaceScope'
 import { subscribeEditorTabs } from '../workspace/editorTabs'
 import { useI18nStore } from '../store/i18nStore'
+import { useSessionStore } from '../store/sessionStore'
+import { useGitStore } from '../store/gitStore'
 import { onAppEvent } from '../utils/appEvents'
 
 const MonacoEditor = lazy(() =>
@@ -49,6 +52,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
   const [showTerminal, setShowTerminal] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(232)
   const [chatWidth, setChatWidth] = useState(336)
+  const [sidebarTab, setSidebarTab] = useState<'files' | 'git'>('files')
   const containerRef = useRef<HTMLDivElement>(null)
   const sidebarCollapseRef = useRef<HTMLButtonElement | null>(null)
   const chatCollapseRef = useRef<HTMLButtonElement | null>(null)
@@ -59,6 +63,14 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
   const reactId = useId()
   const filePanelId = `file-panel-${reactId}`
   const chatPanelId = `chat-panel-${reactId}`
+  const activeSessionId = useSessionStore(
+    (state) => state.byWorkspace[workspacePath]?.active ?? null
+  )
+  const viewRoot = useGitStore((state) =>
+    activeSessionId
+      ? state.byWorkspace[workspacePath]?.bindings[activeSessionId]?.path ?? workspacePath
+      : workspacePath
+  )
 
   const collapseSidebar = useCallback(() => {
     sidebarFocusIntent.current = true
@@ -112,8 +124,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
     return () => offToggle()
   }, [active])
 
-  // 标签变化防抖写入固定状态
-  useEffect(() => subscribeEditorTabs(workspacePath), [workspacePath])
+  // 标签变化防抖写入固定状态；工作树模式按当前视图根保存
+  useEffect(() => subscribeEditorTabs(workspacePath, viewRoot), [workspacePath, viewRoot])
 
   const startResize = useCallback(
     (target: 'sidebar' | 'chat') => (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -158,16 +170,46 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
           <>
             <aside
               id={filePanelId}
-              className="flex-shrink-0 overflow-hidden bg-panel"
+              className="flex flex-shrink-0 flex-col overflow-hidden bg-panel"
               style={{ width: sidebarWidth }}
             >
-              <FileExplorer
-                workspacePath={workspacePath}
-                onCollapse={collapseSidebar}
-                collapseButtonRef={sidebarCollapseRef}
-                panelId={filePanelId}
-                active={active}
-              />
+              <div className="flex h-[34px] flex-shrink-0 items-center gap-0.5 border-b border-rule-divide px-1.5">
+                <button
+                  type="button"
+                  onClick={() => setSidebarTab('files')}
+                  className={`h-full border-b-2 px-2 type-label transition-colors ${
+                    sidebarTab === 'files'
+                      ? 'border-accent text-ink'
+                      : 'border-transparent text-ink-muted hover:text-ink'
+                  }`}
+                >
+                  {t('files')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSidebarTab('git')}
+                  className={`h-full border-b-2 px-2 type-label transition-colors ${
+                    sidebarTab === 'git'
+                      ? 'border-accent text-ink'
+                      : 'border-transparent text-ink-muted hover:text-ink'
+                  }`}
+                >
+                  {t('gitView')}
+                </button>
+              </div>
+              <div className="min-h-0 flex-1">
+                {sidebarTab === 'files' ? (
+                  <FileExplorer
+                    workspacePath={viewRoot}
+                    onCollapse={collapseSidebar}
+                    collapseButtonRef={sidebarCollapseRef}
+                    panelId={filePanelId}
+                    active={active}
+                  />
+                ) : (
+                  <GitView workspacePath={workspacePath} />
+                )}
+              </div>
             </aside>
             <div
               role="separator"
@@ -199,10 +241,12 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
               </div>
             }
           >
-            <MonacoEditor workspacePath={workspacePath} active={active} />
+            <MonacoEditor workspacePath={workspacePath} viewRoot={viewRoot} active={active} />
           </Suspense>
           <TerminalPanel
             workspacePath={workspacePath}
+            cwd={viewRoot}
+            key={`${activeSessionId ?? 'none'}:${viewRoot}`}
             visible={showTerminal}
             onClose={() => setShowTerminal(false)}
             active={active}
@@ -224,6 +268,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
             >
               <ChatPanel
                 workspacePath={workspacePath}
+                viewRoot={viewRoot}
                 onCollapse={collapseChat}
                 collapseButtonRef={chatCollapseRef}
                 panelId={chatPanelId}
@@ -246,7 +291,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
           </button>
         )}
 
-        <DiffViewer workspacePath={workspacePath} active={active} />
+        <DiffViewer workspacePath={viewRoot} active={active} />
       </WorkspaceScopeProvider>
     </div>
   )

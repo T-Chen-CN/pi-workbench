@@ -287,6 +287,51 @@ const mockAPI = {
     success: false,
     error: 'Terminal is only available in the Electron app',
   }),
+  gitRepoInfo: async () => ({ success: true, repo: null, worktrees: [] }),
+  gitListWorktrees: async () => ({ success: true, worktrees: [] }),
+  gitBranches: async () => ({ success: true, branches: [] }),
+  gitStatus: async () => ({
+    success: true,
+    status: {
+      branch: null,
+      upstream: null,
+      ahead: 0,
+      behind: 0,
+      detached: false,
+      clean: true,
+      files: [],
+    },
+  }),
+  gitSessionBinding: async () => ({
+    success: true,
+    binding: { key: 'main', path: '', branch: null },
+  }),
+  gitBindWorktree: async () => ({
+    success: false,
+    error: 'Git is only available in the Electron app',
+  }),
+  gitReleaseSession: async () => ({ success: true, removed: false, dirty: false }),
+  gitCleanupOrphans: async () => ({ success: true, removed: [], dirty: [], external: [] }),
+  gitLog: async () => ({ success: true, commits: [] }),
+  gitCommitDetail: async () => ({ success: false, error: 'Git is only available in the Electron app' }),
+  gitDiff: async () => ({ success: true, patch: '' }),
+  gitCheckout: async () => ({ success: false, error: 'Git is only available in the Electron app' }),
+  gitMerge: async () => ({ success: false, error: 'Git is only available in the Electron app' }),
+  gitGithubTokenStatus: async () => ({ success: true, configured: false }),
+  githubAuthConfig: async () => ({ success: true, appConfigured: false, linked: false }),
+  githubAuthStart: async () => ({
+    success: false,
+    error: 'GitHub login is only available in the Electron app',
+  }),
+  githubAuthStatus: async () => ({ success: true, configured: false }),
+  githubAuthLogout: async () => ({ success: true }),
+  onGithubAuthComplete: () => () => {},
+  gitSetGithubToken: async () => ({ success: true }),
+  gitPrStatus: async () => ({
+    success: true,
+    status: { available: false, reason: 'Git is only available in the Electron app' },
+  }),
+  onAgentSessionRootChanged: () => () => {},
   terminalWrite: async (): Promise<TerminalResult> => ({ success: false }),
   terminalResize: async (): Promise<TerminalResult> => ({ success: false }),
   terminalClose: async (): Promise<TerminalResult> => ({ success: false }),
@@ -392,9 +437,56 @@ export const api = {
   onPluginsChanged: (callback: (payload: { workspaceDir: string }) => void) =>
     electronAPI.onPluginsChanged(callback),
 
+  // Git worktrees / read-only history / GitHub status
+  gitRepoInfo: (workspaceDir: string) => electronAPI.gitRepoInfo(workspaceDir),
+  gitListWorktrees: (workspaceDir: string, activeSessionId?: string) =>
+    electronAPI.gitListWorktrees(workspaceDir, activeSessionId),
+  gitBranches: (workspaceDir: string) => electronAPI.gitBranches(workspaceDir),
+  gitStatus: (workspaceDir: string, worktreePath?: string) =>
+    electronAPI.gitStatus(workspaceDir, worktreePath),
+  gitSessionBinding: (workspaceDir: string, sessionId: string) =>
+    electronAPI.gitSessionBinding(workspaceDir, sessionId),
+  gitBindWorktree: (workspaceDir: string, sessionId: string, target: string, base?: string) =>
+    electronAPI.gitBindWorktree(workspaceDir, sessionId, target, base),
+  gitReleaseSession: (workspaceDir: string, sessionId: string) =>
+    electronAPI.gitReleaseSession(workspaceDir, sessionId),
+  gitCleanupOrphans: (workspaceDir: string) => electronAPI.gitCleanupOrphans(workspaceDir),
+  gitLog: (workspaceDir: string, limit?: number, branch?: string) =>
+    electronAPI.gitLog(workspaceDir, limit, branch),
+  gitCommitDetail: (workspaceDir: string, sha: string) =>
+    electronAPI.gitCommitDetail(workspaceDir, sha),
+  gitDiff: (workspaceDir: string, from: string, to: string) =>
+    electronAPI.gitDiff(workspaceDir, from, to),
+  gitCheckout: (workspaceDir: string, worktreePath: string, branch: string) =>
+    electronAPI.gitCheckout(workspaceDir, worktreePath, branch),
+  gitMerge: (
+    workspaceDir: string,
+    worktreePath: string,
+    branch: string,
+    strategy?: 'merge' | 'squash' | 'rebase'
+  ) => electronAPI.gitMerge(workspaceDir, worktreePath, branch, strategy),
+  gitGithubTokenStatus: () => electronAPI.gitGithubTokenStatus(),
+  githubAuthConfig: () => electronAPI.githubAuthConfig(),
+  githubAuthStart: () => electronAPI.githubAuthStart(),
+  githubAuthStatus: () => electronAPI.githubAuthStatus(),
+  githubAuthLogout: () => electronAPI.githubAuthLogout(),
+  onGithubAuthComplete: (
+    callback: (payload: {
+      success: boolean
+      user?: { login: string; name: string | null; avatarUrl: string | null } | null
+      error?: string
+    }) => void
+  ) => electronAPI.onGithubAuthComplete(callback),
+  gitSetGithubToken: (token: string) => electronAPI.gitSetGithubToken(token),
+  gitPrStatus: (workspaceDir: string, worktreePath?: string) =>
+    electronAPI.gitPrStatus(workspaceDir, worktreePath),
+  onAgentSessionRootChanged: (
+    callback: (payload: { workspaceDir: string; sessionId: string; root: string }) => void
+  ) => electronAPI.onAgentSessionRootChanged(callback),
+
   // Terminal
-  terminalCreate: (workspaceDir: string, cols: number, rows: number) =>
-    electronAPI.terminalCreate(workspaceDir, cols, rows),
+  terminalCreate: (workspaceDir: string, cols: number, rows: number, cwd?: string) =>
+    electronAPI.terminalCreate(workspaceDir, cols, rows, cwd),
   terminalWrite: (id: string, data: string) => electronAPI.terminalWrite(id, data),
   terminalResize: (id: string, cols: number, rows: number) =>
     electronAPI.terminalResize(id, cols, rows),

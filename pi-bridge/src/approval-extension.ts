@@ -19,6 +19,8 @@ export interface ApprovalExtensionContext {
   workspaceDir: string
   logger: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void }
   requestApproval: (request: ApprovalRequestPayload) => Promise<ApprovalDecision>
+  /** 轮次边界等待切换工作树时，禁止继续写文件 */
+  isSwitchPending?: () => boolean
 }
 
 export function createApprovalExtension(
@@ -33,6 +35,14 @@ export function createApprovalExtension(
       const args = event?.input ?? event?.args ?? {}
       const category = categorizeTool(toolName)
       const permission = normalizeSessionPermission(getPermission())
+
+      if ((toolName === 'write' || toolName === 'edit') && context.isSwitchPending?.()) {
+        return {
+          block: true,
+          reason:
+            'A worktree switch is scheduled for the end of this turn. Do not modify files until the switch takes effect.',
+        }
+      }
 
       // Plan 模式只允许只读工具；即使工具集被意外放宽也要拦住
       if (permission.mode === 'plan' && category !== 'read') {

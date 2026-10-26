@@ -9,6 +9,7 @@ import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
 import { sanitizeApprovalDecision, type ApprovalBroker } from '../approval-broker.js'
 import type { AgentRegistry } from '../agent-registry.js'
 import type { PluginManager } from '../plugin-manager.js'
+import { getCoordinator } from '../worktree-coordinator.js'
 import { handleIpc } from './register.js'
 
 const MAX_CHAT_IMAGES = 20
@@ -109,6 +110,7 @@ handleIpc('agent:initialize', async (_event, config: {
     // 延迟加载 AgentManager（用运行时路径解析，避免类型检查依赖未构建的 pi-bridge/dist）
     const { AgentManager } = await import(getBridgeEntryUrl())
     const agent = new AgentManager()
+    const coordinator = await getCoordinator(workspaceDir)
 
     // 初始化 Agent（传入完整的 apiConfig + 便携式 agent 数据目录）
     const result = await agent.initialize({
@@ -125,6 +127,31 @@ handleIpc('agent:initialize', async (_event, config: {
       // 会话权限：全局只提供新会话的默认档位；无审批通道时 Agent 侧按拒绝处理
       getDefaultPermissionLevel: () => context.getDefaultPermissionLevel(),
       requestApproval: (request: unknown) => context.approvalBroker.request(request as any),
+      resolveSessionRoot: (sessionId: string) => coordinator?.getSessionRoot(sessionId),
+      isSessionOfWorkspace: (sessionId: string, headerCwd: string) => {
+        if (coordinator?.hasBinding(sessionId)) return true
+        return path.resolve(headerCwd || workspaceDir) === path.resolve(workspaceDir)
+      },
+      getWorktreeContext: (sessionId: string) => coordinator?.contextFor(sessionId) ?? '',
+      onWorktreeSwitch: async (sessionId: string, target: string, base?: string) => {
+        if (!coordinator) return { success: false, error: 'Not a git repository' }
+        const bound = await coordinator.bind(sessionId, target, base, sessionId)
+        if (!bound.success || !bound.worktree) {
+          return { success: false, error: bound.error ?? 'Unable to bind worktree' }
+        }
+        return {
+          success: true,
+          root: bound.worktree.path,
+          branch: bound.worktree.branch ?? undefined,
+          sharedWith: bound.sharedWith,
+        }
+      },
+      onSessionRootChanged: (sessionId: string, root: string) => {
+        const win = mainWindow()
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('agent:session-root-changed', { workspaceDir, sessionId, root })
+        }
+      },
     })
 
     if (result.success) {
@@ -550,7 +577,7 @@ handleIpc('agent:sessions:open', async (_event, workspaceDir: string, sessionId?
   }
 })
 
-handleIpc('agent:sessions:create', async (_event, workspaceDir: string) => {
+handleIpc('agent:sessions:create', async (_event, workspaceDir: string, root?: string) => {
   try {
     if (!isTrustedWorkspacePath(workspaceDir)) {
       return { success: false, error: 'Workspace is not approved' }
@@ -560,7 +587,14 @@ handleIpc('agent:sessions:create', async (_event, workspaceDir: string) => {
     if (typeof agent.createSession !== 'function') {
       return { success: false, error: 'Sessions are not supported by this agent' }
     }
-    return await agent.createSession()
+    const targetRoot = typeof root === 'string' && root.trim() ? root.trim() : undefined
+    if (targetRoot) {
+      const { isPathInWorkspace } = await import('../git-worktrees.js')
+      if (!isPathInWorkspace(workspaceDir, targetRoot)) {
+        return { success: false, error: 'Worktree is outside the workspace' }
+      }
+    }
+    return await agent.createSession(targetRoot)
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) }
   }
@@ -578,7 +612,9 @@ handleIpc('agent:sessions:close', async (_event, workspaceDir: string, sessionId
     }
     await agent.closeSession(sessionId)
     context.approvalBroker.cancelForSession(sessionId)
-    return { success: true }
+    const coordinator = await getCoordinator(workspaceDir)
+    const released = coordinator ? await coordinator.release(sessionId) : null
+    return { success: true, ...(released ?? {}) }
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) }
   }
@@ -992,7 +1028,12 @@ handleIpc('agent:sessions:delete', async (_event, workspaceDir: string, sessionI
       return { success: false, error: 'Sessions are not supported by this agent' }
     }
     const result = await agent.deleteSession(sessionId)
-    if (result.success) context.approvalBroker.cancelForSession(sessionId)
+    if (result.success) {
+      context.approvalBroker.cancelForSession(sessionId)
+      const coordinator = await getCoordinator(workspaceDir)
+      const released = coordinator ? await coordinator.release(sessionId) : null
+      return { ...result, ...(released ?? {}) }
+    }
     return result
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) }

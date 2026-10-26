@@ -276,6 +276,14 @@ button {
     text-transform: uppercase;
   }
 
+  .type-signature {
+    font-family: var(--font-mono);
+    font-size: 8.5px;
+    font-weight: 400;
+    line-height: 1.2;
+    letter-spacing: 0.08em;
+  }
+
   .type-data {
     font-family: var(--font-mono);
     font-size: 11.5px;

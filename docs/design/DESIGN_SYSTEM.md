@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.30 |
+| 文档版本 | v1.31 |
 | 状态 | Active（正式规范） |
 | 最后更新 | 2026-10-26 |
 | 适用范围 | 渲染进程全部 UI、Monaco / xterm 主题、应用主题设置 |
@@ -172,6 +172,7 @@
 | Key | 10.5px / 1.2 | mono | 快捷键键帽 |
 | Eyebrow | 10.5px / 1.2，uppercase + 0.14em | mono | 纯 Latin 眉题 |
 | Wordmark | 8.5px / 1.2，uppercase + 0.2em | mono | 品牌副标 |
+| Signature | 8.5px / 1.2，0.08em | mono | 作者署名 |
 | Code | 12.5px / 1.65 | mono | 编辑器、代码块 |
 | Stamp | 9px / 1.2 + 7px 副标 | mono | 印章装饰 |
 
@@ -186,6 +187,24 @@
 - 长文本优先使用 `font-reading`，不要用 UI sans 排大段中文。
 - 路径、ID、时间、快捷键和代码使用 mono；字段值和状态值使用 UI sans，不要用 mono 排。
 - 数字型内容使用 `tabular-nums`，保证计数、时间和价格对齐。
+
+### 3.4 品牌标志
+
+**构成**：松绿印面（即应用图标本身）＋ `WORKBENCH` ＋ 署名 `TChen`。π 取自 Noto Serif 的真实轮廓（OFL），不做手绘近似、不拉伸。
+
+| 部位 | 规格 |
+|---|---|
+| 印面 | 顶栏 20px、主锁定 60px、竖排 80px；圆角 19.8%（`rx 152 / 768`），与 `app-icon` 同一份路径 |
+| 对齐 | 印面底边与 `WORKBENCH` 的基线对齐（`items-baseline`）；不按中心对齐，也不按行盒底对齐 |
+| WORKBENCH | `type-wordmark` |
+| 署名 | `type-signature`，前面 1px `bg-rule-divide` 竖线；不放大、不改衬线、不单独作为标志 |
+| 间距 | 印面与文字 7px（顶栏）/ 12px（主锁定），约为印面高度的 0.2–0.35 倍 |
+| 颜色 | 印面 `bg-accent`、字 `text-accent-fg`（`BrandSeal` 用 token，Ink 下自动转浅松绿）；`WORKBENCH` 与署名 `text-ink-muted`，不上色 |
+| 全名 | “Pi Workbench”只出现在窗口标题、关于页、README 标题，不进入标志 |
+
+**图标分稿**：256 带 `TChen` 署名，128 及以下用简化稿（π 放大到 56%）；ICO 每个尺寸单独出图，不做全尺寸统一。
+
+**禁止**：给 `WORKBENCH` 或署名上色；把印面拉成非等比；改用中心 / 行盒底对齐；在 16px 稿里保留署名。
 
 ---
 
@@ -315,6 +334,7 @@
 |---|---|---|
 | `type-eyebrow` | 纯 Latin 眉题 | 中文、混合标签 |
 | `type-wordmark` | 品牌副标 `WORKBENCH` | 正文、标签 |
+| `type-signature` | 作者署名 `TChen` | 正文、标签、放大 |
 | `type-eyebrow-cjk` | 英文界面里的中文眉题 | Latin 长句 |
 | `type-display` / `type-brand` / `type-title` / `type-subtitle` / `type-project` | 展示标题层级 | 正文、控件 |
 | `type-reading` | 14px 阅读型正文 | 高密度控件 |
@@ -590,6 +610,7 @@
 | 颜色 / 字体 / 全局样式 | `src/index.css` |
 | Token 到 Tailwind 的映射 | `tailwind.config.js` |
 | 基础组件 | `src/components/ui.tsx` |
+| 品牌标记 | `src/components/BrandSeal.tsx` |
 | 内容模式组件 | `src/components/patterns.tsx` |
 | 语义文字角色 | `src/index.css`（`.type-*`） |
 | 线条角色 token | `src/index.css`（`--rule-*`）、`tailwind.config.js`（`border-rule-*`） |
@@ -624,6 +645,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.31 | 2026-10-26 | 品牌标志：新增松绿印面 + π（Noto Serif 轮廓，OFL）+ `WORKBENCH` + 署名 `TChen` 的锁定；印面底边压基线、圆角 19.8%；新增 `type-signature` 与 `BrandSeal` 组件；应用图标改为 256 带署名、128 及以下简化的分稿，重生 app-icon.png / 多尺寸 ICO |
 | v1.30 | 2026-10-26 | 文件树排序：头部新增排序菜单（名称 / 类型单选、文件夹优先 / 倒序开关），偏好持久化到 `config/settings.json`；排序改为目录优先 + `Intl.Collator` 自然排序，倒序只翻转组内顺序；`MenuOption` 新增 `menuitemcheckbox` 角色并入 ↑↓ 导航 |
 | v1.29 | 2026-10-26 | 多工作区与首页：每个打开的工作区常驻视图，切换标签/返回首页只隐藏不卸载；顶栏主操作改为「返回首页 / 返回工作区」，关闭只在标签 ×；工作区标签新增待操作 / 错误 / 运行中状态标记；关闭后固定状态（打开的文件、会话、草稿）保留并恢复 |
 | v1.28 | 2026-10-26 | 面板开关回归面板：文件树头部最右端、聊天头部最左端各一个收起按钮，顶栏移除两个开关；收起后显示 26px 全高窄条，整条可点击、图标居中，点击展开；未配置 API 的聊天空状态保留头部与收起按钮 |

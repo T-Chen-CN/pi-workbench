@@ -13,6 +13,7 @@ import {
 import { api } from './api'
 import { piAgentAPI } from './api/piAgentAPI'
 import { IPCDebug } from './components/IPCDebug'
+import { BrandSeal } from './components/BrandSeal'
 import { Settings, type SettingsSection } from './components/Settings'
 import { UpdateDialog } from './components/UpdateDialog'
 import { UpdateStatusIndicator } from './components/UpdateStatusIndicator'
@@ -116,7 +117,8 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    const openSettingsEvent = () => openSettings()
+    const openSettingsEvent = (detail?: { section?: SettingsSection }) =>
+      openSettings(detail?.section ?? 'general')
     return onAppEvent('open-settings', openSettingsEvent)
   }, [openSettings])
 
@@ -449,11 +451,13 @@ export default function App() {
           void window.electronAPI?.toggleMaximizeWindow()
         }}
       >
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="type-brand text-ink">Pi</span>
-          <span className="type-wordmark text-ink-muted">
-            Workbench
-          </span>
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex items-baseline gap-2">
+            <BrandSeal size={20} />
+            <span className="type-wordmark text-ink-muted">Workbench</span>
+            <span className="mx-0.5 h-3 w-px self-center bg-rule-divide" aria-hidden="true" />
+            <span className="type-signature text-ink-muted">TChen</span>
+          </div>
           <span className="border border-rule-control px-1.5 py-0.5 type-caption font-medium text-ink-muted">
             LOCAL
           </span>

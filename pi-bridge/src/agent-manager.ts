@@ -44,6 +44,8 @@ import {
   type SessionExtras,
 } from './session-extras.js'
 import {
+  CONTEXT_BLOCK_END,
+  CONTEXT_BLOCK_START,
   messageText as toMessageText,
   stripContextBlock,
   summarizeToolArgs,
@@ -87,6 +89,7 @@ import {
 } from './session-branch.js'
 import { createApprovalExtension } from './approval-extension.js'
 import { createPlanExtension } from './plan-extension.js'
+import { createWorktreeExtension } from './worktree-extension.js'
 import type {
   AgentChatOptions,
   AgentChatResult,
@@ -196,6 +199,9 @@ export class AgentManager {
   private envLease = false
   private runtimes = new Map<string, SessionRuntime>()
   private lastSessionId: string | null = null
+  /** 轮次边界待应用的工作树切换 */
+  private pendingRoots = new Map<string, { root: string; branch?: string }>()
+  private rebinding = new Set<string>()
 
   /** 从 assistant 消息中提取 usage（Pi 保证 assistant 消息带 usage） */
   private readUsage(message: any): AgentUsage | undefined {
@@ -214,11 +220,11 @@ export class AgentManager {
   }
 
   /** 把工具参数里的路径解析为绝对路径 */
-  private resolveToolPath(toolPath: unknown): string | null {
+  private resolveToolPath(toolPath: unknown, root?: string): string | null {
     if (typeof toolPath !== 'string' || !toolPath) return null
     return path.isAbsolute(toolPath)
       ? toolPath
-      : path.resolve(this.config?.workspaceDir ?? process.cwd(), toolPath)
+      : path.resolve(root ?? this.config?.workspaceDir ?? process.cwd(), toolPath)
   }
 
   /** 工具路径是否位于工作区内（快照只关心工作区文件） */
@@ -230,9 +236,9 @@ export class AgentManager {
   }
 
   /** write/edit 的工具行可附带文件路径；其他工具不暴露文件 */
-  private toolFilePath(toolName: string, args: any): string | undefined {
+  private toolFilePath(toolName: string, args: any, root?: string): string | undefined {
     if (toolName !== 'write' && toolName !== 'edit') return undefined
-    const target = this.resolveToolPath(args?.path)
+    const target = this.resolveToolPath(args?.path, root)
     if (!target || !this.isInsideWorkspace(target)) return undefined
     return target
   }
@@ -350,6 +356,14 @@ export class AgentManager {
           return
         }
 
+        if (event.type === 'agent_settled') {
+          // 在事件回调外重建，避免销毁正在分发事件的会话
+          setTimeout(() => {
+            void this.applyPendingRoot(runtime)
+          }, 0)
+          return
+        }
+
         // 一轮结束：丢弃本轮未闭合的工具快照，避免 Map 无限增长
         if (event.type === 'turn_end' || event.type === 'agent_end') {
           runtime.editSnapshots.clear()
@@ -360,7 +374,8 @@ export class AgentManager {
 
         if (event.type === 'tool_execution_start') {
           const args = event.args ?? {}
-          const filePath = this.toolFilePath(event.toolName, args)
+          const root = runtime.sessionManager.getCwd()
+          const filePath = this.toolFilePath(event.toolName, args, root)
           if (filePath) runtime.toolFiles.set(event.toolCallId, filePath)
           runtime.onTrace?.({
             type: 'tool_start',
@@ -372,7 +387,7 @@ export class AgentManager {
           })
 
           if (event.toolName !== 'write' && event.toolName !== 'edit') return
-          const target = this.resolveToolPath(args.path)
+          const target = this.resolveToolPath(args.path, root)
           if (!target || !this.isInsideWorkspace(target)) return
           const existed = existsSync(target)
           const oldContent = existed ? readFileSync(target, 'utf-8') : ''
@@ -1251,17 +1266,19 @@ export class AgentManager {
       extras.permission = { mode: this.defaultPermissionLevel(), grants: [] }
     }
     const fallbackPermission = normalizeSessionPermission(extras.permission)
+    const root = sessionManager.getCwd() || config.workspaceDir
     const settingsManager = SettingsManager.create(config.workspaceDir, this.agentDir)
     const resourceLoader = new DefaultResourceLoader({
-      cwd: config.workspaceDir,
+      cwd: root,
       agentDir: this.agentDir,
       settingsManager,
       extensionFactories: [
         createApprovalExtension(
           {
-            workspaceDir: this.config?.workspaceDir ?? '',
+            workspaceDir: root,
             logger: this.logger,
             requestApproval: (request) => this.requestToolApproval(request),
+            isSwitchPending: () => this.pendingRoots.has(id),
           },
           id,
           () =>
@@ -1288,12 +1305,19 @@ export class AgentManager {
             normalizeSessionPermission(runtimeRef.current?.extras.permission ?? fallbackPermission)
               .mode,
         }),
+        createWorktreeExtension({
+          sessionId: id,
+          workspaceDir: config.workspaceDir,
+          getRoot: () => sessionManager.getCwd() || config.workspaceDir,
+          onSwitch: (target, base) => this.requestWorktreeSwitch(id, target, base),
+          scheduleRoot: (nextRoot, branch) => this.scheduleRoot(id, nextRoot, branch),
+        }),
       ],
     })
     await resourceLoader.reload()
 
     const sessionPromise = createAgentSession({
-      cwd: config.workspaceDir,
+      cwd: root,
       agentDir: this.agentDir,
       modelRuntime,
       model,
@@ -1386,6 +1410,7 @@ export class AgentManager {
       this.logger.warn('[Agent Manager] Failed to dispose session:', error)
     }
     this.runtimes.delete(runtime.id)
+    this.pendingRoots.delete(runtime.id)
     if (this.lastSessionId === runtime.id) this.lastSessionId = null
   }
 
@@ -1404,10 +1429,118 @@ export class AgentManager {
 
     const config = this.config
     if (!config) throw new Error('Agent not initialized.')
-    const file = SessionManager.findById(config.workspaceDir, sessionId, this.sessionDir)
+    const root = config.resolveSessionRoot?.(sessionId) ?? config.workspaceDir
+    const file =
+      (await this.findSessionFile(sessionId)) ??
+      SessionManager.findById(root, sessionId, this.sessionDir)
     if (!file) throw new Error('Session not found.')
-    const manager = SessionManager.open(file, this.sessionDir, config.workspaceDir)
+    const manager = SessionManager.open(file, this.sessionDir, root)
     return this.createRuntime(manager)
+  }
+
+  /** 会话文件按 id 查找；不依赖 header cwd（工作树会话的 header 可能仍是旧路径） */
+  private async findSessionFile(sessionId: string): Promise<string | null> {
+    try {
+      const infos = await SessionManager.listAll(this.sessionDir)
+      return infos.find((info) => info.id === sessionId)?.path ?? null
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Failed to locate session file:', error)
+      return null
+    }
+  }
+
+  /** 请求主进程创建工作树/更新绑定，返回目标根 */
+  private async requestWorktreeSwitch(
+    sessionId: string,
+    target: string,
+    base?: string
+  ): Promise<{ success: boolean; root?: string; branch?: string; sharedWith?: number; error?: string }> {
+    if (!this.config?.onWorktreeSwitch) {
+      return { success: false, error: 'Worktree switching is unavailable.' }
+    }
+    try {
+      return await this.config.onWorktreeSwitch(sessionId, target, base)
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
+  /** 记录待切换目标；由 agent_settled 统一应用 */
+  private scheduleRoot(sessionId: string, root: string, branch?: string): void {
+    this.pendingRoots.set(sessionId, { root, branch })
+  }
+
+  /**
+   * 在轮次边界应用待切换的工作树。
+   * 先记录旧根与会话文件；重建失败时回退到旧根，避免会话直接消失。
+   */
+  private async applyPendingRoot(runtime: SessionRuntime): Promise<boolean> {
+    const pending = this.pendingRoots.get(runtime.id)
+    if (!pending) return false
+    if (this.runtimes.get(runtime.id) !== runtime) return false
+    if (this.rebinding.has(runtime.id)) return false
+    if (runtime.isProcessing) return false
+
+    const oldRoot = runtime.sessionManager.getCwd()
+    if (path.resolve(oldRoot) === path.resolve(pending.root)) {
+      this.pendingRoots.delete(runtime.id)
+      return true
+    }
+
+    const file = runtime.sessionManager.getSessionFile() ?? (await this.findSessionFile(runtime.id))
+    if (!file) {
+      this.pendingRoots.delete(runtime.id)
+      this.logger.warn('[Agent Manager] Cannot switch worktree for an unpersisted session')
+      return false
+    }
+
+    this.rebinding.add(runtime.id)
+    this.pendingRoots.delete(runtime.id)
+    try {
+      await this.disposeRuntime(runtime)
+      const manager = SessionManager.open(file, this.sessionDir, pending.root)
+      const next = await this.createRuntime(manager)
+      this.lastSessionId = next.id
+      this.config?.onSessionRootChanged?.(next.id, pending.root)
+      this.logger.info(
+        `[Agent Manager] Session ${next.id} switched to worktree: ${pending.root}`
+      )
+      return true
+    } catch (error) {
+      this.logger.error('[Agent Manager] Failed to apply worktree switch:', error)
+      try {
+        const manager = SessionManager.open(file, this.sessionDir, oldRoot)
+        const restored = await this.createRuntime(manager)
+        this.lastSessionId = restored.id
+        this.config?.onSessionRootChanged?.(restored.id, oldRoot)
+      } catch (restoreError) {
+        this.logger.error('[Agent Manager] Failed to restore previous worktree:', restoreError)
+      }
+      return false
+    } finally {
+      this.rebinding.delete(runtime.id)
+    }
+  }
+
+  /**
+   * 用户显式切换工作树：空闲时立即重建；正在运行时排队到本轮结束。
+   * 绑定本身由主进程先完成，这里只负责换 cwd。
+   */
+  async requestSessionRoot(
+    sessionId: string,
+    root: string
+  ): Promise<{ success: boolean; scheduled?: boolean; error?: string }> {
+    const runtime = this.runtimes.get(sessionId)
+    if (!runtime) return { success: true }
+    this.scheduleRoot(sessionId, root)
+    if (runtime.isProcessing) return { success: true, scheduled: true }
+    const applied = await this.applyPendingRoot(runtime)
+    return applied
+      ? { success: true }
+      : { success: false, error: 'Failed to switch the session worktree.' }
   }
 
   /**
@@ -1417,7 +1550,8 @@ export class AgentManager {
   private sessionMessages(runtime: SessionRuntime): AgentMessage[] {
     return buildSessionMessages(runtime.session.messages ?? [], {
       thinkingDurations: runtime.extras.thinkingDurations,
-      toolFilePath: (toolName: string, args: any) => this.toolFilePath(toolName, args),
+      toolFilePath: (toolName: string, args: any) =>
+        this.toolFilePath(toolName, args, runtime.sessionManager.getCwd()),
     })
   }
 
@@ -1486,13 +1620,17 @@ export class AgentManager {
     }
   }
 
-  /** 新建会话（第一条消息前不落盘） */
-  async createSession(): Promise<SessionOpenResult> {
+  /** 新建会话（第一条消息前不落盘）；root 为会话绑定工作树，默认工作区根 */
+  async createSession(root?: string): Promise<SessionOpenResult> {
     try {
       if (!this.modelRuntime || !this.config) {
         return { success: false, error: 'Agent not initialized.' }
       }
-      const manager = SessionManager.create(this.config.workspaceDir, this.sessionDir)
+      const targetRoot =
+        typeof root === 'string' && root.trim()
+          ? path.resolve(root)
+          : this.config.workspaceDir
+      const manager = SessionManager.create(targetRoot, this.sessionDir)
       const runtime = await this.createRuntime(manager)
       this.lastSessionId = runtime.id
       return {
@@ -1515,8 +1653,27 @@ export class AgentManager {
 
     const sessions = new Map<string, SessionSummary>()
     try {
-      const infos = await SessionManager.list(config.workspaceDir, this.sessionDir)
+      let infos: any[] = []
+      if (typeof SessionManager.listAll === 'function') {
+        try {
+          infos = await SessionManager.listAll(this.sessionDir)
+        } catch {
+          infos = []
+        }
+      }
+      // 兼容测试/旧版 SDK：listAll 不可用或为空时退回按 cwd 过滤的 list
+      if (!infos.length) {
+        infos = await SessionManager.list(config.workspaceDir, this.sessionDir)
+      }
+      const belongs = config.isSessionOfWorkspace
+      const workspaceRoot = path.resolve(config.workspaceDir)
       for (const info of infos) {
+        if (belongs) {
+          if (!belongs(info.id, info.cwd)) continue
+        } else {
+          const cwd = info.cwd ? path.resolve(info.cwd) : workspaceRoot
+          if (cwd !== workspaceRoot) continue
+        }
         sessions.set(info.id, {
           id: info.id,
           title: (info.name?.trim() || stripContextBlock(info.firstMessage ?? '').trim()).slice(
@@ -1567,9 +1724,12 @@ export class AgentManager {
       }
       const config = this.config
       if (!config) return { success: false, error: 'Agent not initialized.' }
-      const file = SessionManager.findById(config.workspaceDir, sessionId, this.sessionDir)
+      const root = config.resolveSessionRoot?.(sessionId) ?? config.workspaceDir
+      const file =
+        (await this.findSessionFile(sessionId)) ??
+        SessionManager.findById(root, sessionId, this.sessionDir)
       if (!file) return { success: false, error: 'Session not found.' }
-      const manager = SessionManager.open(file, this.sessionDir, config.workspaceDir)
+      const manager = SessionManager.open(file, this.sessionDir, root)
       manager.appendSessionInfo(title)
       return { success: true }
     } catch (error) {
@@ -1587,7 +1747,10 @@ export class AgentManager {
       if (!config) return { success: false, error: 'Agent not initialized.' }
       if (!isSafeSessionId(sessionId)) return { success: false, error: 'Invalid session id.' }
       // 会话 extras 以 id 为文件名，必须先确认 id 属于当前工作区，避免跨工作区删除
-      const file = SessionManager.findById(config.workspaceDir, sessionId, this.sessionDir)
+      const root = config.resolveSessionRoot?.(sessionId) ?? config.workspaceDir
+      const file =
+        (await this.findSessionFile(sessionId)) ??
+        SessionManager.findById(root, sessionId, this.sessionDir)
       await this.closeSession(sessionId)
       if (!file) return { success: true }
       if (this.extrasStore) {
@@ -1597,8 +1760,8 @@ export class AgentManager {
       }
 
       const resolved = path.resolve(file)
-      const root = path.resolve(this.sessionDir)
-      if (!resolved.startsWith(root + path.sep)) {
+      const sessionDirRoot = path.resolve(this.sessionDir)
+      if (!resolved.startsWith(sessionDirRoot + path.sep)) {
         return { success: false, error: 'Refusing to delete a session outside the session directory.' }
       }
       await fs.unlink(resolved).catch((error: NodeJS.ErrnoException) => {
@@ -1721,6 +1884,24 @@ export class AgentManager {
         timestamp: Date.now(),
       })
 
+      // 工作树上下文放进用户消息前的隐藏上下文块；恢复历史时由 stripContextBlock 剥离
+      let worktreeBlock = ''
+      const contextProvider = this.config?.getWorktreeContext
+      if (contextProvider) {
+        try {
+          const worktreeContext = await contextProvider(runtime.id)
+          if (worktreeContext && worktreeContext.trim()) {
+            worktreeBlock = `${CONTEXT_BLOCK_START}\n${worktreeContext.trim()}\n${CONTEXT_BLOCK_END}`
+          }
+        } catch (error) {
+          this.logger.warn('[Agent Manager] Failed to build worktree context:', error)
+        }
+        if (this.runtimes.get(runtime.id) !== runtime) {
+          runtime.isProcessing = false
+          return { success: false, error: 'Agent request was aborted.' }
+        }
+      }
+
       // 发送用户消息并等待 Agent 完成；超时先 abort，宽限期后仍未结束则强制收尾
       const session = runtime.session
       const planBefore = runtime.extras.plan?.id ?? null
@@ -1728,13 +1909,14 @@ export class AgentManager {
         normalizeSessionPermission(runtime.extras.permission).mode === 'plan'
           ? wrapPlanPrompt(message)
           : message
+      const finalPrompt = worktreeBlock ? `${worktreeBlock}\n\n${promptText}` : promptText
       const images = chatImages.map((image) => ({
         type: 'image' as const,
         data: image.data,
         mimeType: image.mimeType,
       }))
       const promptPromise = session.prompt(
-        promptText,
+        finalPrompt,
         images.length > 0 ? { images } : undefined
       )
       const timeoutPromise = new Promise<never>((_resolve, reject) => {
@@ -1904,15 +2086,18 @@ export class AgentManager {
    */
   private async resetRuntimeAfterHardStop(runtime: SessionRuntime): Promise<void> {
     const id = runtime.id
+    const root = runtime.sessionManager.getCwd()
     await this.disposeRuntime(runtime)
     const config = this.config
     if (!config) return
 
     try {
-      const file = SessionManager.findById(config.workspaceDir, id, this.sessionDir)
+      const file =
+        (await this.findSessionFile(id)) ??
+        SessionManager.findById(root, id, this.sessionDir)
       const manager = file
-        ? SessionManager.open(file, this.sessionDir, config.workspaceDir)
-        : SessionManager.create(config.workspaceDir, this.sessionDir)
+        ? SessionManager.open(file, this.sessionDir, root)
+        : SessionManager.create(root, this.sessionDir)
       const next = await this.createRuntime(manager)
       this.lastSessionId = next.id
     } catch (error) {

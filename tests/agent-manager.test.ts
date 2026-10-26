@@ -1005,6 +1005,36 @@ describe('AgentManager sessions', () => {
     expect(manager.getCurrentSessionId()).toBeNull()
   })
 
+  it('switches the session worktree root when idle', async () => {
+    const first = createFakeSession()
+    primeSdk(first)
+    const baseManager = createFakeSessionManager('session-switch')
+    const persistedManager = {
+      ...baseManager,
+      getCwd: () => workspaceDir,
+      getSessionFile: () => '/tmp/session-switch.jsonl',
+      isPersisted: () => true,
+    }
+    sdk.continueRecent.mockReturnValue(persistedManager)
+    sdk.sessionOpen.mockImplementation(
+      (_file: string, _dir: string, root: string) => ({
+        ...persistedManager,
+        getCwd: () => root,
+      })
+    )
+    await manager.initialize(makeConfig())
+
+    sdk.createAgentSession.mockResolvedValue({ session: createFakeSession() })
+    const newRoot = path.join(workspaceDir, 'worktrees', 'switch-target')
+    await fs.mkdir(newRoot, { recursive: true })
+
+    const switched = await manager.requestSessionRoot('session-switch', newRoot)
+    expect(switched.success).toBe(true)
+    expect(sdk.createAgentSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cwd: newRoot })
+    )
+  })
+
   it('opens an existing session by id', async () => {
     primeSdk(createFakeSession())
     await manager.initialize(makeConfig())

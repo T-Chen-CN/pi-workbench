@@ -1,7 +1,7 @@
 /** 应用内事件：替代散落的 window CustomEvent 字符串 */
 
 export interface AppEventMap {
-  'open-settings': void
+  'open-settings': { section?: 'general' | 'api' | 'github' | 'permissions' | 'shortcuts' | 'about' }
   'open-command-palette': void
   'workspace-toggle-terminal': void
   'pi:refresh-files': void

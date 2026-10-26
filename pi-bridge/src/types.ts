@@ -107,6 +107,26 @@ export interface AgentConfig {
   getDefaultPermissionLevel?: () => unknown
   /** 请求用户审批；未提供时按拒绝处理（fail-closed） */
   requestApproval?: (request: ApprovalRequestPayload) => Promise<ApprovalDecision>
+  /** 会话当前绑定的工作树根；未提供时使用 workspaceDir */
+  resolveSessionRoot?: (sessionId: string) => string | undefined
+  /** 会话是否属于当前工作区（用于 listAll 结果过滤） */
+  isSessionOfWorkspace?: (sessionId: string, headerCwd: string) => boolean
+  /** 注入给 Agent 的工作树上下文（每轮追加为隐藏的 custom message） */
+  getWorktreeContext?: (sessionId: string) => string | Promise<string>
+  /** Agent 通过 switch_worktree 请求切换；主进程负责创建/绑定并返回新根 */
+  onWorktreeSwitch?: (
+    sessionId: string,
+    target: string,
+    base?: string
+  ) => Promise<{
+    success: boolean
+    root?: string
+    branch?: string
+    sharedWith?: number
+    error?: string
+  }>
+  /** 切换在轮次边界生效后回调 */
+  onSessionRootChanged?: (sessionId: string, root: string) => void
 }
 
 export interface SessionSummary {

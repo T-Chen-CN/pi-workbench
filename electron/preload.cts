@@ -138,8 +138,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:sessions:list', workspaceDir),
   agentSessionsOpen: (workspaceDir: string, sessionId?: string) =>
     ipcRenderer.invoke('agent:sessions:open', workspaceDir, sessionId),
-  agentSessionsCreate: (workspaceDir: string) =>
-    ipcRenderer.invoke('agent:sessions:create', workspaceDir),
+  agentSessionsCreate: (workspaceDir: string, root?: string) =>
+    ipcRenderer.invoke('agent:sessions:create', workspaceDir, root),
   agentSessionsClose: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('agent:sessions:close', workspaceDir, sessionId),
   agentSessionsRename: (workspaceDir: string, sessionId: string, name: string) =>
@@ -273,8 +273,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // 终端
-  terminalCreate: (workspaceDir: string, cols: number, rows: number) =>
-    ipcRenderer.invoke('terminal:create', workspaceDir, cols, rows),
+  terminalCreate: (workspaceDir: string, cols: number, rows: number, cwd?: string) =>
+    ipcRenderer.invoke('terminal:create', workspaceDir, cols, rows, cwd),
   terminalWrite: (id: string, data: string) => ipcRenderer.invoke('terminal:write', id, data),
   terminalResize: (id: string, cols: number, rows: number) =>
     ipcRenderer.invoke('terminal:resize', id, cols, rows),
@@ -289,6 +289,72 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event: unknown, payload: { id: string; exitCode: number }) => callback(payload)
     ipcRenderer.on('terminal:exit', listener)
     return () => ipcRenderer.removeListener('terminal:exit', listener)
+  },
+
+  // Git 工作树 / 只读历史 / GitHub 状态
+  gitRepoInfo: (workspaceDir: string) => ipcRenderer.invoke('git:repoInfo', workspaceDir),
+  gitListWorktrees: (workspaceDir: string, activeSessionId?: string) =>
+    ipcRenderer.invoke('git:listWorktrees', workspaceDir, activeSessionId),
+  gitBranches: (workspaceDir: string) => ipcRenderer.invoke('git:branches', workspaceDir),
+  gitStatus: (workspaceDir: string, worktreePath?: string) =>
+    ipcRenderer.invoke('git:status', workspaceDir, worktreePath),
+  gitSessionBinding: (workspaceDir: string, sessionId: string) =>
+    ipcRenderer.invoke('git:sessionBinding', workspaceDir, sessionId),
+  gitBindWorktree: (workspaceDir: string, sessionId: string, target: string, base?: string) =>
+    ipcRenderer.invoke('git:bindWorktree', workspaceDir, sessionId, target, base),
+  gitReleaseSession: (workspaceDir: string, sessionId: string) =>
+    ipcRenderer.invoke('git:releaseSession', workspaceDir, sessionId),
+  gitCleanupOrphans: (workspaceDir: string) =>
+    ipcRenderer.invoke('git:cleanupOrphans', workspaceDir),
+  gitLog: (workspaceDir: string, limit?: number, branch?: string) =>
+    ipcRenderer.invoke('git:log', workspaceDir, limit, branch),
+  gitCommitDetail: (workspaceDir: string, sha: string) =>
+    ipcRenderer.invoke('git:commitDetail', workspaceDir, sha),
+  gitDiff: (workspaceDir: string, from: string, to: string) =>
+    ipcRenderer.invoke('git:diff', workspaceDir, from, to),
+  gitCheckout: (workspaceDir: string, worktreePath: string, branch: string) =>
+    ipcRenderer.invoke('git:checkout', workspaceDir, worktreePath, branch),
+  gitMerge: (
+    workspaceDir: string,
+    worktreePath: string,
+    branch: string,
+    strategy?: 'merge' | 'squash' | 'rebase'
+  ) => ipcRenderer.invoke('git:merge', workspaceDir, worktreePath, branch, strategy),
+  gitGithubTokenStatus: () => ipcRenderer.invoke('git:githubTokenStatus'),
+  githubAuthConfig: () => ipcRenderer.invoke('github:auth:config'),
+  githubAuthStart: () => ipcRenderer.invoke('github:auth:start'),
+  githubAuthStatus: () => ipcRenderer.invoke('github:auth:status'),
+  githubAuthLogout: () => ipcRenderer.invoke('github:auth:logout'),
+  onGithubAuthComplete: (
+    callback: (payload: {
+      success: boolean
+      user?: { login: string; name: string | null; avatarUrl: string | null } | null
+      error?: string
+    }) => void
+  ) => {
+    const listener = (
+      _event: unknown,
+      payload: {
+        success: boolean
+        user?: { login: string; name: string | null; avatarUrl: string | null } | null
+        error?: string
+      }
+    ) => callback(payload)
+    ipcRenderer.on('github:auth:complete', listener)
+    return () => ipcRenderer.removeListener('github:auth:complete', listener)
+  },
+  gitSetGithubToken: (token: string) => ipcRenderer.invoke('git:setGithubToken', token),
+  gitPrStatus: (workspaceDir: string, worktreePath?: string) =>
+    ipcRenderer.invoke('git:prStatus', workspaceDir, worktreePath),
+  onAgentSessionRootChanged: (
+    callback: (payload: { workspaceDir: string; sessionId: string; root: string }) => void
+  ) => {
+    const listener = (
+      _event: unknown,
+      payload: { workspaceDir: string; sessionId: string; root: string }
+    ) => callback(payload)
+    ipcRenderer.on('agent:session-root-changed', listener)
+    return () => ipcRenderer.removeListener('agent:session-root-changed', listener)
   },
 
   // 工作台插件
