@@ -21,6 +21,8 @@ export interface WorkspaceGitState {
   status: GitStatusInfo | null
   commits: GitCommitInfo[]
   commitDetail: GitCommitDetail | null
+  /** 正在加载的提交 sha；用于立即高亮与加载态 */
+  detailPending: string | null
   pr: GithubPrStatus | null
   loading: boolean
   error: string | null
@@ -34,10 +36,14 @@ const EMPTY: WorkspaceGitState = {
   status: null,
   commits: [],
   commitDetail: null,
+  detailPending: null,
   pr: null,
   loading: false,
   error: null,
 }
+
+/** 每个工作区最近一次详情请求的序号：后发的请求让先发的响应失效 */
+const detailRequests = new Map<string, number>()
 
 interface GitState {
   byWorkspace: Record<string, WorkspaceGitState>
@@ -188,10 +194,21 @@ export const useGitStore = create<GitState>((set, get) => ({
 
   loadCommitDetail: async (workspaceDir, sha) => {
     if (typeof api.gitCommitDetail !== 'function') return
-    const result = await api.gitCommitDetail(workspaceDir, sha)
+    const current = workspace(get(), workspaceDir)
+    // 已经是这一条且没有在途请求时不再重复查询
+    if (current.commitDetail?.commit.sha.startsWith(sha) && !current.detailPending) return
+
+    const token = (detailRequests.get(workspaceDir) ?? 0) + 1
+    detailRequests.set(workspaceDir, token)
+    set((state) => patch(state, workspaceDir, { detailPending: sha }))
+
+    const result = await api.gitCommitDetail(workspaceDir, sha).catch(() => null)
+    // 期间又点了别的提交：丢弃这次响应，避免旧结果覆盖新选择
+    if (detailRequests.get(workspaceDir) !== token) return
     set((state) =>
       patch(state, workspaceDir, {
-        commitDetail: result.success ? result.detail ?? null : null,
+        commitDetail: result?.success ? result.detail ?? null : null,
+        detailPending: null,
       })
     )
   },
@@ -241,6 +258,8 @@ export const useGitStore = create<GitState>((set, get) => ({
 
   reset: (workspaceDir) =>
     set((state) => {
+      // 让在途的详情请求失效，避免它们把结果写回已重置的工作区
+      detailRequests.set(workspaceDir, (detailRequests.get(workspaceDir) ?? 0) + 1)
       const byWorkspace = { ...state.byWorkspace }
       delete byWorkspace[workspaceDir]
       return { byWorkspace }

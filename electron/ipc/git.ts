@@ -29,6 +29,7 @@ import {
   mergeBranch,
   type GitRepoInfo,
 } from '../git-worktrees.js'
+import { cachedCommitDetail, cachedRepoRoot } from '../git-cache.js'
 
 interface LoggerLike {
   info: (...args: unknown[]) => void
@@ -46,6 +47,12 @@ export interface GitIpcContext {
 async function resolveRepo(workspaceDir: string): Promise<GitRepoInfo | null> {
   if (!isTrustedWorkspacePath(workspaceDir)) return null
   return getRepoInfo(workspaceDir)
+}
+
+/** 只读查询只需要仓库根：探测一次后复用，避免每次点击都重启 9 个 git 进程 */
+async function resolveRepoRoot(workspaceDir: string): Promise<string | null> {
+  if (!isTrustedWorkspacePath(workspaceDir)) return null
+  return cachedRepoRoot(workspaceDir, async () => (await getRepoInfo(workspaceDir))?.root ?? null)
 }
 
 async function resolveWorktreePath(
@@ -105,9 +112,9 @@ export function registerGitIpc(context: GitIpcContext): void {
 
   handleIpc('git:branches', async (_event, workspaceDir: string) => {
     try {
-      const repo = await resolveRepo(workspaceDir)
-      if (!repo) return { success: false, error: 'Not a git repository' }
-      return { success: true, branches: await listBranches(repo.root) }
+      const root = await resolveRepoRoot(workspaceDir)
+      if (!root) return { success: false, error: 'Not a git repository' }
+      return { success: true, branches: await listBranches(root) }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -196,11 +203,11 @@ export function registerGitIpc(context: GitIpcContext): void {
 
   handleIpc('git:log', async (_event, workspaceDir: string, limit?: number, branch?: string) => {
     try {
-      const repo = await resolveRepo(workspaceDir)
-      if (!repo) return { success: false, error: 'Not a git repository' }
+      const root = await resolveRepoRoot(workspaceDir)
+      if (!root) return { success: false, error: 'Not a git repository' }
       return {
         success: true,
-        commits: await logCommits(repo.root, limit ?? 80, branch),
+        commits: await logCommits(root, limit ?? 80, branch),
       }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -209,9 +216,9 @@ export function registerGitIpc(context: GitIpcContext): void {
 
   handleIpc('git:commitDetail', async (_event, workspaceDir: string, sha: string) => {
     try {
-      const repo = await resolveRepo(workspaceDir)
-      if (!repo) return { success: false, error: 'Not a git repository' }
-      const detail = await commitDetail(repo.root, sha)
+      const root = await resolveRepoRoot(workspaceDir)
+      if (!root) return { success: false, error: 'Not a git repository' }
+      const detail = await cachedCommitDetail(root, sha, () => commitDetail(root, sha))
       return detail
         ? { success: true, detail }
         : { success: false, error: 'Commit not found' }
@@ -224,9 +231,9 @@ export function registerGitIpc(context: GitIpcContext): void {
     'git:diff',
     async (_event, workspaceDir: string, from: string, to: string) => {
       try {
-        const repo = await resolveRepo(workspaceDir)
-        if (!repo) return { success: false, error: 'Not a git repository' }
-        return { success: true, patch: await fileDiffBetween(repo.root, from, to) }
+        const root = await resolveRepoRoot(workspaceDir)
+        if (!root) return { success: false, error: 'Not a git repository' }
+        return { success: true, patch: await fileDiffBetween(root, from, to) }
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) }
       }
@@ -347,9 +354,9 @@ export function registerGitIpc(context: GitIpcContext): void {
   // 供渲染层启动时清理无主托管工作树
   handleIpc('git:listAllWorktrees', async (_event, workspaceDir: string) => {
     try {
-      const repo = await resolveRepo(workspaceDir)
-      if (!repo) return { success: true, worktrees: [] }
-      return { success: true, worktrees: await listWorktrees(repo.root) }
+      const root = await resolveRepoRoot(workspaceDir)
+      if (!root) return { success: true, worktrees: [] }
+      return { success: true, worktrees: await listWorktrees(root) }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

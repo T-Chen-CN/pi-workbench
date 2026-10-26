@@ -476,17 +476,16 @@ export async function commitDetail(
 ): Promise<GitCommitDetail | null> {
   if (!/^[0-9a-f]{4,64}$/i.test(sha)) return null
   const format = ['%H', '%h', '%an', '%ae', '%aI', '%s', '%D', '%P', '%b'].join('%x00')
-  const meta = await git(worktreePath, ['show', '-s', `--format=${format}`, sha])
+  // 三条查询互不依赖，并行执行可省掉约一半的进程等待
+  const [meta, filesResult, patchResult] = await Promise.all([
+    git(worktreePath, ['show', '-s', `--format=${format}`, sha]),
+    git(worktreePath, ['show', '--name-status', '--format=', sha]),
+    git(worktreePath, ['show', '--format=', '--patch', '--no-ext-diff', sha]),
+  ])
   if (!meta.ok) return null
   const fields = meta.stdout.split('\u0000')
   const [fullSha, shortSha, author, email, date, subject, refs, parents] = fields
   const body = (fields[8] ?? '').trim()
-  const filesResult = await git(worktreePath, [
-    'show',
-    '--name-status',
-    '--format=',
-    sha,
-  ])
   const files: GitCommitFile[] = []
   if (filesResult.ok) {
     for (const line of filesResult.stdout.split(/\r?\n/)) {
@@ -495,13 +494,6 @@ export async function commitDetail(
       if (parts.length >= 2) files.push({ status: parts[0], path: parts[parts.length - 1] })
     }
   }
-  const patchResult = await git(worktreePath, [
-    'show',
-    '--format=',
-    '--patch',
-    '--no-ext-diff',
-    sha,
-  ])
   const patch = patchResult.ok ? patchResult.stdout : ''
   const max = 400_000
   return {

@@ -16,7 +16,7 @@ import { useSessionStore } from '../store/sessionStore'
 import { useGitStore } from '../store/gitStore'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
-import { Button, IconButton } from './ui'
+import { Button, IconButton, Spinner } from './ui'
 import { emitAppEvent } from '../utils/appEvents'
 import { buildCommitGraph, type GraphRow } from '../utils/commitGraph'
 import type { GitCommitInfo, GitWorktreeView } from '../types/electron'
@@ -25,7 +25,8 @@ const NO_WORKTREES: GitWorktreeView[] = []
 const NO_BRANCHES: Array<{ name: string; fullName: string; current: boolean; remote: boolean }> = []
 const NO_COMMITS: GitCommitInfo[] = []
 
-const ROW_HEIGHT = 48
+/** 行高固定，提交图按它计算每条 lane 的坐标；两行标题 + 元信息行需要 60px */
+const ROW_HEIGHT = 60
 const LANE_WIDTH = 14
 const GRAPH_PAD = 6
 const LANE_CLASSES = [
@@ -144,7 +145,8 @@ function checkTone(state: string | undefined): string {
 
 export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => {
   const { t } = useI18nStore()
-  const [githubLinked, setGithubLinked] = useState(false)
+  /** null 表示校验尚未返回，避免挂载瞬间闪出“未关联” */
+  const [githubLinked, setGithubLinked] = useState<boolean | null>(null)
   const activeSessionId = useSessionStore(
     (state) => state.byWorkspace[workspacePath]?.active ?? null
   )
@@ -167,6 +169,9 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
   const graphWidth = GRAPH_PAD + graph.laneCount * LANE_WIDTH + 4
   const detail = useGitStore(
     (state) => state.byWorkspace[workspacePath]?.commitDetail ?? null
+  )
+  const detailPending = useGitStore(
+    (state) => state.byWorkspace[workspacePath]?.detailPending ?? null
   )
   const pr = useGitStore((state) => state.byWorkspace[workspacePath]?.pr ?? null)
   const load = useGitStore((state) => state.load)
@@ -376,15 +381,18 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
                     type="button"
                     onClick={() => void loadCommitDetail(workspacePath, commit.sha)}
                     style={{ height: ROW_HEIGHT, paddingLeft: graphWidth + 6 }}
-                    className={`flex w-full flex-col justify-center border-b border-rule-hairline pr-1 text-left transition-colors last:border-b-0 hover:bg-hover ${
-                      detail?.commit.sha === commit.sha ? 'bg-active' : ''
+                    className={`flex w-full flex-col justify-center gap-0.5 border-b border-rule-hairline pr-1 text-left transition-colors last:border-b-0 hover:bg-hover ${
+                      detail?.commit.sha === commit.sha || detailPending === commit.sha
+                        ? 'bg-active'
+                        : ''
                     }`}
                   >
-                    <span className="flex w-full items-center gap-1.5">
-                      <span className="min-w-0 flex-1 truncate type-value text-ink">
-                        {commit.subject}
+                    <span className="line-clamp-2 type-value text-ink">{commit.subject}</span>
+                    <span className="flex w-full items-center gap-1">
+                      <span className="min-w-0 flex-1 truncate type-caption text-ink-muted">
+                        {commit.shortSha} · {commit.author}
                       </span>
-                      {refs.map((ref) => (
+                      {refs.slice(0, 2).map((ref) => (
                         <span
                           key={ref}
                           className="max-w-[80px] flex-shrink-0 truncate rounded-sm border border-rule-hairline px-1 type-caption text-ink-muted"
@@ -394,15 +402,19 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
                         </span>
                       ))}
                     </span>
-                    <span className="type-caption text-ink-muted">
-                      {commit.shortSha} · {commit.author}
-                    </span>
                   </button>
                 )
               })}
             </div>
           )}
         </section>
+
+        {detailPending && detailPending !== detail?.commit.sha && (
+          <section className="flex items-center gap-1.5 border-t border-rule-divide px-2.5 py-2">
+            <Spinner size={12} className="text-ink-muted" />
+            <span className="type-data text-ink-subtle">{detailPending.slice(0, 7)}</span>
+          </section>
+        )}
 
         {detail && (
           <section className="border-t border-rule-divide px-2.5 py-2">
@@ -439,7 +451,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
           </section>
         )}
 
-        {!githubLinked && (
+        {githubLinked === false && (
           <section className="border-t border-rule-divide px-2.5 py-2">
             <div className="type-caption text-ink-muted">{t('githubNotLinked')}</div>
             <div className="mt-1">
