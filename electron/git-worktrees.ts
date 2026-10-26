@@ -69,6 +69,8 @@ export interface GitRepoInfo {
   detached: boolean
   remoteUrl: string | null
   github: GithubRepoRef | null
+  /** git config user.email；用于在提交列表里把「自己的提交」标成「你」 */
+  userEmail: string | null
 }
 
 export interface GitWorktreeInfo {
@@ -216,6 +218,7 @@ export async function getRepoInfo(workspaceDir: string): Promise<GitRepoInfo | n
   const branchResult = await git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
   const headResult = await git(root, ['rev-parse', 'HEAD'])
   const remoteResult = await git(root, ['remote', 'get-url', 'origin'])
+  const emailResult = await git(root, ['config', 'user.email'])
 
   const gitDir = gitDirResult.ok ? canonicalizePath(gitDirResult.stdout.trim()) : null
   const commonDirRaw = commonDirResult.ok ? commonDirResult.stdout.trim() : ''
@@ -226,6 +229,7 @@ export async function getRepoInfo(workspaceDir: string): Promise<GitRepoInfo | n
   const branch = branchResult.ok && branchResult.stdout.trim() ? branchResult.stdout.trim() : null
   const head = headResult.ok && headResult.stdout.trim() ? headResult.stdout.trim() : null
   const remoteUrl = remoteResult.ok && remoteResult.stdout.trim() ? remoteResult.stdout.trim() : null
+  const userEmail = emailResult.ok && emailResult.stdout.trim() ? emailResult.stdout.trim() : null
   const linkedWorktree = Boolean(gitDir && commonDir && gitDir !== commonDir)
 
   return {
@@ -239,6 +243,7 @@ export async function getRepoInfo(workspaceDir: string): Promise<GitRepoInfo | n
     detached: !branch && Boolean(head),
     remoteUrl,
     github: parseGithubRemote(remoteUrl),
+    userEmail,
   }
 }
 
@@ -443,11 +448,13 @@ export async function mergeBranch(
 export async function logCommits(
   worktreePath: string,
   limit = 80,
-  branch?: string
+  branch?: string,
+  all = false
 ): Promise<GitCommitInfo[]> {
   const format = ['%H', '%h', '%an', '%ae', '%aI', '%s', '%D', '%P'].join('%x00')
   const args = ['log', `--format=${format}`, '-n', String(Math.max(1, Math.min(500, limit)))]
-  if (branch) args.push(branch)
+  if (all) args.push('--branches', '--remotes', '--tags', 'HEAD', '--topo-order')
+  else if (branch) args.push(branch)
   const result = await git(worktreePath, args)
   if (!result.ok) return []
   const commits: GitCommitInfo[] = []
@@ -468,6 +475,86 @@ export async function logCommits(
     })
   }
   return commits
+}
+
+export interface GitCommitStats {
+  additions: number
+  deletions: number
+  addedFiles: number
+  modifiedFiles: number
+  deletedFiles: number
+}
+
+/**
+ * 批量取提交的改动统计：两次 `git log`（numstat + name-status），按 sha 汇总。
+ * 合并提交没有直接变更，不会出现在统计里；调用方按 0 处理。
+ */
+export async function logCommitStats(
+  worktreePath: string,
+  limit = 80,
+  branch?: string,
+  all = false
+): Promise<Record<string, GitCommitStats>> {
+  const scope: string[] = []
+  if (all) scope.push('--branches', '--remotes', '--tags', 'HEAD', '--topo-order')
+  else if (branch) scope.push(branch)
+  const count = String(Math.max(1, Math.min(500, limit)))
+  const [numstat, nameStatus] = await Promise.all([
+    git(worktreePath, ['log', ...scope, '-n', count, '--numstat', '--format=%H']),
+    git(worktreePath, ['log', ...scope, '-n', count, '--name-status', '--format=%H']),
+  ])
+  const stats: Record<string, GitCommitStats> = {}
+  const ensure = (sha: string): GitCommitStats => {
+    if (!stats[sha]) {
+      stats[sha] = { additions: 0, deletions: 0, addedFiles: 0, modifiedFiles: 0, deletedFiles: 0 }
+    }
+    return stats[sha]
+  }
+  if (numstat.ok) {
+    let current: string | null = null
+    for (const line of numstat.stdout.split(/\r?\n/)) {
+      if (/^[0-9a-f]{7,64}$/i.test(line)) {
+        current = line
+        ensure(line)
+        continue
+      }
+      if (!current || !line.includes('\t')) continue
+      const parts = line.split('\t')
+      if (parts.length < 3) continue
+      const added = parts[0] === '-' ? 0 : Number(parts[0]) || 0
+      const deleted = parts[1] === '-' ? 0 : Number(parts[1]) || 0
+      const entry = ensure(current)
+      entry.additions += added
+      entry.deletions += deleted
+    }
+  }
+  if (nameStatus.ok) {
+    let current: string | null = null
+    for (const line of nameStatus.stdout.split(/\r?\n/)) {
+      if (/^[0-9a-f]{7,64}$/i.test(line)) {
+        current = line
+        ensure(line)
+        continue
+      }
+      if (!current || !line.includes('\t')) continue
+      const status = line[0]
+      const entry = ensure(current)
+      if (status === 'A') entry.addedFiles += 1
+      else if (status === 'D') entry.deletedFiles += 1
+      else entry.modifiedFiles += 1
+    }
+  }
+  return stats
+}
+
+export async function createBranch(repoRoot: string, name: string, sha: string): Promise<void> {
+  const trimmed = name.trim()
+  if (!/^[A-Za-z0-9][A-Za-z0-9._\-/]*$/.test(trimmed) || trimmed.includes('..')) {
+    throw new Error('Invalid branch name')
+  }
+  if (!/^[0-9a-f]{4,64}$/i.test(sha)) throw new Error('Invalid commit')
+  const result = await git(repoRoot, ['branch', trimmed, sha])
+  if (!result.ok) throw new Error(result.stderr.trim() || 'git branch failed')
 }
 
 export async function commitDetail(

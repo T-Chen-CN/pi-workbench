@@ -14,6 +14,7 @@ import { useI18nStore } from '../store/i18nStore'
 import { useSessionStore } from '../store/sessionStore'
 import { Caption, DataText, EmptyState, IconButton } from './ui'
 import { SearchField } from './patterns'
+import { formatRelativeTime } from '../utils/relativeTime'
 import type { ExportSessionFormat, SessionSummary } from '../types/electron'
 
 interface ChatSessionListProps {
@@ -35,17 +36,7 @@ interface ChatSessionListProps {
 }
 
 function relativeTime(timestamp: number, language: 'zh' | 'en'): string {
-  const diff = Date.now() - timestamp
-  const minutes = Math.max(1, Math.round(diff / 60_000))
-  const formatter = new Intl.RelativeTimeFormat(language === 'zh' ? 'zh-CN' : 'en', {
-    numeric: 'auto',
-  })
-  if (minutes < 60) return formatter.format(-minutes, 'minute')
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return formatter.format(-hours, 'hour')
-  const days = Math.round(hours / 24)
-  if (days < 30) return formatter.format(-days, 'day')
-  return new Date(timestamp).toLocaleDateString(language === 'zh' ? 'zh-CN' : 'en-US')
+  return formatRelativeTime(timestamp, language)
 }
 
 /** 聊天列内的会话列表抽屉：搜索、置顶、归档、导出、打开/重命名/删除 */

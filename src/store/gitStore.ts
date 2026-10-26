@@ -6,6 +6,7 @@ import type {
   GitBranchInfo,
   GitCommitDetail,
   GitCommitInfo,
+  GitCommitStats,
   GitRepoInfo,
   GitSessionBinding,
   GitStatusInfo,
@@ -20,7 +21,11 @@ export interface WorkspaceGitState {
   bindings: Record<string, GitSessionBinding>
   status: GitStatusInfo | null
   commits: GitCommitInfo[]
+  /** 每个提交的改动统计（合并提交缺省为 0） */
+  stats: Record<string, GitCommitStats>
   commitDetail: GitCommitDetail | null
+  /** 详情是否在编辑器区展开 */
+  detailOpen: boolean
   /** 正在加载的提交 sha；用于立即高亮与加载态 */
   detailPending: string | null
   pr: GithubPrStatus | null
@@ -35,7 +40,9 @@ const EMPTY: WorkspaceGitState = {
   bindings: {},
   status: null,
   commits: [],
+  stats: {},
   commitDetail: null,
+  detailOpen: false,
   detailPending: null,
   pr: null,
   loading: false,
@@ -56,8 +63,26 @@ interface GitState {
     target: string,
     base?: string
   ) => Promise<{ success: boolean; error?: string; scheduled?: boolean }>
-  loadCommits: (workspaceDir: string, limit?: number, branch?: string) => Promise<void>
+  loadCommits: (
+    workspaceDir: string,
+    limit?: number,
+    branch?: string,
+    all?: boolean
+  ) => Promise<void>
+  loadCommitStats: (
+    workspaceDir: string,
+    limit?: number,
+    branch?: string,
+    all?: boolean
+  ) => Promise<void>
   loadCommitDetail: (workspaceDir: string, sha: string) => Promise<void>
+  openCommitDetail: (workspaceDir: string, sha: string) => Promise<void>
+  closeCommitDetail: (workspaceDir: string) => void
+  createBranch: (
+    workspaceDir: string,
+    sha: string,
+    name: string
+  ) => Promise<{ success: boolean; error?: string }>
   loadPr: (workspaceDir: string, worktreePath?: string) => Promise<void>
   setGithubToken: (token: string) => Promise<{ success: boolean; error?: string }>
   checkout: (workspaceDir: string, worktreePath: string, branch: string) => Promise<{ success: boolean; error?: string }>
@@ -184,11 +209,19 @@ export const useGitStore = create<GitState>((set, get) => ({
     }
   },
 
-  loadCommits: async (workspaceDir, limit = 80, branch) => {
+  loadCommits: async (workspaceDir, limit = 200, branch, all = true) => {
     if (typeof api.gitLog !== 'function') return
-    const result = await api.gitLog(workspaceDir, limit, branch)
+    const result = await api.gitLog(workspaceDir, limit, branch, all)
     if (result.success) {
       set((state) => patch(state, workspaceDir, { commits: result.commits ?? [] }))
+    }
+  },
+
+  loadCommitStats: async (workspaceDir, limit = 200, branch, all = true) => {
+    if (typeof api.gitCommitStats !== 'function') return
+    const result = await api.gitCommitStats(workspaceDir, limit, branch, all)
+    if (result.success) {
+      set((state) => patch(state, workspaceDir, { stats: result.stats ?? {} }))
     }
   },
 
@@ -211,6 +244,38 @@ export const useGitStore = create<GitState>((set, get) => ({
         detailPending: null,
       })
     )
+  },
+
+  openCommitDetail: async (workspaceDir, sha) => {
+    set((state) => patch(state, workspaceDir, { detailOpen: true }))
+    await get().loadCommitDetail(workspaceDir, sha)
+  },
+
+  closeCommitDetail: (workspaceDir) => {
+    detailRequests.set(workspaceDir, (detailRequests.get(workspaceDir) ?? 0) + 1)
+    set((state) =>
+      patch(state, workspaceDir, {
+        detailOpen: false,
+        commitDetail: null,
+        detailPending: null,
+      })
+    )
+  },
+
+  createBranch: async (workspaceDir, sha, name) => {
+    if (typeof api.gitCreateBranch !== 'function') {
+      return { success: false, error: 'Git is unavailable' }
+    }
+    try {
+      const result = await api.gitCreateBranch(workspaceDir, sha, name)
+      if (result.success) {
+        await get().refreshWorktrees(workspaceDir)
+        await get().loadBranches(workspaceDir)
+      }
+      return { success: result.success, error: result.error }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
   },
 
   loadPr: async (workspaceDir, worktreePath) => {
