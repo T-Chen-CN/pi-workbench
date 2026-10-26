@@ -156,7 +156,9 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
     程序文件在更新时删除。
   - 首个带该脚本的版本需要手动安装（旧版卸载器不受新脚本控制），此后自动更新才会保住数据。
 - 产物文件名必须与更新清单一致：`win` / `mac` / `linux` 都配置了无空格的 `artifactName`。GitHub 会把资产名里的空格替换成点，若使用默认命名，`latest.yml` 中的连字符文件名会 404，自动更新直接失效。
-- 安装包缓存：`{appDir}/cache/{updaterCacheDirName}`（自定义 AppAdapter 覆盖 electron-updater 的系统缓存目录）。
+- 安装包缓存：Windows 使用 `%LOCALAPPDATA%\Pi-Workbench-Update`（安装目录之外）；Linux 使用 `{appDir}/cache/{updaterCacheDirName}`。Windows 的缓存必须在安装目录外——electron-builder 的卸载器按 `$INSTDIR` 路径前缀结束进程，安装器若从安装目录内启动会被误杀。
+- 外部缓存清理：安装器的 `customInstall` 写入 `%LOCALAPPDATA%\Pi-Workbench-Update.flag`，新版本启动时删除缓存目录与标记（带重试）；真正卸载时一并删除。
+- Windows 更新会设置 `installDirectory = appDir`，安装器始终带 `/D=`，不依赖注册表 `InstallLocation`。
 - CI 与打包冒烟使用 `--publish never`，不会误发布。
 - 本地验证打包：`npx electron-builder --win --dir --publish never`（macOS / Linux 需在对应系统上执行）。
 - CI 的 `package-smoke` job 每次 push / PR 都会执行一次未压缩打包，防止打包配置回归。

@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const electronMock = vi.hoisted(() => ({
   fetch: vi.fn(),
@@ -21,6 +24,8 @@ vi.mock('electron', () => ({
 }))
 
 import {
+  cleanupCompletedUpdateCache,
+  resolveUpdaterCacheBase,
   UpdateController,
   classifyUpdateError,
   isNewerVersion,
@@ -232,5 +237,140 @@ describe('UpdateController', () => {
     expect(result.success).toBe(false)
     expect(result.error).toBe(UPDATE_ERROR.noRelease)
     expect(controller.getState().status).toBe('error')
+  })
+})
+
+describe('external update cache', () => {
+  const tempDirs: string[] = []
+
+  const makeTempDir = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-updater-'))
+    tempDirs.push(dir)
+    return dir
+  }
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('uses %LOCALAPPDATA% on Windows and the app directory elsewhere', () => {
+    expect(
+      resolveUpdaterCacheBase({ appDir: '/tmp/app', platform: 'win32', localAppData: '/tmp/local' })
+    ).toBe(path.join('/tmp/local', 'Pi-Workbench-Update'))
+    expect(resolveUpdaterCacheBase({ appDir: '/tmp/app', platform: 'linux' })).toBe(
+      path.join('/tmp/app', 'cache')
+    )
+  })
+
+  it('pins the install directory on Windows so the installer receives /D=', async () => {
+    const { controller, fake } = createController({
+      platform: 'win32',
+      localAppData: '/tmp/local',
+    })
+
+    await controller.check()
+    expect((fake as { installDirectory?: string }).installDirectory).toBe('/tmp/app')
+  })
+
+  it('does not pin an install directory on other platforms', async () => {
+    const { controller, fake } = createController({
+      platform: 'linux',
+      localAppData: '/tmp/local',
+    })
+
+    await controller.check()
+    expect((fake as { installDirectory?: string }).installDirectory).toBeUndefined()
+  })
+
+  it('removes the external cache and flag after an install', async () => {
+    const local = makeTempDir()
+    const appDir = makeTempDir()
+    const cacheBase = path.join(local, 'Pi-Workbench-Update')
+    fs.mkdirSync(path.join(cacheBase, 'pi-workbench-updater', 'pending'), { recursive: true })
+    fs.writeFileSync(path.join(cacheBase, 'pi-workbench-updater', 'pending', 'Setup.exe'), 'x')
+    fs.writeFileSync(`${cacheBase}.flag`, 'installed')
+
+    const cleaned = await cleanupCompletedUpdateCache({
+      appDir,
+      platform: 'win32',
+      localAppData: local,
+      retries: 1,
+      delayMs: 0,
+    })
+
+    expect(cleaned).toBe(true)
+    expect(fs.existsSync(cacheBase)).toBe(false)
+    expect(fs.existsSync(`${cacheBase}.flag`)).toBe(false)
+  })
+
+  it('leaves the cache alone when no install-completed flag exists', async () => {
+    const local = makeTempDir()
+    const appDir = makeTempDir()
+    const cacheBase = path.join(local, 'Pi-Workbench-Update')
+    fs.mkdirSync(path.join(cacheBase, 'pi-workbench-updater'), { recursive: true })
+    fs.writeFileSync(path.join(cacheBase, 'pi-workbench-updater', 'pending.zip'), 'x')
+
+    const cleaned = await cleanupCompletedUpdateCache({
+      appDir,
+      platform: 'win32',
+      localAppData: local,
+      retries: 1,
+      delayMs: 0,
+    })
+
+    expect(cleaned).toBe(true)
+    expect(fs.existsSync(cacheBase)).toBe(true)
+  })
+
+  it('removes a stale flag even when the cache directory is already gone', async () => {
+    const local = makeTempDir()
+    const appDir = makeTempDir()
+    const flag = path.join(local, 'Pi-Workbench-Update.flag')
+    fs.writeFileSync(flag, 'installed')
+
+    await cleanupCompletedUpdateCache({
+      appDir,
+      platform: 'win32',
+      localAppData: local,
+      retries: 1,
+      delayMs: 0,
+    })
+
+    expect(fs.existsSync(flag)).toBe(false)
+  })
+
+  it('clears the legacy in-app updater cache', async () => {
+    const appDir = makeTempDir()
+    const legacy = path.join(appDir, 'cache', 'pi-workbench-updater')
+    fs.mkdirSync(path.join(legacy, 'pending'), { recursive: true })
+    fs.writeFileSync(path.join(legacy, 'pending', 'Setup.exe'), 'x')
+
+    await cleanupCompletedUpdateCache({
+      appDir,
+      platform: 'win32',
+      localAppData: makeTempDir(),
+      retries: 1,
+      delayMs: 0,
+    })
+
+    expect(fs.existsSync(legacy)).toBe(false)
+  })
+
+  it('clears the external cache when no update is available', async () => {
+    const local = makeTempDir()
+    const appDir = makeTempDir()
+    const cacheDir = path.join(local, 'Pi-Workbench-Update', 'pi-workbench-updater')
+    fs.mkdirSync(path.join(cacheDir, 'pending'), { recursive: true })
+    fs.writeFileSync(path.join(cacheDir, 'pending', 'Setup.exe'), 'x')
+
+    const { controller } = createController(
+      { appDir, platform: 'win32', localAppData: local },
+      { isUpdateAvailable: false, updateInfo: { version: '0.2.0' } }
+    )
+
+    await controller.check()
+    expect(fs.existsSync(cacheDir)).toBe(false)
   })
 })

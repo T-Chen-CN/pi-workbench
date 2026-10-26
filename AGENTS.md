@@ -675,17 +675,22 @@ async function initAgent(config: ApiConfig) {
 
 **缓存与路径**:
 
-- ✅ 安装包缓存：`{appDir}/cache/{updaterCacheDirName}`（通过自定义 `AppAdapter` 覆盖 electron-updater 的系统缓存目录）
+- ✅ Windows 安装包缓存：`%LOCALAPPDATA%\Pi-Workbench-Update`（安装目录之外）。安装器不能从 `$INSTDIR` 内启动——electron-builder 的卸载器会按路径前缀结束进程，会把安装器自己杀掉
+- ✅ Linux 安装包缓存：`{appDir}/cache/{updaterCacheDirName}`（通过自定义 `AppAdapter` 覆盖 electron-updater 的系统缓存目录）
+- ✅ 安装完成后安装器写入 `%LOCALAPPDATA%\Pi-Workbench-Update.flag`；应用启动时依据标记删除外部缓存目录与标记（带重试，失败留给下次启动）
+- ✅ Windows 更新时设置 `installDirectory = appDir`，让安装器带 `/D=`，不依赖注册表 `InstallLocation`
 - ✅ 没有可用更新时清理过期缓存
 - ✅ 更新事件写入 `{appDir}/logs/main.log`
 
 **Windows 更新与数据保护**:
 
+- ✅ 更新安装器从 `%LOCALAPPDATA%\Pi-Workbench-Update` 启动（不在安装目录内），避免被卸载器的按路径进程检测误杀
+- ✅ 安装完成标记与清理：`customInstall` 写 `<缓存根>.flag`，应用启动时删除缓存根与标记；真正卸载时一并清理
 - ✅ 更新时的删除逻辑由 `build/installer.nsh` 的 `customRemoveFiles` 接管：只删除
   `resources/installer-manifest.files.txt` / `installer-manifest.dirs.txt` 清单内的程序文件
 - ✅ 清单由 `scripts/after-pack-manifest.js`（electron-builder `afterPack`）生成；清单缺失时更新不删除任何文件
-- ✅ 受保护目录：`config/`、`data/`、`logs/`、`cache/`（含运行中的更新安装包）
-- ✅ 真正卸载时删除清单文件、数据目录与安装器生成的文件（卸载器、图标、`app-update.yml`、`elevate.exe`、`.write-probe`）
+- ✅ 受保护目录：`config/`、`data/`、`logs/`、`cache/`
+- ✅ 真正卸载时删除清单文件、数据目录与安装器生成的文件（卸载器、图标、`app-update.yml`、`elevate.exe`、`.write-probe`、外部更新缓存）
 - ❌ 禁止在安装目录的其他位置保存运行时数据（不在清单外保护范围，更新会被删除）
 - ❌ 新增数据目录时必须同步更新 `PROTECTED_TOP_LEVEL` 与卸载分支，否则更新会清理该目录
 

@@ -522,6 +522,21 @@ app.whenReady().then(async () => {
   }
 
   await initAppDirectories()
+
+  // 安装完成后的首次启动：安装器已写入标记，清空安装目录之外的更新缓存。
+  // 安装器可能仍在退出、文件暂时被占用，清理内部会重试，失败则留给下次启动。
+  if (app.isPackaged) {
+    void import('./updater.js')
+      .then(({ cleanupCompletedUpdateCache }) =>
+        cleanupCompletedUpdateCache({
+          appDir: getAppDir(),
+          platform: process.platform,
+          logger: console,
+        })
+      )
+      .catch((error) => console.warn('[Main] Update cache cleanup failed:', error))
+  }
+
   setAppSettingsCache(await loadSettingsFile())
   await migratePermissionLevel()
   await seedTrustedWorkspaces()

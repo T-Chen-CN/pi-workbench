@@ -5,12 +5,14 @@
  * - Windows / Linux 使用 electron-updater：检查后自动下载，但绝不自动安装
  * - macOS 未签名，只能检查版本并引导用户前往 GitHub Release 手动下载
  *
- * 安装包缓存放进 `{appDir}/cache/<updaterCacheDirName>`：electron-updater 默认把
- * 缓存放在系统目录（LOCALAPPDATA / ~/Library/Caches / ~/.cache），这里通过自定义
- * AppAdapter 覆盖 baseCachePath，保持便携式约束。
+ * Windows 的安装包缓存放在 `%LOCALAPPDATA%\Pi-Workbench-Update`（安装目录之外）：
+ * electron-builder 的卸载器会按 `$INSTDIR` 路径前缀结束进程，安装器若从安装目录内
+ * 启动会被自己当成应用杀掉。安装完成后由安装器写入 `...Update.flag`，新版本启动时
+ * 依据标记清空外部缓存。Linux / macOS 保持 `{appDir}/cache`。
  */
 import { app, net, shell } from 'electron'
 import * as fs from 'fs'
+import * as os from 'os'
 import * as path from 'path'
 // electron-updater 是 CommonJS 模块：主进程以 ESM 运行，命名导入在 Node 的
 // CJS 互操作下不可靠，必须走默认导入再取属性。
@@ -104,6 +106,8 @@ interface UpdaterLike {
   autoInstallOnAppQuit: boolean
   allowPrerelease: boolean
   allowDowngrade: boolean
+  /** Windows NSIS 安装目录；设置后 electron-updater 会传 `/D=` */
+  installDirectory?: string
   logger: UpdateLogger
   on: (event: string, listener: (...args: any[]) => void) => unknown
   checkForUpdates: () => Promise<{
@@ -127,6 +131,8 @@ export interface UpdateControllerOptions {
   publishTarget?: PublishTarget
   fetchRelease?: () => Promise<GithubRelease>
   createUpdater?: () => UpdaterLike
+  /** 测试用：覆盖 %LOCALAPPDATA% */
+  localAppData?: string
 }
 
 export const UPDATE_ERROR = {
@@ -142,6 +148,99 @@ const DEFAULT_PUBLISH_TARGET: PublishTarget = {
   owner: 'T-Chen-CN',
   repo: 'pi-workbench',
   updaterCacheDirName: 'pi-workbench-updater',
+}
+
+/** Windows 外部更新缓存目录名（位于 %LOCALAPPDATA% 下） */
+export const EXTERNAL_UPDATE_CACHE_DIR = 'Pi-Workbench-Update'
+
+/**
+ * electron-updater 的缓存基目录。
+ * Windows 必须在安装目录之外：electron-builder 的卸载器按 `$INSTDIR` 路径前缀
+ * 结束进程，安装器若从安装目录内启动会被误杀。
+ */
+export function resolveUpdaterCacheBase(options: {
+  appDir: string
+  platform: NodeJS.Platform
+  localAppData?: string
+}): string {
+  if (options.platform !== 'win32') return path.join(options.appDir, 'cache')
+  const base =
+    options.localAppData ??
+    process.env.LOCALAPPDATA ??
+    path.join(os.homedir(), 'AppData', 'Local')
+  return path.join(base, EXTERNAL_UPDATE_CACHE_DIR)
+}
+
+export interface UpdateCacheCleanupOptions {
+  appDir: string
+  platform: NodeJS.Platform
+  localAppData?: string
+  /** 旧版本使用的缓存子目录名（默认 pi-workbench-updater） */
+  legacyCacheDirName?: string
+  logger?: UpdateLogger
+  retries?: number
+  delayMs?: number
+}
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+/**
+ * 安装完成后的缓存清理。
+ *
+ * 安装器在安装完成后写入 `<cacheBase>.flag`；应用启动看到标记就删除整个外部缓存
+ * 目录（连同目录本身）。安装器可能仍在退出、文件暂时被占用，因此带重试；失败时
+ * 保留标记，下次启动继续清理。
+ *
+ * 同时清理旧版本遗留在安装目录内的更新缓存（Windows 迁移到外部缓存后不再使用）。
+ */
+export async function cleanupCompletedUpdateCache(
+  options: UpdateCacheCleanupOptions
+): Promise<boolean> {
+  const logger = options.logger ?? console
+  const cacheBase = resolveUpdaterCacheBase(options)
+  const flagPath = `${cacheBase}.flag`
+  const legacyDirName = options.legacyCacheDirName ?? DEFAULT_PUBLISH_TARGET.updaterCacheDirName
+  const retries = Math.max(1, options.retries ?? 5)
+  const delayMs = Math.max(0, options.delayMs ?? 500)
+
+  let pending = false
+  try {
+    pending = fs.existsSync(flagPath)
+  } catch {
+    pending = false
+  }
+
+  if (pending) {
+    for (let attempt = 1; attempt <= retries; attempt += 1) {
+      try {
+        fs.rmSync(cacheBase, { recursive: true, force: true })
+        fs.rmSync(flagPath, { force: true })
+        logger.info('[Updater] Cleared external update cache:', cacheBase)
+        pending = false
+        break
+      } catch (error) {
+        if (attempt === retries) {
+          logger.warn('[Updater] Deferred update cache cleanup:', errorMessage(error))
+        } else {
+          logger.warn('[Updater] Update cache busy, retrying:', errorMessage(error))
+          await delay(delayMs)
+        }
+      }
+    }
+  }
+
+  if (cacheBase !== path.join(options.appDir, 'cache')) {
+    try {
+      fs.rmSync(path.join(options.appDir, 'cache', legacyDirName), {
+        recursive: true,
+        force: true,
+      })
+    } catch (error) {
+      logger.warn('[Updater] Failed to clear legacy update cache:', errorMessage(error))
+    }
+  }
+
+  return !pending
 }
 
 /** 把 `1.2.3` / `v1.2.3` / `1.2.3-beta.1` 解析成数字三元组 */
@@ -256,6 +355,7 @@ export class UpdateController {
   private readonly publishTarget: PublishTarget
   private readonly fetchRelease: () => Promise<GithubRelease>
   private readonly createUpdater: (() => UpdaterLike) | null
+  private readonly cacheBase: string
 
   private state: UpdateState
   private updater: UpdaterLike | null = null
@@ -273,6 +373,11 @@ export class UpdateController {
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url))
     this.publishTarget = options.publishTarget ?? readPublishTarget(this.resourcesPath)
     this.createUpdater = options.createUpdater ?? null
+    this.cacheBase = resolveUpdaterCacheBase({
+      appDir: this.appDir,
+      platform: this.platform,
+      localAppData: options.localAppData,
+    })
     this.fetchRelease =
       options.fetchRelease ??
       (() => this.fetchLatestGithubRelease())
@@ -480,6 +585,12 @@ export class UpdateController {
     updater.allowPrerelease = false
     updater.allowDowngrade = false
     updater.logger = this.logger
+    if (this.platform === 'win32') {
+      // 固定安装器目标为当前应用目录：不依赖注册表 InstallLocation，
+      // 避免卸载旧目录、却把新版装到默认目录的分叉。
+      updater.installDirectory = this.appDir
+      this.logger.info('[Updater] Install directory pinned:', this.appDir)
+    }
     this.attachEvents(updater)
     this.updater = updater
     return updater
@@ -493,8 +604,9 @@ export class UpdateController {
       // 打包后 app-update.yml 由 electron-builder 生成
       appUpdateConfigPath: path.join(this.resourcesPath, 'app-update.yml'),
       userDataPath: app.getPath('userData'),
-      // 覆盖 electron-updater 的系统缓存目录，保持便携式
-      baseCachePath: path.join(this.appDir, 'cache'),
+      // Windows 使用安装目录之外的专用缓存：安装器不能从 $INSTDIR 内启动，
+      // 否则会被卸载器的按路径进程检测误杀。
+      baseCachePath: this.cacheBase,
       whenReady: () => app.whenReady(),
       relaunch: () => app.relaunch(),
       quit: () => app.quit(),
@@ -562,7 +674,7 @@ export class UpdateController {
 
   /** 没有可用更新时，旧的待安装包已经过期，删掉以释放空间 */
   private clearStaleCache(): void {
-    const cacheDir = path.join(this.appDir, 'cache', this.publishTarget.updaterCacheDirName)
+    const cacheDir = path.join(this.cacheBase, this.publishTarget.updaterCacheDirName)
     try {
       fs.rmSync(cacheDir, { recursive: true, force: true })
     } catch (error) {
