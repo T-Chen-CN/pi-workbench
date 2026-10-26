@@ -17,7 +17,7 @@
 
 ## 当前版本
 
-- **版本**: 0.5.1
+- **版本**: 0.5.2
 - **框架**: Electron 44 + React 19 + TypeScript
 - **Agent**: `@earendil-works/pi-coding-agent` 1.3.0
 - **状态**: Phase 6 持续优化
@@ -185,6 +185,7 @@
 - ✅ 2026-10-26 多工作区常驻视图与返回首页：每个打开的工作区各自保留一套常驻视图与编辑器 / Diff 状态，切换标签或返回首页只切换可见性，不卸载、不重置；新增首页视图与「返回首页 / 返回工作区」；编辑器标签写入 `.pi-workbench/editor-tabs.json`，重新打开工作区时恢复；工作区标签显示待操作 / 错误 / 运行中标记。设计系统 v1.29
 - ✅ 2026-10-26 发布 v0.5.0：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含面板折叠回归面板头、工具可用性对齐会话模式、多工作区常驻视图与返回首页
 - ✅ 2026-10-26 发布 v0.5.1：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含渲染进程 sandbox、SQLite 单一最近工作区存储、主进程 IPC 与 AgentManager 拆分、ChatPanel 拆分、工具 Diff 仅内存、会话删除加固与文件树排序
+- ✅ 2026-10-26 发布 v0.5.2：Windows 更新缓存移至 `%LOCALAPPDATA%\Pi-Workbench-Update`（安装完成后清理）、安装器显式 `/D` 装回原目录；Pi SDK 目录与旧默认 userData 回收进安装目录，消除 `~/.pi`、`%APPDATA%\pi-workbench`、`%LOCALAPPDATA%\pi-workbench-updater` 等外部残留
 - ✅ 大文件模式与虚滚动（2026-10-21：聊天 / Diff / 文件树虚拟滚动，>2MB 关闭换行折叠，>10MB 只读）
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
