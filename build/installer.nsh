@@ -10,6 +10,9 @@
 
 !define UPDATER_CACHE_ROOT "$LOCALAPPDATA\Pi-Workbench-Update"
 !define UPDATER_CACHE_FLAG "$LOCALAPPDATA\Pi-Workbench-Update.flag"
+# electron-builder 安装器把自己复制到这里供差分更新使用（APP_INSTALLER_STORE_FILE）。
+# 名称取自 appInfo.updaterCacheDirName，与 app-update.yml 保持一致；改了缓存目录名要同步。
+!define PI_UPDATER_STORE "$LOCALAPPDATA\pi-workbench-updater"
 
 !macro customRemoveFiles
   # un.onInit 把当前目录设为 $INSTDIR，删除前必须离开
@@ -95,4 +98,9 @@
   FileOpen $9 "${UPDATER_CACHE_FLAG}" w
   FileWrite $9 "installed"
   FileClose $9
+
+  # 安装器在 LOCALAPPDATA 的差分副本：更新缓存已改到外部专用目录，
+  # 这份副本不会被 electron-updater 读取，安装完成后直接删除。
+  Delete "${PI_UPDATER_STORE}\installer.exe"
+  RMDir /r "${PI_UPDATER_STORE}"
 !macroend
