@@ -75,7 +75,7 @@ function detail(sha: string): GitCommitDetail {
   }
 }
 
-function commit(sha: string, refs = '') {
+function commit(sha: string, refs = '', parents: string[] = []) {
   return {
     sha,
     shortSha: sha.slice(0, 7),
@@ -84,7 +84,7 @@ function commit(sha: string, refs = '') {
     date: '2026-01-01T00:00:00Z',
     subject: `subject ${sha.slice(0, 4)}`,
     refs,
-    parents: [] as string[],
+    parents,
   }
 }
 
@@ -152,6 +152,14 @@ describe('GitView 提交列表', () => {
     fireEvent.click(screen.getByRole('button', { name: translations.zh.gitLocalRefs }))
     expect(within(row).queryByText('main')).toBeNull()
     expect(within(row).getByText('origin')).not.toBeNull()
+  })
+
+  it('合并提交在标题前显示合并图标', async () => {
+    logCommits = [commit(shaA, '', ['b'.repeat(40), 'c'.repeat(40)])]
+    render(<GitView workspacePath="/repo" />)
+
+    const row = await screen.findByRole('button', { name: /subject aaaa/ })
+    expect(within(row).getByTitle(translations.zh.gitMergeCommit)).not.toBeNull()
   })
 
   it('点击提交立即高亮并进入详情加载态，返回后写入详情', async () => {
