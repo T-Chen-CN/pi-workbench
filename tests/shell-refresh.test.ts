@@ -50,7 +50,7 @@ describe('platformRefreshCommands', () => {
   it('rebuilds the Windows icon cache with ie4uinit', () => {
     const commands = platformRefreshCommands('win32', 'C:\\App\\Pi.exe', { SystemRoot: 'D:\\Win' }, 'C:\\Users\\u')
 
-    expect(commands).toEqual([{ command: path.join('D:\\Win', 'System32', 'ie4uinit.exe'), args: ['-show'] }])
+    expect(commands).toEqual([{ command: path.win32.join('D:\\Win', 'System32', 'ie4uinit.exe'), args: ['-show'] }])
   })
 
   it('touches the bundle and refreshes LaunchServices on macOS', () => {
