@@ -39,6 +39,8 @@ export interface WorktreeView {
   base: string
   managed: boolean
   isMain: boolean
+  /** git 已不再把它当作本仓库工作树（目录可能还在）；不可切换，只能手动忘记 */
+  missing: boolean
   boundSessionCount: number
   boundToActiveSession: boolean
   dirtyCount: number
@@ -232,6 +234,7 @@ async function toView(
     base: record?.base ?? '',
     managed: record?.managed ?? false,
     isMain: id === MAIN_WORKTREE_KEY,
+    missing: id !== MAIN_WORKTREE_KEY && info === null,
     boundSessionCount: bindings.length,
     boundToActiveSession: Boolean(activeSessionId && bindings.some(([session]) => session === activeSessionId)),
     dirtyCount: status?.files.length ?? 0,

@@ -169,7 +169,11 @@ describe('WorktreeCoordinator', () => {
     const external = path.join(workspace, '.claude', 'worktrees', 'gone')
     await fs.mkdir(path.dirname(external), { recursive: true })
     git(['worktree', 'add', '-b', 'feature-gone', external])
-    expect(await coordinator!.listWorktrees()).toHaveLength(2)
+    const live = await coordinator!.listWorktrees()
+    expect(live).toHaveLength(2)
+    const externalView = live.find((view) => !view.isMain)
+    expect(externalView?.missing).toBe(false)
+    expect(live[0].missing).toBe(false)
     expect(recordPaths()).toContain('.claude/worktrees/gone')
 
     await fs.rm(external, { recursive: true, force: true })
@@ -210,6 +214,8 @@ describe('WorktreeCoordinator', () => {
     const views = await coordinator!.listWorktrees()
     expect(recordPaths()).toContain('.claude/worktrees/stale')
     expect(views).toHaveLength(2)
+    // git 已不认但目录还在：标记为失效，不自动删（磁盘上可能有内容）
+    expect(views.find((view) => view.relativePath === '.claude/worktrees/stale')?.missing).toBe(true)
     await expect(fs.access(path.join(external, 'keep.txt'))).resolves.toBeUndefined()
   })
 

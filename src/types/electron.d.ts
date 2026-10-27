@@ -21,6 +21,7 @@ export interface GitWorktreeView {
   base: string
   managed: boolean
   isMain: boolean
+  missing: boolean
   boundSessionCount: number
   boundToActiveSession: boolean
   dirtyCount: number

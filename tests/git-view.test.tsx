@@ -7,13 +7,14 @@ const pendingStatus: Array<(value: unknown) => void> = []
 /** 提交详情请求：由测试决定何时、以什么顺序返回 */
 const pendingDetails: Array<{ sha: string; resolve: (value: unknown) => void }> = []
 let logCommits: unknown[] = []
+let repoWorktrees: unknown[] = []
 
 vi.mock('../src/api', () => ({
   api: {
     gitRepoInfo: vi.fn(async () => ({
       success: true,
       repo: { root: '/repo', branch: 'main', userEmail: null },
-      worktrees: [],
+      worktrees: repoWorktrees,
     })),
     gitSessionBinding: vi.fn(async () => ({ success: true })),
     gitBranches: vi.fn(async () => ({ success: true, branches: [] })),
@@ -206,5 +207,68 @@ describe('GitView 提交列表', () => {
     const state = useGitStore.getState().byWorkspace['/repo']
     expect(state.commitDetail?.commit.sha).toBe(shaB)
     expect(state.detailPending).toBeNull()
+  })
+})
+
+describe('GitView 工作树列表', () => {
+  function worktree(overrides: Record<string, unknown>) {
+    return {
+      id: 'wt-1',
+      path: '/repo/.claude/worktrees/wt-1',
+      relativePath: '.claude/worktrees/wt-1',
+      branch: 'pi/wt-1',
+      base: 'main',
+      managed: true,
+      isMain: false,
+      missing: false,
+      boundSessionCount: 0,
+      boundToActiveSession: false,
+      dirtyCount: 0,
+      ahead: 0,
+      behind: 0,
+      ...overrides,
+    }
+  }
+
+  async function openWorktreeList(): Promise<void> {
+    const toggle = await screen.findByRole('button', {
+      name: new RegExp(translations.zh.gitWorktrees),
+    })
+    fireEvent.click(toggle)
+  }
+
+  beforeEach(() => {
+    pendingStatus.length = 0
+    pendingDetails.length = 0
+    logCommits = []
+    repoWorktrees = []
+    useGitStore.setState({ byWorkspace: {} })
+  })
+
+  afterEach(() => {
+    cleanup()
+    repoWorktrees = []
+  })
+
+  it('失效的工作树显示“已失效”且不提供切换入口', async () => {
+    repoWorktrees = [
+      worktree({ id: 'ext-stale', branch: 'feature-stale', missing: true, managed: false }),
+    ]
+    render(<GitView workspacePath="/repo" />)
+    await openWorktreeList()
+
+    expect(await screen.findAllByText(translations.zh.worktreeMissing)).not.toHaveLength(0)
+    expect(screen.queryByRole('button', { name: translations.zh.gitUseWorktree })).toBeNull()
+  })
+
+  it('正常的工作树仍提供切换入口', async () => {
+    repoWorktrees = [worktree({})]
+    render(<GitView workspacePath="/repo" />)
+    await openWorktreeList()
+
+    expect(
+      await screen.findByRole('button', { name: translations.zh.gitUseWorktree })
+    ).not.toBeNull()
+    expect(screen.queryByText(translations.zh.worktreeMissing)).toBeNull()
   })
 })

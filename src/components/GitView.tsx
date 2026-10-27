@@ -798,6 +798,10 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
             </span>
             {current ? (
               <span className="flex-none text-accent">{t('gitInUse')}</span>
+            ) : worktree.missing ? (
+              <span className="flex-none type-caption text-ink-subtle">
+                {t('worktreeMissing')}
+              </span>
             ) : (
               <button
                 type="button"

@@ -117,6 +117,7 @@ export const WorktreeBar: React.FC<{ workspacePath: string }> = ({ workspacePath
               <MenuOption
                 key={item.id}
                 selected={item.path === current?.path}
+                disabled={item.missing}
                 onSelect={() => void choose(item.path)}
               >
                 <span className="flex min-w-0 flex-col">
@@ -125,10 +126,12 @@ export const WorktreeBar: React.FC<{ workspacePath: string }> = ({ workspacePath
                   </span>
                   <span className="truncate type-caption text-ink-muted">
                     {item.relativePath}
-                    {item.boundSessionCount > 0
-                      ? ` · ${t('gitInUse')} (${item.boundSessionCount})`
-                      : ` · ${t('gitIdle')}`}
-                    {item.dirtyCount > 0 ? ` · ${item.dirtyCount}` : ''}
+                    {item.missing
+                      ? ` · ${t('worktreeMissing')}`
+                      : item.boundSessionCount > 0
+                        ? ` · ${t('gitInUse')} (${item.boundSessionCount})`
+                        : ` · ${t('gitIdle')}`}
+                    {!item.missing && item.dirtyCount > 0 ? ` · ${item.dirtyCount}` : ''}
                   </span>
                 </span>
               </MenuOption>
