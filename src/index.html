@@ -4,9 +4,157 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Pi 工作台</title>
+  <script src="./boot.js"></script>
+  <style>
+    /*
+      启动页在 React 之前绘制，因此颜色在这里独立声明一份，
+      与 index.css 的 :root / html.dark 保持一致（boot-screen.test.ts 会校验）。
+    */
+    :root {
+      --boot-surface: 244 241 234;
+      --boot-ink: 23 21 18;
+      --boot-muted: 97 92 82;
+      --boot-accent: 47 93 78;
+      --boot-accent-fg: 251 249 244;
+      --boot-hairline: 23 21 18;
+    }
+
+    html.dark {
+      --boot-surface: 20 19 17;
+      --boot-ink: 237 231 220;
+      --boot-muted: 168 160 147;
+      --boot-accent: 143 199 180;
+      --boot-accent-fg: 20 19 17;
+      --boot-hairline: 237 231 220;
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      background-color: rgb(var(--boot-surface));
+    }
+
+    #root {
+      height: 100%;
+    }
+
+    .boot {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      background-color: rgb(var(--boot-surface));
+      color: rgb(var(--boot-ink));
+      box-shadow: inset 0 0 0 1px rgb(var(--boot-hairline) / 0.18);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    /* 无边框窗口：顶部 45px 与标题栏同高，保证启动期间可以拖动窗口 */
+    .boot-grip {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 45px;
+      -webkit-app-region: drag;
+    }
+
+    .boot-body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .boot-mark {
+      display: block;
+    }
+
+    .boot-title {
+      margin-top: 20px;
+      font-family: 'Instrument Serif', 'Noto Serif SC Variable', 'Noto Serif SC', 'Songti SC', 'SimSun', serif;
+      font-size: 24px;
+      font-weight: 400;
+      line-height: 1;
+      color: rgb(var(--boot-ink));
+    }
+
+    .boot-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 12px;
+      font-family: 'Noto Sans Variable', 'Noto Sans', 'Noto Sans SC Variable', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.45;
+      color: rgb(var(--boot-muted));
+    }
+
+    .boot-spinner {
+      color: rgb(var(--boot-accent));
+      animation: boot-spin 1s linear infinite;
+    }
+
+    .boot-status-en {
+      display: none;
+    }
+
+    html[data-lang='en'] .boot-status-zh {
+      display: none;
+    }
+
+    html[data-lang='en'] .boot-status-en {
+      display: inline;
+    }
+
+    .boot-hint {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 20px;
+      text-align: center;
+      font-family: 'Noto Sans Variable', 'Noto Sans', 'Noto Sans SC Variable', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+      font-size: 11px;
+      font-weight: 400;
+      line-height: 1.4;
+      color: rgb(var(--boot-muted));
+    }
+
+    @keyframes boot-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+  </style>
 </head>
 <body>
-  <div id="root"></div>
+  <div id="root">
+    <div class="boot" role="status" aria-live="polite">
+      <div class="boot-grip"></div>
+      <div class="boot-body">
+        <svg class="boot-mark" viewBox="128 128 768 768" width="44" height="44" role="img" aria-label="Pi Workbench">
+          <rect x="128" y="128" width="768" height="768" rx="152" fill="rgb(var(--boot-accent))" />
+          <g transform="translate(262.5 722.2) scale(0.7934 -0.7934)" fill="rgb(var(--boot-accent-fg))" fill-rule="nonzero">
+            <path d="M45 417 14 427C26 463 38.3 490.5 57 508.5C75.7 526.5 102 536 142 536H615L605 453H111C89 453 65 443 45 417ZM113 0 169 483H236L215 0ZM494 -6C458 -6 431 14.2 419 49.5C413 67.2 411 88 413 112L443 483H494L501 116C501.7 89.3 505 72.5 511 65.5C517 58.5 524 55 532 55C545.3 55 557 57.7 573 71L590 29C569.3 12.3 552 2.3 538 -1C524 -4.3 509.3 -6 494 -6Z" />
+          </g>
+        </svg>
+        <div class="boot-title">Pi Workbench</div>
+        <div class="boot-status">
+          <svg class="boot-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+          </svg>
+          <span class="boot-status-zh">工作台启动中…</span>
+          <span class="boot-status-en">Starting workbench…</span>
+        </div>
+      </div>
+    </div>
+  </div>
   <script type="module" src="./main.tsx"></script>
 </body>
 </html>

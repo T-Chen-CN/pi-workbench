@@ -3,7 +3,11 @@ import {
   app,
   BrowserWindow,
   dialog,
+  ipcMain,
+  nativeTheme,
   Notification,
+  screen,
+  type Rectangle,
 } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs/promises'
@@ -21,6 +25,7 @@ import { NotificationRouter } from './notifications.js'
 import { createWorkspaceStore, importRecentWorkspaces } from './workspace-store.js'
 import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
+import { animateBounds, type WindowBounds } from './window-morph.js'
 import { registerFilesIpc } from './ipc/files.js'
 import { registerAgentIpc } from './ipc/agent.js'
 import { registerGitIpc } from './ipc/git.js'
@@ -67,6 +72,161 @@ app.setPath('userData', userDataDir)
 
 let mainWindow: BrowserWindow | null = null
 configureIpcWindow(() => mainWindow)
+
+/**
+ * 启动页：窗口先以 420×260 出现，面板数据就绪后放大到工作台尺寸。
+ * 总视觉时长 = 停留（≥600ms）+ 放大（400ms），即最短 1 秒。
+ */
+const BOOT_WINDOW_WIDTH = 420
+const BOOT_WINDOW_HEIGHT = 260
+const APP_WINDOW_WIDTH = 1200
+const APP_WINDOW_HEIGHT = 800
+const BOOT_HOLD_MS = 600
+const BOOT_EXPAND_MS = 400
+const BOOT_READY_TIMEOUT_MS = 8000
+
+let bootActive = false
+let bootStartedAt = 0
+let bootReadyAt: number | null = null
+let bootExpanded = false
+let bootCompleted = false
+let bootTimers: ReturnType<typeof setTimeout>[] = []
+let expandScheduled = false
+let cancelExpandAnimation: (() => void) | null = null
+
+/** 启动期的目录迁移、SQLite 播种与联网配置；最近工作区 IPC 会等它完成 */
+let startupReady: Promise<void> = Promise.resolve()
+
+function resolveTheme(settings: { theme?: unknown }): 'dark' | 'light' {
+  if (settings.theme === 'dark') return 'dark'
+  if (settings.theme === 'light') return 'light'
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+}
+
+function resolveLanguage(settings: { language?: unknown }): 'zh' | 'en' {
+  return settings.language === 'en' || settings.language === 'en-US' ? 'en' : 'zh'
+}
+
+function centeredWindowBounds(
+  workArea: Rectangle,
+  width: number,
+  height: number
+): WindowBounds {
+  const w = Math.min(width, workArea.width)
+  const h = Math.min(height, workArea.height)
+  return {
+    x: Math.round(workArea.x + (workArea.width - w) / 2),
+    y: Math.round(workArea.y + (workArea.height - h) / 2),
+    width: Math.round(w),
+    height: Math.round(h),
+  }
+}
+
+/** 放大目标以窗口当前中心为准（用户可能拖过小窗），并限制在所在显示器工作区内 */
+function expandedWindowBounds(win: BrowserWindow): WindowBounds {
+  const current = win.getBounds()
+  const workArea = screen.getDisplayMatching(current).workArea
+  const width = Math.min(APP_WINDOW_WIDTH, workArea.width)
+  const height = Math.min(APP_WINDOW_HEIGHT, workArea.height)
+  const centerX = current.x + current.width / 2
+  const centerY = current.y + current.height / 2
+  const clamp = (value: number, min: number, max: number) =>
+    Math.min(Math.max(value, min), max)
+  return {
+    x: Math.round(clamp(centerX - width / 2, workArea.x, workArea.x + workArea.width - width)),
+    y: Math.round(clamp(centerY - height / 2, workArea.y, workArea.y + workArea.height - height)),
+    width: Math.round(width),
+    height: Math.round(height),
+  }
+}
+
+function clearBootTimers(): void {
+  for (const timer of bootTimers) clearTimeout(timer)
+  bootTimers = []
+}
+
+function beginBoot(win: BrowserWindow): void {
+  bootActive = true
+  bootStartedAt = Date.now()
+  bootReadyAt = null
+  bootExpanded = false
+  expandScheduled = false
+  clearBootTimers()
+  const fallback = setTimeout(() => {
+    if (bootExpanded) return
+    console.warn('[Boot] Renderer did not signal ready in time; expanding anyway')
+    scheduleExpansion(win)
+  }, BOOT_READY_TIMEOUT_MS)
+  bootTimers.push(fallback)
+}
+
+/** 渲染层启动数据就绪：满足最短停留后开始放大 */
+function handleBootReady(): void {
+  if (!bootActive || bootExpanded || !mainWindow || mainWindow.isDestroyed()) return
+  bootReadyAt = Date.now()
+  console.log('[Boot] Renderer ready after', bootReadyAt - bootStartedAt, 'ms')
+  scheduleExpansion(mainWindow)
+}
+
+function scheduleExpansion(win: BrowserWindow): void {
+  if (bootExpanded || expandScheduled || win.isDestroyed()) return
+  expandScheduled = true
+  const startAt = Math.max(bootStartedAt + BOOT_HOLD_MS, bootReadyAt ?? Date.now())
+  const timer = setTimeout(() => startExpansion(win), Math.max(0, startAt - Date.now()))
+  bootTimers.push(timer)
+}
+
+function startExpansion(win: BrowserWindow): void {
+  if (bootExpanded || win.isDestroyed()) return
+  const from = win.getBounds()
+  const to = expandedWindowBounds(win)
+  console.log('[Boot] Expanding window', `${from.width}×${from.height}`, '→', `${to.width}×${to.height}`)
+  cancelExpandAnimation = animateBounds({
+    from,
+    to,
+    durationMs: BOOT_EXPAND_MS,
+    apply: (bounds) => {
+      if (!win.isDestroyed()) win.setBounds(bounds)
+    },
+    onDone: () => finishBoot(win),
+  })
+}
+
+function finishBoot(win: BrowserWindow): void {
+  if (!bootActive || bootExpanded) return
+  bootActive = false
+  bootExpanded = true
+  bootCompleted = true
+  expandScheduled = false
+  cancelExpandAnimation = null
+  clearBootTimers()
+  console.log('[Boot] Window expanded after', Date.now() - bootStartedAt, 'ms')
+  if (!win.isDestroyed()) {
+    win.setResizable(true)
+    if (process.platform === 'darwin') {
+      try {
+        win.setWindowButtonVisibility(true)
+      } catch {
+        // 旧版本 macOS / 非 macOS 没有该方法
+      }
+    }
+    try {
+      win.webContents.send('app:boot-expanded')
+    } catch (error) {
+      console.warn('[Boot] Failed to notify renderer:', error)
+    }
+  }
+  // 安装目录不可写的提示等界面就绪后再弹，避免盖住启动页
+  if (app.isPackaged && process.platform !== 'darwin') {
+    void ensureAppDirWritable()
+  }
+}
+
+ipcMain.on('app:boot-ready', (event) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (event.sender !== mainWindow.webContents) return
+  handleBootReady()
+})
 
 // GitHub OAuth 回调使用自定义协议；开发版需要带上脚本参数才能在 Windows 上回到 Electron
 try {
@@ -363,6 +523,7 @@ registerWorkspaceIpc({
   pluginManager,
   terminalManager,
   workspaceStore,
+  waitForStartup: () => startupReady,
 })
 
 registerGitIpc({
@@ -458,13 +619,21 @@ async function ensureAppDirWritable(): Promise<void> {
   }
 }
 
-function createWindow() {
+function createWindow(settings: { theme?: unknown; language?: unknown }): void {
   const isMac = process.platform === 'darwin'
+  const theme = resolveTheme(settings)
+  const language = resolveLanguage(settings)
+  // 首次启动从小窗开始；macOS 关掉全部窗口再激活时直接进入正常尺寸
+  const skipBoot = bootCompleted
+  const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
+  const initialBounds = skipBoot
+    ? centeredWindowBounds(workArea, APP_WINDOW_WIDTH, APP_WINDOW_HEIGHT)
+    : centeredWindowBounds(workArea, BOOT_WINDOW_WIDTH, BOOT_WINDOW_HEIGHT)
 
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    backgroundColor: '#F4F1EA',
+    ...initialBounds,
+    backgroundColor: theme === 'dark' ? '#141311' : '#F4F1EA',
+    resizable: skipBoot,
     autoHideMenuBar: true,
     ...(isMac
       ? {
@@ -486,6 +655,15 @@ function createWindow() {
   // Windows/Linux：隐藏默认菜单栏，但保留菜单角色提供的快捷键
   if (!isMac) {
     mainWindow.setMenuBarVisibility(false)
+  }
+
+  // 启动页期间隐藏 macOS 红绿灯：小窗里没有可用的标题栏布局
+  if (isMac && !skipBoot) {
+    try {
+      mainWindow.setWindowButtonVisibility(false)
+    } catch {
+      // 旧版本 macOS 没有该方法
+    }
   }
 
   // 通知渲染进程最大化状态，用于自绘窗口按钮的图标切换
@@ -518,12 +696,26 @@ function createWindow() {
     })
   }
 
-  // Load the app
+  // Load the app：主题与语言随 URL 传入，启动页在首帧之前就能用上
+  const query: Record<string, string> = { theme, lang: language }
+  if (skipBoot) query.boot = '0'
   if (process.env.VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
+    const devUrl = new URL(process.env.VITE_DEV_SERVER_URL)
+    for (const [key, value] of Object.entries(query)) devUrl.searchParams.set(key, value)
+    void mainWindow.loadURL(devUrl.toString())
     mainWindow.webContents.openDevTools()
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
+    void mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), { query })
+  }
+
+  if (skipBoot) {
+    bootActive = false
+    expandScheduled = false
+    clearBootTimers()
+    cancelExpandAnimation?.()
+    cancelExpandAnimation = null
+  } else {
+    beginBoot(mainWindow)
   }
 
   mainWindow.webContents.on('did-finish-load', () => {
@@ -531,6 +723,12 @@ function createWindow() {
   })
 
   mainWindow.on('closed', () => {
+    // 启动动画与兜底定时器不能留到窗口销毁之后
+    clearBootTimers()
+    cancelExpandAnimation?.()
+    cancelExpandAnimation = null
+    expandScheduled = false
+    bootActive = false
     mainWindow = null
   })
 
@@ -580,7 +778,19 @@ function createWindow() {
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error('[Main] Renderer process gone:', details.reason)
+    // 渲染进程崩溃后不再有可能收到 boot-ready，直接结束启动态
+    if (mainWindow && !mainWindow.isDestroyed()) finishBoot(mainWindow)
   })
+
+  mainWindow.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      // -3 是导航被主动中止（重定向等），不是失败
+      if (!isMainFrame || errorCode === -3) return
+      console.error('[Main] Page failed to load:', errorCode, errorDescription, validatedURL)
+      if (mainWindow && !mainWindow.isDestroyed()) finishBoot(mainWindow)
+    }
+  )
 }
 
 app.whenReady().then(async () => {
@@ -603,6 +813,27 @@ app.whenReady().then(async () => {
   }
 
   await initAppDirectories()
+
+  // 启动页要尽早出现：只读设置（主题与语言）就建窗，其余初始化与页面加载并行。
+  let startupSettings: Record<string, any> = {}
+  try {
+    startupSettings = await loadSettingsFile()
+  } catch (error) {
+    console.error('[Main] Failed to load settings before window creation:', error)
+  }
+  setAppSettingsCache(startupSettings)
+  // 权限迁移会写 settings.json，必须在渲染层读取设置之前完成
+  await migratePermissionLevel()
+  createWindow(startupSettings)
+
+  // SQLite 播种与联网配置不阻塞首屏；最近工作区 IPC 会等它完成。
+  startupReady = (async () => {
+    await seedTrustedWorkspaces()
+    await initializeWebSearch()
+  })()
+  void startupReady.catch((error) =>
+    console.warn('[Main] Startup preparation failed:', error)
+  )
 
   // 更新后首次启动：让系统重建图标与桌面菜单缓存（三平台各自实现，失败只记日志）。
   // 与 Windows 安装器里的 SHChangeNotify / ie4uinit 互为兜底。
@@ -644,21 +875,8 @@ app.whenReady().then(async () => {
       .catch((error) => console.warn('[Main] Update cache cleanup failed:', error))
   }
 
-  setAppSettingsCache(await loadSettingsFile())
-  await migratePermissionLevel()
-  await seedTrustedWorkspaces()
-  // 联网搜索是应用基础能力：启动时把配置落到 Agent 目录并注入 Key 环境变量
-  await initializeWebSearch()
-  createWindow()
-
   const initialGithubCallback = process.argv.find((arg) => isGithubCallbackUrl(arg))
   if (initialGithubCallback) void handleGithubCallback(initialGithubCallback)
-
-  // Windows / Linux 的配置、数据和更新缓存都写在安装目录：安装到 Program Files
-  // 这类只读位置时提前告知，避免用户以为设置没有保存。
-  if (app.isPackaged && process.platform !== 'darwin') {
-    void ensureAppDirWritable()
-  }
 
   // 启动后静默检查更新：Windows / Linux 发现新版本会自动下载，但不会自动安装。
   setTimeout(() => {
@@ -710,7 +928,7 @@ app.on('browser-window-focus', () => {
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow()
+    createWindow(getAppSettingsCache())
   }
 })
 

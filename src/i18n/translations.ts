@@ -6,6 +6,8 @@ export const translations = {
   zh: {
     // App
     appTitle: 'Pi 工作台',
+    bootStarting: '工作台启动中…',
+    workspaceLoading: '正在打开工作区…',
     openProject: '打开项目',
     closeProject: '关闭项目',
     welcome: '欢迎使用 Pi 工作台',
@@ -689,6 +691,8 @@ export const translations = {
   en: {
     // App
     appTitle: 'Pi Workbench',
+    bootStarting: 'Starting workbench…',
+    workspaceLoading: 'Opening workspace…',
     openProject: 'Open Project',
     closeProject: 'Close Project',
     welcome: 'Welcome to Pi Workbench',

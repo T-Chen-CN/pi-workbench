@@ -17,6 +17,19 @@ import { commitDetail } from '../electron/git-worktrees'
 
 let workspace = ''
 
+/** Windows 上 git 释放句柄有延迟，删除临时目录需要重试 */
+async function removeTempDir(dir: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (attempt === 4) throw error
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+  }
+}
+
 function git(args: string[], cwd = workspace): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' })
 }
@@ -33,7 +46,7 @@ describe('WorktreeCoordinator', () => {
   })
 
   afterEach(async () => {
-    await fs.rm(workspace, { recursive: true, force: true })
+    await removeTempDir(workspace)
   })
 
   it('creates a managed worktree, reports it as in use, and removes it when clean', async () => {

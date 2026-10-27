@@ -54,6 +54,8 @@ export interface WorkspaceIpcContext {
   pluginManager: PluginManager
   terminalManager: TerminalManager
   workspaceStore: WorkspaceStore
+  /** 启动期的 SQLite 播种与配置落盘；最近工作区列表要等它完成 */
+  waitForStartup?: () => Promise<void>
 }
 
 export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
@@ -143,6 +145,7 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
 
   handleIpc('app:getRecentWorkspaces', async () => {
     try {
+      await context.waitForStartup?.()
       const workspaces = context.workspaceStore
         .listRecent(30)
         .filter((workspacePath) => isTrustedWorkspacePath(workspacePath))

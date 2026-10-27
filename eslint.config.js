@@ -36,6 +36,18 @@ export default tseslint.config(
     },
   },
   {
+    // 启动页脚本：在渲染进程的浏览器环境里运行
+    files: ['src/public/**/*.js'],
+    languageOptions: {
+      sourceType: 'script',
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        URLSearchParams: 'readonly',
+      },
+    },
+  },
+  {
     // 构建期脚本（Node ESM）
     files: ['scripts/**/*.js', 'docs/**/*.mjs'],
     languageOptions: {

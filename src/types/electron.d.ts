@@ -197,6 +197,9 @@ export interface ElectronAPI {
   closeWindow: () => Promise<{ success: boolean }>
   isWindowMaximized: () => Promise<{ success: boolean; maximized: boolean }>
   onWindowMaximizedChange: (callback: (maximized: boolean) => void) => () => void
+  /** 启动闸门：渲染层数据就绪后通知主进程放大窗口 */
+  appBootReady: () => void
+  onAppBootExpanded: (callback: () => void) => () => void
 
   // Workspace configuration
   initWorkspace: (workspacePath: string) => Promise<WorkspaceResult>

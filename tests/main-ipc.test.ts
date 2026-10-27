@@ -43,7 +43,14 @@ vi.mock('electron', () => ({
     handle: (channel: string, handler: IpcHandler) => {
       mocks.handlers.set(channel, handler)
     },
+    on: () => {},
   },
+  screen: {
+    getCursorScreenPoint: () => ({ x: 0, y: 0 }),
+    getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+    getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+  },
+  nativeTheme: { shouldUseDarkColors: false },
   BrowserWindow: class {
     static getAllWindows(): unknown[] {
       return []

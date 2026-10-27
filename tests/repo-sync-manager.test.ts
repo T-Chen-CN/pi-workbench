@@ -39,6 +39,19 @@ async function waitFor(check: () => boolean, timeoutMs = 5000): Promise<void> {
 
 const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }
 
+/** Windows 上 git / 文件监听释放句柄有延迟，删除临时目录需要重试 */
+async function removeTempDir(dir: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (attempt === 4) throw error
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+  }
+}
+
 describe('RepoSyncManager', () => {
   let root = ''
   let manager: RepoSyncManager
@@ -62,7 +75,7 @@ describe('RepoSyncManager', () => {
 
   afterEach(async () => {
     manager.disposeAll()
-    await fs.rm(root, { recursive: true, force: true })
+    await removeTempDir(root)
   })
 
   it('broadcasts a refs change to the workspace that owns the repository', async () => {

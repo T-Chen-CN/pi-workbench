@@ -193,6 +193,8 @@ const mockAPI = {
     maximized: false,
   }),
   onWindowMaximizedChange: (_callback: (maximized: boolean) => void) => () => {},
+  appBootReady: () => {},
+  onAppBootExpanded: (_callback: () => void) => () => {},
   initWorkspace: async (workspacePath: string): Promise<WorkspaceResult> => {
     console.log('[Mock] initWorkspace:', workspacePath)
     return { success: true }
@@ -445,6 +447,13 @@ export const api = {
   isWindowMaximized: () => electronAPI.isWindowMaximized(),
   onWindowMaximizedChange: (callback: (maximized: boolean) => void) =>
     electronAPI.onWindowMaximizedChange(callback),
+  appBootReady: () => {
+    if (typeof electronAPI.appBootReady === 'function') electronAPI.appBootReady()
+  },
+  onAppBootExpanded: (callback: () => void) =>
+    typeof electronAPI.onAppBootExpanded === 'function'
+      ? electronAPI.onAppBootExpanded(callback)
+      : () => {},
 
   // Workspace configuration
   initWorkspace: (workspacePath: string) => electronAPI.initWorkspace(workspacePath),

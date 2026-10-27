@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react'
 import {
   Activity,
   AlertCircle,
@@ -22,8 +22,8 @@ import { ToastContainer } from './components/Toast'
 import { DialogHost } from './components/DialogHost'
 import { WelcomeScreen } from './components/WelcomeScreen'
 import { WindowControls } from './components/WindowControls'
-import { WorkspaceView } from './components/WorkspaceView'
-import { Button, IconButton, Modal } from './components/ui'
+import { BootScreen } from './components/BootScreen'
+import { Button, IconButton, Modal, Spinner } from './components/ui'
 import { useToastStore, toast } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
 import { useThemeStore, useResolvedTheme, type ThemeMode } from './store/themeStore'
@@ -43,6 +43,13 @@ import { restoreEditorTabs, saveEditorTabs } from './workspace/editorTabs'
 import { basename } from './utils/filePath'
 import { emitAppEvent, onAppEvent } from './utils/appEvents'
 
+// 工作区视图（终端、聊天、Markdown）只在真正打开工作区时加载，不进入启动路径
+const WorkspaceView = lazy(() =>
+  import('./components/WorkspaceView').then((module) => ({ default: module.WorkspaceView }))
+)
+
+type BootPhase = 'boot' | 'reveal' | 'ready'
+
 export default function App() {
   const {
     workspacePath: workspace,
@@ -58,6 +65,15 @@ export default function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
   const [showHome, setShowHome] = useState(true)
   const [showActivity, setShowActivity] = useState(false)
+  // boot：只显示启动页；reveal：外壳已挂载、遮罩正在淡出；ready：正常工作台
+  const [bootPhase, setBootPhase] = useState<BootPhase>(() =>
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('boot') === '0'
+      ? 'ready'
+      : 'boot'
+  )
+  const [overlayFading, setOverlayFading] = useState(false)
+  const bootReadySentRef = useRef(false)
   const toastMessages = useToastStore((state) => state.messages)
   const removeToast = useToastStore((state) => state.remove)
   const sessionsByWorkspace = useSessionStore((state) => state.byWorkspace)
@@ -124,21 +140,7 @@ export default function App() {
 
   // 更新状态由 App 统一订阅，设置页、状态栏和安装弹窗共享同一份状态
   const applyUpdateState = useUpdaterStore((store) => store.applyState)
-  useEffect(() => {
-    let active = true
-    api
-      .updateGetState()
-      .then((result) => {
-        if (active && result.success) applyUpdateState(result.state)
-      })
-      .catch((err) => console.error('Failed to load update state:', err))
-
-    const unsubscribe = api.onUpdateStatus((state) => applyUpdateState(state))
-    return () => {
-      active = false
-      unsubscribe()
-    }
-  }, [applyUpdateState])
+  useEffect(() => api.onUpdateStatus((state) => applyUpdateState(state)), [applyUpdateState])
 
   // 窗口标题、文档语言与主题跟随设置
   useEffect(() => {
@@ -150,11 +152,16 @@ export default function App() {
     document.documentElement.classList.toggle('dark', resolvedTheme === 'dark')
   }, [resolvedTheme])
 
-  // 从便携式 settings.json 恢复语言与主题偏好
+  // 启动闸门：设置、最近工作区与更新状态就绪后才放行主界面。
+  // 主进程收到 app:boot-ready 后，按「停留 + 放大」把窗口放大到工作台尺寸。
   useEffect(() => {
-    api.getSettings()
-      .then((result) => {
-        if (!result.success || !result.settings) return
+    let cancelled = false
+    let readyTimeout: number | undefined
+
+    const loadSettings = async () => {
+      try {
+        const result = await api.getSettings()
+        if (cancelled || !result.success || !result.settings) return
         const saved = result.settings
         if (saved.language === 'en' || saved.language === 'en-US') {
           setLanguage('en')
@@ -165,9 +172,85 @@ export default function App() {
           setMode(saved.theme as ThemeMode)
         }
         useSettingsStore.getState().hydrate(saved)
-      })
-      .catch((err) => console.error('Failed to load app settings:', err))
-  }, [setLanguage, setMode])
+      } catch (err) {
+        console.error('Failed to load app settings:', err)
+      }
+    }
+
+    const loadRecents = async () => {
+      try {
+        const result = await api.getRecentWorkspaces()
+        if (!cancelled && result.success) setRecentWorkspaces(result.workspaces)
+      } catch (err) {
+        console.error('Failed to load recent workspaces:', err)
+      }
+    }
+
+    const loadUpdateState = async () => {
+      try {
+        const result = await api.updateGetState()
+        if (!cancelled && result.success) applyUpdateState(result.state)
+      } catch (err) {
+        console.error('Failed to load update state:', err)
+      }
+    }
+
+    const reveal = () => {
+      if (cancelled) return
+      setBootPhase((phase) => (phase === 'boot' ? 'reveal' : phase))
+    }
+
+    void Promise.race([
+      Promise.allSettled([loadSettings(), loadRecents(), loadUpdateState()]),
+      new Promise<void>((resolve) => {
+        readyTimeout = window.setTimeout(resolve, 1500)
+      }),
+    ]).then(() => {
+      if (cancelled) return
+      if (readyTimeout) window.clearTimeout(readyTimeout)
+      if (bootReadySentRef.current) return
+      bootReadySentRef.current = true
+      api.appBootReady()
+      // 浏览器调试没有主进程负责放大窗口，直接进入界面
+      if (!window.electronAPI) reveal()
+    })
+
+    const offExpanded = api.onAppBootExpanded(reveal)
+    // 主进程异常或事件丢失时，不能让界面停在启动页
+    const revealFallback = window.setTimeout(reveal, 8000)
+
+    return () => {
+      cancelled = true
+      if (readyTimeout) window.clearTimeout(readyTimeout)
+      window.clearTimeout(revealFallback)
+      offExpanded()
+    }
+  }, [applyUpdateState, setLanguage, setMode, setRecentWorkspaces])
+
+  // 遮罩退场：放大结束后先让外壳在遮罩下画一帧，再 150ms 淡出
+  useEffect(() => {
+    if (bootPhase !== 'reveal') return
+    let started = false
+    let innerFrame = 0
+    let doneTimer: number | undefined
+    const startFade = () => {
+      if (started) return
+      started = true
+      setOverlayFading(true)
+      doneTimer = window.setTimeout(() => setBootPhase('ready'), 150)
+    }
+    const outerFrame = window.requestAnimationFrame(() => {
+      innerFrame = window.requestAnimationFrame(startFade)
+    })
+    // 窗口被遮挡时 rAF 会被节流；定时器保证遮罩仍然退场
+    const frameFallback = window.setTimeout(startFade, 300)
+    return () => {
+      window.cancelAnimationFrame(outerFrame)
+      window.cancelAnimationFrame(innerFrame)
+      window.clearTimeout(frameFallback)
+      if (doneTimer) window.clearTimeout(doneTimer)
+    }
+  }, [bootPhase])
 
   // 工具审批请求是全局的：切到别的会话时也要能收到通知与入队
   useEffect(() => {
@@ -193,15 +276,6 @@ export default function App() {
       useApprovalStore.getState().reset()
     }
   }, [])
-
-  // 加载最近打开的工作区
-  useEffect(() => {
-    api.getRecentWorkspaces()
-      .then((result) => {
-        if (result.success) setRecentWorkspaces(result.workspaces)
-      })
-      .catch((err) => console.error('Failed to load recent workspaces:', err))
-  }, [setRecentWorkspaces])
 
   // 有未保存修改或运行中的任务时阻止关闭窗口；关闭前尽力把固定状态落盘
   useEffect(() => {
@@ -421,6 +495,9 @@ export default function App() {
 
   const headerLink =
     'type-label text-ink-muted transition-colors hover:text-ink'
+
+  // 启动阶段只渲染启动页，放大动画期间窗口里没有别的 DOM 需要重排
+  if (bootPhase === 'boot') return <BootScreen />
 
   return (
     <div className="flex h-screen flex-col bg-surface text-ink">
@@ -685,13 +762,22 @@ export default function App() {
 
       {/* 每个打开的工作区常驻一个视图；首页只是切换可见性 */}
       <div className="relative flex min-h-0 flex-1 bg-surface">
-        {openWorkspaces.map((path) => (
-          <WorkspaceView
-            key={path}
-            workspacePath={path}
-            active={!showHome && path === workspace}
-          />
-        ))}
+        <Suspense
+          fallback={
+            <div className="flex flex-1 items-center justify-center gap-2 type-label text-ink-muted">
+              <Spinner size={14} />
+              {t('workspaceLoading')}
+            </div>
+          }
+        >
+          {openWorkspaces.map((path) => (
+            <WorkspaceView
+              key={path}
+              workspacePath={path}
+              active={!showHome && path === workspace}
+            />
+          ))}
+        </Suspense>
         {(showHome || !workspace) && (
           <div className="absolute inset-0 flex flex-col overflow-hidden bg-surface">
             <WelcomeScreen
@@ -721,6 +807,17 @@ export default function App() {
           <span>{resolvedTheme === 'dark' ? 'INK' : 'PAPER'}</span>
         </div>
       </footer>
+
+      {/* 放大结束后的遮罩：外壳已在下面完成首帧，淡出后即为完整工作台 */}
+      {bootPhase === 'reveal' && (
+        <div
+          className={`fixed inset-0 z-50 transition-opacity duration-150 ${
+            overlayFading ? 'opacity-0' : 'opacity-100'
+          }`}
+        >
+          <BootScreen />
+        </div>
+      )}
     </div>
   )
 }

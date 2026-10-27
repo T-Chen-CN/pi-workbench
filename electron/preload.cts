@@ -86,6 +86,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('window:maximized-changed', listener)
   },
 
+  // 启动闸门：渲染层数据就绪后通知主进程放大窗口
+  appBootReady: () => ipcRenderer.send('app:boot-ready'),
+  onAppBootExpanded: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('app:boot-expanded', listener)
+    return () => ipcRenderer.removeListener('app:boot-expanded', listener)
+  },
+
   // 工作区配置管理
   initWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace:init', workspacePath),
   disposeWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace:dispose', workspacePath),
