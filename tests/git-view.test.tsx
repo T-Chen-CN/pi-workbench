@@ -39,6 +39,7 @@ vi.mock('../src/api', () => ({
         })
     ),
     gitPrStatus: vi.fn(async () => ({ success: true, status: null })),
+    gitForgetWorktree: vi.fn(async () => ({ success: true, worktrees: [] })),
     githubAuthStatus: vi.fn(
       () =>
         new Promise((resolve) => {
@@ -51,6 +52,8 @@ vi.mock('../src/api', () => ({
 }))
 
 import { GitView } from '../src/components/GitView'
+import { api } from '../src/api'
+import { useDialogStore } from '../src/store/dialogStore'
 import { useGitStore } from '../src/store/gitStore'
 import { translations } from '../src/i18n/translations'
 import type { GitCommitDetail } from '../src/types/electron'
@@ -243,6 +246,8 @@ describe('GitView 工作树列表', () => {
     logCommits = []
     repoWorktrees = []
     useGitStore.setState({ byWorkspace: {} })
+    useDialogStore.setState({ current: null })
+    vi.mocked(api.gitForgetWorktree).mockClear()
   })
 
   afterEach(() => {
@@ -270,5 +275,49 @@ describe('GitView 工作树列表', () => {
       await screen.findByRole('button', { name: translations.zh.gitUseWorktree })
     ).not.toBeNull()
     expect(screen.queryByText(translations.zh.worktreeMissing)).toBeNull()
+  })
+
+  it('失效的工作树可以手动忘记，确认后只移除登记', async () => {
+    repoWorktrees = [
+      worktree({ id: 'ext-stale', branch: 'feature-stale', missing: true, managed: false }),
+    ]
+    vi.mocked(api.gitForgetWorktree).mockResolvedValueOnce({
+      success: true,
+      worktrees: [worktree({ id: 'main', branch: 'main', isMain: true })],
+    })
+    render(<GitView workspacePath="/repo" />)
+    await openWorktreeList()
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: translations.zh.worktreeForget })
+    )
+    await waitFor(() => expect(useDialogStore.getState().current?.kind).toBe('confirm'))
+    await act(async () => {
+      useDialogStore.getState().close(true)
+    })
+
+    await waitFor(() =>
+      expect(api.gitForgetWorktree).toHaveBeenCalledWith('/repo', 'ext-stale', undefined)
+    )
+    const views = useGitStore.getState().byWorkspace['/repo'].worktrees
+    expect(views.some((item) => item.id === 'ext-stale')).toBe(false)
+  })
+
+  it('取消确认时不会忘记工作树', async () => {
+    repoWorktrees = [
+      worktree({ id: 'ext-stale', branch: 'feature-stale', missing: true, managed: false }),
+    ]
+    render(<GitView workspacePath="/repo" />)
+    await openWorktreeList()
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: translations.zh.worktreeForget })
+    )
+    await waitFor(() => expect(useDialogStore.getState().current?.kind).toBe('confirm'))
+    await act(async () => {
+      useDialogStore.getState().close(false)
+    })
+
+    expect(api.gitForgetWorktree).not.toHaveBeenCalled()
   })
 })

@@ -21,6 +21,10 @@ const EXACT: Record<string, TranslationKey> = {
   ERR_UPDATE_MANUAL: 'errUpdateManual',
   ERR_UPDATE_NOT_DOWNLOADED: 'errUpdateNotDownloaded',
   'Failed to switch the session worktree.': 'worktreeSwitchFailed',
+  'Worktree is in use by a session': 'worktreeForgetInUse',
+  'Worktree still exists': 'worktreeForgetStillLive',
+  'The main worktree cannot be forgotten': 'worktreeForgetFailed',
+  'Unknown worktree': 'worktreeForgetFailed',
 }
 
 const PREFIXES: Array<[string, TranslationKey]> = [

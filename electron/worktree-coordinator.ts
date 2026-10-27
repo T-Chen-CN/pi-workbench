@@ -48,6 +48,12 @@ export interface WorktreeView {
   behind: number
 }
 
+export interface ForgetResult {
+  success: boolean
+  error?: string
+  worktrees?: WorktreeView[]
+}
+
 export interface BindResult {
   success: boolean
   worktree?: WorktreeView
@@ -553,6 +559,32 @@ export class WorktreeCoordinator {
       }
       await persist(state)
       return { removed, dirty, external, pruned }
+    })
+  }
+
+  /**
+   * 手动忘记一条失效登记：git 不再认这条路径、也没有会话绑定时才允许。
+   * 只丢登记，不碰磁盘内容——目录里可能还有用户文件。
+   */
+  async forget(id: string, activeSessionId?: string | null): Promise<ForgetResult> {
+    const state = this.state
+    return serialize(state, async (): Promise<ForgetResult> => {
+      if (id === MAIN_WORKTREE_KEY) return { success: false, error: 'The main worktree cannot be forgotten' }
+      if (!state.data.worktrees[id]) return { success: false, error: 'Unknown worktree' }
+      if (boundSessionCount(state, id) > 0) {
+        return { success: false, error: 'Worktree is in use by a session' }
+      }
+      const target = worktreePathFromKey(state, id)
+      const infos = await gitListWorktrees(state.repo.root)
+      const known =
+        target !== null &&
+        infos.some(
+          (info) => !info.prunable && (canonicalizePath(info.path) ?? info.path) === target
+        )
+      if (known) return { success: false, error: 'Worktree still exists' }
+      delete state.data.worktrees[id]
+      await persist(state)
+      return { success: true, worktrees: await this.listWorktrees(activeSessionId) }
     })
   }
 

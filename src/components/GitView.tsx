@@ -22,7 +22,7 @@ import { useGitStore } from '../store/gitStore'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
-import { promptDialog } from '../store/dialogStore'
+import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { IconButton, Spinner } from './ui'
 import { emitAppEvent } from '../utils/appEvents'
 import { buildCommitGraph, type GraphRow } from '../utils/commitGraph'
@@ -359,6 +359,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
   const loadPr = useGitStore((state) => state.loadPr)
   const refreshWorktrees = useGitStore((state) => state.refreshWorktrees)
   const switchWorktree = useGitStore((state) => state.switchWorktree)
+  const forgetWorktree = useGitStore((state) => state.forgetWorktree)
   const openCommitDetail = useGitStore((state) => state.openCommitDetail)
   const createBranchAtCommit = useGitStore((state) => state.createBranch)
 
@@ -488,6 +489,26 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
       setWorktreesOpen(false)
     },
     [activeSessionId, switchWorktree, workspacePath, t]
+  )
+
+  /** 忘记失效登记：只丢登记，不碰磁盘内容 */
+  const forget = useCallback(
+    async (worktree: GitWorktreeView) => {
+      const confirmed = await confirmDialog({
+        title: t('worktreeForget'),
+        message: t('worktreeForgetConfirm').replace('{path}', worktree.relativePath),
+        confirmLabel: t('worktreeForget'),
+        danger: true,
+      })
+      if (!confirmed) return
+      const result = await forgetWorktree(workspacePath, worktree.id, activeSessionId)
+      if (!result.success) {
+        toast.error(result.error ? localizeError(result.error) : t('worktreeForgetFailed'))
+        return
+      }
+      toast.success(t('worktreeForgotten'))
+    },
+    [activeSessionId, forgetWorktree, workspacePath, t]
   )
 
   const copySha = useCallback(
@@ -799,8 +820,15 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
             {current ? (
               <span className="flex-none text-accent">{t('gitInUse')}</span>
             ) : worktree.missing ? (
-              <span className="flex-none type-caption text-ink-subtle">
+              <span className="flex flex-none items-center gap-1 type-caption text-ink-subtle">
                 {t('worktreeMissing')}
+                <button
+                  type="button"
+                  onClick={() => void forget(worktree)}
+                  className="rounded-sm px-1 text-accent hover:bg-hover"
+                >
+                  {t('worktreeForget')}
+                </button>
               </span>
             ) : (
               <button

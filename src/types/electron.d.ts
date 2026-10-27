@@ -439,6 +439,11 @@ export interface ElectronAPI {
     workspaceDir: string,
     activeSessionId?: string
   ) => Promise<{ success: boolean; worktrees?: GitWorktreeView[]; error?: string }>
+  gitForgetWorktree: (
+    workspaceDir: string,
+    id: string,
+    activeSessionId?: string
+  ) => Promise<{ success: boolean; worktrees?: GitWorktreeView[]; error?: string }>
   gitBranches: (
     workspaceDir: string
   ) => Promise<{ success: boolean; branches?: GitBranchInfo[]; error?: string }>

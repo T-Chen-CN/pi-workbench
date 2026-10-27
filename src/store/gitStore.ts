@@ -70,6 +70,11 @@ interface GitState {
   byWorkspace: Record<string, WorkspaceGitState>
   load: (workspaceDir: string, activeSessionId?: string | null) => Promise<void>
   refreshWorktrees: (workspaceDir: string, activeSessionId?: string | null) => Promise<void>
+  forgetWorktree: (
+    workspaceDir: string,
+    id: string,
+    activeSessionId?: string | null
+  ) => Promise<{ success: boolean; error?: string }>
   loadBranches: (workspaceDir: string) => Promise<void>
   switchWorktree: (
     workspaceDir: string,
@@ -191,6 +196,24 @@ export const useGitStore = create<GitState>((set, get) => ({
     const result = await api.gitBranches(workspaceDir)
     if (result.success) {
       set((state) => patch(state, workspaceDir, { branches: result.branches ?? [] }))
+    }
+  },
+
+  forgetWorktree: async (workspaceDir, id, activeSessionId) => {
+    if (typeof api.gitForgetWorktree !== 'function') {
+      return { success: false, error: 'Git is unavailable' }
+    }
+    try {
+      const result = await api.gitForgetWorktree(workspaceDir, id, activeSessionId ?? undefined)
+      if (!result.success) return { success: false, error: result.error }
+      if (result.worktrees) {
+        set((state) => patch(state, workspaceDir, { worktrees: result.worktrees ?? [] }))
+      } else {
+        await get().refreshWorktrees(workspaceDir, activeSessionId)
+      }
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   },
 

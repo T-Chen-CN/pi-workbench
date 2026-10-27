@@ -263,6 +263,45 @@ describe('WorktreeCoordinator', () => {
     expect(result.dirty).toHaveLength(0)
     expect(recordPaths()).toHaveLength(0)
   })
+
+  it('forgets a stale record whose directory is no longer a worktree', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    const external = path.join(workspace, '.claude', 'worktrees', 'stale')
+    await fs.mkdir(path.dirname(external), { recursive: true })
+    git(['worktree', 'add', '-b', 'feature-stale', external])
+    await coordinator!.listWorktrees()
+    git(['worktree', 'remove', external])
+    await fs.mkdir(external, { recursive: true })
+    await fs.writeFile(path.join(external, 'keep.txt'), 'keep\n')
+    const id = Object.entries(loadSessionGit(workspace).worktrees).find(
+      ([, record]) => record.path === '.claude/worktrees/stale'
+    )?.[0]
+    expect(id).toBeDefined()
+
+    const result = await coordinator!.forget(id!)
+
+    expect(result.success).toBe(true)
+    expect(recordPaths()).not.toContain('.claude/worktrees/stale')
+    expect(result.worktrees?.some((view) => view.id === id)).toBe(false)
+    // 忘记只丢登记，不碰磁盘
+    await expect(fs.access(path.join(external, 'keep.txt'))).resolves.toBeUndefined()
+  })
+
+  it('refuses to forget the main worktree, a bound worktree or a live one', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+
+    expect((await coordinator!.forget('main')).success).toBe(false)
+    expect((await coordinator!.forget('nope')).success).toBe(false)
+
+    await coordinator!.bind('session-live', 'new')
+    const id = Object.keys(loadSessionGit(workspace).worktrees)[0]
+    expect((await coordinator!.forget(id)).success).toBe(false)
+
+    await coordinator!.unbind('session-live')
+    // 目录与 git 登记都还在：不允许“忘记”一个活着的工作树
+    expect((await coordinator!.forget(id)).success).toBe(false)
+    expect(recordPaths()).toHaveLength(1)
+  })
 })
 
 /** 当前 workspace 里登记的工作树相对路径 */

@@ -33,6 +33,7 @@ const coordinatorHolder = vi.hoisted(() => ({ current: null as unknown }))
 
 vi.mock('../electron/worktree-coordinator', () => ({
   getCoordinator: async () => coordinatorHolder.current,
+  configureWorktreeLogging: () => {},
 }))
 
 vi.mock('../electron/github-auth', () => ({

@@ -326,6 +326,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   gitListWorktrees: (workspaceDir: string, activeSessionId?: string) =>
     ipcRenderer.invoke('git:listWorktrees', workspaceDir, activeSessionId),
+  gitForgetWorktree: (workspaceDir: string, id: string, activeSessionId?: string) =>
+    ipcRenderer.invoke('git:forgetWorktree', workspaceDir, id, activeSessionId),
   gitBranches: (workspaceDir: string) => ipcRenderer.invoke('git:branches', workspaceDir),
   gitStatus: (workspaceDir: string, worktreePath?: string) =>
     ipcRenderer.invoke('git:status', workspaceDir, worktreePath),

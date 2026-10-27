@@ -322,6 +322,10 @@ const mockAPI = {
   }),
   onGitChanged: (_callback: (payload: GitChangedPayload) => void) => () => {},
   gitListWorktrees: async () => ({ success: true, worktrees: [] }),
+  gitForgetWorktree: async () => ({
+    success: false,
+    error: 'Git is only available in the Electron app',
+  }),
   gitBranches: async () => ({ success: true, branches: [] }),
   gitStatus: async () => ({
     success: true,
@@ -499,6 +503,8 @@ export const api = {
     electronAPI.onGitChanged(callback),
   gitListWorktrees: (workspaceDir: string, activeSessionId?: string) =>
     electronAPI.gitListWorktrees(workspaceDir, activeSessionId),
+  gitForgetWorktree: (workspaceDir: string, id: string, activeSessionId?: string) =>
+    electronAPI.gitForgetWorktree(workspaceDir, id, activeSessionId),
   gitBranches: (workspaceDir: string) => electronAPI.gitBranches(workspaceDir),
   gitStatus: (workspaceDir: string, worktreePath?: string) =>
     electronAPI.gitStatus(workspaceDir, worktreePath),

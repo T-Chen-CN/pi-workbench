@@ -164,6 +164,27 @@ export function registerGitIpc(context: GitIpcContext): void {
     }
   )
 
+  handleIpc(
+    'git:forgetWorktree',
+    async (_event, workspaceDir: string, id: string, activeSessionId?: string) => {
+      try {
+        if (!isTrustedWorkspacePath(workspaceDir)) {
+          return { success: false, error: 'Workspace is not approved' }
+        }
+        if (typeof id !== 'string' || id === '') {
+          return { success: false, error: 'Unknown worktree' }
+        }
+        const coordinator = await getCoordinator(workspaceDir)
+        if (!coordinator) return { success: false, error: 'Not a git repository' }
+        const result = await coordinator.forget(id, activeSessionId ?? null)
+        if (result.success) context.logger.info('[Git] Forgot stale worktree record:', id)
+        return result
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+  )
+
   handleIpc('git:branches', async (_event, workspaceDir: string) => {
     try {
       const root = await resolveRepoRoot(workspaceDir)
