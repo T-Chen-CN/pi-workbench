@@ -469,7 +469,7 @@ export function useChatPanelState(props: ChatPanelProps) {
   const selectedModelCapability =
     modelCapabilities.find((item) => item.id === sessionSettings?.modelId) ?? null
   const imagesAllowed = selectedModelCapability
-    ? selectedModelCapability.vision === true
+    ? selectedModelCapability.vision
     : Boolean(
         sessionSettings?.modelId && configuredImageModels.includes(sessionSettings.modelId)
       )
@@ -477,19 +477,15 @@ export function useChatPanelState(props: ChatPanelProps) {
   const modelCapabilityText = selectedModelCapability
     ? selectedModelCapability.available === false
       ? t('modelUnavailableHint')
-      : selectedModelCapability.source === 'default'
-        ? t('modelCapabilityUnknown')
-        : [
-            selectedModelCapability.contextWindow
-              ? t('modelContextWindow', {
-                  tokens: formatTokenCount(selectedModelCapability.contextWindow),
-                })
-              : null,
-            selectedModelCapability.reasoning ? t('modelSupportsThinking') : t('modelNoThinking'),
-            selectedModelCapability.vision ? t('modelSupportsVision') : t('modelNoVision'),
-          ]
-            .filter(Boolean)
-            .join(' · ')
+      : [
+          t('modelContextWindow', {
+            tokens: formatTokenCount(selectedModelCapability.contextWindow),
+          }),
+          selectedModelCapability.reasoning ? t('modelSupportsThinking') : t('modelNoThinking'),
+          selectedModelCapability.vision ? t('modelSupportsVision') : t('modelNoVision'),
+        ]
+          .filter(Boolean)
+          .join(' · ')
     : null
 
   /** 文案或档位变化后重新测量，避免沿用旧宽度一直把文字收着 */
@@ -1375,7 +1371,11 @@ export function useChatPanelState(props: ChatPanelProps) {
     let cancelled = false
     void api.apiConfigGet().then((result) => {
       if (cancelled || !result.success) return
-      setAvailableModels(result.config?.availableModels ?? [])
+      setAvailableModels(
+        Array.isArray(result.config?.models)
+          ? result.config.models.map((entry) => entry.id)
+          : []
+      )
     })
     return () => {
       cancelled = true

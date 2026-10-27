@@ -5,6 +5,8 @@ import { Settings } from '../src/components/Settings'
 import { useI18nStore } from '../src/store/i18nStore'
 import { INITIAL_UPDATE_STATE, useUpdaterStore } from '../src/store/updaterStore'
 import { api } from '../src/api'
+import { DialogHost } from '../src/components/DialogHost'
+import { useDialogStore } from '../src/store/dialogStore'
 import { translations } from '../src/i18n/translations'
 import type { UpdateState } from '../src/types/electron'
 
@@ -73,37 +75,81 @@ afterEach(() => {
   })
 })
 
-describe('settings provider image capability', () => {
-  it('persists the models checked as image-capable', async () => {
+describe('settings provider model capabilities', () => {
+  it('persists the context window and image flag of each model', async () => {
     vi.mocked(api.apiConfigGet).mockResolvedValue({
       success: true,
       config: {
         provider: 'custom',
         apiUrl: 'https://api.example.com/v1',
         apiKey: 'sk-test',
-        availableModels: ['deepseek-flash', 'text-only-model'],
         selectedModel: 'deepseek-flash',
-        imageModels: ['deepseek-flash'],
+        models: [
+          { id: 'deepseek-flash', contextWindow: 128_000, image: true },
+          { id: 'text-only-model', contextWindow: 64_000, image: false },
+        ],
       },
     })
 
     render(<Settings initialSection="api" />)
 
+    // 只读模型的勾选状态：图片开关与容量下拉都在同一行
     const flash = (await screen.findByRole('checkbox', {
-      name: 'deepseek-flash',
+      name: 'deepseek-flash 图片',
     })) as HTMLInputElement
     expect(flash.checked).toBe(true)
 
-    fireEvent.click(screen.getByRole('checkbox', { name: 'text-only-model' }))
-    fireEvent.click(
-      screen.getByRole('button', { name: translations.zh.saveConfiguration })
-    )
+    fireEvent.click(screen.getByRole('checkbox', { name: 'text-only-model 图片' }))
+    fireEvent.change(screen.getByLabelText('text-only-model 上下文容量'), {
+      target: { value: '1000000' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.saveConfiguration }))
 
     await waitFor(() => expect(api.apiConfigSave).toHaveBeenCalled())
     const saved = vi.mocked(api.apiConfigSave).mock.calls[0][0] as {
-      imageModels: string[]
+      models: Array<{ id: string; contextWindow: number; image: boolean }>
     }
-    expect(saved.imageModels).toEqual(['deepseek-flash', 'text-only-model'])
+    expect(saved.models).toEqual([
+      { id: 'deepseek-flash', contextWindow: 128_000, image: true },
+      { id: 'text-only-model', contextWindow: 1_000_000, image: true },
+    ])
+  })
+
+  it('explains why saving was blocked while sessions are running', async () => {
+    vi.mocked(api.apiConfigGet).mockResolvedValue({
+      success: true,
+      config: {
+        provider: 'custom',
+        apiUrl: 'https://api.example.com/v1',
+        apiKey: 'sk-test',
+        selectedModel: 'deepseek-flash',
+        models: [{ id: 'deepseek-flash', contextWindow: 128_000, image: false }],
+      },
+    })
+    vi.mocked(api.apiConfigSave).mockResolvedValue({
+      success: false,
+      error: 'Agent sessions are running',
+      code: 'AGENT_BUSY',
+      workspaces: [{ path: '/ws', sessionIds: ['s1'] }],
+    })
+
+    render(
+      <>
+        <Settings initialSection="api" />
+        <DialogHost />
+      </>
+    )
+
+    const saveButton = await screen.findByRole('button', {
+      name: translations.zh.saveConfiguration,
+    })
+    expect((saveButton as HTMLButtonElement).disabled).toBe(false)
+
+    fireEvent.click(saveButton)
+
+    expect(await screen.findByText(translations.zh.agentBusyMessage.replace('{count}', '1'))).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.dialogGotIt }))
+    await waitFor(() => expect(useDialogStore.getState().current).toBeNull())
   })
 })
 

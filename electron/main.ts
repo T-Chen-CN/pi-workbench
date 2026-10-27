@@ -31,7 +31,7 @@ import { registerAgentIpc } from './ipc/agent.js'
 import { registerGitIpc } from './ipc/git.js'
 import { repoSync } from './repo-sync.js'
 import { registerWorkspaceIpc, closeAllWorkspaceWatchers } from './ipc/workspace.js'
-import { getActiveProviderApiKey } from './ipc/api-config.js'
+import { getActiveProviderApiKey, setRunningAgentsProvider } from './ipc/api-config.js'
 import {
   WEB_SEARCH_KEY_ENV_PREFIX,
   initializeWebSearch,
@@ -303,6 +303,8 @@ if (process.platform === 'win32') {
 
 /** 每个打开的工作区一个 Agent 实例 */
 const agentRegistry = new AgentRegistry()
+// 配置保存前检查运行中会话：api-config 不直接持有注册表，由这里注入查询
+setRunningAgentsProvider(() => agentRegistry.listRunning())
 let fileLogger: FileLogger | null = null
 let rendererLogger: FileLogger | null = null
 let agentFileLogger: FileLogger | null = null

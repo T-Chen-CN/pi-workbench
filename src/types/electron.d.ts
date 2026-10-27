@@ -649,14 +649,23 @@ export interface WorkspaceResult {
 // Pi Agent types
 export type ApiProvider = 'anthropic' | 'openai' | 'custom'
 
+/** 上下文容量档位：设置页只允许四档，存十进制整数 */
+export type ModelContextWindow = 64000 | 128000 | 256000 | 1000000
+
+/** 设置页维护的单个模型能力 */
+export interface ApiModelEntry {
+  id: string
+  contextWindow: ModelContextWindow
+  image: boolean
+}
+
 export interface ApiConfig {
   provider: ApiProvider
   apiUrl: string
   apiKey: string
-  availableModels: string[]
   selectedModel: string
-  /** 用户勾选为“支持图片”的模型（R-08 优化）；缺省时由主进程填充内置默认值 */
-  imageModels?: string[]
+  /** 模型列表：容量与图片能力由用户显式设置，是 models.json 的唯一来源 */
+  models: ApiModelEntry[]
 }
 
 // 联网搜索（内置能力）
@@ -810,12 +819,10 @@ export interface ToolResultMeta {
 export interface ModelCapabilityInfo {
   id: string
   available: boolean
-  /** catalog：应用内置已知元数据；default：供应商未声明（显示未知） */
-  source: 'catalog' | 'default'
-  contextWindow: number | null
+  contextWindow: number
   maxTokens: number | null
   reasoning: boolean | null
-  vision: boolean | null
+  vision: boolean
   thinkingLevels: string[]
 }
 
@@ -1093,6 +1100,9 @@ export interface ApiConfigGetResult {
 export interface ApiConfigSaveResult {
   success: boolean
   error?: string
+  /** AGENT_BUSY：存在运行中会话，保存被拦下且未写盘 */
+  code?: 'AGENT_BUSY'
+  workspaces?: Array<{ path: string; sessionIds: string[] }>
 }
 
 export interface FetchModelsResult {

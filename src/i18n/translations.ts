@@ -351,7 +351,6 @@ export const translations = {
     thinkingMax: '最高',
     modelUnavailable: '（不可用）',
     modelUnavailableHint: '当前模型不可用：供应商未返回该模型，请在设置中重新获取模型列表',
-    modelCapabilityUnknown: '供应商未提供模型元数据：上下文窗口与思考能力未知',
     modelContextWindow: '{tokens} 上下文',
     modelSupportsThinking: '支持思考',
     modelNoThinking: '不支持思考',
@@ -602,8 +601,12 @@ export const translations = {
     fetching: '获取中...',
     model: '模型',
     modelsAvailable: '（{count} 个可用）',
-    modelImageSupport: '支持图片的模型',
-    modelImageSupportHint: '勾选后该模型可以附加图片；未勾选的模型会阻止发送图片。',
+    modelCapabilityTable: '模型能力',
+    modelColumn: '模型',
+    modelContextColumn: '上下文容量',
+    modelImageColumn: '图片',
+    modelContextHint:
+      '上下文容量只影响应用侧的用量统计与压缩时机，不会真正扩容模型；最低 64K，窗口过小会导致频繁压缩。',
     noModelsAvailable: '暂无可用模型，请先获取',
     saveConfiguration: '保存配置',
     saving: '保存中...',
@@ -620,8 +623,11 @@ export const translations = {
     fetchModelsFailed: '获取模型失败：{error}',
     apiKeyRequired: '请填写 API 密钥',
     selectModelFirst: '请先获取并选择一个模型',
-    apiConfigSaved: 'API 配置已保存',
+    apiConfigSavedReopen: 'API 配置已保存，会话将重新打开',
     saveConfigFailed: '保存配置失败：{error}',
+    agentBusyTitle: '无法保存',
+    agentBusyMessage: '有 {count} 个会话正在运行，请先停止后再保存。',
+    dialogGotIt: '知道了',
 
     // Error boundary
     errorBoundaryTitle: '出错了',
@@ -1049,8 +1055,6 @@ export const translations = {
     modelUnavailable: ' (unavailable)',
     modelUnavailableHint:
       'This model is unavailable: the provider did not return it. Fetch the model list again in Settings.',
-    modelCapabilityUnknown:
-      'The provider did not supply model metadata: context window and thinking support are unknown',
     modelContextWindow: '{tokens} context',
     modelSupportsThinking: 'thinking',
     modelNoThinking: 'no thinking',
@@ -1305,9 +1309,12 @@ export const translations = {
     fetching: 'Fetching...',
     model: 'Model',
     modelsAvailable: '({count} available)',
-    modelImageSupport: 'Image-capable models',
-    modelImageSupportHint:
-      'Checked models can receive images; unchecked models block image attachments.',
+    modelCapabilityTable: 'Model capabilities',
+    modelColumn: 'Model',
+    modelContextColumn: 'Context window',
+    modelImageColumn: 'Images',
+    modelContextHint:
+      'The context window only affects token accounting and compaction timing in this app; it does not enlarge the model. Minimum 64K — smaller windows compact frequently.',
     noModelsAvailable: 'No models available - fetch first',
     saveConfiguration: 'Save Configuration',
     saving: 'Saving...',
@@ -1324,8 +1331,11 @@ export const translations = {
     fetchModelsFailed: 'Failed to fetch models: {error}',
     apiKeyRequired: 'API Key is required',
     selectModelFirst: 'Please fetch and select a model first',
-    apiConfigSaved: 'API configuration saved',
+    apiConfigSavedReopen: 'API configuration saved; sessions will reopen',
     saveConfigFailed: 'Failed to save configuration: {error}',
+    agentBusyTitle: 'Cannot save',
+    agentBusyMessage: '{count} session(s) are running. Stop them before saving.',
+    dialogGotIt: 'Got it',
 
     // Error boundary
     errorBoundaryTitle: 'Something went wrong',

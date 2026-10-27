@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { confirmDialog, promptDialog, useDialogStore } from '../src/store/dialogStore'
+import { alertDialog, confirmDialog, promptDialog, useDialogStore } from '../src/store/dialogStore'
 
 afterEach(() => {
   useDialogStore.setState({ current: null })
@@ -23,6 +23,24 @@ describe('dialog store', () => {
     const cancelled = promptDialog({ title: 'Rename' })
     useDialogStore.getState().close(null)
     await expect(cancelled).resolves.toBeNull()
+  })
+
+  it('resolves an alert dialog without a result', async () => {
+    const promise = alertDialog({ title: 'Cannot save', message: 'Sessions are running' })
+    expect(useDialogStore.getState().current?.kind).toBe('alert')
+
+    useDialogStore.getState().close(null)
+    await expect(promise).resolves.toBeUndefined()
+    expect(useDialogStore.getState().current).toBeNull()
+  })
+
+  it('settles an open alert when another dialog takes over', async () => {
+    const alert = alertDialog({ message: 'Heads up' })
+    const confirm = confirmDialog({ message: 'Delete?' })
+
+    await expect(alert).resolves.toBeUndefined()
+    useDialogStore.getState().close(false)
+    await expect(confirm).resolves.toBe(false)
   })
 
   it('cancels the previous dialog when a new one opens', async () => {

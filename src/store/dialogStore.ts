@@ -17,6 +17,12 @@ export interface PromptDialogOptions {
   cancelLabel?: string
 }
 
+export interface AlertDialogOptions {
+  title?: string
+  message: string
+  confirmLabel?: string
+}
+
 type DialogRequest =
   | {
       kind: 'confirm'
@@ -27,6 +33,11 @@ type DialogRequest =
       kind: 'prompt'
       options: PromptDialogOptions
       resolve: (value: string | null) => void
+    }
+  | {
+      kind: 'alert'
+      options: AlertDialogOptions
+      resolve: () => void
     }
 
 interface DialogState {
@@ -43,7 +54,8 @@ export const useDialogStore = create<DialogState>((set, get) => ({
     const current = get().current
     if (current) {
       if (current.kind === 'confirm') current.resolve(false)
-      else current.resolve(null)
+      else if (current.kind === 'prompt') current.resolve(null)
+      else current.resolve()
     }
     set({ current: dialog })
   },
@@ -54,8 +66,10 @@ export const useDialogStore = create<DialogState>((set, get) => ({
     set({ current: null })
     if (current.kind === 'confirm') {
       current.resolve(Boolean(result))
-    } else {
+    } else if (current.kind === 'prompt') {
       current.resolve(typeof result === 'string' ? result : null)
+    } else {
+      current.resolve()
     }
   },
 }))
@@ -71,5 +85,12 @@ export function confirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
 export function promptDialog(options: PromptDialogOptions): Promise<string | null> {
   return new Promise((resolve) => {
     useDialogStore.getState().open({ kind: 'prompt', options, resolve })
+  })
+}
+
+/** 单按钮提示弹窗：只告知，不做选择（操作未执行时说明原因） */
+export function alertDialog(options: AlertDialogOptions): Promise<void> {
+  return new Promise((resolve) => {
+    useDialogStore.getState().open({ kind: 'alert', options, resolve })
   })
 }

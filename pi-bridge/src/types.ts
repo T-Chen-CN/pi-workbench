@@ -13,6 +13,22 @@ export interface AgentLogger {
   debug: (...args: unknown[]) => void
 }
 
+/**
+ * 上下文容量档位（十进制整数）。
+ * 下限 64K：Pi 默认 reserveTokens=16384 + keepRecentTokens=20000，
+ * 32K 窗口的触发点会低于保留量，导致反复压缩。
+ */
+export const CONTEXT_WINDOW_OPTIONS = [64_000, 128_000, 256_000, 1_000_000] as const
+
+export type ModelContextWindow = (typeof CONTEXT_WINDOW_OPTIONS)[number]
+
+/** 设置页维护的单个模型能力；contextWindow 与 image 均由用户显式指定 */
+export interface ApiModelEntry {
+  id: string
+  contextWindow: ModelContextWindow
+  image: boolean
+}
+
 /** 可展示的工具步骤 */
 export type AgentTracePart =
   | { type: 'text'; id: string; text: string }
@@ -94,10 +110,8 @@ export interface AgentConfig {
     apiUrl: string
     apiKey: string
     selectedModel: string
-    /** 供应商返回的可选模型列表；用于写入 models.json 与能力提示 */
-    availableModels?: string[]
-    /** 用户勾选为“支持图片”的模型；未提供时按内置已知信息兜底 */
-    imageModels?: string[]
+    /** 模型列表：容量档位与图片能力由用户设定，是 models.json 的唯一来源 */
+    models?: ApiModelEntry[]
   }
   /** 日志出口；主进程注入 agent.log，未注入时退回 console */
   logger?: AgentLogger
@@ -141,16 +155,14 @@ export interface SessionSummary {
   updatedAt: number
 }
 
-/** 模型能力提示（R-06）；null 表示供应商未声明，界面显示“未知” */
+/** 模型能力提示（R-06）：容量来自用户设置，maxTokens 由档位与 catalog 收敛 */
 export interface ModelCapabilityInfo {
   id: string
   available: boolean
-  /** catalog：应用内置已知元数据；default：供应商未声明，使用 SDK 默认值 */
-  source: 'catalog' | 'default'
-  contextWindow: number | null
+  contextWindow: number
   maxTokens: number | null
   reasoning: boolean | null
-  vision: boolean | null
+  vision: boolean
   thinkingLevels: string[]
 }
 
