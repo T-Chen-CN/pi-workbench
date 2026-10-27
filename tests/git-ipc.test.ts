@@ -7,6 +7,12 @@ import { tmpdir } from 'os'
 /** 捕获 registerGitIpc 注册的处理器，直接按通道调用 */
 const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
 
+const deviceLogin = vi.hoisted(() => ({
+  start: vi.fn(),
+  cancel: vi.fn(),
+  open: vi.fn(),
+}))
+
 vi.mock('electron', () => ({
   app: {},
   ipcMain: {
@@ -37,6 +43,12 @@ vi.mock('../electron/github-auth', () => ({
 vi.mock('../electron/github-oauth', () => ({
   readGithubOAuthConfig: async () => null,
   startGithubOAuth: async () => ({ success: false }),
+}))
+
+vi.mock('../electron/github-device-login', () => ({
+  startGithubDeviceLogin: deviceLogin.start,
+  cancelGithubDeviceLogin: deviceLogin.cancel,
+  openGithubDeviceVerification: deviceLogin.open,
 }))
 
 vi.mock('../electron/git-worktrees', async (importOriginal) => {
@@ -72,6 +84,9 @@ describe('git IPC commit detail', () => {
   beforeEach(async () => {
     clearGitCaches()
     vi.mocked(getRepoInfo).mockClear()
+    deviceLogin.start.mockReset()
+    deviceLogin.cancel.mockReset()
+    deviceLogin.open.mockReset()
     workspace = await fs.mkdtemp(path.join(tmpdir(), 'pi-git-ipc-'))
     git(['init', '-b', 'main'])
     git(['config', 'user.email', 'test@example.com'])
@@ -162,5 +177,40 @@ describe('git IPC commit detail', () => {
     const result = await invoke('git:createBranch', workspace, head, 'bad name')
 
     expect(result.success).toBe(false)
+  })
+
+  it('设备码登录通道返回用户码', async () => {
+    deviceLogin.start.mockResolvedValue({
+      success: true,
+      userCode: 'ABCD-1234',
+      verificationUri: 'https://github.com/login/device',
+      expiresIn: 900,
+      interval: 5,
+    })
+
+    const result = await invoke('github:auth:device:start')
+    expect(result).toMatchObject({ success: true, userCode: 'ABCD-1234', interval: 5 })
+  })
+
+  it('取消设备码登录', async () => {
+    deviceLogin.cancel.mockReturnValue(true)
+
+    await expect(invoke('github:auth:device:cancel')).resolves.toEqual({
+      success: true,
+      cancelled: true,
+    })
+  })
+
+  it('重新打开设备授权页', async () => {
+    deviceLogin.open.mockResolvedValue(true)
+
+    await expect(invoke('github:auth:device:open')).resolves.toEqual({ success: true })
+  })
+
+  it('解除关联时取消进行中的设备码登录', async () => {
+    deviceLogin.cancel.mockReturnValue(false)
+
+    await invoke('github:auth:logout')
+    expect(deviceLogin.cancel).toHaveBeenCalled()
   })
 })
