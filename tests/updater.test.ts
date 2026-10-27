@@ -25,6 +25,7 @@ vi.mock('electron', () => ({
 
 import {
   cleanupCompletedUpdateCache,
+  pruneUpdateCache,
   resolveUpdaterCacheBase,
   UpdateController,
   classifyUpdateError,
@@ -284,7 +285,33 @@ describe('external update cache', () => {
     expect((fake as { installDirectory?: string }).installDirectory).toBeUndefined()
   })
 
-  it('removes the external cache and flag after an install', async () => {
+  it('keeps the differential base and removes the rest after an install', async () => {
+    const local = makeTempDir()
+    const appDir = makeTempDir()
+    const cacheBase = path.join(local, 'Pi-Workbench-Update')
+    const updaterDir = path.join(cacheBase, 'pi-workbench-updater')
+    fs.mkdirSync(path.join(updaterDir, 'pending'), { recursive: true })
+    fs.writeFileSync(path.join(updaterDir, 'pending', 'Setup.exe'), 'x')
+    fs.writeFileSync(path.join(updaterDir, 'installer.exe'), 'installer')
+    fs.writeFileSync(path.join(updaterDir, 'current.blockmap'), 'blockmap')
+    fs.writeFileSync(`${cacheBase}.flag`, 'installed')
+
+    const cleaned = await cleanupCompletedUpdateCache({
+      appDir,
+      platform: 'win32',
+      localAppData: local,
+      retries: 1,
+      delayMs: 0,
+    })
+
+    expect(cleaned).toBe(true)
+    expect(fs.existsSync(path.join(updaterDir, 'pending'))).toBe(false)
+    expect(fs.existsSync(path.join(updaterDir, 'installer.exe'))).toBe(true)
+    expect(fs.existsSync(path.join(updaterDir, 'current.blockmap'))).toBe(true)
+    expect(fs.existsSync(`${cacheBase}.flag`)).toBe(false)
+  })
+
+  it('removes the external cache when it holds no differential base', async () => {
     const local = makeTempDir()
     const appDir = makeTempDir()
     const cacheBase = path.join(local, 'Pi-Workbench-Update')
@@ -358,7 +385,27 @@ describe('external update cache', () => {
     expect(fs.existsSync(legacy)).toBe(false)
   })
 
-  it('clears the external cache when no update is available', async () => {
+  it('keeps the differential base when no update is available', async () => {
+    const local = makeTempDir()
+    const appDir = makeTempDir()
+    const cacheDir = path.join(local, 'Pi-Workbench-Update', 'pi-workbench-updater')
+    fs.mkdirSync(path.join(cacheDir, 'pending'), { recursive: true })
+    fs.writeFileSync(path.join(cacheDir, 'pending', 'Setup.exe'), 'x')
+    fs.writeFileSync(path.join(cacheDir, 'installer.exe'), 'installer')
+    fs.writeFileSync(path.join(cacheDir, 'current.blockmap'), 'blockmap')
+
+    const { controller } = createController(
+      { appDir, platform: 'win32', localAppData: local },
+      { isUpdateAvailable: false, updateInfo: { version: '0.2.0' } }
+    )
+
+    await controller.check()
+    expect(fs.existsSync(path.join(cacheDir, 'pending'))).toBe(false)
+    expect(fs.existsSync(path.join(cacheDir, 'installer.exe'))).toBe(true)
+    expect(fs.existsSync(path.join(cacheDir, 'current.blockmap'))).toBe(true)
+  })
+
+  it('removes the stale cache directory when it holds no differential base', async () => {
     const local = makeTempDir()
     const appDir = makeTempDir()
     const cacheDir = path.join(local, 'Pi-Workbench-Update', 'pi-workbench-updater')
@@ -372,5 +419,32 @@ describe('external update cache', () => {
 
     await controller.check()
     expect(fs.existsSync(cacheDir)).toBe(false)
+  })
+
+  it('prunes everything but the differential base', () => {
+    const local = makeTempDir()
+    const cacheBase = path.join(local, 'Pi-Workbench-Update')
+    const updaterDir = path.join(cacheBase, 'pi-workbench-updater')
+    fs.mkdirSync(path.join(updaterDir, 'pending'), { recursive: true })
+    fs.writeFileSync(path.join(updaterDir, 'pending', 'Setup.exe'), 'x')
+    fs.writeFileSync(path.join(updaterDir, 'installer.exe'), 'installer')
+    fs.writeFileSync(path.join(updaterDir, 'current.blockmap'), 'blockmap')
+    fs.writeFileSync(path.join(cacheBase, 'stray.tmp'), 'x')
+
+    pruneUpdateCache(cacheBase, 'pi-workbench-updater')
+
+    expect(fs.readdirSync(cacheBase)).toEqual(['pi-workbench-updater'])
+    expect(fs.readdirSync(updaterDir).sort()).toEqual(['current.blockmap', 'installer.exe'])
+  })
+
+  it('removes a cache base that has no differential base', () => {
+    const local = makeTempDir()
+    const cacheBase = path.join(local, 'Pi-Workbench-Update')
+    fs.mkdirSync(path.join(cacheBase, 'pi-workbench-updater', 'pending'), { recursive: true })
+    fs.writeFileSync(path.join(cacheBase, 'pi-workbench-updater', 'pending', 'Setup.exe'), 'x')
+
+    pruneUpdateCache(cacheBase, 'pi-workbench-updater')
+
+    expect(fs.existsSync(cacheBase)).toBe(false)
   })
 })

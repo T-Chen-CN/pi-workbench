@@ -165,8 +165,9 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
   - 首个带该脚本的版本需要手动安装（旧版卸载器不受新脚本控制），此后自动更新才会保住数据。
 - 产物文件名必须与更新清单一致：`win` / `mac` / `linux` 都配置了无空格的 `artifactName`。GitHub 会把资产名里的空格替换成点，若使用默认命名，`latest.yml` 中的连字符文件名会 404，自动更新直接失效。
 - 安装包缓存：Windows 使用 `%LOCALAPPDATA%\Pi-Workbench-Update`（安装目录之外）；Linux 使用 `{appDir}/cache/{updaterCacheDirName}`。Windows 的缓存必须在安装目录外——electron-builder 的卸载器按 `$INSTDIR` 路径前缀结束进程，安装器若从安装目录内启动会被误杀。
-- 外部缓存清理：安装器的 `customInstall` 写入 `%LOCALAPPDATA%\Pi-Workbench-Update.flag`，新版本启动时删除缓存目录与标记（带重试）；真正卸载时一并删除。
+- 外部缓存清理：安装器的 `customInstall` 写入 `%LOCALAPPDATA%\Pi-Workbench-Update.flag`，新版本启动时清理缓存中的下载残留并删除标记（带重试，保留差分基准）；真正卸载时一并删除。
 - 安装器副本清理：electron-builder 安装器会把自身复制到 `%LOCALAPPDATA%\pi-workbench-updater\installer.exe`；`customInstall` 在安装完成后删除该副本与目录，应用启动时兜底清理存量。
+- 差分更新：electron-updater 在 Windows 从 `{baseCachePath}/{updaterCacheDirName}/installer.exe` 读取旧安装包做块级差分。`customInstall` 把本次安装的安装包复制到 `%LOCALAPPDATA%\Pi-Workbench-Update\pi-workbench-updater\installer.exe`；启动清理与“无更新”清理只删除 `pending/` 等下载残留，保留该文件与 `current.blockmap`。每个安装常驻一份安装包大小的磁盘；基准过期或损坏时会被 sha512 校验拦下并自动回退全量下载。该机制从“由带复制步骤的安装器安装的版本”开始生效：从旧安装器升级的那一次仍是全量，之后的一次更新开始走差分。
 - 启动期回收：`electron/legacy-paths.ts` 会合并 `~/.pi` 到 `{appDir}/data/agent` 后删除（检测到独立 Pi CLI 时保留），并删除旧默认 userData（`%APPDATA%\pi-workbench` 等）。`app.setPath('userData')` 必须早于单实例锁，Pi SDK 目录通过环境变量固定到应用目录。
 - Windows 更新会设置 `installDirectory = appDir`，安装器始终带 `/D=`，不依赖注册表 `InstallLocation`。
 - CI 与打包冒烟使用 `--publish never`，不会误发布。

@@ -708,7 +708,7 @@ async function initAgent(config: ApiConfig) {
 
 - ✅ Windows 安装包缓存：`%LOCALAPPDATA%\Pi-Workbench-Update`（安装目录之外）。安装器不能从 `$INSTDIR` 内启动——electron-builder 的卸载器会按路径前缀结束进程，会把安装器自己杀掉
 - ✅ Linux 安装包缓存：`{appDir}/cache/{updaterCacheDirName}`（通过自定义 `AppAdapter` 覆盖 electron-updater 的系统缓存目录）
-- ✅ 安装完成后安装器写入 `%LOCALAPPDATA%\Pi-Workbench-Update.flag`；应用启动时依据标记删除外部缓存目录与标记（带重试，失败留给下次启动）
+- ✅ 安装完成后安装器写入 `%LOCALAPPDATA%\Pi-Workbench-Update.flag`；应用启动时依据标记清理外部缓存中的下载残留并删除标记（带重试，失败留给下次启动；差分基准保留）
 - ✅ Windows 更新时设置 `installDirectory = appDir`，让安装器带 `/D=`，不依赖注册表 `InstallLocation`
 - ✅ 没有可用更新时清理过期缓存
 - ✅ 更新事件写入 `{appDir}/logs/main.log`
@@ -717,8 +717,10 @@ async function initAgent(config: ApiConfig) {
 **Windows 更新与数据保护**:
 
 - ✅ 更新安装器从 `%LOCALAPPDATA%\Pi-Workbench-Update` 启动（不在安装目录内），避免被卸载器的按路径进程检测误杀
-- ✅ 安装完成标记与清理：`customInstall` 写 `<缓存根>.flag`，应用启动时删除缓存根与标记；真正卸载时一并清理
-- ✅ 安装器在 `%LOCALAPPDATA%\pi-workbench-updater` 的差分副本由 `customInstall` 删除，启动清理兜底（我们的缓存不在那里，副本不会被读取）
+- ✅ 安装完成标记与清理：`customInstall` 写 `<缓存根>.flag`，应用启动时清理缓存根中的下载残留并删除标记（保留差分基准）；真正卸载时一并清理
+- ✅ 安装器在 `%LOCALAPPDATA%\pi-workbench-updater` 的默认副本由 `customInstall` 删除（electron-updater 读取的是下一行的差分基准），启动清理兜底
+- ✅ 差分更新基准：`customInstall` 把本次安装的安装包复制到 `%LOCALAPPDATA%\Pi-Workbench-Update\pi-workbench-updater\installer.exe`——electron-updater 读取差分旧文件的路径是 `{baseCachePath}/{updaterCacheDirName}/installer.exe`。启动清理与“无更新”清理只删除 `pending/` 等下载残留，保留该文件与 `current.blockmap`
+- ✅ 差分基准的代价与兜底：每个安装常驻一份安装包大小的磁盘；基准过期或损坏时重建文件无法通过 sha512 校验，electron-updater 自动回退全量下载
 - ✅ 更新时的删除逻辑由 `build/installer.nsh` 的 `customRemoveFiles` 接管：只删除
   `resources/installer-manifest.files.txt` / `installer-manifest.dirs.txt` 清单内的程序文件
 - ✅ 清单由 `scripts/after-pack-manifest.js`（electron-builder `afterPack`）生成；清单缺失时更新不删除任何文件

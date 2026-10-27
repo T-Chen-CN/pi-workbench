@@ -185,11 +185,48 @@ export interface UpdateCacheCleanupOptions {
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 /**
+ * 差分会用到、清理时必须保留的缓存项：
+ * - installer.exe：已安装版本的安装包，electron-updater 以此为差分下载的旧文件
+ * - current.blockmap：该版本的块表，缺失时下次要从远端重新拉旧 blockmap
+ */
+const RETAINED_CACHE_ENTRIES = new Set(['installer.exe', 'current.blockmap'])
+
+/** 删除更新缓存目录里除差分基准以外的内容；目录清空后一并移除 */
+function pruneUpdaterCacheDir(cacheDir: string): void {
+  if (!fs.existsSync(cacheDir)) return
+  for (const entry of fs.readdirSync(cacheDir)) {
+    if (RETAINED_CACHE_ENTRIES.has(entry)) continue
+    fs.rmSync(path.join(cacheDir, entry), { recursive: true, force: true })
+  }
+  if (fs.readdirSync(cacheDir).length === 0) {
+    fs.rmdirSync(cacheDir)
+  }
+}
+
+/**
+ * Windows 安装完成后的缓存清理：删除下载残留（pending/、临时文件），
+ * 保留 `{cacheBase}/{updaterCacheDirName}/installer.exe` 与 `current.blockmap`。
+ * 目录里没有基准文件时整体移除。
+ */
+export function pruneUpdateCache(cacheBase: string, updaterCacheDirName: string): void {
+  if (!fs.existsSync(cacheBase)) return
+  for (const entry of fs.readdirSync(cacheBase, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name === updaterCacheDirName) continue
+    fs.rmSync(path.join(cacheBase, entry.name), { recursive: true, force: true })
+  }
+  pruneUpdaterCacheDir(path.join(cacheBase, updaterCacheDirName))
+  if (fs.readdirSync(cacheBase).length === 0) {
+    fs.rmdirSync(cacheBase)
+  }
+}
+
+/**
  * 安装完成后的缓存清理。
  *
- * 安装器在安装完成后写入 `<cacheBase>.flag`；应用启动看到标记就删除整个外部缓存
- * 目录（连同目录本身）。安装器可能仍在退出、文件暂时被占用，因此带重试；失败时
- * 保留标记，下次启动继续清理。
+ * 安装器在安装完成后写入 `<cacheBase>.flag`；应用启动看到标记就清理外部缓存：
+ * Windows 只删除下载残留（`pending/` 等），保留差分基准 `installer.exe` 与
+ * `current.blockmap`；其他平台删除整个目录。安装器可能仍在退出、文件暂时被占用，
+ * 因此带重试；失败时保留标记，下次启动继续清理。
  *
  * 同时清理旧版本遗留在安装目录内的更新缓存（Windows 迁移到外部缓存后不再使用）。
  */
@@ -213,9 +250,18 @@ export async function cleanupCompletedUpdateCache(
   if (pending) {
     for (let attempt = 1; attempt <= retries; attempt += 1) {
       try {
-        fs.rmSync(cacheBase, { recursive: true, force: true })
+        if (options.platform === 'win32') {
+          pruneUpdateCache(cacheBase, DEFAULT_PUBLISH_TARGET.updaterCacheDirName)
+        } else {
+          fs.rmSync(cacheBase, { recursive: true, force: true })
+        }
         fs.rmSync(flagPath, { force: true })
-        logger.info('[Updater] Cleared external update cache:', cacheBase)
+        logger.info(
+          options.platform === 'win32'
+            ? '[Updater] Pruned external update cache:'
+            : '[Updater] Cleared external update cache:',
+          cacheBase
+        )
         pending = false
         break
       } catch (error) {
@@ -672,11 +718,15 @@ export class UpdateController {
     })
   }
 
-  /** 没有可用更新时，旧的待安装包已经过期，删掉以释放空间 */
+  /** 没有可用更新时，旧的待安装包已经过期，删掉以释放空间（保留差分基准） */
   private clearStaleCache(): void {
     const cacheDir = path.join(this.cacheBase, this.publishTarget.updaterCacheDirName)
     try {
-      fs.rmSync(cacheDir, { recursive: true, force: true })
+      if (this.platform === 'win32') {
+        pruneUpdaterCacheDir(cacheDir)
+      } else {
+        fs.rmSync(cacheDir, { recursive: true, force: true })
+      }
     } catch (error) {
       this.logger.warn('[Updater] Failed to clear stale update cache:', errorMessage(error))
     }

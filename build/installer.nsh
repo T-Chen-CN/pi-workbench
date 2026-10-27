@@ -14,6 +14,12 @@
 # 名称取自 appInfo.updaterCacheDirName，与 app-update.yml 保持一致；改了缓存目录名要同步。
 !define PI_UPDATER_STORE "$LOCALAPPDATA\pi-workbench-updater"
 
+# electron-updater 在 Windows 读取差分基准的路径是
+# {baseCachePath}/{updaterCacheDirName}/installer.exe。应用把 baseCachePath 覆盖成了
+# UPDATER_CACHE_ROOT，和 electron-builder 默认保存副本的位置不同，因此 customInstall
+# 要按这个路径另存一份；清理时由应用保留，真正卸载时随 UPDATER_CACHE_ROOT 一起删除。
+!define PI_DIFFERENTIAL_BASE "${UPDATER_CACHE_ROOT}\pi-workbench-updater"
+
 !macro customRemoveFiles
   # un.onInit 把当前目录设为 $INSTDIR，删除前必须离开
   SetOutPath $TEMP
@@ -99,8 +105,13 @@
   FileWrite $9 "installed"
   FileClose $9
 
-  # 安装器在 LOCALAPPDATA 的差分副本：更新缓存已改到外部专用目录，
-  # 这份副本不会被 electron-updater 读取，安装完成后直接删除。
+  # 差分更新基准：保存本次安装的安装包本身，供下一次更新做块级差分。
+  # 静默更新时 $EXEPATH 就是刚下载的新安装包；首次安装时是用户下载的安装包。
+  CreateDirectory "${PI_DIFFERENTIAL_BASE}"
+  CopyFiles /SILENT "$EXEPATH" "${PI_DIFFERENTIAL_BASE}\installer.exe"
+
+  # 安装器在 LOCALAPPDATA 的差分副本：位置与 electron-updater 读取的基准路径不一致，
+  # 上面已经另存了一份，这里直接删除避免占用双份空间。
   Delete "${PI_UPDATER_STORE}\installer.exe"
   RMDir /r "${PI_UPDATER_STORE}"
 
