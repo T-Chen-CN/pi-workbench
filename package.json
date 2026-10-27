@@ -28,37 +28,27 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^1.3.0",
+    "electron-updater": "^6.8.9",
+    "node-pty": "^1.1.0",
+    "pi-bridge": "*",
+    "pi-web-access": "0.45.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@fontsource-variable/geist-mono": "^5.3.0",
     "@fontsource-variable/noto-sans": "^5.3.0",
     "@fontsource-variable/noto-sans-sc": "^5.3.1",
     "@fontsource-variable/noto-serif-sc": "^5.3.1",
     "@fontsource/instrument-serif": "^5.3.0",
     "@tanstack/react-virtual": "^3.14.21",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
-    "electron-updater": "^6.8.9",
-    "lucide-react": "^1.60.0",
-    "monaco-editor": "^0.57.0",
-    "node-pty": "^1.1.0",
-    "pi-bridge": "*",
-    "pi-web-access": "0.45.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-markdown": "^10.1.0",
-    "rehype-highlight": "^7.0.2",
-    "remark-gfm": "^4.0.1",
-    "remark-parse": "^11.0.0",
-    "unified": "^11.0.5",
-    "zustand": "^4.4.0"
-  },
-  "devDependencies": {
-    "@eslint/js": "^9.39.5",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^24.19.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^4.2.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "autoprefixer": "^10.4.17",
     "concurrently": "^8.2.2",
     "cross-env": "^10.1.0",
@@ -67,18 +57,40 @@
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.1.1",
     "jsdom": "^30.1.3",
+    "lucide-react": "^1.60.0",
+    "monaco-editor": "^0.57.0",
     "postcss": "^8.4.32",
     "prettier": "^3.9.10",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.3.3",
     "typescript-eslint": "^8.72.0",
+    "unified": "^11.0.5",
     "vite": "^5.1.0",
     "vitest": "^2.1.9",
-    "wait-on": "^7.2.0"
+    "wait-on": "^7.2.0",
+    "zustand": "^4.4.0"
   },
   "build": {
     "appId": "com.piworkbench.app",
     "productName": "Pi Workbench",
+    "protocols": [
+      {
+        "name": "Pi Workbench OAuth",
+        "schemes": [
+          "pi-workbench"
+        ]
+      }
+    ],
+    "electronLanguages": [
+      "en-US",
+      "zh-CN"
+    ],
     "publish": [
       {
         "provider": "github",
@@ -113,11 +125,16 @@
       "perMachine": false,
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "allowElevation": false,
       "include": "build/installer.nsh",
       "installerIcon": "app-icon.ico",
       "uninstallerIcon": "app-icon.ico",
-      "createDesktopShortcut": "always",
+      "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
+      "installerLanguages": [
+        "en_US",
+        "zh_CN"
+      ],
       "license": "LICENSE"
     },
     "mac": {

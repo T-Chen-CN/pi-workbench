@@ -446,8 +446,9 @@ export class UpdateController {
     if (!this.supported) {
       return { success: false, state: this.state, error: UPDATE_ERROR.notPackaged }
     }
-    // 正在下载时重复检查会打断进度事件，直接返回当前状态
-    if (this.state.status === 'downloading') {
+    // 正在下载或已下载等待安装时，重复检查既会打断进度事件，也会把
+    // downloaded 状态打回 available 导致重复弹窗；直接返回当前状态。
+    if (this.state.status === 'downloading' || this.state.status === 'downloaded') {
       return { success: true, state: this.state }
     }
     if (this.checkPromise) return this.checkPromise

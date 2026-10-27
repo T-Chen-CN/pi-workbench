@@ -185,6 +185,7 @@ export interface ElectronAPI {
   updateInstall: () => Promise<UpdateActionResult>
   updateGetState: () => Promise<UpdateStateResult>
   updateOpenDownload: () => Promise<UpdateActionResult>
+  consumeUpdateNotice: () => Promise<UpdateNoticeResult>
   onUpdateStatus: (callback: (status: UpdateState) => void) => () => void
   appGetInfo: () => Promise<AppInfoResult>
   appHasActiveWork: () => Promise<AppActiveWorkResult>
@@ -1147,6 +1148,12 @@ export interface UpdateActionResult {
 export interface UpdateStateResult {
   success: boolean
   state: UpdateState
+  error?: string
+}
+
+export interface UpdateNoticeResult {
+  success: boolean
+  notice?: { from: string; to: string } | null
   error?: string
 }
 

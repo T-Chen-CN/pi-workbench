@@ -1,8 +1,9 @@
 # 自定义卸载/更新时的文件删除逻辑（electron-builder 的 customRemoveFiles 钩子）。
 #
 # 更新时（安装器带 --updated 调用旧卸载器）只删除清单里的程序文件，
-# config/data/logs/cache 等运行时数据不会被触碰；真正卸载时再额外清理
-# 安装器生成的文件与数据目录。清单由 scripts/after-pack-manifest.js 生成。
+# config/data/logs/cache 等运行时数据不会被触碰；真正卸载时由用户在卸载
+# 欢迎页勾选是否保留数据，未勾选才清理这些目录。清单由
+# scripts/after-pack-manifest.js 生成，受保护目录清单同样由它生成。
 #
 # 更新安装器运行在 %LOCALAPPDATA%\Pi-Workbench-Update（安装目录之外）：electron-builder
 # 的卸载器会按 $INSTDIR 路径前缀结束进程，安装器若从安装目录内启动会被误杀。
@@ -19,6 +20,99 @@
 # UPDATER_CACHE_ROOT，和 electron-builder 默认保存副本的位置不同，因此 customInstall
 # 要按这个路径另存一份；清理时由应用保留，真正卸载时随 UPDATER_CACHE_ROOT 一起删除。
 !define PI_DIFFERENTIAL_BASE "${UPDATER_CACHE_ROOT}\pi-workbench-updater"
+
+# 本 include 早于 common.nsh / MUI2.nsh，LogicLib 与 nsDialogs 需要自己引入
+# （两者都有重复包含保护）。
+!include LogicLib.nsh
+!include nsDialogs.nsh
+
+# 卸载时是否保留 config/data/logs/cache。静默卸载不显示勾选框，默认保留。
+# 只在卸载器构建里声明：安装器构建不包含 un 页面与 un 段，声明了会成为未使用变量
+# （NSIS warnings-as-errors 会因此失败）。
+!ifdef BUILD_UNINSTALLER
+Var KeepUserData
+Var KeepDataCheckbox
+!endif
+
+# 安装器只编译 en_US / zh_CN 两种语言（见 package.json nsis.installerLanguages），
+# LangString 只需覆盖 1033 / 2052。
+LangString PW_KEEP_DATA_TITLE 1033 "Uninstall Pi Workbench"
+LangString PW_KEEP_DATA_TITLE 2052 "卸载 Pi Workbench"
+LangString PW_KEEP_DATA_SUBTITLE 1033 "Choose whether to keep your settings and session data."
+LangString PW_KEEP_DATA_SUBTITLE 2052 "选择是否保留设置与会话数据。"
+LangString PW_KEEP_DATA_CHECKBOX 1033 "Keep configuration and session data (config, data, logs, cache)"
+LangString PW_KEEP_DATA_CHECKBOX 2052 "保留配置与会话数据（config、data、logs、cache）"
+
+!macro customUnInit
+  # 静默卸载（/S）不会显示卸载欢迎页，按安全默认保留数据
+  StrCpy $KeepUserData 1
+!macroend
+
+# 卸载器欢迎页换成带"保留数据"勾选框的自定义页（assisted 安装器专用）。
+# 函数放在宏里定义：这个 include 早于 MUI2.nsh，宏在 assistedInstaller.nsh
+# 展开时 MUI/nsDialogs 宏才可用。
+!macro customUnWelcomePage
+  Function un.pwKeepDataPageShow
+    !insertmacro MUI_HEADER_TEXT "$(PW_KEEP_DATA_TITLE)" "$(PW_KEEP_DATA_SUBTITLE)"
+
+    nsDialogs::Create 1018
+    Pop $0
+    ${If} $0 == error
+      Abort
+    ${EndIf}
+
+    ${NSD_CreateCheckbox} 0 0u 100% 12u "$(PW_KEEP_DATA_CHECKBOX)"
+    Pop $KeepDataCheckbox
+    ${If} $KeepUserData == 1
+      ${NSD_Check} $KeepDataCheckbox
+    ${EndIf}
+
+    nsDialogs::Show
+  FunctionEnd
+
+  Function un.pwKeepDataPageLeave
+    ${NSD_GetState} $KeepDataCheckbox $0
+    ${If} $0 == ${BST_CHECKED}
+      StrCpy $KeepUserData 1
+    ${Else}
+      StrCpy $KeepUserData 0
+    ${EndIf}
+  FunctionEnd
+
+  UninstPage custom un.pwKeepDataPageShow un.pwKeepDataPageLeave
+!macroend
+
+# 安装目录校验：应用把 config/data/logs 写在安装目录内，目录必须可写。
+# 在目录页就拒绝 Program Files / Windows 目录，避免装完启动才提示重装。
+!macro PW_REJECT_IF_UNDER prefix
+  StrLen $1 ${prefix}
+  IntOp $1 $1 + 1
+  StrCpy $2 $INSTDIR $1
+  ${If} $2 == "${prefix}\"
+    Abort
+  ${EndIf}
+!macroend
+
+Function .onVerifyInstDir
+  StrLen $0 $INSTDIR
+  ${If} $0 < 4
+    Abort
+  ${EndIf}
+
+  ${If} $INSTDIR == "$PROGRAMFILES"
+    Abort
+  ${EndIf}
+  !insertmacro PW_REJECT_IF_UNDER $PROGRAMFILES
+
+  ${If} $PROGRAMFILES64 != ""
+    ${If} $INSTDIR == "$PROGRAMFILES64"
+      Abort
+    ${EndIf}
+    !insertmacro PW_REJECT_IF_UNDER $PROGRAMFILES64
+  ${EndIf}
+
+  !insertmacro PW_REJECT_IF_UNDER $WINDIR
+FunctionEnd
 
 !macro customRemoveFiles
   # un.onInit 把当前目录设为 $INSTDIR，删除前必须离开
@@ -60,17 +154,50 @@
     Goto pwAfterDirs
 
   pwNoManifest:
-    # 没有清单：更新时保守处理（不删任何文件），卸载时退回整目录删除
+    # 没有清单：更新时保守处理（不删任何文件）。
+    # 卸载时保留数据只删顶层程序文件与已知程序目录；否则整目录删除。
     ${ifNot} ${isUpdated}
-      RMDir /r $INSTDIR
+      ${if} $KeepUserData == 1
+        Delete "$INSTDIR\*.*"
+        RMDir /r "$INSTDIR\locales"
+        RMDir /r "$INSTDIR\resources"
+        RMDir /r "$INSTDIR\swiftshader"
+      ${else}
+        RMDir /r $INSTDIR
+      ${endIf}
       Goto pwEnd
     ${endIf}
     DetailPrint "Installer manifest not found; skipping file removal."
     Goto pwEnd
 
   pwAfterDirs:
+    # 运行时数据只在真正卸载且用户未勾选“保留数据”时删除。
+    # 受保护目录清单由 afterPack 生成，避免与 JS 侧名单两处维护。
+    ${ifNot} ${isUpdated}
+      ${if} $KeepUserData != 1
+        ClearErrors
+        FileOpen $0 "$INSTDIR\resources\installer-manifest.protected.txt" r
+        IfErrors pwProtectedDone
+
+      pwProtectedLoop:
+        ClearErrors
+        FileRead $0 $1
+        IfErrors pwProtectedEnd
+        StrCpy $1 $1 -2
+        StrCmp $1 "" pwProtectedLoop
+        RMDir /r "$INSTDIR\$1"
+        Goto pwProtectedLoop
+
+      pwProtectedEnd:
+        FileClose $0
+
+      pwProtectedDone:
+      ${endIf}
+    ${endIf}
+
     Delete "$INSTDIR\resources\installer-manifest.files.txt"
     Delete "$INSTDIR\resources\installer-manifest.dirs.txt"
+    Delete "$INSTDIR\resources\installer-manifest.protected.txt"
 
     ${ifNot} ${isUpdated}
       # 安装器生成、不在清单内的文件（更新时由新安装包覆盖）。
@@ -81,12 +208,6 @@
       Delete "$INSTDIR\resources\elevate.exe"
       Delete "$INSTDIR\.write-probe"
       RMDir "$INSTDIR\resources"
-
-      # 运行时数据（更新时保留，卸载时删除）
-      RMDir /r "$INSTDIR\config"
-      RMDir /r "$INSTDIR\data"
-      RMDir /r "$INSTDIR\logs"
-      RMDir /r "$INSTDIR\cache"
 
       # 外部更新缓存：更新时安装器正从其中运行，只有真正卸载才清理
       RMDir /r "${UPDATER_CACHE_ROOT}"

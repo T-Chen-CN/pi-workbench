@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateInstall: () => ipcRenderer.invoke('update:install'),
   updateGetState: () => ipcRenderer.invoke('update:getState'),
   updateOpenDownload: () => ipcRenderer.invoke('update:openDownload'),
+  consumeUpdateNotice: () => ipcRenderer.invoke('app:consumeUpdateNotice'),
   onUpdateStatus: (callback: (status: unknown) => void) => {
     const listener = (_event: unknown, status: unknown) => callback(status)
     ipcRenderer.on('update:status', listener)

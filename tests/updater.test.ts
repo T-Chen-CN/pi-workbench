@@ -187,6 +187,27 @@ describe('UpdateController', () => {
     expect(fake.quitAndInstall).toHaveBeenCalledWith(true, true)
   })
 
+  it('does not re-check while an update is downloaded and waiting to install', async () => {
+    const { controller, fake } = createController(
+      {},
+      { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    )
+    await controller.check()
+    await controller.download()
+    expect(controller.getState().status).toBe('downloaded')
+
+    const checkSpy = vi.fn(async () => ({
+      isUpdateAvailable: true,
+      updateInfo: { version: '0.3.0' },
+    }))
+    ;(fake as unknown as { checkForUpdates: typeof checkSpy }).checkForUpdates = checkSpy
+
+    const result = await controller.check()
+
+    expect(checkSpy).not.toHaveBeenCalled()
+    expect(result.state.status).toBe('downloaded')
+  })
+
   it('checks macOS releases through GitHub and never auto-installs', async () => {
     electronMock.fetch.mockResolvedValue({
       ok: true,

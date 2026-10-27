@@ -1,6 +1,7 @@
 export declare const PROTECTED_TOP_LEVEL: readonly string[]
 export declare const MANIFEST_FILES: string
 export declare const MANIFEST_DIRS: string
+export declare const MANIFEST_PROTECTED: string
 export declare const MANIFEST_DIR: string
 
 export interface InstallerManifest {
@@ -13,6 +14,7 @@ export interface InstallerManifestWriteResult {
   dirs: number
   filesPath: string
   dirsPath: string
+  protectedPath: string
 }
 
 export declare function validateManifestEntry(entry: string): void

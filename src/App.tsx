@@ -140,6 +140,21 @@ export default function App() {
     }
   }, [applyUpdateState])
 
+  // 更新后首次启动：主进程在版本变化时写入提示，读取一次即清空
+  useEffect(() => {
+    let active = true
+    api
+      .consumeUpdateNotice()
+      .then((result) => {
+        if (!active || !result.success || !result.notice) return
+        toast.info(t('updatedToVersion', { version: result.notice.to }))
+      })
+      .catch((err) => console.error('Failed to read update notice:', err))
+    return () => {
+      active = false
+    }
+  }, [t])
+
   // 窗口标题、文档语言与主题跟随设置
   useEffect(() => {
     document.title = t('appTitle')

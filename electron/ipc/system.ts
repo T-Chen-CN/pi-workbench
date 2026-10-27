@@ -12,6 +12,9 @@ import type { UpdateController, UpdateState } from '../updater.js'
 /** 启动后延迟检查，避免和窗口首屏、插件加载抢网络 */
 export const UPDATE_CHECK_DELAY_MS = 12_000
 
+/** 启动后的定时检查间隔：12 小时 */
+export const UPDATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000
+
 export interface SystemIpcContext {
   getMainWindow: () => BrowserWindow | null
   terminalManager: TerminalManager
@@ -22,6 +25,13 @@ export interface SystemIpcContext {
 
 let updateController: UpdateController | null = null
 let checkUpdatesImpl: (() => Promise<void>) | null = null
+
+/** 更新后首次启动的提示；渲染进程读取一次后清空 */
+let pendingUpdateNotice: { from: string; to: string } | null = null
+
+export function setUpdateNotice(notice: { from: string; to: string }): void {
+  pendingUpdateNotice = notice
+}
 
 /** 启动后延迟调用；未注册 IPC 或未打包时为空操作 */
 export async function checkForUpdates(): Promise<void> {
@@ -206,6 +216,12 @@ export function registerSystemIpc(context: SystemIpcContext): void {
     const controller = await ensureUpdateController()
     if (!controller) return { success: false, error: 'ERR_UPDATE_NOT_PACKAGED' }
     return controller.openDownloadPage()
+  })
+
+  handleIpc('app:consumeUpdateNotice', () => {
+    const notice = pendingUpdateNotice
+    pendingUpdateNotice = null
+    return { success: true, notice }
   })
 
   checkUpdatesImpl = async () => {
