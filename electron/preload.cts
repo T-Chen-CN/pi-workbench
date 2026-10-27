@@ -347,6 +347,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('github:auth:complete', listener)
     return () => ipcRenderer.removeListener('github:auth:complete', listener)
   },
+  githubAuthDeviceStart: () => ipcRenderer.invoke('github:auth:device:start'),
+  githubAuthDeviceCancel: () => ipcRenderer.invoke('github:auth:device:cancel'),
+  githubAuthDeviceOpen: () => ipcRenderer.invoke('github:auth:device:open'),
+  onGithubAuthDeviceEvent: (
+    callback: (payload: {
+      status: 'pending' | 'slow_down' | 'expired' | 'denied' | 'error'
+      interval?: number
+      error?: string
+    }) => void
+  ) => {
+    const listener = (
+      _event: unknown,
+      payload: {
+        status: 'pending' | 'slow_down' | 'expired' | 'denied' | 'error'
+        interval?: number
+        error?: string
+      }
+    ) => callback(payload)
+    ipcRenderer.on('github:auth:device:event', listener)
+    return () => ipcRenderer.removeListener('github:auth:device:event', listener)
+  },
   gitSetGithubToken: (token: string) => ipcRenderer.invoke('git:setGithubToken', token),
   gitPrStatus: (workspaceDir: string, worktreePath?: string) =>
     ipcRenderer.invoke('git:prStatus', workspaceDir, worktreePath),
