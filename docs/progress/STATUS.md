@@ -17,7 +17,7 @@
 
 ## 当前版本
 
-- **版本**: 0.6.1
+- **版本**: 0.6.2
 - **框架**: Electron 44 + React 19 + TypeScript
 - **Agent**: `@earendil-works/pi-coding-agent` 1.3.0
 - **状态**: Phase 6 持续优化
@@ -190,6 +190,7 @@
 - ✅ 2026-10-27 发布 v0.6.0：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含会话 Git worktree（按轮次切换、共享复用与生命周期管理）、Git 面板全分支提交图重构（ref 分类着色、合并标记、列宽引导、并行提交详情）、GitHub OAuth 登录（PKCE + PAT 回退）与 PR/CI 状态、印章品牌标识与 TChen 签名（设计系统 v1.31）、内置联网搜索
 - ✅ 2026-10-27 发布 v0.6.1：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含 GitHub Device Flow 登录（内置 OAuth client ID，替代 PKCE 手动贴码流程）与更新后 shell 缓存刷新（Windows 安装器 `SHChangeNotify` + 三平台启动兜底 `shell-refresh.ts`）
 - ✅ 2026-10-27 启动页与窗口形变：窗口先以 420×260 小窗显示静态启动页，面板数据就绪后停留满 600ms 再 400ms 放大到 1200×800，遮罩 150ms 淡出；主题与语言随 URL 预置，暗色首帧不再闪纸色；启动期只渲染启动页，`WorkspaceView` 改为懒加载（xterm / Markdown 离开启动路径）；主进程把权限迁移、SQLite 播种与联网配置移到建窗之后。设计系统 v1.32
+- ✅ 2026-10-27 发布 v0.6.2：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含启动页与单窗口形变（420×260 → 1 秒放大到 1200×800）、安装包瘦身与安装/卸载加固、Windows 差分更新恢复、Git 面板自动同步与会话 id 保留
 - ✅ 大文件模式与虚滚动（2026-10-21：聊天 / Diff / 文件树虚拟滚动，>2MB 关闭换行折叠，>10MB 只读）
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
