@@ -132,4 +132,18 @@ describe('GitHub device flow', () => {
     await clearGithubToken()
     await expect(readGithubAuth()).resolves.toEqual({ token: null, clientId: 'client-1' })
   })
+
+  it('marks poll failures as retryable only for network errors', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('fetch failed'))
+    await expect(pollDeviceFlow('client-1', 'device-1')).resolves.toMatchObject({
+      status: 'error',
+      retryable: true,
+    })
+
+    fetchMock.mockResolvedValueOnce(response({ error: 'incorrect_client_credentials' }))
+    await expect(pollDeviceFlow('client-1', 'device-1')).resolves.toMatchObject({
+      status: 'error',
+      retryable: false,
+    })
+  })
 })

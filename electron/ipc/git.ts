@@ -16,6 +16,11 @@ import {
   startGithubOAuth,
 } from '../github-oauth.js'
 import {
+  cancelGithubDeviceLogin,
+  openGithubDeviceVerification,
+  startGithubDeviceLogin,
+} from '../github-device-login.js'
+import {
   checkout,
   commitDetail,
   createBranch,
@@ -340,6 +345,32 @@ export function registerGitIpc(context: GitIpcContext): void {
 
   handleIpc('github:auth:start', async () => startGithubOAuth())
 
+  // GitHub 设备码登录：clientId 内置，所有设备零配置
+  handleIpc('github:auth:device:start', async () => {
+    const window = context.getMainWindow()
+    return startGithubDeviceLogin({
+      onEvent: (event) => {
+        if (window && !window.isDestroyed()) {
+          window.webContents.send('github:auth:device:event', event)
+        }
+      },
+      onComplete: (result) => {
+        if (window && !window.isDestroyed()) {
+          window.webContents.send('github:auth:complete', result)
+        }
+      },
+    })
+  })
+
+  handleIpc('github:auth:device:cancel', async () => ({
+    success: true,
+    cancelled: cancelGithubDeviceLogin(),
+  }))
+
+  handleIpc('github:auth:device:open', async () => ({
+    success: await openGithubDeviceVerification(),
+  }))
+
   handleIpc('github:auth:status', async () => {
     try {
       const { token } = await readGithubAuth()
@@ -353,6 +384,7 @@ export function registerGitIpc(context: GitIpcContext): void {
 
   handleIpc('github:auth:logout', async () => {
     try {
+      cancelGithubDeviceLogin()
       await clearGithubToken()
       return { success: true }
     } catch (error) {

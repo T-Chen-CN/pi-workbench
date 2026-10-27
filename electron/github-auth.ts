@@ -34,7 +34,8 @@ export type DeviceFlowPoll =
   | { status: 'pending' }
   | { status: 'slow_down'; interval: number }
   | { status: 'success'; token: string; scope?: string }
-  | { status: 'expired' | 'denied' | 'error'; error: string }
+  | { status: 'expired' | 'denied'; error: string }
+  | { status: 'error'; error: string; retryable: boolean }
 
 interface GithubAuthFile {
   token?: string
@@ -189,9 +190,14 @@ export async function pollDeviceFlow(
     return {
       status: 'error',
       error: body.error_description || body.error || `GitHub returned ${response.status}`,
+      retryable: false,
     }
   } catch (error) {
-    return { status: 'error', error: error instanceof Error ? error.message : String(error) }
+    return {
+      status: 'error',
+      error: error instanceof Error ? error.message : String(error),
+      retryable: true,
+    }
   }
 }
 

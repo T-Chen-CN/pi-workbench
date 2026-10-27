@@ -37,6 +37,7 @@ import type {
   PendingMessagesMap,
   EditorTabs,
   EditorTabsResult,
+  GithubDeviceLoginEvent,
 } from '../types/electron'
 
 // Mock API for browser development
@@ -349,6 +350,13 @@ const mockAPI = {
   githubAuthStatus: async () => ({ success: true, configured: false }),
   githubAuthLogout: async () => ({ success: true }),
   onGithubAuthComplete: () => () => {},
+  githubAuthDeviceStart: async () => ({
+    success: false,
+    error: 'GitHub login is only available in the Electron app',
+  }),
+  githubAuthDeviceCancel: async () => ({ success: true, cancelled: false }),
+  githubAuthDeviceOpen: async () => ({ success: false }),
+  onGithubAuthDeviceEvent: () => () => {},
   gitSetGithubToken: async () => ({ success: true }),
   gitPrStatus: async () => ({
     success: true,
@@ -508,6 +516,11 @@ export const api = {
       error?: string
     }) => void
   ) => electronAPI.onGithubAuthComplete(callback),
+  githubAuthDeviceStart: () => electronAPI.githubAuthDeviceStart(),
+  githubAuthDeviceCancel: () => electronAPI.githubAuthDeviceCancel(),
+  githubAuthDeviceOpen: () => electronAPI.githubAuthDeviceOpen(),
+  onGithubAuthDeviceEvent: (callback: (payload: GithubDeviceLoginEvent) => void) =>
+    electronAPI.onGithubAuthDeviceEvent(callback),
   gitSetGithubToken: (token: string) => electronAPI.gitSetGithubToken(token),
   gitPrStatus: (workspaceDir: string, worktreePath?: string) =>
     electronAPI.gitPrStatus(workspaceDir, worktreePath),

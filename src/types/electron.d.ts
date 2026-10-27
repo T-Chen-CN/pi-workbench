@@ -126,6 +126,20 @@ export interface GithubAuthStatusResult {
   error?: string
 }
 
+export interface GithubDeviceLoginStartResult {
+  success: boolean
+  userCode?: string
+  verificationUri?: string
+  expiresIn?: number
+  interval?: number
+  error?: string
+}
+
+export type GithubDeviceLoginEvent =
+  | { status: 'pending' }
+  | { status: 'slow_down'; interval: number }
+  | { status: 'expired' | 'denied' | 'error'; error: string }
+
 export interface GitSessionBinding {
   key: string
   path: string
@@ -491,6 +505,12 @@ export interface ElectronAPI {
   githubAuthLogout: () => Promise<{ success: boolean; error?: string }>
   onGithubAuthComplete: (
     callback: (payload: GithubAuthCompletePayload) => void
+  ) => () => void
+  githubAuthDeviceStart: () => Promise<GithubDeviceLoginStartResult>
+  githubAuthDeviceCancel: () => Promise<{ success: boolean; cancelled?: boolean }>
+  githubAuthDeviceOpen: () => Promise<{ success: boolean }>
+  onGithubAuthDeviceEvent: (
+    callback: (payload: GithubDeviceLoginEvent) => void
   ) => () => void
   gitSetGithubToken: (token: string) => Promise<{ success: boolean; error?: string }>
   gitPrStatus: (
