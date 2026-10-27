@@ -6,6 +6,7 @@
  */
 
 import * as path from 'path'
+import { existsSync } from 'fs'
 import { randomBytes } from 'crypto'
 import {
   MAIN_WORKTREE_KEY,
@@ -68,6 +69,18 @@ interface WorkspaceState {
 }
 
 const states = new Map<string, WorkspaceState>()
+
+export interface WorktreeLogger {
+  info: (...args: unknown[]) => void
+  warn: (...args: unknown[]) => void
+}
+
+/** 由 IPC 层注入一次，记录自动回收动作；未注入时保持静默 */
+let logging: WorktreeLogger | null = null
+
+export function configureWorktreeLogging(logger: WorktreeLogger | null): void {
+  logging = logger
+}
 
 function keyFor(workspaceDir: string): string {
   return canonicalizePath(workspaceDir) ?? path.resolve(workspaceDir)
@@ -148,6 +161,59 @@ async function persist(state: WorkspaceState): Promise<void> {
   await saveSessionGit(state.workspaceDir, state.data)
 }
 
+/**
+ * 丢掉一条「工作树已不在盘上」的登记。
+ * 只动登记与孤儿分支：managed 工作树的分支只有在没有独有提交时才回收，
+ * 有提交的分支一律保留，避免丢失工作。
+ */
+async function dropMissingRecord(
+  state: WorkspaceState,
+  id: string,
+  record: GitWorktreeRecord
+): Promise<void> {
+  delete state.data.worktrees[id]
+  const branch = record.branch
+  if (!record.managed || !record.base || !branch.startsWith('pi/')) return
+  // git 拒删“仍被某个（已失踪的）工作树 check out”的分支，先把无效登记从 git 侧剪掉
+  await pruneWorktrees(state.repo.root)
+  const hasCommits = await branchHasNewCommits(state.repo.root, branch, record.base)
+  if (hasCommits) {
+    logging?.info(`[Worktree] Kept branch ${branch}: it has commits not in ${record.base}`)
+    return
+  }
+  await deleteBranch(state.repo.root, branch)
+  logging?.info(`[Worktree] Deleted orphan branch ${branch}`)
+}
+
+/**
+ * 自愈：删除目录已不存在、且没有会话绑定的工作树登记。
+ * 目录还在但 git 已不认的登记保留——磁盘上可能有内容，只由用户手动忘记。
+ * 返回被清掉的记录路径。
+ */
+async function pruneMissingRecords(
+  state: WorkspaceState,
+  infos: GitWorktreeInfo[]
+): Promise<string[]> {
+  // prunable 表示 git 自己也认为目录已丢，不能当作活着的工作树
+  const live = new Set(
+    infos.filter((info) => !info.prunable).map((info) => canonicalizePath(info.path) ?? info.path)
+  )
+  const pruned: string[] = []
+  for (const [id, record] of Object.entries(state.data.worktrees)) {
+    if (id === MAIN_WORKTREE_KEY) continue
+    if (boundSessionCount(state, id) > 0) continue
+    const target = worktreePathFromKey(state, id)
+    if (target && live.has(target)) continue
+    if (target && existsSync(target)) continue
+    await dropMissingRecord(state, id, record)
+    pruned.push(target ?? record.path)
+  }
+  if (pruned.length > 0) {
+    logging?.info(`[Worktree] Dropped records for missing worktrees: ${pruned.join(', ')}`)
+  }
+  return pruned
+}
+
 async function toView(
   state: WorkspaceState,
   id: string,
@@ -201,6 +267,8 @@ export class WorktreeCoordinator {
     const mainInfo = byPath.get(rootKey) ?? infos[0] ?? null
     views.push(await toView(state, MAIN_WORKTREE_KEY, mainInfo, null, activeSessionId))
 
+    let changed = (await pruneMissingRecords(state, infos)).length > 0
+
     const known = new Set<string>([rootKey])
     for (const [id, record] of Object.entries(state.data.worktrees)) {
       const target = canonicalizePath(path.join(state.workspaceDir, record.path))
@@ -211,6 +279,7 @@ export class WorktreeCoordinator {
 
     // 发现工作区内用户自己创建、尚未登记的工作树
     for (const info of infos) {
+      if (info.prunable) continue
       const target = canonicalizePath(info.path) ?? info.path
       if (!target || known.has(target)) continue
       if (!isPathInWorkspace(state.workspaceDir, target)) continue
@@ -225,8 +294,10 @@ export class WorktreeCoordinator {
       }
       known.add(target)
       views.push(await toView(state, id, info, state.data.worktrees[id], activeSessionId))
+      changed = true
     }
-    await persist(state)
+    // 只在登记变化时写盘：contextFor() 每条消息都会调 listWorktrees()
+    if (changed) await persist(state)
     return views
   }
 
@@ -409,6 +480,12 @@ export class WorktreeCoordinator {
       if (stillBound) {
         return { success: true, removed: false, dirty: false, worktreePath: target }
       }
+      if (!existsSync(target)) {
+        // 工作树目录已不在：只丢登记，不跑 git worktree remove（那会一直失败并卡在 dirty）
+        await dropMissingRecord(state, key, record)
+        await persist(state)
+        return { success: true, removed: false, dirty: false, worktreePath: target }
+      }
       if (!record.managed) {
         return { success: true, removed: false, dirty: false, worktreePath: target }
       }
@@ -439,19 +516,19 @@ export class WorktreeCoordinator {
     removed: string[]
     dirty: string[]
     external: string[]
+    pruned: string[]
   }> {
     const state = this.state
     return serialize(state, async () => {
       const removed: string[] = []
       const dirty: string[] = []
       const external: string[] = []
+      // 目录已不存在的登记先清掉；它们没有可回收的工作树，也不该算 dirty
+      const pruned = await pruneMissingRecords(state, await gitListWorktrees(state.repo.root))
       for (const [id, record] of Object.entries(state.data.worktrees)) {
         if (boundSessionCount(state, id) > 0) continue
         const target = worktreePathFromKey(state, id)
-        if (!target) {
-          delete state.data.worktrees[id]
-          continue
-        }
+        if (!target) continue
         if (!record.managed) {
           external.push(target)
           continue
@@ -472,7 +549,7 @@ export class WorktreeCoordinator {
         }
       }
       await persist(state)
-      return { removed, dirty, external }
+      return { removed, dirty, external, pruned }
     })
   }
 

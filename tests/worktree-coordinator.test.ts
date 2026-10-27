@@ -13,7 +13,7 @@ vi.mock('electron', () => ({
 }))
 
 import { WorktreeCoordinator } from '../electron/worktree-coordinator'
-import { commitDetail } from '../electron/git-worktrees'
+import { commitDetail, loadSessionGit } from '../electron/git-worktrees'
 
 let workspace = ''
 
@@ -163,4 +163,103 @@ describe('WorktreeCoordinator', () => {
     expect(context).toContain('其他工作树')
     expect(context).toContain('主工作树')
   })
+
+  it('prunes the record of an external worktree whose directory is gone', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    const external = path.join(workspace, '.claude', 'worktrees', 'gone')
+    await fs.mkdir(path.dirname(external), { recursive: true })
+    git(['worktree', 'add', '-b', 'feature-gone', external])
+    expect(await coordinator!.listWorktrees()).toHaveLength(2)
+    expect(recordPaths()).toContain('.claude/worktrees/gone')
+
+    await fs.rm(external, { recursive: true, force: true })
+
+    const views = await coordinator!.listWorktrees()
+    expect(views).toHaveLength(1)
+    expect(views[0].isMain).toBe(true)
+    expect(recordPaths()).toHaveLength(0)
+  })
+
+  it('keeps the record of a missing worktree while a session is bound to it', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    const external = path.join(workspace, '.claude', 'worktrees', 'bound')
+    await fs.mkdir(path.dirname(external), { recursive: true })
+    git(['worktree', 'add', '-b', 'feature-bound', external])
+    await coordinator!.listWorktrees()
+    await coordinator!.bind('session-bound', external)
+
+    await fs.rm(external, { recursive: true, force: true })
+
+    const views = await coordinator!.listWorktrees()
+    expect(views).toHaveLength(2)
+    expect(recordPaths()).toContain('.claude/worktrees/bound')
+  })
+
+  it('keeps a worktree record whose directory still exists but git no longer tracks', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    const external = path.join(workspace, '.claude', 'worktrees', 'stale')
+    await fs.mkdir(path.dirname(external), { recursive: true })
+    git(['worktree', 'add', '-b', 'feature-stale', external])
+    await coordinator!.listWorktrees()
+
+    // 用户用 git 自己删了工作树，但目录留下来了（可能还有文件）
+    git(['worktree', 'remove', external])
+    await fs.mkdir(external, { recursive: true })
+    await fs.writeFile(path.join(external, 'keep.txt'), 'do not delete me\n')
+
+    const views = await coordinator!.listWorktrees()
+    expect(recordPaths()).toContain('.claude/worktrees/stale')
+    expect(views).toHaveLength(2)
+    await expect(fs.access(path.join(external, 'keep.txt'))).resolves.toBeUndefined()
+  })
+
+  it('removes a managed worktree record and its idle branch when the directory is gone', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    await coordinator!.bind('session-managed-gone', 'new')
+    const root = coordinator!.getSessionRoot('session-managed-gone')
+    const branch = git(['branch', '--format=%(refname:short)', '--list', 'pi/*']).trim()
+    expect(branch).not.toBe('')
+
+    await coordinator!.unbind('session-managed-gone')
+    await fs.rm(root, { recursive: true, force: true })
+    await coordinator!.listWorktrees()
+
+    expect(recordPaths()).toHaveLength(0)
+    expect(git(['branch', '--format=%(refname:short)'])).not.toContain('pi/')
+  })
+
+  it('keeps the branch of a managed record when it has commits of its own', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    await coordinator!.bind('session-managed-commits', 'new')
+    const root = coordinator!.getSessionRoot('session-managed-commits')
+    await fs.writeFile(path.join(root, 'work.txt'), 'work\n')
+    git(['add', '.'], root)
+    git(['commit', '-m', 'work'], root)
+    const branch = git(['branch', '--format=%(refname:short)', '--list', 'pi/*']).trim()
+
+    await coordinator!.unbind('session-managed-commits')
+    await fs.rm(root, { recursive: true, force: true })
+    await coordinator!.listWorktrees()
+
+    expect(recordPaths()).toHaveLength(0)
+    expect(git(['branch', '--format=%(refname:short)'])).toContain(branch)
+  })
+
+  it('reports missing worktrees as pruned instead of dirty in cleanupOrphans', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    await coordinator!.bind('session-cleanup', 'new')
+    const root = coordinator!.getSessionRoot('session-cleanup')
+    await coordinator!.unbind('session-cleanup')
+    await fs.rm(root, { recursive: true, force: true })
+
+    const result = await coordinator!.cleanupOrphans()
+    expect(result.pruned).toHaveLength(1)
+    expect(result.dirty).toHaveLength(0)
+    expect(recordPaths()).toHaveLength(0)
+  })
 })
+
+/** 当前 workspace 里登记的工作树相对路径 */
+function recordPaths(): string[] {
+  return Object.values(loadSessionGit(workspace).worktrees).map((record) => record.path)
+}

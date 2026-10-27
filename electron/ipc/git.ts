@@ -5,7 +5,7 @@ import * as path from 'path'
 import { handleIpc } from './register.js'
 import { isTrustedWorkspacePath } from '../workspace-trust.js'
 import type { AgentRegistry } from '../agent-registry.js'
-import { getCoordinator, type WorktreeCoordinator } from '../worktree-coordinator.js'
+import { configureWorktreeLogging, getCoordinator, type WorktreeCoordinator } from '../worktree-coordinator.js'
 import { repoSync } from '../repo-sync.js'
 import {
   clearGithubToken,
@@ -92,6 +92,7 @@ async function restoreWorktreeBinding(
 
 export function registerGitIpc(context: GitIpcContext): void {
   const cleanedWorkspaces = new Set<string>()
+  configureWorktreeLogging(context.logger)
 
   repoSync.configure({
     getMainWindow: context.getMainWindow,
@@ -261,8 +262,12 @@ export function registerGitIpc(context: GitIpcContext): void {
         return { success: false, error: 'Workspace is not approved' }
       }
       const coordinator = await getCoordinator(workspaceDir)
-      if (!coordinator) return { success: true, removed: [], dirty: [], external: [] }
-      return { success: true, ...(await coordinator.cleanupOrphans()) }
+      if (!coordinator) return { success: true, removed: [], dirty: [], external: [], pruned: [] }
+      const result = await coordinator.cleanupOrphans()
+      if (result.pruned.length > 0) {
+        context.logger.info('[Git] Pruned worktree records:', result.pruned.join(', '))
+      }
+      return { success: true, ...result }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
