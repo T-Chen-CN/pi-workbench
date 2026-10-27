@@ -697,7 +697,7 @@ async function initAgent(config: ApiConfig) {
 
 **行为**:
 
-- ✅ 启动 12 秒后静默检查一次；检查失败只写 `main.log`，不打扰用户
+- ✅ 启动 12 秒后静默检查一次，此后每 12 小时复查一次（下载中或已下载待安装时跳过）；检查失败只写 `main.log`，不打扰用户
 - ✅ Windows / Linux 发现新版本后**自动下载**，但**绝不自动安装**（`autoInstallOnAppQuit = false`）
 - ✅ 下载完成弹窗，用户选择“重启并安装”或“稍后”；拒绝后下次启动重新检查并再弹
 - ✅ macOS 未签名，只检查版本（GitHub Releases API），弹窗引导到 Release 页面手动下载 dmg
@@ -724,10 +724,11 @@ async function initAgent(config: ApiConfig) {
 - ✅ 更新时的删除逻辑由 `build/installer.nsh` 的 `customRemoveFiles` 接管：只删除
   `resources/installer-manifest.files.txt` / `installer-manifest.dirs.txt` 清单内的程序文件
 - ✅ 清单由 `scripts/after-pack-manifest.js`（electron-builder `afterPack`）生成；清单缺失时更新不删除任何文件
-- ✅ 受保护目录：`config/`、`data/`、`logs/`、`cache/`
-- ✅ 真正卸载时删除清单文件、数据目录与安装器生成的文件（卸载器、图标、`app-update.yml`、`elevate.exe`、`.write-probe`、外部更新缓存）
+- ✅ 受保护目录：`config/`、`data/`、`logs/`、`cache/`；清单由 `afterPack` 生成为 `resources/installer-manifest.protected.txt`，卸载器按文件删除，JS 侧 `PROTECTED_TOP_LEVEL` 是唯一来源
+- ✅ 真正卸载时删除清单文件与安装器生成的文件（卸载器、图标、`app-update.yml`、`elevate.exe`、`.write-probe`、外部更新缓存）；`config/data/logs/cache` 由卸载欢迎页的「保留数据」勾选框决定，默认保留，静默卸载同样保留
+- ✅ 安装目录必须可写：安装器在目录页拒绝 `%ProgramFiles%`、`%ProgramFiles(x86)%`、`%SystemRoot%` 及其子目录，`allowElevation: false` 不提权
 - ❌ 禁止在安装目录的其他位置保存运行时数据（不在清单外保护范围，更新会被删除）
-- ❌ 新增数据目录时必须同步更新 `PROTECTED_TOP_LEVEL` 与卸载分支，否则更新会清理该目录
+- ❌ 新增数据目录时必须加入 `PROTECTED_TOP_LEVEL`（NSIS 侧读取生成的清单，不要再改卸载分支）
 
 **发布**:
 

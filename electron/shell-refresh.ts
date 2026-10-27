@@ -99,16 +99,30 @@ function runCommand({ command, args }: RefreshCommand): void {
   }
 }
 
+export interface ShellRefreshResult {
+  /** 是否执行了刷新命令 */
+  refreshed: boolean
+  /** 上一次记录的版本；首次运行时为 null */
+  previousVersion: string | null
+  currentVersion: string
+}
+
 /**
  * 打包版首次运行新版本时执行一次；开发模式不做任何事，
- * 避免改动开发者自己的 shell 缓存。返回是否真的执行了刷新，便于测试与日志。
+ * 避免改动开发者自己的 shell 缓存。返回上一次运行的版本，
+ * 供主进程在升级后提示"已更新到 vX"。
  */
-export function refreshShellCachesIfUpdated(): boolean {
-  if (!app.isPackaged) return false
-
+export function refreshShellCachesIfUpdated(): ShellRefreshResult {
   const currentVersion = app.getVersion()
+  if (!app.isPackaged) {
+    return { refreshed: false, previousVersion: null, currentVersion }
+  }
+
   const versionFile = path.join(getAppDir(), 'config', VERSION_FILE)
-  if (!shouldRefresh(readLastRunVersion(versionFile), currentVersion)) return false
+  const previousVersion = readLastRunVersion(versionFile)
+  if (!shouldRefresh(previousVersion, currentVersion)) {
+    return { refreshed: false, previousVersion, currentVersion }
+  }
 
   const commands = platformRefreshCommands(
     process.platform,
@@ -134,5 +148,5 @@ export function refreshShellCachesIfUpdated(): boolean {
     console.warn('[ShellRefresh] Failed to record refreshed version:', error)
   }
 
-  return commands.length > 0
+  return { refreshed: commands.length > 0, previousVersion, currentVersion }
 }

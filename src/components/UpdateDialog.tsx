@@ -87,7 +87,9 @@ export const UpdateDialog: React.FC = () => {
     >
       <div className="flex flex-col gap-3 p-5">
         <p className="m-0 type-reading text-ink">
-          {t('updateReadyBody', { version: state.version ?? '' })}
+          {installing
+            ? t('updateInstalling')
+            : t('updateReadyBody', { version: state.version ?? '' })}
         </p>
         {state.releaseNotes && (
           <div className="flex flex-col gap-1.5">

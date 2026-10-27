@@ -28,6 +28,7 @@ import type {
   TerminalResult,
   UpdateCheckResult,
   UpdateActionResult,
+  UpdateNoticeResult,
   UpdateState,
   UpdateStateResult,
   AppInfoResult,
@@ -130,6 +131,7 @@ const mockAPI = {
     success: false,
     error: 'ERR_UPDATE_NOT_PACKAGED',
   }),
+  consumeUpdateNotice: async (): Promise<UpdateNoticeResult> => ({ success: true, notice: null }),
   onUpdateStatus: (_callback: (status: UpdateState) => void) => () => {},
   appGetInfo: async (): Promise<AppInfoResult> => ({
     success: true,
@@ -434,6 +436,7 @@ export const api = {
   updateInstall: () => electronAPI.updateInstall(),
   updateGetState: () => electronAPI.updateGetState(),
   updateOpenDownload: () => electronAPI.updateOpenDownload(),
+  consumeUpdateNotice: () => electronAPI.consumeUpdateNotice(),
   onUpdateStatus: (callback: (status: UpdateState) => void) => electronAPI.onUpdateStatus(callback),
   appGetInfo: () => electronAPI.appGetInfo(),
   appHasActiveWork: () => electronAPI.appHasActiveWork(),

@@ -6,6 +6,8 @@ import {
   buildInstallerManifest,
   MANIFEST_DIRS,
   MANIFEST_FILES,
+  MANIFEST_PROTECTED,
+  PROTECTED_TOP_LEVEL,
   validateManifestEntry,
   writeInstallerManifest,
 } from '../scripts/lib/installer-manifest.js'
@@ -26,6 +28,7 @@ function makeFixture(): string {
   write('resources/app-update.yml', 'provider: github')
   write(`resources/${MANIFEST_FILES}`, 'old')
   write(`resources/${MANIFEST_DIRS}`, 'old')
+  write(`resources/${MANIFEST_PROTECTED}`, 'old')
   write('resources/app.asar.unpacked/node_modules/node-pty/build/Release/conpty.node')
   write('locales/en-US.pak')
   write('empty-dir/keep.txt')
@@ -70,6 +73,7 @@ describe('buildInstallerManifest', () => {
     expect(files).not.toContain('resources\\app-update.yml')
     expect(files).not.toContain(`resources\\${MANIFEST_FILES}`)
     expect(files).not.toContain(`resources\\${MANIFEST_DIRS}`)
+    expect(files).not.toContain(`resources\\${MANIFEST_PROTECTED}`)
   })
 
   it('sorts files and orders directories deepest-first', () => {
@@ -104,6 +108,16 @@ describe('writeInstallerManifest', () => {
     )
     expect(fs.readFileSync(path.join(root, 'resources', MANIFEST_DIRS), 'utf8')).toBe(
       `${dirs.join('\r\n')}\r\n`
+    )
+  })
+
+  it('writes the protected directory list from PROTECTED_TOP_LEVEL', () => {
+    const root = makeFixture()
+
+    writeInstallerManifest(root)
+
+    expect(fs.readFileSync(path.join(root, 'resources', MANIFEST_PROTECTED), 'utf8')).toBe(
+      `${PROTECTED_TOP_LEVEL.join('\r\n')}\r\n`
     )
   })
 })

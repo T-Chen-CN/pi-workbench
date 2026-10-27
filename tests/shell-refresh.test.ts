@@ -96,19 +96,21 @@ describe('refreshShellCachesIfUpdated', () => {
   it('records the version and runs the refresh once per version', () => {
     const versionFile = path.join(dir, 'config', 'last-run-version.json')
 
-    refreshShellCachesIfUpdated()
+    const first = refreshShellCachesIfUpdated()
+    expect(first).toMatchObject({ previousVersion: null, currentVersion: '0.6.1' })
     const recorded = JSON.parse(fs.readFileSync(versionFile, 'utf-8')) as { version: string }
     expect(recorded.version).toBe('0.6.1')
 
     const callsAfterFirstRun = spawnMock.mock.calls.length
-    refreshShellCachesIfUpdated()
+    const second = refreshShellCachesIfUpdated()
+    expect(second).toMatchObject({ refreshed: false, previousVersion: '0.6.1' })
     expect(spawnMock.mock.calls.length).toBe(callsAfterFirstRun)
   })
 
   it('does nothing in development builds', () => {
     packagedApp.isPackaged = false
 
-    expect(refreshShellCachesIfUpdated()).toBe(false)
+    expect(refreshShellCachesIfUpdated()).toMatchObject({ refreshed: false, previousVersion: null })
     expect(spawnMock).not.toHaveBeenCalled()
     expect(fs.existsSync(path.join(dir, 'config', 'last-run-version.json'))).toBe(false)
   })

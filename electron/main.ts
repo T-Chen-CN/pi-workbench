@@ -51,7 +51,9 @@ import {
 import {
   checkForUpdates,
   registerSystemIpc,
+  setUpdateNotice,
   UPDATE_CHECK_DELAY_MS,
+  UPDATE_CHECK_INTERVAL_MS,
 } from './ipc/system.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
@@ -837,10 +839,22 @@ app.whenReady().then(async () => {
 
   // 更新后首次启动：让系统重建图标与桌面菜单缓存（三平台各自实现，失败只记日志）。
   // 与 Windows 安装器里的 SHChangeNotify / ie4uinit 互为兜底。
+  // 同时记录版本变化，供渲染进程提示“已更新到 vX”。
   if (app.isPackaged) {
-    void import('./shell-refresh.js')
-      .then(({ refreshShellCachesIfUpdated }) => refreshShellCachesIfUpdated())
-      .catch((error) => console.warn('[Main] Shell cache refresh failed:', error))
+    try {
+      const { refreshShellCachesIfUpdated } = await import('./shell-refresh.js')
+      const { previousVersion } = refreshShellCachesIfUpdated()
+      const currentVersion = app.getVersion()
+      if (previousVersion && previousVersion !== currentVersion) {
+        const isNewer = (next: string, now: string) =>
+          next.localeCompare(now, undefined, { numeric: true }) > 0
+        if (isNewer(currentVersion, previousVersion)) {
+          setUpdateNotice({ from: previousVersion, to: currentVersion })
+        }
+      }
+    } catch (error) {
+      console.warn('[Main] Shell cache refresh failed:', error)
+    }
   }
 
   // 回收旧版本遗留在系统目录中的内容：Pi SDK 的 ~/.pi、默认 userData、安装器副本。
@@ -882,6 +896,11 @@ app.whenReady().then(async () => {
   setTimeout(() => {
     void checkForUpdates()
   }, UPDATE_CHECK_DELAY_MS)
+
+  // 长期不关机的用户每 12 小时复查一次；控制器会跳过下载中/已下载等待安装的状态。
+  setInterval(() => {
+    void checkForUpdates()
+  }, UPDATE_CHECK_INTERVAL_MS)
 })
 
 let shuttingDown = false

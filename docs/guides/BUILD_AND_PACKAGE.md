@@ -110,6 +110,10 @@ Windows 产物：
 > `app-icon.ico` 为 256×256 PNG-compressed ICO，供 exe 与 NSIS 安装器使用。
 > NSIS 不接受 PNG 作为 installer icon，必须使用 `.ico`。
 
+**依赖分组（体积约束）**：只有主进程运行时真正 `require` 的包放在 `dependencies`——`electron-updater`、`node-pty`、`pi-bridge`、`@earendil-works/pi-coding-agent`、`pi-web-access`。渲染依赖（`react`、`react-dom`、`monaco-editor`、`lucide-react`、`@xterm/*`、`@fontsource*`、markdown / 高亮栈、`zustand` 等）即使被 Vite 打包，也必须放在 `devDependencies`；放进 `dependencies` 会被 electron-builder 原样再打一份进 `app.asar`（实测约 156MB）。
+
+**语言包**：`build.electronLanguages` 只保留 `en-US` 与 `zh-CN`，避免 55 个 Chromium 语言包（约 49MB）随包分发。安装向导语言同样限制为 `en_US` / `zh_CN`（`nsis.installerLanguages`），因此 `build/installer.nsh` 里的自定义 `LangString` 只需覆盖 1033 / 2052。
+
 根依赖中必须保留：
 
 - `pi-bridge`（workspace 包）
@@ -142,7 +146,7 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
   - Windows 用户首次运行安装包可能看到 SmartScreen 提示；
   - macOS 应用未签名，**不能自动安装更新**，应用只检查版本并打开 Release 页面，用户下载 dmg 后拖入 Applications 覆盖安装；
   - Linux AppImage 可正常自动更新（要求 AppImage 文件所在目录可写）。
-- 更新行为：启动 12 秒后静默检查；Windows / Linux 自动下载、不自动安装；下载完成后弹窗，拒绝则下次启动再提示。
+- 更新行为：启动 12 秒后静默检查，此后每 12 小时复查一次（下载中或已下载待安装时跳过）；Windows / Linux 自动下载、不自动安装；下载完成后弹窗，拒绝则下次启动再提示。
 - 更新后的图标 / 桌面菜单缓存：更新只替换文件，系统仍会沿用旧图标，因此有两道刷新：
   - Windows 安装器的 `customInstall` 末尾调用 `SHChangeNotify(SHCNE_ASSOCCHANGED)` 并执行
     `ie4uinit.exe -show`，让 Explorer 重新读取图标、关联和快捷方式；
@@ -156,12 +160,13 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
     `resources/installer-manifest.files.txt` / `installer-manifest.dirs.txt`（相对路径、CRLF）；
   - 更新时只删除清单内的程序文件，`config/`、`data/`、`logs/`、`cache/` 原地保留（`cache/` 里还有
     正在运行的更新安装包）；清单缺失时不删除任何文件；
-  - 真正卸载时才额外删除数据目录，以及安装器生成、不在清单内的文件
+  - 真正卸载时，卸载欢迎页提供「保留配置与会话数据」勾选框（默认勾选，静默卸载同样保留）：
+    勾选时保留 `config/`、`data/`、`logs/`、`cache/`，只删程序文件与安装器生成的文件
     （`Uninstall Pi Workbench.exe`、`uninstallerIcon.ico`、`resources/app-update.yml`、
-    `resources/elevate.exe`、`.write-probe`）。
-  - **新增运行时数据目录时，必须同时加入 `scripts/lib/installer-manifest.js` 的
-    `PROTECTED_TOP_LEVEL` 和 `build/installer.nsh` 的卸载分支**；写在安装目录其他位置的文件会被当作
-    程序文件在更新时删除。
+    `resources/elevate.exe`、`.write-probe`）；取消勾选才删除这四个目录。
+  - 受保护目录清单由 `afterPack` 生成为 `resources/installer-manifest.protected.txt`，
+    卸载器按文件删除；**新增运行时数据目录只需加入 `scripts/lib/installer-manifest.js` 的
+    `PROTECTED_TOP_LEVEL`**。写在安装目录其他位置的文件会被当作程序文件在更新时删除。
   - 首个带该脚本的版本需要手动安装（旧版卸载器不受新脚本控制），此后自动更新才会保住数据。
 - 产物文件名必须与更新清单一致：`win` / `mac` / `linux` 都配置了无空格的 `artifactName`。GitHub 会把资产名里的空格替换成点，若使用默认命名，`latest.yml` 中的连字符文件名会 404，自动更新直接失效。
 - 安装包缓存：Windows 使用 `%LOCALAPPDATA%\Pi-Workbench-Update`（安装目录之外）；Linux 使用 `{appDir}/cache/{updaterCacheDirName}`。Windows 的缓存必须在安装目录外——electron-builder 的卸载器按 `$INSTDIR` 路径前缀结束进程，安装器若从安装目录内启动会被误杀。
@@ -170,6 +175,8 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
 - 差分更新：electron-updater 在 Windows 从 `{baseCachePath}/{updaterCacheDirName}/installer.exe` 读取旧安装包做块级差分。`customInstall` 把本次安装的安装包复制到 `%LOCALAPPDATA%\Pi-Workbench-Update\pi-workbench-updater\installer.exe`；启动清理与“无更新”清理只删除 `pending/` 等下载残留，保留该文件与 `current.blockmap`。每个安装常驻一份安装包大小的磁盘；基准过期或损坏时会被 sha512 校验拦下并自动回退全量下载。该机制从“由带复制步骤的安装器安装的版本”开始生效：从旧安装器升级的那一次仍是全量，之后的一次更新开始走差分。
 - 启动期回收：`electron/legacy-paths.ts` 会合并 `~/.pi` 到 `{appDir}/data/agent` 后删除（检测到独立 Pi CLI 时保留），并删除旧默认 userData（`%APPDATA%\pi-workbench` 等）。`app.setPath('userData')` 必须早于单实例锁，Pi SDK 目录通过环境变量固定到应用目录。
 - Windows 更新会设置 `installDirectory = appDir`，安装器始终带 `/D=`，不依赖注册表 `InstallLocation`。
+- 安装目录必须可写：安装器在目录页拒绝 `%ProgramFiles%`、`%ProgramFiles(x86)%`、`%SystemRoot%` 及子目录（`.onVerifyInstDir`），并设置 `allowElevation: false`，不会为装进受保护目录而提权。
+- 协议注册：`build.protocols` 在安装时注册 `pi-workbench://`，应用内 `setAsDefaultProtocolClient` 作为兜底。
 - CI 与打包冒烟使用 `--publish never`，不会误发布。
 - 本地验证打包：`npx electron-builder --win --dir --publish never`（macOS / Linux 需在对应系统上执行）。
 - CI 的 `package-smoke` job 每次 push / PR 都会执行一次未压缩打包，防止打包配置回归。

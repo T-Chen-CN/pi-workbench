@@ -11,6 +11,7 @@ import path from 'node:path'
 export const PROTECTED_TOP_LEVEL = Object.freeze(['config', 'data', 'logs', 'cache'])
 export const MANIFEST_FILES = 'installer-manifest.files.txt'
 export const MANIFEST_DIRS = 'installer-manifest.dirs.txt'
+export const MANIFEST_PROTECTED = 'installer-manifest.protected.txt'
 export const MANIFEST_DIR = 'resources'
 
 const MAX_ENTRY_LENGTH = 200
@@ -18,7 +19,7 @@ const MAX_ENTRY_LENGTH = 200
 const LINE_ENDING = '\r\n'
 // electron-builder 在用户 afterPack 之后才写入，更新时不应删除
 const EXCLUDED_RELATIVE = new Set([`${MANIFEST_DIR}\\app-update.yml`])
-const EXCLUDED_FILES = new Set([MANIFEST_FILES, MANIFEST_DIRS])
+const EXCLUDED_FILES = new Set([MANIFEST_FILES, MANIFEST_DIRS, MANIFEST_PROTECTED])
 
 const byName = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 const depthOf = (entry) => entry.split('\\').length
@@ -96,9 +97,13 @@ export function writeInstallerManifest(appOutDir) {
   const { files, dirs } = buildInstallerManifest(appOutDir)
   const filesPath = path.join(resourcesDir, MANIFEST_FILES)
   const dirsPath = path.join(resourcesDir, MANIFEST_DIRS)
+  // 受保护目录清单：卸载器按这份清单决定删除哪些运行时数据目录，
+  // 与 PROTECTED_TOP_LEVEL 保持单一来源。
+  const protectedPath = path.join(resourcesDir, MANIFEST_PROTECTED)
   const toContent = (entries) =>
     entries.length > 0 ? `${entries.join(LINE_ENDING)}${LINE_ENDING}` : ''
   fs.writeFileSync(filesPath, toContent(files), 'utf8')
   fs.writeFileSync(dirsPath, toContent(dirs), 'utf8')
-  return { files: files.length, dirs: dirs.length, filesPath, dirsPath }
+  fs.writeFileSync(protectedPath, toContent([...PROTECTED_TOP_LEVEL]), 'utf8')
+  return { files: files.length, dirs: dirs.length, filesPath, dirsPath, protectedPath }
 }
