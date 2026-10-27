@@ -239,6 +239,21 @@ type AgentStreamPayload = {
 
 `runtime.messageHistory` 继续保留用于 `getMessageHistory` 的兼容回退，但不再是历史真源；`getSessionMessages` 统一使用上面的聚合结果。
 
+### 5.7 空闲超时（stall）与中止
+
+`chat()` 不设整轮等待上限，只有“模型静默”上限：
+
+- **计时对象**：连续 `STALL_TIMEOUT_MS`（120s）没有收到任何模型侧增量。常量在 `pi-bridge/src/agent-manager.ts`，不是设置项，也不提供跳过途径。
+- **算作心跳**：`message_start`、`text_delta`、`thinking_delta`、`toolcall_start` / `toolcall_delta`（工具参数 JSON 流，写大文件时可持续几十秒）、`tool_execution_update`、`auto_retry_start` / `auto_retry_end`。
+- **挂起（不计时）**：
+  1. `tool_execution_start` → `tool_execution_end` 之间的工具执行，按 `toolCallId` 计数，并行 / 嵌套全部结束后才恢复；长命令的静默属于合法等待。
+  2. `tool_call` 审批钩子等待用户的整段（审批先于 `tool_execution_start`），这段由 `APPROVAL_TIMEOUT_MS`（120s）+ fail-closed 自行兜底。
+- **触发后**：`abort()` → 10s 宽限（`ABORT_GRACE_MS`）内未收尾则硬停并重建该会话运行时（`resetRuntimeAfterHardStop`）；返回 `Agent response stalled: no output for 120s.`，已收到的 parts 与 `edits` 保留。
+- **不自动重试**：工具调用可能已有副作用，是否重发由用户决定。
+- **用户主动停止**仍返回 `Agent request was aborted.`，且**不**重建运行时。
+
+实现见 `pi-bridge/src/stall-watchdog.ts`：计时器在 `lastActivityAt + timeoutMs` 到期时自检，心跳只更新时间戳，不逐个 token 重建定时器；已有单测覆盖挂起、恢复与只触发一次。
+
 ## 6. 渲染层与状态
 
 ### 6.1 `chatStore`
@@ -384,7 +399,7 @@ createTraceBuffer(onFlush: (events: BufferedTraceEvent[]) => void, intervalMs = 
 - thinking_delta 按顺序转发；`thinking_end` 无 delta 时补发/脱敏处理。
 - tool_start/update/end 的字段与顺序；写文件参数不包含 content。
 - 历史聚合：一个用户轮次 → 一条 assistant parts；toolCall 与 toolResult 正确配对；错误、耗时、文件路径。
-- 中止/超时：running 工具收尾、已收到 parts 保留。
+- 中止/超时：running 工具收尾、已收到 parts 保留；stall 只在模型静默时触发，工具执行与审批等待期间不触发。
 
 ### IPC / Web dev 桥
 
