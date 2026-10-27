@@ -19,6 +19,7 @@ import {
 } from '../workspace-trust.js'
 import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
 import { disposeCoordinator } from '../worktree-coordinator.js'
+import { repoSync } from '../repo-sync.js'
 
 interface WorkspaceWatchEntry {
   watcher: FSWatcher
@@ -205,6 +206,14 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
         workspaceDir: workspacePath,
       })
 
+      // Git 仓库：开始本地监听与定时 fetch（非 git 仓库自动跳过）。
+      // 这里等探测完成，避免工作区刚打开就被关闭时仍有 git 进程占用目录。
+      try {
+        await repoSync.ensure(workspacePath)
+      } catch (error) {
+        console.warn('[Workspace] Failed to start repo sync:', error)
+      }
+
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -221,6 +230,7 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
       context.terminalManager.closeWorkspace(canonicalizePath(workspacePath) ?? workspacePath)
       context.pluginManager.unload(workspacePath)
       disposeCoordinator(workspacePath)
+      repoSync.detachWorkspace(workspacePath)
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }

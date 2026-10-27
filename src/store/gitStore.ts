@@ -4,6 +4,7 @@ import { create } from 'zustand'
 import { api } from '../api'
 import type {
   GitBranchInfo,
+  GitChangeScope,
   GitCommitDetail,
   GitCommitInfo,
   GitCommitStats,
@@ -52,6 +53,19 @@ const EMPTY: WorkspaceGitState = {
 /** 每个工作区最近一次详情请求的序号：后发的请求让先发的响应失效 */
 const detailRequests = new Map<string, number>()
 
+/** 同一工作区同一类刷新只保留一个在途请求，事件连发时不重复打 git */
+const pendingRefreshes = new Map<string, Promise<void>>()
+
+function refreshOnce(key: string, task: () => Promise<void>): Promise<void> {
+  const existing = pendingRefreshes.get(key)
+  if (existing) return existing
+  const run = task().finally(() => {
+    pendingRefreshes.delete(key)
+  })
+  pendingRefreshes.set(key, run)
+  return run
+}
+
 interface GitState {
   byWorkspace: Record<string, WorkspaceGitState>
   load: (workspaceDir: string, activeSessionId?: string | null) => Promise<void>
@@ -63,6 +77,12 @@ interface GitState {
     target: string,
     base?: string
   ) => Promise<{ success: boolean; error?: string; scheduled?: boolean }>
+  /** 主进程推送的仓库变化：refs → 分支/提交图，status → 工作树状态 */
+  handleChanged: (
+    workspaceDir: string,
+    scopes: GitChangeScope[],
+    activeSessionId?: string | null
+  ) => Promise<void>
   loadCommits: (
     workspaceDir: string,
     limit?: number,
@@ -210,6 +230,29 @@ export const useGitStore = create<GitState>((set, get) => ({
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
+  },
+
+  handleChanged: async (workspaceDir, scopes, activeSessionId) => {
+    const tasks: Promise<void>[] = []
+    if (scopes.includes('refs')) {
+      tasks.push(
+        refreshOnce(`${workspaceDir}:repo`, () => get().load(workspaceDir, activeSessionId))
+      )
+      tasks.push(
+        refreshOnce(`${workspaceDir}:log`, async () => {
+          await get().loadCommits(workspaceDir, undefined, undefined, true)
+          await get().loadCommitStats(workspaceDir, undefined, undefined, true)
+        })
+      )
+    }
+    if (scopes.includes('status')) {
+      tasks.push(
+        refreshOnce(`${workspaceDir}:status`, () =>
+          get().refreshWorktrees(workspaceDir, activeSessionId)
+        )
+      )
+    }
+    await Promise.all(tasks)
   },
 
   loadCommits: async (workspaceDir, limit = 200, branch, all = true) => {

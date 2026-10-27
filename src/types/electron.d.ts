@@ -146,6 +146,22 @@ export interface GitSessionBinding {
   branch: string | null
 }
 
+/** Git 面板自动同步：refs = 分支/提交/提交图；status = 工作树脏状态 */
+export type GitChangeScope = 'refs' | 'status'
+
+export interface GitChangedPayload {
+  workspaceDir: string
+  repoRoot: string
+  scopes: GitChangeScope[]
+  reason: 'watch' | 'fetch'
+}
+
+export interface GitFetchResult {
+  success: boolean
+  skipped?: boolean
+  error?: string
+}
+
 export interface ElectronAPI {
   platform: string
   // File system operations
@@ -411,6 +427,9 @@ export interface ElectronAPI {
     worktrees?: GitWorktreeView[]
     error?: string
   }>
+  /** 拉取远端更新；force 用于手动刷新，默认受最小间隔限制 */
+  gitFetch: (workspaceDir: string, options?: { force?: boolean }) => Promise<GitFetchResult>
+  onGitChanged: (callback: (payload: GitChangedPayload) => void) => () => void
   gitListWorktrees: (
     workspaceDir: string,
     activeSessionId?: string
