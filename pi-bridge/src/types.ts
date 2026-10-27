@@ -245,8 +245,6 @@ export interface AgentChatOptions {
   onTextDelta?: (delta: string) => void
   /** 接收归一化的文本 / 思考 / 工具事件；与 onTextDelta 可同时使用 */
   onTrace?: (event: AgentTraceEvent) => void
-  /** 单轮请求超时（毫秒），0 表示不超时；默认 10 分钟 */
-  timeoutMs?: number
   /** 图像附件（base64，不含 data: 前缀） */
   images?: Array<{ data: string; mimeType: string }>
 }

@@ -3,6 +3,16 @@ import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
 import { AgentManager, type AgentConfig } from '../pi-bridge/src/agent-manager'
+import {
+  ABORT_GRACE_MS,
+  APPROVAL_TIMEOUT_MS,
+  STALL_TIMEOUT_MS,
+} from '../pi-bridge/src/agent-manager'
+import type {
+  ApprovalDecision,
+  ApprovalRequestPayload,
+} from '../pi-bridge/src/approval-policy'
+import type { StallWatchdog } from '../pi-bridge/src/stall-watchdog'
 
 const sdk = vi.hoisted(() => ({
   createAgentSession: vi.fn(),
@@ -308,6 +318,15 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   }
 }
 
+/** 读运行时里的看门狗，用于验证工具 / 审批期间确实挂起了计时 */
+function watchdogOf(target: AgentManager, sessionId = 'session-1'): StallWatchdog | null {
+  return (
+    target as unknown as {
+      runtimes: Map<string, { watchdog: StallWatchdog | null }>
+    }
+  ).runtimes.get(sessionId)?.watchdog ?? null
+}
+
 beforeEach(async () => {
   vi.clearAllMocks()
   sdk.loaders.length = 0
@@ -538,7 +557,7 @@ describe('AgentManager chat', () => {
     expect(result.error).toContain('aborted')
   })
 
-  it('aborts and reports an error when the request times out', async () => {
+  it('aborts and reports a stall when the model stays silent', async () => {
     let resolvePrompt: (() => void) | null = null
     const session = createFakeSession(
       () =>
@@ -554,13 +573,13 @@ describe('AgentManager chat', () => {
 
     vi.useFakeTimers()
     try {
-      const pending = manager.chat('hi', { timeoutMs: 1000 })
-      await vi.advanceTimersByTimeAsync(1000)
+      const pending = manager.chat('hi')
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS)
       const result = await pending
 
       expect(session.abort).toHaveBeenCalled()
       expect(result.success).toBe(false)
-      expect(result.error).toContain('timed out')
+      expect(result.error).toContain('stalled')
     } finally {
       vi.useRealTimers()
     }
@@ -604,14 +623,171 @@ describe('AgentManager chat', () => {
 
     vi.useFakeTimers()
     try {
-      const pending = manager.chat('hi', { timeoutMs: 1000 })
-      await vi.advanceTimersByTimeAsync(1000)
-      await vi.advanceTimersByTimeAsync(10_000)
+      const pending = manager.chat('hi')
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS)
+      await vi.advanceTimersByTimeAsync(ABORT_GRACE_MS)
       const result = await pending
 
       expect(session.abort).toHaveBeenCalled()
       expect(result.success).toBe(false)
-      expect(result.error).toContain('timed out')
+      expect(result.error).toContain('stalled')
+      // 硬停是唯一会销毁并重建运行时的路径
+      expect(session.disposed).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not stall while the model keeps streaming', async () => {
+    const control: { resolvePrompt?: () => void } = {}
+    const session = createFakeSession(
+      () =>
+        new Promise<void>((resolve) => {
+          control.resolvePrompt = resolve
+        })
+    )
+    session.abort = vi.fn(async () => {
+      control.resolvePrompt?.()
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    vi.useFakeTimers()
+    try {
+      const pending = manager.chat('hi')
+      // 50 分钟的长轮次，每 60s 一个增量
+      for (let index = 0; index < 50; index += 1) {
+        await vi.advanceTimersByTimeAsync(60_000)
+        session.emit({
+          type: 'message_update',
+          assistantMessageEvent: { type: 'text_delta', delta: 'x' },
+        })
+      }
+      expect(session.abort).not.toHaveBeenCalled()
+
+      session.messages.push({ role: 'assistant', content: 'done' })
+      control.resolvePrompt?.()
+      const result = await pending
+      expect(result.success).toBe(true)
+      expect(result.response).toBe('done')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not stall while a tool is running', async () => {
+    let resolvePrompt: (() => void) | null = null
+    const session = createFakeSession(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvePrompt = resolve
+        })
+    )
+    session.abort = vi.fn(async () => {
+      resolvePrompt?.()
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    vi.useFakeTimers()
+    try {
+      const pending = manager.chat('hi')
+      session.emit({
+        type: 'tool_execution_start',
+        toolCallId: 'tool-1',
+        toolName: 'bash',
+        args: { command: 'npm test' },
+      })
+
+      // 静默 20 分钟：命令可能一直不输出
+      await vi.advanceTimersByTimeAsync(20 * 60_000)
+      expect(watchdogOf(manager)?.isArmed).toBe(false)
+      expect(session.abort).not.toHaveBeenCalled()
+
+      session.emit({
+        type: 'tool_execution_end',
+        toolCallId: 'tool-1',
+        toolName: 'bash',
+        isError: false,
+        result: 'ok',
+        durationMs: 20 * 60_000,
+      })
+      expect(watchdogOf(manager)?.isArmed).toBe(true)
+      // 工具结束后重新按空闲计时
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS)
+      expect(session.abort).toHaveBeenCalled()
+
+      const result = await pending
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('stalled')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not stall while a tool approval is pending', async () => {
+    const control: {
+      resolvePrompt?: () => void
+      resolveApproval?: (decision: ApprovalDecision) => void
+    } = {}
+    const session = createFakeSession(
+      () =>
+        new Promise<void>((resolve) => {
+          control.resolvePrompt = resolve
+        })
+    )
+    session.abort = vi.fn(async () => {
+      control.resolvePrompt?.()
+    })
+    primeSdk(session)
+    await manager.initialize(
+      makeConfig({
+        requestApproval: () =>
+          new Promise<ApprovalDecision>((resolve) => {
+            control.resolveApproval = resolve
+          }),
+      })
+    )
+
+    const requestApproval = (
+      manager as unknown as {
+        requestToolApproval: (
+          request: ApprovalRequestPayload
+        ) => Promise<ApprovalDecision>
+      }
+    ).requestToolApproval.bind(manager)
+
+    vi.useFakeTimers()
+    try {
+      const pending = manager.chat('hi')
+      // 审批是 tool_call 钩子，先于 tool_execution_start：事件流期间完全静默
+      const approval = requestApproval({
+        requestId: 'approval-1',
+        workspaceDir,
+        sessionId: 'session-1',
+        toolCallId: 'tool-1',
+        toolName: 'bash',
+        category: 'command',
+        summary: 'npm test',
+        details: { command: 'npm test' },
+        createdAt: Date.now(),
+        expiresAt: Date.now() + APPROVAL_TIMEOUT_MS,
+      })
+
+      await vi.advanceTimersByTimeAsync(APPROVAL_TIMEOUT_MS - 1)
+      expect(watchdogOf(manager)?.isArmed).toBe(false)
+      expect(session.abort).not.toHaveBeenCalled()
+
+      control.resolveApproval?.({ action: 'allow-once' })
+      await expect(approval).resolves.toEqual({ action: 'allow-once' })
+      expect(watchdogOf(manager)?.isArmed).toBe(true)
+
+      session.abort = vi.fn(async () => {
+        control.resolvePrompt?.()
+      })
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS)
+      const result = await pending
+      expect(result.error).toContain('stalled')
     } finally {
       vi.useRealTimers()
     }

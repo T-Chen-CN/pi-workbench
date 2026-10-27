@@ -108,6 +108,7 @@ import type {
   ToolResultMeta,
 } from './types.js'
 import { withTimeout, withTimeoutResult } from './async-utils.js'
+import { StallWatchdog } from './stall-watchdog.js'
 
 /** 未注入 logger 时保持原有 console 行为 */
 const consoleAgentLogger: AgentLogger = {
@@ -136,16 +137,21 @@ export type {
   ToolResultMeta,
 } from './types.js'
 
-/** 单轮请求的默认超时（毫秒）；超时后自动中止，避免 Agent 永远处于忙碌状态 */
-const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000
+/** 模型响应空闲超时（毫秒）：连续这么久没有任何模型增量才判定卡死；不设整轮上限 */
+export const STALL_TIMEOUT_MS = 120_000
 /** abort 之后等待 SDK 收尾的宽限期；超过后强制结束本轮，防止永久挂起 */
-const ABORT_GRACE_MS = 10_000
+export const ABORT_GRACE_MS = 10_000
 /** 调用 session.abort() 本身的等待上限，避免 dispose / 重启被卡住 */
 const ABORT_TIMEOUT_MS = 5_000
 /** 初始化（模型运行时 + 会话创建）超时 */
 const INIT_TIMEOUT_MS = 30_000
 /** 单次工具审批的等待上限；超时按拒绝处理（fail-closed） */
-const APPROVAL_TIMEOUT_MS = 120_000
+export const APPROVAL_TIMEOUT_MS = 120_000
+
+/** 空闲超时的统一错误文案（渲染层直接展示） */
+function stallErrorMessage(): string {
+  return `Agent response stalled: no output for ${Math.round(STALL_TIMEOUT_MS / 1000)}s.`
+}
 
 export type { SessionMode }
 
@@ -159,6 +165,8 @@ interface SessionRuntime {
   isProcessing: boolean
   onTextDelta: ((delta: string) => void) | null
   onTrace: ((event: AgentTraceEvent) => void) | null
+  /** 本轮的空闲超时看门狗；工具执行与审批等待期间自动挂起 */
+  watchdog: StallWatchdog | null
   /** 当前 assistant 消息中已经收到过增量的 thinking 块 */
   thinkingDeltaSeen: Set<number>
   /** write/edit 工具开始时的目标路径，供 tool_end 附带 */
@@ -266,6 +274,7 @@ export class AgentManager {
     return runtime.session.subscribe((event: any) => {
       try {
         if (event.type === 'message_start' && event.message?.role === 'assistant') {
+          runtime.watchdog?.touch()
           runtime.thinkingDeltaSeen.clear()
           runtime.thinkingDurationsThisMessage = []
           runtime.thinkingStart = null
@@ -289,6 +298,7 @@ export class AgentManager {
         if (event.type === 'message_update') {
           const update = event.assistantMessageEvent
           if (update?.type === 'text_delta' && typeof update.delta === 'string') {
+            runtime.watchdog?.touch()
             runtime.onTextDelta?.(update.delta)
             runtime.onTrace?.({ type: 'text_delta', delta: update.delta })
           } else if (update?.type === 'thinking_start') {
@@ -297,6 +307,7 @@ export class AgentManager {
             }
             runtime.thinkingStart = Date.now()
           } else if (update?.type === 'thinking_delta' && typeof update.delta === 'string') {
+            runtime.watchdog?.touch()
             if (typeof update.contentIndex === 'number') {
               runtime.thinkingDeltaSeen.add(update.contentIndex)
             }
@@ -315,12 +326,19 @@ export class AgentManager {
               if (content) runtime.onTrace?.({ type: 'thinking_delta', delta: content })
               else runtime.onTrace?.({ type: 'thinking_redacted' })
             }
+          } else if (
+            update?.type === 'toolcall_start' ||
+            update?.type === 'toolcall_delta'
+          ) {
+            // 工具参数 JSON 增量：写大文件时可能持续几十秒，属于模型仍在产出
+            runtime.watchdog?.touch()
           }
           return
         }
 
         // Pi SDK 自带自动重试（429 / 5xx / 网络抖动），记录并转发给渲染层
         if (event.type === 'auto_retry_start') {
+          runtime.watchdog?.touch()
           this.logger.warn(
             `[Agent Manager] Provider retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms: ${event.errorMessage ?? ''}`
           )
@@ -334,6 +352,7 @@ export class AgentManager {
           return
         }
         if (event.type === 'auto_retry_end') {
+          runtime.watchdog?.touch()
           this.logger.info(`[Agent Manager] Auto retry ${event.success ? 'succeeded' : 'failed'}`)
           runtime.onTrace?.({ type: 'retry_end', success: Boolean(event.success) })
           return
@@ -375,6 +394,7 @@ export class AgentManager {
         }
 
         if (event.type === 'tool_execution_start') {
+          runtime.watchdog?.beginTool(event.toolCallId)
           const args = event.args ?? {}
           const root = runtime.sessionManager.getCwd()
           const filePath = this.toolFilePath(event.toolName, args, root)
@@ -398,6 +418,7 @@ export class AgentManager {
         }
 
         if (event.type === 'tool_execution_update') {
+          runtime.watchdog?.touch()
           const preview = summarizeToolResult(
             event.partialResult,
             event.toolName === 'bash' || event.toolName === 'powershell'
@@ -414,6 +435,7 @@ export class AgentManager {
         }
 
         if (event.type === 'tool_execution_end') {
+          runtime.watchdog?.endTool(event.toolCallId)
           const snapshot = runtime.editSnapshots.get(event.toolCallId)
           const filePath = snapshot?.path ?? runtime.toolFiles.get(event.toolCallId)
           runtime.editSnapshots.delete(event.toolCallId)
@@ -558,11 +580,16 @@ export class AgentManager {
     if (!handler) {
       return { action: 'deny', reason: 'No approval channel is available in this environment.' }
     }
+    // 审批是 tool_call 钩子，先于 tool_execution_start；这段静默由审批自己的 120s 上限兜底
+    const watchdog = this.runtimes.get(request.sessionId)?.watchdog ?? null
+    watchdog?.beginApproval()
     try {
       return await withTimeout(handler(request), APPROVAL_TIMEOUT_MS, 'Tool approval')
     } catch (error) {
       this.logger.warn('[Agent Manager] Approval failed or timed out:', error)
       return { action: 'deny', reason: 'The approval request timed out.' }
+    } finally {
+      watchdog?.endApproval()
     }
   }
 
@@ -1377,6 +1404,7 @@ export class AgentManager {
       isProcessing: false,
       onTextDelta: null,
       onTrace: null,
+      watchdog: null,
       thinkingDeltaSeen: new Set(),
       toolFiles: new Map(),
       editSnapshots: new Map(),
@@ -1402,6 +1430,8 @@ export class AgentManager {
   }
 
   private async disposeRuntime(runtime: SessionRuntime): Promise<void> {
+    runtime.watchdog?.stop()
+    runtime.watchdog = null
     if (runtime.isProcessing) {
       try {
         await withTimeout(runtime.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
@@ -1919,11 +1949,13 @@ export class AgentManager {
     }
 
     this.lastSessionId = runtime.id
-    const timeoutMs = options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-    let timeoutTimer: NodeJS.Timeout | null = null
-    let hardStopTimer: NodeJS.Timeout | null = null
-    let timedOut = false
+    let stalled = false
     let hardStopped = false
+    let hardStopTimer: NodeJS.Timeout | null = null
+    let rejectHardStop: ((error: Error) => void) | null = null
+    const hardStopPromise = new Promise<never>((_resolve, reject) => {
+      rejectHardStop = reject
+    })
 
     try {
       runtime.onTextDelta = options?.onTextDelta ?? null
@@ -1978,36 +2010,38 @@ export class AgentManager {
         finalPrompt,
         images.length > 0 ? { images } : undefined
       )
-      const timeoutPromise = new Promise<never>((_resolve, reject) => {
-        if (timeoutMs <= 0) return
-        timeoutTimer = setTimeout(() => {
-          timedOut = true
-          this.logger.warn(`[Agent Manager] Request timed out after ${timeoutMs}ms; aborting`)
+      // 只监视“模型静默”：工具执行与审批等待期间看门狗自动挂起，不设整轮上限
+      const watchdog = new StallWatchdog({
+        timeoutMs: STALL_TIMEOUT_MS,
+        logger: this.logger,
+        onStall: (idleMs) => {
+          stalled = true
+          this.logger.warn(
+            `[Agent Manager] No model output for ${Math.round(idleMs / 1000)}s; aborting session ${runtime.id}`
+          )
           void session.abort().catch((error) => {
-            this.logger.warn('[Agent Manager] Failed to abort timed-out request:', error)
+            this.logger.warn('[Agent Manager] Failed to abort stalled request:', error)
           })
           hardStopTimer = setTimeout(() => {
             hardStopped = true
-            reject(new Error(`Agent request did not stop within ${ABORT_GRACE_MS}ms after abort`))
+            rejectHardStop?.(
+              new Error(`Agent did not stop within ${ABORT_GRACE_MS}ms after abort`)
+            )
           }, ABORT_GRACE_MS)
           hardStopTimer.unref?.()
-        }, timeoutMs)
-        timeoutTimer.unref?.()
+        },
       })
-      await Promise.race([promptPromise, timeoutPromise])
+      runtime.watchdog = watchdog
+      watchdog.start()
+      await Promise.race([promptPromise, hardStopPromise])
 
-      if (timeoutTimer) clearTimeout(timeoutTimer)
       if (hardStopTimer) clearTimeout(hardStopTimer)
 
       // 收集本轮文件修改（在读取回复前取出，确保不串到下一轮）
       const edits = runtime.pendingEdits.splice(0)
 
-      if (timedOut) {
-        return {
-          success: false,
-          error: `Agent request timed out after ${Math.round(timeoutMs / 1000)}s`,
-          edits,
-        }
+      if (stalled) {
+        return { success: false, error: stallErrorMessage(), edits }
       }
 
       const messages = runtime.session.messages
@@ -2093,17 +2127,13 @@ export class AgentManager {
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
-      if (timedOut) {
-        this.logger.error('[Agent Manager] Request timed out:', errorMessage)
+      if (stalled) {
+        this.logger.error('[Agent Manager] Response stalled:', errorMessage)
         const edits = runtime.pendingEdits.splice(0)
         if (hardStopped) {
           await this.resetRuntimeAfterHardStop(runtime)
         }
-        return {
-          success: false,
-          error: `Agent request timed out after ${Math.round(timeoutMs / 1000)}s`,
-          edits,
-        }
+        return { success: false, error: stallErrorMessage(), edits }
       }
       this.logger.error('[Agent Manager] Chat error:', errorMessage)
       this.logger.error('[Agent Manager] Stack:', error instanceof Error ? error.stack : '')
@@ -2114,8 +2144,9 @@ export class AgentManager {
         edits: runtime.pendingEdits.splice(0),
       }
     } finally {
-      if (timeoutTimer) clearTimeout(timeoutTimer)
       if (hardStopTimer) clearTimeout(hardStopTimer)
+      runtime.watchdog?.stop()
+      runtime.watchdog = null
       if (this.runtimes.get(runtime.id) === runtime) {
         runtime.isProcessing = false
         runtime.onTextDelta = null
