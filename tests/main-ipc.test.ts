@@ -469,8 +469,8 @@ describe('API configuration handlers', () => {
       provider: 'custom',
       apiUrl: 'https://api.example.com/v1',
       apiKey: 'sk-123',
-      availableModels: ['model-a'],
       selectedModel: 'model-a',
+      models: [{ id: 'model-a', contextWindow: 128_000, image: false }],
     }
 
     await expect(call('apiConfig:save', config)).resolves.toMatchObject({ success: true })
@@ -490,8 +490,8 @@ describe('API configuration handlers', () => {
     expect(result.config).toMatchObject({
       provider: 'custom',
       apiUrl: '',
-      availableModels: [],
       selectedModel: '',
+      models: [],
     })
   })
 
@@ -526,13 +526,101 @@ describe('API configuration handlers', () => {
       provider: 'custom',
       apiUrl: '',
       apiKey: '',
-      availableModels: [],
       selectedModel: '',
+      models: [],
     })
     await expect(
       fs.readFile(path.join(appDir, 'config', 'api-config.legacy.json'), 'utf-8')
     ).resolves.toContain('anthropic')
     await expect(fs.access(path.join(appDir, 'config', 'api-config.json'))).rejects.toThrow()
+  })
+
+  it('converts the legacy model lists into model entries', async () => {
+    await fs.writeFile(
+      path.join(appDir, 'config', 'api-config.json'),
+      JSON.stringify({
+        provider: 'custom',
+        apiUrl: 'https://api.example.com/v1',
+        apiKey: 'enc:sk-legacy',
+        availableModels: ['model-a', 'model-b'],
+        imageModels: ['model-b'],
+        selectedModel: 'model-a',
+      }),
+      'utf-8'
+    )
+
+    const result = await call('apiConfig:get')
+
+    const config = result.config as { models: unknown; [key: string]: unknown }
+    expect(config.models).toEqual([
+      { id: 'model-a', contextWindow: 128_000, image: false },
+      { id: 'model-b', contextWindow: 128_000, image: true },
+    ])
+    // 旧字段不再出现在返回值里
+    expect(config).not.toHaveProperty('availableModels')
+    expect(config).not.toHaveProperty('imageModels')
+  })
+
+  it('sanitizes model entries and restores a missing selected model', async () => {
+    await fs.writeFile(
+      path.join(appDir, 'config', 'api-config.json'),
+      JSON.stringify({
+        provider: 'custom',
+        apiUrl: 'https://api.example.com/v1',
+        apiKey: 'enc:sk-legacy',
+        selectedModel: 'ghost-model',
+        models: [
+          { id: ' model-a ', contextWindow: 32_000, image: 'yes' },
+          { id: 'model-a', contextWindow: 1_000_000, image: true },
+          { id: '', contextWindow: 256_000, image: false },
+          { id: 'model-b', contextWindow: 1_000_000, image: true },
+        ],
+      }),
+      'utf-8'
+    )
+
+    const result = await call('apiConfig:get')
+
+    expect((result.config as { models: unknown }).models).toEqual([
+      { id: 'ghost-model', contextWindow: 128_000, image: false },
+      { id: 'model-a', contextWindow: 128_000, image: false },
+      { id: 'model-b', contextWindow: 1_000_000, image: true },
+    ])
+  })
+
+  it('refuses to save while sessions are running', async () => {
+    const { setRunningAgentsProvider } = await import('../electron/ipc/api-config')
+    const before = {
+      provider: 'custom',
+      apiUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-123',
+      selectedModel: 'model-a',
+      models: [{ id: 'model-a', contextWindow: 128_000, image: false }],
+    }
+    await expect(call('apiConfig:save', before)).resolves.toMatchObject({ success: true })
+
+    setRunningAgentsProvider(() => [{ workspaceDir: workDir, sessionIds: ['s1'] }])
+    try {
+      // 未改变 agentConfigKey 的保存直接放行，避免误伤无副作用的重复保存
+      await expect(call('apiConfig:save', before)).resolves.toMatchObject({ success: true })
+
+      const after = {
+        ...before,
+        models: [{ id: 'model-a', contextWindow: 1_000_000, image: false }],
+      }
+      await expect(call('apiConfig:save', after)).resolves.toMatchObject({
+        success: false,
+        code: 'AGENT_BUSY',
+        workspaces: [{ path: workDir, sessionIds: ['s1'] }],
+      })
+
+      const result = await call('apiConfig:get')
+      expect((result.config as { models: unknown }).models).toEqual([
+        { id: 'model-a', contextWindow: 128_000, image: false },
+      ])
+    } finally {
+      setRunningAgentsProvider(() => [])
+    }
   })
 
   it('fetches and normalizes models from a { data: [{ id }] } response', async () => {
@@ -693,5 +781,14 @@ describe('workspace editor tabs', () => {
     } finally {
       await fs.rm(untrusted, { recursive: true, force: true })
     }
+  })
+})
+
+describe('model context window options', () => {
+  it('keeps the main-process list in sync with pi-bridge', async () => {
+    const { CONTEXT_WINDOW_VALUES } = await import('../electron/ipc/api-config')
+    const { CONTEXT_WINDOW_OPTIONS } = await import('../pi-bridge/src/model-config')
+
+    expect([...CONTEXT_WINDOW_VALUES]).toEqual([...CONTEXT_WINDOW_OPTIONS])
   })
 })

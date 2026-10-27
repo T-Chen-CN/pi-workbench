@@ -133,7 +133,11 @@ export function useChatSessions(options: ChatSessionsOptions) {
           return
         }
         setConfiguredImageModels(
-          Array.isArray(configResult.config.imageModels) ? configResult.config.imageModels : []
+          Array.isArray(configResult.config.models)
+            ? configResult.config.models
+                .filter((entry) => entry.image)
+                .map((entry) => entry.id)
+            : []
         )
 
         const initResult = await piAgentAPI.initialize({

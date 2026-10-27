@@ -6,6 +6,7 @@ import { shell, dialog, BrowserWindow } from 'electron'
 import { getAppDir, getBridgeEntryUrl } from '../app-paths.js'
 import { isTrustedWorkspacePath } from '../workspace-trust.js'
 import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
+import { agentConfigKey } from '../agent-config-key.js'
 import { sanitizeApprovalDecision, type ApprovalBroker } from '../approval-broker.js'
 import type { AgentRegistry } from '../agent-registry.js'
 import type { PluginManager } from '../plugin-manager.js'
@@ -52,26 +53,6 @@ export function registerAgentIpc(context: AgentIpcContext): void {
 
 // ==================== Pi Agent Integration ====================
 
-/** 配置签名：同一工作区配置变化时需要重建 Agent，否则复用 */
-function agentConfigKey(apiConfig: {
-  provider: string
-  apiUrl: string
-  apiKey: string
-  selectedModel: string
-  availableModels?: string[]
-  imageModels?: string[]
-}): string {
-  return JSON.stringify({
-    provider: apiConfig.provider,
-    apiUrl: apiConfig.apiUrl,
-    selectedModel: apiConfig.selectedModel,
-    apiKey: apiConfig.apiKey,
-    availableModels: apiConfig.availableModels ?? [],
-    // 图片能力勾选决定 models.json 的 input，变化时必须重建 Agent
-    imageModels: [...(apiConfig.imageModels ?? [])].sort(),
-  })
-}
-
 // Agent 初始化（按工作区）
 handleIpc('agent:initialize', async (_event, config: {
   workspaceDir: string
@@ -80,8 +61,7 @@ handleIpc('agent:initialize', async (_event, config: {
     apiUrl: string
     apiKey: string
     selectedModel: string
-    availableModels?: string[]
-    imageModels?: string[]
+    models?: Array<{ id: string; contextWindow: number; image: boolean }>
   }
 }) => {
   try {

@@ -116,6 +116,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       apiUrl: string
       apiKey: string
       selectedModel: string
+      /** 每模型的上下文容量与图片能力；主进程据此生成 models.json */
+      models?: Array<{ id: string; contextWindow: number; image: boolean }>
     }
   }) => ipcRenderer.invoke('agent:initialize', config),
   agentChat: (

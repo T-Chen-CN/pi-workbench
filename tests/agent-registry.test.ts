@@ -89,3 +89,25 @@ describe('AgentRegistry', () => {
     expect(registry.size()).toBe(0)
   })
 })
+
+describe('AgentRegistry running sessions', () => {
+  it('collects session ids per workspace and skips idle agents', async () => {
+    const registry = new AgentRegistry()
+    const idle = createFakeAgent()
+    const busy = createFakeAgent()
+    busy.agent.hasRunningSessions = () => ['s1', 's2']
+
+    await registry.set('/tmp/idle', idle.agent, 'config-1')
+    await registry.set('/tmp/busy', busy.agent, 'config-1')
+
+    expect(registry.listRunning()).toEqual([{ workspaceDir: '/tmp/busy', sessionIds: ['s1', 's2'] }])
+  })
+
+  it('treats agents without the hook as idle', async () => {
+    const registry = new AgentRegistry()
+    const { agent } = createFakeAgent()
+    await registry.set('/tmp/a', agent, 'config-1')
+
+    expect(registry.listRunning()).toEqual([])
+  })
+})

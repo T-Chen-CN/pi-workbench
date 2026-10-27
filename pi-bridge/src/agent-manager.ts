@@ -63,6 +63,8 @@ import {
   KNOWN_MODEL_METADATA,
   THINKING_LEVELS,
   WORKBENCH_PROVIDER_ID,
+  normalizeModelEntries,
+  resolveMaxTokens,
   writeModelsConfig,
 } from './model-config.js'
 import {
@@ -1084,7 +1086,16 @@ export class AgentManager {
     }
   }
 
-  /** 模型能力提示（R-06）：上下文窗口、思考与图像输入 */
+  /** 运行中的会话 ID；配置保存前用于避免打断正在跑的轮次 */
+  hasRunningSessions(): string[] {
+    const ids: string[] = []
+    for (const [id, runtime] of this.runtimes) {
+      if (runtime.isProcessing) ids.push(id)
+    }
+    return ids
+  }
+
+  /** 模型能力提示（R-06）：容量来自用户设置，思考与图片能力来自设置或 catalog */
   async getModelCapabilities(): Promise<{
     success: boolean
     models?: ModelCapabilityInfo[]
@@ -1096,52 +1107,36 @@ export class AgentManager {
         return { success: false, error: 'Agent not initialized.' }
       }
       const config = this.config
-      const ids = [
-        ...new Set(
-          [config.apiConfig.selectedModel, ...(config.apiConfig.availableModels ?? [])].filter(
-            (id): id is string => typeof id === 'string' && id.length > 0
-          )
-        ),
-      ]
+      const entries = normalizeModelEntries(config.apiConfig)
 
-      const listed = config.apiConfig.availableModels ?? []
-      const declaredImages = Array.isArray(config.apiConfig.imageModels)
-        ? config.apiConfig.imageModels
-        : ids.filter((id) => KNOWN_MODEL_METADATA[id]?.input?.includes('image'))
-      const imageSet = new Set(declaredImages)
-      const models = ids.map((id): ModelCapabilityInfo => {
-        const model = this.modelRuntime!.getModel(WORKBENCH_PROVIDER_ID, id)
-        const known = KNOWN_MODEL_METADATA[id]
-        const source = known ? 'catalog' : 'default'
-        // 供应商返回过模型列表时以它为准，避免把已下线的模型标成可用
-        const available = Boolean(model) && (listed.length === 0 || listed.includes(id))
-        if (!model || !available) {
+      const models = entries.map((entry): ModelCapabilityInfo => {
+        const model = this.modelRuntime!.getModel(WORKBENCH_PROVIDER_ID, entry.id)
+        const known = KNOWN_MODEL_METADATA[entry.id]
+        const maxTokens = resolveMaxTokens(entry.contextWindow, known?.maxTokens)
+        if (!model) {
           return {
-            id,
+            id: entry.id,
             available: false,
-            source,
-            contextWindow: known?.contextWindow ?? null,
-            maxTokens: known?.maxTokens ?? null,
+            contextWindow: entry.contextWindow,
+            maxTokens,
             reasoning: known?.reasoning ?? null,
-            vision: imageSet.has(id),
+            vision: entry.image,
             thinkingLevels: [],
           }
         }
         const supportsThinking = Boolean(model.reasoning)
         return {
-          id,
+          id: entry.id,
           available: true,
-          source,
-          contextWindow: known ? model.contextWindow : null,
-          maxTokens: known ? model.maxTokens : null,
-          reasoning: known ? supportsThinking : null,
-          vision: imageSet.has(id),
-          thinkingLevels:
-            known && supportsThinking
-              ? THINKING_LEVELS.filter(
-                  (level) => model.thinkingLevelMap?.[level] !== null
-                ).map((level) => String(level))
-              : [],
+          contextWindow: entry.contextWindow,
+          maxTokens,
+          reasoning: Boolean(known?.reasoning),
+          vision: entry.image,
+          thinkingLevels: supportsThinking
+            ? THINKING_LEVELS.filter(
+                (level) => model.thinkingLevelMap?.[level] !== null
+              ).map((level) => String(level))
+            : [],
         }
       })
 

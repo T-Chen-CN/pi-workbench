@@ -141,8 +141,8 @@ const configWithKey: ApiConfig = {
   provider: 'anthropic',
   apiUrl: 'https://example.test/v1',
   apiKey: 'test-key',
-  availableModels: ['test-model'],
   selectedModel: 'test-model',
+  models: [{ id: 'test-model', contextWindow: 128_000, image: false }],
 }
 
 const session: SessionSummary = {
@@ -450,7 +450,6 @@ describe('ChatPanel', () => {
         {
           id: 'test-model',
           available: true,
-          source: 'catalog',
           contextWindow: 128_000,
           maxTokens: 8_192,
           reasoning: false,
@@ -488,7 +487,13 @@ describe('ChatPanel', () => {
   it('switches the model and thinking level from the status line menus', async () => {
     vi.mocked(api.apiConfigGet).mockResolvedValue({
       success: true,
-      config: { ...configWithKey, availableModels: ['test-model', 'alt-model'] },
+      config: {
+        ...configWithKey,
+        models: [
+          { id: 'test-model', contextWindow: 128_000, image: false },
+          { id: 'alt-model', contextWindow: 128_000, image: false },
+        ],
+      },
     })
     vi.mocked(piAgentAPI.setSessionModel).mockResolvedValue({ success: true })
     vi.mocked(piAgentAPI.setSessionThinking).mockResolvedValue({ success: true })

@@ -253,8 +253,8 @@ const mockAPI = {
         provider: 'custom',
         apiUrl: '',
         apiKey: '',
-        availableModels: [],
-        selectedModel: ''
+        selectedModel: '',
+        models: []
       }
     }
   },

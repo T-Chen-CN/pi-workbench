@@ -27,11 +27,23 @@ import { api } from '../api'
 import { persistAppSettings } from '../utils/persistSettings'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
-import type { ApiConfig, AppInfo, PermissionLevel } from '../types/electron'
+import type {
+  ApiConfig,
+  ApiModelEntry,
+  AppInfo,
+  ModelContextWindow,
+  PermissionLevel,
+} from '../types/electron'
 import { Button, Field, Input, Select } from './ui'
 import { GithubSettings } from './GithubSettings'
 import { WebSearchSettings } from './WebSearchSettings'
-import { KeyCap, LegendRow, Meter } from './patterns'
+import { KeyCap, LegendRow, Meter, SettingsTable, SettingsTableRow } from './patterns'
+import { alertDialog } from '../store/dialogStore'
+import {
+  CONTEXT_WINDOW_OPTIONS,
+  contextWindowLabel,
+  mergeModelEntries,
+} from '../utils/model-capabilities'
 import {
   SESSION_MODE_DESCRIPTION_KEY,
   SESSION_MODE_ICON,
@@ -105,9 +117,8 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     provider: 'custom',
     apiUrl: '',
     apiKey: '',
-    availableModels: [],
     selectedModel: '',
-    imageModels: [],
+    models: [],
   })
 
   const [isSaving, setIsSaving] = useState(false)
@@ -270,7 +281,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
         setApiConfig({
           ...result.config,
           provider: 'custom',
-          imageModels: result.config.imageModels ?? [],
+          models: result.config.models ?? [],
         })
       }
     } catch (error) {
@@ -298,13 +309,13 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
       const result = await api.apiConfigFetchModels(apiConfig.apiUrl, apiConfig.apiKey, 'custom')
 
       if (result.success && result.models && result.models.length > 0) {
-        setApiConfig((prev) => ({
-          ...prev,
-          availableModels: result.models!,
-          selectedModel: result.models!.includes(prev.selectedModel)
+        setApiConfig((prev) => {
+          const models = mergeModelEntries(prev.models ?? [], result.models!)
+          const selectedModel = models.some((entry) => entry.id === prev.selectedModel)
             ? prev.selectedModel
-            : result.models![0],
-        }))
+            : (models[0]?.id ?? '')
+          return { ...prev, models, selectedModel }
+        })
         toast.success(t('fetchedModels', { count: result.models.length }))
       } else if (result.success) {
         toast.warning(t('emptyModelList'))
@@ -321,16 +332,12 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     }
   }
 
-  const toggleImageModel = (model: string, checked: boolean) => {
-    setApiConfig((prev) => {
-      const current = prev.imageModels ?? []
-      return {
-        ...prev,
-        imageModels: checked
-          ? [...new Set([...current, model])]
-          : current.filter((item) => item !== model),
-      }
-    })
+  /** 修改单个模型的容量档位或图片能力；其余字段保持不变 */
+  const updateModelEntry = (id: string, patch: Partial<Omit<ApiModelEntry, 'id'>>) => {
+    setApiConfig((prev) => ({
+      ...prev,
+      models: prev.models.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)),
+    }))
   }
 
   const handleSaveConfig = async () => {
@@ -350,10 +357,18 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
       const result = await api.apiConfigSave(apiConfig)
       if (result.success) {
         setSaveStatus('success')
-        toast.success(t('apiConfigSaved'))
+        toast.success(t('apiConfigSavedReopen'))
         // 通知 ChatPanel 用新配置重新初始化 Agent
         emitAppEvent('api-config-saved')
         setTimeout(() => setSaveStatus('idle'), 2000)
+      } else if (result.code === 'AGENT_BUSY') {
+        // 有运行中的会话时不下盘：弹窗告知原因；保存按钮不禁用，否则用户不知道点不动的原因
+        setSaveStatus('idle')
+        await alertDialog({
+          title: t('agentBusyTitle'),
+          message: t('agentBusyMessage', { count: result.workspaces?.length ?? 0 }),
+          confirmLabel: t('dialogGotIt'),
+        })
       } else {
         setSaveStatus('error')
         toast.error(t('saveConfigFailed', { error: localizeError(result.error) || t('unknownError') }))
@@ -590,49 +605,86 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
 
             <Field
               label={t('model')}
-              hint={t('modelsAvailable', { count: apiConfig.availableModels.length })}
+              hint={t('modelsAvailable', { count: apiConfig.models.length })}
             >
               <Select
                 value={apiConfig.selectedModel}
                 onChange={(e) =>
                   setApiConfig((prev) => ({ ...prev, selectedModel: e.target.value }))
                 }
-                disabled={apiConfig.availableModels.length === 0}
+                disabled={apiConfig.models.length === 0}
               >
-                {apiConfig.availableModels.length === 0 ? (
+                {apiConfig.models.length === 0 ? (
                   <option value="">{t('noModelsAvailable')}</option>
                 ) : (
-                  apiConfig.availableModels.map((model) => (
-                    <option key={model} value={model}>
-                      {model}
+                  apiConfig.models.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.id}
                     </option>
                   ))
                 )}
               </Select>
             </Field>
 
-            <Field label={t('modelImageSupport')} hint={t('modelImageSupportHint')}>
-              {apiConfig.availableModels.length === 0 ? (
+            <div className="flex flex-col gap-2">
+              <span className="type-label text-ink">{t('modelCapabilityTable')}</span>
+              {apiConfig.models.length === 0 ? (
                 <span className="type-caption text-ink-muted">{t('noModelsAvailable')}</span>
               ) : (
-                <div className="max-h-48 overflow-y-auto border border-rule-hairline bg-raised">
-                  {apiConfig.availableModels.map((model) => (
-                    <label
-                      key={model}
-                      className="flex items-center gap-2 border-b border-rule-divide px-3 py-1.5 last:border-b-0 type-value text-ink"
-                    >
-                      <input
-                        type="checkbox"
-                        className="h-3 w-3 flex-shrink-0 accent-[rgb(var(--accent))]"
-                        checked={(apiConfig.imageModels ?? []).includes(model)}
-                        onChange={(event) => toggleImageModel(model, event.target.checked)}
-                      />
-                      <span className="min-w-0 truncate type-data">{model}</span>
-                    </label>
-                  ))}
-                </div>
+                <SettingsTable
+                  columns={[
+                    { label: t('modelColumn'), className: 'min-w-0 flex-1' },
+                    { label: t('modelContextColumn'), className: 'w-24' },
+                    { label: t('modelImageColumn'), className: 'w-12 text-center' },
+                  ]}
+                >
+                  <div className="max-h-64 overflow-y-auto">
+                    {apiConfig.models.map((entry) => (
+                      <SettingsTableRow
+                        key={entry.id}
+                        selected={entry.id === apiConfig.selectedModel}
+                      >
+                        <span
+                          className="min-w-0 flex-1 truncate type-data text-ink"
+                          title={entry.id}
+                        >
+                          {entry.id}
+                        </span>
+                        <div className="w-24">
+                          <Select
+                            value={entry.contextWindow}
+                            aria-label={`${entry.id} ${t('modelContextColumn')}`}
+                            onChange={(event) =>
+                              updateModelEntry(entry.id, {
+                                contextWindow: Number(event.target.value) as ModelContextWindow,
+                              })
+                            }
+                          >
+                            {CONTEXT_WINDOW_OPTIONS.map((value) => (
+                              <option key={value} value={value}>
+                                {contextWindowLabel(value)}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
+                        <label className="flex w-12 justify-center">
+                          <input
+                            type="checkbox"
+                            className="h-3 w-3 flex-shrink-0 accent-[rgb(var(--accent))]"
+                            checked={entry.image}
+                            aria-label={`${entry.id} ${t('modelImageColumn')}`}
+                            onChange={(event) =>
+                              updateModelEntry(entry.id, { image: event.target.checked })
+                            }
+                          />
+                        </label>
+                      </SettingsTableRow>
+                    ))}
+                  </div>
+                </SettingsTable>
               )}
-            </Field>
+              <span className="type-caption text-ink-muted">{t('modelContextHint')}</span>
+            </div>
 
             <div className="mt-1 flex items-center gap-3">
               <Button

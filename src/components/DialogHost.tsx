@@ -3,7 +3,7 @@ import { useDialogStore } from '../store/dialogStore'
 import { useI18nStore } from '../store/i18nStore'
 import { Button, Input, Modal } from './ui'
 
-/** 全局确认/输入对话框，替代 window.confirm / window.prompt */
+/** 全局确认/输入/提示对话框，替代 window.confirm / window.prompt / window.alert */
 export const DialogHost: React.FC = () => {
   const current = useDialogStore((state) => state.current)
   const close = useDialogStore((state) => state.close)
@@ -19,6 +19,7 @@ export const DialogHost: React.FC = () => {
   if (!current) return null
 
   const { kind, options } = current
+  const isAlert = kind === 'alert'
   const isConfirm = kind === 'confirm'
   const danger = kind === 'confirm' && Boolean(options.danger)
 
@@ -33,14 +34,20 @@ export const DialogHost: React.FC = () => {
       size="sm"
       closeLabel={t('close')}
       footer={
-        <>
-          <Button variant="ghost" onClick={cancel} autoFocus={isConfirm}>
-            {options.cancelLabel ?? t('cancel')}
+        isAlert ? (
+          <Button variant="primary" onClick={cancel} autoFocus>
+            {options.confirmLabel ?? t('dialogGotIt')}
           </Button>
-          <Button variant={danger ? 'danger' : 'primary'} onClick={confirm}>
-            {options.confirmLabel ?? t('confirm')}
-          </Button>
-        </>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={cancel} autoFocus={isConfirm}>
+              {options.cancelLabel ?? t('cancel')}
+            </Button>
+            <Button variant={danger ? 'danger' : 'primary'} onClick={confirm}>
+              {options.confirmLabel ?? t('confirm')}
+            </Button>
+          </>
+        )
       }
     >
       <div className="flex flex-col gap-3">

@@ -4,11 +4,21 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import { existsSync } from 'fs'
 import { getAppDir } from '../app-paths.js'
+import { agentConfigKey } from '../agent-config-key.js'
 import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
 import { decryptSecret, encryptSecret } from '../secret-crypto.js'
 import { handleIpc } from './register.js'
 
 let activeProviderApiKey = ''
+
+/** 由 main.ts 注入：返回各工作区运行中的 Agent 会话；保存前用于避免打断正在跑的轮次 */
+let listRunningAgents: (() => Array<{ workspaceDir: string; sessionIds: string[] }>) | null = null
+
+export function setRunningAgentsProvider(
+  provider: () => Array<{ workspaceDir: string; sessionIds: string[] }>
+): void {
+  listRunningAgents = provider
+}
 
 /** 终端环境过滤需要知道当前生效的 Key，避免误删用户自己的同名变量 */
 export function getActiveProviderApiKey(): string {
@@ -18,15 +28,76 @@ export function getActiveProviderApiKey(): string {
 const encryptApiKey = encryptSecret
 const decryptApiKey = decryptSecret
 
+/** 上下文容量只允许四档；与 pi-bridge 的 CONTEXT_WINDOW_OPTIONS 一致（单测校验） */
+export const CONTEXT_WINDOW_VALUES = [64_000, 128_000, 256_000, 1_000_000] as const
+const DEFAULT_CONTEXT_WINDOW = 128_000
+/** 旧配置没有 imageModels 时的历史默认预勾选，只在迁移旧结构时使用 */
+const LEGACY_DEFAULT_IMAGE_MODELS = ['deepseek-flash']
+
+export interface StoredModelEntry {
+  id: string
+  contextWindow: number
+  image: boolean
+}
+
 /** 只支持 OpenAI 兼容渠道；provider 字段保留给 AgentManager 兼容旧结构 */
 const DEFAULT_API_CONFIG = {
   provider: 'custom',
   apiUrl: '',
   apiKey: '',
-  availableModels: [] as string[],
   selectedModel: '',
-  /** 已知支持图片的模型；仅用于旧配置迁移时的预勾选 */
-  imageModels: ['deepseek-flash'] as string[],
+  models: [] as StoredModelEntry[],
+}
+
+function normalizeContextWindow(value: unknown): number {
+  return typeof value === 'number' &&
+    (CONTEXT_WINDOW_VALUES as readonly number[]).includes(value)
+    ? value
+    : DEFAULT_CONTEXT_WINDOW
+}
+
+/**
+ * 归一化模型列表。
+ * 新结构直接清洗；旧结构（availableModels + imageModels）就地转换，不写盘。
+ * selectedModel 不在列表里时补一条默认条目，避免模型下拉与能力提示失配。
+ */
+export function normalizeApiModels(raw: any): StoredModelEntry[] {
+  const entries: StoredModelEntry[] = []
+  const seen = new Set<string>()
+
+  const push = (id: unknown, image: boolean, contextWindow: unknown): void => {
+    const value = typeof id === 'string' ? id.trim() : ''
+    if (!value || seen.has(value)) return
+    seen.add(value)
+    entries.push({
+      id: value,
+      contextWindow: normalizeContextWindow(contextWindow),
+      image,
+    })
+  }
+
+  if (Array.isArray(raw?.models)) {
+    for (const item of raw.models) {
+      push(item?.id, item?.image === true, item?.contextWindow)
+    }
+  } else {
+    const images = new Set(
+      Array.isArray(raw?.imageModels)
+        ? raw.imageModels.filter((id: unknown): id is string => typeof id === 'string')
+        : LEGACY_DEFAULT_IMAGE_MODELS
+    )
+    const available = Array.isArray(raw?.availableModels) ? raw.availableModels : []
+    for (const id of available) {
+      push(id, images.has(String(id)), DEFAULT_CONTEXT_WINDOW)
+    }
+  }
+
+  const selected = typeof raw?.selectedModel === 'string' ? raw.selectedModel.trim() : ''
+  if (selected && !seen.has(selected)) {
+    entries.unshift({ id: selected, contextWindow: DEFAULT_CONTEXT_WINDOW, image: false })
+  }
+
+  return entries
 }
 
 // Helper function to load API Config
@@ -67,9 +138,10 @@ async function loadApiConfig(): Promise<any> {
     }
 
     config.apiKey = decryptApiKey(config.apiKey)
-    config.imageModels = Array.isArray(config.imageModels)
-      ? config.imageModels.filter((id: unknown): id is string => typeof id === 'string')
-      : [...DEFAULT_API_CONFIG.imageModels]
+    // 统一成 models[]；旧字段只在内存中转换，下一次保存才落新结构
+    config.models = normalizeApiModels(config)
+    delete config.availableModels
+    delete config.imageModels
     activeProviderApiKey = typeof config.apiKey === 'string' ? config.apiKey : ''
     return config
   } catch (error) {
@@ -97,30 +169,38 @@ handleIpc('apiConfig:save', async (_event, config: any) => {
     const appDir = getAppDir()
     const configPath = path.join(appDir, 'config', 'api-config.json')
 
-    const stored = {
-      ...config,
-      availableModels: Array.isArray(config?.availableModels)
-        ? [
-            ...new Set(
-              config.availableModels.filter(
-                (id: unknown): id is string => typeof id === 'string' && id.length > 0
-              )
-            ),
-          ]
-        : [],
-      imageModels: Array.isArray(config?.imageModels)
-        ? [
-            ...new Set(
-              config.imageModels.filter(
-                (id: unknown): id is string => typeof id === 'string' && id.length > 0
-              )
-            ),
-          ]
-        : [...DEFAULT_API_CONFIG.imageModels],
-      apiKey: encryptApiKey(String(config?.apiKey ?? '')),
+    /** 明文配置（与 load 结果同形，便于比较配置签名） */
+    const nextConfig = {
+      provider: typeof config?.provider === 'string' ? config.provider : 'custom',
+      apiUrl: String(config?.apiUrl ?? ''),
+      apiKey: String(config?.apiKey ?? ''),
+      selectedModel: String(config?.selectedModel ?? ''),
+      models: normalizeApiModels(config),
     }
-    await writeJsonAtomic(configPath, stored)
-    activeProviderApiKey = String(config?.apiKey ?? '')
+
+    // 会重建 Agent 的变更不允许在会话运行中落地：写盘后各工作区会重新初始化，
+    // 正在跑的轮次会被 dispose 掉，用户看到的是“消息突然中断”。
+    const previous = await loadApiConfig()
+    if (previous && agentConfigKey(previous) !== agentConfigKey(nextConfig)) {
+      const running = listRunningAgents?.() ?? []
+      if (running.length > 0) {
+        return {
+          success: false,
+          code: 'AGENT_BUSY',
+          workspaces: running.map((entry) => ({
+            path: entry.workspaceDir,
+            sessionIds: entry.sessionIds,
+          })),
+          error: 'Agent sessions are running',
+        }
+      }
+    }
+
+    await writeJsonAtomic(configPath, {
+      ...nextConfig,
+      apiKey: encryptApiKey(nextConfig.apiKey),
+    })
+    activeProviderApiKey = nextConfig.apiKey
 
     return { success: true }
   } catch (error) {

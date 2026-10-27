@@ -154,17 +154,18 @@ export interface RegisteredAgent {
   getSessionJsonlPath?: (
     sessionId: string
   ) => Promise<{ success: boolean; title?: string; path?: string; error?: string }>
+  /** 运行中的会话 ID；配置变更前的活跃检查 */
+  hasRunningSessions?: () => string[]
   /** 模型能力提示（R-06） */
   getModelCapabilities?: () => Promise<{
     success: boolean
     models?: Array<{
       id: string
       available: boolean
-      source: 'catalog' | 'default'
-      contextWindow: number | null
+      contextWindow: number
       maxTokens: number | null
       reasoning: boolean | null
-      vision: boolean | null
+      vision: boolean
       thinkingLevels: string[]
     }>
     selected?: string
@@ -295,5 +296,15 @@ export class AgentRegistry {
   /** 已登记的工作区数量（测试与诊断用） */
   size(): number {
     return this.entries.size
+  }
+
+  /** 存在运行中会话的工作区与会话 ID；配置保存前用于避免打断正在跑的轮次 */
+  listRunning(): Array<{ workspaceDir: string; sessionIds: string[] }> {
+    const running: Array<{ workspaceDir: string; sessionIds: string[] }> = []
+    for (const [workspaceDir, entry] of this.entries) {
+      const sessionIds = entry.agent.hasRunningSessions?.() ?? []
+      if (sessionIds.length > 0) running.push({ workspaceDir, sessionIds })
+    }
+    return running
   }
 }

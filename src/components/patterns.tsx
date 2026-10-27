@@ -212,6 +212,57 @@ export const LegendRow: React.FC<LegendRowProps> = ({
   </div>
 )
 
+export interface SettingsTableColumn {
+  label: string
+  /** 列宽与对齐；表头与数据行必须用同一组类名 */
+  className?: string
+}
+
+export interface SettingsTableProps {
+  columns: SettingsTableColumn[]
+  children: React.ReactNode
+  className?: string
+}
+
+/** 设置页能力表：列头 + 行内控件；不用表格语义的卡片式两列表，因为需要第三列开关 */
+export const SettingsTable: React.FC<SettingsTableProps> = ({
+  columns,
+  children,
+  className = '',
+}) => (
+  <div className={`border border-rule-hairline bg-raised ${className}`}>
+    <div className="flex items-center gap-3 border-b border-rule-divide bg-panel px-3 py-1.5">
+      {columns.map((column) => (
+        <Label key={column.label} className={`text-ink-muted ${column.className ?? ''}`}>
+          {column.label}
+        </Label>
+      ))}
+    </div>
+    {children}
+  </div>
+)
+
+export interface SettingsTableRowProps {
+  /** 当前生效项；只做底色区分，不动文字颜色 */
+  selected?: boolean
+  children: React.ReactNode
+  className?: string
+}
+
+export const SettingsTableRow: React.FC<SettingsTableRowProps> = ({
+  selected = false,
+  children,
+  className = '',
+}) => (
+  <div
+    className={`flex items-center gap-3 border-b border-rule-divide px-3 py-1 last:border-b-0 ${
+      selected ? 'bg-active' : ''
+    } ${className}`}
+  >
+    {children}
+  </div>
+)
+
 export const KeyCap: React.FC<{ children: React.ReactNode; className?: string }> = ({
   children,
   className = '',

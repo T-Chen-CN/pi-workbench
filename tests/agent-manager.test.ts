@@ -389,7 +389,7 @@ describe('AgentManager initialization', () => {
       baseUrl: 'https://api.example.com/v1',
       api: 'openai-completions',
       apiKey: '$PI_WORKBENCH_API_KEY',
-      models: [{ id: 'test-model', input: ['text'] }],
+      models: [{ id: 'test-model', contextWindow: 128_000, maxTokens: 8_192, input: ['text'] }],
     })
     expect(raw).not.toContain('sk-secret')
     expect(process.env.PI_WORKBENCH_API_KEY).toBe('sk-secret')
@@ -1928,15 +1928,15 @@ describe('conversation branches', () => {
 })
 
 describe('model capabilities', () => {
-  it('reports catalog metadata and marks unavailable models', async () => {
+  it('reports user-set context windows and marks unavailable models', async () => {
     const session = createFakeSession()
     const models: Record<string, Record<string, unknown>> = {
       'deepseek-flash': {
         provider: 'pi-workbench',
         id: 'deepseek-flash',
         reasoning: true,
-        input: ['text', 'image'],
-        contextWindow: 128_000,
+        input: ['text'],
+        contextWindow: 64_000,
         maxTokens: 8_192,
         thinkingLevelMap: { high: null },
       },
@@ -1954,7 +1954,10 @@ describe('model capabilities', () => {
           apiUrl: 'https://api.example.com/v1/',
           apiKey: 'sk-secret',
           selectedModel: 'deepseek-flash',
-          availableModels: ['deepseek-flash', 'deepseek-v4-pro'],
+          models: [
+            { id: 'deepseek-flash', contextWindow: 128_000, image: true },
+            { id: 'deepseek-v4-pro', contextWindow: 256_000, image: false },
+          ],
         },
       })
     )
@@ -1962,16 +1965,21 @@ describe('model capabilities', () => {
     const result = await manager.getModelCapabilities()
 
     expect(result.success).toBe(true)
+    // 容量以用户设置为准，不采用 catalog / SDK 里的值
     expect(result.models?.[0]).toMatchObject({
       id: 'deepseek-flash',
       available: true,
-      source: 'catalog',
       contextWindow: 128_000,
       reasoning: true,
       vision: true,
     })
     expect(result.models?.[0].thinkingLevels).not.toContain('high')
-    expect(result.models?.[1]).toMatchObject({ id: 'deepseek-v4-pro', available: false })
+    expect(result.models?.[1]).toMatchObject({
+      id: 'deepseek-v4-pro',
+      available: false,
+      contextWindow: 256_000,
+      vision: false,
+    })
 
     const modelsJson = JSON.parse(
       await fs.readFile(path.join(agentDir, 'models.json'), 'utf-8')
@@ -1985,12 +1993,15 @@ describe('model capabilities', () => {
       'text',
       'image',
     ])
+    expect(entries.find((model: { id: string }) => model.id === 'deepseek-flash').contextWindow).toBe(
+      128_000
+    )
     expect(entries.find((model: { id: string }) => model.id === 'deepseek-v4-pro').input).toEqual([
       'text',
     ])
   })
 
-  it('follows the user image checkboxes in models.json', async () => {
+  it('keeps catalog maxTokens as an upper bound and follows user image flags', async () => {
     const session = createFakeSession()
     const models: Record<string, Record<string, unknown>> = {
       'deepseek-flash': {
@@ -2023,30 +2034,55 @@ describe('model capabilities', () => {
           apiUrl: 'https://api.example.com/v1/',
           apiKey: 'sk-secret',
           selectedModel: 'custom-vision-model',
-          availableModels: ['deepseek-flash', 'custom-vision-model'],
-          imageModels: ['custom-vision-model'],
+          models: [
+            { id: 'deepseek-flash', contextWindow: 1_000_000, image: false },
+            { id: 'custom-vision-model', contextWindow: 64_000, image: true },
+          ],
         },
       })
     )
 
     const capabilities = await manager.getModelCapabilities()
-    expect(
-      capabilities.models?.find((model) => model.id === 'deepseek-flash')?.vision
-    ).toBe(false)
-    expect(
-      capabilities.models?.find((model) => model.id === 'custom-vision-model')?.vision
-    ).toBe(true)
+    expect(capabilities.models?.find((model) => model.id === 'deepseek-flash')?.vision).toBe(false)
+    expect(capabilities.models?.find((model) => model.id === 'custom-vision-model')?.vision).toBe(
+      true
+    )
 
     const modelsJson = JSON.parse(
       await fs.readFile(path.join(agentDir, 'models.json'), 'utf-8')
     )
     const entries = modelsJson.providers['pi-workbench'].models
-    expect(entries.find((model: { id: string }) => model.id === 'deepseek-flash').input).toEqual([
-      'text',
-    ])
-    expect(
-      entries.find((model: { id: string }) => model.id === 'custom-vision-model').input
-    ).toEqual(['text', 'image'])
+    const flash = entries.find((model: { id: string }) => model.id === 'deepseek-flash')
+    const vision = entries.find((model: { id: string }) => model.id === 'custom-vision-model')
+
+    expect(flash.input).toEqual(['text'])
+    expect(vision.input).toEqual(['text', 'image'])
+    // 1M 档位配套 16384，但 catalog 只有 8192：只缩不放大
+    expect(flash).toMatchObject({ contextWindow: 1_000_000, maxTokens: 8_192 })
+    // 未登记的模型没有 catalog 上限，按档位配套值写入
+    expect(vision).toMatchObject({ contextWindow: 64_000, maxTokens: 8_192 })
+  })
+
+  it('lists running sessions and clears them once the turn finishes', async () => {
+    let releasePrompt: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      releasePrompt = resolve
+    })
+    const session = createFakeSession(async (s) => {
+      await gate
+      s.messages.push({ role: 'assistant', content: 'done' })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    expect(manager.hasRunningSessions()).toEqual([])
+
+    const pending = manager.chat('hi')
+    expect(manager.hasRunningSessions()).toEqual(['session-1'])
+
+    releasePrompt()
+    await pending
+    expect(manager.hasRunningSessions()).toEqual([])
   })
 })
 
