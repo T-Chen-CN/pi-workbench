@@ -103,4 +103,10 @@
   # 这份副本不会被 electron-updater 读取，安装完成后直接删除。
   Delete "${PI_UPDATER_STORE}\installer.exe"
   RMDir /r "${PI_UPDATER_STORE}"
+
+  # 更新后让 Windows 立刻丢弃旧的 shell 缓存：
+  # SHCNE_ASSOCCHANGED 通知图标 / 文件关联 / 快捷方式失效，ie4uinit 重建图标缓存库。
+  # 两者都是尽力而为，失败不影响安装；应用侧首启还有一次兜底（electron/shell-refresh.ts）。
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0x0000, i 0, i 0)'
+  Exec '"$SYSDIR\ie4uinit.exe" -show'
 !macroend

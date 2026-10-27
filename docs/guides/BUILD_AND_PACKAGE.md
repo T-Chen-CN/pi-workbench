@@ -143,6 +143,14 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
   - macOS 应用未签名，**不能自动安装更新**，应用只检查版本并打开 Release 页面，用户下载 dmg 后拖入 Applications 覆盖安装；
   - Linux AppImage 可正常自动更新（要求 AppImage 文件所在目录可写）。
 - 更新行为：启动 12 秒后静默检查；Windows / Linux 自动下载、不自动安装；下载完成后弹窗，拒绝则下次启动再提示。
+- 更新后的图标 / 桌面菜单缓存：更新只替换文件，系统仍会沿用旧图标，因此有两道刷新：
+  - Windows 安装器的 `customInstall` 末尾调用 `SHChangeNotify(SHCNE_ASSOCCHANGED)` 并执行
+    `ie4uinit.exe -show`，让 Explorer 重新读取图标、关联和快捷方式；
+  - 应用侧 `electron/shell-refresh.ts` 在打包版启动时对比 `{appDir}/config/last-run-version.json`，
+    只有版本变化才执行一次平台刷新：macOS `touch` 应用包 + `lsregister -f`，Linux `touch` AppImage +
+    `update-desktop-database` + `gtk-update-icon-cache`（目录存在时），Windows 再跑一次 `ie4uinit`；
+  - 固定到任务栏 / 开始菜单的条目仍可能沿用 Explorer 会话里的缓存，需要重启资源管理器；Dock 图标
+    必要时手动 `killall Dock`。这些属于用户侧操作，安装器与应用都不代劳。
 - **Windows 更新时的文件删除由自定义 NSIS 卸载器接管**（`build/installer.nsh` 的 `customRemoveFiles`）：
   - 打包时 `scripts/after-pack-manifest.js`（`afterPack`）把安装器自己的文件写成清单，放在
     `resources/installer-manifest.files.txt` / `installer-manifest.dirs.txt`（相对路径、CRLF）；

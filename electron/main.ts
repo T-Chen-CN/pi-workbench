@@ -603,6 +603,14 @@ app.whenReady().then(async () => {
 
   await initAppDirectories()
 
+  // 更新后首次启动：让系统重建图标与桌面菜单缓存（三平台各自实现，失败只记日志）。
+  // 与 Windows 安装器里的 SHChangeNotify / ie4uinit 互为兜底。
+  if (app.isPackaged) {
+    void import('./shell-refresh.js')
+      .then(({ refreshShellCachesIfUpdated }) => refreshShellCachesIfUpdated())
+      .catch((error) => console.warn('[Main] Shell cache refresh failed:', error))
+  }
+
   // 回收旧版本遗留在系统目录中的内容：Pi SDK 的 ~/.pi、默认 userData、安装器副本。
   // 只在打包版执行；迁移/清理都是幂等的，失败只记日志。
   if (app.isPackaged) {
