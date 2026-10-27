@@ -2,6 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const apiMock = vi.hoisted(() => ({
   gitBindWorktree: vi.fn(),
+  gitRepoInfo: vi.fn(),
+  gitSessionBinding: vi.fn(),
+  gitBranches: vi.fn(),
+  gitLog: vi.fn(),
+  gitCommitStats: vi.fn(),
+  gitListWorktrees: vi.fn(),
 }))
 
 vi.mock('../src/api', () => ({ api: apiMock }))
@@ -47,6 +53,26 @@ function seed(bindingPath: string): void {
 
 beforeEach(() => {
   apiMock.gitBindWorktree.mockReset()
+  apiMock.gitRepoInfo.mockReset()
+  apiMock.gitSessionBinding.mockReset()
+  apiMock.gitBranches.mockReset()
+  apiMock.gitLog.mockReset()
+  apiMock.gitCommitStats.mockReset()
+  apiMock.gitListWorktrees.mockReset()
+
+  apiMock.gitRepoInfo.mockResolvedValue({
+    success: true,
+    repo: { root: workspaceDir, branch: 'main', userEmail: null },
+    worktrees: [],
+  })
+  apiMock.gitSessionBinding.mockResolvedValue({
+    success: true,
+    binding: { key: 'main', path: workspaceDir, branch: 'main' },
+  })
+  apiMock.gitBranches.mockResolvedValue({ success: true, branches: [] })
+  apiMock.gitLog.mockResolvedValue({ success: true, commits: [] })
+  apiMock.gitCommitStats.mockResolvedValue({ success: true, stats: {} })
+  apiMock.gitListWorktrees.mockResolvedValue({ success: true, worktrees: [] })
   useGitStore.setState({ byWorkspace: {} })
 })
 
@@ -91,5 +117,24 @@ describe('gitStore switchWorktree', () => {
       path: workspaceDir,
       branch: 'main',
     })
+  })
+})
+
+describe('gitStore handleChanged', () => {
+  it('refreshes branches and history for the refs scope', async () => {
+    await useGitStore.getState().handleChanged(workspaceDir, ['refs'], 'session-1')
+
+    expect(apiMock.gitRepoInfo).toHaveBeenCalledWith(workspaceDir)
+    expect(apiMock.gitLog).toHaveBeenCalled()
+    expect(apiMock.gitCommitStats).toHaveBeenCalled()
+    expect(apiMock.gitListWorktrees).not.toHaveBeenCalled()
+  })
+
+  it('refreshes worktree status only for the status scope', async () => {
+    await useGitStore.getState().handleChanged(workspaceDir, ['status'], 'session-1')
+
+    expect(apiMock.gitListWorktrees).toHaveBeenCalledWith(workspaceDir, 'session-1')
+    expect(apiMock.gitRepoInfo).not.toHaveBeenCalled()
+    expect(apiMock.gitLog).not.toHaveBeenCalled()
   })
 })

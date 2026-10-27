@@ -38,6 +38,7 @@ import type {
   EditorTabs,
   EditorTabsResult,
   GithubDeviceLoginEvent,
+  GitChangedPayload,
 } from '../types/electron'
 
 // Mock API for browser development
@@ -310,6 +311,12 @@ const mockAPI = {
     error: 'Terminal is only available in the Electron app',
   }),
   gitRepoInfo: async () => ({ success: true, repo: null, worktrees: [] }),
+  gitFetch: async () => ({
+    success: false,
+    skipped: true,
+    error: 'Git is only available in the Electron app',
+  }),
+  onGitChanged: (_callback: (payload: GitChangedPayload) => void) => () => {},
   gitListWorktrees: async () => ({ success: true, worktrees: [] }),
   gitBranches: async () => ({ success: true, branches: [] }),
   gitStatus: async () => ({
@@ -474,6 +481,10 @@ export const api = {
 
   // Git worktrees / read-only history / GitHub status
   gitRepoInfo: (workspaceDir: string) => electronAPI.gitRepoInfo(workspaceDir),
+  gitFetch: (workspaceDir: string, options?: { force?: boolean }) =>
+    electronAPI.gitFetch(workspaceDir, options),
+  onGitChanged: (callback: (payload: GitChangedPayload) => void) =>
+    electronAPI.onGitChanged(callback),
   gitListWorktrees: (workspaceDir: string, activeSessionId?: string) =>
     electronAPI.gitListWorktrees(workspaceDir, activeSessionId),
   gitBranches: (workspaceDir: string) => electronAPI.gitBranches(workspaceDir),

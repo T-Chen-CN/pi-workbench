@@ -6,6 +6,7 @@ import { handleIpc } from './register.js'
 import { isTrustedWorkspacePath } from '../workspace-trust.js'
 import type { AgentRegistry } from '../agent-registry.js'
 import { getCoordinator, type WorktreeCoordinator } from '../worktree-coordinator.js'
+import { repoSync } from '../repo-sync.js'
 import {
   clearGithubToken,
   fetchGithubUser,
@@ -92,6 +93,11 @@ async function restoreWorktreeBinding(
 export function registerGitIpc(context: GitIpcContext): void {
   const cleanedWorkspaces = new Set<string>()
 
+  repoSync.configure({
+    getMainWindow: context.getMainWindow,
+    logger: context.logger,
+  })
+
   handleIpc('git:repoInfo', async (_event, workspaceDir: string) => {
     try {
       if (!isTrustedWorkspacePath(workspaceDir)) {
@@ -99,6 +105,10 @@ export function registerGitIpc(context: GitIpcContext): void {
       }
       const repo = await getRepoInfo(workspaceDir)
       if (!repo) return { success: true, repo: null, worktrees: [] }
+      // 打开面板 / 切换会话时补一次远端同步（受最小间隔限制）
+      void repoSync.touch(workspaceDir).catch((error) =>
+        context.logger.warn('[Git] Failed to start repo sync:', error)
+      )
       const coordinator = await getCoordinator(workspaceDir)
       if (coordinator && !cleanedWorkspaces.has(coordinator.workspaceDir)) {
         cleanedWorkspaces.add(coordinator.workspaceDir)
@@ -114,6 +124,25 @@ export function registerGitIpc(context: GitIpcContext): void {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   })
+
+  // 远端同步：手动刷新传 force；面板打开用默认参数，受最小间隔与退避限制
+  handleIpc(
+    'git:fetch',
+    async (_event, workspaceDir: string, options?: { force?: boolean }) => {
+      try {
+        if (!isTrustedWorkspacePath(workspaceDir)) {
+          return { success: false, error: 'Workspace is not approved' }
+        }
+        return await repoSync.fetchNow(workspaceDir, {
+          force: options?.force === true,
+          // 面板打开等非手动触发保持静默；手动刷新允许系统凭据助手接管
+          interactive: options?.force === true,
+        })
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+  )
 
   handleIpc(
     'git:listWorktrees',

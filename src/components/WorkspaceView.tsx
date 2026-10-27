@@ -25,6 +25,8 @@ import { useI18nStore } from '../store/i18nStore'
 import { useSessionStore } from '../store/sessionStore'
 import { useGitStore } from '../store/gitStore'
 import { onAppEvent } from '../utils/appEvents'
+import { api } from '../api'
+import type { GitChangeScope } from '../types/electron'
 
 const MonacoEditor = lazy(() =>
   import('./MonacoEditor').then((module) => ({ default: module.MonacoEditor }))
@@ -39,6 +41,14 @@ const CHAT_MAX = 560
 type SidebarTab = 'files' | 'git'
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
+
+/** Windows 的路径大小写与分隔符不敏感，事件里的工作区路径按宽松方式比较 */
+function sameWorkspacePath(left: string, right: string): boolean {
+  const normalize = (value: string) => value.replace(/\\+/g, '/').replace(/\/+$/, '')
+  const a = normalize(left)
+  const b = normalize(right)
+  return window.electronAPI?.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
 
 interface WorkspaceViewProps {
   workspacePath: string
@@ -165,6 +175,29 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
 
   // 标签变化防抖写入固定状态；工作树模式按当前视图根保存
   useEffect(() => subscribeEditorTabs(workspacePath, viewRoot), [workspacePath, viewRoot])
+
+  // 主进程推送的仓库变化：本地文件监听与定时 fetch 都从这里进入 Git 面板
+  useEffect(() => {
+    if (typeof api.onGitChanged !== 'function') return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const pending = new Set<GitChangeScope>()
+    const flush = () => {
+      timer = null
+      if (pending.size === 0) return
+      const scopes = [...pending]
+      pending.clear()
+      void useGitStore.getState().handleChanged(workspacePath, scopes, activeSessionId)
+    }
+    const off = api.onGitChanged((payload) => {
+      if (!sameWorkspacePath(payload.workspaceDir, workspacePath)) return
+      for (const scope of payload.scopes) pending.add(scope)
+      if (timer === null) timer = setTimeout(flush, 100)
+    })
+    return () => {
+      off()
+      if (timer !== null) clearTimeout(timer)
+    }
+  }, [workspacePath, activeSessionId])
 
   const startResize = useCallback(
     (target: 'sidebar' | 'chat') => (event: ReactPointerEvent<HTMLDivElement>) => {

@@ -401,6 +401,10 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     void load(workspacePath, activeSessionId)
     void loadCommits(workspacePath, COMMIT_LIMIT, undefined, true)
     void loadCommitStats(workspacePath, COMMIT_LIMIT, undefined, true)
+    // 打开面板时补一次远端同步；失败静默，手动刷新会给出提示
+    if (typeof api.gitFetch === 'function') {
+      void api.gitFetch(workspacePath).catch(() => undefined)
+    }
   }, [workspacePath, activeSessionId, load, loadCommits, loadCommitStats])
 
   useEffect(() => {
@@ -442,7 +446,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     }
   }, [])
 
-  const refresh = useCallback(() => {
+  const refreshLocal = useCallback(() => {
     void load(workspacePath, activeSessionId)
     void loadCommits(workspacePath, COMMIT_LIMIT, undefined, true)
     void loadCommitStats(workspacePath, COMMIT_LIMIT, undefined, true)
@@ -458,6 +462,17 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     loadPr,
     refreshWorktrees,
   ])
+
+  /** 手动刷新：先拉远端，再重读本地；拉取失败时提示一次并照常重读 */
+  const refresh = useCallback(async () => {
+    if (typeof api.gitFetch === 'function') {
+      const fetched = await api.gitFetch(workspacePath, { force: true }).catch(() => null)
+      if (fetched && !fetched.success && fetched.error) {
+        toast.error(t('gitFetchFailed', { error: localizeError(fetched.error) }))
+      }
+    }
+    refreshLocal()
+  }, [refreshLocal, t, workspacePath])
 
   const selectWorktree = useCallback(
     async (worktree: GitWorktreeView) => {
@@ -500,12 +515,12 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
       const result = await createBranchAtCommit(workspacePath, sha, trimmed)
       if (result.success) {
         toast.success(t('gitBranchCreated', { name: trimmed }))
-        refresh()
+        refreshLocal()
       } else {
         toast.error(result.error ?? t('gitCreateAction'))
       }
     },
-    [createBranchAtCommit, refresh, t, workspacePath]
+    [createBranchAtCommit, refreshLocal, t, workspacePath]
   )
 
   const authorLabel = useCallback(
@@ -813,7 +828,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
             active={worktreesOpen}
             onClick={() => setWorktreesOpen((value) => !value)}
           />
-          <IconButton icon={RefreshCw} label={t('gitRefresh')} size="sm" onClick={refresh} />
+          <IconButton icon={RefreshCw} label={t('gitRefresh')} size="sm" onClick={() => void refresh()} />
           </div>
           {worktreeList}
           {prRow}
@@ -870,7 +885,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
                 {pr.checks.total}
               </span>
             )}
-            <IconButton icon={RefreshCw} label={t('gitRefresh')} size="sm" onClick={refresh} />
+            <IconButton icon={RefreshCw} label={t('gitRefresh')} size="sm" onClick={() => void refresh()} />
           </div>
           <button
             type="button"

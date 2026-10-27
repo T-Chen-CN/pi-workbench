@@ -24,6 +24,7 @@ import { configureIpcWindow } from './ipc/register.js'
 import { registerFilesIpc } from './ipc/files.js'
 import { registerAgentIpc } from './ipc/agent.js'
 import { registerGitIpc } from './ipc/git.js'
+import { repoSync } from './repo-sync.js'
 import { registerWorkspaceIpc, closeAllWorkspaceWatchers } from './ipc/workspace.js'
 import { getActiveProviderApiKey } from './ipc/api-config.js'
 import {
@@ -671,6 +672,7 @@ let shuttingDown = false
 async function shutdownApplication(): Promise<void> {
   try {
     closeAllWorkspaceWatchers()
+    repoSync.disposeAll()
     terminalManager.closeAll()
     pluginManager.disposeAll()
     approvalBroker.dispose()
@@ -699,6 +701,11 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+// 回到窗口时补一次远端同步（受最小间隔限制）
+app.on('browser-window-focus', () => {
+  repoSync.touchAll()
 })
 
 app.on('activate', () => {

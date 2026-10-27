@@ -17,6 +17,7 @@ import { canonicalizePath, isPathInsideRoot } from './workspace-trust.js'
 
 const execFileAsync = promisify(execFile)
 const GIT_TIMEOUT_MS = 30_000
+const FETCH_TIMEOUT_MS = 60_000
 const MAX_BUFFER = 32 * 1024 * 1024
 
 export const MAIN_WORKTREE_KEY = 'main'
@@ -27,6 +28,57 @@ export interface GitCommandResult {
   stdout: string
   stderr: string
 }
+
+/** 只更新远端引用；后台调用禁止任何终端 / 凭据交互，避免卡住界面 */
+export async function fetchRemote(
+  repoRoot: string,
+  options: { timeoutMs?: number; interactive?: boolean } = {}
+): Promise<{ ok: boolean; stderr: string; durationMs: number }> {
+  const started = Date.now()
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+  if (!options.interactive) {
+    // 后台 fetch 不允许弹凭据窗口或等待输入；交互式（手动刷新）保留系统凭据助手
+    env.GCM_INTERACTIVE = 'never'
+    env.GIT_ASKPASS = 'echo'
+  }
+  try {
+    await execFileAsync('git', ['fetch', '--quiet'], {
+      cwd: repoRoot,
+      timeout: options.timeoutMs ?? FETCH_TIMEOUT_MS,
+      maxBuffer: MAX_BUFFER,
+      windowsHide: true,
+      encoding: 'utf8',
+      env,
+    })
+    return { ok: true, stderr: '', durationMs: Date.now() - started }
+  } catch (error) {
+    const value = error as { stderr?: unknown; message?: unknown }
+    return {
+      ok: false,
+      stderr:
+        typeof value.stderr === 'string' && value.stderr
+          ? value.stderr
+          : typeof value.message === 'string'
+            ? value.message
+            : String(error),
+      durationMs: Date.now() - started,
+    }
+  }
+}
+
+/**
+ * HEAD 与全部引用的快照。
+ * watcher 只负责“有东西变了”，这里判断引用是否真的变了，避免无意义的刷新。
+ */
+export async function readRefsSnapshot(repoRoot: string): Promise<string> {
+  const [refs, head, symbolic] = await Promise.all([
+    git(repoRoot, ['for-each-ref', '--format=%(refname) %(objectname)']),
+    git(repoRoot, ['rev-parse', '-q', '--verify', 'HEAD']),
+    git(repoRoot, ['symbolic-ref', '-q', 'HEAD']),
+  ])
+  return [refs.ok ? refs.stdout : '', head.stdout.trim(), symbolic.stdout.trim()].join('|')
+}
+
 
 async function git(cwd: string, args: string[], timeout = GIT_TIMEOUT_MS): Promise<GitCommandResult> {
   try {

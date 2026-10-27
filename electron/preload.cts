@@ -293,6 +293,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Git 工作树 / 只读历史 / GitHub 状态
   gitRepoInfo: (workspaceDir: string) => ipcRenderer.invoke('git:repoInfo', workspaceDir),
+  gitFetch: (workspaceDir: string, options?: { force?: boolean }) =>
+    ipcRenderer.invoke('git:fetch', workspaceDir, options),
+  onGitChanged: (
+    callback: (payload: {
+      workspaceDir: string
+      repoRoot: string
+      scopes: Array<'refs' | 'status'>
+      reason: 'watch' | 'fetch'
+    }) => void
+  ) => {
+    const listener = (
+      _event: unknown,
+      payload: {
+        workspaceDir: string
+        repoRoot: string
+        scopes: Array<'refs' | 'status'>
+        reason: 'watch' | 'fetch'
+      }
+    ) => callback(payload)
+    ipcRenderer.on('git:changed', listener)
+    return () => ipcRenderer.removeListener('git:changed', listener)
+  },
   gitListWorktrees: (workspaceDir: string, activeSessionId?: string) =>
     ipcRenderer.invoke('git:listWorktrees', workspaceDir, activeSessionId),
   gitBranches: (workspaceDir: string) => ipcRenderer.invoke('git:branches', workspaceDir),
