@@ -372,6 +372,19 @@ export class WorktreeCoordinator {
     return { success: true, key: id }
   }
 
+  /**
+   * 只删除会话绑定，不动工作树本身。
+   * 切换工作树失败回滚时用：绑定已经写入，但运行时没有真正换根。
+   */
+  async unbind(sessionId: string): Promise<void> {
+    const state = this.state
+    await serialize(state, async () => {
+      if (!state.data.sessions[sessionId]) return
+      delete state.data.sessions[sessionId]
+      await persist(state)
+    })
+  }
+
   private async viewForKey(
     key: string,
     activeSessionId?: string | null

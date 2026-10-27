@@ -1493,6 +1493,10 @@ export class AgentManager {
   /**
    * 在轮次边界应用待切换的工作树。
    * 先记录旧根与会话文件；重建失败时回退到旧根，避免会话直接消失。
+   *
+   * 重建前后必须保持会话 id 不变：id 同时是标签、工作树绑定与会话 extras 的键，
+   * 换了 id 就等于换了一个会话。Pi 的 SessionManager 对新会话也会提前分配文件路径，
+   * 文件要等第一条消息才写出，所以要按文件是否真的存在判断，而不是看路径。
    */
   private async applyPendingRoot(runtime: SessionRuntime): Promise<boolean> {
     const pending = this.pendingRoots.get(runtime.id)
@@ -1501,25 +1505,29 @@ export class AgentManager {
     if (this.rebinding.has(runtime.id)) return false
     if (runtime.isProcessing) return false
 
+    const id = runtime.id
     const oldRoot = runtime.sessionManager.getCwd()
     if (path.resolve(oldRoot) === path.resolve(pending.root)) {
-      this.pendingRoots.delete(runtime.id)
+      this.pendingRoots.delete(id)
       return true
     }
 
-    const file = runtime.sessionManager.getSessionFile() ?? (await this.findSessionFile(runtime.id))
-    if (!file) {
-      this.pendingRoots.delete(runtime.id)
-      this.logger.warn('[Agent Manager] Cannot switch worktree for an unpersisted session')
-      return false
-    }
+    const file = await this.resolvePersistedSessionFile(runtime)
+    const pendingTitle = runtime.pendingTitle
+    const sessionName = runtime.sessionManager.getSessionName()
 
-    this.rebinding.add(runtime.id)
-    this.pendingRoots.delete(runtime.id)
+    this.rebinding.add(id)
+    this.pendingRoots.delete(id)
     try {
       await this.disposeRuntime(runtime)
-      const manager = SessionManager.open(file, this.sessionDir, pending.root)
+      const manager = this.openManagerForRoot(id, file, pending.root)
+      if (manager.getSessionId() !== id) {
+        throw new Error(
+          `Session id changed while switching worktrees (${id} -> ${manager.getSessionId()}).`
+        )
+      }
       const next = await this.createRuntime(manager)
+      this.carrySessionIdentity(next, file, pendingTitle, sessionName)
       this.lastSessionId = next.id
       this.config?.onSessionRootChanged?.(next.id, pending.root)
       this.logger.info(
@@ -1529,8 +1537,9 @@ export class AgentManager {
     } catch (error) {
       this.logger.error('[Agent Manager] Failed to apply worktree switch:', error)
       try {
-        const manager = SessionManager.open(file, this.sessionDir, oldRoot)
+        const manager = this.openManagerForRoot(id, file, oldRoot)
         const restored = await this.createRuntime(manager)
+        this.carrySessionIdentity(restored, file, pendingTitle, sessionName)
         this.lastSessionId = restored.id
         this.config?.onSessionRootChanged?.(restored.id, oldRoot)
       } catch (restoreError) {
@@ -1538,8 +1547,41 @@ export class AgentManager {
       }
       return false
     } finally {
-      this.rebinding.delete(runtime.id)
+      this.rebinding.delete(id)
     }
+  }
+
+  /** 会话在磁盘上的文件；未落盘的新会话返回 null */
+  private async resolvePersistedSessionFile(runtime: SessionRuntime): Promise<string | null> {
+    const file = runtime.sessionManager.getSessionFile()
+    if (file && existsSync(file)) return file
+    return this.findSessionFile(runtime.id)
+  }
+
+  /**
+   * 按会话文件重建管理器。文件还不存在（新会话尚未落盘）时用原 id 在目标根重新创建：
+   * 直接 open 一个不存在的路径会让 SDK 生成新的会话 id。
+   */
+  private openManagerForRoot(
+    sessionId: string,
+    file: string | null,
+    root: string
+  ): SessionManager {
+    return file
+      ? SessionManager.open(file, this.sessionDir, root)
+      : SessionManager.create(root, this.sessionDir, { id: sessionId })
+  }
+
+  /** 重建后恢复标题：未落盘的新会话，标题只存在于旧运行时的内存里 */
+  private carrySessionIdentity(
+    runtime: SessionRuntime,
+    persistedFile: string | null,
+    pendingTitle: string | null,
+    sessionName: string | undefined
+  ): void {
+    if (pendingTitle) runtime.pendingTitle = pendingTitle
+    // 已落盘的会话由文件本身恢复名称，重复追加会在 JSONL 里留下多余的 session_info
+    else if (!persistedFile && sessionName) runtime.sessionManager.appendSessionInfo(sessionName)
   }
 
   /**

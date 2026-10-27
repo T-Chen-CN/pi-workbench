@@ -7,6 +7,7 @@ import { useGitStore } from '../store/gitStore'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
 import { api } from '../api'
+import { localizeError } from '../i18n/errors'
 import { MenuOption, PopoverMenu } from './ui'
 import type { GitWorktreeView } from '../types/electron'
 
@@ -63,8 +64,9 @@ export const WorktreeBar: React.FC<{ workspacePath: string }> = ({ workspacePath
     setBusy(true)
     const result = await switchWorktree(workspacePath, activeSessionId, target)
     setBusy(false)
-    if (!result.success) toast.error(result.error ?? t('worktreeSwitchFailed'))
-    else if (result.scheduled) toast.info(t('worktreeSwitchScheduled'))
+    if (!result.success) {
+      toast.error(result.error ? localizeError(result.error) : t('worktreeSwitchFailed'))
+    } else if (result.scheduled) toast.info(t('worktreeSwitchScheduled'))
     else toast.success(t('worktreeSwitched'))
   }
 

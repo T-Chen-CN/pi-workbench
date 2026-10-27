@@ -154,6 +154,17 @@ handleIpc('agent:initialize', async (_event, config: {
         }
       },
       onSessionRootChanged: (sessionId: string, root: string) => {
+        // 运行时实际 cwd 是事实来源：切换失败回滚时也要把工作树绑定改回旧根
+        if (coordinator) {
+          const current = coordinator.getSessionRoot(sessionId)
+          if (path.resolve(current) !== path.resolve(root)) {
+            const target =
+              path.resolve(root) === path.resolve(coordinator.repo.root) ? 'main' : root
+            void coordinator.bind(sessionId, target).catch((error: unknown) => {
+              context.logger.warn('[Main] Failed to sync worktree binding:', error)
+            })
+          }
+        }
         const win = mainWindow()
         if (win && !win.isDestroyed()) {
           win.webContents.send('agent:session-root-changed', { workspaceDir, sessionId, root })

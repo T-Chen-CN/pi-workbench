@@ -181,6 +181,10 @@ export const useGitStore = create<GitState>((set, get) => ({
       if (!result.success || !result.worktree) {
         return { success: false, error: result.error ?? 'Unable to switch worktree' }
       }
+      // 绑定成功但运行时没有换根（主进程已把绑定回滚）：如实报失败，别改本地视图
+      if (result.switched && result.switched.success === false) {
+        return { success: false, error: result.switched.error ?? 'Unable to switch worktree' }
+      }
       const worktree = result.worktree
       const scheduled = Boolean(result.switched?.scheduled)
       set((state) => {
@@ -202,7 +206,6 @@ export const useGitStore = create<GitState>((set, get) => ({
       return {
         success: true,
         scheduled: result.switched?.scheduled,
-        error: result.switched?.success === false ? result.switched.error : undefined,
       }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }

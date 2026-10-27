@@ -29,8 +29,10 @@ vi.mock('../electron/workspace-trust', () => ({
   isPathInsideRoot: () => true,
 }))
 
+const coordinatorHolder = vi.hoisted(() => ({ current: null as unknown }))
+
 vi.mock('../electron/worktree-coordinator', () => ({
-  getCoordinator: async () => null,
+  getCoordinator: async () => coordinatorHolder.current,
 }))
 
 vi.mock('../electron/github-auth', () => ({
@@ -212,5 +214,71 @@ describe('git IPC commit detail', () => {
 
     await invoke('github:auth:logout')
     expect(deviceLogin.cancel).toHaveBeenCalled()
+  })
+})
+
+describe('git IPC worktree binding rollback', () => {
+  const ws = '/ws'
+  const worktreePath = '/ws/worktrees/wt'
+  let coordinator: {
+    hasBinding: ReturnType<typeof vi.fn>
+    getSessionRoot: ReturnType<typeof vi.fn>
+    bind: ReturnType<typeof vi.fn>
+    unbind: ReturnType<typeof vi.fn>
+    repo: { root: string }
+  }
+  let requestSessionRoot: ReturnType<typeof vi.fn>
+
+  beforeAll(() => {
+    registerGitIpc({
+      agentRegistry: { get: () => ({ requestSessionRoot }) } as never,
+      getMainWindow: () => null,
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+    })
+  })
+
+  beforeEach(() => {
+    requestSessionRoot = vi.fn(async () => ({
+      success: false,
+      error: 'Failed to switch the session worktree.',
+    }))
+    coordinator = {
+      hasBinding: vi.fn(() => true),
+      getSessionRoot: vi.fn(() => ws),
+      bind: vi.fn(async () => ({
+        success: true,
+        worktree: { id: 'wt', path: worktreePath, branch: 'pi/wt' },
+        sharedWith: 0,
+      })),
+      unbind: vi.fn(async () => {}),
+      repo: { root: ws },
+    }
+    coordinatorHolder.current = coordinator
+  })
+
+  afterEach(() => {
+    coordinatorHolder.current = null
+  })
+
+  it('把绑定回滚到主工作树：运行时没有换根时不留下错误绑定', async () => {
+    const result = await invoke('git:bindWorktree', ws, 'session-1', worktreePath)
+
+    expect(result).toMatchObject({
+      success: false,
+      error: 'Failed to switch the session worktree.',
+    })
+    expect(coordinator.bind).toHaveBeenCalledTimes(2)
+    expect(coordinator.bind).toHaveBeenLastCalledWith('session-1', 'main')
+    expect(coordinator.unbind).not.toHaveBeenCalled()
+  })
+
+  it('之前没有绑定的会话在失败后直接解绑', async () => {
+    coordinator.hasBinding.mockReturnValue(false)
+
+    const result = await invoke('git:bindWorktree', ws, 'session-1', worktreePath)
+
+    expect(result.success).toBe(false)
+    expect(coordinator.unbind).toHaveBeenCalledWith('session-1')
+    expect(coordinator.bind).toHaveBeenCalledTimes(1)
   })
 })

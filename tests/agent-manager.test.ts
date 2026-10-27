@@ -1009,10 +1009,12 @@ describe('AgentManager sessions', () => {
     const first = createFakeSession()
     primeSdk(first)
     const baseManager = createFakeSessionManager('session-switch')
+    const sessionFile = path.join(tmpRoot, 'session-switch.jsonl')
+    await fs.writeFile(sessionFile, '{}\n', 'utf-8')
     const persistedManager = {
       ...baseManager,
       getCwd: () => workspaceDir,
-      getSessionFile: () => '/tmp/session-switch.jsonl',
+      getSessionFile: () => sessionFile,
       isPersisted: () => true,
     }
     sdk.continueRecent.mockReturnValue(persistedManager)
@@ -1032,6 +1034,84 @@ describe('AgentManager sessions', () => {
     expect(switched.success).toBe(true)
     expect(sdk.createAgentSession).toHaveBeenLastCalledWith(
       expect.objectContaining({ cwd: newRoot })
+    )
+  })
+
+  it('keeps the session id when switching a worktree before the session is persisted', async () => {
+    const first = createFakeSession()
+    primeSdk(first)
+    // 新会话：SDK 已分配文件路径，但第一条消息前文件还没写出来
+    const placeholder = path.join(tmpRoot, 'sessions', 'placeholder.jsonl')
+    const freshManager = {
+      ...createFakeSessionManager('session-fresh'),
+      getSessionFile: () => placeholder,
+      isPersisted: () => false,
+    }
+    sdk.continueRecent.mockReturnValue(freshManager)
+    const roots: Array<[string, string]> = []
+    await manager.initialize(
+      makeConfig({ onSessionRootChanged: (id, root) => roots.push([id, root]) })
+    )
+
+    const newRoot = path.join(workspaceDir, 'worktrees', 'fresh-target')
+    await fs.mkdir(newRoot, { recursive: true })
+    const created: Array<{ cwd: string; options?: { id?: string } }> = []
+    sdk.sessionCreate.mockImplementation(
+      (cwd: string, _dir: string, options?: { id?: string }) => {
+        created.push({ cwd, options })
+        return { ...createFakeSessionManager(options?.id ?? 'generated'), getCwd: () => cwd }
+      }
+    )
+    sdk.createAgentSession.mockResolvedValue({ session: createFakeSession() })
+
+    const switched = await manager.requestSessionRoot('session-fresh', newRoot)
+
+    // 直接用不存在的文件 open 会让 SDK 生成新 id；必须按原 id 重建
+    expect(switched).toEqual({ success: true })
+    expect(sdk.sessionOpen).not.toHaveBeenCalled()
+    expect(created).toEqual([{ cwd: newRoot, options: { id: 'session-fresh' } }])
+    expect(roots[roots.length - 1]).toEqual(['session-fresh', newRoot])
+    expect(manager.getCurrentSessionId()).toBe('session-fresh')
+  })
+
+  it('restores the previous worktree when the rebuilt session changes id', async () => {
+    const first = createFakeSession()
+    primeSdk(first)
+    const sessionFile = path.join(tmpRoot, 'session-rollback.jsonl')
+    await fs.writeFile(sessionFile, '{}\n', 'utf-8')
+    const original = {
+      ...createFakeSessionManager('session-rollback'),
+      getCwd: () => workspaceDir,
+      getSessionFile: () => sessionFile,
+      isPersisted: () => true,
+    }
+    sdk.continueRecent.mockReturnValue(original)
+    const roots: Array<[string, string]> = []
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+    await manager.initialize(
+      makeConfig({ logger, onSessionRootChanged: (id, root) => roots.push([id, root]) })
+    )
+
+    const newRoot = path.join(workspaceDir, 'worktrees', 'bad-target')
+    await fs.mkdir(newRoot, { recursive: true })
+    sdk.sessionOpen
+      .mockImplementationOnce(() => ({
+        ...createFakeSessionManager('regenerated-id'),
+        getCwd: () => newRoot,
+      }))
+      .mockImplementation((_file: string, _dir: string, root: string) => ({
+        ...original,
+        getCwd: () => root,
+      }))
+    sdk.createAgentSession.mockResolvedValue({ session: createFakeSession() })
+
+    const switched = await manager.requestSessionRoot('session-rollback', newRoot)
+
+    expect(switched.success).toBe(false)
+    expect(roots[roots.length - 1]).toEqual(['session-rollback', workspaceDir])
+    expect(logger.error).toHaveBeenCalledWith(
+      '[Agent Manager] Failed to apply worktree switch:',
+      expect.any(Error)
     )
   })
 

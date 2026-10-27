@@ -1,10 +1,11 @@
 /** Git 工作树、分支、只读历史与 GitHub 状态的 IPC */
 
 import { BrowserWindow } from 'electron'
+import * as path from 'path'
 import { handleIpc } from './register.js'
 import { isTrustedWorkspacePath } from '../workspace-trust.js'
 import type { AgentRegistry } from '../agent-registry.js'
-import { getCoordinator } from '../worktree-coordinator.js'
+import { getCoordinator, type WorktreeCoordinator } from '../worktree-coordinator.js'
 import {
   clearGithubToken,
   fetchGithubUser,
@@ -70,6 +71,22 @@ async function resolveWorktreePath(
   if (!requested) return workspaceDir
   if (!isPathInWorkspace(workspaceDir, requested)) return null
   return requested
+}
+
+/** 把会话绑定改回切换之前的位置；未绑定过的会话直接解绑，不回退到主工作树 */
+async function restoreWorktreeBinding(
+  coordinator: WorktreeCoordinator,
+  sessionId: string,
+  wasBound: boolean,
+  previousRoot: string
+): Promise<void> {
+  if (!wasBound) {
+    await coordinator.unbind(sessionId)
+    return
+  }
+  const target =
+    path.resolve(previousRoot) === path.resolve(coordinator.repo.root) ? 'main' : previousRoot
+  await coordinator.bind(sessionId, target)
 }
 
 export function registerGitIpc(context: GitIpcContext): void {
@@ -166,12 +183,26 @@ export function registerGitIpc(context: GitIpcContext): void {
         }
         const coordinator = await getCoordinator(workspaceDir)
         if (!coordinator) return { success: false, error: 'Not a git repository' }
+        const wasBound = coordinator.hasBinding(sessionId)
+        const previousRoot = coordinator.getSessionRoot(sessionId)
         const bound = await coordinator.bind(sessionId, target, base, sessionId)
         if (!bound.success || !bound.worktree) return bound
         const agent = context.agentRegistry.get(workspaceDir)
         const switched = agent?.requestSessionRoot
           ? await agent.requestSessionRoot(sessionId, bound.worktree.path)
           : { success: true as const, scheduled: false }
+        if (switched.success === false) {
+          // 运行时没有换根：绑定回滚，避免文件视图落在新工作树而 Agent 仍在旧根
+          try {
+            await restoreWorktreeBinding(coordinator, sessionId, wasBound, previousRoot)
+          } catch (error) {
+            context.logger.warn('[Git] Failed to restore worktree binding:', error)
+          }
+          return {
+            success: false,
+            error: switched.error ?? 'Failed to switch the session worktree.',
+          }
+        }
         return {
           ...bound,
           switched,

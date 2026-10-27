@@ -84,6 +84,21 @@ describe('WorktreeCoordinator', () => {
     await expect(fs.access(root)).rejects.toThrow()
   })
 
+  it('drops a session binding without touching the worktree', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    await coordinator!.bind('session-a', 'new')
+    const root = coordinator!.getSessionRoot('session-a')
+    expect(coordinator!.hasBinding('session-a')).toBe(true)
+
+    await coordinator!.unbind('session-a')
+
+    expect(coordinator!.hasBinding('session-a')).toBe(false)
+    expect(path.resolve(coordinator!.getSessionRoot('session-a'))).toBe(
+      path.resolve(coordinator!.repo.root)
+    )
+    await expect(fs.access(root)).resolves.toBeUndefined()
+  })
+
   it('keeps a dirty worktree instead of removing it', async () => {
     const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
     await coordinator!.bind('session-dirty', 'new')

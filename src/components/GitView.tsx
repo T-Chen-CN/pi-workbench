@@ -21,6 +21,7 @@ import { useSessionStore } from '../store/sessionStore'
 import { useGitStore } from '../store/gitStore'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
+import { localizeError } from '../i18n/errors'
 import { promptDialog } from '../store/dialogStore'
 import { IconButton, Spinner } from './ui'
 import { emitAppEvent } from '../utils/appEvents'
@@ -465,8 +466,9 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
         return
       }
       const result = await switchWorktree(workspacePath, activeSessionId, worktree.path)
-      if (!result.success) toast.error(result.error ?? t('worktreeSwitchFailed'))
-      else if (result.scheduled) toast.info(t('worktreeSwitchScheduled'))
+      if (!result.success) {
+        toast.error(result.error ? localizeError(result.error) : t('worktreeSwitchFailed'))
+      } else if (result.scheduled) toast.info(t('worktreeSwitchScheduled'))
       else toast.success(t('worktreeSwitched'))
       setWorktreesOpen(false)
     },
