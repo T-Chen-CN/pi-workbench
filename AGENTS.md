@@ -712,6 +712,7 @@ async function initAgent(config: ApiConfig) {
 - ✅ Windows 更新时设置 `installDirectory = appDir`，让安装器带 `/D=`，不依赖注册表 `InstallLocation`
 - ✅ 没有可用更新时清理过期缓存
 - ✅ 更新事件写入 `{appDir}/logs/main.log`
+- ✅ 安装/更新后刷新 shell 缓存：Windows 安装器 `SHChangeNotify` + `ie4uinit`，应用首启（`electron/shell-refresh.ts`）按平台再兜底一次；只在版本变化时执行，开发模式不执行
 
 **Windows 更新与数据保护**:
 
