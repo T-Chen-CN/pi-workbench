@@ -213,6 +213,111 @@ describe('GitView 提交列表', () => {
   })
 })
 
+describe('GitView 窄面板提交行', () => {
+  const shaA = 'a'.repeat(40)
+  const NARROW_WIDTH = 380
+
+  /** jsdom 没有 ResizeObserver；模拟一次异步回调，让面板进入窄视图 */
+  class NarrowResizeObserver {
+    private readonly callback: ResizeObserverCallback
+    constructor(callback: ResizeObserverCallback) {
+      this.callback = callback
+    }
+    observe(target: Element): void {
+      queueMicrotask(() => {
+        this.callback(
+          [{ target, contentRect: { width: NARROW_WIDTH } } as unknown as ResizeObserverEntry],
+          this as unknown as ResizeObserver
+        )
+      })
+    }
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+
+  async function renderNarrowRow(refs: string) {
+    logCommits = [commit(shaA, refs)]
+    const view = render(<GitView workspacePath="/repo" />)
+    const row = await screen.findByRole('button', { name: /subject aaaa/ })
+    await waitFor(() => expect(row.querySelector('[style*="52px"]')).not.toBeNull())
+    return { view, row, cell: row.querySelector('[style*="52px"]') as HTMLElement }
+  }
+
+  beforeEach(() => {
+    pendingStatus.length = 0
+    pendingDetails.length = 0
+    repoWorktrees = []
+    useGitStore.setState({ byWorkspace: {} })
+    vi.stubGlobal('ResizeObserver', NarrowResizeObserver)
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  it('标题与时间占第一行、ref 与短哈希占第二行，时间与哈希同列右对齐', async () => {
+    const { cell } = await renderNarrowRow('HEAD -> main, origin/main')
+
+    const cells = Array.from(cell.children) as HTMLElement[]
+    expect(cells).toHaveLength(4)
+
+    expect(cells[0].textContent).toContain('subject aaaa')
+    expect(cells[1].textContent?.trim()).not.toBe('')
+    expect(cells[2].textContent).toContain('main')
+    expect(cells[3].textContent).toBe('aaaaaaa')
+
+    expect(cells[1].className).toContain('justify-end')
+    expect(cells[3].className).toContain('text-right')
+    expect(cells[2].className).toContain('overflow-hidden')
+    expect(cell.style.gridTemplateColumns).toContain('52px')
+  })
+
+  it('窄面板不显示作者与变更环，短哈希不再占用 ref 行宽度', async () => {
+    const { row } = await renderNarrowRow('HEAD -> main')
+
+    expect(within(row).queryByText('Test')).toBeNull()
+    expect(row.textContent).toContain('aaaaaaa')
+  })
+
+  it('放不下的 ref 折成 +N，并保留全部 ref 名的悬停提示', async () => {
+    const { cell } = await renderNarrowRow('HEAD -> main, origin/main, feat/a, feat/b')
+
+    const refsCell = cell.children[2] as HTMLElement
+    expect(refsCell.textContent).toContain('main')
+    expect(refsCell.textContent).toContain('+3')
+
+    const overflow = within(refsCell).getByText('+3')
+    expect(overflow.getAttribute('title')).toContain('origin/main')
+    expect(overflow.getAttribute('title')).toContain('feat/b')
+  })
+
+})
+
+describe('GitView 宽面板提交行', () => {
+  const shaA = 'a'.repeat(40)
+
+  beforeEach(() => {
+    pendingStatus.length = 0
+    pendingDetails.length = 0
+    repoWorktrees = []
+    logCommits = [commit(shaA, 'HEAD -> main, origin/main')]
+    useGitStore.setState({ byWorkspace: {} })
+  })
+
+  afterEach(cleanup)
+
+  it('保持单行布局，不出现固定 52px 列，作者仍可见', async () => {
+    render(<GitView workspacePath="/repo" />)
+
+    const row = await screen.findByRole('button', { name: /subject aaaa/ })
+    expect(row.querySelector('[style*="52px"]')).toBeNull()
+    expect(row.style.gridTemplateColumns).not.toContain('52px')
+    expect(within(row).getByText('Test')).not.toBeNull()
+    expect(within(row).getByText('main')).not.toBeNull()
+  })
+})
+
 describe('GitView 工作树列表', () => {
   function worktree(overrides: Record<string, unknown>) {
     return {

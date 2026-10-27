@@ -27,7 +27,9 @@ import { IconButton, Spinner } from './ui'
 import { emitAppEvent } from '../utils/appEvents'
 import { buildCommitGraph, type GraphRow } from '../utils/commitGraph'
 import { parseGitRefs, type GitRefChip } from '../utils/gitRefs'
+import { fitRefChips, splitRefsByCount } from '../utils/refBadges'
 import { formatRelativeTime } from '../utils/relativeTime'
+import { clearCaptionWidthCache, measureCaptionWidth } from '../utils/textWidth'
 import type {
   GitCommitInfo,
   GitCommitStats,
@@ -40,8 +42,14 @@ const GRAPH_PAD_RIGHT = 2
 const ROW_HEIGHT = 30
 const ROW_HEIGHT_NARROW = 44
 const NARROW_BREAKPOINT = 420
-/** 行内最多显示几个 ref 徽章，其余折叠成 +N */
+/** 宽面板行内最多显示几个 ref 徽章，其余折叠成 +N */
 const MAX_VISIBLE_REFS = 2
+/** 窄面板右列固定宽度：7 位短哈希 ≈48px、`59分钟前` ≈46px、`25/12/31` ≈43px */
+const NARROW_TIME_COLUMN = 52
+/** 行网格的左右装饰：border-l-2 + pr-2 */
+const ROW_BORDER_LEFT = 2
+const ROW_PADDING_RIGHT = 8
+const COLUMN_GAP = 4
 const COMMIT_LIMIT = 200
 /** 改动行数到这个量时圆环半满，和 GitLens 的 Changes 列观感一致 */
 const CHANGE_SCALE = 400
@@ -86,10 +94,11 @@ function refBadgeIcon(kind: GitRefChip['kind']) {
   return GitBranch
 }
 
-const RefBadge: React.FC<{ chip: GitRefChip; shrinkable?: boolean }> = ({
-  chip,
-  shrinkable = false,
-}) => {
+const RefBadge: React.FC<{
+  chip: GitRefChip
+  /** cap: 宽面板默认上限 / shrink: 宽面板可收缩 / none: 窄面板按实测量好的宽度 / fluid: 连一个都放不下时允许截断 */
+  fit?: 'cap' | 'shrink' | 'none' | 'fluid'
+}> = ({ chip, fit = 'cap' }) => {
   const Icon = refBadgeIcon(chip.kind)
   const tone =
     chip.kind === 'head'
@@ -99,18 +108,34 @@ const RefBadge: React.FC<{ chip: GitRefChip; shrinkable?: boolean }> = ({
         : chip.kind === 'branch'
           ? 'border border-accent/45 bg-accent/[0.06] text-accent'
           : 'border border-rule-hairline bg-raised text-ink-muted'
+  const sizing =
+    fit === 'shrink'
+      ? 'min-w-0 max-w-[120px] shrink'
+      : fit === 'none'
+        ? 'flex-none'
+        : fit === 'fluid'
+          ? 'min-w-0 max-w-full shrink'
+          : 'max-w-[140px] flex-none'
   return (
     <span
       title={chip.title}
-      className={`inline-flex h-4 items-center gap-0.5 rounded-sm px-1 type-caption ${
-        shrinkable ? 'min-w-0 max-w-[120px] shrink' : 'max-w-[140px] flex-none'
-      } ${tone}`}
+      className={`inline-flex h-4 items-center gap-0.5 rounded-sm px-1 type-caption ${sizing} ${tone}`}
     >
       <Icon size={10} className="flex-none" />
       <span className="truncate">{chip.label}</span>
     </span>
   )
 }
+
+/** 被折叠的 ref：只留一个计数徽章，全名在 title 里 */
+const RefOverflowBadge: React.FC<{ chips: GitRefChip[] }> = ({ chips }) => (
+  <span
+    title={chips.map((chip) => chip.title).join(', ')}
+    className="inline-flex h-4 flex-none items-center rounded-sm border border-rule-hairline bg-raised px-1 type-caption text-ink-subtle"
+  >
+    +{chips.length}
+  </span>
+)
 
 const GraphRowSvg: React.FC<{
   row: GraphRow
@@ -319,6 +344,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
   const { t, language } = useI18nStore()
   const [githubLinked, setGithubLinked] = useState<boolean | null>(null)
   const [panelWidth, setPanelWidth] = useState(0)
+  const [rowAreaWidth, setRowAreaWidth] = useState(0)
   const [columnWidths, setColumnWidths] = useState<ColumnWidths>({
     author: 54,
     ring: 34,
@@ -330,6 +356,8 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
   const [resizeGuide, setResizeGuide] = useState<number | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const tableRef = useRef<HTMLDivElement>(null)
+  /** 提交行所在的滚动容器；它的宽度扣掉滚动条，才是行的实际宽度 */
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   const activeSessionId = useSessionStore(
     (state) => state.byWorkspace[workspacePath]?.active ?? null
@@ -386,15 +414,20 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
   const selectedSha = detailPending ?? detail?.commit.sha ?? null
 
   useEffect(() => {
-    const element = panelRef.current
-    if (!element) return
+    const panel = panelRef.current
+    if (!panel) return
     if (typeof ResizeObserver === 'undefined') return
+    const rows = scrollRef.current
     const observer = new ResizeObserver((entries) => {
-      const entry = entries[0]
-      if (entry) setPanelWidth(entry.contentRect.width)
+      for (const entry of entries) {
+        if (entry.target === panel) setPanelWidth(entry.contentRect.width)
+        else if (entry.target === rows) setRowAreaWidth(entry.contentRect.width)
+      }
     })
-    observer.observe(element)
-    setPanelWidth(element.clientWidth)
+    observer.observe(panel)
+    if (rows) observer.observe(rows)
+    setPanelWidth(panel.clientWidth)
+    setRowAreaWidth(rows?.clientWidth ?? 0)
     return () => observer.disconnect()
   }, [])
 
@@ -562,6 +595,43 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     [filters]
   )
 
+  /** 能否量到 `type-caption` 的实际字宽；字体晚到或环境不支持时保持 false，ref 退回计数折叠 */
+  const [refWidthMeasurable, setRefWidthMeasurable] = useState(false)
+  useEffect(() => {
+    const update = () => setRefWidthMeasurable(measureCaptionWidth('M') > 0)
+    update()
+    const fonts = (document as Document & { fonts?: FontFaceSet }).fonts
+    if (!fonts?.ready) return
+    let alive = true
+    void fonts.ready.then(() => {
+      if (!alive) return
+      clearCaptionWidthCache()
+      update()
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  /** 窄面板里 ref 行可用的宽度：行内容宽 - 图宽 - 固定时间列 - 列间距 */
+  const narrowRefsWidth = useMemo(() => {
+    if (!narrow) return 0
+    const rowWidth = rowAreaWidth > 0 ? rowAreaWidth : panelWidth
+    const content = rowWidth - ROW_BORDER_LEFT - ROW_PADDING_RIGHT - graphWidth
+    return Math.max(0, content - NARROW_TIME_COLUMN - COLUMN_GAP)
+  }, [narrow, rowAreaWidth, panelWidth, graphWidth])
+
+  const splitRefs = useCallback(
+    (chips: GitRefChip[]) => {
+      // 量不到字宽（测试环境 / 字体未就绪）或列宽无效时退回计数折叠
+      if (!narrow || narrowRefsWidth <= 0 || !refWidthMeasurable) {
+        return splitRefsByCount(chips, MAX_VISIBLE_REFS)
+      }
+      return fitRefChips(chips, narrowRefsWidth, measureCaptionWidth)
+    },
+    [narrow, narrowRefsWidth, refWidthMeasurable]
+  )
+
   const ringTitle = useCallback(
     (commitSha: string) => {
       const entry = stats[commitSha]
@@ -667,8 +737,10 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     const graphRow = graph.rows[index]
     if (!graphRow) return null
     const chips = visibleRefs(commit)
-    const shownRefs = chips.length > MAX_VISIBLE_REFS ? chips.slice(0, 1) : chips
-    const hiddenRefs = chips.slice(shownRefs.length)
+    /** 宽面板按个数折叠，窄面板按实测宽度折叠 */
+    const refs = splitRefs(chips)
+    const shownRefs = refs.shown
+    const hiddenRefs = refs.hidden
     const selected = selectedSha === commit.sha
     const relative = formatRelativeTime(commit.date, language)
     const author = authorLabel(commit)
@@ -696,7 +768,13 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
           />
         </span>
         {narrow ? (
-          <span className="flex min-w-0 flex-col justify-center gap-0.5">
+          <span
+            className="grid h-full min-w-0 items-center gap-x-1"
+            style={{
+              gridTemplateColumns: `minmax(0,1fr) ${NARROW_TIME_COLUMN}px`,
+              gridTemplateRows: '1fr 1fr',
+            }}
+          >
             <span className="relative flex min-w-0 items-center gap-1">
               {commit.parents.length > 1 && (
                 <span
@@ -707,26 +785,31 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
                 </span>
               )}
               <span className="min-w-0 flex-1 truncate type-value text-ink">{commit.subject}</span>
-              <span className="flex-none type-caption text-ink-subtle">{relative}</span>
+            </span>
+            <span className="relative flex min-w-0 items-center justify-end">
+              <span className="min-w-0 truncate type-caption text-ink-subtle">{relative}</span>
               <span
                 className={`absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-sm bg-panel px-0.5 ${actionVisibility(commit)}`}
               >
                 {renderActionButtons(commit)}
               </span>
             </span>
-            <span className="flex min-w-0 items-center gap-1 type-caption text-ink-muted">
-              {shownRefs.map((chip) => (
-                <RefBadge key={`${chip.kind}:${chip.title}`} chip={chip} shrinkable />
+            <span className="flex min-w-0 items-center gap-1 overflow-hidden">
+              {refs.shown.map((chip) => (
+                <RefBadge
+                  key={`${chip.kind}:${chip.title}`}
+                  chip={chip}
+                  fit={refs.truncated ? 'fluid' : 'none'}
+                />
               ))}
-              {hiddenRefs.length > 0 && (
-                <span
-                  title={hiddenRefs.map((chip) => chip.title).join(', ')}
-                  className="inline-flex h-4 flex-none items-center rounded-sm border border-rule-hairline bg-raised px-1 type-caption text-ink-subtle"
-                >
-                  +{hiddenRefs.length}
+              {refs.hidden.length > 0 && (
+                <span className="ml-auto flex-none">
+                  <RefOverflowBadge chips={refs.hidden} />
                 </span>
               )}
-              <span className="flex-none type-data text-ink-subtle">{commit.shortSha}</span>
+            </span>
+            <span className="min-w-0 truncate text-right type-data text-ink-subtle">
+              {commit.shortSha}
             </span>
           </span>
         ) : (
@@ -741,16 +824,9 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
                 </span>
               )}
               {shownRefs.map((chip) => (
-                <RefBadge key={`${chip.kind}:${chip.title}`} chip={chip} shrinkable />
+                <RefBadge key={`${chip.kind}:${chip.title}`} chip={chip} fit="shrink" />
               ))}
-              {hiddenRefs.length > 0 && (
-                <span
-                  title={hiddenRefs.map((chip) => chip.title).join(', ')}
-                  className="inline-flex h-4 flex-none items-center rounded-sm border border-rule-hairline bg-raised px-1 type-caption text-ink-subtle"
-                >
-                  +{hiddenRefs.length}
-                </span>
-              )}
+              {hiddenRefs.length > 0 && <RefOverflowBadge chips={hiddenRefs} />}
               <span className="min-w-[60px] flex-1 truncate type-value text-ink">
                 {commit.subject}
               </span>
@@ -940,7 +1016,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
       )}
 
       <div ref={tableRef} className="relative flex min-h-0 flex-1">
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
           {!narrow && (
             <div
               className="sticky top-0 z-[3] grid h-[26px] items-center border-b border-l-2 border-l-transparent border-rule-divide bg-panel pr-2 text-ink-subtle type-caption"
