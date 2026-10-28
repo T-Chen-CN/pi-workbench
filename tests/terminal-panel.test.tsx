@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TerminalPanel } from '../src/components/TerminalPanel'
 import { conversationKey, useChatStore } from '../src/store/chatStore'
 import { useSessionStore } from '../src/store/sessionStore'
+import { useTerminalStore } from '../src/store/terminalStore'
 import { useI18nStore } from '../src/store/i18nStore'
 import { api } from '../src/api'
 import { translations } from '../src/i18n/translations'
@@ -25,6 +26,7 @@ vi.mock('@xterm/xterm', () => {
     open = vi.fn()
     write = vi.fn()
     writeln = vi.fn()
+    reset = vi.fn()
     dispose = vi.fn()
     onData = vi.fn(() => ({ dispose: vi.fn() }))
     constructor() {
@@ -69,6 +71,7 @@ beforeEach(() => {
   useSessionStore.getState().setOpen('/ws', ['s1'], 's1')
   useChatStore.getState().ensureConversation(conversationKey('/ws', 's1'))
   xterm.instances.length = 0
+  useTerminalStore.getState().reset()
   vi.clearAllMocks()
   vi.stubGlobal('ResizeObserver', ResizeObserverMock)
   vi.mocked(api.terminalCreate).mockResolvedValue({
@@ -137,6 +140,29 @@ describe('TerminalPanel', () => {
         path: '/logs/t1.log',
       })
     })
+  })
+
+  it('keeps the PTY across remounts and replays the buffered output', async () => {
+    const captured: { handler: ((payload: { id: string; data: string }) => void) | null } = {
+      handler: null,
+    }
+    vi.mocked(api.onTerminalData).mockImplementation((callback) => {
+      captured.handler = callback
+      return () => {}
+    })
+
+    const first = render(<TerminalPanel workspacePath="/ws" visible onClose={vi.fn()} />)
+    await waitFor(() => expect(api.terminalCreate).toHaveBeenCalledTimes(1))
+
+    captured.handler?.({ id: 't1', data: 'before-detach' })
+    first.unmount()
+
+    // 拆回主窗口：组件在另一个 document 里重新挂载
+    render(<TerminalPanel workspacePath="/ws" visible onClose={vi.fn()} />)
+
+    expect(api.terminalCreate).toHaveBeenCalledTimes(1)
+    expect(api.terminalClose).not.toHaveBeenCalled()
+    expect(xterm.instances[1]?.write).toHaveBeenCalledWith('before-detach')
   })
 
   it('writes incoming PTY data to the terminal', async () => {

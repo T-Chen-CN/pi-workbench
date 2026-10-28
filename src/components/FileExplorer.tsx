@@ -13,11 +13,13 @@ import {
   PanelLeftClose,
   Pencil,
   Plus,
-  Trash2,
+  Trash2
 } from 'lucide-react'
 import { api } from '../api'
 import { useEditorStore, editorStoreFor } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
+import { usePanelContextMenu } from './PanelContextMenu'
+import { readPanelUi, writePanelUi } from '../panelHost/panelUiState'
 import { useSettingsStore } from '../store/settingsStore'
 import { localizeError } from '../i18n/errors'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
@@ -27,7 +29,7 @@ import {
   sortTreeEntries,
   sortTreeNodes,
   type ExplorerSortBy,
-  type SortTreeOptions,
+  type SortTreeOptions
 } from '../utils/fileTree'
 import { persistAppSettings } from '../utils/persistSettings'
 import { useVirtualRows } from '../hooks/useVirtualRows'
@@ -55,10 +57,41 @@ function mergeTree(previous: TreeNode[], incoming: TreeNode[]): TreeNode[] {
   const byPath = new Map(previous.map((node) => [node.path, node]))
   return incoming.map((node) => {
     const existing = byPath.get(node.path)
-    return existing
-      ? { ...node, isExpanded: existing.isExpanded, children: existing.children }
-      : node
+    return existing ? { ...node, isExpanded: existing.isExpanded, children: existing.children } : node
   })
+}
+
+/** 已展开路径 → 只带 isExpanded 的骨架树，交给 loadRootDirectory 回填真实条目 */
+function buildExpandedSkeleton(paths: string[], rootPath: string): TreeNode[] {
+  const root = rootPath.replace(/\\/g, '/').replace(/\/+$/, '')
+  const roots: TreeNode[] = []
+  const byPath = new Map<string, TreeNode>()
+
+  for (const raw of paths) {
+    const normalized = raw.replace(/\\/g, '/')
+    if (normalized === root || !normalized.startsWith(`${root}/`)) continue
+    const segments = normalized.slice(root.length + 1).split('/')
+    let parent: TreeNode | null = null
+    let current = root
+    for (const segment of segments) {
+      current = `${current}/${segment}`
+      let node = byPath.get(current)
+      if (!node) {
+        node = {
+          name: segment,
+          path: current,
+          isDirectory: true,
+          isExpanded: true,
+          children: []
+        }
+        byPath.set(current, node)
+        if (parent) parent.children?.push(node)
+        else roots.push(node)
+      }
+      parent = node
+    }
+  }
+  return roots
 }
 
 /** 按扩展名挑一个文件图标 */
@@ -82,14 +115,9 @@ export const FileExplorer: React.FC<{
   collapseButtonRef?: React.Ref<HTMLButtonElement>
   panelId?: string
   active?: boolean
-}> = ({
-  workspacePath,
-  onCollapse,
-  collapseButtonRef,
-  panelId = 'file-panel',
-  active = true,
-}) => {
+}> = ({ workspacePath, onCollapse, collapseButtonRef, panelId = 'file-panel', active = true }) => {
   const { t } = useI18nStore()
+  const panelMenu = usePanelContextMenu('files')
   const [tree, setTree] = useState<TreeNode[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -97,7 +125,7 @@ export const FileExplorer: React.FC<{
   const [createDialog, setCreateDialog] = useState<CreateFileDialogState>({
     isOpen: false,
     fileName: '',
-    parentPath: null,
+    parentPath: null
   })
   const [contextMenu, setContextMenu] = useState<{ node: TreeNode; x: number; y: number } | null>(null)
   const explorerSortBy = useSettingsStore((state) => state.explorerSortBy)
@@ -107,7 +135,7 @@ export const FileExplorer: React.FC<{
     () => ({
       by: explorerSortBy,
       foldersFirst: explorerFoldersFirst,
-      reverse: explorerSortReverse,
+      reverse: explorerSortReverse
     }),
     [explorerSortBy, explorerFoldersFirst, explorerSortReverse]
   )
@@ -117,7 +145,7 @@ export const FileExplorer: React.FC<{
   const flatRows = useMemo(() => flattenVisibleTree(tree), [tree])
   const { parentRef: treeScrollRef, virtualizer } = useVirtualRows({
     count: flatRows.length,
-    estimateSize: 28,
+    estimateSize: 28
   })
 
   // 保存最新树，供异步刷新读取（避免闭包拿到旧的展开状态）
@@ -150,25 +178,62 @@ export const FileExplorer: React.FC<{
     )
   }, [])
 
-  const loadRootDirectory = useCallback(async (rootPath: string) => {
-    try {
-      setLoading(true)
-      setError(null)
-      const dirResult = await api.listDirectory(rootPath)
-      if (dirResult.success && dirResult.items) {
-        const merged = mergeTree(treeRef.current, sortTreeEntries(dirResult.items, sortOptionsRef.current))
-        setTree(await refreshExpanded(merged))
-      } else {
-        setError(dirResult.error || 'Failed to list workspace directory')
+  const loadRootDirectory = useCallback(
+    async (rootPath: string) => {
+      try {
+        setLoading(true)
+        setError(null)
+        const dirResult = await api.listDirectory(rootPath)
+        if (dirResult.success && dirResult.items) {
+          const merged = mergeTree(treeRef.current, sortTreeEntries(dirResult.items, sortOptionsRef.current))
+          setTree(await refreshExpanded(merged))
+        } else {
+          setError(dirResult.error || 'Failed to list workspace directory')
+        }
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err)
+        setError(localizeError(errorMsg))
+        toast.error(t('loadWorkspaceFailed', { error: localizeError(errorMsg) }))
+      } finally {
+        setLoading(false)
       }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err)
-      setError(localizeError(errorMsg))
-      toast.error(t('loadWorkspaceFailed', { error: localizeError(errorMsg) }))
-    } finally {
-      setLoading(false)
+    },
+    [refreshExpanded, t]
+  )
+
+  // 拆窗重建时把展开的目录与滚动位置带过来（面板在另一个 document 里重挂）
+  const restoreRef = useRef<{ scrollTop: number } | null>(null)
+  useEffect(() => {
+    if (!workspacePath) return
+    const saved = readPanelUi<{ expanded: string[]; scrollTop: number }>(workspacePath, 'files')
+    if (!saved) return
+    restoreRef.current = { scrollTop: saved.scrollTop }
+    if (saved.expanded.length > 0) {
+      const skeleton = buildExpandedSkeleton(saved.expanded, workspacePath)
+      treeRef.current = skeleton
+      setTree(skeleton)
     }
-  }, [refreshExpanded, t])
+  }, [workspacePath])
+
+  useEffect(() => {
+    if (!workspacePath) return
+    // 卸载后 ref 已被清空：先抓住滚动容器
+    const scrollEl = treeScrollRef.current
+    return () => {
+      const expanded: string[] = []
+      const walk = (nodes: TreeNode[]) => {
+        for (const node of nodes) {
+          if (node.isDirectory && node.isExpanded) expanded.push(node.path)
+          if (node.children) walk(node.children)
+        }
+      }
+      walk(treeRef.current)
+      writePanelUi(workspacePath, 'files', {
+        expanded,
+        scrollTop: scrollEl?.scrollTop ?? 0
+      })
+    }
+  }, [workspacePath, treeScrollRef])
 
   // Initialize tree when workspace changes
   useEffect(() => {
@@ -176,6 +241,17 @@ export const FileExplorer: React.FC<{
       loadRootDirectory(workspacePath)
     }
   }, [workspacePath, loadRootDirectory])
+
+  // 首帧加载完成后回到上次的滚动位置
+  useEffect(() => {
+    if (loading || !restoreRef.current) return
+    const { scrollTop } = restoreRef.current
+    restoreRef.current = null
+    const frame = requestAnimationFrame(() => {
+      if (treeScrollRef.current) treeScrollRef.current.scrollTop = scrollTop
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [loading, treeScrollRef])
 
   // 文件系统变化时刷新目录树（只在新增/删除/重命名时刷新，忽略编辑器保存）
   // 防抖合并批量事件，避免一次批量操作触发多次根目录重建
@@ -227,7 +303,7 @@ export const FileExplorer: React.FC<{
     if (!node.isDirectory) return
 
     const updateNode = (nodes: TreeNode[]): TreeNode[] => {
-      return nodes.map(n => {
+      return nodes.map((n) => {
         if (n.path === node.path) {
           // Found the node to toggle
           if (n.isExpanded) {
@@ -251,7 +327,7 @@ export const FileExplorer: React.FC<{
       const files = await loadDirectory(node.path)
       // Update the tree with loaded children
       const updateWithChildren = (nodes: TreeNode[]): TreeNode[] => {
-        return nodes.map(n => {
+        return nodes.map((n) => {
           if (n.path === node.path) {
             return { ...n, children: files as TreeNode[], isExpanded: true }
           }
@@ -278,8 +354,8 @@ export const FileExplorer: React.FC<{
         const proceed = await confirmDialog({
           message: t('openLargeFileConfirm', {
             name: node.name,
-            size: `${(info.size / 1024 / 1024).toFixed(1)} MB`,
-          }),
+            size: `${(info.size / 1024 / 1024).toFixed(1)} MB`
+          })
         })
         if (!proceed) return
       }
@@ -293,7 +369,7 @@ export const FileExplorer: React.FC<{
         name: node.name,
         content: result.content,
         isDirty: false,
-        isSaving: false,
+        isSaving: false
       })
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
@@ -308,7 +384,7 @@ export const FileExplorer: React.FC<{
       title: t('rename'),
       message: t('renamePrompt'),
       defaultValue: node.name,
-      confirmLabel: t('rename'),
+      confirmLabel: t('rename')
     })
     if (!newName || newName === node.name) return
 
@@ -335,7 +411,7 @@ export const FileExplorer: React.FC<{
       !(await confirmDialog({
         message: t('deleteConfirm'),
         confirmLabel: t('delete'),
-        danger: true,
+        danger: true
       }))
     ) {
       return
@@ -361,7 +437,7 @@ export const FileExplorer: React.FC<{
       isOpen: true,
       fileName: '',
       // 默认在工作区根目录创建
-      parentPath: workspacePath ?? null,
+      parentPath: workspacePath ?? null
     })
   }
 
@@ -389,7 +465,7 @@ export const FileExplorer: React.FC<{
         name: createDialog.fileName,
         content: '',
         isDirty: false,
-        isSaving: false,
+        isSaving: false
       })
 
       // Refresh the workspace tree
@@ -456,13 +532,12 @@ export const FileExplorer: React.FC<{
   return (
     <div className="flex h-full flex-col overflow-hidden bg-panel">
       <div
+        onContextMenu={panelMenu.onContextMenu}
         className={`flex h-[34px] flex-shrink-0 items-center justify-between border-b border-rule-divide pl-3 ${
           onCollapse ? 'pr-2' : 'pr-3'
         }`}
       >
-        <h3 className="m-0 type-label text-ink-muted">
-          {t('files')}
-        </h3>
+        <h3 className="m-0 type-label text-ink-muted">{t('files')}</h3>
         <div className="flex items-center gap-1">
           {loading && <Loader2 size={13} className="animate-spin text-ink-muted" />}
           {error && (
@@ -488,41 +563,22 @@ export const FileExplorer: React.FC<{
               placement="down"
               className="w-36 py-1"
             >
-              <MenuOption
-                selected={explorerSortBy === 'name'}
-                onSelect={() => handleSortBy('name')}
-              >
+              <MenuOption selected={explorerSortBy === 'name'} onSelect={() => handleSortBy('name')}>
                 {t('sortByName')}
               </MenuOption>
-              <MenuOption
-                selected={explorerSortBy === 'type'}
-                onSelect={() => handleSortBy('type')}
-              >
+              <MenuOption selected={explorerSortBy === 'type'} onSelect={() => handleSortBy('type')}>
                 {t('sortByType')}
               </MenuOption>
               <div role="separator" className="my-1 border-t border-rule-divide" />
-              <MenuOption
-                role="menuitemcheckbox"
-                selected={explorerFoldersFirst}
-                onSelect={handleFoldersFirstChange}
-              >
+              <MenuOption role="menuitemcheckbox" selected={explorerFoldersFirst} onSelect={handleFoldersFirstChange}>
                 {t('sortFoldersFirst')}
               </MenuOption>
-              <MenuOption
-                role="menuitemcheckbox"
-                selected={explorerSortReverse}
-                onSelect={handleSortReverseChange}
-              >
+              <MenuOption role="menuitemcheckbox" selected={explorerSortReverse} onSelect={handleSortReverseChange}>
                 {t('sortReverse')}
               </MenuOption>
             </PopoverMenu>
           </div>
-          <IconButton
-            icon={Plus}
-            label={t('createNewFile')}
-            size="sm"
-            onClick={openCreateFileDialog}
-          />
+          <IconButton icon={Plus} label={t('createNewFile')} size="sm" onClick={openCreateFileDialog} />
           {onCollapse && (
             <IconButton
               ref={collapseButtonRef}
@@ -593,8 +649,7 @@ export const FileExplorer: React.FC<{
             onChange={(e) => setCreateDialog({ ...createDialog, fileName: e.target.value })}
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleCreateFile()
-              if (e.key === 'Escape')
-                setCreateDialog({ isOpen: false, fileName: '', parentPath: null })
+              if (e.key === 'Escape') setCreateDialog({ isOpen: false, fileName: '', parentPath: null })
             }}
             autoFocus
           />
@@ -619,6 +674,7 @@ export const FileExplorer: React.FC<{
           />
         )}
       </div>
+      {panelMenu.menu}
     </div>
   )
 }

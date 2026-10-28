@@ -480,7 +480,8 @@ describe('ChatPanel', () => {
 
     expect(await screen.findByRole('menuitemradio', { name: /test-model/ })).toBeTruthy()
 
-    fireEvent.keyDown(window, { key: 'Escape' })
+    // PopoverMenu 监听在面板所在 document 上，事件从焦点元素冒泡上来
+    fireEvent.keyDown(document.body, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('menuitemradio')).toBeNull())
     expect(document.activeElement).toBe(trigger)
   })
@@ -1232,7 +1233,7 @@ describe('FileExplorer', () => {
       translations.zh.sortReverse,
       translations.zh.sortByName,
     ]) {
-      fireEvent.keyDown(window, { key: 'ArrowDown' })
+      fireEvent.keyDown(document.body, { key: 'ArrowDown' })
       expect(focusedText()).toBe(label)
     }
   })

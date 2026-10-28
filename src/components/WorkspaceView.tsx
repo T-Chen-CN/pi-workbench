@@ -6,12 +6,9 @@ import React, {
   useId,
   useRef,
   useState,
-  type PointerEvent as ReactPointerEvent,
+  type PointerEvent as ReactPointerEvent
 } from 'react'
-import {
-  PanelLeftOpen,
-  PanelRightOpen,
-} from 'lucide-react'
+import { PanelLeftOpen, PanelRightOpen } from 'lucide-react'
 import { FileExplorer } from './FileExplorer'
 import { ChatPanel } from './ChatPanel'
 import { DiffViewer } from './DiffViewer'
@@ -30,9 +27,7 @@ import { onAppEvent } from '../utils/appEvents'
 import { api } from '../api'
 import type { GitChangeScope } from '../types/electron'
 
-const MonacoEditor = lazy(() =>
-  import('./MonacoEditor').then((module) => ({ default: module.MonacoEditor }))
-)
+const MonacoEditor = lazy(() => import('./MonacoEditor').then((module) => ({ default: module.MonacoEditor })))
 
 const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 420
@@ -71,11 +66,19 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
   // 侧栏宽度按标签分别记忆：文件树保持原宽度，Git 提交图可以拉宽到 720
   const [sidebarWidths, setSidebarWidths] = useState<Record<SidebarTab, number>>({
     files: 232,
-    git: 560,
+    git: 560
   })
   const [chatWidth, setChatWidth] = useState(336)
-  // 面板拆到独立窗口后，主窗口这边只剩占位：收起按钮交给窗口自己的信息栏
-  const chatDetached = usePanelStore((state) => state.panelHost[workspacePath]?.chat !== undefined)
+  // 面板拆到独立窗口后，主窗口这边只剩占位：
+  // 收起按钮交给窗口自己的信息栏，主窗口也保持展开，避免把占位一起收掉
+  const detached = usePanelStore((state) => state.panelHost[workspacePath])
+  const chatDetached = detached?.chat !== undefined
+  const filesDetached = detached?.files !== undefined
+  const gitDetached = detached?.git !== undefined
+  const terminalDetached = detached?.terminal !== undefined
+  const sidebarShown = showSidebar || filesDetached || gitDetached
+  const chatShown = showChat || chatDetached
+  const terminalShown = showTerminal || terminalDetached
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('files')
   const [containerWidth, setContainerWidth] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -88,37 +91,33 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
   const reactId = useId()
   const filePanelId = `file-panel-${reactId}`
   const chatPanelId = `chat-panel-${reactId}`
-  const activeSessionId = useSessionStore(
-    (state) => state.byWorkspace[workspacePath]?.active ?? null
-  )
+  const activeSessionId = useSessionStore((state) => state.byWorkspace[workspacePath]?.active ?? null)
   const viewRoot = useGitStore((state) =>
     activeSessionId
-      ? state.byWorkspace[workspacePath]?.bindings[activeSessionId]?.path ?? workspacePath
+      ? (state.byWorkspace[workspacePath]?.bindings[activeSessionId]?.path ?? workspacePath)
       : workspacePath
   )
-  const detailOpen = useGitStore(
-    (state) => state.byWorkspace[workspacePath]?.detailOpen ?? false
-  )
+  const detailOpen = useGitStore((state) => state.byWorkspace[workspacePath]?.detailOpen ?? false)
   const closeCommitDetail = useGitStore((state) => state.closeCommitDetail)
 
   /** Git 标签允许更宽；窗口不够时上限随容器和聊天列收缩 */
   const maxSidebarWidth = useCallback(
     (tab: SidebarTab) => {
       const total = containerWidth || containerRef.current?.clientWidth || window.innerWidth
-      const reserved = EDITOR_MIN + (showChat ? chatWidth : 0)
+      const reserved = EDITOR_MIN + (chatShown ? chatWidth : 0)
       const limit = tab === 'git' ? GIT_SIDEBAR_MAX : SIDEBAR_MAX
       return Math.max(SIDEBAR_MIN, Math.min(limit, total - reserved))
     },
-    [containerWidth, showChat, chatWidth]
+    [containerWidth, chatShown, chatWidth]
   )
   const sidebarWidth = Math.min(sidebarWidths[sidebarTab], maxSidebarWidth(sidebarTab))
 
   /** 聊天栏同样要给编辑器留出 EDITOR_MIN：只受 280/560 绝对上下限约束会把预览区压成 0 并被自己盖住 */
   const maxChatWidth = useCallback(() => {
     const total = containerWidth || containerRef.current?.clientWidth || window.innerWidth
-    const reserved = EDITOR_MIN + (showSidebar ? sidebarWidth : 0)
+    const reserved = EDITOR_MIN + (sidebarShown ? sidebarWidth : 0)
     return Math.max(CHAT_MIN, Math.min(CHAT_MAX, total - reserved))
-  }, [containerWidth, showSidebar, sidebarWidth])
+  }, [containerWidth, sidebarShown, sidebarWidth])
   // 窗口变窄时聊天列跟着收，和侧栏的显示宽度保持同一套规则
   const chatWidthShown = Math.min(chatWidth, maxChatWidth())
 
@@ -219,9 +218,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
       event.preventDefault()
       const startX = event.clientX
       const initial =
-        target === 'sidebar'
-          ? Math.min(sidebarWidths[sidebarTab], maxSidebarWidth(sidebarTab))
-          : chatWidthShown
+        target === 'sidebar' ? Math.min(sidebarWidths[sidebarTab], maxSidebarWidth(sidebarTab)) : chatWidthShown
 
       const onMove = (moveEvent: PointerEvent) => {
         const delta = moveEvent.clientX - startX
@@ -257,7 +254,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
       }`}
     >
       <WorkspaceScopeProvider value={workspacePath}>
-        {showSidebar ? (
+        {sidebarShown ? (
           <>
             <aside
               id={filePanelId}
@@ -280,25 +277,33 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
                   type="button"
                   onClick={() => setSidebarTab('git')}
                   className={`h-full border-b-2 px-2 type-label transition-colors ${
-                    sidebarTab === 'git'
-                      ? 'border-accent text-ink'
-                      : 'border-transparent text-ink-muted hover:text-ink'
+                    sidebarTab === 'git' ? 'border-accent text-ink' : 'border-transparent text-ink-muted hover:text-ink'
                   }`}
                 >
                   {t('gitView')}
                 </button>
               </div>
               <div className="min-h-0 flex-1">
-                {sidebarTab === 'files' ? (
-                  <FileExplorer
-                    workspacePath={viewRoot}
-                    onCollapse={collapseSidebar}
-                    collapseButtonRef={sidebarCollapseRef}
-                    panelId={filePanelId}
-                    active={active}
-                  />
-                ) : (
-                  <GitView workspacePath={workspacePath} />
+                {/* 已拆出的面板必须保持挂载（portal 在别的窗口里），只是主窗口这边不显示 */}
+                {(sidebarTab === 'files' || filesDetached) && (
+                  <div className={sidebarTab === 'files' ? 'h-full' : 'hidden'} aria-hidden={sidebarTab !== 'files'}>
+                    <PanelSlot panel="files">
+                      <FileExplorer
+                        workspacePath={viewRoot}
+                        onCollapse={filesDetached ? undefined : collapseSidebar}
+                        collapseButtonRef={sidebarCollapseRef}
+                        panelId={filePanelId}
+                        active={active}
+                      />
+                    </PanelSlot>
+                  </div>
+                )}
+                {(sidebarTab === 'git' || gitDetached) && (
+                  <div className={sidebarTab === 'git' ? 'h-full' : 'hidden'} aria-hidden={sidebarTab !== 'git'}>
+                    <PanelSlot panel="git">
+                      <GitView workspacePath={workspacePath} />
+                    </PanelSlot>
+                  </div>
                 )}
               </div>
             </aside>
@@ -343,17 +348,20 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
               />
             )}
           </div>
-          <TerminalPanel
-            workspacePath={workspacePath}
-            cwd={viewRoot}
-            key={`${activeSessionId ?? 'none'}:${viewRoot}`}
-            visible={showTerminal}
-            onClose={() => setShowTerminal(false)}
-            active={active}
-          />
+          {terminalShown && (
+            <PanelSlot panel="terminal">
+              <TerminalPanel
+                workspacePath={workspacePath}
+                cwd={viewRoot}
+                visible={terminalShown}
+                onClose={terminalDetached ? undefined : () => setShowTerminal(false)}
+                active={active}
+              />
+            </PanelSlot>
+          )}
         </section>
 
-        {showChat ? (
+        {chatShown ? (
           <>
             <div
               role="separator"

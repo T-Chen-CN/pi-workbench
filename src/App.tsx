@@ -38,6 +38,8 @@ import { useApprovalStore } from './store/approvalStore'
 import { hasRunningWork } from './utils/runningWork'
 import { useUpdaterStore } from './store/updaterStore'
 import { hostIdFromFrameName, usePanelStore } from './store/panelStore'
+import { useTerminalStore } from './store/terminalStore'
+import { clearPanelUi } from './panelHost/panelUiState'
 import { localizeError } from './i18n/errors'
 import { formatShortcut, matchShortcut } from './utils/keybindings'
 import { restoreEditorTabs, saveEditorTabs } from './workspace/editorTabs'
@@ -510,6 +512,8 @@ export default function App() {
     await api.unwatchWorkspace(targetPath).catch(() => undefined)
     // 面板辅助窗口属于运行时：工作区关闭就一并回收（重新打开从默认布局开始）
     usePanelStore.getState().dockWorkspace(targetPath)
+    useTerminalStore.getState().close(targetPath)
+    clearPanelUi(targetPath)
     clearWorkspaceChat(targetPath)
 
     const wasActive = targetPath === workspace

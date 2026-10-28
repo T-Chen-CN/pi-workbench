@@ -14,12 +14,14 @@ import {
   Monitor,
   RefreshCw,
   Tag,
-  XCircle,
+  XCircle
 } from 'lucide-react'
 import { api } from '../api'
 import { useSessionStore } from '../store/sessionStore'
 import { useGitStore } from '../store/gitStore'
 import { useI18nStore } from '../store/i18nStore'
+import { usePanelContextMenu } from './PanelContextMenu'
+import { readPanelUi, writePanelUi } from '../panelHost/panelUiState'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
@@ -30,11 +32,7 @@ import { parseGitRefs, type GitRefChip } from '../utils/gitRefs'
 import { fitRefChips, splitRefsByCount } from '../utils/refBadges'
 import { formatRelativeTime } from '../utils/relativeTime'
 import { clearCaptionWidthCache, measureCaptionWidth } from '../utils/textWidth'
-import type {
-  GitCommitInfo,
-  GitCommitStats,
-  GitWorktreeView,
-} from '../types/electron'
+import type { GitCommitInfo, GitCommitStats, GitWorktreeView } from '../types/electron'
 
 const LANE_WIDTH = 12
 const GRAPH_PAD_LEFT = 6
@@ -55,19 +53,13 @@ const COMMIT_LIMIT = 200
 const CHANGE_SCALE = 400
 
 const LANE_VARS = ['--accent', '--success', '--warning', '--danger', '--ink-muted'] as const
-const LANE_CLASSES = [
-  'stroke-accent',
-  'stroke-success',
-  'stroke-warning',
-  'stroke-danger',
-  'stroke-ink-muted',
-] as const
+const LANE_CLASSES = ['stroke-accent', 'stroke-success', 'stroke-warning', 'stroke-danger', 'stroke-ink-muted'] as const
 
 const COLUMN_LIMITS = {
   author: { min: 40, max: 140 },
   ring: { min: 26, max: 56 },
   date: { min: 56, max: 150 },
-  sha: { min: 44, max: 110 },
+  sha: { min: 44, max: 110 }
 } as const
 
 const EMPTY_WORKTREES: GitWorktreeView[] = []
@@ -152,20 +144,14 @@ const GraphRowSvg: React.FC<{
     className: laneClass(lane),
     strokeWidth,
     fill: 'none' as const,
-    strokeLinecap: 'round' as const,
+    strokeLinecap: 'round' as const
   })
   const parts: React.ReactNode[] = []
 
   for (let lane = 0; lane < total; lane += 1) {
     if (row.incoming.includes(lane)) continue
     if (!row.before[lane]) continue
-    parts.push(
-      <path
-        key={`lane-${lane}`}
-        d={`M ${laneX(lane)} 0 L ${laneX(lane)} ${height}`}
-        {...strokeProps(lane)}
-      />
-    )
+    parts.push(<path key={`lane-${lane}`} d={`M ${laneX(lane)} 0 L ${laneX(lane)} ${height}`} {...strokeProps(lane)} />)
   }
 
   if (dashedTop) {
@@ -184,11 +170,7 @@ const GraphRowSvg: React.FC<{
 
   if (row.incoming.includes(row.lane)) {
     parts.push(
-      <path
-        key="node-in"
-        d={`M ${laneX(row.lane)} 0 L ${laneX(row.lane)} ${yMid}`}
-        {...strokeProps(row.lane)}
-      />
+      <path key="node-in" d={`M ${laneX(row.lane)} 0 L ${laneX(row.lane)} ${yMid}`} {...strokeProps(row.lane)} />
     )
   }
 
@@ -226,11 +208,7 @@ const GraphRowSvg: React.FC<{
   )
 }
 
-const WipNodeSvg: React.FC<{ width: number; height: number; radius: number }> = ({
-  width,
-  height,
-  radius,
-}) => {
+const WipNodeSvg: React.FC<{ width: number; height: number; radius: number }> = ({ width, height, radius }) => {
   const x = GRAPH_PAD_LEFT + LANE_WIDTH / 2
   const yMid = height / 2
   return (
@@ -266,14 +244,7 @@ const ChangeRing: React.FC<{ stats?: GitCommitStats; title: string }> = ({ stats
   const radius = 6
   const circumference = 2 * Math.PI * radius
   const track = (
-    <circle
-      cx={center}
-      cy={center}
-      r={radius}
-      fill="none"
-      stroke="rgb(var(--rule-hairline))"
-      strokeWidth={2.8}
-    />
+    <circle cx={center} cy={center} r={radius} fill="none" stroke="rgb(var(--rule-hairline))" strokeWidth={2.8} />
   )
   let arcs: React.ReactNode = null
   if (total > 0) {
@@ -342,6 +313,7 @@ const FilterChip: React.FC<{
 
 export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => {
   const { t, language } = useI18nStore()
+  const panelMenu = usePanelContextMenu('git')
   const [githubLinked, setGithubLinked] = useState<boolean | null>(null)
   const [panelWidth, setPanelWidth] = useState(0)
   const [rowAreaWidth, setRowAreaWidth] = useState(0)
@@ -349,7 +321,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     author: 54,
     ring: 34,
     date: 82,
-    sha: 58,
+    sha: 58
   })
   const [filters, setFilters] = useState({ branches: true, remotes: true, tags: true })
   const [worktreesOpen, setWorktreesOpen] = useState(false)
@@ -359,26 +331,16 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
   /** 提交行所在的滚动容器；它的宽度扣掉滚动条，才是行的实际宽度 */
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  const activeSessionId = useSessionStore(
-    (state) => state.byWorkspace[workspacePath]?.active ?? null
-  )
+  const activeSessionId = useSessionStore((state) => state.byWorkspace[workspacePath]?.active ?? null)
   const repo = useGitStore((state) => state.byWorkspace[workspacePath]?.repo ?? null)
-  const worktrees = useGitStore(
-    (state) => state.byWorkspace[workspacePath]?.worktrees ?? EMPTY_WORKTREES
-  )
+  const worktrees = useGitStore((state) => state.byWorkspace[workspacePath]?.worktrees ?? EMPTY_WORKTREES)
   const binding = useGitStore((state) =>
-    activeSessionId
-      ? state.byWorkspace[workspacePath]?.bindings[activeSessionId] ?? null
-      : null
+    activeSessionId ? (state.byWorkspace[workspacePath]?.bindings[activeSessionId] ?? null) : null
   )
-  const commits = useGitStore(
-    (state) => state.byWorkspace[workspacePath]?.commits ?? EMPTY_COMMITS
-  )
+  const commits = useGitStore((state) => state.byWorkspace[workspacePath]?.commits ?? EMPTY_COMMITS)
   const stats = useGitStore((state) => state.byWorkspace[workspacePath]?.stats ?? EMPTY_STATS)
   const detail = useGitStore((state) => state.byWorkspace[workspacePath]?.commitDetail ?? null)
-  const detailPending = useGitStore(
-    (state) => state.byWorkspace[workspacePath]?.detailPending ?? null
-  )
+  const detailPending = useGitStore((state) => state.byWorkspace[workspacePath]?.detailPending ?? null)
   const pr = useGitStore((state) => state.byWorkspace[workspacePath]?.pr ?? null)
   const error = useGitStore((state) => state.byWorkspace[workspacePath]?.error ?? null)
   const load = useGitStore((state) => state.load)
@@ -392,6 +354,27 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
   const createBranchAtCommit = useGitStore((state) => state.createBranch)
 
   const graph = useMemo(() => buildCommitGraph(commits), [commits])
+
+  // 拆窗重建组件时把滚动位置带过来
+  const restoreScrollRef = useRef<number | null>(null)
+  useEffect(() => {
+    restoreScrollRef.current = readPanelUi<{ scrollTop: number }>(workspacePath, 'git')?.scrollTop ?? null
+    // 卸载后 ref 已被清空：先抓住滚动容器
+    const scrollEl = scrollRef.current
+    return () => {
+      writePanelUi(workspacePath, 'git', { scrollTop: scrollEl?.scrollTop ?? 0 })
+    }
+  }, [workspacePath])
+
+  useEffect(() => {
+    if (commits.length === 0 || restoreScrollRef.current === null) return
+    const scrollTop = restoreScrollRef.current
+    restoreScrollRef.current = null
+    const frame = requestAnimationFrame(() => {
+      if (scrollRef.current) scrollRef.current.scrollTop = scrollTop
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [commits])
   const graphWidth = GRAPH_PAD_LEFT + graph.laneCount * LANE_WIDTH + GRAPH_PAD_RIGHT
   const narrow = panelWidth > 0 && panelWidth < NARROW_BREAKPOINT
   const rowHeight = narrow ? ROW_HEIGHT_NARROW : ROW_HEIGHT
@@ -408,8 +391,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
   const dirtyCount = currentWorktree?.dirtyCount ?? 0
   const ahead = currentWorktree?.ahead ?? 0
   const behind = currentWorktree?.behind ?? 0
-  const currentBranch =
-    currentWorktree?.branch ?? repo?.branch ?? '—'
+  const currentBranch = currentWorktree?.branch ?? repo?.branch ?? '—'
   const allRefsOn = filters.branches && filters.remotes && filters.tags
   const selectedSha = detailPending ?? detail?.commit.sha ?? null
 
@@ -486,16 +468,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     void loadCommitStats(workspacePath, COMMIT_LIMIT, undefined, true)
     void refreshWorktrees(workspacePath, activeSessionId)
     void loadPr(workspacePath, binding?.path)
-  }, [
-    workspacePath,
-    activeSessionId,
-    binding?.path,
-    load,
-    loadCommits,
-    loadCommitStats,
-    loadPr,
-    refreshWorktrees,
-  ])
+  }, [workspacePath, activeSessionId, binding?.path, load, loadCommits, loadCommitStats, loadPr, refreshWorktrees])
 
   /** 手动刷新：先拉远端，再重读本地；拉取失败时提示一次并照常重读 */
   const refresh = useCallback(async () => {
@@ -531,7 +504,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
         title: t('worktreeForget'),
         message: t('worktreeForgetConfirm').replace('{path}', worktree.relativePath),
         confirmLabel: t('worktreeForget'),
-        danger: true,
+        danger: true
       })
       if (!confirmed) return
       const result = await forgetWorktree(workspacePath, worktree.id, activeSessionId)
@@ -562,7 +535,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
         title: t('gitNewBranchTitle'),
         message: t('gitNewBranchMessage', { sha: sha.slice(0, 7) }),
         placeholder: t('gitNewBranchPlaceholder'),
-        confirmLabel: t('gitCreateAction'),
+        confirmLabel: t('gitCreateAction')
       })
       const trimmed = name?.trim()
       if (!trimmed) return
@@ -641,7 +614,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
         modified: entry.modifiedFiles,
         deleted: entry.deletedFiles,
         additions: entry.additions.toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US'),
-        deletions: entry.deletions.toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US'),
+        deletions: entry.deletions.toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US')
       })
     },
     [stats, t, language]
@@ -658,7 +631,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     if (target.toDateString() === yesterday.toDateString()) return t('gitYesterday')
     return target.toLocaleDateString(language === 'zh' ? 'zh-CN' : 'en-US', {
       month: 'long',
-      day: 'numeric',
+      day: 'numeric'
     })
   }, [commits, language, t])
 
@@ -729,9 +702,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
   )
 
   const actionVisibility = (commit: GitCommitInfo) =>
-    selectedSha === commit.sha
-      ? 'opacity-100'
-      : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'
+    selectedSha === commit.sha ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'
 
   const renderRow = (commit: GitCommitInfo, index: number) => {
     const graphRow = graph.rows[index]
@@ -752,9 +723,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
         aria-label={`${commit.subject} ${author}`}
         style={{ gridTemplateColumns: rowGrid, height: rowHeight }}
         className={`group relative grid w-full items-center border-l-2 pr-2 text-left transition-colors ${
-          selected
-            ? 'border-accent bg-accent/[0.07]'
-            : 'border-transparent hover:bg-hover focus-visible:bg-hover'
+          selected ? 'border-accent bg-accent/[0.07]' : 'border-transparent hover:bg-hover focus-visible:bg-hover'
         }`}
       >
         <span className="flex h-full items-center overflow-hidden">
@@ -772,15 +741,12 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
             className="grid h-full min-w-0 items-center gap-x-1"
             style={{
               gridTemplateColumns: `minmax(0,1fr) ${NARROW_TIME_COLUMN}px`,
-              gridTemplateRows: '1fr 1fr',
+              gridTemplateRows: '1fr 1fr'
             }}
           >
             <span className="relative flex min-w-0 items-center gap-1">
               {commit.parents.length > 1 && (
-                <span
-                  className="flex flex-none items-center text-ink-muted"
-                  title={t('gitMergeCommit')}
-                >
+                <span className="flex flex-none items-center text-ink-muted" title={t('gitMergeCommit')}>
                   <GitMerge size={11} />
                 </span>
               )}
@@ -796,11 +762,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
             </span>
             <span className="flex min-w-0 items-center gap-1 overflow-hidden">
               {refs.shown.map((chip) => (
-                <RefBadge
-                  key={`${chip.kind}:${chip.title}`}
-                  chip={chip}
-                  fit={refs.truncated ? 'fluid' : 'none'}
-                />
+                <RefBadge key={`${chip.kind}:${chip.title}`} chip={chip} fit={refs.truncated ? 'fluid' : 'none'} />
               ))}
               {refs.hidden.length > 0 && (
                 <span className="ml-auto flex-none">
@@ -808,18 +770,13 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
                 </span>
               )}
             </span>
-            <span className="min-w-0 truncate text-right type-data text-ink-subtle">
-              {commit.shortSha}
-            </span>
+            <span className="min-w-0 truncate text-right type-data text-ink-subtle">{commit.shortSha}</span>
           </span>
         ) : (
           <>
             <span className="flex min-w-0 items-center gap-1 overflow-hidden pl-0.5">
               {commit.parents.length > 1 && (
-                <span
-                  className="flex flex-none items-center text-ink-muted"
-                  title={t('gitMergeCommit')}
-                >
+                <span className="flex flex-none items-center text-ink-muted" title={t('gitMergeCommit')}>
                   <GitMerge size={11} />
                 </span>
               )}
@@ -827,9 +784,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
                 <RefBadge key={`${chip.kind}:${chip.title}`} chip={chip} fit="shrink" />
               ))}
               {hiddenRefs.length > 0 && <RefOverflowBadge chips={hiddenRefs} />}
-              <span className="min-w-[60px] flex-1 truncate type-value text-ink">
-                {commit.subject}
-              </span>
+              <span className="min-w-[60px] flex-1 truncate type-value text-ink">{commit.subject}</span>
             </span>
             <span className="truncate pl-0.5 type-caption text-ink-muted">{author}</span>
             <span className="flex items-center pl-0.5">
@@ -925,33 +880,36 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     <div ref={panelRef} className="flex h-full min-h-0 flex-col bg-panel">
       {narrow ? (
         <>
-          <div className="flex h-[34px] flex-none items-center gap-1.5 border-b border-rule-divide px-2">
-          <span className="h-2 w-2 flex-none rounded-full bg-accent" aria-hidden="true" />
-          <span className="min-w-0 truncate type-label text-ink">{t('gitWorkingTree')}</span>
-          <span className="ml-auto flex-none type-caption text-ink-subtle">{dayLabel}</span>
-          <IconButton
-            icon={FolderGit2}
-            label={t('gitWorktrees')}
-            size="sm"
-            active={worktreesOpen}
-            onClick={() => setWorktreesOpen((value) => !value)}
-          />
-          <IconButton icon={RefreshCw} label={t('gitRefresh')} size="sm" onClick={() => void refresh()} />
+          <div
+            onContextMenu={panelMenu.onContextMenu}
+            className="flex h-[34px] flex-none items-center gap-1.5 border-b border-rule-divide px-2"
+          >
+            <span className="h-2 w-2 flex-none rounded-full bg-accent" aria-hidden="true" />
+            <span className="min-w-0 truncate type-label text-ink">{t('gitWorkingTree')}</span>
+            <span className="ml-auto flex-none type-caption text-ink-subtle">{dayLabel}</span>
+            <IconButton
+              icon={FolderGit2}
+              label={t('gitWorktrees')}
+              size="sm"
+              active={worktreesOpen}
+              onClick={() => setWorktreesOpen((value) => !value)}
+            />
+            <IconButton icon={RefreshCw} label={t('gitRefresh')} size="sm" onClick={() => void refresh()} />
           </div>
           {worktreeList}
           {prRow}
         </>
       ) : (
         <>
-          <div className="flex h-[32px] flex-none items-center gap-1.5 border-b border-rule-divide px-2.5">
+          <div
+            onContextMenu={panelMenu.onContextMenu}
+            className="flex h-[32px] flex-none items-center gap-1.5 border-b border-rule-divide px-2.5"
+          >
             <span className="flex-none type-data text-ink-muted">
               ↑{ahead} ↓{behind}
             </span>
             <span className="h-3 w-px flex-none bg-rule-divide" aria-hidden="true" />
-            <FilterChip
-              active={allRefsOn}
-              onClick={() => setFilters({ branches: true, remotes: true, tags: true })}
-            >
+            <FilterChip active={allRefsOn} onClick={() => setFilters({ branches: true, remotes: true, tags: true })}>
               {t('gitAllBranches')}
             </FilterChip>
             <FilterChip
@@ -1069,42 +1027,36 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
             style={{ gridTemplateColumns: rowGrid, height: ROW_HEIGHT, top: narrow ? 0 : 26 }}
             title={t('gitWorkingTreeSummary', { count: dirtyCount })}
           >
-          <span className="flex h-full items-center overflow-hidden">
-            <WipNodeSvg
-              width={graphWidth}
-              height={ROW_HEIGHT}
-              radius={narrow ? 6.5 : 5.5}
-            />
-          </span>
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span className="inline-flex h-[18px] flex-none items-center gap-1 rounded-sm border border-rule-hairline bg-raised px-1.5 type-data text-ink-muted">
-              <FolderGit2 size={11} className="flex-none text-accent" />
-              <span className="text-ink-subtle">+</span>
-              <span className="text-ink">{dirtyCount}</span>
+            <span className="flex h-full items-center overflow-hidden">
+              <WipNodeSvg width={graphWidth} height={ROW_HEIGHT} radius={narrow ? 6.5 : 5.5} />
             </span>
-            {!narrow && <span className="truncate type-label text-ink">{t('gitWorkingTree')}</span>}
-          </span>
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute bottom-0 right-0 border-b border-rule-hairline"
-            style={{ left: graphWidth }}
-          />
-        </div>
-
-        {commits.map((commit, index) => renderRow(commit, index))}
-
-        {detailPending && !detail && (
-          <div className="flex items-center gap-1.5 border-b border-rule-hairline px-2.5 py-1.5">
-            <Spinner size={12} className="text-ink-muted" />
-            <span className="type-data text-ink-subtle">{detailPending.slice(0, 7)}</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="inline-flex h-[18px] flex-none items-center gap-1 rounded-sm border border-rule-hairline bg-raised px-1.5 type-data text-ink-muted">
+                <FolderGit2 size={11} className="flex-none text-accent" />
+                <span className="text-ink-subtle">+</span>
+                <span className="text-ink">{dirtyCount}</span>
+              </span>
+              {!narrow && <span className="truncate type-label text-ink">{t('gitWorkingTree')}</span>}
+            </span>
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute bottom-0 right-0 border-b border-rule-hairline"
+              style={{ left: graphWidth }}
+            />
           </div>
-        )}
 
-        {commits.length === 0 && (
-          <div className="px-2.5 py-2 type-caption text-ink-muted">
-            {error ?? t('gitNoCommits')}
-          </div>
-        )}
+          {commits.map((commit, index) => renderRow(commit, index))}
+
+          {detailPending && !detail && (
+            <div className="flex items-center gap-1.5 border-b border-rule-hairline px-2.5 py-1.5">
+              <Spinner size={12} className="text-ink-muted" />
+              <span className="type-data text-ink-subtle">{detailPending.slice(0, 7)}</span>
+            </div>
+          )}
+
+          {commits.length === 0 && (
+            <div className="px-2.5 py-2 type-caption text-ink-muted">{error ?? t('gitNoCommits')}</div>
+          )}
         </div>
 
         {resizeGuide !== null && (
@@ -1118,9 +1070,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
 
       {githubLinked === false && (
         <div className="flex flex-none items-center gap-1.5 border-t border-rule-divide px-2.5 py-1.5">
-          <span className="min-w-0 flex-1 truncate type-caption text-ink-muted">
-            {t('githubNotLinked')}
-          </span>
+          <span className="min-w-0 flex-1 truncate type-caption text-ink-muted">{t('githubNotLinked')}</span>
           <button
             type="button"
             onClick={() => emitAppEvent('open-settings', { section: 'github' })}
@@ -1131,7 +1081,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
           </button>
         </div>
       )}
+      {panelMenu.menu}
     </div>
   )
 }
-

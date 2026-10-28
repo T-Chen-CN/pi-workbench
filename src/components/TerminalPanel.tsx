@@ -1,17 +1,20 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { api } from '../api'
 import { conversationKey, useChatStore } from '../store/chatStore'
+import { subscribeTerminalData, terminalId, terminalReplay, useTerminalStore } from '../store/terminalStore'
 import { useSessionStore } from '../store/sessionStore'
 import { readThemeTokens, tokenHex } from '../theme/tokens'
 import { useI18nStore } from '../store/i18nStore'
 import { useResolvedTheme } from '../store/themeStore'
-import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
 import { IconButton } from './ui'
+import { useHostId } from '../panelHost/HostContext'
+import { usePanelContextMenu } from './PanelContextMenu'
+import { MAIN_HOST } from '../panelHost/types'
 import { basename } from '../utils/filePath'
 
 interface TerminalPanelProps {
@@ -19,11 +22,10 @@ interface TerminalPanelProps {
   /** 终端工作目录；跟随当前会话的工作树，默认工作区根 */
   cwd?: string
   visible: boolean
-  onClose: () => void
+  /** 缺省时不给关闭按钮：面板已拆到独立窗口，收起入口是窗口自己 */
+  onClose?: () => void
   active?: boolean
 }
-
-type TerminalStatus = 'idle' | 'starting' | 'ready' | 'error'
 
 /** xterm 主题跟随 Paper & Ink token */
 function terminalTheme(isDark: boolean) {
@@ -32,7 +34,7 @@ function terminalTheme(isDark: boolean) {
     background: tokenHex(tokens, 'panel'),
     foreground: tokenHex(tokens, 'ink'),
     cursor: tokenHex(tokens, 'accent'),
-    selectionBackground: tokenHex(tokens, 'accent', 0x30),
+    selectionBackground: tokenHex(tokens, 'accent', 0x30)
   }
 }
 
@@ -41,68 +43,43 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   cwd,
   visible,
   onClose,
-  active = true,
+  active = true
 }) => {
   const { t } = useI18nStore()
   const resolvedTheme = useResolvedTheme()
+  // 独立窗口里没有编辑器可让位，终端铺满整个窗口
+  const detached = useHostId() !== MAIN_HOST
+  const panelMenu = usePanelContextMenu('terminal')
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
-  const terminalIdRef = useRef<string | null>(null)
-  const terminalLogPathRef = useRef<string | null>(null)
   const startedRef = useRef(false)
-  const [status, setStatus] = useState<TerminalStatus>('idle')
-  const [error, setError] = useState<string | null>(null)
-  const [shellName, setShellName] = useState('')
-  const [generation, setGeneration] = useState(0)
-  const activeSessionId = useSessionStore(
-    (state) => state.byWorkspace[workspacePath]?.active ?? null
-  )
+  // PTY 与回放缓冲在 store 里，拆窗重建组件也不会丢 shell
+  const status = useTerminalStore((state) => state.byWorkspace[workspacePath]?.status ?? 'idle')
+  const error = useTerminalStore((state) => state.byWorkspace[workspacePath]?.error ?? null)
+  const shellName = useTerminalStore((state) => state.byWorkspace[workspacePath]?.shellName ?? '')
+  const logPath = useTerminalStore((state) => state.byWorkspace[workspacePath]?.logPath ?? null)
+  const activeSessionId = useSessionStore((state) => state.byWorkspace[workspacePath]?.active ?? null)
 
-  // 输出订阅（组件生命周期内只注册一次）
-  useEffect(() => {
-    const offData = api.onTerminalData(({ id, data }) => {
-      if (id === terminalIdRef.current) {
-        termRef.current?.write(data)
-      }
-    })
-    const offExit = api.onTerminalExit(({ id, exitCode }) => {
-      if (id === terminalIdRef.current) {
-        const message = t('processExited', { code: exitCode })
-        termRef.current?.writeln(`\r\n[${message}]`)
-        setStatus('error')
-        setError(message)
-      }
-    })
-    return () => {
-      offData()
-      offExit()
-    }
-  }, [t])
-
-  // 卸载时释放 PTY
+  // 面板卸下时只销毁 xterm，PTY 留给 store
   useEffect(() => {
     return () => {
-      const id = terminalIdRef.current
-      if (id) void api.terminalClose(id)
-      terminalIdRef.current = null
       termRef.current?.dispose()
       termRef.current = null
+      fitRef.current = null
     }
   }, [])
 
-  // 面板首次可见时创建终端
+  // 面板首次可见时挂上 xterm：先回放缓冲，再接管实时输出
   useEffect(() => {
     if (!visible || startedRef.current || !containerRef.current) return
     startedRef.current = true
-    setStatus('starting')
-    setError(null)
 
     const terminal = new Terminal({
       fontSize: 13,
       fontFamily: '"Geist Mono Variable", "Geist Mono", "Noto Sans SC Variable", Consolas, monospace',
       cursorBlink: true,
-      theme: terminalTheme(resolvedTheme === 'dark'),
+      theme: terminalTheme(resolvedTheme === 'dark')
     })
     const fit = new FitAddon()
     terminal.loadAddon(fit)
@@ -111,39 +88,35 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     termRef.current = terminal
     fitRef.current = fit
 
+    const replay = terminalReplay(workspacePath)
+    if (replay) terminal.write(replay)
+
+    const offData = subscribeTerminalData(workspacePath, (chunk) => {
+      termRef.current?.write(chunk)
+    })
+
     terminal.onData((data) => {
-      const id = terminalIdRef.current
+      const id = terminalId(workspacePath)
       if (id) void api.terminalWrite(id, data)
     })
 
-    let cancelled = false
-    void (async () => {
-      const result = cwd
-        ? await api.terminalCreate(workspacePath, terminal.cols || 80, terminal.rows || 24, cwd)
-        : await api.terminalCreate(workspacePath, terminal.cols || 80, terminal.rows || 24)
-      if (cancelled) {
-        if (result.id) void api.terminalClose(result.id)
-        return
-      }
-      if (result.success && result.id) {
-        terminalIdRef.current = result.id
-        terminalLogPathRef.current = result.logPath ?? null
-        setShellName(result.shell ?? '')
-        setStatus('ready')
-        fit.fit()
-        void api.terminalResize(result.id, terminal.cols, terminal.rows)
-      } else {
-        const message = result.error ? localizeError(result.error) : t('terminalCreateFailed')
-        setStatus('error')
-        setError(message)
-        terminal.writeln(`\r\n${message}`)
-      }
-    })()
+    useTerminalStore.getState().ensure(workspacePath, cwd ?? null, terminal.cols || 80, terminal.rows || 24)
 
     return () => {
-      cancelled = true
+      offData()
     }
-  }, [visible, workspacePath, cwd, generation, t, resolvedTheme])
+  }, [visible, workspacePath, cwd, resolvedTheme])
+
+  // PTY 建好（或换新）后同步一次尺寸
+  useEffect(() => {
+    if (status !== 'ready') return
+    const terminal = termRef.current
+    const id = terminalId(workspacePath)
+    if (terminal && id) {
+      fitRef.current?.fit()
+      void api.terminalResize(id, terminal.cols, terminal.rows)
+    }
+  }, [status, workspacePath])
 
   // 主题切换时同步终端配色
   useEffect(() => {
@@ -158,7 +131,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
     const fitAndResize = () => {
       fitRef.current?.fit()
-      const id = terminalIdRef.current
+      const id = terminalId(workspacePath)
       const terminal = termRef.current
       if (id && terminal) {
         void api.terminalResize(id, terminal.cols, terminal.rows)
@@ -174,27 +147,19 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       clearTimeout(timer)
       observer.disconnect()
     }
-  }, [visible, active])
+  }, [visible, active, workspacePath])
 
   const restart = () => {
-    const id = terminalIdRef.current
-    if (id) void api.terminalClose(id)
-    terminalIdRef.current = null
-    terminalLogPathRef.current = null
-    termRef.current?.dispose()
-    termRef.current = null
-    fitRef.current = null
-    startedRef.current = false
-    setStatus('idle')
-    setGeneration((value) => value + 1)
+    const terminal = termRef.current
+    terminal?.reset()
+    useTerminalStore.getState().restart(workspacePath, cwd ?? null, terminal?.cols || 80, terminal?.rows || 24)
   }
 
   const sendOutputToChat = async () => {
-    const id = terminalIdRef.current
+    const id = terminalId(workspacePath)
     if (!id) return
     await api.terminalFlush(id)
 
-    const logPath = terminalLogPathRef.current
     if (!logPath) {
       toast.error(t('terminalOutputUnavailable'))
       return
@@ -210,30 +175,31 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       return
     }
 
-    useChatStore
-      .getState()
-      .addAttachment(conversationKey(workspacePath, activeSessionId), {
-        kind: 'file',
-        path: logPath,
-        name: basename(logPath) || 'terminal.log',
-      })
+    useChatStore.getState().addAttachment(conversationKey(workspacePath, activeSessionId), {
+      kind: 'file',
+      path: logPath,
+      name: basename(logPath) || 'terminal.log'
+    })
     toast.success(t('terminalAttached'))
   }
 
   return (
     <div
       className={
-        visible
-          ? 'flex h-[172px] flex-shrink-0 flex-col border-t border-rule-divide bg-panel'
-          : 'hidden'
+        detached
+          ? 'flex h-full flex-col overflow-hidden bg-panel'
+          : visible
+            ? 'flex h-[172px] flex-shrink-0 flex-col border-t border-rule-divide bg-panel'
+            : 'hidden'
       }
     >
-      <div className="flex h-7 flex-shrink-0 items-center justify-between border-b border-rule-divide px-3.5">
+      <div
+        onContextMenu={panelMenu.onContextMenu}
+        className="flex h-7 flex-shrink-0 items-center justify-between border-b border-rule-divide px-3.5"
+      >
         <div className="flex items-center gap-3 type-label text-ink-muted">
           <span className="font-medium text-ink-muted">{t('terminal')}</span>
-          {shellName && (
-            <span className="border-b border-accent pb-0.5 type-data text-ink">{shellName}</span>
-          )}
+          {shellName && <span className="border-b border-accent pb-0.5 type-data text-ink">{shellName}</span>}
           {status === 'starting' && <span>{t('terminalStarting')}</span>}
           {status === 'error' && <span className="text-danger">{error}</span>}
         </div>
@@ -253,10 +219,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           >
             {t('restartTerminal')}
           </button>
-          <IconButton icon={X} label={t('close')} size="sm" onClick={onClose} />
+          {onClose && <IconButton icon={X} label={t('close')} size="sm" onClick={onClose} />}
         </div>
       </div>
       <div ref={containerRef} className="min-h-0 flex-1 px-2 pb-1 pt-1" />
+      {panelMenu.menu}
     </div>
   )
 }
