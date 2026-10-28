@@ -9,6 +9,7 @@ import { VirtualRows } from './VirtualRows'
 import { Button, Caption, IconButton, Modal, Spinner } from './ui'
 import { SearchField } from './patterns'
 import { formatBytes } from '../utils/formatBytes'
+import { copyText } from '../utils/clipboard'
 
 /** 每次读取的字符数；分块传输避免超长结果一次性进入渲染进程 */
 const CHUNK_CHARS = 262_144
@@ -157,12 +158,11 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
   }, [query, parentRef])
 
   const handleCopy = async () => {
-    try {
-      const content = matches ? matches.map((match) => match.text).join('\n') : text
-      await navigator.clipboard.writeText(content)
+    const content = matches ? matches.map((match) => match.text).join('\n') : text
+    if (await copyText(content)) {
       toast.info(t('toolResultCopied'))
-    } catch (err) {
-      toast.error(String(err))
+    } else {
+      toast.error(t('copyFailedPlain'))
     }
   }
 

@@ -33,6 +33,7 @@ import { parseGitRefs, type GitRefChip } from '../utils/gitRefs'
 import { fitRefChips, splitRefsByCount } from '../utils/refBadges'
 import { formatRelativeTime } from '../utils/relativeTime'
 import { clearCaptionWidthCache, measureCaptionWidth } from '../utils/textWidth'
+import { copyText } from '../utils/clipboard'
 import type { GitCommitInfo, GitCommitStats, GitWorktreeView } from '../types/electron'
 
 const LANE_WIDTH = 12
@@ -520,10 +521,9 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
 
   const copySha = useCallback(
     async (sha: string) => {
-      try {
-        await navigator.clipboard.writeText(sha)
+      if (await copyText(sha)) {
         toast.success(t('gitCopiedSha'))
-      } catch {
+      } else {
         toast.error(t('gitCopyFailed'))
       }
     },
@@ -807,20 +807,24 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     )
   }
 
+  const pull = pr?.pull
   const prRow =
-    pr?.pull && pr.available ? (
+    pull && pr.available ? (
       <div className="flex h-[26px] flex-none items-center gap-1.5 border-b border-rule-hairline px-2.5 type-caption">
         <GitPullRequest size={11} className="flex-none text-ink-muted" />
         <a
-          href={pr.pull.url}
-          target="_blank"
-          rel="noreferrer"
-          title={pr.pull.title}
+          href={pull.url}
+          title={pull.title}
           className="min-w-0 truncate text-accent hover:underline"
+          onClick={(event) => {
+            // 自定义协议下 target=_blank 会被主窗口静默拒绝，外链必须走主进程
+            event.preventDefault()
+            void api.openExternalUrl(pull.url)
+          }}
         >
-          #{pr.pull.number} {pr.pull.title}
+          #{pull.number} {pull.title}
         </a>
-        {pr.checks && pr.checks.state !== 'none' && (
+        {pr?.checks && pr.checks.state !== 'none' && (
           <span
             className={`ml-auto flex-none ${
               pr.checks.state === 'success'

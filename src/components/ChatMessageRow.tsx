@@ -82,6 +82,8 @@ const TurnEditSummary: React.FC<{
   messageId: string
 }> = ({ edits, messageKey, messageId }) => {
   const { t } = useI18nStore()
+  // 默认收起：一轮可能改十几个文件，全部平铺会把对话吃掉
+  const [open, setOpen] = useState(false)
   const scopeWorkspace = useWorkspaceScope()
   const workspacePath = scopeWorkspace ?? useWorkspaceStore.getState().workspacePath ?? ''
   const { busy, handleRevert, handleRevertAll } = useRevertEdits({
@@ -92,45 +94,64 @@ const TurnEditSummary: React.FC<{
 
   if (edits.length === 0) return null
   const fileName = (target: string) => basename(target) || target
+  const contentId = `turn-changes-${messageId}`
 
   return (
     <div className="mt-2 border border-rule-hairline bg-raised">
-      <div className="flex items-center justify-between gap-2 border-b border-rule-divide px-3 py-1.5">
-        <span className="type-label text-ink">{t('turnChanges', { count: edits.length })}</span>
+      <div className="flex items-center gap-2 border-b border-rule-divide px-3 py-1.5 last:border-b-0">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={contentId}
+          onClick={() => setOpen((value) => !value)}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left type-label text-ink transition-colors hover:text-accent"
+        >
+          <ChevronRight
+            size={12}
+            className={`flex-shrink-0 text-ink-muted transition-transform ${open ? 'rotate-90' : ''}`}
+          />
+          <span className="truncate">{t('turnChanges', { count: edits.length })}</span>
+        </button>
         <button
           type="button"
           disabled={busy}
-          onClick={() => void handleRevertAll(edits)}
-          className="type-caption text-ink-muted transition-colors hover:text-danger disabled:opacity-40"
+          data-turn-changes-aux
+          onClick={(event) => {
+            event.stopPropagation()
+            void handleRevertAll(edits)
+          }}
+          className="flex-shrink-0 type-caption text-ink-muted transition-colors hover:text-danger disabled:opacity-40"
         >
           {t('revertAll')}
         </button>
       </div>
-      {edits.map((edit) => (
-        <div
-          key={edit.path}
-          className="flex items-center gap-2 border-b border-rule-divide px-3 py-1 last:border-b-0"
-        >
-          <span className="min-w-0 flex-1 truncate type-data text-ink-muted" title={edit.path}>
-            {fileName(edit.path)}
-          </span>
-          <button
-            type="button"
-            onClick={() => diffStoreFor(workspacePath).getState().openEdits([edit])}
-            className="type-caption text-ink-muted transition-colors hover:text-ink"
+      {open &&
+        edits.map((edit) => (
+          <div
+            key={edit.path}
+            id={contentId}
+            className="flex items-center gap-2 border-b border-rule-divide px-3 py-1 last:border-b-0"
           >
-            {t('viewChanges')}
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void handleRevert(edit)}
-            className="type-caption text-ink-muted transition-colors hover:text-danger disabled:opacity-40"
-          >
-            {t('revertFile')}
-          </button>
-        </div>
-      ))}
+            <span className="min-w-0 flex-1 truncate type-data text-ink-muted" title={edit.path}>
+              {fileName(edit.path)}
+            </span>
+            <button
+              type="button"
+              onClick={() => diffStoreFor(workspacePath).getState().openEdits([edit])}
+              className="type-caption text-ink-muted transition-colors hover:text-ink"
+            >
+              {t('viewChanges')}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void handleRevert(edit)}
+              className="type-caption text-ink-muted transition-colors hover:text-danger disabled:opacity-40"
+            >
+              {t('revertFile')}
+            </button>
+          </div>
+        ))}
     </div>
   )
 }
@@ -285,7 +306,7 @@ export const ChatMessageRow = React.memo(function ChatMessageRow({
       className="group border-b border-rule-divide py-3 first:pt-0 last:border-b-0"
     >
       <div className="mb-1.5 flex items-baseline gap-2">
-        <Label className="text-ink">{isUser ? t('roleYou') : t('piAgent')}</Label>
+        <Label className={isUser ? 'text-success' : 'text-ink'}>{isUser ? t('roleYou') : t('piAgent')}</Label>
         <Caption className="text-ink-muted">
           {new Date(message.timestamp).toLocaleTimeString(
             language === 'zh' ? 'zh-CN' : 'en-US'
@@ -350,17 +371,21 @@ export const ChatMessageRow = React.memo(function ChatMessageRow({
         )}
       </div>
       {isUser ? (
-        <div className="flex gap-2 type-reading text-ink">
-          <span className="type-project text-accent">›</span>
+        // 用户消息 = 纸卡批注：抬升纸底 + 发丝外框 + 2px 松绿左竖线，与 Agent 的流动正文区分开
+        <div
+          data-testid="user-message"
+          className="flex gap-2 border border-rule-hairline border-l-2 border-l-success bg-raised px-3 py-2 type-reading text-ink"
+        >
+          <span className="type-project flex-shrink-0 text-success" aria-hidden="true">
+            ›
+          </span>
           <div className="min-w-0 flex-1">
             <span className="whitespace-pre-wrap">{message.content}</span>
-            {message.images && message.images.length > 0 && (
-              <MessageImages images={message.images} />
-            )}
+            {message.images && message.images.length > 0 && <MessageImages images={message.images} />}
           </div>
         </div>
       ) : (
-        <div className="text-ink">
+        <div className="text-ink" data-testid="agent-message" data-quote-scope="chat">
           {message.parts?.length ? (
             <AgentParts
               parts={message.parts}

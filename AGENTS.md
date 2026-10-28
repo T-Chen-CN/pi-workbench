@@ -119,6 +119,7 @@ src/components/
 ├── FileExplorer.tsx
 ├── IPCDebug.tsx
 ├── MonacoEditor.tsx
+├── SelectionQuoteButton.tsx
 ├── SessionTabs.tsx
 ├── EditorTabs.tsx
 ├── FileView.tsx

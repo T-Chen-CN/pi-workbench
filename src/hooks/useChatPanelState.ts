@@ -19,6 +19,7 @@ import { api } from '../api'
 import { buildContextPrompt } from '../api/chatContext'
 import { localizeError } from '../i18n/errors'
 import { createTraceBuffer } from '../utils/streamBuffer'
+import { copyText } from '../utils/clipboard'
 import { formatBytes } from '../utils/formatBytes'
 import { SESSION_MODE_ICON } from '../utils/sessionModePresentation'
 import { extractSymbols, sliceSymbol, type ExtractedSymbol } from '../utils/symbols'
@@ -131,6 +132,7 @@ export function useChatPanelState(props: ChatPanelProps) {
   const error = conversation?.error ?? null
   const attachments = conversation?.attachments ?? []
   const input = conversation?.draftInput ?? ''
+  const quoteCurrentFile = conversation?.quoteCurrentFile ?? false
 
   /** 最新一份待批准的计划（R-04）及其所在消息，用于只读计划卡的操作 */
   const latestProposedPlan = useMemo(() => {
@@ -160,6 +162,13 @@ export function useChatPanelState(props: ChatPanelProps) {
 
   const openFiles = useEditorStore(viewRoot ?? workspacePath, (state) => state.openFiles)
   const currentEditorFile = useEditorStore(viewRoot ?? workspacePath, (state) => state.currentFile)
+
+  /** 「引用当前文档」开关：只作用于下一次发送，发送后自动复位 */
+  const toggleQuoteCurrentFile = useCallback(() => {
+    if (!activeKey) return
+    const chat = useChatStore.getState()
+    chat.setQuoteCurrentFile(activeKey, !(chat.conversations[activeKey]?.quoteCurrentFile ?? false))
+  }, [activeKey])
   /** 工作区类型（R-15）：按项目标记文件推断，仅用于空会话建议 */
   const [workspaceType, setWorkspaceType] = useState<WorkspaceType>('unknown')
 
@@ -976,6 +985,8 @@ export function useChatPanelState(props: ChatPanelProps) {
     const composerAttachments = takeComposerAttachments
       ? chat.conversations[key]?.attachments ?? []
       : []
+    // 「引用当前文档」：开关打开时自动带上正在查看的文件，真正发出后复位
+    const quoteFile = takeComposerAttachments && chat.conversations[key]?.quoteCurrentFile ? currentEditorFile : null
     const promptImages = takeComposerAttachments
       ? composerAttachments
           .filter((attachment) => attachment.kind === 'image')
@@ -1016,6 +1027,10 @@ export function useChatPanelState(props: ChatPanelProps) {
         void sendSteer(sessionId, key, item)
       }
       return
+    }
+    // 真正发出这一轮才复位开关：排队期间保留，下一轮仍带上当前文档
+    if (takeComposerAttachments && chat.conversations[key]?.quoteCurrentFile) {
+      chat.setQuoteCurrentFile(key, false)
     }
     forceSendKeysRef.current.delete(key)
     budgetWarnedKeysRef.current.delete(key)
@@ -1112,6 +1127,7 @@ export function useChatPanelState(props: ChatPanelProps) {
         content: string
         startLine?: number
         endLine?: number
+        label?: string
       }> = []
       let totalChars = 0
       for (const attachment of sessionAttachments) {
@@ -1146,7 +1162,21 @@ export function useChatPanelState(props: ChatPanelProps) {
           content,
           startLine: attachment.startLine,
           endLine: attachment.endLine,
+          label: attachment.label
         })
+      }
+      // 当前文档排在附件之后；读不到就不阻断发送
+      if (quoteFile) {
+        const file = await api.readFile(quoteFile.path)
+        if (file.success && typeof file.content === 'string') {
+          if (file.content.length > MAX_CONTEXT_FILE_CHARS) {
+            toast.error(`${t('contextTooLarge')}: ${quoteFile.name}`)
+          } else {
+            contextFiles.push({ path: quoteFile.path, content: file.content })
+          }
+        } else {
+          toast.error(`${t('contextReadFailed')}: ${quoteFile.name}`)
+        }
       }
       const prompt = buildContextPrompt(userMessage, contextFiles)
 
@@ -1540,11 +1570,10 @@ export function useChatPanelState(props: ChatPanelProps) {
   /** 复制整条消息 */
   const handleCopyMessage = useCallback(
     async (text: string) => {
-      try {
-        await navigator.clipboard.writeText(text)
+      if (await copyText(text)) {
         toast.info(t('copied'))
-      } catch (error) {
-        toast.error(t('copyFailed', { error: String(error) }))
+      } else {
+        toast.error(t('copyFailedPlain'))
       }
     },
     [t]
@@ -1722,6 +1751,8 @@ export function useChatPanelState(props: ChatPanelProps) {
     panelOpen,
     pendingApprovals,
     pendingMessages,
+    quoteCurrentFile,
+    toggleQuoteCurrentFile,
     permissionLabelRef,
     retryNow,
     retryStatus,

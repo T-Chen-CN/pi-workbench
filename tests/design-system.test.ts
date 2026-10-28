@@ -157,7 +157,8 @@ describe('design system usage', () => {
       'components/DiffViewer.tsx',
       'components/FileExplorer.tsx',
       'components/PanelContextMenu.tsx',
-      'components/Toast.tsx',
+      'components/SelectionQuoteButton.tsx',
+      'components/Toast.tsx'
     ])
     const violations: string[] = []
     for (const file of businessFiles) {

@@ -453,6 +453,7 @@
 
 ### 6.3 编辑器
 
+- **外部变更提示条**：磁盘内容被外部（Agent 直接写盘、其它编辑器、git 切分支）改过且本地有未保存修改时，在标签条下方显示一行 26px 提示（`bg-panel` + `border-b rule-divide`）：`warning` `AlertCircle` 12px + `type-caption text-ink-muted`「磁盘上的文件已被外部修改」+ 两个 `type-caption` 文本动作「重新加载（丢弃我的修改）」（hover `accent`）/「保留我的修改」（hover `ink`）。不占标签条高度、不使用色块底；干净缓冲的外部变更**不提示**，静默重载。
 - Monaco 主题固定为 `pi-paper` / `pi-ink`，随 `resolvedTheme` 切换；编辑器背景取 `surface`（工作中的墨池），文件标签条取 `panel`，激活标签取 `surface` 与画布连通。
 - 大文件（>2MB 或 >50k 行）关闭换行与折叠；>10MB 或 >200k 行以只读打开。标签下方显示一条 `rule-divide` 细线提示，可关闭，沿用 `type-caption`。
 - 字体 Geist Mono 13.5px / 22px 行高；中文回退 Noto Sans SC；关闭 minimap；行号弱化。
@@ -525,7 +526,10 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 - 标题不显示「就绪」等常态信息：仅在初始化期间把标题文案替换为「初始化中…」并附 4px `warning` 脉冲点，初始化完成后不保留任何状态文字与圆点。
 - 工作树 chip（24px 高，`rounded-sm` + `border-rule-control` + `px-2`）：`GitBranch` 12px + 分支名 `type-value` + 副标 `type-caption`（主工作树 / 相对路径）+ 共享 `Users` 标记 + 脏文件计数 + `ChevronDown` 12px（展开时旋转 180°）。它是工作树切换的唯一入口（原独立工作树条已合并进头部），必须可点、可键盘操作，`aria-haspopup="menu"` + `aria-expanded` + `aria-label` 含当前分支、`title` 保留完整路径；无 git 仓库时整个 chip 不渲染，头部高度不变。
 - 不使用气泡；每条消息以 UI sans 11.5px 角色标签 + 时间开头，消息之间用 1px `rule-divide` 分隔。
-- 用户消息以绿色 `›` 起头；正文 `font-reading` 14px / 1.85。
+- **消息角色分层**：用户消息是「纸卡批注」——`bg-raised` + 1px `border-rule-hairline` + 2px `success` 左边线 + `px-3 py-2`，与 Agent 的流动正文（无底色）分开；角色标签用 `success`（用户）/ `text-ink`（Agent），开头 `›` 用 `type-project` 且同样 `success`。卡片满宽不缩进，长消息的信息密度与原来一致（行高仍 `type-reading` 1.85）；**不使用气泡圆角、不右对齐**。
+- **Markdown 链接三态**（聊天回复与文档阅读视图一致）：外链（`https:` / `http:` / `mailto:`）交系统默认浏览器；`#anchor` 在本文档内滚动；仓库内相对 / 绝对路径交编辑器打开（沿用文件树的信任与大文件校验）。链接一律不使用 `target="_blank"`（打包后主窗口只放行辅助窗口，`window.open` 会被静默拒绝）。打不开时给一条 Toast「打开链接失败：<目标>」。
+- **划词引用**：在文档阅读视图或 Agent 回复里选中文字后，选区右上方浮出 36px 高的「引用到对话」按钮（`bg-raised` + 满墨边 + `shadow-print`，`type-caption` + 12px `TextQuote`）；点击后落成会话附件 chip（`对话引用` 或 `文档名`），发送时随上下文块下发；选区为空、<2 字、超过 8000 字或落在输入框等非引用区时不出现。规则见 6.16。
+- **引用当前文档**：输入区左侧第二个图标按钮（`BookMarked`，14px，与附件按钮同尺寸），默认不激活；激活为 `bg-active` + `aria-pressed`，发送时自动把正在查看的文件作为整文件上下文，发送后立即复位为未激活。无打开文件时禁用。
 - Agent 回复使用 Markdown：标题用 display 字体，正文 reading，代码块 mono；代码块左侧 2px 绿色线，允许换行。
 - 代码块右上角提供复制按钮（hover/focus 显示）。
 - 空状态、未配置 API、错误使用 EmptyState / 细线错误条，不使用大色块。
@@ -557,7 +561,7 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 - 快捷键可达：设置“快捷键”页顶部为“可自定义”区，每行左侧 `type-value` 命令名、右侧 `KeyCap` 组合键与 ghost 按钮“修改”；捕获中显示 `warning` 提示文案，冲突用 Toast 报错，页头提供“恢复默认”。
 - 文件引用：Markdown 行内代码中的 `path[:line]` 使用 `type-data` 样式，hover 变 `accent` 并加下划线，点击打开编辑器；`@` 搜索弹层为 `bg-raised` + 满墨边 + `shadow-print` 的列表（单行 `type-data`，hover `bg-hover`），拖入文件直接进入附件区。
 - 符号附加：附件菜单右上角提供“附加符号 / 附加文件”切换；符号列表每行显示 kind（`type-caption`）、名称（`type-value`，单行截断）与行范围（`type-data`），空态一句“未识别到符号，可改用整文件”。
-- 内联变更卡：助手消息下方的 `bg-raised` + 发丝边卡片；标题行“本轮修改了 N 个文件”（`type-label`）+ 右侧“全部还原”（`type-caption`）；每行文件名为单行截断的 `type-data`，右侧“查看修改 / 还原此文件”文本按钮；还原按钮 hover 变 `danger`。
+- 内联变更卡：助手消息下方的 `bg-raised` + 发丝边卡片；标题行是**默认收起**的折叠触发器（12px `ChevronRight` +「本轮修改了 N 个文件」`type-label`，展开时 chevron 旋转 90°）+ 右侧“全部还原”（`type-caption`）；展开后每行文件名为单行截断的 `type-data`，右侧“查看修改 / 还原此文件”文本按钮；还原按钮 hover 变 `danger`。折叠状态是本条消息的本地状态，不跨会话保存；一轮改十几个文件时默认收起，不把对话吃掉。触发器用 `aria-expanded` / `aria-controls`。
 - 重试与错误：重试提示为输入区上方的 `type-caption text-warning` 一行（Spinner + 次数/等待 + 错误摘要）；错误条保持左侧 2px `danger` 线，右侧提供 `type-caption` 文本按钮“重新生成 / 打开设置”。
 - 本轮任务：输入区上方的发丝边折叠条（`bg-raised`），标题行“本轮任务 + done/total”，展开后逐行显示 `accent` / `success` / `danger` 状态点、工具名与参数；不使用进度条填充。
 - 回到底部：输入区上方的悬浮小按钮（`bg-raised` + 满墨边 + `shadow-print`，`type-caption` + 12px `ArrowDown`），离开底部 120px 后出现；有未读新增时显示“N 条新消息”。
@@ -685,6 +689,17 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 - **已知可接受重叠**：正文里宽代码块的横向滚动条、Monaco 自动补全弹层（编辑器很窄时）可能被压住一角，可接受；滚动条必须让开，其余必须可点的控件不得被覆盖。
 - **同一功能只有一个位置**：阅读 / 源码两种视图共用同一落点，切换时按钮不跳动。
 - **可访问性**：必须有 `aria-label` / `title`，键盘可聚焦，focus 走全局 1px `accent` 描边；不用 `opacity` 把按钮藏起来（半透明不等于不可见）。
+
+### 6.16 选区浮起操作
+
+针对「选中一段文字，然后对它做点什么」的入口。目前只有聊天 / 文档的「引用到对话」。
+
+- **触发范围**：只在带 `data-quote-scope` 的区域生效（文档阅读视图 `doc`、Agent 回复 `chat`），输入框、代码块复制按钮等区域不染。
+- **落点**：`position: fixed`，贴在选区包围盒右上方 8px；选区贴近视口顶部（<44px）或高度不够时落到选区下方 8px；水平方向回夹在 `[8, innerWidth-136]`，不越出窗口。
+- **尺寸与样式**：单行按钮，`bg-raised` + 1px `border-line` + `shadow-print`，`px-2 py-1` + `type-caption` + 12px `TextQuote`；hover 文字转 `accent`。不做箭头、不做浮层卡片。
+- **不打断选区**：`mousedown` 阻止默认行为，点击后清除选区并隐藏按钮；选区折叠、滚动离开、`Esc` 均隐藏。
+- **反馈**：成功后 Toast「已引用到对话」；未打开会话时提示「先打开一个会话再引用」；超过 8000 字提示上限，不静默截断。
+- **可访问性**：按钮是真实 `<button>`，有文本名；只出现在可见工作区（隐藏的工作区视图不挂载），避免抢走别的视图的选区。
 
 ---
 
@@ -827,6 +842,7 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.47 | 2026-10-29 | 聊天可读性一组改动：消息角色分层（用户 = 纸卡批注 `bg-raised` + 2px `success` 左边线，Agent = 流动正文，6.5）；内联变更卡默认收起（6.5）；Markdown 链接三态（外链 / 锚点 / 仓库文件）不再走 `target="_blank"`（6.5）；划词「引用到对话」选区浮起操作（新增 6.16）；输入区新增「引用当前文档」开关（6.5）；编辑器外部变更提示条（6.3） |
 | v1.46 | 2026-10-28 | 会话标题改用去噪后的回复摘录并校验模型输出：命名输入剔除环境说明段落、取最后一条文本回复，要求 JSON 输出，复述原话的标题判为不可用 |
 | v1.45 | 2026-10-28 | 会话标题生成容错：6.3.1 补充「模型返回空内容不算确定、最多重试 3 次」，标题请求为推理型模型留足 token 预算 |
 | v1.44 | 2026-10-28 | 会话标题确定后不再改写：6.3.1 标题规则改写（记录或手动重命名即为确定、失败与无文本回复只保留回退标题、回退取法与会话列表一致） |

@@ -11,7 +11,9 @@ import React, {
 import { PanelLeftOpen, PanelRightOpen } from 'lucide-react'
 import { FileExplorer } from './FileExplorer'
 import { ChatPanel } from './ChatPanel'
+import { ErrorBoundary } from './ErrorBoundary'
 import { DiffViewer } from './DiffViewer'
+import { SelectionQuoteButton } from './SelectionQuoteButton'
 import { PanelSlot } from './PanelSlot'
 import { TerminalPanel } from './TerminalPanel'
 import { GitView } from './GitView'
@@ -22,6 +24,7 @@ import { subscribeEditorTabs } from '../workspace/editorTabs'
 import { useI18nStore } from '../store/i18nStore'
 import { useSessionStore } from '../store/sessionStore'
 import { useGitStore } from '../store/gitStore'
+import { useEditorStore } from '../store/editorStore'
 import { usePanelStore } from '../store/panelStore'
 import { onAppEvent } from '../utils/appEvents'
 import { api } from '../api'
@@ -108,6 +111,9 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
       ? (state.byWorkspace[workspacePath]?.bindings[activeSessionId]?.path ?? workspacePath)
       : workspacePath
   )
+  // 面板级错误边界的重置键：切会话 / 切文件后自动重试渲染
+  const chatResetKey = `${viewRoot}:${activeSessionId ?? ''}`
+  const editorResetKey = useEditorStore(viewRoot, (state) => state.currentFile?.path ?? '')
   const detailOpen = useGitStore((state) => state.byWorkspace[workspacePath]?.detailOpen ?? false)
   const closeCommitDetail = useGitStore((state) => state.closeCommitDetail)
 
@@ -204,6 +210,18 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
 
   // 标签变化防抖写入固定状态；工作树模式按当前视图根保存
   useEffect(() => subscribeEditorTabs(workspacePath, viewRoot), [workspacePath, viewRoot])
+
+  /**
+   * Git 工作树绑定后，源码在另一个目录下。工作区根的监听覆盖不到它，
+   * 不补这一层的话 Agent 改完工作树里的文件，编辑器里打开的文档不会自动刷新。
+   */
+  useEffect(() => {
+    if (viewRoot === workspacePath) return
+    void api.watchWorkspace(viewRoot).catch(() => undefined)
+    return () => {
+      void api.unwatchWorkspace(viewRoot).catch(() => undefined)
+    }
+  }, [viewRoot, workspacePath])
 
   // 主进程推送的仓库变化：本地文件监听与定时 fetch 都从这里进入 Git 面板
   useEffect(() => {
@@ -354,7 +372,10 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
                 </div>
               }
             >
-              <FileView workspacePath={workspacePath} viewRoot={viewRoot} active={active} />
+              {/* 编辑器 / 阅读视图单独兜底：Monaco 出错只坏一块，不整窗白屏 */}
+              <ErrorBoundary scope="pane" resetKey={`${viewRoot}:${editorResetKey}`}>
+                <FileView workspacePath={workspacePath} viewRoot={viewRoot} active={active} />
+              </ErrorBoundary>
             </Suspense>
             {detailOpen && (
               <CommitDetailView
@@ -397,14 +418,16 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
             style={chatShown ? { width: chatWidthShown } : undefined}
           >
             <PanelSlot panel="chat">
-              <ChatPanel
-                workspacePath={workspacePath}
-                viewRoot={viewRoot}
-                onCollapse={chatDetached ? undefined : collapseChat}
-                collapseButtonRef={chatCollapseRef}
-                panelId={chatPanelId}
-                active={active}
-              />
+              <ErrorBoundary scope="pane" resetKey={chatResetKey}>
+                <ChatPanel
+                  workspacePath={workspacePath}
+                  viewRoot={viewRoot}
+                  onCollapse={chatDetached ? undefined : collapseChat}
+                  collapseButtonRef={chatCollapseRef}
+                  panelId={chatPanelId}
+                  active={active}
+                />
+              </ErrorBoundary>
             </PanelSlot>
           </aside>
         )}
@@ -424,6 +447,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
         )}
 
         <DiffViewer workspacePath={viewRoot} active={active} />
+        {/* 划词引用：只挂当前可见的工作区，避免隐藏视图抢走别的视图的选区 */}
+        {active && <SelectionQuoteButton />}
       </WorkspaceScopeProvider>
     </div>
   )

@@ -86,6 +86,10 @@ const mockAPI = {
     success: false,
     error: 'Only available in the Electron app',
   }),
+  openExternalUrl: async (url: string): Promise<WorkspaceResult> => {
+    window.open(url, '_blank', 'noopener,noreferrer')
+    return { success: true }
+  },
   exists: async (filePath: string): Promise<ExistsResult> => {
     console.log('[Mock] exists:', filePath)
     return { success: true, exists: true }
@@ -208,6 +212,7 @@ const mockAPI = {
   // 浏览器开发模式没有辅助窗口的主进程支持：拆窗退化为普通 window.open，由渲染层用 screenX/screenY 定位
   onAuxWindowClosed: (_callback: (frameName: string) => void) => () => {},
   auxDetachAt: async (): Promise<AuxDetachResult> => ({ success: false, error: 'Not supported' }),
+  auxDragBegin: async (): Promise<{ success: boolean }> => ({ success: false }),
   auxWindowCommand: async (_host: string, _command: WindowCommand): Promise<AuxWindowCommandResult> => ({
     success: false,
     error: 'Not supported'
@@ -440,6 +445,10 @@ export const api = {
     typeof electronAPI.openPathExternally === 'function'
       ? electronAPI.openPathExternally(path)
       : Promise.resolve({ success: false, error: 'Not available in the browser' }),
+  openExternalUrl: (url: string) =>
+    typeof electronAPI.openExternalUrl === 'function'
+      ? electronAPI.openExternalUrl(url)
+      : Promise.resolve({ success: false, error: 'Not available in the browser' }),
   exists: (path: string) => electronAPI.exists(path),
   stat: (path: string) => electronAPI.stat(path),
   deletePath: (path: string) => electronAPI.deletePath(path),
@@ -482,6 +491,10 @@ export const api = {
   onAuxWindowClosed: (callback: (frameName: string) => void) =>
     typeof electronAPI.onAuxWindowClosed === 'function' ? electronAPI.onAuxWindowClosed(callback) : () => {},
   auxDetachAt: () => electronAPI.auxDetachAt(),
+  auxDragBegin: (): Promise<{ success: boolean }> =>
+    typeof electronAPI.auxDragBegin === 'function'
+      ? electronAPI.auxDragBegin()
+      : Promise.resolve({ success: false }),
   appBootReady: () => {
     if (typeof electronAPI.appBootReady === 'function') electronAPI.appBootReady()
   },

@@ -4,6 +4,8 @@ export interface AuxDetachResult {
   /** 光标仍在主窗口内：不拆 */
   inside?: boolean
   rect?: { x: number; y: number; width: number; height: number }
+  /** 光标离拖动起点的 DIP 距离（主进程按同一坐标源计算） */
+  distance?: number
   error?: string
 }
 
@@ -195,6 +197,10 @@ export interface ElectronAPI {
   writeFile: (path: string, content: string) => Promise<WriteFileResult>
   /** 用系统默认程序打开文件（媒体与不支持预览的类型） */
   openPathExternally: (path: string) => Promise<WorkspaceResult>
+  /** 外部链接（http / https / mailto）：交给系统浏览器打开 */
+  openExternalUrl: (url: string) => Promise<WorkspaceResult>
+  /** 写入系统剪贴板（自定义协议下 navigator.clipboard 不可用；由主进程执行） */
+  writeClipboardText: (text: string) => Promise<boolean>
   listDirectory: (path: string) => Promise<ListDirectoryResult>
   exists: (path: string) => Promise<ExistsResult>
   stat: (path: string) => Promise<StatResult>
@@ -229,6 +235,8 @@ export interface ElectronAPI {
   onAuxWindowClosed: (callback: (frameName: string) => void) => () => void
   /** 拖出拆窗：由主进程读取真实光标位置并给出新窗口矩形 */
   auxDetachAt: () => Promise<AuxDetachResult>
+  /** 拖动开始：让主进程记下拖动起点，用于判断拖动距离 */
+  auxDragBegin: () => Promise<{ success: boolean }>
   /** 辅助窗口的自绘窗口按钮：按 frameName 寻址，不操作主窗口 */
   auxWindowCommand: (host: string, command: WindowCommand) => Promise<AuxWindowCommandResult>
   auxWindowState: (host: string) => Promise<AuxWindowCommandResult>

@@ -7,6 +7,7 @@ import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
 import { Button, Caption, Field, IconButton, Input, Label } from './ui'
 import { StatusText } from './patterns'
+import { copyText } from '../utils/clipboard'
 import type { GithubAuthUser } from '../types/electron'
 
 type Phase = 'idle' | 'starting' | 'waiting' | 'error'
@@ -135,11 +136,10 @@ export const GithubSettings: React.FC = () => {
 
   const copyCode = async () => {
     if (!device?.userCode) return
-    try {
-      await navigator.clipboard.writeText(device.userCode)
+    if (await copyText(device.userCode)) {
       toast.success(t('githubCodeCopied'))
-    } catch {
-      toast.error(t('githubLoginFailed'))
+    } else {
+      toast.error(t('copyFailedPlain'))
     }
   }
 

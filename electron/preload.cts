@@ -40,6 +40,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readFile: (path: string) => ipcRenderer.invoke('fs:readFile', path),
   writeFile: (path: string, content: string) => ipcRenderer.invoke('fs:writeFile', path, content),
   openPathExternally: (path: string) => ipcRenderer.invoke('fs:openExternally', path),
+  // 外部链接：自定义协议下 target=_blank 会被主窗口拒绝，统一交给主进程转给系统浏览器
+  openExternalUrl: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+  // 剪贴板：pw-app:// 不是浏览器认可的可信来源，navigator.clipboard.writeText 会被拒绝。
+  // sandbox preload 里没有 clipboard 模块（Electron 只暴露 ipcRenderer / contextBridge 等），
+  // 因此转给主进程写系统剪贴板
+  writeClipboardText: (text: string): Promise<boolean> =>
+    ipcRenderer.invoke('clipboard:writeText', String(text ?? '')),
   listDirectory: (path: string) => ipcRenderer.invoke('fs:listDirectory', path),
   exists: (path: string) => ipcRenderer.invoke('fs:exists', path),
   stat: (path: string) => ipcRenderer.invoke('fs:stat', path),
@@ -98,6 +105,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('aux:window-closed', listener)
   },
   auxDetachAt: () => ipcRenderer.invoke('aux:detach-at'),
+  auxDragBegin: () => ipcRenderer.invoke('aux:drag-begin'),
   auxWindowCommand: (frameName: string, command: string) =>
     ipcRenderer.invoke('aux:window-command', frameName, command),
   auxWindowState: (frameName: string) => ipcRenderer.invoke('aux:window-state', frameName),
