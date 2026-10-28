@@ -56,6 +56,7 @@ interface FakeSession {
   disposed: boolean
   subscribe: (listener: (event: SessionEvent) => void) => () => void
   prompt: (message: string) => Promise<void>
+  lastPrompt?: string
   lastPromptOptions?: {
     streamingBehavior?: string
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
@@ -161,6 +162,7 @@ function createFakeSession(
         images?: Array<{ type: 'image'; data: string; mimeType: string }>
       }
     ) => {
+      session.lastPrompt = message
       session.lastPromptOptions = options
       await onPrompt?.(session, message)
     },
@@ -494,6 +496,30 @@ describe('AgentManager chat', () => {
     expect(session.lastPromptOptions?.images).toEqual([{ type: 'image', ...image }])
   })
 
+  it('adds a placeholder text only for Anthropic image-only messages', async () => {
+    const run = async (provider: string, language: 'zh' | 'en'): Promise<string> => {
+      const session = createFakeSession(async (s, message) => {
+        s.messages.push({ role: 'user', content: message })
+        s.messages.push({ role: 'assistant', content: 'ok' })
+      })
+      primeSdk(session)
+      const config = makeConfig({ getLanguage: () => language })
+      config.apiConfig.provider = provider
+      await manager.initialize(config)
+      await manager.chat('', { images: [{ data: 'AAAA', mimeType: 'image/png' }] })
+      const prompt = session.lastPrompt ?? ''
+      await manager.dispose()
+      return prompt
+    }
+
+    // Anthropic 拒绝空 text 块，补占位文本；OpenAI 兼容端点保持空文本
+    await expect(run('anthropic', 'zh')).resolves.toBe('请看这些图片。')
+    await expect(run('anthropic', 'en')).resolves.toBe(
+      'Please look at the attached image(s).'
+    )
+    await expect(run('openai', 'zh')).resolves.toBe('')
+  })
+
   it('omits images when none are valid', async () => {
     const session = createFakeSession(async (s, message) => {
       s.messages.push({ role: 'user', content: message })
@@ -603,6 +629,59 @@ describe('AgentManager chat', () => {
       // 本轮失败，没有新的 assistant 消息
     })
     session.messages.push({ role: 'assistant', content: 'previous reply' })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const result = await manager.chat('hi')
+
+    expect(result.success).toBe(false)
+    expect(result.response).toBeUndefined()
+    expect(result.error).toContain('did not produce')
+  })
+
+  it('keeps the reply when auto-compaction rebuilds the message array', async () => {
+    const session = createFakeSession(async (fake) => {
+      // 模拟 SDK 的 _refreshFinalizedContext()：自动压缩后用会话投影整体替换 messages，
+      // 旧前缀折叠成摘要，数组长度比本轮开始时更短
+      fake.messages = [
+        { role: 'user', content: 'Summary of earlier conversation', timestamp: Date.now() - 3_600_000 },
+        { role: 'user', content: 'hi', timestamp: Date.now() },
+      ]
+      fake.messages.push({ role: 'assistant', content: 'compacted reply', timestamp: Date.now() })
+    })
+    session.messages.push(
+      ...Array.from({ length: 40 }, (_, index) => ({
+        role: index % 2 === 0 ? 'assistant' : 'user',
+        content: `old-${index}`,
+        timestamp: Date.now() - 600_000,
+      }))
+    )
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const result = await manager.chat('hi')
+
+    expect(result.success).toBe(true)
+    expect(result.response).toBe('compacted reply')
+  })
+
+  it('does not treat a previous reply as this run after compaction', async () => {
+    const stale = Date.now() - 600_000
+    const session = createFakeSession(async (fake) => {
+      // 压缩重建数组后，剩下的 assistant 消息全部属于历史轮次
+      fake.messages = [
+        { role: 'user', content: 'Summary of earlier conversation', timestamp: stale },
+        { role: 'assistant', content: 'previous reply', timestamp: stale },
+        { role: 'user', content: 'hi', timestamp: Date.now() },
+      ]
+    })
+    session.messages.push(
+      ...Array.from({ length: 40 }, () => ({
+        role: 'assistant',
+        content: 'old',
+        timestamp: stale,
+      }))
+    )
     primeSdk(session)
     await manager.initialize(makeConfig())
 
@@ -1384,6 +1463,29 @@ describe('AgentManager sessions', () => {
     await until(() => onSessionTitle.mock.calls.length > 0)
     expect(onSessionTitle).toHaveBeenCalledWith('session-1', 'Fix login redirect')
   })
+
+  it('titles an image-only session without calling the model', async () => {
+    const session = createFakeSession(async (fake) => {
+      fake.messages.push({
+        role: 'user',
+        content: [{ type: 'image', data: 'AAAA', mimeType: 'image/png' }],
+      })
+      fake.messages.push({ role: 'assistant', content: 'A red square.' })
+    })
+    primeSdk(session)
+    const onSessionTitle = vi.fn()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await manager.initialize(makeConfig({ onSessionTitle, getLanguage: () => 'zh' }))
+    await expect(
+      manager.chat('', { images: [{ data: 'AAAA', mimeType: 'image/png' }] })
+    ).resolves.toMatchObject({ success: true })
+
+    await until(() => onSessionTitle.mock.calls.length > 0)
+    expect(onSessionTitle).toHaveBeenCalledWith('session-1', '图片对话')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })
 
 describe('AgentManager dispose', () => {
@@ -1689,6 +1791,33 @@ describe('running-turn steering', () => {
       success: false,
       error: 'Message is empty.',
     })
+  })
+
+  it('steers an image-only message with image content blocks', async () => {
+    let release = () => {}
+    let calls = 0
+    const session = createFakeSession(() => {
+      calls++
+      if (calls > 1) return Promise.resolve()
+      return new Promise<void>((resolve) => {
+        release = resolve
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const pendingChat = manager.chat('start')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const images = [{ data: 'AAAA', mimeType: 'image/png' }]
+    await expect(manager.steer('session-1', '', images)).resolves.toEqual({ success: true })
+    expect(session.lastPromptOptions).toEqual({
+      streamingBehavior: 'steer',
+      images: [{ type: 'image', data: 'AAAA', mimeType: 'image/png' }],
+    })
+
+    release()
+    await pendingChat
   })
 })
 

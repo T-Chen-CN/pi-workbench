@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useI18nStore } from '../store/i18nStore'
+import { MAIN_HOST, frameNameOf, sameHost, type HostId } from '../panelHost/types'
 
 /**
  * 窗口控制 glyph：1.25px 直边描边，直角端点，与纸墨体系的细线语言一致。
@@ -50,22 +51,48 @@ const CloseGlyph = () => (
 /**
  * 自绘窗口按钮（Windows / Linux）。
  * macOS 使用原生红绿灯，不渲染此组件。
+ *
+ * `host` 决定按钮作用在哪个窗口：主窗口用窗口服务，辅助窗口按 frameName 寻址。
+ * 渲染层始终跑在主窗口的 JS 上下文里，IPC 来源永远是主窗口，
+ * 所以「操作哪个窗口」不能靠主进程从 sender 推断，必须显式传下去。
  */
-export const WindowControls: React.FC = () => {
+export const WindowControls: React.FC<{ host?: HostId; compact?: boolean }> = ({
+  host = MAIN_HOST,
+  compact = false
+}) => {
   const { t } = useI18nStore()
   const [maximized, setMaximized] = useState(false)
   const api = typeof window !== 'undefined' ? window.electronAPI : undefined
+  const isAux = host !== MAIN_HOST
+  // 这里直接用 preload 桥（需要在无桥的 web 模式早退），所以自己补 frameName 前缀；
+  // 走 `api` 门面的调用点由门面转换，两处都只用 frameNameOf，不写死前缀字面量。
+  const frameName = frameNameOf(host)
 
   useEffect(() => {
     if (!api) return
-    void api.isWindowMaximized().then((result) => setMaximized(result.maximized))
-    return api.onWindowMaximizedChange(setMaximized)
-  }, [api])
+    const readState = isAux ? api.auxWindowState(frameName) : api.isWindowMaximized()
+    void readState.then((result) => {
+      if (result?.maximized !== undefined) setMaximized(result.maximized)
+    })
+    return api.onWindowMaximizedChange((state) => {
+      // 主窗口上报 `main`，辅助窗口上报 frameName：统一后再比较，否则永远对不上
+      if (!state || !sameHost(state.host, host)) return
+      setMaximized(state.maximized)
+    })
+  }, [api, host, isAux, frameName])
 
   if (!api) return null
 
+  const run = (command: 'minimize' | 'toggleMaximize' | 'close') => {
+    if (isAux) void api.auxWindowCommand(frameName, command)
+    else if (command === 'minimize') void api.minimizeWindow()
+    else if (command === 'close') void api.closeWindow()
+    else void api.toggleMaximizeWindow()
+  }
+
+  const controlWidth = compact ? 'w-9' : 'w-[var(--titlebar-height)]'
   const controlClass =
-    'flex h-full w-[var(--titlebar-height)] items-center justify-center text-ink-muted transition-colors duration-150 ' +
+    `flex h-full ${controlWidth} items-center justify-center text-ink-muted transition-colors duration-150 ` +
     'hover:bg-hover hover:text-ink active:bg-active'
 
   return (
@@ -75,7 +102,7 @@ export const WindowControls: React.FC = () => {
         aria-label={t('windowMinimize')}
         title={t('windowMinimize')}
         className={controlClass}
-        onClick={() => void api.minimizeWindow()}
+        onClick={() => run('minimize')}
       >
         <MinimizeGlyph />
       </button>
@@ -84,7 +111,7 @@ export const WindowControls: React.FC = () => {
         aria-label={maximized ? t('windowRestore') : t('windowMaximize')}
         title={maximized ? t('windowRestore') : t('windowMaximize')}
         className={controlClass}
-        onClick={() => void api.toggleMaximizeWindow()}
+        onClick={() => run('toggleMaximize')}
       >
         {maximized ? <RestoreGlyph /> : <MaximizeGlyph />}
       </button>
@@ -92,8 +119,8 @@ export const WindowControls: React.FC = () => {
         type="button"
         aria-label={t('close')}
         title={t('close')}
-        className="flex h-full w-[var(--titlebar-height)] items-center justify-center text-ink-muted transition-colors duration-150 hover:bg-danger hover:text-danger-fg active:bg-danger"
-        onClick={() => void api.closeWindow()}
+        className={`flex h-full ${controlWidth} items-center justify-center text-ink-muted transition-colors duration-150 hover:bg-danger hover:text-danger-fg active:bg-danger`}
+        onClick={() => run('close')}
       >
         <CloseGlyph />
       </button>

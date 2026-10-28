@@ -30,6 +30,9 @@ type AgentStreamPayload = {
   error?: string
 }
 
+/** 自绘窗口按钮的最大化状态：主窗口与辅助窗口各自上报，渲染层按 host 过滤 */
+type WindowMaximizedState = { host: string; maximized: boolean }
+
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   // 文件系统操作
@@ -82,11 +85,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggleMaximize'),
   closeWindow: () => ipcRenderer.invoke('window:close'),
   isWindowMaximized: () => ipcRenderer.invoke('window:isMaximized'),
-  onWindowMaximizedChange: (callback: (maximized: boolean) => void) => {
-    const listener = (_event: unknown, maximized: boolean) => callback(maximized)
+  onWindowMaximizedChange: (callback: (state: WindowMaximizedState) => void) => {
+    const listener = (_event: unknown, state: WindowMaximizedState) => callback(state)
     ipcRenderer.on('window:maximized-changed', listener)
     return () => ipcRenderer.removeListener('window:maximized-changed', listener)
   },
+
+  // 面板辅助窗口（拆成独立窗口）
+  onAuxWindowClosed: (callback: (frameName: string) => void) => {
+    const listener = (_event: unknown, frameName: string) => callback(frameName)
+    ipcRenderer.on('aux:window-closed', listener)
+    return () => ipcRenderer.removeListener('aux:window-closed', listener)
+  },
+  auxDetachAt: () => ipcRenderer.invoke('aux:detach-at'),
+  auxWindowCommand: (frameName: string, command: string) =>
+    ipcRenderer.invoke('aux:window-command', frameName, command),
+  auxWindowState: (frameName: string) => ipcRenderer.invoke('aux:window-state', frameName),
 
   // 启动闸门：渲染层数据就绪后通知主进程放大窗口
   appBootReady: () => ipcRenderer.send('app:boot-ready'),
@@ -103,8 +117,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 崩溃恢复草稿
   draftSave: (workspacePath: string, filePath: string, content: string) =>
     ipcRenderer.invoke('draft:save', workspacePath, filePath, content),
-  draftDelete: (workspacePath: string, filePath: string) =>
-    ipcRenderer.invoke('draft:delete', workspacePath, filePath),
+  draftDelete: (workspacePath: string, filePath: string) => ipcRenderer.invoke('draft:delete', workspacePath, filePath),
   draftList: (workspacePath: string) => ipcRenderer.invoke('draft:list', workspacePath),
   draftClear: (workspacePath: string) => ipcRenderer.invoke('draft:clear', workspacePath),
 
@@ -128,26 +141,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     sessionId?: string,
     images?: Array<{ data: string; mimeType: string }>
   ) => ipcRenderer.invoke('agent:chat', message, requestId, workspaceDir, sessionId, images),
-  agentAbort: (workspaceDir?: string, sessionId?: string) =>
-    ipcRenderer.invoke('agent:abort', workspaceDir, sessionId),
+  agentAbort: (workspaceDir?: string, sessionId?: string) => ipcRenderer.invoke('agent:abort', workspaceDir, sessionId),
   onAgentStream: (callback: (payload: AgentStreamPayload) => void) => {
     const listener = (_event: unknown, payload: AgentStreamPayload) => callback(payload)
     ipcRenderer.on('agent:stream', listener)
     return () => ipcRenderer.removeListener('agent:stream', listener)
   },
-  onAgentSessionTitle: (
-    callback: (payload: { workspaceDir: string; sessionId: string; title: string }) => void
-  ) => {
-    const listener = (
-      _event: unknown,
-      payload: { workspaceDir: string; sessionId: string; title: string }
-    ) => callback(payload)
+  onAgentSessionTitle: (callback: (payload: { workspaceDir: string; sessionId: string; title: string }) => void) => {
+    const listener = (_event: unknown, payload: { workspaceDir: string; sessionId: string; title: string }) =>
+      callback(payload)
     ipcRenderer.on('agent:session-title', listener)
     return () => ipcRenderer.removeListener('agent:session-title', listener)
   },
   agentDispose: (workspaceDir?: string) => ipcRenderer.invoke('agent:dispose', workspaceDir),
-  agentSessionsList: (workspaceDir: string) =>
-    ipcRenderer.invoke('agent:sessions:list', workspaceDir),
+  agentSessionsList: (workspaceDir: string) => ipcRenderer.invoke('agent:sessions:list', workspaceDir),
   agentSessionsOpen: (workspaceDir: string, sessionId?: string) =>
     ipcRenderer.invoke('agent:sessions:open', workspaceDir, sessionId),
   agentSessionsCreate: (workspaceDir: string, root?: string) =>
@@ -158,18 +165,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:sessions:rename', workspaceDir, sessionId, name),
   agentSessionsDelete: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('agent:sessions:delete', workspaceDir, sessionId),
-  agentSessionsGetTabs: (workspaceDir: string) =>
-    ipcRenderer.invoke('agent:sessions:getTabs', workspaceDir),
+  agentSessionsGetTabs: (workspaceDir: string) => ipcRenderer.invoke('agent:sessions:getTabs', workspaceDir),
   agentSessionsSetTabs: (workspaceDir: string, tabs: { open: string[]; active: string | null }) =>
     ipcRenderer.invoke('agent:sessions:setTabs', workspaceDir, tabs),
-  editorTabsGet: (workspaceDir: string) =>
-    ipcRenderer.invoke('workspace:editorTabs:get', workspaceDir),
-  editorTabsSet: (
+  editorTabsGet: (workspaceDir: string) => ipcRenderer.invoke('workspace:editorTabs:get', workspaceDir),
+  editorTabsSet: (workspaceDir: string, tabs: { open: string[]; active: string | null }) =>
+    ipcRenderer.invoke('workspace:editorTabs:set', workspaceDir, tabs),
+  agentSteer: (
     workspaceDir: string,
-    tabs: { open: string[]; active: string | null }
-  ) => ipcRenderer.invoke('workspace:editorTabs:set', workspaceDir, tabs),
-  agentSteer: (workspaceDir: string, sessionId: string, message: string) =>
-    ipcRenderer.invoke('agent:steer', workspaceDir, sessionId, message),
+    sessionId: string,
+    message: string,
+    images?: Array<{ data: string; mimeType: string }>
+  ) => ipcRenderer.invoke('agent:steer', workspaceDir, sessionId, message, images),
   agentContextUsage: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('agent:context:usage', workspaceDir, sessionId),
   agentCompactContext: (workspaceDir: string, sessionId: string) =>
@@ -182,25 +189,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('agent:branches:switch', workspaceDir, sessionId, entryId),
   agentSessionSettings: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('agent:session:settings', workspaceDir, sessionId),
-  agentSessionSetPermission: (
-    workspaceDir: string,
-    sessionId: string,
-    permission: unknown
-  ) => ipcRenderer.invoke('agent:session:setPermission', workspaceDir, sessionId, permission),
+  agentSessionSetPermission: (workspaceDir: string, sessionId: string, permission: unknown) =>
+    ipcRenderer.invoke('agent:session:setPermission', workspaceDir, sessionId, permission),
   agentSessionStats: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('agent:session:stats', workspaceDir, sessionId),
-  agentModelCapabilities: (workspaceDir: string) =>
-    ipcRenderer.invoke('agent:models:capabilities', workspaceDir),
+  agentModelCapabilities: (workspaceDir: string) => ipcRenderer.invoke('agent:models:capabilities', workspaceDir),
   agentPromptResources: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('agent:prompt-resources', workspaceDir, sessionId),
   agentPlanGet: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('agent:plan:get', workspaceDir, sessionId),
-  agentPlanApprove: (
-    workspaceDir: string,
-    sessionId: string,
-    planId: string,
-    targetMode: 'ask' | 'auto'
-  ) => ipcRenderer.invoke('agent:plan:approve', workspaceDir, sessionId, planId, targetMode),
+  agentPlanApprove: (workspaceDir: string, sessionId: string, planId: string, targetMode: 'ask' | 'auto') =>
+    ipcRenderer.invoke('agent:plan:approve', workspaceDir, sessionId, planId, targetMode),
   agentPlanReject: (workspaceDir: string, sessionId: string, planId: string) =>
     ipcRenderer.invoke('agent:plan:reject', workspaceDir, sessionId, planId),
   agentToolResultMeta: (workspaceDir: string, sessionId: string, toolCallId: string) =>
@@ -212,12 +211,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     offset?: number,
     limit?: number
   ) => ipcRenderer.invoke('agent:tool-result:chunk', workspaceDir, sessionId, toolCallId, offset, limit),
-  agentToolResultImage: (
-    workspaceDir: string,
-    sessionId: string,
-    toolCallId: string,
-    index?: number
-  ) => ipcRenderer.invoke('agent:tool-result:image', workspaceDir, sessionId, toolCallId, index),
+  agentToolResultImage: (workspaceDir: string, sessionId: string, toolCallId: string, index?: number) =>
+    ipcRenderer.invoke('agent:tool-result:image', workspaceDir, sessionId, toolCallId, index),
   agentToolResultOpen: (workspaceDir: string, sessionId: string, toolCallId: string) =>
     ipcRenderer.invoke('agent:tool-result:open', workspaceDir, sessionId, toolCallId),
   agentExportSession: (
@@ -225,29 +220,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     sessionId: string,
     format: 'md' | 'html' | 'jsonl',
     language?: 'zh' | 'en'
-  ) =>
-    ipcRenderer.invoke('agent:export-session', workspaceDir, sessionId, format, language),
+  ) => ipcRenderer.invoke('agent:export-session', workspaceDir, sessionId, format, language),
   agentSessionSetModel: (workspaceDir: string, sessionId: string, modelId: string) =>
     ipcRenderer.invoke('agent:session:setModel', workspaceDir, sessionId, modelId),
   agentSessionSetThinking: (workspaceDir: string, sessionId: string, level: string) =>
     ipcRenderer.invoke('agent:session:setThinking', workspaceDir, sessionId, level),
-  agentSessionsMetaGet: (workspaceDir: string) =>
-    ipcRenderer.invoke('agent:sessions:meta:get', workspaceDir),
-  agentSessionsMetaSet: (
-    workspaceDir: string,
-    meta: { pinned?: string[]; archived?: string[] }
-  ) => ipcRenderer.invoke('agent:sessions:meta:set', workspaceDir, meta),
-  chatPendingGet: (workspaceDir: string) => ipcRenderer.invoke('chat:pending:get', workspaceDir),
-  chatPendingSet: (workspaceDir: string, sessions: unknown) =>
-    ipcRenderer.invoke('chat:pending:set', workspaceDir, sessions),
+  agentSessionsMetaGet: (workspaceDir: string) => ipcRenderer.invoke('agent:sessions:meta:get', workspaceDir),
+  agentSessionsMetaSet: (workspaceDir: string, meta: { pinned?: string[]; archived?: string[] }) =>
+    ipcRenderer.invoke('agent:sessions:meta:set', workspaceDir, meta),
   searchWorkspaceFiles: (workspaceDir: string, query: string, limit?: number) =>
     ipcRenderer.invoke('workspace:searchFiles', workspaceDir, query, limit),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  onNotifyClick: (
-    callback: (payload: { workspaceDir: string; sessionId: string }) => void
-  ) => {
-    const listener = (_event: unknown, payload: { workspaceDir: string; sessionId: string }) =>
-      callback(payload)
+  onNotifyClick: (callback: (payload: { workspaceDir: string; sessionId: string }) => void) => {
+    const listener = (_event: unknown, payload: { workspaceDir: string; sessionId: string }) => callback(payload)
     ipcRenderer.on('app:notify-click', listener)
     return () => ipcRenderer.removeListener('app:notify-click', listener)
   },
@@ -272,12 +257,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentRespondApproval: (requestId: string, decision: unknown) =>
     ipcRenderer.invoke('agent:approval:respond', requestId, decision),
   onAgentApprovalResolved: (
-    callback: (payload: {
-      requestId: string
-      workspaceDir: string
-      sessionId: string
-      decision: unknown
-    }) => void
+    callback: (payload: { requestId: string; workspaceDir: string; sessionId: string; decision: unknown }) => void
   ) => {
     const listener = (_event: unknown, payload: any) => callback(payload)
     ipcRenderer.on('agent:approval-resolved', listener)
@@ -288,8 +268,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   terminalCreate: (workspaceDir: string, cols: number, rows: number, cwd?: string) =>
     ipcRenderer.invoke('terminal:create', workspaceDir, cols, rows, cwd),
   terminalWrite: (id: string, data: string) => ipcRenderer.invoke('terminal:write', id, data),
-  terminalResize: (id: string, cols: number, rows: number) =>
-    ipcRenderer.invoke('terminal:resize', id, cols, rows),
+  terminalResize: (id: string, cols: number, rows: number) => ipcRenderer.invoke('terminal:resize', id, cols, rows),
   terminalClose: (id: string) => ipcRenderer.invoke('terminal:close', id),
   terminalFlush: (id: string) => ipcRenderer.invoke('terminal:flush', id),
   onTerminalData: (callback: (payload: { id: string; data: string }) => void) => {
@@ -340,26 +319,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('git:bindWorktree', workspaceDir, sessionId, target, base),
   gitReleaseSession: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('git:releaseSession', workspaceDir, sessionId),
-  gitCleanupOrphans: (workspaceDir: string) =>
-    ipcRenderer.invoke('git:cleanupOrphans', workspaceDir),
+  gitCleanupOrphans: (workspaceDir: string) => ipcRenderer.invoke('git:cleanupOrphans', workspaceDir),
   gitLog: (workspaceDir: string, limit?: number, branch?: string, all?: boolean) =>
     ipcRenderer.invoke('git:log', workspaceDir, limit, branch, all),
   gitCommitStats: (workspaceDir: string, limit?: number, branch?: string, all?: boolean) =>
     ipcRenderer.invoke('git:commitStats', workspaceDir, limit, branch, all),
   gitCreateBranch: (workspaceDir: string, sha: string, name: string) =>
     ipcRenderer.invoke('git:createBranch', workspaceDir, sha, name),
-  gitCommitDetail: (workspaceDir: string, sha: string) =>
-    ipcRenderer.invoke('git:commitDetail', workspaceDir, sha),
-  gitDiff: (workspaceDir: string, from: string, to: string) =>
-    ipcRenderer.invoke('git:diff', workspaceDir, from, to),
+  gitCommitDetail: (workspaceDir: string, sha: string) => ipcRenderer.invoke('git:commitDetail', workspaceDir, sha),
+  gitDiff: (workspaceDir: string, from: string, to: string) => ipcRenderer.invoke('git:diff', workspaceDir, from, to),
   gitCheckout: (workspaceDir: string, worktreePath: string, branch: string) =>
     ipcRenderer.invoke('git:checkout', workspaceDir, worktreePath, branch),
-  gitMerge: (
-    workspaceDir: string,
-    worktreePath: string,
-    branch: string,
-    strategy?: 'merge' | 'squash' | 'rebase'
-  ) => ipcRenderer.invoke('git:merge', workspaceDir, worktreePath, branch, strategy),
+  gitMerge: (workspaceDir: string, worktreePath: string, branch: string, strategy?: 'merge' | 'squash' | 'rebase') =>
+    ipcRenderer.invoke('git:merge', workspaceDir, worktreePath, branch, strategy),
   gitGithubTokenStatus: () => ipcRenderer.invoke('git:githubTokenStatus'),
   githubAuthConfig: () => ipcRenderer.invoke('github:auth:config'),
   githubAuthStart: () => ipcRenderer.invoke('github:auth:start'),
@@ -410,10 +382,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onAgentSessionRootChanged: (
     callback: (payload: { workspaceDir: string; sessionId: string; root: string }) => void
   ) => {
-    const listener = (
-      _event: unknown,
-      payload: { workspaceDir: string; sessionId: string; root: string }
-    ) => callback(payload)
+    const listener = (_event: unknown, payload: { workspaceDir: string; sessionId: string; root: string }) =>
+      callback(payload)
     ipcRenderer.on('agent:session-root-changed', listener)
     return () => ipcRenderer.removeListener('agent:session-root-changed', listener)
   },
@@ -439,7 +409,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 联网搜索（内置能力）
   webSearchGet: () => ipcRenderer.invoke('webSearch:get'),
-  webSearchSave: (config: any) => ipcRenderer.invoke('webSearch:save', config),
+  webSearchSave: (config: any) => ipcRenderer.invoke('webSearch:save', config)
 })
-
-

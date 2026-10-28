@@ -1,14 +1,5 @@
 import { getAppDir, piAgentDir } from './app-paths.js'
-import {
-  app,
-  BrowserWindow,
-  dialog,
-  ipcMain,
-  nativeTheme,
-  Notification,
-  screen,
-  type Rectangle,
-} from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, screen, type Rectangle } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import * as os from 'os'
@@ -25,6 +16,8 @@ import { NotificationRouter } from './notifications.js'
 import { createWorkspaceStore, importRecentWorkspaces } from './workspace-store.js'
 import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
+import { installAuxWindowSupport, registerAuxWindowIpc } from './aux-window.js'
+import { appUrl, isAppUrl, registerAppProtocol, registerAppSchemePrivileges } from './app-protocol.js'
 import { animateBounds, type WindowBounds } from './window-morph.js'
 import { registerFilesIpc } from './ipc/files.js'
 import { registerFileProtocol, registerFileSchemePrivileges } from './file-protocol.js'
@@ -33,28 +26,21 @@ import { registerGitIpc } from './ipc/git.js'
 import { repoSync } from './repo-sync.js'
 import { registerWorkspaceIpc, closeAllWorkspaceWatchers } from './ipc/workspace.js'
 import { getActiveProviderApiKey, setRunningAgentsProvider } from './ipc/api-config.js'
-import {
-  WEB_SEARCH_KEY_ENV_PREFIX,
-  initializeWebSearch,
-} from './ipc/web-search.js'
-import {
-  completeGithubOAuth,
-  isGithubCallbackUrl,
-  GITHUB_PROTOCOL,
-} from './github-oauth.js'
+import { WEB_SEARCH_KEY_ENV_PREFIX, initializeWebSearch } from './ipc/web-search.js'
+import { completeGithubOAuth, isGithubCallbackUrl, GITHUB_PROTOCOL } from './github-oauth.js'
 import {
   getAppSettingsCache,
   loadSettingsFile,
   migratePermissionLevel,
   saveSettingsFile,
-  setAppSettingsCache,
+  setAppSettingsCache
 } from './ipc/settings.js'
 import {
   checkForUpdates,
   registerSystemIpc,
   setUpdateNotice,
   UPDATE_CHECK_DELAY_MS,
-  UPDATE_CHECK_INTERVAL_MS,
+  UPDATE_CHECK_INTERVAL_MS
 } from './ipc/system.js'
 // Lazy load AgentManager to avoid early import errors
 // import { AgentManager } from '../pi-bridge/dist/index.js'
@@ -78,6 +64,9 @@ registerFileSchemePrivileges()
 
 let mainWindow: BrowserWindow | null = null
 configureIpcWindow(() => mainWindow)
+
+// 必须在 app ready 之前声明：外壳走标准协议后，辅助窗口才能与 opener 同源互访
+registerAppSchemePrivileges()
 
 /**
  * 启动页：窗口先以 420×260 出现，面板数据就绪后放大到工作台尺寸。
@@ -113,18 +102,14 @@ function resolveLanguage(settings: { language?: unknown }): 'zh' | 'en' {
   return settings.language === 'en' || settings.language === 'en-US' ? 'en' : 'zh'
 }
 
-function centeredWindowBounds(
-  workArea: Rectangle,
-  width: number,
-  height: number
-): WindowBounds {
+function centeredWindowBounds(workArea: Rectangle, width: number, height: number): WindowBounds {
   const w = Math.min(width, workArea.width)
   const h = Math.min(height, workArea.height)
   return {
     x: Math.round(workArea.x + (workArea.width - w) / 2),
     y: Math.round(workArea.y + (workArea.height - h) / 2),
     width: Math.round(w),
-    height: Math.round(h),
+    height: Math.round(h)
   }
 }
 
@@ -136,13 +121,12 @@ function expandedWindowBounds(win: BrowserWindow): WindowBounds {
   const height = Math.min(APP_WINDOW_HEIGHT, workArea.height)
   const centerX = current.x + current.width / 2
   const centerY = current.y + current.height / 2
-  const clamp = (value: number, min: number, max: number) =>
-    Math.min(Math.max(value, min), max)
+  const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
   return {
     x: Math.round(clamp(centerX - width / 2, workArea.x, workArea.x + workArea.width - width)),
     y: Math.round(clamp(centerY - height / 2, workArea.y, workArea.y + workArea.height - height)),
     width: Math.round(width),
-    height: Math.round(height),
+    height: Math.round(height)
   }
 }
 
@@ -194,7 +178,7 @@ function startExpansion(win: BrowserWindow): void {
     apply: (bounds) => {
       if (!win.isDestroyed()) win.setBounds(bounds)
     },
-    onDone: () => finishBoot(win),
+    onDone: () => finishBoot(win)
   })
 }
 
@@ -237,9 +221,7 @@ ipcMain.on('app:boot-ready', (event) => {
 // GitHub OAuth 回调使用自定义协议；开发版需要带上脚本参数才能在 Windows 上回到 Electron
 try {
   if (process.defaultApp && process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient(GITHUB_PROTOCOL, process.execPath, [
-      path.resolve(process.argv[1]),
-    ])
+    app.setAsDefaultProtocolClient(GITHUB_PROTOCOL, process.execPath, [path.resolve(process.argv[1])])
   } else {
     app.setAsDefaultProtocolClient(GITHUB_PROTOCOL)
   }
@@ -276,8 +258,7 @@ app.on('open-url', (event, url) => {
 })
 /** 每个被监听的工作区一个 watcher；切换工作区不再挤掉其他工作区 */
 // 只允许一个实例：避免两个进程同时写同一份配置和数据库。
-const singleInstanceLock =
-  typeof app.requestSingleInstanceLock === 'function' ? app.requestSingleInstanceLock() : true
+const singleInstanceLock = typeof app.requestSingleInstanceLock === 'function' ? app.requestSingleInstanceLock() : true
 if (!singleInstanceLock) {
   // 立即退出，避免第二个进程继续打开数据库或执行队列
   if (typeof app.exit === 'function') {
@@ -364,7 +345,7 @@ const notificationRouter = new NotificationRouter(
       }
       mainWindow.webContents.send('app:notify-click', {
         workspaceDir: payload.workspaceDir,
-        sessionId: payload.sessionId,
+        sessionId: payload.sessionId
       })
       setTimeout(() => {
         console.log('[Notifications] focus after click:', mainWindow?.isFocused())
@@ -376,7 +357,7 @@ const notificationRouter = new NotificationRouter(
   () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()),
   {
     info: (message) => console.log(message),
-    warn: (message) => console.warn(message),
+    warn: (message) => console.warn(message)
   }
 )
 
@@ -392,7 +373,7 @@ const approvalBroker = new ApprovalBroker(
       workspaceDir: payload.workspaceDir,
       sessionId: payload.sessionId,
       title: text.approval,
-      body: `${payload.toolName} · ${notificationSummary(payload.summary)}`,
+      body: `${payload.toolName} · ${notificationSummary(payload.summary)}`
     })
   },
   (resolution) => {
@@ -407,7 +388,7 @@ const agentLogger = {
   info: (...args: unknown[]) => agentFileLogger?.write('INFO', args),
   warn: (...args: unknown[]) => agentFileLogger?.write('WARN', args),
   error: (...args: unknown[]) => agentFileLogger?.write('ERROR', args),
-  debug: (...args: unknown[]) => agentFileLogger?.write('DEBUG', args),
+  debug: (...args: unknown[]) => agentFileLogger?.write('DEBUG', args)
 }
 
 const requireFromMain = createRequire(import.meta.url)
@@ -434,8 +415,7 @@ const terminalManager = new TerminalManager({
       mainWindow.webContents.send('terminal:exit', { id, exitCode })
     }
   },
-  logPathFor: (workspaceDir, terminalId) =>
-    path.join(workspaceDir, '.pi-workbench', `terminal-${terminalId}.log`),
+  logPathFor: (workspaceDir, terminalId) => path.join(workspaceDir, '.pi-workbench', `terminal-${terminalId}.log`),
   // 只移除应用自己注入的供应商 Key；用户 shell 里同名的其他 Key 保持不变
   envSanitizer: (env) => {
     const sanitized = { ...env }
@@ -452,7 +432,7 @@ const terminalManager = new TerminalManager({
       }
     }
     return sanitized
-  },
+  }
 })
 
 const pluginManager = new PluginManager({
@@ -460,7 +440,7 @@ const pluginManager = new PluginManager({
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('plugins:changed', { workspaceDir })
     }
-  },
+  }
 })
 
 /** 找到文件所属的已加载工作区（用于插件钩子） */
@@ -480,9 +460,7 @@ async function seedTrustedWorkspaces(): Promise<void> {
     if (records.length === 0) {
       const settings = await loadSettingsFile()
       const recent: unknown = settings.recentWorkspaces
-      const candidates = Array.isArray(recent)
-        ? recent.filter((item): item is string => typeof item === 'string')
-        : []
+      const candidates = Array.isArray(recent) ? recent.filter((item): item is string => typeof item === 'string') : []
       if (candidates.length > 0) {
         const trusted: string[] = []
         for (const workspacePath of candidates) {
@@ -512,7 +490,7 @@ registerFilesIpc({
   onFileSaved: (target) => {
     const workspaceDir = workspaceForPath(target)
     if (workspaceDir) void pluginManager.emit(workspaceDir, 'file:saved', { path: target })
-  },
+  }
 })
 
 registerAgentIpc({
@@ -521,9 +499,10 @@ registerAgentIpc({
   pluginManager,
   getMainWindow: () => mainWindow,
   getDefaultPermissionLevel: () => getAppSettingsCache().permissionLevel,
+  getLanguage: () => ((getAppSettingsCache().language ?? 'zh') === 'en' ? 'en' : 'zh'),
   logger: agentLogger,
   notificationText,
-  notify: (event) => notificationRouter.notify(event),
+  notify: (event) => notificationRouter.notify(event)
 })
 
 registerWorkspaceIpc({
@@ -531,13 +510,13 @@ registerWorkspaceIpc({
   pluginManager,
   terminalManager,
   workspaceStore,
-  waitForStartup: () => startupReady,
+  waitForStartup: () => startupReady
 })
 
 registerGitIpc({
   agentRegistry,
   getMainWindow: () => mainWindow,
-  logger: agentLogger,
+  logger: agentLogger
 })
 
 registerSystemIpc({
@@ -545,9 +524,10 @@ registerSystemIpc({
   terminalManager,
   pluginManager,
   getFileLogger: () => fileLogger,
-  getRendererLogger: () => rendererLogger,
+  getRendererLogger: () => rendererLogger
 })
 
+registerAuxWindowIpc({ getMainWindow: () => mainWindow })
 
 // 初始化应用目录结构
 async function initAppDirectories() {
@@ -620,7 +600,7 @@ async function ensureAppDirWritable(): Promise<void> {
         : 'The install folder is not writable; settings, sessions, and updates cannot be saved.',
       detail: zh
         ? `安装位置：${getAppDir()}\n请卸载后重新安装到用户可写目录（例如用户文件夹下的 Programs），或把应用移动到有写权限的位置。`
-        : `Location: ${getAppDir()}\nUninstall and reinstall into a folder your user can write to (for example Programs under your home folder), or move the app to a writable location.`,
+        : `Location: ${getAppDir()}\nUninstall and reinstall into a folder your user can write to (for example Programs under your home folder), or move the app to a writable location.`
     })
   } catch (error) {
     console.error('[Main] Failed to show install folder warning:', error)
@@ -646,18 +626,18 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
     ...(isMac
       ? {
           titleBarStyle: 'hiddenInset' as const,
-          trafficLightPosition: { x: 14, y: 15 },
+          trafficLightPosition: { x: 14, y: 15 }
         }
       : {
-          frame: false,
+          frame: false
         }),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: true
     },
-    icon: path.join(__dirname, '../app-icon.png'),
+    icon: path.join(__dirname, '../app-icon.png')
   })
 
   // Windows/Linux：隐藏默认菜单栏，但保留菜单角色提供的快捷键
@@ -677,7 +657,10 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
   // 通知渲染进程最大化状态，用于自绘窗口按钮的图标切换
   const sendMaximizedState = () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('window:maximized-changed', mainWindow.isMaximized())
+      mainWindow.webContents.send('window:maximized-changed', {
+        host: 'main',
+        maximized: mainWindow.isMaximized()
+      })
     }
   }
   mainWindow.on('maximize', sendMaximizedState)
@@ -713,7 +696,7 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
     void mainWindow.loadURL(devUrl.toString())
     mainWindow.webContents.openDevTools()
   } else {
-    void mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), { query })
+    void mainWindow.loadURL(appUrl('/index.html', query))
   }
 
   if (skipBoot) {
@@ -761,7 +744,7 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
         : 'There are unsaved changes, or sessions or approvals are still running.',
       detail: zh
         ? '关闭窗口会丢失未保存的修改，并中止运行中的会话与等待中的审批。'
-        : 'Closing will discard unsaved changes and stop running sessions and pending approvals.',
+        : 'Closing will discard unsaved changes and stop running sessions and pending approvals.'
     })
     if (choice === 1) {
       // 用户明确继续关闭：清掉已加载工作区的草稿，避免下次启动又提示恢复
@@ -773,12 +756,18 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
     }
   })
 
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  // 面板辅助窗口：只放行 about:blank + pi-panel: 前缀的 window.open
+  installAuxWindowSupport(mainWindow, {
+    onClosed: (frameName) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('aux:window-closed', frameName)
+      }
+    }
+  })
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
     const devServerUrl = process.env.VITE_DEV_SERVER_URL
-    const allowed =
-      url.startsWith('file://') || (devServerUrl ? url.startsWith(devServerUrl) : false)
+    const allowed = isAppUrl(url) || url.startsWith('file://') || (devServerUrl ? url.startsWith(devServerUrl) : false)
     if (!allowed) {
       event.preventDefault()
     }
@@ -790,15 +779,12 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
     if (mainWindow && !mainWindow.isDestroyed()) finishBoot(mainWindow)
   })
 
-  mainWindow.webContents.on(
-    'did-fail-load',
-    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-      // -3 是导航被主动中止（重定向等），不是失败
-      if (!isMainFrame || errorCode === -3) return
-      console.error('[Main] Page failed to load:', errorCode, errorDescription, validatedURL)
-      if (mainWindow && !mainWindow.isDestroyed()) finishBoot(mainWindow)
-    }
-  )
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    // -3 是导航被主动中止（重定向等），不是失败
+    if (!isMainFrame || errorCode === -3) return
+    console.error('[Main] Page failed to load:', errorCode, errorDescription, validatedURL)
+    if (mainWindow && !mainWindow.isDestroyed()) finishBoot(mainWindow)
+  })
 }
 
 app.whenReady().then(async () => {
@@ -807,11 +793,11 @@ app.whenReady().then(async () => {
     fileLogger = new FileLogger({ logDir: path.join(getAppDir(), 'logs') })
     rendererLogger = new FileLogger({
       logDir: path.join(getAppDir(), 'logs'),
-      fileName: 'renderer.log',
+      fileName: 'renderer.log'
     })
     agentFileLogger = new FileLogger({
       logDir: path.join(getAppDir(), 'logs'),
-      fileName: 'agent.log',
+      fileName: 'agent.log'
     })
     installConsoleTee(fileLogger)
     console.log('[Main] File logging enabled:', fileLogger.filePath)
@@ -821,6 +807,8 @@ app.whenReady().then(async () => {
   }
 
   await initAppDirectories()
+  // 外壳协议必须在任何 loadURL 之前注册；辅助窗口依赖它拿到同源文档
+  registerAppProtocol(path.join(__dirname, '../dist'))
   // 只读文件协议：图片 / 音视频 / PDF / HTML 预览
   registerFileProtocol()
 
@@ -841,9 +829,7 @@ app.whenReady().then(async () => {
     await seedTrustedWorkspaces()
     await initializeWebSearch()
   })()
-  void startupReady.catch((error) =>
-    console.warn('[Main] Startup preparation failed:', error)
-  )
+  void startupReady.catch((error) => console.warn('[Main] Startup preparation failed:', error))
 
   // 更新后首次启动：让系统重建图标与桌面菜单缓存（三平台各自实现，失败只记日志）。
   // 与 Windows 安装器里的 SHChangeNotify / ie4uinit 互为兜底。
@@ -854,8 +840,7 @@ app.whenReady().then(async () => {
       const { previousVersion } = refreshShellCachesIfUpdated()
       const currentVersion = app.getVersion()
       if (previousVersion && previousVersion !== currentVersion) {
-        const isNewer = (next: string, now: string) =>
-          next.localeCompare(now, undefined, { numeric: true }) > 0
+        const isNewer = (next: string, now: string) => next.localeCompare(now, undefined, { numeric: true }) > 0
         if (isNewer(currentVersion, previousVersion)) {
           setUpdateNotice({ from: previousVersion, to: currentVersion })
         }
@@ -878,7 +863,7 @@ app.whenReady().then(async () => {
         userDataPath: app.getPath('userData'),
         localAppDataPath: process.env.LOCALAPPDATA,
         cachePath: resolveSystemCachePath(),
-        logger: console,
+        logger: console
       })
     })().catch((error) => console.warn('[Main] Legacy path cleanup failed:', error))
   }
@@ -891,7 +876,7 @@ app.whenReady().then(async () => {
         cleanupCompletedUpdateCache({
           appDir: getAppDir(),
           platform: process.platform,
-          logger: console,
+          logger: console
         })
       )
       .catch((error) => console.warn('[Main] Update cache cleanup failed:', error))

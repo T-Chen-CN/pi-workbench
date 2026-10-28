@@ -158,6 +158,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
     virtualizer,
   } = useChatPanelState(props)
 
+  // 纯图片（无文本）也可以发送；预处理中的图片不算可发送内容
+  const hasSendableInput = Boolean(input.trim()) || attachments.some((a) => a.kind === 'image')
 
   if (needsApiKey) {
     return (
@@ -287,8 +289,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                   <span className="type-caption text-ink-muted">
                     {isLoading ? t('pendingNextTurn') : t('pendingIdle')}
                   </span>
-                  <span className="min-w-0 flex-1 truncate type-value text-ink" title={item.text}>
-                    {item.text}
+                  <span
+                    className="min-w-0 flex-1 truncate type-value text-ink"
+                    title={item.text || undefined}
+                  >
+                    {item.text || t('pendingImageCount', { count: item.images?.length ?? 0 })}
                   </span>
                   {isLoading ? (
                     <button
@@ -307,7 +312,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                       onClick={() => {
                         if (!activeKey) return
                         useChatStore.getState().removePending(activeKey, item.id)
-                        void handleSubmit(undefined, item.text)
+                        void handleSubmit(undefined, item.text, {
+                          images: item.images,
+                          consumeAttachments: false,
+                        })
                       }}
                       className="p-0.5 text-ink-muted transition-colors hover:text-ink"
                       aria-label={t('sendNow')}
@@ -606,7 +614,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                   </div>
                 )}
               </div>
-              {isLoading && !input.trim() ? (
+              {isLoading && !hasSendableInput ? (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -623,7 +631,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                   variant="primary"
                   size="sm"
                   icon={Send}
-                  disabled={!initialized || !input.trim() || imageProcessing > 0}
+                  disabled={!initialized || !hasSendableInput || imageProcessing > 0}
                 >
                   {t('send')}
                 </Button>

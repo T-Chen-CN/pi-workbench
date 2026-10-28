@@ -1,3 +1,27 @@
+/** 拖出拆窗时主进程返回的落点判定 */
+export interface AuxDetachResult {
+  success: boolean
+  /** 光标仍在主窗口内：不拆 */
+  inside?: boolean
+  rect?: { x: number; y: number; width: number; height: number }
+  error?: string
+}
+
+/** 自绘窗口按钮的最大化状态：主窗口与辅助窗口各自上报 */
+export interface WindowMaximizedState {
+  host: string
+  maximized: boolean
+}
+
+/** 自绘窗口按钮的三种动作，主窗口 / 辅助窗口共用 */
+export type WindowCommand = 'minimize' | 'toggleMaximize' | 'close'
+
+export interface AuxWindowCommandResult {
+  success: boolean
+  maximized?: boolean
+  error?: string
+}
+
 export interface GitRepoInfo {
   root: string
   gitDir: string
@@ -200,7 +224,14 @@ export interface ElectronAPI {
   toggleMaximizeWindow: () => Promise<{ success: boolean; maximized: boolean }>
   closeWindow: () => Promise<{ success: boolean }>
   isWindowMaximized: () => Promise<{ success: boolean; maximized: boolean }>
-  onWindowMaximizedChange: (callback: (maximized: boolean) => void) => () => void
+  onWindowMaximizedChange: (callback: (state: WindowMaximizedState) => void) => () => void
+  /** 辅助窗口被关闭时回调（参数是 window.open 的 frameName） */
+  onAuxWindowClosed: (callback: (frameName: string) => void) => () => void
+  /** 拖出拆窗：由主进程读取真实光标位置并给出新窗口矩形 */
+  auxDetachAt: () => Promise<AuxDetachResult>
+  /** 辅助窗口的自绘窗口按钮：按 frameName 寻址，不操作主窗口 */
+  auxWindowCommand: (host: string, command: WindowCommand) => Promise<AuxWindowCommandResult>
+  auxWindowState: (host: string) => Promise<AuxWindowCommandResult>
   /** 启动闸门：渲染层数据就绪后通知主进程放大窗口 */
   appBootReady: () => void
   onAppBootExpanded: (callback: () => void) => () => void
@@ -248,7 +279,8 @@ export interface ElectronAPI {
   agentSteer: (
     workspaceDir: string,
     sessionId: string,
-    message: string
+    message: string,
+    images?: AgentImagePayload[]
   ) => Promise<{ success: boolean; error?: string }>
   agentContextUsage: (
     workspaceDir: string,
@@ -385,13 +417,6 @@ export interface ElectronAPI {
   agentSessionsMetaSet: (
     workspaceDir: string,
     meta: SessionMeta
-  ) => Promise<{ success: boolean; error?: string }>
-  chatPendingGet: (
-    workspaceDir: string
-  ) => Promise<{ success: boolean; sessions?: PendingMessagesMap; error?: string }>
-  chatPendingSet: (
-    workspaceDir: string,
-    sessions: PendingMessagesMap
   ) => Promise<{ success: boolean; error?: string }>
   searchWorkspaceFiles: (
     workspaceDir: string,
@@ -800,14 +825,6 @@ export interface ConversationBranchGroup {
   activeIndex: number
   branches: ConversationBranchOption[]
 }
-
-/** 排队消息（按会话分组持久化） */
-export interface PendingMessageRecord {
-  id: string
-  text: string
-}
-
-export type PendingMessagesMap = Record<string, PendingMessageRecord[]>
 
 /** 会话导出格式（R-10） */
 export type ExportSessionFormat = 'md' | 'html' | 'jsonl'

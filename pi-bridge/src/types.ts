@@ -119,6 +119,8 @@ export interface AgentConfig {
   onSessionTitle?: (sessionId: string, title: string) => void
   /** 新会话的默认权限档位；只在创建会话运行时读取一次，之后会话自行持有权限 */
   getDefaultPermissionLevel?: () => unknown
+  /** 应用语言；用于固定文案（如纯图片会话的标题），缺省按中文 */
+  getLanguage?: () => 'zh' | 'en'
   /** 请求用户审批；未提供时按拒绝处理（fail-closed） */
   requestApproval?: (request: ApprovalRequestPayload) => Promise<ApprovalDecision>
   /** 会话当前绑定的工作树根；未提供时使用 workspaceDir */

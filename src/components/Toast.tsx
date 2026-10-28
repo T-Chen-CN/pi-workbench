@@ -9,6 +9,8 @@ export interface ToastMessage {
   message: string
   type: ToastType
   duration?: number
+  /** 显示在哪个宿主窗口；缺省视为主窗口 */
+  host?: string
 }
 
 interface ToastProps {
@@ -76,13 +78,16 @@ const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
   )
 }
 
-export const ToastContainer: React.FC<{ messages: ToastMessage[]; onClose: (id: string) => void }> = ({
-  messages,
-  onClose,
-}) => {
+export const ToastContainer: React.FC<{
+  messages: ToastMessage[]
+  onClose: (id: string) => void
+  /** 只渲染属于该宿主窗口的提示；辅助窗口各挂一份 */
+  host?: string
+}> = ({ messages, onClose, host = 'main' }) => {
+  const visible = messages.filter((msg) => (msg.host ?? 'main') === host)
   return (
     <div className="pointer-events-none fixed right-4 top-14 z-50 flex w-80 flex-col gap-2">
-      {messages.map((msg) => (
+      {visible.map((msg) => (
         <div key={msg.id} className="pointer-events-auto">
           <Toast message={msg} onClose={onClose} />
         </div>

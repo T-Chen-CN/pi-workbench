@@ -26,8 +26,7 @@ export const translations = {
     welcomeHeadlineA: 'Pi 工作台 ——',
     welcomeHeadlineB: '安静的地方，',
     welcomeHeadlineAccent: '响亮的主意',
-    welcomeLede:
-      '打开一个最近项目，或从右上角选择文件夹；Pi Agent 会在你熟悉的代码库里工作。',
+    welcomeLede: '打开一个最近项目，或从右上角选择文件夹；Pi Agent 会在你熟悉的代码库里工作。',
     welcomeRecent: '最近工作区',
     welcomeProjectCount: '共 {count} 个项目',
     welcomeSearch: '搜索项目…',
@@ -122,12 +121,14 @@ export const translations = {
     gitDetailNoFiles: '没有文件变更',
     gitPatchTruncated: 'diff 已截断',
     githubIntegration: 'GitHub',
-    githubDesc: '关联 GitHub 后，Git 视图可以显示 PR 和 CI 状态。点击后会在浏览器打开 GitHub 设备授权页，输入一次性验证码即可完成关联。',
+    githubDesc:
+      '关联 GitHub 后，Git 视图可以显示 PR 和 CI 状态。点击后会在浏览器打开 GitHub 设备授权页，输入一次性验证码即可完成关联。',
     githubAccount: 'GitHub 账号',
     githubLinked: '已关联',
     githubNotLinked: '未关联',
     githubClientId: 'OAuth App Client ID',
-    githubClientIdHint: '在 GitHub → Settings → Developer settings → OAuth Apps 注册应用并允许 Device Flow，将 Client ID 填在这里。',
+    githubClientIdHint:
+      '在 GitHub → Settings → Developer settings → OAuth Apps 注册应用并允许 Device Flow，将 Client ID 填在这里。',
     githubCreateApp: '创建 OAuth App',
     githubLink: '关联 GitHub',
     githubUnlink: '解除关联',
@@ -222,8 +223,7 @@ export const translations = {
     closeSessionTitle: '关闭会话',
     closeProjectTitle: '关闭项目',
     continueClose: '继续关闭',
-    closeProjectActiveConfirm:
-      '该项目还有正在运行的会话或等待中的审批。关闭项目会中止它们。继续？',
+    closeProjectActiveConfirm: '该项目还有正在运行的会话或等待中的审批。关闭项目会中止它们。继续？',
     closeProjectDirtyActiveConfirm:
       '有未保存的修改，且该项目还有正在运行的会话或等待中的审批。关闭会丢失修改并中止任务。继续？',
     sessionOpened: '已打开',
@@ -288,6 +288,7 @@ export const translations = {
     pendingNextTurn: '下一轮发送',
     pendingIdle: '待发送',
     insertNow: '立即插入当前轮',
+    pendingImageCount: '含图 {count} 张',
     sendNow: '立即发送',
     steerSent: '已插入当前轮',
     steerFailed: '插入失败：{error}',
@@ -716,8 +717,7 @@ export const translations = {
     webSearchSaved: '联网配置已保存，新会话生效',
     webSearchSaveFailed: '保存失败：{error}',
     webSearchLoadFailed: '加载联网配置失败',
-    webSearchRestartHint:
-      '保存后对新建会话生效；正在运行的会话继续使用旧配置，重启应用可立即全部生效。',
+    webSearchRestartHint: '保存后对新建会话生效；正在运行的会话继续使用旧配置，重启应用可立即全部生效。',
     welcomeStepWebSearch: '配置联网搜索',
     welcomeWebSearch: '联网搜索',
     welcomeWebSearchConfigured: '已配置',
@@ -726,6 +726,18 @@ export const translations = {
     toolWebFetch: '读取网页',
     toolWebSearchContent: '读取搜索结果',
     toolSourceCheck: '来源核查',
+
+    // 面板拆分（辅助窗口）
+    panelMenu: '面板操作',
+    panelDetach: '在独立窗口中打开',
+    panelDockBack: '还原到主窗口',
+    panelFocusWindow: '定位到独立窗口',
+    panelDetachedTitle: '面板已在独立窗口打开',
+    panelDetachedHint: '关闭那个窗口即可让它回到这里。',
+    panelDetachBlocked: '新窗口被系统拦截，无法拆分面板',
+    panelDetachFailed: '拆分面板失败',
+    panelDetachedBadge: '已分离',
+    panelDragHint: '拖动 {panel} 到窗口外，拆成独立窗口'
   },
 
   en: {
@@ -847,12 +859,14 @@ export const translations = {
     gitDetailNoFiles: 'No file changes',
     gitPatchTruncated: 'Diff truncated',
     githubIntegration: 'GitHub',
-    githubDesc: 'Link GitHub to show pull request and CI status in the Git view. Linking opens the GitHub device authorization page in your browser; enter the one-time code to finish.',
+    githubDesc:
+      'Link GitHub to show pull request and CI status in the Git view. Linking opens the GitHub device authorization page in your browser; enter the one-time code to finish.',
     githubAccount: 'GitHub account',
     githubLinked: 'Linked',
     githubNotLinked: 'Not linked',
     githubClientId: 'OAuth App client ID',
-    githubClientIdHint: 'Register an OAuth App under GitHub → Settings → Developer settings → OAuth Apps and enable Device Flow, then paste its client ID here.',
+    githubClientIdHint:
+      'Register an OAuth App under GitHub → Settings → Developer settings → OAuth Apps and enable Device Flow, then paste its client ID here.',
     githubCreateApp: 'Create OAuth App',
     githubLink: 'Link GitHub',
     githubUnlink: 'Unlink',
@@ -861,13 +875,16 @@ export const translations = {
     githubCodeCopied: 'Code copied',
     githubOpenBrowser: 'Open browser',
     githubWaiting: 'Waiting for you to confirm in the browser…',
-    githubDeviceHint: 'Open {uri} in your browser and enter the code above. This page updates automatically once you confirm.',
+    githubDeviceHint:
+      'Open {uri} in your browser and enter the code above. This page updates automatically once you confirm.',
     githubExpiresIn: 'Expires in',
     githubCodeExpired: 'The code expired. Start again.',
     githubCodeDenied: 'Authorization was cancelled on GitHub.',
     githubLoginFailed: 'GitHub login failed',
-    githubLoginUnavailable: 'This build is missing a GitHub app configuration. Update the app or use a personal access token.',
-    githubDeviceFlowDisabled: 'Device Flow is not enabled for this GitHub app. The app maintainer must enable it in the OAuth App settings.',
+    githubLoginUnavailable:
+      'This build is missing a GitHub app configuration. Update the app or use a personal access token.',
+    githubDeviceFlowDisabled:
+      'Device Flow is not enabled for this GitHub app. The app maintainer must enable it in the OAuth App settings.',
     githubTokenFallback: 'Use a personal access token (fallback)',
     githubTokenHint: 'If you prefer not to use device login, paste a PAT with repo scope.',
     githubTokenSave: 'Save token',
@@ -944,8 +961,7 @@ export const translations = {
     deleteSession: 'Delete session',
     deleteSessionConfirm: 'Delete session "{name}"? This cannot be undone.',
     closeSessionTab: 'Close session tab',
-    closeRunningSessionConfirm:
-      'This session is still responding. Closing the tab will abort the request. Continue?',
+    closeRunningSessionConfirm: 'This session is still responding. Closing the tab will abort the request. Continue?',
     closeSessionTitle: 'Close session',
     closeProjectTitle: 'Close project',
     continueClose: 'Close anyway',
@@ -1015,6 +1031,7 @@ export const translations = {
     pendingNextTurn: 'Next turn',
     pendingIdle: 'Pending',
     insertNow: 'Insert now',
+    pendingImageCount: '{count} image(s)',
     sendNow: 'Send now',
     steerSent: 'Inserted into the current turn',
     steerFailed: 'Failed to insert: {error}',
@@ -1055,8 +1072,7 @@ export const translations = {
     suggestTestsGoPrompt: 'Run go test ./..., find failing cases and fix them.',
     slashHelp:
       'Commands: /plan plan mode · /act ask mode · /compact compact context · /clear start a new session · /model <name> switch model · /<template> use a prompt template · /skill:<name> run a skill',
-    slashClearConfirm:
-      'Clearing starts a new session; the current conversation stays in the session list. Continue?',
+    slashClearConfirm: 'Clearing starts a new session; the current conversation stays in the session list. Continue?',
     slashCurrentModel: 'Current model: {model}',
     slashUnknownModel: 'Unknown model: {model}',
     slashUnknownCommand: 'Unknown command: {command} (type /help for available commands)',
@@ -1075,8 +1091,7 @@ export const translations = {
     contextSessionTotal: 'Session total',
     contextUnknownHint: 'Context usage updates after the next reply',
     compactContext: 'Compact context',
-    compactConfirm:
-      'Compaction summarizes earlier conversation and frees context; details may be lost. Continue?',
+    compactConfirm: 'Compaction summarizes earlier conversation and frees context; details may be lost. Continue?',
     compactDone: 'Context compacted',
     compactionDivider: 'Context compacted · {kind}',
     compactionDividerTokens: 'Context compacted · {kind} · {tokens} tokens before',
@@ -1173,8 +1188,7 @@ export const translations = {
     imageEncodeFailed: 'Failed to process the image; try another one',
     imageTooManyPixels: 'The image resolution is too high; crop or shrink it first',
     imageTotalTooLarge: 'Images exceed the total size limit; reduce their count or size',
-    modelImageDisabled:
-      'Image input is not enabled for this model. Check it under Settings → Provider.',
+    modelImageDisabled: 'Image input is not enabled for this model. Check it under Settings → Provider.',
     imagePreviewLabel: 'View image {index}',
     contextReadFailed: 'Failed to read file',
     contextTooLarge: 'File too large, skipped',
@@ -1191,8 +1205,8 @@ export const translations = {
     previousFile: 'Previous file',
     nextFile: 'Next file',
     reviewHint: 'Agent changes are already written to disk. Keep them, or revert a file to its previous content.',
-    revertConfirm: 'Revert this file? The agent\'s changes will be undone.',
-    revertAllConfirm: 'Revert all changes? The agent\'s changes will be undone.',
+    revertConfirm: "Revert this file? The agent's changes will be undone.",
+    revertAllConfirm: "Revert all changes? The agent's changes will be undone.",
     revertBlockedDirty: 'This file has unsaved edits. Save or discard them before reverting.',
     revertConflict: 'The file changed after the agent edited it; skipped the revert.',
     revertFailed: 'Revert failed',
@@ -1273,15 +1287,15 @@ export const translations = {
     permissionSetFailed: 'Failed to change session mode: {error}',
     modeLegendTitle: 'The four modes',
     modeReadonlyDesc: 'Reads only; writes and commands are blocked.',
-    modePlanDesc:
-      'Read-only exploration with a structured plan; choose how to execute on approval.',
+    modePlanDesc: 'Read-only exploration with a structured plan; choose how to execute on approval.',
     modeAskDesc: 'Confirms each write and command; always-allow applies to this session only.',
     modeAutoDesc: 'No prompts; all tools run automatically.',
     modeSessionOnly: 'Session only',
     modeDefaultAllowed: 'Can be default',
     listSeparator: ', ',
     notifications: 'Notifications',
-    notificationsHint: 'Desktop notifications for approvals, completed long runs and failures while the app is in the background.',
+    notificationsHint:
+      'Desktop notifications for approvals, completed long runs and failures while the app is in the background.',
     notificationsEnabled: 'Enable desktop notifications',
     notifyOnApproval: 'When approval is needed',
     notifyOnComplete: 'When a long task completes',
@@ -1418,8 +1432,7 @@ export const translations = {
     webSearchProviderLabel: 'Search source',
     webSearchProviderHint: 'Pick one. Switching sources keeps previously saved keys.',
     webSearchProviderDefault: 'None (use the built-in default)',
-    webSearchDefaultHint:
-      'The default route tries keyless public sources and may be unreliable.',
+    webSearchDefaultHint: 'The default route tries keyless public sources and may be unreliable.',
     webSearchProviderTavily: 'Tavily',
     webSearchProviderExa: 'Exa',
     webSearchProviderBrave: 'Brave',
@@ -1441,8 +1454,7 @@ export const translations = {
     webSearchNoteZai: 'Direct in mainland China; needs a GLM Coding Plan key',
     webSearchNoteDuckDuckGo: 'Keyless, but unreachable from mainland China',
     webSearchApiKey: 'API key',
-    webSearchApiKeyHint:
-      'Encrypted in the app config directory; never written to the workspace.',
+    webSearchApiKeyHint: 'Encrypted in the app config directory; never written to the workspace.',
     webSearchApiKeyOptional: 'Optional',
     webSearchKeyRequired: 'Enter an API key for the selected source',
     webSearchEndpoint: 'Endpoint',
@@ -1462,7 +1474,19 @@ export const translations = {
     toolWebFetch: 'Read page',
     toolWebSearchContent: 'Read search results',
     toolSourceCheck: 'Source check',
-  },
+
+    // Detachable panels (auxiliary windows)
+    panelMenu: 'Panel actions',
+    panelDetach: 'Open in separate window',
+    panelDockBack: 'Restore to main window',
+    panelFocusWindow: 'Focus its window',
+    panelDetachedTitle: 'This panel is in a separate window',
+    panelDetachedHint: 'Close that window to bring it back here.',
+    panelDetachBlocked: 'The system blocked the new window',
+    panelDetachFailed: 'Could not detach the panel',
+    panelDetachedBadge: 'Detached',
+    panelDragHint: 'Drag {panel} outside the window to detach it'
+  }
 }
 
 export type TranslationKey = keyof typeof translations.zh

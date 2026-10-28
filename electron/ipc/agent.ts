@@ -43,9 +43,51 @@ export interface AgentIpcContext {
   pluginManager: PluginManager
   getMainWindow: () => BrowserWindow | null
   getDefaultPermissionLevel: () => unknown
+  getLanguage: () => 'zh' | 'en'
   logger: LoggerLike
   notificationText: () => { approval: string; complete: string; error: string }
   notify: (event: NotificationPayload) => void
+}
+
+/**
+ * 校验并归一化图像附件：格式 / 张数 / 单张与总大小统一处理，
+ * 超限明确报错而不是静默丢弃。chat 与 steer 共用。
+ */
+function normalizeChatImages(images: unknown): {
+  images: Array<{ data: string; mimeType: string }>
+  error?: string
+} {
+  const safeImages: Array<{ data: string; mimeType: string }> = []
+  if (images === undefined || images === null) return { images: safeImages }
+  if (!Array.isArray(images)) {
+    return { images: [], error: 'Images must be an array.' }
+  }
+  if (images.length > MAX_CHAT_IMAGES) {
+    return {
+      images: [],
+      error: `At most ${MAX_CHAT_IMAGES} images can be sent at once.`,
+    }
+  }
+  let totalChars = 0
+  for (const image of images) {
+    const data = (image as { data?: unknown } | null)?.data
+    const mimeType = (image as { mimeType?: unknown } | null)?.mimeType
+    if (typeof data !== 'string' || data.length === 0) {
+      return { images: [], error: 'Invalid image payload.' }
+    }
+    if (typeof mimeType !== 'string' || !CHAT_IMAGE_MIME.test(mimeType)) {
+      return { images: [], error: 'Unsupported image format.' }
+    }
+    if (data.length > MAX_IMAGE_BASE64_CHARS) {
+      return { images: [], error: 'Each image must be at most 10 MB.' }
+    }
+    totalChars += data.length
+    if (totalChars > MAX_TOTAL_IMAGE_BASE64_CHARS) {
+      return { images: [], error: 'Images exceed the total size limit.' }
+    }
+    safeImages.push({ data, mimeType })
+  }
+  return { images: safeImages }
 }
 
 export function registerAgentIpc(context: AgentIpcContext): void {
@@ -113,6 +155,7 @@ handleIpc('agent:initialize', async (_event, config: {
       },
       // 会话权限：全局只提供新会话的默认档位；无审批通道时 Agent 侧按拒绝处理
       getDefaultPermissionLevel: () => context.getDefaultPermissionLevel(),
+      getLanguage: () => context.getLanguage(),
       requestApproval: (request: unknown) => context.approvalBroker.request(request as any),
       resolveSessionRoot: (sessionId: string) => coordinator?.getSessionRoot(sessionId),
       isSessionOfWorkspace: (sessionId: string, headerCwd: string) => {
@@ -220,66 +263,6 @@ handleIpc(
   }
 )
 
-// 排队消息持久化（R-02）：按会话分组存 .pi-workbench/pending-messages.json
-// 旧版本可能带 behavior 字段，读取时忽略；排队消息统一表示“下一轮发送”。
-type PendingMessageRecord = { id: string; text: string }
-
-function sanitizePendingSessions(value: unknown): Record<string, PendingMessageRecord[]> {
-  const sessions: Record<string, PendingMessageRecord[]> = {}
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return sessions
-  for (const [sessionId, list] of Object.entries(value as Record<string, unknown>)) {
-    if (Object.keys(sessions).length >= 200) break
-    if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 128) continue
-    if (!Array.isArray(list)) continue
-    const items: PendingMessageRecord[] = []
-    for (const entry of list) {
-      if (items.length >= 50) break
-      if (!entry || typeof entry !== 'object') continue
-      const record = entry as Record<string, unknown>
-      const text = typeof record.text === 'string' ? record.text.slice(0, 20000) : ''
-      if (text.trim().length === 0) continue
-      items.push({
-        id:
-          typeof record.id === 'string' && record.id.length > 0 && record.id.length <= 128
-            ? record.id
-            : `pending-${items.length + 1}`,
-        text,
-      })
-    }
-    if (items.length > 0) sessions[sessionId] = items
-  }
-  return sessions
-}
-
-handleIpc('chat:pending:get', async (_event, workspaceDir: string) => {
-  try {
-    if (!isTrustedWorkspacePath(workspaceDir)) {
-      return { success: false, error: 'Workspace is not approved' }
-    }
-    const filePath = path.join(workspaceDir, '.pi-workbench', 'pending-messages.json')
-    const result = readJsonWithBackup<{ sessions?: unknown }>(filePath)
-    return { success: true, sessions: sanitizePendingSessions(result.data?.sessions) }
-  } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : String(error) }
-  }
-})
-
-handleIpc('chat:pending:set', async (_event, workspaceDir: string, sessions: unknown) => {
-  try {
-    if (!isTrustedWorkspacePath(workspaceDir)) {
-      return { success: false, error: 'Workspace is not approved' }
-    }
-    const dir = path.join(workspaceDir, '.pi-workbench')
-    await fs.mkdir(dir, { recursive: true })
-    await writeJsonAtomic(path.join(dir, 'pending-messages.json'), {
-      sessions: sanitizePendingSessions(sessions),
-    })
-    return { success: true }
-  } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : String(error) }
-  }
-})
-
 // Agent 聊天
 handleIpc(
   'agent:chat',
@@ -305,37 +288,11 @@ handleIpc(
       }
 
       // 图像附件：格式 / 张数 / 单张与总大小统一校验，超限明确报错而不是静默丢弃
-      const safeImages: Array<{ data: string; mimeType: string }> = []
-      if (images !== undefined && images !== null) {
-        if (!Array.isArray(images)) {
-          return { success: false, error: 'Images must be an array.' }
-        }
-        if (images.length > MAX_CHAT_IMAGES) {
-          return {
-            success: false,
-            error: `At most ${MAX_CHAT_IMAGES} images can be sent at once.`,
-          }
-        }
-        let totalChars = 0
-        for (const image of images) {
-          const data = (image as { data?: unknown } | null)?.data
-          const mimeType = (image as { mimeType?: unknown } | null)?.mimeType
-          if (typeof data !== 'string' || data.length === 0) {
-            return { success: false, error: 'Invalid image payload.' }
-          }
-          if (typeof mimeType !== 'string' || !CHAT_IMAGE_MIME.test(mimeType)) {
-            return { success: false, error: 'Unsupported image format.' }
-          }
-          if (data.length > MAX_IMAGE_BASE64_CHARS) {
-            return { success: false, error: 'Each image must be at most 10 MB.' }
-          }
-          totalChars += data.length
-          if (totalChars > MAX_TOTAL_IMAGE_BASE64_CHARS) {
-            return { success: false, error: 'Images exceed the total size limit.' }
-          }
-          safeImages.push({ data, mimeType })
-        }
+      const imageCheck = normalizeChatImages(images)
+      if (imageCheck.error) {
+        return { success: false, error: imageCheck.error }
       }
+      const safeImages = imageCheck.images
 
       console.log('[Main] Sending message to agent:', message.substring(0, 100))
       if (workspaceDir) {
@@ -498,25 +455,44 @@ handleIpc(
   }
 )
 
-// 运行中插话：把消息注入当前轮
-handleIpc('agent:steer', async (_event, workspaceDir: string, sessionId: string, message: string) => {
-  try {
-    if (!isTrustedWorkspacePath(workspaceDir)) {
-      return { success: false, error: 'Workspace is not approved' }
+// 运行中插话：把消息注入当前轮（允许纯图片、空文本）
+handleIpc(
+  'agent:steer',
+  async (
+    _event,
+    workspaceDir: string,
+    sessionId: string,
+    message: unknown,
+    images?: unknown
+  ) => {
+    try {
+      if (!isTrustedWorkspacePath(workspaceDir)) {
+        return { success: false, error: 'Workspace is not approved' }
+      }
+      if (typeof message !== 'string') {
+        return { success: false, error: 'Message is empty' }
+      }
+      const text = message.trim()
+      const imageCheck = normalizeChatImages(images)
+      if (imageCheck.error) return { success: false, error: imageCheck.error }
+      if (!text && imageCheck.images.length === 0) {
+        return { success: false, error: 'Message is empty' }
+      }
+      const agent = context.agentRegistry.get(workspaceDir)
+      if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
+      if (typeof agent.steer !== 'function') {
+        return { success: false, error: 'Steering is not supported by this agent' }
+      }
+      return await agent.steer(
+        sessionId,
+        text,
+        imageCheck.images.length > 0 ? imageCheck.images : undefined
+      )
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
-    if (typeof message !== 'string' || !message.trim()) {
-      return { success: false, error: 'Message is empty' }
-    }
-    const agent = context.agentRegistry.get(workspaceDir)
-    if (!agent) return { success: false, error: 'Agent not initialized for this workspace' }
-    if (typeof agent.steer !== 'function') {
-      return { success: false, error: 'Steering is not supported by this agent' }
-    }
-    return await agent.steer(sessionId, message)
-  } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : String(error) }
   }
-})
+)
 
 // Agent 中止请求（按会话；不传 sessionId 时中止该工作区全部会话）
 handleIpc('agent:abort', async (_event, workspaceDir?: string, sessionId?: string) => {

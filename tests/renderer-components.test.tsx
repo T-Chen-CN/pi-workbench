@@ -9,6 +9,7 @@ import { MarkdownBody } from '../src/components/AgentMarkdown'
 import { AgentParts } from '../src/components/AgentTrace'
 import { useWorkspaceStore } from '../src/store/workspaceStore'
 import { useChatStore, conversationKey } from '../src/store/chatStore'
+import type { NewChatAttachment } from '../src/store/chatStore'
 import { editorStoreFor, resetEditorStores } from '../src/store/editorStore'
 import { useSelectionStore } from '../src/store/selectionStore'
 import { useSessionStore } from '../src/store/sessionStore'
@@ -18,6 +19,7 @@ import { useI18nStore } from '../src/store/i18nStore'
 import { translations } from '../src/i18n/translations'
 import { api } from '../src/api'
 import { piAgentAPI } from '../src/api/piAgentAPI'
+import { clearPanelUi } from '../src/panelHost/panelUiState'
 import type { ApiConfig } from '../src/types/electron'
 
 vi.mock('../src/api', () => ({
@@ -35,8 +37,6 @@ vi.mock('../src/api', () => ({
     exists: vi.fn(),
     stat: vi.fn(),
     onFsChanged: vi.fn(() => () => {}),
-    getPendingMessages: vi.fn(),
-    setPendingMessages: vi.fn(),
     getSettings: vi.fn(),
     saveSettings: vi.fn(),
   },
@@ -152,6 +152,14 @@ const session: SessionSummary = {
   updatedAt: 2,
 }
 const sessionKey = conversationKey('/ws', 's1')
+const imageAttachment: NewChatAttachment = {
+  kind: 'image',
+  path: '',
+  name: 'shot.png',
+  mimeType: 'image/png',
+  data: 'AAAA',
+  size: 3,
+}
 
 beforeEach(() => {
   useChatStore.getState().reset()
@@ -217,8 +225,6 @@ beforeEach(() => {
   vi.mocked(piAgentAPI.openToolResultExternally).mockResolvedValue({ success: false })
   vi.mocked(piAgentAPI.listBranches).mockResolvedValue({ success: true, groups: [] })
   vi.mocked(piAgentAPI.switchBranch).mockResolvedValue({ success: false })
-  vi.mocked(api.getPendingMessages).mockResolvedValue({ success: true, sessions: {} })
-  vi.mocked(api.setPendingMessages).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.steer).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.respondApproval).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.sessionsClose).mockResolvedValue({ success: true })
@@ -297,19 +303,9 @@ describe('ChatPanel', () => {
     // 预览层挂在 body 上，不受聊天列表 transform / overflow 限制
     expect(dialog.parentElement).toBe(document.body)
 
-    fireEvent.keyDown(window, { key: 'Escape' })
+    // 预览层监听在面板所在文档上（拆窗后为子文档），事件从焦点元素冒泡上来
+    fireEvent.keyDown(document.body, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-  })
-
-  it('restores pending messages persisted before restart', async () => {
-    vi.mocked(api.getPendingMessages).mockResolvedValue({
-      success: true,
-      sessions: { s1: [{ id: 'p1', text: 'resume this turn' }] },
-    })
-
-    render(<ChatPanel workspacePath="/ws" />)
-
-    expect(await screen.findByText('resume this turn')).toBeTruthy()
   })
 
   it('shows the stop button while running with an empty input', async () => {
@@ -374,7 +370,7 @@ describe('ChatPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: translations.zh.send }))
 
     await waitFor(() =>
-      expect(piAgentAPI.steer).toHaveBeenCalledWith('/ws', 's1', 'insert this')
+      expect(piAgentAPI.steer).toHaveBeenCalledWith('/ws', 's1', 'insert this', undefined)
     )
     expect(useChatStore.getState().conversations[sessionKey].pending).toHaveLength(0)
   })
@@ -389,11 +385,183 @@ describe('ChatPanel', () => {
     fireEvent.click(await screen.findByRole('button', { name: translations.zh.insertNow }))
 
     await waitFor(() =>
-      expect(piAgentAPI.steer).toHaveBeenCalledWith('/ws', 's1', 'send me now')
+      expect(piAgentAPI.steer).toHaveBeenCalledWith('/ws', 's1', 'send me now', undefined)
     )
     await waitFor(() =>
       expect(useChatStore.getState().conversations[sessionKey].pending).toHaveLength(0)
     )
+  })
+
+  it('steers a queued message together with its images', async () => {
+    useChatStore.getState().ensureConversation(sessionKey)
+    useChatStore.getState().addPending(sessionKey, '', [
+      { data: 'AAAA', mimeType: 'image/png' },
+    ])
+    render(<ChatPanel workspacePath="/ws" />)
+    await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+
+    act(() => useChatStore.getState().setLoading(sessionKey, true))
+    expect(await screen.findByText(translations.zh.pendingImageCount.replace('{count}', '1'))).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: translations.zh.insertNow }))
+
+    await waitFor(() =>
+      expect(piAgentAPI.steer).toHaveBeenCalledWith('/ws', 's1', '', [
+        { data: 'AAAA', mimeType: 'image/png' },
+      ])
+    )
+    const messages = useChatStore.getState().conversations[sessionKey].messages
+    expect(messages[messages.length - 1].images).toEqual([
+      { data: 'AAAA', mimeType: 'image/png' },
+    ])
+  })
+
+  it('consumes image attachments as soon as the message is sent', async () => {
+    const captured: { resolve: ((value: { success: boolean; response?: string }) => void) | null } =
+      { resolve: null }
+    vi.mocked(api.apiConfigGet).mockResolvedValue({
+      success: true,
+      config: {
+        ...configWithKey,
+        models: [{ id: 'test-model', contextWindow: 128_000, image: true }],
+      },
+    })
+    vi.mocked(piAgentAPI.chat).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          captured.resolve = resolve
+        })
+    )
+
+    render(<ChatPanel workspacePath="/ws" />)
+    const textarea = await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+    await waitFor(() => expect((textarea as HTMLTextAreaElement).disabled).toBe(false))
+
+    act(() => {
+      useChatStore.getState().ensureConversation(sessionKey)
+      useChatStore.getState().addAttachment(sessionKey, imageAttachment)
+    })
+    fireEvent.change(textarea, { target: { value: 'describe this' } })
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.send }))
+
+    await waitFor(() =>
+      expect(piAgentAPI.chat).toHaveBeenCalledWith(
+        'describe this',
+        expect.anything(),
+        '/ws',
+        's1',
+        [{ data: 'AAAA', mimeType: 'image/png' }]
+      )
+    )
+    // 流式还在进行时缩略图已消失
+    expect(useChatStore.getState().conversations[sessionKey].attachments).toEqual([])
+
+    act(() => captured.resolve?.({ success: true, response: 'done' }))
+    await waitFor(() =>
+      expect(useChatStore.getState().conversations[sessionKey].isLoading).toBe(false)
+    )
+    expect(useChatStore.getState().conversations[sessionKey].attachments).toEqual([])
+  })
+
+  it('keeps images added while streaming for the next message', async () => {
+    const captured: { resolve: ((value: { success: boolean; response?: string }) => void) | null } =
+      { resolve: null }
+    vi.mocked(api.apiConfigGet).mockResolvedValue({
+      success: true,
+      config: {
+        ...configWithKey,
+        models: [{ id: 'test-model', contextWindow: 128_000, image: true }],
+      },
+    })
+    vi.mocked(piAgentAPI.chat).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          captured.resolve = resolve
+        })
+    )
+
+    render(<ChatPanel workspacePath="/ws" />)
+    const textarea = await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+    await waitFor(() => expect((textarea as HTMLTextAreaElement).disabled).toBe(false))
+
+    act(() => {
+      useChatStore.getState().ensureConversation(sessionKey)
+      useChatStore.getState().addAttachment(sessionKey, imageAttachment)
+    })
+    fireEvent.change(textarea, { target: { value: 'first' } })
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.send }))
+    await waitFor(() => expect(piAgentAPI.chat).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      useChatStore.getState().addAttachment(sessionKey, {
+        ...imageAttachment,
+        name: 'second.png',
+        data: 'BBBB',
+      })
+    })
+
+    act(() => captured.resolve?.({ success: true, response: 'ok' }))
+    await waitFor(() =>
+      expect(useChatStore.getState().conversations[sessionKey].isLoading).toBe(false)
+    )
+    expect(
+      useChatStore.getState().conversations[sessionKey].attachments.map((item) => item.data)
+    ).toEqual(['BBBB'])
+  })
+
+  it('sends an image-only message without text', async () => {
+    vi.mocked(api.apiConfigGet).mockResolvedValue({
+      success: true,
+      config: {
+        ...configWithKey,
+        models: [{ id: 'test-model', contextWindow: 128_000, image: true }],
+      },
+    })
+    vi.mocked(piAgentAPI.chat).mockResolvedValue({ success: true, response: 'ok' })
+
+    render(<ChatPanel workspacePath="/ws" />)
+    await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+    act(() => {
+      useChatStore.getState().ensureConversation(sessionKey)
+      useChatStore.getState().addAttachment(sessionKey, imageAttachment)
+    })
+
+    const send = await screen.findByRole('button', { name: translations.zh.send })
+    await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(send)
+
+    await waitFor(() =>
+      expect(piAgentAPI.chat).toHaveBeenCalledWith('', expect.anything(), '/ws', 's1', [
+        { data: 'AAAA', mimeType: 'image/png' },
+      ])
+    )
+  })
+
+  it('queues an image-only message with its images', async () => {
+    vi.mocked(api.apiConfigGet).mockResolvedValue({
+      success: true,
+      config: {
+        ...configWithKey,
+        models: [{ id: 'test-model', contextWindow: 128_000, image: true }],
+      },
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+    await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+    act(() => {
+      useChatStore.getState().ensureConversation(sessionKey)
+      useChatStore.getState().addAttachment(sessionKey, imageAttachment)
+      useChatStore.getState().setLoading(sessionKey, true)
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: translations.zh.send }))
+
+    await waitFor(() =>
+      expect(useChatStore.getState().conversations[sessionKey].pending[0]?.images).toEqual([
+        { data: 'AAAA', mimeType: 'image/png' },
+      ])
+    )
+    // 入队即消费，附件不会留在输入框
+    expect(useChatStore.getState().conversations[sessionKey].attachments).toEqual([])
   })
 
   it('suggests running tests with the detected workspace type', async () => {
@@ -478,7 +646,8 @@ describe('ChatPanel', () => {
 
     expect(await screen.findByRole('menuitemradio', { name: /test-model/ })).toBeTruthy()
 
-    fireEvent.keyDown(window, { key: 'Escape' })
+    // PopoverMenu 监听在面板所在 document 上，事件从焦点元素冒泡上来
+    fireEvent.keyDown(document.body, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('menuitemradio')).toBeNull())
     expect(document.activeElement).toBe(trigger)
   })
@@ -1213,6 +1382,30 @@ describe('FileExplorer', () => {
     )
   })
 
+  it('restores expanded folders after the panel is remounted in another window', async () => {
+    const workspace = '/ws-remount'
+    clearPanelUi(workspace)
+    vi.mocked(api.listDirectory).mockImplementation(async (dirPath: string) => {
+      if (dirPath === workspace) {
+        return { success: true, items: [{ name: 'src', path: `${workspace}/src`, isDirectory: true }] }
+      }
+      if (dirPath === `${workspace}/src`) {
+        return { success: true, items: [{ name: 'index.ts', path: `${workspace}/src/index.ts`, isDirectory: false }] }
+      }
+      return { success: true, items: [] }
+    })
+
+    const first = render(<FileExplorer workspacePath={workspace} />)
+    fireEvent.click(await screen.findByText('src'))
+    await screen.findByText('index.ts')
+    first.unmount()
+
+    render(<FileExplorer workspacePath={workspace} />)
+
+    expect(await screen.findByText('index.ts')).toBeTruthy()
+    clearPanelUi(workspace)
+  })
+
   it('moves keyboard focus through sort options and toggles', async () => {
     vi.mocked(api.listDirectory).mockResolvedValue({ success: true, items: [] })
 
@@ -1230,7 +1423,7 @@ describe('FileExplorer', () => {
       translations.zh.sortReverse,
       translations.zh.sortByName,
     ]) {
-      fireEvent.keyDown(window, { key: 'ArrowDown' })
+      fireEvent.keyDown(document.body, { key: 'ArrowDown' })
       expect(focusedText()).toBe(label)
     }
   })
