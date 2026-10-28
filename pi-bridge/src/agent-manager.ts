@@ -74,7 +74,8 @@ import {
 } from './environment.js'
 import {
   buildTitlePrompt,
-  normalizeSessionTitle,
+  isEchoOfUserText,
+  parseTitleResponse,
   requestSessionTitle,
 } from './session-title.js'
 import { buildSessionMessagesFromEntries } from './session-history.js'
@@ -2485,14 +2486,16 @@ export class AgentManager {
       buildTitlePrompt(turn.userText, turn.assistantText),
       this.logger
     )
-    const title = raw ? normalizeSessionTitle(raw) : ''
-    if (!title) {
+    const title = raw ? parseTitleResponse(raw) : ''
+    // 空结果或直接复述用户原话（等于回退标题，没有信息量）都算不可用
+    if (!title || isEchoOfUserText(title, turn.userText)) {
       // 结果不可用（推理型模型可能把预算全花在 reasoning 上）不算「已确定」：
       // 留机会给下一轮，但最多试 TITLE_MAX_FAILURES 次，避免每轮都打一次请求
       runtime.titleFailures += 1
       if (runtime.titleFailures < TITLE_MAX_FAILURES) runtime.titleAttempted = false
       this.logger.warn(
-        `[Agent Manager] Session title unavailable (${runtime.titleFailures}/${TITLE_MAX_FAILURES}), keeping the fallback title`
+        `[Agent Manager] Session title unavailable (${runtime.titleFailures}/${TITLE_MAX_FAILURES}), keeping the fallback title`,
+        title ? `rejected: ${JSON.stringify(title)}` : ''
       )
       return
     }
@@ -2522,8 +2525,11 @@ export class AgentManager {
           firstUser = message
           continue
         }
-        if (!firstUser || message.role !== 'assistant' || assistantText) continue
-        assistantText = this.messageText(message.content).trim()
+        if (!firstUser || message.role !== 'assistant') continue
+        // 取最后一条带文本的回复：环境说明（工作目录 / 规矩 / 工作树状态）集中在开头，
+        // 结论段才描述这段对话到底做了什么
+        const text = this.messageText(message.content).trim()
+        if (text) assistantText = text
       }
     } catch (error) {
       this.logger.warn('[Agent Manager] Failed to read the title source messages:', error)

@@ -1632,6 +1632,77 @@ describe('AgentManager sessions', () => {
     expect(onSessionTitle).not.toHaveBeenCalled()
   })
 
+  it('names the topic instead of the environment notes in the reply', async () => {
+    // 真实形状：用户只问一句，助手回复前半段是环境说明（工作目录 / 规矩 / 工作树状态）
+    const session = createFakeSession(async (fake) => {
+      fake.messages.push({ role: 'user', content: '你是谁？' })
+      fake.messages.push({
+        role: 'assistant',
+        content: [
+          {
+            type: 'text',
+            text: [
+              '我是 pi 里的编码智能体（AI 编程助手），可以读写文件、跑命令。',
+              '',
+              '具体到当前环境：',
+              '',
+              '- **工作目录**：`F:\\DSH\\DSH二次开发-2`，这是 DSH 最小核心后端。',
+              '- **工作树状态**：主工作树、分支 `main`，有 35 处未提交改动。',
+            ].join('\n'),
+          },
+        ],
+      })
+    })
+    primeSdk(session)
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '{"title": "助手自我介绍"}' } }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const onSessionTitle = vi.fn()
+
+    await manager.initialize(makeConfig({ onSessionTitle }))
+    await manager.chat('你是谁？')
+    await until(() => onSessionTitle.mock.calls.length > 0)
+
+    const prompt = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).messages[0].content as string
+    expect(prompt).toContain('我是 pi 里的编码智能体')
+    expect(prompt).not.toContain('工作目录')
+    expect(prompt).not.toContain('DSH')
+    expect(onSessionTitle).toHaveBeenCalledWith('session-1', '助手自我介绍')
+  })
+
+  it('rejects a title that just repeats the user message', async () => {
+    const session = createFakeSession(async (fake, message) => {
+      fake.messages.push({ role: 'user', content: message })
+      fake.messages.push({ role: 'assistant', content: `reply to ${message}` })
+    })
+    primeSdk(session)
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '{"title": "你是谁？"}' } }] }),
+      })
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '{"title": "助手自我介绍"}' } }] }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+    const onSessionTitle = vi.fn()
+
+    await manager.initialize(makeConfig({ onSessionTitle }))
+    await manager.chat('你是谁？')
+    await until(() => fetchMock.mock.calls.length === 1)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // 复述原话等于回退标题，不算确定，也不耗完机会
+    expect(onSessionTitle).not.toHaveBeenCalled()
+
+    await manager.chat('再说一次')
+    await until(() => onSessionTitle.mock.calls.length > 0)
+    expect(onSessionTitle).toHaveBeenCalledWith('session-1', '助手自我介绍')
+  })
+
   it('reads the title source from the session record instead of the compacted context', async () => {
     const session = createFakeSession(async (fake) => {
       fake.messages.push({ role: 'user', content: 'next message' })
