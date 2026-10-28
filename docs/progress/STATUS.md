@@ -4,7 +4,7 @@
 
 ## 最新状态
 
-**更新时间**: 2026-10-27
+**更新时间**: 2026-10-28
 
 - ✅ **Phase 0: MVP** — Electron 框架、文件管理、编辑器、Diff、国际化
 - ✅ **便携式架构** — 所有应用数据自包含在应用目录内
@@ -17,7 +17,7 @@
 
 ## 当前版本
 
-- **版本**: 0.6.3
+- **版本**: 0.6.4
 - **框架**: Electron 44 + React 19 + TypeScript
 - **Agent**: `@earendil-works/pi-coding-agent` 1.3.0
 - **状态**: Phase 6 持续优化
@@ -193,6 +193,7 @@
 - ✅ 2026-10-27 发布 v0.6.2：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含启动页与单窗口形变（420×260 → 1 秒放大到 1200×800）、安装包瘦身与安装/卸载加固、Windows 差分更新恢复、Git 面板自动同步与会话 id 保留
 - ✅ 2026-10-27 Agent 空闲超时：移除 10 分钟整轮 wall-clock 上限，改为“模型静默 120s”才判定卡死；工具执行、审批等待、`toolcall_delta` 与工具输出均计入心跳或挂起计时，长任务不再被误杀；用户主动停止与卡死收尾分离（仅后者重建运行时），`AgentChatOptions.timeoutMs` 删除。type-check / lint / 用例 / build 通过
 - ✅ 2026-10-27 发布 v0.6.3：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含 Agent 空闲超时（工具执行 / 审批等待不计时，长任务不再被 10 分钟误杀）、会话 Git 面板清理幽灵 worktree 记录（目录已删的条目可遗忘，不可用的条目不再允许切换）
+- ✅ 2026-10-28 发布 v0.6.4：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含按模型配置上下文窗口（64K / 128K / 256K / 1M 档位 + 图像能力表，`maxTokens` 随档位并受目录值钳制，旧 `availableModels` / `imageModels` 读取时迁移，会话运行中拒绝重建性质的保存）、窄侧栏提交列表两行网格与按实测宽度折叠 refs、Git 自动同步把 fetch 事件与 watcher 竞速解耦（新提交不再丢失 `reason: fetch`）、聊天栏变宽时编辑器列正确收缩（`min-w-0` + `overflow-hidden`，聊天栏宽度受容器与编辑器预留约束）
 - ✅ 大文件模式与虚滚动（2026-10-21：聊天 / Diff / 文件树虚拟滚动，>2MB 关闭换行折叠，>10MB 只读）
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
@@ -202,4 +203,4 @@
 
 ---
 
-**更新时间**: 2026-10-27
+**更新时间**: 2026-10-28

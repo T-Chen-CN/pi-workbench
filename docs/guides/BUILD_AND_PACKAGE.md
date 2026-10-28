@@ -1,6 +1,6 @@
 # 构建与打包指南
 
-**适用版本**: 0.6.3（Phase 6 持续）
+**适用版本**: 0.6.4（Phase 6 持续）
 **最后更新**: 2026-10-27
 
 ---
@@ -136,8 +136,8 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
 
 ## 4.1 发布与自动更新（GitHub Releases）
 
-- 发布前先把 `package.json` 的 `version` 提升到目标版本（当前 `0.6.3`）。
-- 推送 `v*` 标签（例如 `git tag v0.6.3 && git push origin v0.6.3`）会触发
+- 发布前先把 `package.json` 的 `version` 提升到目标版本（当前 `0.6.4`）。
+- 推送 `v*` 标签（例如 `git tag v0.6.4 && git push origin v0.6.4`）会触发
   `.github/workflows/release.yml`：
   1. `verify-version` 校验标签与 `package.json` 版本一致，不一致直接失败；
   2. `build` 在 Windows / macOS / Linux 三个 runner 上构建 NSIS、universal dmg、AppImage；
