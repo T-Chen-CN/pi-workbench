@@ -501,7 +501,11 @@ describe('WorktreeCoordinator 依赖安装（GIT-118）', () => {
 
     const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
     const views = await coordinator!.listWorktrees()
-    const ext = views.find((view) => view.path === external)
+    // 视图里的路径是 canonicalise 过的：macOS 临时目录在 /var → /private/var 后面，
+    // Windows runner 的 TEMP 是 8.3 短名（RUNNER~1），拿未规范化的 tmpdir 拼出来的路径比不到
+    const canonicalExternal = await fs.realpath(external)
+    const ext = views.find((view) => view.path === canonicalExternal)
+    expect(ext, `未找到工作树视图：${canonicalExternal}`).toBeDefined()
     expect(ext?.deps.state).toBe('idle')
     // 没人绑定它：不应启动安装，更不能往用户自己的 checkout 里写 node_modules
     await coordinator!.listWorktrees()
