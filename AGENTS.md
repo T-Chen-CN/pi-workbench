@@ -691,6 +691,8 @@ async function initAgent(config: ApiConfig) {
 - ✅ 打开中的会话标签与激活会话：`{workspaceDir}/.pi-workbench/chat-tabs.json`
 - ✅ 打开中的编辑器标签与当前文件：`{workspaceDir}/.pi-workbench/editor-tabs.json`（只存相对路径；显式关闭工作区不清除，重新打开时恢复）
 - ✅ 会话标题：`session_info` 条目；首轮回复后由模型生成一次，手动重命名优先
+- ✅ 历史与导出的单一真相源是**会话记录**（JSONL entry 沿 `parentId` 的完整分支，`sessionManager.getBranch()`），不是压缩后的模型上下文（`session.messages`）：聊天面板历史、md / html 导出、会话摘要都由 `pi-bridge/src/session-entries.ts` 的 `activeTimeline()` 重建，压缩前历史不丢失；`context_edit` 按最后一次替换生效（`replacement === null` 表示该条被省略，Pi 的溢出恢复会这样隐藏失败尝试）。JSONL 导出仍是原文件直接拷贝。决策见 [ADR-003](docs/decisions/ADR-003-session-record-single-source.md)。
+- ✅ 上下文压缩点（`compaction` 条目）在时间线上是一个 `AgentTracePart`（`type: 'compaction'`），实时与重载后位置一致：落在发生它的那一轮消息的 `parts` 里，不单独追加消息；文案只有「上下文已压缩 · 压缩前 N tokens」与「上下文已压缩」两档，不区分手动 / 自动。
 - ✅ 同工作区多个会话可并行运行（每个会话独立 `AgentSession`，共享 `ModelRuntime` 与环境租约）
 - 会话 API：`agent:sessions:list/open/create/close/rename/delete`，流式事件带 `workspaceDir + sessionId + requestId`
 
