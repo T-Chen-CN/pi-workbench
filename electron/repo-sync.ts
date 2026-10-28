@@ -46,6 +46,8 @@ interface RepoEntry {
   workspaces: Map<string, string>
   watcher?: RepoWatcher
   fetcher?: AutoFetcher
+  /** 基线快照 → 启动监听的一次性任务；保证处理变化前快照已就绪 */
+  startPromise?: Promise<void>
   lastSnapshot: string | null
   chain: Promise<void>
   disposed: boolean
@@ -153,16 +155,17 @@ export class RepoSyncManager {
     const repo = await getRepoInfo(workspaceDir)
     if (!repo || repo.bare || !repo.root) return
 
-    let entry = this.entries.get(repo.root)
-    if (!entry) {
-      entry = this.createEntry(repo)
-      this.entries.set(repo.root, entry)
-    }
+    const entry = this.ensureEntry(repo)
     entry.workspaces.set(key, workspaceDir)
     this.workspaceRepos.set(key, repo.root)
+    await this.startEntry(entry)
   }
 
-  private createEntry(repo: GitRepoInfo): RepoEntry {
+  /** 同步登记仓库，避免并发 attach 建成两个 entry；监听等基线快照就绪后再启动 */
+  private ensureEntry(repo: GitRepoInfo): RepoEntry {
+    const existing = this.entries.get(repo.root)
+    if (existing) return existing
+
     const entry: RepoEntry = {
       repoRoot: repo.root,
       gitDir: repo.gitDir || path.join(repo.root, '.git'),
@@ -172,26 +175,46 @@ export class RepoSyncManager {
       chain: Promise.resolve(),
       disposed: false,
     }
-
-    entry.watcher = new RepoWatcher({
-      gitDir: entry.gitDir,
-      commonDir: entry.commonDir,
-      onScopes: (scopes) => this.enqueue(entry, scopes, 'watch'),
-      logger: this.context?.logger,
-    })
-    entry.fetcher = new AutoFetcher({
-      repoRoot: entry.repoRoot,
-      canFetch: () => this.canFetch(entry),
-      fetch: (root, options) => fetchRemote(root, { interactive: options.interactive }),
-      onFetched: () => this.enqueue(entry, ['refs'], 'fetch'),
-      logger: this.context?.logger,
-    })
-
-    void this.refreshSnapshot(entry)
-    entry.watcher.start()
-    entry.fetcher.start()
-    this.context?.logger.info(`[RepoSync] Watching repository: ${entry.repoRoot}`)
+    this.entries.set(repo.root, entry)
     return entry
+  }
+
+  /**
+   * 先取基线快照，再启动 watcher / fetcher。
+   * 反过来的话快照是游离 promise：落在“变化已落地、fetch 后尚未比对”之间时，
+   * 这次真实变化会被当成已知状态吞掉；落在比对之后又会用旧值覆盖 lastSnapshot。
+   */
+  private startEntry(entry: RepoEntry): Promise<void> {
+    if (entry.startPromise) return entry.startPromise
+
+    entry.startPromise = (async () => {
+      entry.lastSnapshot = await readRefsSnapshot(entry.repoRoot).catch(() => null)
+      if (entry.disposed) return
+
+      entry.watcher = new RepoWatcher({
+        gitDir: entry.gitDir,
+        commonDir: entry.commonDir,
+        onScopes: (scopes) => this.enqueue(entry, scopes, 'watch'),
+        logger: this.context?.logger,
+      })
+
+      /** fetch 之前的快照：watcher 可能先一步广播同一变化，fetch 事件不能因此被当成重复 */
+      let fetchBaseline: string | null = null
+      entry.fetcher = new AutoFetcher({
+        repoRoot: entry.repoRoot,
+        canFetch: () => this.canFetch(entry),
+        fetch: async (root, options) => {
+          fetchBaseline = await readRefsSnapshot(root).catch(() => null)
+          return fetchRemote(root, { interactive: options.interactive })
+        },
+        onFetched: () => this.enqueue(entry, ['refs'], 'fetch', fetchBaseline),
+        logger: this.context?.logger,
+      })
+      entry.watcher.start()
+      entry.fetcher.start()
+      this.context?.logger.info(`[RepoSync] Watching repository: ${entry.repoRoot}`)
+    })()
+    return entry.startPromise
   }
 
   private disposeEntry(entry: RepoEntry): void {
@@ -209,34 +232,34 @@ export class RepoSyncManager {
   private enqueue(
     entry: RepoEntry,
     scopes: RepoChangeScope[],
-    reason: GitChangedPayload['reason']
+    reason: GitChangedPayload['reason'],
+    baseline?: string | null
   ): void {
     entry.chain = entry.chain
-      .then(() => this.processScopes(entry, scopes, reason))
+      .then(() => this.processScopes(entry, scopes, reason, baseline))
       .catch((error) => this.context?.logger.warn('[RepoSync] Failed to process change:', error))
   }
 
   private async processScopes(
     entry: RepoEntry,
     scopes: RepoChangeScope[],
-    reason: GitChangedPayload['reason']
+    reason: GitChangedPayload['reason'],
+    baseline?: string | null
   ): Promise<void> {
     if (entry.disposed) return
     let effective = scopes
     if (scopes.includes('refs')) {
       const snapshot = await readRefsSnapshot(entry.repoRoot)
-      if (snapshot === entry.lastSnapshot) {
+      // fetch 与“fetch 之前的快照”比对：期间 watcher 可能已先广播并更新了 lastSnapshot，
+      // 若仍用 lastSnapshot 作基准，一次真正带回新提交的 fetch 会被当成重复而丢掉 fetch 事件
+      const reference = baseline === undefined ? entry.lastSnapshot : baseline
+      entry.lastSnapshot = snapshot
+      if (snapshot === reference) {
         effective = scopes.filter((scope) => scope !== 'refs')
-      } else {
-        entry.lastSnapshot = snapshot
       }
     }
     if (effective.length === 0) return
     this.broadcast(entry, effective, reason)
-  }
-
-  private async refreshSnapshot(entry: RepoEntry): Promise<void> {
-    entry.lastSnapshot = await readRefsSnapshot(entry.repoRoot).catch(() => null)
   }
 
   private broadcast(
