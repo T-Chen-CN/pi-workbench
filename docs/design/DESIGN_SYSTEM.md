@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.41 |
+| 文档版本 | v1.42 |
 | 状态 | Active（正式规范） |
 | 最后更新 | 2026-10-28 |
 | 适用范围 | 渲染进程全部 UI、Monaco / xterm 主题、应用主题设置 |
@@ -397,6 +397,19 @@
 - `role="menu"` 打开时聚焦当前项，Esc 关闭并把焦点还给触发器；点击外部关闭但不抢回焦点。
 - 菜单宽度使用 Tailwind 标准宽度（`w-36` / `w-56` / `w-64`），不以内容撑开导致面板变形。
 
+### 5.11 OverlayButton
+
+浮在内容之上的图标按钮（内容区右下角等），位于 `src/components/ui.tsx`。
+
+| Prop | 类型 | 说明 |
+|---|---|---|
+| `icon` | `LucideIcon` | 必填，14px |
+| `label` | `string` | 必填，同时用于 `aria-label` 和 `title` |
+| `className` | `string?` | 只用来放定位（如 `absolute bottom-4 right-4 z-10`） |
+| 其余 | `ButtonHTMLAttributes` | 原生属性透传（`data-testid` 等） |
+
+**形态**：28×28px、2px 圆角、`bg-raised/90` + `border-rule-control` + `shadow-print`；hover / focus-visible 转为 `bg-raised` + 满墨 `border-line` + `text-ink`。定位与避让规则见 6.15。
+
 ---
 
 ## 6. 页面与交互模式
@@ -450,11 +463,11 @@
 
 **标签条**：高度 34px、`bg-panel`；图标按类型区分（`FileText` / `Globe` / `Image` / `Film` / `Music` / `FileJson` / `FileCode`），激活标签图标转 `accent`。脏标记仍为 6px `accent` 圆点，保存中显示 10px `Loader2`。
 
-**视图切换**：只在可切源码的类型上出现，位于标签条最右端，是单个 ghost `IconButton`（sm），图标与名称都指向**将要切换到的**形态：阅读视图下为 `Code` +「源码视图」，源码视图下为 `Eye` +「阅读视图」。不使用 `active` 填充，当前形态由内容本身表达。切换只改呈现：**阅读视图与 Monaco 都常驻、只切换显隐**（撤销栈、光标、滚动、iframe 状态全部保留）。Markdown / HTML 打开后在空闲时段预热 Monaco 模块，避免第一次切到源码时现等加载；阅读视图隐藏期间冻结解析结果，源码视图里的每个按键不会触发重排。
+**视图切换**：只在可切源码的类型（Markdown / HTML）上出现，浮在编辑器内容区**右下角**（`absolute bottom-4 right-4 z-10`，`OverlayButton`，28px），阅读视图与源码视图共用同一个落点、切换时不跳动；规则见 6.15。**不再放在标签条里**——标签条是横向滚动容器，标签一多就会把最右端的按钮挤出可视区。图标与名称都指向**将要切换到的**形态：阅读视图下为 `Code` +「源码视图」，源码视图下为 `Eye` +「阅读视图」。不使用 `active` 填充，当前形态由内容本身表达。切换只改呈现：**阅读视图与 Monaco 都常驻、只切换显隐**（撤销栈、光标、滚动、iframe 状态全部保留）。Markdown / HTML 打开后在空闲时段预热 Monaco 模块，避免第一次切到源码时现等加载；阅读视图隐藏期间冻结解析结果，源码视图里的每个按键不会触发重排。
 
 **Markdown 阅读视图**
 
-- 版心 `w-full max-w-[64rem] mx-auto px-8 py-6`：**随编辑区宽度自适应**，超宽屏才封顶 64rem 居中；正文 14px / 1.85（`type-reading`），标题沿用 display 字体；首尾段落 margin 折叠，图片 `max-width: 100%`。不要用 `ch` 定宽——版心自身的 `font-size` 不是正文的 14px，`ch` 会算出远小于预期的列宽。
+- 版心 `w-full max-w-[64rem] mx-auto px-8 pt-6 pb-12`：**随编辑区宽度自适应**，超宽屏才封顶 64rem 居中；正文 14px / 1.85（`type-reading`），标题沿用 display 字体；首尾段落 margin 折叠，图片 `max-width: 100%`。不要用 `ch` 定宽——版心自身的 `font-size` 不是正文的 14px，`ch` 会算出远小于预期的列宽。底部 `pb-12` 是为右下角视图切换浮层留位（见 6.15），不缩小正文列宽。
 - 代码块沿用聊天稿纸的样式（`bg-sunken` + 2px `accent` 左边线 + 允许换行），不出现横向滚动条：阅读视图不覆盖 `white-space`。
 - frontmatter 单独成块，等宽 11.5px、`ink-muted`、`bg-sunken` 底，不渲染成正文。
 - **块级就地编辑**：每个顶层块悬停 / 聚焦时右上角出现 `Pencil` 图标按钮（「编辑此块」）；点击后该块的**原文**（非渲染结果）替换为等宽 `Textarea`，下方一行「保存 / 取消 + 「Ctrl+Enter 保存」提示」。提交只替换该块偏移，文件其余字节不变；空文档显示一个虚线占位块（「开始编辑」）。
@@ -646,6 +659,19 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 - **文案只有两档**：已知压缩前用量时 `上下文已压缩 · 压缩前 N tokens`，未知时 `上下文已压缩`。不区分手动 / 自动，不显示压缩原因。
 - **明确不做**：不做点击展开压缩摘要、不用警告色、不做可操作卡片。
 
+### 6.15 内容区浮动控件
+
+贴在内容上的常驻操作（目前是编辑器的「源码 / 阅读视图」切换）不占标签条或工具条的一行，而是浮在内容区右下角。
+
+- **落点**：内容容器（`FileView` 的 `relative` 层）右下角内缩 16px（`bottom-4 right-4`），`z-10`。16px 是为了把滚动条让出来——竖条约 10–14px，大文件关闭换行时底部还有 10px 水平条；12px 会压住滚动条的拖动区。
+- **不参与内容滚动**：浮层挂在内容容器的滚动区**之外**，正文滚动时不跟着走；不能放进阅读视图自己的滚动容器里。
+- **常态半透明**：`bg-raised/90` + 1px `border-rule-control` + `text-ink-muted`，28×28px；hover / focus-visible 升为 `bg-raised` + 满墨 `border-line` + `text-ink`。禁止 `backdrop-filter`（玻璃拟态）；半透明只允许用 token 的不透明度变体，不写裸 rgba。
+- **为什么不在标签条**：标签条是 `overflow-x-auto`，标签一多，靠 `ml-auto` 贴右的那一格会被挤出可视区（甚至要横向滚动才看得见）。功能性入口不放在会溢出的容器里。
+- **避让**：Markdown 阅读视图版心底部留 `pb-12`，滚到底时最后一行仍在浮层上方；不为浮层缩小正文列宽。
+- **已知可接受重叠**：正文里宽代码块的横向滚动条、Monaco 自动补全弹层（编辑器很窄时）可能被压住一角，可接受；滚动条必须让开，其余必须可点的控件不得被覆盖。
+- **同一功能只有一个位置**：阅读 / 源码两种视图共用同一落点，切换时按钮不跳动。
+- **可访问性**：必须有 `aria-label` / `title`，键盘可聚焦，focus 走全局 1px `accent` 描边；不用 `opacity` 把按钮藏起来（半透明不等于不可见）。
+
 ---
 
 ## 7. 可访问性
@@ -684,6 +710,8 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 - ❌ 用满墨 `border-line` 画区内卡片外框或普通区域边界（只允许浮层）。
 - ❌ 给页面内的纸卡加投影（`shadow-print` 只属于浮层）。
 - ❌ 绕过线条角色直接写 `border-line/50` 等裸透明度。
+- ❌ 把功能性入口（视图切换等）放在会横向溢出的容器里；内容区常驻操作按 6.15 浮在右下角。
+- ❌ 对浮动控件使用 `backdrop-filter` / 玻璃拟态，或压住滚动条拖动区。
 
 ### 9.2 新 UI 工作检查清单
 
@@ -700,7 +728,7 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 - [ ] 聊天面板头部为两层 34px（共 68px），收起按钮图标、标签状态点、工作树 chip 图标的左边缘同为 12px，拖出柄与右侧图标按钮右边缘同为 12px。
 - [ ] 满墨 `border-line` 只出现在浮层（Modal、菜单、命令面板、Toast）上。
 - [ ] `tests/design-system.test.ts` 通过。
-- [ ] 阅读视图：可切源码的类型才显示视图切换；媒体/PDF/二进制没有源码入口，均提供「系统打开」；HTML 预览的 `sandbox` 不含 `allow-same-origin`。
+- [ ] 阅读视图：可切源码的类型才显示视图切换；切换按钮浮在内容区右下角（6.15），不占标签条；媒体/PDF/二进制没有源码入口，均提供「系统打开」；HTML 预览的 `sandbox` 不含 `allow-same-origin`。
 - [ ] placeholder 使用 `ink-muted`。
 - [ ] 键盘可访问，焦点可见，图标按钮有名称。
 - [ ] 1024 / 1440 宽度无横向溢出。
@@ -750,6 +778,7 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 | 会话标签栏 / 列表 | `src/components/SessionTabs.tsx`、`src/components/ChatSessionList.tsx`、`src/store/sessionStore.ts` |
 | 编辑器主题 | `src/components/MonacoEditor.tsx`（`pi-paper` / `pi-ink`） |
 | 文件视图容器 / 标签条 | `src/components/FileView.tsx`、`src/components/EditorTabs.tsx` |
+| 内容区浮动控件 | `src/components/ui.tsx`（`OverlayButton`）、`src/components/FileView.tsx`（右下角落点） |
 | 阅读视图（Markdown / HTML / 媒体 / PDF） | `src/components/MarkdownReadingView.tsx`、`src/components/HtmlPreview.tsx`、`src/components/MediaView.tsx`、`src/components/PdfReadingView.tsx` |
 | 文件类型分派与预览 URL | `src/utils/fileKind.ts`（`detectFileKind` / `defaultViewFor` / `filePreviewUrl`） |
 | 只读文件协议 | `electron/file-protocol.ts`（`pw-file://`，Range + 信任校验） |
@@ -781,6 +810,7 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.42 | 2026-10-28 | 视图切换按钮离开标签条，改为内容区右下角浮层：新增 6.15（16px 让开滚动条、常态 `bg-raised/90` 半透明、hover/focus 实心、阅读视图版心 `pb-12` 避让、可接受重叠清单）与 5.11 `OverlayButton`；6.3.1 视图切换位置改写 |
 | v1.41 | 2026-10-28 | 上下文压缩点改为时间线 part：新增 6.14（位置由 parts 顺序决定、压缩点单独成组、纯分隔线消息不渲染表头、文案统一为「上下文已压缩 · 压缩前 N tokens」并删除手动 / 自动措辞） |
 | v1.40 | 2026-10-28 | 主窗口关闭按钮改为收进托盘常驻（可在设置关闭）：新增 6.13 托盘图标 / 原生菜单 / Windows 首次气泡 / 辅助窗口完全独立；设置「通用」新增「关闭主窗口」复选框与对应文案 |
 | v1.39 | 2026-10-28 | 面板拆出后主窗口彻底让位：撤掉原位 `EmptyState` 占位（连带「定位到独立窗口 / 还原到主窗口」两个按钮），侧栏 / 对话列 / 终端行连同 2px 接缝一起消失，空间交给编辑器；辅助窗口标题栏由面板名改为工作区名；拆出的侧栏标签从标签条隐去，当前标签被拆走时自动切换；回位只靠关闭窗口 |

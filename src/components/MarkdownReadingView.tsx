@@ -84,7 +84,8 @@ export const MarkdownReadingView: React.FC<{
       className="min-h-0 flex-1 overflow-auto bg-surface"
       data-testid="markdown-reading-view"
     >
-      <article className="file-markdown chat-markdown mx-auto w-full max-w-[64rem] px-8 py-6">
+      {/* pb 给右下角的视图切换浮层留位：滚到底时最后一行不被压住 */}
+      <article className="file-markdown chat-markdown mx-auto w-full max-w-[64rem] px-8 pt-6 pb-12">
         {rendered.map((block, index) =>
           editingIndex === index ? (
             <div key={`edit-${block.start}`} className="my-3">

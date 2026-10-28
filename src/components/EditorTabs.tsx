@@ -1,7 +1,5 @@
 import React from 'react'
 import {
-  Code,
-  Eye,
   FileCode,
   FileIcon,
   FileJson,
@@ -18,8 +16,6 @@ import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
 import { confirmDialog } from '../store/dialogStore'
 import type { OpenFile } from '../types'
-import { hasReadingView } from '../utils/fileKind'
-import { IconButton } from './ui'
 
 /** 标签图标按文件类型区分：阅读视图类型不再统一显示代码图标 */
 function iconFor(file: OpenFile) {
@@ -50,7 +46,7 @@ export interface EditorTabsProps {
   root: string
 }
 
-/** 文件标签条：活跃标签、脏标记、关闭，以及阅读 / 源码视图切换 */
+/** 文件标签条：活跃标签、脏标记、关闭。视图切换不在这里（见 FileView 右下角浮层） */
 export const EditorTabs: React.FC<EditorTabsProps> = ({ workspacePath, root }) => {
   const { t } = useI18nStore()
   const store = editorStoreFor(root)
@@ -58,11 +54,11 @@ export const EditorTabs: React.FC<EditorTabsProps> = ({ workspacePath, root }) =
 
   if (openFiles.length === 0) return null
 
-  const toggleLabel = currentFile?.view === 'reading' ? t('viewSource') : t('viewReading')
-  const toggleIcon = currentFile?.view === 'reading' ? Code : Eye
-
   return (
-    <div className="flex flex-shrink-0 items-stretch overflow-x-auto border-b border-rule-divide bg-panel">
+    <div
+      data-testid="editor-tabs"
+      className="flex flex-shrink-0 items-stretch overflow-x-auto border-b border-rule-divide bg-panel"
+    >
       {openFiles.map((file) => {
         const active = currentFile?.path === file.path
         const Icon = iconFor(file)
@@ -118,17 +114,6 @@ export const EditorTabs: React.FC<EditorTabsProps> = ({ workspacePath, root }) =
           </div>
         )
       })}
-
-      {currentFile && hasReadingView(currentFile.kind) && (
-        <div className="ml-auto flex flex-shrink-0 items-center pr-1.5">
-          <IconButton
-            icon={toggleIcon}
-            label={toggleLabel}
-            size="sm"
-            onClick={() => store.getState().toggleFileView(currentFile.path)}
-          />
-        </div>
-      )}
     </div>
   )
 }

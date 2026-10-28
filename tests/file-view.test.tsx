@@ -84,12 +84,46 @@ describe('FileView view dispatch', () => {
     expect(screen.getByText('Title')).toBeTruthy()
   })
 
+  it('floats the view toggle in the content area instead of the tab strip', async () => {
+    render(<FileView workspacePath="/ws" />)
+    open({ content: '# Title\n' })
+
+    const toggle = await screen.findByTestId('file-view-toggle')
+    // 标签条不再承载切换按钮：标签再多也不会把它挤出可视区
+    expect(toggle.closest('[data-testid="editor-tabs"]')).toBeNull()
+    expect(toggle.className).toContain('absolute')
+    expect(toggle.className).toContain('bottom-4')
+    expect(toggle.className).toContain('right-4')
+    // 常态半透明 + 发丝边框，不用 backdrop-filter
+    expect(toggle.className).toContain('bg-raised/90')
+    expect(toggle.className).not.toContain('backdrop')
+
+    // 滚到底时最后一行不被浮层压住
+    const article = screen.getByTestId('markdown-reading-view').querySelector('article')
+    expect(article?.className).toContain('pb-12')
+  })
+
+  it('keeps the toggle in the same spot when switching between views', async () => {
+    render(<FileView workspacePath="/ws" />)
+    open({ content: '# Title\n' })
+
+    const reading = await screen.findByTestId('file-view-toggle')
+    const placement = reading.className
+
+    fireEvent.click(reading)
+    expect(await screen.findByTestId('monaco-editor')).toBeTruthy()
+
+    const source = screen.getByTestId('file-view-toggle')
+    expect(source.className).toBe(placement)
+    expect(source.getAttribute('aria-label')).toBe(zh.viewReading)
+  })
+
   it('keeps plain text files in the source view', async () => {
     render(<FileView workspacePath="/ws" />)
     open({ path: '/ws/a.ts', name: 'a.ts', content: 'const a = 1' })
 
     expect(await screen.findByTestId('monaco-editor')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: zh.viewSource })).toBeNull()
+    expect(screen.queryByTestId('file-view-toggle')).toBeNull()
   })
 
   it('renders images through the read-only protocol and hides the toggle', async () => {
@@ -99,7 +133,7 @@ describe('FileView view dispatch', () => {
     const image = (await screen.findByRole('img')) as HTMLImageElement
     expect(image.getAttribute('src')).toBe('pw-file://local/ws/pic.png')
     expect(screen.queryByTestId('monaco-editor')).toBeNull()
-    expect(screen.queryByRole('button', { name: zh.viewSource })).toBeNull()
+    expect(screen.queryByTestId('file-view-toggle')).toBeNull()
   })
 
   it('offers the system app for binary files', async () => {

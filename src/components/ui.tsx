@@ -116,6 +116,41 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
 )
 IconButton.displayName = 'IconButton'
 
+/**
+ * 浮在内容之上的图标按钮（编辑器右下角等）。
+ *
+ * 常态半透明：不遮挡太多正文，又能一直看见；要点击时靠 hover / focus 升为实心。
+ * 底色只用 token 的不透明度变体（`bg-raised/90`），不使用 backdrop-filter。
+ */
+export interface OverlayButtonProps
+  extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
+  icon: LucideIcon
+  label: string
+}
+
+export const OverlayButton = React.forwardRef<HTMLButtonElement, OverlayButtonProps>(
+  ({ icon: Icon, label, className = '', ...rest }, ref) => (
+    <button
+      ref={ref}
+      type="button"
+      aria-label={label}
+      title={label}
+      className={
+        'inline-flex h-7 w-7 items-center justify-center rounded-sm border border-rule-control ' +
+        'bg-raised/90 text-ink-muted shadow-print transition-colors ' +
+        'hover:border-line hover:bg-raised hover:text-ink ' +
+        'focus-visible:border-line focus-visible:bg-raised focus-visible:text-ink ' +
+        className
+      }
+      {...rest}
+    >
+      <Icon size={14} />
+    </button>
+  )
+)
+
+OverlayButton.displayName = 'OverlayButton'
+
 const CONTROL_BASE =
   'w-full rounded-sm bg-sunken border border-rule-control text-ink type-body ' +
   'placeholder:text-ink-muted transition-colors focus:outline-none ' +

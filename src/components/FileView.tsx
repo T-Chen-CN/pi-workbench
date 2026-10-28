@@ -1,13 +1,13 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react'
-import { FileQuestion, FilePlus2 } from 'lucide-react'
-import { useEditorStore } from '../store/editorStore'
+import { Code, Eye, FileQuestion, FilePlus2 } from 'lucide-react'
+import { editorStoreFor, useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
 import { hasReadingView, supportsSourceView } from '../utils/fileKind'
 import { useFileDocument } from '../workspace/useFileDocument'
-import { Button, EmptyState, Spinner } from './ui'
+import { Button, EmptyState, OverlayButton, Spinner } from './ui'
 import { EditorTabs } from './EditorTabs'
 import { MarkdownReadingView } from './MarkdownReadingView'
 import { HtmlPreview } from './HtmlPreview'
@@ -66,6 +66,7 @@ export const FileView: React.FC<FileViewProps> = ({
 }) => {
   const root = viewRoot ?? workspacePath
   const { t } = useI18nStore()
+  const store = editorStoreFor(root)
   const { currentFile } = useEditorStore(root)
   useFileDocument({ workspacePath, root, active })
 
@@ -148,6 +149,17 @@ export const FileView: React.FC<FileViewProps> = ({
           {fileKind === 'pdf' && <PdfReadingView file={currentFile} />}
           {fileKind === 'binary' && (
             <UnsupportedFileView path={currentFile.path} name={currentFile.name} />
+          )}
+
+          {/* 视图切换浮在内容右下角：不再和文件标签抢标签条，标签再多也不会被挤出可视区 */}
+          {readingKind && (
+            <OverlayButton
+              data-testid="file-view-toggle"
+              icon={reading ? Code : Eye}
+              label={reading ? t('viewSource') : t('viewReading')}
+              className="absolute bottom-4 right-4 z-10"
+              onClick={() => store.getState().toggleFileView(currentFile.path)}
+            />
           )}
         </div>
       )}
