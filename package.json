@@ -167,5 +167,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/T-Chen-CN/pi-workbench.git"
+  },
+  "allowScripts": {
+    "node-pty": true,
+    "esbuild": true
   }
 }
