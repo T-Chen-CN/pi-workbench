@@ -375,6 +375,34 @@ describe('ChatPanel', () => {
     expect(useChatStore.getState().conversations[sessionKey].pending).toHaveLength(0)
   })
 
+  it('scrolls back to the bottom when a message is inserted into the running turn', async () => {
+    useSettingsStore.getState().setRunWhileBusy('steer')
+    render(<ChatPanel workspacePath="/ws" />)
+    const textarea = await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+
+    act(() => {
+      useChatStore.getState().ensureConversation(sessionKey)
+      useChatStore.getState().setLoading(sessionKey, true)
+    })
+
+    const transcript = screen.getByTestId('chat-transcript')
+    Object.defineProperty(transcript, 'scrollHeight', { value: 2400, configurable: true })
+    Object.defineProperty(transcript, 'clientHeight', { value: 500, configurable: true })
+    transcript.scrollTop = 0
+    fireEvent.scroll(transcript)
+    await waitFor(() => expect(screen.getByText(translations.zh.scrollToBottom)).toBeTruthy())
+
+    fireEvent.change(textarea, { target: { value: 'steer this' } })
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.send }))
+
+    await waitFor(() =>
+      expect(piAgentAPI.steer).toHaveBeenCalledWith('/ws', 's1', 'steer this', undefined)
+    )
+    // 插话会写进聊天记录，属主动发送：同样要回到真实底部
+    await waitFor(() => expect(transcript.scrollTop).toBe(2400))
+    expect(screen.queryByText(translations.zh.scrollToBottom)).toBeNull()
+  })
+
   it('inserts a pending message into the current turn on demand', async () => {
     useChatStore.getState().ensureConversation(sessionKey)
     useChatStore.getState().addPending(sessionKey, 'send me now')

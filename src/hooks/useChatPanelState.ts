@@ -858,6 +858,8 @@ export function useChatPanelState(props: ChatPanelProps) {
         content: item.text,
         images: item.images && item.images.length > 0 ? item.images : undefined,
       })
+      // 插话同样会往聊天记录里写一条用户消息，属主动发送：无条件回到最新位置
+      scrollToBottomRef.current()
       toast.info(t('steerSent'))
     } else {
       toast.error(t('steerFailed', { error: localizeError(result.error ?? '') }))
