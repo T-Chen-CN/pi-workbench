@@ -9,7 +9,7 @@ import { WorkspaceScopeProvider } from '../src/workspace/WorkspaceScope'
 import { api } from '../src/api'
 
 vi.mock('../src/api', () => ({
-  api: { auxDetachAt: vi.fn() },
+  api: { auxDetachAt: vi.fn() }
 }))
 
 const WORKSPACE = '/tmp/ws'
@@ -20,7 +20,7 @@ function installPopup() {
     close: vi.fn(),
     addEventListener: () => {},
     removeEventListener: () => {},
-    focus: () => {},
+    focus: () => {}
   }
   vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
   return popup
@@ -36,7 +36,7 @@ function fakeDataTransfer(dropEffect = 'move') {
       data.set(type, value)
     }),
     getData: (type: string) => data.get(type) ?? '',
-    setDragImage: vi.fn(),
+    setDragImage: vi.fn()
   }
 }
 
@@ -75,12 +75,12 @@ describe('PanelDragHandle', () => {
     const handle = await openPanelWindow({
       id: 'aux:1',
       title: 'chat',
-      rect: { x: 0, y: 0, width: 480, height: 600 },
+      rect: { x: 0, y: 0, width: 480, height: 600 }
     })
     act(() => {
       usePanelStore.setState({
         panelHost: { [WORKSPACE]: { chat: 'aux:1' } },
-        windows: { 'aux:1': { workspaceDir: WORKSPACE, panel: 'chat', handle } },
+        windows: { 'aux:1': { workspaceDir: WORKSPACE, panel: 'chat', handle } }
       })
     })
 
@@ -104,7 +104,7 @@ describe('PanelDragHandle', () => {
     vi.mocked(api.auxDetachAt).mockResolvedValue({
       success: true,
       inside: false,
-      rect: { x: 900, y: 200, width: 520, height: 640 },
+      rect: { x: 900, y: 200, width: 520, height: 640 }
     })
     renderHandle()
     const dataTransfer = fakeDataTransfer()
@@ -112,9 +112,7 @@ describe('PanelDragHandle', () => {
     fireEvent.dragStart(grabHandle(), { dataTransfer })
     fireEvent.dragEnd(grabHandle(), { dataTransfer })
 
-    await waitFor(() =>
-      expect(usePanelStore.getState().panelHost[WORKSPACE]?.chat).toMatch(/^aux:/)
-    )
+    await waitFor(() => expect(usePanelStore.getState().panelHost[WORKSPACE]?.chat).toMatch(/^aux:/))
     expect(Object.values(usePanelStore.getState().windows)[0]?.panel).toBe('chat')
   })
 
@@ -130,13 +128,45 @@ describe('PanelDragHandle', () => {
     expect(usePanelStore.getState().panelHost[WORKSPACE]).toBeUndefined()
   })
 
-  it('ignores a cancelled drag', () => {
+  it('detaches even when the drop lands on nothing (dropEffect none)', async () => {
+    // 拖到窗口外松手时没有任何 drop 目标，Chromium 报 dropEffect 'none'。
+    // 这不是取消，而是最常发生的拆窗时机。
+    vi.mocked(api.auxDetachAt).mockResolvedValue({
+      success: true,
+      inside: false,
+      rect: { x: 900, y: 200, width: 520, height: 640 }
+    })
     renderHandle()
     const dataTransfer = fakeDataTransfer('none')
 
     fireEvent.dragStart(grabHandle(), { dataTransfer })
     fireEvent.dragEnd(grabHandle(), { dataTransfer })
 
-    expect(api.auxDetachAt).not.toHaveBeenCalled()
+    await waitFor(() => expect(api.auxDetachAt).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(usePanelStore.getState().panelHost[WORKSPACE]?.chat).toMatch(/^aux:/))
+  })
+
+  it('does not detach when the drag is abandoned inside the window', async () => {
+    vi.mocked(api.auxDetachAt).mockResolvedValue({ success: true, inside: true })
+    renderHandle()
+    const dataTransfer = fakeDataTransfer('none')
+
+    fireEvent.dragStart(grabHandle(), { dataTransfer })
+    fireEvent.dragEnd(grabHandle(), { dataTransfer })
+
+    await waitFor(() => expect(api.auxDetachAt).toHaveBeenCalledTimes(1))
+    expect(usePanelStore.getState().panelHost[WORKSPACE]).toBeUndefined()
+  })
+
+  it('stays docked when the main process cannot resolve a target', async () => {
+    vi.mocked(api.auxDetachAt).mockResolvedValue({ success: false, error: 'No window' })
+    renderHandle()
+    const dataTransfer = fakeDataTransfer('none')
+
+    fireEvent.dragStart(grabHandle(), { dataTransfer })
+    fireEvent.dragEnd(grabHandle(), { dataTransfer })
+
+    await waitFor(() => expect(api.auxDetachAt).toHaveBeenCalledTimes(1))
+    expect(usePanelStore.getState().panelHost[WORKSPACE]).toBeUndefined()
   })
 })

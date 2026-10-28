@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   cursor: { x: 500, y: 400 },
-  display: { workArea: { x: 0, y: 0, width: 1920, height: 1080 } },
+  display: { workArea: { x: 0, y: 0, width: 1920, height: 1080 } }
 }))
 
 vi.mock('electron', () => ({
@@ -12,13 +12,13 @@ vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, handler: (...args: unknown[]) => unknown) => {
       mocks.handlers.set(channel, handler)
-    },
+    }
   },
   screen: {
     getCursorScreenPoint: () => mocks.cursor,
     getDisplayNearestPoint: () => mocks.display,
-    getDisplayMatching: () => mocks.display,
-  },
+    getDisplayMatching: () => mocks.display
+  }
 }))
 
 const {
@@ -26,10 +26,13 @@ const {
   AUX_MIN_HEIGHT,
   AUX_MIN_WIDTH,
   computeDetachedRect,
+  getAuxWindow,
   installAuxWindowSupport,
   isPointInBounds,
   parseAuxWindowFeatures,
+  readAuxWindowState,
   registerAuxWindowIpc,
+  runAuxWindowCommand
 } = await import('../electron/aux-window')
 
 const WORK_AREA = { x: 0, y: 0, width: 1920, height: 1080 }
@@ -80,9 +83,7 @@ describe('parseAuxWindowFeatures', () => {
       'nodeIntegration=yes,frame=no,webPreferences=evil,width=500,height=500',
       WORK_AREA
     )
-    expect(Object.keys(result).sort()).toEqual(
-      ['backgroundColor', 'height', 'width', 'x', 'y'].sort()
-    )
+    expect(Object.keys(result).sort()).toEqual(['backgroundColor', 'height', 'width', 'x', 'y'].sort())
   })
 
   it('survives malformed percent encoding', () => {
@@ -124,8 +125,8 @@ describe('registerAuxWindowIpc', () => {
       getMainWindow: () =>
         ({
           isDestroyed: () => false,
-          getBounds: () => ({ x: 0, y: 0, width: 1200, height: 800 }),
-        }) as never,
+          getBounds: () => ({ x: 0, y: 0, width: 1200, height: 800 })
+        }) as never
     })
     const handler = mocks.handlers.get('aux:detach-at')
     expect(handler?.({} as never)).toEqual({ success: true, inside: true })
@@ -137,8 +138,8 @@ describe('registerAuxWindowIpc', () => {
       getMainWindow: () =>
         ({
           isDestroyed: () => false,
-          getBounds: () => ({ x: 0, y: 0, width: 1200, height: 800 }),
-        }) as never,
+          getBounds: () => ({ x: 0, y: 0, width: 1200, height: 800 })
+        }) as never
     })
     const result = mocks.handlers.get('aux:detach-at')?.({} as never) as {
       success: boolean
@@ -154,7 +155,7 @@ describe('registerAuxWindowIpc', () => {
     registerAuxWindowIpc({ getMainWindow: () => null })
     expect(mocks.handlers.get('aux:detach-at')?.({} as never)).toEqual({
       success: false,
-      error: 'No window',
+      error: 'No window'
     })
   })
 })
@@ -164,21 +165,34 @@ interface FakeChild {
   openHandler: ((details: { url: string }) => { action: string }) | null
   navigations: string[]
   closedHandler: (() => void) | null
+  maximizeHandler: (() => void) | null
+  unmaximizeHandler: (() => void) | null
+  maximized: boolean
+  minimized: boolean
+  closed: boolean
   webContents: Record<string, unknown>
   setMenu: (menu: unknown) => void
   setMenuBarVisibility: (visible: boolean) => void
   on: (event: string, handler: () => void) => void
+  isDestroyed: () => boolean
+  maximize: () => void
+  unmaximize: () => void
+  minimize: () => void
+  isMaximized: () => boolean
+  close: () => void
 }
 
 function createHost() {
-  let openHandler: ((details: {
-    url: string
-    frameName: string
-    features: string
-  }) => { action: string; overrideBrowserWindowOptions?: Record<string, unknown> }) | null = null
+  let openHandler:
+    | ((details: { url: string; frameName: string; features: string }) => {
+        action: string
+        overrideBrowserWindowOptions?: Record<string, unknown>
+      })
+    | null = null
   let createWindowHandler: ((child: FakeChild, details: { frameName: string }) => void) | null = null
 
   const children: FakeChild[] = []
+  const sent: unknown[][] = []
   const webContents = {
     setWindowOpenHandler: (handler: typeof openHandler) => {
       openHandler = handler
@@ -186,10 +200,14 @@ function createHost() {
     on: (event: string, handler: never) => {
       if (event === 'did-create-window') createWindowHandler = handler
     },
+    send: (channel: string, payload: unknown) => {
+      sent.push([channel, payload])
+    }
   }
 
   return {
     children,
+    sent,
     webContents,
     isDestroyed: () => false,
     open: (details: { url: string; frameName: string; features: string }) =>
@@ -200,6 +218,28 @@ function createHost() {
         openHandler: null,
         navigations: [],
         closedHandler: null,
+        maximizeHandler: null,
+        unmaximizeHandler: null,
+        maximized: false,
+        minimized: false,
+        closed: false,
+        isDestroyed: () => false,
+        maximize: () => {
+          child.maximized = true
+          child.maximizeHandler?.()
+        },
+        unmaximize: () => {
+          child.maximized = false
+          child.unmaximizeHandler?.()
+        },
+        minimize: () => {
+          child.minimized = true
+        },
+        isMaximized: () => child.maximized,
+        close: () => {
+          child.closed = true
+          child.closedHandler?.()
+        },
         webContents: {
           setWindowOpenHandler: (handler: typeof openHandler) => {
             child.openHandler = handler as never
@@ -209,7 +249,7 @@ function createHost() {
               child.navigations.push('registered')
               ;(child as unknown as { navigate: typeof handler }).navigate = handler
             }
-          },
+          }
         },
         setMenu: () => {
           child.menuCleared = true
@@ -217,12 +257,14 @@ function createHost() {
         setMenuBarVisibility: () => {},
         on: (event: string, handler: () => void) => {
           if (event === 'closed') child.closedHandler = handler
-        },
+          if (event === 'maximize') child.maximizeHandler = handler
+          if (event === 'unmaximize') child.unmaximizeHandler = handler
+        }
       }
       children.push(child)
       createWindowHandler?.(child, { frameName })
       return child
-    },
+    }
   }
 }
 
@@ -231,35 +273,39 @@ describe('installAuxWindowSupport', () => {
     const host = createHost()
     installAuxWindowSupport(host as never, { onClosed: () => {} })
 
-    expect(host.open({ url: 'https://example.com', frameName: 'x', features: '' }).action).toBe(
-      'deny'
-    )
+    expect(host.open({ url: 'https://example.com', frameName: 'x', features: '' }).action).toBe('deny')
     expect(host.open({ url: 'about:blank', frameName: 'other', features: '' }).action).toBe('deny')
-    expect(
-      host.open({ url: 'about:blank', frameName: `${AUX_FRAME_PREFIX}aux:1`, features: '' }).action
-    ).toBe('allow')
+    expect(host.open({ url: 'about:blank', frameName: `${AUX_FRAME_PREFIX}aux:1`, features: '' }).action).toBe('allow')
   })
 
-  it('returns hardened window options with a native frame', () => {
+  it('returns hardened window options with the same chrome as the main window', () => {
     const host = createHost()
     installAuxWindowSupport(host as never, { onClosed: () => {} })
     const result = host.open({
       url: 'about:blank',
       frameName: `${AUX_FRAME_PREFIX}aux:2`,
-      features: 'width=600,height=500,left=40,top=40,bg=%231b1b1a',
+      features: 'width=600,height=500,left=40,top=40,bg=%231b1b1a'
     }) as { action: string; overrideBrowserWindowOptions: Record<string, unknown> }
 
     expect(result.action).toBe('allow')
     expect(result.overrideBrowserWindowOptions).toMatchObject({
-      frame: true,
       minWidth: AUX_MIN_WIDTH,
       minHeight: AUX_MIN_HEIGHT,
       backgroundColor: '#1b1b1a',
       width: 600,
       height: 500,
       x: 40,
-      y: 40,
+      y: 40
     })
+    // 与主窗口一致：Windows / Linux 无边框（自绘标题栏），macOS 保留红绿灯
+    if (process.platform === 'darwin') {
+      expect(result.overrideBrowserWindowOptions.frame).toBeUndefined()
+      expect(result.overrideBrowserWindowOptions.titleBarStyle).toBe('hiddenInset')
+      expect(result.overrideBrowserWindowOptions.trafficLightPosition).toEqual({ x: 12, y: 10 })
+    } else {
+      expect(result.overrideBrowserWindowOptions.frame).toBe(false)
+      expect(result.overrideBrowserWindowOptions.titleBarStyle).toBeUndefined()
+    }
   })
 
   it('hardens the child window and reports its close event', () => {
@@ -275,5 +321,70 @@ describe('installAuxWindowSupport', () => {
 
     child.closedHandler?.()
     expect(onClosed).toHaveBeenCalledWith(`${AUX_FRAME_PREFIX}aux:3`)
+  })
+
+  it('registers the child window so panel chrome commands address it', () => {
+    const host = createHost()
+    installAuxWindowSupport(host as never, { onClosed: () => {} })
+    const frameName = `${AUX_FRAME_PREFIX}aux:7`
+    host.open({ url: 'about:blank', frameName, features: '' })
+    const child = host.createWindow(frameName)
+
+    expect(getAuxWindow(frameName)).toBe(child)
+    expect(readAuxWindowState(frameName).maximized).toBe(false)
+
+    expect(runAuxWindowCommand(frameName, 'toggleMaximize')).toEqual({ success: true, maximized: true })
+    expect(child.maximized).toBe(true)
+    expect(runAuxWindowCommand(frameName, 'toggleMaximize')).toEqual({ success: true, maximized: false })
+    expect(child.maximized).toBe(false)
+
+    expect(runAuxWindowCommand(frameName, 'minimize')).toEqual({ success: true })
+    expect(child.minimized).toBe(true)
+
+    runAuxWindowCommand(frameName, 'close')
+    expect(child.closed).toBe(true)
+    // 关闭后不再持有窗口引用，后续命令失败而不是操作野指针
+    expect(getAuxWindow(frameName)).toBeNull()
+    expect(runAuxWindowCommand(frameName, 'close').success).toBe(false)
+  })
+
+  it('forwards the maximize state with the frame name', () => {
+    const host = createHost()
+    installAuxWindowSupport(host as never, { onClosed: () => {} })
+    const frameName = `${AUX_FRAME_PREFIX}aux:8`
+    host.open({ url: 'about:blank', frameName, features: '' })
+    const child = host.createWindow(frameName)
+
+    child.maximize()
+    child.unmaximize()
+
+    expect(host.sent).toEqual([
+      ['window:maximized-changed', { host: frameName, maximized: true }],
+      ['window:maximized-changed', { host: frameName, maximized: false }]
+    ])
+  })
+
+  it('rejects unknown hosts and commands from the renderer', () => {
+    const host = createHost()
+    installAuxWindowSupport(host as never, { onClosed: () => {} })
+    const frameName = `${AUX_FRAME_PREFIX}aux:9`
+    host.open({ url: 'about:blank', frameName, features: '' })
+    host.createWindow(frameName)
+    registerAuxWindowIpc({ getMainWindow: () => null })
+
+    const command = mocks.handlers.get('aux:window-command')!
+    expect(command({} as never, 'main', 'close')).toEqual({ success: false, error: 'Invalid host' })
+    expect(command({} as never, frameName, 'explode')).toEqual({
+      success: false,
+      error: 'Invalid command'
+    })
+    expect(command({} as never, `${AUX_FRAME_PREFIX}aux:404`, 'close')).toEqual({
+      success: false,
+      error: 'No such aux window'
+    })
+
+    const state = mocks.handlers.get('aux:window-state')!
+    expect(state({} as never, 42)).toEqual({ success: false, error: 'Invalid host' })
+    expect(state({} as never, frameName)).toEqual({ success: true, maximized: false })
   })
 })

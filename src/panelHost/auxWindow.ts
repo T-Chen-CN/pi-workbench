@@ -11,6 +11,8 @@
  * - 相对 URL 必须绝对化：子文档地址是 about:blank，`<base>` 只作为兜底。
  */
 
+import { frameNameOf } from './types'
+
 export interface AuxWindowRect {
   x: number
   y: number
@@ -38,7 +40,7 @@ const AUX_CONTENT_SECURITY_POLICY = [
   "connect-src 'none'",
   "object-src 'none'",
   "base-uri 'self'",
-  "form-action 'none'",
+  "form-action 'none'"
 ].join('; ')
 
 /** `--panel` 是 RGB 三元组；窗口首帧背景色需要 #rrggbb */
@@ -99,7 +101,7 @@ export function mirrorDocumentAttributes(source: Document, target: Document): ()
   const observer = new MutationObserver(apply)
   observer.observe(source.documentElement, {
     attributes: true,
-    attributeFilter: ['class', 'lang', 'dir', 'data-lang'],
+    attributeFilter: ['class', 'lang', 'dir', 'data-lang']
   })
   if (source.body) {
     observer.observe(source.body, { attributes: true, attributeFilter: ['class'] })
@@ -144,10 +146,10 @@ export async function openPanelWindow(options: {
     `top=${Math.round(options.rect.y)}`,
     `width=${Math.round(options.rect.width)}`,
     `height=${Math.round(options.rect.height)}`,
-    `bg=${encodeURIComponent(background)}`,
+    `bg=${encodeURIComponent(background)}`
   ].join(',')
 
-  const win = window.open('about:blank', `pi-panel:${options.id}`, features)
+  const win = window.open('about:blank', frameNameOf(options.id), features)
   if (!win) throw new Error('aux-window-blocked')
 
   const doc = await resolveChildDocument(win)
@@ -189,6 +191,6 @@ export async function openPanelWindow(options: {
     document: doc,
     container,
     close: () => win.close(),
-    dispose,
+    dispose
   }
 }

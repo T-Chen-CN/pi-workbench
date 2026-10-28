@@ -193,7 +193,7 @@
 - ✅ 2026-10-27 发布 v0.6.2：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含启动页与单窗口形变（420×260 → 1 秒放大到 1200×800）、安装包瘦身与安装/卸载加固、Windows 差分更新恢复、Git 面板自动同步与会话 id 保留
 - ✅ 2026-10-27 Agent 空闲超时：移除 10 分钟整轮 wall-clock 上限，改为“模型静默 120s”才判定卡死；工具执行、审批等待、`toolcall_delta` 与工具输出均计入心跳或挂起计时，长任务不再被误杀；用户主动停止与卡死收尾分离（仅后者重建运行时），`AgentChatOptions.timeoutMs` 删除。type-check / lint / 用例 / build 通过
 - ✅ 2026-10-27 发布 v0.6.3：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含 Agent 空闲超时（工具执行 / 审批等待不计时，长任务不再被 10 分钟误杀）、会话 Git 面板清理幽灵 worktree 记录（目录已删的条目可遗忘，不可用的条目不再允许切换）
-- ✅ 2026-10-28 面板拆分为独立窗口：文件树 / Git / 聊天 / 终端可右键或拖动拆成辅助窗口（原生标题栏 + 32px 信息栏），关闭窗口即回位，原位保留占位不塌陷布局；面板以子文档 portal 渲染，共享同一份 store，终端 PTY 与 200KB 回放缓冲升到 `terminalStore`，展开目录与滚动位置随窗口带走；应用改由 `pw-app://` 协议加载以统一 origin；布局不持久化。设计系统 v1.35，决策见 [ADR-001](../decisions/ADR-001-detachable-panels.md)
+- ✅ 2026-10-28 面板拆分为独立窗口：文件树 / Git / 聊天 / 终端可右键或拖动拆成辅助窗口（与主窗口同一套无边框自绘外壳 + 34px 标题栏，窗口按钮按 `frameName` 寻址），关闭窗口即回位，原位保留占位不塌陷布局；面板以子文档 portal 渲染，共享同一份 store，终端 PTY 与 200KB 回放缓冲升到 `terminalStore`，展开目录与滚动位置随窗口带走；应用改由 `pw-app://` 协议加载以统一 origin；布局不持久化。拖出柄按主进程真实光标判定（`dropEffect` 不能作取消判据）。设计系统 v1.36，决策见 [ADR-001](../decisions/ADR-001-detachable-panels.md)
 - ✅ 2026-10-28 发布 v0.6.4：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含按模型配置上下文窗口（64K / 128K / 256K / 1M 档位 + 图像能力表，`maxTokens` 随档位并受目录值钳制，旧 `availableModels` / `imageModels` 读取时迁移，会话运行中拒绝重建性质的保存）、窄侧栏提交列表两行网格与按实测宽度折叠 refs、Git 自动同步把 fetch 事件与 watcher 竞速解耦（新提交不再丢失 `reason: fetch`）、聊天栏变宽时编辑器列正确收缩（`min-w-0` + `overflow-hidden`，聊天栏宽度受容器与编辑器预留约束）
 - ✅ 大文件模式与虚滚动（2026-10-21：聊天 / Diff / 文件树虚拟滚动，>2MB 关闭换行折叠，>10MB 只读）
 - 已完成：构建分包、生产 CSP、主进程测试覆盖

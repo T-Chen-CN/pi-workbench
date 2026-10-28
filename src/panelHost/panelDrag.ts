@@ -45,12 +45,11 @@ export function beginPanelDrag(event: React.DragEvent, panel: PanelId): void {
 /**
  * 松手后判定是否需要拆窗。
  *
- * Esc 取消（`dropEffect === 'none'`）与「在原窗口内松手」都不拆；
- * 只有光标真的落在主窗口之外才生成新窗口。
+ * 不能用 `dataTransfer.dropEffect` 判断「是否取消」：拖到窗口外松手时没有任何
+ * drop 目标接收，Chromium 同样报 `'none'` —— 而那正是需要拆窗的时机。
+ * 唯一判据交给主进程的光标位置：仍落在主窗口内就不拆（含 Esc 取消）。
  */
-export async function finishPanelDrag(event: React.DragEvent, workspacePath: string, panel: PanelId): Promise<void> {
-  if (event.dataTransfer.dropEffect === 'none') return
-
+export async function finishPanelDrag(workspacePath: string, panel: PanelId): Promise<void> {
   const result = await api.auxDetachAt()
   if (!result.success || result.inside || !result.rect) return
   await usePanelStore.getState().detachPanel(workspacePath, panel, { rect: result.rect })

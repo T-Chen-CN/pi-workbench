@@ -19,3 +19,22 @@ export interface AnchorRect {
 export function isAuxHost(host: HostId | null | undefined): boolean {
   return Boolean(host) && host !== MAIN_HOST
 }
+
+/** 与主进程 electron/aux-window.ts 的 AUX_FRAME_PREFIX 逐字一致（进程间协议，不能只改一边） */
+export const AUX_FRAME_PREFIX = 'pi-panel:'
+
+/** host → window.open 的 frameName；主进程据此找回 BrowserWindow */
+export function frameNameOf(host: HostId): string {
+  return `${AUX_FRAME_PREFIX}${host}`
+}
+
+/** frameName → host（`pi-panel:aux:1` → `aux:1`）；不是辅助窗口的 frameName 返回 null */
+export function hostIdFromFrameName(frameName: string): HostId | null {
+  if (typeof frameName !== 'string' || !frameName.startsWith(AUX_FRAME_PREFIX)) return null
+  return frameName.slice(AUX_FRAME_PREFIX.length) || null
+}
+
+/** 主进程回传的 host 可能是 frameName 也可能是 `main`，比较前统一成 host */
+export function sameHost(stateHost: string, host: HostId): boolean {
+  return (hostIdFromFrameName(stateHost) ?? stateHost) === host
+}

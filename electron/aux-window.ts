@@ -7,6 +7,10 @@
  * 不需要额外的数据通道或窗口注册表。
  *
  * 与 VS Code 的 auxiliary window、Obsidian 的 popout 是同一路线。
+ *
+ * 外壳与主窗口一致：Windows / Linux 无边框 + 自绘窗口按钮，macOS 隐藏标题栏
+ * 保留红绿灯。自绘按钮意味着「关闭」不再由系统处理，因此这里维护
+ * frameName → BrowserWindow 的注册表，让渲染层按窗口寻址，而不是一律操作主窗口。
  */
 
 import { screen, type BrowserWindow, type BrowserWindowConstructorOptions, type Rectangle } from 'electron'
@@ -80,11 +84,7 @@ export function parseAuxWindowFeatures(raw: string, workArea: Rectangle): AuxWin
   const maxHeight = Math.max(AUX_MIN_HEIGHT, workArea.height)
 
   const width = clampInt(readNumber(features, 'width') ?? DEFAULT_AUX_WIDTH, AUX_MIN_WIDTH, maxWidth)
-  const height = clampInt(
-    readNumber(features, 'height') ?? DEFAULT_AUX_HEIGHT,
-    AUX_MIN_HEIGHT,
-    maxHeight
-  )
+  const height = clampInt(readNumber(features, 'height') ?? DEFAULT_AUX_HEIGHT, AUX_MIN_HEIGHT, maxHeight)
   const fallbackX = workArea.x + Math.round((workArea.width - width) / 2)
   const fallbackY = workArea.y + Math.round((workArea.height - height) / 2)
   const x = clampInt(readNumber(features, 'left') ?? fallbackX, workArea.x, workArea.x + workArea.width - width)
@@ -109,11 +109,7 @@ export function isPointInBounds(point: ScreenPoint, bounds: Rectangle): boolean 
  * 拖出拆窗的落点 → 新窗口矩形。
  * 锚在光标处（略偏左上），再整体夹回工作区，避免窗口出现在屏幕外。
  */
-export function computeDetachedRect(
-  point: ScreenPoint,
-  hostBounds: Rectangle,
-  workArea: Rectangle
-): Rectangle {
+export function computeDetachedRect(point: ScreenPoint, hostBounds: Rectangle, workArea: Rectangle): Rectangle {
   const width = clampInt(hostBounds.width * 0.32, 380, Math.min(860, workArea.width))
   const height = clampInt(hostBounds.height * 0.72, 320, Math.min(820, workArea.height))
   const x = clampInt(point.x - 32, workArea.x, workArea.x + workArea.width - width)
@@ -138,8 +134,68 @@ export function resolveDetachTarget(host: BrowserWindow): AuxDetachResult {
   return { success: true, inside: false, rect: computeDetachedRect(point, bounds, workArea) }
 }
 
+export type AuxWindowCommand = 'minimize' | 'toggleMaximize' | 'close'
+
+export interface AuxWindowCommandResult {
+  success: boolean
+  maximized?: boolean
+  error?: string
+}
+
+/** frameName → 子窗口。渲染层只有 frameName，窗口引用必须留在主进程 */
+const auxWindows = new Map<string, BrowserWindow>()
+
+export function getAuxWindow(frameName: string): BrowserWindow | null {
+  const win = auxWindows.get(frameName)
+  if (!win || win.isDestroyed()) return null
+  return win
+}
+
+/** 渲染层点自绘窗口按钮：一律作用在 frameName 指定的窗口上 */
+export function runAuxWindowCommand(frameName: string, command: AuxWindowCommand): AuxWindowCommandResult {
+  const win = getAuxWindow(frameName)
+  if (!win) return { success: false, error: 'No such aux window' }
+  switch (command) {
+    case 'minimize':
+      win.minimize()
+      return { success: true }
+    case 'close':
+      win.close()
+      return { success: true }
+    case 'toggleMaximize':
+      if (win.isMaximized()) win.unmaximize()
+      else win.maximize()
+      return { success: true, maximized: win.isMaximized() }
+    default:
+      return { success: false, error: 'Unknown command' }
+  }
+}
+
+export function readAuxWindowState(frameName: string): AuxWindowCommandResult {
+  const win = getAuxWindow(frameName)
+  if (!win) return { success: false, error: 'No such aux window' }
+  return { success: true, maximized: win.isMaximized() }
+}
+
+function isAuxFrameName(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith(AUX_FRAME_PREFIX)
+}
+
 export function registerAuxWindowIpc(context: { getMainWindow: () => BrowserWindow | null }): void {
   handleIpc('aux:detach-at', () => resolveDetachTarget(context.getMainWindow() as BrowserWindow))
+
+  handleIpc('aux:window-command', (_event, frameName: unknown, command: unknown) => {
+    if (!isAuxFrameName(frameName)) return { success: false, error: 'Invalid host' }
+    if (command !== 'minimize' && command !== 'toggleMaximize' && command !== 'close') {
+      return { success: false, error: 'Invalid command' }
+    }
+    return runAuxWindowCommand(frameName, command)
+  })
+
+  handleIpc('aux:window-state', (_event, frameName: unknown) => {
+    if (!isAuxFrameName(frameName)) return { success: false, error: 'Invalid host' }
+    return readAuxWindowState(frameName)
+  })
 }
 
 export interface AuxWindowSupportOptions {
@@ -150,13 +206,11 @@ export interface AuxWindowSupportOptions {
 /**
  * 在主窗口上启用辅助窗口：
  * - 只放行 `about:blank` + `pi-panel:` 前缀的 window.open；
- * - 覆盖窗口选项（原生标题栏、最小尺寸、主题背景色，避免首帧白闪）；
- * - 子窗口反向加固：禁菜单、禁导航、禁二级弹窗、禁 webview。
+ * - 覆盖窗口选项（与主窗口一致的外壳、最小尺寸、主题背景色，避免首帧白闪）；
+ * - 子窗口反向加固：禁菜单、禁导航、禁二级弹窗、禁 webview；
+ * - 登记窗口引用，并转发最大化状态给渲染层。
  */
-export function installAuxWindowSupport(
-  host: BrowserWindow,
-  options: AuxWindowSupportOptions
-): void {
+export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowSupportOptions): void {
   host.webContents.setWindowOpenHandler(({ url, frameName, features }) => {
     if (url !== 'about:blank') return { action: 'deny' }
     if (!frameName.startsWith(AUX_FRAME_PREFIX)) return { action: 'deny' }
@@ -173,22 +227,39 @@ export function installAuxWindowSupport(
       minWidth: AUX_MIN_WIDTH,
       minHeight: AUX_MIN_HEIGHT,
       backgroundColor: parsed.backgroundColor,
-      // 原生标题栏：与 VS Code 浮动窗口默认一致，省掉按目标窗口寻址的自绘按钮
-      frame: true,
+      // 与主窗口同一套外壳：无边框 + 自绘窗口按钮，标题栏由 PanelWindowFrame 提供
+      ...(process.platform === 'darwin'
+        ? {
+            titleBarStyle: 'hiddenInset' as const,
+            trafficLightPosition: { x: 12, y: 10 }
+          }
+        : {
+            frame: false
+          }),
       autoHideMenuBar: true,
-      show: true,
+      show: true
     }
     return { action: 'allow', overrideBrowserWindowOptions: override }
   })
 
   host.webContents.on('did-create-window', (child, details) => {
     const frameName = details.frameName
+    auxWindows.set(frameName, child)
     try {
       child.setMenu(null)
       child.setMenuBarVisibility(false)
     } catch {
       // 个别平台没有菜单栏
     }
+
+    // 自绘窗口按钮的图标切换：主窗口与每个辅助窗口各自上报
+    const notifyMaximized = (maximized: boolean) => {
+      if (host.isDestroyed()) return
+      host.webContents.send('window:maximized-changed', { host: frameName, maximized })
+    }
+    child.on('maximize', () => notifyMaximized(true))
+    child.on('unmaximize', () => notifyMaximized(false))
+
     child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     child.webContents.on('will-navigate', (event, url) => {
       if (url !== 'about:blank') event.preventDefault()
@@ -197,6 +268,7 @@ export function installAuxWindowSupport(
       event.preventDefault()
     })
     child.on('closed', () => {
+      auxWindows.delete(frameName)
       if (!host.isDestroyed()) options.onClosed(frameName)
     })
   })
