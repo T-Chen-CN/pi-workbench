@@ -30,10 +30,10 @@ export const PanelDragHandle: React.FC<{ panel: PanelId; className?: string }> =
       title={label}
       aria-label={label}
       onDragStart={(event) => beginPanelDrag(event, panel)}
-      onDragEnd={(event) => void finishPanelDrag(event, workspacePath, panel)}
-      className={`flex h-4 w-3 flex-none cursor-grab items-center justify-center text-ink-subtle transition-colors hover:text-ink-muted active:cursor-grabbing ${className}`}
+      onDragEnd={() => void finishPanelDrag(workspacePath, panel)}
+      className={`flex h-4 w-3.5 flex-none cursor-grab items-center justify-center text-ink-muted transition-colors hover:text-ink active:cursor-grabbing ${className}`}
     >
-      <GripVertical size={12} />
+      <GripVertical size={13} />
     </span>
   )
 }

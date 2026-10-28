@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.35 |
+| 文档版本 | v1.36 |
 | 状态 | Active（正式规范） |
 | 最后更新 | 2026-10-28 |
 | 适用范围 | 渲染进程全部 UI、Monaco / xterm 主题、应用主题设置 |
@@ -558,12 +558,13 @@
 
 面板（文件树 / Git / 聊天 / 终端）可以拆成一个独立窗口，关掉那个窗口就回到主窗口原位。拆分只换渲染落点，状态不复制：同一份 store，同一个 JS 上下文。
 
-- **外壳使用系统原生标题栏**（`frame: true` + `autoHideMenuBar`）。这是规范中唯一不用自绘标题栏的窗口：它不承载品牌区与窗口按钮组，自绘收益低于成本，三个平台保持一致。最小尺寸 320×220；首帧背景取 `--panel`，避免开窗白闪。
-- **32px 窗口信息栏**是辅助窗口内唯一新增的结构：`bg-panel` + 底部 `border-rule-divide`；左侧 `type-label text-ink-muted` 显示面板名（复用面板自己的标题文案），右侧 28px `IconButton`（`PanelRightClose`，label「还原到主窗口」）。信息栏不加第二行元数据，不加分隔线以外的装饰。
+- **外壳与主窗口一致**：Windows / Linux 无边框（`frame: false`），macOS `titleBarStyle: 'hiddenInset'` + 红绿灯（`trafficLightPosition { x: 12, y: 10 }`）。最小尺寸 320×220；首帧背景取 `--panel`，避免开窗白闪。
+- **34px 自绘标题栏**是辅助窗口内唯一新增的结构：整条 `app-drag` 可拖动窗口、双击最大化；`bg-panel` + 底部 `border-rule-divide`；左侧 `type-label text-ink-muted` 显示面板名（复用面板自己的标题文案，光标 `pl-3`；macOS 为红绿灯让位 `pl-[84px]`），右侧 28px `IconButton`（`PanelRightClose`，label「还原到主窗口」）+ `WindowControls compact`（三个 36px×34px 按钮，macOS 不渲染）。标题栏只有一个信息位，不与面板内头部重复、不加第二行元数据。
+  - **窗口按钮按目标窗口寻址**：渲染层只跑在主窗口的 JS 上下文里，IPC 来源恒为主窗口，因此辅助窗口的最小化 / 最大化 / 关闭必须显式带 `frameName`（`aux:window-command`），不能由主进程从 sender 推断；最大化状态同理带 `host` 回传（`window:maximized-changed`），每个 `WindowControls` 只认自己的 `host`。
 - **分离后原位占位，不塌陷布局**：原位置渲染 `EmptyState`（图标 `PanelTopOpen`）：标题「面板已在独立窗口打开」、说明「关闭那个窗口即可让它回到这里。」，动作为 `secondary`「定位到独立窗口」+ `ghost`「还原到主窗口」。占位底色 `bg-panel`。
 - **两个入口：右键菜单与拖出柄**。
   - 右键菜单：面板头部右键弹出。形态与 `FileExplorer` 的节点菜单一致（`fixed inset-0` 遮罩 + `bg-raised` + 满墨 `border-line` + `shadow-print`，`min-w-[190px]`，`type-value` 行 `px-3 py-1.5`），按当前状态只给一个动作：`ExternalLink`「在独立窗口中打开」或 `PanelRightClose`「还原到主窗口」。
-  - 拖出柄：面板头部标题左侧的 12px `GripVertical`（`text-ink-subtle`，hover `text-ink-muted`，`cursor-grab`/`active:cursor-grabbing`）。拖到主窗口之外松手即拆出，落点由主进程读真实光标位置决定；在主窗口内松手不算拆分。拖出柄只在面板停靠主窗口时出现，拆出的面板靠关闭按钮回位，不新增常驻按钮。
+  - 拖出柄：面板头部标题左侧的 14px `GripVertical`（`text-ink-muted`，hover `text-ink`，`cursor-grab`/`active:cursor-grabbing`）。拖到主窗口之外松手即拆出，落点由主进程读真实光标位置决定；在主窗口内松手不算拆分。`dataTransfer.dropEffect` 不能作为取消判据（拖出窗口松手时同样为 `'none'`）。拖出柄只在面板停靠主窗口时出现，拆出的面板靠关闭按钮回位，不新增常驻按钮。
   - 拆出瞬间原位置立即换成占位，不等子窗口首帧。
 - **主题与语言跟随主窗口**：辅助窗口镜像 `html.class`（Paper / Ink）、`lang`、`data-lang`，切换主题即时同步，不重开窗口。辅助窗口内不执行任何脚本（`script-src 'none'`）。
 - **提示与对话框按窗口落点**：toast 与 `DialogHost` 每个窗口各挂一份，只显示属于该窗口的条目；落点由「哪个窗口持有焦点」决定，不再弹回主窗口。
@@ -694,6 +695,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.36 | 2026-10-28 | 辅助窗口改用与主窗口同一套外壳：Windows / Linux 无边框、macOS `hiddenInset`，32px 信息栏升级为 34px 自绘标题栏（拖动窗口 / 双击最大化 / 回位 / 窗口按钮）；窗口按钮按 `frameName` 寻址，最大化状态带 `host` 回传；拖出柄 14px，`dropEffect` 不再作为取消判据 |
 | v1.35 | 2026-10-28 | 辅助窗口（面板拆分）：原生标题栏 + 32px 信息栏 + 原位占位；右键菜单拆分/回位；主题与提示按窗口落点；不持久化布局 |
 | v1.34 | 2026-10-28 | 聊天图片附件：提交即按 id 消费（缩略图立即消失），流式期间新图留给下一轮；排队项与运行中插话可带图，正文为空时显示「含图 N 张」；纯图片（无文本）允许发送；系统触发的发送（重试 / 编辑重发 / 计划执行）不消费输入框附件；纯图片会话标题固定为「图片对话 / Image chat」，Anthropic 端由 AgentManager 补占位文本避免空 text 块被拒 |
 | v1.33 | 2026-10-27 | 模型能力表：设置页供应商 API 分节把「支持图片的模型」勾选列表升级为三列能力表（模型 / 上下文容量 / 图片），新增 `SettingsTable` / `SettingsTableRow` 模式与 `Modal` 的 alert 单按钮变体；容量为四档固定字面量（64K / 128K / 256K / 1M，默认 128K） |

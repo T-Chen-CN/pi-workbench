@@ -46,7 +46,7 @@ export const PanelSlot: React.FC<{
       {fallback}
       {createPortal(
         <HostProvider host={host}>
-          <PanelWindowFrame panel={panel} workspacePath={workspacePath}>
+          <PanelWindowFrame panel={panel} workspacePath={workspacePath} host={host}>
             {children}
           </PanelWindowFrame>
         </HostProvider>,

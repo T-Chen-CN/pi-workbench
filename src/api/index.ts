@@ -40,7 +40,11 @@ import type {
   GithubDeviceLoginEvent,
   GitChangedPayload,
   AuxDetachResult,
+  AuxWindowCommandResult,
+  WindowCommand,
+  WindowMaximizedState
 } from '../types/electron'
+import { frameNameOf, type HostId } from '../panelHost/types'
 
 // Mock API for browser development
 const MOCK_CONFIG_KEY = 'pi-workbench-api-config'
@@ -51,7 +55,7 @@ const mockUpdateState: UpdateState = {
   status: 'unsupported',
   currentVersion: '0.0.0-web',
   platform: 'web',
-  canAutoInstall: false,
+  canAutoInstall: false
 }
 
 const mockAPI = {
@@ -66,7 +70,7 @@ const mockAPI = {
       success: true,
       items: [
         { name: 'src', path: '/mock/src', isDirectory: true },
-        { name: 'package.json', path: '/mock/package.json', isDirectory: false },
+        { name: 'package.json', path: '/mock/package.json', isDirectory: false }
       ]
     }
   },
@@ -113,23 +117,23 @@ const mockAPI = {
   updateCheck: async (): Promise<UpdateCheckResult> => ({
     success: false,
     state: mockUpdateState,
-    error: 'ERR_UPDATE_NOT_PACKAGED',
+    error: 'ERR_UPDATE_NOT_PACKAGED'
   }),
   updateDownload: async (): Promise<UpdateActionResult> => ({
     success: false,
-    error: 'ERR_UPDATE_NOT_PACKAGED',
+    error: 'ERR_UPDATE_NOT_PACKAGED'
   }),
   updateInstall: async (): Promise<UpdateActionResult> => ({
     success: false,
-    error: 'ERR_UPDATE_NOT_PACKAGED',
+    error: 'ERR_UPDATE_NOT_PACKAGED'
   }),
   updateGetState: async (): Promise<UpdateStateResult> => ({
     success: true,
-    state: mockUpdateState,
+    state: mockUpdateState
   }),
   updateOpenDownload: async (): Promise<UpdateActionResult> => ({
     success: false,
-    error: 'ERR_UPDATE_NOT_PACKAGED',
+    error: 'ERR_UPDATE_NOT_PACKAGED'
   }),
   consumeUpdateNotice: async (): Promise<UpdateNoticeResult> => ({ success: true, notice: null }),
   onUpdateStatus: (_callback: (status: UpdateState) => void) => () => {},
@@ -142,19 +146,19 @@ const mockAPI = {
       node: '-',
       platform: 'web',
       arch: '-',
-      appDir: '/mock/app/dir',
-    },
+      appDir: '/mock/app/dir'
+    }
   }),
   appHasActiveWork: async (): Promise<AppActiveWorkResult> => ({
     success: true,
-    terminal: false,
+    terminal: false
   }),
   getSettings: async (): Promise<GetSettingsResult> => {
     const defaults = {
       language: 'zh',
       theme: 'light',
       autoSave: true,
-      autoSaveDelay: 2000,
+      autoSaveDelay: 2000
     }
     try {
       const saved = localStorage.getItem(MOCK_SETTINGS_KEY)
@@ -179,25 +183,35 @@ const mockAPI = {
     let existing: string[] = []
     try {
       existing = JSON.parse(localStorage.getItem('pi-workbench-recent-workspaces') || '[]')
-    } catch { /* ignore */ }
-    const workspaces = [workspacePath, ...existing.filter(p => p !== workspacePath)].slice(0, 10)
+    } catch {
+      /* ignore */
+    }
+    const workspaces = [workspacePath, ...existing.filter((p) => p !== workspacePath)].slice(0, 10)
     localStorage.setItem('pi-workbench-recent-workspaces', JSON.stringify(workspaces))
     return { success: true, workspaces }
   },
   minimizeWindow: async (): Promise<{ success: boolean }> => ({ success: false }),
   toggleMaximizeWindow: async (): Promise<{ success: boolean; maximized: boolean }> => ({
     success: false,
-    maximized: false,
+    maximized: false
   }),
   closeWindow: async (): Promise<{ success: boolean }> => ({ success: false }),
   isWindowMaximized: async (): Promise<{ success: boolean; maximized: boolean }> => ({
     success: true,
-    maximized: false,
+    maximized: false
   }),
-  onWindowMaximizedChange: (_callback: (maximized: boolean) => void) => () => {},
+  onWindowMaximizedChange: (_callback: (state: WindowMaximizedState) => void) => () => {},
   // 浏览器开发模式没有辅助窗口的主进程支持：拆窗退化为普通 window.open，由渲染层用 screenX/screenY 定位
   onAuxWindowClosed: (_callback: (frameName: string) => void) => () => {},
   auxDetachAt: async (): Promise<AuxDetachResult> => ({ success: false, error: 'Not supported' }),
+  auxWindowCommand: async (_host: string, _command: WindowCommand): Promise<AuxWindowCommandResult> => ({
+    success: false,
+    error: 'Not supported'
+  }),
+  auxWindowState: async (_host: string): Promise<AuxWindowCommandResult> => ({
+    success: false,
+    error: 'Not supported'
+  }),
   appBootReady: () => {},
   onAppBootExpanded: (_callback: () => void) => () => {},
   initWorkspace: async (workspacePath: string): Promise<WorkspaceResult> => {
@@ -223,8 +237,8 @@ const mockAPI = {
           open: Array.isArray(parsed.open)
             ? parsed.open.filter((item): item is string => typeof item === 'string')
             : [],
-          active: typeof parsed.active === 'string' ? parsed.active : null,
-        },
+          active: typeof parsed.active === 'string' ? parsed.active : null
+        }
       }
     } catch {
       return { success: true, tabs: { open: [], active: null } }
@@ -306,7 +320,7 @@ const mockAPI = {
   pluginsList: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
   pluginsInvoke: async (): Promise<PluginCommandResult> => ({
     success: false,
-    error: 'Plugins are only available in the Electron app',
+    error: 'Plugins are only available in the Electron app'
   }),
   pluginsReload: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
   pluginsSetEnabled: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
@@ -315,19 +329,19 @@ const mockAPI = {
   // Terminal（Web 模式没有 PTY，返回失败而不是抛异常）
   terminalCreate: async (): Promise<TerminalCreateResult> => ({
     success: false,
-    error: 'Terminal is only available in the Electron app',
+    error: 'Terminal is only available in the Electron app'
   }),
   gitRepoInfo: async () => ({ success: true, repo: null, worktrees: [] }),
   gitFetch: async () => ({
     success: false,
     skipped: true,
-    error: 'Git is only available in the Electron app',
+    error: 'Git is only available in the Electron app'
   }),
   onGitChanged: (_callback: (payload: GitChangedPayload) => void) => () => {},
   gitListWorktrees: async () => ({ success: true, worktrees: [] }),
   gitForgetWorktree: async () => ({
     success: false,
-    error: 'Git is only available in the Electron app',
+    error: 'Git is only available in the Electron app'
   }),
   gitBranches: async () => ({ success: true, branches: [] }),
   gitStatus: async () => ({
@@ -339,16 +353,16 @@ const mockAPI = {
       behind: 0,
       detached: false,
       clean: true,
-      files: [],
-    },
+      files: []
+    }
   }),
   gitSessionBinding: async () => ({
     success: true,
-    binding: { key: 'main', path: '', branch: null },
+    binding: { key: 'main', path: '', branch: null }
   }),
   gitBindWorktree: async () => ({
     success: false,
-    error: 'Git is only available in the Electron app',
+    error: 'Git is only available in the Electron app'
   }),
   gitReleaseSession: async () => ({ success: true, removed: false, dirty: false }),
   gitCleanupOrphans: async () => ({ success: true, removed: [], dirty: [], external: [] }),
@@ -363,14 +377,14 @@ const mockAPI = {
   githubAuthConfig: async () => ({ success: true, appConfigured: false, linked: false }),
   githubAuthStart: async () => ({
     success: false,
-    error: 'GitHub login is only available in the Electron app',
+    error: 'GitHub login is only available in the Electron app'
   }),
   githubAuthStatus: async () => ({ success: true, configured: false }),
   githubAuthLogout: async () => ({ success: true }),
   onGithubAuthComplete: () => () => {},
   githubAuthDeviceStart: async () => ({
     success: false,
-    error: 'GitHub login is only available in the Electron app',
+    error: 'GitHub login is only available in the Electron app'
   }),
   githubAuthDeviceCancel: async () => ({ success: true, cancelled: false }),
   githubAuthDeviceOpen: async () => ({ success: false }),
@@ -378,7 +392,7 @@ const mockAPI = {
   gitSetGithubToken: async () => ({ success: true }),
   gitPrStatus: async () => ({
     success: true,
-    status: { available: false, reason: 'Git is only available in the Electron app' },
+    status: { available: false, reason: 'Git is only available in the Electron app' }
   }),
   onAgentSessionRootChanged: () => () => {},
   terminalWrite: async (): Promise<TerminalResult> => ({ success: false }),
@@ -386,7 +400,7 @@ const mockAPI = {
   terminalClose: async (): Promise<TerminalResult> => ({ success: false }),
   terminalFlush: async (): Promise<TerminalResult> => ({ success: false }),
   onTerminalData: (_callback: (payload: { id: string; data: string }) => void) => () => {},
-  onTerminalExit: (_callback: (payload: { id: string; exitCode: number }) => void) => () => {},
+  onTerminalExit: (_callback: (payload: { id: string; exitCode: number }) => void) => () => {}
 }
 
 const electronAPI = window.electronAPI || mockAPI
@@ -394,7 +408,7 @@ const electronAPI = window.electronAPI || mockAPI
 if (!window.electronAPI) {
   console.warn(
     '[API] window.electronAPI is undefined — falling back to mock API. ' +
-    'In Electron this usually means the preload script failed to load.'
+      'In Electron this usually means the preload script failed to load.'
   )
 }
 
@@ -424,8 +438,7 @@ export const api = {
   renamePath: (oldPath: string, newPath: string) => electronAPI.renamePath(oldPath, newPath),
   watchWorkspace: (workspacePath: string) => electronAPI.watchWorkspace(workspacePath),
   unwatchWorkspace: (workspacePath?: string) => electronAPI.unwatchWorkspace(workspacePath),
-  onFsChanged: (callback: (payload: { type: string; path: string }) => void) =>
-    electronAPI.onFsChanged(callback),
+  onFsChanged: (callback: (payload: { type: string; path: string }) => void) => electronAPI.onFsChanged(callback),
 
   // App configuration (portable architecture)
   getAppDir: () => electronAPI.getAppDir(),
@@ -447,33 +460,36 @@ export const api = {
   toggleMaximizeWindow: () => electronAPI.toggleMaximizeWindow(),
   closeWindow: () => electronAPI.closeWindow(),
   isWindowMaximized: () => electronAPI.isWindowMaximized(),
-  onWindowMaximizedChange: (callback: (maximized: boolean) => void) =>
+  onWindowMaximizedChange: (callback: (state: WindowMaximizedState) => void) =>
     electronAPI.onWindowMaximizedChange(callback),
+  // 主进程只接受带 `pi-panel:` 前缀的 frameName，渲染层统一用 HostId
+  auxWindowCommand: (host: HostId, command: WindowCommand): Promise<AuxWindowCommandResult> =>
+    typeof electronAPI.auxWindowCommand === 'function'
+      ? electronAPI.auxWindowCommand(frameNameOf(host), command)
+      : Promise.resolve({ success: false, error: 'Not supported' }),
+  auxWindowState: (host: HostId): Promise<AuxWindowCommandResult> =>
+    typeof electronAPI.auxWindowState === 'function'
+      ? electronAPI.auxWindowState(frameNameOf(host))
+      : Promise.resolve({ success: false, error: 'Not supported' }),
   onAuxWindowClosed: (callback: (frameName: string) => void) =>
-    typeof electronAPI.onAuxWindowClosed === 'function'
-      ? electronAPI.onAuxWindowClosed(callback)
-      : () => {},
+    typeof electronAPI.onAuxWindowClosed === 'function' ? electronAPI.onAuxWindowClosed(callback) : () => {},
   auxDetachAt: () => electronAPI.auxDetachAt(),
   appBootReady: () => {
     if (typeof electronAPI.appBootReady === 'function') electronAPI.appBootReady()
   },
   onAppBootExpanded: (callback: () => void) =>
-    typeof electronAPI.onAppBootExpanded === 'function'
-      ? electronAPI.onAppBootExpanded(callback)
-      : () => {},
+    typeof electronAPI.onAppBootExpanded === 'function' ? electronAPI.onAppBootExpanded(callback) : () => {},
 
   // Workspace configuration
   initWorkspace: (workspacePath: string) => electronAPI.initWorkspace(workspacePath),
   disposeWorkspace: (workspacePath: string) => electronAPI.disposeWorkspace(workspacePath),
   draftSave: (workspacePath: string, filePath: string, content: string) =>
     electronAPI.draftSave(workspacePath, filePath, content),
-  draftDelete: (workspacePath: string, filePath: string) =>
-    electronAPI.draftDelete(workspacePath, filePath),
+  draftDelete: (workspacePath: string, filePath: string) => electronAPI.draftDelete(workspacePath, filePath),
   draftList: (workspacePath: string) => electronAPI.draftList(workspacePath),
   draftClear: (workspacePath: string) => electronAPI.draftClear(workspacePath),
   editorTabsGet: (workspacePath: string) => electronAPI.editorTabsGet(workspacePath),
-  editorTabsSet: (workspacePath: string, tabs: EditorTabs) =>
-    electronAPI.editorTabsSet(workspacePath, tabs),
+  editorTabsSet: (workspacePath: string, tabs: EditorTabs) => electronAPI.editorTabsSet(workspacePath, tabs),
 
   // API Configuration management (portable architecture)
   apiConfigGet: () => electronAPI.apiConfigGet(),
@@ -492,22 +508,18 @@ export const api = {
   pluginsReload: (workspaceDir: string) => electronAPI.pluginsReload(workspaceDir),
   pluginsSetEnabled: (workspaceDir: string, pluginId: string, enabled: boolean) =>
     electronAPI.pluginsSetEnabled(workspaceDir, pluginId, enabled),
-  onPluginsChanged: (callback: (payload: { workspaceDir: string }) => void) =>
-    electronAPI.onPluginsChanged(callback),
+  onPluginsChanged: (callback: (payload: { workspaceDir: string }) => void) => electronAPI.onPluginsChanged(callback),
 
   // Git worktrees / read-only history / GitHub status
   gitRepoInfo: (workspaceDir: string) => electronAPI.gitRepoInfo(workspaceDir),
-  gitFetch: (workspaceDir: string, options?: { force?: boolean }) =>
-    electronAPI.gitFetch(workspaceDir, options),
-  onGitChanged: (callback: (payload: GitChangedPayload) => void) =>
-    electronAPI.onGitChanged(callback),
+  gitFetch: (workspaceDir: string, options?: { force?: boolean }) => electronAPI.gitFetch(workspaceDir, options),
+  onGitChanged: (callback: (payload: GitChangedPayload) => void) => electronAPI.onGitChanged(callback),
   gitListWorktrees: (workspaceDir: string, activeSessionId?: string) =>
     electronAPI.gitListWorktrees(workspaceDir, activeSessionId),
   gitForgetWorktree: (workspaceDir: string, id: string, activeSessionId?: string) =>
     electronAPI.gitForgetWorktree(workspaceDir, id, activeSessionId),
   gitBranches: (workspaceDir: string) => electronAPI.gitBranches(workspaceDir),
-  gitStatus: (workspaceDir: string, worktreePath?: string) =>
-    electronAPI.gitStatus(workspaceDir, worktreePath),
+  gitStatus: (workspaceDir: string, worktreePath?: string) => electronAPI.gitStatus(workspaceDir, worktreePath),
   gitSessionBinding: (workspaceDir: string, sessionId: string) =>
     electronAPI.gitSessionBinding(workspaceDir, sessionId),
   gitBindWorktree: (workspaceDir: string, sessionId: string, target: string, base?: string) =>
@@ -521,18 +533,12 @@ export const api = {
     electronAPI.gitCommitStats(workspaceDir, limit, branch, all),
   gitCreateBranch: (workspaceDir: string, sha: string, name: string) =>
     electronAPI.gitCreateBranch(workspaceDir, sha, name),
-  gitCommitDetail: (workspaceDir: string, sha: string) =>
-    electronAPI.gitCommitDetail(workspaceDir, sha),
-  gitDiff: (workspaceDir: string, from: string, to: string) =>
-    electronAPI.gitDiff(workspaceDir, from, to),
+  gitCommitDetail: (workspaceDir: string, sha: string) => electronAPI.gitCommitDetail(workspaceDir, sha),
+  gitDiff: (workspaceDir: string, from: string, to: string) => electronAPI.gitDiff(workspaceDir, from, to),
   gitCheckout: (workspaceDir: string, worktreePath: string, branch: string) =>
     electronAPI.gitCheckout(workspaceDir, worktreePath, branch),
-  gitMerge: (
-    workspaceDir: string,
-    worktreePath: string,
-    branch: string,
-    strategy?: 'merge' | 'squash' | 'rebase'
-  ) => electronAPI.gitMerge(workspaceDir, worktreePath, branch, strategy),
+  gitMerge: (workspaceDir: string, worktreePath: string, branch: string, strategy?: 'merge' | 'squash' | 'rebase') =>
+    electronAPI.gitMerge(workspaceDir, worktreePath, branch, strategy),
   gitGithubTokenStatus: () => electronAPI.gitGithubTokenStatus(),
   githubAuthConfig: () => electronAPI.githubAuthConfig(),
   githubAuthStart: () => electronAPI.githubAuthStart(),
@@ -551,23 +557,18 @@ export const api = {
   onGithubAuthDeviceEvent: (callback: (payload: GithubDeviceLoginEvent) => void) =>
     electronAPI.onGithubAuthDeviceEvent(callback),
   gitSetGithubToken: (token: string) => electronAPI.gitSetGithubToken(token),
-  gitPrStatus: (workspaceDir: string, worktreePath?: string) =>
-    electronAPI.gitPrStatus(workspaceDir, worktreePath),
-  onAgentSessionRootChanged: (
-    callback: (payload: { workspaceDir: string; sessionId: string; root: string }) => void
-  ) => electronAPI.onAgentSessionRootChanged(callback),
+  gitPrStatus: (workspaceDir: string, worktreePath?: string) => electronAPI.gitPrStatus(workspaceDir, worktreePath),
+  onAgentSessionRootChanged: (callback: (payload: { workspaceDir: string; sessionId: string; root: string }) => void) =>
+    electronAPI.onAgentSessionRootChanged(callback),
 
   // Terminal
   terminalCreate: (workspaceDir: string, cols: number, rows: number, cwd?: string) =>
     electronAPI.terminalCreate(workspaceDir, cols, rows, cwd),
   terminalWrite: (id: string, data: string) => electronAPI.terminalWrite(id, data),
-  terminalResize: (id: string, cols: number, rows: number) =>
-    electronAPI.terminalResize(id, cols, rows),
+  terminalResize: (id: string, cols: number, rows: number) => electronAPI.terminalResize(id, cols, rows),
   terminalClose: (id: string) => electronAPI.terminalClose(id),
   terminalFlush: (id: string) => electronAPI.terminalFlush(id),
-  onTerminalData: (callback: (payload: { id: string; data: string }) => void) =>
-    electronAPI.onTerminalData(callback),
+  onTerminalData: (callback: (payload: { id: string; data: string }) => void) => electronAPI.onTerminalData(callback),
   onTerminalExit: (callback: (payload: { id: string; exitCode: number }) => void) =>
-    electronAPI.onTerminalExit(callback),
+    electronAPI.onTerminalExit(callback)
 }
-

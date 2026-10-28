@@ -7,6 +7,21 @@ export interface AuxDetachResult {
   error?: string
 }
 
+/** 自绘窗口按钮的最大化状态：主窗口与辅助窗口各自上报 */
+export interface WindowMaximizedState {
+  host: string
+  maximized: boolean
+}
+
+/** 自绘窗口按钮的三种动作，主窗口 / 辅助窗口共用 */
+export type WindowCommand = 'minimize' | 'toggleMaximize' | 'close'
+
+export interface AuxWindowCommandResult {
+  success: boolean
+  maximized?: boolean
+  error?: string
+}
+
 export interface GitRepoInfo {
   root: string
   gitDir: string
@@ -207,11 +222,14 @@ export interface ElectronAPI {
   toggleMaximizeWindow: () => Promise<{ success: boolean; maximized: boolean }>
   closeWindow: () => Promise<{ success: boolean }>
   isWindowMaximized: () => Promise<{ success: boolean; maximized: boolean }>
-  onWindowMaximizedChange: (callback: (maximized: boolean) => void) => () => void
+  onWindowMaximizedChange: (callback: (state: WindowMaximizedState) => void) => () => void
   /** 辅助窗口被关闭时回调（参数是 window.open 的 frameName） */
   onAuxWindowClosed: (callback: (frameName: string) => void) => () => void
   /** 拖出拆窗：由主进程读取真实光标位置并给出新窗口矩形 */
   auxDetachAt: () => Promise<AuxDetachResult>
+  /** 辅助窗口的自绘窗口按钮：按 frameName 寻址，不操作主窗口 */
+  auxWindowCommand: (host: string, command: WindowCommand) => Promise<AuxWindowCommandResult>
+  auxWindowState: (host: string) => Promise<AuxWindowCommandResult>
   /** 启动闸门：渲染层数据就绪后通知主进程放大窗口 */
   appBootReady: () => void
   onAppBootExpanded: (callback: () => void) => () => void

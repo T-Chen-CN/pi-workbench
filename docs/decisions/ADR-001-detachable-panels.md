@@ -26,13 +26,14 @@
 | 事项 | 决定 |
 | --- | --- |
 | 应用加载方式 | 改用自定义协议 `pw-app://bundle/`，否则不同 `file://` URL 的 origin 不一致，跨文档操作受限 |
-| 辅助窗口外壳 | 系统原生标题栏（`frame: true`），窗口内只加 32px 信息栏与回位按钮 |
+| 辅助窗口外壳 | 与主窗口同一套：Windows / Linux `frame: false`、macOS `hiddenInset`，窗口内 34px 自绘标题栏（拖动 / 双击最大化 / 回位 / 三个窗口按钮） |
 | 关闭辅助窗口 | 等于停靠回主窗口 |
 | 原位置 | 渲染 `EmptyState` 占位（含「定位到独立窗口 / 还原到主窗口」），布局不塌陷，主窗口保持展开 |
-| 入口 | 面板头部右键菜单 + 12px 拖出柄，不新增常驻按钮 |
-| 拖出判定 | `dragend` 调主进程 `aux:detach-at`，由主进程读真实光标位置与工作区，渲染层不自己算 |
+| 入口 | 面板头部右键菜单 + 14px 拖出柄，不新增常驻按钮 |
+| 拖出判定 | `dragend` 调主进程 `aux:detach-at`，由主进程读真实光标位置与工作区，渲染层不自己算；**不能用 `dataTransfer.dropEffect` 判断取消**——拖到窗口外松手时 Chromium 同样报 `'none'` |
 | 终端 PTY | 所有权升到 `terminalStore`，拆窗只重建 xterm 视图，PTY 与 200KB 尾部缓冲留在 store |
 | 走动时带走的手感 | 展开的目录、文件树 / Git 滚动位置放 `panelUiState`（运行期内存，不落盘）；骨架树必须逐字复用 `listDirectory` 给出的路径写法（Windows 反斜杠），且首轮加载完成前不写回，否则空树会盖掉好快照 |
+| 窗口按钮寻址 | 渲染层只跑在主窗口的 JS 上下文，IPC 来源恒为主窗口，所以辅助窗口的最小化 / 最大化 / 关闭必须显式带 `frameName`（`pi-panel:aux:<n>`），最大化状态回传带 `host` 并由 `sameHost` 归一化后比较 |
 | toast / dialog | 每个窗口各挂一份，按「哪个窗口持有焦点」决定落点 |
 | 布局持久化 | 不做。重启回默认布局，与「退出不自动恢复工作区」一致 |
 
@@ -59,13 +60,14 @@
 - 子文档里的样式依赖 `<link>` 绝对化与 `<base>`，新增资源要检查路径；
 - 需要守住主进程的窗口白名单（只放行 `about:blank` + `pi-panel:`），否则等于开了一个任意开窗的口子；
 - 拆出的面板在主窗口保持挂载（`hidden`）——portal 需要组件树活着，不能真卸载，因此面板组件必须容忍「不可见但 mounted」。
+- 进程边界的字符串是隐式契约：`pi-panel:` 前缀在 `electron/aux-window.ts`、`src/panelHost/types.ts` 两处必须逐字一致，`HostId`（`aux:1`）与 `frameName`（`pi-panel:aux:1`）混用会静默失败（命令被当作无效宿主丢掉，按钮「点了没反应」）；`WindowControls` 直接用 preload 桥，所以那里也要自己走 `frameNameOf()`。
 
 ## 落地位置
 
 - 主进程：`electron/app-protocol.ts`、`electron/aux-window.ts`、`electron/main.ts`（`installAuxWindowSupport` + `registerAppProtocol`）
 - 渲染层：`src/panelHost/{types,focus,auxWindow,HostContext,panelLabels,panelDrag,panelUiState}.ts`、`src/store/panelStore.ts`、`src/components/{PanelSlot,PanelWindowFrame,PanelContextMenu,PanelDragHandle}.tsx`
 - 面板接入：`WorkspaceView.tsx`（`PanelSlot` 包裹 + `sidebarShown / chatShown / terminalShown`）、`TerminalPanel.tsx` + `src/store/terminalStore.ts`
-- 测试：`tests/aux-window.test.ts`、`tests/panel-slot.test.tsx`、`tests/panel-store.test.tsx`、`tests/panel-drag.test.tsx`、`tests/terminal-store.test.ts`、`tests/chat-detach.test.tsx`、`tests/file-panel-detach.test.tsx`
+- 测试：`tests/aux-window.test.ts`、`tests/panel-slot.test.tsx`、`tests/panel-store.test.tsx`、`tests/panel-window-frame.test.tsx`、`tests/panel-drag.test.tsx`、`tests/terminal-store.test.ts`、`tests/chat-detach.test.tsx`、`tests/file-panel-detach.test.tsx`
 
 ## 后续可评估
 

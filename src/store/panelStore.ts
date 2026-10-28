@@ -8,7 +8,15 @@
 import { create } from 'zustand'
 import { openPanelWindow, type AuxWindowHandle } from '../panelHost/auxWindow'
 import { setFocusedHostResolver } from '../panelHost/focus'
-import { MAIN_HOST, PANEL_IDS, type AnchorRect, type HostId, type PanelId } from '../panelHost/types'
+import {
+  MAIN_HOST,
+  PANEL_IDS,
+  hostIdFromFrameName,
+  type AnchorRect,
+  type HostId,
+  type PanelId
+} from '../panelHost/types'
+import { PANEL_TITLE_KEY } from '../panelHost/panelLabels'
 import { useI18nStore } from './i18nStore'
 import { toast } from './toastStore'
 
@@ -52,7 +60,7 @@ function defaultRect(): AnchorRect {
     x: Math.round(anchorX + Math.max(0, outerWidth - width - 48)),
     y: Math.round(anchorY + 64),
     width,
-    height,
+    height
   }
 }
 
@@ -67,7 +75,7 @@ export function rectFromPointer(clientX: number, clientY: number): AnchorRect {
     x: Math.round(offsetX + clientX - 40),
     y: Math.round(offsetY + clientY - 12),
     width,
-    height,
+    height
   }
 }
 
@@ -96,8 +104,9 @@ export const usePanelStore = create<PanelHostState>((set, get) => ({
     try {
       handle = await openPanelWindow({
         id: hostId,
-        title: options?.title ?? panel,
-        rect: options?.rect ?? defaultRect(),
+        // 默认取本地化面板名：拖出路径不传 title，也不能让窗口标题退化成 `files`
+        title: options?.title ?? useI18nStore.getState().t(PANEL_TITLE_KEY[panel]),
+        rect: options?.rect ?? defaultRect()
       })
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
@@ -109,12 +118,12 @@ export const usePanelStore = create<PanelHostState>((set, get) => ({
     set((current) => ({
       panelHost: {
         ...current.panelHost,
-        [workspaceDir]: { ...current.panelHost[workspaceDir], [panel]: hostId },
+        [workspaceDir]: { ...current.panelHost[workspaceDir], [panel]: hostId }
       },
       windows: {
         ...current.windows,
-        [hostId]: { workspaceDir, panel, handle },
-      },
+        [hostId]: { workspaceDir, panel, handle }
+      }
     }))
   },
 
@@ -128,7 +137,7 @@ export const usePanelStore = create<PanelHostState>((set, get) => ({
       delete windows[hostId]
       return {
         panelHost: removePanelHost(current.panelHost, workspaceDir, panel),
-        windows,
+        windows
       }
     })
     entry?.handle.dispose()
@@ -136,9 +145,7 @@ export const usePanelStore = create<PanelHostState>((set, get) => ({
 
   dockWorkspace: (workspaceDir) => {
     const state = get()
-    const panels = PANEL_IDS.filter(
-      (panel) => (state.panelHost[workspaceDir]?.[panel] ?? MAIN_HOST) !== MAIN_HOST
-    )
+    const panels = PANEL_IDS.filter((panel) => (state.panelHost[workspaceDir]?.[panel] ?? MAIN_HOST) !== MAIN_HOST)
     if (panels.length === 0) return
     for (const panel of panels) get().dockPanel(workspaceDir, panel)
   },
@@ -174,11 +181,11 @@ export const usePanelStore = create<PanelHostState>((set, get) => ({
       delete windows[hostId]
       return {
         panelHost: removePanelHost(current.panelHost, entry.workspaceDir, entry.panel),
-        windows,
+        windows
       }
     })
     entry.handle.dispose()
-  },
+  }
 }))
 
 /** 面板当前所在宿主（默认主窗口） */
@@ -199,9 +206,4 @@ setFocusedHostResolver(() => {
   return MAIN_HOST
 })
 
-/** frameName → hostId（`pi-panel:aux:1` → `aux:1`） */
-export function hostIdFromFrameName(frameName: string): HostId | null {
-  const prefix = 'pi-panel:'
-  if (typeof frameName !== 'string' || !frameName.startsWith(prefix)) return null
-  return frameName.slice(prefix.length) || null
-}
+export { hostIdFromFrameName }
