@@ -101,7 +101,7 @@ export const ChatTranscript: React.FC<ChatTranscriptProps> = ({
                 compact
                 icon={History}
                 title={t('agentChatTitle')}
-                description={initialized ? t('agentReadyStatus') : t('agentInitializingStatus')}
+                description={initialized ? undefined : t('agentInitializingStatus')}
               />
               {initialized && activeKey && (
                 <div className="flex max-w-md flex-wrap justify-center gap-1.5">

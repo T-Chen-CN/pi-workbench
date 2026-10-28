@@ -169,12 +169,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
         panelId={panelId}
         t={t}
         fatalError={fatalError}
+        workspacePath={workspacePath}
       />
     )
   }
 
   return (
-    <div className="relative flex h-full flex-col bg-panel">
+    <div className="relative flex h-full flex-col bg-surface">
       <ChatHeader
         onCollapse={onCollapse}
         collapseButtonRef={collapseButtonRef}

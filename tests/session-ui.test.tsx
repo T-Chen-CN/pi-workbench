@@ -65,6 +65,30 @@ describe('SessionTabs', () => {
     expect(props.onClose).toHaveBeenCalledWith('a')
   })
 
+  it('多个未命名会话按序号区分', () => {
+    const untitled: SessionSummary[] = [
+      { id: 'x', title: '', messageCount: 0, createdAt: 1, updatedAt: 2 },
+      { id: 'y', title: '  ', messageCount: 0, createdAt: 1, updatedAt: 3 },
+    ]
+    useSessionStore.getState().setSessions(WS, untitled)
+    useSessionStore.getState().setOpen(WS, ['x', 'y'], 'x')
+    renderTabs({ sessions: untitled })
+
+    expect(screen.getByRole('tab', { name: new RegExp(`${translations.zh.untitledSession} 1`) })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: new RegExp(`${translations.zh.untitledSession} 2`) })).toBeTruthy()
+  })
+
+  it('唯一未命名会话不加序号', () => {
+    const untitled: SessionSummary[] = [
+      { id: 'x', title: '', messageCount: 0, createdAt: 1, updatedAt: 2 },
+    ]
+    useSessionStore.getState().setSessions(WS, untitled)
+    useSessionStore.getState().setOpen(WS, ['x'], 'x')
+    renderTabs({ sessions: untitled })
+
+    expect(screen.getByRole('tab', { name: translations.zh.untitledSession })).toBeTruthy()
+  })
+
   it('shows running, error, needs-action, unread and draft states', () => {
     useSessionStore.getState().markStreaming(WS, 'a', true)
     useSessionStore.getState().markError(WS, 'b', 'provider down')
