@@ -63,23 +63,6 @@ export function mimeForPath(targetPath: string): string {
   return MIME_BY_EXTENSION[extension] ?? 'application/octet-stream'
 }
 
-/** 在 app ready 之前调用：自定义协议需要先声明特权才能被 fetch / 媒体元素使用 */
-export function registerFileSchemePrivileges(): void {
-  protocol.registerSchemesAsPrivileged([
-    {
-      scheme: FILE_SCHEME,
-      privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-        stream: true,
-        corsEnabled: true,
-        bypassCSP: false,
-      },
-    },
-  ])
-}
-
 /**
  * 把 `pw-file://local/<路径>` 还原成绝对路径。
  * 逐段编码，任何包含分隔符、控制字符或 `..` 的段都直接拒绝，避免越权读取。

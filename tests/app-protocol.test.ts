@@ -9,7 +9,6 @@ import {
   isAppUrl,
   mimeForAppPath,
   registerAppProtocol,
-  registerAppSchemePrivileges,
   resolveAppTarget,
   serveAppRequest,
 } from '../electron/app-protocol'
@@ -44,17 +43,8 @@ afterAll(async () => {
   await fs.rm(path.join(path.dirname(distDir), 'pi-app-secret.txt'), { force: true })
 })
 
-describe('scheme privileges', () => {
-  it('registers a standard, secure scheme', () => {
-    registerAppSchemePrivileges()
-    const [schemes] = protocolMock.registerSchemesAsPrivileged.mock.calls[0]
-    const entry = schemes.find((item: { scheme: string }) => item.scheme === APP_SCHEME)
-    expect(entry.privileges.standard).toBe(true)
-    expect(entry.privileges.secure).toBe(true)
-    expect(entry.privileges.supportFetchAPI).toBe(true)
-  })
-
-  it('exposes the protocol handler', () => {
+describe('protocol handler', () => {
+  it('registers the pw-app handler', () => {
     registerAppProtocol(distDir)
     expect(protocolMock.handle).toHaveBeenCalledWith(APP_SCHEME, expect.any(Function))
   })

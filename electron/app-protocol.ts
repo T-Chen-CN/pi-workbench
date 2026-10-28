@@ -50,23 +50,6 @@ export function mimeForAppPath(targetPath: string): string {
   return MIME_BY_EXTENSION[extension] ?? 'application/octet-stream'
 }
 
-/** 在 app ready 之前调用：自定义协议需要先声明特权，否则 fetch / worker 不可用 */
-export function registerAppSchemePrivileges(): void {
-  protocol.registerSchemesAsPrivileged([
-    {
-      scheme: APP_SCHEME,
-      privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-        stream: true,
-        corsEnabled: true,
-        bypassCSP: false,
-      },
-    },
-  ])
-}
-
 /** 生成外壳 URL，例如 appUrl('/index.html', { theme: 'ink' }) */
 export function appUrl(pathname: string, query?: Record<string, string>): string {
   const normalized = pathname.startsWith('/') ? pathname : `/${pathname}`

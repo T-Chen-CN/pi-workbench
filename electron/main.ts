@@ -17,10 +17,11 @@ import { createWorkspaceStore, importRecentWorkspaces } from './workspace-store.
 import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
 import { installAuxWindowSupport, registerAuxWindowIpc } from './aux-window.js'
-import { appUrl, isAppUrl, registerAppProtocol, registerAppSchemePrivileges } from './app-protocol.js'
+import { appUrl, isAppUrl, registerAppProtocol } from './app-protocol.js'
 import { animateBounds, type WindowBounds } from './window-morph.js'
 import { registerFilesIpc } from './ipc/files.js'
-import { registerFileProtocol, registerFileSchemePrivileges } from './file-protocol.js'
+import { registerFileProtocol } from './file-protocol.js'
+import { registerSchemePrivileges } from './scheme-privileges.js'
 import { registerAgentIpc } from './ipc/agent.js'
 import { registerGitIpc } from './ipc/git.js'
 import { repoSync } from './repo-sync.js'
@@ -59,14 +60,12 @@ try {
 }
 app.setPath('userData', userDataDir)
 
-// 自定义文件协议必须在 app ready 之前声明特权，媒体元素与 fetch 才能使用
-registerFileSchemePrivileges()
+// 自定义 scheme 的特权必须在 app ready 之前一次声明：外壳（pw-app）与只读文件
+// （pw-file）合并在同一次调用里，分开注册会被后者覆盖，媒体流与相对路径都会坏
+registerSchemePrivileges()
 
 let mainWindow: BrowserWindow | null = null
 configureIpcWindow(() => mainWindow)
-
-// 必须在 app ready 之前声明：外壳走标准协议后，辅助窗口才能与 opener 同源互访
-registerAppSchemePrivileges()
 
 /**
  * 启动页：窗口先以 420×260 出现，面板数据就绪后放大到工作台尺寸。
