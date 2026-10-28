@@ -15,6 +15,7 @@ import {
   isPathInsideRoot,
   isTrustedWorkspacePath,
   normalizeForComparison,
+  resolveWatchableRoot,
   trustWorkspace,
 } from '../workspace-trust.js'
 import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
@@ -88,9 +89,8 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
   // 工作区文件监听（递归，忽略依赖/构建/应用数据目录）
   handleIpc('fs:watch', async (event, workspacePath: string) => {
     try {
-      const trustedWorkspace = isTrustedWorkspacePath(workspacePath)
-        ? canonicalizePath(workspacePath)
-        : null
+      // 允许监听受信任根内的子目录（会话绑定的 Git 工作树），否则工作树里的改动到不了渲染层
+      const trustedWorkspace = resolveWatchableRoot(workspacePath)
       if (!trustedWorkspace) {
         return { success: false, error: 'Workspace is not approved' }
       }

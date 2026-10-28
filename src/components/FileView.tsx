@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react'
-import { Code, Eye, FileQuestion, FilePlus2 } from 'lucide-react'
+import { Code, Eye, FileQuestion, FilePlus2, AlertCircle } from 'lucide-react'
 import { editorStoreFor, useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
@@ -68,7 +68,7 @@ export const FileView: React.FC<FileViewProps> = ({
   const { t } = useI18nStore()
   const store = editorStoreFor(root)
   const { currentFile } = useEditorStore(root)
-  useFileDocument({ workspacePath, root, active })
+  const { conflicts, reloadFromDisk, keepLocal } = useFileDocument({ workspacePath, root, active })
 
   // Monaco 一经挂载就保留（隐藏而非卸载），这样切回源码视图时撤销栈还在
   const [sourceMounted, setSourceMounted] = useState(false)
@@ -79,6 +79,9 @@ export const FileView: React.FC<FileViewProps> = ({
   )
   const canSource = Boolean(currentFile && supportsSourceView(currentFile.kind))
   const readingKind = fileKind && hasReadingView(fileKind) ? fileKind : null
+
+  // 磁盘内容被外部（Agent / 其它编辑器）改过、本地又有未保存修改：提示条让用户选择
+  const conflictContent = currentFile ? (conflicts[currentFile.path] ?? null) : null
 
   useEffect(() => {
     if (!currentFile) return
@@ -98,6 +101,31 @@ export const FileView: React.FC<FileViewProps> = ({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <EditorTabs workspacePath={workspacePath} root={root} />
+
+      {conflictContent !== null && currentFile && (
+        <div
+          role="status"
+          data-testid="file-conflict-bar"
+          className="flex flex-shrink-0 flex-wrap items-center gap-2 border-b border-rule-divide bg-panel px-3 py-1"
+        >
+          <AlertCircle size={12} className="flex-shrink-0 text-warning" />
+          <span className="type-caption text-ink-muted">{t('fileChangedOnDisk')}</span>
+          <button
+            type="button"
+            onClick={() => void reloadFromDisk(currentFile.path)}
+            className="type-caption text-ink transition-colors hover:text-accent"
+          >
+            {t('fileReload')}
+          </button>
+          <button
+            type="button"
+            onClick={() => keepLocal(currentFile.path)}
+            className="type-caption text-ink-muted transition-colors hover:text-ink"
+          >
+            {t('fileKeepMine')}
+          </button>
+        </div>
+      )}
 
       {!currentFile ? (
         <div className="flex min-h-0 flex-1 items-center justify-center bg-surface">

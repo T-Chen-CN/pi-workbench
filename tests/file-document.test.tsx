@@ -23,8 +23,8 @@ const Harness: React.FC<{
   root?: string
   active?: boolean
 }> = ({ workspacePath, root, active }) => {
-  useFileDocument({ workspacePath, root: root ?? workspacePath, active })
-  return null
+  const { conflicts } = useFileDocument({ workspacePath, root: root ?? workspacePath, active })
+  return <div data-testid="conflicts">{JSON.stringify(conflicts)}</div>
 }
 
 const file = (path: string, content: string) => ({
@@ -215,7 +215,7 @@ describe('useFileDocument', () => {
     })
     vi.mocked(api.readFile).mockResolvedValue({ success: true, binary: false, content: 'disk' })
 
-    render(<Harness workspacePath="/ws" />)
+    const view = render(<Harness workspacePath="/ws" />)
     act(() => {
       editorStoreFor('/ws').getState().addOpenFile(file('/ws/a.ts', 'local'))
     })
@@ -224,15 +224,79 @@ describe('useFileDocument', () => {
     await act(async () => {
       fsChanged?.({ type: 'change', path: '/ws/a.ts' })
       await Promise.resolve()
+      await Promise.resolve()
     })
 
     const current = editorStoreFor('/ws')
       .getState()
       .openFiles.find((item) => item.path === '/ws/a.ts')
+    // 脏缓冲永不被静默覆盖，但要留一条冲突提示由用户选择
     expect(current?.content).toBe('local-edit')
-    expect(api.readFile).not.toHaveBeenCalled()
+    expect(current?.isDirty).toBe(true)
+    expect(JSON.parse(view.getByTestId('conflicts').textContent ?? '{}')).toEqual({
+      '/ws/a.ts': 'disk'
+    })
   })
 
+  it('reloads a clean buffer when the disk content changes', async () => {
+    let fsChanged: ((payload: { type: string; path: string }) => void) | null = null
+    vi.mocked(api.onFsChanged).mockImplementation((callback) => {
+      fsChanged = callback
+      return () => {}
+    })
+    vi.mocked(api.readFile).mockResolvedValue({
+      success: true,
+      binary: false,
+      content: 'from-agent'
+    })
+
+    const view = render(<Harness workspacePath="/ws" />)
+    act(() => {
+      editorStoreFor('/ws').getState().addOpenFile(file('/ws/a.ts', 'local'))
+    })
+
+    await act(async () => {
+      fsChanged?.({ type: 'change', path: '/ws/a.ts' })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const current = editorStoreFor('/ws')
+      .getState()
+      .openFiles.find((item) => item.path === '/ws/a.ts')
+    expect(current?.content).toBe('from-agent')
+    expect(current?.isDirty).toBe(false)
+    expect(JSON.parse(view.getByTestId('conflicts').textContent ?? '{}')).toEqual({})
+  })
+
+  // 从聊天里的 path:line 打开的文件用正斜杠拼路径，watcher 给的是反斜杠：必须能匹配上
+  it('matches the open file regardless of path separators', async () => {
+    let fsChanged: ((payload: { type: string; path: string }) => void) | null = null
+    vi.mocked(api.onFsChanged).mockImplementation((callback) => {
+      fsChanged = callback
+      return () => {}
+    })
+    vi.mocked(api.readFile).mockResolvedValue({
+      success: true,
+      binary: false,
+      content: 'C:\\ws\\b.ts changed'
+    })
+
+    render(<Harness workspacePath={String.raw`C:\ws`} />)
+    act(() => {
+      editorStoreFor(String.raw`C:\ws`)
+        .getState()
+        .addOpenFile(file('C:/ws/b.ts', 'original'))
+    })
+
+    await act(async () => {
+      fsChanged?.({ type: 'change', path: String.raw`C:\ws\b.ts` })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    const store = editorStoreFor(String.raw`C:\ws`)
+    expect(store.getState().openFiles[0]?.content).toBe('C:\\ws\\b.ts changed')
+  })
   it('closes the tab when the file disappears from disk', async () => {
     let fsChanged: ((payload: { type: string; path: string }) => void) | null = null
     vi.mocked(api.onFsChanged).mockImplementation((callback) => {

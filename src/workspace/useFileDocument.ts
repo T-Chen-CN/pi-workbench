@@ -8,7 +8,7 @@
  * 外部变更只递增 version，交给 `pw-file://` 地址刷新。
  */
 
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { editorStoreFor } from '../store/editorStore'
 import { useSettingsStore } from '../store/settingsStore'
@@ -16,14 +16,29 @@ import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
 import { isEditableKind, isStreamedKind } from '../utils/fileKind'
-import type { OpenFile } from '../types'
+import { samePath } from '../utils/filePath'
+import { onAppEvent } from '../utils/appEvents'
 
 /** 未保存内容写入草稿的防抖时间 */
 const DRAFT_DEBOUNCE_MS = 500
 
+/** 从冲突表里去掉一个 key（路径写法可能大小写不同，按同一路径比较） */
+function omitPath(current: Record<string, string>, filePath: string): Record<string, string> {
+  const entries = Object.entries(current)
+  const remaining = entries.filter(([key]) => !samePath(key, filePath))
+  if (remaining.length === entries.length) return current
+  return Object.fromEntries(remaining)
+}
+
 export interface FileDocument {
   /** 立即保存（Ctrl+S 与自动保存都走这里） */
   save: (pathOverride?: string) => Promise<void>
+  /** 磁盘内容被外部改过、但本地还有未保存修改的文件：path → 磁盘内容 */
+  conflicts: Record<string, string>
+  /** 放弃本地修改，用磁盘内容覆盖缓冲区 */
+  reloadFromDisk: (path: string) => Promise<void>
+  /** 保留本地修改，只收起提示 */
+  keepLocal: (path: string) => void
 }
 
 type Timer = ReturnType<typeof setTimeout>
@@ -45,6 +60,10 @@ export function useFileDocument({
   const store = editorStoreFor(root)
   const saveTimers = useRef(new Map<string, Timer>())
   const draftTimers = useRef(new Map<string, Timer>())
+  /** 磁盘内容与未保存修改冲突的文件：path → 磁盘内容 */
+  const [conflicts, setConflicts] = useState<Record<string, string>>({})
+  // 用户点过「保留我的修改」的那份磁盘内容：同一份内容不再反复弹提示，磁盘再变才重新提
+  const dismissedDisk = useRef(new Map<string, string>())
   /** 每个文件最近一次已排程保存的内容，避免重复触发 */
   const scheduledContent = useRef(new Map<string, string>())
   const saveRef = useRef<(pathOverride?: string) => Promise<void>>(async () => undefined)
@@ -125,6 +144,7 @@ export function useFileDocument({
             draftTimers.current.delete(targetPath)
           }
           store.getState().markClean(targetPath)
+          setConflicts((current) => omitPath(current, targetPath))
           // 文件已落盘，删除对应的崩溃恢复草稿
           if (workspacePath) {
             void api.draftDelete(workspacePath, targetPath).catch(() => undefined)
@@ -192,44 +212,109 @@ export function useFileDocument({
 
   // 外部文件变化：文本同步 / 媒体刷新 / 被删除时关闭标签
   useEffect(() => {
-    const unsubscribe = api.onFsChanged(async (payload) => {
-      const state = store.getState()
-      const target: OpenFile | undefined = state.openFiles.find(
-        (file) => file.path === payload.path
-      )
+    /** 读盘并覆盖缓冲区；返回读取到的内容，读不到返回 null */
+    const pullFromDisk = async (filePath: string): Promise<string | null> => {
+      const result = await api.readFile(filePath)
+      if (result.binary) {
+        store.getState().updateOpenFile(filePath, { kind: 'binary', content: '', view: 'source' })
+        store.getState().markClean(filePath)
+        return null
+      }
+      if (!result.success || typeof result.content !== 'string') return null
+      return result.content
+    }
+
+    /** 外部的磁盘变更：干净缓冲直接重载，脏缓冲留冲突提示由用户决定 */
+    const syncFile = async (filePath: string) => {
+      const target = store.getState().openFiles.find((file) => samePath(file.path, filePath))
       if (!target) return
 
-      const existsResult = await api.exists(payload.path)
+      const existsResult = await api.exists(target.path)
       if (existsResult.success && existsResult.exists === false) {
-        clearTimers(payload.path)
-        void api.draftDelete(workspacePath, payload.path).catch(() => undefined)
-        store.getState().removeOpenFile(payload.path)
+        clearTimers(target.path)
+        void api.draftDelete(workspacePath, target.path).catch(() => undefined)
+        store.getState().removeOpenFile(target.path)
+        setConflicts((current) => omitPath(current, target.path))
         toast.info(useI18nStore.getState().t('fileRemoved', { name: target.name }))
         return
       }
 
       // 媒体只刷新预览地址，不读文本
       if (isStreamedKind(target.kind) || target.kind === 'binary') {
-        store.getState().touchFile(payload.path)
+        store.getState().touchFile(target.path)
         return
       }
 
-      if (target.isDirty) return
-
-      const result = await api.readFile(payload.path)
-      if (result.binary) {
-        store.getState().updateOpenFile(payload.path, { kind: 'binary', content: '', view: 'source' })
-        store.getState().markClean(payload.path)
+      if (!target.isDirty) {
+        const content = await pullFromDisk(target.path)
+        const latest = store.getState().openFiles.find((file) => samePath(file.path, target.path))
+        // 读盘期间用户开始输入：交给下一次事件 / 轮末兑底，不要直接覆盖
+        if (!latest || latest.isDirty) return
+        if (content !== null && content !== latest.content) {
+          store.getState().updateOpenFile(latest.path, { content })
+          store.getState().markClean(latest.path)
+          setConflicts((current) => omitPath(current, latest.path))
+        }
         return
       }
-      if (result.success && typeof result.content === 'string' && result.content !== target.content) {
-        store.getState().updateOpenFile(payload.path, { content: result.content })
-        store.getState().markClean(payload.path)
+
+      // 脏缓冲：磁盘内容与本地不同就留一条冲突提示，绝不静默覆盖
+      const diskContent = await pullFromDisk(target.path)
+      if (diskContent === null) return
+      const latest = store.getState().openFiles.find((file) => samePath(file.path, target.path))
+      if (!latest || !latest.isDirty) return
+      if (diskContent === latest.content) {
+        setConflicts((current) => omitPath(current, latest.path))
+        return
+      }
+      if (dismissedDisk.current.get(latest.path) === diskContent) return
+      setConflicts((current) => ({ ...current, [latest.path]: diskContent }))
+    }
+
+    const unsubscribe = api.onFsChanged(async (payload) => {
+      const state = store.getState()
+      const target = state.openFiles.find((file) => samePath(file.path, payload.path))
+      if (!target) return
+      await syncFile(payload.path)
+    })
+
+    // Agent 直接写盘不经过编辑器 IPC，也不一定每个工作树都能收到 watcher 事件：回合结束时兜底重读一次
+    const offRefresh = onAppEvent('pi:refresh-files', () => {
+      for (const file of store.getState().openFiles) {
+        void syncFile(file.path)
       }
     })
 
-    return unsubscribe
+    return () => {
+      unsubscribe()
+      offRefresh()
+    }
   }, [clearTimers, store, workspacePath])
+
+  /** 用磁盘内容覆盖缓冲区（用户在冲突提示里选“重新加载”） */
+  const reloadFromDisk = useCallback(
+    async (filePath: string) => {
+      clearTimers(filePath)
+      const result = await api.readFile(filePath)
+      if (result.success && typeof result.content === 'string') {
+        store.getState().updateOpenFile(filePath, { content: result.content })
+        store.getState().markClean(filePath)
+        void api.draftDelete(workspacePath, filePath).catch(() => undefined)
+      }
+      dismissedDisk.current.delete(filePath)
+      setConflicts((current) => omitPath(current, filePath))
+    },
+    [clearTimers, store, workspacePath]
+  )
+
+  /** 保留本地内容：记住这份磁盘内容，同一份不再打扰（磁盘再变会重新提示） */
+  const keepLocal = useCallback((filePath: string) => {
+    setConflicts((current) => {
+      const diskContent = current[filePath]
+      if (typeof diskContent === 'string') dismissedDisk.current.set(filePath, diskContent)
+      return omitPath(current, filePath)
+    })
+  }, [])
 
   // Ctrl/Cmd+S：只有可见工作区响应
   useEffect(() => {
@@ -265,5 +350,5 @@ export function useFileDocument({
     }
   }, [store, workspacePath])
 
-  return { save }
+  return { save, conflicts, reloadFromDisk, keepLocal }
 }
