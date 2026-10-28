@@ -310,6 +310,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('git:listWorktrees', workspaceDir, activeSessionId),
   gitForgetWorktree: (workspaceDir: string, id: string, activeSessionId?: string) =>
     ipcRenderer.invoke('git:forgetWorktree', workspaceDir, id, activeSessionId),
+  gitInstallWorktreeDeps: (workspaceDir: string, id: string) =>
+    ipcRenderer.invoke('git:installWorktreeDeps', workspaceDir, id),
+  onGitWorktreeDeps: (
+    callback: (payload: {
+      workspaceDir: string
+      key: string
+      state: 'none' | 'idle' | 'installing' | 'ready' | 'failed'
+      manager: string | null
+      error?: string
+    }) => void
+  ) => {
+    const listener = (
+      _event: unknown,
+      payload: {
+        workspaceDir: string
+        key: string
+        state: 'none' | 'idle' | 'installing' | 'ready' | 'failed'
+        manager: string | null
+        error?: string
+      }
+    ) => callback(payload)
+    ipcRenderer.on('git:worktree-deps', listener)
+    return () => ipcRenderer.removeListener('git:worktree-deps', listener)
+  },
   gitBranches: (workspaceDir: string) => ipcRenderer.invoke('git:branches', workspaceDir),
   gitStatus: (workspaceDir: string, worktreePath?: string) =>
     ipcRenderer.invoke('git:status', workspaceDir, worktreePath),

@@ -39,6 +39,7 @@ import type {
   EditorTabsResult,
   GithubDeviceLoginEvent,
   GitChangedPayload,
+  GitWorktreeDepsPayload,
   AuxDetachResult,
   AuxWindowCommandResult,
   WindowCommand,
@@ -347,6 +348,11 @@ const mockAPI = {
     success: false,
     error: 'Git is only available in the Electron app'
   }),
+  gitInstallWorktreeDeps: async () => ({
+    success: false,
+    error: 'Git is only available in the Electron app'
+  }),
+  onGitWorktreeDeps: (_callback: (payload: GitWorktreeDepsPayload) => void) => () => {},
   gitBranches: async () => ({ success: true, branches: [] }),
   gitStatus: async () => ({
     success: true,
@@ -526,6 +532,10 @@ export const api = {
     electronAPI.gitListWorktrees(workspaceDir, activeSessionId),
   gitForgetWorktree: (workspaceDir: string, id: string, activeSessionId?: string) =>
     electronAPI.gitForgetWorktree(workspaceDir, id, activeSessionId),
+  gitInstallWorktreeDeps: (workspaceDir: string, id: string) =>
+    electronAPI.gitInstallWorktreeDeps(workspaceDir, id),
+  onGitWorktreeDeps: (callback: (payload: GitWorktreeDepsPayload) => void) =>
+    electronAPI.onGitWorktreeDeps(callback),
   gitBranches: (workspaceDir: string) => electronAPI.gitBranches(workspaceDir),
   gitStatus: (workspaceDir: string, worktreePath?: string) => electronAPI.gitStatus(workspaceDir, worktreePath),
   gitSessionBinding: (workspaceDir: string, sessionId: string) =>

@@ -51,6 +51,8 @@ export interface GitWorktreeView {
   dirtyCount: number
   ahead: number
   behind: number
+  /** 依赖安装状态；主工作树与失效工作树恒为 none */
+  deps: GitWorktreeDepsStatus
 }
 
 export interface GitBranchInfo {
@@ -184,6 +186,27 @@ export interface GitChangedPayload {
 export interface GitFetchResult {
   success: boolean
   skipped?: boolean
+  error?: string
+}
+
+/** 链接工作树的依赖安装状态（GIT-118） */
+export type GitWorktreeDepsState = 'none' | 'idle' | 'installing' | 'ready' | 'failed'
+
+export interface GitWorktreeDepsStatus {
+  state: GitWorktreeDepsState
+  manager: 'pnpm' | 'bun' | 'yarn' | 'npm' | 'uv' | null
+  /** `${manager}:${sha1}`；无 lockfile 时为 null */
+  hash: string | null
+  error?: string
+  startedAt?: string
+}
+
+/** 主进程推送的依赖状态变化：只带渲染层需要的字段 */
+export interface GitWorktreeDepsPayload {
+  workspaceDir: string
+  key: string
+  state: GitWorktreeDepsState
+  manager: GitWorktreeDepsStatus['manager']
   error?: string
 }
 
@@ -471,6 +494,12 @@ export interface ElectronAPI {
     id: string,
     activeSessionId?: string
   ) => Promise<{ success: boolean; worktrees?: GitWorktreeView[]; error?: string }>
+  /** 手动重试 / 首次触发某个链接工作树的依赖安装（后台执行） */
+  gitInstallWorktreeDeps: (
+    workspaceDir: string,
+    id: string
+  ) => Promise<{ success: boolean; deps?: GitWorktreeDepsStatus; error?: string }>
+  onGitWorktreeDeps: (callback: (payload: GitWorktreeDepsPayload) => void) => () => void
   gitBranches: (
     workspaceDir: string
   ) => Promise<{ success: boolean; branches?: GitBranchInfo[]; error?: string }>

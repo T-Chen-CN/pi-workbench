@@ -1,7 +1,7 @@
 /** 聊天头部的工作树 chip：显示当前分支/工作树，点击切换 */
 
 import React, { useEffect, useState } from 'react'
-import { ChevronDown, GitBranch, Plus, Users } from 'lucide-react'
+import { AlertCircle, Check, ChevronDown, GitBranch, Loader2, Plus, Users } from 'lucide-react'
 import { useSessionStore } from '../store/sessionStore'
 import { useGitStore } from '../store/gitStore'
 import { useI18nStore } from '../store/i18nStore'
@@ -29,6 +29,7 @@ export const WorktreeChip: React.FC<{ workspacePath: string }> = ({ workspacePat
   )
   const load = useGitStore((state) => state.load)
   const switchWorktree = useGitStore((state) => state.switchWorktree)
+  const installWorktreeDeps = useGitStore((state) => state.installWorktreeDeps)
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
 
@@ -55,6 +56,17 @@ export const WorktreeChip: React.FC<{ workspacePath: string }> = ({ workspacePat
   const shared = (current?.boundSessionCount ?? 0) > 1
   const dirty = current?.dirtyCount ?? 0
   const path = current?.path ?? repo.root
+  // 只在链接工作树上显示：主工作树用的是仓库自己的 node_modules
+  const deps = current && !current.isMain ? current.deps : null
+  const depsRetryable = deps?.state === 'failed' || deps?.state === 'idle'
+
+  const retryDeps = async () => {
+    if (!current) return
+    const result = await installWorktreeDeps(workspacePath, current.id)
+    if (!result.success) {
+      toast.error(result.error ? localizeError(result.error) : t('worktreeDepsRetryFailed'))
+    }
+  }
 
   const choose = async (target: string) => {
     setOpen(false)
@@ -101,6 +113,33 @@ export const WorktreeChip: React.FC<{ workspacePath: string }> = ({ workspacePat
           className={`flex-shrink-0 text-ink-muted transition-transform ${open ? 'rotate-180' : ''}`}
         />
       </button>
+
+      {deps && deps.state !== 'none' && depsRetryable && (
+        <button
+          type="button"
+          onClick={() => void retryDeps()}
+          title={deps.error ?? t('worktreeDepsRetry')}
+          aria-label={t('worktreeDepsRetry')}
+          className="ml-1 flex h-6 flex-shrink-0 items-center gap-1 rounded-sm border border-rule-control px-2 type-caption text-danger transition-colors hover:bg-hover"
+        >
+          <AlertCircle size={11} className="flex-shrink-0" />
+          {deps.error ? t('worktreeDepsFailed') : t('worktreeDepsIdle')}
+        </button>
+      )}
+
+      {deps && deps.state !== 'none' && !depsRetryable && (
+        <span
+          className="ml-1 flex h-6 flex-shrink-0 items-center gap-1 rounded-sm border border-rule-control px-2 type-caption text-ink-muted"
+          title={deps.manager ?? undefined}
+        >
+          {deps.state === 'installing' ? (
+            <Loader2 size={11} className="flex-shrink-0 animate-spin text-accent" aria-hidden="true" />
+          ) : (
+            <Check size={11} className="flex-shrink-0 text-success" aria-hidden="true" />
+          )}
+          {deps.state === 'installing' ? t('worktreeDepsInstalling') : t('worktreeDepsReady')}
+        </span>
+      )}
 
       {open && (
         <PopoverMenu

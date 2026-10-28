@@ -22,18 +22,30 @@ vi.mock('electron', () => ({
   },
 }))
 
+const trust = vi.hoisted(() => ({ trusted: true }))
+
 vi.mock('../electron/workspace-trust', () => ({
-  isTrustedWorkspacePath: () => true,
+  isTrustedWorkspacePath: () => trust.trusted,
   isPathInWorkspace: () => true,
   canonicalizePath: (value: string) => value,
   isPathInsideRoot: () => true,
 }))
 
 const coordinatorHolder = vi.hoisted(() => ({ current: null as unknown }))
+const depsConfigHolder = vi.hoisted(() => ({ current: null as any }))
 
 vi.mock('../electron/worktree-coordinator', () => ({
   getCoordinator: async () => coordinatorHolder.current,
   configureWorktreeLogging: () => {},
+  configureWorktreeDeps: (config: unknown) => {
+    depsConfigHolder.current = config
+  },
+}))
+
+const settingsHolder = vi.hoisted(() => ({ current: {} as Record<string, unknown> }))
+
+vi.mock('../electron/ipc/settings', () => ({
+  getAppSettingsCache: () => settingsHolder.current,
 }))
 
 vi.mock('../electron/github-auth', () => ({
@@ -281,5 +293,111 @@ describe('git IPC worktree binding rollback', () => {
     expect(result.success).toBe(false)
     expect(coordinator.unbind).toHaveBeenCalledWith('session-1')
     expect(coordinator.bind).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('git IPC worktree dependencies', () => {
+  const ws = '/ws'
+  const sent: Array<{ channel: string; payload: unknown }> = []
+  const window = {
+    isDestroyed: () => false,
+    webContents: {
+      send: (channel: string, payload: unknown) => sent.push({ channel, payload }),
+    },
+  }
+  let installDeps: ReturnType<typeof vi.fn>
+
+  beforeAll(() => {
+    registerGitIpc({
+      agentRegistry: { get: () => undefined } as never,
+      getMainWindow: () => window as never,
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+    })
+  })
+
+  beforeEach(() => {
+    trust.trusted = true
+    sent.length = 0
+    installDeps = vi.fn(async () => ({
+      success: true,
+      deps: { state: 'installing', manager: 'pnpm', hash: 'pnpm:abc' },
+    }))
+    coordinatorHolder.current = { installDeps }
+  })
+
+  afterEach(() => {
+    coordinatorHolder.current = null
+    trust.trusted = true
+  })
+
+  it('把依赖安装请求交给协调器，并原样返回状态', async () => {
+    const result = await invoke('git:installWorktreeDeps', ws, 'wt-1')
+
+    expect(installDeps).toHaveBeenCalledWith('wt-1')
+    expect(result).toMatchObject({ success: true, deps: { state: 'installing' } })
+  })
+
+  it('缺少工作树 id 时直接拒绝，不打到协调器', async () => {
+    await expect(invoke('git:installWorktreeDeps', ws, '')).resolves.toEqual({
+      success: false,
+      error: 'Unknown worktree',
+    })
+    await expect(invoke('git:installWorktreeDeps', ws, 42)).resolves.toMatchObject({
+      success: false,
+    })
+    expect(installDeps).not.toHaveBeenCalled()
+  })
+
+  it('未批准的工作区被拒绝', async () => {
+    trust.trusted = false
+    await expect(invoke('git:installWorktreeDeps', ws, 'wt-1')).resolves.toEqual({
+      success: false,
+      error: 'Workspace is not approved',
+    })
+    expect(installDeps).not.toHaveBeenCalled()
+  })
+
+  it('不是 git 仓库时返回明确错误', async () => {
+    coordinatorHolder.current = null
+    await expect(invoke('git:installWorktreeDeps', ws, 'wt-1')).resolves.toEqual({
+      success: false,
+      error: 'Not a git repository',
+    })
+  })
+
+  it('依赖状态变化推送到 git:worktree-deps 频道', () => {
+    const config = depsConfigHolder.current
+    expect(config).toBeTruthy()
+
+    config.onStatusChange({
+      workspaceDir: ws,
+      key: 'wt-1',
+      status: { state: 'ready', manager: 'pnpm', hash: 'pnpm:abc', startedAt: '2026-01-01' },
+    })
+
+    expect(sent).toEqual([
+      {
+        channel: 'git:worktree-deps',
+        payload: { workspaceDir: ws, key: 'wt-1', state: 'ready', manager: 'pnpm' },
+      },
+    ])
+  })
+
+  it('自动安装开关跟随设置项，默认开', () => {
+    settingsHolder.current = {}
+    expect(depsConfigHolder.current.isAutoInstallEnabled()).toBe(true)
+    settingsHolder.current = { autoInstallWorktreeDeps: false }
+    expect(depsConfigHolder.current.isAutoInstallEnabled()).toBe(false)
+    settingsHolder.current = {}
+  })
+
+  it('失败状态带上截断后的错误信息', () => {
+    depsConfigHolder.current.onStatusChange({
+      workspaceDir: ws,
+      key: 'wt-1',
+      status: { state: 'failed', manager: 'npm', hash: 'npm:abc', error: 'network down' },
+    })
+
+    expect(sent[0].payload).toMatchObject({ state: 'failed', error: 'network down' })
   })
 })

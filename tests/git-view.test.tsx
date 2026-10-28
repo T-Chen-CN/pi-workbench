@@ -334,6 +334,7 @@ describe('GitView 工作树列表', () => {
       dirtyCount: 0,
       ahead: 0,
       behind: 0,
+      deps: { state: 'none' as const, manager: null, hash: null },
       ...overrides,
     }
   }

@@ -19,6 +19,8 @@ const DEFAULT_SETTINGS = {
   explorerSortReverse: false,
   /** 关闭主窗口时收进托盘而不是退出；Linux 降级为最小化 */
   closeToTray: true,
+  /** 新建 / 首次复用的链接工作树自动后台安装依赖（会执行仓库里的 install 脚本） */
+  autoInstallWorktreeDeps: true,
 }
 
 let settingsCache: Record<string, any> = {}
@@ -126,6 +128,14 @@ handleIpc('app:saveSettings', async (_event, settings: any) => {
         sanitized.closeToTray = settingsCache.closeToTray
       } else {
         delete sanitized.closeToTray
+      }
+    }
+    // 工作树依赖自动安装：同上，缺失时保留现有值
+    if (typeof sanitized.autoInstallWorktreeDeps !== 'boolean') {
+      if (typeof settingsCache.autoInstallWorktreeDeps === 'boolean') {
+        sanitized.autoInstallWorktreeDeps = settingsCache.autoInstallWorktreeDeps
+      } else {
+        delete sanitized.autoInstallWorktreeDeps
       }
     }
     await saveSettingsFile(sanitized)

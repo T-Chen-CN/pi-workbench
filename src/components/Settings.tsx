@@ -98,6 +98,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     runWhileBusy,
     keybindings,
     closeToTray,
+    autoInstallWorktreeDeps,
     setAutoSave,
     setAutoSaveDelay,
     setPermissionLevel,
@@ -105,6 +106,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     setBudgetUsd,
     setRunWhileBusy,
     setCloseToTray,
+    setAutoInstallWorktreeDeps,
     setKeybinding,
     resetKeybindings,
   } = useSettingsStore()
@@ -243,6 +245,11 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
   const handleCloseToTrayChange = (enabled: boolean) => {
     setCloseToTray(enabled)
     void persistAppSettings({ closeToTray: enabled })
+  }
+
+  const handleAutoInstallDepsChange = (enabled: boolean) => {
+    setAutoInstallWorktreeDeps(enabled)
+    void persistAppSettings({ autoInstallWorktreeDeps: enabled })
   }
 
   const shortcutName = (id: ShortcutId) =>
@@ -575,6 +582,20 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                   onChange={(event) => handleCloseToTrayChange(event.target.checked)}
                 />
                 {closeToTray ? t('closeToTrayOn') : t('closeToTrayOff')}
+              </label>
+            </Field>
+
+            <Field label={t('autoInstallWorktreeDeps')} hint={t('autoInstallWorktreeDepsHint')}>
+              <label className="flex h-8 items-center gap-2 type-value text-ink">
+                <input
+                  type="checkbox"
+                  className="h-3 w-3 accent-[rgb(var(--accent))]"
+                  checked={autoInstallWorktreeDeps}
+                  onChange={(event) => handleAutoInstallDepsChange(event.target.checked)}
+                />
+                {autoInstallWorktreeDeps
+                  ? t('autoInstallWorktreeDepsOn')
+                  : t('autoInstallWorktreeDepsOff')}
               </label>
             </Field>
           </div>

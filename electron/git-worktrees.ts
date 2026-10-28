@@ -11,7 +11,6 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import * as path from 'path'
 import * as fs from 'fs/promises'
-import { existsSync } from 'fs'
 import { readJsonWithBackup, writeJsonAtomic } from './atomic-json.js'
 import { canonicalizePath, isPathInsideRoot } from './workspace-trust.js'
 
@@ -660,22 +659,6 @@ export async function fileDiffBetween(
 ): Promise<string> {
   const result = await git(worktreePath, ['diff', '--no-ext-diff', `${from}..${to}`])
   return result.ok ? result.stdout.slice(0, 400_000) : ''
-}
-
-export async function getLockfileHash(repoDir: string): Promise<string | null> {
-  const candidates = ['pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'bun.lockb', 'uv.lock']
-  for (const name of candidates) {
-    const file = path.join(repoDir, name)
-    if (!existsSync(file)) continue
-    try {
-      const content = await fs.readFile(file)
-      const { createHash } = await import('crypto')
-      return `${name}:${createHash('sha1').update(content).digest('hex')}`
-    } catch {
-      return null
-    }
-  }
-  return null
 }
 
 export interface GithubPrStatus {

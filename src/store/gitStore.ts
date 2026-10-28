@@ -11,6 +11,7 @@ import type {
   GitRepoInfo,
   GitSessionBinding,
   GitStatusInfo,
+  GitWorktreeDepsPayload,
   GitWorktreeView,
   GithubPrStatus,
 } from '../types/electron'
@@ -88,6 +89,13 @@ interface GitState {
     scopes: GitChangeScope[],
     activeSessionId?: string | null
   ) => Promise<void>
+  /** 主进程推送的依赖状态：只局部更新对应工作树，不整表轮询 */
+  handleWorktreeDeps: (workspaceDir: string, payload: GitWorktreeDepsPayload) => void
+  /** 手动触发 / 重试某个链接工作树的依赖安装 */
+  installWorktreeDeps: (
+    workspaceDir: string,
+    id: string
+  ) => Promise<{ success: boolean; error?: string }>
   loadCommits: (
     workspaceDir: string,
     limit?: number,
@@ -276,6 +284,51 @@ export const useGitStore = create<GitState>((set, get) => ({
       )
     }
     await Promise.all(tasks)
+  },
+
+  handleWorktreeDeps: (workspaceDir, payload) => {
+    const current = get().byWorkspace[workspaceDir]
+    if (!current) return
+    if (!current.worktrees.some((item) => item.id === payload.key)) return
+    set((state) =>
+      patch(state, workspaceDir, {
+        worktrees: workspace(state, workspaceDir).worktrees.map((item) =>
+          item.id === payload.key
+            ? {
+                ...item,
+                deps: {
+                  state: payload.state,
+                  manager: payload.manager,
+                  hash: item.deps.hash,
+                  ...(payload.error ? { error: payload.error } : {}),
+                },
+              }
+            : item
+        ),
+      })
+    )
+  },
+
+  installWorktreeDeps: async (workspaceDir, id) => {
+    if (typeof api.gitInstallWorktreeDeps !== 'function') {
+      return { success: false, error: 'Git is unavailable' }
+    }
+    try {
+      const result = await api.gitInstallWorktreeDeps(workspaceDir, id)
+      if (result.success && result.deps) {
+        const deps = result.deps
+        set((state) =>
+          patch(state, workspaceDir, {
+            worktrees: workspace(state, workspaceDir).worktrees.map((item) =>
+              item.id === id ? { ...item, deps } : item
+            ),
+          })
+        )
+      }
+      return { success: result.success, error: result.error }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
   },
 
   loadCommits: async (workspaceDir, limit = 200, branch, all = true) => {

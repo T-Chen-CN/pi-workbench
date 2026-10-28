@@ -228,6 +228,15 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
     }
   }, [workspacePath, activeSessionId])
 
+  // 工作树依赖安装状态：主进程只推变化的那一个，不整表轮询
+  useEffect(() => {
+    if (typeof api.onGitWorktreeDeps !== 'function') return
+    return api.onGitWorktreeDeps((payload) => {
+      if (!sameWorkspacePath(payload.workspaceDir, workspacePath)) return
+      useGitStore.getState().handleWorktreeDeps(workspacePath, payload)
+    })
+  }, [workspacePath])
+
   const startResize = useCallback(
     (target: 'sidebar' | 'chat') => (event: ReactPointerEvent<HTMLDivElement>) => {
       event.preventDefault()

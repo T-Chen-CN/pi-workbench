@@ -12,7 +12,8 @@ vi.mock('electron', () => ({
   },
 }))
 
-import { WorktreeCoordinator } from '../electron/worktree-coordinator'
+import { WorktreeCoordinator, configureWorktreeDeps, disposeCoordinator } from '../electron/worktree-coordinator'
+import { clearLockfileHashCache, detectLockfile, WorktreeDepsInstaller, type SpawnFn, type SpawnedProcess } from '../electron/worktree-deps'
 import { commitDetail, loadSessionGit } from '../electron/git-worktrees'
 
 let workspace = ''
@@ -308,3 +309,253 @@ describe('WorktreeCoordinator', () => {
 function recordPaths(): string[] {
   return Object.values(loadSessionGit(workspace).worktrees).map((record) => record.path)
 }
+
+// ---------------------------------------------------------------------------
+// GIT-118：链接工作树的依赖安装
+// ---------------------------------------------------------------------------
+
+interface FakeChild {
+  command: string
+  args: string[]
+  cwd: string
+  killed: boolean
+  exit: (code: number | null) => void
+}
+
+/** 假的安装进程：不跑真实包管理器，由用例决定何时退出 */
+function createFakeInstall() {
+  const children: FakeChild[] = []
+  const spawn: SpawnFn = (command, args, options) => {
+    const exitListeners: Array<(...listenerArgs: unknown[]) => void> = []
+    const record: FakeChild = {
+      command,
+      args,
+      cwd: options.cwd,
+      killed: false,
+      exit: (code) => {
+        for (const listener of exitListeners) listener(code)
+      },
+    }
+    children.push(record)
+    const child: SpawnedProcess = {
+      stdout: { on: () => {} },
+      stderr: { on: () => {} },
+      on: (event, listener) => {
+        if (event === 'exit') exitListeners.push(listener)
+      },
+      kill: () => {
+        record.killed = true
+        return true
+      },
+    }
+    return child
+  }
+  return { children, spawn }
+}
+
+describe('WorktreeCoordinator 依赖安装（GIT-118）', () => {
+  let fake: ReturnType<typeof createFakeInstall>
+  let lockfileHash = ''
+
+  beforeEach(async () => {
+    clearLockfileHashCache()
+    workspace = await fs.mkdtemp(path.join(tmpdir(), 'pi-worktree-deps-coord-'))
+    git(['init', '-b', 'main'])
+    git(['config', 'user.email', 'test@example.com'])
+    git(['config', 'user.name', 'Test'])
+    await fs.writeFile(path.join(workspace, 'a.txt'), 'one\n')
+    git(['add', '.'])
+    git(['commit', '-m', 'init'])
+
+    fake = createFakeInstall()
+    const installer = new WorktreeDepsInstaller({ spawn: fake.spawn })
+    configureWorktreeDeps({
+      isAutoInstallEnabled: () => true,
+      createInstaller: () => installer,
+    })
+    await fs.writeFile(path.join(workspace, 'package-lock.json'), '{"lockfileVersion":3}\n')
+    lockfileHash = (await detectLockfile(workspace))!.hash
+  })
+
+  afterEach(async () => {
+    configureWorktreeDeps(null)
+    disposeCoordinator(workspace)
+    await removeTempDir(workspace)
+  })
+
+  function depsOf(
+    views: Array<{ path: string; deps: { state: string; hash?: string | null } }>,
+    root: string
+  ): { state: string; hash?: string | null } | undefined {
+    return views.find((view) => view.path === root)?.deps
+  }
+
+  it('新建工作树后立刻可用，依赖在后台安装', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    const bound = await coordinator!.bind('session-deps', 'new')
+    const root = coordinator!.getSessionRoot('session-deps')
+
+    // bind 已经返回，安装还没结束：会话不被阻塞
+    expect(bound.success).toBe(true)
+    expect(fake.children).toHaveLength(1)
+    expect(fake.children[0].cwd).toBe(root)
+    expect(fake.children[0].command).toBe('npm')
+    expect(fake.children[0].args).toEqual(['ci'])
+    expect(depsOf(await coordinator!.listWorktrees('session-deps'), root)?.state).toBe(
+      'installing'
+    )
+  })
+
+  it('安装成功后把 lockfile 哈希写进 session-git.json', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    await coordinator!.bind('session-hash', 'new')
+    const root = coordinator!.getSessionRoot('session-hash')
+
+    await fs.mkdir(path.join(root, 'node_modules'), { recursive: true })
+    fake.children[0].exit(0)
+
+    await vi.waitFor(() => {
+      const records = Object.values(loadSessionGit(workspace).worktrees)
+      expect(records[0]?.installedLockfileHash).toBe(lockfileHash)
+    })
+    // 记录写盘后状态直接是 ready，且不再触发新的安装
+    await vi.waitFor(async () => {
+      const views = await coordinator!.listWorktrees('session-hash')
+      expect(depsOf(views, root)?.state).toBe('ready')
+    })
+    expect(fake.children).toHaveLength(1)
+  })
+
+  it('lockfile 未变化时复用工作树不重复安装', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    await coordinator!.bind('session-reuse', 'new')
+    const root = coordinator!.getSessionRoot('session-reuse')
+    await fs.mkdir(path.join(root, 'node_modules'), { recursive: true })
+    fake.children[0].exit(0)
+    await vi.waitFor(async () => {
+      const views = await coordinator!.listWorktrees('session-reuse')
+      expect(depsOf(views, root)?.state).toBe('ready')
+    })
+
+    // 再进一次同一工作树（新会话复用已有工作树）
+    const reused = await coordinator!.bind('session-reuse-2', root)
+    expect(reused.success).toBe(true)
+    expect(fake.children).toHaveLength(1)
+    expect(depsOf(await coordinator!.listWorktrees('session-reuse-2'), root)?.state).toBe('ready')
+  })
+
+  it('lockfile 变化后重新安装', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    await coordinator!.bind('session-change', 'new')
+    const root = coordinator!.getSessionRoot('session-change')
+    await fs.mkdir(path.join(root, 'node_modules'), { recursive: true })
+    fake.children[0].exit(0)
+    await vi.waitFor(async () => {
+      const views = await coordinator!.listWorktrees('session-change')
+      expect(depsOf(views, root)?.state).toBe('ready')
+    })
+
+    await fs.writeFile(
+      path.join(workspace, 'package-lock.json'),
+      '{"lockfileVersion":3,"updated":true}\n'
+    )
+    // 枚举只读：状态变成「待安装」，但不会自己启动
+    const idle = await coordinator!.listWorktrees('session-change')
+    expect(depsOf(idle, root)?.state).toBe('idle')
+    expect(fake.children).toHaveLength(1)
+
+    // 复用（绑定）才触发重装
+    await coordinator!.bind('session-change-2', root)
+    expect(fake.children).toHaveLength(2)
+  })
+
+  it('工作树自己的 lockfile 变化也会重装（哈希跟着安装走）', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    await coordinator!.bind('session-own', 'new')
+    const root = coordinator!.getSessionRoot('session-own')
+    await fs.mkdir(path.join(root, 'node_modules'), { recursive: true })
+    fake.children[0].exit(0)
+    await vi.waitFor(async () => {
+      const views = await coordinator!.listWorktrees('session-own')
+      expect(depsOf(views, root)?.state).toBe('ready')
+    })
+    const hashBefore = depsOf(await coordinator!.listWorktrees('session-own'), root)?.hash
+
+    // 仓库根没动，动的是工作树里的那份（现实里 = 切到 lockfile 不同的分支）
+    await fs.writeFile(
+      path.join(root, 'package-lock.json'),
+      '{"lockfileVersion":3,"branch":true}\n'
+    )
+    const views = await coordinator!.listWorktrees('session-own')
+    expect(depsOf(views, root)?.state).toBe('idle')
+    expect(depsOf(views, root)?.hash).not.toBe(hashBefore)
+
+    await coordinator!.bind('session-own-2', root)
+    expect(fake.children).toHaveLength(2)
+  })
+
+  it('枚举工作树不会给未绑定的工作树装依赖', async () => {
+    const external = path.join(workspace, '.pi-workbench', 'worktrees', 'manual-ext')
+    await fs.mkdir(path.dirname(external), { recursive: true })
+    git(['worktree', 'add', '-b', 'manual-ext-branch', external, 'main'])
+
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    const views = await coordinator!.listWorktrees()
+    const ext = views.find((view) => view.path === external)
+    expect(ext?.deps.state).toBe('idle')
+    // 没人绑定它：不应启动安装，更不能往用户自己的 checkout 里写 node_modules
+    await coordinator!.listWorktrees()
+    expect(fake.children).toHaveLength(0)
+  })
+
+  it('两个会话绑定同一工作树只跑一次安装', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    await coordinator!.bind('session-first', 'new')
+    const root = coordinator!.getSessionRoot('session-first')
+
+    await coordinator!.bind('session-second', root)
+    await Promise.all([
+      coordinator!.listWorktrees('session-first'),
+      coordinator!.listWorktrees('session-second'),
+    ])
+
+    expect(fake.children).toHaveLength(1)
+  })
+
+  it('安装过程中删除工作树会终止安装进程', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    await coordinator!.bind('session-cancel', 'new')
+    expect(fake.children).toHaveLength(1)
+
+    const released = await coordinator!.release('session-cancel')
+
+    expect(released.removed).toBe(true)
+    expect(fake.children[0].killed).toBe(true)
+  })
+
+  it('手动重试会重新启动安装', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    const bound = await coordinator!.bind('session-retry', 'new')
+    const id = bound.worktree!.id
+    const root = coordinator!.getSessionRoot('session-retry')
+    // 首次安装失败
+    fake.children[0].exit(1)
+    await vi.waitFor(async () => {
+      const views = await coordinator!.listWorktrees('session-retry')
+      expect(depsOf(views, root)?.state).toBe('failed')
+    })
+
+    const retry = await coordinator!.installDeps(id)
+    expect(retry.success).toBe(true)
+    expect(retry.deps?.state).toBe('installing')
+    expect(fake.children).toHaveLength(2)
+  })
+
+  it('主工作树不参与依赖安装', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    const views = await coordinator!.listWorktrees()
+    expect(views[0].isMain).toBe(true)
+    expect(views[0].deps).toEqual({ state: 'none', manager: null, hash: null })
+    expect(fake.children).toHaveLength(0)
+  })
+})

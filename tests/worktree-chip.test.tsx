@@ -4,11 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const apiMock = vi.hoisted(() => ({
   gitRepoInfo: vi.fn(),
-  gitSessionBinding: vi.fn(async () => ({ success: true })),
+  gitSessionBinding: vi.fn(
+    async (): Promise<{ success: boolean; binding?: Record<string, unknown> }> => ({ success: true })
+  ),
   gitBranches: vi.fn(async () => ({ success: true, branches: [] })),
   gitListWorktrees: vi.fn(async () => ({ success: true, worktrees: [] })),
   gitBindWorktree: vi.fn(),
+  gitInstallWorktreeDeps: vi.fn(),
   onAgentSessionRootChanged: vi.fn(() => () => {}),
+  onGitWorktreeDeps: vi.fn(() => () => {}),
 }))
 
 vi.mock('../src/api', () => ({ api: apiMock }))
@@ -45,6 +49,7 @@ function worktree(overrides: Record<string, unknown>) {
     dirtyCount: 0,
     ahead: 0,
     behind: 0,
+    deps: { state: 'none', manager: null, hash: null },
     ...overrides,
   }
 }
@@ -159,5 +164,128 @@ describe('ChatPanelHeader', () => {
 
     render(<ChatPanelHeader t={t} initialized workspacePath="/repo" />)
     expect(await screen.findByTitle('/repo')).toBeTruthy()
+  })
+})
+
+describe('WorktreeChip 依赖状态（GIT-118）', () => {
+  const LINKED = '/repo/.pi-workbench/worktrees/wt-live'
+
+  function mockWorktrees(deps: Record<string, unknown>): void {
+    useGitStore.setState({ byWorkspace: {} })
+    useSessionStore.setState({
+      byWorkspace: {
+        '/repo': { sessions: [], open: ['session-1'], active: 'session-1', panelOpen: false },
+      },
+    })
+    apiMock.gitSessionBinding.mockResolvedValue({
+      success: true,
+      binding: { key: 'wt-live', path: LINKED, branch: 'pi/wt-live' },
+    })
+    apiMock.gitRepoInfo.mockResolvedValue({
+      success: true,
+      repo: REPO,
+      worktrees: [
+        worktree({ id: 'main', path: '/repo', relativePath: '', branch: 'main', isMain: true }),
+        worktree({
+          id: 'wt-live',
+          path: LINKED,
+          relativePath: '.pi-workbench/worktrees/wt-live',
+          deps,
+        }),
+      ],
+    })
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+
+  it('安装中显示「安装中…」且不可点击', async () => {
+    mockWorktrees({ state: 'installing', manager: 'pnpm', hash: 'pnpm:abc' })
+    render(<WorktreeChip workspacePath="/repo" />)
+
+    expect(await screen.findByText(translations.zh.worktreeDepsInstalling)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: translations.zh.worktreeDepsRetry })).toBeNull()
+  })
+
+  it('已就绪显示「已就绪」', async () => {
+    mockWorktrees({ state: 'ready', manager: 'pnpm', hash: 'pnpm:abc' })
+    render(<WorktreeChip workspacePath="/repo" />)
+
+    expect(await screen.findByText(translations.zh.worktreeDepsReady)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: translations.zh.worktreeDepsRetry })).toBeNull()
+  })
+
+  it('安装失败可点击重试，并带着错误提示', async () => {
+    mockWorktrees({ state: 'failed', manager: 'pnpm', hash: 'pnpm:abc', error: 'network down' })
+    apiMock.gitInstallWorktreeDeps.mockResolvedValue({
+      success: true,
+      deps: { state: 'installing', manager: 'pnpm', hash: 'pnpm:abc' },
+    })
+    render(<WorktreeChip workspacePath="/repo" />)
+
+    expect(await screen.findByText(translations.zh.worktreeDepsFailed)).toBeTruthy()
+    const retry = screen.getByRole('button', { name: translations.zh.worktreeDepsRetry })
+    expect(retry.getAttribute('title')).toBe('network down')
+
+    fireEvent.click(retry)
+    await screen.findByText(translations.zh.worktreeDepsInstalling)
+    expect(apiMock.gitInstallWorktreeDeps).toHaveBeenCalledWith('/repo', 'wt-live')
+  })
+
+  it('关掉自动安装后显示「未安装依赖」，点击即可安装', async () => {
+    mockWorktrees({ state: 'idle', manager: 'pnpm', hash: 'pnpm:abc' })
+    apiMock.gitInstallWorktreeDeps.mockResolvedValue({
+      success: true,
+      deps: { state: 'installing', manager: 'pnpm', hash: 'pnpm:abc' },
+    })
+    render(<WorktreeChip workspacePath="/repo" />)
+
+    fireEvent.click(await screen.findByRole('button', { name: translations.zh.worktreeDepsRetry }))
+    await screen.findByText(translations.zh.worktreeDepsInstalling)
+    expect(apiMock.gitInstallWorktreeDeps).toHaveBeenCalledWith('/repo', 'wt-live')
+  })
+
+  it('没有 lockfile（none）时不显示任何依赖标记', async () => {
+    mockWorktrees({ state: 'none', manager: null, hash: null })
+    render(<WorktreeChip workspacePath="/repo" />)
+
+    await screen.findByTitle(LINKED)
+    expect(screen.queryByText(translations.zh.worktreeDepsReady)).toBeNull()
+    expect(screen.queryByText(translations.zh.worktreeDepsInstalling)).toBeNull()
+    expect(screen.queryByText(translations.zh.worktreeDepsFailed)).toBeNull()
+  })
+
+  it('主工作树不显示依赖标记', async () => {
+    useGitStore.setState({ byWorkspace: {} })
+    useSessionStore.setState({
+      byWorkspace: {
+        '/repo': { sessions: [], open: ['session-1'], active: 'session-1', panelOpen: false },
+      },
+    })
+    apiMock.gitSessionBinding.mockResolvedValue({ success: true })
+    apiMock.gitRepoInfo.mockResolvedValue({
+      success: true,
+      repo: REPO,
+      worktrees: [
+        worktree({
+          id: 'main',
+          path: '/repo',
+          relativePath: '',
+          branch: 'main',
+          isMain: true,
+          deps: { state: 'ready', manager: 'pnpm', hash: 'pnpm:abc' },
+        }),
+      ],
+    })
+    render(<WorktreeChip workspacePath="/repo" />)
+
+    await screen.findByTitle('/repo')
+    expect(screen.queryByText(translations.zh.worktreeDepsReady)).toBeNull()
   })
 })

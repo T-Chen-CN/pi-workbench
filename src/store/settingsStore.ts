@@ -26,6 +26,9 @@ export const DEFAULT_PERMISSION_LEVEL: PermissionLevel = 'ask'
 /** 关闭主窗口时收进托盘（Linux 上降级为最小化），而不是退出进程 */
 export const DEFAULT_CLOSE_TO_TRAY = true
 
+/** 新建 / 首次复用的链接工作树自动后台安装依赖（会执行仓库里的 install 脚本） */
+export const DEFAULT_AUTO_INSTALL_WORKTREE_DEPS = true
+
 export function isPermissionLevel(value: unknown): value is PermissionLevel {
   return value === 'readonly' || value === 'ask' || value === 'auto'
 }
@@ -73,6 +76,8 @@ interface SettingsState {
   explorerSortReverse: boolean
   /** 关闭按钮：收进托盘 / 直接退出；主进程读取同一字段 */
   closeToTray: boolean
+  /** 链接工作树自动安装依赖；主进程读取同一字段 */
+  autoInstallWorktreeDeps: boolean
   setAutoSave: (enabled: boolean) => void
   setAutoSaveDelay: (delayMs: number) => void
   setPermissionLevel: (level: PermissionLevel) => void
@@ -85,6 +90,7 @@ interface SettingsState {
   setExplorerFoldersFirst: (enabled: boolean) => void
   setExplorerSortReverse: (enabled: boolean) => void
   setCloseToTray: (enabled: boolean) => void
+  setAutoInstallWorktreeDeps: (enabled: boolean) => void
   hydrate: (settings: {
     autoSave?: unknown
     autoSaveDelay?: unknown
@@ -97,6 +103,7 @@ interface SettingsState {
     explorerFoldersFirst?: unknown
     explorerSortReverse?: unknown
     closeToTray?: unknown
+    autoInstallWorktreeDeps?: unknown
   }) => void
 }
 
@@ -113,6 +120,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   explorerFoldersFirst: DEFAULT_SORT_OPTIONS.foldersFirst,
   explorerSortReverse: DEFAULT_SORT_OPTIONS.reverse,
   closeToTray: DEFAULT_CLOSE_TO_TRAY,
+  autoInstallWorktreeDeps: DEFAULT_AUTO_INSTALL_WORKTREE_DEPS,
 
   setAutoSave: (enabled) => set({ autoSave: enabled }),
 
@@ -142,6 +150,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setExplorerSortReverse: (enabled) => set({ explorerSortReverse: enabled }),
 
   setCloseToTray: (enabled) => set({ closeToTray: enabled }),
+
+  setAutoInstallWorktreeDeps: (enabled) => set({ autoInstallWorktreeDeps: enabled }),
 
   hydrate: (settings) =>
     set((state) => ({
@@ -185,5 +195,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         typeof settings.closeToTray === 'boolean'
           ? settings.closeToTray
           : state.closeToTray,
+      autoInstallWorktreeDeps:
+        typeof settings.autoInstallWorktreeDeps === 'boolean'
+          ? settings.autoInstallWorktreeDeps
+          : state.autoInstallWorktreeDeps,
     })),
 }))

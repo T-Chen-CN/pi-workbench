@@ -30,6 +30,12 @@ import {
   type SessionGitFile,
 } from './git-worktrees.js'
 import { canonicalizePath } from './workspace-trust.js'
+import {
+  NO_DEPS,
+  WorktreeDepsManager,
+  type WorktreeDepsInstaller,
+  type WorktreeDepsStatus,
+} from './worktree-deps.js'
 
 export interface WorktreeView {
   id: string
@@ -46,6 +52,8 @@ export interface WorktreeView {
   dirtyCount: number
   ahead: number
   behind: number
+  /** 依赖安装状态；主工作树与失效工作树恒为 none */
+  deps: WorktreeDepsStatus
 }
 
 export interface ForgetResult {
@@ -74,6 +82,7 @@ interface WorkspaceState {
   repo: GitRepoInfo
   data: SessionGitFile
   lock: Promise<unknown>
+  deps: WorktreeDepsManager
 }
 
 const states = new Map<string, WorkspaceState>()
@@ -88,6 +97,30 @@ let logging: WorktreeLogger | null = null
 
 export function configureWorktreeLogging(logger: WorktreeLogger | null): void {
   logging = logger
+}
+
+const SILENT_LOGGER: WorktreeLogger = { info: () => {}, warn: () => {} }
+
+/** 依赖状态变化事件：由 IPC 层转成 `git:worktree-deps` 推给渲染层 */
+export interface WorktreeDepsEventPayload {
+  workspaceDir: string
+  key: string
+  status: WorktreeDepsStatus
+}
+
+export interface WorktreeDepsConfig {
+  /** 设置项 autoInstallWorktreeDeps；默认开 */
+  isAutoInstallEnabled: () => boolean
+  onStatusChange?: (payload: WorktreeDepsEventPayload) => void
+  /** 测试注入点：默认用真实 spawn 的安装器 */
+  createInstaller?: (repoRoot: string) => WorktreeDepsInstaller
+}
+
+let depsConfig: WorktreeDepsConfig | null = null
+
+/** 由 IPC 层注入一次；依赖安装属于「会跑仓库里的脚本」，所以开关由设置驱动 */
+export function configureWorktreeDeps(config: WorktreeDepsConfig | null): void {
+  depsConfig = config
 }
 
 function keyFor(workspaceDir: string): string {
@@ -144,12 +177,31 @@ async function refreshState(workspaceDir: string): Promise<WorkspaceState | null
   if (existing) return existing
   const repo = await getRepoInfo(workspaceDir)
   if (!repo || repo.bare) return null
+  // 安装回调需要 state 本身（按路径映射回工作树 key 才能落盘与推送）
+  const ref: { state: WorkspaceState | null } = { state: null }
+  const deps = new WorktreeDepsManager({
+    repoRoot: repo.root,
+    logger: logging ?? SILENT_LOGGER,
+    isAutoInstallEnabled: () => depsConfig?.isAutoInstallEnabled() ?? true,
+    ...(depsConfig?.createInstaller
+      ? { installer: depsConfig.createInstaller(repo.root) }
+      : {}),
+    // 安装完成后的落盘必须走 serialize()，不能绕过协调器的写锁
+    onInstalled: (worktreePath, hash) => {
+      if (ref.state) persistInstalledHash(ref.state, worktreePath, hash)
+    },
+    onStatusChange: (worktreePath, status) => {
+      if (ref.state) publishDepsStatus(ref.state, worktreePath, status)
+    },
+  })
   const state: WorkspaceState = {
     workspaceDir: key,
     repo,
     data: loadSessionGit(key),
     lock: Promise.resolve(),
+    deps,
   }
+  ref.state = state
   states.set(key, state)
   await ensureWorktreeIgnored(repo.root)
   await pruneWorktrees(repo.root)
@@ -170,6 +222,69 @@ async function persist(state: WorkspaceState): Promise<void> {
 }
 
 /**
+ * 安装成功后把 lockfile 哈希写回工作树记录。
+ * 这里必须走 serialize()：协调器的所有写操作共用一把锁，直接 writeJsonAtomic 会与
+ * bind / release 落盘互相覆盖。注意**不要**在持锁路径里 await 本函数（会死锁），
+ * 所以它是 fire-and-forget 的。
+ */
+function persistInstalledHash(
+  state: WorkspaceState,
+  worktreePath: string,
+  hash: string
+): void {
+  const found = recordForPath(state, worktreePath)
+  if (!found.id || !found.record || found.id === MAIN_WORKTREE_KEY) return
+  const id = found.id
+  void serialize(state, async () => {
+    const record = state.data.worktrees[id]
+    if (!record || record.installedLockfileHash === hash) return
+    state.data.worktrees[id] = { ...record, installedLockfileHash: hash }
+    await persist(state)
+  }).catch((error) =>
+    logging?.warn('[WorktreeDeps] Failed to persist lockfile hash:', error)
+  )
+}
+
+function publishDepsStatus(
+  state: WorkspaceState,
+  worktreePath: string,
+  status: WorktreeDepsStatus
+): void {
+  const found = recordForPath(state, worktreePath)
+  if (!found.id || found.id === MAIN_WORKTREE_KEY) return
+  depsConfig?.onStatusChange?.({ workspaceDir: state.workspaceDir, key: found.id, status })
+}
+
+/** 主工作树与目录已丢失的工作树不参与依赖安装 */
+async function depsStatusFor(
+  state: WorkspaceState,
+  id: string,
+  target: string | null,
+  record: GitWorktreeRecord | null
+): Promise<WorktreeDepsStatus> {
+  if (id === MAIN_WORKTREE_KEY || !target) return NO_DEPS
+  if (!existsSync(target)) return NO_DEPS
+  return state.deps.statusFor(target, record?.installedLockfileHash ?? null)
+}
+
+/** 供 Agent 上下文用的一行描述 */
+function describeDeps(status: WorktreeDepsStatus): string {
+  switch (status.state) {
+    case 'ready':
+      return `已就绪（${status.manager ?? '未知包管理器'}，lockfile 未变化）`
+    case 'installing':
+      return '安装中，测试/构建可能暂时不可用'
+    case 'failed':
+      return `安装失败（${(status.error ?? '未知原因').split('\n')[0]}）—— 可以请用户手动重试，或先自己在该工作树目录安装依赖`
+    case 'idle':
+      return '未安装（该工作树没有依赖目录）—— 跑测试前先在当前目录安装，不要依赖向上解析到主工作树的依赖'
+    case 'none':
+    default:
+      return '未检出 lockfile，跳过依赖安装'
+  }
+}
+
+/**
  * 丢掉一条「工作树已不在盘上」的登记。
  * 只动登记与孤儿分支：managed 工作树的分支只有在没有独有提交时才回收，
  * 有提交的分支一律保留，避免丢失工作。
@@ -179,6 +294,8 @@ async function dropMissingRecord(
   id: string,
   record: GitWorktreeRecord
 ): Promise<void> {
+  const target = worktreePathFromKey(state, id)
+  if (target) state.deps.forget(target)
   delete state.data.worktrees[id]
   const branch = record.branch
   if (!record.managed || !record.base || !branch.startsWith('pi/')) return
@@ -230,7 +347,10 @@ async function toView(
   activeSessionId?: string | null
 ): Promise<WorktreeView> {
   const target = info?.path ?? (id === MAIN_WORKTREE_KEY ? state.repo.root : worktreePathFromKey(state, id))
-  const status: GitStatusInfo | null = target ? await getStatus(target) : null
+  const [status, deps] = await Promise.all([
+    target ? getStatus(target) : Promise.resolve<GitStatusInfo | null>(null),
+    depsStatusFor(state, id, target, record),
+  ])
   const bindings = Object.entries(state.data.sessions).filter(([, binding]) => binding.worktree === id)
   return {
     id,
@@ -246,6 +366,7 @@ async function toView(
     dirtyCount: status?.files.length ?? 0,
     ahead: status?.ahead ?? 0,
     behind: status?.behind ?? 0,
+    deps,
   }
 }
 
@@ -330,6 +451,41 @@ export class WorktreeCoordinator {
     return { key, path: target, branch: record?.branch ?? null }
   }
 
+  /**
+   * 手动触发 / 重试某个工作树的依赖安装。
+   * 不阻塞调用方：立刻返回 `installing` 或 `ready`，结果由 `git:worktree-deps` 推送。
+   */
+  /**
+   * 会话重新打开 / 恢复绑定后补一次依赖检查：应用关着的时候 lockfile 可能已经变了。
+   * 与 `ensureInstalled` 一样受自动安装开关约束，且只在绑定链接工作树时生效。
+   */
+  async ensureSessionDeps(sessionId: string): Promise<void> {
+    const state = this.state
+    const key = this.getSessionKey(sessionId)
+    if (key === MAIN_WORKTREE_KEY) return
+    const target = worktreePathFromKey(state, key)
+    if (!target || !existsSync(target)) return
+    await state.deps.ensureInstalled(
+      target,
+      state.data.worktrees[key]?.installedLockfileHash ?? null
+    )
+  }
+
+  async installDeps(
+    key: string
+  ): Promise<{ success: boolean; deps?: WorktreeDepsStatus; error?: string }> {
+    const state = this.state
+    if (key === MAIN_WORKTREE_KEY) {
+      return { success: false, error: 'The main worktree shares the repository dependencies' }
+    }
+    const target = worktreePathFromKey(state, key)
+    if (!target) return { success: false, error: 'Unknown worktree' }
+    if (!existsSync(target)) return { success: false, error: 'Worktree directory is missing' }
+    const record = state.data.worktrees[key]
+    const deps = await state.deps.install(target, record?.installedLockfileHash ?? null)
+    return { success: true, deps }
+  }
+
   async bind(
     sessionId: string,
     target: string,
@@ -345,6 +501,15 @@ export class WorktreeCoordinator {
       const key = resolved.key
       state.data.sessions[sessionId] = { worktree: key }
       await persist(state)
+      // 新建 / 首次复用绑定工作树：这里才是「该装依赖」的时刻。
+      // 枚举（toView → statusFor）只读，不会触发安装。
+      const boundPath = key === MAIN_WORKTREE_KEY ? null : worktreePathFromKey(state, key)
+      if (boundPath && existsSync(boundPath)) {
+        await state.deps.ensureInstalled(
+          boundPath,
+          state.data.worktrees[key]?.installedLockfileHash ?? null
+        )
+      }
       const view = await this.viewForKey(key, activeSessionId ?? sessionId)
       return {
         success: true,
@@ -503,6 +668,8 @@ export class WorktreeCoordinator {
         return { success: true, removed: false, dirty: true, worktreePath: target }
       }
       try {
+        // 工作树即将消失：先终止还在跑的依赖安装，避免往已经删掉的目录里写文件
+        state.deps.forget(target)
         await gitRemoveWorktree(state.repo.root, target)
         const hasCommits = await branchHasNewCommits(state.repo.root, record.branch, record.base)
         if (record.branch && !hasCommits) await deleteBranch(state.repo.root, record.branch)
@@ -548,6 +715,7 @@ export class WorktreeCoordinator {
           continue
         }
         try {
+          state.deps.forget(target)
           await gitRemoveWorktree(state.repo.root, target)
           const hasCommits = await branchHasNewCommits(state.repo.root, record.branch, record.base)
           if (record.branch && !hasCommits) await deleteBranch(state.repo.root, record.branch)
@@ -582,6 +750,7 @@ export class WorktreeCoordinator {
           (info) => !info.prunable && (canonicalizePath(info.path) ?? info.path) === target
         )
       if (known) return { success: false, error: 'Worktree still exists' }
+      if (target) state.deps.forget(target)
       delete state.data.worktrees[id]
       await persist(state)
       return { success: true, worktrees: await this.listWorktrees(activeSessionId) }
@@ -600,6 +769,9 @@ export class WorktreeCoordinator {
       )
     } else {
       lines.push('当前工作树：主工作树')
+    }
+    if (current && !current.isMain) {
+      lines.push(`依赖：${describeDeps(current.deps)}`)
     }
     const others = views.filter((view) => view !== current)
     if (others.length > 0) {
@@ -632,5 +804,6 @@ export async function getCoordinator(
 export function disposeCoordinator(workspaceDir: string): void {
   const key = keyFor(workspaceDir)
   coordinatorCache.delete(key)
+  states.get(key)?.deps.dispose()
   states.delete(key)
 }

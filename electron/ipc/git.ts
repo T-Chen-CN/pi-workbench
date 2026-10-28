@@ -3,9 +3,10 @@
 import { BrowserWindow } from 'electron'
 import * as path from 'path'
 import { handleIpc } from './register.js'
+import { getAppSettingsCache } from './settings.js'
 import { isTrustedWorkspacePath } from '../workspace-trust.js'
 import type { AgentRegistry } from '../agent-registry.js'
-import { configureWorktreeLogging, getCoordinator, type WorktreeCoordinator } from '../worktree-coordinator.js'
+import { configureWorktreeLogging, configureWorktreeDeps, getCoordinator, type WorktreeCoordinator } from '../worktree-coordinator.js'
 import { repoSync } from '../repo-sync.js'
 import {
   clearGithubToken,
@@ -93,6 +94,21 @@ async function restoreWorktreeBinding(
 export function registerGitIpc(context: GitIpcContext): void {
   const cleanedWorkspaces = new Set<string>()
   configureWorktreeLogging(context.logger)
+  // 依赖安装会执行仓库里的 install 脚本，所以自动安装的开关交给设置项
+  configureWorktreeDeps({
+    isAutoInstallEnabled: () => getAppSettingsCache().autoInstallWorktreeDeps !== false,
+    onStatusChange: ({ workspaceDir, key, status }) => {
+      const window = context.getMainWindow()
+      if (!window || window.isDestroyed()) return
+      window.webContents.send('git:worktree-deps', {
+        workspaceDir,
+        key,
+        state: status.state,
+        manager: status.manager,
+        ...(status.error ? { error: status.error } : {}),
+      })
+    },
+  })
 
   repoSync.configure({
     getMainWindow: context.getMainWindow,
@@ -178,6 +194,29 @@ export function registerGitIpc(context: GitIpcContext): void {
         if (!coordinator) return { success: false, error: 'Not a git repository' }
         const result = await coordinator.forget(id, activeSessionId ?? null)
         if (result.success) context.logger.info('[Git] Forgot stale worktree record:', id)
+        return result
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+  )
+
+  handleIpc(
+    'git:installWorktreeDeps',
+    async (_event, workspaceDir: string, id: string) => {
+      try {
+        if (!isTrustedWorkspacePath(workspaceDir)) {
+          return { success: false, error: 'Workspace is not approved' }
+        }
+        if (typeof id !== 'string' || id === '') {
+          return { success: false, error: 'Unknown worktree' }
+        }
+        const coordinator = await getCoordinator(workspaceDir)
+        if (!coordinator) return { success: false, error: 'Not a git repository' }
+        const result = await coordinator.installDeps(id)
+        if (result.success) {
+          context.logger.info('[Git] Started dependency install for worktree:', id)
+        }
         return result
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) }

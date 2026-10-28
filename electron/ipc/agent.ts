@@ -550,7 +550,20 @@ handleIpc('agent:sessions:open', async (_event, workspaceDir: string, sessionId?
     if (typeof agent.openSession !== 'function') {
       return { success: false, error: 'Sessions are not supported by this agent' }
     }
-    return await agent.openSession(sessionId)
+    const opened = (await agent.openSession(sessionId)) as
+      | { success?: boolean; error?: string }
+      | undefined
+    // 恢复历史会话时补一次依赖检查：应用关着期间 lockfile 可能已经变了。
+    // 装依赖失败不能连坐会话打开，所以单独兜一层。
+    if (opened?.success && sessionId) {
+      try {
+        const coordinator = await getCoordinator(workspaceDir)
+        await coordinator?.ensureSessionDeps(sessionId)
+      } catch (error) {
+        context.logger.warn('[Main] Worktree dependency check failed:', error)
+      }
+    }
+    return opened
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) }
   }
