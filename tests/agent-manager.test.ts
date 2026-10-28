@@ -56,6 +56,7 @@ interface FakeSession {
   disposed: boolean
   subscribe: (listener: (event: SessionEvent) => void) => () => void
   prompt: (message: string) => Promise<void>
+  lastPrompt?: string
   lastPromptOptions?: {
     streamingBehavior?: string
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
@@ -161,6 +162,7 @@ function createFakeSession(
         images?: Array<{ type: 'image'; data: string; mimeType: string }>
       }
     ) => {
+      session.lastPrompt = message
       session.lastPromptOptions = options
       await onPrompt?.(session, message)
     },
@@ -492,6 +494,30 @@ describe('AgentManager chat', () => {
     await manager.chat('describe', { images: [image] })
 
     expect(session.lastPromptOptions?.images).toEqual([{ type: 'image', ...image }])
+  })
+
+  it('adds a placeholder text only for Anthropic image-only messages', async () => {
+    const run = async (provider: string, language: 'zh' | 'en'): Promise<string> => {
+      const session = createFakeSession(async (s, message) => {
+        s.messages.push({ role: 'user', content: message })
+        s.messages.push({ role: 'assistant', content: 'ok' })
+      })
+      primeSdk(session)
+      const config = makeConfig({ getLanguage: () => language })
+      config.apiConfig.provider = provider
+      await manager.initialize(config)
+      await manager.chat('', { images: [{ data: 'AAAA', mimeType: 'image/png' }] })
+      const prompt = session.lastPrompt ?? ''
+      await manager.dispose()
+      return prompt
+    }
+
+    // Anthropic 拒绝空 text 块，补占位文本；OpenAI 兼容端点保持空文本
+    await expect(run('anthropic', 'zh')).resolves.toBe('请看这些图片。')
+    await expect(run('anthropic', 'en')).resolves.toBe(
+      'Please look at the attached image(s).'
+    )
+    await expect(run('openai', 'zh')).resolves.toBe('')
   })
 
   it('omits images when none are valid', async () => {

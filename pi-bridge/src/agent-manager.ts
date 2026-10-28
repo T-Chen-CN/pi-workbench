@@ -161,6 +161,17 @@ function hasImageBlocks(content: unknown): boolean {
   return content.some((part: any) => part?.type === 'image')
 }
 
+/**
+ * 纯图片消息的占位文本：Anthropic 拒绝空 text 块（400），
+ * 其他 OpenAI 兼容端点接受空文本，因此只在需要时补。
+ */
+const IMAGE_ONLY_PROMPTS = ['请看这些图片。', 'Please look at the attached image(s).'] as const
+
+function isImageOnlyPrompt(text: string): boolean {
+  const trimmed = text.trim()
+  return (IMAGE_ONLY_PROMPTS as readonly string[]).includes(trimmed)
+}
+
 export type { SessionMode }
 
 interface SessionRuntime {
@@ -1275,7 +1286,8 @@ export class AgentManager {
       if (!runtime.isProcessing) {
         return { success: false, error: 'Session is not running.' }
       }
-      await runtime.session.prompt(text, {
+      const promptText = this.withImagePlaceholder(text, imageCheck.images.length)
+      await runtime.session.prompt(promptText, {
         streamingBehavior: 'steer',
         ...(imageCheck.images.length > 0
           ? {
@@ -2020,7 +2032,10 @@ export class AgentManager {
         normalizeSessionPermission(runtime.extras.permission).mode === 'plan'
           ? wrapPlanPrompt(message)
           : message
-      const finalPrompt = worktreeBlock ? `${worktreeBlock}\n\n${promptText}` : promptText
+      const imagePromptText = this.withImagePlaceholder(promptText, chatImages.length)
+      const finalPrompt = worktreeBlock
+        ? `${worktreeBlock}\n\n${imagePromptText}`
+        : imagePromptText
       const images = chatImages.map((image) => ({
         type: 'image' as const,
         data: image.data,
@@ -2235,6 +2250,13 @@ export class AgentManager {
     return runtime ? this.sessionMessages(runtime) : []
   }
 
+  /** 纯图片消息的模型输入文本：仅 Anthropic 需要非空 text 块 */
+  private withImagePlaceholder(text: string, imageCount: number): string {
+    if (imageCount === 0 || text.trim()) return text
+    if (this.config?.apiConfig.provider !== 'anthropic') return text
+    return this.config.getLanguage?.() === 'en' ? IMAGE_ONLY_PROMPTS[1] : IMAGE_ONLY_PROMPTS[0]
+  }
+
   private messageText(content: unknown): string {
     if (typeof content === 'string') return content
     if (Array.isArray(content)) {
@@ -2265,8 +2287,8 @@ export class AgentManager {
     if (!assistantText) return
 
     // 纯图片对话：没有可摘取的用户文本，直接写固定标题，不再调用模型
-    if (!userText) {
-      if (!hasImageBlocks(firstUser.content)) return
+    if (!userText || isImageOnlyPrompt(userText)) {
+      if (!userText && !hasImageBlocks(firstUser.content)) return
       this.persistSessionTitle(
         runtime,
         config,
