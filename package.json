@@ -1,6 +1,6 @@
 {
   "name": "pi-workbench",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Lightweight desktop code editor with Pi Agent integration",
   "main": "dist-electron/main.js",
   "type": "module",
