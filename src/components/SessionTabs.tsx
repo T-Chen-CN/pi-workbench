@@ -43,7 +43,7 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
       : t('untitledSession')
 
   return (
-    <div className="flex h-[34px] flex-shrink-0 items-stretch bg-panel">
+    <div className="flex h-[34px] flex-shrink-0 items-stretch border-b border-rule-divide bg-panel">
       <div
         role="tablist"
         aria-label={t('sessions')}
@@ -79,7 +79,7 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
               className={`group flex h-full max-w-[190px] flex-shrink-0 items-center gap-1.5 border-r border-rule-divide pl-3 pr-1 type-label transition-colors ${
                 isActive
                   ? 'bg-surface text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
-                  : 'border-b border-rule-divide text-ink-muted hover:bg-hover hover:text-ink'
+                  : 'text-ink-muted hover:bg-hover hover:text-ink'
               }`}
             >
               <button
@@ -147,7 +147,7 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
           )
         })}
       </div>
-      <div className="flex flex-shrink-0 items-center gap-0.5 border-b border-rule-divide pl-1 pr-0.5">
+      <div className="flex flex-shrink-0 items-center gap-0.5 pl-1 pr-0.5">
         <IconButton icon={Plus} label={t('newSession')} size="sm" onClick={onNew} />
         <IconButton icon={History} label={t('sessionList')} size="sm" onClick={onOpenList} />
       </div>

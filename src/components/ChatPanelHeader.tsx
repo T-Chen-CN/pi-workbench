@@ -38,7 +38,7 @@ export const ChatPanelHeader: React.FC<ChatPanelHeaderProps> = ({
   return (
     <>
       <div
-        className={`flex h-[34px] flex-shrink-0 items-center gap-2 overflow-hidden border-b border-rule-divide pr-3 ${
+        className={`flex h-[34px] flex-shrink-0 items-center gap-2 border-b border-rule-divide pr-3 ${
           onCollapse ? 'pl-0.5' : 'pl-3'
         }`}
         onContextMenu={panelMenu.onContextMenu}

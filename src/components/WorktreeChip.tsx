@@ -72,7 +72,7 @@ export const WorktreeChip: React.FC<{ workspacePath: string }> = ({ workspacePat
   }
 
   return (
-    <div className="relative flex min-w-0 flex-shrink-0 items-center">
+    <div className="relative flex min-w-0 items-center">
       <button
         type="button"
         disabled={busy}
