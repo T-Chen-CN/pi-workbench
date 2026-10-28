@@ -859,6 +859,82 @@ describe('ChatPanel', () => {
     expect(screen.getByText(/Hello world/)).toBeTruthy()
   })
 
+  it('places compaction points inside the running reply, ignoring aborted ones', async () => {
+    let emitTrace: ((event: AgentStreamEvent) => void) | null = null
+    let resolveChat: ((value: { success: boolean; response?: string }) => void) | null = null
+    vi.mocked(piAgentAPI.chat).mockImplementation(
+      (_message, handlers) =>
+        new Promise((resolve) => {
+          emitTrace =
+            typeof handlers === 'object' && handlers ? handlers.onTrace ?? null : null
+          resolveChat = resolve
+        })
+    )
+
+    render(<ChatPanel workspacePath="/ws" />)
+    const input = (await screen.findByPlaceholderText(
+      translations.zh.inputPlaceholder
+    )) as HTMLTextAreaElement
+    await waitFor(() => expect(input.disabled).toBe(false))
+
+    fireEvent.change(input, { target: { value: 'long task' } })
+    fireEvent.click(screen.getByText(translations.zh.send))
+    await waitFor(() => {
+      expect(useSessionStore.getState().streaming[sessionKey]).toBe(true)
+    })
+
+    act(() => {
+      emitTrace?.({ type: 'text_delta', delta: 'before compaction' })
+    })
+    await waitFor(() => expect(screen.getByText(/before compaction/)).toBeTruthy())
+
+    act(() => {
+      emitTrace?.({
+        type: 'compaction_end',
+        reason: 'threshold',
+        aborted: true,
+        tokensBefore: 10,
+      })
+      emitTrace?.({
+        type: 'compaction_end',
+        reason: 'threshold',
+        entryId: 'c1',
+        timestamp: 1_700_000_000_000,
+        tokensBefore: 128_000,
+      })
+    })
+    await waitFor(() =>
+      expect(
+        screen.getByText(translations.zh.compactionDividerTokens.replace('{tokens}', '128,000'))
+      ).toBeTruthy()
+    )
+
+    act(() => {
+      emitTrace?.({ type: 'text_delta', delta: 'after compaction' })
+    })
+    await waitFor(() => expect(screen.getByText(/after compaction/)).toBeTruthy())
+
+    act(() => {
+      resolveChat?.({ success: true, response: 'before compactionafter compaction' })
+    })
+    await waitFor(() => {
+      const assistants = useChatStore
+        .getState()
+        .conversations[sessionKey].messages.filter((item) => item.role === 'assistant')
+      expect(assistants).toHaveLength(1)
+      expect(assistants[0].parts?.map((part) => part.type)).toContain('compaction')
+    })
+    const assistants = useChatStore
+      .getState()
+      .conversations[sessionKey].messages.filter((item) => item.role === 'assistant')
+    expect(assistants[0].parts?.map((part) => part.type)).toEqual(['text', 'compaction', 'text'])
+    expect(assistants[0].parts?.[1]).toMatchObject({
+      type: 'compaction',
+      entryId: 'c1',
+      tokensBefore: 128_000,
+    })
+  })
+
   it('renders a collapsed process group and expands thinking on demand', async () => {
     useSessionStore.getState().setSessions('/ws', [session])
     useSessionStore.getState().setOpen('/ws', [session.id], session.id)

@@ -235,6 +235,21 @@ export const ChatMessageRow = React.memo(function ChatMessageRow({
   const { t, language } = useI18nStore()
 
   if (message.role === 'system') {
+    // 旧的压缩提示是纯文本分隔线；新结构下压缩点是 part，二者都能渲染
+    if (message.parts?.length) {
+      return (
+        <AgentParts
+          parts={message.parts}
+          isStreaming={false}
+          diffToolIds={diffToolIds}
+          onOpenDiff={onOpenDiff}
+          onOpenToolResult={onOpenToolResult}
+          canActOnPlan={canActOnPlan}
+          onApprovePlan={onApprovePlan}
+          onRejectPlan={onRejectPlan}
+        />
+      )
+    }
     return (
       <div className="flex items-center gap-3 py-2">
         <span className="h-px flex-1 bg-rule-divide" />
@@ -247,6 +262,22 @@ export const ChatMessageRow = React.memo(function ChatMessageRow({
   if (message.isStreaming && !message.content && !message.parts?.length) return null
   const isUser = message.role === 'user'
   const hasActions = Boolean(onCopy || onRetry || onEdit)
+  // 只承载压缩分隔线的消息不显示表头与操作区
+  const dividerOnly = Boolean(
+    message.parts?.length && message.parts.every((part) => part.type === 'compaction')
+  )
+
+  if (dividerOnly) {
+    return (
+      <AgentParts
+        parts={message.parts ?? []}
+        isStreaming={false}
+        diffToolIds={diffToolIds}
+        onOpenDiff={onOpenDiff}
+        onOpenToolResult={onOpenToolResult}
+      />
+    )
+  }
 
   return (
     <div

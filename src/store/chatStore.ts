@@ -180,6 +180,15 @@ interface ChatState {
   setMessageBranches: (key: string, groups: ConversationBranchGroup[]) => void
   /** 在指定助手消息中插入 / 更新结构化计划卡（R-04） */
   appendPlanPart: (key: string, messageId: string, plan: StructuredPlan) => void
+  /**
+   * 追加上下文压缩点（R-05）：挂到当前消息的末尾，位置跟随输出顺序。
+   * 默认目标是正在流式输出的助手消息，其次是最后一条助手消息，
+   * 都没有时新建一条只含分隔线的助手消息。
+   */
+  appendCompactionPart: (
+    key: string,
+    part: Extract<AgentTracePart, { type: 'compaction' }>
+  ) => void
   /** 按计划 id 更新所有计划卡（R-04） */
   applyPlanUpdate: (key: string, plan: StructuredPlan) => void
   /** 历史恢复时追加一份计划消息（R-04） */
@@ -653,6 +662,41 @@ export const useChatStore = create<ChatState>((set) => ({
             },
           ],
         }
+      })
+    ),
+
+  appendCompactionPart: (key, part) =>
+    set((state) =>
+      updateExisting(state, key, (current) => {
+        const messages = [...current.messages]
+        let index = -1
+        for (let cursor = messages.length - 1; cursor >= 0; cursor -= 1) {
+          if (messages[cursor].role === 'assistant' && messages[cursor].isStreaming) {
+            index = cursor
+            break
+          }
+        }
+        if (index < 0) {
+          for (let cursor = messages.length - 1; cursor >= 0; cursor -= 1) {
+            if (messages[cursor].role === 'assistant') {
+              index = cursor
+              break
+            }
+          }
+        }
+        if (index < 0) {
+          messages.push({
+            id: `msg-${Date.now()}-${Math.random()}`,
+            role: 'assistant',
+            content: '',
+            timestamp: part.timestamp,
+            parts: [part],
+          })
+        } else {
+          const target = messages[index]
+          messages[index] = { ...target, parts: [...(target.parts ?? []), part] }
+        }
+        return { ...current, messages }
       })
     ),
 

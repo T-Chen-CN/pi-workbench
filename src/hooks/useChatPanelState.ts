@@ -1028,18 +1028,14 @@ export function useChatPanelState(props: ChatPanelProps) {
           case 'compaction_start':
             break
           case 'compaction_end': {
-            if (event.error) break
-            const kind =
-              event.reason === 'manual' ? t('compactionManual') : t('compactionAuto')
-            store.addMessage(key, {
-              role: 'system',
-              content:
-                typeof event.tokensBefore === 'number'
-                  ? t('compactionDividerTokens', {
-                      kind,
-                      tokens: event.tokensBefore.toLocaleString(),
-                    })
-                  : t('compactionDivider', { kind }),
+            // 失败或被取消的压缩不产生分隔线
+            if (event.error || event.aborted) break
+            store.appendCompactionPart(key, {
+              type: 'compaction',
+              id: `compaction-${event.entryId ?? event.timestamp ?? Date.now()}`,
+              entryId: event.entryId,
+              timestamp: event.timestamp ?? Date.now(),
+              tokensBefore: event.tokensBefore,
             })
             // 压缩后上下文仪表立即回落
             void piAgentAPI.getContextUsage(workspacePath, sessionId).then((result) => {

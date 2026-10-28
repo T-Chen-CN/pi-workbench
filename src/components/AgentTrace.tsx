@@ -9,6 +9,7 @@ import { Button, Caption, DataText, Label } from './ui'
 type Translator = (key: TranslationKey, params?: TranslationParams) => string
 
 type WorkPart = Extract<AgentTracePart, { type: 'thinking' | 'tool' }>
+type CompactionPart = Extract<AgentTracePart, { type: 'compaction' }>
 
 type RenderGroup =
   | {
@@ -18,6 +19,7 @@ type RenderGroup =
     }
   | { type: 'work'; key: string; parts: WorkPart[] }
   | { type: 'plan'; key: string; part: Extract<AgentTracePart, { type: 'plan' }> }
+  | { type: 'compaction'; key: string; part: CompactionPart }
 
 function buildGroups(parts: AgentTracePart[]): RenderGroup[] {
   const groups: RenderGroup[] = []
@@ -36,6 +38,10 @@ function buildGroups(parts: AgentTracePart[]): RenderGroup[] {
     } else if (part.type === 'plan') {
       flushWork()
       groups.push({ type: 'plan', key: `plan-${part.plan.id}`, part })
+    } else if (part.type === 'compaction') {
+      // 压缩点单独成组：跟随 parts 顺序，不能被折进可收起的工作块
+      flushWork()
+      groups.push({ type: 'compaction', key: `compaction-${part.id}`, part })
     } else {
       work.push(part)
     }
@@ -98,6 +104,22 @@ export interface AgentPartsProps {
   onRejectPlan?: (plan: StructuredPlan) => void
 }
 
+/** 上下文压缩分隔线：位置由 parts 顺序决定，文案随语言切换重算 */
+const CompactionDivider: React.FC<{ part: CompactionPart }> = ({ part }) => {
+  const { t } = useI18nStore()
+  const label =
+    typeof part.tokensBefore === 'number'
+      ? t('compactionDividerTokens', { tokens: part.tokensBefore.toLocaleString() })
+      : t('compactionDivider')
+  return (
+    <div className="flex items-center gap-3 py-1" role="separator">
+      <div className="h-px flex-1 bg-rule-divide" />
+      <Caption className="shrink-0 text-ink-subtle">{label}</Caption>
+      <div className="h-px flex-1 bg-rule-divide" />
+    </div>
+  )
+}
+
 export const AgentParts: React.FC<AgentPartsProps> = React.memo(function AgentParts({
   parts,
   isStreaming,
@@ -109,12 +131,19 @@ export const AgentParts: React.FC<AgentPartsProps> = React.memo(function AgentPa
   onRejectPlan,
 }) {
   const groups = useMemo(() => buildGroups(parts), [parts])
+  // 末尾的压缩分隔线不算“仍在输出”，否则前面的文本 / 工作块会提前结束流式样式
+  const lastSignificant = (() => {
+    for (let index = groups.length - 1; index >= 0; index -= 1) {
+      if (groups[index].type !== 'compaction') return index
+    }
+    return -1
+  })()
 
   return (
     <>
       {groups.map((group, index) => {
         if (group.type === 'text') {
-          const isLast = index === groups.length - 1
+          const isLast = index === lastSignificant
           return (
             <div key={group.key} className="chat-markdown text-ink">
               {isStreaming && isLast ? (
@@ -139,11 +168,14 @@ export const AgentParts: React.FC<AgentPartsProps> = React.memo(function AgentPa
             />
           )
         }
+        if (group.type === 'compaction') {
+          return <CompactionDivider key={group.key} part={group.part} />
+        }
         return (
           <WorkGroup
             key={group.key}
             parts={group.parts}
-            isStreaming={isStreaming && index === groups.length - 1}
+            isStreaming={isStreaming && index === lastSignificant}
             diffToolIds={diffToolIds}
             onOpenDiff={onOpenDiff}
             onOpenToolResult={onOpenToolResult}
