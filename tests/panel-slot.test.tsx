@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { PanelSlot, PanelDetachedPlaceholder } from '../src/components/PanelSlot'
+import { PanelSlot } from '../src/components/PanelSlot'
 import { openPanelWindow, type AuxWindowHandle } from '../src/panelHost/auxWindow'
 import { usePanelStore } from '../src/store/panelStore'
 import { useI18nStore } from '../src/store/i18nStore'
@@ -29,7 +29,7 @@ function createFakePopup(): FakePopup {
     },
     addEventListener: () => {},
     removeEventListener: () => {},
-    focus: () => {},
+    focus: () => {}
   }
 }
 
@@ -63,14 +63,10 @@ describe('openPanelWindow', () => {
     const handle = await openPanelWindow({
       id: 'aux:1',
       title: '文件',
-      rect: { x: 100, y: 120, width: 480, height: 600 },
+      rect: { x: 100, y: 120, width: 480, height: 600 }
     })
 
-    expect(open).toHaveBeenCalledWith(
-      'about:blank',
-      'pi-panel:aux:1',
-      expect.stringContaining('width=480,height=600')
-    )
+    expect(open).toHaveBeenCalledWith('about:blank', 'pi-panel:aux:1', expect.stringContaining('width=480,height=600'))
     expect(handle.document.title).toBe('文件')
     expect(handle.document.documentElement.classList.contains('dark')).toBe(true)
 
@@ -102,7 +98,7 @@ describe('openPanelWindow', () => {
     const handle = await openPanelWindow({
       id: 'aux:1',
       title: 'Terminal',
-      rect: { x: 0, y: 0, width: 400, height: 400 },
+      rect: { x: 0, y: 0, width: 400, height: 400 }
     })
 
     handle.dispose()
@@ -115,9 +111,7 @@ describe('PanelSlot', () => {
   const renderSlot = (children: React.ReactNode) =>
     render(
       <WorkspaceScopeProvider value={WORKSPACE}>
-        <PanelSlot panel="chat" placeholder={<PanelDetachedPlaceholder panel="chat" />}>
-          {children}
-        </PanelSlot>
+        <PanelSlot panel="chat">{children}</PanelSlot>
       </WorkspaceScopeProvider>
     )
 
@@ -132,21 +126,22 @@ describe('PanelSlot', () => {
     const handle = await openPanelWindow({
       id: 'aux:1',
       title: 'chat',
-      rect: { x: 0, y: 0, width: 480, height: 600 },
+      rect: { x: 0, y: 0, width: 480, height: 600 }
     })
 
     act(() => {
       usePanelStore.setState({
         panelHost: { [WORKSPACE]: { chat: 'aux:1' } },
-        windows: { 'aux:1': { workspaceDir: WORKSPACE, panel: 'chat', handle } },
+        windows: { 'aux:1': { workspaceDir: WORKSPACE, panel: 'chat', handle } }
       })
     })
-    renderSlot(<div data-testid="chat-body">chat</div>)
+    const { container } = renderSlot(<div data-testid="chat-body">chat</div>)
 
-    // 面板内容进了子文档，主文档只剩占位
+    // 面板内容进了子文档；主窗口这一侧什么都不留，宽度全部让给编辑器
     expect(handle.document.querySelector('[data-testid="chat-body"]')).toBeTruthy()
     expect(screen.queryByTestId('chat-body')).toBeNull()
-    expect(screen.getByText(useI18nStore.getState().t('panelDetachedTitle'))).toBeTruthy()
+    expect(container.textContent).toBe('')
+    expect(container.querySelector('*')).toBeNull()
   })
 
   it('brings the panel back when the window is closed', async () => {
@@ -155,13 +150,13 @@ describe('PanelSlot', () => {
     const handle: AuxWindowHandle = await openPanelWindow({
       id: 'aux:1',
       title: 'chat',
-      rect: { x: 0, y: 0, width: 480, height: 600 },
+      rect: { x: 0, y: 0, width: 480, height: 600 }
     })
 
     act(() => {
       usePanelStore.setState({
         panelHost: { [WORKSPACE]: { chat: 'aux:1' } },
-        windows: { 'aux:1': { workspaceDir: WORKSPACE, panel: 'chat', handle } },
+        windows: { 'aux:1': { workspaceDir: WORKSPACE, panel: 'chat', handle } }
       })
     })
     renderSlot(<div data-testid="chat-body">chat</div>)
@@ -182,12 +177,12 @@ describe('panelStore.dockPanel', () => {
     const handle = await openPanelWindow({
       id: 'aux:1',
       title: 'chat',
-      rect: { x: 0, y: 0, width: 480, height: 600 },
+      rect: { x: 0, y: 0, width: 480, height: 600 }
     })
     act(() => {
       usePanelStore.setState({
         panelHost: { [WORKSPACE]: { chat: 'aux:1' } },
-        windows: { 'aux:1': { workspaceDir: WORKSPACE, panel: 'chat', handle } },
+        windows: { 'aux:1': { workspaceDir: WORKSPACE, panel: 'chat', handle } }
       })
     })
 

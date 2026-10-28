@@ -200,6 +200,7 @@
 - ✅ 2026-10-28 文件阅读视图：编辑器按类型分派阅读 / 源码两种形态，Markdown 与 HTML 默认渲染、可切回 Monaco；图片 / 视频 / 音频走只读协议 `pw-file://` 预览并提供系统打开；Markdown 支持块级就地编辑；PDF 改为 pdf.js 自绘（单一滚动容器 + canvas 虚拟化、适应宽度与 50%–400% 缩放、页码 / 翻页 / 键盘），不再依赖 Chromium 内置查看器；标签条按类型出图标并在右侧提供单一视图切换按钮。阅读视图与 Monaco 常驻只切显隐，切换实测 27ms。设计系统 v1.37
 - ✅ 2026-10-28 发布 v0.7.0：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含文件阅读视图与 pdf.js PDF 阅读器、面板拆分独立窗口（`pw-app://` 外壳 + 无边框自绘标题栏 + 拖出拆分）、聊天图片附件按 id 消费（排队项与运行中插话可带图、纯图片允许发送）、Agent 自动压缩后不再误报「无响应」、两个自定义 scheme 特权改为一次注册（修复合并后 `pw-file` 丢失 `stream` / `standard` / `fetch` 特权导致的媒体拖动与 HTML 相对路径问题）
 - ✅ 2026-10-28 发布 v0.7.1：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含聊天头部三层合两层（工作树切换并入头部为 24px chip、会话标签栏升为 34px 并与正文列连通、移除常态「就绪」状态、未命名会话按需加序号）、辅助窗口继承应用菜单（快捷键在拆分窗口可用）
+- ✅ 2026-10-28 拆分窗口改为「主窗口彻底让位」：拆出的面板不再在原位置渲染占位卡（删 `PanelDetachedPlaceholder` 与 `PanelSlot` 的 `placeholder` 入参），侧栏 / 对话列 / 终端行连同 2px 接缝一起把空间让给编辑器，面板仍保持挂载（`hidden`）以维持 portal；files / git 都拆出时侧栏与 26px 导轨全部消失，只剩一个停靠时保留侧栏并把标签切到还在的一边；独立窗口标题改为工作区名（`basename`），删除 `focusPanelWindow` 与「定位到独立窗口 / 已分离」文案，回位只靠关窗。设计系统 v1.39，新增 `tests/workspace-panel-layout.test.tsx`。type-check / lint / 887 用例通过
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
 ## 最近提交

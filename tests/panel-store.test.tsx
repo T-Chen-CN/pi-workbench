@@ -67,6 +67,13 @@ describe('panelStore', () => {
     expect(Object.keys(usePanelStore.getState().windows)).toEqual(['aux:1'])
   })
 
+  it('titles the detached window after the workspace, not the panel', async () => {
+    await usePanelStore.getState().detachPanel(WORKSPACE, 'chat')
+    const [entry] = Object.values(usePanelStore.getState().windows)
+    // 标题只写工作区名：同一工作区拆几个窗口都不可能靠面板名区分
+    expect(entry.handle.document.title).toBe('ws')
+  })
+
   it('surfaces a toast when the popup is blocked', async () => {
     vi.spyOn(window, 'open').mockReturnValue(null)
 
@@ -108,28 +115,6 @@ describe('panelStore', () => {
     expect(handle.window?.closed).toBe(true)
     expect(usePanelStore.getState().windows).toEqual({})
     expect(usePanelStore.getState().panelHost).toEqual({})
-  })
-
-  it('moves focus to the auxiliary window and ignores unknown hosts', async () => {
-    const handle = await detach('chat')
-    const focus = vi.spyOn(handle.window as Window, 'focus')
-
-    act(() => usePanelStore.getState().focusPanelWindow(WORKSPACE, 'chat'))
-    expect(focus).toHaveBeenCalled()
-
-    focus.mockRestore()
-    // 面板不在辅助窗口里：什么都不做，也不抛错
-    expect(() => usePanelStore.getState().focusPanelWindow(WORKSPACE, 'files')).not.toThrow()
-  })
-
-  it('docks the panel again when its window disappears', async () => {
-    const handle = await detach('chat')
-    Object.defineProperty(handle.window, 'closed', { value: true, configurable: true })
-
-    act(() => usePanelStore.getState().focusPanelWindow(WORKSPACE, 'chat'))
-
-    expect(panelHostOf(WORKSPACE, 'chat')).toBe(MAIN_HOST)
-    expect(usePanelStore.getState().windows).toEqual({})
   })
 
   it('ignores close notifications for unknown windows', () => {

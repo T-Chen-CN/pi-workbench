@@ -4,7 +4,6 @@ import { ExternalLink, PanelRightClose, type LucideIcon } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { rectFromPointer, usePanelStore } from '../store/panelStore'
 import { useHostDocument, useHostKeydown } from '../panelHost/HostContext'
-import { PANEL_TITLE_KEY } from '../panelHost/panelLabels'
 import { MAIN_HOST, type PanelId } from '../panelHost/types'
 import { useWorkspaceScope } from '../workspace/WorkspaceScope'
 
@@ -122,7 +121,6 @@ export function usePanelContextMenu(panel: PanelId): {
                   onSelect: () =>
                     void detachPanel(workspacePath, panel, {
                       rect: rectFromPointer(anchor.x, anchor.y),
-                      title: t(PANEL_TITLE_KEY[panel]),
                     }),
                 },
               ]

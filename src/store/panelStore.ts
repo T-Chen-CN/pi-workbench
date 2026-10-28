@@ -16,7 +16,7 @@ import {
   type HostId,
   type PanelId
 } from '../panelHost/types'
-import { PANEL_TITLE_KEY } from '../panelHost/panelLabels'
+import { basename } from '../utils/filePath'
 import { useI18nStore } from './i18nStore'
 import { toast } from './toastStore'
 
@@ -35,7 +35,6 @@ interface PanelHostState {
   dockWorkspace: (workspaceDir: string) => void
   /** 应用退出 / 主窗口卸载前统一回收，避免残留空窗口 */
   disposeAllWindows: () => void
-  focusPanelWindow: (workspaceDir: string, panel: PanelId) => void
   /** 主进程通知：辅助窗口被用户关闭 → 面板回位 */
   handleWindowClosed: (hostId: HostId) => void
 }
@@ -43,8 +42,6 @@ interface PanelHostState {
 export interface DetachOptions {
   /** 目标窗口矩形；缺省时落在主窗口右侧 */
   rect?: AnchorRect
-  /** 窗口标题（原生标题栏显示） */
-  title?: string
 }
 
 let nextHostSeq = 1
@@ -104,8 +101,8 @@ export const usePanelStore = create<PanelHostState>((set, get) => ({
     try {
       handle = await openPanelWindow({
         id: hostId,
-        // 默认取本地化面板名：拖出路径不传 title，也不能让窗口标题退化成 `files`
-        title: options?.title ?? useI18nStore.getState().t(PANEL_TITLE_KEY[panel]),
+        // 窗口属于某个工作区，标题只写工作区名：面板名对多窗口毫无区分度
+        title: basename(workspaceDir),
         rect: options?.rect ?? defaultRect()
       })
     } catch (error) {
@@ -155,22 +152,6 @@ export const usePanelStore = create<PanelHostState>((set, get) => ({
     if (entries.length === 0) return
     set({ panelHost: {}, windows: {} })
     for (const entry of entries) entry.handle.dispose()
-  },
-
-  focusPanelWindow: (workspaceDir, panel) => {
-    const hostId = get().panelHost[workspaceDir]?.[panel]
-    if (!hostId || hostId === MAIN_HOST) return
-    const win = get().windows[hostId]?.handle.window
-    if (!win) return
-    try {
-      if (win.closed) {
-        get().handleWindowClosed(hostId)
-        return
-      }
-      win.focus()
-    } catch {
-      get().handleWindowClosed(hostId)
-    }
   },
 
   handleWindowClosed: (hostId) => {

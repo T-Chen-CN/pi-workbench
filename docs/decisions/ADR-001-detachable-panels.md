@@ -28,7 +28,9 @@
 | 应用加载方式 | 改用自定义协议 `pw-app://bundle/`，否则不同 `file://` URL 的 origin 不一致，跨文档操作受限 |
 | 辅助窗口外壳 | 与主窗口同一套：Windows / Linux `frame: false`、macOS `hiddenInset`，窗口内 34px 自绘标题栏（拖动 / 双击最大化 / 回位 / 三个窗口按钮） |
 | 关闭辅助窗口 | 等于停靠回主窗口 |
-| 原位置 | 渲染 `EmptyState` 占位（含「定位到独立窗口 / 还原到主窗口」），布局不塌陷，主窗口保持展开 |
+| 窗口标题 | 只写工作区名（`basename(workspacePath)`）。面板名对区分窗口没有作用，同一工作区拆多个窗口本来就会同名 |
+| 原位置 | 完全不占位：不渲染占位卡、不留宽度或行高，接缝一并消失，空间交给编辑器。面板组件仍保持挂载（portal 的 fiber 在主窗口树上），侧栏只剩一个停靠面板时保留侧栏 |
+| 回位 | 只靠关闭辅助窗口；面板内部的「还原到主窗口」保留，主窗口这侧不提供定位 / 还原入口 |
 | 入口 | 面板头部右键菜单 + 14px 拖出柄，不新增常驻按钮 |
 | 拖出判定 | `dragend` 调主进程 `aux:detach-at`，由主进程读真实光标位置与工作区，渲染层不自己算；**不能用 `dataTransfer.dropEffect` 判断取消**——拖到窗口外松手时 Chromium 同样报 `'none'` |
 | 终端 PTY | 所有权升到 `terminalStore`，拆窗只重建 xterm 视图，PTY 与 200KB 尾部缓冲留在 store |
@@ -66,11 +68,16 @@
 
 - 主进程：`electron/app-protocol.ts`、`electron/aux-window.ts`、`electron/main.ts`（`installAuxWindowSupport` + `registerAppProtocol`）
 - 渲染层：`src/panelHost/{types,focus,auxWindow,HostContext,panelLabels,panelDrag,panelUiState}.ts`、`src/store/panelStore.ts`、`src/components/{PanelSlot,PanelWindowFrame,PanelContextMenu,PanelDragHandle}.tsx`
-- 面板接入：`WorkspaceView.tsx`（`PanelSlot` 包裹 + `sidebarShown / chatShown / terminalShown`）、`TerminalPanel.tsx` + `src/store/terminalStore.ts`
-- 测试：`tests/aux-window.test.ts`、`tests/panel-slot.test.tsx`、`tests/panel-store.test.tsx`、`tests/panel-window-frame.test.tsx`、`tests/panel-drag.test.tsx`、`tests/terminal-store.test.ts`、`tests/chat-detach.test.tsx`、`tests/file-panel-detach.test.tsx`
+- 面板接入：`WorkspaceView.tsx`（`PanelSlot` 包裹 + `sidebarMounted / sidebarShown / chatMounted / chatShown / terminalMounted`，拆出时 `hidden` 但仍挂载）、`TerminalPanel.tsx` + `src/store/terminalStore.ts`
+- 测试：`tests/aux-window.test.ts`、`tests/panel-slot.test.tsx`、`tests/panel-store.test.tsx`、`tests/panel-window-frame.test.tsx`、`tests/panel-drag.test.tsx`、`tests/workspace-panel-layout.test.tsx`、`tests/terminal-store.test.ts`、`tests/chat-detach.test.tsx`、`tests/file-panel-detach.test.tsx`
+
 
 ## 后续可评估
 
 - 多显示器 / 高 DPI 下的拖出落点复测（`computeDetachedRect` 已按工作区夹取，未在 4K + 200% 缩放组合上实测）；
 - 面板「拖回主窗口」停靠（当前靠关闭窗口回位）；
 - 布局持久化（需要先明确「重启恢复窗口」与当前「退出不恢复工作区」的策略冲突）。
+
+## 修订记录
+
+- 2026-10-28（设计系统 v1.39）：原「原位占位不塌陷」改为「主窗口彻底让位」——占位卡与接缝一并撤销，面板仍挂载但容器 `hidden`；辅助窗口标题改为工作区名；随之删除 `PanelDetachedPlaceholder`、`PanelSlot` 的 `placeholder` 入参、`focusPanelWindow` 与「定位到独立窗口」入口（回位只靠关窗）。

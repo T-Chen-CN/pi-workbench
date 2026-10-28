@@ -732,12 +732,8 @@ export const translations = {
     panelMenu: '面板操作',
     panelDetach: '在独立窗口中打开',
     panelDockBack: '还原到主窗口',
-    panelFocusWindow: '定位到独立窗口',
-    panelDetachedTitle: '面板已在独立窗口打开',
-    panelDetachedHint: '关闭那个窗口即可让它回到这里。',
     panelDetachBlocked: '新窗口被系统拦截，无法拆分面板',
     panelDetachFailed: '拆分面板失败',
-    panelDetachedBadge: '已分离',
     panelDragHint: '拖动 {panel} 到窗口外，拆成独立窗口'
   },
 
@@ -939,8 +935,7 @@ export const translations = {
     imageFitWindow: 'Fit window',
     imageActualSize: 'Actual size',
     mediaSize: 'Size {size}',
-    mediaPlaybackFailed:
-      'Cannot play: the format may be unsupported. Open it with the system app.',
+    mediaPlaybackFailed: 'Cannot play: the format may be unsupported. Open it with the system app.',
     binaryFileLabel: 'Binary file',
     previousPage: 'Previous page',
     nextPage: 'Next page',
@@ -1481,12 +1476,8 @@ export const translations = {
     panelMenu: 'Panel actions',
     panelDetach: 'Open in separate window',
     panelDockBack: 'Restore to main window',
-    panelFocusWindow: 'Focus its window',
-    panelDetachedTitle: 'This panel is in a separate window',
-    panelDetachedHint: 'Close that window to bring it back here.',
     panelDetachBlocked: 'The system blocked the new window',
     panelDetachFailed: 'Could not detach the panel',
-    panelDetachedBadge: 'Detached',
     panelDragHint: 'Drag {panel} outside the window to detach it'
   }
 }

@@ -90,7 +90,7 @@ describe('WindowControls', () => {
 })
 
 describe('PanelWindowFrame', () => {
-  it('uses the bar as a draggable window title bar with a single title slot', async () => {
+  it('uses the bar as a draggable window title bar showing the workspace name', async () => {
     const { container } = render(
       <WorkspaceScopeProvider value={WORKSPACE}>
         <PanelWindowFrame panel="chat" workspacePath={WORKSPACE} host="aux:6">
@@ -101,9 +101,11 @@ describe('PanelWindowFrame', () => {
 
     const bar = container.querySelector('.app-drag')
     expect(bar).toBeTruthy()
-    expect(bar?.textContent).toContain('Pi Agent 对话')
+    // 标题只写工作区名：面板名在这个窗口里不再出现
+    expect(bar?.textContent?.trim()).toBe('ws')
+    expect(container.textContent).not.toContain('Pi Agent 对话')
     // 标题只出现一次：不与系统标题栏或面板内头部重复
-    expect((container.textContent?.match(/Pi Agent 对话/g) ?? []).length).toBe(1)
+    expect(container.querySelectorAll('.app-drag').length).toBe(1)
 
     screen.getByRole('button', { name: '还原到主窗口' }).click()
     await waitFor(() => expect(usePanelStore.getState().panelHost[WORKSPACE]?.chat).toBeUndefined())

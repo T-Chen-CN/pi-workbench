@@ -12,7 +12,7 @@ import { PanelLeftOpen, PanelRightOpen } from 'lucide-react'
 import { FileExplorer } from './FileExplorer'
 import { ChatPanel } from './ChatPanel'
 import { DiffViewer } from './DiffViewer'
-import { PanelSlot, PanelDetachedPlaceholder } from './PanelSlot'
+import { PanelSlot } from './PanelSlot'
 import { TerminalPanel } from './TerminalPanel'
 import { GitView } from './GitView'
 import { CommitDetailView } from './CommitDetailView'
@@ -71,17 +71,26 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
     git: 560
   })
   const [chatWidth, setChatWidth] = useState(336)
-  // 面板拆到独立窗口后，主窗口这边只剩占位：
-  // 收起按钮交给窗口自己的信息栏，主窗口也保持展开，避免把占位一起收掉
+  // 面板拆到独立窗口后：主窗口这一侧完全让位（不占宽、不占高、不留占位）。
+  // 但 PanelSlot 必须继续挂载 —— portal 的 fiber 挂在这里，卸载会把独立窗口里的面板一起拆掉。
   const detached = usePanelStore((state) => state.panelHost[workspacePath])
   const chatDetached = detached?.chat !== undefined
   const filesDetached = detached?.files !== undefined
   const gitDetached = detached?.git !== undefined
   const terminalDetached = detached?.terminal !== undefined
-  const sidebarShown = showSidebar || filesDetached || gitDetached
-  const chatShown = showChat || chatDetached
-  const terminalShown = showTerminal || terminalDetached
+  /** 侧栏是 files / git 共用的：只要还剩一个停靠，侧栏就还能出现 */
+  const sidebarHasDocked = !filesDetached || !gitDetached
+  const sidebarMounted = showSidebar || filesDetached || gitDetached
+  const sidebarShown = showSidebar && sidebarHasDocked
+  const chatMounted = showChat || chatDetached
+  const chatShown = showChat && !chatDetached
+  const terminalMounted = showTerminal || terminalDetached
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('files')
+  // 当前标签被拆走时切到还在的那一边，避免标签条指向一个已经不在这里的面板
+  useEffect(() => {
+    if (sidebarTab === 'files' && filesDetached && !gitDetached) setSidebarTab('git')
+    else if (sidebarTab === 'git' && gitDetached && !filesDetached) setSidebarTab('files')
+  }, [sidebarTab, filesDetached, gitDetached])
   const [containerWidth, setContainerWidth] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const sidebarCollapseRef = useRef<HTMLButtonElement | null>(null)
@@ -181,13 +190,17 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
     return () => observer.disconnect()
   }, [])
 
-  // 顶栏“终端”按钮作用于当前工作区
+  // 顶栏“终端”按钮作用于当前工作区；终端已拆出时不作用——布局这边没有可切换的东西，
+  // 动了只会让独立窗口里的 xterm 拿到 visible=false
   useEffect(() => {
     if (!active) return
-    const onToggleTerminal = () => setShowTerminal((value) => !value)
+    const onToggleTerminal = () => {
+      if (usePanelStore.getState().panelHost[workspacePath]?.terminal) return
+      setShowTerminal((value) => !value)
+    }
     const offToggle = onAppEvent('workspace-toggle-terminal', onToggleTerminal)
     return () => offToggle()
-  }, [active])
+  }, [active, workspacePath])
 
   // 标签变化防抖写入固定状态；工作树模式按当前视图根保存
   useEffect(() => subscribeEditorTabs(workspacePath, viewRoot), [workspacePath, viewRoot])
@@ -256,67 +269,68 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
       }`}
     >
       <WorkspaceScopeProvider value={workspacePath}>
-        {sidebarShown ? (
-          <>
-            <aside
-              id={filePanelId}
-              className="flex flex-shrink-0 flex-col overflow-hidden bg-panel"
-              style={{ width: sidebarWidth }}
-            >
-              <div className="flex h-[34px] flex-shrink-0 items-center gap-0.5 border-b border-rule-divide px-1.5">
-                <button
-                  type="button"
-                  onClick={() => setSidebarTab('files')}
-                  className={`h-full border-b-2 px-2 type-label transition-colors ${
-                    sidebarTab === 'files'
-                      ? 'border-accent text-ink'
-                      : 'border-transparent text-ink-muted hover:text-ink'
-                  }`}
-                >
-                  {t('files')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSidebarTab('git')}
-                  className={`h-full border-b-2 px-2 type-label transition-colors ${
-                    sidebarTab === 'git' ? 'border-accent text-ink' : 'border-transparent text-ink-muted hover:text-ink'
-                  }`}
-                >
-                  {t('gitView')}
-                </button>
-              </div>
-              <div className="min-h-0 flex-1">
-                {/* 已拆出的面板必须保持挂载（portal 在别的窗口里），只是主窗口这边不显示 */}
-                {(sidebarTab === 'files' || filesDetached) && (
-                  <div className={sidebarTab === 'files' ? 'h-full' : 'hidden'} aria-hidden={sidebarTab !== 'files'}>
-                    <PanelSlot panel="files">
-                      <FileExplorer
-                        workspacePath={viewRoot}
-                        onCollapse={filesDetached ? undefined : collapseSidebar}
-                        collapseButtonRef={sidebarCollapseRef}
-                        panelId={filePanelId}
-                        active={active}
-                      />
-                    </PanelSlot>
-                  </div>
-                )}
-                {(sidebarTab === 'git' || gitDetached) && (
-                  <div className={sidebarTab === 'git' ? 'h-full' : 'hidden'} aria-hidden={sidebarTab !== 'git'}>
-                    <PanelSlot panel="git">
-                      <GitView workspacePath={workspacePath} />
-                    </PanelSlot>
-                  </div>
-                )}
-              </div>
-            </aside>
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              className="w-0.5 flex-shrink-0 cursor-col-resize bg-rule-seam transition-colors hover:bg-accent"
-              onPointerDown={startResize('sidebar')}
-            />
-          </>
-        ) : (
+        {/* 侧栏是 files / git 共用的：还剩一个停靠就保留侧栏，两个都拆出就整块让位。
+            已拆出的那个也必须保持挂载 —— portal 的 fiber 挂在这里 */}
+        {sidebarMounted && (
+          <aside
+            id={filePanelId}
+            className={sidebarShown ? 'flex flex-shrink-0 flex-col overflow-hidden bg-panel' : 'hidden'}
+            style={sidebarShown ? { width: sidebarWidth } : undefined}
+          >
+            <div className="flex h-[34px] flex-shrink-0 items-center gap-0.5 border-b border-rule-divide px-1.5">
+              <button
+                type="button"
+                onClick={() => setSidebarTab('files')}
+                className={`${filesDetached ? 'hidden ' : ''}h-full border-b-2 px-2 type-label transition-colors ${
+                  sidebarTab === 'files' ? 'border-accent text-ink' : 'border-transparent text-ink-muted hover:text-ink'
+                }`}
+              >
+                {t('files')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSidebarTab('git')}
+                className={`${gitDetached ? 'hidden ' : ''}h-full border-b-2 px-2 type-label transition-colors ${
+                  sidebarTab === 'git' ? 'border-accent text-ink' : 'border-transparent text-ink-muted hover:text-ink'
+                }`}
+              >
+                {t('gitView')}
+              </button>
+            </div>
+            <div className="min-h-0 flex-1">
+              {/* 已拆出的面板必须保持挂载（portal 在别的窗口里），只是主窗口这边不显示 */}
+              {(sidebarTab === 'files' || filesDetached) && (
+                <div className={sidebarTab === 'files' ? 'h-full' : 'hidden'} aria-hidden={sidebarTab !== 'files'}>
+                  <PanelSlot panel="files">
+                    <FileExplorer
+                      workspacePath={viewRoot}
+                      onCollapse={filesDetached ? undefined : collapseSidebar}
+                      collapseButtonRef={sidebarCollapseRef}
+                      panelId={filePanelId}
+                      active={active}
+                    />
+                  </PanelSlot>
+                </div>
+              )}
+              {(sidebarTab === 'git' || gitDetached) && (
+                <div className={sidebarTab === 'git' ? 'h-full' : 'hidden'} aria-hidden={sidebarTab !== 'git'}>
+                  <PanelSlot panel="git">
+                    <GitView workspacePath={workspacePath} />
+                  </PanelSlot>
+                </div>
+              )}
+            </div>
+          </aside>
+        )}
+        {sidebarShown && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            className="w-0.5 flex-shrink-0 cursor-col-resize bg-rule-seam transition-colors hover:bg-accent"
+            onPointerDown={startResize('sidebar')}
+          />
+        )}
+        {!showSidebar && sidebarHasDocked && (
           <button
             ref={sidebarRailRef}
             type="button"
@@ -350,45 +364,51 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
               />
             )}
           </div>
-          {terminalShown && (
-            <PanelSlot panel="terminal">
-              <TerminalPanel
-                workspacePath={workspacePath}
-                cwd={viewRoot}
-                visible={terminalShown}
-                onClose={terminalDetached ? undefined : () => setShowTerminal(false)}
-                active={active}
-              />
-            </PanelSlot>
-          )}
-        </section>
-
-        {chatShown ? (
-          <>
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              className="w-0.5 flex-shrink-0 cursor-col-resize bg-rule-seam transition-colors hover:bg-accent"
-              onPointerDown={startResize('chat')}
-            />
-            <aside
-              id={chatPanelId}
-              className="flex-shrink-0 overflow-hidden bg-panel"
-              style={{ width: chatWidthShown }}
-            >
-              <PanelSlot panel="chat" placeholder={<PanelDetachedPlaceholder panel="chat" />}>
-                <ChatPanel
+          {/* 终端拆出后，主窗口这一侧不留行高；`visible` 仍是面板自身的可见性，
+              否则独立窗口里的 xterm 会拿到 visible=false 而不初始化 / 不适配尺寸 */}
+          {terminalMounted && (
+            <div className={terminalDetached ? 'hidden' : 'contents'}>
+              <PanelSlot panel="terminal">
+                <TerminalPanel
                   workspacePath={workspacePath}
-                  viewRoot={viewRoot}
-                  onCollapse={chatDetached ? undefined : collapseChat}
-                  collapseButtonRef={chatCollapseRef}
-                  panelId={chatPanelId}
+                  cwd={viewRoot}
+                  visible={showTerminal}
+                  onClose={terminalDetached ? undefined : () => setShowTerminal(false)}
                   active={active}
                 />
               </PanelSlot>
-            </aside>
-          </>
-        ) : (
+            </div>
+          )}
+        </section>
+
+        {chatShown && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            className="w-0.5 flex-shrink-0 cursor-col-resize bg-rule-seam transition-colors hover:bg-accent"
+            onPointerDown={startResize('chat')}
+          />
+        )}
+        {/* 拆出后整列（含接缝）让给编辑器，但面板必须保持挂载 */}
+        {chatMounted && (
+          <aside
+            id={chatPanelId}
+            className={chatShown ? 'flex-shrink-0 overflow-hidden bg-panel' : 'hidden'}
+            style={chatShown ? { width: chatWidthShown } : undefined}
+          >
+            <PanelSlot panel="chat">
+              <ChatPanel
+                workspacePath={workspacePath}
+                viewRoot={viewRoot}
+                onCollapse={chatDetached ? undefined : collapseChat}
+                collapseButtonRef={chatCollapseRef}
+                panelId={chatPanelId}
+                active={active}
+              />
+            </PanelSlot>
+          </aside>
+        )}
+        {!chatMounted && (
           <button
             ref={chatRailRef}
             type="button"
