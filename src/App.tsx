@@ -24,6 +24,7 @@ import { WelcomeScreen } from './components/WelcomeScreen'
 import { WindowControls } from './components/WindowControls'
 import { BootScreen } from './components/BootScreen'
 import { Button, IconButton, Modal, Spinner } from './components/ui'
+import { handleTabStripWheel, Tab } from './components/patterns'
 import { useToastStore, toast } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
 import { useThemeStore, useResolvedTheme, type ThemeMode } from './store/themeStore'
@@ -698,76 +699,72 @@ export default function App() {
 
       {/* Workspace tabs */}
       {openWorkspaces.length > 0 && (
-        <div className="flex flex-shrink-0 items-center overflow-x-auto border-b border-rule-divide bg-panel px-2">
-          {openWorkspaces.map((path) => {
-            const name = basename(path) ?? path
-            const active = path === workspace
-            const status = workspaceActivity(path)
-            const statusLabel =
-              status === 'needsAction'
-                ? t('sessionNeedsAction')
-                : status === 'error'
-                  ? t('sessionError')
-                  : status === 'running'
-                    ? t('sessionRunning')
-                    : ''
-            const accessible = statusLabel ? `${name} · ${statusLabel}` : name
-            return (
-              <div
-                key={path}
-                className={`group flex h-8 items-center gap-2 border-r border-rule-divide px-3 type-label ${
-                  active
-                    ? 'bg-surface text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
-                    : 'text-ink-muted hover:bg-hover hover:text-ink'
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
+        <div className="flex flex-shrink-0 items-center gap-1 border-b border-rule-divide bg-panel pl-2 pr-1">
+          <div
+            role="tablist"
+            aria-label={t('workspaceTabsLabel')}
+            onWheel={handleTabStripWheel}
+            className="tab-strip-scroll flex min-w-0 flex-1 items-center overflow-x-auto"
+          >
+            {openWorkspaces.map((path) => {
+              const name = basename(path) ?? path
+              const active = path === workspace
+              const status = workspaceActivity(path)
+              const statusLabel =
+                status === 'needsAction'
+                  ? t('sessionNeedsAction')
+                  : status === 'error'
+                    ? t('sessionError')
+                    : status === 'running'
+                      ? t('sessionRunning')
+                      : ''
+              const accessible = statusLabel ? `${name} · ${statusLabel}` : name
+              return (
+                <Tab
+                  key={path}
+                  size="sm"
+                  active={active}
+                  title={statusLabel ? `${path} · ${statusLabel}` : path}
+                  ariaLabel={accessible}
+                  busy={status === 'running'}
+                  onSelect={() => {
                     activateWorkspace(path)
                     setShowHome(false)
                   }}
-                  title={statusLabel ? `${path} · ${statusLabel}` : path}
-                  aria-label={accessible}
-                  aria-busy={status === 'running' || undefined}
-                  className="flex max-w-[200px] items-center gap-1.5 bg-transparent text-inherit"
-                >
-                  <Folder size={11} className="flex-shrink-0 opacity-70" />
-                  <span className="truncate">{name}</span>
-                  {status === 'running' ? (
-                    <span
-                      aria-hidden="true"
-                      className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-accent"
-                    />
-                  ) : status === 'error' ? (
-                    <AlertCircle
-                      size={10}
-                      className="flex-shrink-0 text-danger"
-                      aria-hidden="true"
-                    />
-                  ) : status === 'needsAction' ? (
-                    <span
-                      aria-hidden="true"
-                      className="relative flex h-1.5 w-1.5 flex-shrink-0 items-center justify-center rounded-full border border-warning shadow-[0_0_0_2px_rgb(var(--warning)_/_0.18)] animate-breathe"
-                    />
-                  ) : null}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void closeWorkspaceTab(path)}
-                  title={t('close')}
-                  aria-label={t('close')}
-                  className="flex h-4 w-4 items-center justify-center text-ink-muted hover:text-ink"
-                >
-                  <X size={10} />
-                </button>
-              </div>
-            )
-          })}
+                  onClose={() => void closeWorkspaceTab(path)}
+                  closeLabel={t('close')}
+                  className="max-w-[240px]"
+                  labelClassName="max-w-[200px]"
+                  leading={<Folder size={11} className="flex-shrink-0 opacity-70" />}
+                  label={name}
+                  trailing={
+                    status === 'running' ? (
+                      <span
+                        aria-hidden="true"
+                        className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-accent"
+                      />
+                    ) : status === 'error' ? (
+                      <AlertCircle
+                        size={10}
+                        className="flex-shrink-0 text-danger"
+                        aria-hidden="true"
+                      />
+                    ) : status === 'needsAction' ? (
+                      <span
+                        aria-hidden="true"
+                        className="relative flex h-1.5 w-1.5 flex-shrink-0 items-center justify-center rounded-full border border-warning shadow-[0_0_0_2px_rgb(var(--warning)_/_0.18)] animate-breathe"
+                      />
+                    ) : null
+                  }
+                />
+              )
+            })}
+          </div>
           <IconButton
             icon={Plus}
             label={t('openProject')}
             size="sm"
+            className="ml-1 flex-shrink-0"
             onClick={() => void pickWorkspace()}
           />
         </div>

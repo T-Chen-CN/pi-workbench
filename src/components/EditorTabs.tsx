@@ -9,12 +9,12 @@ import {
   Image as ImageIcon,
   Loader2,
   Music,
-  X,
 } from 'lucide-react'
 import { useEditorStore, editorStoreFor } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
 import { confirmDialog } from '../store/dialogStore'
+import { handleTabStripWheel, Tab } from './patterns'
 import type { OpenFile } from '../types'
 
 /** 标签图标按文件类型区分：阅读视图类型不再统一显示代码图标 */
@@ -54,64 +54,65 @@ export const EditorTabs: React.FC<EditorTabsProps> = ({ workspacePath, root }) =
 
   if (openFiles.length === 0) return null
 
+  const hasActive = Boolean(currentFile?.path)
+
+  const closeFile = async (file: OpenFile) => {
+    const target = store.getState().openFiles.find((f) => f.path === file.path)
+    if (
+      target?.isDirty &&
+      !(await confirmDialog({
+        message: t('discardChangesConfirm'),
+        danger: true,
+      }))
+    ) {
+      return
+    }
+    if (workspacePath) {
+      void api.draftDelete(workspacePath, file.path).catch(() => undefined)
+    }
+    removeOpenFile(file.path)
+  }
+
   return (
     <div
       data-testid="editor-tabs"
-      className="flex flex-shrink-0 items-stretch overflow-x-auto border-b border-rule-divide bg-panel"
+      role="tablist"
+      aria-label={t('editorTabsLabel')}
+      onWheel={handleTabStripWheel}
+      className="tab-strip-scroll flex flex-shrink-0 items-stretch overflow-x-auto border-b border-rule-divide bg-panel"
     >
-      {openFiles.map((file) => {
+      {openFiles.map((file, index) => {
         const active = currentFile?.path === file.path
         const Icon = iconFor(file)
         return (
-          <div
+          <Tab
             key={file.path}
-            className={`group flex h-[34px] items-center gap-2 border-r border-rule-divide pl-3 pr-1.5 type-label transition-colors ${
-              active
-                ? 'bg-surface text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
-                : 'text-ink-muted hover:bg-hover hover:text-ink'
-            }`}
-          >
-            <button
-              type="button"
-              className="flex max-w-[220px] items-center gap-1.5 bg-transparent text-inherit"
-              title={file.path}
-              onClick={() => store.setState({ currentFile: file })}
-            >
+            active={active}
+            tabbable={active || (!hasActive && index === 0)}
+            title={file.path}
+            ariaLabel={
+              [file.name, file.isDirty ? t('unsavedChanges') : '', file.isSaving ? t('saving') : '']
+                .filter(Boolean)
+                .join(' · ') || undefined
+            }
+            busy={file.isSaving}
+            onSelect={() => store.setState({ currentFile: file })}
+            onClose={() => void closeFile(file)}
+            closeLabel={t('close')}
+            className="max-w-[280px]"
+            labelClassName="max-w-[220px]"
+            leading={
               <Icon size={12} className={active ? 'text-accent' : 'text-ink-muted'} />
-              <span className="truncate">{file.name}</span>
-              {file.isDirty && (
-                <span
-                  className="h-1 w-1 flex-shrink-0 rounded-full bg-accent"
-                  title={t('unsavedChanges')}
-                />
-              )}
-              {file.isSaving && <Loader2 size={10} className="animate-spin text-ink-muted" />}
-            </button>
-            <button
-              type="button"
-              className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-ink-muted opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100"
-              aria-label={t('close')}
-              title={t('close')}
-              onClick={async () => {
-                const target = store.getState().openFiles.find((f) => f.path === file.path)
-                if (
-                  target?.isDirty &&
-                  !(await confirmDialog({
-                    message: t('discardChangesConfirm'),
-                    danger: true,
-                  }))
-                ) {
-                  return
-                }
-                if (workspacePath) {
-                  void api.draftDelete(workspacePath, file.path).catch(() => undefined)
-                }
-                removeOpenFile(file.path)
-              }}
-            >
-              <X size={11} />
-            </button>
-          </div>
+            }
+            label={file.name}
+            trailing={
+              file.isSaving ? (
+                <Loader2 size={10} className="flex-shrink-0 animate-spin text-ink-muted" />
+              ) : file.isDirty ? (
+                <span className="h-1 w-1 flex-shrink-0 rounded-full bg-accent" />
+              ) : null
+            }
+          />
         )
       })}
     </div>
