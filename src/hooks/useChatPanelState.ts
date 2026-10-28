@@ -13,6 +13,7 @@ import { useI18nStore } from '../store/i18nStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useApprovalStore } from '../store/approvalStore'
 import { useSettingsStore } from '../store/settingsStore'
+import { useHostKeydown } from '../panelHost/HostContext'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
 import { buildContextPrompt } from '../api/chatContext'
@@ -794,18 +795,16 @@ export function useChatPanelState(props: ChatPanelProps) {
     }
   }, [messages.length])
 
-  useEffect(() => {
-    if (!active) return
-    const onKeyDown = (event: KeyboardEvent) => {
+  useHostKeydown(
+    (event) => {
       if (event.altKey && event.key === 'ArrowDown') {
         event.preventDefault()
         scrollToBottom()
       }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, active])
+    },
+    [messages.length],
+    active
+  )
 
   useEffect(() => {
     inputRef.current?.focus()

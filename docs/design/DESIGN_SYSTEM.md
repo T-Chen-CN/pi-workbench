@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.33 |
+| 文档版本 | v1.34 |
 | 状态 | Active（正式规范） |
-| 最后更新 | 2026-10-27 |
+| 最后更新 | 2026-10-28 |
 | 适用范围 | 渲染进程全部 UI、Monaco / xterm 主题、应用主题设置 |
 | 唯一事实来源 | 本文件。所有前端设计相关实现以此为准 |
 | 历史方案 | [PAPER_INK.md](./PAPER_INK.md)（方案、决策与实施记录） |
@@ -554,6 +554,20 @@
 
 ---
 
+### 6.12 辅助窗口（面板拆分）
+
+面板（文件树 / Git / 聊天 / 终端）可以拆成一个独立窗口，关掉那个窗口就回到主窗口原位。拆分只换渲染落点，状态不复制：同一份 store，同一个 JS 上下文。
+
+- **外壳使用系统原生标题栏**（`frame: true` + `autoHideMenuBar`）。这是规范中唯一不用自绘标题栏的窗口：它不承载品牌区与窗口按钮组，自绘收益低于成本，三个平台保持一致。最小尺寸 320×220；首帧背景取 `--panel`，避免开窗白闪。
+- **32px 窗口信息栏**是辅助窗口内唯一新增的结构：`bg-panel` + 底部 `border-rule-divide`；左侧 `type-label text-ink-muted` 显示面板名（复用面板自己的标题文案），右侧 28px `IconButton`（`PanelRightClose`，label「还原到主窗口」）。信息栏不加第二行元数据，不加分隔线以外的装饰。
+- **分离后原位占位，不塌陷布局**：原位置渲染 `EmptyState`（图标 `PanelTopOpen`）：标题「面板已在独立窗口打开」、说明「关闭那个窗口即可让它回到这里。」，动作为 `secondary`「定位到独立窗口」+ `ghost`「还原到主窗口」。占位底色 `bg-panel`。
+- **入口统一为右键菜单**：面板头部 / 侧栏标签右键弹出。形态与 `FileExplorer` 的节点菜单一致（`fixed inset-0` 遮罩 + `bg-raised` + 满墨 `border-line` + `shadow-print`，`min-w-[190px]`，`type-value` 行 `px-3 py-1.5`），按当前状态只给一个动作：`ExternalLink`「在独立窗口中打开」或 `PanelRightClose`「还原到主窗口」。不新增常驻按钮。
+- **主题与语言跟随主窗口**：辅助窗口镜像 `html.class`（Paper / Ink）、`lang`、`data-lang`，切换主题即时同步，不重开窗口。辅助窗口内不执行任何脚本（`script-src 'none'`）。
+- **提示与对话框按窗口落点**：toast 与 `DialogHost` 每个窗口各挂一份，只显示属于该窗口的条目；落点由「哪个窗口持有焦点」决定，不再弹回主窗口。
+- **明确不做**：不做布局持久化（重启回到默认布局）、不做窗口内拖拽重排、辅助窗口里不放 Monaco / Diff / 设置。
+
+---
+
 ## 7. 可访问性
 
 - 正文、链接、按钮文字 ≥4.5:1；`ink-subtle` 仅用于元数据。
@@ -653,6 +667,7 @@
 | 编辑器主题 | `src/components/MonacoEditor.tsx`（`pi-paper` / `pi-ink`） |
 | 终端主题 | `src/components/TerminalPanel.tsx` |
 | 第三方主题 token 桥 | `src/theme/tokens.ts`（`readThemeTokens` / `tokenHex`） |
+| 辅助窗口（面板拆分） | `src/panelHost/`、`src/components/PanelSlot.tsx`、`src/components/PanelWindowFrame.tsx`、`src/components/PanelContextMenu.tsx`、`src/store/panelStore.ts` |
 | 窗口外壳 / 标题栏 | `electron/main.ts`、`electron/preload.cts` |
 | 自绘窗口按钮 | `src/components/WindowControls.tsx` |
 | 拖拽区工具类 | `src/index.css`（`.app-drag` / `.app-no-drag`） |
@@ -676,6 +691,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.34 | 2026-10-28 | 辅助窗口（面板拆分）：原生标题栏 + 32px 信息栏 + 原位占位；右键菜单拆分/回位；主题与提示按窗口落点；不持久化布局 |
 | v1.33 | 2026-10-27 | 模型能力表：设置页供应商 API 分节把「支持图片的模型」勾选列表升级为三列能力表（模型 / 上下文容量 / 图片），新增 `SettingsTable` / `SettingsTableRow` 模式与 `Modal` 的 alert 单按钮变体；容量为四档固定字面量（64K / 128K / 256K / 1M，默认 128K） |
 | v1.32 | 2026-10-27 | Git 面板提交行：窄面板（<420px）改为两行两列布局，ref 徽章与标题等宽、短哈希右对齐进固定 52px 时间列；窄面板 ref 按实测宽度折叠为 `+N`（宽面板仍按个数）；相对时间英文改紧凑单位（`59m` / `23h` / `29d`），超过 30 天改两位年份本地化日期（`25/12/31` / `12/31/25`），会话列表同步 |
 | v1.32 | 2026-10-27 | 启动页与窗口形变：静态启动页 + React 启动闸门，小窗 420×260 → 1 秒（停留 600ms + 放大 400ms）→ 1200×800；主题与语言随 URL 预置；唯一允许的窗口尺寸动效，其他场景仍禁止缩放 |

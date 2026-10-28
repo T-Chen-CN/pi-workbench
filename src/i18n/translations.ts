@@ -701,6 +701,17 @@ export const translations = {
     toolWebFetch: '读取网页',
     toolWebSearchContent: '读取搜索结果',
     toolSourceCheck: '来源核查',
+
+    // 面板拆分（辅助窗口）
+    panelMenu: '面板操作',
+    panelDetach: '在独立窗口中打开',
+    panelDockBack: '还原到主窗口',
+    panelFocusWindow: '定位到独立窗口',
+    panelDetachedTitle: '面板已在独立窗口打开',
+    panelDetachedHint: '关闭那个窗口即可让它回到这里。',
+    panelDetachBlocked: '新窗口被系统拦截，无法拆分面板',
+    panelDetachFailed: '拆分面板失败',
+    panelDetachedBadge: '已分离',
   },
 
   en: {
@@ -1411,6 +1422,17 @@ export const translations = {
     toolWebFetch: 'Read page',
     toolWebSearchContent: 'Read search results',
     toolSourceCheck: 'Source check',
+
+    // Detachable panels (auxiliary windows)
+    panelMenu: 'Panel actions',
+    panelDetach: 'Open in separate window',
+    panelDockBack: 'Restore to main window',
+    panelFocusWindow: 'Focus its window',
+    panelDetachedTitle: 'This panel is in a separate window',
+    panelDetachedHint: 'Close that window to bring it back here.',
+    panelDetachBlocked: 'The system blocked the new window',
+    panelDetachFailed: 'Could not detach the panel',
+    panelDetachedBadge: 'Detached',
   },
 }
 

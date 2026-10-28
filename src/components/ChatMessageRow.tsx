@@ -1,6 +1,6 @@
 /** 聊天消息行、本轮任务与修改摘要 */
 
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronLeft, ChevronRight, Copy, Pencil, RotateCcw, X } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
@@ -9,6 +9,7 @@ import { useWorkspaceScope } from '../workspace/WorkspaceScope'
 import { useChatStore, type ChatMessage } from '../store/chatStore'
 import { diffStoreFor } from '../store/diffStore'
 import { useRevertEdits } from '../hooks/useRevertEdits'
+import { useHostDocument, useHostKeydown } from '../panelHost/HostContext'
 import type { AgentTracePart, FileEdit, StructuredPlan } from '../types/electron'
 import { Caption, IconButton, Label, Spinner } from './ui'
 import { AgentParts } from './AgentTrace'
@@ -140,16 +141,16 @@ const MessageImages: React.FC<{
   images: Array<{ data: string; mimeType: string }>
 }> = ({ images }) => {
   const { t } = useI18nStore()
+  const hostDocument = useHostDocument()
   const [preview, setPreview] = useState<number | null>(null)
 
-  useEffect(() => {
-    if (preview === null) return
-    const onKeyDown = (event: KeyboardEvent) => {
+  useHostKeydown(
+    (event) => {
       if (event.key === 'Escape') setPreview(null)
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [preview])
+    },
+    [],
+    preview !== null
+  )
 
   return (
     <>
@@ -198,7 +199,7 @@ const MessageImages: React.FC<{
               <X size={16} />
             </button>
           </div>,
-          document.body
+          hostDocument.body
         )}
     </>
   )

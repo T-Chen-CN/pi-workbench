@@ -15,6 +15,7 @@ import {
 import { FileExplorer } from './FileExplorer'
 import { ChatPanel } from './ChatPanel'
 import { DiffViewer } from './DiffViewer'
+import { PanelSlot, PanelDetachedPlaceholder } from './PanelSlot'
 import { TerminalPanel } from './TerminalPanel'
 import { GitView } from './GitView'
 import { CommitDetailView } from './CommitDetailView'
@@ -24,6 +25,7 @@ import { subscribeEditorTabs } from '../workspace/editorTabs'
 import { useI18nStore } from '../store/i18nStore'
 import { useSessionStore } from '../store/sessionStore'
 import { useGitStore } from '../store/gitStore'
+import { usePanelStore } from '../store/panelStore'
 import { onAppEvent } from '../utils/appEvents'
 import { api } from '../api'
 import type { GitChangeScope } from '../types/electron'
@@ -72,6 +74,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
     git: 560,
   })
   const [chatWidth, setChatWidth] = useState(336)
+  // 面板拆到独立窗口后，主窗口这边只剩占位：收起按钮交给窗口自己的信息栏
+  const chatDetached = usePanelStore((state) => state.panelHost[workspacePath]?.chat !== undefined)
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('files')
   const [containerWidth, setContainerWidth] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -362,14 +366,16 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
               className="flex-shrink-0 overflow-hidden bg-panel"
               style={{ width: chatWidthShown }}
             >
-              <ChatPanel
-                workspacePath={workspacePath}
-                viewRoot={viewRoot}
-                onCollapse={collapseChat}
-                collapseButtonRef={chatCollapseRef}
-                panelId={chatPanelId}
-                active={active}
-              />
+              <PanelSlot panel="chat" placeholder={<PanelDetachedPlaceholder panel="chat" />}>
+                <ChatPanel
+                  workspacePath={workspacePath}
+                  viewRoot={viewRoot}
+                  onCollapse={chatDetached ? undefined : collapseChat}
+                  collapseButtonRef={chatCollapseRef}
+                  panelId={chatPanelId}
+                  active={active}
+                />
+              </PanelSlot>
             </aside>
           </>
         ) : (

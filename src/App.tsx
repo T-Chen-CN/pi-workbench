@@ -37,6 +37,7 @@ import { useSettingsStore } from './store/settingsStore'
 import { useApprovalStore } from './store/approvalStore'
 import { hasRunningWork } from './utils/runningWork'
 import { useUpdaterStore } from './store/updaterStore'
+import { hostIdFromFrameName, usePanelStore } from './store/panelStore'
 import { localizeError } from './i18n/errors'
 import { formatShortcut, matchShortcut } from './utils/keybindings'
 import { restoreEditorTabs, saveEditorTabs } from './workspace/editorTabs'
@@ -310,6 +311,22 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [openWorkspaces])
 
+  // 面板辅助窗口：用户关窗即回位；主窗口卸载前统一回收，不留孤儿窗口
+  useEffect(() => {
+    const unsubscribe = api.onAuxWindowClosed((frameName) => {
+      const hostId = hostIdFromFrameName(frameName)
+      if (hostId) usePanelStore.getState().handleWindowClosed(hostId)
+    })
+    const disposeAll = () => usePanelStore.getState().disposeAllWindows()
+    window.addEventListener('pagehide', disposeAll)
+    window.addEventListener('beforeunload', disposeAll)
+    return () => {
+      unsubscribe()
+      window.removeEventListener('pagehide', disposeAll)
+      window.removeEventListener('beforeunload', disposeAll)
+    }
+  }, [])
+
   // Ctrl/Cmd+, 打开设置（可在设置中改键）
   const settingsShortcut = useSettingsStore((state) => state.keybindings.settings)
   const paletteShortcut = useSettingsStore((state) => state.keybindings.commandPalette)
@@ -491,6 +508,8 @@ export default function App() {
     await piAgentAPI.dispose(targetPath)
     await api.disposeWorkspace(targetPath).catch(() => undefined)
     await api.unwatchWorkspace(targetPath).catch(() => undefined)
+    // 面板辅助窗口属于运行时：工作区关闭就一并回收（重新打开从默认布局开始）
+    usePanelStore.getState().dockWorkspace(targetPath)
     clearWorkspaceChat(targetPath)
 
     const wasActive = targetPath === workspace

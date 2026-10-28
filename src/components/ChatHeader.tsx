@@ -7,6 +7,7 @@ import type { SessionSummary } from '../types/electron'
 import { IconButton } from './ui'
 import { SessionTabs } from './SessionTabs'
 import { WorktreeBar } from './WorktreeBar'
+import { usePanelContextMenu } from './PanelContextMenu'
 
 export interface ChatHeaderProps {
   onCollapse?: () => void
@@ -32,13 +33,17 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   handleSelectSession,
   handleNewSession,
   handleCloseTab,
-}) => (
-  <>
+}) => {
+  const panelMenu = usePanelContextMenu('chat')
+
+  return (
+    <>
       {/* Header */}
       <div
         className={`flex h-[38px] flex-shrink-0 items-center gap-2.5 border-b border-rule-divide pr-3.5 ${
           onCollapse ? 'pl-2' : 'pl-3.5'
         }`}
+        onContextMenu={panelMenu.onContextMenu}
       >
         {onCollapse && (
           <IconButton
@@ -78,5 +83,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         onOpenList={() => useSessionStore.getState().setPanelOpen(workspacePath, true)}
       />
 
-  </>
-)
+      {panelMenu.menu}
+    </>
+  )
+}

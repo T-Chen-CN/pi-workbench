@@ -298,7 +298,8 @@ describe('ChatPanel', () => {
     // 预览层挂在 body 上，不受聊天列表 transform / overflow 限制
     expect(dialog.parentElement).toBe(document.body)
 
-    fireEvent.keyDown(window, { key: 'Escape' })
+    // 预览层监听在面板所在文档上（拆窗后为子文档），事件从焦点元素冒泡上来
+    fireEvent.keyDown(document.body, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
