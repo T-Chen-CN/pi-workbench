@@ -155,6 +155,36 @@ function stallErrorMessage(): string {
   return `Agent response stalled: no output for ${Math.round(STALL_TIMEOUT_MS / 1000)}s.`
 }
 
+/** 消息上的毫秒时间戳；测试夹具或老数据可能没有 */
+function messageTimestamp(message: any): number | null {
+  const value = message?.timestamp
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/**
+ * 找本轮新增的最后一条 assistant 消息。
+ *
+ * 常规路径按数组下标判定（session.messages 只在末尾追加）。但自动压缩、溢出恢复
+ * 与上下文编辑都会调用 SDK 的 _refreshFinalizedContext()，用会话投影重建整个数组，
+ * 把旧前缀折叠成摘要：下标基准整体前移，messages.length 甚至可能小于 startIndex，
+ * 只按下标扫描会误判成「本轮没有回复」。因此补一条时间戳兜底——消息自带
+ * timestamp（毫秒），本轮之后产生的消息一定 >= startedAt。
+ */
+function findRunAssistant(messages: any[], startIndex: number, startedAt: number): any | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message?.role !== 'assistant') continue
+    const timestamp = messageTimestamp(message)
+    if (timestamp === null) {
+      // 没有时间戳的消息无法参与时间判定，退回下标
+      if (i >= startIndex) return message
+      continue
+    }
+    if (timestamp >= startedAt) return message
+  }
+  return null
+}
+
 /** 用户消息是否带图片块（纯图片对话用于跳过标题模型调用） */
 function hasImageBlocks(content: unknown): boolean {
   if (!Array.isArray(content)) return false
@@ -1996,6 +2026,8 @@ export class AgentManager {
       runtime.editSnapshots.clear()
       // 只认本轮新增的 assistant 消息，避免请求失败时把上一轮回复当成本轮结果
       const messageStartIndex = runtime.session.messages.length
+      // 压缩会重建 messages 数组使下标失效，同时用本轮开始时间兜底
+      const runStartedAt = Date.now()
       this.logger.info(
         `[Agent Manager] Sending message to session ${runtime.id}:`,
         message.substring(0, 100)
@@ -2081,16 +2113,14 @@ export class AgentManager {
 
       const messages = runtime.session.messages
 
-      // 只从本轮开始的位置往后找最后一条 assistant 消息
-      let lastAssistant: any = null
-      for (let i = messages.length - 1; i >= messageStartIndex; i--) {
-        if (messages[i].role === 'assistant') {
-          lastAssistant = messages[i]
-          break
-        }
-      }
+      // 只认本轮新增的 assistant 消息（压缩重建数组后下标不再可信，见 findRunAssistant）
+      const lastAssistant = findRunAssistant(messages, messageStartIndex, runStartedAt)
 
       if (!lastAssistant) {
+        this.logger.warn(
+          `[Agent Manager] No assistant message for this run on ${runtime.id}: ` +
+            `messages=${messages.length}, startIndex=${messageStartIndex}, startedAt=${runStartedAt}`
+        )
         return { success: false, error: 'Agent did not produce a response.', edits }
       }
 

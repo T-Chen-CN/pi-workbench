@@ -639,6 +639,59 @@ describe('AgentManager chat', () => {
     expect(result.error).toContain('did not produce')
   })
 
+  it('keeps the reply when auto-compaction rebuilds the message array', async () => {
+    const session = createFakeSession(async (fake) => {
+      // 模拟 SDK 的 _refreshFinalizedContext()：自动压缩后用会话投影整体替换 messages，
+      // 旧前缀折叠成摘要，数组长度比本轮开始时更短
+      fake.messages = [
+        { role: 'user', content: 'Summary of earlier conversation', timestamp: Date.now() - 3_600_000 },
+        { role: 'user', content: 'hi', timestamp: Date.now() },
+      ]
+      fake.messages.push({ role: 'assistant', content: 'compacted reply', timestamp: Date.now() })
+    })
+    session.messages.push(
+      ...Array.from({ length: 40 }, (_, index) => ({
+        role: index % 2 === 0 ? 'assistant' : 'user',
+        content: `old-${index}`,
+        timestamp: Date.now() - 600_000,
+      }))
+    )
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const result = await manager.chat('hi')
+
+    expect(result.success).toBe(true)
+    expect(result.response).toBe('compacted reply')
+  })
+
+  it('does not treat a previous reply as this run after compaction', async () => {
+    const stale = Date.now() - 600_000
+    const session = createFakeSession(async (fake) => {
+      // 压缩重建数组后，剩下的 assistant 消息全部属于历史轮次
+      fake.messages = [
+        { role: 'user', content: 'Summary of earlier conversation', timestamp: stale },
+        { role: 'assistant', content: 'previous reply', timestamp: stale },
+        { role: 'user', content: 'hi', timestamp: Date.now() },
+      ]
+    })
+    session.messages.push(
+      ...Array.from({ length: 40 }, () => ({
+        role: 'assistant',
+        content: 'old',
+        timestamp: stale,
+      }))
+    )
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const result = await manager.chat('hi')
+
+    expect(result.success).toBe(false)
+    expect(result.response).toBeUndefined()
+    expect(result.error).toContain('did not produce')
+  })
+
   it('hard-stops a request whose abort never settles', async () => {
     const session = createFakeSession(() => new Promise<void>(() => {}))
     session.abort = vi.fn(async () => {
