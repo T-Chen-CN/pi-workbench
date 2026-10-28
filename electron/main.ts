@@ -18,6 +18,13 @@ import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
 import { installAuxWindowSupport, registerAuxWindowIpc } from './aux-window.js'
 import { appUrl, isAppUrl, registerAppProtocol } from './app-protocol.js'
+import {
+  destroyTray,
+  installTray,
+  isTrayReady,
+  resolveCloseAction,
+  showTrayHintOnce
+} from './tray.js'
 import { animateBounds, type WindowBounds } from './window-morph.js'
 import { registerFilesIpc } from './ipc/files.js'
 import { registerFileProtocol } from './file-protocol.js'
@@ -66,6 +73,8 @@ registerSchemePrivileges()
 
 let mainWindow: BrowserWindow | null = null
 configureIpcWindow(() => mainWindow)
+/** 真正退出流程已开始：关闭按钮不再收进托盘，窗口正常销毁 */
+let quitting = false
 
 /**
  * 启动页：窗口先以 420×260 出现，面板数据就绪后放大到工作台尺寸。
@@ -270,7 +279,9 @@ if (!singleInstanceLock) {
     const callbackUrl = argv.find((arg) => isGithubCallbackUrl(arg))
     if (callbackUrl) void handleGithubCallback(callbackUrl)
     if (!mainWindow || mainWindow.isDestroyed()) return
+    // 收进托盘后窗口仍然存在但不可见：先恢复原型再显示
     if (mainWindow.isMinimized()) mainWindow.restore()
+    if (!mainWindow.isVisible()) mainWindow.show()
     mainWindow.focus()
   })
 }
@@ -712,6 +723,26 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
     flushGithubAuthResult()
   })
 
+  // 关闭按钮 = 收进托盘（设置里可改回直接退出）。收进托盘不拦未保存确认：
+  // 窗口只是隐藏，Agent / 终端 / 文件监听与更新定时器继续运行；
+  // 真退出只走托盘菜单「退出」或系统级退出（`quitting` 在 before-quit 置位）。
+  mainWindow.on('close', (event) => {
+    const action = resolveCloseAction({
+      closeToTray: getAppSettingsCache().closeToTray !== false,
+      quitting,
+      trayReady: isTrayReady()
+    })
+    if (action === 'close') return
+    event.preventDefault()
+    if (action === 'minimize') {
+      mainWindow?.minimize()
+      return
+    }
+    mainWindow?.hide()
+    // Windows 首次收起时用托盘气泡说明一次，避免误以为应用被退出了
+    showTrayHintOnce()
+  })
+
   mainWindow.on('closed', () => {
     // 启动动画与兜底定时器不能留到窗口销毁之后
     clearBootTimers()
@@ -726,6 +757,8 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
   // Electron 会保持窗口打开但不给用户任何提示；这里用原生对话框把选择权交给用户。
   mainWindow.webContents.on('will-prevent-unload', (event) => {
     if (!mainWindow || mainWindow.isDestroyed()) return
+    // 从托盘退出时窗口是隐藏的，原生确认框必须挂在可见窗口上
+    if (!mainWindow.isVisible()) mainWindow.show()
     if (typeof dialog.showMessageBoxSync !== 'function') {
       event.preventDefault()
       return
@@ -752,6 +785,9 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
         if (canonical) draftStore.clear(canonical)
       }
       event.preventDefault()
+    } else {
+      // 取消退出：关闭按钮回到「收进托盘」语义，下次点 X 不应该直接退掉
+      quitting = false
     }
   })
 
@@ -822,6 +858,15 @@ app.whenReady().then(async () => {
   // 权限迁移会写 settings.json，必须在渲染层读取设置之前完成
   await migratePermissionLevel()
   createWindow(startupSettings)
+
+  // 托盘常驻：紧接建窗装好，否则 Windows 上首次点关闭会因为没有可用的托盘图标
+  // 而退回真正退出（见 resolveCloseAction）。设置里的开关会热生效。
+  installTray({
+    getEnabled: () => getAppSettingsCache().closeToTray !== false,
+    getLanguage: () => getAppSettingsCache().language,
+    showMainWindow: () => showMainWindow(),
+    quit: () => quitApplication()
+  })
 
   // SQLite 播种与联网配置不阻塞首屏；最近工作区 IPC 会等它完成。
   startupReady = (async () => {
@@ -897,9 +942,27 @@ app.whenReady().then(async () => {
 
 let shuttingDown = false
 
+/** 从托盘 / 第二实例 / Dock 唤回主窗口：还原尺寸、显示并聚焦 */
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow(getAppSettingsCache())
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+/** 唯一真退出入口：托盘菜单「退出」/ 系统级退出（Cmd+Q、关机）也走这里 */
+function quitApplication(): void {
+  quitting = true
+  app.quit()
+}
+
 /** 退出前等待异步资源释放，避免在任务仍写库时关闭 store */
 async function shutdownApplication(): Promise<void> {
   try {
+    destroyTray()
     closeAllWorkspaceWatchers()
     repoSync.disposeAll()
     terminalManager.closeAll()
@@ -919,6 +982,10 @@ async function shutdownApplication(): Promise<void> {
 
 // 退出顺序：先让窗口完成 beforeunload / will-prevent-unload 的未保存确认，
 // 所有窗口真正关闭后再在 will-quit 里做异步清理，避免用户取消关闭时资源已被释放。
+app.on('before-quit', () => {
+  quitting = true
+})
+
 app.on('will-quit', (event) => {
   if (shuttingDown) return
   event.preventDefault()
@@ -927,6 +994,8 @@ app.on('will-quit', (event) => {
 })
 
 app.on('window-all-closed', () => {
+  // 收进托盘时窗口只是隐藏，不会走到这里；走到这里说明主窗口真的关了，
+  // 托盘常驻也没有意义，和以前一样退出（macOS 保留 Dock 行为）。
   if (process.platform !== 'darwin') {
     app.quit()
   }
@@ -938,8 +1007,13 @@ app.on('browser-window-focus', () => {
 })
 
 app.on('activate', () => {
+  // macOS：Dock 图标被点击时，隐藏的主窗口要能回来
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow(getAppSettingsCache())
+    return
+  }
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+    showMainWindow()
   }
 })
 

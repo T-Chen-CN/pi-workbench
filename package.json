@@ -113,7 +113,9 @@
       "pi-bridge/dist/**/*",
       "pi-bridge/package.json",
       "app-icon.png",
-      "app-icon.ico"
+      "app-icon.ico",
+      "tray-template.png",
+      "tray-template@2x.png"
     ],
     "win": {
       "target": [

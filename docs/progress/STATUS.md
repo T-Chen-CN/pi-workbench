@@ -201,6 +201,7 @@
 - ✅ 2026-10-28 发布 v0.7.0：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含文件阅读视图与 pdf.js PDF 阅读器、面板拆分独立窗口（`pw-app://` 外壳 + 无边框自绘标题栏 + 拖出拆分）、聊天图片附件按 id 消费（排队项与运行中插话可带图、纯图片允许发送）、Agent 自动压缩后不再误报「无响应」、两个自定义 scheme 特权改为一次注册（修复合并后 `pw-file` 丢失 `stream` / `standard` / `fetch` 特权导致的媒体拖动与 HTML 相对路径问题）
 - ✅ 2026-10-28 发布 v0.7.1：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含聊天头部三层合两层（工作树切换并入头部为 24px chip、会话标签栏升为 34px 并与正文列连通、移除常态「就绪」状态、未命名会话按需加序号）、辅助窗口继承应用菜单（快捷键在拆分窗口可用）
 - ✅ 2026-10-28 拆分窗口改为「主窗口彻底让位」：拆出的面板不再在原位置渲染占位卡（删 `PanelDetachedPlaceholder` 与 `PanelSlot` 的 `placeholder` 入参），侧栏 / 对话列 / 终端行连同 2px 接缝一起把空间让给编辑器，面板仍保持挂载（`hidden`）以维持 portal；files / git 都拆出时侧栏与 26px 导轨全部消失，只剩一个停靠时保留侧栏并把标签切到还在的一边；独立窗口标题改为工作区名（`basename`），删除 `focusPanelWindow` 与「定位到独立窗口 / 已分离」文案，回位只靠关窗。设计系统 v1.39，新增 `tests/workspace-panel-layout.test.tsx`。type-check / lint / 887 用例通过
+- ✅ 2026-10-28 主窗口关闭改为收进托盘：`X` 不再退出进程，Agent 会话 / 终端 / 文件监听 / 更新定时器继续运行，真退出只走托盘菜单「退出」或系统级退出；收进托盘不拦未保存确认，真退出才拦；托盘图标 Windows / Linux 用彩色 `app-icon.ico`、macOS 用单色 π 模板图（`scripts/make-tray-icon.mjs` 由品牌图标生成 16 / 32 两档），菜单为系统原生菜单（显示主窗口 / 分隔线 / 退出，跟随应用语言）；Linux 降级为最小化到任务栏，Windows 首次收起用托盘气泡提示一次；辅助窗口完全不跟随主窗口隐藏 / 恢复；设置「通用」新增「关闭主窗口」开关（`config/settings.json` 的 `closeToTray`，默认收进托盘）。设计系统 v1.40，决策见 [ADR-002](../decisions/ADR-002-tray-resident-main-window.md)。新增 `tests/tray.test.ts` 与 `tests/close-to-tray-setting.test.tsx`。type-check / lint / 904 用例通过
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
 ## 最近提交

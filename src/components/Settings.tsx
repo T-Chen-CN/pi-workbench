@@ -97,12 +97,14 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     budgetUsd,
     runWhileBusy,
     keybindings,
+    closeToTray,
     setAutoSave,
     setAutoSaveDelay,
     setPermissionLevel,
     setNotificationPrefs,
     setBudgetUsd,
     setRunWhileBusy,
+    setCloseToTray,
     setKeybinding,
     resetKeybindings,
   } = useSettingsStore()
@@ -236,6 +238,11 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     const next: RunWhileBusy = value === 'steer' ? 'steer' : 'queue'
     setRunWhileBusy(next)
     void persistAppSettings({ runWhileBusy: next })
+  }
+
+  const handleCloseToTrayChange = (enabled: boolean) => {
+    setCloseToTray(enabled)
+    void persistAppSettings({ closeToTray: enabled })
   }
 
   const shortcutName = (id: ShortcutId) =>
@@ -557,6 +564,18 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                   )
                 })}
               </div>
+            </Field>
+
+            <Field label={t('closeToTray')} hint={t('closeToTrayHint')}>
+              <label className="flex h-8 items-center gap-2 type-value text-ink">
+                <input
+                  type="checkbox"
+                  className="h-3 w-3 accent-[rgb(var(--accent))]"
+                  checked={closeToTray}
+                  onChange={(event) => handleCloseToTrayChange(event.target.checked)}
+                />
+                {closeToTray ? t('closeToTrayOn') : t('closeToTrayOff')}
+              </label>
             </Field>
           </div>
         )}

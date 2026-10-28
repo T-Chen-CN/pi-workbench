@@ -12,6 +12,8 @@ export default tseslint.config(
       'node_modules/**',
       'cache/**',
       'data/**',
+      // 本机临时脚本与图标生成实验（已被 .gitignore 忽略）
+      '.tmp/**',
       'config/**',
       'logs/**',
       '.claude/**',
@@ -53,6 +55,7 @@ export default tseslint.config(
     languageOptions: {
       sourceType: 'module',
       globals: {
+        Buffer: 'readonly',
         console: 'readonly',
         process: 'readonly',
       },

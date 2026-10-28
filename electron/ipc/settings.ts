@@ -3,6 +3,7 @@
 import * as path from 'path'
 import { getAppDir, getBridgeEntryUrl } from '../app-paths.js'
 import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
+import { refreshTray } from '../tray.js'
 import { handleIpc } from './register.js'
 
 const DEFAULT_SETTINGS = {
@@ -16,6 +17,8 @@ const DEFAULT_SETTINGS = {
   explorerSortBy: 'name',
   explorerFoldersFirst: true,
   explorerSortReverse: false,
+  /** 关闭主窗口时收进托盘而不是退出；Linux 降级为最小化 */
+  closeToTray: true,
 }
 
 let settingsCache: Record<string, any> = {}
@@ -117,8 +120,18 @@ handleIpc('app:saveSettings', async (_event, settings: any) => {
     for (const key of ['explorerFoldersFirst', 'explorerSortReverse'] as const) {
       if (typeof sanitized[key] !== 'boolean') delete sanitized[key]
     }
+    // 关闭按钮行为：缺失时保留现有值，不把旧前端没发过的字段写丢
+    if (typeof sanitized.closeToTray !== 'boolean') {
+      if (typeof settingsCache.closeToTray === 'boolean') {
+        sanitized.closeToTray = settingsCache.closeToTray
+      } else {
+        delete sanitized.closeToTray
+      }
+    }
     await saveSettingsFile(sanitized)
     updateAppSettingsCache(sanitized)
+    // 托盘开关与菜单文案跟随设置即时生效
+    refreshTray()
     return { success: true }
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_AUTO_SAVE_DELAY,
+  DEFAULT_CLOSE_TO_TRAY,
   DEFAULT_RUN_WHILE_BUSY,
   MAX_AUTO_SAVE_DELAY,
   MIN_AUTO_SAVE_DELAY,
@@ -113,5 +114,27 @@ describe('file tree sorting preferences', () => {
 
     useSettingsStore.getState().setExplorerSortBy('modified' as 'name')
     expect(useSettingsStore.getState().explorerSortBy).toBe('name')
+  })
+})
+
+describe('close to tray', () => {
+  it('keeps the main window in the tray by default', () => {
+    expect(useSettingsStore.getState().closeToTray).toBe(DEFAULT_CLOSE_TO_TRAY)
+    expect(DEFAULT_CLOSE_TO_TRAY).toBe(true)
+  })
+
+  it('hydrates the persisted choice and ignores malformed values', () => {
+    useSettingsStore.getState().hydrate({ closeToTray: false })
+    expect(useSettingsStore.getState().closeToTray).toBe(false)
+
+    useSettingsStore.getState().hydrate({ closeToTray: 'yes' })
+    expect(useSettingsStore.getState().closeToTray).toBe(false)
+  })
+
+  it('round-trips through the setter', () => {
+    useSettingsStore.getState().setCloseToTray(false)
+    expect(useSettingsStore.getState().closeToTray).toBe(false)
+    useSettingsStore.getState().setCloseToTray(true)
+    expect(useSettingsStore.getState().closeToTray).toBe(true)
   })
 })

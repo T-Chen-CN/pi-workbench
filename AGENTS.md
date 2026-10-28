@@ -758,6 +758,22 @@ async function initAgent(config: ApiConfig) {
 - ✅ 标签必须与 `package.json` 的 `version` 一致，否则 Release 流水线失败
 - ✅ 当前不签名、不公证；macOS 用户需手动覆盖安装，Windows 可能出现 SmartScreen 提示
 
+### 主窗口关闭与托盘常驻
+
+**行为**:
+
+- ✅ 主窗口 `X` 默认**收进托盘**（`config/settings.json` 的 `closeToTray`，默认 `true`）：进程、Agent 会话、终端、文件监听与更新定时器全部继续运行
+- ✅ 真退出只有两个入口：托盘菜单「退出」（调 `app.quit()`）与系统级退出（Cmd+Q / 关机）；`before-quit` 置 `quitting` 标志，`close` 处理器据此放行窗口关闭
+- ✅ 收进托盘**不拦未保存确认**：窗口只是 `hide()`，渲染进程不卸载，`will-prevent-unload` 只属于真退出路径；真退出时若主窗口正藏着，先 `show()` 再弹原生确认框
+- ✅ 托盘图标：Windows / Linux 用彩色 `app-icon.ico`，macOS 菜单栏用单色 π 模板图 `tray-template.png`（`scripts/make-tray-icon.mjs` 从 `app-icon.png` 生成，`setTemplateImage` 跟随系统深浅色，不分 Paper / Ink）
+- ✅ 托盘菜单为系统原生菜单，只有文案跟随应用语言：显示主窗口 / 分隔线 / 退出；设置保存后 `refreshTray()` 即时重建
+- ✅ Windows 首次收起用托盘气泡提示一次（每次启动至多一次）；macOS / Linux 不提示
+- ✅ 唤回入口：托盘图标（Windows 单击即显示）、第二个实例、macOS Dock（`activate`）；均先 `restore()` 再 `show()` + `focus()`
+- ❌ 禁止让关闭按钮直接 `app.quit()`（会连带杀掉会话与终端），也禁止在收进托盘时弹未保存确认
+- ❌ 辅助窗口不跟随主窗口隐藏 / 恢复：主窗口收托盘时它们留在屏幕上，唯一出口是关闭 → 面板回位（不唤醒、不重新拆出）
+- ✅ Linux 不创建托盘（桌面环境支持不一致），关闭按钮降级为最小化到任务栏；Windows 上托盘创建失败时退回真正关闭，不把窗口藏起来
+- ⚠️ 已知取舍：主窗口藏在托盘期间下载完成的更新不会弹窗，打开主窗口时才提示（状态仍在渲染层内存中）
+
 ### 插件系统约束
 
 **插件定位**:

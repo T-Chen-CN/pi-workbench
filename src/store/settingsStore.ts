@@ -23,6 +23,9 @@ export const DEFAULT_RUN_WHILE_BUSY: RunWhileBusy = 'queue'
 /** 新会话的默认权限档位；会话创建后自行持有权限 */
 export const DEFAULT_PERMISSION_LEVEL: PermissionLevel = 'ask'
 
+/** 关闭主窗口时收进托盘（Linux 上降级为最小化），而不是退出进程 */
+export const DEFAULT_CLOSE_TO_TRAY = true
+
 export function isPermissionLevel(value: unknown): value is PermissionLevel {
   return value === 'readonly' || value === 'ask' || value === 'auto'
 }
@@ -68,6 +71,8 @@ interface SettingsState {
   explorerSortBy: ExplorerSortBy
   explorerFoldersFirst: boolean
   explorerSortReverse: boolean
+  /** 关闭按钮：收进托盘 / 直接退出；主进程读取同一字段 */
+  closeToTray: boolean
   setAutoSave: (enabled: boolean) => void
   setAutoSaveDelay: (delayMs: number) => void
   setPermissionLevel: (level: PermissionLevel) => void
@@ -79,6 +84,7 @@ interface SettingsState {
   setExplorerSortBy: (by: ExplorerSortBy) => void
   setExplorerFoldersFirst: (enabled: boolean) => void
   setExplorerSortReverse: (enabled: boolean) => void
+  setCloseToTray: (enabled: boolean) => void
   hydrate: (settings: {
     autoSave?: unknown
     autoSaveDelay?: unknown
@@ -90,6 +96,7 @@ interface SettingsState {
     explorerSortBy?: unknown
     explorerFoldersFirst?: unknown
     explorerSortReverse?: unknown
+    closeToTray?: unknown
   }) => void
 }
 
@@ -105,6 +112,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   explorerSortBy: DEFAULT_SORT_OPTIONS.by,
   explorerFoldersFirst: DEFAULT_SORT_OPTIONS.foldersFirst,
   explorerSortReverse: DEFAULT_SORT_OPTIONS.reverse,
+  closeToTray: DEFAULT_CLOSE_TO_TRAY,
 
   setAutoSave: (enabled) => set({ autoSave: enabled }),
 
@@ -132,6 +140,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setExplorerFoldersFirst: (enabled) => set({ explorerFoldersFirst: enabled }),
 
   setExplorerSortReverse: (enabled) => set({ explorerSortReverse: enabled }),
+
+  setCloseToTray: (enabled) => set({ closeToTray: enabled }),
 
   hydrate: (settings) =>
     set((state) => ({
@@ -171,5 +181,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         typeof settings.explorerSortReverse === 'boolean'
           ? settings.explorerSortReverse
           : state.explorerSortReverse,
+      closeToTray:
+        typeof settings.closeToTray === 'boolean'
+          ? settings.closeToTray
+          : state.closeToTray,
     })),
 }))
