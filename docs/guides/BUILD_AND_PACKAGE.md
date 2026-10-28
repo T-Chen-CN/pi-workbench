@@ -1,7 +1,7 @@
 # 构建与打包指南
 
 **适用版本**: 0.7.0（Phase 6 持续）
-**最后更新**: 2026-10-27
+**最后更新**: 2026-10-28
 
 ---
 
@@ -9,7 +9,7 @@
 
 | 依赖 | 版本 | 说明 |
 |---|---|---|
-| Node.js | **≥ 22.19** | Pi SDK 硬性要求（Electron 44 内置 Node 24） |
+| Node.js | **≥ 24** | Electron 44 内置 Node 24；构建脚本与 node:sqlite 依赖 |
 | npm | 10+ | 使用 npm workspaces（`pi-bridge`） |
 | Git for Windows | 可选 | Agent 的 bash 工具需要 Git Bash（支持用户目录安装） |
 

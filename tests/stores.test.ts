@@ -211,8 +211,8 @@ describe('chatStore streaming', () => {
     expect(message?.isStreaming).toBe(true)
     expect(message?.content).toBe('')
 
-    useChatStore.getState().appendToMessage(KEY, id, 'Hel')
-    useChatStore.getState().appendToMessage(KEY, id, 'lo')
+    useChatStore.getState().appendTextPart(KEY, id, 'Hel')
+    useChatStore.getState().appendTextPart(KEY, id, 'lo')
 
     message = useChatStore.getState().conversations[KEY].messages.find((m) => m.id === id)
     expect(message?.content).toBe('Hello')
@@ -331,7 +331,7 @@ describe('chatStore streaming', () => {
     useChatStore.getState().addMessage(KEY, { role: 'user', content: 'q' })
     useChatStore.getState().startStreamingMessage(KEY)
 
-    useChatStore.getState().appendToMessage(KEY, 'missing-id', 'x')
+    useChatStore.getState().appendTextPart(KEY, 'missing-id', 'x')
 
     const messages = useChatStore.getState().conversations[KEY].messages
     expect(messages).toHaveLength(2)

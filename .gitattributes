@@ -27,8 +27,6 @@
 # 配置文件 - 使用 LF
 .gitignore text eol=lf
 .gitattributes text eol=lf
-.editorconfig text eol=lf
-.eslintrc text eol=lf
 .prettierrc text eol=lf
 
 # 二进制文件 - 不转换

@@ -149,8 +149,6 @@ interface ChatState {
   startToolPart: (key: string, id: string, event: ToolStartEvent) => void
   updateToolPart: (key: string, id: string, event: ToolUpdateEvent) => void
   endToolPart: (key: string, id: string, event: ToolEndEvent) => void
-  /** @deprecated 使用 appendTextPart；保留给旧调用方与测试 */
-  appendToMessage: (key: string, id: string, delta: string) => void
   finishStreamingMessage: (key: string, id: string, content?: string) => void
   setMessageUsage: (key: string, id: string, usage: ChatUsage) => void
   setMessageEdits: (key: string, id: string, edits: FileEdit[]) => void
@@ -260,7 +258,7 @@ function closeThinking(message: ChatMessage, now = Date.now()): ChatMessage {
   return { ...message, parts, thinkingStartedAt: undefined }
 }
 
-export const useChatStore = create<ChatState>((set, get) => ({
+export const useChatStore = create<ChatState>((set) => ({
   conversations: {},
   pendingDraft: '',
   pendingDraftWorkspace: null,
@@ -436,8 +434,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return { ...message, parts }
       })
     ),
-
-  appendToMessage: (key, id, delta) => get().appendTextPart(key, id, delta),
 
   finishStreamingMessage: (key, id, content) =>
     set((state) =>

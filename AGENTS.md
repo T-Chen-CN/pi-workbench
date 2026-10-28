@@ -6,7 +6,7 @@
 **架构**: Electron 44 + React 19 + TypeScript
 **运行要求**: Node.js ≥ 24（Electron 44 内置 Node 24，node:sqlite 与构建脚本均依赖）
 **当前阶段**: Phase 6 持续优化
-**最后更新**: 2026-10-26
+**最后更新**: 2026-10-28
 
 ---
 
@@ -119,6 +119,23 @@ src/components/
 ├── IPCDebug.tsx
 ├── MonacoEditor.tsx
 ├── SessionTabs.tsx
+├── EditorTabs.tsx
+├── FileView.tsx
+├── MarkdownReadingView.tsx
+├── PdfReadingView.tsx
+├── MediaView.tsx
+├── HtmlPreview.tsx
+├── GitView.tsx
+├── CommitDetailView.tsx
+├── WorktreeBar.tsx
+├── GithubSettings.tsx
+├── WebSearchSettings.tsx
+├── PanelSlot.tsx
+├── PanelDragHandle.tsx
+├── PanelWindowFrame.tsx
+├── PanelContextMenu.tsx
+├── BootScreen.tsx
+├── BrandSeal.tsx
 ├── Settings.tsx
 ├── TerminalPanel.tsx
 ├── Toast.tsx
@@ -139,17 +156,20 @@ src/components/chat/ChatPanel.tsx  // 不要这样！
 #### Store 放置规则
 
 ```typescript
-// ✅ 正确：每个功能域一个独立 store（13 个）
+// ✅ 正确：每个功能域一个独立 store（16 个）
 src/store/
 ├── approvalStore.ts   // 待审批请求
 ├── chatStore.ts       // 聊天消息、草稿、附件、排队消息
 ├── dialogStore.ts     // 应用内确认/输入对话框（替代 confirm/prompt）
 ├── diffStore.ts       // Diff 查看器（按工作区隔离）
 ├── editorStore.ts     // 编辑器标签页、脏标记（按工作区隔离）
+├── gitStore.ts        // Git 视图状态（分支 / 提交 / 工作树）
+├── panelStore.ts      // 可停靠 / 可拖出面板的布局状态
 ├── i18nStore.ts       // 语言切换
 ├── selectionStore.ts  // 编辑器选区片段
 ├── sessionStore.ts    // 会话标签与运行状态（按工作区隔离）
 ├── settingsStore.ts   // 自动保存、默认模式、通知、快捷键
+├── terminalStore.ts   // 终端开关、缓冲区与会话归属
 ├── themeStore.ts      // Paper / Ink 主题
 ├── toastStore.ts      // 全局 Toast（组件外也可调用）
 ├── updaterStore.ts    // 更新状态
@@ -1070,6 +1090,6 @@ docs/
 
 ---
 
-**最后更新**: 2026-10-26  
+**最后更新**: 2026-10-28  
 **维护者**: Pi Workbench Team  
 **AI 友好**: 本文件专为 AI 助手设计，包含项目的所有关键约束和最佳实践

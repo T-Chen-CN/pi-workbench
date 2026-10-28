@@ -28,7 +28,7 @@ pi-workbench/
 │   ├── preload.cts               # contextBridge（编译为 CommonJS preload.cjs）
 │   ├── app-paths.ts              # 便携式应用目录
 │   ├── workspace-trust.ts        # 工作区信任与路径包含
-│   ├── ipc/                      # 按域注册 IPC（files/workspace/agent/api-config/settings/system）
+│   ├── ipc/                      # 按域注册 IPC（agent / api-config / files / git / settings / system / web-search* / workspace）
 │   ├── agent-registry.ts         # 按工作区登记 Agent 实例
 │   ├── approval-broker.ts        # 工具审批挂起 / 超时 / 取消
 │   ├── notifications.ts          # 桌面通知路由（前台抑制）
@@ -41,6 +41,25 @@ pi-workbench/
 │   ├── atomic-json.ts            # 原子写 + .bak 恢复
 │   ├── logger.ts                 # 主进程文件日志
 │   ├── updater.ts                # 自动更新
+│   ├── app-protocol.ts           # 自定义 scheme（pw-file:// 等）注册
+│   ├── scheme-privileges.ts      # 自定义 scheme 权限声明
+│   ├── file-protocol.ts          # 文件预览协议（图片 / PDF / 媒体）
+│   ├── aux-window.ts             # 辅助窗口（可拖出面板）
+│   ├── window-morph.ts           # 面板在主窗口与辅助窗口间迁移
+│   ├── git-cache.ts              # Git 命令结果缓存
+│   ├── git-worktrees.ts          # 会话工作树与 session-git.json
+│   ├── worktree-coordinator.ts   # 工作树切换在轮次边界生效
+│   ├── repo-watcher.ts           # 仓库状态监听
+│   ├── repo-sync.ts              # 分支拉取 / 同步
+│   ├── repo-autofetch.ts         # 定时 fetch
+│   ├── github-auth.ts            # GitHub 凭据读取
+│   ├── github-oauth.ts           # OAuth 回调
+│   ├── github-device-login.ts    # 设备码登录
+│   ├── github-app.ts             # GitHub 设置装配
+│   ├── secret-crypto.ts          # safeStorage 加解密封装
+│   ├── agent-config-key.ts       # 模型配置 key 解析
+│   ├── legacy-paths.ts           # 旧版本路径回收
+│   ├── shell-refresh.ts          # 安装后刷新 shell 缓存
 │   ├── tsconfig.json             # 主进程构建（ESM）
 │   └── tsconfig.preload.json     # preload 构建（CommonJS）
 │
@@ -73,18 +92,38 @@ pi-workbench/
 │   │   ├── WelcomeScreen.tsx     # 欢迎页与最近工作区
 │   │   ├── WindowControls.tsx    # 自绘窗口按钮（Windows / Linux）
 │   │   ├── WorkspaceView.tsx     # 单个工作区的常驻三栏视图
+│   │   ├── BootScreen.tsx        # 启动引导占位
+│   │   ├── BrandSeal.tsx         # 品牌印章（欢迎页 / 空状态）
+│   │   ├── EditorTabs.tsx        # 编辑器标签栏（含未保存与预览状态）
+│   │   ├── FileView.tsx          # 文件阅读视图路由（按类型分发）
+│   │   ├── MarkdownReadingView.tsx # Markdown 阅读视图（块级范围渲染）
+│   │   ├── PdfReadingView.tsx    # PDF 阅读（pdf.js）
+│   │   ├── MediaView.tsx         # 图片 / 二进制预览
+│   │   ├── HtmlPreview.tsx       # HTML 沙箱预览
+│   │   ├── GitView.tsx           # 只读 Git 视图（提交图 / 工作树更改）
+│   │   ├── CommitDetailView.tsx  # 提交详情覆盖层
+│   │   ├── WorktreeBar.tsx       # 会话工作树切换条
+│   │   ├── GithubSettings.tsx    # GitHub 关联（设备码登录 / PAT）
+│   │   ├── WebSearchSettings.tsx # 联网搜索供应商设置
+│   │   ├── PanelSlot.tsx         # 可停靠面板槽位
+│   │   ├── PanelDragHandle.tsx   # 面板拖拽把手
+│   │   ├── PanelWindowFrame.tsx  # 独立面板窗口外壳
+│   │   ├── PanelContextMenu.tsx  # 面板右键菜单
 │   │   ├── ui.tsx                # Button / Input / Modal 等基础组件
 │   │   └── patterns.tsx          # Card / Stat / ListRow 等内容模式
-│   ├── store/                    # 每个功能域一个 store（13 个）
+│   ├── store/                    # 每个功能域一个 store（16 个）
 │   │   ├── approvalStore.ts      # 待审批请求
 │   │   ├── chatStore.ts          # 消息、草稿、附件、排队、用量
 │   │   ├── dialogStore.ts        # 确认 / 输入对话框
 │   │   ├── diffStore.ts          # Diff 查看器（按工作区隔离）
 │   │   ├── editorStore.ts        # 标签页、当前文件、脏标记（按工作区隔离）
+│   │   ├── gitStore.ts           # Git 视图状态（分支 / 提交 / 工作树）
+│   │   ├── panelStore.ts         # 可停靠 / 可拖出面板的布局状态
 │   │   ├── i18nStore.ts          # 语言
 │   │   ├── selectionStore.ts     # 编辑器选区片段
 │   │   ├── sessionStore.ts       # 会话标签与运行状态（按工作区隔离）
 │   │   ├── settingsStore.ts      # 自动保存、默认模式、通知、快捷键
+│   │   ├── terminalStore.ts      # 终端开关、缓冲区与会话归属
 │   │   ├── themeStore.ts         # Paper / Ink 主题
 │   │   ├── toastStore.ts         # 全局 Toast（组件外也可调用）
 │   │   ├── updaterStore.ts       # 更新状态
@@ -108,16 +147,31 @@ pi-workbench/
 │
 ├── pi-bridge/                    # Agent 桥接层（主进程内运行）
 │   ├── src/
-│   │   ├── agent-manager.ts      # 会话/模型配置/工具编辑捕获/历史/导出
+│   │   ├── agent-manager.ts      # 会话 / 模型配置 / 工具编辑捕获 / 历史 / 导出
+│   │   ├── environment.ts        # 环境租约（工作区级共享资源）
+│   │   ├── model-config.ts       # models.json 读写与 key 插值
 │   │   ├── approval-policy.ts    # 会话模式与审批策略
 │   │   ├── tool-policy.ts        # 模式对应的工具集
-│   │   ├── session-extras.ts     # 会话 sidecar（计划、权限）
+│   │   ├── approval-extension.ts # 审批请求扩展
 │   │   ├── plan.ts               # 结构化计划
+│   │   ├── plan-extension.ts     # 计划工具扩展
+│   │   ├── worktree-extension.ts # 工作树切换工具扩展
+│   │   ├── session-extras.ts     # 会话 sidecar（计划、权限）
+│   │   ├── session-history.ts    # JSONL 历史解析
+│   │   ├── session-branch.ts     # 对话分支（fork）切换
+│   │   ├── session-export.ts     # Markdown / HTML / JSONL 导出
+│   │   ├── session-title.ts      # 首轮后生成会话标题
+│   │   ├── chat-images.ts        # 图片附件预处理
+│   │   ├── tool-results.ts       # 按 toolCallId 读取工具结果
+│   │   ├── stall-watchdog.ts     # 无响应看门狗
+│   │   ├── async-utils.ts        # 超时与重试工具
+│   │   ├── text-utils.ts         # 文本截断 / 宽度工具
 │   │   ├── atomic-json.ts        # 原子写
-│   │   └── index.ts
+│   │   ├── types.ts              # 桥接层类型
+│   │   └── index.ts              # 对外导出
 │   └── dist/                     # 构建产物（不纳入版本库）
 │
-├── tests/                        # Vitest 单元 / 组件测试（48 个文件）
+├── tests/                        # Vitest 单元 / 组件测试（91 个文件）
 ├── docs/                         # 项目文档
 ├── vite.config.ts                # Vite + 仅开发环境的 dev 中间件
 ├── vitest.config.ts
