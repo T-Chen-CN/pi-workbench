@@ -33,6 +33,12 @@ import {
 import { toast } from '../store/toastStore'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { useVirtualRows } from './useVirtualRows'
+import {
+  distanceFromBottom,
+  pinToBottom as pinChatToBottom,
+  shouldFollow,
+  shouldShowScrollButton,
+} from './chatScroll'
 import { useChatSessions } from './useChatSessions'
 import type {
   SessionSummary,
@@ -336,6 +342,34 @@ export function useChatPanelState(props: ChatPanelProps) {
     estimateSize: 96,
     overscan: 8,
   })
+
+  /** 贴到滚动容器真实底部（消息列表之外的提示 / 错误块也算在内） */
+  const pinToBottom = useCallback(() => {
+    const element = transcriptRef.current
+    // 容器隐藏时 clientHeight 为 0，写入 scrollTop 会被钳回顶部；等恢复可见再补
+    if (!element || element.clientHeight === 0) return
+    pinChatToBottom(element)
+  }, [transcriptRef])
+
+  /** 回到底部并恢复跟随（发送消息、Alt+↓、点击回底按钮共用） */
+  const scrollToBottom = useCallback(() => {
+    stickToBottomRef.current = true
+    setShowScrollButton(false)
+    setNewMessageCount(0)
+    if (messages.length > 0) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
+    }
+    pinToBottom()
+    // 新行首帧只有 estimateSize 占位，measure 完成后总高度会变；下一帧按真实高度再贴一次
+    requestAnimationFrame(() => {
+      if (!stickToBottomRef.current) return
+      pinToBottom()
+    })
+  }, [messages.length, pinToBottom, virtualizer])
+
+  /** 供挂载 / 尺寸回调等非渲染期执行路径调用，避免闭包过期 */
+  const scrollToBottomRef = useRef(scrollToBottom)
+  scrollToBottomRef.current = scrollToBottom
 
   const setDraft = useCallback(
     (value: string) => {
@@ -699,14 +733,33 @@ export function useChatPanelState(props: ChatPanelProps) {
     setShowAttachMenu(false)
   }, [activeKey, activeSessionId, workspacePath])
 
-  // 贴底时才跟随新消息
+  // 贴底时才跟随内容增长（流式输出、新消息、列表外的提示块）
   useEffect(() => {
     if (!stickToBottomRef.current || messages.length === 0) return
+    virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
+    pinToBottom()
     const frame = requestAnimationFrame(() => {
-      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
+      if (!stickToBottomRef.current) return
+      pinToBottom()
     })
     return () => cancelAnimationFrame(frame)
-  }, [messages, virtualizer, activeKey])
+  }, [messages, virtualizer, pinToBottom, activeKey])
+
+  // 容器尺寸变化（面板收起后展开、标签页切回、独立窗口接入、窗口缩放）时补一次贴底：
+  // 隐藏期间 clientHeight 为 0，滚动位置无法计算，内容也还在增长；节点搬移还会把 scrollTop 归零
+  useEffect(() => {
+    const element = transcriptRef.current
+    if (!element || typeof ResizeObserver === 'undefined') return
+    let height = element.clientHeight
+    const observer = new ResizeObserver(() => {
+      const next = element.clientHeight
+      const changed = next !== height
+      height = next
+      if (changed && next > 0 && stickToBottomRef.current) scrollToBottomRef.current()
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [transcriptRef, activeSessionId])
 
   /** 打开工具结果全量查看器（只读） */
   const handleOpenToolResult = useCallback(
@@ -720,20 +773,11 @@ export function useChatPanelState(props: ChatPanelProps) {
   const handleTranscriptScroll = () => {
     const element = transcriptRef.current
     if (!element) return
-    const distance = element.scrollHeight - element.scrollTop - element.clientHeight
-    stickToBottomRef.current = distance < 64
-    setShowScrollButton(distance > 120)
-    if (distance < 64) setNewMessageCount(0)
-  }
-
-  /** 回到底部并恢复跟随 */
-  const scrollToBottom = () => {
-    if (messages.length > 0) {
-      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
-    }
-    stickToBottomRef.current = true
-    setShowScrollButton(false)
-    setNewMessageCount(0)
+    // 布局未就绪（容器隐藏时 clientHeight 为 0）不参与判定，否则会把跟随状态误置为 false
+    const distance = distanceFromBottom(element)
+    stickToBottomRef.current = shouldFollow(distance)
+    setShowScrollButton(shouldShowScrollButton(distance))
+    if (stickToBottomRef.current) setNewMessageCount(0)
   }
 
   useEffect(() => {
@@ -988,6 +1032,8 @@ export function useChatPanelState(props: ChatPanelProps) {
     setShowAttachMenu(false)
     chat.setLoading(key, true)
     useSessionStore.getState().markStreaming(workspacePath, sessionId, true)
+    // 用户主动发送：无论此前提过历史还是被上滑打断，都回到最新位置
+    scrollToBottomRef.current()
 
     const assistantId = chat.startStreamingMessage(key)
     // 文本 / 思考 / 工具事件共用一条有序缓冲，50ms 合并，保证 parts 顺序

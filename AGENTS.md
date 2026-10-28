@@ -855,6 +855,7 @@ async function initAgent(config: ApiConfig) {
 - 自动保存：2 秒防抖后保存
 - 错误提示：使用 Toast 组件，3 秒后自动消失
 - 加载状态：显示加载指示器，不阻塞 UI
+- 聊天记录跟随：贴底（距底 < 64px）时才跟随流式输出；用户主动发送、重试、编辑重发、计划执行一律恢复跟随并贴到容器真实底部（判定与贴底集中在 `src/hooks/chatScroll.ts`，`clientHeight === 0` 时既不算跟随也不写 `scrollTop`）
 
 ---
 

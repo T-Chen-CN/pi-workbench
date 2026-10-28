@@ -935,6 +935,50 @@ describe('ChatPanel', () => {
     })
   })
 
+  it('sends the transcript back to the bottom even after scrolling up', async () => {
+    vi.mocked(piAgentAPI.chat).mockResolvedValue({ success: true, response: 'ack' })
+
+    render(<ChatPanel workspacePath="/ws" />)
+    const input = (await screen.findByPlaceholderText(
+      translations.zh.inputPlaceholder
+    )) as HTMLTextAreaElement
+    await waitFor(() => expect(input.disabled).toBe(false))
+
+    const transcript = screen.getByTestId('chat-transcript')
+    Object.defineProperty(transcript, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(transcript, 'clientHeight', { value: 500, configurable: true })
+
+    // 用户上滑查看历史：距底 1500px，跟随关闭并出现回到底部按钮
+    transcript.scrollTop = 0
+    fireEvent.scroll(transcript)
+    await waitFor(() => expect(screen.getByText(translations.zh.scrollToBottom)).toBeTruthy())
+
+    fireEvent.change(input, { target: { value: 'hello again' } })
+    fireEvent.click(screen.getByText(translations.zh.send))
+
+    // 主动发送必须恢复跟随并贴到真实底部（含消息列表之外的提示块高度）
+    await waitFor(() => expect(transcript.scrollTop).toBe(2000))
+    expect(screen.queryByText(translations.zh.scrollToBottom)).toBeNull()
+  })
+
+  it('ignores scroll events while the container has no layout', async () => {
+    useChatStore.getState().setMessages(sessionKey, [
+      { role: 'user', content: 'inspect', timestamp: 1 },
+      { role: 'assistant', content: 'answer', timestamp: 2 },
+    ])
+
+    render(<ChatPanel workspacePath="/ws" />)
+    const transcript = await screen.findByTestId('chat-transcript')
+    // display:none 期间 clientHeight 为 0，此时不能把跟随状态误置为 false
+    Object.defineProperty(transcript, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(transcript, 'clientHeight', { value: 0, configurable: true })
+    transcript.scrollTop = 0
+    fireEvent.scroll(transcript)
+
+    await waitFor(() => expect(screen.getByText('answer')).toBeTruthy())
+    expect(screen.queryByText(translations.zh.scrollToBottom)).toBeNull()
+  })
+
   it('renders a collapsed process group and expands thinking on demand', async () => {
     useSessionStore.getState().setSessions('/ws', [session])
     useSessionStore.getState().setOpen('/ws', [session.id], session.id)
