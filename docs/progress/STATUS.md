@@ -10,8 +10,8 @@
 
 **更新时间**: 2026-10-29
 
-- 🟡 **0.7.4 发布中**（基线 `main` @ 0.7.3 发布后的 4 个提交：工作树依赖自动安装与复用（GIT-118）、零引用死代码清理、文档拆分，以及聊天体验 / 外链 / 剪贴板 / 编辑器外部刷新批次合入）
-- ✅ **最新版本 0.7.3**（标签命中区整块可点 + 会话标题锁定）；完整记录见下方 Phase 6 的 2026-10-28 条目
+- ✅ **最新版本 0.7.4**（工作树依赖自动安装与复用 + 聊天体验 / 外链 / 剪贴板 / 编辑器外部刷新批次）；完整记录见下方 Phase 6 的 2026-10-29 条目
+- ✅ **0.7.3 已发布：标签命中区整块可点 + 会话标题锁定**；完整记录见下方 Phase 6 的 2026-10-28 条目
 - ✅ **Phase 0: MVP** — Electron 框架、文件管理、编辑器、Diff、国际化
 - ✅ **便携式架构** — 所有应用数据自包含在应用目录内
 - ✅ **Phase 1: Pi Agent 集成** — 真实 Agent 可用（模型拉取 / 对话 / 工具）
@@ -217,6 +217,7 @@
 - ✅ 2026-10-29 工作树依赖自动安装与复用（GIT-118）：新增 `electron/worktree-deps.ts` 按仓库根 lockfile 识别包管理器（pnpm / bun / yarn（v1 与 berry）/ npm / uv）并在链接工作树里后台 `spawn` 安装（串行（同时只跑一个）、10 分钟硬超时、输出只进日志与内存尾部）；安装结果按 `sha1(工作树自己的 lockfile)` 写进 `session-git.json` 的 `installedLockfileHash`，哈希未变且 `node_modules` / `.venv` 存在则复用不再安装；没有 lockfile 的仓库跳过（状态 `none`）。状态经新推送频道 `git:worktree-deps` 进入工作树 chip（安装中 / 已就绪 / 安装失败可重试），同时进入 Agent 上下文；手动触发走 `git:installWorktreeDeps`；删除 / 遗忘工作树与关闭工作区都会终止在跑的安装；自动安装可用设置项 `autoInstallWorktreeDeps` 关闭（默认开，安装会执行仓库脚本）。修掉了「工作树在仓库内部、Node 向上解析到主 checkout 的 `node_modules`」导致的静默依赖污染。新增 `tests/worktree-deps.test.ts`，扩充 `worktree-coordinator` / `worktree-chip` / `git-ipc` 用例。type-check / lint / 1045 用例通过
 - ✅ 2026-10-29 GIT-118 复查修正：哈希改为取**工作树自己那份 lockfile**（无则回退仓库根）—— 原来用仓库根的哈希描述工作树里的安装，导致分支换 lockfile 时永不重装、两个不同分支的工作树共用一个哈希；依赖安装只在**绑定工作树时**触发（`ensureInstalled`），`statusFor` 改为纯读，修掉「光是枚举工作树就给所有工作树（含用户手工创建的、无会话绑定的）装一遍依赖」；安装改为串行，排队任务被取消时不再启动。新增 `statusFor` 只读 / 串行排队 / 排队取消 / 工作树自身 lockfile 变化重装 / 未绑定工作树不安装 五类用例
 - ✅ 2026-10-29 聊天体验与链接批次合入 main（`pi/01a18458`）：代码框 / 消息 / 提交 SHA / 工具结果的复制改走主进程 `clipboard:writeText`（`copyText()` 三级回退：Electron 原生 → `navigator.clipboard` → textarea + `execCommand`，失败给 Toast 不再静默）；外链（https / http / mailto）统一由 `shell:openExternal` 交系统浏览器（`electron/external-links.ts` 白名单），对话与阅读视图的 Markdown 链接分三态（外链 / `#anchor` 本文档滚动 / 仓库文件交编辑器打开），不再使用 `target="_blank"`；新增划词「引用到对话」浮起按钮与输入区「引用当前文档」开关；内联变更卡默认收起；用户消息改纸卡批注、Agent 保持流动正文；面板级 `ErrorBoundary` 兜住 Monaco `Model is disposed!`（不再整窗白屏）；拖出面板增加 96 DIP 拖动距离判据（`aux:drag-begin`）；辅助窗口登记为受信任 IPC 来源（`trustIpcSender` / `untrustIpcSender`，子框架仍拒绝，频道增至 18 域 / 123 handler）；打开的文件跟随外部（Agent 直接写盘 / git 切分支）改动自动刷新，脏缓冲显示冲突提示条，监听过滤器不再吞 `.pi-workbench/worktrees/**`，`fs:watch` 允许受信任根的子目录（`resolveWatchableRoot`，只授予监听不授予写）。插话时序改动已按要求整体撤销，改由 [聊天渲染单一数据源](../architecture/chat-render-single-source.md)（设计稿，未实施）根治。设计系统 v1.47（新增 6.16），`ipc-and-trust` / `panels-and-windows` / ADR-001 同步新的 IPC 信任模型。type-check / lint / 1069 用例通过
+- ✅ 2026-10-29 发布 v0.7.4：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含工作树依赖自动安装与复用（GIT-118：按 lockfile 识别包管理器、链接工作树后台串行安装、哈希写进 `session-git.json`、chip 显示安装中 / 就绪 / 失败可重试、可在设置关闭）、聊天体验批次（复制走主进程剪贴板、内联变更卡默认收起、用户 / Agent 消息分层、面板级错误边界、划词「引用到对话」与「引用当前文档」）、Markdown 链接三态与外链交系统浏览器、打开的文件跟随外部（Agent 写盘 / git 切分支）改动自动刷新、面板拆出判据加入 96 DIP 拖动距离、辅助窗口登记为受信任 IPC 来源；同时修掉 release 在三平台上唯一失败的一条用例（工作树依赖用例拿未规范化的 tmpdir 路径与 canonicalise 过的 `view.path` 比较，macOS `/var` → `/private/var` 与 Windows `RUNNER~1` 短名下必失败；CI 只在 ubuntu 跑测试，所以之前一直是绿的）。type-check / lint / 1069 用例通过
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
 ## 最近提交
