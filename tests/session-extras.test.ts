@@ -118,6 +118,25 @@ describe('SessionExtrasStore', () => {
     })
   })
 
+  it('round-trips the settled title and drops invalid values', async () => {
+    const store = new SessionExtrasStore(tmpRoot)
+    const extras = emptyExtras()
+    extras.title = 'Fix login redirect'
+    await store.save('session-title', extras)
+    await expect(store.load('session-title')).resolves.toMatchObject({
+      title: 'Fix login redirect',
+    })
+
+    for (const [file, payload] of [
+      ['numeric', { version: 1, title: 42 }],
+      ['blank', { version: 1, title: '   ' }],
+      ['missing', { version: 1 }],
+    ] as const) {
+      await fs.writeFile(path.join(tmpRoot, `${file}.json`), JSON.stringify(payload), 'utf-8')
+      await expect(store.load(file)).resolves.toEqual(emptyExtras())
+    }
+  })
+
   it('ignores corrupt files', async () => {
     const store = new SessionExtrasStore(tmpRoot)
     await fs.writeFile(path.join(tmpRoot, 'broken.json'), '{oops', 'utf-8')

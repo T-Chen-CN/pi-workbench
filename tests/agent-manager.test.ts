@@ -179,10 +179,12 @@ function createFakeSession(
 
 function createFakeSessionManager(
   id = 'session-1',
-  source?: { messages: Array<Record<string, unknown>> }
+  source?: { messages: Array<Record<string, unknown>> },
+  /** 跨实例共享的标题状态：模拟重新打开同一个会话文件 */
+  titleState?: { name?: string; persisted?: boolean }
 ) {
-  let name: string | undefined
-  let persisted = false
+  let name: string | undefined = titleState?.name
+  let persisted = titleState?.persisted ?? false
   const entries = [
     {
       id: 'u1',
@@ -235,6 +237,10 @@ function createFakeSessionManager(
     appendSessionInfo: (value: string) => {
       name = value
       persisted = true
+      if (titleState) {
+        titleState.name = value
+        titleState.persisted = true
+      }
       return 'entry-1'
     },
     isPersisted: () => persisted,
@@ -1510,6 +1516,328 @@ describe('AgentManager sessions', () => {
     await until(() => onSessionTitle.mock.calls.length > 0)
     expect(onSessionTitle).toHaveBeenCalledWith('session-1', '图片对话')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('names a session from the first text reply even when it starts with a tool call', async () => {
+    const session = createFakeSession(async (fake) => {
+      fake.messages.push({ role: 'user', content: 'Fix the login redirect loop' })
+      fake.messages.push({
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 't1', name: 'read', arguments: {} }],
+      })
+      fake.messages.push({ role: 'toolResult', toolCallId: 't1', content: [{ type: 'text', text: 'ok' }] })
+      fake.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'I updated the auth guard.' }] })
+    })
+    primeSdk(session)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'Fix login redirect' } }] }),
+      })
+    )
+    const onSessionTitle = vi.fn()
+
+    await manager.initialize(makeConfig({ onSessionTitle }))
+    await manager.chat('Fix the login redirect loop')
+
+    await until(() => onSessionTitle.mock.calls.length > 0)
+    expect(onSessionTitle).toHaveBeenCalledWith('session-1', 'Fix login redirect')
+  })
+
+  it('waits for a text reply before spending the single title attempt', async () => {
+    const session = createFakeSession(async (fake, message) => {
+      if (message === 'first') {
+        fake.messages.push({ role: 'user', content: 'first' })
+        fake.messages.push({
+          role: 'assistant',
+          content: [{ type: 'toolCall', id: 't1', name: 'read', arguments: {} }],
+        })
+        return
+      }
+      fake.messages.push({ role: 'user', content: 'second' })
+      fake.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'All done.' }] })
+    })
+    primeSdk(session)
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'Workspace cleanup' } }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const onSessionTitle = vi.fn()
+
+    await manager.initialize(makeConfig({ onSessionTitle }))
+    await manager.chat('first')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await manager.chat('second')
+    await until(() => onSessionTitle.mock.calls.length > 0)
+    expect(onSessionTitle).toHaveBeenCalledWith('session-1', 'Workspace cleanup')
+  })
+
+  it('retries the title on the next turn when the model reply is unusable', async () => {
+    const session = createFakeSession(async (fake, message) => {
+      fake.messages.push({ role: 'user', content: message })
+      fake.messages.push({ role: 'assistant', content: `reply to ${message}` })
+    })
+    primeSdk(session)
+    // 推理型模型把 token 预算花在 reasoning 上时，content 是空字符串
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '' }, finish_reason: 'length' }] }),
+      })
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'Workspace cleanup' } }] }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+    const onSessionTitle = vi.fn()
+
+    await manager.initialize(makeConfig({ onSessionTitle }))
+    await manager.chat('first')
+    await until(() => fetchMock.mock.calls.length === 1)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(onSessionTitle).not.toHaveBeenCalled()
+
+    // 标题很短，但推理型模型需要多留 reasoning 预算，否则拿不到 content
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    expect(body.max_tokens).toBeGreaterThanOrEqual(400)
+
+    await manager.chat('second')
+    await until(() => onSessionTitle.mock.calls.length > 0)
+    expect(onSessionTitle).toHaveBeenCalledWith('session-1', 'Workspace cleanup')
+  })
+
+  it('stops retrying the title after repeated unusable replies', async () => {
+    const session = createFakeSession(async (fake, message) => {
+      fake.messages.push({ role: 'user', content: message })
+      fake.messages.push({ role: 'assistant', content: `reply to ${message}` })
+    })
+    primeSdk(session)
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '   ' } }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const onSessionTitle = vi.fn()
+
+    await manager.initialize(makeConfig({ onSessionTitle }))
+    for (const message of ['a', 'b', 'c', 'd']) await manager.chat(message)
+    await new Promise((resolve) => setTimeout(resolve, 40))
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(onSessionTitle).not.toHaveBeenCalled()
+  })
+
+  it('reads the title source from the session record instead of the compacted context', async () => {
+    const session = createFakeSession(async (fake) => {
+      fake.messages.push({ role: 'user', content: 'next message' })
+      fake.messages.push({ role: 'assistant', content: 'next answer' })
+    })
+    // 压缩后的模型上下文：首条消息已经不在其中
+    session.messages.push({ role: 'user', content: 'Unrelated later question' })
+    session.messages.push({ role: 'assistant', content: 'Unrelated later answer' })
+
+    primeSdk(session)
+    const record = [
+      {
+        id: 'u1',
+        parentId: null,
+        type: 'message',
+        timestamp: new Date(1000).toISOString(),
+        message: { role: 'user', content: 'Original question about auth' },
+      },
+      {
+        id: 'a1',
+        parentId: 'u1',
+        type: 'message',
+        timestamp: new Date(2000).toISOString(),
+        message: { role: 'assistant', content: 'Original answer about auth' },
+      },
+    ]
+    sdk.continueRecent.mockImplementation(() => ({
+      ...createFakeSessionManager('session-1', session),
+      getEntries: () => record,
+      getBranch: () => record,
+    }))
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'Auth guard' } }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const onSessionTitle = vi.fn()
+
+    await manager.initialize(makeConfig({ onSessionTitle }))
+    await manager.chat('next message')
+
+    await until(() => onSessionTitle.mock.calls.length > 0)
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string)
+    expect(body.messages[0].content).toContain('Original question about auth')
+    expect(body.messages[0].content).toContain('Original answer about auth')
+    expect(body.messages[0].content).not.toContain('Unrelated')
+  })
+
+  it('never rewrites a title that is already recorded', async () => {
+    const session = createFakeSession(async (fake) => {
+      fake.messages.push({ role: 'user', content: 'second question' })
+      fake.messages.push({ role: 'assistant', content: 'second answer' })
+    })
+    primeSdk(session)
+    const titleState = { name: 'Manual title', persisted: true }
+    sdk.continueRecent.mockImplementation(() =>
+      createFakeSessionManager('session-1', session, titleState)
+    )
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const onSessionTitle = vi.fn()
+
+    await manager.initialize(makeConfig({ onSessionTitle }))
+    const opened = await manager.openSession('session-1')
+    expect(opened.session?.title).toBe('Manual title')
+
+    await manager.chat('second question')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(onSessionTitle).not.toHaveBeenCalled()
+    expect((await manager.listSessions())[0]?.title).toBe('Manual title')
+  })
+
+  it('opens a session once when several requests arrive together', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+    sdk.sessionOpen.mockClear()
+    sdk.createAgentSession.mockClear()
+
+    // 打开会话 / 读分支 / 读计划 同时进来：只能建一个运行时，否则同一个会话会有
+    // 两个 SessionManager，后写者看不到先写者写入的标题
+    const [opened, branches, plan] = await Promise.all([
+      manager.openSession('session-2'),
+      manager.listBranches('session-2'),
+      manager.getPlan('session-2'),
+    ])
+
+    expect(opened.success).toBe(true)
+    expect(branches.success).toBe(true)
+    expect(plan.success).toBe(true)
+    expect(sdk.sessionOpen).toHaveBeenCalledTimes(1)
+    expect(sdk.createAgentSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('restores a title from the sidecar when the record lost it', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    const titleState: { name?: string; persisted?: boolean } = { persisted: true }
+    // 会话文件已落盘，但里面的 session_info 丢了（分支裁剪 / 迁移）
+    const sessionFile = path.join(tmpRoot, 'session-1.jsonl')
+    await fs.writeFile(sessionFile, '{"type":"session"}\n', 'utf-8')
+    sdk.continueRecent.mockImplementation(() => ({
+      ...createFakeSessionManager('session-1', session, titleState),
+      getSessionFile: () => sessionFile,
+    }))
+
+    // 记录（JSONL）里的 session_info 因分支裁剪或迁移丢了，sidecar 仍持有快照
+    await fs.mkdir(path.join(agentDir, 'session-extras'), { recursive: true })
+    await fs.writeFile(
+      path.join(agentDir, 'session-extras', 'session-1.json'),
+      JSON.stringify({ version: 1, thinkingDurations: {}, title: 'Original title' }),
+      'utf-8'
+    )
+
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const onSessionTitle = vi.fn()
+
+    await manager.initialize(makeConfig({ onSessionTitle }))
+    const opened = await manager.openSession('session-1')
+
+    expect(opened.session?.title).toBe('Original title')
+    // 补写回会话记录，且不重新调用模型
+    expect(titleState.name).toBe('Original title')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('drops a generated title when the session was deleted meanwhile', async () => {
+    const session = createFakeSession(async (fake) => {
+      fake.messages.push({ role: 'user', content: 'hello there' })
+      fake.messages.push({ role: 'assistant', content: 'hello back' })
+    })
+    primeSdk(session)
+    const titleState: { name?: string; persisted?: boolean } = { persisted: true }
+    const sessionFile = path.join(agentDir, 'sessions', 'session-1.jsonl')
+    await fs.mkdir(path.join(agentDir, 'sessions'), { recursive: true })
+    await fs.writeFile(sessionFile, '{"type":"session"}\n', 'utf-8')
+    sdk.sessionFindById.mockImplementation(() => sessionFile)
+    sdk.sessionOpen.mockImplementation(() => ({
+      ...createFakeSessionManager('session-1', session, titleState),
+      getSessionFile: () => sessionFile,
+    }))
+
+    let release: ((value: unknown) => void) | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise((resolve) => {
+            release = resolve
+          })
+      )
+    )
+    const onSessionTitle = vi.fn()
+
+    await manager.initialize(makeConfig({ onSessionTitle }))
+    await manager.chat('hello there')
+    await until(() => release !== null)
+
+    await manager.deleteSession('session-1')
+    release!({ ok: true, json: async () => ({ choices: [{ message: { content: 'Greeting' } }] }) })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    expect(titleState.name).toBeUndefined()
+    expect(onSessionTitle).not.toHaveBeenCalled()
+    await expect(
+      fs.access(path.join(agentDir, 'session-extras', 'session-1.json'))
+    ).rejects.toThrow()
+  })
+
+  it('persists a generated title even when the session is closed while the request is in flight', async () => {
+    const session = createFakeSession(async (fake) => {
+      fake.messages.push({ role: 'user', content: 'hello there' })
+      fake.messages.push({ role: 'assistant', content: 'hello back' })
+    })
+    primeSdk(session)
+    const titleState: { name?: string; persisted?: boolean } = { persisted: true }
+    sdk.sessionOpen.mockImplementation((file: string) =>
+      createFakeSessionManager(path.basename(file, '.jsonl'), session, titleState)
+    )
+
+    let release: ((value: unknown) => void) | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise((resolve) => {
+            release = resolve
+          })
+      )
+    )
+    const onSessionTitle = vi.fn()
+
+    await manager.initialize(makeConfig({ onSessionTitle }))
+    await manager.chat('hello there')
+    await until(() => release !== null)
+
+    await manager.closeSession('session-1')
+    release!({ ok: true, json: async () => ({ choices: [{ message: { content: 'Greeting' } }] }) })
+
+    await until(() => titleState.name === 'Greeting')
+    expect(titleState.name).toBe('Greeting')
+    expect(onSessionTitle).toHaveBeenCalledWith('session-1', 'Greeting')
   })
 })
 

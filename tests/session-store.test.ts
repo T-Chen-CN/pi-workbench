@@ -112,4 +112,51 @@ describe('sessionStore', () => {
       useSessionStore.getState().streaming[conversationKey('/other', 'b')]
     ).toBe(true)
   })
+
+  it('keeps a pinned title when a stale list refresh reports the fallback title', () => {
+    const store = useSessionStore.getState()
+    store.setSessions(WS, [makeSession('a', 'Fix the login redirect loop')])
+    // 模型生成的标题到达（agent:session-title），渲染层钉住它
+    store.pinTitle(WS, 'a', '登录重定向修复')
+    expect(useSessionStore.getState().byWorkspace[WS].sessions[0].title).toBe('登录重定向修复')
+
+    // 之前发起的 sessions:list 晚到，带着首条消息的回退标题
+    store.setSessions(WS, [makeSession('a', 'Fix the login redirect loop')])
+    expect(useSessionStore.getState().byWorkspace[WS].sessions[0].title).toBe('登录重定向修复')
+
+    // 其他字段仍以最新列表为准
+    store.setSessions(WS, [{ ...makeSession('a', 'Fix the login redirect loop'), messageCount: 7 }])
+    expect(useSessionStore.getState().byWorkspace[WS].sessions[0]).toMatchObject({
+      title: '登录重定向修复',
+      messageCount: 7,
+    })
+  })
+
+  it('never blanks a title that is already displayed', () => {
+    const store = useSessionStore.getState()
+    store.setSessions(WS, [makeSession('a', 'Existing title')])
+    store.setSessions(WS, [makeSession('a', '')])
+    expect(useSessionStore.getState().byWorkspace[WS].sessions[0].title).toBe('Existing title')
+
+    store.updateSession(WS, 'a', { title: '', messageCount: 3 })
+    expect(useSessionStore.getState().byWorkspace[WS].sessions[0]).toMatchObject({
+      title: 'Existing title',
+      messageCount: 3,
+    })
+  })
+
+  it('drops pinned titles with the session or the workspace', () => {
+    const store = useSessionStore.getState()
+    store.setSessions(WS, [makeSession('a'), makeSession('b')])
+    store.setOpen(WS, ['a', 'b'], 'a')
+    store.pinTitle(WS, 'a', 'Pinned A')
+    store.pinTitle(WS, 'b', 'Pinned B')
+
+    store.removeSession(WS, 'a')
+    expect(useSessionStore.getState().pinnedTitles[`${WS}\u0000a`]).toBeUndefined()
+    expect(useSessionStore.getState().pinnedTitles[`${WS}\u0000b`]).toBe('Pinned B')
+
+    store.resetWorkspace(WS)
+    expect(useSessionStore.getState().pinnedTitles).toEqual({})
+  })
 })

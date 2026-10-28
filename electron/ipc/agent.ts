@@ -90,8 +90,19 @@ function normalizeChatImages(images: unknown): {
   return { images: safeImages }
 }
 
+/**
+ * 广播到所有窗口。
+ * 面板可以拆成独立窗口（各自一个渲染进程），只发主窗口会让拆出的对话列
+ * 收不到会话标题 / 工作树切换事件，只能等下一次列表刷新，出现标题回退与滞后。
+ */
+function broadcastToWindows(channel: string, payload: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    win.webContents.send(channel, payload)
+  }
+}
+
 export function registerAgentIpc(context: AgentIpcContext): void {
-  const mainWindow = () => context.getMainWindow()
 
 // ==================== Pi Agent Integration ====================
 
@@ -148,10 +159,7 @@ handleIpc('agent:initialize', async (_event, config: {
       getWebAccessConfigVersion: () => currentWebSearchConfigVersion(),
       logger: context.logger,
       onSessionTitle: (sessionId: string, title: string) => {
-        const win = mainWindow()
-        if (win && !win.isDestroyed()) {
-          win.webContents.send('agent:session-title', { workspaceDir, sessionId, title })
-        }
+        broadcastToWindows('agent:session-title', { workspaceDir, sessionId, title })
       },
       // 会话权限：全局只提供新会话的默认档位；无审批通道时 Agent 侧按拒绝处理
       getDefaultPermissionLevel: () => context.getDefaultPermissionLevel(),
@@ -188,10 +196,7 @@ handleIpc('agent:initialize', async (_event, config: {
             })
           }
         }
-        const win = mainWindow()
-        if (win && !win.isDestroyed()) {
-          win.webContents.send('agent:session-root-changed', { workspaceDir, sessionId, root })
-        }
+        broadcastToWindows('agent:session-root-changed', { workspaceDir, sessionId, root })
       },
     })
 

@@ -4,6 +4,12 @@ import type { ApiConfigInput } from './model-config.js'
 
 const TITLE_TIMEOUT_MS = 15_000
 
+/**
+ * 标题本身很短，但推理型模型（如 deepseek-flash）会先花掉一批 reasoning token，
+ * 预算太小时 content 会直接为空（finish_reason: length）。留足余量。
+ */
+const TITLE_MAX_TOKENS = 512
+
 export interface TitleLogger {
   warn: (...args: unknown[]) => void
 }
@@ -51,7 +57,7 @@ export async function requestSessionTitle(
         },
         body: JSON.stringify({
           model: selectedModel,
-          max_tokens: 64,
+          max_tokens: TITLE_MAX_TOKENS,
           temperature: 0.2,
           messages: [{ role: 'user', content: prompt }],
         }),
@@ -59,7 +65,13 @@ export async function requestSessionTitle(
       })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const data = (await response.json()) as any
-      return typeof data?.content?.[0]?.text === 'string' ? data.content[0].text : null
+      const text = data?.content?.[0]?.text
+      if (typeof text === 'string' && text.trim()) return text
+      logger.warn(
+        '[Agent Manager] Title generation returned no text:',
+        JSON.stringify({ stopReason: data?.stop_reason })
+      )
+      return null
     }
 
     const response = await fetch(`${base}/chat/completions`, {
@@ -70,7 +82,7 @@ export async function requestSessionTitle(
       },
       body: JSON.stringify({
         model: selectedModel,
-        max_tokens: 64,
+        max_tokens: TITLE_MAX_TOKENS,
         temperature: 0.2,
         messages: [{ role: 'user', content: prompt }],
       }),
@@ -78,8 +90,15 @@ export async function requestSessionTitle(
     })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const data = (await response.json()) as any
-    const content = data?.choices?.[0]?.message?.content
-    return typeof content === 'string' ? content : null
+    const choice = data?.choices?.[0]
+    const content = choice?.message?.content
+    if (typeof content === 'string' && content.trim()) return content
+    // 推理型模型把预算花在 reasoning 上时这里会是空字符串，交给调用方决定是否重试
+    logger.warn(
+      '[Agent Manager] Title generation returned no text:',
+      JSON.stringify({ finishReason: choice?.finish_reason, content: content ?? null })
+    )
+    return null
   } catch (error) {
     logger.warn('[Agent Manager] Title generation failed:', error)
     return null

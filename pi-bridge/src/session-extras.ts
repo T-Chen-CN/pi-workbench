@@ -4,6 +4,7 @@
  * Pi 的 JSONL 只保存消息与工具结果，不保存思考时长。
  * 这里按会话保存一份 sidecar：
  * - thinkingDurations：按 assistant 消息时间戳记录每段思考的时长
+ * - title：已确定的会话标题快照（防丢失，不是展示来源）
  *
  * 工具调用的前后文件内容只在当前进程内保留（用于当前轮 Diff），不再落盘。
  */
@@ -22,6 +23,11 @@ export interface SessionExtras {
   plan: StructuredPlan | null
   /** 会话权限（AF-02）；null 表示尚未固化，首次打开时从全局默认档生成 */
   permission: SessionPermission | null
+  /**
+   * 已确定的会话标题。展示来源仍是 JSONL 的 session_info，这里只做备份：
+   * 记录被裁剪或迁移后重开会话时用它补写回去，并阻止再次自动生成。
+   */
+  title: string | null
 }
 
 /** 会话 id 只允许字母、数字、下划线与连字符，禁止路径分隔符与 `..` */
@@ -36,11 +42,30 @@ export function emptyExtras(): SessionExtras {
     branchLeaves: {},
     plan: null,
     permission: null,
+    title: null,
   }
 }
 
 /** 已清理过旧 toolEdits 的 sidecar，避免每次 load 都重写 */
 const legacyToolEditsPruned = new Set<string>()
+
+/**
+ * Windows 上 rename 覆盖已存在文件可能被索引 / 杀软短暂占用（EPERM / EBUSY），
+ * 标题快照不能因此丢掉，短暂错误重试几次。
+ */
+async function renameWithRetry(from: string, to: string, attempts = 6): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fs.rename(from, to)
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      const transient = code === 'EPERM' || code === 'EBUSY' || code === 'EACCES'
+      if (!transient || attempt >= attempts - 1) throw error
+      await new Promise((resolve) => setTimeout(resolve, 15 * (attempt + 1)))
+    }
+  }
+}
 
 export class SessionExtrasStore {
   constructor(private readonly baseDir: string) {}
@@ -69,6 +94,10 @@ export class SessionExtrasStore {
           raw.permission && typeof raw.permission === 'object'
             ? normalizeSessionPermission(raw.permission)
             : null,
+        title:
+          typeof raw.title === 'string' && raw.title.trim()
+            ? raw.title.trim().slice(0, 80)
+            : null,
       }
       // 旧版本 sidecar 保存过完整文件内容；读取后异步重写一次，回收磁盘
       if (raw.toolEdits && !legacyToolEditsPruned.has(filePath)) {
@@ -86,7 +115,7 @@ export class SessionExtrasStore {
     const target = this.pathFor(sessionId)
     const temp = `${target}.tmp`
     await fs.writeFile(temp, JSON.stringify(extras), 'utf-8')
-    await fs.rename(temp, target)
+    await renameWithRetry(temp, target)
   }
 
   /** 会话删除时一并清理 sidecar，避免遗留权限与历史记录 */

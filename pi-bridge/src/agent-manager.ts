@@ -198,6 +198,9 @@ function hasImageBlocks(content: unknown): boolean {
  */
 const IMAGE_ONLY_PROMPTS = ['请看这些图片。', 'Please look at the attached image(s).'] as const
 
+/** 标题结果不可用（空回复 / 纯推理）时的重试上限：超过就永久保留回退标题 */
+const TITLE_MAX_FAILURES = 3
+
 function isImageOnlyPrompt(text: string): boolean {
   const trimmed = text.trim()
   return (IMAGE_ONLY_PROMPTS as readonly string[]).includes(trimmed)
@@ -228,6 +231,8 @@ interface SessionRuntime {
   updatedAt: number
   /** 自动标题只尝试一次 */
   titleAttempted: boolean
+  /** 模型返回不可用结果（空回复 / 纯推理）的次数；超过上限就不再重试 */
+  titleFailures: number
   /** 未落盘新会话的临时标题 */
   pendingTitle: string | null
   /** 会话注册的全部工具；模式在此之上计算激活集，不受历史影响 */
@@ -262,6 +267,12 @@ export class AgentManager {
   /** 轮次边界待应用的工作树切换 */
   private pendingRoots = new Map<string, { root: string; branch?: string }>()
   private rebinding = new Set<string>()
+  /** sessionId → 正在创建的运行时：并发打开同一个会话时共用一次创建 */
+  private creatingRuntimes = new Map<string, Promise<SessionRuntime>>()
+  /** sessionId → 已确定的标题：跨运行时重建仍然有效，只有手动重命名能改写 */
+  private settledTitles = new Map<string, string>()
+  /** 已删除的会话：在途的标题结果不得再把 sidecar / 记录写回来 */
+  private deletedSessions = new Set<string>()
   /** 上一次创建会话时使用的联网配置版本 */
   private lastWebAccessVersion: string | null = null
 
@@ -1409,6 +1420,32 @@ export class AgentManager {
     }
     const fallbackPermission = normalizeSessionPermission(extras.permission)
     const root = sessionManager.getCwd() || config.workspaceDir
+    // 标题：会话记录里的 session_info 是权威来源，sidecar 只做备份与拦截
+    const recordedTitle = (sessionManager.getSessionName() ?? '').trim()
+    const sessionFile = sessionManager.getSessionFile()
+    const persistedOnDisk = Boolean(sessionFile && existsSync(sessionFile))
+    let titleBackfilled = false
+    // 尚未落盘的会话先留成待写入标题，由首次落盘时一并写进记录
+    let restoredPendingTitle: string | null = null
+    if (recordedTitle) {
+      this.settledTitles.set(id, recordedTitle)
+      if (extras.title !== recordedTitle) {
+        extras.title = recordedTitle
+        titleBackfilled = true
+      }
+    } else if (extras.title) {
+      // 记录里丢了标题（分支裁剪 / 迁移 / 旧版本）：标题已确定，绝不重新生成
+      this.settledTitles.set(id, extras.title)
+      if (persistedOnDisk) {
+        try {
+          sessionManager.appendSessionInfo(extras.title)
+        } catch (error) {
+          this.logger.warn('[Agent Manager] Failed to restore the session title:', error)
+        }
+      } else {
+        restoredPendingTitle = extras.title
+      }
+    }
     const settingsManager = SettingsManager.create(config.workspaceDir, this.agentDir)
     const resourceLoader = new DefaultResourceLoader({
       cwd: root,
@@ -1525,7 +1562,8 @@ export class AgentManager {
       createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
       updatedAt: Date.now(),
       titleAttempted: false,
-      pendingTitle: null,
+      titleFailures: 0,
+      pendingTitle: restoredPendingTitle,
       registeredTools,
       extras,
       extrasSave: Promise.resolve(),
@@ -1538,7 +1576,7 @@ export class AgentManager {
     runtimeRef.current = runtime
     this.applySessionModeTools(runtime, fallbackPermission.mode)
     this.runtimes.set(id, runtime)
-    if (seededPermission) this.persistExtras(runtime)
+    if (seededPermission || titleBackfilled) this.persistExtras(runtime)
     return runtime
   }
 
@@ -1582,20 +1620,34 @@ export class AgentManager {
     this.lastSessionId = null
   }
 
-  /** 确保某个会话已有运行时（不存在则从磁盘打开） */
+  /**
+   * 确保某个会话已有运行时（不存在则从磁盘打开）。
+   * 打开是异步的：打开会话 / 读分支 / 读计划 / 读列表可能同时进来，必须共用同一次创建。
+   * 否则同一个会话会存在两个 SessionManager，后写者看不到先写者写入的标题。
+   */
   private async ensureRuntime(sessionId: string): Promise<SessionRuntime> {
     const existing = this.runtimes.get(sessionId)
     if (existing) return existing
+    const creating = this.creatingRuntimes.get(sessionId)
+    if (creating) return creating
 
-    const config = this.config
-    if (!config) throw new Error('Agent not initialized.')
-    const root = config.resolveSessionRoot?.(sessionId) ?? config.workspaceDir
-    const file =
-      (await this.findSessionFile(sessionId)) ??
-      SessionManager.findById(root, sessionId, this.sessionDir)
-    if (!file) throw new Error('Session not found.')
-    const manager = SessionManager.open(file, this.sessionDir, root)
-    return this.createRuntime(manager)
+    const creation = (async () => {
+      try {
+        const config = this.config
+        if (!config) throw new Error('Agent not initialized.')
+        const root = config.resolveSessionRoot?.(sessionId) ?? config.workspaceDir
+        const file =
+          (await this.findSessionFile(sessionId)) ??
+          SessionManager.findById(root, sessionId, this.sessionDir)
+        if (!file) throw new Error('Session not found.')
+        const manager = SessionManager.open(file, this.sessionDir, root)
+        return await this.createRuntime(manager)
+      } finally {
+        this.creatingRuntimes.delete(sessionId)
+      }
+    })()
+    this.creatingRuntimes.set(sessionId, creation)
+    return creation
   }
 
   /** 会话文件按 id 查找；不依赖 header cwd（工作树会话的 header 可能仍是旧路径） */
@@ -1723,8 +1775,13 @@ export class AgentManager {
     sessionName: string | undefined
   ): void {
     if (pendingTitle) runtime.pendingTitle = pendingTitle
-    // 已落盘的会话由文件本身恢复名称，重复追加会在 JSONL 里留下多余的 session_info
-    else if (!persistedFile && sessionName) runtime.sessionManager.appendSessionInfo(sessionName)
+    // 已落盘的会话由文件本身恢复名称；未落盘的会话若 sidecar 已补写过标题就不再重复追加
+    else if (!persistedFile && sessionName && !runtime.sessionManager.getSessionName()) {
+      runtime.sessionManager.appendSessionInfo(sessionName)
+    }
+    // 标题已确定：重建后不得再次自动生成
+    if (pendingTitle) this.settledTitles.set(runtime.id, pendingTitle)
+    else if (sessionName) this.settleSessionTitle(runtime, sessionName)
   }
 
   /**
@@ -1775,34 +1832,36 @@ export class AgentManager {
   }
 
   private runtimeSummary(runtime: SessionRuntime): SessionSummary {
-    const messages = this.timelineMessages(runtime)
-    const name = runtime.pendingTitle ?? runtime.sessionManager.getSessionName()
-    let firstUser = ''
     let messageCount = 0
-    for (const msg of messages) {
-      if (msg.role !== 'user' && msg.role !== 'assistant') continue
-      messageCount += 1
-      if (!firstUser && msg.role === 'user') {
-        const content =
-          typeof msg.content === 'string'
-            ? msg.content
-            : Array.isArray(msg.content)
-              ? msg.content
-                  .filter((part: any) => part.type === 'text')
-                  .map((part: any) => part.text)
-                  .join('\n')
-              : ''
-        firstUser = stripContextBlock(content)
-      }
+    for (const msg of this.timelineMessages(runtime)) {
+      if (msg.role === 'user' || msg.role === 'assistant') messageCount += 1
     }
 
     return {
       id: runtime.id,
-      title: (name?.trim() || firstUser.trim()).slice(0, 60),
+      title: (this.sessionTitle(runtime) ?? this.recordFirstUserText(runtime)).slice(0, 60),
       messageCount,
       createdAt: runtime.createdAt,
       updatedAt: runtime.updatedAt,
     }
+  }
+
+  /**
+   * 记录行序的首条用户消息文本。
+   * 回退标题必须与磁盘列表（SessionInfo.firstMessage）同一口径，
+   * 否则同一个会话在「标签打开 / 关闭」两种状态下会显示不同标题。
+   */
+  private recordFirstUserText(runtime: SessionRuntime): string {
+    try {
+      for (const entry of runtime.sessionManager.getEntries() as any[]) {
+        if (entry?.type !== 'message' || entry.message?.role !== 'user') continue
+        const text = stripContextBlock(this.messageText(entry.message.content)).trim()
+        if (text) return text
+      }
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Failed to resolve the first user message:', error)
+    }
+    return ''
   }
 
   /** 打开指定会话；不传则继续最近会话 */
@@ -1895,10 +1954,11 @@ export class AgentManager {
         }
         sessions.set(info.id, {
           id: info.id,
-          title: (info.name?.trim() || stripContextBlock(info.firstMessage ?? '').trim()).slice(
-            0,
-            60
-          ),
+          title: (
+            info.name?.trim() ||
+            this.settledTitles.get(info.id)?.trim() ||
+            stripContextBlock(info.firstMessage ?? '').trim()
+          ).slice(0, 60),
           messageCount: info.messageCount,
           createdAt: info.created.getTime(),
           updatedAt: info.modified.getTime(),
@@ -1932,12 +1992,21 @@ export class AgentManager {
     if (!title) return { success: false, error: 'Session name cannot be empty.' }
     try {
       const runtime = this.runtimes.get(sessionId)
+      // 同名重命名直接成功：重复追加只会在 JSONL 里留下多余的 session_info
+      const current = runtime
+        ? this.sessionTitle(runtime)
+        : this.settledTitles.get(sessionId) ?? null
+      if (current === title) {
+        this.settledTitles.set(sessionId, title)
+        return { success: true }
+      }
       if (runtime) {
         runtime.pendingTitle = title
         if (runtime.sessionManager.isPersisted()) {
           runtime.sessionManager.appendSessionInfo(title)
           runtime.pendingTitle = null
         }
+        this.settleSessionTitle(runtime, title)
         runtime.updatedAt = Date.now()
         return { success: true }
       }
@@ -1950,6 +2019,8 @@ export class AgentManager {
       if (!file) return { success: false, error: 'Session not found.' }
       const manager = SessionManager.open(file, this.sessionDir, root)
       manager.appendSessionInfo(title)
+      this.settledTitles.set(sessionId, title)
+      void this.saveSessionTitleExtra(sessionId, title)
       return { success: true }
     } catch (error) {
       return {
@@ -1971,6 +2042,9 @@ export class AgentManager {
         (await this.findSessionFile(sessionId)) ??
         SessionManager.findById(root, sessionId, this.sessionDir)
       await this.closeSession(sessionId)
+      this.settledTitles.delete(sessionId)
+      this.creatingRuntimes.delete(sessionId)
+      this.deletedSessions.add(sessionId)
       if (!file) return { success: true }
       if (this.extrasStore) {
         await this.extrasStore.delete(sessionId).catch((error) => {
@@ -2228,12 +2302,15 @@ export class AgentManager {
       )
       runtime.updatedAt = Date.now()
 
-      // 未落盘的临时标题在会话首次落盘后写入
+      // 未落盘的临时标题在会话首次落盘后写入（手动重命名，确定后不再自动改写）
       if (runtime.pendingTitle && runtime.sessionManager.isPersisted()) {
+        const pendingTitle = runtime.pendingTitle
+        runtime.pendingTitle = null
         try {
-          runtime.sessionManager.appendSessionInfo(runtime.pendingTitle)
-          runtime.pendingTitle = null
+          runtime.sessionManager.appendSessionInfo(pendingTitle)
+          this.settleSessionTitle(runtime, pendingTitle)
         } catch (error) {
+          runtime.pendingTitle = pendingTitle
           this.logger.warn('[Agent Manager] Failed to persist pending session title:', error)
         }
       }
@@ -2366,58 +2443,180 @@ export class AgentManager {
     return ''
   }
 
-  /** 第一轮成功后生成会话标题；每个会话只尝试一次，不阻塞聊天 */
+  /**
+   * 第一轮成功后生成会话标题；不在关键路径上。
+   * 标题一旦确定（会话记录里的 session_info 或 sidecar 快照）就不再自动改写，
+   * 只有用户手动重命名例外。命名输入取会话记录（首条用户消息 + 最早一条带文本的回复），
+   * 而不是压缩后的模型上下文。
+   */
   private async maybeGenerateTitle(runtime: SessionRuntime): Promise<void> {
     if (runtime.titleAttempted) return
-    runtime.titleAttempted = true
-
     const config = this.config
     if (!config?.onSessionTitle) return
-    if (runtime.sessionManager.getSessionName() || runtime.pendingTitle) return
+    if (this.sessionTitle(runtime)) {
+      runtime.titleAttempted = true
+      return
+    }
 
-    const messages = runtime.session.messages ?? []
-    const firstUser = messages.find((msg: any) => msg.role === 'user') as any
-    const firstAssistant = messages.find((msg: any) => msg.role === 'assistant') as any
-    if (!firstUser || !firstAssistant) return
-
-    const userText = stripContextBlock(this.messageText(firstUser.content)).trim()
-    const assistantText = this.messageText(firstAssistant.content).trim()
-    if (!assistantText) return
+    const turn = this.titleSourceTexts(runtime)
+    // 首轮还没有文本回复（工具轮 / 中断 / 纯图片）：不消耗这次机会，下一轮再看
+    if (!turn.assistantText) {
+      this.logger.info('[Agent Manager] Session title skipped: no assistant text yet')
+      return
+    }
+    runtime.titleAttempted = true
 
     // 纯图片对话：没有可摘取的用户文本，直接写固定标题，不再调用模型
-    if (!userText || isImageOnlyPrompt(userText)) {
-      if (!userText && !hasImageBlocks(firstUser.content)) return
-      this.persistSessionTitle(
+    if (turn.imageOnly) {
+      await this.persistSessionTitle(
         runtime,
         config,
         config.getLanguage?.() === 'en' ? 'Image chat' : '图片对话'
       )
       return
     }
+    if (!turn.userText) {
+      this.logger.info('[Agent Manager] Session title skipped: no user text to name')
+      return
+    }
 
-    const prompt = buildTitlePrompt(userText, assistantText)
-
-    const raw = await requestSessionTitle(config.apiConfig, prompt, this.logger)
-    if (!raw) return
-
-    const title = normalizeSessionTitle(raw)
-    if (!title) return
-
-    this.persistSessionTitle(runtime, config, title)
+    const raw = await requestSessionTitle(
+      config.apiConfig,
+      buildTitlePrompt(turn.userText, turn.assistantText),
+      this.logger
+    )
+    const title = raw ? normalizeSessionTitle(raw) : ''
+    if (!title) {
+      // 结果不可用（推理型模型可能把预算全花在 reasoning 上）不算「已确定」：
+      // 留机会给下一轮，但最多试 TITLE_MAX_FAILURES 次，避免每轮都打一次请求
+      runtime.titleFailures += 1
+      if (runtime.titleFailures < TITLE_MAX_FAILURES) runtime.titleAttempted = false
+      this.logger.warn(
+        `[Agent Manager] Session title unavailable (${runtime.titleFailures}/${TITLE_MAX_FAILURES}), keeping the fallback title`
+      )
+      return
+    }
+    await this.persistSessionTitle(runtime, config, title)
   }
 
-  /** 写入会话标题；生成期间用户可能已手动重命名、删除会话或切换走 */
-  private persistSessionTitle(runtime: SessionRuntime, config: AgentConfig, title: string): void {
-    if (!this.runtimes.has(runtime.id)) return
-    if (runtime.sessionManager.getSessionName() || runtime.pendingTitle) return
+  /**
+   * 命名输入：会话记录里首条用户消息 + 最早一条带文本的回复。
+   * - 只读会话记录（getEntries）：压缩后的模型上下文不含首条消息，用它命名会得到
+   *   与会话主题无关的标题。
+   * - 首条 assistant 常常只有 thinking / toolCall，必须跳过它们取第一条文本回复。
+   * - 首轮始终没有文本回复时不消耗机会，留给后面的轮次。
+   */
+  private titleSourceTexts(runtime: SessionRuntime): {
+    userText: string
+    assistantText: string
+    imageOnly: boolean
+  } {
+    let firstUser: any = null
+    let assistantText = ''
+    try {
+      for (const entry of runtime.sessionManager.getEntries() as any[]) {
+        if (entry?.type !== 'message' || !entry.message) continue
+        const message = entry.message
+        if (message.role === 'user') {
+          if (firstUser) continue
+          firstUser = message
+          continue
+        }
+        if (!firstUser || message.role !== 'assistant' || assistantText) continue
+        assistantText = this.messageText(message.content).trim()
+      }
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Failed to read the title source messages:', error)
+      return { userText: '', assistantText: '', imageOnly: false }
+    }
+
+    if (!firstUser) return { userText: '', assistantText, imageOnly: false }
+    const userText = stripContextBlock(this.messageText(firstUser.content)).trim()
+    const imageOnly =
+      hasImageBlocks(firstUser.content) && (!userText || isImageOnlyPrompt(userText))
+    return { userText: imageOnly ? '' : userText, assistantText, imageOnly }
+  }
+
+  /** 已确定的标题：临时标题 → 会话记录 → 进程内已确定 → sidecar 快照 */
+  private sessionTitle(runtime: SessionRuntime): string | null {
+    const pending = runtime.pendingTitle?.trim()
+    if (pending) return pending
+    try {
+      const recorded = (runtime.sessionManager.getSessionName() ?? '').trim()
+      if (recorded) return recorded
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Failed to read the session title:', error)
+    }
+    return this.settledTitles.get(runtime.id)?.trim() || runtime.extras.title?.trim() || null
+  }
+
+  /** 标记标题已确定（进程内 + sidecar）：之后只有手动重命名能改写 */
+  private settleSessionTitle(runtime: SessionRuntime, title: string): void {
+    this.settledTitles.set(runtime.id, title)
+    if (runtime.extras.title === title) return
+    runtime.extras.title = title
+    this.persistExtras(runtime)
+  }
+
+  /**
+   * 写入会话标题。生成结果可能在运行时已被释放（关标签 / 切工作树 / 硬超时重建）
+   * 之后才返回，所以落盘不依赖运行时是否还在——已经生成好的标题不能丢。
+   */
+  private async persistSessionTitle(
+    runtime: SessionRuntime,
+    config: AgentConfig,
+    title: string
+  ): Promise<void> {
+    const id = runtime.id
+    const value = title.trim().slice(0, 80)
+    if (!value) return
+    if (this.sessionTitle(runtime) || this.settledTitles.has(id)) return
 
     try {
-      runtime.sessionManager.appendSessionInfo(title)
-      runtime.updatedAt = Date.now()
-      config.onSessionTitle?.(runtime.id, title)
-      this.logger.info('[Agent Manager] Generated session title:', title)
+      if (this.runtimes.get(id) === runtime) {
+        runtime.sessionManager.appendSessionInfo(value)
+        runtime.updatedAt = Date.now()
+        this.settleSessionTitle(runtime, value)
+      } else if (await this.appendTitleToSessionRecord(id, value)) {
+        this.settledTitles.set(id, value)
+        void this.saveSessionTitleExtra(id, value)
+      } else {
+        this.logger.warn('[Agent Manager] Failed to persist the session title: session is gone')
+        return
+      }
     } catch (error) {
-      this.logger.warn('[Agent Manager] Failed to persist session title:', error)
+      this.logger.warn('[Agent Manager] Failed to persist the session title:', error)
+      return
+    }
+
+    config.onSessionTitle?.(id, value)
+    this.logger.info('[Agent Manager] Generated session title:', value)
+  }
+
+  /** 运行时已释放：按会话 id 找到记录文件，直接补写标题 */
+  private async appendTitleToSessionRecord(id: string, title: string): Promise<boolean> {
+    if (this.deletedSessions.has(id)) return false
+    const config = this.config
+    if (!config) return false
+    const root = config.resolveSessionRoot?.(id) ?? config.workspaceDir
+    const file =
+      (await this.findSessionFile(id)) ?? SessionManager.findById(root, id, this.sessionDir)
+    if (!file) return false
+    const manager = SessionManager.open(file, this.sessionDir, root)
+    if ((manager.getSessionName() ?? '').trim()) return false
+    manager.appendSessionInfo(title)
+    return true
+  }
+
+  /** 运行时已释放：把标题快照写进 sidecar（重开会话时据此补写回记录） */
+  private async saveSessionTitleExtra(id: string, title: string): Promise<void> {
+    if (!this.extrasStore || this.deletedSessions.has(id)) return
+    try {
+      const extras = await this.extrasStore.load(id)
+      if (extras.title === title) return
+      await this.extrasStore.save(id, { ...extras, title })
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Failed to save the session title:', error)
     }
   }
 
@@ -2426,6 +2625,9 @@ export class AgentManager {
    */
   async dispose() {
     await this.disposeAllRuntimes()
+    this.settledTitles.clear()
+    this.creatingRuntimes.clear()
+    this.deletedSessions.clear()
     if (this.envLease) {
       releaseProviderEnv()
       this.envLease = false

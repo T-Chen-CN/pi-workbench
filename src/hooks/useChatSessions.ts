@@ -1,6 +1,6 @@
 /** 会话初始化、标签、历史与增删改 */
 
-import { useCallback, useEffect, type MutableRefObject, type RefObject } from 'react'
+import { useCallback, useEffect, useRef, type MutableRefObject, type RefObject } from 'react'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
 import { conversationKey, useChatStore, type ChatMessage } from '../store/chatStore'
@@ -66,8 +66,14 @@ export function useChatSessions(options: ChatSessionsOptions) {
       .catch(() => undefined)
   }, [workspacePath])
 
+  // 列表请求可能乱序返回（每次回复结束都会刷新两次），只接受最后一次发起的请求结果，
+  // 否则晚到的旧快照会把刚生成的标题改回首条消息文本。
+  const sessionsSeqRef = useRef(0)
+
   const refreshSessions = useCallback(async () => {
+    const seq = ++sessionsSeqRef.current
     const result = await piAgentAPI.sessionsList(workspacePath)
+    if (seq !== sessionsSeqRef.current) return
     if (result.success && result.sessions) {
       useSessionStore.getState().setSessions(workspacePath, result.sessions)
     }
@@ -229,7 +235,8 @@ export function useChatSessions(options: ChatSessionsOptions) {
 
     const offTitle = piAgentAPI.onSessionTitle(({ workspaceDir, sessionId, title }) => {
       if (workspaceDir !== workspacePath) return
-      useSessionStore.getState().updateSession(workspacePath, sessionId, { title })
+      // 标题已确定：钉住它，后续任何列表刷新都不能再改写
+      useSessionStore.getState().pinTitle(workspacePath, sessionId, title)
     })
 
     return () => {
@@ -369,9 +376,7 @@ export function useChatSessions(options: ChatSessionsOptions) {
         )
         return
       }
-      useSessionStore
-        .getState()
-        .updateSession(workspacePath, session.id, { title: name.trim() })
+      useSessionStore.getState().pinTitle(workspacePath, session.id, name.trim())
       void refreshSessions()
     },
     [refreshSessions, t, workspacePath]

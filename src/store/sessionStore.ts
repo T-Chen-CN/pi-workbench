@@ -33,10 +33,17 @@ interface SessionState {
   needsAction: Record<string, NeedsActionReason>
   /** 通知点击后待激活的会话（工作区切换完成后由 ChatPanel 消费） */
   pendingActivation: { workspaceDir: string; sessionId: string } | null
+  /**
+   * `workspacePath\0sessionId` -> 已确定的标题。
+   * 由 `agent:session-title`（模型生成）与手动重命名写入，之后任何列表刷新都不能
+   * 把它改回空或旧的回退文本：标题确定后不允许在屏幕上再变。
+   */
+  pinnedTitles: Record<string, string>
 
   requestActivation: (workspaceDir: string, sessionId: string) => void
   clearPendingActivation: () => void
   setSessions: (workspacePath: string, sessions: SessionSummary[]) => void
+  pinTitle: (workspacePath: string, sessionId: string, title: string) => void
   setOpen: (workspacePath: string, open: string[], active: string | null) => void
   setActive: (workspacePath: string, active: string | null) => void
   addOpen: (workspacePath: string, sessionId: string, summary?: SessionSummary) => boolean
@@ -64,6 +71,40 @@ function workspace(state: SessionState, path: string): WorkspaceSessions {
   return state.byWorkspace[path] ?? EMPTY_WORKSPACE
 }
 
+function titleKey(path: string, sessionId: string): string {
+  return `${path}\u0000${sessionId}`
+}
+
+/** 已确定的标题优先于任何传入的会话摘要 */
+function withPinnedTitle(
+  state: SessionState,
+  path: string,
+  session: SessionSummary
+): SessionSummary {
+  const pinned = state.pinnedTitles[titleKey(path, session.id)]
+  return pinned && pinned !== session.title ? { ...session, title: pinned } : session
+}
+
+/**
+ * 列表刷新只允许补全标题：已确定的标题（钉住 / 已有非空值）不会被刷成空。
+ * 标题变空只可能来自会话还没定名，绝不应当把已经显示出来的标题收回。
+ */
+function applyTitlePolicy(
+  state: SessionState,
+  path: string,
+  sessions: SessionSummary[]
+): SessionSummary[] {
+  const previous = new Map(
+    (state.byWorkspace[path]?.sessions ?? []).map((session) => [session.id, session])
+  )
+  return sessions.map((session) => {
+    const resolved = withPinnedTitle(state, path, session)
+    if (resolved.title?.trim()) return resolved
+    const previousTitle = previous.get(session.id)?.title?.trim()
+    return previousTitle ? { ...resolved, title: previousTitle } : resolved
+  })
+}
+
 function withWorkspace(
   state: SessionState,
   path: string,
@@ -84,6 +125,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   errors: {},
   needsAction: {},
   pendingActivation: null,
+  pinnedTitles: {},
 
   requestActivation: (workspaceDir, sessionId) =>
     set({ pendingActivation: { workspaceDir, sessionId } }),
@@ -91,7 +133,29 @@ export const useSessionStore = create<SessionState>((set) => ({
   clearPendingActivation: () => set({ pendingActivation: null }),
 
   setSessions: (path, sessions) =>
-    set((state) => withWorkspace(state, path, { sessions })),
+    set((state) =>
+      withWorkspace(state, path, { sessions: applyTitlePolicy(state, path, sessions) })
+    ),
+
+  /** 钉住一个已确定的标题，并立即应用；之后的列表刷新无法再降级或改写它 */
+  pinTitle: (path, sessionId, title) =>
+    set((state) => {
+      const value = title.trim()
+      if (!value) return state
+      const current = workspace(state, path)
+      return {
+        pinnedTitles: { ...state.pinnedTitles, [titleKey(path, sessionId)]: value },
+        byWorkspace: {
+          ...state.byWorkspace,
+          [path]: {
+            ...current,
+            sessions: current.sessions.map((session) =>
+              session.id === sessionId ? { ...session, title: value } : session
+            ),
+          },
+        },
+      }
+    }),
 
   setOpen: (path, open, active) =>
     set((state) => withWorkspace(state, path, { open, active })),
@@ -105,9 +169,11 @@ export const useSessionStore = create<SessionState>((set) => ({
       const existing = current.sessions.find((session) => session.id === sessionId)
       const nextSessions =
         summary && !existing
-          ? [...current.sessions, summary]
+          ? [...current.sessions, withPinnedTitle(state, path, summary)]
           : summary && existing
-            ? current.sessions.map((session) => (session.id === sessionId ? summary : session))
+            ? current.sessions.map((session) =>
+                session.id === sessionId ? withPinnedTitle(state, path, summary) : session
+              )
             : current.sessions
 
       if (current.open.includes(sessionId)) {
@@ -161,16 +227,27 @@ export const useSessionStore = create<SessionState>((set) => ({
         active: nextActive,
       })
     })
+    set((state) => {
+      const pinnedTitles = { ...state.pinnedTitles }
+      delete pinnedTitles[titleKey(path, sessionId)]
+      return { pinnedTitles }
+    })
     return nextActive
   },
 
   updateSession: (path, sessionId, patch) =>
     set((state) => {
       const current = workspace(state, path)
+      const pinned = state.pinnedTitles[titleKey(path, sessionId)]
       return withWorkspace(state, path, {
-        sessions: current.sessions.map((session) =>
-          session.id === sessionId ? { ...session, ...patch } : session
-        ),
+        sessions: current.sessions.map((session) => {
+          if (session.id !== sessionId) return session
+          const next = { ...session, ...patch }
+          // 已显示的标题不被清空；已确定的标题以钉住的为准
+          if (!next.title?.trim() && session.title?.trim()) next.title = session.title
+          if (pinned) next.title = pinned
+          return next
+        }),
       })
     }),
 
@@ -229,7 +306,10 @@ export const useSessionStore = create<SessionState>((set) => ({
       const needsAction = Object.fromEntries(
         Object.entries(state.needsAction).filter(([key]) => !key.startsWith(prefix))
       )
-      return { byWorkspace, streaming, unread, errors, needsAction }
+      const pinnedTitles = Object.fromEntries(
+        Object.entries(state.pinnedTitles).filter(([key]) => !key.startsWith(prefix))
+      )
+      return { byWorkspace, streaming, unread, errors, needsAction, pinnedTitles }
     }),
 
   reset: () =>
@@ -240,5 +320,6 @@ export const useSessionStore = create<SessionState>((set) => ({
       errors: {},
       needsAction: {},
       pendingActivation: null,
+      pinnedTitles: {},
     }),
 }))
