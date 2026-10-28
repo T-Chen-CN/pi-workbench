@@ -37,6 +37,8 @@ const SIDEBAR_MAX = 420
 const GIT_SIDEBAR_MAX = 720
 const CHAT_MIN = 280
 const CHAT_MAX = 560
+/** 两侧可拖拽面板都给编辑器留出的最小宽度，低于这个值预览区就只剩一道缝 */
+const EDITOR_MIN = 260
 
 type SidebarTab = 'files' | 'git'
 
@@ -99,13 +101,22 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
   const maxSidebarWidth = useCallback(
     (tab: SidebarTab) => {
       const total = containerWidth || containerRef.current?.clientWidth || window.innerWidth
-      const reserved = 260 + (showChat ? chatWidth : 0)
+      const reserved = EDITOR_MIN + (showChat ? chatWidth : 0)
       const limit = tab === 'git' ? GIT_SIDEBAR_MAX : SIDEBAR_MAX
       return Math.max(SIDEBAR_MIN, Math.min(limit, total - reserved))
     },
     [containerWidth, showChat, chatWidth]
   )
   const sidebarWidth = Math.min(sidebarWidths[sidebarTab], maxSidebarWidth(sidebarTab))
+
+  /** 聊天栏同样要给编辑器留出 EDITOR_MIN：只受 280/560 绝对上下限约束会把预览区压成 0 并被自己盖住 */
+  const maxChatWidth = useCallback(() => {
+    const total = containerWidth || containerRef.current?.clientWidth || window.innerWidth
+    const reserved = EDITOR_MIN + (showSidebar ? sidebarWidth : 0)
+    return Math.max(CHAT_MIN, Math.min(CHAT_MAX, total - reserved))
+  }, [containerWidth, showSidebar, sidebarWidth])
+  // 窗口变窄时聊天列跟着收，和侧栏的显示宽度保持同一套规则
+  const chatWidthShown = Math.min(chatWidth, maxChatWidth())
 
   const collapseSidebar = useCallback(() => {
     sidebarFocusIntent.current = true
@@ -206,7 +217,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
       const initial =
         target === 'sidebar'
           ? Math.min(sidebarWidths[sidebarTab], maxSidebarWidth(sidebarTab))
-          : chatWidth
+          : chatWidthShown
 
       const onMove = (moveEvent: PointerEvent) => {
         const delta = moveEvent.clientX - startX
@@ -214,7 +225,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
           const width = clamp(initial + delta, SIDEBAR_MIN, maxSidebarWidth(sidebarTab))
           setSidebarWidths((current) => ({ ...current, [sidebarTab]: width }))
         } else {
-          setChatWidth(clamp(initial - delta, CHAT_MIN, CHAT_MAX))
+          setChatWidth(clamp(initial - delta, CHAT_MIN, maxChatWidth()))
         }
       }
       const onUp = () => {
@@ -228,7 +239,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
     },
-    [sidebarWidths, sidebarTab, maxSidebarWidth, chatWidth]
+    [sidebarWidths, sidebarTab, maxSidebarWidth, chatWidthShown, maxChatWidth]
   )
 
   return (
@@ -310,7 +321,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
         )}
 
         <section className="flex min-w-0 flex-1 flex-col">
-          <div className="relative flex min-h-0 min-w-0 flex-1">
+          <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
             <Suspense
               fallback={
                 <div className="flex min-h-0 flex-1 items-center justify-center bg-surface">
@@ -349,7 +360,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
             <aside
               id={chatPanelId}
               className="flex-shrink-0 overflow-hidden bg-panel"
-              style={{ width: chatWidth }}
+              style={{ width: chatWidthShown }}
             >
               <ChatPanel
                 workspacePath={workspacePath}

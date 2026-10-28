@@ -531,7 +531,7 @@ export const MonacoEditor: React.FC<{
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-surface">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface">
       <div className="flex flex-shrink-0 items-stretch overflow-x-auto border-b border-rule-divide bg-panel">
         {openFiles.map((file) => {
           const active = currentFile?.path === file.path
@@ -611,7 +611,7 @@ export const MonacoEditor: React.FC<{
           </button>
         </div>
       )}
-      <div ref={editorRef} className="min-h-0 flex-1" />
+      <div ref={editorRef} className="min-h-0 min-w-0 flex-1" />
     </div>
   )
 }
