@@ -18,7 +18,7 @@
 
 ## 当前版本
 
-- **版本**: 0.6.4
+- **版本**: 0.7.0
 - **框架**: Electron 44 + React 19 + TypeScript
 - **Agent**: `@earendil-works/pi-coding-agent` 1.3.0
 - **状态**: Phase 6 持续优化
@@ -197,6 +197,8 @@
 - ✅ 2026-10-28 面板拆分为独立窗口：文件树 / Git / 聊天 / 终端可右键或拖动拆成辅助窗口（与主窗口同一套无边框自绘外壳 + 34px 标题栏，窗口按钮按 `frameName` 寻址），关闭窗口即回位，原位保留占位不塌陷布局；面板以子文档 portal 渲染，共享同一份 store，终端 PTY 与 200KB 回放缓冲升到 `terminalStore`，展开目录与滚动位置随窗口带走；应用改由 `pw-app://` 协议加载以统一 origin；布局不持久化。拖出柄按主进程真实光标判定（`dropEffect` 不能作取消判据）。设计系统 v1.36，决策见 [ADR-001](../decisions/ADR-001-detachable-panels.md)
 - ✅ 2026-10-28 发布 v0.6.4：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含按模型配置上下文窗口（64K / 128K / 256K / 1M 档位 + 图像能力表，`maxTokens` 随档位并受目录值钳制，旧 `availableModels` / `imageModels` 读取时迁移，会话运行中拒绝重建性质的保存）、窄侧栏提交列表两行网格与按实测宽度折叠 refs、Git 自动同步把 fetch 事件与 watcher 竞速解耦（新提交不再丢失 `reason: fetch`）、聊天栏变宽时编辑器列正确收缩（`min-w-0` + `overflow-hidden`，聊天栏宽度受容器与编辑器预留约束）
 - ✅ 2026-10-28 聊天图片附件按 id 消费：提交时立即从输入框消费本轮图片（不再等流式结束才清空），流式期间新加的图片留给下一轮；排队消息携带自己的图片（内存态，按项目所有者要求移除 R-02 的 `pending-messages.json` 持久化与 `chat:pending:get/set` IPC）；运行中插话支持带图与纯图片（`agent:steer` 允许空文本 + 图片）；重试 / 编辑重发 / 计划执行不读取也不消费输入框附件；纯图片（无文本）可发送，纯图片会话直接写固定标题「图片对话 / Image chat」（Anthropic 端点补占位文本，避开空 text 块 400）。type-check / lint / 729 用例通过
+- ✅ 2026-10-28 文件阅读视图：编辑器按类型分派阅读 / 源码两种形态，Markdown 与 HTML 默认渲染、可切回 Monaco；图片 / 视频 / 音频走只读协议 `pw-file://` 预览并提供系统打开；Markdown 支持块级就地编辑；PDF 改为 pdf.js 自绘（单一滚动容器 + canvas 虚拟化、适应宽度与 50%–400% 缩放、页码 / 翻页 / 键盘），不再依赖 Chromium 内置查看器；标签条按类型出图标并在右侧提供单一视图切换按钮。阅读视图与 Monaco 常驻只切显隐，切换实测 27ms。设计系统 v1.37
+- ✅ 2026-10-28 发布 v0.7.0：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含文件阅读视图与 pdf.js PDF 阅读器、面板拆分独立窗口（`pw-app://` 外壳 + 无边框自绘标题栏 + 拖出拆分）、聊天图片附件按 id 消费（排队项与运行中插话可带图、纯图片允许发送）、Agent 自动压缩后不再误报「无响应」、两个自定义 scheme 特权改为一次注册（修复合并后 `pw-file` 丢失 `stream` / `standard` / `fetch` 特权导致的媒体拖动与 HTML 相对路径问题）
 - ✅ 大文件模式与虚滚动（2026-10-21：聊天 / Diff / 文件树虚拟滚动，>2MB 关闭换行折叠，>10MB 只读）
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
