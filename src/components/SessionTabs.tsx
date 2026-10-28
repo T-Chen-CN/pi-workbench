@@ -1,8 +1,9 @@
 import React from 'react'
-import { AlertCircle, History, Pencil, Plus, X } from 'lucide-react'
+import { AlertCircle, History, Pencil, Plus } from 'lucide-react'
 import { conversationKey, useChatStore } from '../store/chatStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useSessionStore } from '../store/sessionStore'
+import { handleTabStripWheel, Tab } from './patterns'
 import { IconButton } from './ui'
 import type { SessionSummary } from '../types/electron'
 
@@ -47,9 +48,10 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
       <div
         role="tablist"
         aria-label={t('sessions')}
-        className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
+        onWheel={handleTabStripWheel}
+        className="tab-strip-scroll flex min-w-0 flex-1 items-stretch overflow-x-auto"
       >
-        {open.map((id) => {
+        {open.map((id, index) => {
           const session = byId.get(id)
           const key = conversationKey(workspacePath, id)
           const isActive = id === active
@@ -74,25 +76,20 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
             ? `${accessible}：${error.slice(0, 80)}`
             : accessible
           return (
-            <div
+            <Tab
               key={id}
-              className={`group flex h-full max-w-[190px] flex-shrink-0 items-center gap-1.5 border-r border-rule-divide pl-3 pr-1 type-label transition-colors ${
-                isActive
-                  ? 'bg-surface text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
-                  : 'text-ink-muted hover:bg-hover hover:text-ink'
-              }`}
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                aria-busy={isStreaming || undefined}
-                aria-label={accessible}
-                title={tooltip}
-                onClick={() => onSelect(id)}
-                className="flex min-w-0 items-center gap-1.5 bg-transparent text-inherit"
-              >
-                {isStreaming ? (
+              active={isActive}
+              tabbable={isActive || (!active && index === 0)}
+              busy={isStreaming}
+              ariaLabel={accessible}
+              title={tooltip}
+              onSelect={() => onSelect(id)}
+              onClose={() => onClose(id)}
+              closeLabel={t('closeSessionTab')}
+              className="max-w-[190px]"
+              label={title}
+              leading={
+                isStreaming ? (
                   <span
                     aria-hidden="true"
                     className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-accent"
@@ -117,33 +114,19 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
                   />
                 ) : (
                   <span className="h-1.5 w-1.5 flex-shrink-0" aria-hidden="true" />
-                )}
-                <span className="truncate">{title}</span>
-                {draft && (
+                )
+              }
+              trailing={
+                draft ? (
                   <span
-                    title={draftLabel}
                     aria-label={draftLabel}
                     className="flex flex-shrink-0 items-center text-ink-subtle"
                   >
                     <Pencil size={9} aria-hidden="true" />
                   </span>
-                )}
-              </button>
-              <button
-                type="button"
-                aria-label={t('closeSessionTab')}
-                title={t('closeSessionTab')}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onClose(id)
-                }}
-                className={`flex h-6 w-6 flex-shrink-0 items-center justify-center text-ink-muted transition-opacity hover:text-ink focus-visible:opacity-100 ${
-                  isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                }`}
-              >
-                <X size={10} />
-              </button>
-            </div>
+                ) : null
+              }
+            />
           )
         })}
       </div>

@@ -340,6 +340,16 @@ button {
   -webkit-app-region: no-drag;
 }
 
+/* 标签条：横向滚动条不占标签高度（10px 滚动条会吃掉 34px 标签近三成命中区），
+   溢出时靠滚轮横移与键盘聚焦滚入视野 */
+.tab-strip-scroll {
+  scrollbar-width: none;
+}
+
+.tab-strip-scroll::-webkit-scrollbar {
+  height: 0;
+}
+
 /* 极淡纸张纹理，仅用于欢迎页 */
 .paper-noise {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");

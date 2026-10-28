@@ -185,4 +185,25 @@ describe('design system usage', () => {
     }
     expect(violations, violations.join('\n')).toEqual([])
   })
+
+  // 命中区规则：标签的可点区域必须是标签矩形本体（patterns.tsx 的 Tab），
+  // 不允许业务组件再拼一层「wrapper + 内层小按钮」，那会让 padding 变成死区。
+  it('builds tabs only from the shared Tab pattern', () => {
+    const violations: string[] = []
+    for (const file of businessFiles) {
+      const rel = relative(SRC, file).replace(/\\/g, '/')
+      const source = readFileSync(file, 'utf-8')
+      for (const match of source.matchAll(/role="tab"/g)) {
+        const line = source.slice(0, match.index).split('\n').length
+        violations.push(`${rel}:${line} — 自行拼装 role="tab"，改用 patterns.tsx 的 Tab`)
+      }
+    }
+    expect(violations, violations.join('\n')).toEqual([])
+  })
+
+  it('keeps the tab close target at least 24px', () => {
+    const patterns = readFileSync(resolve(SRC, 'components/patterns.tsx'), 'utf-8')
+    const close = patterns.slice(patterns.indexOf('data-tab-aux=""'))
+    expect(close).toContain('h-6 w-6')
+  })
 })

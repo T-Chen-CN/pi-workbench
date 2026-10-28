@@ -1,5 +1,5 @@
 import React from 'react'
-import { Search, type LucideIcon } from 'lucide-react'
+import { Search, X, type LucideIcon } from 'lucide-react'
 import { Caption, DataText, Label, Value } from './ui'
 
 export type StatusTone = 'default' | 'muted' | 'accent' | 'success' | 'warning' | 'danger'
@@ -399,3 +399,142 @@ export const SearchField: React.FC<SearchFieldProps> = ({
     />
   </div>
 )
+
+/* ------------------------------------------------------------------
+   标签条（Tab）
+
+   可点区域 = 可视矩形：点击处理在标签本体上，内边距长在标签本体上，
+   文字层 pointer-events-none，关闭按钮用 data-tab-aux 标记并阻断冒泡。
+   禁止把点击处理留在「无 handler 的 wrapper 里的内层小按钮」上。
+------------------------------------------------------------------- */
+
+export interface TabProps {
+  active?: boolean
+  /** roving tabindex：标签条里恰好一个 0；无激活项时由调用方指定首个 */
+  tabbable?: boolean
+  size?: 'md' | 'sm'
+  leading?: React.ReactNode
+  label: React.ReactNode
+  trailing?: React.ReactNode
+  labelClassName?: string
+  title?: string
+  ariaLabel?: string
+  busy?: boolean
+  onSelect: () => void
+  /** 提供即渲染关闭按钮（24px 命中区，图标 10px）；中键同样关闭 */
+  onClose?: () => void
+  closeLabel?: string
+  className?: string
+}
+
+const TAB_SIZES = {
+  md: 'h-[34px]',
+  sm: 'h-8',
+}
+
+export const Tab = React.forwardRef<HTMLDivElement, TabProps>(function Tab(
+  {
+    active = false,
+    tabbable,
+    size = 'md',
+    leading,
+    label,
+    trailing,
+    labelClassName = '',
+    title,
+    ariaLabel,
+    busy = false,
+    onSelect,
+    onClose,
+    closeLabel,
+    className = '',
+  },
+  ref
+) {
+  return (
+    <div
+      ref={ref}
+      role="tab"
+      aria-selected={active}
+      aria-busy={busy || undefined}
+      aria-label={ariaLabel}
+      title={title}
+      tabIndex={(tabbable ?? active) ? 0 : -1}
+      data-tab=""
+      onClick={(event) => {
+        // 次级动作自己阻断冒泡之外再兜一层：将来漏写 stopPropagation 也不会误切标签
+        if ((event.target as HTMLElement).closest('[data-tab-aux]')) return
+        onSelect()
+      }}
+      onAuxClick={(event) => {
+        if (event.button !== 1 || !onClose) return
+        event.preventDefault()
+        onClose()
+      }}
+      onKeyDown={handleTabListKeyDown}
+      className={`group flex ${TAB_SIZES[size]} flex-shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-rule-divide pl-3 pr-1 type-label transition-colors focus-visible:outline-offset-[-2px] ${
+        active
+          ? 'bg-surface text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
+          : 'text-ink-muted hover:bg-hover hover:text-ink'
+      } ${className}`}
+    >
+      {/* 文字与装饰不接触指针事件：整块矩形都落到标签本体 */}
+      <span className="pointer-events-none flex min-w-0 items-center gap-1.5">
+        {leading}
+        <span className={`truncate ${labelClassName}`}>{label}</span>
+        {trailing}
+      </span>
+      {onClose && (
+        <button
+          data-tab-aux=""
+          type="button"
+          aria-label={closeLabel}
+          title={closeLabel}
+          onClick={(event) => {
+            event.stopPropagation()
+            onClose()
+          }}
+          className={`ml-1 flex h-6 w-6 flex-shrink-0 items-center justify-center text-ink-muted transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 ${
+            active ? 'opacity-100' : 'opacity-0'
+          }`}
+        >
+          <X size={10} aria-hidden="true" />
+        </button>
+      )}
+    </div>
+  )
+})
+
+/**
+ * 标签条键盘模型（WAI-ARIA APG Tabs，自动激活）：←/→ 循环、Home/End 到两端、
+ * Enter / Space 激活当前项。焦点移动后直接派发 click，选中逻辑仍只有标签条自己那一份。
+ */
+export function handleTabListKeyDown(event: React.KeyboardEvent<HTMLElement>): void {
+  const { key } = event
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' '].includes(key)) return
+  // 关闭按钮等次级控件自己处理按键，不参与标签间移动
+  if ((event.target as HTMLElement).closest('[data-tab-aux]')) return
+  const strip = event.currentTarget.parentElement
+  if (!strip) return
+  const tabs = Array.from(strip.querySelectorAll<HTMLElement>('[role="tab"]'))
+  const index = tabs.indexOf(event.currentTarget as HTMLElement)
+  if (index < 0) return
+
+  let next = index
+  if (key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length
+  else if (key === 'ArrowRight') next = (index + 1) % tabs.length
+  else if (key === 'Home') next = 0
+  else if (key === 'End') next = tabs.length - 1
+
+  event.preventDefault()
+  tabs[next].focus()
+  tabs[next].click()
+}
+
+/** 标签条横向滚动：滚轮直接横移，标签条上的滚动条因此可以隐藏（不占 34px 高度） */
+export function handleTabStripWheel(event: React.WheelEvent<HTMLElement>): void {
+  if (event.deltaY === 0 || event.deltaX !== 0) return
+  const strip = event.currentTarget
+  if (strip.scrollWidth <= strip.clientWidth) return
+  strip.scrollLeft += event.deltaY
+}
