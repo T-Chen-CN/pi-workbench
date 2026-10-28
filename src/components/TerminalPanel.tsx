@@ -14,6 +14,7 @@ import { toast } from '../store/toastStore'
 import { IconButton } from './ui'
 import { useHostId } from '../panelHost/HostContext'
 import { usePanelContextMenu } from './PanelContextMenu'
+import { PanelDragHandle } from './PanelDragHandle'
 import { MAIN_HOST } from '../panelHost/types'
 import { basename } from '../utils/filePath'
 
@@ -198,7 +199,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         className="flex h-7 flex-shrink-0 items-center justify-between border-b border-rule-divide px-3.5"
       >
         <div className="flex items-center gap-3 type-label text-ink-muted">
-          <span className="font-medium text-ink-muted">{t('terminal')}</span>
+          <span className="flex items-center gap-1.5">
+            <PanelDragHandle panel="terminal" />
+            <span className="font-medium text-ink-muted">{t('terminal')}</span>
+          </span>
           {shellName && <span className="border-b border-accent pb-0.5 type-data text-ink">{shellName}</span>}
           {status === 'starting' && <span>{t('terminalStarting')}</span>}
           {status === 'error' && <span className="text-danger">{error}</span>}

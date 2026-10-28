@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.34 |
+| 文档版本 | v1.35 |
 | 状态 | Active（正式规范） |
 | 最后更新 | 2026-10-28 |
 | 适用范围 | 渲染进程全部 UI、Monaco / xterm 主题、应用主题设置 |
@@ -561,7 +561,10 @@
 - **外壳使用系统原生标题栏**（`frame: true` + `autoHideMenuBar`）。这是规范中唯一不用自绘标题栏的窗口：它不承载品牌区与窗口按钮组，自绘收益低于成本，三个平台保持一致。最小尺寸 320×220；首帧背景取 `--panel`，避免开窗白闪。
 - **32px 窗口信息栏**是辅助窗口内唯一新增的结构：`bg-panel` + 底部 `border-rule-divide`；左侧 `type-label text-ink-muted` 显示面板名（复用面板自己的标题文案），右侧 28px `IconButton`（`PanelRightClose`，label「还原到主窗口」）。信息栏不加第二行元数据，不加分隔线以外的装饰。
 - **分离后原位占位，不塌陷布局**：原位置渲染 `EmptyState`（图标 `PanelTopOpen`）：标题「面板已在独立窗口打开」、说明「关闭那个窗口即可让它回到这里。」，动作为 `secondary`「定位到独立窗口」+ `ghost`「还原到主窗口」。占位底色 `bg-panel`。
-- **入口统一为右键菜单**：面板头部 / 侧栏标签右键弹出。形态与 `FileExplorer` 的节点菜单一致（`fixed inset-0` 遮罩 + `bg-raised` + 满墨 `border-line` + `shadow-print`，`min-w-[190px]`，`type-value` 行 `px-3 py-1.5`），按当前状态只给一个动作：`ExternalLink`「在独立窗口中打开」或 `PanelRightClose`「还原到主窗口」。不新增常驻按钮。
+- **两个入口：右键菜单与拖出柄**。
+  - 右键菜单：面板头部右键弹出。形态与 `FileExplorer` 的节点菜单一致（`fixed inset-0` 遮罩 + `bg-raised` + 满墨 `border-line` + `shadow-print`，`min-w-[190px]`，`type-value` 行 `px-3 py-1.5`），按当前状态只给一个动作：`ExternalLink`「在独立窗口中打开」或 `PanelRightClose`「还原到主窗口」。
+  - 拖出柄：面板头部标题左侧的 12px `GripVertical`（`text-ink-subtle`，hover `text-ink-muted`，`cursor-grab`/`active:cursor-grabbing`）。拖到主窗口之外松手即拆出，落点由主进程读真实光标位置决定；在主窗口内松手不算拆分。拖出柄只在面板停靠主窗口时出现，拆出的面板靠关闭按钮回位，不新增常驻按钮。
+  - 拆出瞬间原位置立即换成占位，不等子窗口首帧。
 - **主题与语言跟随主窗口**：辅助窗口镜像 `html.class`（Paper / Ink）、`lang`、`data-lang`，切换主题即时同步，不重开窗口。辅助窗口内不执行任何脚本（`script-src 'none'`）。
 - **提示与对话框按窗口落点**：toast 与 `DialogHost` 每个窗口各挂一份，只显示属于该窗口的条目；落点由「哪个窗口持有焦点」决定，不再弹回主窗口。
 - **明确不做**：不做布局持久化（重启回到默认布局）、不做窗口内拖拽重排、辅助窗口里不放 Monaco / Diff / 设置。
@@ -667,7 +670,7 @@
 | 编辑器主题 | `src/components/MonacoEditor.tsx`（`pi-paper` / `pi-ink`） |
 | 终端主题 | `src/components/TerminalPanel.tsx` |
 | 第三方主题 token 桥 | `src/theme/tokens.ts`（`readThemeTokens` / `tokenHex`） |
-| 辅助窗口（面板拆分） | `src/panelHost/`、`src/components/PanelSlot.tsx`、`src/components/PanelWindowFrame.tsx`、`src/components/PanelContextMenu.tsx`、`src/store/panelStore.ts` |
+| 辅助窗口（面板拆分） | `src/panelHost/`、`src/components/PanelSlot.tsx`、`src/components/PanelWindowFrame.tsx`、`src/components/PanelContextMenu.tsx`、`src/components/PanelDragHandle.tsx`、`src/store/panelStore.ts` |
 | 窗口外壳 / 标题栏 | `electron/main.ts`、`electron/preload.cts` |
 | 自绘窗口按钮 | `src/components/WindowControls.tsx` |
 | 拖拽区工具类 | `src/index.css`（`.app-drag` / `.app-no-drag`） |

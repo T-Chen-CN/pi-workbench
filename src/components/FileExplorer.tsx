@@ -20,6 +20,7 @@ import { useEditorStore, editorStoreFor } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { usePanelContextMenu } from './PanelContextMenu'
 import { readPanelUi, writePanelUi } from '../panelHost/panelUiState'
+import { PanelDragHandle } from './PanelDragHandle'
 import { useSettingsStore } from '../store/settingsStore'
 import { localizeError } from '../i18n/errors'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
@@ -537,7 +538,10 @@ export const FileExplorer: React.FC<{
           onCollapse ? 'pr-2' : 'pr-3'
         }`}
       >
-        <h3 className="m-0 type-label text-ink-muted">{t('files')}</h3>
+        <div className="flex items-center gap-1.5">
+          <PanelDragHandle panel="files" />
+          <h3 className="m-0 type-label text-ink-muted">{t('files')}</h3>
+        </div>
         <div className="flex items-center gap-1">
           {loading && <Loader2 size={13} className="animate-spin text-ink-muted" />}
           {error && (

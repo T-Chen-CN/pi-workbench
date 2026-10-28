@@ -22,6 +22,7 @@ import { useGitStore } from '../store/gitStore'
 import { useI18nStore } from '../store/i18nStore'
 import { usePanelContextMenu } from './PanelContextMenu'
 import { readPanelUi, writePanelUi } from '../panelHost/panelUiState'
+import { PanelDragHandle } from './PanelDragHandle'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
@@ -884,6 +885,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
             onContextMenu={panelMenu.onContextMenu}
             className="flex h-[34px] flex-none items-center gap-1.5 border-b border-rule-divide px-2"
           >
+            <PanelDragHandle panel="git" />
             <span className="h-2 w-2 flex-none rounded-full bg-accent" aria-hidden="true" />
             <span className="min-w-0 truncate type-label text-ink">{t('gitWorkingTree')}</span>
             <span className="ml-auto flex-none type-caption text-ink-subtle">{dayLabel}</span>
@@ -905,6 +907,7 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
             onContextMenu={panelMenu.onContextMenu}
             className="flex h-[32px] flex-none items-center gap-1.5 border-b border-rule-divide px-2.5"
           >
+            <PanelDragHandle panel="git" />
             <span className="flex-none type-data text-ink-muted">
               ↑{ahead} ↓{behind}
             </span>
