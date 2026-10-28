@@ -35,9 +35,15 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
   const active = state?.active ?? null
 
   const byId = new Map(sessions.map((session) => [session.id, session]))
+  /** 已打开但还没有标题的会话；多于一个时追加序号，避免多开时无从区分 */
+  const untitled = open.filter((id) => !byId.get(id)?.title?.trim())
+  const untitledLabel = (id: string) =>
+    untitled.length > 1
+      ? `${t('untitledSession')} ${untitled.indexOf(id) + 1}`
+      : t('untitledSession')
 
   return (
-    <div className="flex flex-shrink-0 items-stretch border-b border-rule-divide bg-panel">
+    <div className="flex h-[34px] flex-shrink-0 items-stretch bg-panel">
       <div
         role="tablist"
         aria-label={t('sessions')}
@@ -52,7 +58,7 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
           const error = errors[key]
           const actionReason = needsAction[key]
           const draft = Boolean(conversations[key]?.draftInput.trim())
-          const title = session?.title?.trim() || t('untitledSession')
+          const title = session?.title?.trim() || untitledLabel(id)
           const statusLabel = isStreaming
             ? t('sessionRunning')
             : error
@@ -70,10 +76,10 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
           return (
             <div
               key={id}
-              className={`group flex h-8 max-w-[190px] flex-shrink-0 items-center gap-1.5 border-r border-rule-divide pl-3 pr-1 type-label transition-colors ${
+              className={`group flex h-full max-w-[190px] flex-shrink-0 items-center gap-1.5 border-r border-rule-divide pl-3 pr-1 type-label transition-colors ${
                 isActive
                   ? 'bg-surface text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
-                  : 'text-ink-muted hover:bg-hover hover:text-ink'
+                  : 'border-b border-rule-divide text-ink-muted hover:bg-hover hover:text-ink'
               }`}
             >
               <button
@@ -131,7 +137,9 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
                   event.stopPropagation()
                   onClose(id)
                 }}
-                className="flex h-4 w-4 flex-shrink-0 items-center justify-center text-ink-muted opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100"
+                className={`flex h-6 w-6 flex-shrink-0 items-center justify-center text-ink-muted transition-opacity hover:text-ink focus-visible:opacity-100 ${
+                  isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                }`}
               >
                 <X size={10} />
               </button>
@@ -139,7 +147,7 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
           )
         })}
       </div>
-      <div className="flex flex-shrink-0 items-center gap-0.5 px-1">
+      <div className="flex flex-shrink-0 items-center gap-0.5 border-b border-rule-divide pl-1 pr-0.5">
         <IconButton icon={Plus} label={t('newSession')} size="sm" onClick={onNew} />
         <IconButton icon={History} label={t('sessionList')} size="sm" onClick={onOpenList} />
       </div>

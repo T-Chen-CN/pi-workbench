@@ -174,7 +174,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
   }
 
   return (
-    <div className="relative flex h-full flex-col bg-panel">
+    <div className="relative flex h-full flex-col bg-surface">
       <ChatHeader
         onCollapse={onCollapse}
         collapseButtonRef={collapseButtonRef}

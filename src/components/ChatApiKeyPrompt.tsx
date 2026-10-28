@@ -26,7 +26,7 @@ export const ChatApiKeyPrompt: React.FC<ChatApiKeyPromptProps> = ({
   const panelMenu = usePanelContextMenu('chat')
 
   return (
-    <div className="flex h-full flex-col bg-panel">
+    <div className="flex h-full flex-col bg-surface">
       {onCollapse && (
         <div
           className="flex h-[38px] flex-shrink-0 items-center gap-2.5 border-b border-rule-divide pl-2 pr-3.5"
