@@ -47,12 +47,21 @@ export function createWorkspaceStore(dbPath: string): WorkspaceStore {
       'ON CONFLICT(path) DO UPDATE SET opened_at = excluded.opened_at, ' +
       'open_count = workspaces.open_count + 1'
   )
-  const listStmt = db.prepare('SELECT path, opened_at, open_count FROM workspaces ORDER BY opened_at DESC')
+  const listStmt = db.prepare(
+    'SELECT path, opened_at, open_count FROM workspaces ORDER BY opened_at DESC, rowid DESC'
+  )
   const removeStmt = db.prepare('DELETE FROM workspaces WHERE path = ?')
+  const maxStmt = db.prepare('SELECT MAX(opened_at) AS maxAt FROM workspaces')
+
+  // 同一毫秒内连续打开两个工作区时时间戳会撞车，靠 rowid 兜底排不出「谁更近」。
+  // 记录时保证严格递增，让「刚打开的在最前」在任何时钟精度下都成立。
+  let lastOpenedAt = Number((maxStmt.get() as { maxAt: number | null } | undefined)?.maxAt ?? 0) || 0
 
   return {
-    recordOpen(workspacePath, at = Date.now()) {
-      upsert.run(workspacePath, at)
+    recordOpen(workspacePath, at) {
+      const openedAt = at ?? Math.max(Date.now(), lastOpenedAt + 1)
+      lastOpenedAt = Math.max(lastOpenedAt, openedAt)
+      upsert.run(workspacePath, openedAt)
     },
     list() {
       const rows = listStmt.all() as Array<{

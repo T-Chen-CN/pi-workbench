@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
@@ -37,6 +37,23 @@ describe('workspace store', () => {
     store.remove('F:/c')
     expect(store.listRecent()).toEqual(['F:/b', 'F:/a'])
     store.close()
+  })
+
+  it('keeps the most recently opened workspace first when timestamps collide', () => {
+    const store = createWorkspaceStore(path.join(tmpRoot, 'workspaces.db'))
+    const frozen = 1_700_000_000_000
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(frozen)
+    try {
+      // macOS 上连续调用常常落在同一毫秒，此时不能靠时间戳排序
+      store.recordOpen('F:/a')
+      store.recordOpen('F:/b')
+      store.recordOpen('F:/a')
+      expect(store.listRecent()).toEqual(['F:/a', 'F:/b'])
+      expect(store.list()[0].openedAt).toBeGreaterThan(store.list()[1].openedAt)
+    } finally {
+      spy.mockRestore()
+      store.close()
+    }
   })
 
   it('persists records across re-open', () => {
