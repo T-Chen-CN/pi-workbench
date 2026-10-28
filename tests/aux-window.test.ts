@@ -161,7 +161,7 @@ describe('registerAuxWindowIpc', () => {
 })
 
 interface FakeChild {
-  menuCleared: boolean
+  menuOverridden: boolean
   openHandler: ((details: { url: string }) => { action: string }) | null
   navigations: string[]
   closedHandler: (() => void) | null
@@ -214,7 +214,7 @@ function createHost() {
       openHandler?.(details) ?? { action: 'missing' },
     createWindow: (frameName: string) => {
       const child: FakeChild = {
-        menuCleared: false,
+        menuOverridden: false,
         openHandler: null,
         navigations: [],
         closedHandler: null,
@@ -252,7 +252,7 @@ function createHost() {
           }
         },
         setMenu: () => {
-          child.menuCleared = true
+          child.menuOverridden = true
         },
         setMenuBarVisibility: () => {},
         on: (event: string, handler: () => void) => {
@@ -315,7 +315,8 @@ describe('installAuxWindowSupport', () => {
     host.open({ url: 'about:blank', frameName: `${AUX_FRAME_PREFIX}aux:3`, features: '' })
 
     const child = host.createWindow(`${AUX_FRAME_PREFIX}aux:3`)
-    expect(child.menuCleared).toBe(true)
+    // 不能给子窗口单独设菜单：默认快捷键（Ctrl +/-/0、Ctrl+W）依附在继承来的应用菜单上
+    expect(child.menuOverridden).toBe(false)
     expect(child.openHandler?.({ url: 'about:blank' })).toEqual({ action: 'deny' })
     expect(child.closedHandler).toBeTypeOf('function')
 

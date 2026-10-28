@@ -207,7 +207,7 @@ export interface AuxWindowSupportOptions {
  * 在主窗口上启用辅助窗口：
  * - 只放行 `about:blank` + `pi-panel:` 前缀的 window.open；
  * - 覆盖窗口选项（与主窗口一致的外壳、最小尺寸、主题背景色，避免首帧白闪）；
- * - 子窗口反向加固：禁菜单、禁导航、禁二级弹窗、禁 webview；
+ * - 子窗口反向加固：隐藏菜单栏（保留应用默认菜单的快捷键）、禁导航、禁二级弹窗、禁 webview；
  * - 登记窗口引用，并转发最大化状态给渲染层。
  */
 export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowSupportOptions): void {
@@ -246,7 +246,9 @@ export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowS
     const frameName = details.frameName
     auxWindows.set(frameName, child)
     try {
-      child.setMenu(null)
+      // 不给子窗口单独设菜单：BrowserWindow 会自动继承应用菜单（Windows / Linux 上是
+      // 该窗口的菜单栏），Ctrl +/-/0、Ctrl+W 等默认快捷键依附在这份菜单上。
+      // 无边框窗口不绘制菜单栏，所以只需把栏隐藏起来即可。
       child.setMenuBarVisibility(false)
     } catch {
       // 个别平台没有菜单栏
