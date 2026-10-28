@@ -28,8 +28,8 @@ import { onAppEvent } from '../utils/appEvents'
 import { api } from '../api'
 import type { GitChangeScope } from '../types/electron'
 
-const MonacoEditor = lazy(() =>
-  import('./MonacoEditor').then((module) => ({ default: module.MonacoEditor }))
+const FileView = lazy(() =>
+  import('./FileView').then((module) => ({ default: module.FileView }))
 )
 
 const SIDEBAR_MIN = 180
@@ -329,7 +329,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
                 </div>
               }
             >
-              <MonacoEditor workspacePath={workspacePath} viewRoot={viewRoot} active={active} />
+              <FileView workspacePath={workspacePath} viewRoot={viewRoot} active={active} />
             </Suspense>
             {detailOpen && (
               <CommitDetailView

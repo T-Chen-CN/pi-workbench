@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.33 |
+| 文档版本 | v1.34 |
 | 状态 | Active（正式规范） |
 | 最后更新 | 2026-10-27 |
 | 适用范围 | 渲染进程全部 UI、Monaco / xterm 主题、应用主题设置 |
@@ -435,6 +435,44 @@
 - 光标、选区、当前行使用松绿（Paper `#2F5D4E` / Ink `#8FC7B4`）；语法色使用第 2.3 节内容色。
 - 标签页：矩形、sans 12px、激活项纸面底 + 2px 绿顶线；未保存用 6px 绿点。
 
+#### 6.3.1 文件阅读视图
+
+编辑器按文件类型分派两种形态：**阅读视图**（渲染结果）与**源码视图**（Monaco）。默认形态由类型决定，打开即就位，不弹选择。
+
+| 类型 | 默认 | 可切源码 | 呈现 |
+|---|---|---|---|
+| Markdown | 阅读 | 是 | 块级排版 + 就地编辑 |
+| HTML | 阅读 | 是 | 沙箱 iframe 直出文件 |
+| 图片（png/jpg/webp/svg…） | 预览 | 否 | `<img>` + 适应窗口 / 原始尺寸 |
+| 视频 / 音频 | 预览 | 否 | 原生播放器（支持拖动进度） |
+| PDF | 预览 | 否 | Chromium 内置查看器 |
+| 纯文本 / 代码 / JSON | 源码 | — | Monaco |
+| 未知二进制 | 占位 | 否 | 空状态 + 系统打开 |
+
+**标签条**：高度 34px、`bg-panel`；图标按类型区分（`FileText` / `Globe` / `Image` / `Film` / `Music` / `FileJson` / `FileCode`），激活标签图标转 `accent`。脏标记仍为 6px `accent` 圆点，保存中显示 10px `Loader2`。
+
+**视图切换**：只在可切源码的类型上出现，位于标签条最右端，是单个 ghost `IconButton`（sm），图标与名称都指向**将要切换到的**形态：阅读视图下为 `Code` +「源码视图」，源码视图下为 `Eye` +「阅读视图」。不使用 `active` 填充，当前形态由内容本身表达。切换只改呈现，不清空 Monaco 实例（撤销栈、光标、滚动保留）。
+
+**Markdown 阅读视图**
+
+- 版心 `max-w-[68ch]`、`px-8 py-6`，正文 14px / 1.85（`type-reading`），标题沿用 display 字体；首尾段落 margin 折叠，图片 `max-width: 100%`。
+- 代码块沿用聊天稿纸的样式（`bg-sunken` + 2px `accent` 左边线 + 允许换行），不出现横向滚动条：阅读视图不覆盖 `white-space`。
+- frontmatter 单独成块，等宽 11.5px、`ink-muted`、`bg-sunken` 底，不渲染成正文。
+- **块级就地编辑**：每个顶层块悬停 / 聚焦时右上角出现 `Pencil` 图标按钮（「编辑此块」）；点击后该块的**原文**（非渲染结果）替换为等宽 `Textarea`，下方一行「保存 / 取消 + 「Ctrl+Enter 保存」提示」。提交只替换该块偏移，文件其余字节不变；空文档显示一个虚线占位块（「开始编辑」）。
+- 键盘：`Ctrl/⌘+Enter` 保存，`Esc` 取消；切换文件自动退出编辑态。
+
+**媒体与 HTML 工具条**：内容区上方一条 1px `rule-divide` 工具条，左侧文件名（`type-caption` / `ink-muted`），右侧图标按钮组，不做整块标题栏。
+
+- 图片：`适应窗口`（`Maximize2`，`active`）与 `原始尺寸`（`Minimize2`）二态切换，默认适应窗口；图片居中，容器滚动。
+- 视频：内容区 `bg-sunken`，播放器居中，`max-h-full max-w-full`；音频：`w-full max-w-[480px]` 居中 + 文件名 caption。
+- HTML：`重新加载`（`RotateCw`）+ `系统打开`；源码保存后 500ms 防抖刷新，避免连续输入反复重载。
+- 所有媒体与 PDF 均提供 `系统打开`（`ExternalLink`）；加载失败时在内容区中部给出说明文字 + `系统打开` 按钮，不使用红色告警块。
+- PDF 由 Chromium 内置查看器渲染（`webPreferences.plugins`），其工具栏属于 Chromium 自身 UI、不受 Paper / Ink token 控制（跟随系统外观），这是已知且接受的不一致点；不要在 PDF 外层再套自绘工具条。
+
+**安全与协议**：预览资源由主进程的只读协议 `pw-file://` 提供（仅 GET/HEAD、路径必须落在受信任工作区或应用缓存、支持 Range）。HTML 预览的 iframe `sandbox` 为 `allow-scripts allow-forms allow-modals allow-popups allow-downloads`，**不含 `allow-same-origin`**：脚本可执行，但文档处于不透明源，拿不到父窗口与 Electron API。生产 CSP 在 `img-src` / `media-src` / `frame-src` 放行 `pw-file:`。
+
+**二进制与空态**：未知二进制使用 `EmptyState`（「无法预览此文件」+ 说明 + `openExternally` 按钮）；无打开文件时显示 `noFileOpen` / `selectFileToEdit`，与旧编辑器空态一致。
+
 ### 6.4 文件树
 
 - 名称 Noto Sans / Noto Sans SC 12.5px；目录/文件使用 lucide 线性图标。
@@ -605,6 +643,7 @@
 - [ ] 区域分层正确：外壳/侧栏 `panel`，编辑器与激活标签 `surface`；接缝为 2px `bg-rule-seam`。
 - [ ] 满墨 `border-line` 只出现在浮层（Modal、菜单、命令面板、Toast）上。
 - [ ] `tests/design-system.test.ts` 通过。
+- [ ] 阅读视图：可切源码的类型才显示视图切换；媒体/PDF/二进制没有源码入口，均提供「系统打开」；HTML 预览的 `sandbox` 不含 `allow-same-origin`。
 - [ ] placeholder 使用 `ink-muted`。
 - [ ] 键盘可访问，焦点可见，图标按钮有名称。
 - [ ] 1024 / 1440 宽度无横向溢出。
@@ -651,6 +690,12 @@
 | 聊天稿纸 | `src/components/ChatPanel.tsx` |
 | 会话标签栏 / 列表 | `src/components/SessionTabs.tsx`、`src/components/ChatSessionList.tsx`、`src/store/sessionStore.ts` |
 | 编辑器主题 | `src/components/MonacoEditor.tsx`（`pi-paper` / `pi-ink`） |
+| 文件视图容器 / 标签条 | `src/components/FileView.tsx`、`src/components/EditorTabs.tsx` |
+| 阅读视图（Markdown / HTML / 媒体 / PDF） | `src/components/MarkdownReadingView.tsx`、`src/components/HtmlPreview.tsx`、`src/components/MediaView.tsx` |
+| 文件类型分派与预览 URL | `src/utils/fileKind.ts`（`detectFileKind` / `defaultViewFor` / `filePreviewUrl`） |
+| 只读文件协议 | `electron/file-protocol.ts`（`pw-file://`，Range + 信任校验） |
+| 保存 / 草稿 / 外部变更 | `src/workspace/useFileDocument.ts` |
+| 统一打开入口 | `src/workspace/openFileInEditor.ts` |
 | 终端主题 | `src/components/TerminalPanel.tsx` |
 | 第三方主题 token 桥 | `src/theme/tokens.ts`（`readThemeTokens` / `tokenHex`） |
 | 窗口外壳 / 标题栏 | `electron/main.ts`、`electron/preload.cts` |
@@ -676,6 +721,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.34 | 2026-10-27 | 文件阅读视图：编辑器按类型分派阅读 / 源码两种形态，Markdown 与 HTML 默认渲染、可切回 Monaco；图片 / 视频 / 音频 / PDF 走只读协议 `pw-file://` 预览并提供系统打开降级；Markdown 支持块级就地编辑；标签条按类型出图标并在右侧提供单一视图切换按钮 |
 | v1.33 | 2026-10-27 | 模型能力表：设置页供应商 API 分节把「支持图片的模型」勾选列表升级为三列能力表（模型 / 上下文容量 / 图片），新增 `SettingsTable` / `SettingsTableRow` 模式与 `Modal` 的 alert 单按钮变体；容量为四档固定字面量（64K / 128K / 256K / 1M，默认 128K） |
 | v1.32 | 2026-10-27 | Git 面板提交行：窄面板（<420px）改为两行两列布局，ref 徽章与标题等宽、短哈希右对齐进固定 52px 时间列；窄面板 ref 按实测宽度折叠为 `+N`（宽面板仍按个数）；相对时间英文改紧凑单位（`59m` / `23h` / `29d`），超过 30 天改两位年份本地化日期（`25/12/31` / `12/31/25`），会话列表同步 |
 | v1.32 | 2026-10-27 | 启动页与窗口形变：静态启动页 + React 启动闸门，小窗 420×260 → 1 秒（停留 600ms + 放大 400ms）→ 1200×800；主题与语言随 URL 预置；唯一允许的窗口尺寸动效，其他场景仍禁止缩放 |

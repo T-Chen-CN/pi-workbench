@@ -6,11 +6,9 @@ import { Check, Copy } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useWorkspaceScope } from '../workspace/WorkspaceScope'
 import { useWorkspaceStore } from '../store/workspaceStore'
-import { editorStoreFor } from '../store/editorStore'
-import { api } from '../api'
+import { openFileInEditor } from '../workspace/openFileInEditor'
 import { splitMarkdownBlocks } from '../utils/markdownBlocks'
 import { looksLikePath, splitPathLine } from '../utils/filePath'
-import { basename } from '../utils/filePath'
 
 /** 点击文件路径打开编辑器（相对路径按当前工作区解析） */
 const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({
@@ -26,20 +24,8 @@ const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({
       ? filePart
       : `${workspace}/${filePart}`
     try {
-      const exists = await api.exists(target)
-      if (!exists.success || !exists.exists) return
-      const file = await api.readFile(target)
-      if (!file.success || typeof file.content !== 'string') return
-      const store = editorStoreFor(workspace)
-      store.getState().addOpenFile({
-        path: target,
-        name: basename(target) || target,
-        content: file.content,
-        isDirty: false,
-        isSaving: false,
-      })
-      // 带行号时滚动到该行并高亮（R-09）
-      if (line) store.getState().revealLine(target, line)
+      // 与文件树共用打开入口：带行号时滚动到该行并高亮（R-09）
+      await openFileInEditor(workspace, target, { revealLine: line ?? undefined })
     } catch (error) {
       console.error('Failed to open referenced file:', error)
     }

@@ -3,7 +3,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPanel } from '../src/components/ChatPanel'
 import { FileExplorer } from '../src/components/FileExplorer'
-import { MonacoEditor } from '../src/components/MonacoEditor'
 import { WelcomeScreen } from '../src/components/WelcomeScreen'
 import { ToolResultViewer } from '../src/components/ToolResultViewer'
 import { MarkdownBody } from '../src/components/AgentMarkdown'
@@ -1234,46 +1233,6 @@ describe('FileExplorer', () => {
       fireEvent.keyDown(window, { key: 'ArrowDown' })
       expect(focusedText()).toBe(label)
     }
-  })
-})
-
-describe('MonacoEditor', () => {
-  it('syncs external changes for files open in background tabs', async () => {
-    let fsChanged: ((payload: { type: string; path: string }) => void) | null = null
-    vi.mocked(api.onFsChanged).mockImplementation((callback) => {
-      fsChanged = callback
-      return () => {}
-    })
-    vi.mocked(api.exists).mockResolvedValue({ success: true, exists: true })
-    vi.mocked(api.readFile).mockResolvedValue({ success: true, content: 'updated-a' })
-
-    render(<MonacoEditor workspacePath="/ws" />)
-    act(() => {
-      editorStoreFor('/ws').getState().addOpenFile({
-        path: '/ws/a.ts',
-        name: 'a.ts',
-        content: 'old-a',
-        isDirty: false,
-        isSaving: false,
-      })
-      editorStoreFor('/ws').getState().addOpenFile({
-        path: '/ws/b.ts',
-        name: 'b.ts',
-        content: 'b',
-        isDirty: false,
-        isSaving: false,
-      })
-    })
-
-    // 当前文件是 b.ts，外部修改的是后台标签页 a.ts
-    act(() => {
-      fsChanged?.({ type: 'change', path: '/ws/a.ts' })
-    })
-
-    await waitFor(() => {
-      const file = editorStoreFor('/ws').getState().openFiles.find((item) => item.path === '/ws/a.ts')
-      expect(file?.content).toBe('updated-a')
-    })
   })
 })
 

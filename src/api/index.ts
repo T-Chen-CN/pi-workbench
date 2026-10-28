@@ -78,6 +78,10 @@ const mockAPI = {
     console.log('[Mock] writeFile:', filePath, content.length, 'bytes')
     return { success: true }
   },
+  openPathExternally: async (_filePath: string): Promise<WorkspaceResult> => ({
+    success: false,
+    error: 'Only available in the Electron app',
+  }),
   exists: async (filePath: string): Promise<ExistsResult> => {
     console.log('[Mock] exists:', filePath)
     return { success: true, exists: true }
@@ -423,6 +427,10 @@ export const api = {
       : Promise.resolve({ success: true }),
   readFile: (path: string) => electronAPI.readFile(path),
   writeFile: (path: string, content: string) => electronAPI.writeFile(path, content),
+  openPathExternally: (path: string) =>
+    typeof electronAPI.openPathExternally === 'function'
+      ? electronAPI.openPathExternally(path)
+      : Promise.resolve({ success: false, error: 'Not available in the browser' }),
   exists: (path: string) => electronAPI.exists(path),
   stat: (path: string) => electronAPI.stat(path),
   deletePath: (path: string) => electronAPI.deletePath(path),

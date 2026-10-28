@@ -1,9 +1,12 @@
 /** 文件系统、工作区搜索与崩溃恢复草稿的 IPC */
 
 import * as fs from 'fs/promises'
+import { open as openFile } from 'fs/promises'
 import * as path from 'path'
 import { statSync } from 'fs'
+import { shell } from 'electron'
 import { handleIpc } from './register.js'
+import { mimeForPath } from '../file-protocol.js'
 import type { DraftStore } from '../draft-store.js'
 import {
   canonicalizePath,
@@ -19,6 +22,23 @@ export interface FilesIpcContext {
   onFileSaved?: (targetPath: string) => void
 }
 
+/** 探测头部多少字节判断是否二进制 */
+const BINARY_PROBE_BYTES = 8192
+
+/** 头部出现 NUL 字节即视为二进制：文本文件不会包含它 */
+async function looksBinary(targetPath: string, size: number): Promise<boolean> {
+  if (size === 0) return false
+  const handle = await openFile(targetPath, 'r')
+  try {
+    const length = Math.min(BINARY_PROBE_BYTES, size)
+    const buffer = Buffer.alloc(length)
+    const { bytesRead } = await handle.read(buffer, 0, length, 0)
+    return buffer.subarray(0, bytesRead).includes(0)
+  } finally {
+    await handle.close()
+  }
+}
+
 export function registerFilesIpc(context: FilesIpcContext): void {
   handleIpc('fs:readFile', async (_event, filePath: string) => {
     try {
@@ -26,8 +46,32 @@ export function registerFilesIpc(context: FilesIpcContext): void {
       if (!target) {
         return { success: false, error: 'Path is outside the open workspace' }
       }
+      const stats = await fs.stat(target)
+      // 二进制文件不返回文本：图片 / 音视频 / PDF 由 pw-file:// 协议渲染
+      if (await looksBinary(target, stats.size)) {
+        return {
+          success: true,
+          binary: true,
+          mime: mimeForPath(target),
+          size: stats.size,
+        }
+      }
       const content = await fs.readFile(target, 'utf-8')
-      return { success: true, content }
+      return { success: true, binary: false, content }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  // 用系统默认程序打开：不支持预览的类型与媒体文件
+  handleIpc('fs:openExternally', async (_event, filePath: string) => {
+    try {
+      const target = resolveAllowedFileTarget(filePath)
+      if (!target) {
+        return { success: false, error: 'Path is outside the open workspace' }
+      }
+      const error = await shell.openPath(target)
+      return error ? { success: false, error } : { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

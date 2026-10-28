@@ -429,14 +429,17 @@ function devAgentBridge(): Plugin {
  *
  * 开发模式需要 Vite HMR 的内联脚本和 WebSocket，因此不在 dev 下启用。
  * style 允许 inline：Monaco 会在运行时注入 <style>；
- * worker 允许 blob：Monaco 的语言 worker 通过 Blob 创建。
+ * worker 允许 blob：Monaco 的语言 worker 通过 Blob 创建；
+ * pw-file: 是主进程注册的只读文件协议，图片 / 音视频 / PDF / HTML 预览都走它。
  */
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
-  "img-src 'self' data:",
+  "img-src 'self' data: pw-file:",
+  "media-src 'self' pw-file:",
+  "frame-src 'self' pw-file:",
   "worker-src 'self' blob:",
   "connect-src 'self'",
   "object-src 'none'",

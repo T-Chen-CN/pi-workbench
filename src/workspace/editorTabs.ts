@@ -1,6 +1,7 @@
 import { api } from '../api'
 import { editorStoreFor } from '../store/editorStore'
 import { basename } from '../utils/filePath'
+import { detectFileKind, isStreamedKind } from '../utils/fileKind'
 
 /** 恢复时允许自动打开的最大文件，超过则跳过（Monaco 大文件模式仍会生效） */
 const MAX_RESTORE_BYTES = 10 * 1024 * 1024
@@ -95,14 +96,47 @@ export async function restoreEditorTabs(
         skipped++
         continue
       }
+      // 媒体与 PDF 只登记标签：内容由 pw-file:// 协议按需读取，不进 store
+      const kind = detectFileKind(filePath)
+      if (isStreamedKind(kind)) {
+        store.getState().addOpenFile({
+          path: filePath,
+          name: basename(filePath) || filePath,
+          kind,
+          content: '',
+          isDirty: false,
+          isSaving: false,
+        })
+        restored++
+        continue
+      }
       const read = await api.readFile(filePath)
-      if (!read.success || typeof read.content !== 'string') {
+      if (!read.success) {
+        skipped++
+        continue
+      }
+      // 二进制文件不恢复成文本标签，避免把乱码写回磁盘
+      if (read.binary) {
+        store.getState().addOpenFile({
+          path: filePath,
+          name: basename(filePath) || filePath,
+          kind: 'binary',
+          content: '',
+          isDirty: false,
+          isSaving: false,
+          view: 'source',
+        })
+        restored++
+        continue
+      }
+      if (typeof read.content !== 'string') {
         skipped++
         continue
       }
       store.getState().addOpenFile({
         path: filePath,
         name: basename(filePath) || filePath,
+        kind,
         content: read.content,
         isDirty: false,
         isSaving: false,

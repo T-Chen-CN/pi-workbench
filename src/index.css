@@ -480,6 +480,37 @@ button {
   margin: 1em 0;
 }
 
+/* ------------------------------------------------------------------
+   文件阅读视图（Markdown）
+   块用普通 div 包裹：外边距与父级折叠，排版与原文档一致；
+   wrapper 只加 position: relative，用来挂「编辑此块」按钮。
+------------------------------------------------------------------- */
+.file-markdown > *:first-child > *:first-child {
+  margin-top: 0;
+}
+
+.file-markdown > *:last-child > *:last-child {
+  margin-bottom: 0;
+}
+
+.file-markdown img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* 代码块沿用聊天稿纸的换行策略（.chat-markdown pre），不覆盖 white-space */
+.file-markdown .md-frontmatter {
+  margin: 0 0 1.4em;
+  padding: 8px 10px;
+  background: rgb(var(--ink) / 0.04);
+  border-left: 2px solid rgb(var(--line) / 0.24);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  color: rgb(var(--ink-muted));
+}
+
 /* highlight.js 语法着色（跟随主题 token） */
 .hljs-keyword,
 .hljs-selector-tag,

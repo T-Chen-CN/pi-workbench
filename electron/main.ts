@@ -27,6 +27,7 @@ import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
 import { animateBounds, type WindowBounds } from './window-morph.js'
 import { registerFilesIpc } from './ipc/files.js'
+import { registerFileProtocol, registerFileSchemePrivileges } from './file-protocol.js'
 import { registerAgentIpc } from './ipc/agent.js'
 import { registerGitIpc } from './ipc/git.js'
 import { repoSync } from './repo-sync.js'
@@ -71,6 +72,9 @@ try {
   // 目录创建失败时仍让 Electron 使用默认路径，避免启动失败
 }
 app.setPath('userData', userDataDir)
+
+// 自定义文件协议必须在 app ready 之前声明特权，媒体元素与 fetch 才能使用
+registerFileSchemePrivileges()
 
 let mainWindow: BrowserWindow | null = null
 configureIpcWindow(() => mainWindow)
@@ -652,6 +656,8 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Chromium 内置 PDF 查看器依赖 plugins（仍运行在 sandbox 内）
+      plugins: true,
     },
     icon: path.join(__dirname, '../app-icon.png'),
   })
@@ -817,6 +823,8 @@ app.whenReady().then(async () => {
   }
 
   await initAppDirectories()
+  // 只读文件协议：图片 / 音视频 / PDF / HTML 预览
+  registerFileProtocol()
 
   // 启动页要尽早出现：只读设置（主题与语言）就建窗，其余初始化与页面加载并行。
   let startupSettings: Record<string, any> = {}

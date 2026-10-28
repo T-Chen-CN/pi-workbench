@@ -6,10 +6,13 @@ import {
   FileCode,
   FileJson,
   FileText,
+  Film,
   Folder,
   FolderOpen,
+  Globe,
   Image,
   Loader2,
+  Music,
   PanelLeftClose,
   Pencil,
   Plus,
@@ -35,9 +38,9 @@ import { VirtualRows } from './VirtualRows'
 import { Button, EmptyState, IconButton, Input, MenuOption, Modal, PopoverMenu } from './ui'
 import { dirname, joinPath } from '../utils/filePath'
 import { onAppEvent } from '../utils/appEvents'
+import { detectFileKind } from '../utils/fileKind'
+import { openFileInEditor } from '../workspace/openFileInEditor'
 
-/** 超过该大小的文件打开前先确认，避免 Monaco 卡顿 */
-const LARGE_FILE_BYTES = 5 * 1024 * 1024
 
 interface FileEntry {
   name: string
@@ -61,12 +64,16 @@ function mergeTree(previous: TreeNode[], incoming: TreeNode[]): TreeNode[] {
   })
 }
 
-/** 按扩展名挑一个文件图标 */
+/** 按扩展名挑一个文件图标（与编辑区的类型分发保持一致） */
 function fileIconFor(name: string) {
-  if (/\.(ts|tsx|js|jsx|mjs|cjs)$/i.test(name)) return FileCode
+  const kind = detectFileKind(name)
+  if (kind === 'image') return Image
+  if (kind === 'video') return Film
+  if (kind === 'audio') return Music
+  if (kind === 'html') return Globe
+  if (kind === 'markdown' || kind === 'pdf') return FileText
+  if (/\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|rb|css)$/i.test(name)) return FileCode
   if (/\.json$/i.test(name)) return FileJson
-  if (/\.(md|markdown|txt)$/i.test(name)) return FileText
-  if (/\.(png|jpe?g|gif|svg|webp|ico)$/i.test(name)) return Image
   return FileIcon
 }
 
@@ -273,28 +280,15 @@ export const FileExplorer: React.FC<{
     }
 
     try {
-      const info = await api.stat(node.path)
-      if (info?.success && typeof info.size === 'number' && info.size > LARGE_FILE_BYTES) {
-        const proceed = await confirmDialog({
-          message: t('openLargeFileConfirm', {
-            name: node.name,
-            size: `${(info.size / 1024 / 1024).toFixed(1)} MB`,
-          }),
-        })
-        if (!proceed) return
-      }
-
-      const result = await api.readFile(node.path)
-      if (!result.success || typeof result.content !== 'string') {
-        throw new Error(result.error || 'Failed to read file')
-      }
-      editorStore?.getState().addOpenFile({
-        path: node.path,
-        name: node.name,
-        content: result.content,
-        isDirty: false,
-        isSaving: false,
+      // 打开逻辑集中在 openFileInEditor：媒体走协议预览，二进制不会被当文本读入
+      if (!workspacePath) throw new Error('No workspace selected')
+      const outcome = await openFileInEditor(workspacePath, node.path, {
+        skipLargeConfirm: false,
       })
+      if (outcome.status === 'skipped' && outcome.reason === 'declined') return
+      if (outcome.status === 'skipped' && outcome.error) {
+        throw new Error(outcome.error)
+      }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       toast.error(t('openFileFailed', { error: localizeError(errorMsg) }))
@@ -384,13 +378,8 @@ export const FileExplorer: React.FC<{
       }
 
       // Add to editor
-      editorStore?.getState().addOpenFile({
-        path: filePath,
-        name: createDialog.fileName,
-        content: '',
-        isDirty: false,
-        isSaving: false,
-      })
+      if (!workspacePath) throw new Error('No workspace selected')
+      await openFileInEditor(workspacePath, filePath, { skipLargeConfirm: true })
 
       // Refresh the workspace tree
       if (workspacePath) {

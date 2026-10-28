@@ -45,6 +45,15 @@ vi.mock('electron', () => ({
     },
     on: () => {},
   },
+  // 自定义文件协议的注册在模块加载时执行，测试里只需占位
+  protocol: {
+    registerSchemesAsPrivileged: () => {},
+    handle: () => {},
+  },
+  shell: {
+    openPath: async () => '',
+    openExternal: async () => {},
+  },
   screen: {
     getCursorScreenPoint: () => ({ x: 0, y: 0 }),
     getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
@@ -123,7 +132,11 @@ describe('filesystem IPC handlers', () => {
     const target = path.join(workDir, 'a.txt')
 
     await expect(call('fs:writeFile', target, 'hello')).resolves.toMatchObject({ success: true })
-    await expect(call('fs:readFile', target)).resolves.toEqual({ success: true, content: 'hello' })
+    await expect(call('fs:readFile', target)).resolves.toEqual({
+      success: true,
+      binary: false,
+      content: 'hello',
+    })
   })
 
   it('rejects writes outside the approved workspaces', async () => {

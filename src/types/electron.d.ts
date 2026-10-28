@@ -169,6 +169,8 @@ export interface ElectronAPI {
   openDirectoryDialog: () => Promise<OpenDirectoryResult>
   readFile: (path: string) => Promise<ReadFileResult>
   writeFile: (path: string, content: string) => Promise<WriteFileResult>
+  /** 用系统默认程序打开文件（媒体与不支持预览的类型） */
+  openPathExternally: (path: string) => Promise<WorkspaceResult>
   listDirectory: (path: string) => Promise<ListDirectoryResult>
   exists: (path: string) => Promise<ExistsResult>
   stat: (path: string) => Promise<StatResult>
@@ -595,6 +597,11 @@ export interface ListDirectoryResult {
 export interface ReadFileResult {
   success: boolean
   content?: string
+  /** 二进制文件：不返回 content，交给 pw-file:// 协议渲染 */
+  binary?: boolean
+  /** 二进制探测得到的 MIME 猜测 */
+  mime?: string
+  size?: number
   error?: string
 }
 
