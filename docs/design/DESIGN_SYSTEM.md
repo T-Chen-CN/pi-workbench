@@ -409,7 +409,7 @@
 - 多工作区：每个打开的工作区各自保留一套常驻视图（文件树 / 编辑器 / 聊天 / 终端 / Diff），非活动视图用 `visibility: hidden` + `pointer-events: none` + `inert` 隐藏，不卸载、不重置；只有关闭标签才释放运行时状态。
 - 主区域三栏：文件树 232px / 编辑器自适应 / 聊天 336px；可拖拽、可折叠，默认宽度见上。
 - 面板折叠：文件树与聊天面板的头部各有一个收起按钮——文件树在头部最右端（新建文件之后），聊天在头部最左端（标题之前），都紧贴分隔条；顶栏不提供面板开关。收起后该侧显示 26px 宽的全高窄条（`bg-panel` + 内侧 1px `rule-divide`），整条窄条即按钮，图标在正中，hover 整条 `bg-hover`，点击展开；收起与展开后焦点分别落到窄条按钮与面板头部按钮。
-- **区域分层**：顶栏、工作区标签栏、状态栏、文件树、聊天与终端使用 `bg-panel`；编辑器画布与激活标签页使用 `bg-surface`（更深的"墨池"）；纸卡使用 `bg-raised`。区域先靠底色区分，接缝只做收口。
+- **区域分层**：顶栏、工作区标签栏、状态栏、文件树、终端与聊天标签栏使用 `bg-panel`；编辑器画布、聊天正文列与激活标签页使用 `bg-surface`（更深的"墨池"）；纸卡使用 `bg-raised`。区域先靠底色区分，接缝只做收口。聊天正文列与编辑器画布同底，中缝两侧不得出现两种底色。
 - 可拖拽分隔条：2px `bg-rule-seam`，hover / 拖拽时转 `accent`；不要用满墨 `bg-line` 或 1px 线画分栏接缝。
 - 状态栏 28px：mono 文本，左侧品牌/本地优先/Agent 状态，右侧版本号、更新状态、语言、编码、主题。版本号可点击进入设置“关于”；有新版本时在版本号旁显示文字提示，下载中显示 `Meter` 进度，不使用弹跳或彩色胶囊。
 
@@ -495,14 +495,18 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 
 ### 6.5 聊天（稿纸）
 
-- 聊天头部最左端为收起按钮（`PanelRightClose`，label「收起聊天面板」，紧贴分隔条），其后为「Pi Agent 对话」标题与就绪状态；未配置 API 的空状态同样保留该头部与收起按钮。
+- 聊天头部 34px（`ChatPanelHeader`，与聊天标签栏合计两层，共 68px）：最左端为收起按钮（`PanelRightClose`，label「收起聊天面板」，紧贴分隔条），其后为「Pi Agent 对话」标题（不承载状态），右端为工作树 chip 与面板拖出柄；未配置 API 的空状态共用同一个头部组件。
+- 标题不显示「就绪」等常态信息：仅在初始化期间把标题文案替换为「初始化中…」并附 4px `warning` 脉冲点，初始化完成后不保留任何状态文字与圆点。
+- 工作树 chip（24px 高，`rounded-sm` + `border-rule-control` + `px-2`）：`GitBranch` 12px + 分支名 `type-value` + 副标 `type-caption`（主工作树 / 相对路径）+ 共享 `Users` 标记 + 脏文件计数 + `ChevronDown` 12px（展开时旋转 180°）。它是工作树切换的唯一入口（原独立工作树条已合并进头部），必须可点、可键盘操作，`aria-haspopup="menu"` + `aria-expanded` + `aria-label` 含当前分支、`title` 保留完整路径；无 git 仓库时整个 chip 不渲染，头部高度不变。
 - 不使用气泡；每条消息以 UI sans 11.5px 角色标签 + 时间开头，消息之间用 1px `rule-divide` 分隔。
 - 用户消息以绿色 `›` 起头；正文 `font-reading` 14px / 1.85。
 - Agent 回复使用 Markdown：标题用 display 字体，正文 reading，代码块 mono；代码块左侧 2px 绿色线，允许换行。
 - 代码块右上角提供复制按钮（hover/focus 显示）。
 - 空状态、未配置 API、错误使用 EmptyState / 细线错误条，不使用大色块。
 - 上下文附件支持整文件与选区片段：片段 chip 显示 `文件:起止行`，内容是附加时快照（≤40k 字符）；整文件在发送时读取（≤120k 字符，合计 ≤300k）。图片附件在提交瞬间按 id 被本轮消费（缩略图立即消失），与消息一起发送；流式期间新加的图片属于下一轮，不随本轮结束被清空。重试 / 编辑重发 / 计划执行等系统触发的发送不读取也不消费输入框附件，只重发消息自带的图片。
-- 会话标签栏（34px，位于聊天头部下方）：标签代表"已打开"会话，激活标签 `bg-surface` + 2px `accent` 顶线；最多同时打开 8 个，关闭标签只释放运行时、保留会话文件。
+- 会话标签栏（34px，位于聊天头部下方）：标签代表"已打开"会话，容器 `bg-panel`；激活标签 `bg-surface`（与正文列同底，视觉连通）+ 2px `accent` 顶线，并且不画底部 `rule-divide`；非激活标签自绘 `border-b border-rule-divide`，使分隔线只在实际分隔处出现，不在激活标签下方叠加成双线。最多同时打开 8 个，关闭标签只释放运行时、保留会话文件。
+- 关闭按钮命中区 24px（图标仍 10px）：激活标签常显，非激活标签 hover / `focus-visible` 时显示。
+- 未命名会话显示「新会话」；同一工作区存在 ≥2 个未命名会话时追加序号（「新会话 2」），避免多开时无法区分；首轮回复后由模型标题覆盖。
 - 标签状态按优先级只显示一个标记：**运行中**（`accent` 实心点 + 1.4s 脉冲）> **错误**（`danger` 感叹号图标；保留到下次发送或成功回复）> **待操作**（`warning` 空心环 + 中心点 + 2px 硬边外环，2.4s 呼吸；工具审批等待时触发）> **未读**（`success` 实心点，静态；激活标签时清除）> **已读**（无标记）。
 - 草稿是独立标记：标题旁 9px `Pencil` 图标（`ink-subtle`），可与任意主状态并存，不占状态槽。
 - 标签的 `title` / `aria-label` 必须包含状态与草稿文案，运行中同时设置 `aria-busy`；状态不能只靠颜色或动效传达。
@@ -670,7 +674,8 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 - [ ] 业务组件未直接写 `font-*`、任意字号、`uppercase`、`tracking-[...]`、`leading-[...]`。
 - [ ] 新增内容类型已落到 `patterns.tsx`，页面只做组合。
 - [ ] 卡片为 `bg-raised` + `border-rule-hairline` 且无投影；控件边界为 `border-rule-control` 且 ≥3:1。
-- [ ] 区域分层正确：外壳/侧栏 `panel`，编辑器与激活标签 `surface`；接缝为 2px `bg-rule-seam`。
+- [ ] 区域分层正确：外壳/侧栏/聊天标签栏 `panel`，编辑器画布、聊天正文列与激活标签 `surface`；接缝为 2px `bg-rule-seam`。
+- [ ] 聊天面板头部为两层 34px（共 68px），收起按钮图标、标签状态点、工作树 chip 图标的左边缘同为 12px，拖出柄与右侧图标按钮右边缘同为 12px。
 - [ ] 满墨 `border-line` 只出现在浮层（Modal、菜单、命令面板、Toast）上。
 - [ ] `tests/design-system.test.ts` 通过。
 - [ ] 阅读视图：可切源码的类型才显示视图切换；媒体/PDF/二进制没有源码入口，均提供「系统打开」；HTML 预览的 `sandbox` 不含 `allow-same-origin`。
@@ -718,6 +723,8 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 | 主题状态 | `src/store/themeStore.ts` |
 | 欢迎页 | `src/components/WelcomeScreen.tsx` |
 | 聊天稿纸 | `src/components/ChatPanel.tsx` |
+| 聊天头部 | `src/components/ChatPanelHeader.tsx`、`src/components/ChatHeader.tsx` |
+| 工作树切换 chip | `src/components/WorktreeChip.tsx` |
 | 会话标签栏 / 列表 | `src/components/SessionTabs.tsx`、`src/components/ChatSessionList.tsx`、`src/store/sessionStore.ts` |
 | 编辑器主题 | `src/components/MonacoEditor.tsx`（`pi-paper` / `pi-ink`） |
 | 文件视图容器 / 标签条 | `src/components/FileView.tsx`、`src/components/EditorTabs.tsx` |
@@ -752,6 +759,7 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.38 | 2026-10-28 | 聊天头部三层合两层：工作树切换条并入头部为 24px chip（带 `ChevronDown`）、会话标签栏升为 34px，头部由 38 + 34 + 32 收到 34 + 34；移除常态「就绪」状态；聊天正文列改 `bg-surface`，激活标签与正文连通、底部 `rule-divide` 改由标签自绘消除双线；关闭按钮命中区 16px → 24px 且激活标签常显；未命名会话按需加序号；未配置 API 的空状态复用共享头部 |
 | v1.37 | 2026-10-28 | PDF 阅读视图改为 pdf.js 自绘：单一滚动容器 + canvas 虚拟化（视口 ±2 页、离开视口释放像素内存）、适应宽度默认与 50%–400% 手动缩放、页码 / 翻页 / 键盘、失败只留系统打开；工具条与媒体视图同构；移除 Chromium 内置查看器依赖（`webPreferences.plugins`） |
 | v1.36 | 2026-10-28 | 辅助窗口改用与主窗口同一套外壳：Windows / Linux 无边框、macOS `hiddenInset`，32px 信息栏升级为 34px 自绘标题栏（拖动窗口 / 双击最大化 / 回位 / 窗口按钮）；窗口按钮按 `frameName` 寻址，最大化状态带 `host` 回传；拖出柄 14px，`dropEffect` 不再作为取消判据 |
 | v1.35 | 2026-10-28 | 辅助窗口（面板拆分）：原生标题栏 + 32px 信息栏 + 原位占位；右键菜单拆分/回位；主题与提示按窗口落点；不持久化布局 |
