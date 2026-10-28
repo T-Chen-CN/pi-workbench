@@ -17,6 +17,9 @@ export default tseslint.config(
       '.claude/**',
       '.worktrees/**',
       '**/.worktrees/**',
+      // pi 的并行工作树：独立检出、独立依赖，不属于本检出
+      '.pi-workbench/**',
+      '**/.pi-workbench/**',
       '.tmp/**',
     ],
   },
