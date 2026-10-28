@@ -1,7 +1,7 @@
-/** 会话工作树切换条：显示当前分支/工作树，并提供切换入口 */
+/** 聊天头部的工作树 chip：显示当前分支/工作树，点击切换 */
 
 import React, { useEffect, useState } from 'react'
-import { GitBranch, Plus, Users } from 'lucide-react'
+import { ChevronDown, GitBranch, Plus, Users } from 'lucide-react'
 import { useSessionStore } from '../store/sessionStore'
 import { useGitStore } from '../store/gitStore'
 import { useI18nStore } from '../store/i18nStore'
@@ -13,7 +13,7 @@ import type { GitWorktreeView } from '../types/electron'
 
 const NO_WORKTREES: GitWorktreeView[] = []
 
-export const WorktreeBar: React.FC<{ workspacePath: string }> = ({ workspacePath }) => {
+export const WorktreeChip: React.FC<{ workspacePath: string }> = ({ workspacePath }) => {
   const { t } = useI18nStore()
   const activeSessionId = useSessionStore(
     (state) => state.byWorkspace[workspacePath]?.active ?? null
@@ -54,6 +54,7 @@ export const WorktreeBar: React.FC<{ workspacePath: string }> = ({ workspacePath
   const branch = current?.branch ?? repo.branch ?? '—'
   const shared = (current?.boundSessionCount ?? 0) > 1
   const dirty = current?.dirtyCount ?? 0
+  const path = current?.path ?? repo.root
 
   const choose = async (target: string) => {
     setOpen(false)
@@ -71,17 +72,20 @@ export const WorktreeBar: React.FC<{ workspacePath: string }> = ({ workspacePath
   }
 
   return (
-    <div className="relative flex h-[34px] flex-shrink-0 items-center gap-2 border-b border-rule-divide px-3.5">
-      <GitBranch size={14} className="flex-shrink-0 text-ink-muted" />
+    <div className="relative flex min-w-0 flex-shrink-0 items-center">
       <button
         type="button"
         disabled={busy}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={t('worktreeChipLabel', { branch })}
+        title={path}
         onClick={() => setOpen((value) => !value)}
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-hover disabled:opacity-60"
-        title={current?.path ?? repo.root}
+        className="flex h-6 min-w-0 items-center gap-1.5 overflow-hidden rounded-sm border border-rule-control px-2 text-left transition-colors hover:bg-hover disabled:opacity-60"
       >
-        <span className="truncate type-value text-ink">{branch}</span>
-        <span className="truncate type-caption text-ink-muted">
+        <GitBranch size={12} className="flex-shrink-0 text-ink-muted" />
+        <span className="min-w-0 truncate type-value text-ink">{branch}</span>
+        <span className="min-w-0 truncate type-caption text-ink-muted">
           {current?.isMain ? t('mainWorktree') : current?.relativePath ?? t('worktree')}
         </span>
         {shared && (
@@ -90,9 +94,12 @@ export const WorktreeBar: React.FC<{ workspacePath: string }> = ({ workspacePath
             {t('sharedWorktree')}
           </span>
         )}
-        {dirty > 0 && (
-          <span className="flex-shrink-0 type-data text-warning">{dirty}</span>
-        )}
+        {dirty > 0 && <span className="flex-shrink-0 type-data text-warning">{dirty}</span>}
+        <ChevronDown
+          size={12}
+          aria-hidden="true"
+          className={`flex-shrink-0 text-ink-muted transition-transform ${open ? 'rotate-180' : ''}`}
+        />
       </button>
 
       {open && (

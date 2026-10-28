@@ -169,6 +169,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
         panelId={panelId}
         t={t}
         fatalError={fatalError}
+        workspacePath={workspacePath}
       />
     )
   }
