@@ -934,6 +934,15 @@ export type AgentTracePart =
       id: string
       plan: StructuredPlan
     }
+  | {
+      /** 上下文压缩点：随 parts 时间线排序，位置跟随压缩发生的先后 */
+      type: 'compaction'
+      id: string
+      /** 对应 JSONL compaction entry id；实时与重载后共用同一锚点 */
+      entryId?: string
+      timestamp: number
+      tokensBefore?: number
+    }
 
 /** 主进程归一化后的流式事件（不含路由字段） */
 export type AgentStreamEvent =
@@ -978,6 +987,12 @@ export type AgentStreamEvent =
       reason: 'manual' | 'threshold' | 'overflow'
       tokensBefore?: number
       error?: string
+      /** 压缩被取消或未完成：不画分隔线 */
+      aborted?: boolean
+      willRetry?: boolean
+      /** 已落盘的 compaction entry id 与时间戳 */
+      entryId?: string
+      timestamp?: number
     }
   | { type: 'plan_submitted'; plan: StructuredPlan }
   | { type: 'plan_updated'; plan: StructuredPlan }

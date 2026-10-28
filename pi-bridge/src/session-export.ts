@@ -11,6 +11,8 @@ const EXPORT_LABELS = {
     result: '完整结果',
     image: '图片',
     exportedAt: '导出时间',
+    compacted: '上下文已压缩',
+    compactedTokens: '上下文已压缩 · 压缩前 {tokens} tokens',
   },
   en: {
     you: 'You',
@@ -21,6 +23,8 @@ const EXPORT_LABELS = {
     result: 'Full result',
     image: 'Image',
     exportedAt: 'Exported',
+    compacted: 'Context compacted',
+    compactedTokens: 'Context compacted · {tokens} tokens before',
   },
 } as const
 
@@ -39,6 +43,7 @@ export type ExportPart =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string }
   | ExportToolPart
+  | { type: 'compaction'; timestamp: number; tokensBefore?: number }
 
 export type ExportTurn = {
   user: { text: string; timestamp: number }
@@ -60,6 +65,17 @@ function markdownFence(text: string): string {
   return '`'.repeat(Math.max(3, longest + 1))
 }
 
+/** 压缩分隔线文案（导出与界面共用同一口径，不区分手动/自动） */
+function compactionLabel(
+  labels: (typeof EXPORT_LABELS)[ExportLanguage],
+  tokensBefore?: number
+): string {
+  if (typeof tokensBefore === 'number') {
+    return labels.compactedTokens.replace('{tokens}', tokensBefore.toLocaleString())
+  }
+  return labels.compacted
+}
+
 export function buildMarkdownExport(
   title: string,
   turns: ExportTurn[],
@@ -79,6 +95,10 @@ export function buildMarkdownExport(
     for (const part of turn.parts) {
       if (part.type === 'text') {
         lines.push(part.text, '')
+        continue
+      }
+      if (part.type === 'compaction') {
+        lines.push('---', '', `> ${compactionLabel(labels, part.tokensBefore)}`, '')
         continue
       }
       if (part.type === 'thinking') {
@@ -142,6 +162,13 @@ export function buildHtmlExport(
         body.push(`<pre class="text">${escapeHtml(part.text)}</pre>`)
         continue
       }
+      if (part.type === 'compaction') {
+        body.push(
+          '<hr />',
+          `<p class="compacted">${escapeHtml(compactionLabel(labels, part.tokensBefore))}</p>`
+        )
+        continue
+      }
       if (part.type === 'thinking') {
         body.push(
           '<details>',
@@ -188,6 +215,8 @@ pre.text { background: transparent; border: 0; padding: 0; font: inherit; }
 details { border-left: 2px solid #ddd8c8; padding-left: 12px; margin: 12px 0; }
 summary { cursor: pointer; color: #4f6b5a; font-size: 13px; }
 img { max-width: 100%; height: auto; border: 1px solid #ddd8c8; margin: 8px 0; }
+hr { border: 0; border-top: 1px solid #ddd8c8; margin: 24px 0 0; }
+.compacted { color: #7a766a; font-size: 12px; margin: 8px 0 20px; }
 </style>
 </head>
 <body>

@@ -77,7 +77,8 @@ import {
   normalizeSessionTitle,
   requestSessionTitle,
 } from './session-title.js'
-import { buildSessionMessages } from './session-history.js'
+import { buildSessionMessagesFromEntries } from './session-history.js'
+import { activeTimeline, entryTimestamp } from './session-entries.js'
 import {
   describeToolResult,
   findToolResultPayload,
@@ -236,6 +237,8 @@ interface SessionRuntime {
   extrasSave: Promise<void>
   thinkingStart: number | null
   thinkingDurationsThisMessage: number[]
+  /** 最近一次已转发的 compaction entry id，用于 compaction_end 去重取锚点 */
+  lastCompactionEntryId: string | null
 }
 
 /**
@@ -413,15 +416,28 @@ export class AgentManager {
           return
         }
         if (event.type === 'compaction_end') {
+          const error =
+            typeof event.errorMessage === 'string' ? event.errorMessage : undefined
+          const aborted = Boolean((event as any).aborted)
+          // 成功落盘才有 entry 可对齐；失败/取消不画分隔线，但仍下发原因供界面复位
+          const entry = error || aborted ? null : this.resolveCompactionEntry(runtime)
           runtime.onTrace?.({
             type: 'compaction_end',
             reason: event.reason,
             tokensBefore:
               typeof event.result?.tokensBefore === 'number'
                 ? event.result.tokensBefore
+                : typeof entry?.tokensBefore === 'number'
+                  ? entry.tokensBefore
+                  : undefined,
+            error,
+            aborted: aborted || undefined,
+            willRetry:
+              typeof (event as any).willRetry === 'boolean'
+                ? (event as any).willRetry
                 : undefined,
-            error:
-              typeof event.errorMessage === 'string' ? event.errorMessage : undefined,
+            entryId: entry?.id,
+            timestamp: entry ? entryTimestamp(entry.timestamp) : undefined,
           })
           return
         }
@@ -944,8 +960,22 @@ export class AgentManager {
     return this.runtimeSummary(runtime).title || runtime.id
   }
 
+  private timelineMessages(runtime: SessionRuntime): any[] {
+    return activeTimeline(runtime.sessionManager).flatMap((item) =>
+      item.kind === 'message' ? [item.message] : []
+    ) as any[]
+  }
+
   private exportTurns(runtime: SessionRuntime): ExportTurn[] {
-    const messages = (runtime.session.messages ?? []) as any[]
+    // 与界面同源：当前分支的完整 entry 路径（含压缩前历史与压缩点）
+    const items = activeTimeline(runtime.sessionManager)
+    const messages = items
+      .filter(
+        (item): item is Extract<(typeof items)[number], { kind: 'message' }> =>
+          item.kind === 'message'
+      )
+      .map((item) => item.message)
+
     const results = new Map<string, any>()
     for (const message of messages) {
       if (message?.role === 'toolResult' && typeof message.toolCallId === 'string') {
@@ -954,12 +984,32 @@ export class AgentManager {
     }
 
     const turns: ExportTurn[] = []
-    for (const message of messages) {
+    const currentTurn = (timestamp: number): ExportTurn => {
+      const existing = turns[turns.length - 1]
+      if (existing) return existing
+      const created: ExportTurn = { user: { text: '', timestamp }, parts: [] }
+      turns.push(created)
+      return created
+    }
+
+    for (const item of items) {
+      if (item.kind === 'compaction') {
+        currentTurn(item.timestamp).parts.push({
+          type: 'compaction',
+          timestamp: item.timestamp,
+          tokensBefore: item.tokensBefore,
+        })
+        continue
+      }
+
+      const message = item.message as any
+
       if (message?.role === 'user') {
         turns.push({
           user: {
             text: stripContextBlock(toMessageText(message)),
-            timestamp: typeof message.timestamp === 'number' ? message.timestamp : Date.now(),
+            timestamp:
+              typeof message.timestamp === 'number' ? message.timestamp : Date.now(),
           },
           parts: [],
         })
@@ -1481,6 +1531,7 @@ export class AgentManager {
       extrasSave: Promise.resolve(),
       thinkingStart: null,
       thinkingDurationsThisMessage: [],
+      lastCompactionEntryId: null,
     }
     runtime.unsubscribe = this.subscribeToSessionEvents(runtime)
     planContext.runtime = runtime
@@ -1699,15 +1750,32 @@ export class AgentManager {
    * parts 保留 thinking、text、tool 的真实顺序，供前端时间线渲染。
    */
   private sessionMessages(runtime: SessionRuntime): AgentMessage[] {
-    return buildSessionMessages(runtime.session.messages ?? [], {
+    return buildSessionMessagesFromEntries(activeTimeline(runtime.sessionManager), {
       thinkingDurations: runtime.extras.thinkingDurations,
       toolFilePath: (toolName: string, args: any) =>
         this.toolFilePath(toolName, args, runtime.sessionManager.getCwd()),
     })
   }
 
+  /** 成功压缩后取回本次落盘的 compaction entry；已转发过则返回 null */
+  private resolveCompactionEntry(runtime: SessionRuntime): any | null {
+    try {
+      const entries = runtime.sessionManager.getEntries() as any[]
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const entry = entries[index]
+        if (entry?.type !== 'compaction') continue
+        if (entry.id === runtime.lastCompactionEntryId) return null
+        runtime.lastCompactionEntryId = entry.id
+        return entry
+      }
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Failed to resolve compaction entry:', error)
+    }
+    return null
+  }
+
   private runtimeSummary(runtime: SessionRuntime): SessionSummary {
-    const messages = runtime.session.messages ?? []
+    const messages = this.timelineMessages(runtime)
     const name = runtime.pendingTitle ?? runtime.sessionManager.getSessionName()
     let firstUser = ''
     let messageCount = 0

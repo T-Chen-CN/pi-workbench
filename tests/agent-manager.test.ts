@@ -177,7 +177,10 @@ function createFakeSession(
   return session
 }
 
-function createFakeSessionManager(id = 'session-1') {
+function createFakeSessionManager(
+  id = 'session-1',
+  source?: { messages: Array<Record<string, unknown>> }
+) {
   let name: string | undefined
   let persisted = false
   const entries = [
@@ -196,6 +199,22 @@ function createFakeSessionManager(id = 'session-1') {
       timestamp: new Date(2000).toISOString(),
     },
   ]
+  // 真实 SDK 的 entry 链就是会话消息的来源；假管理器按 session.messages 同步派生
+  const deriveEntries = () => {
+    if (!source || source.messages.length === 0) return entries
+    return source.messages.map((message, index) => {
+      const timestamp = (message as { timestamp?: unknown }).timestamp
+      return {
+        id: `m-${index + 1}`,
+        parentId: index === 0 ? null : `m-${index}`,
+        type: 'message',
+        timestamp: new Date(
+          typeof timestamp === 'number' ? timestamp : 1000 + index
+        ).toISOString(),
+        message,
+      }
+    })
+  }
   return {
     getSessionId: () => id,
     getCwd: () => workspaceDir,
@@ -208,8 +227,9 @@ function createFakeSessionManager(id = 'session-1') {
     }),
     getSessionName: () => name,
     getLeafId: () => 'leaf-1',
-    getEntry: (entryId: string) => entries.find((entry) => entry.id === entryId),
-    getBranch: () => entries,
+    getEntry: (entryId: string) => deriveEntries().find((entry) => entry.id === entryId),
+    getBranch: () => deriveEntries(),
+    getEntries: () => deriveEntries(),
     getTree: () => [{ entry: entries[0], children: [{ entry: entries[1], children: [] }] }],
     branch: () => {},
     appendSessionInfo: (value: string) => {
@@ -265,6 +285,7 @@ function createTreeSessionManager(id: string, entries: FakeTreeEntry[], leafId: 
       }
       return pathEntries
     },
+    getEntries: () => entries,
     getTree: () => {
       const nodes = entries.map((entry) => ({ entry, children: [] as unknown[] }))
       const byId = new Map(nodes.map((node) => [node.entry.id, node]))
@@ -289,13 +310,15 @@ function primeSdk(
   sdk.modelRuntimeCreate.mockResolvedValue({
     getModel: vi.fn(() => model),
   })
-  sdk.continueRecent.mockImplementation(() => createFakeSessionManager())
-  sdk.sessionCreate.mockImplementation(() => createFakeSessionManager('session-new'))
+  sdk.continueRecent.mockImplementation(() => createFakeSessionManager('session-1', session))
+  sdk.sessionCreate.mockImplementation(() =>
+    createFakeSessionManager('session-new', session)
+  )
   sdk.sessionFindById.mockImplementation(
     (_cwd: string, id: string) => `/tmp/${id}.jsonl`
   )
   sdk.sessionOpen.mockImplementation((file: string) =>
-    createFakeSessionManager(path.basename(file, '.jsonl'))
+    createFakeSessionManager(path.basename(file, '.jsonl'), session)
   )
   sdk.sessionList.mockResolvedValue([])
   sdk.createAgentSession.mockResolvedValue({ session })
@@ -1378,6 +1401,7 @@ describe('AgentManager sessions', () => {
     reopened.messages.push({ role: 'user', content: 'restored' })
     reopened.messages.push({ role: 'assistant', content: 'hello again' })
     sdk.createAgentSession.mockResolvedValue({ session: reopened })
+    primeSdk(reopened)
     sdk.sessionFindById.mockReturnValue('/tmp/other-session.jsonl')
 
     const opened = await manager.openSession('other-session')
@@ -1427,6 +1451,7 @@ describe('AgentManager sessions', () => {
       session.messages.push({ role: 'assistant', content: 'second answer' })
     })
     sdk.createAgentSession.mockResolvedValue({ session: second })
+    primeSdk(second)
     const created = await manager.createSession()
     expect(created.success).toBe(true)
 
@@ -2651,6 +2676,107 @@ describe('session export', () => {
     await expect(manager.getSessionJsonlPath('session-1')).resolves.toMatchObject({
       success: false,
     })
+  })
+})
+
+describe('compacted session history and export', () => {
+  /** 已压缩的会话：投影只剩压缩后的消息，entry 链仍含压缩前历史与压缩点 */
+  function primeCompactedSession() {
+    const session = createFakeSession()
+    primeSdk(session)
+    const branch = [
+      {
+        id: 'm-1',
+        parentId: null,
+        type: 'message',
+        timestamp: new Date(1000).toISOString(),
+        message: { role: 'user', content: 'long task', timestamp: 1000 },
+      },
+      {
+        id: 'm-2',
+        parentId: 'm-1',
+        type: 'message',
+        timestamp: new Date(1100).toISOString(),
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'pre-compaction output' }],
+          timestamp: 1100,
+        },
+      },
+      {
+        id: 'c-1',
+        parentId: 'm-2',
+        type: 'compaction',
+        timestamp: new Date(1200).toISOString(),
+        summary: 'summary',
+        firstKeptEntryId: 'm-2',
+        tokensBefore: 128_000,
+      },
+      {
+        id: 'm-3',
+        parentId: 'c-1',
+        type: 'message',
+        timestamp: new Date(1300).toISOString(),
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'post-compaction output' }],
+          timestamp: 1300,
+        },
+      },
+    ]
+    const base = createFakeSessionManager('session-1', session)
+    sdk.continueRecent.mockImplementation(() => ({
+      ...base,
+      getBranch: () => branch,
+      getEntries: () => branch,
+    }))
+    // 模型上下文（投影）已经不含压缩前的那条助手消息
+    session.messages = [
+      { role: 'user', content: 'long task', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'post-compaction output' }],
+        timestamp: 1300,
+      },
+    ]
+    return session
+  }
+
+  it('restores pre-compaction messages with the compaction point in order', async () => {
+    primeCompactedSession()
+    await manager.initialize(makeConfig())
+
+    const history = manager.getSessionMessages('session-1')
+
+    expect(history.map((message) => message.role)).toEqual(['user', 'assistant'])
+    expect(history[1].content).toBe('pre-compaction output\npost-compaction output')
+    expect(history[1].parts?.map((part) => part.type)).toEqual([
+      'text',
+      'compaction',
+      'text',
+    ])
+    expect(history[1].parts?.[1]).toMatchObject({
+      type: 'compaction',
+      id: 'compaction-c-1',
+      entryId: 'c-1',
+      tokensBefore: 128_000,
+    })
+  })
+
+  it('exports markdown and html with the full history and compaction marker', async () => {
+    primeCompactedSession()
+    await manager.initialize(makeConfig())
+
+    const markdown = await manager.exportSessionMarkdown('session-1', 'zh')
+    expect(markdown.success).toBe(true)
+    expect(markdown.content).toContain('pre-compaction output')
+    expect(markdown.content).toContain('post-compaction output')
+    expect(markdown.content).toContain('上下文已压缩 · 压缩前 128,000 tokens')
+
+    const html = await manager.exportSessionHtml('session-1', 'zh')
+    expect(html.success).toBe(true)
+    expect(html.content).toContain('pre-compaction output')
+    expect(html.content).toContain('<p class="compacted">上下文已压缩 · 压缩前 128,000 tokens</p>')
   })
 })
 
