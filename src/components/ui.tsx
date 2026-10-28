@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Loader2, X, type LucideIcon } from 'lucide-react'
+import { useHostDocument } from '../panelHost/HostContext'
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
 type ControlSize = 'sm' | 'md'
@@ -195,14 +196,17 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
     const anchor = menu?.parentElement
     if (!menu || !anchor) return
 
+    // 面板可能被拆到辅助窗口：测量、裁剪与监听都落在它自己的 document 上
+    const doc = menu.ownerDocument
+    const view = doc.defaultView
     const anchorRect = anchor.getBoundingClientRect()
     const width = menu.getBoundingClientRect().width
 
     let clipLeft = 0
-    let clipRight = document.documentElement.clientWidth
+    let clipRight = doc.documentElement.clientWidth
     let node: HTMLElement | null = anchor.parentElement
     while (node) {
-      const style = getComputedStyle(node)
+      const style = (view ?? window).getComputedStyle(node)
       if (/(hidden|clip|auto|scroll)/.test(`${style.overflowX} ${style.overflowY}`)) {
         const rect = node.getBoundingClientRect()
         clipLeft = rect.left
@@ -221,7 +225,8 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
 
   useEffect(() => {
     if (!open) return
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const doc = menuRef.current?.ownerDocument ?? document
+    const previousFocus = doc.activeElement instanceof HTMLElement ? doc.activeElement : null
     let restoreFocus = true
 
     const isMenu = role === 'menu'
@@ -254,7 +259,7 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
       const entries = items()
       if (entries.length === 0) return
       event.preventDefault()
-      const current = entries.indexOf(document.activeElement as HTMLButtonElement)
+      const current = entries.indexOf(doc.activeElement as HTMLButtonElement)
       let next = 0
       if (event.key === 'End') next = entries.length - 1
       else if (event.key === 'ArrowDown') next = current < 0 ? 0 : (current + 1) % entries.length
@@ -263,8 +268,8 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
       entries[next].focus()
     }
 
-    window.addEventListener('mousedown', onPointerDown)
-    window.addEventListener('keydown', onKeyDown)
+    doc.addEventListener('mousedown', onPointerDown)
+    doc.addEventListener('keydown', onKeyDown)
 
     if (isMenu) {
       const checked = menuRef.current?.querySelector<HTMLButtonElement>(
@@ -276,9 +281,9 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
     }
 
     return () => {
-      window.removeEventListener('mousedown', onPointerDown)
-      window.removeEventListener('keydown', onKeyDown)
-      if (restoreFocus && previousFocus && document.body.contains(previousFocus)) {
+      doc.removeEventListener('mousedown', onPointerDown)
+      doc.removeEventListener('keydown', onKeyDown)
+      if (restoreFocus && previousFocus && doc.body.contains(previousFocus)) {
         previousFocus.focus()
       }
     }
@@ -437,14 +442,15 @@ export const Modal: React.FC<ModalProps> = ({
   size = 'md',
   closeLabel = 'Close',
 }) => {
+  const hostDocument = useHostDocument()
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, onClose])
+    hostDocument.addEventListener('keydown', onKeyDown)
+    return () => hostDocument.removeEventListener('keydown', onKeyDown)
+  }, [open, onClose, hostDocument])
 
   if (!open) return null
 

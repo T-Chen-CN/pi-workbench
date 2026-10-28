@@ -7,6 +7,8 @@ import type { SessionSummary } from '../types/electron'
 import { IconButton } from './ui'
 import { SessionTabs } from './SessionTabs'
 import { WorktreeBar } from './WorktreeBar'
+import { usePanelContextMenu } from './PanelContextMenu'
+import { PanelDragHandle } from './PanelDragHandle'
 
 export interface ChatHeaderProps {
   onCollapse?: () => void
@@ -31,14 +33,18 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   sessions,
   handleSelectSession,
   handleNewSession,
-  handleCloseTab,
-}) => (
-  <>
+  handleCloseTab
+}) => {
+  const panelMenu = usePanelContextMenu('chat')
+
+  return (
+    <>
       {/* Header */}
       <div
         className={`flex h-[38px] flex-shrink-0 items-center gap-2.5 border-b border-rule-divide pr-3.5 ${
           onCollapse ? 'pl-2' : 'pl-3.5'
         }`}
+        onContextMenu={panelMenu.onContextMenu}
       >
         {onCollapse && (
           <IconButton
@@ -54,14 +60,11 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         <div className="flex items-center gap-2.5">
           <h3 className="m-0 type-label text-ink-muted">{t('agentChatTitle')}</h3>
           <span className="flex items-center gap-1.5 type-caption text-ink-muted">
-            <span
-              className={`h-1 w-1 rounded-full ${
-                initialized ? 'bg-success' : 'animate-pulse bg-warning'
-              }`}
-            />
+            <span className={`h-1 w-1 rounded-full ${initialized ? 'bg-success' : 'animate-pulse bg-warning'}`} />
             {initialized ? t('agentReadyStatus') : t('agentInitializingStatus')}
           </span>
         </div>
+        <PanelDragHandle panel="chat" />
       </div>
 
       <WorktreeBar workspacePath={workspacePath} />
@@ -78,5 +81,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         onOpenList={() => useSessionStore.getState().setPanelOpen(workspacePath, true)}
       />
 
-  </>
-)
+      {panelMenu.menu}
+    </>
+  )
+}

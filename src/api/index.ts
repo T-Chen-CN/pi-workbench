@@ -39,6 +39,7 @@ import type {
   EditorTabsResult,
   GithubDeviceLoginEvent,
   GitChangedPayload,
+  AuxDetachResult,
 } from '../types/electron'
 
 // Mock API for browser development
@@ -194,6 +195,9 @@ const mockAPI = {
     maximized: false,
   }),
   onWindowMaximizedChange: (_callback: (maximized: boolean) => void) => () => {},
+  // 浏览器开发模式没有辅助窗口的主进程支持：拆窗退化为普通 window.open，由渲染层用 screenX/screenY 定位
+  onAuxWindowClosed: (_callback: (frameName: string) => void) => () => {},
+  auxDetachAt: async (): Promise<AuxDetachResult> => ({ success: false, error: 'Not supported' }),
   appBootReady: () => {},
   onAppBootExpanded: (_callback: () => void) => () => {},
   initWorkspace: async (workspacePath: string): Promise<WorkspaceResult> => {
@@ -445,6 +449,11 @@ export const api = {
   isWindowMaximized: () => electronAPI.isWindowMaximized(),
   onWindowMaximizedChange: (callback: (maximized: boolean) => void) =>
     electronAPI.onWindowMaximizedChange(callback),
+  onAuxWindowClosed: (callback: (frameName: string) => void) =>
+    typeof electronAPI.onAuxWindowClosed === 'function'
+      ? electronAPI.onAuxWindowClosed(callback)
+      : () => {},
+  auxDetachAt: () => electronAPI.auxDetachAt(),
   appBootReady: () => {
     if (typeof electronAPI.appBootReady === 'function') electronAPI.appBootReady()
   },

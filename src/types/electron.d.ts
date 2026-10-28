@@ -1,3 +1,12 @@
+/** 拖出拆窗时主进程返回的落点判定 */
+export interface AuxDetachResult {
+  success: boolean
+  /** 光标仍在主窗口内：不拆 */
+  inside?: boolean
+  rect?: { x: number; y: number; width: number; height: number }
+  error?: string
+}
+
 export interface GitRepoInfo {
   root: string
   gitDir: string
@@ -199,6 +208,10 @@ export interface ElectronAPI {
   closeWindow: () => Promise<{ success: boolean }>
   isWindowMaximized: () => Promise<{ success: boolean; maximized: boolean }>
   onWindowMaximizedChange: (callback: (maximized: boolean) => void) => () => void
+  /** 辅助窗口被关闭时回调（参数是 window.open 的 frameName） */
+  onAuxWindowClosed: (callback: (frameName: string) => void) => () => void
+  /** 拖出拆窗：由主进程读取真实光标位置并给出新窗口矩形 */
+  auxDetachAt: () => Promise<AuxDetachResult>
   /** 启动闸门：渲染层数据就绪后通知主进程放大窗口 */
   appBootReady: () => void
   onAppBootExpanded: (callback: () => void) => () => void

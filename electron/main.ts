@@ -25,6 +25,13 @@ import { NotificationRouter } from './notifications.js'
 import { createWorkspaceStore, importRecentWorkspaces } from './workspace-store.js'
 import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
+import { installAuxWindowSupport, registerAuxWindowIpc } from './aux-window.js'
+import {
+  appUrl,
+  isAppUrl,
+  registerAppProtocol,
+  registerAppSchemePrivileges,
+} from './app-protocol.js'
 import { animateBounds, type WindowBounds } from './window-morph.js'
 import { registerFilesIpc } from './ipc/files.js'
 import { registerAgentIpc } from './ipc/agent.js'
@@ -74,6 +81,9 @@ app.setPath('userData', userDataDir)
 
 let mainWindow: BrowserWindow | null = null
 configureIpcWindow(() => mainWindow)
+
+// 必须在 app ready 之前声明：外壳走标准协议后，辅助窗口才能与 opener 同源互访
+registerAppSchemePrivileges()
 
 /**
  * 启动页：窗口先以 420×260 出现，面板数据就绪后放大到工作台尺寸。
@@ -545,6 +555,8 @@ registerSystemIpc({
   getRendererLogger: () => rendererLogger,
 })
 
+registerAuxWindowIpc({ getMainWindow: () => mainWindow })
+
 
 // 初始化应用目录结构
 async function initAppDirectories() {
@@ -710,7 +722,9 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
     void mainWindow.loadURL(devUrl.toString())
     mainWindow.webContents.openDevTools()
   } else {
-    void mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), { query })
+    void mainWindow.loadURL(
+      appUrl('/index.html', query)
+    )
   }
 
   if (skipBoot) {
@@ -770,12 +784,21 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
     }
   })
 
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  // 面板辅助窗口：只放行 about:blank + pi-panel: 前缀的 window.open
+  installAuxWindowSupport(mainWindow, {
+    onClosed: (frameName) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('aux:window-closed', frameName)
+      }
+    },
+  })
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
     const devServerUrl = process.env.VITE_DEV_SERVER_URL
     const allowed =
-      url.startsWith('file://') || (devServerUrl ? url.startsWith(devServerUrl) : false)
+      isAppUrl(url) ||
+      url.startsWith('file://') ||
+      (devServerUrl ? url.startsWith(devServerUrl) : false)
     if (!allowed) {
       event.preventDefault()
     }
@@ -818,6 +841,8 @@ app.whenReady().then(async () => {
   }
 
   await initAppDirectories()
+  // 外壳协议必须在任何 loadURL 之前注册；辅助窗口依赖它拿到同源文档
+  registerAppProtocol(path.join(__dirname, '../dist'))
 
   // 启动页要尽早出现：只读设置（主题与语言）就建窗，其余初始化与页面加载并行。
   let startupSettings: Record<string, any> = {}

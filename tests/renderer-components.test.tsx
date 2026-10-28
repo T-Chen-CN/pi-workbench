@@ -20,6 +20,7 @@ import { useI18nStore } from '../src/store/i18nStore'
 import { translations } from '../src/i18n/translations'
 import { api } from '../src/api'
 import { piAgentAPI } from '../src/api/piAgentAPI'
+import { clearPanelUi } from '../src/panelHost/panelUiState'
 import type { ApiConfig } from '../src/types/electron'
 
 vi.mock('../src/api', () => ({
@@ -303,7 +304,8 @@ describe('ChatPanel', () => {
     // 预览层挂在 body 上，不受聊天列表 transform / overflow 限制
     expect(dialog.parentElement).toBe(document.body)
 
-    fireEvent.keyDown(window, { key: 'Escape' })
+    // 预览层监听在面板所在文档上（拆窗后为子文档），事件从焦点元素冒泡上来
+    fireEvent.keyDown(document.body, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
@@ -645,7 +647,8 @@ describe('ChatPanel', () => {
 
     expect(await screen.findByRole('menuitemradio', { name: /test-model/ })).toBeTruthy()
 
-    fireEvent.keyDown(window, { key: 'Escape' })
+    // PopoverMenu 监听在面板所在 document 上，事件从焦点元素冒泡上来
+    fireEvent.keyDown(document.body, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('menuitemradio')).toBeNull())
     expect(document.activeElement).toBe(trigger)
   })
@@ -1380,6 +1383,30 @@ describe('FileExplorer', () => {
     )
   })
 
+  it('restores expanded folders after the panel is remounted in another window', async () => {
+    const workspace = '/ws-remount'
+    clearPanelUi(workspace)
+    vi.mocked(api.listDirectory).mockImplementation(async (dirPath: string) => {
+      if (dirPath === workspace) {
+        return { success: true, items: [{ name: 'src', path: `${workspace}/src`, isDirectory: true }] }
+      }
+      if (dirPath === `${workspace}/src`) {
+        return { success: true, items: [{ name: 'index.ts', path: `${workspace}/src/index.ts`, isDirectory: false }] }
+      }
+      return { success: true, items: [] }
+    })
+
+    const first = render(<FileExplorer workspacePath={workspace} />)
+    fireEvent.click(await screen.findByText('src'))
+    await screen.findByText('index.ts')
+    first.unmount()
+
+    render(<FileExplorer workspacePath={workspace} />)
+
+    expect(await screen.findByText('index.ts')).toBeTruthy()
+    clearPanelUi(workspace)
+  })
+
   it('moves keyboard focus through sort options and toggles', async () => {
     vi.mocked(api.listDirectory).mockResolvedValue({ success: true, items: [] })
 
@@ -1397,7 +1424,7 @@ describe('FileExplorer', () => {
       translations.zh.sortReverse,
       translations.zh.sortByName,
     ]) {
-      fireEvent.keyDown(window, { key: 'ArrowDown' })
+      fireEvent.keyDown(document.body, { key: 'ArrowDown' })
       expect(focusedText()).toBe(label)
     }
   })

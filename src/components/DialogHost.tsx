@@ -3,9 +3,12 @@ import { useDialogStore } from '../store/dialogStore'
 import { useI18nStore } from '../store/i18nStore'
 import { Button, Input, Modal } from './ui'
 
-/** 全局确认/输入/提示对话框，替代 window.confirm / window.prompt / window.alert */
-export const DialogHost: React.FC = () => {
-  const current = useDialogStore((state) => state.current)
+/**
+ * 全局确认/输入/提示对话框，替代 window.confirm / window.prompt / window.alert。
+ * 每个宿主窗口各挂一份，只渲染属于自己窗口的那一个。
+ */
+export const DialogHost: React.FC<{ host?: string }> = ({ host = 'main' }) => {
+  const current = useDialogStore((state) => (state.currentHost === host ? state.current : null))
   const close = useDialogStore((state) => state.close)
   const { t } = useI18nStore()
   const [value, setValue] = useState('')
