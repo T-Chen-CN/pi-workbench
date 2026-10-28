@@ -107,6 +107,7 @@ src/components/
 ├── ApprovalCard.tsx
 ├── ChatApiKeyPrompt.tsx
 ├── ChatHeader.tsx
+├── ChatPanelHeader.tsx
 ├── ChatMessageRow.tsx
 ├── ChatPanel.tsx
 ├── ChatTranscript.tsx
@@ -127,7 +128,7 @@ src/components/
 ├── HtmlPreview.tsx
 ├── GitView.tsx
 ├── CommitDetailView.tsx
-├── WorktreeBar.tsx
+├── WorktreeChip.tsx
 ├── GithubSettings.tsx
 ├── WebSearchSettings.tsx
 ├── PanelSlot.tsx

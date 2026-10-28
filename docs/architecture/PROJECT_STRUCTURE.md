@@ -70,6 +70,7 @@ pi-workbench/
 │   │   ├── ApprovalCard.tsx      # 工具审批卡
 │   │   ├── ChatPanel.tsx         # 会话面板入口（调用 controller hook）
 │   │   ├── ChatHeader.tsx        # 顶部与会话标签
+│   │   ├── ChatPanelHeader.tsx   # 聊天面板头部（收起 / 标题 / 工作树 chip / 拖出柄）
 │   │   ├── ChatTranscript.tsx    # 虚拟化消息滚动区
 │   │   ├── ChatMessageRow.tsx    # 消息行、任务与变更摘要
 │   │   ├── ChatApiKeyPrompt.tsx  # 未配置 API Key 的提示
@@ -102,7 +103,7 @@ pi-workbench/
 │   │   ├── HtmlPreview.tsx       # HTML 沙箱预览
 │   │   ├── GitView.tsx           # 只读 Git 视图（提交图 / 工作树更改）
 │   │   ├── CommitDetailView.tsx  # 提交详情覆盖层
-│   │   ├── WorktreeBar.tsx       # 会话工作树切换条
+│   │   ├── WorktreeChip.tsx      # 会话工作树切换 chip（合并入聊天头部）
 │   │   ├── GithubSettings.tsx    # GitHub 关联（设备码登录 / PAT）
 │   │   ├── WebSearchSettings.tsx # 联网搜索供应商设置
 │   │   ├── PanelSlot.tsx         # 可停靠面板槽位
