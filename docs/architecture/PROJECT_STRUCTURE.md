@@ -46,6 +46,7 @@ pi-workbench/
 │   ├── logger.ts                 # 主进程文件日志
 │   ├── updater.ts                # 自动更新
 │   ├── app-protocol.ts           # 自定义 scheme（pw-file:// 等）注册
+│   ├── external-links.ts         # 外链协议白名单（https / http / mailto）
 │   ├── scheme-privileges.ts      # 自定义 scheme 权限声明
 │   ├── file-protocol.ts          # 文件预览协议（图片 / PDF / 媒体）
 │   ├── aux-window.ts             # 辅助窗口（可拖出面板）
@@ -88,6 +89,7 @@ pi-workbench/
 │   │   ├── FileExplorer.tsx      # 文件树、新建/重命名/删除、监听刷新
 │   │   ├── IPCDebug.tsx          # 开发调试面板（仅 DEV）
 │   │   ├── MonacoEditor.tsx      # Monaco、每文件 model、自动保存、草稿
+│   │   ├── SelectionQuoteButton.tsx # 划词「引用到对话」浮起按钮
 │   │   ├── SessionTabs.tsx       # 聊天面板内的会话标签
 │   │   ├── Settings.tsx          # 通用 / API / 权限 / 快捷键 / 关于
 │   │   ├── TerminalPanel.tsx     # xterm + PTY、输出附加或复制
@@ -136,10 +138,13 @@ pi-workbench/
 │   │   └── workspaceStore.ts     # 当前工作区 + 最近打开列表
 │   ├── workspace/
 │   │   ├── WorkspaceScope.tsx    # 让深层组件知道所属工作区
+│   │   ├── MarkdownLinkScope.tsx # 链接作用域（外链 / 锚点 / 仓库文件分发）
+│   │   ├── linkTarget.ts         # 链接目标判定与信任校验
+│   │   ├── quoteSelection.ts     # 划词选区取值与长度上限
 │   │   └── editorTabs.ts         # 编辑器标签落盘
 │   ├── theme/tokens.ts           # 从 CSS 变量读取颜色（Monaco / xterm）
 │   ├── hooks/                     # chatScroll（聊天贴底）/ useVirtualRows / useChatSessions / useChatPanelState / useRevertEdits
-│   ├── utils/                    # 文件路径/树、快捷键、符号、图片、Markdown、diff 回退等
+│   ├── utils/                    # 文件路径/树、快捷键、符号、图片、Markdown、剪贴板、diff 回退等
 │   ├── api/
 │   │   ├── index.ts              # IPC 封装 + Web dev mock
 │   │   ├── piAgentAPI.ts         # Agent 调用（Electron IPC / Web SSE 桥接）
@@ -278,7 +283,9 @@ ChatPanel.handleSubmit
 | `window:maximized-changed` | main → renderer | 最大化状态变化 |
 | `git:*`（22 invoke + 2 推送） | invoke / main → renderer | 工作树、只读历史、分支 / 提交、工作树依赖安装；见 [git-and-worktrees §3](../agent/git-and-worktrees.md) |
 | `github:*`（7 invoke + 1 推送） | invoke / main → renderer | GitHub OAuth（设备码 / 回调）、登录状态、账号配置 |
-| `aux:*`（3 invoke + 1 推送） | invoke / main → renderer | 可停见面板的辅助窗口（拆出位置、窗口命令、状态、关闭事件）；handler 注册在 `electron/aux-window.ts` |
+| `aux:*`（4 invoke + 1 推送） | invoke / main → renderer | 可停见面板的辅助窗口（拖动起点、拆出位置、窗口命令、状态、关闭事件）；handler 注册在 `electron/aux-window.ts` |
+| `shell:openExternal` | invoke | 外部链接（https / http / mailto）交系统浏览器；白名单在 `electron/external-links.ts` |
+| `clipboard:writeText` | invoke | 写系统剪贴板（`pw-app://` 下 `navigator.clipboard` 不可用） |
 | `webSearch:get` / `save` | invoke | 联网搜索供应商与 Key（`safeStorage` 加密） |
 
 ---

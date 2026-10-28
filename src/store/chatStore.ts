@@ -69,6 +69,8 @@ export interface ChatAttachment {
   data?: string
   /** 图像字节数（用于展示与限制） */
   size?: number
+  /** 引用块在 prompt 里的标题（对话引用没有文件路径时使用） */
+  label?: string
 }
 
 export type NewChatAttachment = Omit<ChatAttachment, 'id'> & { id?: string }
@@ -103,6 +105,8 @@ export interface ConversationState {
   } | null
   /** 会话累计用量与成本 */
   sessionStats: SessionStatsInfo | null
+  /** 下一条消息是否自动带上当前查看的文档（发送后自动复位） */
+  quoteCurrentFile: boolean
 }
 
 const EMPTY_CONVERSATION: ConversationState = {
@@ -116,6 +120,7 @@ const EMPTY_CONVERSATION: ConversationState = {
   sessionSettings: null,
   retryStatus: null,
   sessionStats: null,
+  quoteCurrentFile: false
 }
 
 /** 会话在 store 中的键：工作区 + 会话，避免跨工作区串数据 */
@@ -158,6 +163,8 @@ interface ChatState {
   /** 按 id 消费已被消息带走的附件；未提交的附件保持不变 */
   consumeAttachments: (key: string, ids: string[]) => void
   setDraftInput: (key: string, value: string) => void
+  /** 引用当前查看的文档开关（只作用于下一次发送） */
+  setQuoteCurrentFile: (key: string, value: boolean) => void
   addPending: (key: string, text: string, images?: AgentImagePayload[]) => PendingMessage
   removePending: (key: string, id: string) => void
   setContextUsage: (key: string, usage: ContextUsageInfo | null) => void
@@ -466,7 +473,7 @@ export const useChatStore = create<ChatState>((set) => ({
           parts,
           content: textFromParts(parts) || next.content,
           isStreaming: false,
-          thinkingStartedAt: undefined,
+          thinkingStartedAt: undefined
         }
       })
     ),
@@ -526,6 +533,9 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) =>
       updateExisting(state, key, (current) => ({ ...current, draftInput: value }))
     ),
+
+  setQuoteCurrentFile: (key, value) =>
+    set((state) => updateExisting(state, key, (current) => ({ ...current, quoteCurrentFile: value }))),
 
   addPending: (key, text, images) => {
     const item: PendingMessage = {

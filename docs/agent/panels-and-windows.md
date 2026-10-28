@@ -17,14 +17,16 @@
 | 主进程窗口白名单只放行 `about:blank` + `pi-panel:` 前缀（`AUX_FRAME_PREFIX`） | 否则等于开了任意开窗的口子 |
 | `pi-panel:` 前缀与 `HostId` 格式在 `electron/aux-window.ts` 与 `src/panelHost/types.ts` **逐字一致** | 进程边界字符串是隐式契约，混用会静默失败（按钮"点了没反应"） |
 | 一切"窗口级" API 走 `useHostDocument()` / `useHostKeydown()`，不用裸 `window` / `document` | 面板可能活在子文档里 |
-| 窗口命令必须显式带 `frameName`（`pi-panel:aux:<n>`） | 渲染层 IPC 来源恒为主窗口，不带就无法寻址辅助窗口 |
+| 窗口命令必须显式带 `frameName`（`pi-panel:aux:<n>`） | 一套 IPC 服务所有窗口（主窗口 + 每个辅助窗口），不带就无法确定目标窗口 |
 | 拆出的面板在主窗口保持挂载但 `hidden` | portal 需要组件树活着；面板组件必须容忍"不可见但 mounted" |
 | 面板宽度 / 宿主归 `panelStore`（运行期，不落盘） | 重启回默认布局，与"退出不自动恢复工作区"一致 |
 | 终端 PTY 归 `terminalStore` | 拆窗只重建 xterm 视图，PTY 与尾部缓冲不能重建 |
 
 - 关闭辅助窗口 = 面板回位；主窗口侧不提供"定位 / 还原"入口。
 - 最小尺寸 320 × 220；外壳与主窗口一致（Windows / Linux 无边框自绘按钮，macOS `hiddenInset`）。
-- 频道：`aux:detach-at`（拖出落点由主进程读真实光标，渲染层不自己算）、`aux:window-command`、`aux:window-state`。
+- 频道：`aux:drag-begin`（拖动起点）、`aux:detach-at`（拖出落点）、`aux:window-command`、`aux:window-state`。起点与落点都由主进程用 `screen.getCursorScreenPoint()` 取，混合 DPI 下不失真；渲染层不自己算坐标。
+- 拆出判据：光标离开窗口 **或** 拖动距离 ≥ 96 DIP（`PANEL_DETACH_DISTANCE`，与面板头同宽量级）——短促误拖不会拆窗。
+- 辅助窗口是**登记过的 IPC 来源**（`trustIpcSender` / `untrustIpcSender`，见 [ipc-and-trust §1](ipc-and-trust.md)），所以拆出面板里的复制、外链、会话操作都可用；但主进程窗口白名单不受影响，仍然只放行 `about:blank` + `pi-panel:`，其它 URL 一律 deny（`isExternalUrl()` 命中的交给 `shell.openExternal`）。
 - 布局**不做**持久化。
 
 ## 2. 主窗口关闭与托盘常驻

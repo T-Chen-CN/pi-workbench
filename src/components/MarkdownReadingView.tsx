@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Pencil, X } from 'lucide-react'
 import { MarkdownBody } from './AgentMarkdown'
+import { MarkdownLinkScopeProvider } from '../workspace/MarkdownLinkScope'
 import { Button, Caption, IconButton, Textarea } from './ui'
 import { useI18nStore } from '../store/i18nStore'
 import { editorStoreFor } from '../store/editorStore'
 import { splitMarkdownBlockRanges, type MarkdownBlockRange } from '../utils/markdownBlocks'
+import { dirname } from '../utils/filePath'
 import type { OpenFile } from '../types'
 
 const EMPTY_BLOCK: MarkdownBlockRange = { text: '', start: 0, end: 0 }
@@ -80,75 +82,74 @@ export const MarkdownReadingView: React.FC<{
   const draftRows = Math.min(28, Math.max(4, draft.split('\n').length + 1))
 
   return (
-    <div
-      className="min-h-0 flex-1 overflow-auto bg-surface"
-      data-testid="markdown-reading-view"
-    >
-      {/* pb 给右下角的视图切换浮层留位：滚到底时最后一行不被压住 */}
-      <article className="file-markdown chat-markdown mx-auto w-full max-w-[64rem] px-8 pt-6 pb-12">
-        {rendered.map((block, index) =>
-          editingIndex === index ? (
-            <div key={`edit-${block.start}`} className="my-3">
-              <Textarea
-                ref={textareaRef}
-                value={draft}
-                rows={draftRows}
-                spellCheck={false}
-                className="type-data"
-                aria-label={t('markdownEditBlock')}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') {
-                    event.preventDefault()
-                    cancel()
-                  }
-                  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-                    event.preventDefault()
-                    commit()
-                  }
-                }}
-              />
-              <div className="mt-1.5 flex items-center gap-2">
-                <Button size="sm" variant="primary" icon={Check} onClick={commit}>
-                  {t('save')}
-                </Button>
-                <Button size="sm" variant="ghost" icon={X} onClick={cancel}>
-                  {t('cancel')}
-                </Button>
-                <Caption className="text-ink-muted">{t('markdownEditHint')}</Caption>
-              </div>
-            </div>
-          ) : (
-            <div
-              key={`${block.start}-${index}`}
-              className="group/block relative"
-              data-block-index={index}
-            >
-              {block.frontmatter ? (
-                <pre className="md-frontmatter type-data text-ink-muted">{block.text}</pre>
-              ) : block.text.trim() ? (
-                <MarkdownBody content={block.text} highlight />
-              ) : (
-                <button
-                  type="button"
-                  className="w-full border border-dashed border-rule-control px-3 py-6 type-body text-ink-muted hover:bg-hover hover:text-ink"
-                  onClick={() => startEditing(index)}
-                >
-                  {t('markdownEmpty')}
-                </button>
-              )}
-              <div className="absolute right-0 top-0 opacity-0 transition-opacity focus-within:opacity-100 group-hover/block:opacity-100">
-                <IconButton
-                  icon={Pencil}
-                  label={t('markdownEditBlock')}
-                  size="sm"
-                  onClick={() => startEditing(index)}
+    <div className="min-h-0 flex-1 overflow-auto bg-surface" data-testid="markdown-reading-view">
+      <MarkdownLinkScopeProvider value={{ docDir: dirname(file.path), openRoot: root }}>
+        {/* pb 给右下角的视图切换浮层留位：滚到底时最后一行不被压住 */}
+        <article
+          className="file-markdown chat-markdown mx-auto w-full max-w-[64rem] px-8 pt-6 pb-12"
+          data-quote-scope="doc"
+          data-quote-doc={file.path}
+        >
+          {rendered.map((block, index) =>
+            editingIndex === index ? (
+              <div key={`edit-${block.start}`} className="my-3">
+                <Textarea
+                  ref={textareaRef}
+                  value={draft}
+                  rows={draftRows}
+                  spellCheck={false}
+                  className="type-data"
+                  aria-label={t('markdownEditBlock')}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                      event.preventDefault()
+                      cancel()
+                    }
+                    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                      event.preventDefault()
+                      commit()
+                    }
+                  }}
                 />
+                <div className="mt-1.5 flex items-center gap-2">
+                  <Button size="sm" variant="primary" icon={Check} onClick={commit}>
+                    {t('save')}
+                  </Button>
+                  <Button size="sm" variant="ghost" icon={X} onClick={cancel}>
+                    {t('cancel')}
+                  </Button>
+                  <Caption className="text-ink-muted">{t('markdownEditHint')}</Caption>
+                </div>
               </div>
-            </div>
-          )
-        )}
-      </article>
+            ) : (
+              <div key={`${block.start}-${index}`} className="group/block relative" data-block-index={index}>
+                {block.frontmatter ? (
+                  <pre className="md-frontmatter type-data text-ink-muted">{block.text}</pre>
+                ) : block.text.trim() ? (
+                  <MarkdownBody content={block.text} highlight />
+                ) : (
+                  <button
+                    type="button"
+                    className="w-full border border-dashed border-rule-control px-3 py-6 type-body text-ink-muted hover:bg-hover hover:text-ink"
+                    onClick={() => startEditing(index)}
+                  >
+                    {t('markdownEmpty')}
+                  </button>
+                )}
+                <div className="absolute right-0 top-0 opacity-0 transition-opacity focus-within:opacity-100 group-hover/block:opacity-100">
+                  <IconButton
+                    icon={Pencil}
+                    label={t('markdownEditBlock')}
+                    size="sm"
+                    onClick={() => startEditing(index)}
+                  />
+                </div>
+              </div>
+            )
+          )}
+        </article>
+      </MarkdownLinkScopeProvider>
     </div>
   )
 }

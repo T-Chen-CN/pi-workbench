@@ -9,7 +9,7 @@ import { WorkspaceScopeProvider } from '../src/workspace/WorkspaceScope'
 import { api } from '../src/api'
 
 vi.mock('../src/api', () => ({
-  api: { auxDetachAt: vi.fn() }
+  api: { auxDetachAt: vi.fn(), auxDragBegin: vi.fn(async () => ({ success: true })) }
 }))
 
 const WORKSPACE = '/tmp/ws'
@@ -98,6 +98,8 @@ describe('PanelDragHandle', () => {
 
     expect(dataTransfer.data.get('application/x-pi-panel')).toBe('chat')
     expect(dataTransfer.effectAllowed).toBe('move')
+    // 拖动起点由主进程记录：距离与落点必须来自同一坐标源
+    expect(api.auxDragBegin).toHaveBeenCalled()
   })
 
   it('detaches the panel when released outside the main window', async () => {
@@ -143,6 +145,23 @@ describe('PanelDragHandle', () => {
     fireEvent.dragEnd(grabHandle(), { dataTransfer })
 
     await waitFor(() => expect(api.auxDetachAt).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(usePanelStore.getState().panelHost[WORKSPACE]?.chat).toMatch(/^aux:/))
+  })
+
+  // 拖动距离足够长就拆窗，不看落点是否还在窗口内
+  it('detaches when the drag travels far enough even inside the window', async () => {
+    vi.mocked(api.auxDetachAt).mockResolvedValue({
+      success: true,
+      inside: true,
+      distance: 240,
+      rect: { x: 900, y: 200, width: 520, height: 640 }
+    })
+    renderHandle()
+    const dataTransfer = fakeDataTransfer()
+
+    fireEvent.dragStart(grabHandle(), { dataTransfer })
+    fireEvent.dragEnd(grabHandle(), { dataTransfer })
+
     await waitFor(() => expect(usePanelStore.getState().panelHost[WORKSPACE]?.chat).toMatch(/^aux:/))
   })
 

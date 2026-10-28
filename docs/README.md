@@ -12,6 +12,7 @@
 ### 🏗️ 架构和设计
 - **[项目结构](./architecture/PROJECT_STRUCTURE.md)** — 代码组织、进程模型、数据流与 IPC 频道表
 - **[Agent 过程轨迹方案](./architecture/AGENT_TRACE.md)** — 思考、工具调用与正文的 parts 时间线（已实现 v1）
+- **[聊天渲染单一数据源](./architecture/chat-render-single-source.md)** — 设计稿（未实施）：实时流式与重载历史产出同一份消息，根治插话 / 压缩点位置问题
 - **[设计系统](./design/DESIGN_SYSTEM.md)** — 颜色、字体、组件与交互的唯一事实来源（强制）
 
 ### 🧾 架构决策（ADR）

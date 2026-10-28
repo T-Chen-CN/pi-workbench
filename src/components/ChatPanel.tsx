@@ -1,21 +1,8 @@
 import React from 'react'
 import { useChatPanelState } from '../hooks/useChatPanelState'
 import type { ChatPanelProps } from '../utils/chatPanelShared'
-import {
-  THINKING_LEVELS,
-  THINKING_LABEL_KEYS,
-  formatTokenCount,
-} from '../utils/chatPanelShared'
-import {
-  ArrowDown,
-  ChevronDown,
-  FileText,
-  Minimize2,
-  Paperclip,
-  Send,
-  Square,
-  X,
-} from 'lucide-react'
+import { THINKING_LEVELS, THINKING_LABEL_KEYS, formatTokenCount } from '../utils/chatPanelShared'
+import { ArrowDown, BookMarked, ChevronDown, FileText, Minimize2, Paperclip, Send, Square, X } from 'lucide-react'
 import { useChatStore } from '../store/chatStore'
 import { useSessionStore } from '../store/sessionStore'
 import { retrySecondsRemaining } from '../utils/retryCountdown'
@@ -32,6 +19,10 @@ import { TurnTaskList } from './ChatMessageRow'
 import { ChatHeader } from './ChatHeader'
 import { ChatApiKeyPrompt } from './ChatApiKeyPrompt'
 import { ChatTranscript } from './ChatTranscript'
+import { MarkdownLinkScopeProvider } from '../workspace/MarkdownLinkScope'
+import { SelectionQuoteButton } from './SelectionQuoteButton'
+import { useHostDocument, useHostId } from '../panelHost/HostContext'
+import { MAIN_HOST } from '../panelHost/types'
 import { ToolResultViewer } from './ToolResultViewer'
 import { Meter, RingMeter } from './patterns'
 import {
@@ -50,7 +41,7 @@ import {
 export type { ChatPanelProps }
 
 export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
-  const { workspacePath, onCollapse, collapseButtonRef, panelId } = props
+  const { workspacePath, viewRoot, onCollapse, collapseButtonRef, panelId } = props
   const {
     SessionModeIcon,
     activeKey,
@@ -123,6 +114,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
     panelOpen,
     pendingApprovals,
     pendingMessages,
+    quoteCurrentFile,
+    toggleQuoteCurrentFile,
     permissionLabelRef,
     retryNow,
     retryStatus,
@@ -158,6 +151,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
     virtualizer,
   } = useChatPanelState(props)
 
+  // 聊天拆进辅助窗口后，选区在那个 document 里：单独挂一个只监听宿主文档的引用按钮
+  const hostId = useHostId()
+  const hostDocument = useHostDocument()
+
   // 纯图片（无文本）也可以发送；预处理中的图片不算可发送内容
   const hasSendableInput = Boolean(input.trim()) || attachments.some((a) => a.kind === 'image')
 
@@ -176,6 +173,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
 
   return (
     <div className="relative flex h-full flex-col bg-surface">
+      {hostId !== MAIN_HOST && <SelectionQuoteButton doc={hostDocument} />}
       <ChatHeader
         onCollapse={onCollapse}
         collapseButtonRef={collapseButtonRef}
@@ -189,35 +187,37 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
         handleCloseTab={handleCloseTab}
       />
 
-      <ChatTranscript
-        activeSessionId={activeSessionId}
-        activeKey={activeKey}
-        handleNewSession={handleNewSession}
-        t={t}
-        transcriptRef={transcriptRef}
-        handleTranscriptScroll={handleTranscriptScroll}
-        messages={messages}
-        isLoading={isLoading}
-        initialized={initialized}
-        emptySuggestions={emptySuggestions}
-        inputRef={inputRef}
-        virtualizer={virtualizer}
-        diffToolIds={diffToolIds}
-        openToolDiff={openToolDiff}
-        handleCopyMessage={handleCopyMessage}
-        handleSwitchBranch={handleSwitchBranch}
-        handleOpenToolResult={handleOpenToolResult}
-        latestProposedPlan={latestProposedPlan}
-        handleApprovePlan={handleApprovePlan}
-        handleRejectPlan={handleRejectPlan}
-        lastMessageId={lastMessageId}
-        lastUserMessageId={lastUserMessageId}
-        handleRetryMessage={handleRetryMessage}
-        handleEditMessage={handleEditMessage}
-        error={error}
-        fatalError={fatalError}
-        lastAssistantMessage={lastAssistantMessage}
-      />
+      <MarkdownLinkScopeProvider value={{ docDir: null, openRoot: viewRoot ?? workspacePath }}>
+        <ChatTranscript
+          activeSessionId={activeSessionId}
+          activeKey={activeKey}
+          handleNewSession={handleNewSession}
+          t={t}
+          transcriptRef={transcriptRef}
+          handleTranscriptScroll={handleTranscriptScroll}
+          messages={messages}
+          isLoading={isLoading}
+          initialized={initialized}
+          emptySuggestions={emptySuggestions}
+          inputRef={inputRef}
+          virtualizer={virtualizer}
+          diffToolIds={diffToolIds}
+          openToolDiff={openToolDiff}
+          handleCopyMessage={handleCopyMessage}
+          handleSwitchBranch={handleSwitchBranch}
+          handleOpenToolResult={handleOpenToolResult}
+          latestProposedPlan={latestProposedPlan}
+          handleApprovePlan={handleApprovePlan}
+          handleRejectPlan={handleRejectPlan}
+          lastMessageId={lastMessageId}
+          lastUserMessageId={lastUserMessageId}
+          handleRetryMessage={handleRetryMessage}
+          handleEditMessage={handleEditMessage}
+          error={error}
+          fatalError={fatalError}
+          lastAssistantMessage={lastAssistantMessage}
+        />
+      </MarkdownLinkScopeProvider>
 
       {/* Composer */}
       {activeSessionId && (
@@ -404,16 +404,20 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                 }
                 const label =
                   attachment.kind === 'snippet'
-                    ? `${attachment.name}:${attachment.startLine}–${attachment.endLine}`
+                    ? attachment.startLine !== undefined && attachment.endLine !== undefined
+                      ? `${attachment.name}:${attachment.startLine}–${attachment.endLine}`
+                      : (attachment.label ?? attachment.name)
                     : attachment.name
                 return (
                   <span
                     key={attachment.id}
                     className="inline-flex items-center gap-1 border border-rule-control bg-sunken px-2 py-1 type-data text-ink-muted"
                     title={
-                      attachment.kind === 'snippet'
+                      attachment.kind === 'snippet' &&
+                      attachment.startLine !== undefined &&
+                      attachment.endLine !== undefined
                         ? `${attachment.path}:${attachment.startLine}-${attachment.endLine}`
-                        : attachment.path
+                        : attachment.path || attachment.label || attachment.name
                     }
                   >
                     <FileText size={10} className="text-ink-muted" />
@@ -500,6 +504,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                     setShowAttachMenu((open) => !open)
                     setAttachMode('files')
                   }}
+                />
+                {/* 引用当前正在查看的文档：默认不激活，激活后随下一次发送带上 */}
+                <IconButton
+                  icon={BookMarked}
+                  label={quoteCurrentFile ? t('quoteCurrentFileOn') : t('quoteCurrentDocHint')}
+                  size="sm"
+                  active={quoteCurrentFile}
+                  disabled={!initialized || !currentEditorFile}
+                  onClick={toggleQuoteCurrentFile}
                 />
                 {showAttachMenu && activeKey && (
                   <div className="absolute bottom-full left-0 z-10 mb-2 max-h-64 w-72 overflow-y-auto border border-line bg-raised py-1 shadow-print">

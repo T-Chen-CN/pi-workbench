@@ -13,8 +13,9 @@
  * frameName → BrowserWindow 的注册表，让渲染层按窗口寻址，而不是一律操作主窗口。
  */
 
-import { screen, type BrowserWindow, type BrowserWindowConstructorOptions, type Rectangle } from 'electron'
-import { handleIpc } from './ipc/register.js'
+import { screen, shell, type BrowserWindow, type BrowserWindowConstructorOptions, type Rectangle } from 'electron'
+import { handleIpc, trustIpcSender, untrustIpcSender } from './ipc/register.js'
+import { isExternalUrl } from './external-links.js'
 
 /** window.open 的 frameName 前缀；只有带前缀的 about:blank 会被放行 */
 export const AUX_FRAME_PREFIX = 'pi-panel:'
@@ -121,17 +122,44 @@ export interface AuxDetachResult {
   success: boolean
   inside?: boolean
   rect?: Rectangle
+  /** 光标离拖动起点的 DIP 距离；没有起点记录时为 undefined */
+  distance?: number
   error?: string
+}
+
+/**
+ * 拖动多远算「拖出」：光标没离开窗口、但已经拖了这么远，同样拆窗。
+ * 96 DIP ≈ 一个面板头宽，短促的误触不会触发。
+ */
+export const PANEL_DETACH_DISTANCE = 96
+
+/** 渲染层在 dragstart 时调用：记下拖动起点，供松手时算拖动距离 */
+let dragOrigin: { x: number; y: number } | null = null
+
+export function beginDetachDrag(): { success: boolean } {
+  const point = screen.getCursorScreenPoint()
+  dragOrigin = { x: point.x, y: point.y }
+  return { success: true }
 }
 
 /** 渲染层在 dragend 时调用：由主进程读取真实光标位置，规避混合 DPI 下 screenX 失真 */
 export function resolveDetachTarget(host: BrowserWindow): AuxDetachResult {
   if (!host || host.isDestroyed()) return { success: false, error: 'No window' }
   const point = screen.getCursorScreenPoint()
+  const distance = dragOrigin ? Math.hypot(point.x - dragOrigin.x, point.y - dragOrigin.y) : undefined
+  dragOrigin = null
   const bounds = host.getBounds()
-  if (isPointInBounds(point, bounds)) return { success: true, inside: true }
+  const inside = isPointInBounds(point, bounds)
+  // 拖得够远就拆，即使光标仍在窗口内（拖动距离与落点用同一坐标源，同样不受 DPI 影响）
+  const farEnough = distance !== undefined && distance >= PANEL_DETACH_DISTANCE
+  if (inside && !farEnough) return { success: true, inside: true, distance }
   const workArea = screen.getDisplayNearestPoint(point).workArea
-  return { success: true, inside: false, rect: computeDetachedRect(point, bounds, workArea) }
+  return {
+    success: true,
+    inside,
+    rect: computeDetachedRect(point, bounds, workArea),
+    distance
+  }
 }
 
 export type AuxWindowCommand = 'minimize' | 'toggleMaximize' | 'close'
@@ -182,6 +210,7 @@ function isAuxFrameName(value: unknown): value is string {
 }
 
 export function registerAuxWindowIpc(context: { getMainWindow: () => BrowserWindow | null }): void {
+  handleIpc('aux:drag-begin', () => beginDetachDrag())
   handleIpc('aux:detach-at', () => resolveDetachTarget(context.getMainWindow() as BrowserWindow))
 
   handleIpc('aux:window-command', (_event, frameName: unknown, command: unknown) => {
@@ -212,6 +241,11 @@ export interface AuxWindowSupportOptions {
  */
 export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowSupportOptions): void {
   host.webContents.setWindowOpenHandler(({ url, frameName, features }) => {
+    // 外部链接（文档 / 对话里的 http(s)）交给系统浏览器，不开内部窗口
+    if (isExternalUrl(url)) {
+      void shell.openExternal(url).catch(() => undefined)
+      return { action: 'deny' }
+    }
     if (url !== 'about:blank') return { action: 'deny' }
     if (!frameName.startsWith(AUX_FRAME_PREFIX)) return { action: 'deny' }
 
@@ -245,6 +279,8 @@ export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowS
   host.webContents.on('did-create-window', (child, details) => {
     const frameName = details.frameName
     auxWindows.set(frameName, child)
+    // 拆出的面板与主窗口同源，需要继续用 IPC（链接、剪贴板、会话），因此加入可信发送者
+    trustIpcSender(child.webContents)
     try {
       // 不给子窗口单独设菜单：BrowserWindow 会自动继承应用菜单（Windows / Linux 上是
       // 该窗口的菜单栏），Ctrl +/-/0、Ctrl+W 等默认快捷键依附在这份菜单上。
@@ -271,6 +307,7 @@ export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowS
     })
     child.on('closed', () => {
       auxWindows.delete(frameName)
+      untrustIpcSender(child.webContents)
       if (!host.isDestroyed()) options.onClosed(frameName)
     })
   })

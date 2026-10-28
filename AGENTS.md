@@ -28,7 +28,7 @@ npm run build      # 渲染层 + bridge + 主进程
 | 位置 | 规则 |
 | --- | --- |
 | `electron/` | 主进程。**IPC 一律写在 `electron/ipc/<域>.ts`，用 `handleIpc()` 注册**；不要在 `main.ts` 里直接 `ipcMain.handle`（会跳过来源校验） |
-| `electron/ipc/register.ts` | `handleIpc` + `isTrustedIpcSender`：只接受主窗口主框架，ready 之后 fail-closed |
+| `electron/ipc/register.ts` | `handleIpc` + `isTrustedIpcSender`：只接受主窗口与登记过的辅助窗口主框架，ready 之后 fail-closed |
 | `src/` | 渲染进程分层：`components/`（扁平，**禁建子目录**）· `store/`（一域一个 Zustand store）· `hooks/` · `utils/` · `workspace/` · `panelHost/` · `theme/` · `pdf/` · `api/`（IPC 封装 + 浏览器 mock 回退） |
 | `pi-bridge/` | 独立的 Agent 桥接包（`AgentManager`），有自己的 `package.json` / `tsconfig`；改完要 `npm run build:bridge` |
 | `tests/` | 扁平目录，文件名与源码同名（`src/utils/fileTree.ts` → `tests/file-tree.test.ts`）；`tests/design-system.test.ts` 是强制门槛 |

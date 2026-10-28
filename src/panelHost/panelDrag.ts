@@ -40,6 +40,8 @@ export function beginPanelDrag(event: React.DragEvent, panel: PanelId): void {
   event.dataTransfer.setData(PANEL_DRAG_MIME, panel)
   event.dataTransfer.effectAllowed = 'move'
   paintDragImage(event, t(PANEL_TITLE_KEY[panel]))
+  // 让主进程记下拖动起点：拖动距离与松手位置必须来自同一坐标源（混合 DPI 下 screenX 不可靠）
+  void api.auxDragBegin()
 }
 
 /**
@@ -47,10 +49,11 @@ export function beginPanelDrag(event: React.DragEvent, panel: PanelId): void {
  *
  * 不能用 `dataTransfer.dropEffect` 判断「是否取消」：拖到窗口外松手时没有任何
  * drop 目标接收，Chromium 同样报 `'none'` —— 而那正是需要拆窗的时机。
- * 唯一判据交给主进程的光标位置：仍落在主窗口内就不拆（含 Esc 取消）。
+ * 判据全部交给主进程：光标离开主窗口，或者拖动距离超过阈值（拖得够远就拆，
+ * 不看落点是否仍在窗口内）。主进程同时给出新窗口矩形，渲染层只负责执行。
  */
 export async function finishPanelDrag(workspacePath: string, panel: PanelId): Promise<void> {
   const result = await api.auxDetachAt()
-  if (!result.success || result.inside || !result.rect) return
+  if (!result.success || !result.rect) return
   await usePanelStore.getState().detachPanel(workspacePath, panel, { rect: result.rect })
 }

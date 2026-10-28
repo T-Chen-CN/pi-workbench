@@ -3,7 +3,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   cursor: { x: 500, y: 400 },
-  display: { workArea: { x: 0, y: 0, width: 1920, height: 1080 } }
+  display: { workArea: { x: 0, y: 0, width: 1920, height: 1080 } },
+  externalUrls: [] as string[]
 }))
 
 vi.mock('electron', () => ({
@@ -18,6 +19,13 @@ vi.mock('electron', () => ({
     getCursorScreenPoint: () => mocks.cursor,
     getDisplayNearestPoint: () => mocks.display,
     getDisplayMatching: () => mocks.display
+  },
+  // 外链交给系统浏览器：测试里只记录调用
+  shell: {
+    openExternal: (url: string) => {
+      mocks.externalUrls.push(url)
+      return Promise.resolve()
+    }
   }
 }))
 

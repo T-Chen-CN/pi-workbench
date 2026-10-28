@@ -12,6 +12,9 @@ interface FakeModel {
   setValue: (next: string) => void
   getValueInRange: () => string
   dispose: ReturnType<typeof vi.fn>
+  /** 组件据此跳过已释放的 model（真实 Monaco 有同名方法） */
+  isDisposed: () => boolean
+  getLineCount: () => number
 }
 
 const mocks = vi.hoisted(() => ({
@@ -39,6 +42,7 @@ vi.mock('monaco-editor', () => ({
 
 function createFakeModel(initialValue: string, uri?: { path?: string }): FakeModel {
   let value = initialValue
+  let disposed = false
   return {
     uri,
     getValue: () => value,
@@ -46,7 +50,11 @@ function createFakeModel(initialValue: string, uri?: { path?: string }): FakeMod
       value = next
     },
     getValueInRange: () => value,
-    dispose: vi.fn(),
+    isDisposed: () => disposed,
+    getLineCount: () => value.split(String.fromCharCode(10)).length,
+    dispose: vi.fn(() => {
+      disposed = true
+    })
   }
 }
 

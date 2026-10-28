@@ -1,8 +1,9 @@
 /** 终端、插件、自动更新、应用信息、渲染日志与窗口按钮 IPC */
 
-import { app, type BrowserWindow } from 'electron'
+import { app, clipboard, shell, type BrowserWindow } from 'electron'
 import { handleIpc } from './register.js'
 import { getAppDir } from '../app-paths.js'
+import { isExternalUrl } from '../external-links.js'
 import { isTrustedWorkspacePath, canonicalizePath, isPathInsideRoot } from '../workspace-trust.js'
 import type { TerminalManager } from '../terminal-manager.js'
 import type { PluginManager } from '../plugin-manager.js'
@@ -261,6 +262,27 @@ export function registerSystemIpc(context: SystemIpcContext): void {
       // 日志失败不影响渲染进程
     }
     return { success: true }
+  })
+
+  // ---- 外部链接 ----
+  // 自定义协议下 window.open / target=_blank 一律被主窗口拒绝，链接只能走这条通道
+  handleIpc('shell:openExternal', async (_event, url: unknown) => {
+    if (!isExternalUrl(url)) return { success: false, error: 'Unsupported URL' }
+    try {
+      await shell.openExternal(url)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  handleIpc('clipboard:writeText', async (_event, text: unknown) => {
+    try {
+      clipboard.writeText(typeof text === 'string' ? text : '')
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
   })
 
   handleIpc('app:getAppDir', async () => {

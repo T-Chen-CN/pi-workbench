@@ -62,6 +62,22 @@ export function isTrustedWorkspacePath(targetPath: string): boolean {
   return canonical !== null && trustedWorkspaceRoots.has(normalizeForComparison(canonical))
 }
 
+/**
+ * 监听允许的目录：受信任根，或位于任一受信任根内的子目录（会话绑定的工作树）。
+ *
+ * 只授予「监听」能力，写 / 删 / 改仍走 `resolveAllowedFileTarget` 的原有校验。
+ */
+export function resolveWatchableRoot(targetPath: string): string | null {
+  const canonical = canonicalizePath(targetPath)
+  if (!canonical) return null
+  const normalized = normalizeForComparison(canonical)
+  if (trustedWorkspaceRoots.has(normalized)) return canonical
+  for (const root of trustedWorkspaceRoots) {
+    if (isPathInsideRoot(root, normalized)) return canonical
+  }
+  return null
+}
+
 /** 文件写删改操作允许的范围：受信任工作区与应用缓存目录 */
 export function resolveAllowedFileTarget(targetPath: string): string | null {
   const target = canonicalizePath(targetPath)

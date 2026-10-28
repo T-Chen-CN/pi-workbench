@@ -122,22 +122,44 @@ export const MonacoEditor: React.FC<{
   }, [])
 
   const getOrCreateModel = useCallback((file: OpenFile): monaco.editor.ITextModel => {
-    const existing = modelsRef.current.get(file.path)
-    if (existing) {
-      if (existing.getValue() !== file.content) {
-        suppressChangeRef.current = true
-        existing.setValue(file.content)
-        suppressChangeRef.current = false
-      }
-      return existing
+    const create = (target: OpenFile): monaco.editor.ITextModel => {
+      const uri = monaco.Uri.file(target.path)
+      const registered = monaco.editor.getModel(uri)
+      const model =
+        registered && !registered.isDisposed()
+          ? registered
+          : monaco.editor.createModel(target.content, detectLanguage(target.name), uri)
+      modelsRef.current.set(target.path, model)
+      return model
     }
 
-    const uri = monaco.Uri.file(file.path)
-    const model =
-      monaco.editor.getModel(uri) ??
-      monaco.editor.createModel(file.content, detectLanguage(file.name), uri)
-    modelsRef.current.set(file.path, model)
-    return model
+    const cached = modelsRef.current.get(file.path)
+    // 缓存的 model 可能已被别的窗口 / 关闭标签释放：直接重建，不要对已释放的 model 读写
+    if (!cached) return create(file)
+    if (cached.isDisposed()) {
+      modelsRef.current.delete(file.path)
+      return create(file)
+    }
+
+    let current = ''
+    try {
+      current = cached.getValue()
+    } catch {
+      current = file.content
+    }
+    if (current !== file.content) {
+      suppressChangeRef.current = true
+      try {
+        cached.setValue(file.content)
+      } catch {
+        // model 在读取与写入之间被释放：重建后返回
+        modelsRef.current.delete(file.path)
+        return create(file)
+      } finally {
+        suppressChangeRef.current = false
+      }
+    }
+    return cached
   }, [])
 
   // 打开首个文件时创建编辑器；关闭全部文件后释放。容器随 currentFile 一起挂载。
@@ -178,7 +200,7 @@ export const MonacoEditor: React.FC<{
       const file = store.getState().currentFile
       const editorModel = editor.getModel()
       const range = editor.getSelection()
-      if (!file || !editorModel || !range) {
+      if (!file || !editorModel || editorModel.isDisposed() || !range) {
         useSelectionStore.getState().clearSelection()
         return
       }
@@ -255,7 +277,7 @@ export const MonacoEditor: React.FC<{
       monacoRef.current?.dispose()
       monacoRef.current = null
       for (const model of models.values()) {
-        model.dispose()
+        if (!model.isDisposed()) model.dispose()
       }
       models.clear()
       viewStates.clear()
@@ -280,7 +302,6 @@ export const MonacoEditor: React.FC<{
     monaco.editor.setModelLanguage(model, detectLanguage(currentFile.name))
     activePathRef.current = currentFile.path
   }, [currentFile, editorReady, getOrCreateModel])
-
   // 打开带行号的路径后滚动到该行并高亮（R-09）
   useEffect(() => {
     const editor = monacoRef.current
@@ -288,6 +309,7 @@ export const MonacoEditor: React.FC<{
       return
     }
     const model = editor.getModel()
+    if (model?.isDisposed()) return
     const lineCount = model?.getLineCount() ?? pendingReveal.line
     const line = Math.max(1, Math.min(pendingReveal.line, lineCount))
     editor.revealLineInCenter(line)
@@ -301,7 +323,7 @@ export const MonacoEditor: React.FC<{
     const openPaths = new Set(openFiles.map((file) => file.path))
     for (const [filePath, model] of [...modelsRef.current.entries()]) {
       if (!openPaths.has(filePath)) {
-        model.dispose()
+        if (!model.isDisposed()) model.dispose()
         modelsRef.current.delete(filePath)
         viewStatesRef.current.delete(filePath)
       }
@@ -336,6 +358,7 @@ export const MonacoEditor: React.FC<{
       if (suppressChangeRef.current) return
       const file = store.getState().currentFile
       if (!file) return
+      if (editor.getModel()?.isDisposed()) return
       const nextContent = editor.getValue()
       if (nextContent === file.content) return
       store.getState().updateOpenFile(file.path, { content: nextContent })

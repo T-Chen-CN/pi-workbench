@@ -39,7 +39,7 @@
 | 拖出判定 | `dragend` 调主进程 `aux:detach-at`，由主进程读真实光标位置与工作区，渲染层不自己算；**不能用 `dataTransfer.dropEffect` 判断取消**——拖到窗口外松手时 Chromium 同样报 `'none'` |
 | 终端 PTY | 所有权升到 `terminalStore`，拆窗只重建 xterm 视图，PTY 与 200KB 尾部缓冲留在 store |
 | 走动时带走的手感 | 展开的目录、文件树 / Git 滚动位置放 `panelUiState`（运行期内存，不落盘）；骨架树必须逐字复用 `listDirectory` 给出的路径写法（Windows 反斜杠），且首轮加载完成前不写回，否则空树会盖掉好快照 |
-| 窗口按钮寻址 | 渲染层只跑在主窗口的 JS 上下文，IPC 来源恒为主窗口，所以辅助窗口的最小化 / 最大化 / 关闭必须显式带 `frameName`（`pi-panel:aux:<n>`），最大化状态回传带 `host` 并由 `sameHost` 归一化后比较 |
+| 窗口按钮寻址 | 一套 IPC 服务所有窗口（主窗口 + 每个拆出面板），不能由主进程从 sender 推断目标，所以辅助窗口的最小化 / 最大化 / 关闭必须显式带 `frameName`（`pi-panel:aux:<n>`），最大化状态回传带 `host` 并由 `sameHost` 归一化后比较 |
 | toast / dialog | 每个窗口各挂一份，按「哪个窗口持有焦点」决定落点 |
 | 布局持久化 | 不做。重启回默认布局，与「退出不自动恢复工作区」一致 |
 
@@ -84,4 +84,5 @@
 
 ## 修订记录
 
+- 2026-10-29：辅助窗口改为**登记过的 IPC 来源**（`trustIpcSender` / `untrustIpcSender`，子框架仍拒绝），原文「IPC 来源恒为主窗口」作废——拆出面板里的复制、外链、会话操作直接走自己的 `webContents`；窗口寻址仍按 `frameName` 显式带（理由改为「一套 IPC 服务多个窗口」，结论不变）。拆出判据同时加入 96 DIP 拖动距离（`PANEL_DETACH_DISTANCE`），外链在 `setWindowOpenHandler` 里直接交给系统浏览器。
 - 2026-10-28（设计系统 v1.39）：原「原位占位不塌陷」改为「主窗口彻底让位」——占位卡与接缝一并撤销，面板仍挂载但容器 `hidden`；辅助窗口标题改为工作区名；随之删除 `PanelDetachedPlaceholder`、`PanelSlot` 的 `placeholder` 入参、`focusPanelWindow` 与「定位到独立窗口」入口（回位只靠关窗）。
