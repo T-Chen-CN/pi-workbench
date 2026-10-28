@@ -32,7 +32,7 @@
 | 入口 | 面板头部右键菜单 + 12px 拖出柄，不新增常驻按钮 |
 | 拖出判定 | `dragend` 调主进程 `aux:detach-at`，由主进程读真实光标位置与工作区，渲染层不自己算 |
 | 终端 PTY | 所有权升到 `terminalStore`，拆窗只重建 xterm 视图，PTY 与 200KB 尾部缓冲留在 store |
-| 走动时带走的手感 | 展开的目录、文件树 / Git 滚动位置放 `panelUiState`（运行期内存，不落盘） |
+| 走动时带走的手感 | 展开的目录、文件树 / Git 滚动位置放 `panelUiState`（运行期内存，不落盘）；骨架树必须逐字复用 `listDirectory` 给出的路径写法（Windows 反斜杠），且首轮加载完成前不写回，否则空树会盖掉好快照 |
 | toast / dialog | 每个窗口各挂一份，按「哪个窗口持有焦点」决定落点 |
 | 布局持久化 | 不做。重启回默认布局，与「退出不自动恢复工作区」一致 |
 
@@ -65,7 +65,7 @@
 - 主进程：`electron/app-protocol.ts`、`electron/aux-window.ts`、`electron/main.ts`（`installAuxWindowSupport` + `registerAppProtocol`）
 - 渲染层：`src/panelHost/{types,focus,auxWindow,HostContext,panelLabels,panelDrag,panelUiState}.ts`、`src/store/panelStore.ts`、`src/components/{PanelSlot,PanelWindowFrame,PanelContextMenu,PanelDragHandle}.tsx`
 - 面板接入：`WorkspaceView.tsx`（`PanelSlot` 包裹 + `sidebarShown / chatShown / terminalShown`）、`TerminalPanel.tsx` + `src/store/terminalStore.ts`
-- 测试：`tests/aux-window.test.ts`、`tests/panel-slot.test.tsx`、`tests/panel-store.test.tsx`、`tests/panel-drag.test.tsx`、`tests/terminal-store.test.ts`、`tests/chat-detach.test.tsx`
+- 测试：`tests/aux-window.test.ts`、`tests/panel-slot.test.tsx`、`tests/panel-store.test.tsx`、`tests/panel-drag.test.tsx`、`tests/terminal-store.test.ts`、`tests/chat-detach.test.tsx`、`tests/file-panel-detach.test.tsx`
 
 ## 后续可评估
 
