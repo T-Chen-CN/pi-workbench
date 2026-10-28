@@ -19,6 +19,7 @@ import { useI18nStore } from '../src/store/i18nStore'
 import { translations } from '../src/i18n/translations'
 import { api } from '../src/api'
 import { piAgentAPI } from '../src/api/piAgentAPI'
+import { clearPanelUi } from '../src/panelHost/panelUiState'
 import type { ApiConfig } from '../src/types/electron'
 
 vi.mock('../src/api', () => ({
@@ -1214,6 +1215,30 @@ describe('FileExplorer', () => {
         expect.objectContaining({ explorerFoldersFirst: false })
       )
     )
+  })
+
+  it('restores expanded folders after the panel is remounted in another window', async () => {
+    const workspace = '/ws-remount'
+    clearPanelUi(workspace)
+    vi.mocked(api.listDirectory).mockImplementation(async (dirPath: string) => {
+      if (dirPath === workspace) {
+        return { success: true, items: [{ name: 'src', path: `${workspace}/src`, isDirectory: true }] }
+      }
+      if (dirPath === `${workspace}/src`) {
+        return { success: true, items: [{ name: 'index.ts', path: `${workspace}/src/index.ts`, isDirectory: false }] }
+      }
+      return { success: true, items: [] }
+    })
+
+    const first = render(<FileExplorer workspacePath={workspace} />)
+    fireEvent.click(await screen.findByText('src'))
+    await screen.findByText('index.ts')
+    first.unmount()
+
+    render(<FileExplorer workspacePath={workspace} />)
+
+    expect(await screen.findByText('index.ts')).toBeTruthy()
+    clearPanelUi(workspace)
   })
 
   it('moves keyboard focus through sort options and toggles', async () => {

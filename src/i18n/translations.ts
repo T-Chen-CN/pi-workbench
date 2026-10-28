@@ -711,7 +711,7 @@ export const translations = {
     panelDetachBlocked: '新窗口被系统拦截，无法拆分面板',
     panelDetachFailed: '拆分面板失败',
     panelDetachedBadge: '已分离',
-    panelDragHint: '拖动 {{panel}} 到窗口外，拆成独立窗口'
+    panelDragHint: '拖动 {panel} 到窗口外，拆成独立窗口'
   },
 
   en: {
@@ -1432,7 +1432,7 @@ export const translations = {
     panelDetachBlocked: 'The system blocked the new window',
     panelDetachFailed: 'Could not detach the panel',
     panelDetachedBadge: 'Detached',
-    panelDragHint: 'Drag {{panel}} outside the window to detach it'
+    panelDragHint: 'Drag {panel} outside the window to detach it'
   }
 }
 

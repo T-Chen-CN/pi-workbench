@@ -71,11 +71,15 @@ function buildExpandedSkeleton(paths: string[], rootPath: string): TreeNode[] {
   for (const raw of paths) {
     const normalized = raw.replace(/\\/g, '/')
     if (normalized === root || !normalized.startsWith(`${root}/`)) continue
+    // 节点路径必须逐字复用 listDirectory 的写法（Windows 是反斜杠），
+    // 否则 mergeTree 按路径对不上，展开状态会在回填时丢掉
+    const base = raw.slice(0, root.length)
+    const separator = raw.includes('\\') ? '\\' : '/'
     const segments = normalized.slice(root.length + 1).split('/')
     let parent: TreeNode | null = null
-    let current = root
+    let current = base
     for (const segment of segments) {
-      current = `${current}/${segment}`
+      current = `${current}${separator}${segment}`
       let node = byPath.get(current)
       if (!node) {
         node = {
@@ -204,6 +208,8 @@ export const FileExplorer: React.FC<{
 
   // 拆窗重建时把展开的目录与滚动位置带过来（面板在另一个 document 里重挂）
   const restoreRef = useRef<{ scrollTop: number } | null>(null)
+  // 首轮加载完成前不写回状态：拆出/回位过快时，空树会把好的快照盖掉
+  const hydratedRef = useRef(false)
   useEffect(() => {
     if (!workspacePath) return
     const saved = readPanelUi<{ expanded: string[]; scrollTop: number }>(workspacePath, 'files')
@@ -221,6 +227,7 @@ export const FileExplorer: React.FC<{
     // 卸载后 ref 已被清空：先抓住滚动容器
     const scrollEl = treeScrollRef.current
     return () => {
+      if (!hydratedRef.current) return
       const expanded: string[] = []
       const walk = (nodes: TreeNode[]) => {
         for (const node of nodes) {
@@ -239,7 +246,9 @@ export const FileExplorer: React.FC<{
   // Initialize tree when workspace changes
   useEffect(() => {
     if (workspacePath) {
-      loadRootDirectory(workspacePath)
+      void loadRootDirectory(workspacePath).then(() => {
+        hydratedRef.current = true
+      })
     }
   }, [workspacePath, loadRootDirectory])
 
