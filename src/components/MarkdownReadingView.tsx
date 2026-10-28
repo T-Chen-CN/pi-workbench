@@ -19,20 +19,29 @@ const EMPTY_BLOCK: MarkdownBlockRange = { text: '', start: 0, end: 0 }
 export const MarkdownReadingView: React.FC<{
   root: string
   file: OpenFile
-}> = ({ root, file }) => {
+  active?: boolean
+}> = ({ root, file, active = true }) => {
   const { t } = useI18nStore()
+  // 视图被切走时冻结解析结果：源码视图里每敲一个字都重排一遍 Markdown 太浪费
+  const [frozen, setFrozen] = useState(file.content)
+  useEffect(() => {
+    if (!active) setFrozen(file.content)
+  }, [active, file.content])
+
+  const source = active ? file.content : frozen
   const rendered = useMemo(() => {
-    const blocks = splitMarkdownBlockRanges(file.content)
+    const blocks = splitMarkdownBlockRanges(source)
     return blocks.length > 0 ? blocks : [EMPTY_BLOCK]
-  }, [file.content])
+  }, [source])
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // 切换文件时退出编辑
+  // 切换文件或切到源码视图时退出编辑
   useEffect(() => {
     setEditingIndex(null)
-  }, [file.path])
+    setDraft('')
+  }, [file.path, active])
 
   useEffect(() => {
     if (editingIndex === null) return
@@ -75,7 +84,7 @@ export const MarkdownReadingView: React.FC<{
       className="min-h-0 flex-1 overflow-auto bg-surface"
       data-testid="markdown-reading-view"
     >
-      <article className="file-markdown chat-markdown mx-auto max-w-[68ch] px-8 py-6">
+      <article className="file-markdown chat-markdown mx-auto w-full max-w-[64rem] px-8 py-6">
         {rendered.map((block, index) =>
           editingIndex === index ? (
             <div key={`edit-${block.start}`} className="my-3">

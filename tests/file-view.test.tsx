@@ -69,12 +69,19 @@ describe('FileView view dispatch', () => {
     render(<FileView workspacePath="/ws" />)
     open({ content: '# Title\n' })
 
+    const pane = await screen.findByTestId('file-reading-pane')
+    expect(pane.dataset.active).toBe('true')
+
     fireEvent.click(await screen.findByRole('button', { name: zh.viewSource }))
     expect(await screen.findByTestId('monaco-editor')).toBeTruthy()
-    expect(screen.queryByTestId('markdown-reading-view')).toBeNull()
+    // 阅读视图常驻、只是隐藏：切回来不必重建 DOM（滚动位置与解析结果都留着）
+    expect(pane.dataset.active).toBe('false')
+    expect(pane.className).toContain('hidden')
 
     fireEvent.click(screen.getByRole('button', { name: zh.viewReading }))
-    expect(await screen.findByTestId('markdown-reading-view')).toBeTruthy()
+    expect(pane.dataset.active).toBe('true')
+    expect(pane.className).not.toContain('hidden')
+    expect(screen.getByText('Title')).toBeTruthy()
   })
 
   it('keeps plain text files in the source view', async () => {

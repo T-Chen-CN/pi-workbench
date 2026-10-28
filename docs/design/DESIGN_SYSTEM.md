@@ -451,11 +451,11 @@
 
 **标签条**：高度 34px、`bg-panel`；图标按类型区分（`FileText` / `Globe` / `Image` / `Film` / `Music` / `FileJson` / `FileCode`），激活标签图标转 `accent`。脏标记仍为 6px `accent` 圆点，保存中显示 10px `Loader2`。
 
-**视图切换**：只在可切源码的类型上出现，位于标签条最右端，是单个 ghost `IconButton`（sm），图标与名称都指向**将要切换到的**形态：阅读视图下为 `Code` +「源码视图」，源码视图下为 `Eye` +「阅读视图」。不使用 `active` 填充，当前形态由内容本身表达。切换只改呈现，不清空 Monaco 实例（撤销栈、光标、滚动保留）。
+**视图切换**：只在可切源码的类型上出现，位于标签条最右端，是单个 ghost `IconButton`（sm），图标与名称都指向**将要切换到的**形态：阅读视图下为 `Code` +「源码视图」，源码视图下为 `Eye` +「阅读视图」。不使用 `active` 填充，当前形态由内容本身表达。切换只改呈现：**阅读视图与 Monaco 都常驻、只切换显隐**（撤销栈、光标、滚动、iframe 状态全部保留）。Markdown / HTML 打开后在空闲时段预热 Monaco 模块，避免第一次切到源码时现等加载；阅读视图隐藏期间冻结解析结果，源码视图里的每个按键不会触发重排。
 
 **Markdown 阅读视图**
 
-- 版心 `max-w-[68ch]`、`px-8 py-6`，正文 14px / 1.85（`type-reading`），标题沿用 display 字体；首尾段落 margin 折叠，图片 `max-width: 100%`。
+- 版心 `w-full max-w-[64rem] mx-auto px-8 py-6`：**随编辑区宽度自适应**，超宽屏才封顶 64rem 居中；正文 14px / 1.85（`type-reading`），标题沿用 display 字体；首尾段落 margin 折叠，图片 `max-width: 100%`。不要用 `ch` 定宽——版心自身的 `font-size` 不是正文的 14px，`ch` 会算出远小于预期的列宽。
 - 代码块沿用聊天稿纸的样式（`bg-sunken` + 2px `accent` 左边线 + 允许换行），不出现横向滚动条：阅读视图不覆盖 `white-space`。
 - frontmatter 单独成块，等宽 11.5px、`ink-muted`、`bg-sunken` 底，不渲染成正文。
 - **块级就地编辑**：每个顶层块悬停 / 聚焦时右上角出现 `Pencil` 图标按钮（「编辑此块」）；点击后该块的**原文**（非渲染结果）替换为等宽 `Textarea`，下方一行「保存 / 取消 + 「Ctrl+Enter 保存」提示」。提交只替换该块偏移，文件其余字节不变；空文档显示一个虚线占位块（「开始编辑」）。

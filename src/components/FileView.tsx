@@ -76,6 +76,7 @@ export const FileView: React.FC<FileViewProps> = ({
     currentFile && currentFile.view === 'reading' && hasReadingView(currentFile.kind)
   )
   const canSource = Boolean(currentFile && supportsSourceView(currentFile.kind))
+  const readingKind = fileKind && hasReadingView(fileKind) ? fileKind : null
 
   useEffect(() => {
     if (!currentFile) return
@@ -83,6 +84,14 @@ export const FileView: React.FC<FileViewProps> = ({
     if (!supportsSourceView(currentFile.kind)) return
     if (currentFile.kind === 'text' || currentFile.view === 'source') setSourceMounted(true)
   }, [currentFile])
+
+  // 预热 Monaco：Markdown / HTML 随时可能切到源码，先让浏览器把模块取下来，
+  // 否则第一次点切换要现等 4MB 模块下载 + 解析
+  useEffect(() => {
+    if (!canSource) return
+    const handle = window.setTimeout(() => void import('./MonacoEditor'), 300)
+    return () => window.clearTimeout(handle)
+  }, [canSource])
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -100,7 +109,7 @@ export const FileView: React.FC<FileViewProps> = ({
         <div className="relative flex min-h-0 min-w-0 flex-1">
           {canSource && (
             <div className={reading ? 'hidden' : 'flex min-h-0 min-w-0 flex-1'}>
-              {sourceMounted || !reading ? (
+              {sourceMounted ? (
                 <Suspense
                   fallback={
                     <div className="flex min-h-0 flex-1 items-center justify-center bg-surface">
@@ -118,10 +127,20 @@ export const FileView: React.FC<FileViewProps> = ({
             </div>
           )}
 
-          {reading && fileKind === 'markdown' && (
-            <MarkdownReadingView root={root} file={currentFile} />
+          {/* 阅读视图同样常驻：切回源码再切回来时不必重建 DOM，滚动位置也留着 */}
+          {readingKind && (
+            <div
+              data-testid="file-reading-pane"
+              data-active={reading ? 'true' : 'false'}
+              className={reading ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}
+            >
+              {readingKind === 'markdown' ? (
+                <MarkdownReadingView root={root} file={currentFile} active={reading} />
+              ) : (
+                <HtmlPreview file={currentFile} />
+              )}
+            </div>
           )}
-          {reading && fileKind === 'html' && <HtmlPreview file={currentFile} />}
           {fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' ? (
             <MediaView file={currentFile} />
           ) : null}
