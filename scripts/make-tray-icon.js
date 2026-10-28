@@ -5,7 +5,7 @@
  * 裁掉下方的 "TChen" 署名，再按面积平均降到 16 / 32 像素，
  * 这样菜单栏里的 π 与 Dock 图标是同一个字形。
  *
- * 用法：node scripts/make-tray-icon.mjs [--preview]
+ * 用法：node scripts/make-tray-icon.js [--preview]
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { deflateSync, inflateSync } from 'node:zlib'

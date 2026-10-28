@@ -1,5 +1,9 @@
 # Agent 过程轨迹（Thinking / Tool Trace）方案
 
+> **面向**：要读 / 改 thinking、工具调用、正文的 parts 时间线的人（`pi-bridge` 流式事件、`chatStore`、`AgentTrace` 渲染）
+> **什么时候读**：改渲染层消息结构、新增 trace 事件类型、排查"历史与实时不一致"时
+> **什么时候要改**：事件协议、parts 数据模型或历史聚合规则变化时
+
 > **状态**: 已实现（v1，2026-10-22）
 > **日期**: 2026-10-22
 > **范围**: `pi-bridge`、Electron IPC、Web dev 桥、`chatStore`、聊天渲染层、设计系统 v1.17
@@ -140,7 +144,7 @@ type RenderGroup =
 
 ## 5. 桥接层与事件协议
 
-### 5.1 现状
+### 5.1 v1 之前的现状（历史）
 
 - `pi-bridge/src/agent-manager.ts` 的 `subscribeToToolEdits` 只处理 `text_delta`，并只在工具事件里抓 write/edit 快照。
 - `electron/main.ts` 的 `agent:chat` 只转发 `agent:stream` 文本增量。
@@ -199,7 +203,7 @@ type AgentStreamPayload = {
 | `message_update` + `thinking_delta` | 转发 `thinking_delta` |
 | `message_update` + `thinking_end` | 若该 contentIndex 没收到过 delta（脱敏/只给完整内容），补发一次 `thinking_delta`（内容为 end 的 `content`），或标记 `redacted` |
 | `tool_execution_start` | 转发 `tool_start`，同时保留现有 write/edit 快照逻辑 |
-| `tool_execution_update` | 可选转发 `tool_update`（v1 可先不启用） |
+| `tool_execution_update` | 转发 `tool_update`（2026-10-23 E-06 启用；无增量回调的工具仍只在结束时给结果） |
 | `tool_execution_end` | 转发 `tool_end`，附带 isError、durationMs、结果预览、write/edit 文件路径 |
 | `turn_end` / `agent_end` | 若仍有 running 的工具 part，渲染层统一收尾为 error/未完成 |
 
@@ -373,7 +377,7 @@ createTraceBuffer(onFlush: (events: BufferedTraceEvent[]) => void, intervalMs = 
 
 在 `docs/design/DESIGN_SYSTEM.md` 新增“过程轨迹”条目，并在 `patterns.tsx` / `AgentTrace.tsx` 落地：
 
-- **触发器**：`type-label`，`text-ink-muted`；chevron 14px；收起状态下也必须显示当前活动状态（思考中 / 当前工具 / 失败），运行中状态点为 `accent`，1.4s 脉冲（复用现有 `pulse`），`prefers-reduced-motion` 下关闭。
+- **触发器**：`type-label`，`text-ink-muted`；chevron 14px；收起状态下也必须显示当前活动状态（思考中 / 当前工具 / 失败），运行中状态点为 `accent`，1.4s 脉冲（复用现有 `pulse`）。
 - **组内容**：左侧 `border-rule-hairline` 发丝线，`pl-3`（12px），与正文形成二级层次；不使用卡片、阴影或渐变。
 - **思考文字**：`type-body`（13px/1.6）+ `text-ink-muted`，Markdown 渲染但关闭代码高亮；与正文的 `type-reading` 14px 区分。
 - **工具行**：`type-label` + 状态图标（16/14px）；目标路径用 `type-data`；结果预览用 `bg-sunken` + `rule-hairline`，`type-data`，最大高度约 240px，内部滚动。
@@ -431,7 +435,7 @@ createTraceBuffer(onFlush: (events: BufferedTraceEvent[]) => void, intervalMs = 
 - `npm run build`
 - Paper / Ink 截图，1024 / 1440 宽度检查
 
-## 10. 实施顺序
+## 10. 实施顺序（v1 已执行，保留作回顾）
 
 1. **桥接层契约**：统一事件类型、thinking 转发、工具事件归一化、历史 parts 聚合；补 `agent-manager` 测试。
 2. **IPC / Web 桥**：`electron/main.ts`、`preload.cts`、`src/types/electron.d.ts`、`src/api/piAgentAPI.ts`、`vite.config.ts`；补主进程/桥接测试。
@@ -494,6 +498,6 @@ createTraceBuffer(onFlush: (events: BufferedTraceEvent[]) => void, intervalMs = 
 - 状态层：`chatStore` 支持 text / thinking / tool parts、工具状态更新、未完成工具收尾；新增 `createTraceBuffer` 有序合并事件。
 - 渲染层：`AgentTrace.tsx` 提供过程组与工具行；过程组默认收起、手动展开保持；`AgentMarkdown.tsx` 抽出可复用的 Markdown 渲染。
 - 设计系统：更新至 v1.17，补充过程组、工具行、思考排版与无障碍规则。
-- 验证：`type-check`、`lint`、`test`（32 个文件 / 307 用例）、`build` 均通过。
+- 验证：`type-check`、`lint`、`test`、`build` 均通过。
 
-与方案一致的取舍：`tool_update` 在 v1 未启用（只处理 start/end 和最终结果预览）；工具行的“查看修改”只在当前 Diff 队列包含该工具调用时出现；thinking 时长仅实时流式可得，历史恢复时显示工具数量摘要。
+与方案一致的取舍：`tool_update` 已在 2026-10-23（E-06）接通，工具执行中的结果预览会实时刷新；工具行的“查看修改”只在当前 Diff 队列包含该工具调用时出现；thinking 时长实时与历史（sidecar）均可得。

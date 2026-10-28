@@ -1,5 +1,9 @@
 # ADR-002 主窗口关闭常驻托盘
 
+> **面向**：要改窗口关闭 / 托盘 / 退出流程的人
+> **什么时候读**：动 `electron/tray.ts`、`closeToTray`、`before-quit` 逻辑之前
+> **什么时候要改**：不修改正文；结论变化时追加"修订记录"或写新 ADR
+
 - **状态**: 已采纳（2026-10-28）
 - **影响范围**: `electron/main.ts` 的窗口生命周期、新增 `electron/tray.ts`、`config/settings.json`、设置「通用」分节、托盘资源
 - **相关文档**: [设计系统 6.13](../design/DESIGN_SYSTEM.md)、[设计系统 6.7](../design/DESIGN_SYSTEM.md)
@@ -23,7 +27,7 @@ Agent 会话、终端 PTY、文件监听与更新检查都跑在主进程里，�
 | 真退出判定 | `before-quit` 置 `quitting = true`（`app.quit()` 与系统退出都会触发），`close` 处理器据此放行；托盘「退出」不直接 `destroy()` 窗口，仍走 `app.quit()` 让 `will-prevent-unload` 生效 |
 | 未保存确认 | 收进托盘**不拦**：窗口只是 `hide()`，渲染进程不卸载，`beforeunload` 不会跑；只有真退出才弹「还有未完成的工作」。真退出时若主窗口正隐藏，先 `show()` 再弹原生框，否则确认框会挂在不可见窗口上 |
 | 取消退出 | `will-prevent-unload` 选「取消」时把 `quitting` 复位，关闭按钮回到「收进托盘」语义 |
-| 托盘图标 | Windows / Linux 用彩色 `app-icon.ico`；macOS 菜单栏用单色 π 模板图 `tray-template.png`（16 / 32 两档，`setTemplateImage`，跟随系统深浅色，不区分 Paper / Ink）。模板图由 `scripts/make-tray-icon.mjs` 从 `app-icon.png` 生成：取浅色像素作 alpha 掩膜、裁掉署名、面积平均降到 16 / 32 |
+| 托盘图标 | Windows / Linux 用彩色 `app-icon.ico`；macOS 菜单栏用单色 π 模板图 `tray-template.png`（16 / 32 两档，`setTemplateImage`，跟随系统深浅色，不区分 Paper / Ink）。模板图由 `scripts/make-tray-icon.js` 从 `app-icon.png` 生成：取浅色像素作 alpha 掩膜、裁掉署名、面积平均降到 16 / 32 |
 | 托盘菜单 | 系统原生菜单（`Menu.buildFromTemplate`）：显示主窗口 / 分隔线 / 退出；文案跟随应用语言，设置保存后 `refreshTray()` 重建 |
 | 唤回入口 | 托盘图标（Windows 单击即显示）、第二个实例（`second-instance`）、macOS Dock（`activate`）；统一 `restore()` → `show()` → `focus()` |
 | Linux | 不创建托盘：GNOME 等桌面默认没有托盘区，收进去可能再也找不回来。关闭按钮降级为最小化到任务栏 |

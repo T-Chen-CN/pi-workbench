@@ -1,6 +1,10 @@
 # 项目结构
 
-**最后更新**: 2026-10-29（v0.7.3）
+> **面向**：需要找文件、查 IPC 频道、了解进程模型与数据流的人
+> **什么时候读**：新增模块 / 频道、接手陌生代码、写设计文档之前
+> **什么时候要改**：目录、频道、进程模型或关键数据流变化时
+
+**最后更新**: 2026-10-29
 
 ---
 
@@ -49,6 +53,7 @@ pi-workbench/
 │   ├── git-cache.ts              # Git 命令结果缓存
 │   ├── git-worktrees.ts          # 会话工作树与 session-git.json
 │   ├── worktree-coordinator.ts   # 工作树切换在轮次边界生效
+│   ├── worktree-deps.ts          # 链接工作树依赖探测与后台安装
 │   ├── repo-watcher.ts           # 仓库状态监听
 │   ├── repo-sync.ts              # 分支拉取 / 同步
 │   ├── repo-autofetch.ts         # 定时 fetch
@@ -133,7 +138,7 @@ pi-workbench/
 │   │   ├── WorkspaceScope.tsx    # 让深层组件知道所属工作区
 │   │   └── editorTabs.ts         # 编辑器标签落盘
 │   ├── theme/tokens.ts           # 从 CSS 变量读取颜色（Monaco / xterm）
-│   ├── hooks/                     # useVirtualRows / useChatSessions / useChatPanelState / useRevertEdits
+│   ├── hooks/                     # chatScroll（聊天贴底）/ useVirtualRows / useChatSessions / useChatPanelState / useRevertEdits
 │   ├── utils/                    # 文件路径/树、快捷键、符号、图片、Markdown、diff 回退等
 │   ├── api/
 │   │   ├── index.ts              # IPC 封装 + Web dev mock
@@ -172,7 +177,7 @@ pi-workbench/
 │   │   └── index.ts              # 对外导出
 │   └── dist/                     # 构建产物（不纳入版本库）
 │
-├── tests/                        # Vitest 单元 / 组件测试（91 个文件）
+├── tests/                        # Vitest 单元 / 组件测试（扁平，文件名与源码同名）
 ├── docs/                         # 项目文档
 ├── vite.config.ts                # Vite + 仅开发环境的 dev 中间件
 ├── vitest.config.ts
@@ -198,7 +203,7 @@ pi-workbench/
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**安全边界**：渲染进程禁用 `nodeIntegration`、启用 `contextIsolation`（sandbox 未显式开启）；
+**安全边界**：渲染进程禁用 `nodeIntegration`、启用 `contextIsolation` 与 `sandbox`；
 所有能力经 preload 显式暴露。Agent 只在主进程运行。
 
 **Web 开发模式**（`npm run web:dev`）：没有 Electron 主进程，`vite.config.ts` 中仅 `serve`
@@ -241,17 +246,7 @@ ChatPanel.handleSubmit
 
 ### 配置与存储
 
-| 数据 | 位置 | 说明 |
-|---|---|---|
-| API 配置 | `{appDir}/config/api-config.json` | `apiKey` 为 `enc:<base64>`（safeStorage） |
-| 应用设置 / 最近工作区 | `{appDir}/config/settings.json` | |
-| 工作区打开记录 | `{appDir}/data/workspaces.db` | SQLite 单存储，记录打开时间与次数 |
-| Agent 模型配置 | `{appDir}/data/agent/models.json` | `apiKey: "$PI_WORKBENCH_API_KEY"`，不落盘 |
-| Agent 会话 | `{appDir}/data/agent/sessions/*.jsonl` | 平铺文件，按 cwd 过滤 |
-| 会话 sidecar | `{appDir}/data/agent/session-extras/*.json` | 计划、权限 |
-| 工作区配置 | `{workspace}/.pi-workbench/config.json` | |
-| 打开中的会话 / 编辑器标签 | `{workspace}/.pi-workbench/chat-tabs.json` / `editor-tabs.json` | |
-| Web dev Agent 数据 | `{appDir}/cache/temp/web-agent/` | 仅开发模式 |
+落盘位置、写入者与恢复语义见 [agent/paths-and-storage §3](../agent/paths-and-storage.md)。
 
 ---
 
@@ -276,12 +271,15 @@ ChatPanel.handleSubmit
 | `terminal:create` / `write` / `resize` / `close` / `flush` | invoke | 终端 PTY |
 | `plugins:list` / `invoke` / `reload` / `setEnabled` | invoke | 工作台插件 |
 | `draft:save` / `delete` / `list` / `clear` | invoke | 崩溃恢复草稿 |
-| `chat:pending:get` / `set` | invoke | 排队消息持久化 |
 | `log:renderer` | invoke | 渲染进程日志 |
 | `update:check` / `download` / `install` / `getState` / `openDownload` | invoke | 自动更新 |
 | `update:status` | main → renderer | 更新进度事件 |
 | `window:minimize` / `toggleMaximize` / `close` / `isMaximized` | invoke | 自绘窗口按钮 |
 | `window:maximized-changed` | main → renderer | 最大化状态变化 |
+| `git:*`（22 invoke + 2 推送） | invoke / main → renderer | 工作树、只读历史、分支 / 提交、工作树依赖安装；见 [git-and-worktrees §3](../agent/git-and-worktrees.md) |
+| `github:*`（7 invoke + 1 推送） | invoke / main → renderer | GitHub OAuth（设备码 / 回调）、登录状态、账号配置 |
+| `aux:*`（3 invoke + 1 推送） | invoke / main → renderer | 可停见面板的辅助窗口（拆出位置、窗口命令、状态、关闭事件）；handler 注册在 `electron/aux-window.ts` |
+| `webSearch:get` / `save` | invoke | 联网搜索供应商与 Key（`safeStorage` 加密） |
 
 ---
 
@@ -289,23 +287,19 @@ ChatPanel.handleSubmit
 
 ### 新增 IPC
 
-1. `electron/main.ts` 注册 `handleIpc`
-2. `electron/preload.cts` 暴露到 `contextBridge`
-3. `src/types/electron.d.ts` 补类型
-4. `src/api/index.ts` 封装（同时补 Web mock）
+用 `handleIpc()` 在 `electron/ipc/<域>.ts` 注册（来源校验），再走 preload → 类型 → `src/api`。四步清单与示例见 [agent/ipc-and-trust §2](../agent/ipc-and-trust.md)。
 
 ### 新增组件 / Store
 
 - 组件放 `src/components/`，扁平结构，Tailwind 写样式
-- Store 放 `src/store/`，每个功能域一个；不要合并成巨型 store
-- 状态更新必须不可变（创建新对象/数组）
-- 工作区级状态使用 `xxxStoreFor(workspacePath)` 工厂，不要放全局单例
+- Store 放 `src/store/`，每个功能域一个；状态更新必须不可变（创建新对象/数组）
+- 工作区级状态用 `xxxStoreFor(workspacePath)` 工厂（铁律见 [AGENTS.md §4](../../AGENTS.md)）
 
 ### 关闭工作区
 
 `App.closeWorkspace` 会确认未保存文件与运行中任务，然后释放该工作区的 Agent、监听与终端；
 `editor-tabs.json`、`chat-tabs.json` 与草稿保留在磁盘，重新打开时恢复。
-不要新增「切换工作区时重置 store」的逻辑——切换只改变可见性。
+切换工作区只改变可见性，不重置 store。
 
 ---
 

@@ -1,5 +1,9 @@
 # Agent 过程轨迹测试方案
 
+> **面向**：要验收过程轨迹（thinking / 工具步骤 / Diff / 性能）的人
+> **什么时候读**：改事件协议、AgentTrace 渲染或历史聚合之后
+> **什么时候要改**：验收项或门禁变化时
+
 > **适用版本**: Agent Trace v1（thinking / text / tool parts）
 > **日期**: 2026-10-22
 > **范围**: Electron 开发版、Web dev 模式、聊天历史、多会话、工具步骤与 Diff、性能与可访问性
@@ -29,7 +33,7 @@ npm run dev        # 主验证环境：Electron + 真实工作区
 npm run web:dev    # 辅助验证：Web dev 桥（SSE）
 ```
 
-- Node.js ≥ 22.19
+- Node.js ≥ 24
 - Windows 优先验证；macOS/Linux 做冒烟
 - 供应商：支持 thinking + tools 的模型（当前使用 `deepseek-flash`）
 - 工作区：包含 `package.json`、`README.md`、可运行的测试脚本
@@ -66,7 +70,7 @@ npm test
 npm run build
 ```
 
-预期：32 个测试文件、307 个用例全部通过；构建无错误。
+预期：`type-check`、`lint`、`test`、`build` 全部通过（用例数以实际运行为准，不写死在文档里）。
 
 ### 已覆盖的自动化用例
 
@@ -116,7 +120,7 @@ npm run build
 - **提示词**: `请把 agent-trace-test.md 的内容改成三行：alpha、beta、gamma，然后读取确认。`
 - **预期**:
   - 工具行显示 `修改` / `写入` 与文件路径。
-  - 轮次结束后 Diff 审阅自动打开，包含该文件。
+  - 轮次结束后助手消息内出现本轮变更卡（不自动打开 Diff 面板），包含该文件。
   - 展开工具行并点击“查看修改”，能重新打开该文件的 Diff。
   - 结果预览不包含完整文件内容（只有截断摘要）。
 
@@ -240,10 +244,10 @@ npm run build
   - 工具行可见文本包含状态；失败不只靠颜色。
   - 焦点样式符合全局 accent 描边。
 
-#### D4 减少动效
+#### D4 动效不跟随系统偏好
 
 - 开启系统 `prefers-reduced-motion: reduce`。
-- **预期**: 状态脉冲和 chevron 过渡关闭；状态仍可通过文字和图标识别。
+- **预期**: 动效不受影响（设计系统 v1.18 起始终播放）；状态仍可通过文字和图标识别。
 
 #### D5 中英文
 
@@ -258,12 +262,12 @@ npm run build
   - 过程组、工具行、结果预览与 Electron 一致。
   - 不出现“只有文本、没有思考和工具”的降级。
 
-## 5. 已知限制（v1 现状）
+## 5. 已知限制（v1 当时的边界）
 
-> 前三项已列入待开发清单，见 [ROADMAP.md](../progress/ROADMAP.md)；其余为暂不排期的边界。
+> `tool_update` 实时输出与历史 thinking 时长（E-06 / E-07）已于 2026-10-23 交付，下列前两条仅作回顾；当前能力以 [STATUS.md](../progress/STATUS.md) 为准。
 
-- `tool_update` 在 v1 未启用：工具结果只在结束时出现一次，没有实时输出流。→ 已排期：[ROADMAP](../progress/ROADMAP.md) E-06。
-- thinking 时长只在实时流式时计算；历史恢复通常没有时长，只显示工具数量摘要。→ 已排期：[ROADMAP](../progress/ROADMAP.md) E-07。
+- ~~`tool_update` 在 v1 未启用~~ → 已交付：工具执行中结果预览实时刷新。
+- ~~thinking 时长仅实时可得~~ → 已交付：sidecar 记录历史时长。
 - 工具行的“查看修改”只对当前轮次仍在 Diff 队列中的工具可用；历史工具行不保存 Diff 数据（2026-10-26 起明确不持久化）。
 - 工具结果预览截断到约 2000 字符，完整内容仍在 Pi JSONL，UI 不提供全量查看器。（B-01，暂不排期）
 - 脱敏 thinking 的占位取决于供应商是否返回 `redacted` / 空内容。（B-02，依赖供应商）
@@ -288,7 +292,7 @@ npm run build
 
 ## 7. 退出标准
 
-- `type-check`、`lint`、307 个测试、`build` 全部通过。
+- `type-check`、`lint`、`test`、`build` 全部通过。
 - A1–A6、B1–B4、C1–C4 全部通过。
 - 至少一组 Paper / Ink 截图和 1024 / 1440 宽度检查通过。
 - 没有新的 console error、React key 警告或会话串流。

@@ -1,8 +1,10 @@
 # Pi Agent 测试清单
 
-> **历史说明（2026-10-26）**：本清单记录 Phase 1 的验收步骤，部分行为已变化：
-> 关闭工作区后运行时释放，但标签与草稿会落盘并在重新打开时恢复；
-> Agent 修改以消息内变更卡展示，不再自动打开 DiffViewer。当前功能以 [STATUS.md](../progress/STATUS.md) 为准。
+> **面向**：要手动验收 Agent 功能的人
+> **什么时候读**：改了 Agent 初始化 / 对话 / 工具 / 会话恢复之后
+> **什么时候要改**：验收步骤与实际行为不一致时（当前能力以 STATUS 为准）
+
+> **历史说明（2026-10-26）**：本清单记录 Phase 1 的验收步骤。关闭工作区后运行时释放，但标签与草稿会落盘并在重新打开时恢复；Agent 修改以消息内变更卡展示。当前功能以 [STATUS.md](../progress/STATUS.md) 为准。
 
 适用于 Phase 1 完成后的验收测试。支持 Electron 与纯 Web（开发模式）两种环境。
 
@@ -55,7 +57,7 @@ npm run web:dev
 2. 观察聊天面板标题
 
 **预期**:
-- ✅ 显示 `● Ready` 与欢迎消息 `Pi Agent (<模型名>) is ready!`
+- ✅ 头部标题为「Pi Agent 对话」，不显示常态「就绪」文字或状态点（仅初始化期间把标题替换为「初始化中…」）
 - ✅ 未配置时显示 "API Configuration Required"，点击 Go to Settings 能打开设置面板
 - ✅ 控制台无 `preload-error`；Electron 启动日志包含 `[Main] Preload check: window.electronAPI = object`
 
@@ -98,9 +100,9 @@ npm run web:dev
 3. 点击“最近打开”中的工作区 A 重新打开
 
 **预期**:
-- ✅ 欢迎页列出最近打开的工作区（最多 10 个），可直接点击打开
-- ✅ 关闭后编辑器标签、聊天消息、Diff 面板全部清空
-- ✅ 重新打开后 Agent 与会话正常恢复，不会串到其他工作区
+- ✅ 欢迎页列出最近打开的工作区（最多 10 个，来自 `data/workspaces.db`），可直接点击打开
+- ✅ 关闭后运行时释放，打开的文件与会话标签、草稿保留在磁盘
+- ✅ 重新打开后标签、草稿与会话历史全部恢复，不会串到其他工作区
 
 ### 9. 会话持久化
 
@@ -148,7 +150,7 @@ npm run web:dev
 | 点击 Fetch 无反应 | 查看 DevTools Console 是否有 `[API] window.electronAPI is undefined`（说明 preload 未加载） |
 | Fetch 返回空列表 | 供应商 `/models` 不支持或 Base URL 少了 `/v1`；看红色 Toast 的 HTTP 错误 |
 | Agent 显示初始化失败 | 检查 `models.json` 是否生成、模型是否在拉取列表中 |
-| Electron 模式读不到配置 | 确认 `config/api-config.json` 存在；Web 模式的配置在 localStorage，不同步 |
+| Electron 模式读不到配置 | 确认 `config/api-config.json` 存在；Web 模式没有 `safeStorage`，配置走 `src/api/index.ts` 的 mock，存在 **localStorage**（与 Electron 的 `config/*.json` 不同步） |
 
 ---
 
@@ -159,7 +161,7 @@ npm run web:dev
 | `config/api-config.json` | API 配置（Key 加密） |
 | `data/agent/models.json` | Agent 模型配置（不含明文 Key） |
 | `data/agent/sessions/` | Pi 会话文件（对话历史与上下文） |
-| `config/settings.json` | 应用设置与最近工作区 |
+| `config/settings.json` | 应用设置（最近工作区在 `data/workspaces.db`） |
 | `cache/temp/web-agent/` | Web dev 模式的临时 Agent 数据（可随时删除） |
 | `pi-bridge/src/agent-manager.ts` | Agent 初始化与对话实现 |
-| `electron/main.ts` | IPC：`apiConfig:*`、`agent:*` |
+| `electron/ipc/api-config.ts`、`electron/ipc/agent.ts` | IPC：`apiConfig:*`、`agent:*` |

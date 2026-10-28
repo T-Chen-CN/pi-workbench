@@ -1,13 +1,16 @@
 # 项目状态
 
+> **面向**：想知道"现在做到哪一步"的人与 agent
+> **什么时候读**：每次开工前、阶段收尾时
+> **什么时候要改**：每次发布或阶段收尾（只追加新状态，不改历史记录）
+
 本文件汇总项目的进度和完成状态。
 
 ## 最新状态
 
 **更新时间**: 2026-10-29
 
-- ✅ **0.7.3 已发布：标签命中区整块可点 + 会话标题锁定与去噪**（0.7.2 之后的 3 个修复：三个标签条统一改用 `Tab`（整块矩形可点、关闭命中区 24px、roving tabindex + ←/→/Home/End）、会话标题一经确定不再被自动改写、标题输入改用去噪后的回复摘录并校验模型输出）
-- ✅ **0.7.2 已发布：面板拆分让位 + 托盘常驻 + 会话记录单一真相源 + 聊天回底**（拆出面板后主窗口彻底让位给编辑器、X 收进托盘进程常驻、压缩点进入消息时间线且 md / html 导出完整、发送 / 插话无条件回底、视图切换改为内容区右下角浮层）
+- ✅ **最新版本 0.7.3**（标签命中区整块可点 + 会话标题锁定）；完整记录见下方 Phase 6 的 2026-10-28 条目
 - ✅ **Phase 0: MVP** — Electron 框架、文件管理、编辑器、Diff、国际化
 - ✅ **便携式架构** — 所有应用数据自包含在应用目录内
 - ✅ **Phase 1: Pi Agent 集成** — 真实 Agent 可用（模型拉取 / 对话 / 工具）
@@ -57,7 +60,7 @@
 - 纯 Web 开发模式：Vite 中间件提供模型拉取代理与 Agent 桥接
 - 已知限制：无流式输出（Phase 2 已解决，见下文“流式输出”）
 
-详细报告：[Phase 1 完成报告](./PHASE-1-COMPLETE.md)
+详细报告：[Phase 1 完成报告](../archive/PHASE-1-COMPLETE.md)
 
 ### ✅ Phase 1 加固（2026-10-20）
 
@@ -77,7 +80,7 @@
 
 #### Phase 2: 工作区与对话体验（完成）
 
-- ✅ 最近打开列表（JSON，`config/settings.json`）
+- ✅ 最近打开列表（JSON，`config/settings.json`；2026-10-26 已迁到 `data/workspaces.db`）
 - ✅ 工作区生命周期（初始化 / 切换清理 / 关闭）
 - ✅ 会话持久化与恢复（Pi 会话 + UI 历史）
 - ✅ 主进程文件日志（`{appDir}/logs/main.log`，5MB 轮转并保留 `.1` 备份；渲染进程日志 2026-10-21 补齐为 `{appDir}/logs/renderer.log`）
@@ -202,7 +205,7 @@
 - ✅ 2026-10-28 发布 v0.7.0：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含文件阅读视图与 pdf.js PDF 阅读器、面板拆分独立窗口（`pw-app://` 外壳 + 无边框自绘标题栏 + 拖出拆分）、聊天图片附件按 id 消费（排队项与运行中插话可带图、纯图片允许发送）、Agent 自动压缩后不再误报「无响应」、两个自定义 scheme 特权改为一次注册（修复合并后 `pw-file` 丢失 `stream` / `standard` / `fetch` 特权导致的媒体拖动与 HTML 相对路径问题）
 - ✅ 2026-10-28 发布 v0.7.1：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含聊天头部三层合两层（工作树切换并入头部为 24px chip、会话标签栏升为 34px 并与正文列连通、移除常态「就绪」状态、未命名会话按需加序号）、辅助窗口继承应用菜单（快捷键在拆分窗口可用）
 - ✅ 2026-10-28 拆分窗口改为「主窗口彻底让位」：拆出的面板不再在原位置渲染占位卡（删 `PanelDetachedPlaceholder` 与 `PanelSlot` 的 `placeholder` 入参），侧栏 / 对话列 / 终端行连同 2px 接缝一起把空间让给编辑器，面板仍保持挂载（`hidden`）以维持 portal；files / git 都拆出时侧栏与 26px 导轨全部消失，只剩一个停靠时保留侧栏并把标签切到还在的一边；独立窗口标题改为工作区名（`basename`），删除 `focusPanelWindow` 与「定位到独立窗口 / 已分离」文案，回位只靠关窗。设计系统 v1.39，新增 `tests/workspace-panel-layout.test.tsx`。type-check / lint / 887 用例通过
-- ✅ 2026-10-28 主窗口关闭改为收进托盘：`X` 不再退出进程，Agent 会话 / 终端 / 文件监听 / 更新定时器继续运行，真退出只走托盘菜单「退出」或系统级退出；收进托盘不拦未保存确认，真退出才拦；托盘图标 Windows / Linux 用彩色 `app-icon.ico`、macOS 用单色 π 模板图（`scripts/make-tray-icon.mjs` 由品牌图标生成 16 / 32 两档），菜单为系统原生菜单（显示主窗口 / 分隔线 / 退出，跟随应用语言）；Linux 降级为最小化到任务栏，Windows 首次收起用托盘气泡提示一次；辅助窗口完全不跟随主窗口隐藏 / 恢复；设置「通用」新增「关闭主窗口」开关（`config/settings.json` 的 `closeToTray`，默认收进托盘）。设计系统 v1.40，决策见 [ADR-002](../decisions/ADR-002-tray-resident-main-window.md)。新增 `tests/tray.test.ts` 与 `tests/close-to-tray-setting.test.tsx`。type-check / lint / 904 用例通过
+- ✅ 2026-10-28 主窗口关闭改为收进托盘：`X` 不再退出进程，Agent 会话 / 终端 / 文件监听 / 更新定时器继续运行，真退出只走托盘菜单「退出」或系统级退出；收进托盘不拦未保存确认，真退出才拦；托盘图标 Windows / Linux 用彩色 `app-icon.ico`、macOS 用单色 π 模板图（`scripts/make-tray-icon.js` 由品牌图标生成 16 / 32 两档），菜单为系统原生菜单（显示主窗口 / 分隔线 / 退出，跟随应用语言）；Linux 降级为最小化到任务栏，Windows 首次收起用托盘气泡提示一次；辅助窗口完全不跟随主窗口隐藏 / 恢复；设置「通用」新增「关闭主窗口」开关（`config/settings.json` 的 `closeToTray`，默认收进托盘）。设计系统 v1.40，决策见 [ADR-002](../decisions/ADR-002-tray-resident-main-window.md)。新增 `tests/tray.test.ts` 与 `tests/close-to-tray-setting.test.tsx`。type-check / lint / 904 用例通过
 - ✅ 2026-10-28 会话历史 / 导出改为以会话记录为单一真相源：新增 `pi-bridge/src/session-entries.ts`（`activeTimeline()` 沿 `getBranch()` 重建完整分支，应用 `context_edit` 替换与省略），聊天历史恢复、md / html 导出与会话摘要统一由它输出，压缩前的消息不再丢失；压缩点改为消息内的 `compaction` part（实时与重载后位置一致，落在发生它的那一轮），渲染为细线分隔条，文案统一为「上下文已压缩 · 压缩前 N tokens」并删除手动 / 自动措辞；`compaction_end` 补发 `entryId` / `timestamp` / `aborted` / `willRetry`，失败或取消的压缩不再画分隔线。设计系统 v1.41（新增 6.14），决策见 [ADR-003](../decisions/ADR-003-session-record-single-source.md)，新增 `tests/session-entries.test.ts` / `session-history.test.ts` / `session-export.test.ts` / `chat-store-compaction.test.ts` / `agent-trace-compaction.test.tsx`。type-check / lint / 937 用例通过
 - ✅ 2026-10-28 聊天记录回底修复：用户主动发送（含重试 / 编辑重发 / 计划执行 / 运行中插话）无条件恢复跟随并贴到滚动容器真实底部，不再因为上滑看过历史就不回底；跟随判定抽成 `src/hooks/chatScroll.ts`（距底判定 / 按钮阈值 / 贴底），按真实 `scrollHeight` 贴底，消息列表之外的「思考中」与错误块高度也计入；贴底分两帧（`measure` 完成后再贴一次），容器尺寸从 0 恢复或变化时按 `ResizeObserver` 补一次贴底，隐藏期间（`clientHeight === 0`）不参与跟随判定也不写 `scrollTop`。新增 `tests/chat-scroll.test.ts` 及 3 个渲染层用例（上滑后发送、插话、容器无布局）。type-check / lint / 946 用例通过
 - ✅ 2026-10-28 视图切换按钮离开文件标签条：改为浮在编辑器内容区右下角的 `OverlayButton`（28px、内缩 16px 让开滚动条、常态 `bg-raised/90` 半透明、hover / focus 实心），阅读与源码两种视图共用同一落点、切换不跳动；标签再多也不会把它挤出可视区（原位置在 `overflow-x-auto` 的标签条最右端，`ml-auto` 在溢出后被推走）；Markdown 阅读视图版心补 `pb-12` 避让，滚到底时最后一行不被压住。设计系统 v1.42（新增 6.15 与 5.11 `OverlayButton`），`tests/file-view.test.tsx` 新增 2 例（浮层落点与标签条解耦 / 两视图位置一致）。type-check / lint / 948 用例通过
@@ -210,12 +213,10 @@
 - ✅ 2026-10-28 会话标题确定后不再改写：标题（模型生成或手动重命名）一经写入 `session_info` 即锁定，后续轮次、压缩后重开、切换工作树、重启应用都不再自动生成或覆盖；自动生成改从会话记录取输入（首条用户消息 + 最早带文本的回复），不再用压缩后的 `session.messages`，并跳过 thinking / toolCall 开头的首条 assistant（此前会静默放弃且不重试）；生成结果不依赖运行时存活（关标签 / 切换工作树后在途结果直接补写进会话文件），sidecar 新增 `title` 快照做防丢失与记录补写；`ensureRuntime` 并发合并，避免同一会话两个 `SessionManager` 互相看不见标题；回退标题与磁盘列表统一为记录行序首条用户消息。渲染层新增 `pinnedTitles` + 列表请求序号，晚到的 `sessions:list` 不再把已确定标题降级回收；`agent:session-title` / `agent:session-root-changed` 改为广播所有窗口（拆出的对话列不再漏事件）；同名重命名不再追加重复的 `session_info`，会话删除后不再被在途标题结果重新写回 sidecar；模型返回空内容（推理型模型会把 token 预算花在 reasoning 上，此前 `max_tokens: 64` 会被吃光）不算确定、最多重试 3 次，标题请求预算提到 512。命名输入再做去噪：取最后一条文本回复并剔除「工作目录 / 已加载的规矩 / 工作树状态」这类环境说明段落（模型会把其中的项目名当主题，实测「你是谁？」被命名成「DSH 编码智能体介绍」），要求模型只回 JSON `{"title": …}`，解析为空或复述用户原话的标题判为不可用并重试。设计系统 v1.45，新增 10 个桥接用例、7 个标题工具用例、1 个 sidecar 用例与 3 个 store 用例。type-check / lint / 971 用例通过
 - ✅ 2026-10-28 标签命中区改为整块标签矩形：此前三个标签条（工作区 / 编辑器文件 / 聊天会话）都把点击挂在内层文字按钮上，34px 标签只有约 17px 可点、左侧 12px 内边距是死区，hover 矩形与实际响应区域不一致；`patterns.tsx` 新增 `Tab`（点击、内边距、hover、激活底色都在本体上，文字与标记层 `pointer-events-none`，关闭按钮 24px 命中区 + `data-tab-aux` 阻断冒泡，中键可关），内置 roving tabindex 与 ←/→/Home/End 自动激活；标签条隐藏横向滚动条改为滚轮横移 + 聚焦自动滚入视野。设计系统 v1.43（新增 4.5 命中区与 Tab 规范、禁止项、检查清单），新增 `tests/tab-hit-area.test.tsx`，`design-system.test.ts` 增加两条静态门槛
 - ✅ 2026-10-28 发布 v0.7.3：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版为 0.7.2 之后的修复版，包含标签命中区改为整块标签矩形（三条标签条统一 `Tab`、关闭命中区 24px、键盘导航）、会话标题一经确定不再被自动改写（含压缩后重开 / 切工作树 / 重启，sidecar `title` 快照防丢失，空返回不计确定最多重试 3 次）、标题输入改用去噪后的最后一条回复摘录并校验模型输出（env 说明段落不参与命名）。type-check / lint / 985 用例通过
+- ✅ 2026-10-29 工作树依赖自动安装与复用（GIT-118）：新增 `electron/worktree-deps.ts` 按仓库根 lockfile 识别包管理器（pnpm / bun / yarn（v1 与 berry）/ npm / uv）并在链接工作树里后台 `spawn` 安装（串行（同时只跑一个）、10 分钟硬超时、输出只进日志与内存尾部）；安装结果按 `sha1(工作树自己的 lockfile)` 写进 `session-git.json` 的 `installedLockfileHash`，哈希未变且 `node_modules` / `.venv` 存在则复用不再安装；没有 lockfile 的仓库跳过（状态 `none`）。状态经新推送频道 `git:worktree-deps` 进入工作树 chip（安装中 / 已就绪 / 安装失败可重试），同时进入 Agent 上下文；手动触发走 `git:installWorktreeDeps`；删除 / 遗忘工作树与关闭工作区都会终止在跑的安装；自动安装可用设置项 `autoInstallWorktreeDeps` 关闭（默认开，安装会执行仓库脚本）。修掉了「工作树在仓库内部、Node 向上解析到主 checkout 的 `node_modules`」导致的静默依赖污染。新增 `tests/worktree-deps.test.ts`，扩充 `worktree-coordinator` / `worktree-chip` / `git-ipc` 用例。type-check / lint / 1045 用例通过
+- ✅ 2026-10-29 GIT-118 复查修正：哈希改为取**工作树自己那份 lockfile**（无则回退仓库根）—— 原来用仓库根的哈希描述工作树里的安装，导致分支换 lockfile 时永不重装、两个不同分支的工作树共用一个哈希；依赖安装只在**绑定工作树时**触发（`ensureInstalled`），`statusFor` 改为纯读，修掉「光是枚举工作树就给所有工作树（含用户手工创建的、无会话绑定的）装一遍依赖」；安装改为串行，排队任务被取消时不再启动。新增 `statusFor` 只读 / 串行排队 / 排队取消 / 工作树自身 lockfile 变化重装 / 未绑定工作树不安装 五类用例
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
 ## 最近提交
 
 详见 git 提交历史。
-
----
-
-**更新时间**: 2026-10-29

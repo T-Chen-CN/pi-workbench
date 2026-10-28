@@ -117,6 +117,7 @@ Workspace data: `{workspace}/.pi-workbench/`
 
 ## Docs
 
+- [Docs index](docs/README.md) — all project documentation
 - [Project plan](docs/PROJECT_PLAN.md)
 - [Project structure](docs/architecture/PROJECT_STRUCTURE.md)
 - [Build & packaging](docs/guides/BUILD_AND_PACKAGE.md)
@@ -124,7 +125,7 @@ Workspace data: `{workspace}/.pi-workbench/`
 - [Status](docs/progress/STATUS.md)
 - [Backlog (closed; platform acceptance pending)](docs/progress/BACKLOG.md)
 - [Roadmap v1 (completed)](docs/progress/ROADMAP.md)
-- [Phase 1 report](docs/progress/PHASE-1-COMPLETE.md)
+- [Phase 1 report](docs/archive/PHASE-1-COMPLETE.md) (archived)
 
 Chinese README: [README_ZH.md](README_ZH.md)
 

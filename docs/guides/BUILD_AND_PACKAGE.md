@@ -1,6 +1,9 @@
 # 构建与打包指南
 
-**适用版本**: 0.7.3（Phase 6 持续）
+> **面向**：要构建、打包、发布或动自动更新逻辑的人
+> **什么时候读**：跑 `npm run package:*`、动 NSIS / 更新机制 / 数据目录之前
+> **什么时候要改**：构建脚本、打包配置、更新机制或受保护目录清单变化时
+
 **最后更新**: 2026-10-28
 
 ---
@@ -50,13 +53,15 @@ npm run web:dev
 npm run build
 ```
 
-依次执行：
+依次执行（**顺序不可颠倒**）：
 
 | 步骤 | 命令 | 产物 |
 |---|---|---|
 | 渲染进程 | `npm run build:renderer` | `dist/` |
-| 主进程 + preload | `npm run build:main` | `dist-electron/main.js`、`dist-electron/preload.cjs` |
 | Agent 桥接层 | `npm run build:bridge` | `pi-bridge/dist/`（已加入 `.gitignore`，构建时生成） |
+| 主进程 + preload | `npm run build:main` | `dist-electron/main.js`、`dist-electron/preload.cjs` |
+
+**为什么这个顺序**：主进程编译时引用 `pi-bridge/dist` 的类型，桥接层必须先构建；`package.json` 的 `build` 脚本已经按此顺序串联。
 
 单独构建某一层：
 
@@ -97,7 +102,9 @@ Windows 产物：
     "pi-bridge/dist/**/*",     // AgentManager 必须打包
     "pi-bridge/package.json",
     "app-icon.png",
-    "app-icon.ico"
+    "app-icon.ico",
+    "tray-template.png",        // macOS 菜单栏托盘模板图，缺了托盘没有图标
+    "tray-template@2x.png"
   ],
   "win": {
     "target": ["nsis"],
@@ -136,7 +143,7 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
 
 ## 4.1 发布与自动更新（GitHub Releases）
 
-- 发布前先把 `package.json` 的 `version` 提升到目标版本（当前 `0.7.3`）。
+- 发布前先把 `package.json` 的 `version` 提升到目标版本，并同步 `README.md` / `README_ZH.md` 顶部的版本号。
 - 推送 `v*` 标签（例如 `git tag v0.7.3 && git push origin v0.7.3`）会触发
   `.github/workflows/release.yml`：
   1. `verify-version` 校验标签与 `package.json` 版本一致，不一致直接失败；
@@ -198,15 +205,7 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时执行：`npm ci` → type-ch
 
 ## 6. 便携式数据目录
 
-Windows / Linux（AppImage 放在 `.AppImage` 文件旁边）在可执行文件所在目录创建并维护：
-
-```
-{appDir}/
-├── config/          # settings.json, api-config.json（API Key 经 safeStorage 加密）
-├── cache/           # 临时文件、Web dev 模式 Agent 数据、更新安装包缓存（cache/{updaterCacheDirName}）
-├── data/            # Agent 模型配置与会话（data/agent/）、Chromium profile（data/profile）
-└── logs/            # main.log / renderer.log / agent.log
-```
+Windows / Linux（AppImage 放在 `.AppImage` 文件旁边）在可执行文件所在目录创建并维护 `config/`、`cache/`、`data/`、`logs/`；具体文件与写入者见 [agent/paths-and-storage §3](../agent/paths-and-storage.md)。
 
 Windows 安装目录必须可写：如果安装到 `C:\Program Files` 等位置，启动时会弹窗提示重新安装到用户可写目录。
 

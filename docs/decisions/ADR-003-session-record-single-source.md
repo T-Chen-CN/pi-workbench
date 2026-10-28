@@ -1,5 +1,9 @@
 # ADR-003 会话记录作为历史与导出的单一真相源
 
+> **面向**：要改会话历史、导出、压缩展示的人
+> **什么时候读**：动 `session-entries.ts`、`session-history.ts`、`session-export.ts`、`chatStore` 之前
+> **什么时候要改**：不修改正文；结论变化时追加"修订记录"或写新 ADR
+
 - **状态**: 已采纳（2026-10-28）
 - **影响范围**: `pi-bridge/src/session-entries.ts`（新增）、`pi-bridge/src/session-history.ts`、`pi-bridge/src/session-export.ts`、`pi-bridge/src/agent-manager.ts`、`src/store/chatStore.ts`、`src/components/AgentTrace.tsx`、`src/components/ChatMessageRow.tsx`
 - **相关文档**: [设计系统 6.14](../design/DESIGN_SYSTEM.md)、[STATUS 2026-10-28](../progress/STATUS.md)、[Backlog R-05 / R-10](../progress/BACKLOG.md)

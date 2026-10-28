@@ -129,6 +129,7 @@ docs/            项目文档
 
 ## 📚 文档
 
+- [文档索引](docs/README.md) — 全部项目文档的入口
 - [项目方案](docs/PROJECT_PLAN.md)
 - [项目结构](docs/architecture/PROJECT_STRUCTURE.md)
 - [构建与打包](docs/guides/BUILD_AND_PACKAGE.md)
@@ -136,7 +137,7 @@ docs/            项目文档
 - [项目状态](docs/progress/STATUS.md)
 - [待开发清单（已收尾）](docs/progress/BACKLOG.md)
 - [v1 功能方案（已归档）](docs/progress/ROADMAP.md)
-- [Phase 1 完成报告](docs/progress/PHASE-1-COMPLETE.md)
+- [Phase 1 完成报告（已归档）](docs/archive/PHASE-1-COMPLETE.md)
 
 English README: [README.md](README.md)
 
