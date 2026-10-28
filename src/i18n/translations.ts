@@ -197,6 +197,12 @@ export const translations = {
     mediaSize: '大小 {size}',
     mediaPlaybackFailed: '无法播放：当前内核可能不支持该格式，可用系统程序打开。',
     binaryFileLabel: '二进制文件',
+    previousPage: '上一页',
+    nextPage: '下一页',
+    zoomIn: '放大',
+    zoomOut: '缩小',
+    fitWidth: '适应宽度',
+    pdfLoadFailed: '无法渲染此 PDF：文件可能已损坏或需要密码。',
 
     // Chat Panel
     piAgent: 'Pi Agent',
@@ -914,8 +920,15 @@ export const translations = {
     imageFitWindow: 'Fit window',
     imageActualSize: 'Actual size',
     mediaSize: 'Size {size}',
-    mediaPlaybackFailed: 'Cannot play: the format may be unsupported. Open it with the system app.',
+    mediaPlaybackFailed:
+      'Cannot play: the format may be unsupported. Open it with the system app.',
     binaryFileLabel: 'Binary file',
+    previousPage: 'Previous page',
+    nextPage: 'Next page',
+    zoomIn: 'Zoom in',
+    zoomOut: 'Zoom out',
+    fitWidth: 'Fit width',
+    pdfLoadFailed: 'Cannot render this PDF: the file may be corrupt or password protected.',
 
     // Chat Panel
     piAgent: 'Pi Agent',

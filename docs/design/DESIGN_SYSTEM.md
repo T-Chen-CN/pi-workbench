@@ -445,7 +445,7 @@
 | HTML | 阅读 | 是 | 沙箱 iframe 直出文件 |
 | 图片（png/jpg/webp/svg…） | 预览 | 否 | `<img>` + 适应窗口 / 原始尺寸 |
 | 视频 / 音频 | 预览 | 否 | 原生播放器（支持拖动进度） |
-| PDF | 预览 | 否 | Chromium 内置查看器 |
+| PDF | 预览 | 否 | pdf.js 自绘阅读器 |
 | 纯文本 / 代码 / JSON | 源码 | — | Monaco |
 | 未知二进制 | 占位 | 否 | 空状态 + 系统打开 |
 
@@ -467,7 +467,20 @@
 - 视频：内容区 `bg-sunken`，播放器居中，`max-h-full max-w-full`；音频：`w-full max-w-[480px]` 居中 + 文件名 caption。
 - HTML：`重新加载`（`RotateCw`）+ `系统打开`；源码保存后 500ms 防抖刷新，避免连续输入反复重载。
 - 所有媒体与 PDF 均提供 `系统打开`（`ExternalLink`）；加载失败时在内容区中部给出说明文字 + `系统打开` 按钮，不使用红色告警块。
-- PDF 由 Chromium 内置查看器渲染（`webPreferences.plugins`），其工具栏属于 Chromium 自身 UI、不受 Paper / Ink token 控制（跟随系统外观），这是已知且接受的不一致点；不要在 PDF 外层再套自绘工具条。
+
+**PDF 阅读视图**
+
+PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工具条与滚动都是黑盒），改用 pdf.js 自绘。工具条与媒体一致（1px `rule-divide`，左侧文件名 `type-caption` / `ink-muted`，右侧图标按钮组），从左到右：上一页（`ChevronUp`）、页码指示、下一页（`ChevronDown`）、缩小（`ZoomOut`）、放大（`ZoomIn`）、适应宽度（`Maximize2`，`active` 表示处于适应宽度）、`系统打开`（`ExternalLink`）。
+
+- 页码指示是 `type-data`（mono 11.5）的 `3 / 12`，两侧按钮不可用时禁用而非隐藏。
+- 内容区 `bg-sunken`（文档台面），页面纸张 `bg-surface` + 1px `rule-hairline`，页间 16px；纸张**不随主题反色**：Ink 主题下仍是纸白，因为 PDF 呈现的是文档本身，黑底反白会失真。
+- 加载失败的页（损坏 / 加密 / 权限）只保留文件名，页码与缩放整组隐去，不要留一排点不动的按钮。
+- 默认**适应宽度**：宽度随编辑区变化实时重算，不写字面缩放百分比；手动缩放后切到自由模式，范围 50%–400%，`Ctrl/⌘+0` 回到适应宽度。
+- 滚动是**单一滚动容器**（不嵌套 iframe / 不嵌套滚动区），只渲染视口 ±2 页的 canvas，其余页保留等高占位，滚动条长度稳定不跳动；canvas 按 `devicePixelRatio` 绘制，超过 16M 像素时自动降采样。
+- 键盘：`PageUp` / `PageDown` 翻页，`Home` / `End` 首末页，`+` / `-` 缩放，`Ctrl/⌘+0` 适应宽度；焦点不在阅读区时不劫持按键。
+- v1 不提供文本层：不可选中、不可查找；补齐时以 pdf.js `textLayer` 叠加在 canvas 之上，视觉不变。
+- 文档加载失败（损坏、加密、权限）在内容区中部给说明文字 + `系统打开`，**不退回内置查看器**——一条渲染路径，不做双实现。
+- 资源全部随包分发、按需加载：pdf.js 主库与 worker 独立 chunk（仅打开 PDF 时载入），CMap / 标准字体 / wasm 解码器由构建期插件生成 base64 虚拟模块（`vite.config.ts` 的 `pi-workbench-pdfjs-assets`）并按类懒加载，不发起任何协议请求；PDF 本体仍走 `pw-file://`（协议支持 Range，pdf.js 对本地协议通常一次取回整份，本地盘上比分块更省事）。
 
 **安全与协议**：预览资源由主进程的只读协议 `pw-file://` 提供（仅 GET/HEAD、路径必须落在受信任工作区或应用缓存、支持 Range）。HTML 预览的 iframe `sandbox` 为 `allow-scripts allow-forms allow-modals allow-popups allow-downloads`，**不含 `allow-same-origin`**：脚本可执行，但文档处于不透明源，拿不到父窗口与 Electron API。生产 CSP 在 `img-src` / `media-src` / `frame-src` 放行 `pw-file:`。
 
@@ -691,7 +704,7 @@
 | 会话标签栏 / 列表 | `src/components/SessionTabs.tsx`、`src/components/ChatSessionList.tsx`、`src/store/sessionStore.ts` |
 | 编辑器主题 | `src/components/MonacoEditor.tsx`（`pi-paper` / `pi-ink`） |
 | 文件视图容器 / 标签条 | `src/components/FileView.tsx`、`src/components/EditorTabs.tsx` |
-| 阅读视图（Markdown / HTML / 媒体 / PDF） | `src/components/MarkdownReadingView.tsx`、`src/components/HtmlPreview.tsx`、`src/components/MediaView.tsx` |
+| 阅读视图（Markdown / HTML / 媒体 / PDF） | `src/components/MarkdownReadingView.tsx`、`src/components/HtmlPreview.tsx`、`src/components/MediaView.tsx`、`src/components/PdfReadingView.tsx` |
 | 文件类型分派与预览 URL | `src/utils/fileKind.ts`（`detectFileKind` / `defaultViewFor` / `filePreviewUrl`） |
 | 只读文件协议 | `electron/file-protocol.ts`（`pw-file://`，Range + 信任校验） |
 | 保存 / 草稿 / 外部变更 | `src/workspace/useFileDocument.ts` |
@@ -721,6 +734,7 @@
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.35 | 2026-10-27 | PDF 阅读视图改为 pdf.js 自绘：单一滚动容器 + canvas 虚拟化（视口 ±2 页、离开视口释放像素内存）、适应宽度默认与 50%–400% 手动缩放、页码 / 翻页 / 键盘、失败只留系统打开；工具条与媒体视图同构；移除 Chromium 内置查看器依赖（`webPreferences.plugins`） |
 | v1.34 | 2026-10-27 | 文件阅读视图：编辑器按类型分派阅读 / 源码两种形态，Markdown 与 HTML 默认渲染、可切回 Monaco；图片 / 视频 / 音频 / PDF 走只读协议 `pw-file://` 预览并提供系统打开降级；Markdown 支持块级就地编辑；标签条按类型出图标并在右侧提供单一视图切换按钮 |
 | v1.33 | 2026-10-27 | 模型能力表：设置页供应商 API 分节把「支持图片的模型」勾选列表升级为三列能力表（模型 / 上下文容量 / 图片），新增 `SettingsTable` / `SettingsTableRow` 模式与 `Modal` 的 alert 单按钮变体；容量为四档固定字面量（64K / 128K / 256K / 1M，默认 128K） |
 | v1.32 | 2026-10-27 | Git 面板提交行：窄面板（<420px）改为两行两列布局，ref 徽章与标题等宽、短哈希右对齐进固定 52px 时间列；窄面板 ref 按实测宽度折叠为 `+N`（宽面板仍按个数）；相对时间英文改紧凑单位（`59m` / `23h` / `29d`），超过 30 天改两位年份本地化日期（`25/12/31` / `12/31/25`），会话列表同步 |

@@ -656,8 +656,6 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // Chromium 内置 PDF 查看器依赖 plugins（仍运行在 sandbox 内）
-      plugins: true,
     },
     icon: path.join(__dirname, '../app-icon.png'),
   })

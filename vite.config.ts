@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 import { pathToFileURL } from 'url'
 import { existsSync } from 'fs'
-import { readFile, writeFile, mkdir } from 'fs/promises'
+import { readFile, writeFile, mkdir, readdir } from 'fs/promises'
 import { createHash } from 'crypto'
 
 /**
@@ -441,12 +441,13 @@ const CONTENT_SECURITY_POLICY = [
   "media-src 'self' pw-file:",
   "frame-src 'self' pw-file:",
   "worker-src 'self' blob:",
-  "connect-src 'self'",
+  // pdf.js 通过 XHR 从只读协议取 PDF 字节（协议只允许 GET/HEAD 且限定在受信任根内）
+  "connect-src 'self' pw-file:",
   "object-src 'none'",
   "base-uri 'self'",
 ].join('; ')
 
-function contentSecurityPolicy(): Plugin {
+export function contentSecurityPolicy(): Plugin {
   return {
     name: 'pi-workbench-csp',
     apply: 'build',
@@ -500,8 +501,61 @@ function monacoLanguageFilter(): Plugin {
   }
 }
 
+/**
+ * pdf.js 的 CMap / 标准字体 / wasm 解码器需要随包分发。
+ *
+ * 不走 `?inline` asset：Vite 对 node_modules 里的二进制 asset 处理不稳定（部分会
+ * 退化成 `new URL(…).href`）；这里由 Node 直接读字节、生成 base64 虚拟模块，
+ * 三类资源各一个 chunk，`src/pdf/pdfAssets.ts` 按需动态导入。
+ */
+const PDFJS_ASSET_GROUPS = {
+  cmaps: ['.bcmap'],
+  standard_fonts: ['.pfb', '.ttf'],
+  wasm: ['.wasm'],
+} as const
+
+type PdfjsAssetGroup = keyof typeof PDFJS_ASSET_GROUPS
+
+export function pdfjsAssets(): Plugin {
+  const prefix = 'virtual:pdfjs-assets/'
+  const resolvedPrefix = '\0' + prefix
+  const root = process.cwd()
+
+  return {
+    name: 'pi-workbench-pdfjs-assets',
+    resolveId(id) {
+      return id.startsWith(prefix) ? '\0' + id : null
+    },
+    async load(id) {
+      if (!id.startsWith(resolvedPrefix)) return null
+      const group = id.slice(resolvedPrefix.length) as PdfjsAssetGroup
+      const suffixes = PDFJS_ASSET_GROUPS[group]
+      if (!suffixes) throw new Error(`Unknown pdf.js asset group: ${group}`)
+      const dir = path.join(root, 'node_modules', 'pdfjs-dist', group)
+      const files = (await readdir(dir)).filter((name) =>
+        (suffixes as readonly string[]).some((suffix) => name.endsWith(suffix))
+      )
+      const entries: string[] = []
+      for (const name of files) {
+        const bytes = await readFile(path.join(dir, name))
+        entries.push(
+          `${JSON.stringify(name)}: ${JSON.stringify(`data:application/octet-stream;base64,${bytes.toString('base64')}`)}`
+        )
+      }
+      return `export default {${entries.join(',\n')}}`
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), devModelsProxy(), devAgentBridge(), contentSecurityPolicy(), monacoLanguageFilter()],
+  plugins: [
+    react(),
+    pdfjsAssets(),
+    devModelsProxy(),
+    devAgentBridge(),
+    contentSecurityPolicy(),
+    monacoLanguageFilter(),
+  ],
   root: 'src',  // 设置根目录为 src
   server: {
     port: 5173,

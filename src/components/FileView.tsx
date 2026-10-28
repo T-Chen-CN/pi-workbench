@@ -11,7 +11,8 @@ import { Button, EmptyState, Spinner } from './ui'
 import { EditorTabs } from './EditorTabs'
 import { MarkdownReadingView } from './MarkdownReadingView'
 import { HtmlPreview } from './HtmlPreview'
-import { MediaView, PdfPreview } from './MediaView'
+import { MediaView } from './MediaView'
+import { PdfReadingView } from './PdfReadingView'
 
 // Monaco 体积大：只在真正需要源码视图时加载
 const MonacoEditor = lazy(() =>
@@ -144,7 +145,7 @@ export const FileView: React.FC<FileViewProps> = ({
           {fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' ? (
             <MediaView file={currentFile} />
           ) : null}
-          {fileKind === 'pdf' && <PdfPreview file={currentFile} />}
+          {fileKind === 'pdf' && <PdfReadingView file={currentFile} />}
           {fileKind === 'binary' && (
             <UnsupportedFileView path={currentFile.path} name={currentFile.name} />
           )}
