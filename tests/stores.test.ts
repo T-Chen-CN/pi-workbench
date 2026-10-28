@@ -175,7 +175,7 @@ describe('chatStore attachments', () => {
     )
   })
 
-  it('removes and clears attachments', () => {
+  it('removes and consumes attachments by id', () => {
     useChatStore.getState().addAttachment(KEY, fileA)
     useChatStore.getState().addAttachment(KEY, fileB)
 
@@ -184,7 +184,13 @@ describe('chatStore attachments', () => {
       { ...fileB, id: 'file:/tmp/b.ts' },
     ])
 
-    useChatStore.getState().clearAttachments(KEY)
+    // 只消费被消息带走的附件；未提交的附件不受影响
+    useChatStore.getState().consumeAttachments(KEY, ['unknown-id'])
+    expect(useChatStore.getState().conversations[KEY].attachments).toEqual([
+      { ...fileB, id: 'file:/tmp/b.ts' },
+    ])
+
+    useChatStore.getState().consumeAttachments(KEY, ['file:/tmp/b.ts'])
     expect(useChatStore.getState().conversations[KEY].attachments).toEqual([])
   })
 
@@ -455,16 +461,13 @@ describe('chatStore pending messages', () => {
     expect(useChatStore.getState().conversations['pending-key'].pending).toEqual([first])
   })
 
-  it('restores pending messages from persisted records', () => {
-    useChatStore.getState().ensureConversation('restore-key')
-    useChatStore.getState().setPending('restore-key', [
-      { id: 'p1', text: 'resume this' },
-      { id: 'p2', text: 'inject that' },
-    ])
-    expect(useChatStore.getState().conversations['restore-key'].pending).toEqual([
-      { id: 'p1', text: 'resume this' },
-      { id: 'p2', text: 'inject that' },
-    ])
+  it('carries images with a queued message', () => {
+    useChatStore.getState().ensureConversation('pending-image-key')
+    const images = [{ data: 'AAAA', mimeType: 'image/png' }]
+    const item = useChatStore.getState().addPending('pending-image-key', '', images)
+
+    expect(item.images).toEqual(images)
+    expect(useChatStore.getState().conversations['pending-image-key'].pending).toEqual([item])
   })
 })
 

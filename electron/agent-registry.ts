@@ -69,8 +69,12 @@ export interface RegisteredAgent {
   closeSession?: (sessionId: string) => Promise<void>
   renameSession?: (sessionId: string, name: string) => Promise<unknown>
   deleteSession?: (sessionId: string) => Promise<{ success: boolean; error?: string }>
-  /** 运行中插话（steer） */
-  steer?: (sessionId: string, message: string) => Promise<{ success: boolean; error?: string }>
+  /** 运行中插话（steer）：携带图片时允许空文本 */
+  steer?: (
+    sessionId: string,
+    message: string,
+    images?: Array<{ data: string; mimeType: string }>
+  ) => Promise<{ success: boolean; error?: string }>
   /** 上下文占用 */
   getContextUsage?: (sessionId: string) => Promise<{
     success: boolean

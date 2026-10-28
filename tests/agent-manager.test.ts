@@ -1384,6 +1384,29 @@ describe('AgentManager sessions', () => {
     await until(() => onSessionTitle.mock.calls.length > 0)
     expect(onSessionTitle).toHaveBeenCalledWith('session-1', 'Fix login redirect')
   })
+
+  it('titles an image-only session without calling the model', async () => {
+    const session = createFakeSession(async (fake) => {
+      fake.messages.push({
+        role: 'user',
+        content: [{ type: 'image', data: 'AAAA', mimeType: 'image/png' }],
+      })
+      fake.messages.push({ role: 'assistant', content: 'A red square.' })
+    })
+    primeSdk(session)
+    const onSessionTitle = vi.fn()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await manager.initialize(makeConfig({ onSessionTitle, getLanguage: () => 'zh' }))
+    await expect(
+      manager.chat('', { images: [{ data: 'AAAA', mimeType: 'image/png' }] })
+    ).resolves.toMatchObject({ success: true })
+
+    await until(() => onSessionTitle.mock.calls.length > 0)
+    expect(onSessionTitle).toHaveBeenCalledWith('session-1', '图片对话')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })
 
 describe('AgentManager dispose', () => {
@@ -1689,6 +1712,33 @@ describe('running-turn steering', () => {
       success: false,
       error: 'Message is empty.',
     })
+  })
+
+  it('steers an image-only message with image content blocks', async () => {
+    let release = () => {}
+    let calls = 0
+    const session = createFakeSession(() => {
+      calls++
+      if (calls > 1) return Promise.resolve()
+      return new Promise<void>((resolve) => {
+        release = resolve
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const pendingChat = manager.chat('start')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const images = [{ data: 'AAAA', mimeType: 'image/png' }]
+    await expect(manager.steer('session-1', '', images)).resolves.toEqual({ success: true })
+    expect(session.lastPromptOptions).toEqual({
+      streamingBehavior: 'steer',
+      images: [{ type: 'image', data: 'AAAA', mimeType: 'image/png' }],
+    })
+
+    release()
+    await pendingChat
   })
 })
 

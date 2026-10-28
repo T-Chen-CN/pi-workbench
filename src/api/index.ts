@@ -35,7 +35,6 @@ import type {
   AppActiveWorkResult,
   DraftListResult,
   DraftResult,
-  PendingMessagesMap,
   EditorTabs,
   EditorTabsResult,
   GithubDeviceLoginEvent,
@@ -412,14 +411,6 @@ export const api = {
   setSessionMeta: (workspaceDir: string, meta: { pinned: string[]; archived: string[] }) =>
     typeof electronAPI.agentSessionsMetaSet === 'function'
       ? electronAPI.agentSessionsMetaSet(workspaceDir, meta)
-      : Promise.resolve({ success: true }),
-  getPendingMessages: (workspaceDir: string) =>
-    typeof electronAPI.chatPendingGet === 'function'
-      ? electronAPI.chatPendingGet(workspaceDir)
-      : Promise.resolve({ success: true, sessions: {} as PendingMessagesMap }),
-  setPendingMessages: (workspaceDir: string, sessions: PendingMessagesMap) =>
-    typeof electronAPI.chatPendingSet === 'function'
-      ? electronAPI.chatPendingSet(workspaceDir, sessions)
       : Promise.resolve({ success: true }),
   readFile: (path: string) => electronAPI.readFile(path),
   writeFile: (path: string, content: string) => electronAPI.writeFile(path, content),

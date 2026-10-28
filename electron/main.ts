@@ -517,6 +517,7 @@ registerAgentIpc({
   pluginManager,
   getMainWindow: () => mainWindow,
   getDefaultPermissionLevel: () => getAppSettingsCache().permissionLevel,
+  getLanguage: () => ((getAppSettingsCache().language ?? 'zh') === 'en' ? 'en' : 'zh'),
   logger: agentLogger,
   notificationText,
   notify: (event) => notificationRouter.notify(event),

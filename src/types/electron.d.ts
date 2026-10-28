@@ -246,7 +246,8 @@ export interface ElectronAPI {
   agentSteer: (
     workspaceDir: string,
     sessionId: string,
-    message: string
+    message: string,
+    images?: AgentImagePayload[]
   ) => Promise<{ success: boolean; error?: string }>
   agentContextUsage: (
     workspaceDir: string,
@@ -383,13 +384,6 @@ export interface ElectronAPI {
   agentSessionsMetaSet: (
     workspaceDir: string,
     meta: SessionMeta
-  ) => Promise<{ success: boolean; error?: string }>
-  chatPendingGet: (
-    workspaceDir: string
-  ) => Promise<{ success: boolean; sessions?: PendingMessagesMap; error?: string }>
-  chatPendingSet: (
-    workspaceDir: string,
-    sessions: PendingMessagesMap
   ) => Promise<{ success: boolean; error?: string }>
   searchWorkspaceFiles: (
     workspaceDir: string,
@@ -793,14 +787,6 @@ export interface ConversationBranchGroup {
   activeIndex: number
   branches: ConversationBranchOption[]
 }
-
-/** 排队消息（按会话分组持久化） */
-export interface PendingMessageRecord {
-  id: string
-  text: string
-}
-
-export type PendingMessagesMap = Record<string, PendingMessageRecord[]>
 
 /** 会话导出格式（R-10） */
 export type ExportSessionFormat = 'md' | 'html' | 'jsonl'

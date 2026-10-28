@@ -155,6 +155,12 @@ function stallErrorMessage(): string {
   return `Agent response stalled: no output for ${Math.round(STALL_TIMEOUT_MS / 1000)}s.`
 }
 
+/** 用户消息是否带图片块（纯图片对话用于跳过标题模型调用） */
+function hasImageBlocks(content: unknown): boolean {
+  if (!Array.isArray(content)) return false
+  return content.some((part: any) => part?.type === 'image')
+}
+
 export type { SessionMode }
 
 interface SessionRuntime {
@@ -1252,16 +1258,35 @@ export class AgentManager {
     }
   }
 
-  /** 运行中插话：把消息注入当前轮（steer），不等待本轮结束 */
-  async steer(sessionId: string, message: string): Promise<{ success: boolean; error?: string }> {
+  /** 运行中插话：把消息（可带图片、可为纯图片）注入当前轮（steer），不等待本轮结束 */
+  async steer(
+    sessionId: string,
+    message: string,
+    images?: Array<{ data: string; mimeType: string }>
+  ): Promise<{ success: boolean; error?: string }> {
     const text = message.trim()
-    if (!text) return { success: false, error: 'Message is empty.' }
+    const imageCheck = validateChatImages(images)
+    if (imageCheck.error) return { success: false, error: imageCheck.error }
+    if (!text && imageCheck.images.length === 0) {
+      return { success: false, error: 'Message is empty.' }
+    }
     try {
       const runtime = await this.ensureRuntime(sessionId)
       if (!runtime.isProcessing) {
         return { success: false, error: 'Session is not running.' }
       }
-      await runtime.session.prompt(text, { streamingBehavior: 'steer' })
+      await runtime.session.prompt(text, {
+        streamingBehavior: 'steer',
+        ...(imageCheck.images.length > 0
+          ? {
+              images: imageCheck.images.map((image) => ({
+                type: 'image' as const,
+                data: image.data,
+                mimeType: image.mimeType,
+              })),
+            }
+          : {}),
+      })
       this.logger.info(`[Agent Manager] Steered session ${sessionId}`)
       return { success: true }
     } catch (error) {
@@ -2237,7 +2262,18 @@ export class AgentManager {
 
     const userText = stripContextBlock(this.messageText(firstUser.content)).trim()
     const assistantText = this.messageText(firstAssistant.content).trim()
-    if (!userText || !assistantText) return
+    if (!assistantText) return
+
+    // 纯图片对话：没有可摘取的用户文本，直接写固定标题，不再调用模型
+    if (!userText) {
+      if (!hasImageBlocks(firstUser.content)) return
+      this.persistSessionTitle(
+        runtime,
+        config,
+        config.getLanguage?.() === 'en' ? 'Image chat' : '图片对话'
+      )
+      return
+    }
 
     const prompt = buildTitlePrompt(userText, assistantText)
 
@@ -2247,7 +2283,11 @@ export class AgentManager {
     const title = normalizeSessionTitle(raw)
     if (!title) return
 
-    // 生成期间用户可能已手动重命名、删除会话或切换走
+    this.persistSessionTitle(runtime, config, title)
+  }
+
+  /** 写入会话标题；生成期间用户可能已手动重命名、删除会话或切换走 */
+  private persistSessionTitle(runtime: SessionRuntime, config: AgentConfig, title: string): void {
     if (!this.runtimes.has(runtime.id)) return
     if (runtime.sessionManager.getSessionName() || runtime.pendingTitle) return
 

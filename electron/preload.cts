@@ -167,8 +167,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     workspaceDir: string,
     tabs: { open: string[]; active: string | null }
   ) => ipcRenderer.invoke('workspace:editorTabs:set', workspaceDir, tabs),
-  agentSteer: (workspaceDir: string, sessionId: string, message: string) =>
-    ipcRenderer.invoke('agent:steer', workspaceDir, sessionId, message),
+  agentSteer: (
+    workspaceDir: string,
+    sessionId: string,
+    message: string,
+    images?: Array<{ data: string; mimeType: string }>
+  ) => ipcRenderer.invoke('agent:steer', workspaceDir, sessionId, message, images),
   agentContextUsage: (workspaceDir: string, sessionId: string) =>
     ipcRenderer.invoke('agent:context:usage', workspaceDir, sessionId),
   agentCompactContext: (workspaceDir: string, sessionId: string) =>
@@ -236,9 +240,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     workspaceDir: string,
     meta: { pinned?: string[]; archived?: string[] }
   ) => ipcRenderer.invoke('agent:sessions:meta:set', workspaceDir, meta),
-  chatPendingGet: (workspaceDir: string) => ipcRenderer.invoke('chat:pending:get', workspaceDir),
-  chatPendingSet: (workspaceDir: string, sessions: unknown) =>
-    ipcRenderer.invoke('chat:pending:set', workspaceDir, sessions),
   searchWorkspaceFiles: (workspaceDir: string, query: string, limit?: number) =>
     ipcRenderer.invoke('workspace:searchFiles', workspaceDir, query, limit),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),

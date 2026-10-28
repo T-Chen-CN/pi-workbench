@@ -23,7 +23,6 @@ export interface ChatSessionsOptions {
   sessions: SessionSummary[]
   activeSessionId: string | null
   initSeqRef: MutableRefObject<number>
-  pendingHydratedRef: MutableRefObject<boolean>
   inputRef: RefObject<HTMLTextAreaElement | null>
   setInitialized: (value: boolean) => void
   setNeedsApiKey: (value: boolean) => void
@@ -52,7 +51,6 @@ export function useChatSessions(options: ChatSessionsOptions) {
     sessions,
     activeSessionId,
     initSeqRef,
-    pendingHydratedRef,
     inputRef,
     setInitialized,
     setNeedsApiKey,
@@ -204,22 +202,6 @@ export function useChatSessions(options: ChatSessionsOptions) {
           }
         }
 
-        // 恢复上次未发送的排队消息（R-02）；每个工作区只恢复一次
-        if (!pendingHydratedRef.current) {
-          const storedPending = await api.getPendingMessages(workspacePath)
-          if (seq !== initSeqRef.current) return
-          if (storedPending.success && storedPending.sessions) {
-            const chat = useChatStore.getState()
-            for (const [storedSessionId, items] of Object.entries(storedPending.sessions)) {
-              if (items.length === 0) continue
-              const key = conversationKey(workspacePath, storedSessionId)
-              chat.ensureConversation(key)
-              chat.setPending(key, items)
-            }
-          }
-          pendingHydratedRef.current = true
-        }
-
         setInitialized(true)
         persistTabs()
 
@@ -256,7 +238,7 @@ export function useChatSessions(options: ChatSessionsOptions) {
       initSeqRef.current++
       offTitle()
     }
-  }, [workspacePath, loadHistory, persistTabs, t, configVersion, initSeqRef, inputRef, pendingHydratedRef, setConfiguredImageModels, setFatalError, setInitialized, setNeedsApiKey])
+  }, [workspacePath, loadHistory, persistTabs, t, configVersion, initSeqRef, inputRef,  setConfiguredImageModels, setFatalError, setInitialized, setNeedsApiKey])
 
   const openSessionById = useCallback(
     async (sessionId: string, showError = true): Promise<boolean> => {

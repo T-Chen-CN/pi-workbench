@@ -36,7 +36,6 @@ import { useChatSessions } from './useChatSessions'
 import type {
   SessionSummary,
   SessionMeta,
-  PendingMessagesMap,
   ModelCapabilityInfo,
   PromptTemplateInfo,
   SkillInfo,
@@ -284,6 +283,8 @@ export function useChatPanelState(props: ChatPanelProps) {
   const [newMessageCount, setNewMessageCount] = useState(0)
   /** 正在预处理（缩放 / 编码）的图片数量 */
   const [imageProcessing, setImageProcessing] = useState(0)
+  /** 同一计数的同步镜像：发送路径需要在事件回调里立即判断，不等渲染 */
+  const imageProcessingRef = useRef(0)
   /** 重试倒计时的本地时钟（R-19） */
   const [retryNow, setRetryNow] = useState(() => Date.now())
   const lastMessageCountRef = useRef(0)
@@ -304,7 +305,6 @@ export function useChatPanelState(props: ChatPanelProps) {
   const forceSendKeysRef = useRef(new Set<string>())
   const budgetWarnedKeysRef = useRef(new Set<string>())
   const initSeqRef = useRef(0)
-  const pendingHydratedRef = useRef(false)
   const stickToBottomRef = useRef(true)
   const stoppedKeysRef = useRef(new Set<string>())
 
@@ -324,7 +324,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     sessions,
     activeSessionId,
     initSeqRef,
-    pendingHydratedRef,
     inputRef,
     setInitialized,
     setNeedsApiKey,
@@ -595,6 +594,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     if (imageFiles.length === 0) return
 
     void (async () => {
+      imageProcessingRef.current += 1
       setImageProcessing((count) => count + 1)
       try {
         const existing = useChatStore.getState().conversations[key]?.attachments ?? []
@@ -638,6 +638,7 @@ export function useChatPanelState(props: ChatPanelProps) {
           }
         }
       } finally {
+        imageProcessingRef.current = Math.max(0, imageProcessingRef.current - 1)
         setImageProcessing((count) => Math.max(0, count - 1))
       }
     })()
@@ -687,58 +688,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     const timer = window.setInterval(() => setRetryNow(Date.now()), 250)
     return () => window.clearInterval(timer)
   }, [retryStatus])
-
-  // 排队消息变化时写入工作区（R-02）；关闭标签或删除会话后快照里自然不再包含它
-  useEffect(() => {
-    const prefix = `${workspacePath}\u0000`
-    const snapshot = (
-      conversations: Record<string, { pending: Array<{ id: string; text: string }> }>
-    ): PendingMessagesMap => {
-      const sessions: PendingMessagesMap = {}
-      for (const [key, conversation] of Object.entries(conversations)) {
-        if (!key.startsWith(prefix) || conversation.pending.length === 0) continue
-        sessions[key.slice(prefix.length)] = conversation.pending.map(({ id, text }) => ({
-          id,
-          text,
-        }))
-      }
-      return sessions
-    }
-    let timer: number | null = null
-    // 只比较 pending 数组引用；草稿输入与流式输出不会触发全量序列化
-    const pendingChanged = (
-      state: { conversations: Record<string, { pending: unknown[] }> },
-      previous: { conversations: Record<string, { pending: unknown[] }> }
-    ): boolean => {
-      const keys = new Set([
-        ...Object.keys(state.conversations),
-        ...Object.keys(previous.conversations),
-      ])
-      for (const key of keys) {
-        if (!key.startsWith(prefix)) continue
-        if (state.conversations[key]?.pending !== previous.conversations[key]?.pending) {
-          return true
-        }
-      }
-      return false
-    }
-    const unsubscribe = useChatStore.subscribe((state, previous) => {
-      if (!pendingHydratedRef.current) return
-      if (!pendingChanged(state, previous)) return
-      if (timer !== null) window.clearTimeout(timer)
-      timer = window.setTimeout(() => {
-        timer = null
-        void api.setPendingMessages(
-          workspacePath,
-          snapshot(useChatStore.getState().conversations)
-        )
-      }, 300)
-    })
-    return () => {
-      unsubscribe()
-      if (timer !== null) window.clearTimeout(timer)
-    }
-  }, [workspacePath])
 
   // 激活会话切换时回到最新位置
   useEffect(() => {
@@ -851,17 +800,21 @@ export function useChatPanelState(props: ChatPanelProps) {
     useSessionStore.getState().clearPendingActivation()
   }, [initialized, sessions, workspacePath])
 
-  /** 运行中插话：把消息注入当前轮 */
+  /** 运行中插话：把消息（含图片）注入当前轮 */
   const sendSteer = async (
     sessionId: string,
     key: string,
     item: import('../store/chatStore').PendingMessage
   ) => {
-    const result = await piAgentAPI.steer(workspacePath, sessionId, item.text)
+    const result = await piAgentAPI.steer(workspacePath, sessionId, item.text, item.images)
     const chat = useChatStore.getState()
     if (result.success) {
       chat.removePending(key, item.id)
-      chat.addMessage(key, { role: 'user', content: item.text })
+      chat.addMessage(key, {
+        role: 'user',
+        content: item.text,
+        images: item.images && item.images.length > 0 ? item.images : undefined,
+      })
       toast.info(t('steerSent'))
     } else {
       toast.error(t('steerFailed', { error: localizeError(result.error ?? '') }))
@@ -948,14 +901,23 @@ export function useChatPanelState(props: ChatPanelProps) {
   const handleSubmit = async (
     e?: React.FormEvent,
     override?: string,
-    options?: { skipUserMessage?: boolean }
+    options?: {
+      skipUserMessage?: boolean
+      /** 随本次请求发送的图片；与 consumeAttachments: false 搭配用于重试 / 编辑重发 */
+      images?: import('../types/electron').AgentImagePayload[]
+      /** 是否把输入框附件带入本次请求；系统触发的发送（重试 / 计划执行 / 排队重发）传 false */
+      consumeAttachments?: boolean
+    }
   ) => {
     e?.preventDefault()
 
     const sessionId = activeSessionId
     const key = activeKey
     const userMessage = (override ?? input).trim()
-    if (!sessionId || !key || !userMessage) return
+    if (!sessionId || !key) return
+    const takeComposerAttachments = options?.consumeAttachments !== false
+    // 输入框图片仍在预处理：此时提交会与正在写入的附件竞争，静默忽略（系统触发的发送不受影响）
+    if (takeComposerAttachments && imageProcessingRef.current > 0) return
 
     const chat = useChatStore.getState()
 
@@ -965,28 +927,46 @@ export function useChatPanelState(props: ChatPanelProps) {
       if (await handleSlashCommand(userMessage)) return
     }
 
-    const imageAttachments = (chat.conversations[key]?.attachments ?? []).filter(
-      (attachment) => attachment.kind === 'image'
-    )
-    if (imageAttachments.length > 0) {
+    // 附件快照：用户提交时由本轮独占，随后立即从输入框消费
+    const composerAttachments = takeComposerAttachments
+      ? chat.conversations[key]?.attachments ?? []
+      : []
+    const promptImages = takeComposerAttachments
+      ? composerAttachments
+          .filter((attachment) => attachment.kind === 'image')
+          .map((attachment) => ({
+            data: attachment.data ?? '',
+            mimeType: attachment.mimeType ?? 'image/png',
+          }))
+          .filter((image) => image.data.length > 0)
+      : options?.images ?? []
+
+    // 纯图片消息（无文本）也允许发送
+    if (!userMessage && promptImages.length === 0) return
+
+    if (promptImages.length > 0) {
       if (!imagesAllowed) {
         toast.error(t('modelImageDisabled'))
         return
       }
-      const totalChars = imageAttachments.reduce(
-        (total, attachment) => total + (attachment.data?.length ?? 0),
-        0
-      )
+      const totalChars = promptImages.reduce((total, image) => total + image.data.length, 0)
       if (totalChars > MAX_TOTAL_IMAGE_BASE64_CHARS) {
         toast.error(t('imageTotalTooLarge'))
         return
       }
     }
 
+    if (takeComposerAttachments && composerAttachments.length > 0) {
+      chat.consumeAttachments(
+        key,
+        composerAttachments.map((attachment) => attachment.id)
+      )
+    }
+
     // 运行中：按设置默认值排队到下一轮，或立即插入当前轮
     if (isLoading && !forceSendKeysRef.current.has(key)) {
       chat.setDraftInput(key, '')
-      const item = chat.addPending(key, userMessage)
+      const item = chat.addPending(key, userMessage, promptImages)
       if (useSettingsStore.getState().runWhileBusy === 'steer') {
         void sendSteer(sessionId, key, item)
       }
@@ -1003,13 +983,7 @@ export function useChatPanelState(props: ChatPanelProps) {
       chat.addMessage(key, {
         role: 'user',
         content: userMessage,
-        images:
-          imageAttachments.length > 0
-            ? imageAttachments.map((attachment) => ({
-                data: attachment.data ?? '',
-                mimeType: attachment.mimeType ?? 'image/png',
-              }))
-            : undefined,
+        images: promptImages.length > 0 ? promptImages : undefined,
       })
     }
     setShowAttachMenu(false)
@@ -1085,7 +1059,7 @@ export function useChatPanelState(props: ChatPanelProps) {
         }
       }
     })
-    const sessionAttachments = chat.conversations[key]?.attachments ?? []
+    const sessionAttachments = composerAttachments
     let succeeded = false
 
     try {
@@ -1133,21 +1107,12 @@ export function useChatPanelState(props: ChatPanelProps) {
       }
       const prompt = buildContextPrompt(userMessage, contextFiles)
 
-      const imageAttachments = sessionAttachments
-        .filter(
-          (attachment): attachment is typeof attachment & { data: string; mimeType: string } =>
-            attachment.kind === 'image' &&
-            typeof attachment.data === 'string' &&
-            typeof attachment.mimeType === 'string'
-        )
-        .map((attachment) => ({ data: attachment.data, mimeType: attachment.mimeType }))
-
       const result = await piAgentAPI.chat(
         prompt,
         { onTrace: traceBuffer.push },
         workspacePath,
         sessionId,
-        imageAttachments.length > 0 ? imageAttachments : undefined
+        promptImages.length > 0 ? promptImages : undefined
       )
       // 收尾前按到达顺序输出剩余事件；有 parts 时不会再用最终文本覆盖
       traceBuffer.flush()
@@ -1197,7 +1162,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     } finally {
       traceBuffer.dispose()
       useChatStore.getState().setLoading(key, false)
-      useChatStore.getState().clearAttachments(key)
       useSessionStore.getState().markStreaming(workspacePath, sessionId, false)
       useChatStore.getState().setRetryStatus(key, null)
       void refreshContextUsage(sessionId)
@@ -1208,7 +1172,15 @@ export function useChatPanelState(props: ChatPanelProps) {
       if (queued && !stoppedKeysRef.current.has(key)) {
         useChatStore.getState().removePending(key, queued.id)
         forceSendKeysRef.current.add(key)
-        window.setTimeout(() => void handleSubmit(undefined, queued.text), 0)
+        // 附件在入队时已转入排队项，重发只带排队项自己的图片
+        window.setTimeout(
+          () =>
+            void handleSubmit(undefined, queued.text, {
+              images: queued.images,
+              consumeAttachments: false,
+            }),
+          0
+        )
       }
       const activeNow = useSessionStore.getState().byWorkspace[workspacePath]?.active
       if (succeeded) {
@@ -1288,7 +1260,9 @@ export function useChatPanelState(props: ChatPanelProps) {
       const steps = result.plan.steps
         .map((step, index) => `${index + 1}. ${step.title}`)
         .join('\n')
-      void submitRef.current(undefined, t('planExecutePrompt', { steps }))
+      void submitRef.current(undefined, t('planExecutePrompt', { steps }), {
+        consumeAttachments: false,
+      })
     },
     [activeSessionId, activeKey, isLoading, workspacePath, t]
   )
@@ -1301,7 +1275,7 @@ export function useChatPanelState(props: ChatPanelProps) {
       return
     }
     if (!(await applySessionPermission({ mode: targetMode, grants: [] }))) return
-    void handleSubmit(undefined, t('planExecuteFallback'))
+    void handleSubmit(undefined, t('planExecuteFallback'), { consumeAttachments: false })
   }
 
   /** 读取上下文占用（每轮结束与会话切换后刷新） */
@@ -1543,7 +1517,11 @@ export function useChatPanelState(props: ChatPanelProps) {
         return
       }
       useChatStore.getState().removeMessage(activeKey, message.id)
-      await submitRef.current(undefined, result.text, { skipUserMessage: true })
+      await submitRef.current(undefined, result.text, {
+        skipUserMessage: true,
+        images: message.images,
+        consumeAttachments: false,
+      })
     },
     [activeSessionId, activeKey, isLoading, workspacePath, t]
   )
@@ -1581,7 +1559,10 @@ export function useChatPanelState(props: ChatPanelProps) {
         return
       }
       useChatStore.getState().truncateLastTurn(activeKey)
-      await submitRef.current(undefined, next.trim())
+      await submitRef.current(undefined, next.trim(), {
+        images: message.images,
+        consumeAttachments: false,
+      })
     },
     [activeSessionId, activeKey, isLoading, workspacePath, t]
   )

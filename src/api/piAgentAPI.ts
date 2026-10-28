@@ -379,13 +379,14 @@ export const piAgentAPI = {
   async steer(
     workspaceDir: string,
     sessionId: string,
-    message: string
+    message: string,
+    images?: AgentImagePayload[]
   ): Promise<{ success: boolean; error?: string }> {
     if (!hasElectronAgent()) {
       return { success: false, error: 'Steering is not available in this environment' }
     }
     try {
-      return await window.electronAPI.agentSteer(workspaceDir, sessionId, message)
+      return await window.electronAPI.agentSteer(workspaceDir, sessionId, message, images)
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

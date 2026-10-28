@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type {
+  AgentImagePayload,
   AgentStreamEvent,
   AgentTracePart,
   ContextUsageInfo,
@@ -75,6 +76,8 @@ export type NewChatAttachment = Omit<ChatAttachment, 'id'> & { id?: string }
 export interface PendingMessage {
   id: string
   text: string
+  /** 排队时一并转入的图片；只存在于内存，不随排队消息落盘 */
+  images?: AgentImagePayload[]
 }
 
 export interface ConversationState {
@@ -154,10 +157,10 @@ interface ChatState {
   removeMessageEdit: (key: string, id: string, path: string) => void
   addAttachment: (key: string, attachment: NewChatAttachment) => void
   removeAttachment: (key: string, id: string) => void
-  clearAttachments: (key: string) => void
+  /** 按 id 消费已被消息带走的附件；未提交的附件保持不变 */
+  consumeAttachments: (key: string, ids: string[]) => void
   setDraftInput: (key: string, value: string) => void
-  addPending: (key: string, text: string) => PendingMessage
-  setPending: (key: string, items: PendingMessage[]) => void
+  addPending: (key: string, text: string, images?: AgentImagePayload[]) => PendingMessage
   removePending: (key: string, id: string) => void
   setContextUsage: (key: string, usage: ContextUsageInfo | null) => void
   setSessionSettings: (
@@ -505,20 +508,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }))
     ),
 
-  clearAttachments: (key) =>
-    set((state) =>
-      updateExisting(state, key, (current) => ({ ...current, attachments: [] }))
-    ),
+  consumeAttachments: (key, ids) =>
+    set((state) => {
+      if (ids.length === 0) return state
+      return updateExisting(state, key, (current) => ({
+        ...current,
+        attachments: current.attachments.filter((item) => !ids.includes(item.id)),
+      }))
+    }),
 
   setDraftInput: (key, value) =>
     set((state) =>
       updateExisting(state, key, (current) => ({ ...current, draftInput: value }))
     ),
 
-  addPending: (key, text) => {
+  addPending: (key, text, images) => {
     const item: PendingMessage = {
       id: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text,
+      ...(images && images.length > 0 ? { images } : {}),
     }
     set((state) =>
       updateExisting(state, key, (current) => ({
@@ -528,14 +536,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     )
     return item
   },
-
-  setPending: (key, items) =>
-    set((state) =>
-      updateExisting(state, key, (current) => ({
-        ...current,
-        pending: items.map((item) => ({ ...item })),
-      }))
-    ),
 
   removePending: (key, id) =>
     set((state) =>
