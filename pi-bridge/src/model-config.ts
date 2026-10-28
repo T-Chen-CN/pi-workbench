@@ -111,10 +111,6 @@ export function normalizeModelEntries(apiConfig: ApiConfigInput): ApiModelEntry[
   return entries
 }
 
-export function buildModelIds(apiConfig: ApiConfigInput): string[] {
-  return normalizeModelEntries(apiConfig).map((entry) => entry.id)
-}
-
 /** 将用户配置的 URL / 模型 / 容量写入 Pi 的 models.json；API Key 只存变量名 */
 export async function writeModelsConfig(
   agentDir: string,

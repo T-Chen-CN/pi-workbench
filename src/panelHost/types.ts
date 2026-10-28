@@ -16,10 +16,6 @@ export interface AnchorRect {
   height: number
 }
 
-export function isAuxHost(host: HostId | null | undefined): boolean {
-  return Boolean(host) && host !== MAIN_HOST
-}
-
 /** 与主进程 electron/aux-window.ts 的 AUX_FRAME_PREFIX 逐字一致（进程间协议，不能只改一边） */
 export const AUX_FRAME_PREFIX = 'pi-panel:'
 
