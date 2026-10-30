@@ -8,8 +8,9 @@
 
 ## 最新状态
 
-**更新时间**: 2026-10-30
+**更新时间**: 2026-10-31
 
+- 🟡 **0.7.5 发布中**（基线 `main` @ 0.7.4 发布后的 8 批改动：聊天附件任意位置/格式、PDF / Office 文档可读 + 只读预览（R-22）、退出可靠性 + 子进程回收 + 单实例恢复、划词引用回显（上下文块 v2）、静默超时 120s→180s、「引用当前文件」改文本 chip、独立窗口关闭报错修复，以及顶层 Agent 需求草案）
 - ✅ **最新版本 0.7.4**（工作树依赖自动安装与复用 + 聊天体验 / 外链 / 剪贴板 / 编辑器外部刷新批次）；完整记录见下方 Phase 6 的 2026-10-29 条目
 - ✅ **0.7.3 已发布：标签命中区整块可点 + 会话标题锁定**；完整记录见下方 Phase 6 的 2026-10-28 条目
 - ✅ **Phase 0: MVP** — Electron 框架、文件管理、编辑器、Diff、国际化
@@ -23,7 +24,7 @@
 
 ## 当前版本
 
-- **版本**: 0.7.4
+- **版本**: 0.7.5
 - **框架**: Electron 44 + React 19 + TypeScript
 - **Agent**: `@earendil-works/pi-coding-agent` 1.3.0
 - **状态**: Phase 6 持续优化
@@ -223,6 +224,7 @@
 - ✅ 2026-10-30 PDF / Office 文档可读（R-22）：给内置 `read` 做**同名覆盖**（`pi-bridge/src/read-with-documents.ts`），参数补 `pages` / `sheet` / `slide`，工具表里仍只有一个 `read`、`READ_ONLY_TOOLS` 不变（不新增第二个读工具，与 Gemini CLI / Claude Code / MarkItDown MCP 的行业实践一致，也不改上游 SDK）。解析链零新依赖：`electron/documents/` 用 `node:zlib` 手写 ZIP 中央目录 + 流式 XML 扫描，覆盖 docx / xlsx / pptx / odt / epub，PDF 用 `pdfjs-dist` legacy build 取文本；`detect.ts` 按魔数分流（`.pdf` 里是文本 → 交回内置 read，`.docx` 里是 OLE → 旧格式指引），扩展名不作数。扫描件（无文本层）渲染成图片走视觉通道：主进程 `documents:render-request` 下发字节（`Uint8Array`，非 base64），渲染进程用现成 pdf.js 画成 PNG（>3MB 退 JPEG）后回传——无窗口 / 超时 60s / >64MB / 单页失败一律降级成一句中文说明，不阻断轮次；不做 OCR。旧格式 `.doc/.xls/.ppt/.wps` 不解析，返回中文「另存为 .docx/.xlsx/.pptx」指引。第二阶段：`electron/documents/preview.ts` 产出只读预览模型（word / sheet / slide / epub / legacy / error），`documents:preview` 复用 `fs:readFile` 的 `resolveAllowedFileTarget()` 校验，新增 `OfficeDocumentView`（Word 用 `chat-markdown` 版心、自绘表格网格、幻灯片卡片、EPUB 章节、旧格式另存为卡片）；`documents:extract` 故意不做 IPC——给渲染层开这条路等于开一条任意路径读通道。设计系统 v1.49，`agent-runtime` §1.2、`ipc-and-trust` §5.2、PROJECT_STRUCTURE 目录与频道表同步。type-check / lint / 1177 用例 / 全量 build 通过
 - ✅ 2026-10-31 用户消息回显引用与附件（划词引用「发出去不体现」修复）：上下文块升级到 v2——块内 `<!--pi:files-->` / `<!--pi:quotes-->` 分节，每条引用是 `<!--pi:quote {json}-->` 正文 `<!--/pi:quote-->`（JSON 只放 label / path / 行号，正文在围栏里，可含空行与 `---`），`pi-bridge/src/text-utils.ts` 新增 `parseContextBlock()` 精确还原，v1 老记录 best-effort（分不清就整段放弃）；`stripContextBlock()` 改为**循环剥完所有块**并按行首匹配结束标记——此前一条消息同时带工作树块与附件块时只剥第一个，附件块原文（含引用正文与内部指令）会直接露在对话历史里（已用 node 复现）；`AgentMessage` / `ChatMessage` 新增可选 `context: { quotes, files }`，历史恢复由 `session-history.ts` 填充，发送时由渲染层写入；用户气泡新增引用块（`bg-sunken` + 2px `border-l-rule-control`，超过 240 字 / 3 行折叠，可展开 / 复制）与附件行（文件名 · 大小 · 工作区外），设计系统 v1.50。同时修掉三个次生缺陷：运行中插话把所有附件硬编码成文件（对话引用 path 为空 → 生成空路径行、正文丢失）、编辑重发丢引用（`rewindToLastUser()` 现同时返回 `context`，渲染层用 `contextToAttachments()` 重新打包）、纯引用消息显示「（已附加 0 个文件）」（计数改为非图片附件总数）。附件 → 上下文条目收敛为唯一入口 `src/workspace/chatAttachments.ts`；导出（Markdown / HTML）也渲染引用与附件。`AGENT_TRACE` §4.1 / §5.6.1、`agent-runtime` §1.1、`PROJECT_STRUCTURE` 同步。type-check / lint / 1200 用例通过
 - ✅ 2026-10-31 独立面板窗口关闭报错 + 面板回不来：`electron/aux-window.ts` 的 `closed` 回调里读 `child.webContents`（为了 `untrustIpcSender`），而窗口销毁后读这个属性会抛 `Object has been destroyed`（Electron 44 类型声明明确）。抛点在 `options.onClosed(frameName)` **之前**，于是主窗口永远收不到 `aux:window-closed`：走「还原到主窗口」按钮时渲染层早已改完状态（面板正常回位，只多一条主进程未捕获异常，`grep process.on('uncaughtException')` 全仓为空，dev 下表现为 Electron 弹窗 / 终端红字）；用户直接点窗口 X 时只有主进程知道，回调一抛面板就再也回不来（`panelHost` 仍指向已销毁窗口，portal 落进死文档）。修法：`did-create-window` 里先把 `child.webContents.id` 取成数字，`closed` 里只带数字调 `untrustIpcSender(id)`（`electron/ipc/register.ts` 两个函数签名改为收 id）——顺带修掉「id 永远删不掉」的登记表泄漏。同时加固两处收尾：`src/panelHost/auxWindow.ts` 的 `dispose()` 在窗口已关闭时只停主题镜像、不再对已销毁文档做 `container.remove()` / 二次 `close()`（新增 `isWindowClosed()`）；`useHostWindow()` / `useHostDocument()` 在关窗到 IPC 抵达之间（不足一帧）回退主窗口，避免读到空 `document` 后 `addEventListener` 抛错。测试侧把 `tests/aux-window.test.ts` 的 fake child 改成与真实 Electron 一致（销毁后读 `webContents` 抛 `Object has been destroyed`），新增回归用例——已验证旧代码下能复现同一句报错。`panels-and-windows` §1、`ipc-and-trust` §1 同步。type-check / lint / 1207 用例通过
+- ✅ 2026-10-31 发布 v0.7.5：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage，附 `latest*.yml` 与 blockmap）。本版包含：聊天附件改为「只给路径」并支持任意位置 / 任意格式（`attachment:pick`，单条上限 10，chip 标「工作区外」，排队与插话会带走附件）；PDF / Office 文档可读（R-22，给内置 `read` 做同名覆盖，零新依赖手写 ZIP + 流式 XML，魔数分流，扫描件走视觉通道，旧格式给另存为指引）与 `OfficeDocumentView` 只读预览；退出可靠性重做（`electron/shutdown.ts` 分步超时 + 双看门狗、`child-registry` 进程树回收、单实例锁被拒时落日志并弹原生提示）；用户消息回显引用与附件（上下文块 v2 + `context` 字段，修掉插话丢正文 / 编辑重发丢引用 / 纯引用占位文案三个次生缺陷）；模型静默超时 120s→180s；「引用当前查看的文件」改为显示文件名的文本 chip；独立面板窗口关闭不再报 `Object has been destroyed` 且面板可靠回位（webContents id 提到窗口存活时取，`dispose()` 与 `useHostWindow()` 对已销毁窗口兜底）。`agent-runtime` / `AGENT_TRACE` / `panels-and-windows` / `ipc-and-trust` / `PROJECT_STRUCTURE` / `DESIGN_SYSTEM`（v1.50、v1.51）同步。type-check / lint / 1207 用例 / 全量 build 通过
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
 ## 最近提交
