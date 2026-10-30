@@ -358,6 +358,77 @@ describe('ChatPanel', () => {
     expect(screen.queryByText(/0 个文件/)).toBeNull()
   })
 
+  it('shows the current file name on the quote toggle instead of a bare icon', async () => {
+    render(<ChatPanel workspacePath="/ws" />)
+    await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+
+    // 无打开文件：可读的引导文案，且禁用
+    const empty = screen.getByRole('button', {
+      name: translations.zh.quoteCurrentFileEmpty,
+    }) as HTMLButtonElement
+    expect(empty.disabled).toBe(true)
+    expect(empty.textContent).toContain(translations.zh.quoteCurrentFileEmpty)
+
+    act(() => {
+      editorStoreFor('/ws').getState().addOpenFile({
+        path: '/ws/docs/README.md',
+        name: 'README.md',
+        content: '# hi',
+        isDirty: false,
+        isSaving: false,
+      })
+    })
+
+    // 有打开文件：文件名可见，完整路径在 title 里
+    const toggle = await screen.findByRole('button', {
+      name: new RegExp(`${translations.zh.quoteCurrentFileNamed} · README\\.md`),
+    })
+    expect(toggle.textContent).toContain('README.md')
+    expect(toggle.textContent).not.toContain('/ws/docs')
+    expect(toggle.getAttribute('title')).toBe('/ws/docs/README.md')
+    expect(toggle.getAttribute('aria-pressed')).toBeNull()
+  })
+
+  it('toggles the quote chip and resets after sending', async () => {
+    vi.mocked(piAgentAPI.chat).mockResolvedValue({ success: true, response: 'ok' })
+    act(() => {
+      editorStoreFor('/ws').getState().addOpenFile({
+        path: '/ws/README.md',
+        name: 'README.md',
+        content: '# hi',
+        isDirty: false,
+        isSaving: false,
+      })
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+    await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+
+    const toggle = await screen.findByRole('button', {
+      name: new RegExp(`${translations.zh.quoteCurrentFileNamed} · README\\.md`),
+    })
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(toggle.getAttribute('aria-pressed')).toBe('true'))
+    expect(toggle.className).toContain('bg-active')
+    // 激活后 aria 文案切换为“不再引用”
+    expect(
+      screen.getByRole('button', {
+        name: new RegExp(`${translations.zh.quoteCurrentFileOn} · README\\.md`),
+      })
+    ).toBe(toggle)
+
+    const textarea = screen.getByPlaceholderText(translations.zh.inputPlaceholder)
+    fireEvent.change(textarea, { target: { value: '看看这个文件' } })
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.send }))
+
+    await waitFor(() => expect(piAgentAPI.chat).toHaveBeenCalledTimes(1))
+    // 发送后开关复位，但文件名仍显示
+    await waitFor(() => expect(toggle.getAttribute('aria-pressed')).toBeNull())
+    expect(toggle.textContent).toContain('README.md')
+    expect(vi.mocked(piAgentAPI.chat).mock.calls[0][0] as string).toContain('/ws/README.md')
+  })
+
   it('shows image thumbnails on user messages restored from history', async () => {
     vi.mocked(piAgentAPI.sessionsOpen).mockResolvedValue({
       success: true,

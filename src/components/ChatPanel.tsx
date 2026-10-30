@@ -6,6 +6,7 @@ import { ArrowDown, BookMarked, ChevronDown, FileText, FolderOpen, Minimize2, Pa
 import { useChatStore } from '../store/chatStore'
 import { useSessionStore } from '../store/sessionStore'
 import { retrySecondsRemaining } from '../utils/retryCountdown'
+import { basename } from '../utils/filePath'
 import { formatBytes } from '../utils/formatBytes'
 import {
   SESSION_MODE_ICON,
@@ -515,15 +516,42 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                     setAttachMode('files')
                   }}
                 />
-                {/* 引用当前正在查看的文档：默认不激活，激活后随下一次发送带上 */}
-                <IconButton
-                  icon={BookMarked}
-                  label={quoteCurrentFile ? t('quoteCurrentFileOn') : t('quoteCurrentDocHint')}
-                  size="sm"
-                  active={quoteCurrentFile}
-                  disabled={!initialized || !currentEditorFile}
+                {/*
+                 * 引用当前正在查看的文件：始终显示文件名（无打开文件时显示“预览文件以引用”并禁用），
+                 * 不再只给一个图标——用户需要直接看出将要带上哪个文件。
+                 */}
+                <button
+                  type="button"
                   onClick={toggleQuoteCurrentFile}
-                />
+                  disabled={!initialized || !currentEditorFile}
+                  aria-pressed={quoteCurrentFile || undefined}
+                  aria-label={
+                    currentEditorFile
+                      ? `${quoteCurrentFile ? t('quoteCurrentFileOn') : t('quoteCurrentFileNamed')} · ${
+                          currentEditorFile.name
+                        }`
+                      : t('quoteCurrentFileEmpty')
+                  }
+                  title={
+                    currentEditorFile
+                      ? currentEditorFile.path
+                      : t('quoteCurrentDocHint')
+                  }
+                  className={`inline-flex h-7 items-center gap-1.5 rounded-sm border px-2.5 type-label transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                    !currentEditorFile
+                      ? 'border-rule-control text-ink-subtle'
+                      : quoteCurrentFile
+                        ? 'border-line bg-active text-ink'
+                        : 'border-rule-control text-ink-muted hover:bg-hover hover:text-ink'
+                  }`}
+                >
+                  <BookMarked size={12} className="flex-shrink-0" />
+                  <span className="max-w-[16rem] truncate">
+                    {currentEditorFile
+                      ? basename(currentEditorFile.path) || currentEditorFile.name
+                      : t('quoteCurrentFileEmpty')}
+                  </span>
+                </button>
                 {showAttachMenu && activeKey && (
                   <div className="absolute bottom-full left-0 z-10 mb-2 max-h-64 w-72 overflow-y-auto border border-line bg-raised py-1 shadow-print">
                     <div className="flex items-center justify-between gap-2 px-3 py-1.5">
