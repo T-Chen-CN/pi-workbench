@@ -111,6 +111,7 @@ pi-workbench/
 │   │   ├── UpdateDialog.tsx      # 更新下载完成弹窗
 │   │   ├── UpdateStatusIndicator.tsx # 状态栏更新提示
 │   │   ├── WelcomeScreen.tsx     # 欢迎页与最近工作区
+│   │   ├── WorkspacePickerDialog.tsx # 标签栏 `+` 的弹窗：历史工作区 + 新增工作区
 │   │   ├── WindowControls.tsx    # 自绘窗口按钮（Windows / Linux）
 │   │   ├── WorkspaceView.tsx     # 单个工作区的常驻三栏视图
 │   │   ├── BootScreen.tsx        # 启动引导占位
@@ -286,7 +287,7 @@ ChatPanel.handleSubmit
 | `fs:watch` / `fs:unwatch` | invoke | 工作区递归监听 |
 | `fs:changed` | main → renderer | 文件变化事件（300ms 批量） |
 | `app:getSettings` / `saveSettings` | invoke | 应用设置 |
-| `app:getRecentWorkspaces` / `addRecentWorkspace` | invoke | 最近工作区 |
+| `app:getRecentWorkspaces` / `addRecentWorkspace` | invoke | 最近工作区（只返回仍然存在的目录） |
 | `app:hasActiveWork` | invoke | 更新安装前的忙碌检查 |
 | `workspace:init` / `dispose` / `searchFiles` / `editorTabs:*` | invoke | 工作区生命周期与标签 |
 | `apiConfig:get` / `save` / `fetchModels` | invoke | 供应商配置与模型拉取 |

@@ -387,6 +387,28 @@ describe('app settings handlers', () => {
       await fs.rm(recentRoot, { recursive: true, force: true })
     }
   })
+
+  it('drops recent workspaces whose directory is gone', async () => {
+    const recentRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-recent-gone-'))
+    try {
+      const kept = path.join(recentRoot, 'kept')
+      const removed = path.join(recentRoot, 'removed')
+      for (const dir of [kept, removed]) {
+        await fs.mkdir(dir)
+        mocks.state.pickedPath = dir
+        await call('dialog:openDirectory')
+        await call('app:addRecentWorkspace', dir)
+      }
+
+      await fs.rm(removed, { recursive: true, force: true })
+
+      const workspaces = (await call('app:getRecentWorkspaces')).workspaces as string[]
+      expect(workspaces).toContain(kept)
+      expect(workspaces).not.toContain(removed)
+    } finally {
+      await fs.rm(recentRoot, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('workspace lifecycle handlers', () => {

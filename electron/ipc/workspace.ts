@@ -59,6 +59,20 @@ export interface WorkspaceIpcContext {
   waitForStartup?: () => Promise<void>
 }
 
+/** 最近工作区只列出仍然存在的目录：被删除或移走的目录不再出现在任何入口里 */
+async function filterExistingDirectories(candidates: string[]): Promise<string[]> {
+  const checks = await Promise.all(
+    candidates.map(async (candidate) => {
+      try {
+        return (await fs.stat(candidate)).isDirectory() ? candidate : null
+      } catch {
+        return null
+      }
+    })
+  )
+  return checks.filter((candidate): candidate is string => candidate !== null)
+}
+
 export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
   const mainWindow = () => context.getMainWindow()
 
@@ -146,10 +160,11 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
   handleIpc('app:getRecentWorkspaces', async () => {
     try {
       await context.waitForStartup?.()
-      const workspaces = context.workspaceStore
+      const recent = context.workspaceStore
         .listRecent(30)
         .filter((workspacePath) => isTrustedWorkspacePath(workspacePath))
-        .slice(0, 10)
+      // 先过滤失效目录再截断，否则死条目会占掉 10 条名额
+      const workspaces = (await filterExistingDirectories(recent)).slice(0, 10)
       return { success: true, workspaces }
     } catch (error) {
       return {
@@ -166,9 +181,10 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
         return { success: false, workspaces: [], error: 'Workspace is not approved' }
       }
       context.workspaceStore.recordOpen(workspacePath)
-      const workspaces = context.workspaceStore
+      const recent = context.workspaceStore
         .listRecent(10)
         .filter((item) => isTrustedWorkspacePath(item))
+      const workspaces = await filterExistingDirectories(recent)
       return { success: true, workspaces }
     } catch (error) {
       return {

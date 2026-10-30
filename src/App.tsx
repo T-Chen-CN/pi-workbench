@@ -21,6 +21,7 @@ import { CommandPalette } from './components/CommandPalette'
 import { ToastContainer } from './components/Toast'
 import { DialogHost } from './components/DialogHost'
 import { WelcomeScreen } from './components/WelcomeScreen'
+import { WorkspacePickerDialog } from './components/WorkspacePickerDialog'
 import { WindowControls } from './components/WindowControls'
 import { BootScreen } from './components/BootScreen'
 import { Button, IconButton, Modal, Spinner } from './components/ui'
@@ -69,6 +70,8 @@ export default function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
   const [showHome, setShowHome] = useState(true)
   const [showActivity, setShowActivity] = useState(false)
+  // 标签栏 `+` 的内置弹窗：选择历史工作区或新增工作区
+  const [addMenuOpen, setAddMenuOpen] = useState(false)
   // boot：只显示启动页；reveal：外壳已挂载、遮罩正在淡出；ready：正常工作台
   const [bootPhase, setBootPhase] = useState<BootPhase>(() =>
     typeof window !== 'undefined' &&
@@ -480,6 +483,11 @@ export default function App() {
     return () => off()
   }, [])
 
+  // 标签全关掉后弹窗不再可见，状态跟着复位，避免下次打开工作区时它自己弹出来
+  useEffect(() => {
+    if (openWorkspaces.length === 0) setAddMenuOpen(false)
+  }, [openWorkspaces.length])
+
   const pickWorkspace = async () => {
     try {
       setError(null)
@@ -502,6 +510,13 @@ export default function App() {
       console.error('Failed to refresh recent workspaces:', err)
     }
   }
+
+  const openAddMenu = () => {
+    setAddMenuOpen(true)
+    // 列表可能被别的窗口改过；打开时刷一次，失效目录由主进程过滤
+    void refreshRecentWorkspaces()
+  }
+  const closeAddMenu = () => setAddMenuOpen(false)
 
   const closeWorkspaceTab = async (targetPath: string) => {
     if (!(await confirmCloseWorkspace(targetPath))) return
@@ -689,7 +704,7 @@ export default function App() {
               icon={FolderOpen}
               onClick={() => void pickWorkspace()}
             >
-              {t('openProject')}
+              {t('addProject')}
             </Button>
           )}
           </div>
@@ -700,11 +715,12 @@ export default function App() {
       {/* Workspace tabs */}
       {openWorkspaces.length > 0 && (
         <div className="flex flex-shrink-0 items-center gap-1 border-b border-rule-divide bg-panel pl-2 pr-1">
+          {/* 收缩到内容宽度：标签少时 `+` 紧贴最后一个标签；溢出时吃掉右侧留白、标签在内部横滚 */}
           <div
             role="tablist"
             aria-label={t('workspaceTabsLabel')}
             onWheel={handleTabStripWheel}
-            className="tab-strip-scroll flex min-w-0 flex-1 items-center overflow-x-auto"
+            className="tab-strip-scroll flex min-w-0 flex-none max-w-[calc(100%_-_2rem)] items-center overflow-x-auto"
           >
             {openWorkspaces.map((path) => {
               const name = basename(path) ?? path
@@ -760,13 +776,24 @@ export default function App() {
               )
             })}
           </div>
-          <IconButton
-            icon={Plus}
-            label={t('openProject')}
-            size="sm"
-            className="ml-1 flex-shrink-0"
-            onClick={() => void pickWorkspace()}
-          />
+          <div className="flex-shrink-0">
+            <IconButton
+              icon={Plus}
+              label={t('addWorkspace')}
+              size="sm"
+              active={addMenuOpen}
+              aria-pressed={undefined}
+              onClick={() => (addMenuOpen ? closeAddMenu() : openAddMenu())}
+            />
+            <WorkspacePickerDialog
+              open={addMenuOpen}
+              onClose={closeAddMenu}
+              recentWorkspaces={recentWorkspaces}
+              openWorkspaces={openWorkspaces}
+              onOpenWorkspace={(path) => void openWorkspaceAt(path)}
+              onAddWorkspace={() => void pickWorkspace()}
+            />
+          </div>
         </div>
       )}
 
