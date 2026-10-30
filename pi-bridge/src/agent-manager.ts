@@ -47,6 +47,7 @@ import {
   CONTEXT_BLOCK_END,
   CONTEXT_BLOCK_START,
   messageText as toMessageText,
+  parseContextBlock,
   stripContextBlock,
   summarizeToolArgs,
   summarizeToolResult,
@@ -104,6 +105,7 @@ import type {
   AgentUsage,
   ConversationBranchGroup,
   FileEdit,
+  MessageContext,
   ModelCapabilityInfo,
   PromptTemplateInfo,
   SessionOpenResult,
@@ -134,6 +136,9 @@ export type {
   AgentUsage,
   ConversationBranchGroup,
   FileEdit,
+  MessageContext,
+  MessageContextFile,
+  MessageContextQuote,
   ModelCapabilityInfo,
   PromptTemplateInfo,
   SessionOpenResult,
@@ -680,7 +685,7 @@ export class AgentManager {
   async rewindToLastUser(
     sessionId: string,
     newText?: string
-  ): Promise<{ success: boolean; text?: string; error?: string }> {
+  ): Promise<{ success: boolean; text?: string; context?: MessageContext; error?: string }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
       if (runtime.isProcessing) {
@@ -694,12 +699,15 @@ export class AgentManager {
       if (!last || last.type !== 'message') {
         return { success: false, error: 'No user message to retry.' }
       }
+      const raw = toMessageText(last.message)
       const result = await runtime.session.navigateTree(last.id, { summarize: false })
       if (result.cancelled) {
         return { success: false, error: 'Rewind was cancelled.' }
       }
-      const text = (newText ?? toMessageText(last.message)).trim()
-      return { success: true, text }
+      // 正文去掉内部上下文块；引用 / 附件单独交回，由渲染层重新打包（重发不丢引用）
+      const text = (newText ?? stripContextBlock(raw)).trim()
+      const context = parseContextBlock(raw)
+      return { success: true, text, ...(context ? { context } : {}) }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -1020,11 +1028,16 @@ export class AgentManager {
       const message = item.message as any
 
       if (message?.role === 'user') {
+        const raw = toMessageText(message)
+        const context = parseContextBlock(raw)
+        const stripped = stripContextBlock(raw)
         turns.push({
           user: {
-            text: stripContextBlock(toMessageText(message)),
+            // 有引用 / 附件时导出渲染引用块，不再重复占位文案
+            text: context && stripped === '(attached files)' ? '' : stripped,
             timestamp:
               typeof message.timestamp === 'number' ? message.timestamp : Date.now(),
+            ...(context ? { context } : {}),
           },
           parts: [],
         })

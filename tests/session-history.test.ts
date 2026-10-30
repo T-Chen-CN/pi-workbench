@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildSessionMessagesFromEntries } from '../pi-bridge/src/session-history'
 import type { TimelineItem } from '../pi-bridge/src/session-entries'
+import { buildContextPrompt, CONTEXT_BLOCK_END, CONTEXT_BLOCK_START } from '../src/api/chatContext'
 
 const options = {
   thinkingDurations: {} as Record<string, number[]>,
@@ -176,5 +177,32 @@ describe('buildSessionMessagesFromEntries', () => {
         timestamp: 1100,
       },
     ])
+    expect(history[0].context).toBeUndefined()
+  })
+
+  it('restores quotes and files attached to a user message', () => {
+    const prompt = buildContextPrompt('看这段', [
+      { kind: 'quote', path: '/w/README.md', label: 'README.md', content: '原文', startLine: 3, endLine: 4 },
+      { kind: 'file', path: '/w/a.pdf', size: 2048 },
+    ])
+    const history = buildSessionMessagesFromEntries([userMessage(prompt)], options)
+
+    expect(history[0].content).toBe('看这段')
+    expect(history[0].context).toEqual({
+      quotes: [{ content: '原文', path: '/w/README.md', label: 'README.md', startLine: 3, endLine: 4 }],
+      files: [{ path: '/w/a.pdf', size: 2048 }],
+    })
+  })
+
+  it('keeps the message text clean when the worktree block precedes the attachment block', () => {
+    const worktree = `${CONTEXT_BLOCK_START}\n[工作树上下文]\n当前工作树：主工作树\n${CONTEXT_BLOCK_END}`
+    const prompt = buildContextPrompt('这是问题', [
+      { kind: 'quote', label: '对话引用', content: '被引用的原文' },
+    ])
+    const history = buildSessionMessagesFromEntries([userMessage(`${worktree}\n\n${prompt}`)], options)
+
+    expect(history[0].content).toBe('这是问题')
+    expect(history[0].content).not.toContain('pi-workbench-context')
+    expect(history[0].context?.quotes).toEqual([{ content: '被引用的原文', label: '对话引用' }])
   })
 })

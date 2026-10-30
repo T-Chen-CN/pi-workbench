@@ -6,6 +6,7 @@ import type {
   ContextUsageInfo,
   ConversationBranchGroup,
   FileEdit,
+  MessageContext,
   SessionPermission,
   SessionStatsInfo,
   StructuredPlan,
@@ -46,6 +47,8 @@ export interface ChatMessage {
   edits?: FileEdit[]
   /** 用户消息附带的图片（R-08），发送后与历史恢复时展示 */
   images?: Array<{ data: string; mimeType: string }>
+  /** 用户消息随行的引用与附件：发送时写入，历史恢复时由 bridge 从记录解析 */
+  context?: MessageContext
   /** 同一用户消息下的回复分支（R-03） */
   branch?: {
     userTimestamp: number

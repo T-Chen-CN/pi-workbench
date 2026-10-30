@@ -5,9 +5,27 @@
  * 因此压缩前的历史与压缩点位置都能还原；`role:'compactionSummary'` 这类
  * 投影产物不再参与，历史不再从 `session.messages` 截断而来。
  */
-import type { AgentMessage, AgentTracePart } from './types.js'
+import type { AgentMessage, AgentTracePart, MessageContext } from './types.js'
 import type { TimelineItem } from './session-entries.js'
-import { stripContextBlock, summarizeToolArgs, summarizeToolResult } from './text-utils.js'
+import { parseContextBlock, stripContextBlock, summarizeToolArgs, summarizeToolResult } from './text-utils.js'
+
+/** 用户消息：正文去掉内部块，随行的引用 / 附件单独携带，供界面回显 */
+export function userMessageFromRaw(
+  raw: string,
+  timestamp: number,
+  images?: AgentMessage['images']
+): AgentMessage {
+  const context: MessageContext | null = parseContextBlock(raw)
+  const stripped = stripContextBlock(raw)
+  return {
+    role: 'user',
+    // 纯附件消息的占位文案在有 chip 时不显示（否则气泡里会同时出现“已附加”与 chip）
+    content: context && stripped === '(attached files)' ? '' : stripped,
+    ...(images && images.length > 0 ? { images } : {}),
+    ...(context ? { context } : {}),
+    timestamp,
+  }
+}
 
 export function buildSessionMessagesFromEntries(
   items: TimelineItem[],
@@ -84,12 +102,13 @@ export function buildSessionMessagesFromEntries(
               mimeType: typeof part.mimeType === 'string' ? part.mimeType : 'image/png',
             }))
         : []
-      result.push({
-        role: 'user',
-        content: stripContextBlock(raw),
-        images: images.length > 0 ? images : undefined,
-        timestamp: typeof msg.timestamp === 'number' ? msg.timestamp : Date.now(),
-      })
+      result.push(
+        userMessageFromRaw(
+          raw,
+          typeof msg.timestamp === 'number' ? msg.timestamp : Date.now(),
+          images
+        )
+      )
       continue
     }
 

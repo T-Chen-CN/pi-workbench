@@ -13,6 +13,7 @@ import type {
   ApprovalRequestPayload,
 } from '../pi-bridge/src/approval-policy'
 import type { StallWatchdog } from '../pi-bridge/src/stall-watchdog'
+import { buildContextPrompt } from '../src/api/chatContext'
 
 const sdk = vi.hoisted(() => ({
   createAgentSession: vi.fn(),
@@ -2325,6 +2326,60 @@ describe('retry and edit-resend', () => {
       success: true,
       text: 'edited question',
     })
+  })
+
+  it('returns the quote context of the rewound message and strips it from the text', async () => {
+    const session = createFakeSession()
+    const prompt = buildContextPrompt('看这段', [
+      { kind: 'quote', label: '对话引用', content: '被引用的原文' },
+    ])
+    const record = [
+      {
+        id: 'u1',
+        parentId: null,
+        type: 'message' as const,
+        timestamp: new Date(1000).toISOString(),
+        message: { role: 'user' as const, content: prompt, timestamp: 1000 },
+      },
+    ]
+    sdk.continueRecent.mockImplementation(() => ({
+      ...createFakeSessionManager('session-1', session),
+      getEntries: () => record,
+      getBranch: () => record,
+    }))
+    await manager.initialize(makeConfig())
+
+    const result = await manager.rewindToLastUser('session-1')
+    expect(result.text).toBe('看这段')
+    expect(result.context).toEqual({ quotes: [{ content: '被引用的原文', label: '对话引用' }], files: [] })
+  })
+
+  it('exposes the quote context on restored history messages', async () => {
+    const session = createFakeSession()
+    const prompt = buildContextPrompt('看这段', [
+      { kind: 'quote', label: '对话引用', content: '被引用的原文' },
+    ])
+    const record = [
+      {
+        id: 'u1',
+        parentId: null,
+        type: 'message' as const,
+        timestamp: new Date(1000).toISOString(),
+        message: { role: 'user' as const, content: prompt, timestamp: 1000 },
+      },
+    ]
+    sdk.continueRecent.mockImplementation(() => ({
+      ...createFakeSessionManager('session-1', session),
+      getEntries: () => record,
+      getBranch: () => record,
+    }))
+    await manager.initialize(makeConfig())
+
+    const history = manager.getSessionMessages('session-1')
+    expect(history[0].content).toBe('看这段')
+    expect(history[0].context?.quotes).toEqual([
+      { content: '被引用的原文', label: '对话引用' },
+    ])
   })
 
   it('refuses to rewind while the session is running', async () => {

@@ -1,5 +1,7 @@
 /** 会话导出（R-10）：Markdown 与自带样式的离线 HTML */
 
+import type { MessageContext } from './types.js'
+
 /** 会话导出（R-10）的结构标签 */
 const EXPORT_LABELS = {
   zh: {
@@ -13,6 +15,9 @@ const EXPORT_LABELS = {
     exportedAt: '导出时间',
     compacted: '上下文已压缩',
     compactedTokens: '上下文已压缩 · 压缩前 {tokens} tokens',
+    quotes: '引用',
+    quoteLines: '第 {lines} 行',
+    attachments: '附件',
   },
   en: {
     you: 'You',
@@ -25,6 +30,9 @@ const EXPORT_LABELS = {
     exportedAt: 'Exported',
     compacted: 'Context compacted',
     compactedTokens: 'Context compacted · {tokens} tokens before',
+    quotes: 'Quotes',
+    quoteLines: 'lines {lines}',
+    attachments: 'Attachments',
   },
 } as const
 
@@ -46,7 +54,7 @@ export type ExportPart =
   | { type: 'compaction'; timestamp: number; tokensBefore?: number }
 
 export type ExportTurn = {
-  user: { text: string; timestamp: number }
+  user: { text: string; timestamp: number; context?: MessageContext }
   parts: ExportPart[]
 }
 
@@ -76,6 +84,33 @@ function compactionLabel(
   return labels.compacted
 }
 
+/** 引用来源行：路径或标题 + 行号 */
+function quoteSourceLabel(
+  labels: (typeof EXPORT_LABELS)[ExportLanguage],
+  quote: MessageContext['quotes'][number]
+): string {
+  const name = quote.path || quote.label || 'quote'
+  const range =
+    quote.startLine !== undefined && quote.endLine !== undefined
+      ? ` · ${labels.quoteLines.replace('{lines}', `${quote.startLine}-${quote.endLine}`)}`
+      : ''
+  return `${name}${range}`
+}
+
+function exportFileSize(bytes: number | undefined): string | null {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return null
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+function fileLineForExport(file: MessageContext['files'][number]): string {
+  const size = exportFileSize(file.size)
+  const name = file.name ? ` [${file.name}]` : ''
+  return `- ${file.path}${name}${size ? ` (${size})` : ''}`
+}
+
 export function buildMarkdownExport(
   title: string,
   turns: ExportTurn[],
@@ -90,7 +125,27 @@ export function buildMarkdownExport(
   ]
 
   for (const turn of turns) {
-    if (turn.user.text) lines.push(`## ${labels.you}`, '', turn.user.text, '')
+    const context = turn.user.context
+    if (turn.user.text || context) {
+      lines.push(`## ${labels.you}`, '')
+    }
+    if (context) {
+      for (const quote of context.quotes) {
+        const fence = markdownFence(quote.content)
+        lines.push(
+          `**${labels.quotes}** · ${quoteSourceLabel(labels, quote)}`,
+          '',
+          `${fence}text`,
+          quote.content,
+          fence,
+          ''
+        )
+      }
+      if (context.files.length > 0) {
+        lines.push(`**${labels.attachments}**`, '', ...context.files.map(fileLineForExport), '')
+      }
+    }
+    if (turn.user.text) lines.push(turn.user.text, '')
     lines.push(`## ${labels.assistant}`, '')
     for (const part of turn.parts) {
       if (part.type === 'text') {
@@ -153,8 +208,32 @@ export function buildHtmlExport(
 
   for (const turn of turns) {
     body.push('<section class="turn">')
+    const context = turn.user.context
+    if (turn.user.text || context) {
+      body.push(`<h2>${labels.you}</h2>`)
+    }
+    if (context) {
+      for (const quote of context.quotes) {
+        body.push(
+          '<blockquote>',
+          `<p class="quote-src">${escapeHtml(labels.quotes)} · ${escapeHtml(
+            quoteSourceLabel(labels, quote)
+          )}</p>`,
+          `<pre class="text">${escapeHtml(quote.content)}</pre>`,
+          '</blockquote>'
+        )
+      }
+      if (context.files.length > 0) {
+        body.push(
+          `<p class="quote-src">${escapeHtml(labels.attachments)}</p>`,
+          '<ul class="files">',
+          ...context.files.map((file) => `<li>${escapeHtml(fileLineForExport(file).slice(2))}</li>`),
+          '</ul>'
+        )
+      }
+    }
     if (turn.user.text) {
-      body.push(`<h2>${labels.you}</h2>`, `<pre class="text">${escapeHtml(turn.user.text)}</pre>`)
+      body.push(`<pre class="text">${escapeHtml(turn.user.text)}</pre>`)
     }
     body.push(`<h2>${labels.assistant}</h2>`)
     for (const part of turn.parts) {
@@ -217,6 +296,9 @@ summary { cursor: pointer; color: #4f6b5a; font-size: 13px; }
 img { max-width: 100%; height: auto; border: 1px solid #ddd8c8; margin: 8px 0; }
 hr { border: 0; border-top: 1px solid #ddd8c8; margin: 24px 0 0; }
 .compacted { color: #7a766a; font-size: 12px; margin: 8px 0 20px; }
+blockquote { margin: 12px 0; padding-left: 12px; border-left: 2px solid #ddd8c8; }
+.quote-src { color: #7a766a; font-size: 12px; margin: 0 0 6px; }
+ul.files { color: #7a766a; font-size: 12px; margin: 4px 0 12px 18px; padding: 0; }
 </style>
 </head>
 <body>

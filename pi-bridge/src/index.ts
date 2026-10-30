@@ -15,6 +15,9 @@ export type {
   AgentTraceEvent,
   AgentTracePart,
   FileEdit,
+  MessageContext,
+  MessageContextFile,
+  MessageContextQuote,
   SessionOpenResult,
   SessionSummary,
 } from './agent-manager.js'

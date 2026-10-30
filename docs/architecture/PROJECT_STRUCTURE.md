@@ -155,6 +155,7 @@ pi-workbench/
 │   │   ├── MarkdownLinkScope.tsx # 链接作用域（外链 / 锚点 / 仓库文件分发）
 │   │   ├── linkTarget.ts         # 链接目标判定与信任校验
 │   │   ├── quoteSelection.ts     # 划词选区取值与长度上限
+│   │   ├── chatAttachments.ts    # 附件 ↔ 上下文条目的唯一映射（发送 / 插话 / 重发）
 │   │   └── editorTabs.ts         # 编辑器标签落盘
 │   ├── theme/tokens.ts           # 从 CSS 变量读取颜色（Monaco / xterm）
 │   ├── hooks/                     # chatScroll（聊天贴底）/ useVirtualRows / useChatSessions / useChatPanelState / useRevertEdits
@@ -192,7 +193,7 @@ pi-workbench/
 │   │   ├── tool-results.ts       # 按 toolCallId 读取工具结果
 │   │   ├── stall-watchdog.ts     # 无响应看门狗
 │   │   ├── async-utils.ts        # 超时与重试工具
-│   │   ├── text-utils.ts         # 文本截断 / 宽度工具
+│   │   ├── text-utils.ts         # 文本截断 / 上下文块拼装与解析
 │   │   ├── atomic-json.ts        # 原子写
 │   │   ├── types.ts              # 桥接层类型
 │   │   └── index.ts              # 对外导出

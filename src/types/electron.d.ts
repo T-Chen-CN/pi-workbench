@@ -339,7 +339,13 @@ export interface ElectronAPI {
     workspaceDir: string,
     sessionId: string,
     newText?: string
-  ) => Promise<{ success: boolean; text?: string; error?: string }>
+  ) => Promise<{
+    success: boolean
+    text?: string
+    /** 被回退的那条用户消息随行的引用 / 附件；重发时重新打包，不丢引用 */
+    context?: MessageContext
+    error?: string
+  }>
   agentBranchesList: (
     workspaceDir: string,
     sessionId: string
@@ -1192,9 +1198,39 @@ export interface AgentHistoryResult {
     parts?: AgentTracePart[]
     /** 用户消息附带的图片（R-08） */
     images?: AgentImagePayload[]
+    /** 用户消息随行的引用与附件；从会话记录里的上下文块解析而来 */
+    context?: MessageContext
     timestamp: number
   }>
   error?: string
+}
+
+/** 引用块：划词引用 / 选区快照（正文内联） */
+export interface MessageContextQuote {
+  /** 来源标题：「对话引用」或文件名 */
+  label?: string
+  /** 来源文件路径；对话引用没有路径 */
+  path?: string
+  startLine?: number
+  endLine?: number
+  content: string
+}
+
+/** 文件附件：只交路径与元信息，内容由 Agent 自己读 */
+export interface MessageContextFile {
+  path: string
+  name?: string
+  size?: number
+  mime?: string
+  mtime?: number
+  /** 位于工作区之外 */
+  external?: boolean
+}
+
+/** 一条用户消息随行的附件 / 引用 */
+export interface MessageContext {
+  quotes: MessageContextQuote[]
+  files: MessageContextFile[]
 }
 
 export interface AgentDisposeResult {

@@ -110,7 +110,14 @@ interface AgentMessage {
   content: string
   /** 新增：按发生顺序排列的过程与正文 */
   parts?: AgentTracePart[]
+  /** 用户消息随行的引用与附件（从记录里的上下文块解析） */
+  context?: MessageContext
   timestamp: number
+}
+
+interface MessageContext {
+  quotes: Array<{ label?: string; path?: string; startLine?: number; endLine?: number; content: string }>
+  files: Array<{ path: string; name?: string; size?: number; mime?: string; mtime?: number; external?: boolean }>
 }
 ```
 
@@ -120,6 +127,7 @@ interface AgentMessage {
 - 历史消息没有 `parts` 时，自动降级为一个 text part。
 - part 的 `id` 在实时与历史之间必须稳定：text/thinking 用递增序号，tool 用 `toolCallId`。
 - **绝不把完整 `write` 内容或完整工具输出放进 part**；参数摘要和结果预览都有限额（见 5.4）。
+- `context` 只描述「这条用户消息带了什么」，正文（引用快照）仍内联在会话记录的上下文块里；发送时由渲染层写入 `ChatMessage.context`，历史恢复时由 `parseContextBlock()` 从记录解析，两边同构。
 
 ### 4.2 渲染分组（派生，不存储）
 
@@ -240,6 +248,16 @@ type AgentStreamPayload = {
    - `parts` = 按顺序收集的全部 part；
    - `timestamp` = 该轮首条 assistant 消息的时间。
 5. 没有 parts 的历史（旧数据）自动视作单个 text part。
+6. 用户消息：`content` = 去掉内部块后的正文（`stripContextBlock`），`context` = `parseContextBlock` 的解析结果。
+
+### 5.6.1 上下文块（附件 / 引用）与回显
+
+用户消息在记录里的形态是「若干个 `<pi-workbench-context>` 块 + 正文」：AgentManager 在前置工作树块，渲染层在前置附件块（文件只给路径，引用内联正文）。因为块可能**同时出现两个**，恢复时必须遵守两条：
+
+- `stripContextBlock()` **循环剥完所有块**（只剥第一个会把附件块原文漏给用户，2026-10 修复）；块结束标记按「独占一行」匹配，引用正文里内联出现的 `</pi-workbench-context>` 不算块结束。
+- 块内结构是 v2：`<!--pi:files-->` / `<!--pi:quotes-->` 分节，每条引用是 `<!--pi:quote {json}-->` 正文 `<!--/pi:quote-->`。解析出来的 `quotes` / `files` 就是界面上的引用块与附件 chip；老记录（v1，`--- 标题 (lines a-b) ---` 分隔）做 best-effort，分不清就整段放弃（宁可少显示，不显示错）。
+
+发送 → 回显的三条路径必须用同一份快照：普通发送、运行中插话、队列重放 / 编辑重发 / 重新生成。附件到上下文条目的映射只有一个入口 `src/workspace/chatAttachments.ts`（`attachmentsToContextEntries` / `contextToAttachments`）；`rewindToLastUser()` 会同时返回去掉块的正文与 `context`，重发时由渲染层重新打包，不靠「把整块当正文重发」。
 
 `runtime.messageHistory` 继续保留用于 `getMessageHistory` 的兼容回退，但不再是历史真源；`getSessionMessages` 统一使用上面的聚合结果。
 

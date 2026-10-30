@@ -231,7 +231,40 @@ export interface AgentMessage {
   parts?: AgentTracePart[]
   /** 用户消息附带的图片（R-08），用于历史恢复时展示 */
   images?: Array<{ data: string; mimeType: string }>
+  /**
+   * 用户消息随行的引用与附件（从会话记录里的上下文块解析而来）。
+   * 老记录没有块，或者块来自 v1 格式且无法安全还原时缺省。
+   */
+  context?: MessageContext
   timestamp: number
+}
+
+/** 引用块：划词引用 / 选区快照（正文内联） */
+export interface MessageContextQuote {
+  /** 来源标题：「对话引用」或文件名 */
+  label?: string
+  /** 来源文件路径；对话引用没有路径 */
+  path?: string
+  startLine?: number
+  endLine?: number
+  content: string
+}
+
+/** 文件附件：只交路径与元信息，内容由 Agent 自己读 */
+export interface MessageContextFile {
+  path: string
+  name?: string
+  size?: number
+  mime?: string
+  mtime?: number
+  /** 位于工作区之外 */
+  external?: boolean
+}
+
+/** 一条用户消息随行的附件 / 引用 */
+export interface MessageContext {
+  quotes: MessageContextQuote[]
+  files: MessageContextFile[]
 }
 
 export interface FileEdit {

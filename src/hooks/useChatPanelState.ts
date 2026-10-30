@@ -16,7 +16,12 @@ import { useSettingsStore } from '../store/settingsStore'
 import { useHostKeydown } from '../panelHost/HostContext'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
-import { buildContextPrompt, type ContextEntry } from '../api/chatContext'
+import { buildContextPrompt, CONTEXT_BLOCK_START, type ContextEntry } from '../api/chatContext'
+import {
+  attachmentsToContextEntries,
+  attachmentsToMessageContext,
+  contextToAttachments,
+} from '../workspace/chatAttachments'
 import { localizeError } from '../i18n/errors'
 import { createTraceBuffer } from '../utils/streamBuffer'
 import { copyText } from '../utils/clipboard'
@@ -952,21 +957,12 @@ export function useChatPanelState(props: ChatPanelProps) {
     item: import('../store/chatStore').PendingMessage
   ) => {
     // 插话也走同一套上下文块：附件否则会随输入框消费而凭空消失
+    const steerEntries = item.attachments ? attachmentsToContextEntries(item.attachments) : []
     const steerText =
-      item.attachments && item.attachments.length > 0
-        ? buildContextPrompt(
-            item.text,
-            item.attachments.map((attachment) => ({
-              kind: 'file' as const,
-              path: attachment.path,
-              name: attachment.name,
-              size: attachment.size,
-              mime: attachment.mime,
-              mtime: attachment.mtime,
-              external: attachment.external
-            }))
-          )
-        : item.text
+      steerEntries.length > 0 ? buildContextPrompt(item.text, steerEntries) : item.text
+    const steerContext = item.attachments
+      ? attachmentsToMessageContext(item.attachments)
+      : undefined
     const result = await piAgentAPI.steer(workspacePath, sessionId, steerText, item.images)
     const chat = useChatStore.getState()
     if (result.success) {
@@ -975,6 +971,7 @@ export function useChatPanelState(props: ChatPanelProps) {
         role: 'user',
         content: item.text,
         images: item.images && item.images.length > 0 ? item.images : undefined,
+        ...(steerContext ? { context: steerContext } : {}),
       })
       // 插话同样会往聊天记录里写一条用户消息，属主动发送：无条件回到最新位置
       scrollToBottomRef.current()
@@ -1157,13 +1154,46 @@ export function useChatPanelState(props: ChatPanelProps) {
     useSessionStore.getState().markError(workspacePath, sessionId, null)
     useSessionStore.getState().markUnread(workspacePath, sessionId, false)
     chat.setDraftInput(key, '')
+    // 文件附件只交路径与元信息，内容由 Agent 自己的 read / grep 工具读；
+    // 选区与划词引用仍内联（它们没有可交给 Agent 的文件语义）。
+    // 过滤放在发送前：气泡回显与 prompt 必须用同一份快照（超限的引用不发送也不展示）。
+    let snippetChars = 0
+    const acceptedAttachments = composerAttachments.filter((attachment) => {
+      if (attachment.kind !== 'snippet') return true
+      const content = attachment.content ?? ''
+      if (!content) return false
+      if (content.length > MAX_CONTEXT_SNIPPET_CHARS) {
+        toast.error(`${t('contextTooLarge')}: ${attachment.name}`)
+        return false
+      }
+      if (snippetChars + content.length > MAX_CONTEXT_TOTAL_CHARS) {
+        toast.error(t('contextTotalTooLarge'))
+        return false
+      }
+      snippetChars += content.length
+      return true
+    })
     if (!options?.skipUserMessage) {
-      const fileCount = composerAttachments.filter((attachment) => attachment.kind === 'file').length
+      const attachmentCount = acceptedAttachments.filter(
+        (attachment) => attachment.kind !== 'image'
+      ).length
+      // 发送后气泡要能看到引用 / 附件：与 prompt 使用同一份快照
+      const messageContext = attachmentsToMessageContext(
+        acceptedAttachments,
+        quoteFile ? [{ path: quoteFile.path, name: quoteFile.name }] : []
+      )
       chat.addMessage(key, {
         role: 'user',
-        // 纯附件消息没有文本：占位一行，历史与编辑重发都能识别
-        content: userMessage || (fileCount > 0 ? t('attachmentOnlyMessage', { count: fileCount }) : ''),
+        // 有引用 / 附件时由气泡里的 chip 表达，不再用占位文案；纯文本除外
+        content:
+          userMessage ||
+          (messageContext
+            ? ''
+            : attachmentCount > 0
+              ? t('attachmentOnlyMessage', { count: attachmentCount })
+              : ''),
         images: promptImages.length > 0 ? promptImages : undefined,
+        ...(messageContext ? { context: messageContext } : {}),
       })
     }
     setShowAttachMenu(false)
@@ -1237,48 +1267,10 @@ export function useChatPanelState(props: ChatPanelProps) {
         }
       }
     })
-    const sessionAttachments = composerAttachments
     let succeeded = false
 
     try {
-      // 文件附件只交路径与元信息，内容由 Agent 自己的 read / grep 工具读；
-      // 选区与划词引用仍内联（它们没有可交给 Agent 的文件语义）
-      const contextEntries: ContextEntry[] = []
-      let snippetChars = 0
-      for (const attachment of sessionAttachments) {
-        if (attachment.kind === 'image') continue
-        if (attachment.kind === 'snippet') {
-          const content = attachment.content ?? ''
-          if (!content) continue
-          if (content.length > MAX_CONTEXT_SNIPPET_CHARS) {
-            toast.error(`${t('contextTooLarge')}: ${attachment.name}`)
-            continue
-          }
-          if (snippetChars + content.length > MAX_CONTEXT_TOTAL_CHARS) {
-            toast.error(t('contextTotalTooLarge'))
-            break
-          }
-          snippetChars += content.length
-          contextEntries.push({
-            kind: 'quote',
-            content,
-            path: attachment.path,
-            label: attachment.label,
-            startLine: attachment.startLine,
-            endLine: attachment.endLine
-          })
-          continue
-        }
-        contextEntries.push({
-          kind: 'file',
-          path: attachment.path,
-          name: attachment.name,
-          size: attachment.size,
-          mime: attachment.mime,
-          mtime: attachment.mtime,
-          external: attachment.external
-        })
-      }
+      const contextEntries: ContextEntry[] = attachmentsToContextEntries(acceptedAttachments)
       // 「引用当前文档」同样只交路径：不受 120k 截断影响，Agent 需要时自己读
       if (quoteFile) {
         contextEntries.push({
@@ -1287,7 +1279,10 @@ export function useChatPanelState(props: ChatPanelProps) {
           name: quoteFile.name
         })
       }
-      const prompt = buildContextPrompt(userMessage, contextEntries)
+      // 重试 / 编辑重发会带着记录里已剥过的正文回来；已含上下文块时不得再包一层
+      const prompt = userMessage.includes(CONTEXT_BLOCK_START)
+        ? userMessage
+        : buildContextPrompt(userMessage, contextEntries)
 
       const result = await piAgentAPI.chat(
         prompt,
@@ -1699,9 +1694,12 @@ export function useChatPanelState(props: ChatPanelProps) {
         return
       }
       useChatStore.getState().removeMessage(activeKey, message.id)
+      // 重发带上原消息的引用 / 附件：否则「重新生成」会把划词引用静默丢掉
+      const restored = result.context ? contextToAttachments(result.context) : []
       await submitRef.current(undefined, result.text, {
         skipUserMessage: true,
         images: message.images,
+        ...(restored.length > 0 ? { attachments: restored } : {}),
         consumeAttachments: false,
       })
     },
@@ -1741,8 +1739,10 @@ export function useChatPanelState(props: ChatPanelProps) {
         return
       }
       useChatStore.getState().truncateLastTurn(activeKey)
+      const restored = result.context ? contextToAttachments(result.context) : []
       await submitRef.current(undefined, next.trim(), {
         images: message.images,
+        ...(restored.length > 0 ? { attachments: restored } : {}),
         consumeAttachments: false,
       })
     },

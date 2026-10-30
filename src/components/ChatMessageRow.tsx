@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, ChevronRight, Copy, Pencil, RotateCcw, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, FileText, Pencil, RotateCcw, X } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useWorkspaceScope } from '../workspace/WorkspaceScope'
@@ -15,6 +15,7 @@ import { Caption, IconButton, Label, Spinner } from './ui'
 import { AgentParts } from './AgentTrace'
 import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
 import { basename } from '../utils/filePath'
+import { formatBytes } from '../utils/formatBytes'
 
 /** 本轮任务列表（AF-12）：由助手消息里的工具步骤派生 */
 export const TurnTaskList: React.FC<{ parts: AgentTracePart[] }> = ({
@@ -226,6 +227,111 @@ const MessageImages: React.FC<{
   )
 }
 
+/** 引用块折叠阔值：超过这个字数（或行数）先收起，避免长引用拱开气泡 */
+const QUOTE_PREVIEW_CHARS = 240
+const QUOTE_PREVIEW_LINES = 3
+
+/**
+ * 用户消息里的引用块（划词引用 / 选区快照）。
+ * 正文就是发给模型的那一段，默认折叠为三行，可展开 / 收起 / 复制。
+ */
+const MessageQuoteBlock: React.FC<{
+  quote: import('../types/electron').MessageContextQuote
+  onCopy?: (text: string) => void
+}> = ({ quote, onCopy }) => {
+  const { t } = useI18nStore()
+  const [expanded, setExpanded] = useState(false)
+  // 与输入区 chip 一致：显示文件名，完整路径放 title
+  const source = quote.path
+    ? basename(quote.path) || quote.path
+    : quote.label || t('quoteFromChat')
+  const range =
+    quote.startLine !== undefined && quote.endLine !== undefined
+      ? `:${quote.startLine}–${quote.endLine}`
+      : ''
+  const collapsible =
+    quote.content.length > QUOTE_PREVIEW_CHARS ||
+    quote.content.split('\n').length > QUOTE_PREVIEW_LINES
+  const visible = expanded ? quote.content : quote.content.slice(0, QUOTE_PREVIEW_CHARS)
+
+  return (
+    <div
+      data-testid="message-quote"
+      className="mb-1.5 border-l-2 border-l-rule-control bg-sunken px-2 py-1"
+    >
+      <div className="flex items-baseline gap-2">
+        <Caption className="min-w-0 flex-1 truncate text-ink-muted">
+          <span title={quote.path ? `${quote.path}${range}` : (quote.label ?? undefined)}>
+            {t('quoteBlockLabel')} · {source}
+            {range}
+          </span>
+        </Caption>
+        {collapsible && (
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="type-caption text-ink-muted transition-colors hover:text-accent"
+          >
+            {expanded ? t('collapseQuote') : t('expandQuote')}
+          </button>
+        )}
+        {onCopy && (
+          <button
+            type="button"
+            onClick={() => onCopy(quote.content)}
+            aria-label={t('copyMessage')}
+            className="text-ink-muted transition-colors hover:text-accent"
+          >
+            <Copy size={10} />
+          </button>
+        )}
+      </div>
+      <div
+        className={`whitespace-pre-wrap type-caption text-ink${
+          collapsible && !expanded ? ' overflow-hidden' : ''
+        }`}
+        style={collapsible && !expanded ? { maxHeight: '3.9em' } : undefined}
+      >
+        {visible}
+        {!expanded && collapsible ? '…' : ''}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 用户消息随行的文件附件：只展示文件名与大小，内容由 Agent 自己读。
+ * 「引用当前文档」产生的条目也走这里（它就是一份文件附件）。
+ */
+const MessageContextFiles: React.FC<{
+  files: import('../types/electron').MessageContextFile[]
+}> = ({ files }) => {
+  const { t } = useI18nStore()
+  if (files.length === 0) return null
+  return (
+    <div className="mb-1.5 flex flex-wrap gap-1.5" data-testid="message-files">
+      {files.map((file, index) => (
+        <span
+          key={`${file.path}-${index}`}
+          className="inline-flex items-center gap-1 border border-rule-control bg-sunken px-2 py-1 type-data text-ink-muted"
+          title={file.path}
+        >
+          <FileText size={10} className="text-ink-muted" />
+          {file.name || basename(file.path)}
+          {file.size !== undefined && (
+            <span className="type-caption text-ink-subtle">
+              {formatBytes(file.size)}
+            </span>
+          )}
+          {file.external && (
+            <span className="type-caption text-ink-subtle">{t('attachmentExternal')}</span>
+          )}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 export const ChatMessageRow = React.memo(function ChatMessageRow({
   message,
   diffToolIds,
@@ -380,6 +486,16 @@ export const ChatMessageRow = React.memo(function ChatMessageRow({
             ›
           </span>
           <div className="min-w-0 flex-1">
+            {message.context?.quotes.map((quote, index) => (
+              <MessageQuoteBlock
+                key={`quote-${index}`}
+                quote={quote}
+                onCopy={onCopy}
+              />
+            ))}
+            {message.context && message.context.files.length > 0 && (
+              <MessageContextFiles files={message.context.files} />
+            )}
             <span className="whitespace-pre-wrap">{message.content}</span>
             {message.images && message.images.length > 0 && <MessageImages images={message.images} />}
           </div>

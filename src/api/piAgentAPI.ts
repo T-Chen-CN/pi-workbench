@@ -432,7 +432,13 @@ export const piAgentAPI = {
     workspaceDir: string,
     sessionId: string,
     newText?: string
-  ): Promise<{ success: boolean; text?: string; error?: string }> {
+  ): Promise<{
+    success: boolean
+    text?: string
+    /** 被回退的那条用户消息随行的引用 / 附件；重发时重新打包 */
+    context?: import('../types/electron').MessageContext
+    error?: string
+  }> {
     if (!hasElectronAgent() || typeof window.electronAPI.agentRewind !== 'function') {
       return { success: false, error: 'Retry is not available in this environment' }
     }

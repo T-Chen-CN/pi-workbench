@@ -279,6 +279,85 @@ describe('ChatPanel', () => {
     expect(await screen.findByText('上下文已压缩 · 自动')).toBeTruthy()
   })
 
+  it('shows the quote on the user message right after sending', async () => {
+    vi.mocked(piAgentAPI.chat).mockResolvedValue({ success: true, response: 'ok' })
+    useChatStore.getState().ensureConversation(sessionKey)
+    useChatStore.getState().addAttachment(sessionKey, {
+      kind: 'snippet',
+      path: '/ws/README.md',
+      name: 'README.md',
+      label: 'README.md',
+      startLine: 3,
+      endLine: 4,
+      content: '被引用的原文',
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    const textarea = await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+    fireEvent.change(textarea, { target: { value: '解释这段' } })
+    fireEvent.click(await screen.findByRole('button', { name: translations.zh.send }))
+
+    await waitFor(() => expect(piAgentAPI.chat).toHaveBeenCalledTimes(1))
+    const quote = await screen.findByTestId('message-quote')
+    // 头部与输入区 chip 一致：文件名 + 行号，完整路径只在 title 里
+    expect(within(quote).getByText(/README\.md:3–4/)).toBeTruthy()
+    expect(quote.textContent).not.toContain('/ws/README.md')
+    expect(quote.querySelector('[title="/ws/README.md:3–4"]')).toBeTruthy()
+    expect(within(quote).getByText(/被引用的原文/)).toBeTruthy()
+    // 引用正文仍在 prompt 里（只被包进上下文块）
+    expect(vi.mocked(piAgentAPI.chat).mock.calls[0][0] as string).toContain('被引用的原文')
+  })
+
+  it('shows the quote restored from session history', async () => {
+    vi.mocked(piAgentAPI.sessionsOpen).mockResolvedValue({
+      success: true,
+      session,
+      history: [
+        {
+          role: 'user',
+          content: '解释这段',
+          timestamp: 1_000,
+          context: {
+            quotes: [{ label: '对话引用', content: '来自历史的引用' }],
+            files: [{ path: '/ws/a.pdf', size: 2048, external: true }],
+          },
+        },
+      ],
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    const quote = await screen.findByTestId('message-quote')
+    expect(within(quote).getByText(/来自历史的引用/)).toBeTruthy()
+    const files = screen.getByTestId('message-files')
+    expect(within(files).getByText('a.pdf')).toBeTruthy()
+    expect(within(files).getByText('2.0 KB')).toBeTruthy()
+    // 历史正文不再携带内部块
+    expect(screen.queryByText(/pi-workbench-context/)).toBeNull()
+  })
+
+  it('counts quotes in the attachment-only placeholder', async () => {
+    vi.mocked(piAgentAPI.chat).mockResolvedValue({ success: true, response: 'ok' })
+    useChatStore.getState().ensureConversation(sessionKey)
+    useChatStore.getState().addAttachment(sessionKey, {
+      kind: 'snippet',
+      path: '',
+      name: '对话引用',
+      label: '对话引用',
+      content: '只有引用没有文字',
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+
+    await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+    fireEvent.click(await screen.findByRole('button', { name: translations.zh.send }))
+
+    await waitFor(() => expect(piAgentAPI.chat).toHaveBeenCalledTimes(1))
+    await screen.findByTestId('message-quote')
+    expect(screen.queryByText(/0 个文件/)).toBeNull()
+  })
+
   it('shows image thumbnails on user messages restored from history', async () => {
     vi.mocked(piAgentAPI.sessionsOpen).mockResolvedValue({
       success: true,

@@ -10,12 +10,19 @@
  * 选区与划词引用仍然内联快照：它们没有可交给 Agent 的文件语义
  * （Agent 回复里的引用块连路径都没有）。
  *
- * 注入块带固定标记，便于 AgentManager 在恢复会话历史时把它剥离，
- * 避免聊天面板重新展示整段内部指令。
+ * 结构（v2）：块内用 `<!--pi:*-->` 分节，每条引用带一行 JSON 元数据，
+ * 便于 `parseContextBlock()` 精确还原成界面上的引用块 / 附件 chip。
+ * 标记与解析在 `pi-bridge/src/text-utils.ts`，两边必须逐字一致。
  */
 
 export const CONTEXT_BLOCK_START = '<pi-workbench-context>'
 export const CONTEXT_BLOCK_END = '</pi-workbench-context>'
+export const CONTEXT_FILES_START = '<!--pi:files-->'
+export const CONTEXT_FILES_END = '<!--/pi:files-->'
+export const CONTEXT_QUOTES_START = '<!--pi:quotes-->'
+export const CONTEXT_QUOTES_END = '<!--/pi:quotes-->'
+export const CONTEXT_QUOTE_START = '<!--pi:quote '
+export const CONTEXT_QUOTE_END = '<!--/pi:quote-->'
 
 /** 文件附件：只描述，不内联内容 */
 export interface ContextFileRef {
@@ -46,6 +53,11 @@ export type ContextEntry = ContextFileRef | ContextQuoteRef
 
 function basenameOf(targetPath: string): string {
   return targetPath.split(/[\\/]/).filter(Boolean).pop() ?? targetPath
+}
+
+/** 路径放进反引号代码段；路径本身带反引号时退回纯文本（解析侧有兜底） */
+function codePath(targetPath: string): string {
+  return targetPath.includes('`') ? targetPath : `\`${targetPath}\``
 }
 
 function formatSize(bytes: number | undefined): string | null {
@@ -79,16 +91,17 @@ function fileMeta(file: ContextFileRef): string {
 function fileLine(file: ContextFileRef): string {
   const name = file.name ?? basenameOf(file.path)
   const nameSuffix = name && name !== basenameOf(file.path) ? ` [${name}]` : ''
-  return `- ${file.path}${nameSuffix}${fileMeta(file)}`
+  return `- ${codePath(file.path)}${nameSuffix}${fileMeta(file)}`
 }
 
-function quoteBlock(quote: ContextQuoteRef): string {
-  const range =
-    quote.startLine !== undefined && quote.endLine !== undefined
-      ? ` (lines ${quote.startLine}-${quote.endLine})`
-      : ''
-  const title = quote.path || quote.label || 'quote'
-  return `--- ${title}${range} ---\n${quote.content}`
+/** 单条引用的元数据行：只放结构化字段，正文留在围栏里（可含空行与 `---`） */
+function quoteMeta(quote: ContextQuoteRef): string {
+  const meta: Record<string, string | number> = {}
+  if (quote.label) meta.label = quote.label
+  if (quote.path) meta.path = quote.path
+  if (quote.startLine !== undefined) meta.startLine = quote.startLine
+  if (quote.endLine !== undefined) meta.endLine = quote.endLine
+  return `${CONTEXT_QUOTE_START}${JSON.stringify(meta)}-->`
 }
 
 export function buildContextPrompt(message: string, entries: ContextEntry[]): string {
@@ -101,15 +114,24 @@ export function buildContextPrompt(message: string, entries: ContextEntry[]): st
   if (files.length > 0) {
     sections.push(
       [
+        CONTEXT_FILES_START,
         'Attached files. Their contents are NOT inlined: read them yourself with the read / grep tools using these absolute paths.',
         'PDF / Word / Excel / PowerPoint / OpenDocument / EPUB attachments are read straight through: call read with the path and it returns the extracted text (scanned PDF pages come back as images for you to look at). Use pages="1-20", sheet="<name>" or slide="1-10" to narrow large files. Old formats (.doc/.xls/.ppt) cannot be decoded — tell the user to save them as .docx/.xlsx/.pptx.',
         ...files.map(fileLine),
+        CONTEXT_FILES_END,
       ].join('\n')
     )
   }
   if (quotes.length > 0) {
-    sections.push(['Quoted excerpts (inlined):', ...quotes.map(quoteBlock)].join('\n\n'))
+    sections.push(
+      [
+        CONTEXT_QUOTES_START,
+        'Quoted excerpts from the conversation or from files the user is reading (inlined):',
+        ...quotes.map((quote) => [quoteMeta(quote), quote.content, CONTEXT_QUOTE_END].join('\n')),
+        CONTEXT_QUOTES_END,
+      ].join('\n')
+    )
   }
 
-  return `${CONTEXT_BLOCK_START}\n${sections.join('\n\n')}\n${CONTEXT_BLOCK_END}\n\n${message}`
+  return `${CONTEXT_BLOCK_START}\n${sections.join('\n')}\n${CONTEXT_BLOCK_END}\n\n${message}`
 }

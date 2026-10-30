@@ -22,6 +22,10 @@
 - 文件路径丢读不到时不会阻断发送：由 Agent 的 `read` 工具报错，错误原文进入工具结果并本地化展示。
 - 渲染层始终没有“传任意路径读内容”的能力：`fs:readFile` 仍只服务工作区与 `{appDir}/cache/`（见 [ipc-and-trust §5.1](ipc-and-trust.md)）。
 
+**发送后回显**：用户消息的气泡里会重新显示这些附件与引用（引用块可折叠 / 展开 / 复制，文件显示名 + 大小 + “工作区外”标记）。数据不在渲染层另存一份：上下文块已经在会话记录里，`parseContextBlock()` 从记录把 `quotes` / `files` 解析回 `Message.context`（见 [AGENT_TRACE §5.6.1](../architecture/AGENT_TRACE.md)）。因此刷新 / 重开会话 / 切分支 / 导出都不会掉引用；`rewindToLastUser()` 也会把 `context` 一起交回，编辑重发与重新生成不会丢引用。
+
+插话（steer）、排队重放与普通发送共用同一套映射（`src/workspace/chatAttachments.ts`）：`snippet` 一律当内联引用，文件一律只给路径。历史上插话曾把引用当文件发（正文丢失、生成空路径行），属于已修复缺陷。
+
 ### 1.2 PDF / Office 文档的阅读（R-22）
 
 附件只交路径，但**文档类**文件光有路径对模型没用（二进制、PDF 流），所以对内置 `read` 做了一层**同名覆盖**，没有新增第二个工具：
