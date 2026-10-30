@@ -30,6 +30,7 @@ import {
 } from './tray.js'
 import { animateBounds, type WindowBounds } from './window-morph.js'
 import { registerFilesIpc } from './ipc/files.js'
+import { registerAttachmentsIpc } from './ipc/attachments.js'
 import { registerFileProtocol } from './file-protocol.js'
 import { registerSchemePrivileges } from './scheme-privileges.js'
 import { registerAgentIpc } from './ipc/agent.js'
@@ -567,6 +568,11 @@ registerAgentIpc({
   logger: agentLogger,
   notificationText,
   notify: (event) => notificationRouter.notify(event)
+})
+
+registerAttachmentsIpc({
+  getMainWindow: () => mainWindow,
+  getLanguage: () => ((getAppSettingsCache().language ?? 'zh') === 'en' ? 'en' : 'zh')
 })
 
 registerWorkspaceIpc({

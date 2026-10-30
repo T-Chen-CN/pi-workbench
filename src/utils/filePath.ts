@@ -40,6 +40,18 @@ export function joinPath(dir: string, name: string): string {
 /** 形如 C:\\dir 或 \\\\server\\share 的 Windows 路径 */
 const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/
 
+/** 判断 target 是否位于 dir 之内（分隔符归一，Windows 路径忽略大小写） */
+export function isPathInside(dir: string, target: string): boolean {
+  const normalize = (value: string) => value.replace(/[\\/]+/g, '/').replace(/\/+$/, '')
+  const root = normalize(dir)
+  const candidate = normalize(target)
+  if (!root || !candidate) return false
+  const windows = WINDOWS_PATH.test(dir.trim()) || WINDOWS_PATH.test(target.trim())
+  const a = windows ? root.toLowerCase() : root
+  const b = windows ? candidate.toLowerCase() : candidate
+  return b === a || b.startsWith(`${a}/`)
+}
+
 /**
  * 判断两个路径是否指向同一文件：分隔符归一，Windows 路径忽略大小写。
  * 渲染层不能读 `process.platform`，所以按路径形状推断。

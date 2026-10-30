@@ -50,9 +50,9 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
 - 主进程的 `error` 是**固定英文串**（便于匹配），渲染层通过 `src/i18n/errors.ts` 映射成当前语言；未知错误原样展示，不要吞掉诊断信息。
 - 事件类频道（`update:status`、`window:maximized-changed`、agent 流式 `trace`）只单向推送，不等待回执；终止 / 取消走独立 invoke 频道。
 
-## 4. 频道分布（18 域 / 123 个 handler）
+## 4. 频道分布（18 域 / 124 个 handler）
 
-`agent 36` · `git 22` · `fs 10` · `app 8` · `github 7` · `workspace 5` · `terminal 5` · `update 5` · `draft 4` · `plugins 4` · `window 4` · `aux 4` · `apiConfig 3` · `webSearch 2` · `shell 1` · `log 1` · `dialog 1` · `clipboard 1`。
+`agent 36` · `git 22` · `fs 10` · `app 8` · `github 7` · `workspace 5` · `terminal 5` · `update 5` · `draft 4` · `plugins 4` · `window 4` · `aux 4` · `apiConfig 3` · `webSearch 2` · `shell 1` · `log 1` · `dialog 1` · `clipboard 1` · `attachment 1`。
 
 按域的频道摘要（含每个频道的作用）在 [PROJECT_STRUCTURE §5](../architecture/PROJECT_STRUCTURE.md)，新增频道时同步那一节。
 
@@ -62,6 +62,15 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
 - 文件写 / 删 / 改只允许发生在受信任工作区与 `{appDir}/cache/` 内；判定用 `realpath` 规范化后 `path.relative` 检查包含关系（`electron/workspace-trust.ts`），不接受前缀字符串比较。
 - 监听（`fs:watch`）走单独的 `resolveWatchableRoot()`：受信任根**及其内部子目录**可监听（会话绑定的 Git 工作树在根目录下），但监听不等于可写，写 / 删 / 改仍走 `resolveAllowedFileTarget()`。
 - 渲染层传入的路径一律先规范化再校验；`editor-tabs.json` 这类记录只存**相对路径**，读回时重新校验是否仍在工作区内。
+
+### 5.1 工作区之外的附件（`attachment:pick`）
+
+聊天附件可以指向任意位置的文件（桌面 / 其他盘 / 网络盘 / 可移动盘），但**没有放宽 `resolveAllowedFileTarget()`**：
+
+- `attachment:pick` 走原生 `dialog.showOpenDialog`（`openFile` + `multiSelections`，无格式过滤），只回传**路径与元信息**（名字 / 大小 / mtime / MIME），内容不经过渲染层。
+- 唯一例外是图片：视觉通道只能收内容，所以主进程读一次并回传 base64（单文件 ≤32MB），渲染层再走既有的压缩与上限管道。
+- 文件内容由 Agent 在**主进程里用自己的 `read` / `bash` 工具**按路径读取，那条链路本来就不受工作区限制（见 [agent-runtime](agent-runtime.md)）；渲染层始终没有“传任意路径读内容”的能力。
+- 因此“选择附件”这个动作本身就是授权，不引入白名单、不引入二次确认；旧的 `fs:readFile` 仍然只服务编辑器与预览，工作区外路径依旧被拒。
 
 ## 6. Web 调试桥
 

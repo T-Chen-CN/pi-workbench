@@ -32,7 +32,7 @@ pi-workbench/
 │   ├── preload.cts               # contextBridge（编译为 CommonJS preload.cjs）
 │   ├── app-paths.ts              # 便携式应用目录
 │   ├── workspace-trust.ts        # 工作区信任与路径包含
-│   ├── ipc/                      # 按域注册 IPC（agent / api-config / files / git / settings / system / web-search* / workspace）
+│   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / files / git / settings / system / web-search* / workspace）
 │   ├── agent-registry.ts         # 按工作区登记 Agent 实例
 │   ├── shutdown.ts               # 退出编排：分步超时清理 + 退出看门狗（强制 exit）
 │   ├── child-registry.ts         # 子进程登记与进程树回收（taskkill /T）
@@ -263,6 +263,7 @@ ChatPanel.handleSubmit
 | 通道 | 方向 | 用途 |
 |---|---|---|
 | `dialog:openDirectory` | invoke | 选择工作区 |
+| `attachment:pick` | invoke | 选择聊天附件（任意路径 / 任意格式，只回传路径与元信息；图片额外回传 base64） |
 | `fs:readFile` / `writeFile` / `listDirectory` / `exists` / `stat` | invoke | 文件操作 |
 | `fs:delete` / `fs:rename` | invoke | 删除 / 重命名 |
 | `fs:watch` / `fs:unwatch` | invoke | 工作区递归监听 |

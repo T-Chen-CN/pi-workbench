@@ -13,6 +13,15 @@
 - ❌ 禁止另起子进程 / Worker / 本地 HTTP 服务承载 Agent。Vite 里的 `devAgentBridge` 只是**调试用替身**，仅在 `serve` 生效。
 - `pi-coding-agent` 内置的 read / write / edit / bash 工具在主进程直接操作文件系统，不经过渲染层 IPC —— 这是设计决定，不是漏洞。应用自身（文件树、编辑器、终端）的文件操作仍必须走 IPC。
 
+### 1.1 聊天附件怎么到 Agent
+
+- 用户在输入区附加的文件**不限位置与格式**（桌面 / 其他盘 / 网络盘 / 可移动盘；文本 / PDF / Office / 压缩包 / 音视频）—— 因为附件**不传内容，只传路径**：`buildContextPrompt()` 把绝对路径 + 元信息（大小 / MIME / mtime / 是否在工作区外）写进 `<pi-workbench-context>` 块，Agent 需要时自己用 `read` / `grep` / `bash` 去读。
+- 好处：不受上下文窗口、文本解码与二进制探测限制；会话记录不堆整文件内容；Agent 能用自己熟悉的方式跳读、分页、局部检索。
+- 例外：**图片**必须走视觉通道（路径对视觉无用），由主进程读 base64 后随请求发送；**选区 / 划词引用**没有可交给 Agent 的文件语义，仍然内联快照（≤40k 字符）。
+- 上限：单条消息 **10 个附件**（文件 + 图片合计，`MAX_ATTACHMENTS` / `MAX_IMAGE_COUNT` / `MAX_CHAT_IMAGES` 三处一致）；图片还有单张 10MB、合计 48MB base64 的旧上限。
+- 文件路径丢读不到时不会阻断发送：由 Agent 的 `read` 工具报错，错误原文进入工具结果并本地化展示。
+- 渲染层始终没有“传任意路径读内容”的能力：`fs:readFile` 仍只服务工作区与 `{appDir}/cache/`（见 [ipc-and-trust §5.1](ipc-and-trust.md)）。
+
 ## 2. 权限模型（安全边界，改这里等于改安全策略）
 
 两级概念，**会话是权限的唯一权威**，全局只提供新会话的默认档（`DEFAULT_PERMISSION_LEVEL = 'ask'`）：

@@ -13,8 +13,9 @@ export interface ChatPanelProps {
   active?: boolean
 }
 
-/** 单个附件与单条消息的上下文字符上限 */
-export const MAX_CONTEXT_FILE_CHARS = 120_000
+/** 单条消息的附件上限（文件 + 图片合计） */
+export const MAX_ATTACHMENTS = 10
+/** 片段上下文上限（选区 / 划词引用仍然内联） */
 export const MAX_CONTEXT_SNIPPET_CHARS = 40_000
 export const MAX_CONTEXT_TOTAL_CHARS = 300_000
 

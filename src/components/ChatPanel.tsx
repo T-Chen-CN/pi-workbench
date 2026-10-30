@@ -2,7 +2,7 @@ import React from 'react'
 import { useChatPanelState } from '../hooks/useChatPanelState'
 import type { ChatPanelProps } from '../utils/chatPanelShared'
 import { THINKING_LEVELS, THINKING_LABEL_KEYS, formatTokenCount } from '../utils/chatPanelShared'
-import { ArrowDown, BookMarked, ChevronDown, FileText, Minimize2, Paperclip, Send, Square, X } from 'lucide-react'
+import { ArrowDown, BookMarked, ChevronDown, FileText, FolderOpen, Minimize2, Paperclip, Send, Square, X } from 'lucide-react'
 import { useChatStore } from '../store/chatStore'
 import { useSessionStore } from '../store/sessionStore'
 import { retrySecondsRemaining } from '../utils/retryCountdown'
@@ -84,6 +84,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
     handleModelChange,
     handleOpenToolResult,
     handlePaste,
+    handlePickFiles,
     handleRejectPlan,
     handleResetPermissionGrants,
     handleRetryMessage,
@@ -155,8 +156,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
   const hostId = useHostId()
   const hostDocument = useHostDocument()
 
-  // 纯图片（无文本）也可以发送；预处理中的图片不算可发送内容
-  const hasSendableInput = Boolean(input.trim()) || attachments.some((a) => a.kind === 'image')
+  // 纯图片 / 纯附件（无文本）也可以发送；预处理中的图片不算可发送内容
+  const hasSendableInput = Boolean(input.trim()) || attachments.length > 0
 
   if (needsApiKey) {
     return (
@@ -417,11 +418,20 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                       attachment.startLine !== undefined &&
                       attachment.endLine !== undefined
                         ? `${attachment.path}:${attachment.startLine}-${attachment.endLine}`
-                        : attachment.path || attachment.label || attachment.name
+                        : [
+                            attachment.path || attachment.label || attachment.name,
+                            attachment.size !== undefined ? formatBytes(attachment.size) : null,
+                            attachment.external ? t('attachmentExternal') : null
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')
                     }
                   >
                     <FileText size={10} className="text-ink-muted" />
                     {label}
+                    {attachment.external && (
+                      <span className="type-caption text-ink-subtle">{t('attachmentExternal')}</span>
+                    )}
                     <button
                       type="button"
                       onClick={() =>
@@ -557,6 +567,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                       )
                     ) : (
                       <>
+                    <button
+                      type="button"
+                      onClick={() => void handlePickFiles()}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink hover:bg-hover"
+                    >
+                      <FolderOpen size={12} className="flex-shrink-0 text-ink-muted" />
+                      <span className="flex min-w-0 flex-col">
+                        <span>{t('attachLocalFile')}</span>
+                        <Caption className="truncate text-ink-muted">{t('attachLocalFileHint')}</Caption>
+                      </span>
+                    </button>
+                    <div className="my-1 border-t border-rule-divide" />
                     <button
                       type="button"
                       disabled={!selection}

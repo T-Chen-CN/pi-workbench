@@ -455,6 +455,8 @@ export interface ElectronAPI {
     limit?: number
   ) => Promise<{ success: boolean; files?: string[]; error?: string }>
   getPathForFile: (file: File) => string
+  /** 原生文件选择：任意路径 / 任意格式；除图片外只回传元信息 */
+  pickAttachments: () => Promise<AttachmentPickResult>
   onAgentApprovalRequest: (callback: (payload: ApprovalRequestPayload) => void) => () => void
   agentRespondApproval: (
     requestId: string,
@@ -643,6 +645,25 @@ export interface OpenDirectoryResult {
   success: boolean
   path?: string
   canceled?: boolean
+  error?: string
+}
+
+/** 通过原生对话框选中的附件：任意路径与格式 */
+export interface PickedAttachment {
+  path: string
+  name: string
+  size: number
+  /** 最后修改时间（ms） */
+  mtime: number
+  mime: string
+  /** 仅图片类型填充：base64（不含 data: 前缀）；其余文件不读内容 */
+  data?: string
+}
+
+export interface AttachmentPickResult {
+  success: boolean
+  canceled: boolean
+  files: PickedAttachment[]
   error?: string
 }
 

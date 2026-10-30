@@ -39,6 +39,7 @@ vi.mock('../src/api', () => ({
     onFsChanged: vi.fn(() => () => {}),
     getSettings: vi.fn(),
     saveSettings: vi.fn(),
+    pickAttachments: vi.fn(),
   },
 }))
 
@@ -1113,6 +1114,87 @@ describe('ChatPanel', () => {
       endLine: 5,
     })
     expect(screen.getByText('a.ts:3–5')).toBeTruthy()
+  })
+
+  it('attaches a file from any location and sends only its path', async () => {
+    vi.mocked(api.pickAttachments).mockResolvedValue({
+      success: true,
+      canceled: false,
+      files: [
+        {
+          path: 'D:\\notes\\design.docx',
+          name: 'design.docx',
+          size: 2048,
+          mtime: 1,
+          mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        },
+      ],
+    })
+    vi.mocked(piAgentAPI.chat).mockResolvedValue({ success: true, response: 'ok' })
+
+    render(<ChatPanel workspacePath="/ws" />)
+    const attachButton = (await screen.findByLabelText(
+      translations.zh.attachContext
+    )) as HTMLButtonElement
+    await waitFor(() => expect(attachButton.disabled).toBe(false))
+    fireEvent.click(attachButton)
+    fireEvent.click(screen.getByText(translations.zh.attachLocalFile))
+
+    await waitFor(() =>
+      expect(useChatStore.getState().conversations[sessionKey].attachments[0]).toMatchObject({
+        kind: 'file',
+        path: 'D:\\notes\\design.docx',
+        name: 'design.docx',
+        size: 2048,
+        external: true,
+      })
+    )
+    expect(await screen.findByText('design.docx')).toBeTruthy()
+    expect(screen.getByText(translations.zh.attachmentExternal)).toBeTruthy()
+
+    const textarea = screen.getByPlaceholderText(translations.zh.inputPlaceholder)
+    fireEvent.change(textarea, { target: { value: 'summarize it' } })
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.send }))
+
+    await waitFor(() => expect(piAgentAPI.chat).toHaveBeenCalledTimes(1))
+    const prompt = vi.mocked(piAgentAPI.chat).mock.calls[0][0] as string
+    // 附件只交路径与元信息，内容不内联，也不经过 fs:readFile
+    expect(prompt).toContain('D:\\notes\\design.docx')
+    expect(prompt).toContain('2.0 KB')
+    expect(prompt).toContain('outside workspace')
+    expect(vi.mocked(api.readFile)).not.toHaveBeenCalledWith('D:\\notes\\design.docx')
+  })
+
+  it('caps a single message at ten attachments', async () => {
+    vi.mocked(api.pickAttachments).mockResolvedValue({
+      success: true,
+      canceled: false,
+      files: [
+        { path: 'D:\\notes\\extra.txt', name: 'extra.txt', size: 1, mtime: 1, mime: 'text/plain' },
+      ],
+    })
+
+    render(<ChatPanel workspacePath="/ws" />)
+    const attachButton = (await screen.findByLabelText(
+      translations.zh.attachContext
+    )) as HTMLButtonElement
+    await waitFor(() => expect(attachButton.disabled).toBe(false))
+    act(() => {
+      useChatStore.getState().ensureConversation(sessionKey)
+      for (let index = 0; index < 10; index += 1) {
+        useChatStore.getState().addAttachment(sessionKey, {
+          kind: 'file',
+          path: `/ws/file-${index}.txt`,
+          name: `file-${index}.txt`,
+        })
+      }
+    })
+    fireEvent.click(attachButton)
+    fireEvent.click(screen.getByText(translations.zh.attachLocalFile))
+
+    await waitFor(() => expect(api.pickAttachments).toHaveBeenCalled())
+    expect(useChatStore.getState().conversations[sessionKey].attachments).toHaveLength(10)
+    expect(screen.queryByText('extra.txt')).toBeNull()
   })
 
   it('virtualizes long transcripts instead of rendering every message', async () => {

@@ -16,19 +16,22 @@ import { useSettingsStore } from '../store/settingsStore'
 import { useHostKeydown } from '../panelHost/HostContext'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
-import { buildContextPrompt } from '../api/chatContext'
+import { buildContextPrompt, type ContextEntry } from '../api/chatContext'
 import { localizeError } from '../i18n/errors'
 import { createTraceBuffer } from '../utils/streamBuffer'
 import { copyText } from '../utils/clipboard'
 import { formatBytes } from '../utils/formatBytes'
 import { SESSION_MODE_ICON } from '../utils/sessionModePresentation'
 import { extractSymbols, sliceSymbol, type ExtractedSymbol } from '../utils/symbols'
+import { isPathInside, joinPath } from '../utils/filePath'
 import { buildChatSuggestions, type WorkspaceType } from '../utils/suggestions'
 import {
+  ALLOWED_IMAGE_TYPES,
   ImagePrepareError,
   MAX_IMAGE_COUNT,
   MAX_IMAGE_OUTPUT_BYTES,
   MAX_TOTAL_IMAGE_BASE64_CHARS,
+  base64ToFile,
   prepareImageFile,
 } from '../utils/imageAttachment'
 import { toast } from '../store/toastStore'
@@ -56,7 +59,7 @@ import type {
 import type { ChatPanelProps } from '../utils/chatPanelShared'
 import { emitAppEvent, onAppEvent } from '../utils/appEvents'
 import {
-  MAX_CONTEXT_FILE_CHARS,
+  MAX_ATTACHMENTS,
   MAX_CONTEXT_SNIPPET_CHARS,
   MAX_CONTEXT_TOTAL_CHARS,
   DEFAULT_SESSION_PERMISSION,
@@ -424,10 +427,11 @@ export function useChatPanelState(props: ChatPanelProps) {
     const tokenEnd = mention.start + 1 + mention.query.length
     const next = `${value.slice(0, mention.start)}@${relative} ${value.slice(tokenEnd)}`
     useChatStore.getState().setDraftInput(activeKey, next)
+    // 搜索以会话工作树根为基准，附件路径必须落在同一根上（否则 Agent 读不到）
     useChatStore.getState().addAttachment(activeKey, {
       kind: 'file',
-      path: `${workspacePath}/${relative}`,
-      name: relative.split('/').pop() || relative,
+      path: joinPath(viewRoot ?? workspacePath, relative),
+      name: relative.split('/').pop() || relative
     })
     setMention(null)
     inputRef.current?.focus()
@@ -643,6 +647,8 @@ export function useChatPanelState(props: ChatPanelProps) {
       try {
         const existing = useChatStore.getState().conversations[key]?.attachments ?? []
         let imageCount = existing.filter((attachment) => attachment.kind === 'image').length
+        // 图片与文件共用同一条消息的总量上限
+        let attachmentCount = existing.length
         let totalChars = existing.reduce(
           (total, attachment) =>
             attachment.kind === 'image' ? total + (attachment.data?.length ?? 0) : total,
@@ -650,6 +656,10 @@ export function useChatPanelState(props: ChatPanelProps) {
         )
 
         for (const file of imageFiles) {
+          if (attachmentCount >= MAX_ATTACHMENTS) {
+            toast.error(t('attachmentLimit', { count: MAX_ATTACHMENTS }))
+            break
+          }
           if (imageCount >= MAX_IMAGE_COUNT) {
             toast.error(t('imageLimit', { count: MAX_IMAGE_COUNT }))
             break
@@ -671,6 +681,7 @@ export function useChatPanelState(props: ChatPanelProps) {
               size: prepared.size,
             })
             imageCount += 1
+            attachmentCount += 1
             totalChars += prepared.data.length
           } catch (error) {
             const code = error instanceof ImagePrepareError ? error.code : 'encodeFailed'
@@ -698,24 +709,106 @@ export function useChatPanelState(props: ChatPanelProps) {
     addImageFiles(files)
   }
 
+  /** 拖入 / 选中的文件统一转成附件：补元信息、去重、守住总量上限 */
+  const attachFiles = useCallback(
+    (
+      key: string,
+      files: Array<{
+        path: string
+        name: string
+        size?: number
+        mime?: string
+        mtime?: number
+      }>
+    ) => {
+      const store = useChatStore.getState()
+      const existing = store.conversations[key]?.attachments ?? []
+      const seen = new Set(existing.map((attachment) => attachment.path))
+      let count = existing.length
+      let overflow = false
+      for (const file of files) {
+        if (count >= MAX_ATTACHMENTS) {
+          overflow = true
+          break
+        }
+        if (seen.has(file.path)) continue
+        seen.add(file.path)
+        count += 1
+        store.addAttachment(key, {
+          kind: 'file',
+          path: file.path,
+          name: file.name,
+          size: file.size,
+          mime: file.mime,
+          mtime: file.mtime,
+          // 工作区外的文件同样能附加，只在 UI 与 prompt 里标明来源
+          external: !isPathInside(viewRoot ?? workspacePath, file.path)
+        })
+      }
+      if (overflow) toast.error(t('attachmentLimit', { count: MAX_ATTACHMENTS }))
+    },
+    [t, viewRoot, workspacePath]
+  )
+
+  /** 原生文件选择：任意位置、任意格式；除图片外只拿路径 */
+  const handlePickFiles = async () => {
+    setShowAttachMenu(false)
+    if (!activeKey) return
+    const result = await api.pickAttachments()
+    if (!result.success) {
+      toast.error(t('attachmentPickFailed'))
+      return
+    }
+    if (result.canceled || result.files.length === 0) return
+
+    // 图片走视觉通道，其余文件只交路径
+    const images: File[] = []
+    const plain: Array<{ path: string; name: string; size?: number; mime?: string; mtime?: number }> = []
+    for (const file of result.files) {
+      // 只把视觉通道支持的位图当图片；SVG 之类仍按普通文件交路径
+      if (ALLOWED_IMAGE_TYPES.has(file.mime) && file.data) {
+        try {
+          images.push(base64ToFile(file.data, file.name, file.mime))
+          continue
+        } catch {
+          // 解码失败就退化为普通文件附件
+        }
+      }
+      plain.push({
+        path: file.path,
+        name: file.name,
+        size: file.size,
+        mime: file.mime,
+        mtime: file.mtime
+      })
+    }
+    attachFiles(activeKey, plain)
+    if (images.length > 0) addImageFiles(images)
+  }
+
   /** 拖入文件作为附件 */
   const handleDropFiles = (event: React.DragEvent) => {
     event.preventDefault()
     if (!activeKey) return
     const images: File[] = []
+    const plain: Array<{ path: string; name: string; size?: number; mime?: string; mtime?: number }> = []
     for (const file of Array.from(event.dataTransfer.files)) {
-      if (file.type.startsWith('image/')) {
+      // 只有位图走视觉通道；SVG 等其他图片格式按普通文件附加（模型可读源码）
+      if (ALLOWED_IMAGE_TYPES.has(file.type)) {
         images.push(file)
         continue
       }
       const target = api.getPathForFile(file)
       if (!target) continue
-      useChatStore.getState().addAttachment(activeKey, {
-        kind: 'file',
+      plain.push({
         path: target,
         name: file.name,
+        size: file.size,
+        mime: file.type || undefined,
+        mtime: file.lastModified || undefined
       })
     }
+    attachFiles(activeKey, plain)
     if (images.length > 0) addImageFiles(images)
   }
 
@@ -858,7 +951,23 @@ export function useChatPanelState(props: ChatPanelProps) {
     key: string,
     item: import('../store/chatStore').PendingMessage
   ) => {
-    const result = await piAgentAPI.steer(workspacePath, sessionId, item.text, item.images)
+    // 插话也走同一套上下文块：附件否则会随输入框消费而凭空消失
+    const steerText =
+      item.attachments && item.attachments.length > 0
+        ? buildContextPrompt(
+            item.text,
+            item.attachments.map((attachment) => ({
+              kind: 'file' as const,
+              path: attachment.path,
+              name: attachment.name,
+              size: attachment.size,
+              mime: attachment.mime,
+              mtime: attachment.mtime,
+              external: attachment.external
+            }))
+          )
+        : item.text
+    const result = await piAgentAPI.steer(workspacePath, sessionId, steerText, item.images)
     const chat = useChatStore.getState()
     if (result.success) {
       chat.removePending(key, item.id)
@@ -959,6 +1068,8 @@ export function useChatPanelState(props: ChatPanelProps) {
       skipUserMessage?: boolean
       /** 随本次请求发送的图片；与 consumeAttachments: false 搭配用于重试 / 编辑重发 */
       images?: import('../types/electron').AgentImagePayload[]
+      /** 排队重发时带回的文件附件（仅路径与元信息） */
+      attachments?: import('../store/chatStore').ChatAttachment[]
       /** 是否把输入框附件带入本次请求；系统触发的发送（重试 / 计划执行 / 排队重发）传 false */
       consumeAttachments?: boolean
     }
@@ -982,9 +1093,10 @@ export function useChatPanelState(props: ChatPanelProps) {
     }
 
     // 附件快照：用户提交时由本轮独占，随后立即从输入框消费
-    const composerAttachments = takeComposerAttachments
-      ? chat.conversations[key]?.attachments ?? []
-      : []
+    const composerAttachments =
+      takeComposerAttachments
+        ? chat.conversations[key]?.attachments ?? []
+        : options?.attachments ?? []
     // 「引用当前文档」：开关打开时自动带上正在查看的文件，真正发出后复位
     const quoteFile = takeComposerAttachments && chat.conversations[key]?.quoteCurrentFile ? currentEditorFile : null
     const promptImages = takeComposerAttachments
@@ -996,9 +1108,11 @@ export function useChatPanelState(props: ChatPanelProps) {
           }))
           .filter((image) => image.data.length > 0)
       : options?.images ?? []
+    // 文件附件只交路径，不占上下文：只有文本与图片都不存在时才算空消息
+    const hasFileAttachments = composerAttachments.some((attachment) => attachment.kind !== 'image')
 
-    // 纯图片消息（无文本）也允许发送
-    if (!userMessage && promptImages.length === 0) return
+    // 纯图片 / 纯附件消息（无文本）也允许发送
+    if (!userMessage && promptImages.length === 0 && !hasFileAttachments) return
 
     if (promptImages.length > 0) {
       if (!imagesAllowed) {
@@ -1022,7 +1136,11 @@ export function useChatPanelState(props: ChatPanelProps) {
     // 运行中：按设置默认值排队到下一轮，或立即插入当前轮
     if (isLoading && !forceSendKeysRef.current.has(key)) {
       chat.setDraftInput(key, '')
-      const item = chat.addPending(key, userMessage, promptImages)
+      // 附件随排队项一起带走，否则排队会让本轮附件凭空消失
+      const pendingAttachments = composerAttachments.filter(
+        (attachment) => attachment.kind !== 'image'
+      )
+      const item = chat.addPending(key, userMessage, promptImages, pendingAttachments)
       if (useSettingsStore.getState().runWhileBusy === 'steer') {
         void sendSteer(sessionId, key, item)
       }
@@ -1040,9 +1158,11 @@ export function useChatPanelState(props: ChatPanelProps) {
     useSessionStore.getState().markUnread(workspacePath, sessionId, false)
     chat.setDraftInput(key, '')
     if (!options?.skipUserMessage) {
+      const fileCount = composerAttachments.filter((attachment) => attachment.kind === 'file').length
       chat.addMessage(key, {
         role: 'user',
-        content: userMessage,
+        // 纯附件消息没有文本：占位一行，历史与编辑重发都能识别
+        content: userMessage || (fileCount > 0 ? t('attachmentOnlyMessage', { count: fileCount }) : ''),
         images: promptImages.length > 0 ? promptImages : undefined,
       })
     }
@@ -1121,64 +1241,53 @@ export function useChatPanelState(props: ChatPanelProps) {
     let succeeded = false
 
     try {
-      // 读取附件内容并注入本轮 prompt；用户气泡只显示原始文本
-      const contextFiles: Array<{
-        path: string
-        content: string
-        startLine?: number
-        endLine?: number
-        label?: string
-      }> = []
-      let totalChars = 0
+      // 文件附件只交路径与元信息，内容由 Agent 自己的 read / grep 工具读；
+      // 选区与划词引用仍内联（它们没有可交给 Agent 的文件语义）
+      const contextEntries: ContextEntry[] = []
+      let snippetChars = 0
       for (const attachment of sessionAttachments) {
         if (attachment.kind === 'image') continue
-        let content: string
         if (attachment.kind === 'snippet') {
-          content = attachment.content ?? ''
+          const content = attachment.content ?? ''
           if (!content) continue
           if (content.length > MAX_CONTEXT_SNIPPET_CHARS) {
             toast.error(`${t('contextTooLarge')}: ${attachment.name}`)
             continue
           }
-        } else {
-          const file = await api.readFile(attachment.path)
-          if (!file.success || typeof file.content !== 'string') {
-            toast.error(`${t('contextReadFailed')}: ${attachment.name}`)
-            continue
+          if (snippetChars + content.length > MAX_CONTEXT_TOTAL_CHARS) {
+            toast.error(t('contextTotalTooLarge'))
+            break
           }
-          if (file.content.length > MAX_CONTEXT_FILE_CHARS) {
-            toast.error(`${t('contextTooLarge')}: ${attachment.name}`)
-            continue
-          }
-          content = file.content
+          snippetChars += content.length
+          contextEntries.push({
+            kind: 'quote',
+            content,
+            path: attachment.path,
+            label: attachment.label,
+            startLine: attachment.startLine,
+            endLine: attachment.endLine
+          })
+          continue
         }
-        if (totalChars + content.length > MAX_CONTEXT_TOTAL_CHARS) {
-          toast.error(t('contextTotalTooLarge'))
-          break
-        }
-        totalChars += content.length
-        contextFiles.push({
+        contextEntries.push({
+          kind: 'file',
           path: attachment.path,
-          content,
-          startLine: attachment.startLine,
-          endLine: attachment.endLine,
-          label: attachment.label
+          name: attachment.name,
+          size: attachment.size,
+          mime: attachment.mime,
+          mtime: attachment.mtime,
+          external: attachment.external
         })
       }
-      // 当前文档排在附件之后；读不到就不阻断发送
+      // 「引用当前文档」同样只交路径：不受 120k 截断影响，Agent 需要时自己读
       if (quoteFile) {
-        const file = await api.readFile(quoteFile.path)
-        if (file.success && typeof file.content === 'string') {
-          if (file.content.length > MAX_CONTEXT_FILE_CHARS) {
-            toast.error(`${t('contextTooLarge')}: ${quoteFile.name}`)
-          } else {
-            contextFiles.push({ path: quoteFile.path, content: file.content })
-          }
-        } else {
-          toast.error(`${t('contextReadFailed')}: ${quoteFile.name}`)
-        }
+        contextEntries.push({
+          kind: 'file',
+          path: quoteFile.path,
+          name: quoteFile.name
+        })
       }
-      const prompt = buildContextPrompt(userMessage, contextFiles)
+      const prompt = buildContextPrompt(userMessage, contextEntries)
 
       const result = await piAgentAPI.chat(
         prompt,
@@ -1250,6 +1359,7 @@ export function useChatPanelState(props: ChatPanelProps) {
           () =>
             void handleSubmit(undefined, queued.text, {
               images: queued.images,
+              attachments: queued.attachments,
               consumeAttachments: false,
             }),
           0
@@ -1721,6 +1831,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     handleModelChange,
     handleOpenToolResult,
     handlePaste,
+    handlePickFiles,
     handleRejectPlan,
     handleResetPermissionGrants,
     handleRetryMessage,

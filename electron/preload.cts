@@ -239,6 +239,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   searchWorkspaceFiles: (workspaceDir: string, query: string, limit?: number) =>
     ipcRenderer.invoke('workspace:searchFiles', workspaceDir, query, limit),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
+  /** 原生文件选择：任意路径 / 任意格式；除图片外只回传元信息 */
+  pickAttachments: () => ipcRenderer.invoke('attachment:pick'),
   onNotifyClick: (callback: (payload: { workspaceDir: string; sessionId: string }) => void) => {
     const listener = (_event: unknown, payload: { workspaceDir: string; sessionId: string }) => callback(payload)
     ipcRenderer.on('app:notify-click', listener)

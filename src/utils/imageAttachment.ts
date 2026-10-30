@@ -8,7 +8,8 @@
  */
 
 export const IMAGE_TARGET_LONG_EDGE = 2048
-export const MAX_IMAGE_COUNT = 20
+/** 单条消息的图片上限；与文件附件共用 MAX_ATTACHMENTS = 10 的总量 */
+export const MAX_IMAGE_COUNT = 10
 /** 源文件保护上限：避免解码超大图拖垮渲染进程 */
 export const MAX_IMAGE_SOURCE_BYTES = 64 * 1024 * 1024
 export const MAX_IMAGE_SOURCE_PIXELS = 100_000_000
@@ -191,4 +192,17 @@ export async function prepareImageFile(file: File): Promise<PreparedImage> {
   } finally {
     bitmap.close?.()
   }
+}
+
+/**
+ * base64（不含 data: 前缀）还原成 File。
+ * 原生对话框选中图片时由主进程读内容，这里转回 File 以复用同一套预处理与上限校验。
+ */
+export function base64ToFile(data: string, name: string, mimeType: string): File {
+  const binary = atob(data)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return new File([bytes], name, { type: mimeType })
 }

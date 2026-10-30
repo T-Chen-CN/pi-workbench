@@ -43,7 +43,8 @@ import type {
   AuxDetachResult,
   AuxWindowCommandResult,
   WindowCommand,
-  WindowMaximizedState
+  WindowMaximizedState,
+  AttachmentPickResult
 } from '../types/electron'
 import { frameNameOf, type HostId } from '../panelHost/types'
 
@@ -64,6 +65,10 @@ const mockAPI = {
   openDirectoryDialog: async (): Promise<OpenDirectoryResult> => {
     console.log('[Mock] openDirectoryDialog')
     return { success: true, path: '/mock/selected/path' }
+  },
+  pickAttachments: async (): Promise<AttachmentPickResult> => {
+    console.log('[Mock] pickAttachments')
+    return { success: true, canceled: true, files: [] }
   },
   listDirectory: async (dirPath: string): Promise<ListDirectoryResult> => {
     console.log('[Mock] listDirectory:', dirPath)
@@ -430,6 +435,10 @@ if (!window.electronAPI) {
 export const api = {
   // File system operations
   openDirectoryDialog: () => electronAPI.openDirectoryDialog(),
+  pickAttachments: () =>
+    typeof electronAPI.pickAttachments === 'function'
+      ? electronAPI.pickAttachments()
+      : Promise.resolve({ success: true, canceled: true, files: [] } as AttachmentPickResult),
   listDirectory: (path: string) => electronAPI.listDirectory(path),
   searchWorkspaceFiles: (workspaceDir: string, query: string, limit?: number) =>
     typeof electronAPI.searchWorkspaceFiles === 'function'

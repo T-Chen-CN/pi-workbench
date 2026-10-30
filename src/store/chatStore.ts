@@ -62,13 +62,19 @@ export interface ChatAttachment {
   /** 片段起止行（1-based，含端点） */
   startLine?: number
   endLine?: number
-  /** 片段附加时的内容快照；整文件在发送时实时读取 */
+  /** 片段附加时的内容快照；整文件只传路径，由 Agent 自己读取 */
   content?: string
   /** 图像附件：base64（不含 data: 前缀）与 MIME */
   mimeType?: string
   data?: string
-  /** 图像字节数（用于展示与限制） */
+  /** 文件 / 图像的字节数（用于展示与限制） */
   size?: number
+  /** 文件最后修改时间（ms）；Dialog 选中的文件才有 */
+  mtime?: number
+  /** 文件 MIME；Dialog 选中的文件才有 */
+  mime?: string
+  /** 位于工作区之外（UI 上标注，并告知模型） */
+  external?: boolean
   /** 引用块在 prompt 里的标题（对话引用没有文件路径时使用） */
   label?: string
 }
@@ -80,6 +86,8 @@ export interface PendingMessage {
   text: string
   /** 排队时一并转入的图片；只存在于内存，不随排队消息落盘 */
   images?: AgentImagePayload[]
+  /** 排队时一并转入的文件附件（只含路径与元信息） */
+  attachments?: ChatAttachment[]
 }
 
 export interface ConversationState {
@@ -165,7 +173,12 @@ interface ChatState {
   setDraftInput: (key: string, value: string) => void
   /** 引用当前查看的文档开关（只作用于下一次发送） */
   setQuoteCurrentFile: (key: string, value: boolean) => void
-  addPending: (key: string, text: string, images?: AgentImagePayload[]) => PendingMessage
+  addPending: (
+    key: string,
+    text: string,
+    images?: AgentImagePayload[],
+    attachments?: ChatAttachment[]
+  ) => PendingMessage
   removePending: (key: string, id: string) => void
   setContextUsage: (key: string, usage: ContextUsageInfo | null) => void
   setSessionSettings: (
@@ -537,11 +550,12 @@ export const useChatStore = create<ChatState>((set) => ({
   setQuoteCurrentFile: (key, value) =>
     set((state) => updateExisting(state, key, (current) => ({ ...current, quoteCurrentFile: value }))),
 
-  addPending: (key, text, images) => {
+  addPending: (key, text, images, attachments) => {
     const item: PendingMessage = {
       id: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text,
       ...(images && images.length > 0 ? { images } : {}),
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
     }
     set((state) =>
       updateExisting(state, key, (current) => ({

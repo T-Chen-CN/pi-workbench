@@ -1,6 +1,7 @@
 /** 聊天图片附件的通用上限与校验；与渲染层、主进程保持一致 */
 
-export const MAX_CHAT_IMAGES = 20
+/** 单条消息的图片上限；渲染层 MAX_IMAGE_COUNT / MAX_ATTACHMENTS 同为 10 */
+export const MAX_CHAT_IMAGES = 10
 export const MAX_IMAGE_BASE64_CHARS = Math.ceil((10 * 1024 * 1024 * 4) / 3)
 export const MAX_TOTAL_IMAGE_BASE64_CHARS = 48 * 1024 * 1024
 export const CHAT_IMAGE_MIME = /^image\/(png|jpe?g|webp|gif)$/i

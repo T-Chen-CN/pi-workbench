@@ -51,7 +51,8 @@ describe('preferredEncodings', () => {
 
 describe('image limits', () => {
   it('keeps a generous but bounded budget', () => {
-    expect(MAX_IMAGE_COUNT).toBe(20)
+    // 与文件附件共用同一条消息的 10 个附件上限
+    expect(MAX_IMAGE_COUNT).toBe(10)
     expect(MAX_IMAGE_OUTPUT_BYTES).toBe(10 * 1024 * 1024)
     expect(MAX_IMAGE_BASE64_CHARS).toBeGreaterThan(MAX_IMAGE_OUTPUT_BYTES)
     expect(MAX_TOTAL_IMAGE_BASE64_CHARS).toBe(48 * 1024 * 1024)

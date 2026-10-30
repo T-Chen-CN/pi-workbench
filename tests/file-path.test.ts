@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { looksLikePath, splitPathLine } from '../src/utils/filePath'
+import { isPathInside, looksLikePath, splitPathLine } from '../src/utils/filePath'
 
 describe('looksLikePath', () => {
   it('accepts relative and absolute file paths with optional line numbers', () => {
@@ -22,5 +22,25 @@ describe('splitPathLine', () => {
   it('splits the line suffix', () => {
     expect(splitPathLine('src/a.ts:42')).toEqual({ path: 'src/a.ts', line: 42 })
     expect(splitPathLine('src/a.ts')).toEqual({ path: 'src/a.ts', line: null })
+  })
+})
+
+describe('isPathInside', () => {
+  it('accepts nested paths and the root itself', () => {
+    expect(isPathInside('/ws', '/ws/a/b.ts')).toBe(true)
+    expect(isPathInside('/ws', '/ws')).toBe(true)
+    expect(isPathInside('/ws', '/ws/')).toBe(true)
+  })
+
+  it('rejects siblings, other roots and empty input', () => {
+    expect(isPathInside('/ws', '/ws2/a.ts')).toBe(false)
+    expect(isPathInside('/ws', '/other/a.ts')).toBe(false)
+    expect(isPathInside('', '/ws/a.ts')).toBe(false)
+  })
+
+  it('normalizes separators and ignores case on windows paths', () => {
+    expect(isPathInside('E:\\Projects\\App', 'e:/projects/app/src/a.ts')).toBe(true)
+    expect(isPathInside('E:\\Projects\\App', 'D:\\Projects\\App\\a.ts')).toBe(false)
+    expect(isPathInside('\\\\server\\share', '\\\\SERVER\\share\\a.txt')).toBe(true)
   })
 })
