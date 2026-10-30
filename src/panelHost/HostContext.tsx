@@ -8,6 +8,7 @@
 
 import React, { createContext, useContext, useEffect } from 'react'
 import { usePanelStore } from '../store/panelStore'
+import { isWindowClosed } from './auxWindow'
 import { MAIN_HOST } from './types'
 import type { HostId } from './types'
 
@@ -26,13 +27,16 @@ export function useHostId(): HostId {
 export function useHostWindow(): Window {
   const host = useHostId()
   const win = usePanelStore((state) => (host === MAIN_HOST ? null : state.windows[host]?.handle?.window ?? null))
-  return win ?? window
+  // 关窗到 IPC 抵达之间不足一帧，但 store 里那条句柄还在：
+  // 已关闭的 WindowProxy 上 `document` 可能取不到，必须在读之前就回落。
+  if (isWindowClosed(win)) return window
+  return win as Window
 }
 
 /** 宿主窗口的 document；辅助窗口已关闭时回落到主文档 */
 export function useHostDocument(): Document {
   const win = useHostWindow()
-  return win.document
+  return win.document ?? document
 }
 
 /**

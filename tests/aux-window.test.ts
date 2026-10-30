@@ -178,6 +178,8 @@ interface FakeChild {
   maximized: boolean
   minimized: boolean
   closed: boolean
+  destroyed: boolean
+  webContentsId: number
   webContents: Record<string, unknown>
   setMenu: (menu: unknown) => void
   setMenuBarVisibility: (visible: boolean) => void
@@ -221,6 +223,19 @@ function createHost() {
     open: (details: { url: string; frameName: string; features: string }) =>
       openHandler?.(details) ?? { action: 'missing' },
     createWindow: (frameName: string) => {
+      let webContentsReadable = true
+      const contents: Record<string, unknown> = {
+        id: 900 + children.length,
+        setWindowOpenHandler: (handler: typeof openHandler) => {
+          child.openHandler = handler as never
+        },
+        on: (event: string, handler: (payload: unknown, url: string) => void) => {
+          if (event === 'will-navigate') {
+            child.navigations.push('registered')
+            ;(child as unknown as { navigate: typeof handler }).navigate = handler
+          }
+        }
+      }
       const child: FakeChild = {
         menuOverridden: false,
         openHandler: null,
@@ -231,7 +246,15 @@ function createHost() {
         maximized: false,
         minimized: false,
         closed: false,
-        isDestroyed: () => false,
+        destroyed: false,
+        webContentsId: contents.id as number,
+        // 与真实 Electron 一致：窗口销毁后读 `webContents` 抛 `Object has been destroyed`。
+        // 这正是 `closed` 回调里最容易踩的坑。
+        get webContents() {
+          if (!webContentsReadable) throw new Error('Object has been destroyed')
+          return contents
+        },
+        isDestroyed: () => child.destroyed,
         maximize: () => {
           child.maximized = true
           child.maximizeHandler?.()
@@ -246,18 +269,10 @@ function createHost() {
         isMaximized: () => child.maximized,
         close: () => {
           child.closed = true
+          child.destroyed = true
+          // 先销毁再回调：真实 Electron 的 `closed` 就是跑在窗口销毁之后的
+          webContentsReadable = false
           child.closedHandler?.()
-        },
-        webContents: {
-          setWindowOpenHandler: (handler: typeof openHandler) => {
-            child.openHandler = handler as never
-          },
-          on: (event: string, handler: (payload: unknown, url: string) => void) => {
-            if (event === 'will-navigate') {
-              child.navigations.push('registered')
-              ;(child as unknown as { navigate: typeof handler }).navigate = handler
-            }
-          }
         },
         setMenu: () => {
           child.menuOverridden = true
@@ -330,6 +345,21 @@ describe('installAuxWindowSupport', () => {
 
     child.closedHandler?.()
     expect(onClosed).toHaveBeenCalledWith(`${AUX_FRAME_PREFIX}aux:3`)
+  })
+
+  it('still docks the panel back when the window is already destroyed', () => {
+    // 回归：`closed` 回调里读 `child.webContents` 会抛 `Object has been destroyed`，
+    // 一旦抛在 onClosed 之前，主窗口永远收不到 `aux:window-closed`，面板就再也回不来
+    const onClosed = vi.fn()
+    const host = createHost()
+    installAuxWindowSupport(host as never, { onClosed })
+    const frameName = `${AUX_FRAME_PREFIX}aux:9`
+    host.open({ url: 'about:blank', frameName, features: '' })
+    const child = host.createWindow(frameName)
+
+    expect(() => child.close()).not.toThrow()
+    expect(onClosed).toHaveBeenCalledWith(frameName)
+    expect(getAuxWindow(frameName)).toBeNull()
   })
 
   it('registers the child window so panel chrome commands address it', () => {

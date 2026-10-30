@@ -168,6 +168,35 @@ describe('PanelSlot', () => {
     expect(screen.getByTestId('chat-body')).toBeTruthy()
     expect(usePanelStore.getState().panelHost[WORKSPACE]?.chat).toBeUndefined()
   })
+
+  it('docks the panel back when the user closed the window directly', async () => {
+    const popup = createFakePopup()
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
+    const handle: AuxWindowHandle = await openPanelWindow({
+      id: 'aux:1',
+      title: 'chat',
+      rect: { x: 0, y: 0, width: 480, height: 600 }
+    })
+
+    act(() => {
+      usePanelStore.setState({
+        panelHost: { [WORKSPACE]: { chat: 'aux:1' } },
+        windows: { 'aux:1': { workspaceDir: WORKSPACE, panel: 'chat', handle } }
+      })
+    })
+    renderSlot(<div data-testid="chat-body">chat</div>)
+
+    // 用户点了窗口 X：文档已随窗口销毁，回收时不能再碰 container
+    const remove = vi.spyOn(handle.container, 'remove')
+    popup.closed = true
+    act(() => {
+      usePanelStore.getState().handleWindowClosed('aux:1')
+    })
+
+    expect(remove).not.toHaveBeenCalled()
+    expect(screen.getByTestId('chat-body')).toBeTruthy()
+    expect(usePanelStore.getState().panelHost[WORKSPACE]?.chat).toBeUndefined()
+  })
 })
 
 describe('panelStore.dockPanel', () => {

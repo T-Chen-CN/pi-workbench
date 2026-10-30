@@ -12,15 +12,19 @@ export function configureIpcWindow(getter: () => BrowserWindow | null): void {
 /**
  * 拆出的面板窗口同样要能用 IPC（链接、剪贴板、会话）。
  * 它们由主窗口 window.open('about:blank') 创建，与主窗口同源；窗口销毁时移除。
+ *
+ * 接口收的是 webContents **id**，不是 webContents 对象：窗口 destroyed 之后读
+ * `win.webContents` 会抛 `Object has been destroyed`，而 `closed` 回调正是那个时刻，
+ * 调用方只能带着创建时取好的数字过来（见 electron/aux-window.ts）。
  */
 const trustedAuxSenders = new Set<number>()
 
-export function trustIpcSender(contents: { id: number }): void {
-  trustedAuxSenders.add(contents.id)
+export function trustIpcSender(webContentsId: number): void {
+  trustedAuxSenders.add(webContentsId)
 }
 
-export function untrustIpcSender(contents: { id: number }): void {
-  trustedAuxSenders.delete(contents.id)
+export function untrustIpcSender(webContentsId: number): void {
+  trustedAuxSenders.delete(webContentsId)
 }
 
 /** 只接受主窗口主框架（或已登记的辅助窗口）发来的 IPC；应用 ready 之后 fail-closed */

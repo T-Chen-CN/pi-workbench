@@ -278,9 +278,13 @@ export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowS
 
   host.webContents.on('did-create-window', (child, details) => {
     const frameName = details.frameName
+    // 窗口销毁后读 `child.webContents`（以及它上面的 id）都会抛
+    // `Object has been destroyed`，而下面的 `closed` 回调正好跑在销毁之后。
+    // 所以 id 必须在窗口活着时取好，之后只带数字走动。
+    const senderId = child.webContents.id
     auxWindows.set(frameName, child)
     // 拆出的面板与主窗口同源，需要继续用 IPC（链接、剪贴板、会话），因此加入可信发送者
-    trustIpcSender(child.webContents)
+    trustIpcSender(senderId)
     try {
       // 不给子窗口单独设菜单：BrowserWindow 会自动继承应用菜单（Windows / Linux 上是
       // 该窗口的菜单栏），Ctrl +/-/0、Ctrl+W 等默认快捷键依附在这份菜单上。
@@ -307,7 +311,8 @@ export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowS
     })
     child.on('closed', () => {
       auxWindows.delete(frameName)
-      untrustIpcSender(child.webContents)
+      // 只碰创建时记下的 id：此时 child.webContents 已不可读（见上方注释）
+      untrustIpcSender(senderId)
       if (!host.isDestroyed()) options.onClosed(frameName)
     })
   })

@@ -22,7 +22,8 @@
 | 面板宽度 / 宿主归 `panelStore`（运行期，不落盘） | 重启回默认布局，与"退出不自动恢复工作区"一致 |
 | 终端 PTY 归 `terminalStore` | 拆窗只重建 xterm 视图，PTY 与尾部缓冲不能重建 |
 
-- 关闭辅助窗口 = 面板回位；主窗口侧不提供"定位 / 还原"入口。
+- 关闭辅助窗口 = 面板回位；主窗口侧不提供"定位 / 还原"入口。回位靠主进程 `closed` 事件回传 `aux:window-closed`，所以**该回调里的任何异常都会让面板回不去**：窗口销毁后读 `child.webContents` 会抛 `Object has been destroyed`，webContents id 必须在 `did-create-window` 时取成数字存着（`closed` 里只带数字）。
+- 渲染层回收分两种：主动还原（`dockPanel` / 退出）拆容器 + 关窗；用户直接点 X 时文档已随窗口销毁，`dispose()` 只停主题镜像、不碰 DOM（`isWindowClosed()` 判）。`useHostWindow()` 同样在窗口已关闭时回退主窗口，避免读到空 `document`。
 - 最小尺寸 320 × 220；外壳与主窗口一致（Windows / Linux 无边框自绘按钮，macOS `hiddenInset`）。
 - 频道：`aux:drag-begin`（拖动起点）、`aux:detach-at`（拖出落点）、`aux:window-command`、`aux:window-state`。起点与落点都由主进程用 `screen.getCursorScreenPoint()` 取，混合 DPI 下不失真；渲染层不自己算坐标。
 - 拆出判据：光标离开窗口 **或** 拖动距离 ≥ 96 DIP（`PANEL_DETACH_DISTANCE`，与面板头同宽量级）——短促误拖不会拆窗。

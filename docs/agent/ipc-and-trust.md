@@ -31,7 +31,7 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
 
 校验失败返回 `{ success: false, error: 'Untrusted IPC sender' }`（**fail-closed**，不是放行也不是抛错）。
 
-**面板辅助窗口是登记的例外**：拆出的 `BrowserWindow` 由 `window.open('about:blank')` 创建、加载同一段 preload，`electron/aux-window.ts` 在窗口创建时 `trustIpcSender(webContents)` 登记、销毁时 `untrustIpcSender` 移除，因此拆出的面板可以直接调 IPC（复制、外链、会话、工作树 chip 等都照旧可用）。登记表只存 WebContents id，不扩大文件写入权限；子框架仍然被拒（见上面最后一行）。细节见 [panels-and-windows](panels-and-windows.md)。
+**面板辅助窗口是登记的例外**：拆出的 `BrowserWindow` 由 `window.open('about:blank')` 创建、加载同一段 preload，`electron/aux-window.ts` 在窗口创建时 `trustIpcSender(webContents.id)` 登记、销毁时 `untrustIpcSender(id)` 移除，因此拆出的面板可以直接调 IPC（复制、外链、会话、工作树 chip 等都照旧可用）。两个函数收的是 **id 数字**而不是 webContents 对象：窗口销毁后读 `win.webContents` 会抛 `Object has been destroyed`，而 `closed` 回调正跑在销毁之后。登记表只存 WebContents id，不扩大文件写入权限；子框架仍然被拒（见上面最后一行）。细节见 [panels-and-windows](panels-and-windows.md)。
 
 ## 2. 新增一个 IPC 的 4 步
 

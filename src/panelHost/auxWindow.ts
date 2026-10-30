@@ -29,6 +29,21 @@ export interface AuxWindowHandle {
   dispose: () => void
 }
 
+/**
+ * 窗口是否已关闭。
+ *
+ * 窗口销毁后 WindowProxy 上的大多数读取都不再可信（`document` 可能是 undefined），
+ * 但 `closed` 仍然可靠，且不会抛；保守起见仍包一层 try。
+ */
+export function isWindowClosed(win: Window | null | undefined): boolean {
+  if (!win) return true
+  try {
+    return win.closed
+  } catch {
+    return true
+  }
+}
+
 /** 子文档 CSP：只允许样式与字体，禁止任何脚本执行 */
 const AUX_CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
@@ -177,11 +192,15 @@ export async function openPanelWindow(options: {
     if (disposed) return
     disposed = true
     stopMirroring()
+    // 用户直接关窗（自绘 X / 系统关闭）时文档已随窗口销毁：
+    // 这时再去 remove 节点、再 close 一次只会碰到已销毁的 DOM，没有意义也不安全。
+    // 主动回收（面板还原）才需要真的拆掉容器并关窗。
+    if (isWindowClosed(win)) return
     container.remove()
     try {
       win.close()
     } catch {
-      // 窗口可能已由用户关闭
+      // 窗口可能刚被系统关掉：忽略
     }
   }
 
