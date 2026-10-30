@@ -9,6 +9,8 @@ import {
   Image as ImageIcon,
   Loader2,
   Music,
+  Presentation,
+  Table2,
 } from 'lucide-react'
 import { useEditorStore, editorStoreFor } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
@@ -32,6 +34,15 @@ function iconFor(file: OpenFile) {
       return Music
     case 'pdf':
       return FileText
+    case 'word':
+    case 'epub':
+      return FileText
+    case 'sheet':
+      return Table2
+    case 'slide':
+      return Presentation
+    case 'office-legacy':
+      return FileIcon
     case 'binary':
       return FileIcon
     default:

@@ -44,7 +44,7 @@
 | R-16 | ✅ 子 Agent 活动视图 | P3 | AF-17 剩余 | 工具轨迹、嵌套调用 |
 | R-19 | ✅ 重试倒计时实时化 | P3 | AF-11 剩余 | 重试事件 |
 | R-21 | ✅ 任意位置 / 任意格式文件附件（只给路径） | P1 | 使用反馈 | 原生文件选择、`buildContextPrompt` |
-| R-22 | ⛔ PDF / Office 内容抽取 | P2 | R-21 后续 | pdf.js、Office 解析（需新依赖或自写 ZIP+XML） |
+| R-22 | ✅ PDF / Office 可读：Agent 读取 + 程序内只读预览 | P2 | R-21 后续 | 自写 ZIP+XML、pdf.js legacy、渲染进程画扫描页 |
 | R-20 | ✅ 工具结果全量查看器 | P2 | B-01 升级 | 会话 sidecar、工具结果存储 |
 | V-01 | macOS 手动验收 | 发布前 | 平台差异 | dmg 构建 |
 | V-02 | Linux 手动验收 | 发布前 | 平台差异 | AppImage 构建 |
@@ -189,11 +189,21 @@
 - **完成情况**：新增 `electron/ipc/attachments.ts`（`attachment:pick`）与 preload / 类型 / `src/api`（含 Web mock）；`ChatAttachment` 补 `size` / `mime` / `mtime` / `external`；`buildContextPrompt` 改成分开渲染「文件（不内联）」与「引用片段（内联）」两类条目；附件菜单首行新增「选择本机文件…」；chip 增加「工作区外」标记与大小提示；`MAX_ATTACHMENTS = 10`，`MAX_IMAGE_COUNT` / `MAX_CHAT_IMAGES` 20 → 10；纯附件（无文本）消息允许发送；`@` 选中的路径改用会话工作树根拼接（原先用工作区根，工作树会话会指错）。
 - **验证**：`type-check` / `npm run lint` / `npm test`（109 文件 1095 用例）/ `npm run build:bridge` 通过；改写 `tests/chat-context.test.ts`（路径不内联、外区标记、引用仍内联）。真实文件选择与 Agent 读取留待界面手动确认。
 
-### R-22 PDF / Office 内容抽取 ⛔ 本轮未做（2026-10-30 定界）
+### R-22 PDF / Office 可读 ✅（2026-10-30）
 
-- 现状：R-21 后 PDF / Office 可以附加并如实告知路径，但模型看不见内容；扫描件 PDF（无文字层，如 `Microsoft: Print To PDF` 导出的图册）即使能抽取也是空字符串。
-- 可选路线：（a）零依赖自写 ZIP + XML 解析 docx/pptx/xlsx（约 100 行，`zlib.inflateRawSync`）；（b）加 `jszip` 依赖；（c）`mammoth` + `xlsx`（最稳，但需先在 AGENTS.md「Ask first」确认新依赖）。扫描件只能渲染首页 N 页为 PNG 走视觉通道（占附件名额），无视觉能力时给明确错误。
-- 为什么暂缓：用户优先要「什么文件都能发」，而抽取是可选增强；先保证路径链路跑通，再按真实使用频率补抽取。
+- 现状（R-21 之后）：PDF / Office 可以附加并如实告知路径，但模型看不见内容；扫描件 PDF（无文本层，如 `Microsoft: Print To PDF` 导出的图册）即使能抽取也是空字符串。
+- 用户定界：**外部成熟方案优先但组件数最少**；扫描件**渲染成图片走视觉通道**（不引 OCR）；**不做 Office 编辑**，先让 Agent 读、再做预览；**旧格式（`.doc` `.xls` `.ppt`）不支持**，检测到就提示另存为；**不改上游 SDK**（不推 `document` 内容块）；**只保留一个 `read` 工具**。
+- 方案：给内置 `read` 做**同名覆盖**（`pi-bridge/src/read-with-documents.ts`），参数补 `pages` / `sheet` / `slide`；工具表里仍只有一个 `read`，`READ_ONLY_TOOLS` 不变。真行业实践（Gemini CLI、Claude Code、MarkItDown MCP）也是「一个 read + 参数」。
+- 解析链（零新依赖，`electron/documents/`）：`zip.ts`（`node:zlib` 手写中央目录）→ `xml.ts`（流式扫描，不建 DOM）→ `ooxml.ts`（docx / xlsx / pptx / odt / epub）与 `pdf.ts`（`pdfjs-dist` legacy build）。`detect.ts` **按魔数**分流，扩展名不作数（`.pdf` 里是文本 → 交回内置 read；`.docx` 里是 OLE → 旧格式指引）。
+- 扫描页：主进程 `render-bridge.ts` 把字节（`Uint8Array`，非 base64）经 `documents:render-request` 下发给渲染进程，渲染进程用现成 pdf.js 画成 PNG（>3MB 退 JPEG），回 `documents:render-result`。无窗口 / 超时 60s / >64MB / 单页失败 → 降级为一句文字说明，**不阻断轮次**。
+- 预览（Phase B）：`electron/documents/preview.ts` 产出结构化模型（`word` / `sheet` / `slide` / `epub` / `legacy` / `error`），`documents:preview` 走与 `fs:readFile` 同一个 `resolveAllowedFileTarget()`；`OfficeDocumentView` 只负责画，**渲染层拿不到路径读能力**。`documents:extract` 故意不做 IPC。
+- 被否方案：`officeparser`（+69MB 重复 pdfjs）、`superdoc` / OnlyOffice（AGPL）、`Univer`（付费 file IO）、SheetJS（CVE-2023-30533）、`tesseract.js`（不做 OCR）、`@napi-rs/canvas`（38MB）、`mammoth`、`docx-preview`（自带字体与白纸背景与主题打架）、LibreOffice（禁子进程 / 未安装）。
+- **验证**：`type-check` / `npm run lint` / `npm test`（118 文件 1177 用例）/ `npm run build` 通过；新增 `documents-{zip,ooxml,pdf,detect,extract,preview}`、`read-with-documents`、`documents-agent-read`、`office-document-view` 与 `file-kind` 扩展用例；测试夹具运行时生成 ZIP / PDF 字节，仓库不放二进制样本。真实 docx / xlsx / pptx / 文字版 PDF / 扫描件 PDF / `.doc` / `.epub` 的界面验收待手动确认。
+- 设计取舍与备选评估留在 `docs/reports/research-document-reading-2026-10-30.md` 与 `docs/reports/design-office-documents-2026-10-30.md`。
+
+### R-22 原始定界（已过时，保留备查）⛔ 本轮未做（2026-10-30）
+
+（当时的备选路线已在上节「被否方案」里逐条记录，不再重复。）
 
 ---
 

@@ -5,7 +5,7 @@ import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
-import { hasReadingView, supportsSourceView } from '../utils/fileKind'
+import { hasReadingView, isOfficeDocumentKind, supportsSourceView } from '../utils/fileKind'
 import { useFileDocument } from '../workspace/useFileDocument'
 import { Button, EmptyState, OverlayButton, Spinner } from './ui'
 import { EditorTabs } from './EditorTabs'
@@ -13,6 +13,7 @@ import { MarkdownReadingView } from './MarkdownReadingView'
 import { HtmlPreview } from './HtmlPreview'
 import { MediaView } from './MediaView'
 import { PdfReadingView } from './PdfReadingView'
+import { OfficeDocumentView } from './OfficeDocumentView'
 
 // Monaco 体积大：只在真正需要源码视图时加载
 const MonacoEditor = lazy(() =>
@@ -175,6 +176,10 @@ export const FileView: React.FC<FileViewProps> = ({
             <MediaView file={currentFile} />
           ) : null}
           {fileKind === 'pdf' && <PdfReadingView file={currentFile} />}
+          {/* Office / EPUB：主进程解析成结构化模型，这里只负责画 */}
+          {fileKind && isOfficeDocumentKind(fileKind) && (
+            <OfficeDocumentView file={currentFile} />
+          )}
           {fileKind === 'binary' && (
             <UnsupportedFileView path={currentFile.path} name={currentFile.name} />
           )}

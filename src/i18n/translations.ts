@@ -194,6 +194,14 @@ export const translations = {
     zoomOut: '缩小',
     fitWidth: '适应宽度',
     pdfLoadFailed: '无法渲染此 PDF：文件可能已损坏或需要密码。',
+    documentReadOnly: '只读预览',
+    documentSlideLabel: '第 {index} 页',
+    documentSlideTextCount: '{count} 行文字',
+    documentSlideEmpty: '这一页只有图形，没有可提取的文字。',
+    documentSheetEmpty: '这个工作表是空的。',
+    documentSheetTruncated: '预览只显示前 300 行 / 60 列，完整数据请用系统程序打开。',
+    documentSheetMerged: '含 {count} 个合并单元格区域，预览按原值展开。',
+    documentPreviewTruncated: '文档较长，预览只显示前面部分。',
 
     // Chat Panel
     piAgent: 'Pi Agent',
@@ -946,6 +954,14 @@ export const translations = {
     zoomOut: 'Zoom out',
     fitWidth: 'Fit width',
     pdfLoadFailed: 'Cannot render this PDF: the file may be corrupt or password protected.',
+    documentReadOnly: 'Read-only preview',
+    documentSlideLabel: 'Slide {index}',
+    documentSlideTextCount: '{count} lines',
+    documentSlideEmpty: 'This slide only contains shapes — no extractable text.',
+    documentSheetEmpty: 'This worksheet is empty.',
+    documentSheetTruncated: 'Preview shows the first 300 rows / 60 columns. Open in the system app for the full sheet.',
+    documentSheetMerged: 'Contains {count} merged ranges, expanded to their values here.',
+    documentPreviewTruncated: 'Long document — only the beginning is shown.',
 
     // Chat Panel
     piAgent: 'Pi Agent',

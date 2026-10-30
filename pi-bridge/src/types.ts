@@ -5,6 +5,7 @@ import type {
   ApprovalRequestPayload,
 } from './approval-policy.js'
 import type { StructuredPlan } from './plan.js'
+import type { DocumentReadHook } from './read-with-documents.js'
 
 export interface AgentLogger {
   info: (...args: unknown[]) => void
@@ -140,6 +141,11 @@ export interface AgentConfig {
   requestApproval?: (request: ApprovalRequestPayload) => Promise<ApprovalDecision>
   /** 会话当前绑定的工作树根；未提供时使用 workspaceDir */
   resolveSessionRoot?: (sessionId: string) => string | undefined
+  /**
+   * 文档内容抽取（主进程实现）。`read` 工具遇到 pdf / docx / xlsx / pptx 等
+   * 扩展名时回调它；返回 `null` 表示不是文档，交回内置 read 按文本处理。
+   */
+  readDocument?: DocumentReadHook
   /** 会话是否属于当前工作区（用于 listAll 结果过滤） */
   isSessionOfWorkspace?: (sessionId: string, headerCwd: string) => boolean
   /** 内置联网扩展（pi-web-access）的加载路径；缺省表示不加载 */

@@ -14,6 +14,11 @@ export type FileKind =
   | 'video'
   | 'audio'
   | 'pdf'
+  | 'word'
+  | 'sheet'
+  | 'slide'
+  | 'epub'
+  | 'office-legacy'
   | 'binary'
 
 /** 阅读视图（渲染结果）与源码视图（Monaco） */
@@ -39,6 +44,39 @@ const IMAGE_EXTENSIONS = new Set([
 const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'ogv', 'ogg', 'm4v', 'mov'])
 const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'flac', 'm4a', 'aac', 'opus', 'oga'])
 const PDF_EXTENSIONS = new Set(['pdf'])
+/** Word 家族：docx / docm / dotx / dotm / odt / ott */
+const WORD_EXTENSIONS = new Set(['docx', 'docm', 'dotx', 'dotm', 'odt', 'ott'])
+/** 表格家族：xlsx / xlsm / xltx / xltm / ods / ots */
+const SHEET_EXTENSIONS = new Set(['xlsx', 'xlsm', 'xltx', 'xltm', 'ods', 'ots'])
+/** 演示文稿家族：pptx / pptm / potx / potm / ppsx / ppsm / odp / otp */
+const SLIDE_EXTENSIONS = new Set([
+  'pptx',
+  'pptm',
+  'potx',
+  'potm',
+  'ppsx',
+  'ppsm',
+  'odp',
+  'otp',
+])
+const EPUB_EXTENSIONS = new Set(['epub'])
+/**
+ * 旧二进制 Office 格式（OLE 容器）：读不了，只能提示用户另存为，
+ * 所以单独一个类型，直接给出带「另存为」指路的卡片。
+ */
+const LEGACY_OFFICE_EXTENSIONS = new Set([
+  'doc',
+  'dot',
+  'xls',
+  'xlt',
+  'xla',
+  'ppt',
+  'pot',
+  'pps',
+  'wps',
+  'et',
+  'dps',
+])
 
 function extensionOf(targetPath: string): string {
   const name = targetPath.replace(/\\/g, '/').split('/').pop() ?? targetPath
@@ -56,12 +94,17 @@ export function detectFileKind(targetPath: string): FileKind {
   if (VIDEO_EXTENSIONS.has(extension)) return 'video'
   if (AUDIO_EXTENSIONS.has(extension)) return 'audio'
   if (PDF_EXTENSIONS.has(extension)) return 'pdf'
+  if (WORD_EXTENSIONS.has(extension)) return 'word'
+  if (SHEET_EXTENSIONS.has(extension)) return 'sheet'
+  if (SLIDE_EXTENSIONS.has(extension)) return 'slide'
+  if (EPUB_EXTENSIONS.has(extension)) return 'epub'
+  if (LEGACY_OFFICE_EXTENSIONS.has(extension)) return 'office-legacy'
   return 'text'
 }
 
-/** 默认视图：Markdown / HTML 直接可读，其余进源码 */
+/** 默认视图：Markdown / HTML / 文档类直接可读（文档类只有预览，没有源码），其余进源码 */
 export function defaultViewFor(kind: FileKind): FileViewMode {
-  return kind === 'markdown' || kind === 'html' ? 'reading' : 'source'
+  return kind === 'markdown' || kind === 'html' || isOfficeDocumentKind(kind) ? 'reading' : 'source'
 }
 
 /** 是否有独立的阅读视图（只有 Markdown / HTML 渲染成排版结果） */
@@ -77,6 +120,17 @@ export function supportsSourceView(kind: FileKind): boolean {
 /** 由 `pw-file://` 协议直接渲染的类型，不读入文本 */
 export function isStreamedKind(kind: FileKind): boolean {
   return kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'pdf'
+}
+
+/** 需要主进程解析成结构化预览的文档类型（PDF 走 `pw-file://` + pdf.js，不在此列） */
+export function isOfficeDocumentKind(kind: FileKind): boolean {
+  return (
+    kind === 'word' ||
+    kind === 'sheet' ||
+    kind === 'slide' ||
+    kind === 'epub' ||
+    kind === 'office-legacy'
+  )
 }
 
 /** 是否允许编辑（媒体与未知二进制只读） */

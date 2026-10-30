@@ -233,6 +233,15 @@ export interface ElectronAPI {
   unwatchWorkspace: (workspacePath?: string) => Promise<WorkspaceResult>
   onFsChanged: (callback: (payload: { type: string; path: string }) => void) => () => void
 
+  /** 主进程请求渲染 PDF 扫描页（只有渲染层有 canvas 与 pdf.js） */
+  onDocumentRenderRequest: (
+    callback: (payload: DocumentRenderRequestPayload) => void
+  ) => () => void
+  /** 文档只读预览模型（docx / xlsx / pptx / epub / odf） */
+  documentsPreview: (path: string) => Promise<DocumentPreviewResult>
+  /** 渲染层回传 PNG 或错误 */
+  documentRenderResult: (payload: DocumentRenderResultPayload) => Promise<{ success: boolean }>
+
   // App configuration (portable architecture)
   getAppDir: () => Promise<GetAppDirResult>
   logRenderer: (level: string, args: unknown[]) => Promise<{ success: boolean }>
@@ -664,6 +673,62 @@ export interface AttachmentPickResult {
   success: boolean
   canceled: boolean
   files: PickedAttachment[]
+  error?: string
+}
+
+/** 扫描页渲染请求：字节由主进程给，渲染层不需要文件访问能力 */
+export interface DocumentRenderRequestPayload {
+  id: string
+  name: string
+  bytes: Uint8Array
+  pages: number[]
+  scale: number
+}
+
+export interface DocumentRenderResultPayload {
+  id: string
+  images?: { data: string; mimeType: string }[]
+  error?: string
+}
+
+/** 程序内只读预览的数据模型（主进程 `electron/documents/preview.ts` 产出） */
+export type DocumentPreviewBlock =
+  | { type: 'heading'; level: number; text: string }
+  | { type: 'paragraph'; text: string }
+  | { type: 'bullet'; text: string }
+  | { type: 'table'; rows: string[][] }
+
+export interface DocumentPreviewSheet {
+  name: string
+  rows: string[][]
+  dimension?: string
+  merges: string[]
+  truncated: boolean
+}
+
+export interface DocumentPreviewSlide {
+  index: number
+  lines: string[]
+  images: { name: string; dataUrl: string }[]
+}
+
+export interface DocumentPreviewChapter {
+  label: string
+  lines: string[]
+}
+
+export type DocumentPreview =
+  | { kind: 'word'; format: string; blocks: DocumentPreviewBlock[]; truncated: boolean }
+  | { kind: 'sheet'; format: string; sheets: DocumentPreviewSheet[] }
+  | { kind: 'slide'; format: string; slides: DocumentPreviewSlide[] }
+  | { kind: 'epub'; format: string; chapters: DocumentPreviewChapter[] }
+  | { kind: 'pdf'; format: 'pdf' }
+  | { kind: 'legacy'; format: 'legacy-office'; message: string }
+  | { kind: 'error'; message: string }
+
+export interface DocumentPreviewResult {
+  success: boolean
+  preview?: DocumentPreview
   error?: string
 }
 

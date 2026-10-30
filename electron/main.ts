@@ -34,6 +34,7 @@ import { registerAttachmentsIpc } from './ipc/attachments.js'
 import { registerFileProtocol } from './file-protocol.js'
 import { registerSchemePrivileges } from './scheme-privileges.js'
 import { registerAgentIpc } from './ipc/agent.js'
+import { registerDocumentsIpc } from './ipc/documents.js'
 import { registerGitIpc } from './ipc/git.js'
 import { repoSync } from './repo-sync.js'
 import { registerWorkspaceIpc, closeAllWorkspaceWatchers } from './ipc/workspace.js'
@@ -574,6 +575,8 @@ registerAttachmentsIpc({
   getMainWindow: () => mainWindow,
   getLanguage: () => ((getAppSettingsCache().language ?? 'zh') === 'en' ? 'en' : 'zh')
 })
+
+registerDocumentsIpc()
 
 registerWorkspaceIpc({
   getMainWindow: () => mainWindow,

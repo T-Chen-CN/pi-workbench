@@ -16,6 +16,8 @@ import {
   PanelLeftClose,
   Pencil,
   Plus,
+  Presentation,
+  Table2,
   Trash2
 } from 'lucide-react'
 import { api } from '../api'
@@ -109,7 +111,9 @@ function fileIconFor(name: string) {
   if (kind === 'video') return Film
   if (kind === 'audio') return Music
   if (kind === 'html') return Globe
-  if (kind === 'markdown' || kind === 'pdf') return FileText
+  if (kind === 'sheet') return Table2
+  if (kind === 'slide') return Presentation
+  if (kind === 'markdown' || kind === 'word' || kind === 'epub' || kind === 'pdf') return FileText
   if (/\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|rb|css)$/i.test(name)) return FileCode
   if (/\.json$/i.test(name)) return FileJson
   return FileIcon

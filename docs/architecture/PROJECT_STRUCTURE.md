@@ -32,7 +32,17 @@ pi-workbench/
 │   ├── preload.cts               # contextBridge（编译为 CommonJS preload.cjs）
 │   ├── app-paths.ts              # 便携式应用目录
 │   ├── workspace-trust.ts        # 工作区信任与路径包含
-│   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / files / git / settings / system / web-search* / workspace）
+│   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / documents / files / git / settings / system / web-search* / workspace）
+│   ├── documents/                # 文档解析（零依赖）：zip / xml / ooxml / pdf / detect / preview / render-bridge
+│   │   ├── zip.ts                # node:zlib 手写 ZIP 中央目录（不引第三方）
+│   │   ├── xml.ts                # 流式 XML 扇描（不建 DOM）
+│   │   ├── ooxml.ts              # docx / xlsx / pptx / odt / epub 解析（同时出 Agent 文本与预览块）
+│   │   ├── pdf.ts                # pdfjs legacy build 取文本（不依赖 canvas）
+│   │   ├── detect.ts             # 按魔数判类型（不信扩展名）
+│   │   ├── extract.ts            # Agent 侧文本抽取（截断 / 扫描页收集）
+│   │   ├── agent-read.ts         # read 工具的文档分支（魔数分流 + 降级）
+│   │   ├── preview.ts            # 只读预览模型（工作表 / 幻灯片 / 章节 / 块）
+│   │   └── render-bridge.ts      # 扫描页渲染：主进程发字节，渲染进程回图片
 │   ├── agent-registry.ts         # 按工作区登记 Agent 实例
 │   ├── shutdown.ts               # 退出编排：分步超时清理 + 退出看门狗（强制 exit）
 │   ├── child-registry.ts         # 子进程登记与进程树回收（taskkill /T）
@@ -109,6 +119,7 @@ pi-workbench/
 │   │   ├── FileView.tsx          # 文件阅读视图路由（按类型分发）
 │   │   ├── MarkdownReadingView.tsx # Markdown 阅读视图（块级范围渲染）
 │   │   ├── PdfReadingView.tsx    # PDF 阅读（pdf.js）
+│   │   ├── OfficeDocumentView.tsx # Word / 表格 / 幻灯片 / EPUB 只读预览
 │   │   ├── MediaView.tsx         # 图片 / 二进制预览
 │   │   ├── HtmlPreview.tsx       # HTML 沙箱预览
 │   │   ├── GitView.tsx           # 只读 Git 视图（提交图 / 工作树更改）
@@ -152,6 +163,7 @@ pi-workbench/
 │   │   ├── index.ts              # IPC 封装 + Web dev mock
 │   │   ├── piAgentAPI.ts         # Agent 调用（Electron IPC / Web SSE 桥接）
 │   │   ├── chatContext.ts        # 上下文块拼装
+│   │   ├── documentRender.ts     # 扫描页渲染桥（渲染进程侧）
 │   │   ├── rendererLog.ts        # 渲染进程日志上报
 │   │   └── diff.ts               # 行级 Diff 算法
 │   ├── types/
@@ -176,6 +188,7 @@ pi-workbench/
 │   │   ├── session-export.ts     # Markdown / HTML / JSONL 导出
 │   │   ├── session-title.ts      # 首轮后生成会话标题
 │   │   ├── chat-images.ts        # 图片附件预处理
+│   │   ├── read-with-documents.ts # 同名覆盖 read：PDF / Office 走文档解析
 │   │   ├── tool-results.ts       # 按 toolCallId 读取工具结果
 │   │   ├── stall-watchdog.ts     # 无响应看门狗
 │   │   ├── async-utils.ts        # 超时与重试工具
@@ -264,6 +277,9 @@ ChatPanel.handleSubmit
 |---|---|---|
 | `dialog:openDirectory` | invoke | 选择工作区 |
 | `attachment:pick` | invoke | 选择聊天附件（任意路径 / 任意格式，只回传路径与元信息；图片额外回传 base64） |
+| `documents:preview` | invoke | 取 Office / EPUB 的只读预览模型（经 `resolveAllowedFileTarget` 校验） |
+| `documents:render-request` | main → renderer | 请求把扫描页字节画成图片（字节随事件下发，渲染层没有路径读能力） |
+| `documents:render-result` | invoke | 渲染进程回传图片或失败原因 |
 | `fs:readFile` / `writeFile` / `listDirectory` / `exists` / `stat` | invoke | 文件操作 |
 | `fs:delete` / `fs:rename` | invoke | 删除 / 重命名 |
 | `fs:watch` / `fs:unwatch` | invoke | 工作区递归监听 |

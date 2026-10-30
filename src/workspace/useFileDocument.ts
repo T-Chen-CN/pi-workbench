@@ -15,7 +15,7 @@ import { useSettingsStore } from '../store/settingsStore'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
-import { isEditableKind, isStreamedKind } from '../utils/fileKind'
+import { isEditableKind, isOfficeDocumentKind, isStreamedKind } from '../utils/fileKind'
 import { samePath } from '../utils/filePath'
 import { onAppEvent } from '../utils/appEvents'
 
@@ -239,8 +239,12 @@ export function useFileDocument({
         return
       }
 
-      // 媒体只刷新预览地址，不读文本
-      if (isStreamedKind(target.kind) || target.kind === 'binary') {
+      // 媒体只刷新预览地址，不读文本；Office 文档让预览按新字节重新解析
+      if (
+        isStreamedKind(target.kind) ||
+        isOfficeDocumentKind(target.kind) ||
+        target.kind === 'binary'
+      ) {
         store.getState().touchFile(target.path)
         return
       }

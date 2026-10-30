@@ -1,7 +1,7 @@
 import { api } from '../api'
 import { editorStoreFor } from '../store/editorStore'
 import { basename } from '../utils/filePath'
-import { detectFileKind, isStreamedKind } from '../utils/fileKind'
+import { detectFileKind, isOfficeDocumentKind, isStreamedKind } from '../utils/fileKind'
 
 /** 恢复时允许自动打开的最大文件，超过则跳过（Monaco 大文件模式仍会生效） */
 const MAX_RESTORE_BYTES = 10 * 1024 * 1024
@@ -96,9 +96,9 @@ export async function restoreEditorTabs(
         skipped++
         continue
       }
-      // 媒体与 PDF 只登记标签：内容由 pw-file:// 协议按需读取，不进 store
+      // 媒体、PDF 与 Office 文档只登记标签：内容由协议或预览 IPC 按需读取，不进 store
       const kind = detectFileKind(filePath)
-      if (isStreamedKind(kind)) {
+      if (isStreamedKind(kind) || isOfficeDocumentKind(kind)) {
         store.getState().addOpenFile({
           path: filePath,
           name: basename(filePath) || filePath,

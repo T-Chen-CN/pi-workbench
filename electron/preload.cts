@@ -443,5 +443,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 联网搜索（内置能力）
   webSearchGet: () => ipcRenderer.invoke('webSearch:get'),
-  webSearchSave: (config: any) => ipcRenderer.invoke('webSearch:save', config)
+  webSearchSave: (config: any) => ipcRenderer.invoke('webSearch:save', config),
+
+  // 文档扫描页渲染：主进程发请求，渲染层画完回传 PNG
+  documentsPreview: (path: string) => ipcRenderer.invoke('documents:preview', path),
+  onDocumentRenderRequest: (
+    callback: (payload: {
+      id: string
+      name: string
+      bytes: Uint8Array
+      pages: number[]
+      scale: number
+    }) => void
+  ) => {
+    const listener = (
+      _event: unknown,
+      payload: { id: string; name: string; bytes: Uint8Array; pages: number[]; scale: number }
+    ) => callback(payload)
+    ipcRenderer.on('documents:render-request', listener)
+    return () => ipcRenderer.removeListener('documents:render-request', listener)
+  },
+  documentRenderResult: (payload: {
+    id: string
+    images?: { data: string; mimeType: string }[]
+    error?: string
+  }) => ipcRenderer.invoke('documents:render-result', payload)
 })

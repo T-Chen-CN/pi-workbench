@@ -15,6 +15,7 @@ import {
   defaultViewFor,
   detectFileKind,
   isEditableKind,
+  isOfficeDocumentKind,
   isStreamedKind,
   type FileKind,
 } from '../utils/fileKind'
@@ -91,6 +92,20 @@ export async function openFileInEditor(
       content: '',
       isDirty: false,
       isSaving: false,
+    })
+    return { status: 'opened', kind }
+  }
+
+  // Office / EPUB：内容由主进程解析成预览模型，渲染层不读字节、也不确认大小
+  if (isOfficeDocumentKind(kind)) {
+    store.getState().addOpenFile({
+      path: targetPath,
+      name,
+      kind,
+      content: '',
+      isDirty: false,
+      isSaving: false,
+      view: 'reading',
     })
     return { status: 'opened', kind }
   }

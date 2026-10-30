@@ -22,6 +22,19 @@
 - 文件路径丢读不到时不会阻断发送：由 Agent 的 `read` 工具报错，错误原文进入工具结果并本地化展示。
 - 渲染层始终没有“传任意路径读内容”的能力：`fs:readFile` 仍只服务工作区与 `{appDir}/cache/`（见 [ipc-and-trust §5.1](ipc-and-trust.md)）。
 
+### 1.2 PDF / Office 文档的阅读（R-22）
+
+附件只交路径，但**文档类**文件光有路径对模型没用（二进制、PDF 流），所以对内置 `read` 做了一层**同名覆盖**，没有新增第二个工具：
+
+- 实现：`pi-bridge/src/read-with-documents.ts` 以 `read` 这个**同一个名字**注册，参数在原 `path` / `offset` / `limit` 之外补 `pages`（PDF 页码范围）、`sheet`（工作表名）、`slide`（幻灯片范围）。SDK 的同名工具会覆盖内置项，工具表里仍然只有一个 `read`，`READ_ONLY_TOOLS` 不受影响。
+- 分流依据是 `electron/documents/detect.ts` 的**魔数**而不是扩展名：`.pdf` 里其实是文本 → 交回内置 read；`.docx` 里其实是 OLE → 给旧格式指引。
+- 解析链在 `electron/documents/`（零依赖）：`zip.ts`（`node:zlib` 手写中央目录）→ `xml.ts`（流式扫描，不建 DOM）→ `ooxml.ts`（docx / xlsx / pptx / odt / epub）与 `pdf.ts`（`pdfjs-dist` legacy build 取文本）。
+- 扫描件（无文本层）→ 渲染成图片走视觉通道：主进程 `electron/documents/render-bridge.ts` 把字节发给渲染进程（`documents:render-request`），渲染进程用现成的 pdf.js 画成 PNG/JPEG 后回传（`documents:render-result`）。主进程没有 canvas，不在主进程引入原生 canvas 依赖。**不做 OCR**。
+- 失败一律降级不阻断轮次：无窗口 / 超时 60s / 文件 > 64MB / 单页渲染失败 → 工具结果里带一句中文说明，正文照常返回。
+- 旧格式（`.doc` `.xls` `.ppt` `.wps` …）不解析：OLE 魔数 → 中文提示让用户另存为 `.docx/.xlsx/.pptx`（`legacyOfficeMessage()`）。
+- 截断沿用内置约定：`DEFAULT_MAX_LINES = 2000` / 50KB，超出时提示用 `pages="1-20"` 之类继续读。
+- 设计取舍与备选方案见 [research-document-reading](../reports/research-document-reading-2026-10-30.md) 与 [design-office-documents](../reports/design-office-documents-2026-10-30.md)。
+
 ## 2. 权限模型（安全边界，改这里等于改安全策略）
 
 两级概念，**会话是权限的唯一权威**，全局只提供新会话的默认档（`DEFAULT_PERMISSION_LEVEL = 'ask'`）：

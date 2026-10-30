@@ -5,6 +5,7 @@ import {
   filePreviewUrl,
   hasReadingView,
   isEditableKind,
+  isOfficeDocumentKind,
   isStreamedKind,
   supportsSourceView,
 } from '../src/utils/fileKind'
@@ -27,6 +28,24 @@ describe('detectFileKind', () => {
     expect(detectFileKind('/ws/.gitignore')).toBe('text')
     expect(detectFileKind('/ws/archive.tar.gz')).toBe('text')
   })
+
+  it('classifies office documents by family', () => {
+    expect(detectFileKind('/ws/报告.docx')).toBe('word')
+    expect(detectFileKind('/ws/REPORT.DOCM')).toBe('word')
+    expect(detectFileKind('/ws/说明.odt')).toBe('word')
+    expect(detectFileKind('/ws/预算.xlsx')).toBe('sheet')
+    expect(detectFileKind('/ws/预算.ods')).toBe('sheet')
+    expect(detectFileKind('/ws/汇报.pptx')).toBe('slide')
+    expect(detectFileKind('/ws/汇报.odp')).toBe('slide')
+    expect(detectFileKind('/ws/book.epub')).toBe('epub')
+  })
+
+  it('keeps legacy OLE formats in their own kind so the UI can point at Save-As', () => {
+    expect(detectFileKind('/ws/旧报告.doc')).toBe('office-legacy')
+    expect(detectFileKind('/ws/旧表.XLS')).toBe('office-legacy')
+    expect(detectFileKind('/ws/旧稿.ppt')).toBe('office-legacy')
+    expect(detectFileKind('/ws/旧稿.wps')).toBe('office-legacy')
+  })
 })
 
 describe('view preferences', () => {
@@ -35,6 +54,9 @@ describe('view preferences', () => {
     expect(defaultViewFor('html')).toBe('reading')
     expect(defaultViewFor('text')).toBe('source')
     expect(defaultViewFor('image')).toBe('source')
+    for (const kind of ['word', 'sheet', 'slide', 'epub', 'office-legacy'] as const) {
+      expect(defaultViewFor(kind)).toBe('reading')
+    }
   })
 
   it('only offers a source toggle for text-like kinds', () => {
@@ -63,6 +85,18 @@ describe('view preferences', () => {
     expect(isStreamedKind('markdown')).toBe(false)
     // 二进制无法经协议渲染，需要占位视图
     expect(isStreamedKind('binary')).toBe(false)
+  })
+
+  it('keeps office documents out of the source view and editing', () => {
+    for (const kind of ['word', 'sheet', 'slide', 'epub', 'office-legacy'] as const) {
+      expect(supportsSourceView(kind)).toBe(false)
+      expect(hasReadingView(kind)).toBe(false)
+      expect(isEditableKind(kind)).toBe(false)
+      expect(isStreamedKind(kind)).toBe(false)
+      expect(isOfficeDocumentKind(kind)).toBe(true)
+    }
+    expect(isOfficeDocumentKind('pdf')).toBe(false)
+    expect(isOfficeDocumentKind('text')).toBe(false)
   })
 
   it('keeps media and binaries read-only', () => {

@@ -476,6 +476,8 @@
 | 图片（png/jpg/webp/svg…） | 预览 | 否 | `<img>` + 适应窗口 / 原始尺寸 |
 | 视频 / 音频 | 预览 | 否 | 原生播放器（支持拖动进度） |
 | PDF | 预览 | 否 | pdf.js 自绘阅读器 |
+| Word / 表格 / 幻灯片 / EPUB | 预览 | 否 | 主进程解析成结构化模型直出（`OfficeDocumentView`） |
+| 旧版 `.doc` / `.xls` / `.ppt` | 预览 | 否 | 另存为指引 + 系统打开 |
 | 纯文本 / 代码 / JSON | 源码 | — | Monaco |
 | 未知二进制 | 占位 | 否 | 空状态 + 系统打开 |
 
@@ -490,6 +492,18 @@
 - frontmatter 单独成块，等宽 11.5px、`ink-muted`、`bg-sunken` 底，不渲染成正文。
 - **块级就地编辑**：每个顶层块悬停 / 聚焦时右上角出现 `Pencil` 图标按钮（「编辑此块」）；点击后该块的**原文**（非渲染结果）替换为等宽 `Textarea`，下方一行「保存 / 取消 + 「Ctrl+Enter 保存」提示」。提交只替换该块偏移，文件其余字节不变；空文档显示一个虚线占位块（「开始编辑」）。
 - 键盘：`Ctrl/⌘+Enter` 保存，`Esc` 取消；切换文件自动退出编辑态。
+
+**Office / EPUB 预览（`OfficeDocumentView`）**
+
+文书类文件不做高保真排版（那是编辑器的活），只把主进程解析出的**结构化模型**排成可读页——用户看到的就是 Agent 读到的同一份结构。
+
+- 工具条与媒体 / PDF 一致（1px `rule-divide`，左侧文件名 `type-caption` / `ink-muted`，右侧 `重新加载` + `系统打开`），文件名旁固定一个 `只读预览` 的 `type-caption text-ink-subtle`，**不提供任何编辑入口**。
+- Word / ODT：内容区 `chat-markdown file-markdown mx-auto w-full max-w-[64rem] px-8 pt-6 pb-12`，与 Markdown 阅读视图同一套版心与排版（标题 / 段落 / 列表 / 表格 / 图片全部复用段落规则），因此 Paper / Ink 两套主题自动跟随。
+- 电子表格：自绘网格（不引表格组件）。表头与行号 `sticky`、`bg-panel`、`type-data`（mono 11.5）、`border-rule-hairline` 细格；单元格单行截断（`max-w-[320px] truncate`）加 `title` 悬浮看全；行 hover `bg-hover`。多工作表时工具条内给 `type-caption` 工作表切换（激活 `bg-hover text-ink`），不另起标签栏。
+- 幻灯片：按页成卡（`border-rule-hairline` + `bg-surface`，头部 `bg-panel` 一行 `第 N 页` / `M 行文字`），正文主行 `type-reading`、其余行 `type-body text-ink-muted`，页内图片 `max-h-64`，卡片间距 12px、底部 `pb-12`。
+- EPUB：章节连续排版（与 Word 同版心），章节标题 `type-label text-ink-subtle`。
+- 旧格式与解析失败的卡片：`warning` 图标 + `type-reading text-ink-muted` 说明 + `系统打开` 按钮，不用红色告警块；旧格式文案明确写「另存为 .docx / .xlsx / .pptx」，不是一句「不支持」。
+- 预览量有上限（300 行 / 60 列 / 4000 块 / 200 页），超出在底部给一行 `type-caption text-ink-subtle` 说明，不隐藏事实。
 
 **媒体与 HTML 工具条**：内容区上方一条 1px `rule-divide` 工具条，左侧文件名（`type-caption` / `ink-muted`），右侧图标按钮组，不做整块标题栏。
 
@@ -854,6 +868,7 @@ PDF 不再交给 Chromium 内置查看器（iframe 里套一个浏览器，工�
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.49 | 2026-10-30 | Office / EPUB 只读预览：新增 `OfficeDocumentView`（Word / ODT 用 `chat-markdown` 版心、自绘表格网格、幻灯片卡片、EPUB 章节、旧格式另存为卡片）；分派表新增三类（6.3.1）；工具条与媒体同构，固定「只读预览」标记，无编辑入口 |
 | v1.48 | 2026-10-30 | 聊天附件改为「只给路径」：新增「选择本机文件…」原生文件选择（任意位置 / 任意格式 / 任意大小，图片仍走视觉通道），整文件附件只把绝对路径与元信息写进上下文块，由 Agent 用自己的工具读；单条消息附件上限 10（文件 + 图片合计，`MAX_IMAGE_COUNT` 20 → 10）；chip 增加「工作区外」标记与大小提示；纯附件消息允许发送（6.5） |
 | v1.47 | 2026-10-29 | 聊天可读性一组改动：消息角色分层（用户 = 纸卡批注 `bg-raised` + 2px `success` 左边线，Agent = 流动正文，6.5）；内联变更卡默认收起（6.5）；Markdown 链接三态（外链 / 锚点 / 仓库文件）不再走 `target="_blank"`（6.5）；划词「引用到对话」选区浮起操作（新增 6.16）；输入区新增「引用当前文档」开关（6.5）；编辑器外部变更提示条（6.3） |
 | v1.46 | 2026-10-28 | 会话标题改用去噪后的回复摘录并校验模型输出：命名输入剔除环境说明段落、取最后一条文本回复，要求 JSON 输出，复述原话的标题判为不可用 |

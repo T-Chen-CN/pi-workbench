@@ -50,9 +50,9 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
 - 主进程的 `error` 是**固定英文串**（便于匹配），渲染层通过 `src/i18n/errors.ts` 映射成当前语言；未知错误原样展示，不要吞掉诊断信息。
 - 事件类频道（`update:status`、`window:maximized-changed`、agent 流式 `trace`）只单向推送，不等待回执；终止 / 取消走独立 invoke 频道。
 
-## 4. 频道分布（18 域 / 124 个 handler）
+## 4. 频道分布（19 域 / 127 个 handler）
 
-`agent 36` · `git 22` · `fs 10` · `app 8` · `github 7` · `workspace 5` · `terminal 5` · `update 5` · `draft 4` · `plugins 4` · `window 4` · `aux 4` · `apiConfig 3` · `webSearch 2` · `shell 1` · `log 1` · `dialog 1` · `clipboard 1` · `attachment 1`。
+`agent 36` · `git 22` · `fs 10` · `app 8` · `github 7` · `workspace 5` · `terminal 5` · `update 5` · `draft 4` · `plugins 4` · `window 4` · `aux 4` · `apiConfig 3` · `documents 3` · `webSearch 2` · `shell 1` · `log 1` · `dialog 1` · `clipboard 1` · `attachment 1`。
 
 按域的频道摘要（含每个频道的作用）在 [PROJECT_STRUCTURE §5](../architecture/PROJECT_STRUCTURE.md)，新增频道时同步那一节。
 
@@ -71,6 +71,20 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
 - 唯一例外是图片：视觉通道只能收内容，所以主进程读一次并回传 base64（单文件 ≤32MB），渲染层再走既有的压缩与上限管道。
 - 文件内容由 Agent 在**主进程里用自己的 `read` / `bash` 工具**按路径读取，那条链路本来就不受工作区限制（见 [agent-runtime](agent-runtime.md)）；渲染层始终没有“传任意路径读内容”的能力。
 - 因此“选择附件”这个动作本身就是授权，不引入白名单、不引入二次确认；旧的 `fs:readFile` 仍然只服务编辑器与预览，工作区外路径依旧被拒。
+
+### 5.2 文档预览与扫描页渲染（`documents:*`）
+
+三个频道都**不**放宽工作区信任，也**不**给渲染层新增“按路径读字节”的能力：
+
+| 频道 | 信任校验 | 说明 |
+| --- | --- | --- |
+| `documents:preview` | `resolveAllowedFileTarget()`（与 `fs:readFile` 同一条） | 主进程解析 docx / xlsx / pptx / odt / epub → 结构化模型（标题 / 段落 / 表格 / 工作表 / 幻灯片 / 章节），只回模型不回字节 |
+| `documents:render-request` | 主 → 渲染，不需入参校验 | 字节（`Uint8Array`，structured clone，非 base64）随事件下发；>64MB 直接拒绝 |
+| `documents:render-result` | `payload.id` 必须命中挂起请求 | 渲染进程回 `{images}` 或 `{error}`；不命中直接丢弃，超时 60s 自动失败 |
+
+- **`documents:extract` 故意不存在**：文本抽取的调用方是主进程里的 Agent 工具（`read`），把它做成 IPC 就等于给渲染层开一条任意路径读通道。
+- 渲染进程只能处理自己收到的字节：它拿不到路径，也发不起请求。
+- 多窗口时优先用聚焦窗口；没有可用窗口就降级为一句文字说明，不阻断轮次。
 
 ## 6. Web 调试桥
 

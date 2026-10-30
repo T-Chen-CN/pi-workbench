@@ -9,11 +9,14 @@ import '@fontsource-variable/geist-mono'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { installRendererLogging } from './api/rendererLog'
+import { installDocumentRenderBridge } from './api/documentRender'
 import { useI18nStore } from './store/i18nStore'
 import { useThemeStore, type ThemeMode } from './store/themeStore'
 import './index.css'
 
 installRendererLogging()
+// 扫描件按页渲成图片（Agent 视觉通道与 read 工具共用这条回调）
+installDocumentRenderBridge()
 
 // 主进程把已保存的主题与语言带在 URL 上：在首帧之前写入 store，
 // 否则 App 第一个 effect 会按默认浅色重画一次，暗色主题会闪。

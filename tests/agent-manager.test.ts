@@ -40,6 +40,15 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
     }
   },
   SettingsManager: { create: () => ({}) },
+  // 内置 read 定义由本仓库扩展（文档能力），测试里给个最小替身
+  createReadToolDefinition: () => ({
+    name: 'read',
+    label: 'read',
+    description: 'Read a file',
+    parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    promptGuidelines: [],
+    execute: async () => ({ content: [{ type: 'text', text: '' }] }),
+  }),
   SessionManager: {
     continueRecent: sdk.continueRecent,
     create: sdk.sessionCreate,

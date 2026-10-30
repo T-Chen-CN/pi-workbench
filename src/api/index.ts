@@ -44,7 +44,8 @@ import type {
   AuxWindowCommandResult,
   WindowCommand,
   WindowMaximizedState,
-  AttachmentPickResult
+  AttachmentPickResult,
+  DocumentPreviewResult
 } from '../types/electron'
 import { frameNameOf, type HostId } from '../panelHost/types'
 
@@ -420,7 +421,23 @@ const mockAPI = {
   terminalClose: async (): Promise<TerminalResult> => ({ success: false }),
   terminalFlush: async (): Promise<TerminalResult> => ({ success: false }),
   onTerminalData: (_callback: (payload: { id: string; data: string }) => void) => () => {},
-  onTerminalExit: (_callback: (payload: { id: string; exitCode: number }) => void) => () => {}
+  onTerminalExit: (_callback: (payload: { id: string; exitCode: number }) => void) => () => {},
+  onDocumentRenderRequest: (_callback: (payload: {
+    id: string
+    name: string
+    bytes: Uint8Array
+    pages: number[]
+    scale: number
+  }) => void) => () => {},
+  documentsPreview: async (_path: string): Promise<DocumentPreviewResult> => ({
+    success: false,
+    error: 'Document preview is only available in the Electron app'
+  }),
+  documentRenderResult: async (_payload: {
+    id: string
+    images?: { data: string; mimeType: string }[]
+    error?: string
+  }) => ({ success: false })
 }
 
 const electronAPI = window.electronAPI || mockAPI
@@ -471,6 +488,35 @@ export const api = {
   watchWorkspace: (workspacePath: string) => electronAPI.watchWorkspace(workspacePath),
   unwatchWorkspace: (workspacePath?: string) => electronAPI.unwatchWorkspace(workspacePath),
   onFsChanged: (callback: (payload: { type: string; path: string }) => void) => electronAPI.onFsChanged(callback),
+
+  // 文档扫描页渲染：主进程发请求，渲染层回传 PNG
+  onDocumentRenderRequest: (
+    callback: (payload: {
+      id: string
+      name: string
+      bytes: Uint8Array
+      pages: number[]
+      scale: number
+    }) => void
+  ) =>
+    typeof electronAPI.onDocumentRenderRequest === 'function'
+      ? electronAPI.onDocumentRenderRequest(callback)
+      : () => {},
+  documentsPreview: (path: string) =>
+    typeof electronAPI.documentsPreview === 'function'
+      ? electronAPI.documentsPreview(path)
+      : Promise.resolve<DocumentPreviewResult>({
+          success: false,
+          error: 'Document preview is only available in the Electron app'
+        }),
+  documentRenderResult: (payload: {
+    id: string
+    images?: { data: string; mimeType: string }[]
+    error?: string
+  }) =>
+    typeof electronAPI.documentRenderResult === 'function'
+      ? electronAPI.documentRenderResult(payload)
+      : Promise.resolve({ success: false }),
 
   // App configuration (portable architecture)
   getAppDir: () => electronAPI.getAppDir(),

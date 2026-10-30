@@ -113,6 +113,7 @@ import type {
 } from './types.js'
 import { withTimeout, withTimeoutResult } from './async-utils.js'
 import { StallWatchdog } from './stall-watchdog.js'
+import { createReadWithDocumentsDefinition } from './read-with-documents.js'
 
 /** 未注入 logger 时保持原有 console 行为 */
 const consoleAgentLogger: AgentLogger = {
@@ -1520,6 +1521,14 @@ export class AgentManager {
       sessionManager,
       settingsManager,
       resourceLoader,
+      // 同名 `read` 覆盖内置定义：文档（pdf/docx/xlsx/pptx…）走主进程抽取，
+      // 其余原样委托内置 read。未注入 readDocument 时这里是内置定义本身。
+      customTools: [
+        createReadWithDocumentsDefinition({
+          cwd: root,
+          readDocument: config.readDocument,
+        }),
+      ],
     })
     const sessionOutcome = await withTimeoutResult(
       sessionPromise,

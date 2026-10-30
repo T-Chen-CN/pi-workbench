@@ -11,6 +11,7 @@ import { sanitizeApprovalDecision, type ApprovalBroker } from '../approval-broke
 import type { AgentRegistry } from '../agent-registry.js'
 import type { PluginManager } from '../plugin-manager.js'
 import { getCoordinator } from '../worktree-coordinator.js'
+import { readDocumentForAgent } from '../documents/agent-read.js'
 import {
   currentWebSearchConfigVersion,
   webAccessExtensionPaths,
@@ -164,6 +165,9 @@ handleIpc('agent:initialize', async (_event, config: {
       // 会话权限：全局只提供新会话的默认档位；无审批通道时 Agent 侧按拒绝处理
       getDefaultPermissionLevel: () => context.getDefaultPermissionLevel(),
       getLanguage: () => context.getLanguage(),
+      // read 工具遇到 pdf / docx / xlsx / pptx 等时回来要内容（工作线程在渲染层）
+      readDocument: (request: { path: string; pages?: string; sheet?: string; slide?: string }) =>
+        readDocumentForAgent(request),
       requestApproval: (request: unknown) => context.approvalBroker.request(request as any),
       resolveSessionRoot: (sessionId: string) => coordinator?.getSessionRoot(sessionId),
       isSessionOfWorkspace: (sessionId: string, headerCwd: string) => {

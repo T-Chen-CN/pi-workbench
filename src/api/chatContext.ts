@@ -102,6 +102,7 @@ export function buildContextPrompt(message: string, entries: ContextEntry[]): st
     sections.push(
       [
         'Attached files. Their contents are NOT inlined: read them yourself with the read / grep tools using these absolute paths.',
+        'PDF / Word / Excel / PowerPoint / OpenDocument / EPUB attachments are read straight through: call read with the path and it returns the extracted text (scanned PDF pages come back as images for you to look at). Use pages="1-20", sheet="<name>" or slide="1-10" to narrow large files. Old formats (.doc/.xls/.ppt) cannot be decoded — tell the user to save them as .docx/.xlsx/.pptx.',
         ...files.map(fileLine),
       ].join('\n')
     )
