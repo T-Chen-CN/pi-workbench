@@ -807,3 +807,22 @@ export function disposeCoordinator(workspaceDir: string): void {
   states.get(key)?.deps.dispose()
   states.delete(key)
 }
+
+/**
+ * 退出时回收全部工作区的 coordinator。
+ *
+ * 依赖安装（npm / pnpm install）可能在退出时还在跑：`deps.dispose()` 会
+ * cancelAll()，把安装进程树一并终止，否则它们会变成孤儿进程继续写
+ * node_modules。
+ */
+export function disposeAllCoordinators(): void {
+  coordinatorCache.clear()
+  for (const [key, state] of [...states.entries()]) {
+    try {
+      state.deps.dispose()
+    } catch (error) {
+      console.warn('[Worktree] Failed to dispose workspace state:', error)
+    }
+    states.delete(key)
+  }
+}

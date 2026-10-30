@@ -147,6 +147,8 @@ export const STALL_TIMEOUT_MS = 120_000
 export const ABORT_GRACE_MS = 10_000
 /** 调用 session.abort() 本身的等待上限，避免 dispose / 重启被卡住 */
 const ABORT_TIMEOUT_MS = 5_000
+/** dispose 时等 extras 落盘的上限：退出流程不能被写盘卡死 */
+const EXTRAS_SAVE_TIMEOUT_MS = 1_000
 /** 初始化（模型运行时 + 会话创建）超时 */
 const INIT_TIMEOUT_MS = 30_000
 /** 单次工具审批的等待上限；超时按拒绝处理（fail-closed） */
@@ -1591,12 +1593,9 @@ export class AgentManager {
         this.logger.warn('[Agent Manager] Failed to abort before dispose:', error)
       }
     }
-    // 等 sidecar 落盘完成，避免删除会话时与最后一次保存竞争
-    try {
-      await runtime.extrasSave
-    } catch {
-      // persistExtras 已记录失败
-    }
+    // 等 sidecar 落盘完成，避免删除会话时与最后一次保存竞争。
+    // 但必须有上界：退出时写盘卡住（磁盘慢 / 文件被占用）不能把清理拖进超时兜底。
+    await withTimeoutResult(runtime.extrasSave, EXTRAS_SAVE_TIMEOUT_MS, 'extras save', this.logger)
     try {
       runtime.unsubscribe?.()
     } catch {

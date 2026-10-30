@@ -3,6 +3,7 @@ import { createHash } from 'crypto'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import { tmpdir } from 'os'
+import { childRegistry } from '../electron/child-registry'
 import {
   WorktreeDepsInstaller,
   WorktreeDepsManager,
@@ -483,5 +484,41 @@ describe('WorktreeDepsManager', () => {
     await manager.statusFor(worktree, hash)
     await manager.statusFor(worktree, hash)
     expect(statuses.filter((item) => item.status.state === 'ready')).toHaveLength(1)
+  })
+})
+
+describe('安装进程登记', () => {
+  afterEach(() => {
+    for (const child of childRegistry.list()) childRegistry.unregister(child.pid)
+  })
+
+  it('安装进程登记到子进程表，结束后注销', async () => {
+    let exitChild: ((code: number) => void) | null = null
+    const spawn: SpawnFn = () => {
+      const exitListeners: Array<(...args: unknown[]) => void> = []
+      exitChild = (code) => {
+        for (const listener of exitListeners) listener(code)
+      }
+      return {
+        pid: 9_200_001,
+        stdout: { on: () => {} },
+        stderr: { on: () => {} },
+        on: (event, listener) => {
+          if (event === 'exit') exitListeners.push(listener)
+        },
+        kill: () => true,
+      }
+    }
+    const installer = new WorktreeDepsInstaller({ spawn })
+    await write('package-lock.json', 'lock\n')
+    const info = (await detectLockfile(repo))!
+
+    const promise = installer.install(worktree, info)
+    expect(childRegistry.list().map((child) => child.pid)).toEqual([9_200_001])
+    expect(childRegistry.list()[0].group).toBe('install')
+
+    exitChild!(0)
+    await expect(promise).resolves.toEqual({ ok: true })
+    expect(childRegistry.size()).toBe(0)
   })
 })

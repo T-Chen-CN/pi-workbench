@@ -4,6 +4,13 @@
  * 每个打开的工作区持有独立的 AgentManager 实例；配置未变化时复用，
  * 配置变化或工作区关闭时释放。
  */
+import { withTimeout } from './async-utils.js'
+
+/**
+ * 单个 Agent 释放的上界。退出时一个卡死的会话（等待 sidecar 落盘、
+ * 未响应的 abort）不能拖住整个应用 —— 超时只记警告，进程继续退出。
+ */
+const AGENT_DISPOSE_TIMEOUT_MS = 2_000
 export interface AgentChatOutcome {
   success: boolean
   response?: string
@@ -252,6 +259,19 @@ interface Entry {
   configKey: string
 }
 
+/** 带超时与异常隔离的单个 Agent 释放 */
+async function disposeAgent(agent: RegisteredAgent, label: string): Promise<void> {
+  try {
+    await withTimeout(
+      Promise.resolve().then(() => agent.dispose()),
+      AGENT_DISPOSE_TIMEOUT_MS,
+      `${label} dispose`
+    )
+  } catch (error) {
+    console.warn(`[Agent Registry] Failed to dispose ${label}:`, error)
+  }
+}
+
 export class AgentRegistry {
   private entries = new Map<string, Entry>()
 
@@ -269,11 +289,7 @@ export class AgentRegistry {
   async set(workspaceDir: string, agent: RegisteredAgent, configKey: string): Promise<void> {
     const existing = this.entries.get(workspaceDir)
     if (existing) {
-      try {
-        await existing.agent.dispose()
-      } catch (error) {
-        console.warn('[Agent Registry] Failed to dispose previous agent:', error)
-      }
+      await disposeAgent(existing.agent, 'previous agent')
     }
     this.entries.set(workspaceDir, { agent, configKey })
   }
@@ -282,19 +298,17 @@ export class AgentRegistry {
     const entry = this.entries.get(workspaceDir)
     if (!entry) return
     this.entries.delete(workspaceDir)
-    await entry.agent.dispose()
+    await disposeAgent(entry.agent, 'agent')
   }
 
+  /**
+   * 并行释放全部 Agent：串行会让一个卡住的会话把退出时间放大成 N × 超时。
+   * 每个 Agent 都有独立超时，失败只记警告。
+   */
   async disposeAll(): Promise<void> {
     const entries = [...this.entries.values()]
     this.entries.clear()
-    for (const entry of entries) {
-      try {
-        await entry.agent.dispose()
-      } catch (error) {
-        console.warn('[Agent Registry] Failed to dispose agent:', error)
-      }
-    }
+    await Promise.allSettled(entries.map((entry) => disposeAgent(entry.agent, 'agent')))
   }
 
   /** 已登记的工作区数量（测试与诊断用） */

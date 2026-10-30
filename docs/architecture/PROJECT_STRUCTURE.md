@@ -34,6 +34,9 @@ pi-workbench/
 │   ├── workspace-trust.ts        # 工作区信任与路径包含
 │   ├── ipc/                      # 按域注册 IPC（agent / api-config / files / git / settings / system / web-search* / workspace）
 │   ├── agent-registry.ts         # 按工作区登记 Agent 实例
+│   ├── shutdown.ts               # 退出编排：分步超时清理 + 退出看门狗（强制 exit）
+│   ├── child-registry.ts         # 子进程登记与进程树回收（taskkill /T）
+│   ├── async-utils.ts            # 主进程超时工具（与 pi-bridge 同语义）
 │   ├── approval-broker.ts        # 工具审批挂起 / 超时 / 取消
 │   ├── notifications.ts          # 桌面通知路由（前台抑制）
 │   ├── terminal-manager.ts       # PTY、输出缓冲与日志轮转
