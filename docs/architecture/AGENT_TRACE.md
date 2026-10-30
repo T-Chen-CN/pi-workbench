@@ -247,12 +247,12 @@ type AgentStreamPayload = {
 
 `chat()` 不设整轮等待上限，只有“模型静默”上限：
 
-- **计时对象**：连续 `STALL_TIMEOUT_MS`（120s）没有收到任何模型侧增量。常量在 `pi-bridge/src/agent-manager.ts`，不是设置项，也不提供跳过途径。
+- **计时对象**：连续 `STALL_TIMEOUT_MS`（180s）没有收到任何模型侧增量。常量在 `pi-bridge/src/agent-manager.ts`，不是设置项，也不提供跳过途径。
 - **算作心跳**：`message_start`、`text_delta`、`thinking_delta`、`toolcall_start` / `toolcall_delta`（工具参数 JSON 流，写大文件时可持续几十秒）、`tool_execution_update`、`auto_retry_start` / `auto_retry_end`。
 - **挂起（不计时）**：
   1. `tool_execution_start` → `tool_execution_end` 之间的工具执行，按 `toolCallId` 计数，并行 / 嵌套全部结束后才恢复；长命令的静默属于合法等待。
   2. `tool_call` 审批钩子等待用户的整段（审批先于 `tool_execution_start`），这段由 `APPROVAL_TIMEOUT_MS`（120s）+ fail-closed 自行兜底。
-- **触发后**：`abort()` → 10s 宽限（`ABORT_GRACE_MS`）内未收尾则硬停并重建该会话运行时（`resetRuntimeAfterHardStop`）；返回 `Agent response stalled: no output for 120s.`，已收到的 parts 与 `edits` 保留。
+- **触发后**：`abort()` → 10s 宽限（`ABORT_GRACE_MS`）内未收尾则硬停并重建该会话运行时（`resetRuntimeAfterHardStop`）；返回 `Agent response stalled: no output for 180s.`，已收到的 parts 与 `edits` 保留。
 - **不自动重试**：工具调用可能已有副作用，是否重发由用户决定。
 - **用户主动停止**仍返回 `Agent request was aborted.`，且**不**重建运行时。
 

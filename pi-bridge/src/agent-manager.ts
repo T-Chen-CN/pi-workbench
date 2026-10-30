@@ -143,7 +143,7 @@ export type {
 } from './types.js'
 
 /** 模型响应空闲超时（毫秒）：连续这么久没有任何模型增量才判定卡死；不设整轮上限 */
-export const STALL_TIMEOUT_MS = 120_000
+export const STALL_TIMEOUT_MS = 180_000
 /** abort 之后等待 SDK 收尾的宽限期；超过后强制结束本轮，防止永久挂起 */
 export const ABORT_GRACE_MS = 10_000
 /** 调用 session.abort() 本身的等待上限，避免 dispose / 重启被卡住 */
