@@ -420,7 +420,9 @@ const notificationRouter = new NotificationRouter(
   {
     info: (message) => console.log(message),
     warn: (message) => console.warn(message)
-  }
+  },
+  // 退出前 / 退出中都不投递：退出时 abort 会话会走 error 分支，不拦就是误报
+  () => quitting || quitSequencer.isShuttingDown()
 )
 
 /** 工具审批：挂起 Agent 的工具调用，等待渲染层响应或超时 */

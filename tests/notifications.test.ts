@@ -89,3 +89,35 @@ describe('NotificationRouter logging', () => {
     expect(info).toHaveBeenCalledWith(expect.stringContaining('delivered "approval"'))
   })
 })
+
+describe('NotificationRouter 退出中静默', () => {
+  it('退出中不投递任何类型，且日志写明原因', () => {
+    const deliver = vi.fn()
+    const info = vi.fn()
+    let quitting = true
+    const router = new NotificationRouter(
+      deliver,
+      () => undefined,
+      () => false,
+      { info, warn: vi.fn() },
+      () => quitting
+    )
+
+    for (const kind of ['approval', 'complete', 'error'] as const) {
+      expect(router.notify({ ...event, kind })).toBe(false)
+    }
+    expect(deliver).not.toHaveBeenCalled()
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('app is quitting'))
+
+    // 退出被取消（未保存确认里点「取消」）后必须恢复正常投递
+    quitting = false
+    expect(router.notify(event)).toBe(true)
+    expect(deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('未注入退出探测时行为不变', () => {
+    const deliver = vi.fn()
+    const router = new NotificationRouter(deliver, () => undefined, () => false)
+    expect(router.notify(event)).toBe(true)
+  })
+})

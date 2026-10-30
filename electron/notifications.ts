@@ -2,6 +2,8 @@
  * 桌面通知路由（AF-06）
  *
  * 只在应用不在前台时通知；每个事件类型单独开关，缺省全部开启。
+ * 退出过程一律不通知：退出时我们会主动 `abort()` 在跑的会话，那会走 ``error`` 分支 ——
+ * 用户刚点了退出却收到一条「错误」系统通知属于自伤型误报，而且窗口已拆、点开无处可去。
  */
 
 export type NotificationKind = 'approval' | 'complete' | 'error'
@@ -50,11 +52,18 @@ export class NotificationRouter {
     private readonly log?: {
       info: (message: string) => void
       warn: (message: string) => void
-    }
+    },
+    /** 退出中探测：关闭流程一启动就不再投递任何系统通知 */
+    private readonly isQuitting?: () => boolean
   ) {}
 
-  /** 前台不打扰；按事件类型开关过滤。返回是否真的发出了通知 */
+  /** 前台不打扰；退出中不打扰；按事件类型开关过滤。返回是否真的发出了通知 */
   notify(event: SessionNotification): boolean {
+    // 先判退出：退出时我们会 abort 在跑的会话，不拦就会把自伤 abort 弹成「错误」通知
+    if (this.isQuitting?.()) {
+      this.log?.info(`[Notifications] skipped "${event.kind}": app is quitting`)
+      return false
+    }
     if (this.isAppFocused()) {
       this.log?.info(`[Notifications] skipped "${event.kind}": app is focused`)
       return false
