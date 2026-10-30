@@ -14,6 +14,7 @@
  */
 
 import { spawn as nodeSpawn } from 'child_process'
+import { childRegistry, killProcessTree } from './child-registry.js'
 import { createHash } from 'crypto'
 import { existsSync } from 'fs'
 import * as fs from 'fs/promises'
@@ -220,6 +221,7 @@ export function truncateError(text: string): string {
 // ---------------------------------------------------------------------------
 
 export interface SpawnedProcess {
+  pid?: number
   stdout: { on: (event: 'data', listener: (chunk: unknown) => void) => void } | null
   stderr: { on: (event: 'data', listener: (chunk: unknown) => void) => void } | null
   on: (event: 'error' | 'exit', listener: (...args: unknown[]) => void) => void
@@ -266,6 +268,23 @@ const defaultSpawn: SpawnFn = (command, args, options) =>
     shell: options.shell,
     stdio: ['ignore', 'pipe', 'pipe'],
   }) as unknown as SpawnedProcess
+
+/**
+ * 终止安装进程及其子进程。
+ *
+ * Windows 上 SIGTERM 只作用于直接子进程，包管理器派生出的孙进程会变成孤儿；
+ * 因此先 taskkill /T 收整棵树 —— 顺序不能反：根进程先死，taskkill 就找不到子进程了。
+ */
+function terminateTree(child: SpawnedProcess | null): void {
+  if (!child) return
+  const pid = typeof child.pid === 'number' && child.pid > 0 ? child.pid : null
+  if (pid !== null && process.platform === 'win32' && killProcessTree(pid)) return
+  try {
+    child.kill('SIGTERM')
+  } catch {
+    // 进程可能已经退出；取消语义已经满足
+  }
+}
 
 /**
  * 单个工作区的安装进程管理。按工作树路径单飞：并发请求 join 同一个任务。
@@ -336,11 +355,7 @@ export class WorktreeDepsInstaller {
     if (!entry) return false
     entry.cancelled = true
     this.running.delete(worktreePath)
-    try {
-      entry.child?.kill('SIGTERM')
-    } catch {
-      // 进程可能已经退出；取消语义已经满足
-    }
+    terminateTree(entry.child)
     entry.settle?.({ ok: false, cancelled: true })
     return true
   }
@@ -374,12 +389,16 @@ export class WorktreeDepsInstaller {
         settled = true
         if (timer) clearTimeout(timer)
         timer = null
+        unregisterChild?.()
+        unregisterChild = null
         this.tails.set(worktreePath, tail)
         this.running.delete(worktreePath)
         // 先交还串行令牌，再结算 promise：排队的下一个安装能立即开工
         this.releaseSlot()
         resolve(result)
       }
+
+      let unregisterChild: (() => void) | null = null
 
       entry.settle = finish
 
@@ -409,6 +428,14 @@ export class WorktreeDepsInstaller {
       }
 
       entry.child = child
+      // 包管理器会派生孙进程（npm → node → tsc…）；登记 pid，退出时整棵树一起收
+      if (typeof child.pid === 'number' && child.pid > 0) {
+        unregisterChild = childRegistry.register({
+          pid: child.pid,
+          group: 'install',
+          kill: () => child.kill('SIGTERM'),
+        })
+      }
       child.stdout?.on('data', append)
       child.stderr?.on('data', append)
 
@@ -435,11 +462,7 @@ export class WorktreeDepsInstaller {
 
       timer = setTimeout(() => {
         log?.warn(`[WorktreeDeps] ${info.manager} install timed out in ${worktreePath}`)
-        try {
-          child.kill('SIGTERM')
-        } catch {
-          // 已经退出
-        }
+        terminateTree(child)
         finish({
           ok: false,
           error: truncateError(

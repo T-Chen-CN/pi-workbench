@@ -111,3 +111,56 @@ describe('AgentRegistry running sessions', () => {
     expect(registry.listRunning()).toEqual([])
   })
 })
+
+describe('AgentRegistry disposeAll 超时隔离', () => {
+  function makeTimedAgent(name: string, delayMs: number, log: string[]): RegisteredAgent {
+    return {
+      initialize: async () => ({ success: true }),
+      chat: async () => ({ success: true }),
+      isInitialized: () => true,
+      dispose: async () => {
+        log.push(name)
+        await new Promise((resolve) => setTimeout(resolve, delayMs))
+        log.push(`${name}:done`)
+      },
+    }
+  }
+
+  it('并行释放：慢 Agent 不阻塞快 Agent', async () => {
+    vi.useFakeTimers()
+    const log: string[] = []
+    const registry = new AgentRegistry()
+    await registry.set('/tmp/slow', makeTimedAgent('slow', 1000, log), 'c')
+    await registry.set('/tmp/fast', makeTimedAgent('fast', 10, log), 'c')
+
+    const promise = registry.disposeAll()
+    await vi.advanceTimersByTimeAsync(20)
+    expect(log).toContain('fast:done')
+    expect(log).not.toContain('slow:done')
+
+    await vi.advanceTimersByTimeAsync(2000)
+    await promise
+    expect(log).toEqual(expect.arrayContaining(['slow', 'slow:done', 'fast', 'fast:done']))
+    vi.useRealTimers()
+  })
+
+  it('卡死的 Agent 超时后不再阻塞清理', async () => {
+    vi.useFakeTimers()
+    const registry = new AgentRegistry()
+    const stuck: RegisteredAgent = {
+      initialize: async () => ({ success: true }),
+      chat: async () => ({ success: true }),
+      isInitialized: () => true,
+      dispose: () => new Promise<void>(() => {}),
+    }
+    await registry.set('/tmp/stuck', stuck, 'c')
+    await registry.set('/tmp/ok', makeTimedAgent('ok', 10, []), 'c')
+
+    const promise = registry.disposeAll()
+    await vi.advanceTimersByTimeAsync(2100)
+    await promise
+
+    expect(registry.size()).toBe(0)
+    vi.useRealTimers()
+  })
+})

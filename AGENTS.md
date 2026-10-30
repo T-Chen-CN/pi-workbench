@@ -65,6 +65,7 @@ npm run build      # 渲染层 + bridge + 主进程
 | 权限是安全边界：`readonly` 用 `deny` 而不是 `ask`；审批超时与通道缺失一律拒绝（fail-closed）；会话是权限的唯一权威 | [agent-runtime](docs/agent/agent-runtime.md) |
 | 历史与导出的唯一真相源是会话记录（JSONL + `parentId` 分支），不是压缩后的 `session.messages` | [ADR-003](docs/decisions/ADR-003-session-record-single-source.md) |
 | 便携式目录 `{appDir}/{config,cache,data,logs}`；`setPath('userData')` 必须早于单实例锁；Pi SDK 目录靠环境变量固定 | [paths-and-storage](docs/agent/paths-and-storage.md) |
+| 退出只在 `will-quit` 收尾：每步超时 + 看门狗 `app.exit(0)`，不再二次 `app.quit()`；托盘最后销毁；子进程登记 `child-registry` 统一收树 | [paths-and-storage](docs/agent/paths-and-storage.md) |
 | 多工作区是常驻视图：切换只 `visibility: hidden` + `inert`，不卸载不 reset；关闭标签是唯一回收入口 | [paths-and-storage](docs/agent/paths-and-storage.md) |
 | 更新只替换程序文件：`config/ data/ logs/ cache/` 受保护，删除靠 `installer-manifest` 清单 | [BUILD_AND_PACKAGE §4.1](docs/guides/BUILD_AND_PACKAGE.md) |
 | 面板可拆成独立窗口（`window.open('about:blank')` + React portal）；主窗口 `X` 默认收托盘，不是退出 | [panels-and-windows](docs/agent/panels-and-windows.md) |

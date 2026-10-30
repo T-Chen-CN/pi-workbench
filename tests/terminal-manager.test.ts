@@ -3,6 +3,7 @@ import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
 import { TerminalManager, type PtyProcess } from '../electron/terminal-manager'
+import { childRegistry } from '../electron/child-registry'
 
 interface FakePty extends PtyProcess {
   written: string[]
@@ -234,5 +235,51 @@ describe('TerminalManager', () => {
     expect(options.env.PI_WORKBENCH_API_KEY).toBeUndefined()
     expect(options.env.ANTHROPIC_API_KEY).toBeUndefined()
     expect(options.env.OPENAI_API_KEY).toBeUndefined()
+  })
+})
+
+describe('TerminalManager 子进程登记', () => {
+  function ptyWithPid(pid: number): FakePty {
+    const pty = createFakePty()
+    pty.pid = pid
+    return pty
+  }
+
+  afterEach(() => {
+    // 全局登记表在测试之间共享，清干净避免互相影响
+    for (const child of childRegistry.list()) childRegistry.unregister(child.pid)
+  })
+
+  it('有 pid 的 pty 登记到子进程表，进程退出后注销', () => {
+    const pty = ptyWithPid(9_100_001)
+    manager = new TerminalManager({ spawn: () => pty, shell: 'bash' })
+
+    const created = manager.create(tmpDir, 80, 24)
+    expect(created.success).toBe(true)
+    expect(childRegistry.list().map((child) => child.pid)).toEqual([9_100_001])
+    expect(childRegistry.list()[0].group).toBe('pty')
+
+    pty.emitExit(0)
+    expect(childRegistry.size()).toBe(0)
+  })
+
+  it('关闭终端时注销登记，避免误杀已复用的 pid', () => {
+    const pty = ptyWithPid(9_100_002)
+    manager = new TerminalManager({ spawn: () => pty, shell: 'bash' })
+
+    const created = manager.create(tmpDir, 80, 24)
+    manager.close(created.id!)
+
+    expect(pty.killed).toBe(true)
+    expect(childRegistry.size()).toBe(0)
+  })
+
+  it('没有 pid 的 pty（测试替身 / 未提供）不登记', () => {
+    const pty = createFakePty()
+    manager = new TerminalManager({ spawn: () => pty, shell: 'bash' })
+
+    manager.create(tmpDir, 80, 24)
+
+    expect(childRegistry.size()).toBe(0)
   })
 })

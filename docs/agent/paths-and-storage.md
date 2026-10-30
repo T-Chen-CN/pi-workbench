@@ -40,7 +40,30 @@ macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动�
    默认值是 `~/.pi/agent`，一旦漏设，崩溃日志、扩展加载器、认证存储都会落到用户主目录。
 3. `electron/legacy-paths.ts` 只在打包版执行启动回收：`~/.pi` 合并进 `{appDir}/data/agent` 后删除（检测到独立 Pi CLI 时保留）；删除旧默认 userData 与安装器在 `%LOCALAPPDATA%` 的差分副本。
 4. 安装目录必须可写：安装器在目录页拒绝 `%ProgramFiles%`、`%ProgramFiles(x86)%`、`%SystemRoot%` 及其子目录，且 `allowElevation: false`。
-5. 新增任何运行时数据目录 → 必须加进 `scripts/lib/installer-manifest.js` 的 `PROTECTED_TOP_LEVEL`，否则更新时会被当程序文件删除（NSIS 侧读生成的清单，不要改卸载分支）。
+5. 文件日志（`FileLogger`）**必须早于** `requestSingleInstanceLock()` 建立：锁被拒绝时要在 `logs/main.log` 留下
+   `[Boot] Another instance holds the single instance lock`，否则「已有实例没退干净」在用户侧只表现为「双击没反应」，
+   且事后没有任何现场证据。
+6. 新增任何运行时数据目录 → 必须加进 `scripts/lib/installer-manifest.js` 的 `PROTECTED_TOP_LEVEL`，否则更新时会被当程序文件删除（NSIS 侧读生成的清单，不要改卸载分支）。
+
+## 2.1 退出顺序（改了会留下僵尸进程）
+
+唯一真退出入口是 `app.on('will-quit')`。顺序与超时由 `electron/shutdown.ts` 强制：
+
+| 阶段 | 行为 | 上界 |
+| --- | --- | --- |
+| `before-quit` | 置 `quitting`（关闭按钮不再收托盘）+ 武装「退出卡住」看门狗 | 10 s 后 `app.exit(0)` |
+| `will-quit` | `preventDefault()` → `runShutdownSteps()` 顺序清理 | 6 s 看门狗，超时直接 `app.exit(0)` |
+| 清理完成后 | **`app.exit(0)`**，不再二次 `app.quit()` | — |
+
+清理顺序（依赖反序，每步独立超时，超时只记警告并继续）：
+`approval-broker → agents → worktree-deps → workspace-tasks(watchers/repoSync/plugins) → terminals → child-processes → workspace-store → tray`。
+
+- 托盘**最后**销毁：清理变慢时用户还能从托盘重新触发退出，而不是只能开任务管理器。
+- 子进程（PTY shell、`npm install`）登记在 `electron/child-registry.ts`，退出时用 `taskkill /T /F` 收整棵树；
+  故意脱离的（`shell-refresh` 的 `detached` 子进程）不登记。
+- 不要再写成 `will-quit` 里 `preventDefault()` 后 `app.quit()`：那依赖上游事件状态机的二次 quit 行为
+  （electron#33643），一旦没生效就是无窗口、无托盘、仍握着单实例锁的僵尸进程。
+- 新增清理步骤 → 必须给 `timeoutMs`，并在 `tests/shutdown.test.ts` 覆盖超时路径。
 
 ## 3. 持久化文件清单
 

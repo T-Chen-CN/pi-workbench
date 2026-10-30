@@ -8,6 +8,9 @@ import { createRequire } from 'module'
 import { mkdirSync } from 'fs'
 import { FileLogger, installConsoleTee } from './logger.js'
 import { AgentRegistry } from './agent-registry.js'
+import { childRegistry } from './child-registry.js'
+import { createQuitSequencer, runShutdownSteps } from './shutdown.js'
+import { disposeAllCoordinators } from './worktree-coordinator.js'
 import { TerminalManager } from './terminal-manager.js'
 import { PluginManager } from './plugin-manager.js'
 import { DraftStore } from './draft-store.js'
@@ -55,6 +58,23 @@ import {
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+// 文件日志必须在单实例锁判定之前建立：锁被拒绝时也要能在 main.log 里留下原因，
+// 否则用户看到的现象只是「双击没反应」，事后完全无从取证。
+let fileLogger: FileLogger | null = null
+let rendererLogger: FileLogger | null = null
+let agentFileLogger: FileLogger | null = null
+const logDir = path.join(getAppDir(), 'logs')
+try {
+  fileLogger = new FileLogger({ logDir })
+  rendererLogger = new FileLogger({ logDir, fileName: 'renderer.log' })
+  agentFileLogger = new FileLogger({ logDir, fileName: 'agent.log' })
+  // 立刻把 console 接进文件：若等到 ready 再接，锁被拒 / 启动崩在 ready 之前的那句
+  // 日志根本落不了盘，事后依旧无法取证。
+  installConsoleTee(fileLogger)
+} catch (error) {
+  console.error('[Main] Failed to enable file logging:', error)
+}
 
 // Chromium 的 profile 与单实例锁都必须落在应用目录。
 // app.setPath('userData') 必须早于 requestSingleInstanceLock：否则单实例锁会在
@@ -264,25 +284,60 @@ app.on('open-url', (event, url) => {
   event.preventDefault()
   void handleGithubCallback(url)
 })
-/** 每个被监听的工作区一个 watcher；切换工作区不再挤掉其他工作区 */
+/** 系统语言是否中文（ready 之前可用） */
+function systemPrefersChinese(): boolean {
+  try {
+    const first = app.getPreferredSystemLanguages?.()[0] ?? ''
+    if (first) return first.toLowerCase().startsWith('zh')
+  } catch {
+    // 拿不到系统语言时退回英文，宁可文案不地道也不要抢在初始化前报错
+  }
+  return false
+}
+
+/**
+ * 单实例锁被拒绝时的提示。
+ *
+ * 为什么不在 ready 之后弹：ready 一到，模块顶层的 whenReady 回调就会初始化
+ * 目录、SQLite、托盘与窗口 —— 第二个进程同样会跑一遗（同一份 userData 与
+ * workspaces.db 被两个进程同时写）。`showErrorBox` 是 ready 之前就能用的原生
+ * 弹框，弹完立即退出，全程不做任何初始化。
+ */
+function reportExistingInstance(): void {
+  const zh = systemPrefersChinese()
+  try {
+    dialog.showErrorBox(
+      zh ? 'Pi Workbench 已在运行' : 'Pi Workbench is already running',
+      zh
+        ? '已请求唤回正在运行的窗口。如果窗口没有出现，请检查任务栏或托盘图标；仍找不到时，在任务管理器结束残留的 “Pi Workbench” 进程后再启动。'
+        : 'The running window has been brought to the front. If no window appears, check the taskbar or the tray icon. If it is still missing, end any leftover “Pi Workbench” process in Task Manager and start again.'
+    )
+  } catch (error) {
+    // 弹框失败也必须退出，不能因为提示失败多留一个进程
+    console.error('[Boot] Failed to show single instance notice:', error)
+  }
+}
+
 // 只允许一个实例：避免两个进程同时写同一份配置和数据库。
 const singleInstanceLock = typeof app.requestSingleInstanceLock === 'function' ? app.requestSingleInstanceLock() : true
 if (!singleInstanceLock) {
-  // 立即退出，避免第二个进程继续打开数据库或执行队列
-  if (typeof app.exit === 'function') {
-    app.exit(0)
-  } else {
-    app.quit()
-  }
+  // 退出前必须先落日志：残留实例占着锁时，这是唯一的现场证据
+  console.warn('[Boot] Another instance holds the single instance lock; exiting', {
+    pid: process.pid,
+    argv: process.argv.slice(1)
+  })
+  reportExistingInstance()
+  if (typeof app.exit === 'function') app.exit(0)
+  else app.quit()
 } else {
   app.on('second-instance', (_event, argv) => {
+    console.log('[Main] Second instance started; focusing main window')
     const callbackUrl = argv.find((arg) => isGithubCallbackUrl(arg))
     if (callbackUrl) void handleGithubCallback(callbackUrl)
-    if (!mainWindow || mainWindow.isDestroyed()) return
-    // 收进托盘后窗口仍然存在但不可见：先恢复原型再显示
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    if (!mainWindow.isVisible()) mainWindow.show()
-    mainWindow.focus()
+    // 清理进行中不再唤回：窗口正在销毁，唤回会打断退出并让退出卡死
+    if (quitSequencer.isShuttingDown()) return
+    // 窗口可能已被销毁（启动期 / 退出中途），showMainWindow 会重建
+    showMainWindow()
   })
 }
 
@@ -300,9 +355,6 @@ if (process.platform === 'win32') {
 const agentRegistry = new AgentRegistry()
 // 配置保存前检查运行中会话：api-config 不直接持有注册表，由这里注入查询
 setRunningAgentsProvider(() => agentRegistry.listRunning())
-let fileLogger: FileLogger | null = null
-let rendererLogger: FileLogger | null = null
-let agentFileLogger: FileLogger | null = null
 /** settings.json 的内存副本；权限策略随工具调用实时读取 */
 
 /** 桌面通知文案（跟随应用语言） */
@@ -368,7 +420,9 @@ const notificationRouter = new NotificationRouter(
   {
     info: (message) => console.log(message),
     warn: (message) => console.warn(message)
-  }
+  },
+  // 退出前 / 退出中都不投递：退出时 abort 会话会走 error 分支，不拦就是误报
+  () => quitting || quitSequencer.isShuttingDown()
 )
 
 /** 工具审批：挂起 Agent 的工具调用，等待渲染层响应或超时 */
@@ -788,6 +842,8 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
     } else {
       // 取消退出：关闭按钮回到「收进托盘」语义，下次点 X 不应该直接退掉
       quitting = false
+      // 撤掉 before-quit 武装的看门狗，否则它会在这个被取消的退出里强制结束进程
+      quitSequencer.cancel()
     }
   })
 
@@ -823,22 +879,14 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
 }
 
 app.whenReady().then(async () => {
-  // 先启用文件日志，后续初始化与 Agent 日志都会落盘（打包后没有控制台）
-  try {
-    fileLogger = new FileLogger({ logDir: path.join(getAppDir(), 'logs') })
-    rendererLogger = new FileLogger({
-      logDir: path.join(getAppDir(), 'logs'),
-      fileName: 'renderer.log'
-    })
-    agentFileLogger = new FileLogger({
-      logDir: path.join(getAppDir(), 'logs'),
-      fileName: 'agent.log'
-    })
-    installConsoleTee(fileLogger)
+  // 第二个实例只负责提示后退出：绝不能继续初始化目录 / SQLite / 托盘
+  if (!singleInstanceLock) return
+  // 日志器在单实例锁判定之前已建立并接管了 console（见文件顶部），这里只确认一声
+  if (fileLogger) {
     console.log('[Main] File logging enabled:', fileLogger.filePath)
-    console.log('[Main] Agent logging enabled:', agentFileLogger.filePath)
-  } catch (error) {
-    console.error('[Main] Failed to enable file logging:', error)
+    console.log('[Main] Agent logging enabled:', agentFileLogger?.filePath ?? '(unavailable)')
+  } else {
+    console.warn('[Main] File logging unavailable; log directory is not writable')
   }
 
   await initAppDirectories()
@@ -940,8 +988,6 @@ app.whenReady().then(async () => {
   }, UPDATE_CHECK_INTERVAL_MS)
 })
 
-let shuttingDown = false
-
 /** 从托盘 / 第二实例 / Dock 唤回主窗口：还原尺寸、显示并聚焦 */
 function showMainWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -959,17 +1005,49 @@ function quitApplication(): void {
   app.quit()
 }
 
-/** 退出前等待异步资源释放，避免在任务仍写库时关闭 store */
+/**
+ * 退出清理。
+ *
+ * 顺序按依赖反序：先停审批与 Agent（可能还在写会话 / 数据库），再收工作树
+ * 依赖安装与监听，然后关终端与子进程，最后关数据库。托盘放在最后销毁：
+ * 清理一旦变慢，用户还能从托盘重新触发退出，而不是只能开任务管理器。
+ *
+ * 每一步都带超时；超时只记警告并继续，真正的兜底是 shutdown.ts 里的看门狗。
+ * 各步超时之和（5.9s）必须小于 SHUTDOWN_TIMEOUT_MS（6s），否则看门狗会提前抢跑。
+ */
 async function shutdownApplication(): Promise<void> {
   try {
-    destroyTray()
-    closeAllWorkspaceWatchers()
-    repoSync.disposeAll()
-    terminalManager.closeAll()
-    pluginManager.disposeAll()
-    approvalBroker.dispose()
-    workspaceStore.close()
-    await Promise.allSettled([agentRegistry.disposeAll()])
+    await runShutdownSteps(
+      [
+        { name: 'approval-broker', timeoutMs: 400, run: () => approvalBroker.dispose() },
+        { name: 'agents', timeoutMs: 2000, run: () => agentRegistry.disposeAll() },
+        { name: 'worktree-deps', timeoutMs: 400, run: () => disposeAllCoordinators() },
+        {
+          name: 'workspace-tasks',
+          timeoutMs: 400,
+          run: () => {
+            closeAllWorkspaceWatchers()
+            repoSync.disposeAll()
+            pluginManager.disposeAll()
+          }
+        },
+        { name: 'terminals', timeoutMs: 400, run: () => terminalManager.closeAll() },
+        {
+          name: 'child-processes',
+          timeoutMs: 1500,
+          run: () => {
+            // PTY shell、npm install 等子进程的孙进程会绕过 kill()，这里收尾整棵树
+            const { killed, failed } = childRegistry.killAll()
+            if (killed > 0 || failed > 0) {
+              console.log(`[Shutdown] child processes: killed=${killed} failed=${failed}`)
+            }
+          }
+        },
+        { name: 'workspace-store', timeoutMs: 400, run: () => workspaceStore.close() },
+        { name: 'tray', timeoutMs: 400, run: () => destroyTray() }
+      ],
+      { logger: console }
+    )
   } catch (error) {
     console.error('[Main] Shutdown cleanup failed:', error)
   } finally {
@@ -980,17 +1058,22 @@ async function shutdownApplication(): Promise<void> {
   }
 }
 
+// 退出流程的兜底：清理卡住 / 渲染层不回应时强制 exit，避免留下握着单实例锁的僵尸进程
+const quitSequencer = createQuitSequencer({
+  app,
+  shutdown: shutdownApplication,
+  logger: console
+})
+
 // 退出顺序：先让窗口完成 beforeunload / will-prevent-unload 的未保存确认，
 // 所有窗口真正关闭后再在 will-quit 里做异步清理，避免用户取消关闭时资源已被释放。
 app.on('before-quit', () => {
   quitting = true
+  quitSequencer.handleBeforeQuit()
 })
 
 app.on('will-quit', (event) => {
-  if (shuttingDown) return
-  event.preventDefault()
-  shuttingDown = true
-  void shutdownApplication().finally(() => app.quit())
+  quitSequencer.handleWillQuit(event)
 })
 
 app.on('window-all-closed', () => {

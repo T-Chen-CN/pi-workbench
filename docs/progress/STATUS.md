@@ -8,7 +8,7 @@
 
 ## 最新状态
 
-**更新时间**: 2026-10-29
+**更新时间**: 2026-10-30
 
 - ✅ **最新版本 0.7.4**（工作树依赖自动安装与复用 + 聊天体验 / 外链 / 剪贴板 / 编辑器外部刷新批次）；完整记录见下方 Phase 6 的 2026-10-29 条目
 - ✅ **0.7.3 已发布：标签命中区整块可点 + 会话标题锁定**；完整记录见下方 Phase 6 的 2026-10-28 条目
@@ -218,6 +218,7 @@
 - ✅ 2026-10-29 GIT-118 复查修正：哈希改为取**工作树自己那份 lockfile**（无则回退仓库根）—— 原来用仓库根的哈希描述工作树里的安装，导致分支换 lockfile 时永不重装、两个不同分支的工作树共用一个哈希；依赖安装只在**绑定工作树时**触发（`ensureInstalled`），`statusFor` 改为纯读，修掉「光是枚举工作树就给所有工作树（含用户手工创建的、无会话绑定的）装一遍依赖」；安装改为串行，排队任务被取消时不再启动。新增 `statusFor` 只读 / 串行排队 / 排队取消 / 工作树自身 lockfile 变化重装 / 未绑定工作树不安装 五类用例
 - ✅ 2026-10-29 聊天体验与链接批次合入 main（`pi/01a18458`）：代码框 / 消息 / 提交 SHA / 工具结果的复制改走主进程 `clipboard:writeText`（`copyText()` 三级回退：Electron 原生 → `navigator.clipboard` → textarea + `execCommand`，失败给 Toast 不再静默）；外链（https / http / mailto）统一由 `shell:openExternal` 交系统浏览器（`electron/external-links.ts` 白名单），对话与阅读视图的 Markdown 链接分三态（外链 / `#anchor` 本文档滚动 / 仓库文件交编辑器打开），不再使用 `target="_blank"`；新增划词「引用到对话」浮起按钮与输入区「引用当前文档」开关；内联变更卡默认收起；用户消息改纸卡批注、Agent 保持流动正文；面板级 `ErrorBoundary` 兜住 Monaco `Model is disposed!`（不再整窗白屏）；拖出面板增加 96 DIP 拖动距离判据（`aux:drag-begin`）；辅助窗口登记为受信任 IPC 来源（`trustIpcSender` / `untrustIpcSender`，子框架仍拒绝，频道增至 18 域 / 123 handler）；打开的文件跟随外部（Agent 直接写盘 / git 切分支）改动自动刷新，脏缓冲显示冲突提示条，监听过滤器不再吞 `.pi-workbench/worktrees/**`，`fs:watch` 允许受信任根的子目录（`resolveWatchableRoot`，只授予监听不授予写）。插话时序改动已按要求整体撤销，改由 [聊天渲染单一数据源](../architecture/chat-render-single-source.md)（设计稿，未实施）根治。设计系统 v1.47（新增 6.16），`ipc-and-trust` / `panels-and-windows` / ADR-001 同步新的 IPC 信任模型。type-check / lint / 1069 用例通过
 - ✅ 2026-10-29 发布 v0.7.4：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage），附 `latest*.yml` 与 blockmap；本版包含工作树依赖自动安装与复用（GIT-118：按 lockfile 识别包管理器、链接工作树后台串行安装、哈希写进 `session-git.json`、chip 显示安装中 / 就绪 / 失败可重试、可在设置关闭）、聊天体验批次（复制走主进程剪贴板、内联变更卡默认收起、用户 / Agent 消息分层、面板级错误边界、划词「引用到对话」与「引用当前文档」）、Markdown 链接三态与外链交系统浏览器、打开的文件跟随外部（Agent 写盘 / git 切分支）改动自动刷新、面板拆出判据加入 96 DIP 拖动距离、辅助窗口登记为受信任 IPC 来源；同时修掉 release 在三平台上唯一失败的一条用例（工作树依赖用例拿未规范化的 tmpdir 路径与 canonicalise 过的 `view.path` 比较，macOS `/var` → `/private/var` 与 Windows `RUNNER~1` 短名下必失败；CI 只在 ubuntu 跑测试，所以之前一直是绿的）。type-check / lint / 1069 用例通过
+- ✅ 2026-10-30 退出可靠性加固（`fix/quit-and-single-instance`）：症状是关闭退出后主进程驻留、继续持有 `data/profile/lockfile`，此后每次双击都在单实例锁处静默 `app.exit(0)`（此时 logger 还没建立）——`logs/main.log` 连续 18 小时零记录，用户看到的就是「双击没反应」。新增 `electron/shutdown.ts`：`runShutdownSteps()` 逐步超时跑清理链，`createQuitSequencer()` 让 `will-quit` 只 `preventDefault()` 一次、清理后用 `app.exit(0)`（不再二次 `app.quit()`，见 electron#33643），并有 6s 清理看门狗 + 10s 退出卡死看门狗；清理顺序改为依赖反序、托盘最后销毁（清理变慢时用户还能从托盘再退一次）；未保存确认里点「取消」时复位 `quitting` 并撤掉看门狗（修复「取消过一次退出后 X 直接退掉而不是收托盘」）。新增 `electron/child-registry.ts` 登记 PTY 与工作树 `npm install` 子进程，退出时按进程树回收（Windows `taskkill /T /F`），并 `disposeAllCoordinators()` 取消在跑的安装；`agentRegistry.disposeAll()` 改为并行 + 单 agent 2s 超时，`pi-bridge` 的 `extrasSave` 加 1s 超时；文件日志与 console tee 提到 `requestSingleInstanceLock()` **之前**，锁被拒时落 `[Boot] Another instance holds the single instance lock` 并在 ready 前弹原生提示框（`showErrorBox`，不初始化目录 / SQLite / 托盘）后退出，`second-instance` 记日志并走 `showMainWindow()` 唤回 / 重建窗口；退出中不再投递桌面通知（`NotificationRouter` 新增 `isQuitting`，修掉退出时 `abort()` 会话导致的「错误」系统通知误报）。退出顺序与约束写入 `paths-and-storage` §2.1 与 AGENTS §4。真机两次退出实测（会话在跑 + 挂起审批）：清理 71 / 72ms、进程 ~0.4s 内归零、`lockfile` 自动删除、无残留子进程。type-check / lint / 1093 用例通过
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
 ## 最近提交

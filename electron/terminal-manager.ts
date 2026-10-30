@@ -4,8 +4,11 @@
  */
 import * as fs from 'fs'
 import * as path from 'path'
+import { childRegistry } from './child-registry.js'
 
 export interface PtyProcess {
+  /** shell 进程 pid；node-pty 会提供，测试替身可能没有 */
+  pid?: number
   onData: (listener: (data: string) => void) => void
   onExit: (listener: (event: { exitCode: number }) => void) => void
   write: (data: string) => void
@@ -61,6 +64,8 @@ interface TerminalEntry {
   logBytes: number
   /** 最近一次输出时间，用于判断终端是否仍在执行任务 */
   lastActivityAt: number
+  /** 从子进程登记表注销；进程退出 / 终端关闭时调用 */
+  unregisterChild: (() => void) | null
 }
 
 const FLUSH_DELAY_MS = 500
@@ -137,6 +142,17 @@ export class TerminalManager {
         logPath,
         logBytes: 0,
         lastActivityAt: 0,
+        unregisterChild: null,
+      }
+
+      // 登记 shell 进程：退出时用 taskkill /T 收整棵树，否则用户启动的
+      // 子进程（dev server、测试运行器）会变成孤儿
+      if (typeof pty.pid === 'number' && pty.pid > 0) {
+        entry.unregisterChild = childRegistry.register({
+          pid: pty.pid,
+          group: 'pty',
+          kill: () => pty.kill(),
+        })
       }
 
       // 同一工作区的终端共用一个日志文件：追加会话标记而不是清空历史
@@ -170,6 +186,8 @@ export class TerminalManager {
       pty.onExit(({ exitCode }) => {
         this.flush(entry)
         this.terminals.delete(id)
+        entry.unregisterChild?.()
+        entry.unregisterChild = null
         this.options.onExit?.(id, exitCode)
       })
 
@@ -201,6 +219,8 @@ export class TerminalManager {
     if (!entry) return false
     this.terminals.delete(id)
     this.clearFlushTimer(id)
+    entry.unregisterChild?.()
+    entry.unregisterChild = null
     try {
       entry.pty.kill()
     } catch (error) {
