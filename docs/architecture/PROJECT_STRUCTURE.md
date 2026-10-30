@@ -68,6 +68,8 @@ pi-workbench/
 │   ├── git-worktrees.ts          # 会话工作树与 session-git.json
 │   ├── worktree-coordinator.ts   # 工作树切换在轮次边界生效
 │   ├── worktree-deps.ts          # 链接工作树依赖探测与后台安装
+│   ├── repo-map.ts               # 仓库地图：Git 跟踪文件 → 职责事实表（只读 + 增量缓存）
+│   ├── repo-map-canvas.ts        # 画布布局落盘（repo-map-canvas.json，读 + 清洗 + 原子写）
 │   ├── repo-watcher.ts           # 仓库状态监听
 │   ├── repo-sync.ts              # 分支拉取 / 同步
 │   ├── repo-autofetch.ts         # 定时 fetch
@@ -116,8 +118,12 @@ pi-workbench/
 │   │   ├── WorkspaceView.tsx     # 单个工作区的常驻三栏视图
 │   │   ├── BootScreen.tsx        # 启动引导占位
 │   │   ├── BrandSeal.tsx         # 品牌印章（欢迎页 / 空状态）
-│   │   ├── EditorTabs.tsx        # 编辑器标签栏（含未保存与预览状态）
-│   │   ├── FileView.tsx          # 文件阅读视图路由（按类型分发）
+│   │   ├── EditorTabs.tsx        # 编辑器标签栏（面板标签 + 未保存与预览状态）
+│   │   ├── FileView.tsx          # 编辑区容器：面板 / 文件视图分发（按类型路由）
+│   │   ├── WorkspacePanel.tsx    # 工作区面板：工具条 / 搜索 / 降级提示 + 画布容器
+│   │   ├── RepoMapCanvas.tsx     # 仓库地图：底层地图 + 上浮链（平移 / 缩放 / 拖动 / 吸附 / LOD / 小地图）
+│   │   ├── RepoMapNodeCard.tsx   # 画布卡片（文件夹卡 / 文件卡）
+│   │   ├── RepoMapMinimap.tsx    # 画布小地图（SVG 缩略图 + 视口框）
 │   │   ├── MarkdownReadingView.tsx # Markdown 阅读视图（块级范围渲染）
 │   │   ├── PdfReadingView.tsx    # PDF 阅读（pdf.js）
 │   │   ├── OfficeDocumentView.tsx # Word / 表格 / 幻灯片 / EPUB 只读预览
@@ -139,8 +145,9 @@ pi-workbench/
 │   │   ├── chatStore.ts          # 消息、草稿、附件、排队、用量
 │   │   ├── dialogStore.ts        # 确认 / 输入对话框
 │   │   ├── diffStore.ts          # Diff 查看器（按工作区隔离）
-│   │   ├── editorStore.ts        # 标签页、当前文件、脏标记（按工作区隔离）
+│   │   ├── editorStore.ts        # 标签页、当前文件、脏标记、面板开关（按工作区隔离）
 │   │   ├── gitStore.ts           # Git 视图状态（分支 / 提交 / 工作树）
+│   │   ├── repoMapStore.ts       # 仓库地图扫描结果（按工作区缓存 / 按需补描述）
 │   │   ├── panelStore.ts         # 可停靠 / 可拖出面板的布局状态
 │   │   ├── i18nStore.ts          # 语言
 │   │   ├── selectionStore.ts     # 编辑器选区片段
@@ -157,10 +164,13 @@ pi-workbench/
 │   │   ├── linkTarget.ts         # 链接目标判定与信任校验
 │   │   ├── quoteSelection.ts     # 划词选区取值与长度上限
 │   │   ├── chatAttachments.ts    # 附件 ↔ 上下文条目的唯一映射（发送 / 插话 / 重发）
-│   │   └── editorTabs.ts         # 编辑器标签落盘
+│   │   ├── editorTabs.ts         # 编辑器标签落盘
+│   │   └── repoMapCanvas.ts      # 底层画布布局的读取与防抖落盘（上浮链状态不落盘）
 │   ├── theme/tokens.ts           # 从 CSS 变量读取颜色（Monaco / xterm）
 │   ├── hooks/                     # chatScroll（聊天贴底）/ useVirtualRows / useChatSessions / useChatPanelState / useRevertEdits
-│   ├── utils/                    # 文件路径/树、快捷键、符号、图片、Markdown、剪贴板、diff 回退等
+│   ├── utils/                    # 文件路径/树、快捷键、符号、图片、Markdown、剪贴板、diff 回退
+│   │                             # 仓库地图：repoMapText（文案）/ repoMapLayout（底层 + 上浮链 + 层级深度）
+│   │                             # repoMapCanvasState（落盘形状与迁移）/ repoMapLod
 │   ├── api/
 │   │   ├── index.ts              # IPC 封装 + Web dev mock
 │   │   ├── piAgentAPI.ts         # Agent 调用（Electron IPC / Web SSE 桥接）
@@ -290,6 +300,8 @@ ChatPanel.handleSubmit
 | `app:getRecentWorkspaces` / `addRecentWorkspace` | invoke | 最近工作区（只返回仍然存在的目录） |
 | `app:hasActiveWork` | invoke | 更新安装前的忙碌检查 |
 | `workspace:init` / `dispose` / `searchFiles` / `editorTabs:*` | invoke | 工作区生命周期与标签 |
+| `repo-map:scan` / `repo-map:describe` | invoke | 仓库地图扫描 / 降级模式下补齐描述（只读，缓存写在工作区 `.pi-workbench/`） |
+| `repo-map:canvas:get` / `repo-map:canvas:set` | invoke | 画布布局读写（`.pi-workbench/repo-map-canvas.json`，写前清洗坐标与路径键） |
 | `apiConfig:get` / `save` / `fetchModels` | invoke | 供应商配置与模型拉取 |
 | `agent:initialize` / `chat` / `abort` / `dispose` / `steer` | invoke | Agent 生命周期与运行控制 |
 | `agent:sessions:*` / `agent:plan:*` / `agent:tool-result:*` | invoke | 会话、计划、工具结果 |

@@ -57,12 +57,17 @@ export async function openFileInEditor(
   options: OpenFileOptions = {}
 ): Promise<OpenFileOutcome> {
   const store = editorStoreFor(root)
+  /** 任何入口打开 / 切到文件都回到文件视图；面板标签只由标签条自己激活 */
+  const openedInEditor = (fileKind: FileKind): OpenFileOutcome => {
+    store.getState().setPanelActive(false)
+    return { status: 'opened', kind: fileKind }
+  }
   const name = basename(targetPath) || targetPath
   const existing = store.getState().openFiles.find((file) => file.path === targetPath)
   if (existing) {
     store.getState().setCurrentFile(existing)
     if (options.revealLine) store.getState().revealLine(targetPath, options.revealLine)
-    return { status: 'opened', kind: existing.kind }
+    return openedInEditor(existing.kind)
   }
 
   let size = 0
@@ -93,7 +98,7 @@ export async function openFileInEditor(
       isDirty: false,
       isSaving: false,
     })
-    return { status: 'opened', kind }
+    return openedInEditor(kind)
   }
 
   // Office / EPUB：内容由主进程解析成预览模型，渲染层不读字节、也不确认大小
@@ -107,7 +112,7 @@ export async function openFileInEditor(
       isSaving: false,
       view: 'reading',
     })
-    return { status: 'opened', kind }
+    return openedInEditor(kind)
   }
 
   // 文本类（含 Markdown / HTML）：先确认大小，再读取并探测二进制
@@ -144,7 +149,7 @@ export async function openFileInEditor(
       isSaving: false,
       view: 'source',
     })
-    return { status: 'opened', kind }
+    return openedInEditor(kind)
   }
 
   // 文本类：按扩展名决定阅读视图还是源码视图
@@ -158,5 +163,5 @@ export async function openFileInEditor(
     view: defaultViewFor(kind),
   })
   if (options.revealLine) store.getState().revealLine(targetPath, options.revealLine)
-  return { status: 'opened', kind }
+  return openedInEditor(kind)
 }

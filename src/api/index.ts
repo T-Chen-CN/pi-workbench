@@ -4,6 +4,11 @@
  */
 
 import type {
+  RepoMapResult,
+  RepoMapScanOptions,
+  RepoMapCanvasState,
+  RepoMapCanvasGetResult,
+  RepoMapCanvasSetResult,
   OpenDirectoryResult,
   ListDirectoryResult,
   ReadFileResult,
@@ -48,9 +53,12 @@ import type {
   DocumentPreviewResult
 } from '../types/electron'
 import { frameNameOf, type HostId } from '../panelHost/types'
+import { emptyCanvasState, sanitizeCanvasState } from '../utils/repoMapCanvasState'
 
 // Mock API for browser development
 const MOCK_CONFIG_KEY = 'pi-workbench-api-config'
+/** 旧 preload（未重启主进程）时的降级文案，语气与 repo-map 的失败文案一致 */
+const CANVAS_UNAVAILABLE = 'Restart the app to save the canvas layout'
 const MOCK_WEB_SEARCH_KEY = 'pi-workbench-web-search-config'
 const MOCK_SETTINGS_KEY = 'pi-workbench-settings'
 
@@ -263,6 +271,79 @@ const mockAPI = {
   editorTabsSet: async (workspacePath: string, tabs: EditorTabs): Promise<WorkspaceResult> => {
     localStorage.setItem(`pi-workbench-editor-tabs:${workspacePath}`, JSON.stringify(tabs))
     return { success: true }
+  },
+  // 浏览器里没有 git：给一份固定的示例地图，方便调面板样式
+  repoMapScan: async (): Promise<RepoMapResult> => ({
+    success: true,
+    isRepo: true,
+    repoRoot: '/mock/repo',
+    total: 4,
+    described: 4,
+    truncated: false,
+    files: [
+      {
+        path: 'src/components/WorkspacePanel.tsx',
+        role: 'component',
+        binary: false,
+        size: 4096,
+        mtimeMs: 0,
+        described: true,
+        headComment: '工作区面板：编辑区的默认视图',
+        exports: ['WorkspacePanel'],
+        symbol: 'WorkspacePanel'
+      },
+      {
+        path: 'src/store/repoMapStore.ts',
+        role: 'state',
+        binary: false,
+        size: 2048,
+        mtimeMs: 0,
+        described: true,
+        headComment: '仓库地图状态：按工作区缓存扫描结果',
+        exports: ['useRepoMapStore'],
+        symbol: 'useRepoMapStore'
+      },
+      {
+        path: 'docs/README.md',
+        role: 'doc',
+        binary: false,
+        size: 1024,
+        mtimeMs: 0,
+        described: true
+      },
+      {
+        path: 'package.json',
+        role: 'config',
+        binary: false,
+        size: 512,
+        mtimeMs: 0,
+        described: true
+      }
+    ]
+  }),
+  repoMapDescribe: async (): Promise<RepoMapResult> => mockAPI.repoMapScan(),
+  repoMapCanvasGet: async (workspacePath: string): Promise<RepoMapCanvasGetResult> => {
+    try {
+      const raw = localStorage.getItem(`pi-workbench-repo-map-canvas:${workspacePath}`)
+      if (!raw) return { success: true, state: emptyCanvasState() }
+      return { success: true, state: sanitizeCanvasState(JSON.parse(raw)) }
+    } catch {
+      return { success: true, state: emptyCanvasState() }
+    }
+  },
+  repoMapCanvasSet: async (
+    workspacePath: string,
+    state: RepoMapCanvasState
+  ): Promise<RepoMapCanvasSetResult> => {
+    try {
+      localStorage.setItem(
+        `pi-workbench-repo-map-canvas:${workspacePath}`,
+        JSON.stringify(sanitizeCanvasState(state))
+      )
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
   },
 
   apiConfigGet: async (): Promise<ApiConfigGetResult> => {
@@ -572,6 +653,42 @@ export const api = {
   draftClear: (workspacePath: string) => electronAPI.draftClear(workspacePath),
   editorTabsGet: (workspacePath: string) => electronAPI.editorTabsGet(workspacePath),
   editorTabsSet: (workspacePath: string, tabs: EditorTabs) => electronAPI.editorTabsSet(workspacePath, tabs),
+  // 旧 preload（热更新期间尚未重启主进程）没有这两个接口：降级为明确的失败，而不是抛异常
+  repoMapScan: (workspacePath: string, options?: RepoMapScanOptions): Promise<RepoMapResult> =>
+    typeof electronAPI.repoMapScan === 'function'
+      ? electronAPI.repoMapScan(workspacePath, options)
+      : Promise.resolve({
+          success: false,
+          isRepo: false,
+          total: 0,
+          described: 0,
+          truncated: false,
+          files: [],
+          error: 'Restart the app to enable the repository map'
+        }),
+  repoMapDescribe: (workspacePath: string, paths: string[]): Promise<RepoMapResult> =>
+    typeof electronAPI.repoMapDescribe === 'function'
+      ? electronAPI.repoMapDescribe(workspacePath, paths)
+      : Promise.resolve({
+          success: false,
+          isRepo: false,
+          total: 0,
+          described: 0,
+          truncated: false,
+          files: [],
+          error: 'Restart the app to enable the repository map'
+        }),
+  repoMapCanvasGet: (workspacePath: string): Promise<RepoMapCanvasGetResult> =>
+    typeof electronAPI.repoMapCanvasGet === 'function'
+      ? electronAPI.repoMapCanvasGet(workspacePath)
+      : Promise.resolve({ success: false, state: emptyCanvasState(), error: CANVAS_UNAVAILABLE }),
+  repoMapCanvasSet: (
+    workspacePath: string,
+    state: RepoMapCanvasState
+  ): Promise<RepoMapCanvasSetResult> =>
+    typeof electronAPI.repoMapCanvasSet === 'function'
+      ? electronAPI.repoMapCanvasSet(workspacePath, state)
+      : Promise.resolve({ success: false, error: CANVAS_UNAVAILABLE }),
 
   // API Configuration management (portable architecture)
   apiConfigGet: () => electronAPI.apiConfigGet(),

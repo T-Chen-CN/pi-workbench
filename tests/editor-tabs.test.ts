@@ -87,6 +87,8 @@ describe('editor tab persistence', () => {
     const state = editorStoreFor('/ws').getState()
     expect(state.openFiles.map((item) => item.path)).toEqual(['/ws/a.ts', '/ws/b.ts'])
     expect(state.currentFile?.path).toBe('/ws/b.ts')
+    // 有恢复出来的文件就直接停在文件视图，不是先闪一下面板
+    expect(state.panelActive).toBe(false)
   })
 
   it('skips missing, directory and oversized files', async () => {

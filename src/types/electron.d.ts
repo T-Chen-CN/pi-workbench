@@ -285,6 +285,17 @@ export interface ElectronAPI {
   draftClear: (workspacePath: string) => Promise<DraftResult>
   editorTabsGet: (workspacePath: string) => Promise<EditorTabsResult>
   editorTabsSet: (workspacePath: string, tabs: EditorTabs) => Promise<WorkspaceResult>
+  /** 仓库地图扫描：只读，缓存写在工作区的 .pi-workbench 里 */
+  repoMapScan: (workspacePath: string, options?: RepoMapScanOptions) => Promise<RepoMapResult>
+  /** 降级模式下补齐指定文件的描述 */
+  repoMapDescribe: (workspacePath: string, paths: string[]) => Promise<RepoMapResult>
+  /** 读取画布视图状态（位置 / 折叠 / 视口） */
+  repoMapCanvasGet: (workspacePath: string) => Promise<RepoMapCanvasGetResult>
+  /** 保存画布视图状态 */
+  repoMapCanvasSet: (
+    workspacePath: string,
+    state: RepoMapCanvasState
+  ) => Promise<RepoMapCanvasSetResult>
 
   // Pi Agent API
   agentInitialize: (config: AgentInitConfig) => Promise<AgentInitResult>
@@ -1187,6 +1198,90 @@ export interface EditorTabs {
 export interface EditorTabsResult {
   success: boolean
   tabs?: EditorTabs
+  error?: string
+}
+
+/** 仓库地图：文件在工作区里的角色（与 i18n 的 repoMapRole* 一一对应） */
+export type RepoMapRole =
+  | 'component'
+  | 'state'
+  | 'ipc'
+  | 'util'
+  | 'type'
+  | 'style'
+  | 'test'
+  | 'doc'
+  | 'config'
+  | 'asset'
+  | 'other'
+
+/** 仓库地图条目：事实（与语言无关）+ 相对仓库根的路径 */
+export interface RepoMapFile {
+  path: string
+  role: RepoMapRole
+  binary: boolean
+  size: number
+  mtimeMs: number
+  /** 是否已生成描述；降级模式下未展开的文件为 false */
+  described: boolean
+  /** 文件首部注释（原文摘要，渲染层再截断） */
+  headComment?: string
+  exports?: string[]
+  symbol?: string
+}
+
+export interface RepoMapResult {
+  success: boolean
+  isRepo: boolean
+  repoRoot?: string
+  total: number
+  described: number
+  /** 仓库超过全量扫描上限时为 true：描述按目录 / 搜索补齐 */
+  truncated: boolean
+  files: RepoMapFile[]
+  error?: string
+}
+
+export interface RepoMapScanOptions {
+  /** 忽略指纹缓存，全部重读 */
+  force?: boolean
+  /** 需要确保已描述的路径（降级模式下展开 / 搜索时传入） */
+  paths?: string[]
+}
+
+/** 画布上的点（世界坐标，与缩放无关） */
+export interface RepoMapPoint {
+  x: number
+  y: number
+}
+
+/** 顶层文件夹：只记手动拖过的位置；缺省表示由底层布局决定 */
+export interface RepoMapFolderState {
+  x?: number
+  y?: number
+}
+
+/** 画布视图状态：落盘在 `.pi-workbench/repo-map-canvas.json`（只含底层地图） */
+export interface RepoMapCanvasState {
+  version: number
+  /** 底层布局版本：升级时旧坐标整批作废 */
+  layoutVersion: number
+  zoom: number
+  pan: RepoMapPoint
+  /** 键是顶层目录相对路径（无尾斜杠） */
+  folders: Record<string, RepoMapFolderState>
+  /** 键是根目录文件相对路径；只有手动拖过的才在这里 */
+  files: Record<string, RepoMapPoint>
+}
+
+export interface RepoMapCanvasGetResult {
+  success: boolean
+  state: RepoMapCanvasState
+  error?: string
+}
+
+export interface RepoMapCanvasSetResult {
+  success: boolean
   error?: string
 }
 

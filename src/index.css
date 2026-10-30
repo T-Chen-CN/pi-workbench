@@ -582,3 +582,61 @@ button {
 .hljs-strong {
   font-weight: 700;
 }
+
+/* ── 仓库地图画布 ───────────────────────────────────────────────
+   点阵底随平移 / 缩放同步（由 RepoMapCanvas 直接写 background-position /
+   background-size），缩放分级只切显隐，不重建 DOM。 */
+.repo-map-canvas {
+  background-image: radial-gradient(circle, rgb(var(--line) / 0.18) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: 0 0;
+}
+
+.repo-map-card[data-dragging='true'] {
+  z-index: 2;
+  border-color: rgb(var(--accent));
+  box-shadow: 5px 6px 0 rgb(var(--shadow-color) / var(--shadow-alpha));
+}
+
+.repo-map-canvas[data-zoom-lod='compact'] .repo-map-card__desc {
+  display: none;
+}
+
+.repo-map-canvas[data-zoom-lod='tiny'] .repo-map-card__desc,
+.repo-map-canvas[data-zoom-lod='tiny'] .repo-map-card__role,
+.repo-map-canvas[data-zoom-lod='tiny'] .repo-map-card__meta {
+  display: none;
+}
+
+.repo-map-card {
+  transition:
+    left 160ms ease-out,
+    top 160ms ease-out,
+    transform 160ms ease-out,
+    box-shadow 160ms ease-out,
+    border-color 120ms ease-out,
+    opacity 120ms ease-out;
+}
+
+/* 拖动中不要过渡，否则卡片会追着鼠标慢半拍 */
+.repo-map-card[data-dragging='true'] {
+  transition: none;
+}
+
+/* 空格手形工具：按住空格时整块画布（含卡片）都换成抓手光标，平移中换成抓紧 */
+.repo-map-canvas[data-space='true'],
+.repo-map-canvas[data-space='true'] .repo-map-card {
+  cursor: grab;
+}
+
+.repo-map-canvas[data-space='true'][data-panning='true'],
+.repo-map-canvas[data-space='true'][data-panning='true'] .repo-map-card {
+  cursor: grabbing;
+}
+
+/* 上浮链的卡片：位置 / 尺寸不变，越深越靠上（层级与阴影由内联 --depth 梯度给出） */
+@media (prefers-reduced-motion: reduce) {
+  .repo-map-card {
+    transition: none;
+  }
+}

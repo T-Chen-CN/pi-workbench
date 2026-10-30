@@ -101,7 +101,7 @@ macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动�
 
 - 每个打开的工作区各挂一套常驻视图（`WorkspaceView`）和按工作区隔离的 editor / diff store；切换标签或返回首页只切 `visibility: hidden` + `inert`，**不卸载、不 reset**。
 - 运行期状态全部保留：Monaco 撤销栈与滚动、聊天草稿 / 附件 / 滚动、终端进程与缓冲区、文件树展开、面板宽度与收起状态、流式输出。
-- **关闭工作区标签是唯一回收运行时的入口**：确认未保存文件与运行中任务 → 写 `editor-tabs.json` → dispose Agent、终端与文件监听 → 卸载视图。`chat-tabs.json`、`editor-tabs.json` 与草稿都**不删除**。
+- **关闭工作区标签是唯一回收运行时的入口**：确认未保存文件与运行中任务 → 写 `editor-tabs.json` → dispose Agent、终端与文件监听 → 卸载视图 → 释放按工作区的 store（`editor` / `diff` / 仓库地图扫描缓存 `repoMapStore.reset`）。`chat-tabs.json`、`editor-tabs.json` 与草稿都**不删除**。
 - 退出应用 / 重启：运行时全部回收，**不自动恢复工作区标签**；固定状态仍在磁盘，下次从最近项目打开时恢复。
 
 | 状态 | 是否落盘 |

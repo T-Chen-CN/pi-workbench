@@ -4,6 +4,12 @@ import { OpenFile, OpenFileInput, EditorState } from '../types'
 import { defaultViewFor, detectFileKind, supportsSourceView, type FileViewMode } from '../utils/fileKind'
 
 export interface EditorStore extends EditorState {
+  /**
+   * 编辑区当前显示工作区面板（标签条最左那枚固定标签）。
+   * 这是运行期状态：不进 `EditorState`，也不写 editor-tabs.json。
+   */
+  panelActive: boolean
+  setPanelActive: (active: boolean) => void
   /** 待定位的文件与行号（R-09），编辑器就绪后消费 */
   pendingReveal: { path: string; line: number } | null
   setCurrentFile: (file: OpenFile | null) => void
@@ -41,6 +47,10 @@ export function createEditorStore(): StoreApi<EditorStore> {
     openFiles: [],
     unsavedChanges: new Set(),
     pendingReveal: null,
+    // 面板是预览区的默认内容：新工作区、重启后都先看到它
+    panelActive: true,
+
+    setPanelActive: (active) => set({ panelActive: active }),
 
     setCurrentFile: (file) => set({ currentFile: file }),
 
@@ -76,6 +86,8 @@ export function createEditorStore(): StoreApi<EditorStore> {
           openFiles: newFiles,
           currentFile,
           unsavedChanges: newDirty,
+          // 不存在「没有文件打开」的空状态：最后一个文件关掉就回面板
+          ...(currentFile ? {} : { panelActive: true }),
         }
       }),
 
@@ -161,6 +173,7 @@ export function createEditorStore(): StoreApi<EditorStore> {
         openFiles: [],
         unsavedChanges: new Set(),
         pendingReveal: null,
+        panelActive: true,
       }),
 
     hasDirtyFiles: () => {

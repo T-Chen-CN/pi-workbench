@@ -36,6 +36,7 @@ import { registerSchemePrivileges } from './scheme-privileges.js'
 import { registerAgentIpc } from './ipc/agent.js'
 import { registerDocumentsIpc } from './ipc/documents.js'
 import { registerGitIpc } from './ipc/git.js'
+import { registerRepoMapIpc } from './ipc/repo-map.js'
 import { repoSync } from './repo-sync.js'
 import { registerWorkspaceIpc, closeAllWorkspaceWatchers } from './ipc/workspace.js'
 import { getActiveProviderApiKey, setRunningAgentsProvider } from './ipc/api-config.js'
@@ -577,6 +578,8 @@ registerAttachmentsIpc({
 })
 
 registerDocumentsIpc()
+
+registerRepoMapIpc()
 
 registerWorkspaceIpc({
   getMainWindow: () => mainWindow,

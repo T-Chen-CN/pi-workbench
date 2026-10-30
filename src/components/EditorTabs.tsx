@@ -7,6 +7,7 @@ import {
   Film,
   Globe,
   Image as ImageIcon,
+  LayoutDashboard,
   Loader2,
   Music,
   Presentation,
@@ -57,15 +58,19 @@ export interface EditorTabsProps {
   root: string
 }
 
-/** 文件标签条：活跃标签、脏标记、关闭。视图切换不在这里（见 FileView 右下角浮层） */
+/**
+ * 文件标签条：面板标签 + 活跃标签、脏标记、关闭。
+ *
+ * 标签条常驻（没有打开任何文件时也留着），因为最左那枚「面板」标签是预览区
+ * 默认视图的唯一入口。面板标签不属于 `openFiles`：不可关闭、不可排序，也不落盘；
+ * 用 sticky 固定在左端，文件标签再多也只是从它下面横向滚过去。视图切换不在这里
+ * （Markdown / HTML 的源码 ↔ 阅读见 FileView 右下角浮层）。
+ */
 export const EditorTabs: React.FC<EditorTabsProps> = ({ workspacePath, root }) => {
   const { t } = useI18nStore()
   const store = editorStoreFor(root)
-  const { currentFile, openFiles, removeOpenFile } = useEditorStore(root)
-
-  if (openFiles.length === 0) return null
-
-  const hasActive = Boolean(currentFile?.path)
+  const { currentFile, openFiles, panelActive, setPanelActive, setCurrentFile, removeOpenFile } =
+    useEditorStore(root)
 
   const closeFile = async (file: OpenFile) => {
     const target = store.getState().openFiles.find((f) => f.path === file.path)
@@ -92,14 +97,34 @@ export const EditorTabs: React.FC<EditorTabsProps> = ({ workspacePath, root }) =
       onWheel={handleTabStripWheel}
       className="tab-strip-scroll flex flex-shrink-0 items-stretch overflow-x-auto border-b border-rule-divide bg-panel"
     >
+      {/* 面板标签：左端固定（sticky），背景不透明，滚动的文件标签从它下面经过 */}
+      <div className="sticky left-0 z-10 flex flex-shrink-0 items-stretch bg-panel">
+        <Tab
+          active={panelActive}
+          tabbable={panelActive}
+          title={t('panelTab')}
+          ariaLabel={t('panelTab')}
+          onSelect={() => setPanelActive(true)}
+          className="max-w-[160px] pr-3"
+          labelClassName="max-w-[120px]"
+          leading={
+            <LayoutDashboard
+              size={12}
+              className={panelActive ? 'text-accent' : 'text-ink-muted'}
+            />
+          }
+          label={t('panelTab')}
+        />
+      </div>
+
       {openFiles.map((file, index) => {
-        const active = currentFile?.path === file.path
+        const active = !panelActive && currentFile?.path === file.path
         const Icon = iconFor(file)
         return (
           <Tab
             key={file.path}
             active={active}
-            tabbable={active || (!hasActive && index === 0)}
+            tabbable={active || (!panelActive && !currentFile && index === 0)}
             title={file.path}
             ariaLabel={
               [file.name, file.isDirty ? t('unsavedChanges') : '', file.isSaving ? t('saving') : '']
@@ -107,7 +132,10 @@ export const EditorTabs: React.FC<EditorTabsProps> = ({ workspacePath, root }) =
                 .join(' · ') || undefined
             }
             busy={file.isSaving}
-            onSelect={() => store.setState({ currentFile: file })}
+            onSelect={() => {
+              setCurrentFile(file)
+              setPanelActive(false)
+            }}
             onClose={() => void closeFile(file)}
             closeLabel={t('close')}
             className="max-w-[280px]"

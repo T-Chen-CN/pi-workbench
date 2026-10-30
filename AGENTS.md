@@ -124,6 +124,7 @@ npm run build      # 渲染层 + bridge + 主进程
 | [agent-runtime](docs/agent/agent-runtime.md) | 会话、权限审批、计划模式、工具白名单、标题、压缩、导出、联网 |
 | [git-and-worktrees](docs/agent/git-and-worktrees.md) | Git 视图、会话工作树、仓库同步、GitHub 关联 |
 | [panels-and-windows](docs/agent/panels-and-windows.md) | 面板拆出窗口、辅助窗口、托盘常驻、通知 |
+| [workspace-panel](docs/agent/workspace-panel.md) | 改编辑区面板 / 仓库地图画布（视图切换、上浮链、视口、落盘） |
 | [AGENT_TRACE](docs/architecture/AGENT_TRACE.md) | 流式事件协议与思考 / 工具轨迹数据模型 |
 | [GIT_WORKTREE_SESSIONS](docs/requirements/GIT_WORKTREE_SESSIONS.md) | 工作树会话的完整需求与验收场景 |
 | [AGENT-TESTING](docs/guides/AGENT-TESTING.md) | Agent 功能手动验收步骤 |

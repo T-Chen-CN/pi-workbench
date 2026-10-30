@@ -32,6 +32,7 @@ import { useThemeStore, useResolvedTheme, type ThemeMode } from './store/themeSt
 import { useWorkspaceStore } from './store/workspaceStore'
 import { useEditorStore, editorStoreFor, disposeEditorStore } from './store/editorStore'
 import { disposeDiffStore } from './store/diffStore'
+import { useRepoMapStore } from './store/repoMapStore'
 import { useChatStore } from './store/chatStore'
 import { useSessionStore } from './store/sessionStore'
 import { confirmDialog } from './store/dialogStore'
@@ -540,10 +541,11 @@ export default function App() {
       setShowHome(true)
     }
 
-    // 视图卸载后再释放按工作区的 store
+    // 视图卸载后再释放按工作区的 store（仓库地图的扫描缓存也要清，否则重开工作区拿到的是旧结果）
     window.setTimeout(() => {
       disposeEditorStore(targetPath)
       disposeDiffStore(targetPath)
+      useRepoMapStore.getState().reset(targetPath)
     }, 0)
   }
 

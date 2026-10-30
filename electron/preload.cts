@@ -179,6 +179,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   editorTabsGet: (workspaceDir: string) => ipcRenderer.invoke('workspace:editorTabs:get', workspaceDir),
   editorTabsSet: (workspaceDir: string, tabs: { open: string[]; active: string | null }) =>
     ipcRenderer.invoke('workspace:editorTabs:set', workspaceDir, tabs),
+  repoMapScan: (workspaceDir: string, options?: { force?: boolean; paths?: string[] }) =>
+    ipcRenderer.invoke('repo-map:scan', workspaceDir, options),
+  repoMapDescribe: (workspaceDir: string, paths: string[]) =>
+    ipcRenderer.invoke('repo-map:describe', workspaceDir, paths),
+  repoMapCanvasGet: (workspaceDir: string) =>
+    ipcRenderer.invoke('repo-map:canvas:get', workspaceDir),
+  repoMapCanvasSet: (workspaceDir: string, state: unknown) =>
+    ipcRenderer.invoke('repo-map:canvas:set', workspaceDir, state),
   agentSteer: (
     workspaceDir: string,
     sessionId: string,

@@ -30,9 +30,18 @@ const { HtmlPreview } = await import('../src/components/HtmlPreview')
 
 const zh = translations.zh
 
+/**
+ * 面板的搜索框也是 textbox：块内联编辑器的查询要限定在 textarea 上，
+ * 否则「找到多个 textbox」。
+ */
+const findEditorTextarea = () =>
+  screen.getAllByRole('textbox').find((node) => node.tagName === 'TEXTAREA') as HTMLTextAreaElement
+
+/** 等价于从文件树点一个文件：登记标签并切到文件视图（面板随之让位） */
 const open = (overrides: Record<string, unknown>) => {
   act(() => {
-    editorStoreFor('/ws').getState().addOpenFile({
+    const store = editorStoreFor('/ws')
+    store.getState().addOpenFile({
       path: '/ws/doc.md',
       name: 'doc.md',
       content: '',
@@ -40,6 +49,7 @@ const open = (overrides: Record<string, unknown>) => {
       isSaving: false,
       ...overrides,
     })
+    store.getState().setPanelActive(false)
   })
 }
 
@@ -145,9 +155,31 @@ describe('FileView view dispatch', () => {
     await waitFor(() => expect(api.openPathExternally).toHaveBeenCalledWith('/ws/app.exe'))
   })
 
-  it('shows the empty state when no file is open', () => {
+  it('shows the workspace panel by default', () => {
     render(<FileView workspacePath="/ws" />)
-    expect(screen.getByText(zh.noFileOpen)).toBeTruthy()
+    expect(screen.getByTestId('workspace-panel')).toBeTruthy()
+    expect(screen.getByRole('tab', { name: zh.panelTab })).toBeTruthy()
+  })
+
+  it('hides the file view instead of unmounting it while the panel is shown', async () => {
+    render(<FileView workspacePath="/ws" />)
+    open({ path: '/ws/a.ts', name: 'a.ts', content: 'const a = 1' })
+    expect(await screen.findByTestId('monaco-editor')).toBeTruthy()
+
+    act(() => editorStoreFor('/ws').getState().setPanelActive(true))
+    // 面板接管内容区，但编辑器仍挂在 DOM 上：撤销栈与滚动位置不会丢
+    expect(screen.getByTestId('workspace-panel')).toBeTruthy()
+    expect(screen.getByTestId('file-content-pane').className).toContain('hidden')
+    expect(screen.getByTestId('monaco-editor')).toBeTruthy()
+  })
+
+  it('falls back to the panel when the last file is closed', () => {
+    render(<FileView workspacePath="/ws" />)
+    open({ path: '/ws/a.ts', name: 'a.ts', content: 'const a = 1' })
+
+    act(() => editorStoreFor('/ws').getState().removeOpenFile('/ws/a.ts'))
+    expect(editorStoreFor('/ws').getState().panelActive).toBe(true)
+    expect(screen.getByTestId('workspace-panel')).toBeTruthy()
   })
 })
 
@@ -161,7 +193,7 @@ describe('MarkdownReadingView', () => {
     const block = paragraph.closest('[data-block-index]') as HTMLElement
     fireEvent.click(block.querySelector('button') as HTMLElement)
 
-    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    const textarea = findEditorTextarea()
     expect(textarea.value).toBe('first paragraph')
 
     fireEvent.change(textarea, { target: { value: 'edited paragraph' } })
@@ -183,7 +215,7 @@ describe('MarkdownReadingView', () => {
     fireEvent.click(
       (paragraph.closest('[data-block-index]') as HTMLElement).querySelector('button') as HTMLElement
     )
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'changed' } })
+    fireEvent.change(findEditorTextarea(), { target: { value: 'changed' } })
     fireEvent.click(screen.getByRole('button', { name: zh.cancel }))
 
     expect(editorStoreFor('/ws').getState().currentFile?.content).toBe(content)
@@ -197,7 +229,7 @@ describe('MarkdownReadingView', () => {
     fireEvent.click(
       (paragraph.closest('[data-block-index]') as HTMLElement).querySelector('button') as HTMLElement
     )
-    const textarea = screen.getByRole('textbox')
+    const textarea = findEditorTextarea()
     fireEvent.change(textarea, { target: { value: 'next' } })
     fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true })
 

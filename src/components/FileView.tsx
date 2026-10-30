@@ -9,6 +9,7 @@ import { hasReadingView, isOfficeDocumentKind, supportsSourceView } from '../uti
 import { useFileDocument } from '../workspace/useFileDocument'
 import { Button, EmptyState, OverlayButton, Spinner } from './ui'
 import { EditorTabs } from './EditorTabs'
+import { WorkspacePanel } from './WorkspacePanel'
 import { MarkdownReadingView } from './MarkdownReadingView'
 import { HtmlPreview } from './HtmlPreview'
 import { MediaView } from './MediaView'
@@ -56,7 +57,11 @@ export interface FileViewProps {
 /**
  * 编辑区容器：标签条 + 视图分发。
  *
- * 视图形态由 `file.kind` 决定，切换按钮只对支持源码视图的类型出现
+ * 内容区只有两种形态：工作区面板（默认，见 `panelActive`）与文件视图。切到面板时
+ * 文件视图是 `hidden` 而不是卸载 —— 与阅读视图同一套约定：Monaco 的撤销栈、
+ * 阅读视图的滚动位置在切回来时都还在。
+ *
+ * 文件视图形态由 `file.kind` 决定，切换按钮只对支持源码视图的类型出现
  * （Markdown / HTML）；媒体类始终是预览。保存与草稿由 `useFileDocument` 承担，
  * 因此阅读视图里的修改与 Monaco 里的修改走同一条落盘路径。
  */
@@ -68,7 +73,7 @@ export const FileView: React.FC<FileViewProps> = ({
   const root = viewRoot ?? workspacePath
   const { t } = useI18nStore()
   const store = editorStoreFor(root)
-  const { currentFile } = useEditorStore(root)
+  const { currentFile, panelActive } = useEditorStore(root)
   const { conflicts, reloadFromDisk, keepLocal } = useFileDocument({ workspacePath, root, active })
 
   // Monaco 一经挂载就保留（隐藏而非卸载），这样切回源码视图时撤销栈还在
@@ -103,7 +108,7 @@ export const FileView: React.FC<FileViewProps> = ({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <EditorTabs workspacePath={workspacePath} root={root} />
 
-      {conflictContent !== null && currentFile && (
+      {!panelActive && conflictContent !== null && currentFile && (
         <div
           role="status"
           data-testid="file-conflict-bar"
@@ -128,74 +133,84 @@ export const FileView: React.FC<FileViewProps> = ({
         </div>
       )}
 
-      {!currentFile ? (
-        <div className="flex min-h-0 flex-1 items-center justify-center bg-surface">
-          <EmptyState
-            icon={FilePlus2}
-            title={t('noFileOpen')}
-            description={t('selectFileToEdit')}
-          />
+      <div className="relative flex min-h-0 min-w-0 flex-1">
+        {/* 面板：预览区的默认内容 */}
+        <div className={panelActive ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}>
+          <WorkspacePanel workspacePath={workspacePath} active={panelActive && active} />
         </div>
-      ) : (
-        <div className="relative flex min-h-0 min-w-0 flex-1">
-          {canSource && (
-            <div className={reading ? 'hidden' : 'flex min-h-0 min-w-0 flex-1'}>
-              {sourceMounted ? (
-                <Suspense
-                  fallback={
-                    <div className="flex min-h-0 flex-1 items-center justify-center bg-surface">
-                      <Spinner />
-                    </div>
-                  }
-                >
-                  <MonacoEditor
-                    workspacePath={workspacePath}
-                    viewRoot={root}
-                    active={active && !reading}
-                  />
-                </Suspense>
-              ) : null}
-            </div>
-          )}
 
-          {/* 阅读视图同样常驻：切回源码再切回来时不必重建 DOM，滚动位置也留着 */}
-          {readingKind && (
-            <div
-              data-testid="file-reading-pane"
-              data-active={reading ? 'true' : 'false'}
-              className={reading ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}
-            >
-              {readingKind === 'markdown' ? (
-                <MarkdownReadingView root={root} file={currentFile} active={reading} />
-              ) : (
-                <HtmlPreview file={currentFile} />
+        {/* 文件视图常驻 DOM，面板激活时只是藏起来（撤销栈 / 滚动位置都留着） */}
+        <div
+          data-testid="file-content-pane"
+          data-active={panelActive ? 'false' : 'true'}
+          className={panelActive ? 'hidden' : 'relative flex min-h-0 min-w-0 flex-1'}
+        >
+          {currentFile ? (
+            <>
+              {canSource && (
+                <div className={reading ? 'hidden' : 'flex min-h-0 min-w-0 flex-1'}>
+                  {sourceMounted ? (
+                    <Suspense
+                      fallback={
+                        <div className="flex min-h-0 flex-1 items-center justify-center bg-surface">
+                          <Spinner />
+                        </div>
+                      }
+                    >
+                      <MonacoEditor
+                        workspacePath={workspacePath}
+                        viewRoot={root}
+                        active={active && !reading && !panelActive}
+                      />
+                    </Suspense>
+                  ) : null}
+                </div>
               )}
-            </div>
-          )}
-          {fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' ? (
-            <MediaView file={currentFile} />
-          ) : null}
-          {fileKind === 'pdf' && <PdfReadingView file={currentFile} />}
-          {/* Office / EPUB：主进程解析成结构化模型，这里只负责画 */}
-          {fileKind && isOfficeDocumentKind(fileKind) && (
-            <OfficeDocumentView file={currentFile} />
-          )}
-          {fileKind === 'binary' && (
-            <UnsupportedFileView path={currentFile.path} name={currentFile.name} />
-          )}
 
-          {/* 视图切换浮在内容右下角：不再和文件标签抢标签条，标签再多也不会被挤出可视区 */}
-          {readingKind && (
-            <OverlayButton
-              data-testid="file-view-toggle"
-              icon={reading ? Code : Eye}
-              label={reading ? t('viewSource') : t('viewReading')}
-              className="absolute bottom-4 right-4 z-10"
-              onClick={() => store.getState().toggleFileView(currentFile.path)}
-            />
-          )}
+              {/* 阅读视图同样常驻：切回源码再切回来时不必重建 DOM，滚动位置也留着 */}
+              {readingKind && (
+                <div
+                  data-testid="file-reading-pane"
+                  data-active={reading ? 'true' : 'false'}
+                  className={reading ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}
+                >
+                  {readingKind === 'markdown' ? (
+                    <MarkdownReadingView
+                      root={root}
+                      file={currentFile}
+                      active={reading && !panelActive}
+                    />
+                  ) : (
+                    <HtmlPreview file={currentFile} />
+                  )}
+                </div>
+              )}
+              {fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' ? (
+                <MediaView file={currentFile} />
+              ) : null}
+              {fileKind === 'pdf' && <PdfReadingView file={currentFile} />}
+              {/* Office / EPUB：主进程解析成结构化模型，这里只负责画 */}
+              {fileKind && isOfficeDocumentKind(fileKind) && (
+                <OfficeDocumentView file={currentFile} />
+              )}
+              {fileKind === 'binary' && (
+                <UnsupportedFileView path={currentFile.path} name={currentFile.name} />
+              )}
+
+              {/* 视图切换浮在内容右下角：不再和文件标签抢标签条，标签再多也不会被挤出可视区 */}
+              {readingKind && (
+                <OverlayButton
+                  data-testid="file-view-toggle"
+                  icon={reading ? Code : Eye}
+                  label={reading ? t('viewSource') : t('viewReading')}
+                  className="absolute bottom-4 right-4 z-10"
+                  onClick={() => store.getState().toggleFileView(currentFile.path)}
+                />
+              )}
+            </>
+          ) : null}
         </div>
-      )}
+      </div>
     </div>
   )
 }

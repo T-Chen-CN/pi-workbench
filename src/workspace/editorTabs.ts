@@ -154,5 +154,8 @@ export async function restoreEditorTabs(
     if (activeFile) store.getState().setCurrentFile(activeFile)
   }
 
+  // 有恢复出来的文件就停在文件视图（否则重启后明明有标签，内容区却还是面板）
+  if (store.getState().openFiles.length > 0) store.getState().setPanelActive(false)
+
   return { restored, skipped }
 }

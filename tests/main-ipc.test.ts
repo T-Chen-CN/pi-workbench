@@ -795,6 +795,140 @@ describe('workspace editor tabs', () => {
   })
 })
 
+describe('repo map handlers', () => {
+  async function initRepo(): Promise<void> {
+    const { execFileSync } = await import('child_process')
+    const run = (args: string[]) => execFileSync('git', args, { cwd: workDir, encoding: 'utf8' })
+    run(['init', '-b', 'main'])
+    run(['config', 'user.email', 'test@example.com'])
+    run(['config', 'user.name', 'Test'])
+    await fs.mkdir(path.join(workDir, 'src', 'store'), { recursive: true })
+    await fs.writeFile(
+      path.join(workDir, 'src', 'store', 'editorStore.ts'),
+      '// 编辑器状态\nexport const editorStoreFor = 1\n'
+    )
+    await fs.writeFile(path.join(workDir, 'README.md'), '# 标题\n')
+    run(['add', '-A'])
+    run(['commit', '-m', 'init'])
+  }
+
+  it('scans tracked files and caches the result inside the workspace', async () => {
+    // 先建仓库再 init 工作区：init 会往 .pi-workbench 写运行期文件，别让它们进索引
+    await initRepo()
+    await call('workspace:init', workDir)
+
+    const result = await call('repo-map:scan', workDir)
+    expect(result).toMatchObject({ success: true, isRepo: true, total: 2, described: 2 })
+    const files = result.files as Array<{ path: string; role: string; headComment?: string }>
+    expect(files.map((file) => file.path)).toEqual(['README.md', 'src/store/editorStore.ts'])
+    expect(files.find((file) => file.path === 'src/store/editorStore.ts')).toMatchObject({
+      role: 'state',
+      headComment: '编辑器状态',
+    })
+
+    const cache = JSON.parse(
+      await fs.readFile(path.join(workDir, '.pi-workbench', 'repo-map.json'), 'utf-8')
+    ) as { version: number; files: Record<string, unknown> }
+    expect(cache.version).toBeGreaterThan(0)
+    expect(Object.keys(cache.files)).toEqual(['README.md', 'src/store/editorStore.ts'])
+  })
+
+  it('fills descriptions on demand and rejects empty path lists', async () => {
+    await initRepo()
+    await call('workspace:init', workDir)
+
+    await expect(call('repo-map:describe', workDir, ['src/store/editorStore.ts'])).resolves.toMatchObject({
+      success: true,
+      described: 2,
+    })
+    await expect(call('repo-map:describe', workDir, [])).resolves.toMatchObject({
+      success: false,
+    })
+  })
+
+  it('rejects untrusted workspaces and reports non-git directories as empty', async () => {
+    const untrusted = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-untrusted-map-'))
+    try {
+      await expect(call('repo-map:scan', untrusted)).resolves.toMatchObject({ success: false })
+    } finally {
+      await fs.rm(untrusted, { recursive: true, force: true })
+    }
+
+    await call('workspace:init', workDir)
+    await expect(call('repo-map:scan', workDir)).resolves.toMatchObject({
+      success: true,
+      isRepo: false,
+      total: 0,
+    })
+  })
+
+  it('round-trips the canvas layout and creates it lazily', async () => {
+    await call('workspace:init', workDir)
+    await expect(call('repo-map:canvas:get', workDir)).resolves.toMatchObject({
+      success: true,
+      state: { version: 1, zoom: 1, folders: {}, files: {} },
+    })
+
+    const state = {
+      version: 1,
+      layoutVersion: 3,
+      zoom: 0.8,
+      pan: { x: -40, y: 12 },
+      folders: { src: { x: 320, y: 80 } },
+      files: { 'README.md': { x: 0, y: 0 } },
+    }
+    await expect(call('repo-map:canvas:set', workDir, state)).resolves.toMatchObject({
+      success: true,
+    })
+    await expect(call('repo-map:canvas:get', workDir)).resolves.toMatchObject({
+      success: true,
+      state,
+    })
+    const raw = JSON.parse(
+      await fs.readFile(path.join(workDir, '.pi-workbench', 'repo-map-canvas.json'), 'utf-8')
+    ) as { version: number }
+    expect(raw.version).toBe(1)
+  })
+
+  it('sanitizes hostile canvas payloads and rejects untrusted workspaces', async () => {
+    await call('workspace:init', workDir)
+    const hostile = {
+      version: 1,
+      zoom: 99,
+      pan: { x: 'nope', y: 0 },
+      // 只有带坐标的目录条目才留；collapsed 是 v2 遗留字段，一律忽略
+      folders: {
+        '../escape': { x: 0, y: 0 },
+        legacy: { collapsed: false },
+        src: { x: 12, y: 34, collapsed: false },
+      },
+      files: { '../escape.ts': { x: 1, y: 2 }, 'ok.ts': { x: 9e12, y: 0 } },
+    }
+    await expect(call('repo-map:canvas:set', workDir, hostile)).resolves.toMatchObject({
+      success: true,
+    })
+    const read = await call('repo-map:canvas:get', workDir)
+    expect(read.state).toMatchObject({
+      zoom: 2,
+      pan: { x: 0, y: 0 },
+      folders: { src: { x: 12, y: 34 } },
+      files: { 'ok.ts': { x: 1_000_000, y: 0 } },
+    })
+
+    const untrusted = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-untrusted-canvas-'))
+    try {
+      await expect(call('repo-map:canvas:set', untrusted, hostile)).resolves.toMatchObject({
+        success: false,
+      })
+      await expect(call('repo-map:canvas:get', untrusted)).resolves.toMatchObject({
+        success: false,
+      })
+    } finally {
+      await fs.rm(untrusted, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('model context window options', () => {
   it('keeps the main-process list in sync with pi-bridge', async () => {
     const { CONTEXT_WINDOW_VALUES } = await import('../electron/ipc/api-config')

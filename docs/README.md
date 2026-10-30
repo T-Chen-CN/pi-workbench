@@ -36,6 +36,8 @@
 - **[Agent 运行时](./agent/agent-runtime.md)** — 会话、权限审批、计划模式、工具白名单、标题、压缩、导出、联网
 - **[Git 与工作树会话](./agent/git-and-worktrees.md)** — 工作树绑定、Git 视图、仓库同步、GitHub 关联
 - **[面板、辅助窗口与托盘](./agent/panels-and-windows.md)** — 拆出窗口、托盘常驻、通知、自定义协议
+- **[仓库地图（工作区面板）](./agent/repo-map.md)** — 面板列出 Git 跟踪文件的职责：扫描口径、事实与缓存、增量指纹、降级与刷新
+- **[工作区面板实现说明](./agent/workspace-panel.md)** — 面板从入口到画布的全貌：视图切换、底层地图、上浮链与当前层、视口 / 拖动 / 吸附、落盘状态、测试与改动指引
 - **[报告与文档规范](./agent/reporting.md)** — 什么时候写报告、放哪里、怎么清理
 
 ### 📊 项目信息
@@ -57,6 +59,7 @@
 | 了解项目结构和进程模型 | [PROJECT_STRUCTURE.md](./architecture/PROJECT_STRUCTURE.md) |
 | 查某个 IPC 频道 / 新增 IPC | [agent/ipc-and-trust.md](./agent/ipc-and-trust.md) |
 | 查落盘位置与状态恢复 | [agent/paths-and-storage.md](./agent/paths-and-storage.md) |
+| 改编辑区面板 / 仓库地图画布 | [agent/workspace-panel.md](./agent/workspace-panel.md) |
 | 改权限 / 审批 / 计划模式 | [agent/agent-runtime.md](./agent/agent-runtime.md) |
 | 改工作树会话 / Git 视图 | [agent/git-and-worktrees.md](./agent/git-and-worktrees.md) |
 | 规划 / 实现跨工作区顶层 Agent | [requirements/TOP_LEVEL_AGENT_BRIEF.md](./requirements/TOP_LEVEL_AGENT_BRIEF.md)（先看简版）→ [TOP_LEVEL_AGENT.md](./requirements/TOP_LEVEL_AGENT.md) |
