@@ -17,7 +17,7 @@
 | **Description** | 一行，**中文在前、英文在后**，讲清「是什么 + 与同类不同的地方」，≤ 350 字符 |
 | **Topics** | 8–12 个，覆盖 `ai` / `coding-agent` / `electron` / `monaco-editor` 等技术词，这是唯一的自然搜索入口 |
 | **Website** | 指向 `releases/latest`，让读者一眼能下载 |
-| **Social preview** | 1280×640，Paper 主题主界面截图 + 品牌印章，不要用默认灰卡 |
+| **Social preview** | 已产出 `docs/assets/social-preview.png`（1280×640 @2x，Paper 主题）。GitHub **没有 API** 可以设置，必须在仓库 Settings → Social preview 手工上传 |
 
 > Description 是**单字段**，GitHub 不支持多语言（中文用户和英文用户看到同一行）。既然项目中文优先，这一行就中文在前、英文作为后半句兜住搜索关键词。
 
@@ -147,6 +147,7 @@ README 只有 banner 一处图片，在 `docs/assets/`：
 | 文件 | 内容 |
 | --- | --- |
 | `banner-light.svg` / `banner-dark.svg` | 1280×320，Paper / Ink 双主题，`<picture>` + `prefers-color-scheme` 切换 |
+| `social-preview.png` | 2560×1280（=1280×640 @2x），社交分享卡；不在 README 里引用，只用于仓库 Settings → Social preview |
 
 banner 的色值 / 字体 / 字号只允许取自 [DESIGN_SYSTEM](../design/DESIGN_SYSTEM.md) §2.1 与 §3.1–§3.4，印面复用 `BrandSeal` 的同一份 π 路径，印面底边与副标基线对齐。改 banner 后同步两份 README 的 `<img alt>`。
 
