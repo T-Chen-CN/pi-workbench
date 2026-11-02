@@ -127,7 +127,7 @@ gh repo edit T-Chen-CN/pi-workbench \
 
 1. **banner**（`<picture>` 双主题）+ **标题 + 一句话定位 + 徽章**（CI / 最新版本 / 许可证 / 平台 / Node）+ 语言切换行
 2. **目录** —— 10 条锚点
-3. **特性一览** —— 五组，每组「一句导语 + 一个截图位 + 3–4 条 bullet」：Agent / 文档 / Git 与工作树 / 工作台 / 本地优先
+3. **特性一览** —— **六个「主张式」小节**，标题写成一句可反驳的话（如「改文件的是 Agent，能不能改由你定」），而不是「文件管理」「终端」这类功能名；每节「一句导语 + 3–4 条 bullet」。序：权限与计划 / 工作树 / 文档 / 审阅与撤回 / 托盘常驻 / 本地优先。末尾用一行引用「**其余能力**（够用，但不算特色）」收纳常规功能
 4. **下载** —— 三平台资产表 + 未签名说明 + 更新策略。桌面应用的第一诉求，不要埋在最后
 5. **开始使用** —— A 下载即用 / B 从源码运行 / C 自己打包，三条路并列
 6. **配置** —— 供应商 → 地址 → Key → 拉模型 → 联网搜索（五步编号）
@@ -140,19 +140,22 @@ gh repo edit T-Chen-CN/pi-workbench \
 
 ### 视觉资产
 
-全部在 `docs/assets/`。**banner 已产出**；截图位目前是空的 HTML 注释占位（不渲染、不产生断链）：
+README 只有 banner 一处图片，在 `docs/assets/`：
 
-| 文件 | 状态 | 内容 |
-| --- | --- | --- |
-| `banner-light.svg` / `banner-dark.svg` | 已产出 | 1280×320，Paper / Ink 双主题，`<picture>` + `prefers-color-scheme` 切换 |
-| `shot-agent.png` | 待补 | Ink 主题：工具轨迹展开 + 内联变更卡 + 审批卡 |
-| `shot-docs.png` | 待补 | Paper 主题：Office / PDF 只读预览 + 附件 chip |
-| `shot-worktree.png` | 待补 | Ink 主题：工作树 chip + Git 提交图 |
-| `shot-panel.png` | 待补 | Ink 主题：主窗口 + 拆出的面板窗口 |
+| 文件 | 内容 |
+| --- | --- |
+| `banner-light.svg` / `banner-dark.svg` | 1280×320，Paper / Ink 双主题，`<picture>` + `prefers-color-scheme` 切换 |
 
-截图规格：宽 1800px（2x）、单张 ≤ 400KB、总量 ≤ 2MB；不含真实 API Key 与个人目录名。补图时把对应 `<!-- 截图位：… -->` 注释换成指向 `docs/assets/shot-xxx.png` 的图片引用（带 alt）。
+banner 的色值 / 字体 / 字号只允许取自 [DESIGN_SYSTEM](../design/DESIGN_SYSTEM.md) §2.1 与 §3.1–§3.4，印面复用 `BrandSeal` 的同一份 π 路径，印面底边与副标基线对齐。改 banner 后同步两份 README 的 `<img alt>`。
 
-banner 的色值 / 字体 / 字号只允许取自 [DESIGN_SYSTEM](../design/DESIGN_SYSTEM.md) §2.1 与 §3.1–§3.4，印面复用 `BrandSeal` 的同一份 π 路径，印面底边与副标基线对齐。
+### 特性写作规则
+
+特性一览的每一节都是一个**可以反驳的主张**，不是功能名。判断标准：
+
+- 小节标题不能是「文件管理」「终端」「支持 PDF」这种名词短语，要写成一句人话（「你的 PDF、Word、Excel 它真的能读」）。
+- 每条 bullet 必须包含一个**别人不会这么做**的具体机制（只读模式用 `deny` 而不是 `ask`、lockfile 哈希复用、扫描件走视觉通道）。
+- **竞品普遍有的东西不进小节**：多标签编辑、自动保存、终端、主题、双语、自动更新 —— 全部收敛到末尾那行「其余能力」。
+- 不在小节里写性能数字、内部代号、Phase 编号；数字只出现在「开发情况」表里。
 
 ---
 
@@ -166,4 +169,4 @@ banner 的色值 / 字体 / 字号只允许取自 [DESIGN_SYSTEM](../design/DESI
 - [ ] 「开发情况」表的版本 / 发布数 / 用例数 / 已知边界与 STATUS 对齐
 - [ ] Release 说明按 §2 结构写，含 Downloads 与 Known issues
 - [ ] 仓库 About / Topics / Website 未过期
-- [ ] 截图与界面不一致时重截（改版后至少重截 Agent 与工作台两张）
+- [ ] 新增功能先问一句「竞品有没有」：有就归入「其余能力」一行，没有才配得上独立小节

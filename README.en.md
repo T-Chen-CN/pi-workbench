@@ -7,7 +7,7 @@
 
 # Pi Workbench
 
-A local-first desktop workbench where a real coding agent sits next to your editor — it reads, writes, edits and runs commands on your actual files, inside a permission mode you choose.
+A local-first desktop workbench where a real coding agent sits next to your editor — it reads, writes, edits and runs commands on your actual files, and the permission boundary is yours to set.
 
 [![CI](https://github.com/T-Chen-CN/pi-workbench/actions/workflows/ci.yml/badge.svg)](https://github.com/T-Chen-CN/pi-workbench/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/T-Chen-CN/pi-workbench)](https://github.com/T-Chen-CN/pi-workbench/releases/latest)
@@ -36,49 +36,46 @@ A local-first desktop workbench where a real coding agent sits next to your edit
 
 ## Highlights
 
-### The agent: finish the job, not hand you a snippet
+### The agent changes files — and only the ones you allow
 
-The agent is a main-process runtime, not a child process or a side-car HTTP service — which is what makes permission enforcement and approval timeouts mean anything. It works on the real files of the workspace, and every tool call has to pass the session mode.
+Not "please don't touch anything" in a prompt, but a runtime boundary. The agent runs inside the main process, every tool call is checked against the session mode, anything that needs a decision raises an approval card, and a timeout counts as a refusal.
 
-<!-- screenshot slot: docs/assets/shot-agent.png (Ink theme, expanded tool trace + inline change card + approval card) -->
+- **Four session modes**: read-only / plan / ask / full. Read-only denies instead of asking — there is no "I clicked allow and it wrote to disk" failure mode.
+- **Plan mode makes it show its work first**: only read-only tools are enabled, and it must submit a plan card (steps, files at risk, risks). Approving flips the session into execution mode atomically and the plan becomes a live checklist.
+- **Approvals cover four kinds of action** (read / write / command / other): allow once, for this session, always, or deny. Silence times out as a denial, it never just hangs.
 
-- **Four permission modes per session**: read-only / plan / ask / full. Anything that needs a decision raises an approval card (allow once / this session / always / deny); unresolved approvals fail closed on timeout.
-- **Plan mode**: only read-only tools are enabled, and the agent must submit a plan card (steps, files at risk, risks). Approving flips the session into execution mode and the plan becomes a live checklist.
-- **Visible process**: thinking and tool calls render as an ordered timeline with durations, arguments and result previews; `write` / `edit` open the matching diff.
-- **A conversation that behaves like a terminal**: queue or steer while a turn is running, regenerate and switch branches, edit-and-resend, and a marker at the exact turn compaction happened.
+### One session, one worktree — parallel tasks stop colliding
 
-### Documents: one `read` to rule them all
+Switching tasks no longer means stash and copy. Bind a session to a Git worktree, every turn lands there, and the history is still there when you switch back.
 
-No second read tool. PDF and Office are covered by the built-in `read`, so the model only needs to know that `read` reads everything.
+- **The binding is on disk**: `.pi-workbench/session-git.json` remembers session ↔ worktree; switching takes effect only at turn boundaries, never mid-turn.
+- **Dependencies install themselves**: the lockfile is detected (pnpm / bun / yarn / npm / uv), installs run serially in the background with a hard timeout, results are cached by hash — unchanged lockfiles are reused.
+- **The Git panel covers all branches**: classified refs, merge markers, commit detail with per-file diffs, plus PR and CI status for the current branch.
 
-<!-- screenshot slot: docs/assets/shot-docs.png (Paper theme, Office / PDF read-only preview + attachment chips) -->
+### It actually opens your PDF, Word and Excel files
 
-- **Six formats**: `.pdf` / `.docx` / `.xlsx` / `.pptx` / `.odt` / `.epub` are detected by magic bytes (not extension) and parsed with zero added dependencies.
-- **Scans go through the vision channel**: PDFs without a text layer are rendered to images; legacy `.doc` / `.xls` / `.ppt` are not guessed at — they return a "save as" pointer instead.
-- **Reading views in the editor**: Markdown / HTML render (Markdown supports block-level in-place editing), images / audio / video preview over a local protocol, and a self-drawn pdf.js PDF reader with page navigation and 50%–400% zoom.
-- **Office read-only previews**: Word body, table grid, slide cards and EPUB chapters each get their own layout.
+No MCP server, no "convert to Markdown first". The same `read` tool sniffs the format by magic bytes and hands back the actual content.
 
-### Git and worktrees: parallel work that does not collide
+- **Six formats**: `.pdf` / `.docx` / `.xlsx` / `.pptx` / `.odt` / `.epub`, parsed with zero added dependencies.
+- **Scans are not dropped**: PDFs without a text layer are rendered to images and go through the vision channel; legacy `.doc` / `.xls` / `.ppt` are not guessed at — you get a "save as" pointer instead.
+- **Readable in the editor too**: Markdown / HTML rendering, image, audio and video preview, a self-drawn pdf.js reader (page navigation, 50%–400% zoom), and read-only Office previews.
 
-A session is bound to a worktree, and every turn lands there — switching tasks no longer means moving files around.
+### Every change is reviewable, and revertible one file at a time
 
-<!-- screenshot slot: docs/assets/shot-worktree.png (Ink theme, worktree chip + commit graph) -->
+The agent does not just say "done". Every file it touched in that turn shows up in the conversation — review the diff, or throw it away.
 
-- **All-branch commit graph**: classified refs, merge markers, commit detail with per-file diffs.
-- **Session-bound worktrees**: switching takes effect only at turn boundaries; the binding lives in `.pi-workbench/session-git.json`.
-- **Worktree dependencies install themselves**: the lockfile is detected (pnpm / bun / yarn / npm / uv), installs are serialized in the background with a hard timeout, and results are cached by lockfile hash.
-- **GitHub integration**: device-flow sign-in (PAT fallback) with PR and CI status for the current branch.
+- **Inline change cards**: one per file, open the diff, revert one file or all of them; files with unsaved edits are refused rather than silently overwritten.
+- **The process is visible**: thinking and tool calls render as a timeline with durations, arguments and result previews; `write` / `edit` jump straight to the diff.
+- **History is not lost**: history and export read the session record (entry chain), so pre-compaction messages survive and the compaction marker lands on the turn where it happened.
+- **You can change your mind**: queue or steer mid-turn, regenerate and switch branches, edit-and-resend a user message.
 
-### The workbench: panels detach, closing keeps it running
+### Close the window; it keeps working
 
-Multiple workspaces, detachable panels, a tray-resident window — none of this is decoration; it is what lets the agent keep working while you do something else.
+This is not an IDE plugin but a standalone workbench: closing the window only parks it in the tray, while sessions, file watchers and update checks keep running.
 
-<!-- screenshot slot: docs/assets/shot-panel.png (Ink theme, main window + a panel in its own window) -->
-
-- **Persistent workspaces**: switching tabs only toggles visibility; each workspace keeps its editors, diffs, terminal and agent sessions.
-- **Detachable panels**: pull the file tree, Git view, chat or terminal into its own window. Panels share one store, so the terminal keeps its PTY and 200KB scrollback.
-- **Terminal and plugins**: xterm.js + node-pty, output attachable to the agent as context; command palette plus workspace plugins (commands / hooks / hot reload).
-- **Tray-resident**: closing the window keeps sessions, file watchers and update checks running; quit from the tray menu.
+- **Workspaces stay resident**: switching tabs only toggles visibility — editors, diffs, terminal and agent sessions are all kept, not torn down.
+- **Panels detach**: pull the file tree, Git view, chat or terminal into its own window; they share one store, and the terminal keeps its PTY and scrollback.
+- **Context has a meter**: token usage and cost sit above the composer, with an optional budget cap; only 80% / 95% change colour.
 
 ### Local-first: your data stays on your machine
 
@@ -94,6 +91,8 @@ Multiple workspaces, detachable panels, a tray-resident window — none of this 
 - The renderer is sandboxed with no Node access; every IPC channel validates its sender; file operations are confined to trusted workspaces plus `{appDir}/cache/`.
 - No telemetry, no account, fully offline-capable; web search is optional.
 - On macOS the app bundle is read-only, so data lives in `~/Library/Application Support/pi-workbench`.
+
+> **Everything else** (useful, but not the selling point): multi-tab Monaco editing with 2s debounced auto-save, file tree operations with live refresh, an xterm.js + node-pty terminal, command palette and workspace plugins, Paper / Ink themes, Chinese / English UI, crash-recovered drafts, auto-update.
 
 ---
 
