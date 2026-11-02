@@ -143,7 +143,7 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
 
 ## 4.1 发布与自动更新（GitHub Releases）
 
-- 发布前先把 `package.json` 的 `version` 提升到目标版本，并同步 `README.md` / `README_ZH.md` 顶部的版本号。
+- 发布前先把 `package.json` 的 `version` 提升到目标版本。README 的版本号**只出现在 banner 的右侧数据栏与徽章里**（徽章自动，banner 需同步改 `docs/assets/banner-light.svg` / `banner-dark.svg` 的那一行 `vX.Y.Z`）。
 - 推送 `v*` 标签（例如 `git tag v0.7.4 && git push origin v0.7.4`）会触发
   `.github/workflows/release.yml`：
   1. `verify-version` 校验标签与 `package.json` 版本一致，不一致直接失败；

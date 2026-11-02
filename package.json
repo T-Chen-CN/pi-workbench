@@ -1,7 +1,20 @@
 {
   "name": "pi-workbench",
   "version": "0.7.5",
-  "description": "Lightweight desktop code editor with Pi Agent integration",
+  "description": "Local-first desktop workbench where a real coding agent works beside a Monaco editor: session worktrees, plan mode, detachable panels",
+  "keywords": [
+    "ai",
+    "coding-agent",
+    "developer-tools",
+    "desktop-app",
+    "electron",
+    "editor",
+    "git-worktree",
+    "local-first",
+    "monaco-editor",
+    "react",
+    "typescript"
+  ],
   "main": "dist-electron/main.js",
   "type": "module",
   "workspaces": [

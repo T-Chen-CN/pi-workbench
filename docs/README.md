@@ -1,6 +1,6 @@
 # 📚 Pi Workbench 文档中心
 
-> 这里是**文档索引**。安装、运行、配置、打包请从 [主 README](../README.md) 开始；给 AI agent 的项目约束见 [AGENTS.md](../AGENTS.md)。
+> 这里是**文档索引**。三个入口：想用 → [中文 README](../README.md) 的「下载」与「配置」；想看它为什么这么设计 → [PROJECT_PLAN](./PROJECT_PLAN.md)；给 AI agent 的项目约束 → [AGENTS.md](../AGENTS.md)。
 
 ---
 
@@ -27,6 +27,7 @@
 
 ### 🔧 开发指南
 - **[构建和打包](./guides/BUILD_AND_PACKAGE.md)** — 构建、打包、发布与自动更新
+- **[对外文案](./guides/PUBLIC_COPY.md)** — 仓库门面（About / Topics）、Release 说明模板与 README 结构、截图槽位
 - **[Agent 测试清单](./guides/AGENT-TESTING.md)** — Agent 功能手动验收步骤
 - **[Agent 过程轨迹测试方案](./guides/AGENT_TRACE_TESTING.md)** — thinking / 工具步骤的自动化与手动验收
 
@@ -69,6 +70,7 @@
 | 规划后续开发目标 | [BACKLOG.md](./progress/BACKLOG.md) |
 | 查看 v1 交付记录 | [ROADMAP.md](./progress/ROADMAP.md) |
 | 构建和发布应用 | [BUILD_AND_PACKAGE.md](./guides/BUILD_AND_PACKAGE.md) |
+| 改 README / 发版说明 / 仓库 About | [PUBLIC_COPY.md](./guides/PUBLIC_COPY.md) |
 | 验收 Agent 功能 | [AGENT-TESTING.md](./guides/AGENT-TESTING.md) |
 | 验收过程轨迹 / 工具步骤 | [AGENT_TRACE_TESTING.md](./guides/AGENT_TRACE_TESTING.md) |
 | 查看功能状态 | [STATUS.md](./progress/STATUS.md) |
@@ -78,10 +80,10 @@
 
 ## 🔗 相关链接
 
-- [主 README](../README.md) — 安装、运行、配置、打包
-- [中文 README](../README_ZH.md)
+- [中文 README](../README.md) — 下载、特性一览、配置、开发情况
+- [English README](../README.en.md)
 - [Electron 文档](https://www.electronjs.org/docs/latest/) · [React 文档](https://react.dev/)
 
 ---
 
-**最后更新**: 2026-10-30
+**最后更新**: 2026-10-31（对齐 v0.7.5）

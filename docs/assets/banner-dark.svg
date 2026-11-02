@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-label="Pi Workbench — 本地优先的 Agent 开发工作台">
+  <title>Pi Workbench — 本地优先的 Agent 开发工作台</title>
+
+  <!-- Ink 主题：panel 底 + 墨线收口（DESIGN_SYSTEM §2.1） -->
+  <rect width="1280" height="320" fill="#1A1815" />
+  <rect x="0.5" y="0.5" width="1279" height="319" fill="none" stroke="#EDE7DC" stroke-opacity="0.18" />
+
+  <!-- 品牌印面：Ink 下自动转浅松绿，π 用 accent-fg（§3.4） -->
+  <svg x="72" y="112" width="96" height="96" viewBox="128 128 768 768">
+    <rect x="128" y="128" width="768" height="768" rx="152" fill="#8FC7B4" />
+    <g transform="translate(262.5 722.2) scale(0.7934 -0.7934)" fill="#141311" fill-rule="nonzero">
+      <path d="M45 417 14 427C26 463 38.3 490.5 57 508.5C75.7 526.5 102 536 142 536H615L605 453H111C89 453 65 443 45 417ZM113 0 169 483H236L215 0ZM494 -6C458 -6 431 14.2 419 49.5C413 67.2 411 88 413 112L443 483H494L501 116C501.7 89.3 505 72.5 511 65.5C517 58.5 524 55 532 55C545.3 55 557 57.7 573 71L590 29C569.3 12.3 552 2.3 538 -1C524 -4.3 509.3 -6 494 -6Z" />
+    </g>
+  </svg>
+
+  <text x="196" y="126" font-family="'Geist Mono', Consolas, monospace" font-size="11" letter-spacing="1.54" fill="#A8A093">LOCAL-FIRST · AGENT-NATIVE</text>
+
+  <text x="196" y="176" font-family="'Instrument Serif', 'Noto Serif SC', Georgia, serif" font-size="62" letter-spacing="-0.4" fill="#EDE7DC">Pi Workbench</text>
+
+  <text x="196" y="208" font-family="'Noto Serif SC', 'Songti SC', Georgia, serif" font-size="21" fill="#A8A093">本地优先的 Agent 开发工作台</text>
+
+  <line x1="1010" y1="100" x2="1010" y2="208" stroke="#EDE7DC" stroke-opacity="0.22" />
+  <g font-family="'Geist Mono', Consolas, monospace" text-anchor="end">
+    <text x="1208" y="128" font-size="13" fill="#EDE7DC">v0.7.5</text>
+    <text x="1208" y="154" font-size="10.5" letter-spacing="1.4" fill="#A8A093">WINDOWS · MACOS · LINUX</text>
+    <text x="1208" y="178" font-size="10.5" letter-spacing="1.4" fill="#A8A093">ELECTRON 44 · REACT 19</text>
+  </g>
+</svg>

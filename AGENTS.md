@@ -2,7 +2,7 @@
 
 > 给 AI 编码代理的项目说明。规范原文在 `docs/`，从这里按指针进入。
 
-**一句话**：轻量级 AI 辅助开发工作台 —— Electron 桌面应用，内嵌 Pi Agent 作为编码助手。
+**一句话**：本地优先的 Agent 原生开发工作台 —— Electron 桌面应用，Pi Agent 跑在主进程里，直接读写工作区、执行命令。
 **栈**：Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57。**Node ≥ 24**（`node:sqlite`、构建脚本依赖）。
 **阶段**：Phase 6 持续优化（见 [STATUS](docs/progress/STATUS.md)）。
 
@@ -119,6 +119,7 @@ npm run build      # 渲染层 + bridge + 主进程
 | [PROJECT_STRUCTURE](docs/architecture/PROJECT_STRUCTURE.md) | 找文件、查 IPC 频道表、看进程模型与数据流 |
 | [DESIGN_SYSTEM](docs/design/DESIGN_SYSTEM.md) | 任何颜色 / 字体 / 间距 / 组件 / 主题改动（强制） |
 | [BUILD_AND_PACKAGE](docs/guides/BUILD_AND_PACKAGE.md) | 打包、自动更新、数据目录、打包故障排查 |
+| [PUBLIC_COPY](docs/guides/PUBLIC_COPY.md) | 改 README / Release 说明 / 仓库 About、Topics 之前 |
 | [paths-and-storage](docs/agent/paths-and-storage.md) | 落盘位置、启动顺序、持久化文件清单、多工作区状态 |
 | [ipc-and-trust](docs/agent/ipc-and-trust.md) | 新增 IPC、来源校验、preload 与 API 层、Web 调试桥 |
 | [agent-runtime](docs/agent/agent-runtime.md) | 会话、权限审批、计划模式、工具白名单、标题、压缩、导出、联网 |
