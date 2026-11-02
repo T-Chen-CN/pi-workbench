@@ -14,33 +14,35 @@
 
 | 项 | 要求 |
 | --- | --- |
-| **Description** | 一行，讲清「是什么 + 与同类不同的地方」，英文，≤ 200 字符 |
+| **Description** | 一行，**中文在前、英文在后**，讲清「是什么 + 与同类不同的地方」，≤ 350 字符 |
 | **Topics** | 8–12 个，覆盖 `ai` / `coding-agent` / `electron` / `monaco-editor` 等技术词，这是唯一的自然搜索入口 |
 | **Website** | 指向 `releases/latest`，让读者一眼能下载 |
 | **Social preview** | 1280×640，Paper 主题主界面截图 + 品牌印章，不要用默认灰卡 |
 
+> Description 是**单字段**，GitHub 不支持多语言（中文用户和英文用户看到同一行）。既然项目中文优先，这一行就中文在前、英文作为后半句兜住搜索关键词。
+
 现用 Description（可直接替换）：
 
 ```
-Local-first desktop workbench where a real coding agent works beside a Monaco editor — permission modes, session worktrees, plan mode, detachable panels. Electron + React + TypeScript.
+本地优先的 Agent 开发工作台：Agent 在主进程里改你的真实文件，权限模式决定它能动什么 · Local-first workbench with a real coding agent — session worktrees, plan mode, PDF/Office reading, detachable panels.
 ```
 
 Topics：
 
 ```
-ai  coding-agent  developer-tools  desktop-app  electron  editor  git-worktree  local-first  monaco-editor  react  typescript
+agent  ai  coding-agent  desktop-app  developer-tools  editor  electron  git-worktree  local-first  monaco-editor  react  typescript
 ```
 
 `gh` 命令（需要已登录且有仓库权限，**执行前确认**）：
 
 ```bash
 gh repo edit T-Chen-CN/pi-workbench \
-  --description "Local-first desktop workbench where a real coding agent works beside a Monaco editor — permission modes, session worktrees, plan mode, detachable panels. Electron + React + TypeScript." \
+  --description "本地优先的 Agent 开发工作台：Agent 在主进程里改你的真实文件，权限模式决定它能动什么 · Local-first workbench with a real coding agent — session worktrees, plan mode, PDF/Office reading, detachable panels." \
   --homepage "https://github.com/T-Chen-CN/pi-workbench/releases/latest" \
-  --add-topic ai --add-topic coding-agent --add-topic developer-tools \
-  --add-topic desktop-app --add-topic electron --add-topic editor \
-  --add-topic git-worktree --add-topic local-first --add-topic monaco-editor \
-  --add-topic react --add-topic typescript
+  --add-topic agent --add-topic ai --add-topic coding-agent \
+  --add-topic developer-tools --add-topic desktop-app --add-topic electron \
+  --add-topic editor --add-topic git-worktree --add-topic local-first \
+  --add-topic monaco-editor --add-topic react --add-topic typescript
 ```
 
 ---
