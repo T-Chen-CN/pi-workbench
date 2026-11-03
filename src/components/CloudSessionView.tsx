@@ -9,6 +9,7 @@ import { formatRelativeTime } from '../utils/relativeTime'
 import { formatCost, firstLine, sessionCostUsd } from '../utils/cloudFormat'
 import { formatTokenCount } from '../utils/chatPanelShared'
 import type { CloudSession } from '../types/cloud'
+import type { AppView } from '../types/navigation'
 import { Button, Caption, DataText, EmptyState, IconButton, Label, Spinner, Textarea } from './ui'
 import { CloudSessionMetaLine, CloudTrace } from './CloudTrace'
 
@@ -59,7 +60,10 @@ const SessionRow: React.FC<{ session: CloudSession; selected: boolean; onSelect:
   )
 }
 
-export const CloudSessionView: React.FC<{ active: boolean }> = ({ active }) => {
+export const CloudSessionView: React.FC<{
+  active: boolean
+  onNavigate?: (view: AppView) => void
+}> = ({ active, onNavigate }) => {
   const { t } = useI18nStore()
 
   const connection = useCloudStore((state) => state.connection)
@@ -238,6 +242,13 @@ export const CloudSessionView: React.FC<{ active: boolean }> = ({ active }) => {
                 icon={Cloud}
                 title={t('cloudNoSession')}
                 description={t('cloudNoSessionHint')}
+                action={
+                  !connected && onNavigate ? (
+                    <Button size="sm" onClick={() => onNavigate('cloud-connection')}>
+                      {t('cloudGoToConnection')}
+                    </Button>
+                  ) : undefined
+                }
               />
             </div>
           )}

@@ -141,7 +141,8 @@ pi-workbench/
 │   │   ├── PanelContextMenu.tsx  # 面板右键菜单
 │   │   ├── CloudWorkspaceView.tsx # 云端 Agent 外壳：会话 / 配置两个常驻页签
 │   │   ├── CloudSessionView.tsx  # 云端会话列表 + 时间线 + 输入框
-│   │   ├── CloudConfigView.tsx   # 云端连接表单 + 程序内控制台容器（上报边界）
+│   │   ├── CloudConsoleView.tsx  # 云端控制台全屏宿主（原生视图边界上报 / 失败与未连接态）
+│   │   ├── CloudConnectionView.tsx # 云端连接页（地址 / 密钥 / 连通性 / 能力回显）
 │   │   ├── CloudTrace.tsx        # 云端时间线（文本 / 思考折叠 / 分隔线）
 │   │   ├── CloudToolCard.tsx     # 云端工具执行卡
 │   │   ├── ui.tsx                # Button / Input / Modal 等基础组件

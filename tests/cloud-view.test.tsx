@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CloudWorkspaceView } from '../src/components/CloudWorkspaceView'
 import { CloudTrace } from '../src/components/CloudTrace'
 import { useCloudStore } from '../src/store/cloudStore'
+import { UNCONFIGURED_CONNECTION } from '../src/api/cloud'
 import { useI18nStore } from '../src/store/i18nStore'
 import { translations } from '../src/i18n/translations'
 import type { CloudFrame, CloudSession, CloudTracePart } from '../src/types/cloud'
@@ -93,6 +94,10 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
 function resetStore() {
   useCloudStore.setState({
     bridgeAvailable: false,
+    hydrated: false,
+    config: UNCONFIGURED_CONNECTION,
+    dashboard: { visible: false, loading: false, url: '', error: null },
+    pendingDisconnect: null,
     connection: 'unconfigured',
     error: null,
     capabilities: null,
@@ -184,19 +189,80 @@ describe('CloudWorkspaceView', () => {
     expect(screen.getByText('$0.0004')).toBeTruthy()
   })
 
-  it('keeps both tabs mounted so switching does not lose state', async () => {
+  it('keeps every tab mounted so switching does not lose state', async () => {
     installBridge()
     const onNavigate = vi.fn()
     const view = render(<CloudWorkspaceView view="cloud-session" onNavigate={onNavigate} />)
 
     await waitFor(() => expect(screen.getByText('Probe session')).toBeTruthy())
-    fireEvent.click(screen.getByText(zh.cloudTabConfig))
-    expect(onNavigate).toHaveBeenCalledWith('cloud-config')
+    fireEvent.click(screen.getByRole('button', { name: zh.cloudTabConnection }))
+    expect(onNavigate).toHaveBeenCalledWith('cloud-connection')
 
-    // 父组件切到配置页：会话页只是隐藏，DOM 仍在（inert + invisible）
-    view.rerender(<CloudWorkspaceView view="cloud-config" onNavigate={onNavigate} />)
+    // 父组件切到连接页：会话页只是隐藏，DOM 仍在（inert + invisible）
+    view.rerender(<CloudWorkspaceView view="cloud-connection" onNavigate={onNavigate} />)
     expect(screen.getByText('Probe session')).toBeTruthy()
     expect(screen.getByText(zh.cloudBaseUrl)).toBeTruthy()
+
+    view.rerender(<CloudWorkspaceView view="cloud-console" onNavigate={onNavigate} />)
+    expect(screen.getByText(zh.cloudBaseUrl)).toBeTruthy()
+  })
+
+  it('opens the console when the console tab becomes active', async () => {
+    const stub = installBridge()
+    const openSpy = vi.fn(async () => ({ success: true }))
+    const boundsSpy = vi.fn(async () => ({ success: true }))
+    ;(
+      window as unknown as { electronAPI: Record<string, unknown> }
+    ).electronAPI.cloudDashboardOpen = openSpy
+    ;(
+      window as unknown as { electronAPI: Record<string, unknown> }
+    ).electronAPI.cloudDashboardBounds = boundsSpy
+
+    render(<CloudWorkspaceView view="cloud-console" onNavigate={vi.fn()} />)
+
+    await waitFor(() => expect(openSpy).toHaveBeenCalled())
+    await waitFor(() => expect(boundsSpy).toHaveBeenCalled())
+    expect(stub.startRun).not.toHaveBeenCalled()
+  })
+
+  it('points at the connection tab when the console has no key', async () => {
+    const stub = installBridge()
+    ;(
+      window as unknown as { electronAPI: Record<string, unknown> }
+    ).electronAPI.cloudConfigGet = async () => ({
+      success: true,
+      config: {
+        baseUrl: 'https://api.example.com',
+        dashboardUrl: 'https://dash.example.com',
+        hasToken: false,
+      },
+    })
+    const onNavigate = vi.fn()
+    render(<CloudWorkspaceView view="cloud-console" onNavigate={onNavigate} />)
+
+    await waitFor(() => expect(screen.getByText(zh.cloudConsoleNeedsConnection)).toBeTruthy())
+    // 会话页与本页都提供「去连接」入口，点哪个都到连接页
+    fireEvent.click(screen.getAllByText(zh.cloudGoToConnection)[0])
+    expect(onNavigate).toHaveBeenCalledWith('cloud-connection')
+    expect(stub.startRun).not.toHaveBeenCalled()
+  })
+
+  it('lands on the connection tab when nothing is configured yet', async () => {
+    installBridge()
+    ;(
+      window as unknown as { electronAPI: Record<string, unknown> }
+    ).electronAPI.cloudConfigGet = async () => ({
+      success: true,
+      config: {
+        baseUrl: 'https://api.example.com',
+        dashboardUrl: 'https://dash.example.com',
+        hasToken: false,
+      },
+    })
+    const onNavigate = vi.fn()
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={onNavigate} />)
+
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith('cloud-connection'))
   })
 
   it('sends the draft and renders streamed parts', async () => {

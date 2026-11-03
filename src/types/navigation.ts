@@ -1,10 +1,20 @@
-/** 顶层视图：首页 / 工作区 / 云端会话 / 云端配置 */
+/** 顶层视图：首页 / 工作区 / 云端会话 / 云端控制台 / 云端连接 */
 
-export type AppView = 'home' | 'workspace' | 'cloud-session' | 'cloud-config'
+export type AppView =
+  | 'home'
+  | 'workspace'
+  | 'cloud-session'
+  | 'cloud-console'
+  | 'cloud-connection'
 
-/** 云端外壳的两个页签 */
-export type CloudView = Extract<AppView, 'cloud-session' | 'cloud-config'>
+/** 云端外壳的三个页签 */
+export type CloudView = Extract<
+  AppView,
+  'cloud-session' | 'cloud-console' | 'cloud-connection'
+>
 
 export function isCloudView(view: AppView): view is CloudView {
-  return view === 'cloud-session' || view === 'cloud-config'
+  return (
+    view === 'cloud-session' || view === 'cloud-console' || view === 'cloud-connection'
+  )
 }

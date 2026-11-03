@@ -46,6 +46,8 @@ export function upsertPart(parts: CloudTracePart[], part: CloudTracePart): Cloud
 
 interface CloudState {
   bridgeAvailable: boolean
+  /** 首次 hydrate 是否完成（云端外壳据此决定落「连接」还是「会话」页） */
+  hydrated: boolean
   config: CloudConnectionInfo
   connection: CloudConnectionState
   error: string | null
@@ -75,6 +77,7 @@ interface CloudState {
   hydrate: () => Promise<void>
   saveConfig: (input: { baseUrl: string; apiKey?: string }) => Promise<boolean>
   connect: () => Promise<void>
+  disconnect: () => Promise<void>
   refreshSessions: () => Promise<void>
   openSession: (sessionId: string) => Promise<void>
   newSession: () => void
@@ -98,6 +101,7 @@ interface CloudState {
 
 export const useCloudStore = create<CloudState>()((set, get) => ({
   bridgeAvailable: false,
+  hydrated: false,
   config: UNCONFIGURED_CONNECTION,
   connection: 'unconfigured',
   error: null,
@@ -126,7 +130,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     const bridgeAvailable = hasCloudBridge()
     set({ bridgeAvailable })
     if (!bridgeAvailable) {
-      set({ connection: 'unconfigured', error: null })
+      set({ connection: 'unconfigured', error: null, hydrated: true })
       return
     }
     const result = await cloudApi.getConfig()
@@ -134,10 +138,11 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       set({ config: result.config })
       if (result.config.hasToken) {
         await get().connect()
+        set({ hydrated: true })
         return
       }
     }
-    set({ connection: 'unconfigured' })
+    set({ connection: 'unconfigured', hydrated: true })
   },
 
   async saveConfig(input) {
@@ -165,6 +170,29 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       error: result.error ?? null,
     })
     if (result.state === 'connected') await get().refreshSessions()
+  },
+
+  async disconnect() {
+    await cloudApi.disconnect()
+    await cloudApi.closeDashboard()
+    set({
+      connection: 'unconfigured',
+      error: null,
+      capabilities: null,
+      config: { ...get().config, hasToken: false },
+      sessions: [],
+      sessionsError: null,
+      activeSessionId: null,
+      sessionMeta: null,
+      parts: [],
+      partsError: null,
+      runId: null,
+      runState: null,
+      runError: null,
+      pending: null,
+      pendingDisconnect: null,
+      dashboard: EMPTY_DASHBOARD,
+    })
   },
 
   async refreshSessions() {

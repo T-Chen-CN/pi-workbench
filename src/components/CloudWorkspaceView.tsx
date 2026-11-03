@@ -1,17 +1,29 @@
-/** 云端 Agent 外壳：会话 / 配置两个页签，两页都常驻，切页不丢状态 */
+/**
+ * 云端 Agent 外壳：会话 / 控制台 / 连接 三个常驻页签。
+ *
+ * 控制台是原生视图（盖在内容区上），所以它需要的东西（加载指示、重载、错误）
+ * 都放在页签栏里 —— 那里不在原生层覆盖范围内。
+ */
 
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef } from 'react'
+import { RefreshCw } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useCloudStore } from '../store/cloudStore'
 import { useCloudBridge } from '../hooks/useCloudBridge'
+import { cloudApi } from '../api/cloud'
 import type { AppView, CloudView } from '../types/navigation'
-import { Caption } from './ui'
+import { Caption, IconButton, Spinner } from './ui'
 import { CloudSessionView } from './CloudSessionView'
-import { CloudConfigView } from './CloudConfigView'
+import { CloudConsoleView } from './CloudConsoleView'
+import { CloudConnectionView } from './CloudConnectionView'
 
-const TABS: Array<{ view: CloudView; labelKey: 'cloudTabSession' | 'cloudTabConfig' }> = [
+const TABS: Array<{
+  view: CloudView
+  labelKey: 'cloudTabSession' | 'cloudTabConsole' | 'cloudTabConnection'
+}> = [
   { view: 'cloud-session', labelKey: 'cloudTabSession' },
-  { view: 'cloud-config', labelKey: 'cloudTabConfig' },
+  { view: 'cloud-console', labelKey: 'cloudTabConsole' },
+  { view: 'cloud-connection', labelKey: 'cloudTabConnection' },
 ]
 
 export const CloudWorkspaceView: React.FC<{
@@ -20,15 +32,36 @@ export const CloudWorkspaceView: React.FC<{
 }> = ({ view, onNavigate }) => {
   const { t } = useI18nStore()
   const hydrate = useCloudStore((state) => state.hydrate)
+  const hydrated = useCloudStore((state) => state.hydrated)
+  const config = useCloudStore((state) => state.config)
   const connection = useCloudStore((state) => state.connection)
   const error = useCloudStore((state) => state.error)
   const capabilities = useCloudStore((state) => state.capabilities)
+  const dashboard = useCloudStore((state) => state.dashboard)
+  const reloadDashboard = useCloudStore((state) => state.reloadDashboard)
+  const hideDashboard = useCloudStore((state) => state.hideDashboard)
+  const landedRef = useRef(false)
 
   useCloudBridge()
 
   useEffect(() => {
     void hydrate()
   }, [hydrate])
+
+  // 首次进入云端：没配好就直接落在「连接」页，配好了默认停在「会话」
+  useEffect(() => {
+    if (!hydrated || landedRef.current) return
+    landedRef.current = true
+    if (!config.hasToken && view === 'cloud-session') onNavigate('cloud-connection')
+  }, [hydrated, config.hasToken, view, onNavigate])
+
+  // 控制台里按 Esc：收起原生层并回到会话页
+  useEffect(() => {
+    return cloudApi.onDashboardClosed(() => {
+      hideDashboard()
+      if (view === 'cloud-console') onNavigate('cloud-session')
+    })
+  }, [view, onNavigate, hideDashboard])
 
   const tone =
     connection === 'connected'
@@ -57,9 +90,26 @@ export const CloudWorkspaceView: React.FC<{
             {t(tab.labelKey)}
           </button>
         ))}
+
         <span className="ml-auto flex items-center gap-2 pr-1">
+          {view === 'cloud-console' && config.hasToken && (
+            <>
+              {dashboard.loading && (
+                <span className="flex items-center gap-1.5">
+                  <Spinner size={11} />
+                  <Caption className="text-ink-muted">{t('cloudLoading')}</Caption>
+                </span>
+              )}
+              <IconButton
+                icon={RefreshCw}
+                label={t('cloudRetry')}
+                size="sm"
+                onClick={() => void reloadDashboard()}
+              />
+            </>
+          )}
           {error && connection === 'error' && (
-            <Caption className="max-w-[420px] truncate text-danger">{error}</Caption>
+            <Caption className="max-w-[360px] truncate text-danger">{error}</Caption>
           )}
           {capabilities?.model && (
             <Caption className="text-ink-subtle">{capabilities.model}</Caption>
@@ -78,9 +128,11 @@ export const CloudWorkspaceView: React.FC<{
           </span>
         </span>
       </div>
+
       <div className="relative min-h-0 flex-1">
-        <CloudSessionView active={view === 'cloud-session'} />
-        <CloudConfigView active={view === 'cloud-config'} />
+        <CloudSessionView active={view === 'cloud-session'} onNavigate={onNavigate} />
+        <CloudConsoleView active={view === 'cloud-console'} onNavigate={onNavigate} />
+        <CloudConnectionView active={view === 'cloud-connection'} />
       </div>
     </div>
   )
