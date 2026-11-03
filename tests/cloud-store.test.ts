@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest'
 import { isTerminalRun, upsertPart, useCloudStore } from '../src/store/cloudStore'
 import type { CloudTracePart } from '../src/types/cloud'
@@ -65,5 +66,33 @@ describe('applyFrame', () => {
     useCloudStore.getState().applyFrame({ kind: 'session', sessionId: 'run_session' })
     expect(useCloudStore.getState().activeSessionId).toBe('run_session')
     expect(useCloudStore.getState().sessionMeta?.id).toBe('run_session')
+  })
+})
+
+describe('openSession', () => {
+  it('drops history that arrives after a newer session was opened', async () => {
+    const pending: Record<string, (value: unknown) => void> = {}
+    ;(
+      window as unknown as { electronAPI: Record<string, unknown> }
+    ).electronAPI = {
+      cloudMessagesList: ({ sessionId }: { sessionId: string }) =>
+        new Promise((resolve) => {
+          pending[sessionId] = resolve
+        }),
+    }
+
+    const slow = useCloudStore.getState().openSession('slow')
+    const fast = useCloudStore.getState().openSession('fast')
+
+    // 后点的会话先回来
+    pending.fast({ success: true, parts: [text('h:1', 'fast')] })
+    await fast
+    expect(useCloudStore.getState().parts).toEqual([text('h:1', 'fast')])
+
+    // 先点的会话晚回来：不能把界面盖成另一个会话的历史
+    pending.slow({ success: true, parts: [text('h:1', 'slow')] })
+    await slow
+    expect(useCloudStore.getState().activeSessionId).toBe('fast')
+    expect(useCloudStore.getState().parts).toEqual([text('h:1', 'fast')])
   })
 })

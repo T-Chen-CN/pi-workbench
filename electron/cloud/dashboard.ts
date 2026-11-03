@@ -13,9 +13,14 @@ const PARTITION = 'persist:hermes-dashboard'
 const MIN_WIDTH = 80
 const MIN_HEIGHT = 80
 
+/** 同一个 partition 的 session 是共享的：事件处理器只挂一次，否则视图重建会越挂越多 */
+const configuredSessions = new WeakSet<Electron.Session>()
+
 export interface CloudDashboardDeps {
   getWindow: () => BrowserWindow | null
   onLoadFailed: (payload: { code: number; description: string }) => void
+  /** 一次加载收尾（成功或失败都会来）：渲染层据此关掉加载态 */
+  onLoadSettled: () => void
   /** 页面里按 Esc：交回渲染层改状态 */
   onRequestClose: () => void
   onTitleChange?: (title: string) => void
@@ -44,6 +49,8 @@ export class CloudDashboard {
   private wantedVisible = false
   private loading = false
   private error: string | null = null
+  /** 本次加载是否已失败：失败后 did-stop-loading 不能把错误态清掉 */
+  private loadFailed = false
   private currentUrl = ''
 
   constructor(private readonly deps: CloudDashboardDeps) {}
@@ -85,14 +92,19 @@ export class CloudDashboard {
     })
     contents.on('did-start-loading', () => {
       this.loading = true
+      this.loadFailed = false
     })
     contents.on('did-stop-loading', () => {
       this.loading = false
+      // 成功加载（或重试成功）要把上一次的错误清掉，否则渲染层会一直以为控制台是坏的
+      if (!this.loadFailed) this.error = null
+      this.deps.onLoadSettled()
     })
     contents.on('did-fail-load', (_event, code, description, validatedURL, isMainFrame) => {
       // -3 = ERR_ABORTED（我们自己触发的导航），不算失败
       if (!isMainFrame || code === -3) return
       this.loading = false
+      this.loadFailed = true
       this.error = description || String(code)
       this.deps.onLoadFailed({ code, description: this.error })
       void validatedURL
@@ -108,13 +120,17 @@ export class CloudDashboard {
     })
 
     const session = contents.session
-    session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
-    session.on('will-download', (event) => event.preventDefault())
+    if (!configuredSessions.has(session)) {
+      configuredSessions.add(session)
+      session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+      session.on('will-download', (event) => event.preventDefault())
+    }
 
     this.view = view
     this.currentUrl = url
     this.error = null
     this.loading = true
+    this.loadFailed = false
     void contents.loadURL(url).catch((loadError: unknown) => {
       this.loading = false
       this.error = loadError instanceof Error ? loadError.message : String(loadError)
@@ -128,9 +144,13 @@ export class CloudDashboard {
     const view = this.ensureView(url)
     if (!view) return
     this.attach()
-    // 挂上去之后先给一个 1x1 的占位，等渲染层量好尺寸再对齐，避免闪一屏错位
-    view.setBounds(this.bounds ?? { x: 0, y: 0, width: MIN_WIDTH, height: MIN_HEIGHT })
-    view.setVisible(true)
+    // 还没收到渲染层上报的矩形时先不显示：否则会先闪一屏 80x80 的错位窗口
+    if (this.bounds) {
+      view.setBounds(this.bounds)
+      view.setVisible(true)
+    } else {
+      view.setVisible(false)
+    }
   }
 
   close(): void {
@@ -160,6 +180,7 @@ export class CloudDashboard {
     }
     this.error = null
     this.loading = true
+    this.loadFailed = false
     view.webContents.reload()
   }
 

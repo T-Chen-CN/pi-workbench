@@ -719,6 +719,7 @@ export interface ElectronAPI {
     callback: (payload: { code: number; description: string }) => void
   ) => () => void
   onCloudDashboardClosed: (callback: (payload: { reason?: string }) => void) => () => void
+  onCloudDashboardLoaded: (callback: () => void) => () => void
 }
 
 export interface OpenDirectoryResult {

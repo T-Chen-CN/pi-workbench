@@ -70,6 +70,8 @@ interface CloudState {
   pendingDisconnect: string | null
   /** 上一个未成功的发送：重试时复用同一个幂等键，避免后端重复执行 */
   pending: { text: string; key: string } | null
+  /** 历史拉取的世代号：只接受最后一次请求的结果（连点会话时防串台） */
+  historyToken: number
 
   draft: string
   dashboard: CloudDashboardState
@@ -95,6 +97,8 @@ interface CloudState {
   setDashboardBounds: (bounds: CloudDashboardBounds) => Promise<void>
   reloadDashboard: () => Promise<void>
   setDashboardError: (error: string | null) => void
+  /** 主进程报「这次加载收尾」：清加载态；成功时连错误一起清（重试成功要自愈） */
+  settleDashboard: () => void
   /** 主进程那边关掉了视图（例如页面里按了 Esc） */
   hideDashboard: () => void
 }
@@ -122,6 +126,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   runError: null,
   pendingDisconnect: null,
   pending: null,
+  historyToken: 0,
 
   draft: '',
   dashboard: EMPTY_DASHBOARD,
@@ -175,11 +180,11 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   async disconnect() {
     await cloudApi.disconnect()
     await cloudApi.closeDashboard()
+    const config = await cloudApi.getConfig()
     set({
       connection: 'unconfigured',
       error: null,
       capabilities: null,
-      config: { ...get().config, hasToken: false },
       sessions: [],
       sessionsError: null,
       activeSessionId: null,
@@ -192,6 +197,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       pending: null,
       pendingDisconnect: null,
       dashboard: EMPTY_DASHBOARD,
+      ...(config.success ? { config: config.config } : {}),
     })
   },
 
@@ -211,7 +217,10 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   },
 
   async openSession(sessionId) {
+    // 连点两个会话时，先发的那次可能后回来：用令牌保证只认最后一次
+    const token = get().historyToken + 1
     set({
+      historyToken: token,
       activeSessionId: sessionId,
       sessionMeta: get().sessions.find((session) => session.id === sessionId) ?? null,
       partsLoading: true,
@@ -223,6 +232,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       pending: null,
     })
     const result = await cloudApi.listMessages({ sessionId, limit: MESSAGES_PAGE_SIZE })
+    if (get().historyToken !== token) return
     if (!result.success) {
       set({ partsLoading: false, partsError: result.error ?? 'unknown' })
       return
@@ -388,7 +398,11 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   },
 
   setDashboardError(error) {
-    set({ dashboard: { ...get().dashboard, error } })
+    set({ dashboard: { ...get().dashboard, error, loading: error ? false : get().dashboard.loading } })
+  },
+
+  settleDashboard() {
+    set({ dashboard: { ...get().dashboard, loading: false, error: null } })
   },
 
   hideDashboard() {

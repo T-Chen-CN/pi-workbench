@@ -191,6 +191,12 @@ export const cloudApi = {
     return bridge.onCloudDashboardClosed(callback)
   },
 
+  onDashboardLoaded(callback: () => void): () => void {
+    const bridge = api()
+    if (!bridge || typeof bridge.onCloudDashboardLoaded !== 'function') return () => {}
+    return bridge.onCloudDashboardLoaded(callback)
+  },
+
   onDashboardLoadFailed(
     callback: (payload: { code: number; description: string }) => void
   ): () => void {

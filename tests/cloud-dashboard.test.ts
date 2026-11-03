@@ -16,21 +16,7 @@ const mocks = vi.hoisted(() => {
       | null = null
     loadedUrl = ''
     reloads = 0
-    sessionHandlers = new Map<string, Handler>()
-    session = {
-      setPermissionRequestHandler: (
-        handler: (
-          contents: unknown,
-          permission: string,
-          callback: (granted: boolean) => void
-        ) => void
-      ) => {
-        this.permissionHandler = handler
-      },
-      on: (event: string, handler: Handler) => {
-        this.sessionHandlers.set(event, handler)
-      },
-    }
+    session = mocks.session
 
     setWindowOpenHandler(handler: (details: { url: string }) => unknown): void {
       this.windowOpenHandler = handler
@@ -88,6 +74,23 @@ const mocks = vi.hoisted(() => {
 
   const views: FakeWebContentsView[] = []
   const external: string[] = []
+  /** 同一个 partition 的 session 在真实 Electron 里是共享的：测试里也共享 */
+  const session = {
+    permissionHandler: null as
+      | ((contents: unknown, permission: string, callback: (granted: boolean) => void) => void)
+      | null,
+    onCounts: new Map<string, number>(),
+    handlers: new Map<string, Handler>(),
+    setPermissionRequestHandler(
+      handler: (contents: unknown, permission: string, callback: (granted: boolean) => void) => void
+    ) {
+      this.permissionHandler = handler
+    },
+    on(event: string, handler: Handler) {
+      this.onCounts.set(event, (this.onCounts.get(event) ?? 0) + 1)
+      this.handlers.set(event, handler)
+    },
+  }
   const window = {
     contentView: {
       children: [] as FakeWebContentsView[],
@@ -109,7 +112,7 @@ const mocks = vi.hoisted(() => {
     }
   }
 
-  return { views, external, window, WebContentsView }
+  return { views, external, window, session, WebContentsView }
 })
 
 vi.mock('electron', () => ({
@@ -128,11 +131,15 @@ const DASH_URL = 'https://dash.tchen-xiaoxiao.com/'
 function makeDashboard() {
   const events = {
     loadFailed: [] as Array<{ code: number; description: string }>,
+    loadSettled: 0,
     closed: 0,
   }
   const dashboard = new CloudDashboard({
     getWindow: () => mocks.window as never,
     onLoadFailed: (payload) => events.loadFailed.push(payload),
+    onLoadSettled: () => {
+      events.loadSettled += 1
+    },
     onRequestClose: () => {
       events.closed += 1
     },
@@ -163,6 +170,9 @@ describe('CloudDashboard', () => {
     await Promise.resolve()
     expect(created.webContents.loadedUrl).toBe(DASH_URL)
     expect(mocks.window.contentView.children).toContain(created)
+    // 还没收到渲染层上报的矩形：先不显示，避免闪一屏 80x80 的错位窗口
+    expect(created.visible).toBe(false)
+    dashboard.setBounds({ x: 0, y: 34, width: 1200, height: 766 }, true)
     expect(created.visible).toBe(true)
     expect(dashboard.snapshot().visible).toBe(true)
   })
@@ -176,6 +186,7 @@ describe('CloudDashboard', () => {
 
     dashboard.open(DASH_URL)
     expect(mocks.views).toHaveLength(1)
+    dashboard.setBounds({ x: 0, y: 34, width: 1200, height: 766 }, true)
     expect(view().visible).toBe(true)
   })
 
@@ -230,9 +241,9 @@ describe('CloudDashboard', () => {
   })
 
   it('denies every permission request', () => {
-    const { dashboard, view } = makeDashboard()
+    const { dashboard } = makeDashboard()
     dashboard.open(DASH_URL)
-    const handler = view().webContents.permissionHandler
+    const handler = mocks.session.permissionHandler
     expect(handler).toBeTruthy()
     let granted: boolean | null = null
     handler?.(null, 'geolocation', (value) => {
@@ -269,6 +280,51 @@ describe('CloudDashboard', () => {
     dashboard.open(DASH_URL)
     dashboard.reload()
     expect(view().webContents.reloads).toBe(1)
+  })
+
+  it('stays hidden until the renderer reports its rectangle', () => {
+    const { dashboard, view } = makeDashboard()
+    dashboard.open(DASH_URL)
+    expect(view().visible).toBe(false)
+
+    dashboard.setBounds({ x: 0, y: 34, width: 800, height: 600 }, true)
+    expect(view().visible).toBe(true)
+
+    // 切页只隐藏，不销毁：回来是热的
+    dashboard.setBounds({ x: 0, y: 34, width: 800, height: 600 }, false)
+    expect(view().visible).toBe(false)
+    dashboard.setBounds({ x: 0, y: 34, width: 800, height: 600 }, true)
+    expect(view().visible).toBe(true)
+    expect(mocks.views).toHaveLength(1)
+  })
+
+  it('clears a previous failure once a later load settles', () => {
+    const { dashboard, events, view } = makeDashboard()
+    dashboard.open(DASH_URL)
+    const contents = view().webContents
+
+    contents.emit('did-fail-load', {}, -105, 'ERR_NAME_NOT_RESOLVED', DASH_URL, true)
+    contents.emit('did-stop-loading')
+    // 失败后 did-stop-loading 也会来：不能顺手把错误抹掉
+    expect(dashboard.snapshot().error).toBe('ERR_NAME_NOT_RESOLVED')
+    expect(events.loadSettled).toBe(1)
+
+    // 重试成功：did-start-loading 重置失败标记，收尾时才清错误
+    contents.emit('did-start-loading')
+    contents.emit('did-stop-loading')
+    expect(dashboard.snapshot().error).toBeNull()
+    expect(dashboard.snapshot().loading).toBe(false)
+    expect(events.loadSettled).toBe(2)
+  })
+
+  it('configures the shared session only once across view recreations', () => {
+    const { dashboard } = makeDashboard()
+    dashboard.open(DASH_URL)
+    expect(mocks.session.onCounts.get('will-download')).toBe(1)
+    dashboard.destroy()
+    dashboard.open(DASH_URL)
+    expect(mocks.views).toHaveLength(2)
+    expect(mocks.session.onCounts.get('will-download')).toBe(1)
   })
 
   it('detaches and closes the view on destroy', () => {

@@ -95,6 +95,18 @@ export function writeCloudConfig(input: { baseUrl: string; apiKey?: string }): C
   }
 }
 
+/** 断开连接：丢掉密钥，保留地址（下次只需重新粘密钥） */
+export function clearCloudToken(): CloudConfig {
+  const current = readCloudConfig()
+  const stored: StoredCloudConfig = {
+    baseUrl: current.baseUrl,
+    dashboardUrl: current.dashboardUrl,
+    apiKey: '',
+  }
+  writeJsonAtomicSync(cloudConfigFile(), stored)
+  return { ...current, apiKey: '', hasToken: false }
+}
+
 /** 只暴露给渲染层的字段 */
 export function publicCloudConfig(config = readCloudConfig()): {
   baseUrl: string

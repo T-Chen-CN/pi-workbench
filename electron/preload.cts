@@ -520,5 +520,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event: unknown, payload: unknown) => callback(payload)
     ipcRenderer.on('cloud:dashboard:closed', listener)
     return () => ipcRenderer.removeListener('cloud:dashboard:closed', listener)
+  },
+  onCloudDashboardLoaded: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('cloud:dashboard:loaded', listener)
+    return () => ipcRenderer.removeListener('cloud:dashboard:loaded', listener)
   }
 })

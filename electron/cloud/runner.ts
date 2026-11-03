@@ -6,13 +6,16 @@
  */
 
 import type { CloudFrame, CloudRunStatus } from './types.js'
-import { CloudApiError, cloudErrorMessage, type CloudClient } from './client.js'
+import { CloudApiError, type CloudClient } from './client.js'
 import { readSseStream } from './events.js'
 import { RunMapper } from './map.js'
 import { createRemote, type CloudRemote } from './remote.js'
 
 /** 停止请求发出后，等后端推终态的最长时间 */
 const STOP_FALLBACK_MS = 15_000
+/** 断流后最多重订阅几次（后端支持 Last-Event-ID 续传） */
+const MAX_STREAM_RETRIES = 3
+const RETRY_BASE_DELAY_MS = 500
 
 export interface CloudRunnerDeps {
   emit: (frame: CloudFrame) => void
@@ -97,28 +100,64 @@ export class CloudRunner {
 
     if (sessionId) this.lastSessionId = sessionId
     let terminal = false
+    // 已经收到的最后一个事件序号：断流重订阅时带回去，避免重复或漏事件
+    let lastSeq = -1
+
     try {
-      const response = await this.client.openStream(`/v1/runs/${encodeURIComponent(runId)}/events`, controller.signal)
-      if (!response.body) throw new Error('事件流没有响应正文')
-      await readSseStream(response.body, {
-        signal: controller.signal,
-        onFrame: (frame) => {
-          for (const emitted of mapper.handle(frame)) {
-            if (emitted.kind === 'run') terminal = true
-            this.deps.emit(emitted)
-          }
-        },
-      })
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        this.deps.log?.('[Cloud] run stream failed', error)
-        this.deps.emit({ kind: 'error', runId, error: cloudErrorMessage(error) })
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          const suffix = lastSeq >= 0 ? `?last_seq=${lastSeq}` : ''
+          const response = await this.client.openStream(
+            `/v1/runs/${encodeURIComponent(runId)}/events${suffix}`,
+            controller.signal
+          )
+          if (!response.body) throw new Error('事件流没有响应正文')
+          await readSseStream(response.body, {
+            signal: controller.signal,
+            onFrame: (frame) => {
+              if (typeof frame.id === 'number') lastSeq = frame.id
+              for (const emitted of mapper.handle(frame)) {
+                if (emitted.kind === 'run') terminal = true
+                this.deps.emit(emitted)
+              }
+            },
+          })
+        } catch (error) {
+          if (controller.signal.aborted) break
+          this.deps.log?.('[Cloud] run stream failed', error)
+        }
+
+        if (terminal || controller.signal.aborted) break
+
+        // 流断了但没收到终态：先确认后端还在跑，再决定续订还是收尾
+        const stillRunning = await this.isRunning(runId)
+        if (!stillRunning) break
+        if (attempt >= MAX_STREAM_RETRIES) {
+          this.deps.emit({
+            kind: 'error',
+            runId,
+            error: '事件流多次中断，已停止跟随；重新打开会话可看到最新进度',
+          })
+          break
+        }
+        await delay(RETRY_BASE_DELAY_MS * 2 ** attempt)
       }
     } finally {
       if (this.stream?.runId === runId) this.stream = null
     }
 
     await this.reconcile(runId, sessionId, terminal)
+  }
+
+  /** 后端是否仍在执行这一轮（查不到状态时按「已结束」处理，交给 reconcile 兜底） */
+  private async isRunning(runId: string): Promise<boolean> {
+    try {
+      const snapshot = await this.remote.runStatus(runId)
+      return snapshot.status !== 'completed' && snapshot.status !== 'failed' && snapshot.status !== 'cancelled'
+    } catch (error) {
+      this.deps.log?.('[Cloud] run status probe failed', error)
+      return false
+    }
   }
 
   /** 流结束 / 断流后的收敛：拿最终状态 + 重拉历史（工具结果、token、花费都以历史为准） */
@@ -162,4 +201,8 @@ export class CloudRunner {
       this.deps.emit({ kind: 'run', runId, state, error: error ?? undefined })
     }
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }

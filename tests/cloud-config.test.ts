@@ -36,6 +36,22 @@ afterAll(() => {
   fs.rmSync(mocks.state.appDir, { recursive: true, force: true })
 })
 
+describe('clearCloudToken', () => {
+  it('drops the key but keeps the base url so reconnecting only needs the key', () => {
+    config.writeCloudConfig({ baseUrl: 'https://api.tchen-xiaoxiao.com', apiKey: 'sk-secret' })
+    expect(config.readCloudConfig().hasToken).toBe(true)
+
+    const cleared = config.clearCloudToken()
+    expect(cleared.hasToken).toBe(false)
+    expect(cleared.baseUrl).toBe('https://api.tchen-xiaoxiao.com')
+    expect(cleared.apiKey).toBe('')
+
+    const reread = config.readCloudConfig()
+    expect(reread.hasToken).toBe(false)
+    expect(reread.baseUrl).toBe('https://api.tchen-xiaoxiao.com')
+  })
+})
+
 describe('normalizeBaseUrl', () => {
   it('strips trailing slashes and a /v1 suffix', () => {
     expect(config.normalizeBaseUrl('https://api.example.com/')).toBe('https://api.example.com')

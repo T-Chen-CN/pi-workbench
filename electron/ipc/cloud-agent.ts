@@ -4,6 +4,7 @@ import type { BrowserWindow } from 'electron'
 import { handleIpc } from './register.js'
 import {
   normalizeBaseUrl,
+  clearCloudToken,
   publicCloudConfig,
   readCloudConfig,
   writeCloudConfig,
@@ -46,6 +47,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   const dashboard = new CloudDashboard({
     getWindow: () => deps.getMainWindow(),
     onLoadFailed: (payload) => send('cloud:dashboard:load-failed', payload),
+    onLoadSettled: () => send('cloud:dashboard:loaded', {}),
     onRequestClose: () => {
       dashboard.close()
       send(DASHBOARD_CLOSED_EVENT, { reason: 'escape' })
@@ -60,7 +62,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   function ensureClient(): CloudClient {
     const config = readCloudConfig()
     if (!config.hasToken) {
-      throw new CloudApiError('unauthorized', '还没有配置 API 密钥，请先在「配置」里保存')
+      throw new CloudApiError('unauthorized', '还没有配置 API 密钥，请先在「连接」页保存')
     }
     const key = clientKeyFor(config)
     if (client && key === clientKey) return client
@@ -136,12 +138,15 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   })
 
+  // 「断开连接」= 真正断开：丢掉主进程里的客户端，同时清掉盘上的密钥
   handleIpc('cloud:disconnect', () => {
     runner?.dispose()
     runner = null
     client = null
     clientKey = ''
     capabilities = null
+    dashboard.close()
+    clearCloudToken()
     send('cloud:status', { state: 'unconfigured', error: null, capabilities: null })
     return { success: true }
   })
