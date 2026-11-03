@@ -81,41 +81,39 @@ gh repo edit T-Chen-CN/pi-workbench \
 - **Known issues 诚实写**：未签名未公证、`.doc/.xls/.ppt` 旧格式只给另存为指引、扫描件不做 OCR。
 - 资产名由 `package.json` 的 `artifactName` 决定，改名时同步本节。
 
-### v0.7.5 成品（可直接粘贴覆盖现有说明）
+### v0.7.6 成品（可直接粘贴覆盖现有说明）
 
 ```markdown
-附件只给路径、PDF / Office 可读、退出可靠性重做 —— 这一版把「Agent 能不能真的读到你的文档」和「关掉它能不能干净退出」两件事做完了。
+三个立刻能感觉到的变化：编辑区默认视图变成了一张能自由摆放的仓库地图，标签栏「+」直接弹工作区列表，打字不再一顿一顿。
 
 ## Highlights
 
-- **附件改为只给路径，任意位置任意格式** — 单条消息最多 10 个附件，工作区外的文件也能选；路径与元信息进上下文，由 Agent 用自己的工具去读，渲染层仍然没有「任意路径读内容」的能力。
-- **PDF / Word / Excel / PowerPoint / OpenDocument / EPUB 可读** — 按魔数分流解析（`.pdf` 里是文本就交回内置 `read`，`.docx` 里是 OLE 就给另存为指引），零新增依赖；没有文本层的扫描件走视觉通道。Office 文档另有编辑器内只读预览。
-- **退出可靠性重做** — 清理链逐步超时 + 双看门狗，子进程按进程树回收；单实例锁被拒时落日志并弹原生提示，不再出现「双击没反应」。
-- **用户消息回显引用与附件** — 划词引用、附加文件、纯引用消息都在气泡里如实显示，编辑重发与运行中插话不再丢引用。
-- **独立面板窗口关闭修复** — 关闭拆出的面板不再报 `Object has been destroyed`，面板可靠回位。
-- **模型静默超时 120s → 180s** — 长思考不再被误判卡死。
+- **仓库地图面板** — 编辑区默认视图把仓库里的文件按职责摆成一张可缩放、可平移的地图：顶层目录逐层点开，卡片拖到你顺手的位置会被记住。职责靠离线规则推断（Git 索引 + 文件头注释），不联网、不调模型、不碰 Git。
+- **打字不再卡** — 按键路径上三处看不见的开销全部拆掉：隐藏的 Markdown 阅读视图不再每键重排整篇、编辑时全文只读一次、草稿改为异步落盘不阻塞输入法。markdown 源码视图实测 338ms/键 → 18~35ms/键。
+- **标签栏「+」改成工作区选择弹窗** — 点一下就在最后一个标签旁边展开工作区列表，不用再绕菜单。
+- **README 中文优先重写** — 首屏改用主张式小节，补品牌 banner 与社交分享卡；英文对等版在 `README.en.md`。
 
 ## Downloads
 
 | Platform | Asset |
 | --- | --- |
-| Windows | `Pi-Workbench-Setup-0.7.5.exe` |
-| macOS | `Pi-Workbench-0.7.5-universal.dmg` |
-| Linux | `Pi-Workbench-0.7.5.AppImage` |
+| Windows | `Pi-Workbench-Setup-0.7.6.exe` |
+| macOS | `Pi-Workbench-0.7.6-universal.dmg` |
+| Linux | `Pi-Workbench-0.7.6.AppImage` |
 
 ## Upgrade notes
 
-0.7.4 及更早版本可直接通过应用内更新升级：Windows / Linux 后台下载、点确认后安装，数据目录不受影响；macOS 请下载 dmg 覆盖安装。
+0.7.5 及更早版本可直接通过应用内更新升级：Windows / Linux 后台下载、点确认后安装，数据目录不受影响；macOS 请下载 dmg 覆盖安装。
 
 ## Known issues
 
 - 构建未做代码签名与公证，首次启动需在 SmartScreen / Gatekeeper 中确认一次。
 - 旧格式 `.doc / .xls / .ppt / .wps` 不解析，只返回「另存为 .docx / .xlsx / .pptx」指引；扫描件不做 OCR。
 
-**Full Changelog**: https://github.com/T-Chen-CN/pi-workbench/compare/v0.7.4...v0.7.5
+**Full Changelog**: https://github.com/T-Chen-CN/pi-workbench/compare/v0.7.5...v0.7.6
 ```
 
-粘贴方式（**执行前确认**）：`gh release edit v0.7.5 --notes-file <上面这段存成的文件>`。
+粘贴方式（**执行前确认**）：`gh release edit v0.7.6 --notes-file <上面这段存成的文件>`。
 
 ### 仍未接入
 

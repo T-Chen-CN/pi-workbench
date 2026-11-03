@@ -170,10 +170,10 @@ Open **Settings** on first run and complete five steps:
 
 | Item            | State                                                                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Current version | `0.7.5` (2026-10-31)                                                                                                                                          |
-| Releases        | 12 GitHub releases; installers and `latest*.yml` produced by CI on tags                                                                                       |
+| Current version | `0.7.6` (2026-11-03)                                                                                                                                          |
+| Releases        | 13 GitHub releases; installers and `latest*.yml` produced by CI on tags                                                                                       |
 | Phases          | Phase 0–4 done · Phase 5 (Fleet background jobs) removed 2026-10-24 · Phase 6 ongoing                                                                         |
-| Quality         | type-check + lint + 1,200+ Vitest cases + full build; CI also runs a Windows packaging smoke test                                                             |
+| Quality         | type-check + lint + 1,300+ Vitest cases + full build; CI also runs a Windows packaging smoke test                                                             |
 | Stack           | Electron 44 · React 19 · TypeScript 5.9 · Monaco 0.57 · `@earendil-works/pi-coding-agent` 1.3                                                                 |
 | Known limits    | Not signed or notarized; legacy Office formats are not parsed; no OCR for scans; Linux tray degrades to minimize; manual platform acceptance is still pending |
 
