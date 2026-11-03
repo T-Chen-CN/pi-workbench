@@ -13,7 +13,7 @@ import {
   Presentation,
   Table2,
 } from 'lucide-react'
-import { useEditorStore, editorStoreFor } from '../store/editorStore'
+import { useEditorStore, editorStoreFor, sameOpenFileTabs } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
 import { confirmDialog } from '../store/dialogStore'
@@ -66,11 +66,15 @@ export interface EditorTabsProps {
  * 用 sticky 固定在左端，文件标签再多也只是从它下面横向滚过去。视图切换不在这里
  * （Markdown / HTML 的源码 ↔ 阅读见 FileView 右下角浮层）。
  */
-export const EditorTabs: React.FC<EditorTabsProps> = ({ workspacePath, root }) => {
+// 父级 FileView 会跟着正文每按键重渲染：memo 住，标签条只在自己的订阅真的变了时才重画
+export const EditorTabs = React.memo(function EditorTabs({ workspacePath, root }: EditorTabsProps) {
   const { t } = useI18nStore()
   const store = editorStoreFor(root)
-  const { currentFile, openFiles, panelActive, setPanelActive, setCurrentFile, removeOpenFile } =
-    useEditorStore(root)
+  // 只订阅「哪些标签开着 / 哪个是当前标签 / 面板是否激活」：
+  // 正文每按键都会造新数组，订阅整个 store 会让标签条跟着每按键重渲染
+  const openFiles = useEditorStore(root, (state) => state.openFiles, sameOpenFileTabs)
+  const currentPath = useEditorStore(root, (state) => state.currentFile?.path ?? null)
+  const panelActive = useEditorStore(root, (state) => state.panelActive)
 
   const closeFile = async (file: OpenFile) => {
     const target = store.getState().openFiles.find((f) => f.path === file.path)
@@ -86,7 +90,7 @@ export const EditorTabs: React.FC<EditorTabsProps> = ({ workspacePath, root }) =
     if (workspacePath) {
       void api.draftDelete(workspacePath, file.path).catch(() => undefined)
     }
-    removeOpenFile(file.path)
+    store.getState().removeOpenFile(file.path)
   }
 
   return (
@@ -104,7 +108,7 @@ export const EditorTabs: React.FC<EditorTabsProps> = ({ workspacePath, root }) =
           tabbable={panelActive}
           title={t('panelTab')}
           ariaLabel={t('panelTab')}
-          onSelect={() => setPanelActive(true)}
+          onSelect={() => store.getState().setPanelActive(true)}
           className="max-w-[160px] pr-3"
           labelClassName="max-w-[120px]"
           leading={
@@ -118,13 +122,13 @@ export const EditorTabs: React.FC<EditorTabsProps> = ({ workspacePath, root }) =
       </div>
 
       {openFiles.map((file, index) => {
-        const active = !panelActive && currentFile?.path === file.path
+        const active = !panelActive && currentPath === file.path
         const Icon = iconFor(file)
         return (
           <Tab
             key={file.path}
             active={active}
-            tabbable={active || (!panelActive && !currentFile && index === 0)}
+            tabbable={active || (!panelActive && !currentPath && index === 0)}
             title={file.path}
             ariaLabel={
               [file.name, file.isDirty ? t('unsavedChanges') : '', file.isSaving ? t('saving') : '']
@@ -133,8 +137,10 @@ export const EditorTabs: React.FC<EditorTabsProps> = ({ workspacePath, root }) =
             }
             busy={file.isSaving}
             onSelect={() => {
-              setCurrentFile(file)
-              setPanelActive(false)
+              // 现取 store 里的那份：列表本身可能为了少渲染而保留着旧内容
+              const latest = store.getState().openFiles.find((item) => item.path === file.path)
+              if (latest) store.getState().setCurrentFile(latest)
+              store.getState().setPanelActive(false)
             }}
             onClose={() => void closeFile(file)}
             closeLabel={t('close')}
@@ -156,4 +162,4 @@ export const EditorTabs: React.FC<EditorTabsProps> = ({ workspacePath, root }) =
       })}
     </div>
   )
-}
+})

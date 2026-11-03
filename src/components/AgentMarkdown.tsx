@@ -77,7 +77,15 @@ const CodeBlock: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
 }
 
 const REMARK_PLUGINS = [remarkGfm]
-const HIGHLIGHT_PLUGINS = [rehypeHighlight]
+/**
+ * `rehypeHighlight` 每次被调用都会 `createLowlight(common)`，现场把整套语法
+ * （js/ts/css/php/sql…）注册一遍，单次约 20ms。它返回的变换只依赖固定选项，
+ * 所以只构建一次、后续复用，否则每个 Markdown 块每次重渲染都要交这笔钱。
+ */
+let highlightTransform: ReturnType<typeof rehypeHighlight> | null = null
+const rehypeHighlightShared = (() =>
+  (highlightTransform ??= rehypeHighlight())) as unknown as typeof rehypeHighlight
+const HIGHLIGHT_PLUGINS = [rehypeHighlightShared]
 const NO_PLUGINS: [] = []
 
 /**

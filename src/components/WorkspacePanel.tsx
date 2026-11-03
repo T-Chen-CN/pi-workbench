@@ -45,7 +45,10 @@ export interface WorkspacePanelProps {
   active: boolean
 }
 
-export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({ workspacePath, active }) => {
+export const WorkspacePanel = React.memo(function WorkspacePanel({
+  workspacePath,
+  active,
+}: WorkspacePanelProps) {
   const { t } = useI18nStore()
   const state = useRepoMapStore((s) => repoMapStateFor(s, workspacePath))
   const scan = useRepoMapStore((s) => s.scan)
@@ -256,4 +259,4 @@ export const WorkspacePanel: React.FC<WorkspacePanelProps> = ({ workspacePath, a
       )}
     </div>
   )
-}
+})

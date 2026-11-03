@@ -98,7 +98,9 @@ export default function App() {
   const { t, setLanguage, language } = useI18nStore()
   const { setMode } = useThemeStore()
   const resolvedTheme = useResolvedTheme()
-  const currentFile = useEditorStore(workspace, (state) => state.currentFile)
+  // 只订阅文件名：`currentFile` 对象每次按键都会换身份，订阅它会让整个外壳
+  // （所有常驻工作区、侧栏、聊天、仓库地图）跟着每按键重渲染
+  const currentFileName = useEditorStore(workspace, (state) => state.currentFile?.name ?? '')
   const platform = typeof window !== 'undefined' ? window.electronAPI?.platform : undefined
   const usesMacTrafficLights = platform === 'darwin'
   const usesCustomWindowControls = !!platform && platform !== 'darwin' && platform !== 'web'
@@ -113,7 +115,7 @@ export default function App() {
   }
 
   const fileLanguage = (() => {
-    const ext = currentFile?.name.split('.').pop()?.toLowerCase()
+    const ext = currentFileName.split('.').pop()?.toLowerCase()
     switch (ext) {
       case 'ts':
       case 'tsx':
@@ -866,7 +868,7 @@ export default function App() {
         )}
         <div className="ml-auto flex items-center gap-4">
           <UpdateStatusIndicator onOpenSettings={() => openSettings('about')} />
-          {currentFile && <span>{fileLanguage}</span>}
+          {currentFileName && <span>{fileLanguage}</span>}
           <span>UTF-8</span>
           <span>{resolvedTheme === 'dark' ? 'INK' : 'PAPER'}</span>
         </div>

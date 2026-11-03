@@ -24,13 +24,17 @@ export const MarkdownReadingView: React.FC<{
   active?: boolean
 }> = ({ root, file, active = true }) => {
   const { t } = useI18nStore()
-  // 视图被切走时冻结解析结果：源码视图里每敲一个字都重排一遍 Markdown 太浪费
-  const [frozen, setFrozen] = useState(file.content)
-  useEffect(() => {
-    if (!active) setFrozen(file.content)
-  }, [active, file.content])
+  /**
+   * 冻结解析结果：源码视图里每敲一个字都重排一遍 Markdown 太浪费。
+   *
+   * 快照只在**视图活跃期间**跟随内容；切到源码视图后就不再动它，隐藏着的这篇
+   * 排版结果保持原样，按键只付出「不活跃」的部分代价。切回阅读视图时 `active`
+   * 变真，`source` 直接取最新内容，快照随之刷新。
+   */
+  const frozenRef = useRef(file.content)
+  if (active && frozenRef.current !== file.content) frozenRef.current = file.content
 
-  const source = active ? file.content : frozen
+  const source = active ? file.content : frozenRef.current
   const rendered = useMemo(() => {
     const blocks = splitMarkdownBlockRanges(source)
     return blocks.length > 0 ? blocks : [EMPTY_BLOCK]
@@ -90,9 +94,13 @@ export const MarkdownReadingView: React.FC<{
           data-quote-scope="doc"
           data-quote-doc={file.path}
         >
+          {/* key 只能用下标：`block.start` 是字符偏移，前面多敲一个字后面所有块的 key
+              都会变，React 会把整篇块卸载重挂（每块都要重新 parse + 重新注册一遍
+              highlight 语法，实测每键 270ms）。下标身份稳定，未变化的块靠
+              MarkdownBody 的 memo 直接跳过。 */}
           {rendered.map((block, index) =>
             editingIndex === index ? (
-              <div key={`edit-${block.start}`} className="my-3">
+              <div key={`edit-${index}`} className="my-3">
                 <Textarea
                   ref={textareaRef}
                   value={draft}
@@ -123,7 +131,7 @@ export const MarkdownReadingView: React.FC<{
                 </div>
               </div>
             ) : (
-              <div key={`${block.start}-${index}`} className="group/block relative" data-block-index={index}>
+              <div key={index} className="group/block relative" data-block-index={index}>
                 {block.frontmatter ? (
                   <pre className="md-frontmatter type-data text-ink-muted">{block.text}</pre>
                 ) : block.text.trim() ? (

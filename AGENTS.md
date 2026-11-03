@@ -54,7 +54,7 @@ npm run build      # 渲染层 + bridge + 主进程
 **Always**
 - 新增 IPC 四步：`electron/ipc/<域>.ts` 用 `handleIpc` → `electron/preload.cts` 暴露 → `src/types/electron.d.ts` 补类型 → `src/api/index.ts` 封装（同时补 Web mock）。
 - 文件写 / 删 / 改只允许发生在受信任工作区与 `{appDir}/cache/`；校验用 `realpath` + `path.relative`（`electron/workspace-trust.ts`）。
-- 落盘 JSON 走 `electron/atomic-json.ts` 的原子写（临时文件 + fsync + rename，旧文件留 `.bak`）；**不要自己 `writeFile` 覆盖**这些状态文件。
+- 落盘 JSON 走 `electron/atomic-json.ts` 的原子写（临时文件 + fsync + rename，旧文件留 `.bak`）；高频小文件（`cache/drafts`）用异步版 `writeJsonAtomicAsync` 且不留 `.bak`——主进程同步 fsync 会卡住浏览器 UI 线程；**不要自己 `writeFile` 覆盖**这些状态文件。
 - 状态更新不可变；按工作区隔离的状态用 `xxxStoreFor(workspacePath)` 工厂，不要放全局单例。
 
 ## 4. 架构铁律（动手前读对应文档）

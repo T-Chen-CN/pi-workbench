@@ -92,11 +92,15 @@ function defineEditorThemes(): void {
  * 这里只维护 model 缓存（切换标签保留撤销栈、光标与滚动）、主题、选区上报
  * 与大文件模式。Markdown / HTML 的阅读视图由 FileView 叠加在上层。
  */
-export const MonacoEditor: React.FC<{
+export const MonacoEditor = React.memo(function MonacoEditor({
+  workspacePath,
+  viewRoot,
+  active = true,
+}: {
   workspacePath: string
   viewRoot?: string
   active?: boolean
-}> = ({ workspacePath, viewRoot, active = true }) => {
+}) {
   const root = viewRoot ?? workspacePath
   const store = editorStoreFor(root)
   const { t } = useI18nStore()
@@ -106,6 +110,8 @@ export const MonacoEditor: React.FC<{
   const { currentFile, openFiles, pendingReveal, consumeReveal } = useEditorStore(root)
   // 每个文件一个 model：切换标签时保留撤销栈、光标与滚动位置
   const modelsRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map())
+  /** 每个 model 里当前内容的来源（store 里的那一份）：按键级比较靠引用相等，不必回读全文 */
+  const modelContentRef = useRef<Map<string, string>>(new Map())
   const viewStatesRef = useRef<Map<string, monaco.editor.ICodeEditorViewState | null>>(new Map())
   const activePathRef = useRef<string | null>(null)
   // 程序化 setValue 时抑制内容变化回调，避免误标脏 + 自动保存回环
@@ -130,6 +136,7 @@ export const MonacoEditor: React.FC<{
           ? registered
           : monaco.editor.createModel(target.content, detectLanguage(target.name), uri)
       modelsRef.current.set(target.path, model)
+      modelContentRef.current.set(target.path, target.content)
       return model
     }
 
@@ -138,8 +145,12 @@ export const MonacoEditor: React.FC<{
     if (!cached) return create(file)
     if (cached.isDisposed()) {
       modelsRef.current.delete(file.path)
+      modelContentRef.current.delete(file.path)
       return create(file)
     }
+
+    // 快路径：model 里的内容就是 store 这份（打字时的绝大多数情况），比较引用即可，不回读全文
+    if (modelContentRef.current.get(file.path) === file.content) return cached
 
     let current = ''
     try {
@@ -154,11 +165,13 @@ export const MonacoEditor: React.FC<{
       } catch {
         // model 在读取与写入之间被释放：重建后返回
         modelsRef.current.delete(file.path)
+        modelContentRef.current.delete(file.path)
         return create(file)
       } finally {
         suppressChangeRef.current = false
       }
     }
+    modelContentRef.current.set(file.path, file.content)
     return cached
   }, [])
 
@@ -269,6 +282,7 @@ export const MonacoEditor: React.FC<{
   // 组件卸载时释放编辑器与所有 model
   useEffect(() => {
     const models = modelsRef.current
+    const modelContents = modelContentRef.current
     const viewStates = viewStatesRef.current
     return () => {
       selectionSubRef.current?.dispose()
@@ -280,11 +294,14 @@ export const MonacoEditor: React.FC<{
         if (!model.isDisposed()) model.dispose()
       }
       models.clear()
+      modelContents.clear()
       viewStates.clear()
     }
   }, [])
 
-  // 切换当前文件：保存上一个文件的视图状态，并切换到它自己的 model
+  // 切换当前文件：保存上一个文件的视图状态，并切换到它自己的 model。
+  // 依赖里带 `currentFile`（每按键换身份）是有意的：外部把磁盘内容改过时要靠它推进 model；
+  // 打字时走 `getOrCreateModel` 的引用相等快路径，不会回读全文。
   useEffect(() => {
     const editor = monacoRef.current
     if (!editor || !currentFile) return
@@ -325,6 +342,7 @@ export const MonacoEditor: React.FC<{
       if (!openPaths.has(filePath)) {
         if (!model.isDisposed()) model.dispose()
         modelsRef.current.delete(filePath)
+        modelContentRef.current.delete(filePath)
         viewStatesRef.current.delete(filePath)
       }
     }
@@ -361,6 +379,8 @@ export const MonacoEditor: React.FC<{
       if (editor.getModel()?.isDisposed()) return
       const nextContent = editor.getValue()
       if (nextContent === file.content) return
+      // 记下 model 里这份内容的出处：上面「切换当前文件」的效应靠它做 O(1) 比较
+      modelContentRef.current.set(file.path, nextContent)
       store.getState().updateOpenFile(file.path, { content: nextContent })
       store.getState().markDirty(file.path)
     })
@@ -396,4 +416,4 @@ export const MonacoEditor: React.FC<{
       <div ref={editorRef} className="min-h-0 min-w-0 flex-1" />
     </div>
   )
-}
+})

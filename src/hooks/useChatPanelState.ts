@@ -8,7 +8,7 @@ import {
 } from '../store/chatStore'
 import { useSessionStore } from '../store/sessionStore'
 import { diffStoreFor } from '../store/diffStore'
-import { useEditorStore } from '../store/editorStore'
+import { editorStoreFor, sameOpenFileTabs, useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useApprovalStore } from '../store/approvalStore'
@@ -72,6 +72,9 @@ import {
   EMPTY_MESSAGES,
   formatTokenCount,
 } from '../utils/chatPanelShared'
+
+/** 「附加符号」全文扫描的防抖窗口：停手后才重算一次 */
+const SYMBOL_SCAN_DEBOUNCE_MS = 400
 
 export function useChatPanelState(props: ChatPanelProps) {
   const { workspacePath, viewRoot, active = true } = props
@@ -168,8 +171,12 @@ export function useChatPanelState(props: ChatPanelProps) {
     return null
   }, [messages])
 
-  const openFiles = useEditorStore(viewRoot ?? workspacePath, (state) => state.openFiles)
-  const currentEditorFile = useEditorStore(viewRoot ?? workspacePath, (state) => state.currentFile)
+  const editorRoot = viewRoot ?? workspacePath
+  const openFiles = useEditorStore(editorRoot, (state) => state.openFiles, sameOpenFileTabs)
+  // 只订阅当前文件的身份信息：`currentFile` 对象每次按键都会换身份（内容在里面），
+  // 订阅它曾让聊天面板每敲一个字就重渲染一次；内容只在动手那一刻现取（`editorStoreFor`）。
+  const currentEditorPath = useEditorStore(editorRoot, (state) => state.currentFile?.path ?? null)
+  const currentEditorName = useEditorStore(editorRoot, (state) => state.currentFile?.name ?? '')
 
   /** 「引用当前文档」开关：只作用于下一次发送，发送后自动复位 */
   const toggleQuoteCurrentFile = useCallback(() => {
@@ -209,7 +216,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     const normalize = (value: string) => value.replace(/\\/g, '/')
     const root = normalize(workspacePath).replace(/\/+$/, '')
     const ordered = [
-      ...(currentEditorFile ? [currentEditorFile.path] : []),
+      ...(currentEditorPath ? [currentEditorPath] : []),
       ...[...openFiles].reverse().map((file) => file.path),
     ]
     const seen = new Set<string>()
@@ -225,7 +232,7 @@ export function useChatPanelState(props: ChatPanelProps) {
       if (result.length >= 3) break
     }
     return result
-  }, [openFiles, currentEditorFile, workspacePath])
+  }, [openFiles, currentEditorPath, workspacePath])
 
   const emptySuggestions = useMemo(
     () => buildChatSuggestions({ workspaceType, recentFiles, translate: t }),
@@ -513,9 +520,37 @@ export function useChatPanelState(props: ChatPanelProps) {
     return () => offInsert()
   }, [activeKey, active])
 
-  const currentSymbols = useMemo(() =>
-      currentEditorFile ? extractSymbols(currentEditorFile.content, currentEditorFile.name) : [],
-    [currentEditorFile]
+  /**
+   * 「附加符号」要扫全文：不能跟着每按键重算。
+   * 这里只在停止输入 `SYMBOL_SCAN_DEBOUNCE_MS` 之后重算一次（切文件立即重算），
+   * 扫的是那一次的快照，用户真从菜单里选符号时再从 store 现取原文切片。
+   */
+  const [symbolSource, setSymbolSource] = useState<{ name: string; content: string } | null>(null)
+  useEffect(() => {
+    const store = editorStoreFor(editorRoot)
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const snapshot = (immediate: boolean) => {
+      if (timer) clearTimeout(timer)
+      const publish = () => {
+        timer = null
+        const file = store.getState().currentFile
+        setSymbolSource(file ? { name: file.name, content: file.content } : null)
+      }
+      if (immediate) publish()
+      else timer = setTimeout(publish, SYMBOL_SCAN_DEBOUNCE_MS)
+    }
+    snapshot(true)
+    // 内容变化高频：交给定时器合并，只有停手后才 setState（不触发按键级重渲染）
+    const unsubscribe = store.subscribe(() => snapshot(false))
+    return () => {
+      if (timer) clearTimeout(timer)
+      unsubscribe()
+    }
+  }, [editorRoot])
+
+  const currentSymbols = useMemo(
+    () => (symbolSource ? extractSymbols(symbolSource.content, symbolSource.name) : []),
+    [symbolSource]
   )
 
   const selectedModelCapability =
@@ -622,14 +657,16 @@ export function useChatPanelState(props: ChatPanelProps) {
 
   /** 附加单个符号（函数 / 类等）作为上下文 */
   const attachSymbol = (symbol: ExtractedSymbol) => {
-    if (!activeKey || !currentEditorFile) return
+    // 切片取当下的正文（符号列表是防抖后的快照，可能比文件旧）
+    const file = editorStoreFor(editorRoot).getState().currentFile
+    if (!activeKey || !file) return
     useChatStore.getState().addAttachment(activeKey, {
       kind: 'snippet',
-      path: currentEditorFile.path,
-      name: `${currentEditorFile.name}#${symbol.name}`,
+      path: file.path,
+      name: `${file.name}#${symbol.name}`,
       startLine: symbol.startLine,
       endLine: symbol.endLine,
-      content: sliceSymbol(currentEditorFile.content, symbol),
+      content: sliceSymbol(file.content, symbol),
     })
     setShowAttachMenu(false)
     setAttachMode('files')
@@ -1095,7 +1132,11 @@ export function useChatPanelState(props: ChatPanelProps) {
         ? chat.conversations[key]?.attachments ?? []
         : options?.attachments ?? []
     // 「引用当前文档」：开关打开时自动带上正在查看的文件，真正发出后复位
-    const quoteFile = takeComposerAttachments && chat.conversations[key]?.quoteCurrentFile ? currentEditorFile : null
+    // （正文现取：渲染时不再订阅 `currentFile` 对象，那会让面板每按键重渲染）
+    const quoteFile =
+      takeComposerAttachments && chat.conversations[key]?.quoteCurrentFile
+        ? editorStoreFor(editorRoot).getState().currentFile
+        : null
     const promptImages = takeComposerAttachments
       ? composerAttachments
           .filter((attachment) => attachment.kind === 'image')
@@ -1807,7 +1848,8 @@ export function useChatPanelState(props: ChatPanelProps) {
     contextTokensText,
     contextTone,
     contextUsage,
-    currentEditorFile,
+    currentEditorName,
+    currentEditorPath,
     currentSymbols,
     diffToolIds,
     emptySuggestions,

@@ -61,7 +61,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
     contextTokensText,
     contextTone,
     contextUsage,
-    currentEditorFile,
+    currentEditorName,
+    currentEditorPath,
     currentSymbols,
     diffToolIds,
     emptySuggestions,
@@ -523,22 +524,18 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                 <button
                   type="button"
                   onClick={toggleQuoteCurrentFile}
-                  disabled={!initialized || !currentEditorFile}
+                  disabled={!initialized || !currentEditorPath}
                   aria-pressed={quoteCurrentFile || undefined}
                   aria-label={
-                    currentEditorFile
+                    currentEditorPath
                       ? `${quoteCurrentFile ? t('quoteCurrentFileOn') : t('quoteCurrentFileNamed')} · ${
-                          currentEditorFile.name
+                          currentEditorName
                         }`
                       : t('quoteCurrentFileEmpty')
                   }
-                  title={
-                    currentEditorFile
-                      ? currentEditorFile.path
-                      : t('quoteCurrentDocHint')
-                  }
+                  title={currentEditorPath ? currentEditorPath : t('quoteCurrentDocHint')}
                   className={`inline-flex h-7 items-center gap-1.5 rounded-sm border px-2.5 type-label transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                    !currentEditorFile
+                    !currentEditorPath
                       ? 'border-rule-control text-ink-subtle'
                       : quoteCurrentFile
                         ? 'border-line bg-active text-ink'
@@ -547,8 +544,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                 >
                   <BookMarked size={12} className="flex-shrink-0" />
                   <span className="max-w-[16rem] truncate">
-                    {currentEditorFile
-                      ? basename(currentEditorFile.path) || currentEditorFile.name
+                    {currentEditorPath
+                      ? basename(currentEditorPath) || currentEditorName
                       : t('quoteCurrentFileEmpty')}
                   </span>
                 </button>
@@ -556,7 +553,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                   <div className="absolute bottom-full left-0 z-10 mb-2 max-h-64 w-72 overflow-y-auto border border-line bg-raised py-1 shadow-print">
                     <div className="flex items-center justify-between gap-2 px-3 py-1.5">
                       <span className="type-label text-ink-muted">{t('attachContext')}</span>
-                      {currentEditorFile && (
+                      {currentEditorPath && (
                         <button
                           type="button"
                           onClick={() =>

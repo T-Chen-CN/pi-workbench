@@ -97,6 +97,8 @@ macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动�
 
 **所有 JSON 落盘都走 `electron/atomic-json.ts`**：临时文件 → fsync → rename；覆盖前把旧文件复制为 `.bak`，读取时主文件损坏则回退备份。自己 `writeFile` 覆盖这些文件会破坏崩溃恢复。
 
+例外：`cache/drafts/` 用同一模块的**异步**写（`writeJsonAtomicAsync`）且不留 `.bak`。主进程的 Node 事件循环就是浏览器 UI 线程，同步 `fsync` + 回读解析上一份全文（草稿里就是整篇文档）会把窗口事件与输入法合成一起卡住；草稿是可再生的缓存，临时文件 + rename 已经足够。
+
 ## 4. 多工作区与运行期状态
 
 - 每个打开的工作区各挂一套常驻视图（`WorkspaceView`）和按工作区隔离的 editor / diff store；切换标签或返回首页只切 `visibility: hidden` + `inert`，**不卸载、不 reset**。

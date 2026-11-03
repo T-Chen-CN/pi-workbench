@@ -45,7 +45,8 @@ function createFakeModel(initialValue: string, uri?: { path?: string }): FakeMod
   let disposed = false
   return {
     uri,
-    getValue: () => value,
+    // 用 spy 的 getValue：全文回读次数是编辑卡顿的间接指标，断言见下方用例
+    getValue: vi.fn(() => value),
     setValue: (next: string) => {
       value = next
     },
@@ -227,4 +228,39 @@ describe('MonacoEditor', () => {
     expect(writeSpy).not.toHaveBeenCalled()
   })
 
+  it('reads the document back only once per keystroke', () => {
+    render(<MonacoEditor workspacePath="/ws" />)
+    act(() => {
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
+    })
+    const editor = mocks.create.mock.results[0].value
+    const model: FakeModel = editor.getModel()
+    vi.mocked(model.getValue).mockClear()
+
+    act(() => {
+      editor.emitChange('ab')
+    })
+
+    // 事件里取一次写进 store；「切换当前文件」的效应靠引用相等跳过，不该再回读全文
+    expect(model.getValue).toHaveBeenCalledTimes(1)
+  })
+
+  it('pushes externally reloaded content into the model', () => {
+    render(<MonacoEditor workspacePath="/ws" />)
+    act(() => {
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/a.ts', 'a'))
+    })
+    const editor = mocks.create.mock.results[0].value
+    const model: FakeModel = editor.getModel()
+
+    // 外部（磁盘 / Agent）改了内容：store 里的正文与 model 不一致时必须推进 model
+    act(() => {
+      const store = editorStoreFor('/ws')
+      store.getState().updateOpenFile('/tmp/a.ts', { content: 'from disk' })
+      store.getState().markClean('/tmp/a.ts')
+    })
+
+    expect(model.getValue()).toBe('from disk')
+    expect(editorStoreFor('/ws').getState().currentFile?.content).toBe('from disk')
+  })
 })

@@ -242,7 +242,7 @@ export function registerFilesIpc(context: FilesIpcContext): void {
       if (typeof content !== 'string') {
         return { success: false, error: 'Draft content must be a string' }
       }
-      context.draftStore.save(target.workspace, target.file, content)
+      await context.draftStore.save(target.workspace, target.file, content)
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }

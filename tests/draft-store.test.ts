@@ -17,8 +17,8 @@ afterEach(async () => {
 })
 
 describe('DraftStore', () => {
-  it('saves and lists drafts for a workspace', () => {
-    store.save('/ws/a', '/ws/a/src/index.ts', 'unsaved content')
+  it('saves and lists drafts for a workspace', async () => {
+    await store.save('/ws/a', '/ws/a/src/index.ts', 'unsaved content')
 
     expect(store.list('/ws/a')).toMatchObject([
       { workspace: '/ws/a', path: '/ws/a/src/index.ts', content: 'unsaved content' },
@@ -26,9 +26,9 @@ describe('DraftStore', () => {
     expect(store.list('/ws/b')).toEqual([])
   })
 
-  it('keeps one draft per file and removes it on delete', () => {
-    store.save('/ws/a', '/ws/a/a.ts', 'first')
-    store.save('/ws/a', '/ws/a/a.ts', 'second')
+  it('keeps one draft per file and removes it on delete', async () => {
+    await store.save('/ws/a', '/ws/a/a.ts', 'first')
+    await store.save('/ws/a', '/ws/a/a.ts', 'second')
 
     expect(store.list('/ws/a')).toHaveLength(1)
     expect(store.list('/ws/a')[0].content).toBe('second')
@@ -37,9 +37,9 @@ describe('DraftStore', () => {
     expect(store.list('/ws/a')).toEqual([])
   })
 
-  it('clears drafts for one workspace only', () => {
-    store.save('/ws/a', '/ws/a/a.ts', 'a')
-    store.save('/ws/b', '/ws/b/b.ts', 'b')
+  it('clears drafts for one workspace only', async () => {
+    await store.save('/ws/a', '/ws/a/a.ts', 'a')
+    await store.save('/ws/b', '/ws/b/b.ts', 'b')
 
     store.clear('/ws/a')
 
@@ -48,7 +48,7 @@ describe('DraftStore', () => {
   })
 
   it('recovers a draft from its backup when the primary file is corrupted', async () => {
-    store.save('/ws/a', '/ws/a/a.ts', 'recover me')
+    await store.save('/ws/a', '/ws/a/a.ts', 'recover me')
     const files = await fs.readdir(path.join(dir, 'drafts'))
     const primary = path.join(dir, 'drafts', files[0])
     await fs.copyFile(primary, `${primary}.bak`)
@@ -57,16 +57,16 @@ describe('DraftStore', () => {
     expect(store.list('/ws/a')).toMatchObject([{ content: 'recover me' }])
   })
 
-  it('does not persist oversized drafts', () => {
+  it('does not persist oversized drafts', async () => {
     const huge = 'x'.repeat(2_000_010)
-    store.save('/ws/a', '/ws/a/huge.txt', huge)
+    await store.save('/ws/a', '/ws/a/huge.txt', huge)
 
     expect(store.list('/ws/a')).toEqual([])
   })
 
-  it('clears every draft even beyond the list cap', () => {
+  it('clears every draft even beyond the list cap', async () => {
     for (let index = 0; index < 105; index++) {
-      store.save('/ws/a', `/ws/a/file-${index}.ts`, `content-${index}`)
+      await store.save('/ws/a', `/ws/a/file-${index}.ts`, `content-${index}`)
     }
     expect(store.list('/ws/a')).toHaveLength(100)
 

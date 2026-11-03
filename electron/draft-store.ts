@@ -7,7 +7,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { createHash } from 'crypto'
-import { readJsonWithBackup, writeJsonAtomicSync } from './atomic-json.js'
+import { readJsonWithBackup, writeJsonAtomicAsync } from './atomic-json.js'
 
 export interface DraftRecord {
   workspace: string
@@ -37,7 +37,15 @@ export class DraftStore {
     return path.join(this.rootDir, `${key}.json`)
   }
 
-  save(workspace: string, filePath: string, content: string): void {
+  /**
+   * 写一份草稿（异步原子写）。
+   *
+   * 两条硬要求：
+   * 1. 不能同步落盘：主进程线程就是浏览器 UI 线程，`fsync` 会连带卡住窗口事件与输入法合成；
+   * 2. 不留 `.bak`：写 `.bak` 要先回读并解析上一份全文（草稿里就是整篇文档），
+   *    等于每次保存多一遍全文 I/O。草稿是可再生的缓存，临时文件 + rename 已足够。
+   */
+  async save(workspace: string, filePath: string, content: string): Promise<void> {
     // 超长草稿不做截断保存：截断内容一旦被恢复并保存，会破坏原文件
     if (content.length > MAX_DRAFT_CHARS) {
       console.warn(
@@ -52,7 +60,7 @@ export class DraftStore {
       content,
       updatedAt: Date.now(),
     }
-    writeJsonAtomicSync(this.fileFor(workspace, filePath), record)
+    await writeJsonAtomicAsync(this.fileFor(workspace, filePath), record, { backup: false })
   }
 
   remove(workspace: string, filePath: string): void {

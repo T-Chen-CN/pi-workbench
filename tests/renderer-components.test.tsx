@@ -20,6 +20,7 @@ import { translations } from '../src/i18n/translations'
 import { api } from '../src/api'
 import { piAgentAPI } from '../src/api/piAgentAPI'
 import { clearPanelUi } from '../src/panelHost/panelUiState'
+import { extractSymbols } from '../src/utils/symbols'
 import type { ApiConfig } from '../src/types/electron'
 
 vi.mock('../src/api', () => ({
@@ -91,6 +92,12 @@ vi.mock('../src/store/dialogStore', () => ({
   confirmDialog: vi.fn(async () => true),
   promptDialog: vi.fn(async () => null),
 }))
+
+// 符号扫描是全文级的：把调用次数暴露给用例，守住「不在每次按键后扫全文」这条线
+vi.mock('../src/utils/symbols', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/utils/symbols')>()
+  return { ...actual, extractSymbols: vi.fn(actual.extractSymbols) }
+})
 
 vi.mock('monaco-editor', () => {
   const createModel = (initialValue: string) => {
@@ -427,6 +434,39 @@ describe('ChatPanel', () => {
     await waitFor(() => expect(toggle.getAttribute('aria-pressed')).toBeNull())
     expect(toggle.textContent).toContain('README.md')
     expect(vi.mocked(piAgentAPI.chat).mock.calls[0][0] as string).toContain('/ws/README.md')
+  })
+
+  it('scans symbols once after typing settles instead of on every keystroke', async () => {
+    const extract = vi.mocked(extractSymbols)
+    extract.mockClear()
+
+    render(<ChatPanel workspacePath="/ws" />)
+    await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
+
+    act(() => {
+      editorStoreFor('/ws').getState().addOpenFile({
+        path: '/ws/a.ts',
+        name: 'a.ts',
+        content: 'export function alpha() {}\n',
+        isDirty: false,
+        isSaving: false,
+      })
+    })
+    // 打开文件后先算一次：附加符号菜单要能马上列出符号
+    await waitFor(() => expect(extract).toHaveBeenCalledTimes(1))
+
+    // 连续输入：内容变了，但全文扫描不应该跟着跑
+    act(() => {
+      for (let index = 0; index < 5; index++) {
+        editorStoreFor('/ws').getState().updateOpenFile('/ws/a.ts', {
+          content: `export function alpha${index}() {}\n`,
+        })
+      }
+    })
+    expect(extract).toHaveBeenCalledTimes(1)
+
+    // 停手后合并成一次
+    await waitFor(() => expect(extract).toHaveBeenCalledTimes(2), { timeout: 2_000 })
   })
 
   it('shows image thumbnails on user messages restored from history', async () => {

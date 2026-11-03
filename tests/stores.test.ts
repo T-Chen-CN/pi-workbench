@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { editorStoreFor, resetEditorStores } from '../src/store/editorStore'
+import { editorStoreFor, resetEditorStores, sameOpenFileTabs } from '../src/store/editorStore'
 import { useChatStore } from '../src/store/chatStore'
 import { useToastStore, toast } from '../src/store/toastStore'
 import { useWorkspaceStore } from '../src/store/workspaceStore'
 import { diffStoreFor, resetDiffStores } from '../src/store/diffStore'
 import { useSessionStore } from '../src/store/sessionStore'
+import type { OpenFile } from '../src/types'
 
 beforeEach(() => {
   resetEditorStores()
@@ -76,6 +77,29 @@ describe('editorStore', () => {
     editorStoreFor('/ws').getState().addOpenFile(file)
 
     expect(editorStoreFor('/ws').getState().unsavedChanges.has(file.path)).toBe(false)
+  })
+
+  it('treats open files as unchanged when only the body changes', () => {
+    // 标签条 / 附件菜单靠这个判断避开「每按一键就重渲染」：正文不算标签身份变化
+    const tab = (path: string, name: string, extra: Partial<OpenFile> = {}): OpenFile => ({
+      ...file,
+      path,
+      name,
+      kind: 'text',
+      view: 'source',
+      version: 0,
+      ...extra,
+    })
+    const a = tab('/ws/a.ts', 'a.ts')
+    const b = tab('/ws/b.ts', 'b.ts')
+
+    expect(sameOpenFileTabs([a, b], [a, b])).toBe(true)
+    expect(sameOpenFileTabs([a], [{ ...a, content: 'typed' }])).toBe(true)
+    expect(sameOpenFileTabs([a], [{ ...a, isDirty: true }])).toBe(false)
+    expect(sameOpenFileTabs([a], [{ ...a, isSaving: true }])).toBe(false)
+    expect(sameOpenFileTabs([a], [{ ...a, kind: 'binary' as const }])).toBe(false)
+    expect(sameOpenFileTabs([a], [a, b])).toBe(false)
+    expect(sameOpenFileTabs([a], [b])).toBe(false)
   })
 })
 

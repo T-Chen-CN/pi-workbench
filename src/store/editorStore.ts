@@ -1,4 +1,5 @@
-import { useStore } from 'zustand'
+// 带相等函数的 useStore：zustand v4 的 `useStore` 传 equalityFn 会报弃用警告
+import { useStoreWithEqualityFn } from 'zustand/traditional'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import { OpenFile, OpenFileInput, EditorState } from '../types'
 import { defaultViewFor, detectFileKind, supportsSourceView, type FileViewMode } from '../utils/fileKind'
@@ -210,12 +211,36 @@ export function resetEditorStores(): void {
 export function useEditorStore(workspacePath: string | null | undefined): EditorStore
 export function useEditorStore<T>(
   workspacePath: string | null | undefined,
-  selector: (state: EditorStore) => T
+  selector: (state: EditorStore) => T,
+  /** 可选相等函数：选择器返回新对象 / 新数组时用它收窄重渲染（内容变化不再触发 UI 更新） */
+  isEqual?: (a: T, b: T) => boolean
 ): T
 export function useEditorStore<T>(
   workspacePath: string | null | undefined,
-  selector?: (state: EditorStore) => T
+  selector?: (state: EditorStore) => T,
+  isEqual?: (a: T, b: T) => boolean
 ): EditorStore | T {
   const store = editorStoreFor(workspacePath)
-  return useStore(store, selector ?? ((state) => state as unknown as T))
+  return useStoreWithEqualityFn(store, selector ?? ((state) => state as unknown as T), isEqual)
+}
+
+/** 只关心「哪些标签开着」：编辑正文不算变化，避免每次按键重渲染标签条 / 附件菜单 */
+export function sameOpenFileTabs(
+  a: readonly OpenFile[],
+  b: readonly OpenFile[]
+): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let index = 0; index < a.length; index++) {
+    if (
+      a[index].path !== b[index].path ||
+      a[index].name !== b[index].name ||
+      a[index].kind !== b[index].kind ||
+      a[index].isDirty !== b[index].isDirty ||
+      a[index].isSaving !== b[index].isSaving
+    ) {
+      return false
+    }
+  }
+  return true
 }
