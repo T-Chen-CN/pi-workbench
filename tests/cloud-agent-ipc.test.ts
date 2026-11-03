@@ -1,0 +1,310 @@
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+
+interface IpcHandler {
+  (event: unknown, ...args: unknown[]): unknown
+}
+
+const mocks = vi.hoisted(() => {
+  const state = {
+    appDir: '',
+    statusCalls: 0,
+    sent: [] as Array<{ channel: string; payload: unknown }>,
+    requests: [] as string[],
+  }
+  const window = {
+    webContents: {
+      send: (channel: string, payload: unknown) => {
+        state.sent.push({ channel, payload })
+      },
+      isDestroyed: () => false,
+    },
+    isDestroyed: () => false,
+    on: () => {},
+  }
+  return {
+    state,
+    window,
+    handlers: new Map<string, IpcHandler>(),
+    safeStorage: {
+      isEncryptionAvailable: () => true,
+      encryptString: (value: string) => Buffer.from(`enc:${value}`, 'utf-8'),
+      decryptString: (buffer: Buffer) => Buffer.from(buffer).toString('utf-8').slice(4),
+    },
+  }
+})
+
+vi.mock('electron', () => ({
+  app: {
+    isPackaged: false,
+    isReady: () => false,
+    getAppPath: () => mocks.state.appDir,
+    getPath: () => mocks.state.appDir,
+    quote: undefined,
+  },
+  ipcMain: {
+    handle: (channel: string, handler: IpcHandler) => {
+      mocks.handlers.set(channel, handler)
+    },
+  },
+  safeStorage: mocks.safeStorage,
+  shell: { openExternal: async () => {} },
+  WebContentsView: class {
+    webContents = {
+      setWindowOpenHandler: () => {},
+      on: () => {},
+      session: { setPermissionRequestHandler: () => {}, on: () => {} },
+      loadURL: async () => {},
+      isDestroyed: () => false,
+      close: () => {},
+    }
+    setBackgroundColor() {}
+    setBounds() {}
+    setVisible() {}
+  },
+  net: {
+    fetch: async (url: string, init?: { method?: string }) => {
+      mocks.state.requests.push(`${init?.method ?? 'GET'} ${url}`)
+      const parsed = new URL(url)
+      const route = parsed.pathname
+
+      if (route === '/v1/capabilities') {
+        return Response.json({ platform: 'hermes-agent', model: 'pi-cloud', run_stop: true })
+      }
+      if (route === '/v1/runs' && init?.method === 'POST') {
+        return Response.json({ run_id: 'run_test', status: 'started', replayed: false }, { status: 202 })
+      }
+      if (route === '/v1/runs/run_test') {
+        mocks.state.statusCalls += 1
+        return Response.json({
+          object: 'hermes.run',
+          run_id: 'run_test',
+          status: mocks.state.statusCalls === 1 ? 'running' : 'completed',
+          session_id: 'run_session',
+        })
+      }
+      if (route === '/v1/runs/run_test/events') {
+        const encoder = new TextEncoder()
+        const frames = [
+          { seq: 0, event: 'run.running', run_id: 'run_test' },
+          { seq: 1, event: 'message.delta', run_id: 'run_test', delta: 'Hello ' },
+          { seq: 2, event: 'message.delta', run_id: 'run_test', delta: 'cloud' },
+          {
+            seq: 3,
+            event: 'tool.started',
+            run_id: 'run_test',
+            tool: 'terminal',
+            preview: 'ls',
+            tool_call_id: 'c1',
+          },
+          {
+            seq: 4,
+            event: 'tool.completed',
+            run_id: 'run_test',
+            tool: 'terminal',
+            tool_call_id: 'c1',
+            error: false,
+            duration: 0.5,
+            preview: '',
+          },
+          { seq: 5, event: 'run.completed', run_id: 'run_test', output: 'Hello cloud', usage: {} },
+        ]
+        const body = frames
+          .map((frame) => `id: ${frame.seq}\ndata: ${JSON.stringify(frame)}\n\n`)
+          .join('')
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(encoder.encode(body))
+              controller.close()
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+        )
+      }
+      if (route === '/api/sessions') {
+        return Response.json({
+          object: 'list',
+          data: [
+            {
+              id: 'run_session',
+              title: 'Probe',
+              preview: 'hello',
+              message_count: 2,
+              tool_call_count: 1,
+              input_tokens: 100,
+              output_tokens: 20,
+              last_active: 1793733153.1,
+              started_at: 1793733048.3,
+              model: 'deepseek-flash',
+              estimated_cost_usd: 0.0004,
+              actual_cost_usd: null,
+            },
+          ],
+          has_more: false,
+        })
+      }
+      if (route === '/api/sessions/run_session/messages') {
+        return Response.json({
+          object: 'list',
+          session_id: 'run_session',
+          data: [
+            { id: 1, role: 'user', content: 'hello' },
+            {
+              id: 2,
+              role: 'assistant',
+              content: '',
+              tool_calls: [{ call_id: 'c1', function: { name: 'terminal', arguments: '{"command":"ls"}' } }],
+            },
+            {
+              id: 3,
+              role: 'tool',
+              content: '{"output":"file.txt","exit_code":0,"error":null}',
+              tool_call_id: 'c1',
+              tool_name: 'terminal',
+            },
+            { id: 4, role: 'assistant', content: 'Hello cloud' },
+          ],
+          pagination: { limit: 500, offset: 0, returned: 4 },
+        })
+      }
+      return new Response('not found', { status: 404 })
+    },
+  },
+}))
+
+type CloudAgentModule = typeof import('../electron/ipc/cloud-agent')
+
+function call<T = Record<string, unknown>>(channel: string, ...args: unknown[]): Promise<T> {
+  const handler = mocks.handlers.get(channel)
+  if (!handler) throw new Error(`IPC handler not registered: ${channel}`)
+  return Promise.resolve(handler({}, ...args) as T)
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const started = Date.now()
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error('timeout waiting for condition')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
+let module: CloudAgentModule
+let dispose: () => void
+
+beforeAll(async () => {
+  mocks.state.appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-cloud-ipc-'))
+  module = await import('../electron/ipc/cloud-agent')
+  const registered = module.registerCloudAgentIpc({
+    getMainWindow: () => mocks.window as never,
+  })
+  dispose = registered.dispose
+})
+
+afterAll(() => {
+  dispose?.()
+  fs.rmSync(mocks.state.appDir, { recursive: true, force: true })
+})
+
+describe('cloud IPC', () => {
+  it('starts unconfigured and hides the key', async () => {
+    const result = await call<{ success: boolean; config: { baseUrl: string; hasToken: boolean } }>(
+      'cloud:config:get'
+    )
+    expect(result.success).toBe(true)
+    expect(result.config.hasToken).toBe(false)
+    expect(result.config).not.toHaveProperty('apiKey')
+  })
+
+  it('rejects cloud calls before a key is saved', async () => {
+    const result = await call<{ success: boolean; error?: string }>('cloud:sessions:list', {})
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('API 密钥')
+  })
+
+  it('saves config, connects and lists sessions', async () => {
+    const saved = await call<{ success: boolean }>('cloud:config:set', {
+      baseUrl: 'https://api.example.com',
+      apiKey: 'test-key',
+    })
+    expect(saved.success).toBe(true)
+
+    const connected = await call<{ success: boolean; capabilities?: { model?: string } }>(
+      'cloud:connect'
+    )
+    expect(connected.success).toBe(true)
+    expect(connected.capabilities?.model).toBe('pi-cloud')
+
+    const listed = await call<{
+      success: boolean
+      sessions: Array<{ id: string; costUsd: number; lastActive: number; toolCallCount: number }>
+    }>('cloud:sessions:list', { limit: 10 })
+    expect(listed.success).toBe(true)
+    expect(listed.sessions[0]).toMatchObject({
+      id: 'run_session',
+      toolCallCount: 1,
+      costUsd: 0.0004,
+    })
+    // epoch 秒 → 毫秒
+    expect(listed.sessions[0].lastActive).toBe(1793733153100)
+  })
+
+  it('runs a turn and streams mapped frames before the corrective history frame', async () => {
+    mocks.state.sent.length = 0
+    const started = await call<{ success: boolean; runId?: string; sessionId?: string }>(
+      'cloud:run:start',
+      { input: 'hi', idempotencyKey: 'key-1' }
+    )
+    expect(started).toMatchObject({ success: true, runId: 'run_test', sessionId: 'run_session' })
+
+    await waitFor(() =>
+      mocks.state.sent.some(
+        (message) =>
+          message.channel === 'cloud:event' &&
+          (message.payload as { kind?: string }).kind === 'parts'
+      )
+    )
+
+    const frames = mocks.state.sent
+      .filter((message) => message.channel === 'cloud:event')
+      .map((message) => message.payload as { kind: string; [key: string]: unknown })
+
+    // 增量帧：文本 + 工具卡
+    expect(frames.some((frame) => frame.kind === 'part')).toBe(true)
+    // 终态帧
+    expect(frames.some((frame) => frame.kind === 'run' && frame.state === 'completed')).toBe(true)
+    // 校正帧：来自历史的完整时间线（含工具结果）
+    const partsFrame = frames.find((frame) => frame.kind === 'parts') as
+      | { parts: Array<{ type: string; resultPreview?: string }> }
+      | undefined
+    expect(partsFrame).toBeTruthy()
+    expect(partsFrame?.parts.map((part) => part.type)).toEqual([
+      'text',
+      'tool',
+      'text',
+    ])
+    expect(partsFrame?.parts[1].resultPreview).toBe('file.txt')
+
+    expect(mocks.state.requests).toContain('POST https://api.example.com/v1/runs')
+    expect(mocks.state.requests.some((line) => line.endsWith('/v1/runs/run_test/events'))).toBe(true)
+  })
+
+  it('lists messages as timeline parts', async () => {
+    const result = await call<{ success: boolean; parts: Array<{ type: string }> }>(
+      'cloud:messages:list',
+      { sessionId: 'run_session' }
+    )
+    expect(result.success).toBe(true)
+    expect(result.parts.map((part) => part.type)).toEqual(['text', 'tool', 'text'])
+  })
+
+  it('requires a session id and an idempotency key', async () => {
+    expect(await call('cloud:messages:list', {})).toMatchObject({ success: false })
+    expect(await call('cloud:run:start', { input: 'hi' })).toMatchObject({
+      success: false,
+      error: '缺少幂等键',
+    })
+  })
+})

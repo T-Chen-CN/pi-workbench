@@ -475,5 +475,50 @@ contextBridge.exposeInMainWorld('electronAPI', {
     id: string
     images?: { data: string; mimeType: string }[]
     error?: string
-  }) => ipcRenderer.invoke('documents:render-result', payload)
+  }) => ipcRenderer.invoke('documents:render-result', payload),
+
+  // 云端 Agent：HTTP / SSE 都在主进程，这里只转发
+  cloudConfigGet: () => ipcRenderer.invoke('cloud:config:get'),
+  cloudConfigSet: (input: { baseUrl: string; apiKey?: string }) =>
+    ipcRenderer.invoke('cloud:config:set', input),
+  cloudConnect: () => ipcRenderer.invoke('cloud:connect'),
+  cloudDisconnect: () => ipcRenderer.invoke('cloud:disconnect'),
+  cloudSessionsList: (input: { limit?: number; offset?: number }) =>
+    ipcRenderer.invoke('cloud:sessions:list', input),
+  cloudMessagesList: (input: { sessionId: string; limit?: number; offset?: number }) =>
+    ipcRenderer.invoke('cloud:messages:list', input),
+  cloudRunStart: (input: { input: string; sessionId?: string; idempotencyKey: string }) =>
+    ipcRenderer.invoke('cloud:run:start', input),
+  cloudRunStatus: (input: { runId: string }) => ipcRenderer.invoke('cloud:run:status', input),
+  cloudRunStop: (input: { runId: string }) => ipcRenderer.invoke('cloud:run:stop', input),
+  cloudDashboardOpen: () => ipcRenderer.invoke('cloud:dashboard:open'),
+  cloudDashboardClose: () => ipcRenderer.invoke('cloud:dashboard:close'),
+  cloudDashboardBounds: (bounds: {
+    x: number
+    y: number
+    width: number
+    height: number
+    visible: boolean
+  }) => ipcRenderer.invoke('cloud:dashboard:bounds', bounds),
+  cloudDashboardReload: () => ipcRenderer.invoke('cloud:dashboard:reload'),
+  onCloudEvent: (callback: (frame: unknown) => void) => {
+    const listener = (_event: unknown, frame: unknown) => callback(frame)
+    ipcRenderer.on('cloud:event', listener)
+    return () => ipcRenderer.removeListener('cloud:event', listener)
+  },
+  onCloudStatus: (callback: (payload: unknown) => void) => {
+    const listener = (_event: unknown, payload: unknown) => callback(payload)
+    ipcRenderer.on('cloud:status', listener)
+    return () => ipcRenderer.removeListener('cloud:status', listener)
+  },
+  onCloudDashboardLoadFailed: (callback: (payload: unknown) => void) => {
+    const listener = (_event: unknown, payload: unknown) => callback(payload)
+    ipcRenderer.on('cloud:dashboard:load-failed', listener)
+    return () => ipcRenderer.removeListener('cloud:dashboard:load-failed', listener)
+  },
+  onCloudDashboardClosed: (callback: (payload: unknown) => void) => {
+    const listener = (_event: unknown, payload: unknown) => callback(payload)
+    ipcRenderer.on('cloud:dashboard:closed', listener)
+    return () => ipcRenderer.removeListener('cloud:dashboard:closed', listener)
+  }
 })

@@ -37,6 +37,7 @@ import { registerAgentIpc } from './ipc/agent.js'
 import { registerDocumentsIpc } from './ipc/documents.js'
 import { registerGitIpc } from './ipc/git.js'
 import { registerRepoMapIpc } from './ipc/repo-map.js'
+import { registerCloudAgentIpc } from './ipc/cloud-agent.js'
 import { repoSync } from './repo-sync.js'
 import { registerWorkspaceIpc, closeAllWorkspaceWatchers } from './ipc/workspace.js'
 import { getActiveProviderApiKey, setRunningAgentsProvider } from './ipc/api-config.js'
@@ -605,6 +606,12 @@ registerSystemIpc({
 
 registerAuxWindowIpc({ getMainWindow: () => mainWindow })
 
+// 云端 Agent：配置 / 会话 / run / 程序内控制台（HTTP 与 SSE 都在主进程）
+const cloudAgentIpc = registerCloudAgentIpc({
+  getMainWindow: () => mainWindow,
+  logger: agentLogger
+})
+
 // 初始化应用目录结构
 async function initAppDirectories() {
   const appDir = getAppDir()
@@ -1032,6 +1039,7 @@ async function shutdownApplication(): Promise<void> {
     await runShutdownSteps(
       [
         { name: 'approval-broker', timeoutMs: 400, run: () => approvalBroker.dispose() },
+        { name: 'cloud-agent', timeoutMs: 400, run: () => cloudAgentIpc.dispose() },
         { name: 'agents', timeoutMs: 2000, run: () => agentRegistry.disposeAll() },
         { name: 'worktree-deps', timeoutMs: 400, run: () => disposeAllCoordinators() },
         {
