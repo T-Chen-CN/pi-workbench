@@ -32,7 +32,8 @@ pi-workbench/
 │   ├── preload.cts               # contextBridge（编译为 CommonJS preload.cjs）
 │   ├── app-paths.ts              # 便携式应用目录
 │   ├── workspace-trust.ts        # 工作区信任与路径包含
-│   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / documents / files / git / settings / system / web-search* / workspace）
+│   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / cloud-agent / documents / files / git / settings / system / web-search* / workspace）
+│   ├── cloud/                    # 云端 Agent 主进程侧（config / client / remote / events / map / runner / dashboard）
 │   ├── documents/                # 文档解析（零依赖）：zip / xml / ooxml / pdf / detect / preview / render-bridge
 │   │   ├── zip.ts                # node:zlib 手写 ZIP 中央目录（不引第三方）
 │   │   ├── xml.ts                # 流式 XML 扇描（不建 DOM）
@@ -138,11 +139,17 @@ pi-workbench/
 │   │   ├── PanelDragHandle.tsx   # 面板拖拽把手
 │   │   ├── PanelWindowFrame.tsx  # 独立面板窗口外壳
 │   │   ├── PanelContextMenu.tsx  # 面板右键菜单
+│   │   ├── CloudWorkspaceView.tsx # 云端 Agent 外壳：会话 / 配置两个常驻页签
+│   │   ├── CloudSessionView.tsx  # 云端会话列表 + 时间线 + 输入框
+│   │   ├── CloudConfigView.tsx   # 云端连接表单 + 程序内控制台容器（上报边界）
+│   │   ├── CloudTrace.tsx        # 云端时间线（文本 / 思考折叠 / 分隔线）
+│   │   ├── CloudToolCard.tsx     # 云端工具执行卡
 │   │   ├── ui.tsx                # Button / Input / Modal 等基础组件
 │   │   └── patterns.tsx          # Card / Stat / ListRow 等内容模式
 │   ├── store/                    # 每个功能域一个 store（16 个）
 │   │   ├── approvalStore.ts      # 待审批请求
 │   │   ├── chatStore.ts          # 消息、草稿、附件、排队、用量
+│   │   ├── cloudStore.ts         # 云端连接、会话列表、时间线片段、当前轮次、控制台状态
 │   │   ├── dialogStore.ts        # 确认 / 输入对话框
 │   │   ├── diffStore.ts          # Diff 查看器（按工作区隔离）
 │   │   ├── editorStore.ts        # 标签页、当前文件、脏标记、面板开关（按工作区隔离）
@@ -168,18 +175,22 @@ pi-workbench/
 │   │   └── repoMapCanvas.ts      # 底层画布布局的读取与防抖落盘（上浮链状态不落盘）
 │   ├── theme/tokens.ts           # 从 CSS 变量读取颜色（Monaco / xterm）
 │   ├── hooks/                     # chatScroll（聊天贴底）/ useVirtualRows / useChatSessions / useChatPanelState / useRevertEdits
+│   │                             # useCloudBridge（主进程推来的云端事件 → store）
 │   ├── utils/                    # 文件路径/树、快捷键、符号、图片、Markdown、剪贴板、diff 回退
 │   │                             # 仓库地图：repoMapText（文案）/ repoMapLayout（底层 + 上浮链 + 层级深度）
 │   │                             # repoMapCanvasState（落盘形状与迁移）/ repoMapLod
 │   ├── api/
 │   │   ├── index.ts              # IPC 封装 + Web dev mock
 │   │   ├── piAgentAPI.ts         # Agent 调用（Electron IPC / Web SSE 桥接）
+│   │   ├── cloud.ts              # 云端 Agent IPC 封装（浏览器下返回「未配置」）
 │   │   ├── chatContext.ts        # 上下文块拼装
 │   │   ├── documentRender.ts     # 扫描页渲染桥（渲染进程侧）
 │   │   ├── rendererLog.ts        # 渲染进程日志上报
 │   │   └── diff.ts               # 行级 Diff 算法
 │   ├── types/
 │   │   ├── electron.d.ts         # window.electronAPI 与 IPC 结果类型
+│   │   ├── cloud.ts              # 云端时间线片段 / 会话 / 轮次状态（主进程有一份结构相同的副本）
+│   │   ├── navigation.ts         # 顶层视图 AppView
 │   │   └── index.ts              # 编辑器通用类型
 │   └── i18n/                     # 中英文文案与错误本地化
 │
@@ -321,6 +332,13 @@ ChatPanel.handleSubmit
 | `shell:openExternal` | invoke | 外部链接（https / http / mailto）交系统浏览器；白名单在 `electron/external-links.ts` |
 | `clipboard:writeText` | invoke | 写系统剪贴板（`pw-app://` 下 `navigator.clipboard` 不可用） |
 | `webSearch:get` / `save` | invoke | 联网搜索供应商与 Key（`safeStorage` 加密） |
+| `cloud:config:get` / `config:set` / `connect` / `disconnect` | invoke | 云端 Agent 连接配置（`data/cloud-agent/connection.json`，密钥 `safeStorage` 加密，渲染层只拿 `hasToken`）与连通性探测 |
+| `cloud:sessions:list` / `messages:list` | invoke | 云端会话列表与历史消息（主进程直接映射成时间线片段） |
+| `cloud:run:start` / `run:stop` / `run:status` | invoke | 云端轮次：POST `/v1/runs`（带幂等键）、停止、状态轮询 |
+| `cloud:event` | main → renderer | SSE 帧映射后的时间线增量 / 轮次状态 / 会话 id |
+| `cloud:status` | main → renderer | 连接状态变化 |
+| `cloud:dashboard:open` / `close` / `bounds` / `reload` | invoke | 程序内控制台：`WebContentsView`（独立 partition、sandbox、无 preload）的开合、边界同步、重载 |
+| `cloud:dashboard:load-failed` / `dashboard:closed` | main → renderer | 控制台加载失败、页面内 Esc 关闭 |
 
 ---
 

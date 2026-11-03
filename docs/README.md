@@ -19,11 +19,16 @@
 - **[ADR-001 面板拆分为独立窗口](./decisions/ADR-001-detachable-panels.md)** — 单 renderer + 子文档 portal 的取舍
 - **[ADR-002 主窗口托盘常驻](./decisions/ADR-002-tray-resident-main-window.md)** — 关闭按钮收托盘、真退出入口
 - **[ADR-003 会话记录作为单一真相源](./decisions/ADR-003-session-record-single-source.md)** — 历史与导出取 JSONL 分支，不取压缩后的上下文
+- **[ADR-004 云端 Agent 采用 Hermes 为后端](./decisions/ADR-004-cloud-agent-backend.md)** — 不自研、不 fork；两套真相源互不越界（接入/后端/自研范围已由 ADR-005、ADR-006 修订）
+- **[ADR-005 云端 Agent 的控制面与自研范围](./decisions/ADR-005-cloud-agent-control-plane.md)** — 容器后端与「必批」互斥；能力收敛（控制面与配置面已由 ADR-006 修订；终端后端 ssh 已由 ADR-007 修订）
+- **[ADR-006 控制面改用 API Server + 自有域名反代](./decisions/ADR-006-cloud-agent-api-control-plane.md)** — api_server（Bearer REST+SSE）为主通道、dashboard 作配置面（内嵌）、自研 8 → 4；SSH 仅运维（探针数量与用量归属已由 ADR-007 修订）
+- **[ADR-007 放开整机权限、本地改双页面](./decisions/ADR-007-cloud-agent-full-host-access.md)** — 不建受限用户（Hermes 含 sudo）、隔离只做软限制；云端是两个独立页面（会话 / 配置）；不复用工作区前端；删预算熔断
 
 ### 📌 需求文档
 - **[Git 会话工作流（会话-工作树绑定）](./requirements/GIT_WORKTREE_SESSIONS.md)** — 工作树会话的完整需求、边界执行顺序与验收场景
 - **[顶层 Agent（跨工作区编排）](./requirements/TOP_LEVEL_AGENT.md)** — 草案：首页常驻顶层会话、派发子会话、委派授权、headless 工作区、任务状态机与验收场景
 - **[顶层 Agent 简版需求](./requirements/TOP_LEVEL_AGENT_BRIEF.md)** — 同上，去掉术语与实现细节，只说「它要做什么 / 不做什么 / 权限规矩」
+- **[云端 Agent 方案 v5](./requirements/CLOUD_AGENT.md)** — 以后端 Hermes 为基础的云端常驻 Agent（对标 Dots / Grok Bot / Muse）：50 条能力 ID 覆盖表（v5 删 1 条）、自研 4 条、通道（API Server 主 / dashboard 配置面 / ACP 迁移路径）、域名 + TLS 反代部署、整机权限与软限制口径、最小化 profile、安全边界 S-01~S-15、AC-01~AC-22、四探针 D1–D2、双轨工程序 A–H（v5：两页独立前端、不做预算熔断）
 
 ### 🔧 开发指南
 - **[构建和打包](./guides/BUILD_AND_PACKAGE.md)** — 构建、打包、发布与自动更新
@@ -64,6 +69,7 @@
 | 改权限 / 审批 / 计划模式 | [agent/agent-runtime.md](./agent/agent-runtime.md) |
 | 改工作树会话 / Git 视图 | [agent/git-and-worktrees.md](./agent/git-and-worktrees.md) |
 | 规划 / 实现跨工作区顶层 Agent | [requirements/TOP_LEVEL_AGENT_BRIEF.md](./requirements/TOP_LEVEL_AGENT_BRIEF.md)（先看简版）→ [TOP_LEVEL_AGENT.md](./requirements/TOP_LEVEL_AGENT.md) |
+| 做云端 Agent（常驻自主 Agent） | [requirements/CLOUD_AGENT.md](./requirements/CLOUD_AGENT.md) + [ADR-004](./decisions/ADR-004-cloud-agent-backend.md) + [ADR-005](./decisions/ADR-005-cloud-agent-control-plane.md) + [ADR-006](./decisions/ADR-006-cloud-agent-api-control-plane.md) + [ADR-007](./decisions/ADR-007-cloud-agent-full-host-access.md) |
 | 改面板拆出 / 托盘行为 | [agent/panels-and-windows.md](./agent/panels-and-windows.md) |
 | 查看思考与工具轨迹方案 | [AGENT_TRACE.md](./architecture/AGENT_TRACE.md) |
 | 查某个架构决定的理由 | [decisions/](./decisions/) |

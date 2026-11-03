@@ -4,7 +4,7 @@
 > **什么时候读**：规划迭代、确认某个事项是否已被处理时
 > **什么时候要改**：新增待办、关闭待办或范围变化时
 
-> **状态**: ✅ 已收尾（2026-10-24，经项目所有者手动验收）
+> **状态**: ✅ 已收尾（2026-10-24，经项目所有者手动验收）；**2026-11-03 因云端 Agent 重新开启**，见第 7 节
 > **来源**: [ROADMAP v1](./ROADMAP.md) 收尾时未实现或按 v1 缩小范围的项目
 > **基线**: v0.7.4 · `main` · CI 通过
 > **相关**: [v1 方案（已归档）](./ROADMAP.md)、[项目状态](./STATUS.md)、[设计系统](../design/DESIGN_SYSTEM.md)
@@ -50,6 +50,8 @@
 | V-02 | Linux 手动验收 | 发布前 | 平台差异 | AppImage 构建 |
 
 建议顺序：R-08 → R-02 → R-03 → R-20 → R-10 → 其余按优先级与使用反馈穿插。编号不复用，已移除的编号见第 5 节。
+
+> **云端 Agent 不在本节**：条目 C-00 ~ C-11 及其依赖、建议顺序见 [第 7 节](#7-云端-agent2026-11-03-重新开启)。
 
 ---
 
@@ -259,5 +261,39 @@
 
 ---
 
+## 7. 云端 Agent（2026-11-03 重新开启）
+
+> 完整需求与验收：[CLOUD_AGENT v5](../requirements/CLOUD_AGENT.md) · 决策：[ADR-004](../decisions/ADR-004-cloud-agent-backend.md) / [ADR-005](../decisions/ADR-005-cloud-agent-control-plane.md) / [ADR-006](../decisions/ADR-006-cloud-agent-api-control-plane.md) / [ADR-007](../decisions/ADR-007-cloud-agent-full-host-access.md)
+> 执行顺序以 [CLOUD_AGENT §9](../requirements/CLOUD_AGENT.md#9-环境闸门与工程序) 为准；本节只登记条目与依赖。
+
+### 7.1 条目
+
+| ID | 项目 | 优先级 | 依赖 | 验收 |
+| --- | --- | --- | --- | --- |
+| C-00 | VPS + Hermes 最小可测实例（D0）+ **云侧兜底**（安全组 / 快照 / provider 额度告警） | P1 | — | `doctor` / `status` 全绿；只监听 loopback；快照可恢复 |
+| C-01 | 四个 go/no-go 探针（D1–D2：capabilities / 危险命令 park-vs-BLOCKED / dashboard 配置面 / 双进程并存） | P1 | C-00 | 结论回填 CLOUD_AGENT §10（Q13 是门槛） |
+| C-02 | 首页入口 + 两个独立页面骨架（会话页 / 配置页）+ `cloudStore` | P1 | —（可与 C-00/C-01 并行） | AC-08 / AC-12；无云端可开两页；可单独合入 |
+| C-03 | 控制面客户端 + IPC 四步（`cloud:connect/disconnect/status/sessions:list`） | P1 | C-01、C-02 | AC-01 |
+| C-04 | 事件流 → parts **类型对齐**（含 `approval` / `clarify`，不复用组件） | P1 | C-03 | AC-02 / AC-19 |
+| C-05 | 审批三层（策略版本化 + 控制台 UI + 审计 JSONL）+ 哈希告警与一键还原 | P1 | C-04 | AC-03 / AC-04 / AC-16~18 / AC-21 / AC-22 |
+| C-06 | 配置页：BrowserView 嵌 dashboard + 凭据与会话隔离 | P1 | C-03 | AC-20 |
+| C-07 | 耐久性（run 重新 attach / 断线占位 / 未结算清单 / jobs 视图） | P2 | C-05 | AC-06 / AC-07 / AC-09 / AC-10 |
+| C-08 | 屏幕与接管（CDP screencast / `Input.*`） | P2 | C-07 | AC-05 |
+| C-09 | 任务板视图（Kanban 投影）+ `clarify` 建议卡片 | P3 | C-08 | — |
+| C-10 | 云端页面拆窗 | P3 | C-09 | AC-13 |
+| C-11 | IM 渠道 / 语音 / 出网与遥测复核 | P3 | C-07 | AC-15 |
+| C-12 | （可选）对外写 MCP 门 + write-ahead 账本 | P3 | C-05 | 幂等 / 未结算清单可演示 |
+
+**建议顺序**：C-00 → C-01 ∥ C-02 → C-03 → C-04 → C-05 → C-06 → C-07 → C-08 → C-09 → C-10 → C-11（C-12 按需）。
+**先不做**：多 profile / 多 agent 并行、**用量展示与预算熔断**（没有消费上限）、语义分类器、桌面截图 / Xvfb / VNC（见 CLOUD_AGENT §9.4）。
+
+### 7.2 开工前必须已知的三条坑
+
+1. **容器终端后端会静默关掉审批**（`docker` / `modal` / `daytona` / `vercel` / `singularity`）——S-04 与它互斥；v5 用 `local` 后端（Hermes 拿整机权限，不再用 `ssh` 到受限用户）。
+2. **`execute_code` 没有整脚本审批**——必须 `agent.disabled_toolsets: [code_execution]`。
+3. **`write_file` / `patch` 没有审批路径**——整机权限下它也能改自己的 `approvals.deny` 与 `.env`；只能靠哈希告警 + 版本化副本还原 + 云快照兜底（S-09 / S-11 / S-14），这个缺口要接受并写进 UI 说明。
+
+---
+
 **维护者**: Pi Workbench Team
-**最后更新**: 2026-10-24
+**最后更新**: 2026-11-03（§7 云端 Agent 重新开启）
