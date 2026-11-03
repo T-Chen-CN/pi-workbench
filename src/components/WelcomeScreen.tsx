@@ -3,6 +3,7 @@ import {
   ArrowRight,
   ArrowUpRight,
   Check,
+  Cloud,
   Folder,
   FolderOpen,
   RefreshCw,
@@ -34,6 +35,8 @@ interface WelcomeScreenProps {
   onOpenWorkspace: (path: string) => void
   onOpenSettings: (section?: SettingsSection) => void
   onRefreshRecent: () => void
+  /** 进入云端 Agent 页（顶栏入口之外的第二入口） */
+  onOpenCloud?: () => void
 }
 
 const workspaceName = (path: string) => basename(path) ?? path
@@ -44,6 +47,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   onOpenWorkspace,
   onOpenSettings,
   onRefreshRecent,
+  onOpenCloud,
 }) => {
   const { t, language } = useI18nStore()
   const [query, setQuery] = useState('')
@@ -214,6 +218,13 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   label={t('welcomeQuickRefresh')}
                   onClick={onRefreshRecent}
                 />
+                {onOpenCloud && (
+                  <QuickAction
+                    icon={Cloud}
+                    label={t('cloudAgent')}
+                    onClick={onOpenCloud}
+                  />
+                )}
                 <QuickAction
                   icon={SettingsIcon}
                   label={t('welcomeQuickSettings')}

@@ -1,3 +1,16 @@
+import type {
+  CloudCapabilities,
+  CloudConfigGetResult,
+  CloudConfigSetResult,
+  CloudConnectResult,
+  CloudConnectionState,
+  CloudFrame,
+  CloudMessagesResult,
+  CloudRunResult,
+  CloudRunStartResult,
+  CloudSessionsResult,
+} from './cloud'
+
 /** 拖出拆窗时主进程返回的落点判定 */
 export interface AuxDetachResult {
   success: boolean
@@ -665,6 +678,47 @@ export interface ElectronAPI {
   // Web search (内置联网能力)
   webSearchGet: () => Promise<WebSearchGetResult>
   webSearchSave: (config: WebSearchConfig) => Promise<WebSearchSaveResult>
+
+  // 云端 Agent（远程 Hermes：API 走主进程 net 栈，SSE 由主进程解析后推帧）
+  cloudConfigGet: () => Promise<CloudConfigGetResult>
+  cloudConfigSet: (input: { baseUrl: string; apiKey?: string }) => Promise<CloudConfigSetResult>
+  cloudConnect: () => Promise<CloudConnectResult>
+  cloudDisconnect: () => Promise<{ success: boolean; error?: string }>
+  cloudSessionsList: (input: { limit?: number; offset?: number }) => Promise<CloudSessionsResult>
+  cloudMessagesList: (input: {
+    sessionId: string
+    limit?: number
+    offset?: number
+  }) => Promise<CloudMessagesResult>
+  cloudRunStart: (input: {
+    input: string
+    sessionId?: string
+    idempotencyKey: string
+  }) => Promise<CloudRunStartResult>
+  cloudRunStop: (input: { runId: string }) => Promise<CloudRunResult>
+  cloudRunStatus: (input: { runId: string }) => Promise<CloudRunResult>
+  cloudDashboardOpen: () => Promise<{ success: boolean; error?: string }>
+  cloudDashboardClose: () => Promise<{ success: boolean; error?: string }>
+  cloudDashboardBounds: (bounds: {
+    x: number
+    y: number
+    width: number
+    height: number
+    visible: boolean
+  }) => Promise<{ success: boolean }>
+  cloudDashboardReload: () => Promise<{ success: boolean; error?: string }>
+  onCloudEvent: (callback: (frame: CloudFrame) => void) => () => void
+  onCloudStatus: (
+    callback: (payload: {
+      state: CloudConnectionState
+      error: string | null
+      capabilities?: CloudCapabilities | null
+    }) => void
+  ) => () => void
+  onCloudDashboardLoadFailed: (
+    callback: (payload: { code: number; description: string }) => void
+  ) => () => void
+  onCloudDashboardClosed: (callback: (payload: { reason?: string }) => void) => () => void
 }
 
 export interface OpenDirectoryResult {

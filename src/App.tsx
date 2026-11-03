@@ -24,6 +24,8 @@ import { WelcomeScreen } from './components/WelcomeScreen'
 import { WorkspacePickerDialog } from './components/WorkspacePickerDialog'
 import { WindowControls } from './components/WindowControls'
 import { BootScreen } from './components/BootScreen'
+import { CloudWorkspaceView } from './components/CloudWorkspaceView'
+import { isCloudView, type AppView } from './types/navigation'
 import { Button, IconButton, Modal, Spinner } from './components/ui'
 import { handleTabStripWheel, Tab } from './components/patterns'
 import { useToastStore, toast } from './store/toastStore'
@@ -69,7 +71,8 @@ export default function App() {
   const [showDebug, setShowDebug] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
-  const [showHome, setShowHome] = useState(true)
+  const [view, setView] = useState<AppView>('home')
+  const showHome = view === 'home'
   const [showActivity, setShowActivity] = useState(false)
   // 标签栏 `+` 的内置弹窗：选择历史工作区或新增工作区
   const [addMenuOpen, setAddMenuOpen] = useState(false)
@@ -387,7 +390,7 @@ export default function App() {
       // 已打开：只切视图，不重新初始化、不重置任何状态
       if (openWorkspaces.includes(targetPath)) {
         activateWorkspace(targetPath)
-        setShowHome(false)
+        setView('workspace')
         if (initialPrompt) {
           useChatStore.getState().setPendingDraft(initialPrompt, targetPath)
         }
@@ -403,7 +406,7 @@ export default function App() {
 
       // 其他已打开工作区的视图、监听和 Agent 实例全部保持原样
       activateWorkspace(targetPath)
-      setShowHome(false)
+      setView('workspace')
 
       // 恢复固定状态：上次的编辑器标签
       const restored = await restoreEditorTabs(targetPath)
@@ -540,7 +543,7 @@ export default function App() {
     const nextWorkspace = useWorkspaceStore.getState().closeWorkspace(targetPath)
 
     if (wasActive && !wasHome && !nextWorkspace) {
-      setShowHome(true)
+      setView('home')
     }
 
     // 视图卸载后再释放按工作区的 store（仓库地图的扫描缓存也要清，否则重开工作区拿到的是旧结果）
@@ -644,7 +647,7 @@ export default function App() {
                               type="button"
                               onClick={() => {
                                 activateWorkspace(streamingWorkspace)
-                                setShowHome(false)
+                                setView('workspace')
                                 useSessionStore.getState().setActive(streamingWorkspace, session.id)
                                 setShowActivity(false)
                               }}
@@ -667,7 +670,7 @@ export default function App() {
                   )}
                 </div>
               )}
-              {!showHome && (
+              {view === 'workspace' && (
                 <button
                   type="button"
                   className={headerLink}
@@ -689,6 +692,17 @@ export default function App() {
               onClick={() => setShowDebug((value) => !value)}
             />
           )}
+          <button
+            type="button"
+            className={headerLink}
+            onClick={() =>
+              setView(
+                isCloudView(view) ? (workspace ? 'workspace' : 'home') : 'cloud-session'
+              )
+            }
+          >
+            {t('cloudAgent')}
+          </button>
           <button type="button" className={headerLink} onClick={() => openSettings()}>
             {t('settings')}
           </button>
@@ -697,7 +711,7 @@ export default function App() {
               variant={showHome ? 'primary' : 'secondary'}
               size="sm"
               icon={showHome ? ArrowLeft : Home}
-              onClick={() => setShowHome((value) => !value)}
+              onClick={() => setView(showHome ? 'workspace' : 'home')}
             >
               {showHome ? t('backToWorkspace') : t('backToHome')}
             </Button>
@@ -749,7 +763,7 @@ export default function App() {
                   busy={status === 'running'}
                   onSelect={() => {
                     activateWorkspace(path)
-                    setShowHome(false)
+                    setView('workspace')
                   }}
                   onClose={() => void closeWorkspaceTab(path)}
                   closeLabel={t('close')}
@@ -840,11 +854,12 @@ export default function App() {
             <WorkspaceView
               key={path}
               workspacePath={path}
-              active={!showHome && path === workspace}
+              active={view === 'workspace' && path === workspace}
             />
           ))}
         </Suspense>
-        {(showHome || !workspace) && (
+        {isCloudView(view) && <CloudWorkspaceView view={view} onNavigate={setView} />}
+        {(view === 'home' || (view === 'workspace' && !workspace)) && (
           <div className="absolute inset-0 flex flex-col overflow-hidden bg-surface">
             <WelcomeScreen
               recentWorkspaces={recentWorkspaces}
@@ -852,6 +867,7 @@ export default function App() {
               onOpenWorkspace={(path) => void openWorkspaceAt(path)}
               onOpenSettings={(section) => openSettings(section)}
               onRefreshRecent={() => void refreshRecentWorkspaces()}
+              onOpenCloud={() => setView('cloud-session')}
             />
           </div>
         )}
