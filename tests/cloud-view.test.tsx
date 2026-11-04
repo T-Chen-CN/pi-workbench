@@ -540,11 +540,14 @@ describe('未结算账本', () => {
     expect(screen.getByText(zh.cloudLedgerDidIt)).toBeTruthy()
   })
 
-  it('hides the badge when nothing is pending', async () => {
+  it('keeps an entry point when nothing is pending, so a note can be logged', async () => {
     installBridge()
     useCloudStore.setState({ pendingWrites: [] })
     render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
-    await waitFor(() => expect(screen.queryByText(zh.cloudLedgerBadge.replace('{count}', '0'))).toBeNull())
+    // 没有待核对项时不显示计数，但入口还在（否则第一次永远打不开）
+    expect(screen.queryByText(zh.cloudLedgerBadge.replace('{count}', '0'))).toBeNull()
+    fireEvent.click(await screen.findByLabelText(zh.cloudLedgerOpen))
+    expect(await screen.findByText(zh.cloudLedgerEmpty)).toBeTruthy()
   })
 })
 

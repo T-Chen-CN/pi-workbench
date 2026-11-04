@@ -2,6 +2,7 @@
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
+  ClipboardList,
   Cloud,
   CloudOff,
   MessageSquarePlus,
@@ -520,15 +521,20 @@ export const CloudSessionView: React.FC<{
           <DataText className="min-w-0 truncate text-ink">
             {sessionMeta?.title || t('cloudNoSession')}
           </DataText>
-          {openWriteCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setLedgerOpen(true)}
-              className="flex-shrink-0 type-caption text-warning hover:underline"
-            >
-              {t('cloudLedgerBadge', { count: openWriteCount })}
-            </button>
-          )}
+          {/* 入口常驻：没有待核对项时也要能进去手工补记，否则第一次永远打不开 */}
+          <button
+            type="button"
+            aria-label={t('cloudLedgerOpen')}
+            onClick={() => setLedgerOpen(true)}
+            className="flex flex-shrink-0 items-center gap-1 text-ink-subtle hover:text-ink"
+          >
+            <ClipboardList size={11} />
+            {openWriteCount > 0 && (
+              <span className="type-caption text-warning">
+                {t('cloudLedgerBadge', { count: openWriteCount })}
+              </span>
+            )}
+          </button>
           {sessionMeta && (
             <div className="ml-auto flex min-w-0 items-center">
               <CloudSessionMetaLine
