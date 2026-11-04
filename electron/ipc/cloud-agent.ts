@@ -13,8 +13,23 @@ import { CloudApiError, cloudErrorMessage, createCloudClient, type CloudClient }
 import { CloudRunner } from '../cloud/runner.js'
 import { CloudDashboard } from '../cloud/dashboard.js'
 import { createDashboardClient, parseImageDataUrl } from '../cloud/dash.js'
+import {
+  applyVerdict,
+  classifyToolWrite,
+  makeWriteEntry,
+  mutateLedger,
+  readLedger,
+  reconcileWithHistory,
+  recordCompleted,
+  recordStarted,
+  settleRun
+} from '../cloud/ledger.js'
 import { createRemote, toRunStatus } from '../cloud/remote.js'
-import type { CloudCapabilities, CloudConnectionState } from '../cloud/types.js'
+import type {
+  CloudCapabilities,
+  CloudConnectionState,
+  CloudPendingWrite
+} from '../cloud/types.js'
 
 interface LoggerLike {
   info: (...args: unknown[]) => void
@@ -45,6 +60,75 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     win.webContents.send(channel, payload)
   }
 
+  /**
+   * 当前轮：账本需要 runId / sessionId，而工具帧本身不带。
+   * `unknown` 这类"没能收尾"的轮次也要能对应上，所以用最近一次的 start 结果兜底。
+   */
+  let activeRun: { runId: string; sessionId: string | null } | null = null
+
+  /**
+   * 只观测**实时**帧：`kind:'parts'` 是历史校正，里面的工具早已结束，
+   * 从那里记账只会把陈年旧账翻出来。
+   */
+  function observeForLedger(frame: unknown): void {
+    const value = frame as {
+      kind?: string
+      runId?: string
+      state?: string
+      sessionId?: string
+      part?: {
+        type?: string
+        toolCallId?: string
+        toolName?: string
+        argsSummary?: string
+        status?: string
+      }
+    }
+    try {
+      if (value.kind === 'session' && typeof value.sessionId === 'string') {
+        if (activeRun) activeRun.sessionId = value.sessionId
+        return
+      }
+      if (value.kind === 'run') {
+        const state = value.state
+        if (state === 'completed' || state === 'failed' || state === 'cancelled') {
+          const runId = value.runId ?? activeRun?.runId
+          if (runId) mutateLedger((entries) => settleRun(entries, runId))
+          if (activeRun && (!value.runId || value.runId === activeRun.runId)) activeRun = null
+        }
+        return
+      }
+      if (value.kind !== 'part') return
+      const part = value.part
+      if (!part || part.type !== 'tool' || !part.toolCallId) return
+      const runId = activeRun?.runId
+      if (!runId) return
+      if (part.status === 'running') {
+        const writeClass = classifyToolWrite({
+          toolName: String(part.toolName ?? ''),
+          summary: String(part.argsSummary ?? '')
+        })
+        if (!writeClass) return
+        const entry = makeWriteEntry({
+          runId,
+          sessionId: activeRun?.sessionId ?? null,
+          toolCallId: part.toolCallId,
+          toolName: String(part.toolName ?? ''),
+          summary: String(part.argsSummary ?? ''),
+          writeClass
+        })
+        mutateLedger((entries) => recordStarted(entries, entry))
+        return
+      }
+      // success / error：结账
+      mutateLedger((entries) =>
+        recordCompleted(entries, runId, String(part.toolCallId), part.status !== 'error')
+      )
+    } catch (error) {
+      logger?.warn('[Cloud] ledger observe failed', error)
+    }
+  }
+
   const dashboard = new CloudDashboard({
     getWindow: () => deps.getMainWindow(),
     onLoadFailed: (payload) => send('cloud:dashboard:load-failed', payload),
@@ -72,7 +156,10 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     client = createCloudClient({ baseUrl: config.baseUrl, apiKey: config.apiKey })
     runner = new CloudRunner(
       {
-        emit: (frame) => send('cloud:event', frame),
+        emit: (frame) => {
+          observeForLedger(frame)
+          send('cloud:event', frame)
+        },
         log: (message, error) => logger?.warn(message, error ?? '')
       },
       client
@@ -195,6 +282,63 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   })
 
+  handleIpc('cloud:ledger:list', () => {
+    try {
+      return { success: true as const, entries: readLedger() }
+    } catch (error) {
+      logger?.warn('[Cloud] ledger read failed', error)
+      return fail(error)
+    }
+  })
+
+  handleIpc(
+    'cloud:ledger:resolve',
+    (_event, input: { id?: string; verdict?: string }) => {
+      const id = String(input?.id ?? '')
+      const verdict = String(input?.verdict ?? '')
+      if (!id) return { success: false as const, error: '缺少条目 id' }
+      if (verdict !== 'done' && verdict !== 'missing' && verdict !== 'ignored') {
+        return { success: false as const, error: '未知的核对结论' }
+      }
+      try {
+        const entries = mutateLedger((list) => applyVerdict(list, id, verdict))
+        return { success: true as const, entries }
+      } catch (error) {
+        logger?.warn('[Cloud] ledger resolve failed', error)
+        return fail(error)
+      }
+    }
+  )
+
+  handleIpc(
+    'cloud:ledger:note',
+    (_event, input: { summary?: string; writeClass?: string; sessionId?: string }) => {
+      const summary = String(input?.summary ?? '').trim()
+      if (!summary) return { success: false as const, error: '没有内容' }
+      const writeClass =
+        input?.writeClass === 'system' || input?.writeClass === 'irreversible'
+          ? input.writeClass
+          : 'external'
+      try {
+        const entry: CloudPendingWrite = {
+          id: `note:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+          runId: 'manual',
+          sessionId: input?.sessionId ? String(input.sessionId) : null,
+          toolName: 'manual',
+          writeClass,
+          summary: summary.slice(0, 300),
+          startedAt: Date.now(),
+          status: 'unknown'
+        }
+        const entries = mutateLedger((list) => [entry, ...list])
+        return { success: true as const, entries }
+      } catch (error) {
+        logger?.warn('[Cloud] ledger note failed', error)
+        return fail(error)
+      }
+    }
+  )
+
   handleIpc('cloud:media:upload', async (_event, input: { dataUrl?: string; filename?: string }) => {
     const dataUrl = String(input?.dataUrl ?? '')
     if (!dataUrl) return { success: false as const, error: '没有图片数据' }
@@ -250,6 +394,18 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
         limit: input?.limit,
         offset: input?.offset
       })
+      // 顺手复核账本：历史里有 tool_call_id 就说明那个工具真的跑完了
+      try {
+        const callIds = new Set<string>()
+        for (const part of page.parts) {
+          if (part.type === 'tool' && part.toolCallId) callIds.add(part.toolCallId)
+        }
+        if (callIds.size > 0) {
+          mutateLedger((entries) => reconcileWithHistory(entries, sessionId, callIds))
+        }
+      } catch (error) {
+        logger?.warn('[Cloud] ledger reconcile failed', error)
+      }
       return { success: true, parts: page.parts, hasMore: page.hasMore }
     } catch (error) {
       return fail(error)
@@ -269,6 +425,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
           sessionId: input?.sessionId || undefined,
           idempotencyKey
         })
+        activeRun = { runId: started.runId, sessionId: started.sessionId ?? null }
         return { success: true, runId: started.runId, sessionId: started.sessionId ?? undefined }
       } catch (error) {
         logger?.warn('[Cloud] run start failed', cloudErrorMessage(error))

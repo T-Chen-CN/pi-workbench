@@ -487,6 +487,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('cloud:sessions:list', input),
   cloudSessionsUpdate: (input: unknown) => ipcRenderer.invoke('cloud:sessions:update', input),
   cloudSessionsDelete: (input: unknown) => ipcRenderer.invoke('cloud:sessions:delete', input),
+  cloudLedgerList: () => ipcRenderer.invoke('cloud:ledger:list'),
+  cloudLedgerResolve: (input: { id: string; verdict: 'done' | 'missing' | 'ignored' }) =>
+    ipcRenderer.invoke('cloud:ledger:resolve', input),
+  cloudLedgerNote: (input: { summary: string; writeClass?: string; sessionId?: string }) =>
+    ipcRenderer.invoke('cloud:ledger:note', input),
   cloudMediaUpload: (input: { dataUrl: string; filename?: string }) =>
     ipcRenderer.invoke('cloud:media:upload', input),
   cloudMediaRead: (input: { path: string }) => ipcRenderer.invoke('cloud:media:read', input),

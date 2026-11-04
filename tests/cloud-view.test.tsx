@@ -126,6 +126,8 @@ function resetStore() {
     steerError: null,
     resolveError: null,
     resolvingUnknown: false,
+    pendingWrites: [],
+    ledgerError: null,
     pending: null,
     draft: '',
   })
@@ -499,5 +501,40 @@ describe('丢失主人的轮次', () => {
     fireEvent.click(ack)
     await waitFor(() => expect(resolve).toHaveBeenCalledWith({ runId: 'run_lost' }))
     await waitFor(() => expect(useCloudStore.getState().runState).toBe('cancelled'))
+  })
+})
+
+describe('未结算账本', () => {
+  it('shows the badge only when something is unresolved and opens the drawer', async () => {
+    installBridge()
+    useCloudStore.setState({
+      runId: null,
+      runState: null,
+      pendingWrites: [
+        {
+          id: 'run_1:c1',
+          runId: 'run_1',
+          sessionId: 's1',
+          toolName: 'terminal',
+          writeClass: 'external',
+          summary: 'git push origin main',
+          startedAt: Date.now(),
+          status: 'unknown',
+        },
+      ],
+    })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+
+    const badge = await waitFor(() => screen.getByText(zh.cloudLedgerBadge.replace('{count}', '1')))
+    fireEvent.click(badge)
+    expect(await screen.findByText('git push origin main')).toBeTruthy()
+    expect(screen.getByText(zh.cloudLedgerDidIt)).toBeTruthy()
+  })
+
+  it('hides the badge when nothing is pending', async () => {
+    installBridge()
+    useCloudStore.setState({ pendingWrites: [] })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+    await waitFor(() => expect(screen.queryByText(zh.cloudLedgerBadge.replace('{count}', '0'))).toBeNull())
   })
 })

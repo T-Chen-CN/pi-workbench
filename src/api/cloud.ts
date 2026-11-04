@@ -16,6 +16,7 @@ import type {
   CloudMessagesResult,
   CloudRunResult,
   CloudRunStartResult,
+  CloudPendingWrite,
   CloudRunStatus,
   CloudSessionsResult,
   CloudSession,
@@ -118,6 +119,44 @@ export const cloudApi = {
       return { success: false, error: NO_BRIDGE }
     }
     return bridge.cloudSessionsDelete({ sessionId })
+  },
+
+  async listLedger(): Promise<{
+    success: boolean
+    error?: string
+    entries: CloudPendingWrite[]
+  }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudLedgerList !== 'function') {
+      return { success: false, error: NO_BRIDGE, entries: [] }
+    }
+    const result = await bridge.cloudLedgerList()
+    return { ...result, entries: result.entries ?? [] }
+  },
+
+  async resolveLedger(input: {
+    id: string
+    verdict: 'done' | 'missing' | 'ignored'
+  }): Promise<{ success: boolean; error?: string; entries: CloudPendingWrite[] }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudLedgerResolve !== 'function') {
+      return { success: false, error: NO_BRIDGE, entries: [] }
+    }
+    const result = await bridge.cloudLedgerResolve(input)
+    return { ...result, entries: result.entries ?? [] }
+  },
+
+  async noteLedger(input: {
+    summary: string
+    writeClass?: 'external' | 'system' | 'irreversible'
+    sessionId?: string
+  }): Promise<{ success: boolean; error?: string; entries: CloudPendingWrite[] }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudLedgerNote !== 'function') {
+      return { success: false, error: NO_BRIDGE, entries: [] }
+    }
+    const result = await bridge.cloudLedgerNote(input)
+    return { ...result, entries: result.entries ?? [] }
   },
 
   async uploadImage(input: {

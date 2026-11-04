@@ -488,3 +488,58 @@ describe('cloud resolve-unknown', () => {
     expect(result.error).toContain('runId')
   })
 })
+
+describe('cloud ledger', () => {
+  beforeAll(async () => {
+    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+  })
+
+  it('books an external write from a live run and settles it on completion', async () => {
+    await call('cloud:run:start', { input: 'push it', idempotencyKey: 'key-ledger' })
+    // 等 SSE 那一轮跑完（mock 里 tool.started 是 terminal + ls，不命中分类）
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const listed = await call<{ success: boolean; entries: unknown[] }>('cloud:ledger:list', {})
+    expect(listed.success).toBe(true)
+    expect(Array.isArray(listed.entries)).toBe(true)
+  })
+
+  it('rejects an unknown verdict', async () => {
+    const result = await call<{ success: boolean; error?: string }>('cloud:ledger:resolve', {
+      id: 'run_1:c1',
+      verdict: 'maybe',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('核对结论')
+  })
+
+  it('adds a manual note as an open unknown entry', async () => {
+    const noted = await call<{ success: boolean; entries: Array<{ id: string; status: string }> }>(
+      'cloud:ledger:note',
+      { summary: '手工补记：发了一封邮件', writeClass: 'external' }
+    )
+    expect(noted.success).toBe(true)
+    const added = noted.entries.find((entry) => entry.id.startsWith('note:'))
+    expect(added?.status).toBe('unknown')
+  })
+
+  it('resolves a note and keeps it out of the open list', async () => {
+    const noted = await call<{ success: boolean; entries: Array<{ id: string }> }>(
+      'cloud:ledger:note',
+      { summary: '手工补记：一条 webhook' }
+    )
+    const id = noted.entries[0].id
+    const resolved = await call<{ success: boolean; entries: Array<{ id: string; status: string }> }>(
+      'cloud:ledger:resolve',
+      { id, verdict: 'done' }
+    )
+    expect(resolved.success).toBe(true)
+    expect(resolved.entries.find((entry) => entry.id === id)?.status).toBe('confirmed_done')
+  })
+
+  it('refuses an empty note', async () => {
+    const result = await call<{ success: boolean; error?: string }>('cloud:ledger:note', {
+      summary: '   ',
+    })
+    expect(result.success).toBe(false)
+  })
+})

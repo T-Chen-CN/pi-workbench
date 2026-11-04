@@ -16,6 +16,7 @@ import type {
   CloudDashboardState,
   CloudFrame,
   CloudRunStatus,
+  CloudPendingWrite,
   CloudSession,
   CloudTracePart,
 } from '../types/cloud'
@@ -80,6 +81,9 @@ interface CloudState {
   /** 收尾确认的失败原因 */
   resolveError: string | null
   resolvingUnknown: boolean
+  /** 未结算账本（全部条目，UI 自己过滤待处理项） */
+  pendingWrites: CloudPendingWrite[]
+  ledgerError: string | null
   /** 断流后待补的分隔线（校正帧会整体替换 parts，标记留到替换时插入） */
   pendingDisconnect: string | null
   /** 上一个未成功的发送：重试时复用同一个幂等键，避免后端重复执行 */
@@ -107,6 +111,9 @@ interface CloudState {
   send: () => Promise<void>
   steer: () => Promise<void>
   resolveUnknown: () => Promise<boolean>
+  loadLedger: () => Promise<void>
+  resolveLedger: (id: string, verdict: 'done' | 'missing' | 'ignored') => Promise<boolean>
+  noteLedger: (summary: string) => Promise<boolean>
   stop: () => Promise<void>
   applyFrame: (frame: CloudFrame) => void
   applyStatus: (payload: {
@@ -155,6 +162,8 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   steerError: null,
   resolveError: null,
   resolvingUnknown: false,
+  pendingWrites: [],
+  ledgerError: null,
   pendingDisconnect: null,
   pending: null,
   historyToken: 0,
@@ -175,6 +184,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       if (result.config.hasToken) {
         await get().connect()
         set({ hydrated: true })
+        void get().loadLedger()
         return
       }
     }
@@ -416,6 +426,8 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       partsLoading: false,
       sessionMeta: result.session ?? get().sessionMeta,
     })
+    // 打开会话时主进程顺手做了历史复核，这里刷新一次让账本状态跟上
+    void get().loadLedger()
   },
 
   newSession() {
@@ -508,6 +520,40 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   /**
    * 收尾一轮「主人进程丢了」的 run。两个凭据由主进程现查，渲染层只递 runId。
    */
+  async loadLedger() {
+    const result = await cloudApi.listLedger()
+    if (!result.success) {
+      set({ ledgerError: result.error ?? 'unknown' })
+      return
+    }
+    set({ pendingWrites: result.entries, ledgerError: null })
+  },
+
+  async resolveLedger(id, verdict) {
+    const result = await cloudApi.resolveLedger({ id, verdict })
+    if (!result.success) {
+      set({ ledgerError: result.error ?? 'unknown' })
+      return false
+    }
+    set({ pendingWrites: result.entries, ledgerError: null })
+    return true
+  },
+
+  async noteLedger(summary) {
+    const text = summary.trim()
+    if (!text) return false
+    const result = await cloudApi.noteLedger({
+      summary: text,
+      sessionId: get().activeSessionId ?? undefined,
+    })
+    if (!result.success) {
+      set({ ledgerError: result.error ?? 'unknown' })
+      return false
+    }
+    set({ pendingWrites: result.entries, ledgerError: null })
+    return true
+  },
+
   async resolveUnknown() {
     const { runId, runState, resolvingUnknown } = get()
     if (!runId || runState !== 'unknown' || resolvingUnknown) return false
@@ -566,7 +612,10 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       return
     }
     if (frame.kind === 'run') {
+      const settling = isTerminalRun(frame.state)
       set({ runId: frame.runId, runState: frame.state, runError: frame.error ?? null })
+      // 终态时账本刚从 pending 变 unknown，拉一次让提示条准确
+      if (settling) void get().loadLedger()
       if (isTerminalRun(frame.state)) void get().refreshSessions()
       return
     }

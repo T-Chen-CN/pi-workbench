@@ -6,6 +6,7 @@ import type {
   CloudConnectionState,
   CloudFrame,
   CloudMessagesResult,
+  CloudPendingWrite,
   CloudRunResult,
   CloudRunStartResult,
   CloudSessionsResult,
@@ -695,6 +696,20 @@ export interface ElectronAPI {
     deleted?: boolean
     error?: string
   }>
+  cloudLedgerList: () => Promise<{
+    success: boolean
+    error?: string
+    entries?: CloudPendingWrite[]
+  }>
+  cloudLedgerResolve: (input: {
+    id: string
+    verdict: 'done' | 'missing' | 'ignored'
+  }) => Promise<{ success: boolean; error?: string; entries?: CloudPendingWrite[] }>
+  cloudLedgerNote: (input: {
+    summary: string
+    writeClass?: string
+    sessionId?: string
+  }) => Promise<{ success: boolean; error?: string; entries?: CloudPendingWrite[] }>
   cloudMediaUpload: (input: { dataUrl: string; filename?: string }) => Promise<{
     success: boolean
     error?: string

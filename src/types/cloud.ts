@@ -38,6 +38,35 @@ export type CloudRunStatus =
   /** 主人进程丢了（owner epoch 丢失）：非终态，等 POST /v1/runs/{id}/resolve-unknown 收尾 */
   | 'unknown'
 
+/** 未结算账本条目：这一轮"出去了就收不回来"的动作 */
+export type CloudWriteClass = 'external' | 'system' | 'irreversible'
+
+export type CloudWriteStatus =
+  | 'pending'
+  | 'done'
+  | 'failed'
+  | 'unknown'
+  | 'confirmed_done'
+  | 'confirmed_missing'
+  | 'ignored'
+
+export interface CloudPendingWrite {
+  /** `runId:toolCallId` */
+  id: string
+  runId: string
+  sessionId: string | null
+  toolName: string
+  writeClass: CloudWriteClass
+  /** 命令摘要（命令文本会被截断到 300 字符） */
+  summary: string
+  startedAt: number
+  status: CloudWriteStatus
+  settledAt?: number
+  confirmedAt?: number
+  /** 由历史消息推断出来的结果（不是亲眼看到回执） */
+  inferred?: boolean
+}
+
 /** 会话列表行（GET /api/sessions 的条目，只保留前端展示用到的字段） */
 export interface CloudSession {
   id: string

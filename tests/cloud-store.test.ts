@@ -414,3 +414,28 @@ describe('丢失主人的 run', () => {
     expect(resolve).not.toHaveBeenCalled()
   })
 })
+
+describe('账本', () => {
+  it('loads and resolves entries', async () => {
+    const entries = [
+      { id: 'run_1:c1', status: 'unknown' },
+    ] as unknown as never[]
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudLedgerList: async () => ({ success: true, entries }),
+      cloudLedgerResolve: async () => ({ success: true, entries: [] }),
+    }
+    await useCloudStore.getState().loadLedger()
+    expect(useCloudStore.getState().pendingWrites).toHaveLength(1)
+
+    await expect(useCloudStore.getState().resolveLedger('run_1:c1', 'done')).resolves.toBe(true)
+    expect(useCloudStore.getState().pendingWrites).toEqual([])
+  })
+
+  it('surfaces the backend reason and keeps the list untouched on failure', async () => {
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudLedgerList: async () => ({ success: false, error: '读不出来' }),
+    }
+    await useCloudStore.getState().loadLedger()
+    expect(useCloudStore.getState().ledgerError).toBe('读不出来')
+  })
+})

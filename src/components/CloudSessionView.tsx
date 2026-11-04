@@ -20,6 +20,7 @@ import {
 import { useI18nStore } from '../store/i18nStore'
 import { filterSessions, isTerminalRun, useCloudStore } from '../store/cloudStore'
 import { cloudApi } from '../api/cloud'
+import { CloudLedgerDrawer, openWrites } from './CloudLedgerDrawer'
 import { withImageDirectives } from '../utils/cloudImages'
 import { distanceFromBottom, pinToBottom, shouldFollow } from '../hooks/chatScroll'
 import { formatRelativeTime } from '../utils/relativeTime'
@@ -250,6 +251,9 @@ export const CloudSessionView: React.FC<{
   const resolveError = useCloudStore((state) => state.resolveError)
   const resolvingUnknown = useCloudStore((state) => state.resolvingUnknown)
   const runLost = useCloudStore((state) => state.runState === 'unknown')
+  const pendingWrites = useCloudStore((state) => state.pendingWrites)
+  const [ledgerOpen, setLedgerOpen] = useState(false)
+  const openWriteCount = openWrites(pendingWrites).length
   const draft = useCloudStore((state) => state.draft)
   const setDraft = useCloudStore((state) => state.setDraft)
   const send = useCloudStore((state) => state.send)
@@ -505,6 +509,15 @@ export const CloudSessionView: React.FC<{
           <DataText className="min-w-0 truncate text-ink">
             {sessionMeta?.title || t('cloudNoSession')}
           </DataText>
+          {openWriteCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setLedgerOpen(true)}
+              className="flex-shrink-0 type-caption text-warning hover:underline"
+            >
+              {t('cloudLedgerBadge', { count: openWriteCount })}
+            </button>
+          )}
           {sessionMeta && (
             <div className="ml-auto flex min-w-0 items-center">
               <CloudSessionMetaLine
@@ -751,6 +764,8 @@ export const CloudSessionView: React.FC<{
           <Caption className="text-ink-muted">{t('cloudDeleteBody')}</Caption>
         </div>
       </Modal>
+
+      <CloudLedgerDrawer open={ledgerOpen} onClose={() => setLedgerOpen(false)} />
     </div>
   )
 }

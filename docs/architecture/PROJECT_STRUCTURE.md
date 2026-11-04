@@ -39,7 +39,8 @@ pi-workbench/
 │   │   ├── events.ts / map.ts    # SSE 事件解析与时间线映射（含插话回执）
 │   │   ├── runner.ts             # 轮次生命周期（断流重订阅、校帧、停止兜底）
 │   │   ├── dashboard.ts          # 控制台原生视图（WebContentsView）宿主
-│   │   └── dash.ts               # 控制台旁路（Bearer）：图片上传 / 按路径读回图片
+│   │   ├── dash.ts               # 控制台旁路（Bearer）：图片上传 / 按路径读回图片
+│   │   └── ledger.ts             # 未结算账本：分类 / 记账 / 结账 / 历史复核 / 剪枝
 │   ├── documents/                # 文档解析（零依赖）：zip / xml / ooxml / pdf / detect / preview / render-bridge
 │   │   ├── zip.ts                # node:zlib 手写 ZIP 中央目录（不引第三方）
 │   │   ├── xml.ts                # 流式 XML 扇描（不建 DOM）
@@ -345,6 +346,7 @@ ChatPanel.handleSubmit
 | `cloud:sessions:list` / `messages:list` | invoke | 云端会话列表与历史消息（主进程直接映射成时间线片段） |
 | `cloud:sessions:update` / `sessions:delete` | invoke | 会话条目操作（PATCH 白名单字段 / 硬删除，不可恢复） |
 | `cloud:run:start` / `run:stop` / `run:status` / `run:steer` | invoke | 云端轮次：POST `/v1/runs`（带幂等键）、停止、状态轮询、运行中插话 |
+| `cloud:ledger:list` / `ledger:resolve` / `ledger:note` | invoke | 未结算账本：列条目、人工三选一（做了 / 没做 / 不管）、手工补记 |
 | `cloud:run:resolve-unknown` | invoke | 收尾「主人进程丢了」的 run（凭据由主进程现查，渲染层只递 runId） |
 | `cloud:media:upload` / `media:read` | invoke | 图片上传与按路径读回（走控制台旁路，需要 `HERMES_DASHBOARD_SESSION_TOKEN`） |
 | `cloud:event` | main → renderer | SSE 帧映射后的时间线增量 / 轮次状态 / 会话 id |
