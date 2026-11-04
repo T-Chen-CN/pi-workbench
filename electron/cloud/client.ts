@@ -38,6 +38,23 @@ export class CloudApiError extends Error {
   }
 }
 
+/**
+ * 已知错误码 → 中文文案。后端的 `message` 是英文运维原文，
+ * 直接摊给用户看不懂；按码翻译，未知码再回落到「状态码 + 原文」。
+ */
+const CODE_MESSAGES: Record<string, string> = {
+  gateway_auth_failed: 'API 密钥无效或已过期（检查连接页填的密钥）',
+  idempotency_key_conflict: '这次请求和上一条用了同一个幂等键但内容不同，请重新发送',
+  run_not_found: '这一轮已经结束了',
+  run_not_active: '这一轮不在本机进程里跑，无法操作',
+  run_not_accepting_steer: '本轮已经不再接受插话（快结束了），等它收尾再发',
+  steer_not_accepted: '本轮没有接住这条插话，等它收尾再发',
+  invalid_steer_input: '插话内容不能为空',
+  unsupported_session_field: '这个会话字段服务端不支持修改',
+  session_not_found: '会话不存在（可能已被删除）',
+  client_upgrade_required: '服务端要求更新客户端才能用这个接口',
+}
+
 const STATUS_MESSAGES: Record<number, string> = {
   401: 'API 密钥无效或已过期（401）',
   403: '没有权限访问这个接口（403）',
@@ -60,29 +77,39 @@ function codeForStatus(status: number): CloudErrorCode {
   return 'unknown'
 }
 
-/** 从错误响应体里取出可读信息：`{error:{message}}` / `{message}` / 原文 */
-async function describeErrorBody(response: Response): Promise<string> {
+interface ErrorBody {
+  /** 后端错误码（`{error:{code}}` 或 `{code}`） */
+  code: string
+  /** 可读信息 */
+  message: string
+}
+
+/** 从错误响应体里取出错误码与可读信息：`{error:{code,message}}` / `{message}` / 原文 */
+async function describeErrorBody(response: Response): Promise<ErrorBody> {
   try {
     const text = await response.text()
-    if (!text) return ''
+    if (!text) return { code: '', message: '' }
     try {
       const parsed = JSON.parse(text) as {
-        error?: { message?: string } | string
+        error?: { message?: string; code?: string } | string
         message?: string
         code?: string
       }
-      if (parsed && typeof parsed.error === 'object' && parsed.error?.message) {
-        return String(parsed.error.message)
-      }
-      if (typeof parsed?.error === 'string') return parsed.error
-      if (parsed?.message) return String(parsed.message)
-      if (parsed?.code) return String(parsed.code)
+      const errorObject = typeof parsed?.error === 'object' ? parsed.error : null
+      const code = String(errorObject?.code ?? parsed?.code ?? '')
+      const message = String(
+        errorObject?.message ??
+          (typeof parsed?.error === 'string' ? parsed.error : '') ??
+          parsed?.message ??
+          ''
+      )
+      return { code, message }
     } catch {
       // 非 JSON：截断原样返回
     }
-    return text.slice(0, 300)
+    return { code: '', message: text.slice(0, 300) }
   } catch {
-    return ''
+    return { code: '', message: '' }
   }
 }
 
@@ -90,8 +117,13 @@ async function toApiError(response: Response): Promise<CloudApiError> {
   const status = response.status
   const code = codeForStatus(status)
   const detail = await describeErrorBody(response)
+  const known = detail.code ? CODE_MESSAGES[detail.code] : ''
   const base = STATUS_MESSAGES[status] ?? `云端返回 HTTP ${status}`
-  const message = detail && detail !== base ? `${base}：${detail}` : base
+  const message = known
+    ? known
+    : detail.message && detail.message !== base
+      ? `${base}：${detail.message}`
+      : base
   const retryAfter = Number(response.headers.get('retry-after') ?? '')
   return new CloudApiError(code, message, {
     status,

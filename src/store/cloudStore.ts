@@ -525,7 +525,15 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       return
     }
     if (frame.kind === 'part') {
-      set({ parts: upsertPart(get().parts, frame.part) })
+      const part = frame.part
+      // 未送达的插话放回输入框：服务端把没消费掉的 steer 挂在终态上，
+      // 用户下一次回车就能发出去，不用重打一遍
+      const replay =
+        part.type === 'interjection' && part.undelivered && !get().draft.trim() ? part.text : ''
+      set({
+        parts: upsertPart(get().parts, part),
+        ...(replay ? { draft: replay } : {}),
+      })
       return
     }
     if (frame.kind === 'session') {
