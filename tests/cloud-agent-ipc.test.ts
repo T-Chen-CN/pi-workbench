@@ -127,6 +127,18 @@ vi.mock('electron', () => ({
           { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
         )
       }
+      if (route === '/api/chat/image-upload' && init?.method === 'POST') {
+        return Response.json({
+          ok: true,
+          path: '/srv/img/pasted.png',
+          name: 'pasted.png',
+          bytes: 12,
+          mime_type: 'image/png',
+        })
+      }
+      if (route === '/api/fs/read-data-url') {
+        return Response.json({ dataUrl: 'data:image/png;base64,CCCC' })
+      }
       if (route === '/api/sessions') {
         return Response.json({
           object: 'list',
@@ -375,5 +387,50 @@ describe('cloud steer', () => {
   it('rejects steering when no run is active', async () => {
     const result = await call<{ success: boolean; error?: string }>('cloud:run:steer', { text: 'hi' })
     expect(result.success).toBe(false)
+  })
+})
+
+describe('cloud images', () => {
+  it('refuses to upload before a console token is configured', async () => {
+    const result = await call<{ success: boolean; error?: string }>('cloud:media:upload', {
+      dataUrl: 'data:image/png;base64,AAAA',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('HERMES_DASHBOARD_SESSION_TOKEN')
+  })
+
+  it('rejects a non-whitelisted type locally', async () => {
+    await call('cloud:config:set', {
+      baseUrl: 'https://api.example.com',
+      apiKey: 'test-key',
+      dashboardToken: 'dash-token',
+    })
+    const result = await call<{ success: boolean; error?: string }>('cloud:media:upload', {
+      dataUrl: 'data:image/svg+xml;base64,AAAA',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('不支持')
+  })
+
+  it('uploads and reads back through the console', async () => {
+    await call('cloud:config:set', {
+      baseUrl: 'https://api.example.com',
+      apiKey: 'test-key',
+      dashboardToken: 'dash-token',
+    })
+    const uploaded = await call<{ success: boolean; image?: { path: string } }>(
+      'cloud:media:upload',
+      { dataUrl: 'data:image/png;base64,AAAA', filename: 'pasted.png' }
+    )
+    expect(uploaded.success).toBe(true)
+    expect(uploaded.image?.path).toBe('/srv/img/pasted.png')
+
+    const read = await call<{ success: boolean; dataUrl?: string }>('cloud:media:read', {
+      path: '/srv/img/pasted.png',
+    })
+    expect(read.success).toBe(true)
+    expect(read.dataUrl).toBe('data:image/png;base64,CCCC')
+    // 旁路必须打控制台域名，不是网关域名
+    expect(mocks.state.requests.some((line) => line.includes('/api/chat/image-upload'))).toBe(true)
   })
 })

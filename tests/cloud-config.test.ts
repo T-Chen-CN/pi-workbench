@@ -102,6 +102,7 @@ describe('read/write connection', () => {
       baseUrl: 'https://api.example.com',
       dashboardUrl: 'https://dash.example.com',
       hasToken: true,
+      hasDashboardToken: false,
     })
     expect(publicView).not.toHaveProperty('apiKey')
   })
@@ -114,5 +115,36 @@ describe('read/write connection', () => {
   it('falls back to the default endpoint for invalid input', () => {
     const saved = config.writeCloudConfig({ baseUrl: 'nonsense' })
     expect(saved.baseUrl).toBe(config.DEFAULT_CLOUD_BASE_URL)
+  })
+})
+
+describe('控制台会话令牌', () => {
+  it('is encrypted at rest and never leaves the main process', () => {
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com', apiKey: 'gateway-key' })
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com', dashboardToken: 'dash-token' })
+
+    expect(config.readCloudConfig().hasDashboardToken).toBe(true)
+    expect(config.readCloudConfig().dashboardToken).toBe('dash-token')
+    // 公开字段里只有「有没有」，没有明文
+    expect(config.publicCloudConfig()).toEqual({
+      baseUrl: 'https://api.example.com',
+      dashboardUrl: 'https://dash.example.com',
+      hasToken: true,
+      hasDashboardToken: true,
+    })
+    expect(JSON.stringify(config.publicCloudConfig())).not.toContain('dash-token')
+  })
+
+  it('keeps the existing token when the field is left empty', () => {
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com', dashboardToken: 'dash-token' })
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com' })
+    expect(config.readCloudConfig().dashboardToken).toBe('dash-token')
+  })
+
+  it('drops it on disconnect along with the API key', () => {
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com', dashboardToken: 'dash-token' })
+    config.clearCloudToken()
+    expect(config.readCloudConfig().hasDashboardToken).toBe(false)
+    expect(config.readCloudConfig().baseUrl).toBe('https://api.example.com')
   })
 })

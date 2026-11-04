@@ -9,6 +9,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  ImagePlus,
   RefreshCw,
   Search,
   Send,
@@ -18,6 +19,8 @@ import {
 } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { filterSessions, isTerminalRun, useCloudStore } from '../store/cloudStore'
+import { cloudApi } from '../api/cloud'
+import { withImageDirectives } from '../utils/cloudImages'
 import { distanceFromBottom, pinToBottom, shouldFollow } from '../hooks/chatScroll'
 import { formatRelativeTime } from '../utils/relativeTime'
 import { formatCost, firstLine, sessionCostUsd } from '../utils/cloudFormat'
@@ -246,6 +249,13 @@ export const CloudSessionView: React.FC<{
 
   const [stopping, setStopping] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<CloudSession | null>(null)
+  const [attachments, setAttachments] = useState<
+    Array<{ path: string; name: string; preview: string }>
+  >([])
+  const [imageBusy, setImageBusy] = useState(false)
+  const [imageError, setImageError] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const hasDashboardToken = useCloudStore((state) => state.config.hasDashboardToken)
   const visibleSessions = useMemo(
     () => filterSessions(sessions, sessionQuery),
     [sessions, sessionQuery]
@@ -289,9 +299,54 @@ export const CloudSessionView: React.FC<{
   }
 
   const submit = () => {
-    if (!draft.trim() || busy) return
+    if ((!draft.trim() && attachments.length === 0) || busy) return
+    if (attachments.length > 0) {
+      // 平台的取图方式是文本指令，发出去和用户手打 `/image <path>` 完全一样
+      setDraft(withImageDirectives(draft, attachments.map((item) => item.path)))
+      setAttachments([])
+    }
     followRef.current = true
     void send()
+  }
+
+  const readFileAsDataUrl = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result ?? ''))
+      reader.onerror = () => reject(reader.error ?? new Error('读取图片失败'))
+      reader.readAsDataURL(file)
+    })
+
+  const attachFiles = async (files: File[]) => {
+    const images = files.filter((file) => file.type.startsWith('image/'))
+    if (images.length === 0) return
+    if (!hasDashboardToken) {
+      setImageError(t('cloudImageTokenMissing'))
+      return
+    }
+    setImageBusy(true)
+    setImageError(null)
+    for (const file of images) {
+      try {
+        const dataUrl = await readFileAsDataUrl(file)
+        const uploaded = await cloudApi.uploadImage({ dataUrl, filename: file.name })
+        if (!uploaded.success || !uploaded.image) {
+          setImageError(t('cloudImageUploadFailed', { error: uploaded.error ?? 'unknown' }))
+          continue
+        }
+        setAttachments((current) => [
+          ...current,
+          { path: uploaded.image!.path, name: uploaded.image!.name || file.name, preview: dataUrl },
+        ])
+      } catch (error) {
+        setImageError(
+          t('cloudImageUploadFailed', {
+            error: error instanceof Error ? error.message : String(error),
+          })
+        )
+      }
+    }
+    setImageBusy(false)
   }
 
   const handleStop = () => {
@@ -489,7 +544,59 @@ export const CloudSessionView: React.FC<{
           )}
         </div>
 
-        <div className="flex-shrink-0 border-t border-rule-divide p-2">
+        <div
+          className="flex-shrink-0 border-t border-rule-divide p-2"
+          onDragOver={(event) => {
+            if (event.dataTransfer?.types.includes('Files')) event.preventDefault()
+          }}
+          onDrop={(event) => {
+            const files = Array.from(event.dataTransfer?.files ?? [])
+            if (files.length === 0) return
+            event.preventDefault()
+            void attachFiles(files)
+          }}
+        >
+          {(attachments.length > 0 || imageBusy) && (
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              {attachments.map((item) => (
+                <div
+                  key={item.path}
+                  className="group relative h-14 w-14 overflow-hidden border border-rule-control"
+                >
+                  <img src={item.preview} alt={item.name} className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    aria-label={t('cloudRemoveImage')}
+                    onClick={() =>
+                      setAttachments((current) => current.filter((row) => row.path !== item.path))
+                    }
+                    className="absolute right-0 top-0 flex h-4 w-4 items-center justify-center bg-canvas-base text-ink-muted opacity-0 transition-opacity group-hover:opacity-100"
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              ))}
+              {imageBusy && (
+                <span className="flex items-center gap-1.5 type-caption text-ink-muted">
+                  <Spinner size={12} />
+                  {t('cloudUploadingImage')}
+                </span>
+              )}
+            </div>
+          )}
+          {imageError && <div className="mb-2 type-caption text-danger">{imageError}</div>}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp,image/bmp"
+            multiple
+            hidden
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? [])
+              event.target.value = ''
+              void attachFiles(files)
+            }}
+          />
           <div className="flex items-end gap-2">
             <Textarea
               ref={inputRef}
@@ -502,12 +609,34 @@ export const CloudSessionView: React.FC<{
                   else submit()
                 }
               }}
+              onPaste={(event) => {
+                const files = Array.from(event.clipboardData?.files ?? [])
+                if (files.some((file) => file.type.startsWith('image/'))) {
+                  event.preventDefault()
+                  void attachFiles(files)
+                }
+              }}
               rows={2}
               placeholder={t('cloudInputPlaceholder')}
               aria-label={t('cloudInputPlaceholder')}
               disabled={!connected}
               className="min-h-[52px] flex-1"
             />
+            <div className="flex flex-col items-center gap-1">
+              <IconButton
+                icon={ImagePlus}
+                label={t('cloudAttachImage')}
+                size="sm"
+                disabled={!connected || imageBusy}
+                onClick={() => {
+                  if (!hasDashboardToken) {
+                    setImageError(t('cloudImageTokenMissing'))
+                    return
+                  }
+                  fileInputRef.current?.click()
+                }}
+              />
+            </div>
             {busy ? (
               <div className="flex flex-col gap-1">
                 <Button

@@ -399,3 +399,43 @@ describe('会话搜索与分页', () => {
     expect(screen.getByText(zh.cloudAllLoaded)).toBeTruthy()
   })
 })
+
+describe('图片', () => {
+  it('renders a thumbnail for /image directives and hides the raw path', async () => {
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudMediaRead: async () => ({ success: true, dataUrl: 'data:image/png;base64,AAAA' }),
+    }
+    render(
+      <CloudTrace
+        streaming={false}
+        parts={[
+          {
+            type: 'text',
+            id: 'h:1',
+            role: 'user',
+            text: ['/image /srv/img/a.png', '这是什么？'].join('\n'),
+          },
+        ]}
+      />
+    )
+    const thumb = await waitFor(() => screen.getByLabelText(zh.cloudImageOpen))
+    expect(thumb.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,AAAA')
+    expect(screen.queryByText('/image /srv/img/a.png')).toBeNull()
+    expect(screen.getByText('这是什么？')).toBeTruthy()
+  })
+
+  it('degrades to a label when the console cannot serve the bytes', async () => {
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudMediaRead: async () => ({ success: false, error: 'no token' }),
+    }
+    render(
+      <CloudTrace
+        streaming={false}
+        parts={[
+          { type: 'text', id: 'h:2', role: 'user', text: '/image /srv/img/b.png' },
+        ]}
+      />
+    )
+    await waitFor(() => expect(screen.getByText(zh.cloudImageUnavailable)).toBeTruthy())
+  })
+})

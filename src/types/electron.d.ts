@@ -695,6 +695,16 @@ export interface ElectronAPI {
     deleted?: boolean
     error?: string
   }>
+  cloudMediaUpload: (input: { dataUrl: string; filename?: string }) => Promise<{
+    success: boolean
+    error?: string
+    image?: { path: string; name: string; bytes: number; mimeType: string }
+  }>
+  cloudMediaRead: (input: { path: string }) => Promise<{
+    success: boolean
+    error?: string
+    dataUrl?: string
+  }>
   cloudMessagesList: (input: {
     sessionId: string
     limit?: number

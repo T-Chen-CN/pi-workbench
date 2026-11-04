@@ -21,6 +21,8 @@ export interface CloudConnectionInfo {
   dashboardUrl: string
   /** 渲染层永远拿不到密钥，只能知道有没有 */
   hasToken: boolean
+  /** 控制台会话令牌是否已配置（图片上传/读取要用） */
+  hasDashboardToken: boolean
 }
 
 /** 后端 /v1/capabilities 的子集（只取前端实际用到的） */

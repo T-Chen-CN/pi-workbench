@@ -487,6 +487,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('cloud:sessions:list', input),
   cloudSessionsUpdate: (input: unknown) => ipcRenderer.invoke('cloud:sessions:update', input),
   cloudSessionsDelete: (input: unknown) => ipcRenderer.invoke('cloud:sessions:delete', input),
+  cloudMediaUpload: (input: { dataUrl: string; filename?: string }) =>
+    ipcRenderer.invoke('cloud:media:upload', input),
+  cloudMediaRead: (input: { path: string }) => ipcRenderer.invoke('cloud:media:read', input),
   cloudMessagesList: (input: { sessionId: string; limit?: number; offset?: number }) =>
     ipcRenderer.invoke('cloud:messages:list', input),
   cloudRunStart: (input: { input: string; sessionId?: string; idempotencyKey: string }) =>

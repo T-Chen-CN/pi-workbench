@@ -85,7 +85,7 @@ interface CloudState {
   dashboard: CloudDashboardState
 
   hydrate: () => Promise<void>
-  saveConfig: (input: { baseUrl: string; apiKey?: string }) => Promise<boolean>
+  saveConfig: (input: { baseUrl: string; apiKey?: string; dashboardToken?: string }) => Promise<boolean>
   connect: () => Promise<void>
   disconnect: () => Promise<void>
   refreshSessions: () => Promise<void>

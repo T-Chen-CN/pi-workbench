@@ -17,6 +17,11 @@ interface StoredCloudConfig {
   baseUrl?: string
   apiKey?: string
   dashboardUrl?: string
+  /**
+   * 控制台会话令牌（服务端 `.env` 里的 `HERMES_DASHBOARD_SESSION_TOKEN`）。
+   * 只有它能让主进程直接调控制台的 `/api/*`（图片上传、读回图片字节）。
+   */
+  dashboardToken?: string
 }
 
 export interface CloudConfig {
@@ -25,6 +30,9 @@ export interface CloudConfig {
   /** 明文密钥：只在主进程内使用，不经过 IPC 返回 */
   apiKey: string
   hasToken: boolean
+  /** 控制台会话令牌明文（主进程内使用） */
+  dashboardToken: string
+  hasDashboardToken: boolean
 }
 
 export function cloudConfigFile(): string {
@@ -70,10 +78,22 @@ export function readCloudConfig(): CloudConfig {
   const apiKey = decryptSecret(stored?.apiKey ?? '')
   const dashboardUrl =
     normalizeBaseUrl(stored?.dashboardUrl ?? '') || deriveDashboardUrl(baseUrl)
-  return { baseUrl, dashboardUrl, apiKey, hasToken: Boolean(apiKey) }
+  const dashboardToken = decryptSecret(stored?.dashboardToken ?? '')
+  return {
+    baseUrl,
+    dashboardUrl,
+    apiKey,
+    hasToken: Boolean(apiKey),
+    dashboardToken,
+    hasDashboardToken: Boolean(dashboardToken),
+  }
 }
 
-export function writeCloudConfig(input: { baseUrl: string; apiKey?: string }): CloudConfig {
+export function writeCloudConfig(input: {
+  baseUrl: string
+  apiKey?: string
+  dashboardToken?: string
+}): CloudConfig {
   const current = readCloudConfig()
   const baseUrl = normalizeBaseUrl(input.baseUrl) || DEFAULT_CLOUD_BASE_URL
   // 留空表示沿用旧密钥；显式传入才覆盖
@@ -81,10 +101,15 @@ export function writeCloudConfig(input: { baseUrl: string; apiKey?: string }): C
     typeof input.apiKey === 'string' && input.apiKey.trim()
       ? input.apiKey.trim()
       : current.apiKey
+  const nextDashboardToken =
+    typeof input.dashboardToken === 'string' && input.dashboardToken.trim()
+      ? input.dashboardToken.trim()
+      : current.dashboardToken
   const stored: StoredCloudConfig = {
     baseUrl,
     dashboardUrl: deriveDashboardUrl(baseUrl),
     apiKey: nextKey ? encryptSecret(nextKey) : '',
+    dashboardToken: nextDashboardToken ? encryptSecret(nextDashboardToken) : '',
   }
   writeJsonAtomicSync(cloudConfigFile(), stored)
   return {
@@ -92,6 +117,8 @@ export function writeCloudConfig(input: { baseUrl: string; apiKey?: string }): C
     dashboardUrl: stored.dashboardUrl ?? deriveDashboardUrl(baseUrl),
     apiKey: nextKey,
     hasToken: Boolean(nextKey),
+    dashboardToken: nextDashboardToken,
+    hasDashboardToken: Boolean(nextDashboardToken),
   }
 }
 
@@ -102,9 +129,10 @@ export function clearCloudToken(): CloudConfig {
     baseUrl: current.baseUrl,
     dashboardUrl: current.dashboardUrl,
     apiKey: '',
+    dashboardToken: '',
   }
   writeJsonAtomicSync(cloudConfigFile(), stored)
-  return { ...current, apiKey: '', hasToken: false }
+  return { ...current, apiKey: '', hasToken: false, dashboardToken: '', hasDashboardToken: false }
 }
 
 /** 只暴露给渲染层的字段 */
@@ -112,10 +140,12 @@ export function publicCloudConfig(config = readCloudConfig()): {
   baseUrl: string
   dashboardUrl: string
   hasToken: boolean
+  hasDashboardToken: boolean
 } {
   return {
     baseUrl: config.baseUrl,
     dashboardUrl: config.dashboardUrl,
     hasToken: config.hasToken,
+    hasDashboardToken: config.hasDashboardToken,
   }
 }

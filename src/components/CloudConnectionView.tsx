@@ -28,6 +28,7 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
 
   const [baseUrl, setBaseUrl] = useState(config.baseUrl)
   const [apiKey, setApiKey] = useState('')
+  const [dashboardToken, setDashboardToken] = useState('')
   const [busy, setBusy] = useState<'save' | 'connect' | null>(null)
 
   useEffect(() => {
@@ -36,9 +37,16 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
 
   const handleSave = async () => {
     setBusy('save')
-    const ok = await saveConfig({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim() || undefined })
+    const ok = await saveConfig({
+      baseUrl: baseUrl.trim(),
+      apiKey: apiKey.trim() || undefined,
+      dashboardToken: dashboardToken.trim() || undefined,
+    })
     setBusy(null)
-    if (ok) setApiKey('')
+    if (ok) {
+      setApiKey('')
+      setDashboardToken('')
+    }
   }
 
   const handleReconnect = async () => {
@@ -116,6 +124,25 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                 autoComplete="off"
                 placeholder={t('cloudApiKeyPlaceholder')}
                 onChange={(event) => setApiKey(event.target.value)}
+              />
+            </Field>
+            <Field
+              label={t('cloudDashboardToken')}
+              hint={
+                config.hasDashboardToken
+                  ? t('cloudDashboardTokenSavedHint')
+                  : t('cloudDashboardTokenHint')
+              }
+              htmlFor="cloud-dashboard-token"
+            >
+              <Input
+                id="cloud-dashboard-token"
+                type="password"
+                value={dashboardToken}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder={t('cloudDashboardTokenPlaceholder')}
+                onChange={(event) => setDashboardToken(event.target.value)}
               />
             </Field>
             <div className="flex flex-wrap items-center gap-2">

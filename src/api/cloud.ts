@@ -53,6 +53,7 @@ export const UNCONFIGURED_CONNECTION: CloudConnectionInfo = {
   baseUrl: FALLBACK_BASE_URL,
   dashboardUrl: FALLBACK_DASHBOARD_URL,
   hasToken: false,
+  hasDashboardToken: false,
 }
 
 export const cloudApi = {
@@ -116,6 +117,29 @@ export const cloudApi = {
       return { success: false, error: NO_BRIDGE }
     }
     return bridge.cloudSessionsDelete({ sessionId })
+  },
+
+  async uploadImage(input: {
+    dataUrl: string
+    filename?: string
+  }): Promise<{
+    success: boolean
+    error?: string
+    image?: { path: string; name: string; bytes: number; mimeType: string }
+  }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudMediaUpload !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudMediaUpload(input)
+  },
+
+  async readImage(path: string): Promise<{ success: boolean; error?: string; dataUrl?: string }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudMediaRead !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudMediaRead({ path })
   },
 
   async listMessages(input: {

@@ -7,11 +7,12 @@ import {
   clearCloudToken,
   publicCloudConfig,
   readCloudConfig,
-  writeCloudConfig,
+  writeCloudConfig
 } from '../cloud/config.js'
 import { CloudApiError, cloudErrorMessage, createCloudClient, type CloudClient } from '../cloud/client.js'
 import { CloudRunner } from '../cloud/runner.js'
 import { CloudDashboard } from '../cloud/dashboard.js'
+import { createDashboardClient, parseImageDataUrl } from '../cloud/dash.js'
 import { createRemote, toRunStatus } from '../cloud/remote.js'
 import type { CloudCapabilities, CloudConnectionState } from '../cloud/types.js'
 
@@ -51,7 +52,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     onRequestClose: () => {
       dashboard.close()
       send(DASHBOARD_CLOSED_EVENT, { reason: 'escape' })
-    },
+    }
   })
 
   function clientKeyFor(config: { baseUrl: string; apiKey: string }): string {
@@ -71,7 +72,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     runner = new CloudRunner(
       {
         emit: (frame) => send('cloud:event', frame),
-        log: (message, error) => logger?.warn(message, error ?? ''),
+        log: (message, error) => logger?.warn(message, error ?? '')
       },
       client
     )
@@ -98,7 +99,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
 
   const fail = (error: unknown): { success: false; error: string } => ({
     success: false,
-    error: cloudErrorMessage(error),
+    error: cloudErrorMessage(error)
   })
 
   handleIpc('cloud:config:get', () => {
@@ -106,10 +107,11 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     return { success: true, config }
   })
 
-  handleIpc('cloud:config:set', (_event, input: { baseUrl?: string; apiKey?: string }) => {
+  handleIpc('cloud:config:set', (_event, input: { baseUrl?: string; apiKey?: string; dashboardToken?: string }) => {
     const saved = writeCloudConfig({
       baseUrl: String(input?.baseUrl ?? ''),
       apiKey: typeof input?.apiKey === 'string' ? input.apiKey : undefined,
+      dashboardToken: typeof input?.dashboardToken === 'string' ? input.dashboardToken : undefined
     })
     // 地址或密钥变化后旧连接作废
     client = null
@@ -119,7 +121,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     capabilities = null
     return {
       success: true,
-      config: { baseUrl: saved.baseUrl, dashboardUrl: saved.dashboardUrl, hasToken: saved.hasToken },
+      config: publicCloudConfig(saved)
     }
   })
 
@@ -163,10 +165,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
 
   handleIpc(
     'cloud:sessions:update',
-    async (
-      _event,
-      input: { sessionId?: string; title?: string; pinned?: boolean }
-    ) => {
+    async (_event, input: { sessionId?: string; title?: string; pinned?: boolean }) => {
       const sessionId = String(input?.sessionId ?? '')
       if (!sessionId) return { success: false, error: '缺少 sessionId' }
       try {
@@ -174,7 +173,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
         const session = await remote.updateSession({
           sessionId,
           title: typeof input?.title === 'string' ? input.title : undefined,
-          pinned: typeof input?.pinned === 'boolean' ? input.pinned : undefined,
+          pinned: typeof input?.pinned === 'boolean' ? input.pinned : undefined
         })
         return { success: true, session }
       } catch (error) {
@@ -195,31 +194,70 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   })
 
-  handleIpc(
-    'cloud:messages:list',
-    async (_event, input: { sessionId?: string; limit?: number; offset?: number }) => {
-      const sessionId = String(input?.sessionId ?? '')
-      if (!sessionId) return { success: false, error: '缺少 sessionId' }
-      try {
-        const remote = createRemote(ensureClient())
-        const page = await remote.listMessages({
-          sessionId,
-          limit: input?.limit,
-          offset: input?.offset,
-        })
-        return { success: true, parts: page.parts, hasMore: page.hasMore }
-      } catch (error) {
-        return fail(error)
+  handleIpc('cloud:media:upload', async (_event, input: { dataUrl?: string; filename?: string }) => {
+    const dataUrl = String(input?.dataUrl ?? '')
+    if (!dataUrl) return { success: false as const, error: '没有图片数据' }
+    const config = readCloudConfig()
+    if (!config.hasDashboardToken) {
+      return {
+        success: false as const,
+        error: '图片上传需要控制台会话令牌：在「连接」页填入服务端 .env 的 HERMES_DASHBOARD_SESSION_TOKEN'
       }
     }
-  )
+    try {
+      // 本地先校验类型与体积，省一次注定失败的往返
+      parseImageDataUrl(dataUrl)
+      const client = createDashboardClient({
+        dashboardUrl: config.dashboardUrl,
+        token: config.dashboardToken
+      })
+      const image = await client.uploadImage({ dataUrl, filename: input?.filename })
+      return { success: true as const, image }
+    } catch (error) {
+      logger?.warn('[Cloud] image upload failed', cloudErrorMessage(error))
+      return fail(error)
+    }
+  })
+
+  handleIpc('cloud:media:read', async (_event, input: { path?: string }) => {
+    const target = String(input?.path ?? '').trim()
+    if (!target) return { success: false as const, error: '没有图片路径' }
+    const config = readCloudConfig()
+    if (!config.hasDashboardToken) {
+      return { success: false as const, error: '读取云端图片需要控制台会话令牌' }
+    }
+    try {
+      const client = createDashboardClient({
+        dashboardUrl: config.dashboardUrl,
+        token: config.dashboardToken
+      })
+      const dataUrl = await client.readImageDataUrl(target)
+      return { success: true as const, dataUrl }
+    } catch (error) {
+      logger?.warn('[Cloud] image read failed', cloudErrorMessage(error))
+      return fail(error)
+    }
+  })
+
+  handleIpc('cloud:messages:list', async (_event, input: { sessionId?: string; limit?: number; offset?: number }) => {
+    const sessionId = String(input?.sessionId ?? '')
+    if (!sessionId) return { success: false, error: '缺少 sessionId' }
+    try {
+      const remote = createRemote(ensureClient())
+      const page = await remote.listMessages({
+        sessionId,
+        limit: input?.limit,
+        offset: input?.offset
+      })
+      return { success: true, parts: page.parts, hasMore: page.hasMore }
+    } catch (error) {
+      return fail(error)
+    }
+  })
 
   handleIpc(
     'cloud:run:start',
-    async (
-      _event,
-      input: { input?: string; sessionId?: string; idempotencyKey?: string }
-    ) => {
+    async (_event, input: { input?: string; sessionId?: string; idempotencyKey?: string }) => {
       const text = String(input?.input ?? '').trim()
       if (!text) return { success: false, error: '消息内容为空' }
       const idempotencyKey = String(input?.idempotencyKey ?? '').trim()
@@ -228,7 +266,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
         const started = await ensureRunner().start({
           input: text,
           sessionId: input?.sessionId || undefined,
-          idempotencyKey,
+          idempotencyKey
         })
         return { success: true, runId: started.runId, sessionId: started.sessionId ?? undefined }
       } catch (error) {
@@ -300,7 +338,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
           x: Number(rect?.x ?? 0),
           y: Number(rect?.y ?? 0),
           width: Number(rect?.width ?? 0),
-          height: Number(rect?.height ?? 0),
+          height: Number(rect?.height ?? 0)
         },
         Boolean(rect?.visible ?? true)
       )
@@ -317,6 +355,6 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     dispose: () => {
       runner?.dispose()
       dashboard.destroy()
-    },
+    }
   }
 }

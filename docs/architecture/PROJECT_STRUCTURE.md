@@ -33,7 +33,13 @@ pi-workbench/
 │   ├── app-paths.ts              # 便携式应用目录
 │   ├── workspace-trust.ts        # 工作区信任与路径包含
 │   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / cloud-agent / documents / files / git / settings / system / web-search* / workspace）
-│   ├── cloud/                    # 云端 Agent 主进程侧（config / client / remote / events / map / runner / dashboard）
+│   ├── cloud/                    # 云端 Agent 主进程侧
+│   │   ├── config.ts             # 连接配置（API 密钥 + 控制台令牌，safeStorage 加密）
+│   │   ├── client.ts / remote.ts # 网关客户端与 REST 调用（会话、轮次、停止、插话）
+│   │   ├── events.ts / map.ts    # SSE 事件解析与时间线映射（含插话回执）
+│   │   ├── runner.ts             # 轮次生命周期（断流重订阅、校帧、停止兜底）
+│   │   ├── dashboard.ts          # 控制台原生视图（WebContentsView）宿主
+│   │   └── dash.ts               # 控制台旁路（Bearer）：图片上传 / 按路径读回图片
 │   ├── documents/                # 文档解析（零依赖）：zip / xml / ooxml / pdf / detect / preview / render-bridge
 │   │   ├── zip.ts                # node:zlib 手写 ZIP 中央目录（不引第三方）
 │   │   ├── xml.ts                # 流式 XML 扇描（不建 DOM）
@@ -177,9 +183,11 @@ pi-workbench/
 │   ├── theme/tokens.ts           # 从 CSS 变量读取颜色（Monaco / xterm）
 │   ├── hooks/                     # chatScroll（聊天贴底）/ useVirtualRows / useChatSessions / useChatPanelState / useRevertEdits
 │   │                             # useCloudBridge（主进程推来的云端事件 → store）
+│   │                             # useCloudImage（按路径读云端图片，带 24 条缓存）
 │   ├── utils/                    # 文件路径/树、快捷键、符号、图片、Markdown、剪贴板、diff 回退
 │   │                             # 仓库地图：repoMapText（文案）/ repoMapLayout（底层 + 上浮链 + 层级深度）
 │   │                             # repoMapCanvasState（落盘形状与迁移）/ repoMapLod
+│   │                             # cloudImages（`/image <path>` 指令的抽取 / 剥离 / 拼接）
 │   ├── api/
 │   │   ├── index.ts              # IPC 封装 + Web dev mock
 │   │   ├── piAgentAPI.ts         # Agent 调用（Electron IPC / Web SSE 桥接）
@@ -337,6 +345,7 @@ ChatPanel.handleSubmit
 | `cloud:sessions:list` / `messages:list` | invoke | 云端会话列表与历史消息（主进程直接映射成时间线片段） |
 | `cloud:sessions:update` / `sessions:delete` | invoke | 会话条目操作（PATCH 白名单字段 / 硬删除，不可恢复） |
 | `cloud:run:start` / `run:stop` / `run:status` / `run:steer` | invoke | 云端轮次：POST `/v1/runs`（带幂等键）、停止、状态轮询、运行中插话 |
+| `cloud:media:upload` / `media:read` | invoke | 图片上传与按路径读回（走控制台旁路，需要 `HERMES_DASHBOARD_SESSION_TOKEN`） |
 | `cloud:event` | main → renderer | SSE 帧映射后的时间线增量 / 轮次状态 / 会话 id |
 | `cloud:status` | main → renderer | 连接状态变化 |
 | `cloud:dashboard:open` / `close` / `bounds` / `reload` | invoke | 程序内控制台：`WebContentsView`（独立 partition、sandbox、无 preload）的开合、边界同步、重载 |

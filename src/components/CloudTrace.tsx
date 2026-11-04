@@ -4,9 +4,11 @@ import React, { useMemo, useState } from 'react'
 import { ChevronRight, Sparkles } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import type { CloudTracePart } from '../types/cloud'
-import { Caption, DataText, Label } from './ui'
+import { Caption, DataText, Label, Modal, Spinner } from './ui'
 import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
 import { CloudToolCard } from './CloudToolCard'
+import { useCloudImage } from '../hooks/useCloudImage'
+import { collectImagePaths, stripImageDirectives } from '../utils/cloudImages'
 
 type TextPart = Extract<CloudTracePart, { type: 'text' }>
 type ThinkingPart = Extract<CloudTracePart, { type: 'thinking' }>
@@ -127,9 +129,47 @@ const InterjectionRow: React.FC<{ part: InterjectionPart }> = ({ part }) => {
   )
 }
 
+const ImageThumb: React.FC<{ path: string; onOpen: (path: string) => void }> = ({
+  path,
+  onOpen,
+}) => {
+  const { t } = useI18nStore()
+  const { src, error, loading } = useCloudImage(path)
+  if (loading) {
+    return (
+      <div className="flex h-16 w-16 items-center justify-center border border-rule-control">
+        <Spinner size={12} />
+      </div>
+    )
+  }
+  if (error || !src) {
+    return (
+      <div className="flex h-16 w-24 flex-col justify-center border border-rule-control px-2">
+        <Caption className="text-ink-subtle">{t('cloudImageUnavailable')}</Caption>
+        <DataText className="break-all text-ink-subtle">
+          {path.split('/').pop() ?? path}
+        </DataText>
+      </div>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(src)}
+      className="h-16 w-16 overflow-hidden border border-rule-control"
+      aria-label={t('cloudImageOpen')}
+    >
+      <img src={src} alt="" className="h-full w-full object-cover" />
+    </button>
+  )
+}
+
 const TextRow: React.FC<{ part: TextPart; streaming: boolean }> = ({ part, streaming }) => {
   const { t } = useI18nStore()
   const isUser = part.role === 'user'
+  const [preview, setPreview] = useState<string | null>(null)
+  const images = isUser ? collectImagePaths(part.text) : []
+  const body = images.length > 0 ? stripImageDirectives(part.text) : part.text
   return (
     <div className="border-b border-rule-divide py-3 first:pt-0 last:border-b-0">
       <div className="mb-1.5 flex items-baseline gap-2">
@@ -137,8 +177,25 @@ const TextRow: React.FC<{ part: TextPart; streaming: boolean }> = ({ part, strea
           {isUser ? t('roleYou') : t('cloudAgent')}
         </Label>
       </div>
+      {images.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {images.map((path) => (
+            <ImageThumb key={path} path={path} onOpen={setPreview} />
+          ))}
+        </div>
+      )}
+      <Modal
+        open={Boolean(preview)}
+        onClose={() => setPreview(null)}
+        title={t('cloudImagePreview')}
+        size="lg"
+      >
+        {preview && <img src={preview} alt="" className="max-h-[70vh] w-full object-contain" />}
+      </Modal>
       {isUser ? (
-        <div className="whitespace-pre-wrap break-words type-body text-ink">{part.text}</div>
+        body ? (
+          <div className="whitespace-pre-wrap break-words type-body text-ink">{body}</div>
+        ) : null
       ) : (
         <div className="chat-markdown text-ink">
           {streaming ? (
