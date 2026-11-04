@@ -108,6 +108,10 @@ function resetStore() {
     capabilities: null,
     sessions: [],
     sessionsLoading: false,
+    sessionsLoadingMore: false,
+    sessionsHasMore: false,
+    sessionQuery: '',
+    sessionActionPending: null,
     sessionsError: null,
     activeSessionId: null,
     sessionMeta: null,
@@ -363,5 +367,35 @@ describe('会话条目操作', () => {
     fireEvent.click(screen.getByText(zh.cloudPin))
 
     await waitFor(() => expect(update).toHaveBeenCalledWith({ sessionId: SESSION.id, pinned: true }))
+  })
+})
+
+describe('会话搜索与分页', () => {
+  it('filters the loaded list locally and shows the scope', async () => {
+    installBridge({
+      sessions: [SESSION, { ...SESSION, id: 'run_other', title: 'Another one', preview: 'x' }],
+    })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('Another one')).toBeTruthy())
+
+    fireEvent.change(screen.getByLabelText(zh.cloudSearchSessions), {
+      target: { value: 'probe' },
+    })
+    await waitFor(() => expect(screen.queryByText('Another one')).toBeNull())
+    expect(screen.getByText('Probe session')).toBeTruthy()
+    expect(
+      screen.getByText(zh.cloudSearchScope.replace('{matched}', '1').replace('{loaded}', '2'))
+    ).toBeTruthy()
+  })
+
+  it('shows a load-more button only while the server reports more pages', async () => {
+    installBridge()
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.cloudSessionsList =
+      async () => ({ success: true, sessions: [SESSION], hasMore: false })
+
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('Probe session')).toBeTruthy())
+    expect(screen.queryByText(zh.cloudLoadMore)).toBeNull()
+    expect(screen.getByText(zh.cloudAllLoaded)).toBeTruthy()
   })
 })

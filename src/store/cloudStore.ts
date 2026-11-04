@@ -55,7 +55,11 @@ interface CloudState {
 
   sessions: CloudSession[]
   sessionsLoading: boolean
+  sessionsLoadingMore: boolean
+  sessionsHasMore: boolean
   sessionsError: string | null
+  /** 列表搜索词（纯本地过滤：服务端只支持精确标题查找） */
+  sessionQuery: string
   /** 正在执行条目操作（重命名 / 置顶 / 删除）的会话 id */
   sessionActionPending: string | null
 
@@ -83,6 +87,8 @@ interface CloudState {
   connect: () => Promise<void>
   disconnect: () => Promise<void>
   refreshSessions: () => Promise<void>
+  loadMoreSessions: () => Promise<void>
+  setSessionQuery: (query: string) => void
   renameSession: (sessionId: string, title: string) => Promise<boolean>
   togglePinned: (sessionId: string) => Promise<boolean>
   deleteSession: (sessionId: string) => Promise<boolean>
@@ -118,7 +124,10 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
 
   sessions: [],
   sessionsLoading: false,
+  sessionsLoadingMore: false,
+  sessionsHasMore: false,
   sessionsError: null,
+  sessionQuery: '',
   sessionActionPending: null,
 
   activeSessionId: null,
@@ -209,17 +218,47 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
 
   async refreshSessions() {
     set({ sessionsLoading: true, sessionsError: null })
-    const result = await cloudApi.listSessions({ limit: SESSIONS_PAGE_SIZE })
+    const result = await cloudApi.listSessions({ limit: SESSIONS_PAGE_SIZE, offset: 0 })
     if (!result.success) {
       set({ sessionsLoading: false, sessionsError: result.error ?? 'unknown' })
       return
     }
-    set({ sessions: result.sessions, sessionsLoading: false })
+    set({
+      sessions: result.sessions,
+      sessionsLoading: false,
+      sessionsHasMore: result.hasMore === true,
+    })
     const active = get().activeSessionId
     if (active) {
       const meta = result.sessions.find((session) => session.id === active)
       if (meta) set({ sessionMeta: meta })
     }
+  },
+
+  async loadMoreSessions() {
+    const { sessions, sessionsHasMore, sessionsLoading, sessionsLoadingMore } = get()
+    if (!sessionsHasMore || sessionsLoading || sessionsLoadingMore) return
+    set({ sessionsLoadingMore: true })
+    const result = await cloudApi.listSessions({
+      limit: SESSIONS_PAGE_SIZE,
+      offset: sessions.length,
+    })
+    if (!result.success) {
+      set({ sessionsLoadingMore: false, sessionsError: result.error ?? 'unknown' })
+      return
+    }
+    // 翻页期间可能有新会话插进来：按 id 去重，避免同一行渲染两次
+    const seen = new Set(get().sessions.map((session) => session.id))
+    const appended = result.sessions.filter((session) => !seen.has(session.id))
+    set({
+      sessions: [...get().sessions, ...appended],
+      sessionsLoadingMore: false,
+      sessionsHasMore: result.hasMore === true,
+    })
+  },
+
+  setSessionQuery(query) {
+    set({ sessionQuery: query })
   },
 
   async renameSession(sessionId, title) {
@@ -523,4 +562,18 @@ function applySessionPatch(
     sessions: get().sessions.map((row) => (row.id === session.id ? session : row)),
   })
   if (get().activeSessionId === session.id) set({ sessionMeta: session })
+}
+
+/**
+ * 本地搜索：服务端 `title` 参数是「先子串查再精确等值过滤」，
+ * 拿不到模糊结果，所以搜索只在已加载的会话里做。
+ */
+export function filterSessions(sessions: CloudSession[], query: string): CloudSession[] {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return sessions
+  return sessions.filter(
+    (session) =>
+      session.title.toLowerCase().includes(needle) ||
+      session.preview.toLowerCase().includes(needle)
+  )
 }

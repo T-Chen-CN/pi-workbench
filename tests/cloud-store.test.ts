@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest'
-import { isTerminalRun, upsertPart, useCloudStore } from '../src/store/cloudStore'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { filterSessions, isTerminalRun, upsertPart, useCloudStore } from '../src/store/cloudStore'
 import type { CloudTracePart } from '../src/types/cloud'
 
 const text = (id: string, body: string): CloudTracePart => ({
@@ -194,5 +194,59 @@ describe('session actions', () => {
     await expect(useCloudStore.getState().deleteSession('s1')).resolves.toBe(false)
     expect(useCloudStore.getState().sessions.map((session) => session.id)).toEqual(['s1', 's2'])
     expect(useCloudStore.getState().sessionsError).toBe('nope')
+  })
+})
+
+describe('会话分页与搜索', () => {
+  const row = (id: string, title: string, preview = '') => ({
+    id,
+    title,
+    preview,
+    lastActive: 1,
+    startedAt: 1,
+    messageCount: 0,
+    toolCallCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    costUsd: 0,
+    model: 'm',
+    parentSessionId: null,
+    pinned: false,
+    archived: false,
+  })
+
+  it('appends the next page and drops duplicates', async () => {
+    useCloudStore.setState({ sessions: [row('a', 'A')], sessionsHasMore: true, sessionQuery: '' })
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      // 翻页期间后台插进了一条新会话，导致第二页首条与已加载的重复
+      cloudSessionsList: async () => ({
+        success: true,
+        sessions: [row('a', 'A'), row('b', 'B'), row('c', 'C')],
+        hasMore: false,
+      }),
+    }
+
+    await useCloudStore.getState().loadMoreSessions()
+    const state = useCloudStore.getState()
+    expect(state.sessions.map((session) => session.id)).toEqual(['a', 'b', 'c'])
+    expect(state.sessionsHasMore).toBe(false)
+    expect(state.sessionsLoadingMore).toBe(false)
+  })
+
+  it('stops asking once the server says there is nothing more', async () => {
+    useCloudStore.setState({ sessions: [row('a', 'A')], sessionsHasMore: false })
+    const call = vi.fn()
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudSessionsList: call,
+    }
+    await useCloudStore.getState().loadMoreSessions()
+    expect(call).not.toHaveBeenCalled()
+  })
+
+  it('filters by title and preview, case-insensitively', () => {
+    const rows = [row('a', 'Deploy notes'), row('b', 'other', 'mentions DEPLOY too'), row('c', 'x')] as never
+    expect(filterSessions(rows, 'deploy').map((session) => session.id)).toEqual(['a', 'b'])
+    expect(filterSessions(rows, '  ').length).toBe(3)
+    expect(filterSessions(rows, 'nothing').length).toBe(0)
   })
 })

@@ -1,6 +1,6 @@
 /** 云端会话页：左侧会话列表 + 右侧时间线与输入框 */
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   Cloud,
   CloudOff,
@@ -10,12 +10,14 @@ import {
   Pin,
   PinOff,
   RefreshCw,
+  Search,
   Send,
   Square,
   Trash2,
+  X,
 } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
-import { isTerminalRun, useCloudStore } from '../store/cloudStore'
+import { filterSessions, isTerminalRun, useCloudStore } from '../store/cloudStore'
 import { distanceFromBottom, pinToBottom, shouldFollow } from '../hooks/chatScroll'
 import { formatRelativeTime } from '../utils/relativeTime'
 import { formatCost, firstLine, sessionCostUsd } from '../utils/cloudFormat'
@@ -216,6 +218,11 @@ export const CloudSessionView: React.FC<{
   const sessions = useCloudStore((state) => state.sessions)
   const sessionsLoading = useCloudStore((state) => state.sessionsLoading)
   const sessionsError = useCloudStore((state) => state.sessionsError)
+  const sessionsHasMore = useCloudStore((state) => state.sessionsHasMore)
+  const sessionsLoadingMore = useCloudStore((state) => state.sessionsLoadingMore)
+  const sessionQuery = useCloudStore((state) => state.sessionQuery)
+  const setSessionQuery = useCloudStore((state) => state.setSessionQuery)
+  const loadMoreSessions = useCloudStore((state) => state.loadMoreSessions)
   const refreshSessions = useCloudStore((state) => state.refreshSessions)
   const activeSessionId = useCloudStore((state) => state.activeSessionId)
   const sessionMeta = useCloudStore((state) => state.sessionMeta)
@@ -237,6 +244,10 @@ export const CloudSessionView: React.FC<{
 
   const [stopping, setStopping] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<CloudSession | null>(null)
+  const visibleSessions = useMemo(
+    () => filterSessions(sessions, sessionQuery),
+    [sessions, sessionQuery]
+  )
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const followRef = useRef(true)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
@@ -319,7 +330,34 @@ export const CloudSessionView: React.FC<{
             />
           </span>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="flex h-8 flex-shrink-0 items-center gap-1.5 border-b border-rule-divide px-2">
+          <Search size={12} aria-hidden="true" className="flex-shrink-0 text-ink-subtle" />
+          <Input
+            value={sessionQuery}
+            placeholder={t('cloudSearchSessions')}
+            aria-label={t('cloudSearchSessions')}
+            onChange={(event) => setSessionQuery(event.target.value)}
+            className="h-6 border-0 bg-transparent px-0"
+          />
+          {sessionQuery && (
+            <IconButton
+              icon={X}
+              label={t('cloudClearSearch')}
+              size="sm"
+              onClick={() => setSessionQuery('')}
+            />
+          )}
+        </div>
+        <div
+          className="min-h-0 flex-1 overflow-y-auto"
+          onScroll={(event) => {
+            if (sessionQuery) return
+            const element = event.currentTarget
+            if (element.scrollHeight - element.scrollTop - element.clientHeight < 120) {
+              void loadMoreSessions()
+            }
+          }}
+        >
           {sessionsLoading && sessions.length === 0 && (
             <div className="flex items-center gap-2 px-3 py-3 type-caption text-ink-muted">
               <Spinner size={12} />
@@ -334,7 +372,12 @@ export const CloudSessionView: React.FC<{
               {t('cloudSessionsEmpty')}
             </div>
           )}
-          {sessions.map((session) => (
+          {sessions.length > 0 && visibleSessions.length === 0 && (
+            <div className="px-3 py-3 type-caption text-ink-muted">
+              {t('cloudSearchEmpty')}
+            </div>
+          )}
+          {visibleSessions.map((session) => (
             <SessionRow
               key={session.id}
               session={session}
@@ -350,6 +393,31 @@ export const CloudSessionView: React.FC<{
               onDelete={() => setDeleteTarget(session)}
             />
           ))}
+          {sessionQuery ? (
+            <div className="px-3 py-2">
+              <Caption className="text-ink-subtle">
+                {t('cloudSearchScope')
+                  .replace('{matched}', String(visibleSessions.length))
+                  .replace('{loaded}', String(sessions.length))}
+              </Caption>
+            </div>
+          ) : sessionsHasMore ? (
+            <div className="flex items-center justify-center px-3 py-2">
+              {sessionsLoadingMore ? (
+                <Spinner size={12} />
+              ) : (
+                <Button size="sm" onClick={() => void loadMoreSessions()}>
+                  {t('cloudLoadMore')}
+                </Button>
+              )}
+            </div>
+          ) : (
+            sessions.length > 0 && (
+              <div className="px-3 py-2">
+                <Caption className="text-ink-subtle">{t('cloudAllLoaded')}</Caption>
+              </div>
+            )
+          )}
         </div>
       </aside>
 
