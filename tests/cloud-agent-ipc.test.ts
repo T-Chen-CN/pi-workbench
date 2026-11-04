@@ -116,6 +116,9 @@ vi.mock('electron', () => ({
       if (route === '/v1/models') {
         return Response.json({ data: [{ id: 'pi-cloud' }] })
       }
+      if (route === '/api/jobs' && !parsed.search.includes('include_disabled=true')) {
+        return Response.json({ jobs: [] })
+      }
       if (route === '/api/jobs') {
         return Response.json({
           jobs: [
@@ -597,6 +600,12 @@ describe('cloud ledger', () => {
 })
 
 describe('cloud jobs', () => {
+  it('asks for disabled jobs too, otherwise a paused job can never be resumed', async () => {
+    await call('cloud:jobs:list', {})
+    const urls = mocks.state.requests.filter((line) => line.includes('/api/jobs'))
+    expect(urls[urls.length - 1]).toContain('include_disabled=true')
+  })
+
   beforeAll(async () => {
     await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
   })

@@ -466,7 +466,11 @@ export function createRemote(client: CloudClient) {
      * 新建等于写一段 prompt 交给调度器，那属于对话里让 Agent 建。
      */
     async listJobs(): Promise<CloudJob[]> {
-      const raw = await client.request<{ jobs?: RawJob[] }>('/api/jobs', { timeoutMs: 20_000 })
+      // `include_disabled=true` 不能省：服务端默认只回 enabled 的任务，
+      // 暂停过的那条会从列表里消失 —— 那样就永远没法恢复了。
+      const raw = await client.request<{ jobs?: RawJob[] }>('/api/jobs?include_disabled=true', {
+        timeoutMs: 20_000,
+      })
       const rows = Array.isArray(raw?.jobs) ? raw.jobs : []
       return rows.map(toJob)
     },

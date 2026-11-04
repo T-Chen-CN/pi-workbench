@@ -17,7 +17,7 @@ const Section: React.FC<{
   title: string
   ok?: boolean
   error?: string
-  count?: number
+  count?: number | string
   children?: React.ReactNode
 }> = ({ title, ok, error, count, children }) => (
   <div className="flex flex-col gap-1">
@@ -28,9 +28,7 @@ const Section: React.FC<{
         <AlertCircle size={11} className="flex-shrink-0 text-danger" />
       )}
       <Label className="text-ink-muted">{title}</Label>
-      {typeof count === 'number' && (
-        <Caption className="text-ink-subtle">{String(count)}</Caption>
-      )}
+      {count !== undefined && <Caption className="text-ink-subtle">{String(count)}</Caption>}
     </div>
     {error && <div className="type-caption text-danger">{error}</div>}
     {children}
@@ -139,30 +137,42 @@ export const CloudDiagnosticsPanel: React.FC<{ connected: boolean }> = ({ connec
                 title={t('cloudDiagnosticsToolsets')}
                 ok={diagnostics.toolsets.ok}
                 error={diagnostics.toolsets.error}
-                count={diagnostics.toolsets.ok ? diagnostics.toolsets.items.length : undefined}
+                count={
+                  diagnostics.toolsets.ok
+                    ? t('cloudDiagnosticsEnabledCount', {
+                        count: diagnostics.toolsets.items.filter((row) => row.enabled).length,
+                      })
+                    : undefined
+                }
               >
+                {/* 只列开着的：把 27 个全列出来（含一堆"已关闭"）等于让人自己找 */}
                 <div className="flex flex-col gap-1">
-                  {diagnostics.toolsets.items.map((toolset) => {
-                    // enabled = 开关；configured = 依赖有没有装好，两件事分开看
-                    const trouble = !toolset.enabled || !toolset.configured
-                    return (
+                  {diagnostics.toolsets.items
+                    .filter((toolset) => toolset.enabled)
+                    .map((toolset) => (
                       <Row
                         key={toolset.name}
-                        name={
-                          toolset.enabled
-                            ? toolset.name
-                            : `${toolset.name} · ${t('cloudDiagnosticsDisabled')}`
-                        }
+                        name={toolset.name}
                         value={
                           toolset.configured
                             ? String(toolset.tools.length)
                             : t('cloudDiagnosticsNotConfigured')
                         }
-                        tone={trouble ? 'text-warning' : 'text-ink'}
+                        // configured = 依赖有没有装好，跟开关是两件事
+                        tone={toolset.configured ? 'text-ink' : 'text-warning'}
                       />
-                    )
-                  })}
+                    ))}
                 </div>
+                {diagnostics.toolsets.items.some((toolset) => !toolset.enabled) && (
+                  <Caption className="text-ink-subtle">
+                    {t('cloudDiagnosticsDisabledList', {
+                      names: diagnostics.toolsets.items
+                        .filter((toolset) => !toolset.enabled)
+                        .map((toolset) => toolset.name)
+                        .join(' · '),
+                    })}
+                  </Caption>
+                )}
               </Section>
 
               <Section

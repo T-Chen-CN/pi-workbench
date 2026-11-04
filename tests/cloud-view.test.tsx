@@ -678,6 +678,8 @@ describe('自检面板', () => {
     // 缺依赖的工具集要单独标出来，不能和"关掉了"混在一起
     expect(screen.getByText(zh.cloudDiagnosticsNotConfigured)).toBeTruthy()
     expect(screen.getByText('pi-cloud')).toBeTruthy()
+    // 关掉的不占行，只在末尾汇总一行；计数只算启用的
+    expect(screen.getByText(zh.cloudDiagnosticsEnabledCount.replace('{count}', '2'))).toBeTruthy()
   })
 })
 

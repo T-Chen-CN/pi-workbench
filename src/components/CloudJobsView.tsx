@@ -126,7 +126,15 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
   }, [active, connected, loadJobs])
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    // 四个云端页面是叠放的常驻视图：必须 absolute inset-0 + 非激活时 inert，
+    // 否则会跑进文档流、盖在别的页面上（真机上出现过）
+    <div
+      aria-hidden={!active}
+      inert={!active}
+      className={`absolute inset-0 flex flex-col ${
+        active ? 'visible' : 'pointer-events-none invisible'
+      }`}
+    >
       <div className="flex h-8 flex-shrink-0 items-center gap-2 border-b border-rule-divide px-3">
         <CalendarClock size={12} className="flex-shrink-0 text-ink-subtle" />
         <span className="type-caption text-ink">{t('cloudTabJobs')}</span>
