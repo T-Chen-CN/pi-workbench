@@ -150,6 +150,14 @@ export const cloudApi = {
     return bridge.cloudRunStop({ runId })
   },
 
+  async steerRun(text: string): Promise<{ success: boolean; error?: string }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudRunSteer !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudRunSteer({ text })
+  },
+
   async runStatus(runId: string): Promise<CloudRunResult> {
     const bridge = api()
     if (!bridge || typeof bridge.cloudRunStatus !== 'function') {

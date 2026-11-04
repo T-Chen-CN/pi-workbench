@@ -707,6 +707,10 @@ export interface ElectronAPI {
   }) => Promise<CloudRunStartResult>
   cloudRunStop: (input: { runId: string }) => Promise<CloudRunResult>
   cloudRunStatus: (input: { runId: string }) => Promise<CloudRunResult>
+  cloudRunSteer: (input: { runId?: string; text: string }) => Promise<{
+    success: boolean
+    error?: string
+  }>
   cloudDashboardOpen: () => Promise<{ success: boolean; error?: string }>
   cloudDashboardClose: () => Promise<{ success: boolean; error?: string }>
   cloudDashboardBounds: (bounds: {

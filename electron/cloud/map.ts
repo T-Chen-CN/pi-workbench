@@ -209,9 +209,48 @@ export class RunMapper {
   private textId: string | null = null
   private textSeq = 0
   private toolSeq = 0
+  /** 终态事件带回的未投递插话（pending_steer） */
+  private lastPendingSteer = ''
 
   constructor(runId: string) {
     this.runId = runId
+  }
+
+  /** 找到文本相同的那条插话（后插的优先） */
+  private findInterjection(text: string): number {
+    for (let index = this.parts.length - 1; index >= 0; index -= 1) {
+      const part = this.parts[index]
+      if (part.type !== 'interjection') continue
+      if (!text || part.text === text) return index
+    }
+    return -1
+  }
+
+  /**
+   * 终态事件可能带回 `pending_steer`：这段插话没送进本轮。
+   * 必须在收尾时显示出来，否则用户以为插进去了。
+   */
+  private takePendingSteer(frames: CloudFrame[]): void {
+    const pending = this.lastPendingSteer
+    this.lastPendingSteer = ''
+    if (!pending) return
+    const index = this.findInterjection(pending)
+    if (index >= 0) {
+      const existing = this.parts[index] as Extract<CloudTracePart, { type: 'interjection' }>
+      const next = { ...existing, delivered: false, undelivered: true }
+      this.parts[index] = next
+      frames.push({ kind: 'part', part: next })
+      return
+    }
+    const part: CloudTracePart = {
+      type: 'interjection',
+      id: `s:steer:${this.parts.length}`,
+      text: pending,
+      delivered: false,
+      undelivered: true,
+    }
+    this.parts.push(part)
+    frames.push({ kind: 'part', part })
   }
 
   private ensureText(delta: string): CloudTracePart | null {
@@ -251,6 +290,10 @@ export class RunMapper {
     }
     const name = String(payload.event ?? frame.event ?? '')
     const frames: CloudFrame[] = []
+    // 终态（completed / failed / cancelled）可能带回没送进去的插话
+    if (typeof payload.pending_steer === 'string' && payload.pending_steer) {
+      this.lastPendingSteer = String(payload.pending_steer)
+    }
 
     switch (name) {
       case 'message.delta': {
@@ -372,6 +415,7 @@ export class RunMapper {
           }
         }
         frames.push({ kind: 'run', runId: this.runId, state: 'completed' })
+        this.takePendingSteer(frames)
         break
       }
       case 'run.failed':
@@ -382,14 +426,28 @@ export class RunMapper {
           state: 'failed' as CloudRunStatus,
           error: textOf(payload.error) || '本轮执行失败',
         })
+        this.takePendingSteer(frames)
+        break
+      }
+      case 'run.steered': {
+        // 插话已投递：把最后一条还挂着 interjection 的片段标成 delivered
+        const text = textOf(payload.input) || textOf(payload.message) || textOf(payload.text)
+        const index = this.findInterjection(text)
+        if (index >= 0) {
+          const existing = this.parts[index] as Extract<CloudTracePart, { type: 'interjection' }>
+          const next = { ...existing, delivered: true }
+          this.parts[index] = next
+          frames.push({ kind: 'part', part: next })
+        }
         break
       }
       case 'run.cancelled': {
         frames.push({ kind: 'run', runId: this.runId, state: 'cancelled' })
+        this.takePendingSteer(frames)
         break
       }
       default:
-        // run.queued / run.steered / subagent.* 等不进入时间线
+        // run.queued / subagent.* 等不进入时间线
         break
     }
 

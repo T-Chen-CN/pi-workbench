@@ -237,6 +237,8 @@ export const CloudSessionView: React.FC<{
   const partsError = useCloudStore((state) => state.partsError)
   const runState = useCloudStore((state) => state.runState)
   const runError = useCloudStore((state) => state.runError)
+  const steerError = useCloudStore((state) => state.steerError)
+  const steer = useCloudStore((state) => state.steer)
   const draft = useCloudStore((state) => state.draft)
   const setDraft = useCloudStore((state) => state.setDraft)
   const send = useCloudStore((state) => state.send)
@@ -480,6 +482,11 @@ export const CloudSessionView: React.FC<{
               {t('cloudRunError', { error: runError })}
             </div>
           )}
+          {steerError && (
+            <div className="py-2 type-caption text-danger">
+              {t('cloudSteerFailed', { error: steerError })}
+            </div>
+          )}
         </div>
 
         <div className="flex-shrink-0 border-t border-rule-divide p-2">
@@ -491,7 +498,8 @@ export const CloudSessionView: React.FC<{
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault()
-                  submit()
+                  if (busy) void steer()
+                  else submit()
                 }
               }}
               rows={2}
@@ -501,15 +509,27 @@ export const CloudSessionView: React.FC<{
               className="min-h-[52px] flex-1"
             />
             {busy ? (
-              <Button
-                variant="danger"
-                size="sm"
-                icon={Square}
-                loading={stopping}
-                onClick={handleStop}
-              >
-                {stopping ? t('cloudStopping') : t('cloudStop')}
-              </Button>
+              <div className="flex flex-col gap-1">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={MessageSquarePlus}
+                  disabled={!connected || !draft.trim()}
+                  title={t('cloudSteerHint')}
+                  onClick={() => void steer()}
+                >
+                  {t('cloudSteer')}
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  icon={Square}
+                  loading={stopping}
+                  onClick={handleStop}
+                >
+                  {stopping ? t('cloudStopping') : t('cloudStop')}
+                </Button>
+              </div>
             ) : (
               <Button
                 variant="primary"

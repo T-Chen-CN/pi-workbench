@@ -85,6 +85,9 @@ vi.mock('electron', () => ({
           session_id: 'run_session',
         })
       }
+      if (route === '/v1/runs/run_test/steer') {
+        return Response.json({ object: 'hermes.run.steer', accepted: true })
+      }
       if (route === '/v1/runs/run_test/events') {
         const encoder = new TextEncoder()
         const frames = [
@@ -359,5 +362,18 @@ describe('cloud session actions', () => {
     const result = await call<{ success: boolean; error?: string }>('cloud:sessions:delete', {})
     expect(result.success).toBe(false)
     expect(result.error).toContain('sessionId')
+  })
+})
+
+describe('cloud steer', () => {
+  it('refuses an empty interjection', async () => {
+    const result = await call<{ success: boolean; error?: string }>('cloud:run:steer', { text: '   ' })
+    expect(result.success).toBe(false)
+    expect(result.error).toBeTruthy()
+  })
+
+  it('rejects steering when no run is active', async () => {
+    const result = await call<{ success: boolean; error?: string }>('cloud:run:steer', { text: 'hi' })
+    expect(result.success).toBe(false)
   })
 })

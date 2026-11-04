@@ -12,12 +12,14 @@ type TextPart = Extract<CloudTracePart, { type: 'text' }>
 type ThinkingPart = Extract<CloudTracePart, { type: 'thinking' }>
 type ToolPart = Extract<CloudTracePart, { type: 'tool' }>
 type DividerPart = Extract<CloudTracePart, { type: 'divider' }>
+type InterjectionPart = Extract<CloudTracePart, { type: 'interjection' }>
 
 type Group =
   | { kind: 'text'; key: string; part: TextPart }
   | { kind: 'thinking'; key: string; parts: ThinkingPart[] }
   | { kind: 'tool'; key: string; part: ToolPart }
   | { kind: 'divider'; key: string; part: DividerPart }
+  | { kind: 'interjection'; key: string; part: InterjectionPart }
 
 /** 相邻的思考片段合成一组，避免每个 token 块各占一行 */
 export function groupCloudParts(parts: CloudTracePart[]): Group[] {
@@ -33,6 +35,10 @@ export function groupCloudParts(parts: CloudTracePart[]): Group[] {
     }
     if (part.type === 'divider') {
       groups.push({ kind: 'divider', key: part.id, part })
+      continue
+    }
+    if (part.type === 'interjection') {
+      groups.push({ kind: 'interjection', key: part.id, part })
       continue
     }
     // approval 在 P0 只做占位展示（后端当前没有闸门）
@@ -98,6 +104,25 @@ const ThinkingGroup: React.FC<{ parts: ThinkingPart[]; streaming: boolean }> = (
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+const InterjectionRow: React.FC<{ part: InterjectionPart }> = ({ part }) => {
+  const { t } = useI18nStore()
+  const status = part.undelivered
+    ? t('cloudSteerUndelivered')
+    : part.delivered
+      ? t('cloudSteerDelivered')
+      : t('cloudSteerPending')
+  const tone = part.undelivered ? 'text-danger' : part.delivered ? 'text-success' : 'text-ink-subtle'
+  return (
+    <div className="border-b border-rule-divide py-2">
+      <div className="mb-1 flex items-baseline gap-2">
+        <Label className="text-accent">{t('cloudSteerLabel')}</Label>
+        <Caption className={tone}>{status}</Caption>
+      </div>
+      <p className="m-0 whitespace-pre-wrap break-words type-value text-ink">{part.text}</p>
     </div>
   )
 }
@@ -188,6 +213,9 @@ export const CloudTrace: React.FC<CloudTraceProps> = ({ parts, streaming }) => {
         }
         if (group.kind === 'tool') {
           return <CloudToolCard key={group.key} part={group.part} />
+        }
+        if (group.kind === 'interjection') {
+          return <InterjectionRow key={group.key} part={group.part} />
         }
         return <DividerRow key={group.key} part={group.part} />
       })}

@@ -72,6 +72,8 @@ interface CloudState {
   runId: string | null
   runState: CloudRunStatus | null
   runError: string | null
+  /** 插话请求本身的失败（与轮次失败分开，避免误报「这一轮挂了」） */
+  steerError: string | null
   /** 断流后待补的分隔线（校正帧会整体替换 parts，标记留到替换时插入） */
   pendingDisconnect: string | null
   /** 上一个未成功的发送：重试时复用同一个幂等键，避免后端重复执行 */
@@ -96,6 +98,7 @@ interface CloudState {
   newSession: () => void
   setDraft: (text: string) => void
   send: () => Promise<void>
+  steer: () => Promise<void>
   stop: () => Promise<void>
   applyFrame: (frame: CloudFrame) => void
   applyStatus: (payload: {
@@ -139,6 +142,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   runId: null,
   runState: null,
   runError: null,
+  steerError: null,
   pendingDisconnect: null,
   pending: null,
   historyToken: 0,
@@ -427,6 +431,29 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       set({
         activeSessionId: result.sessionId,
         sessionMeta: { ...(get().sessionMeta ?? emptySessionMeta()), id: result.sessionId },
+      })
+    }
+  },
+
+  async steer() {
+    const { draft, runState } = get()
+    const text = draft.trim()
+    if (!text) return
+    // 只有正在执行的一轮能被插话（queued 会被后端拒绝）
+    if (runState === null || isTerminalRun(runState)) return
+    const id = `local:steer:${crypto.randomUUID()}`
+    set({
+      draft: '',
+      steerError: null,
+      parts: upsertPart(get().parts, { type: 'interjection', id, text, delivered: false }),
+    })
+    const result = await cloudApi.steerRun(text)
+    if (!result.success) {
+      // 请求都没发出去：撤回这条插话，把文字还回输入框
+      set({
+        draft: text,
+        steerError: result.error ?? 'unknown',
+        parts: get().parts.filter((part) => part.id !== id),
       })
     }
   },

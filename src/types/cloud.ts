@@ -80,6 +80,15 @@ export type CloudTracePart =
       summary: string
       decision?: 'allow' | 'deny'
     }
+  | {
+      type: 'interjection'
+      id: string
+      text: string
+      /** 服务端确认已投递（run.steered）；false 时还在路上 */
+      delivered: boolean
+      /** 本轮结束时仍未投递（终态里的 pending_steer） */
+      undelivered?: boolean
+    }
   | { type: 'divider'; id: string; kind: 'session_meta' | 'disconnect' | 'run_error'; detail?: string }
 
 /** 主进程 → 渲染层的事件帧 */

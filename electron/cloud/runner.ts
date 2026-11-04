@@ -87,6 +87,18 @@ export class CloudRunner {
     return snapshot.status
   }
 
+  /**
+   * 插话：运行中把新指令插进去。
+   *
+   * 后端只接受 `running` 状态（queued 会被拒），并且不保证立刻投递 ——
+   * 终态事件里可能带回 `pending_steer`，那才是"没送进去"的真相。
+   */
+  async steer(text: string): Promise<void> {
+    const runId = this.stream?.runId ?? null
+    if (!runId) throw new Error('当前没有正在执行的一轮')
+    await this.remote.steerRun(runId, text)
+  }
+
   dispose(): void {
     this.stream?.controller.abort()
     this.stream = null

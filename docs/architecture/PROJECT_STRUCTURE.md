@@ -336,7 +336,7 @@ ChatPanel.handleSubmit
 | `cloud:config:get` / `config:set` / `connect` / `disconnect` | invoke | 云端 Agent 连接配置（`data/cloud-agent/connection.json`，密钥 `safeStorage` 加密，渲染层只拿 `hasToken`）与连通性探测 |
 | `cloud:sessions:list` / `messages:list` | invoke | 云端会话列表与历史消息（主进程直接映射成时间线片段） |
 | `cloud:sessions:update` / `sessions:delete` | invoke | 会话条目操作（PATCH 白名单字段 / 硬删除，不可恢复） |
-| `cloud:run:start` / `run:stop` / `run:status` | invoke | 云端轮次：POST `/v1/runs`（带幂等键）、停止、状态轮询 |
+| `cloud:run:start` / `run:stop` / `run:status` / `run:steer` | invoke | 云端轮次：POST `/v1/runs`（带幂等键）、停止、状态轮询、运行中插话 |
 | `cloud:event` | main → renderer | SSE 帧映射后的时间线增量 / 轮次状态 / 会话 id |
 | `cloud:status` | main → renderer | 连接状态变化 |
 | `cloud:dashboard:open` / `close` / `bounds` / `reload` | invoke | 程序内控制台：`WebContentsView`（独立 partition、sandbox、无 preload）的开合、边界同步、重载 |

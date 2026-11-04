@@ -238,6 +238,18 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   )
 
+  handleIpc('cloud:run:steer', async (_event, input: { runId?: string; text?: string }) => {
+    const text = String(input?.text ?? '').trim()
+    if (!text) return { success: false, error: '插话内容为空' }
+    try {
+      await ensureRunner().steer(text)
+      return { success: true }
+    } catch (error) {
+      logger?.warn('[Cloud] steer failed', cloudErrorMessage(error))
+      return fail(error)
+    }
+  })
+
   handleIpc('cloud:run:status', async (_event, input: { runId?: string }) => {
     const runId = String(input?.runId ?? '')
     if (!runId) return { success: false, error: '缺少 runId' }

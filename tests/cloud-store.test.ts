@@ -250,3 +250,47 @@ describe('会话分页与搜索', () => {
     expect(filterSessions(rows, 'nothing').length).toBe(0)
   })
 })
+
+describe('插话', () => {
+  it('puts the interjection on the timeline and restores the draft when the request fails', async () => {
+    useCloudStore.setState({ draft: '换个方向', runState: 'running', parts: [], steerError: null })
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudRunSteer: async () => ({ success: false, error: 'not running' }),
+    }
+
+    await useCloudStore.getState().steer()
+
+    const state = useCloudStore.getState()
+    expect(state.draft).toBe('换个方向')
+    expect(state.steerError).toBe('not running')
+    expect(state.parts.filter((part) => part.type === 'interjection')).toEqual([])
+  })
+
+  it('keeps the interjection pending until the server confirms', async () => {
+    useCloudStore.setState({ draft: '换个方向', runState: 'running', parts: [], steerError: null })
+    const steer = vi.fn(async () => ({ success: true }))
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudRunSteer: steer,
+    }
+
+    await useCloudStore.getState().steer()
+
+    expect(steer).toHaveBeenCalledWith({ text: '换个方向' })
+    expect(useCloudStore.getState().draft).toBe('')
+    expect(useCloudStore.getState().parts[0]).toMatchObject({
+      type: 'interjection',
+      text: '换个方向',
+      delivered: false,
+    })
+  })
+
+  it('refuses to steer when nothing is running', async () => {
+    useCloudStore.setState({ draft: 'hi', runState: 'completed', parts: [] })
+    const steer = vi.fn()
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudRunSteer: steer,
+    }
+    await useCloudStore.getState().steer()
+    expect(steer).not.toHaveBeenCalled()
+  })
+})

@@ -241,3 +241,45 @@ describe('RunMapper', () => {
     expect(frames[0]).toMatchObject({ kind: 'run', state: 'failed', error: 'provider 401' })
   })
 })
+
+describe('插话（steer）', () => {
+  const frame = (event: string, payload: Record<string, unknown>, id = 1) => ({
+    id,
+    event: null,
+    data: JSON.stringify({ event, ...payload }),
+  })
+
+  it('marks an interjection delivered when run.steered comes back', () => {
+    const mapper = new RunMapper('run_1')
+    mapper.parts.push({ type: 'interjection', id: 'local:steer:1', text: '换个方向', delivered: false })
+
+    const frames = mapper.handle(frame('run.steered', { input: '换个方向' }, 2))
+    const part = frames.find((item) => item.kind === 'part')
+    expect(part && 'part' in part ? part.part : null).toMatchObject({
+      type: 'interjection',
+      delivered: true,
+    })
+  })
+
+  it('surfaces an undelivered steer via pending_steer on the terminal event', () => {
+    const mapper = new RunMapper('run_1')
+    mapper.parts.push({ type: 'interjection', id: 'local:steer:1', text: '换个方向', delivered: false })
+
+    const frames = mapper.handle(
+      frame('run.completed', { output: 'done', pending_steer: '换个方向' }, 9)
+    )
+    const interjection = frames
+      .filter((item) => item.kind === 'part')
+      .map((item) => ('part' in item ? item.part : null))
+      .find((part) => part?.type === 'interjection')
+    expect(interjection).toMatchObject({ delivered: false, undelivered: true })
+  })
+
+  it('leaves no undelivered marker when the run finishes cleanly', () => {
+    const mapper = new RunMapper('run_1')
+    const frames = mapper.handle(frame('run.completed', { output: 'x' }, 3))
+    expect(
+      frames.some((item) => item.kind === 'part' && 'part' in item && item.part.type === 'interjection')
+    ).toBe(false)
+  })
+})

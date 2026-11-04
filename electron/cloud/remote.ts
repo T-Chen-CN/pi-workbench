@@ -223,6 +223,13 @@ export function createRemote(client: CloudClient) {
       }
     },
 
+    async steerRun(runId: string, text: string): Promise<void> {
+      await client.request<Record<string, unknown>>(
+        `/v1/runs/${encodeURIComponent(runId)}/steer`,
+        { method: 'POST', body: { input: text }, timeoutMs: 20_000 }
+      )
+    },
+
     async stopRun(runId: string): Promise<RunStatusSnapshot> {
       const raw = await client.request<RawRunStatus>(
         `/v1/runs/${encodeURIComponent(runId)}/stop`,
