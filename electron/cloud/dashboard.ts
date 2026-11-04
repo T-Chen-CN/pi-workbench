@@ -8,7 +8,10 @@
 
 import { WebContentsView, shell, type BrowserWindow, type Rectangle } from 'electron'
 
-const ALLOWED_HOSTS = new Set(['dash.tchen-xiaoxiao.com'])
+/**
+ * 控制台地址是用户可配的（连接页能改），域名白名单不能写死。
+ * 这里只放行「当前配置的控制台主机」，其余导航一律拦掉。
+ */
 const PARTITION = 'persist:hermes-dashboard'
 const MIN_WIDTH = 80
 const MIN_HEIGHT = 80
@@ -24,13 +27,16 @@ export interface CloudDashboardDeps {
   /** 页面里按 Esc：交回渲染层改状态 */
   onRequestClose: () => void
   onTitleChange?: (title: string) => void
+  /** 当前配置的控制台地址：导航白名单跟着它走 */
+  getAllowedUrl: () => string
 }
 
-function hostAllowed(url: string): boolean {
+export function hostAllowed(url: string, allowedUrl: string): boolean {
   try {
     const parsed = new URL(url)
     if (parsed.protocol !== 'https:') return false
-    return ALLOWED_HOSTS.has(parsed.hostname)
+    const allowed = new URL(allowedUrl)
+    return parsed.hostname.toLowerCase() === allowed.hostname.toLowerCase()
   } catch {
     return false
   }
@@ -88,7 +94,7 @@ export class CloudDashboard {
       return { action: 'deny' }
     })
     contents.on('will-navigate', (event, target) => {
-      if (!hostAllowed(target)) event.preventDefault()
+      if (!hostAllowed(target, this.deps.getAllowedUrl())) event.preventDefault()
     })
     contents.on('did-start-loading', () => {
       this.loading = true

@@ -143,6 +143,7 @@ function makeDashboard() {
     onRequestClose: () => {
       events.closed += 1
     },
+    getAllowedUrl: () => DASH_URL,
   })
   const view = () => mocks.views[mocks.views.length - 1]
   return { dashboard, events, view }
@@ -334,5 +335,16 @@ describe('CloudDashboard', () => {
     dashboard.destroy()
     expect(mocks.window.contentView.children).not.toContain(created)
     expect(created.webContents.destroyed).toBe(true)
+  })
+})
+
+describe('白名单跟着配置走', () => {
+  it('only allows the configured console host, not a hardcoded one', async () => {
+    const { hostAllowed } = await import('../electron/cloud/dashboard')
+    expect(hostAllowed('https://dash.my-own.host/settings', 'https://dash.my-own.host')).toBe(true)
+    expect(hostAllowed('https://dash.tchen-xiaoxiao.com/', 'https://dash.my-own.host')).toBe(false)
+    // 明文不放行
+    expect(hostAllowed('http://dash.my-own.host/', 'https://dash.my-own.host')).toBe(false)
+    expect(hostAllowed('not a url', 'https://dash.my-own.host')).toBe(false)
   })
 })

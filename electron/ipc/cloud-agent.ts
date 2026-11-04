@@ -52,7 +52,8 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     onRequestClose: () => {
       dashboard.close()
       send(DASHBOARD_CLOSED_EVENT, { reason: 'escape' })
-    }
+    },
+    getAllowedUrl: () => readCloudConfig().dashboardUrl
   })
 
   function clientKeyFor(config: { baseUrl: string; apiKey: string }): string {
