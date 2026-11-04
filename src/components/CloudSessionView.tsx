@@ -42,6 +42,8 @@ import {
 } from './ui'
 import { CloudSessionMetaLine, CloudTrace } from './CloudTrace'
 
+/** 多端同步周期：后端没有事件推送也没有 ETag，只能低频拉一次首屏 */
+const SYNC_INTERVAL_MS = 15_000
 const SESSION_PREVIEW_CHARS = 90
 
 const SessionRow: React.FC<{
@@ -214,7 +216,7 @@ export const CloudSessionView: React.FC<{
   active: boolean
   onNavigate?: (view: AppView) => void
 }> = ({ active, onNavigate }) => {
-  const { t } = useI18nStore()
+  const { t, language } = useI18nStore()
 
   const connection = useCloudStore((state) => state.connection)
   const bridgeAvailable = useCloudStore((state) => state.bridgeAvailable)
@@ -226,6 +228,8 @@ export const CloudSessionView: React.FC<{
   const sessionQuery = useCloudStore((state) => state.sessionQuery)
   const setSessionQuery = useCloudStore((state) => state.setSessionQuery)
   const loadMoreSessions = useCloudStore((state) => state.loadMoreSessions)
+  const syncSessions = useCloudStore((state) => state.syncSessions)
+  const sessionsSyncedAt = useCloudStore((state) => state.sessionsSyncedAt)
   const refreshSessions = useCloudStore((state) => state.refreshSessions)
   const activeSessionId = useCloudStore((state) => state.activeSessionId)
   const sessionMeta = useCloudStore((state) => state.sessionMeta)
@@ -256,6 +260,15 @@ export const CloudSessionView: React.FC<{
   const [imageError, setImageError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const hasDashboardToken = useCloudStore((state) => state.config.hasDashboardToken)
+  useEffect(() => {
+    if (!active) return
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+      void syncSessions()
+    }, SYNC_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [active, syncSessions])
+
   const visibleSessions = useMemo(
     () => filterSessions(sessions, sessionQuery),
     [sessions, sessionQuery]
@@ -470,8 +483,13 @@ export const CloudSessionView: React.FC<{
             </div>
           ) : (
             sessions.length > 0 && (
-              <div className="px-3 py-2">
+              <div className="flex items-center gap-2 px-3 py-2">
                 <Caption className="text-ink-subtle">{t('cloudAllLoaded')}</Caption>
+                {sessionsSyncedAt && (
+                  <Caption className="text-ink-subtle">
+                    · {t('cloudSyncedAgo', { time: formatRelativeTime(sessionsSyncedAt, language) })}
+                  </Caption>
+                )}
               </div>
             )
           )}

@@ -294,3 +294,88 @@ describe('插话', () => {
     expect(steer).not.toHaveBeenCalled()
   })
 })
+
+describe('多端同步', () => {
+  const row = (id: string, title: string, pinned = false) => ({
+    id,
+    title,
+    preview: '',
+    lastActive: 1,
+    startedAt: 1,
+    messageCount: 0,
+    toolCallCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    costUsd: 0,
+    model: 'm',
+    parentSessionId: null,
+    pinned,
+    archived: false,
+  })
+
+  it('merges remote rows without dropping already loaded pages', async () => {
+    useCloudStore.setState({
+      connection: 'connected',
+      runState: null,
+      sessions: [row('a', 'A'), row('b', 'B')],
+      sessionActionPending: null,
+      syncing: false,
+      sessionsSyncedAt: null,
+    })
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      // 首屏只有一条 + 一条新的；已加载的 b 不能被砍掉
+      cloudSessionsList: async () => ({
+        success: true,
+        sessions: [row('c', 'C'), row('a', 'A renamed', true)],
+        hasMore: false,
+      }),
+    }
+
+    await useCloudStore.getState().syncSessions()
+    const state = useCloudStore.getState()
+    expect(state.sessions.map((session) => session.id)).toEqual(['c', 'a', 'b'])
+    expect(state.sessions[1]).toMatchObject({ title: 'A renamed', pinned: true })
+    expect(state.sessionsSyncedAt).toBeGreaterThan(0)
+    expect(state.syncing).toBe(false)
+  })
+
+  it('leaves the row being edited alone', async () => {
+    useCloudStore.setState({
+      connection: 'connected',
+      runState: null,
+      sessions: [row('a', '我的新标题')],
+      sessionActionPending: 'a',
+      syncing: false,
+    })
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudSessionsList: async () => ({ success: true, sessions: [row('a', 'Old')], hasMore: false }),
+    }
+    await useCloudStore.getState().syncSessions()
+    expect(useCloudStore.getState().sessions[0].title).toBe('我的新标题')
+  })
+
+  it('skips polling while a run is in flight and when the list call fails', async () => {
+    useCloudStore.setState({ connection: 'connected', runState: 'running', sessions: [row('a', 'A')], syncing: false })
+    const call = vi.fn()
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudSessionsList: call,
+    }
+    await useCloudStore.getState().syncSessions()
+    expect(call).not.toHaveBeenCalled()
+
+    useCloudStore.setState({
+      connection: 'connected',
+      runState: null,
+      syncing: false,
+      sessionsError: null,
+    })
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudSessionsList: async () => ({ success: false, error: 'offline', sessions: [] }),
+    }
+    await useCloudStore.getState().syncSessions()
+    const state = useCloudStore.getState()
+    // 后台刷新失败不写 sessionsError（会闪错误横幅）
+    expect(state.sessionsError).toBeNull()
+    expect(state.sessions).toHaveLength(1)
+  })
+})

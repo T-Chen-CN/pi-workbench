@@ -112,6 +112,8 @@ function resetStore() {
     sessionsHasMore: false,
     sessionQuery: '',
     sessionActionPending: null,
+    sessionsSyncedAt: null,
+    syncing: false,
     sessionsError: null,
     activeSessionId: null,
     sessionMeta: null,
@@ -437,5 +439,44 @@ describe('图片', () => {
       />
     )
     await waitFor(() => expect(screen.getByText(zh.cloudImageUnavailable)).toBeTruthy())
+  })
+})
+
+describe('多端同步', () => {
+  it('refreshes the list on a timer while the page is visible', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      installBridge()
+      const list = vi.fn(async () => ({ success: true, sessions: [SESSION], hasMore: false }))
+      ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.cloudSessionsList =
+        list
+
+      render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+      await waitFor(() => expect(list).toHaveBeenCalledTimes(1))
+
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(list.mock.calls.length).toBeGreaterThanOrEqual(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops polling when the page is switched away', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      installBridge()
+      const list = vi.fn(async () => ({ success: true, sessions: [SESSION], hasMore: false }))
+      ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.cloudSessionsList =
+        list
+
+      const { rerender } = render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+      await waitFor(() => expect(list).toHaveBeenCalledTimes(1))
+      rerender(<CloudWorkspaceView view="cloud-connection" onNavigate={vi.fn()} />)
+      const before = list.mock.calls.length
+      await vi.advanceTimersByTimeAsync(45_000)
+      expect(list.mock.calls.length).toBe(before)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

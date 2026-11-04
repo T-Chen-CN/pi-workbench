@@ -60,6 +60,9 @@ interface CloudState {
   sessionsError: string | null
   /** 列表搜索词（纯本地过滤：服务端只支持精确标题查找） */
   sessionQuery: string
+  /** 最近一次自动同步成功的时间（多端同步的唯一信号） */
+  sessionsSyncedAt: number | null
+  syncing: boolean
   /** 正在执行条目操作（重命名 / 置顶 / 删除）的会话 id */
   sessionActionPending: string | null
 
@@ -91,6 +94,7 @@ interface CloudState {
   refreshSessions: () => Promise<void>
   loadMoreSessions: () => Promise<void>
   setSessionQuery: (query: string) => void
+  syncSessions: () => Promise<void>
   renameSession: (sessionId: string, title: string) => Promise<boolean>
   togglePinned: (sessionId: string) => Promise<boolean>
   deleteSession: (sessionId: string) => Promise<boolean>
@@ -131,6 +135,8 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   sessionsHasMore: false,
   sessionsError: null,
   sessionQuery: '',
+  sessionsSyncedAt: null,
+  syncing: false,
   sessionActionPending: null,
 
   activeSessionId: null,
@@ -258,6 +264,41 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       sessions: [...get().sessions, ...appended],
       sessionsLoadingMore: false,
       sessionsHasMore: result.hasMore === true,
+    })
+  },
+
+  /**
+   * 多端同步：没有全局事件端点，也没有 ETag，只能低频轮询。
+   * 只合并列表行，不动当前会话的 parts —— 正在看的时间线不该被后台刷新截断。
+   */
+  async syncSessions() {
+    const { connection, runState, sessionActionPending, syncing } = get()
+    if (connection !== 'connected' || syncing) return
+    // 本轮还在跑：SSE 正在推时间线，这时候拉列表只会让行乱跳
+    if (runState !== null && !isTerminalRun(runState)) return
+    set({ syncing: true })
+    const result = await cloudApi.listSessions({ limit: SESSIONS_PAGE_SIZE, offset: 0 })
+    if (!result.success) {
+      // 后台刷新失败不打扰用户：保留旧列表，等下一个周期
+      set({ syncing: false })
+      return
+    }
+    const current = get().sessions
+    const fresh = new Map(result.sessions.map((session) => [session.id, session]))
+    const known = new Set(current.map((session) => session.id))
+    const merged = current.map((row) => {
+      // 本地正在做条目操作用户看不到自己被覆盖
+      if (sessionActionPending === row.id) return row
+      return fresh.get(row.id) ?? row
+    })
+    const added = result.sessions.filter((session) => !known.has(session.id))
+    const active = get().activeSessionId
+    const activeMeta = active ? fresh.get(active) : null
+    set({
+      sessions: [...added, ...merged],
+      syncing: false,
+      sessionsSyncedAt: Date.now(),
+      ...(activeMeta ? { sessionMeta: activeMeta } : {}),
     })
   },
 
