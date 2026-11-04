@@ -717,6 +717,11 @@ export interface ElectronAPI {
   }) => Promise<CloudRunStartResult>
   cloudRunStop: (input: { runId: string }) => Promise<CloudRunResult>
   cloudRunStatus: (input: { runId: string }) => Promise<CloudRunResult>
+  cloudRunResolveUnknown: (input: { runId: string }) => Promise<{
+    success: boolean
+    error?: string
+    state?: CloudRunStatus
+  }>
   cloudRunSteer: (input: { runId?: string; text: string }) => Promise<{
     success: boolean
     error?: string

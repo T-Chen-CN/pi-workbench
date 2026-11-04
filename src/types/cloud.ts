@@ -35,6 +35,8 @@ export type CloudRunStatus =
   | 'completed'
   | 'failed'
   | 'cancelled'
+  /** 主人进程丢了（owner epoch 丢失）：非终态，等 POST /v1/runs/{id}/resolve-unknown 收尾 */
+  | 'unknown'
 
 /** 会话列表行（GET /api/sessions 的条目，只保留前端展示用到的字段） */
 export interface CloudSession {

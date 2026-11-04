@@ -345,6 +345,7 @@ ChatPanel.handleSubmit
 | `cloud:sessions:list` / `messages:list` | invoke | 云端会话列表与历史消息（主进程直接映射成时间线片段） |
 | `cloud:sessions:update` / `sessions:delete` | invoke | 会话条目操作（PATCH 白名单字段 / 硬删除，不可恢复） |
 | `cloud:run:start` / `run:stop` / `run:status` / `run:steer` | invoke | 云端轮次：POST `/v1/runs`（带幂等键）、停止、状态轮询、运行中插话 |
+| `cloud:run:resolve-unknown` | invoke | 收尾「主人进程丢了」的 run（凭据由主进程现查，渲染层只递 runId） |
 | `cloud:media:upload` / `media:read` | invoke | 图片上传与按路径读回（走控制台旁路，需要 `HERMES_DASHBOARD_SESSION_TOKEN`） |
 | `cloud:event` | main → renderer | SSE 帧映射后的时间线增量 / 轮次状态 / 会话 id |
 | `cloud:status` | main → renderer | 连接状态变化 |

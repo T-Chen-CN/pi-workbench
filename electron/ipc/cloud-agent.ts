@@ -277,6 +277,31 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   )
 
+  handleIpc('cloud:run:resolve-unknown', async (_event, input: { runId?: string }) => {
+    const runId = String(input?.runId ?? '')
+    if (!runId) return { success: false, error: '缺少 runId' }
+    try {
+      const remote = createRemote(ensureClient())
+      // 收尾凭据必须与后端当前记录一致：现查一次，绝不缓存旧值
+      const snapshot = await remote.runStatus(runId)
+      if (snapshot.status !== 'unknown') {
+        return { success: false, error: '这一轮不是丢失状态，无需收尾' }
+      }
+      if (!snapshot.admissionId || typeof snapshot.executionGeneration !== 'number') {
+        return { success: false, error: '后端没有给出收尾凭据（admission_id / execution_generation）' }
+      }
+      const resolved = await remote.resolveUnknownRun({
+        runId,
+        admissionId: snapshot.admissionId,
+        executionGeneration: snapshot.executionGeneration
+      })
+      return { success: true, state: resolved.status }
+    } catch (error) {
+      logger?.warn('[Cloud] resolve-unknown failed', cloudErrorMessage(error))
+      return fail(error)
+    }
+  })
+
   handleIpc('cloud:run:steer', async (_event, input: { runId?: string; text?: string }) => {
     const text = String(input?.text ?? '').trim()
     if (!text) return { success: false, error: '插话内容为空' }

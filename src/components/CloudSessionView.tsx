@@ -246,6 +246,10 @@ export const CloudSessionView: React.FC<{
   const runError = useCloudStore((state) => state.runError)
   const steerError = useCloudStore((state) => state.steerError)
   const steer = useCloudStore((state) => state.steer)
+  const resolveUnknown = useCloudStore((state) => state.resolveUnknown)
+  const resolveError = useCloudStore((state) => state.resolveError)
+  const resolvingUnknown = useCloudStore((state) => state.resolvingUnknown)
+  const runLost = useCloudStore((state) => state.runState === 'unknown')
   const draft = useCloudStore((state) => state.draft)
   const setDraft = useCloudStore((state) => state.setDraft)
   const send = useCloudStore((state) => state.send)
@@ -558,6 +562,23 @@ export const CloudSessionView: React.FC<{
           {steerError && (
             <div className="py-2 type-caption text-danger">
               {t('cloudSteerFailed', { error: steerError })}
+            </div>
+          )}
+          {runLost && (
+            <div className="flex flex-wrap items-center gap-3 border border-rule-control bg-raised px-3 py-2">
+              <span className="type-caption text-ink-muted">{t('cloudRunLostBody')}</span>
+              <Button
+                size="sm"
+                loading={resolvingUnknown}
+                onClick={() => void resolveUnknown()}
+              >
+                {t('cloudResolveUnknown')}
+              </Button>
+            </div>
+          )}
+          {resolveError && (
+            <div className="py-2 type-caption text-danger">
+              {t('cloudResolveFailed', { error: resolveError })}
             </div>
           )}
         </div>

@@ -16,6 +16,7 @@ import type {
   CloudMessagesResult,
   CloudRunResult,
   CloudRunStartResult,
+  CloudRunStatus,
   CloudSessionsResult,
   CloudSession,
   CloudConnectionInfo,
@@ -172,6 +173,18 @@ export const cloudApi = {
       return { success: false, error: NO_BRIDGE }
     }
     return bridge.cloudRunStop({ runId })
+  },
+
+  async resolveUnknownRun(runId: string): Promise<{
+    success: boolean
+    error?: string
+    state?: CloudRunStatus
+  }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudRunResolveUnknown !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudRunResolveUnknown({ runId })
   },
 
   async steerRun(text: string): Promise<{ success: boolean; error?: string }> {

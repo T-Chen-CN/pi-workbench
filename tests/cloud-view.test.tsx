@@ -123,6 +123,9 @@ function resetStore() {
     runId: null,
     runState: null,
     runError: null,
+    steerError: null,
+    resolveError: null,
+    resolvingUnknown: false,
     pending: null,
     draft: '',
   })
@@ -478,5 +481,23 @@ describe('多端同步', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('丢失主人的轮次', () => {
+  it('shows the acknowledge bar only for an unknown run and reports success', async () => {
+    installBridge()
+    const resolve = vi.fn(async () => ({ success: true, state: 'cancelled' }))
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI
+      .cloudRunResolveUnknown = resolve
+
+    useCloudStore.setState({ runId: 'run_lost', runState: 'unknown', resolveError: null })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+
+    const ack = await waitFor(() => screen.getByText(zh.cloudResolveUnknown))
+    expect(screen.getByText(zh.cloudRunLostBody)).toBeTruthy()
+    fireEvent.click(ack)
+    await waitFor(() => expect(resolve).toHaveBeenCalledWith({ runId: 'run_lost' }))
+    await waitFor(() => expect(useCloudStore.getState().runState).toBe('cancelled'))
   })
 })

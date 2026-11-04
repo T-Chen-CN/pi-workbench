@@ -161,10 +161,14 @@ export class CloudRunner {
     await this.reconcile(runId, sessionId, terminal)
   }
 
-  /** 后端是否仍在执行这一轮（查不到状态时按「已结束」处理，交给 reconcile 兜底） */
+  /**
+   * 后端是否仍在执行这一轮（查不到状态时按「已结束」处理，交给 reconcile 兜底）。
+   * `unknown` 表示主人进程丢了：流不可能再推任何东西，不再重订阅。
+   */
   private async isRunning(runId: string): Promise<boolean> {
     try {
       const snapshot = await this.remote.runStatus(runId)
+      if (snapshot.status === 'unknown') return false
       return snapshot.status !== 'completed' && snapshot.status !== 'failed' && snapshot.status !== 'cancelled'
     } catch (error) {
       this.deps.log?.('[Cloud] run status probe failed', error)

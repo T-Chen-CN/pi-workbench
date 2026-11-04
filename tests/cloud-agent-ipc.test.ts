@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => {
     statusCalls: 0,
     sent: [] as Array<{ channel: string; payload: unknown }>,
     requests: [] as string[],
+    bodies: [] as string[],
   }
   const window = {
     webContents: {
@@ -65,8 +66,9 @@ vi.mock('electron', () => ({
     setVisible() {}
   },
   net: {
-    fetch: async (url: string, init?: { method?: string }) => {
+    fetch: async (url: string, init?: { method?: string; body?: unknown }) => {
       mocks.state.requests.push(`${init?.method ?? 'GET'} ${url}`)
+      if (typeof init?.body === 'string') mocks.state.bodies.push(init.body)
       const parsed = new URL(url)
       const route = parsed.pathname
 
@@ -82,6 +84,19 @@ vi.mock('electron', () => ({
           object: 'hermes.run',
           run_id: 'run_test',
           status: mocks.state.statusCalls === 1 ? 'running' : 'completed',
+          session_id: 'run_session',
+        })
+      }
+      if (route.endsWith('/resolve-unknown') && init?.method === 'POST') {
+        return Response.json({ run_id: 'run_test', status: 'cancelled', object: 'hermes.run.receipt' })
+      }
+      if (route === '/v1/runs/run_lost') {
+        return Response.json({
+          object: 'hermes.run',
+          run_id: 'run_lost',
+          status: 'unknown',
+          admission_id: 'adm_lost',
+          execution_generation: 7,
           session_id: 'run_session',
         })
       }
@@ -432,5 +447,44 @@ describe('cloud images', () => {
     expect(read.dataUrl).toBe('data:image/png;base64,CCCC')
     // 旁路必须打控制台域名，不是网关域名
     expect(mocks.state.requests.some((line) => line.includes('/api/chat/image-upload'))).toBe(true)
+  })
+})
+
+describe('cloud resolve-unknown', () => {
+  beforeAll(async () => {
+    await call('cloud:config:set', {
+      baseUrl: 'https://api.example.com',
+      apiKey: 'test-key',
+    })
+  })
+
+  it('refuses to close a run that is merely running', async () => {
+    const result = await call<{ success: boolean; error?: string }>('cloud:run:resolve-unknown', {
+      runId: 'run_test',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('无需收尾')
+  })
+
+  it('sends the admission pair back and reports the settled state', async () => {
+    const result = await call<{ success: boolean; state?: string; error?: string }>(
+      'cloud:run:resolve-unknown',
+      { runId: 'run_lost' }
+    )
+    expect(result.error).toBeUndefined()
+    expect(result).toMatchObject({ success: true, state: 'cancelled' })
+    const body = mocks.state.bodies.find((item) => item.includes('adm_lost'))
+    expect(body).toBeTruthy()
+    // body 必须严格只有两个字段，多一个后端就 invalid_params
+    expect(JSON.parse(body as string)).toEqual({
+      admission_id: 'adm_lost',
+      execution_generation: 7,
+    })
+  })
+
+  it('requires a run id', async () => {
+    const result = await call<{ success: boolean; error?: string }>('cloud:run:resolve-unknown', {})
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('runId')
   })
 })

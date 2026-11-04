@@ -77,6 +77,9 @@ interface CloudState {
   runError: string | null
   /** 插话请求本身的失败（与轮次失败分开，避免误报「这一轮挂了」） */
   steerError: string | null
+  /** 收尾确认的失败原因 */
+  resolveError: string | null
+  resolvingUnknown: boolean
   /** 断流后待补的分隔线（校正帧会整体替换 parts，标记留到替换时插入） */
   pendingDisconnect: string | null
   /** 上一个未成功的发送：重试时复用同一个幂等键，避免后端重复执行 */
@@ -103,6 +106,7 @@ interface CloudState {
   setDraft: (text: string) => void
   send: () => Promise<void>
   steer: () => Promise<void>
+  resolveUnknown: () => Promise<boolean>
   stop: () => Promise<void>
   applyFrame: (frame: CloudFrame) => void
   applyStatus: (payload: {
@@ -149,6 +153,8 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   runState: null,
   runError: null,
   steerError: null,
+  resolveError: null,
+  resolvingUnknown: false,
   pendingDisconnect: null,
   pending: null,
   historyToken: 0,
@@ -497,6 +503,22 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
         parts: get().parts.filter((part) => part.id !== id),
       })
     }
+  },
+
+  /**
+   * 收尾一轮「主人进程丢了」的 run。两个凭据由主进程现查，渲染层只递 runId。
+   */
+  async resolveUnknown() {
+    const { runId, runState, resolvingUnknown } = get()
+    if (!runId || runState !== 'unknown' || resolvingUnknown) return false
+    set({ resolvingUnknown: true, resolveError: null })
+    const result = await cloudApi.resolveUnknownRun(runId)
+    if (!result.success) {
+      set({ resolvingUnknown: false, resolveError: result.error ?? 'unknown' })
+      return false
+    }
+    set({ resolvingUnknown: false, runState: result.state ?? 'cancelled' })
+    return true
   },
 
   async stop() {

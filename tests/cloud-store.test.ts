@@ -379,3 +379,38 @@ describe('多端同步', () => {
     expect(state.sessions).toHaveLength(1)
   })
 })
+
+describe('丢失主人的 run', () => {
+  it('settles only when the backend confirms, and surfaces the reason otherwise', async () => {
+    useCloudStore.setState({
+      runId: 'run_lost',
+      runState: 'unknown',
+      resolvingUnknown: false,
+      resolveError: null,
+    })
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudRunResolveUnknown: async () => ({ success: false, error: '这一轮不是丢失状态' }),
+    }
+
+    await expect(useCloudStore.getState().resolveUnknown()).resolves.toBe(false)
+    expect(useCloudStore.getState().resolveError).toBe('这一轮不是丢失状态')
+    expect(useCloudStore.getState().runState).toBe('unknown')
+
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudRunResolveUnknown: async () => ({ success: true, state: 'cancelled' }),
+    }
+    await expect(useCloudStore.getState().resolveUnknown()).resolves.toBe(true)
+    expect(useCloudStore.getState().runState).toBe('cancelled')
+    expect(useCloudStore.getState().resolvingUnknown).toBe(false)
+  })
+
+  it('does nothing unless the run is actually lost', async () => {
+    useCloudStore.setState({ runId: 'run_1', runState: 'running', resolvingUnknown: false })
+    const resolve = vi.fn()
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudRunResolveUnknown: resolve,
+    }
+    await expect(useCloudStore.getState().resolveUnknown()).resolves.toBe(false)
+    expect(resolve).not.toHaveBeenCalled()
+  })
+})

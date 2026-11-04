@@ -57,6 +57,9 @@ function featureFlag(raw: RawCapabilities, key: string): boolean {
 interface RawRunStatus {
   run_id?: string
   status?: string
+  /** 丢失 owner epoch 时用来确认收尾的凭据 */
+  admission_id?: string
+  execution_generation?: number
   session_id?: string
   error?: string
   output?: string
@@ -107,6 +110,7 @@ const RUN_STATUSES: CloudRunStatus[] = [
   'completed',
   'failed',
   'cancelled',
+  'unknown',
 ]
 
 export function toRunStatus(value: unknown): CloudRunStatus {
@@ -121,6 +125,9 @@ export interface RunStatusSnapshot {
   status: CloudRunStatus
   sessionId: string | null
   error: string | null
+  /** 只有 `unknown` 才有；确认收尾时原样回传 */
+  admissionId?: string
+  executionGeneration?: number
 }
 
 export function createRemote(client: CloudClient) {
@@ -220,6 +227,35 @@ export function createRemote(client: CloudClient) {
         status: toRunStatus(raw.status),
         sessionId: raw.session_id ? String(raw.session_id) : null,
         error: raw.error ? String(raw.error) : null,
+        admissionId: raw.admission_id ? String(raw.admission_id) : undefined,
+        executionGeneration:
+          typeof raw.execution_generation === 'number' ? raw.execution_generation : undefined,
+      }
+    },
+
+    /**
+     * 丢失 owner epoch 的收尾确认：只对 `unknown` 有意义，body 必须**严格等于**
+     * `{admission_id, execution_generation}`（多一个字段后端就 invalid_params）。
+     */
+    async resolveUnknownRun(input: {
+      runId: string
+      admissionId: string
+      executionGeneration: number
+    }): Promise<{ status: RunStatusSnapshot['status']; sessionId: string | null }> {
+      const raw = await client.request<RawRunStatus>(
+        `/v1/runs/${encodeURIComponent(input.runId)}/resolve-unknown`,
+        {
+          method: 'POST',
+          body: {
+            admission_id: input.admissionId,
+            execution_generation: input.executionGeneration,
+          },
+          timeoutMs: 30_000,
+        }
+      )
+      return {
+        status: toRunStatus(raw.status ?? 'cancelled'),
+        sessionId: raw.session_id ? String(raw.session_id) : null,
       }
     },
 
