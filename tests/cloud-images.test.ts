@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   collectImagePaths,
+  collectMediaPaths,
+  isImagePath,
   stripImageDirectives,
+  stripMediaTags,
   withImageDirectives,
 } from '../src/utils/cloudImages'
 // dash 模块只依赖 `electron.net`，测试里用桩替掉主进程 can
@@ -37,6 +40,45 @@ describe('图片指令', () => {
     )
     expect(withImageDirectives('看图', [])).toBe('看图')
     expect(withImageDirectives('', ['/a/1.png'])).toBe('/image /a/1.png')
+  })
+
+})
+
+describe('Agent 的 MEDIA 标签', () => {
+  it('collects MEDIA paths that are images', () => {
+    const text = ['页面已打开。', '', 'MEDIA:/home/u/.config/browser-harness/tmp/shot.png'].join('\n')
+    expect(collectMediaPaths(text)).toEqual(['/home/u/.config/browser-harness/tmp/shot.png'])
+  })
+
+  it('also picks up tags that share a line with the caption', () => {
+    // Hermes 允许「说明文字 MEDIA:/path」写在一起（`hermes send` 的用法）
+    expect(collectMediaPaths('截图已附上 MEDIA:/tmp/a.jpg')).toEqual(['/tmp/a.jpg'])
+    expect(collectMediaPaths('[[as_document]] MEDIA:/tmp/a.webp')).toEqual(['/tmp/a.webp'])
+  })
+
+  it('skips non-image media and keeps them visible as text', () => {
+    const text = ['报告生成了', 'MEDIA:/tmp/report.pdf'].join('\n')
+    expect(collectMediaPaths(text)).toEqual([])
+    // 非图片标签不该被默默吞掉
+    expect(stripMediaTags(text)).toBe(['报告生成了', 'MEDIA:/tmp/report.pdf'].join('\n'))
+  })
+
+  it('dedupes repeated paths', () => {
+    expect(collectMediaPaths('MEDIA:/tmp/a.png MEDIA:/tmp/a.png')).toEqual(['/tmp/a.png'])
+  })
+
+  it('strips image tags so the caption stays readable', () => {
+    const text = ['截图已附上', '', 'MEDIA:/tmp/a.png', '', ''].join('\n')
+    expect(stripMediaTags(text)).toBe('截图已附上')
+    expect(stripMediaTags('MEDIA:/tmp/a.png')).toBe('')
+    expect(stripMediaTags('截图 MEDIA:/tmp/a.png')).toBe('截图')
+  })
+
+  it('knows which extensions are images', () => {
+    expect(isImagePath('/a/b.PNG')).toBe(true)
+    expect(isImagePath('/a/b.jpeg?v=2')).toBe(true)
+    expect(isImagePath('/a/b.pdf')).toBe(false)
+    expect(isImagePath('/a/b')).toBe(false)
   })
 })
 

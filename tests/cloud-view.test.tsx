@@ -441,6 +441,45 @@ describe('图片', () => {
     expect(screen.getByText('这是什么？')).toBeTruthy()
   })
 
+  it('renders an agent MEDIA tag as a picture instead of a raw path', async () => {
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudMediaRead: async () => ({ success: true, dataUrl: 'data:image/png;base64,BBBB' }),
+    }
+    render(
+      <CloudTrace
+        streaming={false}
+        parts={[
+          {
+            type: 'text',
+            id: 'a:1',
+            role: 'assistant',
+            text: ['页面已打开，title 是 Example。', '', 'MEDIA:/srv/shots/shot.png'].join(String.fromCharCode(10)),
+          },
+        ]}
+      />
+    )
+    const thumb = await waitFor(() => screen.getByLabelText(zh.cloudImageOpen))
+    expect(thumb.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,BBBB')
+    // 路径不该以正文形式露出来
+    expect(screen.queryByText(/MEDIA:\/srv\/shots\/shot\.png/)).toBeNull()
+    expect(screen.getByText(/页面已打开/)).toBeTruthy()
+  })
+
+  it('leaves non-image MEDIA tags alone', async () => {
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudMediaRead: async () => ({ success: false, error: 'nope' }),
+    }
+    render(
+      <CloudTrace
+        streaming={false}
+        parts={[
+          { type: 'text', id: 'a:2', role: 'assistant', text: '报告好了 MEDIA:/srv/report.pdf' },
+        ]}
+      />
+    )
+    await waitFor(() => expect(screen.getByText(/MEDIA:\/srv\/report\.pdf/)).toBeTruthy())
+    expect(screen.queryByLabelText(zh.cloudImageOpen)).toBeNull()
+  })
   it('degrades to a label when the console cannot serve the bytes', async () => {
     ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
       cloudMediaRead: async () => ({ success: false, error: 'no token' }),

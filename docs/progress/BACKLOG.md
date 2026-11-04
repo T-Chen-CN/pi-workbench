@@ -391,6 +391,17 @@
 | 账本 · 入口常驻 | 无待核对项时仍能打开抽屉补记 | 通过 |
 | 页面叠放 | 任务页不再覆盖会话页（`absolute inset-0` + `inert`） | 通过 |
 
+#### 屏幕流的前置：`MEDIA:` 图片标签（2026-11-05 已做）
+
+云端 Agent 回图的写法是 Hermes 自己的约定 `MEDIA:<服务器绝对路径>`（`agent/prompt_builder.py`
+教模型这么写），不是我们发的 `/image` 指令。之前会话页把它当普通文字显示 —— 路径直接裸露，
+图看不到。现在按扩展名白名单（png/jpg/jpeg/gif/webp/bmp）抽出来渲染成缩略图 + 点击看大图，
+非图片标签（pdf/音频）原样保留，不悄悄吞掉。
+
+实测取证：会话 `run_0dc1a8…` 的 assistant 内容是 `MEDIA:/tmp/pi-media-probe.png`；
+`/api/fs/read-data-url` 用**会话令牌**（不是 Basic auth，Basic 会回 `no_cookie`）返回
+`data:image/png;base64,…` —— 渲染链路通。
+
 **仍未取得真机证据的**：`unknown`（主人进程丢了）的收尾按钮 —— 需要云端进程真被杀一次才会出现，
 本地造不出来，只有单测覆盖（`cloud-agent-ipc` / `cloud-remote` / `cloud-store` / `cloud-view`）。
 

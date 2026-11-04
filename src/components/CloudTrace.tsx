@@ -10,7 +10,7 @@ import { CloudToolCard } from './CloudToolCard'
 import { CloudSubagentCard } from './CloudSubagentCard'
 import { CloudClarifyCard } from './CloudClarifyCard'
 import { useCloudImage } from '../hooks/useCloudImage'
-import { collectImagePaths, stripImageDirectives } from '../utils/cloudImages'
+import { collectImagePaths, collectMediaPaths, stripImageDirectives, stripMediaTags } from '../utils/cloudImages'
 
 type TextPart = Extract<CloudTracePart, { type: 'text' }>
 type ThinkingPart = Extract<CloudTracePart, { type: 'thinking' }>
@@ -183,7 +183,12 @@ const TextRow: React.FC<{ part: TextPart; streaming: boolean }> = ({ part, strea
   const isUser = part.role === 'user'
   const [preview, setPreview] = useState<string | null>(null)
   const images = isUser ? collectImagePaths(part.text) : []
-  const body = images.length > 0 ? stripImageDirectives(part.text) : part.text
+  // Agent 回图的写法是 MEDIA:<服务器路径>（不是 /image 指令），单独一套标签
+  const media = isUser ? [] : collectMediaPaths(part.text)
+  const body = stripMediaTags(
+    images.length > 0 ? stripImageDirectives(part.text) : part.text
+  )
+  const visibleImages = isUser ? images : media
   return (
     <div className="border-b border-rule-divide py-3 first:pt-0 last:border-b-0">
       <div className="mb-1.5 flex items-baseline gap-2">
@@ -191,9 +196,9 @@ const TextRow: React.FC<{ part: TextPart; streaming: boolean }> = ({ part, strea
           {isUser ? t('roleYou') : t('cloudAgent')}
         </Label>
       </div>
-      {images.length > 0 && (
+      {isUser && visibleImages.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
-          {images.map((path) => (
+          {visibleImages.map((path) => (
             <ImageThumb key={path} path={path} onOpen={setPreview} />
           ))}
         </div>
@@ -211,13 +216,24 @@ const TextRow: React.FC<{ part: TextPart; streaming: boolean }> = ({ part, strea
           <div className="whitespace-pre-wrap break-words type-body text-ink">{body}</div>
         ) : null
       ) : (
-        <div className="chat-markdown text-ink">
-          {streaming ? (
-            <StreamingMarkdown content={part.text} />
-          ) : (
-            <MarkdownBody content={part.text} highlight={part.text.length <= 20_000} />
+        <>
+          {body ? (
+            <div className="chat-markdown text-ink">
+              {streaming ? (
+                <StreamingMarkdown content={body} />
+              ) : (
+                <MarkdownBody content={body} highlight={body.length <= 20_000} />
+              )}
+            </div>
+          ) : null}
+          {visibleImages.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {visibleImages.map((path) => (
+                <ImageThumb key={path} path={path} onOpen={setPreview} />
+              ))}
+            </div>
           )}
-        </div>
+        </>
       )}
     </div>
   )
