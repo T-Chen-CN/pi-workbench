@@ -378,6 +378,22 @@
   只记"出去了就收不回来"的三类。
 - **`browser` 工具集**：开着但 chromium 未安装，调用必失败（要装再说）。
 
+#### 验收记录（2026-11-05，真机 + 服务端取证）
+
+| 项 | 证据 | 结论 |
+| --- | --- | --- |
+| clarify 问答 | 会话 `run_197e1c…` 工具结果 `{"status":"answered","user_response":"继续"}` | 通过 |
+| 任务页 · 现在跑一次 | `latest_execution` claimed→finished 3.5s `completed`，`repeat.completed=1`，并生成 cron 会话 | 通过（跑完状态变「已排期」= 上游 `trigger_job` 语义，客户端已加确认框） |
+| 任务页 · 暂停 / 恢复 | 暂停后 `state=paused enabled=false`，且仍在列表里（`include_disabled=true`） | 通过 |
+| 自检 | `clarify 1`、15 个启用工具集、`/v1/skills` 单独红（`HTTP 500`） | 通过 |
+| 账本 · 补记 | `pending-writes.json` 里 `note:…` → `confirmed_done` | 通过 |
+| 账本 · 自动记账 | `curl -X POST` 那条被识别为 `external`，232ms 后结账 `done`，**没有留在待核对里** | 通过（无误报） |
+| 账本 · 入口常驻 | 无待核对项时仍能打开抽屉补记 | 通过 |
+| 页面叠放 | 任务页不再覆盖会话页（`absolute inset-0` + `inert`） | 通过 |
+
+**仍未取得真机证据的**：`unknown`（主人进程丢了）的收尾按钮 —— 需要云端进程真被杀一次才会出现，
+本地造不出来，只有单测覆盖（`cloud-agent-ipc` / `cloud-remote` / `cloud-store` / `cloud-view`）。
+
 **还没做的（登记，不排期；2026-11-05 补正——上一版漏记了 C-08 / C-10 / C-11）**：
 
 | 条目 | 内容 | 为什么还没做 |
