@@ -132,6 +132,9 @@ function resetStore() {
     jobsLoading: false,
     jobsError: null,
     jobActionPending: null,
+    diagnostics: null,
+    diagnosticsLoading: false,
+    diagnosticsError: null,
     pending: null,
     draft: '',
   })
@@ -627,5 +630,48 @@ describe('任务页', () => {
     useCloudStore.setState({ connection: 'unconfigured' })
     render(<CloudWorkspaceView view="cloud-jobs" onNavigate={vi.fn()} />)
     expect(await screen.findByText(zh.cloudJobNeedsConnectionHint)).toBeTruthy()
+  })
+})
+
+describe('自检面板', () => {
+  it('loads on expand and shows one failing section without hiding the rest', async () => {
+    installBridge()
+    const load = vi.fn(async () => {
+      useCloudStore.setState({
+        diagnostics: {
+          fetchedAt: Date.now(),
+          version: '0.22.6',
+          platform: 'hermes-agent',
+          gatewayState: 'running',
+          readiness: { ok: true, checks: [{ name: 'model', status: 'ok' }] },
+          toolsets: {
+            ok: true,
+            items: [
+              { name: 'terminal', label: 'Terminal', enabled: true, configured: true, tools: ['terminal'] },
+              { name: 'browser', label: 'Browser', enabled: true, configured: false, tools: [] },
+            ],
+          },
+          skills: { ok: false, error: 'Failed to enumerate skills', names: [] },
+          models: { ok: true, items: ['pi-cloud'] },
+        },
+      })
+    })
+    Object.assign((window as unknown as { electronAPI: Record<string, unknown> }).electronAPI, {
+      cloudDiagnostics: load,
+    })
+    useCloudStore.setState({
+      connection: 'connected',
+      config: { ...UNCONFIGURED_CONNECTION, baseUrl: 'https://api.example.com', hasToken: true },
+    })
+
+    render(<CloudWorkspaceView view="cloud-connection" onNavigate={vi.fn()} />)
+    fireEvent.click(await screen.findByText(zh.cloudDiagnostics))
+    await waitFor(() => expect(load).toHaveBeenCalled())
+
+    expect(await screen.findByText(zh.cloudDiagnosticsSkills)).toBeTruthy()
+    expect(screen.getByText('Failed to enumerate skills')).toBeTruthy()
+    // 缺依赖的工具集要单独标出来，不能和"关掉了"混在一起
+    expect(screen.getByText(zh.cloudDiagnosticsNotConfigured)).toBeTruthy()
+    expect(screen.getByText('pi-cloud')).toBeTruthy()
   })
 })

@@ -4,6 +4,7 @@ import type {
   CloudConfigSetResult,
   CloudConnectResult,
   CloudConnectionState,
+  CloudDiagnostics,
   CloudJob,
   CloudFrame,
   CloudMessagesResult,
@@ -696,6 +697,11 @@ export interface ElectronAPI {
     success: boolean
     deleted?: boolean
     error?: string
+  }>
+  cloudDiagnostics: () => Promise<{
+    success: boolean
+    error?: string
+    diagnostics?: CloudDiagnostics
   }>
   cloudJobsList: () => Promise<{ success: boolean; error?: string; jobs?: CloudJob[] }>
   cloudJobsRun: (input: { jobId: string }) => Promise<{ success: boolean; error?: string }>

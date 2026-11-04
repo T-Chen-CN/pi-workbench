@@ -87,6 +87,35 @@ vi.mock('electron', () => ({
           session_id: 'run_session',
         })
       }
+      if (route === '/health/detailed') {
+        return Response.json({
+          status: 'ok',
+          platform: 'hermes-agent',
+          version: '0.22.6',
+          gateway_state: 'running',
+          readiness: {
+            status: 'ok',
+            checks: {
+              model: { status: 'ok' },
+              disk: { status: 'ok', used_percent: 16.1 },
+            },
+          },
+        })
+      }
+      if (route === '/v1/toolsets') {
+        return Response.json({
+          data: [
+            { name: 'terminal', label: 'Terminal', enabled: true, configured: true, tools: ['terminal'] },
+            { name: 'browser', label: 'Browser', enabled: true, configured: false, tools: [] },
+          ],
+        })
+      }
+      if (route === '/v1/skills') {
+        return Response.json({ error: { message: 'Failed to enumerate skills' } }, { status: 500 })
+      }
+      if (route === '/v1/models') {
+        return Response.json({ data: [{ id: 'pi-cloud' }] })
+      }
       if (route === '/api/jobs') {
         return Response.json({
           jobs: [
@@ -598,5 +627,37 @@ describe('cloud jobs', () => {
     expect(result.success).toBe(false)
     expect(result.error).toContain('任务 id')
     expect(mocks.state.requests.length).toBe(before)
+  })
+})
+
+describe('cloud diagnostics', () => {
+  beforeAll(async () => {
+    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+  })
+
+  it('keeps the healthy sections when one of them fails', async () => {
+    const result = await call<{
+      success: boolean
+      diagnostics: {
+        version?: string
+        gatewayState?: string
+        readiness: { ok: boolean; checks: Array<{ name: string; status: string }> }
+        toolsets: { ok: boolean; items: Array<{ name: string; configured: boolean }> }
+        skills: { ok: boolean; error?: string }
+        models: { ok: boolean; items: string[] }
+      }
+    }>('cloud:diagnostics', {})
+
+    expect(result.success).toBe(true)
+    const d = result.diagnostics
+    expect(d.version).toBe('0.22.6')
+    expect(d.gatewayState).toBe('running')
+    expect(d.readiness.ok).toBe(true)
+    expect(d.readiness.checks.map((check) => check.name)).toContain('disk')
+    expect(d.toolsets.items.find((row) => row.name === 'browser')?.configured).toBe(false)
+    // /v1/skills 在服务器上就是 500：单独失败，不影响其它块
+    expect(d.skills.ok).toBe(false)
+    expect(d.skills.error).toBeTruthy()
+    expect(d.models.items).toEqual(['pi-cloud'])
   })
 })

@@ -6,6 +6,7 @@ import { useI18nStore } from '../store/i18nStore'
 import { useCloudStore } from '../store/cloudStore'
 import { Button, Caption, DataText, Field, Input, Label } from './ui'
 import { Card, CardHeader, StatusText } from './patterns'
+import { CloudDiagnosticsPanel } from './CloudDiagnosticsPanel'
 
 const CAPABILITY_KEYS = [
   { key: 'runStop', labelKey: 'cloudCapStop' },
@@ -203,6 +204,8 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
             <Caption className="text-ink-subtle">{t('cloudCapabilitiesHint')}</Caption>
           </div>
         </Card>
+
+        <CloudDiagnosticsPanel connected={connection === 'connected'} />
       </div>
     </div>
   )

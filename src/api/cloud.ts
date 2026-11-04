@@ -16,6 +16,7 @@ import type {
   CloudMessagesResult,
   CloudRunResult,
   CloudRunStartResult,
+  CloudDiagnostics,
   CloudJob,
   CloudPendingWrite,
   CloudRunStatus,
@@ -120,6 +121,19 @@ export const cloudApi = {
       return { success: false, error: NO_BRIDGE }
     }
     return bridge.cloudSessionsDelete({ sessionId })
+  },
+
+  async diagnostics(): Promise<{
+    success: boolean
+    error?: string
+    diagnostics: CloudDiagnostics | null
+  }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudDiagnostics !== 'function') {
+      return { success: false, error: NO_BRIDGE, diagnostics: null }
+    }
+    const result = await bridge.cloudDiagnostics()
+    return { ...result, diagnostics: result.diagnostics ?? null }
   },
 
   async listJobs(): Promise<{ success: boolean; error?: string; jobs: CloudJob[] }> {

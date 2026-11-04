@@ -16,6 +16,7 @@ import type {
   CloudDashboardState,
   CloudFrame,
   CloudRunStatus,
+  CloudDiagnostics,
   CloudJob,
   CloudPendingWrite,
   CloudSession,
@@ -91,6 +92,10 @@ interface CloudState {
   jobsError: string | null
   /** 正在操作的 job id（按钮级 loading） */
   jobActionPending: string | null
+  /** 自检结果（连接页折叠区块，按需拉） */
+  diagnostics: CloudDiagnostics | null
+  diagnosticsLoading: boolean
+  diagnosticsError: string | null
   /** 断流后待补的分隔线（校正帧会整体替换 parts，标记留到替换时插入） */
   pendingDisconnect: string | null
   /** 上一个未成功的发送：重试时复用同一个幂等键，避免后端重复执行 */
@@ -121,6 +126,7 @@ interface CloudState {
   loadLedger: () => Promise<void>
   resolveLedger: (id: string, verdict: 'done' | 'missing' | 'ignored') => Promise<boolean>
   noteLedger: (summary: string) => Promise<boolean>
+  loadDiagnostics: () => Promise<void>
   loadJobs: () => Promise<void>
   runJob: (jobId: string) => Promise<boolean>
   pauseJob: (jobId: string) => Promise<boolean>
@@ -179,6 +185,9 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   jobsLoading: false,
   jobsError: null,
   jobActionPending: null,
+  diagnostics: null,
+  diagnosticsLoading: false,
+  diagnosticsError: null,
   pendingDisconnect: null,
   pending: null,
   historyToken: 0,
@@ -535,6 +544,16 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   /**
    * 收尾一轮「主人进程丢了」的 run。两个凭据由主进程现查，渲染层只递 runId。
    */
+  async loadDiagnostics() {
+    set({ diagnosticsLoading: true, diagnosticsError: null })
+    const result = await cloudApi.diagnostics()
+    if (!result.success || !result.diagnostics) {
+      set({ diagnosticsLoading: false, diagnosticsError: result.error ?? 'unknown' })
+      return
+    }
+    set({ diagnostics: result.diagnostics, diagnosticsLoading: false })
+  },
+
   async loadJobs() {
     set({ jobsLoading: true, jobsError: null })
     const result = await cloudApi.listJobs()

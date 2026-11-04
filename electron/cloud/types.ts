@@ -46,6 +46,35 @@ export type CloudRunStatus =
   | 'unknown'
 
 /** 未结算账本条目：这一轮"出去了就收不回来"的动作 */
+/** 自检里的一项健康检查（`/health/detailed` 的 readiness.checks） */
+export interface CloudDiagnosticCheck {
+  name: string
+  status: string
+  /** 人话补充（磁盘占用、队列深度…） */
+  detail?: string
+}
+
+/** 工具集一行：`enabled` 是开关，`configured` 是有没有装好依赖，两件事别混 */
+export interface CloudDiagnosticToolset {
+  name: string
+  label: string
+  enabled: boolean
+  configured: boolean
+  tools: string[]
+}
+
+/** 自检结果：每块独立成败，一块挂了不影响其它块显示 */
+export interface CloudDiagnostics {
+  fetchedAt: number
+  version?: string
+  platform?: string
+  gatewayState?: string
+  readiness: { ok: boolean; error?: string; checks: CloudDiagnosticCheck[] }
+  toolsets: { ok: boolean; error?: string; items: CloudDiagnosticToolset[] }
+  skills: { ok: boolean; error?: string; names: string[] }
+  models: { ok: boolean; error?: string; items: string[] }
+}
+
 /** 定时任务的最近一次执行（服务端 executions 表的一行） */
 export interface CloudJobExecution {
   id?: string

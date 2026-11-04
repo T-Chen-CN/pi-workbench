@@ -2,6 +2,8 @@
 
 import type {
   CloudCapabilities,
+  CloudDiagnosticCheck,
+  CloudDiagnostics,
   CloudJob,
   CloudJobExecution,
   CloudRunStatus,
@@ -59,6 +61,62 @@ function featureFlag(raw: RawCapabilities, key: string): boolean {
     return Boolean((value as { supported?: unknown }).supported)
   }
   return false
+}
+
+interface RawHealthDetailed {
+  status?: string
+  platform?: string
+  version?: string
+  gateway_state?: string
+  readiness?: {
+    status?: string
+    checks?: Record<string, Record<string, unknown> | undefined>
+  }
+}
+
+interface RawToolsetList {
+  data?: Array<{
+    name?: string
+    label?: string
+    enabled?: boolean
+    configured?: boolean
+    tools?: unknown[]
+  }>
+}
+
+interface RawSkillList {
+  data?: unknown[]
+}
+
+interface RawModelList {
+  data?: Array<{ id?: string }>
+}
+
+/** `/v1/skills` 的形状在版本间变过：数组 / `{data}` / `{skills}` 都认 */
+function collectSkillNames(raw: RawSkillList | undefined): string[] {
+  const list = Array.isArray(raw?.data)
+    ? raw.data
+    : Array.isArray((raw as { skills?: unknown[] })?.skills)
+      ? ((raw as { skills?: unknown[] }).skills as unknown[])
+      : []
+  return list
+    .map((row) =>
+      typeof row === 'string' ? row : String((row as { name?: string })?.name ?? '')
+    )
+    .filter(Boolean)
+}
+
+/** 检查项里除了 status 以外的可读信息（磁盘占用 / 队列深度…） */
+function describeCheck(value: Record<string, unknown> | undefined): string | undefined {
+  if (!value) return undefined
+  const parts: string[] = []
+  if (typeof value.used_percent === 'number') parts.push(`${value.used_percent}%`)
+  if (typeof value.state === 'string' && value.state) parts.push(String(value.state))
+  if (typeof value.active_api_runs === 'number') parts.push(`runs ${value.active_api_runs}`)
+  if (typeof value.active_delegations === 'number') {
+    parts.push(`delegations ${value.active_delegations}`)
+  }
+  return parts.length > 0 ? parts.join(' · ') : undefined
 }
 
 interface RawJobExecution {
@@ -205,6 +263,81 @@ export function createRemote(client: CloudClient) {
         runSteer: featureFlag(raw, 'run_steer'),
         approvalEvents: featureFlag(raw, 'approval_events'),
         runApprovalResponse: featureFlag(raw, 'run_approval_response'),
+      }
+    },
+
+    /**
+     * 自检：四块只读事实一次拉全。
+     *
+     * 每块独立失败——`/v1/skills` 目前在服务器上就是 500，如果整块挂了就把
+     * 其它三块一起拖黑，自检就失去意义了。
+     */
+    async diagnostics(): Promise<CloudDiagnostics> {
+      const [health, toolsets, skills, models] = await Promise.all([
+        client
+          .request<RawHealthDetailed>('/health/detailed', { timeoutMs: 15_000 })
+          .then((value) => ({ ok: true as const, value }))
+          .catch((error: unknown) => ({ ok: false as const, error })),
+        client
+          .request<RawToolsetList>('/v1/toolsets', { timeoutMs: 15_000 })
+          .then((value) => ({ ok: true as const, value }))
+          .catch((error: unknown) => ({ ok: false as const, error })),
+        client
+          .request<RawSkillList>('/v1/skills', { timeoutMs: 15_000 })
+          .then((value) => ({ ok: true as const, value }))
+          .catch((error: unknown) => ({ ok: false as const, error })),
+        client
+          .request<RawModelList>('/v1/models', { timeoutMs: 15_000 })
+          .then((value) => ({ ok: true as const, value }))
+          .catch((error: unknown) => ({ ok: false as const, error })),
+      ])
+
+      const reason = (error: unknown): string =>
+        error instanceof Error ? error.message : String(error ?? '未知错误')
+
+      const checks: CloudDiagnosticCheck[] = []
+      if (health.ok) {
+        const rawChecks = health.value?.readiness?.checks ?? {}
+        for (const [name, value] of Object.entries(rawChecks)) {
+          checks.push({
+            name,
+            status: String(value?.status ?? 'unknown'),
+            detail: describeCheck(value),
+          })
+        }
+      }
+
+      return {
+        fetchedAt: Date.now(),
+        version: health.ok ? health.value?.version : undefined,
+        platform: health.ok ? health.value?.platform : undefined,
+        gatewayState: health.ok ? health.value?.gateway_state : undefined,
+        readiness: health.ok
+          ? { ok: true, checks }
+          : { ok: false, error: reason(health.error), checks: [] },
+        toolsets: toolsets.ok
+          ? {
+              ok: true,
+              items: (toolsets.value?.data ?? []).map((row) => ({
+                name: String(row?.name ?? ''),
+                label: String(row?.label ?? row?.name ?? ''),
+                enabled: row?.enabled !== false,
+                configured: row?.configured !== false,
+                tools: Array.isArray(row?.tools) ? row.tools.map(String) : [],
+              })),
+            }
+          : { ok: false, error: reason(toolsets.error), items: [] },
+        skills: skills.ok
+          ? { ok: true, names: collectSkillNames(skills.value) }
+          : { ok: false, error: reason(skills.error), names: [] },
+        models: models.ok
+          ? {
+              ok: true,
+              items: (models.value?.data ?? [])
+                .map((row) => String(row?.id ?? ''))
+                .filter(Boolean),
+            }
+          : { ok: false, error: reason(models.error), items: [] },
       }
     },
 

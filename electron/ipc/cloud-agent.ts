@@ -282,6 +282,15 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   })
 
+  handleIpc('cloud:diagnostics', async () => {
+    try {
+      const diagnostics = await createRemote(ensureClient()).diagnostics()
+      return { success: true as const, diagnostics }
+    } catch (error) {
+      return fail(error)
+    }
+  })
+
   handleIpc('cloud:jobs:list', async () => {
     try {
       const remote = createRemote(ensureClient())
