@@ -304,7 +304,7 @@
 | ID | 项目 | 优先级 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
 | G-01 | Hermes 自举 Prompt：判断现状（A 齐备 / B 有域名无反代 / C 无域名）→ 协助配域名与反代 → 补齐凭证 → 验证 → 交付 600 权限文件（不明文进对话） | P1 | 一台可自由折腾的机器 | 草稿已写：[hermes-bootstrap-prompt.md](../requirements/hermes-bootstrap-prompt.md)；**未实跑验证** |
-| G-02 | 控制台域名白名单跟随配置：`electron/cloud/dashboard.ts` 的 `ALLOWED_HOSTS` 目前硬编码 `dash.tchen-xiaoxiao.com`，别人用自己的域名时登录跳转会被 `will-navigate` 拦掉 | P1 | — | 未开始（小改动 + 一条测试） |
+| G-02 | 控制台域名白名单跟随配置：`electron/cloud/dashboard.ts` 的 `ALLOWED_HOSTS` 目前硬编码 `dash.tchen-xiaoxiao.com`，别人用自己的域名时登录跳转会被 `will-navigate` 拦掉 | P1 | — | **已完成**（de88fb4）：`hostAllowed(url, allowedUrl)` 取当前配置的 `dashboardUrl` 主机名，含测试 |
 | G-03 | 连接页「从文件导入」：消费 G-01 交付的 `hermes-handoff v1` 文件，自动填地址 / 密钥 / 控制台账号（密钥进 safeStorage，明文不落日志），导入后提示删除该文件 | P2 | G-01 定稿 | 未开始 |
 | G-04 | 引导状态机与文案：4 态（未连接 / 已连接未登录控制台 / 已登录未对话 / 全部完成）+ 一屏 4 步文案（连接页 / 控制台登录引导 / 会话页空态复用同一份） | P2 | G-02、G-03 | 设计已定稿，未实现 |
 | G-05 | 待定：反向代理是否收窄为「只支持 Caddy」 | P3 | — | 未定 —— `nginx/apache` 追加 vhost 的路径**没有实跑验证过**，Prompt 里这一段属于未验证内容 |
@@ -320,5 +320,28 @@
 
 ---
 
+### 7.4 功能补全（2026-11-04 落地）
+
+| ID | 项目 | 状态 |
+| --- | --- | --- |
+| F-01 | 会话重命名 / 置顶 / 删除（PATCH 白名单 + 硬删除二次确认） | **已完成**（3f23d90） |
+| F-02 | 会话列表分页（`limit≤200` + `offset`）与本地搜索 | **已完成**（306d9fe） |
+| F-03 | 运行中插话（steer）：三态回执 + 终态 `pending_steer` 未送达提示 | **已完成**（c5e3e0c） |
+| F-04 | 对话收发图片（控制台旁路：上传 + 按路径读回 + 缩略图） | **已完成**（fdec4ae） |
+| F-05 | 多端同步（15s 轮询，只合并列表行） | **已完成**（ce59722） |
+
+**这一轮读源码后确认「不做」的**：
+
+- **归档**：`archived` 字段可写，但 `GET /api/sessions` 不暴露 `include_archived` —— 归档后客户端再也拉不到，等于单程票。
+- **服务端搜索**：`title` 参数是「先子串查再精确等值过滤」，传什么只回完全同名的会话，所以搜索只能本地做。
+- **批量删除 / 导出**：控制台有 `bulk-delete` 与导出，但都在 409 版本守卫后面（`client_upgrade_required`），网关没有对应端点。
+
+**两个已核实的部署事实**（写进实现，别再猜）：
+
+- 控制台 `/api/sessions/:id` 的 `PATCH`/`DELETE` 被版本守卫拦成 **409**；会话写操作一律走**网关**（`:8642`，`API_SERVER_KEY`）。
+- 图片走文本指令 `/image <绝对路径>`：网关与控制台的会话行里**都只有文本**（没有 data URI），所以历史缩略图必须按路径回读 `/api/fs/read-data-url`（需要 `HERMES_DASHBOARD_SESSION_TOKEN`）。
+
+---
+
 **维护者**: Pi Workbench Team
-**最后更新**: 2026-11-04（§7.3 引导与凭证交付登记，暂不排期）
+**最后更新**: 2026-11-04（§7.4 功能补全登记；G-02 完成）
