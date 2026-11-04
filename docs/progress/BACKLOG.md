@@ -340,6 +340,8 @@
 
 - 控制台 `/api/sessions/:id` 的 `PATCH`/`DELETE` 被版本守卫拦成 **409**；会话写操作一律走**网关**（`:8642`，`API_SERVER_KEY`）。
 - 图片走文本指令 `/image <绝对路径>`：网关与控制台的会话行里**都只有文本**（没有 data URI），所以历史缩略图必须按路径回读 `/api/fs/read-data-url`（需要 `HERMES_DASHBOARD_SESSION_TOKEN`）。
+- **steer 有窗口期**（实跑确认）：`running` 状态下返回 200 `{accepted:true}`，收尾阶段返回 409 `run_not_accepting_steer`。没被消费的 steer 会挂在终态事件的 `pending_steer` 上（官方注释写明是给客户端重放用），客户端收到就放回输入框。
+- 运行状态里的 `pending_controls` 是**审批 / clarify 提示**，不是 steer —— 两者别混。
 
 ---
 
