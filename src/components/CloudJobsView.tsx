@@ -6,12 +6,12 @@
  * 这里只留暂停（想删就暂停，人再去服务器上删）。
  */
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { AlertCircle, CalendarClock, Loader2, Pause, Play, RefreshCw, RotateCw } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useCloudStore } from '../store/cloudStore'
 import type { CloudJob } from '../types/cloud'
-import { Button, Caption, DataText, EmptyState, IconButton, Label, Spinner } from './ui'
+import { Button, Caption, DataText, EmptyState, IconButton, Label, Modal, Spinner } from './ui'
 import { formatRelativeTime } from '../utils/relativeTime'
 
 /** 服务端 `effective_job_state` 的四种取值 */
@@ -116,7 +116,32 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
   const pauseJob = useCloudStore((state) => state.pauseJob)
   const resumeJob = useCloudStore((state) => state.resumeJob)
   const [loadedOnce, setLoadedOnce] = useState(false)
+  /** 暂停任务点「现在跑一次」要先说清楚：服务端会顺手把它恢复成排期 */
+  const [runTarget, setRunTarget] = useState<CloudJob | null>(null)
+  const pollRef = useRef<number | null>(null)
   const connected = connection === 'connected'
+
+  /**
+   * 跑一次之后隔几秒补两次刷新。
+   * 服务端是先置 due 再调度，点完立刻看只会看到「已排期」，几秒后才有「上次 completed」。
+   */
+  const refreshAfterRun = () => {
+    if (pollRef.current !== null) window.clearTimeout(pollRef.current)
+    let tries = 0
+    const tick = () => {
+      tries += 1
+      void loadJobs().then(() => {
+        if (tries < 3) pollRef.current = window.setTimeout(tick, 4000)
+      })
+    }
+    pollRef.current = window.setTimeout(tick, 3000)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current !== null) window.clearTimeout(pollRef.current)
+    }
+  }, [])
 
   // 只有切到这一页（或已连接后首次进入）才拉：任务列表不参与会话页的轮询
   useEffect(() => {
@@ -192,7 +217,15 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
               job={job}
               connected={connected}
               pending={pending === job.id}
-              onRun={() => void runJob(job.id)}
+              onRun={() => {
+                if (job.state === 'paused' || !job.enabled) {
+                  setRunTarget(job)
+                  return
+                }
+                void runJob(job.id).then((ok) => {
+                  if (ok) refreshAfterRun()
+                })
+              }}
               onPause={() => void pauseJob(job.id)}
               onResume={() => void resumeJob(job.id)}
             />
@@ -202,6 +235,34 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
       <div className="flex-shrink-0 border-t border-rule-divide px-3 py-1.5">
         <Caption className="text-ink-subtle">{t('cloudJobFootnote')}</Caption>
       </div>
+
+      <Modal
+        open={Boolean(runTarget)}
+        onClose={() => setRunTarget(null)}
+        title={t('cloudJobRunPausedTitle')}
+        footer={
+          <>
+            <Button size="sm" onClick={() => setRunTarget(null)}>
+              {t('cloudCancel')}
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => {
+                const target = runTarget
+                setRunTarget(null)
+                if (target) void runJob(target.id).then((ok) => ok && refreshAfterRun())
+              }}
+            >
+              {t('cloudJobRunPausedConfirm')}
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2 px-5 py-4">
+          <Caption className="text-ink-muted">{t('cloudJobRunPausedBody')}</Caption>
+        </div>
+      </Modal>
     </div>
   )
 }

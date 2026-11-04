@@ -336,6 +336,13 @@
 - **服务端搜索**：`title` 参数是「先子串查再精确等值过滤」，传什么只回完全同名的会话，所以搜索只能本地做。
 - **批量删除 / 导出**：控制台有 `bulk-delete` 与导出，但都在 409 版本守卫后面（`client_upgrade_required`），网关没有对应端点。
 
+- **「现在跑一次」会顺手恢复排期**（2026-11-05 实测）：服务端 `trigger_job` 里直接写
+  `enabled=True, state=scheduled, paused_at=None` —— 暂停的任务点一下就变回排期了。
+  客户端为此加了确认弹窗（只在任务是暂停态时出现），跑完再补两次刷新去抓 `completed`
+  （服务端是「先置 due 再调度」，点完立刻看只会看到「已排期」）。
+  另外 `GET /api/jobs` **默认过滤掉 enabled=false 的任务**，必须显式带 `include_disabled=true`，
+  否则暂停过的任务从列表消失、永远没法恢复。
+
 **两个已核实的部署事实**（写进实现，别再猜）：
 
 - 控制台 `/api/sessions/:id` 的 `PATCH`/`DELETE` 被版本守卫拦成 **409**；会话写操作一律走**网关**（`:8642`，`API_SERVER_KEY`）。

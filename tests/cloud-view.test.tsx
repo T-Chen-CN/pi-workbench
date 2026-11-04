@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CloudWorkspaceView } from '../src/components/CloudWorkspaceView'
+import { CloudJobsView } from '../src/components/CloudJobsView'
 import { CloudTrace } from '../src/components/CloudTrace'
 import { useCloudStore } from '../src/store/cloudStore'
 import { UNCONFIGURED_CONNECTION } from '../src/api/cloud'
@@ -616,6 +617,7 @@ describe('任务页', () => {
     fireEvent.click(screen.getByText(zh.cloudJobPause))
     await waitFor(() => expect(pause).toHaveBeenCalledWith({ jobId: 'job_1' }))
 
+    // 未暂停的任务：直接跑
     fireEvent.click(screen.getByText(zh.cloudJobRunNow))
     await waitFor(() => expect(run).toHaveBeenCalledWith({ jobId: 'job_1' }))
   })
@@ -763,5 +765,41 @@ describe('clarify 提问卡', () => {
     render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
     expect(await screen.findByText(zh.cloudClarifySettledElsewhere)).toBeTruthy()
     expect(screen.queryByText('staging')).toBeNull()
+  })
+})
+
+describe('任务页：暂停任务点「现在跑一次」', () => {
+  const PAUSED = {
+    id: 'job_p',
+    name: '演示任务',
+    prompt: '',
+    schedule: '0 3 1 1 *',
+    scheduleDisplay: '0 3 1 1 *',
+    state: 'paused',
+    enabled: false,
+  }
+
+  // 单独挂这个视图：整页外壳会跑 hydrate，把连接态改掉、顺带卸载任务列表
+  const renderJobs = () => render(<CloudJobsView active onNavigate={vi.fn()} />)
+
+  it('warns first, because the server resumes the schedule as a side effect', async () => {
+    installBridge()
+    const run = vi.fn(async () => ({ success: true }))
+    const list = vi.fn(async () => ({ success: true, jobs: [PAUSED] }))
+    Object.assign((window as unknown as { electronAPI: Record<string, unknown> }).electronAPI, {
+      cloudJobsList: list,
+      cloudJobsRun: run,
+    })
+    useCloudStore.setState({ connection: 'connected', jobs: [PAUSED], hydrated: true })
+    renderJobs()
+
+    const button = await screen.findByRole('button', { name: zh.cloudJobRunNow })
+    fireEvent.click(button)
+    expect(await screen.findByText(zh.cloudJobRunPausedTitle)).toBeTruthy()
+    // 点确认之前不发请求
+    expect(run).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByText(zh.cloudJobRunPausedConfirm))
+    await waitFor(() => expect(run).toHaveBeenCalledWith({ jobId: 'job_p' }))
   })
 })
