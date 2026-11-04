@@ -284,3 +284,121 @@ describe('插话（steer）', () => {
   })
 })
 
+describe('子代理轨道', () => {
+  const sse = (payload: Record<string, unknown>, id = 1) => ({
+    id,
+    event: null,
+    data: JSON.stringify({ timestamp: 1, ...payload }),
+  })
+
+  it('pairs start and complete by subagent_id', () => {
+    const mapper = new RunMapper('run_1')
+    const opened = mapper.handle(
+      sse({
+        event: 'subagent.start',
+        goal: '查一下 Caddy 版本',
+        subagent_id: 'sa_1',
+        task_index: 0,
+        task_count: 2,
+        model: 'deepseek-flash',
+      })
+    )
+    const started = (opened[0] as { kind: 'part'; part: CloudTracePart }).part
+    expect(started).toMatchObject({
+      type: 'subagent',
+      id: 'sa:sa_1',
+      goal: '查一下 Caddy 版本',
+      status: 'running',
+      model: 'deepseek-flash',
+      taskCount: 2,
+    })
+
+    const closed = mapper.handle(
+      sse(
+        {
+          event: 'subagent.complete',
+          goal: '查一下 Caddy 版本',
+          subagent_id: 'sa_1',
+          status: 'completed',
+          duration_seconds: 4.2,
+          summary: 'v2.11.7',
+          tool_count: 3,
+          input_tokens: 100,
+          output_tokens: 20,
+          cost_usd: 0.0012,
+          files_read: ['a.ts', 'b.ts'],
+          files_written: ['c.ts'],
+          output_tail: [{ tool: 'terminal', output: 'Caddy v2.11.7' }],
+        },
+        2
+      )
+    )
+    const done = (closed[0] as { kind: 'part'; part: CloudTracePart }).part
+    expect(done).toMatchObject({
+      type: 'subagent',
+      status: 'completed',
+      summary: 'v2.11.7',
+      durationMs: 4200,
+      toolCount: 3,
+      filesRead: 2,
+      filesWritten: 1,
+    })
+    expect((done as Extract<CloudTracePart, { type: 'subagent' }>).outputTail).toContain(
+      'Caddy v2.11.7'
+    )
+  })
+
+  it('keeps two concurrent subagents apart', () => {
+    const mapper = new RunMapper('run_1')
+    mapper.handle(sse({ event: 'subagent.start', goal: 'A', subagent_id: 'sa_1' }))
+    mapper.handle(sse({ event: 'subagent.start', goal: 'B', subagent_id: 'sa_2' }, 2))
+    const frames = mapper.handle(
+      sse({ event: 'subagent.complete', subagent_id: 'sa_2', status: 'failed', summary: 'boom' }, 3)
+    )
+    const part = (frames[0] as { kind: 'part'; part: CloudTracePart }).part as Extract<
+      CloudTracePart,
+      { type: 'subagent' }
+    >
+    expect(part.id).toBe('sa:sa_2')
+    expect(part.status).toBe('failed')
+    expect(part.goal).toBe('B')
+  })
+
+  it('reports timeout as its own state and keeps the failure reason', () => {
+    const mapper = new RunMapper('run_1')
+    mapper.handle(sse({ event: 'subagent.start', goal: 'A', subagent_id: 'sa_1' }))
+    const frames = mapper.handle(
+      sse({
+        event: 'subagent.complete',
+        subagent_id: 'sa_1',
+        status: 'timeout',
+        failure_reason: 'inactivity_timeout',
+      }, 2)
+    )
+    const part = (frames[0] as { kind: 'part'; part: CloudTracePart }).part as Extract<
+      CloudTracePart,
+      { type: 'subagent' }
+    >
+    expect(part.status).toBe('timeout')
+    expect(part.failureReason).toBe('inactivity_timeout')
+  })
+
+  it('does not drop a completion that arrives without a start frame', () => {
+    const mapper = new RunMapper('run_1')
+    const frames = mapper.handle(
+      sse({ event: 'subagent.complete', subagent_id: 'sa_9', status: 'completed', summary: 'ok' })
+    )
+    const part = (frames[frames.length - 1] as { kind: 'part'; part: CloudTracePart })
+      .part as Extract<CloudTracePart, { type: 'subagent' }>
+    expect(part.id).toBe('sa:sa_9')
+    expect(part.status).toBe('completed')
+    expect(part.summary).toBe('ok')
+  })
+
+  it('ignores the per-token child chatter', () => {
+    const mapper = new RunMapper('run_1')
+    expect(mapper.handle(sse({ event: 'subagent.text', subagent_id: 'sa_1', text: 'x' }))).toEqual(
+      []
+    )
+  })
+})

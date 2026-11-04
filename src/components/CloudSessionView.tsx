@@ -254,6 +254,17 @@ export const CloudSessionView: React.FC<{
   const pendingWrites = useCloudStore((state) => state.pendingWrites)
   const [ledgerOpen, setLedgerOpen] = useState(false)
   const openWriteCount = openWrites(pendingWrites).length
+  /**
+   * 历史接口只存工具行，不存 subagent.* 事件：有 delegate 调用却没有子代理卡片，
+   * 就是「这段历史里派过子代理，但回执看不到」——明说，别让人以为没派过。
+   */
+  const subagentTrackMissing = useMemo(() => {
+    const delegated = parts.some(
+      (part) => part.type === 'tool' && /delegate/i.test(part.toolName)
+    )
+    if (!delegated) return false
+    return !parts.some((part) => part.type === 'subagent')
+  }, [parts])
   const draft = useCloudStore((state) => state.draft)
   const setDraft = useCloudStore((state) => state.setDraft)
   const send = useCloudStore((state) => state.send)
@@ -565,6 +576,9 @@ export const CloudSessionView: React.FC<{
                 }
               />
             </div>
+          )}
+          {subagentTrackMissing && (
+            <div className="pb-1 type-caption text-ink-subtle">{t('cloudSubagentHistoryHint')}</div>
           )}
           <CloudTrace parts={parts} streaming={busy} />
           {runError && !busy && (

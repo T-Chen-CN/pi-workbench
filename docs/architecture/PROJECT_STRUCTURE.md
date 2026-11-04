@@ -40,7 +40,7 @@ pi-workbench/
 │   │   ├── runner.ts             # 轮次生命周期（断流重订阅、校帧、停止兜底）
 │   │   ├── dashboard.ts          # 控制台原生视图（WebContentsView）宿主
 │   │   ├── dash.ts               # 控制台旁路（Bearer）：图片上传 / 按路径读回图片
-│   │   └── ledger.ts             # 未结算账本：分类 / 记账 / 结账 / 历史复核 / 剪枝
+│   │   ├── ledger.ts             # 未结算账本：分类 / 记账 / 结账 / 历史复核 / 剪枝
 │   ├── documents/                # 文档解析（零依赖）：zip / xml / ooxml / pdf / detect / preview / render-bridge
 │   │   ├── zip.ts                # node:zlib 手写 ZIP 中央目录（不引第三方）
 │   │   ├── xml.ts                # 流式 XML 扇描（不建 DOM）
@@ -151,6 +151,8 @@ pi-workbench/
 │   │   ├── CloudConsoleView.tsx  # 云端控制台全屏宿主（原生视图边界上报 / 失败与未连接态）
 │   │   ├── CloudConnectionView.tsx # 云端连接页（地址 / 密钥 / 连通性 / 能力回显）
 │   │   ├── CloudTrace.tsx        # 云端时间线（文本 / 思考折叠 / 分隔线）
+│   │   ├── CloudSubagentCard.tsx  # 子代理卡片（目标 / 状态 / token / 输出尾巴）
+│   │   ├── CloudLedgerDrawer.tsx  # 未结算账本抽屉（做了 / 没做 / 不管）
 │   │   ├── CloudToolCard.tsx     # 云端工具执行卡
 │   │   ├── ui.tsx                # Button / Input / Modal 等基础组件
 │   │   └── patterns.tsx          # Card / Stat / ListRow 等内容模式

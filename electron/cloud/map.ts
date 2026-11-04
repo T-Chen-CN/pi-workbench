@@ -6,7 +6,13 @@
  *   `h:` 历史（含序号，稳定）· `t:` 工具调用 · `s:` 流式产出。
  */
 
-import type { CloudFrame, CloudRunStatus, CloudTracePart, CloudToolStatus } from './types.js'
+import type {
+  CloudFrame,
+  CloudRunStatus,
+  CloudSubagentStatus,
+  CloudToolStatus,
+  CloudTracePart,
+} from './types.js'
 import type { SseFrame } from './events.js'
 
 const ARGS_MAX_CHARS = 240
@@ -118,6 +124,42 @@ export interface MapMessagesOptions {
 }
 
 /** 会话历史 → 时间线片段（顺序即后端返回顺序） */
+function numOf(value: unknown): number | undefined {
+  const n = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(n) ? n : undefined
+}
+
+const SUBAGENT_STATUS: Record<string, CloudSubagentStatus> = {
+  running: 'running',
+  queued: 'running',
+  completed: 'completed',
+  ok: 'completed',
+  failed: 'failed',
+  error: 'failed',
+  cancelled: 'failed',
+  timeout: 'timeout',
+}
+
+function subagentStatusOf(value: unknown): CloudSubagentStatus {
+  return SUBAGENT_STATUS[String(value ?? '').toLowerCase()] ?? 'running'
+}
+
+/** `output_tail` 是 [{tool, preview}] 之类的字典数组，压成一段可读文本 */
+function tailTextOf(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return typeof value === 'string' ? value : undefined
+  const lines = value
+    .map((item) => {
+      if (typeof item === 'string') return item
+      if (!item || typeof item !== 'object') return ''
+      const row = item as Record<string, unknown>
+      const name = textOf(row.tool) || textOf(row.name) || textOf(row.command)
+      const body = textOf(row.output) || textOf(row.preview) || textOf(row.text)
+      return [name, body].filter(Boolean).join(': ')
+    })
+    .filter(Boolean)
+  return lines.length > 0 ? lines.join('\n').slice(-1200) : undefined
+}
+
 export function mapMessages(rows: RawMessage[], options: MapMessagesOptions = {}): CloudTracePart[] {
   const settled = options.settled ?? true
   const parts: CloudTracePart[] = []
@@ -253,6 +295,38 @@ export class RunMapper {
     frames.push({ kind: 'part', part })
   }
 
+  /** 收尾帧的可观测字段，缺哪个就不写哪个 */
+  private subagentResult(
+    payload: Record<string, unknown>
+  ): Partial<Extract<CloudTracePart, { type: 'subagent' }>> {
+    const seconds = numOf(payload.duration_seconds)
+    const filesRead = Array.isArray(payload.files_read) ? payload.files_read.length : undefined
+    const filesWritten = Array.isArray(payload.files_written)
+      ? payload.files_written.length
+      : undefined
+    const result: Partial<Extract<CloudTracePart, { type: 'subagent' }>> = {
+      status: subagentStatusOf(payload.status),
+      summary: textOf(payload.summary) || undefined,
+      durationMs: seconds === undefined ? undefined : Math.round(seconds * 1000),
+      toolCount: numOf(payload.tool_count),
+      inputTokens: numOf(payload.input_tokens),
+      outputTokens: numOf(payload.output_tokens),
+      reasoningTokens: numOf(payload.reasoning_tokens),
+      apiCalls: numOf(payload.api_calls),
+      costUsd: numOf(payload.cost_usd),
+      filesRead,
+      filesWritten,
+      outputTail: tailTextOf(payload.output_tail),
+      failureReason: textOf(payload.failure_reason) || undefined,
+    }
+    // 收尾帧不一定带 goal：缺了就别把 start 帧的 goal 覆盖成 undefined
+    if (textOf(payload.goal)) result.goal = textOf(payload.goal)
+    for (const key of Object.keys(result) as Array<keyof typeof result>) {
+      if (result[key] === undefined) delete result[key]
+    }
+    return result
+  }
+
   private ensureText(delta: string): CloudTracePart | null {
     if (!delta) return null
     if (this.textId) {
@@ -273,6 +347,22 @@ export class RunMapper {
     this.textId = part.id
     this.parts.push(part)
     return part
+  }
+
+  private findSubagent(key: string): number {
+    return this.parts.findIndex((part) => part.type === 'subagent' && part.id === key)
+  }
+
+  /** 配对键：`subagent_id` → `delegation_id` → 单飞的"最后一个还在跑的子代理" */
+  private subagentKey(payload: Record<string, unknown>): string {
+    const id = textOf(payload.subagent_id) || textOf(payload.delegation_id)
+    if (id) return `sa:${id}`
+    for (let index = this.parts.length - 1; index >= 0; index -= 1) {
+      const part = this.parts[index]
+      if (part.type === 'subagent' && part.status === 'running') return part.id
+    }
+    const taskIndex = numOf(payload.task_index) ?? 0
+    return `sa:task:${taskIndex}`
   }
 
   private findTool(callId: string): number {
@@ -427,6 +517,49 @@ export class RunMapper {
           error: textOf(payload.error) || '本轮执行失败',
         })
         this.takePendingSteer(frames)
+        break
+      }
+      case 'subagent.start':
+      case 'subagent.complete': {
+        const key = this.subagentKey(payload)
+        const index = this.findSubagent(key)
+        const goal = textOf(payload.goal) || textOf(payload.text)
+        const done = name === 'subagent.complete'
+        const status = done ? subagentStatusOf(payload.status) : 'running'
+        if (index < 0) {
+          const part: CloudTracePart = {
+            type: 'subagent',
+            id: key,
+            goal: goal || '子代理',
+            status,
+            subagentId: textOf(payload.subagent_id) || undefined,
+            delegationId: textOf(payload.delegation_id) || undefined,
+            taskIndex: numOf(payload.task_index),
+            taskCount: numOf(payload.task_count),
+            model: textOf(payload.model) || undefined,
+            childSessionId: textOf(payload.child_session_id) || undefined,
+          }
+          this.parts.push(part)
+          frames.push({ kind: 'part', part })
+          if (!done) break
+          // 没有 start 帧（比如中途接入）：补一条已完成的卡片，别把它丢了
+          const filled: CloudTracePart = { ...part, ...this.subagentResult(payload) }
+          this.parts[this.parts.length - 1] = filled
+          frames.push({ kind: 'part', part: filled })
+          break
+        }
+        const current = this.parts[index] as Extract<CloudTracePart, { type: 'subagent' }>
+        const next: CloudTracePart = done
+          ? { ...current, ...this.subagentResult(payload) }
+          : {
+              ...current,
+              status: 'running',
+              // start 帧偶尔晚于 progress：只在还没有 goal 时补
+              goal: current.goal || goal || '子代理',
+              toolCount: numOf(payload.tool_count) ?? current.toolCount,
+            }
+        this.parts[index] = next
+        frames.push({ kind: 'part', part: next })
         break
       }
       case 'run.steered': {

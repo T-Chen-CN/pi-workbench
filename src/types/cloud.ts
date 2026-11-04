@@ -91,6 +91,15 @@ export interface CloudSession {
 export type CloudToolStatus = 'running' | 'success' | 'error'
 
 /** 时间线单元。历史与流式事件映射到同一套形状。 */
+/**
+ * 子代理轨道：一次 `delegate_task` 派出去的子任务。
+ *
+ * 事件来自 SSE 的 `subagent.start` / `subagent.complete`；**历史消息里没有**
+ * （`/api/sessions/:id/messages` 只有工具行），所以重开会话只能看到空档，
+ * 这一层要在 UI 上说明，而不是假装没有子代理。
+ */
+export type CloudSubagentStatus = 'running' | 'completed' | 'failed' | 'timeout'
+
 export type CloudTracePart =
   | { type: 'text'; id: string; role: 'user' | 'assistant'; text: string }
   | { type: 'thinking'; id: string; text: string; redacted?: boolean }
@@ -121,6 +130,32 @@ export type CloudTracePart =
       delivered: boolean
       /** 本轮结束时仍未投递（终态里的 pending_steer） */
       undelivered?: boolean
+    }
+  | {
+      type: 'subagent'
+      id: string
+      goal: string
+      status: CloudSubagentStatus
+      subagentId?: string
+      delegationId?: string
+      taskIndex?: number
+      taskCount?: number
+      model?: string
+      toolCount?: number
+      summary?: string
+      durationMs?: number
+      inputTokens?: number
+      outputTokens?: number
+      reasoningTokens?: number
+      apiCalls?: number
+      costUsd?: number
+      filesRead?: number
+      filesWritten?: number
+      /** 子代理最后几条工具输出的尾巴（服务端已脱敏并截断） */
+      outputTail?: string
+      /** 失败分类（服务端给的 verdict） */
+      failureReason?: string
+      childSessionId?: string
     }
   | { type: 'divider'; id: string; kind: 'session_meta' | 'disconnect' | 'run_error'; detail?: string }
 

@@ -538,3 +538,37 @@ describe('未结算账本', () => {
     await waitFor(() => expect(screen.queryByText(zh.cloudLedgerBadge.replace('{count}', '0'))).toBeNull())
   })
 })
+
+describe('子代理轨道', () => {
+  it('renders a subagent card and explains the missing track in history', async () => {
+    installBridge()
+    useCloudStore.setState({
+      runState: null,
+      parts: [
+        {
+          type: 'subagent',
+          id: 'sa:sa_1',
+          goal: '查 Caddy 版本',
+          status: 'completed',
+          summary: 'v2.11.7',
+          durationMs: 4300,
+          toolCount: 2,
+        },
+        { type: 'tool', id: 't1', toolCallId: 'c1', toolName: 'delegate_task', argsSummary: '', status: 'success' },
+      ],
+    })
+    const first = render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+    expect(await screen.findByText('查 Caddy 版本')).toBeTruthy()
+    // 有子代理卡片时不提示缺轨道
+    expect(screen.queryByText(zh.cloudSubagentHistoryHint)).toBeNull()
+    first.unmount()
+
+    useCloudStore.setState({
+      parts: [
+        { type: 'tool', id: 't1', toolCallId: 'c1', toolName: 'delegate_task', argsSummary: '', status: 'success' },
+      ],
+    })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+    expect(await screen.findByText(zh.cloudSubagentHistoryHint)).toBeTruthy()
+  })
+})

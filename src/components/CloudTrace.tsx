@@ -7,6 +7,7 @@ import type { CloudTracePart } from '../types/cloud'
 import { Caption, DataText, Label, Modal, Spinner } from './ui'
 import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
 import { CloudToolCard } from './CloudToolCard'
+import { CloudSubagentCard } from './CloudSubagentCard'
 import { useCloudImage } from '../hooks/useCloudImage'
 import { collectImagePaths, stripImageDirectives } from '../utils/cloudImages'
 
@@ -15,6 +16,7 @@ type ThinkingPart = Extract<CloudTracePart, { type: 'thinking' }>
 type ToolPart = Extract<CloudTracePart, { type: 'tool' }>
 type DividerPart = Extract<CloudTracePart, { type: 'divider' }>
 type InterjectionPart = Extract<CloudTracePart, { type: 'interjection' }>
+type SubagentPart = Extract<CloudTracePart, { type: 'subagent' }>
 
 type Group =
   | { kind: 'text'; key: string; part: TextPart }
@@ -22,6 +24,7 @@ type Group =
   | { kind: 'tool'; key: string; part: ToolPart }
   | { kind: 'divider'; key: string; part: DividerPart }
   | { kind: 'interjection'; key: string; part: InterjectionPart }
+  | { kind: 'subagent'; key: string; part: SubagentPart }
 
 /** 相邻的思考片段合成一组，避免每个 token 块各占一行 */
 export function groupCloudParts(parts: CloudTracePart[]): Group[] {
@@ -41,6 +44,10 @@ export function groupCloudParts(parts: CloudTracePart[]): Group[] {
     }
     if (part.type === 'interjection') {
       groups.push({ kind: 'interjection', key: part.id, part })
+      continue
+    }
+    if (part.type === 'subagent') {
+      groups.push({ kind: 'subagent', key: part.id, part })
       continue
     }
     // approval 在 P0 只做占位展示（后端当前没有闸门）
@@ -273,6 +280,9 @@ export const CloudTrace: React.FC<CloudTraceProps> = ({ parts, streaming }) => {
         }
         if (group.kind === 'interjection') {
           return <InterjectionRow key={group.key} part={group.part} />
+        }
+        if (group.kind === 'subagent') {
+          return <CloudSubagentCard key={group.key} part={group.part} />
         }
         return <DividerRow key={group.key} part={group.part} />
       })}
