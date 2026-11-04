@@ -685,6 +685,16 @@ export interface ElectronAPI {
   cloudConnect: () => Promise<CloudConnectResult>
   cloudDisconnect: () => Promise<{ success: boolean; error?: string }>
   cloudSessionsList: (input: { limit?: number; offset?: number }) => Promise<CloudSessionsResult>
+  cloudSessionsUpdate: (input: {
+    sessionId: string
+    title?: string
+    pinned?: boolean
+  }) => Promise<{ success: boolean; session?: CloudSession; error?: string }>
+  cloudSessionsDelete: (input: { sessionId: string }) => Promise<{
+    success: boolean
+    deleted?: boolean
+    error?: string
+  }>
   cloudMessagesList: (input: {
     sessionId: string
     limit?: number

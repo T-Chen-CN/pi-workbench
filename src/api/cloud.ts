@@ -17,6 +17,7 @@ import type {
   CloudRunResult,
   CloudRunStartResult,
   CloudSessionsResult,
+  CloudSession,
   CloudConnectionInfo,
 } from '../types/cloud'
 
@@ -93,6 +94,28 @@ export const cloudApi = {
       return { success: false, sessions: [], error: NO_BRIDGE }
     }
     return bridge.cloudSessionsList(input ?? {})
+  },
+
+  async updateSession(input: {
+    sessionId: string
+    title?: string
+    pinned?: boolean
+  }): Promise<{ success: boolean; session?: CloudSession; error?: string }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudSessionsUpdate !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudSessionsUpdate(input)
+  },
+
+  async deleteSession(
+    sessionId: string
+  ): Promise<{ success: boolean; deleted?: boolean; error?: string }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudSessionsDelete !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudSessionsDelete({ sessionId })
   },
 
   async listMessages(input: {

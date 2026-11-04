@@ -485,6 +485,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cloudDisconnect: () => ipcRenderer.invoke('cloud:disconnect'),
   cloudSessionsList: (input: { limit?: number; offset?: number }) =>
     ipcRenderer.invoke('cloud:sessions:list', input),
+  cloudSessionsUpdate: (input: unknown) => ipcRenderer.invoke('cloud:sessions:update', input),
+  cloudSessionsDelete: (input: unknown) => ipcRenderer.invoke('cloud:sessions:delete', input),
   cloudMessagesList: (input: { sessionId: string; limit?: number; offset?: number }) =>
     ipcRenderer.invoke('cloud:messages:list', input),
   cloudRunStart: (input: { input: string; sessionId?: string; idempotencyKey: string }) =>

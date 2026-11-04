@@ -151,6 +151,30 @@ export function createRemote(client: CloudClient) {
       return { sessions, hasMore }
     },
 
+    async updateSession(input: {
+      sessionId: string
+      title?: string
+      pinned?: boolean
+    }): Promise<CloudSession> {
+      const body: Record<string, unknown> = {}
+      if (typeof input.title === 'string') body.title = input.title
+      if (typeof input.pinned === 'boolean') body.pinned = input.pinned
+      const raw = await client.request<{ session?: RawSession }>(
+        `/api/sessions/${encodeURIComponent(input.sessionId)}`,
+        { method: 'PATCH', body, timeoutMs: 20_000 }
+      )
+      if (!raw?.session) throw new Error('云端没有返回更新后的会话')
+      return toCloudSession(raw.session)
+    },
+
+    async deleteSession(sessionId: string): Promise<boolean> {
+      const raw = await client.request<{ deleted?: boolean }>(
+        `/api/sessions/${encodeURIComponent(sessionId)}`,
+        { method: 'DELETE', timeoutMs: 30_000 }
+      )
+      return raw?.deleted === true
+    },
+
     async listMessages(input: {
       sessionId: string
       limit?: number

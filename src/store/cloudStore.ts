@@ -56,6 +56,8 @@ interface CloudState {
   sessions: CloudSession[]
   sessionsLoading: boolean
   sessionsError: string | null
+  /** 正在执行条目操作（重命名 / 置顶 / 删除）的会话 id */
+  sessionActionPending: string | null
 
   activeSessionId: string | null
   sessionMeta: CloudSession | null
@@ -81,6 +83,9 @@ interface CloudState {
   connect: () => Promise<void>
   disconnect: () => Promise<void>
   refreshSessions: () => Promise<void>
+  renameSession: (sessionId: string, title: string) => Promise<boolean>
+  togglePinned: (sessionId: string) => Promise<boolean>
+  deleteSession: (sessionId: string) => Promise<boolean>
   openSession: (sessionId: string) => Promise<void>
   newSession: () => void
   setDraft: (text: string) => void
@@ -114,6 +119,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   sessions: [],
   sessionsLoading: false,
   sessionsError: null,
+  sessionActionPending: null,
 
   activeSessionId: null,
   sessionMeta: null,
@@ -214,6 +220,84 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       const meta = result.sessions.find((session) => session.id === active)
       if (meta) set({ sessionMeta: meta })
     }
+  },
+
+  async renameSession(sessionId, title) {
+    const next = title.trim()
+    const current = get().sessions.find((session) => session.id === sessionId)
+    if (!current || !next || next === current.title) return false
+    // 乐观更新：先改本地，失败回滚（等一个 RTT 的话手感很差）
+    set({
+      sessionActionPending: sessionId,
+      sessions: get().sessions.map((session) =>
+        session.id === sessionId ? { ...session, title: next } : session
+      ),
+    })
+    const result = await cloudApi.updateSession({ sessionId, title: next })
+    set({ sessionActionPending: null })
+    if (!result.success) {
+      set({
+        sessions: get().sessions.map((session) =>
+          session.id === sessionId ? { ...session, title: current.title } : session
+        ),
+        sessionsError: result.error ?? 'unknown',
+      })
+      return false
+    }
+    if (result.session) applySessionPatch(set, get, result.session)
+    return true
+  },
+
+  async togglePinned(sessionId) {
+    const current = get().sessions.find((session) => session.id === sessionId)
+    if (!current) return false
+    const pinned = !current.pinned
+    set({
+      sessionActionPending: sessionId,
+      sessions: get().sessions.map((session) =>
+        session.id === sessionId ? { ...session, pinned } : session
+      ),
+    })
+    const result = await cloudApi.updateSession({ sessionId, pinned })
+    set({ sessionActionPending: null })
+    if (!result.success) {
+      set({
+        sessions: get().sessions.map((session) =>
+          session.id === sessionId ? { ...session, pinned: current.pinned } : session
+        ),
+        sessionsError: result.error ?? 'unknown',
+      })
+      return false
+    }
+    if (result.session) applySessionPatch(set, get, result.session)
+    return true
+  },
+
+  async deleteSession(sessionId) {
+    const snapshot = get().sessions
+    set({
+      sessionActionPending: sessionId,
+      sessions: snapshot.filter((session) => session.id !== sessionId),
+    })
+    const result = await cloudApi.deleteSession(sessionId)
+    set({ sessionActionPending: null })
+    if (!result.success || result.deleted === false) {
+      set({ sessions: snapshot, sessionsError: result.error ?? 'unknown' })
+      return false
+    }
+    if (get().activeSessionId === sessionId) {
+      set({
+        activeSessionId: null,
+        sessionMeta: null,
+        parts: [],
+        partsError: null,
+        runId: null,
+        runState: null,
+        runError: null,
+        pending: null,
+      })
+    }
+    return true
   },
 
   async openSession(sessionId) {
@@ -427,4 +511,16 @@ function emptySessionMeta(): CloudSession {
     pinned: false,
     archived: false,
   }
+}
+
+/** 把主进程返回的最新会话行合回列表，并把当前会话的 meta 一起刷新 */
+function applySessionPatch(
+  set: (partial: Partial<CloudState>) => void,
+  get: () => CloudState,
+  session: CloudSession
+): void {
+  set({
+    sessions: get().sessions.map((row) => (row.id === session.id ? session : row)),
+  })
+  if (get().activeSessionId === session.id) set({ sessionMeta: session })
 }

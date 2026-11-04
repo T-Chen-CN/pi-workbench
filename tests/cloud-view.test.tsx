@@ -67,6 +67,11 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     }),
     cloudDisconnect: async () => ({ success: true }),
     cloudSessionsList: async () => ({ success: true, sessions: stub.sessions, hasMore: false }),
+    cloudSessionsUpdate: async (input: { sessionId: string; title?: string; pinned?: boolean }) => ({
+      success: true,
+      session: { ...stub.sessions[0], ...input },
+    }),
+    cloudSessionsDelete: async () => ({ success: true, deleted: true }),
     cloudMessagesList: async () => ({ success: true, parts: stub.parts, hasMore: false }),
     cloudRunStart: stub.startRun,
     cloudRunStatus: async () => ({ success: true, state: 'completed' }),
@@ -298,5 +303,65 @@ describe('CloudWorkspaceView', () => {
         .getState()
         .parts.some((part) => part.type === 'text' && part.text === 'run it')
     ).toBe(true)
+  })
+})
+
+describe('会话条目操作', () => {
+  it('renames a session inline and sends the new title', async () => {
+    installBridge()
+    const update = vi.fn(async (input: { sessionId: string; title?: string }) => ({
+      success: true,
+      session: { ...SESSION, title: input.title ?? SESSION.title },
+    }))
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.cloudSessionsUpdate =
+      update
+
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('Probe session')).toBeTruthy())
+
+    fireEvent.click(screen.getByLabelText(zh.cloudSessionActions))
+    fireEvent.click(screen.getAllByText(zh.cloudRename)[0])
+
+    const input = screen.getByLabelText(zh.cloudRename)
+    fireEvent.change(input, { target: { value: 'Renamed session' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith({ sessionId: SESSION.id, title: 'Renamed session' }))
+    await waitFor(() => expect(screen.getByText('Renamed session')).toBeTruthy())
+  })
+
+  it('asks for confirmation before deleting and warns it cannot be undone', async () => {
+    installBridge()
+    const remove = vi.fn(async () => ({ success: true, deleted: true }))
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.cloudSessionsDelete =
+      remove
+
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('Probe session')).toBeTruthy())
+
+    fireEvent.click(screen.getByLabelText(zh.cloudSessionActions))
+    fireEvent.click(screen.getAllByText(zh.cloudDelete)[0])
+
+    // 确认框里必须写明不可恢复，并且此时还没有发请求
+    expect(screen.getByText(zh.cloudDeleteBody)).toBeTruthy()
+    expect(remove).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByText(zh.cloudDeleteConfirm))
+    await waitFor(() => expect(remove).toHaveBeenCalledWith({ sessionId: SESSION.id }))
+  })
+
+  it('toggles pin from the row menu', async () => {
+    installBridge()
+    const update = vi.fn(async () => ({ success: true, session: { ...SESSION, pinned: true } }))
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.cloudSessionsUpdate =
+      update
+
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('Probe session')).toBeTruthy())
+
+    fireEvent.click(screen.getByLabelText(zh.cloudSessionActions))
+    fireEvent.click(screen.getByText(zh.cloudPin))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith({ sessionId: SESSION.id, pinned: true }))
   })
 })

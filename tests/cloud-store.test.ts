@@ -96,3 +96,103 @@ describe('openSession', () => {
     expect(useCloudStore.getState().parts).toEqual([text('h:1', 'fast')])
   })
 })
+
+describe('session actions', () => {
+  const seed = () => {
+    useCloudStore.setState({
+      sessions: [
+        {
+          id: 's1',
+          title: 'One',
+          preview: '',
+          lastActive: 1,
+          startedAt: 1,
+          messageCount: 0,
+          toolCallCount: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          costUsd: 0,
+          model: 'm',
+          parentSessionId: null,
+          pinned: false,
+          archived: false,
+        },
+        {
+          id: 's2',
+          title: 'Two',
+          preview: '',
+          lastActive: 2,
+          startedAt: 2,
+          messageCount: 0,
+          toolCallCount: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          costUsd: 0,
+          model: 'm',
+          parentSessionId: null,
+          pinned: false,
+          archived: false,
+        },
+      ],
+      sessionActionPending: null,
+      sessionsError: null,
+      activeSessionId: null,
+    })
+  }
+
+  it('renames optimistically and rolls back when the server rejects', async () => {
+    seed()
+    let release: (value: unknown) => void = () => {}
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudSessionsUpdate: () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    }
+
+    const pending = useCloudStore.getState().renameSession('s1', 'New name')
+    // 请求还在飞：本地已经改了（乐观更新）
+    expect(useCloudStore.getState().sessions[0].title).toBe('New name')
+    expect(useCloudStore.getState().sessionActionPending).toBe('s1')
+
+    release({ success: false, error: 'boom' })
+    await expect(pending).resolves.toBe(false)
+    expect(useCloudStore.getState().sessions[0].title).toBe('One')
+    expect(useCloudStore.getState().sessionsError).toBe('boom')
+  })
+
+  it('applies the server row after a successful pin', async () => {
+    seed()
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudSessionsUpdate: async () => ({
+        success: true,
+        session: { ...useCloudStore.getState().sessions[0], pinned: true },
+      }),
+    }
+    await expect(useCloudStore.getState().togglePinned('s1')).resolves.toBe(true)
+    expect(useCloudStore.getState().sessions[0].pinned).toBe(true)
+  })
+
+  it('removes a deleted session and clears it when it was open', async () => {
+    seed()
+    useCloudStore.setState({ activeSessionId: 's1', parts: [text('h:1', 'x')] })
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudSessionsDelete: async () => ({ success: true, deleted: true }),
+    }
+
+    await expect(useCloudStore.getState().deleteSession('s1')).resolves.toBe(true)
+    expect(useCloudStore.getState().sessions.map((session) => session.id)).toEqual(['s2'])
+    expect(useCloudStore.getState().activeSessionId).toBeNull()
+    expect(useCloudStore.getState().parts).toEqual([])
+  })
+
+  it('restores the row when delete fails', async () => {
+    seed()
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudSessionsDelete: async () => ({ success: false, error: 'nope' }),
+    }
+    await expect(useCloudStore.getState().deleteSession('s1')).resolves.toBe(false)
+    expect(useCloudStore.getState().sessions.map((session) => session.id)).toEqual(['s1', 's2'])
+    expect(useCloudStore.getState().sessionsError).toBe('nope')
+  })
+})

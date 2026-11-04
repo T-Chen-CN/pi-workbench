@@ -1,7 +1,19 @@
 /** 云端会话页：左侧会话列表 + 右侧时间线与输入框 */
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Cloud, CloudOff, MessageSquarePlus, RefreshCw, Send, Square } from 'lucide-react'
+import {
+  Cloud,
+  CloudOff,
+  MessageSquarePlus,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
+  RefreshCw,
+  Send,
+  Square,
+  Trash2,
+} from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { isTerminalRun, useCloudStore } from '../store/cloudStore'
 import { distanceFromBottom, pinToBottom, shouldFollow } from '../hooks/chatScroll'
@@ -10,53 +22,186 @@ import { formatCost, firstLine, sessionCostUsd } from '../utils/cloudFormat'
 import { formatTokenCount } from '../utils/chatPanelShared'
 import type { CloudSession } from '../types/cloud'
 import type { AppView } from '../types/navigation'
-import { Button, Caption, DataText, EmptyState, IconButton, Label, Spinner, Textarea } from './ui'
+import {
+  Button,
+  Caption,
+  DataText,
+  EmptyState,
+  IconButton,
+  Input,
+  Label,
+  Modal,
+  PopoverMenu,
+  Spinner,
+  Textarea,
+} from './ui'
 import { CloudSessionMetaLine, CloudTrace } from './CloudTrace'
 
 const SESSION_PREVIEW_CHARS = 90
 
-const SessionRow: React.FC<{ session: CloudSession; selected: boolean; onSelect: () => void }> = ({
-  session,
-  selected,
-  onSelect,
-}) => {
+const SessionRow: React.FC<{
+  session: CloudSession
+  selected: boolean
+  pending: boolean
+  onSelect: () => void
+  onRename: (title: string) => void
+  onTogglePin: () => void
+  onDelete: () => void
+}> = ({ session, selected, pending, onSelect, onRename, onTogglePin, onDelete }) => {
   const { t, language } = useI18nStore()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [draftTitle, setDraftTitle] = useState(session.title)
+  const renameRef = useRef<HTMLInputElement | null>(null)
   const tokens = session.inputTokens + session.outputTokens
+
+  useEffect(() => {
+    if (!editing) return
+    renameRef.current?.focus()
+    renameRef.current?.select()
+  }, [editing])
+
+  const startRename = () => {
+    setDraftTitle(session.title)
+    setEditing(true)
+  }
+
+  const commitRename = () => {
+    if (!editing) return
+    setEditing(false)
+    const next = draftTitle.trim()
+    if (next && next !== session.title) onRename(next)
+  }
+
   return (
-    <button
-      type="button"
-      aria-current={selected || undefined}
-      onClick={onSelect}
-      className={`flex w-full flex-col gap-1 border-b border-rule-hairline px-2.5 py-2 text-left transition-colors ${
+    <div
+      className={`group relative flex items-start gap-1 border-b border-rule-hairline transition-colors ${
         selected ? 'bg-active' : 'hover:bg-hover'
       }`}
     >
-      <span className="flex items-baseline gap-2">
-        <span className="min-w-0 flex-1 truncate type-value text-ink">
-          {session.title || t('untitledSession')}
-        </span>
-        <Caption className="flex-shrink-0 text-ink-subtle">
-          {formatRelativeTime(session.lastActive, language)}
-        </Caption>
-      </span>
-      {session.preview && (
-        <Caption className="truncate text-ink-muted">
-          {firstLine(session.preview, SESSION_PREVIEW_CHARS)}
-        </Caption>
+      {editing ? (
+        <div className="flex min-w-0 flex-1 items-center px-2 py-1.5">
+          <Input
+            ref={renameRef}
+            value={draftTitle}
+            aria-label={t('cloudRename')}
+            onChange={(event) => setDraftTitle(event.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                commitRename()
+              } else if (event.key === 'Escape') {
+                event.preventDefault()
+                setEditing(false)
+              }
+            }}
+          />
+        </div>
+      ) : (
+        <button
+          type="button"
+          aria-current={selected || undefined}
+          onClick={onSelect}
+          className="flex min-w-0 flex-1 flex-col gap-1 px-2.5 py-2 text-left"
+        >
+          <span className="flex items-baseline gap-2">
+            {session.pinned && <Pin size={11} aria-hidden="true" className="text-accent" />}
+            <span className="min-w-0 flex-1 truncate type-value text-ink">
+              {session.title || t('untitledSession')}
+            </span>
+            <Caption className="flex-shrink-0 text-ink-subtle">
+              {formatRelativeTime(session.lastActive, language)}
+            </Caption>
+          </span>
+          {session.preview && (
+            <Caption className="truncate text-ink-muted">
+              {firstLine(session.preview, SESSION_PREVIEW_CHARS)}
+            </Caption>
+          )}
+          <span className="flex items-center gap-2">
+            <Caption className="text-ink-subtle">{`${session.messageCount} ${t('cloudMessagesLabel')}`}</Caption>
+            <Caption className="text-ink-subtle">{`${session.toolCallCount} ${t('cloudToolsLabel')}`}</Caption>
+            {tokens > 0 && (
+              <Caption className="text-ink-subtle">
+                {`${formatTokenCount(tokens)} ${t('cloudTokensLabel')}`}
+              </Caption>
+            )}
+            <Caption className="ml-auto flex-shrink-0 text-ink-muted">
+              {formatCost(sessionCostUsd(session))}
+            </Caption>
+          </span>
+        </button>
       )}
-      <span className="flex items-center gap-2">
-        <Caption className="text-ink-subtle">{`${session.messageCount} ${t('cloudMessagesLabel')}`}</Caption>
-        <Caption className="text-ink-subtle">{`${session.toolCallCount} ${t('cloudToolsLabel')}`}</Caption>
-        {tokens > 0 && (
-          <Caption className="text-ink-subtle">
-            {`${formatTokenCount(tokens)} ${t('cloudTokensLabel')}`}
-          </Caption>
-        )}
-        <Caption className="ml-auto flex-shrink-0 text-ink-muted">
-          {formatCost(sessionCostUsd(session))}
-        </Caption>
-      </span>
-    </button>
+
+      {!editing && (
+        <div className="relative flex items-center pr-1 pt-1">
+          {pending ? (
+            <span className="flex h-6 w-6 items-center justify-center">
+              <Spinner size={11} />
+            </span>
+          ) : (
+            <IconButton
+              icon={MoreHorizontal}
+              label={t('cloudSessionActions')}
+              size="sm"
+              onClick={() => setMenuOpen((open) => !open)}
+              className={`transition-opacity ${
+                menuOpen || selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              }`}
+            />
+          )}
+          <PopoverMenu
+            open={menuOpen}
+            onClose={() => setMenuOpen(false)}
+            label={t('cloudSessionActions')}
+            placement="down"
+            className="min-w-[160px]"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink hover:bg-hover"
+              onClick={() => {
+                setMenuOpen(false)
+                startRename()
+              }}
+            >
+              <Pencil size={13} className="text-ink-muted" />
+              {t('cloudRename')}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink hover:bg-hover"
+              onClick={() => {
+                setMenuOpen(false)
+                onTogglePin()
+              }}
+            >
+              {session.pinned ? (
+                <PinOff size={13} className="text-ink-muted" />
+              ) : (
+                <Pin size={13} className="text-ink-muted" />
+              )}
+              {session.pinned ? t('cloudUnpin') : t('cloudPin')}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-danger hover:bg-hover"
+              onClick={() => {
+                setMenuOpen(false)
+                onDelete()
+              }}
+            >
+              <Trash2 size={13} />
+              {t('cloudDelete')}
+            </button>
+          </PopoverMenu>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -76,6 +221,10 @@ export const CloudSessionView: React.FC<{
   const sessionMeta = useCloudStore((state) => state.sessionMeta)
   const openSession = useCloudStore((state) => state.openSession)
   const newSession = useCloudStore((state) => state.newSession)
+  const renameSession = useCloudStore((state) => state.renameSession)
+  const togglePinned = useCloudStore((state) => state.togglePinned)
+  const deleteSession = useCloudStore((state) => state.deleteSession)
+  const sessionActionPending = useCloudStore((state) => state.sessionActionPending)
   const parts = useCloudStore((state) => state.parts)
   const partsLoading = useCloudStore((state) => state.partsLoading)
   const partsError = useCloudStore((state) => state.partsError)
@@ -87,6 +236,7 @@ export const CloudSessionView: React.FC<{
   const stop = useCloudStore((state) => state.stop)
 
   const [stopping, setStopping] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<CloudSession | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const followRef = useRef(true)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
@@ -189,11 +339,15 @@ export const CloudSessionView: React.FC<{
               key={session.id}
               session={session}
               selected={session.id === activeSessionId}
+              pending={sessionActionPending === session.id}
               onSelect={() => {
                 if (session.id === activeSessionId) return
                 followRef.current = true
                 void openSession(session.id)
               }}
+              onRename={(title) => void renameSession(session.id, title)}
+              onTogglePin={() => void togglePinned(session.id)}
+              onDelete={() => setDeleteTarget(session)}
             />
           ))}
         </div>
@@ -307,6 +461,40 @@ export const CloudSessionView: React.FC<{
           </div>
         </div>
       </section>
+
+      <Modal
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        title={t('cloudDeleteTitle')}
+        size="sm"
+        closeLabel={t('cloudCancel')}
+        footer={
+          <>
+            <Button size="sm" onClick={() => setDeleteTarget(null)}>
+              {t('cloudCancel')}
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              icon={Trash2}
+              onClick={() => {
+                const target = deleteTarget
+                setDeleteTarget(null)
+                if (target) void deleteSession(target.id)
+              }}
+            >
+              {t('cloudDeleteConfirm')}
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2 px-5 py-4">
+          <p className="m-0 type-value text-ink">
+            {deleteTarget?.title || t('untitledSession')}
+          </p>
+          <Caption className="text-ink-muted">{t('cloudDeleteBody')}</Caption>
+        </div>
+      </Modal>
     </div>
   )
 }

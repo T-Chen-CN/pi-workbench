@@ -162,6 +162,40 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   })
 
   handleIpc(
+    'cloud:sessions:update',
+    async (
+      _event,
+      input: { sessionId?: string; title?: string; pinned?: boolean }
+    ) => {
+      const sessionId = String(input?.sessionId ?? '')
+      if (!sessionId) return { success: false, error: '缺少 sessionId' }
+      try {
+        const remote = createRemote(ensureClient())
+        const session = await remote.updateSession({
+          sessionId,
+          title: typeof input?.title === 'string' ? input.title : undefined,
+          pinned: typeof input?.pinned === 'boolean' ? input.pinned : undefined,
+        })
+        return { success: true, session }
+      } catch (error) {
+        return fail(error)
+      }
+    }
+  )
+
+  handleIpc('cloud:sessions:delete', async (_event, input: { sessionId?: string }) => {
+    const sessionId = String(input?.sessionId ?? '')
+    if (!sessionId) return { success: false, error: '缺少 sessionId' }
+    try {
+      const remote = createRemote(ensureClient())
+      const deleted = await remote.deleteSession(sessionId)
+      return { success: true, deleted }
+    } catch (error) {
+      return fail(error)
+    }
+  })
+
+  handleIpc(
     'cloud:messages:list',
     async (_event, input: { sessionId?: string; limit?: number; offset?: number }) => {
       const sessionId = String(input?.sessionId ?? '')

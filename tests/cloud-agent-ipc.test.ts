@@ -146,6 +146,27 @@ vi.mock('electron', () => ({
           has_more: false,
         })
       }
+      if (route === '/api/sessions/run_session' && init?.method === 'PATCH') {
+        return Response.json({
+          object: 'hermes.session',
+          session: {
+            id: 'run_session',
+            title: 'Renamed probe',
+            preview: 'hello',
+            message_count: 2,
+            tool_call_count: 1,
+            input_tokens: 100,
+            output_tokens: 20,
+            last_active: 1793733153.1,
+            started_at: 1793733048.3,
+            model: 'deepseek-flash',
+            pinned: true,
+          },
+        })
+      }
+      if (route === '/api/sessions/run_session' && init?.method === 'DELETE') {
+        return Response.json({ object: 'hermes.session.deleted', id: 'run_session', deleted: true })
+      }
       if (route === '/api/sessions/run_session/messages') {
         return Response.json({
           object: 'list',
@@ -306,5 +327,37 @@ describe('cloud IPC', () => {
       success: false,
       error: '缺少幂等键',
     })
+  })
+})
+
+describe('cloud session actions', () => {
+  it('renames and pins through PATCH, and deletes hard', async () => {
+    const renamed = await call<{ success: boolean; session?: { title: string } }>(
+      'cloud:sessions:update',
+      { sessionId: 'run_session', title: 'Renamed probe' }
+    )
+    expect(renamed.success).toBe(true)
+    expect(renamed.session?.title).toBe('Renamed probe')
+
+    const pinned = await call<{ success: boolean; session?: { pinned: boolean } }>(
+      'cloud:sessions:update',
+      { sessionId: 'run_session', pinned: true }
+    )
+    expect(pinned.success).toBe(true)
+    expect(pinned.session?.pinned).toBe(true)
+    // 请求确实打到 PATCH /api/sessions/{id}
+    expect(mocks.state.requests.some((line) => line === 'PATCH https://api.example.com/api/sessions/run_session')).toBe(true)
+
+    const removed = await call<{ success: boolean; deleted?: boolean }>('cloud:sessions:delete', {
+      sessionId: 'run_session',
+    })
+    expect(removed).toMatchObject({ success: true, deleted: true })
+    expect(mocks.state.requests.some((line) => line === 'DELETE https://api.example.com/api/sessions/run_session')).toBe(true)
+  })
+
+  it('rejects a missing session id', async () => {
+    const result = await call<{ success: boolean; error?: string }>('cloud:sessions:delete', {})
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('sessionId')
   })
 })
