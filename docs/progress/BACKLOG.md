@@ -343,7 +343,38 @@
 - **steer 有窗口期**（实跑确认）：`running` 状态下返回 200 `{accepted:true}`，收尾阶段返回 409 `run_not_accepting_steer`。没被消费的 steer 会挂在终态事件的 `pending_steer` 上（官方注释写明是给客户端重放用），客户端收到就放回输入框。
 - 运行状态里的 `pending_controls` 是**审批 / clarify 提示**，不是 steer —— 两者别混。
 
+### 7.5 原始方案 CLOUD_AGENT v5 欠账清点与收尾（2026-11-05）
+
+清点结论：v5 里还剩 21 项功能 + 4 项 G 系列。这一轮做掉 P1–P6 六项，其余登记为不动。
+
+| ID | 项目 | 状态 |
+| --- | --- | --- |
+| P1 | `unknown`（主人进程丢了）状态 + `resolve-unknown` 收尾 | **已完成**（936969f） |
+| P2 | 未结算账本：对外写 / 系统级 / 不可逆三类动作的事后核对 | **已完成**（f285435） |
+| P3 | 子代理轨道（`delegate_task` 出去的子任务可视化） | **已完成**（4cc642f） |
+| P4 | 任务页（云端 cron：列表 / 现在跑 / 暂停 / 恢复） | **已完成**（a1a5a11） |
+| P5 | 自检面板（健康 / 工具集 / 技能 / 模型） | **已完成**（fe932f7） |
+| P6 | clarify 问答（应用内可答） | **已完成**（05b417a） |
+
+**P6 的服务端改动**（可回滚，一行）：`~/.hermes/profiles/pi-cloud/config.yaml`
+备份为 `config.yaml.bak-clarify-20261105-0330`；`platform_toolsets.api_server` 改成显式白名单
+（原来 14 个工具集全部保留）+ `clarify`，并加 `clarify.timeout: 300`。重启后 `/v1/toolsets`
+复核：`clarify` 由 off 变 ON，其余一个没掉。实测「提问 → 回答 → 轮次继续 → completed」通过。
+
+**这一轮读完源码 / 实测后确认「不做」的**：
+
+- **Kanban**：网关路由表里没有任何 kanban 端点；`web_dist` 里没有 KanbanPage；`toolsets.py` 把
+  kanban 从 `hermes-api-server` 里主动剔除。要做只能拉 `.db` 用 `node:sqlite` 解析，schema 一改就崩。
+- **归档 / 批量删除 / 导出**：见 §7.4（版本守卫后，网关无对应端点）。
+- **任务新建与删除**：新建等于把 prompt 交给调度器（属于对话）；删除不可逆，只在服务器上做。
+- **账本不记文件写入**：`write_file` / `patch` 每轮都命中，噪音太大，而且改动都在 git 里可回滚。
+  只记"出去了就收不回来"的三类。
+- **`browser` 工具集**：开着但 chromium 未安装，调用必失败（要装再说）。
+
+**还没做的（登记，不排期）**：AC-20 surface 隔离自测、G-01 自举 Prompt（需要干净机器）、
+G-03 从文件导入、G-04 引导状态机、G-05 反代是否只支持 Caddy。
+
 ---
 
 **维护者**: Pi Workbench Team
-**最后更新**: 2026-11-04（§7.4 功能补全登记；G-02 完成）
+**最后更新**: 2026-11-05（§7.5 v5 欠账清点：P1–P6 六项落地）
