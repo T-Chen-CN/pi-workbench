@@ -16,6 +16,7 @@ import type {
   CloudMessagesResult,
   CloudRunResult,
   CloudRunStartResult,
+  CloudJob,
   CloudPendingWrite,
   CloudRunStatus,
   CloudSessionsResult,
@@ -119,6 +120,39 @@ export const cloudApi = {
       return { success: false, error: NO_BRIDGE }
     }
     return bridge.cloudSessionsDelete({ sessionId })
+  },
+
+  async listJobs(): Promise<{ success: boolean; error?: string; jobs: CloudJob[] }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudJobsList !== 'function') {
+      return { success: false, error: NO_BRIDGE, jobs: [] }
+    }
+    const result = await bridge.cloudJobsList()
+    return { ...result, jobs: result.jobs ?? [] }
+  },
+
+  async runJob(jobId: string): Promise<{ success: boolean; error?: string }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudJobsRun !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudJobsRun({ jobId })
+  },
+
+  async pauseJob(jobId: string): Promise<{ success: boolean; error?: string }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudJobsPause !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudJobsPause({ jobId })
+  },
+
+  async resumeJob(jobId: string): Promise<{ success: boolean; error?: string }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudJobsResume !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudJobsResume({ jobId })
   },
 
   async listLedger(): Promise<{

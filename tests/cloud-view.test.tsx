@@ -128,6 +128,10 @@ function resetStore() {
     resolvingUnknown: false,
     pendingWrites: [],
     ledgerError: null,
+    jobs: [],
+    jobsLoading: false,
+    jobsError: null,
+    jobActionPending: null,
     pending: null,
     draft: '',
   })
@@ -570,5 +574,58 @@ describe('子代理轨道', () => {
     })
     render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
     expect(await screen.findByText(zh.cloudSubagentHistoryHint)).toBeTruthy()
+  })
+})
+
+describe('任务页', () => {
+  const JOB = {
+    id: 'job_1',
+    name: '每日日志汇总',
+    prompt: '汇总昨天的日志',
+    schedule: '0 9 * * *',
+    scheduleDisplay: '每天 9 点',
+    state: 'scheduled',
+    enabled: true,
+    nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
+  }
+
+  it('lists jobs with schedule and next run, and can pause / run', async () => {
+    installBridge()
+    const pause = vi.fn(async () => ({ success: true }))
+    const run = vi.fn(async () => ({ success: true }))
+    const list = vi.fn(async () => ({ success: true, jobs: [JOB] }))
+    Object.assign((window as unknown as { electronAPI: Record<string, unknown> }).electronAPI, {
+      cloudJobsList: list,
+      cloudJobsPause: pause,
+      cloudJobsRun: run,
+    })
+    useCloudStore.setState({ connection: 'connected', jobs: [JOB], jobsLoading: false })
+
+    render(<CloudWorkspaceView view="cloud-jobs" onNavigate={vi.fn()} />)
+    expect(await screen.findByText('每日日志汇总')).toBeTruthy()
+    expect(screen.getByText('每天 9 点')).toBeTruthy()
+
+    fireEvent.click(screen.getByText(zh.cloudJobPause))
+    await waitFor(() => expect(pause).toHaveBeenCalledWith({ jobId: 'job_1' }))
+
+    fireEvent.click(screen.getByText(zh.cloudJobRunNow))
+    await waitFor(() => expect(run).toHaveBeenCalledWith({ jobId: 'job_1' }))
+  })
+
+  it('shows the empty state with the create-from-conversation hint', async () => {
+    installBridge()
+    Object.assign((window as unknown as { electronAPI: Record<string, unknown> }).electronAPI, {
+      cloudJobsList: async () => ({ success: true, jobs: [] }),
+    })
+    useCloudStore.setState({ connection: 'connected', jobs: [], jobsLoading: false })
+    render(<CloudWorkspaceView view="cloud-jobs" onNavigate={vi.fn()} />)
+    expect(await screen.findByText(zh.cloudJobEmptyHint)).toBeTruthy()
+  })
+
+  it('sends you to the connection page when not connected', async () => {
+    installBridge()
+    useCloudStore.setState({ connection: 'unconfigured' })
+    render(<CloudWorkspaceView view="cloud-jobs" onNavigate={vi.fn()} />)
+    expect(await screen.findByText(zh.cloudJobNeedsConnectionHint)).toBeTruthy()
   })
 })

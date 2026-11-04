@@ -1,6 +1,13 @@
 /** 云端 REST 端点 → 前端模型（只做形状转换，不含业务状态） */
 
-import type { CloudCapabilities, CloudRunStatus, CloudSession, CloudTracePart } from './types.js'
+import type {
+  CloudCapabilities,
+  CloudJob,
+  CloudJobExecution,
+  CloudRunStatus,
+  CloudSession,
+  CloudTracePart,
+} from './types.js'
 import type { CloudClient } from './client.js'
 import { mapMessages, type RawMessage } from './map.js'
 
@@ -52,6 +59,63 @@ function featureFlag(raw: RawCapabilities, key: string): boolean {
     return Boolean((value as { supported?: unknown }).supported)
   }
   return false
+}
+
+interface RawJobExecution {
+  id?: string
+  status?: string
+  claimed_at?: string
+  started_at?: string | null
+  finished_at?: string | null
+  error?: string | null
+}
+
+interface RawJob {
+  id?: string
+  name?: string
+  prompt?: string | null
+  schedule?: string
+  schedule_display?: string
+  state?: string
+  enabled?: boolean
+  next_run_at?: string | null
+  last_run_at?: string | null
+  repeat?: number | null
+  paused_reason?: string | null
+  latest_execution?: RawJobExecution | null
+  live_execution?: RawJobExecution | null
+}
+
+function toJobExecution(raw: RawJobExecution | null | undefined): CloudJobExecution | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  return {
+    id: raw.id ? String(raw.id) : undefined,
+    status: raw.status ? String(raw.status) : undefined,
+    claimedAt: raw.claimed_at ? String(raw.claimed_at) : undefined,
+    startedAt: raw.started_at ? String(raw.started_at) : undefined,
+    finishedAt: raw.finished_at ? String(raw.finished_at) : undefined,
+    error: raw.error ? String(raw.error) : undefined,
+  }
+}
+
+/** 服务端记录 → 渲染层的驼峰形状；缺字段一律当空，不编造 */
+function toJob(raw: RawJob): CloudJob {
+  const id = String(raw?.id ?? '')
+  return {
+    id,
+    name: String(raw?.name ?? id),
+    prompt: String(raw?.prompt ?? ''),
+    schedule: String(raw?.schedule ?? ''),
+    scheduleDisplay: String(raw?.schedule_display ?? raw?.schedule ?? ''),
+    state: String(raw?.state ?? 'scheduled'),
+    enabled: raw?.enabled !== false,
+    nextRunAt: raw?.next_run_at ? String(raw.next_run_at) : undefined,
+    lastRunAt: raw?.last_run_at ? String(raw.last_run_at) : undefined,
+    repeat: raw?.repeat ?? null,
+    pausedReason: raw?.paused_reason ? String(raw.paused_reason) : undefined,
+    latestExecution: toJobExecution(raw?.latest_execution),
+    liveExecution: toJobExecution(raw?.live_execution),
+  }
 }
 
 interface RawRunStatus {
@@ -257,6 +321,39 @@ export function createRemote(client: CloudClient) {
         status: toRunStatus(raw.status ?? 'cancelled'),
         sessionId: raw.session_id ? String(raw.session_id) : null,
       }
+    },
+
+    /**
+     * 定时任务：只有「列 / 立刻跑 / 暂停 / 恢复」四个动作。
+     *
+     * 不做删除（用户明确：任务只能暂停，不能在这里删），也不做新建——
+     * 新建等于写一段 prompt 交给调度器，那属于对话里让 Agent 建。
+     */
+    async listJobs(): Promise<CloudJob[]> {
+      const raw = await client.request<{ jobs?: RawJob[] }>('/api/jobs', { timeoutMs: 20_000 })
+      const rows = Array.isArray(raw?.jobs) ? raw.jobs : []
+      return rows.map(toJob)
+    },
+
+    async runJob(jobId: string): Promise<void> {
+      await client.request<Record<string, unknown>>(
+        `/api/jobs/${encodeURIComponent(jobId)}/run`,
+        { method: 'POST', body: {}, timeoutMs: 20_000 }
+      )
+    },
+
+    async pauseJob(jobId: string): Promise<void> {
+      await client.request<Record<string, unknown>>(
+        `/api/jobs/${encodeURIComponent(jobId)}/pause`,
+        { method: 'POST', body: {}, timeoutMs: 20_000 }
+      )
+    },
+
+    async resumeJob(jobId: string): Promise<void> {
+      await client.request<Record<string, unknown>>(
+        `/api/jobs/${encodeURIComponent(jobId)}/resume`,
+        { method: 'POST', body: {}, timeoutMs: 20_000 }
+      )
     },
 
     async steerRun(runId: string, text: string): Promise<void> {

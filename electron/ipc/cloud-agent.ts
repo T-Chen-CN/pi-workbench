@@ -282,6 +282,49 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   })
 
+  handleIpc('cloud:jobs:list', async () => {
+    try {
+      const remote = createRemote(ensureClient())
+      const jobs = await remote.listJobs()
+      return { success: true as const, jobs }
+    } catch (error) {
+      return fail(error)
+    }
+  })
+
+  handleIpc('cloud:jobs:run', async (_event, input: { jobId?: string }) => {
+    const jobId = String(input?.jobId ?? '')
+    if (!jobId) return { success: false as const, error: '缺少任务 id' }
+    try {
+      await createRemote(ensureClient()).runJob(jobId)
+      return { success: true as const }
+    } catch (error) {
+      return fail(error)
+    }
+  })
+
+  handleIpc('cloud:jobs:pause', async (_event, input: { jobId?: string }) => {
+    const jobId = String(input?.jobId ?? '')
+    if (!jobId) return { success: false as const, error: '缺少任务 id' }
+    try {
+      await createRemote(ensureClient()).pauseJob(jobId)
+      return { success: true as const }
+    } catch (error) {
+      return fail(error)
+    }
+  })
+
+  handleIpc('cloud:jobs:resume', async (_event, input: { jobId?: string }) => {
+    const jobId = String(input?.jobId ?? '')
+    if (!jobId) return { success: false as const, error: '缺少任务 id' }
+    try {
+      await createRemote(ensureClient()).resumeJob(jobId)
+      return { success: true as const }
+    } catch (error) {
+      return fail(error)
+    }
+  })
+
   handleIpc('cloud:ledger:list', () => {
     try {
       return { success: true as const, entries: readLedger() }

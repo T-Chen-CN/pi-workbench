@@ -39,6 +39,36 @@ export type CloudRunStatus =
   | 'unknown'
 
 /** 未结算账本条目：这一轮"出去了就收不回来"的动作 */
+/** 定时任务的最近一次执行（服务端 executions 表的一行） */
+export interface CloudJobExecution {
+  id?: string
+  status?: string
+  claimedAt?: string
+  startedAt?: string
+  finishedAt?: string
+  error?: string
+}
+
+/** 定时任务（`/api/jobs` 的归一化记录，字段按服务端 `_normalize_job_record` 取） */
+export interface CloudJob {
+  id: string
+  name: string
+  prompt: string
+  /** 原始调度表达式（`30m` / `0 9 * * *` / ISO 时间） */
+  schedule: string
+  /** 服务端给的人话版本（`every 30m`） */
+  scheduleDisplay: string
+  /** `scheduled` | `paused` | `completed` | `error`（服务端 `effective_job_state`） */
+  state: string
+  enabled: boolean
+  nextRunAt?: string
+  lastRunAt?: string
+  repeat?: number | null
+  pausedReason?: string
+  latestExecution?: CloudJobExecution
+  liveExecution?: CloudJobExecution
+}
+
 export type CloudWriteClass = 'external' | 'system' | 'irreversible'
 
 export type CloudWriteStatus =

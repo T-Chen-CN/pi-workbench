@@ -16,6 +16,7 @@ import type {
   CloudDashboardState,
   CloudFrame,
   CloudRunStatus,
+  CloudJob,
   CloudPendingWrite,
   CloudSession,
   CloudTracePart,
@@ -84,6 +85,12 @@ interface CloudState {
   /** 未结算账本（全部条目，UI 自己过滤待处理项） */
   pendingWrites: CloudPendingWrite[]
   ledgerError: string | null
+  /** 定时任务（只读列表 + 三个动作，不给新建 / 删除） */
+  jobs: CloudJob[]
+  jobsLoading: boolean
+  jobsError: string | null
+  /** 正在操作的 job id（按钮级 loading） */
+  jobActionPending: string | null
   /** 断流后待补的分隔线（校正帧会整体替换 parts，标记留到替换时插入） */
   pendingDisconnect: string | null
   /** 上一个未成功的发送：重试时复用同一个幂等键，避免后端重复执行 */
@@ -114,6 +121,10 @@ interface CloudState {
   loadLedger: () => Promise<void>
   resolveLedger: (id: string, verdict: 'done' | 'missing' | 'ignored') => Promise<boolean>
   noteLedger: (summary: string) => Promise<boolean>
+  loadJobs: () => Promise<void>
+  runJob: (jobId: string) => Promise<boolean>
+  pauseJob: (jobId: string) => Promise<boolean>
+  resumeJob: (jobId: string) => Promise<boolean>
   stop: () => Promise<void>
   applyFrame: (frame: CloudFrame) => void
   applyStatus: (payload: {
@@ -164,6 +175,10 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   resolvingUnknown: false,
   pendingWrites: [],
   ledgerError: null,
+  jobs: [],
+  jobsLoading: false,
+  jobsError: null,
+  jobActionPending: null,
   pendingDisconnect: null,
   pending: null,
   historyToken: 0,
@@ -520,6 +535,52 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   /**
    * 收尾一轮「主人进程丢了」的 run。两个凭据由主进程现查，渲染层只递 runId。
    */
+  async loadJobs() {
+    set({ jobsLoading: true, jobsError: null })
+    const result = await cloudApi.listJobs()
+    if (!result.success) {
+      set({ jobsLoading: false, jobsError: result.error ?? 'unknown' })
+      return
+    }
+    set({ jobs: result.jobs, jobsLoading: false })
+  },
+
+  async runJob(jobId) {
+    set({ jobActionPending: jobId, jobsError: null })
+    const result = await cloudApi.runJob(jobId)
+    set({ jobActionPending: null })
+    if (!result.success) {
+      set({ jobsError: result.error ?? 'unknown' })
+      return false
+    }
+    await get().loadJobs()
+    return true
+  },
+
+  async pauseJob(jobId) {
+    set({ jobActionPending: jobId, jobsError: null })
+    const result = await cloudApi.pauseJob(jobId)
+    set({ jobActionPending: null })
+    if (!result.success) {
+      set({ jobsError: result.error ?? 'unknown' })
+      return false
+    }
+    await get().loadJobs()
+    return true
+  },
+
+  async resumeJob(jobId) {
+    set({ jobActionPending: jobId, jobsError: null })
+    const result = await cloudApi.resumeJob(jobId)
+    set({ jobActionPending: null })
+    if (!result.success) {
+      set({ jobsError: result.error ?? 'unknown' })
+      return false
+    }
+    await get().loadJobs()
+    return true
+  },
+
   async loadLedger() {
     const result = await cloudApi.listLedger()
     if (!result.success) {

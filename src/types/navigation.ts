@@ -5,16 +5,20 @@ export type AppView =
   | 'workspace'
   | 'cloud-session'
   | 'cloud-console'
+  | 'cloud-jobs'
   | 'cloud-connection'
 
 /** 云端外壳的三个页签 */
 export type CloudView = Extract<
   AppView,
-  'cloud-session' | 'cloud-console' | 'cloud-connection'
+  'cloud-session' | 'cloud-console' | 'cloud-jobs' | 'cloud-connection'
 >
 
 export function isCloudView(view: AppView): view is CloudView {
   return (
-    view === 'cloud-session' || view === 'cloud-console' || view === 'cloud-connection'
+    view === 'cloud-session' ||
+    view === 'cloud-console' ||
+    view === 'cloud-jobs' ||
+    view === 'cloud-connection'
   )
 }

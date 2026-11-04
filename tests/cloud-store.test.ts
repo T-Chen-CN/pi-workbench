@@ -439,3 +439,27 @@ describe('账本', () => {
     expect(useCloudStore.getState().ledgerError).toBe('读不出来')
   })
 })
+
+describe('任务', () => {
+  it('refreshes the list after each action and surfaces a failure', async () => {
+    const jobs = [{ id: 'job_1', name: 'A', state: 'scheduled', enabled: true }]
+    let paused = false
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudJobsList: async () => ({ success: true, jobs: paused ? [{ ...jobs[0], state: 'paused' }] : jobs }),
+      cloudJobsPause: async () => {
+        paused = true
+        return { success: true }
+      },
+      cloudJobsRun: async () => ({ success: false, error: '任务不存在' }),
+    }
+    await useCloudStore.getState().loadJobs()
+    expect(useCloudStore.getState().jobs).toHaveLength(1)
+
+    await expect(useCloudStore.getState().pauseJob('job_1')).resolves.toBe(true)
+    expect(useCloudStore.getState().jobs[0].state).toBe('paused')
+    expect(useCloudStore.getState().jobActionPending).toBeNull()
+
+    await expect(useCloudStore.getState().runJob('job_9')).resolves.toBe(false)
+    expect(useCloudStore.getState().jobsError).toBe('任务不存在')
+  })
+})

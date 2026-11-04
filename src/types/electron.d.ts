@@ -4,6 +4,7 @@ import type {
   CloudConfigSetResult,
   CloudConnectResult,
   CloudConnectionState,
+  CloudJob,
   CloudFrame,
   CloudMessagesResult,
   CloudPendingWrite,
@@ -696,6 +697,10 @@ export interface ElectronAPI {
     deleted?: boolean
     error?: string
   }>
+  cloudJobsList: () => Promise<{ success: boolean; error?: string; jobs?: CloudJob[] }>
+  cloudJobsRun: (input: { jobId: string }) => Promise<{ success: boolean; error?: string }>
+  cloudJobsPause: (input: { jobId: string }) => Promise<{ success: boolean; error?: string }>
+  cloudJobsResume: (input: { jobId: string }) => Promise<{ success: boolean; error?: string }>
   cloudLedgerList: () => Promise<{
     success: boolean
     error?: string

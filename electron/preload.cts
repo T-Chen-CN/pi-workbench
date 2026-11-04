@@ -487,6 +487,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('cloud:sessions:list', input),
   cloudSessionsUpdate: (input: unknown) => ipcRenderer.invoke('cloud:sessions:update', input),
   cloudSessionsDelete: (input: unknown) => ipcRenderer.invoke('cloud:sessions:delete', input),
+  cloudJobsList: () => ipcRenderer.invoke('cloud:jobs:list'),
+  cloudJobsRun: (input: { jobId: string }) => ipcRenderer.invoke('cloud:jobs:run', input),
+  cloudJobsPause: (input: { jobId: string }) => ipcRenderer.invoke('cloud:jobs:pause', input),
+  cloudJobsResume: (input: { jobId: string }) => ipcRenderer.invoke('cloud:jobs:resume', input),
   cloudLedgerList: () => ipcRenderer.invoke('cloud:ledger:list'),
   cloudLedgerResolve: (input: { id: string; verdict: 'done' | 'missing' | 'ignored' }) =>
     ipcRenderer.invoke('cloud:ledger:resolve', input),

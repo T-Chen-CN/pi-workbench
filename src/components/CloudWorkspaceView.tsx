@@ -1,5 +1,5 @@
 /**
- * 云端 Agent 外壳：会话 / 控制台 / 连接 三个常驻页签。
+ * 云端 Agent 外壳：会话 / 控制台 / 任务 / 连接 四个常驻页签。
  *
  * 控制台是原生视图（盖在内容区上），所以它需要的东西（加载指示、重载、错误）
  * 都放在页签栏里 —— 那里不在原生层覆盖范围内。
@@ -15,14 +15,16 @@ import type { AppView, CloudView } from '../types/navigation'
 import { Caption, IconButton, Spinner } from './ui'
 import { CloudSessionView } from './CloudSessionView'
 import { CloudConsoleView } from './CloudConsoleView'
+import { CloudJobsView } from './CloudJobsView'
 import { CloudConnectionView } from './CloudConnectionView'
 
 const TABS: Array<{
   view: CloudView
-  labelKey: 'cloudTabSession' | 'cloudTabConsole' | 'cloudTabConnection'
+  labelKey: 'cloudTabSession' | 'cloudTabConsole' | 'cloudTabJobs' | 'cloudTabConnection'
 }> = [
   { view: 'cloud-session', labelKey: 'cloudTabSession' },
   { view: 'cloud-console', labelKey: 'cloudTabConsole' },
+  { view: 'cloud-jobs', labelKey: 'cloudTabJobs' },
   { view: 'cloud-connection', labelKey: 'cloudTabConnection' },
 ]
 
@@ -132,6 +134,7 @@ export const CloudWorkspaceView: React.FC<{
       <div className="relative min-h-0 flex-1">
         <CloudSessionView active={view === 'cloud-session'} onNavigate={onNavigate} />
         <CloudConsoleView active={view === 'cloud-console'} onNavigate={onNavigate} />
+        <CloudJobsView active={view === 'cloud-jobs'} onNavigate={onNavigate} />
         <CloudConnectionView active={view === 'cloud-connection'} />
       </div>
     </div>

@@ -87,6 +87,26 @@ vi.mock('electron', () => ({
           session_id: 'run_session',
         })
       }
+      if (route === '/api/jobs') {
+        return Response.json({
+          jobs: [
+            {
+              id: 'job_1',
+              name: '每日日志汇总',
+              prompt: '汇总昨天的日志',
+              schedule: '0 9 * * *',
+              schedule_display: '0 9 * * *',
+              state: 'scheduled',
+              enabled: true,
+              next_run_at: '2026-05-01T01:00:00Z',
+              repeat: null,
+            },
+          ],
+        })
+      }
+      if (/^\/api\/jobs\/job_1\/(run|pause|resume)$/.test(route) && init?.method === 'POST') {
+        return Response.json({ job: { id: 'job_1' } })
+      }
       if (route.endsWith('/resolve-unknown') && init?.method === 'POST') {
         return Response.json({ run_id: 'run_test', status: 'cancelled', object: 'hermes.run.receipt' })
       }
@@ -541,5 +561,42 @@ describe('cloud ledger', () => {
       summary: '   ',
     })
     expect(result.success).toBe(false)
+  })
+})
+
+describe('cloud jobs', () => {
+  beforeAll(async () => {
+    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+  })
+
+  it('maps the server record into camelCase and keeps the display schedule', async () => {
+    const result = await call<{ success: boolean; error?: string; jobs: Array<Record<string, unknown>> }>(
+      'cloud:jobs:list',
+      {}
+    )
+    expect(result.success).toBe(true)
+    expect(result.jobs[0]).toMatchObject({
+      id: 'job_1',
+      name: '每日日志汇总',
+      scheduleDisplay: '0 9 * * *',
+      state: 'scheduled',
+      enabled: true,
+      nextRunAt: '2026-05-01T01:00:00Z',
+    })
+  })
+
+  it('runs, pauses and resumes by id', async () => {
+    for (const channel of ['cloud:jobs:run', 'cloud:jobs:pause', 'cloud:jobs:resume']) {
+      const result = await call<{ success: boolean }>(channel, { jobId: 'job_1' })
+      expect(result.success).toBe(true)
+    }
+  })
+
+  it('refuses a missing job id without hitting the network', async () => {
+    const before = mocks.state.requests.length
+    const result = await call<{ success: boolean; error?: string }>('cloud:jobs:run', {})
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('任务 id')
+    expect(mocks.state.requests.length).toBe(before)
   })
 })
