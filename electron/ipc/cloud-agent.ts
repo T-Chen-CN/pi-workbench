@@ -282,6 +282,26 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   })
 
+  handleIpc(
+    'cloud:clarify:respond',
+    async (_event, input: { requestId?: string; generation?: number; answer?: string }) => {
+      const requestId = String(input?.requestId ?? '')
+      const answer = String(input?.answer ?? '')
+      if (!requestId) return { success: false as const, error: '缺少提问 id' }
+      if (!answer.trim()) return { success: false as const, error: '回答不能为空' }
+      const generation = Number(input?.generation)
+      if (!Number.isInteger(generation)) return { success: false as const, error: '缺少轮次代号' }
+      const runId = runner?.activeRunId ?? null
+      if (!runId) return { success: false as const, error: '当前没有正在执行的一轮' }
+      try {
+        await createRemote(ensureClient()).clarifyRun({ runId, requestId, generation, answer })
+        return { success: true as const }
+      } catch (error) {
+        return fail(error)
+      }
+    }
+  )
+
   handleIpc('cloud:diagnostics', async () => {
     try {
       const diagnostics = await createRemote(ensureClient()).diagnostics()

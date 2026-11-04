@@ -136,6 +136,9 @@ vi.mock('electron', () => ({
       if (/^\/api\/jobs\/job_1\/(run|pause|resume)$/.test(route) && init?.method === 'POST') {
         return Response.json({ job: { id: 'job_1' } })
       }
+      if (route.endsWith('/clarify') && init?.method === 'POST') {
+        return Response.json({ status: 'resolved', prompt_id: 'cl_1' })
+      }
       if (route.endsWith('/resolve-unknown') && init?.method === 'POST') {
         return Response.json({ run_id: 'run_test', status: 'cancelled', object: 'hermes.run.receipt' })
       }
@@ -659,5 +662,52 @@ describe('cloud diagnostics', () => {
     expect(d.skills.ok).toBe(false)
     expect(d.skills.error).toBeTruthy()
     expect(d.models.items).toEqual(['pi-cloud'])
+  })
+})
+
+describe('cloud clarify', () => {
+  beforeAll(async () => {
+    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+  })
+
+  it('sends exactly the three fields the backend accepts', async () => {
+    await call('cloud:run:start', { input: 'ask me', idempotencyKey: 'key-clarify' })
+    const before = mocks.state.bodies.length
+    const result = await call<{ success: boolean; error?: string }>('cloud:clarify:respond', {
+      requestId: 'cl_1',
+      generation: 4,
+      answer: 'production',
+    })
+    expect(result.error).toBeUndefined()
+    expect(result.success).toBe(true)
+    const body = JSON.parse(mocks.state.bodies[before])
+    expect(Object.keys(body).sort()).toEqual(['answer', 'execution_generation', 'request_id'])
+    expect(body).toEqual({ request_id: 'cl_1', execution_generation: 4, answer: 'production' })
+  })
+
+  it('refuses an empty answer, a missing id or a missing generation', async () => {
+    for (const input of [
+      { requestId: 'cl_1', generation: 4, answer: '   ' },
+      { generation: 4, answer: 'x' },
+      { requestId: 'cl_1', answer: 'x' },
+    ]) {
+      const result = await call<{ success: boolean; error?: string }>(
+        'cloud:clarify:respond',
+        input
+      )
+      expect(result.success).toBe(false)
+    }
+  })
+
+  it('refuses when there is no active run to answer into', async () => {
+    await call('cloud:run:stop', { runId: 'run_test' })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const result = await call<{ success: boolean; error?: string }>('cloud:clarify:respond', {
+      requestId: 'cl_1',
+      generation: 4,
+      answer: 'x',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('正在执行')
   })
 })

@@ -60,3 +60,23 @@ describe('resolve-unknown', () => {
     })
   })
 })
+
+describe('clarify 应答', () => {
+  it('posts exactly the three fields the backend accepts', async () => {
+    mocks.fetch.mockResolvedValueOnce(Response.json({ status: 'resolved', prompt_id: 'cl_1' }))
+    await remote().clarifyRun({
+      runId: 'run_9',
+      requestId: 'cl_1',
+      generation: 3,
+      answer: 'production',
+    })
+    const [url, init] = mocks.fetch.mock.calls[mocks.fetch.mock.calls.length - 1]
+    expect(url).toBe('https://api.example.com/v1/runs/run_9/clarify')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({
+      request_id: 'cl_1',
+      execution_generation: 3,
+      answer: 'production',
+    })
+  })
+})

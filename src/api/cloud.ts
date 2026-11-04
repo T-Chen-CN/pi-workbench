@@ -123,6 +123,18 @@ export const cloudApi = {
     return bridge.cloudSessionsDelete({ sessionId })
   },
 
+  async respondClarify(input: {
+    requestId: string
+    generation: number
+    answer: string
+  }): Promise<{ success: boolean; error?: string }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudClarifyRespond !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudClarifyRespond(input)
+  },
+
   async diagnostics(): Promise<{
     success: boolean
     error?: string

@@ -349,6 +349,30 @@ export class RunMapper {
     return part
   }
 
+  /**
+   * clarify 提问片段的唯一构造点：SSE 的 `clarify.request` 和
+   * `GET /v1/runs/{id}` 的 `pending_controls` 两条路都走这里，按 prompt_id 去重。
+   */
+  ensureClarify(payload: Record<string, unknown>): CloudFrame[] {
+    const promptId = textOf(payload.prompt_id) || textOf(payload.request_id)
+    if (!promptId) return []
+    if (this.parts.some((part) => part.type === 'clarify' && part.promptId === promptId)) return []
+    const rawChoices = Array.isArray(payload.choices) ? payload.choices : []
+    const generation = numOf(payload.execution_generation) ?? numOf(payload.generation) ?? 1
+    const part: CloudTracePart = {
+      type: 'clarify',
+      id: `c:${promptId}`,
+      promptId,
+      generation,
+      question: flatten(textOf(payload.question), 500) || '（没有给出问题）',
+      choices: rawChoices.map((choice) => String(choice ?? '')).filter(Boolean),
+      multiSelect: payload.multi_select === true,
+      timeoutSeconds: numOf(payload.timeout_s),
+    }
+    this.parts.push(part)
+    return [{ kind: 'part', part }]
+  }
+
   private findSubagent(key: string): number {
     return this.parts.findIndex((part) => part.type === 'subagent' && part.id === key)
   }
@@ -517,6 +541,26 @@ export class RunMapper {
           error: textOf(payload.error) || '本轮执行失败',
         })
         this.takePendingSteer(frames)
+        break
+      }
+      case 'clarify.request': {
+        for (const emitted of this.ensureClarify(payload)) frames.push(emitted)
+        break
+      }
+      case 'clarify.settled': {
+        // 结算可能来自我们自己的回答，也可能是超时 / 别的客户端答的
+        const promptId = textOf(payload.prompt_id)
+        const index = this.parts.findIndex(
+          (part) => part.type === 'clarify' && part.promptId === promptId
+        )
+        if (index >= 0) {
+          const existing = this.parts[index] as Extract<CloudTracePart, { type: 'clarify' }>
+          if (!existing.settled) {
+            const next = { ...existing, settled: true }
+            this.parts[index] = next
+            frames.push({ kind: 'part', part: next })
+          }
+        }
         break
       }
       case 'subagent.start':

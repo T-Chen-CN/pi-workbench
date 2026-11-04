@@ -92,6 +92,9 @@ interface CloudState {
   jobsError: string | null
   /** 正在操作的 job id（按钮级 loading） */
   jobActionPending: string | null
+  /** 正在提交回答的提问 id */
+  clarifyPending: string | null
+  clarifyError: string | null
   /** 自检结果（连接页折叠区块，按需拉） */
   diagnostics: CloudDiagnostics | null
   diagnosticsLoading: boolean
@@ -126,6 +129,7 @@ interface CloudState {
   loadLedger: () => Promise<void>
   resolveLedger: (id: string, verdict: 'done' | 'missing' | 'ignored') => Promise<boolean>
   noteLedger: (summary: string) => Promise<boolean>
+  respondClarify: (promptId: string, answer: string) => Promise<boolean>
   loadDiagnostics: () => Promise<void>
   loadJobs: () => Promise<void>
   runJob: (jobId: string) => Promise<boolean>
@@ -185,6 +189,8 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   jobsLoading: false,
   jobsError: null,
   jobActionPending: null,
+  clarifyPending: null,
+  clarifyError: null,
   diagnostics: null,
   diagnosticsLoading: false,
   diagnosticsError: null,
@@ -544,6 +550,40 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   /**
    * 收尾一轮「主人进程丢了」的 run。两个凭据由主进程现查，渲染层只递 runId。
    */
+  async respondClarify(promptId, answer) {
+    const text = answer.trim()
+    if (!text) return false
+    const part = get().parts.find(
+      (item): item is Extract<CloudTracePart, { type: 'clarify' }> =>
+        item.type === 'clarify' && item.promptId === promptId
+    )
+    if (!part || part.settled) return false
+
+    // 乐观写入：卡片立刻显示答案，失败再撤回
+    const patch = (next: Partial<typeof part>) =>
+      set((state) => ({
+        parts: state.parts.map((item) =>
+          item.type === 'clarify' && item.promptId === promptId ? { ...item, ...next } : item
+        ),
+      }))
+    set({ clarifyPending: promptId, clarifyError: null })
+    patch({ answer: text })
+
+    const result = await cloudApi.respondClarify({
+      requestId: promptId,
+      generation: part.generation,
+      answer: text,
+    })
+    set({ clarifyPending: null })
+    if (!result.success) {
+      patch({ answer: undefined })
+      set({ clarifyError: result.error ?? 'unknown' })
+      return false
+    }
+    patch({ settled: true })
+    return true
+  },
+
   async loadDiagnostics() {
     set({ diagnosticsLoading: true, diagnosticsError: null })
     const result = await cloudApi.diagnostics()

@@ -132,6 +132,8 @@ function resetStore() {
     jobsLoading: false,
     jobsError: null,
     jobActionPending: null,
+    clarifyPending: null,
+    clarifyError: null,
     diagnostics: null,
     diagnosticsLoading: false,
     diagnosticsError: null,
@@ -673,5 +675,88 @@ describe('自检面板', () => {
     // 缺依赖的工具集要单独标出来，不能和"关掉了"混在一起
     expect(screen.getByText(zh.cloudDiagnosticsNotConfigured)).toBeTruthy()
     expect(screen.getByText('pi-cloud')).toBeTruthy()
+  })
+})
+
+describe('clarify 提问卡', () => {
+  const CLARIFY = {
+    type: 'clarify' as const,
+    id: 'c:cl_1',
+    promptId: 'cl_1',
+    generation: 4,
+    question: '要发布到哪个环境？',
+    choices: ['staging', 'production'],
+  }
+
+  it('offers the choices and sends the picked one', async () => {
+    installBridge()
+    const respond = vi.fn(async () => ({ success: true }))
+    Object.assign((window as unknown as { electronAPI: Record<string, unknown> }).electronAPI, {
+      cloudClarifyRespond: respond,
+    })
+    useCloudStore.setState({ runState: 'running', parts: [CLARIFY] })
+
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+    expect(await screen.findByText('要发布到哪个环境？')).toBeTruthy()
+    fireEvent.click(screen.getByText('production'))
+    await waitFor(() =>
+      expect(respond).toHaveBeenCalledWith({
+        requestId: 'cl_1',
+        generation: 4,
+        answer: 'production',
+      })
+    )
+    // 已答状态：答案显示出来，选项消失
+    await waitFor(() => expect(screen.queryByText('staging')).toBeNull())
+    expect(screen.getByText('production')).toBeTruthy()
+  })
+
+  it('takes a free-text answer when there are no choices', async () => {
+    installBridge()
+    const respond = vi.fn(async () => ({ success: true }))
+    Object.assign((window as unknown as { electronAPI: Record<string, unknown> }).electronAPI, {
+      cloudClarifyRespond: respond,
+    })
+    useCloudStore.setState({
+      runState: 'running',
+      parts: [{ ...CLARIFY, choices: [], question: '要写在哪？' }],
+    })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+
+    const input = await screen.findByLabelText(zh.cloudClarifyAnswer)
+    fireEvent.change(input, { target: { value: '/tmp/out.md' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() =>
+      expect(respond).toHaveBeenCalledWith({
+        requestId: 'cl_1',
+        generation: 4,
+        answer: '/tmp/out.md',
+      })
+    )
+  })
+
+  it('keeps the card open and shows why when the answer is rejected', async () => {
+    installBridge()
+    Object.assign((window as unknown as { electronAPI: Record<string, unknown> }).electronAPI, {
+      cloudClarifyRespond: async () => ({ success: false, error: '提问已失效' }),
+    })
+    useCloudStore.setState({ runState: 'running', parts: [CLARIFY] })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+
+    fireEvent.click(await screen.findByText('staging'))
+    expect(await screen.findByText('提问已失效')).toBeTruthy()
+    // 答案撤回，选项还在
+    expect(screen.getByText('production')).toBeTruthy()
+  })
+
+  it('does not pretend we answered a prompt settled elsewhere', async () => {
+    installBridge()
+    useCloudStore.setState({
+      runState: 'running',
+      parts: [{ ...CLARIFY, settled: true }],
+    })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+    expect(await screen.findByText(zh.cloudClarifySettledElsewhere)).toBeTruthy()
+    expect(screen.queryByText('staging')).toBeNull()
   })
 })

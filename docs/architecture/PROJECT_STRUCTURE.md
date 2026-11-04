@@ -155,6 +155,7 @@ pi-workbench/
 │   │   ├── CloudLedgerDrawer.tsx  # 未结算账本抽屉（做了 / 没做 / 不管）
 │   │   ├── CloudJobsView.tsx      # 定时任务页（列表 / 现在跑 / 暂停 / 恢复）
 │   │   ├── CloudDiagnosticsPanel.tsx # 自检折叠块（健康 / 工具集 / 技能 / 模型）
+│   │   ├── CloudClarifyCard.tsx   # clarify 提问卡（选项 + 自由回答）
 │   │   ├── CloudToolCard.tsx     # 云端工具执行卡
 │   │   ├── ui.tsx                # Button / Input / Modal 等基础组件
 │   │   └── patterns.tsx          # Card / Stat / ListRow 等内容模式
@@ -350,6 +351,7 @@ ChatPanel.handleSubmit
 | `cloud:sessions:list` / `messages:list` | invoke | 云端会话列表与历史消息（主进程直接映射成时间线片段） |
 | `cloud:sessions:update` / `sessions:delete` | invoke | 会话条目操作（PATCH 白名单字段 / 硬删除，不可恢复） |
 | `cloud:run:start` / `run:stop` / `run:status` / `run:steer` | invoke | 云端轮次：POST `/v1/runs`（带幂等键）、停止、状态轮询、运行中插话 |
+| `cloud:clarify:respond` | invoke | 回答 clarify 提问（body 严格 `{request_id, execution_generation, answer}`） |
 | `cloud:diagnostics` | invoke | 自检：`/health/detailed` + `/v1/{toolsets,skills,models}` 四块独立成败 |
 | `cloud:jobs:list` / `jobs:run` / `jobs:pause` / `jobs:resume` | invoke | 定时任务：只读列表 + 三个动作（新建走对话、删除不提供） |
 | `cloud:ledger:list` / `ledger:resolve` / `ledger:note` | invoke | 未结算账本：列条目、人工三选一（做了 / 没做 / 不管）、手工补记 |

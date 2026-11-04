@@ -698,6 +698,11 @@ export interface ElectronAPI {
     deleted?: boolean
     error?: string
   }>
+  cloudClarifyRespond: (input: {
+    requestId: string
+    generation: number
+    answer: string
+  }) => Promise<{ success: boolean; error?: string }>
   cloudDiagnostics: () => Promise<{
     success: boolean
     error?: string

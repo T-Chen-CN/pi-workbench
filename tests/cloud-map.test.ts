@@ -402,3 +402,60 @@ describe('子代理轨道', () => {
     )
   })
 })
+
+describe('clarify', () => {
+  const sse = (payload: Record<string, unknown>, id = 1) => ({
+    id,
+    event: null,
+    data: JSON.stringify({ timestamp: 1, ...payload }),
+  })
+
+  it('turns a clarify.request into an answerable part', () => {
+    const mapper = new RunMapper('run_1')
+    const frames = mapper.handle(
+      sse({
+        event: 'clarify.request',
+        kind: 'clarify',
+        prompt_id: 'cl_1',
+        execution_generation: 4,
+        question: '要发布到哪个环境？',
+        choices: ['staging', 'production'],
+        multi_select: false,
+        timeout_s: 300,
+      })
+    )
+    const part = (frames[0] as { kind: 'part'; part: CloudTracePart }).part
+    expect(part).toMatchObject({
+      type: 'clarify',
+      promptId: 'cl_1',
+      generation: 4,
+      question: '要发布到哪个环境？',
+      choices: ['staging', 'production'],
+      timeoutSeconds: 300,
+    })
+  })
+
+  it('dedupes the prompt when it also arrives from the status poll', () => {
+    const mapper = new RunMapper('run_1')
+    mapper.handle(sse({ event: 'clarify.request', prompt_id: 'cl_1', question: 'Q', choices: [] }))
+    expect(
+      mapper.ensureClarify({ kind: 'clarify', prompt_id: 'cl_1', question: 'Q', choices: [] })
+    ).toEqual([])
+    // 第一次开会补出卡片
+    expect(
+      mapper.ensureClarify({ kind: 'clarify', prompt_id: 'cl_2', question: 'Q2', choices: [] })[0]
+    ).toMatchObject({ kind: 'part' })
+  })
+
+  it('marks the prompt settled without inventing an answer', () => {
+    const mapper = new RunMapper('run_1')
+    mapper.handle(sse({ event: 'clarify.request', prompt_id: 'cl_1', question: 'Q', choices: [] }))
+    const frames = mapper.handle(sse({ event: 'clarify.settled', prompt_id: 'cl_1' }, 2))
+    const part = (frames[0] as { kind: 'part'; part: CloudTracePart }).part as Extract<
+      CloudTracePart,
+      { type: 'clarify' }
+    >
+    expect(part.settled).toBe(true)
+    expect(part.answer).toBeUndefined()
+  })
+})

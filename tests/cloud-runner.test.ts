@@ -10,7 +10,7 @@ vi.mock('electron', () => ({
   },
 }))
 import type { CloudClient } from '../electron/cloud/client'
-import { CloudRunner } from '../electron/cloud/runner'
+import { CloudRunner, CONTROL_POLL_MS } from '../electron/cloud/runner'
 import type { CloudFrame } from '../electron/cloud/types'
 
 function sseStream(chunks: string[]): Response {
@@ -127,4 +127,64 @@ describe('CloudRunner 断流续订', () => {
     const error = frames.find((item) => item.kind === 'error')
     expect(error && 'error' in error ? error.error : '').toContain('事件流多次中断')
   }, 15_000)
+})
+
+describe('clarify 兜底轮询', () => {
+  it('synthesises the prompt from pending_controls when the stream never carried it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const frames: CloudFrame[] = []
+    const client: CloudClient = {
+      baseUrl: 'https://api.example.com',
+      rawBaseUrl: 'https://api.example.com',
+      apiKey: 'key',
+      request: async <T,>(path: string): Promise<T> => {
+        if (path === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
+        if (path === '/api/sessions/s-1/messages') {
+          return { data: [], session_id: 's-1' } as T
+        }
+        // 流里没推 clarify.request，但状态里挂着这条提问
+        return {
+          status: 'running',
+          session_id: 's-1',
+          pending_controls: [
+            {
+              kind: 'clarify',
+              prompt_id: 'cl_9',
+              execution_generation: 2,
+              question: '要继续吗？',
+              choices: ['继续', '停'],
+              timeout_s: 300,
+            },
+          ],
+        } as T
+      },
+      openStream: async () => {
+        // 一直开着但不推任何事件
+        const body = new ReadableStream<Uint8Array>({ start() {} })
+        return new Response(body, { headers: { 'content-type': 'text/event-stream' } })
+      },
+    }
+    const runner = new CloudRunner({ emit: (frame) => frames.push(frame) }, client)
+    await runner.start({ input: 'hi', sessionId: 's-1', idempotencyKey: 'k-clarify' })
+
+    await vi.advanceTimersByTimeAsync(CONTROL_POLL_MS + 50)
+    const clarify = frames.find(
+      (frame) => frame.kind === 'part' && frame.part.type === 'clarify'
+    ) as { kind: 'part'; part: Extract<CloudFrame, { kind: 'part' }>['part'] } | undefined
+    expect(clarify?.part).toMatchObject({
+      type: 'clarify',
+      promptId: 'cl_9',
+      generation: 2,
+      question: '要继续吗？',
+      choices: ['继续', '停'],
+    })
+
+    // 第二轮轮询不会重复推同一张卡
+    const before = frames.filter((frame) => frame.kind === 'part').length
+    await vi.advanceTimersByTimeAsync(CONTROL_POLL_MS + 50)
+    expect(frames.filter((frame) => frame.kind === 'part').length).toBe(before)
+
+    runner.dispose()
+    vi.useRealTimers()
+  })
 })

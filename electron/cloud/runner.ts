@@ -16,6 +16,14 @@ const STOP_FALLBACK_MS = 15_000
 /** 断流后最多重订阅几次（后端支持 Last-Event-ID 续传） */
 const MAX_STREAM_RETRIES = 3
 const RETRY_BASE_DELAY_MS = 500
+/**
+ * 轮询状态的间隔。
+ *
+ * clarify / approval 本来会从 SSE 推过来，但流可能已经断了（重连三次失败后我们只是
+ * 不再跟随）。这时只有 `GET /v1/runs/{id}` 的 `pending_controls` 能告诉我们
+ * "它在等人回答" —— 15 秒一次，代价可以忽略。
+ */
+export const CONTROL_POLL_MS = 15_000
 
 export interface CloudRunnerDeps {
   emit: (frame: CloudFrame) => void
@@ -112,6 +120,11 @@ export class CloudRunner {
 
     if (sessionId) this.lastSessionId = sessionId
     let terminal = false
+    const controlPoll = setInterval(() => {
+      if (terminal || controller.signal.aborted) return
+      void this.pollControls(runId, mapper)
+    }, CONTROL_POLL_MS)
+    controlPoll.unref?.()
     // 已经收到的最后一个事件序号：断流重订阅时带回去，避免重复或漏事件
     let lastSeq = -1
 
@@ -155,10 +168,24 @@ export class CloudRunner {
         await delay(RETRY_BASE_DELAY_MS * 2 ** attempt)
       }
     } finally {
+      clearInterval(controlPoll)
       if (this.stream?.runId === runId) this.stream = null
     }
 
     await this.reconcile(runId, sessionId, terminal)
+  }
+
+  /** 只补「还没见过的提问」：已有的 prompt_id 会被 mapper 去重掉 */
+  private async pollControls(runId: string, mapper: RunMapper): Promise<void> {
+    try {
+      const snapshot = await this.remote.runStatus(runId)
+      for (const control of snapshot.pendingControls ?? []) {
+        if (String(control?.kind ?? '') !== 'clarify') continue
+        for (const emitted of mapper.ensureClarify(control)) this.deps.emit(emitted)
+      }
+    } catch (error) {
+      this.deps.log?.('[Cloud] control poll failed', error)
+    }
   }
 
   /**

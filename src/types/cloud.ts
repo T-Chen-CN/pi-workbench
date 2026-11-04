@@ -191,6 +191,22 @@ export type CloudTracePart =
       undelivered?: boolean
     }
   | {
+      type: 'clarify'
+      id: string
+      promptId: string
+      /** 应答必须带上，否则后端 stale_generation */
+      generation: number
+      question: string
+      /** 空数组表示纯自由回答 */
+      choices: string[]
+      multiSelect?: boolean
+      timeoutSeconds?: number
+      /** 已提交的答案（乐观写入，失败会撤回） */
+      answer?: string
+      /** 后端已结算：可能是我们答的，也可能是超时或被别的端答了 */
+      settled?: boolean
+    }
+  | {
       type: 'subagent'
       id: string
       goal: string

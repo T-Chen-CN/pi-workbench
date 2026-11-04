@@ -177,6 +177,7 @@ function toJob(raw: RawJob): CloudJob {
 }
 
 interface RawRunStatus {
+  pending_controls?: Array<Record<string, unknown>>
   run_id?: string
   status?: string
   /** 丢失 owner epoch 时用来确认收尾的凭据 */
@@ -185,7 +186,6 @@ interface RawRunStatus {
   session_id?: string
   error?: string
   output?: string
-  pending_controls?: unknown
 }
 
 interface RawAcceptedRun {
@@ -250,6 +250,8 @@ export interface RunStatusSnapshot {
   /** 只有 `unknown` 才有；确认收尾时原样回传 */
   admissionId?: string
   executionGeneration?: number
+  /** 卡在这一轮上的提问（approval / clarify）；流断了也能靠它补出卡片 */
+  pendingControls?: Array<Record<string, unknown>>
 }
 
 export function createRemote(client: CloudClient) {
@@ -427,6 +429,7 @@ export function createRemote(client: CloudClient) {
         admissionId: raw.admission_id ? String(raw.admission_id) : undefined,
         executionGeneration:
           typeof raw.execution_generation === 'number' ? raw.execution_generation : undefined,
+        pendingControls: Array.isArray(raw.pending_controls) ? raw.pending_controls : undefined,
       }
     },
 
@@ -486,6 +489,30 @@ export function createRemote(client: CloudClient) {
       await client.request<Record<string, unknown>>(
         `/api/jobs/${encodeURIComponent(jobId)}/resume`,
         { method: 'POST', body: {}, timeoutMs: 20_000 }
+      )
+    },
+
+    /**
+     * 回答 clarify 提问。body **严格等于** `{request_id, execution_generation, answer}`
+     * （多一个字段后端就 invalid_params；generation 不对就 stale_generation）。
+     */
+    async clarifyRun(input: {
+      runId: string
+      requestId: string
+      generation: number
+      answer: string
+    }): Promise<void> {
+      await client.request<Record<string, unknown>>(
+        `/v1/runs/${encodeURIComponent(input.runId)}/clarify`,
+        {
+          method: 'POST',
+          body: {
+            request_id: input.requestId,
+            execution_generation: input.generation,
+            answer: input.answer,
+          },
+          timeoutMs: 30_000,
+        }
       )
     },
 
