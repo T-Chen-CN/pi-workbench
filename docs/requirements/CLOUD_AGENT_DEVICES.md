@@ -692,7 +692,7 @@ curl -s -o /dev/null -w '%{http_code}
 | `author` 覆盖 | 上游日志出现 `pi-workbench/<deviceId>`（本地值只进审计） |
 | 撤销后 | `401 device_revoked` |
 
-**G1 判据（待人工点一遍）**：在连接页用管理密钥登记这台设备 → 12 项全功能回归（聊天 / 工具卡 / 审批 / 插话 / 跨重启 attach / 会话管理 / 任务页 / 自检 / 图片 / 停止 / 会话切换 / 取消）全部正常；**且**停插件时 UI 说「网关不可用」、只停 Hermes 时说「Hermes 异常」。
+**G1 判据（逐条手点清单：见 [AGENT-TESTING §云端单入口](../guides/AGENT-TESTING.md#-云端单入口g1验收--逐条手点)）**：在连接页用管理密钥登记这台设备 → 12 项全功能回归（聊天 / 工具卡 / 审批 / 插话 / 跨重启 attach / 会话管理 / 任务页 / 自检 / 图片 / 停止 / 会话切换 / 取消）全部正常；**且**停插件时 UI 说「网关不可用」、只停 Hermes 时说「Hermes 异常」。
 
 **回滚**：`connection.json` 的 `gatewayUrl` 改回 `https://api.tchen-xiaoxiao.com` + 用回 `apiKey`（一步，1 分钟）。注销设备不会自动回落直连——代码里刻意不保留第二套客户端（C-2）。
 

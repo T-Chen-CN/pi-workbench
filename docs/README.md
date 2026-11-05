@@ -37,7 +37,7 @@
 ### 🔧 开发指南
 - **[构建和打包](./guides/BUILD_AND_PACKAGE.md)** — 构建、打包、发布与自动更新
 - **[对外文案](./guides/PUBLIC_COPY.md)** — 仓库门面（About / Topics）、Release 说明模板与 README 结构、截图槽位
-- **[Agent 测试清单](./guides/AGENT-TESTING.md)** — Agent 功能手动验收步骤
+- **[Agent 测试清单](./guides/AGENT-TESTING.md)** — Agent 功能手动验收步骤；含 **云端单入口（G1）验收** 逐条手点清单（对话 / 工具 / 审批 / 插话 / 停止 / 跨重启接回 / 图片 / 会话与任务页 / 两种失败语义 / 注销再登记 / 审计对账）
 - **[Agent 过程轨迹测试方案](./guides/AGENT_TRACE_TESTING.md)** — thinking / 工具步骤的自动化与手动验收
 
 ### 🧭 Agent 开发约束（从 AGENTS.md 拆出）
