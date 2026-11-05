@@ -29,6 +29,7 @@
 - **[顶层 Agent（跨工作区编排）](./requirements/TOP_LEVEL_AGENT.md)** — 草案：首页常驻顶层会话、派发子会话、委派授权、headless 工作区、任务状态机与验收场景
 - **[顶层 Agent 简版需求](./requirements/TOP_LEVEL_AGENT_BRIEF.md)** — 同上，去掉术语与实现细节，只说「它要做什么 / 不做什么 / 权限规矩」
 - **[云端 Agent 方案 v5](./requirements/CLOUD_AGENT.md)** — 以后端 Hermes 为基础的云端常驻 Agent（对标 Dots / Grok Bot / Muse）：50 条能力 ID 覆盖表（v5 删 1 条）、自研 4 条、通道（API Server 主 / dashboard 配置面 / ACP 迁移路径）、域名 + TLS 反代部署、整机权限与软限制口径、最小化 profile、安全边界 S-01~S-15、AC-01~AC-22、四探针 D1–D2、双轨工程序 A–H（v5：两页独立前端、不做预算熔断）
+- **[云端 Agent 多设备身份与反向派活方案（草案）](./requirements/CLOUD_AGENT_DEVICES.md)** — 多台本地程序连同一个云端 Agent：设备身份（平台层 + 模型层）、`pi-hub` 控制面前置、云端派活「只发请求、能力只由本地授予」、S-02 改口径、D0–D4 分期与 14 条验收
 - **[云端 Agent 审批实现方案（C-05）](./requirements/CLOUD_AGENT_APPROVAL.md)** — 审批卡片 / 应答通道 / 断流补卡 / 审计 JSONL + **原生 `approvals.mode` 三档切换**（不自造档位预设）；含 2026-11-06 实机实测事实与两次服务端前置
 - **[云端自举 Prompt（草稿）](./requirements/hermes-bootstrap-prompt.md)** — 交给已部署的 Hermes 自己完成域名 / 反代 / 凭证并交付一个文件；**未验证**，见 [BACKLOG §7.3](./progress/BACKLOG.md)
 
@@ -73,6 +74,7 @@
 | 规划 / 实现跨工作区顶层 Agent | [requirements/TOP_LEVEL_AGENT_BRIEF.md](./requirements/TOP_LEVEL_AGENT_BRIEF.md)（先看简版）→ [TOP_LEVEL_AGENT.md](./requirements/TOP_LEVEL_AGENT.md) |
 | 做云端 Agent（常驻自主 Agent） | [requirements/CLOUD_AGENT.md](./requirements/CLOUD_AGENT.md) + [ADR-004](./decisions/ADR-004-cloud-agent-backend.md) + [ADR-005](./decisions/ADR-005-cloud-agent-control-plane.md) + [ADR-006](./decisions/ADR-006-cloud-agent-api-control-plane.md) + [ADR-007](./decisions/ADR-007-cloud-agent-full-host-access.md) |
 | 改云端审批 / 权限档位 | [requirements/CLOUD_AGENT_APPROVAL.md](./requirements/CLOUD_AGENT_APPROVAL.md) |
+| 做多设备身份 / 云端派活本地 | [requirements/CLOUD_AGENT_DEVICES.md](./requirements/CLOUD_AGENT_DEVICES.md)（草案，未开工） |
 | 改面板拆出 / 托盘行为 | [agent/panels-and-windows.md](./agent/panels-and-windows.md) |
 | 查看思考与工具轨迹方案 | [AGENT_TRACE.md](./architecture/AGENT_TRACE.md) |
 | 查某个架构决定的理由 | [decisions/](./decisions/) |
