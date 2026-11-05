@@ -481,6 +481,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cloudConfigGet: () => ipcRenderer.invoke('cloud:config:get'),
   cloudConfigSet: (input: { baseUrl: string; apiKey?: string }) =>
     ipcRenderer.invoke('cloud:config:set', input),
+  cloudHandoffPick: () => ipcRenderer.invoke('cloud:handoff:pick'),
+  cloudHandoffApply: (input: { applyNonce: string }) =>
+    ipcRenderer.invoke('cloud:handoff:apply', input),
+  cloudHandoffCopy: (input: { field: 'password' }) =>
+    ipcRenderer.invoke('cloud:handoff:copy', input),
   cloudConnect: () => ipcRenderer.invoke('cloud:connect'),
   cloudDisconnect: () => ipcRenderer.invoke('cloud:disconnect'),
   cloudSessionsList: (input: { limit?: number; offset?: number }) =>

@@ -15,6 +15,7 @@ import type {
   CloudDashboardBounds,
   CloudDashboardState,
   CloudFrame,
+  CloudHandoffPreview,
   CloudRunStatus,
   CloudDiagnostics,
   CloudJob,
@@ -108,9 +109,17 @@ interface CloudState {
 
   draft: string
   dashboard: CloudDashboardState
+  /** 导入预览（脱敏）：非空时连接页弹预览框 */
+  handoffPreview: CloudHandoffPreview | null
+  handoffBusy: 'pick' | 'apply' | null
+  handoffError: string | null
 
   hydrate: () => Promise<void>
   saveConfig: (input: { baseUrl: string; apiKey?: string; dashboardToken?: string }) => Promise<boolean>
+  pickHandoff: () => Promise<boolean>
+  applyHandoff: () => Promise<boolean>
+  copyHandoffSecret: () => Promise<boolean>
+  clearHandoffPreview: () => void
   connect: () => Promise<void>
   disconnect: () => Promise<void>
   refreshSessions: () => Promise<void>
@@ -200,6 +209,9 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
 
   draft: '',
   dashboard: EMPTY_DASHBOARD,
+  handoffPreview: null,
+  handoffBusy: null,
+  handoffError: null,
 
   async hydrate() {
     const bridgeAvailable = hasCloudBridge()
@@ -231,6 +243,51 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     if (result.config) set({ config: result.config })
     await get().connect()
     return true
+  },
+
+  /**
+   * 选文件 → 主进程解析 → 只把脱敏预览带回来。
+   *
+   * 取消选择不算失败（返回 false 但不写 error）。
+   */
+  async pickHandoff() {
+    set({ handoffBusy: 'pick', handoffError: null })
+    const result = await cloudApi.pickHandoff()
+    if (!result.success) {
+      set({ handoffBusy: null, handoffError: result.code ?? result.error ?? 'unknown' })
+      return false
+    }
+    if (result.canceled || !result.preview) {
+      set({ handoffBusy: null })
+      return false
+    }
+    set({ handoffBusy: null, handoffPreview: result.preview })
+    return true
+  },
+
+  /** 应用预览：只传 nonce，写盘与「作废旧连接」都在主进程完成 */
+  async applyHandoff() {
+    const preview = get().handoffPreview
+    if (!preview) return false
+    set({ handoffBusy: 'apply', handoffError: null })
+    const result = await cloudApi.applyHandoff(preview.applyNonce)
+    if (!result.success) {
+      set({ handoffBusy: null, handoffError: result.error ?? 'unknown' })
+      return false
+    }
+    if (result.config) set({ config: result.config })
+    set({ handoffBusy: null, handoffPreview: null })
+    await get().connect()
+    return true
+  },
+
+  async copyHandoffSecret() {
+    const result = await cloudApi.copyHandoffSecret('password')
+    return result.success
+  },
+
+  clearHandoffPreview() {
+    set({ handoffPreview: null, handoffError: null, handoffBusy: null })
   },
 
   async connect() {

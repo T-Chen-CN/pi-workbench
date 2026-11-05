@@ -244,9 +244,10 @@ export function parseHandoff(raw: string): HandoffParseResult {
 }
 
 /** 脱敏预览：唯一允许离开主进程的形状 */
-export function toPreview(data: HandoffData): CloudHandoffSummary {
+export function toPreview(data: HandoffData, fileName = ''): CloudHandoffSummary {
   return {
     version: data.version,
+    fileName,
     baseUrl: data.baseUrl,
     dashboardUrl: data.dashboardUrl,
     keyMask: maskSecret(data.apiKey),

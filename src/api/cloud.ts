@@ -11,6 +11,8 @@ import type {
   CloudConfigGetResult,
   CloudConfigSetResult,
   CloudConnectResult,
+  CloudHandoffApplyResult,
+  CloudHandoffPickResult,
   CloudDashboardBounds,
   CloudFrame,
   CloudMessagesResult,
@@ -30,6 +32,8 @@ export type {
   CloudConfigGetResult,
   CloudConfigSetResult,
   CloudConnectResult,
+  CloudHandoffApplyResult,
+  CloudHandoffPickResult,
   CloudDashboardBounds,
   CloudFrame,
   CloudMessagesResult,
@@ -58,6 +62,8 @@ export const UNCONFIGURED_CONNECTION: CloudConnectionInfo = {
   dashboardUrl: FALLBACK_DASHBOARD_URL,
   hasToken: false,
   hasDashboardToken: false,
+  dashboardUser: '',
+  hasDashboardPassword: false,
 }
 
 export const cloudApi = {
@@ -75,6 +81,33 @@ export const cloudApi = {
       return { success: false, error: NO_BRIDGE }
     }
     return bridge.cloudConfigSet(input)
+  },
+
+  /** 选交接文件并解析：只回脱敏预览，明文留在主进程 */
+  async pickHandoff(): Promise<CloudHandoffPickResult> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudHandoffPick !== 'function') {
+      return { success: false, canceled: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudHandoffPick()
+  },
+
+  /** 应用上一次 pick 的结果：只传一次性 nonce */
+  async applyHandoff(applyNonce: string): Promise<CloudHandoffApplyResult> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudHandoffApply !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudHandoffApply({ applyNonce })
+  },
+
+  /** 把保存的控制台口令写进剪贴板（明文不回渲染层） */
+  async copyHandoffSecret(field: 'password'): Promise<{ success: boolean; error?: string }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudHandoffCopy !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudHandoffCopy({ field })
   },
 
   async connect(): Promise<CloudConnectResult> {

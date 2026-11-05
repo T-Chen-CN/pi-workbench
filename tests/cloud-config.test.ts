@@ -103,6 +103,8 @@ describe('read/write connection', () => {
       dashboardUrl: 'https://dash.example.com',
       hasToken: true,
       hasDashboardToken: false,
+      dashboardUser: '',
+      hasDashboardPassword: false,
     })
     expect(publicView).not.toHaveProperty('apiKey')
   })
@@ -131,6 +133,8 @@ describe('控制台会话令牌', () => {
       dashboardUrl: 'https://dash.example.com',
       hasToken: true,
       hasDashboardToken: true,
+      dashboardUser: '',
+      hasDashboardPassword: false,
     })
     expect(JSON.stringify(config.publicCloudConfig())).not.toContain('dash-token')
   })
@@ -146,5 +150,75 @@ describe('控制台会话令牌', () => {
     config.clearCloudToken()
     expect(config.readCloudConfig().hasDashboardToken).toBe(false)
     expect(config.readCloudConfig().baseUrl).toBe('https://api.example.com')
+  })
+})
+
+describe('控制台账号与导入记录', () => {
+  it('stores the password encrypted and only exposes the flag', () => {
+    config.writeCloudConfig({
+      baseUrl: 'https://api.example.com',
+      dashboardUser: 'admin',
+      dashboardPassword: 'p@ss=word',
+    })
+    const read = config.readCloudConfig()
+    expect(read.dashboardUser).toBe('admin')
+    expect(read.dashboardPassword).toBe('p@ss=word')
+    expect(read.hasDashboardPassword).toBe(true)
+
+    const raw = fs.readFileSync(config.cloudConfigFile(), 'utf-8')
+    expect(raw).not.toContain('p@ss=word')
+    expect(JSON.stringify(config.publicCloudConfig())).not.toContain('p@ss=word')
+    expect(config.publicCloudConfig().dashboardUser).toBe('admin')
+  })
+
+  it('honours an explicit dashboard url from the handoff file', () => {
+    const saved = config.writeCloudConfig({
+      baseUrl: 'https://api.example.com',
+      dashboardUrl: 'https://console.elsewhere.test',
+    })
+    expect(saved.dashboardUrl).toBe('https://console.elsewhere.test')
+    expect(config.readCloudConfig().dashboardUrl).toBe('https://console.elsewhere.test')
+  })
+
+  it('records where the import came from', () => {
+    config.writeCloudConfig({
+      baseUrl: 'https://api.example.com',
+      handoffImportedAt: 1_800_000_000_000,
+      handoffProfile: 'pi-cloud',
+    })
+    expect(config.readCloudConfig().handoffImportedAt).toBe(1_800_000_000_000)
+    expect(config.readCloudConfig().handoffProfile).toBe('pi-cloud')
+  })
+
+  it('keeps the account but drops every secret on disconnect', () => {
+    config.writeCloudConfig({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'secret-key',
+      dashboardToken: 'dash-token',
+      dashboardUser: 'admin',
+      dashboardPassword: 'p@ss=word',
+      handoffProfile: 'pi-cloud',
+    })
+    config.clearCloudToken()
+    const read = config.readCloudConfig()
+    expect(read.hasToken).toBe(false)
+    expect(read.hasDashboardToken).toBe(false)
+    expect(read.hasDashboardPassword).toBe(false)
+    expect(read.dashboardUser).toBe('admin')
+    expect(read.handoffProfile).toBe('pi-cloud')
+  })
+
+  it('reads legacy files without the new fields', () => {
+    fs.writeFileSync(
+      config.cloudConfigFile(),
+      JSON.stringify({ baseUrl: 'https://api.example.com', apiKey: 'plain-legacy-key' }),
+      'utf-8'
+    )
+    const read = config.readCloudConfig()
+    expect(read.apiKey).toBe('plain-legacy-key')
+    expect(read.dashboardUser).toBe('')
+    expect(read.hasDashboardPassword).toBe(false)
+    expect(read.handoffImportedAt).toBeNull()
+    expect(read.handoffProfile).toBe('')
   })
 })

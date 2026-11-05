@@ -1,6 +1,9 @@
 /** 云端 Agent 的 IPC：配置、会话、run 生命周期、程序内控制台 */
 
-import type { BrowserWindow } from 'electron'
+import { randomUUID } from 'crypto'
+import * as fs from 'fs'
+import * as path from 'path'
+import { clipboard, dialog, type BrowserWindow } from 'electron'
 import { handleIpc } from './register.js'
 import {
   normalizeBaseUrl,
@@ -9,6 +12,12 @@ import {
   readCloudConfig,
   writeCloudConfig
 } from '../cloud/config.js'
+import {
+  HANDOFF_MAX_BYTES,
+  parseHandoff,
+  pendingPatch,
+  toPreview
+} from '../cloud/handoff.js'
 import { CloudApiError, cloudErrorMessage, createCloudClient, type CloudClient } from '../cloud/client.js'
 import { CloudRunner } from '../cloud/runner.js'
 import { CloudDashboard } from '../cloud/dashboard.js'
@@ -27,7 +36,9 @@ import {
 import { createRemote, toRunStatus } from '../cloud/remote.js'
 import type {
   CloudCapabilities,
+  CloudConfigPatch,
   CloudConnectionState,
+  CloudHandoffParseCode,
   CloudPendingWrite
 } from '../cloud/types.js'
 
@@ -53,6 +64,21 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   let runner: CloudRunner | null = null
   let capabilities: CloudCapabilities | null = null
   let hookedWindow: BrowserWindow | null = null
+
+  /**
+   * 待应用的交接文件：明文补丁只在内存里活 60 秒，或被一次 apply 消费。
+   * 渲染层只拿 nonce，不拿明文。
+   */
+  let pendingHandoff: { nonce: string; patch: CloudConfigPatch; timer: NodeJS.Timeout } | null =
+    null
+  const HANDOFF_TTL_MS = 60_000
+  const HANDOFF_EXTENSIONS = ['txt', 'handoff', 'env', 'conf']
+
+  function clearPendingHandoff(): void {
+    if (!pendingHandoff) return
+    clearTimeout(pendingHandoff.timer)
+    pendingHandoff = null
+  }
 
   const send = (channel: string, payload: unknown): void => {
     const win = deps.getMainWindow()
@@ -211,6 +237,100 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       success: true,
       config: publicCloudConfig(saved)
     }
+  })
+
+  /**
+   * 选一个交接文件 → 只读解析 → 回脱敏预览。
+   * 明文密钥留在主进程的 pendingHandoff 里，`apply` 只回传 nonce。
+   */
+  handleIpc('cloud:handoff:pick', async () => {
+    const win = deps.getMainWindow()
+    const options = {
+      title: '选择 Hermes 交接文件',
+      properties: ['openFile'] as Array<'openFile'>,
+      filters: [{ name: 'hermes-handoff', extensions: HANDOFF_EXTENSIONS }]
+    }
+    let filePath = ''
+    try {
+      const picked = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      if (picked.canceled || picked.filePaths.length === 0) {
+        return { success: true, canceled: true }
+      }
+      filePath = picked.filePaths[0]
+    } catch {
+      return { success: false, canceled: true, error: '无法打开文件选择框' }
+    }
+
+    let text = ''
+    try {
+      const stats = await fs.promises.stat(filePath)
+      if (stats.size > HANDOFF_MAX_BYTES) {
+        return { success: false, canceled: false, code: 'too_large' as CloudHandoffParseCode }
+      }
+      text = await fs.promises.readFile(filePath, 'utf8')
+    } catch {
+      return { success: false, canceled: false, code: 'read_failed' as CloudHandoffParseCode }
+    }
+
+    const parsed = parseHandoff(text)
+    if (!parsed.ok) {
+      // 只回原因码：文件内容（含明文密钥）绝不出主进程
+      return { success: false, canceled: false, code: parsed.code }
+    }
+
+    clearPendingHandoff()
+    const nonce = randomUUID()
+    const timer = setTimeout(() => {
+      pendingHandoff = null
+    }, HANDOFF_TTL_MS)
+    // 不因一个待应用的预览把进程留住
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+    pendingHandoff = { nonce, patch: pendingPatch(parsed.data), timer }
+
+    logger?.info('[Cloud] handoff picked', parsed.data.version)
+    return {
+      success: true,
+      canceled: false,
+      preview: {
+        ...toPreview(parsed.data, path.basename(filePath)),
+        willOverwrite: readCloudConfig().hasToken,
+        applyNonce: nonce
+      }
+    }
+  })
+
+  handleIpc('cloud:handoff:apply', (_event, input: { applyNonce?: string }) => {
+    const nonce = String(input?.applyNonce ?? '')
+    if (!pendingHandoff || !nonce || pendingHandoff.nonce !== nonce) {
+      return { success: false, error: '预览已过期，请重新选择交接文件' }
+    }
+    const patch = pendingHandoff.patch
+    // 一次性：无论写盘成败都作废，避免拿着同一份预览反复覆盖
+    clearPendingHandoff()
+    try {
+      const saved = writeCloudConfig({ ...patch, handoffImportedAt: Date.now() })
+      // 地址或密钥变了，旧连接作废（与 cloud:config:set 同一套语义）
+      client = null
+      clientKey = ''
+      runner?.dispose()
+      runner = null
+      capabilities = null
+      logger?.info('[Cloud] handoff imported', saved.handoffProfile || 'unknown')
+      return { success: true, config: publicCloudConfig(saved) }
+    } catch (error) {
+      return fail(error)
+    }
+  })
+
+  handleIpc('cloud:handoff:copy', (_event, input: { field?: string }) => {
+    const field = String(input?.field ?? '')
+    if (field !== 'password') return { success: false, error: '不支持复制这个字段' }
+    const password = readCloudConfig().dashboardPassword
+    if (!password) return { success: false, error: '没有保存控制台口令' }
+    clipboard.writeText(password)
+    return { success: true }
   })
 
   handleIpc('cloud:connect', async () => {
@@ -608,6 +728,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
 
   return {
     dispose: () => {
+      clearPendingHandoff()
       runner?.dispose()
       dashboard.destroy()
     }

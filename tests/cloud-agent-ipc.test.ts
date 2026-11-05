@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => {
     sent: [] as Array<{ channel: string; payload: unknown }>,
     requests: [] as string[],
     bodies: [] as string[],
+    /** 下一次 dialog.showOpenDialog 返回的文件（空 = 用户取消） */
+    dialogFiles: [] as string[],
+    clipboard: [] as string[],
   }
   const window = {
     webContents: {
@@ -52,6 +55,17 @@ vi.mock('electron', () => ({
   },
   safeStorage: mocks.safeStorage,
   shell: { openExternal: async () => {} },
+  dialog: {
+    showOpenDialog: async () =>
+      mocks.state.dialogFiles.length === 0
+        ? { canceled: true, filePaths: [] as string[] }
+        : { canceled: false, filePaths: mocks.state.dialogFiles },
+  },
+  clipboard: {
+    writeText: (text: string) => {
+      mocks.state.clipboard.push(text)
+    },
+  },
   WebContentsView: class {
     webContents = {
       setWindowOpenHandler: () => {},
@@ -718,5 +732,165 @@ describe('cloud clarify', () => {
     })
     expect(result.success).toBe(false)
     expect(result.error).toContain('正在执行')
+  })
+})
+
+describe('cloud handoff import', () => {
+  const API_KEY = 'abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+  const PASSWORD = 'p@ss=word'
+
+  function writeHandoff(body?: string): string {
+    const file = path.join(mocks.state.appDir, `handoff-${Date.now()}.txt`)
+    fs.writeFileSync(
+      file,
+      body ??
+        [
+          '# hermes-handoff v1.1',
+          'PROFILE=pi-cloud',
+          'API_BASE_URL=https://api.example.com',
+          `API_KEY=${API_KEY}`,
+          'DASHBOARD_URL=https://dash.example.com',
+          'DASHBOARD_USER=admin',
+          `DASHBOARD_PASSWORD=${PASSWORD}`,
+          'DASHBOARD_SESSION_TOKEN=dash-session-token',
+          'AUTH_MODE=basic',
+          'HERMES_VERSION=0.22.6',
+          '# ---- 校验结果 ----',
+          'dns_ok=true',
+          'capabilities_http=200',
+          'dashboard_http=200',
+          'sse_ok=true',
+          '',
+        ].join('\n'),
+      'utf-8'
+    )
+    return file
+  }
+
+  function connectionFile(): string {
+    return path.join(mocks.state.appDir, 'data', 'cloud-agent', 'connection.json')
+  }
+
+  it('parses the file and returns a masked preview only', async () => {
+    mocks.state.dialogFiles = [writeHandoff()]
+    const result = await call<{
+      success: boolean
+      canceled: boolean
+      preview?: {
+        fileName: string
+        keyMask: string
+        baseUrl: string
+        dashboardUrl: string
+        dashboardUser: string
+        hasDashboardPassword: boolean
+        hasDashboardToken: boolean
+        version: string
+        willOverwrite: boolean
+        applyNonce: string
+      }
+    }>('cloud:handoff:pick')
+
+    expect(result.success).toBe(true)
+    expect(result.canceled).toBe(false)
+    const preview = result.preview!
+    expect(preview.baseUrl).toBe('https://api.example.com')
+    expect(preview.dashboardUrl).toBe('https://dash.example.com')
+    expect(preview.dashboardUser).toBe('admin')
+    expect(preview.hasDashboardPassword).toBe(true)
+    expect(preview.hasDashboardToken).toBe(true)
+    expect(preview.version).toBe('v1.1')
+    expect(preview.keyMask).toBe('abc****ABCD')
+    expect(preview.fileName.endsWith('.txt')).toBe(true)
+    // 已有连接：要先确认覆盖
+    expect(preview.willOverwrite).toBe(true)
+    expect(preview.applyNonce).toBeTruthy()
+    // 明文一个都不许出现在返回值里
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain(API_KEY)
+    expect(serialized).not.toContain(PASSWORD)
+    expect(serialized).not.toContain('dash-session-token')
+  })
+
+  it('treats a canceled dialog as a no-op', async () => {
+    mocks.state.dialogFiles = []
+    const result = await call<{ success: boolean; canceled: boolean; preview?: unknown }>(
+      'cloud:handoff:pick'
+    )
+    expect(result).toMatchObject({ success: true, canceled: true })
+    expect(result.preview).toBeUndefined()
+  })
+
+  it('reports a readable code for a file that is not a handoff', async () => {
+    mocks.state.dialogFiles = [writeHandoff('hello, not a handoff file\n')]
+    const result = await call<{ success: boolean; canceled: boolean; code?: string }>(
+      'cloud:handoff:pick'
+    )
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('not_handoff')
+  })
+
+  it('refuses an unknown nonce and reuses no stale preview', async () => {
+    const result = await call<{ success: boolean; error?: string }>('cloud:handoff:apply', {
+      applyNonce: 'not-a-real-nonce',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('过期')
+  })
+
+  it('applies the preview, encrypts both secrets and spends the nonce', async () => {
+    mocks.state.dialogFiles = [writeHandoff()]
+    const picked = await call<{ preview: { applyNonce: string } }>('cloud:handoff:pick')
+
+    const applied = await call<{
+      success: boolean
+      config?: { dashboardUser: string; hasDashboardPassword: boolean; hasToken: boolean }
+    }>('cloud:handoff:apply', { applyNonce: picked.preview.applyNonce })
+
+    expect(applied.success).toBe(true)
+    expect(applied.config).toMatchObject({
+      hasToken: true,
+      dashboardUser: 'admin',
+      hasDashboardPassword: true,
+    })
+    expect(JSON.stringify(applied)).not.toContain(API_KEY)
+    expect(JSON.stringify(applied)).not.toContain(PASSWORD)
+
+    const raw = fs.readFileSync(connectionFile(), 'utf-8')
+    expect(raw).not.toContain(API_KEY)
+    expect(raw).not.toContain(PASSWORD)
+    expect(raw).toContain('enc:')
+    expect(raw).toContain('pi-cloud')
+
+    // 一次性：同一 nonce 不能再用
+    const again = await call<{ success: boolean }>('cloud:handoff:apply', {
+      applyNonce: picked.preview.applyNonce,
+    })
+    expect(again.success).toBe(false)
+  })
+
+  it('copies the console password without returning it', async () => {
+    mocks.state.clipboard.length = 0
+    const result = await call<{ success: boolean; [key: string]: unknown }>('cloud:handoff:copy', {
+      field: 'password',
+    })
+    expect(result).toEqual({ success: true })
+    expect(mocks.state.clipboard).toEqual([PASSWORD])
+  })
+
+  it('refuses to copy anything but the password', async () => {
+    const result = await call<{ success: boolean; error?: string }>('cloud:handoff:copy', {
+      field: 'apiKey',
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('drops the password on disconnect and then refuses to copy it', async () => {
+    await call('cloud:disconnect')
+    mocks.state.clipboard.length = 0
+    const result = await call<{ success: boolean; error?: string }>('cloud:handoff:copy', {
+      field: 'password',
+    })
+    expect(result.success).toBe(false)
+    expect(mocks.state.clipboard).toEqual([])
   })
 })

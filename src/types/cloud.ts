@@ -16,6 +16,9 @@ export interface CloudConnectionInfo {
   hasToken: boolean
   /** 控制台会话令牌是否已配置（图片上传/读取要用） */
   hasDashboardToken: boolean
+  /** 控制台账号（用户名明文；口令只回 has 标记） */
+  dashboardUser: string
+  hasDashboardPassword: boolean
 }
 
 /** 后端 /v1/capabilities 的子集（只取前端实际用到的） */
@@ -57,6 +60,8 @@ export type CloudHandoffParseCode =
 /** 导入前的脱敏预览：密钥只有掩码，明文留在主进程 */
 export interface CloudHandoffPreview {
   version: 'v1' | 'v1.1'
+  /** 交接文件名（只取 basename，用于「导入后请删除该文件」提示） */
+  fileName: string
   baseUrl: string
   dashboardUrl: string
   keyMask: string

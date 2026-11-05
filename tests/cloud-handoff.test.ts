@@ -208,7 +208,8 @@ describe('maskSecret', () => {
 describe('toPreview', () => {
   it('never leaks the plaintext secrets', () => {
     const data = parseOk(handoff({ DASHBOARD_SESSION_TOKEN: 'tok-123' }, 'v1.1'))
-    const preview = toPreview(data)
+    const preview = toPreview(data, 'pi-cloud-20261106-0123.txt')
+    expect(preview.fileName).toBe('pi-cloud-20261106-0123.txt')
     const serialized = JSON.stringify(preview)
     expect(serialized).not.toContain(data.apiKey)
     expect(serialized).not.toContain('p@ss=word')
