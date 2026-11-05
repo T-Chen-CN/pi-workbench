@@ -528,6 +528,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cloudDeviceGet: () => ipcRenderer.invoke('cloud:device:get'),
   cloudDeviceReprobe: () => ipcRenderer.invoke('cloud:device:reprobe'),
   cloudDeviceSet: (input: { name: string }) => ipcRenderer.invoke('cloud:device:set', input),
+  cloudGatewayStatus: () => ipcRenderer.invoke('cloud:gateway:status'),
+  cloudGatewayRegister: (input: {
+    adminKey: string
+    name?: string
+    gatewayUrl?: string
+    scopes?: string[]
+  }) => ipcRenderer.invoke('cloud:gateway:register', input),
+  cloudGatewayRevoke: (input: { adminKey?: string }) =>
+    ipcRenderer.invoke('cloud:gateway:revoke', input),
   cloudRunResolveUnknown: (input: { runId: string }) =>
     ipcRenderer.invoke('cloud:run:resolve-unknown', input),
   cloudRunSteer: (input: { runId?: string; text: string }) =>

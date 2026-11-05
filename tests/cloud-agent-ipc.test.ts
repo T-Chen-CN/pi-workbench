@@ -83,12 +83,63 @@ vi.mock('electron', () => ({
     setVisible() {}
   },
   net: {
-    fetch: async (url: string, init?: { method?: string; body?: unknown }) => {
+    fetch: async (
+      url: string,
+      init?: { method?: string; body?: unknown; headers?: Record<string, string> }
+    ) => {
       mocks.state.requests.push(`${init?.method ?? 'GET'} ${url}`)
       if (typeof init?.body === 'string') mocks.state.bodies.push(init.body)
       const parsed = new URL(url)
       const route = parsed.pathname
 
+      // 网关（单入口）三个接口：设备自己、健康检查、登记与撤销
+      if (route === '/v1/hub/health') {
+        return Response.json({
+          status: 'ok',
+          hub: '0.1.0',
+          upstream: 'http://127.0.0.1:8642',
+          upstreamOk: true,
+          upstreamVersion: '0.22.6',
+          dashboard: 'http://127.0.0.1:9119',
+          devices: { total: 1, active: 1, revoked: 0 },
+          adminKeyConfigured: true,
+          uptimeSeconds: 12,
+        })
+      }
+      if (route === '/v1/devices/me') {
+        const auth = String(init?.headers?.Authorization ?? '')
+        if (!auth.startsWith('Bearer pi_hub_')) {
+          return Response.json({ error: { code: 'unauthorized' } }, { status: 401 })
+        }
+        return Response.json({
+          deviceId: 'dev_from_gateway',
+          name: 'TChen-Legion',
+          scopes: ['chat', 'dispatch'],
+          hub: '0.1.0',
+        })
+      }
+      if (route === '/v1/devices/register' && init?.method === 'POST') {
+        const headers = init?.headers ?? {}
+        if (headers['X-Pi-Admin-Key'] !== 'admin-ok') {
+          return Response.json(
+            { error: { code: 'admin_required', message: 'bad key' } },
+            { status: 403 }
+          )
+        }
+        return Response.json(
+          {
+            deviceId: JSON.parse(String(init.body)).deviceId,
+            name: JSON.parse(String(init.body)).name,
+            scopes: ['chat', 'dispatch'],
+            token: 'pi_hub_token_once',
+            tokenPrefix: 'pi_hub_token',
+          },
+          { status: 201 }
+        )
+      }
+      if (route.startsWith('/v1/devices/') && route.endsWith('/revoke')) {
+        return Response.json({ success: true })
+      }
       if (route === '/v1/capabilities') {
         return Response.json({ platform: 'hermes-agent', model: 'pi-cloud', run_stop: true })
       }
@@ -421,7 +472,8 @@ describe('cloud IPC', () => {
   it('rejects cloud calls before a key is saved', async () => {
     const result = await call<{ success: boolean; error?: string }>('cloud:sessions:list', {})
     expect(result.success).toBe(false)
-    expect(result.error).toContain('API 密钥')
+    // 单缝之后「没配置」的含义变了：先要求登记设备，直连密钥只是回滚手段
+    expect(result.error).toMatch(/登记|API 密钥/)
   })
 
   it('saves config, connects and lists sessions', async () => {
@@ -1291,5 +1343,91 @@ describe('cloud run attach（重启后接回在跑的一轮）', () => {
 
     // 复原配置，别影响同文件里排在前面的用例假设
     await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+  })
+})
+
+describe('cloud gateway (single entry)', () => {
+  interface StatusResult {
+    success: boolean
+    registered: boolean
+    gatewayUrl: string
+    deviceId?: string
+    scopes?: string[]
+    online?: boolean | null
+    upstreamVersion?: string
+    devices?: { total: number; active: number; revoked: number } | null
+    error?: string
+  }
+
+  it('starts unregistered and reports the gateway url without touching the network', async () => {
+    const before = mocks.state.requests.length
+    const status = await call<StatusResult>('cloud:gateway:status')
+    expect(status.success).toBe(true)
+    expect(status.registered).toBe(false)
+    expect(status.gatewayUrl).toMatch(/^https?:\/\//)
+    expect(mocks.state.requests.length).toBe(before)
+  })
+
+  it('registers with the local device id and keeps the token in the main process', async () => {
+    const device = await call<{ device?: { id: string } }>('cloud:device:get')
+    const registered = await call<{
+      success: boolean
+      deviceId?: string
+      tokenPrefix?: string
+      scopes?: string[]
+      error?: string
+    }>('cloud:gateway:register', { adminKey: 'admin-ok' })
+
+    expect(registered.success).toBe(true)
+    // 网关侧身份 = 本地 device.json 的 id，不另起一个
+    expect(registered.deviceId).toBe(device.device?.id)
+    expect(registered.tokenPrefix).toBe('pi_hub_token')
+
+    const config = JSON.parse(
+      fs.readFileSync(path.join(mocks.state.appDir, 'data', 'cloud-agent', 'connection.json'), 'utf-8')
+    ) as { deviceToken?: string; gatewayUrl?: string }
+    // 落盘的是加密后的 token，明文不出主进程
+    expect(config.deviceToken).toMatch(/^enc:/)
+    expect(config.deviceToken).not.toContain('pi_hub_token_once')
+    expect(config.gatewayUrl).toBeTruthy()
+  })
+
+  it('switches every business call to the gateway once registered', async () => {
+    await call('cloud:connect')
+    const last = mocks.state.requests[mocks.state.requests.length - 1]
+    // 单缝：登记之后不再打 api. 直连，一律走 hub
+    expect(last).toMatch(/^(GET|POST) https:\/\/hub\./)
+  })
+
+  it('reports the device identity and upstream health from the gateway', async () => {
+    const status = await call<StatusResult>('cloud:gateway:status')
+    expect(status.registered).toBe(true)
+    expect(status.deviceId).toBe('dev_from_gateway')
+    expect(status.scopes).toEqual(['chat', 'dispatch'])
+    expect(status.online).toBe(true)
+    expect(status.upstreamVersion).toBe('0.22.6')
+  })
+
+  it('refuses a wrong admin key and stays unregistered afterwards', async () => {
+    const denied = await call<{ success: boolean; error?: string }>('cloud:gateway:register', {
+      adminKey: 'wrong',
+    })
+    expect(denied.success).toBe(false)
+    // 管理密钥不对要能看懂，不是把 admin_required 丢出来
+    expect(denied.error).toMatch(/管理密钥/)
+  })
+
+  it('revokes the device and drops the local token immediately', async () => {
+    const revoked = await call<{ success: boolean; error?: string }>('cloud:gateway:revoke', {})
+    expect(revoked).toMatchObject({ success: true })
+
+    const after = await call<StatusResult>('cloud:gateway:status')
+    expect(after.registered).toBe(false)
+
+    // 注销之后不能再打网关（回滚靠运维改配置，代码里不自动退回直连）
+    const before = mocks.state.requests.length
+    await call('cloud:sessions:list', { limit: 1 })
+    const after2 = mocks.state.requests.slice(before)
+    expect(after2.every((line) => !line.includes('hub.'))).toBe(true)
   })
 })

@@ -7,6 +7,8 @@ import type {
   CloudConnectResult,
   CloudConnectionState,
   CloudDeviceResult,
+  CloudGatewayRegisterResult,
+  CloudGatewayStatusResult,
   CloudDiagnostics,
   CloudHandoffApplyResult,
   CloudHandoffPickResult,
@@ -780,6 +782,15 @@ export interface ElectronAPI {
   cloudDeviceGet: () => Promise<CloudDeviceResult>
   cloudDeviceSet: (input: { name: string }) => Promise<CloudDeviceResult>
   cloudDeviceReprobe: () => Promise<CloudDeviceResult>
+  cloudGatewayStatus: () => Promise<CloudGatewayStatusResult>
+  cloudGatewayRegister: (input: {
+    adminKey: string
+    name?: string
+    gatewayUrl?: string
+    scopes?: string[]
+  }) => Promise<CloudGatewayRegisterResult>
+  cloudGatewayRevoke: (input: { adminKey?: string }) =>
+    Promise<{ success: boolean; error?: string }>
   cloudRunStop: (input: { runId: string }) => Promise<CloudRunResult>
   cloudRunStatus: (input: { runId: string }) => Promise<CloudRunResult & {
     /** 断流 / 重启后补卡片的唯一来源（已脱敏） */

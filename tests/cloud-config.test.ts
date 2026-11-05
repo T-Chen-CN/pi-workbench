@@ -100,8 +100,13 @@ describe('read/write connection', () => {
     const publicView = config.publicCloudConfig()
     expect(publicView).toEqual({
       baseUrl: 'https://api.example.com',
+      // 网关地址默认由 `api.` 派生成 `hub.`（单入口）
+      gatewayUrl: 'https://hub.example.com',
       dashboardUrl: 'https://dash.example.com',
       hasToken: true,
+      hasDeviceToken: false,
+      deviceScopes: [],
+      deviceId: '',
       hasDashboardToken: false,
       dashboardUser: '',
       hasDashboardPassword: false,
@@ -130,8 +135,12 @@ describe('控制台会话令牌', () => {
     // 公开字段里只有「有没有」，没有明文
     expect(config.publicCloudConfig()).toEqual({
       baseUrl: 'https://api.example.com',
+      gatewayUrl: 'https://hub.example.com',
       dashboardUrl: 'https://dash.example.com',
       hasToken: true,
+      hasDeviceToken: false,
+      deviceScopes: [],
+      deviceId: '',
       hasDashboardToken: true,
       dashboardUser: '',
       hasDashboardPassword: false,

@@ -10,7 +10,9 @@ import {
   clearCloudToken,
   publicCloudConfig,
   readCloudConfig,
-  writeCloudConfig
+  writeCloudConfig,
+  cloudTransport,
+  clearDeviceCredentials
 } from '../cloud/config.js'
 import {
   HANDOFF_MAX_BYTES,
@@ -22,6 +24,12 @@ import { CloudApiError, cloudErrorMessage, createCloudClient, type CloudClient }
 import { CloudRunner } from '../cloud/runner.js'
 import { CloudDashboard } from '../cloud/dashboard.js'
 import { createDashboardClient, parseImageDataUrl } from '../cloud/dash.js'
+import {
+  gatewayHealth,
+  gatewayWhoAmI,
+  registerDevice,
+  revokeDevice,
+} from '../cloud/gateway.js'
 import {
   applyVerdict,
   classifyToolWrite,
@@ -191,20 +199,26 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     getAllowedUrl: () => readCloudConfig().dashboardUrl
   })
 
-  function clientKeyFor(config: { baseUrl: string; apiKey: string }): string {
-    return `${normalizeBaseUrl(config.baseUrl)}|${config.apiKey}`
+  function clientKeyFor(transport: { baseUrl: string; credential: string }): string {
+    return `${normalizeBaseUrl(transport.baseUrl)}|${transport.credential}`
   }
 
   /** 配置变了就重建客户端与 runner（避免旧密钥/旧地址残留） */
   function ensureClient(): CloudClient {
     const config = readCloudConfig()
-    if (!config.hasToken) {
-      throw new CloudApiError('unauthorized', '还没有配置 API 密钥，请先在「连接」页保存')
+    const transport = cloudTransport(config)
+    if (!transport.credential) {
+      throw new CloudApiError(
+        'unauthorized',
+        config.hasDeviceToken
+          ? '设备 token 丢失，请在「连接」页重新登记这台设备'
+          : '还没有登记这台设备，请先在「连接」页用管理密钥登记'
+      )
     }
-    const key = clientKeyFor(config)
+    const key = clientKeyFor(transport)
     if (client && key === clientKey) return client
     runner?.dispose()
-    client = createCloudClient({ baseUrl: config.baseUrl, apiKey: config.apiKey })
+    client = createCloudClient({ baseUrl: transport.baseUrl, apiKey: transport.credential })
     runner = new CloudRunner(
       {
         emit: (frame) => {
@@ -567,6 +581,122 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   })
 
+  /**
+   * 网关（云端单入口）三件事：看状态、登记这台设备、注销这台设备。
+   *
+   * 登记是**设备身份的唯一诞生点**：管理密钥换一次性 token，token 用 safeStorage
+   * 存起来，之后所有请求（含图片上传）只带它。`deviceId` 用本地 `device.json`
+   * 里那个只读 id，网关侧与 `author.id` 因此是同一个身份。
+   */
+  handleIpc('cloud:gateway:status', async () => {
+    const config = readCloudConfig()
+    const device = readCloudDevice()
+    const base = { gatewayUrl: config.gatewayUrl, device: deviceSummary(device) }
+    if (!config.hasDeviceToken) {
+      return { success: true as const, registered: false as const, ...base }
+    }
+    try {
+      const [me, health] = await Promise.all([
+        gatewayWhoAmI(config.gatewayUrl, config.deviceToken),
+        gatewayHealth(config.gatewayUrl).catch(() => null)
+      ])
+      return {
+        success: true as const,
+        registered: true as const,
+        ...base,
+        deviceId: me.deviceId,
+        name: me.name,
+        scopes: me.scopes,
+        hub: me.hub,
+        online: health?.upstreamOk ?? null,
+        upstream: health?.upstream ?? '',
+        upstreamVersion: health?.upstreamVersion ?? '',
+        devices: health?.devices ?? null
+      }
+    } catch (error) {
+      logger?.warn('[Cloud] gateway status failed', cloudErrorMessage(error))
+      return {
+        success: true as const,
+        registered: false as const,
+        ...base,
+        error: cloudErrorMessage(error)
+      }
+    }
+  })
+
+  /** 用管理密钥登记这台设备；成功后立刻落盘（token 只出现这一次）。 */
+  handleIpc(
+    'cloud:gateway:register',
+    async (
+      _event,
+      input: { adminKey?: string; name?: string; gatewayUrl?: string; scopes?: string[] }
+    ) => {
+      const adminKey = String(input?.adminKey ?? '').trim()
+      if (!adminKey) return { success: false as const, error: '请填写管理密钥' }
+      const config = readCloudConfig()
+      const gatewayUrl = String(input?.gatewayUrl ?? '').trim() || config.gatewayUrl
+      const record = readCloudDevice()
+      const name = String(input?.name ?? '').trim() || record.name
+      try {
+        const result = await registerDevice({
+          gatewayUrl,
+          adminKey,
+          deviceId: record.id,
+          name,
+          scopes: input?.scopes
+        })
+        writeCloudConfig({
+          baseUrl: config.baseUrl,
+          gatewayUrl,
+          deviceToken: result.token,
+          deviceScopes: result.scopes,
+          deviceId: result.deviceId
+        })
+        client = null // 凭据变了，重建客户端与 runner
+        runner?.dispose()
+        runner = null
+        logger?.info(
+          `[Cloud] device registered name=${result.name} prefix=${result.tokenPrefix} scopes=${result.scopes.join('+')}`
+        )
+        return {
+          success: true as const,
+          deviceId: result.deviceId,
+          tokenPrefix: result.tokenPrefix,
+          scopes: result.scopes,
+          name: result.name
+        }
+      } catch (error) {
+        logger?.warn('[Cloud] device register failed', cloudErrorMessage(error))
+        return { success: false as const, error: cloudErrorMessage(error) }
+      }
+    }
+  )
+
+  /** 注销这台设备：token 立即失效；本地同时清掉 token（要重新登记才能用）。 */
+  handleIpc('cloud:gateway:revoke', async (_event, input: { adminKey?: string }) => {
+    const config = readCloudConfig()
+    if (!config.hasDeviceToken) {
+      return { success: false as const, error: '这台设备还没登记' }
+    }
+    try {
+      await revokeDevice({
+        gatewayUrl: config.gatewayUrl,
+        deviceId: config.deviceId || readCloudDevice().id,
+        adminKey: String(input?.adminKey ?? '').trim() || undefined,
+        deviceToken: config.deviceToken
+      })
+      // 只清设备凭据：网关地址要留着显示，`apiKey` 是回滚手段
+      clearDeviceCredentials()
+      client = null
+      runner?.dispose()
+      runner = null
+      return { success: true as const }
+    } catch (error) {
+      logger?.warn('[Cloud] device revoke failed', cloudErrorMessage(error))
+      return { success: false as const, error: cloudErrorMessage(error) }
+    }
+  })
+
   handleIpc('cloud:policy:get', async () => {
     try {
       const policy = await readApprovalPolicy()
@@ -708,18 +838,21 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     const dataUrl = String(input?.dataUrl ?? '')
     if (!dataUrl) return { success: false as const, error: '没有图片数据' }
     const config = readCloudConfig()
-    if (!config.hasDashboardToken) {
+    const transport = cloudTransport(config)
+    if (!transport.dashboardToken) {
       return {
         success: false as const,
-        error: '图片上传需要控制台会话令牌：在「连接」页填入服务端 .env 的 HERMES_DASHBOARD_SESSION_TOKEN'
+        error: config.hasDeviceToken
+          ? '设备 token 丢失，请重新登记这台设备'
+          : '图片上传需要控制台会话令牌：在「连接」页填入服务端 .env 的 HERMES_DASHBOARD_SESSION_TOKEN'
       }
     }
     try {
       // 本地先校验类型与体积，省一次注定失败的往返
       parseImageDataUrl(dataUrl)
       const client = createDashboardClient({
-        dashboardUrl: config.dashboardUrl,
-        token: config.dashboardToken
+        dashboardUrl: transport.dashboardBaseUrl,
+        token: transport.dashboardToken
       })
       const image = await client.uploadImage({ dataUrl, filename: input?.filename })
       return { success: true as const, image }
@@ -733,13 +866,14 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     const target = String(input?.path ?? '').trim()
     if (!target) return { success: false as const, error: '没有图片路径' }
     const config = readCloudConfig()
-    if (!config.hasDashboardToken) {
+    const transport = cloudTransport(config)
+    if (!transport.dashboardToken) {
       return { success: false as const, error: '读取云端图片需要控制台会话令牌' }
     }
     try {
       const client = createDashboardClient({
-        dashboardUrl: config.dashboardUrl,
-        token: config.dashboardToken
+        dashboardUrl: transport.dashboardBaseUrl,
+        token: transport.dashboardToken
       })
       const dataUrl = await client.readImageDataUrl(target)
       return { success: true as const, dataUrl }

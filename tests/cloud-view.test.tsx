@@ -44,6 +44,9 @@ interface BridgeStub {
   handoffApply: ReturnType<typeof vi.fn>
   handoffCopy: ReturnType<typeof vi.fn>
   deviceGet: ReturnType<typeof vi.fn>
+  gatewayStatus: ReturnType<typeof vi.fn>
+  gatewayRegister: ReturnType<typeof vi.fn>
+  gatewayRevoke: ReturnType<typeof vi.fn>
   deviceSet: ReturnType<typeof vi.fn>
   deviceReprobe: ReturnType<typeof vi.fn>
   clipboard: string[]
@@ -79,6 +82,20 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
         defaultName: 'TChen-Legion',
       },
     })),
+    gatewayStatus: vi.fn(async () => ({
+      success: true,
+      registered: false,
+      gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+      device: { id: 'd1e2f3a4-0000-4000-8000-000000000000', name: 'TChen-Legion', defaultName: 'TChen-Legion' },
+    })),
+    gatewayRegister: vi.fn(async () => ({
+      success: true,
+      deviceId: 'd1e2f3a4-0000-4000-8000-000000000000',
+      tokenPrefix: 'pi_abcdefghij',
+      scopes: ['chat', 'dispatch'],
+      name: 'TChen-Legion',
+    })),
+    gatewayRevoke: vi.fn(async () => ({ success: true })),
     clipboard: [],
     sessions: [SESSION],
     parts: [
@@ -105,6 +122,9 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     cloudDeviceGet: stub.deviceGet,
     cloudDeviceSet: stub.deviceSet,
     cloudDeviceReprobe: stub.deviceReprobe,
+    cloudGatewayStatus: stub.gatewayStatus,
+    cloudGatewayRegister: stub.gatewayRegister,
+    cloudGatewayRevoke: stub.gatewayRevoke,
     writeClipboardText: (text: string) => {
       stub.clipboard.push(text)
       return true
@@ -181,6 +201,10 @@ function resetStore() {
     config: UNCONFIGURED_CONNECTION,
     dashboard: { visible: false, loading: false, url: '', error: null },
     pendingDisconnect: null,
+    gateway: null,
+    gatewayBusy: false,
+    gatewayError: null,
+    gatewayNotice: null,
     connection: 'unconfigured',
     error: null,
     capabilities: null,
@@ -1179,8 +1203,85 @@ describe('CloudConnectionView 设备卡', () => {
 
     await useCloudStore.getState().loadDevice()
     render(<CloudConnectionView active />)
-    expect(await screen.findByText(/重启应用/)).toBeTruthy()
+    // 设备卡与网关卡都会报 stale，这里只看「设备名输入框没有出现」
+    expect((await screen.findAllByText(/重启应用/)).length).toBeGreaterThan(0)
     expect(screen.queryByLabelText(zh.cloudDeviceName)).toBeNull()
+  })
+
+  it('registers this device with the admin key and never renders the token', async () => {
+    const stub = installBridge()
+    render(<CloudConnectionView active />)
+    const keyInput = await screen.findByLabelText(zh.cloudGatewayAdminKey)
+    fireEvent.change(keyInput, { target: { value: 'admin-secret' } })
+    fireEvent.click(screen.getByText(zh.cloudGatewayRegister))
+
+    await waitFor(() =>
+      expect(stub.gatewayRegister).toHaveBeenCalledWith({ adminKey: 'admin-secret' })
+    )
+    // 明文 token 只在主进程；界面只出现前缀
+    expect(await screen.findByText(/pi_abcdefghij/)).toBeTruthy()
+    expect(document.body.textContent).not.toContain('admin-secret')
+  })
+
+  it('shows the registered state with scopes and upstream version', async () => {
+    installBridge({
+      gatewayStatus: vi.fn(async () => ({
+        success: true,
+        registered: true,
+        gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+        deviceId: 'b8235e0e-a459-4bad-95a2-5d0585a613fc',
+        name: 'TChen-Legion',
+        scopes: ['chat', 'dispatch'],
+        hub: '0.1.0',
+        online: true,
+        upstream: 'http://127.0.0.1:8642',
+        upstreamVersion: '0.22.6',
+        devices: { total: 1, active: 1, revoked: 0 },
+      }))
+    })
+    await useCloudStore.getState().loadGateway()
+    render(<CloudConnectionView active />)
+    expect(await screen.findByText(zh.cloudGatewayRegistered)).toBeTruthy()
+    expect(screen.getByText(/chat \/ dispatch/)).toBeTruthy()
+    expect(screen.getByText(/0\.22\.6/)).toBeTruthy()
+    expect(screen.queryByLabelText(zh.cloudGatewayAdminKey)).toBeNull()
+  })
+
+  it('warns when the device is registered but the cloud agent is down', async () => {
+    installBridge({
+      gatewayStatus: vi.fn(async () => ({
+        success: true,
+        registered: true,
+        gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+        deviceId: 'b8235e0e',
+        name: 'TChen-Legion',
+        scopes: ['chat'],
+        online: false,
+        upstreamVersion: '',
+      }))
+    })
+    await useCloudStore.getState().loadGateway()
+    render(<CloudConnectionView active />)
+    expect(await screen.findByText(zh.cloudGatewayUpstreamDown)).toBeTruthy()
+  })
+
+  it('revokes the device from the card', async () => {
+    const stub = installBridge({
+      gatewayStatus: vi.fn(async () => ({
+        success: true,
+        registered: true,
+        gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+        deviceId: 'b8235e0e',
+        name: 'TChen-Legion',
+        scopes: ['chat', 'dispatch'],
+        online: true,
+      }))
+    })
+    await useCloudStore.getState().loadGateway()
+    render(<CloudConnectionView active />)
+    fireEvent.click(await screen.findByText(zh.cloudGatewayRevoke))
+    await waitFor(() => expect(stub.gatewayRevoke).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText('这台设备已注销')).toBeTruthy()
   })
 
   it('copies the device id through the electron clipboard', async () => {

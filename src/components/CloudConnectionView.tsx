@@ -38,12 +38,20 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const setDeviceName = useCloudStore((state) => state.setDeviceName)
   const loadDevice = useCloudStore((state) => state.loadDevice)
   const reprobeDeviceName = useCloudStore((state) => state.reprobeDeviceName)
+  const gateway = useCloudStore((state) => state.gateway)
+  const gatewayBusy = useCloudStore((state) => state.gatewayBusy)
+  const gatewayError = useCloudStore((state) => state.gatewayError)
+  const gatewayNotice = useCloudStore((state) => state.gatewayNotice)
+  const loadGateway = useCloudStore((state) => state.loadGateway)
+  const registerGateway = useCloudStore((state) => state.registerGateway)
+  const revokeGateway = useCloudStore((state) => state.revokeGateway)
 
   const [baseUrl, setBaseUrl] = useState(config.baseUrl)
   const [apiKey, setApiKey] = useState('')
   const [dashboardToken, setDashboardToken] = useState('')
   const [busy, setBusy] = useState<'save' | 'connect' | null>(null)
   const [deviceName, setDeviceNameDraft] = useState('')
+  const [adminKey, setAdminKey] = useState('')
 
   useEffect(() => {
     setBaseUrl(config.baseUrl)
@@ -316,6 +324,91 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
               {deviceError && <Caption className="text-danger">{deviceError}</Caption>}
             </div>
           )}
+        </Card>
+
+        <Card>
+          <CardHeader title={t('cloudGatewayTitle')} />
+          <div className="flex flex-col gap-3 pt-3">
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-ink-muted">{t('cloudGatewayUrl')}</Label>
+              <DataText className="select-all break-all text-ink-subtle">
+                {gateway?.gatewayUrl || config.gatewayUrl}
+              </DataText>
+            </div>
+
+            {gateway?.registered ? (
+              <>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <StatusText tone={gateway.online === false ? 'danger' : 'success'}>
+                    {gateway.online === false
+                      ? t('cloudGatewayUpstreamDown')
+                      : t('cloudGatewayRegistered')}
+                  </StatusText>
+                  <Caption className="text-ink-subtle">
+                    {t('cloudGatewayScopes')}: {(gateway.scopes ?? []).join(' / ') || '—'}
+                  </Caption>
+                  {gateway.upstreamVersion && (
+                    <Caption className="text-ink-subtle">
+                      {t('cloudGatewayUpstream')}: {gateway.upstreamVersion}
+                    </Caption>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-ink-muted">{t('cloudDeviceId')}</Label>
+                  <DataText className="select-all break-all text-ink-subtle">
+                    {gateway.deviceId}
+                  </DataText>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" icon={RefreshCw} disabled={gatewayBusy} loading={gatewayBusy}
+                    onClick={() => void loadGateway()}>
+                    {t('cloudGatewayRefresh')}
+                  </Button>
+                  <Button size="sm" icon={Link2Off} disabled={gatewayBusy}
+                    onClick={() => void revokeGateway()}>
+                    {t('cloudGatewayRevoke')}
+                  </Button>
+                </div>
+                <Caption className="text-ink-subtle">{t('cloudGatewayRevokeHint')}</Caption>
+              </>
+            ) : (
+              <>
+                <Field
+                  label={t('cloudGatewayAdminKey')}
+                  hint={t('cloudGatewayAdminKeyHint')}
+                  htmlFor="cloud-gateway-admin-key"
+                >
+                  <Input
+                    id="cloud-gateway-admin-key"
+                    type="password"
+                    value={adminKey}
+                    onChange={(event) => setAdminKey(event.target.value)}
+                    placeholder="••••••••"
+                  />
+                </Field>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" disabled={gatewayBusy || !adminKey.trim()}
+                    loading={gatewayBusy}
+                    onClick={async () => {
+                      const ok = await registerGateway(adminKey.trim())
+                      if (ok) setAdminKey('')
+                    }}>
+                    {t('cloudGatewayRegister')}
+                  </Button>
+                  <Button size="sm" icon={RefreshCw} disabled={gatewayBusy}
+                    onClick={() => void loadGateway()}>
+                    {t('cloudGatewayRefresh')}
+                  </Button>
+                </div>
+                <Caption className="text-ink-subtle">{t('cloudGatewayUnregisteredHint')}</Caption>
+              </>
+            )}
+
+            {gatewayNotice && <Caption className="text-success">{gatewayNotice}</Caption>}
+            {(gatewayError || gateway?.error) && (
+              <Caption className="text-danger">{gatewayError ?? gateway?.error}</Caption>
+            )}
+          </div>
         </Card>
 
         <Card>

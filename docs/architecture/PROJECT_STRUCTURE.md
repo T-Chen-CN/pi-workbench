@@ -34,7 +34,8 @@ pi-workbench/
 │   ├── workspace-trust.ts        # 工作区信任与路径包含
 │   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / cloud-agent / documents / files / git / settings / system / web-search* / workspace）
 │   ├── cloud/                    # 云端 Agent 主进程侧
-│   │   ├── config.ts             # 连接配置（API 密钥 + 控制台令牌，safeStorage 加密）
+│   │   ├── config.ts             # 连接配置（设备 token / 控制台令牌，safeStorage 加密）+ cloudTransport() 单入口
+│   │   ├── gateway.ts            # 网关管理面：登记 / 我是谁 / 撤销 + 错误码翻译（与 core/errors.py 对齐）
 │   │   ├── client.ts / remote.ts # 网关客户端与 REST 调用（会话、轮次、停止、插话）
 │   │   ├── events.ts / map.ts    # SSE 事件解析与时间线映射（含插话回执）
 │   │   ├── runner.ts             # 轮次生命周期（断流重订阅、校帧、停止兜底）
@@ -221,6 +222,7 @@ pi-workbench/
 │       │   ├── db.py             # SQLite WAL（devices / workspaces / tasks / audit）
 │       │   ├── audit.py          # SQLite + JSONL 双写审计
 │       │   ├── proxy.py          # loopback 反向代理（重写鉴权、注入 X-Pi-Device、SSE 不缓冲）
+│       │   ├── fsguard.py        # `/api/fs` 白名单（真实路径 + realpath + relative_to）
 │       │   └── errors.py         # 统一错误码表
 │       └── tests/                # unittest（不装任何依赖，`python -m unittest`）
 │
@@ -363,6 +365,7 @@ ChatPanel.handleSubmit
 | `clipboard:writeText` | invoke | 写系统剪贴板（`pw-app://` 下 `navigator.clipboard` 不可用） |
 | `webSearch:get` / `save` | invoke | 联网搜索供应商与 Key（`safeStorage` 加密） |
 | `cloud:config:get` / `config:set` / `connect` / `disconnect` | invoke | 云端 Agent 连接配置（`data/cloud-agent/connection.json`，密钥 `safeStorage` 加密，渲染层只拿 `hasToken`）与连通性探测 |
+| `cloud:gateway:status` / `gateway:register` / `gateway:revoke` | invoke | 云端单入口（`hub.`）三件事：`status` = 登记了没有 + scope + 上游在不在（未登记时**不发任何请求**）；`register` = 用管理密钥换一次性设备 token（`deviceId` 钉死本地 `device.json` 的 id，明文 token 只留主进程，落盘 `enc:`）；`revoke` = 注销并只清设备凭据（`gatewayUrl` 与 `apiKey` 留着，后者是回滚手段） |
 | `cloud:device:get` / `device:set` / `device:reprobe` | invoke | 本机设备身份（`data/cloud-agent/device.json`，启动时即建）：`get` 首次会补一次系统友好名探测（`probedAt` 后不再自动探），`set` 只改 `name`（空串 = 恢复默认名），`reprobe` 是用户显式「重新读取系统名」。`id` 只读，随每轮 `POST /v1/runs` 的 `author` 发出（只做记忆归属，**不进 prompt**） |
 | `cloud:sessions:list` / `messages:list` | invoke | 云端会话列表与历史消息（主进程直接映射成时间线片段） |
 | `cloud:sessions:update` / `sessions:delete` | invoke | 会话条目操作（PATCH 白名单字段 / 硬删除，不可恢复） |

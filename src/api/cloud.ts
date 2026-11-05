@@ -23,6 +23,8 @@ import type {
   CloudRunResult,
   CloudRunStartResult,
   CloudDeviceResult,
+  CloudGatewayRegisterResult,
+  CloudGatewayStatusResult,
   CloudDeviceSummary,
   CloudDiagnostics,
   CloudJob,
@@ -108,10 +110,17 @@ export function hasCloudBridge(): boolean {
   return Boolean(bridge && typeof bridge.cloudConfigGet === 'function')
 }
 
+/** 没有主进程时的网关地址（只用于界面展示占位） */
+const FALLBACK_GATEWAY_URL = 'https://hub.tchen-xiaoxiao.com'
+
 export const UNCONFIGURED_CONNECTION: CloudConnectionInfo = {
   baseUrl: FALLBACK_BASE_URL,
+  gatewayUrl: FALLBACK_GATEWAY_URL,
   dashboardUrl: FALLBACK_DASHBOARD_URL,
   hasToken: false,
+  hasDeviceToken: false,
+  deviceScopes: [],
+  deviceId: '',
   hasDashboardToken: false,
   dashboardUser: '',
   hasDashboardPassword: false,
@@ -160,6 +169,68 @@ export const cloudApi = {
     }
     return invoke(
       () => bridge.cloudDeviceReprobe(),
+      (error) => ({ success: false, error })
+    )
+  },
+
+  /**
+   * 网关状态：这台设备登记了没有、有哪些 scope、云端 Hermes 在不在。
+   * 没有 bridge（浏览器预览）时给一份「未登记」的稳定结果。
+   */
+  async gatewayStatus(): Promise<CloudGatewayStatusResult> {
+    const bridge = api()
+    if (!bridge) {
+      return {
+        success: true,
+        registered: false,
+        gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+        device: PREVIEW_DEVICE,
+        error: '浏览器预览里没有主进程，无法登记',
+      }
+    }
+    if (typeof bridge.cloudGatewayStatus !== 'function') {
+      return {
+        success: false,
+        registered: false,
+        gatewayUrl: '',
+        error: BRIDGE_STALE,
+      }
+    }
+    return invoke(
+      () => bridge.cloudGatewayStatus(),
+      (error) => ({ success: false, registered: false, gatewayUrl: '', error })
+    )
+  },
+
+  /** 登记这台设备：管理密钥只在这一刻用，成功后本地只留设备 token */
+  async gatewayRegister(input: {
+    adminKey: string
+    name?: string
+    gatewayUrl?: string
+    scopes?: string[]
+  }): Promise<CloudGatewayRegisterResult> {
+    const bridge = api()
+    if (!bridge) {
+      return { success: false, error: '浏览器预览里无法登记设备（需要主进程）' }
+    }
+    if (typeof bridge.cloudGatewayRegister !== 'function') {
+      return { success: false, error: BRIDGE_STALE }
+    }
+    return invoke(
+      () => bridge.cloudGatewayRegister(input),
+      (error) => ({ success: false, error })
+    )
+  },
+
+  /** 注销这台设备（token 立即失效，要重新登记才能用） */
+  async gatewayRevoke(adminKey?: string): Promise<{ success: boolean; error?: string }> {
+    const bridge = api()
+    if (!bridge) return { success: false, error: '浏览器预览里无法注销设备' }
+    if (typeof bridge.cloudGatewayRevoke !== 'function') {
+      return { success: false, error: BRIDGE_STALE }
+    }
+    return invoke(
+      () => bridge.cloudGatewayRevoke({ adminKey }),
       (error) => ({ success: false, error })
     )
   },

@@ -3,7 +3,7 @@
 > **面向**：要实现「多台本地程序连同一个云端 Agent」「云端 Agent 认得是哪台设备」「云端指挥本地 Agent 干活」的人
 > **什么时候读**：动对接层（本地 ↔ 云端）、设备身份、反向任务通道、变更 S-02 之前
 > **什么时候要改**：插件形态、设备身份口径、派活权限口径、上游插件 API、验收场景变化时
-> **状态**：**v3.1 · 2026-11-06 · H0 已完成（G0 全绿），H1 进行中** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
+> **状态**：**v3.2 · 2026-11-06 · H0 已完成（G0 全绿）、H1 服务端与本地切换均已完成（G1 待人点一遍）** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
 > **取代**：v1 的 `pi-hub` 独立服务方案（作废，理由见 §4）
 
 ---
@@ -574,6 +574,7 @@ ssh -i "F:/SSH KEY/SG_001.pem"     -o "ProxyCommand=<HTTP CONNECT 隧道脚本> 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
 | **v3.1** | 2026-11-06 | **H0 完成**：插件骨架落地（`hermes-plugin/pi-workbench`，50 个 unittest 全绿）+ 部署到 VPS，**G0 六条全过**。实测三条上游事实写回方案：`register_platform`/`register_tool` 签名、`platform` 插件**自动 connect**（无需 `platforms:` 配置块，激活证据是 `plugins.enable` + `requires_env`）、`capabilities` 只接受注册表 id（原计划的 `network_ingress` 不存在，清单里不写）。两个运维坑：插件 INFO 日志不进 journalctl（看 `/v1/hub/health`）、Caddy reload 后证书有 ~5s 窗口 |
+| **v3.2** | 2026-11-06 | **H1 完成**：服务端全量切换（SSE 保真 + `author` 覆盖 + 幂等命名空间 + `fsguard` 白名单 + dashboard 侧通道，79 用例，`9dacb1f`）+ 本地单入口（`cloudTransport()` 唯一切换点、`gateway.ts`、三个 IPC、连接页「云端网关」卡、`clearDeviceCredentials()`，测试 149 个文件全绿）。**本地与云端的往来不再需要 API 密钥**；`apiKey` 只在回滚时手工启用 |
 | **v3.0** | 2026-11-06 | **最终版**：所有者「全部都按你默认」→ B1 同名工作区加设备后缀 / B2 不做分支指定 / B3 只报打开过的工作区 / 批准三项生产环境改动（先备份）。新增 **§20 执行手册**：20.0 备份命令 → H0–H4 每阶段的分步清单 + G0–G4 Gate 判据（含可手打的 curl）+ 每阶段回滚动作 + 时间线「第一次动手的 5 件事」。状态改为「待开工 H0」 |
 | **v2.1** | 2026-11-06 | **两处关键修正**：① **派活改为工作区层级**（所有者指出；设备只是承载者，`workspaceId` 不透明、路径永不出本机，`local_workspaces()` 成为主入口，新增 `ambiguous_workspace` / `workspace_untrusted` / `workspace_offline`）；② **传输改 stdlib**（`http.server` + `urllib` + 独立线程，不用 aiohttp —— 上游依赖在 uv overlay 里，单测跑不动；且线程内失败打不死 gateway 循环；与内置 a2a 同款）。另：**纠正 v2 的错误** —— `platform_toolsets.api_server` 白名单**仍要加 `pi_workbench`**（预检实测）；VPS 预检 15 项全部跑完（§14.2）；决策全部锁定（§17.1）；新增 AC-D05b/D18/D19 |
 | **v2** | 2026-11-06 | **改单缝 + 插件形态**：`pi-hub` 独立服务作废，改为 Hermes 插件 `pi-workbench`（`kind: platform`，与 gateway 同进程）；除 dashboard 外**全部对接**经插件；**不做直连兜底**；接口契约按「设备管理 / 设备侧 / 透明代理」三类重写；派活工具由 MCP 改为 `provides_tools`（不再改 `platform_toolsets`）；新增 AC-D15~D17；新增 §14 执行前检查（本地 7 项已通过、VPS 9 项待执行）与 QN-1~QN-7 |
@@ -654,18 +655,30 @@ curl -s -o /dev/null -w '%{http_code}
 1. 插件 `INFO` 日志**不进** `journalctl`（默认级别只放 WARNING）→ 判断插件是否活着看 `/v1/hub/health`，不要找日志。
 2. Caddy `reload` 后首次签发证书有 ~5 秒窗口，立刻 `curl` 会得到 `tlsv1 alert internal error`，等 5 秒即可。
 
-### 20.2 H1 全量切换（4 天）→ **G1（唯一切换点）**
+### 20.2 H1 全量切换 → **G1（唯一切换点）**
 
-| 步 | 内容 | 验收 |
+**服务端 ✅ 已完成并上线（commit `9dacb1f`，79 用例）**
+
+| 步 | 内容 | 结果 |
 | --- | --- | --- |
-| H1-1 | SSE 代理：`text/event-stream` 逐块透传、`Last-Event-ID` 透传、客户端断开即断上游、禁止缓冲 | 契约测试：分块边界 / 断连 / 不重复不丢 |
-| H1-2 | 写路径：`POST /v1/runs`（覆盖 `author`、幂等键加 `pi:<deviceId>:` 前缀）、`steer` / `stop` / `approval` / `clarify` / `resolve-unknown` + 审计 | AC-D04 / D17 |
-| H1-3 | `sessions*` / `jobs*` / `config`（GET 透传、PUT 需 `admin`）/ `image-upload` / `fs-read-data-url`（白名单） | AC-D17 |
-| H1-4 | 本地：`cloudFetch()` 单入口 + `deviceToken`（`enc:`）+ 四种错误码映射 + 连接页改「云端网关」 | vitest 全绿 |
-| H1-5 | 切换 + 12 项全功能回归（聊天 / 工具卡 / 审批 / 插话 / 跨重启 attach / 会话管理 / 任务页 / 自检 / 图片 / 停止 / 会话切换 / 取消） | AC-D15 / D16 |
+| H1-1 | SSE 代理：逐块透传、`Last-Event-ID` 透传、断开即断上游、`X-Accel-Buffering: no` + `Accept-Encoding: identity` | ✅ 线上实测 `: open` / delta / `run.completed` / `: stream closed`；从 id 1 续传不重放 id 0 |
+| H1-2 | `POST /v1/runs` 覆盖 `author`（`pi-workbench/<deviceId>`）、幂等键 `pi:<deviceId>:` 前缀、`steer`/`stop`/`approval`/`clarify`/`resolve-unknown` + 审计 | ✅ 建 run 0.04s；审计 jsonl 有 deviceId 与路径 |
+| H1-3 | `sessions*` / `jobs*` / `/api/config`（PUT 需 `admin`）/ `image-upload` / `fs-read-data-url`（`fsguard` 白名单：真实路径 + realpath + `relative_to`） | ✅ |
+| H1-3b | 新增 `core/fsguard.py`；admin 路由同时接受管理密钥与 `admin` scope 设备 token（都缺 → 403 `admin_required`）；register 允许客户端钉住 `deviceId` | ✅ |
 
-**G1 判据**：本地 `gatewayUrl` 指向 hub、`apiKey` 停用后，上面 12 项全部正常；**且**停插件时 UI 说「网关不可用」、只停 Hermes 时说「Hermes 异常」。
-**回滚**：`connection.json` 的 `gatewayUrl` 改回 `https://api.tchen-xiaoxiao.com` + 用回 `apiKey`（一步，1 分钟）。
+**本地侧 ✅ 已完成（本 commit）**
+
+| 步 | 内容 | 结果 |
+| --- | --- | --- |
+| H1-4 | `cloudTransport()` 单入口：有设备 token → 一律走 `gatewayUrl` + 设备 token（含图片上传/读回的 dashboard 侧通道）；否则回落实体字段（**只是回滚路径**） | `tsc` + lint + 149 个测试文件全绿 |
+| H1-4b | `electron/cloud/gateway.ts`（`health` / `whoami` / `register` / `revoke`）+ 错误码翻译，与 `core/errors.py` 一一对应 | `tests/cloud-gateway.test.ts`（8 例） |
+| H1-4c | IPC 三个新频道：`cloud:gateway:status|register|revoke`（四步都补了：`handleIpc` → preload → `electron.d.ts` → `api/cloud.ts` + Web mock） | `tests/cloud-agent-ipc.test.ts` 新增 6 例（含「登记后业务请求一律走 hub」「注销后不再打网关」） |
+| H1-4d | 连接页新增「云端网关」卡：地址 / 登记状态 / scope / 上游版本 / 登记（管理密钥只此一次） / 刷新 / 注销 | `tests/cloud-view.test.tsx` 新增 4 例 |
+| H1-4e | `clearDeviceCredentials()`：注销只清设备凭据，**保留** `gatewayUrl`（要显示）与 `apiKey`（回滚手段） | `tests/cloud-config.test.ts` |
+
+**G1 判据（待人工点一遍）**：在连接页用管理密钥登记这台设备 → 12 项全功能回归（聊天 / 工具卡 / 审批 / 插话 / 跨重启 attach / 会话管理 / 任务页 / 自检 / 图片 / 停止 / 会话切换 / 取消）全部正常；**且**停插件时 UI 说「网关不可用」、只停 Hermes 时说「Hermes 异常」。
+
+**回滚**：`connection.json` 的 `gatewayUrl` 改回 `https://api.tchen-xiaoxiao.com` + 用回 `apiKey`（一步，1 分钟）。注销设备不会自动回落直连——代码里刻意不保留第二套客户端（C-2）。
 
 ### 20.3 H2 设备面（2 天）→ **G2**
 

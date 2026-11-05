@@ -7,6 +7,7 @@
 
 export const DEFAULT_CLOUD_BASE_URL = 'https://api.tchen-xiaoxiao.com'
 export const DEFAULT_CLOUD_DASHBOARD_URL = 'https://dash.tchen-xiaoxiao.com'
+export const DEFAULT_CLOUD_GATEWAY_URL = 'https://hub.tchen-xiaoxiao.com'
 
 /** `https://api.example.com/v1/` → `https://api.example.com`；非法输入返回空串 */
 export function normalizeBaseUrl(raw: string): string {
@@ -38,5 +39,23 @@ export function deriveDashboardUrl(baseUrl: string): string {
     return parsed.toString().replace(/\/+$/, '')
   } catch {
     return DEFAULT_CLOUD_DASHBOARD_URL
+  }
+}
+
+/**
+ * 网关地址（本方案的单入口）：`api.x.com` → `hub.x.com`；
+ * 其他情况退回默认值，用户仍可在连接页手填。
+ */
+export function deriveGatewayUrl(baseUrl: string): string {
+  try {
+    const parsed = new URL(baseUrl)
+    if (parsed.hostname.startsWith('api.')) {
+      parsed.hostname = `hub.${parsed.hostname.slice(4)}`
+    } else {
+      return DEFAULT_CLOUD_GATEWAY_URL
+    }
+    return parsed.toString().replace(/\/+$/, '')
+  } catch {
+    return DEFAULT_CLOUD_GATEWAY_URL
   }
 }

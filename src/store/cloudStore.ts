@@ -18,6 +18,7 @@ import type {
   CloudDashboardBounds,
   CloudDashboardState,
   CloudDeviceSummary,
+  CloudGatewayStatusResult,
   CloudFrame,
   CloudHandoffPreview,
   CloudRunStatus,
@@ -113,6 +114,12 @@ interface CloudState {
   device: CloudDeviceSummary | null
   deviceBusy: boolean
   deviceError: string | null
+  /** 云端网关（单入口）状态：登记与否 / scope / 上游在线 */
+  gateway: CloudGatewayStatusResult | null
+  gatewayBusy: boolean
+  gatewayError: string | null
+  /** 登记/注销成功后的提示（一次性，界面自己清） */
+  gatewayNotice: string | null
   /** 自检结果（连接页折叠区块，按需拉） */
   diagnostics: CloudDiagnostics | null
   diagnosticsLoading: boolean
@@ -187,10 +194,18 @@ interface CloudState {
 
   /** 读本机设备身份（顺带补一次系统友好名探测） */
   loadDevice: () => Promise<void>
+  loadGateway: () => Promise<void>
   /** 改设备名；空串 = 恢复默认名。返回是否成功 */
   setDeviceName: (name: string) => Promise<boolean>
   /** 重新读取系统设备名。返回是否成功 */
   reprobeDeviceName: () => Promise<boolean>
+
+  /** 用管理密钥登记这台设备（成功后本地只留设备 token） */
+  registerGateway: (adminKey: string) => Promise<boolean>
+  /** 注销这台设备（token 立即失效） */
+  revokeGateway: (adminKey?: string) => Promise<boolean>
+  /** 清掉一次性提示 */
+  clearGatewayNotice: () => void
 }
 
 export const useCloudStore = create<CloudState>()((set, get) => ({
@@ -240,6 +255,10 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   device: null,
   deviceBusy: false,
   deviceError: null,
+  gateway: null,
+  gatewayBusy: false,
+  gatewayError: null,
+  gatewayNotice: null,
   diagnostics: null,
   diagnosticsLoading: false,
   diagnosticsError: null,
@@ -258,6 +277,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     set({ bridgeAvailable })
     // 设备身份跟连接无关：没配 token 也要能看到「这台设备」
     void get().loadDevice()
+    void get().loadGateway()
     if (!bridgeAvailable) {
       set({ connection: 'unconfigured', error: null, hydrated: true })
       return
@@ -1053,6 +1073,47 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     }
     set({ device: result.device })
     return true
+  },
+
+  async loadGateway() {
+    const status = await cloudApi.gatewayStatus()
+    if (!status.success) {
+      set({ gatewayError: status.error ?? 'unknown' })
+      return
+    }
+    set({ gateway: status, gatewayError: null })
+  },
+
+  async registerGateway(adminKey) {
+    set({ gatewayBusy: true, gatewayError: null, gatewayNotice: null })
+    const result = await cloudApi.gatewayRegister({ adminKey })
+    set({ gatewayBusy: false })
+    if (!result.success) {
+      set({ gatewayError: result.error ?? 'unknown' })
+      return false
+    }
+    set({
+      gatewayNotice: `已登记：${result.tokenPrefix ?? ''}（${(result.scopes ?? []).join(' / ')}）`
+    })
+    await get().loadGateway()
+    return true
+  },
+
+  async revokeGateway(adminKey) {
+    set({ gatewayBusy: true, gatewayError: null, gatewayNotice: null })
+    const result = await cloudApi.gatewayRevoke(adminKey)
+    set({ gatewayBusy: false })
+    if (!result.success) {
+      set({ gatewayError: result.error ?? 'unknown' })
+      return false
+    }
+    set({ gatewayNotice: '这台设备已注销' })
+    await get().loadGateway()
+    return true
+  },
+
+  clearGatewayNotice() {
+    set({ gatewayNotice: null })
   },
 
   async reprobeDeviceName() {

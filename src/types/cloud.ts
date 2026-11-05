@@ -11,9 +11,15 @@ export type CloudConnectionState = 'unconfigured' | 'connecting' | 'connected' |
 
 export interface CloudConnectionInfo {
   baseUrl: string
+  /** 网关（单入口）地址；登记后所有请求走它 */
+  gatewayUrl: string
   dashboardUrl: string
   /** 渲染层永远拿不到密钥，只能知道有没有 */
   hasToken: boolean
+  /** 设备 token 是否已就位（登记后为 true，此时按网关模式工作） */
+  hasDeviceToken: boolean
+  deviceScopes: string[]
+  deviceId: string
   /** 控制台会话令牌是否已配置（图片上传/读取要用） */
   hasDashboardToken: boolean
   /** 控制台账号（用户名明文；口令只回 has 标记） */
@@ -490,4 +496,33 @@ export interface CloudDashboardBounds {
   width: number
   height: number
   visible: boolean
+}
+
+/** 网关（云端单入口）状态：登记与否、scope、上游是否在线 */
+export interface CloudGatewayStatusResult {
+  success: boolean
+  /** 本地持有设备 token 且网关认得它 */
+  registered: boolean
+  gatewayUrl: string
+  device?: { id: string; name: string; defaultName: string }
+  deviceId?: string
+  name?: string
+  scopes?: string[]
+  hub?: string
+  /** 网关健康检查对上游（Hermes）的结论 */
+  online?: boolean | null
+  upstream?: string
+  upstreamVersion?: string
+  devices?: { total: number; active: number; revoked: number } | null
+  error?: string
+}
+
+/** 登记结果：token 明文只留在主进程，渲染层只拿到前缀用于对账 */
+export interface CloudGatewayRegisterResult {
+  success: boolean
+  deviceId?: string
+  tokenPrefix?: string
+  scopes?: string[]
+  name?: string
+  error?: string
 }
