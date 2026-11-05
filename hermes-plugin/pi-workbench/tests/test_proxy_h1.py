@@ -338,6 +338,18 @@ class FsGuardUnitTests(unittest.TestCase):
         roots = fsguard.default_roots("/home/x/.hermes/profiles/p")
         self.assertTrue(any(str(r).endswith("uploads") for r in roots))
 
+    def test_default_roots_cover_where_the_dashboard_writes_images(self):
+        """聊天里的图片路径是 `cache/images/…`，根里没有它 → 每张缩略图都 403。"""
+        roots = fsguard.default_roots("/home/x/.hermes/profiles/p")
+        joined = [str(r) for r in roots]
+        self.assertTrue(any(path.endswith(os.path.join("cache", "images")) for path in joined))
+        self.assertTrue(any(path.endswith("image_cache") for path in joined))
+
+    def test_default_roots_never_include_browser_profile(self):
+        """`cache/browser*` 里是 Cookie 和登录数据，绝不进白名单。"""
+        roots = [str(r) for r in fsguard.default_roots("/home/x/.hermes/profiles/p")]
+        self.assertFalse(any("browser" in path for path in roots))
+
     def test_rejects_empty_and_relative(self):
         for path in ("", "relative.txt"):
             with self.assertRaises(HubError) as ctx:

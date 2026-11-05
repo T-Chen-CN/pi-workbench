@@ -173,6 +173,28 @@ class AuthenticationTests(HubTestCase):
 
 
 class AdminTests(HubTestCase):
+    def test_a_device_can_revoke_itself_with_chat_scope(self):
+        """注销按钮用的是设备 token（只有 chat/dispatch）——自注销不能要求 admin。
+
+        否则用户点「注销这台设备」只会看到一个 403 scope_required。
+        """
+        device_id, token = self.register(scopes=["chat", "dispatch"])
+        status, payload, _ = self.json_call("POST", f"/v1/devices/{device_id}/revoke", token=token)
+        self.assertEqual(status, 200, payload)
+        self.assertTrue(payload["revoked"])
+
+        after, _, raw = self.call("GET", "/v1/devices/me", token=token)
+        self.assertEqual(after, 401)
+        self.assertEqual(self.error_code(raw), "device_revoked")
+
+    def test_a_device_cannot_revoke_someone_else(self):
+        """自己注销自己是自助，注销**别的**设备仍然要 admin。"""
+        _, token = self.register("a", scopes=["chat", "dispatch"])
+        other, _ = self.register("b", scopes=["chat", "dispatch"])
+        status, payload, _ = self.json_call("POST", f"/v1/devices/{other}/revoke", token=token)
+        self.assertEqual(status, 403, payload)
+        self.assertEqual(payload["error"]["code"], "scope_required")
+
     def test_registering_a_known_id_returns_200_and_rotates(self):
         """已登记的 id 再登记 → 200 + rotated，绝不能 500（应用里就点这一个按钮）"""
         body = {"deviceId": "dev-same", "name": "TChen-Legion", "scopes": ["chat"]}

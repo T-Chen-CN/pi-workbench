@@ -149,7 +149,9 @@ class Hub:
             # -- device administration (admin key) -------------------------
             ("POST", r"/v1/devices/register", self.register_device, "admin"),
             ("GET", r"/v1/devices", self.list_devices, "admin"),
-            ("POST", r"/v1/devices/(?P<device_id>[A-Za-z0-9_.:-]+)/revoke", self.revoke_device, "admin"),
+            # 注销：管理密钥 / admin token / **设备注销自己**（chat scope 即可）。
+            # 自注销是设备能对自己做的最不危险的事 —— 它只会切断自己。
+            ("POST", r"/v1/devices/(?P<device_id>[A-Za-z0-9_.:-]+)/revoke", self.revoke_device, "admin_or_self"),
             # -- device self (own token) -----------------------------------
             ("GET", r"/v1/devices/me", self.device_me, "chat"),
             # -- passthrough: api_server -----------------------------------
@@ -440,7 +442,7 @@ class HubRequestHandler(BaseHTTPRequestHandler):
         try:
             req.body = self._read_body()
             route, params = self.hub.match(method, path)
-            self._authorize(route, req)
+            self._authorize(route, req, params)
             result = getattr(self.hub, route.handler)(req, **params)
             if method in WRITE_METHODS:
                 # Record before emitting so a client disconnect cannot lose the
@@ -461,9 +463,26 @@ class HubRequestHandler(BaseHTTPRequestHandler):
             err = HubError("internal_error")
             self._emit(_json_response(err.payload(), status=err.status))
 
-    def _authorize(self, route: Route, req: Request) -> None:
+    def _authorize(self, route: Route, req: Request, params: dict | None = None) -> None:
         ctx = self.hub.ctx
+        params = params or {}
         if route.mode == "anon":
+            return
+        if route.mode == "admin_or_self":
+            key = req.header("X-Pi-Admin-Key")
+            if key:
+                ctx.auth.check_admin(key, ctx.admin_key)
+                return
+            token = _bearer(req.header("Authorization"))
+            if not token:
+                raise HubError("admin_required")
+            device = ctx.auth.authenticate(token)
+            target = params.get("device_id") or ""
+            if device["id"] != target:
+                # 不是自己：仍需 admin scope
+                ctx.auth.require_scope(device, "admin")
+            ctx.auth.touch(device["id"])
+            req.device = device
             return
         if route.mode == "admin":
             key = req.header("X-Pi-Admin-Key")

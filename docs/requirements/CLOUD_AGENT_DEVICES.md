@@ -3,7 +3,7 @@
 > **面向**：要实现「多台本地程序连同一个云端 Agent」「云端 Agent 认得是哪台设备」「云端指挥本地 Agent 干活」的人
 > **什么时候读**：动对接层（本地 ↔ 云端）、设备身份、反向任务通道、变更 S-02 之前
 > **什么时候要改**：插件形态、设备身份口径、派活权限口径、上游插件 API、验收场景变化时
-> **状态**：**v3.3 · 2026-11-06 · H0 已完成（G0 全绿）、H1 服务端与本地切换均已完成（G1 待人点一遍）** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
+> **状态**：**v3.4 · 2026-11-06 · H0 已完成（G0 全绿）、H1 服务端与本地切换均已完成（G1 待人点一遍）** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
 > **取代**：v1 的 `pi-hub` 独立服务方案（作废，理由见 §4）
 
 ---
@@ -114,7 +114,7 @@ dashboard（dash.*）── 直连，不过插件
 | --- | --- | --- | --- |
 | `POST /v1/devices/register` | 登记设备，返回**一次性明文 token** + deviceId。新 id → `201`；**同一 id 再登记 → `200` + `rotated:true` 并立刻作废旧 token**（重装 / token 丢失 / 误注销都走这条；撤销状态一并清掉） | `X-Pi-Admin-Key` | 服务端只存 sha256 + 前 8 位 |
 | `GET /v1/devices` | 设备列表（名字 / 在线 / scope / 最后活跃） | `X-Pi-Admin-Key` 或 `admin` scope | |
-| `POST /v1/devices/{id}/revoke` | 撤销（立刻 401） | 同上 | 不删行，写 `revoked_at` |
+| `POST /v1/devices/{id}/revoke` | 撤销（立刻 401）。**设备可以撤销自己**（chat scope 即可，只切断自己）；撤销**别的**设备仍需管理密钥或 `admin` scope | `X-Pi-Admin-Key` / `Bearer`（自注销） | 不删行，写 `revoked_at` |
 | `GET /v1/hub/health` | 插件自检（版本 / 上游连通 / 设备数 / 队列深度） | 匿名 | UI 用它区分故障源 |
 
 ### 5.2 设备侧（`Authorization: Bearer pi_…`）
@@ -574,6 +574,7 @@ ssh -i "F:/SSH KEY/SG_001.pem"     -o "ProxyCommand=<HTTP CONNECT 隧道脚本> 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
 | **v3.1** | 2026-11-06 | **H0 完成**：插件骨架落地（`hermes-plugin/pi-workbench`，50 个 unittest 全绿）+ 部署到 VPS，**G0 六条全过**。实测三条上游事实写回方案：`register_platform`/`register_tool` 签名、`platform` 插件**自动 connect**（无需 `platforms:` 配置块，激活证据是 `plugins.enable` + `requires_env`）、`capabilities` 只接受注册表 id（原计划的 `network_ingress` 不存在，清单里不写）。两个运维坑：插件 INFO 日志不进 journalctl（看 `/v1/hub/health`）、Caddy reload 后证书有 ~5s 窗口 |
+| **v3.4** | 2026-11-06 | **两条实测缺陷修复**：① `fsguard` 白名单漏了 `cache/images`（dashboard 写图片的位置），导致聊天里**所有图片缩略图**读回都是 403 `path_not_allowed` → UI 显示「图片不可见」；根目录补 `cache/{images,audio,vision,screenshots,videos,documents,scratch}`，`cache/browser*`（Cookie）明确排除。② 撤销路由只认管理密钥或 `admin` scope，而连接页用的是 `chat/dispatch` 设备 token → 点「注销这台设备」永远 403 `scope_required`；改为**允许设备自注销**（只切断自己），撤销别人的设备仍需 admin。共 86 例 |
 | **v3.3** | 2026-11-06 | **登记改为幂等（可换 token）**：同一 `deviceId` 再登记不再撞 `UNIQUE constraint failed: devices.id` 变成 500，而是 `200` + `rotated:true` + 旧 token 立即失效 + 清撤销状态。真实场景：token 丢失 / 应用重装 / 误注销后用户会再点一次「登记」，而 id 是身份不该变。客户端补 `internal` 错误码文案。新增 3 例单测（rotate / 旧 token 失效 / 撤销后复活），共 82 例 |
 | **v3.2** | 2026-11-06 | **H1 完成**：服务端全量切换（SSE 保真 + `author` 覆盖 + 幂等命名空间 + `fsguard` 白名单 + dashboard 侧通道，79 用例，`9dacb1f`）+ 本地单入口（`cloudTransport()` 唯一切换点、`gateway.ts`、三个 IPC、连接页「云端网关」卡、`clearDeviceCredentials()`，测试 149 个文件全绿）。**本地与云端的往来不再需要 API 密钥**；`apiKey` 只在回滚时手工启用 |
 | **v3.0** | 2026-11-06 | **最终版**：所有者「全部都按你默认」→ B1 同名工作区加设备后缀 / B2 不做分支指定 / B3 只报打开过的工作区 / 批准三项生产环境改动（先备份）。新增 **§20 执行手册**：20.0 备份命令 → H0–H4 每阶段的分步清单 + G0–G4 Gate 判据（含可手打的 curl）+ 每阶段回滚动作 + 时间线「第一次动手的 5 件事」。状态改为「待开工 H0」 |

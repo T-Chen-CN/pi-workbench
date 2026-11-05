@@ -11,12 +11,33 @@ import os
 from pathlib import Path
 
 
+# Media dirs the dashboard/agent writes into, relative to the profile home.
+# `cache/browser*` is deliberately absent: those hold cookies and login data.
+_MEDIA_DIRS = (
+    "uploads",
+    "image_cache",
+    "audio_cache",
+    os.path.join("cache", "images"),
+    os.path.join("cache", "audio"),
+    os.path.join("cache", "vision"),
+    os.path.join("cache", "screenshots"),
+    os.path.join("cache", "videos"),
+    os.path.join("cache", "documents"),
+    os.path.join("cache", "scratch"),
+)
+
+
 def default_roots(profile_home: str | os.PathLike[str] | None) -> list[Path]:
-    roots: list[Path] = []
-    if profile_home:
-        home = Path(profile_home)
-        roots.extend([home / "uploads", home / "image_cache", home / "audio_cache"])
-    return roots
+    """Where a device token is allowed to read images/documents from.
+
+    Chat messages carry *paths* (`cache/images/dashboard_….png`), and the UI
+    reads them back through `/api/fs/read-data-url` — so these roots have to
+    match where the dashboard actually writes, or every thumbnail breaks.
+    """
+    if not profile_home:
+        return []
+    home = Path(profile_home)
+    return [home / part for part in _MEDIA_DIRS]
 
 
 def resolve_roots(raw: str | None, profile_home: str | os.PathLike[str] | None) -> list[Path]:

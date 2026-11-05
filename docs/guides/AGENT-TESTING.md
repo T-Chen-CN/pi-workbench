@@ -209,19 +209,22 @@ ssh … 'tail -f ~/.hermes/profiles/pi-cloud/plugin-data/pi-workbench/audit.json
 
 ### 4. 审批三档（安全边界）
 
+> ⚠️ **先说清上游语义**：Hermes 的 `approvals.mode: manual` 只对**危险 shell 命令**
+> （`rm -r*`、`mkfs`、`dd`、`kill`、`shutdown`…）和**少数敏感文件路径**（如 `~/.ssh/config`）
+> 要审批；**普通文件写入不弹审批**（`tools/file_tools.py` 只对敏感路径走审批门）。
+> 所以「创建文件没要我批准」是上游设计，不是本项目的 bug。想看审批卡，要用危险命令。
+
 **步骤**（同一条会话里依次做）
-1. 发：`创建文件 g1-test.txt，内容写 hello`
+1. 发：`在 /tmp 下建一个目录 g1-probe，然后用 rm -rf 把它删掉`
 2. 审批卡出现时点 **`once`**（仅这次）
-3. 再发：`再创建一次 g1-test-2.txt`
-4. 这次点 **`session`**（本会话内不再问）
-5. 再发：`再创建一次 g1-test-3.txt`
-6. 这次点 **`deny`**（拒绝）
+3. 再发同一句，这次点 **`session`**（本会话内不再问）
+4. 再发同一句，这次点 **`deny`**（拒绝）
+5. 另开一条**新会话**，再发同一句 —— 审批卡应该**重新出现**（`session` 不跨会话）
 
 **预期**
-- ✅ `once`：工具卡回执显示写入成功（铁证可 `ssh … 'find ~/.hermes -name "g1-test*" 2>/dev/null'`）。
-- ✅ `session`：同样真的执行。
-- ✅ 点 `session` 之后**同一会话**再发同类写操作，**不再弹审批**；新开会话仍会弹。
-- ✅ `deny`：工具卡显示被拒 / `BLOCKED`，VPS 上**不存在** `g1-test-3.txt`。
+- ✅ `once`：命令真的执行（工具卡回执可见 `rm -rf` 结果）。
+- ✅ `session`：**同一会话**再发同一句，**不再弹审批**；**新会话仍弹**。
+- ✅ `deny`：工具卡显示被拒 / `BLOCKED`，目录**还在**（`ssh … 'ls -d /tmp/g1-probe'`）。
 - ✅ 每一步云端审计都有对应 `approval` 记录；本机 `logs/main.log` 有回执日志。
 - ❌ 点 `deny` 却执行了 → 立刻停手，这是安全问题（看审计里 `decision` 字段）。
 
