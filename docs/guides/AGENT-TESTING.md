@@ -147,7 +147,7 @@ npm run web:dev
 
 > 什么时候跑：改过 `hermes-plugin/`（云端网关）、`electron/cloud*`、连接页之后。
 > 判据出处：[CLOUD_AGENT_DEVICES §20.2](../requirements/CLOUD_AGENT_DEVICES.md)。
-> 全部通过 = 本地与云端只剩一条门，`apiKey` 可以永久不用。
+> 全部通过 = 本地与云端只剩一条门（设备 token 是唯一凭据）。
 
 ### 0. 前置（每次开工 30 秒）
 
@@ -350,7 +350,7 @@ ssh … 'HERMES_HOME=… hermes --profile pi-cloud gateway stop'  # 或停 api_s
 
 **预期**
 - ✅ 注销后卡变成未登记态；**会话区立刻变成不可用**（顶部提示「已注销，需重新登记」，能力与会话清空）。
-- ✅ 发消息**明确失败**，且**不会悄悄回到 `api.` 直连**（本地锁在网关模式；回拨直连要运维改 `transportMode`）。
+- ✅ 发消息**明确失败**（本地只有网关一条路，没有任何直连残留）。
 - ✅ 再登记立刻恢复（同一 `deviceId`，token 换了：云端审计里 `rotated:true`）。
 - ✅ 旧 token 已失效（可让旧设备再请求一次验证 401 `device_revoked`）。
 
@@ -369,7 +369,7 @@ ssh … 'HERMES_HOME=… hermes --profile pi-cloud gateway stop'  # 或停 api_s
 
 ### G1 通过标准
 
-12 项（第 2–10 项 + 11/12/13 三条语义）全绿 = **G1 通过**，`apiKey` 可永久停用。
+12 项（第 2–10 项 + 11/12/13 三条语义）全绿 = **G1 通过**。
 
 任何一项不绿，先按表定位到底是哪一层：
 

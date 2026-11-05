@@ -10,18 +10,13 @@
 export type CloudConnectionState = 'unconfigured' | 'connecting' | 'connected' | 'error'
 
 export interface CloudConnectionInfo {
-  baseUrl: string
-  /** 网关（单入口）地址；登记后所有请求走它 */
+  /** 网关（单入口）地址：本地唯一出口（C-2，没有直连兜底） */
   gatewayUrl: string
   dashboardUrl: string
-  /** 渲染层永远拿不到密钥，只能知道有没有 */
-  hasToken: boolean
-  /** 设备 token 是否已就位（登记后为 true，此时按网关模式工作） */
+  /** 设备 token 是否已就位（登记后为 true，渲染层只能知道有没有） */
   hasDeviceToken: boolean
   deviceScopes: string[]
   deviceId: string
-  /** `gateway` = 只走网关（注销后没有 token 就是**不能用**，不回落直连） */
-  transportMode: 'gateway' | 'direct'
   /** 控制台会话令牌是否已配置（图片上传/读取要用） */
   hasDashboardToken: boolean
   /** 控制台账号（用户名明文；口令只回 has 标记） */

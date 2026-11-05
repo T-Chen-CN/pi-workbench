@@ -445,6 +445,21 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
 let module: CloudAgentModule
 let dispose: () => void
 
+/**
+ * 把本地置成「已登记」状态：单入口之后没有 API 密钥这条路，
+ * 所有需要凭据的用例都从这里起步（等价于连接页登记成功之后）。
+ */
+async function registerLocalDevice(): Promise<void> {
+  const config = await import('../electron/cloud/config')
+  config.writeCloudConfig({
+    baseUrl: 'https://api.example.com',
+    gatewayUrl: 'https://hub.example.com',
+    deviceToken: 'pi_hub_token_once',
+    deviceScopes: ['chat', 'dispatch', 'admin'],
+    deviceId: 'dev-local',
+  })
+}
+
 beforeAll(async () => {
   mocks.state.appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-cloud-ipc-'))
   module = await import('../electron/ipc/cloud-agent')
@@ -460,13 +475,17 @@ afterAll(() => {
 })
 
 describe('cloud IPC', () => {
-  it('starts unconfigured and hides the key', async () => {
-    const result = await call<{ success: boolean; config: { baseUrl: string; hasToken: boolean } }>(
-      'cloud:config:get'
-    )
+  it('starts unregistered and never leaks a credential', async () => {
+    const result = await call<{
+      success: boolean
+      config: { gatewayUrl: string; hasDeviceToken: boolean }
+    }>('cloud:config:get')
     expect(result.success).toBe(true)
-    expect(result.config.hasToken).toBe(false)
+    expect(result.config.hasDeviceToken).toBe(false)
+    // 单入口：连「API 密钥」这个概念都不该出现在公开配置里
     expect(result.config).not.toHaveProperty('apiKey')
+    expect(result.config).not.toHaveProperty('deviceToken')
+    expect(result.config.gatewayUrl).toMatch(/^https?:\/\//)
   })
 
   it('rejects cloud calls before a key is saved', async () => {
@@ -476,10 +495,10 @@ describe('cloud IPC', () => {
     expect(result.error).toMatch(/登记|API 密钥/)
   })
 
-  it('saves config, connects and lists sessions', async () => {
+  it('saves the console token, connects and lists sessions', async () => {
+    await registerLocalDevice()
     const saved = await call<{ success: boolean }>('cloud:config:set', {
-      baseUrl: 'https://api.example.com',
-      apiKey: 'test-key',
+      dashboardToken: 'dash-token',
     })
     expect(saved.success).toBe(true)
 
@@ -539,7 +558,7 @@ describe('cloud IPC', () => {
     ])
     expect(partsFrame?.parts[1].resultPreview).toBe('file.txt')
 
-    expect(mocks.state.requests).toContain('POST https://api.example.com/v1/runs')
+    expect(mocks.state.requests).toContain('POST https://hub.example.com/v1/runs')
     expect(mocks.state.requests.some((line) => line.endsWith('/v1/runs/run_test/events'))).toBe(true)
   })
 
@@ -628,6 +647,7 @@ describe('cloud device identity', () => {
 
 describe('cloud session actions', () => {
   it('renames and pins through PATCH, and deletes hard', async () => {
+    await registerLocalDevice()
     const renamed = await call<{ success: boolean; session?: { title: string } }>(
       'cloud:sessions:update',
       { sessionId: 'run_session', title: 'Renamed probe' }
@@ -642,13 +662,13 @@ describe('cloud session actions', () => {
     expect(pinned.success).toBe(true)
     expect(pinned.session?.pinned).toBe(true)
     // 请求确实打到 PATCH /api/sessions/{id}
-    expect(mocks.state.requests.some((line) => line === 'PATCH https://api.example.com/api/sessions/run_session')).toBe(true)
+    expect(mocks.state.requests.some((line) => line === 'PATCH https://hub.example.com/api/sessions/run_session')).toBe(true)
 
     const removed = await call<{ success: boolean; deleted?: boolean }>('cloud:sessions:delete', {
       sessionId: 'run_session',
     })
     expect(removed).toMatchObject({ success: true, deleted: true })
-    expect(mocks.state.requests.some((line) => line === 'DELETE https://api.example.com/api/sessions/run_session')).toBe(true)
+    expect(mocks.state.requests.some((line) => line === 'DELETE https://hub.example.com/api/sessions/run_session')).toBe(true)
   })
 
   it('rejects a missing session id', async () => {
@@ -672,20 +692,33 @@ describe('cloud steer', () => {
 })
 
 describe('cloud images', () => {
-  it('refuses to upload before a console token is configured', async () => {
+  it('uploads with the device token, no console token needed', async () => {
+    await registerLocalDevice()
+    const uploaded = await call<{ success: boolean; image?: { path: string } }>(
+      'cloud:media:upload',
+      { dataUrl: 'data:image/png;base64,AAAA', filename: 'pasted.png' }
+    )
+    // 单入口：图片上传也走网关，凭据是设备 token
+    expect(uploaded.success).toBe(true)
+    expect(mocks.state.requests.some((line) => line.startsWith('POST https://hub.example.com/api/chat/image-upload'))).toBe(true)
+  })
+
+  it('refuses to upload before the device is registered', async () => {
+    // 没登记 = 没有凭据，连上传都不该发出去
+    const config = await import('../electron/cloud/config')
+    config.clearDeviceCredentials()
+    const before = mocks.state.requests.length
     const result = await call<{ success: boolean; error?: string }>('cloud:media:upload', {
       dataUrl: 'data:image/png;base64,AAAA',
     })
     expect(result.success).toBe(false)
-    expect(result.error).toContain('HERMES_DASHBOARD_SESSION_TOKEN')
+    expect(result.error).toMatch(/登记/)
+    expect(mocks.state.requests.length).toBe(before)
   })
 
   it('rejects a non-whitelisted type locally', async () => {
-    await call('cloud:config:set', {
-      baseUrl: 'https://api.example.com',
-      apiKey: 'test-key',
-      dashboardToken: 'dash-token',
-    })
+    await registerLocalDevice()
+    await call('cloud:config:set', { dashboardToken: 'dash-token' })
     const result = await call<{ success: boolean; error?: string }>('cloud:media:upload', {
       dataUrl: 'data:image/svg+xml;base64,AAAA',
     })
@@ -694,11 +727,8 @@ describe('cloud images', () => {
   })
 
   it('uploads and reads back through the console', async () => {
-    await call('cloud:config:set', {
-      baseUrl: 'https://api.example.com',
-      apiKey: 'test-key',
-      dashboardToken: 'dash-token',
-    })
+    await registerLocalDevice()
+    await call('cloud:config:set', { dashboardToken: 'dash-token' })
     const uploaded = await call<{ success: boolean; image?: { path: string } }>(
       'cloud:media:upload',
       { dataUrl: 'data:image/png;base64,AAAA', filename: 'pasted.png' }
@@ -718,10 +748,7 @@ describe('cloud images', () => {
 
 describe('cloud resolve-unknown', () => {
   beforeAll(async () => {
-    await call('cloud:config:set', {
-      baseUrl: 'https://api.example.com',
-      apiKey: 'test-key',
-    })
+    await registerLocalDevice()
   })
 
   it('refuses to close a run that is merely running', async () => {
@@ -757,7 +784,7 @@ describe('cloud resolve-unknown', () => {
 
 describe('cloud ledger', () => {
   beforeAll(async () => {
-    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+    await registerLocalDevice()
   })
 
   it('books an external write from a live run and settles it on completion', async () => {
@@ -818,7 +845,7 @@ describe('cloud jobs', () => {
   })
 
   beforeAll(async () => {
-    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+    await registerLocalDevice()
   })
 
   it('maps the server record into camelCase and keeps the display schedule', async () => {
@@ -855,7 +882,7 @@ describe('cloud jobs', () => {
 
 describe('cloud diagnostics', () => {
   beforeAll(async () => {
-    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+    await registerLocalDevice()
   })
 
   it('keeps the healthy sections when one of them fails', async () => {
@@ -887,7 +914,7 @@ describe('cloud diagnostics', () => {
 
 describe('cloud clarify', () => {
   beforeAll(async () => {
-    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+    await registerLocalDevice()
   })
 
   it('sends exactly the three fields the backend accepts', async () => {
@@ -944,12 +971,8 @@ describe('cloud approval', () => {
   }
 
   beforeAll(async () => {
-    await call('cloud:config:set', {
-      baseUrl: 'https://api.example.com',
-      apiKey: 'test-key',
-      dashboardUrl: 'https://dash.example.com',
-      dashboardToken: 'dash-token',
-    })
+    await registerLocalDevice()
+    await call('cloud:config:set', { dashboardToken: 'dash-token' })
     await call('cloud:run:start', { input: 'run a command', idempotencyKey: 'key-approval' })
   })
 
@@ -1205,12 +1228,16 @@ describe('cloud handoff import', () => {
 
     const applied = await call<{
       success: boolean
-      config?: { dashboardUser: string; hasDashboardPassword: boolean; hasToken: boolean }
+      config?: {
+        dashboardUser: string
+        hasDashboardPassword: boolean
+        hasDashboardToken: boolean
+      }
     }>('cloud:handoff:apply', { applyNonce: picked.preview.applyNonce })
 
     expect(applied.success).toBe(true)
     expect(applied.config).toMatchObject({
-      hasToken: true,
+      hasDashboardToken: true,
       dashboardUser: 'admin',
       hasDashboardPassword: true,
     })
@@ -1260,7 +1287,7 @@ describe('cloud handoff import', () => {
 describe('cloud run attach（重启后接回在跑的一轮）', () => {
   beforeAll(async () => {
     // 上面的 handoff 用例结尾断开了连接（令牌被清掉），这里恢复一个可用配置
-    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+    await registerLocalDevice()
     await call('cloud:connect')
   })
 
@@ -1335,14 +1362,15 @@ describe('cloud run attach（重启后接回在跑的一轮）', () => {
   it('keeps the record when the address stays the same, drops it when it changes', async () => {
     writeActiveRun({ runId: 'run_hang', sessionId: 'hang_session', startedAt: 1 })
     // 原地保存同一个地址不该把能接回的记录清掉
-    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+    await registerLocalDevice()
     expect(readActiveRun()?.runId).toBe('run_hang')
 
-    await call('cloud:config:set', { baseUrl: 'https://other.example.com' })
+    // 换了服务器（网关地址变了）= 上一台的轮次接不回来
+    await call('cloud:config:set', { gatewayUrl: 'https://other.example.com' })
     expect(readActiveRun()).toBeNull()
 
     // 复原配置，别影响同文件里排在前面的用例假设
-    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+    await registerLocalDevice()
   })
 })
 
@@ -1360,6 +1388,8 @@ describe('cloud gateway (single entry)', () => {
   }
 
   it('starts unregistered and reports the gateway url without touching the network', async () => {
+    const config = await import('../electron/cloud/config')
+    config.clearDeviceCredentials()
     const before = mocks.state.requests.length
     const status = await call<StatusResult>('cloud:gateway:status')
     expect(status.success).toBe(true)

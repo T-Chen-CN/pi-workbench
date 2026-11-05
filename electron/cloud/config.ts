@@ -1,8 +1,11 @@
 /**
  * 云端连接配置：`data/cloud-agent/connection.json`
  *
- * 密钥用 safeStorage 加密（`enc:` 前缀），与 apiConfig 同一套约定；
- * 渲染层永远只拿到 `hasToken`。
+ * 凭据用 safeStorage 加密（`enc:` 前缀），与 apiConfig 同一套约定；
+ * 渲染层只能知道「有没有设备 token」，拿不到明文。
+ *
+ * **C-2：本地只有一扇门**。业务请求一律走 `gatewayUrl` + 设备 token；
+ * 不保留任何直连客户端，也没有「换个凭据再试一次」的分支。
  */
 
 import * as path from 'path'
@@ -30,21 +33,12 @@ export {
 
 interface StoredCloudConfig {
   baseUrl?: string
-  apiKey?: string
-  /** 网关（单入口）地址：本地只认这一个门，除非显式回滚到直连 */
+  /** 网关（单入口）地址：本地只有这一个门（C-2：没有直连兜底） */
   gatewayUrl?: string
   /** 设备 token（`pi_…`），safeStorage 加密；由网关登记时一次性发放 */
   deviceToken?: string
   /** 登记时授予的 scope 快照，仅供界面展示 */
   deviceScopes?: string[]
-  /**
-   * 传输模式：`gateway` = 只走网关（登记过就永久是这个），`direct` = 老直连。
-   *
-   * 为什么要存：注销/丢 token 之后 `deviceToken` 就空了，如果这时还「回落到 apiKey」，
-   * 注销等于没注销——设备照样能用云端。回滚是**运维改配置**（环境变量或手改这个字段），
-   * 不是代码里自动接管。
-   */
-  transportMode?: 'gateway' | 'direct'
   deviceId?: string
   dashboardUrl?: string
   /**
@@ -69,12 +63,7 @@ export interface CloudConfig {
   hasDeviceToken: boolean
   deviceScopes: string[]
   deviceId: string
-  /** `gateway` = 只走网关（登记过就是它）；`direct` = 老直连（仅运维回滚） */
-  transportMode: 'gateway' | 'direct'
   dashboardUrl: string
-  /** 明文密钥：只在主进程内使用，不经过 IPC 返回 */
-  apiKey: string
-  hasToken: boolean
   /** 控制台会话令牌明文（主进程内使用） */
   dashboardToken: string
   hasDashboardToken: boolean
@@ -93,7 +82,6 @@ export function cloudConfigFile(): string {
 export function readCloudConfig(): CloudConfig {
   const stored = readJsonWithBackup<StoredCloudConfig>(cloudConfigFile()).data
   const baseUrl = normalizeBaseUrl(stored?.baseUrl ?? '') || DEFAULT_CLOUD_BASE_URL
-  const apiKey = decryptSecret(stored?.apiKey ?? '')
   const deviceToken = decryptSecret(stored?.deviceToken ?? '')
   const gatewayUrl =
     normalizeBaseUrl(stored?.gatewayUrl ?? '') || deriveGatewayUrl(baseUrl) || DEFAULT_CLOUD_GATEWAY_URL
@@ -108,14 +96,7 @@ export function readCloudConfig(): CloudConfig {
     hasDeviceToken: Boolean(deviceToken),
     deviceScopes: Array.isArray(stored?.deviceScopes) ? stored!.deviceScopes!.map(String) : [],
     deviceId: String(stored?.deviceId ?? ''),
-    // 有 token 或有登记记录 = 网关模式；老配置（两者都没有）才算直连
-    transportMode:
-      stored?.transportMode === 'gateway' || deviceToken || stored?.deviceId
-        ? 'gateway'
-        : 'direct',
     dashboardUrl,
-    apiKey,
-    hasToken: Boolean(apiKey),
     dashboardToken,
     hasDashboardToken: Boolean(dashboardToken),
     dashboardUser: stored?.dashboardUser ?? '',
@@ -133,8 +114,6 @@ export function writeCloudConfig(input: {
   deviceToken?: string
   deviceScopes?: string[]
   deviceId?: string
-  transportMode?: 'gateway' | 'direct'
-  apiKey?: string
   dashboardToken?: string
   /** 交接文件里的控制台地址可能与 `api.` 派生规则不一致，允许显式覆盖 */
   dashboardUrl?: string
@@ -148,15 +127,11 @@ export function writeCloudConfig(input: {
   // 留空表示沿用旧值；显式传入才覆盖
   const pick = (value: string | undefined, fallback: string): string =>
     typeof value === 'string' && value.trim() ? value.trim() : fallback
-  const nextKey = pick(input.apiKey, current.apiKey)
   const nextDeviceToken = pick(input.deviceToken, current.deviceToken)
   // 显式传入优先，否则按 baseUrl 派生（不沿用旧值：地址改了网关就该跟着改）
   const nextGatewayUrl = normalizeBaseUrl(input.gatewayUrl ?? '') || deriveGatewayUrl(baseUrl)
   const nextDeviceScopes = input.deviceScopes ?? current.deviceScopes
   const nextDeviceId = pick(input.deviceId, current.deviceId)
-  // 一旦登记过就锁在网关模式：注销/丢 token 之后也不许悄悄回落到 apiKey
-  const nextTransportMode: 'gateway' | 'direct' =
-    input.transportMode ?? (nextDeviceId || input.deviceToken ? 'gateway' : current.transportMode)
   const nextDashboardToken = pick(input.dashboardToken, current.dashboardToken)
   const nextDashboardUser = pick(input.dashboardUser, current.dashboardUser)
   const nextDashboardPassword = pick(input.dashboardPassword, current.dashboardPassword)
@@ -172,9 +147,7 @@ export function writeCloudConfig(input: {
     deviceToken: nextDeviceToken ? encryptSecret(nextDeviceToken) : '',
     deviceScopes: nextDeviceScopes,
     deviceId: nextDeviceId || undefined,
-    transportMode: nextTransportMode,
     dashboardUrl,
-    apiKey: nextKey ? encryptSecret(nextKey) : '',
     dashboardToken: nextDashboardToken ? encryptSecret(nextDashboardToken) : '',
     dashboardUser: nextDashboardUser,
     dashboardPassword: nextDashboardPassword ? encryptSecret(nextDashboardPassword) : '',
@@ -190,10 +163,7 @@ export function writeCloudConfig(input: {
     hasDeviceToken: Boolean(nextDeviceToken),
     deviceScopes: nextDeviceScopes,
     deviceId: nextDeviceId,
-    transportMode: nextTransportMode,
     dashboardUrl,
-    apiKey: nextKey,
-    hasToken: Boolean(nextKey),
     dashboardToken: nextDashboardToken,
     hasDashboardToken: Boolean(nextDashboardToken),
     dashboardUser: nextDashboardUser,
@@ -219,14 +189,11 @@ export function clearDeviceCredentials(): CloudConfig {
     dashboardUser: current.dashboardUser,
     handoffImportedAt: current.handoffImportedAt ?? undefined,
     handoffProfile: current.handoffProfile || undefined,
-    apiKey: current.apiKey ? encryptSecret(current.apiKey) : '',
     dashboardToken: current.dashboardToken ? encryptSecret(current.dashboardToken) : '',
     dashboardPassword: current.dashboardPassword ? encryptSecret(current.dashboardPassword) : '',
     deviceToken: '',
     deviceScopes: [],
     deviceId: undefined,
-    // 注销后仍然是网关模式：没有 token = 没有凭据 = 明确报错，而不是回落直连
-    transportMode: 'gateway',
   }
   writeJsonAtomicSync(cloudConfigFile(), stored)
   return {
@@ -235,7 +202,6 @@ export function clearDeviceCredentials(): CloudConfig {
     hasDeviceToken: false,
     deviceScopes: [],
     deviceId: '',
-    transportMode: 'gateway',
   }
 }
 
@@ -249,18 +215,14 @@ export function clearCloudToken(): CloudConfig {
     dashboardUser: current.dashboardUser,
     handoffImportedAt: current.handoffImportedAt ?? undefined,
     handoffProfile: current.handoffProfile || undefined,
-    apiKey: '',
     deviceToken: '',
     deviceScopes: [],
-    transportMode: current.transportMode,
     dashboardToken: '',
     dashboardPassword: '',
   }
   writeJsonAtomicSync(cloudConfigFile(), stored)
   return {
     ...current,
-    apiKey: '',
-    hasToken: false,
     deviceToken: '',
     hasDeviceToken: false,
     deviceScopes: [],
@@ -281,55 +243,36 @@ export function clearCloudToken(): CloudConfig {
 export function cloudTransport(config = readCloudConfig()): {
   baseUrl: string
   credential: string
-  viaGateway: boolean
   dashboardBaseUrl: string
   dashboardToken: string
 } {
-  // 网关模式（登记过就永久）：token 没了就是**没有凭据**，绝不回落到 apiKey。
-  // 注销之后还能用云端 = 注销没意义，也会让「哪台设备做的」永远说不清。
-  if (config.transportMode === 'gateway' || config.hasDeviceToken) {
-    return {
-      baseUrl: config.gatewayUrl,
-      credential: config.deviceToken,
-      viaGateway: true,
-      // 图片上传与图片读回也走网关（本地因此不需要控制台令牌）
-      dashboardBaseUrl: config.gatewayUrl,
-      dashboardToken: config.deviceToken,
-    }
-  }
-  // 直连只留给「从没登记过设备」的老配置 / 运维显式回滚
+  // 只有一扇门（C-2）。没有设备 token = 没有凭据 = 上层明确报错，
+  // 不存在「换个客户端再试一次」这条路。
   return {
-    baseUrl: config.baseUrl,
-    credential: config.apiKey,
-    viaGateway: false,
-    dashboardBaseUrl: config.dashboardUrl,
-    dashboardToken: config.dashboardToken,
+    baseUrl: config.gatewayUrl,
+    credential: config.deviceToken,
+    // 图片上传与图片读回也走网关（本地因此不需要控制台令牌）
+    dashboardBaseUrl: config.gatewayUrl,
+    dashboardToken: config.deviceToken,
   }
 }
 
 /** 只暴露给渲染层的字段 */
 export function publicCloudConfig(config = readCloudConfig()): {
-  baseUrl: string
   gatewayUrl: string
-  hasToken: boolean
   hasDeviceToken: boolean
   deviceScopes: string[]
   deviceId: string
-  /** `gateway` = 只走网关（登记过就是它）；`direct` = 老直连（仅运维回滚） */
-  transportMode: 'gateway' | 'direct'
   dashboardUrl: string
   hasDashboardToken: boolean
   dashboardUser: string
   hasDashboardPassword: boolean
 } {
   return {
-    baseUrl: config.baseUrl,
     gatewayUrl: config.gatewayUrl,
-    hasToken: config.hasToken,
     hasDeviceToken: config.hasDeviceToken,
     deviceScopes: config.deviceScopes,
     deviceId: config.deviceId,
-    transportMode: config.transportMode,
     dashboardUrl: config.dashboardUrl,
     hasDashboardToken: config.hasDashboardToken,
     dashboardUser: config.dashboardUser,

@@ -218,7 +218,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     const key = clientKeyFor(transport)
     if (client && key === clientKey) return client
     runner?.dispose()
-    client = createCloudClient({ baseUrl: transport.baseUrl, apiKey: transport.credential })
+    client = createCloudClient({ baseUrl: transport.baseUrl, credential: transport.credential })
     runner = new CloudRunner(
       {
         emit: (frame) => {
@@ -262,11 +262,12 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     return { success: true, config }
   })
 
-  handleIpc('cloud:config:set', (_event, input: { baseUrl?: string; apiKey?: string; dashboardToken?: string }) => {
-    const previousBaseUrl = readCloudConfig().baseUrl
+  handleIpc('cloud:config:set', (_event, input: { gatewayUrl?: string; dashboardToken?: string }) => {
+    const current = readCloudConfig()
+    const previousGatewayUrl = current.gatewayUrl
     const saved = writeCloudConfig({
-      baseUrl: String(input?.baseUrl ?? ''),
-      apiKey: typeof input?.apiKey === 'string' ? input.apiKey : undefined,
+      baseUrl: current.baseUrl,
+      gatewayUrl: typeof input?.gatewayUrl === 'string' ? input.gatewayUrl : undefined,
       dashboardToken: typeof input?.dashboardToken === 'string' ? input.dashboardToken : undefined
     })
     // 地址或密钥变化后旧连接作废
@@ -275,8 +276,8 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     runner?.dispose()
     runner = null
     capabilities = null
-    // 换了服务器，上一台的 run 记录就再也接不上了（原地保存别把能接回的记录清掉）
-    if (normalizeBaseUrl(saved.baseUrl) !== normalizeBaseUrl(previousBaseUrl)) clearActiveRun()
+    // 换了网关，上一台的 run 记录就再也接不上了（原地保存别把能接回的记录清掉）
+    if (normalizeBaseUrl(saved.gatewayUrl) !== normalizeBaseUrl(previousGatewayUrl)) clearActiveRun()
     return {
       success: true,
       config: publicCloudConfig(saved)
@@ -339,7 +340,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       canceled: false,
       preview: {
         ...toPreview(parsed.data, path.basename(filePath)),
-        willOverwrite: readCloudConfig().hasToken,
+        willOverwrite: readCloudConfig().hasDeviceToken,
         applyNonce: nonce
       }
     }
@@ -840,12 +841,8 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     const config = readCloudConfig()
     const transport = cloudTransport(config)
     if (!transport.dashboardToken) {
-      return {
-        success: false as const,
-        error: config.hasDeviceToken
-          ? '设备 token 丢失，请重新登记这台设备'
-          : '图片上传需要控制台会话令牌：在「连接」页填入服务端 .env 的 HERMES_DASHBOARD_SESSION_TOKEN'
-      }
+      // 单入口：上传凭据就是设备 token，没有第二条路
+      return { success: false as const, error: '这台设备还没有登记，先在「连接」页登记' }
     }
     try {
       // 本地先校验类型与体积，省一次注定失败的往返
@@ -868,7 +865,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     const config = readCloudConfig()
     const transport = cloudTransport(config)
     if (!transport.dashboardToken) {
-      return { success: false as const, error: '读取云端图片需要控制台会话令牌' }
+      return { success: false as const, error: '这台设备还没有登记，先在「连接」页登记' }
     }
     try {
       const client = createDashboardClient({
@@ -1085,8 +1082,8 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
 
   handleIpc('cloud:dashboard:open', () => {
     const config = readCloudConfig()
-    if (!config.hasToken) {
-      return { success: false, error: '还没有配置 API 密钥' }
+    if (!config.hasDeviceToken) {
+      return { success: false, error: '这台设备还没有登记，先在「连接」页登记' }
     }
     hookWindow()
     try {

@@ -30,9 +30,6 @@ export const translations = {
     cloudStateError: '连接失败',
     cloudBaseUrl: 'API 地址',
     cloudBaseUrlHint: '形如 https://api.example.com，不要带 /v1',
-    cloudApiKey: 'API Key',
-    cloudApiKeySavedHint: '已保存密钥；留空则保持不变',
-    cloudApiKeyPlaceholder: '粘贴 API_SERVER_KEY',
     cloudDeviceTitle: '这台设备',
     cloudDeviceName: '设备名',
     cloudDeviceNameHint:
@@ -1127,9 +1124,6 @@ export const translations = {
     cloudStateError: 'Connection failed',
     cloudBaseUrl: 'API URL',
     cloudBaseUrlHint: 'Like https://api.example.com — without /v1',
-    cloudApiKey: 'API key',
-    cloudApiKeySavedHint: 'A key is saved; leave blank to keep it',
-    cloudApiKeyPlaceholder: 'Paste API_SERVER_KEY',
     cloudDeviceTitle: 'This device',
     cloudDeviceName: 'Device name',
     cloudDeviceNameHint:

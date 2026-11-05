@@ -3,7 +3,7 @@
 > **面向**：要实现「多台本地程序连同一个云端 Agent」「云端 Agent 认得是哪台设备」「云端指挥本地 Agent 干活」的人
 > **什么时候读**：动对接层（本地 ↔ 云端）、设备身份、反向任务通道、变更 S-02 之前
 > **什么时候要改**：插件形态、设备身份口径、派活权限口径、上游插件 API、验收场景变化时
-> **状态**：**v3.5 · 2026-11-06 · H0 已完成（G0 全绿）、H1 服务端与本地切换均已完成（G1 待人点一遍）** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
+> **状态**：**v3.6 · 2026-11-06 · H0 已完成（G0 全绿）、H1 服务端与本地切换均已完成（G1 待人点一遍）** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
 > **取代**：v1 的 `pi-hub` 独立服务方案（作废，理由见 §4）
 
 ---
@@ -48,8 +48,8 @@
 | 结果粒度 | 只回摘要（≤2k） |
 | 派活选设备 | 由 **工作区** 反查设备（工作区→唯一设备）；工作区离线即拒 |
 | 升级中断 | 允许（开发阶段，无可用性承诺）；升级前先 `plugins disable` |
-| 本地 `apiKey` 字段 | 保留到 H4 之后（唯一回滚手段），正常路径不用 |
-| 本地 `transportMode` | `gateway` / `direct`。**登记过就锁在 `gateway`**：注销或 token 丢失时「没有凭据 = 明确报错」，绝不回落到 `apiKey`。回拨到 `direct` 是**运维改配置**（手改 `connection.json`），不是代码自动接管 |
+| 本地直连凭据 | **一律删除**（v3.6）。渲染层的「服务地址 / API 密钥」输入、配置里的 `apiKey` 字段、`cloudTransport()` 的直连分支、`createCloudClient` 的第二套凭据全部移除。只有一个客户端、一份凭据（设备 token） |
+| 单入口的唯一出口 | `cloudTransport()` 永远返回 `{ baseUrl: gatewayUrl, credential: deviceToken }`；没有 token = 没有凭据 = 上层明确报错 |
 | 注销的语义 | 云端对这扇门关门：设备 token 立即失效，本地清掉凭据并**清空能力与会话视图**，界面显示「已注销，需重新登记」；云端会话数据仍在（重新登记后可见），但撤销期间的这台设备读不到 |
 | 本地会话缓存层 | **不做**（所有者：开发阶段，云端可长期停机） |
 | 分期顺序 | H0 → H1（唯一切换点）→ H2 → H3 → H4 |
@@ -360,7 +360,7 @@ interface RemoteTask {
 
 | 项 | 改动 |
 | --- | --- |
-| 配置 `connection.json` | 增 `gatewayUrl`（默认 hub）、`deviceId`、`deviceToken`（`enc:`）、`scopes`、`hubStatus`；`apiKey` 降级为**仅登记设备时**使用 |
+| 配置 `connection.json` | 只有 `gatewayUrl`（默认 hub）、`deviceId`、`deviceToken`（`enc:`）、`deviceScopes`，加控制台视图用的 `dashboard*`；**没有 `apiKey`** |
 | 客户端 | 所有 cloud 调用收敛到 `cloudFetch()`：带 device token、统一错误码映射；**删除直连分支** |
 | 连接页 | 改为「云端网关」：地址 + 管理密钥（登记用）+ 「登记这台设备」+ token 前 8 位 / scope / 在线状态 + 「注销这台设备」 |
 | 设备卡（D0 已有） | 增登记状态、scope、在线、注销；本地仍发 `author`（会被插件覆盖，权威在服务端） |
@@ -540,9 +540,9 @@ ssh … 'NEW=$(openssl rand -base64 32 | tr -d "/+=" ); printf "%s" "$NEW" > ~/p
 | 迁移期 `author` 双写混乱 | 低 | 插件覆盖；本地值只进日志 |
 | 插件数据丢失 | 中 | `plugin_data_dir` 每日备份；设备可重新登记（token 重签即可） |
 
-**回滚**（运维动作，代码里不实现）：把 `connection.json` 的 `transportMode` 改成 `"direct"` + `gatewayUrl` 指回 `https://api.tchen-xiaoxiao.com` + 用回 `apiKey`；`hermes plugins disable pi-workbench`。前提是 `apiKey` 字段保留到 H4 之后。
+**回滚**（只有运维动作，代码里没有任何直连残留）：把插件修好 / 降级到旧插件版本；真要停用就在 VPS 上 `hermes plugins disable pi-workbench` —— 此时本地**云端功能整体不可用**（明确报错），这是刻意的：没有第二条缝可以偷偷绕过去。
 
-> 为什么多了 `transportMode` 这一步：只有把模式显式改回去，才可能出现「注销了却还能用云端」的情况。默认锁在 `gateway` 意味着**注销就是真的注销**。
+> v3.6 起连 `transportMode` 也没有了：初始化就没有第二条路，所以「注销了却还能用云端」在结构上不可能发生。
 
 ---
 
@@ -567,7 +567,7 @@ ssh … 'NEW=$(openssl rand -base64 32 | tr -d "/+=" ); printf "%s" "$NEW" > ~/p
 | QN-2 | 端口 127.0.0.1:8484 | ✅ |
 | QN-3 | 管理密钥放 systemd `Environment=` | ✅ |
 | QN-4 | 升级允许短暂中断 | ✅ |
-| QN-5 | 保留 `apiKey` 到 H4 之后（回滚用） | ✅ |
+| QN-5 | ~~保留 `apiKey` 到 H4 之后（回滚用）~~ → **v3.6 撤销**：所有者指出这仍是「回退设计」；已把直连凭据与分支从代码里全部删除 | ✅ |
 | QN-6 | VPS 操作由我执行 | ✅ 已连通并跑完预检 |
 | QN-7 | SSE 空闲 15 分钟 | ✅ |
 | — | 本地缓存层 | ❌ 不做（开发阶段无可用性承诺） |
@@ -601,6 +601,7 @@ ssh … 'NEW=$(openssl rand -base64 32 | tr -d "/+=" ); printf "%s" "$NEW" > ~/p
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
 | **v3.1** | 2026-11-06 | **H0 完成**：插件骨架落地（`hermes-plugin/pi-workbench`，50 个 unittest 全绿）+ 部署到 VPS，**G0 六条全过**。实测三条上游事实写回方案：`register_platform`/`register_tool` 签名、`platform` 插件**自动 connect**（无需 `platforms:` 配置块，激活证据是 `plugins.enable` + `requires_env`）、`capabilities` 只接受注册表 id（原计划的 `network_ingress` 不存在，清单里不写）。两个运维坑：插件 INFO 日志不进 journalctl（看 `/v1/hub/health`）、Caddy reload 后证书有 ~5s 窗口 |
+| **v3.6** | 2026-11-06 | **清掉最后一丝「回退设计」**（所有者指出 v3.5 的 `transportMode` 本身仍是回退设计）。删除 `apiKey` 字段与 `createCloudClient` 的第二套凭据、删除 `cloudTransport()` 的直连分支、删除渲染层「服务地址 / API 密钥」输入与相关文案、交接导入不再写 API 密钥。`cloudTransport()` 永远返回网关地址 + 设备 token，没 token 就是没凭据。注销/断线后界面直接不可用，回滚只能靠运维修插件 |
 | **v3.5** | 2026-11-06 | **注销 = 真的关门**：新增 `transportMode`（`gateway`/`direct`）。此前注销只清了设备 token，`cloudTransport()` 会**回落到 `apiKey` 直连**——等于注销没生效，也让「哪台设备做的」说不清。现在登记过就锁在网关模式，没有 token 就是没有凭据（明确报错），界面同时清空能力/会话并显示「已注销，需重新登记」；回拨直连必须运维手改配置（§16）。新增 4 例 config 单测 + 2 例 store 单测 |
 | **v3.4** | 2026-11-06 | **两条实测缺陷修复**：① `fsguard` 白名单漏了 `cache/images`（dashboard 写图片的位置），导致聊天里**所有图片缩略图**读回都是 403 `path_not_allowed` → UI 显示「图片不可见」；根目录补 `cache/{images,audio,vision,screenshots,videos,documents,scratch}`，`cache/browser*`（Cookie）明确排除。② 撤销路由只认管理密钥或 `admin` scope，而连接页用的是 `chat/dispatch` 设备 token → 点「注销这台设备」永远 403 `scope_required`；改为**允许设备自注销**（只切断自己），撤销别人的设备仍需 admin。共 86 例 |
 | **v3.3** | 2026-11-06 | **登记改为幂等（可换 token）**：同一 `deviceId` 再登记不再撞 `UNIQUE constraint failed: devices.id` 变成 500，而是 `200` + `rotated:true` + 旧 token 立即失效 + 清撤销状态。真实场景：token 丢失 / 应用重装 / 误注销后用户会再点一次「登记」，而 id 是身份不该变。客户端补 `internal` 错误码文案。新增 3 例单测（rotate / 旧 token 失效 / 撤销后复活），共 82 例 |
@@ -704,7 +705,7 @@ curl -s -o /dev/null -w '%{http_code}
 | H1-4b | `electron/cloud/gateway.ts`（`health` / `whoami` / `register` / `revoke`）+ 错误码翻译，与 `core/errors.py` 一一对应 | `tests/cloud-gateway.test.ts`（8 例） |
 | H1-4c | IPC 三个新频道：`cloud:gateway:status|register|revoke`（四步都补了：`handleIpc` → preload → `electron.d.ts` → `api/cloud.ts` + Web mock） | `tests/cloud-agent-ipc.test.ts` 新增 6 例（含「登记后业务请求一律走 hub」「注销后不再打网关」） |
 | H1-4d | 连接页新增「云端网关」卡：地址 / 登记状态 / scope / 上游版本 / 登记（管理密钥只此一次） / 刷新 / 注销 | `tests/cloud-view.test.tsx` 新增 4 例 |
-| H1-4e | `clearDeviceCredentials()`：注销只清设备凭据，**保留** `gatewayUrl`（要显示）与 `apiKey`（回滚手段） | `tests/cloud-config.test.ts` |
+| H1-4e | `clearDeviceCredentials()`：注销清设备凭据，只保留 `gatewayUrl`（要显示） | `tests/cloud-config.test.ts` |
 
 **本地 → 网关全链路预检 ✅（2026-11-06，从本机经公网直连 `hub.` 实测，用临时设备 `local-pretest`，验完即注销）**
 
@@ -723,7 +724,7 @@ curl -s -o /dev/null -w '%{http_code}
 
 **G1 判据（逐条手点清单：见 [AGENT-TESTING §云端单入口](../guides/AGENT-TESTING.md#-云端单入口g1验收--逐条手点)）**：在连接页用管理密钥登记这台设备 → 12 项全功能回归（聊天 / 工具卡 / 审批 / 插话 / 跨重启 attach / 会话管理 / 任务页 / 自检 / 图片 / 停止 / 会话切换 / 取消）全部正常；**且**停插件时 UI 说「网关不可用」、只停 Hermes 时说「Hermes 异常」。
 
-**回滚**：`connection.json` 的 `gatewayUrl` 改回 `https://api.tchen-xiaoxiao.com` + 用回 `apiKey`（一步，1 分钟）。注销设备不会自动回落直连——代码里刻意不保留第二套客户端（C-2）。
+**回滚**：修好插件或降级插件版本；停用插件 = 云端功能整体不可用（明确报错）。**代码里不存在本地直连这条路**（C-2，v3.6 起连配置字段都没有了）。
 
 ### 20.3 H2 设备面（2 天）→ **G2**
 

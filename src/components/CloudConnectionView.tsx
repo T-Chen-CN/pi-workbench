@@ -46,16 +46,10 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const registerGateway = useCloudStore((state) => state.registerGateway)
   const revokeGateway = useCloudStore((state) => state.revokeGateway)
 
-  const [baseUrl, setBaseUrl] = useState(config.baseUrl)
-  const [apiKey, setApiKey] = useState('')
   const [dashboardToken, setDashboardToken] = useState('')
   const [busy, setBusy] = useState<'save' | 'connect' | null>(null)
   const [deviceName, setDeviceNameDraft] = useState('')
   const [adminKey, setAdminKey] = useState('')
-
-  useEffect(() => {
-    setBaseUrl(config.baseUrl)
-  }, [config.baseUrl])
 
   useEffect(() => {
     setDeviceNameDraft(device?.name ?? '')
@@ -90,16 +84,9 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
 
   const handleSave = async () => {
     setBusy('save')
-    const ok = await saveConfig({
-      baseUrl: baseUrl.trim(),
-      apiKey: apiKey.trim() || undefined,
-      dashboardToken: dashboardToken.trim() || undefined,
-    })
+    const ok = await saveConfig({ dashboardToken: dashboardToken.trim() || undefined })
     setBusy(null)
-    if (ok) {
-      setApiKey('')
-      setDashboardToken('')
-    }
+    if (ok) setDashboardToken('')
   }
 
   const handleReconnect = async () => {
@@ -161,30 +148,6 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
             }
           />
           <div className="flex flex-col gap-3 pt-3">
-            <Field label={t('cloudBaseUrl')} hint={t('cloudBaseUrlHint')} htmlFor="cloud-base-url">
-              <Input
-                id="cloud-base-url"
-                value={baseUrl}
-                spellCheck={false}
-                autoComplete="off"
-                onChange={(event) => setBaseUrl(event.target.value)}
-              />
-            </Field>
-            <Field
-              label={t('cloudApiKey')}
-              hint={config.hasToken ? t('cloudApiKeySavedHint') : undefined}
-              htmlFor="cloud-api-key"
-            >
-              <Input
-                id="cloud-api-key"
-                type="password"
-                value={apiKey}
-                spellCheck={false}
-                autoComplete="off"
-                placeholder={t('cloudApiKeyPlaceholder')}
-                onChange={(event) => setApiKey(event.target.value)}
-              />
-            </Field>
             <Field
               label={t('cloudDashboardToken')}
               hint={
@@ -226,7 +189,7 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                 size="sm"
                 icon={RefreshCw}
                 loading={busy === 'connect'}
-                disabled={!config.hasToken}
+                disabled={!config.hasDeviceToken}
                 onClick={() => void handleReconnect()}
               >
                 {t('cloudReconnect')}
@@ -234,7 +197,7 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
               <Button
                 size="sm"
                 icon={Link2Off}
-                disabled={!config.hasToken || connection === 'unconfigured'}
+                disabled={!config.hasDeviceToken || connection === 'unconfigured'}
                 onClick={() => void disconnect()}
                 className="ml-auto"
               >

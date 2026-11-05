@@ -16,7 +16,7 @@ import { createCloudClient } from '../electron/cloud/client'
 import { createRemote, toRunStatus } from '../electron/cloud/remote'
 
 function remote() {
-  return createRemote(createCloudClient({ baseUrl: 'https://api.example.com', apiKey: 'k' }))
+  return createRemote(createCloudClient({ baseUrl: 'https://api.example.com', credential: 'k' }))
 }
 
 describe('run 状态映射', () => {

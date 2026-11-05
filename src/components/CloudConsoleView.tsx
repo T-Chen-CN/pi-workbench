@@ -24,7 +24,7 @@ export const CloudConsoleView: React.FC<{
   const setDashboardBounds = useCloudStore((state) => state.setDashboardBounds)
   const hostRef = useRef<HTMLDivElement | null>(null)
 
-  const ready = config.hasToken
+  const ready = config.hasDeviceToken
 
   // 进入本页即打开（离开只是把原生层藏起来，视图留着，回来是热的）
   useEffect(() => {

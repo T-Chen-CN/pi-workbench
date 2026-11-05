@@ -17,11 +17,14 @@
 export type CloudConnectionState = 'unconfigured' | 'connecting' | 'connected' | 'error'
 
 export interface CloudConnectionInfo {
-  baseUrl: string
+  /** 网关（单入口）地址：本地唯一出口，没有直连兜底 */
+  gatewayUrl: string
   dashboardUrl: string
-  /** 渲染层永远拿不到密钥，只能知道有没有 */
-  hasToken: boolean
-  /** 控制台会话令牌是否已配置（图片上传/读取要用） */
+  /** 设备 token 是否已就位（渲染层只能知道有没有） */
+  hasDeviceToken: boolean
+  deviceScopes: string[]
+  deviceId: string
+  /** 控制台会话令牌是否已配置（内嵌控制台视图要用；C-1 的唯一例外） */
   hasDashboardToken: boolean
   /** 控制台账号（用户名明文；口令只回 has 标记） */
   dashboardUser: string
@@ -119,7 +122,6 @@ export type CloudHandoffSummary = Omit<CloudHandoffPreview, 'willOverwrite' | 'a
 export interface CloudConfigPatch {
   baseUrl: string
   dashboardUrl: string
-  apiKey: string
   dashboardToken?: string
   dashboardUser?: string
   dashboardPassword?: string

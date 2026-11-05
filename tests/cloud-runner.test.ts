@@ -61,7 +61,7 @@ function makeRunner(streams: Response[], behavior: Behavior) {
   const client: CloudClient = {
     baseUrl: 'https://api.example.com',
     rawBaseUrl: 'https://api.example.com',
-    apiKey: 'key',
+    credential: 'key',
     request: async <T,>(path: string): Promise<T> => {
       if (path === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
       if (path === '/api/sessions/s-1/messages') {
@@ -154,7 +154,7 @@ describe('clarify 兜底轮询', () => {
     const client: CloudClient = {
       baseUrl: 'https://api.example.com',
       rawBaseUrl: 'https://api.example.com',
-      apiKey: 'key',
+      credential: 'key',
       request: async <T,>(path: string): Promise<T> => {
         if (path === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
         if (path === '/api/sessions/s-1/messages') {
@@ -214,7 +214,7 @@ describe('审批兜底轮询', () => {
     const client: CloudClient = {
       baseUrl: 'https://api.example.com',
       rawBaseUrl: 'https://api.example.com',
-      apiKey: 'key',
+      credential: 'key',
       request: async <T,>(path: string): Promise<T> => {
         if (path === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
         if (path === '/api/sessions/s-1/messages') {
@@ -319,7 +319,7 @@ describe('审批结果对号', () => {
     const client: CloudClient = {
       baseUrl: 'https://api.example.com',
       rawBaseUrl: 'https://api.example.com',
-      apiKey: 'key',
+      credential: 'key',
       request: async <T,>(p: string): Promise<T> => {
         if (p === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
         if (p === '/api/sessions/s-1/messages') return { data: [], session_id: 's-1' } as T
@@ -370,7 +370,7 @@ describe('审批结果对号', () => {
     const client: CloudClient = {
       baseUrl: 'https://api.example.com',
       rawBaseUrl: 'https://api.example.com',
-      apiKey: 'key',
+      credential: 'key',
       request: async <T,>(p: string): Promise<T> => {
         if (p === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
         if (p.startsWith('/api/sessions/s-1/messages')) {
@@ -434,7 +434,7 @@ describe('审批结果对号', () => {
     const client: CloudClient = {
       baseUrl: 'https://api.example.com',
       rawBaseUrl: 'https://api.example.com',
-      apiKey: 'key',
+      credential: 'key',
       request: async <T,>(p: string): Promise<T> => {
         if (p === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
         if (p.startsWith('/api/sessions/s-1/messages')) {
@@ -516,7 +516,7 @@ describe('接回在跑的一轮（重启后 attach）', () => {
     const client: CloudClient = {
       baseUrl: 'https://api.example.com',
       rawBaseUrl: 'https://api.example.com',
-      apiKey: 'key',
+      credential: 'key',
       request: async <T,>(path: string): Promise<T> => {
         if (path.startsWith('/api/sessions/s-1/messages')) {
           if (behavior.beforeMessages) await behavior.beforeMessages()

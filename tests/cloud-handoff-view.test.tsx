@@ -46,9 +46,9 @@ function installBridge(overrides: Record<string, unknown> = {}) {
   const apply = vi.fn(async () => ({
     success: true,
     config: {
-      baseUrl: 'https://api.example.com',
       dashboardUrl: 'https://dash.example.com',
-      hasToken: true,
+      hasDeviceToken: true,
+      deviceId: 'dev-1',
       hasDashboardToken: true,
       dashboardUser: 'admin',
       hasDashboardPassword: true,
@@ -64,9 +64,10 @@ function installBridge(overrides: Record<string, unknown> = {}) {
     cloudConfigGet: async () => ({
       success: true,
       config: {
-        baseUrl: 'https://api.example.com',
         dashboardUrl: 'https://dash.example.com',
-        hasToken: true,
+        hasDeviceToken: true,
+        deviceId: 'dev-1',
+        deviceScopes: ['chat'],
         hasDashboardToken: false,
         dashboardUser: '',
         hasDashboardPassword: false,
@@ -95,9 +96,9 @@ function resetStore() {
     hydrated: true,
     config: {
       ...UNCONFIGURED_CONNECTION,
-      baseUrl: 'https://api.example.com',
       dashboardUrl: 'https://dash.example.com',
-      hasToken: true,
+      hasDeviceToken: true,
+      deviceId: 'dev-1',
     },
     connection: 'connected',
     error: null,

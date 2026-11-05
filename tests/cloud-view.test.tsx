@@ -111,14 +111,11 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     cloudConfigGet: async () => ({
       success: true,
       config: {
-        baseUrl: 'https://api.example.com',
         gatewayUrl: 'https://hub.example.com',
         dashboardUrl: 'https://dash.example.com',
-        hasToken: true,
-        hasDeviceToken: false,
-        deviceScopes: [],
-        deviceId: '',
-        transportMode: 'direct' as const,
+        hasDeviceToken: true,
+        deviceScopes: ['chat', 'dispatch'],
+        deviceId: 'dev-1',
         hasDashboardToken: false,
         dashboardUser: '',
         hasDashboardPassword: false,
@@ -361,10 +358,11 @@ describe('CloudWorkspaceView', () => {
     // 父组件切到连接页：会话页只是隐藏，DOM 仍在（inert + invisible）
     view.rerender(<CloudWorkspaceView view="cloud-connection" onNavigate={onNavigate} />)
     expect(screen.getByText('Probe session')).toBeTruthy()
-    expect(screen.getByText(zh.cloudBaseUrl)).toBeTruthy()
+    // 连接页现在只剩「网关 / 设备 / 控制台令牌」，不再有 API 地址输入
+    expect(screen.getByText(zh.cloudGatewayTitle)).toBeTruthy()
 
     view.rerender(<CloudWorkspaceView view="cloud-console" onNavigate={onNavigate} />)
-    expect(screen.getByText(zh.cloudBaseUrl)).toBeTruthy()
+    expect(screen.getByText(zh.cloudGatewayTitle)).toBeTruthy()
   })
 
   it('opens the console when the console tab becomes active', async () => {
@@ -392,9 +390,8 @@ describe('CloudWorkspaceView', () => {
     ).electronAPI.cloudConfigGet = async () => ({
       success: true,
       config: {
-        baseUrl: 'https://api.example.com',
         dashboardUrl: 'https://dash.example.com',
-        hasToken: false,
+        hasDeviceToken: false,
       },
     })
     const onNavigate = vi.fn()
@@ -414,9 +411,8 @@ describe('CloudWorkspaceView', () => {
     ).electronAPI.cloudConfigGet = async () => ({
       success: true,
       config: {
-        baseUrl: 'https://api.example.com',
         dashboardUrl: 'https://dash.example.com',
-        hasToken: false,
+        hasDeviceToken: false,
       },
     })
     const onNavigate = vi.fn()
@@ -841,7 +837,7 @@ describe('自检面板', () => {
     })
     useCloudStore.setState({
       connection: 'connected',
-      config: { ...UNCONFIGURED_CONNECTION, baseUrl: 'https://api.example.com', hasToken: true },
+      config: { ...UNCONFIGURED_CONNECTION, hasDeviceToken: true, deviceId: 'dev-1' },
     })
 
     render(<CloudWorkspaceView view="cloud-connection" onNavigate={vi.fn()} />)

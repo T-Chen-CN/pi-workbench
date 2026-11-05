@@ -55,8 +55,8 @@ export const CloudWorkspaceView: React.FC<{
   useEffect(() => {
     if (!hydrated || landedRef.current) return
     landedRef.current = true
-    if (!config.hasToken && view === 'cloud-session') onNavigate('cloud-connection')
-  }, [hydrated, config.hasToken, view, onNavigate])
+    if (!config.hasDeviceToken && view === 'cloud-session') onNavigate('cloud-connection')
+  }, [hydrated, config.hasDeviceToken, view, onNavigate])
 
   // 控制台里按 Esc：收起原生层并回到会话页
   useEffect(() => {
@@ -95,7 +95,7 @@ export const CloudWorkspaceView: React.FC<{
         ))}
 
         <span className="ml-auto flex items-center gap-2 pr-1">
-          {view === 'cloud-console' && config.hasToken && (
+          {view === 'cloud-console' && config.hasDeviceToken && (
             <>
               {dashboard.loading && (
                 <span className="flex items-center gap-1.5">

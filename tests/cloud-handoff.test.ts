@@ -224,7 +224,8 @@ describe('pendingPatch', () => {
   it('drops empty optional fields so the existing values survive', () => {
     const data = parseOk(handoff({ DASHBOARD_SESSION_TOKEN: null, DASHBOARD_USER: null }))
     const patch = pendingPatch(data)
-    expect(patch.apiKey).toBe(data.apiKey)
+    // API 密钥不再进配置：单入口之后它没有用处，落盘只会误导人
+    expect(patch).not.toHaveProperty('apiKey')
     expect(patch.dashboardUrl).toBe('https://dash.example.com')
     expect(patch.dashboardToken).toBeUndefined()
     expect(patch.dashboardUser).toBeUndefined()

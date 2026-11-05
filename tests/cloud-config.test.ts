@@ -37,18 +37,21 @@ afterAll(() => {
 })
 
 describe('clearCloudToken', () => {
-  it('drops the key but keeps the base url so reconnecting only needs the key', () => {
-    config.writeCloudConfig({ baseUrl: 'https://api.tchen-xiaoxiao.com', apiKey: 'sk-secret' })
-    expect(config.readCloudConfig().hasToken).toBe(true)
+  it('drops the device token but keeps the gateway url', () => {
+    config.writeCloudConfig({
+      baseUrl: 'https://api.tchen-xiaoxiao.com',
+      deviceToken: 'pi_secret',
+      deviceId: 'dev-1',
+    })
+    expect(config.readCloudConfig().hasDeviceToken).toBe(true)
 
     const cleared = config.clearCloudToken()
-    expect(cleared.hasToken).toBe(false)
-    expect(cleared.baseUrl).toBe('https://api.tchen-xiaoxiao.com')
-    expect(cleared.apiKey).toBe('')
+    expect(cleared.hasDeviceToken).toBe(false)
+    expect(cleared.gatewayUrl).toBe('https://hub.tchen-xiaoxiao.com')
 
     const reread = config.readCloudConfig()
-    expect(reread.hasToken).toBe(false)
-    expect(reread.baseUrl).toBe('https://api.tchen-xiaoxiao.com')
+    expect(reread.hasDeviceToken).toBe(false)
+    expect(reread.gatewayUrl).toBe('https://hub.tchen-xiaoxiao.com')
   })
 })
 
@@ -85,40 +88,40 @@ describe('deriveDashboardUrl', () => {
 })
 
 describe('read/write connection', () => {
-  it('persists the key encrypted and never exposes it publicly', () => {
+  it('persists the device token encrypted and never exposes it publicly', () => {
     const saved = config.writeCloudConfig({
       baseUrl: 'https://api.example.com',
-      apiKey: 'secret-key',
+      deviceToken: 'pi_secret',
+      deviceId: 'dev-1',
+      deviceScopes: ['chat'],
     })
-    expect(saved.hasToken).toBe(true)
-    expect(saved.apiKey).toBe('secret-key')
+    expect(saved.hasDeviceToken).toBe(true)
+    expect(saved.deviceToken).toBe('pi_secret')
 
     const raw = fs.readFileSync(config.cloudConfigFile(), 'utf-8')
-    expect(raw).not.toContain('secret-key')
+    expect(raw).not.toContain('pi_secret')
     expect(raw).toContain('enc:')
 
     const publicView = config.publicCloudConfig()
     expect(publicView).toEqual({
-      baseUrl: 'https://api.example.com',
       // 网关地址默认由 `api.` 派生成 `hub.`（单入口）
       gatewayUrl: 'https://hub.example.com',
       dashboardUrl: 'https://dash.example.com',
-      hasToken: true,
-      hasDeviceToken: false,
-      deviceScopes: [],
-      deviceId: '',
-      // 从没登记过设备 = 老直连配置，直连仍然可用（运维回滚路径）
-      transportMode: 'direct',
+      hasDeviceToken: true,
+      deviceScopes: ['chat'],
+      deviceId: 'dev-1',
       hasDashboardToken: false,
       dashboardUser: '',
       hasDashboardPassword: false,
     })
+    // 明文凭据永远不进渲染层
+    expect(publicView).not.toHaveProperty('deviceToken')
     expect(publicView).not.toHaveProperty('apiKey')
   })
 
-  it('keeps the previous key when the next save omits it', () => {
+  it('keeps the previous device token when the next save omits it', () => {
     config.writeCloudConfig({ baseUrl: 'https://api.example.com' })
-    expect(config.readCloudConfig().apiKey).toBe('secret-key')
+    expect(config.readCloudConfig().deviceToken).toBe('pi_secret')
   })
 
   it('falls back to the default endpoint for invalid input', () => {
@@ -129,21 +132,20 @@ describe('read/write connection', () => {
 
 describe('控制台会话令牌', () => {
   it('is encrypted at rest and never leaves the main process', () => {
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com', apiKey: 'gateway-key' })
+    // 先清掉前面用例留下的设备凭据，这条只关心控制台令牌
+    config.clearDeviceCredentials()
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com' })
     config.writeCloudConfig({ baseUrl: 'https://api.example.com', dashboardToken: 'dash-token' })
 
     expect(config.readCloudConfig().hasDashboardToken).toBe(true)
     expect(config.readCloudConfig().dashboardToken).toBe('dash-token')
     // 公开字段里只有「有没有」，没有明文
     expect(config.publicCloudConfig()).toEqual({
-      baseUrl: 'https://api.example.com',
       gatewayUrl: 'https://hub.example.com',
       dashboardUrl: 'https://dash.example.com',
-      hasToken: true,
       hasDeviceToken: false,
       deviceScopes: [],
       deviceId: '',
-      transportMode: 'direct',
       hasDashboardToken: true,
       dashboardUser: '',
       hasDashboardPassword: false,
@@ -157,7 +159,7 @@ describe('控制台会话令牌', () => {
     expect(config.readCloudConfig().dashboardToken).toBe('dash-token')
   })
 
-  it('drops it on disconnect along with the API key', () => {
+  it('drops it on disconnect along with the device token', () => {
     config.writeCloudConfig({ baseUrl: 'https://api.example.com', dashboardToken: 'dash-token' })
     config.clearCloudToken()
     expect(config.readCloudConfig().hasDashboardToken).toBe(false)
@@ -205,7 +207,7 @@ describe('控制台账号与导入记录', () => {
   it('keeps the account but drops every secret on disconnect', () => {
     config.writeCloudConfig({
       baseUrl: 'https://api.example.com',
-      apiKey: 'secret-key',
+      deviceToken: 'pi_secret',
       dashboardToken: 'dash-token',
       dashboardUser: 'admin',
       dashboardPassword: 'p@ss=word',
@@ -213,21 +215,23 @@ describe('控制台账号与导入记录', () => {
     })
     config.clearCloudToken()
     const read = config.readCloudConfig()
-    expect(read.hasToken).toBe(false)
+    expect(read.hasDeviceToken).toBe(false)
     expect(read.hasDashboardToken).toBe(false)
     expect(read.hasDashboardPassword).toBe(false)
     expect(read.dashboardUser).toBe('admin')
     expect(read.handoffProfile).toBe('pi-cloud')
   })
 
-  it('reads legacy files without the new fields', () => {
+  it('ignores the legacy api key: there is only one way in', () => {
+    // 老文件里的 apiKey 现在完全不参与传输，读出来就该是空的
     fs.writeFileSync(
       config.cloudConfigFile(),
       JSON.stringify({ baseUrl: 'https://api.example.com', apiKey: 'plain-legacy-key' }),
       'utf-8'
     )
     const read = config.readCloudConfig()
-    expect(read.apiKey).toBe('plain-legacy-key')
+    expect(read).not.toHaveProperty('apiKey')
+    expect(config.cloudTransport().credential).toBe('')
     expect(read.dashboardUser).toBe('')
     expect(read.hasDashboardPassword).toBe(false)
     expect(read.handoffImportedAt).toBeNull()
@@ -235,63 +239,68 @@ describe('控制台账号与导入记录', () => {
   })
 })
 
-describe('transport 模式（注销后不许回落直连）', () => {
+describe('单入口：本地只有一扇门（C-2）', () => {
   function freshFile(): void {
-    fs.rmSync(config.cloudConfigFile(), { force: true })
+    // 连 `.bak` 一起删：读取器在主文件缺失时会回退到备份，只删主文件等于没删
+    for (const file of [config.cloudConfigFile(), `${config.cloudConfigFile()}.bak`]) {
+      fs.rmSync(file, { force: true })
+    }
   }
 
-  it('starts in direct mode so a legacy api-key-only setup still works', () => {
+  it('always talks to the gateway, even with a legacy api key on disk', () => {
     freshFile()
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com', apiKey: 'sk-legacy' })
+    // 有人手动把 apiKey 写回文件，也不该被当成凭据
+    fs.writeFileSync(
+      config.cloudConfigFile(),
+      JSON.stringify({
+        baseUrl: 'https://api.example.com',
+        apiKey: 'plain-legacy-key',
+        deviceToken: 'enc:' + 'pi_dev',
+      }),
+      'utf-8'
+    )
     const transport = config.cloudTransport()
-    expect(transport.viaGateway).toBe(false)
-    expect(transport.credential).toBe('sk-legacy')
+    expect(transport.baseUrl).toBe('https://hub.example.com')
+    expect(transport.credential).not.toBe('plain-legacy-key')
   })
 
-  it('locks to the gateway once a device token exists', () => {
+  it('has no credential at all when the device is not registered', () => {
+    freshFile()
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com' })
+    const transport = config.cloudTransport()
+    // 没有设备 token = 没有凭据 = 上层明确报错；不存在第二条路
+    expect(transport.baseUrl).toBe('https://hub.example.com')
+    expect(transport.credential).toBe('')
+    expect(transport.dashboardToken).toBe('')
+  })
+
+  it('loses the credential after the device is revoked', () => {
     freshFile()
     config.writeCloudConfig({
       baseUrl: 'https://api.example.com',
-      apiKey: 'sk-legacy',
-      deviceToken: 'pi_dev',
-      deviceId: 'dev-1',
-    })
-    const transport = config.cloudTransport()
-    expect(transport.viaGateway).toBe(true)
-    expect(transport.credential).toBe('pi_dev')
-    // 密钥还在盘上（回滚用），但正常路径绝不用它
-    expect(transport.credential).not.toBe('sk-legacy')
-  })
-
-  it('has no credential at all after the device is revoked', () => {
-    freshFile()
-    config.writeCloudConfig({
-      baseUrl: 'https://api.example.com',
-      apiKey: 'sk-legacy',
       deviceToken: 'pi_dev',
       deviceId: 'dev-1',
     })
     config.clearDeviceCredentials()
-
     const transport = config.cloudTransport()
-    // 关键：即使 apiKey 还在，也**不能**拿它当凭据 —— 注销必须真的关门
-    expect(transport.viaGateway).toBe(true)
     expect(transport.credential).toBe('')
     expect(transport.dashboardToken).toBe('')
-    expect(config.readCloudConfig().transportMode).toBe('gateway')
-    // 回滚手段仍然保留（要人工改配置才会用上）
-    expect(config.readCloudConfig().apiKey).toBe('sk-legacy')
+    // 登记的痕迹（deviceId）也清了：界面据此判断「已注销」
+    expect(config.readCloudConfig().deviceId).toBe('')
   })
 
   it('keeps the gateway lock across a plain disconnect', () => {
     freshFile()
     config.writeCloudConfig({
       baseUrl: 'https://api.example.com',
-      apiKey: 'sk-legacy',
       deviceToken: 'pi_dev',
       deviceId: 'dev-1',
     })
     config.clearCloudToken()
-    expect(config.readCloudConfig().transportMode).toBe('gateway')
+    const read = config.readCloudConfig()
+    expect(read.hasDeviceToken).toBe(false)
+    // 断开之后仍然只认网关地址
+    expect(config.cloudTransport().baseUrl).toBe('https://hub.example.com')
   })
 })
+

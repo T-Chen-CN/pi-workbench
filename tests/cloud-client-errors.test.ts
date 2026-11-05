@@ -13,7 +13,7 @@ vi.mock('electron', () => ({
 import { CloudApiError, createCloudClient } from '../electron/cloud/client'
 
 function client() {
-  return createCloudClient({ baseUrl: 'https://api.example.com', apiKey: 'k' })
+  return createCloudClient({ baseUrl: 'https://api.example.com', credential: 'k' })
 }
 
 describe('云端错误文案', () => {

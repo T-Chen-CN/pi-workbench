@@ -139,7 +139,7 @@ interface CloudState {
   handoffError: string | null
 
   hydrate: () => Promise<void>
-  saveConfig: (input: { baseUrl: string; apiKey?: string; dashboardToken?: string }) => Promise<boolean>
+  saveConfig: (input: { gatewayUrl?: string; dashboardToken?: string }) => Promise<boolean>
   pickHandoff: () => Promise<boolean>
   applyHandoff: () => Promise<boolean>
   copyHandoffSecret: () => Promise<boolean>
@@ -286,26 +286,20 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     if (result.success) {
       set({ config: result.config })
       const config = result.config
-      // 登记过却没有设备 token = 这台设备被注销了（或 token 丢了）。
-      // 这不是「未配置」：云端对这台设备已经关门，必须重新登记才能用。
-      if (config.transportMode === 'gateway' && !config.hasDeviceToken) {
-        set({
-          connection: 'error',
-          error: '这台设备已注销或凭据丢失，请在「连接」页重新登记',
-          hydrated: true,
-        })
-        return
-      }
       if (config.hasDeviceToken) {
         await get().connect()
         set({ hydrated: true })
         void get().loadLedger()
         return
       }
-      if (config.hasToken) {
-        await get().connect()
-        set({ hydrated: true })
-        void get().loadLedger()
+      // 有登记记录（deviceId）却没有 token = 这台设备被注销了（或 token 丢了）。
+      // 这不是「未配置」：云端对这台设备已经关门，必须重新登记才能用。
+      if (config.deviceId) {
+        set({
+          connection: 'error',
+          error: '这台设备已注销或凭据丢失，请在「连接」页重新登记',
+          hydrated: true,
+        })
         return
       }
     }

@@ -168,24 +168,24 @@ export interface CloudClient {
    */
   openStream: (path: string, signal: AbortSignal) => Promise<Response>
   rawBaseUrl: string
-  apiKey: string
+  credential: string
 }
 
-export function createCloudClient(input: { baseUrl: string; apiKey: string }): CloudClient {
+export function createCloudClient(input: { baseUrl: string; credential: string }): CloudClient {
   const rawBaseUrl = normalizeBaseUrl(input.baseUrl)
   if (!rawBaseUrl) {
     throw new CloudApiError('bad_request', 'API 地址格式不正确（需要 http:// 或 https://）')
   }
-  const apiKey = input.apiKey
-  if (!apiKey) {
-    throw new CloudApiError('unauthorized', '还没有填写 API 密钥')
+  const credential = input.credential
+  if (!credential) {
+    throw new CloudApiError('unauthorized', '这台设备还没有登记，请在「连接」页登记后重试')
   }
 
-  const authHeaders = { Authorization: `Bearer ${apiKey}` }
+  const authHeaders = { Authorization: `Bearer ${credential}` }
 
   return {
     rawBaseUrl,
-    apiKey,
+    credential,
     baseUrl: rawBaseUrl,
 
     async request<T>(path: string, init: CloudRequestInit = {}) {

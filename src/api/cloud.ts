@@ -55,7 +55,6 @@ export type {
   CloudConnectionInfo,
 } from '../types/cloud'
 
-const FALLBACK_BASE_URL = 'https://api.tchen-xiaoxiao.com'
 const FALLBACK_DASHBOARD_URL = 'https://dash.tchen-xiaoxiao.com'
 /**
  * 纯浏览器预览（没有 preload）用的假设备身份。
@@ -114,14 +113,11 @@ export function hasCloudBridge(): boolean {
 const FALLBACK_GATEWAY_URL = 'https://hub.tchen-xiaoxiao.com'
 
 export const UNCONFIGURED_CONNECTION: CloudConnectionInfo = {
-  baseUrl: FALLBACK_BASE_URL,
   gatewayUrl: FALLBACK_GATEWAY_URL,
   dashboardUrl: FALLBACK_DASHBOARD_URL,
-  hasToken: false,
   hasDeviceToken: false,
   deviceScopes: [],
   deviceId: '',
-  transportMode: 'gateway',
   hasDashboardToken: false,
   dashboardUser: '',
   hasDashboardPassword: false,
@@ -244,7 +240,7 @@ export const cloudApi = {
     return bridge.cloudConfigGet()
   },
 
-  async setConfig(input: { baseUrl: string; apiKey?: string }): Promise<CloudConfigSetResult> {
+  async setConfig(input: { gatewayUrl?: string; dashboardToken?: string }): Promise<CloudConfigSetResult> {
     const bridge = api()
     if (!bridge || typeof bridge.cloudConfigSet !== 'function') {
       return { success: false, error: NO_BRIDGE }
