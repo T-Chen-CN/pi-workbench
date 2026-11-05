@@ -43,6 +43,11 @@ export interface CloudAuditOutcome {
   runId: string
   /** 工具自己是否报错（被拒绝时服务端会把 BLOCKED 当作错误返回） */
   error: boolean
+  /**
+   * 退出码。有它才分得清「被审批拦下」和「放行了但命令自己失败」——
+   * 实测放行后 `exit=0; ls 不存在的目录` 也是 `error:true`。
+   */
+  exitCode?: number | null
   /** 结果预览前 200 字 */
   preview: string
 }
@@ -97,7 +102,7 @@ const pendingByRun = new Map<
     auditId: string
     toolCallId?: string
     /** 实时帧只给了 `error`、预览是空的：先挂着，等历史里那份真结果 */
-    orphan?: { error: boolean }
+    orphan?: { error: boolean; exitCode?: number | null }
   }
 >()
 
@@ -133,7 +138,7 @@ export function recordApprovalDecision(input: {
  */
 export function recordApprovalOutcome(
   runId: string,
-  result: { error: boolean; preview: string; toolCallId?: string }
+  result: { error: boolean; preview: string; exitCode?: number | null; toolCallId?: string }
 ): boolean {
   const pending = pendingByRun.get(runId)
   if (!pending) return false
@@ -145,10 +150,14 @@ export function recordApprovalOutcome(
   if (!preview) {
     // 实时 `tool.completed` 的 preview 通常是空的；这一轮的收尾会重拉历史，
     // 那里才有真结果。先记下「是成功还是被拒」，别急着落一行空证据。
-    pending.orphan = { error: Boolean(result.error) }
+    pending.orphan = { error: Boolean(result.error), exitCode: result.exitCode }
     return false
   }
-  writeOutcome(runId, pending.auditId, { error: Boolean(result.error), preview })
+  writeOutcome(runId, pending.auditId, {
+    error: Boolean(result.error),
+    exitCode: result.exitCode,
+    preview,
+  })
   pendingByRun.delete(runId)
   return true
 }
@@ -160,7 +169,11 @@ export function recordApprovalOutcome(
 export function flushApprovalOutcome(runId: string): boolean {
   const pending = pendingByRun.get(runId)
   if (!pending?.orphan) return false
-  writeOutcome(runId, pending.auditId, { error: pending.orphan.error, preview: '' })
+  writeOutcome(runId, pending.auditId, {
+    error: pending.orphan.error,
+    exitCode: pending.orphan.exitCode,
+    preview: '',
+  })
   pendingByRun.delete(runId)
   return true
 }
@@ -175,7 +188,7 @@ function normalizePreview(raw: string): string {
 function writeOutcome(
   runId: string,
   auditId: string,
-  result: { error: boolean; preview: string }
+  result: { error: boolean; preview: string; exitCode?: number | null }
 ): void {
   appendAudit({
     at: Date.now(),
@@ -183,6 +196,7 @@ function writeOutcome(
     auditId,
     runId,
     error: result.error,
+    ...(typeof result.exitCode === 'number' ? { exitCode: result.exitCode } : {}),
     preview: result.preview,
   })
 }

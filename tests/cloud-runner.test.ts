@@ -490,7 +490,7 @@ describe('审批结果对号', () => {
     stream.close()
     await waitFor(() => auditLines().some((line) => line.kind === 'approval_result'))
     const result = auditLines().find((line) => line.kind === 'approval_result')
-    expect(result).toMatchObject({ error: true })
+    expect(result).toMatchObject({ error: true, exitCode: -1 })
     expect(String(result?.preview)).toContain('BLOCKED')
     runner.dispose()
   })

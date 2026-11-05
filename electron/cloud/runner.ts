@@ -203,6 +203,7 @@ export class CloudRunner {
       recordApprovalOutcome(runId, {
         error: part.status === 'error',
         preview: part.resultPreview ?? '',
+        exitCode: part.exitCode,
         toolCallId: part.toolCallId || undefined,
       })
     }

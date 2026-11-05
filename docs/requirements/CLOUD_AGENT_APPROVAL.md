@@ -230,18 +230,32 @@ Hermes 默认 `approvals.deny` 就是空。保持默认后，安全地板只剩�
 
 **文件**：`data/cloud-agent/audit.jsonl`（追加 + `fsync`，一行一条，永不改写；**首期不轮转**）。**实施时同步登记进 [paths-and-storage](../agent/paths-and-storage.md) 的落盘清单。**
 
-```jsonc
-{ "at": 1793733048000, "kind": "approval", "runId": "run_x", "sessionId": "s_x",
-  "command": "git reset --hard HEAD",          // ≤200 字摘要（决策 6：不存全文）
-  "patternKeys": ["recursive delete"],
-  "choice": "deny",
-  "mode": "manual",                            // 决策当时的档位
-  "result": { "error": true, "preview": "BLOCKED: ..." } }  // 来自 tool.completed，可为 null
+实测格式（决定与结果分开两行，靠 `auditId` 关联）：
 
-{ "at": ..., "kind": "mode", "from": "manual", "to": "off" }
+```jsonc
+// 点按钮的那一刻
+{ "at": 1793874832389, "kind": "approval",
+  "auditId": "ap:mw3erbb9:v0g7q1", "runId": "run_c929…", "sessionId": "run_c929…",
+  "command": "ls -la /tmp/pi-manual-test …; rm -rf /tmp/pi-manual-test",  // ≤200 字摘要，不存全文
+  "patternKeys": ["delete in root path"],   // 服务端只有 description，没有 pattern_keys
+  "choice": "deny",                          // once | session | deny（always 在映射层就被丢掉）
+  "mode": "manual",                          // 决策当时服务端生效的档位
+  "toolCallId": "call_00_3l8C…" }            // 这条审批拦下的调用
+
+// 那次调用的最终结果（同一 auditId）
+{ "at": 1793874833861, "kind": "approval_result",
+  "auditId": "ap:mw3erbb9:v0g7q1", "runId": "run_c929…",
+  "error": true, "exitCode": -1,
+  "preview": "BLOCKED: Command denied by user. …" }   // ≤200 字
+
+{ "at": …, "kind": "mode", "from": "manual", "to": "off" }
 ```
 
-审计只回答三个问题：**谁批的**（本机用户点的那一下）、**依据哪条规则**（`pattern_keys` + 当时的 `mode`）、**真实结果**（工具卡最终 `error` / `preview` 前 200 字）。
+读这三行能回答三个问题：**谁批的**（本机点的那一下）、**依据哪条规则**（`patternKeys` + 当时的 `mode`）、**真实结果**（`error` + `exitCode` + `preview`）。
+
+`error` 是「这次调用是否失败」，**不等于「审批出了问题」**：放行后命令自己以非 0 退出（例如 `rm -rf …; ls 不存在的目录`）也是 `error:true`，这时看 `exitCode` 与 `preview` 就能分清。
+
+结果行宁可晚到也不写空：实时 `tool.completed` 的 `preview` 一直是空串，真结果只在历史里，所以空预览先挂住，等这一轮收尾重拉历史后补上；历史也没有内容才写一行只有 `error` / `exitCode` 的。
 
 ---
 
