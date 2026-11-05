@@ -31,6 +31,7 @@ npm run build      # 渲染层 + bridge + 主进程
 | `electron/ipc/register.ts` | `handleIpc` + `isTrustedIpcSender`：只接受主窗口与登记过的辅助窗口主框架，ready 之后 fail-closed |
 | `src/` | 渲染进程分层：`components/`（扁平，**禁建子目录**）· `store/`（一域一个 Zustand store）· `hooks/` · `utils/` · `workspace/` · `panelHost/` · `theme/` · `pdf/` · `api/`（IPC 封装 + 浏览器 mock 回退） |
 | `pi-bridge/` | 独立的 Agent 桥接包（`AgentManager`），有自己的 `package.json` / `tsconfig`；改完要 `npm run build:bridge` |
+| `hermes-plugin/pi-workbench/` | **云端 Hermes 插件**（本地 ↔ 云端唯一入口）。`core/` 必须是纯 stdlib 且不 import Hermes；传输不许换 aiohttp（服务跑在独立线程，崩了不能拖垮 gateway）；单测 `cd hermes-plugin/pi-workbench && python -m unittest discover -s tests -t .` |
 | `tests/` | 扁平目录，文件名与源码同名（`src/utils/fileTree.ts` → `tests/file-tree.test.ts`）；`tests/design-system.test.ts` 是强制门槛 |
 | `docs/` | 规范原文，`docs/README.md` 是唯一索引 |
 
@@ -84,6 +85,7 @@ npm run build      # 渲染层 + bridge + 主进程
 | `src/` 任意 | 对应单文件 vitest → 收尾 `npm test` + `npm run lint` |
 | `electron/` | `npm run type-check` + 相关 `tests/{main-ipc,*-manager,updater,...}.test.ts` |
 | `pi-bridge/` | `npm run build:bridge` + `tests/{session-*,agent-*}.test.ts` |
+| `hermes-plugin/` | `cd hermes-plugin/pi-workbench && python -m unittest discover -s tests -t .`（零依赖），再按 [CLOUD_AGENT_DEVICES §20](docs/requirements/CLOUD_AGENT_DEVICES.md) 的 G0/G1 手打验收 |
 | UI / 样式 | `tests/design-system.test.ts` + Paper / Ink 两套截图 + 1024 / 1440 宽度 |
 | 打包 / 更新 / NSIS | `npx electron-builder --win --dir --publish never` |
 
