@@ -93,15 +93,16 @@ export const CloudModeSwitch: React.FC<{ disabled?: boolean }> = ({ disabled = f
         })}
       </div>
       {loading && <Spinner size={10} />}
-      {/* 未知档位：服务端给了我们没见过的值（例如被别的运维改过），不猜、不覆盖 */}
-      {!loading && current === null && (
+      {/* 未知档位：服务端给了我们没见过的值（例如被别的运维改过），不猜、不覆盖；
+          有错误时只说错误（“重启 dev”比“档位未知”可行动） */}
+      {!loading && current === null && !error && (
         <Caption className="text-ink-subtle">{t('cloudModeUnknown')}</Caption>
       )}
       {policy && current === 'off' && (
         <Caption className="flex-shrink-0 text-danger">{t('cloudModeOffWarn')}</Caption>
       )}
       {error && (
-        <Caption className="max-w-[240px] truncate text-danger" title={error}>
+        <Caption className="min-w-0 truncate text-danger" title={error}>
           {error}
         </Caption>
       )}

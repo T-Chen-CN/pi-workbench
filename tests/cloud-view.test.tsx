@@ -1025,13 +1025,45 @@ describe('审批档位控件', () => {
     expect(screen.getByText(zh.cloudPolicyRisk)).toBeTruthy()
   })
 
-  it('does not invent a mode the server did not report', async () => {
+  it('shows the error and stops spinning when the read fails', async () => {
     installBridge()
     bridge().cloudPolicyGet = async () => ({ success: false, error: '控制台超时' })
     useCloudStore.setState({ policy: null })
     render(<CloudModeSwitch />)
 
+    expect(await screen.findByText('控制台超时')).toBeTruthy()
+    // 读不到档位不能卡在 loading：按钮必须回到可点（并保留「我们不知道现在是什么」）
+    await waitFor(() => expect(useCloudStore.getState().policyLoading).toBe(false))
+    expect(useCloudStore.getState().policyPending).toBeNull()
+    expect(screen.queryByText(zh.cloudModeOffWarn)).toBeNull()
+  })
+
+  it('does not invent a mode the server did not report', async () => {
+    installBridge()
+    bridge().cloudPolicyGet = async () => ({ success: true, policy: policy(null) })
+    useCloudStore.setState({ policy: null })
+    render(<CloudModeSwitch />)
+
     expect(await screen.findByText(zh.cloudModeUnknown)).toBeTruthy()
     expect(screen.queryByText(zh.cloudModeOffWarn)).toBeNull()
+  })
+
+  it('clears pending and reports the error when a switch rejects', async () => {
+    installBridge()
+    bridge().cloudPolicySet = async () => {
+      throw new Error("Error invoking remote method 'cloud:policy:set': No handler registered")
+    }
+    useCloudStore.setState({ policy: policy('manual') })
+    render(<CloudModeSwitch />)
+
+    const off = (await screen.findByText(zh.cloudModeOff)).closest('button') as HTMLButtonElement
+    await waitFor(() => expect(off.disabled).toBe(false))
+    fireEvent.click(off)
+    fireEvent.click(await screen.findByText(zh.cloudModeOffConfirmAction))
+
+    await waitFor(() => expect(useCloudStore.getState().policyPending).toBeNull())
+    // 老主进程会直接 reject：必须落成人话，且档位不被改成「已生效」
+    expect(await screen.findByText(/主进程还没更新/)).toBeTruthy()
+    expect(useCloudStore.getState().policy?.mode).toBe('manual')
   })
 })

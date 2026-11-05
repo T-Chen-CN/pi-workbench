@@ -59,6 +59,32 @@ function api() {
   return typeof window === 'undefined' ? undefined : window.electronAPI
 }
 
+/**
+ * `ipcRenderer.invoke` 在线路缺失时会直接 reject（「No handler registered …」）：
+ * 渲染层拿到的不是 `{success:false}` 而是异常。折成结果对象，避免调用方卡在
+ * loading 里（主进程还是上一版构建时最容易踩到）。
+ */
+function invokeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  if (/No handler registered|not been registered/i.test(message)) {
+    return '主进程还没更新：重启 npm run dev'
+  }
+  return message || '云端调用失败'
+}
+
+/** 统一包一层：异常 → `{success:false, error}`，且不吞掉空返回 */
+async function invoke<T extends { success: boolean; error?: string }>(
+  call: () => Promise<T> | undefined,
+  fallback: (error: string) => T
+): Promise<T> {
+  try {
+    const result = await call()
+    return result ?? fallback(NO_BRIDGE)
+  } catch (error) {
+    return fallback(invokeError(error))
+  }
+}
+
 /** 通道是否真的存在（浏览器 / 旧 preload 时都返回 false） */
 export function hasCloudBridge(): boolean {
   const bridge = api()
@@ -193,7 +219,10 @@ export const cloudApi = {
     if (!bridge || typeof bridge.cloudApprovalRespond !== 'function') {
       return { success: false, error: NO_BRIDGE }
     }
-    return (await bridge.cloudApprovalRespond(input)) ?? { success: false, error: NO_BRIDGE }
+    return invoke(
+      () => bridge.cloudApprovalRespond(input),
+      (error) => ({ success: false, error })
+    )
   },
 
   /** 读服务端当前生效的审批策略（白名单子集） */
@@ -202,7 +231,10 @@ export const cloudApi = {
     if (!bridge || typeof bridge.cloudPolicyGet !== 'function') {
       return { success: false, error: NO_BRIDGE }
     }
-    return (await bridge.cloudPolicyGet()) ?? { success: false, error: NO_BRIDGE }
+    return invoke(
+      () => bridge.cloudPolicyGet(),
+      (error) => ({ success: false, error })
+    )
   },
 
   /** 切换原生审批档位（只写 `approvals.mode` 一个键） */
@@ -211,7 +243,10 @@ export const cloudApi = {
     if (!bridge || typeof bridge.cloudPolicySet !== 'function') {
       return { success: false, error: NO_BRIDGE }
     }
-    return (await bridge.cloudPolicySet({ mode })) ?? { success: false, error: NO_BRIDGE }
+    return invoke(
+      () => bridge.cloudPolicySet({ mode }),
+      (error) => ({ success: false, error })
+    )
   },
 
   async diagnostics(): Promise<{

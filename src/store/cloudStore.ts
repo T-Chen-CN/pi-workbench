@@ -700,16 +700,22 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     set({ approvalPending: requestId, approvalError: null })
     patch({ decision: choice, decidedAt: Date.now() })
 
-    const result = await cloudApi.respondApproval({
-      runId: effectiveRunId,
-      requestId: part.requestId,
-      generation: part.generation,
-      choice,
-      command: part.command,
-      patternKeys: part.patternKeys,
-      sessionId: activeSessionId ?? undefined,
-    })
-    set({ approvalPending: null })
+    let result: { success: boolean; error?: string }
+    try {
+      result = await cloudApi.respondApproval({
+        runId: effectiveRunId,
+        requestId: part.requestId,
+        generation: part.generation,
+        choice,
+        command: part.command,
+        patternKeys: part.patternKeys,
+        sessionId: activeSessionId ?? undefined,
+      })
+    } catch (error) {
+      result = { success: false, error: error instanceof Error ? error.message : String(error) }
+    } finally {
+      set({ approvalPending: null })
+    }
     if (result.success) return true
 
     const settledElsewhere = /结算|过期|not_pending|not_active|stale/.test(result.error ?? '')
@@ -736,12 +742,19 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   /** 读服务端当前策略：只读白名单子集，从不本地缓存旧的档位 */
   async loadPolicy() {
     set({ policyLoading: true, policyError: null })
-    const result = await cloudApi.getPolicy()
-    if (!result.success || !result.policy) {
-      set({ policyLoading: false, policyError: result.error ?? 'unknown' })
-      return
+    try {
+      const result = await cloudApi.getPolicy()
+      if (!result.success || !result.policy) {
+        set({ policyError: result.error ?? 'unknown' })
+        return
+      }
+      set({ policy: result.policy })
+    } catch (error) {
+      // 兜底：加载态必须收掉，否则控件会永远转圈且点不动
+      set({ policyError: error instanceof Error ? error.message : String(error) })
+    } finally {
+      set({ policyLoading: false })
     }
-    set({ policy: result.policy, policyLoading: false })
   },
 
   /**
@@ -752,13 +765,20 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     const previous = get().policy
     if (previous?.mode === mode) return true
     set({ policyPending: mode, policyError: null })
-    const result = await cloudApi.setPolicy(mode)
-    if (!result.success || !result.policy) {
-      set({ policyPending: null, policyError: result.error ?? 'unknown' })
+    try {
+      const result = await cloudApi.setPolicy(mode)
+      if (!result.success || !result.policy) {
+        set({ policyError: result.error ?? 'unknown' })
+        return false
+      }
+      set({ policy: result.policy })
+      return true
+    } catch (error) {
+      set({ policyError: error instanceof Error ? error.message : String(error) })
       return false
+    } finally {
+      set({ policyPending: null })
     }
-    set({ policy: result.policy, policyPending: null })
-    return true
   },
 
   async loadDiagnostics() {
