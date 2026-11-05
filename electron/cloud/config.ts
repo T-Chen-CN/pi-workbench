@@ -9,9 +9,15 @@ import * as path from 'path'
 import { getAppDir } from '../app-paths.js'
 import { readJsonWithBackup, writeJsonAtomicSync } from '../atomic-json.js'
 import { decryptSecret, encryptSecret } from '../secret-crypto.js'
+import {
+  DEFAULT_CLOUD_BASE_URL,
+  DEFAULT_CLOUD_DASHBOARD_URL,
+  deriveDashboardUrl,
+  normalizeBaseUrl,
+} from './url.js'
 
-export const DEFAULT_CLOUD_BASE_URL = 'https://api.tchen-xiaoxiao.com'
-const DEFAULT_CLOUD_DASHBOARD_URL = 'https://dash.tchen-xiaoxiao.com'
+// 地址工具在 `url.ts`（纯函数）；这里再导出一次，保持既有调用方不变
+export { DEFAULT_CLOUD_BASE_URL, DEFAULT_CLOUD_DASHBOARD_URL, deriveDashboardUrl, normalizeBaseUrl }
 
 interface StoredCloudConfig {
   baseUrl?: string
@@ -37,39 +43,6 @@ export interface CloudConfig {
 
 export function cloudConfigFile(): string {
   return path.join(getAppDir(), 'data', 'cloud-agent', 'connection.json')
-}
-
-/** `https://api.example.com/v1/` → `https://api.example.com`；非法输入返回空串 */
-export function normalizeBaseUrl(raw: string): string {
-  const trimmed = String(raw ?? '').trim()
-  if (!trimmed) return ''
-  let parsed: URL
-  try {
-    parsed = new URL(trimmed)
-  } catch {
-    return ''
-  }
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return ''
-  parsed.hash = ''
-  parsed.search = ''
-  parsed.pathname = parsed.pathname.replace(/\/+$/, '').replace(/\/v1$/i, '')
-  return parsed.toString().replace(/\/+$/, '')
-}
-
-/**
- * 控制台地址：`api.x.com` → `dash.x.com`（本项目部署形态）；
- * 其他情况退回同源地址，用户仍可正常登录。
- */
-export function deriveDashboardUrl(baseUrl: string): string {
-  try {
-    const parsed = new URL(baseUrl)
-    if (parsed.hostname.startsWith('api.')) {
-      parsed.hostname = `dash.${parsed.hostname.slice(4)}`
-    }
-    return parsed.toString().replace(/\/+$/, '')
-  } catch {
-    return DEFAULT_CLOUD_DASHBOARD_URL
-  }
 }
 
 export function readCloudConfig(): CloudConfig {

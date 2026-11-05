@@ -28,6 +28,71 @@ export interface CloudCapabilities {
   runApprovalResponse?: boolean
 }
 
+/** hermes-handoff 交接文件里的 `# ---- 校验结果 ----` 段 */
+export interface CloudHandoffChecks {
+  dnsOk: boolean | null
+  capabilitiesHttp: number | null
+  dashboardHttp: number | null
+  sseOk: boolean | null
+  tlsNotAfter: string | null
+}
+
+/** 导入时提示的疑点：`code` 由渲染层翻译，`detail` 是补充（如状态码） */
+export interface CloudHandoffWarning {
+  code: string
+  detail?: string
+}
+
+/** 解析失败的原因码（渲染层按码翻译，永不携带文件内容） */
+export type CloudHandoffParseCode =
+  | 'not_handoff'
+  | 'too_large'
+  | 'binary'
+  | 'missing_base_url'
+  | 'bad_base_url'
+  | 'missing_key'
+  | 'bad_key'
+  | 'read_failed'
+
+/** 导入前的脱敏预览：密钥只有掩码，明文留在主进程 */
+export interface CloudHandoffPreview {
+  version: 'v1' | 'v1.1'
+  baseUrl: string
+  dashboardUrl: string
+  keyMask: string
+  keyLength: number
+  dashboardUser: string
+  hasDashboardPassword: boolean
+  hasDashboardToken: boolean
+  authMode: 'basic' | 'form' | 'none'
+  profile: string
+  hermesVersion: string
+  serverHost: string
+  generatedAt: string
+  checks: CloudHandoffChecks
+  warnings: CloudHandoffWarning[]
+  /** 文件里出现的、我们不认识的键名（只记键名） */
+  ignored: string[]
+  /** 当前已有可用连接：应用会覆盖它（并在界面上先确认） */
+  willOverwrite: boolean
+  /** 一次性句柄：`apply` 只回传它，不传明文 */
+  applyNonce: string
+}
+
+/** 主进程内的预览形状（nonce 与覆盖判定由 IPC 层补上） */
+export type CloudHandoffSummary = Omit<CloudHandoffPreview, 'willOverwrite' | 'applyNonce'>
+
+/** 导入时要落盘的配置补丁（含明文，只在主进程内传递） */
+export interface CloudConfigPatch {
+  baseUrl: string
+  dashboardUrl: string
+  apiKey: string
+  dashboardToken?: string
+  dashboardUser?: string
+  dashboardPassword?: string
+  handoffProfile?: string
+}
+
 export type CloudRunStatus =
   | 'started'
   | 'running'
@@ -265,6 +330,21 @@ export interface CloudConfigGetResult {
 }
 
 export interface CloudConfigSetResult {
+  success: boolean
+  config?: CloudConnectionInfo
+  error?: string
+}
+
+export interface CloudHandoffPickResult {
+  success: boolean
+  canceled: boolean
+  preview?: CloudHandoffPreview
+  /** 解析失败原因码（`success:false` 时给） */
+  code?: CloudHandoffParseCode
+  error?: string
+}
+
+export interface CloudHandoffApplyResult {
   success: boolean
   config?: CloudConnectionInfo
   error?: string
