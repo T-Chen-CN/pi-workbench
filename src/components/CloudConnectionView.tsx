@@ -1,9 +1,12 @@
 /** 云端连接页：API 地址 / 密钥 / 连通性 / 能力回显（独立成页，不塞进控制台） */
 
 import React, { useEffect, useState } from 'react'
-import { FileUp, Link2Off, RefreshCw } from 'lucide-react'
+import { Copy, FileUp, Link2Off, RefreshCw } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useCloudStore } from '../store/cloudStore'
+import { toast } from '../store/toastStore'
+import { copyText } from '../utils/clipboard'
+import { HERMES_BOOTSTRAP_PROMPT } from '../utils/hermesPrompt'
 import { Button, Caption, DataText, Field, Input, Label } from './ui'
 import { Card, CardHeader, StatusText } from './patterns'
 import { CloudDiagnosticsPanel } from './CloudDiagnosticsPanel'
@@ -56,6 +59,12 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
     setBusy('connect')
     await connect()
     setBusy(null)
+  }
+
+  /** 自举 Prompt 由文档构建时内联（见 utils/hermesPrompt.ts），这里只负责写入剪贴板 */
+  const handleCopyPrompt = async () => {
+    if (await copyText(HERMES_BOOTSTRAP_PROMPT)) toast.success(t('cloudBootstrapCopied'))
+    else toast.error(t('cloudBootstrapCopyFailed'))
   }
 
   const tone =
@@ -193,6 +202,19 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                 </p>
               </div>
             )}
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader title={t('cloudBootstrapTitle')} />
+          <div className="flex flex-col gap-2 pt-3">
+            <p className="m-0 type-caption text-ink-muted">{t('cloudBootstrapBody')}</p>
+            <Caption className="text-ink-subtle">{t('cloudBootstrapSteps')}</Caption>
+            <div className="flex items-center gap-2">
+              <Button size="sm" icon={Copy} onClick={() => void handleCopyPrompt()}>
+                {t('cloudBootstrapCopy')}
+              </Button>
+            </div>
           </div>
         </Card>
 

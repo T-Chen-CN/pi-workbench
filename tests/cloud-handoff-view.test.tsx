@@ -55,6 +55,10 @@ function installBridge(overrides: Record<string, unknown> = {}) {
     },
   }))
   const copy = vi.fn(async () => ({ success: true }))
+  const writeClipboard = vi.fn(async (text: string) => {
+    void text
+    return true
+  })
 
   ;(window as unknown as { electronAPI: unknown }).electronAPI = {
     cloudConfigGet: async () => ({
@@ -75,13 +79,14 @@ function installBridge(overrides: Record<string, unknown> = {}) {
     cloudHandoffPick: pick,
     cloudHandoffApply: apply,
     cloudHandoffCopy: copy,
+    writeClipboardText: writeClipboard,
     onCloudEvent: () => () => {},
     onCloudStatus: () => () => {},
     onCloudDashboardLoadFailed: () => () => {},
     onCloudDashboardClosed: () => () => {},
     ...overrides,
   }
-  return { pick, apply, copy }
+  return { pick, apply, copy, writeClipboard }
 }
 
 function resetStore() {
@@ -222,5 +227,21 @@ describe('cloud handoff import (view)', () => {
     await waitFor(() => expect(screen.queryByText(zh.cloudImportTitle)).toBeNull())
     // 状态没丢：切回来还在
     expect(useCloudStore.getState().handoffPreview).toBeTruthy()
+  })
+})
+
+describe('hermes bootstrap prompt entry', () => {
+  it('copies the prompt straight from the connection page', async () => {
+    const { writeClipboard } = installBridge()
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: zh.cloudBootstrapCopy }))
+    await waitFor(() => expect(writeClipboard).toHaveBeenCalled())
+
+    const text = writeClipboard.mock.calls[0][0] as string
+    expect(text).toContain('# hermes-handoff v1.1')
+    expect(text).toContain('API_SERVER_KEY')
+    // 模板里的密钥只能是空占位符
+    expect(text).not.toMatch(/^API_KEY=.+/m)
   })
 })

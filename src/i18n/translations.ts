@@ -92,6 +92,14 @@ export const translations = {
     cloudImportDeleteHint: '导入完成，请删除交接文件 {file} —— 里面是明文密钥。',
     cloudImportFailed: '导入失败',
     cloudImportPickHint: '选一个 hermes-handoff v1 / v1.1 文件，先预览再导入。',
+    cloudBootstrapTitle: '还没有云端？先用自举 Prompt',
+    cloudBootstrapBody:
+      '把这段 Prompt 粘给已经在服务器上跑着的 Hermes Agent：它会自己判断现状，配好域名与反向代理、补齐凭证，最后交付一个交接文件。',
+    cloudBootstrapSteps:
+      '前置条件：你本来就能跟它对话（控制台登录或 SSH）。拿到文件后，用上面的「从文件导入」。',
+    cloudBootstrapCopy: '复制自举 Prompt',
+    cloudBootstrapCopied: 'Prompt 已复制，粘给服务器上的 Hermes 即可',
+    cloudBootstrapCopyFailed: '复制失败，请重试',
     cloudHandoffErr_not_handoff: '这不是 hermes-handoff 交接文件（首行缺少版本标记）',
     cloudHandoffErr_too_large: '文件太大，交接文件正常只有几十行',
     cloudHandoffErr_binary: '文件不是纯文本',
@@ -1113,6 +1121,14 @@ export const translations = {
     cloudImportDeleteHint: 'Imported. Delete the handoff file {file} — it holds plaintext keys.',
     cloudImportFailed: 'Import failed',
     cloudImportPickHint: 'Pick a hermes-handoff v1 / v1.1 file to preview before importing.',
+    cloudBootstrapTitle: 'No cloud yet? Start with the bootstrap prompt',
+    cloudBootstrapBody:
+      'Paste this prompt into the Hermes agent already running on your server: it inspects the box, sets up the domain and reverse proxy, fills in the credentials and hands you a handoff file.',
+    cloudBootstrapSteps:
+      'Precondition: you can already talk to it (console login or SSH). Once you have the file, use “Import from file” above.',
+    cloudBootstrapCopy: 'Copy bootstrap prompt',
+    cloudBootstrapCopied: 'Prompt copied — paste it into Hermes',
+    cloudBootstrapCopyFailed: 'Copy failed, please retry',
     cloudHandoffErr_not_handoff: 'Not a hermes-handoff file (no version marker on the first line)',
     cloudHandoffErr_too_large: 'File too large — a handoff file is a few dozen lines',
     cloudHandoffErr_binary: 'File is not plain text',
