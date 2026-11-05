@@ -239,7 +239,9 @@ export function mapMessages(rows: RawMessage[], options: MapMessagesOptions = {}
       const result = parseToolResult(row.content)
       const patch = {
         status: toolStatusOf(result),
-        resultPreview: clip(result.output, RESULT_MAX_CHARS),
+        // 被审批拦下的调用 `output` 是空的，真正的原因在 `error` 里
+        // （"BLOCKED: Command denied by user…"）：不兜住的话卡片和审计都是一片空白
+        resultPreview: clip(result.output || result.error || '', RESULT_MAX_CHARS),
         exitCode: result.exitCode,
       }
       const target = callId ? toolIndex.get(callId) : undefined

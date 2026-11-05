@@ -143,6 +143,28 @@ describe('mapMessages', () => {
     expect((parts[0] as ToolPart).status).toBe('error')
     expect((parts[0] as ToolPart).resultPreview).toBe('boom')
   })
+
+  it('shows the block reason when output is empty (实机被审批拦下)', () => {
+    // 真机返回：被拒绝时 output 是空串，原因全在 error 里
+    const parts = mapMessages([
+      {
+        id: 1,
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ call_id: 'c1', function: { name: 'terminal', arguments: '{}' } }],
+      },
+      {
+        id: 2,
+        role: 'tool',
+        content:
+          '{"output":"","exit_code":-1,"error":"BLOCKED: Command denied by user.","status":"blocked"}',
+        tool_call_id: 'c1',
+        tool_name: 'terminal',
+      },
+    ])
+    expect((parts[0] as ToolPart).status).toBe('error')
+    expect((parts[0] as ToolPart).resultPreview).toContain('BLOCKED')
+  })
 })
 
 describe('RunMapper', () => {
