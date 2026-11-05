@@ -676,6 +676,21 @@ curl -s -o /dev/null -w '%{http_code}
 | H1-4d | 连接页新增「云端网关」卡：地址 / 登记状态 / scope / 上游版本 / 登记（管理密钥只此一次） / 刷新 / 注销 | `tests/cloud-view.test.tsx` 新增 4 例 |
 | H1-4e | `clearDeviceCredentials()`：注销只清设备凭据，**保留** `gatewayUrl`（要显示）与 `apiKey`（回滚手段） | `tests/cloud-config.test.ts` |
 
+**本地 → 网关全链路预检 ✅（2026-11-06，从本机经公网直连 `hub.` 实测，用临时设备 `local-pretest`，验完即注销）**
+
+| 步骤 | 结果 |
+| --- | --- |
+| `POST /v1/devices/register`（`X-Pi-Admin-Key`） | `201`，回一次性 token |
+| `GET /v1/devices/me` | `200`，`deviceId` / `scopes` / `hub` 都正确 |
+| `GET /v1/capabilities` | `200`，上游真实数据（`hermes-agent` / `pi-cloud`） |
+| `POST /v1/runs` | `202`，`run_id` 立即可用 |
+| `GET /v1/runs/{id}/events`（SSE） | `: open` → `message.delta`（`p` / `ong`）→ `run.completed`（`pong`）→ `: stream closed` |
+| 同 `Idempotency-Key` 重发 | 同一 `run_id`，`replayed: true` |
+| `Last-Event-ID: 1` 续传 | 只回 `seq 2`，**重放 `seq 1`，无不丢不重** |
+| 审计 `audit.jsonl` | `device.register` + 两条 `http.post /v1/runs`，带 `deviceId` 与客户端 IP |
+| `author` 覆盖 | 上游日志出现 `pi-workbench/<deviceId>`（本地值只进审计） |
+| 撤销后 | `401 device_revoked` |
+
 **G1 判据（待人工点一遍）**：在连接页用管理密钥登记这台设备 → 12 项全功能回归（聊天 / 工具卡 / 审批 / 插话 / 跨重启 attach / 会话管理 / 任务页 / 自检 / 图片 / 停止 / 会话切换 / 取消）全部正常；**且**停插件时 UI 说「网关不可用」、只停 Hermes 时说「Hermes 异常」。
 
 **回滚**：`connection.json` 的 `gatewayUrl` 改回 `https://api.tchen-xiaoxiao.com` + 用回 `apiKey`（一步，1 分钟）。注销设备不会自动回落直连——代码里刻意不保留第二套客户端（C-2）。
