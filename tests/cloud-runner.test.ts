@@ -26,7 +26,7 @@ afterAll(() => {
   fs.rmSync(dirs.appDir, { recursive: true, force: true })
 })
 
-import type { CloudClient } from '../electron/cloud/client'
+import { CloudApiError, type CloudClient } from '../electron/cloud/client'
 import { CloudRunner, controlKindOf, CONTROL_POLL_MS } from '../electron/cloud/runner'
 import { auditFile, recordApprovalDecision, resetAuditForTests } from '../electron/cloud/audit'
 import type { CloudFrame } from '../electron/cloud/types'
@@ -492,6 +492,157 @@ describe('审批结果对号', () => {
     const result = auditLines().find((line) => line.kind === 'approval_result')
     expect(result).toMatchObject({ error: true, exitCode: -1 })
     expect(String(result?.preview)).toContain('BLOCKED')
+    runner.dispose()
+  })
+})
+
+describe('接回在跑的一轮（重启后 attach）', () => {
+  interface AttachBehavior {
+    /** 状态依次返回：接上时一次，收尾校正一次 */
+    status: string | string[]
+    /** 状态接口抛错时的错误（模拟 404 之类） */
+    statusError?: Error
+    streams?: Response[]
+    /** 历史请求前先等等（模拟「run 比历史先结束」） */
+    beforeMessages?: () => Promise<void>
+  }
+
+  function makeAttachRunner(behavior: AttachBehavior) {
+    const frames: CloudFrame[] = []
+    const opened: string[] = []
+    let streamIndex = 0
+    let statusIndex = 0
+    const statuses = Array.isArray(behavior.status) ? behavior.status : [behavior.status]
+    const client: CloudClient = {
+      baseUrl: 'https://api.example.com',
+      rawBaseUrl: 'https://api.example.com',
+      apiKey: 'key',
+      request: async <T,>(path: string): Promise<T> => {
+        if (path.startsWith('/api/sessions/s-1/messages')) {
+          if (behavior.beforeMessages) await behavior.beforeMessages()
+          return {
+            data: [
+              { id: 'm-1', role: 'user', content: 'hi' },
+              { id: 'm-2', role: 'assistant', content: '历史里的半句话' },
+            ],
+            session_id: 's-1',
+          } as T
+        }
+        if (behavior.statusError) throw behavior.statusError
+        const status = statuses[Math.min(statusIndex, statuses.length - 1)]
+        statusIndex += 1
+        return { status, session_id: 's-1' } as T
+      },
+      openStream: async (path: string) => {
+        opened.push(path)
+        const streams = behavior.streams ?? []
+        return streams[streamIndex++] ?? sseStream([])
+      },
+    }
+    const runner = new CloudRunner({ emit: (frame) => frames.push(frame) }, client)
+    return { runner, frames, opened }
+  }
+
+  it('subscribes live-only and puts history before the buffered delta', async () => {
+    const { runner, frames, opened } = makeAttachRunner({
+      status: 'running',
+      streams: [
+        sseStream([
+          frame('message.delta', { delta: '接上之后的半句' }, 42),
+          frame('run.completed', {}, 43),
+        ]),
+      ],
+    })
+
+    const result = await runner.attach({ runId: 'run-9', sessionId: 's-1' })
+    expect(result).toMatchObject({ attached: true, runId: 'run-9', sessionId: 's-1' })
+    await waitFor(() => frames.some((item) => item.kind === 'parts'))
+
+    // 关键：不带 last_seq 会从 seq 0 回放整轮，重启后时间线会重复一遍
+    expect(opened[0]).toBe(`/v1/runs/run-9/events?last_seq=2147483647`)
+
+    const partsIndex = frames.findIndex((item) => item.kind === 'parts')
+    const dividerIndex = frames.findIndex(
+      (item) => item.kind === 'part' && item.part.type === 'divider'
+    )
+    const deltaIndex = frames.findIndex(
+      (item) => item.kind === 'part' && item.part.type === 'text' && item.part.id.startsWith('s:')
+    )
+    // 历史先铺，分隔线其次，增量最后 —— 否则全量替换会把刚推来的卡片冲掉
+    expect(partsIndex).toBeGreaterThanOrEqual(0)
+    expect(dividerIndex).toBeGreaterThan(partsIndex)
+    expect(deltaIndex).toBeGreaterThan(dividerIndex)
+    const divider = frames.find((item) => item.kind === 'part' && item.part.type === 'divider')
+    expect(divider).toMatchObject({ kind: 'part', part: { kind: 'reattach' } })
+    runner.dispose()
+  })
+
+  it('does not subscribe again when the same run is already being followed', async () => {
+    const { runner, opened } = makeAttachRunner({
+      status: 'running',
+      streams: [sseStream([])],
+    })
+    await runner.attach({ runId: 'run-9', sessionId: 's-1' })
+    const again = await runner.attach({ runId: 'run-9' })
+    expect(again.attached).toBe(true)
+    expect(opened).toHaveLength(1)
+    runner.dispose()
+  })
+
+  it('only reconciles a finished run instead of subscribing', async () => {
+    const { runner, frames, opened } = makeAttachRunner({ status: 'completed' })
+    const result = await runner.attach({ runId: 'run-9', sessionId: 's-1' })
+    expect(result).toMatchObject({ attached: false, state: 'completed' })
+    expect(opened).toHaveLength(0)
+    await waitFor(() => frames.some((item) => item.kind === 'run'))
+    expect(frames.some((item) => item.kind === 'parts')).toBe(true)
+    expect(frames.find((item) => item.kind === 'run')).toMatchObject({ state: 'completed' })
+    runner.dispose()
+  })
+
+  it('surfaces a lost run as unknown so the resolve action can be offered', async () => {
+    const { runner, frames, opened } = makeAttachRunner({ status: 'unknown' })
+    const result = await runner.attach({ runId: 'run-9', sessionId: 's-1' })
+    expect(result).toMatchObject({ attached: false, state: 'unknown' })
+    expect(opened).toHaveLength(0)
+    await waitFor(() => frames.some((item) => item.kind === 'run'))
+    expect(frames.find((item) => item.kind === 'run')).toMatchObject({ state: 'unknown' })
+    runner.dispose()
+  })
+
+  it('still reports the terminal state when the run ends before history lands', async () => {
+    // 这条路径下终态增量落在缓冲里被丢弃：必须有收尾校正补一次终态帧，
+    // 否则界面会永远停在「运行中」
+    let open: (() => void) | null = null
+    const held = new Promise<void>((resolve) => {
+      open = resolve
+    })
+    const { runner, frames } = makeAttachRunner({
+      status: ['running', 'completed'],
+      streams: [sseStream([frame('message.delta', { delta: '说完就结束' }, 9), frame('run.completed', {}, 10)])],
+      beforeMessages: () => held,
+    })
+
+    const result = await runner.attach({ runId: 'run-9', sessionId: 's-1' })
+    expect(result.attached).toBe(true)
+    await waitFor(() => frames.some((item) => item.kind === 'run' && item.state === 'completed'))
+
+    open!()
+    await waitFor(() => frames.some((item) => item.kind === 'parts'))
+    // 被丢弃的增量不该再露头（历史已经是权威）
+    expect(frames.some((item) => item.kind === 'part' && item.part.id.startsWith('s:text'))).toBe(
+      false
+    )
+    expect(frames.filter((item) => item.kind === 'run' && item.state === 'completed')).toHaveLength(1)
+    runner.dispose()
+  })
+
+  it('propagates not_found so the caller can drop a stale record', async () => {
+    const { runner } = makeAttachRunner({
+      status: 'running',
+      statusError: new CloudApiError('not_found', 'run 不存在'),
+    })
+    await expect(runner.attach({ runId: 'run-gone' })).rejects.toBeInstanceOf(CloudApiError)
     runner.dispose()
   })
 })

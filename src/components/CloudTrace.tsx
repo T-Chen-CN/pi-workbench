@@ -239,7 +239,9 @@ const DividerRow: React.FC<{ part: DividerPart }> = ({ part }) => {
       ? t('cloudSessionMetaDivider')
       : part.kind === 'disconnect'
         ? t('cloudDisconnectDivider')
-        : t('cloudRunError', { error: part.detail ?? 'unknown' })
+        : part.kind === 'reattach'
+          ? t('cloudReattachDivider')
+          : t('cloudRunError', { error: part.detail ?? 'unknown' })
   return (
     <div className="flex items-center gap-3 py-1" role="separator">
       <div className="h-px flex-1 bg-rule-divide" />

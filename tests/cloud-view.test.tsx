@@ -225,6 +225,20 @@ describe('CloudTrace', () => {
     expect(screen.getByText('reasoning body')).toBeTruthy()
   })
 
+  it('marks the timeline where a run was reattached after a restart', () => {
+    render(
+      <CloudTrace
+        parts={[
+          { type: 'text', id: 'h:1', role: 'user', text: 'hello' },
+          { type: 'divider', id: 'reattach:run_1', kind: 'reattach' },
+        ]}
+        streaming={false}
+      />
+    )
+
+    expect(screen.getByText(zh.cloudReattachDivider)).toBeTruthy()
+  })
+
   it('expands a tool card to show its result', () => {
     render(
       <CloudTrace

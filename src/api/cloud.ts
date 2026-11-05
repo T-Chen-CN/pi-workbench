@@ -417,6 +417,22 @@ export const cloudApi = {
     return bridge.cloudRunStatus({ runId })
   },
 
+  /** 接回上一轮还在跑的 run（重启 / 断线后）；没有就返回 `attached: false` */
+  async attachRun(input: { sessionId?: string } = {}): Promise<{
+    success: boolean
+    attached: boolean
+    runId?: string
+    sessionId?: string
+    state?: CloudRunStatus
+    error?: string
+  }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudRunAttach !== 'function') {
+      return { success: false, attached: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudRunAttach(input)
+  },
+
   async openDashboard(): Promise<{ success: boolean; error?: string }> {
     const bridge = api()
     if (!bridge || typeof bridge.cloudDashboardOpen !== 'function') {

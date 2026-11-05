@@ -142,6 +142,8 @@ interface CloudState {
   togglePinned: (sessionId: string) => Promise<boolean>
   deleteSession: (sessionId: string) => Promise<boolean>
   openSession: (sessionId: string) => Promise<void>
+  /** 接回上一轮还在跑的 run（重启 / 断线后）；接上了返回 true */
+  attachRun: (sessionId?: string) => Promise<boolean>
   newSession: () => void
   setDraft: (text: string) => void
   send: () => Promise<void>
@@ -325,7 +327,11 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       capabilities: result.capabilities ?? null,
       error: result.error ?? null,
     })
-    if (result.state === 'connected') await get().refreshSessions()
+    if (result.state === 'connected') {
+      await get().refreshSessions()
+      // 上一轮可能还在服务端跑着：接回来，否则用户得自己重发
+      void get().attachRun()
+    }
   },
 
   async disconnect() {
@@ -540,6 +546,21 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     })
     // 打开会话时主进程顺手做了历史复核，这里刷新一次让账本状态跟上
     void get().loadLedger()
+    // 这个会话是不是还有一轮在跑（应用重启过 / 断线过）
+    void get().attachRun(sessionId)
+  },
+
+  async attachRun(sessionId) {
+    if (!hasCloudBridge()) return false
+    const result = await cloudApi.attachRun(sessionId ? { sessionId } : {})
+    if (!result.success || !result.attached) return false
+    // 帧会同时从推送频道过来；这里先把状态收窄，避免首帧到达前的空窗被当成空闲
+    set({
+      runId: result.runId ?? get().runId,
+      runState: result.state ?? 'running',
+      runError: null,
+    })
+    return true
   },
 
   newSession() {

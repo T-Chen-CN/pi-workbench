@@ -356,7 +356,12 @@ export type CloudTracePart =
       failureReason?: string
       childSessionId?: string
     }
-  | { type: 'divider'; id: string; kind: 'session_meta' | 'disconnect' | 'run_error'; detail?: string }
+  | {
+      type: 'divider'
+      id: string
+      kind: 'session_meta' | 'disconnect' | 'run_error' | 'reattach'
+      detail?: string
+    }
 
 /** 主进程 → 渲染层的事件帧 */
 export type CloudFrame =

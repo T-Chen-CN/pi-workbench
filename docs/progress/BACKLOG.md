@@ -277,14 +277,14 @@
 | C-04 ✅ | 事件流 → parts **类型对齐**（含 `approval` / `clarify`，不复用组件） | P1 | C-03 | AC-02 / AC-19 |
 | C-05 | ~~审批闭环：卡片 / 应答通道 / 断流补卡 / 审计 JSONL + **原生 `approvals.mode` 三档切换**（不做策略版本化 / 漂移告警 / 一键还原）~~ **已完成真机验收并合入 main**（once / session / deny 三条 + 档位切换 + 审计配对；UI 截图经用户确认跳过） | P1 | C-04 | AC-03 / AC-04 / AC-16 / AC-17 / AC-22；AC-18 / AC-21 降级为「档位显示 = 服务端真值」。方案见 [CLOUD_AGENT_APPROVAL](../requirements/CLOUD_AGENT_APPROVAL.md) |
 | C-06 ✅ | 配置页：BrowserView 嵌 dashboard + 凭据与会话隔离 | P1 | C-03 | AC-20 |
-| C-07 | 耐久性（run 重新 attach / 断线占位 / 未结算清单 / jobs 视图） | P2 | C-05 | AC-06 / AC-07 / AC-09 / AC-10 |
+| C-07 ✅ | 耐久性（run 重新 attach / 断线占位 / 未结算清单 / jobs 视图） | P2 | C-05 | AC-06 / AC-07 / AC-09 / AC-10。**2026-11-06 收尾**：断线占位、未结算清单、jobs 视图此前已做；本轮补上**跨重启 attach** —— `data/cloud-agent/active-run.json` 记最近一轮，启动 / 连上 / 打开对应会话时用 `GET /v1/runs/{id}` 探活，还在跑就重订阅（`last_seq` 顶到 int32 上限只收新事件，先铺历史再放增量，避免整轮重复渲染），终态 / `unknown` / 后端 404 一律作废记录 |
 | C-08 | 屏幕与接管（CDP screencast / `Input.*`） | P2 | C-07 | AC-05 |
 | C-09 | 任务板视图（Kanban 投影）+ `clarify` 建议卡片 | P3 | C-08 | — |
 | C-10 | 云端页面拆窗 | P3 | C-09 | AC-13 |
 | C-11 | IM 渠道 / 语音 / 出网与遥测复核 | P3 | C-07 | AC-15 |
 | C-12 | （可选）对外写 MCP 门 + write-ahead 账本 | P3 | C-05 | 幂等 / 未结算清单可演示 |
 
-**建议顺序**：~~C-00 → C-01 ∥ C-02 → C-03 → C-04 → C-05 → C-06~~ **（已全部交付并合入 `main`，2026-11-06 阶段性收口）** → C-07 → C-08 → C-09 → C-10 → C-11（C-12 按需）。实施现状与后置理由见 [CLOUD_AGENT §10.5](../requirements/CLOUD_AGENT.md)。
+**建议顺序**：~~C-00 → C-01 ∥ C-02 → C-03 → C-04 → C-05 → C-06 → C-07~~ **（已全部交付并合入 `main`，2026-11-06 阶段性收口）** → C-08 → C-09 → C-10 → C-11（C-12 按需）。实施现状与后置理由见 [CLOUD_AGENT §10.5](../requirements/CLOUD_AGENT.md)。
 **先不做**：多 profile / 多 agent 并行、**用量展示与预算熔断**（没有消费上限）、语义分类器、桌面截图 / Xvfb / VNC（见 CLOUD_AGENT §9.4）。
 
 ### 7.2 开工前必须已知的三条坑

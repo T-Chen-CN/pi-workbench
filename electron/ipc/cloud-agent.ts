@@ -34,6 +34,7 @@ import {
   settleRun
 } from '../cloud/ledger.js'
 import { createRemote, toRunStatus } from '../cloud/remote.js'
+import { clearActiveRun, readActiveRun, writeActiveRun } from '../cloud/active-run.js'
 import { recordApprovalDecision, recordModeChange } from '../cloud/audit.js'
 import {
   isApprovalMode,
@@ -202,7 +203,9 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
           observeForLedger(frame)
           send('cloud:event', frame)
         },
-        log: (message, error) => logger?.warn(message, error ?? '')
+        log: (message, error) => logger?.warn(message, error ?? ''),
+        // 这一轮结束了：跨重启接回的记录用完即弃
+        onRunSettled: (runId) => clearActiveRun(runId)
       },
       client
     )
@@ -238,6 +241,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   })
 
   handleIpc('cloud:config:set', (_event, input: { baseUrl?: string; apiKey?: string; dashboardToken?: string }) => {
+    const previousBaseUrl = readCloudConfig().baseUrl
     const saved = writeCloudConfig({
       baseUrl: String(input?.baseUrl ?? ''),
       apiKey: typeof input?.apiKey === 'string' ? input.apiKey : undefined,
@@ -249,6 +253,8 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     runner?.dispose()
     runner = null
     capabilities = null
+    // 换了服务器，上一台的 run 记录就再也接不上了（原地保存别把能接回的记录清掉）
+    if (normalizeBaseUrl(saved.baseUrl) !== normalizeBaseUrl(previousBaseUrl)) clearActiveRun()
     return {
       success: true,
       config: publicCloudConfig(saved)
@@ -735,6 +741,12 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
           idempotencyKey
         })
         activeRun = { runId: started.runId, sessionId: started.sessionId ?? null }
+        // 落一条「上次开跑的是哪一轮」：重启之后靠它把还在跑的 run 接回来
+        writeActiveRun({
+          runId: started.runId,
+          sessionId: started.sessionId ?? null,
+          startedAt: Date.now(),
+        })
         return { success: true, runId: started.runId, sessionId: started.sessionId ?? undefined }
       } catch (error) {
         logger?.warn('[Cloud] run start failed', cloudErrorMessage(error))
@@ -742,6 +754,48 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       }
     }
   )
+
+  /**
+   * 接回上一次开的那一轮（应用重启 / 断线之后）。
+   *
+   * 没有记录、记录的会话跟当前要打开的不是同一个、后端已经认不得这条 run
+   * 都返回 `attached: false` —— 渲染层据此什么也不做，不报错。
+   */
+  handleIpc('cloud:run:attach', async (_event, input: { sessionId?: string }) => {
+    const record = readActiveRun()
+    if (!record) return { success: true, attached: false }
+    const wanted = String(input?.sessionId ?? '')
+    if (wanted && record.sessionId && wanted !== record.sessionId) {
+      return { success: true, attached: false }
+    }
+    try {
+      const result = await ensureRunner().attach({
+        runId: record.runId,
+        sessionId: record.sessionId,
+      })
+      if (result.attached) {
+        activeRun = { runId: result.runId, sessionId: result.sessionId ?? record.sessionId }
+      } else {
+        // 终态 / unknown：记录已完成使命（unknown 仍是会话里的状态，不靠它找回）
+        clearActiveRun(record.runId)
+      }
+      return {
+        success: true,
+        attached: result.attached,
+        runId: result.runId,
+        sessionId: result.sessionId ?? undefined,
+        state: result.state,
+      }
+    } catch (error) {
+      // 网关重启过 / run 被回收：这条记录永远接不上了，删掉别每次启动都问
+      if (error instanceof CloudApiError && error.code === 'not_found') {
+        clearActiveRun(record.runId)
+        return { success: true, attached: false }
+      }
+      logger?.warn('[Cloud] run attach failed', cloudErrorMessage(error))
+      return fail(error)
+    }
+  })
 
   handleIpc('cloud:run:resolve-unknown', async (_event, input: { runId?: string }) => {
     const runId = String(input?.runId ?? '')

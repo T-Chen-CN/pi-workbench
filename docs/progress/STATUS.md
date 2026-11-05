@@ -10,6 +10,7 @@
 
 **更新时间**: 2026-11-06
 
+- 🟢 **云端 Agent C-07 耐久性收尾**（2026-11-06，未发版）：补上**跨重启接回在跑的一轮**。`data/cloud-agent/active-run.json` 记最近一次开跑的 `runId` / `sessionId`（终态、后端 404、换服务器即删）；启动连上后与打开对应会话时用 `GET /v1/runs/{id}` 探活 —— 还在跑就重订阅事件流（`last_seq` 顶到 int32 上限**只收新事件**，否则服务端从 seq 0 回放整轮、时间线重复一遍），**先铺历史再放增量**（历史是全量替换，晚到会把刚推的卡片冲掉），并立刻补一次 `pending_controls`（审批卡不会自动重推）；终态 / `unknown` 只做历史校正，`unknown` 顺带把「收尾」按钮接回重启后的界面。见 [BACKLOG §7.1](BACKLOG.md) / [CLOUD_AGENT §10.5](../requirements/CLOUD_AGENT.md)
 - **屏幕与接管（C-08）挂待办**：调研与真机可行性验证已做完（冷启 0.3–0.5s、ack 66ms→15fps/378KB/s、公网首帧 142ms、`browser.cdp_url` 可让 Hermes 用外部浏览器且不会杀它），定位是**显式进入的工作模式**而非常驻功能；实测数字、架构、两个必踩的坑见 `BACKLOG §7.5.1`。服务器已全量回滚。
 - 🟢 **云端 Agent 补全到 v5 欠账清单**（2026-11-05，未发版）：会话管理 / 分页搜索 / 插话 / 图片 / 多端同步 / `unknown` 收尾 / 未结算账本 / 子代理轨道 / 任务页 / 自检 / clarify 问答，按 P1–P6 六期落地，见 [BACKLOG §7.5](BACKLOG.md)
 - 🟢 **连接页从文件导入**（2026-11-06，未发版）：消费 `hermes-handoff v1 / v1.1`，`pick → 脱敏预览 → apply`（明文与写入全在主进程，渲染层只拿掩码与一次性 nonce），见 [BACKLOG §7.3 G-03](BACKLOG.md)；同页另有**「复制自举 Prompt」**（`?raw` 内联 `hermes-bootstrap-prompt.md`，单份事实源）

@@ -767,6 +767,15 @@ export interface ElectronAPI {
     sessionId?: string
     idempotencyKey: string
   }) => Promise<CloudRunStartResult>
+  cloudRunAttach: (input: { sessionId?: string }) => Promise<{
+    success: boolean
+    /** true = 事件流已经接上；false = 没有在跑的轮次 / 已结束 */
+    attached: boolean
+    runId?: string
+    sessionId?: string
+    state?: CloudRunStatus
+    error?: string
+  }>
   cloudRunStop: (input: { runId: string }) => Promise<CloudRunResult>
   cloudRunStatus: (input: { runId: string }) => Promise<CloudRunResult & {
     /** 断流 / 重启后补卡片的唯一来源（已脱敏） */

@@ -513,11 +513,11 @@ dash.example.com {
 | 配置面 | `WebContentsView` 嵌 dashboard（独立 partition、无 preload）+ 连接页策略卡与自检面板 | `electron/cloud/{dash,dashboard}.ts`、`CloudConnectionView.tsx` |
 | 任务与导入 | 定时任务列表 / 三个动作、`hermes-handoff` 文件导入 | `CloudJobsView.tsx`、`electron/cloud/handoff.ts` |
 
-**明确后置**（不是遗漏，是排期决定）：
+**明确后置**（不是遗漏，是排期决定；C-07 已于 2026-11-06 补齐，见下表首行）：
 
 | 条目 | 内容 | 为什么后置 |
 | --- | --- | --- |
-| C-07 | 耐久性：run 重新 attach / 断线占位 / 未结算清单补录 | AC-06 / AC-07 / AC-09 / AC-10；当前断线靠 15s 状态轮询兜底 |
+| ~~C-07~~ ✅ | 耐久性：run 重新 attach / 断线占位 / 未结算清单补录 | AC-06 / AC-07 / AC-09 / AC-10；**2026-11-06 补齐跨重启 attach**（`electron/cloud/active-run.ts` 记最近一轮，接回时先铺历史再放增量、只订阅新事件） |
 | C-08 | CDP 屏幕与接管（AC-05） | 需要云上常驻浏览器，运维面另算 |
 | C-09 / C-10 | Kanban 投影、云端页面拆窗 | 依赖 C-08 |
 | C-11 | IM 渠道 / 语音 / 出网遥测复核 | 一次性验收动作，不是功能 |
@@ -537,6 +537,7 @@ dash.example.com {
 
 | 版本 | 日期 | 变化 |
 | --- | --- | --- |
+| **C-07 补齐** | 2026-11-06 | 不回改正文：§10.5 的 C-07 由「明确后置」改为已交付（跨重启 attach：`active-run.json` + `run:attach` + 先铺历史再放增量）。剩余后置项收窄为 C-08 – C-12。 |
 | **收口** | 2026-11-06 | 不回改方案正文：新增 §10.5「实施现状」（C-00–C-06 已交付、C-07–C-12 明确后置、三条已知盲区），四个 go/no-go 探针与 Q13 回填实测结论。 |
 | **v5** | 2026-11-03 | ①删掉受限 OS 用户 `piagent` 与 `terminal.backend: ssh`，Hermes 改整机权限（含 sudo），`api_server` toolset 放开 `terminal`；隔离降为软限制 → 新增 S-14（硬边界只能在主机外）/ S-15（deny 覆盖系统级）、S-03/S-09/S-11 强度下调；②本地改**两个独立页面**（会话页 / 配置页，首页按钮进入），顶层入口提到 P0；③云端前端**不复用** `ChatPanel`/`chatStore`，只对齐 parts 类型（删掉 transcript 解耦）；④**删掉预算熔断**（C-E04 / S-07 / AC-08）与用量展示，探针 5 → 4，工期 10–12 → **9–11 周**。 |
 | v4 | 2026-11-03 | 控制面改 api_server（Bearer REST + SSE）；传输改域名 + TLS 反代（弃 SSH 隧道）；配置面改内嵌 dashboard；自研 8 → 4；surface 隔离升为铁律；补网络前提。同日精简：删选型论证（归 ADR）。 |

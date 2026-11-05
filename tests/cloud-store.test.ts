@@ -618,3 +618,75 @@ describe('审批档位', () => {
     expect(useCloudStore.getState().policyError).toContain('403')
   })
 })
+
+describe('attachRun（重启后接回在跑的一轮）', () => {
+  interface AttachCall {
+    sessionId?: string
+  }
+
+  function bridgeFor(
+    attach: (input: AttachCall) => Promise<{
+      success: boolean
+      attached: boolean
+      runId?: string
+      sessionId?: string
+      state?: string
+    }>,
+    calls: AttachCall[]
+  ) {
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudConfigGet: async () => ({ success: true }),
+      cloudConnect: async () => ({ success: true, state: 'connected', capabilities: {} }),
+      cloudSessionsList: async () => ({ success: true, sessions: [], hasMore: false }),
+      cloudMessagesList: async () => ({ success: true, parts: [], hasMore: false }),
+      cloudRunAttach: (input: AttachCall) => {
+        calls.push(input)
+        return attach(input)
+      },
+    }
+  }
+
+  beforeEach(() => {
+    useCloudStore.setState({ activeSessionId: null, runId: null, runState: null, runError: null })
+  })
+
+  it('adopts the run state reported by the main process', async () => {
+    const calls: AttachCall[] = []
+    bridgeFor(
+      async () => ({ success: true, attached: true, runId: 'run_1', sessionId: 's1', state: 'running' }),
+      calls
+    )
+
+    const attached = await useCloudStore.getState().attachRun()
+    expect(attached).toBe(true)
+    expect(calls).toEqual([{}])
+    expect(useCloudStore.getState()).toMatchObject({ runId: 'run_1', runState: 'running' })
+  })
+
+  it('stays idle when there is nothing to attach to', async () => {
+    const calls: AttachCall[] = []
+    bridgeFor(async () => ({ success: true, attached: false }), calls)
+
+    const attached = await useCloudStore.getState().attachRun('s1')
+    expect(attached).toBe(false)
+    expect(useCloudStore.getState().runState).toBeNull()
+  })
+
+  it('asks about the session that was just opened', async () => {
+    const calls: AttachCall[] = []
+    bridgeFor(async () => ({ success: true, attached: false }), calls)
+
+    await useCloudStore.getState().openSession('s2')
+    await Promise.resolve()
+    expect(calls).toEqual([{ sessionId: 's2' }])
+  })
+
+  it('tries to attach right after connecting', async () => {
+    const calls: AttachCall[] = []
+    bridgeFor(async () => ({ success: true, attached: false }), calls)
+
+    await useCloudStore.getState().connect()
+    await Promise.resolve()
+    expect(calls).toHaveLength(1)
+  })
+})

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => {
   const state = {
     appDir: '',
     statusCalls: 0,
+    liveStatusCalls: 0,
     sent: [] as Array<{ channel: string; payload: unknown }>,
     requests: [] as string[],
     bodies: [] as string[],
@@ -92,7 +93,53 @@ vi.mock('electron', () => ({
         return Response.json({ platform: 'hermes-agent', model: 'pi-cloud', run_stop: true })
       }
       if (route === '/v1/runs' && init?.method === 'POST') {
-        return Response.json({ run_id: 'run_test', status: 'started', replayed: false }, { status: 202 })
+        const body = String(init.body ?? '')
+        const runId = body.includes('hang') ? 'run_hang' : 'run_test'
+        return Response.json({ run_id: runId, status: 'started', replayed: false }, { status: 202 })
+      }
+      if (route === '/v1/runs/run_hang') {
+        return Response.json({
+          object: 'hermes.run',
+          run_id: 'run_hang',
+          status: 'running',
+          session_id: 'hang_session',
+        })
+      }
+      if (route === '/v1/runs/run_hang/events') {
+        // 一直开着、不收尾：验证「记录会一直留着」的那条用例
+        return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      }
+      if (route === '/v1/runs/run_live') {
+        // 接上时还在跑，收尾校正时已经结束（真实服务端就是这个顺序）
+        mocks.state.liveStatusCalls += 1
+        return Response.json({
+          object: 'hermes.run',
+          run_id: 'run_live',
+          status: mocks.state.liveStatusCalls === 1 ? 'running' : 'completed',
+          session_id: 'run_session',
+        })
+      }
+      if (route === '/v1/runs/run_live/events') {
+        const encoder = new TextEncoder()
+        const frames = [
+          { seq: 7, event: 'message.delta', run_id: 'run_live', delta: '接上之后' },
+          { seq: 8, event: 'run.completed', run_id: 'run_live', output: '接上之后' },
+        ]
+        const body = frames
+          .map((frame) => `id: ${frame.seq}\ndata: ${JSON.stringify(frame)}\n\n`)
+          .join('')
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(encoder.encode(body))
+              controller.close()
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+        )
       }
       if (route === '/v1/runs/run_test') {
         mocks.state.statusCalls += 1
@@ -321,6 +368,12 @@ vi.mock('electron', () => ({
     },
   },
 }))
+
+import {
+  clearActiveRun,
+  readActiveRun,
+  writeActiveRun,
+} from '../electron/cloud/active-run'
 
 type CloudAgentModule = typeof import('../electron/ipc/cloud-agent')
 
@@ -1082,5 +1135,94 @@ describe('cloud handoff import', () => {
     })
     expect(result.success).toBe(false)
     expect(mocks.state.clipboard).toEqual([])
+  })
+})
+
+describe('cloud run attach（重启后接回在跑的一轮）', () => {
+  beforeAll(async () => {
+    // 上面的 handoff 用例结尾断开了连接（令牌被清掉），这里恢复一个可用配置
+    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+    await call('cloud:connect')
+  })
+
+  it('remembers the run it just started', async () => {
+    clearActiveRun()
+    const started = await call<{ success: boolean; runId?: string }>('cloud:run:start', {
+      input: 'hang 住别结束',
+      idempotencyKey: 'key-hang',
+    })
+    expect(started).toMatchObject({ success: true, runId: 'run_hang' })
+    expect(readActiveRun()).toMatchObject({ runId: 'run_hang', sessionId: 'hang_session' })
+  })
+
+  it('does nothing when the record belongs to another session', async () => {
+    const before = mocks.state.requests.filter((line) => line.includes('/v1/runs/run_hang')).length
+    const result = await call<{ success: boolean; attached: boolean }>('cloud:run:attach', {
+      sessionId: 'run_session',
+    })
+    expect(result).toMatchObject({ success: true, attached: false })
+    // 不该为了一个不相关的会话去问服务端
+    const after = mocks.state.requests.filter((line) => line.includes('/v1/runs/run_hang')).length
+    expect(after).toBe(before)
+  })
+
+  it('drops a record the backend no longer knows about', async () => {
+    writeActiveRun({ runId: 'run_gone', sessionId: 'run_session', startedAt: 1 })
+    const result = await call<{ success: boolean; attached: boolean }>('cloud:run:attach', {
+      sessionId: 'run_session',
+    })
+    // 404 不是错误：记录作废，页面照常打开
+    expect(result).toMatchObject({ success: true, attached: false })
+    expect(readActiveRun()).toBeNull()
+  })
+
+  it('reattaches a live run, streams it and clears the record at the end', async () => {
+    writeActiveRun({ runId: 'run_live', sessionId: 'run_session', startedAt: 1 })
+    mocks.state.sent.length = 0
+    const result = await call<{
+      success: boolean
+      attached: boolean
+      runId?: string
+      sessionId?: string
+      state?: string
+    }>('cloud:run:attach', { sessionId: 'run_session' })
+    expect(result).toMatchObject({
+      success: true,
+      attached: true,
+      runId: 'run_live',
+      sessionId: 'run_session',
+      state: 'running',
+    })
+    // 只订阅新事件：带 last_seq 上限，避免把整轮回放一遍
+    expect(
+      mocks.state.requests.some((line) => line.includes('/v1/runs/run_live/events?last_seq=2147483647'))
+    ).toBe(true)
+
+    await waitFor(() => readActiveRun() === null)
+    const frames = mocks.state.sent
+      .filter((message) => message.channel === 'cloud:event')
+      .map((message) => message.payload as { kind: string; state?: string })
+    // 历史先铺，然后才是增量与「已接上」分隔线
+    expect(frames.some((frame) => frame.kind === 'parts')).toBe(true)
+    expect(frames.some((frame) => frame.kind === 'run' && frame.state === 'completed')).toBe(true)
+  })
+
+  it('returns attached: false when there is nothing to attach to', async () => {
+    clearActiveRun()
+    const result = await call<{ success: boolean; attached: boolean }>('cloud:run:attach', {})
+    expect(result).toMatchObject({ success: true, attached: false })
+  })
+
+  it('keeps the record when the address stays the same, drops it when it changes', async () => {
+    writeActiveRun({ runId: 'run_hang', sessionId: 'hang_session', startedAt: 1 })
+    // 原地保存同一个地址不该把能接回的记录清掉
+    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
+    expect(readActiveRun()?.runId).toBe('run_hang')
+
+    await call('cloud:config:set', { baseUrl: 'https://other.example.com' })
+    expect(readActiveRun()).toBeNull()
+
+    // 复原配置，别影响同文件里排在前面的用例假设
+    await call('cloud:config:set', { baseUrl: 'https://api.example.com', apiKey: 'test-key' })
   })
 })

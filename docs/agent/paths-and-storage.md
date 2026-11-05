@@ -73,6 +73,7 @@ macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动�
 | `config/api-config.json` | `apiConfig:*` | provider / apiUrl / apiKey（`enc:` + safeStorage）/ 模型与容量 |
 | `config/web-search.json` | `webSearch:*` | 当前 provider + 各 provider 的 Key（`enc:`） |
 | `data/cloud-agent/connection.json` | `electron/cloud/config.ts` | 云端连接：`baseUrl` / `dashboardUrl` / `apiKey`（`enc:`）/ `dashboardToken`（`enc:`）/ `dashboardUser` / `dashboardPassword`（`enc:`）/ `handoffImportedAt` / `handoffProfile`。`cloud:disconnect` 只清密钥，保留地址、账号与导入记录 |
+| `data/cloud-agent/active-run.json` | `electron/cloud/active-run.ts` | 「上一次开跑的是哪一轮」：`{runId, sessionId, startedAt}`。只用来在重启 / 断线后接回**还在服务端跑着**的 run（`GET /api/sessions` 不返回 run id，没有它就问不出来）。可丢弃的 UI 缓存，不是云端真相；终态 / 后端 404 / 换服务器即删 |
 | `data/cloud-agent/pending-writes.json` | `electron/cloud/ledger.ts` | 未结算账本：`出去了就收不回来` 的三类动作（对外写 / 系统级 / 不可逆），事后人工核对 |
 | `data/cloud-agent/audit.jsonl` | `electron/cloud/audit.ts` | 审批审计：**追加 + fsync，永不改写**（不是原子替换）。每行一个事件：`approval`（决定：只存 ≤200 字命令摘要 + 命中规则 + 当时档位）、`approval_result`（**审批拦下的那次**工具卡的 `error` / `exitCode` + 结果预览，按 `toolCallId` 对号）、`mode`（档位变更） |
 | `config/last-run-version.json` | `shell-refresh.ts` | 仅在版本变化时刷新 shell / 图标缓存 |
