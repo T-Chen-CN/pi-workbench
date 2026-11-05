@@ -107,6 +107,8 @@ describe('read/write connection', () => {
       hasDeviceToken: false,
       deviceScopes: [],
       deviceId: '',
+      // 从没登记过设备 = 老直连配置，直连仍然可用（运维回滚路径）
+      transportMode: 'direct',
       hasDashboardToken: false,
       dashboardUser: '',
       hasDashboardPassword: false,
@@ -141,6 +143,7 @@ describe('控制台会话令牌', () => {
       hasDeviceToken: false,
       deviceScopes: [],
       deviceId: '',
+      transportMode: 'direct',
       hasDashboardToken: true,
       dashboardUser: '',
       hasDashboardPassword: false,
@@ -229,5 +232,66 @@ describe('控制台账号与导入记录', () => {
     expect(read.hasDashboardPassword).toBe(false)
     expect(read.handoffImportedAt).toBeNull()
     expect(read.handoffProfile).toBe('')
+  })
+})
+
+describe('transport 模式（注销后不许回落直连）', () => {
+  function freshFile(): void {
+    fs.rmSync(config.cloudConfigFile(), { force: true })
+  }
+
+  it('starts in direct mode so a legacy api-key-only setup still works', () => {
+    freshFile()
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com', apiKey: 'sk-legacy' })
+    const transport = config.cloudTransport()
+    expect(transport.viaGateway).toBe(false)
+    expect(transport.credential).toBe('sk-legacy')
+  })
+
+  it('locks to the gateway once a device token exists', () => {
+    freshFile()
+    config.writeCloudConfig({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'sk-legacy',
+      deviceToken: 'pi_dev',
+      deviceId: 'dev-1',
+    })
+    const transport = config.cloudTransport()
+    expect(transport.viaGateway).toBe(true)
+    expect(transport.credential).toBe('pi_dev')
+    // 密钥还在盘上（回滚用），但正常路径绝不用它
+    expect(transport.credential).not.toBe('sk-legacy')
+  })
+
+  it('has no credential at all after the device is revoked', () => {
+    freshFile()
+    config.writeCloudConfig({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'sk-legacy',
+      deviceToken: 'pi_dev',
+      deviceId: 'dev-1',
+    })
+    config.clearDeviceCredentials()
+
+    const transport = config.cloudTransport()
+    // 关键：即使 apiKey 还在，也**不能**拿它当凭据 —— 注销必须真的关门
+    expect(transport.viaGateway).toBe(true)
+    expect(transport.credential).toBe('')
+    expect(transport.dashboardToken).toBe('')
+    expect(config.readCloudConfig().transportMode).toBe('gateway')
+    // 回滚手段仍然保留（要人工改配置才会用上）
+    expect(config.readCloudConfig().apiKey).toBe('sk-legacy')
+  })
+
+  it('keeps the gateway lock across a plain disconnect', () => {
+    freshFile()
+    config.writeCloudConfig({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'sk-legacy',
+      deviceToken: 'pi_dev',
+      deviceId: 'dev-1',
+    })
+    config.clearCloudToken()
+    expect(config.readCloudConfig().transportMode).toBe('gateway')
   })
 })

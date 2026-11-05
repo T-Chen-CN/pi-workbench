@@ -37,6 +37,14 @@ interface StoredCloudConfig {
   deviceToken?: string
   /** 登记时授予的 scope 快照，仅供界面展示 */
   deviceScopes?: string[]
+  /**
+   * 传输模式：`gateway` = 只走网关（登记过就永久是这个），`direct` = 老直连。
+   *
+   * 为什么要存：注销/丢 token 之后 `deviceToken` 就空了，如果这时还「回落到 apiKey」，
+   * 注销等于没注销——设备照样能用云端。回滚是**运维改配置**（环境变量或手改这个字段），
+   * 不是代码里自动接管。
+   */
+  transportMode?: 'gateway' | 'direct'
   deviceId?: string
   dashboardUrl?: string
   /**
@@ -61,6 +69,8 @@ export interface CloudConfig {
   hasDeviceToken: boolean
   deviceScopes: string[]
   deviceId: string
+  /** `gateway` = 只走网关（登记过就是它）；`direct` = 老直连（仅运维回滚） */
+  transportMode: 'gateway' | 'direct'
   dashboardUrl: string
   /** 明文密钥：只在主进程内使用，不经过 IPC 返回 */
   apiKey: string
@@ -98,6 +108,11 @@ export function readCloudConfig(): CloudConfig {
     hasDeviceToken: Boolean(deviceToken),
     deviceScopes: Array.isArray(stored?.deviceScopes) ? stored!.deviceScopes!.map(String) : [],
     deviceId: String(stored?.deviceId ?? ''),
+    // 有 token 或有登记记录 = 网关模式；老配置（两者都没有）才算直连
+    transportMode:
+      stored?.transportMode === 'gateway' || deviceToken || stored?.deviceId
+        ? 'gateway'
+        : 'direct',
     dashboardUrl,
     apiKey,
     hasToken: Boolean(apiKey),
@@ -118,6 +133,7 @@ export function writeCloudConfig(input: {
   deviceToken?: string
   deviceScopes?: string[]
   deviceId?: string
+  transportMode?: 'gateway' | 'direct'
   apiKey?: string
   dashboardToken?: string
   /** 交接文件里的控制台地址可能与 `api.` 派生规则不一致，允许显式覆盖 */
@@ -138,6 +154,9 @@ export function writeCloudConfig(input: {
   const nextGatewayUrl = normalizeBaseUrl(input.gatewayUrl ?? '') || deriveGatewayUrl(baseUrl)
   const nextDeviceScopes = input.deviceScopes ?? current.deviceScopes
   const nextDeviceId = pick(input.deviceId, current.deviceId)
+  // 一旦登记过就锁在网关模式：注销/丢 token 之后也不许悄悄回落到 apiKey
+  const nextTransportMode: 'gateway' | 'direct' =
+    input.transportMode ?? (nextDeviceId || input.deviceToken ? 'gateway' : current.transportMode)
   const nextDashboardToken = pick(input.dashboardToken, current.dashboardToken)
   const nextDashboardUser = pick(input.dashboardUser, current.dashboardUser)
   const nextDashboardPassword = pick(input.dashboardPassword, current.dashboardPassword)
@@ -153,6 +172,7 @@ export function writeCloudConfig(input: {
     deviceToken: nextDeviceToken ? encryptSecret(nextDeviceToken) : '',
     deviceScopes: nextDeviceScopes,
     deviceId: nextDeviceId || undefined,
+    transportMode: nextTransportMode,
     dashboardUrl,
     apiKey: nextKey ? encryptSecret(nextKey) : '',
     dashboardToken: nextDashboardToken ? encryptSecret(nextDashboardToken) : '',
@@ -170,6 +190,7 @@ export function writeCloudConfig(input: {
     hasDeviceToken: Boolean(nextDeviceToken),
     deviceScopes: nextDeviceScopes,
     deviceId: nextDeviceId,
+    transportMode: nextTransportMode,
     dashboardUrl,
     apiKey: nextKey,
     hasToken: Boolean(nextKey),
@@ -204,6 +225,8 @@ export function clearDeviceCredentials(): CloudConfig {
     deviceToken: '',
     deviceScopes: [],
     deviceId: undefined,
+    // 注销后仍然是网关模式：没有 token = 没有凭据 = 明确报错，而不是回落直连
+    transportMode: 'gateway',
   }
   writeJsonAtomicSync(cloudConfigFile(), stored)
   return {
@@ -212,6 +235,7 @@ export function clearDeviceCredentials(): CloudConfig {
     hasDeviceToken: false,
     deviceScopes: [],
     deviceId: '',
+    transportMode: 'gateway',
   }
 }
 
@@ -228,6 +252,7 @@ export function clearCloudToken(): CloudConfig {
     apiKey: '',
     deviceToken: '',
     deviceScopes: [],
+    transportMode: current.transportMode,
     dashboardToken: '',
     dashboardPassword: '',
   }
@@ -260,7 +285,9 @@ export function cloudTransport(config = readCloudConfig()): {
   dashboardBaseUrl: string
   dashboardToken: string
 } {
-  if (config.hasDeviceToken) {
+  // 网关模式（登记过就永久）：token 没了就是**没有凭据**，绝不回落到 apiKey。
+  // 注销之后还能用云端 = 注销没意义，也会让「哪台设备做的」永远说不清。
+  if (config.transportMode === 'gateway' || config.hasDeviceToken) {
     return {
       baseUrl: config.gatewayUrl,
       credential: config.deviceToken,
@@ -270,6 +297,7 @@ export function cloudTransport(config = readCloudConfig()): {
       dashboardToken: config.deviceToken,
     }
   }
+  // 直连只留给「从没登记过设备」的老配置 / 运维显式回滚
   return {
     baseUrl: config.baseUrl,
     credential: config.apiKey,
@@ -287,6 +315,8 @@ export function publicCloudConfig(config = readCloudConfig()): {
   hasDeviceToken: boolean
   deviceScopes: string[]
   deviceId: string
+  /** `gateway` = 只走网关（登记过就是它）；`direct` = 老直连（仅运维回滚） */
+  transportMode: 'gateway' | 'direct'
   dashboardUrl: string
   hasDashboardToken: boolean
   dashboardUser: string
@@ -299,6 +329,7 @@ export function publicCloudConfig(config = readCloudConfig()): {
     hasDeviceToken: config.hasDeviceToken,
     deviceScopes: config.deviceScopes,
     deviceId: config.deviceId,
+    transportMode: config.transportMode,
     dashboardUrl: config.dashboardUrl,
     hasDashboardToken: config.hasDashboardToken,
     dashboardUser: config.dashboardUser,

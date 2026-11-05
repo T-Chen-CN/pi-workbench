@@ -44,6 +44,7 @@ interface BridgeStub {
   handoffApply: ReturnType<typeof vi.fn>
   handoffCopy: ReturnType<typeof vi.fn>
   deviceGet: ReturnType<typeof vi.fn>
+  config?: Record<string, unknown>
   gatewayStatus: ReturnType<typeof vi.fn>
   gatewayRegister: ReturnType<typeof vi.fn>
   gatewayRevoke: ReturnType<typeof vi.fn>
@@ -111,11 +112,17 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
       success: true,
       config: {
         baseUrl: 'https://api.example.com',
+        gatewayUrl: 'https://hub.example.com',
         dashboardUrl: 'https://dash.example.com',
         hasToken: true,
+        hasDeviceToken: false,
+        deviceScopes: [],
+        deviceId: '',
+        transportMode: 'direct' as const,
         hasDashboardToken: false,
         dashboardUser: '',
         hasDashboardPassword: false,
+        ...(overrides.config as object | undefined),
       },
     }),
     cloudConfigSet: async () => ({ success: true }),
@@ -1263,6 +1270,33 @@ describe('CloudConnectionView 设备卡', () => {
     await useCloudStore.getState().loadGateway()
     render(<CloudConnectionView active />)
     expect(await screen.findByText(zh.cloudGatewayUpstreamDown)).toBeTruthy()
+  })
+
+  it('treats a registered device with no token as revoked, not unconfigured', async () => {
+    // 登记过（transportMode=gateway）但 token 已经没了 = 被注销
+    installBridge({
+      config: { transportMode: 'gateway', deviceId: 'b8235e0e', hasDeviceToken: false },
+    })
+    await useCloudStore.getState().hydrate()
+    const state = useCloudStore.getState()
+    expect(state.connection).toBe('error')
+    expect(state.error).toMatch(/注销/)
+  })
+
+  it('locks the cloud view right after revoking', async () => {
+    installBridge()
+    useCloudStore.setState({
+      connection: 'connected',
+      capabilities: { runStop: true } as never,
+      sessions: [{ id: 's1' } as never],
+    })
+    await useCloudStore.getState().revokeGateway()
+    const state = useCloudStore.getState()
+    expect(state.connection).toBe('error')
+    expect(state.error).toMatch(/注销/)
+    // 能力与会话一起清掉：注销之后不该还能看到「已连接」
+    expect(state.capabilities).toBeNull()
+    expect(state.sessions).toHaveLength(0)
   })
 
   it('revokes the device from the card', async () => {

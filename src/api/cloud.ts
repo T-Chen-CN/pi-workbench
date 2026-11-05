@@ -121,6 +121,7 @@ export const UNCONFIGURED_CONNECTION: CloudConnectionInfo = {
   hasDeviceToken: false,
   deviceScopes: [],
   deviceId: '',
+  transportMode: 'gateway',
   hasDashboardToken: false,
   dashboardUser: '',
   hasDashboardPassword: false,

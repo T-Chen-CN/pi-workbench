@@ -285,7 +285,24 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     const result = await cloudApi.getConfig()
     if (result.success) {
       set({ config: result.config })
-      if (result.config.hasToken) {
+      const config = result.config
+      // 登记过却没有设备 token = 这台设备被注销了（或 token 丢了）。
+      // 这不是「未配置」：云端对这台设备已经关门，必须重新登记才能用。
+      if (config.transportMode === 'gateway' && !config.hasDeviceToken) {
+        set({
+          connection: 'error',
+          error: '这台设备已注销或凭据丢失，请在「连接」页重新登记',
+          hydrated: true,
+        })
+        return
+      }
+      if (config.hasDeviceToken) {
+        await get().connect()
+        set({ hydrated: true })
+        void get().loadLedger()
+        return
+      }
+      if (config.hasToken) {
         await get().connect()
         set({ hydrated: true })
         void get().loadLedger()
@@ -1107,7 +1124,19 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       set({ gatewayError: result.error ?? 'unknown' })
       return false
     }
-    set({ gatewayNotice: '这台设备已注销' })
+    // 注销是「云端对这扇门关门」：立即清掉能力与会话视图，不留在连接态
+    set({
+      gatewayNotice: '这台设备已注销',
+      connection: 'error',
+      error: '这台设备已注销，需重新登记才能继续使用云端',
+      capabilities: null,
+      sessions: [],
+      activeSessionId: null,
+      sessionMeta: null,
+      parts: [],
+      runId: null,
+      runState: null
+    })
     await get().loadGateway()
     return true
   },

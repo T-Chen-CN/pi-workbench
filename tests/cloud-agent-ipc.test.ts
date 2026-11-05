@@ -1424,10 +1424,14 @@ describe('cloud gateway (single entry)', () => {
     const after = await call<StatusResult>('cloud:gateway:status')
     expect(after.registered).toBe(false)
 
-    // 注销之后不能再打网关（回滚靠运维改配置，代码里不自动退回直连）
+    // 注销之后这台设备对云端就是关门的：既不能打网关，也不能悄悄用 apiKey 走直连
     const before = mocks.state.requests.length
-    await call('cloud:sessions:list', { limit: 1 })
+    const listed = await call<{ success: boolean; error?: string }>('cloud:sessions:list', {
+      limit: 1,
+    })
+    expect(listed.success).toBe(false)
+    expect(listed.error).toMatch(/登记|注销/)
     const after2 = mocks.state.requests.slice(before)
-    expect(after2.every((line) => !line.includes('hub.'))).toBe(true)
+    expect(after2).toHaveLength(0)
   })
 })

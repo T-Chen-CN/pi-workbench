@@ -20,6 +20,8 @@ export interface CloudConnectionInfo {
   hasDeviceToken: boolean
   deviceScopes: string[]
   deviceId: string
+  /** `gateway` = 只走网关（注销后没有 token 就是**不能用**，不回落直连） */
+  transportMode: 'gateway' | 'direct'
   /** 控制台会话令牌是否已配置（图片上传/读取要用） */
   hasDashboardToken: boolean
   /** 控制台账号（用户名明文；口令只回 has 标记） */

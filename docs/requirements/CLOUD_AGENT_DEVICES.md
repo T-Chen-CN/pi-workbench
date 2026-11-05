@@ -3,7 +3,7 @@
 > **面向**：要实现「多台本地程序连同一个云端 Agent」「云端 Agent 认得是哪台设备」「云端指挥本地 Agent 干活」的人
 > **什么时候读**：动对接层（本地 ↔ 云端）、设备身份、反向任务通道、变更 S-02 之前
 > **什么时候要改**：插件形态、设备身份口径、派活权限口径、上游插件 API、验收场景变化时
-> **状态**：**v3.4 · 2026-11-06 · H0 已完成（G0 全绿）、H1 服务端与本地切换均已完成（G1 待人点一遍）** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
+> **状态**：**v3.5 · 2026-11-06 · H0 已完成（G0 全绿）、H1 服务端与本地切换均已完成（G1 待人点一遍）** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
 > **取代**：v1 的 `pi-hub` 独立服务方案（作废，理由见 §4）
 
 ---
@@ -49,6 +49,8 @@
 | 派活选设备 | 由 **工作区** 反查设备（工作区→唯一设备）；工作区离线即拒 |
 | 升级中断 | 允许（开发阶段，无可用性承诺）；升级前先 `plugins disable` |
 | 本地 `apiKey` 字段 | 保留到 H4 之后（唯一回滚手段），正常路径不用 |
+| 本地 `transportMode` | `gateway` / `direct`。**登记过就锁在 `gateway`**：注销或 token 丢失时「没有凭据 = 明确报错」，绝不回落到 `apiKey`。回拨到 `direct` 是**运维改配置**（手改 `connection.json`），不是代码自动接管 |
+| 注销的语义 | 云端对这扇门关门：设备 token 立即失效，本地清掉凭据并**清空能力与会话视图**，界面显示「已注销，需重新登记」；云端会话数据仍在（重新登记后可见），但撤销期间的这台设备读不到 |
 | 本地会话缓存层 | **不做**（所有者：开发阶段，云端可长期停机） |
 | 分期顺序 | H0 → H1（唯一切换点）→ H2 → H3 → H4 |
 
@@ -538,7 +540,9 @@ ssh … 'NEW=$(openssl rand -base64 32 | tr -d "/+=" ); printf "%s" "$NEW" > ~/p
 | 迁移期 `author` 双写混乱 | 低 | 插件覆盖；本地值只进日志 |
 | 插件数据丢失 | 中 | `plugin_data_dir` 每日备份；设备可重新登记（token 重签即可） |
 
-**回滚**（运维动作，代码里不实现）：`connection.json` 的 `gatewayUrl` 指回 `https://api.tchen-xiaoxiao.com` + 用回 `apiKey`；`hermes plugins disable pi-workbench`。前提是 `apiKey` 字段保留到 H4 之后。
+**回滚**（运维动作，代码里不实现）：把 `connection.json` 的 `transportMode` 改成 `"direct"` + `gatewayUrl` 指回 `https://api.tchen-xiaoxiao.com` + 用回 `apiKey`；`hermes plugins disable pi-workbench`。前提是 `apiKey` 字段保留到 H4 之后。
+
+> 为什么多了 `transportMode` 这一步：只有把模式显式改回去，才可能出现「注销了却还能用云端」的情况。默认锁在 `gateway` 意味着**注销就是真的注销**。
 
 ---
 
@@ -597,6 +601,7 @@ ssh … 'NEW=$(openssl rand -base64 32 | tr -d "/+=" ); printf "%s" "$NEW" > ~/p
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
 | **v3.1** | 2026-11-06 | **H0 完成**：插件骨架落地（`hermes-plugin/pi-workbench`，50 个 unittest 全绿）+ 部署到 VPS，**G0 六条全过**。实测三条上游事实写回方案：`register_platform`/`register_tool` 签名、`platform` 插件**自动 connect**（无需 `platforms:` 配置块，激活证据是 `plugins.enable` + `requires_env`）、`capabilities` 只接受注册表 id（原计划的 `network_ingress` 不存在，清单里不写）。两个运维坑：插件 INFO 日志不进 journalctl（看 `/v1/hub/health`）、Caddy reload 后证书有 ~5s 窗口 |
+| **v3.5** | 2026-11-06 | **注销 = 真的关门**：新增 `transportMode`（`gateway`/`direct`）。此前注销只清了设备 token，`cloudTransport()` 会**回落到 `apiKey` 直连**——等于注销没生效，也让「哪台设备做的」说不清。现在登记过就锁在网关模式，没有 token 就是没有凭据（明确报错），界面同时清空能力/会话并显示「已注销，需重新登记」；回拨直连必须运维手改配置（§16）。新增 4 例 config 单测 + 2 例 store 单测 |
 | **v3.4** | 2026-11-06 | **两条实测缺陷修复**：① `fsguard` 白名单漏了 `cache/images`（dashboard 写图片的位置），导致聊天里**所有图片缩略图**读回都是 403 `path_not_allowed` → UI 显示「图片不可见」；根目录补 `cache/{images,audio,vision,screenshots,videos,documents,scratch}`，`cache/browser*`（Cookie）明确排除。② 撤销路由只认管理密钥或 `admin` scope，而连接页用的是 `chat/dispatch` 设备 token → 点「注销这台设备」永远 403 `scope_required`；改为**允许设备自注销**（只切断自己），撤销别人的设备仍需 admin。共 86 例 |
 | **v3.3** | 2026-11-06 | **登记改为幂等（可换 token）**：同一 `deviceId` 再登记不再撞 `UNIQUE constraint failed: devices.id` 变成 500，而是 `200` + `rotated:true` + 旧 token 立即失效 + 清撤销状态。真实场景：token 丢失 / 应用重装 / 误注销后用户会再点一次「登记」，而 id 是身份不该变。客户端补 `internal` 错误码文案。新增 3 例单测（rotate / 旧 token 失效 / 撤销后复活），共 82 例 |
 | **v3.2** | 2026-11-06 | **H1 完成**：服务端全量切换（SSE 保真 + `author` 覆盖 + 幂等命名空间 + `fsguard` 白名单 + dashboard 侧通道，79 用例，`9dacb1f`）+ 本地单入口（`cloudTransport()` 唯一切换点、`gateway.ts`、三个 IPC、连接页「云端网关」卡、`clearDeviceCredentials()`，测试 149 个文件全绿）。**本地与云端的往来不再需要 API 密钥**；`apiKey` 只在回滚时手工启用 |

@@ -349,7 +349,8 @@ ssh … 'HERMES_HOME=… hermes --profile pi-cloud gateway stop'  # 或停 api_s
 4. 再发一条消息。
 
 **预期**
-- ✅ 注销后卡变成未登记态；发消息**明确失败**，且**不会悄悄回到 `api.` 直连**。
+- ✅ 注销后卡变成未登记态；**会话区立刻变成不可用**（顶部提示「已注销，需重新登记」，能力与会话清空）。
+- ✅ 发消息**明确失败**，且**不会悄悄回到 `api.` 直连**（本地锁在网关模式；回拨直连要运维改 `transportMode`）。
 - ✅ 再登记立刻恢复（同一 `deviceId`，token 换了：云端审计里 `rotated:true`）。
 - ✅ 旧 token 已失效（可让旧设备再请求一次验证 401 `device_revoked`）。
 
