@@ -30,7 +30,7 @@
 - **[顶层 Agent（跨工作区编排）](./requirements/TOP_LEVEL_AGENT.md)** — 草案：首页常驻顶层会话、派发子会话、委派授权、headless 工作区、任务状态机与验收场景
 - **[顶层 Agent 简版需求](./requirements/TOP_LEVEL_AGENT_BRIEF.md)** — 同上，去掉术语与实现细节，只说「它要做什么 / 不做什么 / 权限规矩」
 - **[云端 Agent 方案 v5](./requirements/CLOUD_AGENT.md)** — 以后端 Hermes 为基础的云端常驻 Agent（对标 Dots / Grok Bot / Muse）：50 条能力 ID 覆盖表（v5 删 1 条）、自研 4 条、通道（API Server 主 / dashboard 配置面 / ACP 迁移路径）、域名 + TLS 反代部署、整机权限与软限制口径、最小化 profile、安全边界 S-01~S-15、AC-01~AC-22、四探针 D1–D2、双轨工程序 A–H（v5：两页独立前端、不做预算熔断）
-- **[云端 Agent 多设备身份与反向派活方案 v2](./requirements/CLOUD_AGENT_DEVICES.md)** — 本地与云端只留一条缝：自写 Hermes 插件 `pi-workbench`（`kind: platform`，与 gateway 同进程）；除 dashboard 外全部对接经它转发；设备 token → `deviceId`、scope 限权、审计逐条带设备；云端派活「只发请求、能力只由本地授予」（S-02 → 零本地授权，见 [ADR-008](./decisions/ADR-008-cloud-single-entry-plugin.md)）；**派活单位是工作区**（设备只是承载者，路径不出本机）；H0–H4 分期 + 20 条验收 + 已完成预检（§14.2 VPS 15 项实测）
+- **[云端 Agent 多设备身份与反向派活方案 v2](./requirements/CLOUD_AGENT_DEVICES.md)** — 本地与云端只留一条缝：自写 Hermes 插件 `pi-workbench`（`kind: platform`，与 gateway 同进程）；除 dashboard 外全部对接经它转发；设备 token → `deviceId`、scope 限权、审计逐条带设备；云端派活「只发请求、能力只由本地授予」（S-02 → 零本地授权，见 [ADR-008](./decisions/ADR-008-cloud-single-entry-plugin.md)）；**派活单位是工作区**（设备只是承载者，路径不出本机）；H0–H4 分期 + **§20 执行手册**（备份 → H0–H4 分步 + G0–G4 Gate）+ 20 条验收 + 预检 15 项实测
 - **[云端 Agent 审批实现方案（C-05）](./requirements/CLOUD_AGENT_APPROVAL.md)** — 审批卡片 / 应答通道 / 断流补卡 / 审计 JSONL + **原生 `approvals.mode` 三档切换**（不自造档位预设）；含 2026-11-06 实机实测事实与两次服务端前置
 - **[云端自举 Prompt（草稿）](./requirements/hermes-bootstrap-prompt.md)** — 交给已部署的 Hermes 自己完成域名 / 反代 / 凭证并交付一个文件；**未验证**，见 [BACKLOG §7.3](./progress/BACKLOG.md)
 

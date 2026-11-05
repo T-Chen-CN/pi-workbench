@@ -3,7 +3,7 @@
 > **面向**：要实现「多台本地程序连同一个云端 Agent」「云端 Agent 认得是哪台设备」「云端指挥本地 Agent 干活」的人
 > **什么时候读**：动对接层（本地 ↔ 云端）、设备身份、反向任务通道、变更 S-02 之前
 > **什么时候要改**：插件形态、设备身份口径、派活权限口径、上游插件 API、验收场景变化时
-> **状态**：v2.1 · 2026-11-06 · **未开工（预检已完成）** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；VPS 9 项预检已跑完（§14）
+> **状态**：**v3.0 最终版 · 2026-11-06 · 待开工 H0** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
 > **取代**：v1 的 `pi-hub` 独立服务方案（作废，理由见 §4）
 
 ---
@@ -543,13 +543,17 @@ ssh -i "F:/SSH KEY/SG_001.pem"     -o "ProxyCommand=<HTTP CONNECT 隧道脚本> 
 | QN-6 | VPS 操作由我执行 | ✅ 已连通并跑完预检 |
 | QN-7 | SSE 空闲 15 分钟 | ✅ |
 | — | 本地缓存层 | ❌ 不做（开发阶段无可用性承诺） |
+| — | 生产环境改动（Caddy / config.yaml / systemd） | ✅ 批准，先备份 |
 
-### 17.2 仍想听你意见的 2 件事（不阻塞 H0，可随时改）
+### 17.2 最终确认（2026-11-06：「全部都按你默认」）
 
-| # | 问题 | 我的默认 |
+| # | 问题 | 定案 |
 | --- | --- | --- |
-| 1 | **同名工作区怎么显示给云端**：两台设备各有一份 `project-X` 的 clone 时，云端看到两个名字一样的条目，容易选错。要不要自动加设备后缀（`project-X (TChen-Legion)`）？ | 加后缀（云端不误选；`workspaceId` 仍是权威） |
-| 2 | **派活是否要能指定分支/工作树**（例如「在 `feat/x` 工作树里跑」） | H3 先不做；只按工作区，分支由本地当前工作树决定。后续按需加 |
+| 1 | 同名工作区显示 | **加设备后缀**（`project-X (TChen-Legion)`）；`workspaceId` 仍是权威 |
+| 2 | 派活能否指定分支/工作树 | H3 **不做**；按工作区当前工作树，后续按需加 |
+| 3 | 工作区上报范围 | 只报**打开过的**（上限 20），不摊硬盘结构 |
+| 4 | 动生产环境（Caddy vhost / `platform_toolsets` 加一行 / systemd env） | **批准**，开工前先打备份包 |
+| 5 | 本地缓存层 | 不做 |
 
 ---
 
@@ -568,6 +572,7 @@ ssh -i "F:/SSH KEY/SG_001.pem"     -o "ProxyCommand=<HTTP CONNECT 隧道脚本> 
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| **v3.0** | 2026-11-06 | **最终版**：所有者「全部都按你默认」→ B1 同名工作区加设备后缀 / B2 不做分支指定 / B3 只报打开过的工作区 / 批准三项生产环境改动（先备份）。新增 **§20 执行手册**：20.0 备份命令 → H0–H4 每阶段的分步清单 + G0–G4 Gate 判据（含可手打的 curl）+ 每阶段回滚动作 + 时间线「第一次动手的 5 件事」。状态改为「待开工 H0」 |
 | **v2.1** | 2026-11-06 | **两处关键修正**：① **派活改为工作区层级**（所有者指出；设备只是承载者，`workspaceId` 不透明、路径永不出本机，`local_workspaces()` 成为主入口，新增 `ambiguous_workspace` / `workspace_untrusted` / `workspace_offline`）；② **传输改 stdlib**（`http.server` + `urllib` + 独立线程，不用 aiohttp —— 上游依赖在 uv overlay 里，单测跑不动；且线程内失败打不死 gateway 循环；与内置 a2a 同款）。另：**纠正 v2 的错误** —— `platform_toolsets.api_server` 白名单**仍要加 `pi_workbench`**（预检实测）；VPS 预检 15 项全部跑完（§14.2）；决策全部锁定（§17.1）；新增 AC-D05b/D18/D19 |
 | **v2** | 2026-11-06 | **改单缝 + 插件形态**：`pi-hub` 独立服务作废，改为 Hermes 插件 `pi-workbench`（`kind: platform`，与 gateway 同进程）；除 dashboard 外**全部对接**经插件；**不做直连兜底**；接口契约按「设备管理 / 设备侧 / 透明代理」三类重写；派活工具由 MCP 改为 `provides_tools`（不再改 `platform_toolsets`）；新增 AC-D15~D17；新增 §14 执行前检查（本地 7 项已通过、VPS 9 项待执行）与 QN-1~QN-7 |
 | v1.5 | 2026-11-06 | 身份时机定稿（A+B）：启动即建 id；友好名只探测一次 + `cloud:device:reprobe` |
@@ -576,3 +581,112 @@ ssh -i "F:/SSH KEY/SG_001.pem"     -o "ProxyCommand=<HTTP CONNECT 隧道脚本> 
 | v1.2 | 2026-11-06 | 设备名默认读系统友好名；D0 去掉重置按钮 |
 | v1.1 | 2026-11-06 | 设备身份改「通道强制 + 工具按需」，取消每轮注入 |
 | v1 | 2026-11-06 | 初稿（`pi-hub` 独立服务方案） |
+
+---
+
+## 20. 执行手册（逐步清单，H0 → H4）
+
+> **通用 DoD（每阶段都要过）**：`pytest`（插件）/ `npm test` + `type-check` + `lint`（本地）/ 文档同步（§15 运维、PROJECT_STRUCTURE、BACKLOG、STATUS）/ 服务器改动有备份与回滚命令。
+> **Gate（每阶段结束找所有者确认一次）**：G0 → G1 → G2 → G3 → G4，见各阶段末。
+
+### 20.0 开工前置（30 分钟，一次）
+
+```bash
+# 1) 备份（H-1 / A 组要求）
+ssh ubuntu@43.160.243.96 '
+  cd /home/ubuntu/.hermes/profiles/pi-cloud &&
+  tar czf ~/hermes-backup-pre-plugin-$(date +%F-%H%M).tgz config.yaml .env plugins plugin-data 2>/dev/null;
+  sudo cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak-pre-plugin-$(date +%F-%H%M);
+  sudo cp /etc/systemd/system/hermes-gateway-pi-cloud.service.d/10-api-server.conf ~/dropin-backup-$(date +%F-%H%M).conf;
+  ls -lh ~/*.tgz ~/*.conf'
+# 2) 回滚命令写进 docs（§15），并记下三个 .bak 的路径
+```
+
+### 20.1 H0 骨架（3 天）→ **G0**
+
+| 步 | 内容 | 产出 / 验收 |
+| --- | --- | --- |
+| H0-1 | 仓库新建 `hermes-plugin/pi-workbench/`（`plugin.yaml` / `__init__.py` / `shim.py` / `adapter.py` / `core/{server,auth,db,registry}.py` / `tools.py` / `tests/`） | 空跑 `pytest` 绿；同步更新 `AGENTS.md` 仓库地图 + `PROJECT_STRUCTURE.md` |
+| H0-2 | `core/db.py` + `auth.py`：devices 表、`sha256(token)`、scope、令牌桶、`last_seen_at` | pytest：hash 稳定 / 撤销即拒 / scope 403 / 限流 429 |
+| H0-3 | `core/server.py`：路由骨架 + 中间件链（认证→scope→限流→审计）+ 六种错误码 | pytest：错误码与 HTTP 状态一表对齐 |
+| H0-4 | admin 登记/撤销（`X-Pi-Admin-Key`）+ `GET /v1/devices/me` + `GET /v1/hub/health` | 手工：登记拿到一次性 token |
+| H0-5 | `core/proxy.py` 只读部分（health / capabilities / toolsets / skills / models）+ 30s 缓存 | pytest：假上游字节一致 |
+| H0-6 | **首次上服务器**：rsync 插件 → `plugins enable` → drop-in 加 3 个 env → `platform_toolsets` 加 `pi_workbench` → Caddy 加 `hub.` vhost → `reload caddy` + `restart gateway` | 三条 curl 过关（见下） |
+
+**G0 验收（必须逐条手打）**
+
+```bash
+curl -s https://hub.tchen-xiaoxiao.com/v1/hub/health                        # 200，含上游连通
+curl -s -o /dev/null -w '%{http_code}
+' https://hub.tchen-xiaoxiao.com/v1/capabilities   # 401
+curl -s -H "Authorization: Bearer pi_<刚发的>" https://hub.tchen-xiaoxiao.com/v1/capabilities | head -c 120  # 200
+curl -s -X POST -H "X-Pi-Admin-Key: <key>" https://hub.tchen-xiaoxiao.com/v1/devices/<id>/revoke
+curl -s -o /dev/null -w '%{http_code}
+' -H "Authorization: Bearer pi_<刚发的>" https://hub.tchen-xiaoxiao.com/v1/capabilities  # 401 device_revoked
+```
+
+**回滚**：`plugins disable pi-workbench` → 注释 Caddy vhost → `reload caddy` → `restart gateway`（本地此时还在用旧直连，零影响）。
+
+### 20.2 H1 全量切换（4 天）→ **G1（唯一切换点）**
+
+| 步 | 内容 | 验收 |
+| --- | --- | --- |
+| H1-1 | SSE 代理：`text/event-stream` 逐块透传、`Last-Event-ID` 透传、客户端断开即断上游、禁止缓冲 | 契约测试：分块边界 / 断连 / 不重复不丢 |
+| H1-2 | 写路径：`POST /v1/runs`（覆盖 `author`、幂等键加 `pi:<deviceId>:` 前缀）、`steer` / `stop` / `approval` / `clarify` / `resolve-unknown` + 审计 | AC-D04 / D17 |
+| H1-3 | `sessions*` / `jobs*` / `config`（GET 透传、PUT 需 `admin`）/ `image-upload` / `fs-read-data-url`（白名单） | AC-D17 |
+| H1-4 | 本地：`cloudFetch()` 单入口 + `deviceToken`（`enc:`）+ 四种错误码映射 + 连接页改「云端网关」 | vitest 全绿 |
+| H1-5 | 切换 + 12 项全功能回归（聊天 / 工具卡 / 审批 / 插话 / 跨重启 attach / 会话管理 / 任务页 / 自检 / 图片 / 停止 / 会话切换 / 取消） | AC-D15 / D16 |
+
+**G1 判据**：本地 `gatewayUrl` 指向 hub、`apiKey` 停用后，上面 12 项全部正常；**且**停插件时 UI 说「网关不可用」、只停 Hermes 时说「Hermes 异常」。
+**回滚**：`connection.json` 的 `gatewayUrl` 改回 `https://api.tchen-xiaoxiao.com` + 用回 `apiKey`（一步，1 分钟）。
+
+### 20.3 H2 设备面（2 天）→ **G2**
+
+| 步 | 内容 | 验收 |
+| --- | --- | --- |
+| H2-1 | 心跳 30s / 在线判定 90s / `GET|POST /v1/devices` / 撤销 | AC-D02 / D03 |
+| H2-2 | 本地设备卡升级（登记状态 / scope / 在线 / 注销）+ 自检「网关」块 | AC-D01 |
+| H2-3 | 审计 JSONL 落盘 + `tail` 可读 | AC-D12 基础 |
+
+**G2 判据**：第二台设备登记后，两边各自 token、互不影响；拔网 90s 显示离线；注销后该机 UI 明确提示。
+
+### 20.4 H3 工作区派活（5 天）→ **G3**
+
+| 步 | 内容 | 验收 |
+| --- | --- | --- |
+| H3-1 | `workspaces` 表 + `POST /v1/devices/me/workspaces` + 本地 `data/cloud-agent/workspaces.json`（`ws_<uuid>`，无路径） | AC-D18 |
+| H3-2 | 四个工具注册（`local_workspaces` / `local_devices` / `local_dispatch` / `local_task`）+ `platform_toolsets` 已含 `pi_workbench` | AC-D19 |
+| H3-3 | 邮箱：原子 claim、TTL、幂等（同 `taskId` 只执行一次） | AC-D09 / D10 |
+| H3-4 | 本地执行器：总开关（默认关）/ 工作区白名单 / 档位上限 / 逐次审批 / 摘要回传 + 「云端任务」列表 UI | AC-D05 / D05b / D06 / D07 / D08 / D11 |
+| H3-5 | 注入演练 + 审计三问 | AC-D13 / D12 / D14 |
+
+**G3 判据**：生死线两条（AC-D07 不可放大、AC-D13 注入演练）必须亲手复现一次。
+
+### 20.5 H4 收口（2 天）→ **G4**
+
+| 步 | 内容 |
+| --- | --- |
+| H4-1 | 运维手册定稿（§15）：备份 / 升级 / doctor / 撤销 / 故障三分（网关 / 上游 / 模型） |
+| H4-2 | `hermes plugins doctor` 进发布检查；`plugin.yaml` 版本区间钉死 |
+| H4-3 | 威胁模型复核（同进程、token 库、`/api/fs`、审计完整性） |
+| H4-4 | `plugins update` 演练：数据不丢、设备不掉线 |
+| H4-5 | 文档定稿：本方案 → v3.0 已交付；BACKLOG / STATUS 收口 |
+
+### 20.6 第一次动手的 5 件事（顺序固定）
+
+1. 打备份包 + 记三个 `.bak` 路径（§20.0）
+2. 仓库建 `hermes-plugin/pi-workbench/` 骨架 + pytest 空跑
+3. `core/db.py` + `auth.py` + 单测（这是所有安全断言的地基）
+4. `core/server.py` 中间件 + `/v1/hub/health`
+5. 只读代理 + 上服务器跑 G0 三条 curl
+
+### 20.7 时间线
+
+| 阶段 | 工期 | 累计 | Gate |
+| --- | --- | --- | --- |
+| 20.0 前置 | 0.5h | — | — |
+| H0 | 3 天 | 3 天 | G0 |
+| H1（切换） | 4 天 | 7 天 | G1 |
+| H2 | 2 天 | 9 天 | G2 |
+| H3 | 5 天 | 14 天 | G3 |
+| H4 | 2 天 | 16 天（≈3 周） | G4 |
