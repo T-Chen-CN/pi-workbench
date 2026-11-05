@@ -405,11 +405,79 @@
 **仍未取得真机证据的**：`unknown`（主人进程丢了）的收尾按钮 —— 需要云端进程真被杀一次才会出现，
 本地造不出来，只有单测覆盖（`cloud-agent-ipc` / `cloud-remote` / `cloud-store` / `cloud-view`）。
 
+#### 7.5.1 屏幕与接管（C-08）：调研已完成，待办不排期
+
+用户 2026-11-05 决定先挂待办。**不做二次调研**，这里记全实测数字、架构结论和坑。
+
+**产品定位（用户定的）**：「看屏幕 + 接管」不是一个常驻功能，而是**一种显式进入的工作模式** ——
+进入才有长生命周期的共享浏览器、才有画面、才谈得上接手；退出后系统里不存在"屏幕"这个概念
+（不显示空面板、不显示灰按钮）。默认仍是 Hermes 自己的"每次调用起临时 profile 的浏览器"。
+补一句：一旦进入模式，`browser.cdp_url` 就变成**长期配置**而非测试手段。
+
+**已实测（2026-11-05，服务器 + 真机）**
+
+| 项 | 数字 |
+| --- | --- |
+| chromium | 已装：`~/.hermes/tools/chromium-1208`，364MB（Chrome for Testing 145），`pm install chromium` 顺手装了 12 个系统库 |
+| 冷启 → CDP 就绪 | 空 profile 444ms / 已有 profile 292ms |
+| 空闲占用 | 66MB（1 个空白页，MemAvailable 差值；`ps` 求和会重复计共享页，别用） |
+| 一页真实页面 | ~120–270MB |
+| screencast 出帧 | **只在画面变化时出帧**（静态页 6 秒 1 帧）；连续动画 58fps |
+| 节流旋钮 | **ack 间隔**（不是 `everyNthFrame`）：0ms→59.8fps/1.5MB/s，33ms→29fps/739KB/s，**66ms→15fps/378KB/s**，100ms→10fps/250KB/s |
+| 输入往返 | `Input.dispatchMouseEvent` p50 2ms（本机） |
+| 公网端到端 | 经代理 + Caddy + 令牌路径：探测 371ms、WS 建连 819ms、**首帧 142ms**、16.3fps / 470KB/s（帧已目视确认是真实页面） |
+| Hermes 自己的浏览器 | **run 结束 +5 秒就没了** → "跟随 Hermes 的浏览器"这条路线不可用 |
+| `browser.cdp_url` | 让 Hermes 用外部浏览器：两次 run 复用同一实例、标签累积；且源码明写 foreign 浏览器 "stopped only from its own environment" —— **Hermes 不会杀别人的浏览器** |
+
+**两个必踩的坑（都已在真机复现并解决）**
+
+1. CDP 拒绝非 IP/localhost 的 `Host` 头（防 DNS rebinding）→ `Host header is specified and is not an IP address or localhost`，500。
+   Caddy 里必须 `header_up Host {upstream_hostport}`，HTTP 与 WS 都要。
+2. **鉴权只能放路径令牌**：Node/undici 全局 `WebSocket.length === 1`，传不了自定义头 → Basic auth 对 WS 无用。
+   实测用 `/cdp/<32 位随机令牌>/*` + `uri strip_prefix` 可以。
+
+**架构结论（未实施）**
+
+```
+【模式】共享浏览器（profile 级，一次一个会话在用）
+  ├─ Hermes：browser.cdp_url 永久指向它 → 所有 browser_* 都落在这里
+  ├─ 人类：同一个浏览器，看（screencast）+ 接管（Input.*）
+  └─ 生命周期：进入模式时启动 → 退出后空闲回收（不常驻）
+
+【服务端】pi-cdp-relay（常驻，几十行，几 MB）
+  ├─ 稳定入口（真实 ws 路径里的 uuid 每次重启都变，客户端/Hermes 都不能写死）
+  ├─ 按需 spawn / 空闲 kill
+  ├─ 方法白名单（只放 Page.startScreencast / screencastFrameAck / Input.* / Page.navigate）
+  └─ Caddy 转发到它（对外带路径令牌）
+```
+
+**三个已知约束（不是"能不能做"，是"必须这么做"）**
+
+1. **可见性独占**：只有前台 tab 出帧（`Page.screencastVisibilityChanged` 为 false 时一帧没有 —— 这就是
+   第一次"agent 操作期间 0 帧"的真因，不是双客户端冲突）。要跟随**活跃 tab**（`Target.targetInfoChanged`），
+   且不能无脑 `bringToFront` 抢走 agent 正在用的 tab（后台 tab 定时器会被节流）。
+2. **手感是"逐动作刷新"不是视频**：agent 滚动两次 = 3 帧；连续动画才 60fps。Steel / Browserless 同样如此。
+3. **共享 profile 是双刃剑**：人登录一次 agent 就能用那个登录态（这是模式最大价值），反过来 agent 也能读到那些 cookie。
+
+**开工前必须验的两件事**
+
+1. `browser.cdp_url` 指向**自定义路径**（`ws://127.0.0.1:9335/cdp` 而非 `/devtools/browser/<uuid>`）时 Hermes 是否接受
+   —— `_devtools_path` 是按 `"/devtools/browser/"` 字符串找的，找不到回 `None`。退路：relay 暴露真实 uuid 路径并自动改写 config。
+2. 长跑（>10 分钟）screencast 是否漏内存（实测最长只跑过 40 秒）。
+
+**模式带来的两个新问题（实现时要有答案）**
+
+- **接管冲突**：人和 agent 同时动同一个浏览器。要么不强互斥（只显示"agent 正在操作"），要么人一动手就通过 steer 让 agent 停。
+- **账本盲区**：人手动在浏览器里点提交/付款，不经过工具层，账本完全看不见。这是这个模式的已知盲区，要写进文档而不是假装没有。
+
+**现状**：服务器已**全量回滚**（无常驻浏览器、无 Caddy 改动、`config.yaml` 934 字节无 `cdp_url`、三服务 active）；
+chromium 与本机 364MB 保留（browser 工具集因此第一次真跑通）。上一次临时上线并回滚的记录见下方验收记录。
+
 **还没做的（登记，不排期；2026-11-05 补正——上一版漏记了 C-08 / C-10 / C-11）**：
 
 | 条目 | 内容 | 为什么还没做 |
 | --- | --- | --- |
-| C-08 | 屏幕与接管（CDP screencast + `Input.*`，AC-05） | 要云端装 chromium + 开 CDP 端口；`browser` 工具集虽然开着，但属于「装了才谈得上」的一层 |
+| C-08 | 屏幕与接管（CDP screencast + `Input.*`，AC-05） | 已调研完毕、**待办不排期**，可行性实测与架构结论见下面「§7.5.1 屏幕与接管」 |
 | C-10 | 云端页面拆窗（AC-13） | 依赖 C-08 之后才有意义（现在没有需要长时间盯的画面）；主窗口已有通用拆窗能力可复用 |
 | C-11 | IM 渠道 / 语音 / 出网与遥测复核（AC-15） | 「抓包确认无外发」是一次性验收动作，不是功能；要做得单独排 |
 | G-01 | 自举 Prompt | 需要一台没有域名 / 没有反代的干净机器才能跑 B/C 形态 |
