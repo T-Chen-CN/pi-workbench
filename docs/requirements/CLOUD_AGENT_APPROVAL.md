@@ -357,3 +357,27 @@ POST /v1/runs/{run_id}/approval
 | `src/components/CloudTrace.tsx` | 审批片段渲染成卡片（原来是 `run_error` 分隔线） |
 
 **待做**：阶段 1（服务端 `mode: manual` / `timeout: 120` / 三个子模式 `deny` / `disabled_toolsets: [code_execution]` + 真帧捕获），以及 UI 截图验收。
+
+### 13.1 已对服务端做的改动（可原样回滚）
+
+2026-11-06 执行，读回复核通过；`/v1/toolsets` 里 `code_execution.enabled=false` 立即生效（无需重启网关）。
+
+```jsonc
+// PUT {dashboard}/api/config
+{ "config": {
+    "approvals": { "mode": "manual", "timeout": 120,
+                   "cron_mode": "deny", "single_query_mode": "deny", "unattended_mode": "deny" },
+    "agent": { "disabled_toolsets": ["code_execution"] } } }
+```
+
+改动前：`mode: off`、`timeout: 300`、三个子模式 `off`、`approvals.deny: []`、`agent.disabled_toolsets: []`、`terminal.backend: local`。
+
+回滚（等价于界面里点「完全不问」，但不用装客户端）：
+
+```jsonc
+{ "config": { "approvals": { "mode": "off", "timeout": 300,
+                             "cron_mode": "off", "single_query_mode": "off", "unattended_mode": "off" },
+              "agent": { "disabled_toolsets": [] } } }
+```
+
+已单独验证过**最小 patch 不破坏其它键**（只发 `{"config":{"approvals":{"mode":"manual"}}}`，`timeout` / `cron_mode` / `disabled_toolsets` / `terminal.backend` 全部原样），所以策略层日常只发这一个键。
