@@ -39,6 +39,9 @@ export const translations = {
       '默认是这台设备自己的名称，可以改成任何你认得出的叫法；会随每轮对话发给云端 Agent，只作为归属标签，不是授权。',
     cloudDeviceSave: '保存',
     cloudDeviceRestore: '恢复默认名',
+    cloudDeviceReprobe: '重新读取系统名',
+    cloudDeviceReprobed: '已重新读取系统设备名',
+    cloudDeviceReprobeFailed: '读取系统设备名失败',
     cloudDeviceRetry: '重试',
     cloudDeviceId: '设备 ID',
     cloudDeviceIdHint:
@@ -1119,6 +1122,9 @@ export const translations = {
       "Defaults to this device's own name. Whatever you type here is sent with every turn as an attribution label only — it grants nothing.",
     cloudDeviceSave: 'Save',
     cloudDeviceRestore: 'Restore default',
+    cloudDeviceReprobe: 'Re-read system name',
+    cloudDeviceReprobed: 'System device name re-read',
+    cloudDeviceReprobeFailed: 'Could not read the system device name',
     cloudDeviceRetry: 'Retry',
     cloudDeviceId: 'Device ID',
     cloudDeviceIdHint:

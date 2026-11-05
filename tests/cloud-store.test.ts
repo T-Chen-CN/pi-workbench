@@ -739,6 +739,24 @@ describe('设备身份', () => {
     expect(useCloudStore.getState().deviceBusy).toBe(false)
   })
 
+  it('re-reads the system name through the bridge', async () => {
+    const reprobe = vi.fn(async () => ({
+      success: true,
+      device: { ...DEVICE, defaultName: 'TChen-Legion', name: 'TChen-Legion' },
+    }))
+    ;(window as unknown as { electronAPI: unknown }).electronAPI = {
+      cloudConfigGet: async () => ({ success: false }),
+      cloudDeviceGet: async () => ({ success: true, device: DEVICE }),
+      cloudDeviceReprobe: reprobe,
+    }
+
+    await useCloudStore.getState().loadDevice()
+    await expect(useCloudStore.getState().reprobeDeviceName()).resolves.toBe(true)
+    expect(reprobe).toHaveBeenCalledTimes(1)
+    expect(useCloudStore.getState().device).toMatchObject({ name: 'TChen-Legion' })
+    expect(useCloudStore.getState().deviceBusy).toBe(false)
+  })
+
   it('keeps the previous name and surfaces the error when saving fails', async () => {
     ;(window as unknown as { electronAPI: unknown }).electronAPI = {
       cloudConfigGet: async () => ({ success: false }),

@@ -40,6 +40,7 @@ import {
   ensureDeviceNameProbe,
   readCloudDevice,
   recordSessionDevice,
+  reprobeDeviceName,
   updateCloudDeviceName
 } from '../cloud/device.js'
 import { recordApprovalDecision, recordModeChange } from '../cloud/audit.js'
@@ -538,6 +539,20 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     } catch (error) {
       logger?.warn('[Cloud] device read failed', error)
       return { success: false as const, error: '读取设备身份失败' }
+    }
+  })
+
+  /**
+   * 重新读取系统设备名。自动探测只做一次（默认名一旦取到就封存，避免系统改名让云端
+   * 看到的设备名无声变化），所以「跟随系统改名」必须由用户显式点这一下。
+   */
+  handleIpc('cloud:device:reprobe', async () => {
+    try {
+      const record = await reprobeDeviceName()
+      return { success: true as const, device: deviceSummary(record) }
+    } catch (error) {
+      logger?.warn('[Cloud] device reprobe failed', error)
+      return { success: false as const, error: '读取系统设备名失败' }
     }
   })
 

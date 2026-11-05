@@ -557,6 +557,15 @@ describe('cloud device identity', () => {
     })
   })
 
+  it('re-reads the system name on demand without touching a name the user typed', async () => {
+    await call('cloud:device:set', { name: '手工名' })
+    const before = await call<DeviceResult>('cloud:device:get')
+    const reprobed = await call<DeviceResult>('cloud:device:reprobe')
+    expect(reprobed.success).toBe(true)
+    expect(reprobed.device?.name).toBe('手工名')
+    expect(reprobed.device?.id).toBe(before.device?.id)
+  })
+
   it('restores the system default name when the input is cleared', async () => {
     const before = await call<DeviceResult>('cloud:device:get')
     const cleared = await call<DeviceResult>('cloud:device:set', { name: '   ' })

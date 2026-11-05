@@ -189,6 +189,8 @@ interface CloudState {
   loadDevice: () => Promise<void>
   /** 改设备名；空串 = 恢复默认名。返回是否成功 */
   setDeviceName: (name: string) => Promise<boolean>
+  /** 重新读取系统设备名。返回是否成功 */
+  reprobeDeviceName: () => Promise<boolean>
 }
 
 export const useCloudStore = create<CloudState>()((set, get) => ({
@@ -1044,6 +1046,18 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   async setDeviceName(name) {
     set({ deviceBusy: true, deviceError: null })
     const result = await cloudApi.setDeviceName(name)
+    set({ deviceBusy: false })
+    if (!result.success || !result.device) {
+      set({ deviceError: result.error ?? 'unknown' })
+      return false
+    }
+    set({ device: result.device })
+    return true
+  },
+
+  async reprobeDeviceName() {
+    set({ deviceBusy: true, deviceError: null })
+    const result = await cloudApi.reprobeDeviceName()
     set({ deviceBusy: false })
     if (!result.success || !result.device) {
       set({ deviceError: result.error ?? 'unknown' })

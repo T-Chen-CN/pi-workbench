@@ -37,6 +37,7 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const deviceError = useCloudStore((state) => state.deviceError)
   const setDeviceName = useCloudStore((state) => state.setDeviceName)
   const loadDevice = useCloudStore((state) => state.loadDevice)
+  const reprobeDeviceName = useCloudStore((state) => state.reprobeDeviceName)
 
   const [baseUrl, setBaseUrl] = useState(config.baseUrl)
   const [apiKey, setApiKey] = useState('')
@@ -66,6 +67,12 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
 
   const deviceDirty = device ? deviceName.trim() !== device.name : false
   const canRestore = device ? device.name !== device.defaultName : false
+
+  /** 跟随系统改名：自动探测只做一次，所以跟一次要用户点一次 */
+  const handleReprobeDeviceName = async () => {
+    if (await reprobeDeviceName()) toast.success(t('cloudDeviceReprobed'))
+    else toast.error(t('cloudDeviceReprobeFailed'))
+  }
 
   const handleCopyDeviceId = async () => {
     if (!device) return
@@ -285,6 +292,14 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                   onClick={() => void handleSaveDeviceName('')}
                 >
                   {t('cloudDeviceRestore')}
+                </Button>
+                <Button
+                  size="sm"
+                  icon={RefreshCw}
+                  disabled={deviceBusy}
+                  onClick={() => void handleReprobeDeviceName()}
+                >
+                  {t('cloudDeviceReprobe')}
                 </Button>
               </div>
               <Caption className="text-ink-subtle">{t('cloudDeviceNameHint')}</Caption>

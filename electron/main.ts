@@ -21,6 +21,7 @@ import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
 import { installAuxWindowSupport, registerAuxWindowIpc } from './aux-window.js'
 import { appUrl, isAppUrl, registerAppProtocol } from './app-protocol.js'
+import { ensureDeviceIdentityOnBoot } from './cloud/device.js'
 import {
   destroyTray,
   installTray,
@@ -637,6 +638,13 @@ async function initAppDirectories() {
     await fs.rm(path.join(appDir, 'data', 'checkpoints'), { recursive: true, force: true })
   } catch (error) {
     console.error('Failed to remove legacy checkpoint data:', error)
+  }
+
+  // 设备身份在这里就落地（A 档）：只建 id + 机器名默认值，不做友好名探测（spawn 不上启动路径）。
+  // 好处是「身份什么时候诞生」不再取决于用户何时第一次打开云端页，启动日志也有锚点。
+  const device = ensureDeviceIdentityOnBoot()
+  if (device) {
+    console.log(`[Boot] device=${device.name} (${device.id.slice(0, 8)})`)
   }
 
   console.log('应用目录已初始化:', appDir)

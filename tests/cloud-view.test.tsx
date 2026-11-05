@@ -45,6 +45,7 @@ interface BridgeStub {
   handoffCopy: ReturnType<typeof vi.fn>
   deviceGet: ReturnType<typeof vi.fn>
   deviceSet: ReturnType<typeof vi.fn>
+  deviceReprobe: ReturnType<typeof vi.fn>
   clipboard: string[]
   sessions: CloudSession[]
   parts: CloudTracePart[]
@@ -61,6 +62,14 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     deviceGet: vi.fn(async () => ({
       success: true,
       device: { id: 'd1e2f3a4-0000-4000-8000-000000000000', name: 'TChen-Legion', defaultName: 'TChen-Legion' },
+    })),
+    deviceReprobe: vi.fn(async () => ({
+      success: true,
+      device: {
+        id: 'd1e2f3a4-0000-4000-8000-000000000000',
+        name: 'TChen-Legion-2',
+        defaultName: 'TChen-Legion-2',
+      },
     })),
     deviceSet: vi.fn(async (input: { name: string }) => ({
       success: true,
@@ -95,6 +104,7 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     cloudConfigSet: async () => ({ success: true }),
     cloudDeviceGet: stub.deviceGet,
     cloudDeviceSet: stub.deviceSet,
+    cloudDeviceReprobe: stub.deviceReprobe,
     writeClipboardText: (text: string) => {
       stub.clipboard.push(text)
       return true
@@ -1146,6 +1156,18 @@ describe('CloudConnectionView 设备卡', () => {
     fireEvent.click(screen.getByText(zh.cloudDeviceRestore))
     await waitFor(() => expect(stub.deviceSet).toHaveBeenLastCalledWith({ name: '' }))
     await waitFor(() => expect((input as HTMLInputElement).value).toBe('TChen-Legion'))
+  })
+
+  it('follows a system rename only when 重新读取系统名 is pressed', async () => {
+    const stub = installBridge()
+    await useCloudStore.getState().loadDevice()
+    render(<CloudConnectionView active />)
+    const input = await screen.findByLabelText(zh.cloudDeviceName)
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe('TChen-Legion'))
+
+    fireEvent.click(screen.getByText(zh.cloudDeviceReprobe))
+    await waitFor(() => expect(stub.deviceReprobe).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe('TChen-Legion-2'))
   })
 
   it('says the preload is stale instead of showing a fake device name', async () => {

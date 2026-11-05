@@ -160,10 +160,67 @@ describe('ensureDeviceNameProbe', () => {
     expect(record.defaultName).toBe('唐辰的 MacBook Pro')
   })
 
-  it('is a no-op when the probe finds nothing', async () => {
+  it('keeps the names when the probe finds nothing, but remembers it tried', async () => {
     const before = device.readCloudDevice()
     const after = await device.ensureDeviceNameProbe(async () => null)
-    expect(after).toEqual(before)
+    expect(after.name).toBe(before.name)
+    expect(after.defaultName).toBe(before.defaultName)
+    // 探不到也算「做过」：别让每次打开连接页都白 spawn 一次
+    expect(after.probedAt).toBeTypeOf('number')
+  })
+
+  it('only probes once — a renamed machine does not silently change the name later', async () => {
+    const detect = vi.fn(async () => '唐辰的 MacBook Pro')
+    await device.ensureDeviceNameProbe(detect)
+    expect(detect).toHaveBeenCalledTimes(1)
+
+    const second = vi.fn(async () => '改过名字的 Mac')
+    const record = await device.ensureDeviceNameProbe(second)
+    expect(second).not.toHaveBeenCalled()
+    expect(record.name).toBe('唐辰的 MacBook Pro')
+  })
+
+  it('reprobe follows the system rename but still respects a name the user typed', async () => {
+    await device.ensureDeviceNameProbe(async () => '旧名字')
+    device.updateCloudDeviceName('客厅那台')
+
+    const forced = await device.reprobeDeviceName(async () => '新名字')
+    expect(forced.defaultName).toBe('新名字')
+    expect(forced.name).toBe('客厅那台')
+
+    // 恢复默认名之后拿到的是重探到的新名字
+    expect(device.updateCloudDeviceName('').name).toBe('新名字')
+  })
+
+  it('reprobe picks the new system name when the user never edited', async () => {
+    await device.ensureDeviceNameProbe(async () => '旧名字')
+    const forced = await device.reprobeDeviceName(async () => '新名字')
+    expect(forced.name).toBe('新名字')
+  })
+})
+
+describe('ensureDeviceIdentityOnBoot', () => {
+  it('creates the identity without spawning anything and is idempotent', () => {
+    const first = device.ensureDeviceIdentityOnBoot()
+    expect(first?.id).toMatch(/^[0-9a-f-]{36}$/)
+    expect(first?.name.length).toBeGreaterThan(0)
+    // 启动路径不探测：probedAt 留空，等打开连接页再说
+    expect(first?.probedAt).toBeNull()
+    expect(device.ensureDeviceIdentityOnBoot()?.id).toBe(first?.id)
+  })
+
+  it('never throws, even when the data dir is unusable', () => {
+    const dir = device.cloudDeviceDir()
+    const blocker = path.join(dir, 'device.json')
+    fs.mkdirSync(dir, { recursive: true })
+    // 用目录占住文件路径：写必然失败
+    fs.rmSync(blocker, { force: true })
+    fs.mkdirSync(blocker, { recursive: true })
+    try {
+      expect(() => device.ensureDeviceIdentityOnBoot()).not.toThrow()
+    } finally {
+      fs.rmSync(blocker, { recursive: true, force: true })
+    }
   })
 })
 

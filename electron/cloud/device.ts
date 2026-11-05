@@ -36,6 +36,13 @@ export interface CloudDeviceRecord {
   createdAt: number
   /** 用户手动改过名字的时间；有它就说明 `name` 是用户的意思，探测不再覆盖 */
   nameEditedAt: number | null
+  /**
+   * 友好名探测做过一次的时间。
+   *
+   * 有值就**不再自动探测**：默认名在第一次取到后封存，之后系统改名不会让云端看到的
+   * 设备名无声变化（历史记忆要对得上）。想跟随系统改名，走「重新读取系统名」。
+   */
+  probedAt: number | null
 }
 
 export interface CloudDeviceSessionEntry {
@@ -133,6 +140,11 @@ export function readCloudDevice(hostname: string = os.hostname()): CloudDeviceRe
         typeof stored?.nameEditedAt === 'number' && Number.isFinite(stored.nameEditedAt)
           ? stored.nameEditedAt
           : null,
+      // 老文件没这个字段：当成「还没探测过」，下次打开连接页补一次
+      probedAt:
+        typeof stored?.probedAt === 'number' && Number.isFinite(stored.probedAt)
+          ? stored.probedAt
+          : null,
     }
     return record
   }
@@ -146,6 +158,7 @@ export function readCloudDevice(hostname: string = os.hostname()): CloudDeviceRe
     defaultName: defaultName || fallbackName(id),
     createdAt: Date.now(),
     nameEditedAt: null,
+    probedAt: null,
   }
   persist(fresh)
   return fresh
@@ -162,6 +175,7 @@ export function updateCloudDeviceName(raw: unknown): CloudDeviceRecord {
     const reset: CloudDeviceRecord = {
       ...current,
       name: current.defaultName,
+      // 清掉「用户改过」标记，允许以后重新跟随探测结果；probedAt 不动（默认名已封存）
       nameEditedAt: null,
     }
     persist(reset)
@@ -217,25 +231,60 @@ export async function detectDefaultName(
 }
 
 /**
- * 首次读身份时补一次友好名探测（只在连接页打开时调，幂等）。
+ * 友好名探测：**只做一次**（`probedAt` 记着做过）。
  *
- * 已经存在且用户手动改过名（`nameEditedAt` 有值）→ 一个字都不动。
+ * `force = true` 是「重新读取系统名」按钮走的路：重探并刷新默认名，
+ * 用户自己起的名字仍然不动（`nameEditedAt` 有值就只更新默认名）。
+ *
+ * 探不到系统名（Linux 无 systemd、命令超时）也会记 `probedAt`：别让每次打开
+ * 连接页都白 spawn 一次；想再试就按按钮。
  */
 export async function ensureDeviceNameProbe(
-  detect: () => Promise<string | null> = () => detectDefaultName()
+  detect: () => Promise<string | null> = () => detectDefaultName(),
+  force = false
 ): Promise<CloudDeviceRecord> {
   const record = readCloudDevice()
-  const probed = sanitizeDeviceName(await detect())
-  if (!probed) return record
+  if (record.probedAt && !force) return record
 
+  const probed = sanitizeDeviceName(await detect())
   const next: CloudDeviceRecord = {
     ...record,
-    defaultName: probed,
-    name: record.nameEditedAt ? record.name : probed,
+    probedAt: Date.now(),
+    defaultName: probed || record.defaultName,
+    name: record.nameEditedAt || !probed ? record.name : probed,
   }
-  if (next.name === record.name && next.defaultName === record.defaultName) return record
+  if (
+    next.name === record.name &&
+    next.defaultName === record.defaultName &&
+    next.probedAt === record.probedAt
+  ) {
+    return record
+  }
   persist(next)
   return next
+}
+
+/** 「重新读取系统名」：强制重探一次（自动探测只做一次，见 `ensureDeviceNameProbe`） */
+export function reprobeDeviceName(
+  detect: () => Promise<string | null> = () => detectDefaultName()
+): Promise<CloudDeviceRecord> {
+  return ensureDeviceNameProbe(detect, true)
+}
+
+/**
+ * 启动时确保身份存在（DE-01 / A 档）。
+ *
+ * 只建 `id` + hostname 默认名：**不做友好名探测**——那是 spawn，不能上启动路径。
+ * 身份早建的意义是「时机确定」：不再取决于用户什么时候第一次打开云端页，
+ * 启动日志里也能留下锚点。失败只记日志，绝不阻断启动。
+ */
+export function ensureDeviceIdentityOnBoot(): CloudDeviceRecord | null {
+  try {
+    return readCloudDevice()
+  } catch (error) {
+    console.warn('[Cloud] device identity init failed:', error)
+    return null
+  }
 }
 
 /** 发给云端的一轮归属标签：只做记忆归属与审计，不构成授权、不进 prompt */

@@ -151,6 +151,19 @@ export const cloudApi = {
     )
   },
 
+  /** 重新读取系统设备名（自动探测只做一次，跟随系统改名要靠这一下） */
+  async reprobeDeviceName(): Promise<CloudDeviceResult> {
+    const bridge = api()
+    if (!bridge) return { success: true, device: PREVIEW_DEVICE }
+    if (typeof bridge.cloudDeviceReprobe !== 'function') {
+      return { success: false, error: BRIDGE_STALE }
+    }
+    return invoke(
+      () => bridge.cloudDeviceReprobe(),
+      (error) => ({ success: false, error })
+    )
+  },
+
   async getConfig(): Promise<CloudConfigGetResult> {
     const bridge = api()
     if (!bridge || typeof bridge.cloudConfigGet !== 'function') {
