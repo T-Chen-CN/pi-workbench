@@ -38,11 +38,13 @@ class PiWorkbenchAdapter(BasePlatformAdapter):
             logger.info("%s already listening on %s", _LOG_PREFIX, self._hub.address)
             return True
 
+        from .core import fsguard
         from .core.server import HubServer
         from .shim import (
             DEFAULT_API_BASE,
             DEFAULT_HOST,
             DEFAULT_PORT,
+            DEFAULT_DASHBOARD_BASE,
             DEFAULT_RATE_LIMIT,
             _int_env,
         )
@@ -55,6 +57,7 @@ class PiWorkbenchAdapter(BasePlatformAdapter):
                 _LOG_PREFIX,
             )
         try:
+            profile_home = os.environ.get("HERMES_HOME") or ""
             hub = HubServer(
                 data_dir=self._data_dir,
                 upstream_base=os.environ.get("HERMES_API_BASE", DEFAULT_API_BASE),
@@ -63,6 +66,9 @@ class PiWorkbenchAdapter(BasePlatformAdapter):
                 host=os.environ.get("PI_HUB_HOST", DEFAULT_HOST),
                 port=_int_env("PI_HUB_PORT", DEFAULT_PORT),
                 rate_limit=_int_env("PI_HUB_RATE_LIMIT", DEFAULT_RATE_LIMIT),
+                dashboard_base=os.environ.get("PI_HUB_DASHBOARD_BASE", DEFAULT_DASHBOARD_BASE),
+                dashboard_key=os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN", ""),
+                fs_roots=fsguard.resolve_roots(os.environ.get("PI_HUB_FS_ROOTS"), profile_home),
             )
             hub.start()
         except OSError as exc:

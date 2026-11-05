@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 import threading
 import time
@@ -34,6 +35,14 @@ def hash_token(token: str) -> str:
 def token_prefix(token: str) -> str:
     """First 12 chars — enough for a human to match a log line to a device."""
     return token[:12]
+
+
+_DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+
+
+def _clean_device_id(raw: str | None) -> str | None:
+    candidate = str(raw or "").strip()
+    return candidate if _DEVICE_ID_RE.match(candidate) else None
 
 
 def scopes_list(raw: str) -> list[str]:
@@ -121,16 +130,21 @@ class Authenticator:
         scopes: tuple[str, ...] = DEFAULT_SCOPES,
         note: str | None = None,
         now: int | None = None,
+        device_id: str | None = None,
     ) -> tuple[dict, str]:
         """Create a device and return ``(row, plaintext_token)``.
 
         The plaintext token is returned exactly once; only its hash is stored.
+        Registration is admin-authenticated, so a caller may pin the id to the
+        one its local install already uses (``data/cloud-agent/device.json``) —
+        that keeps ``author.id`` stable across the hub instead of inventing a
+        second identity for the same machine.
         """
         now = int(time.time()) if now is None else int(now)
         clean_name = " ".join(str(name or "").split())[:40] or "unnamed"
         clean_scopes = tuple(s for s in scopes if s in SCOPES) or DEFAULT_SCOPES
         token = new_token()
-        device_id = secrets.token_hex(16)
+        device_id = _clean_device_id(device_id) or secrets.token_hex(16)
         conn = self.db.connection()
         with conn:
             conn.execute(

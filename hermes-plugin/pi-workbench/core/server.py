@@ -8,16 +8,20 @@ Why stdlib and not aiohttp (which Hermes already ships)
 2. Tests run with a bare ``python -m unittest``; nothing to install.
 3. Upstream does the same thing for its own ``a2a`` platform plugin.
 
-Route table (H0: devices + read-only passthrough; H1 adds runs/SSE and friends)
------------------------------------------------------------------------------
-anon     GET  /health                     upstream passthrough
-anon     GET  /v1/hub/health              hub self-check
-admin    POST /v1/devices/register
-admin    GET  /v1/devices
-admin    POST /v1/devices/{id}/revoke
-chat     GET  /v1/devices/me
-chat     GET  /v1/capabilities | /v1/toolsets | /v1/skills | /v1/models
-chat     *    /v1/runs...                 (H1)
+Routing model
+-------------
+Three families:
+
+* **own routes** — devices, hub health (handled in this process);
+* **api routes** — everything the local app talks to on ``:8642``
+  (``/v1/runs*``, ``/v1/capabilities``, ``/health/detailed``, sessions, jobs…),
+  proxied with identity rewritten and SSE streamed through;
+* **dashboard routes** — the two side-channel calls the local app makes on
+  ``:9119`` (image upload, file read-back), proxied so the local machine never
+  needs the dashboard token, with a path allowlist on reads.
+
+Prefix rules are ordered: the first match wins, so the specific device routes are
+registered before the prefix catch-alls.
 """
 
 from __future__ import annotations
@@ -25,24 +29,31 @@ from __future__ import annotations
 import json
 import logging
 import re
-import socket
 import threading
 import time
 import urllib.parse
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Iterable
 from pathlib import Path
+from typing import Any, Callable
 
 from . import auth as auth_mod
+from . import fsguard
 from .audit import Auditor
 from .db import Database
 from .errors import HubError
 from .proxy import Response, StreamResponse, Upstream
 
 VERSION = "0.1.0"
-MAX_BODY_BYTES = 2 * 1024 * 1024
+MAX_BODY_BYTES = 32 * 1024 * 1024  # image uploads go through the hub
 LOGGER = logging.getLogger(__name__)
+
+# Prefixes forwarded to api_server (:8642).
+API_PREFIXES = ("/v1/runs", "/v1/capabilities", "/v1/toolsets", "/v1/skills", "/v1/models",
+                "/v1/devices/me/tasks", "/health", "/api/sessions", "/api/jobs")
+# Prefixes forwarded to the dashboard (:9119).
+DASHBOARD_PREFIXES = ("/api/chat/image-upload", "/api/fs/read-data-url", "/api/config")
+WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 @dataclass
@@ -72,10 +83,14 @@ class Request:
             raise HubError("bad_request", "body must be a JSON object")
         return data
 
+    @property
+    def full_path(self) -> str:
+        return self.path + (f"?{self.query}" if self.query else "")
+
 
 @dataclass
 class Route:
-    method: str
+    method: str  # "*" matches any
     pattern: re.Pattern
     handler: str
     mode: str  # "anon" | "admin" | "chat" | "dispatch"
@@ -92,13 +107,18 @@ class HubContext:
         upstream_key: str,
         admin_key: str,
         rate_limit: int = 60,
+        dashboard_base: str = "",
+        dashboard_key: str = "",
+        fs_roots: list[Path] | None = None,
     ):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.db = Database(self.data_dir / "hub.db")
         self.auth = auth_mod.Authenticator(self.db, rate_limit=rate_limit)
         self.audit = Auditor(self.db, self.data_dir / "audit.jsonl")
-        self.upstream = Upstream(upstream_base, upstream_key)
+        self.api = Upstream(upstream_base, upstream_key)
+        self.dashboard = Upstream(dashboard_base, dashboard_key) if dashboard_base else None
+        self.fs_roots = fs_roots or []
         self.admin_key = admin_key
         self.started_at = time.time()
 
@@ -107,65 +127,80 @@ class HubContext:
 
 
 class Hub:
-    """Routes and handlers. No HTTP plumbing in here beyond Response objects."""
+    """Routes and handlers. No HTTP plumbing beyond building Response objects."""
 
     def __init__(self, ctx: HubContext):
         self.ctx = ctx
         self.routes: list[Route] = []
+        for method, pattern, handler, mode in self._table():
+            self._add(method, pattern, handler, mode)
 
-        def add(method: str, pattern: str, handler: Callable, mode: str) -> None:
-            self.routes.append(Route(method, re.compile(f"^{pattern}$"), handler.__name__, mode))
-            setattr(self, handler.__name__, handler)
+    def _add(self, method: str, pattern: str, handler: Callable, mode: str) -> None:
+        name = handler.__name__
+        self.routes.append(Route(method, re.compile(f"^{pattern}$"), name, mode))
+        if not hasattr(type(self), name):
+            setattr(self, name, handler)
 
-        # -- self / health -------------------------------------------------
-        add("GET", r"/health", self.upstream_health, "anon")
-        add("GET", r"/v1/hub/health", self.hub_health, "anon")
-
-        # -- device administration (admin key) -----------------------------
-        add("POST", r"/v1/devices/register", self.register_device, "admin")
-        add("GET", r"/v1/devices", self.list_devices, "admin")
-        add("POST", r"/v1/devices/(?P<device_id>[A-Za-z0-9_.:-]+)/revoke", self.revoke_device, "admin")
-
-        # -- device self (own token) ---------------------------------------
-        add("GET", r"/v1/devices/me", self.device_me, "chat")
-
-        # -- read-only passthrough -----------------------------------------
-        for path in ("/v1/capabilities", "/v1/toolsets", "/v1/skills", "/v1/models"):
-            add("GET", re.escape(path), self.passthrough_get, "chat")
+    def _table(self) -> list[tuple[str, str, Callable, str]]:
+        t: list[tuple[str, str, Callable, str]] = [
+            # -- self ------------------------------------------------------
+            ("GET", r"/health", self.upstream_health, "anon"),
+            ("GET", r"/v1/hub/health", self.hub_health, "anon"),
+            # -- device administration (admin key) -------------------------
+            ("POST", r"/v1/devices/register", self.register_device, "admin"),
+            ("GET", r"/v1/devices", self.list_devices, "admin"),
+            ("POST", r"/v1/devices/(?P<device_id>[A-Za-z0-9_.:-]+)/revoke", self.revoke_device, "admin"),
+            # -- device self (own token) -----------------------------------
+            ("GET", r"/v1/devices/me", self.device_me, "chat"),
+            # -- passthrough: api_server -----------------------------------
+            ("GET", r"/health/detailed", self.api_passthrough, "chat"),
+            ("GET", r"/v1/(?:capabilities|toolsets|skills|models)", self.api_passthrough, "chat"),
+            ("*", r"/api/sessions", self.api_passthrough, "chat"),
+            ("*", r"/api/sessions/[^/]+", self.api_passthrough, "chat"),
+            ("*", r"/api/sessions/[^/]+/messages", self.api_passthrough, "chat"),
+            ("*", r"/api/jobs", self.api_passthrough, "chat"),
+            ("*", r"/api/jobs/[^/]+", self.api_passthrough, "chat"),
+            ("*", r"/v1/runs", self.api_passthrough, "chat"),
+            ("*", r"/v1/runs/[^/]+", self.api_passthrough, "chat"),
+            ("*", r"/v1/runs/[^/]+/[A-Za-z0-9_-]+", self.api_passthrough, "chat"),
+            # -- passthrough: dashboard side channels ----------------------
+            ("POST", r"/api/chat/image-upload", self.dashboard_passthrough, "chat"),
+            ("GET", r"/api/fs/read-data-url", self.dashboard_passthrough, "chat"),
+            ("GET", r"/api/config", self.dashboard_passthrough, "admin"),
+            ("PUT", r"/api/config", self.dashboard_passthrough, "admin"),
+        ]
+        return t
 
     # -- dispatch ----------------------------------------------------------
 
-    def match(self, method: str, path: str) -> tuple[Route, dict] | None:
+    def match(self, method: str, path: str) -> tuple[Route, dict]:
         allowed_elsewhere = False
         for route in self.routes:
             found = route.pattern.match(path)
             if not found:
                 continue
-            if route.method != method:
+            if route.method not in ("*", method):
                 allowed_elsewhere = True
                 continue
-            return route, found.groupdict()
+            return route, {k: v for k, v in found.groupdict().items() if v is not None}
         if allowed_elsewhere:
             raise HubError("method_not_allowed", f"{method} is not allowed on {path}")
-        return None
+        raise HubError("not_found", f"no hub route for {method} {path}")
 
     # -- handlers: self ----------------------------------------------------
 
     def upstream_health(self, req: Request, **_: str) -> Response:
-        try:
-            response = self.ctx.upstream.request("GET", "/health", headers=req.headers)
-        except HubError:
-            raise
-        return Response(response.status, response.headers, response.body)
+        return self.ctx.api.request("GET", "/health", headers=req.headers)
 
     def hub_health(self, req: Request, **_: str) -> Response:
         devices = self.ctx.auth.list_devices()
         online_at = int(time.time()) - 90
-        payload = {
+        payload: dict[str, Any] = {
             "status": "ok",
             "hub": VERSION,
-            "upstream": f"{self.ctx.upstream.base_url}",
+            "upstream": self.ctx.api.base_url,
             "upstreamOk": None,
+            "dashboard": self.ctx.dashboard.base_url if self.ctx.dashboard else None,
             "devices": {
                 "total": len(devices),
                 "active": sum(1 for d in devices if (d.get("last_seen_at") or 0) >= online_at),
@@ -175,14 +210,13 @@ class Hub:
             "uptimeSeconds": int(time.time() - self.ctx.started_at),
         }
         try:
-            response = self.ctx.upstream.request("GET", "/health", cacheable=False, timeout=5.0)
+            response = self.ctx.api.request("GET", "/health", cacheable=False, timeout=5.0)
             payload["upstreamOk"] = response.status == 200
-            payload["upstreamVersion"] = _upstream_version(response)
+            payload["upstreamVersion"] = _json_field(response, "version")
         except HubError as exc:
             payload["upstreamOk"] = False
             payload["upstreamError"] = exc.code
-        status = 200 if payload["upstreamOk"] else 503
-        return _json_response(payload, status=status)
+        return _json_response(payload, status=200 if payload["upstreamOk"] else 503)
 
     # -- handlers: device admin -------------------------------------------
 
@@ -192,6 +226,7 @@ class Hub:
             body.get("name") or "unnamed",
             scopes=tuple(body.get("scopes") or auth_mod.DEFAULT_SCOPES),
             note=body.get("note"),
+            device_id=body.get("deviceId"),
         )
         self.ctx.audit.record(
             "device.register",
@@ -257,20 +292,89 @@ class Hub:
 
     # -- handlers: passthrough --------------------------------------------
 
-    def passthrough_get(self, req: Request, **_: str) -> Response:
-        path = req.path + (f"?{req.query}" if req.query else "")
-        device = req.device or {}
-        response = self.ctx.upstream.request(
-            "GET", path, headers=req.headers, device_id=device.get("id")
+    def api_passthrough(self, req: Request, **_: str) -> Response | StreamResponse:
+        body = req.body
+        headers = dict(req.headers)
+        if req.method == "POST" and req.path == "/v1/runs":
+            body = _rewrite_author(body, req.device or {})
+            headers = _prefix_idempotency(headers, (req.device or {}).get("id", ""))
+
+        if _wants_stream(req):
+            return self.ctx.api.stream(
+                req.method,
+                req.full_path,
+                headers=headers,
+                body=body or None,
+                device_id=(req.device or {}).get("id"),
+            )
+        return self.ctx.api.request(
+            req.method,
+            req.full_path,
+            headers=headers,
+            body=body or None,
+            device_id=(req.device or {}).get("id"),
         )
-        return response
+
+    def dashboard_passthrough(self, req: Request, **_: str) -> Response:
+        dashboard = self.ctx.dashboard
+        if dashboard is None:
+            raise HubError("upstream_unavailable", "dashboard side channel is not configured")
+        path = req.full_path
+        if req.path == "/api/fs/read-data-url":
+            wanted = urllib.parse.parse_qs(req.query).get("path", [""])[0]
+            fsguard.ensure_allowed(wanted, self.ctx.fs_roots)
+        return dashboard.request(
+            req.method, path, headers=req.headers, body=req.body or None,
+            device_id=(req.device or {}).get("id"),
+        )
 
 
-def _upstream_version(response: Response) -> str | None:
+# -- helpers ---------------------------------------------------------------
+
+
+def _json_field(response: Response, name: str) -> Any:
     try:
-        return json.loads(response.body.decode("utf-8")).get("version")
+        return json.loads(response.body.decode("utf-8")).get(name)
     except Exception:
         return None
+
+
+def _wants_stream(req: Request) -> bool:
+    if req.method != "GET":
+        return False
+    accept = (req.header("Accept") or "").lower()
+    return "text/event-stream" in accept or req.path.endswith("/events")
+
+
+def _rewrite_author(body: bytes, device: dict) -> bytes:
+    """The token decides who you are: replace any client-supplied ``author``."""
+    if not body or not device:
+        return body
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return body  # let upstream produce the real error
+    if not isinstance(payload, dict):
+        return body
+    payload["author"] = {
+        "id": f"pi-workbench/{device.get('id', '')}",
+        "name": device.get("name") or "unknown device",
+        "is_bot": False,
+    }
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+def _prefix_idempotency(headers: dict[str, str], device_id: str) -> dict[str, str]:
+    out = dict(headers)
+    for key in list(out.keys()):
+        if key.lower() != "idempotency-key":
+            continue
+        value = out.pop(key)
+        if not device_id or value.startswith("pi:"):
+            out["Idempotency-Key"] = value
+        else:
+            out["Idempotency-Key"] = f"pi:{device_id}:{value}"
+    return out
 
 
 def _json_response(payload: dict, status: int = 200) -> Response:
@@ -282,8 +386,6 @@ class HubRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = f"pi-workbench/{VERSION}"
     sys_version = ""
-
-    # -- plumbing ----------------------------------------------------------
 
     @property
     def hub(self) -> Hub:
@@ -307,6 +409,8 @@ class HubRequestHandler(BaseHTTPRequestHandler):
     def do_PATCH(self) -> None:
         self._dispatch("PATCH")
 
+    # -- plumbing ----------------------------------------------------------
+
     def _read_body(self) -> bytes:
         raw_length = self.headers.get("Content-Length")
         if not raw_length:
@@ -329,20 +433,16 @@ class HubRequestHandler(BaseHTTPRequestHandler):
             query=parsed.query,
             headers={k: v for k, v in self.headers.items()},
             body=b"",
-            client_ip=self.address_string(),
+            client_ip=_client_ip(self.headers, self.address_string()),
         )
-        route: Route | None = None
         try:
             req.body = self._read_body()
-            matched = self.hub.match(method, path)
-            if matched is None:
-                raise HubError("not_found", f"no hub route for {path}")
-            route, params = matched
+            route, params = self.hub.match(method, path)
             self._authorize(route, req)
-            handler = getattr(self.hub, route.handler)
-            result = handler(req, **params)
-            self._emit(result)
-            if method in ("POST", "PUT", "PATCH", "DELETE"):
+            result = getattr(self.hub, route.handler)(req, **params)
+            if method in WRITE_METHODS:
+                # Record before emitting so a client disconnect cannot lose the
+                # trail, and so "response received" implies "audited".
                 self.hub.ctx.audit.record(
                     f"http.{method.lower()}",
                     device_id=(req.device or {}).get("id"),
@@ -351,6 +451,7 @@ class HubRequestHandler(BaseHTTPRequestHandler):
                     detail={"durationMs": int((time.time() - started) * 1000)},
                     ip=req.client_ip,
                 )
+            self._emit(result)
         except HubError as exc:
             self._emit(_json_response(exc.payload(), status=exc.status), extra_headers=exc.headers())
         except Exception:  # pragma: no cover - last resort, keep the socket healthy
@@ -363,15 +464,25 @@ class HubRequestHandler(BaseHTTPRequestHandler):
         if route.mode == "anon":
             return
         if route.mode == "admin":
-            ctx.auth.check_admin(req.header("X-Pi-Admin-Key"), ctx.admin_key)
+            key = req.header("X-Pi-Admin-Key")
+            if key:
+                ctx.auth.check_admin(key, ctx.admin_key)
+                return
+            token = _bearer(req.header("Authorization"))
+            if not token:
+                raise HubError("admin_required")
+            # An admin-scoped device token is equally acceptable.
+            device = ctx.auth.authenticate(token)
+            ctx.auth.require_scope(device, "admin")
+            ctx.auth.touch(device["id"])
+            req.device = device
             return
         token = _bearer(req.header("Authorization"))
         device = ctx.auth.authenticate(token)
         ctx.auth.limiter.check(device["id"])
         ctx.auth.touch(device["id"])
         req.device = device
-        if route.mode in ("chat", "dispatch"):
-            ctx.auth.require_scope(device, route.mode)
+        ctx.auth.require_scope(device, route.mode)
 
     def _emit(self, result: Response | StreamResponse, extra_headers: dict[str, str] | None = None) -> None:
         if isinstance(result, StreamResponse):
@@ -415,6 +526,21 @@ class HubRequestHandler(BaseHTTPRequestHandler):
                 close()
 
 
+def _client_ip(headers, peer: str) -> str:
+    """Caddy terminates TLS, so the socket peer is always 127.0.0.1.
+
+    The hub only ever listens on loopback with Caddy in front, which makes the
+    last ``X-Forwarded-For`` hop trustworthy — and the audit trail useless
+    without it.
+    """
+    forwarded = headers.get("X-Forwarded-For") if headers else None
+    if forwarded:
+        hops = [part.strip() for part in str(forwarded).split(",") if part.strip()]
+        if hops:
+            return hops[-1]
+    return peer
+
+
 def _bearer(header: str | None) -> str | None:
     if not header:
         return None
@@ -437,6 +563,9 @@ class HubServer:
         host: str = "127.0.0.1",
         port: int = 8484,
         rate_limit: int = 60,
+        dashboard_base: str = "",
+        dashboard_key: str = "",
+        fs_roots: list[Path] | None = None,
     ):
         self.ctx = HubContext(
             data_dir=data_dir,
@@ -444,6 +573,9 @@ class HubServer:
             upstream_key=upstream_key,
             admin_key=admin_key,
             rate_limit=rate_limit,
+            dashboard_base=dashboard_base,
+            dashboard_key=dashboard_key,
+            fs_roots=fs_roots,
         )
         self.hub = Hub(self.ctx)
         self.host = host
@@ -459,7 +591,11 @@ class HubServer:
         httpd.hub = self.hub  # type: ignore[attr-defined]
         self._httpd = httpd
         self.port = httpd.server_address[1]
-        self._thread = threading.Thread(target=lambda: httpd.serve_forever(poll_interval=0.1), name="pi-workbench-hub", daemon=True)
+        self._thread = threading.Thread(
+            target=lambda: httpd.serve_forever(poll_interval=0.1),
+            name="pi-workbench-hub",
+            daemon=True,
+        )
         self._thread.start()
 
     def stop(self) -> None:
@@ -482,4 +618,4 @@ class HubServer:
 
     @property
     def upstream_base(self) -> str:
-        return self.ctx.upstream.base_url
+        return self.ctx.api.base_url

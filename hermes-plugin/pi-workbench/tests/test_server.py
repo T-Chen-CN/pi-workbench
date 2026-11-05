@@ -269,7 +269,7 @@ class ProxyTests(HubTestCase):
 
     def test_upstream_down_reports_502(self):
         _, token = self.register()
-        self.hub.ctx.upstream.flush_cache()
+        self.hub.ctx.api.flush_cache()
         self.upstream.stop()
         status, payload, _ = self.json_call("GET", "/v1/toolsets", token=token)
         self.assertEqual(status, 502)
