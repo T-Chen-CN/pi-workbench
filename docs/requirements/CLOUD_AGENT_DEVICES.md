@@ -3,7 +3,7 @@
 > **面向**：要实现「多台本地程序连同一个云端 Agent」「云端 Agent 认得是哪台设备」「云端指挥本地 Agent 干活」的人
 > **什么时候读**：动对接层（本地 ↔ 云端）、设备身份、反向任务通道、变更 S-02 之前
 > **什么时候要改**：插件形态、设备身份口径、派活权限口径、上游插件 API、验收场景变化时
-> **状态**：**v3.0 最终版 · 2026-11-06 · 待开工 H0** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
+> **状态**：**v3.1 · 2026-11-06 · H0 已完成（G0 全绿），H1 进行中** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
 > **取代**：v1 的 `pi-hub` 独立服务方案（作废，理由见 §4）
 
 ---
@@ -479,8 +479,8 @@ ssh -i "F:/SSH KEY/SG_001.pem"     -o "ProxyCommand=<HTTP CONNECT 隧道脚本> 
 
 ### 14.5 H0 第一小时要实测的两件事（不阻塞，但决定写法）
 
-1. `kind: platform` 插件在 gateway 启动时是否**自动** `connect()`，还是要 `config.yaml` 显式启用（决定设备入口何时起来、D1 验收怎么做）。
-2. 经 Caddy + `hub.` 转发后 SSE 是否被缓冲（AC-D15 的前提；`flush_interval -1` 已有先例）。
+1. ✅ **已实测**：`kind: platform` 插件在 gateway 启动时**自动 `connect()`**，不需要在 `config.yaml` 写 `platforms:` 块 —— 激活证据来自 `plugins.enable` + `requires_env` 里声明的 `PI_HUB_ADMIN_KEY`（`gateway/platform_activation.py` 的 `activation_env`）。部署后 `ss -ltn` 立刻能看到 8484。
+2. ⏳ 待 H1：经 Caddy + `hub.` 转发后 SSE 是否被缓冲（AC-D15 的前提；`flush_interval -1` 已在 api vhost 上有先例，hub vhost 同样配了）。
 
 ---
 
@@ -490,7 +490,8 @@ ssh -i "F:/SSH KEY/SG_001.pem"     -o "ProxyCommand=<HTTP CONNECT 隧道脚本> 
 | --- | --- |
 | 插件放置 | 开发期：`/home/ubuntu/.hermes/profiles/pi-cloud/plugins/pi-workbench/`（含 `__init__.py`）；发布期：`hermes plugins install` + `adopt` |
 | 启用 | `HERMES_HOME=/home/ubuntu/.hermes/profiles/pi-cloud hermes plugins enable pi-workbench` |
-| 环境变量 | systemd drop-in（与 api_server 同一个）：`PI_HUB_ADMIN_KEY`、`HERMES_API_BASE=http://127.0.0.1:8642`、`PI_HUB_PORT=8484`。**不进 `.env`**（agent 读得到） |
+| 环境变量 | systemd drop-in **`20-pi-hub.conf`**（独立文件，回滚只需删它）：`PI_HUB_ADMIN_KEY`、`HERMES_API_BASE=http://127.0.0.1:8642`、`PI_HUB_PORT=8484`、`PI_HUB_HOST=127.0.0.1`。**不进 `.env`**（agent 读得到） |
+| 管理密钥位置 | `/home/ubuntu/pi-hub-admin-key`（600）——登记/撤销设备用，等于「签发票的能力」，比 device token 更敏感 |
 | 工具可见性 | profile `config.yaml` 的 `platform_toolsets.api_server` 加 `pi_workbench` |
 | 暴露 | `/etc/caddy/Caddyfile` 加：`hub.tchen-xiaoxiao.com { reverse_proxy 127.0.0.1:8484 { flush_interval -1 } }`，`sudo systemctl reload caddy` |
 | 重启 | `sudo systemctl restart hermes-gateway-pi-cloud.service`（插件随 gateway 起停） |
@@ -572,6 +573,7 @@ ssh -i "F:/SSH KEY/SG_001.pem"     -o "ProxyCommand=<HTTP CONNECT 隧道脚本> 
 
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
+| **v3.1** | 2026-11-06 | **H0 完成**：插件骨架落地（`hermes-plugin/pi-workbench`，50 个 unittest 全绿）+ 部署到 VPS，**G0 六条全过**。实测三条上游事实写回方案：`register_platform`/`register_tool` 签名、`platform` 插件**自动 connect**（无需 `platforms:` 配置块，激活证据是 `plugins.enable` + `requires_env`）、`capabilities` 只接受注册表 id（原计划的 `network_ingress` 不存在，清单里不写）。两个运维坑：插件 INFO 日志不进 journalctl（看 `/v1/hub/health`）、Caddy reload 后证书有 ~5s 窗口 |
 | **v3.0** | 2026-11-06 | **最终版**：所有者「全部都按你默认」→ B1 同名工作区加设备后缀 / B2 不做分支指定 / B3 只报打开过的工作区 / 批准三项生产环境改动（先备份）。新增 **§20 执行手册**：20.0 备份命令 → H0–H4 每阶段的分步清单 + G0–G4 Gate 判据（含可手打的 curl）+ 每阶段回滚动作 + 时间线「第一次动手的 5 件事」。状态改为「待开工 H0」 |
 | **v2.1** | 2026-11-06 | **两处关键修正**：① **派活改为工作区层级**（所有者指出；设备只是承载者，`workspaceId` 不透明、路径永不出本机，`local_workspaces()` 成为主入口，新增 `ambiguous_workspace` / `workspace_untrusted` / `workspace_offline`）；② **传输改 stdlib**（`http.server` + `urllib` + 独立线程，不用 aiohttp —— 上游依赖在 uv overlay 里，单测跑不动；且线程内失败打不死 gateway 循环；与内置 a2a 同款）。另：**纠正 v2 的错误** —— `platform_toolsets.api_server` 白名单**仍要加 `pi_workbench`**（预检实测）；VPS 预检 15 项全部跑完（§14.2）；决策全部锁定（§17.1）；新增 AC-D05b/D18/D19 |
 | **v2** | 2026-11-06 | **改单缝 + 插件形态**：`pi-hub` 独立服务作废，改为 Hermes 插件 `pi-workbench`（`kind: platform`，与 gateway 同进程）；除 dashboard 外**全部对接**经插件；**不做直连兜底**；接口契约按「设备管理 / 设备侧 / 透明代理」三类重写；派活工具由 MCP 改为 `provides_tools`（不再改 `platform_toolsets`）；新增 AC-D15~D17；新增 §14 执行前检查（本地 7 项已通过、VPS 9 项待执行）与 QN-1~QN-7 |
@@ -602,7 +604,7 @@ ssh ubuntu@43.160.243.96 '
 # 2) 回滚命令写进 docs（§15），并记下三个 .bak 的路径
 ```
 
-### 20.1 H0 骨架（3 天）→ **G0**
+### 20.1 H0 骨架 ✅ 已完成（2026-11-06，commit `74eb419` + 部署）
 
 | 步 | 内容 | 产出 / 验收 |
 | --- | --- | --- |
@@ -626,6 +628,31 @@ curl -s -o /dev/null -w '%{http_code}
 ```
 
 **回滚**：`plugins disable pi-workbench` → 注释 Caddy vhost → `reload caddy` → `restart gateway`（本地此时还在用旧直连，零影响）。
+
+**实际结果（2026-11-06 21:40，全部通过）**
+
+| G0 | 结果 |
+| --- | --- |
+| hub health | `200`，`upstreamOk:true`、`upstreamVersion:0.22.6`、`adminKeyConfigured:true` |
+| 无 token | `401 unauthorized` |
+| 登记设备 | `201`，`deviceId` + token 前缀 + scopes |
+| 带 token | `200`（上游真实 capabilities） |
+| 撤销 | `200` |
+| 撤销后再用 | `401 device_revoked` |
+
+**实测落点（运维必须知道）**
+
+| 项 | 值 |
+| --- | --- |
+| 插件目录 | `/home/ubuntu/.hermes/profiles/pi-cloud/plugins/pi-workbench/` |
+| 数据目录 | `/home/ubuntu/.hermes/profiles/pi-cloud/plugin-data/pi-workbench/`（`hub.db` + `audit.jsonl`） |
+| 管理密钥 | `/home/ubuntu/pi-hub-admin-key`（600）**+** systemd drop-in `20-pi-hub.conf` |
+| 设备 token（本机） | `/home/ubuntu/pi-hub-device-token`（600，H1 才搬到本地） |
+| 监听 | `127.0.0.1:8484`（`ss -ltn` 可查） |
+
+**两个踩到的坑（已写进 README）**
+1. 插件 `INFO` 日志**不进** `journalctl`（默认级别只放 WARNING）→ 判断插件是否活着看 `/v1/hub/health`，不要找日志。
+2. Caddy `reload` 后首次签发证书有 ~5 秒窗口，立刻 `curl` 会得到 `tlsv1 alert internal error`，等 5 秒即可。
 
 ### 20.2 H1 全量切换（4 天）→ **G1（唯一切换点）**
 

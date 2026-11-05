@@ -498,7 +498,7 @@ chromium 与本机 364MB 保留（browser 工具集因此第一次真跑通）�
 | DE-00 ✅ | **签字**：QD-1~QD-7 + QN-1~QN-7 + C-4（工作区级派活）+ ADR-008 | P1 | — | **已完成**（授权代定，ADR-008 状态已改为「已接受」） |
 | DE-01 ✅ | 设备身份 v0：`device.json`（启动即建 `id`、名字可改、探测只做一次）、每轮 `author`、审计带设备名、连接页设备卡（保存/恢复默认/重读系统名）。**不注入 prompt** | P1 | ~~DE-00~~ | 已落地（`96f2eaa`）。无服务端改动，经确认先于 DE-00 落地 |
 | **H-1** ✅ | **执行前预检**：本地 6 项 + VPS 15 项全部跑完（方案 §14.2）。关键实测：`register_platform`/`register_tool` 存在、先例 a2a 为纯 stdlib、`plugin_data_dir` 走 profile、**`platform_toolsets.api_server` 白名单必须加 `pi_workbench`**、8484 空闲、api_server 在 8642 | P1 | ~~DE-00~~ | **已完成** |
-| DE-02 | **H0 插件骨架**（待开工，§20.1）：`plugin.yaml` + `shim` + `core/app` + SQLite + admin 登记/撤销 + token 中间件 + `/v1/hub/health` + 只读代理 + Caddy vhost | P1 | H-1 | token 可通、无 token 401、撤销即 401 |
+| DE-02 ✅ | **H0 插件骨架**：`hermes-plugin/pi-workbench`（shim/adapter/core 三层，纯 stdlib，50 用例）+ SQLite + admin 登记/撤销 + token/scope/限流中间件 + `/v1/hub/health` + 只读代理 + Caddy vhost + systemd drop-in | P1 | ~~H-1~~ | **已完成**：G0 六条全过（health 200 / 无 token 401 / 带 token 200 / revoke 200 / 撤销后 401 device_revoked） |
 | DE-03 | **H1 全量切换**：`/v1/runs*`（SSE 保真）+ sessions/jobs/config/media/fs 代理 + 本地改单入口 + 错误码映射 | P1 | DE-02 | AC-D04 / AC-D15 / AC-D16 / AC-D17 |
 | DE-04 | **H2 设备面**：心跳 / 在线 / 注销 + 本地登记与状态 UI + 自检网关块 | P1 | DE-03 | AC-D01 / AC-D02 / AC-D03 |
 | DE-05 | **H3 工作区派活闭环**：四个工具（`local_workspaces` / `local_devices` / `local_dispatch` / `local_task`）+ 工作区登记 + 任务邮箱 + 本地执行器（开关/白名单/上限/审批/摘要）+ 结果回传 | P1 | DE-04 + ADR-008 | AC-D05 / D05b / D06~D14 / D18 / D19 |
