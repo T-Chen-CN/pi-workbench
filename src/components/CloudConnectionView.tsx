@@ -256,7 +256,9 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                 <Input
                   id="cloud-device-name"
                   value={deviceName}
-                  maxLength={40}
+                  // 只防手滑贴长文本：真正的上限是主进程按**码点**截 40 字
+                  // （这里数的是 UTF-16 单元，窄写成 40 会连 emoji 一起挡掉）
+                  maxLength={80}
                   spellCheck={false}
                   autoComplete="off"
                   disabled={deviceBusy}
