@@ -69,13 +69,20 @@ curl -X POST -H "X-Pi-Admin-Key: …" https://hub.tchen-xiaoxiao.com/v1/devices/
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer pi_…" .../v1/capabilities  # 401 device_revoked
 ```
 
+管理密钥在哪、怎么拿、怎么换：见 [CLOUD_AGENT_DEVICES §15.1](../../docs/requirements/CLOUD_AGENT_DEVICES.md)。
+一句话：`ssh … 'cat ~/pi-hub-admin-key'`；只有「登记新设备 / 操作别的设备」需要它，
+平时对话、审批、图片、注销自己都不用。
+
 设备登记（一次）：
 
 ```bash
 curl -s -X POST https://hub.tchen-xiaoxiao.com/v1/devices/register \
   -H "X-Pi-Admin-Key: $PI_HUB_ADMIN_KEY" -H 'Content-Type: application/json' \
-  -d '{"name":"TChen-Legion","scopes":["chat","dispatch"]}'
+  -d '{"deviceId":"<本地 device.json 的 id>","name":"TChen-Legion","scopes":["chat","dispatch"]}'
 ```
+
+同一个 `deviceId` 再登记 = **换 token**（`200` + `rotated:true`，旧 token 立刻失效）——
+重装、token 丢失、误注销都走这条，不会 500。
 
 ## 故障三分
 
