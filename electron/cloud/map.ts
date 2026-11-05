@@ -432,6 +432,10 @@ export class RunMapper {
       choices: approvalChoicesOf(payload.choices),
       requestedAt: Date.now(),
     }
+    // 审批总是在那次 `tool.started` 之后才来的：记下它拦的是哪个调用，
+    // 审计的「真实结果」才能对号（工具卡后来才终态，可能来自实时流也可能来自历史）
+    const guarded = this.lastRunningToolCallId()
+    if (guarded) part.toolCallId = guarded
     if (generation !== undefined) part.generation = generation
     if (timeoutSeconds !== undefined) {
       part.timeoutSeconds = timeoutSeconds
@@ -440,6 +444,28 @@ export class RunMapper {
     }
     this.parts.push(part)
     return [{ kind: 'part', part }]
+  }
+
+  /** 最近一个还在跑的工具调用（审批要拦的就是它） */
+  private lastRunningToolCallId(): string | undefined {
+    for (let index = this.parts.length - 1; index >= 0; index -= 1) {
+      const part = this.parts[index]
+      if (part.type !== 'tool') continue
+      if (part.status !== 'running') continue
+      return part.toolCallId || undefined
+    }
+    return undefined
+  }
+
+  /** 这张审批拦的是哪个工具调用（主进程用它给审计的结果行对号） */
+  approvalToolCallId(requestId: string): string | undefined {
+    for (let index = this.parts.length - 1; index >= 0; index -= 1) {
+      const part = this.parts[index]
+      if (part.type !== 'approval') continue
+      if (part.requestId !== requestId) continue
+      return part.toolCallId
+    }
+    return undefined
   }
 
   /**

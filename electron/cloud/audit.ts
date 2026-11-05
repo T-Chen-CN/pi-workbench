@@ -32,6 +32,8 @@ export interface CloudAuditDecision {
   choice: CloudApprovalChoice
   /** 决策当时服务端生效的档位 */
   mode: CloudApprovalMode | null
+  /** 这条审批拦下的工具调用（结果行靠它对号） */
+  toolCallId?: string
 }
 
 export interface CloudAuditOutcome {
@@ -83,12 +85,13 @@ export function appendAudit(entry: CloudAuditEntry): void {
 }
 
 /**
- * 待关联的审批决定：runId → auditId。
+ * 待关联的审批决定：runId → { auditId, toolCallId }。
  *
- * 一轮里同时只会有一个待决审批，所以不用 requestId 当键；结果到达时（下一个
- * 终态工具卡）就把这一条结掉，避免长时间挂着内存。
+ * 一轮里同时只会有一个待决审批，所以不用 requestId 当键；结果到达时就把这一条
+ * 结掉，避免长时间挂着内存。`toolCallId` 是审批拦下的那次调用：实时流和历史补
+ * 结果都靠它对号，避免拿「下一个随便什么工具卡」当结果。
  */
-const pendingByRun = new Map<string, string>()
+const pendingByRun = new Map<string, { auditId: string; toolCallId?: string }>()
 
 export function recordApprovalDecision(input: {
   runId: string
@@ -97,6 +100,7 @@ export function recordApprovalDecision(input: {
   patternKeys?: string[]
   choice: CloudApprovalChoice
   mode?: CloudApprovalMode | null
+  toolCallId?: string
 }): CloudAuditDecision {
   const entry: CloudAuditDecision = {
     at: Date.now(),
@@ -108,9 +112,10 @@ export function recordApprovalDecision(input: {
     patternKeys: (input.patternKeys ?? []).slice(0, 8),
     choice: input.choice,
     mode: input.mode ?? null,
+    ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
   }
   appendAudit(entry)
-  pendingByRun.set(input.runId, entry.auditId)
+  pendingByRun.set(input.runId, { auditId: entry.auditId, toolCallId: input.toolCallId })
   return entry
 }
 
@@ -120,10 +125,15 @@ export function recordApprovalDecision(input: {
  */
 export function recordApprovalOutcome(
   runId: string,
-  result: { error: boolean; preview: string }
+  result: { error: boolean; preview: string; toolCallId?: string }
 ): boolean {
-  const auditId = pendingByRun.get(runId)
-  if (!auditId) return false
+  const pending = pendingByRun.get(runId)
+  if (!pending) return false
+  // 两边都知道是哪次调用时必须一致：别拿后面某个无关工具卡的结果充数
+  if (pending.toolCallId && result.toolCallId && pending.toolCallId !== result.toolCallId) {
+    return false
+  }
+  const auditId = pending.auditId
   pendingByRun.delete(runId)
   appendAudit({
     at: Date.now(),

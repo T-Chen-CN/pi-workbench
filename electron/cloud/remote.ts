@@ -10,7 +10,7 @@ import type {
   CloudSession,
   CloudTracePart,
 } from './types.js'
-import { CloudApiError, type CloudClient } from './client.js'
+import type { CloudClient } from './client.js'
 import { mapMessages, type RawMessage } from './map.js'
 
 interface RawSession {
@@ -530,46 +530,31 @@ export function createRemote(client: CloudClient) {
     /**
      * 提交审批决定。
      *
-     * 服务端存在两种口径（见 CLOUD_AGENT_APPROVAL §3.3）：
-     * - canonical：`{request_id, execution_generation, choice}`，缺身份会 400/409；
-     * - run-scoped：只要 `{choice}`，多带字段会被当未知字段拒掉。
-     *
-     * 所以「能带就带」：拿得到 prompt_id + generation 就先按 canonical 发，
-     * 被 400 `invalid_params` 拒时退回 run-scoped —— 两种服务端都能跑。
+     * 2026-11-06 实测（Hermes 0.22.6）：三个字段**都必填** —— 只发 `{choice}` 或
+     * `{request_id, choice}` 一律 `400 invalid_params`；凑齐
+     * `{request_id, execution_generation, choice}` 才回 `200 {status:"resolved"}`。
+     * 所以这里不做「能带就带」的降级（缺字段的请求只会白挨一次 400），
+     * 由调用方从轮次状态里补 `execution_generation`。
      */
     async respondApproval(input: {
       runId: string
-      requestId?: string
-      generation?: number
+      requestId: string
+      generation: number
       choice: 'once' | 'session' | 'deny'
     }): Promise<{ resolved?: number }> {
-      const path = `/v1/runs/${encodeURIComponent(input.runId)}/approval`
-      const body: Record<string, unknown> = { choice: input.choice }
-      if (input.requestId) body.request_id = input.requestId
-      if (typeof input.generation === 'number') body.execution_generation = input.generation
-
-      try {
-        const raw = await client.request<Record<string, unknown>>(path, {
+      const raw = await client.request<Record<string, unknown>>(
+        `/v1/runs/${encodeURIComponent(input.runId)}/approval`,
+        {
           method: 'POST',
-          body,
+          body: {
+            request_id: input.requestId,
+            execution_generation: input.generation,
+            choice: input.choice,
+          },
           timeoutMs: 30_000,
-        })
-        return { resolved: typeof raw?.resolved === 'number' ? raw.resolved : undefined }
-      } catch (error) {
-        const canonical = Object.prototype.hasOwnProperty.call(body, 'request_id')
-        const rejected =
-          error instanceof CloudApiError &&
-          error.status === 400 &&
-          (error.backendCode === 'invalid_params' || error.backendCode === 'bad_request')
-        if (!canonical || !rejected) throw error
-        // 退回 run-scoped：只发 choice
-        const raw = await client.request<Record<string, unknown>>(path, {
-          method: 'POST',
-          body: { choice: input.choice },
-          timeoutMs: 30_000,
-        })
-        return { resolved: typeof raw?.resolved === 'number' ? raw.resolved : undefined }
-      }
+        }
+      )
+      return { resolved: typeof raw?.resolved === 'number' ? raw.resolved : undefined }
     },
 
     async stopRun(runId: string): Promise<RunStatusSnapshot> {

@@ -280,6 +280,11 @@ export type CloudTracePart =
       requestId: string
       /** 应答时要带（canonical 语义）；run-scoped 语义下没有 */
       generation?: number
+      /**
+       * 这条审批拦下的工具调用（审批请求总是紧跟在 `tool.started` 之后）。
+       * 审计的「真实结果」靠它对上号，断流后从历史补结果也靠它。
+       */
+      toolCallId?: string
       /** 命令原文（卡片正文） */
       command: string
       /** 命中的危险模式（审计与 UI 都用它） */

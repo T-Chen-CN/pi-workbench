@@ -63,6 +63,14 @@ export interface CloudAgentIpcDeps {
 
 const DASHBOARD_CLOSED_EVENT = 'cloud:dashboard:closed'
 
+/**
+ * 最近一次从服务端读到的档位：**只用于审计留痕**。
+ *
+ * 审批回执之后不能再去读配置（`tool.completed` 会在那次往返期间到达，结果行就配
+ * 不上了），所以决定行用这个缓存值；档位本身的显示永远走 `cloud:policy:get`。
+ */
+let cachedPolicyMode: CloudApprovalMode | null = null
+
 export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   dispose: () => void
 } {
@@ -456,28 +464,45 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       }
       const runId = String(input?.runId ?? '') || (runner?.activeRunId ?? '')
       if (!runId) return { success: false as const, error: '当前没有正在执行的一轮' }
-      const requestId = String(input?.requestId ?? '') || undefined
+      const requestId = String(input?.requestId ?? '')
       const rawGeneration = Number(input?.generation)
-      const generation = Number.isInteger(rawGeneration) ? rawGeneration : undefined
+      let generation = Number.isInteger(rawGeneration) ? rawGeneration : undefined
 
       try {
         const remote = createRemote(ensureClient())
-        await remote.respondApproval({ runId, requestId, generation, choice: choice as CloudApprovalChoice })
-        // 审计：决定行（结果行由 runner 后补）
-        let mode: CloudApprovalMode | null = null
-        try {
-          mode = (await readApprovalPolicy()).mode
-        } catch {
-          // 读不到档位不影响审批本身：审计里就记 null
+        // 服务端（0.22.6）要求三个字段齐全：缺代次就从轮次状态里取一次
+        if (generation === undefined) {
+          generation = (await remote.runStatus(runId)).executionGeneration
         }
+        if (!requestId || generation === undefined) {
+          return {
+            success: false as const,
+            error: '这条审批缺请求标识或轮次代次，刷新会话后重试',
+          }
+        }
+        await remote.respondApproval({
+          runId,
+          requestId,
+          generation,
+          choice: choice as CloudApprovalChoice,
+        })
+        // 审计必须**立刻**写：这里不能再做任何网络往返 —— 服务端紧接着就会推
+        // tool.completed，结果行要能配对上；先读一遍策略（一次 HTTP GET）就会输掉这场赛跑。
         recordApprovalDecision({
           runId,
           sessionId: input?.sessionId ?? null,
           command: String(input?.command ?? ''),
           patternKeys: Array.isArray(input?.patternKeys) ? input.patternKeys : [],
           choice: choice as CloudApprovalChoice,
-          mode,
+          mode: cachedPolicyMode,
+          toolCallId: runner?.approvalToolCallId(requestId),
         })
+        // 档位只用于留痕：异步刷新缓存，失败无所谓（下一次读会补）
+        void readApprovalPolicy()
+          .then((policy) => {
+            cachedPolicyMode = policy.mode
+          })
+          .catch(() => {})
         return { success: true as const, choice }
       } catch (error) {
         logger?.warn('[Cloud] approval respond failed', cloudErrorMessage(error))
@@ -489,6 +514,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   handleIpc('cloud:policy:get', async () => {
     try {
       const policy = await readApprovalPolicy()
+      cachedPolicyMode = policy.mode
       return { success: true as const, policy }
     } catch (error) {
       logger?.warn('[Cloud] policy read failed', cloudErrorMessage(error))
@@ -504,6 +530,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     try {
       const before = await readApprovalPolicy()
       const policy = await writeApprovalMode(mode)
+      cachedPolicyMode = policy.mode
       if (before.mode !== policy.mode) recordModeChange(before.mode, policy.mode)
       return { success: true as const, policy }
     } catch (error) {

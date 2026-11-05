@@ -126,17 +126,17 @@ Hermes 默认 `approvals.deny` 就是空。保持默认后，安全地板只剩�
 
 ### 3.3 应答（`POST /v1/runs/{id}/approval`）
 
-实测结论（R1 关闭）：**canonical 语义生效**，run-scoped 语义不需要。
+实测结论（2026-11-06，Hermes 0.22.6）：**三个字段都是必填**，run-scoped 语义不存在。
 
-```
-POST /v1/runs/{run_id}/approval
-{ "request_id": "<prompt_id>", "execution_generation": 1, "choice": "once" }
-→ 200 { "run_id": "run_x", "status": "resolved", "prompt_id": "ee1d…" }
-```
+| body | 结果 |
+| --- | --- |
+| `{"choice":"deny"}` | **400 `invalid_params`** |
+| `{"request_id":…,"choice":"deny"}` | **400 `invalid_params`** |
+| `{"request_id":…,"execution_generation":1,"choice":"deny"}` | **200 `{status:"resolved", prompt_id}`** |
 
-`request_id` 直接吃 `prompt_id` 的值。实现仍保留「能带就带」的降级：拿不到 `prompt_id` 时退回 `{"choice": …}`，被 400 `invalid_params` 拒再回退——旧版服务端也能跑。错误码仍是 `409 stale_generation` / `409 approval_not_pending` / `404 run_not_found`。
+`request_id` 直接吃 `prompt_id` 的值；`execution_generation` 在 `approval.request`、`pending_controls` 与 `GET /v1/runs/{id}` 上都有，卡片缺失时由主进程现取一次。
 
-放行与拒绝都验证过：`deny` → `tool.completed{error:true, preview:""}`（Agent 说明「被审批层拦下」）；`once` → `tool.completed{error:false}` 后 `run.completed`。
+放行与拒绝都验证过：`deny` → `tool.completed{error:true}`（Agent 说明「被审批层拦下」）；`once` → 工具真的执行，`exit_code: 0`，且 Hermes 自己在工具结果里记了 `"approval": "Command required approval (delete in root path) and was approved by the user."`。
 
 ---
 
@@ -356,7 +356,17 @@ POST /v1/runs/{run_id}/approval
 | `src/components/CloudSessionView.tsx` | 滚动上翻时不抢视口，只在输入框上方亮「有待审批」；底部状态栏挂档位控件 |
 | `src/components/CloudTrace.tsx` | 审批片段渲染成卡片（原来是 `run_error` 分隔线） |
 
-**待做**：阶段 1（服务端 `mode: manual` / `timeout: 120` / 三个子模式 `deny` / `disabled_toolsets: [code_execution]` + 真帧捕获），以及 UI 截图验收。
+### 13.2 真机复盘修掉的两个缺陷（2026-11-06 晚）
+
+第一次真机点「本次允许」后，审计只写了决定行、**没有结果行**。实测定位到两处：
+
+1. **审计写得太晚**：决定行原来写在「回执成功 → 再 GET 一次 `/api/config` 拿档位」之后。那是一次网络往返，而服务端在回执成功后立刻执行工具、推 `tool.completed` —— 结果行先到，`pendingByRun` 里还没有这条决定，于是配不上。
+   改法：回执一成功就落盘，档位用内存缓存（`cachedPolicyMode`，由 `cloud:policy:get/set` 维护），刷缓存异步做。
+2. **回执字段**：`{choice}` 与 `{request_id, choice}` 都是 `400 invalid_params`，三个字段缺一不可；缺 `execution_generation` 时由主进程用 `GET /v1/runs/{id}` 补。
+
+顺带加固：结果行按 **`toolCallId`** 对号（审批总是紧跟在它拦下的那次 `tool.started` 之后），实时流和历史纠正帧（`reconcile`）都参与配对 —— 断流时结果只从历史回来，也不能把「真实结果」这一问丢掉。
+
+**待做**：UI 截图验收（Paper / Ink × 1024 / 1440）。
 
 ### 13.1 已对服务端做的改动（可原样回滚）
 

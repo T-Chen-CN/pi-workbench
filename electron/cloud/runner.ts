@@ -34,6 +34,8 @@ export interface CloudRunnerDeps {
 export class CloudRunner {
   private remote: CloudRemote
   private stream: { runId: string; controller: AbortController } | null = null
+  /** 当前轮的映射器：IPC 要用它把审批对到具体的工具调用上 */
+  private mapper: RunMapper | null = null
   /** 当前轮所属会话：stop / 断流收尾时用来重拉历史 */
   private lastSessionId: string | null = null
 
@@ -118,6 +120,7 @@ export class CloudRunner {
     const controller = new AbortController()
     if (this.stream) this.stream.controller.abort()
     this.stream = { runId, controller }
+    this.mapper = mapper
 
     if (sessionId) this.lastSessionId = sessionId
     let terminal = false
@@ -145,7 +148,7 @@ export class CloudRunner {
               for (const emitted of mapper.handle(frame)) {
                 if (emitted.kind === 'run') terminal = true
                 this.deps.emit(emitted)
-                this.auditToolOutcome(emitted)
+                this.auditToolOutcome(emitted, runId)
               }
             },
           })
@@ -172,26 +175,40 @@ export class CloudRunner {
     } finally {
       clearInterval(controlPoll)
       if (this.stream?.runId === runId) this.stream = null
+      this.mapper = null
     }
 
     await this.reconcile(runId, sessionId, terminal)
   }
 
   /**
-   * 审批的真实结果：上一次决定之后的**第一个终态工具卡**就结掉审计。
+   * 审批的真实结果：**审批拦下的那个工具卡**一旦终态就结掉审计。
    *
    * 被拒绝时服务端返回 `BLOCKED: ...` 且 `error=true`，与真实执行失败区得开 ——
-   * 这正是「审计三问」里第三问的证据。
+   * 这正是「审计三问」里第三问的证据。实时流和历史纠正帧都走这里：断流之后
+   * 结果只会出现在历史里，不能因此把这一问丢掉。
    */
-  private auditToolOutcome(frame: CloudFrame): void {
-    if (frame.kind !== 'part') return
-    const part = frame.part
-    if (part.type !== 'tool') return
-    if (part.status === 'running') return
-    recordApprovalOutcome(this.stream?.runId ?? 'unknown', {
-      error: part.status === 'error',
-      preview: part.resultPreview ?? '',
-    })
+  private auditToolOutcome(frame: CloudFrame, runId: string): void {
+    const parts =
+      frame.kind === 'part'
+        ? [frame.part]
+        : frame.kind === 'parts'
+          ? frame.parts
+          : []
+    for (const part of parts) {
+      if (part.type !== 'tool') continue
+      if (part.status === 'running') continue
+      recordApprovalOutcome(runId, {
+        error: part.status === 'error',
+        preview: part.resultPreview ?? '',
+        toolCallId: part.toolCallId || undefined,
+      })
+    }
+  }
+
+  /** 这条审批拦的是哪个工具调用（IPC 写审计时用；拿不到就当未知） */
+  approvalToolCallId(requestId: string): string | undefined {
+    return this.mapper?.approvalToolCallId(requestId)
   }
 
   /** 只补「还没见过的提问」：已有的 prompt_id 会被 mapper 去重掉 */
@@ -257,6 +274,8 @@ export class CloudRunner {
     if (session) {
       try {
         const page = await this.remote.listMessages({ sessionId: session, limit: 500 })
+        // 历史里也可能带着「那次审批的结果」：断流期间结果只走这条路回来
+        this.auditToolOutcome({ kind: 'parts', parts: page.parts }, runId)
         this.deps.emit({ kind: 'parts', parts: page.parts })
       } catch (historyError) {
         this.deps.log?.('[Cloud] history reconcile failed', historyError)

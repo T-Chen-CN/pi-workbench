@@ -1,16 +1,34 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 
 // runner 会间接载入 client.ts（依赖 app-paths），测试里给个最小 electron 替身
+const dirs = vi.hoisted(() => ({
+  appDir: '',
+}))
+
 vi.mock('electron', () => ({
-  app: { isPackaged: false, getAppPath: () => '/tmp', getPath: () => '/tmp' },
+  app: {
+    isPackaged: false,
+    getAppPath: () => dirs.appDir,
+    getPath: () => dirs.appDir,
+  },
   safeStorage: {
     isEncryptionAvailable: () => true,
     encryptString: (value: string) => Buffer.from(`enc:${value}`, 'utf-8'),
     decryptString: (buffer: Buffer) => Buffer.from(buffer).toString('utf-8').slice(4),
   },
 }))
+dirs.appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-cloud-runner-'))
+
+afterAll(() => {
+  fs.rmSync(dirs.appDir, { recursive: true, force: true })
+})
+
 import type { CloudClient } from '../electron/cloud/client'
 import { CloudRunner, controlKindOf, CONTROL_POLL_MS } from '../electron/cloud/runner'
+import { auditFile, recordApprovalDecision, resetAuditForTests } from '../electron/cloud/audit'
 import type { CloudFrame } from '../electron/cloud/types'
 
 function sseStream(chunks: string[]): Response {
@@ -263,5 +281,150 @@ describe('控制项识别', () => {
     expect(controlKindOf({ pattern_keys: ['rm -rf'] })).toBe('approval')
     expect(controlKindOf({ question: '继续吗？' })).toBe('clarify')
     expect(controlKindOf({})).toBeNull()
+  })
+})
+
+/** 手控的 SSE 流：可以按真实时序注入事件（审批挂起时流是敞着的） */
+function liveStream(): { response: Response; push: (chunk: string) => void; close: () => void } {
+  const encoder = new TextEncoder()
+  let controller: ReadableStreamDefaultController<Uint8Array> | null = null
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c
+    },
+  })
+  return {
+    response: new Response(body, { headers: { 'content-type': 'text/event-stream' } }),
+    push: (chunk) => controller?.enqueue(encoder.encode(chunk)),
+    close: () => controller?.close(),
+  }
+}
+
+function auditLines(): Array<Record<string, unknown>> {
+  if (!fs.existsSync(auditFile())) return []
+  return fs
+    .readFileSync(auditFile(), 'utf-8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+}
+
+describe('审批结果对号', () => {
+  beforeEach(() => {
+    resetAuditForTests()
+  })
+
+  it('pairs the guarded tool call and ignores unrelated tool results', async () => {
+    const stream = liveStream()
+    const client: CloudClient = {
+      baseUrl: 'https://api.example.com',
+      rawBaseUrl: 'https://api.example.com',
+      apiKey: 'key',
+      request: async <T,>(p: string): Promise<T> => {
+        if (p === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
+        if (p === '/api/sessions/s-1/messages') return { data: [], session_id: 's-1' } as T
+        return { status: 'running', session_id: 's-1' } as T
+      },
+      openStream: async () => stream.response,
+    }
+    const runner = new CloudRunner({ emit: () => {} }, client)
+    void runner.start({ input: 'hi', sessionId: 's-1', idempotencyKey: 'k' })
+
+    await waitFor(() => true)
+    stream.push(frame('tool.started', { tool: 'terminal', preview: 'rm -rf /tmp/x', tool_call_id: 'c1' }, 0))
+    stream.push(
+      frame(
+        'approval.request',
+        { prompt_id: 'ap_1', command: 'rm -rf /tmp/x', description: 'delete in root path' },
+        1
+      )
+    )
+    await waitFor(() => runner.approvalToolCallId('ap_1') === 'c1')
+
+    // 用户点「本次允许」：主进程写审计（带 toolCallId），服务端随后才执行工具
+    recordApprovalDecision({
+      runId: 'run-1',
+      command: 'rm -rf /tmp/x',
+      patternKeys: ['delete in root path'],
+      choice: 'once',
+      mode: 'manual',
+      toolCallId: runner.approvalToolCallId('ap_1'),
+    })
+
+    // 另一个无关工具的终态：不该拿去充数
+    stream.push(frame('tool.completed', { tool: 'read_file', tool_call_id: 'c2', error: false }, 2))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(auditLines().some((line) => line.kind === 'approval_result')).toBe(false)
+
+    stream.push(frame('tool.completed', { tool: 'terminal', tool_call_id: 'c1', error: false, preview: '' }, 3))
+    await waitFor(() => auditLines().some((line) => line.kind === 'approval_result'))
+    const result = auditLines().find((line) => line.kind === 'approval_result')
+    expect(result).toMatchObject({ error: false })
+    stream.push(frame('run.completed', {}, 4))
+    runner.dispose()
+  })
+
+  it('still pairs the outcome when the result only arrives through history', async () => {
+    // 断流：审批之后没有任何实时事件，结果只能靠 reconcile 拉历史回来
+    const stream = liveStream()
+    const client: CloudClient = {
+      baseUrl: 'https://api.example.com',
+      rawBaseUrl: 'https://api.example.com',
+      apiKey: 'key',
+      request: async <T,>(p: string): Promise<T> => {
+        if (p === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
+        if (p.startsWith('/api/sessions/s-1/messages')) {
+          return {
+            data: [
+              {
+                id: 'm1',
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'c9',
+                    call_id: 'c9',
+                    type: 'function',
+                    function: { name: 'terminal', arguments: '{"command":"rm -rf /tmp/x"}' },
+                  },
+                ],
+              },
+              {
+                id: 'm2',
+                role: 'tool',
+                tool_call_id: 'c9',
+                tool_name: 'terminal',
+                content: '{"output":"已删除","exit_code":0,"error":null}',
+              },
+            ],
+            session_id: 's-1',
+          } as T
+        }
+        return { status: 'completed', session_id: 's-1' } as T
+      },
+      openStream: async () => stream.response,
+    }
+    const runner = new CloudRunner({ emit: () => {} }, client)
+    void runner.start({ input: 'hi', sessionId: 's-1', idempotencyKey: 'k' })
+
+    await waitFor(() => true)
+    stream.push(frame('tool.started', { tool: 'terminal', tool_call_id: 'c9' }, 0))
+    stream.push(frame('approval.request', { prompt_id: 'ap_9', command: 'rm -rf /tmp/x' }, 1))
+    await waitFor(() => runner.approvalToolCallId('ap_9') === 'c9')
+    recordApprovalDecision({
+      runId: 'run-1',
+      command: 'rm -rf /tmp/x',
+      choice: 'once',
+      mode: 'manual',
+      toolCallId: 'c9',
+    })
+    // 流结束（服务端没再推 tool.completed）
+    stream.close()
+
+    await waitFor(() => auditLines().some((line) => line.kind === 'approval_result'))
+    const result = auditLines().find((line) => line.kind === 'approval_result')
+    expect(result).toMatchObject({ error: false })
+    expect(String(result?.preview)).toContain('已删除')
+    runner.dispose()
   })
 })

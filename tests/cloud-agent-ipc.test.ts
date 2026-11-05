@@ -101,6 +101,8 @@ vi.mock('electron', () => ({
           run_id: 'run_test',
           status: mocks.state.statusCalls === 1 ? 'running' : 'completed',
           session_id: 'run_session',
+          // 真实服务端会给这个：审批回执缺它会被 400 invalid_params
+          execution_generation: 3,
         })
       }
       if (route === '/health/detailed') {
@@ -796,10 +798,28 @@ describe('cloud approval', () => {
     expect(body).toEqual({ choice: 'once', request_id: 'ap_7', execution_generation: 3 })
   })
 
-  it('falls back to choice-only when there is no request id', async () => {
+  it('fills the generation from the run status when the card has none', async () => {
+    // 实测：{choice} 与 {request_id, choice} 都是 400 invalid_params，三个字段必须齐全
     const before = mocks.state.bodies.length
-    await call('cloud:approval:respond', { runId: 'run_test', choice: 'deny' })
-    expect(JSON.parse(mocks.state.bodies[before])).toEqual({ choice: 'deny' })
+    const result = await call<{ success: boolean; error?: string }>('cloud:approval:respond', {
+      runId: 'run_test',
+      requestId: 'ap_9',
+      choice: 'deny',
+    })
+    expect(result.error).toBeUndefined()
+    const body = JSON.parse(mocks.state.bodies[before])
+    expect(body.request_id).toBe('ap_9')
+    expect(body.execution_generation).toBeTypeOf('number')
+  })
+
+  it('refuses when there is no request id at all', async () => {
+    const before = mocks.state.bodies.length
+    const result = await call<{ success: boolean; error?: string }>('cloud:approval:respond', {
+      runId: 'run_test',
+      choice: 'deny',
+    })
+    expect(result.success).toBe(false)
+    expect(mocks.state.bodies.length).toBe(before)
   })
 
   it('refuses always and unknown choices without touching the network', async () => {
@@ -815,15 +835,39 @@ describe('cloud approval', () => {
     }
   })
 
-  it('writes one audit line with a truncated command and the matched patterns', () => {
+  it('writes one audit line with a truncated command and the matched patterns', async () => {
+    // 界面挂载时会读一次策略；决定行用那次读回的值（不再在回执里现读）
+    await call('cloud:policy:get')
+    await call('cloud:approval:respond', {
+      runId: 'run_test',
+      requestId: 'ap_8',
+      generation: 1,
+      choice: 'once',
+      command: 'rm -rf build\nrm -rf dist',
+      patternKeys: ['rm -rf'],
+    })
     const lines = auditLines().filter((line) => line.kind === 'approval')
-    const line = lines.find((row) => row.choice === 'once')
+    const line = lines.find((row) => row.requestId === 'ap_8') ?? lines[lines.length - 1]
     expect(line).toBeTruthy()
     expect(line?.patternKeys).toEqual(['rm -rf'])
     expect(String(line?.command).length).toBeLessThanOrEqual(200)
     expect(line?.mode).toBe('manual')
-    // 审计只存摘要：完整命令不该整个落盘
+    // 审计只存摘要：换行被压平
     expect(String(line?.command)).not.toContain('\n')
+  })
+
+  it('records the decision before the outcome can arrive', async () => {
+    // 回归：决定行曾经写在一次策略 GET 之后，服务端的 tool.completed 会先到，
+    // 结果行就永远配不上。现在回执一返回就落盘。
+    const { recordApprovalOutcome } = await import('../electron/cloud/audit')
+    await call('cloud:approval:respond', {
+      runId: 'run_test',
+      requestId: 'ap_10',
+      generation: 1,
+      choice: 'deny',
+    })
+    expect(recordApprovalOutcome('run_test', { error: true, preview: 'BLOCKED' })).toBe(true)
+    expect(auditLines().filter((line) => line.kind === 'approval_result').length).toBeGreaterThan(0)
   })
 
   it('returns only the whitelisted policy subset', async () => {
