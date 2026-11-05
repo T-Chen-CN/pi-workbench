@@ -494,12 +494,12 @@ chromium 与本机 364MB 保留（browser 工具集因此第一次真跑通）�
 | ID | 项目 | 优先级 | 依赖 | 验收 |
 | --- | --- | --- | --- | --- |
 | DE-00 | **方案批准 + ADR-008**（S-02 改口径为「零本地授权」；新增 `pi-hub` 服务） | P1 | — | 你签字；ADR 落地 |
-| DE-01 | 设备身份 v0：`data/cloud-agent/device.json`、设备名设置、每轮 `author`、会话首轮 `<pi-devices>`、审计带设备名 | P1 | DE-00 | AC-D01；无服务端改动 |
-| DE-02 | `pi-hub` 控制面前置：设备登记 / 每设备 token（只存 hash）/ 转发注入 / 心跳 / 撤销 / 审计 JSONL + Caddy | P1 | DE-01 | AC-D02 / AC-D03 |
-| DE-03 | 派活最小闭环：任务邮箱 + MCP server（`local_devices` / `local_dispatch` / `local_task`，`trust: untrusted`）+ 本地执行器（白名单 / 档位上限 / 审批 / 结果摘要）+ 总开关 | P1 | DE-02 | AC-D05 ~ AC-D08 / AC-D10 |
+| DE-01 | 设备身份 v0（通道层）：`data/cloud-agent/device.json`、设备名设置、每轮 `author`、审计带设备名、会话页显示「发起设备」。**不注入 prompt**（v1.1：模型层识别放到 DE-03 的 `local_devices()`） | P1 | DE-00 | AC-D01；无服务端改动；约 1.5 天 |
+| DE-02 | `pi-hub` 控制面前置：设备登记 / 每设备 token（只存 hash）/ 转发注入 `X-Pi-Device` / 心跳 / 撤销 / 审计 JSONL + Caddy | P1 | DE-01 | AC-D02 / AC-D03 |
+| DE-03 | 派活最小闭环：任务邮箱 + MCP server（`local_devices` / `local_dispatch` / `local_task`，`trust: untrusted`）+ 本地执行器（白名单 / 档位上限 / 审批 / 结果摘要）+ 总开关。**模型层身份的唯一致力来源是 `local_devices()`**（按需查，不注入） | P1 | DE-02 | AC-D05 ~ AC-D08 / AC-D10 / AC-D01b |
 | DE-04 | 多设备体验：每设备每项目会话、共享会话开关、设备面板、`run.queued` 排队可视化 | P2 | DE-03 | AC-D04 / AC-D09 |
 | DE-05 | 安全收口：token 轮换 / 撤销 UI、TTL 与限速、审计导出、注入演练、运维文档 | P2 | DE-03 | AC-D11 ~ AC-D14 |
-| DE-06 | 实现前先验 QD-7：`author` 是否真进模型上下文（上游注释只说 memory 标签） | P1 | —（可与 DE-01 并行） | 一轮带 `author` 的对话里模型能复述设备名；不能则只靠 `instructions` |
+| DE-06 ✅ | 验 QD-7：`author` 是否进模型上下文 | P1 | — | **已完成（读上游源码）**：`prompt_builder.py` 无 `turn_author`；`memory_manager.py:446-463` 只给 memory provider；`bot_chain.py` 只看 `is_bot`。结论：不进 prompt，只做记忆归属 |
 
 **坑（写在开工前）**：`platform_toolsets.api_server` 是显式白名单，新增 `mcp-pi-hub` 必须加进去，否则工具对 api_server 会话不可见（clarify 踩过一次）；同会话并发轮次在服务端**排队**（`run.queued`），不是并行。
 
