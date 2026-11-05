@@ -222,17 +222,18 @@ class Hub:
 
     def register_device(self, req: Request, **_: str) -> Response:
         body = req.json()
-        row, token = self.ctx.auth.register_device(
+        row, token, rotated = self.ctx.auth.register_device(
             body.get("name") or "unnamed",
             scopes=tuple(body.get("scopes") or auth_mod.DEFAULT_SCOPES),
             note=body.get("note"),
             device_id=body.get("deviceId"),
         )
+        status = 200 if rotated else 201
         self.ctx.audit.record(
             "device.register",
             device_id=row["id"],
-            status=201,
-            detail={"name": row["name"], "scopes": row["scopes"]},
+            status=status,
+            detail={"name": row["name"], "scopes": row["scopes"], "rotated": rotated},
             ip=req.client_ip,
         )
         return _json_response(
@@ -242,9 +243,10 @@ class Hub:
                 "scopes": auth_mod.scopes_list(row["scopes"]),
                 "token": token,
                 "tokenPrefix": row["token_prefix"],
+                "rotated": rotated,
                 "note": "token is shown once; the hub only stores its hash",
             },
-            status=201,
+            status=status,
         )
 
     def list_devices(self, req: Request, **_: str) -> Response:

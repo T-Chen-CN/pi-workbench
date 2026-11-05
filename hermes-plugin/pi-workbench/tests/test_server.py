@@ -173,6 +173,30 @@ class AuthenticationTests(HubTestCase):
 
 
 class AdminTests(HubTestCase):
+    def test_registering_a_known_id_returns_200_and_rotates(self):
+        """已登记的 id 再登记 → 200 + rotated，绝不能 500（应用里就点这一个按钮）"""
+        body = {"deviceId": "dev-same", "name": "TChen-Legion", "scopes": ["chat"]}
+        first_status, first, _ = self.json_call(
+            "POST", "/v1/devices/register", admin=ADMIN_KEY, body=body
+        )
+        self.assertEqual(first_status, 201)
+        self.assertFalse(first["rotated"])
+
+        second_status, second, _ = self.json_call(
+            "POST", "/v1/devices/register", admin=ADMIN_KEY, body=body
+        )
+        self.assertEqual(second_status, 200)
+        self.assertTrue(second["rotated"])
+        self.assertEqual(second["deviceId"], "dev-same")
+        self.assertNotEqual(second["token"], first["token"])
+
+        # 新 token 能用，旧 token 立刻不能
+        ok, _, _ = self.call("GET", "/v1/devices/me", token=second["token"])
+        self.assertEqual(ok, 200)
+        stale, _, raw = self.call("GET", "/v1/devices/me", token=first["token"])
+        self.assertEqual(stale, 401)
+        self.assertEqual(self.error_code(raw), "unauthorized")
+
     def test_register_requires_admin_key(self):
         status, payload, _ = self.json_call("POST", "/v1/devices/register", body={"name": "x"})
         self.assertEqual(status, 403)

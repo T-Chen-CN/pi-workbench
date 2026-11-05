@@ -131,14 +131,21 @@ class Authenticator:
         note: str | None = None,
         now: int | None = None,
         device_id: str | None = None,
-    ) -> tuple[dict, str]:
-        """Create a device and return ``(row, plaintext_token)``.
+    ) -> tuple[dict, str, bool]:
+        """Create — or re-issue — a device and return ``(row, plaintext_token, rotated)``.
 
         The plaintext token is returned exactly once; only its hash is stored.
         Registration is admin-authenticated, so a caller may pin the id to the
         one its local install already uses (``data/cloud-agent/device.json``) —
         that keeps ``author.id`` stable across the hub instead of inventing a
         second identity for the same machine.
+
+        Re-registering the **same id** is a normal operation (token lost, app
+        reinstalled, revoked by mistake): it rotates the token instead of
+        failing on the primary key. The old token stops working immediately,
+        which is the point — one device must never hold two live tokens. A
+        revoked device is reactivated by the same call, because the caller had
+        to prove it holds the admin key.
         """
         now = int(time.time()) if now is None else int(now)
         clean_name = " ".join(str(name or "").split())[:40] or "unnamed"
@@ -147,21 +154,39 @@ class Authenticator:
         device_id = _clean_device_id(device_id) or secrets.token_hex(16)
         conn = self.db.connection()
         with conn:
-            conn.execute(
-                "INSERT INTO devices(id, name, token_hash, token_prefix, scopes, created_at, note) "
-                "VALUES(?,?,?,?,?,?,?)",
-                (
-                    device_id,
-                    clean_name,
-                    hash_token(token),
-                    token_prefix(token),
-                    ",".join(clean_scopes),
-                    now,
-                    note,
-                ),
-            )
+            existing = conn.execute("SELECT id FROM devices WHERE id = ?", (device_id,)).fetchone()
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO devices(id, name, token_hash, token_prefix, scopes, created_at, note) "
+                    "VALUES(?,?,?,?,?,?,?)",
+                    (
+                        device_id,
+                        clean_name,
+                        hash_token(token),
+                        token_prefix(token),
+                        ",".join(clean_scopes),
+                        now,
+                        note,
+                    ),
+                )
+                rotated = False
+            else:
+                # 同一个 id 再登记 = 换 token（旧 token 立刻失效），撤销状态一并清掉
+                conn.execute(
+                    "UPDATE devices SET name = ?, token_hash = ?, token_prefix = ?, scopes = ?, "
+                    "revoked_at = NULL, note = ? WHERE id = ?",
+                    (
+                        clean_name,
+                        hash_token(token),
+                        token_prefix(token),
+                        ",".join(clean_scopes),
+                        note,
+                        device_id,
+                    ),
+                )
+                rotated = True
         row = dict(conn.execute("SELECT * FROM devices WHERE id = ?", (device_id,)).fetchone())
-        return row, token
+        return row, token, rotated
 
     def revoke_device(self, device_id: str, now: int | None = None) -> bool:
         now = int(time.time()) if now is None else int(now)

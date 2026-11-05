@@ -59,6 +59,7 @@ const GATEWAY_MESSAGES: Record<string, string> = {
   hub_disabled: '网关没配管理密钥，登记/撤销暂时不可用',
   payload_too_large: '请求体太大',
   not_found: '网关没有这个接口（可能是版本不匹配）',
+  internal: '网关内部出错（云端已记录日志，可先点「刷新状态」重试）',
 }
 
 export function gatewayErrorMessage(code: string, fallback: string): string {
@@ -144,10 +145,11 @@ export async function gatewayWhoAmI(
 }
 
 /**
- * 登记这台设备。
+ * 登记这台设备（同一 id 再登记 = 换 token，返回 `rotated: true`）。
  *
  * `deviceId` 用本地 `device.json` 里那个只读 id：这样网关侧、`author.id`、
- * 审计日志说的是同一个身份，不会出现「一台机器两个 id」。
+ * 审计日志说的是同一个身份，不会出现「一台机器两个 id」。也正因为 id 固定，
+ * 重装 / token 丢失 / 误注销之后再点一次「登记」是**正常操作**，不该报错。
  */
 export function registerDevice(input: {
   gatewayUrl: string

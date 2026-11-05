@@ -55,8 +55,42 @@ class DeviceRegistryTests(TempDirMixin):
         self.db.close()
         super().tearDown()
 
+    def test_reregistering_the_same_id_rotates_the_token(self):
+        """同一个 id 再登记必须换 token，而不是撞主键报 500。
+
+        真实场景：本机 `connection.json` 里的 token 丢了、应用重装、或者误点注销
+        —— 用户会再按一次「登记」，那时 id 还是同一个（id 是身份，不该变）。
+        """
+        first, token_a, rotated_a = self.auth.register_device("TChen-Legion", device_id="dev-1")
+        self.assertFalse(rotated_a)
+
+        second, token_b, rotated_b = self.auth.register_device(
+            "TChen-Legion-2", device_id="dev-1", scopes=("chat",)
+        )
+        self.assertTrue(rotated_b)
+        self.assertEqual(second["id"], first["id"])
+        self.assertNotEqual(token_a, token_b)
+        self.assertEqual(second["name"], "TChen-Legion-2")
+        self.assertEqual(second["scopes"], "chat")
+
+        # 一台设备不允许同时有两个活 token：旧的立刻失效
+        self.auth.authenticate(token_b)
+        with self.assertRaises(auth.HubError):
+            self.auth.authenticate(token_a)
+
+    def test_reregistering_reactivates_a_revoked_device(self):
+        row, token, _ = self.auth.register_device("d", device_id="dev-2")
+        self.assertTrue(self.auth.revoke_device(row["id"]))
+        with self.assertRaises(auth.HubError):
+            self.auth.authenticate(token)
+
+        revived, token_2, rotated = self.auth.register_device("d", device_id="dev-2")
+        self.assertTrue(rotated)
+        self.assertIsNone(revived["revoked_at"])
+        self.assertEqual(self.auth.authenticate(token_2)["id"], "dev-2")
+
     def test_register_returns_row_and_plaintext_once(self):
-        row, token = self.auth.register_device("TChen-Legion")
+        row, token, _rotated = self.auth.register_device("TChen-Legion")
         self.assertTrue(token.startswith("pi_"))
         self.assertEqual(row["name"], "TChen-Legion")
         self.assertEqual(row["scopes"], "chat")
@@ -64,23 +98,23 @@ class DeviceRegistryTests(TempDirMixin):
         self.assertEqual(row["token_hash"], auth.hash_token(token))
 
     def test_register_normalises_name(self):
-        row, _ = self.auth.register_device("  TChen \t  Legion  ")
+        row, _, _rotated = self.auth.register_device("  TChen \t  Legion  ")
         self.assertEqual(row["name"], "TChen Legion")
 
     def test_register_clamps_name_length(self):
-        row, _ = self.auth.register_device("x" * 200)
+        row, _, _rotated = self.auth.register_device("x" * 200)
         self.assertEqual(len(row["name"]), 40)
 
     def test_register_rejects_unknown_scopes(self):
-        row, _ = self.auth.register_device("d", scopes=("root", "chat"))
+        row, _, _rotated = self.auth.register_device("d", scopes=("root", "chat"))
         self.assertEqual(row["scopes"], "chat")
 
     def test_register_with_no_valid_scope_falls_back_to_chat(self):
-        row, _ = self.auth.register_device("d", scopes=("root",))
+        row, _, _rotated = self.auth.register_device("d", scopes=("root",))
         self.assertEqual(row["scopes"], "chat")
 
     def test_authenticate_accepts_valid_token(self):
-        row, token = self.auth.register_device("d", scopes=("chat", "dispatch"))
+        row, token, _rotated = self.auth.register_device("d", scopes=("chat", "dispatch"))
         device = self.auth.authenticate(token)
         self.assertEqual(device["id"], row["id"])
 
@@ -97,25 +131,25 @@ class DeviceRegistryTests(TempDirMixin):
                 self.auth.authenticate(junk)
 
     def test_revoked_device_is_rejected_immediately(self):
-        row, token = self.auth.register_device("d")
+        row, token, _rotated = self.auth.register_device("d")
         self.assertTrue(self.auth.revoke_device(row["id"]))
         with self.assertRaises(HubError) as ctx:
             self.auth.authenticate(token)
         self.assertEqual(ctx.exception.code, "device_revoked")
 
     def test_revoke_is_idempotent(self):
-        row, _ = self.auth.register_device("d")
+        row, _, _rotated = self.auth.register_device("d")
         self.assertTrue(self.auth.revoke_device(row["id"]))
         self.assertFalse(self.auth.revoke_device(row["id"]))
 
     def test_revoke_only_affects_one_device(self):
-        row_a, token_a = self.auth.register_device("a")
-        _, token_b = self.auth.register_device("b")
+        row_a, token_a, _rotated = self.auth.register_device("a")
+        _, token_b, _rotated = self.auth.register_device("b")
         self.auth.revoke_device(row_a["id"])
         self.auth.authenticate(token_b)  # must not raise
 
     def test_scope_enforcement(self):
-        _, token = self.auth.register_device("d", scopes=("chat",))
+        _, token, _rotated = self.auth.register_device("d", scopes=("chat",))
         device = self.auth.authenticate(token)
         self.auth.require_scope(device, "chat")
         with self.assertRaises(HubError) as ctx:
@@ -136,7 +170,7 @@ class DeviceRegistryTests(TempDirMixin):
         self.assertEqual(ctx.exception.code, "hub_disabled")
 
     def test_touch_updates_last_seen(self):
-        row, token = self.auth.register_device("d")
+        row, token, _rotated = self.auth.register_device("d")
         self.auth.touch(row["id"], now=1000)
         device = self.auth.authenticate(token)
         self.assertEqual(device["last_seen_at"], 1000)
