@@ -469,7 +469,7 @@ dash.example.com {
 | 阶段 | 做什么 | DoD |
 | --- | --- | --- |
 | **A 入口与两页** | 首页入口按钮（不属于任何 `workspaceDir`）；`src/components/cloud/{CloudSessionView,CloudConfigView}.tsx`；`src/store/cloudStore.ts`；两页 `hidden + inert` 切换 | 无云端也能开两页（会话页显示「未连接」、配置页显示「未配置」）；`npm test` + `lint` + design-system 绿；**可单独合入 main** |
-| **B 传输** | `electron/cloud/{http,client,config}.ts`、`electron/ipc/cloud-agent.ts`（`connect`/`disconnect`/`status`/`sessions:list`/`run:start`/`run:stop`）、preload + `types/electron.d.ts` + `src/api/cloud.ts`（含 Web mock） | 能列会话、能发一轮；Bearer 存 safeStorage，渲染层无凭据 |
+| **B 传输** | `electron/cloud/{http,client,config}.ts`、`electron/ipc/cloud-agent.ts`（`connect`/`disconnect`/`status`/`sessions:list`/`run:start`/`run:stop`）、preload + `types/electron.d.ts` + `src/api/cloud.ts`（含 Web mock）；连接页从交接文件导入（`handoff v1.1`：`pick → 脱敏预览 → apply`，明文只留主进程） | 能列会话、能发一轮；Bearer 存 safeStorage，渲染层无凭据 |
 | **C 事件流** | `electron/cloud/events.ts` → 对齐 parts **类型**（不复用组件）；含 `approval` / `clarify` | AC-01 / AC-02 / AC-19 |
 | **D 审批** | `electron/cloud/approval.ts`（复用 `approval-broker.ts` 语义）、`src/store/cloudApprovalStore.ts`、`data/cloud-agent/audit.jsonl`；`cloud/hermes-profile/`（config 版本化 + 哈希告警 + 还原） | AC-03 / AC-04 / AC-16~18 / AC-21 / AC-22 |
 | **E 配置页接入** | BrowserView 承载 dashboard（独立页面，非 tab）；凭据与会话隔离 | 能在配置页改配置/密钥/技能，改动可回读 |

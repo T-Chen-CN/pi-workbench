@@ -17,6 +17,7 @@ import { CloudSessionView } from './CloudSessionView'
 import { CloudConsoleView } from './CloudConsoleView'
 import { CloudJobsView } from './CloudJobsView'
 import { CloudConnectionView } from './CloudConnectionView'
+import { CloudHandoffDialog } from './CloudHandoffDialog'
 
 const TABS: Array<{
   view: CloudView
@@ -137,6 +138,9 @@ export const CloudWorkspaceView: React.FC<{
         <CloudJobsView active={view === 'cloud-jobs'} onNavigate={onNavigate} />
         <CloudConnectionView active={view === 'cloud-connection'} />
       </div>
+
+      {/* 导入预览框：挂在 inert 页面容器之外 */}
+      <CloudHandoffDialog active={view === 'cloud-connection'} />
     </div>
   )
 }

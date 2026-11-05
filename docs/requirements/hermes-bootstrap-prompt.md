@@ -4,7 +4,7 @@
 > 它会：判断现状 →（必要时）协助配好域名与反向代理 → 补齐连接凭证 → 验证 → 交付**一个文件**。
 > 支持的形态：**域名 + 反向代理（HTTPS）**。不支持无域名 / 纯 IP 直连。
 > 前提：执行者本来就能与 Hermes 对话（控制台登录或 SSH）。
-> 状态：**草案，未验证**（还没有在干净机器上实跑过）。已登记：[docs/README.md](../README.md) ·
+> 状态：**草案，未验证**（还没有在干净机器上实跑过）。交付格式 **v1.1**（新增 `DASHBOARD_SESSION_TOKEN`，向后兼容 v1：缺这个字段只会让对话里的图片功能不可用）。已登记：[docs/README.md](../README.md) ·
 > 待办与范围边界：[BACKLOG §7.3](../progress/BACKLOG.md)。
 
 ```text
@@ -111,7 +111,7 @@
 
 写文件到 `~/.hermes/handoff/<profile>-<YYYYmmdd-HHMM>.txt`，权限 600，内容严格按下面格式：
 
-# hermes-handoff v1
+# hermes-handoff v1.1
 # 本文件含明文密钥，导入后请删除；需要重新生成时重跑本 Prompt。
 PROFILE=
 API_BASE_URL=
@@ -119,6 +119,7 @@ API_KEY=
 DASHBOARD_URL=
 DASHBOARD_USER=
 DASHBOARD_PASSWORD=
+DASHBOARD_SESSION_TOKEN=   # 控制台 /api/* 用的会话令牌（图片上传/回显）；没有就留空
 AUTH_MODE=            # basic | form | none
 HERMES_VERSION=
 SERVER_HOST=
@@ -131,6 +132,8 @@ dashboard_http=
 sse_ok=
 
 写入后回读验证，并记录 `ls -l` 与 `sha256sum` 的输出。
+
+格式版本是 **v1.1**：比 v1 只多 `DASHBOARD_SESSION_TOKEN` 一行。不知道令牌就留空（不要凭空编造），导入端会把 v1 与 v1.1 都认；缺令牌只是让对话里的图片功能不可用。
 
 交付方式：
 

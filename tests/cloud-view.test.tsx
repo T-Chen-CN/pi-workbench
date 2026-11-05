@@ -8,7 +8,11 @@ import { useCloudStore } from '../src/store/cloudStore'
 import { UNCONFIGURED_CONNECTION } from '../src/api/cloud'
 import { useI18nStore } from '../src/store/i18nStore'
 import { translations } from '../src/i18n/translations'
-import type { CloudFrame, CloudSession, CloudTracePart } from '../src/types/cloud'
+import type {
+  CloudFrame,
+  CloudSession,
+  CloudTracePart,
+} from '../src/types/cloud'
 
 const zh = translations.zh
 
@@ -33,6 +37,9 @@ interface BridgeStub {
   frames: Array<(frame: CloudFrame) => void>
   statusListeners: Array<(payload: unknown) => void>
   startRun: ReturnType<typeof vi.fn>
+  handoffPick: ReturnType<typeof vi.fn>
+  handoffApply: ReturnType<typeof vi.fn>
+  handoffCopy: ReturnType<typeof vi.fn>
   sessions: CloudSession[]
   parts: CloudTracePart[]
 }
@@ -42,6 +49,9 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     frames: [],
     statusListeners: [],
     startRun: vi.fn(async () => ({ success: true, runId: 'run_1', sessionId: 'run_session' })),
+    handoffPick: vi.fn(async () => ({ success: true, canceled: true })),
+    handoffApply: vi.fn(async () => ({ success: true })),
+    handoffCopy: vi.fn(async () => ({ success: true })),
     sessions: [SESSION],
     parts: [
       { type: 'text', id: 'h:1', role: 'user', text: 'hello there' },
@@ -58,6 +68,9 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
         baseUrl: 'https://api.example.com',
         dashboardUrl: 'https://dash.example.com',
         hasToken: true,
+        hasDashboardToken: false,
+        dashboardUser: '',
+        hasDashboardPassword: false,
       },
     }),
     cloudConfigSet: async () => ({ success: true }),
@@ -68,6 +81,9 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     }),
     cloudDisconnect: async () => ({ success: true }),
     cloudSessionsList: async () => ({ success: true, sessions: stub.sessions, hasMore: false }),
+    cloudHandoffPick: stub.handoffPick,
+    cloudHandoffApply: stub.handoffApply,
+    cloudHandoffCopy: stub.handoffCopy,
     cloudSessionsUpdate: async (input: { sessionId: string; title?: string; pinned?: boolean }) => ({
       success: true,
       session: { ...stub.sessions[0], ...input },
@@ -140,6 +156,9 @@ function resetStore() {
     diagnosticsError: null,
     pending: null,
     draft: '',
+    handoffPreview: null,
+    handoffBusy: null,
+    handoffError: null,
   })
 }
 

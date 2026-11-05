@@ -72,6 +72,8 @@ macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动�
 | `config/settings.json` | `app:saveSettings` | 语言、主题、自动保存、`closeToTray`、`permissionLevel`、通知开关、快捷键 |
 | `config/api-config.json` | `apiConfig:*` | provider / apiUrl / apiKey（`enc:` + safeStorage）/ 模型与容量 |
 | `config/web-search.json` | `webSearch:*` | 当前 provider + 各 provider 的 Key（`enc:`） |
+| `data/cloud-agent/connection.json` | `electron/cloud/config.ts` | 云端连接：`baseUrl` / `dashboardUrl` / `apiKey`（`enc:`）/ `dashboardToken`（`enc:`）/ `dashboardUser` / `dashboardPassword`（`enc:`）/ `handoffImportedAt` / `handoffProfile`。`cloud:disconnect` 只清密钥，保留地址、账号与导入记录 |
+| `data/cloud-agent/pending-writes.json` | `electron/cloud/ledger.ts` | 未结算账本：`出去了就收不回来` 的三类动作（对外写 / 系统级 / 不可逆），事后人工核对 |
 | `config/last-run-version.json` | `shell-refresh.ts` | 仅在版本变化时刷新 shell / 图标缓存 |
 | `data/workspaces.db` | `workspace-store.ts` | `node:sqlite`，表 `workspaces(path, opened_at, open_count)`；**最近工作区的唯一来源**，渲染层不再保存 `recentWorkspaces` |
 | `data/agent/models.json` | `model-config.ts` | Pi 模型配置；Key 只写变量名 `$PI_WORKBENCH_API_KEY`，不落盘 |

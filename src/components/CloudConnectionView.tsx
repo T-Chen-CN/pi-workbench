@@ -1,7 +1,7 @@
 /** 云端连接页：API 地址 / 密钥 / 连通性 / 能力回显（独立成页，不塞进控制台） */
 
 import React, { useEffect, useState } from 'react'
-import { Link2Off, RefreshCw } from 'lucide-react'
+import { FileUp, Link2Off, RefreshCw } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useCloudStore } from '../store/cloudStore'
 import { Button, Caption, DataText, Field, Input, Label } from './ui'
@@ -24,6 +24,8 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const capabilities = useCloudStore((state) => state.capabilities)
   const bridgeAvailable = useCloudStore((state) => state.bridgeAvailable)
   const saveConfig = useCloudStore((state) => state.saveConfig)
+  const pickHandoff = useCloudStore((state) => state.pickHandoff)
+  const handoffBusy = useCloudStore((state) => state.handoffBusy)
   const connect = useCloudStore((state) => state.connect)
   const disconnect = useCloudStore((state) => state.disconnect)
 
@@ -147,6 +149,15 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
               />
             </Field>
             <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                icon={FileUp}
+                disabled={!bridgeAvailable}
+                loading={handoffBusy === 'pick'}
+                onClick={() => void pickHandoff()}
+              >
+                {t('cloudImportFromFile')}
+              </Button>
               <Button
                 variant="primary"
                 size="sm"
