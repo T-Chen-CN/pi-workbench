@@ -75,7 +75,9 @@ macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动�
 | `data/cloud-agent/connection.json` | `electron/cloud/config.ts` | 云端连接：`baseUrl` / `dashboardUrl` / `apiKey`（`enc:`）/ `dashboardToken`（`enc:`）/ `dashboardUser` / `dashboardPassword`（`enc:`）/ `handoffImportedAt` / `handoffProfile`。`cloud:disconnect` 只清密钥，保留地址、账号与导入记录 |
 | `data/cloud-agent/active-run.json` | `electron/cloud/active-run.ts` | 「上一次开跑的是哪一轮」：`{runId, sessionId, startedAt}`。只用来在重启 / 断线后接回**还在服务端跑着**的 run（`GET /api/sessions` 不返回 run id，没有它就问不出来）。可丢弃的 UI 缓存，不是云端真相；终态 / 后端 404 / 换服务器即删 |
 | `data/cloud-agent/pending-writes.json` | `electron/cloud/ledger.ts` | 未结算账本：`出去了就收不回来` 的三类动作（对外写 / 系统级 / 不可逆），事后人工核对 |
-| `data/cloud-agent/audit.jsonl` | `electron/cloud/audit.ts` | 审批审计：**追加 + fsync，永不改写**（不是原子替换）。每行一个事件：`approval`（决定：只存 ≤200 字命令摘要 + 命中规则 + 当时档位）、`approval_result`（**审批拦下的那次**工具卡的 `error` / `exitCode` + 结果预览，按 `toolCallId` 对号）、`mode`（档位变更） |
+| `data/cloud-agent/device.json` | `electron/cloud/device.ts` | 本机设备身份：`{id, name, defaultName, createdAt, nameEditedAt}`。`id` 首次启动生成、只读，随每轮 `author.id` 发给云端（`pi-workbench/<uuid>`）；`name` 默认取系统友好名（macOS `ComputerName` / Linux `hostnamectl --pretty`，失败回落 hostname），用户改名后写 `nameEditedAt` 并停止自动覆盖。删文件 = 换身份（云端记忆归属会断） |
+| `data/cloud-agent/device-sessions.json` | `electron/cloud/device.ts` | 会话归属：`sessionId → {deviceId, deviceName, firstSeenAt}`，首次写入即固定，只留最近 200 条。**本机展示用，不是云端真相**（D3 多设备时用它标出「另一台设备发起」） |
+| `data/cloud-agent/audit.jsonl` | `electron/cloud/audit.ts` | 审批审计：**追加 + fsync，永不改写**（不是原子替换）。每行一个事件：`approval`（决定：只存 ≤200 字命令摘要 + 命中规则 + 当时档位 + `device {id,name}`）、`approval_result`（**审批拦下的那次**工具卡的 `error` / `exitCode` + 结果预览，按 `toolCallId` 对号）、`mode`（档位变更） |
 | `config/last-run-version.json` | `shell-refresh.ts` | 仅在版本变化时刷新 shell / 图标缓存 |
 | `data/workspaces.db` | `workspace-store.ts` | `node:sqlite`，表 `workspaces(path, opened_at, open_count)`；**最近工作区的唯一来源**，渲染层不再保存 `recentWorkspaces` |
 | `data/agent/models.json` | `model-config.ts` | Pi 模型配置；Key 只写变量名 `$PI_WORKBENCH_API_KEY`，不落盘 |

@@ -218,7 +218,7 @@ interface RemoteTask {
 
 | 期 | 目标 | 交付判据 | 工期 |
 | --- | --- | --- | --- |
-| **D0 身份 v0** | `device.json` + 设备名设置 + 每轮 `author` + 审计带设备名 + 会话页显示「发起设备」**（不动 prompt）** | AC-D01（平台层）；**无服务端改动，可单独合入** | 1.5 天 |
+| **D0 身份 v0 ✅** | `device.json` + 设备名设置 + 每轮 `author` + 审计带设备名 + 连接页设备卡**（不动 prompt）** | AC-D01（平台层）；**无服务端改动，可单独合入**。已落地：`electron/cloud/device.ts`、`cloud:device:get|set`、`data/cloud-agent/device-sessions.json` | ~~1.5 天~~ 已实现 |
 | **D1 pi-hub 控制面前置** | hub 服务（设备登记 / token 校验 / 转发 / 心跳 / 撤销 / 审计）+ Caddy 调整 + 本地「经 hub 连接」与直连降级 | AC-D02 / AC-D03；两台设备各持一把 token | 1 周 |
 | **D2 派活最小闭环** | 任务邮箱 + MCP server（3 个工具，`trust: untrusted`）+ 本地执行器（白名单 / 档位上限 / 审批 / 结果回传）+ 派活总开关。**模型层身份在这里交付**：`local_devices()` 是唯一权威来源（按需查，不注入） | AC-D05 / AC-D06 / AC-D07 / AC-D08 / AC-D10 / AC-D01（模型层） | 1.5 周 |
 | **D3 多设备体验** | 每设备每项目会话 + 共享会话开关 + 设备面板（在线 / 能力 / 最近任务）+ 排队可视化 | AC-D04 / AC-D09 | 1 周 |
@@ -275,6 +275,7 @@ interface RemoteTask {
 
 | 版本 | 日期 | 变化 |
 | --- | --- | --- |
+| v1.4 | 2026-11-06 | **D0 已实现**：`electron/cloud/device.ts`（身份落盘 + 平台友好名探测）、`cloud:device:get/set`、每轮 `author`、审计带 `device`、会话归属表、连接页「这台设备」卡。模型层识别仍留到 D2 |
 | v1.3 | 2026-11-06 | **D0 口径定稿**：不做换机器检测；设备名必须可自定义并可随时改（改动立即生效、不影响 `deviceId`）。D0 收窄为「身份落盘 + 每轮 `author` + 本地归属记录 + 连接页设备卡」 |
 | v1.2 | 2026-11-06 | 设备名默认改为**直接读系统友好名**（macOS `ComputerName` / Linux `hostnamectl --pretty` / Windows 计算机名，失败回落 hostname），并明确「名字 ≠ 身份」；D0 去掉「重置设备身份」按钮，改由 D1 的服务端注销承担，另留一条可选的「换机器检测」 |
 | v1.1 | 2026-11-06 | 设备身份改为**通道强制 + 工具按需**：取消「每轮 `instructions` 注入」，`author` 明确只做记忆归属（已读上游源码确认不进 prompt），模型层识别推到 D2 的 `local_devices()`；D0 从 3 天缩到 1.5 天且不动 prompt；新增 QD-8 与 AC-D01b |

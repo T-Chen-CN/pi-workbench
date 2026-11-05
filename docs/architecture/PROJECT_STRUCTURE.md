@@ -348,6 +348,7 @@ ChatPanel.handleSubmit
 | `clipboard:writeText` | invoke | 写系统剪贴板（`pw-app://` 下 `navigator.clipboard` 不可用） |
 | `webSearch:get` / `save` | invoke | 联网搜索供应商与 Key（`safeStorage` 加密） |
 | `cloud:config:get` / `config:set` / `connect` / `disconnect` | invoke | 云端 Agent 连接配置（`data/cloud-agent/connection.json`，密钥 `safeStorage` 加密，渲染层只拿 `hasToken`）与连通性探测 |
+| `cloud:device:get` / `device:set` | invoke | 本机设备身份（`data/cloud-agent/device.json`）：读时顺带补一次系统友好名探测，写时只改 `name`（空串 = 恢复默认名）。`id` 只读，随每轮 `POST /v1/runs` 的 `author` 发出（只做记忆归属，**不进 prompt**） |
 | `cloud:sessions:list` / `messages:list` | invoke | 云端会话列表与历史消息（主进程直接映射成时间线片段） |
 | `cloud:sessions:update` / `sessions:delete` | invoke | 会话条目操作（PATCH 白名单字段 / 硬删除，不可恢复） |
 | `cloud:run:start` / `run:stop` / `run:status` / `run:steer` / `run:attach` | invoke | 云端轮次：POST `/v1/runs`（带幂等键）、停止、状态轮询、运行中插话；`run:attach` 用 `data/cloud-agent/active-run.json` 在重启后接回还在跑的那一轮（订阅带 `last_seq` 上限，只收新事件，先铺历史再放增量） |
