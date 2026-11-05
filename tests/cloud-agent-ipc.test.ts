@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => {
     /** 下一次 dialog.showOpenDialog 返回的文件（空 = 用户取消） */
     dialogFiles: [] as string[],
     clipboard: [] as string[],
+    /** 控制台配置里 approvals.mode 的当前值（模拟 PUT 之后读回） */
+    configMode: 'manual' as string,
   }
   const window = {
     webContents: {
@@ -155,6 +157,29 @@ vi.mock('electron', () => ({
       }
       if (route.endsWith('/clarify') && init?.method === 'POST') {
         return Response.json({ status: 'resolved', prompt_id: 'cl_1' })
+      }
+      if (route === '/api/config') {
+        if (init?.method === 'PUT') {
+          const patch = JSON.parse(String(init.body ?? '{}')) as {
+            config?: { approvals?: { mode?: string } }
+          }
+          if (patch.config?.approvals?.mode) mocks.state.configMode = patch.config.approvals.mode
+          return Response.json({ ok: true })
+        }
+        // 真实接口会把密钥解析成明文一起返回；策略层只允许取白名单子集
+        return Response.json({
+          approvals: {
+            mode: mocks.state.configMode,
+            timeout: 120,
+            deny: ['rm -rf /', 'mkfs.*'],
+          },
+          agent: { disabled_toolsets: ['code_execution'] },
+          terminal: { backend: 'local' },
+          providers: { openai: { api_key: 'sk-should-never-leak' } },
+        })
+      }
+      if (/\/v1\/runs\/[^/]+\/approval$/.test(route) && init?.method === 'POST') {
+        return Response.json({ status: 'resolved', resolved: 1 })
       }
       if (route.endsWith('/resolve-unknown') && init?.method === 'POST') {
         return Response.json({ run_id: 'run_test', status: 'cancelled', object: 'hermes.run.receipt' })
@@ -732,6 +757,127 @@ describe('cloud clarify', () => {
     })
     expect(result.success).toBe(false)
     expect(result.error).toContain('正在执行')
+  })
+})
+
+describe('cloud approval', () => {
+  const auditLines = (): Array<Record<string, unknown>> => {
+    const file = path.join(mocks.state.appDir, 'data', 'cloud-agent', 'audit.jsonl')
+    if (!fs.existsSync(file)) return []
+    return fs
+      .readFileSync(file, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+  }
+
+  beforeAll(async () => {
+    await call('cloud:config:set', {
+      baseUrl: 'https://api.example.com',
+      apiKey: 'test-key',
+      dashboardUrl: 'https://dash.example.com',
+      dashboardToken: 'dash-token',
+    })
+    await call('cloud:run:start', { input: 'run a command', idempotencyKey: 'key-approval' })
+  })
+
+  it('sends request_id + generation + choice when it has them', async () => {
+    const before = mocks.state.bodies.length
+    const result = await call<{ success: boolean; error?: string }>('cloud:approval:respond', {
+      runId: 'run_test',
+      requestId: 'ap_7',
+      generation: 3,
+      choice: 'once',
+      command: 'rm -rf build',
+      patternKeys: ['rm -rf'],
+    })
+    expect(result.error).toBeUndefined()
+    const body = JSON.parse(mocks.state.bodies[before])
+    expect(body).toEqual({ choice: 'once', request_id: 'ap_7', execution_generation: 3 })
+  })
+
+  it('falls back to choice-only when there is no request id', async () => {
+    const before = mocks.state.bodies.length
+    await call('cloud:approval:respond', { runId: 'run_test', choice: 'deny' })
+    expect(JSON.parse(mocks.state.bodies[before])).toEqual({ choice: 'deny' })
+  })
+
+  it('refuses always and unknown choices without touching the network', async () => {
+    for (const choice of ['always', 'allow', '']) {
+      const before = mocks.state.bodies.length
+      const result = await call<{ success: boolean; error?: string }>('cloud:approval:respond', {
+        runId: 'run_test',
+        requestId: 'ap_7',
+        choice,
+      })
+      expect(result.success).toBe(false)
+      expect(mocks.state.bodies.length).toBe(before)
+    }
+  })
+
+  it('writes one audit line with a truncated command and the matched patterns', () => {
+    const lines = auditLines().filter((line) => line.kind === 'approval')
+    const line = lines.find((row) => row.choice === 'once')
+    expect(line).toBeTruthy()
+    expect(line?.patternKeys).toEqual(['rm -rf'])
+    expect(String(line?.command).length).toBeLessThanOrEqual(200)
+    expect(line?.mode).toBe('manual')
+    // 审计只存摘要：完整命令不该整个落盘
+    expect(String(line?.command)).not.toContain('\n')
+  })
+
+  it('returns only the whitelisted policy subset', async () => {
+    const result = await call<{
+      success: boolean
+      policy?: {
+        mode: string | null
+        timeoutSeconds: number | null
+        denyCount: number
+        disabledToolsets: string[]
+        terminalBackend: string
+      }
+    }>('cloud:policy:get')
+    expect(result.success).toBe(true)
+    expect(result.policy).toEqual({
+      mode: 'manual',
+      timeoutSeconds: 120,
+      denyCount: 2,
+      disabledToolsets: ['code_execution'],
+      terminalBackend: 'local',
+    })
+    // 整份配置里有明文密钥：绝不能随手透出
+    expect(JSON.stringify(result)).not.toContain('sk-should-never-leak')
+  })
+
+  it('switches mode with a minimal patch and verifies by reading back', async () => {
+    const before = mocks.state.bodies.length
+    const result = await call<{ success: boolean; policy?: { mode: string } }>(
+      'cloud:policy:set',
+      { mode: 'off' }
+    )
+    expect(result.success).toBe(true)
+    expect(result.policy?.mode).toBe('off')
+    const patch = JSON.parse(mocks.state.bodies[before])
+    expect(patch).toEqual({ config: { approvals: { mode: 'off' } } })
+
+    const modeLine = auditLines().filter((line) => line.kind === 'mode')
+    expect(modeLine[modeLine.length - 1]).toMatchObject({ from: 'manual', to: 'off' })
+  })
+
+  it('rejects a mode the server does not have', async () => {
+    for (const mode of ['readonly', 'full', '']) {
+      const result = await call<{ success: boolean }>('cloud:policy:set', { mode })
+      expect(result.success).toBe(false)
+    }
+  })
+
+  it('exposes pending controls on run status without leaking anything else', async () => {
+    const result = await call<{
+      success: boolean
+      pendingControls?: Array<Record<string, unknown>>
+    }>('cloud:run:status', { runId: 'run_test' })
+    expect(result.success).toBe(true)
+    expect(Array.isArray(result.pendingControls)).toBe(true)
   })
 })
 

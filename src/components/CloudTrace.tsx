@@ -9,6 +9,7 @@ import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
 import { CloudToolCard } from './CloudToolCard'
 import { CloudSubagentCard } from './CloudSubagentCard'
 import { CloudClarifyCard } from './CloudClarifyCard'
+import { CloudApprovalCard } from './CloudApprovalCard'
 import { useCloudImage } from '../hooks/useCloudImage'
 import { collectImagePaths, collectMediaPaths, stripImageDirectives, stripMediaTags } from '../utils/cloudImages'
 
@@ -19,6 +20,7 @@ type DividerPart = Extract<CloudTracePart, { type: 'divider' }>
 type InterjectionPart = Extract<CloudTracePart, { type: 'interjection' }>
 type SubagentPart = Extract<CloudTracePart, { type: 'subagent' }>
 type ClarifyPart = Extract<CloudTracePart, { type: 'clarify' }>
+type ApprovalPart = Extract<CloudTracePart, { type: 'approval' }>
 
 type Group =
   | { kind: 'text'; key: string; part: TextPart }
@@ -28,6 +30,7 @@ type Group =
   | { kind: 'interjection'; key: string; part: InterjectionPart }
   | { kind: 'subagent'; key: string; part: SubagentPart }
   | { kind: 'clarify'; key: string; part: ClarifyPart }
+  | { kind: 'approval'; key: string; part: ApprovalPart }
 
 /** 相邻的思考片段合成一组，避免每个 token 块各占一行 */
 export function groupCloudParts(parts: CloudTracePart[]): Group[] {
@@ -57,18 +60,8 @@ export function groupCloudParts(parts: CloudTracePart[]): Group[] {
       groups.push({ kind: 'clarify', key: part.id, part })
       continue
     }
-    // approval 在 P0 只做占位展示（后端当前没有闸门）
     if (part.type === 'approval') {
-      groups.push({
-        kind: 'divider',
-        key: part.id,
-        part: {
-          type: 'divider',
-          id: part.id,
-          kind: 'run_error',
-          detail: part.summary,
-        },
-      })
+      groups.push({ kind: 'approval', key: part.id, part })
       continue
     }
     const last = groups[groups.length - 1]
@@ -309,6 +302,9 @@ export const CloudTrace: React.FC<CloudTraceProps> = ({ parts, streaming }) => {
         }
         if (group.kind === 'clarify') {
           return <CloudClarifyCard key={group.key} part={group.part} />
+        }
+        if (group.kind === 'approval') {
+          return <CloudApprovalCard key={group.key} part={group.part} />
         }
         return <DividerRow key={group.key} part={group.part} />
       })}

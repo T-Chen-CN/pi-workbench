@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CloudWorkspaceView } from '../src/components/CloudWorkspaceView'
 import { CloudJobsView } from '../src/components/CloudJobsView'
 import { CloudTrace } from '../src/components/CloudTrace'
+import { CloudApprovalCard } from '../src/components/CloudApprovalCard'
+import { CloudModeSwitch } from '../src/components/CloudModeSwitch'
 import { useCloudStore } from '../src/store/cloudStore'
 import { UNCONFIGURED_CONNECTION } from '../src/api/cloud'
 import { useI18nStore } from '../src/store/i18nStore'
@@ -92,6 +94,27 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     cloudMessagesList: async () => ({ success: true, parts: stub.parts, hasMore: false }),
     cloudRunStart: stub.startRun,
     cloudRunStatus: async () => ({ success: true, state: 'completed' }),
+    cloudApprovalRespond: vi.fn(async () => ({ success: true, choice: 'once' })),
+    cloudPolicyGet: vi.fn(async () => ({
+      success: true,
+      policy: {
+        mode: 'manual',
+        timeoutSeconds: 120,
+        denyCount: 0,
+        disabledToolsets: ['code_execution'],
+        terminalBackend: 'local',
+      },
+    })),
+    cloudPolicySet: vi.fn(async (input: { mode: string }) => ({
+      success: true,
+      policy: {
+        mode: input.mode,
+        timeoutSeconds: 120,
+        denyCount: 0,
+        disabledToolsets: ['code_execution'],
+        terminalBackend: 'local',
+      },
+    })),
     cloudRunStop: async () => ({ success: true, state: 'cancelled' }),
     cloudDashboardOpen: async () => ({ success: true }),
     cloudDashboardClose: async () => ({ success: true }),
@@ -111,6 +134,11 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     onCloudDashboardClosed: () => () => {},
   }
   return stub
+}
+
+/** 直接拿装好的桥接替身：断言某个 IPC 有没有被调用 */
+function bridge(): Record<string, unknown> {
+  return (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI
 }
 
 function resetStore() {
@@ -151,6 +179,12 @@ function resetStore() {
     jobActionPending: null,
     clarifyPending: null,
     clarifyError: null,
+    approvalPending: null,
+    approvalError: null,
+    policy: null,
+    policyLoading: false,
+    policyError: null,
+    policyPending: null,
     diagnostics: null,
     diagnosticsLoading: false,
     diagnosticsError: null,
@@ -859,5 +893,130 @@ describe('任务页：暂停任务点「现在跑一次」', () => {
 
     fireEvent.click(screen.getByText(zh.cloudJobRunPausedConfirm))
     await waitFor(() => expect(run).toHaveBeenCalledWith({ jobId: 'job_p' }))
+  })
+})
+
+describe('审批卡', () => {
+  const part = (
+    overrides: Partial<Extract<CloudTracePart, { type: 'approval' }>> = {}
+  ): Extract<CloudTracePart, { type: 'approval' }> => ({
+    type: 'approval',
+    id: 'a:ap_1',
+    requestId: 'ap_1',
+    command: 'rm -rf build',
+    patternKeys: ['rm -rf'],
+    choices: ['once', 'session', 'deny'],
+    ...overrides,
+  })
+
+  it('offers exactly the three choices and never `always`', () => {
+    installBridge()
+    render(<CloudApprovalCard part={part()} />)
+
+    expect(screen.getByText(zh.cloudApprovalOnce)).toBeTruthy()
+    expect(screen.getByText(zh.cloudApprovalSession)).toBeTruthy()
+    expect(screen.getByText(zh.cloudApprovalDeny)).toBeTruthy()
+    expect(screen.queryByText(/always|永久/i)).toBeNull()
+    expect(screen.getByText('rm -rf build')).toBeTruthy()
+    // 命中的规则要摆出来：这是「为什么问我」的依据
+    expect(screen.getByText('rm -rf')).toBeTruthy()
+  })
+
+  it('submits the choice the user clicked', async () => {
+    installBridge()
+    const respond = bridge().cloudApprovalRespond as ReturnType<typeof vi.fn>
+    const target = part()
+    useCloudStore.setState({
+      parts: [target],
+      runId: 'run_1',
+      activeSessionId: 'run_session',
+    })
+    render(<CloudApprovalCard part={target} />)
+
+    fireEvent.click(screen.getByText(zh.cloudApprovalSession))
+    await waitFor(() =>
+      expect(respond).toHaveBeenCalledWith(
+        expect.objectContaining({ requestId: 'ap_1', choice: 'session', runId: 'run_1' })
+      )
+    )
+    // 卡片在真实链路里由 store 驱动：决定要落回 store 的那一份
+    await waitFor(() => {
+      const stored = useCloudStore.getState().parts[0]
+      expect(stored.type === 'approval' && stored.decision).toBe('session')
+    })
+  })
+
+  it('greys out an expired card instead of letting it be clicked', () => {
+    installBridge()
+    render(<CloudApprovalCard part={part({ expiredAt: Date.now() })} />)
+
+    expect(screen.queryByText(zh.cloudApprovalOnce)).toBeNull()
+    expect(screen.getByText(zh.cloudApprovalExpiredBody)).toBeTruthy()
+  })
+
+  it('says so when another client resolved it', () => {
+    installBridge()
+    render(<CloudApprovalCard part={part({ settled: true })} />)
+
+    expect(screen.queryByText(zh.cloudApprovalOnce)).toBeNull()
+    expect(screen.getByText(zh.cloudApprovalSettledElsewhere)).toBeTruthy()
+  })
+
+  it('shows the chosen decision after the fact', () => {
+    installBridge()
+    render(<CloudApprovalCard part={part({ decision: 'deny', decidedAt: Date.now() })} />)
+    expect(screen.getByText(zh.cloudApprovalDeny)).toBeTruthy()
+    expect(screen.getByText(zh.cloudApprovalYouChose)).toBeTruthy()
+  })
+})
+
+describe('审批档位控件', () => {
+  const policy = (mode: 'manual' | 'smart' | 'off' | null) => ({
+    mode,
+    timeoutSeconds: 120,
+    denyCount: 0,
+    disabledToolsets: ['code_execution'],
+    terminalBackend: 'local',
+  })
+
+  it('shows the server mode and switches tighter in one click', async () => {
+    installBridge()
+    const setPolicy = bridge().cloudPolicySet as ReturnType<typeof vi.fn>
+    bridge().cloudPolicyGet = async () => ({ success: true, policy: policy('off') })
+    useCloudStore.setState({ policy: policy('off') })
+    render(<CloudModeSwitch />)
+
+    expect(await screen.findByText(zh.cloudModeOffWarn)).toBeTruthy()
+    const tighter = screen.getByText(zh.cloudModeManual).closest('button') as HTMLButtonElement
+    await waitFor(() => expect(tighter.disabled).toBe(false))
+    fireEvent.click(tighter)
+    await waitFor(() => expect(setPolicy).toHaveBeenCalledWith({ mode: 'manual' }))
+  })
+
+  it('asks for a second confirmation before turning approvals off', async () => {
+    installBridge()
+    const setPolicy = bridge().cloudPolicySet as ReturnType<typeof vi.fn>
+    useCloudStore.setState({ policy: policy('manual') })
+    render(<CloudModeSwitch />)
+
+    const off = (await screen.findByText(zh.cloudModeOff)).closest('button') as HTMLButtonElement
+    await waitFor(() => expect(off.disabled).toBe(false))
+    fireEvent.click(off)
+    // 第一次点击只开确认框，不能直接写服务端
+    expect(setPolicy).not.toHaveBeenCalled()
+    expect(await screen.findByText(zh.cloudModeOffConfirmBody)).toBeTruthy()
+
+    fireEvent.click(screen.getByText(zh.cloudModeOffConfirmAction))
+    await waitFor(() => expect(setPolicy).toHaveBeenCalledWith({ mode: 'off' }))
+  })
+
+  it('does not invent a mode the server did not report', async () => {
+    installBridge()
+    bridge().cloudPolicyGet = async () => ({ success: false, error: '控制台超时' })
+    useCloudStore.setState({ policy: null })
+    render(<CloudModeSwitch />)
+
+    expect(await screen.findByText(zh.cloudModeUnknown)).toBeTruthy()
+    expect(screen.queryByText(zh.cloudModeOffWarn)).toBeNull()
   })
 })

@@ -229,6 +229,26 @@ export type CloudToolStatus = 'running' | 'success' | 'error'
  */
 export type CloudSubagentStatus = 'running' | 'completed' | 'failed' | 'timeout'
 
+/**
+ * 审批回执（服务端 `choices` 的子集）。
+ * 故意不含 `always`：它会把命令写进服务端永久白名单（`S-08` 禁止），映射层就丢弃。
+ */
+export type CloudApprovalChoice = 'once' | 'session' | 'deny'
+
+/** 原生审批档位（`approvals.mode`）。不自造预设，就用这三个 */
+export type CloudApprovalMode = 'manual' | 'smart' | 'off'
+
+/** 服务端当前生效的审批策略（白名单子集：只读，不含任何密钥） */
+export interface CloudApprovalPolicy {
+  /** 读不到或值不认识时为 null（UI 显示「未知」，不猜） */
+  mode: CloudApprovalMode | null
+  timeoutSeconds: number | null
+  /** `approvals.deny` 的条数（**只计数，不留内容**） */
+  denyCount: number
+  disabledToolsets: string[]
+  terminalBackend: string
+}
+
 export type CloudTracePart =
   | { type: 'text'; id: string; role: 'user' | 'assistant'; text: string }
   | { type: 'thinking'; id: string; text: string; redacted?: boolean }
@@ -246,10 +266,30 @@ export type CloudTracePart =
   | {
       type: 'approval'
       id: string
+      /**
+       * 服务端 `prompt_id` / `request_id`。拿不到时退化为 **runId**：两者都能
+       * 唯一定位一轮里的待决请求，而合成序号会让 `approval.responded` 匹配不上。
+       */
       requestId: string
-      generation: number
-      summary: string
-      decision?: 'allow' | 'deny'
+      /** 应答时要带（canonical 语义）；run-scoped 语义下没有 */
+      generation?: number
+      /** 命令原文（卡片正文） */
+      command: string
+      /** 命中的危险模式（审计与 UI 都用它） */
+      patternKeys: string[]
+      /** 已剔除 `always` 的可选项 */
+      choices: CloudApprovalChoice[]
+      /** 后端给的等待秒数（没有就不显示倒计时） */
+      timeoutSeconds?: number
+      /** 截止时刻（`createdAt + timeoutSeconds`）：倒计时用绝对时间，重渲染不重置 */
+      expiresAt?: number
+      /** 本地做出的决定（回填点） */
+      decision?: CloudApprovalChoice
+      decidedAt?: number
+      /** 本地判定超时：服务端随后按其 `approvals.timeout` 拒绝 */
+      expiredAt?: number
+      /** 后端已结算，但不是本地点的那一下（超时 / 别的客户端） */
+      settled?: boolean
     }
   | {
       type: 'interjection'
@@ -337,6 +377,20 @@ export interface CloudConfigGetResult {
 export interface CloudConfigSetResult {
   success: boolean
   config?: CloudConnectionInfo
+  error?: string
+}
+
+/** 读服务端当前审批策略（白名单子集） */
+export interface CloudPolicyGetResult {
+  success: boolean
+  policy?: CloudApprovalPolicy
+  error?: string
+}
+
+/** 切换原生审批档位 */
+export interface CloudPolicySetResult {
+  success: boolean
+  policy?: CloudApprovalPolicy
   error?: string
 }
 

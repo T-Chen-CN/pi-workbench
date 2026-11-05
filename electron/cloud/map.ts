@@ -7,6 +7,7 @@
  */
 
 import type {
+  CloudApprovalChoice,
   CloudFrame,
   CloudRunStatus,
   CloudSubagentStatus,
@@ -17,6 +18,30 @@ import type { SseFrame } from './events.js'
 
 const ARGS_MAX_CHARS = 240
 const RESULT_MAX_CHARS = 1200
+
+/**
+ * 我们允许回执的三个选项。
+ * `always` 不在其中：它会把命令写进服务端永久白名单（`S-08` 禁止），
+ * 所以**在映射层就丢掉**，渲染层拿不到也就发不出去。
+ */
+const APPROVAL_CHOICES: CloudApprovalChoice[] = ['once', 'session', 'deny']
+
+function approvalChoicesOf(raw: unknown): CloudApprovalChoice[] {
+  const list = Array.isArray(raw) ? raw.map((item) => String(item ?? '')) : []
+  const kept = APPROVAL_CHOICES.filter((choice) => list.includes(choice))
+  // 服务端没给 choices（旧版本 / 局部实现）时按标准三项给
+  return kept.length > 0 ? kept : [...APPROVAL_CHOICES]
+}
+
+function approvalChoiceOf(raw: unknown): CloudApprovalChoice | null {
+  const value = String(raw ?? '').trim().toLowerCase()
+  if (value === 'once' || value === 'approved' || value === 'approve' || value === 'allow') {
+    return 'once'
+  }
+  if (value === 'session') return 'session'
+  if (value === 'deny' || value === 'denied' || value === 'cancel' || value === 'no') return 'deny'
+  return null
+}
 
 export interface RawMessage {
   id?: number | string
@@ -373,6 +398,90 @@ export class RunMapper {
     return [{ kind: 'part', part }]
   }
 
+  /**
+   * 审批请求片段的唯一构造点：SSE 的 `approval.request` 与 `GET /v1/runs/{id}`
+   * 的 `pending_controls` 两条路都走这里。
+   *
+   * 去重键：服务端 `prompt_id` / `request_id`；两者都没有时退化为 **runId**
+   * （一轮里同时只会有一个待决审批，runId 够用）。绝不用合成序号：
+   * 那样 `approval.responded` 永远匹配不上，卡片会停在未决。
+   */
+  ensureApproval(payload: Record<string, unknown>): CloudFrame[] {
+    const requestId = textOf(payload.prompt_id) || textOf(payload.request_id) || this.runId
+    if (this.parts.some((part) => part.type === 'approval' && part.requestId === requestId)) {
+      return []
+    }
+    const command =
+      textOf(payload.command) || textOf(payload.summary) || textOf(payload.preview) || ''
+    const patternKeys = Array.isArray(payload.pattern_keys)
+      ? payload.pattern_keys.map((key) => String(key ?? '')).filter(Boolean)
+      : textOf(payload.pattern_key)
+        ? [textOf(payload.pattern_key)]
+        : []
+    const generation = numOf(payload.execution_generation) ?? numOf(payload.generation)
+    const timeoutSeconds = numOf(payload.timeout_s) ?? numOf(payload.timeout_seconds)
+    const part: CloudTracePart = {
+      type: 'approval',
+      id: `a:${requestId}`,
+      requestId,
+      command,
+      patternKeys,
+      choices: approvalChoicesOf(payload.choices),
+    }
+    if (generation !== undefined) part.generation = generation
+    if (timeoutSeconds !== undefined) {
+      part.timeoutSeconds = timeoutSeconds
+      // 绝对截止时刻：断流重开后卡片还在，倒计时应该接着走而不是从头数
+      if (timeoutSeconds > 0) part.expiresAt = Date.now() + timeoutSeconds * 1000
+    }
+    this.parts.push(part)
+    return [{ kind: 'part', part }]
+  }
+
+  /**
+   * 结算回执找卡片：`prompt_id` → 命令原文 → 唯一一条未决。
+   * 三级兜底是因为服务端的 `approval.responded` 不一定带 `request_id`。
+   */
+  private findApproval(payload: Record<string, unknown>): number {
+    const id = textOf(payload.request_id) || textOf(payload.prompt_id)
+    if (id) {
+      const byId = this.parts.findIndex(
+        (part) => part.type === 'approval' && part.requestId === id
+      )
+      if (byId >= 0) return byId
+    }
+    const command = textOf(payload.command)
+    if (command) {
+      const byCommand = this.parts.findIndex(
+        (part) => part.type === 'approval' && part.command === command
+      )
+      if (byCommand >= 0) return byCommand
+    }
+    let found = -1
+    let count = 0
+    for (let index = 0; index < this.parts.length; index += 1) {
+      const part = this.parts[index]
+      if (part.type !== 'approval') continue
+      if (part.decision || part.expiredAt !== undefined || part.settled) continue
+      found = index
+      count += 1
+    }
+    return count === 1 ? found : -1
+  }
+
+  /** 一轮结束仍未决的审批：本地标超时（服务端不会再给回执了） */
+  private expirePendingApprovals(frames: CloudFrame[]): void {
+    const at = Date.now()
+    for (let index = 0; index < this.parts.length; index += 1) {
+      const part = this.parts[index]
+      if (part.type !== 'approval') continue
+      if (part.decision || part.expiredAt !== undefined || part.settled) continue
+      const next: CloudTracePart = { ...part, expiredAt: at }
+      this.parts[index] = next
+      frames.push({ kind: 'part', part: next })
+    }
+  }
+
   private findSubagent(key: string): number {
     return this.parts.findIndex((part) => part.type === 'subagent' && part.id === key)
   }
@@ -480,31 +589,18 @@ export class RunMapper {
         break
       }
       case 'approval.request': {
-        const requestId = textOf(payload.request_id) || `s:approval:${frame.id ?? 0}`
-        const part: CloudTracePart = {
-          type: 'approval',
-          id: `a:${requestId}`,
-          requestId,
-          generation: typeof payload.generation === 'number' ? payload.generation : 1,
-          summary: flatten(
-            textOf(payload.summary) || textOf(payload.preview) || textOf(payload.command),
-            200
-          ),
-        }
-        this.parts.push(part)
-        frames.push({ kind: 'part', part })
+        for (const emitted of this.ensureApproval(payload)) frames.push(emitted)
         break
       }
       case 'approval.responded': {
-        const requestId = textOf(payload.request_id)
-        const index = this.parts.findIndex(
-          (part) => part.type === 'approval' && part.requestId === requestId
-        )
+        const index = this.findApproval(payload)
         if (index >= 0) {
           const existing = this.parts[index] as Extract<CloudTracePart, { type: 'approval' }>
-          const decision =
-            payload.choice === 'deny' || payload.choice === 'denied' ? 'deny' : 'allow'
-          const next = { ...existing, decision: decision as 'allow' | 'deny' }
+          const decision = approvalChoiceOf(payload.choice)
+          const next: CloudTracePart = decision
+            ? { ...existing, decision, decidedAt: existing.decidedAt ?? Date.now() }
+            : // 服务端说结算了，但选项不是我们支持的（例如别的客户端选了 always）
+              { ...existing, settled: true }
           this.parts[index] = next
           frames.push({ kind: 'part', part: next })
         }
@@ -529,6 +625,7 @@ export class RunMapper {
           }
         }
         frames.push({ kind: 'run', runId: this.runId, state: 'completed' })
+        this.expirePendingApprovals(frames)
         this.takePendingSteer(frames)
         break
       }
@@ -540,6 +637,7 @@ export class RunMapper {
           state: 'failed' as CloudRunStatus,
           error: textOf(payload.error) || '本轮执行失败',
         })
+        this.expirePendingApprovals(frames)
         this.takePendingSteer(frames)
         break
       }
@@ -620,6 +718,7 @@ export class RunMapper {
       }
       case 'run.cancelled': {
         frames.push({ kind: 'run', runId: this.runId, state: 'cancelled' })
+        this.expirePendingApprovals(frames)
         this.takePendingSteer(frames)
         break
       }

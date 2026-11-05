@@ -463,3 +463,158 @@ describe('任务', () => {
     expect(useCloudStore.getState().jobsError).toBe('任务不存在')
   })
 })
+
+const approval = (
+  requestId: string,
+  overrides: Partial<Extract<CloudTracePart, { type: 'approval' }>> = {}
+): CloudTracePart => ({
+  type: 'approval',
+  id: `a:${requestId}`,
+  requestId,
+  command: 'rm -rf build',
+  patternKeys: ['rm -rf'],
+  choices: ['once', 'session', 'deny'],
+  ...overrides,
+})
+
+describe('审批决定', () => {
+  beforeEach(() => {
+    useCloudStore.setState({
+      parts: [approval('ap_1')],
+      runId: 'run_1',
+      activeSessionId: 's_1',
+      approvalPending: null,
+      approvalError: null,
+    })
+  })
+
+  it('fills the decision in optimistically and keeps it when the server accepts', async () => {
+    const sent: Array<Record<string, unknown>> = []
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudApprovalRespond: async (input: Record<string, unknown>) => {
+        sent.push(input)
+        return { success: true, choice: input.choice }
+      },
+    }
+
+    const done = useCloudStore.getState().respondApproval('ap_1', 'session')
+    // 乐观更新：点下去卡片立刻收折，不用等网络
+    expect(
+      (useCloudStore.getState().parts[0] as Extract<CloudTracePart, { type: 'approval' }>).decision
+    ).toBe('session')
+    await expect(done).resolves.toBe(true)
+
+    expect(sent[0]).toMatchObject({
+      runId: 'run_1',
+      requestId: 'ap_1',
+      choice: 'session',
+      sessionId: 's_1',
+    })
+    expect(useCloudStore.getState().approvalPending).toBeNull()
+  })
+
+  it('rolls the decision back when the call fails', async () => {
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudApprovalRespond: async () => ({ success: false, error: '网络断了' }),
+    }
+    await expect(useCloudStore.getState().respondApproval('ap_1', 'once')).resolves.toBe(false)
+    const part = useCloudStore.getState().parts[0] as Extract<CloudTracePart, { type: 'approval' }>
+    expect(part.decision).toBeUndefined()
+    expect(useCloudStore.getState().approvalError).toBe('网络断了')
+  })
+
+  it('marks the card settled instead of clickable when someone else resolved it', async () => {
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudApprovalRespond: async () => ({ success: false, error: '这条审批已经被结算了' }),
+    }
+    await useCloudStore.getState().respondApproval('ap_1', 'once')
+    const part = useCloudStore.getState().parts[0] as Extract<CloudTracePart, { type: 'approval' }>
+    expect(part.decision).toBeUndefined()
+    expect(part.settled).toBe(true)
+  })
+
+  it('ignores a second click while one is in flight', async () => {
+    let release: (value: unknown) => void = () => {}
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudApprovalRespond: () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    }
+    const first = useCloudStore.getState().respondApproval('ap_1', 'once')
+    await expect(useCloudStore.getState().respondApproval('ap_1', 'deny')).resolves.toBe(false)
+    release({ success: true })
+    await expect(first).resolves.toBe(true)
+  })
+
+  it('will not answer an expired or already-decided card', async () => {
+    useCloudStore.setState({ parts: [approval('ap_2', { expiredAt: Date.now() })] })
+    await expect(useCloudStore.getState().respondApproval('ap_2', 'once')).resolves.toBe(false)
+
+    useCloudStore.setState({ parts: [approval('ap_3', { decision: 'deny' })] })
+    await expect(useCloudStore.getState().respondApproval('ap_3', 'once')).resolves.toBe(false)
+  })
+
+  it('expires the card locally when the countdown runs out', () => {
+    useCloudStore.getState().expireApproval('ap_1')
+    const part = useCloudStore.getState().parts[0] as Extract<CloudTracePart, { type: 'approval' }>
+    expect(part.expiredAt).toBeTypeOf('number')
+  })
+})
+
+describe('审批档位', () => {
+  it('shows what the server reports after a successful switch', async () => {
+    const modes: string[] = []
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudPolicyGet: async () => ({
+        success: true,
+        policy: {
+          mode: 'manual',
+          timeoutSeconds: 120,
+          denyCount: 0,
+          disabledToolsets: ['code_execution'],
+          terminalBackend: 'local',
+        },
+      }),
+      cloudPolicySet: async (input: { mode: string }) => {
+        modes.push(input.mode)
+        return {
+          success: true,
+          policy: {
+            mode: input.mode,
+            timeoutSeconds: 120,
+            denyCount: 0,
+            disabledToolsets: ['code_execution'],
+            terminalBackend: 'local',
+          },
+        }
+      },
+    }
+
+    await useCloudStore.getState().loadPolicy()
+    expect(useCloudStore.getState().policy?.mode).toBe('manual')
+
+    await expect(useCloudStore.getState().setMode('off')).resolves.toBe(true)
+    expect(modes).toEqual(['off'])
+    expect(useCloudStore.getState().policy?.mode).toBe('off')
+    expect(useCloudStore.getState().policyPending).toBeNull()
+  })
+
+  it('keeps the old mode when the switch fails', async () => {
+    useCloudStore.setState({
+      policy: {
+        mode: 'manual',
+        timeoutSeconds: 120,
+        denyCount: 0,
+        disabledToolsets: [],
+        terminalBackend: 'local',
+      },
+    })
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudPolicySet: async () => ({ success: false, error: '控制台拒绝了保存请求（403）' }),
+    }
+    await expect(useCloudStore.getState().setMode('off')).resolves.toBe(false)
+    expect(useCloudStore.getState().policy?.mode).toBe('manual')
+    expect(useCloudStore.getState().policyError).toContain('403')
+  })
+})

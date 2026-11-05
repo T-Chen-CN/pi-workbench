@@ -10,7 +10,7 @@ vi.mock('electron', () => ({
   },
 }))
 import type { CloudClient } from '../electron/cloud/client'
-import { CloudRunner, CONTROL_POLL_MS } from '../electron/cloud/runner'
+import { CloudRunner, controlKindOf, CONTROL_POLL_MS } from '../electron/cloud/runner'
 import type { CloudFrame } from '../electron/cloud/types'
 
 function sseStream(chunks: string[]): Response {
@@ -186,5 +186,82 @@ describe('clarify 兜底轮询', () => {
 
     runner.dispose()
     vi.useRealTimers()
+  })
+})
+
+describe('审批兜底轮询', () => {
+  it('synthesises the approval card from pending_controls', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const frames: CloudFrame[] = []
+    const client: CloudClient = {
+      baseUrl: 'https://api.example.com',
+      rawBaseUrl: 'https://api.example.com',
+      apiKey: 'key',
+      request: async <T,>(path: string): Promise<T> => {
+        if (path === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
+        if (path === '/api/sessions/s-1/messages') {
+          return { data: [], session_id: 's-1' } as T
+        }
+        // SSE 里错过了 approval.request，但状态里挂着待审批
+        return {
+          status: 'waiting_for_approval',
+          session_id: 's-1',
+          pending_controls: [
+            {
+              kind: 'approval',
+              prompt_id: 'ap_3',
+              execution_generation: 8,
+              command: 'systemctl restart caddy',
+              pattern_keys: ['systemctl restart'],
+              choices: ['once', 'session', 'deny', 'always'],
+              timeout_s: 120,
+            },
+          ],
+        } as T
+      },
+      openStream: async () => {
+        const body = new ReadableStream<Uint8Array>({ start() {} })
+        return new Response(body, { headers: { 'content-type': 'text/event-stream' } })
+      },
+    }
+    const runner = new CloudRunner({ emit: (frame) => frames.push(frame) }, client)
+    await runner.start({ input: 'hi', sessionId: 's-1', idempotencyKey: 'k-approval' })
+
+    await vi.advanceTimersByTimeAsync(CONTROL_POLL_MS + 50)
+    const part = frames.find(
+      (frame) => frame.kind === 'part' && frame.part.type === 'approval'
+    ) as { kind: 'part'; part: Extract<CloudFrame, { kind: 'part' }>['part'] } | undefined
+    expect(part?.part).toMatchObject({
+      type: 'approval',
+      requestId: 'ap_3',
+      command: 'systemctl restart caddy',
+      patternKeys: ['systemctl restart'],
+      generation: 8,
+      timeoutSeconds: 120,
+    })
+    // always 不进我们的可选项
+    expect(
+      (part?.part as Extract<CloudFrame, { kind: 'part' }>['part'] & { choices: string[] }).choices
+    ).not.toContain('always')
+
+    // 第二轮不会重复推同一张卡
+    const before = frames.filter((frame) => frame.kind === 'part').length
+    await vi.advanceTimersByTimeAsync(CONTROL_POLL_MS + 50)
+    expect(frames.filter((frame) => frame.kind === 'part').length).toBe(before)
+
+    runner.dispose()
+    vi.useRealTimers()
+  })
+})
+
+describe('控制项识别', () => {
+  it('tells approvals from clarifies by kind or by shape', () => {
+    expect(controlKindOf({ kind: 'approval' })).toBe('approval')
+    expect(controlKindOf({ kind: 'clarify' })).toBe('clarify')
+    // 服务端版本差异：只看字段形状也能认出来
+    expect(controlKindOf({ command: 'rm -rf /tmp/x' })).toBe('approval')
+    expect(controlKindOf({ pattern_keys: ['rm -rf'] })).toBe('approval')
+    expect(controlKindOf({ question: '继续吗？' })).toBe('clarify')
+    expect(controlKindOf({})).toBeNull()
   })
 })

@@ -24,17 +24,20 @@ export class CloudApiError extends Error {
   readonly code: CloudErrorCode
   readonly status: number
   readonly retryAfterMs?: number
+  /** 后端自己的错误码（`invalid_params` / `stale_generation` / `approval_not_pending` …） */
+  readonly backendCode: string
 
   constructor(
     code: CloudErrorCode,
     message: string,
-    options: { status?: number; retryAfterMs?: number } = {}
+    options: { status?: number; retryAfterMs?: number; backendCode?: string } = {}
   ) {
     super(message)
     this.name = 'CloudApiError'
     this.code = code
     this.status = options.status ?? 0
     this.retryAfterMs = options.retryAfterMs
+    this.backendCode = options.backendCode ?? ''
   }
 }
 
@@ -53,6 +56,13 @@ const CODE_MESSAGES: Record<string, string> = {
   unsupported_session_field: '这个会话字段服务端不支持修改',
   session_not_found: '会话不存在（可能已被删除）',
   client_upgrade_required: '服务端要求更新客户端才能用这个接口',
+  // 审批（/v1/runs/{id}/approval）
+  invalid_approval_choice: '审批选项不被服务端接受',
+  approval_not_pending: '这条审批已经被结算了（超时 / 已在别处处理）',
+  approval_not_active: '这一轮已经没有待决审批了',
+  stale_generation: '审批已经过期（服务端轮次变了），请重试这一轮',
+  invalid_params: '请求参数不被服务端接受',
+  unknown_execution: '这一轮的结果未知（服务端进程重启过）',
 }
 
 const STATUS_MESSAGES: Record<number, string> = {
@@ -128,6 +138,7 @@ async function toApiError(response: Response): Promise<CloudApiError> {
   return new CloudApiError(code, message, {
     status,
     retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined,
+    backendCode: detail.code || undefined,
   })
 }
 

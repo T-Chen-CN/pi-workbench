@@ -34,7 +34,15 @@ import {
   settleRun
 } from '../cloud/ledger.js'
 import { createRemote, toRunStatus } from '../cloud/remote.js'
+import { recordApprovalDecision, recordModeChange } from '../cloud/audit.js'
+import {
+  isApprovalMode,
+  readApprovalPolicy,
+  writeApprovalMode
+} from '../cloud/policy.js'
 import type {
+  CloudApprovalChoice,
+  CloudApprovalMode,
   CloudCapabilities,
   CloudConfigPatch,
   CloudConnectionState,
@@ -422,6 +430,88 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   )
 
+  /**
+   * 提交审批决定。
+   *
+   * 只接受 once / session / deny（`always` 会写服务端永久白名单，S-08 禁止），
+   * 并在同一次调用里写一条审计（决定行）；结果行由 runner 在下一个终态工具卡上补。
+   */
+  handleIpc(
+    'cloud:approval:respond',
+    async (
+      _event,
+      input: {
+        runId?: string
+        requestId?: string
+        generation?: number
+        choice?: string
+        command?: string
+        patternKeys?: string[]
+        sessionId?: string
+      }
+    ) => {
+      const choice = String(input?.choice ?? '')
+      if (choice !== 'once' && choice !== 'session' && choice !== 'deny') {
+        return { success: false as const, error: '审批选项只能是 once / session / deny' }
+      }
+      const runId = String(input?.runId ?? '') || (runner?.activeRunId ?? '')
+      if (!runId) return { success: false as const, error: '当前没有正在执行的一轮' }
+      const requestId = String(input?.requestId ?? '') || undefined
+      const rawGeneration = Number(input?.generation)
+      const generation = Number.isInteger(rawGeneration) ? rawGeneration : undefined
+
+      try {
+        const remote = createRemote(ensureClient())
+        await remote.respondApproval({ runId, requestId, generation, choice: choice as CloudApprovalChoice })
+        // 审计：决定行（结果行由 runner 后补）
+        let mode: CloudApprovalMode | null = null
+        try {
+          mode = (await readApprovalPolicy()).mode
+        } catch {
+          // 读不到档位不影响审批本身：审计里就记 null
+        }
+        recordApprovalDecision({
+          runId,
+          sessionId: input?.sessionId ?? null,
+          command: String(input?.command ?? ''),
+          patternKeys: Array.isArray(input?.patternKeys) ? input.patternKeys : [],
+          choice: choice as CloudApprovalChoice,
+          mode,
+        })
+        return { success: true as const, choice }
+      } catch (error) {
+        logger?.warn('[Cloud] approval respond failed', cloudErrorMessage(error))
+        return fail(error)
+      }
+    }
+  )
+
+  handleIpc('cloud:policy:get', async () => {
+    try {
+      const policy = await readApprovalPolicy()
+      return { success: true as const, policy }
+    } catch (error) {
+      logger?.warn('[Cloud] policy read failed', cloudErrorMessage(error))
+      return fail(error)
+    }
+  })
+
+  handleIpc('cloud:policy:set', async (_event, input: { mode?: string }) => {
+    const mode = String(input?.mode ?? '')
+    if (!isApprovalMode(mode)) {
+      return { success: false as const, error: `不支持的审批档位：${mode}` }
+    }
+    try {
+      const before = await readApprovalPolicy()
+      const policy = await writeApprovalMode(mode)
+      if (before.mode !== policy.mode) recordModeChange(before.mode, policy.mode)
+      return { success: true as const, policy }
+    } catch (error) {
+      logger?.warn('[Cloud] policy write failed', cloudErrorMessage(error))
+      return fail(error)
+    }
+  })
+
   handleIpc('cloud:diagnostics', async () => {
     try {
       const diagnostics = await createRemote(ensureClient()).diagnostics()
@@ -668,7 +758,39 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     if (!runId) return { success: false, error: '缺少 runId' }
     try {
       const snapshot = await createRemote(ensureClient()).runStatus(runId)
-      return { success: true, state: snapshot.status, error: snapshot.error ?? undefined }
+      return {
+        success: true,
+        state: snapshot.status,
+        error: snapshot.error ?? undefined,
+        // 断流 / 重启后补卡片的唯一来源；只透脱敏字段（命令 + 命中规则 + 定位用的 id）
+        pendingControls: (snapshot.pendingControls ?? []).map((control) => ({
+          kind: typeof control?.kind === 'string' ? control.kind : '',
+          promptId: String(control?.prompt_id ?? control?.request_id ?? ''),
+          generation:
+            typeof control?.execution_generation === 'number'
+              ? control.execution_generation
+              : typeof control?.generation === 'number'
+                ? control.generation
+                : undefined,
+          command: typeof control?.command === 'string' ? control.command : '',
+          patternKey:
+            typeof control?.pattern_key === 'string'
+              ? control.pattern_key
+              : Array.isArray(control?.pattern_keys)
+                ? String(control.pattern_keys[0] ?? '')
+                : '',
+          question: typeof control?.question === 'string' ? control.question : '',
+          choices: Array.isArray(control?.choices)
+            ? control.choices.map((item) => String(item ?? '')).filter(Boolean)
+            : undefined,
+          timeoutSeconds:
+            typeof control?.timeout_s === 'number'
+              ? control.timeout_s
+              : typeof control?.timeout_seconds === 'number'
+                ? control.timeout_seconds
+                : undefined,
+        })),
+      }
     } catch (error) {
       return fail(error)
     }

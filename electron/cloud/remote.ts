@@ -10,7 +10,7 @@ import type {
   CloudSession,
   CloudTracePart,
 } from './types.js'
-import type { CloudClient } from './client.js'
+import { CloudApiError, type CloudClient } from './client.js'
 import { mapMessages, type RawMessage } from './map.js'
 
 interface RawSession {
@@ -525,6 +525,51 @@ export function createRemote(client: CloudClient) {
         `/v1/runs/${encodeURIComponent(runId)}/steer`,
         { method: 'POST', body: { input: text }, timeoutMs: 20_000 }
       )
+    },
+
+    /**
+     * 提交审批决定。
+     *
+     * 服务端存在两种口径（见 CLOUD_AGENT_APPROVAL §3.3）：
+     * - canonical：`{request_id, execution_generation, choice}`，缺身份会 400/409；
+     * - run-scoped：只要 `{choice}`，多带字段会被当未知字段拒掉。
+     *
+     * 所以「能带就带」：拿得到 prompt_id + generation 就先按 canonical 发，
+     * 被 400 `invalid_params` 拒时退回 run-scoped —— 两种服务端都能跑。
+     */
+    async respondApproval(input: {
+      runId: string
+      requestId?: string
+      generation?: number
+      choice: 'once' | 'session' | 'deny'
+    }): Promise<{ resolved?: number }> {
+      const path = `/v1/runs/${encodeURIComponent(input.runId)}/approval`
+      const body: Record<string, unknown> = { choice: input.choice }
+      if (input.requestId) body.request_id = input.requestId
+      if (typeof input.generation === 'number') body.execution_generation = input.generation
+
+      try {
+        const raw = await client.request<Record<string, unknown>>(path, {
+          method: 'POST',
+          body,
+          timeoutMs: 30_000,
+        })
+        return { resolved: typeof raw?.resolved === 'number' ? raw.resolved : undefined }
+      } catch (error) {
+        const canonical = Object.prototype.hasOwnProperty.call(body, 'request_id')
+        const rejected =
+          error instanceof CloudApiError &&
+          error.status === 400 &&
+          (error.backendCode === 'invalid_params' || error.backendCode === 'bad_request')
+        if (!canonical || !rejected) throw error
+        // 退回 run-scoped：只发 choice
+        const raw = await client.request<Record<string, unknown>>(path, {
+          method: 'POST',
+          body: { choice: input.choice },
+          timeoutMs: 30_000,
+        })
+        return { resolved: typeof raw?.resolved === 'number' ? raw.resolved : undefined }
+      }
     },
 
     async stopRun(runId: string): Promise<RunStatusSnapshot> {

@@ -9,6 +9,9 @@
 import { create } from 'zustand'
 import { cloudApi, hasCloudBridge, UNCONFIGURED_CONNECTION } from '../api/cloud'
 import type {
+  CloudApprovalChoice,
+  CloudApprovalMode,
+  CloudApprovalPolicy,
   CloudCapabilities,
   CloudConnectionInfo,
   CloudConnectionState,
@@ -96,6 +99,15 @@ interface CloudState {
   /** 正在提交回答的提问 id */
   clarifyPending: string | null
   clarifyError: string | null
+  /** 正在提交的审批请求 id */
+  approvalPending: string | null
+  approvalError: string | null
+  /** 服务端当前生效的审批策略（原生档位；不本地记忆） */
+  policy: CloudApprovalPolicy | null
+  policyLoading: boolean
+  policyError: string | null
+  /** 正在切换的档位（分段控件 loading） */
+  policyPending: CloudApprovalMode | null
   /** 自检结果（连接页折叠区块，按需拉） */
   diagnostics: CloudDiagnostics | null
   diagnosticsLoading: boolean
@@ -139,6 +151,11 @@ interface CloudState {
   resolveLedger: (id: string, verdict: 'done' | 'missing' | 'ignored') => Promise<boolean>
   noteLedger: (summary: string) => Promise<boolean>
   respondClarify: (promptId: string, answer: string) => Promise<boolean>
+  respondApproval: (requestId: string, choice: CloudApprovalChoice) => Promise<boolean>
+  /** 本地倒计时归零：卡片置灰（服务端随后按自己的超时拒绝） */
+  expireApproval: (requestId: string) => void
+  loadPolicy: () => Promise<void>
+  setMode: (mode: CloudApprovalMode) => Promise<boolean>
   loadDiagnostics: () => Promise<void>
   loadJobs: () => Promise<void>
   runJob: (jobId: string) => Promise<boolean>
@@ -200,6 +217,12 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   jobActionPending: null,
   clarifyPending: null,
   clarifyError: null,
+  approvalPending: null,
+  approvalError: null,
+  policy: null,
+  policyLoading: false,
+  policyError: null,
+  policyPending: null,
   diagnostics: null,
   diagnosticsLoading: false,
   diagnosticsError: null,
@@ -501,6 +524,8 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       runState: null,
       runError: null,
       pending: null,
+      approvalPending: null,
+      approvalError: null,
     })
     const result = await cloudApi.listMessages({ sessionId, limit: MESSAGES_PAGE_SIZE })
     if (get().historyToken !== token) return
@@ -528,6 +553,8 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       runState: null,
       runError: null,
       pending: null,
+      approvalPending: null,
+      approvalError: null,
     })
   },
 
@@ -638,6 +665,99 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       return false
     }
     patch({ settled: true })
+    return true
+  },
+
+  /**
+   * 提交审批决定。
+   *
+   * 乐观写入：卡片立即收折，失败就回退并显示错误。服务端把「已结算 / 代次过期」
+   * 回成 409 时，卡片不回退成可点（否则会被重复提交），而是标成已结算。
+   */
+  async respondApproval(requestId, choice) {
+    const { parts, runId, activeSessionId, approvalPending } = get()
+    if (approvalPending) return false
+    const part = parts.find(
+      (item): item is Extract<CloudTracePart, { type: 'approval' }> =>
+        item.type === 'approval' && item.requestId === requestId
+    )
+    if (!part || part.decision || part.settled) return false
+    if (part.expiredAt !== undefined && choice !== 'deny') return false
+
+    const effectiveRunId = runId ?? ''
+    if (!effectiveRunId) {
+      set({ approvalError: '当前没有正在执行的一轮' })
+      return false
+    }
+
+    const patch = (next: Partial<typeof part>) =>
+      set((state) => ({
+        parts: state.parts.map((item) =>
+          item.type === 'approval' && item.requestId === requestId ? { ...item, ...next } : item
+        ),
+      }))
+
+    set({ approvalPending: requestId, approvalError: null })
+    patch({ decision: choice, decidedAt: Date.now() })
+
+    const result = await cloudApi.respondApproval({
+      runId: effectiveRunId,
+      requestId: part.requestId,
+      generation: part.generation,
+      choice,
+      command: part.command,
+      patternKeys: part.patternKeys,
+      sessionId: activeSessionId ?? undefined,
+    })
+    set({ approvalPending: null })
+    if (result.success) return true
+
+    const settledElsewhere = /结算|过期|not_pending|not_active|stale/.test(result.error ?? '')
+    if (settledElsewhere) {
+      patch({ decision: undefined, decidedAt: undefined, settled: true })
+    } else {
+      patch({ decision: undefined, decidedAt: undefined })
+    }
+    set({ approvalError: result.error ?? 'unknown' })
+    return false
+  },
+
+  /** 本地倒计时归零：卡片置灰（不靠服务端回执，避免重开后又能点） */
+  expireApproval(requestId) {
+    set((state) => ({
+      parts: state.parts.map((item) =>
+        item.type === 'approval' && item.requestId === requestId && item.expiredAt === undefined
+          ? { ...item, expiredAt: Date.now() }
+          : item
+      ),
+    }))
+  },
+
+  /** 读服务端当前策略：只读白名单子集，从不本地缓存旧的档位 */
+  async loadPolicy() {
+    set({ policyLoading: true, policyError: null })
+    const result = await cloudApi.getPolicy()
+    if (!result.success || !result.policy) {
+      set({ policyLoading: false, policyError: result.error ?? 'unknown' })
+      return
+    }
+    set({ policy: result.policy, policyLoading: false })
+  },
+
+  /**
+   * 切原生档位。写后读回的校验在主进程做，这里只更新显示。
+   * 失败时保留旧值（绝不把没生效的档位显示成已生效）。
+   */
+  async setMode(mode) {
+    const previous = get().policy
+    if (previous?.mode === mode) return true
+    set({ policyPending: mode, policyError: null })
+    const result = await cloudApi.setPolicy(mode)
+    if (!result.success || !result.policy) {
+      set({ policyPending: null, policyError: result.error ?? 'unknown' })
+      return false
+    }
+    set({ policy: result.policy, policyPending: null })
     return true
   },
 

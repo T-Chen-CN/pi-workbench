@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Search,
   Send,
+  ShieldAlert,
   Square,
   Trash2,
   X,
@@ -22,6 +23,7 @@ import { useI18nStore } from '../store/i18nStore'
 import { filterSessions, isTerminalRun, useCloudStore } from '../store/cloudStore'
 import { cloudApi } from '../api/cloud'
 import { CloudLedgerDrawer, openWrites } from './CloudLedgerDrawer'
+import { CloudModeSwitch } from './CloudModeSwitch'
 import { withImageDirectives } from '../utils/cloudImages'
 import { distanceFromBottom, pinToBottom, shouldFollow } from '../hooks/chatScroll'
 import { formatRelativeTime } from '../utils/relativeTime'
@@ -252,6 +254,18 @@ export const CloudSessionView: React.FC<{
   const resolveError = useCloudStore((state) => state.resolveError)
   const resolvingUnknown = useCloudStore((state) => state.resolvingUnknown)
   const runLost = useCloudStore((state) => state.runState === 'unknown')
+  /** 待处理的审批（只在真的待决时提示，已决定 / 已过期都不提示） */
+  const pendingApproval = useMemo(
+    () =>
+      parts.find(
+        (part): part is Extract<typeof part, { type: 'approval' }> =>
+          part.type === 'approval' &&
+          !part.decision &&
+          part.expiredAt === undefined &&
+          !part.settled
+      ) ?? null,
+    [parts]
+  )
   const pendingWrites = useCloudStore((state) => state.pendingWrites)
   const [ledgerOpen, setLedgerOpen] = useState(false)
   const openWriteCount = openWrites(pendingWrites).length
@@ -295,6 +309,8 @@ export const CloudSessionView: React.FC<{
   )
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const followRef = useRef(true)
+  /** 与 followRef 同步的一份响应式副本：只是为了让提示条能重渲染 */
+  const [atBottom, setAtBottom] = useState(true)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
 
   const busy = runState !== null && !isTerminalRun(runState)
@@ -305,7 +321,6 @@ export const CloudSessionView: React.FC<{
     if (!element) return
     if (followRef.current) pinToBottom(element)
   }, [parts, activeSessionId])
-
   // 停止请求返回 / 本轮收尾后按钮回到「发送」
   useEffect(() => {
     if (!busy) setStopping(false)
@@ -329,6 +344,15 @@ export const CloudSessionView: React.FC<{
         clientHeight: element.clientHeight,
       })
     )
+    if (followRef.current !== atBottom) setAtBottom(followRef.current)
+  }
+
+  /** 从提示条跳回待审批卡片：审批总在时间线末尾，贴底就是跳到它 */
+  const jumpToApproval = () => {
+    const element = scrollRef.current
+    followRef.current = true
+    setAtBottom(true)
+    if (element) pinToBottom(element)
   }
 
   const submit = () => {
@@ -628,6 +652,20 @@ export const CloudSessionView: React.FC<{
             void attachFiles(files)
           }}
         >
+          {/* 用户滚上去了：不抢滚动位置，只在输入框上方提一句 */}
+          {pendingApproval && !atBottom && (
+            <button
+              type="button"
+              onClick={jumpToApproval}
+              className="mb-2 flex w-full items-center gap-1.5 border border-rule-control bg-raised px-2 py-1 text-left hover:bg-hover"
+            >
+              <ShieldAlert size={11} className="flex-shrink-0 text-warning" />
+              <span className="type-caption text-ink">{t('cloudApprovalPendingHint')}</span>
+              <span className="ml-auto type-caption text-accent">
+                {t('cloudApprovalPendingJump')}
+              </span>
+            </button>
+          )}
           {(attachments.length > 0 || imageBusy) && (
             <div className="mb-2 flex flex-wrap items-center gap-2">
               {attachments.map((item) => (
@@ -744,9 +782,11 @@ export const CloudSessionView: React.FC<{
             )}
           </div>
           <div className="mt-1 flex items-center gap-2">
-            <Caption className="text-ink-subtle">
+            <Caption className="flex-shrink-0 text-ink-subtle">
               {connected ? t('cloudStateConnected') : t('cloudStateUnconfigured')}
             </Caption>
+            <span className="ml-auto flex-shrink-0" />
+            <CloudModeSwitch disabled={!connected} />
           </div>
         </div>
       </section>

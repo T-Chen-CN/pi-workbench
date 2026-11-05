@@ -7,6 +7,8 @@
  */
 
 import type {
+  CloudApprovalChoice,
+  CloudApprovalMode,
   CloudCapabilities,
   CloudConfigGetResult,
   CloudConfigSetResult,
@@ -16,6 +18,8 @@ import type {
   CloudDashboardBounds,
   CloudFrame,
   CloudMessagesResult,
+  CloudPolicyGetResult,
+  CloudPolicySetResult,
   CloudRunResult,
   CloudRunStartResult,
   CloudDiagnostics,
@@ -28,6 +32,8 @@ import type {
 } from '../types/cloud'
 
 export type {
+  CloudApprovalChoice,
+  CloudApprovalMode,
   CloudCapabilities,
   CloudConfigGetResult,
   CloudConfigSetResult,
@@ -37,6 +43,8 @@ export type {
   CloudDashboardBounds,
   CloudFrame,
   CloudMessagesResult,
+  CloudPolicyGetResult,
+  CloudPolicySetResult,
   CloudRunResult,
   CloudRunStartResult,
   CloudSessionsResult,
@@ -168,6 +176,44 @@ export const cloudApi = {
     return bridge.cloudClarifyRespond(input)
   },
 
+  /**
+   * 提交审批决定。`once / session / deny` 之外的值主进程会拒掉（含 `always`）。
+   * 命令与命中规则只用于审计，审批本身不依赖它们。
+   */
+  async respondApproval(input: {
+    runId: string
+    requestId?: string
+    generation?: number
+    choice: CloudApprovalChoice
+    command?: string
+    patternKeys?: string[]
+    sessionId?: string
+  }): Promise<{ success: boolean; error?: string; choice?: CloudApprovalChoice }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudApprovalRespond !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return (await bridge.cloudApprovalRespond(input)) ?? { success: false, error: NO_BRIDGE }
+  },
+
+  /** 读服务端当前生效的审批策略（白名单子集） */
+  async getPolicy(): Promise<CloudPolicyGetResult> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudPolicyGet !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return (await bridge.cloudPolicyGet()) ?? { success: false, error: NO_BRIDGE }
+  },
+
+  /** 切换原生审批档位（只写 `approvals.mode` 一个键） */
+  async setPolicy(mode: CloudApprovalMode): Promise<CloudPolicySetResult> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudPolicySet !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return (await bridge.cloudPolicySet({ mode })) ?? { success: false, error: NO_BRIDGE }
+  },
+
   async diagnostics(): Promise<{
     success: boolean
     error?: string
@@ -178,7 +224,8 @@ export const cloudApi = {
       return { success: false, error: NO_BRIDGE, diagnostics: null }
     }
     const result = await bridge.cloudDiagnostics()
-    return { ...result, diagnostics: result.diagnostics ?? null }
+    // 桥接层可能什么都不回（Web 调试 mock / 半成品替身）：不能在这里抛
+    return { success: result?.success ?? false, error: result?.error, diagnostics: result?.diagnostics ?? null }
   },
 
   async listJobs(): Promise<{ success: boolean; error?: string; jobs: CloudJob[] }> {

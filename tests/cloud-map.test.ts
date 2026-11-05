@@ -459,3 +459,91 @@ describe('clarify', () => {
     expect(part.answer).toBeUndefined()
   })
 })
+
+describe('审批事件', () => {
+  const sse = (payload: Record<string, unknown>, id = 1) => ({
+    id,
+    event: null,
+    data: JSON.stringify({ timestamp: 1, ...payload }),
+  })
+
+  const approvalPart = (frames: unknown[]): Extract<CloudTracePart, { type: 'approval' }> =>
+    (frames[0] as { part: Extract<CloudTracePart, { type: 'approval' }> }).part
+
+  it('builds the card from approval.request with the real request id', () => {
+    const mapper = new RunMapper('run_1')
+    const frames = mapper.handle(
+      sse({
+        event: 'approval.request',
+        run_id: 'run_1',
+        prompt_id: 'ap_42',
+        command: 'rm -rf build',
+        pattern_keys: ['rm -rf', 'destructive'],
+        choices: ['once', 'session', 'deny', 'always'],
+        execution_generation: 5,
+        timeout_s: 120,
+      })
+    )
+    const part = approvalPart(frames)
+    expect(part.requestId).toBe('ap_42')
+    expect(part.command).toBe('rm -rf build')
+    expect(part.patternKeys).toEqual(['rm -rf', 'destructive'])
+    // always 会写服务端永久白名单：映射层就剔掉，UI 拿不到
+    expect(part.choices).toEqual(['once', 'session', 'deny'])
+    expect(part.generation).toBe(5)
+    expect(part.timeoutSeconds).toBe(120)
+    expect(part.expiresAt).toBeGreaterThan(Date.now() - 1000)
+    expect(part.decision).toBeUndefined()
+  })
+
+  it('falls back to the run id when the server gives no prompt id', () => {
+    const mapper = new RunMapper('run_9')
+    const part = approvalPart(
+      mapper.handle(sse({ event: 'approval.request', command: 'ls', choices: [] }))
+    )
+    expect(part.requestId).toBe('run_9')
+    // 服务端没给 choices 时按我们的三项来，绝不补 always
+    expect(part.choices).toEqual(['once', 'session', 'deny'])
+  })
+
+  it('fills the decision back from approval.responded', () => {
+    const mapper = new RunMapper('run_1')
+    mapper.handle(sse({ event: 'approval.request', prompt_id: 'ap_1', command: 'ls' }))
+    const frames = mapper.handle(
+      sse({ event: 'approval.responded', prompt_id: 'ap_1', choice: 'approved', resolved: 1 }, 2)
+    )
+    const part = approvalPart(frames)
+    expect(part.decision).toBe('once')
+    expect(part.decidedAt).toBeTypeOf('number')
+  })
+
+  it('marks the card settled when someone else picked a choice we do not offer', () => {
+    const mapper = new RunMapper('run_1')
+    mapper.handle(sse({ event: 'approval.request', prompt_id: 'ap_1', command: 'ls' }))
+    const part = approvalPart(
+      mapper.handle(sse({ event: 'approval.responded', prompt_id: 'ap_1', choice: 'always' }, 2))
+    )
+    expect(part.decision).toBeUndefined()
+    expect(part.settled).toBe(true)
+  })
+
+  it('expires the pending card when the run ends without an answer', () => {
+    const mapper = new RunMapper('run_1')
+    mapper.handle(sse({ event: 'approval.request', prompt_id: 'ap_1', command: 'ls' }))
+    const frames = mapper.handle(sse({ event: 'run.completed', output: 'ok' }, 2))
+    const expired = frames.find(
+      (frame) =>
+        frame.kind === 'part' && frame.part.type === 'approval' && frame.part.expiredAt !== undefined
+    )
+    expect(expired).toBeTruthy()
+  })
+
+  it('dedupes the same approval coming from the status poll', () => {
+    const mapper = new RunMapper('run_1')
+    mapper.handle(sse({ event: 'approval.request', prompt_id: 'ap_1', command: 'ls' }))
+    expect(mapper.ensureApproval({ kind: 'approval', prompt_id: 'ap_1', command: 'ls' })).toEqual([])
+    expect(
+      mapper.ensureApproval({ kind: 'approval', prompt_id: 'ap_2', command: 'whoami' })[0]
+    ).toMatchObject({ kind: 'part' })
+  })
+})

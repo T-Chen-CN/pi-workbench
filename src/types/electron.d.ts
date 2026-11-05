@@ -1,4 +1,6 @@
 import type {
+  CloudApprovalChoice,
+  CloudApprovalMode,
   CloudCapabilities,
   CloudConfigGetResult,
   CloudConfigSetResult,
@@ -11,6 +13,8 @@ import type {
   CloudFrame,
   CloudMessagesResult,
   CloudPendingWrite,
+  CloudPolicyGetResult,
+  CloudPolicySetResult,
   CloudRunResult,
   CloudRunStartResult,
   CloudSessionsResult,
@@ -708,6 +712,18 @@ export interface ElectronAPI {
     generation: number
     answer: string
   }) => Promise<{ success: boolean; error?: string }>
+  cloudApprovalRespond: (input: {
+    runId: string
+    requestId?: string
+    generation?: number
+    choice: CloudApprovalChoice
+    /** 只给审计用（主进程不再回头查卡片） */
+    command?: string
+    patternKeys?: string[]
+    sessionId?: string
+  }) => Promise<{ success: boolean; error?: string; choice?: CloudApprovalChoice }>
+  cloudPolicyGet: () => Promise<CloudPolicyGetResult>
+  cloudPolicySet: (input: { mode: CloudApprovalMode }) => Promise<CloudPolicySetResult>
   cloudDiagnostics: () => Promise<{
     success: boolean
     error?: string
@@ -752,7 +768,19 @@ export interface ElectronAPI {
     idempotencyKey: string
   }) => Promise<CloudRunStartResult>
   cloudRunStop: (input: { runId: string }) => Promise<CloudRunResult>
-  cloudRunStatus: (input: { runId: string }) => Promise<CloudRunResult>
+  cloudRunStatus: (input: { runId: string }) => Promise<CloudRunResult & {
+    /** 断流 / 重启后补卡片的唯一来源（已脱敏） */
+    pendingControls?: Array<{
+      kind: string
+      promptId: string
+      generation?: number
+      command: string
+      patternKey: string
+      question: string
+      choices?: string[]
+      timeoutSeconds?: number
+    }>
+  }>
   cloudRunResolveUnknown: (input: { runId: string }) => Promise<{
     success: boolean
     error?: string

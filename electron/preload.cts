@@ -494,6 +494,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cloudSessionsDelete: (input: unknown) => ipcRenderer.invoke('cloud:sessions:delete', input),
   cloudClarifyRespond: (input: { requestId: string; generation: number; answer: string }) =>
     ipcRenderer.invoke('cloud:clarify:respond', input),
+  cloudApprovalRespond: (input: {
+    runId: string
+    requestId?: string
+    generation?: number
+    choice: 'once' | 'session' | 'deny'
+    command?: string
+    patternKeys?: string[]
+    sessionId?: string
+  }) => ipcRenderer.invoke('cloud:approval:respond', input),
+  cloudPolicyGet: () => ipcRenderer.invoke('cloud:policy:get'),
+  cloudPolicySet: (input: { mode: 'manual' | 'smart' | 'off' }) =>
+    ipcRenderer.invoke('cloud:policy:set', input),
   cloudDiagnostics: () => ipcRenderer.invoke('cloud:diagnostics'),
   cloudJobsList: () => ipcRenderer.invoke('cloud:jobs:list'),
   cloudJobsRun: (input: { jobId: string }) => ipcRenderer.invoke('cloud:jobs:run', input),

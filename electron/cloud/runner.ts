@@ -10,6 +10,7 @@ import { CloudApiError, type CloudClient } from './client.js'
 import { readSseStream } from './events.js'
 import { RunMapper } from './map.js'
 import { createRemote, type CloudRemote } from './remote.js'
+import { recordApprovalOutcome } from './audit.js'
 
 /** 停止请求发出后，等后端推终态的最长时间 */
 const STOP_FALLBACK_MS = 15_000
@@ -144,6 +145,7 @@ export class CloudRunner {
               for (const emitted of mapper.handle(frame)) {
                 if (emitted.kind === 'run') terminal = true
                 this.deps.emit(emitted)
+                this.auditToolOutcome(emitted)
               }
             },
           })
@@ -175,13 +177,34 @@ export class CloudRunner {
     await this.reconcile(runId, sessionId, terminal)
   }
 
+  /**
+   * 审批的真实结果：上一次决定之后的**第一个终态工具卡**就结掉审计。
+   *
+   * 被拒绝时服务端返回 `BLOCKED: ...` 且 `error=true`，与真实执行失败区得开 ——
+   * 这正是「审计三问」里第三问的证据。
+   */
+  private auditToolOutcome(frame: CloudFrame): void {
+    if (frame.kind !== 'part') return
+    const part = frame.part
+    if (part.type !== 'tool') return
+    if (part.status === 'running') return
+    recordApprovalOutcome(this.stream?.runId ?? 'unknown', {
+      error: part.status === 'error',
+      preview: part.resultPreview ?? '',
+    })
+  }
+
   /** 只补「还没见过的提问」：已有的 prompt_id 会被 mapper 去重掉 */
   private async pollControls(runId: string, mapper: RunMapper): Promise<void> {
     try {
       const snapshot = await this.remote.runStatus(runId)
       for (const control of snapshot.pendingControls ?? []) {
-        if (String(control?.kind ?? '') !== 'clarify') continue
-        for (const emitted of mapper.ensureClarify(control)) this.deps.emit(emitted)
+        const kind = controlKindOf(control)
+        if (kind === 'clarify') {
+          for (const emitted of mapper.ensureClarify(control)) this.deps.emit(emitted)
+        } else if (kind === 'approval') {
+          for (const emitted of mapper.ensureApproval(control)) this.deps.emit(emitted)
+        }
       }
     } catch (error) {
       this.deps.log?.('[Cloud] control poll failed', error)
@@ -248,4 +271,21 @@ export class CloudRunner {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * `pending_controls` 里这一条是审批还是提问。
+ *
+ * 不硬编码单一 `kind`：服务端版本间 `kind` 的取值与字段都在变，所以先看 `kind`，
+ * 再看字段形状（审批带命令/命中规则，提问带问题文本）。
+ */
+export function controlKindOf(control: Record<string, unknown>): 'clarify' | 'approval' | null {
+  const kind = String(control?.kind ?? '').toLowerCase()
+  if (kind.includes('clarify')) return 'clarify'
+  if (kind.includes('approv')) return 'approval'
+  const hasCommand = typeof control?.command === 'string'
+  const hasPattern = control?.pattern_key !== undefined || Array.isArray(control?.pattern_keys)
+  if (hasCommand || hasPattern) return 'approval'
+  if (typeof control?.question === 'string') return 'clarify'
+  return null
 }
