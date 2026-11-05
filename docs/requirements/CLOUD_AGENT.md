@@ -439,21 +439,21 @@ dash.example.com {
 
 ### 9.2 D1–D2：四个 go/no-go 探针（1 天）
 
-| # | 探针 | 不通过怎么办 |
+| # | 探针 | 结论（2026-11-05/06 实测，Hermes 0.22.6） |
 | --- | --- | --- |
-| ① | `GET /v1/capabilities` 有 `run_approval` / `session_*` | 版本太旧 → `hermes update`；仍无 → 回到 dashboard WS 面 |
-| ② | 危险命令是 **park**（`pending_controls` 有值）还是直接 `BLOCKED` | 直接 BLOCKED → 审批只能靠前置策略收缩，S-04 降级，D 阶段重设计 |
-| ③ | `GET /api/config/schema` + `PUT /api/config` 回读 + **下个 session 是否生效** | 不通 → 配置页改自研 |
-| ④ | 双进程并存：profile 归属、端口、dashboard 能否重启 gateway | 冲突 → dashboard 用 `--isolated` 单独实例 |
+| ① | `GET /v1/capabilities` 有 `run_approval` / `session_*` | ✅ 通过：`/v1/capabilities` 200 且带审批与 `session_*` 端点 |
+| ② | 危险命令是 **park**（`pending_controls` 有值）还是直接 `BLOCKED` | ✅ **park**：`approval.request`（`prompt_id` / `execution_generation` / `command` / `description` / `choices`）+ `GET /v1/runs/{id}` 的 `status: waiting_for_approval`，答复后工具才执行 |
+| ③ | `GET /api/config/schema` + `PUT /api/config` 回读 + **下个 session 是否生效** | ✅ 通过：`PUT {"config":{...}}` 走 `_deep_merge`（可只发一个键），读回一致，且 `disabled_toolsets` **立即生效**（无需重启 gateway） |
+| ④ | 双进程并存：profile 归属、端口、dashboard 能否重启 gateway | ✅ 通过：api_server `:8642` 与 dashboard `:9119` 并存；两域名反代各自可用（`dash.` 走 HTML/配置面，`api.` 走 Bearer REST/SSE） |
 
-> v4 的「`usage` 含 cache token」探针已删（不做预算熔断）。探针是一次性脚本，不入库；结论回填 §10 的 Q 表。
+> v4 的「`usage` 含 cache token」探针已删（不做预算熔断）。探针是一次性脚本，不入库；原始帧与回执语义见 [CLOUD_AGENT_APPROVAL](./CLOUD_AGENT_APPROVAL.md)。
 
 ### 9.3 分期（9–11 周）
 
 | 期 | 目标 | 交付判据 | 工期 |
 | --- | --- | --- | --- |
-| **P0 接通** | D0–D2 → 首页入口 + 两个页面骨架 → 传输（Bearer + runs）→ 事件映射 | AC-01 / AC-02 / AC-08 / AC-19 | 2 周 |
-| **P1 看得见 + 批得动** | 审批 UI（`pending_controls`）/ 审计三问 / 活动流水（接现成）/ 配置页（内嵌 dashboard）/ 策略版本化 + 告警还原（S-09/S-11） | AC-03 / AC-04 / AC-16~18 / AC-20 / AC-21 / AC-22 | 3 周 |
+| **P0 接通** ✅ | D0–D2 → 首页入口 + 两个页面骨架 → 传输（Bearer + runs）→ 事件映射 | AC-01 / AC-02 / AC-08 / AC-19 | 2 周 |
+| **P1 看得见 + 批得动** ✅（策略版本化 / 告警还原除外，见 §13） | 审批 UI（`pending_controls`）/ 审计三问 / 活动流水（接现成）/ 配置页（内嵌 dashboard） | AC-03 / AC-04 / AC-16~18 / AC-20 / AC-21 / AC-22 | 3 周 |
 | **P2 敢放着不管** | 断线占位 / run 重新 attach / 未结算清单 / jobs 视图 | AC-06 / AC-07 / AC-09 / AC-10 | 2 周 |
 | **P3 补齐缺口** | CDP 屏幕 + 接管 / Kanban 任务视图 / `clarify` 卡片 /（可选）对外写 MCP 门 | AC-05 | 2 周 |
 | **P4 收尾** | 一个 IM 渠道（如需）/ 遥测与出网复核 / 拆窗 | AC-13 / AC-15 | 1 周 |
@@ -494,9 +494,36 @@ dash.example.com {
 | Q6 | 子代理互通 | ⚠ 待验证 |
 | Q8 | NemoClaw | 🟡 暂不引入 |
 | Q12 | 与官方 Hermes Desktop 的差异化 | 🟠 假设：同窗并列 + 本地/云端并存 + 统一审批与审计；**P0 后复核** |
-| **Q13** | 危险命令在 api 会话里是 park 还是 BLOCKED | ⚠ **探针②**，P0 的门槛 |
+| ~~Q13~~ | 危险命令在 api 会话里是 park 还是 BLOCKED | **已回答（探针②）**：park —— 挂成待批、答复后才执行 |
 
 已答：Q1 ACP → 不作主通道；Q2 控制面 → api_server REST+SSE；Q3 多 agent → 隔离模型 + `multiplex_profiles`（P3 后）；Q7 容器后端 → 已否决；Q9 屏幕流 → CDP screencast；Q10 F03/H03 → 砍掉；Q11 用量 → v5 首期不做（也不做预算闸）；Q14 证书 → DNSPod + DNS-01，本地访问需代理。
+
+---
+
+## 10.5 实施现状（2026-11-06 收口）
+
+**已交付**（[BACKLOG](../progress/BACKLOG.md) 的 C-00 – C-06，全部在 `main`）：
+
+| 分期 | 交付物 | 对应代码 |
+| --- | --- | --- |
+| 入口与页面 | 首页「云端 Hermes」入口 + 会话 / 控制台 / 任务 / 连接 四个常驻页签（切走只 `hidden` + `inert`） | `src/components/CloudWorkspaceView.tsx` |
+| 控制面 | 连接配置（`safeStorage`）、`/v1/runs` + SSE 事件映射、停止 / 插话 / clarify / 审批四个回执通道 | `electron/cloud/{config,client,events,map,remote,runner}.ts`、`electron/ipc/cloud-agent.ts` |
+| 会话与时间线 | 会话 CRUD、历史映射、工具卡 / 子代理卡 / 思考块 / 图片 / 未结算账本抽屉 | `src/components/Cloud{SessionView,Trace,ToolCard,SubagentCard,LedgerDrawer}.tsx` |
+| 审批闭环 | 审批卡（once / session / deny）+ 倒计时 + 断流补卡；审计 `data/cloud-agent/audit.jsonl`；原生档位三档切换 | [CLOUD_AGENT_APPROVAL](./CLOUD_AGENT_APPROVAL.md) |
+| 配置面 | `WebContentsView` 嵌 dashboard（独立 partition、无 preload）+ 连接页策略卡与自检面板 | `electron/cloud/{dash,dashboard}.ts`、`CloudConnectionView.tsx` |
+| 任务与导入 | 定时任务列表 / 三个动作、`hermes-handoff` 文件导入 | `CloudJobsView.tsx`、`electron/cloud/handoff.ts` |
+
+**明确后置**（不是遗漏，是排期决定）：
+
+| 条目 | 内容 | 为什么后置 |
+| --- | --- | --- |
+| C-07 | 耐久性：run 重新 attach / 断线占位 / 未结算清单补录 | AC-06 / AC-07 / AC-09 / AC-10；当前断线靠 15s 状态轮询兜底 |
+| C-08 | CDP 屏幕与接管（AC-05） | 需要云上常驻浏览器，运维面另算 |
+| C-09 / C-10 | Kanban 投影、云端页面拆窗 | 依赖 C-08 |
+| C-11 | IM 渠道 / 语音 / 出网遥测复核 | 一次性验收动作，不是功能 |
+| C-12 | 对外写 MCP 门 + write-ahead 账本 | 账本已能记与人工核对，门是另一个量级 |
+
+**已知盲区**（写进 UI，不假装没有）：纯 `sudo <cmd>` 与 `write_file` / `patch` 没有审批路径（Hermes 只对危险 shell 模式问）；没有消费上限；`approvals.deny` 保持 Hermes 默认空。
 
 ---
 
@@ -510,6 +537,7 @@ dash.example.com {
 
 | 版本 | 日期 | 变化 |
 | --- | --- | --- |
+| **收口** | 2026-11-06 | 不回改方案正文：新增 §10.5「实施现状」（C-00–C-06 已交付、C-07–C-12 明确后置、三条已知盲区），四个 go/no-go 探针与 Q13 回填实测结论。 |
 | **v5** | 2026-11-03 | ①删掉受限 OS 用户 `piagent` 与 `terminal.backend: ssh`，Hermes 改整机权限（含 sudo），`api_server` toolset 放开 `terminal`；隔离降为软限制 → 新增 S-14（硬边界只能在主机外）/ S-15（deny 覆盖系统级）、S-03/S-09/S-11 强度下调；②本地改**两个独立页面**（会话页 / 配置页，首页按钮进入），顶层入口提到 P0；③云端前端**不复用** `ChatPanel`/`chatStore`，只对齐 parts 类型（删掉 transcript 解耦）；④**删掉预算熔断**（C-E04 / S-07 / AC-08）与用量展示，探针 5 → 4，工期 10–12 → **9–11 周**。 |
 | v4 | 2026-11-03 | 控制面改 api_server（Bearer REST + SSE）；传输改域名 + TLS 反代（弃 SSH 隧道）；配置面改内嵌 dashboard；自研 8 → 4；surface 隔离升为铁律；补网络前提。同日精简：删选型论证（归 ADR）。 |
 

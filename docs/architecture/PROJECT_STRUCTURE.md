@@ -352,7 +352,7 @@ ChatPanel.handleSubmit
 | `cloud:sessions:update` / `sessions:delete` | invoke | 会话条目操作（PATCH 白名单字段 / 硬删除，不可恢复） |
 | `cloud:run:start` / `run:stop` / `run:status` / `run:steer` | invoke | 云端轮次：POST `/v1/runs`（带幂等键）、停止、状态轮询、运行中插话 |
 | `cloud:clarify:respond` | invoke | 回答 clarify 提问（body 严格 `{request_id, execution_generation, answer}`） |
-| `cloud:approval:respond` | invoke | 提交审批决定（只收 `once` / `session` / `deny`，`always` 一律拒；body 能带就带 `request_id` + `execution_generation`，被 400 拒时回退 `{choice}`）；同次调用写一条审计 |
+| `cloud:approval:respond` | invoke | 提交审批决定（只收 `once` / `session` / `deny`，`always` 一律拒；body **三个字段必填** `{request_id, execution_generation, choice}`，实测少一个就是 400 `invalid_params`）；回执一成功立刻写一条审计 |
 | `cloud:policy:get` / `policy:set` | invoke | 服务端原生审批档位（`approvals.mode` = `manual` / `smart` / `off`）：只读白名单子集（`mode` / `timeout` / deny 条数 / 禁用工具集 / 终端后端）、写最小 patch 并读回复核 |
 | `cloud:diagnostics` | invoke | 自检：`/health/detailed` + `/v1/{toolsets,skills,models}` 四块独立成败 |
 | `cloud:jobs:list` / `jobs:run` / `jobs:pause` / `jobs:resume` | invoke | 定时任务：只读列表 + 三个动作（新建走对话、删除不提供） |
@@ -362,7 +362,8 @@ ChatPanel.handleSubmit
 | `cloud:event` | main → renderer | SSE 帧映射后的时间线增量 / 轮次状态 / 会话 id |
 | `cloud:status` | main → renderer | 连接状态变化 |
 | `cloud:dashboard:open` / `close` / `bounds` / `reload` | invoke | 程序内控制台：`WebContentsView`（独立 partition、sandbox、无 preload）的开合、边界同步、重载 |
-| `cloud:dashboard:load-failed` / `dashboard:closed` | main → renderer | 控制台加载失败、页面内 Esc 关闭 |
+| `cloud:dashboard:loaded` / `load-failed` / `dashboard:closed` | main → renderer | 控制台首帧加载完成 / 加载失败 / 页面内 Esc 关闭 |
+| `cloud:handoff:pick` / `handoff:apply` / `handoff:copy` | invoke | `hermes-handoff` 交接文件：选文件并解析预览、确认后写入连接配置、复制自举 Prompt |
 
 ---
 

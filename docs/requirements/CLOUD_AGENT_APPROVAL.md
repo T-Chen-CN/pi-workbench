@@ -259,50 +259,21 @@ Hermes 默认 `approvals.deny` 就是空。保持默认后，安全地板只剩�
 
 ---
 
-## 8. 分期
+## 8. 分期（三步均已执行完）
 
-### 阶段 0：前端闭环（纯本地，可独立合入）
+| 阶段 | 内容 | 状态 |
+| --- | --- | --- |
+| 0 前端闭环 | 类型扩展 → `map.ts` 真实字段 / `ensureApproval` / 剔除 `always` → `pollControls` 纳入审批 → `cloud:approval:respond` → 审批卡 + i18n → store 状态机 → 审计 | ✅ 已合入 |
+| 1 服务端收严 + 抓真帧 | 最小 patch 只改 `approvals.mode: manual` / `timeout: 120` / 三个子模式 `deny` / `agent.disabled_toolsets: [code_execution]`（`approvals.deny` 保持空），读回复核 + 抓 `approval.request` 真帧 | ✅ 已执行（回滚 patch 见 §13.1；`timeout` 收尾后回到 300） |
+| 2 原生档位切换 | `policy.ts` 白名单读 + 最小 patch 写 + 读回复核 → `cloud:policy:get/set` → `CloudModeSwitch` + 二次确认 + 变更审计 | ✅ 已合入 |
 
-1. `types.ts` / `types/cloud.ts` 的 approval 字段扩展
-2. `map.ts`：真实字段 + `ensureApproval` + 三级回填 + 剔除 `always`
-3. `runner.ts`：`pollControls` 纳入 approval；终态标记未决为 `expired`
-4. `remote.ts` + IPC 四步：`cloud:approval:respond`；`cloud:run:status` 透出 `pendingControls`
-5. `CloudApprovalCard` + `CloudTrace` 接入 + i18n
-6. `cloudStore` 状态机 + `useCloudBridge` + 待审批提示
-7. `audit.ts` + 收尾落账
-8. 测试（§10）
-
-**DoD**：`npm test` + `npm run lint` + `npm run type-check` 绿；mock 帧下卡片能出、能点、能回填、能过期；`design-system.test.ts` 绿。
-
-### 阶段 1：服务端收严 + 抓真帧（由实现者直接执行，回滚 30 秒）
-
-1. `cp config.yaml config.yaml.bak-approval-<ts>`
-2. 改（最小 patch，**只 4 个键**）：
-   - `approvals.mode: manual`
-   - `approvals.timeout: 120`
-   - `approvals.cron_mode` / `single_query_mode` / `unattended_mode: deny`
-   - `agent.disabled_toolsets: [code_execution]` ← **唯一一处非默认**
-   - `approvals.deny` **保持空**（决策 5）
-3. 复核：`/api/config` 读回一致；`/v1/toolsets`（`code_execution` 应为 off；其余 26 个不动）
-4. **探针 ②**：让 Agent 跑 `bash -c "echo probe"`（命中「`-c` 脚本执行」危险模式；被批准也无害），抓 `approval.request` 与 `pending_controls` 原样留档 `cache/probe/frames/`
-5. 两种回执语义各试一次，确定口径并回填 §3.3
-6. 回滚：恢复备份 + 重启 gateway（`hermes-gateway`）
-
-### 阶段 2：原生档位切换
-
-1. `policy.ts`（白名单子集读 + 最小 patch 写 + 读回复核）
-2. IPC 四步：`cloud:policy:get` / `cloud:policy:set`
-3. `CloudModeSwitch` + 二次确认 + 生效说明 + 模式变更审计
-4. 首次空 patch 验证（§6.3 最后一行）
-5. 测试
-
----
+真帧留档在对话与本节，**不入库**（`cache/probe/` 是临时目录，收口时已清理）。
 
 ## 9. 风险与未知
 
 | 编号 | 未知 / 风险 | 处理 |
 | --- | --- | --- |
-| R1 | 回执到底是 `{choice}` 还是 `{request_id, execution_generation, choice}`；`approval.request` 是否真不带 `request_id` | **已关闭（2026-11-06 实测）**：canonical 生效；`approval.request` 只带 `prompt_id`。代码仍保留「能带就带 + 兜底」 |
+| R1 | 回执到底是 `{choice}` 还是 `{request_id, execution_generation, choice}`；`approval.request` 是否真不带 `request_id` | **已关闭（2026-11-06 实测）**：三个字段缺一即 400 `invalid_params`，没有 run-scoped 语义；`approval.request` 只带 `prompt_id`。代码只发 canonical，`{choice}` 回退已删 |
 | R2 | `pending_controls` 里 approval 的字段名 | **已关闭**：`{kind:'approval', prompt_id, execution_generation, command, description, choices}`（无 `pattern_*` / `timeout_s`） |
 | R3 | `PUT /api/config` 是否会重写 YAML（丢注释 / 顺序） | **已执行**：patch 返回 `{"ok":true}` 且读回一致；注释能否保留需登服务器才知道（本机只能经 HTTP，故未断言） |
 | R4 | `GET /api/config` 返回解析后的密钥 | 铁律：主进程读、只取白名单子集、**永不回传整份** |
@@ -331,11 +302,11 @@ Hermes 默认 `approvals.deny` 就是空。保持默认后，安全地板只剩�
 
 | 验收 | 覆盖 | 备注 |
 | --- | --- | --- |
-| AC-03 命令级审批（拒绝 → run 继续不重试 → 审计有记录） | 阶段 0 + 1 | |
-| AC-04 审批超时（自动 deny，审计有记录） | 阶段 0 + 1 | `timeout: 120` |
-| AC-16 审批不被后端关掉 | 阶段 2 | `deny` 保持空 → **部分满足**：危险模式会问，纯 `sudo` 不问（见 R7） |
-| AC-17 `execute_code` 已禁用 | 阶段 1 | 唯一非默认项 |
-| AC-22 整机权限可用（先拦再放行） | 阶段 1 第 4 步 | 用 `systemctl stop xxx` 类命令试 |
+| AC-03 命令级审批（拒绝 → run 继续不重试 → 审计有记录） | 阶段 0 + 1 | ✅ 实测：`deny` → `tool.completed{error:true}` + 结果行 `preview:"BLOCKED: Command denied by user…"`，Agent 明确停下 |
+| AC-04 审批超时（自动 deny，审计有记录） | 阶段 0 + 1 | ✅ 代码与倒计时就位（卡片用 `approvals.timeout` 兜底算截止时刻）；未真等满一轮 |
+| AC-16 审批不被后端关掉 | 阶段 2 | ⚠ **部分满足**：危险模式会问，纯 `sudo` 不问（见 R7）；`terminal.backend` 改动由连接页策略卡显示真值 |
+| AC-17 `execute_code` 已禁用 | 阶段 1 | ✅ `/v1/toolsets` 里 `code_execution: enabled=false`，且改动即时生效 |
+| AC-22 整机权限可用（先拦再放行） | 阶段 1 第 4 步 | ✅ 实测：`rm -rf /tmp/…` 先弹卡，`本次允许` 后真的执行并回 `exit=0` |
 | AC-18 / AC-21 策略可回滚 / 被改可发现 | **降级** | 只保证「档位显示 = 服务端真值」 |
 
 ---
@@ -358,7 +329,7 @@ Hermes 默认 `approvals.deny` 就是空。保持默认后，安全地板只剩�
 | --- | --- |
 | `electron/cloud/types.ts` · `src/types/cloud.ts` | `CloudApprovalChoice`（`once`/`session`/`deny`，无 `always`）、`CloudApprovalMode`、`CloudApprovalPolicy`（白名单子集）、审批片段的真实字段（`requestId`/`generation`/`patternKeys`/`choices`/`timeoutSeconds`/`expiresAt`/`decision`/`settled`） |
 | `electron/cloud/map.ts` | `ensureApproval()` 单点建卡（SSE 与 `pending_controls` 同一入口）；`approvalChoicesOf()` 剔 `always`；三级回填（id → 命令 → 唯一未决）；`expirePendingApprovals()` 在 `run.completed` / `failed` / `cancelled` 收尾 |
-| `electron/cloud/remote.ts` | `respondApproval()`：能带就带 `request_id` + `execution_generation`，被 400 `invalid_params` 拒时回退 `{choice}` |
+| `electron/cloud/remote.ts` | `respondApproval()`：只发 canonical `{request_id, execution_generation, choice}`（三个都必填，实测少一个即 400；无 run-scoped 回退） |
 | `electron/cloud/client.ts` | `CloudApiError.backendCode` 保留服务端错误码（`stale_generation` / `approval_not_pending` …）并译成中文文案 |
 | `electron/cloud/runner.ts` | `pollControls` 同时补 clarify + approval；`controlKindOf()` 按 `kind` 再按字段形状识别；`auditToolOutcome()` 在下一个终态工具卡补写审计结果 |
 | `electron/cloud/audit.ts`（新） | `data/cloud-agent/audit.jsonl` 追加 + `fsync`；命令摘要 ≤200 字 |
@@ -384,7 +355,7 @@ Hermes 默认 `approvals.deny` 就是空。保持默认后，安全地板只剩�
 
 顺带加固：结果行按 **`toolCallId`** 对号（审批总是紧跟在它拦下的那次 `tool.started` 之后），实时流和历史纠正帧（`reconcile`）都参与配对 —— 断流时结果只从历史回来，也不能把「真实结果」这一问丢掉。
 
-**待做**：UI 截图验收（Paper / Ink × 1024 / 1440）。
+**验收**：功能主线经用户真机验收（once / session / deny 三条 + 档位切换 + 审计配对）；UI 截图（Paper / Ink × 1024 / 1440）经用户确认跳过。
 
 ### 13.1 已对服务端做的改动（可原样回滚）
 
