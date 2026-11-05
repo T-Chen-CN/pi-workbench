@@ -499,7 +499,30 @@ ssh -i "F:/SSH KEY/SG_001.pem"     -o "ProxyCommand=<HTTP CONNECT 隧道脚本> 
 | 升级 | `hermes plugins update pi-workbench`（数据不动）；升 Hermes 前 `plugins disable` → 升级 → 启用 → `hermes plugins doctor` |
 | 观测 | `curl https://hub.tchen-xiaoxiao.com/v1/hub/health`、`tail -f .../plugin-data/pi-workbench/audit-*.jsonl`、`journalctl -u hermes-gateway-pi-cloud -f` |
 | 限流默认 | 60 req/min/设备；SSE 并发 2；单设备任务队列 8 |
-| 撤销设备 | `POST /v1/devices/{id}/revoke` + 本地连接页「注销这台设备」 |
+| 撤销设备 | `POST /v1/devices/{id}/revoke` + 本地连接页「注销这台设备」（设备可自注销；撤销**别的**设备要管理密钥） |
+
+### 15.1 管理密钥怎么拿、什么时候要、怎么换
+
+**只有两件事需要它**：登记新设备、撤销/操作**别的**设备。日常对话、审批、图片、注销自己都不需要。
+
+```bash
+# 拿（= 以后自己取，不用问人）
+ssh … 'cat ~/pi-hub-admin-key'
+
+# 也可从 systemd drop-in 里看（同一个值）
+ssh … 'sudo grep PI_HUB_ADMIN_KEY /etc/systemd/system/hermes-gateway-pi-cloud.service.d/20-pi-hub.conf'
+```
+
+**换（轮换）**：新值 → 写文件 → 改 drop-in → 重启。旧值立刻失效，已登记的 device token **不受影响**（token 是独立凭据）。
+
+```bash
+ssh … 'NEW=$(openssl rand -base64 32 | tr -d "/+=" ); printf "%s" "$NEW" > ~/pi-hub-admin-key; chmod 600 ~/pi-hub-admin-key;
+        sudo sed -i "s|^Environment=PI_HUB_ADMIN_KEY=.*|Environment=PI_HUB_ADMIN_KEY=$NEW|"           /etc/systemd/system/hermes-gateway-pi-cloud.service.d/20-pi-hub.conf;
+        sudo systemctl daemon-reload && sudo systemctl restart hermes-gateway-pi-cloud.service;
+        sleep 5; curl -s http://127.0.0.1:8484/v1/hub/health | head -c 80'
+```
+
+**建议**：拿到后存进密码管理器；不放进仓库、不放进工作区（`.env` 也不行——agent 读得到）。
 
 ---
 
