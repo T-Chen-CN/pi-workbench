@@ -6,6 +6,7 @@ import type {
   CloudConfigSetResult,
   CloudConnectResult,
   CloudConnectionState,
+  CloudDeviceResult,
   CloudDiagnostics,
   CloudHandoffApplyResult,
   CloudHandoffPickResult,
@@ -776,6 +777,8 @@ export interface ElectronAPI {
     state?: CloudRunStatus
     error?: string
   }>
+  cloudDeviceGet: () => Promise<CloudDeviceResult>
+  cloudDeviceSet: (input: { name: string }) => Promise<CloudDeviceResult>
   cloudRunStop: (input: { runId: string }) => Promise<CloudRunResult>
   cloudRunStatus: (input: { runId: string }) => Promise<CloudRunResult & {
     /** 断流 / 重启后补卡片的唯一来源（已脱敏） */

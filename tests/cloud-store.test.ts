@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { filterSessions, isTerminalRun, upsertPart, useCloudStore } from '../src/store/cloudStore'
 import type { CloudTracePart } from '../src/types/cloud'
 
@@ -688,5 +688,53 @@ describe('attachRun（重启后接回在跑的一轮）', () => {
     await useCloudStore.getState().connect()
     await Promise.resolve()
     expect(calls).toHaveLength(1)
+  })
+})
+
+describe('设备身份', () => {
+  const DEVICE = { id: 'dev-1', name: '本机', defaultName: '本机' }
+
+  afterEach(() => {
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI
+    useCloudStore.setState({ device: null, deviceError: null, deviceBusy: false })
+  })
+
+  it('falls back to a stable preview identity when there is no bridge', async () => {
+    await useCloudStore.getState().loadDevice()
+    expect(useCloudStore.getState().device).toMatchObject({ name: '浏览器预览' })
+    expect(useCloudStore.getState().deviceError).toBeNull()
+  })
+
+  it('reads and renames through the bridge', async () => {
+    const setDevice = vi.fn(async (input: { name: string }) => ({
+      success: true,
+      device: { ...DEVICE, name: input.name || DEVICE.defaultName },
+    }))
+    ;(window as unknown as { electronAPI: unknown }).electronAPI = {
+      cloudConfigGet: async () => ({ success: false }),
+      cloudDeviceGet: async () => ({ success: true, device: DEVICE }),
+      cloudDeviceSet: setDevice,
+    }
+
+    await useCloudStore.getState().loadDevice()
+    expect(useCloudStore.getState().device).toEqual(DEVICE)
+
+    await expect(useCloudStore.getState().setDeviceName('客厅那台')).resolves.toBe(true)
+    expect(setDevice).toHaveBeenCalledWith({ name: '客厅那台' })
+    expect(useCloudStore.getState().device?.name).toBe('客厅那台')
+    expect(useCloudStore.getState().deviceBusy).toBe(false)
+  })
+
+  it('keeps the previous name and surfaces the error when saving fails', async () => {
+    ;(window as unknown as { electronAPI: unknown }).electronAPI = {
+      cloudConfigGet: async () => ({ success: false }),
+      cloudDeviceGet: async () => ({ success: true, device: DEVICE }),
+      cloudDeviceSet: async () => ({ success: false, error: '保存设备名失败' }),
+    }
+
+    await useCloudStore.getState().loadDevice()
+    await expect(useCloudStore.getState().setDeviceName('坏名字')).resolves.toBe(false)
+    expect(useCloudStore.getState().device?.name).toBe('本机')
+    expect(useCloudStore.getState().deviceError).toBe('保存设备名失败')
   })
 })

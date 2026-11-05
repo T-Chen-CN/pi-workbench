@@ -32,15 +32,43 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const handoffBusy = useCloudStore((state) => state.handoffBusy)
   const connect = useCloudStore((state) => state.connect)
   const disconnect = useCloudStore((state) => state.disconnect)
+  const device = useCloudStore((state) => state.device)
+  const deviceBusy = useCloudStore((state) => state.deviceBusy)
+  const deviceError = useCloudStore((state) => state.deviceError)
+  const setDeviceName = useCloudStore((state) => state.setDeviceName)
 
   const [baseUrl, setBaseUrl] = useState(config.baseUrl)
   const [apiKey, setApiKey] = useState('')
   const [dashboardToken, setDashboardToken] = useState('')
   const [busy, setBusy] = useState<'save' | 'connect' | null>(null)
+  const [deviceName, setDeviceNameDraft] = useState('')
 
   useEffect(() => {
     setBaseUrl(config.baseUrl)
   }, [config.baseUrl])
+
+  useEffect(() => {
+    setDeviceNameDraft(device?.name ?? '')
+  }, [device?.name])
+
+  /** 失焦 / 回车提交。值没变就什么也不做，避免每次点过输入框都写一遍盘。 */
+  const handleCommitDeviceName = async () => {
+    if (!device) return
+    if (deviceName.trim() === device.name) return
+    const ok = await setDeviceName(deviceName)
+    if (ok) {
+      toast.success(t('cloudDeviceSaved'))
+      return
+    }
+    toast.error(t('cloudDeviceSaveFailed'))
+    setDeviceNameDraft(device.name)
+  }
+
+  const handleCopyDeviceId = async () => {
+    if (!device) return
+    if (await copyText(device.id)) toast.success(t('cloudDeviceIdCopied'))
+    else toast.error(t('cloudDeviceCopyFailed'))
+  }
 
   const handleSave = async () => {
     setBusy('save')
@@ -204,6 +232,49 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
               </div>
             )}
           </div>
+        </Card>
+
+        <Card>
+          <CardHeader title={t('cloudDeviceTitle')} />
+          {!device ? (
+            <div className="pt-3">
+              <Caption className="text-ink-subtle">{t('cloudDeviceLoading')}</Caption>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3 pt-3">
+              <Field label={t('cloudDeviceName')} htmlFor="cloud-device-name">
+                <Input
+                  id="cloud-device-name"
+                  value={deviceName}
+                  maxLength={40}
+                  spellCheck={false}
+                  autoComplete="off"
+                  disabled={deviceBusy}
+                  onChange={(event) => setDeviceNameDraft(event.target.value)}
+                  onBlur={() => void handleCommitDeviceName()}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') event.currentTarget.blur()
+                    if (event.key === 'Escape') {
+                      setDeviceNameDraft(device.name)
+                      event.currentTarget.blur()
+                    }
+                  }}
+                />
+              </Field>
+              <Caption className="text-ink-subtle">{t('cloudDeviceNameHint')}</Caption>
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="text-ink-muted">{t('cloudDeviceId')}</Label>
+                  <Button size="sm" icon={Copy} onClick={() => void handleCopyDeviceId()}>
+                    {t('copyCode')}
+                  </Button>
+                </div>
+                <DataText className="select-all break-all text-ink-subtle">{device.id}</DataText>
+              </div>
+              <Caption className="text-ink-subtle">{t('cloudDeviceIdHint')}</Caption>
+              {deviceError && <Caption className="text-danger">{deviceError}</Caption>}
+            </div>
+          )}
         </Card>
 
         <Card>

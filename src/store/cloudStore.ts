@@ -17,6 +17,7 @@ import type {
   CloudConnectionState,
   CloudDashboardBounds,
   CloudDashboardState,
+  CloudDeviceSummary,
   CloudFrame,
   CloudHandoffPreview,
   CloudRunStatus,
@@ -108,6 +109,10 @@ interface CloudState {
   policyError: string | null
   /** 正在切换的档位（分段控件 loading） */
   policyPending: CloudApprovalMode | null
+  /** 本机设备身份（连接页设备卡；与云端连接状态无关，没配 token 也有） */
+  device: CloudDeviceSummary | null
+  deviceBusy: boolean
+  deviceError: string | null
   /** 自检结果（连接页折叠区块，按需拉） */
   diagnostics: CloudDiagnostics | null
   diagnosticsLoading: boolean
@@ -179,6 +184,11 @@ interface CloudState {
   settleDashboard: () => void
   /** 主进程那边关掉了视图（例如页面里按了 Esc） */
   hideDashboard: () => void
+
+  /** 读本机设备身份（顺带补一次系统友好名探测） */
+  loadDevice: () => Promise<void>
+  /** 改设备名；空串 = 恢复默认名。返回是否成功 */
+  setDeviceName: (name: string) => Promise<boolean>
 }
 
 export const useCloudStore = create<CloudState>()((set, get) => ({
@@ -225,6 +235,9 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   policyLoading: false,
   policyError: null,
   policyPending: null,
+  device: null,
+  deviceBusy: false,
+  deviceError: null,
   diagnostics: null,
   diagnosticsLoading: false,
   diagnosticsError: null,
@@ -241,6 +254,8 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   async hydrate() {
     const bridgeAvailable = hasCloudBridge()
     set({ bridgeAvailable })
+    // 设备身份跟连接无关：没配 token 也要能看到「这台设备」
+    void get().loadDevice()
     if (!bridgeAvailable) {
       set({ connection: 'unconfigured', error: null, hydrated: true })
       return
@@ -1015,6 +1030,27 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
 
   hideDashboard() {
     set({ dashboard: { ...get().dashboard, visible: false, loading: false } })
+  },
+
+  async loadDevice() {
+    const result = await cloudApi.getDevice()
+    if (result.success && result.device) {
+      set({ device: result.device, deviceError: null })
+      return
+    }
+    set({ deviceError: result.error ?? 'unknown' })
+  },
+
+  async setDeviceName(name) {
+    set({ deviceBusy: true, deviceError: null })
+    const result = await cloudApi.setDeviceName(name)
+    set({ deviceBusy: false })
+    if (!result.success || !result.device) {
+      set({ deviceError: result.error ?? 'unknown' })
+      return false
+    }
+    set({ device: result.device })
+    return true
   },
 }))
 

@@ -11,6 +11,7 @@ import type {
   CloudTracePart,
 } from './types.js'
 import type { CloudClient } from './client.js'
+import { deviceAuthor } from './device.js'
 import { mapMessages, type RawMessage } from './map.js'
 
 interface RawSession {
@@ -405,7 +406,10 @@ export function createRemote(client: CloudClient) {
       sessionId?: string
       idempotencyKey: string
     }): Promise<{ runId: string; status: CloudRunStatus }> {
-      const body: Record<string, unknown> = { input: input.input }
+      // `author` 只做记忆归属：上游 `prompt_builder.py` 不读 turn_author，
+      // 真正能影响模型判断的是 `instructions`（我们不注入，见 CLOUD_AGENT_DEVICES §3.2）。
+      // 逐轮字面量稳定，所以同 Idempotency-Key + 同 body 仍然命中幂等。
+      const body: Record<string, unknown> = { input: input.input, author: deviceAuthor() }
       if (input.sessionId) body.session_id = input.sessionId
       const raw = await client.request<RawAcceptedRun>('/v1/runs', {
         method: 'POST',

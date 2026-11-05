@@ -35,6 +35,13 @@ import {
 } from '../cloud/ledger.js'
 import { createRemote, toRunStatus } from '../cloud/remote.js'
 import { clearActiveRun, readActiveRun, writeActiveRun } from '../cloud/active-run.js'
+import {
+  deviceSummary,
+  ensureDeviceNameProbe,
+  readCloudDevice,
+  recordSessionDevice,
+  updateCloudDeviceName
+} from '../cloud/device.js'
 import { recordApprovalDecision, recordModeChange } from '../cloud/audit.js'
 import {
   isApprovalMode,
@@ -502,6 +509,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
           choice: choice as CloudApprovalChoice,
           mode: cachedPolicyMode,
           toolCallId: runner?.approvalToolCallId(requestId),
+          device: deviceSummary(),
         })
         // 档位只用于留痕：异步刷新缓存，失败无所谓（下一次读会补）
         void readApprovalPolicy()
@@ -516,6 +524,33 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       }
     }
   )
+
+  /**
+   * 本机设备身份。
+   *
+   * `get` 顺带补一次系统友好名探测（macOS `ComputerName` / Linux `hostnamectl --pretty`）：
+   * 只在打开连接页时跑，且用户改过名就一个字都不动。
+   */
+  handleIpc('cloud:device:get', async () => {
+    try {
+      const record = await ensureDeviceNameProbe()
+      return { success: true as const, device: deviceSummary(record) }
+    } catch (error) {
+      logger?.warn('[Cloud] device read failed', error)
+      return { success: false as const, error: '读取设备身份失败' }
+    }
+  })
+
+  /** 改设备名。空字符串 = 恢复系统默认名。 */
+  handleIpc('cloud:device:set', (_event, input: { name?: string }) => {
+    try {
+      const record = updateCloudDeviceName(input?.name ?? '')
+      return { success: true as const, device: deviceSummary(record) }
+    } catch (error) {
+      logger?.warn('[Cloud] device rename failed', error)
+      return { success: false as const, error: '保存设备名失败' }
+    }
+  })
 
   handleIpc('cloud:policy:get', async () => {
     try {
@@ -741,6 +776,16 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
           idempotencyKey
         })
         activeRun = { runId: started.runId, sessionId: started.sessionId ?? null }
+        const device = readCloudDevice()
+        logger?.info(
+          `[Cloud] run start device=${device.name} (${device.id.slice(0, 8)})`
+        )
+        // 会话归属：本机记一条「哪个会话是哪台设备起的」（云端不记这个）
+        try {
+          if (started.sessionId) recordSessionDevice(started.sessionId, device)
+        } catch (error) {
+          logger?.warn('[Cloud] session device record failed', error)
+        }
         // 落一条「上次开跑的是哪一轮」：重启之后靠它把还在跑的 run 接回来
         writeActiveRun({
           runId: started.runId,

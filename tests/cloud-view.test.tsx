@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CloudWorkspaceView } from '../src/components/CloudWorkspaceView'
+import { CloudConnectionView } from '../src/components/CloudConnectionView'
 import { CloudJobsView } from '../src/components/CloudJobsView'
 import { CloudTrace } from '../src/components/CloudTrace'
 import { CloudApprovalCard } from '../src/components/CloudApprovalCard'
@@ -42,6 +43,9 @@ interface BridgeStub {
   handoffPick: ReturnType<typeof vi.fn>
   handoffApply: ReturnType<typeof vi.fn>
   handoffCopy: ReturnType<typeof vi.fn>
+  deviceGet: ReturnType<typeof vi.fn>
+  deviceSet: ReturnType<typeof vi.fn>
+  clipboard: string[]
   sessions: CloudSession[]
   parts: CloudTracePart[]
 }
@@ -54,6 +58,19 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     handoffPick: vi.fn(async () => ({ success: true, canceled: true })),
     handoffApply: vi.fn(async () => ({ success: true })),
     handoffCopy: vi.fn(async () => ({ success: true })),
+    deviceGet: vi.fn(async () => ({
+      success: true,
+      device: { id: 'd1e2f3a4-0000-4000-8000-000000000000', name: 'TChen-Legion', defaultName: 'TChen-Legion' },
+    })),
+    deviceSet: vi.fn(async (input: { name: string }) => ({
+      success: true,
+      device: {
+        id: 'd1e2f3a4-0000-4000-8000-000000000000',
+        name: input.name.trim() || 'TChen-Legion',
+        defaultName: 'TChen-Legion',
+      },
+    })),
+    clipboard: [],
     sessions: [SESSION],
     parts: [
       { type: 'text', id: 'h:1', role: 'user', text: 'hello there' },
@@ -76,6 +93,12 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
       },
     }),
     cloudConfigSet: async () => ({ success: true }),
+    cloudDeviceGet: stub.deviceGet,
+    cloudDeviceSet: stub.deviceSet,
+    writeClipboardText: (text: string) => {
+      stub.clipboard.push(text)
+      return true
+    },
     cloudConnect: async () => ({
       success: true,
       state: 'connected',
@@ -188,6 +211,9 @@ function resetStore() {
     diagnostics: null,
     diagnosticsLoading: false,
     diagnosticsError: null,
+    device: null,
+    deviceBusy: false,
+    deviceError: null,
     pending: null,
     draft: '',
     handoffPreview: null,
@@ -1079,5 +1105,48 @@ describe('审批档位控件', () => {
     // 老主进程会直接 reject：必须落成人话，且档位不被改成「已生效」
     expect(await screen.findByText(/主进程还没更新/)).toBeTruthy()
     expect(useCloudStore.getState().policy?.mode).toBe('manual')
+  })
+})
+
+describe('CloudConnectionView 设备卡', () => {
+  it('shows the device name and id, and commits a rename on blur', async () => {
+    const stub = installBridge()
+    // 真实应用里 hydrate() 会拉一次设备身份；这里直接拉，省掉整个外壳
+    await useCloudStore.getState().loadDevice()
+    render(<CloudConnectionView active />)
+
+    const input = await screen.findByLabelText(zh.cloudDeviceName)
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe('TChen-Legion'))
+    expect(screen.getByText('d1e2f3a4-0000-4000-8000-000000000000')).toBeTruthy()
+
+    fireEvent.change(input, { target: { value: '客厅那台' } })
+    fireEvent.blur(input)
+
+    await waitFor(() => expect(stub.deviceSet).toHaveBeenCalledWith({ name: '客厅那台' }))
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe('客厅那台'))
+  })
+
+  it('does not write when the name did not change', async () => {
+    const stub = installBridge()
+    await useCloudStore.getState().loadDevice()
+    render(<CloudConnectionView active />)
+    const input = await screen.findByLabelText(zh.cloudDeviceName)
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe('TChen-Legion'))
+
+    fireEvent.blur(input)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(stub.deviceSet).not.toHaveBeenCalled()
+  })
+
+  it('copies the device id through the electron clipboard', async () => {
+    const stub = installBridge()
+    await useCloudStore.getState().loadDevice()
+    render(<CloudConnectionView active />)
+    await screen.findByLabelText(zh.cloudDeviceName)
+
+    fireEvent.click(screen.getByText(zh.copyCode))
+    await waitFor(() =>
+      expect(stub.clipboard).toContain('d1e2f3a4-0000-4000-8000-000000000000')
+    )
   })
 })

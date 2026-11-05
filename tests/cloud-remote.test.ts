@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ fetch: vi.fn() }))
+const mocks = vi.hoisted(() => {
+  // 设备身份会落 `data/cloud-agent/device.json`：指到临时目录，别写进仓库的 data/
+  const dir = `${process.env.TMPDIR ?? process.env.TEMP ?? '/tmp'}/pi-cloud-remote-${process.pid}-${Date.now()}`
+  return { fetch: vi.fn(), appDir: dir }
+})
 
 vi.mock('electron', () => ({
   net: { fetch: mocks.fetch },
-  app: { isPackaged: false, getAppPath: () => process.cwd() },
+  app: { isPackaged: false, getAppPath: () => mocks.appDir },
   safeStorage: { isEncryptionAvailable: () => false },
 }))
 
@@ -78,5 +82,26 @@ describe('clarify 应答', () => {
       execution_generation: 3,
       answer: 'production',
     })
+  })
+})
+
+describe('startRun 的设备归属', () => {
+  it('sends author on the body and leaves instructions out', async () => {
+    mocks.fetch.mockResolvedValueOnce(
+      Response.json({ run_id: 'run_1', status: 'started' }, { status: 202 })
+    )
+    await remote().startRun({ input: 'hi', sessionId: 's1', idempotencyKey: 'key-1' })
+
+    const [url, init] = mocks.fetch.mock.calls[mocks.fetch.mock.calls.length - 1]
+    expect(String(url)).toBe('https://api.example.com/v1/runs')
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(body.input).toBe('hi')
+    expect(body.session_id).toBe('s1')
+    expect(body.author).toMatchObject({ is_bot: false })
+    expect(String(body.author.id)).toMatch(/^pi-workbench\//)
+    expect(body.author.name.length).toBeGreaterThan(0)
+    // 设备身份刻意不走 prompt：instructions 会变成 ephemeral_system_prompt
+    expect(body).not.toHaveProperty('instructions')
+    expect((init as RequestInit).headers).toMatchObject({ 'Idempotency-Key': 'key-1' })
   })
 })

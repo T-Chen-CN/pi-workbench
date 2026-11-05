@@ -525,6 +525,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('cloud:run:start', input),
   cloudRunStatus: (input: { runId: string }) => ipcRenderer.invoke('cloud:run:status', input),
   cloudRunAttach: (input: { sessionId?: string }) => ipcRenderer.invoke('cloud:run:attach', input),
+  cloudDeviceGet: () => ipcRenderer.invoke('cloud:device:get'),
+  cloudDeviceSet: (input: { name: string }) => ipcRenderer.invoke('cloud:device:set', input),
   cloudRunResolveUnknown: (input: { runId: string }) =>
     ipcRenderer.invoke('cloud:run:resolve-unknown', input),
   cloudRunSteer: (input: { runId?: string; text: string }) =>

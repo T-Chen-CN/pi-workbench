@@ -22,6 +22,8 @@ import type {
   CloudPolicySetResult,
   CloudRunResult,
   CloudRunStartResult,
+  CloudDeviceResult,
+  CloudDeviceSummary,
   CloudDiagnostics,
   CloudJob,
   CloudPendingWrite,
@@ -53,6 +55,17 @@ export type {
 
 const FALLBACK_BASE_URL = 'https://api.tchen-xiaoxiao.com'
 const FALLBACK_DASHBOARD_URL = 'https://dash.tchen-xiaoxiao.com'
+/**
+ * 浏览器预览用的假设备身份。
+ *
+ * 用固定 id 而不是随机：页面每次刷新都该是同一台「设备」，否则看起来像在跳。
+ */
+const PREVIEW_DEVICE: CloudDeviceSummary = {
+  id: 'web-preview-0000-0000-000000000000',
+  name: '浏览器预览',
+  defaultName: '浏览器预览',
+}
+
 const NO_BRIDGE = '云端通道不可用（缺少应用内 IPC）'
 
 function api() {
@@ -101,6 +114,27 @@ export const UNCONFIGURED_CONNECTION: CloudConnectionInfo = {
 }
 
 export const cloudApi = {
+  /**
+   * 本机设备身份。没有 bridge（浏览器预览）时给一份稳定的假身份，
+   * 让连接页的设备卡在 `npm run dev` 里也能看。
+   */
+  async getDevice(): Promise<CloudDeviceResult> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudDeviceGet !== 'function') {
+      return { success: true, device: PREVIEW_DEVICE }
+    }
+    return bridge.cloudDeviceGet()
+  },
+
+  /** 改设备名；空串 = 恢复系统默认名 */
+  async setDeviceName(name: string): Promise<CloudDeviceResult> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudDeviceSet !== 'function') {
+      return { success: true, device: { ...PREVIEW_DEVICE, name: name.trim() || PREVIEW_DEVICE.defaultName } }
+    }
+    return bridge.cloudDeviceSet({ name })
+  },
+
   async getConfig(): Promise<CloudConfigGetResult> {
     const bridge = api()
     if (!bridge || typeof bridge.cloudConfigGet !== 'function') {

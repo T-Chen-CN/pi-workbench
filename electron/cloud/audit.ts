@@ -34,6 +34,11 @@ export interface CloudAuditDecision {
   mode: CloudApprovalMode | null
   /** 这条审批拦下的工具调用（结果行靠它对号） */
   toolCallId?: string
+  /**
+   * 哪台设备批的。本机审计里看着冗余，但多设备时日志会被合并查看，
+   * 缺了它就分不清「谁批的」（用户直接问的第一个问题）。
+   */
+  device?: { id: string; name: string }
 }
 
 export interface CloudAuditOutcome {
@@ -114,6 +119,7 @@ export function recordApprovalDecision(input: {
   choice: CloudApprovalChoice
   mode?: CloudApprovalMode | null
   toolCallId?: string
+  device?: { id: string; name: string } | null
 }): CloudAuditDecision {
   const entry: CloudAuditDecision = {
     at: Date.now(),
@@ -126,6 +132,7 @@ export function recordApprovalDecision(input: {
     choice: input.choice,
     mode: input.mode ?? null,
     ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
+    ...(input.device ? { device: { id: input.device.id, name: input.device.name } } : {}),
   }
   appendAudit(entry)
   pendingByRun.set(input.runId, { auditId: entry.auditId, toolCallId: input.toolCallId })

@@ -509,6 +509,62 @@ describe('cloud IPC', () => {
   })
 })
 
+describe('cloud device identity', () => {
+  interface DeviceResult {
+    success: boolean
+    device?: { id: string; name: string; defaultName: string }
+  }
+
+  it('creates an identity on first read and keeps the id across renames', async () => {
+    const first = await call<DeviceResult>('cloud:device:get')
+    expect(first.success).toBe(true)
+    expect(first.device?.id).toMatch(/^[0-9a-f-]{36}$/)
+    expect(first.device?.name.length).toBeGreaterThan(0)
+
+    const renamed = await call<DeviceResult>('cloud:device:set', { name: '  客厅那台  ' })
+    expect(renamed.success).toBe(true)
+    expect(renamed.device?.name).toBe('客厅那台')
+    expect(renamed.device?.id).toBe(first.device?.id)
+
+    // 再读一次：友好名探测不能把用户起的名字盖掉
+    const reread = await call<DeviceResult>('cloud:device:get')
+    expect(reread.device?.name).toBe('客厅那台')
+  })
+
+  it('sends author with every run and records which device started the session', async () => {
+    const current = await call<DeviceResult>('cloud:device:set', { name: '客厅那台' })
+    const before = mocks.state.bodies.length
+    await call('cloud:run:start', { input: 'device probe', idempotencyKey: 'key-device' })
+
+    const body = JSON.parse(mocks.state.bodies[before])
+    expect(body.input).toBe('device probe')
+    expect(body.author).toMatchObject({ name: '客厅那台', is_bot: false })
+    expect(String(body.author.id)).toMatch(/^pi-workbench\//)
+    // 不注入 prompt：上游 instructions 是另一条路，我们刻意不用
+    expect(body).not.toHaveProperty('instructions')
+
+    // 会话归属是「首次写入即固定」（run_session 在前面已由 hostname 名字记过），
+    // 改名不该把历史归属改写成新名字 —— 但设备 id 必须一致。
+    const index = JSON.parse(
+      fs.readFileSync(
+        path.join(mocks.state.appDir, 'data', 'cloud-agent', 'device-sessions.json'),
+        'utf-8'
+      )
+    ) as Record<string, { deviceId: string; deviceName: string }>
+    expect(index.run_session).toMatchObject({
+      deviceId: current.device?.id,
+      deviceName: expect.any(String),
+    })
+  })
+
+  it('restores the system default name when the input is cleared', async () => {
+    const before = await call<DeviceResult>('cloud:device:get')
+    const cleared = await call<DeviceResult>('cloud:device:set', { name: '   ' })
+    expect(cleared.device?.name).toBe(before.device?.defaultName)
+    expect(cleared.device?.id).toBe(before.device?.id)
+  })
+})
+
 describe('cloud session actions', () => {
   it('renames and pins through PATCH, and deletes hard', async () => {
     const renamed = await call<{ success: boolean; session?: { title: string } }>(
@@ -907,6 +963,8 @@ describe('cloud approval', () => {
     expect(line?.mode).toBe('manual')
     // 审计只存摘要：换行被压平
     expect(String(line?.command)).not.toContain('\n')
+    // 哪台设备批的：多设备时日志会合并查看，这条必须留
+    expect(line?.device).toMatchObject({ id: expect.any(String), name: expect.any(String) })
   })
 
   it('records the decision before the outcome can arrive', async () => {

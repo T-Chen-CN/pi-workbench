@@ -21,6 +21,27 @@ export interface CloudConnectionInfo {
   hasDashboardPassword: boolean
 }
 
+/** 本机设备身份（`cloud:device:get` 的返回）。`id` 只读，`name` 可改 */
+export interface CloudDeviceSummary {
+  /** 本机生成的 uuid —— 认设备用它，不随改名变化 */
+  id: string
+  /** 显示名；每轮请求作为 `author.name` 发出 */
+  name: string
+  /** 系统给出的默认名（输入清空时回到这里） */
+  defaultName: string
+}
+
+/**
+ * `POST /v1/runs` 的 `author`：上游注释写明 "memory-attribution label only; grants nothing"。
+ * 只影响记忆归属与审计，**不进 prompt**、不构成任何授权。
+ */
+export interface CloudDeviceAuthor {
+  /** `pi-workbench/<uuid>`，斜杠只是命名空间分隔，不含用户可控内容 */
+  id: string
+  name: string
+  is_bot: false
+}
+
 /** 后端 /v1/capabilities 的子集（只取前端实际用到的） */
 export interface CloudCapabilities {
   platform?: string
@@ -378,6 +399,13 @@ export interface CloudStatusPayload {
   state: CloudConnectionState
   error: string | null
   capabilities: CloudCapabilities | null
+}
+
+/** `cloud:device:get` / `cloud:device:set` 的返回 */
+export interface CloudDeviceResult {
+  success: boolean
+  device?: CloudDeviceSummary
+  error?: string
 }
 
 export interface CloudConfigGetResult {
