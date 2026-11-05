@@ -356,7 +356,7 @@ describe('审批结果对号', () => {
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(auditLines().some((line) => line.kind === 'approval_result')).toBe(false)
 
-    stream.push(frame('tool.completed', { tool: 'terminal', tool_call_id: 'c1', error: false, preview: '' }, 3))
+    stream.push(frame('tool.completed', { tool: 'terminal', tool_call_id: 'c1', error: false, preview: '已删除' }, 3))
     await waitFor(() => auditLines().some((line) => line.kind === 'approval_result'))
     const result = auditLines().find((line) => line.kind === 'approval_result')
     expect(result).toMatchObject({ error: false })
@@ -425,6 +425,73 @@ describe('审批结果对号', () => {
     const result = auditLines().find((line) => line.kind === 'approval_result')
     expect(result).toMatchObject({ error: false })
     expect(String(result?.preview)).toContain('已删除')
+    runner.dispose()
+  })
+
+  it('waits for the real preview instead of logging an empty result', async () => {
+    // 实时 tool.completed 的 preview 就是空的；历史里才有真结果 → 用历史那份
+    const stream = liveStream()
+    const client: CloudClient = {
+      baseUrl: 'https://api.example.com',
+      rawBaseUrl: 'https://api.example.com',
+      apiKey: 'key',
+      request: async <T,>(p: string): Promise<T> => {
+        if (p === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
+        if (p.startsWith('/api/sessions/s-1/messages')) {
+          return {
+            data: [
+              {
+                id: 'm1',
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'c1',
+                    call_id: 'c1',
+                    type: 'function',
+                    function: { name: 'terminal', arguments: '{"command":"rm -rf /tmp/x"}' },
+                  },
+                ],
+              },
+              {
+                id: 'm2',
+                role: 'tool',
+                tool_call_id: 'c1',
+                tool_name: 'terminal',
+                content: '{"output":"BLOCKED: 用户拒绝","exit_code":-1,"error":"blocked"}',
+              },
+            ],
+            session_id: 's-1',
+          } as T
+        }
+        return { status: 'completed', session_id: 's-1' } as T
+      },
+      openStream: async () => stream.response,
+    }
+    const runner = new CloudRunner({ emit: () => {} }, client)
+    void runner.start({ input: 'hi', sessionId: 's-1', idempotencyKey: 'k' })
+
+    stream.push(frame('tool.started', { tool: 'terminal', tool_call_id: 'c1' }, 0))
+    stream.push(frame('approval.request', { prompt_id: 'ap_2', command: 'rm -rf /tmp/x' }, 1))
+    await waitFor(() => runner.approvalToolCallId('ap_2') === 'c1')
+    recordApprovalDecision({
+      runId: 'run-1',
+      command: 'rm -rf /tmp/x',
+      choice: 'deny',
+      mode: 'manual',
+      toolCallId: 'c1',
+    })
+    stream.push(frame('tool.completed', { tool: 'terminal', tool_call_id: 'c1', error: true, preview: '' }, 2))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    // 空预览不落盘：宁缺毋滥
+    expect(auditLines().some((line) => line.kind === 'approval_result')).toBe(false)
+
+    stream.push(frame('run.completed', {}, 3))
+    stream.close()
+    await waitFor(() => auditLines().some((line) => line.kind === 'approval_result'))
+    const result = auditLines().find((line) => line.kind === 'approval_result')
+    expect(result).toMatchObject({ error: true })
+    expect(String(result?.preview)).toContain('BLOCKED')
     runner.dispose()
   })
 })

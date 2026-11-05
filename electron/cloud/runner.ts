@@ -10,7 +10,7 @@ import { CloudApiError, type CloudClient } from './client.js'
 import { readSseStream } from './events.js'
 import { RunMapper } from './map.js'
 import { createRemote, type CloudRemote } from './remote.js'
-import { recordApprovalOutcome } from './audit.js'
+import { flushApprovalOutcome, recordApprovalOutcome } from './audit.js'
 
 /** 停止请求发出后，等后端推终态的最长时间 */
 const STOP_FALLBACK_MS = 15_000
@@ -179,6 +179,8 @@ export class CloudRunner {
     }
 
     await this.reconcile(runId, sessionId, terminal)
+    // 实时帧只有 `error`、预览是空的：收尾时历史已经重拉过，该补的补上
+    flushApprovalOutcome(runId)
   }
 
   /**

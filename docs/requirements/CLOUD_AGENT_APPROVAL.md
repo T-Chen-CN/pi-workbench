@@ -364,6 +364,8 @@ Hermes 默认 `approvals.deny` 就是空。保持默认后，安全地板只剩�
    改法：回执一成功就落盘，档位用内存缓存（`cachedPolicyMode`，由 `cloud:policy:get/set` 维护），刷缓存异步做。
 2. **回执字段**：`{choice}` 与 `{request_id, choice}` 都是 `400 invalid_params`，三个字段缺一不可；缺 `execution_generation` 时由主进程用 `GET /v1/runs/{id}` 补。
 
+3. **结果行没有内容**：实时 `tool.completed` 的 `preview` 一直是空串，真结果只在历史里。现在空预览先不落盘（只记住 `error`），等这一轮收尾重拉历史补上；历史也没有内容时才写一行只有 `error` 的，宁缺毋滥。
+
 顺带加固：结果行按 **`toolCallId`** 对号（审批总是紧跟在它拦下的那次 `tool.started` 之后），实时流和历史纠正帧（`reconcile`）都参与配对 —— 断流时结果只从历史回来，也不能把「真实结果」这一问丢掉。
 
 **待做**：UI 截图验收（Paper / Ink × 1024 / 1440）。

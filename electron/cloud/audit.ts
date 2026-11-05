@@ -91,7 +91,15 @@ export function appendAudit(entry: CloudAuditEntry): void {
  * 结掉，避免长时间挂着内存。`toolCallId` 是审批拦下的那次调用：实时流和历史补
  * 结果都靠它对号，避免拿「下一个随便什么工具卡」当结果。
  */
-const pendingByRun = new Map<string, { auditId: string; toolCallId?: string }>()
+const pendingByRun = new Map<
+  string,
+  {
+    auditId: string
+    toolCallId?: string
+    /** 实时帧只给了 `error`、预览是空的：先挂着，等历史里那份真结果 */
+    orphan?: { error: boolean }
+  }
+>()
 
 export function recordApprovalDecision(input: {
   runId: string
@@ -133,19 +141,50 @@ export function recordApprovalOutcome(
   if (pending.toolCallId && result.toolCallId && pending.toolCallId !== result.toolCallId) {
     return false
   }
-  const auditId = pending.auditId
+  const preview = normalizePreview(result.preview)
+  if (!preview) {
+    // 实时 `tool.completed` 的 preview 通常是空的；这一轮的收尾会重拉历史，
+    // 那里才有真结果。先记下「是成功还是被拒」，别急着落一行空证据。
+    pending.orphan = { error: Boolean(result.error) }
+    return false
+  }
+  writeOutcome(runId, pending.auditId, { error: Boolean(result.error), preview })
   pendingByRun.delete(runId)
+  return true
+}
+
+/**
+ * 一轮收尾时把只拿到 `error`、没有预览的那条补上（历史也没有内容时才这么写）。
+ * 追不到结果就让它留在内存里等下一次，绝不编一条。
+ */
+export function flushApprovalOutcome(runId: string): boolean {
+  const pending = pendingByRun.get(runId)
+  if (!pending?.orphan) return false
+  writeOutcome(runId, pending.auditId, { error: pending.orphan.error, preview: '' })
+  pendingByRun.delete(runId)
+  return true
+}
+
+function normalizePreview(raw: string): string {
+  return String(raw ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, PREVIEW_MAX_CHARS)
+}
+
+function writeOutcome(
+  runId: string,
+  auditId: string,
+  result: { error: boolean; preview: string }
+): void {
   appendAudit({
     at: Date.now(),
     kind: 'approval_result',
     auditId,
     runId,
-    error: Boolean(result.error),
-    preview: String(result.preview ?? '')
-      .replace(/\s+/g, ' ')
-      .slice(0, PREVIEW_MAX_CHARS),
+    error: result.error,
+    preview: result.preview,
   })
-  return true
 }
 
 /** 档位变更也进审计：谁把闸门拧松了，要留痕 */
