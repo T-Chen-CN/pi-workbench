@@ -119,7 +119,7 @@
 | 项 | 定义 |
 | --- | --- |
 | `deviceId` | 本地首次启动生成 `crypto.randomUUID()`，落 `data/cloud-agent/device.json`，**机器认的就是它**。D0 不提供「重置身份」按钮（见下） |
-| 设备名 | **默认直接读系统里的设备名**：macOS `scutil --get ComputerName`（"唐辰的 MacBook Pro"）· Linux `hostnamectl --pretty` · Windows 用计算机名（`os.hostname()`，改名要重启才生效，不为此去 spawn `reg query`）；任一失败 800ms 内回落 `os.hostname()`。清洗（去 Cc/Cs/Cn/Co 控制字符与 `/`、trim、≤40 字）+ 连接页可改 |
+| 设备名 | **默认直接读系统里的设备名**：macOS `scutil --get ComputerName`（"唐辰的 MacBook Pro"）· Linux `hostnamectl --pretty` · Windows 用计算机名（`os.hostname()`，改名要重启才生效，不为此去 spawn `reg query`）；任一失败 800ms 内回落 `os.hostname()`。清洗（去 Cc/Cs/Co 控制字符与私用区、去 `/`、折叠空白、按码点截 ≤40 字）+ 连接页可改，改完下一轮即生效 |
 | 设备 token | 由 hub 签发：`pi_<base64url(32B)>`；**服务端只存 hash**，本地用 `safeStorage` 存 `enc:`（与 `connection.json` 同一套约定） |
 | 名字 ≠ 身份 | 名字只作显示与 `author.name` 归属标签：会重名、会被改、常含个人信息（`唐辰的 MacBook Pro`），所以**不能当身份证**。认设备永远用 `deviceId` |
 | 不做「重置设备身份」 | D0 去掉：它只影响云端记忆归属的连续性，用户日常没有这个动作。真正的需求是 D1 的**注销这台设备**（服务端撤销 token，本地清文件只是副作用） |

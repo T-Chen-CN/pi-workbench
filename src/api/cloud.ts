@@ -129,7 +129,10 @@ export const cloudApi = {
     // 有 preload 却没有这个方法 = 跑的是旧构建（改了主进程没重启）：
     // 这时绝不能假装成功，否则界面上出现的是假设备名，比报错更难查
     if (typeof bridge.cloudDeviceGet !== 'function') return { success: false, error: BRIDGE_STALE }
-    return bridge.cloudDeviceGet()
+    return invoke(
+      () => bridge.cloudDeviceGet(),
+      (error) => ({ success: false, error })
+    )
   },
 
   /** 改设备名；空串 = 恢复系统默认名 */
@@ -142,7 +145,10 @@ export const cloudApi = {
       }
     }
     if (typeof bridge.cloudDeviceSet !== 'function') return { success: false, error: BRIDGE_STALE }
-    return bridge.cloudDeviceSet({ name })
+    return invoke(
+      () => bridge.cloudDeviceSet({ name }),
+      (error) => ({ success: false, error })
+    )
   },
 
   async getConfig(): Promise<CloudConfigGetResult> {

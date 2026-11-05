@@ -45,11 +45,13 @@ export interface CloudDeviceSessionEntry {
 }
 
 /**
- * 清洗设备名：丢掉 Unicode 类别 Cc/Cs/Cn/Co（控制字符、孤立代理、未分配、私用区），
- * 去掉能当路径分隔符的 `/`，折叠空白，截到 40 字。
+ * 清洗设备名：丢掉 Cc / Cs / Co（控制字符、孤立代理、私用区），去掉能当路径分隔符的 `/`，
+ * 折叠空白，按**码点**截到 40 字。
  *
- * 为什么逐码点判断而不是正则替换：emoji 序列（ZWJ / 变体选择符）属于 Cf，不能连坐删掉，
- * 否则「唐辰的 MacBook Pro」里的表情会被拆散。
+ * 两个刻意的取舍：
+ * - 逐码点判断而不是整类正则：emoji 序列里的 ZWJ / 变体选择符属于 Cf，删掉会把表情拆散；
+ * - 用 `Array.from` 而不是 `slice`：`slice` 数的是 UTF-16 单元，40 字边界正好切在
+ *   代理对中间时会留下孤立代理，序列化给云端就是坏字符。
  */
 export function sanitizeDeviceName(raw: unknown): string {
   if (typeof raw !== 'string') return ''
@@ -65,12 +67,13 @@ export function sanitizeDeviceName(raw: unknown): string {
     if (char === '/') continue
     out += char
   }
-  return out.replace(/\s+/g, ' ').trim().slice(0, NAME_MAX_CHARS)
+  const compact = out.replace(/\s+/g, ' ').trim()
+  return Array.from(compact).slice(0, NAME_MAX_CHARS).join('')
 }
 
 const WHITESPACE_CONTROLS = new Set(['\t', '\n', '\r', '\f', '\v'])
 
-/** Cc 0x00-0x1F 0x7F-0x9F · Cs 代理 · Cn 未分配 · Co 私用区 */
+/** Cc 0x00–0x1F / 0x7F–0x9F · Cs 代理对半 · Co 私用区（含补充私用区） */
 function isDroppedCategory(code: number): boolean {
   if (code <= 0x1f) return true
   if (code >= 0x7f && code <= 0x9f) return true
@@ -134,8 +137,8 @@ export function readCloudDevice(hostname: string = os.hostname()): CloudDeviceRe
     return record
   }
 
-  // 没有 id（首次启动 / 文件损坏且没有可用备份）→ 生成新身份。
-  // 不拿 .bak 硬凑：错的身份比新身份更难收拾。
+  // 没有 id：首次启动，或主文件与 `.bak` 都读不出 id（`readJsonWithBackup` 已经先试过备份）。
+  // 这时生成新身份 —— 与其沿用一份可疑的旧 id，不如换一个干净的（归属从今天重新算）。
   const id = randomUUID()
   const fresh: CloudDeviceRecord = {
     id,
@@ -224,7 +227,6 @@ export async function ensureDeviceNameProbe(
   const record = readCloudDevice()
   const probed = sanitizeDeviceName(await detect())
   if (!probed) return record
-  if (record.nameEditedAt && record.name === probed) return record
 
   const next: CloudDeviceRecord = {
     ...record,
@@ -278,9 +280,22 @@ export function recordSessionDevice(
 }
 
 export function readSessionDevices(): Record<string, CloudDeviceSessionEntry> {
-  const stored = readJsonWithBackup<Record<string, CloudDeviceSessionEntry>>(
-    deviceSessionsFile()
-  ).data
+  const stored = readJsonWithBackup<Record<string, unknown>>(deviceSessionsFile()).data
   if (!stored || typeof stored !== 'object') return {}
-  return stored
+  const clean: Record<string, CloudDeviceSessionEntry> = {}
+  for (const [sessionId, value] of Object.entries(stored)) {
+    if (!sessionId.trim()) continue
+    if (!value || typeof value !== 'object') continue
+    const entry = value as Partial<CloudDeviceSessionEntry>
+    if (typeof entry.deviceId !== 'string' || !entry.deviceId) continue
+    clean[sessionId] = {
+      deviceId: entry.deviceId,
+      deviceName: typeof entry.deviceName === 'string' ? entry.deviceName : '',
+      firstSeenAt:
+        typeof entry.firstSeenAt === 'number' && Number.isFinite(entry.firstSeenAt)
+          ? entry.firstSeenAt
+          : 0,
+    }
+  }
+  return clean
 }

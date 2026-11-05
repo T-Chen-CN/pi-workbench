@@ -48,6 +48,14 @@ describe('sanitizeDeviceName', () => {
     expect(device.sanitizeDeviceName('x'.repeat(60))).toHaveLength(40)
   })
 
+  it('truncates by code point so the 40-char edge never leaves a lone surrogate', () => {
+    const name = device.sanitizeDeviceName(`${'a'.repeat(39)}🚀`)
+    expect(Array.from(name)).toHaveLength(40)
+    expect(name.endsWith('🚀')).toBe(true)
+    // 40 个码点 = 41 个 UTF-16 单元：说明 🚀 没被劈成孤立代理
+    expect(name.length).toBe(41)
+  })
+
   it('returns empty for non-strings and blank input', () => {
     expect(device.sanitizeDeviceName(undefined)).toBe('')
     expect(device.sanitizeDeviceName('   \u0007 ')).toBe('')
@@ -192,5 +200,24 @@ describe('recordSessionDevice', () => {
   it('ignores blank session ids', () => {
     device.recordSessionDevice('   ')
     expect(device.readSessionDevices()).toEqual({})
+  })
+
+  it('drops junk entries instead of throwing on a hand-edited file', () => {
+    fs.mkdirSync(device.cloudDeviceDir(), { recursive: true })
+    fs.writeFileSync(
+      device.deviceSessionsFile(),
+      JSON.stringify({
+        good: { deviceId: 'dev-1', deviceName: '本机', firstSeenAt: 1 },
+        nullish: null,
+        number: 42,
+        noId: { deviceName: '缺 id' },
+        blank: { deviceId: '', deviceName: '' },
+        '': { deviceId: 'dev-2', deviceName: '空键' },
+      }),
+      'utf-8'
+    )
+    expect(device.readSessionDevices()).toEqual({
+      good: { deviceId: 'dev-1', deviceName: '本机', firstSeenAt: 1 },
+    })
   })
 })
