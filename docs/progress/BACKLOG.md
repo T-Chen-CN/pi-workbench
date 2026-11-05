@@ -486,22 +486,32 @@ chromium 与本机 364MB 保留（browser 工具集因此第一次真跑通）�
 | — | AC-20 surface 隔离自测 | 属于你手动验收，不是代码工作 |
 | — | `unknown`（主人进程丢了）收尾的真机验证 | 得等云端进程真的被杀一次，造不出来 |
 
-### 7.6 多设备身份与反向派活（2026-11-06 登记，方案待批准）
+### 7.6 多设备身份与反向派活（方案 v2：单缝 · Hermes 插件形态）
 
-> 方案：[CLOUD_AGENT_DEVICES](../requirements/CLOUD_AGENT_DEVICES.md)（v1 草案）· 变更 [CLOUD_AGENT](../requirements/CLOUD_AGENT.md) §6 的 **S-02 铁律**，必须先批准再开工；批准后补 ADR-008
+> 方案：[CLOUD_AGENT_DEVICES](../requirements/CLOUD_AGENT_DEVICES.md)（**v2**）· [ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md)（提议，待批准）· 变更 [CLOUD_AGENT](../requirements/CLOUD_AGENT.md) §6 的 **S-02 铁律**（H3 前必须批准）
+> 三条定稿：**C-1 单缝**（除 dashboard 外全部经插件）· **C-2 无直连兜底**· **C-3 插件形态取代 `pi-hub`**
 > 三条需求：① 多设备连同一云端 Agent 要能识别设备；② 单用户多入口（不做多租户）；③ 云端指挥本地 Agent 干活
 
 | ID | 项目 | 优先级 | 依赖 | 验收 |
 | --- | --- | --- | --- | --- |
-| DE-00 | **方案批准 + ADR-008**（S-02 改口径为「零本地授权」；新增 `pi-hub` 服务） | P1 | — | 你签字；ADR 落地 |
-| DE-01 ✅ | 设备身份 v0（通道层）：`data/cloud-agent/device.json`（`id` 自动生成/只读 + `name` 默认读系统友好名、可改）、每轮 `author`、审计带设备名、连接页设备卡。**不注入 prompt、不提供重置按钮**（v1.2：模型层识别放到 DE-03 的 `local_devices()`；注销留到 DE-02） | P1 | ~~DE-00~~ | **已落地**（`device.ts` / `cloud:device:get|set|reprobe` / 启动即建身份 / `author` 注入 / `device-sessions.json` / 连接页设备卡）。无服务端改动，经所有者确认**先于 DE-00 落地**；DE-00 仍拦着 DE-02 |
-| DE-02 | `pi-hub` 控制面前置：设备登记 / 每设备 token（只存 hash）/ 转发注入 `X-Pi-Device` / 心跳 / 撤销 / 审计 JSONL + Caddy | P1 | DE-01 | AC-D02 / AC-D03 |
-| DE-03 | 派活最小闭环：任务邮箱 + MCP server（`local_devices` / `local_dispatch` / `local_task`，`trust: untrusted`）+ 本地执行器（白名单 / 档位上限 / 审批 / 结果摘要）+ 总开关。**模型层身份的唯一致力来源是 `local_devices()`**（按需查，不注入） | P1 | DE-02 | AC-D05 ~ AC-D08 / AC-D10 / AC-D01b |
-| DE-04 | 多设备体验：每设备每项目会话、共享会话开关、设备面板、`run.queued` 排队可视化 | P2 | DE-03 | AC-D04 / AC-D09 |
-| DE-05 | 安全收口：token 轮换 / 撤销 UI、TTL 与限速、审计导出、注入演练、运维文档 | P2 | DE-03 | AC-D11 ~ AC-D14 |
-| DE-06 ✅ | 验 QD-7：`author` 是否进模型上下文 | P1 | — | **已完成（读上游源码）**：`prompt_builder.py` 无 `turn_author`；`memory_manager.py:446-463` 只给 memory provider；`bot_chain.py` 只看 `is_bot`。结论：不进 prompt，只做记忆归属 |
+| DE-00 | **签字**：QD-1~QD-6 + QN-1~QN-7 + ADR-008（S-02 → 「零本地授权」+ 云端单入口插件） | P1 | — | 你签字；ADR-008 状态改为「已接受」 |
+| DE-01 ✅ | 设备身份 v0：`device.json`（启动即建 `id`、名字可改、探测只做一次）、每轮 `author`、审计带设备名、连接页设备卡（保存/恢复默认/重读系统名）。**不注入 prompt** | P1 | ~~DE-00~~ | 已落地（`96f2eaa`）。无服务端改动，经确认先于 DE-00 落地 |
+| **H-1** | **执行前预检**：本地 7 项（已通过）+ VPS 9 项（待执行，见方案 §14） | P1 | DE-00 | 硬阻塞 5 项全绿 |
+| DE-02 | **H0 插件骨架**：`plugin.yaml` + `shim` + `core/app` + SQLite + admin 登记/撤销 + token 中间件 + `/v1/hub/health` + 只读代理 + Caddy vhost | P1 | H-1 | token 可通、无 token 401、撤销即 401 |
+| DE-03 | **H1 全量切换**：`/v1/runs*`（SSE 保真）+ sessions/jobs/config/media/fs 代理 + 本地改单入口 + 错误码映射 | P1 | DE-02 | AC-D04 / AC-D15 / AC-D16 / AC-D17 |
+| DE-04 | **H2 设备面**：心跳 / 在线 / 注销 + 本地登记与状态 UI + 自检网关块 | P1 | DE-03 | AC-D01 / AC-D02 / AC-D03 |
+| DE-05 | **H3 派活闭环**：`provides_tools` 三工具 + 任务邮箱 + 本地执行器（开关/白名单/上限/审批/摘要）+ 结果回传 | P1 | DE-04 + ADR-008 | AC-D05 ~ AC-D14 / AC-D01b |
+| DE-06 | **H4 收口**：运维手册（备份/升级/doctor）、威胁模型复核、版本区间钉死、多设备体验（每设备会话、排队可视化） | P2 | DE-05 | AC-D12 / AC-D14；`plugins update` 数据不丢 |
+| DE-07 ✅ | 验 QD-7：`author` 是否进模型上下文 | P1 | — | **已完成（读上游源码）**：不进 prompt，只做记忆归属 |
 
-**坑（写在开工前）**：`platform_toolsets.api_server` 是显式白名单，新增 `mcp-pi-hub` 必须加进去，否则工具对 api_server 会话不可见（clarify 踩过一次）；同会话并发轮次在服务端**排队**（`run.queued`），不是并行。
+**已核事实（2026-11-06，无需凭证即可验证）**：上游 `0.22.6` / Python 3.14 / aiohttp 3.14.5（`Server` 头），反代为 Caddy（`Via` 头），`hub.` 子域未占用；无 token 访问 `/v1/capabilities` 返回 `401 gateway_auth_failed`。
+
+**坑（写在开工前）**：
+- 插件与 agent **同进程**：sqlite 必须走异步 + WAL 短事务，任何同步阻塞都会拖住 agent。
+- SSE 透传最易写错的三件事：缓冲、压缩、客户端断开未传导（Caddy 侧要 `flush_interval -1`）。
+- `kind: platform` 插件是**延迟加载**的，设备入口何时起来取决于网关是否连接该平台 → H0 必须实测。
+- 改用 `provides_tools` 后**不再需要**改 `platform_toolsets` 白名单（v1 的坑作废）。
+- 同会话并发轮次在服务端**排队**（`run.queued`），不是并行。
 
 ---
 

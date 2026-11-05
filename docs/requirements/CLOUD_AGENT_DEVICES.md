@@ -1,284 +1,523 @@
-# 云端 Agent 多设备身份与反向派活方案 v1（草案，待批准）
+# 云端 Agent 多设备身份与反向派活方案 v2（单缝 · Hermes 插件形态）
 
 > **面向**：要实现「多台本地程序连同一个云端 Agent」「云端 Agent 认得是哪台设备」「云端指挥本地 Agent 干活」的人
-> **什么时候读**：动设备身份、控制面前置、反向任务通道、变更 S-02 之前
-> **什么时候要改**：`pi-hub` 形态、设备身份口径、派活权限口径、验收场景变化时
-> **状态**：v1 草案 · 2026-11-06 · **未开工**（变更 [CLOUD_AGENT v5](./CLOUD_AGENT.md) §6 的 S-02 铁律，必须先批准；批准后补 ADR-008）
+> **什么时候读**：动对接层（本地 ↔ 云端）、设备身份、反向任务通道、变更 S-02 之前
+> **什么时候要改**：插件形态、设备身份口径、派活权限口径、上游插件 API、验收场景变化时
+> **状态**：v2 · 2026-11-06 · **未开工** · D0（设备身份 v0）已落地；H3 需先批准 [ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md)（S-02 改口径）
+> **取代**：v1 的 `pi-hub` 独立服务方案（作废，理由见 §4）
 
 ---
 
 ## 0. 一句话
 
-**给每台本地设备一张身份证，并把「云端派活」做成一条只能由本地授予能力的窄通道。**
-云端只负责**发请求**，能力（写文件 / 跑命令 / 用哪个工作区）永远由**本地**按白名单 + 档位上限 + 逐次审批授予——这样既满足「云端指挥本地干活」，又不用把 S-02 改成「云端有本地能力」。
+**本地与云端之间只留一条缝：一个自写的 Hermes 插件。** 插件在 VPS 上、与 gateway 同进程，负责认设备、限权、审计、代转发，并提供三个派活工具；云端仍然**只能发请求**，能力（写文件 / 跑命令 / 用哪个工作区）永远由**本地**按白名单 + 档位上限 + 逐次审批授予。
 
 ---
 
 ## 1. 三条需求与落点
 
-| # | 你的原话 | 落点 | 结论 |
+| # | 需求 | 落点 | 结论 |
 | --- | --- | --- | --- |
-| D-01 | 多设备的多本地程序连同一个云端 Agent，云端要能识别是哪台设备 | 设备身份：`deviceId` + 设备名 + **每设备独立 token**；平台层（转发日志 / 审计）与模型层（`author` + 设备上下文）双路可见 | 需要新组件（见 §3） |
-| D-02 | 同一个云端 Agent 只对应同一个用户，多设备只是「同一个人的不同入口」 | 不做账号 / 租户 / 团队；**一个 profile、一把用户身份、多台设备**；设备不是用户 | 不引入多租户 |
-| D-03 | 云端 Agent 后续要能指挥本地 Agent 工作 | 反向任务通道：云端 `local_dispatch` 工具 → 设备任务邮箱 → 本地执行器 → 结果回灌到云端时间线 | 需要新组件 + 新 ADR（S-02 变更） |
+| D-01 | 多台本地程序连同一个云端 Agent，云端要能识别是哪台设备 | 设备 token → `deviceId`（插件中间件）；`author` 由插件按 token 覆盖；审计逐条带设备 | 插件 + 本地设备卡 |
+| D-02 | 同一云端 Agent 只对应同一用户，多设备只是同一人的不同入口 | 不做账号 / 租户 / 团队；一个 profile、一个用户、多台设备 | 不引入多租户 |
+| D-03 | 云端 Agent 要能指挥本地 Agent 工作 | 插件三个工具 → 设备任务邮箱 → 本地执行器（审批/上限/白名单）→ 摘要回传 | 需 S-02 改口径（ADR-008） |
 
 ---
 
-## 2. 现状（读代码得来，不是设想）
+## 2. 三条定稿决策（2026-11-06，项目所有者确认）
 
-| 事实 | 位置 / 依据 |
-| --- | --- |
-| 本地 → 云端是**单向可见**：本机能读 `/v1/capabilities`、`/health/detailed`、`/v1/toolsets`、`/v1/skills`、`/v1/models` | `electron/cloud/remote.ts`、`CloudDiagnosticsPanel.tsx` |
-| 发起一轮只发 `{input, session_id}`，**零本机信息** | `electron/cloud/remote.ts:409` |
-| 云端 Agent **零本地能力**（铁律） | [CLOUD_AGENT §6 S-02](./CLOUD_AGENT.md) |
-| 本地不实现 ACP、不通告 `fs/*` / `terminal/*` | 同上 §1.1 |
-| 只有**一把** `API_SERVER_KEY`（≥32B），没有按设备分权的概念 | 同上 §5.2 |
-| 同会话并发轮次会**排队**（`run.queued` / `status: queued` / `admission_queued`） | 上游 `gateway/platforms/api_server_runs.py` |
-| `/v1/runs` 支持 `author: {id, name, is_bot}`，注释写明 **"memory-attribution label only; grants nothing"** | 上游 `agent/turn_author.py`、`api_server.py:583` |
-| `/v1/runs` 支持 `instructions`（与首轮历史一起解析） | 上游 `_resolve_chained_history` |
-| MCP 服务器可配 `trust: untrusted` → **每个写能力工具调用都要人工审批**（Once / Session / Always，`Always` 写 `command_allowlist` 的 `mcp:<server>/<tool>`） | 上游 `website/docs/reference/mcp-config-reference.md` |
-| `platform_toolsets.api_server` 是**显式白名单**，新增工具集必须加进去（clarify 就踩过） | [BACKLOG §7.5](../progress/BACKLOG.md) |
-| 本地已有「派发 / 委派授权 / 不可放大 / headless 工作区 / 任务状态机」的设计 | [TOP_LEVEL_AGENT](./TOP_LEVEL_AGENT.md) §3.4 / §4.3 / §4.5 / §4.8 |
-
-**一句话**：D-01 今天只能做到「模型层猜」，D-03 完全没有路。而 D-03 要的本地执行语义，[TOP_LEVEL_AGENT](./TOP_LEVEL_AGENT.md) 已经定义过一遍 —— 只是今天派发方是本地顶层会话，之后要多一个派发方：云端。
-
----
-
-## 3. 关键设计决定
-
-### 3.1 新增一个组件：`pi-hub`（一物三用）
-
-```
-腾讯云 VPS
-├── hermes-gateway     127.0.0.1:8642    ← 只有 hub 直连它（不再对公网暴露 api.）
-├── hermes-dashboard   127.0.0.1:9119    ← 配置面，保持现状
-├── pi-hub             127.0.0.1:8650    ← 新增：控制面前置 + 设备目录 + 任务邮箱 + MCP server
-└── caddy              0.0.0.0:443
-        api.  → hub（设备 token 校验后转发 :8642）
-        mcp.  → hub 的 MCP 端点（Bearer = hub 自己的服务密钥，Hermes 侧配置）
-        dash. → :9119
-```
-
-为什么**必须**有它（三个需求各差一块拼图，一个组件同时补上）：
-
-| 缺口 | 单靠 Hermes 做不到的原因 | hub 补法 |
+| # | 决策 | 含义 |
 | --- | --- | --- |
-| 按设备识别 / 撤销 | `API_SERVER_KEY` 只有一把，撤销等于全员掉线；Hermes 日志里没有设备概念 | 每设备一把 token，hub 校验后注入 `X-Pi-Device` + `author`，转发给 gateway |
-| 设备在线状态 | gateway 不知道「谁在线」 | 设备心跳 + 长轮询连接数就是在线状态 |
-| 云端 → 本地 | 本地没有可入站端口，Hermes 也没有「投递给某台设备」的通道 | hub 做任务邮箱 + 给 Hermes 暴露 MCP 工具 |
+| **C-1** | **单缝** | 本地 → 云端只有一条路：`https://hub.tchen-xiaoxiao.com` + 设备 token。除 dashboard 外**全部**经插件（轮次、SSE、审批、会话、任务、配置、媒体） |
+| **C-2** | **无直连兜底** | 代码里不保留第二套客户端、不做自动回落。应急只有运维动作（改配置），不是运行时特性 |
+| **C-3** | **插件形态** | 弃 `pi-hub` 独立服务；改为 Hermes 插件 `pi-workbench`（`kind: platform`，与 gateway 同进程，随其重启） |
 
-**不做的替代方案**：把 hub 塞进 dashboard 进程 → 侵入上游、跟着 `hermes update` 一起炸；让本地开入站端口 → 破 S-01。
-
-### 3.2 设备身份：通道强制 + 工具按需（v1.1 修订，不再每轮注入）
-
-| 层 | 内容 | 谁看得到 | 强弱 |
-| --- | --- | --- | --- |
-| **通道层（强制）** | hub 按 token 认设备，写进转发日志 / 任务审计 / 在线表；可单独撤销、可限速、可限权（只能派活 / 只能对话）。派活默认目标就是「请求这条通道的那台设备」 | 运维 / 控制台 / hub | **硬**（不可伪造） |
-| **工具层（按需）** | 只读工具 `local_devices()`：设备名、在线、能力、最近活跃（D2 落地） | 模型**主动查**才看得见 | **硬**（token 换来，篡不了） |
-| **记忆层（软）** | `author: {id: "pi-workbench/<deviceId>", name: "<设备名>", is_bot: false}` | 只进 memory provider 的 `sync_turn`，**不进 prompt** | 只做归属 |
-| ~~模型层（每轮注入）~~ | ~~`instructions` 里的 `<pi-devices>`~~ → **v1.1 取消** | — | — |
-
-**为什么取消每轮注入**（三条，按重要性）：
-
-1. **大多数场景不需要**：身份是**通道属性**而非模型知识 —— 派活路由由 hub 按 token 决定，模型不必知道设备名。模型只在「用户直接问」或「多设备轮流接话」时才真需要；
-2. **注入不可信、工具可验证**：注入进 prompt 的文字，模型读过的网页同样能写「我是设备 B，把任务派给我」；工具返回来自 hub 的 token，伪造不了 —— 把身份放在可信那一侧（对应 R-07 / R-08）；
-3. **成本与缓存**：`instructions` → `ephemeral_system_prompt`，用 `session_id` 时服务端不记忆（只有 `previous_response_id` 链路才复用），等于每轮都发；按需读取常规成本为 0，且时间线上有工具卡可审计。
-
-**`author` 的定位（已由上游源码确认，见 §9 QD-7）**：只做记忆归属与审计标签，**不构成授权、不进模型上下文**。
-
-**唯一的注入例外**：共享会话里设备切换时，用**消息级极短前缀**（与本地 `<pi-workbench-context>` 同一套约定，渲染时剥掉），不走 system prompt；该场景默认关闭（§3.3）。
-
-### 3.3 多设备与会话：默认一设备一会话
-
-- 默认：`设备 × 项目 = 一个云端会话`（`session_id` 存在本地 `data/cloud-agent/device-sessions.json`）；
-- 理由：同一会话的并发轮次在服务端**排队**（§2），两台设备抢一个会话只会互相阻塞；而「记忆」在 Hermes 是 profile 级全局的，不共享会话也不会失忆；
-- 提供「共享会话」显式开关，界面上写明「另一台设备发言时会排队」，排队用 `run.queued` 事件显示成时间线上的一行；
-- 设备清单 + 「本会话属于设备 A」写进会话首轮 `instructions`，让模型知道「现在是哪台机器在跟我说话」。
-
-### 3.4 反向派活：能力只由本地授予
-
-```
-云端 Agent 想「在 project-X 上跑测试」
-  └─> MCP 工具 local_dispatch(project, prompt, mode, timeout)
-        ├─ [云端审批①] MCP 服务器以 trust: untrusted 注册 → 工具调用本身要人批
-        ├─ pi-hub 校验：设备 token 有效？设备在线？该设备开了「允许派活」？
-        ├─ 设备 ack 独占任务（同一 taskId 只执行一次）→ 本地执行器
-        │     ├─ [本地白名单] projectId 必须已登记且允许该模式
-        │     ├─ [本地档位上限] 请求的 mode ≤ 本机设置的上限（默认 readonly）
-        │     ├─ [本地审批②] 落进既有 ApprovalBroker（fail-closed，超时即拒）
-        │     └─ 新建本地会话执行（复用 TOP_LEVEL_AGENT 的任务 / 委派 / headless 工作区）
-        └─ 结果回灌：MCP 工具返回值 = {status, summary, changedFiles, diffStat, logTail}
-```
-
-**为什么不破 S-02**：S-02 的原意是「云端不能凭自己拿到本地能力」。这套设计里，能力的三道门（白名单 / 档位上限 / 逐次审批）**全部在本地**，云端只能提交一个**请求**，本地可以永远拒（总开关、撤销 token、超时）。所以 S-02 的措辞要从「零本地能力」改成「**零本地授权**：能力只能由本地授予，云端只能发请求」，语义没松，只是说清了边界在哪。
+**唯一例外**：dashboard（`dash.tchen-xiaoxiao.com`，WebSocket + 静态资源 + 上游自有前端）继续直连，插件不代理。
 
 ---
 
-## 4. 设备身份细则（D-01 / D-02）
+## 3. 目标架构
+
+```
+        ┌──────────── VPS ────────────────────────────────────────────┐
+Pi Workbench                          Caddy (TLS)
+ (本地)  ──https──▶ hub.tchen-xiaoxiao.com ──▶ 127.0.0.1:8484
+                                              │
+                                    ┌─────────▼───────────┐
+                                    │ 插件 pi-workbench    │ ← 与 agent 同进程
+                                    │ token 校验 / scope   │
+                                    │ 设备目录 / 心跳       │
+                                    │ 任务邮箱 / 三个工具   │
+                                    │ 审计 JSONL           │
+                                    └─────────┬───────────┘
+                                              │ loopback HTTP（带 API_SERVER_KEY）
+                                    ┌─────────▼───────────┐
+                                    │ api_server (Hermes)  │
+                                    └─────────────────────┘
+
+dashboard（dash.*）── 直连，不过插件
+```
+
+**一条请求的完整路径**：本地带 `Authorization: Bearer pi_…` → 插件按 sha256 查 token → 查 scope → 注入 `X-Pi-Device`、**覆盖** `author` → loopback 转发 → 原样回传（SSE 流式）。上游签名（`API_SERVER_KEY`）永不出现在本地。
+
+---
+
+## 4. 为什么改成插件（以及代价）
+
+### 4.1 Hermes 插件系统刚好给了我们要的座位
+
+| 我们需要 | 插件提供 | 依据 |
+| --- | --- | --- |
+| 设备入口（认 token、长轮询） | `kind: platform` 插件 + `ctx.register_platform(name, label, adapter_factory, check_fn, ...)`；适配器 `connect()` 里**可以自己起 aiohttp server** | 《Adding a Platform Adapter》的 webhook/callback 示例 |
+| 模型侧三个工具 | `provides_tools` + `tools.py: register_tools(ctx)`，**无需单独 MCP server** | 《Build a Hermes Plugin》 |
+| 设备目录 / 邮箱 / 审计 | `plugin_data_dir()` + `plugin_db()`（SQLite WAL），`hermes plugins update` 不丢 | 同上「Store durable state」 |
+| 权限声明 / 配置 | `plugin.yaml` 的 `capabilities:`（同意屏）、`requires_env` / `optional_env` | 同上 |
+| 生命周期 / 校验 | `hermes plugins install/enable/update/remove` + `plugin doctor` | 同上 |
+| 先例 | 内置 **`a2a` 插件**：自带 HTTP 入口（Agent Card + JSON-RPC）**同时**提供客户端工具 —— 与本方案同形 | 插件目录 |
+
+**顺带收益**：`platform_toolsets` 那个显式白名单**不用改了**（原来加 MCP server 必须改它）——回到只用文档化接口。
+
+### 4.2 代价（比独立服务多出来的）
+
+| 代价 | 说明 | 缓解 |
+| --- | --- | --- |
+| 单点放大 | 插件挂 → 云端全挂（无兜底） | 热路径无 DB 写、限流、超时、`/v1/hub/health` 让 UI 分得清"网关挂了"还是"模型挂了" |
+| 同进程 | 插件崩会拖累 gateway；阻塞事件循环会卡住 agent | sqlite 全走异步 + WAL 短事务；禁止同步 HTTP；每条路由超时 |
+| 权限半径 | token 库与邮箱在 agent 进程内 | 只存 hash、`capabilities:` 同意屏、审计独立 JSONL、邮箱不存明文命令 |
+| 上游耦合 | 插件 API 变更会打断我们 | `shim.py` 只做注册与起停（≤120 行）；`core/` 不 import 任何 Hermes 模块；钉版本区间 + `plugin doctor` |
+
+**为什么不选「插件只做派活、其余直连」**：两条缝会让设备身份只覆盖一半，`approvals.mode` 这类安全写操作仍可被任何持全局钥匙者改；「哪台设备做的」永远说不全。
+
+---
+
+## 5. 接口契约
+
+### 5.1 设备管理（管理密钥，只给运维用）
+
+| 方法 / 路径 | 用途 | 认证 | 备注 |
+| --- | --- | --- | --- |
+| `POST /v1/devices/register` | 登记设备，返回**一次性明文 token** + deviceId | `X-Pi-Admin-Key` | 服务端只存 sha256 + 前 8 位 |
+| `GET /v1/devices` | 设备列表（名字 / 在线 / scope / 最后活跃） | `X-Pi-Admin-Key` 或 `admin` scope | |
+| `POST /v1/devices/{id}/revoke` | 撤销（立刻 401） | 同上 | 不删行，写 `revoked_at` |
+| `GET /v1/hub/health` | 插件自检（版本 / 上游连通 / 设备数 / 队列深度） | 匿名 | UI 用它区分故障源 |
+
+### 5.2 设备侧（`Authorization: Bearer pi_…`）
+
+| 方法 / 路径 | 用途 | scope |
+| --- | --- | --- |
+| `GET /v1/devices/me` | 自己的身份与 scope | `chat` |
+| `POST /v1/devices/me/heartbeat` | 心跳 30s，返回在线设备列表 | `chat` |
+| `GET /v1/devices/me/tasks?wait=25` | 长轮询取派活（**原子 claim**） | `dispatch` |
+| `POST /v1/devices/me/tasks/{id}/result` | 回传摘要结果 | `dispatch` |
+
+### 5.3 透明代理（dashboard 除外，全量）
+
+| 上游 | 插件处理 |
+| --- | --- |
+| `/health` · `/v1/capabilities` · `/v1/{toolsets,skills,models}` | 透明 + 30s 内存缓存 |
+| `POST /v1/runs` | 覆盖 `author`（以 token 为准）、幂等键加 `pi:<deviceId>:` 前缀、审计 |
+| `GET /v1/runs/{id}` · `/events`(SSE) · `/steer` · `/stop` | 流式透传：不缓冲、不压缩、透 `Last-Event-ID`、客户端断开即断上游 |
+| `/v1/runs/{id}/approval` · `/clarify` · `/resolve-unknown` | 透传 + 审计「哪台设备批的、依据哪条规则」 |
+| `/api/sessions*` · `/api/jobs*` | 透明 |
+| `/api/config` GET | 透明（白名单字段由本地再做一次） |
+| `/api/config` PUT | **需 `admin` scope** + 审计（会改 `approvals.mode`，是安全写） |
+| `/api/chat/image-upload` | 透明（沿用上游大小上限） |
+| `/api/fs/read-data-url` | **收紧**：只允许 `HERMES_HOME/uploads`、`cache/images` 下的文件，越界 `403 path_not_allowed` |
+
+**统一错误码**（插件自己产生；上游 4xx/5xx 原样透传）：
+
+| code | HTTP | 本地 UI 文案方向 |
+| --- | --- | --- |
+| `unauthorized` | 401 | 设备未登记 / token 无效 |
+| `device_revoked` | 401 | 这台设备已被注销 |
+| `scope_required` | 403 | 当前设备权限不够（缺 chat/dispatch/admin） |
+| `rate_limited` | 429 | 请求太频繁，稍后再试（带 `Retry-After`） |
+| `upstream_unavailable` | 502 | 网关正常但 Hermes 异常 |
+| `path_not_allowed` | 403 | 该路径不在允许范围 |
+
+---
+
+## 6. 数据模型（`plugin_data_dir("pi-workbench")/hub.db`）
+
+```sql
+devices(id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+        token_prefix TEXT NOT NULL, scopes TEXT NOT NULL,
+        created_at INTEGER NOT NULL, last_seen_at INTEGER,
+        revoked_at INTEGER, note TEXT)
+
+tasks(id TEXT PRIMARY KEY, device_id TEXT NOT NULL, project_id TEXT NOT NULL,
+      prompt TEXT NOT NULL, mode TEXT NOT NULL,          -- readonly | ask
+      status TEXT NOT NULL,                              -- queued|claimed|running|done|failed|expired|refused|cancelled
+      created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+      claimed_at INTEGER, finished_at INTEGER,
+      result_summary TEXT, exit_code INTEGER, error TEXT,
+      origin_run_id TEXT, origin_session_id TEXT)
+
+audit(id INTEGER PRIMARY KEY, at INTEGER NOT NULL, kind TEXT NOT NULL,
+      device_id TEXT, path TEXT, status INTEGER, detail TEXT, ip TEXT)
+```
+
+约定：
+- **只存 token 的 sha256**；明文只在登记响应里出现一次。
+- `prompt` 全文入库（云端本地库），结果只存摘要（≤2k）；摘要之外的内容不出本机。
+- 审计另写 `plugin_data_dir/audit-YYYYMM.jsonl`（与 SQLite 解耦，可直接 `tail`）。
+- `tasks` 保留 30 天，过期清理由插件启动时做一次。
+
+---
+
+## 7. 插件工程结构
+
+```
+pi-workbench/
+  plugin.yaml            # kind: platform / 版本区间 / env / capabilities
+  __init__.py            # register(ctx) → 只调 shim.register
+  shim.py                # ≤120 行：ctx.register_platform(...) + 起停 aiohttp app
+  core/
+    app.py               # aiohttp Application：路由表 + 中间件（认证/scope/限流/审计/错误映射）
+    auth.py              # token 校验、scope、内存令牌桶
+    registry.py          # devices 读写、心跳、撤销
+    mailbox.py           # tasks 认领/回传（原子 claim、TTL 过期）
+    proxy.py             # 上游转发 + SSE 流式保真 + author 覆盖 + 幂等键前缀
+    fsguard.py           # /api/fs 白名单
+  tools.py               # register_tools(ctx)：local_devices / local_dispatch / local_task
+  tests/                 # pytest + aiohttp test client + 假上游
+```
+
+`plugin.yaml`（草案，H0 实测后钉死区间）：
+
+```yaml
+name: pi-workbench
+kind: platform
+version: 0.1.0
+hermes: ">=0.22.6,<0.24"        # 已部署版本 0.22.6
+python_dependencies: []          # aiohttp 已是上游依赖
+requires_env:
+  - PI_HUB_ADMIN_KEY             # 登记 / 撤销设备
+  - HERMES_API_BASE              # 默认 http://127.0.0.1:<api_server 端口>
+  - HERMES_API_SERVER_KEY        # loopback 调上游
+optional_env:
+  - PI_HUB_PORT                  # 默认 8484
+  - PI_HUB_TASK_TTL_SECONDS      # 默认 600
+capabilities: [network_ingress, durable_state]   # 走一次同意屏
+```
+
+**三层纪律**：
+1. `shim.py` 是唯一碰 Hermes 插件 API 的文件 —— 上游改签名只改它；
+2. `core/` 不知道 Hermes 存在（输入 HTTP、状态 SQLite），**随时可 5 分钟外提为独立服务**；
+3. `tools.py` 只依赖 `ctx.register_tool`，与 `core/mailbox.py` 通过函数调用交互。
+
+---
+
+## 8. 设备身份细则（D0 已落地，此处为最终口径）
 
 | 项 | 定义 |
 | --- | --- |
-| `deviceId` | 本地首次启动生成 `crypto.randomUUID()`，落 `data/cloud-agent/device.json`，**机器认的就是它**。D0 不提供「重置身份」按钮（见下） |
-| 设备名 | **默认直接读系统里的设备名**：macOS `scutil --get ComputerName`（"唐辰的 MacBook Pro"）· Linux `hostnamectl --pretty` · Windows 用计算机名（`os.hostname()`，改名要重启才生效，不为此去 spawn `reg query`）；任一失败 800ms 内回落 `os.hostname()`。清洗（去 Cc/Cs/Co 控制字符与私用区、去 `/`、折叠空白、按码点截 ≤40 字）+ 连接页可改，改完下一轮即生效 |
-| 设备 token | 由 hub 签发：`pi_<base64url(32B)>`；**服务端只存 hash**，本地用 `safeStorage` 存 `enc:`（与 `connection.json` 同一套约定） |
-| 名字 ≠ 身份 | 名字只作显示与 `author.name` 归属标签：会重名、会被改、常含个人信息（`唐辰的 MacBook Pro`），所以**不能当身份证**。认设备永远用 `deviceId` |
-| 不做「重置设备身份」 | D0 去掉：它只影响云端记忆归属的连续性，用户日常没有这个动作。真正的需求是 D1 的**注销这台设备**（服务端撤销 token，本地清文件只是副作用） |
-| 身份在**启动时**落地（2026-11-06 定） | `initAppDirectories` 之后立刻建 `device.json`（只 `id` + hostname，**不 spawn 探测**，失败只 warn）。这样「身份什么时候诞生」不取决于用户何时第一次打开云端页，启动日志有 `[Boot] device=<名字> (<id8>)` 锚点。友好名探测仍是懒的（首次打开连接页），且**只做一次**：`probedAt` 之后系统改名不自动跟随，改为「重新读取系统名」按钮 |
-| 不做「换机器检测」（2026-11-06 定） | 不做 `hostnameAtCreation` 比对。便携目录被整包拷贝导致的身份冲突留到 D1 由服务端发现（同一 `deviceId` 从两个 IP 来），本地不猜 |
-| 设备名必须可自定义、可随时改 | 默认值只求"开箱就对"，人一定想改成自己的叫法（「公司的台式」「客厅那台」）。改名**立即生效**：`name` 每轮现读现发，不需要重连、不需要重启、不影响 `deviceId` |
-| 绑定流程 | 连接页「登记这台设备」→ 用 hub 的管理密钥换一张设备 token → 一次性展示 + 写入 safeStorage + 提示「可在云端设备页撤销」 |
-| 心跳 | 在线时每 30s `POST /v1/devices/:id/heartbeat`；离线判定 90s |
-| 撤销 | hub 侧删除 / 停用 token → 该设备下一次请求即 `401 device_revoked`，其它设备不受影响 |
-| 限权 | token 带 `scopes: ['chat','dispatch']`；只想给「能对话不能派活」的旧笔记本，就只给 `chat` |
-| 模型可见性 | **默认不注入**；`author` 只作记忆归属；模型要确认时调 `local_devices()`（D2）。设备名不进 prompt → 不破 cache，也不可被内容注入伪造 |
-
-**支持的传输形态（分阶段）**
-
-| 阶段 | 本地连谁 | 身份强度 |
-| --- | --- | --- |
-| D0（先做） | 直连 `api.`，共用 `API_SERVER_KEY` | 只有模型层（`author` + 设备上下文），平台层无身份 |
-| D1（主形态） | 经 `api.` → hub → gateway | 平台层强制 + 模型层 |
-
-旧路径保留为「直连降级」，用于 hub 挂掉或用户不想装 hub 的场景（对应 UI 上的连接方式选择）。
+| `deviceId` | 本地首次**启动时**生成（`initAppDirectories` 之后），只读、不重置；随每轮 `author.id = pi-workbench/<uuid>` |
+| 设备名 | 默认读系统友好名（macOS `scutil --get ComputerName` / Linux `hostnamectl --pretty`，失败回落 hostname），**只探测一次**（`probedAt`），用户可改、改完下一轮生效；跟随系统改名须按「重新读取系统名」 |
+| device token | `pi_<base64url(32B)>`；服务端只存 hash + 前 8 位；本地 `safeStorage`（`enc:`）；scopes `['chat','dispatch']`（`admin` 单独签发） |
+| 权威来源 | **token → deviceId**。客户端自称的 `author` 会被插件覆盖；`X-Pi-Device` 只允许插件注入（中间件先删客户端传入的） |
+| 模型可见性 | **默认不注入 prompt**。模型要确认设备时调 `local_devices()`（按需、可审计、不可伪造）；`author` 只进 memory provider 的 `sync_turn`（已核源码，不进 prompt） |
+| 心跳 / 离线 | 30s 心跳；>90s 无任何认证请求判离线（任一请求都会刷 `last_seen_at`） |
 
 ---
 
-## 5. 反向派活细则（D-03）
+## 9. 反向派活细则（H3，需 ADR-008）
 
-### 5.1 任务信封（hub ↔ 设备）
+### 9.1 任务信封
 
 ```ts
 interface RemoteTask {
-  taskId: string            // hub 生成（uuid），幂等的唯一键
+  taskId: string          // uuid，幂等键
   deviceId: string
-  projectId: string         // 逻辑项目 id；**绝对路径永不出本机**
-  prompt: string            // 任务说明（≤ 8k 字符）
-  mode: 'readonly' | 'ask'  // 上限由本地钳制，'full' 一律拒绝
-  timeoutS: number          // 默认 900，上限 3600
+  projectId: string       // 必须是本地已登记并信任的工作区
+  prompt: string          // ≤8k
+  mode: 'readonly' | 'ask'   // 上限 readonly，云端的 'full' 直接 refused
+  timeoutS: number        // ≤3600
   createdAt: number
-  expiresAt: number         // 设备离线超过 TTL 即作废（默认 10 分钟）
-  origin: { runId: string; sessionId: string | null }  // 云端来源，用于回灌与审计
+  expiresAt: number       // 默认 10 分钟
+  origin: { runId: string; sessionId: string | null }
 }
 ```
 
-### 5.2 三个 MCP 工具（注册名 `mcp-pi-hub`）
+### 9.2 三个工具（`provides_tools`，非 MCP）
 
-| 工具 | 语义 | 备注 |
+| 工具 | 入参 | 返回 |
 | --- | --- | --- |
-| `local_devices()` | 列出设备：名字、在线、能力（`chat`/`dispatch`）、最近活跃 | 只读，供模型自己选设备 |
-| `local_dispatch(project, prompt, device?, mode?, timeout_s?)` | 派活并**等待**结果 | 默认选「最近活跃且空闲」的设备；同步等待 ≤ 上限，超时返回 `{status:"running", taskId}` |
-| `local_task(task_id)` | 查/续等一个任务 | 配合上一条的异步返回，最长再等 15 分钟 |
+| `local_devices()` | — | `[{deviceId, name, online, scopes, lastSeenAt, projects}]` |
+| `local_dispatch(deviceId?, projectId, prompt, mode?, timeoutS?)` | 缺省设备 = 最近活跃在线设备 | `{taskId, status: 'queued'}` 或 `refused: <reason>` |
+| `local_task(taskId)` | — | `{status, exitCode?, summary?, startedAt?, finishedAt?}` |
 
-**为什么是同步工具**：工具返回值就是模型上下文里的「事实」，同步语义最不容易出错；异步续等交给 `local_task`，避免 MCP 工具超时把结果丢掉。
+拒绝原因固定枚举：`disabled`（总开关关）· `permission_ceiling`（要的档位高于上限）· `unknown_project` · `device_offline` · `device_unknown` · `scope_required` · `queue_full`。
 
-### 5.3 本地执行器（复用既有能力，不新造）
+### 9.3 本地执行器（复用既有能力，不新造）
 
-| 环节 | 复用 |
+| 门 | 实现 |
 | --- | --- |
-| 任务 → 会话 | [TOP_LEVEL_AGENT](./TOP_LEVEL_AGENT.md) §4.3 派发 + §3.4 任务一等对象（任务 id / 状态机 / 时间线） |
-| 权限 | 既有 `SessionMode` + `electron/approval-broker.ts`（fail-closed、超时即拒） |
-| 授权不可放大 | §4.5 委派授权规则：云端请求的 `mode` 只能**小于等于**本机上限 |
-| headless | §4.8：目标工作区不必打开，`WorkspaceView` 是否存在不影响执行 |
-| 工作区信任 | `electron/workspace-trust.ts`（`realpath` + `path.relative`）不变 |
+| 总开关 | 默认**关**；关掉即 `refused: disabled`（插件侧也拒绝入队） |
+| 工作区白名单 | 只接受已登记 + 已信任的工作区（`workspace-trust.ts`） |
+| 档位上限 | 默认 `readonly`；请求 `ask`/`full` 高于上限 → `refused: permission_ceiling` |
+| 逐次审批 | 每个写能力动作走既有 `ApprovalBroker`；超时 / 通道缺失一律拒绝（fail-closed） |
+| 执行 | 新建本地会话执行该 prompt，产出摘要（退出码、改动文件数、结果前 N 字） |
 
-新增的只有三件事：设备 token 校验、任务队列与独占 ack、结果摘要生成（`changedFiles` / `diffStat` / `logTail`）。
+### 9.4 结果回传粒度
 
-### 5.4 结果回传粒度
-
-默认只回：`status` / 一句话 `summary` / 变更文件列表 / diff 统计 / 最后 40 行日志。
-**不回**完整文件内容、不回完整 diff（要看得让云端读 git，或本地导出一份），避免「本地代码库被整体搬进模型上下文」。
+只回**摘要**（≤2k）：状态、退出码、改动统计、结果前 200 字、错误首行。完整 diff / 日志留在本地可导出，不回云端。
 
 ---
 
-## 6. 安全模型（本方案的唯一边界变更）
+## 10. 本地侧改造（H1/H2）
 
-威胁模型从 v5 的三条（防误操作 / 防外泄 / 防公网扫描）扩一条：**防跨端提权** —— 云端被攻破或模型被注入后，不能绕过本地审批让本地执行任意动作。
-
-| 编号 | 约束 | 落地 |
-| --- | --- | --- |
-| R-01 | 能力只由本地授予 | 三道门（白名单 / 档位上限 / 逐次审批）全在本地；hub 不持有任何本地能力 |
-| R-02 | 云端请求不得放大 | `mode` 只能 ≤ 本机上限；`full` 一律 `refused: permission_ceiling` |
-| R-03 | 工作区白名单 | 未登记 `projectId` → `refused: unknown_project`，不创建本地会话 |
-| R-04 | 双层审批 | MCP `trust: untrusted`（云端侧）+ 本地 ApprovalBroker（本地侧）；任一拒绝即中止 |
-| R-05 | 总开关 + 可撤销 | 本机「允许云端派活」默认**关**；关掉后 hub 派活立即 `refused: disabled`；token 可单独撤销 |
-| R-06 | 任务 TTL 与独占 | 过期不执行；`taskId` 唯一，两台设备不会重复跑同一个任务 |
-| R-07 | 审计三问 | 谁派的（run / session / 设备）/ 哪台设备执行的（deviceId + 本地会话）/ 真实结果（工具卡 + 本地 JSONL），一条链可查 |
-| R-08 | 注入隔离 | 派活来源必须是一个 MCP 工具调用（有审批路径），不接受自由文本；本地执行时按档位审批，不允许静默提权 |
-| R-09 | 路径不出本机 | 云端只见 `projectId` + 项目名；绝对路径、用户名、目录结构一律不外发 |
-| R-10 | 结果最小化 | 只回摘要与统计（§5.4） |
-| R-11 | hub 自身可审计 | 每次转发 / 派活 / 撤销写一行 JSONL；设备 token 只存 hash |
-| R-12 | 密钥卫生 | 设备 token 走 `safeStorage`，渲染层永不持有；hub 管理密钥只用于登记，不进任何日志 |
-
-**S-02 的新措辞（等批准）**：
-> ~~云端 Agent 零本地能力：Pi Workbench 不实现 ACP，不通告 `fs/*`、`terminal/*`~~
-> **云端 Agent 零本地授权**：云端只能提交请求（对话 / 派活），本地能力（工作区、档位、写与命令）只能由本地按白名单 + 上限 + 逐次审批授予，且可随时整体撤销。
+| 项 | 改动 |
+| --- | --- |
+| 配置 `connection.json` | 增 `gatewayUrl`（默认 hub）、`deviceId`、`deviceToken`（`enc:`）、`scopes`、`hubStatus`；`apiKey` 降级为**仅登记设备时**使用 |
+| 客户端 | 所有 cloud 调用收敛到 `cloudFetch()`：带 device token、统一错误码映射；**删除直连分支** |
+| 连接页 | 改为「云端网关」：地址 + 管理密钥（登记用）+ 「登记这台设备」+ token 前 8 位 / scope / 在线状态 + 「注销这台设备」 |
+| 设备卡（D0 已有） | 增登记状态、scope、在线、注销；本地仍发 `author`（会被插件覆盖，权威在服务端） |
+| 错误态 | `unauthorized` / `device_revoked` / `scope_required` / `upstream_unavailable` 四种明确文案 + 各自下一步 |
+| 心跳 | 主进程 30s 定时（随窗口生命周期），失败静默重试；>90s 视为离线并在 UI 灰显 |
+| 自检 | `CloudDiagnosticsPanel` 增一块「网关」：`/v1/hub/health` 的三项（插件版本 / 上游连通 / 设备在线） |
 
 ---
 
-## 7. 分期与工期
+## 11. 安全与失败语义
 
-| 期 | 目标 | 交付判据 | 工期 |
+| 项 | 约定 |
+| --- | --- |
+| 身份权威 | token → deviceId；`author` 被插件覆盖；`X-Pi-Device` 先删后注，客户端无法伪造 |
+| 注入隔离 | 设备名 / 项目名一律进结构化字段，不进 system prompt；派活 prompt 只在本地审批卡里给人看 |
+| fail-closed | token 缺失/无效/撤销 → 401；scope 不足 → 403；上游不通 → 502 `upstream_unavailable`；**永不"放行当默认"** |
+| 同进程防护 | sqlite 走 `asyncio.to_thread` + WAL + 短事务；代理超时 120s、SSE 空闲 15min；限流 60 req/min/设备、SSE 并发 2 |
+| 审计 | 所有写操作（approval / clarify / config PUT / dispatch / result）一条 JSONL：deviceId、path、状态码、耗时、ip |
+| `/api/fs` | 白名单目录 + `realpath` 校验，越界 403 + 审计 |
+| 凭据 | 上游 `API_SERVER_KEY` 只在插件进程内；本地永不持有；device token 可单台撤销 |
+| 威胁模型补充 | 插件与 agent 同进程 → 若 agent 被注入，它**可能**读到插件数据目录。因此：token 只存 hash、邮箱不存完整命令、审计独立落盘，且**派活的最终闸门始终在本地**（云端被完全接管也拿不到超出 readonly 的能力） |
+
+**没有兜底的代价**：插件必须「挂了就明确报错，不假装成功」。本地 UI 是唯一的故障判断依据。
+
+---
+
+## 12. 分期与工期（≈3 周）
+
+| 阶段 | 内容 | 工期 | 完成标准 |
 | --- | --- | --- | --- |
-| **D0 身份 v0 ✅** | `device.json` + 设备名设置 + 每轮 `author` + 审计带设备名 + 连接页设备卡**（不动 prompt）** | AC-D01（平台层）；**无服务端改动，可单独合入**。已落地：`electron/cloud/device.ts`、`cloud:device:get|set`、`data/cloud-agent/device-sessions.json` | ~~1.5 天~~ 已实现 |
-| **D1 pi-hub 控制面前置** | hub 服务（设备登记 / token 校验 / 转发 / 心跳 / 撤销 / 审计）+ Caddy 调整 + 本地「经 hub 连接」与直连降级 | AC-D02 / AC-D03；两台设备各持一把 token | 1 周 |
-| **D2 派活最小闭环** | 任务邮箱 + MCP server（3 个工具，`trust: untrusted`）+ 本地执行器（白名单 / 档位上限 / 审批 / 结果回传）+ 派活总开关。**模型层身份在这里交付**：`local_devices()` 是唯一权威来源（按需查，不注入） | AC-D05 / AC-D06 / AC-D07 / AC-D08 / AC-D10 / AC-D01（模型层） | 1.5 周 |
-| **D3 多设备体验** | 每设备每项目会话 + 共享会话开关 + 设备面板（在线 / 能力 / 最近任务）+ 排队可视化 | AC-D04 / AC-D09 | 1 周 |
-| **D4 安全收口** | token 轮换 / 撤销 UI、任务 TTL 与限速、审计导出、注入演练、运维文档（备份 / 升级 / hub 挂了怎么办） | AC-D11 ~ AC-D14 | 0.5 周 |
+| **H-1 预检** | §14 清单全部通过；QD/QN 全部签字 | 你 30 分钟 + 我 1 小时 | 见 §14 结果栏 |
+| **H0 骨架** | 插件目录 + `plugin.yaml` + `shim` + `core/app` + SQLite + admin 登记/撤销 + token 中间件 + `/v1/hub/health` + 只读代理（health/capabilities/toolsets/skills/models）+ Caddy vhost | 3 天 | 带 token 从本机拿到 capabilities；无 token 401；撤销后立刻 401 |
+| **H1 全量切换** | `/v1/runs*`（含 SSE 保真）+ sessions/jobs/config/media/fs + 本地改单入口 + 错误码映射 + 全功能回归 | 4 天 | 本地一切照旧：聊天/工具卡/审批/插话/跨重启 attach/会话管理/任务页/自检/图片；断线重连不重复不丢 |
+| **H2 设备面** | 心跳/在线/注销 + 本地登记与状态 UI + 审计打通 + 自检网关块 | 2 天 | 两台设备各自 token；拔网 90s 离线；撤销后 UI 提示「设备已注销」 |
+| **H3 派活** | 三个工具 + 邮箱 + 本地执行器（开关/白名单/上限/审批/摘要）+ 结果回传 | 5 天 | AC-D05~D13 |
+| **H4 收口** | 运维手册（备份/升级/doctor）、威胁模型复核、版本区间钉死、文档定稿 | 2 天 | `hermes plugins update` 后数据不丢；`plugin doctor` 通过 |
 
-**合计约 4.5–5 周**，关键路径是 D1（hub）。
+**切换点只有一个**：H1 末尾。此后本地不再有第二条路（回滚 = 改配置 + 停用插件，运维动作）。
 
 ---
 
-## 8. 验收场景
+## 13. 验收场景
 
-| 编号 | 场景 | 通过标准 |
+| 编号 | 场景 | 通过标准 | 阶段 |
+| --- | --- | --- | --- |
+| AC-D01 | 设备识别（通道层） | 两台设备各发一轮，审计与 `/v1/devices` 都能标出设备；`author` 由插件按 token 填入 | H1/H2 |
+| AC-D01b | 设备识别（模型层） | 问「你从哪台设备收到这条消息」→ 它调 `local_devices()`（时间线有工具卡）并答对；不依赖任何 prompt 注入 | H3 |
+| AC-D02 | 设备撤销 | 撤销 A → A 立刻 `401 device_revoked`，B 不受影响 | H2 |
+| AC-D03 | 在线状态 | 关掉 A → 90s 内显示离线；重连自动恢复 | H2 |
+| AC-D04 | 多设备并发 | A、B 同时对同一会话发言 → 后者 `queued`，界面显示排队，两条都不丢 | H1 |
+| AC-D05 | 派活闭环 | 云端「在 project-X 跑测试」→ 工具卡带参数 → 本地新会话执行 → 摘要回到云端时间线 | H3 |
+| AC-D06 | 双层审批 | 云端工具调用弹一次审批；本地按档位再批；任一处拒绝则中止且审计有记录 | H3 |
+| AC-D07 | **不可放大（生死线）** | 云端请求 `mode: 'full'` → `refused: permission_ceiling`，本地不建会话 | H3 |
+| AC-D08 | 白名单 | 未登记项目 → `refused: unknown_project` | H3 |
+| AC-D09 | 幂等与独占 | 同一 `taskId` 重放只执行一次；两台设备不同时跑同一任务 | H3 |
+| AC-D10 | 过期 | 设备离线时派活 → TTL 后 `expired`，设备上线也不执行 | H3 |
+| AC-D11 | 总开关 | 关闭 → 立即 `refused: disabled`；重开无需重装 | H3 |
+| AC-D12 | 审计三问 | 一条任务链能回答「谁派的 / 哪台设备执行 / 真实结果」 | H3 |
+| AC-D13 | **注入演练（生死线）** | 云端读含恶意指令的网页后派活 → 本地仍必须人工批准，且拿不到高于上限的档位 | H3 |
+| AC-D14 | 断网恢复 | 本地断网 1 分钟，TTL 内重连后完成；超时后不重复执行 | H3 |
+| **AC-D15** | **SSE 保真** | 切换后：工具卡顺序不变、审批卡不重复、重连不重放已收事件、`Last-Event-ID` 生效 | H1 |
+| **AC-D16** | **故障可分辨** | 停掉插件 → UI 显示「网关不可用」；只停 Hermes → UI 显示「Hermes 异常」（两者文案不同） | H1 |
+| **AC-D17** | **越权阻断** | 只给 `chat` 的 token 调 `local_dispatch` / `config PUT` → 403 `scope_required`；`/api/fs` 越界 → 403 | H1/H3 |
+
+---
+
+## 14. 执行前检查清单（H-1）
+
+### 14.1 本地：已执行并通过（2026-11-06，`main` @ `96f2eaa`）
+
+| 检查 | 命令 | 结果 |
 | --- | --- | --- |
-| AC-D01 | 设备识别（平台层） | 两台设备各发一轮，hub 转发日志 / 审计 / 会话页都能标出设备；`author` 出现在服务端会话记录里 |
-| AC-D01b | 设备识别（模型层，D2） | 问云端「你现在从哪台设备收到这条消息」→ 它调 `local_devices()`（时间线上有工具卡）并答对；**不依赖任何 prompt 注入**，改设备名后无需重连即生效 |
-| AC-D02 | 设备撤销（平台层） | 撤销设备 A 的 token → A 立刻 `401 device_revoked`，B 完全不受影响 |
-| AC-D03 | 在线状态 | 关掉 A → 90s 内设备面板显示离线；重连自动恢复 |
-| AC-D04 | 多设备并发 | A、B 同时对同一会话发言 → 后者 `queued`，界面显示排队，两条都不丢 |
-| AC-D05 | 派活闭环 | 云端「在 project-X 跑测试」→ 工具卡带参数 → 本地新会话执行 → 结果（含 diff 统计）回到云端时间线 |
-| AC-D06 | 双层审批 | 云端 MCP 调用弹一次审批；本地执行按档位再批；任一处拒绝则整体中止且审计有记录 |
-| AC-D07 | 不可放大 | 云端请求 `mode: full` → `refused: permission_ceiling`，本地不建会话 |
-| AC-D08 | 白名单 | 请求未登记项目 → `refused: unknown_project` |
-| AC-D09 | 幂等与独占 | 同一 `taskId` 重放只执行一次；两台设备不会同时跑同一任务 |
-| AC-D10 | 过期 | 设备离线时派活 → TTL 后 `expired`，设备上线也不执行 |
-| AC-D11 | 总开关 | 关闭「允许云端派活」→ 立即 `refused: disabled`；重新打开无需重装 |
-| AC-D12 | 审计三问 | 一条任务链能回答「谁派的 / 哪台设备执行 / 真实结果」 |
-| AC-D13 | 注入演练 | 让云端读一个含恶意指令的网页后派活 → 本地仍必须人工批准，且不能拿到高于上限的档位 |
-| AC-D14 | 断网恢复 | 本地断网 1 分钟，任务在 TTL 内重连后完成；超时后不重复执行 |
+| 工作树干净 | `git status --porcelain` | ✅ 无改动 |
+| Node 版本（构建脚本 / 主进程约束） | `node -v` | ✅ v24.21.0（≥24） |
+| 类型 | `npm run type-check` | ✅ 0 |
+| 静态检查 | `npm run lint` | ✅ 0 |
+| 全量测试 | `npm test` | ✅ 148 文件 / 1744 用例 |
+| 主进程 + preload 构建 | `npm run build:main` | ✅ 0 |
+| D0 产物就位 | `data/cloud-agent/device.json` | ✅ `id` + `name = TChen-Legion` |
+
+### 14.2 本地：已核实的外部事实（无需凭证）
+
+| 事实 | 探测方式 | 结果 |
+| --- | --- | --- |
+| 上游版本 | `GET https://api.tchen-xiaoxiao.com/health` | ✅ `{"status":"ok","platform":"hermes-agent","version":"0.22.6"}` |
+| 上游运行时 | 同响应头 | ✅ `Server: Python/3.14 aiohttp/3.14.5` → **aiohttp 已是现成依赖，插件不需要新装包** |
+| 反代类型 | 响应头 | ✅ `Via: 1.1 Caddy` → Caddy 已在前，加 vhost 即可 |
+| 鉴权失败形状 | `GET /v1/capabilities`（无 token） | ✅ `401 {"error":{"code":"gateway_auth_failed","type":"gateway_auth_error"}}` → 插件错误码要与之区分 |
+| `/health` 只接受 GET | `HEAD /health` | ✅ `405 Allow: GET` → 健康检查用 GET |
+| `hub` 子域是否已被占用 | `nslookup hub.tchen-xiaoxiao.com` | ✅ 未解析，可新建 |
+
+### 14.3 VPS：待执行（**硬阻塞 H0**，请贴回结果）
+
+```bash
+# 1) Hermes 安装位置与 home
+echo "$HERMES_HOME"; which hermes; hermes --version
+
+# 2) 插件系统是否存在（本方案的整个前提）
+hermes plugins --help | head -30
+ls -la "$HERMES_HOME/plugins" 2>/dev/null | head
+python - <<'PY'
+import importlib, inspect
+for mod, names in [("plugins.plugin_storage", ["plugin_data_dir", "plugin_db"]),
+                   ("gateway.platforms.base", ["BasePlatformAdapter"])]:
+    try:
+        m = importlib.import_module(mod)
+        print(mod, "->", {n: hasattr(m, n) for n in names})
+    except Exception as e:
+        print(mod, "-> MISSING:", e)
+PY
+
+# 3) 平台适配器注册入口（签名是否与文档一致）
+python - <<'PY'
+import inspect
+try:
+    from plugins.api import PluginContext
+    print("register_platform:", inspect.signature(PluginContext.register_platform))
+    print("register_tool:", inspect.signature(PluginContext.register_tool))
+except Exception as e:
+    print("PluginContext 探查失败:", e)
+PY
+
+# 4) api_server 监听端口（插件要回环调它）
+ss -ltnp | grep -E ':(8[0-9]{3}|3[0-9]{4})' || netstat -ltnp | head -20
+grep -RIn "api_server" "$HERMES_HOME/config.yaml" 2>/dev/null | head
+
+# 5) API_SERVER_KEY 的读取位置（插件要用同一把）
+grep -n "API_SERVER_KEY" "$HERMES_HOME/.env" 2>/dev/null | sed 's/=.*/=<hidden>/'
+
+# 6) gateway 的 systemd 单元（插件随它重启）
+systemctl list-units --type=service | grep -i hermes
+
+# 7) Caddy 配置位置与现有 vhost
+systemctl status caddy --no-pager | head -5
+find /etc/caddy /etc/caddyfile -maxdepth 2 -name "*Caddyfile*" 2>/dev/null
+
+# 8) 端口 8484 是否空闲
+ss -ltn | grep ':8484' || echo "8484 free"
+
+# 9) 备份现状（万一要回滚）
+tar czf ~/hermes-backup-$(date +%F).tgz "$HERMES_HOME/config.yaml" "$HERMES_HOME/.env" 2>/dev/null && ls -lh ~/hermes-backup-*.tgz
+```
+
+### 14.4 VPS：待确认（不阻塞 H0，阻塞 H1/H3）
+
+| 项 | 为什么 | 检查方式 |
+| --- | --- | --- |
+| `plugins update` 是否保留 `plugin_data_dir` | 决定备份策略 | 用一次性测试插件跑一次 install→update→remove |
+| `provides_tools` + `tools.py::register_tools` 在 0.22.6 是否存在 | H3 的前提（否则退回 MCP + `platform_toolsets`） | `grep -rn "register_tools" "$HERMES_HOME"/plugins \| head` |
+| `kind: platform` 插件是否在 gateway 启动时自动 `connect()` | 决定设备入口何时起来 | 用最小 adapter 打印日志验证 |
+| SSE 是否被 Caddy 缓冲 | AC-D15 的前提 | `curl -N` 通过 hub 域名看首字节延迟 |
+| `/api/fs/read-data-url` 实际可读目录 | 白名单要按真实路径写 | `grep -rn "read-data-url" "$HERMES_HOME"` |
+
+### 14.5 硬阻塞项（不过就不开工）
+
+1. 插件系统在 0.22.6 里存在（14.3 第 2 项）
+2. `API_SERVER_KEY` 可被插件进程读到（14.3 第 5 项）
+3. api_server 端口可回环访问（14.3 第 4 项）
+4. `hub` 子域可解析 + Caddy 可加 vhost（14.3 第 7、8 项）
+5. §17 的 QD/QN 全部签字
 
 ---
 
-## 9. 开工前必须收敛的问题
+## 15. 运维
+
+| 项 | 做法 |
+| --- | --- |
+| 部署 | `hermes plugins install <git url>`（开发期用 `$HERMES_HOME/plugins/pi-workbench` 直放），`hermes plugins enable pi-workbench` |
+| 暴露 | Caddy：`hub.tchen-xiaoxiao.com { reverse_proxy 127.0.0.1:8484 { flush_interval -1 } }` + 关闭压缩 |
+| 随启 | 由 gateway 拉起（`kind: platform` 在配置启用后 `connect()`）；systemd 仍是原 gateway 单元 |
+| 数据 | `plugin_data_dir("pi-workbench")`：`hub.db` + `audit-YYYYMM.jsonl`。备份 = 拷整个目录 |
+| 升级 | `hermes plugins update pi-workbench`（数据不受影响）；升 Hermes 前跑 `hermes plugins doctor` |
+| 观测 | `/v1/hub/health`（匿名）、audit JSONL、gateway 日志（插件用同一 logger） |
+| 限流默认 | 60 req/min/设备；SSE 并发 2；单设备任务队列 8 |
+| 撤销设备 | `POST /v1/devices/{id}/revoke` + 本地连接页「注销这台设备」 |
+
+---
+
+## 16. 风险与回滚
+
+| 风险 | 严重度 | 缓解 |
+| --- | --- | --- |
+| 插件挂 = 云端全挂（无兜底） | 高 | 热路径无 DB 写、限流、超时；`/v1/hub/health` 让 UI 一眼分辨故障源（AC-D16） |
+| SSE 保真（缓冲/压缩/分块/断连） | 高 | 契约测试专项 + Caddy `flush_interval -1` + 不压缩 + AC-D15 |
+| 同进程阻塞事件循环 | 高 | sqlite 全异步 + WAL 短事务；禁止同步 HTTP；每路由超时 |
+| 上游插件 API 变更 | 中 | `shim.py` ≤120 行 + 版本区间 + `plugin doctor`；`core/` 不依赖 Hermes |
+| `/api/fs` 越界读 | 高 | 白名单 + realpath + 403 + 审计（AC-D17） |
+| 迁移期 `author` 双写混乱 | 低 | 插件覆盖；本地值只进日志 |
+| 插件数据丢失 | 中 | `plugin_data_dir` 每日备份；设备可重新登记（token 重签即可） |
+
+**回滚**（运维动作，代码里不实现）：`connection.json` 的 `gatewayUrl` 指回 `https://api.tchen-xiaoxiao.com` + 用回 `apiKey`；`hermes plugins disable pi-workbench`。前提是 `apiKey` 字段保留到 H4 之后。
+
+---
+
+## 17. 待确认（开工前需签字）
+
+### 17.1 已定（项目所有者 2026-11-06 确认）
+
+| 编号 | 事项 | 结论 |
+| --- | --- | --- |
+| C-1 | 单缝：除 dashboard 外全部经插件 | ✅ 已定 |
+| C-2 | 不做直连兜底 | ✅ 已定 |
+| C-3 | 插件形态取代 `pi-hub` | ✅ 已定 |
+
+### 17.2 仍需签（QD，与 v1 一致）
 
 | 编号 | 问题 | 建议 |
 | --- | --- | --- |
-| QD-1 | 接受在 VPS 上新增第三个常驻服务 `pi-hub`（自己写、自己运维、自己备份）吗？ | 接受；它是 D-01 与 D-03 的公共前置 |
-| QD-2 | D-01 先做「模型层标签」（3 天、零服务端改动），还是直接上 hub？ | 先 D0 再 D1，D0 单独就有价值且可回退 |
-| QD-3 | 多设备默认「每设备一会话」还是「共享一会话」？ | 默认分开（并发会排队），共享作为显式开关 |
-| QD-4 | 派活的权限上限默认档？总开关默认开还是关？ | 上限默认 `readonly`，总开关默认**关** |
-| QD-5 | 结果回传只回摘要，还是要能回完整 diff / 日志？ | 只回摘要（§5.4），需要时本地导出 |
-| QD-6 | 多设备时谁决定派给哪台：模型指定 / 任选空闲 / 本地默认？ | 模型可指定设备名，缺省「最近活跃且空闲」，冲突时排队而不是并行 |
-| QD-7 | ~~`author` 是否真会进模型上下文？~~ | **已回答（读上游源码，无需探针）**：`agent/prompt_builder.py` 无任何 `turn_author` 引用；`agent/memory_manager.py:446-463` 只转给 memory provider 的 `sync_turn`（注释 "reaches only providers whose `sync_turn` accepts it"）；`agent/bot_chain.py:71-96` 只看 `is_bot` / `hops`。结论：**`author` 不进 prompt**，只做记忆归属 |
-| QD-8 | 共享会话里设备切换时，是否需要「消息级」极短设备前缀？ | 默认不需要（共享会话默认关）；真要做就用消息级 `<pi-device>`，**不进 system prompt** |
+| QD-1 | 接受「自写 Hermes 插件 + 一条 Caddy vhost + 与 agent 同进程」的风险吗？ | 接受（独立服务已作废） |
+| QD-2 | 分期顺序 H0→H1→H2→H3→H4 认可吗？ | 认可；H3 前必须先批 ADR-008 |
+| QD-3 | 多设备默认「每设备一会话」还是「共享一会话」？ | 默认分开（同会话并发会排队），共享作为显式开关 |
+| QD-4 | 派活权限上限默认档？总开关默认？ | 上限 `readonly`；总开关**默认关** |
+| QD-5 | 结果只回摘要？ | 只回摘要（≤2k），完整内容留在本地导出 |
+| QD-6 | 谁决定派给哪台设备？ | 模型可指定；缺省「最近活跃且在线」；冲突排队不并行 |
+
+### 17.3 新增待确认（QN，插件形态带来的）
+
+| 编号 | 问题 | 为什么必须问 | 我的建议 |
+| --- | --- | --- | --- |
+| QN-1 | `hub.tchen-xiaoxiao.com` 这个子域可以用吗？ | 要新建 DNS + Caddy vhost | 用它；备选 `gw.` |
+| QN-2 | 插件端口用 `127.0.0.1:8484`？ | 要避开上游已占用端口 | 8484，仅监听回环 |
+| QN-3 | 管理密钥（登记/撤销设备用）放在哪？ | 它等于「签发票的能力」，比 device token 更敏感 | VPS 的 systemd `Environment=` 里（不进仓库、不进 `.env` 共享给 agent） |
+| QN-4 | 升级 Hermes 时允许插件短暂中断吗？ | 无兜底意味着升级 = 云端不可用若干秒 | 允许；升级前先 `plugins disable`，避免半加载状态 |
+| QN-5 | 本地 `apiKey` 字段保留到 H4 之后（应急用）可以吗？ | 无兜底时它是唯一回滚手段 | 保留但不在正常路径使用 |
+| QN-6 | VPS 操作由谁执行？ | 我需要 `hermes plugins`、Caddy、systemd 权限 | 你执行 + 贴结果（我给出逐条命令），或临时给我 SSH |
+| QN-7 | SSE 空闲超时 15 分钟够吗？（长任务可能静默很久） | 太短会掐掉长任务 | 15 分钟空闲；有心跳注释行维持连接 |
 
 ---
 
-## 10. 非目标
+## 18. 非目标
 
-❌ 多租户 / 账号体系 / 团队共享（D-02 明确单用户）· ❌ 云端直接读写本地文件系统 · ❌ 云端绕过本地审批执行命令 · ❌ 本地开入站端口 · ❌ 把 `pi-hub` 塞进 dashboard 进程 · ❌ 用 ACP 作为派活通道 · ❌ 让设备 token 具备「代表用户批准」的权力 · ❌ 跨设备同步本地会话记录（本地真相源仍是 ADR-003）
+- 不做账号 / 租户 / 团队共享（单用户多入口）
+- 不把 dashboard 纳入插件（WebSocket + 上游前端）
+- 不做自动兜底 / 多路复用 / 主备切换
+- 不做云端到本地的直连（本地不开入站端口，铁律 S-01 不变）
+- 不做预算熔断（S-07 已删）
+- 不把完整 diff / 日志 / 绝对路径送回云端
 
 ---
 
-## 11. 变更记录
+## 19. 变更记录
 
-| 版本 | 日期 | 变化 |
+| 版本 | 日期 | 变更 |
 | --- | --- | --- |
-| v1.5 | 2026-11-06 | **身份时机定稿（A+B）**：启动时就建 `id`（无 spawn、失败不阻断），友好名探测改为**只做一次**（`probedAt`，系统改名不无声漂移），新增 `cloud:device:reprobe` + 连接页「重新读取系统名」 |
-| v1.4 | 2026-11-06 | **D0 已实现**：`electron/cloud/device.ts`（身份落盘 + 平台友好名探测）、`cloud:device:get/set`、每轮 `author`、审计带 `device`、会话归属表、连接页「这台设备」卡。模型层识别仍留到 D2 |
-| v1.3 | 2026-11-06 | **D0 口径定稿**：不做换机器检测；设备名必须可自定义并可随时改（改动立即生效、不影响 `deviceId`）。D0 收窄为「身份落盘 + 每轮 `author` + 本地归属记录 + 连接页设备卡」 |
-| v1.2 | 2026-11-06 | 设备名默认改为**直接读系统友好名**（macOS `ComputerName` / Linux `hostnamectl --pretty` / Windows 计算机名，失败回落 hostname），并明确「名字 ≠ 身份」；D0 去掉「重置设备身份」按钮，改由 D1 的服务端注销承担，另留一条可选的「换机器检测」 |
-| v1.1 | 2026-11-06 | 设备身份改为**通道强制 + 工具按需**：取消「每轮 `instructions` 注入」，`author` 明确只做记忆归属（已读上游源码确认不进 prompt），模型层识别推到 D2 的 `local_devices()`；D0 从 3 天缩到 1.5 天且不动 prompt；新增 QD-8 与 AC-D01b |
-| v1 | 2026-11-06 | 初稿：三条需求 → 设备身份（两层可见）/ pi-hub 一物三用 / 反向派活只发请求 / S-02 改口径 / D0–D4 分期与 14 条验收 |
+| **v2** | 2026-11-06 | **改单缝 + 插件形态**：`pi-hub` 独立服务作废，改为 Hermes 插件 `pi-workbench`（`kind: platform`，与 gateway 同进程）；除 dashboard 外**全部对接**经插件；**不做直连兜底**；接口契约按「设备管理 / 设备侧 / 透明代理」三类重写；派活工具由 MCP 改为 `provides_tools`（不再改 `platform_toolsets`）；新增 AC-D15~D17；新增 §14 执行前检查（本地 7 项已通过、VPS 9 项待执行）与 QN-1~QN-7 |
+| v1.5 | 2026-11-06 | 身份时机定稿（A+B）：启动即建 id；友好名只探测一次 + `cloud:device:reprobe` |
+| v1.4 | 2026-11-06 | D0 已实现 |
+| v1.3 | 2026-11-06 | D0 口径定稿：不做换机器检测；设备名可自定义并即时生效 |
+| v1.2 | 2026-11-06 | 设备名默认读系统友好名；D0 去掉重置按钮 |
+| v1.1 | 2026-11-06 | 设备身份改「通道强制 + 工具按需」，取消每轮注入 |
+| v1 | 2026-11-06 | 初稿（`pi-hub` 独立服务方案） |
