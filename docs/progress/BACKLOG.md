@@ -494,7 +494,7 @@ chromium 与本机 364MB 保留（browser 工具集因此第一次真跑通）�
 | ID | 项目 | 优先级 | 依赖 | 验收 |
 | --- | --- | --- | --- | --- |
 | DE-00 | **方案批准 + ADR-008**（S-02 改口径为「零本地授权」；新增 `pi-hub` 服务） | P1 | — | 你签字；ADR 落地 |
-| DE-01 | 设备身份 v0（通道层）：`data/cloud-agent/device.json`、设备名设置、每轮 `author`、审计带设备名、会话页显示「发起设备」。**不注入 prompt**（v1.1：模型层识别放到 DE-03 的 `local_devices()`） | P1 | DE-00 | AC-D01；无服务端改动；约 1.5 天 |
+| DE-01 | 设备身份 v0（通道层）：`data/cloud-agent/device.json`（`id` 自动生成/只读 + `name` 默认读系统友好名、可改）、每轮 `author`、审计带设备名、连接页设备卡。**不注入 prompt、不提供重置按钮**（v1.2：模型层识别放到 DE-03 的 `local_devices()`；注销留到 DE-02） | P1 | DE-00 | AC-D01；无服务端改动；约 1.5 天 |
 | DE-02 | `pi-hub` 控制面前置：设备登记 / 每设备 token（只存 hash）/ 转发注入 `X-Pi-Device` / 心跳 / 撤销 / 审计 JSONL + Caddy | P1 | DE-01 | AC-D02 / AC-D03 |
 | DE-03 | 派活最小闭环：任务邮箱 + MCP server（`local_devices` / `local_dispatch` / `local_task`，`trust: untrusted`）+ 本地执行器（白名单 / 档位上限 / 审批 / 结果摘要）+ 总开关。**模型层身份的唯一致力来源是 `local_devices()`**（按需查，不注入） | P1 | DE-02 | AC-D05 ~ AC-D08 / AC-D10 / AC-D01b |
 | DE-04 | 多设备体验：每设备每项目会话、共享会话开关、设备面板、`run.queued` 排队可视化 | P2 | DE-03 | AC-D04 / AC-D09 |
