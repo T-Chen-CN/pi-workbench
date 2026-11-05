@@ -686,7 +686,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
         adminKey: String(input?.adminKey ?? '').trim() || undefined,
         deviceToken: config.deviceToken
       })
-      // 只清设备凭据：网关地址要留着显示，`apiKey` 是回滚手段
+      // 注销：只清设备凭据，网关地址留着显示（本地没有别的凭据可退）
       clearDeviceCredentials()
       client = null
       runner?.dispose()

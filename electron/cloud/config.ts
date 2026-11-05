@@ -177,8 +177,8 @@ export function writeCloudConfig(input: {
 /**
  * 注销设备后清掉**这台设备**的凭据（token / scope / id）。
  *
- * 与 `clearCloudToken()` 的区别：这里刻意保留网关地址和 `apiKey`——
- * 网关地址还要显示给用户，`apiKey` 是运维改配置时唯一的回滚手段。
+ * 与 `clearCloudToken()` 的区别：这里保留网关地址（界面还要显示它）。
+ * 不保留任何别的凭据 —— 本地只有设备 token 一种凭据。
  */
 export function clearDeviceCredentials(): CloudConfig {
   const current = readCloudConfig()

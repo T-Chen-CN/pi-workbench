@@ -115,7 +115,6 @@ export type CloudHandoffSummary = Omit<CloudHandoffPreview, 'willOverwrite' | 'a
 export interface CloudConfigPatch {
   baseUrl: string
   dashboardUrl: string
-  apiKey: string
   dashboardToken?: string
   dashboardUser?: string
   dashboardPassword?: string
