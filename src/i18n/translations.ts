@@ -175,6 +175,16 @@ export const translations = {
     cloudModeOffConfirmTitle: '关闭审批？',
     cloudModeOffConfirmAction: '确认关闭',
     cloudModeOffConfirmBody: '关闭后，Agent 执行任何命令都不再经过你确认。',
+    cloudPolicyTitle: '审批策略',
+    cloudPolicyTimeout: '等待时间',
+    cloudPolicySeconds: '{seconds} 秒后自动拒绝',
+    cloudPolicyDenyList: '额外拒绝清单',
+    cloudPolicyDenyCount: '{count} 条（Hermes 默认空）',
+    cloudPolicyDisabled: '已禁用工具集',
+    cloudPolicyNone: '无',
+    cloudPolicyUnknown: '未知',
+    cloudPolicyRisk:
+      '提醒：危险模式表覆盖不到的命令不会问（例如纯 sudo），文件写入也没有审批环节——审批是减风险，不是沙箱。',
     cloudModeOffConfirmDetail:
       '只有在你完全信任这一轮的指令时才该这么做。想重新打开，随时点「询问我」——立即生效，不用重启服务端。',
     cloudDiagnostics: '自检',
@@ -1234,6 +1244,16 @@ export const translations = {
     cloudModeOffConfirmTitle: 'Turn approvals off?',
     cloudModeOffConfirmAction: 'Turn off',
     cloudModeOffConfirmBody: 'After this, the agent runs any command without asking you.',
+    cloudPolicyTitle: 'Approval policy',
+    cloudPolicyTimeout: 'Timeout',
+    cloudPolicySeconds: 'auto-deny after {seconds}s',
+    cloudPolicyDenyList: 'Extra deny list',
+    cloudPolicyDenyCount: '{count} entries (Hermes default is empty)',
+    cloudPolicyDisabled: 'Disabled toolsets',
+    cloudPolicyNone: 'none',
+    cloudPolicyUnknown: 'unknown',
+    cloudPolicyRisk:
+      'Note: commands outside the dangerous-pattern table are not asked about (plain sudo, for one), and file writes have no approval step at all — approvals reduce risk, they are not a sandbox.',
     cloudModeOffConfirmDetail:
       'Only do this when you fully trust what this turn will do. Click “Ask me” any time to turn it back on — it takes effect immediately, no gateway restart.',
     cloudDiagnostics: 'Self-check',

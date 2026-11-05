@@ -10,6 +10,7 @@ import { HERMES_BOOTSTRAP_PROMPT } from '../utils/hermesPrompt'
 import { Button, Caption, DataText, Field, Input, Label } from './ui'
 import { Card, CardHeader, StatusText } from './patterns'
 import { CloudDiagnosticsPanel } from './CloudDiagnosticsPanel'
+import { CloudModeSwitch } from './CloudModeSwitch'
 
 const CAPABILITY_KEYS = [
   { key: 'runStop', labelKey: 'cloudCapStop' },
@@ -239,7 +240,57 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
         </Card>
 
         <CloudDiagnosticsPanel connected={connection === 'connected'} />
+
+        <CloudPolicyCard connected={connection === 'connected'} />
       </div>
     </div>
+  )
+}
+
+/**
+ * 审批策略：档位控件 + 当前生效值 + 已知的两处盲区。
+ *
+ * 盲区必须写出来（决策 5 的代价）：`approvals.deny` 保持 Hermes 默认空，
+ * 危险模式表里没有纯 `sudo`，文件写入根本没有审批路径。不说清楚，
+ * 「开了审批」会给人一种「什么都拦住了」的错觉。
+ */
+const CloudPolicyCard: React.FC<{ connected: boolean }> = ({ connected }) => {
+  const { t } = useI18nStore()
+  const policy = useCloudStore((state) => state.policy)
+
+  return (
+    <Card>
+      <CardHeader title={t('cloudPolicyTitle')} />
+      <div className="flex flex-col gap-2 pt-3">
+        <CloudModeSwitch disabled={!connected} />
+        {policy && (
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-3">
+              <Caption className="text-ink-muted">{t('cloudPolicyTimeout')}</Caption>
+              <DataText className="text-ink">
+                {policy.timeoutSeconds === null
+                  ? t('cloudPolicyUnknown')
+                  : t('cloudPolicySeconds', { seconds: policy.timeoutSeconds })}
+              </DataText>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <Caption className="text-ink-muted">{t('cloudPolicyDenyList')}</Caption>
+              <DataText className="text-ink">
+                {t('cloudPolicyDenyCount', { count: policy.denyCount })}
+              </DataText>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <Caption className="text-ink-muted">{t('cloudPolicyDisabled')}</Caption>
+              <DataText className="text-ink">
+                {policy.disabledToolsets.length > 0
+                  ? policy.disabledToolsets.join(', ')
+                  : t('cloudPolicyNone')}
+              </DataText>
+            </div>
+          </div>
+        )}
+        <Caption className="text-ink-subtle">{t('cloudPolicyRisk')}</Caption>
+      </div>
+    </Card>
   )
 }

@@ -1010,6 +1010,21 @@ describe('审批档位控件', () => {
     await waitFor(() => expect(setPolicy).toHaveBeenCalledWith({ mode: 'off' }))
   })
 
+  it('shows the effective policy values and the known blind spots', async () => {
+    installBridge()
+    useCloudStore.setState({ connection: 'connected' })
+    render(<CloudWorkspaceView view="cloud-connection" onNavigate={vi.fn()} />)
+
+    expect(await screen.findByText(zh.cloudPolicyTitle)).toBeTruthy()
+    // 生效值来自服务端读回，不是本地记的
+    await waitFor(() =>
+      expect(screen.getByText(zh.cloudPolicySeconds.replace('{seconds}', '120'))).toBeTruthy()
+    )
+    expect(screen.getByText('code_execution')).toBeTruthy()
+    // 盲区必须写出来：审批不是沙箱
+    expect(screen.getByText(zh.cloudPolicyRisk)).toBeTruthy()
+  })
+
   it('does not invent a mode the server did not report', async () => {
     installBridge()
     bridge().cloudPolicyGet = async () => ({ success: false, error: '控制台超时' })
