@@ -82,34 +82,61 @@ Hermes 默认 `approvals.deny` 就是空。保持默认后，安全地板只剩�
 
 ### 3.1 SSE 事件（`GET /v1/runs/{id}/events`）
 
-```jsonc
-// approval.request  —— 上游 PR #21899 的实际形状（本项目实测未取到，见 §9 R1）
-{ "event": "approval.request", "run_id": "run_x", "timestamp": 1.79e9,
-  "command": "git reset --hard HEAD",
-  "pattern_key": "recursive delete", "pattern_keys": ["recursive delete"],
-  "choices": ["once", "session", "always", "deny"] }
+**以下是 2026-11-06 拨到 `manual` 后抓到的真实帧**（探针 `cache/probe/step10-approval-frame.ps1`，已 gitignore）：
 
-// approval.responded
-{ "event": "approval.responded", "run_id": "run_x", "choice": "deny", "resolved": 1 }
+```jsonc
+// approval.request —— 实测形状（与上游 PR 描述不同：是 prompt_id，不是 request_id）
+{ "event": "approval.request", "run_id": "run_x", "timestamp": 1793871866.9,
+  "kind": "approval",
+  "prompt_id": "ee2d0ceebe1d4f5ebca75be7bc8620b2",
+  "execution_generation": 1,
+  "command": "rm -rf /tmp/pi-probe-approval-nonexistent; echo \"EXIT_CODE=$?\"",
+  "description": "delete in root path",     // 命中规则的人类可读描述
+  "choices": ["once", "deny", "session", "always"],
+  "seq": 1 }
+
+// approval.settled —— 应答之后服务端只推这个（**没有 choice 字段**）
+{ "event": "approval.settled", "run_id": "run_x", "prompt_id": "ee2d…",
+  "execution_generation": 1, "seq": 2 }
 ```
 
-- `choices` 里会出现 `always` 与 `session`：**`always` 一律不渲染**；`session` 保留（决策 8）。
-- 运行时状态会变成 `waiting_for_approval`（已在 `CLOUD_RUN_STATUS` 里，`remote.ts:231`）。
+- **没有 `pattern_key` / `pattern_keys`**：命中规则只在 `description` 里 → 映射层按 `pattern_keys → pattern_key → description` 兜底。
+- **没有 `timeout_s`**：倒计时用配置里的 `approvals.timeout`（120s）兜底，不编造服务端字段。
+- `choices` 里会出现 `always`：**一律不渲染**；`session` 保留（决策 8）。
+- 结算回执是 `approval.settled`（不带 choice）而非 `approval.responded`：本地已记的决定**必须保留**，否则会退化成「别人处理的」。
+- 运行时状态确实是 `waiting_for_approval`，`toRunStatus()` 会折成内部的 `waiting_approval`。
 
 ### 3.2 状态轮询（`GET /v1/runs/{id}`）
 
-`pending_controls`：canonical owner 模式下带 `prompt_id` + `execution_generation`；stream 断掉后这是唯一能补出卡片的来源。
+实测（`cache/probe/step11-approval-pending.ps1`）：
+
+```jsonc
+{ "status": "waiting_for_approval",
+  "pending_controls": [
+    { "kind": "approval",
+      "prompt_id": "ee1d8826f6cc4934bcc963a361881913",
+      "execution_generation": 1,
+      "command": "rm -rf /tmp/pi-probe-approval-two",
+      "description": "delete in root path",
+      "choices": ["once", "deny", "session", "always"] } ],
+  "session_id": "run_x", "admission_id": "dca9…", "execution_generation": 1 }
+```
+
+答复之后再查：`pending_controls: []`、`status: "running"` → 这是断流后补卡 / 判活的唯一来源。
 
 ### 3.3 应答（`POST /v1/runs/{id}/approval`）
 
-两种语义并存，**必须先用真帧确定**（§9 R1）：
+实测结论（R1 关闭）：**canonical 语义生效**，run-scoped 语义不需要。
 
-| 语义 | body |
-| --- | --- |
-| run-scoped（PR #21899） | `{"choice": "once"\|"session"\|"deny"}` |
-| canonical（新文档） | `{"request_id": "<prompt_id>", "execution_generation": 3, "choice": "..."}` |
+```
+POST /v1/runs/{run_id}/approval
+{ "request_id": "<prompt_id>", "execution_generation": 1, "choice": "once" }
+→ 200 { "run_id": "run_x", "status": "resolved", "prompt_id": "ee1d…" }
+```
 
-实现按「能带就带」处理：拿得到 `prompt_id` + `generation` 就带，拿不到退回 `{choice}`；两种都失败时按错误码给人话（`409 stale_generation` / `409 approval_not_pending` / `404 run_not_found`）。
+`request_id` 直接吃 `prompt_id` 的值。实现仍保留「能带就带」的降级：拿不到 `prompt_id` 时退回 `{"choice": …}`，被 400 `invalid_params` 拒再回退——旧版服务端也能跑。错误码仍是 `409 stale_generation` / `409 approval_not_pending` / `404 run_not_found`。
+
+放行与拒绝都验证过：`deny` → `tool.completed{error:true, preview:""}`（Agent 说明「被审批层拦下」）；`once` → `tool.completed{error:false}` 后 `run.completed`。
 
 ---
 
@@ -261,14 +288,14 @@ Hermes 默认 `approvals.deny` 就是空。保持默认后，安全地板只剩�
 
 | 编号 | 未知 / 风险 | 处理 |
 | --- | --- | --- |
-| R1 | 回执到底是 `{choice}` 还是 `{request_id, execution_generation, choice}`；`approval.request` 是否真不带 `request_id` | 阶段 1 抓真帧；代码按「能带就带 + 兜底」写，两种都能跑 |
-| R2 | `pending_controls` 里 approval 的字段名（`kind`? `prompt_id`?） | 抓帧后定；`pollControls` 按字段判别，不硬编码 |
-| R3 | `PUT /api/config` 是否会重写 YAML（丢注释 / 顺序） | 首次空 patch 前后比 hash + mtime |
+| R1 | 回执到底是 `{choice}` 还是 `{request_id, execution_generation, choice}`；`approval.request` 是否真不带 `request_id` | **已关闭（2026-11-06 实测）**：canonical 生效；`approval.request` 只带 `prompt_id`。代码仍保留「能带就带 + 兜底」 |
+| R2 | `pending_controls` 里 approval 的字段名 | **已关闭**：`{kind:'approval', prompt_id, execution_generation, command, description, choices}`（无 `pattern_*` / `timeout_s`） |
+| R3 | `PUT /api/config` 是否会重写 YAML（丢注释 / 顺序） | **已执行**：patch 返回 `{"ok":true}` 且读回一致；注释能否保留需登服务器才知道（本机只能经 HTTP，故未断言） |
 | R4 | `GET /api/config` 返回解析后的密钥 | 铁律：主进程读、只取白名单子集、**永不回传整份** |
 | R5 | 多端同时审批同一请求 | 服务端以 `stale_generation` / `approval_not_pending` 拒绝；本地按 409 处理并重拉状态 |
-| R6 | 审批期间 SSE 断线 | 卡片可点（HTTP 不依赖流）；15s 状态轮询兜底 |
+| R6 | 审批期间 SSE 断线 | 卡片可点（HTTP 不依赖流）；15s 状态轮询兜底（`waiting_for_approval` + `pending_controls` 已实测） |
 | R7 | **纯 `sudo` 不在危险模式表里**，`write_file`/`patch` 无审批路径（决策 5 的代价） | 接受并在连接页「当前策略」处一句话说明；不额外造 deny 清单 |
-| R8 | 阶段 0 合入时服务端仍是 `off` → 卡片不会出现 | 预期行为；阶段 1 拨过去才生效，不算 bug |
+| R8 | 阶段 0 合入时服务端仍是 `off` → 卡片不会出现 | **已解除**：2026-11-06 已把服务端拨到 `manual`（`timeout: 120`、三子模式 `deny`、`disabled_toolsets: [code_execution]`），并抓帧验证 |
 
 ---
 

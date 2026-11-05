@@ -286,9 +286,11 @@ export type CloudTracePart =
       patternKeys: string[]
       /** 已剔除 `always` 的可选项 */
       choices: CloudApprovalChoice[]
-      /** 后端给的等待秒数（没有就不显示倒计时） */
+      /** 后端给的等待秒数（实机不给，由配置 `approvals.timeout` 兜底） */
       timeoutSeconds?: number
-      /** 截止时刻（`createdAt + timeoutSeconds`）：倒计时用绝对时间，重渲染不重置 */
+      /** 卡片建立时刻：没有 `timeoutSeconds` 时用它 + 策略里的超时算倒计时 */
+      requestedAt?: number
+      /** 截止时刻（`requestedAt + timeoutSeconds`）：倒计时用绝对时间，重渲染不重置 */
       expiresAt?: number
       /** 本地做出的决定（回填点） */
       decision?: CloudApprovalChoice

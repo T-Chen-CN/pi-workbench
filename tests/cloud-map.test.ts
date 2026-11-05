@@ -496,6 +496,53 @@ describe('审批事件', () => {
     expect(part.decision).toBeUndefined()
   })
 
+  it('takes the matched rule from `description` (实机没有 pattern_keys)', () => {
+    const mapper = new RunMapper('run_1')
+    // 2026-11-06 实帧：只有 description，没有 pattern_key(s)
+    const part = approvalPart(
+      mapper.handle(
+        sse({
+          event: 'approval.request',
+          kind: 'approval',
+          prompt_id: 'ee2d0cee',
+          execution_generation: 1,
+          command: 'rm -rf /tmp/x; echo "EXIT_CODE=$?"',
+          description: 'delete in root path',
+          choices: ['once', 'deny', 'session', 'always'],
+        })
+      )
+    )
+    expect(part.patternKeys).toEqual(['delete in root path'])
+    expect(part.choices).toEqual(['once', 'session', 'deny'])
+    expect(part.requestedAt).toBeTypeOf('number')
+    // 实机不给 timeout_s：没有服务端截止时刻就不编一个出来
+    expect(part.expiresAt).toBeUndefined()
+  })
+
+  it('keeps our decision when the server echoes only approval.settled', () => {
+    const mapper = new RunMapper('run_1')
+    mapper.handle(sse({ event: 'approval.request', prompt_id: 'ap_1', command: 'ls' }))
+    // 我们自己点过（本地先写决定）
+    const local = mapper.ensureApproval({ kind: 'approval', prompt_id: 'ap_1' })
+    expect(local).toEqual([])
+    mapper.handle(sse({ event: 'approval.responded', prompt_id: 'ap_1', choice: 'approved' }, 2))
+    const frames = mapper.handle(
+      sse({ event: 'approval.settled', prompt_id: 'ap_1', execution_generation: 1 }, 3)
+    )
+    // 结算回执不带 choice，但不能把我们自己的决定抹掉、也不能标成「别人处理的」
+    expect(frames).toEqual([])
+  })
+
+  it('marks a settled approval we never answered', () => {
+    const mapper = new RunMapper('run_1')
+    mapper.handle(sse({ event: 'approval.request', prompt_id: 'ap_1', command: 'ls' }))
+    const part = approvalPart(
+      mapper.handle(sse({ event: 'approval.settled', prompt_id: 'ap_1' }, 2))
+    )
+    expect(part.decision).toBeUndefined()
+    expect(part.settled).toBe(true)
+  })
+
   it('falls back to the run id when the server gives no prompt id', () => {
     const mapper = new RunMapper('run_9')
     const part = approvalPart(

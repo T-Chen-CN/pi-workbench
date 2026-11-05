@@ -417,7 +417,10 @@ export class RunMapper {
       ? payload.pattern_keys.map((key) => String(key ?? '')).filter(Boolean)
       : textOf(payload.pattern_key)
         ? [textOf(payload.pattern_key)]
-        : []
+        : // 实机只给 `description`（例如 `delete in root path`），没有 pattern_keys
+          textOf(payload.description)
+          ? [textOf(payload.description)]
+          : []
     const generation = numOf(payload.execution_generation) ?? numOf(payload.generation)
     const timeoutSeconds = numOf(payload.timeout_s) ?? numOf(payload.timeout_seconds)
     const part: CloudTracePart = {
@@ -427,6 +430,7 @@ export class RunMapper {
       command,
       patternKeys,
       choices: approvalChoicesOf(payload.choices),
+      requestedAt: Date.now(),
     }
     if (generation !== undefined) part.generation = generation
     if (timeoutSeconds !== undefined) {
@@ -601,6 +605,19 @@ export class RunMapper {
             ? { ...existing, decision, decidedAt: existing.decidedAt ?? Date.now() }
             : // 服务端说结算了，但选项不是我们支持的（例如别的客户端选了 always）
               { ...existing, settled: true }
+          this.parts[index] = next
+          frames.push({ kind: 'part', part: next })
+        }
+        break
+      }
+      case 'approval.settled': {
+        // 实机回执只有 `prompt_id` + `execution_generation`，**不带 choice**。
+        // 自己点过就先保留那个决定（这是应答的回声）；没有就是我们没参与的结算。
+        const index = this.findApproval(payload)
+        if (index >= 0) {
+          const existing = this.parts[index] as Extract<CloudTracePart, { type: 'approval' }>
+          if (existing.decision || existing.settled) break
+          const next: CloudTracePart = { ...existing, settled: true }
           this.parts[index] = next
           frames.push({ kind: 'part', part: next })
         }

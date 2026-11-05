@@ -29,19 +29,25 @@ const CHOICE_LABEL = {
 /** 倒计时：每秒重算剩余秒数；归零时本地置灰（服务端那一侧由它自己超时） */
 function useCountdown(part: ApprovalPart, active: boolean): number | null {
   const expire = useCloudStore((state) => state.expireApproval)
+  const fallback = useCloudStore((state) => state.policy?.timeoutSeconds ?? null)
   const [now, setNow] = useState(() => Date.now())
+  // 服务端事件里没有 timeout_s：用配置里的 `approvals.timeout` 兜底算截止时刻
+  const deadline =
+    part.expiresAt ??
+    (fallback && part.requestedAt ? part.requestedAt + fallback * 1000 : null)
+
   useEffect(() => {
-    if (!active || typeof part.expiresAt !== 'number') return
+    if (!active || deadline === null) return
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
-  }, [active, part.expiresAt])
+  }, [active, deadline])
 
   return useMemo(() => {
-    if (typeof part.expiresAt !== 'number') return null
-    const remaining = Math.max(0, Math.ceil((part.expiresAt - now) / 1000))
+    if (deadline === null) return null
+    const remaining = Math.max(0, Math.ceil((deadline - now) / 1000))
     if (remaining === 0 && active) expire(part.requestId)
     return remaining
-  }, [part.expiresAt, part.requestId, now, active, expire])
+  }, [deadline, part.requestId, now, active, expire])
 }
 
 export const CloudApprovalCard: React.FC<{ part: ApprovalPart }> = ({ part }) => {
