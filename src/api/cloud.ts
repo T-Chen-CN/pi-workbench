@@ -56,15 +56,19 @@ export type {
 const FALLBACK_BASE_URL = 'https://api.tchen-xiaoxiao.com'
 const FALLBACK_DASHBOARD_URL = 'https://dash.tchen-xiaoxiao.com'
 /**
- * 浏览器预览用的假设备身份。
+ * 纯浏览器预览（没有 preload）用的假设备身份。
  *
  * 用固定 id 而不是随机：页面每次刷新都该是同一台「设备」，否则看起来像在跳。
+ * 名字刻意写明是预览 —— 真机上看到它，说明 preload 没接上，不是真的设备名。
  */
 const PREVIEW_DEVICE: CloudDeviceSummary = {
   id: 'web-preview-0000-0000-000000000000',
-  name: '浏览器预览',
-  defaultName: '浏览器预览',
+  name: '浏览器预览（无主进程）',
+  defaultName: '浏览器预览（无主进程）',
 }
+
+/** 主进程已更新、preload 还是旧的：面板打不开就先重启应用 */
+const BRIDGE_STALE = '主进程接口未就绪，请重启应用后重试'
 
 const NO_BRIDGE = '云端通道不可用（缺少应用内 IPC）'
 
@@ -120,18 +124,24 @@ export const cloudApi = {
    */
   async getDevice(): Promise<CloudDeviceResult> {
     const bridge = api()
-    if (!bridge || typeof bridge.cloudDeviceGet !== 'function') {
-      return { success: true, device: PREVIEW_DEVICE }
-    }
+    // 完全没有 preload = 浏览器里跑 Vite，给预览用的假身份
+    if (!bridge) return { success: true, device: PREVIEW_DEVICE }
+    // 有 preload 却没有这个方法 = 跑的是旧构建（改了主进程没重启）：
+    // 这时绝不能假装成功，否则界面上出现的是假设备名，比报错更难查
+    if (typeof bridge.cloudDeviceGet !== 'function') return { success: false, error: BRIDGE_STALE }
     return bridge.cloudDeviceGet()
   },
 
   /** 改设备名；空串 = 恢复系统默认名 */
   async setDeviceName(name: string): Promise<CloudDeviceResult> {
     const bridge = api()
-    if (!bridge || typeof bridge.cloudDeviceSet !== 'function') {
-      return { success: true, device: { ...PREVIEW_DEVICE, name: name.trim() || PREVIEW_DEVICE.defaultName } }
+    if (!bridge) {
+      return {
+        success: true,
+        device: { ...PREVIEW_DEVICE, name: name.trim() || PREVIEW_DEVICE.defaultName },
+      }
     }
+    if (typeof bridge.cloudDeviceSet !== 'function') return { success: false, error: BRIDGE_STALE }
     return bridge.cloudDeviceSet({ name })
   },
 

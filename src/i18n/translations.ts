@@ -36,7 +36,10 @@ export const translations = {
     cloudDeviceTitle: '这台设备',
     cloudDeviceName: '设备名',
     cloudDeviceNameHint:
-      '会随每轮对话一起发给云端 Agent，只作为归属标签，不是授权。清空可恢复系统默认名。',
+      '默认是这台设备自己的名称，可以改成任何你认得出的叫法；会随每轮对话发给云端 Agent，只作为归属标签，不是授权。',
+    cloudDeviceSave: '保存',
+    cloudDeviceRestore: '恢复默认名',
+    cloudDeviceRetry: '重试',
     cloudDeviceId: '设备 ID',
     cloudDeviceIdHint:
       '由本机生成，云端用它区分设备；改名不影响它。删除 data/cloud-agent/device.json 会换一个新身份。',
@@ -1113,7 +1116,10 @@ export const translations = {
     cloudDeviceTitle: 'This device',
     cloudDeviceName: 'Device name',
     cloudDeviceNameHint:
-      'Sent with every turn as an attribution label only — it grants nothing. Clear the field to restore the system default.',
+      "Defaults to this device's own name. Whatever you type here is sent with every turn as an attribution label only — it grants nothing.",
+    cloudDeviceSave: 'Save',
+    cloudDeviceRestore: 'Restore default',
+    cloudDeviceRetry: 'Retry',
     cloudDeviceId: 'Device ID',
     cloudDeviceIdHint:
       'Generated on this machine; the cloud uses it to tell devices apart, and renaming does not change it. Deleting data/cloud-agent/device.json creates a new identity.',

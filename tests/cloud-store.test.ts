@@ -694,6 +694,11 @@ describe('attachRun（重启后接回在跑的一轮）', () => {
 describe('设备身份', () => {
   const DEVICE = { id: 'dev-1', name: '本机', defaultName: '本机' }
 
+  // 前面的用例会把 window.electronAPI 留着，这里先清干净再各测各的
+  beforeEach(() => {
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI
+  })
+
   afterEach(() => {
     delete (window as unknown as { electronAPI?: unknown }).electronAPI
     useCloudStore.setState({ device: null, deviceError: null, deviceBusy: false })
@@ -701,8 +706,17 @@ describe('设备身份', () => {
 
   it('falls back to a stable preview identity when there is no bridge', async () => {
     await useCloudStore.getState().loadDevice()
-    expect(useCloudStore.getState().device).toMatchObject({ name: '浏览器预览' })
+    expect(useCloudStore.getState().device).toMatchObject({ name: '浏览器预览（无主进程）' })
     expect(useCloudStore.getState().deviceError).toBeNull()
+  })
+
+  it('refuses to fake an identity when the preload is older than the main process', async () => {
+    ;(window as unknown as { electronAPI: unknown }).electronAPI = {
+      cloudConfigGet: async () => ({ success: false }),
+    }
+    await useCloudStore.getState().loadDevice()
+    expect(useCloudStore.getState().device).toBeNull()
+    expect(useCloudStore.getState().deviceError).toMatch(/重启应用/)
   })
 
   it('reads and renames through the bridge', async () => {

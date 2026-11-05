@@ -1109,7 +1109,7 @@ describe('审批档位控件', () => {
 })
 
 describe('CloudConnectionView 设备卡', () => {
-  it('shows the device name and id, and commits a rename on blur', async () => {
+  it('shows the device name and id, and only writes when 保存 is pressed', async () => {
     const stub = installBridge()
     // 真实应用里 hydrate() 会拉一次设备身份；这里直接拉，省掉整个外壳
     await useCloudStore.getState().loadDevice()
@@ -1119,23 +1119,46 @@ describe('CloudConnectionView 设备卡', () => {
     await waitFor(() => expect((input as HTMLInputElement).value).toBe('TChen-Legion'))
     expect(screen.getByText('d1e2f3a4-0000-4000-8000-000000000000')).toBeTruthy()
 
-    fireEvent.change(input, { target: { value: '客厅那台' } })
+    // 没改过：保存按钮不可用，失焦也不写盘
+    const save = screen.getByText(zh.cloudDeviceSave).closest('button') as HTMLButtonElement
+    expect(save.disabled).toBe(true)
     fireEvent.blur(input)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(stub.deviceSet).not.toHaveBeenCalled()
+
+    fireEvent.change(input, { target: { value: '客厅那台' } })
+    expect(save.disabled).toBe(false)
+    fireEvent.click(save)
 
     await waitFor(() => expect(stub.deviceSet).toHaveBeenCalledWith({ name: '客厅那台' }))
     await waitFor(() => expect((input as HTMLInputElement).value).toBe('客厅那台'))
   })
 
-  it('does not write when the name did not change', async () => {
+  it('restores the system default name with 恢复默认名', async () => {
     const stub = installBridge()
     await useCloudStore.getState().loadDevice()
+    await useCloudStore.getState().setDeviceName('客厅那台')
     render(<CloudConnectionView active />)
-    const input = await screen.findByLabelText(zh.cloudDeviceName)
-    await waitFor(() => expect((input as HTMLInputElement).value).toBe('TChen-Legion'))
 
-    fireEvent.blur(input)
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(stub.deviceSet).not.toHaveBeenCalled()
+    const input = await screen.findByLabelText(zh.cloudDeviceName)
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe('客厅那台'))
+
+    fireEvent.click(screen.getByText(zh.cloudDeviceRestore))
+    await waitFor(() => expect(stub.deviceSet).toHaveBeenLastCalledWith({ name: '' }))
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe('TChen-Legion'))
+  })
+
+  it('says the preload is stale instead of showing a fake device name', async () => {
+    installBridge()
+    // 有 preload、但还没有 cloudDeviceGet：改主进程后没重启应用
+    const api = (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI
+    delete api.cloudDeviceGet
+    delete api.cloudDeviceSet
+
+    await useCloudStore.getState().loadDevice()
+    render(<CloudConnectionView active />)
+    expect(await screen.findByText(/重启应用/)).toBeTruthy()
+    expect(screen.queryByLabelText(zh.cloudDeviceName)).toBeNull()
   })
 
   it('copies the device id through the electron clipboard', async () => {

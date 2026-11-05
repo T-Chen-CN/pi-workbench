@@ -36,6 +36,7 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const deviceBusy = useCloudStore((state) => state.deviceBusy)
   const deviceError = useCloudStore((state) => state.deviceError)
   const setDeviceName = useCloudStore((state) => state.setDeviceName)
+  const loadDevice = useCloudStore((state) => state.loadDevice)
 
   const [baseUrl, setBaseUrl] = useState(config.baseUrl)
   const [apiKey, setApiKey] = useState('')
@@ -51,11 +52,10 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
     setDeviceNameDraft(device?.name ?? '')
   }, [device?.name])
 
-  /** 失焦 / 回车提交。值没变就什么也不做，避免每次点过输入框都写一遍盘。 */
-  const handleCommitDeviceName = async () => {
+  /** 明确按「保存」才写盘：清空输入等于恢复系统默认名（主进程那边的约定） */
+  const handleSaveDeviceName = async (value: string) => {
     if (!device) return
-    if (deviceName.trim() === device.name) return
-    const ok = await setDeviceName(deviceName)
+    const ok = await setDeviceName(value)
     if (ok) {
       toast.success(t('cloudDeviceSaved'))
       return
@@ -63,6 +63,9 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
     toast.error(t('cloudDeviceSaveFailed'))
     setDeviceNameDraft(device.name)
   }
+
+  const deviceDirty = device ? deviceName.trim() !== device.name : false
+  const canRestore = device ? device.name !== device.defaultName : false
 
   const handleCopyDeviceId = async () => {
     if (!device) return
@@ -237,8 +240,15 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
         <Card>
           <CardHeader title={t('cloudDeviceTitle')} />
           {!device ? (
-            <div className="pt-3">
-              <Caption className="text-ink-subtle">{t('cloudDeviceLoading')}</Caption>
+            <div className="flex flex-wrap items-center gap-2 pt-3">
+              <Caption className={deviceError ? 'text-danger' : 'text-ink-subtle'}>
+                {deviceError ?? t('cloudDeviceLoading')}
+              </Caption>
+              {deviceError && (
+                <Button size="sm" icon={RefreshCw} onClick={() => void loadDevice()}>
+                  {t('cloudDeviceRetry')}
+                </Button>
+              )}
             </div>
           ) : (
             <div className="flex flex-col gap-3 pt-3">
@@ -251,16 +261,30 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                   autoComplete="off"
                   disabled={deviceBusy}
                   onChange={(event) => setDeviceNameDraft(event.target.value)}
-                  onBlur={() => void handleCommitDeviceName()}
                   onKeyDown={(event) => {
-                    if (event.key === 'Enter') event.currentTarget.blur()
-                    if (event.key === 'Escape') {
-                      setDeviceNameDraft(device.name)
-                      event.currentTarget.blur()
-                    }
+                    if (event.key === 'Enter' && deviceDirty) void handleSaveDeviceName(deviceName)
+                    if (event.key === 'Escape') setDeviceNameDraft(device.name)
                   }}
                 />
               </Field>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  loading={deviceBusy}
+                  disabled={!deviceDirty}
+                  onClick={() => void handleSaveDeviceName(deviceName)}
+                >
+                  {t('cloudDeviceSave')}
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!canRestore || deviceBusy}
+                  onClick={() => void handleSaveDeviceName('')}
+                >
+                  {t('cloudDeviceRestore')}
+                </Button>
+              </div>
               <Caption className="text-ink-subtle">{t('cloudDeviceNameHint')}</Caption>
               <div className="flex flex-col gap-1.5">
                 <div className="flex items-center justify-between gap-2">
