@@ -275,7 +275,7 @@
 | C-02 | 首页入口 + 两个独立页面骨架（会话页 / 配置页）+ `cloudStore` | P1 | —（可与 C-00/C-01 并行） | AC-08 / AC-12；无云端可开两页；可单独合入 |
 | C-03 | 控制面客户端 + IPC 四步（`cloud:connect/disconnect/status/sessions:list`） | P1 | C-01、C-02 | AC-01 |
 | C-04 | 事件流 → parts **类型对齐**（含 `approval` / `clarify`，不复用组件） | P1 | C-03 | AC-02 / AC-19 |
-| C-05 | ~~审批闭环：卡片 / 应答通道 / 断流补卡 / 审计 JSONL + **原生 `approvals.mode` 三档切换**（不做策略版本化 / 漂移告警 / 一键还原）~~ **已完成真机验收**（once / session / deny 三条 + 档位切换 + 审计配对；剩 UI 截图） | P1 | C-04 | AC-03 / AC-04 / AC-16 / AC-17 / AC-22；AC-18 / AC-21 降级为「档位显示 = 服务端真值」。方案见 [CLOUD_AGENT_APPROVAL](../requirements/CLOUD_AGENT_APPROVAL.md) |
+| C-05 | ~~审批闭环：卡片 / 应答通道 / 断流补卡 / 审计 JSONL + **原生 `approvals.mode` 三档切换**（不做策略版本化 / 漂移告警 / 一键还原）~~ **已完成真机验收并合入 main**（once / session / deny 三条 + 档位切换 + 审计配对；UI 截图经用户确认跳过） | P1 | C-04 | AC-03 / AC-04 / AC-16 / AC-17 / AC-22；AC-18 / AC-21 降级为「档位显示 = 服务端真值」。方案见 [CLOUD_AGENT_APPROVAL](../requirements/CLOUD_AGENT_APPROVAL.md) |
 | C-06 | 配置页：BrowserView 嵌 dashboard + 凭据与会话隔离 | P1 | C-03 | AC-20 |
 | C-07 | 耐久性（run 重新 attach / 断线占位 / 未结算清单 / jobs 视图） | P2 | C-05 | AC-06 / AC-07 / AC-09 / AC-10 |
 | C-08 | 屏幕与接管（CDP screencast / `Input.*`） | P2 | C-07 | AC-05 |
