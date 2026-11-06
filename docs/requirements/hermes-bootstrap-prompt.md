@@ -10,9 +10,10 @@
 > `tests/hermes-prompt.test.ts` 守住代码块存在与完整性）。
 > 状态：**草案，未在干净机器上实跑过**。交付格式 **v2**（单入口：`GATEWAY_URL` + `ADMIN_KEY`，
 > 不再有 `API_KEY` / `DASHBOARD_SESSION_TOKEN`；v1 / v1.1 文件应用仍能导入，但没有管理密钥）。
-> 代码块里的 `{{PLUGIN_REPO}}` / `{{PLUGIN_REF}}` 是**占位符**：由应用在复制时注入
-> （`src/utils/hermesPrompt.ts` 的 `PLUGIN_REPO` / `PLUGIN_REF` 两个常量）。这样插件发版只需改
-> 应用仓库一行，不用动这份文档；`tests/hermes-prompt.test.ts` 守着「复制出来的内容不含 `{{`」。
+> 代码块里的 `{{PLUGIN_REPO}}` 是**占位符**：由应用在复制时注入
+> （`src/utils/hermesPrompt.ts` 的 `PLUGIN_REPO` 常量）。**不写版本号**：引导装的是插件仓库默认分支
+> 的最新版，之后用 `hermes plugins update` 跟版 —— 钉 SHA 只属于运维侧（要复现某次部署时才用）。
+> `tests/hermes-prompt.test.ts` 守着「复制出来的内容不含 `{{`、也不带 `--ref`」。
 > 已登记：[docs/README.md](../README.md) · 待办与范围边界：[BACKLOG §7.3](../progress/BACKLOG.md)。
 
 ```text
@@ -49,8 +50,8 @@
 7. **不得在对话里输出任何明文密钥**（管理密钥、API 密钥、控制台口令）。只允许脱敏形式，
    例如 `zsr****m2Rc`，或"已写入交付文件"。这条没有例外。**唯一的明文出口是第五步的交付文件。**
 8. 交付文件不得放在任何 git 仓库或 agent 工作区内，不得被 git 跟踪。
-9. **只能安装指定的网关插件**：`{{PLUGIN_REPO}}` 的 `{{PLUGIN_REF}}` 版本（见第三步）。
-   不要从其他来源找插件、不要凭记忆重写一份、不要"顺手"装别的分支或别的版本。装不上就报告并停止。
+9. **只能安装指定的网关插件**：只允许 `{{PLUGIN_REPO}}`（见第三步）。
+   不要从其他来源找插件、不要凭记忆重写一份、不要装别的仓库的同名插件。装不上就报告并停止。
 
 ## 第一步：判断现状（只读，不改任何东西）
 
@@ -114,12 +115,14 @@
 
 网关插件是本地与云端之间**唯一**的通道，所以这一步必须做干净。
 
-1. **插件来源**：唯一允许的来源是 `{{PLUGIN_REPO}}`，且必须停在 `{{PLUGIN_REF}}`（40 位 commit SHA）。
+1. **插件来源**：唯一允许的来源是 `{{PLUGIN_REPO}}`。**装仓库默认分支的最新版，不要钉任何版本号**
+   （钉版本是运维的事，不是引导的事：装完就跟版靠 `update`，每次插件发版不该回头改这份 Prompt）。
    先看 `hermes plugins list` 里有没有 `pi-workbench`：
-   - **已有** → 不要再装、也不要 `hermes plugins update`（更新会把版本挪走）。核对版本后继续第 3 小步。
+   - **已有** → 不要再装（重装/覆盖可能丢 git 来源），需要跟版就 `hermes plugins update pi-workbench`。
    - **没有** → 在 profile 里装（`HERMES_HOME` 必须指向 profile 目录，不是 `~/.hermes`）：
-     `hermes plugins install {{PLUGIN_REPO}} --ref {{PLUGIN_REF}} --no-enable`
-     - `--ref` 只接受完整 40 位 SHA，**不接受分支名或 tag**；不要改成 `main`。
+     `hermes plugins install {{PLUGIN_REPO}} --no-enable`
+     - 装完**如实记录实际落到的提交**（交付说明里写一行）：
+       `git -C <profile>/plugins/pi-workbench rev-parse HEAD`
      - `--no-enable` 先装不启用：`PI_HUB_ADMIN_KEY` 还没配（第 3 小步配好后在第 2 小步启用）。
      - 仓库是公开的，**不需要任何凭据 / deploy key**；需要凭据才能拉 → 说明地址被改过，报告并停止。
    - **装失败** → 贴原始错误并停止。不要退回手写插件、不要换别的仓库。

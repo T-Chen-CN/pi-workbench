@@ -2,8 +2,8 @@
 
 > **什么时候读**：要把云端 Hermes 插件从本仓库搬出去、单独维护时；或插件发版要跟版时。
 > **谁执行**：主工作区（本仓库）做阶段 C；**新工作区（新仓库）做阶段 A**；阶段 B 在 VPS 上做。
-> **一句话**：插件在独立仓库 → 用 `hermes plugins install/adopt` 取代 `tar + scp` → 自举 Prompt 用
-> `{{PLUGIN_REPO}}` + `{{PLUGIN_REF}}` 钉死版本。
+> **一句话**：插件在独立仓库 → 用 `hermes plugins install/adopt` 取代 `tar + scp` → 自举 Prompt 只注入仓库地址
+> （**不钉版本**：引导装默认分支最新版，跟版靠 `hermes plugins update`），钉 SHA 留给运维。
 > **不做什么**：不碰 `plugin-data`（设备 token / 审计在那边）；不轮换管理密钥；不在同一次里既换安装来源又换版本。
 
 ## 执行状态（2026-11-06）
@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | **A 建仓库** | ✅ 完成 | [T-Chen-CN/pi-workbench-plugin](https://github.com/T-Chen-CN/pi-workbench-plugin)，**公开 · MIT · 根目录即插件**；tag `v0.1.0` → `8669f32e98a6afb49ec81f9bac59394e3852f6d5`；103 个 unittest 绿；`hermes plugins validate .` / `doctor . --ci` 通过；**没有** `__pycache__` |
 | **A7 部署凭据** | ⏭ 不需要 | 仓库公开 → 安装无需任何凭据；只在**转私有**时才补只读 deploy key |
-| **C 应用侧收尾** | ✅ 完成 | 本仓库已删 `hermes-plugin/pi-workbench/`（只留路牌 README）；自举 Prompt 用占位符 + `src/utils/hermesPrompt.ts` 的 `PLUGIN_REPO` / `PLUGIN_REF`（两条新用例兑底） |
+| **C 应用侧收尾** | ✅ 完成 | 本仓库已删 `hermes-plugin/pi-workbench/`（只留路牌 README）；自举 Prompt 用 `{{PLUGIN_REPO}}` 占位符 + `src/utils/hermesPrompt.ts` 的单个常量（**不钉版本**，三条新用例兑底） |
 | **B VPS 切换** | ⏳ 待做 | 线上仍是 `tar` 解压的旧那份（只 90 用例）；切换到仓库版会重启一次 gateway（停机 ≈10s），步骤见 §3 |
 
 > 与本节不一致的历史描述以本节为准；下面阶段 A / B / C 的命令保留为**可重跑的执行说明**。
@@ -29,7 +29,7 @@
 | 服务 | `hermes-gateway-pi-cloud.service`（`hermes --profile pi-cloud gateway run`） | 重启只重启这一个 |
 | 端口 / 域名 | `127.0.0.1:8484` / `hub.tchen-xiaoxiao.com`（Caddy `flush_interval -1`） | 迁移后应一字不变 |
 | 管理密钥 | `~/pi-hub-admin-key`（600）+ systemd drop-in `20-pi-hub.conf` | 复用，不重新生成 |
-| 测试 | `cd hermes-plugin/pi-workbench && python -m unittest discover -s tests -t .` | 90 用例，零依赖 |
+| 测试 | `cd <插件目录> && python -m unittest discover -s tests -t .` | 零依赖（仓库版已 103 用例） |
 
 **关键事实**：`hermes plugins list` **看不到** `pi-workbench`（它是 untracked 目录插件），
 所以 `doctor` / `check-updates` / `update` 现在都管不到它 —— 这就是要迁的理由。
@@ -40,7 +40,9 @@
 2. **公开仓库 + MIT**（所有者 2026-11-06 决定；`plugin.yaml` 的 `license` 同步改成 `MIT`）。插件本身不含任何
    密钥（管理密钥、设备 token 都在 VPS 上），公开反而免掉部署凭据。⚠️ 若将来要收回来：先转私有，再补只读
    deploy key（§A7），否则 VPS 侧的 `plugins update` 会 401。
-3. **版本用不可变 SHA 钉死**：`hermes plugins install --ref <40 位 SHA>`（CLI **不接受 tag**）。
+3. **版本不写进引导**（2026-11-06 修订）：`hermes plugins install <repo>` 装默认分支最新版，跟版靠
+   `hermes plugins update`。只有**要复现某次部署**时才用 `--ref <40 位 SHA>`（CLI 只认完整 SHA，不认 tag）——
+   否则每次插件发版都得改应用仓库，两个仓库的发布被串在一起。
 4. **两仓库分工**：插件仓库 = 代码/测试/`plugin.yaml` 版本/tag；本仓库 = 客户端、契约文档、自举 Prompt 模板。
 5. **本仓库不再保留插件源码**，只留一句指针 + Prompt 占位符常量。
 
@@ -167,7 +169,7 @@ cd $P/plugins
 mv pi-workbench pi-workbench.bak-$TS          # 留着回滚，不删
 git clone --depth 1 https://github.com/T-Chen-CN/pi-workbench-plugin.git pi-workbench
 cd pi-workbench && git fetch --depth 1 origin 8669f32e98a6afb49ec81f9bac59394e3852f6d5 \
-  && git checkout 8669f32e98a6afb49ec81f9bac59394e3852f6d5   # 必须与 Prompt 的 PLUGIN_REF 一致
+  && git checkout 8669f32e98a6afb49ec81f9bac59394e3852f6d5   # 运维钉版本用（引导 Prompt 不钉，装最新）
 # 只有在仓库转私有时才需要前置凭据：
 #   GIT_SSH_COMMAND='ssh -i ~/.ssh/pi-plugin-deploy' git clone ...
 export PATH=$HOME/.local/bin:$PATH
@@ -224,16 +226,15 @@ git commit -m "chore(plugin): 插件迁到独立仓库（见 docs/guides/PLUGIN_
 
 - `docs/requirements/hermes-bootstrap-prompt.md`：第三步的"插件来源"改成
   ```
-  hermes plugins install {{PLUGIN_REPO}} --ref {{PLUGIN_REF}} --no-enable
+  hermes plugins install {{PLUGIN_REPO}} --no-enable
   # 再按需启用：hermes plugins enable pi-workbench（requires_env 会问 PI_HUB_ADMIN_KEY）
   ```
-- `src/utils/hermesPrompt.ts`：取出代码块后做替换
+- `src/utils/hermesPrompt.ts`：取出代码块后替换占位符（**只有一个常量，没有版本号**）
   ```ts
-  export const PLUGIN_REPO = 'https://github.com/<org>/pi-workbench-plugin'
-  export const PLUGIN_REF = '<40 位 SHA>'
-  // HERMES_BOOTSTRAP_PROMPT = block.replaceAll('{{PLUGIN_REPO}}', PLUGIN_REPO).replaceAll('{{PLUGIN_REF}}', PLUGIN_REF)
+  export const PLUGIN_REPO = 'https://github.com/<org>/pi-workbench-plugin.git'
+  // HERMES_BOOTSTRAP_PROMPT = block.split('{{PLUGIN_REPO}}').join(PLUGIN_REPO)
   ```
-- `tests/hermes-prompt.test.ts` 增两条：**替换后不含 `{{`**、**`PLUGIN_REF` 是 40 位十六进制**。
+- `tests/hermes-prompt.test.ts` 增三条：**替换后不含 `{{`**、**Prompt 里没有 `--ref`**、**没有 40 位十六进制**。
 - 公开仓库：Prompt 已写明"不需要任何凭据 / deploy key"（需要凭据才能拉就说明地址被改过）。
   若哪天转私有：Prompt 里要补一句"先配好只读 deploy key（见 A7）"，不要让 Hermes 去猜凭据。
 
@@ -255,14 +256,14 @@ git commit -m "chore(plugin): 插件迁到独立仓库（见 docs/guides/PLUGIN_
 **插件仓库（发版方）**
 1. 改代码 + `python -m unittest discover -s tests -t .` 全绿
 2. 改 `plugin.yaml` 的 `version`（semver）
-3. `git tag vX.Y.Z` → `git rev-parse HEAD` 拿 40 位 SHA
+3. `git tag vX.Y.Z`（发版标记；**不需要**把 SHA 交给应用仓库）
 4. （可选）`hermes plugins validate .` / `doctor`
-5. 把 SHA 交给应用仓库（见下）
+5. 需要复现某次部署时，才用 `--ref <tag 指向的 40 位 SHA>`
 
 **应用仓库（跟版方）**
-1. 改 `src/utils/hermesPrompt.ts` 的 `PLUGIN_REF`
-2. `npm test`（含 Prompt 两条新用例）
-3. 按需跑 G1 清单 §0（健康 + 登记状态 + 心跳）
+1. **应用仓库通常不用改**（Prompt 不钉版本）—— 只有仓库地址变了才改 `PLUGIN_REPO`
+2. VPS 跟版：`hermes plugins check-updates` → `hermes plugins update pi-workbench` → 重启该 gateway unit
+3. `npm test`（含 Prompt 三条用例）；按需跑 G1 清单 §0（健康 + 登记状态 + 心跳）
 
 > 两边都要 `plugin.yaml` 的 `requires_hermes` 与实际 VPS 的 Hermes 版本对齐（当前 `0.22.6`）。
 

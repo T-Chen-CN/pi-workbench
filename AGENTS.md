@@ -31,7 +31,7 @@ npm run build      # 渲染层 + bridge + 主进程
 | `electron/ipc/register.ts` | `handleIpc` + `isTrustedIpcSender`：只接受主窗口与登记过的辅助窗口主框架，ready 之后 fail-closed |
 | `src/` | 渲染进程分层：`components/`（扁平，**禁建子目录**）· `store/`（一域一个 Zustand store）· `hooks/` · `utils/` · `workspace/` · `panelHost/` · `theme/` · `pdf/` · `api/`（IPC 封装 + 浏览器 mock 回退） |
 | `pi-bridge/` | 独立的 Agent 桥接包（`AgentManager`），有自己的 `package.json` / `tsconfig`；改完要 `npm run build:bridge` |
-| `hermes-plugin/` | **只剩一个路牌**：云端网关插件已迁到独立仓库 [T-Chen-CN/pi-workbench-plugin](https://github.com/T-Chen-CN/pi-workbench-plugin)（仓库根就是插件本体，公开 MIT）。本仓库不再放插件代码；应用侧只有 `src/utils/hermesPrompt.ts` 的 `PLUGIN_REPO` / `PLUGIN_REF` 两个常量跟着发版走。见 [hermes-plugin/README.md](hermes-plugin/README.md) · [PLUGIN_REPO_MIGRATION](docs/guides/PLUGIN_REPO_MIGRATION.md) |
+| `hermes-plugin/` | **只剩一个路牌**：云端网关插件已迁到独立仓库 [T-Chen-CN/pi-workbench-plugin](https://github.com/T-Chen-CN/pi-workbench-plugin)（仓库根就是插件本体，公开 MIT）。本仓库不再放插件代码；应用侧只有 `src/utils/hermesPrompt.ts` 的 `PLUGIN_REPO` 一个常量（**故意不钉版本**：引导装最新，跟版靠 `plugins update`）。见 [hermes-plugin/README.md](hermes-plugin/README.md) · [PLUGIN_REPO_MIGRATION](docs/guides/PLUGIN_REPO_MIGRATION.md) |
 | `tests/` | 扁平目录，文件名与源码同名（`src/utils/fileTree.ts` → `tests/file-tree.test.ts`）；`tests/design-system.test.ts` 是强制门槛 |
 | `docs/` | 规范原文，`docs/README.md` 是唯一索引 |
 

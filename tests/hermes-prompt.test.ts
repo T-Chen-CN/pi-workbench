@@ -3,7 +3,6 @@ import {
   extractPromptBlock,
   fillPromptPlaceholders,
   HERMES_BOOTSTRAP_PROMPT,
-  PLUGIN_REF,
   PLUGIN_REPO,
 } from '../src/utils/hermesPrompt'
 
@@ -44,23 +43,21 @@ describe('hermes bootstrap prompt', () => {
   })
 
   // 插件有自己的仓库（见 docs/guides/PLUGIN_REPO_MIGRATION.md）：文档里只留占位符，
-  // 真实地址与版本由 PLUGIN_REPO / PLUGIN_REF 注入 —— 复制出去的内容里不能残留 {{…}}。
-  it('injects the plugin repo and an immutable SHA ref', () => {
-    expect(PLUGIN_REF).toMatch(/^[0-9a-f]{40}$/)
+  // 真实地址由 PLUGIN_REPO 注入 —— 复制出去的内容里不能残留 {{…}}。
+  it('injects the plugin repo, and never pins a version', () => {
     expect(PLUGIN_REPO.startsWith('https://')).toBe(true)
     expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('{{')
     expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('}}')
     expect(HERMES_BOOTSTRAP_PROMPT).toContain(PLUGIN_REPO)
-    expect(HERMES_BOOTSTRAP_PROMPT).toContain(`--ref ${PLUGIN_REF}`)
-    // 装插件那条命令只能来自指定仓库，不能出现别的来源或可移动引用
     expect(HERMES_BOOTSTRAP_PROMPT).toContain('hermes plugins install')
-    expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('--ref main')
+    // 引导装默认分支最新版：钉了 SHA 就等于每次插件发版都要改应用仓库（两处发布串在一起）
+    expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('--ref')
+    expect(HERMES_BOOTSTRAP_PROMPT).not.toMatch(/[0-9a-f]{40}/)
+    expect(HERMES_BOOTSTRAP_PROMPT).toContain('hermes plugins update')
   })
 
-  it('only rewrites the two known placeholders', () => {
-    expect(fillPromptPlaceholders('a {{PLUGIN_REPO}} b {{PLUGIN_REF}} c')).toBe(
-      `a ${PLUGIN_REPO} b ${PLUGIN_REF} c`
-    )
+  it('only rewrites the known placeholder', () => {
+    expect(fillPromptPlaceholders('a {{PLUGIN_REPO}} b')).toBe(`a ${PLUGIN_REPO} b`)
     // 未知占位符原样保留（不会被静默翻译成空串）
     expect(fillPromptPlaceholders('{{SOMETHING_ELSE}}')).toBe('{{SOMETHING_ELSE}}')
   })

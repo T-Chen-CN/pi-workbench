@@ -8,9 +8,12 @@
  * 因此：改 Prompt 只改文档，应用里自动跟着变；`tests/hermes-prompt.test.ts` 守住
  * 「代码块存在、内容完整」这条，防止文档被改坏后按钮复制出一段残缺文本。
  *
- * 插件仓库与版本**不写在文档里**，而是文档里留 `{{PLUGIN_REPO}}` / `{{PLUGIN_REF}}` 占位符、
- * 由这里注入：插件有自己的仓库与发版节奏（见 `docs/guides/PLUGIN_REPO_MIGRATION.md`），
- * 跟版时只改下面两个常量，文档一字不动。
+ * 插件仓库**不写死在文档里**，而是文档里留 `{{PLUGIN_REPO}}` 占位符、由这里注入：插件有自己的
+ * 仓库与发版节奏（见 `docs/guides/PLUGIN_REPO_MIGRATION.md`）。
+ *
+ * **故意不钉版本**：引导只负责"装上"，装的是仓库默认分支最新版，之后跟版靠 `hermes plugins update`。
+ * 把 40 位 SHA 写进 Prompt 会让每次插件发版都得改应用仓库（两处发布串在一起），而收益只是"新机器装到
+ * 某个旧版"。要复现某次部署时用 `--ref <SHA>`，那属于运维手册，不属于引导 Prompt。
  */
 
 import doc from '../../docs/requirements/hermes-bootstrap-prompt.md?raw'
@@ -23,12 +26,6 @@ const TEXT_FENCE = /```text\r?\n([\s\S]*?)```/
  */
 export const PLUGIN_REPO = 'https://github.com/T-Chen-CN/pi-workbench-plugin.git'
 
-/**
- * 插件版本：**完整 40 位 commit SHA**（`hermes plugins install --ref` 只认这个，不认 tag / 分支）。
- * 当前 = tag `v0.1.0`；每次插件发版在这里改一行（见迁移手册 §5「发布 checklist」）。
- */
-export const PLUGIN_REF = '8669f32e98a6afb49ec81f9bac59394e3852f6d5'
-
 /** 取出文档里第一个 ```text 代码块（统一换行、去掉首尾空行） */
 export function extractPromptBlock(markdown: string): string {
   const match = TEXT_FENCE.exec(markdown)
@@ -38,7 +35,7 @@ export function extractPromptBlock(markdown: string): string {
 
 /** 把文档里的占位符换成真实值（纯函数，便于单测；用 split/join 而不是 replaceAll：tsconfig 锁在 ES2020） */
 export function fillPromptPlaceholders(block: string): string {
-  return block.split('{{PLUGIN_REPO}}').join(PLUGIN_REPO).split('{{PLUGIN_REF}}').join(PLUGIN_REF)
+  return block.split('{{PLUGIN_REPO}}').join(PLUGIN_REPO)
 }
 
 export const HERMES_BOOTSTRAP_PROMPT = fillPromptPlaceholders(extractPromptBlock(doc))
