@@ -47,6 +47,7 @@ vi.mock('electron', () => ({
   app: {
     isPackaged: false,
     isReady: () => false,
+    whenReady: async () => {},
     getAppPath: () => mocks.state.appDir,
     getPath: () => mocks.state.appDir,
     quote: undefined,

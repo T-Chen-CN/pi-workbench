@@ -3,7 +3,7 @@
 import { randomUUID } from 'crypto'
 import * as fs from 'fs'
 import * as path from 'path'
-import { clipboard, dialog, type BrowserWindow } from 'electron'
+import { app, clipboard, dialog, type BrowserWindow } from 'electron'
 import { handleIpc } from './register.js'
 import {
   normalizeBaseUrl,
@@ -100,6 +100,9 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   /** 心跳：登记后每 30s 一拍，让云端知道这台机器还开着（H2-1） */
   const heartbeat = startHeartbeat({
     credential: () => {
+      // 这个模块在 app ready 之前就被装配了；此时 safeStorage 还不能解密，
+      // 读配置会报错并刷日志 —— 没 ready 就当「没有凭据」，ready 后再 poke。
+      if (!app.isReady()) return null
       const config = readCloudConfig()
       if (!config.hasDeviceToken) return null
       return { gatewayUrl: config.gatewayUrl, deviceToken: config.deviceToken }
@@ -111,6 +114,8 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       send('cloud:gateway:revoked', { reason })
     }
   })
+  // ready 之后补一拍：启动那一刻还没有 safeStorage，凭据读不出来
+  void app.whenReady().then(() => heartbeat.poke())
   let capabilities: CloudCapabilities | null = null
   let hookedWindow: BrowserWindow | null = null
 
