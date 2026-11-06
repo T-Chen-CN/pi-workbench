@@ -2,7 +2,7 @@
  * Agent 配置签名。
  *
  * 任何会改变 models.json 的字段变化都必须重建 Agent：模型列表、容量档位、
- * 图片勾选、API URL 与 Key 都会影响模型运行时，因此全部纳入签名。
+ * 输出上限、图片勾选、API URL 与 Key 都会影响模型运行时，因此全部纳入签名。
  * 排序后序列化，避免模型列表顺序变化触发无谓重建。
  */
 
@@ -11,7 +11,7 @@ export interface AgentConfigKeyInput {
   apiUrl: string
   apiKey: string
   selectedModel: string
-  models?: Array<{ id: string; contextWindow: number; image: boolean }>
+  models?: Array<{ id: string; contextWindow: number; image: boolean; maxTokens?: number }>
 }
 
 export function agentConfigKey(apiConfig: AgentConfigKeyInput): string {
@@ -20,6 +20,8 @@ export function agentConfigKey(apiConfig: AgentConfigKeyInput): string {
       id: typeof entry?.id === 'string' ? entry.id : '',
       contextWindow: Number(entry?.contextWindow ?? 0),
       image: entry?.image === true,
+      // 缺省与 0 都是「自动」，签名保持一致
+      maxTokens: Number(entry?.maxTokens ?? 0),
     }))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 
