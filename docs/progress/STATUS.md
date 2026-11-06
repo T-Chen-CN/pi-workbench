@@ -10,8 +10,9 @@
 
 **更新时间**: 2026-11-06
 
-- 📋 **R-23 已登记（未开工）**：模型输出预算与截断的完整处理（`length` 分支、`reasoning` 透传、空正文不落历史、UI 提示）。来源：2026-11-06 PW-Hermes 工作区连续 8 次空回复；同时 256K 档输出上限已由 8K 提到 32K（`9979fec`）。详见 [BACKLOG](./BACKLOG.md) R-23
-- ✅ **最新版本 0.7.6**（仓库地图画布面板、标签栏「选择工作区」弹窗、按键延迟两批治理、README 中文优先重写）；完整记录见下方 Phase 6 的 2026-11-03 发布条目
+- ✅ **最新版本 0.7.7**（思考模式输出上限 8K→32K，修 DeepSeek 思考把预算吃满导致的连续空回复）；完整记录见下方 Phase 6 的 2026-11-06 发布条目
+- 📋 **R-23 已登记（未开工）**：模型输出预算与截断的完整处理（`length` 分支、`reasoning` 透传、空正文不落历史、UI 提示）。来源：2026-11-06 PW-Hermes 工作区连续 8 次空回复；0.7.7 已把 256K 档输出上限提到 32K（`9979fec`），截断本身仍未处理。详见 [BACKLOG](./BACKLOG.md) R-23
+- ✅ **0.7.6 已发布：仓库地图画布面板、标签栏「选择工作区」弹窗、按键延迟两批治理、README 中文优先重写**；完整记录见下方 Phase 6 的 2026-11-03 条目
 - ✅ **0.7.5 已发布：聊天附件任意位置 / 格式 + PDF / Office 可读与只读预览 + 退出可靠性与单实例恢复**；完整记录见下方 Phase 6 的 2026-10-31 条目
 - ✅ **0.7.4 已发布：工作树依赖自动安装与复用 + 聊天体验 / 外链 / 剪贴板 / 编辑器外部刷新批次**；完整记录见下方 Phase 6 的 2026-10-29 条目
 - ✅ **0.7.3 已发布：标签命中区整块可点 + 会话标题锁定**；完整记录见下方 Phase 6 的 2026-10-28 条目
@@ -26,7 +27,7 @@
 
 ## 当前版本
 
-- **版本**: 0.7.6
+- **版本**: 0.7.7
 - **框架**: Electron 44 + React 19 + TypeScript
 - **Agent**: `@earendil-works/pi-coding-agent` 1.3.0
 - **状态**: Phase 6 持续优化
@@ -230,6 +231,7 @@
 - ✅ 2026-11-01 编辑卡顿（输入法输入尤其明显）——三个叠加的按键级开销：① `useChatPanelState` 的 `currentSymbols` 原本 `useMemo` 依赖 `currentFile` 对象（每次按键换身份），等于每敲一个字就把整篇文档 `split` + 逐行跑正则扫一遍符号，而它只服务于「附加符号」菜单；现在改成停手 400ms 后算一次（切文件立即算），切片时再从 store 现取正文。② `App` 原本订阅 `currentFile` 对象，一次按键会重渲染整个外壳——所有常驻工作区、侧栏、聊天、仓库地图（`RepoMapCanvas` 的卡片 memo 被内联闭包打穿）；现在只订阅 `currentFile?.name`，并给 `useEditorStore` 加可选相等函数（走 `zustand/traditional`，避开 v4 弃用警告），`openFiles` 用 `sameOpenFileTabs` 比较（正文变化不算变化），标签条与聊天面板不再每按键重渲染，`WorkspacePanel` 加 `React.memo`。③ `MonacoEditor` 的「切换当前文件」效应以 `currentFile` 为依赖（外部改盘要靠它推进 model），原本每按键都回读一遍全文；现在用 `modelContentRef` 记下 model 里这份内容的出处，引用相等即跳过，编辑时全文只读一次。④ 主进程 `draft:save` 原本同步 `writeJsonAtomicSync`（JSON.stringify 全文 + fsync + 回读并 `JSON.parse` 上一份草稿 + copy `.bak`），阻塞的正是浏览器 UI 线程，会直接拖慢输入法合成的往返；新增 `writeJsonAtomicAsync`（临时文件 + fsync + rename，全异步），草稿不留 `.bak`（可再生缓存）。回归用例：`monaco-editor`「每按键只读一次全文」与「外部内容仍推进 model」、`renderer-components`「符号停手后才重扫」、`stores` 的 `sameOpenFileTabs` 语义。`paths-and-storage` §3 补草稿写法的例外。type-check / lint / 1373 用例通过
 - ✅ 2026-11-03 编辑卡顿（真凶，压过前一批）：`MarkdownReadingView` 的块 key 写成 `` `${block.start}-${index}` ``，而 `block.start` 是**字符偏移**——在文件靠前处敲一个字，后面每个块的 `start` 全体 +1，key 全变，React 把整篇块卸载重挂（实测一次按键 89 块里重挂 87 个）。每重挂一个块 = `react-markdown` 全量 parse + `rehype-highlight` 现场 `createLowlight(common)` 把整套语法注册一遍（单次约 20ms）。同时「隐藏时冻结解析结果」那段 `useEffect` 把 `file.content` 写进了依赖，于是**源码视图里每敲一个字都把隐藏的阅读视图重排一遍**，冻结形同虚设。修法：① key 改回下标（身份稳定，未变化的块靠 `MarkdownBody` 的 `React.memo` 直接跳过）；② 冻结改用 render 期的 `frozenRef` 快照，只在视图活跃时跟随内容，切回阅读视图时按最新内容排版；③ `AgentMarkdown` 把 `rehypeHighlight()` 的结果缓成模块级变换复用，不再每次渲染重注册语法（聊天区每个消息块同样受益）。实测（同一次按键路径，CDP 采样）：markdown 文件源码视图打字 338→18~35ms/键，阅读视图 DOM 重挂 87→0，profile 里 `Markdown` / `createLowlight` 完全消失。归因靠临时探针（长任务 / 事件分解）与 CDP CPU profile，定位后已全部移除。回归用例：`tests/markdown-reading-perf.test.tsx`（块身份不变、隐藏时冻结且切回追平、高亮变换只构建一次；已验证旧代码下前三条会红）。type-check / lint / 1377 用例通过
 - ✅ 2026-11-03 发布 v0.7.6：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage，附 `latest*.yml` 与 blockmap）。本版包含：工作区面板改成固定规则的**仓库地图画布**（`electron/repo-map.ts` 只读 `git ls-files` + 文件头 4KB 推断 11 类职责，`size+mtimeMs` 指纹增量，缓存落 `{workspace}/.pi-workbench/repo-map.json`；`RepoMapCanvas` 底层 / 上浮链 / 世界坐标 + 按缩放切 LOD，卡片位置与视口落 `repo-map-canvas.json`，标签条最左固定标签是入口，`panelActive` 不落盘）；标签栏「+」改为紧贴最后一个标签的「选择工作区」弹窗；按键延迟两批治理（符号菜单停手 400ms 再算、`App` 与 `MonacoEditor` 订阅收窄、`draft:save` 改 `writeJsonAtomicAsync` 异步落盘；`MarkdownReadingView` 块 key 改下标、冻结改用 render 期快照——markdown 源码视图 338ms→18~35ms/键）；README 中文优先重写 + 品牌 banner / 社交分享卡 + About 中文在前。`repo-map` / `workspace-panel` / `paths-and-storage` / `PROJECT_STRUCTURE` / `DESIGN_SYSTEM` 同步。type-check / lint / 1377 用例通过
+- ✅ 2026-11-06 发布 v0.7.7：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage，附 `latest*.yml` 与 blockmap）。本版修「Agent completed but returned no text response.」：DeepSeek 思考模式下 `max_tokens` 是 completion 总预算，`deepseek-flash` 的 catalog 上限被固定在 8192，思考把预算吃满即 `stopReason=length` 且只产出 thinking 块，上层把空正文替换成占位文案并当成功写入历史（PW-Hermes 工作区 22 轮里 8 轮命中，`usage.output === usage.reasoning === 8192`）。修法：`PAIRED_MAX_TOKENS[256_000]` 16_384 → 32_768、`KNOWN_MODEL_METADATA['deepseek-flash'].maxTokens` 8_192 → 32_768，`deepseek-v4-pro` 同档位一起从 16K 升到 32K（官方思考模式默认输出 64K，范围 1–384K）。`agent-runtime` 档位表同步。截断的完整处理（`length` 分支、`reasoning` 透传、空正文不落历史、UI 提示）登记为 BACKLOG R-23，本版未实现。type-check / lint / 1377 用例通过
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
 ## 最近提交
