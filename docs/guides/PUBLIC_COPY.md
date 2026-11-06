@@ -81,37 +81,41 @@ gh repo edit T-Chen-CN/pi-workbench \
 - **Known issues 诚实写**：未签名未公证、`.doc/.xls/.ppt` 旧格式只给另存为指引、扫描件不做 OCR。
 - 资产名由 `package.json` 的 `artifactName` 决定，改名时同步本节。
 
-### v0.7.7 成品（可直接粘贴覆盖现有说明）
+### v0.7.8 成品（可直接粘贴覆盖现有说明）
 
 ```markdown
-修掉一个会让对话突然「空手而归」的问题。
+输出上限不再写死在代码里，撞上限也不再假装「模型没说话」。
 
 ## Highlights
 
-- **思考不再吃掉全部输出预算** — DeepSeek 思考模式单轮最多只能输出 8192 token，复杂任务常常把预算全部用在思考上，正文一个字都发不出来，界面只显示「Agent completed but returned no text response.」。256K 上下文档的输出上限已由 8K 提到 32K，同一轮能装下更长的思考和正文；`deepseek-v4-pro` 同档位一起受益。
+- **输出上限可以自己调** — 设置 → 模型能力新增「输出上限」列：自动 / 16K / 32K / 64K / 128K / 256K。选「自动」按上下文容量推导（128K→16K、256K→64K、1M→128K），256K 档的默认值从 32K 提到 64K。以前这是代码里的固定数字，想改只能等发版。
+- **被截断时说明白** — 输出撞上限不再显示「Agent completed but returned no text response.」，而是红色错误气泡，写清 token 花在哪里：「输出被截断：思考 5,800 + 正文 200 token，已用满上限 6,000」。只有思考、正文一个字没有的情况另有文案。
+- **用量看得到思考占比** — 气泡下方用量行现在显示 `... tokens · 思考 N`，一眼能看出预算花在思考还是正文上。
 
 ## Downloads
 
 | Platform | Asset |
 | --- | --- |
-| Windows | `Pi-Workbench-Setup-0.7.7.exe` |
-| macOS | `Pi-Workbench-0.7.7-universal.dmg` |
-| Linux | `Pi-Workbench-0.7.7.AppImage` |
+| Windows | `Pi-Workbench-Setup-0.7.8.exe` |
+| macOS | `Pi-Workbench-0.7.8-universal.dmg` |
+| Linux | `Pi-Workbench-0.7.8.AppImage` |
 
 ## Upgrade notes
 
-0.7.6 及更早版本可直接通过应用内更新升级：Windows / Linux 后台下载、点确认后安装，数据目录不受影响；macOS 请下载 dmg 覆盖安装。
+0.7.7 及更早版本可直接通过应用内更新升级：Windows / Linux 后台下载、点确认后安装，数据目录不受影响；macOS 请下载 dmg 覆盖安装。
+
+升级后首次启动会按新的档位表重写 `data/agent/models.json`，256K 上下文档的输出上限自动从 32K 变为 64K，不需要手动改配置。已经手动选过档位的模型保持原值。
 
 ## Known issues
 
 - 构建未做代码签名与公证，首次启动需在 SmartScreen / Gatekeeper 中确认一次。
-- 输出撞上限时仍会显示占位文案而不是可操作提示——完整处理已记入待办，本版未实现。
+- 截断只如实报错，不会自动提高上限重试，也不建议为此调低思考强度。
 - 旧格式 `.doc / .xls / .ppt / .wps` 不解析，只返回「另存为 .docx / .xlsx / .pptx」指引；扫描件不做 OCR。
 
-**Full Changelog**: https://github.com/T-Chen-CN/pi-workbench/compare/v0.7.6...v0.7.7
+**Full Changelog**: https://github.com/T-Chen-CN/pi-workbench/compare/v0.7.7...v0.7.8
 ```
 
-粘贴方式（**执行前确认**）：`gh release edit v0.7.7 --notes-file <上面这段存成的文件>`。
+粘贴方式（**执行前确认**）：`gh release edit v0.7.8 --notes-file <上面这段存成的文件>`。
 
 ### 仍未接入
 
