@@ -155,6 +155,7 @@ npm run web:dev
 | --- | --- | --- |
 | 云端网关活着 | `curl -s https://hub.tchen-xiaoxiao.com/v1/hub/health` | `status:ok`、`upstreamOk:true`、`adminKeyConfigured:true` |
 | 本机已登记 | 连接页「云端网关」卡 | `这台设备已登记` + `chat / dispatch` + 上游版本 `0.22.6` |
+| 不想手填管理密钥 | 连接页 →「从文件导入」 | 导入 `hermes-handoff v2`（由自举 Prompt 生成）后，管理密钥与网关地址都就位，只需点「登记这台设备」 |
 | 记录起点 | 连接页设备卡的 `deviceId` | 抄下来（后面每一步都要能和云端审计对上） |
 | 清空干扰 | 关闭其他正在跑的会话 | 避免事件流串台 |
 
