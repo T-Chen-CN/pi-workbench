@@ -43,6 +43,7 @@ import { alertDialog } from '../store/dialogStore'
 import {
   CONTEXT_WINDOW_OPTIONS,
   MAX_TOKENS_OPTIONS,
+  autoMaxTokens,
   contextWindowLabel,
   maxTokensLabel,
   mergeModelEntries,
@@ -373,6 +374,8 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     try {
       const result = await api.apiConfigSave(apiConfig)
       if (result.success) {
+        // 以磁盘为准回读：任何一层弄丢字段（例如输出上限档位）都会在这里立刻暴露
+        await loadApiConfig()
         setSaveStatus('success')
         toast.success(t('apiConfigSavedReopen'))
         // 通知 ChatPanel 用新配置重新初始化 Agent
@@ -723,7 +726,11 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                           >
                             {MAX_TOKENS_OPTIONS.map((value) => (
                               <option key={value} value={value}>
-                                {value > 0 ? maxTokensLabel(value) : t('modelMaxTokensAuto')}
+                                {value > 0
+                                  ? maxTokensLabel(value)
+                                  : t('modelMaxTokensAutoWithValue', {
+                                      value: maxTokensLabel(autoMaxTokens(entry.contextWindow)),
+                                    })}
                               </option>
                             ))}
                           </Select>

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AUTO_MAX_TOKENS,
   CONTEXT_WINDOW_OPTIONS as RENDERER_OPTIONS,
   MAX_TOKENS_OPTIONS as RENDERER_MAX_TOKENS,
+  autoMaxTokens,
   contextWindowLabel,
   maxTokensLabel,
   mergeModelEntries,
@@ -39,6 +41,17 @@ describe('max tokens options', () => {
       '128K',
       '256K',
     ])
+  })
+
+  it('shows the derived value on the auto option', () => {
+    // 设置页把「自动」渲染成「自动（64K）」，取值必须与 pi-bridge 推导一致
+    for (const contextWindow of RENDERER_OPTIONS) {
+      expect(AUTO_MAX_TOKENS[contextWindow]).toBe(resolveMaxTokens(contextWindow, undefined, 0))
+    }
+    expect(maxTokensLabel(autoMaxTokens(64_000))).toBe('8K')
+    expect(maxTokensLabel(autoMaxTokens(128_000))).toBe('16K')
+    expect(maxTokensLabel(autoMaxTokens(256_000))).toBe('64K')
+    expect(maxTokensLabel(autoMaxTokens(1_000_000))).toBe('128K')
   })
 })
 
