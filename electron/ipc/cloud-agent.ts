@@ -1,26 +1,17 @@
 /** 云端 Agent 的 IPC：配置、会话、run 生命周期、程序内控制台 */
 
-import { randomUUID } from 'crypto'
-import * as fs from 'fs'
-import * as path from 'path'
-import { app, clipboard, dialog, type BrowserWindow } from 'electron'
+import { app, type BrowserWindow } from 'electron'
 import { handleIpc } from './register.js'
 import {
   normalizeBaseUrl,
-  clearCloudToken,
+  deriveDashboardUrl,
   publicCloudConfig,
   readCloudConfig,
   writeCloudConfig,
   cloudTransport,
   clearDeviceCredentials,
-  pruneLegacyCloudConfig
+  pruneUnknownCloudConfig
 } from '../cloud/config.js'
-import {
-  HANDOFF_MAX_BYTES,
-  parseHandoff,
-  pendingPatch,
-  toPreview
-} from '../cloud/handoff.js'
 import { CloudApiError, cloudErrorMessage, createCloudClient, type CloudClient } from '../cloud/client.js'
 import { CloudRunner } from '../cloud/runner.js'
 import { CloudDashboard } from '../cloud/dashboard.js'
@@ -29,7 +20,7 @@ import {
   gatewayHealth,
   gatewayWhoAmI,
   heartbeatDevice,
-  registerDevice,
+  pairDevice,
   revokeDevice,
 } from '../cloud/gateway.js'
 import {
@@ -64,9 +55,8 @@ import type {
   CloudApprovalChoice,
   CloudApprovalMode,
   CloudCapabilities,
-  CloudConfigPatch,
   CloudConnectionState,
-  CloudHandoffParseCode,
+  CloudPairErrorCode,
   CloudPendingWrite
 } from '../cloud/types.js'
 
@@ -98,7 +88,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   let client: CloudClient | null = null
   let clientKey = ''
   let runner: CloudRunner | null = null
-  /** 心跳：登记后每 30s 一拍，让云端知道这台机器还开着（H2-1） */
+  /** 心跳：配对后每 30s 一拍，让云端知道这台机器还开着（H2-1） */
   const heartbeat = startHeartbeat({
     credential: () => {
       // 这个模块在 app ready 之前就被装配了；此时 safeStorage 还不能解密，
@@ -119,21 +109,6 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   void app.whenReady().then(() => heartbeat.poke())
   let capabilities: CloudCapabilities | null = null
   let hookedWindow: BrowserWindow | null = null
-
-  /**
-   * 待应用的交接文件：明文补丁只在内存里活 60 秒，或被一次 apply 消费。
-   * 渲染层只拿 nonce，不拿明文。
-   */
-  let pendingHandoff: { nonce: string; patch: CloudConfigPatch; timer: NodeJS.Timeout } | null =
-    null
-  const HANDOFF_TTL_MS = 60_000
-  const HANDOFF_EXTENSIONS = ['txt', 'handoff', 'env', 'conf']
-
-  function clearPendingHandoff(): void {
-    if (!pendingHandoff) return
-    clearTimeout(pendingHandoff.timer)
-    pendingHandoff = null
-  }
 
   const send = (channel: string, payload: unknown): void => {
     const win = deps.getMainWindow()
@@ -233,8 +208,8 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       throw new CloudApiError(
         'unauthorized',
         config.hasDeviceToken
-          ? '设备 token 丢失，请在「连接」页重新登记这台设备'
-          : '还没有登记这台设备，请先在「连接」页用管理密钥登记'
+          ? '设备 token 丢失，请在「连接」页重新配对这台设备'
+          : '还没有配对这台设备，请先在「连接」页用连接码配对'
       )
     }
     const key = clientKeyFor(transport)
@@ -280,109 +255,10 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   })
 
   handleIpc('cloud:config:get', () => {
-    // 老版本留下的字段（baseUrl / dashboardToken / apiKey）顺手清掉：读取本来就不用它们
-    pruneLegacyCloudConfig()
+    // 旧版本留下的字段（baseUrl / apiKey / 管理密钥 / 控制台口令 / handoff 记录）顺手清掉
+    pruneUnknownCloudConfig()
     const config = publicCloudConfig()
     return { success: true, config }
-  })
-
-  /**
-   * 选一个交接文件 → 只读解析 → 回脱敏预览。
-   * 明文密钥留在主进程的 pendingHandoff 里，`apply` 只回传 nonce。
-   */
-  handleIpc('cloud:handoff:pick', async () => {
-    const win = deps.getMainWindow()
-    const options = {
-      title: '选择 Hermes 交接文件',
-      properties: ['openFile'] as Array<'openFile'>,
-      filters: [{ name: 'hermes-handoff', extensions: HANDOFF_EXTENSIONS }]
-    }
-    let filePath = ''
-    try {
-      const picked = win
-        ? await dialog.showOpenDialog(win, options)
-        : await dialog.showOpenDialog(options)
-      if (picked.canceled || picked.filePaths.length === 0) {
-        return { success: true, canceled: true }
-      }
-      filePath = picked.filePaths[0]
-    } catch {
-      return { success: false, canceled: true, error: '无法打开文件选择框' }
-    }
-
-    let text = ''
-    try {
-      const stats = await fs.promises.stat(filePath)
-      if (stats.size > HANDOFF_MAX_BYTES) {
-        return { success: false, canceled: false, code: 'too_large' as CloudHandoffParseCode }
-      }
-      text = await fs.promises.readFile(filePath, 'utf8')
-    } catch {
-      return { success: false, canceled: false, code: 'read_failed' as CloudHandoffParseCode }
-    }
-
-    const parsed = parseHandoff(text)
-    if (!parsed.ok) {
-      // 只回原因码：文件内容（含明文密钥）绝不出主进程
-      return { success: false, canceled: false, code: parsed.code }
-    }
-
-    clearPendingHandoff()
-    const nonce = randomUUID()
-    const timer = setTimeout(() => {
-      pendingHandoff = null
-    }, HANDOFF_TTL_MS)
-    // 不因一个待应用的预览把进程留住
-    ;(timer as unknown as { unref?: () => void }).unref?.()
-    pendingHandoff = { nonce, patch: pendingPatch(parsed.data), timer }
-
-    logger?.info('[Cloud] handoff picked', parsed.data.version)
-    return {
-      success: true,
-      canceled: false,
-      preview: {
-        ...toPreview(parsed.data, path.basename(filePath)),
-        willOverwrite: readCloudConfig().hasDeviceToken,
-        applyNonce: nonce
-      }
-    }
-  })
-
-  handleIpc('cloud:handoff:apply', (_event, input: { applyNonce?: string }) => {
-    const nonce = String(input?.applyNonce ?? '')
-    if (!pendingHandoff || !nonce || pendingHandoff.nonce !== nonce) {
-      return { success: false, error: '预览已过期，请重新选择交接文件' }
-    }
-    const patch = pendingHandoff.patch
-    // 一次性：无论写盘成败都作废，避免拿着同一份预览反复覆盖
-    clearPendingHandoff()
-    try {
-      const previousGatewayUrl = readCloudConfig().gatewayUrl
-      const saved = writeCloudConfig({ ...patch, handoffImportedAt: Date.now() })
-      // 地址或密钥变了，旧连接作废
-      client = null
-      clientKey = ''
-      runner?.dispose()
-      runner = null
-      capabilities = null
-      // 换了网关，上一台的 run 记录就再也接不上了
-      if (normalizeBaseUrl(saved.gatewayUrl) !== normalizeBaseUrl(previousGatewayUrl)) {
-        clearActiveRun()
-      }
-      logger?.info('[Cloud] handoff imported', saved.handoffProfile || 'unknown')
-      return { success: true, config: publicCloudConfig(saved) }
-    } catch (error) {
-      return fail(error)
-    }
-  })
-
-  handleIpc('cloud:handoff:copy', (_event, input: { field?: string }) => {
-    const field = String(input?.field ?? '')
-    if (field !== 'password') return { success: false, error: '不支持复制这个字段' }
-    const password = readCloudConfig().dashboardPassword
-    if (!password) return { success: false, error: '没有保存控制台口令' }
-    clipboard.writeText(password)
-    return { success: true }
   })
 
   handleIpc('cloud:connect', async () => {
@@ -408,7 +284,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     clientKey = ''
     capabilities = null
     dashboard.close()
-    clearCloudToken()
+    clearDeviceCredentials()
     send('cloud:status', { state: 'unconfigured', error: null, capabilities: null })
     return { success: true }
   })
@@ -590,9 +466,9 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   })
 
   /**
-   * 网关（云端单入口）三件事：看状态、登记这台设备、注销这台设备。
+   * 网关（云端单入口）三件事：看状态、配对这台设备、注销这台设备。
    *
-   * 登记是**设备身份的唯一诞生点**：管理密钥换一次性 token，token 用 safeStorage
+   * 配对是**设备身份的唯一诞生点**：一次性连接码换 token，token 用 safeStorage
    * 存起来，之后所有请求（含图片上传）只带它。`deviceId` 用本地 `device.json`
    * 里那个只读 id，网关侧与 `author.id` 因此是同一个身份。
    */
@@ -637,82 +513,98 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   })
 
-  /** 用管理密钥登记这台设备；成功后立刻落盘（token 只出现这一次）。 */
+  const PAIR_ERROR_CODES: CloudPairErrorCode[] = [
+    'pairing_not_found',
+    'pairing_expired',
+    'pairing_used',
+    'rate_limited',
+    'pairing_disabled',
+    'pairing_unsupported'
+  ]
+  const pairErrorCode = (error: unknown): CloudPairErrorCode | undefined => {
+    if (!(error instanceof CloudApiError)) return undefined
+    return PAIR_ERROR_CODES.find((code) => code === error.backendCode)
+  }
+
+  /**
+   * 用一次性连接码配对这台设备。
+   *
+   * 连接码是这一次唯一的授权：请求不带管理密钥，也不带设备 token。
+   * 失败时**不写盘**，旧配置（包括原有 token）保持不动。
+   */
   handleIpc(
-    'cloud:gateway:register',
+    'cloud:gateway:pair',
     async (
       _event,
-      input: {
-        adminKey?: string
-        name?: string
-        gatewayUrl?: string
-        scopes?: string[]
-        /** 勾上就记住这把管理密钥（`enc:`，只留在主进程） */
-        rememberAdminKey?: boolean
-      }
+      input: { code?: string; gatewayUrl?: string; name?: string }
     ) => {
       const config = readCloudConfig()
-      // 界面上不填 = 用本机记住的那把（勾过「记住」之后就不必反复粘）
-      const typed = String(input?.adminKey ?? '').trim()
-      const adminKey = typed || config.adminKey
-      if (!adminKey) return { success: false as const, error: '请填写管理密钥' }
+      const code = String(input?.code ?? '').trim()
+      if (!code) {
+        return { success: false as const, error: '请填写连接码' }
+      }
       const gatewayUrl = String(input?.gatewayUrl ?? '').trim() || config.gatewayUrl
       const record = readCloudDevice()
       const name = String(input?.name ?? '').trim() || record.name
       try {
-        const result = await registerDevice({
+        const result = await pairDevice({
           gatewayUrl,
-          adminKey,
+          code,
           deviceId: record.id,
-          name,
-          scopes: input?.scopes
+          name
         })
-        writeCloudConfig({
+        const nextDashboardUrl =
+          normalizeBaseUrl(result.dashboardUrl ?? '') ||
+          (normalizeBaseUrl(gatewayUrl) === normalizeBaseUrl(config.gatewayUrl)
+            ? config.dashboardUrl
+            : deriveDashboardUrl(gatewayUrl))
+        const saved = writeCloudConfig({
           gatewayUrl,
-          // 自建部署可能单独指定过控制台地址：别因为登记设备把它覆盖掉
-          dashboardUrl: config.dashboardUrl,
+          dashboardUrl: nextDashboardUrl,
           deviceToken: result.token,
           deviceScopes: result.scopes,
-          deviceId: result.deviceId,
-          // 勾选才记；不勾且之前记过 = 尊重这次选择（清掉）
-          adminKey: input?.rememberAdminKey ? adminKey : ''
+          deviceId: result.deviceId
         })
-        client = null // 凭据变了，重建客户端与 runner
+        client = null
+        clientKey = ''
         runner?.dispose()
         runner = null
+        capabilities = null
         // 换了一台网关：上一台的 run 记录接不回来
         if (normalizeBaseUrl(gatewayUrl) !== normalizeBaseUrl(config.gatewayUrl)) {
           clearActiveRun()
         }
         heartbeat.poke() // 新 token 立刻跳一拍：云端马上看到「在线」
         logger?.info(
-          `[Cloud] device registered name=${result.name} prefix=${result.tokenPrefix} scopes=${result.scopes.join('+')}`
+          `[Cloud] device paired name=${result.name} prefix=${result.tokenPrefix} scopes=${result.scopes.join('+')}`
         )
         return {
           success: true as const,
-          deviceId: result.deviceId,
+          config: publicCloudConfig(saved),
           tokenPrefix: result.tokenPrefix,
-          scopes: result.scopes,
           name: result.name
         }
       } catch (error) {
-        logger?.warn('[Cloud] device register failed', cloudErrorMessage(error))
-        return { success: false as const, error: cloudErrorMessage(error) }
+        logger?.warn('[Cloud] device pair failed', cloudErrorMessage(error))
+        return {
+          success: false as const,
+          code: pairErrorCode(error),
+          error: cloudErrorMessage(error)
+        }
       }
     }
   )
 
-  /** 注销这台设备：token 立即失效；本地同时清掉 token（要重新登记才能用）。 */
-  handleIpc('cloud:gateway:revoke', async (_event, input: { adminKey?: string }) => {
+  /** 注销这台设备：token 立即失效；本地同时清掉 token（要重新配对才能用）。 */
+  handleIpc('cloud:gateway:revoke', async () => {
     const config = readCloudConfig()
     if (!config.hasDeviceToken) {
-      return { success: false as const, error: '这台设备还没登记' }
+      return { success: false as const, error: '这台设备还没配对' }
     }
     try {
       await revokeDevice({
         gatewayUrl: config.gatewayUrl,
         deviceId: config.deviceId || readCloudDevice().id,
-        adminKey: String(input?.adminKey ?? '').trim() || undefined,
         deviceToken: config.deviceToken
       })
       // 注销：只清设备凭据，网关地址留着显示（本地没有别的凭据可退）
@@ -721,24 +613,12 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       client = null
       runner?.dispose()
       runner = null
+      capabilities = null
       return { success: true as const }
     } catch (error) {
       logger?.warn('[Cloud] device revoke failed', cloudErrorMessage(error))
       return { success: false as const, error: cloudErrorMessage(error) }
     }
-  })
-
-  /** 忘掉本机记住的管理密钥（下次登记要重新粘） */
-  handleIpc('cloud:gateway:forget-admin-key', () => {
-    const config = readCloudConfig()
-    if (!config.hasAdminKey) return { success: true as const }
-    // 只动管理密钥：自建部署的 gateway / dashboard 地址不能被重置
-    writeCloudConfig({
-      gatewayUrl: config.gatewayUrl,
-      dashboardUrl: config.dashboardUrl,
-      adminKey: ''
-    })
-    return { success: true as const }
   })
 
   handleIpc('cloud:policy:get', async () => {
@@ -885,7 +765,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     const transport = cloudTransport(config)
     if (!transport.credential) {
       // 单入口：上传凭据就是设备 token，没有第二条路
-      return { success: false as const, error: '这台设备还没有登记，先在「连接」页登记' }
+      return { success: false as const, error: '这台设备还没有配对，先在「连接」页配对' }
     }
     try {
       // 本地先校验类型与体积，省一次注定失败的往返
@@ -908,7 +788,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     const config = readCloudConfig()
     const transport = cloudTransport(config)
     if (!transport.credential) {
-      return { success: false as const, error: '这台设备还没有登记，先在「连接」页登记' }
+      return { success: false as const, error: '这台设备还没有配对，先在「连接」页配对' }
     }
     try {
       const client = createMediaClient({
@@ -1126,7 +1006,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   handleIpc('cloud:dashboard:open', () => {
     const config = readCloudConfig()
     if (!config.hasDeviceToken) {
-      return { success: false, error: '这台设备还没有登记，先在「连接」页登记' }
+      return { success: false, error: '这台设备还没有配对，先在「连接」页配对' }
     }
     hookWindow()
     try {
@@ -1165,7 +1045,6 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
 
   return {
     dispose: () => {
-      clearPendingHandoff()
       heartbeat.stop()
       runner?.dispose()
       dashboard.destroy()

@@ -2,7 +2,7 @@
  * 网关管理面（`electron/cloud/gateway.ts`）单测。
  *
  * 这里守的是三件事：
- * 1. 登记用的凭据是 `X-Pi-Admin-Key`，业务请求用的是 `Bearer`——拿错就是安全事件；
+ * 1. 业务请求只带设备 token（`Bearer`），管理密钥不进入桌面端；
  * 2. 一次性明文 token 原样回给调用方（只有主进程会看见），前缀用于对账；
  * 3. 网关自己的错误码要翻成人话，不能把 `device_revoked` 这种原样丢给用户。
  */
@@ -55,69 +55,30 @@ describe('gatewayWhoAmI', () => {
   })
 })
 
-describe('registerDevice', () => {
-  it('sends the admin key header and pins the local device id', async () => {
-    mocks.fetch.mockResolvedValueOnce(
-      json({
-        deviceId: 'b8235e0e',
-        name: 'TChen-Legion',
-        scopes: ['chat', 'dispatch'],
-        token: 'pi_secret',
-        tokenPrefix: 'pi_secret_ab',
-      })
-    )
-    const result = await gateway.registerDevice({
-      gatewayUrl: 'https://hub.example.com',
-      adminKey: 'admin-key',
-      deviceId: 'b8235e0e',
-      name: 'TChen-Legion',
-    })
-    expect(result.token).toBe('pi_secret')
-
-    const [url, init] = mocks.fetch.mock.calls[0]
-    expect(url).toBe('https://hub.example.com/v1/devices/register')
-    const headers = (init as RequestInit).headers as Record<string, string>
-    expect(headers['X-Pi-Admin-Key']).toBe('admin-key')
-    // 管理密钥绝不能同时当成业务凭据混进去
-    expect(headers.Authorization).toBeUndefined()
-    expect(JSON.parse(String((init as RequestInit).body))).toMatchObject({
-      deviceId: 'b8235e0e',
-      name: 'TChen-Legion',
-      scopes: ['chat', 'dispatch'],
-    })
-  })
-})
-
 describe('revokeDevice', () => {
-  it('prefers the admin key and falls back to the device token', async () => {
-    // Response 的 body 只能读一次，每次调用都要给新的实例
-    mocks.fetch.mockImplementation(async () => json({ success: true }))
+  it('uses the device token as a bearer credential and encodes the id', async () => {
+    mocks.fetch.mockResolvedValueOnce(json({ success: true }))
     await gateway.revokeDevice({
       gatewayUrl: 'https://hub.example.com',
       deviceId: 'dev 1',
-      adminKey: 'admin-key',
+      deviceToken: 'pi_abc',
     })
     const [url, init] = mocks.fetch.mock.calls[0]
     // id 必须编码：不然后缀被当成另一条路径
     expect(url).toBe('https://hub.example.com/v1/devices/dev%201/revoke')
     const headers = (init as RequestInit).headers as Record<string, string>
-    expect(headers['X-Pi-Admin-Key']).toBe('admin-key')
-    expect(headers.Authorization).toBeUndefined()
-
-    mocks.fetch.mockClear()
-    await gateway.revokeDevice({
-      gatewayUrl: 'https://hub.example.com',
-      deviceId: 'dev_1',
-      deviceToken: 'pi_abc',
-    })
-    const second = mocks.fetch.mock.calls[0][1] as RequestInit
-    expect((second.headers as Record<string, string>).Authorization).toBe('Bearer pi_abc')
+    expect(headers.Authorization).toBe('Bearer pi_abc')
+    expect(headers['X-Pi-Admin-Key']).toBeUndefined()
   })
 
-  it('refuses to call the server with no credential at all', async () => {
+  it('refuses to call the server without a device credential', async () => {
     await expect(
-      gateway.revokeDevice({ gatewayUrl: 'https://hub.example.com', deviceId: 'dev_1' })
-    ).rejects.toThrow(/管理密钥/)
+      gateway.revokeDevice({
+        gatewayUrl: 'https://hub.example.com',
+        deviceId: 'dev_1',
+        deviceToken: '',
+      })
+    ).rejects.toThrow(/设备凭据/)
     expect(mocks.fetch).not.toHaveBeenCalled()
   })
 })

@@ -12,8 +12,6 @@ import type {
   CloudCapabilities,
   CloudConfigGetResult,
   CloudConnectResult,
-  CloudHandoffApplyResult,
-  CloudHandoffPickResult,
   CloudDashboardBounds,
   CloudFrame,
   CloudMessagesResult,
@@ -22,7 +20,8 @@ import type {
   CloudRunResult,
   CloudRunStartResult,
   CloudDeviceResult,
-  CloudGatewayRegisterResult,
+  CloudGatewayPairInput,
+  CloudGatewayPairResult,
   CloudGatewayStatusResult,
   CloudHeartbeatState,
   CloudDeviceSummary,
@@ -41,8 +40,6 @@ export type {
   CloudCapabilities,
   CloudConfigGetResult,
   CloudConnectResult,
-  CloudHandoffApplyResult,
-  CloudHandoffPickResult,
   CloudDashboardBounds,
   CloudFrame,
   CloudMessagesResult,
@@ -117,9 +114,6 @@ export const UNCONFIGURED_CONNECTION: CloudConnectionInfo = {
   hasDeviceToken: false,
   deviceScopes: [],
   deviceId: '',
-  hasAdminKey: false,
-  dashboardUser: '',
-  hasDashboardPassword: false,
 }
 
 export const cloudApi = {
@@ -170,8 +164,8 @@ export const cloudApi = {
   },
 
   /**
-   * 网关状态：这台设备登记了没有、有哪些 scope、云端 Hermes 在不在。
-   * 没有 bridge（浏览器预览）时给一份「未登记」的稳定结果。
+   * 网关状态：这台设备配对了没有、有哪些 scope、云端 Hermes 在不在。
+   * 没有 bridge（浏览器预览）时给一份「未配对」的稳定结果。
    */
   async gatewayStatus(): Promise<CloudGatewayStatusResult> {
     const bridge = api()
@@ -181,7 +175,7 @@ export const cloudApi = {
         registered: false,
         gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
         device: PREVIEW_DEVICE,
-        error: '浏览器预览里没有主进程，无法登记',
+        error: '浏览器预览里没有主进程，无法配对',
       }
     }
     if (typeof bridge.cloudGatewayStatus !== 'function') {
@@ -198,48 +192,30 @@ export const cloudApi = {
     )
   },
 
-  /** 登记这台设备：管理密钥只在这一刻用，成功后本地只留设备 token */
-  async gatewayRegister(input: {
-    adminKey?: string
-    name?: string
-    gatewayUrl?: string
-    scopes?: string[]
-    rememberAdminKey?: boolean
-  }): Promise<CloudGatewayRegisterResult> {
+  /** 用一次性连接码配对这台设备；成功后本地只留设备 token */
+  async gatewayPair(input: CloudGatewayPairInput): Promise<CloudGatewayPairResult> {
     const bridge = api()
     if (!bridge) {
-      return { success: false, error: '浏览器预览里无法登记设备（需要主进程）' }
+      return { success: false, error: '浏览器预览里无法配对设备（需要主进程）' }
     }
-    if (typeof bridge.cloudGatewayRegister !== 'function') {
+    if (typeof bridge.cloudGatewayPair !== 'function') {
       return { success: false, error: BRIDGE_STALE }
     }
     return invoke(
-      () => bridge.cloudGatewayRegister(input),
+      () => bridge.cloudGatewayPair(input),
       (error) => ({ success: false, error })
     )
   },
 
-  /** 忘掉本机保存的管理密钥 */
-  async forgetAdminKey(): Promise<{ success: boolean; error?: string }> {
-    const bridge = api()
-    if (!bridge || typeof bridge.cloudGatewayForgetAdminKey !== 'function') {
-      return { success: false, error: BRIDGE_STALE }
-    }
-    return invoke(
-      () => bridge.cloudGatewayForgetAdminKey(),
-      (error) => ({ success: false, error })
-    )
-  },
-
-  /** 注销这台设备（token 立即失效，要重新登记才能用） */
-  async gatewayRevoke(adminKey?: string): Promise<{ success: boolean; error?: string }> {
+  /** 注销这台设备（token 立即失效，要重新配对才能用） */
+  async gatewayRevoke(): Promise<{ success: boolean; error?: string }> {
     const bridge = api()
     if (!bridge) return { success: false, error: '浏览器预览里无法注销设备' }
     if (typeof bridge.cloudGatewayRevoke !== 'function') {
       return { success: false, error: BRIDGE_STALE }
     }
     return invoke(
-      () => bridge.cloudGatewayRevoke({ adminKey }),
+      () => bridge.cloudGatewayRevoke(),
       (error) => ({ success: false, error })
     )
   },
@@ -250,33 +226,6 @@ export const cloudApi = {
       return { success: false, config: UNCONFIGURED_CONNECTION, error: NO_BRIDGE }
     }
     return bridge.cloudConfigGet()
-  },
-
-  /** 选交接文件并解析：只回脱敏预览，明文留在主进程 */
-  async pickHandoff(): Promise<CloudHandoffPickResult> {
-    const bridge = api()
-    if (!bridge || typeof bridge.cloudHandoffPick !== 'function') {
-      return { success: false, canceled: false, error: NO_BRIDGE }
-    }
-    return bridge.cloudHandoffPick()
-  },
-
-  /** 应用上一次 pick 的结果：只传一次性 nonce */
-  async applyHandoff(applyNonce: string): Promise<CloudHandoffApplyResult> {
-    const bridge = api()
-    if (!bridge || typeof bridge.cloudHandoffApply !== 'function') {
-      return { success: false, error: NO_BRIDGE }
-    }
-    return bridge.cloudHandoffApply({ applyNonce })
-  },
-
-  /** 把保存的控制台口令写进剪贴板（明文不回渲染层） */
-  async copyHandoffSecret(field: 'password'): Promise<{ success: boolean; error?: string }> {
-    const bridge = api()
-    if (!bridge || typeof bridge.cloudHandoffCopy !== 'function') {
-      return { success: false, error: NO_BRIDGE }
-    }
-    return bridge.cloudHandoffCopy({ field })
   },
 
   async connect(): Promise<CloudConnectResult> {

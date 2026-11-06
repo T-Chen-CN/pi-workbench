@@ -15,6 +15,7 @@ export type CloudErrorCode =
   | 'conflict'
   | 'rate_limited'
   | 'bad_request'
+  | 'bad_response'
   | 'server'
   | 'network'
   | 'timeout'
@@ -46,7 +47,7 @@ export class CloudApiError extends Error {
  * 直接摊给用户看不懂；按码翻译，未知码再回落到「状态码 + 原文」。
  */
 const CODE_MESSAGES: Record<string, string> = {
-  gateway_auth_failed: '设备凭据无效或已过期（这台设备可能已被注销），在「连接」页重新登记',
+  gateway_auth_failed: '设备凭据无效或已过期（这台设备可能已被注销），在「连接」页重新配对',
   idempotency_key_conflict: '这次请求和上一条用了同一个幂等键但内容不同，请重新发送',
   run_not_found: '这一轮已经结束了',
   run_not_active: '这一轮不在本机进程里跑，无法操作',
@@ -178,7 +179,7 @@ export function createCloudClient(input: { baseUrl: string; credential: string }
   }
   const credential = input.credential
   if (!credential) {
-    throw new CloudApiError('unauthorized', '这台设备还没有登记，请在「连接」页登记后重试')
+    throw new CloudApiError('unauthorized', '这台设备还没有配对，请在「连接」页配对后重试')
   }
 
   const authHeaders = { Authorization: `Bearer ${credential}` }

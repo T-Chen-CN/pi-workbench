@@ -135,7 +135,7 @@ describe('控制台旁路客户端', () => {
 
   it('refuses to build a client without a token', () => {
     expect(() => createMediaClient({ baseUrl: 'https://hub.example.com', credential: '' })).toThrow(
-      /这台设备还没有登记/
+      /这台设备还没有配对/
     )
   })
 })

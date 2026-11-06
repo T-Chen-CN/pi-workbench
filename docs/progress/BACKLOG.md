@@ -308,7 +308,7 @@
 | G-02 | **插件独立仓库**（A 方案）：根目录即插件、`--ref <SHA>` 钉版本、VPS 从 `tar+scp` 换成 `plugins install/adopt` + `update`、自举 Prompt 只注入仓库地址（**不钉版本**，跟版靠 `plugins update`） | P1 | 只剩 VPS 切换（停机 ≈10s） | **仓库/应用侧已完成**：`T-Chen-CN/pi-workbench-plugin`（公开 **MIT**，tag `v0.1.0` = `8669f32…`，103 用例 + `plugins validate/doctor` 全绿）；应用仓库已删插件子树、Prompt 改进占位符（只有 `PLUGIN_REPO`，**故意不钉 SHA**：钉了每次插件发版都得改应用仓库）。**剩 VPS 切换**（`plugins adopt` + 重启），步骤见 [PLUGIN_REPO_MIGRATION.md](../guides/PLUGIN_REPO_MIGRATION.md) §3 |
 | G-01 | Hermes 自举 Prompt：判断现状（A 齐备 / B 有域名无反代 / C 无域名）→ 协助配域名与反代 → **装网关插件 + 管理密钥** → 验证 → 交付 600 权限文件（不明文进对话） | P1 | 一台可自由折腾的机器 | **历史方案（Phase 3 改写）**：v2 `hermes-handoff` 将被连接码取代；现行 Prompt 见 [hermes-bootstrap-prompt.md](../requirements/hermes-bootstrap-prompt.md)；**仍待干净机器实跑** |
 | G-02 | 控制台域名白名单跟随配置：`electron/cloud/dashboard.ts` 的 `ALLOWED_HOSTS` 目前硬编码 `dash.tchen-xiaoxiao.com`，别人用自己的域名时登录跳转会被 `will-navigate` 拦掉 | P1 | — | **已完成**（de88fb4）：`hostAllowed(url, allowedUrl)` 取当前配置的 `dashboardUrl` 主机名，含测试 |
-| G-03 | 连接页「从文件导入」：消费 G-01 交付的 `hermes-handoff v1 / v1.1` 文件，自动填地址 / 密钥 / 控制台账号（密钥进 safeStorage，明文不落日志），导入后提示删除该文件 | P2 | G-01 定稿 | **过渡实现，Phase 1 删除**（feat/cloud-handoff）：解析器 / 预览弹框 / IPC / 配置字段全部移除，改为连接码配对；见 [CLOUD_AGENT_PAIRING](../requirements/CLOUD_AGENT_PAIRING.md) |
+| G-03 | 连接页「从文件导入」：消费 G-01 交付的 `hermes-handoff v1 / v1.1` 文件，自动填地址 / 密钥 / 控制台账号（密钥进 safeStorage，明文不落日志），导入后提示删除该文件 | P2 | G-01 定稿 | **已删除（Phase 1）**：解析器 / 预览弹框 / IPC / 配置字段全部移除，改为连接码配对；见 [CLOUD_AGENT_PAIRING](../requirements/CLOUD_AGENT_PAIRING.md) |
 | G-04 | 引导状态机与文案：4 态（未连接 / 已连接未登录控制台 / 已登录未对话 / 全部完成）+ 一屏 4 步文案（连接页 / 控制台登录引导 / 会话页空态复用同一份） | P2 | G-02、G-03 | 设计已定稿，未实现 |
 | G-05 | 待定：反向代理是否收窄为「只支持 Caddy」 | P3 | — | 未定 —— `nginx/apache` 追加 vhost 的路径**没有实跑验证过**，Prompt 里这一段属于未验证内容 |
 

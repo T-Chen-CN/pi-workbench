@@ -155,8 +155,8 @@ npm run web:dev
 | 检查 | 命令 / 位置 | 应该是 |
 | --- | --- | --- |
 | 云端网关活着 | `curl -s https://hub.tchen-xiaoxiao.com/v1/hub/health` | `status:ok`、`upstreamOk:true`、`adminKeyConfigured:true` |
-| 本机已登记 | 连接页「云端网关」卡 | `这台设备已登记` + `chat / dispatch` + 上游版本 `0.22.6` |
-| 不想手填管理密钥 | 连接页 →「从文件导入」 | 导入 `hermes-handoff v2`（由自举 Prompt 生成）后，管理密钥与网关地址都就位，只需点「登记这台设备」 |
+| 本机已配对 | 连接页「云端网关」卡 | `这台设备已配对` + `chat / dispatch` + 上游版本 `0.22.6` |
+| 首次 / 重新配对 | 服务器生成一次性连接码 | 把 `https://hub.…/#pair=XXXXX-XXXXX` 粘到连接页「连接码」并点「配对并连接」；管理密钥不进入桌面端（插件 Phase 2 完成后可用） |
 | 记录起点 | 连接页设备卡的 `deviceId` | 抄下来（后面每一步都要能和云端审计对上） |
 | 清空干扰 | 关闭其他正在跑的会话 | 避免事件流串台 |
 
@@ -177,10 +177,10 @@ ssh … 'tail -f ~/.hermes/profiles/pi-cloud/plugin-data/pi-workbench/audit.json
 2. 打开云端「自检」（诊断）页。
 
 **预期**
-- ✅ 网关卡显示已登记、上游在线，并且有一行 **「心跳正常 · 刚刚同步」**（30s 一拍）。
+- ✅ 网关卡显示已配对、上游在线，并且有一行 **「心跳正常 · 刚刚同步」**（30s 一拍）。
 - ✅ 在云端 `audit.jsonl` 里能看到 `POST /v1/devices/me/heartbeat` 200（约每 30s 一条）。
 - ✅ 自检里 API / dashboard / SSE 三项都绿；显示的上游版本是 `0.22.6`。
-- ❌ 若「已登记但上游没响应」→ 是 Hermes 进程问题，不是网关（跳到 §12-B）。
+- ❌ 若「已配对但上游没响应」→ 是 Hermes 进程问题，不是网关（跳到 §12-B）。
 
 ---
 
@@ -285,7 +285,7 @@ ssh … 'tail -f ~/.hermes/profiles/pi-cloud/plugin-data/pi-workbench/audit.json
 **预期**
 - ✅ 上传成功、模型能看到图；读回时图片正常显示。
 - ✅ 这一步**不需要**控制台令牌 —— 现在用设备 token 经网关转发。
-- ❌ 401 → 设备 token 已失效 / 未登记；旧 `dashboardToken` 会在连接页读取配置时自动清掉，不再是干扰源。
+- ❌ 401 → 设备 token 已失效 / 未配对；旧 `dashboardToken` 会在连接页读取配置时自动清掉，不再是干扰源。
 
 ---
 

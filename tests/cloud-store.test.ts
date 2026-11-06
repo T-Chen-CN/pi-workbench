@@ -792,3 +792,75 @@ describe('设备身份', () => {
     expect(useCloudStore.getState().deviceError).toBe('保存设备名失败')
   })
 })
+
+describe('pairGateway', () => {
+  const config = {
+    gatewayUrl: 'https://hub.example.com',
+    dashboardUrl: 'https://dash.example.com',
+    hasDeviceToken: true,
+    deviceScopes: ['chat', 'dispatch'],
+    deviceId: 'dev-local',
+  }
+
+  it('stores the returned config, connects and refreshes the gateway view', async () => {
+    const { cloudApi } = await import('../src/api/cloud')
+    const pair = vi.spyOn(cloudApi, 'gatewayPair').mockResolvedValue({
+      success: true,
+      config,
+      name: 'TChen-Legion',
+    })
+    const connect = vi.spyOn(cloudApi, 'connect').mockResolvedValue({
+      success: true,
+      state: 'connected',
+      capabilities: null,
+    })
+    vi.spyOn(cloudApi, 'listSessions').mockResolvedValue({
+      success: true,
+      sessions: [],
+      hasMore: false,
+    })
+    vi.spyOn(cloudApi, 'attachRun').mockResolvedValue({ success: true, attached: false })
+    vi.spyOn(cloudApi, 'gatewayStatus').mockResolvedValue({
+      success: true,
+      registered: true,
+      gatewayUrl: config.gatewayUrl,
+    })
+
+    useCloudStore.setState({ config: {} as never, connection: 'unconfigured' })
+    const ok = await useCloudStore.getState().pairGateway({
+      code: 'ABCDE-FGHIJ',
+      gatewayUrl: 'https://hub.example.com',
+    })
+
+    expect(ok).toBe(true)
+    expect(pair).toHaveBeenCalledWith({
+      code: 'ABCDE-FGHIJ',
+      gatewayUrl: 'https://hub.example.com',
+    })
+    expect(connect).toHaveBeenCalled()
+    expect(useCloudStore.getState().config).toEqual(config)
+    expect(useCloudStore.getState().connection).toBe('connected')
+    expect(useCloudStore.getState().gatewayNotice).toContain('TChen-Legion')
+    expect(useCloudStore.getState().pairBusy).toBe(false)
+  })
+
+  it('keeps the old config and exposes the reason when pairing fails', async () => {
+    const { cloudApi } = await import('../src/api/cloud')
+    vi.spyOn(cloudApi, 'gatewayPair').mockResolvedValue({
+      success: false,
+      error: '连接码已过期',
+      code: 'pairing_expired',
+    })
+    const connect = vi.spyOn(cloudApi, 'connect')
+    const before = { ...config, hasDeviceToken: false, deviceId: '' }
+    useCloudStore.setState({ config: before, connection: 'unconfigured' })
+
+    const ok = await useCloudStore.getState().pairGateway({ code: 'EXPIRED001' })
+
+    expect(ok).toBe(false)
+    expect(connect).not.toHaveBeenCalled()
+    expect(useCloudStore.getState().config).toEqual(before)
+    expect(useCloudStore.getState().pairError).toBe('连接码已过期')
+    expect(useCloudStore.getState().pairErrorCode).toBe('pairing_expired')
+  })
+})

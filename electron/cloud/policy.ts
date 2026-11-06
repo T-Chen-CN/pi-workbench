@@ -35,7 +35,7 @@ interface PolicyClient {
 function client(): PolicyClient {
   const transport = cloudTransport()
   if (!transport.credential) {
-    throw new CloudApiError('unauthorized', '这台设备还没有登记，先在「连接」页登记')
+    throw new CloudApiError('unauthorized', '这台设备还没有配对，先在「连接」页配对')
   }
   return { url: transport.baseUrl.replace(/\/+$/, ''), token: transport.credential }
 }

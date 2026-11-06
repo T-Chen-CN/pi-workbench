@@ -7,11 +7,9 @@ import type {
   CloudConnectResult,
   CloudConnectionState,
   CloudDeviceResult,
-  CloudGatewayRegisterResult,
+  CloudGatewayPairResult,
   CloudGatewayStatusResult,
   CloudDiagnostics,
-  CloudHandoffApplyResult,
-  CloudHandoffPickResult,
   CloudJob,
   CloudFrame,
   CloudMessagesResult,
@@ -693,9 +691,6 @@ export interface ElectronAPI {
 
   // 云端 Agent（远程 Hermes：API 走主进程 net 栈，SSE 由主进程解析后推帧）
   cloudConfigGet: () => Promise<CloudConfigGetResult>
-  cloudHandoffPick: () => Promise<CloudHandoffPickResult>
-  cloudHandoffApply: (input: { applyNonce: string }) => Promise<CloudHandoffApplyResult>
-  cloudHandoffCopy: (input: { field: 'password' }) => Promise<{ success: boolean; error?: string }>
   cloudConnect: () => Promise<CloudConnectResult>
   cloudDisconnect: () => Promise<{ success: boolean; error?: string }>
   cloudSessionsList: (input: { limit?: number; offset?: number }) => Promise<CloudSessionsResult>
@@ -782,18 +777,9 @@ export interface ElectronAPI {
   cloudDeviceSet: (input: { name: string }) => Promise<CloudDeviceResult>
   cloudDeviceReprobe: () => Promise<CloudDeviceResult>
   cloudGatewayStatus: () => Promise<CloudGatewayStatusResult>
-  cloudGatewayRegister: (input: {
-    /** 留空 = 用本机记住的那把管理密钥 */
-    adminKey?: string
-    name?: string
-    gatewayUrl?: string
-    scopes?: string[]
-    rememberAdminKey?: boolean
-  }) => Promise<CloudGatewayRegisterResult>
-  cloudGatewayRevoke: (input: { adminKey?: string }) =>
-    Promise<{ success: boolean; error?: string }>
-  /** 忘掉本机保存的管理密钥 */
-  cloudGatewayForgetAdminKey: () => Promise<{ success: boolean; error?: string }>
+  cloudGatewayPair: (input: { code: string; gatewayUrl?: string; name?: string }) =>
+    Promise<CloudGatewayPairResult>
+  cloudGatewayRevoke: () => Promise<{ success: boolean; error?: string }>
   cloudRunStop: (input: { runId: string }) => Promise<CloudRunResult>
   cloudRunStatus: (input: { runId: string }) => Promise<CloudRunResult & {
     /** 断流 / 重启后补卡片的唯一来源（已脱敏） */

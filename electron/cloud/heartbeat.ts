@@ -6,9 +6,9 @@
  * 而实际上它一直开着，只是没在发消息。
  *
  * 三条纪律：
- * - **凭据从配置里现读**：登记 / 注销 / 换 token 之后不用重启心跳。
+ * - **凭据从配置里现读**：配对 / 注销 / 换 token 之后不用重启心跳。
  * - **被注销就停**：401 `device_revoked` / `unauthorized` 时继续打只是噪音，
- *   停到用户重新登记（`poke()` 会被重新调一次）。
+ *   停到用户重新配对（`poke()` 会被重新调一次）。
  * - **失败不打断任何人**：网络抖动只记状态，下一拍再试；不抛异常、不进日志刷屏。
  */
 
@@ -25,12 +25,12 @@ export interface HeartbeatState {
   lastOkAt: number | null
   /** 最近一次失败原因；成功一次就清空 */
   lastError: string | null
-  /** 因为被注销而停下（要重新登记才会再跳） */
+  /** 因为被注销而停下（要重新配对才会再跳） */
   stoppedBecauseRevoked: boolean
 }
 
 export interface HeartbeatDeps {
-  /** 读当前凭据：没有 token 就返回 null（未登记 / 已注销） */
+  /** 读当前凭据：没有 token 就返回 null（未配对 / 已注销） */
   credential: () => { gatewayUrl: string; deviceToken: string } | null
   beat: (input: { gatewayUrl: string; deviceToken: string }) => Promise<HeartbeatResult>
   /** 状态变化时通知上层（用来推给界面，不用于做业务判断） */
@@ -65,7 +65,7 @@ export function isRevokedError(error: unknown): boolean {
 }
 
 export interface HeartbeatHandle {
-  /** 立刻跳一拍（登记成功后、窗口重新可见时调） */
+  /** 立刻跳一拍（配对成功后、窗口重新可见时调） */
   poke: () => void
   /** 停掉（应用退出） */
   stop: () => void
@@ -105,7 +105,7 @@ export function startHeartbeat(deps: HeartbeatDeps): HeartbeatHandle {
     if (stopped || inFlight) return
     const credential = deps.credential()
     if (!credential || !credential.deviceToken) {
-      // 未登记 / 已注销：不打网络，只等下一次（用户登记时会 poke，这里也不停表）
+      // 未配对 / 已注销：不打网络，只等下一次（用户配对时会 poke，这里也不停表）
       schedule()
       return
     }
@@ -127,7 +127,7 @@ export function startHeartbeat(deps: HeartbeatDeps): HeartbeatHandle {
       const message = error instanceof Error ? error.message : String(error)
       state.lastError = message
       if (isRevokedError(error)) {
-        // 凭据已经废了：停下来，等用户重新登记（否则每 30s 一条 401）
+        // 凭据已经废了：停下来，等用户重新配对（否则每 30s 一条 401）
         state.stoppedBecauseRevoked = true
         stopped = true
         if (timer) clearTimer(timer)
@@ -143,7 +143,7 @@ export function startHeartbeat(deps: HeartbeatDeps): HeartbeatHandle {
     schedule()
   }
 
-  // 启动即跳一拍：登记完成后马上就能在云端看到「在线」
+  // 启动即跳一拍：配对完成后马上就能在云端看到「在线」
   void tick()
 
   return {

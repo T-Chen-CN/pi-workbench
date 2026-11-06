@@ -15,7 +15,7 @@ export interface CloudHeartbeatState {
   lastOkAt: number | null
   /** 最近一次失败原因（成功一次就清空） */
   lastError: string | null
-  /** 因为被注销而停下：要重新登记才会再跳 */
+  /** 因为被注销而停下：要重新配对才会再跳 */
   stoppedBecauseRevoked: boolean
 }
 
@@ -23,15 +23,10 @@ export interface CloudConnectionInfo {
   /** 网关（单入口）地址：本地唯一出口（C-2，没有直连兜底） */
   gatewayUrl: string
   dashboardUrl: string
-  /** 设备 token 是否已就位（登记后为 true，渲染层只能知道有没有） */
+  /** 设备 token 是否已就位（配对后为 true，渲染层只能知道有没有） */
   hasDeviceToken: boolean
   deviceScopes: string[]
   deviceId: string
-  /** 本机是否记住了管理密钥（值永不出主进程） */
-  hasAdminKey: boolean
-  /** 控制台账号（用户名明文；口令只回 has 标记） */
-  dashboardUser: string
-  hasDashboardPassword: boolean
 }
 
 /** 本机设备身份（`cloud:device:get` 的返回）。`id` 只读，`name` 可改 */
@@ -63,83 +58,6 @@ export interface CloudCapabilities {
   runSteer?: boolean
   approvalEvents?: boolean
   runApprovalResponse?: boolean
-}
-
-/** hermes-handoff 交接文件里的 `# ---- 校验结果 ----` 段 */
-export interface CloudHandoffChecks {
-  dnsOk: boolean | null
-  /** `/v1/hub/health` 的状态码（v2；v1 文件用旧的 capabilities 探测） */
-  gatewayHttp: number | null
-  /** 网关自己报的「上游 Hermes 是否活着」 */
-  upstreamOk: boolean | null
-  /** 网关有没有配管理密钥（没配就登记不了） */
-  adminKeyConfigured: boolean | null
-  dashboardHttp: number | null
-  tlsNotAfter: string | null
-}
-
-/** 导入时提示的疑点：`code` 由渲染层翻译，`detail` 是补充（如状态码） */
-export interface CloudHandoffWarning {
-  code: string
-  detail?: string
-}
-
-/** 解析失败的原因码（渲染层按码翻译，永不携带文件内容） */
-export type CloudHandoffParseCode =
-  | 'not_handoff'
-  | 'too_large'
-  | 'binary'
-  | 'missing_base_url'
-  | 'bad_base_url'
-  | 'bad_gateway_url'
-  | 'missing_key'
-  | 'bad_key'
-  | 'missing_admin_key'
-  | 'read_failed'
-
-/** 导入前的脱敏预览：密钥只有掩码，明文留在主进程 */
-export interface CloudHandoffPreview {
-  version: 'v1' | 'v1.1' | 'v2'
-  /** 交接文件名（只取 basename，用于「导入后请删除该文件」提示） */
-  fileName: string
-  /** 网关地址（唯一的门） */
-  gatewayUrl: string
-  /** 管理密钥掩码：明文永不出主进程 */
-  adminKeyMask: string
-  adminKeyLength: number
-  /** v1/v1.1 文件里没有管理密钥：导入后还得手填一次 */
-  hasAdminKey: boolean
-  dashboardUrl: string
-  dashboardUser: string
-  hasDashboardPassword: boolean
-  authMode: 'basic' | 'form' | 'none'
-  profile: string
-  hermesVersion: string
-  serverHost: string
-  generatedAt: string
-  checks: CloudHandoffChecks
-  warnings: CloudHandoffWarning[]
-  /** 文件里出现的、我们不认识的键名（只记键名） */
-  ignored: string[]
-  /** 当前已有可用连接：应用会覆盖它（并在界面上先确认） */
-  willOverwrite: boolean
-  /** 一次性句柄：`apply` 只回传它，不传明文 */
-  applyNonce: string
-}
-
-/** 主进程内的预览形状（nonce 与覆盖判定由 IPC 层补上） */
-export type CloudHandoffSummary = Omit<CloudHandoffPreview, 'willOverwrite' | 'applyNonce'>
-
-/** 导入时要落盘的配置补丁（含明文，只在主进程内传递） */
-export interface CloudConfigPatch {
-  /** 网关地址（v2 交接文件直接给，不用从 api. 推导） */
-  gatewayUrl?: string
-  /** 管理密钥（v2 交接文件里的 ADMIN_KEY）：导入即记住 */
-  adminKey?: string
-  dashboardUrl: string
-  dashboardUser?: string
-  dashboardPassword?: string
-  handoffProfile?: string
 }
 
 export type CloudRunStatus =
@@ -452,21 +370,6 @@ export interface CloudPolicySetResult {
   error?: string
 }
 
-export interface CloudHandoffPickResult {
-  success: boolean
-  canceled: boolean
-  preview?: CloudHandoffPreview
-  /** 解析失败原因码（`success:false` 时给） */
-  code?: CloudHandoffParseCode
-  error?: string
-}
-
-export interface CloudHandoffApplyResult {
-  success: boolean
-  config?: CloudConnectionInfo
-  error?: string
-}
-
 export interface CloudConnectResult {
   success: boolean
   state: CloudConnectionState
@@ -510,7 +413,7 @@ export interface CloudDashboardBounds {
   visible: boolean
 }
 
-/** 网关（云端单入口）状态：登记与否、scope、上游是否在线 */
+/** 网关（云端单入口）状态：配对与否、scope、上游是否在线 */
 export interface CloudGatewayStatusResult {
   success: boolean
   /** 本地持有设备 token 且网关认得它 */
@@ -531,12 +434,28 @@ export interface CloudGatewayStatusResult {
   error?: string
 }
 
-/** 登记结果：token 明文只留在主进程，渲染层只拿到前缀用于对账 */
-export interface CloudGatewayRegisterResult {
-  success: boolean
-  deviceId?: string
-  tokenPrefix?: string
-  scopes?: string[]
+/** 配对失败原因：服务端错误码之外，桌面端补一个「插件没有这个接口」 */
+export type CloudPairErrorCode =
+  | 'pairing_not_found'
+  | 'pairing_expired'
+  | 'pairing_used'
+  | 'rate_limited'
+  | 'pairing_disabled'
+  | 'pairing_unsupported'
+
+/** 配对输入：完整链接已在渲染层拆好，主进程只收网关 + 连接码 */
+export interface CloudGatewayPairInput {
+  code: string
+  gatewayUrl?: string
   name?: string
+}
+
+/** 配对结果：成功时回最新配置；失败不落 token */
+export interface CloudGatewayPairResult {
+  success: boolean
+  config?: CloudConnectionInfo
+  tokenPrefix?: string
+  name?: string
+  code?: CloudPairErrorCode
   error?: string
 }

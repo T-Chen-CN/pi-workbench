@@ -15,9 +15,6 @@ const mocks = vi.hoisted(() => {
     sent: [] as Array<{ channel: string; payload: unknown }>,
     requests: [] as string[],
     bodies: [] as string[],
-    /** 下一次 dialog.showOpenDialog 返回的文件（空 = 用户取消） */
-    dialogFiles: [] as string[],
-    clipboard: [] as string[],
     /** 控制台配置里 approvals.mode 的当前值（模拟 PUT 之后读回） */
     configMode: 'manual' as string,
   }
@@ -59,17 +56,6 @@ vi.mock('electron', () => ({
   },
   safeStorage: mocks.safeStorage,
   shell: { openExternal: async () => {} },
-  dialog: {
-    showOpenDialog: async () =>
-      mocks.state.dialogFiles.length === 0
-        ? { canceled: true, filePaths: [] as string[] }
-        : { canceled: false, filePaths: mocks.state.dialogFiles },
-  },
-  clipboard: {
-    writeText: (text: string) => {
-      mocks.state.clipboard.push(text)
-    },
-  },
   WebContentsView: class {
     webContents = {
       setWindowOpenHandler: () => {},
@@ -93,7 +79,7 @@ vi.mock('electron', () => ({
       const parsed = new URL(url)
       const route = parsed.pathname
 
-      // 网关（单入口）三个接口：设备自己、健康检查、登记与撤销
+      // 网关（单入口）三个接口：设备自己、健康检查、配对与撤销
       if (route === '/v1/hub/health') {
         return Response.json({
           status: 'ok',
@@ -119,21 +105,30 @@ vi.mock('electron', () => ({
           hub: '0.1.0',
         })
       }
-      if (route === '/v1/devices/register' && init?.method === 'POST') {
+      if (route === '/v1/devices/pair' && init?.method === 'POST') {
         const headers = init?.headers ?? {}
-        if (headers['X-Pi-Admin-Key'] !== 'admin-ok') {
-          return Response.json(
-            { error: { code: 'admin_required', message: 'bad key' } },
-            { status: 403 }
-          )
+        const body = JSON.parse(String(init.body)) as { code: string; deviceId: string; name: string }
+        // 配对请求绝不能携带管理凭据；带上就说明客户端走错了路
+        if (headers['X-Pi-Admin-Key'] || headers.Authorization) {
+          return Response.json({ error: { code: 'invalid_params' } }, { status: 400 })
+        }
+        if (body.code === 'PAIREXPIRED') {
+          return Response.json({ error: { code: 'pairing_expired' } }, { status: 410 })
+        }
+        if (body.code === 'OLDPLUGIN') {
+          return new Response('', { status: 404 })
+        }
+        if (body.code !== 'ABCDEFGHIJ') {
+          return Response.json({ error: { code: 'pairing_not_found' } }, { status: 404 })
         }
         return Response.json(
           {
-            deviceId: JSON.parse(String(init.body)).deviceId,
-            name: JSON.parse(String(init.body)).name,
+            deviceId: body.deviceId,
+            name: body.name,
             scopes: ['chat', 'dispatch'],
-            token: 'pi_hub_token_once',
-            tokenPrefix: 'pi_hub_token',
+            token: 'pi_hub_token_paired',
+            tokenPrefix: 'pi_hub_paired',
+            dashboardUrl: 'https://dash.example.com',
           },
           { status: 201 }
         )
@@ -447,15 +442,15 @@ let module: CloudAgentModule
 let dispose: () => void
 
 /**
- * 把本地置成「已登记」状态：单入口之后没有 API 密钥这条路，
- * 所有需要凭据的用例都从这里起步（等价于连接页登记成功之后）。
+ * 把本地置成「已配对」状态：单入口之后没有 API 密钥这条路，
+ * 所有需要凭据的用例都从这里起步（等价于连接页配对成功之后）。
  */
-async function registerLocalDevice(): Promise<void> {
+async function seedPairedDevice(): Promise<void> {
   const config = await import('../electron/cloud/config')
   config.writeCloudConfig({
     gatewayUrl: 'https://hub.example.com',
-    deviceToken: 'pi_hub_token_once',
-    deviceScopes: ['chat', 'dispatch', 'admin'],
+    deviceToken: 'pi_hub_token_paired',
+    deviceScopes: ['chat', 'dispatch'],
     deviceId: 'dev-local',
   })
 }
@@ -491,12 +486,12 @@ describe('cloud IPC', () => {
   it('rejects cloud calls before a key is saved', async () => {
     const result = await call<{ success: boolean; error?: string }>('cloud:sessions:list', {})
     expect(result.success).toBe(false)
-    // 单缝之后「没配置」= 这台设备还没登记
-    expect(result.error).toMatch(/登记/)
+    // 单缝之后「没配置」= 这台设备还没配对
+    expect(result.error).toMatch(/配对/)
   })
 
   it('connects and lists sessions after registration', async () => {
-    await registerLocalDevice()
+    await seedPairedDevice()
 
     const connected = await call<{ success: boolean; capabilities?: { model?: string } }>(
       'cloud:connect'
@@ -643,7 +638,7 @@ describe('cloud device identity', () => {
 
 describe('cloud session actions', () => {
   it('renames and pins through PATCH, and deletes hard', async () => {
-    await registerLocalDevice()
+    await seedPairedDevice()
     const renamed = await call<{ success: boolean; session?: { title: string } }>(
       'cloud:sessions:update',
       { sessionId: 'run_session', title: 'Renamed probe' }
@@ -689,7 +684,7 @@ describe('cloud steer', () => {
 
 describe('cloud images', () => {
   it('uploads with the device token, no console token needed', async () => {
-    await registerLocalDevice()
+    await seedPairedDevice()
     const uploaded = await call<{ success: boolean; image?: { path: string } }>(
       'cloud:media:upload',
       { dataUrl: 'data:image/png;base64,AAAA', filename: 'pasted.png' }
@@ -700,7 +695,7 @@ describe('cloud images', () => {
   })
 
   it('refuses to upload before the device is registered', async () => {
-    // 没登记 = 没有凭据，连上传都不该发出去
+    // 没配对 = 没有凭据，连上传都不该发出去
     const config = await import('../electron/cloud/config')
     config.clearDeviceCredentials()
     const before = mocks.state.requests.length
@@ -708,12 +703,12 @@ describe('cloud images', () => {
       dataUrl: 'data:image/png;base64,AAAA',
     })
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/登记/)
+    expect(result.error).toMatch(/配对/)
     expect(mocks.state.requests.length).toBe(before)
   })
 
   it('rejects a non-whitelisted type locally', async () => {
-    await registerLocalDevice()
+    await seedPairedDevice()
     const result = await call<{ success: boolean; error?: string }>('cloud:media:upload', {
       dataUrl: 'data:image/svg+xml;base64,AAAA',
     })
@@ -722,7 +717,7 @@ describe('cloud images', () => {
   })
 
   it('uploads and reads back through the console', async () => {
-    await registerLocalDevice()
+    await seedPairedDevice()
     const uploaded = await call<{ success: boolean; image?: { path: string } }>(
       'cloud:media:upload',
       { dataUrl: 'data:image/png;base64,AAAA', filename: 'pasted.png' }
@@ -742,7 +737,7 @@ describe('cloud images', () => {
 
 describe('cloud resolve-unknown', () => {
   beforeAll(async () => {
-    await registerLocalDevice()
+    await seedPairedDevice()
   })
 
   it('refuses to close a run that is merely running', async () => {
@@ -778,7 +773,7 @@ describe('cloud resolve-unknown', () => {
 
 describe('cloud ledger', () => {
   beforeAll(async () => {
-    await registerLocalDevice()
+    await seedPairedDevice()
   })
 
   it('books an external write from a live run and settles it on completion', async () => {
@@ -839,7 +834,7 @@ describe('cloud jobs', () => {
   })
 
   beforeAll(async () => {
-    await registerLocalDevice()
+    await seedPairedDevice()
   })
 
   it('maps the server record into camelCase and keeps the display schedule', async () => {
@@ -876,7 +871,7 @@ describe('cloud jobs', () => {
 
 describe('cloud diagnostics', () => {
   beforeAll(async () => {
-    await registerLocalDevice()
+    await seedPairedDevice()
   })
 
   it('keeps the healthy sections when one of them fails', async () => {
@@ -908,7 +903,7 @@ describe('cloud diagnostics', () => {
 
 describe('cloud clarify', () => {
   beforeAll(async () => {
-    await registerLocalDevice()
+    await seedPairedDevice()
   })
 
   it('sends exactly the three fields the backend accepts', async () => {
@@ -965,7 +960,7 @@ describe('cloud approval', () => {
   }
 
   beforeAll(async () => {
-    await registerLocalDevice()
+    await seedPairedDevice()
     await call('cloud:run:start', { input: 'run a command', idempotencyKey: 'key-approval' })
   })
 
@@ -1113,177 +1108,10 @@ describe('cloud approval', () => {
   })
 })
 
-describe('cloud handoff import', () => {
-  const API_KEY = 'abcdefghijklmnopqrstuvwxyz0123456789ABCD'
-  const PASSWORD = 'p@ss=word'
-
-  function writeHandoff(body?: string): string {
-    const file = path.join(mocks.state.appDir, `handoff-${Date.now()}.txt`)
-    fs.writeFileSync(
-      file,
-      body ??
-        [
-          '# hermes-handoff v2',
-          'PROFILE=pi-cloud',
-          'GATEWAY_URL=https://hub.example.com',
-          `ADMIN_KEY=${API_KEY}`,
-          'DASHBOARD_URL=https://dash.example.com',
-          'DASHBOARD_USER=admin',
-          `DASHBOARD_PASSWORD=${PASSWORD}`,
-          'AUTH_MODE=basic',
-          'HERMES_VERSION=0.22.6',
-          '# ---- 校验结果 ----',
-          'DNS_OK=true',
-          'GATEWAY_HTTP=200',
-          'UPSTREAM_OK=true',
-          'ADMIN_KEY_CONFIGURED=true',
-          'DASHBOARD_HTTP=200',
-          '',
-        ].join('\n'),
-      'utf-8'
-    )
-    return file
-  }
-
-  function connectionFile(): string {
-    return path.join(mocks.state.appDir, 'data', 'cloud-agent', 'connection.json')
-  }
-
-  it('parses the file and returns a masked preview only', async () => {
-    mocks.state.dialogFiles = [writeHandoff()]
-    const result = await call<{
-      success: boolean
-      canceled: boolean
-      preview?: {
-        fileName: string
-        gatewayUrl: string
-        adminKeyMask: string
-        hasAdminKey: boolean
-        dashboardUrl: string
-        dashboardUser: string
-        hasDashboardPassword: boolean
-        version: string
-        willOverwrite: boolean
-        applyNonce: string
-      }
-    }>('cloud:handoff:pick')
-
-    expect(result.success).toBe(true)
-    expect(result.canceled).toBe(false)
-    const preview = result.preview!
-    expect(preview.gatewayUrl).toBe('https://hub.example.com')
-    expect(preview.dashboardUrl).toBe('https://dash.example.com')
-    expect(preview.dashboardUser).toBe('admin')
-    expect(preview.hasDashboardPassword).toBe(true)
-    expect(preview.hasAdminKey).toBe(true)
-    expect(preview.version).toBe('v2')
-    expect(preview.adminKeyMask).toBe('abc****ABCD')
-    expect(preview.fileName.endsWith('.txt')).toBe(true)
-    // 已有连接：要先确认覆盖
-    expect(preview.willOverwrite).toBe(true)
-    expect(preview.applyNonce).toBeTruthy()
-    // 明文一个都不许出现在返回值里
-    const serialized = JSON.stringify(result)
-    expect(serialized).not.toContain(API_KEY)
-    expect(serialized).not.toContain(PASSWORD)
-    expect(serialized).not.toContain('dash-session-token')
-  })
-
-  it('treats a canceled dialog as a no-op', async () => {
-    mocks.state.dialogFiles = []
-    const result = await call<{ success: boolean; canceled: boolean; preview?: unknown }>(
-      'cloud:handoff:pick'
-    )
-    expect(result).toMatchObject({ success: true, canceled: true })
-    expect(result.preview).toBeUndefined()
-  })
-
-  it('reports a readable code for a file that is not a handoff', async () => {
-    mocks.state.dialogFiles = [writeHandoff('hello, not a handoff file\n')]
-    const result = await call<{ success: boolean; canceled: boolean; code?: string }>(
-      'cloud:handoff:pick'
-    )
-    expect(result.success).toBe(false)
-    expect(result.code).toBe('not_handoff')
-  })
-
-  it('refuses an unknown nonce and reuses no stale preview', async () => {
-    const result = await call<{ success: boolean; error?: string }>('cloud:handoff:apply', {
-      applyNonce: 'not-a-real-nonce',
-    })
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('过期')
-  })
-
-  it('applies the preview, encrypts both secrets and spends the nonce', async () => {
-    mocks.state.dialogFiles = [writeHandoff()]
-    const picked = await call<{ preview: { applyNonce: string } }>('cloud:handoff:pick')
-
-    const applied = await call<{
-      success: boolean
-      config?: {
-        gatewayUrl: string
-        dashboardUser: string
-        hasDashboardPassword: boolean
-        hasAdminKey: boolean
-      }
-    }>('cloud:handoff:apply', { applyNonce: picked.preview.applyNonce })
-
-    expect(applied.success).toBe(true)
-    expect(applied.config).toMatchObject({
-      // v2 文件带来网关地址与管理密钥：导入之后只差点一次「登记」
-      gatewayUrl: 'https://hub.example.com',
-      hasAdminKey: true,
-      dashboardUser: 'admin',
-      hasDashboardPassword: true,
-    })
-    expect(JSON.stringify(applied)).not.toContain(API_KEY)
-    expect(JSON.stringify(applied)).not.toContain(PASSWORD)
-
-    const raw = fs.readFileSync(connectionFile(), 'utf-8')
-    expect(raw).not.toContain(API_KEY)
-    expect(raw).not.toContain(PASSWORD)
-    expect(raw).toContain('enc:')
-    expect(raw).toContain('pi-cloud')
-
-    // 一次性：同一 nonce 不能再用
-    const again = await call<{ success: boolean }>('cloud:handoff:apply', {
-      applyNonce: picked.preview.applyNonce,
-    })
-    expect(again.success).toBe(false)
-  })
-
-  it('copies the console password without returning it', async () => {
-    mocks.state.clipboard.length = 0
-    const result = await call<{ success: boolean; [key: string]: unknown }>('cloud:handoff:copy', {
-      field: 'password',
-    })
-    expect(result).toEqual({ success: true })
-    expect(mocks.state.clipboard).toEqual([PASSWORD])
-  })
-
-  it('refuses to copy anything but the password', async () => {
-    const result = await call<{ success: boolean; error?: string }>('cloud:handoff:copy', {
-      field: 'apiKey',
-    })
-    expect(result.success).toBe(false)
-  })
-
-  it('drops the password on disconnect and then refuses to copy it', async () => {
-    await call('cloud:disconnect')
-    mocks.state.clipboard.length = 0
-    const result = await call<{ success: boolean; error?: string }>('cloud:handoff:copy', {
-      field: 'password',
-    })
-    expect(result.success).toBe(false)
-    expect(mocks.state.clipboard).toEqual([])
-  })
-})
-
 describe('cloud run attach（重启后接回在跑的一轮）', () => {
   beforeAll(async () => {
-    // 上面的 handoff 用例结尾断开了连接（令牌被清掉），这里恢复一个可用配置
-    await registerLocalDevice()
+    // 前面的用例可能清掉凭据；这里恢复一个可用配置
+    await seedPairedDevice()
     await call('cloud:connect')
   })
 
@@ -1358,18 +1186,18 @@ describe('cloud run attach（重启后接回在跑的一轮）', () => {
   it('keeps the record when the address stays the same, drops it when it changes', async () => {
     writeActiveRun({ runId: 'run_hang', sessionId: 'hang_session', startedAt: 1 })
     // 原地保存同一个地址不该把能接回的记录清掉
-    await registerLocalDevice()
+    await seedPairedDevice()
     expect(readActiveRun()?.runId).toBe('run_hang')
 
     // 换了服务器（网关地址变了）= 上一台的轮次接不回来
-    await call('cloud:gateway:register', {
-      adminKey: 'admin-ok',
+    await call('cloud:gateway:pair', {
+      code: 'ABCDE-FGHIJ',
       gatewayUrl: 'https://other.example.com',
     })
     expect(readActiveRun()).toBeNull()
 
     // 复原配置，别影响同文件里排在前面的用例假设
-    await registerLocalDevice()
+    await seedPairedDevice()
   })
 })
 
@@ -1386,7 +1214,7 @@ describe('cloud gateway (single entry)', () => {
     error?: string
   }
 
-  it('starts unregistered and reports the gateway url without touching the network', async () => {
+  it('starts unpaired and reports the gateway url without touching the network', async () => {
     const config = await import('../electron/cloud/config')
     config.clearDeviceCredentials()
     const before = mocks.state.requests.length
@@ -1397,38 +1225,16 @@ describe('cloud gateway (single entry)', () => {
     expect(mocks.state.requests.length).toBe(before)
   })
 
-  it('registers with the local device id and keeps the token in the main process', async () => {
-    const device = await call<{ device?: { id: string } }>('cloud:device:get')
-    const registered = await call<{
-      success: boolean
-      deviceId?: string
-      tokenPrefix?: string
-      scopes?: string[]
-      error?: string
-    }>('cloud:gateway:register', { adminKey: 'admin-ok' })
-
-    expect(registered.success).toBe(true)
-    // 网关侧身份 = 本地 device.json 的 id，不另起一个
-    expect(registered.deviceId).toBe(device.device?.id)
-    expect(registered.tokenPrefix).toBe('pi_hub_token')
-
-    const config = JSON.parse(
-      fs.readFileSync(path.join(mocks.state.appDir, 'data', 'cloud-agent', 'connection.json'), 'utf-8')
-    ) as { deviceToken?: string; gatewayUrl?: string }
-    // 落盘的是加密后的 token，明文不出主进程
-    expect(config.deviceToken).toMatch(/^enc:/)
-    expect(config.deviceToken).not.toContain('pi_hub_token_once')
-    expect(config.gatewayUrl).toBeTruthy()
-  })
-
-  it('switches every business call to the gateway once registered', async () => {
+  it('switches every business call to the gateway once paired', async () => {
+    await seedPairedDevice()
     await call('cloud:connect')
     const last = mocks.state.requests[mocks.state.requests.length - 1]
-    // 单缝：登记之后不再打 api. 直连，一律走 hub
+    // 单缝：配对之后不再打 api. 直连，一律走 hub
     expect(last).toMatch(/^(GET|POST) https:\/\/hub\./)
   })
 
   it('reports the device identity and upstream health from the gateway', async () => {
+    await seedPairedDevice()
     const status = await call<StatusResult>('cloud:gateway:status')
     expect(status.registered).toBe(true)
     expect(status.deviceId).toBe('dev_from_gateway')
@@ -1437,60 +1243,9 @@ describe('cloud gateway (single entry)', () => {
     expect(status.upstreamVersion).toBe('0.22.6')
   })
 
-  it('refuses a wrong admin key and stays unregistered afterwards', async () => {
-    const denied = await call<{ success: boolean; error?: string }>('cloud:gateway:register', {
-      adminKey: 'wrong',
-    })
-    expect(denied.success).toBe(false)
-    // 管理密钥不对要能看懂，不是把 admin_required 丢出来
-    expect(denied.error).toMatch(/管理密钥/)
-  })
-
-  it('reuses the remembered admin key when the field is left empty', async () => {
-    const config = await import('../electron/cloud/config')
-    config.clearDeviceCredentials()
-    // 先记住一次
-    const first = await call<{ success: boolean }>('cloud:gateway:register', {
-      adminKey: 'admin-ok',
-      rememberAdminKey: true,
-    })
-    expect(first.success).toBe(true)
-    expect(config.readCloudConfig().hasAdminKey).toBe(true)
-
-    // 注销后只点「登记」、不再粘密钥
-    config.clearDeviceCredentials()
-    const second = await call<{ success: boolean; error?: string }>('cloud:gateway:register', {})
-    expect(second.success).toBe(true)
-
-    // 落盘的还是加密的
-    const raw = fs.readFileSync(
-      path.join(mocks.state.appDir, 'data', 'cloud-agent', 'connection.json'),
-      'utf-8'
-    )
-    expect(raw).not.toContain('admin-ok')
-  })
-
-  it('forgets the admin key on request', async () => {
-    const config = await import('../electron/cloud/config')
-    config.writeCloudConfig({
-      // 自建部署：两扇地址都是手填的
-      gatewayUrl: 'https://hub.self-hosted.test',
-      dashboardUrl: 'https://console.self-hosted.test',
-      adminKey: 'admin-ok',
-    })
-    expect(config.readCloudConfig().hasAdminKey).toBe(true)
-
-    const forgotten = await call<{ success: boolean }>('cloud:gateway:forget-admin-key')
-    expect(forgotten.success).toBe(true)
-    const after = config.readCloudConfig()
-    expect(after.hasAdminKey).toBe(false)
-    // 只清管理密钥，不能把自建地址重新推导成默认值
-    expect(after.gatewayUrl).toBe('https://hub.self-hosted.test')
-    expect(after.dashboardUrl).toBe('https://console.self-hosted.test')
-  })
-
   it('revokes the device and drops the local token immediately', async () => {
-    const revoked = await call<{ success: boolean; error?: string }>('cloud:gateway:revoke', {})
+    await seedPairedDevice()
+    const revoked = await call<{ success: boolean; error?: string }>('cloud:gateway:revoke')
     expect(revoked).toMatchObject({ success: true })
 
     const after = await call<StatusResult>('cloud:gateway:status')
@@ -1502,8 +1257,78 @@ describe('cloud gateway (single entry)', () => {
       limit: 1,
     })
     expect(listed.success).toBe(false)
-    expect(listed.error).toMatch(/登记|注销/)
+    expect(listed.error).toMatch(/配对|注销/)
     const after2 = mocks.state.requests.slice(before)
     expect(after2).toHaveLength(0)
+  })
+})
+
+describe('cloud gateway pairing', () => {
+  it('pairs with a code, writes config and uses the response dashboard url', async () => {
+    const config = await import('../electron/cloud/config')
+    config.writeCloudConfig({ gatewayUrl: 'https://hub.example.com' })
+    const device = await call<{ device?: { id: string } }>('cloud:device:get')
+
+    const paired = await call<{
+      success: boolean
+      config?: { hasDeviceToken: boolean; deviceId: string; dashboardUrl: string }
+      error?: string
+    }>('cloud:gateway:pair', {
+      code: 'abcde-fghij',
+      gatewayUrl: 'https://hub.example.com',
+    })
+
+    expect(paired.success).toBe(true)
+    expect(paired.config).toMatchObject({
+      hasDeviceToken: true,
+      deviceId: device.device?.id,
+      dashboardUrl: 'https://dash.example.com',
+    })
+    const raw = JSON.parse(
+      fs.readFileSync(path.join(mocks.state.appDir, 'data', 'cloud-agent', 'connection.json'), 'utf-8')
+    ) as { deviceToken?: string; deviceScopes?: string[] }
+    expect(raw.deviceToken).toMatch(/^enc:/)
+    expect(raw.deviceToken).not.toContain('pi_hub_token_paired')
+    expect(raw.deviceScopes).toEqual(['chat', 'dispatch'])
+  })
+
+  it('does not overwrite an existing token when pairing fails', async () => {
+    await seedPairedDevice()
+    const config = await import('../electron/cloud/config')
+    const before = config.readCloudConfig().deviceToken
+
+    const failed = await call<{ success: boolean; code?: string; error?: string }>(
+      'cloud:gateway:pair',
+      { code: 'PAIREXPIRED', gatewayUrl: 'https://hub.example.com' }
+    )
+    expect(failed.success).toBe(false)
+    expect(failed.code).toBe('pairing_expired')
+    expect(config.readCloudConfig().deviceToken).toBe(before)
+  })
+
+  it('reports an old plugin separately from a bad code', async () => {
+    const failed = await call<{ success: boolean; code?: string }>('cloud:gateway:pair', {
+      code: 'OLDPLUGIN',
+      gatewayUrl: 'https://hub.example.com',
+    })
+    expect(failed.success).toBe(false)
+    expect(failed.code).toBe('pairing_unsupported')
+  })
+
+  it('drops the previous active run when the gateway changes', async () => {
+    const config = await import('../electron/cloud/config')
+    config.writeCloudConfig({
+      gatewayUrl: 'https://old.example.com',
+      deviceToken: 'old-token',
+      deviceId: 'old-device',
+    })
+    writeActiveRun({ runId: 'run_old', sessionId: 'old_session', startedAt: 1 })
+
+    const paired = await call<{ success: boolean }>('cloud:gateway:pair', {
+      code: 'ABCDE-FGHIJ',
+      gatewayUrl: 'https://new.example.com',
+    })
+    expect(paired.success).toBe(true)
+    expect(readActiveRun()).toBeNull()
   })
 })

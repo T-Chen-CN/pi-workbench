@@ -19,9 +19,9 @@ import type {
   CloudDashboardState,
   CloudDeviceSummary,
   CloudGatewayStatusResult,
+  CloudPairErrorCode,
   CloudHeartbeatState,
   CloudFrame,
-  CloudHandoffPreview,
   CloudRunStatus,
   CloudDiagnostics,
   CloudJob,
@@ -124,13 +124,17 @@ interface CloudState {
   device: CloudDeviceSummary | null
   deviceBusy: boolean
   deviceError: string | null
-  /** 云端网关（单入口）状态：登记与否 / scope / 上游在线 */
+  /** 云端网关（单入口）状态：配对与否 / scope / 上游在线 */
   gateway: CloudGatewayStatusResult | null
   /** 心跳状态（主进程每 30s 一拍）：用于在设备卡上显示「还连着」 */
   heartbeat: CloudHeartbeatState | null
   gatewayBusy: boolean
   gatewayError: string | null
-  /** 登记/注销成功后的提示（一次性，界面自己清） */
+  /** 正在配对（连接码 → 设备 token） */
+  pairBusy: boolean
+  pairError: string | null
+  pairErrorCode: CloudPairErrorCode | null
+  /** 配对/注销成功后的提示（一次性，界面自己清） */
   gatewayNotice: string | null
   /** 自检结果（连接页折叠区块，按需拉） */
   diagnostics: CloudDiagnostics | null
@@ -145,16 +149,7 @@ interface CloudState {
 
   draft: string
   dashboard: CloudDashboardState
-  /** 导入预览（脱敏）：非空时连接页弹预览框 */
-  handoffPreview: CloudHandoffPreview | null
-  handoffBusy: 'pick' | 'apply' | null
-  handoffError: string | null
-
   hydrate: () => Promise<void>
-  pickHandoff: () => Promise<boolean>
-  applyHandoff: () => Promise<boolean>
-  copyHandoffSecret: () => Promise<boolean>
-  clearHandoffPreview: () => void
   connect: () => Promise<void>
   disconnect: () => Promise<void>
   refreshSessions: () => Promise<void>
@@ -213,15 +208,10 @@ interface CloudState {
   /** 重新读取系统设备名。返回是否成功 */
   reprobeDeviceName: () => Promise<boolean>
 
-  /** 用管理密钥登记这台设备（成功后本地只留设备 token） */
-  registerGateway: (
-    adminKey: string,
-    options?: { remember?: boolean; gatewayUrl?: string }
-  ) => Promise<boolean>
-  /** 忘掉本机保存的管理密钥 */
-  forgetAdminKey: () => Promise<boolean>
+  /** 用一次性连接码配对这台设备（成功后本地只留设备 token） */
+  pairGateway: (input: { code: string; gatewayUrl?: string; name?: string }) => Promise<boolean>
   /** 注销这台设备（token 立即失效） */
-  revokeGateway: (adminKey?: string) => Promise<boolean>
+  revokeGateway: () => Promise<boolean>
   /** 清掉一次性提示 */
   clearGatewayNotice: () => void
 }
@@ -277,6 +267,9 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   heartbeat: null,
   gatewayBusy: false,
   gatewayError: null,
+  pairBusy: false,
+  pairError: null,
+  pairErrorCode: null,
   gatewayNotice: null,
   diagnostics: null,
   diagnosticsLoading: false,
@@ -287,9 +280,6 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
 
   draft: '',
   dashboard: EMPTY_DASHBOARD,
-  handoffPreview: null,
-  handoffBusy: null,
-  handoffError: null,
 
   async hydrate() {
     const bridgeAvailable = hasCloudBridge()
@@ -311,63 +301,18 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
         void get().loadLedger()
         return
       }
-      // 有登记记录（deviceId）却没有 token = 这台设备被注销了（或 token 丢了）。
-      // 这不是「未配置」：云端对这台设备已经关门，必须重新登记才能用。
+      // 有配对记录（deviceId）却没有 token = 这台设备被注销了（或 token 丢了）。
+      // 这不是「未配置」：云端对这台设备已经关门，必须重新配对才能用。
       if (config.deviceId) {
         set({
           connection: 'error',
-          error: '这台设备已注销或凭据丢失，请在「连接」页重新登记',
+          error: '这台设备已注销或凭据丢失，请在「连接」页重新配对',
           hydrated: true,
         })
         return
       }
     }
     set({ connection: 'unconfigured', hydrated: true })
-  },
-
-  /**
-   * 选文件 → 主进程解析 → 只把脱敏预览带回来。
-   *
-   * 取消选择不算失败（返回 false 但不写 error）。
-   */
-  async pickHandoff() {
-    set({ handoffBusy: 'pick', handoffError: null })
-    const result = await cloudApi.pickHandoff()
-    if (!result.success) {
-      set({ handoffBusy: null, handoffError: result.code ?? result.error ?? 'unknown' })
-      return false
-    }
-    if (result.canceled || !result.preview) {
-      set({ handoffBusy: null })
-      return false
-    }
-    set({ handoffBusy: null, handoffPreview: result.preview })
-    return true
-  },
-
-  /** 应用预览：只传 nonce，写盘与「作废旧连接」都在主进程完成 */
-  async applyHandoff() {
-    const preview = get().handoffPreview
-    if (!preview) return false
-    set({ handoffBusy: 'apply', handoffError: null })
-    const result = await cloudApi.applyHandoff(preview.applyNonce)
-    if (!result.success) {
-      set({ handoffBusy: null, handoffError: result.error ?? 'unknown' })
-      return false
-    }
-    if (result.config) set({ config: result.config })
-    set({ handoffBusy: null, handoffPreview: null })
-    await get().connect()
-    return true
-  },
-
-  async copyHandoffSecret() {
-    const result = await cloudApi.copyHandoffSecret('password')
-    return result.success
-  },
-
-  clearHandoffPreview() {
-    set({ handoffPreview: null, handoffError: null, handoffBusy: null })
   },
 
   async connect() {
@@ -1110,7 +1055,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
         set({
           heartbeat: { lastOkAt: null, lastError: payload.reason, stoppedBecauseRevoked: true },
           connection: 'error',
-          error: '云端把这台设备的凭据注销了，请重新登记',
+          error: '云端把这台设备的凭据注销了，请重新配对',
           capabilities: null,
           sessions: [],
           activeSessionId: null,
@@ -1148,35 +1093,38 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     })
   },
 
-  async registerGateway(adminKey, options) {
-    set({ gatewayBusy: true, gatewayError: null, gatewayNotice: null })
-    const result = await cloudApi.gatewayRegister({
-      adminKey: adminKey.trim() || undefined,
-      // 自建部署可以在这里改网关地址；留空就用默认的 hub.
-      gatewayUrl: options?.gatewayUrl?.trim() || undefined,
-      // 勾了才存；不勾且输入框为空（用的就是已存密钥）= 保持原样
-      rememberAdminKey: options?.remember ? true : adminKey.trim() ? false : undefined,
-    })
-    set({ gatewayBusy: false })
+  async pairGateway(input) {
+    set({ pairBusy: true, pairError: null, pairErrorCode: null, gatewayNotice: null })
+    const result = await cloudApi.gatewayPair(input)
     if (!result.success) {
-      set({ gatewayError: result.error ?? 'unknown' })
+      set({
+        pairBusy: false,
+        pairError: result.error ?? 'unknown',
+        pairErrorCode: result.code ?? null
+      })
       return false
     }
+    // 主进程已经落盘；正常会带回最新 config。没有就再拉一次，避免界面停在旧 token 状态。
+    let config = result.config
+    if (!config) {
+      const refreshed = await cloudApi.getConfig()
+      if (refreshed.success) config = refreshed.config
+    }
     set({
-      gatewayNotice: `已登记：${result.tokenPrefix ?? ''}（${(result.scopes ?? []).join(' / ')}）`
+      pairBusy: false,
+      pairError: null,
+      pairErrorCode: null,
+      ...(config ? { config } : {}),
+      gatewayNotice: `已配对：${result.name ?? ''}`
     })
-    // 登记只在主进程写盘：这里必须刷新渲染层看到的 config，再真正连上。
-    // 否则 hasDeviceToken 还是旧的 false，「重新连接」按钮被禁用、会话区停在不可用。
-    const config = await cloudApi.getConfig()
-    if (config.success) set({ config: config.config })
     await get().connect()
     await get().loadGateway()
     return true
   },
 
-  async revokeGateway(adminKey) {
+  async revokeGateway() {
     set({ gatewayBusy: true, gatewayError: null, gatewayNotice: null })
-    const result = await cloudApi.gatewayRevoke(adminKey)
+    const result = await cloudApi.gatewayRevoke()
     set({ gatewayBusy: false })
     if (!result.success) {
       set({ gatewayError: result.error ?? 'unknown' })
@@ -1186,7 +1134,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     set({
       gatewayNotice: '这台设备已注销',
       connection: 'error',
-      error: '这台设备已注销，需重新登记才能继续使用云端',
+      error: '这台设备已注销，需重新配对才能继续使用云端',
       capabilities: null,
       sessions: [],
       activeSessionId: null,
@@ -1196,19 +1144,6 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       runState: null
     })
     // 主进程已经清掉设备凭据：同步刷新 config，否则按钮仍按 hasDeviceToken=true 显示
-    const config = await cloudApi.getConfig()
-    if (config.success) set({ config: config.config })
-    await get().loadGateway()
-    return true
-  },
-
-  async forgetAdminKey() {
-    const result = await cloudApi.forgetAdminKey()
-    if (!result.success) {
-      set({ gatewayError: result.error ?? 'unknown' })
-      return false
-    }
-    set({ gatewayNotice: '已忘记本机保存的管理密钥' })
     const config = await cloudApi.getConfig()
     if (config.success) set({ config: config.config })
     await get().loadGateway()

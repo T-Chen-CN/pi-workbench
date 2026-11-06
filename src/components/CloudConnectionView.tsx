@@ -1,11 +1,12 @@
-/** 云端连接页：API 地址 / 密钥 / 连通性 / 能力回显（独立成页，不塞进控制台） */
+/** 云端连接页：配对（连接码）/ 网关状态 / 连通性 / 能力回显（独立成页，不塞进控制台） */
 
 import React, { useEffect, useState } from 'react'
-import { Copy, FileUp, Link2Off, RefreshCw } from 'lucide-react'
+import { Copy, Link2, Link2Off, RefreshCw } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useCloudStore } from '../store/cloudStore'
 import { toast } from '../store/toastStore'
 import { copyText } from '../utils/clipboard'
+import { parsePairingInput } from '../utils/cloudPairing'
 import { HERMES_BOOTSTRAP_PROMPT } from '../utils/hermesPrompt'
 import { Button, Caption, DataText, Field, Input, Label } from './ui'
 import { Card, CardHeader, StatusText } from './patterns'
@@ -27,8 +28,6 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const error = useCloudStore((state) => state.error)
   const capabilities = useCloudStore((state) => state.capabilities)
   const bridgeAvailable = useCloudStore((state) => state.bridgeAvailable)
-  const pickHandoff = useCloudStore((state) => state.pickHandoff)
-  const handoffBusy = useCloudStore((state) => state.handoffBusy)
   const connect = useCloudStore((state) => state.connect)
   const disconnect = useCloudStore((state) => state.disconnect)
   const device = useCloudStore((state) => state.device)
@@ -41,17 +40,19 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const gatewayBusy = useCloudStore((state) => state.gatewayBusy)
   const gatewayError = useCloudStore((state) => state.gatewayError)
   const gatewayNotice = useCloudStore((state) => state.gatewayNotice)
+  const pairBusy = useCloudStore((state) => state.pairBusy)
+  const pairError = useCloudStore((state) => state.pairError)
+  const pairErrorCode = useCloudStore((state) => state.pairErrorCode)
   const loadGateway = useCloudStore((state) => state.loadGateway)
-  const registerGateway = useCloudStore((state) => state.registerGateway)
+  const pairGateway = useCloudStore((state) => state.pairGateway)
   const revokeGateway = useCloudStore((state) => state.revokeGateway)
-  const forgetAdminKey = useCloudStore((state) => state.forgetAdminKey)
   const heartbeat = useCloudStore((state) => state.heartbeat)
 
   const [busy, setBusy] = useState<'save' | 'connect' | null>(null)
   const [deviceName, setDeviceNameDraft] = useState('')
-  const [adminKey, setAdminKey] = useState('')
-  const [gatewayDraft, setGatewayDraft] = useState('')
-  const [rememberAdminKey, setRememberAdminKey] = useState(false)
+  const [pairCode, setPairCode] = useState('')
+  const [pairGatewayDraft, setPairGatewayDraft] = useState('')
+  const [pairInputError, setPairInputError] = useState<'missing_code' | 'bad_gateway' | null>(null)
 
   useEffect(() => {
     setDeviceNameDraft(device?.name ?? '')
@@ -90,12 +91,49 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
     else toast.error(t('cloudDeviceCopyFailed'))
   }
 
-
   const handleReconnect = async () => {
     setBusy('connect')
     await connect()
     setBusy(null)
   }
+
+  /** 连接码可以是纯码，也可以是插件给出的完整链接（#pair=CODE） */
+  const handlePair = async () => {
+    setPairInputError(null)
+    const fallbackGateway = pairGatewayDraft.trim() || gateway?.gatewayUrl || config.gatewayUrl
+    const parsed = parsePairingInput(pairCode, fallbackGateway)
+    if (!parsed.ok) {
+      setPairInputError(parsed.reason)
+      return
+    }
+    const ok = await pairGateway({
+      code: parsed.code,
+      gatewayUrl: parsed.gatewayUrl,
+    })
+    if (ok) {
+      setPairCode('')
+      setPairGatewayDraft('')
+    }
+  }
+
+  const pairErrorText =
+    pairInputError === 'missing_code'
+      ? t('cloudPairMissingCode')
+      : pairInputError === 'bad_gateway'
+        ? t('cloudPairBadGateway')
+        : pairErrorCode === 'pairing_expired'
+          ? t('cloudPairExpired')
+          : pairErrorCode === 'pairing_not_found'
+            ? t('cloudPairNotFound')
+            : pairErrorCode === 'pairing_used'
+              ? t('cloudPairUsed')
+              : pairErrorCode === 'rate_limited'
+                ? t('cloudPairRateLimited')
+                : pairErrorCode === 'pairing_disabled'
+                  ? t('cloudPairDisabled')
+                  : pairErrorCode === 'pairing_unsupported'
+                    ? t('cloudPairPluginOutdated')
+                    : pairError
 
   /** 自举 Prompt 由文档构建时内联（见 utils/hermesPrompt.ts），这里只负责写入剪贴板 */
   const handleCopyPrompt = async () => {
@@ -151,15 +189,6 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
           />
           <div className="flex flex-col gap-3 pt-3">
             <div className="flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                icon={FileUp}
-                disabled={!bridgeAvailable}
-                loading={handoffBusy === 'pick'}
-                onClick={() => void pickHandoff()}
-              >
-                {t('cloudImportFromFile')}
-              </Button>
               <Button
                 size="sm"
                 icon={RefreshCw}
@@ -317,82 +346,69 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                     onClick={() => void revokeGateway()}>
                     {t('cloudGatewayRevoke')}
                   </Button>
-                  {config.hasAdminKey && (
-                    <Button size="sm" disabled={gatewayBusy}
-                      onClick={() => void forgetAdminKey()}>
-                      {t('cloudGatewayForgetKey')}
-                    </Button>
-                  )}
                 </div>
-                <Caption className="text-ink-subtle">{t('cloudGatewayRevokeHint')}</Caption>
+                <Caption className="text-ink-subtle">{t('cloudPairRevokeHint')}</Caption>
               </>
             ) : (
               <>
                 <Field
-                  label={t('cloudGatewayUrl')}
-                  hint={t('cloudGatewayUrlHint')}
-                  htmlFor="cloud-gateway-url"
+                  label={t('cloudPairGatewayAdvanced')}
+                  hint={t('cloudPairGatewayHint')}
+                  htmlFor="cloud-pair-gateway"
                 >
                   <Input
-                    id="cloud-gateway-url"
-                    value={gatewayDraft}
+                    id="cloud-pair-gateway"
+                    value={pairGatewayDraft}
                     spellCheck={false}
                     autoComplete="off"
                     placeholder={gateway?.gatewayUrl || config.gatewayUrl}
-                    onChange={(event) => setGatewayDraft(event.target.value)}
+                    onChange={(event) => {
+                      setPairGatewayDraft(event.target.value)
+                      setPairInputError(null)
+                    }}
                   />
                 </Field>
                 <Field
-                  label={t('cloudGatewayAdminKey')}
-                  hint={
-                    config.hasAdminKey && !adminKey
-                      ? t('cloudGatewayAdminKeySaved')
-                      : t('cloudGatewayAdminKeyHint')
-                  }
-                  htmlFor="cloud-gateway-admin-key"
+                  label={t('cloudPairCode')}
+                  hint={t('cloudPairCodeHint')}
+                  htmlFor="cloud-pair-code"
                 >
                   <Input
-                    id="cloud-gateway-admin-key"
-                    type="password"
-                    value={adminKey}
-                    onChange={(event) => setAdminKey(event.target.value)}
-                    placeholder={
-                      config.hasAdminKey ? t('cloudGatewayAdminKeySavedPlaceholder') : '••••••••'
-                    }
-                  />
-                </Field>
-                <label className="flex items-center gap-2 type-caption text-ink-muted">
-                  <input
-                    type="checkbox"
-                    checked={rememberAdminKey || (config.hasAdminKey && !adminKey)}
-                    onChange={(event) => setRememberAdminKey(event.target.checked)}
-                  />
-                  {t('cloudGatewayRememberKey')}
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    disabled={gatewayBusy || (!adminKey.trim() && !config.hasAdminKey)}
-                    loading={gatewayBusy}
-                    onClick={async () => {
-                      const ok = await registerGateway(adminKey, {
-                        remember: rememberAdminKey || (config.hasAdminKey && !adminKey),
-                        gatewayUrl: gatewayDraft,
-                      })
-                      if (ok) {
-                        setAdminKey('')
-                        setGatewayDraft('')
+                    id="cloud-pair-code"
+                    value={pairCode}
+                    spellCheck={false}
+                    autoComplete="off"
+                    autoCapitalize="characters"
+                    placeholder="XXXXX-XXXXX"
+                    onChange={(event) => {
+                      setPairCode(event.target.value)
+                      setPairInputError(null)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && pairCode.trim() && !pairBusy) {
+                        void handlePair()
                       }
                     }}
+                  />
+                </Field>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={Link2}
+                    disabled={pairBusy || !pairCode.trim()}
+                    loading={pairBusy}
+                    onClick={() => void handlePair()}
                   >
-                    {t('cloudGatewayRegister')}
+                    {pairBusy ? t('cloudPairing') : t('cloudPairConnect')}
                   </Button>
                   <Button size="sm" icon={RefreshCw} disabled={gatewayBusy}
                     onClick={() => void loadGateway()}>
                     {t('cloudGatewayRefresh')}
                   </Button>
                 </div>
-                <Caption className="text-ink-subtle">{t('cloudGatewayUnregisteredHint')}</Caption>
+                <Caption className="text-ink-subtle">{t('cloudPairHint')}</Caption>
+                {pairErrorText && <Caption className="text-danger">{pairErrorText}</Caption>}
               </>
             )}
 

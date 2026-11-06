@@ -479,11 +479,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 云端 Agent：HTTP / SSE 都在主进程，这里只转发
   cloudConfigGet: () => ipcRenderer.invoke('cloud:config:get'),
-  cloudHandoffPick: () => ipcRenderer.invoke('cloud:handoff:pick'),
-  cloudHandoffApply: (input: { applyNonce: string }) =>
-    ipcRenderer.invoke('cloud:handoff:apply', input),
-  cloudHandoffCopy: (input: { field: 'password' }) =>
-    ipcRenderer.invoke('cloud:handoff:copy', input),
   cloudConnect: () => ipcRenderer.invoke('cloud:connect'),
   cloudDisconnect: () => ipcRenderer.invoke('cloud:disconnect'),
   cloudSessionsList: (input: { limit?: number; offset?: number }) =>
@@ -527,16 +522,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cloudDeviceReprobe: () => ipcRenderer.invoke('cloud:device:reprobe'),
   cloudDeviceSet: (input: { name: string }) => ipcRenderer.invoke('cloud:device:set', input),
   cloudGatewayStatus: () => ipcRenderer.invoke('cloud:gateway:status'),
-  cloudGatewayRegister: (input: {
-    adminKey?: string
-    name?: string
-    gatewayUrl?: string
-    scopes?: string[]
-    rememberAdminKey?: boolean
-  }) => ipcRenderer.invoke('cloud:gateway:register', input),
-  cloudGatewayRevoke: (input: { adminKey?: string }) =>
-    ipcRenderer.invoke('cloud:gateway:revoke', input),
-  cloudGatewayForgetAdminKey: () => ipcRenderer.invoke('cloud:gateway:forget-admin-key'),
+  cloudGatewayPair: (input: { code: string; gatewayUrl?: string; name?: string }) =>
+    ipcRenderer.invoke('cloud:gateway:pair', input),
+  cloudGatewayRevoke: () => ipcRenderer.invoke('cloud:gateway:revoke'),
   cloudRunResolveUnknown: (input: { runId: string }) =>
     ipcRenderer.invoke('cloud:run:resolve-unknown', input),
   cloudRunSteer: (input: { runId?: string; text: string }) =>

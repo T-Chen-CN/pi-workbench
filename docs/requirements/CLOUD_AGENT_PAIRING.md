@@ -3,7 +3,7 @@
 > **面向**：实现「桌面端首次连接云端」与「插件签发设备 token」的人
 > **什么时候读**：动 `electron/cloud/*`、连接页、`cloud:gateway:*`、插件设备路由之前
 > **什么时候要改**：配对协议、设备 token 签发方式、控制台登录方式变化时
-> **状态**：v1 草案 · 2026-11-06 · **Phase 1 待执行**
+> **状态**：v1 · 2026-11-06 · **Phase 1 已完成（桌面端）**；Phase 2 插件待实现
 > **取代**：桌面端的 `hermes-handoff` 导入（v1 / v1.1 / v2 全部删除）与管理密钥输入
 > **上游**：[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) · [CLOUD_AGENT_DEVICES](./CLOUD_AGENT_DEVICES.md) · [插件仓库](https://github.com/T-Chen-CN/pi-workbench-plugin)
 
@@ -113,7 +113,7 @@ curl -sS -X POST https://hub.<域名>/v1/devices/pairing \
 已配对时：
 
 ```
-这台设备已登记
+这台设备已配对
   设备 ID / 权限 / 心跳 / 上游版本
   [刷新状态] [注销这台设备] [打开控制台]
 ```
@@ -456,3 +456,22 @@ curl -sS -X POST https://hub.example.com/v1/devices/pair \
 - [PROJECT_STRUCTURE](../architecture/PROJECT_STRUCTURE.md) — IPC / 文件树
 - [paths-and-storage](../agent/paths-and-storage.md) — `connection.json` 字段
 - [插件仓库](https://github.com/T-Chen-CN/pi-workbench-plugin) — Phase 2 实现
+
+---
+
+## 13. Phase 1 落地记录（2026-11-06）
+
+桌面端已完成，插件路由尚未实现；真实配对待 Phase 2。
+
+| 项 | 结果 |
+| --- | --- |
+| 删除历史路径 | `electron/cloud/handoff.ts`、`CloudHandoffDialog.tsx`、`cloud:handoff:*`、`cloud:gateway:register`、`cloud:gateway:forget-admin-key`、管理密钥 / 控制台口令 / handoff 配置字段、对应 i18n 与测试全部移除 |
+| 新增配对路径 | `electron/cloud/gateway.ts` 的 `pairDevice()`、`cloud:gateway:pair`、`cloudApi.gatewayPair()`、`cloudStore.pairGateway()` |
+| 连接页 | 网关地址（高级）+ 连接码 + 「配对并连接」；支持 `https://host/#pair=CODE` 与 `?pair=CODE`；错误按 `pairing_*` 码显示 |
+| 配置 schema | `connection.json` 只剩 `gatewayUrl` / `deviceToken` / `deviceScopes` / `deviceId` / `dashboardUrl`；`config:get` 白名单清理旧字段 |
+| 控制台地址 | 优先配对响应的 `dashboardUrl`；缺省同网关保留现值，换网关按 `hub.` → `dash.` 派生 |
+| 安全约束 | 桌面端代码不再出现 `X-Pi-Admin-Key`；注销只带设备 token；配对失败不写 token |
+| 测试 | 新增 `tests/cloud-pairing.test.ts`、`tests/cloud-gateway-pair.test.ts`；config / gateway / IPC / store / view / types 用例同步 |
+| 验证 | `npm test`（151 文件 / 1770 用例）、`npm run type-check`、`npm run lint` 全绿 |
+| 尚未验证 | 真实插件 `/v1/devices/pairing` 与 `/v1/devices/pair`；Phase 2 完成后跑 Phase 3 联调 |
+

@@ -40,13 +40,10 @@ interface BridgeStub {
   frames: Array<(frame: CloudFrame) => void>
   statusListeners: Array<(payload: unknown) => void>
   startRun: ReturnType<typeof vi.fn>
-  handoffPick: ReturnType<typeof vi.fn>
-  handoffApply: ReturnType<typeof vi.fn>
-  handoffCopy: ReturnType<typeof vi.fn>
   deviceGet: ReturnType<typeof vi.fn>
   config?: Record<string, unknown>
   gatewayStatus: ReturnType<typeof vi.fn>
-  gatewayRegister: ReturnType<typeof vi.fn>
+  gatewayPair: ReturnType<typeof vi.fn>
   gatewayRevoke: ReturnType<typeof vi.fn>
   deviceSet: ReturnType<typeof vi.fn>
   deviceReprobe: ReturnType<typeof vi.fn>
@@ -62,9 +59,6 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     frames: [],
     statusListeners: [],
     startRun: vi.fn(async () => ({ success: true, runId: 'run_1', sessionId: 'run_session' })),
-    handoffPick: vi.fn(async () => ({ success: true, canceled: true })),
-    handoffApply: vi.fn(async () => ({ success: true })),
-    handoffCopy: vi.fn(async () => ({ success: true })),
     deviceGet: vi.fn(async () => ({
       success: true,
       device: { id: 'd1e2f3a4-0000-4000-8000-000000000000', name: 'TChen-Legion', defaultName: 'TChen-Legion' },
@@ -91,11 +85,8 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
       gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
       device: { id: 'd1e2f3a4-0000-4000-8000-000000000000', name: 'TChen-Legion', defaultName: 'TChen-Legion' },
     })),
-    gatewayRegister: vi.fn(async () => ({
+    gatewayPair: vi.fn(async () => ({
       success: true,
-      deviceId: 'd1e2f3a4-0000-4000-8000-000000000000',
-      tokenPrefix: 'pi_abcdefghij',
-      scopes: ['chat', 'dispatch'],
       name: 'TChen-Legion',
     })),
     gatewayRevoke: vi.fn(async () => ({ success: true })),
@@ -120,8 +111,6 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
         hasDeviceToken: true,
         deviceScopes: ['chat', 'dispatch'],
         deviceId: 'dev-1',
-        dashboardUser: '',
-        hasDashboardPassword: false,
         ...(overrides.config as object | undefined),
       },
     }),
@@ -129,7 +118,7 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     cloudDeviceSet: stub.deviceSet,
     cloudDeviceReprobe: stub.deviceReprobe,
     cloudGatewayStatus: () => stub.gatewayStatus(),
-    cloudGatewayRegister: stub.gatewayRegister,
+    cloudGatewayPair: stub.gatewayPair,
     cloudGatewayRevoke: stub.gatewayRevoke,
     writeClipboardText: (text: string) => {
       stub.clipboard.push(text)
@@ -142,9 +131,6 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     }),
     cloudDisconnect: async () => ({ success: true }),
     cloudSessionsList: async () => ({ success: true, sessions: stub.sessions, hasMore: false }),
-    cloudHandoffPick: stub.handoffPick,
-    cloudHandoffApply: stub.handoffApply,
-    cloudHandoffCopy: stub.handoffCopy,
     cloudSessionsUpdate: async (input: { sessionId: string; title?: string; pinned?: boolean }) => ({
       success: true,
       session: { ...stub.sessions[0], ...input },
@@ -222,6 +208,9 @@ function resetStore() {
     gateway: null,
     gatewayBusy: false,
     gatewayError: null,
+    pairBusy: false,
+    pairError: null,
+    pairErrorCode: null,
     gatewayNotice: null,
     connection: 'unconfigured',
     error: null,
@@ -268,9 +257,6 @@ function resetStore() {
     deviceError: null,
     pending: null,
     draft: '',
-    handoffPreview: null,
-    handoffBusy: null,
-    handoffError: null,
   })
 }
 
@@ -1247,7 +1233,7 @@ describe('CloudConnectionView 心跳', () => {
     })
 
     await waitFor(() => expect(useCloudStore.getState().connection).toBe('error'))
-    expect(useCloudStore.getState().error).toContain('重新登记')
+    expect(useCloudStore.getState().error).toContain('重新配对')
     expect(useCloudStore.getState().sessions).toEqual([])
     expect(useCloudStore.getState().heartbeat?.stoppedBecauseRevoked).toBe(true)
   })
@@ -1319,29 +1305,83 @@ describe('CloudConnectionView 设备卡', () => {
     expect(screen.queryByLabelText(zh.cloudDeviceName)).toBeNull()
   })
 
-  it('registers this device with the admin key and never renders the token', async () => {
+  it('pairs with a full link and connects without exposing a token', async () => {
     const stub = installBridge()
     render(<CloudConnectionView active />)
-    const keyInput = await screen.findByLabelText(zh.cloudGatewayAdminKey)
-    fireEvent.change(keyInput, { target: { value: 'admin-secret' } })
-    fireEvent.click(screen.getByText(zh.cloudGatewayRegister))
+
+    const codeInput = await screen.findByLabelText(zh.cloudPairCode)
+    fireEvent.change(codeInput, {
+      target: { value: 'https://hub.example.com/#pair=ABCDE-FGHIJ' },
+    })
+    fireEvent.click(screen.getByText(zh.cloudPairConnect))
 
     await waitFor(() =>
-      expect(stub.gatewayRegister).toHaveBeenCalledWith({
-        adminKey: 'admin-secret',
-        // 没勾「记住」= 不往盘上写管理密钥；网关地址留空 = 用默认/已存的
-        rememberAdminKey: false,
-        gatewayUrl: undefined,
+      expect(stub.gatewayPair).toHaveBeenCalledWith({
+        code: 'ABCDEFGHIJ',
+        gatewayUrl: 'https://hub.example.com',
       })
     )
-    // 明文 token 只在主进程；界面只出现前缀
-    expect(await screen.findByText(/pi_abcdefghij/)).toBeTruthy()
-    expect(document.body.textContent).not.toContain('admin-secret')
+    expect(await screen.findByText(/已配对：TChen-Legion/)).toBeTruthy()
+    expect(document.body.textContent).not.toContain('pi_abcdefghij')
 
-    // 登记只写主进程的盘：渲染层要刷新 config 并真正连上，
-    // 否则「重新连接」按钮按旧的 hasDeviceToken 禁用，会话区停在不可用。
     await waitFor(() => expect(useCloudStore.getState().config.hasDeviceToken).toBe(true))
     await waitFor(() => expect(useCloudStore.getState().connection).toBe('connected'))
+  })
+
+  it('uses the gateway draft for a bare code', async () => {
+    const stub = installBridge()
+    render(<CloudConnectionView active />)
+
+    fireEvent.change(await screen.findByLabelText(zh.cloudPairGatewayAdvanced), {
+      target: { value: 'https://self-hosted.example.com' },
+    })
+    fireEvent.change(screen.getByLabelText(zh.cloudPairCode), {
+      target: { value: 'abcde-fghij' },
+    })
+    fireEvent.click(screen.getByText(zh.cloudPairConnect))
+
+    await waitFor(() =>
+      expect(stub.gatewayPair).toHaveBeenCalledWith({
+        code: 'ABCDEFGHIJ',
+        gatewayUrl: 'https://self-hosted.example.com',
+      })
+    )
+  })
+
+  it('shows an expired-code reason from the server', async () => {
+    installBridge({
+      gatewayPair: vi.fn(async () => ({
+        success: false,
+        error: '连接码已过期',
+        code: 'pairing_expired' as const,
+      })),
+    })
+    render(<CloudConnectionView active />)
+
+    fireEvent.change(await screen.findByLabelText(zh.cloudPairCode), {
+      target: { value: 'EXPIRED001' },
+    })
+    fireEvent.click(screen.getByText(zh.cloudPairConnect))
+
+    expect(await screen.findByText(zh.cloudPairExpired)).toBeTruthy()
+  })
+
+  it('tells the user to upgrade an old plugin', async () => {
+    installBridge({
+      gatewayPair: vi.fn(async () => ({
+        success: false,
+        error: '网关没有配对接口',
+        code: 'pairing_unsupported' as const,
+      })),
+    })
+    render(<CloudConnectionView active />)
+
+    fireEvent.change(await screen.findByLabelText(zh.cloudPairCode), {
+      target: { value: 'OLDPLUGIN' },
+    })
+    fireEvent.click(screen.getByText(zh.cloudPairConnect))
+
+    expect(await screen.findByText(zh.cloudPairPluginOutdated)).toBeTruthy()
   })
 
   it('shows the registered state with scopes and upstream version', async () => {
@@ -1365,7 +1405,7 @@ describe('CloudConnectionView 设备卡', () => {
     expect(await screen.findByText(zh.cloudGatewayRegistered)).toBeTruthy()
     expect(screen.getByText(/chat \/ dispatch/)).toBeTruthy()
     expect(screen.getByText(/0\.22\.6/)).toBeTruthy()
-    expect(screen.queryByLabelText(zh.cloudGatewayAdminKey)).toBeNull()
+    expect(screen.queryByLabelText(zh.cloudPairCode)).toBeNull()
   })
 
   it('warns when the device is registered but the cloud agent is down', async () => {

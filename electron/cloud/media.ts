@@ -56,7 +56,7 @@ async function failure(response: Response, what: string): Promise<CloudApiError>
     // 读不出来就只报状态码
   }
   if (status === 401 || status === 403) {
-    return new CloudApiError('unauthorized', `云端网关拒绝了${what}请求（${status}）：设备凭据无效或未登记`, {
+    return new CloudApiError('unauthorized', `云端网关拒绝了${what}请求（${status}）：设备凭据无效或未配对`, {
       status,
     })
   }
@@ -74,7 +74,7 @@ export function createMediaClient(input: {
   const base = String(input.baseUrl ?? '').replace(/\/+$/, '')
   if (!base) throw new CloudApiError('bad_request', '网关地址为空')
   if (!input.credential) {
-    throw new CloudApiError('unauthorized', '这台设备还没有登记，先在「连接」页登记')
+    throw new CloudApiError('unauthorized', '这台设备还没有配对，先在「连接」页配对')
   }
   const headers = { Authorization: `Bearer ${input.credential}` }
 
