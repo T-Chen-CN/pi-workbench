@@ -31,6 +31,8 @@ const mocks = vi.hoisted(() => {
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
+    // 心跳模块在装配时就会读凭据；没 ready 时 credential() 必须返回 null（不能抛）
+    isReady: () => false,
     getAppPath: () => mocks.state.appDir,
     getPath: () => mocks.state.appDir,
     setPath: () => {},

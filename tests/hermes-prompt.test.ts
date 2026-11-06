@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { extractPromptBlock, HERMES_BOOTSTRAP_PROMPT } from '../src/utils/hermesPrompt'
+import {
+  extractPromptBlock,
+  fillPromptPlaceholders,
+  HERMES_BOOTSTRAP_PROMPT,
+  PLUGIN_REF,
+  PLUGIN_REPO,
+} from '../src/utils/hermesPrompt'
 
 describe('hermes bootstrap prompt', () => {
   it('inlines the fenced block from the requirement doc', () => {
@@ -35,6 +41,28 @@ describe('hermes bootstrap prompt', () => {
   it('returns an empty string when the fence is missing', () => {
     expect(extractPromptBlock('# 只有说明，没有代码块')).toBe('')
     expect(extractPromptBlock('```bash\necho hi\n```')).toBe('')
+  })
+
+  // 插件有自己的仓库（见 docs/guides/PLUGIN_REPO_MIGRATION.md）：文档里只留占位符，
+  // 真实地址与版本由 PLUGIN_REPO / PLUGIN_REF 注入 —— 复制出去的内容里不能残留 {{…}}。
+  it('injects the plugin repo and an immutable SHA ref', () => {
+    expect(PLUGIN_REF).toMatch(/^[0-9a-f]{40}$/)
+    expect(PLUGIN_REPO.startsWith('https://')).toBe(true)
+    expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('{{')
+    expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('}}')
+    expect(HERMES_BOOTSTRAP_PROMPT).toContain(PLUGIN_REPO)
+    expect(HERMES_BOOTSTRAP_PROMPT).toContain(`--ref ${PLUGIN_REF}`)
+    // 装插件那条命令只能来自指定仓库，不能出现别的来源或可移动引用
+    expect(HERMES_BOOTSTRAP_PROMPT).toContain('hermes plugins install')
+    expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('--ref main')
+  })
+
+  it('only rewrites the two known placeholders', () => {
+    expect(fillPromptPlaceholders('a {{PLUGIN_REPO}} b {{PLUGIN_REF}} c')).toBe(
+      `a ${PLUGIN_REPO} b ${PLUGIN_REF} c`
+    )
+    // 未知占位符原样保留（不会被静默翻译成空串）
+    expect(fillPromptPlaceholders('{{SOMETHING_ELSE}}')).toBe('{{SOMETHING_ELSE}}')
   })
 
   it('normalises CRLF from the doc and trims blank edges', () => {

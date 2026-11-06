@@ -1,10 +1,21 @@
 # 插件独立仓库迁移手册（A 方案执行版）
 
-> **什么时候读**：要把云端 Hermes 插件从本仓库搬出去、单独维护时。
+> **什么时候读**：要把云端 Hermes 插件从本仓库搬出去、单独维护时；或插件发版要跟版时。
 > **谁执行**：主工作区（本仓库）做阶段 C；**新工作区（新仓库）做阶段 A**；阶段 B 在 VPS 上做。
-> **一句话**：插件搬进独立私有仓库 → 用 `hermes plugins install/adopt` 取代 `tar + scp` → 自举 Prompt 用
+> **一句话**：插件在独立仓库 → 用 `hermes plugins install/adopt` 取代 `tar + scp` → 自举 Prompt 用
 > `{{PLUGIN_REPO}}` + `{{PLUGIN_REF}}` 钉死版本。
 > **不做什么**：不碰 `plugin-data`（设备 token / 审计在那边）；不轮换管理密钥；不在同一次里既换安装来源又换版本。
+
+## 执行状态（2026-11-06）
+
+| 阶段 | 状态 | 事实 |
+| --- | --- | --- |
+| **A 建仓库** | ✅ 完成 | [T-Chen-CN/pi-workbench-plugin](https://github.com/T-Chen-CN/pi-workbench-plugin)，**公开 · MIT · 根目录即插件**；tag `v0.1.0` → `8669f32e98a6afb49ec81f9bac59394e3852f6d5`；103 个 unittest 绿；`hermes plugins validate .` / `doctor . --ci` 通过；**没有** `__pycache__` |
+| **A7 部署凭据** | ⏭ 不需要 | 仓库公开 → 安装无需任何凭据；只在**转私有**时才补只读 deploy key |
+| **C 应用侧收尾** | ✅ 完成 | 本仓库已删 `hermes-plugin/pi-workbench/`（只留路牌 README）；自举 Prompt 用占位符 + `src/utils/hermesPrompt.ts` 的 `PLUGIN_REPO` / `PLUGIN_REF`（两条新用例兑底） |
+| **B VPS 切换** | ⏳ 待做 | 线上仍是 `tar` 解压的旧那份（只 90 用例）；切换到仓库版会重启一次 gateway（停机 ≈10s），步骤见 §3 |
+
+> 与本节不一致的历史描述以本节为准；下面阶段 A / B / C 的命令保留为**可重跑的执行说明**。
 
 ## 0. 现状盘点（迁移前的事实，别凭记忆）
 
@@ -26,8 +37,9 @@
 ## 1. 决策摘要（写进 ADR-009，阶段 C 补）
 
 1. **A 方案**：独立仓库，**根目录就是插件**（`plugin.yaml` 在仓库根，`hermes plugins install owner/repo` 才认）。
-2. **私有仓库 + 只读 deploy key**（`~/.ssh/pi-plugin-deploy`，600，只绑这一个仓库）。理由：插件承载的是
-   "怎么绕 Hermes"的实现细节，比开源更值得藏；deploy key 是标准运维件，不是把业务密钥摊开。
+2. **公开仓库 + MIT**（所有者 2026-11-06 决定；`plugin.yaml` 的 `license` 同步改成 `MIT`）。插件本身不含任何
+   密钥（管理密钥、设备 token 都在 VPS 上），公开反而免掉部署凭据。⚠️ 若将来要收回来：先转私有，再补只读
+   deploy key（§A7），否则 VPS 侧的 `plugins update` 会 401。
 3. **版本用不可变 SHA 钉死**：`hermes plugins install --ref <40 位 SHA>`（CLI **不接受 tag**）。
 4. **两仓库分工**：插件仓库 = 代码/测试/`plugin.yaml` 版本/tag；本仓库 = 客户端、契约文档、自举 Prompt 模板。
 5. **本仓库不再保留插件源码**，只留一句指针 + Prompt 占位符常量。
@@ -46,7 +58,7 @@ git init -b main
 printf '__pycache__/\n*.pyc\n.venv/\n' > .gitignore
 ```
 
-- **license 要拍板**：私有仓库保持 `plugin.yaml` 的 `UNLICENSED` 即可；要公开就同时补 `LICENSE`。
+- **license**：已定 **MIT** —— 仓库根 `LICENSE` 与 `plugin.yaml` 的 `license:` 必须一致（两处都改才算完成）。
 - 根目录必须有 `plugin.yaml`。`requires_hermes: ">=0.22.6,<0.24"` 保持不变。
 
 ### A2. 保留历史地搬家（不要 `cp` 完就删）
@@ -101,7 +113,7 @@ ls plugin.yaml                                # 必须在根
 ### A5. CI（可选但推荐）
 
 ```yaml
-# .github/workflows/ci.yml（私有仓库同样可用）
+# .github/workflows/ci.yml（公开仓库可直接用）
 - run: python -m unittest discover -s tests -t .
 ```
 
@@ -116,7 +128,7 @@ git tag v0.1.0
 git sha=$(git rev-parse HEAD); echo $sha      # 40 位，阶段 C 要用
 ```
 
-### A7. 私有仓库的只读凭据（给 VPS 用）
+### A7. 只读凭据（**当前不需要**；只在仓库转私有时做）
 
 ```bash
 # 本机生成（不要加 passphrase，服务要非交互）
@@ -153,9 +165,11 @@ ls -l /home/ubuntu/backup-$TS.tgz
 ```bash
 cd $P/plugins
 mv pi-workbench pi-workbench.bak-$TS          # 留着回滚，不删
-GIT_SSH_COMMAND='ssh -i ~/.ssh/pi-plugin-deploy' \
-  git clone --depth 1 https://github.com/<org>/pi-workbench-plugin.git pi-workbench
-cd pi-workbench && git fetch --depth 1 origin <40位SHA> && git checkout <40位SHA>   # 钉到与 Prompt 一致的版本
+git clone --depth 1 https://github.com/T-Chen-CN/pi-workbench-plugin.git pi-workbench
+cd pi-workbench && git fetch --depth 1 origin 8669f32e98a6afb49ec81f9bac59394e3852f6d5 \
+  && git checkout 8669f32e98a6afb49ec81f9bac59394e3852f6d5   # 必须与 Prompt 的 PLUGIN_REF 一致
+# 只有在仓库转私有时才需要前置凭据：
+#   GIT_SSH_COMMAND='ssh -i ~/.ssh/pi-plugin-deploy' git clone ...
 export PATH=$HOME/.local/bin:$PATH
 hermes plugins adopt pi-workbench            # 读 origin URL → 写 provenance → 变成 tracked git 安装
 hermes plugins list | grep pi-workbench      # 这次应该看得到
@@ -220,7 +234,8 @@ git commit -m "chore(plugin): 插件迁到独立仓库（见 docs/guides/PLUGIN_
   // HERMES_BOOTSTRAP_PROMPT = block.replaceAll('{{PLUGIN_REPO}}', PLUGIN_REPO).replaceAll('{{PLUGIN_REF}}', PLUGIN_REF)
   ```
 - `tests/hermes-prompt.test.ts` 增两条：**替换后不含 `{{`**、**`PLUGIN_REF` 是 40 位十六进制**。
-- 私有仓库时：Prompt 里要说明"需要先配好只读 deploy key（见 A7）"，不要让 Hermes 去猜凭据。
+- 公开仓库：Prompt 已写明"不需要任何凭据 / deploy key"（需要凭据才能拉就说明地址被改过）。
+  若哪天转私有：Prompt 里要补一句"先配好只读 deploy key（见 A7）"，不要让 Hermes 去猜凭据。
 
 ### C3. 更新所有指向旧路径的地方
 
@@ -230,7 +245,7 @@ git commit -m "chore(plugin): 插件迁到独立仓库（见 docs/guides/PLUGIN_
 | `docs/architecture/PROJECT_STRUCTURE.md` | 目录树去掉 `hermes-plugin/` |
 | `docs/guides/AGENT-TESTING.md` | "什么时候跑"里的 `hermes-plugin/` → 改成"网关行为未变时可跳过" |
 | `docs/requirements/CLOUD_AGENT_DEVICES.md` | §20 H0 的路径表述 + 新增 v3.x 变更记录（插件仓库独立，SHA 钉版本） |
-| `docs/decisions/ADR-009-plugin-standalone-repo.md` | **新建**：把 §1 的五条决策写实（含"为什么私有仓库"） |
+| `docs/decisions/ADR-009-plugin-standalone-repo.md` | **新建**：把 §1 的五条决策写实（含"为什么独立成仓库 / 为什么公开 MIT"） |
 | `docs/progress/{STATUS,BACKLOG}.md` | 记一笔迁移完成 + 部署方式变更 |
 
 ---
@@ -255,15 +270,16 @@ git commit -m "chore(plugin): 插件迁到独立仓库（见 docs/guides/PLUGIN_
 
 ## 6. 验收（Gate）
 
-全部满足才算迁移完成：
+全部满足才算迁移完成（✅ = 已完成，2026-11-06）：
 
-- [ ] `python -m unittest discover -s tests -t .`（新仓库）**90 用例**绿
-- [ ] `git ls-files | grep -c __pycache__` = **0**
-- [ ] VPS：`hermes plugins list` 能看到 `pi-workbench`（有 Source）
-- [ ] `curl -s https://hub.tchen-xiaoxiao.com/v1/hub/health` → `status:ok` / `upstreamOk:true` / `adminKeyConfigured:true`
-- [ ] `devices.total` 与迁移前**一致**（没有设备被迫重新登记）
-- [ ] 本机连接页仍显示「已登记」+「心跳正常」；随便发一句话能流式回来
-- [ ] 应用复制出的 Prompt 里**没有** `{{`，且 `--ref` 是 40 位 SHA
+- [x] `python -m unittest discover -s tests -t .`（插件仓库）**103 用例**绿
+- [x] `git ls-files | grep -c __pycache__` = **0**
+- [x] `hermes plugins validate .` / `doctor . --ci` 通过（VPS 上对着 fresh clone 跑过）
+- [ ] VPS：`hermes plugins list` 能看到 `pi-workbench`（有 Source）—— 待阶段 B
+- [ ] `curl -s https://hub.tchen-xiaoxiao.com/v1/hub/health` → `status:ok` / `upstreamOk:true` / `adminKeyConfigured:true` —— 待阶段 B（切换后重跑）
+- [ ] `devices.total` 与迁移前**一致**（迁移前 = 9）—— 待阶段 B
+- [ ] 本机连接页仍显示「已登记」+「心跳正常」；随便发一句话能流式回来 —— 待阶段 B
+- [x] 应用复制出的 Prompt 里**没有** `{{`，且 `--ref` 是 40 位 SHA（`tests/hermes-prompt.test.ts`）
 - [ ] 回滚路径演练过一次（B2 的命令能照着跑）
 
 ## 7. 坑位速查
@@ -274,7 +290,7 @@ git commit -m "chore(plugin): 插件迁到独立仓库（见 docs/guides/PLUGIN_
 | `plugins list` 看不到插件 | 未 tracked 的目录插件不会出现在列表里；`adopt` 之后才出现 |
 | `--ref` 不接受 tag | 只认 40 位 commit SHA；tag 只是给自己看的 |
 | 卸载会丢数据？ | `hub.db` / `audit.jsonl` 在 `plugin-data/`，**不在**插件目录；但仍按 B0 备份 |
-| 私有仓库凭据 | 只读 deploy key + `~/.ssh/config` 里的 `IdentityFile`；别忘了 `--depth 1` 也要能过认证 |
+| 仓库转私有 | 先转私有 → 补只读 deploy key + `~/.ssh/config` 的 `IdentityFile` → 再验证 `plugins check-updates`（否则会 401） |
 | `requires_env` 会拦安装 | `PI_HUB_ADMIN_KEY` 是必需项：装的时候会问 → 用 `--no-enable` 先装、配好 env 再 `enable` |
 | `__pycache__` | 新仓库必须忽略；本仓库那 13 个被跟踪的 pyc 不要在搬家时带过去 |
 | Plugin INFO 日志 | 不进 `journalctl`（只有 WARNING+）；判断活没活看 `/v1/hub/health` |

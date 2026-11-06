@@ -145,7 +145,8 @@ npm run web:dev
 
 ## ☁️ 云端单入口（G1）验收 —— 逐条手点
 
-> 什么时候跑：改过 `hermes-plugin/`（云端网关）、`electron/cloud*`、连接页之后。
+> 什么时候跑：改过网关插件（独立仓库 [T-Chen-CN/pi-workbench-plugin](https://github.com/T-Chen-CN/pi-workbench-plugin)，不在本仓库）、`electron/cloud*`、连接页之后。
+> 插件侧先跑 `python -m unittest discover -s tests -t .` + `hermes plugins validate .`；本清单是**真机**那一步。
 > 判据出处：[CLOUD_AGENT_DEVICES §20.2](../requirements/CLOUD_AGENT_DEVICES.md)。
 > 全部通过 = 本地与云端只剩一条门（设备 token 是唯一凭据）。
 

@@ -210,21 +210,11 @@ pi-workbench/
 │   │   └── index.ts              # 编辑器通用类型
 │   └── i18n/                     # 中英文文案与错误本地化
 │
-├── hermes-plugin/                # 云端 Hermes 插件（渲染层与主进程都不引用）
-│   └── pi-workbench/             # 本地 ↔ 云端的唯一入口（kind: platform，与 gateway 同进程）
-│       ├── plugin.yaml           # 清单：requires_hermes / requires_env / optional_env
-│       ├── __init__.py           # register(ctx) → 只调 shim
-│       ├── shim.py               # ≤120 行：唯一碰 Hermes 插件 API 的文件
-│       ├── adapter.py            # BasePlatformAdapter 子类（connect 起线程，disconnect 收）
-│       ├── core/                 # 纯 stdlib，不知道 Hermes 存在（可外提为独立服务）
-│       │   ├── server.py         # ThreadingHTTPServer + 路由 + 中间件（认证/scope/限流/审计）
-│       │   ├── auth.py           # 设备 token（sha256）/ scope / 令牌桶
-│       │   ├── db.py             # SQLite WAL（devices / workspaces / tasks / audit）
-│       │   ├── audit.py          # SQLite + JSONL 双写审计
-│       │   ├── proxy.py          # loopback 反向代理（重写鉴权、注入 X-Pi-Device、SSE 不缓冲）
-│       │   ├── fsguard.py        # `/api/fs` 白名单（真实路径 + realpath + relative_to）
-│       │   └── errors.py         # 统一错误码表
-│       └── tests/                # unittest（不装任何依赖，`python -m unittest`）
+├── hermes-plugin/                # 只剩路牌：插件本体已迁到独立仓库（公开 MIT）
+│   └── README.md                 # 指向 T-Chen-CN/pi-workbench-plugin + 钉版本 SHA + 安装命令
+│                                 # 插件形状：仓库根 = plugin.yaml / shim.py / adapter.py / config.py / core/ / tests/
+│                                 # 硬约束仍生效：core/ 纯 stdlib、不 import Hermes、传输不许换 aiohttp
+│                                 # 测试：cd <插件仓库> && python -m unittest discover -s tests -t .
 │
 ├── pi-bridge/                    # Agent 桥接层（主进程内运行）
 │   ├── src/
