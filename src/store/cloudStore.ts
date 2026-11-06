@@ -206,7 +206,10 @@ interface CloudState {
   reprobeDeviceName: () => Promise<boolean>
 
   /** 用管理密钥登记这台设备（成功后本地只留设备 token） */
-  registerGateway: (adminKey: string, options?: { remember?: boolean }) => Promise<boolean>
+  registerGateway: (
+    adminKey: string,
+    options?: { remember?: boolean; gatewayUrl?: string }
+  ) => Promise<boolean>
   /** 忘掉本机保存的管理密钥 */
   forgetAdminKey: () => Promise<boolean>
   /** 注销这台设备（token 立即失效） */
@@ -1131,6 +1134,8 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     set({ gatewayBusy: true, gatewayError: null, gatewayNotice: null })
     const result = await cloudApi.gatewayRegister({
       adminKey: adminKey.trim() || undefined,
+      // 自建部署可以在这里改网关地址；留空就用默认的 hub.
+      gatewayUrl: options?.gatewayUrl?.trim() || undefined,
       // 勾了才存；不勾且输入框为空（用的就是已存密钥）= 保持原样
       rememberAdminKey: options?.remember ? true : adminKey.trim() ? false : undefined,
     })

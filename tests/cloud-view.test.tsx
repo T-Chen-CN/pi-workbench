@@ -1291,8 +1291,9 @@ describe('CloudConnectionView 设备卡', () => {
     await waitFor(() =>
       expect(stub.gatewayRegister).toHaveBeenCalledWith({
         adminKey: 'admin-secret',
-        // 没勾「记住」= 不往盘上写管理密钥
+        // 没勾「记住」= 不往盘上写管理密钥；网关地址留空 = 用默认/已存的
         rememberAdminKey: false,
+        gatewayUrl: undefined,
       })
     )
     // 明文 token 只在主进程；界面只出现前缀

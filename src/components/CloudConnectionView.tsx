@@ -50,6 +50,7 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const [busy, setBusy] = useState<'save' | 'connect' | null>(null)
   const [deviceName, setDeviceNameDraft] = useState('')
   const [adminKey, setAdminKey] = useState('')
+  const [gatewayDraft, setGatewayDraft] = useState('')
   const [rememberAdminKey, setRememberAdminKey] = useState(false)
 
   useEffect(() => {
@@ -328,6 +329,20 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
             ) : (
               <>
                 <Field
+                  label={t('cloudGatewayUrl')}
+                  hint={t('cloudGatewayUrlHint')}
+                  htmlFor="cloud-gateway-url"
+                >
+                  <Input
+                    id="cloud-gateway-url"
+                    value={gatewayDraft}
+                    spellCheck={false}
+                    autoComplete="off"
+                    placeholder={gateway?.gatewayUrl || config.gatewayUrl}
+                    onChange={(event) => setGatewayDraft(event.target.value)}
+                  />
+                </Field>
+                <Field
                   label={t('cloudGatewayAdminKey')}
                   hint={
                     config.hasAdminKey && !adminKey
@@ -362,8 +377,12 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                     onClick={async () => {
                       const ok = await registerGateway(adminKey, {
                         remember: rememberAdminKey || (config.hasAdminKey && !adminKey),
+                        gatewayUrl: gatewayDraft,
                       })
-                      if (ok) setAdminKey('')
+                      if (ok) {
+                        setAdminKey('')
+                        setGatewayDraft('')
+                      }
                     }}
                   >
                     {t('cloudGatewayRegister')}

@@ -44,6 +44,7 @@ export const translations = {
     cloudGatewayRefresh: '刷新状态',
     cloudGatewayRevoke: '注销这台设备',
     cloudGatewayRevokeHint: '注销后这台设备立刻不能用云端；重新登记才能恢复。',
+    cloudGatewayUrlHint: '默认从官方地址推导；自建部署时填自己的网关地址',
     cloudGatewayAdminKeySaved: '已记住管理密钥；留空就用它',
     cloudGatewayAdminKeySavedPlaceholder: '已保存，留空即可',
     cloudGatewayRememberKey: '在本机记住管理密钥（加密保存，只用于登记设备）',
@@ -1146,6 +1147,7 @@ export const translations = {
     cloudGatewayRevoke: 'Revoke this device',
     cloudGatewayRevokeHint:
       'Revoking cuts this device off immediately; you must register again to restore it.',
+    cloudGatewayUrlHint: 'Derived from the default address; fill in your own for a self-hosted gateway',
     cloudGatewayAdminKeySaved: 'Admin key saved; leave blank to use it',
     cloudGatewayAdminKeySavedPlaceholder: 'Saved — leave blank',
     cloudGatewayRememberKey: 'Remember the admin key on this machine (encrypted, device registration only)',
