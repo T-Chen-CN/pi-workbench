@@ -48,6 +48,8 @@ interface AgentResponse {
 interface AgentUsage {
   input: number
   output: number
+  /** 本轮花在思考上的输出 token（output 的子集） */
+  reasoning: number
   cacheRead: number
   cacheWrite: number
   totalTokens: number

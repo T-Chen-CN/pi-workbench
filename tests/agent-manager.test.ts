@@ -581,6 +581,14 @@ describe('AgentManager chat', () => {
           { type: 'tool_use', id: 't' },
           { type: 'text', text: 'part two' },
         ],
+        usage: {
+          input: 100,
+          output: 50,
+          reasoning: 30,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 150,
+        },
       })
     })
     primeSdk(session)
@@ -589,6 +597,8 @@ describe('AgentManager chat', () => {
     const result = await manager.chat('hi')
 
     expect(result.response).toBe('part one\npart two')
+    // 思考用量必须透出：截断报错要靠它解释 token 花在哪
+    expect(result.usage).toMatchObject({ output: 50, reasoning: 30 })
   })
 
   it('surfaces provider errors carried in stopReason', async () => {

@@ -294,6 +294,7 @@ export class AgentManager {
     return {
       input: value(raw.input),
       output: value(raw.output),
+      reasoning: value(raw.reasoning),
       cacheRead: value(raw.cacheRead),
       cacheWrite: value(raw.cacheWrite),
       totalTokens: value(raw.totalTokens),
