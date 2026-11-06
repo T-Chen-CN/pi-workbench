@@ -23,7 +23,7 @@ const base: ToolPart = {
 describe('CloudToolCard', () => {
   afterEach(() => {
     cleanup()
-    useI18nStore.setState({ locale: 'zh' })
+    useI18nStore.setState({ language: 'zh' })
   })
 
   it('explains a failure that came with no error text', () => {

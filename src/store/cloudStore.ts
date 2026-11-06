@@ -19,6 +19,7 @@ import type {
   CloudDashboardState,
   CloudDeviceSummary,
   CloudGatewayStatusResult,
+  CloudHeartbeatState,
   CloudFrame,
   CloudHandoffPreview,
   CloudRunStatus,
@@ -116,6 +117,8 @@ interface CloudState {
   deviceError: string | null
   /** 云端网关（单入口）状态：登记与否 / scope / 上游在线 */
   gateway: CloudGatewayStatusResult | null
+  /** 心跳状态（主进程每 30s 一拍）：用于在设备卡上显示「还连着」 */
+  heartbeat: CloudHeartbeatState | null
   gatewayBusy: boolean
   gatewayError: string | null
   /** 登记/注销成功后的提示（一次性，界面自己清） */
@@ -195,6 +198,8 @@ interface CloudState {
   /** 读本机设备身份（顺带补一次系统友好名探测） */
   loadDevice: () => Promise<void>
   loadGateway: () => Promise<void>
+  /** 订阅主进程的心跳推送（心跳被撤销时把连接状态说清楚） */
+  watchHeartbeat: () => () => void
   /** 改设备名；空串 = 恢复默认名。返回是否成功 */
   setDeviceName: (name: string) => Promise<boolean>
   /** 重新读取系统设备名。返回是否成功 */
@@ -258,6 +263,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   deviceBusy: false,
   deviceError: null,
   gateway: null,
+  heartbeat: null,
   gatewayBusy: false,
   gatewayError: null,
   gatewayNotice: null,
@@ -1086,6 +1092,30 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     }
     set({ device: result.device })
     return true
+  },
+
+  watchHeartbeat() {
+    const offBeat = cloudApi.onGatewayHeartbeat((state) => set({ heartbeat: state }))
+    const offRevoked = cloudApi.onGatewayRevoked((payload) => {
+      // 云端把凭据废了：和注销一样处理 —— 界面不许再显示「已连接」
+      set({
+        heartbeat: { lastOkAt: null, lastError: payload.reason, stoppedBecauseRevoked: true },
+        connection: 'error',
+        error: '云端把这台设备的凭据注销了，请重新登记',
+        capabilities: null,
+        sessions: [],
+        activeSessionId: null,
+        sessionMeta: null,
+        parts: [],
+        runId: null,
+        runState: null,
+      })
+      void get().loadGateway()
+    })
+    return () => {
+      offBeat()
+      offRevoked()
+    }
   },
 
   async loadGateway() {

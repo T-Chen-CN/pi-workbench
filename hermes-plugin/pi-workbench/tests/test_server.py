@@ -170,6 +170,38 @@ class AuthenticationTests(HubTestCase):
         self.assertEqual(payload["deviceId"], device_id)
         self.assertEqual(payload["name"], "TChen-Legion")
         self.assertEqual(payload["scopes"], ["chat", "dispatch"])
+        # 在线判定窗口要跟着设备一起回，本地不必猜
+        self.assertEqual(payload["onlineWindow"], 90)
+        self.assertTrue(payload["online"])
+
+
+class HeartbeatTests(HubTestCase):
+    def test_heartbeat_refreshes_last_seen(self):
+        device_id, token = self.register("legion")
+        status, payload, _ = self.json_call("POST", "/v1/devices/me/heartbeat", token=token)
+        self.assertEqual(status, 200, payload)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["deviceId"], device_id)
+        self.assertEqual(payload["onlineWindow"], 90)
+        self.assertIsInstance(payload["serverTime"], int)
+
+        status, listing, _ = self.json_call("GET", "/v1/devices", admin=ADMIN_KEY)
+        self.assertEqual(status, 200)
+        row = [d for d in listing["devices"] if d["deviceId"] == device_id][0]
+        self.assertTrue(row["online"])
+        self.assertGreaterEqual(row["lastSeenAt"], payload["serverTime"] - 2)
+
+    def test_heartbeat_needs_a_device_token(self):
+        status, payload, _ = self.json_call("POST", "/v1/devices/me/heartbeat")
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["error"]["code"], "unauthorized")
+
+    def test_a_revoked_device_cannot_keep_heartbeating(self):
+        device_id, token = self.register()
+        self.json_call("POST", f"/v1/devices/{device_id}/revoke", admin=ADMIN_KEY)
+        status, payload, _ = self.json_call("POST", "/v1/devices/me/heartbeat", token=token)
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["error"]["code"], "device_revoked")
 
 
 class AdminTests(HubTestCase):

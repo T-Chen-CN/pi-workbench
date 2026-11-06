@@ -25,6 +25,7 @@ import type {
   CloudDeviceResult,
   CloudGatewayRegisterResult,
   CloudGatewayStatusResult,
+  CloudHeartbeatState,
   CloudDeviceSummary,
   CloudDiagnostics,
   CloudJob,
@@ -632,6 +633,18 @@ export const cloudApi = {
     const bridge = api()
     if (!bridge || typeof bridge.onCloudDashboardClosed !== 'function') return () => {}
     return bridge.onCloudDashboardClosed(callback)
+  },
+
+  onGatewayHeartbeat(callback: (state: CloudHeartbeatState) => void): () => void {
+    const bridge = api()
+    if (!bridge || typeof bridge.onCloudGatewayHeartbeat !== 'function') return () => {}
+    return bridge.onCloudGatewayHeartbeat(callback)
+  },
+
+  onGatewayRevoked(callback: (payload: { reason: string }) => void): () => void {
+    const bridge = api()
+    if (!bridge || typeof bridge.onCloudGatewayRevoked !== 'function') return () => {}
+    return bridge.onCloudGatewayRevoked(callback)
   },
 
   onDashboardLoaded(callback: () => void): () => void {

@@ -25,6 +25,14 @@ export interface GatewayDevice {
   tokenPrefix?: string
 }
 
+/** 心跳回执：`onlineWindow` 是云端判定在线的窗口（秒），本地据此决定心跳节奏 */
+export interface HeartbeatResult {
+  ok: boolean
+  deviceId: string
+  serverTime: number
+  onlineWindow: number
+}
+
 export interface GatewayHealth {
   status: string
   hub: string
@@ -140,7 +148,16 @@ export function gatewayHealth(gatewayUrl: string): Promise<GatewayHealth> {
 export async function gatewayWhoAmI(
   gatewayUrl: string,
   deviceToken: string
-): Promise<{ deviceId: string; name: string; scopes: string[]; hub: string }> {
+): Promise<{
+  deviceId: string
+  name: string
+  scopes: string[]
+  hub: string
+  lastSeenAt?: number | null
+  online?: boolean
+  onlineWindow?: number
+  serverTime?: number
+}> {
   return call(gatewayUrl, '/v1/devices/me', { bearer: deviceToken })
 }
 
@@ -168,6 +185,17 @@ export function registerDevice(input: {
       scopes: input.scopes ?? ['chat', 'dispatch'],
       note: input.note,
     },
+  })
+}
+
+/** 心跳：告诉云端「这台机器还开着」。每 30s 一次，成本是一条空 POST。 */
+export function heartbeatDevice(input: {
+  gatewayUrl: string
+  deviceToken: string
+}): Promise<HeartbeatResult> {
+  return call<HeartbeatResult>(input.gatewayUrl, '/v1/devices/me/heartbeat', {
+    method: 'POST',
+    bearer: input.deviceToken,
   })
 }
 

@@ -1,5 +1,6 @@
 import type {
   CloudApprovalChoice,
+  CloudHeartbeatState,
   CloudApprovalMode,
   CloudCapabilities,
   CloudConfigGetResult,
@@ -829,6 +830,10 @@ export interface ElectronAPI {
   }) => Promise<{ success: boolean }>
   cloudDashboardReload: () => Promise<{ success: boolean; error?: string }>
   onCloudEvent: (callback: (frame: CloudFrame) => void) => () => void
+  /** 心跳状态推送（每 30s 一拍的结果） */
+  onCloudGatewayHeartbeat: (callback: (payload: CloudHeartbeatState) => void) => () => void
+  /** 云端把凭据废了（心跳收到 401）：界面要说明原因 */
+  onCloudGatewayRevoked: (callback: (payload: { reason: string }) => void) => () => void
   onCloudStatus: (
     callback: (payload: {
       state: CloudConnectionState

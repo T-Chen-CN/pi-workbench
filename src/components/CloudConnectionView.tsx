@@ -46,6 +46,7 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const registerGateway = useCloudStore((state) => state.registerGateway)
   const revokeGateway = useCloudStore((state) => state.revokeGateway)
   const forgetAdminKey = useCloudStore((state) => state.forgetAdminKey)
+  const heartbeat = useCloudStore((state) => state.heartbeat)
 
   const [dashboardToken, setDashboardToken] = useState('')
   const [busy, setBusy] = useState<'save' | 'connect' | null>(null)
@@ -56,6 +57,12 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   useEffect(() => {
     setDeviceNameDraft(device?.name ?? '')
   }, [device?.name])
+
+  // 心跳推送：卡片上要能看出「这台机器还连着云端」
+  useEffect(() => {
+    const unwatch = useCloudStore.getState().watchHeartbeat()
+    return unwatch
+  }, [])
 
   /** 明确按「保存」才写盘：清空输入等于恢复系统默认名（主进程那边的约定） */
   const handleSaveDeviceName = async (value: string) => {
@@ -317,6 +324,17 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                       {t('cloudGatewayUpstream')}: {gateway.upstreamVersion}
                     </Caption>
                   )}
+                  <Caption
+                    className={heartbeat?.lastError ? 'text-danger' : 'text-ink-subtle'}
+                  >
+                    {heartbeat?.stoppedBecauseRevoked
+                      ? t('cloudGatewayHeartbeatRevoked')
+                      : heartbeat?.lastError
+                        ? `${t('cloudGatewayHeartbeatFailed')}: ${heartbeat.lastError}`
+                        : heartbeat?.lastOkAt
+                          ? `${t('cloudGatewayHeartbeatOk')} · ${t('cloudGatewayHeartbeatJustNow')}`
+                          : t('cloudGatewayHeartbeatPending')}
+                  </Caption>
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label className="text-ink-muted">{t('cloudDeviceId')}</Label>

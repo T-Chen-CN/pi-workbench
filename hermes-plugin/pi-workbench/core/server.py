@@ -45,6 +45,9 @@ from .errors import HubError
 from .proxy import Response, StreamResponse, Upstream
 
 VERSION = "0.1.0"
+
+# 在线判定窗口：本地每 30s 心跳一次，超过 90s 没动静就算离线
+ONLINE_WINDOW_S = 90
 MAX_BODY_BYTES = 32 * 1024 * 1024  # image uploads go through the hub
 LOGGER = logging.getLogger(__name__)
 
@@ -154,6 +157,8 @@ class Hub:
             ("POST", r"/v1/devices/(?P<device_id>[A-Za-z0-9_.:-]+)/revoke", self.revoke_device, "admin_or_self"),
             # -- device self (own token) -----------------------------------
             ("GET", r"/v1/devices/me", self.device_me, "chat"),
+            # 心跳：本地每 30s 一次，让云端知道这台机器还开着（在线判定 90s）
+            ("POST", r"/v1/devices/me/heartbeat", self.device_heartbeat, "chat"),
             # -- passthrough: api_server -----------------------------------
             ("GET", r"/health/detailed", self.api_passthrough, "chat"),
             ("GET", r"/v1/(?:capabilities|toolsets|skills|models)", self.api_passthrough, "chat"),
@@ -196,7 +201,7 @@ class Hub:
 
     def hub_health(self, req: Request, **_: str) -> Response:
         devices = self.ctx.auth.list_devices()
-        online_at = int(time.time()) - 90
+        online_at = int(time.time()) - ONLINE_WINDOW_S
         payload: dict[str, Any] = {
             "status": "ok",
             "hub": VERSION,
@@ -264,7 +269,9 @@ class Hub:
                     "tokenPrefix": row["token_prefix"],
                     "createdAt": row["created_at"],
                     "lastSeenAt": last_seen,
-                    "online": bool(last_seen and now - last_seen < 90 and not row.get("revoked_at")),
+                    "online": bool(
+                        last_seen and now - last_seen < ONLINE_WINDOW_S and not row.get("revoked_at")
+                    ),
                     "revokedAt": row["revoked_at"],
                     "note": row.get("note"),
                 }
@@ -284,13 +291,31 @@ class Hub:
 
     def device_me(self, req: Request, **_: str) -> Response:
         device = req.device or {}
+        last_seen = device.get("last_seen_at")
         return _json_response(
             {
                 "deviceId": device.get("id"),
                 "name": device.get("name"),
                 "scopes": auth_mod.scopes_list(device.get("scopes", "")),
                 "createdAt": device.get("created_at"),
+                "lastSeenAt": last_seen,
+                "online": bool(device.get("id")),
+                "onlineWindow": ONLINE_WINDOW_S,
+                "serverTime": int(time.time()),
                 "hub": VERSION,
+            }
+        )
+
+    def device_heartbeat(self, req: Request, **_: str) -> Response:
+        device = req.device or {}
+        now = int(time.time())
+        self.ctx.auth.touch(str(device.get("id") or ""), now)
+        return _json_response(
+            {
+                "ok": True,
+                "deviceId": device.get("id"),
+                "serverTime": now,
+                "onlineWindow": ONLINE_WINDOW_S,
             }
         )
 

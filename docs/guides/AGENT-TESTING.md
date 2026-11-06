@@ -175,7 +175,8 @@ ssh … 'tail -f ~/.hermes/profiles/pi-cloud/plugin-data/pi-workbench/audit.json
 2. 打开云端「自检」（诊断）页。
 
 **预期**
-- ✅ 网关卡显示已登记、上游在线。
+- ✅ 网关卡显示已登记、上游在线，并且有一行 **「心跳正常 · 刚刚同步」**（30s 一拍）。
+- ✅ 在云端 `audit.jsonl` 里能看到 `POST /v1/devices/me/heartbeat` 200（约每 30s 一条）。
 - ✅ 自检里 API / dashboard / SSE 三项都绿；显示的上游版本是 `0.22.6`。
 - ❌ 若「已登记但上游没响应」→ 是 Hermes 进程问题，不是网关（跳到 §12-B）。
 

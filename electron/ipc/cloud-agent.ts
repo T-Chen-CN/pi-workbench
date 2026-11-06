@@ -27,6 +27,7 @@ import { createDashboardClient, parseImageDataUrl } from '../cloud/dash.js'
 import {
   gatewayHealth,
   gatewayWhoAmI,
+  heartbeatDevice,
   registerDevice,
   revokeDevice,
 } from '../cloud/gateway.js'
@@ -43,6 +44,7 @@ import {
 } from '../cloud/ledger.js'
 import { createRemote, toRunStatus } from '../cloud/remote.js'
 import { clearActiveRun, readActiveRun, writeActiveRun } from '../cloud/active-run.js'
+import { startHeartbeat } from '../cloud/heartbeat.js'
 import {
   deviceSummary,
   ensureDeviceNameProbe,
@@ -95,6 +97,20 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   let client: CloudClient | null = null
   let clientKey = ''
   let runner: CloudRunner | null = null
+  /** 心跳：登记后每 30s 一拍，让云端知道这台机器还开着（H2-1） */
+  const heartbeat = startHeartbeat({
+    credential: () => {
+      const config = readCloudConfig()
+      if (!config.hasDeviceToken) return null
+      return { gatewayUrl: config.gatewayUrl, deviceToken: config.deviceToken }
+    },
+    beat: ({ gatewayUrl, deviceToken }) => heartbeatDevice({ gatewayUrl, deviceToken }),
+    onState: (state) => send('cloud:gateway:heartbeat', state),
+    onRevoked: (reason) => {
+      logger?.warn('[Cloud] heartbeat stopped: credentials revoked', reason)
+      send('cloud:gateway:revoked', { reason })
+    }
+  })
   let capabilities: CloudCapabilities | null = null
   let hookedWindow: BrowserWindow | null = null
 
@@ -667,6 +683,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
         client = null // 凭据变了，重建客户端与 runner
         runner?.dispose()
         runner = null
+        heartbeat.poke() // 新 token 立刻跳一拍：云端马上看到「在线」
         logger?.info(
           `[Cloud] device registered name=${result.name} prefix=${result.tokenPrefix} scopes=${result.scopes.join('+')}`
         )
@@ -699,6 +716,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       })
       // 注销：只清设备凭据，网关地址留着显示（本地没有别的凭据可退）
       clearDeviceCredentials()
+      heartbeat.stop() // 没凭据了，别再往云端打 401
       client = null
       runner?.dispose()
       runner = null
@@ -1142,6 +1160,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   return {
     dispose: () => {
       clearPendingHandoff()
+      heartbeat.stop()
       runner?.dispose()
       dashboard.destroy()
     }

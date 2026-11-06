@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CloudWorkspaceView } from '../src/components/CloudWorkspaceView'
 import { CloudConnectionView } from '../src/components/CloudConnectionView'
@@ -53,6 +53,8 @@ interface BridgeStub {
   clipboard: string[]
   sessions: CloudSession[]
   parts: CloudTracePart[]
+  heartbeatListeners: Array<(payload: unknown) => void>
+  revokedListeners: Array<(payload: unknown) => void>
 }
 
 function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
@@ -99,6 +101,8 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     gatewayRevoke: vi.fn(async () => ({ success: true })),
     clipboard: [],
     sessions: [SESSION],
+    heartbeatListeners: [],
+    revokedListeners: [],
     parts: [
       { type: 'text', id: 'h:1', role: 'user', text: 'hello there' },
       { type: 'thinking', id: 'h:2:r', text: 'secret reasoning' },
@@ -126,7 +130,7 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     cloudDeviceGet: stub.deviceGet,
     cloudDeviceSet: stub.deviceSet,
     cloudDeviceReprobe: stub.deviceReprobe,
-    cloudGatewayStatus: stub.gatewayStatus,
+    cloudGatewayStatus: () => stub.gatewayStatus(),
     cloudGatewayRegister: stub.gatewayRegister,
     cloudGatewayRevoke: stub.gatewayRevoke,
     writeClipboardText: (text: string) => {
@@ -189,6 +193,18 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     },
     onCloudDashboardLoadFailed: () => () => {},
     onCloudDashboardClosed: () => () => {},
+    onCloudGatewayHeartbeat: (callback: (payload: unknown) => void) => {
+      stub.heartbeatListeners.push(callback)
+      return () => {
+        stub.heartbeatListeners = stub.heartbeatListeners.filter((item) => item !== callback)
+      }
+    },
+    onCloudGatewayRevoked: (callback: (payload: unknown) => void) => {
+      stub.revokedListeners.push(callback)
+      return () => {
+        stub.revokedListeners = stub.revokedListeners.filter((item) => item !== callback)
+      }
+    },
   }
   return stub
 }
@@ -1142,6 +1158,60 @@ describe('审批档位控件', () => {
     // 老主进程会直接 reject：必须落成人话，且档位不被改成「已生效」
     expect(await screen.findByText(/主进程还没更新/)).toBeTruthy()
     expect(useCloudStore.getState().policy?.mode).toBe('manual')
+  })
+})
+
+describe('CloudConnectionView 心跳', () => {
+  it('shows the heartbeat result on the gateway card', async () => {
+    const stub = installBridge()
+    stub.gatewayStatus = vi.fn(async () => ({
+      success: true,
+      registered: true,
+      gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+      deviceId: 'd1e2f3a4-0000-4000-8000-000000000000',
+      name: 'TChen-Legion',
+      scopes: ['chat', 'dispatch'],
+      hub: '0.1.0',
+      online: true,
+      upstreamVersion: '0.22.6',
+    }))
+    await useCloudStore.getState().loadGateway()
+    render(<CloudConnectionView active />)
+
+    // 还没打出去
+    expect(await screen.findByText(zh.cloudGatewayHeartbeatPending)).toBeTruthy()
+
+    act(() => {
+      for (const listener of stub.heartbeatListeners) {
+        listener({ lastOkAt: Date.now(), lastError: null, stoppedBecauseRevoked: false })
+      }
+    })
+    const ok = await screen.findByText(new RegExp(zh.cloudGatewayHeartbeatOk))
+    expect(ok.textContent).toContain(zh.cloudGatewayHeartbeatJustNow)
+  })
+
+  it('turns the connection into an error when the cloud revokes us', async () => {
+    const stub = installBridge()
+    stub.gatewayStatus = vi.fn(async () => ({
+      success: true,
+      registered: false,
+      gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+      device: { id: 'd1e2f3a4-0000-4000-8000-000000000000', name: 'TChen-Legion', defaultName: 'TChen-Legion' },
+    }))
+    useCloudStore.setState({ connection: 'connected', sessions: [SESSION], activeSessionId: 'run_session' })
+    render(<CloudConnectionView active />)
+    await screen.findByText(zh.cloudGatewayTitle)
+
+    act(() => {
+      for (const listener of stub.revokedListeners) {
+        listener({ reason: 'device_revoked: token is no longer valid' })
+      }
+    })
+
+    await waitFor(() => expect(useCloudStore.getState().connection).toBe('error'))
+    expect(useCloudStore.getState().error).toContain('重新登记')
+    expect(useCloudStore.getState().sessions).toEqual([])
+    expect(useCloudStore.getState().heartbeat?.stoppedBecauseRevoked).toBe(true)
   })
 })
 

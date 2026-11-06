@@ -559,6 +559,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('cloud:event', listener)
     return () => ipcRenderer.removeListener('cloud:event', listener)
   },
+  onCloudGatewayHeartbeat: (callback: (payload: unknown) => void) => {
+    const listener = (_event: unknown, payload: unknown) => callback(payload)
+    ipcRenderer.on('cloud:gateway:heartbeat', listener)
+    return () => ipcRenderer.removeListener('cloud:gateway:heartbeat', listener)
+  },
+  onCloudGatewayRevoked: (callback: (payload: unknown) => void) => {
+    const listener = (_event: unknown, payload: unknown) => callback(payload)
+    ipcRenderer.on('cloud:gateway:revoked', listener)
+    return () => ipcRenderer.removeListener('cloud:gateway:revoked', listener)
+  },
   onCloudStatus: (callback: (payload: unknown) => void) => {
     const listener = (_event: unknown, payload: unknown) => callback(payload)
     ipcRenderer.on('cloud:status', listener)

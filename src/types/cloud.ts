@@ -9,6 +9,16 @@
 /** 连接状态：未配置（没有 token）→ connecting → connected / error */
 export type CloudConnectionState = 'unconfigured' | 'connecting' | 'connected' | 'error'
 
+/** 心跳状态（主进程每 30s 一拍的结果，只用于显示） */
+export interface CloudHeartbeatState {
+  /** 最近一次成功心跳（本地时间 ms） */
+  lastOkAt: number | null
+  /** 最近一次失败原因（成功一次就清空） */
+  lastError: string | null
+  /** 因为被注销而停下：要重新登记才会再跳 */
+  stoppedBecauseRevoked: boolean
+}
+
 export interface CloudConnectionInfo {
   /** 网关（单入口）地址：本地唯一出口（C-2，没有直连兜底） */
   gatewayUrl: string
