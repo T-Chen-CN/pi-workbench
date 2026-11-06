@@ -290,6 +290,7 @@ export const translations = {
     cloudToolRunning: '执行中',
     cloudToolDone: '完成',
     cloudToolFailed: '失败',
+    cloudToolFailedNoDetail: '上游只回了失败状态，没带错误内容（多半是命令退出码不是 0）',
     cloudRunError: '本轮执行失败：{error}',
     cloudDisconnectDivider: '连接中断，已切换到该会话的历史记录',
     cloudSessionMetaDivider: '会话开始',
@@ -1391,6 +1392,8 @@ export const translations = {
     cloudToolRunning: 'Running',
     cloudToolDone: 'Done',
     cloudToolFailed: 'Failed',
+    cloudToolFailedNoDetail:
+      'The upstream only reported a failure status — no error text came with it',
     cloudRunError: 'Run failed: {error}',
     cloudDisconnectDivider: 'Connection lost — showing this session history',
     cloudSessionMetaDivider: 'Session started',

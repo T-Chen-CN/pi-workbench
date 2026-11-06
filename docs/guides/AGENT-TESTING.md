@@ -204,6 +204,10 @@ ssh … 'tail -f ~/.hermes/profiles/pi-cloud/plugin-data/pi-workbench/audit.json
 **预期**
 - ✅ 出现工具卡，参数可见，结果展开后是真实文件名。
 - ✅ 卡片状态从「运行中」变「完成」；时间线顺序不乱。
+- ℹ️ 工具**失败**时卡片是红的，而且上游 `tool.completed` 只回 `error:true` + 空 `preview`
+  （2026-11-06 实测：`ls /root/nonexistent-dir` → `error:true, preview:""`）。所以卡片里会显示
+  「上游只回了失败状态，没带错误内容（多半是命令退出码不是 0）」——**这是上游的粒度，不是我没渲染**。
+  想看真实报错就看结果回填（§2 说的时间线校正帧会重拉历史）。
 
 ---
 

@@ -11,7 +11,7 @@ type ToolPart = Extract<CloudTracePart, { type: 'tool' }>
 export const CloudToolCard: React.FC<{ part: ToolPart }> = ({ part }) => {
   const { t } = useI18nStore()
   const [open, setOpen] = useState(false)
-  const hasDetail = Boolean(part.argsSummary || part.resultPreview)
+  const hasDetail = Boolean(part.argsSummary || part.resultPreview || part.status === 'error')
   const contentId = `cloud-tool-${part.id}`
 
   const statusText =
@@ -73,10 +73,16 @@ export const CloudToolCard: React.FC<{ part: ToolPart }> = ({ part }) => {
               {part.argsSummary}
             </pre>
           )}
-          {part.resultPreview && (
+          {part.resultPreview ? (
             <pre className="m-0 max-h-64 overflow-auto px-2 py-1.5 type-code text-ink-muted whitespace-pre-wrap break-all">
               {part.resultPreview}
             </pre>
+          ) : (
+            part.status === 'error' && (
+              <div className="px-2 py-1.5">
+                <Caption className="text-danger">{t('cloudToolFailedNoDetail')}</Caption>
+              </div>
+            )
           )}
           {typeof part.exitCode === 'number' && (
             <div className="border-t border-rule-divide px-2 py-1">
