@@ -8,6 +8,7 @@ import {
   CONTEXT_WINDOW_OPTIONS as BRIDGE_OPTIONS,
   normalizeModelEntries,
   resolveMaxTokens,
+  resolveMaxTokensDetail,
 } from '../pi-bridge/src/model-config'
 
 describe('context window options', () => {
@@ -90,8 +91,17 @@ describe('resolveMaxTokens', () => {
     expect(resolveMaxTokens(1_000_000, 8_192)).toBe(8_192)
     // 未登记模型没有 catalog 值，直接用档位配套值
     expect(resolveMaxTokens(64_000)).toBe(8_192)
-    expect(resolveMaxTokens(256_000)).toBe(32_768)
-    // 256K 档 catalog 与配套值一致时不缩
-    expect(resolveMaxTokens(256_000, 32_768)).toBe(32_768)
+    expect(resolveMaxTokens(256_000)).toBe(65_536)
+    // 用户档位优先，但仍受 catalog 封顶
+    expect(resolveMaxTokens(256_000, 393_216, 131_072)).toBe(131_072)
+    expect(resolveMaxTokens(256_000, 65_536, 131_072)).toBe(65_536)
+    // 非法档位回落到自动
+    expect(resolveMaxTokens(256_000, undefined, 999)).toBe(65_536)
+  })
+
+  it('reports where the effective value came from', () => {
+    expect(resolveMaxTokensDetail(256_000).source).toBe('auto')
+    expect(resolveMaxTokensDetail(256_000, undefined, 131_072).source).toBe('user')
+    expect(resolveMaxTokensDetail(256_000, 65_536, 131_072).source).toBe('clamped')
   })
 })

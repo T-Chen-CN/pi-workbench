@@ -28,7 +28,17 @@ export interface ApiModelEntry {
   id: string
   contextWindow: ModelContextWindow
   image: boolean
+  /** 输出上限档位；缺省或 0 表示按上下文档位自动推导 */
+  maxTokens?: ModelMaxTokens
 }
+
+/**
+ * 输出上限档位（0 = 自动，按上下文档位推导）。
+ * 上限 256K：再高会被 SDK 的 clampMaxTokensToContext 按上下文余量压回，UI 上没有意义。
+ */
+export const MAX_TOKENS_OPTIONS = [0, 16_384, 32_768, 65_536, 131_072, 262_144] as const
+
+export type ModelMaxTokens = (typeof MAX_TOKENS_OPTIONS)[number]
 
 /** 可展示的工具步骤 */
 export type AgentTracePart =
@@ -184,6 +194,8 @@ export interface ModelCapabilityInfo {
   available: boolean
   contextWindow: number
   maxTokens: number | null
+  /** 生效值来源：auto=档位推导，user=用户档位，clamped=被 catalog 封顶 */
+  maxTokensSource?: 'auto' | 'user' | 'clamped'
   reasoning: boolean | null
   vision: boolean
   thinkingLevels: string[]

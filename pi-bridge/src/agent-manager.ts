@@ -65,7 +65,7 @@ import {
   THINKING_LEVELS,
   WORKBENCH_PROVIDER_ID,
   normalizeModelEntries,
-  resolveMaxTokens,
+  resolveMaxTokensDetail,
   writeModelsConfig,
 } from './model-config.js'
 import {
@@ -1237,13 +1237,16 @@ export class AgentManager {
       const models = entries.map((entry): ModelCapabilityInfo => {
         const model = this.modelRuntime!.getModel(WORKBENCH_PROVIDER_ID, entry.id)
         const known = KNOWN_MODEL_METADATA[entry.id]
-        const maxTokens = resolveMaxTokens(entry.contextWindow, known?.maxTokens)
+        const resolved = resolveMaxTokensDetail(entry.contextWindow, known?.maxTokens, entry.maxTokens)
+        const maxTokens = resolved.value
+        const maxTokensSource = resolved.source
         if (!model) {
           return {
             id: entry.id,
             available: false,
             contextWindow: entry.contextWindow,
             maxTokens,
+            maxTokensSource,
             reasoning: known?.reasoning ?? null,
             vision: entry.image,
             thinkingLevels: [],
@@ -1255,6 +1258,7 @@ export class AgentManager {
           available: true,
           contextWindow: entry.contextWindow,
           maxTokens,
+          maxTokensSource,
           reasoning: Boolean(known?.reasoning),
           vision: entry.image,
           thinkingLevels: supportsThinking

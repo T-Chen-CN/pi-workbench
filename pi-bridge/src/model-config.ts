@@ -3,10 +3,10 @@
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import { writeJsonAtomicSync } from './atomic-json.js'
-import { CONTEXT_WINDOW_OPTIONS } from './types.js'
-import type { ApiModelEntry, ModelContextWindow } from './types.js'
+import { CONTEXT_WINDOW_OPTIONS, MAX_TOKENS_OPTIONS } from './types.js'
+import type { ApiModelEntry, ModelContextWindow, ModelMaxTokens } from './types.js'
 
-export { CONTEXT_WINDOW_OPTIONS }
+export { CONTEXT_WINDOW_OPTIONS, MAX_TOKENS_OPTIONS }
 
 export interface ApiConfigInput {
   provider: string
@@ -20,14 +20,15 @@ export interface ApiConfigInput {
 export const DEFAULT_CONTEXT_WINDOW: ModelContextWindow = 128_000
 
 /**
- * 档位配套的输出上限。最终取 min(配套值, catalog)，即只缩不放大：
- * 抬高会超出供应商允许的 max_tokens，直接导致请求失败。
+ * 「自动」档的配套输出上限，最终取 min(配套值, catalog)。
+ * 值对齐主流区间（各供应商 p10–p75）：256K → 64K（DeepSeek 思考默认 / Gemini 档），
+ * 1M → 128K（OpenAI / Anthropic 旗舰档）。用户可在设置页手动覆盖。
  */
 const PAIRED_MAX_TOKENS: Record<ModelContextWindow, number> = {
   64_000: 8_192,
-  128_000: 8_192,
-  256_000: 32_768,
-  1_000_000: 16_384,
+  128_000: 16_384,
+  256_000: 65_536,
+  1_000_000: 131_072,
 }
 
 /**
@@ -42,8 +43,10 @@ export const KNOWN_MODEL_METADATA: Record<
   }
 > = {
   // 2026-10-24 由项目所有者确认：DeepSeek flash 支持图像输入与思考
+  // maxTokens 是**供应商硬上限**（官方文档 1–384K），不是推荐值；
+  // 推荐值由上下文档位推导，用户也可在设置页覆盖
   'deepseek-flash': {
-    maxTokens: 32_768,
+    maxTokens: 393_216,
     reasoning: true,
   },
 }
@@ -75,12 +78,43 @@ export function normalizeContextWindow(value: unknown): ModelContextWindow {
   return isContextWindow(value) ? value : DEFAULT_CONTEXT_WINDOW
 }
 
-/** 输出上限只缩不放大：catalog 更小时保留 catalog 值 */
-export function resolveMaxTokens(contextWindow: number, catalogMaxTokens?: number): number {
+/** 非法 / 缺失的输出档位回落到「自动」 */
+export function normalizeMaxTokens(value: unknown): ModelMaxTokens {
+  return typeof value === 'number' && (MAX_TOKENS_OPTIONS as readonly number[]).includes(value)
+    ? (value as ModelMaxTokens)
+    : 0
+}
+
+export type MaxTokensSource = 'auto' | 'user' | 'clamped'
+
+/**
+ * 解析输出上限：用户档位优先，其次按上下文档位推导；两者都以 catalog 封顶。
+ * source 用于设置页说明生效值从哪来（auto / user / clamped）。
+ */
+export function resolveMaxTokensDetail(
+  contextWindow: number,
+  catalogMaxTokens?: number,
+  userMaxTokens?: number | null
+): { value: number; source: MaxTokensSource } {
+  const catalog =
+    typeof catalogMaxTokens === 'number' && catalogMaxTokens > 0 ? catalogMaxTokens : Number.POSITIVE_INFINITY
+  const user = normalizeMaxTokens(userMaxTokens)
+  if (user > 0) {
+    const value = Math.min(user, catalog)
+    return { value, source: value < user ? 'clamped' : 'user' }
+  }
   const paired = PAIRED_MAX_TOKENS[normalizeContextWindow(contextWindow)]
-  return typeof catalogMaxTokens === 'number' && catalogMaxTokens > 0
-    ? Math.min(catalogMaxTokens, paired)
-    : paired
+  const value = Math.min(paired, catalog)
+  return { value, source: value < paired ? 'clamped' : 'auto' }
+}
+
+/** 输出上限只缩不放大：catalog 与用户档位都更小时保留较小的那个 */
+export function resolveMaxTokens(
+  contextWindow: number,
+  catalogMaxTokens?: number,
+  userMaxTokens?: number | null
+): number {
+  return resolveMaxTokensDetail(contextWindow, catalogMaxTokens, userMaxTokens).value
 }
 
 /**
@@ -100,6 +134,10 @@ export function normalizeModelEntries(apiConfig: ApiConfigInput): ApiModelEntry[
       id,
       contextWindow: normalizeContextWindow(item.contextWindow),
       image: item.image === true,
+      // 0 视为自动，不写入配置，保持旧配置形状不变
+      ...(normalizeMaxTokens(item.maxTokens) > 0
+        ? { maxTokens: normalizeMaxTokens(item.maxTokens) }
+        : {}),
     })
   }
 
@@ -134,7 +172,7 @@ export async function writeModelsConfig(
             ...(known.reasoning ? { reasoning: true } : {}),
             // 上下文容量以用户设置为唯一来源
             contextWindow: entry.contextWindow,
-            maxTokens: resolveMaxTokens(entry.contextWindow, known.maxTokens),
+            maxTokens: resolveMaxTokens(entry.contextWindow, known.maxTokens, entry.maxTokens),
             // Pi SDK 按 input 决定是否把图片传给模型；以用户勾选为准
             input: entry.image ? ['text', 'image'] : ['text'],
           }

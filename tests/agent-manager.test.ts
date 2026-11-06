@@ -430,7 +430,7 @@ describe('AgentManager initialization', () => {
       baseUrl: 'https://api.example.com/v1',
       api: 'openai-completions',
       apiKey: '$PI_WORKBENCH_API_KEY',
-      models: [{ id: 'test-model', contextWindow: 128_000, maxTokens: 8_192, input: ['text'] }],
+      models: [{ id: 'test-model', contextWindow: 128_000, maxTokens: 16_384, input: ['text'] }],
     })
     expect(raw).not.toContain('sk-secret')
     expect(process.env.PI_WORKBENCH_API_KEY).toBe('sk-secret')
@@ -2674,8 +2674,8 @@ describe('model capabilities', () => {
 
     expect(flash.input).toEqual(['text'])
     expect(vision.input).toEqual(['text', 'image'])
-    // 1M 档位配套 16384，catalog 声明 32768：取档位配套值
-    expect(flash).toMatchObject({ contextWindow: 1_000_000, maxTokens: 16_384 })
+    // 1M 档位配套 131072，catalog 声明上限 393216：取档位配套值
+    expect(flash).toMatchObject({ contextWindow: 1_000_000, maxTokens: 131_072 })
     // 未登记的模型没有 catalog 上限，按档位配套值写入
     expect(vision).toMatchObject({ contextWindow: 64_000, maxTokens: 8_192 })
   })
