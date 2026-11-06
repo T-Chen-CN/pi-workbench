@@ -46,6 +46,7 @@
 | R-21 | ✅ 任意位置 / 任意格式文件附件（只给路径） | P1 | 使用反馈 | 原生文件选择、`buildContextPrompt` |
 | R-22 | ✅ PDF / Office 可读：Agent 读取 + 程序内只读预览 | P2 | R-21 后续 | 自写 ZIP+XML、pdf.js legacy、渲染进程画扫描页 |
 | R-20 | ✅ 工具结果全量查看器 | P2 | B-01 升级 | 会话 sidecar、工具结果存储 |
+| R-23 | ❌ 输出预算与截断的完整处理（防 / 检 / 修 / 呈现） | P0 | 现场故障：PW-Hermes 2026-11-06 连续 8 次空回复 | `AgentManager`、`model-config`、R-06 |
 | V-01 | macOS 手动验收 | 发布前 | 平台差异 | dmg 构建 |
 | V-02 | Linux 手动验收 | 发布前 | 平台差异 | AppImage 构建 |
 
@@ -204,6 +205,25 @@
 ### R-22 原始定界（已过时，保留备查）⛔ 本轮未做（2026-10-30）
 
 （当时的备选路线已在上节「被否方案」里逐条记录，不再重复。）
+
+### R-23 输出预算与截断的完整处理 ❌ 未开工（2026-11-06）
+
+- **现状**：`AgentManager` 只把 `stopReason` 的 `error` / `aborted` 当失败；`length`（输出撞上限）落进「成功」分支，正文为空时被替换成 `Agent completed but returned no text response.` 并写入 `runtime.messageHistory`。`readUsage` 丢弃 `usage.reasoning`；渲染层没有任何「截断」概念（全项目仅 `agent-manager.ts` 与 `session-title.ts` 引用 `stopReason`）。2026-11-06 在 PW-Hermes 工作区 22 轮里出现 8 轮：`stopReason=length`、`content` 只有 1 个 thinking 块、`usage.output === usage.reasoning === 8192`，分布在 3 个会话，用户反复重发同一指令。
+- **已做的止血**：`9979fec` 把 deepseek-flash 的 catalog 上限与 256K 档配套值从 8K 提到 32K（供应商思考模式默认 64K，官方范围 1–384K）。触发率显著下降，但**不改变失败时的表现**——偶发时仍是那句占位文案。
+- **目标**：让「截断」在系统里成为显式状态，覆盖业界已有的防 / 检 / 修 / 呈现四类做法。
+- **子项**：
+  - **B1（检）** `agent-manager.ts:2293` 增 `stopReason === 'length'` 分支；撞墙判定用 `output - reasoning ≈ 0`（OpenRouter 公式），不能只看 `output === maxTokens`——现有 `isRecoverableLength` 要求 `output < maxTokens`，打满即被 SDK 判为不可恢复。
+  - **B2（修）** 返回 `success:false` + 可操作文案（降思考档位 / 拆小任务 / 提高上限），走 `useChatPanelState.ts:1357` 已有的错误气泡通路。
+  - **B3（修）** 空正文不写 `runtime.messageHistory`（对齐 AstrBot #9035：空壳进历史会让下一轮 400）。
+  - **B4（修）** 区分「正文被截断」（可续写）与「纯思考截断」（确定性，不重试；对齐 oh-my-pi #2774）。
+  - **B5（呈现）** `AgentUsage` 增 `reasoning`（`types.ts`、`electron.d.ts`、`api/index.ts` mock 同步），用量处显示「思考 N / 上限 M」。
+  - **B6（防）** catalog 只放「核实过的供应商上限」，策略值只留在 `PAIRED_MAX_TOKENS`；补一条单测锁住「catalog 不得压制档位值」。
+  - **B7（防）** 长上下文下 `clampMaxTokensToContext` 压到临界值时提前提示或自动降 effort。
+  - **B8（防）** 标题生成、压缩摘要等轻任务单独预算或关思考。
+  - **B9（回归）** 用例：`length + thinking-only`、`output === max && reasoning === output`、空正文不落 history。
+  - **B10（文档）** `agent-runtime.md` 增「输出预算与截断」章节；`AGENT-TESTING.md` §6「错误透传」补手动验收。
+- **验收**：mock 供应商返回 `length + thinking-only` 时界面显示可操作错误而非占位文案；`messageHistory` 无空壳；用量面板能看到 reasoning 数字；`npm test` 覆盖上述三种场景。
+- **参考**：OpenRouter [Reasoning Tokens](https://openrouter.ai/docs/use-cases/reasoning-tokens)（检测公式、`max_output_tokens` 必须大于思考预算）、OpenAI [Reasoning](https://developers.openai.com/api/docs/guides/reasoning)（`incomplete_details.reason=max_output_tokens`）、AWS Bedrock [扩展思考](https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-extended-thinking.html)（`budget_tokens < max_tokens`）、vLLM [Reasoning Outputs](https://docs.vllm.ai/en/latest/features/reasoning_outputs)（`thinking_token_budget`）、Cline [#5645](https://github.com/cline/cline/issues/5645)（3 次退避重试）、oh-my-pi [#2774](https://github.com/can1357/oh-my-pi/issues/2774)（确定性截断不重试、抛可操作错误）、AstrBot [#9035](https://github.com/AstrBotDevs/AstrBot/issues/9035)（空壳入历史导致 400）、Signet-AI [#809](https://github.com/Signet-AI/signetai/issues/809)（`max_tokens` 过小导致 `content: null`）、llama.cpp [#20931](https://github.com/ggml-org/llama.cpp/discussions/20931)（`max_tokens` 低于思考预算即空响应）。
 
 ---
 
