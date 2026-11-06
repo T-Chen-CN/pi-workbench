@@ -25,7 +25,7 @@
   <!-- 右侧信息栏：mono 数据（§3.1 mono 只承担路径 / ID / 时间 / 版本） -->
   <line x1="1010" y1="100" x2="1010" y2="208" stroke="#171512" stroke-opacity="0.22" />
   <g font-family="'Geist Mono', Consolas, monospace" text-anchor="end">
-    <text x="1208" y="128" font-size="13" fill="#171512">v0.7.6</text>
+    <text x="1208" y="128" font-size="13" fill="#171512">v0.7.7</text>
     <text x="1208" y="154" font-size="10.5" letter-spacing="1.4" fill="#615C52">WINDOWS · MACOS · LINUX</text>
     <text x="1208" y="178" font-size="10.5" letter-spacing="1.4" fill="#615C52">ELECTRON 44 · REACT 19</text>
   </g>
