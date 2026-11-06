@@ -619,6 +619,65 @@ describe('AgentManager chat', () => {
     expect(result.error).toBe('401 Unauthorized')
   })
 
+  it('reports truncated output instead of a placeholder reply', async () => {
+    const session = createFakeSession(async (s) => {
+      s.messages.push({
+        role: 'assistant',
+        content: [],
+        stopReason: 'length',
+        usage: {
+          input: 100,
+          output: 8192,
+          reasoning: 8192,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 8292,
+        },
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const result = await manager.chat('hi')
+
+    expect(result.success).toBe(false)
+    expect(result.errorCode).toBe('output-truncated')
+    expect(result.error).toContain('No reply body')
+    expect(result.error).not.toContain('Agent completed but returned no text response.')
+    expect(result.usage?.reasoning).toBe(8192)
+    expect(result.outputLimit).toBeGreaterThan(0)
+    // 空壳回复不能进历史，否则下一轮请求会被污染
+    expect(manager.getMessageHistory().filter((m) => m.role === 'assistant')).toHaveLength(0)
+  })
+
+  it('reports partial truncation with the token split', async () => {
+    const session = createFakeSession(async (s) => {
+      s.messages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'half a sen' }],
+        stopReason: 'length',
+        usage: {
+          input: 100,
+          output: 6000,
+          reasoning: 5800,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 6100,
+        },
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const result = await manager.chat('hi')
+
+    expect(result.success).toBe(false)
+    expect(result.errorCode).toBe('output-truncated')
+    expect(result.error).toContain('Output truncated')
+    expect(result.error).toContain('reasoning 5800')
+    expect(result.error).toContain('text 200')
+  })
+
   it('reports aborted requests', async () => {
     const session = createFakeSession(async (s) => {
       s.messages.push({ role: 'assistant', content: '', stopReason: 'aborted' })

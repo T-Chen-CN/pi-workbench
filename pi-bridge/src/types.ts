@@ -314,6 +314,10 @@ export interface AgentChatResult {
   success: boolean
   response?: string
   error?: string
+  /** 可本地化的错误码；渲染层优先用它生成文案，error 作为日志兑底 */
+  errorCode?: 'output-truncated' | 'empty-response'
+  /** 本轮生效的输出上限（errorCode 为截断类时提供） */
+  outputLimit?: number
   /** Agent 在本轮对话中修改过的文件（用于 Diff 展示） */
   edits?: FileEdit[]
   /** 本轮模型调用的 token 用量 */

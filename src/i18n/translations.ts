@@ -284,6 +284,10 @@ export const translations = {
     goToSettings: '前往设置',
     agentInitFailed: 'Agent 初始化失败',
     agentResponseFailed: '未能获取 Agent 回复',
+    agentOutputTruncated:
+      '输出被截断：思考 {{reasoning}} + 正文 {{body}} token，已用满上限 {{limit}}。可在「设置 → 模型能力 → 输出上限」调高后重试。',
+    agentEmptyResponse:
+      '本轮没有产出正文：思考用完了 {{limit}} token 的输出上限。可在「设置 → 模型能力 → 输出上限」调高后重试。',
     agentModifiedFiles: 'Agent 修改了 {count} 个文件',
     turnChanges: '本轮修改了 {count} 个文件',
     approvalTitle: '需要你确认后才能继续',
@@ -1096,6 +1100,10 @@ export const translations = {
     goToSettings: 'Go to Settings',
     agentInitFailed: 'Failed to initialize agent',
     agentResponseFailed: 'Failed to get response from agent',
+    agentOutputTruncated:
+      'Output truncated: reasoning {{reasoning}} + text {{body}} of {{limit}} tokens. Raise the output limit in Settings → Model capabilities → Output limit, then retry.',
+    agentEmptyResponse:
+      'No reply body: reasoning used the whole {{limit}}-token output limit. Raise the output limit in Settings → Model capabilities → Output limit, then retry.',
     agentModifiedFiles: 'Agent modified {count} file(s)',
     turnChanges: 'This turn changed {count} file(s)',
     approvalTitle: 'Approval required to continue',

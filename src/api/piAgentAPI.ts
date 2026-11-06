@@ -60,6 +60,10 @@ interface AgentChatResponse {
   success: boolean
   response?: string
   error?: string
+  /** 可本地化的错误码（截断类） */
+  errorCode?: 'output-truncated' | 'empty-response'
+  /** 本轮生效的输出上限 */
+  outputLimit?: number
   edits?: FileEdit[]
   usage?: AgentUsage
   plan?: StructuredPlan

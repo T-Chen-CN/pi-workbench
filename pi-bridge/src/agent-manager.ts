@@ -61,6 +61,7 @@ import {
 } from './session-export.js'
 import { validateChatImages } from './chat-images.js'
 import {
+  DEFAULT_CONTEXT_WINDOW,
   KNOWN_MODEL_METADATA,
   THINKING_LEVELS,
   WORKBENCH_PROVIDER_ID,
@@ -284,6 +285,20 @@ export class AgentManager {
   private deletedSessions = new Set<string>()
   /** 上一次创建会话时使用的联网配置版本 */
   private lastWebAccessVersion: string | null = null
+
+  /** 当前生效的输出上限（与 models.json 里写入的值一致），用于截断报错 */
+  private outputLimit(): number {
+    const apiConfig = this.config?.apiConfig
+    if (!apiConfig) return 0
+    const id = apiConfig.selectedModel
+    const entry = normalizeModelEntries(apiConfig).find((item) => item.id === id)
+    const known = KNOWN_MODEL_METADATA[id]
+    return resolveMaxTokensDetail(
+      entry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+      known?.maxTokens,
+      entry?.maxTokens
+    ).value
+  }
 
   /** 从 assistant 消息中提取 usage（Pi 保证 assistant 消息带 usage） */
   private readUsage(message: any): AgentUsage | undefined {
@@ -2314,8 +2329,34 @@ export class AgentManager {
           .join('\n')
       }
 
+      // 输出撞上限：如实报错，不再伪装成「成功但没有正文」
+      if (lastAssistant.stopReason === 'length') {
+        const limit = this.outputLimit()
+        const output = usage?.output ?? 0
+        const reasoning = usage?.reasoning ?? 0
+        const body = Math.max(0, output - reasoning)
+        const detail = assistantResponse
+          ? `Output truncated: reasoning ${reasoning} + text ${body} of ${limit} tokens. Raise the output limit in Settings and retry.`
+          : `No reply body: reasoning used the whole ${limit}-token output limit. Raise the output limit in Settings and retry.`
+        this.logger.warn(
+          `[Agent Manager] Output truncated on ${runtime.id}: limit=${limit} output=${output} reasoning=${reasoning} hasText=${assistantResponse.length > 0}`
+        )
+        // 不写 runtime.messageHistory：空壳或残缺回复进入历史会污染下一轮请求
+        return { success: false, error: detail, edits, usage, errorCode: 'output-truncated', outputLimit: limit }
+      }
+
       if (!assistantResponse) {
-        assistantResponse = 'Agent completed but returned no text response.'
+        this.logger.warn(
+          `[Agent Manager] Empty assistant response on ${runtime.id}: stopReason=${lastAssistant.stopReason} output=${usage?.output ?? 0}`
+        )
+        return {
+          success: false,
+          error: 'No reply body: the model returned only thinking or tool calls.',
+          edits,
+          usage,
+          errorCode: 'empty-response',
+          outputLimit: this.outputLimit(),
+        }
       }
 
       const aggregated = this.sessionMessages(runtime)
