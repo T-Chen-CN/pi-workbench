@@ -37,6 +37,7 @@
 ### 🔧 开发指南
 - **[构建和打包](./guides/BUILD_AND_PACKAGE.md)** — 构建、打包、发布与自动更新
 - **[对外文案](./guides/PUBLIC_COPY.md)** — 仓库门面（About / Topics）、Release 说明模板与 README 结构、截图槽位
+- **[插件独立仓库迁移手册](./guides/PLUGIN_REPO_MIGRATION.md)** — A 方案执行版：插件搬进独立私有仓库（根目录即插件、只读 deploy key、`--ref <SHA>` 钉版本）、VPS 用 `plugins adopt` 取代 `tar + scp`、自举 Prompt 改成 `{{PLUGIN_REPO}}` / `{{PLUGIN_REF}}` 占位符；含备份 / 回滚 / 验收 / 坑位速查
 - **[Agent 测试清单](./guides/AGENT-TESTING.md)** — Agent 功能手动验收步骤；含 **云端单入口（G1）验收** 逐条手点清单（对话 / 工具 / 审批 / 插话 / 停止 / 跨重启接回 / 图片 / 会话与任务页 / 两种失败语义 / 注销再登记 / 审计对账）
 - **[Agent 过程轨迹测试方案](./guides/AGENT_TRACE_TESTING.md)** — thinking / 工具步骤的自动化与手动验收
 
