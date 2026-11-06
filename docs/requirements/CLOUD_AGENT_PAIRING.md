@@ -341,6 +341,8 @@ Phase 1 结束时：应用可编译、测试全绿；真实配对会因插件未
 
 ## 6. 插件改造（Phase 2，独立仓库）
 
+> **2026-11-06 方案更新**：Phase 2 由新仓库 `pi-workbench-gateway` 从零实现。详细开发方案见 [CLOUD_AGENT_GATEWAY_PLUGIN](./CLOUD_AGENT_GATEWAY_PLUGIN.md)。
+
 按 §4 契约实现，不改桌面端：
 
 | 文件 | 改动 |
@@ -455,7 +457,7 @@ curl -sS -X POST https://hub.example.com/v1/devices/pair \
 - [AGENT-TESTING](../guides/AGENT-TESTING.md) — G1 手工验收
 - [PROJECT_STRUCTURE](../architecture/PROJECT_STRUCTURE.md) — IPC / 文件树
 - [paths-and-storage](../agent/paths-and-storage.md) — `connection.json` 字段
-- [插件仓库](https://github.com/T-Chen-CN/pi-workbench-plugin) — Phase 2 实现
+- [网关插件开发方案](./CLOUD_AGENT_GATEWAY_PLUGIN.md) — Phase 2 从零实现新仓库
 
 ---
 

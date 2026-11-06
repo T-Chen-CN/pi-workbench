@@ -1,27 +1,28 @@
 # hermes-plugin/ —— 已迁出，这里是路牌
 
-云端网关插件**不再存放在本仓库**。它有自己的仓库：
+云端网关插件**不再存放在本仓库**。新插件是独立仓库：
 
 | 项 | 值 |
 | --- | --- |
-| 仓库 | <https://github.com/T-Chen-CN/pi-workbench-plugin>（公开，MIT） |
-| 形状 | **仓库根目录就是插件本体**（`plugin.yaml` 在根，`hermes plugins install` 只认这种形状） |
-| 版本 | 引导装默认分支最新版；`--ref <40 位 SHA>` 只在「复现某次部署」时用（见迁移手册） |
+| 仓库 | `pi-workbench-gateway`（新仓库，开发中） |
+| 形状 | **仓库根目录就是插件本体**（`plugin.yaml` 在根） |
+| 插件 id | `pi-workbench-gateway` |
 | 测试 | `python -m unittest discover -s tests -t .`（纯 stdlib，零依赖） |
 
-安装（在 VPS 的 profile 里，`HERMES_HOME` 指向 profile 而不是 `~/.hermes`）：
+开发方案、目录结构、协议、验收与部署步骤：
 
-```bash
-hermes plugins install https://github.com/T-Chen-CN/pi-workbench-plugin.git --no-enable
-# 引导不钉版本（装默认分支最新版）；要复现某次部署时才用 --ref <40 位 SHA>
-hermes plugins adopt pi-workbench          # 过渡期：目录还在时的收编路径
-hermes plugins check-updates / update      # 之后走这个，不再 tar + scp
-```
+[CLOUD_AGENT_GATEWAY_PLUGIN](../docs/requirements/CLOUD_AGENT_GATEWAY_PLUGIN.md)
 
-**不要再往这里加插件代码。** 插件侧（`core/` 纪律、`plugin.yaml`、发版）全在新仓库；
-应用侧只保留三样东西：客户端代码、契约文档、自举 Prompt 里的 `{{PLUGIN_REPO}}`
-（`src/utils/hermesPrompt.ts` 的一个常量；**不钉版本** —— 引导装默认分支最新版，跟版靠 `hermes plugins update`）。
+**不要再往这里加插件代码。** 应用侧只保留三样东西：
 
-迁移过程与回滚步骤：[PLUGIN_REPO_MIGRATION](../docs/guides/PLUGIN_REPO_MIGRATION.md)。
-契约与验收：[CLOUD_AGENT_DEVICES](../docs/requirements/CLOUD_AGENT_DEVICES.md) ·
-[ADR-008](../docs/decisions/ADR-008-cloud-single-entry-plugin.md)。
+- 客户端代码
+- 契约文档
+- 自举 Prompt 里的 `{{PLUGIN_REPO}}`（`src/utils/hermesPrompt.ts` 的一个常量）
+
+新仓库发布后，把应用侧常量与自举 Prompt 一起切到新仓库地址；引导不钉版本，跟版靠 `hermes plugins update`。
+
+契约与验收：
+
+- [CLOUD_AGENT_PAIRING](../docs/requirements/CLOUD_AGENT_PAIRING.md)
+- [CLOUD_AGENT_GATEWAY_PLUGIN](../docs/requirements/CLOUD_AGENT_GATEWAY_PLUGIN.md)
+- [ADR-008](../docs/decisions/ADR-008-cloud-single-entry-plugin.md)

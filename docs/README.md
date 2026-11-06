@@ -31,7 +31,8 @@
 - **[顶层 Agent 简版需求](./requirements/TOP_LEVEL_AGENT_BRIEF.md)** — 同上，去掉术语与实现细节，只说「它要做什么 / 不做什么 / 权限规矩」
 - **[云端 Agent 方案 v5](./requirements/CLOUD_AGENT.md)** — 以后端 Hermes 为基础的云端常驻 Agent（对标 Dots / Grok Bot / Muse）：50 条能力 ID 覆盖表（v5 删 1 条）、自研 4 条、通道（API Server 主 / dashboard 配置面 / ACP 迁移路径）、域名 + TLS 反代部署、整机权限与软限制口径、最小化 profile、安全边界 S-01~S-15、AC-01~AC-22、四探针 D1–D2、双轨工程序 A–H（v5：两页独立前端、不做预算熔断）
 - **[云端 Agent 多设备身份与反向派活方案 v3.2](./requirements/CLOUD_AGENT_DEVICES.md)** — 本地与云端只留一条缝：自写 Hermes 插件 `pi-workbench`（`kind: platform`，与 gateway 同进程）；除 dashboard 外全部对接经它转发；设备 token → `deviceId`、scope 限权、审计逐条带设备；云端派活「只发请求、能力只由本地授予」（S-02 → 零本地授权，见 [ADR-008](./decisions/ADR-008-cloud-single-entry-plugin.md)）；**派活单位是工作区**（设备只是承载者，路径不出本机）；H0–H4 分期 + **§20 执行手册**（备份 → H0–H4 分步 + G0–G4 Gate）+ 20 条验收 + 预检 15 项实测；**H0 / H1 已完成**（插件上线、本地改单入口）
-- **[云端 Agent 配对连接方案（插件配对码）](./requirements/CLOUD_AGENT_PAIRING.md)** — 草案：删除 handoff v1/v1.1/v2 与管理密钥 UI，桌面端只粘贴一次性连接码；管理密钥不出服务器、控制台手动登录；含协议契约（`/v1/devices/pairing` + `/v1/devices/pair`）、Phase 1–3、验收与工作量
+- **[云端 Agent 网关插件开发方案（从零实现）](./requirements/CLOUD_AGENT_GATEWAY_PLUGIN.md)** — 新仓库 `pi-workbench-gateway`：从零实现 Hermes `kind: platform` 网关插件；设备 token / 一次性连接码 / 限流 / 审计 / `/v1/*` 与 `/api/*` 反向代理 / SSE / 控制台侧路 / 域名 + Caddy 部署；含 P0–P5、验收 AC-GW01~16 与开工清单
+- **[云端 Agent 配对连接方案（插件配对码）](./requirements/CLOUD_AGENT_PAIRING.md)** — Phase 1 桌面端已完成：删除 handoff v1/v1.1/v2 与管理密钥 UI，桌面端只粘贴一次性连接码；管理密钥不出服务器、控制台手动登录；含协议契约（`/v1/devices/pairing` + `/v1/devices/pair`）、Phase 1–3、验收与工作量
 - **[云端 Agent 审批实现方案（C-05）](./requirements/CLOUD_AGENT_APPROVAL.md)** — 审批卡片 / 应答通道 / 断流补卡 / 审计 JSONL + **原生 `approvals.mode` 三档切换**（不自造档位预设）；含 2026-11-06 实机实测事实与两次服务端前置
 - **[云端自举 Prompt（草案 v2）](./requirements/hermes-bootstrap-prompt.md)** — 交给已部署的 Hermes 自己完成域名 / 反代 / **网关插件 + 管理密钥**；当前仍交付 `hermes-handoff v2` 文件，Phase 3 改为一次性连接码（见 [配对方案](./requirements/CLOUD_AGENT_PAIRING.md)）；**未在干净机器实跑**，见 [BACKLOG §7.3](./progress/BACKLOG.md)
 
@@ -79,6 +80,7 @@
 | 改云端审批 / 权限档位 | [requirements/CLOUD_AGENT_APPROVAL.md](./requirements/CLOUD_AGENT_APPROVAL.md) |
 | 做多设备身份 / 云端派活 / 对接层 | [requirements/CLOUD_AGENT_DEVICES.md](./requirements/CLOUD_AGENT_DEVICES.md)（v2.1，预检完成待开工）· [decisions/ADR-008](./decisions/ADR-008-cloud-single-entry-plugin.md)（已接受） |
 | 做云端配对 / 首次连接 | [requirements/CLOUD_AGENT_PAIRING.md](./requirements/CLOUD_AGENT_PAIRING.md)（连接码契约与 Phase 1–3） |
+| 从零开发云端网关插件 | [requirements/CLOUD_AGENT_GATEWAY_PLUGIN.md](./requirements/CLOUD_AGENT_GATEWAY_PLUGIN.md)（新仓库、P0–P5、AC-GW） |
 | 改面板拆出 / 托盘行为 | [agent/panels-and-windows.md](./agent/panels-and-windows.md) |
 | 查看思考与工具轨迹方案 | [AGENT_TRACE.md](./architecture/AGENT_TRACE.md) |
 | 查某个架构决定的理由 | [decisions/](./decisions/) |
@@ -101,4 +103,4 @@
 
 ---
 
-**最后更新**: 2026-11-06（新增云端配对连接方案）
+**最后更新**: 2026-11-06（新增云端网关插件开发方案）
