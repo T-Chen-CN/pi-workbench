@@ -10,8 +10,9 @@
 
 **更新时间**: 2026-11-06
 
-- ✅ **最新版本 0.7.8**（输出上限从代码常数变成用户档位：自动 / 16K / 32K / 64K / 128K / 256K，自动档 256K→64K、1M→128K；截断不再伪装成空回复，改为如实报错并给出思考 / 正文 / 上限；`usage.reasoning` 透出）；完整记录见下方 Phase 6 的 2026-11-06 发布条目
-- 🟡 **R-23 部分完成**：`length` 判失败、`reasoning` 透出、空正文不落历史、UI 提示、catalog 退回供应商硬上限、输出上限档位已在 0.7.8 落地；剩「可续写截断」的后续动作、上下文余量预警、轻任务独立预算、`reasoning_effort` 联动。详见 [BACKLOG](./BACKLOG.md) R-23
+- ✅ **最新版本 0.7.9**（修 0.7.8 输出上限档位不落盘的缺陷：主进程白名单丢弃 `maxTokens`、配置签名遗漏字段，选完保存又变回「自动」；「自动」现在显示生效值，保存后以磁盘为准）；完整记录见下方 Phase 6 的 2026-11-06 发布条目
+- ✅ **0.7.8 已发布：输出上限改为用户档位、截断如实报错、`usage.reasoning` 透出**；完整记录见下方 Phase 6 的 2026-11-06 条目
+- 🟡 **R-23 部分完成**：`length` 判失败、`reasoning` 透出、空正文不落历史、UI 提示、catalog 退回供应商硬上限、输出上限档位（含落盘修复）已在 0.7.8 / 0.7.9 落地；剩「可续写截断」的后续动作、上下文余量预警、轻任务独立预算、`reasoning_effort` 联动。详见 [BACKLOG](./BACKLOG.md) R-23
 - ✅ **0.7.6 已发布：仓库地图画布面板、标签栏「选择工作区」弹窗、按键延迟两批治理、README 中文优先重写**；完整记录见下方 Phase 6 的 2026-11-03 条目
 - ✅ **0.7.5 已发布：聊天附件任意位置 / 格式 + PDF / Office 可读与只读预览 + 退出可靠性与单实例恢复**；完整记录见下方 Phase 6 的 2026-10-31 条目
 - ✅ **0.7.4 已发布：工作树依赖自动安装与复用 + 聊天体验 / 外链 / 剪贴板 / 编辑器外部刷新批次**；完整记录见下方 Phase 6 的 2026-10-29 条目
@@ -27,7 +28,7 @@
 
 ## 当前版本
 
-- **版本**: 0.7.8
+- **版本**: 0.7.9
 - **框架**: Electron 44 + React 19 + TypeScript
 - **Agent**: `@earendil-works/pi-coding-agent` 1.3.0
 - **状态**: Phase 6 持续优化
@@ -233,6 +234,7 @@
 - ✅ 2026-11-03 发布 v0.7.6：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage，附 `latest*.yml` 与 blockmap）。本版包含：工作区面板改成固定规则的**仓库地图画布**（`electron/repo-map.ts` 只读 `git ls-files` + 文件头 4KB 推断 11 类职责，`size+mtimeMs` 指纹增量，缓存落 `{workspace}/.pi-workbench/repo-map.json`；`RepoMapCanvas` 底层 / 上浮链 / 世界坐标 + 按缩放切 LOD，卡片位置与视口落 `repo-map-canvas.json`，标签条最左固定标签是入口，`panelActive` 不落盘）；标签栏「+」改为紧贴最后一个标签的「选择工作区」弹窗；按键延迟两批治理（符号菜单停手 400ms 再算、`App` 与 `MonacoEditor` 订阅收窄、`draft:save` 改 `writeJsonAtomicAsync` 异步落盘；`MarkdownReadingView` 块 key 改下标、冻结改用 render 期快照——markdown 源码视图 338ms→18~35ms/键）；README 中文优先重写 + 品牌 banner / 社交分享卡 + About 中文在前。`repo-map` / `workspace-panel` / `paths-and-storage` / `PROJECT_STRUCTURE` / `DESIGN_SYSTEM` 同步。type-check / lint / 1377 用例通过
 - ✅ 2026-11-06 发布 v0.7.7：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage，附 `latest*.yml` 与 blockmap）。本版修「Agent completed but returned no text response.」：DeepSeek 思考模式下 `max_tokens` 是 completion 总预算，`deepseek-flash` 的 catalog 上限被固定在 8192，思考把预算吃满即 `stopReason=length` 且只产出 thinking 块，上层把空正文替换成占位文案并当成功写入历史（PW-Hermes 工作区 22 轮里 8 轮命中，`usage.output === usage.reasoning === 8192`）。修法：`PAIRED_MAX_TOKENS[256_000]` 16_384 → 32_768、`KNOWN_MODEL_METADATA['deepseek-flash'].maxTokens` 8_192 → 32_768，`deepseek-v4-pro` 同档位一起从 16K 升到 32K（官方思考模式默认输出 64K，范围 1–384K）。`agent-runtime` 档位表同步。截断的完整处理（`length` 分支、`reasoning` 透传、空正文不落历史、UI 提示）登记为 BACKLOG R-23，本版未实现。type-check / lint / 1377 用例通过
 - ✅ 2026-11-06 发布 v0.7.8：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage，附 `latest*.yml` 与 blockmap）。本版把输出上限从代码常数变成用户档位，并让截断如实报错（消化 BACKLOG R-23 的 B1/B2/B3/B5/B6）。**档位**：设置 → 模型能力新增「输出上限」列（自动 / 16K / 32K / 64K / 128K / 256K，写 `api-config.json` 的 `maxTokens`），自动档配套值 8K / 16K / 64K / 128K（256K→64K 对齐 DeepSeek 思考默认，1M→128K 对齐 OpenAI / Anthropic 旗舰档）；`KNOWN_MODEL_METADATA['deepseek-flash'].maxTokens` 退回**供应商硬上限** 393216（官方 1–384K），只作天花板不作推荐值——此前填 32768 等于用 catalog 压死用户选择；新增 `resolveMaxTokensDetail()` 返回 `{value, source}`（`auto` / `user` / `clamped`）并由 `listModels` 透出 `maxTokensSource`；`mergeModelEntries` 保留用户档位（否则每次拉模型列表都会丢设置）。**截断**：`stopReason === 'length'` 不再落进成功分支，返回 `success:false` + `errorCode`（`output-truncated` / `empty-response`）+ `outputLimit`，渲染层用 i18n 生成两类文案（有正文被切 / 只有思考），空正文不写 `runtime.messageHistory`（防下一轮 400），删掉 `Agent completed but returned no text response.` 占位文案；刻意不做自动提升上限重试，也不建议降低思考强度（思考强度是用户的选择）。`AgentUsage` 增 `reasoning`（bridge / api / store 三处同步），聊天气泡用量行显示「思考 N」。`outputLimit()` 复算生效上限，与 models.json 写入值同源。升级后首次启动 `writeModelsConfig` 会按新档位表重写 `models.json`（256K 档 32K→64K），手动选过档位的模型保持原值。`agent-runtime` §6 / `AGENT-TESTING` §6 / BACKLOG R-23 同步。type-check / lint / 1382 用例 / 全量 build 通过
+- ✅ 2026-11-06 发布 v0.7.9：三平台 CI 发布（Windows NSIS / macOS universal dmg / Linux AppImage，附 `latest*.yml` 与 blockmap）。本版修 0.7.8 的落盘缺陷：`maxTokens` 在渲染层与 `pi-bridge` 都已接好，但中间的主进程 `normalizeApiModels` 是白名单（只留 `id / contextWindow / image`），`apiConfig:save` 与 `loadApiConfig` 两条路径双双丢弃该字段，所以设置里选完 64K 保存后重开又变「自动」；且 `agentConfigKey` 未包含该字段，即使存上也不会重建 Agent、`models.json` 不重写。修法：`StoredModelEntry` 与 `push()` 接 `maxTokens`（新增 `MAX_TOKENS_VALUES` 白名单，仅在 > 0 时写盘，与 bridge 同步有单测）、`agentConfigKey` 纳入该字段（缺省与 0 同义）、设置页「自动」渲染为「自动（64K）」（`AUTO_MAX_TOKENS` 与 bridge 自动档表逐档对齐）、保存成功后 `apiConfigGet()` 回读使 UI 以磁盘为准。测试补「带 maxTokens 的写入→读回」往返用例（此前只断言 `success: true`，是这次漏网的原因；dev 模式走 `localStorage` 原样存对象，又掩盖了生产路径）。`agent-runtime` §6 记下事实源与三层归一化必须同步改，BACKLOG R-23 增 B11。type-check / lint / 1386 用例 / 全量 build 通过
 - 已完成：构建分包、生产 CSP、主进程测试覆盖
 
 ## 最近提交

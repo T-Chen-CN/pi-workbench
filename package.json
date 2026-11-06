@@ -1,6 +1,6 @@
 {
   "name": "pi-workbench",
-  "version": "0.7.8",
+  "version": "0.7.9",
   "description": "Local-first desktop workbench where a real coding agent works beside a Monaco editor: session worktrees, plan mode, detachable panels",
   "keywords": [
     "ai",
