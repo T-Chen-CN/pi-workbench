@@ -224,6 +224,7 @@
   - **B8（防）⛔ 剩余** 标题生成、压缩摘要等轻任务单独预算或关思考。
   - **B9（回归）🟡 部分** 已有 `length + thinking-only`、`length + 部分正文`、空正文不落 history、`usage.reasoning` 四组用例；缺 SDK 自动压缩重试的联动用例。
   - **B10（文档）✅** `agent-runtime.md` §6 已更新档位与截断语义；`AGENT-TESTING.md` §6 补了截断验收步骤。
+  - **B11（回归）✅** 0.7.8 发布后发现「设置里选 64K 保存后又变回自动」：主进程 `normalizeApiModels` 是白名单，只留 `id / contextWindow / image`，`apiConfig:save` 与 `loadApiConfig` 两条路径都把 `maxTokens` 抹掉；`agentConfigKey` 也不含该字段，所以即使存上也不会重建 Agent。已修（`13f9083` / `4d556bb`），并在 `agent-runtime` §6 记下「三层归一化必须同步改」。**教训**：往返用例只断言 `success: true` 与旧字段，没带新字段；开发模式又走 `localStorage` 原样存对象，掩盖了生产路径。以后新增配置字段必须补「写入→读回」的往返断言。
   - **思考强度 ↔ 预算联动 ⛔ 剩余** 接 `reasoning_effort`（DeepSeek 支持 `none/low/high/max`），让档位驱动思考深度而不是只调 `max_tokens`。现在 `model-config.ts` 生成的模型对象没有 `compat.thinkingFormat`，所以 `openai-completions.js:670` 的 deepseek 分支从不执行。
 - **关键事实**：pi-ai 的 `buildBaseOptions`（`simple-options.js:26`）强制 `options?.maxTokens ?? model.maxTokens`，**请求体永远带 `max_tokens`**——「不传、让供应商决定」在现有 SDK 下不可行。唯一绕过点是 `onPayload`（`openai-completions.js:188`），但 pi-bridge 未暴露。
 - **验收**：mock 供应商返回 `length + thinking-only` 时界面显示可操作错误而非占位文案；`messageHistory` 无空壳；用量面板能看到 reasoning 数字；`npm test` 覆盖上述三种场景。
