@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   CONTEXT_WINDOW_OPTIONS as RENDERER_OPTIONS,
+  MAX_TOKENS_OPTIONS as RENDERER_MAX_TOKENS,
   contextWindowLabel,
+  maxTokensLabel,
   mergeModelEntries,
 } from '../src/utils/model-capabilities'
 import {
   CONTEXT_WINDOW_OPTIONS as BRIDGE_OPTIONS,
+  MAX_TOKENS_OPTIONS as BRIDGE_MAX_TOKENS,
   normalizeModelEntries,
   resolveMaxTokens,
   resolveMaxTokensDetail,
@@ -22,21 +25,38 @@ describe('context window options', () => {
   })
 })
 
+describe('max tokens options', () => {
+  it('stays in sync between the renderer and pi-bridge', () => {
+    expect([...RENDERER_MAX_TOKENS]).toEqual([...BRIDGE_MAX_TOKENS])
+    expect([...RENDERER_MAX_TOKENS]).toEqual([0, 16_384, 32_768, 65_536, 131_072, 262_144])
+  })
+
+  it('renders fixed labels and leaves auto to the caller', () => {
+    expect(RENDERER_MAX_TOKENS.slice(1).map(maxTokensLabel)).toEqual([
+      '16K',
+      '32K',
+      '64K',
+      '128K',
+      '256K',
+    ])
+  })
+})
+
 describe('mergeModelEntries', () => {
   const previous = [
-    { id: 'a', contextWindow: 256_000 as const, image: true },
+    { id: 'a', contextWindow: 256_000 as const, image: true, maxTokens: 131_072 as const },
     { id: 'removed', contextWindow: 64_000 as const, image: false },
   ]
 
   it('keeps the settings of models that still exist', () => {
     expect(mergeModelEntries(previous, ['a'])).toEqual([
-      { id: 'a', contextWindow: 256_000, image: true },
+      { id: 'a', contextWindow: 256_000, image: true, maxTokens: 131_072 },
     ])
   })
 
   it('appends new models with the default entry and drops removed ones', () => {
     expect(mergeModelEntries(previous, ['a', 'b'])).toEqual([
-      { id: 'a', contextWindow: 256_000, image: true },
+      { id: 'a', contextWindow: 256_000, image: true, maxTokens: 131_072 },
       { id: 'b', contextWindow: 128_000, image: false },
     ])
   })

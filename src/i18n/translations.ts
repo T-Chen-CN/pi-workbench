@@ -698,7 +698,11 @@ export const translations = {
     modelCapabilityTable: '模型能力',
     modelColumn: '模型',
     modelContextColumn: '上下文容量',
+    modelMaxTokensColumn: '输出上限',
+    modelMaxTokensAuto: '自动',
     modelImageColumn: '图片',
+    modelMaxTokensHint:
+      '自动档按上下文容量推导（128K→16K、256K→64K、1M→128K）；实际生效值还会受模型能力与上下文余量约束，超出时会被自动压回。',
     modelContextHint:
       '上下文容量只影响应用侧的用量统计与压缩时机，不会真正扩容模型；最低 64K，窗口过小会导致频繁压缩。',
     noModelsAvailable: '暂无可用模型，请先获取',
@@ -1510,7 +1514,11 @@ export const translations = {
     modelCapabilityTable: 'Model capabilities',
     modelColumn: 'Model',
     modelContextColumn: 'Context window',
+    modelMaxTokensColumn: 'Output limit',
+    modelMaxTokensAuto: 'Auto',
     modelImageColumn: 'Images',
+    modelMaxTokensHint:
+      'Auto derives the limit from the context window (128K→16K, 256K→64K, 1M→128K). The effective value is still capped by model capability and remaining context; higher values are clamped automatically.',
     modelContextHint:
       'The context window only affects token accounting and compaction timing in this app; it does not enlarge the model. Minimum 64K — smaller windows compact frequently.',
     noModelsAvailable: 'No models available - fetch first',
