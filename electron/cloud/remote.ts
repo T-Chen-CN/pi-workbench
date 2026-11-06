@@ -238,7 +238,8 @@ const RUN_STATUSES: CloudRunStatus[] = [
 
 export function toRunStatus(value: unknown): CloudRunStatus {
   const text = String(value ?? '')
-  if (text === 'queued') return 'started'
+  // 排队是真实状态：别折叠成 started，否则界面会把「排在别人后面」显示成已在执行
+  if (text === 'queued') return 'queued'
   if (text === 'waiting_for_approval') return 'waiting_approval'
   if (text === 'interrupted') return 'failed'
   return (RUN_STATUSES as string[]).includes(text) ? (text as CloudRunStatus) : 'running'

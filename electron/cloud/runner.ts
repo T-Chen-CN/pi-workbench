@@ -86,17 +86,20 @@ export class CloudRunner {
   }): Promise<{ runId: string; sessionId: string | null }> {
     const accepted = await this.remote.startRun(input)
     let sessionId = input.sessionId ?? null
+    // 同一会话已有轮次在跑时后端会排队（202 里 status=queued）：别把它报成 started
+    let initialState: CloudRunStatus = 'started'
 
     // 202 里没有 session_id：读一次状态拿（同时能发现「一秒内就失败」的轮次）
     try {
       const snapshot = await this.remote.runStatus(accepted.runId)
       if (snapshot.sessionId) sessionId = snapshot.sessionId
+      if (snapshot.status === 'queued') initialState = 'queued'
     } catch (error) {
       this.deps.log?.('[Cloud] initial run status failed', error)
     }
 
     if (sessionId) this.deps.emit({ kind: 'session', sessionId })
-    this.deps.emit({ kind: 'run', runId: accepted.runId, state: 'started' })
+    this.deps.emit({ kind: 'run', runId: accepted.runId, state: initialState })
 
     void this.streamRun(accepted.runId, sessionId)
     return { runId: accepted.runId, sessionId }

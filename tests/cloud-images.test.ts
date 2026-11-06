@@ -7,14 +7,14 @@ import {
   stripMediaTags,
   withImageDirectives,
 } from '../src/utils/cloudImages'
-// dash 模块只依赖 `electron.net`，测试里用桩替掉主进程 can
+// media 模块只依赖 `electron.net`，测试里用桩替掉主进程 can
 vi.mock('electron', () => ({
   net: { fetch: vi.fn() },
   app: { isPackaged: false, getAppPath: () => process.cwd() },
   safeStorage: { isEncryptionAvailable: () => false },
 }))
 
-import { createDashboardClient, extractImagePaths, parseImageDataUrl } from '../electron/cloud/dash'
+import { createMediaClient, extractImagePaths, parseImageDataUrl } from '../electron/cloud/media'
 import { net } from 'electron'
 
 describe('图片指令', () => {
@@ -103,39 +103,39 @@ describe('控制台旁路客户端', () => {
     fetchMock.mockResolvedValueOnce(
       Response.json({ ok: true, path: '/srv/img/a.png', name: 'a.png', bytes: 12, mime_type: 'image/png' })
     )
-    const client = createDashboardClient({ dashboardUrl: 'https://dash.example.com', token: 'tk' })
+    const client = createMediaClient({ baseUrl: 'https://hub.example.com', credential: 'tk' })
     const image = await client.uploadImage({ dataUrl: 'data:image/png;base64,AAAA', filename: 'a.png' })
     expect(image).toMatchObject({ path: '/srv/img/a.png', mimeType: 'image/png' })
 
     const [url, init] = fetchMock.mock.calls[0]
-    expect(String(url)).toBe('https://dash.example.com/api/chat/image-upload')
+    expect(String(url)).toBe('https://hub.example.com/api/chat/image-upload')
     expect((init as RequestInit).headers).toMatchObject({ Authorization: 'Bearer tk' })
   })
 
   it('reads bytes back as a data URL', async () => {
     fetchMock.mockResolvedValueOnce(Response.json({ dataUrl: 'data:image/png;base64,BBBB' }))
-    const client = createDashboardClient({ dashboardUrl: 'https://dash.example.com/', token: 'tk' })
+    const client = createMediaClient({ baseUrl: 'https://hub.example.com/', credential: 'tk' })
     await expect(client.readImageDataUrl('/srv/img/a.png')).resolves.toBe(
       'data:image/png;base64,BBBB'
     )
     const lastCall = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]
     // 路径必须编码，否则带空格的路径会打歪
     expect(String(lastCall[0])).toBe(
-      'https://dash.example.com/api/fs/read-data-url?path=%2Fsrv%2Fimg%2Fa.png'
+      'https://hub.example.com/api/fs/read-data-url?path=%2Fsrv%2Fimg%2Fa.png'
     )
   })
 
   it('explains a rejected token instead of leaking a bare 401', async () => {
     fetchMock.mockResolvedValueOnce(new Response('nope', { status: 401 }))
-    const client = createDashboardClient({ dashboardUrl: 'https://dash.example.com', token: 'bad' })
+    const client = createMediaClient({ baseUrl: 'https://hub.example.com', credential: 'bad' })
     await expect(client.uploadImage({ dataUrl: 'data:image/png;base64,AAAA' })).rejects.toThrow(
-      /会话令牌无效/
+      /设备凭据无效/
     )
   })
 
   it('refuses to build a client without a token', () => {
-    expect(() => createDashboardClient({ dashboardUrl: 'https://dash.example.com', token: '' })).toThrow(
-      /HERMES_DASHBOARD_SESSION_TOKEN/
+    expect(() => createMediaClient({ baseUrl: 'https://hub.example.com', credential: '' })).toThrow(
+      /这台设备还没有登记/
     )
   })
 })

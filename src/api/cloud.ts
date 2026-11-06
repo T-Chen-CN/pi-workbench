@@ -11,7 +11,6 @@ import type {
   CloudApprovalMode,
   CloudCapabilities,
   CloudConfigGetResult,
-  CloudConfigSetResult,
   CloudConnectResult,
   CloudHandoffApplyResult,
   CloudHandoffPickResult,
@@ -41,7 +40,6 @@ export type {
   CloudApprovalMode,
   CloudCapabilities,
   CloudConfigGetResult,
-  CloudConfigSetResult,
   CloudConnectResult,
   CloudHandoffApplyResult,
   CloudHandoffPickResult,
@@ -252,14 +250,6 @@ export const cloudApi = {
       return { success: false, config: UNCONFIGURED_CONNECTION, error: NO_BRIDGE }
     }
     return bridge.cloudConfigGet()
-  },
-
-  async setConfig(input: { gatewayUrl?: string }): Promise<CloudConfigSetResult> {
-    const bridge = api()
-    if (!bridge || typeof bridge.cloudConfigSet !== 'function') {
-      return { success: false, error: NO_BRIDGE }
-    }
-    return bridge.cloudConfigSet(input)
   },
 
   /** 选交接文件并解析：只回脱敏预览，明文留在主进程 */

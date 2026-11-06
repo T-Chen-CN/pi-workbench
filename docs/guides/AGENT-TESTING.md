@@ -285,7 +285,7 @@ ssh … 'tail -f ~/.hermes/profiles/pi-cloud/plugin-data/pi-workbench/audit.json
 **预期**
 - ✅ 上传成功、模型能看到图；读回时图片正常显示。
 - ✅ 这一步**不需要**控制台令牌 —— 现在用设备 token 经网关转发。
-- ❌ 401 → 检查是不是 `connection.json` 里还留着旧 `dashboardToken` 干扰（清掉它）。
+- ❌ 401 → 设备 token 已失效 / 未登记；旧 `dashboardToken` 会在连接页读取配置时自动清掉，不再是干扰源。
 
 ---
 

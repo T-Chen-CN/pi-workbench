@@ -41,6 +41,15 @@ const EMPTY_DASHBOARD: CloudDashboardState = {
   error: null,
 }
 
+/**
+ * `watchHeartbeat` 的订阅引用计数。
+ *
+ * 云端外壳（CloudWorkspaceView，常驻）与连接页都会订阅；只保留一份监听，
+ * 否则一次心跳会写两次 store，撤销时还会重复拉网关状态。
+ */
+let heartbeatWatchers = 0
+let stopHeartbeatWatch: (() => void) | null = null
+
 export function isTerminalRun(state: CloudRunStatus | null): boolean {
   return state != null && TERMINAL_STATES.includes(state)
 }
@@ -142,7 +151,6 @@ interface CloudState {
   handoffError: string | null
 
   hydrate: () => Promise<void>
-  saveConfig: (input: { gatewayUrl?: string }) => Promise<boolean>
   pickHandoff: () => Promise<boolean>
   applyHandoff: () => Promise<boolean>
   copyHandoffSecret: () => Promise<boolean>
@@ -315,18 +323,6 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       }
     }
     set({ connection: 'unconfigured', hydrated: true })
-  },
-
-  async saveConfig(input) {
-    set({ error: null })
-    const result = await cloudApi.setConfig(input)
-    if (!result.success) {
-      set({ error: result.error ?? 'unknown' })
-      return false
-    }
-    if (result.config) set({ config: result.config })
-    await get().connect()
-    return true
   },
 
   /**
@@ -694,6 +690,10 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     if (!text) return
     // 只有正在执行的一轮能被插话（queued 会被后端拒绝）
     if (runState === null || isTerminalRun(runState)) return
+    if (runState === 'queued') {
+      set({ steerError: '这一轮还在排队，开始执行后再插话' })
+      return
+    }
     const id = `local:steer:${crypto.randomUUID()}`
     set({
       draft: '',
@@ -995,9 +995,13 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       // 用户下一次回车就能发出去，不用重打一遍
       const replay =
         part.type === 'interjection' && part.undelivered && !get().draft.trim() ? part.text : ''
+      // 排队中的轮次一旦有内容帧就说明它真的开始了（后端不一定推 run.started）
+      const started =
+        get().runState === 'queued' ? { runState: 'running' as CloudRunStatus } : {}
       set({
         parts: upsertPart(get().parts, part),
         ...(replay ? { draft: replay } : {}),
+        ...started,
       })
       return
     }
@@ -1098,26 +1102,35 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   },
 
   watchHeartbeat() {
-    const offBeat = cloudApi.onGatewayHeartbeat((state) => set({ heartbeat: state }))
-    const offRevoked = cloudApi.onGatewayRevoked((payload) => {
-      // 云端把凭据废了：和注销一样处理 —— 界面不许再显示「已连接」
-      set({
-        heartbeat: { lastOkAt: null, lastError: payload.reason, stoppedBecauseRevoked: true },
-        connection: 'error',
-        error: '云端把这台设备的凭据注销了，请重新登记',
-        capabilities: null,
-        sessions: [],
-        activeSessionId: null,
-        sessionMeta: null,
-        parts: [],
-        runId: null,
-        runState: null,
+    heartbeatWatchers += 1
+    if (!stopHeartbeatWatch) {
+      const offBeat = cloudApi.onGatewayHeartbeat((state) => set({ heartbeat: state }))
+      const offRevoked = cloudApi.onGatewayRevoked((payload) => {
+        // 云端把凭据废了：和注销一样处理 —— 界面不许再显示「已连接」
+        set({
+          heartbeat: { lastOkAt: null, lastError: payload.reason, stoppedBecauseRevoked: true },
+          connection: 'error',
+          error: '云端把这台设备的凭据注销了，请重新登记',
+          capabilities: null,
+          sessions: [],
+          activeSessionId: null,
+          sessionMeta: null,
+          parts: [],
+          runId: null,
+          runState: null,
+        })
+        void get().loadGateway()
       })
-      void get().loadGateway()
-    })
+      stopHeartbeatWatch = () => {
+        offBeat()
+        offRevoked()
+      }
+    }
     return () => {
-      offBeat()
-      offRevoked()
+      heartbeatWatchers = Math.max(0, heartbeatWatchers - 1)
+      if (heartbeatWatchers > 0) return
+      stopHeartbeatWatch?.()
+      stopHeartbeatWatch = null
     }
   },
 
@@ -1127,7 +1140,12 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       set({ gatewayError: status.error ?? 'unknown' })
       return
     }
-    set({ gateway: status, gatewayError: null })
+    set({
+      gateway: status,
+      gatewayError: null,
+      // 主进程把心跳状态一起带回来：错过推送 / 页面重开也能看到「已注销」
+      ...(status.heartbeat ? { heartbeat: status.heartbeat } : {}),
+    })
   },
 
   async registerGateway(adminKey, options) {
@@ -1147,6 +1165,11 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     set({
       gatewayNotice: `已登记：${result.tokenPrefix ?? ''}（${(result.scopes ?? []).join(' / ')}）`
     })
+    // 登记只在主进程写盘：这里必须刷新渲染层看到的 config，再真正连上。
+    // 否则 hasDeviceToken 还是旧的 false，「重新连接」按钮被禁用、会话区停在不可用。
+    const config = await cloudApi.getConfig()
+    if (config.success) set({ config: config.config })
+    await get().connect()
     await get().loadGateway()
     return true
   },
@@ -1172,6 +1195,9 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       runId: null,
       runState: null
     })
+    // 主进程已经清掉设备凭据：同步刷新 config，否则按钮仍按 hasDeviceToken=true 显示
+    const config = await cloudApi.getConfig()
+    if (config.success) set({ config: config.config })
     await get().loadGateway()
     return true
   },
@@ -1183,6 +1209,8 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       return false
     }
     set({ gatewayNotice: '已忘记本机保存的管理密钥' })
+    const config = await cloudApi.getConfig()
+    if (config.success) set({ config: config.config })
     await get().loadGateway()
     return true
   },

@@ -43,6 +43,27 @@ export interface HeartbeatDeps {
   clearTimer?: (handle: ReturnType<typeof setTimeout>) => void
 }
 
+/**
+ * 这次失败是不是「凭据已经废了」。
+ *
+ * 不能只看 message：`gateway.ts` 会把后端的 `device_revoked` / `unauthorized`
+ * 翻译成中文文案，英文码只留在 `CloudApiError.code` / `backendCode` 上。
+ * 两条路都认，避免翻译层一改就把「撤销即停」弄哑。
+ */
+export function isRevokedError(error: unknown): boolean {
+  if (error && typeof error === 'object') {
+    const code = String((error as { code?: unknown }).code ?? '')
+    const backendCode = String((error as { backendCode?: unknown }).backendCode ?? '')
+    if (code === 'unauthorized' || code === 'device_revoked') return true
+    if (backendCode === 'unauthorized' || backendCode === 'device_revoked') return true
+  }
+  const message = error instanceof Error ? error.message : String(error)
+  return (
+    /\b(unauthorized|device_revoked)\b/i.test(message) ||
+    /已被注销|token 已失效/.test(message)
+  )
+}
+
 export interface HeartbeatHandle {
   /** 立刻跳一拍（登记成功后、窗口重新可见时调） */
   poke: () => void
@@ -105,8 +126,7 @@ export function startHeartbeat(deps: HeartbeatDeps): HeartbeatHandle {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       state.lastError = message
-      const revoked = /\b(unauthorized|device_revoked)\b/i.test(message)
-      if (revoked) {
+      if (isRevokedError(error)) {
         // 凭据已经废了：停下来，等用户重新登记（否则每 30s 一条 401）
         state.stoppedBecauseRevoked = true
         stopped = true

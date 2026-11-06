@@ -315,6 +315,7 @@ export const CloudSessionView: React.FC<{
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
 
   const busy = runState !== null && !isTerminalRun(runState)
+  const queued = runState === 'queued'
   const connected = connection === 'connected'
 
   useLayoutEffect(() => {
@@ -575,7 +576,9 @@ export const CloudSessionView: React.FC<{
           {busy && (
             <span className="flex flex-shrink-0 items-center gap-1.5">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-              <Caption className="text-accent">{t('cloudToolRunning')}</Caption>
+              <Caption className="text-accent">
+                {queued ? t('cloudRunQueued') : t('cloudToolRunning')}
+              </Caption>
             </span>
           )}
         </div>
@@ -611,7 +614,7 @@ export const CloudSessionView: React.FC<{
           {subagentTrackMissing && (
             <div className="pb-1 type-caption text-ink-subtle">{t('cloudSubagentHistoryHint')}</div>
           )}
-          <CloudTrace parts={parts} streaming={busy} />
+          <CloudTrace parts={parts} streaming={busy && !queued} />
           {runError && !busy && (
             <div className="py-2 type-caption text-danger">
               {t('cloudRunError', { error: runError })}
@@ -716,8 +719,10 @@ export const CloudSessionView: React.FC<{
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault()
-                  if (busy) void steer()
-                  else submit()
+                  // 排队中的轮次不接受插话（后端会 400）：先等它开始
+                  if (busy) {
+                    if (!queued) void steer()
+                  } else submit()
                 }
               }}
               onPaste={(event) => {
@@ -754,8 +759,8 @@ export const CloudSessionView: React.FC<{
                   variant="primary"
                   size="sm"
                   icon={MessageSquarePlus}
-                  disabled={!connected || !draft.trim()}
-                  title={t('cloudSteerHint')}
+                  disabled={!connected || !draft.trim() || queued}
+                  title={queued ? t('cloudSteerQueued') : t('cloudSteerHint')}
                   onClick={() => void steer()}
                 >
                   {t('cloudSteer')}

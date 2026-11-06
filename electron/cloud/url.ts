@@ -5,7 +5,6 @@
  * 而 `config.ts` 会碰 `app` / `safeStorage`，被它牵连就进不了纯单测。
  */
 
-export const DEFAULT_CLOUD_BASE_URL = 'https://api.tchen-xiaoxiao.com'
 export const DEFAULT_CLOUD_DASHBOARD_URL = 'https://dash.tchen-xiaoxiao.com'
 export const DEFAULT_CLOUD_GATEWAY_URL = 'https://hub.tchen-xiaoxiao.com'
 
@@ -27,7 +26,7 @@ export function normalizeBaseUrl(raw: string): string {
 }
 
 /**
- * 控制台地址：`api.x.com` → `dash.x.com`（本项目部署形态）；
+ * 控制台地址：`api.x.com` → `dash.x.com`（v1 交接文件的旧地址就用这个规则）。
  * 其他情况退回同源地址，用户仍可正常登录。
  */
 export function deriveDashboardUrl(baseUrl: string): string {
@@ -43,8 +42,8 @@ export function deriveDashboardUrl(baseUrl: string): string {
 }
 
 /**
- * 网关地址（本方案的单入口）：`api.x.com` → `hub.x.com`；
- * 其他情况退回默认值，用户仍可在连接页手填。
+ * 网关地址（本方案的单入口）：`api.x.com` → `hub.x.com`。
+ * 只用于解析 v1 交接文件；当前配置直接存 `gatewayUrl`。
  */
 export function deriveGatewayUrl(baseUrl: string): string {
   try {

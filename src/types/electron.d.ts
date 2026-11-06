@@ -4,7 +4,6 @@ import type {
   CloudApprovalMode,
   CloudCapabilities,
   CloudConfigGetResult,
-  CloudConfigSetResult,
   CloudConnectResult,
   CloudConnectionState,
   CloudDeviceResult,
@@ -694,7 +693,6 @@ export interface ElectronAPI {
 
   // 云端 Agent（远程 Hermes：API 走主进程 net 栈，SSE 由主进程解析后推帧）
   cloudConfigGet: () => Promise<CloudConfigGetResult>
-  cloudConfigSet: (input: { gatewayUrl?: string }) => Promise<CloudConfigSetResult>
   cloudHandoffPick: () => Promise<CloudHandoffPickResult>
   cloudHandoffApply: (input: { applyNonce: string }) => Promise<CloudHandoffApplyResult>
   cloudHandoffCopy: (input: { field: 'password' }) => Promise<{ success: boolean; error?: string }>

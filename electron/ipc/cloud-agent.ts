@@ -12,7 +12,8 @@ import {
   readCloudConfig,
   writeCloudConfig,
   cloudTransport,
-  clearDeviceCredentials
+  clearDeviceCredentials,
+  pruneLegacyCloudConfig
 } from '../cloud/config.js'
 import {
   HANDOFF_MAX_BYTES,
@@ -23,7 +24,7 @@ import {
 import { CloudApiError, cloudErrorMessage, createCloudClient, type CloudClient } from '../cloud/client.js'
 import { CloudRunner } from '../cloud/runner.js'
 import { CloudDashboard } from '../cloud/dashboard.js'
-import { createDashboardClient, parseImageDataUrl } from '../cloud/dash.js'
+import { createMediaClient, parseImageDataUrl } from '../cloud/media.js'
 import {
   gatewayHealth,
   gatewayWhoAmI,
@@ -279,29 +280,10 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   })
 
   handleIpc('cloud:config:get', () => {
+    // 老版本留下的字段（baseUrl / dashboardToken / apiKey）顺手清掉：读取本来就不用它们
+    pruneLegacyCloudConfig()
     const config = publicCloudConfig()
     return { success: true, config }
-  })
-
-  handleIpc('cloud:config:set', (_event, input: { gatewayUrl?: string }) => {
-    const current = readCloudConfig()
-    const previousGatewayUrl = current.gatewayUrl
-    const saved = writeCloudConfig({
-      baseUrl: current.baseUrl,
-      gatewayUrl: typeof input?.gatewayUrl === 'string' ? input.gatewayUrl : undefined
-    })
-    // 地址或密钥变化后旧连接作废
-    client = null
-    clientKey = ''
-    runner?.dispose()
-    runner = null
-    capabilities = null
-    // 换了网关，上一台的 run 记录就再也接不上了（原地保存别把能接回的记录清掉）
-    if (normalizeBaseUrl(saved.gatewayUrl) !== normalizeBaseUrl(previousGatewayUrl)) clearActiveRun()
-    return {
-      success: true,
-      config: publicCloudConfig(saved)
-    }
   })
 
   /**
@@ -375,13 +357,18 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     // 一次性：无论写盘成败都作废，避免拿着同一份预览反复覆盖
     clearPendingHandoff()
     try {
+      const previousGatewayUrl = readCloudConfig().gatewayUrl
       const saved = writeCloudConfig({ ...patch, handoffImportedAt: Date.now() })
-      // 地址或密钥变了，旧连接作废（与 cloud:config:set 同一套语义）
+      // 地址或密钥变了，旧连接作废
       client = null
       clientKey = ''
       runner?.dispose()
       runner = null
       capabilities = null
+      // 换了网关，上一台的 run 记录就再也接不上了
+      if (normalizeBaseUrl(saved.gatewayUrl) !== normalizeBaseUrl(previousGatewayUrl)) {
+        clearActiveRun()
+      }
       logger?.info('[Cloud] handoff imported', saved.handoffProfile || 'unknown')
       return { success: true, config: publicCloudConfig(saved) }
     } catch (error) {
@@ -612,7 +599,12 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   handleIpc('cloud:gateway:status', async () => {
     const config = readCloudConfig()
     const device = readCloudDevice()
-    const base = { gatewayUrl: config.gatewayUrl, device: deviceSummary(device) }
+    const base = {
+      gatewayUrl: config.gatewayUrl,
+      device: deviceSummary(device),
+      // 心跳状态也放在状态里：页面重开 / 错过了推送时还能看到「已被注销」
+      heartbeat: heartbeat.state()
+    }
     if (!config.hasDeviceToken) {
       return { success: true as const, registered: false as const, ...base }
     }
@@ -676,8 +668,9 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
           scopes: input?.scopes
         })
         writeCloudConfig({
-          baseUrl: config.baseUrl,
           gatewayUrl,
+          // 自建部署可能单独指定过控制台地址：别因为登记设备把它覆盖掉
+          dashboardUrl: config.dashboardUrl,
           deviceToken: result.token,
           deviceScopes: result.scopes,
           deviceId: result.deviceId,
@@ -687,6 +680,10 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
         client = null // 凭据变了，重建客户端与 runner
         runner?.dispose()
         runner = null
+        // 换了一台网关：上一台的 run 记录接不回来
+        if (normalizeBaseUrl(gatewayUrl) !== normalizeBaseUrl(config.gatewayUrl)) {
+          clearActiveRun()
+        }
         heartbeat.poke() // 新 token 立刻跳一拍：云端马上看到「在线」
         logger?.info(
           `[Cloud] device registered name=${result.name} prefix=${result.tokenPrefix} scopes=${result.scopes.join('+')}`
@@ -735,7 +732,12 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   handleIpc('cloud:gateway:forget-admin-key', () => {
     const config = readCloudConfig()
     if (!config.hasAdminKey) return { success: true as const }
-    writeCloudConfig({ baseUrl: config.baseUrl, adminKey: '' })
+    // 只动管理密钥：自建部署的 gateway / dashboard 地址不能被重置
+    writeCloudConfig({
+      gatewayUrl: config.gatewayUrl,
+      dashboardUrl: config.dashboardUrl,
+      adminKey: ''
+    })
     return { success: true as const }
   })
 
@@ -881,16 +883,16 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     if (!dataUrl) return { success: false as const, error: '没有图片数据' }
     const config = readCloudConfig()
     const transport = cloudTransport(config)
-    if (!transport.dashboardToken) {
+    if (!transport.credential) {
       // 单入口：上传凭据就是设备 token，没有第二条路
       return { success: false as const, error: '这台设备还没有登记，先在「连接」页登记' }
     }
     try {
       // 本地先校验类型与体积，省一次注定失败的往返
       parseImageDataUrl(dataUrl)
-      const client = createDashboardClient({
-        dashboardUrl: transport.dashboardBaseUrl,
-        token: transport.dashboardToken
+      const client = createMediaClient({
+        baseUrl: transport.baseUrl,
+        credential: transport.credential
       })
       const image = await client.uploadImage({ dataUrl, filename: input?.filename })
       return { success: true as const, image }
@@ -905,13 +907,13 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     if (!target) return { success: false as const, error: '没有图片路径' }
     const config = readCloudConfig()
     const transport = cloudTransport(config)
-    if (!transport.dashboardToken) {
+    if (!transport.credential) {
       return { success: false as const, error: '这台设备还没有登记，先在「连接」页登记' }
     }
     try {
-      const client = createDashboardClient({
-        dashboardUrl: transport.dashboardBaseUrl,
-        token: transport.dashboardToken
+      const client = createMediaClient({
+        baseUrl: transport.baseUrl,
+        credential: transport.credential
       })
       const dataUrl = await client.readImageDataUrl(target)
       return { success: true as const, dataUrl }

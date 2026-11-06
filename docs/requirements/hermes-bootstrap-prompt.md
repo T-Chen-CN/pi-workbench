@@ -15,6 +15,8 @@
 > 的最新版，之后用 `hermes plugins update` 跟版 —— 钉 SHA 只属于运维侧（要复现某次部署时才用）。
 > `tests/hermes-prompt.test.ts` 守着「复制出来的内容不含 `{{`、也不带 `--ref`」。
 > 已登记：[docs/README.md](../README.md) · 待办与范围边界：[BACKLOG §7.3](../progress/BACKLOG.md)。
+>
+> **交付方式变更中**：本 Prompt 的“交付凭证文件”将被 [CLOUD_AGENT_PAIRING](./CLOUD_AGENT_PAIRING.md) 取代——改为生成一次性连接码，不写文件、不 `scp`；当前文档仍是现行实现，Phase 3 再改。
 
 ```text
 # 任务：把云端 Hermes 配置到「可被 Pi Workbench 连接」的状态，并交付凭证文件

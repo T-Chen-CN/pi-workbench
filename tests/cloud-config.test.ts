@@ -39,7 +39,7 @@ afterAll(() => {
 describe('clearCloudToken', () => {
   it('drops the device token but keeps the gateway url', () => {
     config.writeCloudConfig({
-      baseUrl: 'https://api.tchen-xiaoxiao.com',
+      gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
       deviceToken: 'pi_secret',
       deviceId: 'dev-1',
     })
@@ -90,7 +90,8 @@ describe('deriveDashboardUrl', () => {
 describe('read/write connection', () => {
   it('persists the device token encrypted and never exposes it publicly', () => {
     const saved = config.writeCloudConfig({
-      baseUrl: 'https://api.example.com',
+      gatewayUrl: 'https://hub.example.com',
+      dashboardUrl: 'https://dash.example.com',
       deviceToken: 'pi_secret',
       deviceId: 'dev-1',
       deviceScopes: ['chat'],
@@ -120,36 +121,60 @@ describe('read/write connection', () => {
   })
 
   it('keeps the previous device token when the next save omits it', () => {
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com' })
+    config.writeCloudConfig({ gatewayUrl: 'https://hub.example.com' })
     expect(config.readCloudConfig().deviceToken).toBe('pi_secret')
   })
 
-  it('falls back to the default endpoint for invalid input', () => {
-    const saved = config.writeCloudConfig({ baseUrl: 'nonsense' })
-    expect(saved.baseUrl).toBe(config.DEFAULT_CLOUD_BASE_URL)
+  it('defaults to the official gateway when nothing is stored', () => {
+    for (const file of [config.cloudConfigFile(), `${config.cloudConfigFile()}.bak`]) {
+      fs.rmSync(file, { force: true })
+    }
+    const saved = config.writeCloudConfig({})
+    expect(saved.gatewayUrl).toBe(config.DEFAULT_CLOUD_GATEWAY_URL)
+    expect(saved).not.toHaveProperty('baseUrl')
   })
 })
 
 describe('控制台会话令牌（已废弃）', () => {
   it('ignores a token left behind by older builds', () => {
     // 单入口之后图片旁路也用设备 token；老文件里的 dash-token 一个字都不许进传输
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com', deviceToken: 'pi_dev' })
+    config.writeCloudConfig({ gatewayUrl: 'https://hub.example.com', deviceToken: 'pi_dev' })
     const file = config.cloudConfigFile()
     const stored = JSON.parse(fs.readFileSync(file, 'utf-8'))
     stored.dashboardToken = 'dash-token'
     fs.writeFileSync(file, JSON.stringify(stored))
 
     const transport = config.cloudTransport()
-    expect(transport.dashboardToken).toBe('pi_dev')
-    expect(transport.dashboardToken).not.toBe('dash-token')
+    expect(transport.credential).toBe('pi_dev')
+    expect(transport.credential).not.toBe('dash-token')
     expect(config.publicCloudConfig()).not.toHaveProperty('hasDashboardToken')
+  })
+
+  it('prunes legacy credential fields from the file on the next config read', () => {
+    config.writeCloudConfig({ gatewayUrl: 'https://hub.example.com', deviceToken: 'pi_dev' })
+    const file = config.cloudConfigFile()
+    const stored = JSON.parse(fs.readFileSync(file, 'utf-8'))
+    stored.dashboardToken = 'dash-token'
+    stored.apiKey = 'legacy-api-key'
+    stored.baseUrl = 'https://api.example.com'
+    fs.writeFileSync(file, JSON.stringify(stored))
+
+    config.pruneLegacyCloudConfig()
+
+    const after = JSON.parse(fs.readFileSync(file, 'utf-8'))
+    expect(after).not.toHaveProperty('dashboardToken')
+    expect(after).not.toHaveProperty('apiKey')
+    expect(after).not.toHaveProperty('baseUrl')
+    // 真正的凭据与地址不能被顺手弄丢
+    expect(after.deviceToken).toBeTruthy()
+    expect(after.gatewayUrl).toBe('https://hub.example.com')
   })
 })
 
 describe('控制台账号与导入记录', () => {
   it('stores the password encrypted and only exposes the flag', () => {
     config.writeCloudConfig({
-      baseUrl: 'https://api.example.com',
+      gatewayUrl: 'https://hub.example.com',
       dashboardUser: 'admin',
       dashboardPassword: 'p@ss=word',
     })
@@ -166,7 +191,7 @@ describe('控制台账号与导入记录', () => {
 
   it('honours an explicit dashboard url from the handoff file', () => {
     const saved = config.writeCloudConfig({
-      baseUrl: 'https://api.example.com',
+      gatewayUrl: 'https://hub.example.com',
       dashboardUrl: 'https://console.elsewhere.test',
     })
     expect(saved.dashboardUrl).toBe('https://console.elsewhere.test')
@@ -175,7 +200,7 @@ describe('控制台账号与导入记录', () => {
 
   it('records where the import came from', () => {
     config.writeCloudConfig({
-      baseUrl: 'https://api.example.com',
+      gatewayUrl: 'https://hub.example.com',
       handoffImportedAt: 1_800_000_000_000,
       handoffProfile: 'pi-cloud',
     })
@@ -185,7 +210,7 @@ describe('控制台账号与导入记录', () => {
 
   it('keeps the account but drops every secret on disconnect', () => {
     config.writeCloudConfig({
-      baseUrl: 'https://api.example.com',
+      gatewayUrl: 'https://hub.example.com',
       deviceToken: 'pi_secret',
       dashboardUser: 'admin',
       dashboardPassword: 'p@ss=word',
@@ -203,7 +228,7 @@ describe('控制台账号与导入记录', () => {
     // 老文件里的 apiKey 现在完全不参与传输，读出来就该是空的
     fs.writeFileSync(
       config.cloudConfigFile(),
-      JSON.stringify({ baseUrl: 'https://api.example.com', apiKey: 'plain-legacy-key' }),
+      JSON.stringify({ gatewayUrl: 'https://hub.example.com', apiKey: 'plain-legacy-key' }),
       'utf-8'
     )
     const read = config.readCloudConfig()
@@ -230,7 +255,7 @@ describe('单入口：本地只有一扇门（C-2）', () => {
     fs.writeFileSync(
       config.cloudConfigFile(),
       JSON.stringify({
-        baseUrl: 'https://api.example.com',
+        gatewayUrl: 'https://hub.example.com',
         apiKey: 'plain-legacy-key',
         deviceToken: 'enc:' + 'pi_dev',
       }),
@@ -243,25 +268,23 @@ describe('单入口：本地只有一扇门（C-2）', () => {
 
   it('has no credential at all when the device is not registered', () => {
     freshFile()
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com' })
+    config.writeCloudConfig({ gatewayUrl: 'https://hub.example.com' })
     const transport = config.cloudTransport()
     // 没有设备 token = 没有凭据 = 上层明确报错；不存在第二条路
     expect(transport.baseUrl).toBe('https://hub.example.com')
     expect(transport.credential).toBe('')
-    expect(transport.dashboardToken).toBe('')
   })
 
   it('loses the credential after the device is revoked', () => {
     freshFile()
     config.writeCloudConfig({
-      baseUrl: 'https://api.example.com',
+      gatewayUrl: 'https://hub.example.com',
       deviceToken: 'pi_dev',
       deviceId: 'dev-1',
     })
     config.clearDeviceCredentials()
     const transport = config.cloudTransport()
     expect(transport.credential).toBe('')
-    expect(transport.dashboardToken).toBe('')
     // 登记的痕迹（deviceId）也清了：界面据此判断「已注销」
     expect(config.readCloudConfig().deviceId).toBe('')
   })
@@ -269,7 +292,7 @@ describe('单入口：本地只有一扇门（C-2）', () => {
   it('keeps the gateway lock across a plain disconnect', () => {
     freshFile()
     config.writeCloudConfig({
-      baseUrl: 'https://api.example.com',
+      gatewayUrl: 'https://hub.example.com',
       deviceToken: 'pi_dev',
       deviceId: 'dev-1',
     })
@@ -283,7 +306,7 @@ describe('单入口：本地只有一扇门（C-2）', () => {
 
 describe('记住管理密钥（默认不存）', () => {
   it('stores it encrypted only when asked, and never exposes it', () => {
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com', adminKey: 'admin-secret' })
+    config.writeCloudConfig({ gatewayUrl: 'https://hub.example.com', adminKey: 'admin-secret' })
     expect(config.readCloudConfig().hasAdminKey).toBe(true)
     const raw = fs.readFileSync(config.cloudConfigFile(), 'utf-8')
     expect(raw).not.toContain('admin-secret')
@@ -292,7 +315,7 @@ describe('记住管理密钥（默认不存）', () => {
 
   it('keeps it across a revoke so the next registration needs no pasting', () => {
     config.writeCloudConfig({
-      baseUrl: 'https://api.example.com',
+      gatewayUrl: 'https://hub.example.com',
       deviceToken: 'pi_dev',
       deviceId: 'dev-1',
       adminKey: 'admin-secret',
@@ -305,14 +328,14 @@ describe('记住管理密钥（默认不存）', () => {
   })
 
   it('drops it when the user disconnects everything', () => {
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com', adminKey: 'admin-secret' })
+    config.writeCloudConfig({ gatewayUrl: 'https://hub.example.com', adminKey: 'admin-secret' })
     config.clearCloudToken()
     expect(config.readCloudConfig().hasAdminKey).toBe(false)
   })
 
   it('forgets it when written as an empty string', () => {
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com', adminKey: 'admin-secret' })
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com', adminKey: '' })
+    config.writeCloudConfig({ gatewayUrl: 'https://hub.example.com', adminKey: 'admin-secret' })
+    config.writeCloudConfig({ gatewayUrl: 'https://hub.example.com', adminKey: '' })
     expect(config.readCloudConfig().hasAdminKey).toBe(false)
   })
 })

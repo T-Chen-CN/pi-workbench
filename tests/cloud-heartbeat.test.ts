@@ -143,6 +143,26 @@ describe('设备心跳', () => {
     h.handle.stop()
   })
 
+  it('stops beating when the gateway reports the revocation in Chinese', async () => {
+    // 真实链路：gateway.ts 把 device_revoked 翻成中文，英文码只在 CloudApiError 字段上
+    const onRevoked = vi.fn()
+    const error = Object.assign(new Error('这台设备已被注销（在云端重新登记即可）'), {
+      code: 'unauthorized',
+      backendCode: 'device_revoked',
+    })
+    const h = harness({
+      beat: async () => {
+        throw error
+      },
+      onRevoked,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(onRevoked).toHaveBeenCalledTimes(1)
+    expect(h.handle.state().stoppedBecauseRevoked).toBe(true)
+    expect(h.pending().length).toBe(0)
+    h.handle.stop()
+  })
+
   it('resumes when the user registers again (poke)', async () => {
     let calls = 0
     const h = harness({

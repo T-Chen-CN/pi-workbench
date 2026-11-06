@@ -1,14 +1,9 @@
 /**
- * 控制台旁路客户端（主进程）：只用它做网关不做的事 —— 图片上传与图片字节读回。
+ * 图片旁路客户端（主进程）：上传与按路径读回。
  *
- * 为什么要单独一个客户端：
- * - 网关（`:8642`）只认 `API_SERVER_KEY`，没有上传接口；
- * - 控制台（`:9119`）认 `HERMES_DASHBOARD_SESSION_TOKEN`（Bearer），有
- *   `POST /api/chat/image-upload` 和 `GET /api/fs/read-data-url`；
- * - 两套凭据、两套错误语义，混在一个客户端里会互相污染。
- *
- * 这里**不**承担会话读写：PATCH/DELETE 在控制台会被版本守卫拦成 409
- * （`client_upgrade_required`），会话一律走网关。
+ * 单入口之后它也走网关（`hub.`）+ 设备 token；插件把
+ * `POST /api/chat/image-upload` / `GET /api/fs/read-data-url` 转发给控制台。
+ * 这里**不**承担会话读写：会话一律走网关的 `/v1/*`。
  */
 
 import { net } from 'electron'
@@ -34,7 +29,7 @@ export interface DashImageUpload {
   mimeType: string
 }
 
-export interface DashboardClient {
+export interface MediaClient {
   uploadImage: (input: { dataUrl: string; filename?: string }) => Promise<DashImageUpload>
   readImageDataUrl: (path: string) => Promise<string>
 }
@@ -43,11 +38,11 @@ function wrap(error: unknown): CloudApiError {
   if (error instanceof CloudApiError) return error
   const name = (error as { name?: string })?.name
   if (name === 'AbortError' || name === 'TimeoutError') {
-    return new CloudApiError('timeout', '控制台请求超时')
+    return new CloudApiError('timeout', '图片请求超时')
   }
   return new CloudApiError(
     'network',
-    `无法连接控制台（检查地址 / 代理 / 控制台是否在跑）：${error instanceof Error ? error.message : String(error)}`
+    `无法连接云端网关（检查网络 / 代理 / 网关是否在跑）：${error instanceof Error ? error.message : String(error)}`
   )
 }
 
@@ -61,27 +56,27 @@ async function failure(response: Response, what: string): Promise<CloudApiError>
     // 读不出来就只报状态码
   }
   if (status === 401 || status === 403) {
-    return new CloudApiError('unauthorized', `控制台拒绝了${what}请求（${status}）：会话令牌无效或未配置`, {
+    return new CloudApiError('unauthorized', `云端网关拒绝了${what}请求（${status}）：设备凭据无效或未登记`, {
       status,
     })
   }
   return new CloudApiError(
     status >= 500 ? 'server' : 'bad_request',
-    `控制台${what}失败（${status}）${detail ? `：${detail}` : ''}`,
+    `云端网关${what}失败（${status}）${detail ? `：${detail}` : ''}`,
     { status }
   )
 }
 
-export function createDashboardClient(input: {
-  dashboardUrl: string
-  token: string
-}): DashboardClient {
-  const base = String(input.dashboardUrl ?? '').replace(/\/+$/, '')
-  if (!base) throw new CloudApiError('bad_request', '控制台地址为空')
-  if (!input.token) {
-    throw new CloudApiError('unauthorized', '还没有填写控制台会话令牌（服务端 .env 的 HERMES_DASHBOARD_SESSION_TOKEN）')
+export function createMediaClient(input: {
+  baseUrl: string
+  credential: string
+}): MediaClient {
+  const base = String(input.baseUrl ?? '').replace(/\/+$/, '')
+  if (!base) throw new CloudApiError('bad_request', '网关地址为空')
+  if (!input.credential) {
+    throw new CloudApiError('unauthorized', '这台设备还没有登记，先在「连接」页登记')
   }
-  const headers = { Authorization: `Bearer ${input.token}` }
+  const headers = { Authorization: `Bearer ${input.credential}` }
 
   return {
     async uploadImage({ dataUrl, filename }) {
@@ -97,7 +92,7 @@ export function createDashboardClient(input: {
         if (!response.ok) throw await failure(response, '图片上传')
         const raw = (await response.json()) as Record<string, unknown>
         if (raw?.ok !== true || typeof raw.path !== 'string' || !raw.path) {
-          throw new CloudApiError('server', '控制台没有返回图片路径')
+          throw new CloudApiError('server', '云端网关没有返回图片路径')
         }
         return {
           path: String(raw.path),
@@ -124,7 +119,7 @@ export function createDashboardClient(input: {
         const raw = (await response.json()) as Record<string, unknown>
         const dataUrl = String(raw?.dataUrl ?? raw?.data_url ?? '')
         if (!dataUrl.startsWith('data:image/')) {
-          throw new CloudApiError('server', '控制台返回的不是图片数据')
+          throw new CloudApiError('server', '云端网关返回的不是图片数据')
         }
         return dataUrl
       } catch (error) {

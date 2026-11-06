@@ -24,8 +24,8 @@ export interface CloudConnectionInfo {
   hasDeviceToken: boolean
   deviceScopes: string[]
   deviceId: string
-  /** 控制台会话令牌是否已配置（内嵌控制台视图要用；C-1 的唯一例外） */
-  hasDashboardToken: boolean
+  /** 本机是否记住了管理密钥（值永不出主进程） */
+  hasAdminKey: boolean
   /** 控制台账号（用户名明文；口令只回 has 标记） */
   dashboardUser: string
   hasDashboardPassword: boolean
@@ -129,7 +129,6 @@ export type CloudHandoffSummary = Omit<CloudHandoffPreview, 'willOverwrite' | 'a
 
 /** 导入时要落盘的配置补丁（含明文，只在主进程内传递） */
 export interface CloudConfigPatch {
-  baseUrl: string
   /** 网关地址（v2 交接文件直接给，不用从 api. 推导） */
   gatewayUrl?: string
   /** 管理密钥（v2 交接文件里的 ADMIN_KEY）：导入即记住 */
@@ -141,6 +140,7 @@ export interface CloudConfigPatch {
 }
 
 export type CloudRunStatus =
+  | 'queued'
   | 'started'
   | 'running'
   | 'waiting_approval'
@@ -432,12 +432,6 @@ export interface CloudDeviceResult {
 export interface CloudConfigGetResult {
   success: boolean
   config: CloudConnectionInfo
-  error?: string
-}
-
-export interface CloudConfigSetResult {
-  success: boolean
-  config?: CloudConnectionInfo
   error?: string
 }
 

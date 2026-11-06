@@ -120,13 +120,11 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
         hasDeviceToken: true,
         deviceScopes: ['chat', 'dispatch'],
         deviceId: 'dev-1',
-        hasDashboardToken: false,
         dashboardUser: '',
         hasDashboardPassword: false,
         ...(overrides.config as object | undefined),
       },
     }),
-    cloudConfigSet: async () => ({ success: true }),
     cloudDeviceGet: stub.deviceGet,
     cloudDeviceSet: stub.deviceSet,
     cloudDeviceReprobe: stub.deviceReprobe,
@@ -681,6 +679,26 @@ describe('多端同步', () => {
   })
 })
 
+describe('排队中的轮次', () => {
+  it('shows queued instead of running and blocks steering', async () => {
+    installBridge()
+    useCloudStore.setState({
+      activeSessionId: SESSION.id,
+      sessionMeta: SESSION,
+      runId: 'run_q',
+      runState: 'queued',
+      parts: [{ type: 'text', id: 'h:1', role: 'user', text: 'hello' }],
+    })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+
+    expect(await screen.findByText(zh.cloudRunQueued)).toBeTruthy()
+    expect(screen.queryByText(zh.cloudToolRunning)).toBeNull()
+    // 排队时后端会拒绝插话：按钮应当是禁用的
+    const steer = screen.getByText(zh.cloudSteer).closest('button')
+    expect(steer?.hasAttribute('disabled')).toBe(true)
+  })
+})
+
 describe('丢失主人的轮次', () => {
   it('shows the acknowledge bar only for an unknown run and reports success', async () => {
     installBridge()
@@ -1190,6 +1208,26 @@ describe('CloudConnectionView 心跳', () => {
     expect(ok.textContent).toContain(zh.cloudGatewayHeartbeatJustNow)
   })
 
+  it('restores the last heartbeat state from the gateway status after a missed push', async () => {
+    installBridge({
+      gatewayStatus: vi.fn(async () => ({
+        success: true,
+        registered: true,
+        gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+        deviceId: 'd1e2f3a4-0000-4000-8000-000000000000',
+        name: 'TChen-Legion',
+        scopes: ['chat', 'dispatch'],
+        hub: '0.1.0',
+        online: true,
+        upstreamVersion: '0.22.6',
+        heartbeat: { lastOkAt: Date.now(), lastError: null, stoppedBecauseRevoked: false },
+      })),
+    })
+    await useCloudStore.getState().loadGateway()
+    render(<CloudConnectionView active />)
+    expect(await screen.findByText(new RegExp(zh.cloudGatewayHeartbeatOk))).toBeTruthy()
+  })
+
   it('turns the connection into an error when the cloud revokes us', async () => {
     const stub = installBridge()
     stub.gatewayStatus = vi.fn(async () => ({
@@ -1299,6 +1337,11 @@ describe('CloudConnectionView 设备卡', () => {
     // 明文 token 只在主进程；界面只出现前缀
     expect(await screen.findByText(/pi_abcdefghij/)).toBeTruthy()
     expect(document.body.textContent).not.toContain('admin-secret')
+
+    // 登记只写主进程的盘：渲染层要刷新 config 并真正连上，
+    // 否则「重新连接」按钮按旧的 hasDeviceToken 禁用，会话区停在不可用。
+    await waitFor(() => expect(useCloudStore.getState().config.hasDeviceToken).toBe(true))
+    await waitFor(() => expect(useCloudStore.getState().connection).toBe('connected'))
   })
 
   it('shows the registered state with scopes and upstream version', async () => {
@@ -1344,9 +1387,9 @@ describe('CloudConnectionView 设备卡', () => {
   })
 
   it('treats a registered device with no token as revoked, not unconfigured', async () => {
-    // 登记过（transportMode=gateway）但 token 已经没了 = 被注销
+    // 登记过但 token 已经没了 = 被注销
     installBridge({
-      config: { transportMode: 'gateway', deviceId: 'b8235e0e', hasDeviceToken: false },
+      config: { deviceId: 'b8235e0e', hasDeviceToken: false },
     })
     await useCloudStore.getState().hydrate()
     const state = useCloudStore.getState()
@@ -1356,6 +1399,13 @@ describe('CloudConnectionView 设备卡', () => {
 
   it('locks the cloud view right after revoking', async () => {
     installBridge()
+    // 主进程注销时已经清掉 token：这里让 getConfig 如实反映，验证渲染层跟着刷新
+    ;(
+      window as unknown as { electronAPI: Record<string, unknown> }
+    ).electronAPI.cloudConfigGet = async () => ({
+      success: true,
+      config: { ...UNCONFIGURED_CONNECTION },
+    })
     useCloudStore.setState({
       connection: 'connected',
       capabilities: { runStop: true } as never,
@@ -1368,6 +1418,8 @@ describe('CloudConnectionView 设备卡', () => {
     // 能力与会话一起清掉：注销之后不该还能看到「已连接」
     expect(state.capabilities).toBeNull()
     expect(state.sessions).toHaveLength(0)
+    // config 也要刷新：否则「重新连接 / 断开连接」还按 hasDeviceToken=true 显示
+    expect(state.config.hasDeviceToken).toBe(false)
   })
 
   it('revokes the device from the card', async () => {

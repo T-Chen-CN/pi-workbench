@@ -46,7 +46,7 @@ export class CloudApiError extends Error {
  * 直接摊给用户看不懂；按码翻译，未知码再回落到「状态码 + 原文」。
  */
 const CODE_MESSAGES: Record<string, string> = {
-  gateway_auth_failed: 'API 密钥无效或已过期（检查连接页填的密钥）',
+  gateway_auth_failed: '设备凭据无效或已过期（这台设备可能已被注销），在「连接」页重新登记',
   idempotency_key_conflict: '这次请求和上一条用了同一个幂等键但内容不同，请重新发送',
   run_not_found: '这一轮已经结束了',
   run_not_active: '这一轮不在本机进程里跑，无法操作',
@@ -66,7 +66,7 @@ const CODE_MESSAGES: Record<string, string> = {
 }
 
 const STATUS_MESSAGES: Record<number, string> = {
-  401: 'API 密钥无效或已过期（401）',
+  401: '设备凭据无效或已过期（401）',
   403: '没有权限访问这个接口（403）',
   404: '云端资源不存在（404）',
   409: '幂等键冲突：同样的 key 已用于不同的请求内容（409）',

@@ -479,8 +479,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 云端 Agent：HTTP / SSE 都在主进程，这里只转发
   cloudConfigGet: () => ipcRenderer.invoke('cloud:config:get'),
-  cloudConfigSet: (input: { gatewayUrl?: string }) =>
-    ipcRenderer.invoke('cloud:config:set', input),
   cloudHandoffPick: () => ipcRenderer.invoke('cloud:handoff:pick'),
   cloudHandoffApply: (input: { applyNonce: string }) =>
     ipcRenderer.invoke('cloud:handoff:apply', input),

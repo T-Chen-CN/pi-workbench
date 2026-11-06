@@ -9,6 +9,11 @@ export function useCloudBridge(): void {
   const applyStatus = useCloudStore((state) => state.applyStatus)
   const setDashboardError = useCloudStore((state) => state.setDashboardError)
   const settleDashboard = useCloudStore((state) => state.settleDashboard)
+  const watchHeartbeat = useCloudStore((state) => state.watchHeartbeat)
+
+  // 心跳 / 撤销推送要在整个云端区域常驻订阅：只在连接页订阅的话，
+  // 用户在会话页被云端注销时会什么都收不到。store 里做了引用计数，不会重复监听。
+  useEffect(() => watchHeartbeat(), [watchHeartbeat])
 
   useEffect(() => {
     const offEvent = cloudApi.onEvent((frame) => applyFrame(frame))

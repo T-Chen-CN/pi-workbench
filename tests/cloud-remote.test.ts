@@ -22,7 +22,8 @@ function remote() {
 describe('run 状态映射', () => {
   it('keeps "unknown" distinct instead of pretending it is running', () => {
     expect(toRunStatus('unknown')).toBe('unknown')
-    expect(toRunStatus('queued')).toBe('started')
+    // queued 是真实状态：不能折叠成 started，否则界面会把「排队」显示成「执行中」
+    expect(toRunStatus('queued')).toBe('queued')
     expect(toRunStatus('waiting_for_approval')).toBe('waiting_approval')
     // 没见过的新状态仍然按 running 处理（不误判成终态）
     expect(toRunStatus('brand_new_status')).toBe('running')

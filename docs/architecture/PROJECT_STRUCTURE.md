@@ -34,13 +34,13 @@ pi-workbench/
 │   ├── workspace-trust.ts        # 工作区信任与路径包含
 │   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / cloud-agent / documents / files / git / settings / system / web-search* / workspace）
 │   ├── cloud/                    # 云端 Agent 主进程侧
-│   │   ├── config.ts             # 连接配置（设备 token / 控制台令牌，safeStorage 加密）+ cloudTransport() 单入口
+│   │   ├── config.ts             # 连接配置（设备 token / 控制台账号，safeStorage 加密）+ cloudTransport() 单入口
 │   │   ├── gateway.ts            # 网关管理面：登记 / 我是谁 / 撤销 + 错误码翻译（与 core/errors.py 对齐）
 │   │   ├── client.ts / remote.ts # 网关客户端与 REST 调用（会话、轮次、停止、插话）
 │   │   ├── events.ts / map.ts    # SSE 事件解析与时间线映射（含插话回执）
 │   │   ├── runner.ts             # 轮次生命周期（断流重订阅、校帧、停止兜底）
 │   │   ├── dashboard.ts          # 控制台原生视图（WebContentsView）宿主
-│   │   ├── dash.ts               # 控制台旁路（Bearer）：图片上传 / 按路径读回图片
+│   │   ├── media.ts              # 图片旁路（Bearer 设备 token）：上传 / 按路径读回
 │   │   ├── ledger.ts             # 未结算账本：分类 / 记账 / 结账 / 历史复核 / 剪枝
 │   ├── documents/                # 文档解析（零依赖）：zip / xml / ooxml / pdf / detect / preview / render-bridge
 │   │   ├── zip.ts                # node:zlib 手写 ZIP 中央目录（不引第三方）
@@ -211,7 +211,7 @@ pi-workbench/
 │   └── i18n/                     # 中英文文案与错误本地化
 │
 ├── hermes-plugin/                # 只剩路牌：插件本体已迁到独立仓库（公开 MIT）
-│   └── README.md                 # 指向 T-Chen-CN/pi-workbench-plugin + 钉版本 SHA + 安装命令
+│   └── README.md                 # 指向 T-Chen-CN/pi-workbench-plugin + 安装命令（不钉版本）
 │                                 # 插件形状：仓库根 = plugin.yaml / shim.py / adapter.py / config.py / core/ / tests/
 │                                 # 硬约束仍生效：core/ 纯 stdlib、不 import Hermes、传输不许换 aiohttp
 │                                 # 测试：cd <插件仓库> && python -m unittest discover -s tests -t .
@@ -354,12 +354,12 @@ ChatPanel.handleSubmit
 | `shell:openExternal` | invoke | 外部链接（https / http / mailto）交系统浏览器；白名单在 `electron/external-links.ts` |
 | `clipboard:writeText` | invoke | 写系统剪贴板（`pw-app://` 下 `navigator.clipboard` 不可用） |
 | `webSearch:get` / `save` | invoke | 联网搜索供应商与 Key（`safeStorage` 加密） |
-| `cloud:config:get` / `config:set` / `connect` / `disconnect` | invoke | 云端 Agent 连接配置（`data/cloud-agent/connection.json`，密钥 `safeStorage` 加密，渲染层只拿 `hasToken`）与连通性探测 |
-| `cloud:gateway:status` / `gateway:register` / `gateway:revoke` | invoke | 云端单入口（`hub.`）三件事：`status` = 登记了没有 + scope + 上游在不在（未登记时**不发任何请求**）；`register` = 用管理密钥换一次性设备 token（`deviceId` 钉死本地 `device.json` 的 id，明文 token 只留主进程，落盘 `enc:`）；`revoke` = 注销并只清设备凭据（`gatewayUrl` 与 `apiKey` 留着，后者是回滚手段） |
+| `cloud:config:get` / `connect` / `disconnect` | invoke | 云端 Agent 连接配置（`data/cloud-agent/connection.json`，密钥 `safeStorage` 加密，渲染层只拿 `hasDeviceToken`）与连通性探测；旧字段 `baseUrl` / `dashboardToken` / `apiKey` 在 `config:get` 时顺手清掉 |
+| `cloud:gateway:status` / `gateway:register` / `gateway:revoke` | invoke | 云端单入口（`hub.`）三件事：`status` = 登记了没有 + scope + 上游在不在 + 本机心跳状态（未登记时**不发任何请求**）；`register` = 用管理密钥换一次性设备 token（`deviceId` 钉死本地 `device.json` 的 id，明文 token 只留主进程，落盘 `enc:`；成功后渲染层刷新 config 并直接重连）；`revoke` = 注销并只清设备凭据（`gatewayUrl` 与已记住的管理密钥保留，管理密钥只用于重新登记） |
 | `cloud:device:get` / `device:set` / `device:reprobe` | invoke | 本机设备身份（`data/cloud-agent/device.json`，启动时即建）：`get` 首次会补一次系统友好名探测（`probedAt` 后不再自动探），`set` 只改 `name`（空串 = 恢复默认名），`reprobe` 是用户显式「重新读取系统名」。`id` 只读，随每轮 `POST /v1/runs` 的 `author` 发出（只做记忆归属，**不进 prompt**） |
 | `cloud:sessions:list` / `messages:list` | invoke | 云端会话列表与历史消息（主进程直接映射成时间线片段） |
 | `cloud:sessions:update` / `sessions:delete` | invoke | 会话条目操作（PATCH 白名单字段 / 硬删除，不可恢复） |
-| `cloud:run:start` / `run:stop` / `run:status` / `run:steer` / `run:attach` | invoke | 云端轮次：POST `/v1/runs`（带幂等键）、停止、状态轮询、运行中插话；`run:attach` 用 `data/cloud-agent/active-run.json` 在重启后接回还在跑的那一轮（订阅带 `last_seq` 上限，只收新事件，先铺历史再放增量） |
+| `cloud:run:start` / `run:stop` / `run:status` / `run:steer` / `run:attach` | invoke | 云端轮次：POST `/v1/runs`（带幂等键）、停止、状态轮询、运行中插话（`queued` 不接受插话）；`run:attach` 用 `data/cloud-agent/active-run.json` 在重启后接回还在跑的那一轮（订阅带 `last_seq` 上限，只收新事件，先铺历史再放增量） |
 | `cloud:clarify:respond` | invoke | 回答 clarify 提问（body 严格 `{request_id, execution_generation, answer}`） |
 | `cloud:approval:respond` | invoke | 提交审批决定（只收 `once` / `session` / `deny`，`always` 一律拒；body **三个字段必填** `{request_id, execution_generation, choice}`，实测少一个就是 400 `invalid_params`）；回执一成功立刻写一条审计 |
 | `cloud:policy:get` / `policy:set` | invoke | 服务端原生审批档位（`approvals.mode` = `manual` / `smart` / `off`）：只读白名单子集（`mode` / `timeout` / deny 条数 / 禁用工具集 / 终端后端）、写最小 patch 并读回复核 |
@@ -367,7 +367,7 @@ ChatPanel.handleSubmit
 | `cloud:jobs:list` / `jobs:run` / `jobs:pause` / `jobs:resume` | invoke | 定时任务：只读列表 + 三个动作（新建走对话、删除不提供） |
 | `cloud:ledger:list` / `ledger:resolve` / `ledger:note` | invoke | 未结算账本：列条目、人工三选一（做了 / 没做 / 不管）、手工补记 |
 | `cloud:run:resolve-unknown` | invoke | 收尾「主人进程丢了」的 run（凭据由主进程现查，渲染层只递 runId） |
-| `cloud:media:upload` / `media:read` | invoke | 图片上传与按路径读回（走控制台旁路，需要 `HERMES_DASHBOARD_SESSION_TOKEN`） |
+| `cloud:media:upload` / `media:read` | invoke | 图片上传与按路径读回（经网关旁路，凭据就是设备 token；插件转发给控制台） |
 | `cloud:event` | main → renderer | SSE 帧映射后的时间线增量 / 轮次状态 / 会话 id |
 | `cloud:status` | main → renderer | 连接状态变化 |
 | `cloud:dashboard:open` / `close` / `bounds` / `reload` | invoke | 程序内控制台：`WebContentsView`（独立 partition、sandbox、无 preload）的开合、边界同步、重载 |

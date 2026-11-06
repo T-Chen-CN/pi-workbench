@@ -132,7 +132,6 @@ export type CloudHandoffSummary = Omit<CloudHandoffPreview, 'willOverwrite' | 'a
 
 /** 导入时要落盘的配置补丁（含明文，只在主进程内传递） */
 export interface CloudConfigPatch {
-  baseUrl: string
   /** 网关地址（v2 交接文件直接给，不用从 api. 推导） */
   gatewayUrl?: string
   /** 管理密钥（v2 交接文件里的 ADMIN_KEY）：导入即记住 */
@@ -144,6 +143,7 @@ export interface CloudConfigPatch {
 }
 
 export type CloudRunStatus =
+  | 'queued'
   | 'started'
   | 'running'
   | 'waiting_approval'
@@ -438,12 +438,6 @@ export interface CloudConfigGetResult {
   error?: string
 }
 
-export interface CloudConfigSetResult {
-  success: boolean
-  config?: CloudConnectionInfo
-  error?: string
-}
-
 /** 读服务端当前审批策略（白名单子集） */
 export interface CloudPolicyGetResult {
   success: boolean
@@ -532,6 +526,8 @@ export interface CloudGatewayStatusResult {
   upstream?: string
   upstreamVersion?: string
   devices?: { total: number; active: number; revoked: number } | null
+  /** 本机心跳状态：错过推送时靠它把「已注销 / 心跳失败」补回来 */
+  heartbeat?: CloudHeartbeatState
   error?: string
 }
 

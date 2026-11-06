@@ -67,6 +67,15 @@ describe('applyFrame', () => {
     expect(useCloudStore.getState().activeSessionId).toBe('run_session')
     expect(useCloudStore.getState().sessionMeta?.id).toBe('run_session')
   })
+
+  it('keeps a queued run distinct and flips it to running on the first content frame', () => {
+    useCloudStore.getState().applyFrame({ kind: 'run', runId: 'run_q', state: 'queued' })
+    expect(useCloudStore.getState().runState).toBe('queued')
+
+    // 后端不一定推 run.started：内容帧到了就说明真的开始了
+    useCloudStore.getState().applyFrame({ kind: 'part', part: text('s:1', 'hello') })
+    expect(useCloudStore.getState().runState).toBe('running')
+  })
 })
 
 describe('openSession', () => {
@@ -292,6 +301,19 @@ describe('插话', () => {
     }
     await useCloudStore.getState().steer()
     expect(steer).not.toHaveBeenCalled()
+  })
+
+  it('refuses to steer while the run is still queued', async () => {
+    useCloudStore.setState({ draft: 'hi', runState: 'queued', parts: [], steerError: null })
+    const steer = vi.fn()
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudRunSteer: steer,
+    }
+    await useCloudStore.getState().steer()
+    expect(steer).not.toHaveBeenCalled()
+    expect(useCloudStore.getState().steerError).toContain('排队')
+    // 草稿不能被吃掉：等它开始执行用户还要发
+    expect(useCloudStore.getState().draft).toBe('hi')
   })
 })
 

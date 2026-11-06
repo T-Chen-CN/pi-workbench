@@ -70,8 +70,7 @@ describe('parseHandoff', () => {
   it('parses a v1 handoff file', () => {
     const data = parseOk(handoff())
     expect(data.version).toBe('v1')
-    expect(data.baseUrl).toBe('https://api.example.com')
-    expect(data.apiKey).toBe('abcdefghijklmnopqrstuvwxyz0123456789ABCD')
+    expect(data.gatewayUrl).toBe('https://hub.example.com')
     expect(data.dashboardUrl).toBe('https://dash.example.com')
     expect(data.dashboardUser).toBe('admin')
     expect(data.dashboardPassword).toBe('p@ss=word')
@@ -93,23 +92,21 @@ describe('parseHandoff', () => {
     expect(data.warnings.map((warning) => warning.code)).toEqual(['no_admin_key'])
   })
 
-  it('recognises v1.1 and picks up the dashboard session token', () => {
+  it('recognises v1.1 and ignores its legacy session token', () => {
     const data = parseOk(handoff({ DASHBOARD_SESSION_TOKEN: 'tok-123' }, 'v1.1'))
     expect(data.version).toBe('v1.1')
-    expect(data.dashboardToken).toBe('tok-123')
-    expect(data.warnings.map((warning) => warning.code)).not.toContain('no_dashboard_token')
+    expect(data).not.toHaveProperty('dashboardToken')
   })
 
   it('tolerates BOM and CRLF', () => {
     const text = `\uFEFF${handoff().replace(/\n/g, '\r\n')}`
-    expect(parseOk(text).baseUrl).toBe('https://api.example.com')
+    expect(parseOk(text).gatewayUrl).toBe('https://hub.example.com')
   })
 
   it('accepts spaces around the separator and quoted values', () => {
     const text = `# hermes-handoff v1\nAPI_BASE_URL = "https://api.example.com"\nAPI_KEY = "abcdefghijklmnopqrstuvwxyz0123456789ABCD"\n`
     const data = parseOk(text)
-    expect(data.baseUrl).toBe('https://api.example.com')
-    expect(data.apiKey).toBe('abcdefghijklmnopqrstuvwxyz0123456789ABCD')
+    expect(data.gatewayUrl).toBe('https://hub.example.com')
   })
 
   it('strips inline comments that follow whitespace', () => {
@@ -121,7 +118,7 @@ describe('parseHandoff', () => {
   it('keeps the last value when a key repeats, and warns about it', () => {
     const text = `# hermes-handoff v1\nAPI_BASE_URL=https://old.example.com\nAPI_BASE_URL=https://api.example.com\nAPI_KEY=abcdefghijklmnopqrstuvwxyz0123456789ABCD\n`
     const data = parseOk(text)
-    expect(data.baseUrl).toBe('https://api.example.com')
+    expect(data.gatewayUrl).toBe('https://hub.example.com')
     expect(warningCodes(text)).toContain('duplicate_key')
   })
 
@@ -138,8 +135,8 @@ describe('parseHandoff', () => {
   })
 
   it('strips a trailing /v1 from the api url', () => {
-    expect(parseOk(handoff({ API_BASE_URL: 'https://api.example.com/v1/' })).baseUrl).toBe(
-      'https://api.example.com'
+    expect(parseOk(handoff({ API_BASE_URL: 'https://api.example.com/v1/' })).gatewayUrl).toBe(
+      'https://hub.example.com'
     )
   })
 

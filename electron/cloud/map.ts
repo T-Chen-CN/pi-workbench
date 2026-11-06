@@ -651,6 +651,17 @@ export class RunMapper {
         }
         break
       }
+      case 'run.queued': {
+        // 同一会话已有轮次在跑：后端排队，界面要能说“排队中”而不是“执行中”
+        frames.push({ kind: 'run', runId: this.runId, state: 'queued' })
+        break
+      }
+      case 'run.started':
+      case 'run.running': {
+        // 排队结束 / 断流后重新接上：状态从 queued 回到 running
+        frames.push({ kind: 'run', runId: this.runId, state: 'running' })
+        break
+      }
       case 'run.completed': {
         const output = textOf(payload.output)
         if (output.trim()) {
@@ -768,7 +779,7 @@ export class RunMapper {
         break
       }
       default:
-        // run.queued / subagent.* 等不进入时间线
+        // subagent.* 等不进入时间线
         break
     }
 

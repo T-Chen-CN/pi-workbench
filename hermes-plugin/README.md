@@ -6,14 +6,14 @@
 | --- | --- |
 | 仓库 | <https://github.com/T-Chen-CN/pi-workbench-plugin>（公开，MIT） |
 | 形状 | **仓库根目录就是插件本体**（`plugin.yaml` 在根，`hermes plugins install` 只认这种形状） |
-| 版本 | 引导装默认分支最新版；tag `v0.1.0` = `8669f32…` 只用于「复现某次部署」时 `--ref`（CLI 只认 40 位 SHA） |
+| 版本 | 引导装默认分支最新版；`--ref <40 位 SHA>` 只在「复现某次部署」时用（见迁移手册） |
 | 测试 | `python -m unittest discover -s tests -t .`（纯 stdlib，零依赖） |
 
 安装（在 VPS 的 profile 里，`HERMES_HOME` 指向 profile 而不是 `~/.hermes`）：
 
 ```bash
-hermes plugins install https://github.com/T-Chen-CN/pi-workbench-plugin.git \
-  --ref 8669f32e98a6afb49ec81f9bac59394e3852f6d5 --no-enable
+hermes plugins install https://github.com/T-Chen-CN/pi-workbench-plugin.git --no-enable
+# 引导不钉版本（装默认分支最新版）；要复现某次部署时才用 --ref <40 位 SHA>
 hermes plugins adopt pi-workbench          # 过渡期：目录还在时的收编路径
 hermes plugins check-updates / update      # 之后走这个，不再 tar + scp
 ```

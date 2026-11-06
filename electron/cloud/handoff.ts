@@ -46,6 +46,7 @@ const KNOWN_KEYS = new Set([
   'DASHBOARD_URL',
   'DASHBOARD_USER',
   'DASHBOARD_PASSWORD',
+  // v1.1 遗留：认得出来（不进 `ignored`），但不再读取、也不落盘
   'DASHBOARD_SESSION_TOKEN',
   'AUTH_MODE',
   'HERMES_VERSION',
@@ -67,11 +68,7 @@ export interface HandoffData {
   gatewayUrl: string
   /** 管理密钥（v2）：只在主进程内使用，导入后加密存进 `connection.json` */
   adminKey: string
-  /** v1/v1.1 遗留字段：不再参与任何请求，只为读得懂旧文件 */
-  baseUrl: string
-  apiKey: string
   dashboardUrl: string
-  dashboardToken: string
   dashboardUser: string
   dashboardPassword: string
   authMode: 'basic' | 'form' | 'none'
@@ -240,8 +237,6 @@ export function parseHandoff(raw: string): HandoffParseResult {
     normalizeBaseUrl(values.get('DASHBOARD_URL') ?? '') ||
     deriveDashboardUrl(baseUrl || gatewayUrl)
 
-  const dashboardToken = values.get('DASHBOARD_SESSION_TOKEN') ?? ''
-
   const checks: CloudHandoffChecks = {
     dnsOk: toBool(values.get('DNS_OK')),
     gatewayHttp: toInt(values.get('GATEWAY_HTTP')) ?? toInt(values.get('CAPABILITIES_HTTP')),
@@ -269,10 +264,7 @@ export function parseHandoff(raw: string): HandoffParseResult {
       version,
       gatewayUrl,
       adminKey,
-      baseUrl,
-      apiKey,
       dashboardUrl,
-      dashboardToken,
       dashboardUser: values.get('DASHBOARD_USER') ?? '',
       dashboardPassword: values.get('DASHBOARD_PASSWORD') ?? '',
       authMode,
@@ -317,8 +309,6 @@ export function toPreview(data: HandoffData, fileName = ''): CloudHandoffSummary
  */
 export function pendingPatch(data: HandoffData): CloudConfigPatch {
   return {
-    // 单入口之后 baseUrl 只是历史字段（网关地址才是真的门）
-    baseUrl: data.baseUrl || data.gatewayUrl,
     gatewayUrl: data.gatewayUrl,
     adminKey: data.adminKey || undefined,
     dashboardUrl: data.dashboardUrl,

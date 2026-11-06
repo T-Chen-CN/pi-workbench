@@ -453,7 +453,6 @@ let dispose: () => void
 async function registerLocalDevice(): Promise<void> {
   const config = await import('../electron/cloud/config')
   config.writeCloudConfig({
-    baseUrl: 'https://api.example.com',
     gatewayUrl: 'https://hub.example.com',
     deviceToken: 'pi_hub_token_once',
     deviceScopes: ['chat', 'dispatch', 'admin'],
@@ -492,16 +491,12 @@ describe('cloud IPC', () => {
   it('rejects cloud calls before a key is saved', async () => {
     const result = await call<{ success: boolean; error?: string }>('cloud:sessions:list', {})
     expect(result.success).toBe(false)
-    // 单缝之后「没配置」的含义变了：先要求登记设备，直连密钥只是回滚手段
-    expect(result.error).toMatch(/登记|API 密钥/)
+    // 单缝之后「没配置」= 这台设备还没登记
+    expect(result.error).toMatch(/登记/)
   })
 
-  it('saves the console token, connects and lists sessions', async () => {
+  it('connects and lists sessions after registration', async () => {
     await registerLocalDevice()
-    const saved = await call<{ success: boolean }>('cloud:config:set', {
-      dashboardToken: 'dash-token',
-    })
-    expect(saved.success).toBe(true)
 
     const connected = await call<{ success: boolean; capabilities?: { model?: string } }>(
       'cloud:connect'
@@ -719,7 +714,6 @@ describe('cloud images', () => {
 
   it('rejects a non-whitelisted type locally', async () => {
     await registerLocalDevice()
-    await call('cloud:config:set', { dashboardToken: 'dash-token' })
     const result = await call<{ success: boolean; error?: string }>('cloud:media:upload', {
       dataUrl: 'data:image/svg+xml;base64,AAAA',
     })
@@ -729,7 +723,6 @@ describe('cloud images', () => {
 
   it('uploads and reads back through the console', async () => {
     await registerLocalDevice()
-    await call('cloud:config:set', { dashboardToken: 'dash-token' })
     const uploaded = await call<{ success: boolean; image?: { path: string } }>(
       'cloud:media:upload',
       { dataUrl: 'data:image/png;base64,AAAA', filename: 'pasted.png' }
@@ -973,7 +966,6 @@ describe('cloud approval', () => {
 
   beforeAll(async () => {
     await registerLocalDevice()
-    await call('cloud:config:set', { dashboardToken: 'dash-token' })
     await call('cloud:run:start', { input: 'run a command', idempotencyKey: 'key-approval' })
   })
 
@@ -1370,7 +1362,10 @@ describe('cloud run attach（重启后接回在跑的一轮）', () => {
     expect(readActiveRun()?.runId).toBe('run_hang')
 
     // 换了服务器（网关地址变了）= 上一台的轮次接不回来
-    await call('cloud:config:set', { gatewayUrl: 'https://other.example.com' })
+    await call('cloud:gateway:register', {
+      adminKey: 'admin-ok',
+      gatewayUrl: 'https://other.example.com',
+    })
     expect(readActiveRun()).toBeNull()
 
     // 复原配置，别影响同文件里排在前面的用例假设
@@ -1477,12 +1472,21 @@ describe('cloud gateway (single entry)', () => {
 
   it('forgets the admin key on request', async () => {
     const config = await import('../electron/cloud/config')
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com', adminKey: 'admin-ok' })
+    config.writeCloudConfig({
+      // 自建部署：两扇地址都是手填的
+      gatewayUrl: 'https://hub.self-hosted.test',
+      dashboardUrl: 'https://console.self-hosted.test',
+      adminKey: 'admin-ok',
+    })
     expect(config.readCloudConfig().hasAdminKey).toBe(true)
 
     const forgotten = await call<{ success: boolean }>('cloud:gateway:forget-admin-key')
     expect(forgotten.success).toBe(true)
-    expect(config.readCloudConfig().hasAdminKey).toBe(false)
+    const after = config.readCloudConfig()
+    expect(after.hasAdminKey).toBe(false)
+    // 只清管理密钥，不能把自建地址重新推导成默认值
+    expect(after.gatewayUrl).toBe('https://hub.self-hosted.test')
+    expect(after.dashboardUrl).toBe('https://console.self-hosted.test')
   })
 
   it('revokes the device and drops the local token immediately', async () => {

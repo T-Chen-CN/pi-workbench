@@ -13,7 +13,6 @@ import { getAppDir } from '../app-paths.js'
 import { readJsonWithBackup, writeJsonAtomicSync } from '../atomic-json.js'
 import { decryptSecret, encryptSecret } from '../secret-crypto.js'
 import {
-  DEFAULT_CLOUD_BASE_URL,
   DEFAULT_CLOUD_DASHBOARD_URL,
   DEFAULT_CLOUD_GATEWAY_URL,
   deriveDashboardUrl,
@@ -23,7 +22,6 @@ import {
 
 // 地址工具在 `url.ts`（纯函数）；这里再导出一次，保持既有调用方不变
 export {
-  DEFAULT_CLOUD_BASE_URL,
   DEFAULT_CLOUD_DASHBOARD_URL,
   DEFAULT_CLOUD_GATEWAY_URL,
   deriveDashboardUrl,
@@ -32,7 +30,6 @@ export {
 }
 
 interface StoredCloudConfig {
-  baseUrl?: string
   /** 网关（单入口）地址：本地只有这一个门（C-2：没有直连兜底） */
   gatewayUrl?: string
   /** 设备 token（`pi_…`），safeStorage 加密；由网关登记时一次性发放 */
@@ -55,8 +52,7 @@ interface StoredCloudConfig {
 }
 
 export interface CloudConfig {
-  baseUrl: string
-  /** 网关地址（默认由 `api.` 派生 `hub.`） */
+  /** 网关地址（唯一的门） */
   gatewayUrl: string
   /** 设备 token 明文：只在主进程内使用 */
   deviceToken: string
@@ -79,18 +75,39 @@ export function cloudConfigFile(): string {
   return path.join(getAppDir(), 'data', 'cloud-agent', 'connection.json')
 }
 
+/**
+ * 单入口之前留在盘上的字段。
+ *
+ * `baseUrl` 是直连时代的 API 地址；`dashboardToken` / `apiKey` 已经被设备 token 取代。
+ * 读取时一直忽略；这里只负责把它们从文件里抹掉，避免运维看到「还有一把旧密钥」跟着排查半天。
+ */
+const LEGACY_CONFIG_KEYS = ['baseUrl', 'dashboardToken', 'apiKey'] as const
+
+/** 清掉历史字段（只动主文件，不碰 .bak）；没有可清的字段时一次 IO 都不做。 */
+export function pruneLegacyCloudConfig(): void {
+  const file = cloudConfigFile()
+  const { data } = readJsonWithBackup<Record<string, unknown>>(file)
+  if (!data || typeof data !== 'object') return
+  const legacy = LEGACY_CONFIG_KEYS.filter((key) => key in data)
+  if (legacy.length === 0) return
+  for (const key of legacy) delete data[key]
+  try {
+    writeJsonAtomicSync(file, data)
+  } catch {
+    // 清不掉不影响任何读写；下次 config:get 再试
+  }
+}
+
 export function readCloudConfig(): CloudConfig {
   const stored = readJsonWithBackup<StoredCloudConfig>(cloudConfigFile()).data
-  const baseUrl = normalizeBaseUrl(stored?.baseUrl ?? '') || DEFAULT_CLOUD_BASE_URL
   const deviceToken = decryptSecret(stored?.deviceToken ?? '')
   const gatewayUrl =
-    normalizeBaseUrl(stored?.gatewayUrl ?? '') || deriveGatewayUrl(baseUrl) || DEFAULT_CLOUD_GATEWAY_URL
+    normalizeBaseUrl(stored?.gatewayUrl ?? '') || DEFAULT_CLOUD_GATEWAY_URL
   const dashboardUrl =
-    normalizeBaseUrl(stored?.dashboardUrl ?? '') || deriveDashboardUrl(baseUrl)
+    normalizeBaseUrl(stored?.dashboardUrl ?? '') || DEFAULT_CLOUD_DASHBOARD_URL
   const adminKey = decryptSecret(stored?.adminKey ?? '')
   const dashboardPassword = decryptSecret(stored?.dashboardPassword ?? '')
   return {
-    baseUrl,
     gatewayUrl,
     deviceToken,
     hasDeviceToken: Boolean(deviceToken),
@@ -109,13 +126,12 @@ export function readCloudConfig(): CloudConfig {
 }
 
 export function writeCloudConfig(input: {
-  baseUrl: string
   gatewayUrl?: string
   deviceToken?: string
   deviceScopes?: string[]
   deviceId?: string
   adminKey?: string
-  /** 交接文件里的控制台地址可能与 `api.` 派生规则不一致，允许显式覆盖 */
+  /** 交接文件里的控制台地址可能与默认派生规则不一致，允许显式覆盖 */
   dashboardUrl?: string
   dashboardUser?: string
   dashboardPassword?: string
@@ -123,13 +139,12 @@ export function writeCloudConfig(input: {
   handoffProfile?: string
 }): CloudConfig {
   const current = readCloudConfig()
-  const baseUrl = normalizeBaseUrl(input.baseUrl) || DEFAULT_CLOUD_BASE_URL
   // 留空表示沿用旧值；显式传入才覆盖
   const pick = (value: string | undefined, fallback: string): string =>
     typeof value === 'string' && value.trim() ? value.trim() : fallback
   const nextDeviceToken = pick(input.deviceToken, current.deviceToken)
-  // 显式传入优先，否则按 baseUrl 派生（不沿用旧值：地址改了网关就该跟着改）
-  const nextGatewayUrl = normalizeBaseUrl(input.gatewayUrl ?? '') || deriveGatewayUrl(baseUrl)
+  const nextGatewayUrl =
+    normalizeBaseUrl(input.gatewayUrl ?? '') || current.gatewayUrl || DEFAULT_CLOUD_GATEWAY_URL
   const nextDeviceScopes = input.deviceScopes ?? current.deviceScopes
   // 空串 = 用户点了「忘记」；undefined = 不动
   const nextAdminKey =
@@ -142,9 +157,9 @@ export function writeCloudConfig(input: {
     typeof input.handoffImportedAt === 'number'
       ? input.handoffImportedAt
       : current.handoffImportedAt
-  const dashboardUrl = normalizeBaseUrl(input.dashboardUrl ?? '') || deriveDashboardUrl(baseUrl)
+  const dashboardUrl =
+    normalizeBaseUrl(input.dashboardUrl ?? '') || current.dashboardUrl || DEFAULT_CLOUD_DASHBOARD_URL
   const stored: StoredCloudConfig = {
-    baseUrl,
     gatewayUrl: nextGatewayUrl,
     deviceToken: nextDeviceToken ? encryptSecret(nextDeviceToken) : '',
     deviceScopes: nextDeviceScopes,
@@ -159,7 +174,6 @@ export function writeCloudConfig(input: {
   writeJsonAtomicSync(cloudConfigFile(), stored)
   return {
     ...readCloudConfig(),
-    baseUrl,
     gatewayUrl: nextGatewayUrl,
     deviceToken: nextDeviceToken,
     hasDeviceToken: Boolean(nextDeviceToken),
@@ -185,7 +199,6 @@ export function writeCloudConfig(input: {
 export function clearDeviceCredentials(): CloudConfig {
   const current = readCloudConfig()
   const stored: StoredCloudConfig = {
-    baseUrl: current.baseUrl,
     gatewayUrl: current.gatewayUrl || undefined,
     dashboardUrl: current.dashboardUrl,
     dashboardUser: current.dashboardUser,
@@ -211,7 +224,7 @@ export function clearDeviceCredentials(): CloudConfig {
 export function clearCloudToken(): CloudConfig {
   const current = readCloudConfig()
   const stored: StoredCloudConfig = {
-    baseUrl: current.baseUrl,
+    gatewayUrl: current.gatewayUrl || undefined,
     dashboardUrl: current.dashboardUrl,
     // 账号与导入记录留着：下次只需重新粘密钥
     dashboardUser: current.dashboardUser,
@@ -242,18 +255,12 @@ export function clearCloudToken(): CloudConfig {
 export function cloudTransport(config = readCloudConfig()): {
   baseUrl: string
   credential: string
-  /** 控制台侧旁路（图片上传 / 读回）也走这同一扇门 */
-  dashboardBaseUrl: string
-  dashboardToken: string
 } {
   // 只有一扇门（C-2）。没有设备 token = 没有凭据 = 上层明确报错，
   // 不存在「换个客户端再试一次」这条路。
   return {
     baseUrl: config.gatewayUrl,
     credential: config.deviceToken,
-    // 图片上传与图片读回也走网关（本地因此不需要控制台令牌）
-    dashboardBaseUrl: config.gatewayUrl,
-    dashboardToken: config.deviceToken,
   }
 }
 

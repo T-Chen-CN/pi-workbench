@@ -44,11 +44,11 @@ function wrap(error: unknown): CloudApiError {
   if (error instanceof CloudApiError) return error
   const name = (error as { name?: string })?.name
   if (name === 'AbortError' || name === 'TimeoutError') {
-    return new CloudApiError('timeout', '控制台请求超时')
+    return new CloudApiError('timeout', '审批档位请求超时')
   }
   return new CloudApiError(
     'network',
-    `无法连接控制台（检查地址 / 代理 / 控制台是否在跑）：${error instanceof Error ? error.message : String(error)}`
+    `无法连接云端网关（检查网络 / 代理 / 网关是否在跑）：${error instanceof Error ? error.message : String(error)}`
   )
 }
 
@@ -56,13 +56,13 @@ function failure(status: number, detail: string, what: string): CloudApiError {
   if (status === 401 || status === 403) {
     return new CloudApiError(
       'unauthorized',
-      `控制台拒绝了${what}请求（${status}）：会话令牌无效或权限不足`,
+      `云端网关拒绝了${what}请求（${status}）：设备凭据无效或权限不足`,
       { status }
     )
   }
   return new CloudApiError(
     status >= 500 ? 'server' : 'bad_request',
-    `控制台${what}失败（${status}）${detail ? `：${detail}` : ''}`,
+    `云端网关${what}失败（${status}）${detail ? `：${detail}` : ''}`,
     { status }
   )
 }

@@ -75,7 +75,7 @@ beforeAll(async () => {
   policy = await import('../electron/cloud/policy')
   config = await import('../electron/cloud/config')
   config.writeCloudConfig({
-    baseUrl: 'https://api.example.com',
+    gatewayUrl: 'https://hub.example.com',
     deviceToken: 'pi_dev',
     dashboardUrl: 'https://dash.example.com',
   })
