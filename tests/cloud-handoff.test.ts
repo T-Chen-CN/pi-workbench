@@ -264,7 +264,6 @@ describe('pendingPatch', () => {
     expect(patch.adminKey).toBeUndefined()
     expect(patch.gatewayUrl).toBe('https://hub.example.com')
     expect(patch.dashboardUrl).toBe('https://dash.example.com')
-    expect(patch.dashboardToken).toBeUndefined()
     expect(patch.dashboardUser).toBeUndefined()
     expect(patch.handoffProfile).toBe('pi-cloud')
   })

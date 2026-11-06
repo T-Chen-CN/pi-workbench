@@ -46,11 +46,6 @@ interface StoredCloudConfig {
    */
   adminKey?: string
   dashboardUrl?: string
-  /**
-   * 控制台会话令牌（服务端 `.env` 里的 `HERMES_DASHBOARD_SESSION_TOKEN`）。
-   * 只有它能让主进程直接调控制台的 `/api/*`（图片上传、读回图片字节）。
-   */
-  dashboardToken?: string
   /** 控制台账号：用户名不加密，口令走 `enc:` */
   dashboardUser?: string
   dashboardPassword?: string
@@ -72,9 +67,6 @@ export interface CloudConfig {
   adminKey: string
   hasAdminKey: boolean
   dashboardUrl: string
-  /** 控制台会话令牌明文（主进程内使用） */
-  dashboardToken: string
-  hasDashboardToken: boolean
   dashboardUser: string
   /** 控制台口令明文（主进程内使用，只用于「复制口令」） */
   dashboardPassword: string
@@ -96,7 +88,6 @@ export function readCloudConfig(): CloudConfig {
   const dashboardUrl =
     normalizeBaseUrl(stored?.dashboardUrl ?? '') || deriveDashboardUrl(baseUrl)
   const adminKey = decryptSecret(stored?.adminKey ?? '')
-  const dashboardToken = decryptSecret(stored?.dashboardToken ?? '')
   const dashboardPassword = decryptSecret(stored?.dashboardPassword ?? '')
   return {
     baseUrl,
@@ -108,8 +99,6 @@ export function readCloudConfig(): CloudConfig {
     adminKey,
     hasAdminKey: Boolean(adminKey),
     dashboardUrl,
-    dashboardToken,
-    hasDashboardToken: Boolean(dashboardToken),
     dashboardUser: stored?.dashboardUser ?? '',
     dashboardPassword,
     hasDashboardPassword: Boolean(dashboardPassword),
@@ -126,7 +115,6 @@ export function writeCloudConfig(input: {
   deviceScopes?: string[]
   deviceId?: string
   adminKey?: string
-  dashboardToken?: string
   /** 交接文件里的控制台地址可能与 `api.` 派生规则不一致，允许显式覆盖 */
   dashboardUrl?: string
   dashboardUser?: string
@@ -147,7 +135,6 @@ export function writeCloudConfig(input: {
   const nextAdminKey =
     input.adminKey === undefined ? current.adminKey : input.adminKey.trim()
   const nextDeviceId = pick(input.deviceId, current.deviceId)
-  const nextDashboardToken = pick(input.dashboardToken, current.dashboardToken)
   const nextDashboardUser = pick(input.dashboardUser, current.dashboardUser)
   const nextDashboardPassword = pick(input.dashboardPassword, current.dashboardPassword)
   const nextProfile = pick(input.handoffProfile, current.handoffProfile)
@@ -164,7 +151,6 @@ export function writeCloudConfig(input: {
     deviceId: nextDeviceId || undefined,
     adminKey: nextAdminKey ? encryptSecret(nextAdminKey) : undefined,
     dashboardUrl,
-    dashboardToken: nextDashboardToken ? encryptSecret(nextDashboardToken) : '',
     dashboardUser: nextDashboardUser,
     dashboardPassword: nextDashboardPassword ? encryptSecret(nextDashboardPassword) : '',
     handoffImportedAt: nextImportedAt ?? undefined,
@@ -182,8 +168,6 @@ export function writeCloudConfig(input: {
     adminKey: nextAdminKey,
     hasAdminKey: Boolean(nextAdminKey),
     dashboardUrl,
-    dashboardToken: nextDashboardToken,
-    hasDashboardToken: Boolean(nextDashboardToken),
     dashboardUser: nextDashboardUser,
     dashboardPassword: nextDashboardPassword,
     hasDashboardPassword: Boolean(nextDashboardPassword),
@@ -207,7 +191,6 @@ export function clearDeviceCredentials(): CloudConfig {
     dashboardUser: current.dashboardUser,
     handoffImportedAt: current.handoffImportedAt ?? undefined,
     handoffProfile: current.handoffProfile || undefined,
-    dashboardToken: current.dashboardToken ? encryptSecret(current.dashboardToken) : '',
     dashboardPassword: current.dashboardPassword ? encryptSecret(current.dashboardPassword) : '',
     deviceToken: '',
     deviceScopes: [],
@@ -237,7 +220,6 @@ export function clearCloudToken(): CloudConfig {
     deviceToken: '',
     deviceScopes: [],
     adminKey: undefined,
-    dashboardToken: '',
     dashboardPassword: '',
   }
   writeJsonAtomicSync(cloudConfigFile(), stored)
@@ -246,8 +228,6 @@ export function clearCloudToken(): CloudConfig {
     deviceToken: '',
     hasDeviceToken: false,
     deviceScopes: [],
-    dashboardToken: '',
-    hasDashboardToken: false,
     dashboardPassword: '',
     hasDashboardPassword: false,
   }
@@ -257,12 +237,12 @@ export function clearCloudToken(): CloudConfig {
  * 实际发请求用的「地址 + 凭据」。
  *
  * **只有一个门**：有设备 token 就走网关（C-1 单缝、C-2 无自动兜底）；
- * 没有设备 token 时才落到老的直连字段上 —— 那是登记完成前的过渡态，
- * 也是唯一的手工回滚手段（QN-5）。
+ * 单入口（C-2）：网关地址 + 设备 token，除此之外没有任何凭据。
  */
 export function cloudTransport(config = readCloudConfig()): {
   baseUrl: string
   credential: string
+  /** 控制台侧旁路（图片上传 / 读回）也走这同一扇门 */
   dashboardBaseUrl: string
   dashboardToken: string
 } {
@@ -286,7 +266,6 @@ export function publicCloudConfig(config = readCloudConfig()): {
   /** 本机是否记住了管理密钥（值永不出主进程） */
   hasAdminKey: boolean
   dashboardUrl: string
-  hasDashboardToken: boolean
   dashboardUser: string
   hasDashboardPassword: boolean
 } {
@@ -297,7 +276,6 @@ export function publicCloudConfig(config = readCloudConfig()): {
     deviceId: config.deviceId,
     hasAdminKey: config.hasAdminKey,
     dashboardUrl: config.dashboardUrl,
-    hasDashboardToken: config.hasDashboardToken,
     dashboardUser: config.dashboardUser,
     hasDashboardPassword: config.hasDashboardPassword,
   }

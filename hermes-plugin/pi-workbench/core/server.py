@@ -173,7 +173,9 @@ class Hub:
             # -- passthrough: dashboard side channels ----------------------
             ("POST", r"/api/chat/image-upload", self.dashboard_passthrough, "chat"),
             ("GET", r"/api/fs/read-data-url", self.dashboard_passthrough, "chat"),
-            ("GET", r"/api/config", self.dashboard_passthrough, "admin"),
+            # 读配置（审批档位那一小块）是纯只读：设备凭 chat 就该能读，
+            # 否则「连接页显示当前档位」会 403。写配置仍然只有 admin 能做。
+            ("GET", r"/api/config", self.dashboard_passthrough, "chat"),
             ("PUT", r"/api/config", self.dashboard_passthrough, "admin"),
         ]
         return t

@@ -300,9 +300,19 @@ class DashboardSideChannelTests(H1TestCase):
         )
         self.assertEqual(status, 403)
 
-    def test_config_read_needs_admin_scope(self):
+    def test_config_read_is_allowed_with_chat_scope(self):
+        """读审批档位是纯只读：设备凭 chat 就该读到，否则连接页显示不了当前档位。"""
         _, token = self.register(scopes=("chat",))
         status, payload = self.json_request("GET", "/api/config", token=token)
+        self.assertEqual(status, 200, payload)
+        self.assertIn("config", payload)
+
+    def test_config_write_still_needs_admin_scope(self):
+        """读放宽了，写没有：改审批档位仍然是 admin 的事。"""
+        _, token = self.register(scopes=("chat",))
+        status, payload = self.json_request(
+            "PUT", "/api/config", token=token, body={"config": {"approvals": {"mode": "manual"}}}
+        )
         self.assertEqual(status, 403)
         self.assertEqual(payload["error"]["code"], "scope_required")
 

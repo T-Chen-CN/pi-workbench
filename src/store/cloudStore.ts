@@ -142,7 +142,7 @@ interface CloudState {
   handoffError: string | null
 
   hydrate: () => Promise<void>
-  saveConfig: (input: { gatewayUrl?: string; dashboardToken?: string }) => Promise<boolean>
+  saveConfig: (input: { gatewayUrl?: string }) => Promise<boolean>
   pickHandoff: () => Promise<boolean>
   applyHandoff: () => Promise<boolean>
   copyHandoffSecret: () => Promise<boolean>

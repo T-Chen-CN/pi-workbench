@@ -322,7 +322,6 @@ export function pendingPatch(data: HandoffData): CloudConfigPatch {
     gatewayUrl: data.gatewayUrl,
     adminKey: data.adminKey || undefined,
     dashboardUrl: data.dashboardUrl,
-    dashboardToken: data.dashboardToken || undefined,
     dashboardUser: data.dashboardUser || undefined,
     dashboardPassword: data.dashboardPassword || undefined,
     handoffProfile: data.profile || undefined,

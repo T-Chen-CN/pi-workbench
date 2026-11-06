@@ -120,7 +120,6 @@ export const UNCONFIGURED_CONNECTION: CloudConnectionInfo = {
   deviceScopes: [],
   deviceId: '',
   hasAdminKey: false,
-  hasDashboardToken: false,
   dashboardUser: '',
   hasDashboardPassword: false,
 }
@@ -255,7 +254,7 @@ export const cloudApi = {
     return bridge.cloudConfigGet()
   },
 
-  async setConfig(input: { gatewayUrl?: string; dashboardToken?: string }): Promise<CloudConfigSetResult> {
+  async setConfig(input: { gatewayUrl?: string }): Promise<CloudConfigSetResult> {
     const bridge = api()
     if (!bridge || typeof bridge.cloudConfigSet !== 'function') {
       return { success: false, error: NO_BRIDGE }

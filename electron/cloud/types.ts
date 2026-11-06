@@ -135,7 +135,6 @@ export interface CloudConfigPatch {
   /** 管理密钥（v2 交接文件里的 ADMIN_KEY）：导入即记住 */
   adminKey?: string
   dashboardUrl: string
-  dashboardToken?: string
   dashboardUser?: string
   dashboardPassword?: string
   handoffProfile?: string

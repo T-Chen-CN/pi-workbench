@@ -27,7 +27,6 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const error = useCloudStore((state) => state.error)
   const capabilities = useCloudStore((state) => state.capabilities)
   const bridgeAvailable = useCloudStore((state) => state.bridgeAvailable)
-  const saveConfig = useCloudStore((state) => state.saveConfig)
   const pickHandoff = useCloudStore((state) => state.pickHandoff)
   const handoffBusy = useCloudStore((state) => state.handoffBusy)
   const connect = useCloudStore((state) => state.connect)
@@ -48,7 +47,6 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const forgetAdminKey = useCloudStore((state) => state.forgetAdminKey)
   const heartbeat = useCloudStore((state) => state.heartbeat)
 
-  const [dashboardToken, setDashboardToken] = useState('')
   const [busy, setBusy] = useState<'save' | 'connect' | null>(null)
   const [deviceName, setDeviceNameDraft] = useState('')
   const [adminKey, setAdminKey] = useState('')
@@ -91,12 +89,6 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
     else toast.error(t('cloudDeviceCopyFailed'))
   }
 
-  const handleSave = async () => {
-    setBusy('save')
-    const ok = await saveConfig({ dashboardToken: dashboardToken.trim() || undefined })
-    setBusy(null)
-    if (ok) setDashboardToken('')
-  }
 
   const handleReconnect = async () => {
     setBusy('connect')
@@ -157,25 +149,6 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
             }
           />
           <div className="flex flex-col gap-3 pt-3">
-            <Field
-              label={t('cloudDashboardToken')}
-              hint={
-                config.hasDashboardToken
-                  ? t('cloudDashboardTokenSavedHint')
-                  : t('cloudDashboardTokenHint')
-              }
-              htmlFor="cloud-dashboard-token"
-            >
-              <Input
-                id="cloud-dashboard-token"
-                type="password"
-                value={dashboardToken}
-                spellCheck={false}
-                autoComplete="off"
-                placeholder={t('cloudDashboardTokenPlaceholder')}
-                onChange={(event) => setDashboardToken(event.target.value)}
-              />
-            </Field>
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 size="sm"
@@ -185,14 +158,6 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                 onClick={() => void pickHandoff()}
               >
                 {t('cloudImportFromFile')}
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                loading={busy === 'save'}
-                onClick={() => void handleSave()}
-              >
-                {t('cloudSave')}
               </Button>
               <Button
                 size="sm"

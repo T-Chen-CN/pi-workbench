@@ -29,8 +29,6 @@ export interface CloudConnectionInfo {
   deviceId: string
   /** 本机是否记住了管理密钥（值永不出主进程） */
   hasAdminKey: boolean
-  /** 控制台会话令牌是否已配置（图片上传/读取要用） */
-  hasDashboardToken: boolean
   /** 控制台账号（用户名明文；口令只回 has 标记） */
   dashboardUser: string
   hasDashboardPassword: boolean
@@ -140,7 +138,6 @@ export interface CloudConfigPatch {
   /** 管理密钥（v2 交接文件里的 ADMIN_KEY）：导入即记住 */
   adminKey?: string
   dashboardUrl: string
-  dashboardToken?: string
   dashboardUser?: string
   dashboardPassword?: string
   handoffProfile?: string

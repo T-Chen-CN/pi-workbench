@@ -111,7 +111,6 @@ describe('read/write connection', () => {
       deviceScopes: ['chat'],
       deviceId: 'dev-1',
       hasAdminKey: false,
-      hasDashboardToken: false,
       dashboardUser: '',
       hasDashboardPassword: false,
     })
@@ -131,41 +130,19 @@ describe('read/write connection', () => {
   })
 })
 
-describe('控制台会话令牌', () => {
-  it('is encrypted at rest and never leaves the main process', () => {
-    // 先清掉前面用例留下的设备凭据，这条只关心控制台令牌
-    config.clearDeviceCredentials()
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com' })
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com', dashboardToken: 'dash-token' })
+describe('控制台会话令牌（已废弃）', () => {
+  it('ignores a token left behind by older builds', () => {
+    // 单入口之后图片旁路也用设备 token；老文件里的 dash-token 一个字都不许进传输
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com', deviceToken: 'pi_dev' })
+    const file = config.cloudConfigFile()
+    const stored = JSON.parse(fs.readFileSync(file, 'utf-8'))
+    stored.dashboardToken = 'dash-token'
+    fs.writeFileSync(file, JSON.stringify(stored))
 
-    expect(config.readCloudConfig().hasDashboardToken).toBe(true)
-    expect(config.readCloudConfig().dashboardToken).toBe('dash-token')
-    // 公开字段里只有「有没有」，没有明文
-    expect(config.publicCloudConfig()).toEqual({
-      gatewayUrl: 'https://hub.example.com',
-      dashboardUrl: 'https://dash.example.com',
-      hasDeviceToken: false,
-      deviceScopes: [],
-      deviceId: '',
-      hasAdminKey: false,
-      hasDashboardToken: true,
-      dashboardUser: '',
-      hasDashboardPassword: false,
-    })
-    expect(JSON.stringify(config.publicCloudConfig())).not.toContain('dash-token')
-  })
-
-  it('keeps the existing token when the field is left empty', () => {
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com', dashboardToken: 'dash-token' })
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com' })
-    expect(config.readCloudConfig().dashboardToken).toBe('dash-token')
-  })
-
-  it('drops it on disconnect along with the device token', () => {
-    config.writeCloudConfig({ baseUrl: 'https://api.example.com', dashboardToken: 'dash-token' })
-    config.clearCloudToken()
-    expect(config.readCloudConfig().hasDashboardToken).toBe(false)
-    expect(config.readCloudConfig().baseUrl).toBe('https://api.example.com')
+    const transport = config.cloudTransport()
+    expect(transport.dashboardToken).toBe('pi_dev')
+    expect(transport.dashboardToken).not.toBe('dash-token')
+    expect(config.publicCloudConfig()).not.toHaveProperty('hasDashboardToken')
   })
 })
 
@@ -210,7 +187,6 @@ describe('控制台账号与导入记录', () => {
     config.writeCloudConfig({
       baseUrl: 'https://api.example.com',
       deviceToken: 'pi_secret',
-      dashboardToken: 'dash-token',
       dashboardUser: 'admin',
       dashboardPassword: 'p@ss=word',
       handoffProfile: 'pi-cloud',
@@ -218,7 +194,6 @@ describe('控制台账号与导入记录', () => {
     config.clearCloudToken()
     const read = config.readCloudConfig()
     expect(read.hasDeviceToken).toBe(false)
-    expect(read.hasDashboardToken).toBe(false)
     expect(read.hasDashboardPassword).toBe(false)
     expect(read.dashboardUser).toBe('admin')
     expect(read.handoffProfile).toBe('pi-cloud')

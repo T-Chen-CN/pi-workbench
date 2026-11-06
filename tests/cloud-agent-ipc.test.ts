@@ -1230,15 +1230,18 @@ describe('cloud handoff import', () => {
     const applied = await call<{
       success: boolean
       config?: {
+        gatewayUrl: string
         dashboardUser: string
         hasDashboardPassword: boolean
-        hasDashboardToken: boolean
+        hasAdminKey: boolean
       }
     }>('cloud:handoff:apply', { applyNonce: picked.preview.applyNonce })
 
     expect(applied.success).toBe(true)
     expect(applied.config).toMatchObject({
-      hasDashboardToken: true,
+      // v2 文件带来网关地址与管理密钥：导入之后只差点一次「登记」
+      gatewayUrl: 'https://hub.example.com',
+      hasAdminKey: true,
       dashboardUser: 'admin',
       hasDashboardPassword: true,
     })

@@ -13,7 +13,7 @@
 
 import { net } from 'electron'
 import { CloudApiError } from './client.js'
-import { readCloudConfig } from './config.js'
+import { cloudTransport } from './config.js'
 import type { CloudApprovalMode, CloudApprovalPolicy } from './types.js'
 
 /** 允许切换的三个原生档位（顺序即 UI 顺序：收紧 → 自动 → 放开） */
@@ -28,16 +28,16 @@ interface PolicyClient {
   token: string
 }
 
+/**
+ * 读 / 写审批档位走**网关**（`/api/config` 由插件转发到控制台），
+ * 只有设备 token 这一种凭据 —— 不再直连 `dash.`（C-1/C-2）。
+ */
 function client(): PolicyClient {
-  const config = readCloudConfig()
-  if (!config.dashboardUrl) throw new CloudApiError('bad_request', '控制台地址为空')
-  if (!config.dashboardToken) {
-    throw new CloudApiError(
-      'unauthorized',
-      '还没有配置控制台会话令牌（服务端 .env 的 HERMES_DASHBOARD_SESSION_TOKEN）'
-    )
+  const transport = cloudTransport()
+  if (!transport.credential) {
+    throw new CloudApiError('unauthorized', '这台设备还没有登记，先在「连接」页登记')
   }
-  return { url: config.dashboardUrl.replace(/\/+$/, ''), token: config.dashboardToken }
+  return { url: transport.baseUrl.replace(/\/+$/, ''), token: transport.credential }
 }
 
 function wrap(error: unknown): CloudApiError {

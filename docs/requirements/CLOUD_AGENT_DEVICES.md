@@ -3,7 +3,7 @@
 > **面向**：要实现「多台本地程序连同一个云端 Agent」「云端 Agent 认得是哪台设备」「云端指挥本地 Agent 干活」的人
 > **什么时候读**：动对接层（本地 ↔ 云端）、设备身份、反向任务通道、变更 S-02 之前
 > **什么时候要改**：插件形态、设备身份口径、派活权限口径、上游插件 API、验收场景变化时
-> **状态**：**v3.8 · 2026-11-06 · H0 已完成（G0 全绿）、H1 服务端与本地切换均已完成（G1 待人点一遍）** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
+> **状态**：**v3.9 · 2026-11-06 · H0 已完成（G0 全绿）、H1 服务端与本地切换均已完成（G1 待人点一遍）** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
 > **取代**：v1 的 `pi-hub` 独立服务方案（作废，理由见 §4）
 
 ---
@@ -602,6 +602,7 @@ ssh … 'NEW=$(openssl rand -base64 32 | tr -d "/+=" ); printf "%s" "$NEW" > ~/p
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
 | **v3.1** | 2026-11-06 | **H0 完成**：插件骨架落地（`hermes-plugin/pi-workbench`，50 个 unittest 全绿）+ 部署到 VPS，**G0 六条全过**。实测三条上游事实写回方案：`register_platform`/`register_tool` 签名、`platform` 插件**自动 connect**（无需 `platforms:` 配置块，激活证据是 `plugins.enable` + `requires_env`）、`capabilities` 只接受注册表 id（原计划的 `network_ingress` 不存在，清单里不写）。两个运维坑：插件 INFO 日志不进 journalctl（看 `/v1/hub/health`）、Caddy reload 后证书有 ~5s 窗口 |
+| **v3.9** | 2026-11-06 | **摘掉最后一条侧门**：审批档位读写原来直连 `dash.` + 控制台会话令牌（`policy.ts`），单入口之后不该再有这条路 —— 改成走网关 `/api/config`（服务端把 GET 从 `admin` 放宽到 `chat`，PUT 仍要 `admin`），并且**删掉 `dashboardToken` / 连接页的「控制台会话令牌」字段**（图片上传早已用设备 token）。线上实测：chat 设备 GET 200 / PUT 403 |
 | **v3.8** | 2026-11-06 | **自举 Prompt 与交接文件升到 v2**（单入口口径）：域名角色改成 `hub.`（唯一对外入口）+ `dash.`（控制台），`api.` 不再需要公网；第三步从「配 api/dashboard」变成「装 `pi-workbench` 插件 + 生成/复用 `PI_HUB_ADMIN_KEY` + 验证 `hub/health`」；交付文件 `hermes-handoff v2` 用 `GATEWAY_URL` + `ADMIN_KEY` 取代 `API_BASE_URL`/`API_KEY`/`DASHBOARD_SESSION_TOKEN`，校验结果换成 `GATEWAY_HTTP` / `UPSTREAM_OK` / `ADMIN_KEY_CONFIGURED`。解析器兼容 v1/v1.1（缺管理密钥时给出「导入后手填一次」的提醒），v2 缺 `GATEWAY_URL` 或 `ADMIN_KEY` 直接拒收 |
 | **v3.7** | 2026-11-06 | **H2-1 心跳落地**：服务端新增 `POST /v1/devices/me/heartbeat`（`ONLINE_WINDOW_S` 单点定义，`me`/`list`/`hub/health` 共用），`GET /v1/devices/me` 补 `lastSeenAt` / `online` / `onlineWindow` / `serverTime`；本地新增 `electron/cloud/heartbeat.ts`（30s 节奏、被注销即停、`cloud:gateway:heartbeat` / `cloud:gateway:revoked` 两条推送），连接页设备卡显示「心跳正常 / 心跳失败 / 云端已注销」。插件 89 用例、本地 151 文件 1790 用例全绿，线上实测心跳落 `audit.jsonl` |
 | **v3.6.1** | 2026-11-06 | **可选记住管理密钥**：`connection.json` 增 `adminKey: enc:`（只有勾选才写，默认关）；`cloud:gateway:register` 的 `adminKey` 变可选（留空 = 用已存的）+ 新增 `rememberAdminKey`；新 IPC `cloud:gateway:forget-admin-key`；连接页加勾选框、已存提示、「忘记管理密钥」。注销保留管理密钥（下次一步重登），「断开」与「忘记」才清 |

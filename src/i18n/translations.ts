@@ -28,8 +28,6 @@ export const translations = {
     cloudStateConnecting: '连接中…',
     cloudStateConnected: '已连接',
     cloudStateError: '连接失败',
-    cloudBaseUrl: 'API 地址',
-    cloudBaseUrlHint: '形如 https://api.example.com，不要带 /v1',
     cloudDeviceTitle: '这台设备',
     cloudDeviceName: '设备名',
     cloudDeviceNameHint:
@@ -91,11 +89,6 @@ export const translations = {
     cloudSteer: '插话',
     cloudSteerHint: '运行中插话：直接把新指令交给它，而不是等这一轮结束',
     cloudSteerFailed: '插话没发出去：{error}',
-    cloudDashboardToken: '控制台会话令牌（用于传图）',
-    cloudDashboardTokenHint:
-      '服务端 .env 里的 HERMES_DASHBOARD_SESSION_TOKEN。有了它才能在对话里发图片；不填也能正常聊天。',
-    cloudDashboardTokenSavedHint: '已配置。留空表示保持不变；换令牌时直接粘新的。',
-    cloudDashboardTokenPlaceholder: '粘一次即可，加密后保存',
     cloudImportFromFile: '从文件导入',
     cloudImportTitle: '导入 Hermes 交接文件',
     cloudImportSource: '文件',
@@ -1137,8 +1130,6 @@ export const translations = {
     cloudStateConnecting: 'Connecting…',
     cloudStateConnected: 'Connected',
     cloudStateError: 'Connection failed',
-    cloudBaseUrl: 'API URL',
-    cloudBaseUrlHint: 'Like https://api.example.com — without /v1',
     cloudDeviceTitle: 'This device',
     cloudDeviceName: 'Device name',
     cloudDeviceNameHint:
@@ -1202,11 +1193,6 @@ export const translations = {
     cloudSteer: 'Steer',
     cloudSteerHint: 'Steer while it runs: hand it a new instruction instead of waiting for this turn',
     cloudSteerFailed: 'Steer did not go out: {error}',
-    cloudDashboardToken: 'Console session token (for images)',
-    cloudDashboardTokenHint:
-      'HERMES_DASHBOARD_SESSION_TOKEN from the server .env. Needed to send images in a chat; everything else works without it.',
-    cloudDashboardTokenSavedHint: 'Configured. Leave empty to keep it; paste a new one to rotate.',
-    cloudDashboardTokenPlaceholder: 'Paste once — stored encrypted',
     cloudImportFromFile: 'Import from file',
     cloudImportTitle: 'Import a Hermes handoff file',
     cloudImportSource: 'File',

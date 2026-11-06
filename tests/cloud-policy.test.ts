@@ -76,9 +76,8 @@ beforeAll(async () => {
   config = await import('../electron/cloud/config')
   config.writeCloudConfig({
     baseUrl: 'https://api.example.com',
-    deviceToken: 'pi_key',
+    deviceToken: 'pi_dev',
     dashboardUrl: 'https://dash.example.com',
-    dashboardToken: 'dash-token',
   })
 })
 
@@ -123,12 +122,12 @@ describe('pickApprovalPolicy', () => {
 })
 
 describe('readApprovalPolicy', () => {
-  it('reads the mode from the dashboard with the session token', async () => {
+  it('reads the mode through the gateway with the device token', async () => {
     const result = await policy.readApprovalPolicy()
     expect(result.mode).toBe('manual')
     expect(result.denyCount).toBe(2)
     expect(state.gets).toBe(1)
-    expect(state.headers[0]?.Authorization).toBe('Bearer dash-token')
+    expect(state.headers[0]?.Authorization).toBe('Bearer pi_dev')
   })
 
   it('ignores fields outside the whitelist', () => {

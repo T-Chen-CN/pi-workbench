@@ -283,13 +283,12 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     return { success: true, config }
   })
 
-  handleIpc('cloud:config:set', (_event, input: { gatewayUrl?: string; dashboardToken?: string }) => {
+  handleIpc('cloud:config:set', (_event, input: { gatewayUrl?: string }) => {
     const current = readCloudConfig()
     const previousGatewayUrl = current.gatewayUrl
     const saved = writeCloudConfig({
       baseUrl: current.baseUrl,
-      gatewayUrl: typeof input?.gatewayUrl === 'string' ? input.gatewayUrl : undefined,
-      dashboardToken: typeof input?.dashboardToken === 'string' ? input.dashboardToken : undefined
+      gatewayUrl: typeof input?.gatewayUrl === 'string' ? input.gatewayUrl : undefined
     })
     // 地址或密钥变化后旧连接作废
     client = null
