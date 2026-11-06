@@ -2674,8 +2674,8 @@ describe('model capabilities', () => {
 
     expect(flash.input).toEqual(['text'])
     expect(vision.input).toEqual(['text', 'image'])
-    // 1M 档位配套 16384，但 catalog 只有 8192：只缩不放大
-    expect(flash).toMatchObject({ contextWindow: 1_000_000, maxTokens: 8_192 })
+    // 1M 档位配套 16384，catalog 声明 32768：取档位配套值
+    expect(flash).toMatchObject({ contextWindow: 1_000_000, maxTokens: 16_384 })
     // 未登记的模型没有 catalog 上限，按档位配套值写入
     expect(vision).toMatchObject({ contextWindow: 64_000, maxTokens: 8_192 })
   })

@@ -26,7 +26,7 @@ export const DEFAULT_CONTEXT_WINDOW: ModelContextWindow = 128_000
 const PAIRED_MAX_TOKENS: Record<ModelContextWindow, number> = {
   64_000: 8_192,
   128_000: 8_192,
-  256_000: 16_384,
+  256_000: 32_768,
   1_000_000: 16_384,
 }
 
@@ -43,7 +43,7 @@ export const KNOWN_MODEL_METADATA: Record<
 > = {
   // 2026-10-24 由项目所有者确认：DeepSeek flash 支持图像输入与思考
   'deepseek-flash': {
-    maxTokens: 8_192,
+    maxTokens: 32_768,
     reasoning: true,
   },
 }

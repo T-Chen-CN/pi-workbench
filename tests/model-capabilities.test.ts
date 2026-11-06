@@ -86,10 +86,12 @@ describe('normalizeModelEntries', () => {
 
 describe('resolveMaxTokens', () => {
   it('never raises the catalog limit', () => {
-    // 1M 档位配套 16384，但 catalog 只声明 8192
+    // catalog 更小时取 catalog
     expect(resolveMaxTokens(1_000_000, 8_192)).toBe(8_192)
     // 未登记模型没有 catalog 值，直接用档位配套值
     expect(resolveMaxTokens(64_000)).toBe(8_192)
-    expect(resolveMaxTokens(256_000)).toBe(16_384)
+    expect(resolveMaxTokens(256_000)).toBe(32_768)
+    // 256K 档 catalog 与配套值一致时不缩
+    expect(resolveMaxTokens(256_000, 32_768)).toBe(32_768)
   })
 })

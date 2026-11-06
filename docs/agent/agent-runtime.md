@@ -112,7 +112,7 @@ Pi tool_call 钩子 → AgentManager 归类 + 生成摘要 → ApprovalBroker（
 ## 6. 模型配置
 
 - 写入 `{appDir}/data/agent/models.json`；API Key 通过环境变量 `$PI_WORKBENCH_API_KEY` 插值，**不落盘**（见 `pi-bridge/src/model-config.ts`）。
-- 容量档位：64K / 128K / 256K / 1M，各自配套输出上限（8K / 8K / 16K / 16K），最终取 `min(配套值, catalog)` —— 只缩不放大，否则请求会被供应商拒绝。
+- 容量档位：64K / 128K / 256K / 1M，各自配套输出上限（8K / 8K / 32K / 16K），最终取 `min(配套值, catalog)` —— 只缩不放大，否则请求会被供应商拒绝。
 - provider / apiUrl / apiKey / selectedModel 是**应用级全局配置**，所有工作区共用；❌ 禁止放进工作区配置（`.pi-workbench/config.json`）。
 
 ## 7. 内置联网能力
