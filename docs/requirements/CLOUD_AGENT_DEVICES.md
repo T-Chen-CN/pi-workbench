@@ -3,7 +3,7 @@
 > **面向**：要实现「多台本地程序连同一个云端 Agent」「云端 Agent 认得是哪台设备」「云端指挥本地 Agent 干活」的人
 > **什么时候读**：动对接层（本地 ↔ 云端）、设备身份、反向任务通道、变更 S-02 之前
 > **什么时候要改**：插件形态、设备身份口径、派活权限口径、上游插件 API、验收场景变化时
-> **状态**：**v3.6 · 2026-11-06 · H0 已完成（G0 全绿）、H1 服务端与本地切换均已完成（G1 待人点一遍）** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
+> **状态**：**v3.6.1 · 2026-11-06 · H0 已完成（G0 全绿）、H1 服务端与本地切换均已完成（G1 待人点一遍）** · D0 已落地；[ADR-008](../decisions/ADR-008-cloud-single-entry-plugin.md) 已接受；预检 15 项全绿（§14）；决策全部锁定（§17）；执行手册见 §20
 > **取代**：v1 的 `pi-hub` 独立服务方案（作废，理由见 §4）
 
 ---
@@ -48,6 +48,7 @@
 | 结果粒度 | 只回摘要（≤2k） |
 | 派活选设备 | 由 **工作区** 反查设备（工作区→唯一设备）；工作区离线即拒 |
 | 升级中断 | 允许（开发阶段，无可用性承诺）；升级前先 `plugins disable` |
+| 管理密钥 | **默认不落盘**。连接页有「在本机记住管理密钥」勾选框（默认关），勾了才写 `adminKey: enc:`；注销设备**不清**它（否则每次重登都要去服务器取），用户点「忘记管理密钥」或「断开」才清。值永不出主进程，渲染层只看得见 `hasAdminKey` |
 | 本地直连凭据 | **一律删除**（v3.6）。渲染层的「服务地址 / API 密钥」输入、配置里的 `apiKey` 字段、`cloudTransport()` 的直连分支、`createCloudClient` 的第二套凭据全部移除。只有一个客户端、一份凭据（设备 token） |
 | 单入口的唯一出口 | `cloudTransport()` 永远返回 `{ baseUrl: gatewayUrl, credential: deviceToken }`；没有 token = 没有凭据 = 上层明确报错 |
 | 注销的语义 | 云端对这扇门关门：设备 token 立即失效，本地清掉凭据并**清空能力与会话视图**，界面显示「已注销，需重新登记」；云端会话数据仍在（重新登记后可见），但撤销期间的这台设备读不到 |
@@ -601,6 +602,7 @@ ssh … 'NEW=$(openssl rand -base64 32 | tr -d "/+=" ); printf "%s" "$NEW" > ~/p
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
 | **v3.1** | 2026-11-06 | **H0 完成**：插件骨架落地（`hermes-plugin/pi-workbench`，50 个 unittest 全绿）+ 部署到 VPS，**G0 六条全过**。实测三条上游事实写回方案：`register_platform`/`register_tool` 签名、`platform` 插件**自动 connect**（无需 `platforms:` 配置块，激活证据是 `plugins.enable` + `requires_env`）、`capabilities` 只接受注册表 id（原计划的 `network_ingress` 不存在，清单里不写）。两个运维坑：插件 INFO 日志不进 journalctl（看 `/v1/hub/health`）、Caddy reload 后证书有 ~5s 窗口 |
+| **v3.6.1** | 2026-11-06 | **可选记住管理密钥**：`connection.json` 增 `adminKey: enc:`（只有勾选才写，默认关）；`cloud:gateway:register` 的 `adminKey` 变可选（留空 = 用已存的）+ 新增 `rememberAdminKey`；新 IPC `cloud:gateway:forget-admin-key`；连接页加勾选框、已存提示、「忘记管理密钥」。注销保留管理密钥（下次一步重登），「断开」与「忘记」才清 |
 | **v3.6** | 2026-11-06 | **清掉最后一丝「回退设计」**（所有者指出 v3.5 的 `transportMode` 本身仍是回退设计）。删除 `apiKey` 字段与 `createCloudClient` 的第二套凭据、删除 `cloudTransport()` 的直连分支、删除渲染层「服务地址 / API 密钥」输入与相关文案、交接导入不再写 API 密钥。`cloudTransport()` 永远返回网关地址 + 设备 token，没 token 就是没凭据。注销/断线后界面直接不可用，回滚只能靠运维修插件 |
 | **v3.5** | 2026-11-06 | **注销 = 真的关门**：新增 `transportMode`（`gateway`/`direct`）。此前注销只清了设备 token，`cloudTransport()` 会**回落到 `apiKey` 直连**——等于注销没生效，也让「哪台设备做的」说不清。现在登记过就锁在网关模式，没有 token 就是没有凭据（明确报错），界面同时清空能力/会话并显示「已注销，需重新登记」；回拨直连必须运维手改配置（§16）。新增 4 例 config 单测 + 2 例 store 单测 |
 | **v3.4** | 2026-11-06 | **两条实测缺陷修复**：① `fsguard` 白名单漏了 `cache/images`（dashboard 写图片的位置），导致聊天里**所有图片缩略图**读回都是 403 `path_not_allowed` → UI 显示「图片不可见」；根目录补 `cache/{images,audio,vision,screenshots,videos,documents,scratch}`，`cache/browser*`（Cookie）明确排除。② 撤销路由只认管理密钥或 `admin` scope，而连接页用的是 `chat/dispatch` 设备 token → 点「注销这台设备」永远 403 `scope_required`；改为**允许设备自注销**（只切断自己），撤销别人的设备仍需 admin。共 86 例 |

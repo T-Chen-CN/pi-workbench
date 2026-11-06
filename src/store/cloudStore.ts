@@ -201,7 +201,9 @@ interface CloudState {
   reprobeDeviceName: () => Promise<boolean>
 
   /** 用管理密钥登记这台设备（成功后本地只留设备 token） */
-  registerGateway: (adminKey: string) => Promise<boolean>
+  registerGateway: (adminKey: string, options?: { remember?: boolean }) => Promise<boolean>
+  /** 忘掉本机保存的管理密钥 */
+  forgetAdminKey: () => Promise<boolean>
   /** 注销这台设备（token 立即失效） */
   revokeGateway: (adminKey?: string) => Promise<boolean>
   /** 清掉一次性提示 */
@@ -1095,9 +1097,13 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     set({ gateway: status, gatewayError: null })
   },
 
-  async registerGateway(adminKey) {
+  async registerGateway(adminKey, options) {
     set({ gatewayBusy: true, gatewayError: null, gatewayNotice: null })
-    const result = await cloudApi.gatewayRegister({ adminKey })
+    const result = await cloudApi.gatewayRegister({
+      adminKey: adminKey.trim() || undefined,
+      // 勾了才存；不勾且输入框为空（用的就是已存密钥）= 保持原样
+      rememberAdminKey: options?.remember ? true : adminKey.trim() ? false : undefined,
+    })
     set({ gatewayBusy: false })
     if (!result.success) {
       set({ gatewayError: result.error ?? 'unknown' })
@@ -1131,6 +1137,17 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       runId: null,
       runState: null
     })
+    await get().loadGateway()
+    return true
+  },
+
+  async forgetAdminKey() {
+    const result = await cloudApi.forgetAdminKey()
+    if (!result.success) {
+      set({ gatewayError: result.error ?? 'unknown' })
+      return false
+    }
+    set({ gatewayNotice: '已忘记本机保存的管理密钥' })
     await get().loadGateway()
     return true
   },

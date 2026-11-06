@@ -630,11 +630,20 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     'cloud:gateway:register',
     async (
       _event,
-      input: { adminKey?: string; name?: string; gatewayUrl?: string; scopes?: string[] }
+      input: {
+        adminKey?: string
+        name?: string
+        gatewayUrl?: string
+        scopes?: string[]
+        /** 勾上就记住这把管理密钥（`enc:`，只留在主进程） */
+        rememberAdminKey?: boolean
+      }
     ) => {
-      const adminKey = String(input?.adminKey ?? '').trim()
-      if (!adminKey) return { success: false as const, error: '请填写管理密钥' }
       const config = readCloudConfig()
+      // 界面上不填 = 用本机记住的那把（勾过「记住」之后就不必反复粘）
+      const typed = String(input?.adminKey ?? '').trim()
+      const adminKey = typed || config.adminKey
+      if (!adminKey) return { success: false as const, error: '请填写管理密钥' }
       const gatewayUrl = String(input?.gatewayUrl ?? '').trim() || config.gatewayUrl
       const record = readCloudDevice()
       const name = String(input?.name ?? '').trim() || record.name
@@ -651,7 +660,9 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
           gatewayUrl,
           deviceToken: result.token,
           deviceScopes: result.scopes,
-          deviceId: result.deviceId
+          deviceId: result.deviceId,
+          // 勾选才记；不勾且之前记过 = 尊重这次选择（清掉）
+          adminKey: input?.rememberAdminKey ? adminKey : ''
         })
         client = null // 凭据变了，重建客户端与 runner
         runner?.dispose()
@@ -696,6 +707,14 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       logger?.warn('[Cloud] device revoke failed', cloudErrorMessage(error))
       return { success: false as const, error: cloudErrorMessage(error) }
     }
+  })
+
+  /** 忘掉本机记住的管理密钥（下次登记要重新粘） */
+  handleIpc('cloud:gateway:forget-admin-key', () => {
+    const config = readCloudConfig()
+    if (!config.hasAdminKey) return { success: true as const }
+    writeCloudConfig({ baseUrl: config.baseUrl, adminKey: '' })
+    return { success: true as const }
   })
 
   handleIpc('cloud:policy:get', async () => {

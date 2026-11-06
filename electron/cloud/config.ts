@@ -40,6 +40,11 @@ interface StoredCloudConfig {
   /** 登记时授予的 scope 快照，仅供界面展示 */
   deviceScopes?: string[]
   deviceId?: string
+  /**
+   * 管理密钥（`enc:`，默认不存）。只有用户显式勾选「在本机记住」才会写入，
+   * 用途仅限「登记这台设备 / 撤销别的设备」——它等于云端签发权，比设备 token 敏感。
+   */
+  adminKey?: string
   dashboardUrl?: string
   /**
    * 控制台会话令牌（服务端 `.env` 里的 `HERMES_DASHBOARD_SESSION_TOKEN`）。
@@ -63,6 +68,9 @@ export interface CloudConfig {
   hasDeviceToken: boolean
   deviceScopes: string[]
   deviceId: string
+  /** 管理密钥明文：只在主进程内使用；没有就是没记住 */
+  adminKey: string
+  hasAdminKey: boolean
   dashboardUrl: string
   /** 控制台会话令牌明文（主进程内使用） */
   dashboardToken: string
@@ -87,6 +95,7 @@ export function readCloudConfig(): CloudConfig {
     normalizeBaseUrl(stored?.gatewayUrl ?? '') || deriveGatewayUrl(baseUrl) || DEFAULT_CLOUD_GATEWAY_URL
   const dashboardUrl =
     normalizeBaseUrl(stored?.dashboardUrl ?? '') || deriveDashboardUrl(baseUrl)
+  const adminKey = decryptSecret(stored?.adminKey ?? '')
   const dashboardToken = decryptSecret(stored?.dashboardToken ?? '')
   const dashboardPassword = decryptSecret(stored?.dashboardPassword ?? '')
   return {
@@ -96,6 +105,8 @@ export function readCloudConfig(): CloudConfig {
     hasDeviceToken: Boolean(deviceToken),
     deviceScopes: Array.isArray(stored?.deviceScopes) ? stored!.deviceScopes!.map(String) : [],
     deviceId: String(stored?.deviceId ?? ''),
+    adminKey,
+    hasAdminKey: Boolean(adminKey),
     dashboardUrl,
     dashboardToken,
     hasDashboardToken: Boolean(dashboardToken),
@@ -114,6 +125,7 @@ export function writeCloudConfig(input: {
   deviceToken?: string
   deviceScopes?: string[]
   deviceId?: string
+  adminKey?: string
   dashboardToken?: string
   /** 交接文件里的控制台地址可能与 `api.` 派生规则不一致，允许显式覆盖 */
   dashboardUrl?: string
@@ -131,6 +143,9 @@ export function writeCloudConfig(input: {
   // 显式传入优先，否则按 baseUrl 派生（不沿用旧值：地址改了网关就该跟着改）
   const nextGatewayUrl = normalizeBaseUrl(input.gatewayUrl ?? '') || deriveGatewayUrl(baseUrl)
   const nextDeviceScopes = input.deviceScopes ?? current.deviceScopes
+  // 空串 = 用户点了「忘记」；undefined = 不动
+  const nextAdminKey =
+    input.adminKey === undefined ? current.adminKey : input.adminKey.trim()
   const nextDeviceId = pick(input.deviceId, current.deviceId)
   const nextDashboardToken = pick(input.dashboardToken, current.dashboardToken)
   const nextDashboardUser = pick(input.dashboardUser, current.dashboardUser)
@@ -147,6 +162,7 @@ export function writeCloudConfig(input: {
     deviceToken: nextDeviceToken ? encryptSecret(nextDeviceToken) : '',
     deviceScopes: nextDeviceScopes,
     deviceId: nextDeviceId || undefined,
+    adminKey: nextAdminKey ? encryptSecret(nextAdminKey) : undefined,
     dashboardUrl,
     dashboardToken: nextDashboardToken ? encryptSecret(nextDashboardToken) : '',
     dashboardUser: nextDashboardUser,
@@ -163,6 +179,8 @@ export function writeCloudConfig(input: {
     hasDeviceToken: Boolean(nextDeviceToken),
     deviceScopes: nextDeviceScopes,
     deviceId: nextDeviceId,
+    adminKey: nextAdminKey,
+    hasAdminKey: Boolean(nextAdminKey),
     dashboardUrl,
     dashboardToken: nextDashboardToken,
     hasDashboardToken: Boolean(nextDashboardToken),
@@ -194,6 +212,7 @@ export function clearDeviceCredentials(): CloudConfig {
     deviceToken: '',
     deviceScopes: [],
     deviceId: undefined,
+    adminKey: current.adminKey ? encryptSecret(current.adminKey) : undefined,
   }
   writeJsonAtomicSync(cloudConfigFile(), stored)
   return {
@@ -217,6 +236,7 @@ export function clearCloudToken(): CloudConfig {
     handoffProfile: current.handoffProfile || undefined,
     deviceToken: '',
     deviceScopes: [],
+    adminKey: undefined,
     dashboardToken: '',
     dashboardPassword: '',
   }
@@ -263,6 +283,8 @@ export function publicCloudConfig(config = readCloudConfig()): {
   hasDeviceToken: boolean
   deviceScopes: string[]
   deviceId: string
+  /** 本机是否记住了管理密钥（值永不出主进程） */
+  hasAdminKey: boolean
   dashboardUrl: string
   hasDashboardToken: boolean
   dashboardUser: string
@@ -273,6 +295,7 @@ export function publicCloudConfig(config = readCloudConfig()): {
     hasDeviceToken: config.hasDeviceToken,
     deviceScopes: config.deviceScopes,
     deviceId: config.deviceId,
+    hasAdminKey: config.hasAdminKey,
     dashboardUrl: config.dashboardUrl,
     hasDashboardToken: config.hasDashboardToken,
     dashboardUser: config.dashboardUser,

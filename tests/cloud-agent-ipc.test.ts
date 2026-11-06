@@ -1447,6 +1447,40 @@ describe('cloud gateway (single entry)', () => {
     expect(denied.error).toMatch(/管理密钥/)
   })
 
+  it('reuses the remembered admin key when the field is left empty', async () => {
+    const config = await import('../electron/cloud/config')
+    config.clearDeviceCredentials()
+    // 先记住一次
+    const first = await call<{ success: boolean }>('cloud:gateway:register', {
+      adminKey: 'admin-ok',
+      rememberAdminKey: true,
+    })
+    expect(first.success).toBe(true)
+    expect(config.readCloudConfig().hasAdminKey).toBe(true)
+
+    // 注销后只点「登记」、不再粘密钥
+    config.clearDeviceCredentials()
+    const second = await call<{ success: boolean; error?: string }>('cloud:gateway:register', {})
+    expect(second.success).toBe(true)
+
+    // 落盘的还是加密的
+    const raw = fs.readFileSync(
+      path.join(mocks.state.appDir, 'data', 'cloud-agent', 'connection.json'),
+      'utf-8'
+    )
+    expect(raw).not.toContain('admin-ok')
+  })
+
+  it('forgets the admin key on request', async () => {
+    const config = await import('../electron/cloud/config')
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com', adminKey: 'admin-ok' })
+    expect(config.readCloudConfig().hasAdminKey).toBe(true)
+
+    const forgotten = await call<{ success: boolean }>('cloud:gateway:forget-admin-key')
+    expect(forgotten.success).toBe(true)
+    expect(config.readCloudConfig().hasAdminKey).toBe(false)
+  })
+
   it('revokes the device and drops the local token immediately', async () => {
     const revoked = await call<{ success: boolean; error?: string }>('cloud:gateway:revoke', {})
     expect(revoked).toMatchObject({ success: true })

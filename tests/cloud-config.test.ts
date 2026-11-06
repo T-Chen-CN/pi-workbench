@@ -110,6 +110,7 @@ describe('read/write connection', () => {
       hasDeviceToken: true,
       deviceScopes: ['chat'],
       deviceId: 'dev-1',
+      hasAdminKey: false,
       hasDashboardToken: false,
       dashboardUser: '',
       hasDashboardPassword: false,
@@ -146,6 +147,7 @@ describe('控制台会话令牌', () => {
       hasDeviceToken: false,
       deviceScopes: [],
       deviceId: '',
+      hasAdminKey: false,
       hasDashboardToken: true,
       dashboardUser: '',
       hasDashboardPassword: false,
@@ -304,3 +306,38 @@ describe('单入口：本地只有一扇门（C-2）', () => {
   })
 })
 
+describe('记住管理密钥（默认不存）', () => {
+  it('stores it encrypted only when asked, and never exposes it', () => {
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com', adminKey: 'admin-secret' })
+    expect(config.readCloudConfig().hasAdminKey).toBe(true)
+    const raw = fs.readFileSync(config.cloudConfigFile(), 'utf-8')
+    expect(raw).not.toContain('admin-secret')
+    expect(config.publicCloudConfig()).not.toHaveProperty('adminKey')
+  })
+
+  it('keeps it across a revoke so the next registration needs no pasting', () => {
+    config.writeCloudConfig({
+      baseUrl: 'https://api.example.com',
+      deviceToken: 'pi_dev',
+      deviceId: 'dev-1',
+      adminKey: 'admin-secret',
+    })
+    config.clearDeviceCredentials()
+    const read = config.readCloudConfig()
+    expect(read.hasDeviceToken).toBe(false)
+    // 注销只收设备的钥匙，管理密钥留着（否则下次还要去服务器上取）
+    expect(read.hasAdminKey).toBe(true)
+  })
+
+  it('drops it when the user disconnects everything', () => {
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com', adminKey: 'admin-secret' })
+    config.clearCloudToken()
+    expect(config.readCloudConfig().hasAdminKey).toBe(false)
+  })
+
+  it('forgets it when written as an empty string', () => {
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com', adminKey: 'admin-secret' })
+    config.writeCloudConfig({ baseUrl: 'https://api.example.com', adminKey: '' })
+    expect(config.readCloudConfig().hasAdminKey).toBe(false)
+  })
+})

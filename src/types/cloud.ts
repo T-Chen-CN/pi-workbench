@@ -17,6 +17,8 @@ export interface CloudConnectionInfo {
   hasDeviceToken: boolean
   deviceScopes: string[]
   deviceId: string
+  /** 本机是否记住了管理密钥（值永不出主进程） */
+  hasAdminKey: boolean
   /** 控制台会话令牌是否已配置（图片上传/读取要用） */
   hasDashboardToken: boolean
   /** 控制台账号（用户名明文；口令只回 has 标记） */

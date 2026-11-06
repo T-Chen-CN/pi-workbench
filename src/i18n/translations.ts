@@ -46,6 +46,10 @@ export const translations = {
     cloudGatewayRefresh: '刷新状态',
     cloudGatewayRevoke: '注销这台设备',
     cloudGatewayRevokeHint: '注销后这台设备立刻不能用云端；重新登记才能恢复。',
+    cloudGatewayAdminKeySaved: '已记住管理密钥；留空就用它',
+    cloudGatewayAdminKeySavedPlaceholder: '已保存，留空即可',
+    cloudGatewayRememberKey: '在本机记住管理密钥（加密保存，只用于登记设备）',
+    cloudGatewayForgetKey: '忘记管理密钥',
     cloudGatewayRegister: '登记这台设备',
     cloudGatewayAdminKey: '管理密钥',
     cloudGatewayAdminKeyHint: '只在这一步用一次，不会保存在本机；登记成功后本机只留设备 token。',
@@ -1140,6 +1144,10 @@ export const translations = {
     cloudGatewayRevoke: 'Revoke this device',
     cloudGatewayRevokeHint:
       'Revoking cuts this device off immediately; you must register again to restore it.',
+    cloudGatewayAdminKeySaved: 'Admin key saved; leave blank to use it',
+    cloudGatewayAdminKeySavedPlaceholder: 'Saved — leave blank',
+    cloudGatewayRememberKey: 'Remember the admin key on this machine (encrypted, device registration only)',
+    cloudGatewayForgetKey: 'Forget admin key',
     cloudGatewayRegister: 'Register this device',
     cloudGatewayAdminKey: 'Admin key',
     cloudGatewayAdminKeyHint:

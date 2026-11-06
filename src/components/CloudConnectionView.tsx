@@ -45,11 +45,13 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const loadGateway = useCloudStore((state) => state.loadGateway)
   const registerGateway = useCloudStore((state) => state.registerGateway)
   const revokeGateway = useCloudStore((state) => state.revokeGateway)
+  const forgetAdminKey = useCloudStore((state) => state.forgetAdminKey)
 
   const [dashboardToken, setDashboardToken] = useState('')
   const [busy, setBusy] = useState<'save' | 'connect' | null>(null)
   const [deviceName, setDeviceNameDraft] = useState('')
   const [adminKey, setAdminKey] = useState('')
+  const [rememberAdminKey, setRememberAdminKey] = useState(false)
 
   useEffect(() => {
     setDeviceNameDraft(device?.name ?? '')
@@ -331,6 +333,12 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                     onClick={() => void revokeGateway()}>
                     {t('cloudGatewayRevoke')}
                   </Button>
+                  {config.hasAdminKey && (
+                    <Button size="sm" disabled={gatewayBusy}
+                      onClick={() => void forgetAdminKey()}>
+                      {t('cloudGatewayForgetKey')}
+                    </Button>
+                  )}
                 </div>
                 <Caption className="text-ink-subtle">{t('cloudGatewayRevokeHint')}</Caption>
               </>
@@ -338,7 +346,11 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
               <>
                 <Field
                   label={t('cloudGatewayAdminKey')}
-                  hint={t('cloudGatewayAdminKeyHint')}
+                  hint={
+                    config.hasAdminKey && !adminKey
+                      ? t('cloudGatewayAdminKeySaved')
+                      : t('cloudGatewayAdminKeyHint')
+                  }
                   htmlFor="cloud-gateway-admin-key"
                 >
                   <Input
@@ -346,16 +358,31 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                     type="password"
                     value={adminKey}
                     onChange={(event) => setAdminKey(event.target.value)}
-                    placeholder="••••••••"
+                    placeholder={
+                      config.hasAdminKey ? t('cloudGatewayAdminKeySavedPlaceholder') : '••••••••'
+                    }
                   />
                 </Field>
+                <label className="flex items-center gap-2 type-caption text-ink-muted">
+                  <input
+                    type="checkbox"
+                    checked={rememberAdminKey || (config.hasAdminKey && !adminKey)}
+                    onChange={(event) => setRememberAdminKey(event.target.checked)}
+                  />
+                  {t('cloudGatewayRememberKey')}
+                </label>
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" disabled={gatewayBusy || !adminKey.trim()}
+                  <Button
+                    size="sm"
+                    disabled={gatewayBusy || (!adminKey.trim() && !config.hasAdminKey)}
                     loading={gatewayBusy}
                     onClick={async () => {
-                      const ok = await registerGateway(adminKey.trim())
+                      const ok = await registerGateway(adminKey, {
+                        remember: rememberAdminKey || (config.hasAdminKey && !adminKey),
+                      })
                       if (ok) setAdminKey('')
-                    }}>
+                    }}
+                  >
                     {t('cloudGatewayRegister')}
                   </Button>
                   <Button size="sm" icon={RefreshCw} disabled={gatewayBusy}

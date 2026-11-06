@@ -118,6 +118,7 @@ export const UNCONFIGURED_CONNECTION: CloudConnectionInfo = {
   hasDeviceToken: false,
   deviceScopes: [],
   deviceId: '',
+  hasAdminKey: false,
   hasDashboardToken: false,
   dashboardUser: '',
   hasDashboardPassword: false,
@@ -201,10 +202,11 @@ export const cloudApi = {
 
   /** 登记这台设备：管理密钥只在这一刻用，成功后本地只留设备 token */
   async gatewayRegister(input: {
-    adminKey: string
+    adminKey?: string
     name?: string
     gatewayUrl?: string
     scopes?: string[]
+    rememberAdminKey?: boolean
   }): Promise<CloudGatewayRegisterResult> {
     const bridge = api()
     if (!bridge) {
@@ -215,6 +217,18 @@ export const cloudApi = {
     }
     return invoke(
       () => bridge.cloudGatewayRegister(input),
+      (error) => ({ success: false, error })
+    )
+  },
+
+  /** 忘掉本机保存的管理密钥 */
+  async forgetAdminKey(): Promise<{ success: boolean; error?: string }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudGatewayForgetAdminKey !== 'function') {
+      return { success: false, error: BRIDGE_STALE }
+    }
+    return invoke(
+      () => bridge.cloudGatewayForgetAdminKey(),
       (error) => ({ success: false, error })
     )
   },

@@ -784,13 +784,17 @@ export interface ElectronAPI {
   cloudDeviceReprobe: () => Promise<CloudDeviceResult>
   cloudGatewayStatus: () => Promise<CloudGatewayStatusResult>
   cloudGatewayRegister: (input: {
-    adminKey: string
+    /** 留空 = 用本机记住的那把管理密钥 */
+    adminKey?: string
     name?: string
     gatewayUrl?: string
     scopes?: string[]
+    rememberAdminKey?: boolean
   }) => Promise<CloudGatewayRegisterResult>
   cloudGatewayRevoke: (input: { adminKey?: string }) =>
     Promise<{ success: boolean; error?: string }>
+  /** 忘掉本机保存的管理密钥 */
+  cloudGatewayForgetAdminKey: () => Promise<{ success: boolean; error?: string }>
   cloudRunStop: (input: { runId: string }) => Promise<CloudRunResult>
   cloudRunStatus: (input: { runId: string }) => Promise<CloudRunResult & {
     /** 断流 / 重启后补卡片的唯一来源（已脱敏） */

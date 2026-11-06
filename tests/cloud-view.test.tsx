@@ -1219,7 +1219,11 @@ describe('CloudConnectionView 设备卡', () => {
     fireEvent.click(screen.getByText(zh.cloudGatewayRegister))
 
     await waitFor(() =>
-      expect(stub.gatewayRegister).toHaveBeenCalledWith({ adminKey: 'admin-secret' })
+      expect(stub.gatewayRegister).toHaveBeenCalledWith({
+        adminKey: 'admin-secret',
+        // 没勾「记住」= 不往盘上写管理密钥
+        rememberAdminKey: false,
+      })
     )
     // 明文 token 只在主进程；界面只出现前缀
     expect(await screen.findByText(/pi_abcdefghij/)).toBeTruthy()
