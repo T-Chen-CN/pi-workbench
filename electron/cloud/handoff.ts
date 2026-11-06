@@ -1,5 +1,5 @@
 /**
- * `hermes-handoff v1 / v1.1` 交接文件解析。
+ * `hermes-handoff v1 / v1.1 / v2` 交接文件解析。
  *
  * 纯函数，不碰 fs / electron：文件读取、落盘与 IPC 都在 `ipc/cloud-agent.ts`。
  * 明文密钥只在这个模块与 config 层出现；凡是要给渲染层的，一律走 `toPreview()`
@@ -9,7 +9,7 @@
  * 格式是 `KEY=value` 文本 + `#` 注释，末尾带一段 `# ---- 校验结果 ----`。
  */
 
-import { deriveDashboardUrl, normalizeBaseUrl } from './url.js'
+import { deriveDashboardUrl, deriveGatewayUrl, normalizeBaseUrl } from './url.js'
 import type {
   CloudConfigPatch,
   CloudHandoffChecks,
@@ -24,8 +24,14 @@ export const HANDOFF_MAX_BYTES = 64 * 1024
 /** 行数上限，防「一大坨二进制伪装成文本」 */
 const HANDOFF_MAX_LINES = 400
 
-/** 首个非空行必须是版本标记（v1.1 只多一个字段，兼容同一套解析） */
-const HEADER_RE = /^#\s*hermes-handoff\s+v1(\.\d+)?\b/i
+/**
+ * 首个非空行必须是版本标记。
+ *
+ * - `v1` / `v1.1`：历史格式（`API_BASE_URL` + `API_KEY`），仍能读，但没有管理密钥，
+ *   导入后要去连接页手填一次才能登记；
+ * - `v2`：单入口格式 —— `GATEWAY_URL`（唯一的门）+ `ADMIN_KEY`（登记用），不再有 api key。
+ */
+const HEADER_RE = /^#\s*hermes-handoff\s+v(1(\.\d+)?|2)\b/i
 
 /** 这些主机名允许明文 http：`ssh -L` 转发到本机的场景必须放过 */
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
@@ -33,6 +39,8 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
 /** 认识的键；其余进 `ignored`（只记键名，不记值） */
 const KNOWN_KEYS = new Set([
   'PROFILE',
+  'GATEWAY_URL',
+  'ADMIN_KEY',
   'API_BASE_URL',
   'API_KEY',
   'DASHBOARD_URL',
@@ -44,6 +52,9 @@ const KNOWN_KEYS = new Set([
   'SERVER_HOST',
   'GENERATED_AT',
   'DNS_OK',
+  'GATEWAY_HTTP',
+  'UPSTREAM_OK',
+  'ADMIN_KEY_CONFIGURED',
   'CAPABILITIES_HTTP',
   'TLS_NOT_AFTER',
   'DASHBOARD_HTTP',
@@ -51,9 +62,13 @@ const KNOWN_KEYS = new Set([
 ])
 
 export interface HandoffData {
-  version: 'v1' | 'v1.1'
+  version: 'v1' | 'v1.1' | 'v2'
+  /** 网关地址（唯一的门）：v2 读 `GATEWAY_URL`，v1 由 `API_BASE_URL` 推导 */
+  gatewayUrl: string
+  /** 管理密钥（v2）：只在主进程内使用，导入后加密存进 `connection.json` */
+  adminKey: string
+  /** v1/v1.1 遗留字段：不再参与任何请求，只为读得懂旧文件 */
   baseUrl: string
-  /** 明文密钥：只在主进程内使用 */
   apiKey: string
   dashboardUrl: string
   dashboardToken: string
@@ -141,7 +156,11 @@ export function parseHandoff(raw: string): HandoffParseResult {
   if (!headerLine) return { ok: false, code: 'not_handoff' }
   const headerMatch = HEADER_RE.exec(headerLine.trim())
   if (!headerMatch) return { ok: false, code: 'not_handoff' }
-  const version: 'v1' | 'v1.1' = headerMatch[1] ? 'v1.1' : 'v1'
+  const version: 'v1' | 'v1.1' | 'v2' = headerMatch[2]
+    ? 'v1.1'
+    : headerMatch[1] === '2'
+      ? 'v2'
+      : 'v1'
 
   const values = new Map<string, string>()
   const ignored: string[] = []
@@ -168,23 +187,43 @@ export function parseHandoff(raw: string): HandoffParseResult {
     values.set(key, value)
   }
 
-  const baseRaw = values.get('API_BASE_URL') ?? ''
-  if (!baseRaw) return { ok: false, code: 'missing_base_url' }
-  const baseUrl = normalizeBaseUrl(baseRaw)
-  if (!baseUrl) return { ok: false, code: 'bad_base_url' }
-
-  const apiKey = values.get('API_KEY') ?? ''
-  if (!apiKey) return { ok: false, code: 'missing_key' }
-  if (/\s/.test(apiKey)) return { ok: false, code: 'bad_key' }
-
   const warnings: CloudHandoffWarning[] = []
 
-  const parsedUrl = new URL(baseUrl)
+  // v1 / v1.1：老格式（api 地址 + api key）。能读，但没有管理密钥，也没有网关地址。
+  const baseRaw = values.get('API_BASE_URL') ?? ''
+  const baseUrl = baseRaw ? normalizeBaseUrl(baseRaw) : ''
+  if (baseUrl === '' && baseRaw) return { ok: false, code: 'bad_base_url' }
+  const apiKey = values.get('API_KEY') ?? ''
+  if (/\s/.test(apiKey)) return { ok: false, code: 'bad_key' }
+
+  // v2：单入口。GATEWAY_URL 是唯一的门，ADMIN_KEY 是登记用的钥匙。
+  const gatewayRaw = values.get('GATEWAY_URL') ?? ''
+  let gatewayUrl = gatewayRaw ? normalizeBaseUrl(gatewayRaw) : ''
+  if (gatewayRaw && !gatewayUrl) return { ok: false, code: 'bad_gateway_url' }
+  if (!gatewayUrl && baseUrl) gatewayUrl = deriveGatewayUrl(baseUrl)
+  if (!gatewayUrl) return { ok: false, code: 'missing_base_url' }
+
+  const adminKey = values.get('ADMIN_KEY') ?? ''
+  if (/\s/.test(adminKey)) return { ok: false, code: 'bad_key' }
+
+  if (version === 'v2') {
+    if (!gatewayRaw) return { ok: false, code: 'missing_base_url' }
+    if (!adminKey) return { ok: false, code: 'missing_admin_key' }
+  } else {
+    if (!baseUrl) return { ok: false, code: 'missing_base_url' }
+    if (!apiKey) return { ok: false, code: 'missing_key' }
+  }
+
+  const parsedUrl = new URL(gatewayUrl)
   if (parsedUrl.protocol !== 'https:' && !LOOPBACK_HOSTS.has(parsedUrl.hostname.toLowerCase())) {
     warnings.push({ code: 'http_not_loopback', detail: parsedUrl.hostname })
   }
-  if (apiKey.length < 32) {
-    warnings.push({ code: 'short_key', detail: String(apiKey.length) })
+  if (version !== 'v2') {
+    // 旧文件：没有管理密钥 → 导入后还要手填一次
+    warnings.push({ code: 'no_admin_key' })
+  }
+  if (adminKey && adminKey.length < 32) {
+    warnings.push({ code: 'short_key', detail: String(adminKey.length) })
   }
   if (duplicateKeys.length > 0) {
     warnings.push({ code: 'duplicate_key', detail: duplicateKeys.join(', ') })
@@ -198,22 +237,25 @@ export function parseHandoff(raw: string): HandoffParseResult {
   }
 
   const dashboardUrl =
-    normalizeBaseUrl(values.get('DASHBOARD_URL') ?? '') || deriveDashboardUrl(baseUrl)
+    normalizeBaseUrl(values.get('DASHBOARD_URL') ?? '') ||
+    deriveDashboardUrl(baseUrl || gatewayUrl)
 
   const dashboardToken = values.get('DASHBOARD_SESSION_TOKEN') ?? ''
-  if (!dashboardToken) warnings.push({ code: 'no_dashboard_token' })
 
   const checks: CloudHandoffChecks = {
     dnsOk: toBool(values.get('DNS_OK')),
-    capabilitiesHttp: toInt(values.get('CAPABILITIES_HTTP')),
+    gatewayHttp: toInt(values.get('GATEWAY_HTTP')) ?? toInt(values.get('CAPABILITIES_HTTP')),
+    upstreamOk: toBool(values.get('UPSTREAM_OK')),
+    adminKeyConfigured: toBool(values.get('ADMIN_KEY_CONFIGURED')),
     dashboardHttp: toInt(values.get('DASHBOARD_HTTP')),
-    sseOk: toBool(values.get('SSE_OK')),
     tlsNotAfter: values.get('TLS_NOT_AFTER') ?? null,
   }
 
-  if (checks.capabilitiesHttp !== null && checks.capabilitiesHttp !== 200) {
-    warnings.push({ code: 'capabilities_not_ok', detail: String(checks.capabilitiesHttp) })
+  if (checks.gatewayHttp !== null && checks.gatewayHttp !== 200) {
+    warnings.push({ code: 'gateway_not_ok', detail: String(checks.gatewayHttp) })
   }
+  if (checks.upstreamOk === false) warnings.push({ code: 'upstream_down' })
+  if (checks.adminKeyConfigured === false) warnings.push({ code: 'admin_key_missing' })
   if (checks.dashboardHttp !== null && checks.dashboardHttp >= 400) {
     warnings.push({ code: 'dashboard_not_ok', detail: String(checks.dashboardHttp) })
   }
@@ -225,6 +267,8 @@ export function parseHandoff(raw: string): HandoffParseResult {
     ok: true,
     data: {
       version,
+      gatewayUrl,
+      adminKey,
       baseUrl,
       apiKey,
       dashboardUrl,
@@ -248,13 +292,13 @@ export function toPreview(data: HandoffData, fileName = ''): CloudHandoffSummary
   return {
     version: data.version,
     fileName,
-    baseUrl: data.baseUrl,
+    gatewayUrl: data.gatewayUrl,
+    adminKeyMask: maskSecret(data.adminKey),
+    adminKeyLength: data.adminKey.length,
+    hasAdminKey: Boolean(data.adminKey),
     dashboardUrl: data.dashboardUrl,
-    keyMask: maskSecret(data.apiKey),
-    keyLength: data.apiKey.length,
     dashboardUser: data.dashboardUser,
     hasDashboardPassword: Boolean(data.dashboardPassword),
-    hasDashboardToken: Boolean(data.dashboardToken),
     authMode: data.authMode,
     profile: data.profile,
     hermesVersion: data.hermesVersion,
@@ -273,7 +317,10 @@ export function toPreview(data: HandoffData, fileName = ''): CloudHandoffSummary
  */
 export function pendingPatch(data: HandoffData): CloudConfigPatch {
   return {
-    baseUrl: data.baseUrl,
+    // 单入口之后 baseUrl 只是历史字段（网关地址才是真的门）
+    baseUrl: data.baseUrl || data.gatewayUrl,
+    gatewayUrl: data.gatewayUrl,
+    adminKey: data.adminKey || undefined,
     dashboardUrl: data.dashboardUrl,
     dashboardToken: data.dashboardToken || undefined,
     dashboardUser: data.dashboardUser || undefined,

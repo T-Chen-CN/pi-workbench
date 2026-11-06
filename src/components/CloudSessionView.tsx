@@ -293,7 +293,8 @@ export const CloudSessionView: React.FC<{
   const [imageBusy, setImageBusy] = useState(false)
   const [imageError, setImageError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const hasDashboardToken = useCloudStore((state) => state.config.hasDashboardToken)
+  // 单入口：传图用的就是设备 token，不再需要额外的控制台会话令牌
+  const hasCredential = useCloudStore((state) => state.config.hasDeviceToken)
   useEffect(() => {
     if (!active) return
     const timer = setInterval(() => {
@@ -377,7 +378,7 @@ export const CloudSessionView: React.FC<{
   const attachFiles = async (files: File[]) => {
     const images = files.filter((file) => file.type.startsWith('image/'))
     if (images.length === 0) return
-    if (!hasDashboardToken) {
+    if (!hasCredential) {
       setImageError(t('cloudImageTokenMissing'))
       return
     }
@@ -739,7 +740,7 @@ export const CloudSessionView: React.FC<{
                 size="sm"
                 disabled={!connected || imageBusy}
                 onClick={() => {
-                  if (!hasDashboardToken) {
+                  if (!hasCredential) {
                     setImageError(t('cloudImageTokenMissing'))
                     return
                   }

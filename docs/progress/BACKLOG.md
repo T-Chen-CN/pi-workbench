@@ -303,7 +303,7 @@
 
 | ID | 项目 | 优先级 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
-| G-01 | Hermes 自举 Prompt：判断现状（A 齐备 / B 有域名无反代 / C 无域名）→ 协助配域名与反代 → 补齐凭证 → 验证 → 交付 600 权限文件（不明文进对话） | P1 | 一台可自由折腾的机器 | 草稿已写：[hermes-bootstrap-prompt.md](../requirements/hermes-bootstrap-prompt.md)；**应用内一键复制已做**（连接页 →「复制自举 Prompt」，`?raw` 内联同一份文档）；**仍待干净机器实跑** |
+| G-01 | Hermes 自举 Prompt：判断现状（A 齐备 / B 有域名无反代 / C 无域名）→ 协助配域名与反代 → **装网关插件 + 管理密钥** → 验证 → 交付 600 权限文件（不明文进对话） | P1 | 一台可自由折腾的机器 | **v2 已改**（`hub.` 唯一入口 + `ADMIN_KEY`，交付格式 `hermes-handoff v2`）：[hermes-bootstrap-prompt.md](../requirements/hermes-bootstrap-prompt.md)；应用内一键复制同源（`?raw` 内联）；**仍待干净机器实跑** |
 | G-02 | 控制台域名白名单跟随配置：`electron/cloud/dashboard.ts` 的 `ALLOWED_HOSTS` 目前硬编码 `dash.tchen-xiaoxiao.com`，别人用自己的域名时登录跳转会被 `will-navigate` 拦掉 | P1 | — | **已完成**（de88fb4）：`hostAllowed(url, allowedUrl)` 取当前配置的 `dashboardUrl` 主机名，含测试 |
 | G-03 | 连接页「从文件导入」：消费 G-01 交付的 `hermes-handoff v1 / v1.1` 文件，自动填地址 / 密钥 / 控制台账号（密钥进 safeStorage，明文不落日志），导入后提示删除该文件 | P2 | G-01 定稿 | **已完成**（feat/cloud-handoff）：`electron/cloud/handoff.ts` 纯解析器 + `cloud:handoff:{pick,apply,copy}` 四步 + 预览弹框（主进程持明文，渲染层只有掩码/一次性 nonce） |
 | G-04 | 引导状态机与文案：4 态（未连接 / 已连接未登录控制台 / 已登录未对话 / 全部完成）+ 一屏 4 步文案（连接页 / 控制台登录引导 / 会话页空态复用同一份） | P2 | G-02、G-03 | 设计已定稿，未实现 |

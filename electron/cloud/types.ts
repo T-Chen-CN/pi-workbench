@@ -65,9 +65,13 @@ export interface CloudCapabilities {
 /** hermes-handoff 交接文件里的 `# ---- 校验结果 ----` 段 */
 export interface CloudHandoffChecks {
   dnsOk: boolean | null
-  capabilitiesHttp: number | null
+  /** `/v1/hub/health` 的状态码（v2；v1 文件用旧的 capabilities 探测） */
+  gatewayHttp: number | null
+  /** 网关自己报的「上游 Hermes 是否活着」 */
+  upstreamOk: boolean | null
+  /** 网关有没有配管理密钥（没配就登记不了） */
+  adminKeyConfigured: boolean | null
   dashboardHttp: number | null
-  sseOk: boolean | null
   tlsNotAfter: string | null
 }
 
@@ -84,22 +88,27 @@ export type CloudHandoffParseCode =
   | 'binary'
   | 'missing_base_url'
   | 'bad_base_url'
+  | 'bad_gateway_url'
   | 'missing_key'
   | 'bad_key'
+  | 'missing_admin_key'
   | 'read_failed'
 
 /** 导入前的脱敏预览：密钥只有掩码，明文留在主进程 */
 export interface CloudHandoffPreview {
-  version: 'v1' | 'v1.1'
+  version: 'v1' | 'v1.1' | 'v2'
   /** 交接文件名（只取 basename，用于「导入后请删除该文件」提示） */
   fileName: string
-  baseUrl: string
+  /** 网关地址（唯一的门） */
+  gatewayUrl: string
+  /** 管理密钥掩码：明文永不出主进程 */
+  adminKeyMask: string
+  adminKeyLength: number
+  /** v1/v1.1 文件里没有管理密钥：导入后还得手填一次 */
+  hasAdminKey: boolean
   dashboardUrl: string
-  keyMask: string
-  keyLength: number
   dashboardUser: string
   hasDashboardPassword: boolean
-  hasDashboardToken: boolean
   authMode: 'basic' | 'form' | 'none'
   profile: string
   hermesVersion: string
@@ -121,6 +130,10 @@ export type CloudHandoffSummary = Omit<CloudHandoffPreview, 'willOverwrite' | 'a
 /** 导入时要落盘的配置补丁（含明文，只在主进程内传递） */
 export interface CloudConfigPatch {
   baseUrl: string
+  /** 网关地址（v2 交接文件直接给，不用从 api. 推导） */
+  gatewayUrl?: string
+  /** 管理密钥（v2 交接文件里的 ADMIN_KEY）：导入即记住 */
+  adminKey?: string
   dashboardUrl: string
   dashboardToken?: string
   dashboardUser?: string

@@ -12,15 +12,15 @@ import type { CloudHandoffPreview } from '../src/types/cloud'
 const zh = translations.zh
 
 const PREVIEW: CloudHandoffPreview = {
-  version: 'v1.1',
+  version: 'v2',
   fileName: 'pi-cloud-20261106-0123.txt',
-  baseUrl: 'https://api.example.com',
+  gatewayUrl: 'https://hub.example.com',
+  adminKeyMask: 'abc****ABCD',
+  adminKeyLength: 43,
+  hasAdminKey: true,
   dashboardUrl: 'https://dash.example.com',
-  keyMask: 'abc****ABCD',
-  keyLength: 40,
   dashboardUser: 'admin',
   hasDashboardPassword: true,
-  hasDashboardToken: true,
   authMode: 'basic',
   profile: 'pi-cloud',
   hermesVersion: '0.22.6',
@@ -28,9 +28,10 @@ const PREVIEW: CloudHandoffPreview = {
   generatedAt: '2026-11-06T01:00:00Z',
   checks: {
     dnsOk: true,
-    capabilitiesHttp: 200,
+    gatewayHttp: 200,
+    upstreamOk: true,
+    adminKeyConfigured: true,
     dashboardHttp: 200,
-    sseOk: true,
     tlsNotAfter: '2027-02-01T00:00:00Z',
   },
   warnings: [],
@@ -167,7 +168,7 @@ describe('cloud handoff import (view)', () => {
 
     expect(await screen.findByText(zh.cloudImportTitle)).toBeTruthy()
     // 预览里只有掩码
-    expect(screen.getByText(PREVIEW.keyMask)).toBeTruthy()
+    expect(screen.getByText(PREVIEW.adminKeyMask)).toBeTruthy()
     expect(document.body.textContent).not.toContain(PLAINTEXT_KEY)
     // 还没确认，不写盘
     expect(apply).not.toHaveBeenCalled()
@@ -240,8 +241,9 @@ describe('hermes bootstrap prompt entry', () => {
     await waitFor(() => expect(writeClipboard).toHaveBeenCalled())
 
     const text = writeClipboard.mock.calls[0][0] as string
-    expect(text).toContain('# hermes-handoff v1.1')
-    expect(text).toContain('API_SERVER_KEY')
+    expect(text).toContain('# hermes-handoff v2')
+    expect(text).toContain('GATEWAY_URL=')
+    expect(text).toContain('ADMIN_KEY=')
     // 模板里的密钥只能是空占位符
     expect(text).not.toMatch(/^API_KEY=.+/m)
   })

@@ -41,14 +41,30 @@ function checkRows(checks: CloudHandoffChecks, t: (key: TranslationKey) => strin
       detail: '',
     },
     {
-      label: t('cloudImportCheckCapabilities'),
+      label: t('cloudImportCheckGateway'),
       state:
-        checks.capabilitiesHttp === null
+        checks.gatewayHttp === null
           ? 'unknown'
-          : checks.capabilitiesHttp === 200
+          : checks.gatewayHttp === 200
             ? 'ok'
             : 'fail',
-      detail: checks.capabilitiesHttp === null ? '' : `HTTP ${checks.capabilitiesHttp}`,
+      detail: checks.gatewayHttp === null ? '' : `HTTP ${checks.gatewayHttp}`,
+    },
+    {
+      label: t('cloudImportCheckUpstream'),
+      state:
+        checks.upstreamOk === null ? 'unknown' : checks.upstreamOk ? 'ok' : 'fail',
+      detail: '',
+    },
+    {
+      label: t('cloudImportCheckAdminKey'),
+      state:
+        checks.adminKeyConfigured === null
+          ? 'unknown'
+          : checks.adminKeyConfigured
+            ? 'ok'
+            : 'fail',
+      detail: '',
     },
     {
       label: t('cloudImportCheckDashboard'),
@@ -59,11 +75,6 @@ function checkRows(checks: CloudHandoffChecks, t: (key: TranslationKey) => strin
             ? 'ok'
             : 'fail',
       detail: checks.dashboardHttp === null ? '' : `HTTP ${checks.dashboardHttp}`,
-    },
-    {
-      label: t('cloudImportCheckSse'),
-      state: checks.sseOk === null ? 'unknown' : checks.sseOk ? 'ok' : 'fail',
-      detail: '',
     },
     {
       label: t('cloudImportCheckTls'),
@@ -119,7 +130,7 @@ export const CloudHandoffDialog: React.FC<{ active: boolean }> = ({ active }) =>
   }
 
   const checks = preview ? checkRows(preview.checks, t) : []
-  const severe = Boolean(preview?.warnings.some((warning) => warning.code === 'capabilities_not_ok'))
+  const severe = Boolean(preview?.warnings.some((warning) => warning.code === 'gateway_not_ok'))
 
   return (
     <Modal
@@ -154,8 +165,8 @@ export const CloudHandoffDialog: React.FC<{ active: boolean }> = ({ active }) =>
               <div className="flex items-start gap-2 border border-danger/30 bg-danger/10 px-2.5 py-2">
                 <AlertCircle size={13} className="mt-0.5 flex-shrink-0 text-danger" />
                 <div className="type-caption text-danger">
-                  {t('cloudHandoffWarn_capabilities_not_ok', {
-                    detail: String(preview.checks.capabilitiesHttp ?? '—'),
+                  {t('cloudHandoffWarn_gateway_not_ok', {
+                    detail: String(preview.checks.gatewayHttp ?? '—'),
                   })}
                 </div>
               </div>
@@ -176,10 +187,14 @@ export const CloudHandoffDialog: React.FC<{ active: boolean }> = ({ active }) =>
             </div>
 
             <div className="flex flex-col gap-1.5 border-t border-rule-divide pt-3">
-              <MetaRow label={t('cloudBaseUrl')} value={preview.baseUrl} />
+              <MetaRow label={t('cloudGatewayUrl')} value={preview.gatewayUrl} />
               <div className="flex items-baseline justify-between gap-3">
-                <Caption className="flex-shrink-0 text-ink-muted">{t('cloudImportKey')}</Caption>
-                <DataText className="min-w-0 truncate text-ink">{preview.keyMask}</DataText>
+                <Caption className="flex-shrink-0 text-ink-muted">
+                  {t('cloudGatewayAdminKey')}
+                </Caption>
+                <DataText className="min-w-0 truncate text-ink">
+                  {preview.hasAdminKey ? preview.adminKeyMask : t('cloudImportNoAdminKey')}
+                </DataText>
               </div>
               <MetaRow label={t('cloudImportDashboardUrl')} value={preview.dashboardUrl} />
               <div className="flex items-baseline justify-between gap-3">
@@ -198,9 +213,9 @@ export const CloudHandoffDialog: React.FC<{ active: boolean }> = ({ active }) =>
                 </span>
               </div>
               <Caption className="text-ink-subtle">
-                {preview.hasDashboardToken
-                  ? t('cloudImportWithToken')
-                  : t('cloudImportWithoutToken')}
+                {preview.hasAdminKey
+                  ? t('cloudImportAdminKeyStored')
+                  : t('cloudImportAdminKeyManual')}
               </Caption>
             </div>
 

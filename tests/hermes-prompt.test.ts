@@ -11,9 +11,13 @@ describe('hermes bootstrap prompt', () => {
     expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('```')
     // 六个步骤与交付格式都在
     expect(HERMES_BOOTSTRAP_PROMPT).toContain('## 第五步：交付')
-    expect(HERMES_BOOTSTRAP_PROMPT).toContain('# hermes-handoff v1.1')
-    expect(HERMES_BOOTSTRAP_PROMPT).toContain('DASHBOARD_SESSION_TOKEN=')
-    expect(HERMES_BOOTSTRAP_PROMPT).toContain('API_SERVER_KEY')
+    expect(HERMES_BOOTSTRAP_PROMPT).toContain('# hermes-handoff v2')
+    // v2 = 单入口：网关地址 + 管理密钥，不再有 api key / 控制台会话令牌
+    expect(HERMES_BOOTSTRAP_PROMPT).toContain('GATEWAY_URL=')
+    expect(HERMES_BOOTSTRAP_PROMPT).toContain('ADMIN_KEY=')
+    expect(HERMES_BOOTSTRAP_PROMPT).toContain('ADMIN_KEY_CONFIGURED=')
+    expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('DASHBOARD_SESSION_TOKEN=')
+    expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('API_SERVER_KEY')
     expect(HERMES_BOOTSTRAP_PROMPT).toContain('绝对不要')
   })
 

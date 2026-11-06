@@ -8,6 +8,27 @@ import {
 } from '../electron/cloud/handoff'
 
 /** 一份「标准」交接文件：后续用例在此基础上做变形 */
+/** v2：单入口格式（GATEWAY_URL + ADMIN_KEY），不再有 api key */
+const ADMIN_KEY = 'zsrBGJg9KluNcNi_Rtz5NQfTLM6m1F3HE-gH7hHm2Rc'
+
+function handoffV2(overrides: Record<string, string | null> = {}): string {
+  return handoff(
+    {
+      API_BASE_URL: null,
+      API_KEY: null,
+      CAPABILITIES_HTTP: null,
+      SSE_OK: null,
+      GATEWAY_URL: 'https://hub.example.com',
+      ADMIN_KEY,
+      GATEWAY_HTTP: '200',
+      UPSTREAM_OK: 'true',
+      ADMIN_KEY_CONFIGURED: 'true',
+      ...overrides,
+    },
+    'v2'
+  )
+}
+
 function handoff(overrides: Record<string, string | null> = {}, header = 'v1'): string {
   const base: Record<string, string | null> = {
     PROFILE: 'pi-cloud',
@@ -61,12 +82,15 @@ describe('parseHandoff', () => {
     expect(data.generatedAt).toBe('2026-11-06T01:00:00Z')
     expect(data.checks).toEqual({
       dnsOk: true,
-      capabilitiesHttp: 200,
+      // v1 文件只有 CAPABILITIES_HTTP，读进同一个「网关探测」槽位
+      gatewayHttp: 200,
+      upstreamOk: null,
+      adminKeyConfigured: null,
       dashboardHttp: 200,
-      sseOk: true,
       tlsNotAfter: '2027-02-01T00:00:00Z',
     })
-    expect(data.warnings.map((warning) => warning.code)).toEqual(['no_dashboard_token'])
+    // 旧文件没有管理密钥：导入后要手填一次
+    expect(data.warnings.map((warning) => warning.code)).toEqual(['no_admin_key'])
   })
 
   it('recognises v1.1 and picks up the dashboard session token', () => {
@@ -169,12 +193,12 @@ describe('parseHandoff', () => {
     expect(publicHost).toContain('http_not_loopback')
   })
 
-  it('warns about a short api key', () => {
-    expect(warningCodes(handoff({ API_KEY: 'short-key-123456' }))).toContain('short_key')
+  it('warns about a short admin key', () => {
+    expect(warningCodes(handoffV2({ ADMIN_KEY: 'short-key-123456' }))).toContain('short_key')
   })
 
-  it('warns when the file reports a failed capability probe', () => {
-    expect(warningCodes(handoff({ CAPABILITIES_HTTP: '401' }))).toContain('capabilities_not_ok')
+  it('warns when the file reports a failed gateway probe', () => {
+    expect(warningCodes(handoff({ CAPABILITIES_HTTP: '401' }))).toContain('gateway_not_ok')
   })
 
   it('warns when the certificate expires within a week', () => {
@@ -207,16 +231,26 @@ describe('maskSecret', () => {
 
 describe('toPreview', () => {
   it('never leaks the plaintext secrets', () => {
-    const data = parseOk(handoff({ DASHBOARD_SESSION_TOKEN: 'tok-123' }, 'v1.1'))
+    const data = parseOk(handoffV2({ DASHBOARD_SESSION_TOKEN: 'tok-123' }))
     const preview = toPreview(data, 'pi-cloud-20261106-0123.txt')
     expect(preview.fileName).toBe('pi-cloud-20261106-0123.txt')
     const serialized = JSON.stringify(preview)
-    expect(serialized).not.toContain(data.apiKey)
+    expect(serialized).not.toContain(data.adminKey)
     expect(serialized).not.toContain('p@ss=word')
     expect(serialized).not.toContain('tok-123')
-    expect(preview.keyMask).toBe('abc****ABCD')
+    expect(preview.adminKeyMask).toBe('zsr****m2Rc')
+    expect(preview.hasAdminKey).toBe(true)
     expect(preview.hasDashboardPassword).toBe(true)
-    expect(preview.hasDashboardToken).toBe(true)
+    expect(preview.gatewayUrl).toBe('https://hub.example.com')
+  })
+
+  it('marks an old v1 file as carrying no admin key', () => {
+    const preview = toPreview(parseOk(handoff()), 'old.txt')
+    expect(preview.version).toBe('v1')
+    expect(preview.hasAdminKey).toBe(false)
+    expect(preview.adminKeyMask).toBe('')
+    // 旧文件没有网关地址：从 api. 地址推导 hub.
+    expect(preview.gatewayUrl).toBe('https://hub.example.com')
   })
 })
 
@@ -226,9 +260,65 @@ describe('pendingPatch', () => {
     const patch = pendingPatch(data)
     // API 密钥不再进配置：单入口之后它没有用处，落盘只会误导人
     expect(patch).not.toHaveProperty('apiKey')
+    // v1 文件：没有管理密钥，网关地址由 api. 地址推导出来
+    expect(patch.adminKey).toBeUndefined()
+    expect(patch.gatewayUrl).toBe('https://hub.example.com')
     expect(patch.dashboardUrl).toBe('https://dash.example.com')
     expect(patch.dashboardToken).toBeUndefined()
     expect(patch.dashboardUser).toBeUndefined()
     expect(patch.handoffProfile).toBe('pi-cloud')
+  })
+})
+
+describe('v2（单入口）', () => {
+  it('reads the gateway url and the admin key', () => {
+    const data = parseOk(handoffV2())
+    expect(data.version).toBe('v2')
+    expect(data.gatewayUrl).toBe('https://hub.example.com')
+    expect(data.adminKey).toBe(ADMIN_KEY)
+    expect(data.checks.gatewayHttp).toBe(200)
+    expect(data.checks.upstreamOk).toBe(true)
+    expect(data.checks.adminKeyConfigured).toBe(true)
+    // v2 不需要 api key，缺了也不报错
+    expect(data.warnings.map((w) => w.code)).not.toContain('no_admin_key')
+  })
+
+  it('takes the admin key into the config patch', () => {
+    const patch = pendingPatch(parseOk(handoffV2()))
+    expect(patch.gatewayUrl).toBe('https://hub.example.com')
+    expect(patch.adminKey).toBe(ADMIN_KEY)
+  })
+
+  it('rejects a v2 file without a gateway url', () => {
+    const result = parseHandoff(handoffV2({ GATEWAY_URL: null }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('missing_base_url')
+  })
+
+  it('rejects a v2 file without an admin key', () => {
+    const result = parseHandoff(handoffV2({ ADMIN_KEY: null }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('missing_admin_key')
+  })
+
+  it('warns when the gateway reports a broken upstream or a missing admin key', () => {
+    const codes = warningCodes(handoffV2({ UPSTREAM_OK: 'false', ADMIN_KEY_CONFIGURED: 'false' }))
+    expect(codes).toContain('upstream_down')
+    expect(codes).toContain('admin_key_missing')
+  })
+
+  it('warns when the gateway probe did not return 200', () => {
+    expect(warningCodes(handoffV2({ GATEWAY_HTTP: '502' }))).toContain('gateway_not_ok')
+  })
+
+  it('flags a v1 file as needing the admin key by hand', () => {
+    expect(warningCodes(handoff())).toContain('no_admin_key')
+  })
+
+  it('allows loopback http for the gateway too', () => {
+    const data = parseOk(handoffV2({ GATEWAY_URL: 'http://127.0.0.1:8484' }))
+    expect(data.warnings.map((w) => w.code)).not.toContain('http_not_loopback')
+    const remote = parseOk(handoffV2({ GATEWAY_URL: 'http://hub.example.com' }))
+    expect(remote.warnings.map((w) => w.code)).toContain('http_not_loopback')
   })
 })

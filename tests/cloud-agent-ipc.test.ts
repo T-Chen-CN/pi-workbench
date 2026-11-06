@@ -1131,21 +1131,21 @@ describe('cloud handoff import', () => {
       file,
       body ??
         [
-          '# hermes-handoff v1.1',
+          '# hermes-handoff v2',
           'PROFILE=pi-cloud',
-          'API_BASE_URL=https://api.example.com',
-          `API_KEY=${API_KEY}`,
+          'GATEWAY_URL=https://hub.example.com',
+          `ADMIN_KEY=${API_KEY}`,
           'DASHBOARD_URL=https://dash.example.com',
           'DASHBOARD_USER=admin',
           `DASHBOARD_PASSWORD=${PASSWORD}`,
-          'DASHBOARD_SESSION_TOKEN=dash-session-token',
           'AUTH_MODE=basic',
           'HERMES_VERSION=0.22.6',
           '# ---- 校验结果 ----',
-          'dns_ok=true',
-          'capabilities_http=200',
-          'dashboard_http=200',
-          'sse_ok=true',
+          'DNS_OK=true',
+          'GATEWAY_HTTP=200',
+          'UPSTREAM_OK=true',
+          'ADMIN_KEY_CONFIGURED=true',
+          'DASHBOARD_HTTP=200',
           '',
         ].join('\n'),
       'utf-8'
@@ -1164,12 +1164,12 @@ describe('cloud handoff import', () => {
       canceled: boolean
       preview?: {
         fileName: string
-        keyMask: string
-        baseUrl: string
+        gatewayUrl: string
+        adminKeyMask: string
+        hasAdminKey: boolean
         dashboardUrl: string
         dashboardUser: string
         hasDashboardPassword: boolean
-        hasDashboardToken: boolean
         version: string
         willOverwrite: boolean
         applyNonce: string
@@ -1179,13 +1179,13 @@ describe('cloud handoff import', () => {
     expect(result.success).toBe(true)
     expect(result.canceled).toBe(false)
     const preview = result.preview!
-    expect(preview.baseUrl).toBe('https://api.example.com')
+    expect(preview.gatewayUrl).toBe('https://hub.example.com')
     expect(preview.dashboardUrl).toBe('https://dash.example.com')
     expect(preview.dashboardUser).toBe('admin')
     expect(preview.hasDashboardPassword).toBe(true)
-    expect(preview.hasDashboardToken).toBe(true)
-    expect(preview.version).toBe('v1.1')
-    expect(preview.keyMask).toBe('abc****ABCD')
+    expect(preview.hasAdminKey).toBe(true)
+    expect(preview.version).toBe('v2')
+    expect(preview.adminKeyMask).toBe('abc****ABCD')
     expect(preview.fileName.endsWith('.txt')).toBe(true)
     // 已有连接：要先确认覆盖
     expect(preview.willOverwrite).toBe(true)
