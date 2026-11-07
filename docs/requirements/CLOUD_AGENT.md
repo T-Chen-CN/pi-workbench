@@ -3,7 +3,7 @@
 > **面向**：实现、维护、验收云端 Agent 的人
 > **什么时候读**：动 `electron/cloud/*`、云端页面、网关插件、配对、设备身份、审批、部署之前
 > **什么时候要改**：协议、插件形态、权限口径、部署拓扑、验收标准变化时
-> **状态**：2026-11-07 · 桌面端 Phase 1 已完成；网关插件 Phase 2 未开工；Phase 3 未联调
+> **状态**：2026-11-07 · 桌面端 Phase 1 已完成；网关插件重新从零开发（旧插件已下线）；Phase 3 未联调
 > **唯一事实源**：本文。历史方案、历史 ADR、历史研究报告已并入本文并从索引移除。
 > **运行期资产**：[hermes-bootstrap-prompt.md](./hermes-bootstrap-prompt.md) 仍单独存在，因为应用用 Vite `?raw` 在构建时内联它。
 
@@ -16,9 +16,9 @@
 | 应用仓库 | `main`，版本 `0.7.9`，工作区干净 |
 | 桌面端配对 | Phase 1 已完成：连接码、`cloud:gateway:pair`、配置收窄、旧入口删除 |
 | 桌面端云端功能 | 会话 / SSE / 审批 / dashboard / 任务 / 媒体 / 耐久性已落地 |
-| 网关插件 | 新仓库 `pi-workbench-gateway` **尚未创建**，P0 未开始 |
+| 网关插件 | 旧插件（线上 v0.1.0）已按计划下线并清理；新仓库 `pi-workbench-gateway` 骨架已建（本地嵌套仓库，无业务代码），P0 未开始 |
 | 真实配对 | 不可用：插件还没有 `/v1/devices/pairing` 与 `/v1/devices/pair` |
-| 部署 | 新插件未部署；G0 / G1 未跑 |
+| 部署 | 新插件未部署：`hub.` 域名现在返回 502（Caddy 站点保留，等新插件上线）；G0 / G1 未跑 |
 | 测试基线 | `npm test`：151 文件 / 1779 用例；`type-check` / `lint` / `build` 全绿 |
 
 **一句话**：桌面端驾驶舱已经就绪，但云端入口插件还没写；当前处于 Phase 1 与 Phase 2 之间的已知空窗期，不发版。
@@ -370,6 +370,8 @@ Content-Type: application/json
 
 ```text
 仓库：pi-workbench-gateway
+物理位置：应用仓库工作区内嵌套的独立 git 仓库 `pi-workbench-gateway/`
+         （主仓库 `.gitignore` 排除，不是 submodule；应用侧只依赖 `PLUGIN_REPO` 常量）
 插件 id：pi-workbench-gateway
 类型：Hermes kind: platform
 版本：0.1.0
@@ -1046,7 +1048,9 @@ src/types/cloud.ts
 src/types/electron.d.ts
 ```
 
-### 插件（待建）
+### 插件（本工作区内的嵌套独立仓库）
+
+物理位置 `pi-workbench-gateway/`，有自己的 `.git` / 远端 / CI；主仓库 `.gitignore` 排除它。
 
 ```text
 pi-workbench-gateway/
@@ -1075,6 +1079,7 @@ docs/architecture/PROJECT_STRUCTURE.md     # 代码结构 / IPC
 
 | 日期 | 变化 |
 | --- | --- |
+| 2026-11-07 | 旧网关插件下线：停用 + 删除插件与环境变量（备份留在服务器 `/home/ubuntu/pi-hub-cleanup-*`），`hub.` 域名转为 502；插件改为在本工作区内新建嵌套独立仓库从零开发 |
 | 2026-11-07 | 文档校对：§11 文件索引补 `electron/cloud/types.ts` / `url.ts`；§3.2 写明内置默认网关与控制台地址及其副本位置 |
 | 2026-11-07 | 云端方案收口：删除旧 ADR、旧需求、旧研究报告、旧迁移手册，合并为本文；桌面端 Phase 1 完成，Phase 2 未开工 |
 | 2026-11-06 | 桌面端配对 Phase 1：连接码、`cloud:gateway:pair`、配置白名单、旧入口删除 |

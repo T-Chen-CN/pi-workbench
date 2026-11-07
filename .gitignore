@@ -53,6 +53,10 @@ Thumbs.db
 # Workspace
 .pi-workbench/
 
+# 云端网关插件：嵌套在本工作区里的独立 git 仓库（不是 submodule）。
+# 主仓库不管理它的内容；它自己有自己的 .git / 远端 / CI。
+/pi-workbench-gateway/
+
 # Runtime data (portable architecture) — may contain API keys
 /config/
 /cache/

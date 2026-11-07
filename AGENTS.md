@@ -31,7 +31,7 @@ npm run build      # 渲染层 + bridge + 主进程
 | `electron/ipc/register.ts` | `handleIpc` + `isTrustedIpcSender`：只接受主窗口与登记过的辅助窗口主框架，ready 之后 fail-closed |
 | `src/` | 渲染进程分层：`components/`（扁平，**禁建子目录**）· `store/`（一域一个 Zustand store）· `hooks/` · `utils/` · `workspace/` · `panelHost/` · `theme/` · `pdf/` · `api/`（IPC 封装 + 浏览器 mock 回退） |
 | `pi-bridge/` | 独立的 Agent 桥接包（`AgentManager`），有自己的 `package.json` / `tsconfig`；改完要 `npm run build:bridge` |
-| 云端网关插件 | 独立仓库 `pi-workbench-gateway`（尚未创建）。本仓库不放插件代码；应用侧只有 `src/utils/hermesPrompt.ts` 的 `PLUGIN_REPO` 一个常量（**故意不钉版本**：引导装最新，跟版靠 `plugins update`）。见 [CLOUD_AGENT](docs/requirements/CLOUD_AGENT.md) |
+| 云端网关插件 | 独立 git 仓库，物理位置 `pi-workbench-gateway/`（**嵌套在本工作区内、由主仓库 `.gitignore` 排除**，不是 submodule、不是 `data/`）。主仓库代码只依赖 `src/utils/hermesPrompt.ts` 的 `PLUGIN_REPO` 一个常量（**故意不钉版本**：引导装最新，跟版靠 `plugins update`）。见 [CLOUD_AGENT](docs/requirements/CLOUD_AGENT.md) |
 | `tests/` | 扁平目录，文件名与源码同名（`src/utils/fileTree.ts` → `tests/file-tree.test.ts`）；`tests/design-system.test.ts` 是强制门槛 |
 | `docs/` | 规范原文，`docs/README.md` 是唯一索引 |
 
@@ -85,7 +85,7 @@ npm run build      # 渲染层 + bridge + 主进程
 | `src/` 任意 | 对应单文件 vitest → 收尾 `npm test` + `npm run lint` |
 | `electron/` | `npm run type-check` + 相关 `tests/{main-ipc,*-manager,updater,...}.test.ts` |
 | `pi-bridge/` | `npm run build:bridge` + `tests/{session-*,agent-*}.test.ts` |
-| 云端网关插件（独立仓库） | 插件侧：`python -m unittest discover -s tests -t .`（零依赖）+ `hermes plugins validate .` / `doctor . --ci`；应用侧跟版：`npx vitest run tests/hermes-prompt.test.ts`。再按 [CLOUD_AGENT](docs/requirements/CLOUD_AGENT.md) 的 G0/G1 手打验收 |
+| 云端网关插件（嵌套独立仓库 `pi-workbench-gateway/`） | 插件侧（在该目录下）：`python -m unittest discover -s tests -t .`（零依赖）+ `hermes plugins validate .` / `doctor . --ci`；应用侧跟版：`npx vitest run tests/hermes-prompt.test.ts`。再按 [CLOUD_AGENT](docs/requirements/CLOUD_AGENT.md) 的 G0/G1 手打验收 |
 | UI / 样式 | `tests/design-system.test.ts` + Paper / Ink 两套截图 + 1024 / 1440 宽度 |
 | 打包 / 更新 / NSIS | `npx electron-builder --win --dir --publish never` |
 
