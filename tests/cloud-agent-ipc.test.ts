@@ -499,7 +499,8 @@ describe('cloud IPC', () => {
     // 单入口：连「API 密钥」这个概念都不该出现在公开配置里
     expect(result.config).not.toHaveProperty('apiKey')
     expect(result.config).not.toHaveProperty('deviceToken')
-    expect(result.config.gatewayUrl).toMatch(/^https?:\/\//)
+    // 网关地址没有内置默认值：未配置时就是空串（不会偷偷指向某个域名）
+    expect(result.config.gatewayUrl).toBe('')
   })
 
   it('rejects cloud calls before a key is saved', async () => {

@@ -73,4 +73,16 @@ describe('parsePairingInput', () => {
       reason: 'bad_gateway',
     })
   })
+
+  it('requires a gateway address when only a bare code is pasted', () => {
+    // 网关地址没有内置默认值：只给码、又没填地址 → 必须报「没有可用地址」
+    expect(parsePairingInput('ABCDE-FGHIJ', '')).toEqual({
+      ok: false,
+      reason: 'bad_gateway',
+    })
+    // 但从完整链接里读得到地址时，不需要用户再填
+    expect(
+      parsePairingInput('https://hub.example.com/#pair=ABCDE-FGHIJ', '')
+    ).toMatchObject({ ok: true, gatewayUrl: 'https://hub.example.com' })
+  })
 })

@@ -8,6 +8,7 @@ import { toast } from '../store/toastStore'
 import { copyText } from '../utils/clipboard'
 import { parsePairingInput } from '../utils/cloudPairing'
 import { HERMES_BOOTSTRAP_PROMPT } from '../utils/hermesPrompt'
+import { PLACEHOLDER_GATEWAY_URL } from '../api/cloud'
 import { Button, Caption, DataText, Field, Input, Label } from './ui'
 import { Card, CardHeader, StatusText } from './patterns'
 import { CloudDiagnosticsPanel } from './CloudDiagnosticsPanel'
@@ -298,8 +299,9 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
           <div className="flex flex-col gap-3 pt-3">
             <div className="flex flex-col gap-1.5">
               <Label className="text-ink-muted">{t('cloudGatewayUrl')}</Label>
+              {/* 没有内置默认地址：没配对且没填过就是空，如实说「未设置」 */}
               <DataText className="select-all break-all text-ink-subtle">
-                {gateway?.gatewayUrl || config.gatewayUrl}
+                {gateway?.gatewayUrl || config.gatewayUrl || t('cloudGatewayNotSet')}
               </DataText>
             </div>
 
@@ -361,7 +363,7 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                     value={pairGatewayDraft}
                     spellCheck={false}
                     autoComplete="off"
-                    placeholder={gateway?.gatewayUrl || config.gatewayUrl}
+                    placeholder={gateway?.gatewayUrl || config.gatewayUrl || PLACEHOLDER_GATEWAY_URL}
                     onChange={(event) => {
                       setPairGatewayDraft(event.target.value)
                       setPairInputError(null)

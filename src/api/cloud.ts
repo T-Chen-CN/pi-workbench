@@ -51,7 +51,12 @@ export type {
   CloudConnectionInfo,
 } from '../types/cloud'
 
-const FALLBACK_DASHBOARD_URL = 'https://dash.tchen-xiaoxiao.com'
+/**
+ * 占位符：网关地址没有内置默认值（那是用户自己的部署）。这里只在浏览器预览时
+ * 给输入框一个示例，不会作为真实请求目标。
+ */
+export const PLACEHOLDER_GATEWAY_URL = 'https://hub.example.com'
+export const PLACEHOLDER_DASHBOARD_URL = 'https://dash.example.com'
 /**
  * 纯浏览器预览（没有 preload）用的假设备身份。
  *
@@ -105,12 +110,9 @@ export function hasCloudBridge(): boolean {
   return Boolean(bridge && typeof bridge.cloudConfigGet === 'function')
 }
 
-/** 没有主进程时的网关地址（只用于界面展示占位） */
-const FALLBACK_GATEWAY_URL = 'https://hub.tchen-xiaoxiao.com'
-
 export const UNCONFIGURED_CONNECTION: CloudConnectionInfo = {
-  gatewayUrl: FALLBACK_GATEWAY_URL,
-  dashboardUrl: FALLBACK_DASHBOARD_URL,
+  gatewayUrl: '',
+  dashboardUrl: '',
   hasDeviceToken: false,
   deviceScopes: [],
   deviceId: '',

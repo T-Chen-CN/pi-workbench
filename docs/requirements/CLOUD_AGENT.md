@@ -108,7 +108,14 @@ dash.<domain> ── 直连 Hermes dashboard（127.0.0.1:9119），不经过插�
 
 连接页只保留：
 
-1. 网关地址（高级；留空用内置默认 `https://hub.tchen-xiaoxiao.com`，控制台默认 `https://dash.tchen-xiaoxiao.com`。默认值在 `electron/cloud/url.ts`，`src/api/cloud.ts` 的 Web mock 另有一份副本——改域名要两边同步）。
+1. 网关地址（**必填**，没有内置默认值）：用户填自己的 `https://hub.<域名>`，或直接粘贴完整配对链接
+   （`https://hub.<域名>/#pair=CODE`，地址从链接里读）。输入框占位符是 `https://hub.example.com`，
+   定义在 `electron/cloud/url.ts` 的 `PLACEHOLDER_CLOUD_GATEWAY_URL`（`src/api/cloud.ts` 的 Web mock
+   另有一份同名常量）。
+   - 客户端**不内置任何人的域名**：`readCloudConfig().gatewayUrl` 未配置时就是空串，
+     `parsePairingInput('CODE', '')` 直接返回 `bad_gateway`（提示"还没有可用的网关地址"）。
+   - 控制台地址由配对响应或 `hub.` → `dash.` 推导；推不出来就是空，界面显示「未设置」，
+     打开控制台时给可执行的错误而不是空白页。
 2. 连接码输入。
 3. 「配对并连接」。
 

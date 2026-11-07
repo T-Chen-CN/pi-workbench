@@ -1011,6 +1011,12 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     if (!config.hasDeviceToken) {
       return { success: false, error: '这台设备还没有配对，先在「连接」页配对' }
     }
+    if (!config.dashboardUrl) {
+      return {
+        success: false,
+        error: '还没有控制台地址：重新配对一次会自动带上，或在「连接」页填好网关地址后再试'
+      }
+    }
     hookWindow()
     try {
       dashboard.open(config.dashboardUrl)

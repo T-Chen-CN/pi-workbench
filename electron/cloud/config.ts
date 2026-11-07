@@ -16,16 +16,16 @@ import { getAppDir } from '../app-paths.js'
 import { readJsonWithBackup, writeJsonAtomicSync } from '../atomic-json.js'
 import { decryptSecret, encryptSecret } from '../secret-crypto.js'
 import {
-  DEFAULT_CLOUD_DASHBOARD_URL,
-  DEFAULT_CLOUD_GATEWAY_URL,
+  PLACEHOLDER_CLOUD_DASHBOARD_URL,
+  PLACEHOLDER_CLOUD_GATEWAY_URL,
   deriveDashboardUrl,
   normalizeBaseUrl,
 } from './url.js'
 
 // 地址工具在 `url.ts`（纯函数）；这里再导出一次，保持既有调用方不变
 export {
-  DEFAULT_CLOUD_DASHBOARD_URL,
-  DEFAULT_CLOUD_GATEWAY_URL,
+  PLACEHOLDER_CLOUD_DASHBOARD_URL,
+  PLACEHOLDER_CLOUD_GATEWAY_URL,
   deriveDashboardUrl,
   normalizeBaseUrl,
 }
@@ -91,10 +91,9 @@ export function pruneUnknownCloudConfig(): void {
 export function readCloudConfig(): CloudConfig {
   const stored = readJsonWithBackup<StoredCloudConfig>(cloudConfigFile()).data
   const deviceToken = decryptSecret(stored?.deviceToken ?? '')
-  const gatewayUrl =
-    normalizeBaseUrl(stored?.gatewayUrl ?? '') || DEFAULT_CLOUD_GATEWAY_URL
-  const dashboardUrl =
-    normalizeBaseUrl(stored?.dashboardUrl ?? '') || DEFAULT_CLOUD_DASHBOARD_URL
+  // 留空就是留空：网关地址必须由用户提供（配对链接或手填），没有内置域名
+  const gatewayUrl = normalizeBaseUrl(stored?.gatewayUrl ?? '')
+  const dashboardUrl = normalizeBaseUrl(stored?.dashboardUrl ?? '')
   return {
     gatewayUrl,
     deviceToken,
@@ -117,12 +116,10 @@ export function writeCloudConfig(input: {
   const pick = (value: string | undefined, fallback: string): string =>
     typeof value === 'string' && value.trim() ? value.trim() : fallback
   const nextDeviceToken = pick(input.deviceToken, current.deviceToken)
-  const nextGatewayUrl =
-    normalizeBaseUrl(input.gatewayUrl ?? '') || current.gatewayUrl || DEFAULT_CLOUD_GATEWAY_URL
+  const nextGatewayUrl = normalizeBaseUrl(input.gatewayUrl ?? '') || current.gatewayUrl
   const nextDeviceScopes = input.deviceScopes ?? current.deviceScopes
   const nextDeviceId = pick(input.deviceId, current.deviceId)
-  const dashboardUrl =
-    normalizeBaseUrl(input.dashboardUrl ?? '') || current.dashboardUrl || DEFAULT_CLOUD_DASHBOARD_URL
+  const dashboardUrl = normalizeBaseUrl(input.dashboardUrl ?? '') || current.dashboardUrl
   const stored: StoredCloudConfig = {
     gatewayUrl: nextGatewayUrl,
     deviceToken: nextDeviceToken ? encryptSecret(nextDeviceToken) : '',

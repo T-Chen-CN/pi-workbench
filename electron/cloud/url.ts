@@ -5,8 +5,13 @@
  * 而 `config.ts` 会碰 `app` / `safeStorage`，被它牵连就进不了纯单测。
  */
 
-export const DEFAULT_CLOUD_DASHBOARD_URL = 'https://dash.tchen-xiaoxiao.com'
-export const DEFAULT_CLOUD_GATEWAY_URL = 'https://hub.tchen-xiaoxiao.com'
+/**
+ * 网关地址**没有默认值**：它是用户自己的部署，客户端不该内置任何人的域名。
+ * 未配置时 `readCloudConfig().gatewayUrl` 就是空串，连接页要求用户填（或直接粘
+ * 一段完整的配对链接，地址从链接里来）。下面的占位符只用于输入框提示。
+ */
+export const PLACEHOLDER_CLOUD_GATEWAY_URL = 'https://hub.example.com'
+export const PLACEHOLDER_CLOUD_DASHBOARD_URL = 'https://dash.example.com'
 
 /** `https://api.example.com/v1/` → `https://api.example.com`；非法输入返回空串 */
 export function normalizeBaseUrl(raw: string): string {
@@ -39,6 +44,7 @@ export function deriveDashboardUrl(baseUrl: string): string {
     }
     return parsed.toString().replace(/\/+$/, '')
   } catch {
-    return DEFAULT_CLOUD_DASHBOARD_URL
+    // 推不出来就给空串：调用方展示「未设置」，不要编一个别人的域名
+    return ''
   }
 }

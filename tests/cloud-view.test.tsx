@@ -82,7 +82,7 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     gatewayStatus: vi.fn(async () => ({
       success: true,
       registered: false,
-      gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+      gatewayUrl: 'https://hub.example.com',
       device: { id: 'd1e2f3a4-0000-4000-8000-000000000000', name: 'TChen-Legion', defaultName: 'TChen-Legion' },
     })),
     gatewayPair: vi.fn(async () => ({
@@ -1171,7 +1171,7 @@ describe('CloudConnectionView 心跳', () => {
     stub.gatewayStatus = vi.fn(async () => ({
       success: true,
       registered: true,
-      gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+      gatewayUrl: 'https://hub.example.com',
       deviceId: 'd1e2f3a4-0000-4000-8000-000000000000',
       name: 'TChen-Legion',
       scopes: ['chat', 'dispatch'],
@@ -1199,7 +1199,7 @@ describe('CloudConnectionView 心跳', () => {
       gatewayStatus: vi.fn(async () => ({
         success: true,
         registered: true,
-        gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+        gatewayUrl: 'https://hub.example.com',
         deviceId: 'd1e2f3a4-0000-4000-8000-000000000000',
         name: 'TChen-Legion',
         scopes: ['chat', 'dispatch'],
@@ -1219,7 +1219,7 @@ describe('CloudConnectionView 心跳', () => {
     stub.gatewayStatus = vi.fn(async () => ({
       success: true,
       registered: false,
-      gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+      gatewayUrl: 'https://hub.example.com',
       device: { id: 'd1e2f3a4-0000-4000-8000-000000000000', name: 'TChen-Legion', defaultName: 'TChen-Legion' },
     }))
     useCloudStore.setState({ connection: 'connected', sessions: [SESSION], activeSessionId: 'run_session' })
@@ -1348,6 +1348,28 @@ describe('CloudConnectionView 设备卡', () => {
     )
   })
 
+  it('requires a gateway address in the UI when nothing is configured', async () => {
+    // 网关地址没有内置默认值：未配置时输入框只给占位符，地址栏显示「未设置」
+    const { container } = render(<CloudConnectionView active />)
+    expect(await screen.findByText(zh.cloudGatewayNotSet)).toBeTruthy()
+    const gatewayInput = container.querySelector('#cloud-pair-gateway') as HTMLInputElement
+    expect(gatewayInput.placeholder).toBe('https://hub.example.com')
+  })
+
+  it('refuses a bare code without a gateway address', async () => {
+    const stub = installBridge()
+    render(<CloudConnectionView active />)
+
+    fireEvent.change(await screen.findByLabelText(zh.cloudPairCode), {
+      target: { value: 'ABCDE-FGHIJ' },
+    })
+    fireEvent.click(screen.getByText(zh.cloudPairConnect))
+
+    // 直接报「还没有可用的网关地址」，且不往主进程发请求
+    expect(await screen.findByText(zh.cloudPairBadGateway)).toBeTruthy()
+    expect(stub.gatewayPair).not.toHaveBeenCalled()
+  })
+
   it('shows an expired-code reason from the server', async () => {
     installBridge({
       gatewayPair: vi.fn(async () => ({
@@ -1358,6 +1380,10 @@ describe('CloudConnectionView 设备卡', () => {
     })
     render(<CloudConnectionView active />)
 
+    // 没有内置网关地址：先填地址，再填码（只给码会被判“没有可用地址”）
+    fireEvent.change(await screen.findByLabelText(zh.cloudPairGatewayAdvanced), {
+      target: { value: 'https://hub.example.com' },
+    })
     fireEvent.change(await screen.findByLabelText(zh.cloudPairCode), {
       target: { value: 'EXPIRED001' },
     })
@@ -1376,6 +1402,9 @@ describe('CloudConnectionView 设备卡', () => {
     })
     render(<CloudConnectionView active />)
 
+    fireEvent.change(await screen.findByLabelText(zh.cloudPairGatewayAdvanced), {
+      target: { value: 'https://hub.example.com' },
+    })
     fireEvent.change(await screen.findByLabelText(zh.cloudPairCode), {
       target: { value: 'OLDPLUGIN' },
     })
@@ -1389,7 +1418,7 @@ describe('CloudConnectionView 设备卡', () => {
       gatewayStatus: vi.fn(async () => ({
         success: true,
         registered: true,
-        gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+        gatewayUrl: 'https://hub.example.com',
         deviceId: 'b8235e0e-a459-4bad-95a2-5d0585a613fc',
         name: 'TChen-Legion',
         scopes: ['chat', 'dispatch'],
@@ -1413,7 +1442,7 @@ describe('CloudConnectionView 设备卡', () => {
       gatewayStatus: vi.fn(async () => ({
         success: true,
         registered: true,
-        gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+        gatewayUrl: 'https://hub.example.com',
         deviceId: 'b8235e0e',
         name: 'TChen-Legion',
         scopes: ['chat'],
@@ -1467,7 +1496,7 @@ describe('CloudConnectionView 设备卡', () => {
       gatewayStatus: vi.fn(async () => ({
         success: true,
         registered: true,
-        gatewayUrl: 'https://hub.tchen-xiaoxiao.com',
+        gatewayUrl: 'https://hub.example.com',
         deviceId: 'b8235e0e',
         name: 'TChen-Legion',
         scopes: ['chat', 'dispatch'],

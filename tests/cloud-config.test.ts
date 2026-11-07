@@ -62,14 +62,14 @@ describe('normalizeBaseUrl', () => {
 
 describe('deriveDashboardUrl', () => {
   it('maps hub.<domain> to dash.<domain>', () => {
-    expect(config.deriveDashboardUrl('https://hub.tchen-xiaoxiao.com')).toBe(
-      'https://dash.tchen-xiaoxiao.com'
+    expect(config.deriveDashboardUrl('https://hub.example.com')).toBe(
+      'https://dash.example.com'
     )
   })
 
   it('keeps the old api.<domain> rule for compatibility', () => {
-    expect(config.deriveDashboardUrl('https://api.tchen-xiaoxiao.com')).toBe(
-      'https://dash.tchen-xiaoxiao.com'
+    expect(config.deriveDashboardUrl('https://api.example.com')).toBe(
+      'https://dash.example.com'
     )
   })
 
@@ -77,6 +77,11 @@ describe('deriveDashboardUrl', () => {
     expect(config.deriveDashboardUrl('https://cloud.example.com')).toBe(
       'https://cloud.example.com'
     )
+  })
+
+  it('returns nothing for garbage instead of inventing a domain', () => {
+    expect(config.deriveDashboardUrl('')).toBe('')
+    expect(config.deriveDashboardUrl('not a url')).toBe('')
   })
 })
 
@@ -114,11 +119,18 @@ describe('read/write connection', () => {
     expect(config.readCloudConfig().deviceToken).toBe('pi_secret')
   })
 
-  it('defaults to the official gateway when nothing is stored', () => {
+  it('has no built-in gateway URL: nothing stored means empty', () => {
     const saved = config.writeCloudConfig({})
-    expect(saved.gatewayUrl).toBe(config.DEFAULT_CLOUD_GATEWAY_URL)
-    expect(saved.dashboardUrl).toBe(config.DEFAULT_CLOUD_DASHBOARD_URL)
+    // 网关地址是用户自己的部署，客户端不内置任何域名
+    expect(saved.gatewayUrl).toBe('')
+    expect(saved.dashboardUrl).toBe('')
     expect(saved).not.toHaveProperty('baseUrl')
+  })
+
+  it('keeps a stored gateway URL untouched across saves', () => {
+    config.writeCloudConfig({ gatewayUrl: 'https://hub.example.com' })
+    expect(config.readCloudConfig().gatewayUrl).toBe('https://hub.example.com')
+    expect(config.writeCloudConfig({}).gatewayUrl).toBe('https://hub.example.com')
   })
 })
 

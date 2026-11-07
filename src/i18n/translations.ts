@@ -37,6 +37,7 @@ export const translations = {
     cloudDeviceReprobe: '重新读取系统名',
     cloudGatewayTitle: '云端网关',
     cloudGatewayUrl: '网关地址',
+    cloudGatewayNotSet: '未设置',
     cloudGatewayRegistered: '这台设备已配对',
     cloudGatewayUpstreamDown: '已配对，但云端 Hermes 没响应',
     cloudGatewayScopes: '权限',
@@ -44,7 +45,8 @@ export const translations = {
     cloudGatewayRefresh: '刷新状态',
     cloudGatewayRevoke: '注销这台设备',
     cloudPairGatewayAdvanced: '网关地址（高级）',
-    cloudPairGatewayHint: '默认使用官方网关；自建部署时填自己的 hub 地址，或直接粘贴完整配对链接',
+    cloudPairGatewayHint:
+      '必填：你自己的网关地址（例如 https://hub.example.com）。也可以直接粘贴完整配对链接，地址和连接码会一起读出来',
     cloudPairCode: '连接码',
     cloudPairCodeHint: '在服务器上执行配对命令后得到，一次性有效；也可以直接粘贴插件给出的完整链接',
     cloudPairConnect: '配对并连接',
@@ -52,7 +54,7 @@ export const translations = {
     cloudPairHint: '配对成功后这台设备会拿到自己的设备凭据，管理密钥不会进入桌面端。',
     cloudPairRevokeHint: '注销后这台设备立刻不能用云端；需要回到服务器重新生成连接码并再次配对。',
     cloudPairMissingCode: '请填写连接码，或粘贴完整的配对链接',
-    cloudPairBadGateway: '网关地址格式不正确（需要 http:// 或 https://）',
+    cloudPairBadGateway: '还没有可用的网关地址：填一个（需要 http:// 或 https://），或直接粘贴完整配对链接',
     cloudPairExpired: '连接码已过期，请在服务器重新生成',
     cloudPairNotFound: '连接码不存在或已失效，请在服务器重新生成',
     cloudPairUsed: '连接码已经被使用过，请在服务器重新生成',
@@ -1103,6 +1105,7 @@ export const translations = {
     cloudDeviceRestore: 'Restore default',
     cloudGatewayTitle: 'Cloud gateway',
     cloudGatewayUrl: 'Gateway URL',
+    cloudGatewayNotSet: 'Not set',
     cloudGatewayRegistered: 'This device is paired',
     cloudGatewayUpstreamDown: 'Paired, but the cloud Hermes is not responding',
     cloudGatewayScopes: 'Scopes',
@@ -1111,7 +1114,7 @@ export const translations = {
     cloudGatewayRevoke: 'Revoke this device',
     cloudPairGatewayAdvanced: 'Gateway URL (advanced)',
     cloudPairGatewayHint:
-      'Use the official gateway by default; for self-hosted setups fill in your hub URL or paste the full pairing link',
+      'Required: your own gateway URL (e.g. https://hub.example.com). You can also paste the full pairing link — the address is read from it',
     cloudPairCode: 'Pairing code',
     cloudPairCodeHint:
       'Generated on the server, valid once; you can also paste the full link from the plugin',
@@ -1122,7 +1125,8 @@ export const translations = {
     cloudPairRevokeHint:
       'Revoking disables cloud access immediately; generate a new pairing code on the server and pair again.',
     cloudPairMissingCode: 'Enter a pairing code or paste the full pairing link',
-    cloudPairBadGateway: 'Invalid gateway URL (http:// or https:// required)',
+    cloudPairBadGateway:
+      'No usable gateway URL yet: enter one (http:// or https:// required) or paste the full pairing link',
     cloudPairExpired: 'The pairing code has expired — generate a new one on the server',
     cloudPairNotFound: 'The pairing code does not exist or is no longer valid — generate a new one',
     cloudPairUsed: 'The pairing code has already been used — generate a new one',

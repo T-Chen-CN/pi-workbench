@@ -126,7 +126,7 @@ vi.mock('electron', () => ({
 
 import { CloudDashboard } from '../electron/cloud/dashboard'
 
-const DASH_URL = 'https://dash.tchen-xiaoxiao.com/'
+const DASH_URL = 'https://dash.example.com/'
 
 function makeDashboard() {
   const events = {
@@ -342,7 +342,7 @@ describe('白名单跟着配置走', () => {
   it('only allows the configured console host, not a hardcoded one', async () => {
     const { hostAllowed } = await import('../electron/cloud/dashboard')
     expect(hostAllowed('https://dash.my-own.host/settings', 'https://dash.my-own.host')).toBe(true)
-    expect(hostAllowed('https://dash.tchen-xiaoxiao.com/', 'https://dash.my-own.host')).toBe(false)
+    expect(hostAllowed('https://dash.example.com/', 'https://dash.my-own.host')).toBe(false)
     // 明文不放行
     expect(hostAllowed('http://dash.my-own.host/', 'https://dash.my-own.host')).toBe(false)
     expect(hostAllowed('not a url', 'https://dash.my-own.host')).toBe(false)
