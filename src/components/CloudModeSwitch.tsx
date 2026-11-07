@@ -40,9 +40,13 @@ export const CloudModeSwitch: React.FC<{ disabled?: boolean }> = ({ disabled = f
   const setMode = useCloudStore((state) => state.setMode)
   const [confirmOff, setConfirmOff] = useState(false)
 
+  // 只在「已连接」时才读档位：配对之前读只会拿到一条「这台设备还没有配对」，
+  // 而那条错误不会自己消失（组件不重新挂载），配对成功后卡片就一直挂着红字。
+  // 所以等 connected 由 false 变 true 再读——顺带覆盖「断开后重连」。
   useEffect(() => {
+    if (disabled) return
     void loadPolicy()
-  }, [loadPolicy])
+  }, [disabled, loadPolicy])
 
   const current = policy?.mode ?? null
   const choose = (mode: CloudApprovalMode) => {
@@ -101,7 +105,8 @@ export const CloudModeSwitch: React.FC<{ disabled?: boolean }> = ({ disabled = f
       {policy && current === 'off' && (
         <Caption className="flex-shrink-0 text-danger">{t('cloudModeOffWarn')}</Caption>
       )}
-      {error && (
+      {/* 未连接时不显示读写错误：那句“去连接页配对”在已配对的世界里是纯噪音 */}
+      {!disabled && error && (
         <Caption className="min-w-0 truncate text-danger" title={error}>
           {error}
         </Caption>
