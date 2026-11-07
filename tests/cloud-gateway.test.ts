@@ -55,6 +55,38 @@ describe('gatewayWhoAmI', () => {
   })
 })
 
+describe('gatewayHealth vs gatewayStatus', () => {
+  it('health stays anonymous and slim', async () => {
+    mocks.fetch.mockResolvedValueOnce(json({ status: 'ok', upstreamOk: true, hub: '0.1.0' }))
+    const health = await gateway.gatewayHealth('https://hub.example.com')
+    expect(health.upstreamOk).toBe(true)
+    const [url, init] = mocks.fetch.mock.calls[0]
+    expect(url).toBe('https://hub.example.com/v1/hub/health')
+    // 匿名端點不能带任何凭据
+    expect((init as RequestInit).headers).not.toHaveProperty('Authorization')
+  })
+
+  it('status carries the device token and returns full diagnostics', async () => {
+    mocks.fetch.mockResolvedValueOnce(
+      json({
+        status: 'ok',
+        hub: '0.1.0',
+        upstreamOk: true,
+        upstreamVersion: '0.22.6',
+        devices: { total: 2, active: 1, revoked: 1 },
+        adminKeyConfigured: true,
+        uptimeSeconds: 12
+      })
+    )
+    const status = await gateway.gatewayStatus('https://hub.example.com', 'pi_abc')
+    expect(status.devices).toEqual({ total: 2, active: 1, revoked: 1 })
+    expect(status.upstreamVersion).toBe('0.22.6')
+    const [url, init] = mocks.fetch.mock.calls[0]
+    expect(url).toBe('https://hub.example.com/v1/hub/status')
+    expect((init as RequestInit).headers).toMatchObject({ Authorization: 'Bearer pi_abc' })
+  })
+})
+
 describe('revokeDevice', () => {
   it('uses the device token as a bearer credential and encodes the id', async () => {
     mocks.fetch.mockResolvedValueOnce(json({ success: true }))

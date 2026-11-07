@@ -488,7 +488,7 @@ optional_env:
 | `PI_HUB_HOST` | 插件 | `127.0.0.1` | 只监听 loopback |
 | `PI_HUB_PORT` | 插件 | `8484` | |
 | `PI_HUB_RATE_LIMIT` | 插件 | `60` | 每设备每分钟 |
-| `PI_HUB_FS_ROOTS` | 插件 | profile upload/cache | 媒体白名单，`:` 分隔 |
+| `PI_HUB_FS_ROOTS` | 插件 | profile upload/cache | 媒体白名单，**`os.pathsep` 分隔**（Linux `:` / Windows `;`）。不用 `:`：Windows 盘符自带冒号 |
 | `API_SERVER_KEY` | Hermes/systemd | — | 转发 `/v1/*` |
 | `HERMES_DASHBOARD_SESSION_TOKEN` | Hermes/systemd | — | 转发 `/api/config` / 图片 |
 
@@ -556,7 +556,8 @@ CREATE TABLE IF NOT EXISTS audit_events (
 
 | 方法 | 路径 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
-| `GET` | `/v1/hub/health` | 无 | 网关活着就 200；`upstreamOk` 表达上游 |
+| `GET` | `/v1/hub/health` | 无 | 网关活着就 200；**只回** `status` / `upstreamOk` / `hub` / `contractVersion` / `features` |
+| `GET` | `/v1/hub/status` | Device 或 Admin | 完整诊断（设备计数、上游版本、dashboard 地址、运行时长） |
 | `POST` | `/v1/devices/pairing` | Admin | 生成连接码 |
 | `POST` | `/v1/devices/pair` | 无 | 消费连接码，签发 token |
 | `GET` | `/v1/devices/me` | Device | 当前身份 |
@@ -566,7 +567,19 @@ CREATE TABLE IF NOT EXISTS audit_events (
 | `GET` | `/api/config` | Device | 白名单策略子集 |
 | `PUT` | `/api/config` | Device | 只写 `approvals.mode` |
 
-`/v1/hub/health` 成功：
+`/v1/hub/health` 成功（**已瘦身**）：
+
+```json
+{
+  "status": "ok",
+  "upstreamOk": true,
+  "hub": "0.1.0",
+  "contractVersion": 1,
+  "features": ["pairing", "heartbeat", "policy", "media"]
+}
+```
+
+完整诊断在 `GET /v1/hub/status`（设备 token 或管理密钥）：
 
 ```json
 {
@@ -581,12 +594,16 @@ CREATE TABLE IF NOT EXISTS audit_events (
   "devices": { "total": 1, "active": 1, "revoked": 0 },
   "adminKeyConfigured": true,
   "pairingEnabled": true,
-  "uptimeSeconds": 12
+  "fsRoots": ["/srv/hermes/uploads"],
+  "uptimeSeconds": 12,
+  "serverTime": 1793874832
 }
 ```
 
 - 网关进程活着就返回 200；上游挂了用 `upstreamOk:false`，不要用 5xx 表示网关存活。
 - `contractVersion` / `features` 供 Phase 3 握手；当前桌面端可忽略。
+- **刻意偏离旧版**：旧插件把设备计数、上游版本、内部端口、运行时长全挂在匿名端点上，
+  等于给公网扫描器免费送指纹。诊断一律要凭据（`/v1/hub/status`）。
 
 ### 5.6 认证
 
@@ -1079,7 +1096,8 @@ docs/architecture/PROJECT_STRUCTURE.md     # 代码结构 / IPC
 
 | 日期 | 变化 |
 | --- | --- |
-| 2026-11-07 | 旧网关插件下线：停用 + 删除插件与环境变量（备份留在服务器 `/home/ubuntu/pi-hub-cleanup-*`），`hub.` 域名转为 502；插件改为在本工作区内新建嵌套独立仓库从零开发 |
+| 2026-11-07 | 旧网关插件下线：停用 + 删除插件、环境变量与残留明文凭据（备份留在服务器 `/home/ubuntu/pi-hub-cleanup-*`），`hub.` 域名转为 502；插件改为本工作区内嵌套独立仓库从零开发 |
+| 2026-11-07 | 新插件 P0–P4 落地（本地仓库 `pi-workbench-gateway/`）：health 瘦身 + `GET /v1/hub/status`、`PI_HUB_FS_ROOTS` 改 `os.pathsep`；桌面端 `cloud:gateway:status` 优先读 status、回退 health |
 | 2026-11-07 | 文档校对：§11 文件索引补 `electron/cloud/types.ts` / `url.ts`；§3.2 写明内置默认网关与控制台地址及其副本位置 |
 | 2026-11-07 | 云端方案收口：删除旧 ADR、旧需求、旧研究报告、旧迁移手册，合并为本文；桌面端 Phase 1 完成，Phase 2 未开工 |
 | 2026-11-06 | 桌面端配对 Phase 1：连接码、`cloud:gateway:pair`、配置白名单、旧入口删除 |

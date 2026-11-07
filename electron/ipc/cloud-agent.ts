@@ -18,6 +18,7 @@ import { CloudDashboard } from '../cloud/dashboard.js'
 import { createMediaClient, parseImageDataUrl } from '../cloud/media.js'
 import {
   gatewayHealth,
+  gatewayStatus,
   gatewayWhoAmI,
   heartbeatDevice,
   pairDevice,
@@ -485,10 +486,12 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       return { success: true as const, registered: false as const, ...base }
     }
     try {
-      const [me, health] = await Promise.all([
+      const [me, detailed] = await Promise.all([
         gatewayWhoAmI(config.gatewayUrl, config.deviceToken),
-        gatewayHealth(config.gatewayUrl).catch(() => null)
+        // 新版插件有完整诊断；旧插件没有这条路由（404）→ 回退到瘦身版 health
+        gatewayStatus(config.gatewayUrl, config.deviceToken).catch(() => null)
       ])
+      const health = detailed ? null : await gatewayHealth(config.gatewayUrl).catch(() => null)
       return {
         success: true as const,
         registered: true as const,
@@ -497,10 +500,10 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
         name: me.name,
         scopes: me.scopes,
         hub: me.hub,
-        online: health?.upstreamOk ?? null,
-        upstream: health?.upstream ?? '',
-        upstreamVersion: health?.upstreamVersion ?? '',
-        devices: health?.devices ?? null
+        online: detailed ? (detailed.upstreamOk ?? null) : (health?.upstreamOk ?? null),
+        upstream: detailed?.upstream ?? health?.upstream ?? '',
+        upstreamVersion: detailed?.upstreamVersion ?? health?.upstreamVersion ?? '',
+        devices: detailed?.devices ?? health?.devices ?? null
       }
     } catch (error) {
       logger?.warn('[Cloud] gateway status failed', cloudErrorMessage(error))

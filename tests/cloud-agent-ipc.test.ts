@@ -93,6 +93,25 @@ vi.mock('electron', () => ({
           uptimeSeconds: 12,
         })
       }
+      if (route === '/v1/hub/status') {
+        const auth = String(init?.headers?.Authorization ?? '')
+        if (!auth.startsWith('Bearer pi_hub_')) {
+          return Response.json({ error: { code: 'unauthorized' } }, { status: 401 })
+        }
+        return Response.json({
+          status: 'ok',
+          hub: '0.1.0',
+          contractVersion: 1,
+          features: ['pairing'],
+          upstream: 'http://127.0.0.1:8642',
+          upstreamOk: true,
+          upstreamVersion: '0.22.6-full',
+          dashboard: 'https://dash.example.com',
+          devices: { total: 3, active: 2, revoked: 1 },
+          adminKeyConfigured: true,
+          uptimeSeconds: 99
+        })
+      }
       if (route === '/v1/devices/me') {
         const auth = String(init?.headers?.Authorization ?? '')
         if (!auth.startsWith('Bearer pi_hub_')) {
@@ -1240,7 +1259,17 @@ describe('cloud gateway (single entry)', () => {
     expect(status.deviceId).toBe('dev_from_gateway')
     expect(status.scopes).toEqual(['chat', 'dispatch'])
     expect(status.online).toBe(true)
-    expect(status.upstreamVersion).toBe('0.22.6')
+    // 新版插件：诊断优先取带凭据的 /v1/hub/status（health 已瘦身，只回存活）
+    expect(status.upstreamVersion).toBe('0.22.6-full')
+  })
+
+  it('prefers the authenticated status endpoint for diagnostics', async () => {
+    await seedPairedDevice()
+    const status = await call<StatusResult>('cloud:gateway:status')
+    expect(status.devices).toEqual({ total: 3, active: 2, revoked: 1 })
+    // 完整诊断来自 /v1/hub/status，而不是匿名的 /v1/hub/health
+    expect(status.upstreamVersion).toBe('0.22.6-full')
+    expect(mocks.state.requests.some((r: string) => r.includes('/v1/hub/status'))).toBe(true)
   })
 
   it('revokes the device and drops the local token immediately', async () => {

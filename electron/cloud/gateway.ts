@@ -56,7 +56,7 @@ export interface PairResult {
   dashboardUrl?: string
 }
 
-/** 网关自己的错误码 → 中文文案（与后端 `core/errors.py` 一一对应） */
+/** 网关自己的错误码 → 中文文案（与 hub/errors.py 一一对应） */
 const GATEWAY_MESSAGES: Record<string, string> = {
   unauthorized: '这台设备还没有配对，或 token 已失效',
   device_revoked: '这台设备已被注销（在云端重新配对即可）',
@@ -148,6 +148,33 @@ async function call<T>(
 
 export function gatewayHealth(gatewayUrl: string): Promise<GatewayHealth> {
   return call<GatewayHealth>(gatewayUrl, '/v1/hub/health')
+}
+
+/**
+ * 完整诊断（`/v1/hub/status`）：设备 token 就够了。
+ *
+ * 匿名端点 `/v1/hub/health` 刻意只回答「网关活着 / 上游活着」——设备计数、内部端口、
+ * 运行时长、上游版本不该对公网扫器免费开放。拿不到（旧插件没有这条路由）时调用方
+ * 回退到 `/v1/hub/health`。
+ */
+export interface GatewayStatus {
+  status?: string
+  hub?: string
+  contractVersion?: number
+  features?: string[]
+  upstream?: string
+  upstreamOk?: boolean | null
+  upstreamVersion?: string
+  dashboard?: string
+  devices?: { total: number; active: number; revoked: number }
+  adminKeyConfigured?: boolean
+  pairingEnabled?: boolean
+  uptimeSeconds?: number
+  serverTime?: number
+}
+
+export function gatewayStatus(gatewayUrl: string, deviceToken: string): Promise<GatewayStatus> {
+  return call<GatewayStatus>(gatewayUrl, '/v1/hub/status', { bearer: deviceToken })
 }
 
 /** 读这台设备自己的身份：token 有效才有答案 */
