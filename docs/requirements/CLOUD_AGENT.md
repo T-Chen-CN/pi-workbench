@@ -108,7 +108,7 @@ dash.<domain> ── 直连 Hermes dashboard（127.0.0.1:9119），不经过插�
 
 连接页只保留：
 
-1. 网关地址（高级，默认 `https://hub.<domain>`）。
+1. 网关地址（高级；留空用内置默认 `https://hub.tchen-xiaoxiao.com`，控制台默认 `https://dash.tchen-xiaoxiao.com`。默认值在 `electron/cloud/url.ts`，`src/api/cloud.ts` 的 Web mock 另有一份副本——改域名要两边同步）。
 2. 连接码输入。
 3. 「配对并连接」。
 
@@ -1022,6 +1022,8 @@ electron/cloud/
   device.ts        device.json / device-sessions.json
   heartbeat.ts     30s 心跳
   dashboard.ts     WebContentsView dashboard
+  types.ts         数据模型（主进程副本；与 src/types/cloud.ts 一致，由 tests/cloud-types.test.ts 守）
+  url.ts           纯函数地址工具：内置默认地址 / normalizeBaseUrl / deriveDashboardUrl
 
 src/components/
   CloudWorkspaceView.tsx
@@ -1073,6 +1075,7 @@ docs/architecture/PROJECT_STRUCTURE.md     # 代码结构 / IPC
 
 | 日期 | 变化 |
 | --- | --- |
+| 2026-11-07 | 文档校对：§11 文件索引补 `electron/cloud/types.ts` / `url.ts`；§3.2 写明内置默认网关与控制台地址及其副本位置 |
 | 2026-11-07 | 云端方案收口：删除旧 ADR、旧需求、旧研究报告、旧迁移手册，合并为本文；桌面端 Phase 1 完成，Phase 2 未开工 |
 | 2026-11-06 | 桌面端配对 Phase 1：连接码、`cloud:gateway:pair`、配置白名单、旧入口删除 |
 | 2026-11-06 | 云端 Agent C-00–C-06 收口；C-07 跨重启 attach；审批三档与审计真机验收 |
