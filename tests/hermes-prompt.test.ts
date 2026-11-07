@@ -14,27 +14,21 @@ describe('hermes bootstrap prompt', () => {
     // 代码块之外的说明文字不该被带进去
     expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('> 用途：用户把下方代码块')
     expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('```')
-    // 六个步骤与交付格式都在
-    expect(HERMES_BOOTSTRAP_PROMPT).toContain('## 第五步：交付')
-    expect(HERMES_BOOTSTRAP_PROMPT).toContain('# hermes-handoff v2')
-    // v2 = 单入口：网关地址 + 管理密钥，不再有 api key / 控制台会话令牌
-    expect(HERMES_BOOTSTRAP_PROMPT).toContain('GATEWAY_URL=')
-    expect(HERMES_BOOTSTRAP_PROMPT).toContain('ADMIN_KEY=')
-    expect(HERMES_BOOTSTRAP_PROMPT).toContain('ADMIN_KEY_CONFIGURED=')
-    expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('DASHBOARD_SESSION_TOKEN=')
-    expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('API_SERVER_KEY')
-    expect(HERMES_BOOTSTRAP_PROMPT).toContain('绝对不要')
+    // 六个步骤与连接码交付都在
+    expect(HERMES_BOOTSTRAP_PROMPT).toContain('## 第六步：生成一次性连接码并交付')
+    expect(HERMES_BOOTSTRAP_PROMPT).toContain('/v1/devices/pairing')
+    expect(HERMES_BOOTSTRAP_PROMPT).toContain('pairingUrl')
+    // Phase 1 起只认一次性连接码：不写文件、不导入凭证、不把管理密钥交给桌面端
+    expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('从文件导入')
+    expect(HERMES_BOOTSTRAP_PROMPT).toContain('不得在对话里输出任何明文密钥')
   })
 
   it('keeps the prompt free of real credentials', () => {
-    // 交接文件模版里的密钥只能是空占位符（复制出去的内容不能带任何真实凭据）
-    const templateLines = HERMES_BOOTSTRAP_PROMPT.split('\n').filter(
-      (line) => line.startsWith('API_KEY=') || line.startsWith('DASHBOARD_PASSWORD=')
-    )
-    expect(templateLines.length).toBeGreaterThan(0)
-    for (const line of templateLines) {
-      expect(['API_KEY=', 'DASHBOARD_PASSWORD=']).toContain(line)
-    }
+    // 复制出去的内容不能带任何真实凭据，也不能再有凭证文件模板行
+    expect(HERMES_BOOTSTRAP_PROMPT).not.toMatch(/^ADMIN_KEY=/m)
+    expect(HERMES_BOOTSTRAP_PROMPT).not.toMatch(/^GATEWAY_URL=/m)
+    expect(HERMES_BOOTSTRAP_PROMPT).not.toMatch(/^DASHBOARD_PASSWORD=/m)
+    expect(HERMES_BOOTSTRAP_PROMPT).not.toContain('API_KEY=')
   })
 
   it('returns an empty string when the fence is missing', () => {
@@ -42,7 +36,7 @@ describe('hermes bootstrap prompt', () => {
     expect(extractPromptBlock('```bash\necho hi\n```')).toBe('')
   })
 
-  // 插件有自己的仓库（见 docs/guides/PLUGIN_REPO_MIGRATION.md）：文档里只留占位符，
+  // 插件有自己的仓库（见 docs/requirements/CLOUD_AGENT.md）：文档里只留占位符，
   // 真实地址由 PLUGIN_REPO 注入 —— 复制出去的内容里不能残留 {{…}}。
   it('injects the plugin repo, and never pins a version', () => {
     expect(PLUGIN_REPO.startsWith('https://')).toBe(true)

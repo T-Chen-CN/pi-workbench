@@ -9,7 +9,7 @@
  * 「代码块存在、内容完整」这条，防止文档被改坏后按钮复制出一段残缺文本。
  *
  * 插件仓库**不写死在文档里**，而是文档里留 `{{PLUGIN_REPO}}` 占位符、由这里注入：插件有自己的
- * 仓库与发版节奏（见 `docs/guides/PLUGIN_REPO_MIGRATION.md`）。
+ * 仓库与发版节奏（见 `docs/requirements/CLOUD_AGENT.md`）。
  *
  * **故意不钉版本**：引导只负责"装上"，装的是仓库默认分支最新版，之后跟版靠 `hermes plugins update`。
  * 把 40 位 SHA 写进 Prompt 会让每次插件发版都得改应用仓库（两处发布串在一起），而收益只是"新机器装到
@@ -24,7 +24,7 @@ const TEXT_FENCE = /```text\r?\n([\s\S]*?)```/
  * 插件仓库地址（`hermes plugins install` 的 `repo` 参数）。
  * 公开仓库，安装不需要任何凭据。
  */
-export const PLUGIN_REPO = 'https://github.com/T-Chen-CN/pi-workbench-plugin.git'
+export const PLUGIN_REPO = 'https://github.com/T-Chen-CN/pi-workbench-gateway.git'
 
 /** 取出文档里第一个 ```text 代码块（统一换行、去掉首尾空行） */
 export function extractPromptBlock(markdown: string): string {

@@ -208,7 +208,7 @@ export async function pairDevice(input: {
       tokenPrefix: result.tokenPrefix || result.token.slice(0, 7),
     }
   } catch (error) {
-    // 旧插件没有这条路由：404 且没有后端错误码。新插件连「码不存在」都会给 code，
+    // 旧网关没有这条路由：404 且没有后端错误码。新插件连「码不存在」都会给 code，
     // 所以不能把 404 一律当成「插件过旧」。
     if (error instanceof CloudApiError && error.status === 404 && !error.backendCode) {
       throw new CloudApiError('not_found', '网关没有配对接口（插件可能需要升级）', {

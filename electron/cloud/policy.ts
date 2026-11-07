@@ -4,7 +4,7 @@
  * **读**：`GET /api/config` 只取白名单子集 —— `approvals.mode` / `approvals.timeout` /
  * `approvals.deny`（**只计数**）/ `agent.disabled_toolsets` / `terminal.backend`。
  * 整份配置里有 `providers` / `secrets` 等**已被解析成明文**的密钥，所以它永远不出
- * 主进程，也永远不回传（CLOUD_AGENT_APPROVAL §12 第 1 条）。
+ * 主进程，也永远不回传（见 CLOUD_AGENT.md §3.5）。
  *
  * **写**：`PUT /api/config` 的最小 patch `{"config":{"approvals":{"mode":...}}}`。
  * 服务端是 `_deep_merge(磁盘原文件, 收到的子块)`，所以不需要把整份文档回传 ——

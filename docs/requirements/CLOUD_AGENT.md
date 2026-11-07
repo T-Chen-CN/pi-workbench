@@ -1,545 +1,1080 @@
-# 云端 Agent 方案 v5：以 Hermes API Server 为控制面
+# 云端 Agent（唯一方案文档）
 
-> **面向**：实现「云端 Agent（常驻、自主、可观察、可审批）」的人
-> **什么时候读**：动云端接入、新增云端相关 IPC / 页面、改审批与审计之前
-> **什么时候要改**：后端选型、接入口径、自研范围（§3）、部署拓扑（§5）、权限口径（§6）变化时
-
-**状态**：v5 · **日期**：2026-11-03
-**相关**：[ADR-004](../decisions/ADR-004-cloud-agent-backend.md)（后端）· [ADR-005](../decisions/ADR-005-cloud-agent-control-plane.md)（控制面 v3）· [ADR-006](../decisions/ADR-006-cloud-agent-api-control-plane.md)（控制面 v4）· [ADR-007](../decisions/ADR-007-cloud-agent-full-host-access.md)（整机权限 / 云端前端独立）· [选型证据](../reports/research-cloud-agent-2026-11-03.md) · [AGENT_RUNTIME](../agent/agent-runtime.md) · [AGENT_TRACE](../architecture/AGENT_TRACE.md)
-**决策依据**不在本文：选型对比见 ADR-004，控制面/传输/配置面见 ADR-006，权限与前端形态见 ADR-007。本文只说**要做什么、边界在哪、怎么验**。
-
-**v5 相对 v4**：①**取消受限 OS 用户与 ssh 终端后端**，Hermes 拿整机权限（含 sudo），隔离只做软限制 → 安全边界重心上移到云控制台；②本地做**两个独立页面**（会话页 / 配置页），首页按钮进入，不共用工作区前端；③云端前端**只对齐 parts 类型、不复用组件**（删掉 transcript 解耦这条）；④**删掉预算熔断**（没有消费上限），用量首期不管。
+> **面向**：实现、维护、验收云端 Agent 的人
+> **什么时候读**：动 `electron/cloud/*`、云端页面、网关插件、配对、设备身份、审批、部署之前
+> **什么时候要改**：协议、插件形态、权限口径、部署拓扑、验收标准变化时
+> **状态**：2026-11-07 · 桌面端 Phase 1 已完成；网关插件 Phase 2 未开工；Phase 3 未联调
+> **唯一事实源**：本文。历史方案、历史 ADR、历史研究报告已并入本文并从索引移除。
+> **运行期资产**：[hermes-bootstrap-prompt.md](./hermes-bootstrap-prompt.md) 仍单独存在，因为应用用 Vite `?raw` 在构建时内联它。
 
 ---
 
-## 0. 一句话
+## 0. 当前状态
 
-**云端跑 Hermes Agent，Pi Workbench 是它的驾驶舱。**本地 Agent（Pi Agent）与云端 Agent（Hermes）**并存、互不替代、互不调用**；云端 Agent **不需要任何本地能力**。
-
-| 面 | 用谁 | 为什么 |
-| --- | --- | --- |
-| 对话 / 会话 / 任务 / 审批 | **api_server（`:8642`，Bearer）** | 结构化事件 + 审批端点 + 幂等键，全是现成 |
-| 配置 / 密钥 / 技能 / MCP / 日志 / 分析 | **dashboard（`:9119`）** | 只有它有配置面；重写等于重做 150+ 字段 |
-| 屏幕 / 接管 | 自研（CDP） | 两个面都不提供 headless 浏览器画面 |
-
-三方分工：**Hermes** 负责运行时（模型循环、工具、终端后端、技能、cron、Kanban、记忆、MCP、配置面）；**Pi Workbench** 负责会话页、配置页、审批队列、审计；**审批执行器**用 Hermes 自带的 `/v1/runs/{id}/approval`。
-
----
-
-## 1. 边界
-
-### 1.1 明确不动的部分
-
-| 现有铁律 | 态度 |
+| 项 | 状态 |
 | --- | --- |
-| Pi Agent 只在主进程运行 | **不变**（云端 Agent 是外部进程） |
-| 会话记录是唯一真相源（ADR-003） | **本地不变**；云端真相源是 Hermes `state.db`，本地不落副本 |
-| 便携式目录、启动顺序、退出收尾、多工作区常驻视图 | **完全不变** |
-| 文件写删改只允许在受信任工作区 | **完全不变**（云端页面不碰本地 fs） |
-| 权限 fail-closed、审批超时即拒 | 沿用：Hermes 侧超时/桥接失败即 deny；本地侧复用 `electron/approval-broker.ts` |
-| IPC 四步（`handleIpc` → preload → 类型 → API） | **不变** |
+| 应用仓库 | `main`，版本 `0.7.9`，工作区干净 |
+| 桌面端配对 | Phase 1 已完成：连接码、`cloud:gateway:pair`、配置收窄、旧入口删除 |
+| 桌面端云端功能 | 会话 / SSE / 审批 / dashboard / 任务 / 媒体 / 耐久性已落地 |
+| 网关插件 | 新仓库 `pi-workbench-gateway` **尚未创建**，P0 未开始 |
+| 真实配对 | 不可用：插件还没有 `/v1/devices/pairing` 与 `/v1/devices/pair` |
+| 部署 | 新插件未部署；G0 / G1 未跑 |
+| 测试基线 | `npm test`：151 文件 / 1779 用例；`type-check` / `lint` / `build` 全绿 |
 
-**单用户前提**：不做账号、不做租户隔离、不做团队共享。
-
-**云端前端独立**：云端是两个**独立页面**，不挂在任何工作区里，**不复用** `ChatPanel` / `chatStore` / 工作区壳。样式受 [DESIGN_SYSTEM](../design/DESIGN_SYSTEM.md) 约束（token 一致），组件各自实现。
-
-### 1.2 Hermes 的四个「面」（必须先分清）
-
-Hermes 本体 = 一套 Python 程序 + 数据目录 `~/.hermes`。它不是「一个服务器」，而是同一份数据的几个前门：
-
-| 前门 | 是什么 | 谁拉起 | 端口 | 给谁 |
-| --- | --- | --- | --- | --- |
-| **api_server** | gateway 里的一个 platform adapter（与 Telegram 同级） | `hermes gateway` | `127.0.0.1:8642` | **程序**（Pi Workbench 会话页） |
-| **dashboard** | 独立进程：FastAPI + SPA + PTY 桥 | `hermes dashboard` | `127.0.0.1:9119` | **人**（Pi Workbench 配置页 / 浏览器） |
-| gateway 的 IM 平台 | Telegram / Discord / Slack / 邮件… | `hermes gateway` | 无（出站长连） | 手机 |
-| **ACP** | 一次性 stdio 子进程，gateway daemon 的 viewer | 编辑器 spawn | 无 | Zed / VS Code |
-
-三条硬事实：
-
-| 事实 | 影响 |
-| --- | --- |
-| dashboard 才是「desktop 连的那个后端」，gateway 不是 | 配置页走 dashboard，不是 gateway WS |
-| api_server 自带 `run_approval` / `Idempotency-Key` / `tool.started\|completed` | C-E03 / C-B02 不用自研 |
-| **会话按 surface 隔离**：API 会话不能绑其他 surface 的会话（`409 permission_denied`） | 会话页与 dashboard 不能轮流聊同一会话 |
-
-**两条安全事实（v5 修订）**：容器后端**跳过审批**（`docker`/`modal`/`daytona`/`vercel_sandbox`/`singularity`）→ 与 S-04 互斥，**不用**；`execute_code` 无整脚本审批 → 必须 `agent.disabled_toolsets: [code_execution]`。审批只覆盖 dangerous shell 命令，`write_file`/`patch` **没有审批路径**——整机权限下这是最需要注意的缺口（见 S-04）。
+**一句话**：桌面端驾驶舱已经就绪，但云端入口插件还没写；当前处于 Phase 1 与 Phase 2 之间的已知空窗期，不发版。
 
 ---
 
-## 2. 能力覆盖（50 条 ID，v5 删 1 条）
+## 1. 目标与非目标
 
-状态：✅ 现成 · 🟡 需配置 / 只差视图 · 🔧 自研 · ⚠ 待验证 · ❌ 砍掉
+### 1.1 目标
 
-| 面 | ✅ 现成 | 🟡 配置 / 视图 | 🔧 自研 | 备注 |
-| --- | --- | --- | --- | --- |
-| A 运行时 | A01 常驻云端机（fs+browser+terminal，宿主级权限） | A02 状态持久化 · A03 休眠唤醒 · A04 多 Agent 各一屏 | — | A05 用户隔离 ❌ |
-| B 观察面 | B02 活动流水 · B04 离开后可恢复 | — | B01 屏幕流 · B03 审计三问 | B02 直接接 `/v1/runs/{id}/events` |
-| C 介入面 | C03 打断纠偏 · C04 一键停 | — | C01 动作级审批（收窄） · C02 接管 | 命令级审批已现成 |
-| D 治理面 | D01 守卫隔离（软） · D04 读写分离 · D05 自定义规则 | D02 出网白名单 · D03 凭据零暴露 · D06 撤销授权 | — | D05 = `approvals.deny` + `command_allowlist` |
-| E 耐久性 | E03 幂等（限定） · E05 无人监督即停 · E06 断线重连补齐 | E01 任务是一等对象 | E07 恢复核对（降级） | E02 检查点 ⚠ · **E04 预算熔断 ❌（v5 删）** |
-| F 连接面 | F01 MCP 目录 · F05 自装 MCP | F04 浏览器兜底 | — | F02 token 模型可见性 ⚠ · F03 自有邮箱 ❌ |
-| G 认知面 | G01 持久记忆 · G02 记忆管理 | G03 主动性研究（只读） · G04 建议机制 | — | G04 接 `clarify` 端点 |
-| H 复用 | H01 Skill · H02 Routine（cron + `/api/jobs`） | — | — | H03 Teach a task ❌ · H04 团队共享 ❌ |
-| I 协作 | I01 多 Agent 并行 | I02 Agent 间交棒 | — | |
-| J 多端 | J02 外部入口（IM / 邮件） | J01 会话多端 · J03 语音 | — | J01 受 surface 隔离约束 |
-| K 本地前端 | **K06 配置页（内嵌 dashboard）** | — | K01 首页入口 + 页面骨架 · K02 会话页 · K03 屏幕面板 · K04 审批队列 · K05 身份 | 云端前端独立，不与工作区共用 |
+- 云端跑 Hermes Agent，Pi Workbench 做会话、审批、配置与审计的驾驶舱。
+- 本地 Agent 与云端 Agent 并存、互不替代、互不调用。
+- 单用户、多设备：一个网关对应一个 Hermes profile；每台设备一个 token。
+- 本地与云端只留一条缝：网关插件。除 dashboard 外，所有请求经它转发。
+- 配对只用一次性连接码；管理密钥不出服务器，桌面端不保存。
+- 设备 token → `deviceId`，请求可归因、可撤销、可限权、可审计。
+- 插件零第三方 Python 依赖，异常不拖死 Hermes gateway。
 
-**计数**：✅ 20 · 🟡 12 · 🔧 5 · ⚠ 2 · ❌ 5 · K 6 = 50（ID 空间不变；原 🟡 的 C-E04 预算熔断移入 ❌，有效条目 45）。
+### 1.2 非目标
 
-**需要一句话解释的 5 条**：
-
-| 编号 | 说明 |
-| --- | --- |
-| C-C01 | 收窄为三件事：**策略层**（`approvals.deny` / `mode: manual` / `command_allowlist` 做成可编辑、可版本化对象）+ **UI 层**（跨任务聚合队列，三级分类：不可逆 / 跨边界 / 对外副作用）+（P3 可选）**对外写门** |
-| C-E03 | `Idempotency-Key` 只覆盖 **API 提交面**（持久 admission、跨重启 replay、改 payload 同 key → 409）；Hermes 原生工具与对外写不承诺 |
-| C-E07 | 不承诺自动核对真实世界；恢复后列出「未结算的对外写」**逐条人工确认**，数据来自我们自己的 write-ahead 账本 |
-| C-J01 | 同一 surface 内多 viewer 可以；跨 surface 只能靠 gateway WS 的 `prompt.submit` |
-| C-K01 | 首页（不属于任何 `workspaceDir`）常驻入口按钮 → 会话页 / 配置页；两页各自 `hidden + inert` 常驻，靠按钮切换，不卸载、不 reset |
+- 多租户、账号体系、团队共享、计费。
+- 重写 Hermes Agent 或 fork Hermes。
+- 把云端会话写进本地 JSONL；云端真相源仍是 Hermes 自己的存储。
+- 桌面端保存管理密钥 / 控制台口令 / 直连 API Key。
+- 直连兜底、第二套客户端、自动降级。
+- 控制台 HTML 代理；dashboard 由桌面端直接打开。
+- 当前 P0–P5 不做 H3 工作区派活 / `local_*` 工具 / 任务邮箱；该能力保留为后续阶段。
+- 预算熔断、用量面板、语义分类器、桌面截图 / Xvfb / VNC。
 
 ---
 
-## 3. 自研范围（4 条核心）
+## 2. 总体架构
 
-### 3.1 核心 4 件
+```text
+Pi Workbench（本地）
+  │  HTTPS + 设备 token
+  ▼
+Caddy（TLS 终止）
+  │  hub.<domain>
+  ▼
+pi-workbench-gateway（Hermes kind: platform，127.0.0.1:8484）
+  ├─ 配对 / 设备 token / scope / 限流 / 审计
+  ├─ /v1/* 反向代理（含 SSE）
+  ├─ /api/config 白名单读写
+  ├─ /api/chat/image-upload、/api/fs/read-data-url（fsguard）
+  └─ loopback + API_SERVER_KEY
+        ▼
+Hermes api_server（127.0.0.1:8642）
 
-| 编号 | 做什么 | 为什么不能靠 Hermes |
-| --- | --- | --- |
-| **C-K01–K05** | 云端前端本体：首页入口、会话页、屏幕面板、审批队列、身份 | Hermes 没有「跟本地工作区同窗」的形态；这部分是纯本地资产 |
-| **C-C01** | 见 §2 表：策略层 + 审批 UI（+ P3 可选对外写门） | 命令级审批有端点，但**策略要版本化**；`write_file`/`patch` 无审批路径 |
-| **C-B01 / C-C02** | 屏幕流 + 接管：自建 CDP（`Page.startScreencast`、`Input.dispatch*`） | 云端 headless 没有桌面；两个 HTTP 面都不提供画面 |
-| **C-B03** | 审计三问：谁批的 / 依据哪条规则 / 真实结果 | Hermes 有日志与 `state.db`，没有归因视图 |
-
-审批三层落地：
-
-```
-不可逆 / 对外写  ──▶  Hermes 审批端点（pending_controls → /approval）
-                       └─ 缺幂等时才自建 MCP 执行器门（P3 可选）
-
-dangerous shell  ──▶  Hermes approvals（mode: manual + deny 下限 + allowlist）
-                       └─ 渲染成同一条审批队列里的卡片
-
-文件写入         ──▶  ❌ 无审批路径：只能靠 write safe root + 保护路径 denylist
-                       （整机权限下这是最大的缺口，S-04 记录并接受）
+dash.<domain> ── 直连 Hermes dashboard（127.0.0.1:9119），不经过插件
 ```
 
-### 3.2 降级 / 内嵌（原自研）
+### 2.1 三个面
 
-| 编号 | 曾经 | 现在 |
+| 面 | 用途 | 谁提供 |
 | --- | --- | --- |
-| C-E03 幂等 | 自研 | 接现成 `Idempotency-Key` |
-| C-B02 活动流水 | 自研聚合 | 接现成 `/v1/runs/{id}/events` |
-| C-E01 / C-G04 | 视图 | 视图（不变） |
-| C-K06 配置页 | 自研表单 | **内嵌 dashboard**（BrowserView）；只对 `approvals.deny` 等 2–3 项做增强（S-11） |
-| C-E04 预算熔断 | 客户端闸 | **删除**（v5：没有消费上限；`usage` 首期也不展示） |
+| 会话 / 轮次 / 审批 / 任务 | 驾驶舱主通道 | Hermes api_server（Bearer REST + SSE） |
+| 配置 / 密钥 / 技能 / MCP / 日志 | 配置面 | Hermes dashboard（WebContentsView 内嵌） |
+| 设备身份 / 转发 / 审计 | 唯一入口 | 新网关插件 |
 
-### 3.3 本地侧必须先做的改造
-
-**顶层入口**：`PanelId` 是固定 union（`files | git | chat | terminal`），`panelStore` 按 `workspaceDir` 索引。云端**不是再加一个 panel**，而是与工作区并列的**独立页面**：
-
-- 首页有常驻入口按钮（首页不属于任何 `workspaceDir`，状态归属要么放独立 store，要么归 `cloudStore`）；
-- 会话页与配置页彼此独立，靠按钮切换；切走只 `hidden + inert`，不卸载、不 reset（与多工作区同规则）；
-- 拆窗（`auxWindow`）后置到 P4，但入口形态一开始就定。
-
-**前端隔离**：云端不复用 `ChatPanel`（1108 行）/ `chatStore`，`cloudStore` 与 `chatStore` 互不 import。parts **只对齐类型**（`text` / `thinking` / `tool` / `approval` / `clarify`），渲染组件各自实现 —— 这样事件映射表能复用，视觉不必长得一样。
-
----
-
-## 4. 接口：api_server 为主通道
-
-### 4.1 三条面取舍
-
-| 面 | 给我们什么 | 判定 |
-| --- | --- | --- |
-| **api_server（`:8642`）** | 对话（`/v1/runs` + SSE）、会话、任务、审批、澄清、幂等、能力自描述 | ✅ **会话页通道** |
-| **dashboard（`:9119`）** | 配置（`/api/config` + `/api/config/schema`）、API Keys、Skills、MCP、Logs、Analytics、备份、doctor、PTY | ✅ **配置页通道** |
-| **ACP（stdio）** | 事件形状最贴 AGENT_TRACE、`session/request_permission` | 🟡 迁移路径，不作主备通道 |
-
-**不用 OpenAI 兼容端做驾驶舱**（`/v1/chat/completions`、`/v1/responses`）：工具事件只有一个 `hermes.tool.progress`（只有开始没有结果），且**没有审批应答路径**（危险命令只落 `BLOCKED` 文本）。
-
-### 4.2 端点清单
-
-| 用途 | 端点 |
-| --- | --- |
-| 能力探测 | `GET /v1/capabilities`、`GET /health`、`GET /health/detailed` |
-| 发起一轮 | `POST /v1/runs`（body: `input`，可选 `session_id`/`instructions`/`conversation_history`；header: `Idempotency-Key`） |
-| 事件流 | `GET /v1/runs/{run_id}/events`（SSE） |
-| 状态 | `GET /v1/runs/{run_id}`（`status`、`runtime`、**`pending_controls`**；`usage` 首期不展示） |
-| 停止 | `POST /v1/runs/{run_id}/stop`（`stopping → cancelled`） |
-| **审批** | `POST /v1/runs/{run_id}/approval`（body: `request_id`=prompt_id、`execution_generation`、`choice`） |
-| 澄清 | `POST /v1/runs/{run_id}/clarify`（同上 + `answer`） |
-| 未知状态收尾 | `POST /v1/runs/{run_id}/resolve-unknown`（`admission_id`、`execution_generation`） |
-| 会话 | `GET/POST /api/sessions`、`GET/PATCH/DELETE /api/sessions/{id}`、`GET …/messages`、`POST …/fork`、`POST …/chat[/stream]` |
-| 定时任务 | `/api/jobs` CRUD + `pause`/`resume`/`run` |
-| 能力枚举 | `GET /v1/skills`、`GET /v1/toolsets`、`GET /api/model/options` |
-
-### 4.3 事件模型（SSE → parts）
-
-| SSE 事件 | 映射到 |
-| --- | --- |
-| `message.delta` | `text` part（增量） |
-| `message.interim`（`already_streamed`） | `thinking` / 进度 part（去重靠 `already_streamed`） |
-| `tool.started`（`tool`、`preview`） | `tool` part 开始（`argsSummary`） |
-| `tool.completed`（`duration`、`error`、`preview`） | `tool` part 结束（`resultPreview` 已脱敏、截断 500 字符） |
-| `tool.failed` | `tool` part 失败 |
-| `subagent.start` / `subagent.complete` | `tool` part 的子节点（委派） |
-| `run.completed` / `failed` / `cancelled` / `interrupted` | turn 终态（未闭合的 tool 一律标 `failed`） |
-| `approval.request` + `pending_controls` | **`approval` part** |
-| `clarify.request` | **`clarify` part**（问信息 ≠ 给权限） |
-
-三条限制：
-
-- **审批身份强绑定**：回执必须带 `request_id`（= `prompt_id`）+ `execution_generation`；陈旧 generation / 别人的 prompt / 已结算的 run 一律 409。**不做「批量批」**。
-- **终止态是唯一真相**：`run.completed` 只代表 run 结束；`message.interim` 不等于成功。
-- **SSE 有 keepalive**：无事件 10 秒发 `: keepalive`；自建反代必须 `proxy_buffering off`，否则流被憋住。
-
-### 4.4 会话边界
+### 2.2 两套真相源
 
 | | 本地 Agent | 云端 Agent |
 | --- | --- | --- |
-| 真相源 | 本地 `sessions/*.jsonl` + `parentId`（ADR-003，不变） | Hermes `state.db` |
-| 本地留存 | 全量 | 只有**可丢弃的 UI 缓存** |
-| 跨 surface | — | **禁止**：API 会话不能绑 CLI/TUI/Desktop/ACP/IM 的会话（`409`）；dashboard 能**看**，不能**接着聊** |
-| 断线恢复 | — | ①SSE 重连 + `GET /v1/runs/{id}` 轮询对齐 ②拉 `/api/sessions/{id}/messages` ③本地缓存在时间线上插一条**显式断线占位** |
-| 禁止 | — | 绝不写成本地 JSONL；绝不把本地 `parentId` 分支语义带进云端；**不自造事件游标** |
+| 真相源 | 本地 `sessions/*.jsonl` + `parentId`（ADR-003，不变） | Hermes 自己的会话存储 |
+| 本地留存 | 全量 | 只有可丢弃的 UI 缓存 |
+| 禁止 | — | 云端会话不写本地 JSONL；本地分支语义不进云端 |
 
-**产品含义**：Pi Workbench 会话页是**唯一对话入口**；配置页只当配置台与只读观察窗。
+### 2.3 单入口与唯一例外
 
----
-
-## 5. 部署（域名 + TLS 反代，无 SSH 隧道）
-
-### 5.1 拓扑
-
-```
-腾讯云 VPS（2 vCPU / 3.6 GB / 59 GB）— Hermes 以宿主级权限运行（含 sudo）
-├── systemd  hermes-gateway      127.0.0.1:8642   ← platform 只开 api_server
-├── systemd  hermes-dashboard    127.0.0.1:9119   ← public_url + 认证门
-├── systemd  caddy               0.0.0.0:443      ← TLS 终结 + 双 hostname
-└── sshd :22                                      ← 运维专用，不作产品通道
-
-api.example.com   → 127.0.0.1:8642   Bearer（≥32B）
-dash.example.com  → 127.0.0.1:9119   dashboard 认证
-
-本机 Pi Workbench
-├── 主进程：https://api.example.com   Bearer（safeStorage）
-└── 配置页 BrowserView：https://dash.example.com   （登录一次，cookie 持久）
-
-云控制台（主机外的唯一硬边界）：安全组只开 443 / 快照与自动备份 / provider 额度告警
-```
-
-### 5.2 两条域名的配置差异（必须配对，否则起不来）
-
-| | `api.` → `:8642` | `dash.` → `:9119` |
-| --- | --- | --- |
-| 反代 | 普通 HTTP，无 Host 校验 | **必须** `dashboard.public_url: "https://dash.example.com"`（精确主机名，禁通配） |
-| 认证 | `API_SERVER_ENABLED=true` + `API_SERVER_KEY`（≥32 字节） | **非 loopback 的 `public_url` 会强制开认证门**；无 provider 则启动即 fail-closed |
-| 额外 | `API_SERVER_CORS_ORIGINS` 仅浏览器直连需要（Electron 主进程不需要） | `dashboard.trusted_proxies`（TLS 终结者不在 loopback 时填其 IP/CIDR；拒绝 `*`、`0.0.0.0/0`） |
-| 顺序 | 无要求 | **先写 `.env` 认证 → 再写 `public_url` → 最后启服务**（顺序错拒绝启动） |
-
-**用两个子域而不是同域不同路径**：dashboard 只认 `public_url` 里那个精确主机名（挡 `dash.example.com.evil.test`）；路径前缀会给 cookie（`Path=/`）与 WS `Origin` 增加变量。
-
-### 5.3 网络前提（实测）
-
-| 实测 | 结果 | 推论 |
-| --- | --- | --- |
-| 海外 12 个节点测 `:22` | **12/12 可连** | 入站对海外可达 → LE 的 HTTP-01 / TLS-ALPN-01 能过 |
-| 本地运营商直连该 IP（22/80/443/3389） | 全超时；tracert 死在国内骨干 | **本地访问必须经代理**（或换区域 / 换 IP / 加中继） |
-| 经代理访问 | 正常 | 开发期可用；**不能假定「忘了开代理」也能用** |
-
-**证书策略**：优先 **DNS-01**（DNSPod API token）——不依赖 80/443 入站、续期稳；HTTP-01 作备选。
-
-### 5.4 反代的 4 个技术暗礁
-
-1. **WS 空闲被掐**：dashboard 的 `/api/pty` 每 20 秒发 resize keepalive；自建反代放长 `proxy_read_timeout`（≥ 300s）。
-2. **SSE 被缓冲**：必须 `proxy_buffering off` + `X-Accel-Buffering: no`。
-3. **Host / Origin**：dashboard 只认 `public_url` 的精确主机名；两个子域各配各的。
-4. **Cookie 的 `Secure`**：靠 `X-Forwarded-Proto: https` 判定；该头只接受 loopback 或 `trusted_proxies` 中的对端（Caddy 在本机时天然满足）。
-
-**为什么不用 SSH 隧道**：一把 key = 整机 shell、撤不干净、隧道内无 per-request 审计、依赖本机代理且断线要自己写状态机。SSH 保留为唯一运维入口，不作产品传输层（论证见 ADR-006）。
+- 本地 → 云端只有 `gatewayUrl + deviceToken` 这一条路。
+- 没有 token 就是没有凭据，上层明确报错；不做直连回退。
+- **唯一例外**：dashboard（`dash.<domain>`）由桌面端 `WebContentsView` 直接打开，手动登录，不经过插件。它只做配置台与只读观察窗，不作为对话入口。
 
 ---
 
-## 6. 安全边界
+## 3. 桌面端实现
 
-**威胁模型（v5 修订）**：单用户 + Hermes 有整机权限，所以**不再防「agent 提权」**，只防三件事：**防误操作**（危险动作要人点一下）、**防外泄**（密钥别进日志/上下文/公网）、**防公网扫描打进控制面**。凡是需要「绝对挡住 agent」的，只能放在**主机之外**（S-14）。
+### 3.1 页面与入口
+
+- 首页常驻「云端 Hermes」入口，不属于任何 `workspaceDir`。
+- `CloudWorkspaceView` 内含四个常驻页签：**会话 / 控制台 / 任务 / 连接**。
+- 切走只 `hidden + inert`，不卸载、不 reset。
+- 云端前端不复用 `ChatPanel` / `chatStore`；只对齐 parts 类型（`text` / `thinking` / `tool` / `approval` / `clarify`）。
+
+### 3.2 连接与配对
+
+连接页只保留：
+
+1. 网关地址（高级，默认 `https://hub.<domain>`）。
+2. 连接码输入。
+3. 「配对并连接」。
+
+支持三种输入：
+
+- 纯码：`XXXXX-XXXXX`
+- 完整链接：`https://host/#pair=CODE`
+- 查询参数：`https://host/?pair=CODE`
+
+配对流程：
+
+```text
+unconfigured
+  └─ 输入连接码 → pairing
+       ├─ 成功 → 写 connection.json → connect() → heartbeat
+       └─ 失败 → 保留输入，显示 pairing_* 错误；不写 token
+connected
+  ├─ 心跳失败 / 被撤销 → error / 提示重新配对
+  └─ 注销 → unconfigured（保留 gatewayUrl）
+```
+
+配置 `connection.json` 只有：
+
+```json
+{
+  "gatewayUrl": "https://hub.example.com",
+  "deviceToken": "enc:...",
+  "deviceScopes": ["chat", "dispatch"],
+  "deviceId": "b8235e0e-a459-4bad-95a2-5d0585a613fc",
+  "dashboardUrl": "https://dash.example.com"
+}
+```
+
+旧字段（`baseUrl` / `apiKey` / `adminKey` / `dashboardToken` / `dashboardUser` / `dashboardPassword` / 旧凭证字段）在 `config:get` 时按白名单清除。
+
+### 3.3 会话与 SSE
+
+- 主进程 `electron/cloud/client.ts` 负责 HTTPS + Bearer。
+- `POST /v1/runs` 发起一轮；`GET /v1/runs/{id}/events` 订阅 SSE。
+- `electron/cloud/map.ts` 把 SSE 映射为 parts：
+
+| SSE | parts |
+| --- | --- |
+| `message.delta` | `text` 增量 |
+| `message.interim` | `thinking` / 进度（`already_streamed` 去重） |
+| `tool.started` | `tool` 开始 |
+| `tool.completed` / `tool.failed` | `tool` 结束 / 失败 |
+| `subagent.start` / `subagent.complete` | 子代理节点 |
+| `approval.request` | `approval` 卡片 |
+| `clarify.request` | `clarify` 卡片 |
+| `run.completed` / `failed` / `cancelled` / `interrupted` | 终态；未闭合工具标失败 |
+
+三条限制：
+
+- 审批回执必须带 `request_id`（= `prompt_id`）+ `execution_generation`；不做批量批。
+- 终止态是唯一真相；`message.interim` 不等于成功。
+- SSE 必须不缓冲；Caddy `flush_interval -1`，插件加 `X-Accel-Buffering: no`。
+
+### 3.4 审批闭环
+
+- 审批卡三按钮：**一次 / 本会话 / 拒绝**；`always` 在映射层丢弃，永远不渲染。
+- 默认拒绝；超时自动拒绝；通道缺失 / 回执失败一律按 fail-closed 呈现。
+- 断流后靠 `GET /v1/runs/{id}` 的 `pending_controls` 补卡。
+- 审计 `data/cloud-agent/audit.jsonl`：
+
+```jsonc
+// 决定
+{ "at": 1793874832389, "kind": "approval", "auditId": "ap:...",
+  "runId": "run_...", "command": "≤200 字摘要", "patternKeys": ["..."],
+  "choice": "deny", "mode": "manual", "toolCallId": "call_..." }
+
+// 真实结果
+{ "at": 1793874833861, "kind": "approval_result", "auditId": "ap:...",
+  "runId": "run_...", "error": true, "exitCode": -1, "preview": "BLOCKED: ..." }
+
+// 档位变更
+{ "at": ..., "kind": "mode", "from": "manual", "to": "off" }
+```
+
+- 审计只写命令摘要 + 命中规则，不写全文、不写密钥。
+- 结果行按 `toolCallId` 与真实工具结果配对；空预览先挂住，收尾重拉历史后补。
+
+### 3.5 配置面与审批档位
+
+- 配置页用 `WebContentsView` 内嵌 dashboard；独立 partition、无 preload；用户手动登录。
+- 审批档位只用 Hermes 原生三档：`manual` / `smart` / `off`；不自造预设、不切工具集。
+- 桌面端通过网关读写策略，不直连 dashboard：
+
+```text
+GET  /api/config        → 只返回白名单子集
+PUT  /api/config        → 只接受 {"config":{"approvals":{"mode":...}}}
+```
+
+白名单子集：
+
+```json
+{
+  "approvals": { "mode": "manual", "timeout": 300 },
+  "agent": { "disabled_toolsets": ["code_execution"] },
+  "terminal": { "backend": "local" },
+  "policy": { "denyCount": 12 }
+}
+```
+
+规则：
+
+- 网关持有 dashboard 服务端凭据；设备 token 永远拿不到整份配置与密钥。
+- `PUT` 只允许 `approvals.mode` 一个键；写后读回复核；变更写审计。
+- 放宽档位（→ `off`）桌面端二次确认；收紧不确认。
+- `deny` 只回条数，不回内容。
+
+### 3.6 任务、媒体、耐久性
+
+- 任务页：`/api/jobs` 列表 + `run` / `pause` / `resume`。
+- 图片：上传走 `/api/chat/image-upload`，读回走 `/api/fs/read-data-url`，都经网关；渲染层不持凭据。
+- 耐久性：`data/cloud-agent/active-run.json` 记最近一轮；重启 / 重连后 `GET /v1/runs/{id}` 探活，还在跑就重订阅（`last_seq` 顶到 int32 上限只收新事件），先铺历史再放增量。
+- 未结算账本：`data/cloud-agent/pending-writes.json`，只做人工核对，不是云端真相。
+- 断线占位：时间线插一条显式断线标记；不把断线当成功。
+
+### 3.7 设备身份与心跳
+
+- `data/cloud-agent/device.json`：
+  - `id`：首次启动生成，只读，随每轮 `author.id = pi-workbench/<uuid>` 发给云端。
+  - `name`：系统友好名，只探测一次；用户可改，空串恢复默认。
+- `author` **只做记忆归属，不注入 prompt**；模型需要识别设备时走后续工具能力，不靠 prompt。
+- 心跳：30 秒一拍；90 秒无认证请求判离线；被撤销即停，并推 `cloud:gateway:revoked`。
+- 注销：设备可自注销，只切断自己；撤销别的设备需要管理密钥或 `admin`。
+
+### 3.8 落盘文件
+
+| 文件 | 用途 |
+| --- | --- |
+| `data/cloud-agent/connection.json` | 网关地址、设备 token（`enc:`）、scope、deviceId、dashboardUrl |
+| `data/cloud-agent/device.json` | 本机设备身份 |
+| `data/cloud-agent/device-sessions.json` | 本机会话归属（UI 用，不是云端真相） |
+| `data/cloud-agent/active-run.json` | 最近一轮，用于重启接回 |
+| `data/cloud-agent/pending-writes.json` | 未结算对外写 |
+| `data/cloud-agent/audit.jsonl` | 审批审计，追加 + fsync，永不改写 |
+
+---
+
+## 4. 配对与设备协议
+
+### 4.1 生成连接码
+
+```http
+POST /v1/devices/pairing
+X-Pi-Admin-Key: <管理密钥>
+Content-Type: application/json
+
+{}
+```
+
+成功 `201`：
+
+```json
+{
+  "code": "ABCDE-FGHJK",
+  "expiresAt": 1793938800,
+  "pairingUrl": "https://hub.example.com/#pair=ABCDE-FGHJK"
+}
+```
+
+- 只有服务器调用；管理密钥不出服务器。
+- `expiresAt` 为 Unix 秒。
+- `pairingUrl` 优先 `PI_HUB_PUBLIC_URL`；否则 `X-Forwarded-Proto` + `X-Forwarded-Host`；再否则请求 `Host`。
+- 生成失败不返回部分结果。
+
+### 4.2 消费连接码
+
+```http
+POST /v1/devices/pair
+Content-Type: application/json
+
+{
+  "code": "ABCDE-FGHJK",
+  "deviceId": "b8235e0e-a459-4bad-95a2-5d0585a613fc",
+  "name": "TChen-Legion"
+}
+```
+
+成功 `201`：
+
+```json
+{
+  "token": "pi_...",
+  "tokenPrefix": "pi_abcd",
+  "deviceId": "b8235e0e-a459-4bad-95a2-5d0585a613fc",
+  "name": "TChen-Legion",
+  "scopes": ["chat", "dispatch"],
+  "dashboardUrl": "https://dash.example.com"
+}
+```
+
+规则：
+
+- 不需要 header 凭据；码本身就是授权。
+- 码 10 位 Crockford Base32，显示 `XXXXX-XXXXX`；服务端只存 `sha256(规范化码)`。
+- TTL 600 秒；单次使用；`BEGIN IMMEDIATE` 事务内消费。
+- 限流：`/pairing` 5 次/分/IP；`/pair` 10 次/分/IP；失败也计数。
+- `scopes` 固定 `chat` + `dispatch`，**永远不返回 `admin`**；忽略客户端传的 scopes。
+- 同一 `deviceId` 再配对 = 轮换 token，旧 token 立即失效。
+- `dashboardUrl` 可选；能推导就返回；桌面端缺省按 `hub.` → `dash.` 派生。
+
+### 4.3 设备侧
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/v1/devices/me` | Device | 身份、scope、`lastSeenAt` / `online` / `onlineWindow` / `serverTime` |
+| `POST` | `/v1/devices/me/heartbeat` | Device | 心跳；刷新 `last_seen_at` |
+| `POST` | `/v1/devices/{id}/revoke` | Device 自身 / Admin | 自注销只切断自己；撤销别人要 Admin |
+| `POST` | `/v1/devices/register` | Admin | 服务器 break-glass；桌面端不调用 |
+
+`onlineWindow` 默认 90 秒。
+
+### 4.4 错误形状
+
+```json
+{ "error": { "code": "pairing_expired", "message": "连接码已过期，请在服务器重新生成" } }
+```
+
+| code | HTTP | 场景 |
+| --- | --- | --- |
+| `unauthorized` | 401 | 没有 token / token 不存在 |
+| `device_revoked` | 401 | token 已注销 |
+| `scope_required` | 403 | scope 不足 |
+| `admin_required` | 403 | 管理接口缺少管理密钥 |
+| `invalid_params` | 400 | 字段缺失 / 格式错误 |
+| `pairing_not_found` | 404 | 码不存在 |
+| `pairing_expired` | 410 | 码过期 |
+| `pairing_used` | 409 | 码已使用 |
+| `pairing_disabled` | 503 | 未配置管理密钥 / 配对关闭 |
+| `rate_limited` | 429 | 限流，带 `Retry-After` |
+| `path_not_allowed` | 403 | 媒体路径越权 |
+| `payload_too_large` | 413 | 请求体过大 |
+| `upstream_unavailable` | 502 | api_server 不可用 |
+| `upstream_timeout` | 504 | api_server 超时 |
+| `not_found` | 404 | 未知路由 / 不在代理白名单 |
+| `internal` | 500 | 未预期异常 |
+
+### 4.5 安全参数
+
+| 项 | 值 |
+| --- | --- |
+| 码熵 | 10 位 Crockford Base32，约 50 bit |
+| TTL | 600 秒 |
+| 使用次数 | 1 次，事务内消费 |
+| 存储 | `sha256(规范化码)`，不存明文 |
+| 设备 token | `pi_<base64url(32B)>`；服务端只存 hash + 前缀 |
+| scope | `chat` / `dispatch`；`admin` 单独签发，桌面端永远没有 |
+| 传输 | HTTPS；loopback 例外 |
+| 日志 | 永不记录 code / token / Authorization / 管理密钥 |
+
+---
+
+## 5. 网关插件
+
+### 5.1 仓库与硬约束
+
+```text
+仓库：pi-workbench-gateway
+插件 id：pi-workbench-gateway
+类型：Hermes kind: platform
+版本：0.1.0
+```
+
+目录：
+
+```text
+pi-workbench-gateway/
+  plugin.yaml
+  __init__.py              # register(ctx) → shim
+  shim.py                  # 唯一接触 Hermes 插件 API
+  adapter.py               # connect / disconnect
+  config.py                # 唯一读取环境变量
+  hub/                     # 纯 stdlib，不知道 Hermes 存在
+    server.py              # ThreadingHTTPServer + 生命周期
+    router.py
+    routes/{health,pairing,devices,proxy,policy}.py
+    db.py
+    auth.py
+    pairing.py
+    ratelimit.py
+    audit.py
+    errors.py
+    upstream.py
+    fsguard.py
+  tests/
+  .github/workflows/ci.yml
+  README.md
+  LICENSE
+```
+
+硬约束：
+
+- 只有 `shim.py` / `adapter.py` 接触 Hermes 插件 API。
+- 只有 `config.py` 读 `os.environ`。
+- 只用 Python 标准库：`http.server`、`http.client`、`sqlite3`、`threading`、`secrets`。
+- 不引入 FastAPI / aiohttp / uvicorn。
+- 服务跑在 daemon 线程；插件异常不能打穿 gateway 主进程。
+- SQLite：WAL、`busy_timeout=5000`、每线程独立连接、事务写。
+- 不 `import hermes` 内部模块；上游只走 loopback HTTP。
+
+### 5.2 `plugin.yaml`
+
+```yaml
+name: pi-workbench-gateway
+label: Pi Workbench Gateway
+kind: platform
+version: 0.1.0
+manifest_version: 2
+api_version: 1
+author: Pi Workbench
+license: MIT
+description: The only entry between Pi Workbench and this Hermes profile.
+requires_hermes: ">=0.22.6"
+python_dependencies: []
+
+requires_env:
+  - name: PI_HUB_ADMIN_KEY
+    description: "Admin key for pairing codes and device management"
+    prompt: "Pi Workbench gateway admin key"
+    password: true
+    secret: true
+
+optional_env:
+  - name: PI_HUB_PUBLIC_URL
+    description: "Public gateway URL, e.g. https://hub.example.com"
+    prompt: "Public gateway URL"
+    password: false
+  - name: PI_HUB_PUBLIC_DASHBOARD_URL
+    description: "Public dashboard URL (default: derived from PI_HUB_PUBLIC_URL)"
+    prompt: "Public dashboard URL"
+    password: false
+  - name: HERMES_API_BASE
+    description: "Local api_server base URL (default http://127.0.0.1:8642)"
+    prompt: "Hermes api_server base URL"
+    password: false
+  - name: PI_HUB_DASHBOARD_BASE
+    description: "Local dashboard base URL (default http://127.0.0.1:9119)"
+    prompt: "Hermes dashboard base URL"
+    password: false
+  - name: PI_HUB_HOST
+    description: "Bind host (default 127.0.0.1; keep loopback)"
+    prompt: "Gateway bind host"
+    password: false
+  - name: PI_HUB_PORT
+    description: "Listen port (default 8484)"
+    prompt: "Gateway port"
+    password: false
+  - name: PI_HUB_RATE_LIMIT
+    description: "Requests per minute per device (default 60)"
+    prompt: "Gateway rate limit"
+    password: false
+  - name: PI_HUB_FS_ROOTS
+    description: "Allowed media roots, ':'-separated"
+    prompt: "Allowed media roots"
+    password: false
+```
+
+- 不声明 `provides_tools`；当前 P0–P5 不做派活。
+- `requires_hermes` 不设上界：上游补丁版本不应阻止安装。
+- `API_SERVER_KEY` / `HERMES_DASHBOARD_SESSION_TOKEN` / `HERMES_HOME` 由 Hermes 或 systemd 提供，不进 manifest。
+- `requires_env` 缺失时的行为需 P0 实测；P0 门槛之一。
+
+### 5.3 配置
+
+| 变量 | 归属 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `PI_HUB_ADMIN_KEY` | systemd drop-in，secret | — | 生成配对码 / 管理设备；缺失 = 配对关闭 |
+| `PI_HUB_PUBLIC_URL` | systemd / 插件 | 由请求推导 | 对外地址；自举时必填 |
+| `PI_HUB_PUBLIC_DASHBOARD_URL` | 插件 | 从 public URL 推导 | 桌面端控制台地址 |
+| `HERMES_API_BASE` | 插件 | `http://127.0.0.1:8642` | Hermes api_server |
+| `PI_HUB_DASHBOARD_BASE` | 插件 | `http://127.0.0.1:9119` | dashboard 侧路 |
+| `PI_HUB_HOST` | 插件 | `127.0.0.1` | 只监听 loopback |
+| `PI_HUB_PORT` | 插件 | `8484` | |
+| `PI_HUB_RATE_LIMIT` | 插件 | `60` | 每设备每分钟 |
+| `PI_HUB_FS_ROOTS` | 插件 | profile upload/cache | 媒体白名单，`:` 分隔 |
+| `API_SERVER_KEY` | Hermes/systemd | — | 转发 `/v1/*` |
+| `HERMES_DASHBOARD_SESSION_TOKEN` | Hermes/systemd | — | 转发 `/api/config` / 图片 |
+
+管理密钥处理：
+
+- 只放 gateway systemd drop-in，不写 `.env`。
+- 启动加载后从 `os.environ` 删除，避免被子进程继承。
+- 比较用常量时间；永不进日志。
+- 威胁模型：管理密钥 ≈ 服务器管理员权限；能拿到它就等于能签发设备。
+
+### 5.4 数据模型
+
+SQLite 放 `plugin_data_dir('pi-workbench-gateway')`。
+
+```sql
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA foreign_keys = ON;
+PRAGMA busy_timeout = 5000;
+
+CREATE TABLE IF NOT EXISTS schema_meta (
+  version INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS devices (
+  device_id     TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  token_hash    TEXT NOT NULL UNIQUE,
+  token_prefix  TEXT NOT NULL,
+  scopes        TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  last_seen_at  INTEGER,
+  revoked_at    INTEGER,
+  rotated_at    INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS pairing_codes (
+  code_hash       TEXT PRIMARY KEY,
+  created_at      INTEGER NOT NULL,
+  expires_at      INTEGER NOT NULL,
+  used_at         INTEGER,
+  used_by_device  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         INTEGER NOT NULL,
+  event      TEXT NOT NULL,
+  device_id  TEXT,
+  ip         TEXT,
+  path       TEXT,
+  status     INTEGER,
+  detail     TEXT
+);
+```
+
+- token / 码只存 `sha256`。
+- 同 `deviceId` 再配对 = 更新 token + `rotated_at`，旧 token 立即失效。
+- 配对码 `BEGIN IMMEDIATE` 消费。
+- 启动清理过期码；运行中定期清理。
+- 所有时间用 Unix 秒。
+- 审计 SQLite + `audit-YYYYMMDD.jsonl` 双写；日志永不记录 code / token / Authorization。
+
+### 5.5 本地路由
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/v1/hub/health` | 无 | 网关活着就 200；`upstreamOk` 表达上游 |
+| `POST` | `/v1/devices/pairing` | Admin | 生成连接码 |
+| `POST` | `/v1/devices/pair` | 无 | 消费连接码，签发 token |
+| `GET` | `/v1/devices/me` | Device | 当前身份 |
+| `POST` | `/v1/devices/me/heartbeat` | Device | 心跳 |
+| `POST` | `/v1/devices/{id}/revoke` | Device 自身 / Admin | 注销 |
+| `POST` | `/v1/devices/register` | Admin | break-glass |
+| `GET` | `/api/config` | Device | 白名单策略子集 |
+| `PUT` | `/api/config` | Device | 只写 `approvals.mode` |
+
+`/v1/hub/health` 成功：
+
+```json
+{
+  "status": "ok",
+  "hub": "0.1.0",
+  "contractVersion": 1,
+  "features": ["pairing", "heartbeat", "policy", "media"],
+  "upstream": "http://127.0.0.1:8642",
+  "upstreamOk": true,
+  "upstreamVersion": "0.22.6",
+  "dashboard": "https://dash.example.com",
+  "devices": { "total": 1, "active": 1, "revoked": 0 },
+  "adminKeyConfigured": true,
+  "pairingEnabled": true,
+  "uptimeSeconds": 12
+}
+```
+
+- 网关进程活着就返回 200；上游挂了用 `upstreamOk:false`，不要用 5xx 表示网关存活。
+- `contractVersion` / `features` 供 Phase 3 握手；当前桌面端可忽略。
+
+### 5.6 认证
+
+设备 token 处理顺序：
+
+1. 取 `Authorization: Bearer pi_...`；没有 → `401 unauthorized`。
+2. `sha256(token)` 查 `devices`；不存在 → `401 unauthorized`。
+3. `revoked_at` 非空 → `401 device_revoked`。
+4. 检查 scope；不足 → `403 scope_required`。
+5. 更新 `last_seen_at`。
+6. 注入 `X-Pi-Device: <deviceId>`。
+
+管理密钥只用于：
+
+- `POST /v1/devices/pairing`
+- `POST /v1/devices/register`
+- `POST /v1/devices/{id}/revoke`（撤销别的设备）
+
+代理上游：
+
+- 删除客户端 `Authorization`、`X-Pi-Admin-Key`、客户端 `X-Pi-Device`。
+- 设置 `Authorization: Bearer <API_SERVER_KEY>`。
+- 设置 `X-Pi-Device: <deviceId>`。
+- `POST /v1/runs` 覆盖 `author` 为 `pi-workbench/<deviceId>`；幂等键加 `pi:<deviceId>:` 前缀。
+- 保留方法、query、body、`Content-Type`；过滤 hop-by-hop header。
+- 请求体上限 25MB。
+
+### 5.7 代理白名单
+
+**deny-by-default**：只代理下面列出的路径；其余 `/v1/*`、`/api/*` 返回 `404 not_found`，不做通用透传。
+
+api_server：
+
+```text
+GET  /v1/capabilities
+GET  /health/detailed
+GET  /v1/toolsets
+GET  /v1/skills
+GET  /v1/models
+POST /v1/runs
+GET  /v1/runs/{id}
+GET  /v1/runs/{id}/events        # SSE
+POST /v1/runs/{id}/stop
+POST /v1/runs/{id}/steer
+POST /v1/runs/{id}/approval
+POST /v1/runs/{id}/clarify
+POST /v1/runs/{id}/resolve-unknown
+GET  /api/sessions
+POST /api/sessions
+GET  /api/sessions/{id}
+PATCH /api/sessions/{id}
+DELETE /api/sessions/{id}
+GET  /api/sessions/{id}/messages
+POST /api/sessions/{id}/fork
+GET  /api/jobs
+POST /api/jobs
+GET  /api/jobs/{id}
+POST /api/jobs/{id}/run
+POST /api/jobs/{id}/pause
+POST /api/jobs/{id}/resume
+```
+
+dashboard 侧路：
+
+| 方法 | 路径 | 处理 |
+| --- | --- | --- |
+| `GET` | `/api/config` | 只回白名单子集，绝不回整份配置 |
+| `PUT` | `/api/config` | 只接受 `approvals.mode` 最小 patch，写后读回复核 |
+| `POST` | `/api/chat/image-upload` | 透传，沿用上游大小上限 |
+| `GET` | `/api/fs/read-data-url` | `fsguard` 白名单 + `realpath` |
+
+`/api/fs/read-data-url`：
+
+- `realpath` 解析。
+- 只允许 `PI_HUB_FS_ROOTS` 下文件。
+- 拒绝符号链接逃逸、路径穿越。
+- 失败 `403 path_not_allowed`。
+
+### 5.8 SSE
+
+- 不设置 `Content-Length`。
+- 每个 chunk 立即 flush。
+- 透传 `Last-Event-ID`。
+- 响应头 `X-Accel-Buffering: no`。
+- `Accept-Encoding: identity`，不压缩。
+- 上游断开 / 客户端断开都要正确收尾。
+- Caddy `flush_interval -1`。
+- SSE 并发上限 2 / 设备；空闲超时 15 分钟。
+
+### 5.9 限流
+
+- 设备 token：默认 60 次/分钟。
+- `/pairing`：5 次/分钟/IP。
+- `/pair`：10 次/分钟/IP。
+- 健康检查不计入。
+- 超限 `429 rate_limited` + `Retry-After`。
+- Caddy 后取真实 IP：只信本机反代传入的 `X-Forwarded-For` 最后一跳。
+
+### 5.10 审计
+
+事件：
+
+```text
+pairing.created
+pairing.consumed
+pairing.failed
+device.registered
+device.rotated
+device.revoked
+auth.failed
+config.read
+config.write
+proxy.completed
+proxy.upstream_error
+```
+
+每条只记录：时间、事件、`deviceId`、IP、路径、状态码、结果类别。
+
+**永不记录**：code、token、Authorization、请求正文、管理密钥、配置密钥。
+
+落盘：
+
+- SQLite `audit_events`
+- `audit-YYYYMMDD.jsonl`
+- 日志轮转 / 清理策略在 P4 定稿。
+
+---
+
+## 6. 权限与安全
+
+单用户前提；Hermes 拿整机权限（含 sudo），所以**不防 agent 提权**，只防三件事：
+
+1. **防误操作**：危险动作要人点一下。
+2. **防外泄**：密钥不进日志、上下文、公网。
+3. **防公网扫描打进控制面**。
 
 | 编号 | 边界 | 落地 |
 | --- | --- | --- |
-| S-01 | 云端 Agent 在独立 VPS 内，本地只走协议 | 控制面 = 两个 loopback 服务 + TLS 反代 + 身份门；安全组零入站（除 443）；SSH 不作产品通道。**主机内不做用户隔离**（v5） |
-| S-02 | 云端 Agent **零本地能力** | Pi Workbench 不实现 ACP，不通告 `fs/*`、`terminal/*` |
-| S-03 | 凭据不进模型上下文、不进本地日志 | Bearer / dashboard 会话存 safeStorage、渲染层永不持凭据；**云端 `.env` 对 agent 可读是已知且接受的**（同用户，v5）→ 靠输出 redactor + provider key 可轮换降爆炸半径 |
-| S-04 | 不可逆操作必须人工批准 | ①容器后端整层关审批 → **不用**；②`write_file`/`patch` 无审批路径（整机权限下最危险，接受）；③`execute_code` 必须禁用；④回执必须带 `request_id` + `execution_generation`，不做批量批 |
-| S-05 | 审批 fail-closed | 超时 / 通道缺失即 deny，同一轮不自动重试 |
-| ~~S-07~~ | ~~预算到线即停~~ | **已删（v5）**：没有消费上限，不做预算熔断 |
-| S-08 | 控制台不得成为提权通道 | 控制台的「直接操作」也走同一审计流；**不提供 `allow_always`**（会写永久白名单） |
-| S-09 | 关键配置变更要被发现 | 钉 `config.yaml` / `SOUL.md` / `approvals` 的哈希，变更即告警 + **一键还原到版本化副本**。强度是「事后发现」，不是「事前拦截」（v5 下调） |
-| S-10 | 遥测默认关闭 | 不装遥测插件；复核第三方 MCP 出网 |
-| S-11 | 审批策略要版本化 | `approvals.deny` 与允许清单落盘 `cloud/hermes-profile/`，有 diff 与回滚。**agent 与 daemon 同用户，能自己改**（v5 承认）→ 靠 S-09 告警 + 定时核对还原 |
-| S-12 | 两个暴露面分开治理 | `api.` = Bearer（≥32B）+ 反代限速；`dash.` = 认证门 + 建议 IP 白名单（Basic 官方明确不适合裸奔公网，需配 OAuth 或前置身份代理） |
-| S-13 | 密钥轮换 | `API_SERVER_KEY` 与 dashboard 密码支持热换（改 `.env` → 重启对应服务）；轮换记录进审计 |
-| **S-14** | **硬边界只能在主机外** | 腾讯云**安全组**（唯一入站白名单）；**云快照 + 自动备份**（搞坏了能回滚）；**provider 侧额度告警**（删掉预算熔断后唯一的花钱防线）。这三样 agent 触达不到 |
-| **S-15** | **deny 清单要覆盖「系统级」而非只覆盖「破坏性」** | `approvals.deny` 必须包含 `*sudo*`、`*systemctl*`、`*crontab*`、`*authorized_keys*`、`*iptables*`、`*ufw*`、`*useradd*`、`*chmod*777*` 等；它们都是 shell 命令，fnmatch 能拦 |
+| S-01 | 云端 Agent 在独立 VPS；本地只走协议 | 控制面 loopback + TLS 反代 + 设备 token；安全组只开 443；SSH 只做运维 |
+| S-02 | 云端零本地授权 | 云端只能发请求；本地动作必须由本地按白名单 + 档位 + 逐次审批授予；当前 P0–P5 不做派活 |
+| S-03 | 凭据不进模型上下文 / 日志 | 设备 token 主进程 safeStorage；管理密钥 systemd；dashboard 凭据只在网关；输出 redactor |
+| S-04 | 不可逆操作必须人工批准 | 容器后端与审批互斥，不用；`execute_code` 禁用；`write_file` / `patch` 无审批路径，接受并写进 UI；回执必须带 `request_id` + `execution_generation` |
+| S-05 | 审批 fail-closed | 超时 / 通道缺失 / 回执异常一律拒绝，不自动重试 |
+| S-08 | 控制台不得成为提权通道 | 不提供 `always`；配置写只允许 `approvals.mode` |
+| S-09 | 关键配置变更可发现 | 记录 `approvals.mode` 变更；策略版本化 / 漂移告警后置 |
+| S-10 | 遥测默认关闭 | 不装遥测；复核第三方 MCP 出网 |
+| S-11 | 审批策略可回滚 | 当前只保证「档位显示 = 服务端真值」；完整版本化 / diff / 一键还原后置 |
+| S-12 | 两个暴露面分开治理 | `hub.` = 设备 token + 限流；`dash.` = dashboard 认证 + 建议 IP 白名单 |
+| S-13 | 密钥轮换 | `API_SERVER_KEY` / dashboard 凭据可轮换；轮换留审计 |
+| S-14 | 硬边界只能在主机外 | 云安全组、快照 + 自动备份、provider 额度告警 |
+| S-15 | deny 清单覆盖系统级 | 若启用 `approvals.deny`，至少覆盖 `sudo` / `systemctl` / `crontab` / `authorized_keys` / `iptables` / `ufw` / `useradd` / `chmod 777` |
 
-S-06（单用户）已删除。
+已知弱点（写进 UI，不假装没有）：
+
+- 纯 `sudo <cmd>` 不在 Hermes 危险模式表里，不会弹审批。
+- `write_file` / `patch` 没有审批路径；整机权限下可改自己的配置。
+- 没有消费上限 / 预算熔断。
+- `approvals.deny` 当前保持 Hermes 默认空；是否启用系统级 deny 清单是运维决策。
 
 ---
 
-## 7. 最小化配置（可执行清单）
+## 7. 部署与自举
 
-### 7.1 安装与 profile
+### 7.1 拓扑
 
-```bash
-# 前置：git / curl / tar / sha256sum；缺 libatomic1 时装上（PM 的 Node 需要）
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/h.sh
-bash /tmp/h.sh --skip-browser --skip-computer-use --non-interactive
-source ~/.bashrc && hermes doctor
+```text
+腾讯云 VPS
+├── systemd hermes-gateway     127.0.0.1:8642  api_server
+├── systemd hermes-dashboard   127.0.0.1:9119  dashboard（P4 起必须常驻）
+├── systemd caddy              0.0.0.0:443      TLS
+└── sshd :22                   运维专用
 
-hermes profile create pi-cloud --no-skills     # 同时得到 pi-cloud 命令别名
+hub.<domain>  → 127.0.0.1:8484  网关插件
+dash.<domain> → 127.0.0.1:9119  控制台，直连
+api.<domain>  → 可选，仅旧客户端需要；桌面端不需要公网 API
 ```
 
-> 落点：程序 `~/.hermes/hermes-agent/`、启动器 `~/.local/bin/hermes`、数据 `~/.hermes/`。`--skip-*` 会被记住，`hermes update` 不会加回来。
+### 7.2 Caddy
 
-### 7.2 `config.yaml` 最小集（`~/.hermes/profiles/pi-cloud/config.yaml`）
+```caddy
+hub.example.com {
+  reverse_proxy 127.0.0.1:8484 {
+    flush_interval -1
+  }
+}
 
-```yaml
-approvals:
-  mode: manual               # 不用 smart：判定不可复现、进不了审计
-  timeout: 120
-  cron_mode: deny
-  single_query_mode: deny
-  unattended_mode: deny
-  deny:                      # 在 yolo 与 mode off 之前生效；整机权限下要覆盖系统级（S-15）
-    - "*git push --force*"
-    - "*rm -rf*"
-    - "*curl*|*sh*"
-    - "dd if=* of=/dev/*"
-    - "*sudo*"
-    - "*systemctl*"
-    - "*crontab*"
-    - "*authorized_keys*"
-    - "*iptables*"
-    - "*ufw*"
-    - "*useradd*"
-agent:
-  disabled_toolsets: [code_execution]
-platform_toolsets:
-  api_server: [file, web, skills, terminal]   # v5：放开终端（要能接管整机）；审批靠 approvals
-terminal:
-  backend: local              # v5：不用 ssh 后端，不用容器后端（容器会关掉审批）
-skills:
-  write_approval: true        # 技能自改要过审批（建议开）
-dashboard:
-  public_url: "https://dash.example.com"
-  trusted_proxies: []         # 反代在本机 loopback 时可留空
+dash.example.com {
+  reverse_proxy 127.0.0.1:9119 {
+    transport http { read_timeout 300s }
+  }
+}
 ```
 
-### 7.3 `.env`（`~/.hermes/profiles/pi-cloud/.env`）
+- 证书优先 DNS-01，不依赖 80 入站。
+- 公网 HTTP 不允许；TLS 是设备 token 的底线。
+- 没有自有域名时可用 Tailscale / DDNS / SSH 隧道，但不是默认引导路径。
 
-```bash
-OPENROUTER_API_KEY=...        # 模型 provider，任选一个（要可轮换）
-API_SERVER_ENABLED=true
-API_SERVER_KEY=<openssl rand -base64 48>
-# dashboard 公网必配，否则 fail-closed
-HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin
-HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=<强口令>
-HERMES_DASHBOARD_BASIC_AUTH_SECRET=<openssl rand -base64 32>
-```
-
-> 该文件对 agent **可读**（同用户）→ S-03 已接受此风险；只靠「provider key 能轮换 + 输出 redactor」降爆炸半径。权限仍建议 `chmod 600`。
-
-### 7.4 整机权限（v5 取代受限用户）
-
-Hermes 与 daemon 同一用户运行，需要时给无密码 sudo（写入 `/etc/sudoers.d/pi-agent` 并在审计里记一笔）。**不要**再建 `piagent` 之类的隔离用户：
-
-- 好处：agent 真能接管服务器（装包、改服务、查日志），不需要为每个动作开洞。
-- 代价：它能改自己的 `approvals.deny` 与 `.env`（`write_file` 无审批路径）——这条已写进 S-03 / S-11 的「已知弱点」，靠 S-09 告警 + 还原、S-14 云侧兜底。
-
-### 7.5 两个 systemd 单元
+### 7.3 systemd drop-in
 
 ```ini
-# /etc/systemd/system/hermes-gateway.service
-[Service]
-User=ubuntu
-EnvironmentFile=/home/ubuntu/.hermes/profiles/pi-cloud/.env
-ExecStart=/home/ubuntu/.local/bin/pi-cloud gateway
-Restart=always
-RestartSec=5
-
-# /etc/systemd/system/hermes-dashboard.service
-[Service]
-User=ubuntu
-EnvironmentFile=/home/ubuntu/.hermes/profiles/pi-cloud/.env
-ExecStart=/home/ubuntu/.local/bin/pi-cloud dashboard --host 127.0.0.1 --port 9119 --no-open
-Restart=always
-RestartSec=10
-RestartPreventExitStatus=78     # 该主机已被别的后端占用时不要空转重启
+Environment=PI_HUB_ADMIN_KEY=...
+Environment=PI_HUB_PUBLIC_URL=https://hub.example.com
+Environment=PI_HUB_PUBLIC_DASHBOARD_URL=https://dash.example.com
+Environment=HERMES_API_BASE=http://127.0.0.1:8642
+Environment=PI_HUB_DASHBOARD_BASE=http://127.0.0.1:9119
+Environment=PI_HUB_PORT=8484
+Environment=PI_HUB_HOST=127.0.0.1
 ```
 
-### 7.6 反代（Caddy 示例）
+- 管理密钥不写 `.env`。
+- dashboard 凭据由 Hermes/systemd 提供；网关只读。
+- 插件加载后从环境删除管理密钥。
 
-```caddyfile
-api.example.com {
-    reverse_proxy 127.0.0.1:8642 {
-        flush_interval -1          # SSE 不缓冲
-    }
-}
-dash.example.com {
-    reverse_proxy 127.0.0.1:9119 {
-        transport http { read_timeout 300s }   # WS 长连接
-    }
-}
-```
+### 7.4 自举 Prompt
 
-证书：`tls { dns dnspod {env.DNSPOD_API_TOKEN} }`（DNS-01，不依赖 80 入站）。
+[hermes-bootstrap-prompt.md](./hermes-bootstrap-prompt.md) 是运行期资产，应用连接页「复制自举 Prompt」直接内联。
 
-### 7.7 云控制台兜底（S-14，必做）
+目标流程（Phase 3 完成）：
 
-| 项 | 配置 |
+1. 判断现状：hub / dash / 插件 / 管理密钥 / 端口。
+2. 必要时配置域名、Caddy、TLS。
+3. 安装 `pi-workbench-gateway`（仓库地址由 `{{PLUGIN_REPO}}` 注入，不钉版本）。
+4. 配置 `PI_HUB_ADMIN_KEY`、`PI_HUB_PUBLIC_URL`、`PI_HUB_PUBLIC_DASHBOARD_URL`。
+5. 启用插件并验证 health / 401 / dashboard。
+6. 调 `/v1/devices/pairing` 生成连接码，返回 `pairingUrl` 和操作提示；**不再写凭证文件、不再 scp**。
+
+### 7.5 回滚
+
+- 插件坏了：修插件或降级；停用插件 = 云端功能整体不可用，明确报错。
+- 代码里没有本地直连回退；这是刻意选择。
+- VPS 改动前备份 `config.yaml` / `.env` / `plugins/` / `plugin-data/`；回滚按备份恢复。
+
+---
+
+## 8. 测试与验收
+
+### 8.1 测试层
+
+| 层 | 内容 |
 | --- | --- |
-| 安全组 | 入站只开 443（源 0.0.0.0/0）；SSH 22 改为只允许固定运维 IP（平时关闭） |
-| 快照 | 开自动快照（日）+ 动手前手动快照；恢复演练一次 |
-| provider 额度 | 在 provider 侧设消费告警（删了预算熔断后这是唯一的花钱防线） |
+| 插件单元 | 配置默认值、码生成、规范化、哈希、消费、过期、重放、并发、token 轮换、撤销、限流、审计脱敏、fsguard |
+| 插件集成 | 假 api_server / dashboard：方法、query、body、鉴权头替换、SSE 分块、错误映射、大请求体、路径穿越 |
+| 契约 | 配对、me、heartbeat、revoke、health、capabilities、sessions、runs + SSE |
+| 桌面端 | `tests/cloud-*.test.ts`；当前 151 文件 / 1779 用例 |
+
+命令：
+
+```bash
+# 插件
+python -m unittest discover -s tests -t . -v
+hermes plugins validate .
+hermes doctor . --ci
+
+# 应用
+npm run type-check
+npm test
+npm run lint
+npm run build
+```
+
+本机没有 `hermes` 可执行文件；`plugins validate` / `doctor` 需要 VPS 或 Hermes 环境。
+
+### 8.2 Gate
+
+**G0（插件骨架 + 只读代理）**：
+
+```bash
+curl -s https://hub.example.com/v1/hub/health
+curl -s -o /dev/null -w '%{http_code}' https://hub.example.com/v1/capabilities          # 401
+curl -s -H "Authorization: Bearer pi_<token>" https://hub.example.com/v1/capabilities    # 200
+curl -s -X POST -H "X-Pi-Admin-Key: <key>" https://hub.example.com/v1/devices/<id>/revoke
+curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer pi_<token>" https://hub.example.com/v1/capabilities  # 401 device_revoked
+```
+
+**G1（桌面端真实联调）**：
+
+- 生成连接码 → 粘贴 → 配对成功 → 心跳正常。
+- 对话 / 工具卡 / 审批 / 插话 / 停止 / 跨重启接回 / 会话管理 / 任务页 / 图片 / 注销再配对。
+- 停插件 → UI 说「网关不可用」；只停 Hermes → UI 说「Hermes 异常」。
+- 审计能对上 `deviceId` / 路径 / 状态 / IP。
+
+### 8.3 验收清单
+
+**配对**
+
+| ID | 场景 | 期望 |
+| --- | --- | --- |
+| AC-P01 | 完整链接 | 自动填网关与码，配对成功 |
+| AC-P02 | 纯码 + 默认网关 | 配对成功 |
+| AC-P03 | 成功 | token 加密落盘、立即 connected、心跳开始 |
+| AC-P04 | 过期 / 已用 / 不存在 | 对应提示，不落 token，保留输入 |
+| AC-P05 | 同设备重新配对 | 旧 token 立即失效，新 token 可用 |
+| AC-P06 | 桌面端检查 | 无管理密钥 / 旧凭证文件 / 控制台口令 |
+| AC-P07 | 注销后重新配对 | 注销只清设备凭据，网关保留 |
+| AC-P08 | 管理密钥边界 | 只在服务器；桌面端从未发送 |
+| AC-P09 | 自举 Prompt | 输出连接码链接，不写文件、不 scp |
+| AC-P10 | 旧凭证导入 | 无导入入口、无解析路径 |
+
+**网关插件**
+
+| ID | 场景 | 期望 |
+| --- | --- | --- |
+| AC-GW01 | health | 200，`upstreamOk` 正确 |
+| AC-GW02 | 生成码 | Admin 201，返回 code / expiresAt / pairingUrl |
+| AC-GW03 | 消费码 | 无凭据 201，返回 token + scopes，无 admin |
+| AC-GW04 | 重放 | 409 `pairing_used` |
+| AC-GW05 | 过期 | 410 `pairing_expired` |
+| AC-GW06 | 不存在 | 404 `pairing_not_found` |
+| AC-GW07 | 无 token 代理 | 401 `unauthorized` |
+| AC-GW08 | 撤销后 | 401 `device_revoked` |
+| AC-GW09 | 自注销 | 只能自己的 id；成功后 token 立即失效 |
+| AC-GW10 | 同设备重配对 | 旧 token 失效，新 token 可用 |
+| AC-GW11 | SSE | 文本 / 工具事件流式到达，不缓冲 |
+| AC-GW12 | 审批档位 | GET 白名单；PUT 只写 `approvals.mode` |
+| AC-GW13 | 图片 | 上传 / 读回可用；越权路径拒绝 |
+| AC-GW14 | 日志 | 不含 code / token / Authorization |
+| AC-GW15 | 部署 | 域名 + Caddy 后 G0 全绿 |
+| AC-GW16 | 桌面联调 | 配对 → 连接 → 对话 → 注销 → 再配对 |
+
+**桌面端云端功能**
+
+| ID | 场景 | 状态 |
+| --- | --- | --- |
+| AC-01 | 冷启动列会话 | 已完成 |
+| AC-02 | 发指令 + 流式 + 停止 | 已完成 |
+| AC-03 | 审批拒绝 | 已完成 |
+| AC-04 | 审批超时自动拒绝 | 已完成 |
+| AC-05 | CDP 屏幕 / 接管 | 后置 |
+| AC-06 | 断线 / 重启状态一致 | 已完成 |
+| AC-07 | 断线补齐 + attach | 已完成 |
+| AC-08 | 会话 / 配置两页切换 | 已完成 |
+| AC-09 | 幂等键 | 已完成 |
+| AC-10 | 未结算账本核对 | 已完成 |
+| AC-11 | 云端零本地文件能力 | 已完成 |
+| AC-12 | 与工作区隔离 | 已完成 |
+| AC-13 | 拆窗 | 后置 |
+| AC-14 | Hermes 升级保留数据 | 待验收 |
+| AC-15 | 无遥测 / 出网复核 | 待验收 |
+| AC-16 | 审批不被后端关闭 | 部分满足（纯 sudo 不问） |
+| AC-17 | `execute_code` 禁用 | 已完成 |
+| AC-18 | 策略可回滚 | 降级为「档位显示 = 真值」 |
+| AC-19 | 反代穿透：SSE / WS / Host | 待新插件验证 |
+| AC-20 | surface 隔离 | 已完成 |
+| AC-21 | 软限制被破坏可发现 | 后置 |
+| AC-22 | 整机权限真能用 | 已完成 |
 
 ---
 
-## 8. 验收场景
+## 9. 路线与工作量
 
-| 编号 | 场景 | 通过标准 |
-| --- | --- | --- |
-| AC-01 | 冷启动接通 | 首页 → 点「云端 Hermes」→ **会话页** 3 秒内列出会话（`/api/sessions`） |
-| AC-02 | 发一条指令 | `POST /v1/runs` → SSE 流式文本 + 工具卡；停止按钮命中 `/stop` |
-| AC-03 | 审批（命令级） | 危险命令 → 本地弹卡片 → **拒绝** → run 继续但不重试 → 审计有记录 |
-| AC-04 | 审批超时 | 不响应 → 自动 deny，agent 收到拒绝并停下，审计有记录 |
-| AC-05 | 屏幕 | 能持续看到云端**浏览器**画面（CDP screencast），≤ 2 秒延迟（P3） |
-| AC-06 | 恢复与状态一致 | 断线/重启控制台后重连 → 用 `GET /v1/runs/{id}` 对齐状态 → 与 Hermes 一致 |
-| AC-07 | 断线补齐 | 拔网 1 分钟 → 恢复后 ①无重复渲染 ②时间线有一条显式断线占位 ③进行中的 run 能 attach 回去 |
-| AC-08 | **两页切换**（原预算熔断，v5 改用途） | 会话页 ↔ 配置页 经按钮切换：切走只 `hidden + inert`，**不卸载**；会话页带滚动位置与未发送草稿回来；配置页 cookie 不丢 |
-| AC-09 | 幂等 | 同一 `Idempotency-Key` 重发 → 外部只执行一次；改 payload 同 key → 409 |
-| AC-10 | 恢复核对 | 恢复后列出未结算的对外写并逐条确认（P2） |
-| AC-11 | 零本地能力 | 云端 agent 无法读写本地任何路径（不实现 ACP，天然满足） |
-| AC-12 | 页面隔离 | 与现有工作区互不影响：切走只 `hidden` + `inert`，不卸载；云端页面不出现文件树/编辑器/终端/Diff |
-| AC-13 | 拆分窗口 | 云端页面可单独拆窗（阶段 H） |
-| AC-14 | 升级路径 | `hermes update` 后 SOUL / skills 保留、记忆不丢、`approvals` 不被静默重置 |
-| AC-15 | 遥测 | 无遥测插件；抓包确认除 LLM provider 与已登记 MCP 外无外发 |
-| AC-16 | 审批不被后端关掉 | 当前配置下危险命令**必须**弹审批；`terminal.backend` 被改成容器类则主动告警 |
-| AC-17 | `execute_code` 已禁用 | 让 agent 用 `execute_code` 做文件操作 → toolset 层拒绕 |
-| AC-18 | 审批策略可回滚 | 改 `approvals.deny` → 有 diff、有审计、可一键回滚 |
-| AC-19 | 反代穿透 | 经域名走完一轮：SSE 首字延迟 < 1s 且不「懋流」；`/api/pty` 空闲 5 分钟不断；`Host`/`Origin` 校验通过 |
-| AC-20 | surface 隔离 | api_server 建的会话在 dashboard Sessions 页可见，但 Chat 接管被拒（`409`），且不产生重复会话 |
-| **AC-21** | **软限制被破坏可发现**（v5） | 手工改 `config.yaml` 的 `approvals`（模似 agent 自行解锁）→ 控制台告警 + 一键还原成功；审计里有记录 |
-| **AC-22** | **整机权限可用**（v5） | 让 agent 完成一次需要系统权限的活（如 `systemctl restart` 先被审批拦一下再放行）→ 既有审批记录也真执行成功 |
+### 9.1 已完成
 
----
+- 桌面端页面、连接、SSE、审批、dashboard、任务、媒体、耐久性、设备身份、心跳。
+- Phase 1 配对：连接码 UI / IPC / 配置收窄 / 测试。
+- 文档收口：云端方案合并为本文。
 
-## 9. 环境、闸门与工程序
+### 9.2 当前阶段：Phase 2
 
-### 9.1 D0：最小可测实例（半天）
-
-按 §7（1–7.7）顺序做完，确认只监听 loopback、两个 hostname 通、安全组与快照已就位、**不装浏览器**（`--skip-browser` 已生效）。
-
-### 9.2 D1–D2：四个 go/no-go 探针（1 天）
-
-| # | 探针 | 结论（2026-11-05/06 实测，Hermes 0.22.6） |
-| --- | --- | --- |
-| ① | `GET /v1/capabilities` 有 `run_approval` / `session_*` | ✅ 通过：`/v1/capabilities` 200 且带审批与 `session_*` 端点 |
-| ② | 危险命令是 **park**（`pending_controls` 有值）还是直接 `BLOCKED` | ✅ **park**：`approval.request`（`prompt_id` / `execution_generation` / `command` / `description` / `choices`）+ `GET /v1/runs/{id}` 的 `status: waiting_for_approval`，答复后工具才执行 |
-| ③ | `GET /api/config/schema` + `PUT /api/config` 回读 + **下个 session 是否生效** | ✅ 通过：`PUT {"config":{...}}` 走 `_deep_merge`（可只发一个键），读回一致，且 `disabled_toolsets` **立即生效**（无需重启 gateway） |
-| ④ | 双进程并存：profile 归属、端口、dashboard 能否重启 gateway | ✅ 通过：api_server `:8642` 与 dashboard `:9119` 并存；两域名反代各自可用（`dash.` 走 HTML/配置面，`api.` 走 Bearer REST/SSE） |
-
-> v4 的「`usage` 含 cache token」探针已删（不做预算熔断）。探针是一次性脚本，不入库；原始帧与回执语义见 [CLOUD_AGENT_APPROVAL](./CLOUD_AGENT_APPROVAL.md)。
-
-### 9.3 分期（9–11 周）
-
-| 期 | 目标 | 交付判据 | 工期 |
+| 阶段 | 内容 | 工期 | Gate |
 | --- | --- | --- | --- |
-| **P0 接通** ✅ | D0–D2 → 首页入口 + 两个页面骨架 → 传输（Bearer + runs）→ 事件映射 | AC-01 / AC-02 / AC-08 / AC-19 | 2 周 |
-| **P1 看得见 + 批得动** ✅（策略版本化 / 告警还原除外，见 §13） | 审批 UI（`pending_controls`）/ 审计三问 / 活动流水（接现成）/ 配置页（内嵌 dashboard） | AC-03 / AC-04 / AC-16~18 / AC-20 / AC-21 / AC-22 | 3 周 |
-| **P2 敢放着不管** | 断线占位 / run 重新 attach / 未结算清单 / jobs 视图 | AC-06 / AC-07 / AC-09 / AC-10 | 2 周 |
-| **P3 补齐缺口** | CDP 屏幕 + 接管 / Kanban 任务视图 / `clarify` 卡片 /（可选）对外写 MCP 门 | AC-05 | 2 周 |
-| **P4 收尾** | 一个 IM 渠道（如需）/ 遥测与出网复核 / 拆窗 | AC-13 / AC-15 | 1 周 |
+| **P0** | 新仓库、`plugin.yaml`、入口、配置、server 线程、`/v1/hub/health`、CI | 0.5 天 | 插件可安装 / 启用，health 200 |
+| **P1** | SQLite、配对码、设备 token、轮换、限流、审计 | 1 天 | curl 生成 → 消费 → 重放失败 → 过期失败 |
+| **P2** | Bearer、scope、`/me`、heartbeat、自注销 / 管理员注销、break-glass | 0.5 天 | token 200、无 token 401、撤销后 401 |
+| **P3** | `/v1/*` 白名单代理、SSE、错误映射、请求体上限 | 1.5 天 | 真实对话流式正常 |
+| **P4** | `/api/config` 白名单、图片、fsguard、审计完善、限流完善 | 1 天 | 档位可读可写；图片可读回；越权拒绝 |
+| **P5** | 部署、Caddy、systemd、G0、README、版本 0.1.0 | 0.5–1 天 | 干净 VPS 按 README 部署成功；G0 全绿 |
 
-### 9.4 工程序（双轨）
+合计约 **5–6 个工作日**。
 
+### 9.3 Phase 3：应用侧联调
+
+已随文档收口完成：
+
+- `src/utils/hermesPrompt.ts` 的 `PLUGIN_REPO` 指向 `pi-workbench-gateway`（仓库发布后即可安装）。
+- 自举 Prompt 改为新插件 + 一次性连接码，不写凭证文件。
+- `PROJECT_STRUCTURE` / `paths-and-storage` / `AGENT-TESTING` 的云端段落改为指向本文。
+
+仍待 Phase 2 完成后做：
+
+- 真实配对 → 对话 → 审批 → 注销 → 再配对；G1。
+- 若网关 `GET /api/config` 返回 `denyCount`，桌面端 `pickApprovalPolicy` 同步支持。
+
+### 9.4 后置
+
+| 条目 | 内容 | 原因 |
+| --- | --- | --- |
+| C-08 | CDP 屏幕 / 接管 | 需要云上常驻浏览器，运维面另算 |
+| C-09 | Kanban 投影 / clarify 建议卡片 | 依赖 C-08 |
+| C-10 | 云端页面拆窗 | 依赖 C-09 |
+| C-11 | IM 渠道 / 语音 / 出网遥测复核 | 一次性验收动作 |
+| C-12 | 对外写 MCP 门 + write-ahead 账本 | 账本已有，门是另一个量级 |
+| H3 | 工作区派活 / `local_*` 工具 / 任务邮箱 | 当前 P0–P5 明确不做；保留需求，后续单独立项 |
+
+---
+
+## 10. 关键决策摘要
+
+原 ADR 已并入本节，不再单独维护。
+
+| 决策 | 结论 |
+| --- | --- |
+| 后端 | Hermes Agent，MIT，跑在 VPS；不自研运行时、不 fork |
+| 控制面 | api_server 的 `/v1/runs` + SSE；不用 OpenAI 兼容端；ACP 只作迁移路径 |
+| 配置面 | 内嵌 dashboard，不重写 150+ 字段 |
+| 传输 | 自有域名 + Caddy TLS；SSH 只做运维 |
+| 终端 | `terminal.backend: local`；容器后端会关审批，不用 |
+| 权限 | Hermes 整机权限 + 软限制；硬边界在云控制台（安全组 / 快照 / 额度） |
+| 前端 | 两个独立页面，不复用 `ChatPanel` / `chatStore`；只对齐 parts 类型 |
+| 单入口 | 自写 Hermes 插件；不做直连兜底；dashboard 唯一例外 |
+| 设备身份 | `token → deviceId`；插件覆盖 `author`；审计带设备 |
+| 配对 | 一次性连接码；管理密钥只在服务器；桌面端固定 `chat` + `dispatch` |
+| 派活 | 目标单位是工作区，不是设备；当前 P0–P5 不做，保留为后续 |
+| 预算 | 不做预算熔断 / 用量面板；只保留 provider 额度告警 |
+
+---
+
+## 11. 文件索引
+
+### 桌面端
+
+```text
+electron/cloud/
+  client.ts        HTTPS + Bearer + 错误码
+  config.ts        connection.json 白名单 / cloudTransport
+  gateway.ts       配对 / health / whoami / revoke
+  events.ts        SSE 解析
+  map.ts           SSE → parts
+  runner.ts        run 生命周期 / pollControls / attach
+  remote.ts        runs / sessions / jobs / approval / clarify
+  policy.ts        /api/config 白名单读写
+  audit.ts         audit.jsonl
+  active-run.ts    重启接回
+  ledger.ts        未结算账本
+  media.ts         图片上传 / 读回
+  device.ts        device.json / device-sessions.json
+  heartbeat.ts     30s 心跳
+  dashboard.ts     WebContentsView dashboard
+
+src/components/
+  CloudWorkspaceView.tsx
+  CloudSessionView.tsx
+  CloudConnectionView.tsx
+  CloudConsoleView.tsx
+  CloudJobsView.tsx
+  CloudApprovalCard.tsx
+  CloudModeSwitch.tsx
+  CloudTrace.tsx
+  CloudToolCard.tsx
+  CloudSubagentCard.tsx
+  CloudClarifyCard.tsx
+  CloudDiagnosticsPanel.tsx
+  CloudLedgerDrawer.tsx
+
+src/store/cloudStore.ts
+src/api/cloud.ts
+src/types/cloud.ts
+src/types/electron.d.ts
 ```
-云端轨  D0 环境+反代+云兜底 ─▶ D1-2 四探针 ─┬─▶ P1 策略/配置页
-                                            └─▶ P3 CDP / IM 渠道
-本地轨  A 入口与两页 ─▶ B 传输 ─▶ C 事件流 ─▶ D 审批 ─▶ E 配置页接入 ─▶ F 耐久 ─▶ G 屏幕 ─▶ H 收尾
+
+### 插件（待建）
+
+```text
+pi-workbench-gateway/
+  plugin.yaml
+  __init__.py
+  shim.py
+  adapter.py
+  config.py
+  hub/
+  tests/
 ```
 
-| 阶段 | 做什么 | DoD |
-| --- | --- | --- |
-| **A 入口与两页** | 首页入口按钮（不属于任何 `workspaceDir`）；`src/components/cloud/{CloudSessionView,CloudConfigView}.tsx`；`src/store/cloudStore.ts`；两页 `hidden + inert` 切换 | 无云端也能开两页（会话页显示「未连接」、配置页显示「未配置」）；`npm test` + `lint` + design-system 绿；**可单独合入 main** |
-| **B 传输** | `electron/cloud/{http,client,config}.ts`、`electron/ipc/cloud-agent.ts`（`connect`/`disconnect`/`status`/`sessions:list`/`run:start`/`run:stop`）、preload + `types/electron.d.ts` + `src/api/cloud.ts`（含 Web mock）；连接页从交接文件导入（`handoff v1.1`：`pick → 脱敏预览 → apply`，明文只留主进程） | 能列会话、能发一轮；Bearer 存 safeStorage，渲染层无凭据 |
-| **C 事件流** | `electron/cloud/events.ts` → 对齐 parts **类型**（不复用组件）；含 `approval` / `clarify` | AC-01 / AC-02 / AC-19 |
-| **D 审批** | `electron/cloud/approval.ts`（复用 `approval-broker.ts` 语义）、`src/store/cloudApprovalStore.ts`、`data/cloud-agent/audit.jsonl`；`cloud/hermes-profile/`（config 版本化 + 哈希告警 + 还原） | AC-03 / AC-04 / AC-16~18 / AC-21 / AC-22 |
-| **E 配置页接入** | BrowserView 承载 dashboard（独立页面，非 tab）；凭据与会话隔离 | 能在配置页改配置/密钥/技能，改动可回读 |
-| **F 耐久** | run 重新 attach、断线占位、未结算清单、jobs 视图 | AC-06 / AC-07 / AC-09 / AC-10 |
-| **G 屏幕** | 帧 IPC + 面板；`Input.*` 接管 | AC-05 |
-| **H 收尾** | Kanban 视图、`clarify` 卡片、**此时才动** `PanelId` / `panelStore` 做拆窗 | AC-13 / AC-15 |
+### 文档
 
-**横切（每阶段都做）**：IPC 四步含 Web mock；i18n 中英双语；`design-system.test.ts`；JSON 落盘走 `atomic-json`（审计 JSONL 例外：追加 + fsync）；**不碰** `sessions/*.jsonl` 与 `session-git.json`；同步更新本文与 STATUS。
-
-**提交节奏**：`feat/cloud-agent-{scaffold,transport,trace,approval,config,durability}`，每段一个可独立 review 的 PR。
-
-**先不做（防范围蔓延）**：多 profile / 多 agent 并行（单 agent 闭环跑通后）· 拆窗（阶段 H）· 自建 MCP 执行器（只有确实要发信/付款时）· IM 渠道与语音（P4）· **用量展示与预算熔断（首期不管，以后再说）** · 语义分类器 / 桌面截图 / Xvfb / VNC（**永远不做**）· 重写 dashboard 配置表单（**不做**，只增强 `approvals.deny` 等 2–3 项）。
-
----
-
-## 10. 待确认
-
-| 编号 | 问题 | 现状 |
-| --- | --- | --- |
-| Q4 | 凭据是否真不进模型上下文 | ⚠ 待验证（`mcp-tokens/` 的模型可见性；S-03 已接受 `.env` 可读） |
-| Q5 | 步骤级检查点 | 🟠 无；run 是会话级 |
-| Q6 | 子代理互通 | ⚠ 待验证 |
-| Q8 | NemoClaw | 🟡 暂不引入 |
-| Q12 | 与官方 Hermes Desktop 的差异化 | 🟠 假设：同窗并列 + 本地/云端并存 + 统一审批与审计；**P0 后复核** |
-| ~~Q13~~ | 危险命令在 api 会话里是 park 还是 BLOCKED | **已回答（探针②）**：park —— 挂成待批、答复后才执行 |
-
-已答：Q1 ACP → 不作主通道；Q2 控制面 → api_server REST+SSE；Q3 多 agent → 隔离模型 + `multiplex_profiles`（P3 后）；Q7 容器后端 → 已否决；Q9 屏幕流 → CDP screencast；Q10 F03/H03 → 砍掉；Q11 用量 → v5 首期不做（也不做预算闸）；Q14 证书 → DNSPod + DNS-01，本地访问需代理。
-
----
-
-## 10.5 实施现状（2026-11-06 收口）
-
-**已交付**（[BACKLOG](../progress/BACKLOG.md) 的 C-00 – C-06，全部在 `main`）：
-
-| 分期 | 交付物 | 对应代码 |
-| --- | --- | --- |
-| 入口与页面 | 首页「云端 Hermes」入口 + 会话 / 控制台 / 任务 / 连接 四个常驻页签（切走只 `hidden` + `inert`） | `src/components/CloudWorkspaceView.tsx` |
-| 控制面 | 连接配置（`safeStorage`）、`/v1/runs` + SSE 事件映射、停止 / 插话 / clarify / 审批四个回执通道 | `electron/cloud/{config,client,events,map,remote,runner}.ts`、`electron/ipc/cloud-agent.ts` |
-| 会话与时间线 | 会话 CRUD、历史映射、工具卡 / 子代理卡 / 思考块 / 图片 / 未结算账本抽屉 | `src/components/Cloud{SessionView,Trace,ToolCard,SubagentCard,LedgerDrawer}.tsx` |
-| 审批闭环 | 审批卡（once / session / deny）+ 倒计时 + 断流补卡；审计 `data/cloud-agent/audit.jsonl`；原生档位三档切换 | [CLOUD_AGENT_APPROVAL](./CLOUD_AGENT_APPROVAL.md) |
-| 配置面 | `WebContentsView` 嵌 dashboard（独立 partition、无 preload）+ 连接页策略卡与自检面板 | `electron/cloud/{dash,dashboard}.ts`、`CloudConnectionView.tsx` |
-| 任务与导入 | 定时任务列表 / 三个动作、`hermes-handoff` 文件导入 | `CloudJobsView.tsx`、`electron/cloud/handoff.ts` |
-
-**明确后置**（不是遗漏，是排期决定；C-07 已于 2026-11-06 补齐，见下表首行）：
-
-| 条目 | 内容 | 为什么后置 |
-| --- | --- | --- |
-| ~~C-07~~ ✅ | 耐久性：run 重新 attach / 断线占位 / 未结算清单补录 | AC-06 / AC-07 / AC-09 / AC-10；**2026-11-06 补齐跨重启 attach**（`electron/cloud/active-run.ts` 记最近一轮，接回时先铺历史再放增量、只订阅新事件） |
-| C-08 | CDP 屏幕与接管（AC-05） | 需要云上常驻浏览器，运维面另算 |
-| C-09 / C-10 | Kanban 投影、云端页面拆窗 | 依赖 C-08 |
-| C-11 | IM 渠道 / 语音 / 出网遥测复核 | 一次性验收动作，不是功能 |
-| C-12 | 对外写 MCP 门 + write-ahead 账本 | 账本已能记与人工核对，门是另一个量级 |
-
-**已知盲区**（写进 UI，不假装没有）：纯 `sudo <cmd>` 与 `write_file` / `patch` 没有审批路径（Hermes 只对危险 shell 模式问）；没有消费上限；`approvals.deny` 保持 Hermes 默认空。
-
----
-
-## 11. 非目标
-
-❌ 自研云端 Agent 运行时 · ❌ fork Hermes · ❌ 把云端会话写进本地 JSONL · ❌ 多租户 / 账号体系 / 团队协作 · ❌ 把本地 Agent 迁移到云上 · ❌ 云端页面里放文件树 / 编辑器 / 终端 / Diff / 工作树切换 · ❌ 云端复用本地 `ChatPanel` / `chatStore`（只对齐 parts 类型） · ❌ 重写 dashboard 配置表单 / 技能广场 / MCP 目录 · ❌ 给 Hermes 原生工具层加幂等 · ❌ 自动核对真实世界状态 · ❌ 用 SSH 隧道作为产品传输层 · ❌ 用容器后端换取「审批 + 隔离」两全 · ❌ **主机内 OS 用户隔离**（v5：改软限制 + 云侧兜底） · ❌ **预算熔断与用量面板**（v5）。
+```text
+docs/requirements/CLOUD_AGENT.md          # 本文，唯一方案
+docs/requirements/hermes-bootstrap-prompt.md  # 运行期 Prompt
+docs/guides/AGENT-TESTING.md              # 云端 G1 手测入口
+docs/agent/paths-and-storage.md            # 落盘清单
+docs/architecture/PROJECT_STRUCTURE.md     # 代码结构 / IPC
+```
 
 ---
 
 ## 12. 变更记录
 
-| 版本 | 日期 | 变化 |
-| --- | --- | --- |
-| **C-07 补齐** | 2026-11-06 | 不回改正文：§10.5 的 C-07 由「明确后置」改为已交付（跨重启 attach：`active-run.json` + `run:attach` + 先铺历史再放增量）。剩余后置项收窄为 C-08 – C-12。 |
-| **收口** | 2026-11-06 | 不回改方案正文：新增 §10.5「实施现状」（C-00–C-06 已交付、C-07–C-12 明确后置、三条已知盲区），四个 go/no-go 探针与 Q13 回填实测结论。 |
-| **v5** | 2026-11-03 | ①删掉受限 OS 用户 `piagent` 与 `terminal.backend: ssh`，Hermes 改整机权限（含 sudo），`api_server` toolset 放开 `terminal`；隔离降为软限制 → 新增 S-14（硬边界只能在主机外）/ S-15（deny 覆盖系统级）、S-03/S-09/S-11 强度下调；②本地改**两个独立页面**（会话页 / 配置页，首页按钮进入），顶层入口提到 P0；③云端前端**不复用** `ChatPanel`/`chatStore`，只对齐 parts 类型（删掉 transcript 解耦）；④**删掉预算熔断**（C-E04 / S-07 / AC-08）与用量展示，探针 5 → 4，工期 10–12 → **9–11 周**。 |
-| v4 | 2026-11-03 | 控制面改 api_server（Bearer REST + SSE）；传输改域名 + TLS 反代（弃 SSH 隧道）；配置面改内嵌 dashboard；自研 8 → 4；surface 隔离升为铁律；补网络前提。同日精简：删选型论证（归 ADR）。 |
-
-v1–v3 的演进过程见 Git 历史与 [ADR-005](../decisions/ADR-005-cloud-agent-control-plane.md) / [ADR-006](../decisions/ADR-006-cloud-agent-api-control-plane.md) / [ADR-007](../decisions/ADR-007-cloud-agent-full-host-access.md)。
+| 日期 | 变化 |
+| --- | --- |
+| 2026-11-07 | 云端方案收口：删除旧 ADR、旧需求、旧研究报告、旧迁移手册，合并为本文；桌面端 Phase 1 完成，Phase 2 未开工 |
+| 2026-11-06 | 桌面端配对 Phase 1：连接码、`cloud:gateway:pair`、配置白名单、旧入口删除 |
+| 2026-11-06 | 云端 Agent C-00–C-06 收口；C-07 跨重启 attach；审批三档与审计真机验收 |
+| 2026-11-03 | v5：整机权限、双页面、删预算熔断；api_server 控制面 |
+| 2026-11-03 | Hermes 后端选型、api_server 控制面、dashboard 配置面、单入口插件方向确定 |

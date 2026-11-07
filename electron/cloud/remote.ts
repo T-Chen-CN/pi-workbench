@@ -408,7 +408,7 @@ export function createRemote(client: CloudClient) {
       idempotencyKey: string
     }): Promise<{ runId: string; status: CloudRunStatus }> {
       // `author` 只做记忆归属：上游 `prompt_builder.py` 不读 turn_author，
-      // 真正能影响模型判断的是 `instructions`（我们不注入，见 CLOUD_AGENT_DEVICES §3.2）。
+      // 真正能影响模型判断的是 `instructions`（我们不注入，见 CLOUD_AGENT.md §3.7）。
       // 逐轮字面量稳定，所以同 Idempotency-Key + 同 body 仍然命中幂等。
       const body: Record<string, unknown> = { input: input.input, author: deviceAuthor() }
       if (input.sessionId) body.session_id = input.sessionId

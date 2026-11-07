@@ -255,7 +255,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   })
 
   handleIpc('cloud:config:get', () => {
-    // 旧版本留下的字段（baseUrl / apiKey / 管理密钥 / 控制台口令 / handoff 记录）顺手清掉
+    // 旧版本留下的字段（baseUrl / apiKey / 管理密钥 / 控制台口令 / 旧凭证记录）顺手清掉
     pruneUnknownCloudConfig()
     const config = publicCloudConfig()
     return { success: true, config }

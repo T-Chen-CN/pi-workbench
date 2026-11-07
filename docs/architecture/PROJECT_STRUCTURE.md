@@ -34,8 +34,8 @@ pi-workbench/
 │   ├── workspace-trust.ts        # 工作区信任与路径包含
 │   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / cloud-agent / documents / files / git / settings / system / web-search* / workspace）
 │   ├── cloud/                    # 云端 Agent 主进程侧
-│   │   ├── config.ts             # 连接配置（设备 token / 控制台账号，safeStorage 加密）+ cloudTransport() 单入口
-│   │   ├── gateway.ts            # 网关：配对 / 我是谁 / 撤销 + 错误码翻译（与 core/errors.py 对齐）
+│   │   ├── config.ts             # 连接配置（网关地址 / 设备 token，safeStorage 加密）+ cloudTransport() 单入口
+│   │   ├── gateway.ts            # 网关：配对 / 我是谁 / 撤销 + 错误码翻译（与 CLOUD_AGENT 的错误码表对齐）
 │   │   ├── client.ts / remote.ts # 网关客户端与 REST 调用（会话、轮次、停止、插话）
 │   │   ├── events.ts / map.ts    # SSE 事件解析与时间线映射（含插话回执）
 │   │   ├── runner.ts             # 轮次生命周期（断流重订阅、校帧、停止兜底）
@@ -210,11 +210,8 @@ pi-workbench/
 │   │   └── index.ts              # 编辑器通用类型
 │   └── i18n/                     # 中英文文案与错误本地化
 │
-├── hermes-plugin/                # 只剩路牌：插件本体已迁到独立仓库（公开 MIT）
-│   └── README.md                 # 指向 T-Chen-CN/pi-workbench-plugin + 安装命令（不钉版本）
-│                                 # 插件形状：仓库根 = plugin.yaml / shim.py / adapter.py / config.py / core/ / tests/
-│                                 # 硬约束仍生效：core/ 纯 stdlib、不 import Hermes、传输不许换 aiohttp
-│                                 # 测试：cd <插件仓库> && python -m unittest discover -s tests -t .
+├── tests/                        # 扁平测试目录（文件名与源码同名）
+├── docs/                         # 规范原文；云端方案唯一入口是 requirements/CLOUD_AGENT.md
 │
 ├── pi-bridge/                    # Agent 桥接层（主进程内运行）
 │   ├── src/
@@ -354,7 +351,7 @@ ChatPanel.handleSubmit
 | `shell:openExternal` | invoke | 外部链接（https / http / mailto）交系统浏览器；白名单在 `electron/external-links.ts` |
 | `clipboard:writeText` | invoke | 写系统剪贴板（`pw-app://` 下 `navigator.clipboard` 不可用） |
 | `webSearch:get` / `save` | invoke | 联网搜索供应商与 Key（`safeStorage` 加密） |
-| `cloud:config:get` / `connect` / `disconnect` | invoke | 云端 Agent 连接配置（`data/cloud-agent/connection.json`，只允许 `gatewayUrl` / `deviceToken` / `deviceScopes` / `deviceId` / `dashboardUrl`；token 走 `safeStorage` 加密，渲染层只拿 `hasDeviceToken`）与连通性探测；旧字段（`baseUrl` / `apiKey` / `dashboardToken` / 管理密钥 / 控制台账号口令 / handoff 记录）在 `config:get` 时按白名单清掉 |
+| `cloud:config:get` / `connect` / `disconnect` | invoke | 云端 Agent 连接配置（`data/cloud-agent/connection.json`，只允许 `gatewayUrl` / `deviceToken` / `deviceScopes` / `deviceId` / `dashboardUrl`；token 走 `safeStorage` 加密，渲染层只拿 `hasDeviceToken`）与连通性探测；旧字段（`baseUrl` / `apiKey` / `dashboardToken` / 管理密钥 / 控制台账号口令 / 旧凭证导入记录）在 `config:get` 时按白名单清掉 |
 | `cloud:gateway:status` / `gateway:pair` / `gateway:revoke` | invoke | 云端单入口（`hub.`）三件事：`status` = 配对了没有 + scope + 上游在不在 + 本机心跳状态（未配对时**不发任何请求**）；`pair` = 一次性连接码换设备 token（`deviceId` 钉死本地 `device.json` 的 id，明文 token 只留主进程，落盘 `enc:`；不带任何管理凭据；成功后清 active-run、pokes 心跳、渲染层刷新 config 并直接重连）；`revoke` = 设备自注销并只清设备凭据（保留 `gatewayUrl` / `dashboardUrl`） |
 | `cloud:device:get` / `device:set` / `device:reprobe` | invoke | 本机设备身份（`data/cloud-agent/device.json`，启动时即建）：`get` 首次会补一次系统友好名探测（`probedAt` 后不再自动探），`set` 只改 `name`（空串 = 恢复默认名），`reprobe` 是用户显式「重新读取系统名」。`id` 只读，随每轮 `POST /v1/runs` 的 `author` 发出（只做记忆归属，**不进 prompt**） |
 | `cloud:sessions:list` / `messages:list` | invoke | 云端会话列表与历史消息（主进程直接映射成时间线片段） |
