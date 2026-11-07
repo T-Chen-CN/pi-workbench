@@ -1005,12 +1005,9 @@ curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer pi_<token>" htt
 - 自举 Prompt 改为新插件 + 一次性连接码，不写凭证文件。
 - `PROJECT_STRUCTURE` / `paths-and-storage` / `AGENT-TESTING` 的云端段落改为指向本文。
 
-验收已做（2026-11-08，结果见 §8.2）：配对 → 对话 → 审批 → 插话 → 注销 → 再配对 + 两种异常态文案，全部真实跑通；剩「停止按钮」与跨重启接回待补。
+验收已做（2026-11-08，结果见 §8.2）：配对 → 对话 → 审批 → 插话 → 注销 → 再配对 + 两种异常态文案，全部真实跑通。「停止按钮」「跨重启接回」按决定不单独立项验收。
 
-仍待做：
-
-- 停止按钮与跨重启接回的实测。
-- 若网关 `GET /api/config` 返回 `denyCount`，桌面端 `pickApprovalPolicy` 同步支持。
+已补：网关只回 `policy.denyCount`（不回 deny 内容），桌面端 `pickApprovalPolicy` 现在两种形态都认（网关的 `policy.denyCount` 优先，直连 dashboard 的 `approvals.deny` 兜底），否则过网关时永远显示 0 条。
 
 ### 9.4 后置
 

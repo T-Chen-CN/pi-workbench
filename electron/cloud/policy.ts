@@ -85,13 +85,18 @@ export function pickApprovalPolicy(config: Record<string, unknown>): CloudApprov
   const approvals = (config.approvals ?? {}) as Record<string, unknown>
   const agent = (config.agent ?? {}) as Record<string, unknown>
   const terminal = (config.terminal ?? {}) as Record<string, unknown>
+  // 网关只回条数、不回 deny 内容（`policy.denyCount`）；直连 dashboard 的形态才是
+  // `approvals.deny` 数组。两种都认，否则过网关时永远显示 0 条
+  const policyMeta = (config.policy ?? {}) as Record<string, unknown>
   const disabled = Array.isArray(agent.disabled_toolsets)
     ? agent.disabled_toolsets.map((item) => String(item ?? '')).filter(Boolean)
     : []
   return {
     mode: modeOf(approvals.mode),
     timeoutSeconds: numberOrNull(approvals.timeout),
-    denyCount: Array.isArray(approvals.deny) ? approvals.deny.length : 0,
+    denyCount:
+      numberOrNull(policyMeta.denyCount) ??
+      (Array.isArray(approvals.deny) ? approvals.deny.length : 0),
     disabledToolsets: disabled,
     terminalBackend: typeof terminal.backend === 'string' ? terminal.backend : '',
   }

@@ -111,6 +111,28 @@ describe('pickApprovalPolicy', () => {
     expect(JSON.stringify(picked)).not.toContain('sk-live')
   })
 
+
+  it('reads the count the gateway actually sends (policy.denyCount)', () => {
+    // 过网关时 deny 内容被剥掉，只剩条数：`{"policy":{"denyCount":12}}`
+    const picked = policy.pickApprovalPolicy({
+      approvals: { mode: 'manual', timeout: 300 },
+      agent: { disabled_toolsets: ['code_execution'] },
+      terminal: { backend: 'local' },
+      policy: { denyCount: 12 },
+    })
+    expect(picked.denyCount).toBe(12)
+    // 0 也要如实取，不能当成"没这个字段"退回别的来源
+    expect(policy.pickApprovalPolicy({ policy: { denyCount: 0 } }).denyCount).toBe(0)
+  })
+
+  it('prefers the gateway count when both shapes are present', () => {
+    const picked = policy.pickApprovalPolicy({
+      approvals: { mode: 'manual', deny: ['a', 'b'] },
+      policy: { denyCount: 7 },
+    })
+    expect(picked.denyCount).toBe(7)
+  })
+
   it('reports an unknown mode as null instead of guessing', () => {
     const picked = policy.pickApprovalPolicy({ approvals: { mode: 'yolo' } })
     expect(picked.mode).toBeNull()
