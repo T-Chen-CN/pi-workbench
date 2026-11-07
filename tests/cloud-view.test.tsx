@@ -1280,21 +1280,36 @@ describe('CloudConnectionView 心跳', () => {
 })
 
 describe('CloudConnectionView 配对表单', () => {
-  it('labels the last used gateway as history, not as a built-in default', async () => {
-    installBridge()
+  it('keeps the last used gateway in a labelled hint, never as a fake default', async () => {
+    installBridge({
+      config: { gatewayUrl: 'https://hub.my-own.host' },
+      // 注销后的形态：本地还留着地址，但网关侧已经没这台设备了
+      gatewayStatus: vi.fn(async () => ({
+        success: true,
+        registered: false,
+        gatewayUrl: 'https://hub.my-own.host',
+        online: true,
+      })),
+    })
     await useCloudStore.getState().hydrate()
     render(<CloudConnectionView active />)
 
-    // 注销之后地址仍在本地（重配同一台省事），但界面必须说清它是「上次用的」
-    expect(await screen.findByText(zh.cloudPairGatewayLastUsed)).toBeTruthy()
     const input = screen.getByLabelText(zh.cloudPairGatewayAdvanced) as HTMLInputElement
+    // 输入框是空的，灰字永远是示例地址——不会让人以为代码里内置了某个域名
     expect(input.value).toBe('')
     expect(input.placeholder).toBe('https://hub.example.com')
 
+    // 上次配对用的地址单独一行说清来路（带 url，不是伪装成默认值）
+    expect(
+      await screen.findByText(
+        zh.cloudPairGatewayLastUsed.replace('{url}', 'https://hub.my-own.host')
+      )
+    ).toBeTruthy()
+
     fireEvent.click(screen.getByText(zh.cloudPairGatewayUseLast))
-    await waitFor(() => expect(input.value).toBe('https://hub.example.com'))
+    await waitFor(() => expect(input.value).toBe('https://hub.my-own.host'))
     // 填进来之后这行说明就收掉，不再挡着
-    expect(screen.queryByText(zh.cloudPairGatewayLastUsed)).toBeNull()
+    expect(screen.queryByText(zh.cloudPairGatewayUseLast)).toBeNull()
   })
 })
 

@@ -864,3 +864,54 @@ describe('pairGateway', () => {
     expect(useCloudStore.getState().pairErrorCode).toBe('pairing_expired')
   })
 })
+
+describe('网关状态驱动连接状态', () => {
+  it('turns the connection red when the gateway cannot be reached', async () => {
+    const { cloudApi } = await import('../src/api/cloud')
+    vi.spyOn(cloudApi, 'gatewayStatus').mockResolvedValue({
+      success: false,
+      registered: false,
+      gatewayUrl: 'https://hub.example.com',
+      error: '连不上网关：连接被关闭（ERR_CONNECTION_CLOSED）',
+    } as never)
+    useCloudStore.setState({ connection: 'connected', error: null, gatewayError: null })
+
+    await useCloudStore.getState().loadGateway()
+
+    // 右上角的状态灯不能还挂着"已连接"
+    expect(useCloudStore.getState().connection).toBe('error')
+    expect(useCloudStore.getState().error).toContain('ERR_CONNECTION_CLOSED')
+  })
+
+  it('turns the connection red when the hub is up but Hermes is not', async () => {
+    const { cloudApi } = await import('../src/api/cloud')
+    vi.spyOn(cloudApi, 'gatewayStatus').mockResolvedValue({
+      success: true,
+      registered: true,
+      gatewayUrl: 'https://hub.example.com',
+      online: false,
+    } as never)
+    useCloudStore.setState({ connection: 'connected', error: null })
+
+    await useCloudStore.getState().loadGateway()
+
+    expect(useCloudStore.getState().connection).toBe('error')
+    expect(useCloudStore.getState().error).toContain('Hermes 没响应')
+  })
+
+  it('clears the error once the gateway and upstream are both healthy again', async () => {
+    const { cloudApi } = await import('../src/api/cloud')
+    vi.spyOn(cloudApi, 'gatewayStatus').mockResolvedValue({
+      success: true,
+      registered: true,
+      gatewayUrl: 'https://hub.example.com',
+      online: true,
+    } as never)
+    useCloudStore.setState({ connection: 'error', error: '上一个错误' })
+
+    await useCloudStore.getState().loadGateway()
+
+    expect(useCloudStore.getState().connection).toBe('connected')
+    expect(useCloudStore.getState().error).toBeNull()
+  })
+})

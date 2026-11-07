@@ -64,6 +64,18 @@ const CODE_MESSAGES: Record<string, string> = {
   stale_generation: '审批已经过期（服务端轮次变了），请重试这一轮',
   invalid_params: '请求参数不被服务端接受',
   unknown_execution: '这一轮的结果未知（服务端进程重启过）',
+  // 网关（pi-workbench-gateway）自己的错误码：不把它的英文原句透给用户
+  upstream_unavailable: '网关在线，但云端的 Hermes 没有响应',
+  upstream_timeout: '网关在线，但云端 Hermes 响应超时',
+  device_revoked: '这台设备已被注销，在「连接」页重新配对',
+  scope_required: '当前设备权限不够，需要在云端重新授权',
+  hub_disabled: '网关没配管理密钥，配对 / 注销暂时不可用',
+  path_not_allowed: '这个路径不在网关允许的范围内',
+  payload_too_large: '请求体太大，网关拒绝了',
+  pairing_not_found: '连接码不存在，在服务器重新生成',
+  pairing_expired: '连接码已过期，在服务器重新生成',
+  pairing_used: '连接码已经被用过，在服务器重新生成',
+  pairing_disabled: '服务器没启用设备配对，检查插件配置',
 }
 
 const STATUS_MESSAGES: Record<number, string> = {
@@ -149,8 +161,36 @@ function wrapNetworkError(error: unknown): CloudApiError {
   if (name === 'AbortError' || name === 'TimeoutError') {
     return new CloudApiError('timeout', TIMEOUT_MESSAGE)
   }
-  const raw = error instanceof Error ? error.message : String(error)
-  return new CloudApiError('network', `${NETWORK_MESSAGE}：${raw}`)
+  return new CloudApiError('network', `${NETWORK_MESSAGE}：${networkFailureText(error)}`)
+}
+
+/** Chromium 的 net 错误码 → 人话。保留原码在后括号里，排查还得靠它 */
+const NET_ERROR_TEXT: Record<string, string> = {
+  ERR_CONNECTION_CLOSED: '连接被关闭',
+  ERR_CONNECTION_REFUSED: '连接被拒绝，服务可能没在运行',
+  ERR_CONNECTION_RESET: '连接被重置',
+  ERR_CONNECTION_TIMED_OUT: '连接超时',
+  ERR_TIMED_OUT: '连接超时',
+  ERR_NAME_NOT_RESOLVED: '域名解析失败',
+  ERR_INTERNET_DISCONNECTED: '本机没有网络',
+  ERR_NETWORK_CHANGED: '网络切换中断了请求',
+  ERR_PROXY_CONNECTION_FAILED: '代理连不上',
+  ERR_TUNNEL_CONNECTION_FAILED: '代理隧道建立失败',
+  ERR_ADDRESS_UNREACHABLE: '地址不可达',
+  ERR_SSL_PROTOCOL_ERROR: 'TLS 握手失败',
+  ERR_CERT_AUTHORITY_INVALID: '证书不受信任',
+  ERR_CERT_COMMON_NAME_INVALID: '证书和域名不匹配',
+  ERR_CERT_DATE_INVALID: '证书已过期或未生效',
+}
+
+/** 把 `net:ERR_CONNECTION_CLOSED` 这类底层串译成可读文案（含原码） */
+export function networkFailureText(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? '')
+  const match = /(?:net:)?(ERR_[A-Z_]+)/.exec(raw)
+  if (!match) return raw
+  const code = match[1]
+  const friendly = NET_ERROR_TEXT[code]
+  return friendly ? `${friendly}（${code}）` : raw
 }
 
 export interface CloudRequestInit {

@@ -895,6 +895,20 @@ curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer pi_<token>" htt
 - 停插件 → UI 说「网关不可用」；只停 Hermes → UI 说「Hermes 异常」。
 - 审计能对上 `deviceId` / 路径 / 状态 / IP。
 
+**G1 实测结果（2026-11-08，TChen-Legion）**：
+
+| 项 | 结果 |
+| --- | --- |
+| 配对 / 心跳 / 注销再配对 | ✅ `device.revoked` → `pairing.consumed` → `device.registered`，心跳恢复 |
+| 对话 + SSE 逐字 | ✅ `POST /v1/runs` 202 → `GET /events` 200，UI 逐字出字 |
+| 工具卡 + 审批回执 | ✅ `POST /runs/<id>/approval` 200；`rm -rf` 真实执行（退出码 0） |
+| 插话 steer | ✅ 中途「改成只数到 5」→ run 收尾 `output: 1..5` |
+| 断网 / 上游挂着 | ✅ 停 Caddy →「连不上网关：连接被关闭（ERR_CONNECTION_CLOSED）」；上游指向死端口 →「网关在线，但云端的 Hermes 没有响应」+ 网关卡「已配对，但云端 Hermes 没响应」 |
+| 审计 | ✅ 每条都带 `deviceId` / 路径 / 状态 / IP，无凭据泄漏 |
+| 停止按钮 | ⬜ 未验（下次补） |
+
+> 坑：`approvals.mode: manual` **不是**“每个工具都问”——Hermes 只看 `detect_dangerous_command()`（`rm -rf` / `dd of=/dev/*` / `kill -1` 这类），`seq`/`for` 这类安全命令直接放行。测审批要用会命中危险模式的命令，否则看不到卡。
+
 ### 8.3 验收清单
 
 **配对**
@@ -991,9 +1005,11 @@ curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer pi_<token>" htt
 - 自举 Prompt 改为新插件 + 一次性连接码，不写凭证文件。
 - `PROJECT_STRUCTURE` / `paths-and-storage` / `AGENT-TESTING` 的云端段落改为指向本文。
 
-仍待 Phase 2 完成后做：
+验收已做（2026-11-08，结果见 §8.2）：配对 → 对话 → 审批 → 插话 → 注销 → 再配对 + 两种异常态文案，全部真实跑通；剩「停止按钮」与跨重启接回待补。
 
-- 真实配对 → 对话 → 审批 → 注销 → 再配对；G1。配对 / 心跳 / 撤销 / 代理 / 媒体 / 配置面已真机验证，仍缺真实 run 创建、SSE 逐字与审批回执的端到端。
+仍待做：
+
+- 停止按钮与跨重启接回的实测。
 - 若网关 `GET /api/config` 返回 `denyCount`，桌面端 `pickApprovalPolicy` 同步支持。
 
 ### 9.4 后置

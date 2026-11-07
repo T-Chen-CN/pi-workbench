@@ -369,7 +369,7 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                     value={pairGatewayDraft}
                     spellCheck={false}
                     autoComplete="off"
-                    placeholder={lastGateway || PLACEHOLDER_GATEWAY_URL}
+                    placeholder={PLACEHOLDER_GATEWAY_URL}
                     onChange={(event) => {
                       setPairGatewayDraft(event.target.value)
                       setPairInputError(null)
@@ -377,7 +377,9 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                   />
                   {lastGateway && !pairGatewayDraft.trim() && (
                     <span className="flex items-center gap-2">
-                      <Caption className="text-ink-subtle">{t('cloudPairGatewayLastUsed')}</Caption>
+                      <Caption className="break-all text-ink-subtle">
+                        {t('cloudPairGatewayLastUsed', { url: lastGateway })}
+                      </Caption>
                       <Button
                         size="sm"
                         variant="ghost"

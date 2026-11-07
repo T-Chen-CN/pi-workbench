@@ -11,7 +11,7 @@
  */
 
 import { net } from 'electron'
-import { CloudApiError, cloudErrorMessage } from './client.js'
+import { CloudApiError, networkFailureText } from './client.js'
 import { normalizeBaseUrl } from './url.js'
 
 export interface GatewayDevice {
@@ -140,7 +140,7 @@ async function call<T>(
     if (name === 'AbortError') {
       throw new CloudApiError('timeout', '网关没有按时响应')
     }
-    throw new CloudApiError('network', `连不上网关（${cloudErrorMessage(error)}）`)
+    throw new CloudApiError('network', `连不上网关：${networkFailureText(error)}`)
   } finally {
     clearTimeout(timer)
   }

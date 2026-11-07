@@ -1082,14 +1082,24 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   async loadGateway() {
     const status = await cloudApi.gatewayStatus()
     if (!status.success) {
-      set({ gatewayError: status.error ?? 'unknown' })
+      const message = status.error ?? 'unknown'
+      // 连不上网关就是端到端不可用：顶部的连接状态得跟着变，
+      // 否则会出现“网关卡报连不上、右上角还挂着绿灯”
+      set({ gatewayError: message, connection: 'error', error: message })
       return
     }
+    // 网关在线但上游 Hermes 没响应：同样不算“已连接”（B 阶段实测过的场景）
+    const upstreamDown = Boolean(status.registered) && status.online === false
     set({
       gateway: status,
       gatewayError: null,
       // 主进程把心跳状态一起带回来：错过推送 / 页面重开也能看到「已注销」
       ...(status.heartbeat ? { heartbeat: status.heartbeat } : {}),
+      ...(upstreamDown
+        ? { connection: 'error' as const, error: '云端 Hermes 没响应（网关在线）' }
+        : status.registered
+          ? { connection: 'connected' as const, error: null }
+          : {}),
     })
   },
 
