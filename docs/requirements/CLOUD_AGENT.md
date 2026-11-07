@@ -474,14 +474,17 @@ optional_env:
 - 不声明 `provides_tools`；当前 P0–P5 不做派活。
 - `requires_hermes` 不设上界：上游补丁版本不应阻止安装。
 - `API_SERVER_KEY` / `HERMES_DASHBOARD_SESSION_TOKEN` / `HERMES_HOME` 由 Hermes 或 systemd 提供，不进 manifest。
-- `requires_env` 缺失时的行为需 P0 实测；P0 门槛之一。
+- `requires_env` 缺失时的行为已实测（0.22.6）：安装结束时会逐个交互提示，答案由 Hermes 写进
+  `<profile>/.env`；进程环境或 `.env` 里已有的变量不再问。`requires_env` 声明成纯字符串时提示读 stdin
+  （可管子进去），声明成 `{name, secret: true}` 则走遮罩输入、需要 TTY。源码位置与完整结论见插件仓库
+  `docs/HERMES_PLUGIN_API.md` §5.1。
 
 ### 5.3 配置
 
 | 变量 | 归属 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `PI_HUB_ADMIN_KEY` | systemd drop-in，secret | — | 生成配对码 / 管理设备；缺失 = 配对关闭 |
-| `PI_HUB_PUBLIC_URL` | systemd / 插件 | 由请求推导 | 对外地址；自举时必填 |
+| `PI_HUB_ADMIN_KEY` | `<profile>/.env`（安装时 `requires_env` 提示写入），secret | — | 生成配对码 / 管理设备；缺失 = 配对关闭 |
+| `PI_HUB_PUBLIC_URL` | `.env` / 插件 | 由请求推导 | 对外地址；自举时必填 |
 | `PI_HUB_PUBLIC_DASHBOARD_URL` | 插件 | 从 public URL 推导 | 桌面端控制台地址 |
 | `HERMES_API_BASE` | 插件 | `http://127.0.0.1:8642` | Hermes api_server |
 | `PI_HUB_DASHBOARD_BASE` | 插件 | `http://127.0.0.1:9119` | dashboard 侧路 |
@@ -494,8 +497,12 @@ optional_env:
 
 管理密钥处理：
 
-- 只放 gateway systemd drop-in，不写 `.env`。
-- 启动加载后从 `os.environ` 删除，避免被子进程继承。
+- **落盘位置就是 `<profile>/.env`**：`hermes plugins install` 的 `requires_env` 提示直接写进去，
+  和这台机器上的 `API_SERVER_KEY`、dashboard basic auth 同一处。没有理由再发明一套 drop-in 存放方式。
+- gateway 启动时由 `hermes_cli/env_loader.load_hermes_dotenv` 把 `.env` 装进 `os.environ`，插件只读进程环境。
+- 启动加载后从 `os.environ` 删除，缩小被子进程顺走的面积；**但这不是保密手段**——Hermes 的子进程会自己
+  重载 `.env`。保密靠 `.env` 的文件权限与"永不回显、永不进日志"。
+- 热重载（不重启服务）时密钥已被抹除，该次注册视为"未配置"；重启服务即可。
 - 比较用常量时间；永不进日志。
 - 威胁模型：管理密钥 ≈ 服务器管理员权限；能拿到它就等于能签发设备。
 
@@ -801,21 +808,16 @@ dash.example.com {
 - 公网 HTTP 不允许；TLS 是设备 token 的底线。
 - 没有自有域名时可用 Tailscale / DDNS / SSH 隧道，但不是默认引导路径。
 
-### 7.3 systemd drop-in
+### 7.3 环境变量落在哪
 
-```ini
-Environment=PI_HUB_ADMIN_KEY=...
-Environment=PI_HUB_PUBLIC_URL=https://hub.example.com
-Environment=PI_HUB_PUBLIC_DASHBOARD_URL=https://dash.example.com
-Environment=HERMES_API_BASE=http://127.0.0.1:8642
-Environment=PI_HUB_DASHBOARD_BASE=http://127.0.0.1:9119
-Environment=PI_HUB_PORT=8484
-Environment=PI_HUB_HOST=127.0.0.1
-```
+Hermes 的官方约定是 `<profile>/.env`（`hermes plugins install` 的 `requires_env` 提示直接写进去），
+gateway 启动时把 `.env` 装载进 `os.environ`。所以：
 
-- 管理密钥不写 `.env`。
-- dashboard 凭据由 Hermes/systemd 提供；网关只读。
-- 插件加载后从环境删除管理密钥。
+- **密钥**（`PI_HUB_ADMIN_KEY`）只进 `.env`；不要写 `config.yaml`、shell history、日志。
+- **非密钥配置**（`PI_HUB_PUBLIC_URL` / `PI_HUB_PUBLIC_DASHBOARD_URL` / `HERMES_API_BASE` /
+  `PI_HUB_PORT` 等）写 `.env` 或 systemd drop-in 都行，**二选一，别两处都放**（两处不一致时排查成本极高）。
+- dashboard 凭据由 Hermes 提供；网关只读。
+- 插件加载后从 `os.environ` 删除管理密钥（见 §5.3）。
 
 ### 7.4 自举 Prompt
 

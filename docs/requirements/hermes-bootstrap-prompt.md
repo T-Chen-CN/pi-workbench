@@ -77,9 +77,9 @@
    用 `curl -s -o /dev/null -w '%{http_code}'` 配合页面内容判断，不要猜。
 7. **网关插件现状**：profile 的 `plugins/pi-workbench-gateway/` 是否存在；
    `ss -ltn | grep 8484` 是否有监听；`curl -s 127.0.0.1:8484/v1/hub/health` 是否 200。
-8. **管理密钥现状**：systemd 服务环境里是否有 `PI_HUB_ADMIN_KEY`
-   （`systemctl show -p Environment <unit>`，回显若有明文，只报告"已配置"，
-   不要复制到对话、不要写进文件）。已有就复用，绝不轮换。
+8. **管理密钥现状**：`<profile>/.env` 与 systemd 服务环境里是否有 `PI_HUB_ADMIN_KEY`
+   （`grep -c '^PI_HUB_ADMIN_KEY=' <profile>/.env` 与 `systemctl show -p Environment <unit>`；
+   只报告"键存在"，**不要读值、不要复制到对话、不要写进文件**）。已有就复用，绝不轮换。
 9. 现有控制台口令：能读到或用户提供了就复用；读不到标记为"不可得"。
 
 需要用户提供信息时，**把所有问题集中成一次提问**，不要反复打断。
@@ -122,31 +122,41 @@
    先看 `hermes plugins list` 里有没有 `pi-workbench-gateway`：
    - **已有** → 不要再装（重装/覆盖可能丢 git 来源），需要跟版就
      `hermes plugins update pi-workbench-gateway`。
-   - **没有** → 在 profile 里装（`HERMES_HOME` 必须指向 profile 目录，不是 `~/.hermes`）：
-     `hermes plugins install {{PLUGIN_REPO}} --no-enable`
+   - **没有** → 先做第 2 小步（把密钥放进临时 shell 变量），再在 profile 里装
+     （`HERMES_HOME` 必须指向 profile 目录，不是 `~/.hermes`）。
+     Hermes 的官方安装会克隆到 `<profile>/plugins/pi-workbench-gateway/`（目录名取自仓库名），
+     装完提示填写 `PI_HUB_ADMIN_KEY` 并把它写进 `<profile>/.env`。用管子把值喂给提示：
+
+     - 执行（`HERMES_HOME` 指向 profile）：
+       `printf '%s\n' "$ADMIN_KEY" | hermes plugins install {{PLUGIN_REPO}} --yes-deps --enable`
+     - 随后 `unset ADMIN_KEY`。整条命令一行写完，方便直接粘贴。
+     - 清单里 `requires_env` 声明成纯字符串，提示读的是 stdin，所以非交互场景也走得通。
+     - `--yes-deps` 省掉 pip 依赖确认；`--enable` 省掉启用确认（插件只依赖标准库，不装任何包）。
      - 装完**如实记录实际落到的提交**（收尾报告里写一行）：
        `git -C <profile>/plugins/pi-workbench-gateway rev-parse HEAD`
-     - `--no-enable` 先装不启用：`PI_HUB_ADMIN_KEY` 还没配（第 3 小步配好后在第 2 小步启用）。
      - 仓库是公开的，**不需要任何凭据 / deploy key**；需要凭据才能拉 → 说明地址被改过，报告并停止。
    - **装失败** → 贴原始错误并停止。不要退回手写插件、不要换别的仓库。
-2. **让 Hermes 启用它**：在 profile 的 `config.yaml` 里 `plugins.enabled` 下加
-   `pi-workbench-gateway`（已有就不要重复加）。改动前备份。插件只依赖 Python 标准库，
-   **不需要装任何 pip 包**；清单里的 `requires_env` 会在启用时确认 `PI_HUB_ADMIN_KEY` 已就位。
-3. **管理密钥**（`PI_HUB_ADMIN_KEY`）——它是"签发设备凭证"的钥匙，只在这台机器上：
+2. **管理密钥**（`PI_HUB_ADMIN_KEY`）——它是"签发设备凭证"的钥匙，只在这台机器上：
    - **已存在就复用，绝不轮换**（轮换会让所有已登记设备失效）。
-   - 缺失才生成：`python3 -c 'import secrets;print(secrets.token_urlsafe(32))'`。
-   - 只写到服务环境（推荐 systemd drop-in，例如
-     `/etc/systemd/system/<gateway-unit>.service.d/20-pi-hub.conf`）：
-     `Environment="PI_HUB_ADMIN_KEY=<值>"`，同时补
-     `PI_HUB_PUBLIC_URL=https://hub.<域名>`、
+   - 缺失才生成到临时 shell 变量（**不要 echo**）：
+     `ADMIN_KEY=$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')`
+   - 落盘位置是 `<profile>/.env`（Hermes 官方约定，与 `API_SERVER_KEY` 同处），由上一步的安装提示写入；
+     **不要**另抄一份到 `config.yaml`、shell history、日志或任何文件，也不要把值交给用户。
+   - 非密钥配置（`PI_HUB_PUBLIC_URL=https://hub.<域名>`、
      `PI_HUB_PUBLIC_DASHBOARD_URL=https://dash.<域名>`、
-     `HERMES_API_BASE=http://127.0.0.1:<api端口>`、
-     `PI_HUB_PORT=8484`、`PI_HUB_HOST=127.0.0.1`。
-   - **不要**把密钥写进 profile 的 `config.yaml`、shell history、日志或任何文件；
-     不要回显，不要交给用户。
+     `HERMES_API_BASE=http://127.0.0.1:<api端口>`、`PI_HUB_PORT=8484`、`PI_HUB_HOST=127.0.0.1`）
+     写进 `<profile>/.env` 或 systemd drop-in，**二选一，别两处都放**。
+3. **清单自检**（Hermes 的安装命令不会自动校验，要单独跑）：
+   `hermes plugins validate pi-workbench-gateway`、`hermes plugins doctor pi-workbench-gateway --ci`。
+   有错就贴原始输出并停止。
 4. **重启**承载该 profile 的 gateway 服务（只重启这一个），然后验证：
    - `ss -ltn | grep 8484` → 有监听，且只绑 `127.0.0.1`
-   - `curl -s 127.0.0.1:8484/v1/hub/health` → `{"status":"ok", ... "upstreamOk":true, "adminKeyConfigured":true}`
+   - `curl -s 127.0.0.1:8484/v1/hub/health` → `{"status":"ok", "upstreamOk":true, ...}`
+     （**瘦身版**：只回 `status` / `upstreamOk` / `hub` / `contractVersion` / `features`，
+     没有设备计数与上游版本——别以为插件缺功能）
+   - `curl -s 127.0.0.1:8484/v1/hub/status -H "X-Pi-Admin-Key: <密钥>"` → 完整诊断，
+     确认 `adminKeyConfigured=true`、`upstreamVersion` 有值
+     （密钥按第六步第 1 条从 `.env` 取到临时变量，**不要 echo**）
    - `curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:8484/v1/devices/me` → `401`
      （没带设备 token 就该拒，说明鉴权在网关这一层）
 5. 插件日志：**INFO 级不进 journalctl**（只有 WARNING 及以上进）。
@@ -157,7 +167,9 @@
 1. DNS：`dig +short hub.<域名>` / `dash.<域名>` 指向本机公网 IP
 2. 证书：`echo | openssl s_client -connect hub.<域名>:443 -servername hub.<域名> 2>/dev/null | openssl x509 -noout -enddate`
 3. 网关健康（公网）：`curl -s https://hub.<域名>/v1/hub/health`
-   → 200，且 `status=ok`、`upstreamOk=true`、`adminKeyConfigured=true`、`upstreamVersion` 有值
+   → 200，且 `status=ok`、`upstreamOk=true`
+   （health 已是瘦身版；`adminKeyConfigured`、`upstreamVersion`、设备计数要到需凭据的
+   `/v1/hub/status` 才有——公网匿名面上不该出现这些）
 4. 网关鉴权：`curl -s -o /dev/null -w '%{http_code}' https://hub.<域名>/v1/devices/me`
    → `401`（没有设备 token；有 token 才 200。**不要**为了验证去登记假设备）
 5. 控制台：`curl -s -o /dev/null -w '%{http_code}' https://dash.<域名>/`
@@ -168,13 +180,16 @@
 
 ## 第六步：生成一次性连接码并交付
 
-1. 从服务环境取管理密钥到临时 shell 变量，**不要 echo、不要写文件**：
-   `ADMIN_KEY=$(systemctl show -p Environment <gateway-unit> --value | tr ' ' '\n' | sed -n 's/^PI_HUB_ADMIN_KEY=//p')`
+1. 从 `<profile>/.env` 取管理密钥到临时 shell 变量，**不要 echo、不要写文件**：
+   `ADMIN_KEY=$(sed -n 's/^PI_HUB_ADMIN_KEY=//p' <profile>/.env | head -1)`
+   （若当初把密钥放进了 systemd drop-in，则改用
+   `systemctl show -p Environment <gateway-unit> --value | tr ' ' '\n' | sed -n 's/^PI_HUB_ADMIN_KEY=//p'`）
 2. 调网关生成连接码：
    `curl -s -X POST https://hub.<域名>/v1/devices/pairing -H "X-Pi-Admin-Key: $ADMIN_KEY" -H 'Content-Type: application/json' -d '{}'`
 3. 期望返回 `201`，形如：
    `{"code":"ABCDE-FGHJK","expiresAt":1793938800,"pairingUrl":"https://hub.<域名>/#pair=ABCDE-FGHJK"}`
-   如果返回 `503 pairing_disabled`，说明管理密钥没进服务环境；回第四步检查并停止。
+   如果返回 `503 pairing_disabled`，说明密钥没进服务环境（`.env` 里缺，或服务没重启加载）；
+   回第四步检查并停止。
 4. 立即 `unset ADMIN_KEY`。
 5. 在对话里给用户**可直接粘贴的 `pairingUrl`**（没有 `pairingUrl` 就用
    `https://hub.<域名>/#pair=<code>`），并说明：
