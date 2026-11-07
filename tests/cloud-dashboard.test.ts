@@ -170,10 +170,12 @@ describe('CloudDashboard', () => {
     expect(created.options.webPreferences).not.toHaveProperty('preload')
     await Promise.resolve()
     expect(created.webContents.loadedUrl).toBe(DASH_URL)
-    expect(mocks.window.contentView.children).toContain(created)
-    // 还没收到渲染层上报的矩形：先不显示，避免闪一屏 80x80 的错位窗口
+    // 页面还没说它在前台：视图不该挂在窗口上（挂上就有可能被窗口事件点亮）
+    expect(mocks.window.contentView.children).not.toContain(created)
+    // 也还没收到渲染层上报的矩形：先不显示，避免闪一屏 80x80 的错位窗口
     expect(created.visible).toBe(false)
     dashboard.setBounds({ x: 0, y: 34, width: 1200, height: 766 }, true)
+    expect(mocks.window.contentView.children).toContain(created)
     expect(created.visible).toBe(true)
     expect(dashboard.snapshot().visible).toBe(true)
   })
@@ -181,9 +183,13 @@ describe('CloudDashboard', () => {
   it('hides on close and reuses the same view on reopen', () => {
     const { dashboard, view } = makeDashboard()
     dashboard.open(DASH_URL)
+    dashboard.setBounds({ x: 0, y: 34, width: 800, height: 600 }, true)
     dashboard.close()
     expect(view().visible).toBe(false)
     expect(dashboard.snapshot().visible).toBe(false)
+    // 关闭之后窗口再怎么唤回也不该出现
+    dashboard.sync()
+    expect(view().visible).toBe(false)
 
     dashboard.open(DASH_URL)
     expect(mocks.views).toHaveLength(1)
@@ -199,6 +205,58 @@ describe('CloudDashboard', () => {
 
     dashboard.setBounds({ x: 10, y: 20, width: 400, height: 300 }, false)
     expect(view().visible).toBe(false)
+  })
+
+  it('detaches from the window whenever the page says it is not on screen', () => {
+    const { dashboard, view } = makeDashboard()
+    dashboard.open(DASH_URL)
+    const created = view()
+
+    dashboard.setBounds({ x: 0, y: 34, width: 800, height: 600 }, true)
+    expect(mocks.window.contentView.children).toContain(created)
+
+    // 切页 / 卸下控制台页：直接摘掉，没挂着的视图不可能被任何路径点亮
+    dashboard.setBounds({ x: 0, y: 34, width: 800, height: 600 }, false)
+    expect(mocks.window.contentView.children).not.toContain(created)
+    expect(dashboard.snapshot().visible).toBe(false)
+    // 页面状态不丢，回来还是热的
+    expect(mocks.views).toHaveLength(1)
+  })
+
+  it('window show/restore never lights the console up on its own', () => {
+    const { dashboard, view } = makeDashboard()
+    dashboard.open(DASH_URL)
+    const created = view()
+
+    // 用户在一次控制台访问之后切走（页面推 visible:false）
+    dashboard.setBounds({ x: 0, y: 34, width: 800, height: 600 }, true)
+    dashboard.setBounds({ x: 0, y: 34, width: 800, height: 600 }, false)
+
+    // 托盘唤回 / 通知点击 / 第二实例：窗口 show 与 restore 都会来一遍
+    dashboard.sync()
+    expect(created.visible).toBe(false)
+    expect(mocks.window.contentView.children).not.toContain(created)
+    dashboard.sync()
+    expect(created.visible).toBe(false)
+
+    // 只有页面重新说「我可见」时才回来
+    dashboard.setBounds({ x: 0, y: 34, width: 800, height: 600 }, true)
+    dashboard.sync()
+    expect(created.visible).toBe(true)
+    expect(mocks.window.contentView.children).toContain(created)
+  })
+
+  it('restores the page-requested state after a minimize/restore cycle', () => {
+    const { dashboard, view } = makeDashboard()
+    dashboard.open(DASH_URL)
+    const created = view()
+    dashboard.setBounds({ x: 0, y: 34, width: 800, height: 600 }, true)
+
+    dashboard.hide()
+    expect(created.visible).toBe(false)
+    // 页面没切走：窗口回来时该恢复原样
+    dashboard.sync()
+    expect(created.visible).toBe(true)
   })
 
   it('clamps tiny bounds so the view never collapses to 0px', () => {

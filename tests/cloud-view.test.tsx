@@ -12,6 +12,7 @@ import { UNCONFIGURED_CONNECTION } from '../src/api/cloud'
 import { useI18nStore } from '../src/store/i18nStore'
 import { translations } from '../src/i18n/translations'
 import type {
+  CloudDashboardBounds,
   CloudFrame,
   CloudSession,
   CloudTracePart,
@@ -381,6 +382,45 @@ describe('CloudWorkspaceView', () => {
     await waitFor(() => expect(openSpy).toHaveBeenCalled())
     await waitFor(() => expect(boundsSpy).toHaveBeenCalled())
     expect(stub.startRun).not.toHaveBeenCalled()
+  })
+
+  it('hides the native layer when the console page unmounts', async () => {
+    installBridge()
+    const boundsSpy = vi.fn(async (_bounds: CloudDashboardBounds) => ({ success: true }))
+    ;(
+      window as unknown as { electronAPI: Record<string, unknown> }
+    ).electronAPI.cloudDashboardBounds = boundsSpy
+    // jsdom 里所有矩形都是 0：铺一块真实尺寸，页签才会报 visible:true
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 34,
+      width: 1200,
+      height: 766,
+      top: 34,
+      left: 0,
+      right: 1200,
+      bottom: 800,
+      toJSON: () => ({}),
+    } as DOMRect)
+
+    try {
+      const view = render(<CloudWorkspaceView view="cloud-console" onNavigate={vi.fn()} />)
+      await waitFor(() => {
+        const calls = boundsSpy.mock.calls
+        const last = calls[calls.length - 1]?.[0] as { visible: boolean } | undefined
+        expect(last?.visible).toBe(true)
+      })
+
+      // 切到本地工作区：整个云视图被摘掉（App.tsx），没人再推边界
+      view.unmount()
+      await waitFor(() => {
+        const calls = boundsSpy.mock.calls
+        const last = calls[calls.length - 1]?.[0] as { visible: boolean } | undefined
+        expect(last?.visible).toBe(false)
+      })
+    } finally {
+      rectSpy.mockRestore()
+    }
   })
 
   it('points at the connection tab when the console has no key', async () => {

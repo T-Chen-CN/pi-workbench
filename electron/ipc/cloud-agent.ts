@@ -245,8 +245,10 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     hookedWindow = win
     win.on('minimize', () => dashboard.hide())
     win.on('hide', () => dashboard.hide())
-    win.on('restore', () => dashboard.show())
-    win.on('show', () => dashboard.show())
+    // 窗口回来只恢复「页面最后要求的状态」：控制台不在前台时它连窗口都没挂着，
+    // 托盘唤回 / 通知点击 / 第二实例都不可能把它糊到当前页面上
+    win.on('restore', () => dashboard.sync())
+    win.on('show', () => dashboard.sync())
     win.on('closed', () => dashboard.destroy())
   }
 
@@ -1033,7 +1035,13 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
 
   handleIpc(
     'cloud:dashboard:bounds',
-    (_event, rect: { x: number; y: number; width: number; height: number; visible?: boolean }) => {
+    (event, rect: { x: number; y: number; width: number; height: number; visible?: boolean }) => {
+      // 原生层盖在主窗口上：坐标系只有主窗口说得清。拆出去的面板窗口推上来的
+      // 矩形会把控制台摆到主窗口的错误位置（或干脆把不该可见的它点亮）
+      const win = deps.getMainWindow()
+      if (!win || win.isDestroyed() || event.sender !== win.webContents) {
+        return { success: false, error: '控制台原生层只接受主窗口上报的边界' }
+      }
       dashboard.setBounds(
         {
           x: Number(rect?.x ?? 0),

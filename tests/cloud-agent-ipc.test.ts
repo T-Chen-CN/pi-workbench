@@ -921,6 +921,27 @@ describe('cloud diagnostics', () => {
   })
 })
 
+describe('cloud console layer', () => {
+  it('only lets the main window report the native layer bounds', async () => {
+    const handler = mocks.handlers.get('cloud:dashboard:bounds')
+    expect(handler).toBeTruthy()
+    const rect = { x: 0, y: 34, width: 800, height: 600, visible: true }
+
+    // 拆出去的面板窗口：坐标系与主窗口无关，推上来的矩形会把控制台摆错位置
+    const rejected = (await handler?.({ sender: { id: 999 } }, rect)) as {
+      success: boolean
+      error?: string
+    }
+    expect(rejected.success).toBe(false)
+    expect(rejected.error).toContain('主窗口')
+
+    const accepted = (await handler?.({ sender: mocks.window.webContents }, rect)) as {
+      success: boolean
+    }
+    expect(accepted.success).toBe(true)
+  })
+})
+
 describe('cloud clarify', () => {
   beforeAll(async () => {
     await seedPairedDevice()

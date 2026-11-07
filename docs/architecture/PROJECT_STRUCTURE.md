@@ -367,7 +367,7 @@ ChatPanel.handleSubmit
 | `cloud:media:upload` / `media:read` | invoke | 图片上传与按路径读回（经网关旁路，凭据就是设备 token；插件转发给控制台） |
 | `cloud:event` | main → renderer | SSE 帧映射后的时间线增量 / 轮次状态 / 会话 id |
 | `cloud:status` | main → renderer | 连接状态变化 |
-| `cloud:dashboard:open` / `close` / `bounds` / `reload` | invoke | 程序内控制台：`WebContentsView`（独立 partition、sandbox、无 preload）的开合、边界同步、重载 |
+| `cloud:dashboard:open` / `close` / `bounds` / `reload` | invoke | 程序内控制台：`WebContentsView`（独立 partition、sandbox、无 preload）的开合、边界同步、重载。**可见性唯一真相是 `bounds.visible`**：为 false 时视图直接从窗口摘除；`bounds` 只接受主窗口上报 |
 | `cloud:dashboard:loaded` / `load-failed` / `dashboard:closed` | main → renderer | 控制台首帧加载完成 / 加载失败 / 页面内 Esc 关闭 |
 
 ---

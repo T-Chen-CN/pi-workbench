@@ -201,6 +201,7 @@ connected
 ### 3.5 配置面与审批档位
 
 - 配置页用 `WebContentsView` 内嵌 dashboard；独立 partition、无 preload；用户手动登录。
+- 这一层的可见性只由控制台页决定：`bounds.visible=false`（切页 / 卸载 / 窗口后台）时视图直接从窗口摘除；托盘唤回、通知点击、第二实例只恢复页面最后要求的状态，不得自行显示（否则会盖住当前页面）。
 - 审批档位只用 Hermes 原生三档：`manual` / `smart` / `off`；不自造预设、不切工具集。
 - 桌面端通过网关读写策略，不直连 dashboard：
 

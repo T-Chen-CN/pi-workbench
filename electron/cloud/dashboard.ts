@@ -1,9 +1,11 @@
 /**
  * 程序内控制台（远程页面）。
  *
- * 它是一个原生 `WebContentsView`，盖在窗口内容之上：位置由渲染层实测后上报，
- * 可见性由主进程控制（CSS 管不到原生层）。安全上是独立的浏览器环境：
- * 独立 partition、sandbox、无 preload、外链与导航白名单、权限全拒。
+ * 它是一个原生 `WebContentsView`，盖在窗口内容之上：位置与可见性都由渲染层实测后上报
+ * （CSS 管不到原生层）。**可见性的唯一真相是「控制台页此刻在不在前台」**：页面说不可见时
+ * 视图直接从窗口上摘掉（`removeChildView`），窗口最小化/托盘唤回这类事件只负责把视图
+ * 恢复到页面最后要求的状态，绝不自己点亮它 —— 否则控制台会盖在别的页面上。
+ * 安全上是独立的浏览器环境：独立 partition、sandbox、无 preload、外链与导航白名单、权限全拒。
  */
 
 import { WebContentsView, shell, type BrowserWindow, type Rectangle } from 'electron'
@@ -52,7 +54,8 @@ export interface DashboardSnapshot {
 export class CloudDashboard {
   private view: WebContentsView | null = null
   private bounds: Rectangle | null = null
-  private wantedVisible = false
+  /** 页面（渲染层）最后一次要求的状态：true = 控制台页此刻在前台 */
+  private pageVisible = false
   private loading = false
   private error: string | null = null
   /** 本次加载是否已失败：失败后 did-stop-loading 不能把错误态清掉 */
@@ -61,13 +64,47 @@ export class CloudDashboard {
 
   constructor(private readonly deps: CloudDashboardDeps) {}
 
-  /** 当前窗口挂载点；窗口重建后视图需要重新 attach */
-  private attach(): void {
+  /** 挂到当前窗口（窗口重建后需要重新挂）；只有页面要求可见时才会走到这里 */
+  private attachView(): void {
     const win = this.deps.getWindow()
     const view = this.view
-    if (!win || !view) return
+    if (!win || win.isDestroyed() || !view) return
     const children = win.contentView.children
     if (!children.includes(view)) win.contentView.addChildView(view)
+  }
+
+  /** 从窗口上摘掉：没挂着的视图不可能被任何路径点亮 */
+  private detachView(): void {
+    const view = this.view
+    const win = this.deps.getWindow()
+    if (!view || !win || win.isDestroyed()) return
+    if (!win.contentView.children.includes(view)) return
+    try {
+      win.contentView.removeChildView(view)
+    } catch {
+      // 窗口正在销毁：父子关系交给窗口自己收
+    }
+  }
+
+  private isAttached(): boolean {
+    const win = this.deps.getWindow()
+    const view = this.view
+    if (!win || win.isDestroyed() || !view) return false
+    return win.contentView.children.includes(view)
+  }
+
+  /** 把「页面要的可见性 + 最近一次矩形」落到视图上（挂载/摘除也在这里决定） */
+  private apply(): void {
+    const view = this.view
+    if (!view || view.webContents.isDestroyed()) return
+    if (!this.pageVisible || !this.bounds) {
+      view.setVisible(false)
+      this.detachView()
+      return
+    }
+    this.attachView()
+    view.setBounds(this.bounds)
+    view.setVisible(true)
   }
 
   private ensureView(url: string): WebContentsView | null {
@@ -144,38 +181,34 @@ export class CloudDashboard {
     return view
   }
 
+  /**
+   * 打开（创建/复用）远程页面。
+   *
+   * 这里**不显示**：渲染层紧接着会用 `setBounds` 报「此刻该不该看到」，
+   * 还没报就先藏着 —— 否则会先闪一屏 80x80 的错位窗口。
+   */
   open(url: string): void {
-    this.wantedVisible = true
     this.error = null
-    const view = this.ensureView(url)
-    if (!view) return
-    this.attach()
-    // 还没收到渲染层上报的矩形时先不显示：否则会先闪一屏 80x80 的错位窗口
-    if (this.bounds) {
-      view.setBounds(this.bounds)
-      view.setVisible(true)
-    } else {
-      view.setVisible(false)
-    }
+    if (!this.ensureView(url)) return
+    this.apply()
   }
 
   close(): void {
-    this.wantedVisible = false
-    if (this.view && !this.view.webContents.isDestroyed()) this.view.setVisible(false)
+    this.pageVisible = false
+    this.apply()
   }
 
   /**
    * 渲染层实测的矩形（CSS px = DIP，zoomFactor=1）。
-   * visible=false 表示页面此刻不该被看到（切页 / 弹窗 / 窗口后台）。
+   * visible=false 表示页面此刻不该被看到（切页 / 卸载 / 弹窗 / 窗口后台）：
+   * 此时直接把视图从窗口上摘掉，而不是只 `setVisible(false)`。
    */
   setBounds(rect: Rectangle, visible: boolean): void {
     const width = Math.max(MIN_WIDTH, Math.round(rect.width))
     const height = Math.max(MIN_HEIGHT, Math.round(rect.height))
     this.bounds = { x: Math.round(rect.x), y: Math.round(rect.y), width, height }
-    const view = this.view
-    if (!view || view.webContents.isDestroyed()) return
-    view.setBounds(this.bounds)
-    view.setVisible(this.wantedVisible && visible)
+    this.pageVisible = visible
+    this.apply()
   }
 
   reload(): void {
@@ -190,21 +223,27 @@ export class CloudDashboard {
     view.webContents.reload()
   }
 
-  /** 窗口最小化 / 隐藏到托盘时，原生层不会自己跟着消失 */
+  /**
+   * 窗口最小化 / 隐藏到托盘时，原生层不会自己跟着消失。
+   * 只藏起来，不改 `pageVisible` —— 窗口回来时 `sync()` 恢复成页面要的样子。
+   */
   hide(): void {
     if (this.view && !this.view.webContents.isDestroyed()) this.view.setVisible(false)
   }
 
-  show(): void {
-    const view = this.view
-    if (!view || view.webContents.isDestroyed() || !this.wantedVisible || !this.bounds) return
-    view.setVisible(true)
+  /**
+   * 窗口重新显示（restore / show）时调用。
+   * 只把视图恢复到页面最后要求的状态：控制台不在前台时它连窗口都没挂着。
+   * 这里刻意不叫 `show()` —— 曾经那版会无条件点亮，托盘唤回/通知点击就把控制台糊到当前页面上。
+   */
+  sync(): void {
+    this.apply()
   }
 
   destroy(): void {
     const view = this.view
     this.view = null
-    this.wantedVisible = false
+    this.pageVisible = false
     if (!view) return
     const win = this.deps.getWindow()
     if (win && !win.isDestroyed()) {
@@ -219,7 +258,7 @@ export class CloudDashboard {
 
   snapshot(): DashboardSnapshot {
     return {
-      visible: Boolean(this.view && this.wantedVisible),
+      visible: Boolean(this.view && this.pageVisible && this.isAttached()),
       loading: this.loading,
       url: this.currentUrl,
       error: this.error,
