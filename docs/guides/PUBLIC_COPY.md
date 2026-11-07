@@ -81,6 +81,47 @@ gh repo edit T-Chen-CN/pi-workbench \
 - **Known issues 诚实写**：未签名未公证、`.doc/.xls/.ppt` 旧格式只给另存为指引、扫描件不做 OCR。
 - 资产名由 `package.json` 的 `artifactName` 决定，改名时同步本节。
 
+### v0.8.0 成品（可直接粘贴覆盖现有说明）
+
+```markdown
+云端 Agent 来了：这台机器上的工作台，现在能指挥跑在你自己服务器上的 Agent。
+
+## Highlights
+
+- **云端 Agent 打通** — 桌面端新增「云端 Agent」区域：会话列表与历史、SSE 流式输出、工具卡、审批卡片、插话、任务页、图片，全部走你自建的单入口网关。凭据只在主进程（safeStorage），渲染层永远拿不到。
+- **只需要一个一次性连接码** — 在服务器上装好 `pi-workbench-gateway` 插件，生成连接码，粘进「连接」页就完成配对。设备自己长出自己的身份（`token → deviceId`），撤销后立刻失效，重配再发一枚。
+- **内嵌控制台** — 配置台用原生视图嵌在「控制台」页里：独立 partition、沙箱、无 preload、导航白名单。它只在你打开这一页时存在，托盘唤回、通知点击、切到别的页面都不会把它糊到当前画面上。
+
+## 其他改动
+
+- **云端报错说人话** — 网关的错误码（`upstream_unavailable` 等）与 `net:ERR_*` 都映射成中文；不再出现 `api_server is not reachable: [Errno 111] Connection refused` 这种原文。
+- **连接状态跟着事实走** — 刷新状态失败、或网关在线但上游 Hermes 没响应时，右上角状态灯与错误提示同步变红；恢复后自动回绿。
+- **配对表单不再"假装"有默认地址** — 输入框占位符固定是示例地址；你上次配对用的地址单独一行标成「上次配对用的地址」，点「填入」才写进去。
+- **审批策略显示真实条数** — 网关只回 `policy.denyCount`，之前桌面端认不出这个形态，「云端拒绝的命令」永远显示 0 条，现已修。
+
+## Downloads
+
+| Platform | Asset |
+| --- | --- |
+| Windows | `Pi-Workbench-Setup-0.8.0.exe` |
+| macOS | `Pi-Workbench-0.8.0-universal.dmg` |
+| Linux | `Pi-Workbench-0.8.0.AppImage` |
+
+## Upgrade notes
+
+0.7.9 及更早版本可直接通过应用内更新升级：Windows / Linux 后台下载、点确认后安装，数据目录不受影响；macOS 请下载 dmg 覆盖安装。
+
+不想用云端也没有任何变化：不配对就什么都不发生，本地 Agent、编辑器、终端、Git 全部照旧。要用的话按「连接 → 还没有云端？先用自举 Prompt」复制那段 Prompt 粘到服务器上的 Hermes Agent，它会自己装插件、配反向代理，最后给你一枚连接码。
+
+## Known issues
+
+- 构建未做代码签名与公证，首次启动需在 SmartScreen / Gatekeeper 中确认一次。
+
+**Full Changelog**: https://github.com/T-Chen-CN/pi-workbench/compare/v0.7.9...v0.8.0
+```
+
+粘贴方式（**执行前确认**）：`gh release edit v0.8.0 --notes-file cache/release-notes-0.8.0.md`。
+
 ### v0.7.9 成品（可直接粘贴覆盖现有说明）
 
 ```markdown

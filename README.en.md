@@ -170,7 +170,7 @@ Open **Settings** on first run and complete five steps:
 
 | Item            | State                                                                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Current version | `0.7.9` (2026-11-06)                                                                                                                                          |
+| Current version | `0.8.0` (2026-11-08)                                                                                                                                          |
 | Releases        | 16 GitHub releases; installers and `latest*.yml` produced by CI on tags                                                                                       |
 | Phases          | Phase 0–4 done · Phase 5 (Fleet background jobs) removed 2026-10-24 · Phase 6 ongoing                                                                         |
 | Quality         | type-check + lint + 1,300+ Vitest cases + full build; CI also runs a Windows packaging smoke test                                                             |
