@@ -1279,6 +1279,25 @@ describe('CloudConnectionView 心跳', () => {
   })
 })
 
+describe('CloudConnectionView 配对表单', () => {
+  it('labels the last used gateway as history, not as a built-in default', async () => {
+    installBridge()
+    await useCloudStore.getState().hydrate()
+    render(<CloudConnectionView active />)
+
+    // 注销之后地址仍在本地（重配同一台省事），但界面必须说清它是「上次用的」
+    expect(await screen.findByText(zh.cloudPairGatewayLastUsed)).toBeTruthy()
+    const input = screen.getByLabelText(zh.cloudPairGatewayAdvanced) as HTMLInputElement
+    expect(input.value).toBe('')
+    expect(input.placeholder).toBe('https://hub.example.com')
+
+    fireEvent.click(screen.getByText(zh.cloudPairGatewayUseLast))
+    await waitFor(() => expect(input.value).toBe('https://hub.example.com'))
+    // 填进来之后这行说明就收掉，不再挡着
+    expect(screen.queryByText(zh.cloudPairGatewayLastUsed)).toBeNull()
+  })
+})
+
 describe('CloudConnectionView 设备卡', () => {
   it('shows the device name and id, and only writes when 保存 is pressed', async () => {
     const stub = installBridge()

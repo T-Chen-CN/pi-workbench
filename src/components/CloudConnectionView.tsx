@@ -54,6 +54,12 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
   const [pairCode, setPairCode] = useState('')
   const [pairGatewayDraft, setPairGatewayDraft] = useState('')
   const [pairInputError, setPairInputError] = useState<'missing_code' | 'bad_gateway' | null>(null)
+  /**
+   * 上次配对用的网关地址（本地落盘，注销不会清）。
+   * 它只做**输入框的占位提示**，不是内置默认值 —— 界面上要明确说出来，
+   * 否则看起来就像代码里写死了作者自己的域名。
+   */
+  const lastGateway = (gateway?.gatewayUrl || config.gatewayUrl || '').trim()
 
   useEffect(() => {
     setDeviceNameDraft(device?.name ?? '')
@@ -363,12 +369,27 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
                     value={pairGatewayDraft}
                     spellCheck={false}
                     autoComplete="off"
-                    placeholder={gateway?.gatewayUrl || config.gatewayUrl || PLACEHOLDER_GATEWAY_URL}
+                    placeholder={lastGateway || PLACEHOLDER_GATEWAY_URL}
                     onChange={(event) => {
                       setPairGatewayDraft(event.target.value)
                       setPairInputError(null)
                     }}
                   />
+                  {lastGateway && !pairGatewayDraft.trim() && (
+                    <span className="flex items-center gap-2">
+                      <Caption className="text-ink-subtle">{t('cloudPairGatewayLastUsed')}</Caption>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setPairGatewayDraft(lastGateway)
+                          setPairInputError(null)
+                        }}
+                      >
+                        {t('cloudPairGatewayUseLast')}
+                      </Button>
+                    </span>
+                  )}
                 </Field>
                 <Field
                   label={t('cloudPairCode')}

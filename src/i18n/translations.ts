@@ -47,6 +47,8 @@ export const translations = {
     cloudPairGatewayAdvanced: '网关地址（高级）',
     cloudPairGatewayHint:
       '必填：你自己的网关地址（例如 https://hub.example.com）。也可以直接粘贴完整配对链接，地址和连接码会一起读出来',
+    cloudPairGatewayLastUsed: '灰字是上次配对用的地址，不是默认值',
+    cloudPairGatewayUseLast: '填入',
     cloudPairCode: '连接码',
     cloudPairCodeHint: '在服务器上执行配对命令后得到，一次性有效；也可以直接粘贴插件给出的完整链接',
     cloudPairConnect: '配对并连接',
@@ -1115,6 +1117,8 @@ export const translations = {
     cloudPairGatewayAdvanced: 'Gateway URL (advanced)',
     cloudPairGatewayHint:
       'Required: your own gateway URL (e.g. https://hub.example.com). You can also paste the full pairing link — the address is read from it',
+    cloudPairGatewayLastUsed: 'Grey text is the address from your last pairing, not a default',
+    cloudPairGatewayUseLast: 'Use it',
     cloudPairCode: 'Pairing code',
     cloudPairCodeHint:
       'Generated on the server, valid once; you can also paste the full link from the plugin',
