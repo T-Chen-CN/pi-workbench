@@ -147,9 +147,13 @@
      `HERMES_API_BASE=http://127.0.0.1:<api端口>`、`PI_HUB_PORT=8484`、`PI_HUB_HOST=127.0.0.1`）
      写进 `<profile>/.env` 或 systemd drop-in，**二选一，别两处都放**。
 3. **清单自检**（Hermes 的安装命令不会自动校验，要单独跑）：
-   `hermes plugins validate pi-workbench-gateway`、`hermes plugins doctor pi-workbench-gateway --ci`。
-   有错就贴原始输出并停止。
-4. **重启**承载该 profile 的 gateway 服务（只重启这一个），然后验证：
+   `hermes plugins validate <profile>/plugins/pi-workbench-gateway`——注意 `validate` 收的是
+   **目录**，传插件名会得到"not a directory / Validation failed"（不是插件有问题）；
+   `hermes plugins doctor pi-workbench-gateway --ci` 才收插件名。有错就贴原始输出并停止。
+4. **重启**承载该 profile 的 gateway 服务（只重启这一个）——**必须重启**：装完 Hermes 会打印
+   "Gateway reloaded plugins; nothing of this plugin needs a session or restart"，但插件读的是
+   **进程环境**，`.env` 里的 `PI_HUB_ADMIN_KEY` 只有新进程才看得见；不重启的表现是 8484 根本不监听、
+   日志喊 "PI_HUB_ADMIN_KEY is not set"。重启后验证：
    - `ss -ltn | grep 8484` → 有监听，且只绑 `127.0.0.1`
    - `curl -s 127.0.0.1:8484/v1/hub/health` → `{"status":"ok", "upstreamOk":true, ...}`
      （**瘦身版**：只回 `status` / `upstreamOk` / `hub` / `contractVersion` / `features`，
