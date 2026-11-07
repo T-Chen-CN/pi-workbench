@@ -970,7 +970,7 @@ curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer pi_<token>" htt
 - Phase 1 配对：连接码 UI / IPC / 配置收窄 / 测试。
 - 文档收口：云端方案合并为本文。
 
-### 9.2 当前阶段：Phase 2
+### 9.2 Phase 2（P0–P5 已落地，2026-11-07 真机上线）
 
 | 阶段 | 内容 | 工期 | Gate |
 | --- | --- | --- | --- |
@@ -993,7 +993,7 @@ curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer pi_<token>" htt
 
 仍待 Phase 2 完成后做：
 
-- 真实配对 → 对话 → 审批 → 注销 → 再配对；G1。
+- 真实配对 → 对话 → 审批 → 注销 → 再配对；G1。配对 / 心跳 / 撤销 / 代理 / 媒体 / 配置面已真机验证，仍缺真实 run 创建、SSE 逐字与审批回执的端到端。
 - 若网关 `GET /api/config` 返回 `denyCount`，桌面端 `pickApprovalPolicy` 同步支持。
 
 ### 9.4 后置
