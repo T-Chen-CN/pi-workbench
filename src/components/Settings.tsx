@@ -32,6 +32,7 @@ import type {
   ApiModelEntry,
   AppInfo,
   ModelContextWindow,
+  ModelMaxTokens,
   PermissionLevel,
 } from '../types/electron'
 import { Button, Field, Input, Select } from './ui'
@@ -41,7 +42,10 @@ import { KeyCap, LegendRow, Meter, SettingsTable, SettingsTableRow } from './pat
 import { alertDialog } from '../store/dialogStore'
 import {
   CONTEXT_WINDOW_OPTIONS,
+  MAX_TOKENS_OPTIONS,
+  autoMaxTokens,
   contextWindowLabel,
+  maxTokensLabel,
   mergeModelEntries,
 } from '../utils/model-capabilities'
 import {
@@ -370,6 +374,8 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     try {
       const result = await api.apiConfigSave(apiConfig)
       if (result.success) {
+        // 以磁盘为准回读：任何一层弄丢字段（例如输出上限档位）都会在这里立刻暴露
+        await loadApiConfig()
         setSaveStatus('success')
         toast.success(t('apiConfigSavedReopen'))
         // 通知 ChatPanel 用新配置重新初始化 Agent
@@ -675,6 +681,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                   columns={[
                     { label: t('modelColumn'), className: 'min-w-0 flex-1' },
                     { label: t('modelContextColumn'), className: 'w-24' },
+                    { label: t('modelMaxTokensColumn'), className: 'w-24' },
                     { label: t('modelImageColumn'), className: 'w-12 text-center' },
                   ]}
                 >
@@ -707,6 +714,27 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                             ))}
                           </Select>
                         </div>
+                        <div className="w-24">
+                          <Select
+                            value={entry.maxTokens ?? 0}
+                            aria-label={`${entry.id} ${t('modelMaxTokensColumn')}`}
+                            onChange={(event) =>
+                              updateModelEntry(entry.id, {
+                                maxTokens: Number(event.target.value) as ModelMaxTokens,
+                              })
+                            }
+                          >
+                            {MAX_TOKENS_OPTIONS.map((value) => (
+                              <option key={value} value={value}>
+                                {value > 0
+                                  ? maxTokensLabel(value)
+                                  : t('modelMaxTokensAutoWithValue', {
+                                      value: maxTokensLabel(autoMaxTokens(entry.contextWindow)),
+                                    })}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
                         <label className="flex w-12 justify-center">
                           <input
                             type="checkbox"
@@ -724,6 +752,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                 </SettingsTable>
               )}
               <span className="type-caption text-ink-muted">{t('modelContextHint')}</span>
+              <span className="type-caption text-ink-muted">{t('modelMaxTokensHint')}</span>
             </div>
 
             <div className="mt-1 flex items-center gap-3">

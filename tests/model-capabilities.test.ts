@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AUTO_MAX_TOKENS,
   CONTEXT_WINDOW_OPTIONS as RENDERER_OPTIONS,
+  MAX_TOKENS_OPTIONS as RENDERER_MAX_TOKENS,
+  autoMaxTokens,
   contextWindowLabel,
+  maxTokensLabel,
   mergeModelEntries,
 } from '../src/utils/model-capabilities'
 import {
   CONTEXT_WINDOW_OPTIONS as BRIDGE_OPTIONS,
+  MAX_TOKENS_OPTIONS as BRIDGE_MAX_TOKENS,
   normalizeModelEntries,
   resolveMaxTokens,
+  resolveMaxTokensDetail,
 } from '../pi-bridge/src/model-config'
 
 describe('context window options', () => {
@@ -21,21 +27,49 @@ describe('context window options', () => {
   })
 })
 
+describe('max tokens options', () => {
+  it('stays in sync between the renderer and pi-bridge', () => {
+    expect([...RENDERER_MAX_TOKENS]).toEqual([...BRIDGE_MAX_TOKENS])
+    expect([...RENDERER_MAX_TOKENS]).toEqual([0, 16_384, 32_768, 65_536, 131_072, 262_144])
+  })
+
+  it('renders fixed labels and leaves auto to the caller', () => {
+    expect(RENDERER_MAX_TOKENS.slice(1).map(maxTokensLabel)).toEqual([
+      '16K',
+      '32K',
+      '64K',
+      '128K',
+      '256K',
+    ])
+  })
+
+  it('shows the derived value on the auto option', () => {
+    // 设置页把「自动」渲染成「自动（64K）」，取值必须与 pi-bridge 推导一致
+    for (const contextWindow of RENDERER_OPTIONS) {
+      expect(AUTO_MAX_TOKENS[contextWindow]).toBe(resolveMaxTokens(contextWindow, undefined, 0))
+    }
+    expect(maxTokensLabel(autoMaxTokens(64_000))).toBe('8K')
+    expect(maxTokensLabel(autoMaxTokens(128_000))).toBe('16K')
+    expect(maxTokensLabel(autoMaxTokens(256_000))).toBe('64K')
+    expect(maxTokensLabel(autoMaxTokens(1_000_000))).toBe('128K')
+  })
+})
+
 describe('mergeModelEntries', () => {
   const previous = [
-    { id: 'a', contextWindow: 256_000 as const, image: true },
+    { id: 'a', contextWindow: 256_000 as const, image: true, maxTokens: 131_072 as const },
     { id: 'removed', contextWindow: 64_000 as const, image: false },
   ]
 
   it('keeps the settings of models that still exist', () => {
     expect(mergeModelEntries(previous, ['a'])).toEqual([
-      { id: 'a', contextWindow: 256_000, image: true },
+      { id: 'a', contextWindow: 256_000, image: true, maxTokens: 131_072 },
     ])
   })
 
   it('appends new models with the default entry and drops removed ones', () => {
     expect(mergeModelEntries(previous, ['a', 'b'])).toEqual([
-      { id: 'a', contextWindow: 256_000, image: true },
+      { id: 'a', contextWindow: 256_000, image: true, maxTokens: 131_072 },
       { id: 'b', contextWindow: 128_000, image: false },
     ])
   })
@@ -86,10 +120,21 @@ describe('normalizeModelEntries', () => {
 
 describe('resolveMaxTokens', () => {
   it('never raises the catalog limit', () => {
-    // 1M 档位配套 16384，但 catalog 只声明 8192
+    // catalog 更小时取 catalog
     expect(resolveMaxTokens(1_000_000, 8_192)).toBe(8_192)
     // 未登记模型没有 catalog 值，直接用档位配套值
     expect(resolveMaxTokens(64_000)).toBe(8_192)
-    expect(resolveMaxTokens(256_000)).toBe(16_384)
+    expect(resolveMaxTokens(256_000)).toBe(65_536)
+    // 用户档位优先，但仍受 catalog 封顶
+    expect(resolveMaxTokens(256_000, 393_216, 131_072)).toBe(131_072)
+    expect(resolveMaxTokens(256_000, 65_536, 131_072)).toBe(65_536)
+    // 非法档位回落到自动
+    expect(resolveMaxTokens(256_000, undefined, 999)).toBe(65_536)
+  })
+
+  it('reports where the effective value came from', () => {
+    expect(resolveMaxTokensDetail(256_000).source).toBe('auto')
+    expect(resolveMaxTokensDetail(256_000, undefined, 131_072).source).toBe('user')
+    expect(resolveMaxTokensDetail(256_000, 65_536, 131_072).source).toBe('clamped')
   })
 })

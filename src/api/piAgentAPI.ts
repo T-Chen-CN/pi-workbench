@@ -48,6 +48,8 @@ interface AgentResponse {
 interface AgentUsage {
   input: number
   output: number
+  /** 本轮花在思考上的输出 token（output 的子集） */
+  reasoning: number
   cacheRead: number
   cacheWrite: number
   totalTokens: number
@@ -58,6 +60,10 @@ interface AgentChatResponse {
   success: boolean
   response?: string
   error?: string
+  /** 可本地化的错误码（截断类） */
+  errorCode?: 'output-truncated' | 'empty-response'
+  /** 本轮生效的输出上限 */
+  outputLimit?: number
   edits?: FileEdit[]
   usage?: AgentUsage
   plan?: StructuredPlan

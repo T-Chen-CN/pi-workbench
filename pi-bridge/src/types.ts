@@ -28,7 +28,17 @@ export interface ApiModelEntry {
   id: string
   contextWindow: ModelContextWindow
   image: boolean
+  /** 输出上限档位；缺省或 0 表示按上下文档位自动推导 */
+  maxTokens?: ModelMaxTokens
 }
+
+/**
+ * 输出上限档位（0 = 自动，按上下文档位推导）。
+ * 上限 256K：再高会被 SDK 的 clampMaxTokensToContext 按上下文余量压回，UI 上没有意义。
+ */
+export const MAX_TOKENS_OPTIONS = [0, 16_384, 32_768, 65_536, 131_072, 262_144] as const
+
+export type ModelMaxTokens = (typeof MAX_TOKENS_OPTIONS)[number]
 
 /** 可展示的工具步骤 */
 export type AgentTracePart =
@@ -184,6 +194,8 @@ export interface ModelCapabilityInfo {
   available: boolean
   contextWindow: number
   maxTokens: number | null
+  /** 生效值来源：auto=档位推导，user=用户档位，clamped=被 catalog 封顶 */
+  maxTokensSource?: 'auto' | 'user' | 'clamped'
   reasoning: boolean | null
   vision: boolean
   thinkingLevels: string[]
@@ -289,6 +301,8 @@ export interface ToolResultMeta {
 export interface AgentUsage {
   input: number
   output: number
+  /** 本轮花在思考上的输出 token（output 的子集） */
+  reasoning: number
   cacheRead: number
   cacheWrite: number
   totalTokens: number
@@ -300,6 +314,10 @@ export interface AgentChatResult {
   success: boolean
   response?: string
   error?: string
+  /** 可本地化的错误码；渲染层优先用它生成文案，error 作为日志兑底 */
+  errorCode?: 'output-truncated' | 'empty-response'
+  /** 本轮生效的输出上限（errorCode 为截断类时提供） */
+  outputLimit?: number
   /** Agent 在本轮对话中修改过的文件（用于 Diff 展示） */
   edits?: FileEdit[]
   /** 本轮模型调用的 token 用量 */

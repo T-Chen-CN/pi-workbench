@@ -81,39 +81,41 @@ gh repo edit T-Chen-CN/pi-workbench \
 - **Known issues 诚实写**：未签名未公证、`.doc/.xls/.ppt` 旧格式只给另存为指引、扫描件不做 OCR。
 - 资产名由 `package.json` 的 `artifactName` 决定，改名时同步本节。
 
-### v0.7.6 成品（可直接粘贴覆盖现有说明）
+### v0.7.9 成品（可直接粘贴覆盖现有说明）
 
 ```markdown
-三个立刻能感觉到的变化：编辑区默认视图变成了一张能自由摆放的仓库地图，标签栏「+」直接弹工作区列表，打字不再一顿一顿。
+修好上一版没接上的那个开关。
 
 ## Highlights
 
-- **仓库地图面板** — 编辑区默认视图把仓库里的文件按职责摆成一张可缩放、可平移的地图：顶层目录逐层点开，卡片拖到你顺手的位置会被记住。职责靠离线规则推断（Git 索引 + 文件头注释），不联网、不调模型、不碰 Git。
-- **打字不再卡** — 按键路径上三处看不见的开销全部拆掉：隐藏的 Markdown 阅读视图不再每键重排整篇、编辑时全文只读一次、草稿改为异步落盘不阻塞输入法。markdown 源码视图实测 338ms/键 → 18~35ms/键。
-- **标签栏「+」改成工作区选择弹窗** — 点一下就在最后一个标签旁边展开工作区列表，不用再绕菜单。
-- **README 中文优先重写** — 首屏改用主张式小节，补品牌 banner 与社交分享卡；英文对等版在 `README.en.md`。
+- **输出上限现在真的能存住** — 0.7.8 新增的输出上限设置没有生效：主进程清洗配置时把这个字段丢了，所以选完保存又变回「自动」。本版修好了保存与读取，改档位会立刻重建模型并生效，重启后也还在。
+- **「自动」直接告诉你算出来是多少** — 下拉里现在显示「自动（64K）」这类字样，值随上下文档位变化（128K→16K、256K→64K、1M→128K），不用再猜自动档到底是多少。
+- **保存后以磁盘为准** — 保存成功后会回读一次配置，界面显示的是真正存下去的东西。以后这类「看着改了实际没改」的毛病会当场暴露。
 
 ## Downloads
 
 | Platform | Asset |
 | --- | --- |
-| Windows | `Pi-Workbench-Setup-0.7.6.exe` |
-| macOS | `Pi-Workbench-0.7.6-universal.dmg` |
-| Linux | `Pi-Workbench-0.7.6.AppImage` |
+| Windows | `Pi-Workbench-Setup-0.7.9.exe` |
+| macOS | `Pi-Workbench-0.7.9-universal.dmg` |
+| Linux | `Pi-Workbench-0.7.9.AppImage` |
 
 ## Upgrade notes
 
-0.7.5 及更早版本可直接通过应用内更新升级：Windows / Linux 后台下载、点确认后安装，数据目录不受影响；macOS 请下载 dmg 覆盖安装。
+0.7.8 及更早版本可直接通过应用内更新升级：Windows / Linux 后台下载、点确认后安装，数据目录不受影响；macOS 请下载 dmg 覆盖安装。
+
+如果你在 0.7.8 里手动选过输出上限，那个值没有存下来，需要在设置里重选一次。不选也没关系，自动档在 256K 上下文档下是 64K。
 
 ## Known issues
 
 - 构建未做代码签名与公证，首次启动需在 SmartScreen / Gatekeeper 中确认一次。
+- 截断只如实报错，不会自动提高上限重试，也不建议为此调低思考强度。
 - 旧格式 `.doc / .xls / .ppt / .wps` 不解析，只返回「另存为 .docx / .xlsx / .pptx」指引；扫描件不做 OCR。
 
-**Full Changelog**: https://github.com/T-Chen-CN/pi-workbench/compare/v0.7.5...v0.7.6
+**Full Changelog**: https://github.com/T-Chen-CN/pi-workbench/compare/v0.7.8...v0.7.9
 ```
 
-粘贴方式（**执行前确认**）：`gh release edit v0.7.6 --notes-file <上面这段存成的文件>`。
+粘贴方式（**执行前确认**）：`gh release edit v0.7.9 --notes-file <上面这段存成的文件>`。
 
 ### 仍未接入
 

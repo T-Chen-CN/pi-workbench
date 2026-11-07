@@ -1354,9 +1354,7 @@ export function useChatPanelState(props: ChatPanelProps) {
           useChatStore.getState().appendPlanPart(key, assistantId, result.plan)
         }
       } else {
-        const errorMessage = result.error
-          ? localizeError(result.error)
-          : t('agentResponseFailed')
+        const errorMessage = describeAgentFailure(result)
         if (stoppedKeysRef.current.has(key)) {
           chat.setError(key, null)
           chat.finishStreamingMessage(key, assistantId)
@@ -1940,4 +1938,32 @@ export function useChatPanelState(props: ChatPanelProps) {
     transcriptRef,
     virtualizer,
   }
+}
+
+/**
+ * 截断类错误用结构化字段 + i18n 生成文案；其余错误走 localizeError。
+ * 不在这里给「降低思考强度」之类的建议——思考强度是用户的选择。
+ */
+function describeAgentFailure(result: {
+  error?: string
+  errorCode?: 'output-truncated' | 'empty-response'
+  outputLimit?: number
+  usage?: { output: number; reasoning: number }
+}): string {
+  const { t } = useI18nStore.getState()
+  if (result.errorCode) {
+    const limit = (result.outputLimit ?? 0).toLocaleString()
+    if (result.errorCode === 'empty-response') {
+      return t('agentEmptyResponse', { limit })
+    }
+    const output = result.usage?.output ?? 0
+    const reasoning = result.usage?.reasoning ?? 0
+    const body = Math.max(0, output - reasoning)
+    return t('agentOutputTruncated', {
+      reasoning: reasoning.toLocaleString(),
+      body: body.toLocaleString(),
+      limit,
+    })
+  }
+  return result.error ? localizeError(result.error) : t('agentResponseFailed')
 }

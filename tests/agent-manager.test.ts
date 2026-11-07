@@ -430,7 +430,7 @@ describe('AgentManager initialization', () => {
       baseUrl: 'https://api.example.com/v1',
       api: 'openai-completions',
       apiKey: '$PI_WORKBENCH_API_KEY',
-      models: [{ id: 'test-model', contextWindow: 128_000, maxTokens: 8_192, input: ['text'] }],
+      models: [{ id: 'test-model', contextWindow: 128_000, maxTokens: 16_384, input: ['text'] }],
     })
     expect(raw).not.toContain('sk-secret')
     expect(process.env.PI_WORKBENCH_API_KEY).toBe('sk-secret')
@@ -581,6 +581,14 @@ describe('AgentManager chat', () => {
           { type: 'tool_use', id: 't' },
           { type: 'text', text: 'part two' },
         ],
+        usage: {
+          input: 100,
+          output: 50,
+          reasoning: 30,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 150,
+        },
       })
     })
     primeSdk(session)
@@ -589,6 +597,8 @@ describe('AgentManager chat', () => {
     const result = await manager.chat('hi')
 
     expect(result.response).toBe('part one\npart two')
+    // 思考用量必须透出：截断报错要靠它解释 token 花在哪
+    expect(result.usage).toMatchObject({ output: 50, reasoning: 30 })
   })
 
   it('surfaces provider errors carried in stopReason', async () => {
@@ -607,6 +617,65 @@ describe('AgentManager chat', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('401 Unauthorized')
+  })
+
+  it('reports truncated output instead of a placeholder reply', async () => {
+    const session = createFakeSession(async (s) => {
+      s.messages.push({
+        role: 'assistant',
+        content: [],
+        stopReason: 'length',
+        usage: {
+          input: 100,
+          output: 8192,
+          reasoning: 8192,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 8292,
+        },
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const result = await manager.chat('hi')
+
+    expect(result.success).toBe(false)
+    expect(result.errorCode).toBe('output-truncated')
+    expect(result.error).toContain('No reply body')
+    expect(result.error).not.toContain('Agent completed but returned no text response.')
+    expect(result.usage?.reasoning).toBe(8192)
+    expect(result.outputLimit).toBeGreaterThan(0)
+    // 空壳回复不能进历史，否则下一轮请求会被污染
+    expect(manager.getMessageHistory().filter((m) => m.role === 'assistant')).toHaveLength(0)
+  })
+
+  it('reports partial truncation with the token split', async () => {
+    const session = createFakeSession(async (s) => {
+      s.messages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'half a sen' }],
+        stopReason: 'length',
+        usage: {
+          input: 100,
+          output: 6000,
+          reasoning: 5800,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 6100,
+        },
+      })
+    })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const result = await manager.chat('hi')
+
+    expect(result.success).toBe(false)
+    expect(result.errorCode).toBe('output-truncated')
+    expect(result.error).toContain('Output truncated')
+    expect(result.error).toContain('reasoning 5800')
+    expect(result.error).toContain('text 200')
   })
 
   it('reports aborted requests', async () => {
@@ -2674,8 +2743,8 @@ describe('model capabilities', () => {
 
     expect(flash.input).toEqual(['text'])
     expect(vision.input).toEqual(['text', 'image'])
-    // 1M 档位配套 16384，但 catalog 只有 8192：只缩不放大
-    expect(flash).toMatchObject({ contextWindow: 1_000_000, maxTokens: 8_192 })
+    // 1M 档位配套 131072，catalog 声明上限 393216：取档位配套值
+    expect(flash).toMatchObject({ contextWindow: 1_000_000, maxTokens: 131_072 })
     // 未登记的模型没有 catalog 上限，按档位配套值写入
     expect(vision).toMatchObject({ contextWindow: 64_000, maxTokens: 8_192 })
   })

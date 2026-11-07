@@ -989,11 +989,16 @@ export type ApiProvider = 'anthropic' | 'openai' | 'custom'
 /** 上下文容量档位：设置页只允许四档，存十进制整数 */
 export type ModelContextWindow = 64000 | 128000 | 256000 | 1000000
 
+/** 输出上限档位；0 = 按上下文档位自动推导 */
+export type ModelMaxTokens = 0 | 16384 | 32768 | 65536 | 131072 | 262144
+
 /** 设置页维护的单个模型能力 */
 export interface ApiModelEntry {
   id: string
   contextWindow: ModelContextWindow
   image: boolean
+  /** 输出上限档位；缺省或 0 表示自动 */
+  maxTokens?: ModelMaxTokens
 }
 
 export interface ApiConfig {
@@ -1150,6 +1155,8 @@ export interface ModelCapabilityInfo {
   available: boolean
   contextWindow: number
   maxTokens: number | null
+  /** 生效值来源：auto=档位推导，user=用户档位，clamped=被 catalog 封顶 */
+  maxTokensSource?: 'auto' | 'user' | 'clamped'
   reasoning: boolean | null
   vision: boolean
   thinkingLevels: string[]

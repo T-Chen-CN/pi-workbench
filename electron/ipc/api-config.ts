@@ -31,6 +31,11 @@ const decryptApiKey = decryptSecret
 /** 上下文容量只允许四档；与 pi-bridge 的 CONTEXT_WINDOW_OPTIONS 一致（单测校验） */
 export const CONTEXT_WINDOW_VALUES = [64_000, 128_000, 256_000, 1_000_000] as const
 const DEFAULT_CONTEXT_WINDOW = 128_000
+/**
+ * 输出上限档位；与 pi-bridge 的 MAX_TOKENS_OPTIONS 一致（去掉 0，单测校验）。
+ * 0 / 缺省都表示自动，不写盘。
+ */
+export const MAX_TOKENS_VALUES = [16_384, 32_768, 65_536, 131_072, 262_144] as const
 /** 旧配置没有 imageModels 时的历史默认预勾选，只在迁移旧结构时使用 */
 const LEGACY_DEFAULT_IMAGE_MODELS = ['deepseek-flash']
 
@@ -38,6 +43,8 @@ export interface StoredModelEntry {
   id: string
   contextWindow: number
   image: boolean
+  /** 输出上限档位；缺省表示自动，不写盘 */
+  maxTokens?: number
 }
 
 /** 只支持 OpenAI 兼容渠道；provider 字段保留给 AgentManager 兼容旧结构 */
@@ -56,6 +63,13 @@ function normalizeContextWindow(value: unknown): number {
     : DEFAULT_CONTEXT_WINDOW
 }
 
+/** 非法档位回落到 0（自动），避免把脏值写进 api-config.json */
+function normalizeMaxTokens(value: unknown): number {
+  return typeof value === 'number' && (MAX_TOKENS_VALUES as readonly number[]).includes(value)
+    ? value
+    : 0
+}
+
 /**
  * 归一化模型列表。
  * 新结构直接清洗；旧结构（availableModels + imageModels）就地转换，不写盘。
@@ -65,20 +79,28 @@ export function normalizeApiModels(raw: any): StoredModelEntry[] {
   const entries: StoredModelEntry[] = []
   const seen = new Set<string>()
 
-  const push = (id: unknown, image: boolean, contextWindow: unknown): void => {
+  const push = (
+    id: unknown,
+    image: boolean,
+    contextWindow: unknown,
+    maxTokens?: unknown
+  ): void => {
     const value = typeof id === 'string' ? id.trim() : ''
     if (!value || seen.has(value)) return
     seen.add(value)
+    const output = normalizeMaxTokens(maxTokens)
     entries.push({
       id: value,
       contextWindow: normalizeContextWindow(contextWindow),
       image,
+      // 0 视为自动，不写入配置，保持旧配置形状不变
+      ...(output > 0 ? { maxTokens: output } : {}),
     })
   }
 
   if (Array.isArray(raw?.models)) {
     for (const item of raw.models) {
-      push(item?.id, item?.image === true, item?.contextWindow)
+      push(item?.id, item?.image === true, item?.contextWindow, item?.maxTokens)
     }
   } else {
     const images = new Set(

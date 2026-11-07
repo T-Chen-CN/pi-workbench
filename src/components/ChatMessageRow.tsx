@@ -528,6 +528,9 @@ export const ChatMessageRow = React.memo(function ChatMessageRow({
           {message.usage && (
             <Caption className="mt-1 block text-ink-muted">
               {message.usage.totalTokens.toLocaleString()} tokens
+              {message.usage.reasoning > 0
+                ? ` · ${t('usageReasoningTokens', { count: message.usage.reasoning.toLocaleString() })}`
+                : ''}
               {message.usage.cost > 0 ? ` · $${message.usage.cost.toFixed(4)}` : ''}
             </Caption>
           )}

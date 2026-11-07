@@ -112,7 +112,13 @@ Pi tool_call 钩子 → AgentManager 归类 + 生成摘要 → ApprovalBroker（
 ## 6. 模型配置
 
 - 写入 `{appDir}/data/agent/models.json`；API Key 通过环境变量 `$PI_WORKBENCH_API_KEY` 插值，**不落盘**（见 `pi-bridge/src/model-config.ts`）。
-- 容量档位：64K / 128K / 256K / 1M，各自配套输出上限（8K / 8K / 16K / 16K），最终取 `min(配套值, catalog)` —— 只缩不放大，否则请求会被供应商拒绝。
+- 容量档位：64K / 128K / 256K / 1M，自动档配套输出上限 8K / 16K / 64K / 128K（对齐主流旗舰区间：256K→64K、1M→128K）。
+- 输出上限可显式选：自动 / 16K / 32K / 64K / 128K / 256K，写入 `api-config.json` 的 `maxTokens`（设置页：模型能力表「输出上限」列）。最终取 `min(用户档位或配套值, catalog)` —— 只缩不放大，否则请求会被供应商拒绝。
+- **事实源与派生**：`config/api-config.json` 的 `models[].maxTokens` 是唯一事实源（用户意愿，缺省 = 自动）；`data/agent/models.json` 的同名字段是 `resolveMaxTokensDetail()` 的派生结果，每次 `initialize()` 重写。改档位会改变 Agent 配置签名（`electron/agent-config-key.ts`），因此必须重建 Agent 才生效——签名漏掉这个字段时，保存后一切照旧，且 `models.json` 不会刷新。
+  - 中途有三层会改写模型条目，新增字段必须三处一起改：渲染层 `mergeModelEntries` → 主进程 `normalizeApiModels`（`electron/ipc/api-config.ts`，读写两条路径都走它）→ `pi-bridge` 的 `normalizeModelEntries`。主进程这层是白名单，最容易漏。
+- `KNOWN_MODEL_METADATA` 里的 `maxTokens` 是**供应商硬上限**而不是推荐值：`deepseek-flash` 填 393216（官方 1–384K），职责只是防 400，不参与策略。若把它当推荐值填小，会直接压死用户档位。
+- 生效值还会被 SDK 的 `clampMaxTokensToContext`（`contextWindow - estimateContextTokens - 4096`）按上下文余量再压一次；`listModels` 透出 `maxTokensSource`（`auto` / `user` / `clamped`）供前端提示。
+- 输出撞上限（`stopReason === 'length'`）一律 `success: false`：返回 `errorCode`（`output-truncated` / `empty-response`）与 `outputLimit`，用量字段带 `reasoning`，渲染层据此提示「思考 X + 正文 Y / 上限 Z」；空正文不写入 `messageHistory`（否则下一轮请求 400）。旧行为是把空正文替换成 `Agent completed but returned no text response.` 并当作成功——已于 0.7.7 后修正。
 - provider / apiUrl / apiKey / selectedModel 是**应用级全局配置**，所有工作区共用；❌ 禁止放进工作区配置（`.pi-workbench/config.json`）。
 
 ## 7. 内置联网能力

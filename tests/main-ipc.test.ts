@@ -457,7 +457,7 @@ describe('API configuration handlers', () => {
       apiUrl: 'https://api.example.com/v1',
       apiKey: 'sk-123',
       selectedModel: 'model-a',
-      models: [{ id: 'model-a', contextWindow: 128_000, image: false }],
+      models: [{ id: 'model-a', contextWindow: 128_000, image: false, maxTokens: 65_536 }],
     }
 
     await expect(call('apiConfig:save', config)).resolves.toMatchObject({ success: true })
@@ -465,9 +465,37 @@ describe('API configuration handlers', () => {
     const raw = await fs.readFile(path.join(appDir, 'config', 'api-config.json'), 'utf-8')
     expect(raw).not.toContain('sk-123')
     expect(JSON.parse(raw).apiKey).toMatch(/^enc:/)
+    // 输出上限档位必须落盘：曾经被白名单静默丢弃，用户在设置里选完又变回“自动”
+    expect(JSON.parse(raw).models[0].maxTokens).toBe(65_536)
 
     const result = await call('apiConfig:get')
     expect(result.config).toMatchObject({ ...config, apiKey: 'sk-123' })
+  })
+
+  it('drops unknown output limits and omits the automatic one', async () => {
+    const config = {
+      provider: 'custom',
+      apiUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-123',
+      selectedModel: 'model-a',
+      models: [
+        { id: 'model-a', contextWindow: 128_000, image: false, maxTokens: 12_345 },
+        { id: 'model-b', contextWindow: 64_000, image: false, maxTokens: 0 },
+      ],
+    }
+
+    await expect(call('apiConfig:save', config)).resolves.toMatchObject({ success: true })
+
+    const raw = JSON.parse(await fs.readFile(path.join(appDir, 'config', 'api-config.json'), 'utf-8'))
+    const byId = (id: string) => raw.models.find((entry: { id: string }) => entry.id === id)
+    expect(byId('model-a')).not.toHaveProperty('maxTokens')
+    expect(byId('model-b')).not.toHaveProperty('maxTokens')
+
+    const result = await call('apiConfig:get')
+    expect((result.config as { models: Array<Record<string, unknown>> }).models).toEqual([
+      { id: 'model-a', contextWindow: 128_000, image: false },
+      { id: 'model-b', contextWindow: 64_000, image: false },
+    ])
   })
 
   it('falls back to defaults when no API config exists', async () => {
@@ -937,5 +965,38 @@ describe('model context window options', () => {
     const { CONTEXT_WINDOW_OPTIONS } = await import('../pi-bridge/src/model-config')
 
     expect([...CONTEXT_WINDOW_VALUES]).toEqual([...CONTEXT_WINDOW_OPTIONS])
+  })
+})
+
+describe('model output limit options', () => {
+  it('keeps the main-process list in sync with pi-bridge', async () => {
+    const { MAX_TOKENS_VALUES } = await import('../electron/ipc/api-config')
+    const { MAX_TOKENS_OPTIONS } = await import('../pi-bridge/src/model-config')
+
+    // 主进程不存 0：0 / 缺省都表示自动
+    expect([...MAX_TOKENS_VALUES]).toEqual(MAX_TOKENS_OPTIONS.filter((value) => value > 0))
+  })
+})
+
+describe('agent config signature', () => {
+  it('changes when the output limit changes', async () => {
+    const { agentConfigKey } = await import('../electron/agent-config-key')
+    const base = {
+      provider: 'custom',
+      apiUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-123',
+      selectedModel: 'model-a',
+      models: [{ id: 'model-a', contextWindow: 256_000, image: false }],
+    }
+
+    // 改档位必须重建 Agent，否则 models.json 不会重写，设置白改
+    expect(
+      agentConfigKey({ ...base, models: [{ ...base.models[0], maxTokens: 65_536 }] })
+    ).not.toBe(agentConfigKey(base))
+
+    // 缺省与 0 同义：都表示自动，不应多触发一次重建
+    expect(
+      agentConfigKey({ ...base, models: [{ ...base.models[0], maxTokens: 0 }] })
+    ).toBe(agentConfigKey(base))
   })
 })
