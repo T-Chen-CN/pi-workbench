@@ -331,6 +331,9 @@ export type CloudTracePart =
       detail?: string
     }
 
+/** 云端会话导出格式：md / 自带样式 HTML / 原始片段 JSON */
+export type CloudExportFormat = 'md' | 'html' | 'json'
+
 /** 一轮的 token 用量（终态帧里给，字段名照抄上游） */
 export interface CloudRunUsage {
   input: number

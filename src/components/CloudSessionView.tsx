@@ -5,6 +5,7 @@ import {
   ClipboardList,
   Cloud,
   CloudOff,
+  Download,
   MessageSquarePlus,
   MoreHorizontal,
   Pencil,
@@ -20,6 +21,7 @@ import {
   X,
 } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
+import { toast } from '../store/toastStore'
 import { filterSessions, isTerminalRun, useCloudStore } from '../store/cloudStore'
 import { cloudApi } from '../api/cloud'
 import { CloudLedgerDrawer, openWrites } from './CloudLedgerDrawer'
@@ -39,6 +41,7 @@ import {
   IconButton,
   Input,
   Label,
+  MenuOption,
   Modal,
   PopoverMenu,
   Spinner,
@@ -272,6 +275,8 @@ export const CloudSessionView: React.FC<{
   )
   const pendingWrites = useCloudStore((state) => state.pendingWrites)
   const [ledgerOpen, setLedgerOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const openWriteCount = openWrites(pendingWrites).length
   /**
    * 历史接口只存工具行，不存 subagent.* 事件：有 delegate 调用却没有子代理卡片，
@@ -432,6 +437,24 @@ export const CloudSessionView: React.FC<{
     setImageBusy(false)
   }
 
+  const runExport = async (format: 'md' | 'html' | 'json') => {
+    if (!activeSessionId || exporting) return
+    setExportOpen(false)
+    setExporting(true)
+    try {
+      const result = await cloudApi.exportSession({
+        sessionId: activeSessionId,
+        title: sessionMeta?.title ?? '',
+        format,
+        language,
+      })
+      if (result.success && !result.canceled) toast.success(t('exportDone'))
+      else if (!result.success) toast.error(t('exportFailed', { error: result.error ?? '' }))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const handleStop = () => {
     if (!busy) return
     setStopping(true)
@@ -585,6 +608,29 @@ export const CloudSessionView: React.FC<{
               </span>
             )}
           </button>
+          {activeSessionId && (
+            <span className="relative ml-auto flex-shrink-0">
+              <IconButton
+                icon={Download}
+                label={t('exportSession')}
+                size="sm"
+                disabled={exporting}
+                onClick={() => setExportOpen((open) => !open)}
+              />
+              <PopoverMenu
+                open={exportOpen}
+                onClose={() => setExportOpen(false)}
+                label={t('exportSession')}
+                className="w-32 py-1"
+              >
+                {(['md', 'html', 'json'] as const).map((format) => (
+                  <MenuOption key={format} onSelect={() => void runExport(format)}>
+                    {format.toUpperCase()}
+                  </MenuOption>
+                ))}
+              </PopoverMenu>
+            </span>
+          )}
           {sessionMeta && (
             <div className="ml-auto flex min-w-0 items-center">
               <CloudSessionMetaLine

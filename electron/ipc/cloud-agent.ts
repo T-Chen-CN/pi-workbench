@@ -1,6 +1,8 @@
 /** 云端 Agent 的 IPC：配置、会话、run 生命周期、程序内控制台 */
 
-import { app, type BrowserWindow } from 'electron'
+import { app, dialog, type BrowserWindow } from 'electron'
+import * as fs from 'node:fs/promises'
+import * as path from 'node:path'
 import { handleIpc } from './register.js'
 import {
   normalizeBaseUrl,
@@ -57,6 +59,7 @@ import {
   readApprovalPolicy,
   writeApprovalMode
 } from '../cloud/policy.js'
+import { cloudExportFileName, renderCloudExport } from '../cloud/export.js'
 import type {
   CloudApprovalChoice,
   CloudApprovalMode,
@@ -980,6 +983,64 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       return fail(error)
     }
   })
+
+  /**
+   * 导出云端会话（md / html / json）。
+   *
+   * 云端没有可复制的会话记录文件：真相是 `/api/sessions/{id}/messages`，
+   * 所以这里现拉一轮片段、渲染成文档，再让用户选路径。默认落在下载目录。
+   */
+  handleIpc(
+    'cloud:session:export',
+    async (
+      _event,
+      input: { sessionId?: string; title?: string; format?: string; language?: string }
+    ) => {
+      const sessionId = String(input?.sessionId ?? '')
+      if (!sessionId) return { success: false as const, error: '缺少 sessionId' }
+      const format = input?.format === 'html' ? 'html' : input?.format === 'json' ? 'json' : 'md'
+      const language: 'zh' | 'en' = input?.language === 'en' ? 'en' : 'zh'
+      try {
+        const remote = createRemote(ensureClient())
+        const page = await remote.listMessages({ sessionId, limit: 500 })
+        const title = String(input?.title ?? '').trim()
+        const content = renderCloudExport(
+          page.parts,
+          { sessionId, title, model: capabilities?.model ?? null, exportedAt: Date.now() },
+          format,
+          language
+        )
+
+        let baseDir = ''
+        try {
+          baseDir = app.getPath('downloads')
+        } catch {
+          baseDir = ''
+        }
+        const defaultPath = baseDir
+          ? path.join(baseDir, cloudExportFileName(title, sessionId, format))
+          : cloudExportFileName(title, sessionId, format)
+        const filters =
+          format === 'md'
+            ? [{ name: 'Markdown', extensions: ['md'] }]
+            : format === 'html'
+              ? [{ name: 'HTML', extensions: ['html'] }]
+              : [{ name: 'JSON', extensions: ['json'] }]
+        const win = deps.getMainWindow()
+        const picked = win
+          ? await dialog.showSaveDialog(win, { defaultPath, filters })
+          : await dialog.showSaveDialog({ defaultPath, filters })
+        if (picked.canceled || !picked.filePath) {
+          return { success: true as const, canceled: true }
+        }
+        await fs.writeFile(picked.filePath, content, 'utf-8')
+        return { success: true as const, path: picked.filePath }
+      } catch (error) {
+        logger?.warn('[Cloud] export failed', cloudErrorMessage(error))
+        return { success: false as const, error: cloudErrorMessage(error) }
+      }
+    }
+  )
 
   handleIpc('cloud:messages:list', async (_event, input: { sessionId?: string; limit?: number; offset?: number }) => {
     const sessionId = String(input?.sessionId ?? '')

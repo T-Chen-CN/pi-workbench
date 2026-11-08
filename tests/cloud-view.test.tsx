@@ -138,6 +138,7 @@ function installBridge(overrides: Partial<BridgeStub> = {}): BridgeStub {
     }),
     cloudSessionsDelete: async () => ({ success: true, deleted: true }),
     cloudMessagesList: async () => ({ success: true, parts: stub.parts, hasMore: false }),
+    cloudSessionExport: vi.fn(async () => ({ success: true, path: 'C:/tmp/out.md' })),
     cloudRunStart: stub.startRun,
     cloudRunStatus: async () => ({ success: true, state: 'completed' }),
     cloudApprovalRespond: vi.fn(async () => ({ success: true, choice: 'once' })),
@@ -741,6 +742,31 @@ describe('丢失主人的轮次', () => {
     fireEvent.click(ack)
     await waitFor(() => expect(resolve).toHaveBeenCalledWith({ runId: 'run_lost' }))
     await waitFor(() => expect(useCloudStore.getState().runState).toBe('cancelled'))
+  })
+})
+
+describe('会话导出', () => {
+  it('exports the open session in the picked format', async () => {
+    installBridge()
+    useCloudStore.setState({
+      activeSessionId: 'sess_1',
+      sessionMeta: { ...(useCloudStore.getState().sessionMeta ?? ({} as never)), id: 'sess_1', title: '部署排查' } as never,
+      parts: [{ type: 'text', id: 'h:1', role: 'user', text: 'hi' }],
+    })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+
+    const button = await waitFor(() => screen.getByLabelText(zh.exportSession))
+    fireEvent.click(button)
+    fireEvent.click(await waitFor(() => screen.getByText('HTML')))
+
+    const exportFn = (window as unknown as { electronAPI: Record<string, unknown> })
+      .electronAPI.cloudSessionExport as { mock: { calls: unknown[][] } }
+    await waitFor(() => expect(exportFn.mock.calls.length).toBe(1))
+    expect(exportFn.mock.calls[0][0]).toMatchObject({
+      sessionId: 'sess_1',
+      title: '部署排查',
+      format: 'html',
+    })
   })
 })
 

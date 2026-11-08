@@ -13,6 +13,7 @@ import type {
   CloudConfigGetResult,
   CloudConnectResult,
   CloudDashboardBounds,
+  CloudExportFormat,
   CloudFrame,
   CloudMessagesResult,
   CloudPolicyGetResult,
@@ -464,6 +465,20 @@ export const cloudApi = {
       return { success: false, parts: [], error: NO_BRIDGE }
     }
     return bridge.cloudMessagesList(input)
+  },
+
+  /** 导出会话：主进程现拉片段、渲染成文档、让用户选路径 */
+  async exportSession(input: {
+    sessionId: string
+    title?: string
+    format: CloudExportFormat
+    language?: string
+  }): Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudSessionExport !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudSessionExport(input)
   },
 
   async startRun(input: {

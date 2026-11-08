@@ -27,6 +27,10 @@ const mocks = vi.hoisted(() => {
     bodies: [] as string[],
     /** 控制台配置里 approvals.mode 的当前值（模拟 PUT 之后读回） */
     configMode: 'manual' as string,
+    /** 导出时保存对话框的落点（空 = 用户取消） */
+    savePath: '' as string,
+    /** 每次导出请求的 defaultPath，用来断言文件名 */
+    saveDialogs: [] as string[],
   }
   const window = {
     webContents: {
@@ -65,6 +69,13 @@ vi.mock('electron', () => ({
     },
   },
   safeStorage: mocks.safeStorage,
+  dialog: {
+    showSaveDialog: async (_win: unknown, options?: { defaultPath?: string }) => {
+      const target = mocks.state.savePath
+      mocks.state.saveDialogs.push(options?.defaultPath ?? '')
+      return target ? { canceled: false, filePath: target } : { canceled: true }
+    },
+  },
   shell: { openExternal: async () => {} },
   WebContentsView: class {
     webContents = {
@@ -1002,6 +1013,52 @@ describe('cloud ledger', () => {
       summary: '   ',
     })
     expect(result.success).toBe(false)
+  })
+})
+
+describe('cloud session export', () => {
+  beforeAll(async () => {
+    await seedPairedDevice()
+  })
+
+  it('renders the session and writes it to the picked path', async () => {
+    const target = path.join(mocks.state.appDir, 'export.md')
+    mocks.state.savePath = target
+    mocks.state.saveDialogs = []
+
+    const result = await call<{ success: boolean; path?: string }>('cloud:session:export', {
+      sessionId: 'run_session',
+      title: '部署排查',
+      format: 'md',
+      language: 'zh',
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.path).toBe(target)
+    const written = fs.readFileSync(target, 'utf-8')
+    expect(written).toContain('# 部署排查')
+    expect(written).toContain('hello')
+    expect(written).toContain('Hello cloud')
+    // 默认文件名取自标题，落在下载目录
+    expect(mocks.state.saveDialogs[0]).toContain('部署排查.md')
+  })
+
+  it('reports a cancelled dialog as success so the UI stays quiet', async () => {
+    mocks.state.savePath = ''
+    const result = await call<{ success: boolean; canceled?: boolean }>('cloud:session:export', {
+      sessionId: 'run_session',
+      title: 'x',
+      format: 'html',
+    })
+    expect(result).toMatchObject({ success: true, canceled: true })
+  })
+
+  it('refuses to export without a session id', async () => {
+    const result = await call<{ success: boolean; error?: string }>('cloud:session:export', {
+      format: 'md',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('sessionId')
   })
 })
 

@@ -526,6 +526,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cloudMediaRead: (input: { path: string }) => ipcRenderer.invoke('cloud:media:read', input),
   cloudMessagesList: (input: { sessionId: string; limit?: number; offset?: number }) =>
     ipcRenderer.invoke('cloud:messages:list', input),
+  cloudSessionExport: (input: {
+    sessionId: string
+    title?: string
+    format: 'md' | 'html' | 'json'
+    language?: string
+  }) => ipcRenderer.invoke('cloud:session:export', input),
   cloudRunStart: (input: { input: string; sessionId?: string; idempotencyKey: string }) =>
     ipcRenderer.invoke('cloud:run:start', input),
   cloudRunStatus: (input: { runId: string }) => ipcRenderer.invoke('cloud:run:status', input),

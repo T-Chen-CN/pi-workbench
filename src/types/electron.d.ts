@@ -9,6 +9,7 @@ import type {
   CloudDeviceResult,
   CloudGatewayPairResult,
   CloudGatewayStatusResult,
+  CloudExportFormat,
   CloudDiagnostics,
   CloudJob,
   CloudFrame,
@@ -773,6 +774,12 @@ export interface ElectronAPI {
     limit?: number
     offset?: number
   }) => Promise<CloudMessagesResult>
+  cloudSessionExport: (input: {
+    sessionId: string
+    title?: string
+    format: CloudExportFormat
+    language?: string
+  }) => Promise<{ success: boolean; canceled?: boolean; path?: string; error?: string }>
   cloudRunStart: (input: {
     input: string
     sessionId?: string
