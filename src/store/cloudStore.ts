@@ -27,6 +27,7 @@ import type {
   CloudDiagnostics,
   CloudJob,
   CloudJobDraft,
+  CloudJobPatch,
   CloudPendingWrite,
   CloudSession,
   CloudTracePart,
@@ -201,6 +202,10 @@ interface CloudState {
   runJob: (jobId: string) => Promise<boolean>
   pauseJob: (jobId: string) => Promise<boolean>
   resumeJob: (jobId: string) => Promise<boolean>
+  /** 改任务（名称 / 调度 / 提示词）：只递真正变了的字段 */
+  updateJob: (jobId: string, patch: CloudJobPatch) => Promise<boolean>
+  /** 删任务：服务端删掉后就从列表里移除 */
+  deleteJob: (jobId: string) => Promise<boolean>
   stop: () => Promise<void>
   applyFrame: (frame: CloudFrame) => void
   applyStatus: (payload: {
@@ -966,6 +971,30 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       return false
     }
     set({ resolvingUnknown: false, runState: result.state ?? 'cancelled' })
+    return true
+  },
+
+  async updateJob(jobId, patch) {
+    set({ jobActionPending: jobId, jobsError: null })
+    const result = await cloudApi.updateJob(jobId, patch)
+    set({ jobActionPending: null })
+    if (!result.success || !result.job) {
+      set({ jobsError: result.error ?? 'unknown' })
+      return false
+    }
+    set({ jobs: get().jobs.map((job) => (job.id === jobId ? result.job! : job)) })
+    return true
+  },
+
+  async deleteJob(jobId) {
+    set({ jobActionPending: jobId, jobsError: null })
+    const result = await cloudApi.deleteJob(jobId)
+    set({ jobActionPending: null })
+    if (!result.success) {
+      set({ jobsError: result.error ?? 'unknown' })
+      return false
+    }
+    set({ jobs: get().jobs.filter((job) => job.id !== jobId) })
     return true
   },
 

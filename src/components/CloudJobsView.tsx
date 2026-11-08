@@ -1,16 +1,39 @@
 /**
  * 任务页：云端定时任务（cron）。
  *
- * 做五件事：看列表、新建、立刻跑一次、暂停、恢复。**不给删除**——删除是不可逆动作，
- * 这里只留暂停（想删就暂停，人再去服务器上删）。
+ * 做六件事：看列表、新建、编辑、立刻跑一次、暂停、恢复、删除。
+ * 删除与编辑都要网关白名单放行 `DELETE /api/jobs/{id}` 与 `PATCH /api/jobs/{id}`（插件 0.1.2 起）。
  */
 
 import React, { useEffect, useRef, useState } from 'react'
-import { AlertCircle, CalendarClock, Loader2, Pause, Play, Plus, RefreshCw, RotateCw } from 'lucide-react'
+import {
+  AlertCircle,
+  CalendarClock,
+  Loader2,
+  Pause,
+  Pencil,
+  Play,
+  Plus,
+  RefreshCw,
+  RotateCw,
+  Trash2,
+} from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useCloudStore } from '../store/cloudStore'
 import type { CloudJob } from '../types/cloud'
-import { Button, Caption, DataText, EmptyState, Field, IconButton, Input, Label, Modal, Spinner, Textarea } from './ui'
+import {
+  Button,
+  Caption,
+  DataText,
+  EmptyState,
+  Field,
+  IconButton,
+  Input,
+  Label,
+  Modal,
+  Spinner,
+  Textarea,
+} from './ui'
 import { formatRelativeTime } from '../utils/relativeTime'
 
 /** 调度快捷项：覆盖「间隔 / 每天 / 工作日」三种最常见意图，也能自己敲 */
@@ -31,7 +54,9 @@ const Row: React.FC<{
   onRun: () => void
   onPause: () => void
   onResume: () => void
-}> = ({ job, connected, pending, onRun, onPause, onResume }) => {
+  onEdit: () => void
+  onDelete: () => void
+}> = ({ job, connected, pending, onRun, onPause, onResume, onEdit, onDelete }) => {
   const { t, language } = useI18nStore()
   const paused = job.state === 'paused' || !job.enabled
   const tone =
@@ -97,7 +122,23 @@ const Row: React.FC<{
             {t('cloudJobPause')}
           </Button>
         )}
-        {pending && <Spinner size={12} />}
+        <span className="ml-auto flex items-center gap-1">
+          {pending && <Spinner size={12} />}
+          <IconButton
+            icon={Pencil}
+            label={t('cloudJobEdit')}
+            size="sm"
+            disabled={!connected || pending}
+            onClick={onEdit}
+          />
+          <IconButton
+            icon={Trash2}
+            label={t('cloudJobDelete')}
+            size="sm"
+            disabled={!connected || pending}
+            onClick={onDelete}
+          />
+        </span>
       </div>
     </div>
   )
@@ -118,33 +159,65 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
   const pauseJob = useCloudStore((state) => state.pauseJob)
   const resumeJob = useCloudStore((state) => state.resumeJob)
   const createJob = useCloudStore((state) => state.createJob)
+  const updateJob = useCloudStore((state) => state.updateJob)
+  const deleteJob = useCloudStore((state) => state.deleteJob)
   const creating = useCloudStore((state) => state.jobCreatePending)
   const [loadedOnce, setLoadedOnce] = useState(false)
   /** 暂停任务点「现在跑一次」要先说清楚：服务端会顺手把它恢复成排期 */
   const [runTarget, setRunTarget] = useState<CloudJob | null>(null)
-  /** 新建表单：存在组件里就够，关掉即丢弃（不落盘、不跨页面） */
-  const [createOpen, setCreateOpen] = useState(false)
+  /** 新建 / 编辑共用一份表单：存在组件里就够，关掉即丢弃（不落盘、不跨页面） */
+  const [formOpen, setFormOpen] = useState(false)
+  const [editTarget, setEditTarget] = useState<CloudJob | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<CloudJob | null>(null)
+  const [saving, setSaving] = useState(false)
   const [draft, setDraft] = useState({ name: '', schedule: '', prompt: '', repeat: '' })
   const draftReady = Boolean(draft.name.trim() && draft.schedule.trim() && draft.prompt.trim())
   const pollRef = useRef<number | null>(null)
   const connected = connection === 'connected'
 
   const openCreate = () => {
+    setEditTarget(null)
     setDraft({ name: '', schedule: '', prompt: '', repeat: '' })
-    setCreateOpen(true)
+    setFormOpen(true)
   }
 
-  const submitCreate = () => {
-    if (!draftReady) return
-    const repeat = draft.repeat.trim() ? Number(draft.repeat.trim()) : undefined
-    void createJob({
-      name: draft.name.trim(),
-      schedule: draft.schedule.trim(),
-      prompt: draft.prompt.trim(),
-      ...(typeof repeat === 'number' && Number.isInteger(repeat) && repeat > 0 ? { repeat } : {}),
-    }).then((ok) => {
-      if (ok) setCreateOpen(false)
-    })
+  const openEdit = (job: CloudJob) => {
+    setEditTarget(job)
+    setDraft({ name: job.name, schedule: job.schedule, prompt: job.prompt, repeat: '' })
+    setFormOpen(true)
+  }
+
+  /** 编辑时只递真正变了的字段：上游对空更新直接 400 */
+  const submitForm = async () => {
+    if (!draftReady || saving) return
+    setSaving(true)
+    try {
+      if (editTarget) {
+        const patch: { name?: string; schedule?: string; prompt?: string } = {}
+        const name = draft.name.trim()
+        const schedule = draft.schedule.trim()
+        const prompt = draft.prompt.trim()
+        if (name !== editTarget.name) patch.name = name
+        if (schedule !== editTarget.schedule) patch.schedule = schedule
+        if (prompt !== editTarget.prompt) patch.prompt = prompt
+        if (Object.keys(patch).length === 0) {
+          setFormOpen(false)
+          return
+        }
+        if (await updateJob(editTarget.id, patch)) setFormOpen(false)
+        return
+      }
+      const repeat = draft.repeat.trim() ? Number(draft.repeat.trim()) : undefined
+      const ok = await createJob({
+        name: draft.name.trim(),
+        schedule: draft.schedule.trim(),
+        prompt: draft.prompt.trim(),
+        ...(typeof repeat === 'number' && Number.isInteger(repeat) && repeat > 0 ? { repeat } : {}),
+      })
+      if (ok) setFormOpen(false)
+    } finally {
+      setSaving(false)
+    }
   }
 
   /**
@@ -260,6 +333,8 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
               }}
               onPause={() => void pauseJob(job.id)}
               onResume={() => void resumeJob(job.id)}
+              onEdit={() => openEdit(job)}
+              onDelete={() => setDeleteTarget(job)}
             />
           ))}
       </div>
@@ -269,16 +344,21 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
       </div>
 
       <Modal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        title={t('cloudJobCreateTitle')}
+        open={formOpen}
+        onClose={() => setFormOpen(false)}
+        title={editTarget ? t('cloudJobEditTitle') : t('cloudJobCreateTitle')}
         footer={
           <>
-            <Button size="sm" onClick={() => setCreateOpen(false)}>
+            <Button size="sm" onClick={() => setFormOpen(false)}>
               {t('cloudCancel')}
             </Button>
-            <Button size="sm" variant="primary" disabled={!draftReady || creating} onClick={submitCreate}>
-              {t('cloudJobCreateSubmit')}
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={!draftReady || (!editTarget && creating) || saving}
+              onClick={() => void submitForm()}
+            >
+              {editTarget ? t('cloudJobSave') : t('cloudJobCreateSubmit')}
             </Button>
           </>
         }
@@ -324,6 +404,7 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
               onChange={(event) => setDraft((prev) => ({ ...prev, prompt: event.target.value }))}
             />
           </Field>
+          {!editTarget && (
           <Field
             label={t('cloudJobCreateRepeat')}
             htmlFor="cloud-job-repeat"
@@ -338,7 +419,36 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
               onChange={(event) => setDraft((prev) => ({ ...prev, repeat: event.target.value }))}
             />
           </Field>
+          )}
           {error && <div className="type-caption text-danger">{error}</div>}
+        </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        title={t('cloudJobDeleteTitle')}
+        footer={
+          <>
+            <Button size="sm" onClick={() => setDeleteTarget(null)}>
+              {t('cloudCancel')}
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => {
+                const target = deleteTarget
+                setDeleteTarget(null)
+                if (target) void deleteJob(target.id)
+              }}
+            >
+              {t('cloudJobDeleteConfirm')}
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2 px-5 py-4">
+          <Caption className="text-ink-muted">{t('cloudJobDeleteBody')}</Caption>
         </div>
       </Modal>
 

@@ -6,6 +6,7 @@ import type {
   CloudDiagnostics,
   CloudJob,
   CloudJobDraft,
+  CloudJobPatch,
   CloudJobExecution,
   CloudRunStatus,
   CloudSession,
@@ -468,7 +469,7 @@ export function createRemote(client: CloudClient) {
     /**
      * 定时任务：列 / 新建 / 立刻跑 / 暂停 / 恢复。
      *
-     * 不做删除（用户明确：任务只能暂停，不能在这里删；想删去服务器上做）。
+     * 删除走 `DELETE /api/jobs/{id}`、编辑走 `PATCH /api/jobs/{id}`（都要网关白名单放行）。
      * 新建走 `POST /api/jobs`，`deliver` 用服务端默认值。
      */
     async listJobs(): Promise<CloudJob[]> {
@@ -496,6 +497,30 @@ export function createRemote(client: CloudClient) {
       })
       if (!raw?.job) throw new Error('服务端没有回任务对象')
       return toJob(raw.job)
+    },
+
+    /** 只允许改上游白名单里的字段，多余的会被上游静默丢弃（也可能 400 空更新） */
+    async updateJob(jobId: string, patch: CloudJobPatch): Promise<CloudJob> {
+      const body: Record<string, unknown> = {}
+      if (typeof patch.name === 'string' && patch.name.trim()) body.name = patch.name.trim()
+      if (typeof patch.schedule === 'string' && patch.schedule.trim()) {
+        body.schedule = patch.schedule.trim()
+      }
+      if (typeof patch.prompt === 'string' && patch.prompt.trim()) body.prompt = patch.prompt.trim()
+      if (Object.keys(body).length === 0) throw new Error('没有要修改的字段')
+      const raw = await client.request<{ job?: RawJob }>(
+        `/api/jobs/${encodeURIComponent(jobId)}`,
+        { method: 'PATCH', body, timeoutMs: 20_000 }
+      )
+      if (!raw?.job) throw new Error('服务端没有回任务对象')
+      return toJob(raw.job)
+    },
+
+    async deleteJob(jobId: string): Promise<void> {
+      await client.request<Record<string, unknown>>(`/api/jobs/${encodeURIComponent(jobId)}`, {
+        method: 'DELETE',
+        timeoutMs: 20_000,
+      })
     },
 
     async runJob(jobId: string): Promise<void> {

@@ -516,6 +516,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cloudJobsRun: (input: { jobId: string }) => ipcRenderer.invoke('cloud:jobs:run', input),
   cloudJobsPause: (input: { jobId: string }) => ipcRenderer.invoke('cloud:jobs:pause', input),
   cloudJobsResume: (input: { jobId: string }) => ipcRenderer.invoke('cloud:jobs:resume', input),
+  cloudJobsUpdate: (input: { jobId: string; name?: string; schedule?: string; prompt?: string }) =>
+    ipcRenderer.invoke('cloud:jobs:update', input),
+  cloudJobsDelete: (input: { jobId: string }) => ipcRenderer.invoke('cloud:jobs:delete', input),
   cloudLedgerList: () => ipcRenderer.invoke('cloud:ledger:list'),
   cloudLedgerResolve: (input: { id: string; verdict: 'done' | 'missing' | 'ignored' }) =>
     ipcRenderer.invoke('cloud:ledger:resolve', input),

@@ -136,6 +136,12 @@ export interface CloudJob {
  *
  * `deliver` 不暴露：桌面端只关心任务本身，投递用服务端默认的 `local`。
  */
+export interface CloudJobPatch {
+  name?: string
+  schedule?: string
+  prompt?: string
+}
+
 export interface CloudJobDraft {
   name: string
   /** 调度表达式：`30m` / `every 2h` / `in 30m` / `0 9 * * *` / ISO 时间 */

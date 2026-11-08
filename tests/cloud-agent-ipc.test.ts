@@ -362,6 +362,25 @@ vi.mock('electron', () => ({
           ],
         })
       }
+      if (route === '/api/jobs/job_1' && init?.method === 'PATCH') {
+        const body = JSON.parse(String(init.body ?? '{}')) as Record<string, unknown>
+        return Response.json({
+          job: {
+            id: 'job_1',
+            name: body.name ?? '每日日志汇总',
+            prompt: body.prompt ?? '汇总昨天的日志',
+            schedule: body.schedule ?? '0 9 * * *',
+            schedule_display: body.schedule ?? '0 9 * * *',
+            state: 'scheduled',
+            enabled: true,
+            next_run_at: '2026-05-01T01:00:00Z',
+            repeat: null,
+          },
+        })
+      }
+      if (route === '/api/jobs/job_1' && init?.method === 'DELETE') {
+        return Response.json({ ok: true })
+      }
       if (route === '/api/jobs' && init?.method === 'POST') {
         const body = JSON.parse(String(init.body ?? '{}')) as Record<string, unknown>
         return Response.json({
@@ -1094,6 +1113,32 @@ describe('cloud jobs', () => {
       const result = await call<{ success: boolean }>(channel, { jobId: 'job_1' })
       expect(result.success).toBe(true)
     }
+  })
+
+  it('edits a job through PATCH and only sends the fields it was given', async () => {
+    const before = mocks.state.bodies.length
+    const result = await call<{ success: boolean; job?: Record<string, unknown> }>(
+      'cloud:jobs:update',
+      { jobId: 'job_1', name: '  改名后的任务  ' }
+    )
+    expect(result.success).toBe(true)
+    expect(result.job).toMatchObject({ id: 'job_1', name: '改名后的任务' })
+    const body = JSON.parse(mocks.state.bodies[before]) as Record<string, unknown>
+    expect(body).toEqual({ name: '改名后的任务' })
+  })
+
+  it('refuses an empty edit instead of turning it into a 400 upstream', async () => {
+    const result = await call<{ success: boolean; error?: string }>('cloud:jobs:update', {
+      jobId: 'job_1',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('没有要修改的字段')
+  })
+
+  it('deletes a job by id', async () => {
+    const result = await call<{ success: boolean }>('cloud:jobs:delete', { jobId: 'job_1' })
+    expect(result.success).toBe(true)
+    expect(mocks.state.requests.some((line) => line === 'DELETE https://hub.example.com/api/jobs/job_1')).toBe(true)
   })
 
   it('creates a job with the schedule the form collected', async () => {

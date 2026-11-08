@@ -911,6 +911,54 @@ describe('任务页', () => {
     await waitFor(() => expect(run).toHaveBeenCalledWith({ jobId: 'job_1' }))
   })
 
+  it('edits a job in place and only sends what changed', async () => {
+    installBridge()
+    const update = vi.fn(async () => ({ success: true, job: { ...JOB, name: '改名后的任务' } }))
+    Object.assign((window as unknown as { electronAPI: Record<string, unknown> }).electronAPI, {
+      cloudJobsList: async () => ({ success: true, jobs: [JOB] }),
+      cloudJobsUpdate: update,
+    })
+    useCloudStore.setState({ connection: 'connected', jobs: [JOB], jobsLoading: false })
+
+    render(<CloudWorkspaceView view="cloud-jobs" onNavigate={vi.fn()} />)
+    // 列表首帧会重建一次节点：等它稳定再点，否则点到的是被换掉的旧按钮
+    expect(await screen.findByText('每日日志汇总')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText(zh.cloudJobEdit))
+    expect(await screen.findByText(zh.cloudJobEditTitle)).toBeTruthy()
+
+    const nameInput = await screen.findByLabelText(zh.cloudJobCreateName)
+    fireEvent.change(nameInput, { target: { value: '改名后的任务' } })
+    fireEvent.click(screen.getByText(zh.cloudJobSave))
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith({ jobId: 'job_1', name: '改名后的任务' })
+    )
+    await waitFor(() =>
+      expect(useCloudStore.getState().jobs[0].name).toBe('改名后的任务')
+    )
+  })
+
+  it('deletes a job only after the confirmation', async () => {
+    installBridge()
+    const remove = vi.fn(async () => ({ success: true }))
+    Object.assign((window as unknown as { electronAPI: Record<string, unknown> }).electronAPI, {
+      cloudJobsList: async () => ({ success: true, jobs: [JOB] }),
+      cloudJobsDelete: remove,
+    })
+    useCloudStore.setState({ connection: 'connected', jobs: [JOB], jobsLoading: false })
+
+    render(<CloudWorkspaceView view="cloud-jobs" onNavigate={vi.fn()} />)
+    expect(await screen.findByText('每日日志汇总')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText(zh.cloudJobDelete))
+    // 确认之前不能删
+    expect(await screen.findByText(zh.cloudJobDeleteTitle)).toBeTruthy()
+    expect(remove).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText(zh.cloudJobDeleteConfirm))
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith({ jobId: 'job_1' }))
+    await waitFor(() => expect(useCloudStore.getState().jobs).toHaveLength(0))
+  })
+
   it('creates a job from the form and closes it on success', async () => {
     installBridge()
     const create = vi.fn(async () => ({ success: true, job: { ...JOB, id: 'job_2' } }))

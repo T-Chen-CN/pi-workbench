@@ -882,6 +882,46 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   })
 
+  handleIpc(
+    'cloud:jobs:update',
+    async (
+      _event,
+      input: { jobId?: string; name?: string; schedule?: string; prompt?: string }
+    ) => {
+      const jobId = String(input?.jobId ?? '')
+      if (!jobId) return { success: false as const, error: '缺少任务 id' }
+      const name = String(input?.name ?? '').trim()
+      const schedule = String(input?.schedule ?? '').trim()
+      const prompt = String(input?.prompt ?? '').trim()
+      if (name.length > 200) return { success: false as const, error: '任务名最多 200 个字符' }
+      if (prompt.length > 5000) return { success: false as const, error: '提示词最多 5000 个字符' }
+      if (!name && !schedule && !prompt) {
+        return { success: false as const, error: '没有要修改的字段' }
+      }
+      try {
+        const job = await createRemote(ensureClient()).updateJob(jobId, {
+          ...(name ? { name } : {}),
+          ...(schedule ? { schedule } : {}),
+          ...(prompt ? { prompt } : {}),
+        })
+        return { success: true as const, job }
+      } catch (error) {
+        return fail(error)
+      }
+    }
+  )
+
+  handleIpc('cloud:jobs:delete', async (_event, input: { jobId?: string }) => {
+    const jobId = String(input?.jobId ?? '')
+    if (!jobId) return { success: false as const, error: '缺少任务 id' }
+    try {
+      await createRemote(ensureClient()).deleteJob(jobId)
+      return { success: true as const }
+    } catch (error) {
+      return fail(error)
+    }
+  })
+
   handleIpc('cloud:ledger:list', () => {
     try {
       return { success: true as const, entries: readLedger() }

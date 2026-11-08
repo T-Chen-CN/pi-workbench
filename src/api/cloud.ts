@@ -29,6 +29,7 @@ import type {
   CloudDiagnostics,
   CloudJob,
   CloudJobDraft,
+  CloudJobPatch,
   CloudPendingWrite,
   CloudRunStatus,
   CloudSessionsResult,
@@ -392,6 +393,25 @@ export const cloudApi = {
       return { success: false, error: NO_BRIDGE }
     }
     return bridge.cloudJobsResume({ jobId })
+  },
+
+  async updateJob(
+    jobId: string,
+    patch: CloudJobPatch
+  ): Promise<{ success: boolean; error?: string; job?: CloudJob }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudJobsUpdate !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudJobsUpdate({ jobId, ...patch })
+  },
+
+  async deleteJob(jobId: string): Promise<{ success: boolean; error?: string }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudJobsDelete !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudJobsDelete({ jobId })
   },
 
   async listLedger(): Promise<{
