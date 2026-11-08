@@ -650,7 +650,19 @@ Hermes → local_dispatch(workspace, prompt)
 | 设备 token 越权 | 探针设备看不到 Legion 的工作区（卡片 0 个 skill），读/取消/派活一律「没有找到」，admin 密钥不受限 |
 | 未鉴权访问 A2A | 401 |
 
-### 15.8 仍未做
+### 15.8 补齐 §8.1 / §8.2 剩余验收场景（同日，dev build + 真 VPS）
+
+§15.4 / §15.6 漏掉的三个场景补测（都不是改代码，纯验收）：
+
+| 场景 | 做法 | 结果 |
+| --- | --- | --- |
+| §8.1 D3 派到不在白名单的工作区 | 让云端模型把任务派给不存在的「部署仓库」 | **通过**：`local_workspaces` 里查不到，模型如实说「没找到这个工作区」并列出唯一可用的那个，再问要不要改派 |
+| §8.1 D4 设备下线后派活 | 硬杀 Electron 后派活 | **通过**：任务停在 `queued`；`local_workspaces` 在 90s 心跳窗口内仍显示 `online: true`（设计如此），窗口过后变 `online: false`；模型如实报告 taskId、状态、没有写任何文件，并给出「取消或等设备上线」两条路 |
+| §8.2 D9 执行中断网 30s | 任务跑到一半停掉网关 33s 再起 | **通过**：本地会话照常跑完，中继自动重连，任务 `completed`（`attempt=1`，没有被租约抢走），文件内容正确，账本与云端一致 |
+
+D6 的「7 天后清理」由单测覆盖（`test_purge_keeps_live_tasks` / `test_sweep_purges_only_when_asked`），不做真机等 7 天。
+
+### 15.9 仍未做
 
 - push webhook（`pushNotifications: false`）；
 - 跨设备重投（现在只重投给**原设备**；换设备需要迁移已有的本地会话，暂不做）；
