@@ -22,7 +22,7 @@ import {
 } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
-import { filterSessions, isTerminalRun, useCloudStore } from '../store/cloudStore'
+import { filterSessions, isRunningEntry, isTerminalRun, useCloudStore } from '../store/cloudStore'
 import { cloudApi } from '../api/cloud'
 import { CloudLedgerDrawer, openWrites } from './CloudLedgerDrawer'
 import { CloudModeSwitch } from './CloudModeSwitch'
@@ -57,11 +57,13 @@ const SessionRow: React.FC<{
   session: CloudSession
   selected: boolean
   pending: boolean
+  /** 这个会话还有一轮在跑（可能是后台跑的，用户切走了） */
+  running: boolean
   onSelect: () => void
   onRename: (title: string) => void
   onTogglePin: () => void
   onDelete: () => void
-}> = ({ session, selected, pending, onSelect, onRename, onTogglePin, onDelete }) => {
+}> = ({ session, selected, pending, running, onSelect, onRename, onTogglePin, onDelete }) => {
   const { t, language } = useI18nStore()
   const [menuOpen, setMenuOpen] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -120,6 +122,15 @@ const SessionRow: React.FC<{
           className="flex min-w-0 flex-1 flex-col gap-1 px-2.5 py-2 text-left"
         >
           <span className="flex items-baseline gap-2">
+            {running && (
+              <span
+                role="status"
+                aria-label={t('cloudSessionRunning')}
+                className="flex-shrink-0 self-center"
+              >
+                <Spinner size={10} />
+              </span>
+            )}
             {session.pinned && <Pin size={11} aria-hidden="true" className="text-accent" />}
             <span className="min-w-0 flex-1 truncate type-value text-ink">
               {session.title || t('untitledSession')}
@@ -256,6 +267,8 @@ export const CloudSessionView: React.FC<{
   const runPartial = useCloudStore((state) => state.runPartial)
   const runInterrupted = useCloudStore((state) => state.runInterrupted)
   const steerError = useCloudStore((state) => state.steerError)
+  const sessionRuns = useCloudStore((state) => state.sessionRuns)
+  const sendError = useCloudStore((state) => state.sendError)
   const steer = useCloudStore((state) => state.steer)
   const resolveUnknown = useCloudStore((state) => state.resolveUnknown)
   const resolveError = useCloudStore((state) => state.resolveError)
@@ -546,6 +559,7 @@ export const CloudSessionView: React.FC<{
               session={session}
               selected={session.id === activeSessionId}
               pending={sessionActionPending === session.id}
+              running={isRunningEntry(sessionRuns[session.id])}
               onSelect={() => {
                 if (session.id === activeSessionId) return
                 followRef.current = true
@@ -711,6 +725,8 @@ export const CloudSessionView: React.FC<{
               {t('cloudSteerFailed', { error: steerError })}
             </div>
           )}
+          {/* 发送被挡下（并行轮次已满）：这条不是轮次失败，别混进终态脚注 */}
+          {sendError && <div className="py-2 type-caption text-danger">{sendError}</div>}
           {runLost && (
             <div className="flex flex-wrap items-center gap-3 border border-rule-control bg-raised px-3 py-2">
               <span className="type-caption text-ink-muted">{t('cloudRunLostBody')}</span>

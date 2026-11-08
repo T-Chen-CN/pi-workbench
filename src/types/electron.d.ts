@@ -793,6 +793,7 @@ export interface ElectronAPI {
     idempotencyKey: string
   }) => Promise<CloudRunStartResult>
   cloudRunAttach: (input: { sessionId?: string }) => Promise<{
+    runs?: Array<{ runId: string; sessionId: string | null; state: CloudRunStatus }>
     success: boolean
     /** true = 事件流已经接上；false = 没有在跑的轮次 / 已结束 */
     attached: boolean

@@ -166,6 +166,98 @@ describe('帧的会话归属', () => {
   })
 })
 
+describe('并行跑两轮', () => {
+  /** 永不结束的事件流：两轮同时挂着，才能验「同时跟随」 */
+  function hangingStream(): Response {
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start() {
+          // 故意不 close：reader 会一直 await
+        },
+      }),
+      { headers: { 'content-type': 'text/event-stream' } }
+    )
+  }
+
+  function makeConcurrentRunner() {
+    const frames: CloudFrame[] = []
+    const opened: string[] = []
+    let created = 0
+    const client: CloudClient = {
+      baseUrl: 'https://api.example.com',
+      rawBaseUrl: 'https://api.example.com',
+      credential: 'key',
+      request: async <T,>(requestPath: string): Promise<T> => {
+        if (requestPath === '/v1/runs') {
+          created += 1
+          return { run_id: `run-${created}`, status: 'queued' } as T
+        }
+        // 状态探测：保持 running，谁都不许自动收尾；不给 session_id，
+        // 让 start() 用调用方传进来的那个（真实后端也只对新建的 run 才回填）
+        return { status: 'running' } as T
+      },
+      openStream: async (requestPath: string) => {
+        opened.push(requestPath)
+        return hangingStream()
+      },
+    }
+    const runner = new CloudRunner({ emit: (frame) => frames.push(frame) }, client)
+    return { runner, frames, opened }
+  }
+
+  it('follows two runs at once and keeps their sessions apart', async () => {
+    const { runner, frames, opened } = makeConcurrentRunner()
+    try {
+      const first = await runner.start({ input: 'a', sessionId: 's-a', idempotencyKey: 'k-a' })
+      const second = await runner.start({ input: 'b', sessionId: 's-b', idempotencyKey: 'k-b' })
+
+      await waitFor(() => opened.length === 2)
+      // 第二条不许把第一条掐掉：这正是「切到 B 就把 A 掐死」的根因
+      expect(runner.liveStreamCount).toBe(2)
+      expect(runner.activeRunIdFor('s-a')).toBe(first.runId)
+      expect(runner.activeRunIdFor('s-b')).toBe(second.runId)
+      expect(opened).toEqual(['/v1/runs/run-1/events', '/v1/runs/run-2/events'])
+      expect(frames.some((item) => item.kind === 'session' && item.sessionId === 's-b')).toBe(true)
+    } finally {
+      runner.dispose()
+    }
+  })
+
+  it('refuses a third run instead of waiting for a 429 from the gateway', async () => {
+    const { runner } = makeConcurrentRunner()
+    try {
+      await runner.start({ input: 'a', sessionId: 's-a', idempotencyKey: 'k-a' })
+      await runner.start({ input: 'b', sessionId: 's-b', idempotencyKey: 'k-b' })
+      await expect(
+        runner.start({ input: 'c', sessionId: 's-c', idempotencyKey: 'k-c' })
+      ).rejects.toThrow(/同时最多跟随 2 轮/)
+      expect(runner.liveStreamCount).toBe(2)
+    } finally {
+      runner.dispose()
+    }
+  })
+
+  it('steers the run the caller names, not the most recent one', async () => {
+    const { runner } = makeConcurrentRunner()
+    const steered: string[] = []
+    const remote = runner.remoteApi as unknown as {
+      steerRun: (runId: string, text: string) => Promise<unknown>
+    }
+    remote.steerRun = async (runId: string) => {
+      steered.push(runId)
+    }
+    try {
+      const first = await runner.start({ input: 'a', sessionId: 's-a', idempotencyKey: 'k-a' })
+      await runner.start({ input: 'b', sessionId: 's-b', idempotencyKey: 'k-b' })
+
+      await runner.steer(first.runId, '改一下')
+      expect(steered).toEqual([first.runId])
+    } finally {
+      runner.dispose()
+    }
+  })
+})
+
 describe('clarify 兜底轮询', () => {
   it('synthesises the prompt from pending_controls when the stream never carried it', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })

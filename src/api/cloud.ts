@@ -533,12 +533,13 @@ export const cloudApi = {
     return bridge.cloudRunResolveUnknown({ runId })
   },
 
-  async steerRun(text: string): Promise<{ success: boolean; error?: string }> {
+  async steerRun(text: string, runId?: string): Promise<{ success: boolean; error?: string }> {
     const bridge = api()
     if (!bridge || typeof bridge.cloudRunSteer !== 'function') {
       return { success: false, error: NO_BRIDGE }
     }
-    return bridge.cloudRunSteer({ text })
+    // 并行跑两轮时不能靠主进程「最近一轮」猜：显式带上 runId
+    return bridge.cloudRunSteer(runId ? { text, runId } : { text })
   },
 
   async runStatus(runId: string): Promise<CloudRunResult> {
@@ -556,6 +557,7 @@ export const cloudApi = {
     runId?: string
     sessionId?: string
     state?: CloudRunStatus
+    runs?: Array<{ runId: string; sessionId: string | null; state: CloudRunStatus }>
     error?: string
   }> {
     const bridge = api()

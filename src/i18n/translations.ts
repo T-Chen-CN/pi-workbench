@@ -278,6 +278,7 @@ export const translations = {
     cloudToolFailed: '失败',
     cloudToolFailedNoDetail: '上游只回了失败状态，没带错误内容（多半是命令退出码不是 0）',
     cloudRunError: '本轮执行失败：{error}',
+    cloudSessionRunning: '有轮次在跑',
     cloudRunUsage: '本轮 {input} 入 / {output} 出 tokens',
     cloudRunModel: '模型 {model}',
     cloudRunPartial: '上游把这一轮截断了（撞到输出上限），内容不完整；可以再发一句让它接着写。',
@@ -1382,6 +1383,7 @@ export const translations = {
     cloudToolFailedNoDetail:
       'The upstream only reported a failure status — no error text came with it',
     cloudRunError: 'Run failed: {error}',
+    cloudSessionRunning: 'Turn running',
     cloudRunUsage: 'This turn: {input} in / {output} out tokens',
     cloudRunModel: 'Model {model}',
     cloudRunPartial:

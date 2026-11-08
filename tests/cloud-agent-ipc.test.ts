@@ -258,6 +258,22 @@ vi.mock('electron', () => ({
           { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
         )
       }
+      if (route === '/v1/runs/run_par_a' || route === '/v1/runs/run_par_b') {
+        const isA = route.endsWith('_a')
+        return Response.json({
+          object: 'hermes.run',
+          run_id: isA ? 'run_par_a' : 'run_par_b',
+          status: 'running',
+          session_id: isA ? 'par_session_a' : 'par_session_b',
+        })
+      }
+      if (route === '/v1/runs/run_par_a/events' || route === '/v1/runs/run_par_b/events') {
+        // 两条流都挂着不收尾：同时跟随的状态才留得住
+        return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      }
       if (route === '/v1/runs/run_hang') {
         return Response.json({
           object: 'hermes.run',
@@ -568,6 +584,7 @@ vi.mock('electron', () => ({
 import {
   clearActiveRun,
   readActiveRun,
+  readActiveRuns,
   writeActiveRun,
 } from '../electron/cloud/active-run'
 
@@ -1491,6 +1508,8 @@ describe('cloud run attach（重启后接回在跑的一轮）', () => {
   })
 
   it('drops a record the backend no longer knows about', async () => {
+    // 记录是多条并存的：先清空，别让上一个用例留下的那条干扰断言
+    clearActiveRun()
     writeActiveRun({ runId: 'run_gone', sessionId: 'run_session', startedAt: 1 })
     const result = await call<{ success: boolean; attached: boolean }>('cloud:run:attach', {
       sessionId: 'run_session',
@@ -1501,6 +1520,7 @@ describe('cloud run attach（重启后接回在跑的一轮）', () => {
   })
 
   it('reattaches a live run, streams it and clears the record at the end', async () => {
+    clearActiveRun()
     writeActiveRun({ runId: 'run_live', sessionId: 'run_session', startedAt: 1 })
     mocks.state.sent.length = 0
     const result = await call<{
@@ -1529,6 +1549,41 @@ describe('cloud run attach（重启后接回在跑的一轮）', () => {
     // 历史先铺，然后才是增量与「已接上」分隔线
     expect(frames.some((frame) => frame.kind === 'parts')).toBe(true)
     expect(frames.some((frame) => frame.kind === 'run' && frame.state === 'completed')).toBe(true)
+  })
+
+  it('attaches every recorded run at once, each under its own session', async () => {
+    // 重启后两轮都还在服务端跑：必须都接回来，否则其中一轮的进度就永远看不到了
+    clearActiveRun()
+    writeActiveRun({ runId: 'run_par_a', sessionId: 'par_session_a', startedAt: 1 })
+    writeActiveRun({ runId: 'run_par_b', sessionId: 'par_session_b', startedAt: 2 })
+
+    const result = await call<{
+      success: boolean
+      attached: boolean
+      runs?: Array<{ runId: string; sessionId: string | null; state: string }>
+    }>('cloud:run:attach', {})
+
+    expect(result.success).toBe(true)
+    expect(result.attached).toBe(true)
+    expect(result.runs?.map((row) => row.runId).sort()).toEqual(['run_par_a', 'run_par_b'])
+    expect(result.runs?.map((row) => row.sessionId).sort()).toEqual([
+      'par_session_a',
+      'par_session_b',
+    ])
+    // 两条记录都还在（各自没收尾）
+    expect(readActiveRuns()).toHaveLength(2)
+  })
+
+  it('only attaches the run of the session it was asked about', async () => {
+    clearActiveRun()
+    writeActiveRun({ runId: 'run_par_a', sessionId: 'par_session_a', startedAt: 1 })
+    writeActiveRun({ runId: 'run_par_b', sessionId: 'par_session_b', startedAt: 2 })
+
+    const result = await call<{ success: boolean; runs?: Array<{ runId: string }> }>(
+      'cloud:run:attach',
+      { sessionId: 'par_session_b' }
+    )
+    expect(result.runs?.map((row) => row.runId)).toEqual(['run_par_b'])
   })
 
   it('returns attached: false when there is nothing to attach to', async () => {

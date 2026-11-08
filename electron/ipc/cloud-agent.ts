@@ -38,7 +38,7 @@ import {
   settleRun
 } from '../cloud/ledger.js'
 import { createRemote, toRunStatus } from '../cloud/remote.js'
-import { clearActiveRun, readActiveRun, writeActiveRun } from '../cloud/active-run.js'
+import { clearActiveRun, readActiveRuns, writeActiveRun } from '../cloud/active-run.js'
 import { startHeartbeat } from '../cloud/heartbeat.js'
 import {
   deviceSummary,
@@ -136,6 +136,19 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   let activeRun: { runId: string; sessionId: string | null } | null = null
 
   /**
+   * 帧属于哪一轮。
+   *
+   * 并行跑两轮时不能再用「最近一次 start」兜底：同一时刻两条流都在推帧。
+   * 帧里没有 runId（part / parts 帧），但 `CloudFrameOrigin.sessionId` 有，
+   * 而 runner 知道每个在跟的会话对应哪个 run。
+   */
+  function runIdFromFrame(frame: { runId?: string; sessionId?: string }): string {
+    if (typeof frame.runId === 'string' && frame.runId) return frame.runId
+    const bySession = runner?.activeRunIdFor(frame.sessionId) ?? null
+    return bySession ?? activeRun?.runId ?? ''
+  }
+
+  /**
    * 只观测**实时**帧：`kind:'parts'` 是历史校正，里面的工具早已结束，
    * 从那里记账只会把陈年旧账翻出来。
    */
@@ -161,7 +174,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       if (value.kind === 'run') {
         const state = value.state
         if (state === 'completed' || state === 'failed' || state === 'cancelled') {
-          const runId = value.runId ?? activeRun?.runId
+          const runId = runIdFromFrame(value)
           if (runId) mutateLedger((entries) => settleRun(entries, runId))
           if (activeRun && (!value.runId || value.runId === activeRun.runId)) activeRun = null
         }
@@ -170,7 +183,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       if (value.kind !== 'part') return
       const part = value.part
       if (!part || part.type !== 'tool' || !part.toolCallId) return
-      const runId = activeRun?.runId
+      const runId = runIdFromFrame(value)
       if (!runId) return
       if (part.status === 'running') {
         const writeClass = classifyToolWrite({
@@ -180,7 +193,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
         if (!writeClass) return
         const entry = makeWriteEntry({
           runId,
-          sessionId: activeRun?.sessionId ?? null,
+          sessionId: value.sessionId ?? activeRun?.sessionId ?? null,
           toolCallId: part.toolCallId,
           toolName: String(part.toolName ?? ''),
           summary: String(part.argsSummary ?? ''),
@@ -206,8 +219,8 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
   const notifiedRuns = new Set<string>()
   /** 帧里不总是带 sessionId：先记最近一次看到的，点击通知才有地方落 */
   let notifySessionId = ''
-  /** 最近一段助手正文：终态通知的正文用它，空正文时就不写 */
-  let lastReply = ''
+  /** 每一轮最近一段助手正文：终态通知的正文用它，空正文时就不写（按 runId 分开，并行不互相顶） */
+  const lastReplyByRun = new Map<string, string>()
 
   function rememberNoticeKey(bucket: Set<string>, key: string): boolean {
     if (bucket.has(key)) return false
@@ -268,9 +281,10 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
         notifySessionId = value.sessionId
         return
       }
+      if (typeof value.sessionId === 'string' && value.sessionId) notifySessionId = value.sessionId
       if (value.kind === 'run') {
         const state = value.state
-        const runId = value.runId || activeRun?.runId || ''
+        const runId = runIdFromFrame(value)
         if (!runId) return
         // 自己点的停止不通知：那是用户已经知道的结果
         if (state === 'failed' || state === 'interrupted' || state === 'completed') {
@@ -281,7 +295,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
             title: state === 'completed' ? text.cloudComplete : text.cloudError,
             body:
               state === 'completed'
-                ? notificationSummary(lastReply)
+                ? notificationSummary(lastReplyByRun.get(runId) ?? '')
                 : notificationSummary(String(value.error ?? ''))
           })
         }
@@ -291,7 +305,8 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       const part = value.part
       if (!part) return
       if (part.type === 'text' && part.role === 'assistant' && typeof part.text === 'string') {
-        lastReply = part.text
+        const runId = runIdFromFrame(value)
+        if (runId) lastReplyByRun.set(runId, part.text)
         return
       }
       // 审批 / 澄清才是“这轮卡住了”：没填 decision、没 settled、没超时才值得弹
@@ -1124,8 +1139,8 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
           idempotencyKey
         })
         activeRun = { runId: started.runId, sessionId: started.sessionId ?? null }
-        // 新一轮：上一轮的正文不能再当成本轮的结果摘要
-        lastReply = ''
+        // 新一轮：这个 runId 上不可能有历史正文（并行时别的轮次不受影响）
+        lastReplyByRun.delete(started.runId)
         const device = readCloudDevice()
         logger?.info(
           `[Cloud] run start device=${device.name} (${device.id.slice(0, 8)})`
@@ -1157,38 +1172,50 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
    * 都返回 `attached: false` —— 渲染层据此什么也不做，不报错。
    */
   handleIpc('cloud:run:attach', async (_event, input: { sessionId?: string }) => {
-    const record = readActiveRun()
-    if (!record) return { success: true, attached: false }
     const wanted = String(input?.sessionId ?? '')
-    if (wanted && record.sessionId && wanted !== record.sessionId) {
-      return { success: true, attached: false }
+    const records = wanted
+      ? readActiveRuns().filter((record) => record.sessionId === wanted)
+      : readActiveRuns()
+    if (records.length === 0) return { success: true, attached: false, runs: [] }
+
+    const runner = ensureRunner()
+    const attached: Array<{ runId: string; sessionId: string | null; state: string }> = []
+    for (const record of records) {
+      try {
+        const result = await runner.attach({
+          runId: record.runId,
+          sessionId: record.sessionId,
+        })
+        if (result.attached) {
+          activeRun = { runId: result.runId, sessionId: result.sessionId ?? record.sessionId }
+          attached.push({
+            runId: result.runId,
+            sessionId: result.sessionId ?? record.sessionId,
+            state: result.state,
+          })
+        } else {
+          // 终态 / unknown：记录已完成使命（unknown 仍是会话里的状态，不靠它找回）
+          clearActiveRun(record.runId)
+        }
+      } catch (error) {
+        // 网关重启过 / run 被回收：这条记录永远接不上了，删掉别每次启动都问
+        if (error instanceof CloudApiError && error.code === 'not_found') {
+          clearActiveRun(record.runId)
+          continue
+        }
+        logger?.warn('[Cloud] run attach failed', cloudErrorMessage(error))
+        if (records.length === 1) return fail(error)
+      }
     }
-    try {
-      const result = await ensureRunner().attach({
-        runId: record.runId,
-        sessionId: record.sessionId,
-      })
-      if (result.attached) {
-        activeRun = { runId: result.runId, sessionId: result.sessionId ?? record.sessionId }
-      } else {
-        // 终态 / unknown：记录已完成使命（unknown 仍是会话里的状态，不靠它找回）
-        clearActiveRun(record.runId)
-      }
-      return {
-        success: true,
-        attached: result.attached,
-        runId: result.runId,
-        sessionId: result.sessionId ?? undefined,
-        state: result.state,
-      }
-    } catch (error) {
-      // 网关重启过 / run 被回收：这条记录永远接不上了，删掉别每次启动都问
-      if (error instanceof CloudApiError && error.code === 'not_found') {
-        clearActiveRun(record.runId)
-        return { success: true, attached: false }
-      }
-      logger?.warn('[Cloud] run attach failed', cloudErrorMessage(error))
-      return fail(error)
+
+    const first = attached[0]
+    return {
+      success: true,
+      attached: attached.length > 0,
+      runId: first?.runId,
+      sessionId: first?.sessionId ?? undefined,
+      state: first?.state,
+      runs: attached,
     }
   })
 
@@ -1221,7 +1248,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     const text = String(input?.text ?? '').trim()
     if (!text) return { success: false, error: '插话内容为空' }
     try {
-      await ensureRunner().steer(text)
+      await ensureRunner().steer(String(input?.runId ?? '') || null, text)
       return { success: true }
     } catch (error) {
       logger?.warn('[Cloud] steer failed', cloudErrorMessage(error))

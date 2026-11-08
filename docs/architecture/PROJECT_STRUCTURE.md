@@ -364,7 +364,7 @@ ChatPanel.handleSubmit
 | `cloud:approval:respond` | invoke | 提交审批决定（只收 `once` / `session` / `deny`，`always` 一律拒；body **三个字段必填** `{request_id, execution_generation, choice}`，实测少一个就是 400 `invalid_params`）；回执一成功立刻写一条审计 |
 | `cloud:policy:get` / `policy:set` | invoke | 服务端原生审批档位（`approvals.mode` = `manual` / `smart` / `off`）：只读白名单子集（`mode` / `timeout` / deny 条数 / 禁用工具集 / 终端后端）、写最小 patch 并读回复核 |
 | `cloud:diagnostics` | invoke | 自检：`/health/detailed` + `/v1/{toolsets,skills,models}` 四块独立成败 |
-| `cloud:jobs:list` / `jobs:create` / `jobs:run` / `jobs:pause` / `jobs:resume` | invoke | 定时任务：列表 + 新建 + 三个动作（删除不提供，去服务器删） |
+| `cloud:jobs:list` / `jobs:create` / `jobs:update` / `jobs:delete` / `jobs:run` / `jobs:pause` / `jobs:resume` | invoke | 定时任务：列表 + 新建 + 编辑 / 删除 + 三个动作 |
 | `cloud:ledger:list` / `ledger:resolve` / `ledger:note` | invoke | 未结算账本：列条目、人工三选一（做了 / 没做 / 不管）、手工补记 |
 | `cloud:run:resolve-unknown` | invoke | 收尾「主人进程丢了」的 run（凭据由主进程现查，渲染层只递 runId） |
 | `cloud:media:upload` / `media:read` | invoke | 图片上传与按路径读回（经网关旁路，凭据就是设备 token；插件转发给控制台） |

@@ -57,6 +57,52 @@ export function isTerminalRun(state: CloudRunStatus | null): boolean {
   return state != null && TERMINAL_STATES.includes(state)
 }
 
+/** 这个会话还有一轮没结束（含排队 / 收尾中） */
+export function isRunningEntry(entry: CloudRunEntry | null | undefined): boolean {
+  return Boolean(entry) && !isTerminalRun(entry!.state)
+}
+
+/** 一个会话当前那一轮的完整状态（多轮并存时按会话分开存） */
+export interface CloudRunEntry {
+  runId: string
+  state: CloudRunStatus
+  error: string | null
+  usage: CloudRunUsage | null
+  model: string | null
+  partial: boolean
+  interrupted: boolean
+  /** 这一轮的终态是「被收尾」，不是正常结束 */
+  unknown?: boolean
+}
+
+/** 还没有会话 id 时的键：首轮发出后主进程才回填 session_id */
+export const PENDING_SESSION_KEY = ''
+
+export function runKeyOf(sessionId: string | null | undefined): string {
+  return sessionId ?? PENDING_SESSION_KEY
+}
+
+/** 状态条的镜像字段：只对当前会话生效 */
+function mirrorRunFields(entry: CloudRunEntry | null): {
+  runId: string | null
+  runState: CloudRunStatus | null
+  runError: string | null
+  runUsage: CloudRunUsage | null
+  runModel: string | null
+  runPartial: boolean
+  runInterrupted: boolean
+} {
+  return {
+    runId: entry?.runId || null,
+    runState: entry?.state ?? null,
+    runError: entry?.error ?? null,
+    runUsage: entry?.usage ?? null,
+    runModel: entry?.model ?? null,
+    runPartial: entry?.partial ?? false,
+    runInterrupted: entry?.interrupted ?? false,
+  }
+}
+
 /** 按 id 覆盖或追加：同 id 的位置不动，保证时间线不跳动 */
 export function upsertPart(parts: CloudTracePart[], part: CloudTracePart): CloudTracePart[] {
   const index = parts.findIndex((item) => item.id === part.id)
@@ -65,6 +111,64 @@ export function upsertPart(parts: CloudTracePart[], part: CloudTracePart): Cloud
   next[index] = part
   return next
 }
+
+/**
+ * 写入某个会话的轮次状态，并同步「当前会话」的镜像字段。
+ *
+ * 一切轮次状态都从这里走：直接 `set({ runState })` 会让 `sessionRuns` 与镜像发散，
+ * 而切会话时的恢复靠的就是 `sessionRuns`。
+ */
+function writeRunEntry(
+  state: CloudState,
+  sessionId: string | null | undefined,
+  patch: Partial<CloudRunEntry> | null
+): Partial<CloudState> {
+  const key = runKeyOf(sessionId)
+  const sessionRuns = { ...state.sessionRuns }
+  let entry: CloudRunEntry | null = null
+  if (patch === null) {
+    delete sessionRuns[key]
+  } else {
+    const prev = sessionRuns[key]
+    entry = {
+      runId: patch.runId ?? prev?.runId ?? '',
+      state: patch.state ?? prev?.state ?? 'started',
+      error: patch.error !== undefined ? patch.error : (prev?.error ?? null),
+      usage: patch.usage !== undefined ? patch.usage : (prev?.usage ?? null),
+      model: patch.model !== undefined ? patch.model : (prev?.model ?? null),
+      partial: patch.partial ?? prev?.partial ?? false,
+      interrupted: patch.interrupted ?? prev?.interrupted ?? false,
+    }
+    sessionRuns[key] = entry
+  }
+  const mirrored = key === runKeyOf(state.activeSessionId) ? mirrorRunFields(entry) : {}
+  return { sessionRuns, ...mirrored }
+}
+
+/**
+ * 把「还没有会话 id」那条记录迁到真会话名下。
+ *
+ * 首轮的乐观写入发生在服务端回填 session_id 之前，不迁的话切走再回来就找不到这一轮了。
+ * 必须单独 set 一次：两次 set 合并成一次时，后一次的 sessionRuns 会带着旧键把前一次覆盖掉。
+ */
+function moveRunEntry(
+  state: CloudState,
+  from: string | null | undefined,
+  to: string | null | undefined
+): Partial<CloudState> {
+  const fromKey = runKeyOf(from)
+  const toKey = runKeyOf(to)
+  const entry = state.sessionRuns[fromKey]
+  if (!entry || fromKey === toKey) return {}
+  const sessionRuns = { ...state.sessionRuns }
+  delete sessionRuns[fromKey]
+  sessionRuns[toKey] = entry
+  const mirrored = toKey === runKeyOf(state.activeSessionId) ? mirrorRunFields(entry) : {}
+  return { sessionRuns, ...mirrored }
+}
+
+/** 同时跟随的轮次上限：与主进程 `MAX_LIVE_STREAMS` 一致（网关 SSE 每设备 2 条） */
+export const MAX_LIVE_RUNS = 2
 
 interface CloudState {
   bridgeAvailable: boolean
@@ -99,6 +203,15 @@ interface CloudState {
    */
   focusRequestId: string | null
 
+  /**
+   * 每个会话各自的轮次状态（键是会话 id，还没有会话时是空串）。
+   *
+   * 并行跑的时候状态不能再是单例：A 在跑、切到 B 发消息，两条流同时在推帧。
+   * 下面那组 `runXxx` 只是**当前打开会话**的镜像，方便渲染层直接读；
+   * 真正的账在 `sessionRuns`，切会话时从它恢复。
+   */
+  sessionRuns: Record<string, CloudRunEntry>
+  /** 当前会话的镜像（= sessionRuns[activeSessionId ?? '']） */
   runId: string | null
   runState: CloudRunStatus | null
   runError: string | null
@@ -109,6 +222,8 @@ interface CloudState {
   /** 上游说输出不完整：`partial` 撞上限、`interrupted` 被打断 */
   runPartial: boolean
   runInterrupted: boolean
+  /** 发送本身被挡下的原因（同时在跑的轮次太多等），与轮次失败分开 */
+  sendError: string | null
   /** 插话请求本身的失败（与轮次失败分开，避免误报「这一轮挂了」） */
   steerError: string | null
   /** 收尾确认的失败原因 */
@@ -266,6 +381,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   partsError: null,
   focusRequestId: null,
 
+  sessionRuns: {},
   runId: null,
   runState: null,
   runError: null,
@@ -273,6 +389,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   runModel: null,
   runPartial: false,
   runInterrupted: false,
+  sendError: null,
   steerError: null,
   resolveError: null,
   resolvingUnknown: false,
@@ -379,6 +496,8 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       sessionMeta: null,
       parts: [],
       partsError: null,
+      // 断开后本机不再跟随任何一轮：留着的 entry 会一直显示「在跑」
+      sessionRuns: {},
       runId: null,
       runState: null,
       runError: null,
@@ -435,10 +554,11 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
    * 只合并列表行，不动当前会话的 parts —— 正在看的时间线不该被后台刷新截断。
    */
   async syncSessions() {
-    const { connection, runState, sessionActionPending, syncing } = get()
+    const { connection, sessionRuns, activeSessionId, sessionActionPending, syncing } = get()
     if (connection !== 'connected' || syncing) return
-    // 本轮还在跑：SSE 正在推时间线，这时候拉列表只会让行乱跳
-    if (runState !== null && !isTerminalRun(runState)) return
+    // 本会话还在跑：SSE 正在推时间线，这时候拉列表只会让行乱跳（别人在跑不影响）
+    const activeEntry = sessionRuns[runKeyOf(activeSessionId)]
+    if (activeEntry && !isTerminalRun(activeEntry.state)) return
     set({ syncing: true })
     const result = await cloudApi.listSessions({ limit: SESSIONS_PAGE_SIZE, offset: 0 })
     if (!result.success) {
@@ -532,19 +652,13 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       set({ sessions: snapshot, sessionsError: result.error ?? 'unknown' })
       return false
     }
+    set(writeRunEntry(get(), sessionId, null))
     if (get().activeSessionId === sessionId) {
       set({
         activeSessionId: null,
         sessionMeta: null,
         parts: [],
         partsError: null,
-        runId: null,
-        runState: null,
-        runError: null,
-        runUsage: null,
-        runModel: null,
-        runPartial: false,
-        runInterrupted: false,
         pending: null,
       })
     }
@@ -561,13 +675,9 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       partsLoading: true,
       partsError: null,
       parts: [],
-      runId: null,
-      runState: null,
-      runError: null,
-      runUsage: null,
-      runModel: null,
-      runPartial: false,
-      runInterrupted: false,
+      // 这个会话自己那一轮还在跑就照实恢复：后台继续，不因为「切走」而丢掉进度
+      ...mirrorRunFields(get().sessionRuns[runKeyOf(sessionId)] ?? null),
+      sendError: null,
       pending: null,
       approvalPending: null,
       approvalError: null,
@@ -596,11 +706,15 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     const result = await cloudApi.attachRun(sessionId ? { sessionId } : {})
     if (!result.success || !result.attached) return false
     // 帧会同时从推送频道过来；这里先把状态收窄，避免首帧到达前的空窗被当成空闲
-    set({
-      runId: result.runId ?? get().runId,
-      runState: result.state ?? 'running',
-      runError: null,
-    })
+    const rows = result.runs ?? []
+    const targets =
+      rows.length > 0
+        ? rows
+        : [{ runId: result.runId ?? '', sessionId: result.sessionId ?? null, state: result.state ?? 'running' }]
+    for (const row of targets) {
+      if (!row.runId) continue
+      set(writeRunEntry(get(), row.sessionId ?? sessionId, { runId: row.runId, state: row.state, error: null }))
+    }
     return true
   },
 
@@ -620,9 +734,8 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       parts: [],
       partsError: null,
       partsLoading: false,
-      runId: null,
-      runState: null,
-      runError: null,
+      ...mirrorRunFields(get().sessionRuns[PENDING_SESSION_KEY] ?? null),
+      sendError: null,
       pending: null,
       approvalPending: null,
       approvalError: null,
@@ -634,10 +747,21 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   },
 
   async send() {
-    const { draft, activeSessionId, runState, pending } = get()
+    const { draft, activeSessionId, sessionRuns, pending } = get()
     const text = draft.trim()
     if (!text) return
-    if (runState !== null && !isTerminalRun(runState)) return
+    // 只有本会话在跑时挡住重复发送：别的会话在跑不影响这里
+    const own = sessionRuns[runKeyOf(activeSessionId)]
+    if (own && !isTerminalRun(own.state)) return
+
+    // 网关给每台设备的 SSE 并发是 2：第 3 轮在本地就挡下，比等 429 好解释
+    const live = Object.values(sessionRuns).filter(
+      (entry) => entry && !isTerminalRun(entry.state)
+    ).length
+    if (live >= MAX_LIVE_RUNS) {
+      set({ sendError: `同时最多跟随 ${MAX_LIVE_RUNS} 轮；先等其中一轮结束` })
+      return
+    }
 
     // 同一段文本的重试复用幂等键：后端幂等窗口内不会重复执行
     const key = pending && pending.text === text ? pending.key : crypto.randomUUID()
@@ -645,13 +769,16 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     set({
       draft: '',
       pending: { text, key },
-      runId: null,
-      runState: 'started',
-      runError: null,
-      runUsage: null,
-      runModel: null,
-      runPartial: false,
-      runInterrupted: false,
+      sendError: null,
+      ...writeRunEntry(get(), activeSessionId, {
+        runId: '',
+        state: 'started',
+        error: null,
+        usage: null,
+        model: null,
+        partial: false,
+        interrupted: false,
+      }),
       parts: upsertPart(get().parts, { type: 'text', id: optimisticId, role: 'user', text }),
     })
 
@@ -663,8 +790,10 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     if (!result.success || !result.runId) {
       set({
         draft: text,
-        runState: 'failed',
-        runError: result.error ?? 'unknown',
+        ...writeRunEntry(get(), activeSessionId, {
+          state: 'failed',
+          error: result.error ?? 'unknown',
+        }),
         parts: upsertPart(get().parts, {
           type: 'divider',
           id: `run-error:${key}`,
@@ -674,17 +803,22 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       })
       return
     }
-    set({ runId: result.runId, pending: null })
+    set({
+      ...writeRunEntry(get(), activeSessionId, { runId: result.runId }),
+      pending: null,
+    })
     if (!activeSessionId && result.sessionId) {
+      // 首轮才有会话 id：把「还没有会话」那条记录迁到真会话名下，否则切走再回来会丢
       set({
         activeSessionId: result.sessionId,
         sessionMeta: { ...(get().sessionMeta ?? emptySessionMeta()), id: result.sessionId },
       })
+      set(moveRunEntry(get(), PENDING_SESSION_KEY, result.sessionId))
     }
   },
 
   async steer() {
-    const { draft, runState } = get()
+    const { draft, runId, runState } = get()
     const text = draft.trim()
     if (!text) return
     // 只有正在执行的一轮能被插话（queued 会被后端拒绝）
@@ -699,7 +833,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       steerError: null,
       parts: upsertPart(get().parts, { type: 'interjection', id, text, delivered: false }),
     })
-    const result = await cloudApi.steerRun(text)
+    const result = await cloudApi.steerRun(text, runId ?? undefined)
     if (!result.success) {
       // 请求都没发出去：撤回这条插话，把文字还回输入框
       set({
@@ -962,7 +1096,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   },
 
   async resolveUnknown() {
-    const { runId, runState, resolvingUnknown } = get()
+    const { runId, runState, resolvingUnknown, activeSessionId } = get()
     if (!runId || runState !== 'unknown' || resolvingUnknown) return false
     set({ resolvingUnknown: true, resolveError: null })
     const result = await cloudApi.resolveUnknownRun(runId)
@@ -970,7 +1104,13 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       set({ resolvingUnknown: false, resolveError: result.error ?? 'unknown' })
       return false
     }
-    set({ resolvingUnknown: false, runState: result.state ?? 'cancelled' })
+    set({
+      resolvingUnknown: false,
+      ...writeRunEntry(get(), activeSessionId, {
+        runId,
+        state: result.state ?? 'cancelled',
+      }),
+    })
     return true
   },
 
@@ -999,14 +1139,14 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   },
 
   async stop() {
-    const runId = get().runId
+    const { runId, activeSessionId } = get()
     if (!runId) return
     const result = await cloudApi.stopRun(runId)
     if (!result.success) {
-      set({ runError: result.error ?? 'unknown' })
+      set(writeRunEntry(get(), activeSessionId, { error: result.error ?? 'unknown' }))
       return
     }
-    if (result.state) set({ runState: result.state })
+    if (result.state) set(writeRunEntry(get(), activeSessionId, { runId, state: result.state }))
   },
 
   applyFrame(frame) {
@@ -1018,11 +1158,32 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
           activeSessionId: frame.sessionId,
           sessionMeta: { ...(get().sessionMeta ?? emptySessionMeta()), id: frame.sessionId },
         })
+        // 首轮：帧上的会话 id 晚于乐观写入，把那条状态迁过来
+        set(moveRunEntry(get(), PENDING_SESSION_KEY, frame.sessionId))
       }
       return
     }
-    // 别的会话的帧一律丢弃：A 在跑的时候切到 B，A 的增量不能写进 B 的时间线
-    if (frame.sessionId != null && frame.sessionId !== active) return
+    // 别的会话的帧：正文不进当前时间线，但轮次状态要记在它自己名下
+    if (frame.sessionId != null && frame.sessionId !== active) {
+      if (frame.kind === 'run') {
+        set(
+          writeRunEntry(get(), frame.sessionId, {
+            runId: frame.runId,
+            state: frame.state,
+            error: frame.error ?? null,
+            usage: frame.usage ?? null,
+            model: frame.model ?? null,
+            partial: frame.partial === true,
+            interrupted: frame.interrupted === true,
+          })
+        )
+        if (isTerminalRun(frame.state)) {
+          void get().refreshSessions()
+          void get().loadLedger()
+        }
+      }
+      return
+    }
     if (frame.kind === 'parts') {
       const pendingDisconnect = get().pendingDisconnect
       set({
@@ -1044,7 +1205,9 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
         part.type === 'interjection' && part.undelivered && !get().draft.trim() ? part.text : ''
       // 排队中的轮次一旦有内容帧就说明它真的开始了（后端不一定推 run.started）
       const started =
-        get().runState === 'queued' ? { runState: 'running' as CloudRunStatus } : {}
+        get().sessionRuns[runKeyOf(active)]?.state === 'queued'
+          ? writeRunEntry(get(), active, { state: 'running' })
+          : {}
       set({
         parts: upsertPart(get().parts, part),
         ...(replay ? { draft: replay } : {}),
@@ -1054,24 +1217,27 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     }
     if (frame.kind === 'run') {
       const settling = isTerminalRun(frame.state)
-      set({
-        runId: frame.runId,
-        runState: frame.state,
-        runError: frame.error ?? null,
-        // 只有终态帧带用量；运行中的帧把上一轮的残留清掉
-        runUsage: frame.usage ?? (settling ? get().runUsage : null),
-        runModel: frame.model ?? get().runModel,
-        runPartial: frame.partial === true,
-        runInterrupted: frame.interrupted === true,
-      })
+      const key = runKeyOf(frame.sessionId ?? active)
+      const prev = get().sessionRuns[key]
+      set(
+        writeRunEntry(get(), frame.sessionId ?? active, {
+          runId: frame.runId,
+          state: frame.state,
+          error: frame.error ?? null,
+          // 只有终态帧带用量；运行中的帧把上一轮的残留清掉
+          usage: frame.usage ?? (settling ? prev?.usage ?? null : null),
+          model: frame.model ?? prev?.model ?? null,
+          partial: frame.partial === true,
+          interrupted: frame.interrupted === true,
+        })
+      )
       // 终态时账本刚从 pending 变 unknown，拉一次让提示条准确
       if (settling) void get().loadLedger()
       if (isTerminalRun(frame.state)) void get().refreshSessions()
       return
     }
     set({
-      runState: 'failed',
-      runError: frame.error,
+      ...writeRunEntry(get(), active, { state: 'failed', error: frame.error }),
       pendingDisconnect: frame.runId,
     })
   },

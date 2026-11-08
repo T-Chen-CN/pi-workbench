@@ -231,6 +231,9 @@ function resetStore() {
     parts: [],
     partsLoading: false,
     partsError: null,
+    // 轮次状态按会话分开存：不重置会被上一个用例的在跑状态挡在发送之前
+    sessionRuns: {},
+    sendError: null,
     runId: null,
     runState: null,
     runError: null,
@@ -669,6 +672,32 @@ describe('图片', () => {
 })
 
 describe('多端同步', () => {
+  it('marks the sessions that still have a run going', async () => {
+    installBridge()
+    Object.assign((window as unknown as { electronAPI: Record<string, unknown> }).electronAPI, {
+      cloudSessionsList: async () => ({ success: true, sessions: [SESSION], hasMore: false }),
+    })
+    // 用户切走了，但那一轮还在跑：列表行要能看出来
+    useCloudStore.setState({
+      connection: 'connected',
+      activeSessionId: 'other',
+      sessionRuns: {
+        [SESSION.id]: {
+          runId: 'run_1',
+          state: 'running',
+          error: null,
+          usage: null,
+          model: null,
+          partial: false,
+          interrupted: false,
+        },
+      },
+    })
+
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+    expect(await screen.findByLabelText(zh.cloudSessionRunning)).toBeTruthy()
+  })
+
   it('refreshes the list on a timer while the page is visible', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {

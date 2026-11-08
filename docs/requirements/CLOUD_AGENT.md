@@ -232,13 +232,14 @@ PUT  /api/config        → 只接受 {"config":{"approvals":{"mode":...}}}
 
 ### 3.6 任务、媒体、耐久性
 
-- 任务页：`/api/jobs` 列表 + 新建 + `run` / `pause` / `resume`（**不做删除**，删除只在服务器上）。
+- 任务页：`/api/jobs` 列表 + 新建 + `run` / `pause` / `resume` + **编辑（`PATCH`）/ 删除（`DELETE`）**（插件 0.1.2 起放行；删除要过一次确认）。
   - 新建表单收「任务名 / 调度 / 提示词 / 最多跑几次（可选）」，调度支持间隔（`30m`、`every 2h`）、
     一次性（`in 30m`、ISO 时间）与 cron 表达式（`0 9 * * *`）。
   - cron 表达式与「每周一 9 点」这类自然语言写法要服务端装了 `croniter`（Hermes 声明为核心依赖，
     部分运行时未预装，缺的时候上游会直接报错）；纯间隔写法不需要它。
 - 图片：上传走 `/api/chat/image-upload`，读回走 `/api/fs/read-data-url`，都经网关；渲染层不持凭据。
-- 耐久性：`data/cloud-agent/active-run.json` 记最近一轮；重启 / 重连后 `GET /v1/runs/{id}` 探活，还在跑就重订阅（`last_seq` 顶到 int32 上限只收新事件），先铺历史再放增量。
+- 耐久性：`data/cloud-agent/active-run.json` 记**在跑的每一轮**（`{runs:[{runId,sessionId,startedAt}]}`，旧单条形状读取兼容）；重启 / 重连后逐条 `GET /v1/runs/{id}` 探活，还在跑就重订阅（`last_seq` 顶到 int32 上限只收新事件），先铺历史再放增量。
+- 并行：不同会话可以同时各跑一轮（上限 2，与网关 SSE 并发一致）。帧带 `sessionId`（`CloudFrameOrigin`），渲染层按会话分账（`sessionRuns`）：别的会话的正文不写进当前时间线，但状态要记在它名下（会话行显示「有轮次在跑」）。同一会话内仍是一次一轮。
 - 未结算账本：`data/cloud-agent/pending-writes.json`，只做人工核对，不是云端真相。
 - 断线占位：时间线插一条显式断线标记；不把断线当成功。
 
@@ -258,7 +259,7 @@ PUT  /api/config        → 只接受 {"config":{"approvals":{"mode":...}}}
 | `data/cloud-agent/connection.json` | 网关地址、设备 token（`enc:`）、scope、deviceId、dashboardUrl |
 | `data/cloud-agent/device.json` | 本机设备身份 |
 | `data/cloud-agent/device-sessions.json` | 本机会话归属（UI 用，不是云端真相） |
-| `data/cloud-agent/active-run.json` | 最近一轮，用于重启接回 |
+| `data/cloud-agent/active-run.json` | 在跑的轮次（可多条），用于重启接回 |
 | `data/cloud-agent/pending-writes.json` | 未结算对外写 |
 | `data/cloud-agent/audit.jsonl` | 审批审计，追加 + fsync，永不改写 |
 

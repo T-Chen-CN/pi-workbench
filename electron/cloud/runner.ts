@@ -27,6 +27,14 @@ const RETRY_BASE_DELAY_MS = 500
  */
 export const LIVE_ONLY_SEQ = 2 ** 31 - 1
 
+/**
+ * 同时跟随的实时流上限。
+ *
+ * 网关给每台设备的 SSE 并发是 2（CLOUD_AGENT §6.4），所以本地也封 2 条：
+ * 第 3 轮在客户端就拒绝，比让服务端回 429、界面卡在「运行中」要好解释。
+ */
+export const MAX_LIVE_STREAMS = 2
+
 export interface CloudAttachResult {
   /** 是否真的接上了事件流（false = 这轮已经结束 / 只补了状态） */
   attached: boolean
@@ -53,13 +61,23 @@ export interface CloudRunnerDeps {
   onRunSettled?: (runId: string, state: CloudRunStatus) => void
 }
 
+interface StreamState {
+  runId: string
+  sessionId: string | null
+  controller: AbortController
+  /** 这一轮的映射器：IPC 要用它把审批对到具体的工具调用上 */
+  mapper: RunMapper
+}
+
 export class CloudRunner {
   private remote: CloudRemote
-  private stream: { runId: string; controller: AbortController } | null = null
-  /** 当前轮的映射器：IPC 要用它把审批对到具体的工具调用上 */
-  private mapper: RunMapper | null = null
-  /** 当前轮所属会话：stop / 断流收尾时用来重拉历史 */
-  private lastSessionId: string | null = null
+  /**
+   * 在跟随的轮次，按 runId 索引。
+   *
+   * 多轮并存是允许的（不同会话各跑各的），上限见 `MAX_LIVE_STREAMS`。
+   * 每轮的状态必须自己带 sessionId：帧的归属、收尾重拉历史、停止的兜底都靠它。
+   */
+  private streams = new Map<string, StreamState>()
 
   private readonly client: CloudClient
 
@@ -71,8 +89,23 @@ export class CloudRunner {
     this.remote = createRemote(client)
   }
 
+  /** 最近一轮（IPC 没拿到显式 runId 时的兜底） */
   get activeRunId(): string | null {
-    return this.stream?.runId ?? null
+    const ids = [...this.streams.keys()]
+    return ids.length > 0 ? (ids[ids.length - 1] ?? null) : null
+  }
+
+  /** 这个会话正在跟的 run（没有就 null） */
+  activeRunIdFor(sessionId: string | null | undefined): string | null {
+    if (!sessionId) return null
+    for (const stream of this.streams.values()) {
+      if (stream.sessionId === sessionId) return stream.runId
+    }
+    return null
+  }
+
+  get liveStreamCount(): number {
+    return this.streams.size
   }
 
   /**
@@ -94,6 +127,12 @@ export class CloudRunner {
     sessionId?: string
     idempotencyKey: string
   }): Promise<{ runId: string; sessionId: string | null }> {
+    if (this.streams.size >= MAX_LIVE_STREAMS) {
+      throw new CloudApiError(
+        'conflict',
+        `同时最多跟随 ${MAX_LIVE_STREAMS} 轮；先等其中一轮结束`
+      )
+    }
     const accepted = await this.remote.startRun(input)
     let sessionId = input.sessionId ?? null
     // 同一会话已有轮次在跑时后端会排队（202 里 status=queued）：别把它报成 started
@@ -125,17 +164,15 @@ export class CloudRunner {
    */
   async attach(input: { runId: string; sessionId?: string | null }): Promise<CloudAttachResult> {
     const runId = input.runId
-    if (this.stream?.runId === runId) {
-      const sessionId = this.lastSessionId ?? input.sessionId ?? null
+    const live = this.streams.get(runId)
+    if (live) {
+      const sessionId = live.sessionId ?? input.sessionId ?? null
       return { attached: true, runId, sessionId, state: 'running' }
     }
 
     const snapshot = await this.remote.runStatus(runId)
     const sessionId = snapshot.sessionId ?? input.sessionId ?? null
-    if (sessionId) {
-      this.lastSessionId = sessionId
-      this.emit({ kind: 'session', sessionId }, sessionId)
-    }
+    if (sessionId) this.emit({ kind: 'session', sessionId }, sessionId)
 
     if (isTerminalStatus(snapshot.status) || snapshot.status === 'unknown') {
       // 收尾 / 丢失的轮次没有实时流可跟：账本与工具结果全靠历史这条路回来
@@ -157,10 +194,10 @@ export class CloudRunner {
   async stop(runId: string): Promise<CloudRunStatus> {
     const snapshot = await this.remote.stopRun(runId)
     const timer = setTimeout(() => {
-      if (this.stream?.runId !== runId) return
-      this.stream.controller.abort()
-      this.stream = null
-      void this.reconcile(runId, this.lastSessionId, false)
+      if (!this.streams.has(runId)) return
+      this.streams.get(runId)?.controller.abort()
+      this.streams.delete(runId)
+      void this.reconcile(runId, null, false)
     }, STOP_FALLBACK_MS)
     timer.unref?.()
     return snapshot.status
@@ -172,15 +209,15 @@ export class CloudRunner {
    * 后端只接受 `running` 状态（queued 会被拒），并且不保证立刻投递 ——
    * 终态事件里可能带回 `pending_steer`，那才是"没送进去"的真相。
    */
-  async steer(text: string): Promise<void> {
-    const runId = this.stream?.runId ?? null
-    if (!runId) throw new Error('当前没有正在执行的一轮')
-    await this.remote.steerRun(runId, text)
+  async steer(runId: string | null, text: string): Promise<void> {
+    const target = runId ?? this.activeRunId
+    if (!target) throw new Error('当前没有正在执行的一轮')
+    await this.remote.steerRun(target, text)
   }
 
   dispose(): void {
-    this.stream?.controller.abort()
-    this.stream = null
+    for (const stream of this.streams.values()) stream.controller.abort()
+    this.streams.clear()
   }
 
   private async streamRun(
@@ -190,11 +227,9 @@ export class CloudRunner {
   ): Promise<void> {
     const mapper = new RunMapper(runId)
     const controller = new AbortController()
-    if (this.stream) this.stream.controller.abort()
-    this.stream = { runId, controller }
-    this.mapper = mapper
-
-    if (sessionId) this.lastSessionId = sessionId
+    // 同一轮重复订阅（attach 之后又收到重推）：旧的先让位，避免两条流写同一条时间线
+    this.streams.get(runId)?.controller.abort()
+    this.streams.set(runId, { runId, sessionId, controller, mapper })
     let terminal = false
     const controlPoll = setInterval(() => {
       if (terminal || controller.signal.aborted) return
@@ -290,8 +325,7 @@ export class CloudRunner {
       clearInterval(controlPoll)
       finished = true
       buffered.length = 0
-      if (this.stream?.runId === runId) this.stream = null
-      this.mapper = null
+      if (this.streams.get(runId)?.controller === controller) this.streams.delete(runId)
     }
 
     // 第三个参数 = 「渲染层已经收到过终态」，而不是「后端已经结束」：
@@ -329,7 +363,11 @@ export class CloudRunner {
 
   /** 这条审批拦的是哪个工具调用（IPC 写审计时用；拿不到就当未知） */
   approvalToolCallId(requestId: string): string | undefined {
-    return this.mapper?.approvalToolCallId(requestId)
+    for (const stream of this.streams.values()) {
+      const found = stream.mapper.approvalToolCallId(requestId)
+      if (found) return found
+    }
+    return undefined
   }
 
   /** 只补「还没见过的提问」：已有的 prompt_id 会被 mapper 去重掉 */

@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { filterSessions, isTerminalRun, upsertPart, useCloudStore } from '../src/store/cloudStore'
+import {
+  filterSessions,
+  isRunningEntry,
+  isTerminalRun,
+  upsertPart,
+  useCloudStore,
+} from '../src/store/cloudStore'
 import type { CloudTracePart } from '../src/types/cloud'
 
 const text = (id: string, body: string): CloudTracePart => ({
@@ -16,6 +22,8 @@ beforeEach(() => {
     sessionMeta: null,
     parts: [],
     pendingDisconnect: null,
+    // 轮次状态按会话分开存：不清空的话上一个用例留下的 entry 会污染下一个
+    sessionRuns: {},
     runState: null,
     runError: null,
     draft: '',
@@ -70,6 +78,133 @@ describe('applyFrame', () => {
     // 当前会话的帧照常生效
     useCloudStore.getState().applyFrame({ kind: 'part', part: text('s:2', '这是 B 的'), sessionId: 'session-b' })
     expect(useCloudStore.getState().parts).toHaveLength(1)
+  })
+
+  it('keeps the run state of a background session while another one runs', () => {
+    // 并行：A 还在跑，用户切到 B 发了一轮。A 的帧不进 B 的时间线，但状态要留在 A 名下
+    useCloudStore.setState({ activeSessionId: 'session-b', parts: [] })
+
+    useCloudStore.getState().applyFrame({
+      kind: 'run',
+      runId: 'run-a',
+      state: 'running',
+      sessionId: 'session-a',
+    })
+    useCloudStore.getState().applyFrame({
+      kind: 'run',
+      runId: 'run-b',
+      state: 'running',
+      sessionId: 'session-b',
+    })
+
+    const state = useCloudStore.getState()
+    expect(state.runId).toBe('run-b')
+    expect(state.sessionRuns['session-a']).toMatchObject({ runId: 'run-a', state: 'running' })
+    expect(isRunningEntry(state.sessionRuns['session-a'])).toBe(true)
+
+    // A 结束：只改 A 的记录，当前会话的镜像不受影响
+    useCloudStore.getState().applyFrame({
+      kind: 'run',
+      runId: 'run-a',
+      state: 'completed',
+      sessionId: 'session-a',
+    })
+    expect(useCloudStore.getState().sessionRuns['session-a']?.state).toBe('completed')
+    expect(useCloudStore.getState().runId).toBe('run-b')
+  })
+
+  it('restores that session own run state when switching back to it', async () => {
+    useCloudStore.setState({
+      activeSessionId: 'session-a',
+      sessionRuns: {
+        'session-a': {
+          runId: 'run-a',
+          state: 'running',
+          error: null,
+          usage: null,
+          model: null,
+          partial: false,
+          interrupted: false,
+        },
+      },
+      runId: 'run-a',
+      runState: 'running',
+    })
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudSessionMessages: async () => ({ success: true, parts: [], hasMore: false }),
+      cloudRunAttach: async () => ({ success: true, attached: false }),
+      cloudLedgerList: async () => ({ success: true, entries: [] }),
+    }
+
+    await useCloudStore.getState().openSession('session-a')
+    // 切回来还是「在跑」：不能因为重开了会话就当成空闲
+    expect(useCloudStore.getState().runState).toBe('running')
+    expect(useCloudStore.getState().runId).toBe('run-a')
+  })
+
+  it('stops a second send in the same session but allows another session', () => {
+    useCloudStore.setState({
+      activeSessionId: 'session-a',
+      sessionRuns: {
+        'session-a': {
+          runId: 'run-a',
+          state: 'running',
+          error: null,
+          usage: null,
+          model: null,
+          partial: false,
+          interrupted: false,
+        },
+      },
+      runState: 'running',
+      draft: '继续',
+    })
+    // 同一会话还在跑：不发
+    void useCloudStore.getState().send()
+    expect(useCloudStore.getState().draft).toBe('继续')
+
+    // 换到另一个会话：允许（并行第二轮）
+    useCloudStore.setState({ activeSessionId: 'session-b', sessionRuns: { 'session-a': useCloudStore.getState().sessionRuns['session-a']! }, runState: null })
+    void useCloudStore.getState().send()
+    expect(useCloudStore.getState().sessionRuns['session-b']).toMatchObject({ state: 'started' })
+  })
+
+  it('refuses a third parallel run instead of letting the gateway 429', () => {
+    const entry = (runId: string) => ({
+      runId,
+      state: 'running' as const,
+      error: null,
+      usage: null,
+      model: null,
+      partial: false,
+      interrupted: false,
+    })
+    useCloudStore.setState({
+      activeSessionId: 'session-c',
+      sessionRuns: { a: entry('run-a'), b: entry('run-b') },
+      runState: null,
+      draft: '第三轮',
+    })
+    void useCloudStore.getState().send()
+    expect(useCloudStore.getState().sendError).toContain('同时最多跟随 2 轮')
+    expect(useCloudStore.getState().draft).toBe('第三轮')
+  })
+
+  it('moves the optimistic entry onto the session id the server returns', () => {
+    useCloudStore.setState({ activeSessionId: null, sessionRuns: {} })
+    useCloudStore.getState().applyFrame({ kind: 'session', sessionId: 'fresh' })
+    expect(useCloudStore.getState().sessionRuns.fresh).toBeUndefined()
+
+    useCloudStore.setState({
+      sessionRuns: {
+        '': { runId: '', state: 'started', error: null, usage: null, model: null, partial: false, interrupted: false },
+      },
+    })
+    useCloudStore.setState({ activeSessionId: null })
+    useCloudStore.getState().applyFrame({ kind: 'session', sessionId: 'fresh' })
+    const state = useCloudStore.getState()
+    expect(state.sessionRuns['']).toBeUndefined()
+    expect(state.sessionRuns.fresh).toMatchObject({ state: 'started' })
   })
 
   it('adopts a new session id only when nothing is open', () => {
@@ -427,7 +562,14 @@ describe('多端同步', () => {
   })
 
   it('skips polling while a run is in flight and when the list call fails', async () => {
-    useCloudStore.setState({ connection: 'connected', runState: 'running', sessions: [row('a', 'A')], syncing: false })
+    useCloudStore.setState({
+      connection: 'connected',
+      activeSessionId: 'a',
+      sessionRuns: { a: { runId: 'run_1', state: 'running', error: null, usage: null, model: null, partial: false, interrupted: false } },
+      runState: 'running',
+      sessions: [row('a', 'A')],
+      syncing: false,
+    })
     const call = vi.fn()
     ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
       cloudSessionsList: call,
@@ -437,6 +579,7 @@ describe('多端同步', () => {
 
     useCloudStore.setState({
       connection: 'connected',
+      sessionRuns: {},
       runState: null,
       syncing: false,
       sessionsError: null,
@@ -759,7 +902,11 @@ describe('attachRun（重启后接回在跑的一轮）', () => {
     const attached = await useCloudStore.getState().attachRun()
     expect(attached).toBe(true)
     expect(calls).toEqual([{}])
-    expect(useCloudStore.getState()).toMatchObject({ runId: 'run_1', runState: 'running' })
+    // 没有打开的会话时只记在 sessionRuns 里（重启后靠它给会话行标「在跑」）
+    expect(useCloudStore.getState().sessionRuns.s1).toMatchObject({
+      runId: 'run_1',
+      state: 'running',
+    })
   })
 
   it('stays idle when there is nothing to attach to', async () => {
