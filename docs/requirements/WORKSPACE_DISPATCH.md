@@ -498,3 +498,15 @@ Hermes → local_dispatch(workspace, prompt)
 1. **P1 不含对外 A2A 端点**（§4.1 / §4.2 / §6.1 / §8）：Agent Card 与 `/a2a` JSON-RPC 推到 P3。P1/P2 内部工具就够跑通全链路，少写约 400 行；协议语义仍按 A2A 写，P3 只加信封映射。
 2. **工具集登记改成启动自检**（§6.1）：不登记就静默失效，这个坑只能靠一条显式 WARN 兜住；插件不自动改宿主配置。
 3. **`local_dispatch` 加幂等键 `client_token`**（§4.3 / §5.1 / §5.2）：云端重放或双击不会派两个活。默认值 `<contextId 或 sessionId>:<轮次序号>`，store 用唯一索引兜底。
+
+---
+
+## 14. 上游升级后的复查清单
+
+派活有三处**依赖 Hermes 内部行为**，升级上游（0.23 → 0.24 …）后必须各复查一次，任何一条变了都要改我们的实现：
+
+| 依赖 | 怎么查 | 变了会怎样 |
+| --- | --- | --- |
+| 插件工具集必须登记进 `platform_toolsets.api_server` | `hermes --profile pi-cloud tools list --platform api_server`，看 `pi_workbench` 是否在列 | 工具对模型静默不可见（启动自检会报 WARN，但能力等于没了） |
+| 运行中的工具不设执行超时 | 读 `tools/registry.py` 的 `register(... execution_timeout=...)`：插件走 `PluginContext.register_tool`，不传这个值 | 若某版开始给插件工具默认超时，90s 阻塞会被掐断，必须降阻塞时长并改用轮询 |
+| 事件流每 10s 发 `: keepalive` | 阻塞期间抓 `/v1/runs/{id}/events` 原始字节 | 若心跳消失，桌面 60s 空闲阈值会误判断流（`electron/cloud/events.ts:73`），得调大阈值 |
