@@ -10,6 +10,7 @@ import type {
   CloudApprovalChoice,
   CloudFrame,
   CloudRunStatus,
+  CloudRunUsage,
   CloudSubagentStatus,
   CloudToolStatus,
   CloudTracePart,
@@ -60,6 +61,33 @@ export interface RawMessage {
   tool_name?: string | null
   timestamp?: number
   display_kind?: string | null
+}
+
+/**
+ * 终态的 token 用量。
+ *
+ * 上游字段名是 `input_tokens` / `output_tokens` / `total_tokens`；缺字段就不报，
+ * 免得界面上出现 `NaN` 或「0 tokens」这种假数据。
+ */
+function readUsage(value: unknown): CloudRunUsage | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const raw = value as Record<string, unknown>
+  const input = Number(raw.input_tokens)
+  const output = Number(raw.output_tokens)
+  if (!Number.isFinite(input) || !Number.isFinite(output)) return undefined
+  const total = Number(raw.total_tokens)
+  return {
+    input,
+    output,
+    ...(Number.isFinite(total) ? { total } : {}),
+  }
+}
+
+/** 这一轮实际用的模型：上游偶尔给空串，空就当没有 */
+function readModel(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null
+  const model = String((value as Record<string, unknown>).model ?? '').trim()
+  return model || null
 }
 
 function textOf(value: unknown): string {
@@ -680,7 +708,15 @@ export class RunMapper {
             frames.push({ kind: 'part', part })
           }
         }
-        frames.push({ kind: 'run', runId: this.runId, state: 'completed' })
+        frames.push({
+          kind: 'run',
+          runId: this.runId,
+          state: 'completed',
+          usage: readUsage(payload.usage),
+          model: readModel(payload.runtime),
+          partial: payload.partial === true,
+          interrupted: payload.interrupted === true,
+        })
         this.expirePendingApprovals(frames)
         this.takePendingSteer(frames)
         break
@@ -692,6 +728,9 @@ export class RunMapper {
           runId: this.runId,
           state: 'failed' as CloudRunStatus,
           error: textOf(payload.error) || '本轮执行失败',
+          usage: readUsage(payload.usage),
+          model: readModel(payload.runtime),
+          interrupted: name === 'run.interrupted' || payload.interrupted === true,
         })
         this.expirePendingApprovals(frames)
         this.takePendingSteer(frames)

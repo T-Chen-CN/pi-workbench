@@ -12,6 +12,8 @@ const text = (id: string, body: string): CloudTracePart => ({
 
 beforeEach(() => {
   useCloudStore.setState({
+    activeSessionId: null,
+    sessionMeta: null,
     parts: [],
     pendingDisconnect: null,
     runState: null,
@@ -49,6 +51,54 @@ describe('applyFrame', () => {
   it('replaces the timeline on a correction frame', () => {
     useCloudStore.getState().applyFrame({ kind: 'parts', parts: [text('h:1', 'history')] })
     expect(useCloudStore.getState().parts).toHaveLength(1)
+  })
+
+  it('drops frames that belong to another session', () => {
+    // A 在跑的时候切到 B：A 的增量不能写进 B 的时间线，runState 也不能被它改掉
+    useCloudStore.setState({ activeSessionId: 'session-b', parts: [], runState: null })
+
+    useCloudStore.getState().applyFrame({
+      kind: 'part',
+      part: text('s:1', '这是 A 的输出'),
+      sessionId: 'session-a',
+    })
+    useCloudStore.getState().applyFrame({ kind: 'run', runId: 'run-a', state: 'running', sessionId: 'session-a' })
+
+    expect(useCloudStore.getState().parts).toHaveLength(0)
+    expect(useCloudStore.getState().runState).toBeNull()
+
+    // 当前会话的帧照常生效
+    useCloudStore.getState().applyFrame({ kind: 'part', part: text('s:2', '这是 B 的'), sessionId: 'session-b' })
+    expect(useCloudStore.getState().parts).toHaveLength(1)
+  })
+
+  it('adopts a new session id only when nothing is open', () => {
+    useCloudStore.setState({ activeSessionId: null, sessionMeta: null })
+    useCloudStore.getState().applyFrame({ kind: 'session', sessionId: 'fresh' })
+    expect(useCloudStore.getState().activeSessionId).toBe('fresh')
+
+    // 后台轮次建出新会话时不许抢当前视图
+    useCloudStore.setState({ activeSessionId: 'session-b' })
+    useCloudStore.getState().applyFrame({ kind: 'session', sessionId: 'background' })
+    expect(useCloudStore.getState().activeSessionId).toBe('session-b')
+  })
+
+  it('keeps the usage and the truncation flags of a finished run', () => {
+    useCloudStore.setState({ activeSessionId: 'session-a' })
+    useCloudStore.getState().applyFrame({
+      kind: 'run',
+      runId: 'run-a',
+      state: 'completed',
+      sessionId: 'session-a',
+      usage: { input: 1200, output: 40, total: 1240 },
+      model: 'deepseek-chat',
+      partial: true,
+    })
+    const state = useCloudStore.getState()
+    expect(state.runUsage).toEqual({ input: 1200, output: 40, total: 1240 })
+    expect(state.runModel).toBe('deepseek-chat')
+    expect(state.runPartial).toBe(true)
+    expect(state.runInterrupted).toBe(false)
   })
 
   it('leaves a disconnect marker after a broken stream', () => {

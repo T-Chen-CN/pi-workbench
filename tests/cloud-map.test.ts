@@ -255,6 +255,43 @@ describe('RunMapper', () => {
     expect(texts).toHaveLength(1)
   })
 
+  it('keeps the usage, model and truncation flags of a completed run', () => {
+    // 真机回的就是这一坨：usage + runtime + partial/interrupted
+    const mapper = new RunMapper('run_1')
+    const frames = mapper.handle(
+      frame({
+        event: 'run.completed',
+        output: '在线',
+        usage: { input_tokens: 11357, output_tokens: 2, total_tokens: 11359 },
+        runtime: { provider: 'deepseek', model: 'deepseek-chat', route_source: 'global' },
+        partial: true,
+        interrupted: false,
+      })
+    )
+    const run = frames.find((item) => item.kind === 'run')
+    expect(run).toMatchObject({
+      kind: 'run',
+      state: 'completed',
+      usage: { input: 11357, output: 2, total: 11359 },
+      model: 'deepseek-chat',
+      partial: true,
+      interrupted: false,
+    })
+  })
+
+  it('drops a usage block it cannot read instead of reporting zeros', () => {
+    const mapper = new RunMapper('run_1')
+    const frames = mapper.handle(frame({ event: 'run.completed', output: 'ok', usage: {} }))
+    const run = frames.find((item) => item.kind === 'run')
+    expect((run as { usage?: unknown })?.usage).toBeUndefined()
+  })
+
+  it('marks an interrupted run so the timeline does not look complete', () => {
+    const mapper = new RunMapper('run_1')
+    const frames = mapper.handle(frame({ event: 'run.interrupted', error: '服务端关停' }))
+    expect(frames[0]).toMatchObject({ kind: 'run', state: 'failed', interrupted: true })
+  })
+
   it('surfaces failures with the backend message', () => {
     const mapper = new RunMapper('run_1')
     const frames = mapper.handle(

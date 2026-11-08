@@ -147,6 +147,25 @@ describe('CloudRunner 断流续订', () => {
   }, 15_000)
 })
 
+describe('帧的会话归属', () => {
+  it('tags every frame with the session it belongs to', async () => {
+    // A 在跑的时候用户可能切到 B：渲染层只靠这个字段判断帧该不该写进当前时间线
+    const { runner, frames } = makeRunner(
+      [sseStream([frame('message.delta', { delta: 'hello' }, 1), frame('run.completed', {}, 2)])],
+      { statuses: ['running', 'completed'] }
+    )
+
+    await runner.start({ input: 'hi', sessionId: 's-1', idempotencyKey: 'k-tag' })
+    await waitFor(() => frames.some((item) => item.kind === 'parts'))
+
+    const tagged = frames.filter((item) => item.kind !== 'session')
+    expect(tagged.length).toBeGreaterThan(0)
+    for (const item of tagged) expect(item.sessionId).toBe('s-1')
+    // `session` 帧自己就是会话 id 的来源
+    expect(frames.find((item) => item.kind === 'session')).toMatchObject({ sessionId: 's-1' })
+  })
+})
+
 describe('clarify 兜底轮询', () => {
   it('synthesises the prompt from pending_controls when the stream never carried it', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })

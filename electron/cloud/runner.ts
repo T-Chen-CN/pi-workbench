@@ -75,6 +75,16 @@ export class CloudRunner {
     return this.stream?.runId ?? null
   }
 
+  /**
+   * 所有帧都要带会话归属。
+   *
+   * 渲染层只认当前会话的帧：A 在跑的时候切到 B，A 的增量不能写进 B 的时间线。
+   */
+  private emit(frame: CloudFrame, sessionId: string | null): void {
+    // `session` 帧自己就带着新会话 id，不能再被外层覆盖
+    this.deps.emit(frame.kind === 'session' ? frame : { ...frame, sessionId })
+  }
+
   get remoteApi(): CloudRemote {
     return this.remote
   }
@@ -98,8 +108,8 @@ export class CloudRunner {
       this.deps.log?.('[Cloud] initial run status failed', error)
     }
 
-    if (sessionId) this.deps.emit({ kind: 'session', sessionId })
-    this.deps.emit({ kind: 'run', runId: accepted.runId, state: initialState })
+    if (sessionId) this.emit({ kind: 'session', sessionId }, sessionId)
+    this.emit({ kind: 'run', runId: accepted.runId, state: initialState }, sessionId)
 
     void this.streamRun(accepted.runId, sessionId)
     return { runId: accepted.runId, sessionId }
@@ -124,7 +134,7 @@ export class CloudRunner {
     const sessionId = snapshot.sessionId ?? input.sessionId ?? null
     if (sessionId) {
       this.lastSessionId = sessionId
-      this.deps.emit({ kind: 'session', sessionId })
+      this.emit({ kind: 'session', sessionId }, sessionId)
     }
 
     if (isTerminalStatus(snapshot.status) || snapshot.status === 'unknown') {
@@ -133,7 +143,7 @@ export class CloudRunner {
       return { attached: false, runId, sessionId, state: snapshot.status }
     }
 
-    this.deps.emit({ kind: 'run', runId, state: snapshot.status })
+    this.emit({ kind: 'run', runId, state: snapshot.status }, sessionId)
     void this.streamRun(runId, sessionId, { liveOnly: true, historyFirst: true })
     return { attached: true, runId, sessionId, state: snapshot.status }
   }
@@ -188,11 +198,11 @@ export class CloudRunner {
     let terminal = false
     const controlPoll = setInterval(() => {
       if (terminal || controller.signal.aborted) return
-      void this.pollControls(runId, mapper)
+      void this.pollControls(runId, mapper, sessionId)
     }, CONTROL_POLL_MS)
     controlPoll.unref?.()
     // 接回来的轮次：审批卡不会自动重推，先问一次，别等 15 秒
-    if (options.historyFirst) void this.pollControls(runId, mapper)
+    if (options.historyFirst) void this.pollControls(runId, mapper, sessionId)
     // 已经收到的最后一个事件序号：断流重订阅时带回去，避免重复或漏事件
     let lastSeq = options.liveOnly ? LIVE_ONLY_SEQ : -1
 
@@ -214,7 +224,7 @@ export class CloudRunner {
         return
       }
       if (frame.kind === 'run' && isTerminalStatus(frame.state)) deliveredTerminal = true
-      this.deps.emit(frame)
+      this.emit(frame, sessionId)
       this.auditToolOutcome(frame, runId)
     }
     const release = (): void => {
@@ -264,11 +274,14 @@ export class CloudRunner {
         const stillRunning = await this.isRunning(runId)
         if (!stillRunning) break
         if (attempt >= MAX_STREAM_RETRIES) {
-          this.deps.emit({
-            kind: 'error',
-            runId,
-            error: '事件流多次中断，已停止跟随；重新打开会话可看到最新进度',
-          })
+          this.emit(
+            {
+              kind: 'error',
+              runId,
+              error: '事件流多次中断，已停止跟随；重新打开会话可看到最新进度',
+            },
+            sessionId
+          )
           break
         }
         await delay(RETRY_BASE_DELAY_MS * 2 ** attempt)
@@ -320,15 +333,15 @@ export class CloudRunner {
   }
 
   /** 只补「还没见过的提问」：已有的 prompt_id 会被 mapper 去重掉 */
-  private async pollControls(runId: string, mapper: RunMapper): Promise<void> {
+  private async pollControls(runId: string, mapper: RunMapper, sessionId: string | null): Promise<void> {
     try {
       const snapshot = await this.remote.runStatus(runId)
       for (const control of snapshot.pendingControls ?? []) {
         const kind = controlKindOf(control)
         if (kind === 'clarify') {
-          for (const emitted of mapper.ensureClarify(control)) this.deps.emit(emitted)
+          for (const emitted of mapper.ensureClarify(control)) this.emit(emitted, sessionId)
         } else if (kind === 'approval') {
-          for (const emitted of mapper.ensureApproval(control)) this.deps.emit(emitted)
+          for (const emitted of mapper.ensureApproval(control)) this.emit(emitted, sessionId)
         }
       }
     } catch (error) {
@@ -361,11 +374,11 @@ export class CloudRunner {
     if (!sessionId) return
     const page = await this.remote.listMessages({ sessionId, limit: 500 })
     this.auditToolOutcome({ kind: 'parts', parts: page.parts }, runId)
-    this.deps.emit({ kind: 'parts', parts: page.parts })
-    this.deps.emit({
-      kind: 'part',
-      part: { type: 'divider', id: `reattach:${runId}`, kind: 'reattach' },
-    })
+    this.emit({ kind: 'parts', parts: page.parts }, sessionId)
+    this.emit(
+      { kind: 'part', part: { type: 'divider', id: `reattach:${runId}`, kind: 'reattach' } },
+      sessionId
+    )
   }
 
   /** 流结束 / 断流后的收敛：拿最终状态 + 重拉历史（工具结果、token、花费都以历史为准） */
@@ -395,13 +408,13 @@ export class CloudRunner {
     if (state && isTerminalStatus(state)) this.deps.onRunSettled?.(runId, state)
 
     if (session && session !== sessionId) {
-      this.deps.emit({ kind: 'session', sessionId: session })
+      this.emit({ kind: 'session', sessionId: session }, session)
     }
 
     // 终态先告诉渲染层：重拉历史可能很慢（接回时的历史请求甚至可能卡住），
     // 不能让界面一直停在「运行中」。
     if (!terminal && state) {
-      this.deps.emit({ kind: 'run', runId, state, error: error ?? undefined })
+      this.emit({ kind: 'run', runId, state, error: error ?? undefined }, session)
     }
 
     if (session) {
@@ -409,7 +422,7 @@ export class CloudRunner {
         const page = await this.remote.listMessages({ sessionId: session, limit: 500 })
         // 历史里也可能带着「那次审批的结果」：断流期间结果只走这条路回来
         this.auditToolOutcome({ kind: 'parts', parts: page.parts }, runId)
-        this.deps.emit({ kind: 'parts', parts: page.parts })
+        this.emit({ kind: 'parts', parts: page.parts }, session)
       } catch (historyError) {
         this.deps.log?.('[Cloud] history reconcile failed', historyError)
       }

@@ -248,6 +248,10 @@ export const CloudSessionView: React.FC<{
   const partsError = useCloudStore((state) => state.partsError)
   const runState = useCloudStore((state) => state.runState)
   const runError = useCloudStore((state) => state.runError)
+  const runUsage = useCloudStore((state) => state.runUsage)
+  const runModel = useCloudStore((state) => state.runModel)
+  const runPartial = useCloudStore((state) => state.runPartial)
+  const runInterrupted = useCloudStore((state) => state.runInterrupted)
   const steerError = useCloudStore((state) => state.steerError)
   const steer = useCloudStore((state) => state.steer)
   const resolveUnknown = useCloudStore((state) => state.resolveUnknown)
@@ -638,6 +642,22 @@ export const CloudSessionView: React.FC<{
           {runError && !busy && (
             <div className="py-2 type-caption text-danger">
               {t('cloudRunError', { error: runError })}
+            </div>
+          )}
+          {/* 上游说这一轮不完整：不能让它长得像正常完成 */}
+          {runInterrupted && !busy && (
+            <div className="py-2 type-caption text-danger">{t('cloudRunInterrupted')}</div>
+          )}
+          {runPartial && !busy && (
+            <div className="py-2 type-caption text-danger">{t('cloudRunPartial')}</div>
+          )}
+          {/* 终态之后的用量与模型：只是脚注，没数据就不占位置 */}
+          {!busy && (runUsage || runModel) && (
+            <div className="flex flex-wrap items-center gap-3 py-1 type-caption text-ink-subtle">
+              {runUsage && (
+                <span>{t('cloudRunUsage', { input: runUsage.input, output: runUsage.output })}</span>
+              )}
+              {runModel && <span>{t('cloudRunModel', { model: runModel })}</span>}
             </div>
           )}
           {steerError && (

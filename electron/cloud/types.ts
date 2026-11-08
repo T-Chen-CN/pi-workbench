@@ -331,16 +331,43 @@ export type CloudTracePart =
       detail?: string
     }
 
+/** 一轮的 token 用量（终态帧里给，字段名照抄上游） */
+export interface CloudRunUsage {
+  input: number
+  output: number
+  total?: number
+}
+
+/** 帧的来源：属于哪个会话。并行轮次时渲染层靠它把别的会话的帧丢掉 */
+export interface CloudFrameOrigin {
+  sessionId?: string | null
+}
+
 /** 主进程 → 渲染层的事件帧 */
-export type CloudFrame =
+export type CloudFrame = CloudFrameOrigin &
+  (
   /** 全量替换（打开会话的历史 / 轮次结束后的校正） */
   | { kind: 'parts'; parts: CloudTracePart[] }
   /** 增量：按 id 覆盖或追加 */
   | { kind: 'part'; part: CloudTracePart }
-  | { kind: 'run'; runId: string; state: CloudRunStatus; error?: string }
+  | {
+      kind: 'run'
+      runId: string
+      state: CloudRunStatus
+      error?: string
+      /** 终态帧里的用量：tokens 是「这一轮」的，不是累计 */
+      usage?: CloudRunUsage
+      /** 这一轮实际用的模型（上游没填就没有） */
+      model?: string | null
+      /** 上游说这一轮的输出被截断了：不能当正常完成 */
+      partial?: boolean
+      /** 上游说这一轮被打断（超时 / 关停），输出不完整 */
+      interrupted?: boolean
+    }
   /** 新会话的 id：第一条消息发出后由主进程回填 */
   | { kind: 'session'; sessionId: string }
   | { kind: 'error'; runId: string; error: string }
+)
 
 export interface CloudDashboardState {
   visible: boolean

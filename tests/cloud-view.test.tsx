@@ -744,6 +744,39 @@ describe('丢失主人的轮次', () => {
   })
 })
 
+describe('终态脚注与截断提示', () => {
+  it('shows tokens and the model after a finished run', async () => {
+    installBridge()
+    useCloudStore.setState({
+      runId: 'run_done',
+      runState: 'completed',
+      runUsage: { input: 11357, output: 2, total: 11359 },
+      runModel: 'deepseek-chat',
+    })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+
+    await waitFor(() => screen.getByText('本轮 11357 入 / 2 出 tokens'))
+    expect(screen.getByText('模型 deepseek-chat')).toBeTruthy()
+  })
+
+  it('never lets a truncated turn look complete', async () => {
+    installBridge()
+    useCloudStore.setState({ runId: 'run_cut', runState: 'completed', runPartial: true })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+
+    await waitFor(() => screen.getByText(zh.cloudRunPartial))
+    expect(screen.queryByText(zh.cloudRunInterrupted)).toBeNull()
+  })
+
+  it('says a run was interrupted instead of showing it as a normal failure', async () => {
+    installBridge()
+    useCloudStore.setState({ runId: 'run_int', runState: 'failed', runInterrupted: true })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+
+    await waitFor(() => screen.getByText(zh.cloudRunInterrupted))
+  })
+})
+
 describe('未结算账本', () => {
   it('shows the badge only when something is unresolved and opens the drawer', async () => {
     installBridge()

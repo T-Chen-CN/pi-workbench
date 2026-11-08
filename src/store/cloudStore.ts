@@ -23,6 +23,7 @@ import type {
   CloudHeartbeatState,
   CloudFrame,
   CloudRunStatus,
+  CloudRunUsage,
   CloudDiagnostics,
   CloudJob,
   CloudJobDraft,
@@ -100,6 +101,13 @@ interface CloudState {
   runId: string | null
   runState: CloudRunStatus | null
   runError: string | null
+  /** 这一轮的 token 用量（终态才给） */
+  runUsage: CloudRunUsage | null
+  /** 这一轮实际用的模型（上游没填就是 null） */
+  runModel: string | null
+  /** 上游说输出不完整：`partial` 撞上限、`interrupted` 被打断 */
+  runPartial: boolean
+  runInterrupted: boolean
   /** 插话请求本身的失败（与轮次失败分开，避免误报「这一轮挂了」） */
   steerError: string | null
   /** 收尾确认的失败原因 */
@@ -256,6 +264,10 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   runId: null,
   runState: null,
   runError: null,
+  runUsage: null,
+  runModel: null,
+  runPartial: false,
+  runInterrupted: false,
   steerError: null,
   resolveError: null,
   resolvingUnknown: false,
@@ -524,6 +536,10 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
         runId: null,
         runState: null,
         runError: null,
+        runUsage: null,
+        runModel: null,
+        runPartial: false,
+        runInterrupted: false,
         pending: null,
       })
     }
@@ -543,6 +559,10 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       runId: null,
       runState: null,
       runError: null,
+      runUsage: null,
+      runModel: null,
+      runPartial: false,
+      runInterrupted: false,
       pending: null,
       approvalPending: null,
       approvalError: null,
@@ -623,6 +643,10 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       runId: null,
       runState: 'started',
       runError: null,
+      runUsage: null,
+      runModel: null,
+      runPartial: false,
+      runInterrupted: false,
       parts: upsertPart(get().parts, { type: 'text', id: optimisticId, role: 'user', text }),
     })
 
@@ -957,6 +981,19 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   },
 
   applyFrame(frame) {
+    const active = get().activeSessionId
+    // 新会话的 id 由主进程回填：当前还没有会话时直接采纳，否则只认同一会话
+    if (frame.kind === 'session') {
+      if (active === null || active === frame.sessionId) {
+        set({
+          activeSessionId: frame.sessionId,
+          sessionMeta: { ...(get().sessionMeta ?? emptySessionMeta()), id: frame.sessionId },
+        })
+      }
+      return
+    }
+    // 别的会话的帧一律丢弃：A 在跑的时候切到 B，A 的增量不能写进 B 的时间线
+    if (frame.sessionId != null && frame.sessionId !== active) return
     if (frame.kind === 'parts') {
       const pendingDisconnect = get().pendingDisconnect
       set({
@@ -986,16 +1023,18 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       })
       return
     }
-    if (frame.kind === 'session') {
-      set({
-        activeSessionId: frame.sessionId,
-        sessionMeta: { ...(get().sessionMeta ?? emptySessionMeta()), id: frame.sessionId },
-      })
-      return
-    }
     if (frame.kind === 'run') {
       const settling = isTerminalRun(frame.state)
-      set({ runId: frame.runId, runState: frame.state, runError: frame.error ?? null })
+      set({
+        runId: frame.runId,
+        runState: frame.state,
+        runError: frame.error ?? null,
+        // 只有终态帧带用量；运行中的帧把上一轮的残留清掉
+        runUsage: frame.usage ?? (settling ? get().runUsage : null),
+        runModel: frame.model ?? get().runModel,
+        runPartial: frame.partial === true,
+        runInterrupted: frame.interrupted === true,
+      })
       // 终态时账本刚从 pending 变 unknown，拉一次让提示条准确
       if (settling) void get().loadLedger()
       if (isTerminalRun(frame.state)) void get().refreshSessions()

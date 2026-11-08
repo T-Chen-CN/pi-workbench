@@ -271,6 +271,10 @@ export const translations = {
     cloudToolFailed: '失败',
     cloudToolFailedNoDetail: '上游只回了失败状态，没带错误内容（多半是命令退出码不是 0）',
     cloudRunError: '本轮执行失败：{error}',
+    cloudRunUsage: '本轮 {input} 入 / {output} 出 tokens',
+    cloudRunModel: '模型 {model}',
+    cloudRunPartial: '上游把这一轮截断了（撞到输出上限），内容不完整；可以再发一句让它接着写。',
+    cloudRunInterrupted: '这一轮被打断了（超时或服务端关停），时间线上的内容是残缺的。',
     cloudDisconnectDivider: '连接中断，已切换到该会话的历史记录',
     cloudSessionMetaDivider: '会话开始',
     cloudReattachDivider: '已接上仍在运行的一轮',
@@ -1363,6 +1367,11 @@ export const translations = {
     cloudToolFailedNoDetail:
       'The upstream only reported a failure status — no error text came with it',
     cloudRunError: 'Run failed: {error}',
+    cloudRunUsage: 'This turn: {input} in / {output} out tokens',
+    cloudRunModel: 'Model {model}',
+    cloudRunPartial:
+      'The upstream cut this turn short (output limit reached) — the answer is incomplete. Ask it to continue.',
+    cloudRunInterrupted: 'This turn was interrupted (timeout or server shutdown) — the timeline is incomplete.',
     cloudDisconnectDivider: 'Connection lost — showing this session history',
     cloudSessionMetaDivider: 'Session started',
     cloudReattachDivider: 'Reattached to the run still in progress',
