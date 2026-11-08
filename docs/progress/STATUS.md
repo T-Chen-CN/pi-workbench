@@ -22,7 +22,7 @@
 - **R-23 剩余子项**：B4 续写截断的后续动作、B7 上下文临界预警、B8 轻任务预算、`reasoning_effort` 联动——见 [BACKLOG](./BACKLOG.md) §3。
 - **平台手动验收** V-01（macOS dmg）/ V-02（Linux AppImage）尚未做。
 - **云端后置**：C-08 CDP 屏幕接管 → C-09 Kanban → C-10 拆窗 → C-11 IM / 语音 / 遥测 → C-12 对外写 MCP 门。见 [CLOUD_AGENT §9.4](../requirements/CLOUD_AGENT.md)。
-- **H3 工作区派活 P1–P3 已落地并真机验收**（插件 0.3.0 + 桌面开发版）：中继进真 hub、模型能调 `local_*`、任务落本机并回报；急停 / 云端取消 / 幂等 / 断线重放 / 关掉派活拒派都实测通过；**P2 / P3 也已落地并真机验收**（本地反问、租约重投、断线接回、A2A 端点）——见 [WORKSPACE_DISPATCH](../requirements/WORKSPACE_DISPATCH.md) §15.6。
+- **H3 工作区派活 P1–P3 已落地并真机验收**（插件 0.3.0 + 桌面开发版）：中继进真 hub、模型能调 `local_*`、任务落本机并回报；急停 / 云端取消 / 幂等 / 断线重放 / 关掉派活拒派都实测通过；**P2 / P3 也已落地并两轮真机验收**（本地反问、租约重投、断线接回、A2A 端点；第二轮补了 A2A 回答反问、过期原因、取消原因透传、重发不重跑）——见 [WORKSPACE_DISPATCH](../requirements/WORKSPACE_DISPATCH.md) §15.6。
 
 ## 已交付（一行一项，细节在 git）
 

@@ -507,3 +507,113 @@ describe('dispatch worker · input_required 与断线补发', () => {
     expect(done.length).toBeGreaterThanOrEqual(2)
   })
 })
+
+describe('dispatch worker · 重发不重跑', () => {
+  it('re-reports a task it already finished instead of running it twice', async () => {
+    const { client, reports } = makeClient()
+    const executor = makeExecutor()
+    const { worker } = createWorker(executor, client)
+    await worker.refresh()
+
+    await worker.handleFrame({
+      type: 'task.assigned',
+      taskId: 't-once',
+      workspaceId: wsId(),
+      prompt: '只该跑一次'
+    })
+    await vi.waitFor(() => expect(executor.runs).toEqual(['t-once@repo']))
+    executor.release()
+    await vi.waitFor(() => expect(worker.getState().runningTaskId).toBeNull())
+    const before = reports.length
+
+    // 网关重连后补发同一任务（它还以为在跑）：不能再执行一遍
+    await worker.handleFrame({
+      type: 'task.assigned',
+      taskId: 't-once',
+      workspaceId: wsId(),
+      prompt: '只该跑一次',
+      attempt: 2
+    })
+    expect(executor.runs).toEqual(['t-once@repo'])
+    await vi.waitFor(() => expect(reports.length).toBe(before + 1))
+    expect(reports[reports.length - 1].body).toMatchObject({
+      taskId: 't-once',
+      kind: 'done',
+      summary: '已处理 t-once'
+    })
+  })
+
+  it('uses the ledger to answer a replay after a restart', async () => {
+    const { client, reports } = makeClient()
+    const executor = makeExecutor()
+    const { worker } = createWorker(executor, client)
+    await worker.refresh()
+
+    await worker.handleFrame({
+      type: 'task.assigned',
+      taskId: 't-ledger',
+      workspaceId: wsId(),
+      prompt: 'x'
+    })
+    await vi.waitFor(() => expect(executor.runs).toEqual(['t-ledger@repo']))
+    executor.release()
+    await vi.waitFor(() => expect(worker.getState().runningTaskId).toBeNull())
+
+    // 新进程：内存里没有记录，只能靠账本
+    const restarted = createWorker(makeExecutor(), client).worker
+    await restarted.refresh()
+    await restarted.handleFrame({
+      type: 'task.assigned',
+      taskId: 't-ledger',
+      workspaceId: wsId(),
+      prompt: 'x',
+      attempt: 2
+    })
+    await vi.waitFor(() =>
+      expect(reports[reports.length - 1].body).toMatchObject({ taskId: 't-ledger', kind: 'done' })
+    )
+  })
+})
+
+describe('dispatch worker · 取消原因透传', () => {
+  it('uses the reason from the task.cancel frame (gateway expiry vs cloud cancel)', async () => {
+    const { client } = makeClient()
+    const runs: string[] = []
+    let rejectRun: ((error: Error) => void) | undefined
+    const executor: DispatchExecutorLike = {
+      run: async (task) => {
+        runs.push(task.taskId)
+        await new Promise<never>((_resolve, reject) => {
+          rejectRun = reject
+        })
+        return { report: { kind: 'done' }, sessionId: null }
+      },
+      cancel: async () => {
+        rejectRun?.(new Error('aborted'))
+        return true
+      }
+    }
+    const { worker } = createWorker(executor, client)
+    await worker.refresh()
+    await worker.handleFrame({
+      type: 'task.assigned',
+      taskId: 't-expire',
+      workspaceId: wsId(),
+      prompt: 'x'
+    })
+    await vi.waitFor(() => expect(runs).toEqual(['t-expire']))
+
+    await worker.handleFrame({
+      type: 'task.cancel',
+      taskId: 't-expire',
+      reason: '超过截止时间仍未完成（网关收尾）。',
+      by: 'gateway'
+    })
+    await vi.waitFor(() =>
+      expect(readLedger(ledgerPath(tmp))[0]).toMatchObject({
+        state: 'canceled',
+        summary: '超过截止时间仍未完成（网关收尾）。'
+      })
+    )
+  })
+})

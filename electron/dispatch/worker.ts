@@ -130,6 +130,13 @@ export class DispatchWorker {
     taskId: string
     input: Omit<ReportInput, 'taskId'>
   }> = []
+  /**
+   * 已经跑出结果的任务：taskId → 该补发的那次回报。
+   *
+   * 重连时网关会补发 `running` 任务（接回语义），但如果本机其实已经跑完、只是回报
+   * 没送到，直接重跑等于把同一条指令执行两遍。这里记着结果，收到补发就再报一次。
+   */
+  private readonly finished = new Map<string, Omit<ReportInput, 'taskId'>>()
   private progressTimer: ReturnType<typeof setInterval> | null = null
   private draining = false
   private catalogTimer: ReturnType<typeof setInterval> | null = null
@@ -312,6 +319,7 @@ export class DispatchWorker {
     const taskId = typeof frame.taskId === 'string' ? frame.taskId : ''
     if (!taskId) return
     if (frame.type === 'task.assigned') {
+      if (await this.replayFinished(taskId)) return
       this.enqueue({
         taskId,
         workspaceId: String(frame.workspaceId ?? ''),
@@ -320,7 +328,8 @@ export class DispatchWorker {
       return
     }
     if (frame.type === 'task.cancel') {
-      await this.cancelTask(taskId)
+      const reason = typeof frame.reason === 'string' && frame.reason ? frame.reason : '云端取消'
+      await this.cancelTask(taskId, reason)
       return
     }
     if (frame.type === 'task.answered') {
@@ -341,17 +350,17 @@ export class DispatchWorker {
     void this.drain()
   }
 
-  private async cancelTask(taskId: string): Promise<void> {
+  private async cancelTask(taskId: string, reason = '云端取消'): Promise<void> {
     const index = this.queue.findIndex((item) => item.taskId === taskId)
     if (index >= 0) {
       this.queue.splice(index, 1)
-      await this.report(taskId, { kind: 'canceled', error: '云端取消' }).catch(() => undefined)
+      await this.report(taskId, { kind: 'canceled', error: reason }).catch(() => undefined)
       this.patch({})
       return
     }
     if (this.state.runningTaskId === taskId) {
-      this.cancelReasons.set(taskId, '云端取消')
-      this.rejectQuestion(taskId, '云端取消了这个任务')
+      this.cancelReasons.set(taskId, reason)
+      this.rejectQuestion(taskId, reason)
       await this.executor.cancel(taskId)
     }
   }
@@ -439,6 +448,7 @@ export class DispatchWorker {
         await this.report(next.taskId, report).catch((error: unknown) => {
           this.deps.logger.warn('[Dispatch] outcome report failed', error)
         })
+        this.rememberFinished(next.taskId, report)
         this.record({
           taskId: next.taskId,
           workspaceId: next.workspaceId,
@@ -453,6 +463,54 @@ export class DispatchWorker {
       this.draining = false
       this.patch({})
     }
+  }
+
+  /**
+   * 收到「本机已经跑完」的任务补发：只补发回报，不重跑。
+   *
+   * 先看内存（本轮跑完、回报失败），再退回账本（上一进程跑完、崩在回报前后）。
+   * 都没有才返回 false，让调用方照常入队执行。
+   */
+  private async replayFinished(taskId: string): Promise<boolean> {
+    const known = this.finished.get(taskId) ?? this.finishedFromLedger(taskId)
+    if (!known) return false
+    this.deps.logger.info?.('[Dispatch] re-reporting finished task instead of re-running', taskId)
+    await this.report(taskId, known).catch((error: unknown) => {
+      this.deps.logger.warn('[Dispatch] re-reporting finished task failed', error)
+    })
+    return true
+  }
+
+  private rememberFinished(taskId: string, report: Omit<ReportInput, 'taskId'>): void {
+    this.finished.set(taskId, report)
+    // 只需要挡住「刚跑完就被重放」这种窗口，留最近 50 条足够
+    while (this.finished.size > 50) {
+      const oldest = this.finished.keys().next().value
+      if (oldest === undefined) break
+      this.finished.delete(oldest)
+    }
+  }
+
+  private finishedFromLedger(taskId: string): Omit<ReportInput, 'taskId'> | null {
+    let entries: DispatchLedgerEntry[] = []
+    try {
+      entries = readLedger(this.deps.ledgerPath)
+    } catch {
+      return null
+    }
+    const entry = entries.find((item) => item.taskId === taskId)
+    if (!entry) return null
+    if (entry.state === 'completed') {
+      return {
+        kind: 'done',
+        summary: entry.summary,
+        localSessionId: entry.sessionId ?? undefined,
+      }
+    }
+    if (entry.state === 'canceled') {
+      return { kind: 'canceled', error: entry.summary || '本机已取消该任务' }
+    }
+    return { kind: 'failed', error: entry.summary || '本机执行失败', localSessionId: entry.sessionId ?? undefined }
   }
 
   /** 写本机账本；写失败只记日志，不影响任务结果 */

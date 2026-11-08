@@ -620,7 +620,32 @@ Hermes → local_dispatch(workspace, prompt)
 | D10 租约重投 | **通过**（真桌面 + 真云端）：任务跑到一半**硬杀 Electron** → 120s 后 hub 记 `task.requeued`（attempt=1）→ 重启桌面，重连收到 attempt=2 的派活帧 → 从零重跑并 `completed`，账本与云端都一致 |
 | P3 A2A | **通过**（真 hub）：Agent Card 列出两个可派活工作区；`message/send` / `tasks/get` / `tasks/cancel` 全通，状态映射正确 |
 
-### 15.7 仍未做
+### 15.7 第二轮验收发现并修掉的问题（同日，插件 0.3.0 内补丁）
+
+用 dev build + 真 VPS 重打一遍 P2/P3，重点打「上一轮没覆盖的路径」：A2A 打真桌面、
+`tasks/resubscribe` 全生命周期、等回答时取消 / 超时、连续两次反问。
+
+| 问题 | 表现 | 修法 |
+| --- | --- | --- |
+| A2A 无法回答反问 | `message/send` 不看 `message.taskId`，回答反问被当成**新任务**（还会撞「设备正忙」），外部客户端只能等 deadline | 带 `taskId` 的 message 走 `answer()` + 推 `task.answered`，并跳过设备忙检查（同一任务本来就在占设备） |
+| 过期任务没有原因 | `expire()` 只改状态不写 `error`，客户端看到 `failed` 却不知为什么 | 写入「超过截止时间仍未完成（网关收尾）」 |
+| 桌面取消原因不区分来源 | 网关超时收尾也被记成「云端取消」 | `task.cancel` 帧的 `reason` 透传，账本按真实原因落 |
+| A2A skill 后缀匹配 | `workspaceId.endswith(target)` 会让 `bfc` 命中意外工作区（派错目录比报错更糟） | 只认 `设备/工作区`、`workspaceId`、`label` 三种精确写法 |
+| 重连补发会重跑已完成任务 | 回报丢失时网关补发 `running` 任务，桌面当成新任务再执行一遍 | worker 记 `finished`（最近 50 条）+ 退回本机账本：收到补发只**补发回报**，不重跑 |
+
+第二轮验收结果（全部通过）：
+
+| 场景 | 结果 |
+| --- | --- |
+| A2A → 真桌面 blocking 派活 | `message/send` 阻塞返回 `completed`，`A2A.md` 内容正确 |
+| A2A 回答反问（两次连续） | 两轮 `input-required` → 两次 `message.taskId` 回答 → `completed`，`TWOSTEP.md` 两行都对 |
+| `tasks/resubscribe` 全生命周期 | 帧序列 `working → input-required → working → completed(final)` |
+| 等回答时云端取消 | 状态 `canceled`，本地账本「云端取消」，会话被 abort，`question` 清空 |
+| 等回答时超 deadline | 60s 后 `expired → failed`，原因「超过截止时间仍未完成（网关收尾）」；本地账本同样原因、任务停止 |
+| 工具路径（`local_dispatch` + `local_task_reply`） | 改动后重跑仍通过（`D8B.md` = `ok`） |
+| 未鉴权访问 A2A | 401 |
+
+### 15.8 仍未做
 
 - push webhook（`pushNotifications: false`）；
 - 跨设备重投（现在只重投给**原设备**；换设备需要迁移已有的本地会话，暂不做）；
