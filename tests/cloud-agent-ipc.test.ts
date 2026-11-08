@@ -13,6 +13,16 @@ const mocks = vi.hoisted(() => {
     statusCalls: 0,
     liveStatusCalls: 0,
     sent: [] as Array<{ channel: string; payload: unknown }>,
+    /** 云端通知：主进程发出的每一条（路由侧的前台/开关判断不在本层） */
+    notifies: [] as Array<{
+      kind: string
+      title: string
+      body: string
+      workspaceDir: string | null
+      sessionId: string
+      cloud?: boolean
+      requestId?: string
+    }>,
     requests: [] as string[],
     bodies: [] as string[],
     /** 控制台配置里 approvals.mode 的当前值（模拟 PUT 之后读回） */
@@ -160,8 +170,82 @@ vi.mock('electron', () => ({
       }
       if (route === '/v1/runs' && init?.method === 'POST') {
         const body = String(init.body ?? '')
-        const runId = body.includes('hang') ? 'run_hang' : 'run_test'
+        const runId = body.includes('hang')
+          ? 'run_hang'
+          : body.includes('notify')
+            ? 'run_notify'
+            : body.includes('cancel')
+              ? 'run_cancel'
+              : 'run_test'
         return Response.json({ run_id: runId, status: 'started', replayed: false }, { status: 202 })
+      }
+      if (route === '/v1/runs/run_notify' || route === '/v1/runs/run_cancel') {
+        const isNotify = route.endsWith('notify')
+        return Response.json({
+          object: 'hermes.run',
+          run_id: isNotify ? 'run_notify' : 'run_cancel',
+          status: isNotify ? 'running' : 'cancelled',
+          session_id: isNotify ? 'notify_session' : 'cancel_session',
+          execution_generation: 2,
+        })
+      }
+      if (route === '/v1/runs/run_notify/events' || route === '/v1/runs/run_cancel/events') {
+        const encoder = new TextEncoder()
+        const isNotify = route.includes('run_notify')
+        const runId = isNotify ? 'run_notify' : 'run_cancel'
+        const frames: Array<Record<string, unknown>> = [
+          { seq: 0, event: 'run.running', run_id: runId },
+          { seq: 1, event: 'message.delta', run_id: runId, delta: 'Hello notify' }
+        ]
+        if (isNotify) {
+          frames.push(
+            {
+              seq: 2,
+              event: 'approval.request',
+              run_id: runId,
+              prompt_id: 'ap_1',
+              execution_generation: 2,
+              command: 'rm -rf /tmp/build',
+              choices: ['once', 'session', 'deny'],
+              timeout_s: 300
+            },
+            // 同一条审批重放：只该弹一条通知
+            {
+              seq: 3,
+              event: 'approval.request',
+              run_id: runId,
+              prompt_id: 'ap_1',
+              execution_generation: 2,
+              command: 'rm -rf /tmp/build',
+              choices: ['once', 'session', 'deny'],
+              timeout_s: 300
+            },
+            {
+              seq: 4,
+              event: 'clarify.request',
+              run_id: runId,
+              prompt_id: 'cl_1',
+              execution_generation: 2,
+              question: '要清空哪个目录？',
+              choices: ['/tmp/a', '/tmp/b']
+            },
+            { seq: 5, event: 'run.completed', run_id: runId, output: 'Hello notify', usage: {} }
+          )
+        } else {
+          frames.push({ seq: 2, event: 'run.cancelled', run_id: runId })
+        }
+        const body = frames
+          .map((frame) => `id: ${frame.seq}\ndata: ${JSON.stringify(frame)}\n\n`)
+          .join('')
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(encoder.encode(body))
+              controller.close()
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+        )
       }
       if (route === '/v1/runs/run_hang') {
         return Response.json({
@@ -495,6 +579,11 @@ beforeAll(async () => {
   module = await import('../electron/ipc/cloud-agent')
   const registered = module.registerCloudAgentIpc({
     getMainWindow: () => mocks.window as never,
+    getLanguage: () => 'zh',
+    notify: (event) => {
+      mocks.state.notifies.push(event)
+      return true
+    }
   })
   dispose = registered.dispose
 })
@@ -604,6 +693,60 @@ describe('cloud IPC', () => {
       success: false,
       error: '缺少幂等键',
     })
+  })
+})
+
+describe('cloud notifications', () => {
+  it('notifies the approval, the clarify and the finish of a run, once each', async () => {
+    await seedPairedDevice()
+    mocks.state.notifies.length = 0
+    const started = await call<{ success: boolean }>('cloud:run:start', {
+      input: 'notify me',
+      idempotencyKey: 'notify-1'
+    })
+    expect(started.success).toBe(true)
+    await waitFor(() => mocks.state.notifies.some((notice) => notice.kind === 'complete'))
+
+    // 审批 → 澄清 → 收尾；重放的同一条审批不进第二条
+    expect(mocks.state.notifies.map((notice) => notice.kind)).toEqual([
+      'approval',
+      'approval',
+      'complete'
+    ])
+
+    const [approval, clarify, complete] = mocks.state.notifies
+    // 云端会话没有工作区：点击后只能切云端页，不能去开同名目录
+    expect(approval).toMatchObject({
+      cloud: true,
+      workspaceDir: null,
+      sessionId: 'notify_session',
+      requestId: 'ap_1',
+      title: '云端需要审批'
+    })
+    expect(approval.body).toContain('rm -rf /tmp/build')
+    // clarify 不是一类新通知：对用户来说一样是“这轮卡在等你”
+    expect(clarify).toMatchObject({ kind: 'approval', requestId: 'cl_1', title: '云端在等你回答' })
+    expect(clarify.body).toContain('要清空哪个目录')
+    expect(complete).toMatchObject({
+      kind: 'complete',
+      sessionId: 'notify_session',
+      title: '云端会话已完成'
+    })
+    // 正文取最近一段助手输出，方便不解手机就知道发生了什么
+    expect(complete.body).toContain('Hello notify')
+  })
+
+  it('stays silent when the run is cancelled on purpose', async () => {
+    await seedPairedDevice()
+    mocks.state.notifies.length = 0
+    await call('cloud:run:start', { input: 'cancel it', idempotencyKey: 'notify-2' })
+    await waitFor(() =>
+      mocks.state.sent.some((message) => {
+        const payload = message.payload as { kind?: string; state?: string }
+        return message.channel === 'cloud:event' && payload.state === 'cancelled'
+      })
+    )
+    expect(mocks.state.notifies).toHaveLength(0)
   })
 })
 

@@ -309,6 +309,8 @@ export const CloudSessionView: React.FC<{
     [sessions, sessionQuery]
   )
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const focusRequestId = useCloudStore((state) => state.focusRequestId)
+  const consumeFocus = useCloudStore((state) => state.consumeFocus)
   const followRef = useRef(true)
   /** 与 followRef 同步的一份响应式副本：只是为了让提示条能重渲染 */
   const [atBottom, setAtBottom] = useState(true)
@@ -323,6 +325,24 @@ export const CloudSessionView: React.FC<{
     if (!element) return
     if (followRef.current) pinToBottom(element)
   }, [parts, activeSessionId])
+
+  /**
+   * 桌面通知点进来：把那张审批 / 澄清卡滚进视野。
+   * 找不到锚点就先不消费意图（历史还在加载时 parts 随后会变，再试一次）。
+   */
+  useEffect(() => {
+    if (!focusRequestId) return
+    const element = scrollRef.current
+    if (!element) return
+    const target = Array.from(
+      element.querySelectorAll<HTMLElement>('[data-cloud-card]')
+    ).find((node) => node.dataset.cloudCard === focusRequestId)
+    if (!target) return
+    followRef.current = false
+    setAtBottom(false)
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    consumeFocus()
+  }, [focusRequestId, parts, consumeFocus])
   // 停止请求返回 / 本轮收尾后按钮回到「发送」
   useEffect(() => {
     if (!busy) setStopping(false)

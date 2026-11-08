@@ -15,7 +15,7 @@ import { TerminalManager } from './terminal-manager.js'
 import { PluginManager } from './plugin-manager.js'
 import { DraftStore } from './draft-store.js'
 import { ApprovalBroker } from './approval-broker.js'
-import { NotificationRouter } from './notifications.js'
+import { NotificationRouter, notificationCopy, notificationSummary } from './notifications.js'
 import { createWorkspaceStore, importRecentWorkspaces } from './workspace-store.js'
 import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
@@ -362,18 +362,9 @@ const agentRegistry = new AgentRegistry()
 setRunningAgentsProvider(() => agentRegistry.listRunning())
 /** settings.json 的内存副本；权限策略随工具调用实时读取 */
 
-/** 桌面通知文案（跟随应用语言） */
+/** 桌面通知文案（跟随应用语言）；文案本体在 notifications.ts，本地与云端共用 */
 function notificationText() {
-  const zh = (getAppSettingsCache().language ?? 'zh') !== 'en'
-  return zh
-    ? { approval: '需要审批', complete: '会话已完成', error: '会话运行失败' }
-    : { approval: 'Approval required', complete: 'Session finished', error: 'Session failed' }
-}
-
-/** 通知里只放一行短摘要，避免把完整命令（可能含密钥）显示在锁屏上 */
-function notificationSummary(text: string): string {
-  const single = text.replace(/\s+/g, ' ').trim()
-  return single.length > 120 ? `${single.slice(0, 117)}…` : single
+  return notificationCopy(getAppSettingsCache().language)
 }
 
 /** 正在显示的系统通知；必须保持引用，否则对象被 GC 后 click 事件不会触发 */
@@ -412,7 +403,9 @@ const notificationRouter = new NotificationRouter(
       }
       mainWindow.webContents.send('app:notify-click', {
         workspaceDir: payload.workspaceDir,
-        sessionId: payload.sessionId
+        sessionId: payload.sessionId,
+        cloud: payload.cloud === true,
+        requestId: payload.requestId
       })
       setTimeout(() => {
         console.log('[Notifications] focus after click:', mainWindow?.isFocused())
@@ -610,7 +603,10 @@ registerAuxWindowIpc({ getMainWindow: () => mainWindow })
 // 云端 Agent：配置 / 会话 / run / 程序内控制台（HTTP 与 SSE 都在主进程）
 const cloudAgentIpc = registerCloudAgentIpc({
   getMainWindow: () => mainWindow,
-  logger: agentLogger
+  logger: agentLogger,
+  getLanguage: () => getAppSettingsCache().language,
+  // 云端审批 / 澄清 / 终态：接入现有通知路由（只看得到“不在前台”的，和本地一致）
+  notify: (event) => notificationRouter.notify(event)
 })
 
 // 初始化应用目录结构

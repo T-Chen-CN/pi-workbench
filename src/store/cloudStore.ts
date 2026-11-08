@@ -91,6 +91,11 @@ interface CloudState {
   parts: CloudTracePart[]
   partsLoading: boolean
   partsError: string | null
+  /**
+   * 桌面通知点进来要定位的那张审批 / 澄清卡（requestId）。
+   * 只负责“滚到它”，不代表任何状态：消费一次就清掉。
+   */
+  focusRequestId: string | null
 
   runId: string | null
   runState: CloudRunStatus | null
@@ -163,6 +168,9 @@ interface CloudState {
   togglePinned: (sessionId: string) => Promise<boolean>
   deleteSession: (sessionId: string) => Promise<boolean>
   openSession: (sessionId: string) => Promise<void>
+  /** 通知点击：把某张审批 / 澄清卡滚进视野（下一条消息 / 下次打开即失效） */
+  requestFocus: (requestId: string) => void
+  consumeFocus: () => void
   /** 接回上一轮还在跑的 run（重启 / 断线后）；接上了返回 true */
   attachRun: (sessionId?: string) => Promise<boolean>
   newSession: () => void
@@ -243,6 +251,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   parts: [],
   partsLoading: false,
   partsError: null,
+  focusRequestId: null,
 
   runId: null,
   runState: null,
@@ -537,6 +546,8 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       pending: null,
       approvalPending: null,
       approvalError: null,
+      // 换了会话，上一张卡的定位请求就失效了
+      focusRequestId: null,
     })
     const result = await cloudApi.listMessages({ sessionId, limit: MESSAGES_PAGE_SIZE })
     if (get().historyToken !== token) return
@@ -566,6 +577,15 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       runError: null,
     })
     return true
+  },
+
+  /** 通知点击：只设一个“滚到它”的意图，由时间线自己消费 */
+  requestFocus(requestId) {
+    set({ focusRequestId: requestId })
+  },
+
+  consumeFocus() {
+    if (get().focusRequestId !== null) set({ focusRequestId: null })
   },
 
   newSession() {

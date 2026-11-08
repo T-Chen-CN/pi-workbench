@@ -37,6 +37,7 @@ import { disposeDiffStore } from './store/diffStore'
 import { useRepoMapStore } from './store/repoMapStore'
 import { useChatStore } from './store/chatStore'
 import { useSessionStore } from './store/sessionStore'
+import { useCloudStore } from './store/cloudStore'
 import { confirmDialog } from './store/dialogStore'
 import { useSettingsStore } from './store/settingsStore'
 import { useApprovalStore } from './store/approvalStore'
@@ -471,19 +472,35 @@ export default function App() {
     }
   }
 
-  // 桌面通知点击：先切到对应工作区，再让 ChatPanel 激活会话
+  // 桌面通知点击：本地会话→先切到对应工作区，再让 ChatPanel 激活会话；
+  // 云端会话没有工作区，只能切到云端页（会话 id 为空时连会话都不开）
   const openWorkspaceRef = useRef(openWorkspaceAt)
   useEffect(() => {
     openWorkspaceRef.current = openWorkspaceAt
   })
 
   useEffect(() => {
-    const off = piAgentAPI.onNotifyClick(({ workspaceDir, sessionId }) => {
+    const off = piAgentAPI.onNotifyClick(({ workspaceDir, sessionId, cloud, requestId }) => {
       void (async () => {
+        if (cloud) {
+          setView('cloud-session')
+          let cloudStore = useCloudStore.getState()
+          // 通知可能在云端页从未打开过时到达：先补水，否则拿到的还是默认的“未配对”
+          if (!cloudStore.hydrated) {
+            await cloudStore.hydrate()
+            cloudStore = useCloudStore.getState()
+          }
+          if (sessionId && cloudStore.config.hasDeviceToken) {
+            await cloudStore.openSession(sessionId)
+          }
+          // 审批 / 澄清卡：定位意图交给时间线自己消费（parts 加载完才找得到锚点）
+          if (requestId) useCloudStore.getState().requestFocus(requestId)
+          return
+        }
         if (workspaceDir) {
           await openWorkspaceRef.current(workspaceDir)
         }
-        useSessionStore.getState().requestActivation(workspaceDir, sessionId)
+        useSessionStore.getState().requestActivation(workspaceDir ?? '', sessionId)
       })()
     })
     return () => off()

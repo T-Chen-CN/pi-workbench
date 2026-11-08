@@ -303,10 +303,19 @@ export const CloudTrace: React.FC<CloudTraceProps> = ({ parts, streaming }) => {
           return <CloudSubagentCard key={group.key} part={group.part} />
         }
         if (group.kind === 'clarify') {
-          return <CloudClarifyCard key={group.key} part={group.part} />
+          return (
+            <div key={group.key} data-cloud-card={group.part.promptId}>
+              <CloudClarifyCard part={group.part} />
+            </div>
+          )
         }
         if (group.kind === 'approval') {
-          return <CloudApprovalCard key={group.key} part={group.part} />
+          return (
+            // 锚点：桌面通知点击靠这个 attribute 把卡滚进视野（见 CloudSessionView）
+            <div key={group.key} data-cloud-card={group.part.requestId}>
+              <CloudApprovalCard part={group.part} />
+            </div>
+          )
         }
         return <DividerRow key={group.key} part={group.part} />
       })}

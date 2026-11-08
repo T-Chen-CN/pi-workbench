@@ -48,6 +48,11 @@ import {
 } from '../cloud/device.js'
 import { recordApprovalDecision, recordModeChange } from '../cloud/audit.js'
 import {
+  notificationCopy,
+  notificationSummary,
+  type SessionNotification
+} from '../notifications.js'
+import {
   isApprovalMode,
   readApprovalPolicy,
   writeApprovalMode
@@ -70,6 +75,10 @@ interface LoggerLike {
 export interface CloudAgentIpcDeps {
   getMainWindow: () => BrowserWindow | null
   logger?: LoggerLike
+  /** 通知文案跟随应用语言（缺省中文），与本地 Agent 同一份 copy */
+  getLanguage?: () => string | undefined
+  /** 桌面通知出口：路由自己会判前台 / 开关 / 退出，这里只负责构造事件 */
+  notify?: (event: SessionNotification) => boolean
 }
 
 const DASHBOARD_CLOSED_EVENT = 'cloud:dashboard:closed'
@@ -186,6 +195,131 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   }
 
+  /**
+   * 通知去重：同一张审批卡 / 同一轮的终态只发一条。
+   * SSE 会重订阅、历史会重放，而系统通知重复弹出来比不弹更扰民。
+   */
+  const notifiedApprovals = new Set<string>()
+  const notifiedRuns = new Set<string>()
+  /** 帧里不总是带 sessionId：先记最近一次看到的，点击通知才有地方落 */
+  let notifySessionId = ''
+  /** 最近一段助手正文：终态通知的正文用它，空正文时就不写 */
+  let lastReply = ''
+
+  function rememberNoticeKey(bucket: Set<string>, key: string): boolean {
+    if (bucket.has(key)) return false
+    // 无界增长在长跑的机器上没意义：只挡重复，不需要历史
+    if (bucket.size > 500) bucket.clear()
+    bucket.add(key)
+    return true
+  }
+
+  function postNotification(event: {
+    kind: 'approval' | 'complete' | 'error'
+    title: string
+    body: string
+    requestId?: string
+  }): void {
+    if (!deps.notify) return
+    deps.notify({
+      kind: event.kind,
+      title: event.title,
+      body: event.body,
+      // 云端会话没有工作区：点击后只能切到云端页，不能去开同名目录
+      workspaceDir: null,
+      sessionId: notifySessionId || activeRun?.sessionId || '',
+      cloud: true,
+      requestId: event.requestId
+    })
+  }
+
+  /**
+   * 通知只跟**实时**帧：`kind:'parts'` 是历史校正，里面的审批早就结算了，
+   * 拿它通知就是把陈年卡当新请求推给用户。
+   */
+  function observeForNotify(frame: unknown): void {
+    if (!deps.notify) return
+    const value = frame as {
+      kind?: string
+      runId?: string
+      state?: string
+      sessionId?: string
+      /** 终态帧里的失败原因：上通知正文，不解锁屏也知道为什么挂的 */
+      error?: string
+      part?: {
+        type?: string
+        role?: string
+        text?: string
+        requestId?: string
+        promptId?: string
+        question?: string
+        command?: string
+        decision?: string
+        answer?: string
+        settled?: boolean
+        expiredAt?: number
+      }
+    }
+    try {
+      if (value.kind === 'session' && typeof value.sessionId === 'string') {
+        notifySessionId = value.sessionId
+        return
+      }
+      if (value.kind === 'run') {
+        const state = value.state
+        const runId = value.runId || activeRun?.runId || ''
+        if (!runId) return
+        // 自己点的停止不通知：那是用户已经知道的结果
+        if (state === 'failed' || state === 'interrupted' || state === 'completed') {
+          if (!rememberNoticeKey(notifiedRuns, runId)) return
+          const text = notificationCopy(deps.getLanguage?.())
+          postNotification({
+            kind: state === 'completed' ? 'complete' : 'error',
+            title: state === 'completed' ? text.cloudComplete : text.cloudError,
+            body:
+              state === 'completed'
+                ? notificationSummary(lastReply)
+                : notificationSummary(String(value.error ?? ''))
+          })
+        }
+        return
+      }
+      if (value.kind !== 'part') return
+      const part = value.part
+      if (!part) return
+      if (part.type === 'text' && part.role === 'assistant' && typeof part.text === 'string') {
+        lastReply = part.text
+        return
+      }
+      // 审批 / 澄清才是“这轮卡住了”：没填 decision、没 settled、没超时才值得弹
+      const pending =
+        part.decision === undefined && part.settled !== true && part.expiredAt === undefined
+      if (!pending) return
+      const text = notificationCopy(deps.getLanguage?.())
+      if (part.type === 'approval' && typeof part.requestId === 'string' && part.requestId) {
+        if (!rememberNoticeKey(notifiedApprovals, `ap:${part.requestId}`)) return
+        postNotification({
+          kind: 'approval',
+          title: text.cloudApproval,
+          body: notificationSummary(String(part.command ?? '')),
+          requestId: part.requestId
+        })
+        return
+      }
+      if (part.type === 'clarify' && typeof part.promptId === 'string' && part.promptId) {
+        if (!rememberNoticeKey(notifiedApprovals, `cl:${part.promptId}`)) return
+        postNotification({
+          kind: 'approval',
+          title: text.cloudClarify,
+          body: notificationSummary(String(part.question ?? '')),
+          requestId: part.promptId
+        })
+      }
+    } catch (error) {
+      logger?.warn('[Cloud] notify observe failed', error)
+    }
+  }
+
   const dashboard = new CloudDashboard({
     getWindow: () => deps.getMainWindow(),
     onLoadFailed: (payload) => send('cloud:dashboard:load-failed', payload),
@@ -221,6 +355,7 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       {
         emit: (frame) => {
           observeForLedger(frame)
+          observeForNotify(frame)
           send('cloud:event', frame)
         },
         log: (message, error) => logger?.warn(message, error ?? ''),
@@ -888,6 +1023,8 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
           idempotencyKey
         })
         activeRun = { runId: started.runId, sessionId: started.sessionId ?? null }
+        // 新一轮：上一轮的正文不能再当成本轮的结果摘要
+        lastReply = ''
         const device = readCloudDevice()
         logger?.info(
           `[Cloud] run start device=${device.name} (${device.id.slice(0, 8)})`

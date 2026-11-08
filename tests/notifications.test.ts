@@ -3,6 +3,8 @@ import {
   DEFAULT_NOTIFICATION_PREFS,
   NotificationRouter,
   normalizeNotificationPrefs,
+  notificationCopy,
+  notificationSummary,
 } from '../electron/notifications'
 
 const event = {
@@ -68,6 +70,60 @@ describe('NotificationRouter', () => {
       () => false
     )
     expect(router.notify(event)).toBe(false)
+  })
+})
+
+describe('NotificationRouter 云端会话', () => {
+  it('把云端标记与锚点透传出去，工作区为 null', () => {
+    const deliver = vi.fn()
+    const router = new NotificationRouter(deliver, () => undefined, () => false)
+    expect(
+      router.notify({
+        kind: 'approval',
+        workspaceDir: null,
+        sessionId: 'run_session',
+        cloud: true,
+        requestId: 'ap_1',
+        title: '云端需要审批',
+        body: 'rm -rf build'
+      })
+    ).toBe(true)
+    expect(deliver).toHaveBeenCalledWith({
+      title: '云端需要审批',
+      body: 'rm -rf build',
+      workspaceDir: null,
+      sessionId: 'run_session',
+      cloud: true,
+      requestId: 'ap_1'
+    })
+  })
+
+  it('本地事件不带云端字段', () => {
+    const deliver = vi.fn()
+    new NotificationRouter(deliver, () => undefined, () => false).notify(event)
+    expect(deliver.mock.calls[0][0]).toMatchObject({ cloud: undefined, requestId: undefined })
+  })
+})
+
+describe('notificationCopy', () => {
+  it('云端与本地各有一套措辞，中文为默认', () => {
+    const zh = notificationCopy(undefined)
+    expect(zh.approval).toBe('需要审批')
+    expect(zh.cloudApproval).toBe('云端需要审批')
+    expect(zh.cloudComplete).toBe('云端会话已完成')
+
+    const en = notificationCopy('en')
+    expect(en.cloudApproval).toBe('Cloud approval required')
+    expect(en.complete).toBe('Session finished')
+  })
+})
+
+describe('notificationSummary', () => {
+  it('压成一行并截断到 120 字，避免锁屏上出现长命令', () => {
+    expect(notificationSummary('  rm\n -rf  build ')).toBe('rm -rf build')
+    const long = notificationSummary('a'.repeat(400))
+    expect(long.endsWith('…')).toBe(true)
+    expect(long.length).toBeLessThanOrEqual(120)
   })
 })
 

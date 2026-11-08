@@ -258,6 +258,7 @@ function resetStore() {
     deviceError: null,
     pending: null,
     draft: '',
+    focusRequestId: null,
   })
 }
 
@@ -1064,6 +1065,56 @@ describe('任务页：暂停任务点「现在跑一次」', () => {
 
     fireEvent.click(screen.getByText(zh.cloudJobRunPausedConfirm))
     await waitFor(() => expect(run).toHaveBeenCalledWith({ jobId: 'job_p' }))
+  })
+})
+
+describe('通知点击定位', () => {
+  const approvalPart: CloudTracePart = {
+    type: 'approval',
+    id: 'a:ap_9',
+    requestId: 'ap_9',
+    command: 'rm -rf build',
+    patternKeys: ['rm -rf'],
+    choices: ['once', 'session', 'deny'],
+  }
+
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn()
+  })
+
+  it('scrolls the notified card into view and consumes the intent', async () => {
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView')
+    installBridge({
+      parts: [
+        approvalPart,
+        { type: 'text', id: 'h:9', role: 'assistant', text: 'done' }
+      ]
+    })
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('Probe session')).toBeTruthy())
+    fireEvent.click(screen.getByText('Probe session'))
+    await waitFor(() => expect(screen.getByText('rm -rf build')).toBeTruthy())
+
+    await act(async () => {
+      useCloudStore.getState().requestFocus('ap_9')
+    })
+
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled())
+    // 意图是一次性的：滚过就清掉，后续新消息不应该再把视口扯回去
+    expect(useCloudStore.getState().focusRequestId).toBeNull()
+  })
+
+  it('keeps the intent while the card is not rendered yet', async () => {
+    installBridge()
+    render(<CloudWorkspaceView view="cloud-session" onNavigate={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('Probe session')).toBeTruthy())
+
+    await act(async () => {
+      useCloudStore.getState().requestFocus('ap_missing')
+    })
+
+    // 历史还在路上：找不到锚点就不能把意图吃掉，否则这张卡永远不会被定位
+    expect(useCloudStore.getState().focusRequestId).toBe('ap_missing')
   })
 })
 

@@ -1,5 +1,15 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
+type NotifyClickPayload = {
+  /** 本地工作区会话才有；云端会话为 null */
+  workspaceDir: string | null
+  sessionId: string
+  /** 云端会话：点击后切到云端页 */
+  cloud?: boolean
+  /** 云端审批 / 澄清卡：点击后定位到那张卡 */
+  requestId?: string
+}
+
 type AgentStreamPayload = {
   requestId?: string
   workspaceDir?: string
@@ -249,8 +259,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   /** 原生文件选择：任意路径 / 任意格式；除图片外只回传元信息 */
   pickAttachments: () => ipcRenderer.invoke('attachment:pick'),
-  onNotifyClick: (callback: (payload: { workspaceDir: string; sessionId: string }) => void) => {
-    const listener = (_event: unknown, payload: { workspaceDir: string; sessionId: string }) => callback(payload)
+  onNotifyClick: (callback: (payload: NotifyClickPayload) => void) => {
+    const listener = (_event: unknown, payload: NotifyClickPayload) => callback(payload)
     ipcRenderer.on('app:notify-click', listener)
     return () => ipcRenderer.removeListener('app:notify-click', listener)
   },

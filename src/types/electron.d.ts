@@ -348,7 +348,15 @@ export interface ElectronAPI {
   agentSessionsGetTabs: (workspaceDir: string) => Promise<SessionTabsResult>
   agentSessionsSetTabs: (workspaceDir: string, tabs: SessionTabs) => Promise<AgentDisposeResult>
   onNotifyClick: (
-    callback: (payload: { workspaceDir: string; sessionId: string }) => void
+    callback: (payload: {
+      /** 本地工作区会话才有；云端会话为 null */
+      workspaceDir: string | null
+      sessionId: string
+      /** 云端会话：点击后切到云端页，不去找同名工作区 */
+      cloud?: boolean
+      /** 云端审批 / 澄清卡：点击后定位到那张卡 */
+      requestId?: string
+    }) => void
   ) => () => void
   agentSteer: (
     workspaceDir: string,
