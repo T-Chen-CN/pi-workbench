@@ -9,8 +9,6 @@
  */
 
 import * as path from 'node:path'
-import type { AgentManager } from '../../pi-bridge/src/agent-manager.js'
-import type { AgentChatResult } from '../../pi-bridge/src/types.js'
 import { ensureWorkspaceAgent, type AgentIpcContext } from '../ipc/agent.js'
 import type { ReportInput } from './relay.js'
 
@@ -42,9 +40,36 @@ export interface ExecutorDeps {
 
 const SUMMARY_LIMIT = 4000
 
+/**
+ * 派活只用到 Agent 的四个方法。这里用结构化最小类型而不是 import pi-bridge：
+ * 主进程的 tsconfig 以 `electron` 为 rootDir，从那里 import 源码会直接打穿构建。
+ */
+interface DispatchAgent {
+  createSession: (
+    workspaceDir: string
+  ) => Promise<{ success: boolean; session?: { id: string }; error?: string }>
+  setSessionPermission: (
+    sessionId: string,
+    permission: { mode: 'auto'; grants: string[] }
+  ) => Promise<unknown>
+  chat: (sessionId: string, prompt: string) => Promise<DispatchChatResult>
+  abort: (sessionId?: string) => Promise<void>
+}
+
+/** `AgentChatResult` 里派活实际读的字段 */
+interface DispatchChatResult {
+  success: boolean
+  response?: string
+  error?: string
+  errorCode?: string
+  outputLimit?: number
+  edits?: Array<{ path: string }>
+  usage?: { totalTokens?: number }
+}
+
 export class DispatchExecutor {
   /** 正在跑的本地会话：取消时按任务 id 找到它 */
-  private readonly running = new Map<string, { agent: AgentManager; sessionId: string }>()
+  private readonly running = new Map<string, { agent: DispatchAgent; sessionId: string }>()
 
   constructor(private readonly deps: ExecutorDeps) {}
 
@@ -82,9 +107,8 @@ export class DispatchExecutor {
       }
     }
 
-    const agent = this.deps.context.agentRegistry.get(task.workspacePath) as
-      | AgentManager
-      | null
+    const agent = (this.deps.context.agentRegistry.get(task.workspacePath) ??
+      null) as DispatchAgent | null
     if (!agent) {
       return {
         report: { kind: 'failed', error: '本机 Agent 不可用（未登记到工作区）。' },
@@ -109,7 +133,7 @@ export class DispatchExecutor {
     this.running.set(task.taskId, { agent, sessionId })
 
     try {
-      const result: AgentChatResult = await agent.chat(sessionId, task.prompt)
+      const result = await agent.chat(sessionId, task.prompt)
       if (!result.success) {
         return {
           report: { kind: 'failed', error: this.describeFailure(result), localSessionId: sessionId },
@@ -152,7 +176,7 @@ export class DispatchExecutor {
     return this.running.has(taskId)
   }
 
-  private describeFailure(result: AgentChatResult): string {
+  private describeFailure(result: DispatchChatResult): string {
     if (result.errorCode === 'output-truncated') {
       return `本地 Agent 输出被截断（上限 ${result.outputLimit ?? 0} tokens），任务没跑完。`
     }
@@ -160,14 +184,14 @@ export class DispatchExecutor {
     return (result.error ?? '本地 Agent 执行失败').slice(0, 2000)
   }
 
-  private summarize(result: AgentChatResult): string {
+  private summarize(result: DispatchChatResult): string {
     const text = (result.response ?? '').trim()
     if (!text) return '本地 Agent 执行完成，但没有文字总结。'
     return text.slice(0, SUMMARY_LIMIT)
   }
 
   /** 只上报**相对工作区**的路径：绝对路径不出本机 */
-  private changedFiles(result: AgentChatResult, workspacePath: string): string[] {
+  private changedFiles(result: DispatchChatResult, workspacePath: string): string[] {
     const root = path.resolve(workspacePath)
     const files: string[] = []
     for (const edit of result.edits ?? []) {
