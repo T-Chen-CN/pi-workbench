@@ -8,8 +8,7 @@
 > 应用内入口：Pi Workbench 云端「连接」页 →「复制自举 Prompt」。
 > 按钮复制的就是下方代码块（构建时用 vite 的 `?raw` 从本文内联，所以**改这里就是改应用**；
 > `tests/hermes-prompt.test.ts` 守住代码块存在与完整性）。
-> 状态：**Phase 3 草案**。依赖新插件 `pi-workbench-gateway`（仓库尚未创建，P0 未开工）；
-> 插件发布前，本 Prompt 可以在干净机器上预演前三步，但最后一步会失败。
+> 状态：**已上线**。插件 `pi-workbench-gateway` 已发布（真机线上是 0.1.1），本 Prompt 随 0.8.0 一起发。
 > 交付格式：**只在对话里返回连接码与配对链接**，不写文件、不 `scp`、不把管理密钥交给桌面端。
 > 代码块里的 `{{PLUGIN_REPO}}` 是**占位符**：由应用在复制时注入
 > （`src/utils/hermesPrompt.ts` 的 `PLUGIN_REPO` 常量）。**不写版本号**：引导装的是插件仓库默认分支
@@ -72,6 +71,13 @@
 3. 80 / 443 端口当前由谁占用（`ss -ltnp | grep -E ':(80|443)\b'`），以及已有的 Web 服务器。
 4. 对外提供 API 的是哪个 profile（结合 `~/.hermes/profiles/`、`systemctl list-units 'hermes*'`、
    反向代理配置里转发到的本地端口）。多个 profile 时选反代指向的那个，并说明判断依据。
+   **顺带记下发 gateway 的形态**：`hermes gateway list` —— Hermes 0.23 起默认是「一个 default
+   gateway 多路复用所有 profile」，per-profile 的 systemd 单元已被上游标记为不再支持
+   （`hermes gateway migrate --dry-run` 能看清差异，不改任何东西）。
+   **但如果 `hermes gateway list` 显示这个 profile 是 "served by the default multiplexer"，本 Prompt
+   到这里就停下并原样报告**：多路复用进程不读 profile 的 `.env`，也不起 profile 的 api_server，
+   装上去只会得到一个「监听 8484 但没有管理密钥、没有上游」的空壳。要装就先把该 profile 退回自带的
+   gateway 单元（`hermes -p <profile> gateway install --force --system --start-now`），再继续。
 5. api_server 的本地端口（默认 8642）与是否启用；dashboard 的本地端口（默认 9119）与是否常驻。
 6. 控制台的认证方式：反代层 basic auth 还是页面自带登录表单。
    用 `curl -s -o /dev/null -w '%{http_code}'` 配合页面内容判断，不要猜。
@@ -150,10 +156,13 @@
    `hermes plugins validate <profile>/plugins/pi-workbench-gateway`——注意 `validate` 收的是
    **目录**，传插件名会得到"not a directory / Validation failed"（不是插件有问题）；
    `hermes plugins doctor pi-workbench-gateway --ci` 才收插件名。有错就贴原始输出并停止。
-4. **重启**承载该 profile 的 gateway 服务（只重启这一个）——**必须重启**：装完 Hermes 会打印
+4. **重启**承载该 profile 的 gateway 服务——**必须重启**：装完 Hermes 会打印
    "Gateway reloaded plugins; nothing of this plugin needs a session or restart"，但插件读的是
    **进程环境**，`.env` 里的 `PI_HUB_ADMIN_KEY` 只有新进程才看得见；不重启的表现是 8484 根本不监听、
-   日志喊 "PI_HUB_ADMIN_KEY is not set"。重启后验证：
+   日志喊 "PI_HUB_ADMIN_KEY is not set"。重启的是**该 profile 自己的** gateway 单元
+   （`sudo hermes -p <profile> gateway restart --system`）：本插件靠进程环境读 `PI_HUB_ADMIN_KEY`
+   与 `API_SERVER_KEY`，而这两样只在该 profile 的单元（`.env` + drop-in `10-api-server.conf`）里
+   才存在。重启后验证：
    - `ss -ltn | grep 8484` → 有监听，且只绑 `127.0.0.1`
    - `curl -s 127.0.0.1:8484/v1/hub/health` → `{"status":"ok", "upstreamOk":true, ...}`
      （**瘦身版**：只回 `status` / `upstreamOk` / `hub` / `contractVersion` / `features`，

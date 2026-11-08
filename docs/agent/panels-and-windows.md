@@ -48,6 +48,8 @@
 
 `electron/notifications.ts` 只在应用**不在前台**时发系统通知；类型 `approval` / `complete` / `error` 各有独立开关（`settings.json` 的通知配置），`enabled` 为总闸。新增通知类型时同步 `NotificationKind`、prefs 归一化和设置界面。
 
+本地 Agent 与云端 Agent 共用这一条通路（`notificationCopy` 是唯一文案来源），靠事件上的字段区分去处：本地带 `workspaceDir`，云端带 `cloud: true` + `sessionId`（可选 `requestId`）。点击后的去向由渲染层决定（`app:notify-click` 载荷）：本地会切工作区并激活会话，云端只切到云端页并定位那张审批 / 澄清卡（`focusRequestId` → 时间线的 `data-cloud-card` 锚点）。**云端会话没有工作区**，不要给它编一个。
+
 ## 4. 自定义协议
 
 应用走自定义协议 `pw-app://bundle/` 加载（不同 `file://` URL 的 origin 不一致，会阻碍跨文档操作）；`pw-file://` 是只读文件协议，供图片 / 音频 / 视频 / PDF / HTML 预览使用，只允许 `GET` / `HEAD` 且限定在受信任根内。新增协议时要同步 `electron/app-protocol.ts`、`electron/scheme-privileges.ts` 与 `vite.config.ts` 的 CSP。

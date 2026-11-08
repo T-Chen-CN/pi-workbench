@@ -74,7 +74,10 @@
 | Phase 1：桌面端配对 | ✅ | 一次性连接码、`cloud:gateway:pair`、配置白名单、旧入口删除 |
 | Phase 2：网关插件 | ✅ | `pi-workbench-gateway` P0–P5，`hermes plugins install` 装到真机，G0 全绿 |
 | Phase 3：应用联调 | ✅ | G1 真机通过（配对 / 对话 / SSE / 审批回执 / 插话 / 注销再配对 / 两种异常态），随 0.8.0 发布 |
+| 云端事件通知 | ✅ | 0.8.0 之后补：审批 / 澄清 / 终态投递系统通知，按 `requestId` / `runId` 去重，点击切云端页并定位那张卡（[CLOUD_AGENT §3.9](../requirements/CLOUD_AGENT.md)） |
+| AC-14 / AC-15 / AC-19 | ✅ | 2026-11-08 真机结项：Hermes v0.22.6→v0.23.0 后设备库 / 审计 / 会话全保留且不用重新配对；运行时唯一对外连接是模型 API；反代实测 200/401/404/拒 WS/308。详见 [CLOUD_AGENT §8.4](../requirements/CLOUD_AGENT.md) |
 | 任务页新建 | ✅ | 0.8.0 之后补（`cloud:jobs:create`）；删除仍只在服务器上做 |
+| gateway 多路复用（0.23） | ⛔ 等上游 | 2026-11-08 实迁失败并回滚：宿主进程不读 profile 的 `.env`、不起 profile 的 api_server → 插件无密钥、无上游。回滚配方见 [CLOUD_AGENT §7.5](../requirements/CLOUD_AGENT.md)；上游补齐（或评估把密钥移到宿主 `.env` 的安全代价）后再试 |
 | C-08 ~ C-12 / H3 | ⬜ 后置 | 见 §2 与 [CLOUD_AGENT §9.4](../requirements/CLOUD_AGENT.md) |
 | 停止按钮 / 跨重启接回 | ⛔ 不单独立项 | 2026-11-08 项目所有者决定不做真机验收 |
 

@@ -147,7 +147,7 @@ pi-workbench/
 │   │   ├── PanelDragHandle.tsx   # 面板拖拽把手
 │   │   ├── PanelWindowFrame.tsx  # 独立面板窗口外壳
 │   │   ├── PanelContextMenu.tsx  # 面板右键菜单
-│   │   ├── CloudWorkspaceView.tsx # 云端 Agent 外壳：会话 / 配置两个常驻页签
+│   │   ├── CloudWorkspaceView.tsx # 云端 Agent 外壳：会话 / 控制台 / 任务 / 连接四个常驻页签（切走只 hidden + inert）
 │   │   ├── CloudSessionView.tsx  # 云端会话列表 + 时间线 + 输入框
 │   │   ├── CloudConsoleView.tsx  # 云端控制台全屏宿主（原生视图边界上报 / 失败与未连接态）
 │   │   ├── CloudConnectionView.tsx # 云端连接页（地址 / 密钥 / 连通性 / 能力回显）
@@ -157,6 +157,8 @@ pi-workbench/
 │   │   ├── CloudJobsView.tsx      # 定时任务页（列表 / 现在跑 / 暂停 / 恢复）
 │   │   ├── CloudDiagnosticsPanel.tsx # 自检折叠块（健康 / 工具集 / 技能 / 模型）
 │   │   ├── CloudClarifyCard.tsx   # clarify 提问卡（选项 + 自由回答）
+│   │   ├── CloudApprovalCard.tsx  # 审批卡（一次 / 本会话 / 拒绝；默认拒绝，`always` 永不渲染）
+│   │   ├── CloudModeSwitch.tsx    # 审批档位手动切（manual / smart / off；放宽到 off 要二次确认）
 │   │   ├── CloudToolCard.tsx     # 云端工具执行卡
 │   │   ├── ui.tsx                # Button / Input / Modal 等基础组件
 │   │   └── patterns.tsx          # Card / Stat / ListRow 等内容模式
@@ -337,6 +339,7 @@ ChatPanel.handleSubmit
 | `agent:sessions:*` / `agent:plan:*` / `agent:tool-result:*` | invoke | 会话、计划、工具结果 |
 | `agent:stream` / `agent:session-title` | main → renderer | 流式事件与会话标题 |
 | `agent:approval-request` / `approval-resolved` | main → renderer | 审批请求与解除 |
+| `app:notify-click` | main → renderer | 系统通知点击：本地带 `workspaceDir`（切工作区 + 激活会话）；云端带 `cloud` + `sessionId` + 可选 `requestId`（切云端页 + 打开会话 + 定位那张审批 / 澄清卡，`data-cloud-card` 锚点） |
 | `terminal:create` / `write` / `resize` / `close` / `flush` | invoke | 终端 PTY |
 | `plugins:list` / `invoke` / `reload` / `setEnabled` | invoke | 工作台插件 |
 | `draft:save` / `delete` / `list` / `clear` | invoke | 崩溃恢复草稿 |
