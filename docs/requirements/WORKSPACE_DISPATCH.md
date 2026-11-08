@@ -519,7 +519,7 @@ Hermes → local_dispatch(workspace, prompt)
 ### 15.1 交付内容
 
 - **网关插件 0.2.0**（`pi-workbench-gateway`，已 tag `v0.2.0` 并部署到 VPS）：`hub/dispatch.py`、`hub/relay.py`、`hub/routes/dispatch.py`、`tools.py`、`hub/db.py`（schema 2）、`shim.py`（工具注册 + 启动自检）、`plugin.yaml`。插件侧 139 条单测。
-- **桌面端**（本仓库）：`electron/dispatch/{config,relay,executor,worker,ledger}.ts`、`electron/ipc/dispatch.ts`、`src/api/dispatch.ts`、`src/store/dispatchStore.ts`、`src/components/DispatchCard.tsx`、preload / 类型 / `main.ts` 接线、i18n 文案。桌面侧新增 28 条单测（config / relay / worker / ledger / card）。
+- **桌面端**（本仓库）：`electron/dispatch/{config,relay,executor,worker,ledger}.ts`、`electron/ipc/dispatch.ts`、`src/api/dispatch.ts`、`src/store/dispatchStore.ts`、`src/components/DispatchCard.tsx`、preload / 类型 / `main.ts` 接线、i18n 文案。桌面侧新增 33 条单测（config / relay / worker / ledger / card / ipc）。
 - **部署动作**（每台云端机器都要做一次）：`config.yaml` 的 `platform_toolsets.api_server` 追加 `- pi_workbench`，重启 gateway 单元。**手改，不用 `hermes tools enable`**（§13 ①）。
 
 ### 15.2 实现时补定的细节
@@ -546,6 +546,7 @@ Hermes → local_dispatch(workspace, prompt)
 | 任务真的落到本机 | **通过**：`task.assigned` 帧到达，worker 状态 `runningTaskId=dt_95a72836…`，执行器真的写了文件 |
 | 本机回报回到云端工具结果 | **通过**：`local_dispatch` 返回 `completed` + 摘要 + `files`，模型据此作答 |
 | 本机账本 | **通过**：`recent[0]` = 该任务，状态 `completed`，带 `sessionId` |
+| 白名单只能靠人点选扩张 | **通过**（单测）：`dispatch:config:set` 递陌生路径被丢弃；新增目录只走 `dispatch:workspace:add` 的系统对话框 |
 | 撤销设备后目录立即失效 | **通过**：`revoke` 后 `device_workspaces` 被清空（`drop_device`），任务行保留 |
 | 清理 | 临时设备已 revoke、探针测试文件与临时目录已删除 |
 

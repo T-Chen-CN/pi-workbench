@@ -103,16 +103,17 @@ export function registerDispatchIpc(context: DispatchIpcContext): { dispose: () 
           for (const item of patch.workspaces) {
             const canonical =
               typeof item?.path === 'string' ? canonicalizePath(item.path) : null
-            if (!canonical || !exists(canonical)) continue
-            // 只允许「本来就在白名单里的」或「用户在对话框里刚选的」目录：
-            // 这里的选择本身就是一次授权，登记进信任表
-            trustWorkspace(canonical)
-            const fallbackLabel = basename(canonical)
+            if (!canonical) continue
+            // 只允许**已经在白名单里**的目录：新增目录必须走 `dispatch:workspace:add`
+            // 的系统对话框（用户点选才是授权）。渲染层随手递一个路径不能变成信任根。
+            const existing = findWorkspace(current, workspaceIdFor(canonical))
+            if (!existing) continue
+            trustWorkspace(existing.path)
             workspaces.push({
-              id: workspaceIdFor(canonical),
-              path: canonical,
-              label: (item.label ?? '').trim().slice(0, 120) || fallbackLabel,
-              description: (item.description ?? '').slice(0, 400),
+              id: existing.id,
+              path: existing.path,
+              label: (item.label ?? '').trim().slice(0, 120) || existing.label,
+              description: (item.description ?? existing.description).slice(0, 400),
             })
           }
           next.workspaces = workspaces
