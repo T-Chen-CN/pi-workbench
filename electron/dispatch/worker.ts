@@ -31,6 +31,7 @@ import {
   type ReportInput,
 } from './relay.js'
 import { appendLedger, readLedger, type DispatchLedgerEntry } from './ledger.js'
+import { TraceCollector, compactTrace, readTrace } from './trace.js'
 
 export interface DispatchWorkerState {
   enabled: boolean
@@ -61,6 +62,8 @@ export interface DispatchWorkerDeps {
   logger: { info?: (...args: unknown[]) => void; warn: (...args: unknown[]) => void }
   /** 账本落盘位置（`{appDir}/data/agent/dispatch-ledger.json`） */
   ledgerPath: string
+  /** 轨迹缓存目录（`{appDir}/cache/dispatch-traces`）；测试注入 */
+  traceDir?: string
   onState: (state: DispatchWorkerState) => void
   /** 测试注入 */
   now?: () => number
@@ -79,6 +82,16 @@ export interface DispatchExecutorLike {
     workspacePath: string
     prompt: string
     ask?: (question: string) => Promise<string>
+    onTrace?: (event: {
+      type: string
+      toolCallId?: string
+      toolName?: string
+      argsSummary?: string
+      status?: 'success' | 'error'
+      durationMs?: number
+      resultPreview?: string
+      filePath?: string
+    }) => void
   }) => Promise<{
     report: Omit<Parameters<typeof reportTask>[1], 'taskId'>
     sessionId: string | null
@@ -448,6 +461,8 @@ export class DispatchWorker {
         })
 
         this.startProgress(next.taskId)
+        // 轨迹只攒在本地（缓存 + 终态回报里的紧凑副本），不发任何事件
+        const collector = new TraceCollector(next.taskId, workspace.path, this.deps.now)
         // 执行器承诺不抛（自己把失败包成 report），但反问被 reject / 取消这类
         // 路径仍可能把异常带出来；漏掉就会让任务悬挂到 deadline
         const outcome = await this.executor
@@ -457,6 +472,7 @@ export class DispatchWorker {
             workspacePath: workspace.path,
             prompt: next.prompt,
             ask: (question) => this.askCloud(next.taskId, question),
+            onTrace: (event) => collector.note(event),
           })
           .catch((error: unknown) => {
             this.deps.logger.warn('[Dispatch] executor threw', error)
@@ -478,6 +494,16 @@ export class DispatchWorker {
         // 本地会话 id 一定要带上（云端拿它做「派活 → 本机会话」的锚点）
         const report: Omit<ReportInput, 'taskId'> = { ...base }
         if (!report.localSessionId && outcome.sessionId) report.localSessionId = outcome.sessionId
+        // 轨迹：落本地缓存 + 终态回报里带一份紧凑副本（云端要能事后查）
+        try {
+          collector.finish()
+          if (this.deps.traceDir) await collector.flush(this.deps.traceDir)
+          if (report.kind !== 'canceled' || collector.snapshot().steps.length > 0) {
+            report.trace = compactTrace(collector.snapshot())
+          }
+        } catch (error) {
+          this.deps.logger.warn('[Dispatch] recording trace failed', error)
+        }
         await this.report(next.taskId, report).catch((error: unknown) => {
           this.deps.logger.warn('[Dispatch] outcome report failed', error)
         })
@@ -507,6 +533,11 @@ export class DispatchWorker {
   private async replayFinished(taskId: string): Promise<boolean> {
     const known = this.finished.get(taskId) ?? this.finishedFromLedger(taskId)
     if (!known) return false
+    // 崩溃重启后内存里没有轨迹，从缓存补回来：云端至少还能查到步骤
+    if (!known.trace && this.deps.traceDir) {
+      const cached = await readTrace(this.deps.traceDir, taskId)
+      if (cached) known.trace = compactTrace(cached)
+    }
     this.deps.logger.info?.('[Dispatch] re-reporting finished task instead of re-running', taskId)
     await this.report(taskId, known).catch((error: unknown) => {
       this.deps.logger.warn('[Dispatch] re-reporting finished task failed', error)

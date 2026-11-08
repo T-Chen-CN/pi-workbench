@@ -49,6 +49,19 @@
 
 一句话：**本地 Agent 的"用户"就是 Hermes；人类的身份是"Hermes 的委托人"，不是本地 Agent 的审批人。**
 
+### 2.1.1 进度只有一个出口 `[确认]`
+
+```
+用户 ──▶ 本地程序里的「云端 Agent 会话」──▶ 工作区 Agent（派活）
+              ↑ 唯一跟进入口                  ↑ 干活的手
+```
+
+- 派活任务 = 云端 Agent 的一次工具调用，和它自己跑 `bash`、读文件同级，是它的**内部动作**。
+- 完成 / 失败 / 反问只落在**工具返回值**里；下一步（继续、汇总、问用户）只由云端 Agent 决定。
+- 所以：**不弹系统通知、不推送、不广播进度**。子任务跑完就弹提示只会打断人，真正的信息在
+  云端 Agent 的汇总里。桌面「派活」卡片只是本地审计 + 急停入口，不承担进度通知。
+- 例外只有「用户主动要看」：轨迹**可查**（`local_task_trace`），但绝不主动推。
+
 ### 2.2 为什么不是逐条审批
 
 逐条审批在这个场景里是**假安全**：人不在机器前，审批超时即拒绝，任务白跑；人在机器前，又等于替云端 Agent 干了一遍判断。真正的边界应该落在"这个工作区允不允许被派活"这一层一次性预授权。
@@ -422,7 +435,12 @@ Hermes → local_dispatch(workspace, prompt)
 ## 10. 不做清单
 
 - WebSocket 中继（stdlib 代价高，SSE 够用）
-- 跨设备任务迁移 / 负载均衡
+- **push webhook / 外部推送**：进度出口只有云端会话（§2.1.1）；A2A 的
+  `pushNotificationConfig` 地址只能由第三方客户端提供，当前没有调用方
+- **派活完成的强提醒（系统通知 / IM 推送）**：结果由云端 Agent 汇总，子任务完成不值得打断用户
+- **逐条 trace 实时直播**：默认不推，需要时按需查（`local_task_trace` / `tasks/get` + `include:["trace"]`）
+- 跨设备任务迁移 / 负载均衡（**永久不做**：工作区 = 一台机器的一个目录，换设备等于换任务，
+  本地未提交改动 / 依赖 / git 状态全不相同，还会掩盖真实状态）
 - 云端直接读本地文件树或绝对路径
 - 派活任务自动重试
 - 本地逐条审批与永久授权（`always` 一律禁止）
@@ -662,8 +680,33 @@ Hermes → local_dispatch(workspace, prompt)
 
 D6 的「7 天后清理」由单测覆盖（`test_purge_keeps_live_tasks` / `test_sweep_purges_only_when_asked`），不做真机等 7 天。
 
-### 15.9 仍未做
+### 15.9 轨迹可查落地（2026-11-09，插件 0.3.1）
 
-- push webhook（`pushNotifications: false`）；
-- 跨设备重投（现在只重投给**原设备**；换设备需要迁移已有的本地会话，暂不做）；
-- `tasks/resubscribe` 的事件粒度是状态变化，不是逐条 trace。
+按「默认不推、按需可查」把最后一项做完，同时把 §10 的不做清单补齐理由。
+
+| 层 | 改动 |
+| --- | --- |
+| 桌面 | 新增 `electron/dispatch/trace.ts`：`TraceCollector` 吃 `tool_start` / `tool_end` 攒步骤（工具、参数摘要、成败、耗时、改动文件），摘要里的本机绝对路径脱敏成工作区内相对路径；限 200 步 / 64KB 落 `cache/dispatch-traces/<taskId>.json`（保留最近 50 个，供重启后补报） |
+| 桌面 | 执行器把 `onTrace` 透传给 `chat()`；worker 在**终态回报**里带一份紧凑副本（≤24KB，超了只留最近若干步并置 `truncated`）。`claimed` / `progress` / `question` 一律不带 |
+| 网关 | `dispatch_tasks.trace`（schema 3，老库启动时自动 `ALTER TABLE`）；`report(trace=...)` 校验并压到 32KB |
+| 云端可查 | 新工具 `local_task_trace(task_id, offset, limit)`：分页列步骤；`local_task_get` 的终态文案会提示「共 N 步，用 local_task_trace 看」 |
+| 外部可查 | A2A `tasks/get` 支持 `include: ["trace"]`，默认不返回 |
+| 文案 | `expired` 不再写「可以换台设备重派」，改成「在同一个工作区重派，或先问用户」 |
+
+真机验收（dev build + VPS 0.3.1 + 真云端模型）：
+
+| 场景 | 结果 |
+| --- | --- |
+| 云端模型主动查轨迹 | **通过**：`local_dispatch` 完成后模型调 `local_task_trace`，拿到逐步骤列表（工具名、成败、耗时、改动文件），并向用户复述 |
+| A2A 查轨迹 | **通过**：`tasks/get` 不带 `include` → 无 `trace`；带 `include:["trace"]` → `metadata.trace` 有步骤 |
+| 默认不推送 | **通过**：整轮验收中网关没有新增任何推送通道；`claimed` / `progress` 回报里没有 `trace` |
+| 脱敏 | **通过**：轨迹里工作区内的路径变相对路径，盘符形式（`D:\…`）、git-bash 挂载形式（`/d/…`）、家目录/临时目录的绝对路径都压成文件名；云端模型自己也确认「轨迹里没有出现 D:\ 或 /d/」 |
+| 摘要 vs 轨迹 | 边界写清：**轨迹**（元数据）脱敏；**摘要**（本地 Agent 自己写的总结）不做二次改写——那是任务产出内容，改了就不是原文了 |
+
+### 15.10 仍未做
+
+到这里**方案内没有剩余项**。刻意不做的东西见 §10：push webhook、强提醒、逐条 trace 直播、
+跨设备重投（永久不做）。租约重投仍只投**原设备**——这不是待办，是语义要求（§10）。
+
+`tasks/resubscribe` 的事件粒度就是状态变化（`working → input-required → completed`），
+要明细走 `tasks/get` + `include:["trace"]`。

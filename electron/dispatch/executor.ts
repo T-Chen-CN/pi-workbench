@@ -22,6 +22,20 @@ export interface ExecuteTask {
    * 等 `task.answered` 帧，再把答案 resolve 回来。任务被取消 / 超时会 reject。
    */
   ask?: (question: string) => Promise<string>
+  /**
+   * 轨迹事件出口：worker 用它在本地攒步骤（工具调用 / 结果 / 耗时）。
+   * 派活轨迹只用来**事后查**，不做实时推送。
+   */
+  onTrace?: (event: {
+    type: string
+    toolCallId?: string
+    toolName?: string
+    argsSummary?: string
+    status?: 'success' | 'error'
+    durationMs?: number
+    resultPreview?: string
+    filePath?: string
+  }) => void
 }
 
 export interface ExecuteOutcome {
@@ -58,7 +72,11 @@ interface DispatchAgent {
     sessionId: string,
     permission: { mode: 'auto'; grants: string[] }
   ) => Promise<unknown>
-  chat: (sessionId: string, prompt: string) => Promise<DispatchChatResult>
+  chat: (
+    sessionId: string,
+    prompt: string,
+    options?: { onTrace?: (event: Record<string, unknown> & { type: string }) => void }
+  ) => Promise<DispatchChatResult>
   abort: (sessionId?: string) => Promise<void>
 }
 
@@ -142,7 +160,7 @@ export class DispatchExecutor {
     this.running.set(task.taskId, { agent, sessionId })
 
     try {
-      const result = await agent.chat(sessionId, task.prompt)
+      const result = await agent.chat(sessionId, task.prompt, task.onTrace ? { onTrace: task.onTrace } : undefined)
       if (!result.success) {
         return {
           report: { kind: 'failed', error: this.describeFailure(result), localSessionId: sessionId },

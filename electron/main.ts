@@ -620,6 +620,7 @@ const dispatchWorker = new DispatchWorker({
   readApiConfig: loadApiConfig,
   logger: agentLogger,
   ledgerPath: path.join(getAppDir(), 'data', 'agent', 'dispatch-ledger.json'),
+  traceDir: path.join(getAppDir(), 'cache', 'dispatch-traces'),
   onState: (state) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (win.isDestroyed()) continue

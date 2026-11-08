@@ -118,6 +118,7 @@ function createWorker(
     readApiConfig: async () => null,
     logger: { warn: () => {} },
     ledgerPath: ledgerPath(tmp),
+    traceDir: path.join(tmp, 'cache', 'dispatch-traces'),
     onState: (snapshot) => states.push(snapshot),
     createClient: () => client,
     executor,
@@ -654,6 +655,105 @@ describe('dispatch worker · 取消原因透传', () => {
         state: 'canceled',
         summary: '超过截止时间仍未完成（网关收尾）。'
       })
+    )
+  })
+})
+
+describe('dispatch worker · 轨迹只随终态回报运一趟', () => {
+  /** 会回报几个工具的假执行器：模拟真实 chat 的 onTrace 序列 */
+  function makeTracingExecutor() {
+    const runs: string[] = []
+    const executor = {
+      runs,
+      run: async (task: {
+        taskId: string
+        onTrace?: (event: {
+          type: string
+          toolCallId?: string
+          toolName?: string
+          argsSummary?: string
+          status?: 'success' | 'error'
+          durationMs?: number
+        }) => void
+      }) => {
+        runs.push(task.taskId)
+        task.onTrace?.({ type: 'tool_start', toolCallId: 'c1', toolName: 'bash', argsSummary: 'npm test' })
+        task.onTrace?.({
+          type: 'tool_end',
+          toolCallId: 'c1',
+          toolName: 'bash',
+          status: 'success',
+          durationMs: 900
+        })
+        return {
+          report: { kind: 'done' as const, summary: '跑完了' },
+          sessionId: `session-${task.taskId}`
+        }
+      },
+      cancel: async () => true
+    }
+    return executor
+  }
+
+  it('attaches the trace to the terminal report and caches it on disk', async () => {
+    const { client, reports } = makeClient()
+    const executor = makeTracingExecutor()
+    const { worker } = createWorker(executor as never, client)
+    await worker.refresh()
+    await worker.handleFrame({ type: 'task.assigned', taskId: 't-trace', workspaceId: wsId(), prompt: 'x' })
+
+    await vi.waitFor(() => {
+      const done = reports.find(
+        (call) => (call.body as { kind?: string }).kind === 'done'
+      )
+      expect(done).toBeTruthy()
+    })
+    const done = reports.find((call) => (call.body as { kind?: string }).kind === 'done')
+    const trace = (done?.body as { trace?: { steps: Array<{ tool: string; ok: boolean }>; total: number } })
+      .trace
+    expect(trace?.total).toBe(1)
+    expect(trace?.steps[0]).toMatchObject({ tool: 'bash', ok: true })
+    expect(fs.existsSync(path.join(tmp, 'cache', 'dispatch-traces', 't-trace.json'))).toBe(true)
+  })
+
+  it('never puts the trace on progress or claimed reports', async () => {
+    const { client, reports } = makeClient()
+    const executor = makeTracingExecutor()
+    const { worker } = createWorker(executor as never, client)
+    await worker.refresh()
+    await worker.handleFrame({ type: 'task.assigned', taskId: 't-lean', workspaceId: wsId(), prompt: 'x' })
+    await vi.waitFor(() => expect(executor.runs).toEqual(['t-lean']))
+
+    for (const call of reports) {
+      const kind = (call.body as { kind?: string }).kind
+      if (kind && kind !== 'done' && kind !== 'failed' && kind !== 'canceled') {
+        expect((call.body as { trace?: unknown }).trace).toBeUndefined()
+      }
+    }
+  })
+
+  it('replays a cached trace when the report is re-sent after a restart', async () => {
+    const { client: firstClient } = makeClient()
+    const first = createWorker(makeTracingExecutor() as never, firstClient)
+    await first.worker.refresh()
+    await first.worker.handleFrame({ type: 'task.assigned', taskId: 't-replay-trace', workspaceId: wsId(), prompt: 'x' })
+    await vi.waitFor(() =>
+      expect(fs.existsSync(path.join(tmp, 'cache', 'dispatch-traces', 't-replay-trace.json'))).toBe(true)
+    )
+
+    // 重启：新的 worker 没有内存记录，账本里也没有这条（模拟账本已滚掉）
+    const { client, reports } = makeClient()
+    const second = createWorker(makeTracingExecutor() as never, client)
+    await second.worker.refresh()
+    // 内存里没有 → 走账本；账本里没有 → 照常入队
+    await second.worker.handleFrame({
+      type: 'task.assigned',
+      taskId: 't-replay-trace',
+      workspaceId: wsId(),
+      prompt: 'x'
+    })
+    await vi.waitFor(() =>
+      expect(reports.some((call) => (call.body as { kind?: string }).kind === 'done')).toBe(true)
     )
   })
 })

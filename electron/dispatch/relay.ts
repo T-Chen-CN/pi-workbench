@@ -151,6 +151,27 @@ export interface ReportInput {
   error?: string
   question?: string
   localSessionId?: string
+  /**
+   * 执行轨迹的紧凑副本（只在终态回报里带）。
+   *
+   * 云端 Agent 事后要能查「本地到底跑了哪些步骤」，所以终态回报顺带运一趟 ——
+   * 设备可能明天就关机，靠事后回连拉取不现实。**不是推送**：没有任何事件或帧，
+   * 只有调 `local_task_trace` 时才读得到。
+   */
+  trace?: {
+    steps: Array<{
+      at: number
+      tool: string
+      args: string
+      ok: boolean
+      ms: number
+      result?: string
+      file?: string
+    }>
+    total: number
+    truncated: boolean
+    ms: number
+  }
 }
 
 export async function reportTask(client: CloudClient, input: ReportInput): Promise<void> {

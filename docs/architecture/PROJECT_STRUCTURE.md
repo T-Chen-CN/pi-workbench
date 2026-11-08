@@ -47,7 +47,8 @@ pi-workbench/
 │   │   ├── relay.ts              # 出站 SSE 中继（退避重连）+ 清单上报 + 任务回报
 │   │   ├── executor.ts           # 把一条云任务变成一次真实本地会话（权限 auto，无本地审批门）
 │   │   ├── worker.ts             # 帧分发 / 串行队列 / 取消 / 反问 / 心跳 / 账本写入
-│   │   └── ledger.ts             # 本机账本 `data/agent/dispatch-ledger.json`（最近 20 条）
+│   │   ├── ledger.ts             # 本机账本 `data/agent/dispatch-ledger.json`（最近 20 条）
+│   │   └── trace.ts              # 派活轨迹 `cache/dispatch-traces/`（步骤上限 200，路径脱敏，仅事后查）
 │   ├── documents/                # 文档解析（零依赖）：zip / xml / ooxml / pdf / detect / preview / render-bridge
 │   │   ├── zip.ts                # node:zlib 手写 ZIP 中央目录（不引第三方）
 │   │   ├── xml.ts                # 流式 XML 扇描（不建 DOM）
