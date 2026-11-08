@@ -171,13 +171,13 @@ Open **Settings** on first run and complete five steps:
 | Item            | State                                                                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Current version | `0.8.0` (2026-11-08)                                                                                                                                          |
-| Releases        | 16 GitHub releases; installers and `latest*.yml` produced by CI on tags                                                                                       |
+| Releases        | 17 GitHub releases; installers and `latest*.yml` produced by CI on tags                                                                                       |
 | Phases          | Phase 0–4 done · Phase 5 (Fleet background jobs) removed 2026-10-24 · Phase 6 ongoing                                                                         |
-| Quality         | type-check + lint + 1,300+ Vitest cases + full build; CI also runs a Windows packaging smoke test                                                             |
+| Quality         | type-check + lint + 1,800+ Vitest cases + full build; CI also runs a Windows packaging smoke test                                                             |
 | Stack           | Electron 44 · React 19 · TypeScript 5.9 · Monaco 0.57 · `@earendil-works/pi-coding-agent` 1.3                                                                 |
 | Known limits    | Not signed or notarized; legacy Office formats are not parsed; no OCR for scans; Linux tray degrades to minimize; manual platform acceptance is still pending |
 
-**In progress**: a top-level agent that orchestrates across workspaces (dispatching sub-sessions, delegated grants, headless workspaces) is still at the requirements-draft stage — see [TOP_LEVEL_AGENT_BRIEF](docs/requirements/TOP_LEVEL_AGENT_BRIEF.md). Current state is in [STATUS](docs/progress/STATUS.md); tasks and parked items in [BACKLOG](docs/progress/BACKLOG.md).
+**Next up**: wrapping up R-23 output budgeting (follow-up actions for truncated output, context-limit warnings, dedicated budgets for light tasks), manual macOS / Linux acceptance, and the parked cloud items (screen takeover → kanban → detached panels → IM / voice → outbound MCP gate). Current state is in [STATUS](docs/progress/STATUS.md); tasks and parked items in [BACKLOG](docs/progress/BACKLOG.md).
 
 ---
 

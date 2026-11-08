@@ -24,8 +24,6 @@
 
 ### 📌 需求文档
 - **[Git 会话工作流（会话-工作树绑定）](./requirements/GIT_WORKTREE_SESSIONS.md)** — 工作树会话的完整需求、边界执行顺序与验收场景
-- **[顶层 Agent（跨工作区编排）](./requirements/TOP_LEVEL_AGENT.md)** — 草案：首页常驻顶层会话、派发子会话、委派授权、headless 工作区、任务状态机与验收场景
-- **[顶层 Agent 简版需求](./requirements/TOP_LEVEL_AGENT_BRIEF.md)** — 同上，去掉术语与实现细节，只说「它要做什么 / 不做什么 / 权限规矩」
 - **[云端 Agent（唯一方案）](./requirements/CLOUD_AGENT.md)** — 桌面端 Phase 1（连接码配对）、会话 / SSE / 审批 / 配置面、设备身份与心跳、网关插件 P0–P5、部署、安全边界、验收与路线。历史方案、历史 ADR、历史研究报告已并入本文
 - **[云端自举 Prompt（Phase 3 草案）](./requirements/hermes-bootstrap-prompt.md)** — 交给已部署的 Hermes 完成域名 / 反代 / 网关插件 / 管理密钥，并生成一次性连接码；插件发布前不可用
 
@@ -62,7 +60,6 @@
 | 改编辑区面板 / 仓库地图画布 | [agent/workspace-panel.md](./agent/workspace-panel.md) |
 | 改权限 / 审批 / 计划模式 | [agent/agent-runtime.md](./agent/agent-runtime.md) |
 | 改工作树会话 / Git 视图 | [agent/git-and-worktrees.md](./agent/git-and-worktrees.md) |
-| 规划 / 实现跨工作区顶层 Agent | [requirements/TOP_LEVEL_AGENT_BRIEF.md](./requirements/TOP_LEVEL_AGENT_BRIEF.md)（先看简版）→ [TOP_LEVEL_AGENT.md](./requirements/TOP_LEVEL_AGENT.md) |
 | 做云端 Agent（配对 / 审批 / 设备 / 网关 / 部署） | [requirements/CLOUD_AGENT.md](./requirements/CLOUD_AGENT.md)（唯一事实源） |
 | 从零开发云端网关插件 | [requirements/CLOUD_AGENT.md](./requirements/CLOUD_AGENT.md) §5 + §9（P0–P5、AC-GW） |
 | 改面板拆出 / 托盘行为 | [agent/panels-and-windows.md](./agent/panels-and-windows.md) |
@@ -86,4 +83,4 @@
 
 ---
 
-**最后更新**: 2026-11-07（云端文档收口：11 份合并为 CLOUD_AGENT.md）
+**最后更新**: 2026-11-08（文档收敛：任务表合并、已交付文档删除、顶层 Agent 草案下线）

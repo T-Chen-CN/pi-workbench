@@ -21,7 +21,6 @@
 - **R-23 剩余子项**：B4 续写截断的后续动作、B7 上下文临界预警、B8 轻任务预算、`reasoning_effort` 联动——见 [BACKLOG](./BACKLOG.md) §3。
 - **平台手动验收** V-01（macOS dmg）/ V-02（Linux AppImage）尚未做。
 - **云端后置**：C-08 CDP 屏幕接管 → C-09 Kanban → C-10 拆窗 → C-11 IM / 语音 / 遥测 → C-12 对外写 MCP 门；H3 工作区派活单独立项。见 [CLOUD_AGENT §9.4](../requirements/CLOUD_AGENT.md)。
-- **顶层 Agent** 仍是需求草案（[TOP_LEVEL_AGENT](../requirements/TOP_LEVEL_AGENT.md)）。
 
 ## 已交付（一行一项，细节在 git）
 
