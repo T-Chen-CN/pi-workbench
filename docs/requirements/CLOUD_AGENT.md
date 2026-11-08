@@ -230,7 +230,11 @@ PUT  /api/config        → 只接受 {"config":{"approvals":{"mode":...}}}
 
 ### 3.6 任务、媒体、耐久性
 
-- 任务页：`/api/jobs` 列表 + `run` / `pause` / `resume`。
+- 任务页：`/api/jobs` 列表 + 新建 + `run` / `pause` / `resume`（**不做删除**，删除只在服务器上）。
+  - 新建表单收「任务名 / 调度 / 提示词 / 最多跑几次（可选）」，调度支持间隔（`30m`、`every 2h`）、
+    一次性（`in 30m`、ISO 时间）与 cron 表达式（`0 9 * * *`）。
+  - cron 表达式与「每周一 9 点」这类自然语言写法要服务端装了 `croniter`（Hermes 声明为核心依赖，
+    部分运行时未预装，缺的时候上游会直接报错）；纯间隔写法不需要它。
 - 图片：上传走 `/api/chat/image-upload`，读回走 `/api/fs/read-data-url`，都经网关；渲染层不持凭据。
 - 耐久性：`data/cloud-agent/active-run.json` 记最近一轮；重启 / 重连后 `GET /v1/runs/{id}` 探活，还在跑就重订阅（`last_seq` 顶到 int32 上限只收新事件），先铺历史再放增量。
 - 未结算账本：`data/cloud-agent/pending-writes.json`，只做人工核对，不是云端真相。
@@ -672,7 +676,6 @@ GET  /api/sessions/{id}
 PATCH /api/sessions/{id}
 DELETE /api/sessions/{id}
 GET  /api/sessions/{id}/messages
-POST /api/sessions/{id}/fork
 GET  /api/jobs
 POST /api/jobs
 GET  /api/jobs/{id}

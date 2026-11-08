@@ -673,6 +673,44 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   })
 
+  /**
+   * 新建定时任务。
+   *
+   * 三条必填在本地先拦：服务端把空白名 / 缺调度当 400 回，但那句话是英文且不含字段名，
+   * 让用户对着表单猜很不划算。上限与服务端常量一致（名 ≤ 200、提示词 ≤ 5000）。
+   */
+  handleIpc(
+    'cloud:jobs:create',
+    async (
+      _event,
+      input: { name?: string; schedule?: string; prompt?: string; repeat?: number }
+    ) => {
+      const name = String(input?.name ?? '').trim()
+      const schedule = String(input?.schedule ?? '').trim()
+      const prompt = String(input?.prompt ?? '').trim()
+      if (!name) return { success: false as const, error: '任务名不能为空' }
+      if (!schedule) return { success: false as const, error: '调度表达式不能为空' }
+      if (!prompt) return { success: false as const, error: '提示词不能为空' }
+      if (name.length > 200) return { success: false as const, error: '任务名最多 200 个字符' }
+      if (prompt.length > 5000) return { success: false as const, error: '提示词最多 5000 个字符' }
+      const repeat = Number(input?.repeat)
+      if (input?.repeat !== undefined && input?.repeat !== null && !(Number.isInteger(repeat) && repeat > 0)) {
+        return { success: false as const, error: '「最多跑几次」要么留空，要么填正整数' }
+      }
+      try {
+        const job = await createRemote(ensureClient()).createJob({
+          name,
+          schedule,
+          prompt,
+          ...(Number.isInteger(repeat) && repeat > 0 ? { repeat } : {}),
+        })
+        return { success: true as const, job }
+      } catch (error) {
+        return fail(error)
+      }
+    }
+  )
+
   handleIpc('cloud:jobs:run', async (_event, input: { jobId?: string }) => {
     const jobId = String(input?.jobId ?? '')
     if (!jobId) return { success: false as const, error: '缺少任务 id' }

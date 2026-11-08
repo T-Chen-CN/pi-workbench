@@ -5,6 +5,7 @@ import type {
   CloudDiagnosticCheck,
   CloudDiagnostics,
   CloudJob,
+  CloudJobDraft,
   CloudJobExecution,
   CloudRunStatus,
   CloudSession,
@@ -465,10 +466,10 @@ export function createRemote(client: CloudClient) {
     },
 
     /**
-     * 定时任务：只有「列 / 立刻跑 / 暂停 / 恢复」四个动作。
+     * 定时任务：列 / 新建 / 立刻跑 / 暂停 / 恢复。
      *
-     * 不做删除（用户明确：任务只能暂停，不能在这里删），也不做新建——
-     * 新建等于写一段 prompt 交给调度器，那属于对话里让 Agent 建。
+     * 不做删除（用户明确：任务只能暂停，不能在这里删；想删去服务器上做）。
+     * 新建走 `POST /api/jobs`，`deliver` 用服务端默认值。
      */
     async listJobs(): Promise<CloudJob[]> {
       // `include_disabled=true` 不能省：服务端默认只回 enabled 的任务，
@@ -478,6 +479,23 @@ export function createRemote(client: CloudClient) {
       })
       const rows = Array.isArray(raw?.jobs) ? raw.jobs : []
       return rows.map(toJob)
+    },
+
+    async createJob(draft: CloudJobDraft): Promise<CloudJob> {
+      const body: Record<string, unknown> = {
+        name: draft.name,
+        schedule: draft.schedule,
+        prompt: draft.prompt,
+      }
+      // 只有真给了正整数才带 repeat：服务端把 0 / 负数当 400
+      if (typeof draft.repeat === 'number' && draft.repeat > 0) body.repeat = draft.repeat
+      const raw = await client.request<{ job?: RawJob }>('/api/jobs', {
+        method: 'POST',
+        body,
+        timeoutMs: 20_000,
+      })
+      if (!raw?.job) throw new Error('服务端没有回任务对象')
+      return toJob(raw.job)
     },
 
     async runJob(jobId: string): Promise<void> {

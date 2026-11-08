@@ -128,6 +128,21 @@ export interface CloudJob {
   liveExecution?: CloudJobExecution
 }
 
+/**
+ * 新建任务时交给服务端的草稿（`POST /api/jobs` 的 body 子集）。
+ *
+ * `deliver` 不暴露：桌面端只关心任务本身，投递用服务端默认的 `local`。
+ */
+export interface CloudJobDraft {
+  name: string
+  /** 调度表达式：`30m` / `every 2h` / `in 30m` / `0 9 * * *` / ISO 时间 */
+  schedule: string
+  /** 每次要 Agent 执行的提示词 */
+  prompt: string
+  /** 最多跑几次；不填表示不限次 */
+  repeat?: number
+}
+
 export type CloudWriteClass = 'external' | 'system' | 'irreversible'
 
 export type CloudWriteStatus =

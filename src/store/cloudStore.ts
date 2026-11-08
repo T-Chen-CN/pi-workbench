@@ -25,6 +25,7 @@ import type {
   CloudRunStatus,
   CloudDiagnostics,
   CloudJob,
+  CloudJobDraft,
   CloudPendingWrite,
   CloudSession,
   CloudTracePart,
@@ -102,12 +103,14 @@ interface CloudState {
   /** 未结算账本（全部条目，UI 自己过滤待处理项） */
   pendingWrites: CloudPendingWrite[]
   ledgerError: string | null
-  /** 定时任务（只读列表 + 三个动作，不给新建 / 删除） */
+  /** 定时任务（列表 + 新建 + 三个动作；删除只在服务器上做） */
   jobs: CloudJob[]
   jobsLoading: boolean
   jobsError: string | null
   /** 正在操作的 job id（按钮级 loading） */
   jobActionPending: string | null
+  /** 新建任务请求在飞（表单按钮级 loading） */
+  jobCreatePending: boolean
   /** 正在提交回答的提问 id */
   clarifyPending: string | null
   clarifyError: string | null
@@ -178,6 +181,7 @@ interface CloudState {
   setMode: (mode: CloudApprovalMode) => Promise<boolean>
   loadDiagnostics: () => Promise<void>
   loadJobs: () => Promise<void>
+  createJob: (draft: CloudJobDraft) => Promise<boolean>
   runJob: (jobId: string) => Promise<boolean>
   pauseJob: (jobId: string) => Promise<boolean>
   resumeJob: (jobId: string) => Promise<boolean>
@@ -252,6 +256,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   jobsLoading: false,
   jobsError: null,
   jobActionPending: null,
+  jobCreatePending: false,
   clarifyPending: null,
   clarifyError: null,
   approvalPending: null,
@@ -826,6 +831,17 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     set({ jobs: result.jobs, jobsLoading: false })
   },
 
+  async createJob(draft) {
+    set({ jobCreatePending: true, jobsError: null })
+    const result = await cloudApi.createJob(draft)
+    set({ jobCreatePending: false })
+    if (!result.success) {
+      set({ jobsError: result.error ?? 'unknown' })
+      return false
+    }
+    await get().loadJobs()
+    return true
+  },
   async runJob(jobId) {
     set({ jobActionPending: jobId, jobsError: null })
     const result = await cloudApi.runJob(jobId)

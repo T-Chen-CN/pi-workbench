@@ -727,6 +727,12 @@ export interface ElectronAPI {
     diagnostics?: CloudDiagnostics
   }>
   cloudJobsList: () => Promise<{ success: boolean; error?: string; jobs?: CloudJob[] }>
+  cloudJobsCreate: (input: {
+    name: string
+    schedule: string
+    prompt: string
+    repeat?: number
+  }) => Promise<{ success: boolean; error?: string; job?: CloudJob }>
   cloudJobsRun: (input: { jobId: string }) => Promise<{ success: boolean; error?: string }>
   cloudJobsPause: (input: { jobId: string }) => Promise<{ success: boolean; error?: string }>
   cloudJobsResume: (input: { jobId: string }) => Promise<{ success: boolean; error?: string }>

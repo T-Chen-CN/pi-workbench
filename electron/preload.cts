@@ -501,6 +501,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('cloud:policy:set', input),
   cloudDiagnostics: () => ipcRenderer.invoke('cloud:diagnostics'),
   cloudJobsList: () => ipcRenderer.invoke('cloud:jobs:list'),
+  cloudJobsCreate: (input: { name: string; schedule: string; prompt: string; repeat?: number }) =>
+    ipcRenderer.invoke('cloud:jobs:create', input),
   cloudJobsRun: (input: { jobId: string }) => ipcRenderer.invoke('cloud:jobs:run', input),
   cloudJobsPause: (input: { jobId: string }) => ipcRenderer.invoke('cloud:jobs:pause', input),
   cloudJobsResume: (input: { jobId: string }) => ipcRenderer.invoke('cloud:jobs:resume', input),

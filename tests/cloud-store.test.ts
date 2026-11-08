@@ -484,6 +484,33 @@ describe('任务', () => {
     await expect(useCloudStore.getState().runJob('job_9')).resolves.toBe(false)
     expect(useCloudStore.getState().jobsError).toBe('任务不存在')
   })
+
+  it('creates a job, reloads the list, and keeps the form error on failure', async () => {
+    const created: Array<Record<string, unknown>> = []
+    let jobs = [{ id: 'job_1', name: 'A', state: 'scheduled', enabled: true }]
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudJobsList: async () => ({ success: true, jobs }),
+      cloudJobsCreate: async (input: Record<string, unknown>) => {
+        created.push(input)
+        if (input.name === '炸') return { success: false, error: '调度表达式无法解析' }
+        jobs = [...jobs, { id: 'job_2', name: String(input.name), state: 'scheduled', enabled: true }]
+        return { success: true, job: { id: 'job_2', name: input.name } }
+      },
+    }
+
+    await expect(
+      useCloudStore.getState().createJob({ name: '每日', schedule: '30m', prompt: '汇总' })
+    ).resolves.toBe(true)
+    expect(created[0]).toEqual({ name: '每日', schedule: '30m', prompt: '汇总' })
+    expect(useCloudStore.getState().jobCreatePending).toBe(false)
+    expect(useCloudStore.getState().jobs).toHaveLength(2)
+
+    await expect(
+      useCloudStore.getState().createJob({ name: '炸', schedule: 'nonsense', prompt: 'x' })
+    ).resolves.toBe(false)
+    expect(useCloudStore.getState().jobsError).toBe('调度表达式无法解析')
+    expect(useCloudStore.getState().jobCreatePending).toBe(false)
+  })
 })
 
 const approval = (

@@ -27,6 +27,7 @@ import type {
   CloudDeviceSummary,
   CloudDiagnostics,
   CloudJob,
+  CloudJobDraft,
   CloudPendingWrite,
   CloudRunStatus,
   CloudSessionsResult,
@@ -356,6 +357,16 @@ export const cloudApi = {
     }
     const result = await bridge.cloudJobsList()
     return { ...result, jobs: result.jobs ?? [] }
+  },
+
+  async createJob(
+    draft: CloudJobDraft
+  ): Promise<{ success: boolean; error?: string; job?: CloudJob }> {
+    const bridge = api()
+    if (!bridge || typeof bridge.cloudJobsCreate !== 'function') {
+      return { success: false, error: NO_BRIDGE }
+    }
+    return bridge.cloudJobsCreate(draft)
   },
 
   async runJob(jobId: string): Promise<{ success: boolean; error?: string }> {

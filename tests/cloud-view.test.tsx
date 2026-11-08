@@ -851,6 +851,40 @@ describe('任务页', () => {
     await waitFor(() => expect(run).toHaveBeenCalledWith({ jobId: 'job_1' }))
   })
 
+  it('creates a job from the form and closes it on success', async () => {
+    installBridge()
+    const create = vi.fn(async () => ({ success: true, job: { ...JOB, id: 'job_2' } }))
+    Object.assign((window as unknown as { electronAPI: Record<string, unknown> }).electronAPI, {
+      cloudJobsList: async () => ({ success: true, jobs: [] }),
+      cloudJobsCreate: create,
+    })
+    useCloudStore.setState({ connection: 'connected', jobs: [], jobsLoading: false })
+
+    render(<CloudWorkspaceView view="cloud-jobs" onNavigate={vi.fn()} />)
+    // 首帧会先拉列表、空状态随之重建一次节点：等它稳定再点，否则点到的是被换掉的旧按钮
+    expect(await screen.findByText(zh.cloudJobEmpty)).toBeTruthy()
+    fireEvent.click(screen.getByText(zh.cloudJobCreate))
+    expect(await screen.findByText(zh.cloudJobCreateTitle)).toBeTruthy()
+
+    // 三项必填都空时提交按钮不可用
+    const submit = screen.getByText(zh.cloudJobCreateSubmit) as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
+
+    fireEvent.change(screen.getByLabelText(zh.cloudJobCreateName), { target: { value: '每日日志汇总' } })
+    fireEvent.change(screen.getByLabelText(zh.cloudJobCreateSchedule), { target: { value: '0 9 * * *' } })
+    fireEvent.change(screen.getByLabelText(zh.cloudJobCreatePrompt), { target: { value: '汇总昨天的日志' } })
+    fireEvent.click(screen.getByText(zh.cloudJobCreateSubmit))
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith({
+        name: '每日日志汇总',
+        schedule: '0 9 * * *',
+        prompt: '汇总昨天的日志',
+      })
+    )
+    await waitFor(() => expect(screen.queryByText(zh.cloudJobCreateTitle)).toBeNull())
+  })
+
   it('shows the empty state with the create-from-conversation hint', async () => {
     installBridge()
     Object.assign((window as unknown as { electronAPI: Record<string, unknown> }).electronAPI, {

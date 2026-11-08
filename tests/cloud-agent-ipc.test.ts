@@ -247,10 +247,10 @@ vi.mock('electron', () => ({
       if (route === '/v1/models') {
         return Response.json({ data: [{ id: 'pi-cloud' }] })
       }
-      if (route === '/api/jobs' && !parsed.search.includes('include_disabled=true')) {
+      if (route === '/api/jobs' && init?.method !== 'POST' && !parsed.search.includes('include_disabled=true')) {
         return Response.json({ jobs: [] })
       }
-      if (route === '/api/jobs') {
+      if (route === '/api/jobs' && init?.method !== 'POST') {
         return Response.json({
           jobs: [
             {
@@ -265,6 +265,22 @@ vi.mock('electron', () => ({
               repeat: null,
             },
           ],
+        })
+      }
+      if (route === '/api/jobs' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body ?? '{}')) as Record<string, unknown>
+        return Response.json({
+          job: {
+            id: 'job_new',
+            name: body.name,
+            prompt: body.prompt,
+            schedule: body.schedule,
+            schedule_display: body.schedule,
+            state: 'scheduled',
+            enabled: true,
+            next_run_at: '2026-05-02T01:00:00Z',
+            repeat: body.repeat ?? null,
+          },
         })
       }
       if (/^\/api\/jobs\/job_1\/(run|pause|resume)$/.test(route) && init?.method === 'POST') {
@@ -878,6 +894,58 @@ describe('cloud jobs', () => {
       const result = await call<{ success: boolean }>(channel, { jobId: 'job_1' })
       expect(result.success).toBe(true)
     }
+  })
+
+  it('creates a job with the schedule the form collected', async () => {
+    const before = mocks.state.bodies.length
+    const result = await call<{ success: boolean; job?: Record<string, unknown> }>(
+      'cloud:jobs:create',
+      { name: '  每日日志汇总  ', schedule: '0 9 * * *', prompt: '汇总昨天的日志' }
+    )
+    expect(result.success).toBe(true)
+    expect(result.job).toMatchObject({
+      id: 'job_new',
+      name: '每日日志汇总',
+      schedule: '0 9 * * *',
+      state: 'scheduled',
+    })
+    // 名字要去空白后再发，repeat 没填就不带（服务端把 0/负数当 400）
+    const body = JSON.parse(mocks.state.bodies[before]) as Record<string, unknown>
+    expect(body).toMatchObject({ name: '每日日志汇总', schedule: '0 9 * * *' })
+    expect('repeat' in body).toBe(false)
+  })
+
+  it('passes repeat through only when it is a positive integer', async () => {
+    const before = mocks.state.bodies.length
+    await call('cloud:jobs:create', {
+      name: '一次性',
+      schedule: 'in 30m',
+      prompt: '跑一次',
+      repeat: 2,
+    })
+    expect(JSON.parse(mocks.state.bodies[before]).repeat).toBe(2)
+
+    const rejected = await call<{ success: boolean; error?: string }>('cloud:jobs:create', {
+      name: 'x',
+      schedule: '30m',
+      prompt: 'y',
+      repeat: 0,
+    })
+    expect(rejected.success).toBe(false)
+    expect(rejected.error).toContain('正整数')
+  })
+
+  it('refuses blank fields without hitting the network', async () => {
+    const before = mocks.state.requests.length
+    for (const input of [
+      { name: '  ', schedule: '30m', prompt: 'p' },
+      { name: 'n', schedule: '  ', prompt: 'p' },
+      { name: 'n', schedule: '30m', prompt: '  ' },
+    ]) {
+      const result = await call<{ success: boolean; error?: string }>('cloud:jobs:create', input)
+      expect(result.success).toBe(false)
+    }
+    expect(mocks.state.requests.length).toBe(before)
   })
 
   it('refuses a missing job id without hitting the network', async () => {

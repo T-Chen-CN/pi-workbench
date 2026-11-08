@@ -1,18 +1,20 @@
 /**
  * 任务页：云端定时任务（cron）。
  *
- * 只做四件事：看列表、立刻跑一次、暂停、恢复。**不给新建也不给删除**——
- * 新建等于把一段 prompt 交给调度器，那该在对话里让 Agent 建；删除是不可逆动作，
+ * 做五件事：看列表、新建、立刻跑一次、暂停、恢复。**不给删除**——删除是不可逆动作，
  * 这里只留暂停（想删就暂停，人再去服务器上删）。
  */
 
 import React, { useEffect, useRef, useState } from 'react'
-import { AlertCircle, CalendarClock, Loader2, Pause, Play, RefreshCw, RotateCw } from 'lucide-react'
+import { AlertCircle, CalendarClock, Loader2, Pause, Play, Plus, RefreshCw, RotateCw } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useCloudStore } from '../store/cloudStore'
 import type { CloudJob } from '../types/cloud'
-import { Button, Caption, DataText, EmptyState, IconButton, Label, Modal, Spinner } from './ui'
+import { Button, Caption, DataText, EmptyState, Field, IconButton, Input, Label, Modal, Spinner, Textarea } from './ui'
 import { formatRelativeTime } from '../utils/relativeTime'
+
+/** 调度快捷项：覆盖「间隔 / 每天 / 工作日」三种最常见意图，也能自己敲 */
+const SCHEDULE_PRESETS = ['every 30m', 'every 2h', 'every day at 9am', '0 9 * * 1-5']
 
 /** 服务端 `effective_job_state` 的四种取值 */
 function stateLabelKey(state: string): 'cloudJobStateScheduled' | 'cloudJobStatePaused' | 'cloudJobStateCompleted' | 'cloudJobStateError' {
@@ -115,11 +117,35 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
   const runJob = useCloudStore((state) => state.runJob)
   const pauseJob = useCloudStore((state) => state.pauseJob)
   const resumeJob = useCloudStore((state) => state.resumeJob)
+  const createJob = useCloudStore((state) => state.createJob)
+  const creating = useCloudStore((state) => state.jobCreatePending)
   const [loadedOnce, setLoadedOnce] = useState(false)
   /** 暂停任务点「现在跑一次」要先说清楚：服务端会顺手把它恢复成排期 */
   const [runTarget, setRunTarget] = useState<CloudJob | null>(null)
+  /** 新建表单：存在组件里就够，关掉即丢弃（不落盘、不跨页面） */
+  const [createOpen, setCreateOpen] = useState(false)
+  const [draft, setDraft] = useState({ name: '', schedule: '', prompt: '', repeat: '' })
+  const draftReady = Boolean(draft.name.trim() && draft.schedule.trim() && draft.prompt.trim())
   const pollRef = useRef<number | null>(null)
   const connected = connection === 'connected'
+
+  const openCreate = () => {
+    setDraft({ name: '', schedule: '', prompt: '', repeat: '' })
+    setCreateOpen(true)
+  }
+
+  const submitCreate = () => {
+    if (!draftReady) return
+    const repeat = draft.repeat.trim() ? Number(draft.repeat.trim()) : undefined
+    void createJob({
+      name: draft.name.trim(),
+      schedule: draft.schedule.trim(),
+      prompt: draft.prompt.trim(),
+      ...(typeof repeat === 'number' && Number.isInteger(repeat) && repeat > 0 ? { repeat } : {}),
+    }).then((ok) => {
+      if (ok) setCreateOpen(false)
+    })
+  }
 
   /**
    * 跑一次之后隔几秒补两次刷新。
@@ -168,6 +194,7 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
         )}
         <span className="flex-1" />
         {loading && <Loader2 size={12} className="animate-spin text-ink-subtle" />}
+        <IconButton icon={Plus} label={t('cloudJobCreate')} size="sm" disabled={!connected} onClick={openCreate} />
         <IconButton
           icon={RefreshCw}
           label={t('cloudJobRefresh')}
@@ -208,6 +235,11 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
             icon={CalendarClock}
             title={t('cloudJobEmpty')}
             description={t('cloudJobEmptyHint')}
+            action={
+              <Button size="sm" icon={Plus} onClick={openCreate}>
+                {t('cloudJobCreate')}
+              </Button>
+            }
           />
         )}
         {connected &&
@@ -235,6 +267,80 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
       <div className="flex-shrink-0 border-t border-rule-divide px-3 py-1.5">
         <Caption className="text-ink-subtle">{t('cloudJobFootnote')}</Caption>
       </div>
+
+      <Modal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        title={t('cloudJobCreateTitle')}
+        footer={
+          <>
+            <Button size="sm" onClick={() => setCreateOpen(false)}>
+              {t('cloudCancel')}
+            </Button>
+            <Button size="sm" variant="primary" disabled={!draftReady || creating} onClick={submitCreate}>
+              {t('cloudJobCreateSubmit')}
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3 px-5 py-4">
+          <Field label={t('cloudJobCreateName')} htmlFor="cloud-job-name">
+            <Input
+              id="cloud-job-name"
+              value={draft.name}
+              maxLength={200}
+              placeholder={t('cloudJobCreateNamePlaceholder')}
+              onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
+            />
+          </Field>
+          <Field label={t('cloudJobCreateSchedule')} htmlFor="cloud-job-schedule">
+            <Input
+              id="cloud-job-schedule"
+              value={draft.schedule}
+              maxLength={120}
+              placeholder={t('cloudJobCreateSchedulePlaceholder')}
+              onChange={(event) => setDraft((prev) => ({ ...prev, schedule: event.target.value }))}
+            />
+          </Field>
+          <div className="-mt-1 flex flex-wrap gap-1.5">
+            {SCHEDULE_PRESETS.map((preset) => (
+              <Button
+                key={preset}
+                size="sm"
+                onClick={() => setDraft((prev) => ({ ...prev, schedule: preset }))}
+              >
+                {preset}
+              </Button>
+            ))}
+          </div>
+          <Caption className="text-ink-subtle">{t('cloudJobCreateScheduleHint')}</Caption>
+          <Field label={t('cloudJobCreatePrompt')} htmlFor="cloud-job-prompt">
+            <Textarea
+              id="cloud-job-prompt"
+              rows={4}
+              value={draft.prompt}
+              maxLength={5000}
+              placeholder={t('cloudJobCreatePromptPlaceholder')}
+              onChange={(event) => setDraft((prev) => ({ ...prev, prompt: event.target.value }))}
+            />
+          </Field>
+          <Field
+            label={t('cloudJobCreateRepeat')}
+            htmlFor="cloud-job-repeat"
+            hint={t('cloudJobCreateRepeatOptional')}
+          >
+            <Input
+              id="cloud-job-repeat"
+              type="number"
+              min={1}
+              value={draft.repeat}
+              placeholder={t('cloudJobCreateRepeatPlaceholder')}
+              onChange={(event) => setDraft((prev) => ({ ...prev, repeat: event.target.value }))}
+            />
+          </Field>
+          {error && <div className="type-caption text-danger">{error}</div>}
+        </div>
+      </Modal>
 
       <Modal
         open={Boolean(runTarget)}
