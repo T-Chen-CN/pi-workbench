@@ -13,7 +13,7 @@
 | 阶段 | 云端 Agent 主链路已完成并发布；Phase 6 持续优化 |
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
-| 质量门槛 | `type-check` · `lint` · `npm test`（152 文件 / 1817 用例）· `design-system` 全绿 |
+| 质量门槛 | `type-check` · `lint` · `npm test`（153 文件 / 1856 用例）· `design-system` 全绿 |
 | 网关插件 | `pi-workbench-gateway` **0.1.1**（独立公开仓库，已真机上线） |
 
 ## 正在做 / 下一步

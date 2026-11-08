@@ -160,9 +160,12 @@
    "Gateway reloaded plugins; nothing of this plugin needs a session or restart"，但插件读的是
    **进程环境**，`.env` 里的 `PI_HUB_ADMIN_KEY` 只有新进程才看得见；不重启的表现是 8484 根本不监听、
    日志喊 "PI_HUB_ADMIN_KEY is not set"。重启的是**该 profile 自己的** gateway 单元
-   （`sudo hermes -p <profile> gateway restart --system`）：本插件靠进程环境读 `PI_HUB_ADMIN_KEY`
-   与 `API_SERVER_KEY`，而这两样只在该 profile 的单元（`.env` + drop-in `10-api-server.conf`）里
-   才存在。重启后验证：
+   （`sudo systemctl restart hermes-gateway-<profile>.service`）：本插件靠进程环境读
+   `PI_HUB_ADMIN_KEY` 与 `API_SERVER_KEY`，而这两样只在该 profile 的单元（`.env` + drop-in
+   `10-api-server.conf`）里才存在。
+   **别用 `sudo hermes ... gateway restart --system`**：root 跑 hermes 会去「准备依赖环境」，
+   发现 `<hermes 安装目录>` 属主是安装用户后直接拒绝（`owned by uid 1000, not the current uid 0`），
+   命令退出但服务照旧跑旧代码——排查时极易误判成「改的代码没生效」。重启后验证：
    - `ss -ltn | grep 8484` → 有监听，且只绑 `127.0.0.1`
    - `curl -s 127.0.0.1:8484/v1/hub/health` → `{"status":"ok", "upstreamOk":true, ...}`
      （**瘦身版**：只回 `status` / `upstreamOk` / `hub` / `contractVersion` / `features`，

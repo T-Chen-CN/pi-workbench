@@ -16,10 +16,10 @@
 | 应用仓库 | `main`，版本 `0.8.0`（2026-11-08 发布） |
 | 桌面端配对 | Phase 1 已完成：连接码、`cloud:gateway:pair`、配置收窄、旧入口删除 |
 | 桌面端云端功能 | 会话 / SSE / 审批 / 控制台 / 任务（含新建）/ 媒体 / 设备身份 / 心跳 / 耐久性已落地，随 0.8.0 发布 |
-| 网关插件 | `pi-workbench-gateway` **0.1.1**：P0–P5 全部落地，已 `hermes plugins install` 装到真机 |
+| 网关插件 | `pi-workbench-gateway` **0.1.2**：P0–P5 全部落地，已 `hermes plugins install` 装到真机 |
 | 真实配对 | 可用：`/v1/devices/pairing` + `/v1/devices/pair` 已上线，连接码真机配对通过 |
 | 部署 | 已部署：`hub.` 网关在线（Caddy TLS + `flush_interval -1`），`dash.` 直连控制台；G0 / G1 全绿（§8.2） |
-| 测试基线 | `npm test`：152 文件 / 1817 用例全绿；`type-check` / `lint` / `build` 全绿 |
+| 测试基线 | `npm test`：153 文件 / 1856 用例全绿；`type-check` / `lint` / `build` 全绿 |
 | 待验收 | 无（AC-14 / AC-15 / AC-19 已于 2026-11-08 真机跑完，见 §8.4） |
 | 后置 | C-08 ~ C-12 与 H3 未排期（§9.4）；「停止按钮 / 跨重启接回」按 2026-11-08 决定不做真机验收 |
 
@@ -389,7 +389,7 @@ Content-Type: application/json
          （主仓库 `.gitignore` 排除，不是 submodule；应用侧只依赖 `PLUGIN_REPO` 常量）
 插件 id：pi-workbench-gateway
 类型：Hermes kind: platform
-版本：0.1.1
+版本：0.1.2
 ```
 
 目录：
@@ -435,7 +435,7 @@ pi-workbench-gateway/
 name: pi-workbench-gateway
 label: Pi Workbench Gateway
 kind: platform
-version: 0.1.1
+version: 0.1.2
 manifest_version: 2
 api_version: 1
 author: Pi Workbench
@@ -595,7 +595,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
 {
   "status": "ok",
   "upstreamOk": true,
-  "hub": "0.1.1",
+  "hub": "0.1.2",
   "contractVersion": 1,
   "features": ["pairing", "heartbeat", "policy", "media"]
 }
@@ -606,7 +606,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
 ```json
 {
   "status": "ok",
-  "hub": "0.1.1",
+  "hub": "0.1.2",
   "contractVersion": 1,
   "features": ["pairing", "heartbeat", "policy", "media"],
   "upstream": "http://127.0.0.1:8642",
@@ -875,6 +875,8 @@ gateway 启动时把 `.env` 装载进 `os.environ`。所以：
   3. `sudo hermes -p pi-cloud gateway install --force --system --start-now` —— **`--force` 不能省**：不加会被拒并提示「default multiplexer already serves this profile」/ `gateway.standalone: true` 的临时兼容路径
   4. 验证：`8484 / 8642 / 9119` 三个端口都在、`/v1/hub/health` → `upstreamOk:true`、设备表与 `hub.db` inode 不变
   - 注意 `hermes gateway uninstall` 只删 default 单元；`hermes-gateway-pi-cloud.service` 与其 drop-in `10-api-server.conf` 在迁移时被删掉了，必须靠第 3 步重装才回来（重装会重建默认的 `API_SERVER_*`）；若当初 drop-in 里有自定义项，从 `/root/hermes-pi-cloud-<stamp>.tgz` 里取回。
+- **装完 / 改完插件后的重启**：`sudo systemctl restart hermes-gateway-pi-cloud.service`。**不要**用 `sudo hermes -p pi-cloud gateway restart --system`：root 跑 hermes 会先「准备依赖环境」，发现 `<hermes 安装目录>` 属主是 ubuntu 后拒绝（`owned by uid 1000, not the current uid 0`），命令退出、服务仍是旧代码——2026-11-08 升 0.1.2 时就踩到过（`/v1/hub/health` 一直回 `hub:0.1.1`）。
+- 插件目录属主：CLI 用 root 跑过 `plugins update` 会把 `plugins/` 变成 root 所有，之后 ubuntu 身份再跑就会 `Permission denied`（`.install-metadata.json` / `plugin-update-locks/`）。修法：`sudo chown -R ubuntu:ubuntu <profile>/plugins`，然后用**服务同一个用户**跑 CLI。
 - 插件坏了：修插件或降级；停用插件 = 云端功能整体不可用，明确报错。
 - 代码里没有本地直连回退；这是刻意选择。
 - VPS 改动前备份 `config.yaml` / `.env` / `plugins/` / `plugin-data/`；回滚按备份恢复。
@@ -890,7 +892,7 @@ gateway 启动时把 `.env` 装载进 `os.environ`。所以：
 | 插件单元 | 配置默认值、码生成、规范化、哈希、消费、过期、重放、并发、token 轮换、撤销、限流、审计脱敏、fsguard |
 | 插件集成 | 假 api_server / dashboard：方法、query、body、鉴权头替换、SSE 分块、错误映射、大请求体、路径穿越 |
 | 契约 | 配对、me、heartbeat、revoke、health、capabilities、sessions、runs + SSE |
-| 桌面端 | `tests/cloud-*.test.ts`；全量 152 文件 / 1817 用例 |
+| 桌面端 | `tests/cloud-*.test.ts`；全量 153 文件 / 1856 用例 |
 
 命令：
 
@@ -996,7 +998,7 @@ curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer pi_<token>" htt
 
 | 断言 | 实测 |
 | --- | --- |
-| `GET /v1/hub/health` | `200`，`{"status":"ok","hub":"0.1.1","upstreamOk":true,...}` |
+| `GET /v1/hub/health` | `200`，`{"status":"ok","hub":"0.1.2","upstreamOk":true,...}` |
 | 无 token 访问 `/v1/capabilities` | `401`（G0 第一条） |
 | 非白名单 `/api/secrets` | `404 not_found`（deny-by-default 穿过了 Caddy） |
 | 带 `Upgrade: websocket` 请求 | `401`，**不是** `101` —— 反代没有把它当 WS 升级（桌面端只用 SSE） |
@@ -1011,7 +1013,7 @@ SSE 不缓冲已由 G1 逐字出字（§8.2）在真机证实。代码层：`hub
 | 项 | 升级前 | 升级后 |
 | --- | --- | --- |
 | Hermes | v0.22.6 `f0d9488` | v0.23.0 `2bd378e` |
-| 插件 | `pi-workbench-gateway 0.1.1` enabled | 不变 |
+| 插件 | `pi-workbench-gateway 0.1.1` enabled | 不变（0.1.2 之后再升，只加了任务编辑 / 删除的路由） |
 | `hub.db` devices / revoked | 2 / 1 | 2 / 1 |
 | pairing_codes / audit_events / schema | 13 / 187 / 1 | 13 / 187 / 1 |
 | `audit-*.jsonl` | 11-07 / 11-08 两份 | 仍在，之后继续追加 |
@@ -1265,6 +1267,7 @@ docs/architecture/PROJECT_STRUCTURE.md     # 代码结构 / IPC
 | 2026-11-08 | 真机结项：AC-14（Hermes v0.22.6 → v0.23.0，设备库 / 配对码 / 审计 / 会话全保留，不用重新配对）、AC-15（运行时唯一对外连接是 `api.deepseek.com:443`，无分析域名）、AC-19（公网实测 200 / 401 / 404 / 拒 WS 升级 / 308 强制 TLS）全部通过 |
 | 2026-11-08 | 云端事件接进桌面通知（§3.9）：`approval.request` / `clarify.request` / `run.completed` / `run.failed|interrupted` 各投递一条，按 `requestId` / `runId` 去重，点击切云端页并定位那张卡；文案与本地共用 `notificationCopy`，`app:notify-click` 载荷加 `cloud` / `requestId` |
 | 2026-11-08 | AC-19 收口：插件补 WS 升级头不转发 / Host 改写两条回归用例；新增 §8.4 真机验收脚本（AC-14 / AC-15 当天跑完，见上） |
+| 2026-11-08 | 插件 0.1.2：代理白名单放行 `PATCH` / `DELETE /api/jobs/{job_id}`（桌面任务页的编辑与删除），`docs/CONTRACT.md` 同步 |
 | 2026-11-08 | 插件 0.1.1：代理白名单撤掉 `/api/sessions/{id}/fork`（桌面端不用），`/v1/hub/health` 的 `hub` 字段改为跟 `plugin.yaml` 取版本 |
 | 2026-11-08 | 状态刷新：头部与 §0 对齐 0.8.0 现实（插件 0.1.1 真机上线、`hub.` 在线、真实配对可用、G0 / G1 全绿、测试基线 152 文件 / 1809 用例）；AC-19 标注 SSE 已验；待验收项集中到 §0 与 §8.3 |
 | 2026-11-07 | 旧网关插件下线：停用 + 删除插件、环境变量与残留明文凭据（备份留在服务器 `/home/ubuntu/pi-hub-cleanup-*`），`hub.` 域名转为 502；插件改为本工作区内嵌套独立仓库从零开发 |
