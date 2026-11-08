@@ -14,14 +14,15 @@
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
 | 质量门槛 | `type-check` · `lint` · `npm test`（153 文件 / 1857 用例）· `design-system` 全绿 |
-| 网关插件 | `pi-workbench-gateway` **0.1.1**（独立公开仓库，已真机上线） |
+| 网关插件 | `pi-workbench-gateway` **0.1.2**（独立公开仓库，已真机上线） |
 
 ## 正在做 / 下一步
 
 - **云端事件通知已接进系统通知**（审批 / 澄清 / 终态，点击定位到卡）；下一步候选见 [BACKLOG](./BACKLOG.md) §6。
 - **R-23 剩余子项**：B4 续写截断的后续动作、B7 上下文临界预警、B8 轻任务预算、`reasoning_effort` 联动——见 [BACKLOG](./BACKLOG.md) §3。
 - **平台手动验收** V-01（macOS dmg）/ V-02（Linux AppImage）尚未做。
-- **云端后置**：C-08 CDP 屏幕接管 → C-09 Kanban → C-10 拆窗 → C-11 IM / 语音 / 遥测 → C-12 对外写 MCP 门；H3 工作区派活单独立项。见 [CLOUD_AGENT §9.4](../requirements/CLOUD_AGENT.md)。
+- **云端后置**：C-08 CDP 屏幕接管 → C-09 Kanban → C-10 拆窗 → C-11 IM / 语音 / 遥测 → C-12 对外写 MCP 门。见 [CLOUD_AGENT §9.4](../requirements/CLOUD_AGENT.md)。
+- **H3 工作区派活**：方案已定稿（权限由 Hermes 代行、A2A 语义 + 网关中继），P1 未开工——见 [WORKSPACE_DISPATCH](../requirements/WORKSPACE_DISPATCH.md)。
 
 ## 已交付（一行一项，细节在 git）
 

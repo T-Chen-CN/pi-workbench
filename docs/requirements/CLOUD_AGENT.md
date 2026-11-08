@@ -1161,7 +1161,7 @@ sudo ss -tnp state established | grep -v 127.0.0.1
 | C-10 | 云端页面拆窗 | 依赖 C-09 |
 | C-11 | IM 渠道 / 语音 / 出网遥测复核 | 一次性验收动作 |
 | C-12 | 对外写 MCP 门 + write-ahead 账本 | 账本已有，门是另一个量级 |
-| H3 | 工作区派活 / `local_*` 工具 / 任务邮箱 | 当前 P0–P5 明确不做；保留需求，后续单独立项 |
+| H3 | 工作区派活 / `local_*` 工具 / 任务邮箱 | 方案见 [WORKSPACE_DISPATCH](./WORKSPACE_DISPATCH.md)（Hermes 代行权限 + A2A 语义 + 网关中继）；P1 未开工 |
 
 ---
 

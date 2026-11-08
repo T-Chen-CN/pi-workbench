@@ -25,6 +25,7 @@
 ### 📌 需求文档
 - **[Git 会话工作流（会话-工作树绑定）](./requirements/GIT_WORKTREE_SESSIONS.md)** — 工作树会话的完整需求、边界执行顺序与验收场景
 - **[云端 Agent（唯一方案）](./requirements/CLOUD_AGENT.md)** — 桌面端 Phase 1（连接码配对）、会话 / SSE / 审批 / 配置面、设备身份与心跳、网关插件 P0–P5、部署、安全边界、验收与路线。历史方案、历史 ADR、历史研究报告已并入本文
+- **[工作区派活（H3）](./requirements/WORKSPACE_DISPATCH.md)** — 云端 Hermes 主动调起本地工作区 Agent：权限模型（Hermes 代行、人只管白名单）、A2A 语义与中继协议、hub.db schema、组件改动清单、三期验收场景
 - **[云端自举 Prompt（Phase 3 草案）](./requirements/hermes-bootstrap-prompt.md)** — 交给已部署的 Hermes 完成域名 / 反代 / 网关插件 / 管理密钥，并生成一次性连接码；插件发布前不可用
 
 ### 🔧 开发指南
@@ -61,6 +62,7 @@
 | 改权限 / 审批 / 计划模式 | [agent/agent-runtime.md](./agent/agent-runtime.md) |
 | 改工作树会话 / Git 视图 | [agent/git-and-worktrees.md](./agent/git-and-worktrees.md) |
 | 做云端 Agent（配对 / 审批 / 设备 / 网关 / 部署） | [requirements/CLOUD_AGENT.md](./requirements/CLOUD_AGENT.md)（唯一事实源） |
+| 做「云端派活到本地工作区」（H3） | [requirements/WORKSPACE_DISPATCH.md](./requirements/WORKSPACE_DISPATCH.md) |
 | 从零开发云端网关插件 | [requirements/CLOUD_AGENT.md](./requirements/CLOUD_AGENT.md) §5 + §9（P0–P5、AC-GW） |
 | 改面板拆出 / 托盘行为 | [agent/panels-and-windows.md](./agent/panels-and-windows.md) |
 | 查看思考与工具轨迹方案 | [AGENT_TRACE.md](./architecture/AGENT_TRACE.md) |
