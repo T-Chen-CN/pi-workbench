@@ -19,7 +19,7 @@
 | 网关插件 | `pi-workbench-gateway` **0.1.2**：P0–P5 全部落地，已 `hermes plugins install` 装到真机 |
 | 真实配对 | 可用：`/v1/devices/pairing` + `/v1/devices/pair` 已上线，连接码真机配对通过 |
 | 部署 | 已部署：`hub.` 网关在线（Caddy TLS + `flush_interval -1`），`dash.` 直连控制台；G0 / G1 全绿（§8.2） |
-| 测试基线 | `npm test`：153 文件 / 1856 用例全绿；`type-check` / `lint` / `build` 全绿 |
+| 测试基线 | `npm test`：153 文件 / 1857 用例全绿；`type-check` / `lint` / `build` 全绿 |
 | 待验收 | 无（AC-14 / AC-15 / AC-19 已于 2026-11-08 真机跑完，见 §8.4） |
 | 后置 | C-08 ~ C-12 与 H3 未排期（§9.4）；「停止按钮 / 跨重启接回」按 2026-11-08 决定不做真机验收 |
 
@@ -892,7 +892,7 @@ gateway 启动时把 `.env` 装载进 `os.environ`。所以：
 | 插件单元 | 配置默认值、码生成、规范化、哈希、消费、过期、重放、并发、token 轮换、撤销、限流、审计脱敏、fsguard |
 | 插件集成 | 假 api_server / dashboard：方法、query、body、鉴权头替换、SSE 分块、错误映射、大请求体、路径穿越 |
 | 契约 | 配对、me、heartbeat、revoke、health、capabilities、sessions、runs + SSE |
-| 桌面端 | `tests/cloud-*.test.ts`；全量 153 文件 / 1856 用例 |
+| 桌面端 | `tests/cloud-*.test.ts`；全量 153 文件 / 1857 用例 |
 
 命令：
 
