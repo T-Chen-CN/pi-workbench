@@ -123,7 +123,8 @@ export function normalizeApiModels(raw: any): StoredModelEntry[] {
 }
 
 // Helper function to load API Config
-async function loadApiConfig(): Promise<any> {
+// 派活 worker 与渲染层读同一份配置（含解密后的 key），所以对外导出
+export async function loadApiConfig(): Promise<any> {
   try {
     activeProviderApiKey = ''
     const appDir = getAppDir()

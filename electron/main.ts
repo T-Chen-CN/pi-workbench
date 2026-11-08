@@ -34,11 +34,14 @@ import { registerFilesIpc } from './ipc/files.js'
 import { registerAttachmentsIpc } from './ipc/attachments.js'
 import { registerFileProtocol } from './file-protocol.js'
 import { registerSchemePrivileges } from './scheme-privileges.js'
-import { registerAgentIpc } from './ipc/agent.js'
+import { registerAgentIpc, type AgentIpcContext } from './ipc/agent.js'
 import { registerDocumentsIpc } from './ipc/documents.js'
 import { registerGitIpc } from './ipc/git.js'
 import { registerRepoMapIpc } from './ipc/repo-map.js'
 import { registerCloudAgentIpc } from './ipc/cloud-agent.js'
+import { registerDispatchIpc } from './ipc/dispatch.js'
+import { loadApiConfig } from './ipc/api-config.js'
+import { DispatchWorker } from './dispatch/worker.js'
 import { repoSync } from './repo-sync.js'
 import { registerWorkspaceIpc, closeAllWorkspaceWatchers } from './ipc/workspace.js'
 import { getActiveProviderApiKey, setRunningAgentsProvider } from './ipc/api-config.js'
@@ -555,7 +558,7 @@ registerFilesIpc({
   }
 })
 
-registerAgentIpc({
+const agentIpcContext: AgentIpcContext = {
   agentRegistry,
   approvalBroker,
   pluginManager,
@@ -565,7 +568,9 @@ registerAgentIpc({
   logger: agentLogger,
   notificationText,
   notify: (event) => notificationRouter.notify(event)
-})
+}
+
+registerAgentIpc(agentIpcContext)
 
 registerAttachmentsIpc({
   getMainWindow: () => mainWindow,
@@ -607,6 +612,32 @@ const cloudAgentIpc = registerCloudAgentIpc({
   getLanguage: () => getAppSettingsCache().language,
   // 云端审批 / 澄清 / 终态：接入现有通知路由（只看得到“不在前台”的，和本地一致）
   notify: (event) => notificationRouter.notify(event)
+})
+
+// 工作区派活：云端 Hermes 把任务推到本机，本机用真实会话执行
+const dispatchWorker = new DispatchWorker({
+  context: agentIpcContext,
+  readApiConfig: loadApiConfig,
+  logger: agentLogger,
+  ledgerPath: path.join(getAppDir(), 'data', 'agent', 'dispatch-ledger.json'),
+  onState: (state) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue
+      win.webContents.send('dispatch:state-changed', state)
+    }
+  }
+})
+
+const dispatchIpc = registerDispatchIpc({
+  worker: dispatchWorker,
+  agentContext: agentIpcContext,
+  getMainWindow: () => mainWindow,
+  getLanguage: () => ((getAppSettingsCache().language ?? 'zh') === 'en' ? 'en' : 'zh'),
+  logger: agentLogger
+})
+// 开机按已保存的配置拉起中继（没开派活时会立刻停掉，不留连接）
+void dispatchWorker.refresh().catch((error) => {
+  agentLogger.warn('[Dispatch] startup refresh failed', error)
 })
 
 // 初始化应用目录结构
@@ -1044,6 +1075,7 @@ async function shutdownApplication(): Promise<void> {
       [
         { name: 'approval-broker', timeoutMs: 400, run: () => approvalBroker.dispose() },
         { name: 'cloud-agent', timeoutMs: 400, run: () => cloudAgentIpc.dispose() },
+        { name: 'dispatch', timeoutMs: 400, run: () => dispatchIpc.dispose() },
         { name: 'agents', timeoutMs: 2000, run: () => agentRegistry.disposeAll() },
         { name: 'worktree-deps', timeoutMs: 400, run: () => disposeAllCoordinators() },
         {

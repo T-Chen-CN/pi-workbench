@@ -103,13 +103,10 @@ function broadcastToWindows(channel: string, payload: unknown): void {
   }
 }
 
-export function registerAgentIpc(context: AgentIpcContext): void {
-
-// ==================== Pi Agent Integration ====================
-
-// Agent 初始化（按工作区）
-handleIpc('agent:initialize', async (_event, config: {
-  workspaceDir: string
+/** 确保某个工作区有一个可用 Agent（渲染层 IPC 与派活 worker 共用这一条路径）。 */
+export async function ensureWorkspaceAgent(
+  context: AgentIpcContext,
+  workspaceDir: string,
   apiConfig: {
     provider: string
     apiUrl: string
@@ -117,28 +114,8 @@ handleIpc('agent:initialize', async (_event, config: {
     selectedModel: string
     models?: Array<{ id: string; contextWindow: number; image: boolean }>
   }
-}) => {
+): Promise<{ success: boolean; error?: string }> {
   try {
-    const { workspaceDir, apiConfig } = config
-
-    if (!isTrustedWorkspacePath(workspaceDir)) {
-      return { success: false, error: 'Workspace is not approved' }
-    }
-
-    console.log('[Main] Initializing Pi Agent with config:', {
-      provider: apiConfig.provider,
-      model: apiConfig.selectedModel,
-      workspaceDir
-    })
-
-    // 验证 API Key
-    if (!apiConfig.apiKey) {
-      return {
-        success: false,
-        error: 'API key not configured. Please set it in Settings.'
-      }
-    }
-
     const configKey = agentConfigKey(apiConfig)
     if (context.agentRegistry.shouldReuse(workspaceDir, configKey)) {
       console.log('[Main] Reusing agent for workspace:', workspaceDir)
@@ -214,6 +191,53 @@ handleIpc('agent:initialize', async (_event, config: {
     }
 
     return result
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    console.error('[Main] Agent initialization error:', errorMessage)
+    return {
+      success: false,
+      error: `Failed to initialize agent: ${errorMessage}`
+    }
+  }
+}
+
+export function registerAgentIpc(context: AgentIpcContext): void {
+
+// ==================== Pi Agent Integration ====================
+
+// Agent 初始化（按工作区）
+handleIpc('agent:initialize', async (_event, config: {
+  workspaceDir: string
+  apiConfig: {
+    provider: string
+    apiUrl: string
+    apiKey: string
+    selectedModel: string
+    models?: Array<{ id: string; contextWindow: number; image: boolean }>
+  }
+}) => {
+  try {
+    const { workspaceDir, apiConfig } = config
+
+    if (!isTrustedWorkspacePath(workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+
+    console.log('[Main] Initializing Pi Agent with config:', {
+      provider: apiConfig.provider,
+      model: apiConfig.selectedModel,
+      workspaceDir
+    })
+
+    // 验证 API Key
+    if (!apiConfig.apiKey) {
+      return {
+        success: false,
+        error: 'API key not configured. Please set it in Settings.'
+      }
+    }
+
+    return await ensureWorkspaceAgent(context, workspaceDir, apiConfig)
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     console.error('[Main] Agent initialization error:', errorMessage)

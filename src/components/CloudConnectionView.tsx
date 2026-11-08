@@ -13,6 +13,7 @@ import { Button, Caption, DataText, Field, Input, Label } from './ui'
 import { Card, CardHeader, StatusText } from './patterns'
 import { CloudDiagnosticsPanel } from './CloudDiagnosticsPanel'
 import { CloudModeSwitch } from './CloudModeSwitch'
+import { DispatchCard } from './DispatchCard'
 
 const CAPABILITY_KEYS = [
   { key: 'runStop', labelKey: 'cloudCapStop' },
@@ -476,6 +477,8 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
             <Caption className="text-ink-subtle">{t('cloudCapabilitiesHint')}</Caption>
           </div>
         </Card>
+
+        <DispatchCard connected={connection === 'connected'} />
 
         <CloudDiagnosticsPanel connected={connection === 'connected'} />
 

@@ -556,6 +556,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cloudRunSteer: (input: { runId?: string; text: string }) =>
     ipcRenderer.invoke('cloud:run:steer', input),
   cloudRunStop: (input: { runId: string }) => ipcRenderer.invoke('cloud:run:stop', input),
+  // 工作区派活：配置 / 白名单 / 急停（路径只在本机流动）
+  dispatchConfigGet: () => ipcRenderer.invoke('dispatch:config:get'),
+  dispatchConfigSet: (patch: unknown) => ipcRenderer.invoke('dispatch:config:set', patch),
+  dispatchWorkspaceAdd: () => ipcRenderer.invoke('dispatch:workspace:add'),
+  dispatchWorkspaceUpdate: (input: { id: string; label?: string; description?: string }) =>
+    ipcRenderer.invoke('dispatch:workspace:update', input),
+  dispatchWorkspaceRemove: (id: string) => ipcRenderer.invoke('dispatch:workspace:remove', id),
+  dispatchState: () => ipcRenderer.invoke('dispatch:state'),
+  dispatchStop: () => ipcRenderer.invoke('dispatch:stop'),
+  onDispatchState: (callback: (payload: unknown) => void) => {
+    const listener = (_event: unknown, payload: unknown) => callback(payload)
+    ipcRenderer.on('dispatch:state-changed', listener)
+    return () => ipcRenderer.removeListener('dispatch:state-changed', listener)
+  },
   cloudDashboardOpen: () => ipcRenderer.invoke('cloud:dashboard:open'),
   cloudDashboardClose: () => ipcRenderer.invoke('cloud:dashboard:close'),
   cloudDashboardBounds: (bounds: {

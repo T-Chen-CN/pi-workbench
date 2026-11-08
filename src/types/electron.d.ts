@@ -699,6 +699,21 @@ export interface ElectronAPI {
   webSearchSave: (config: WebSearchConfig) => Promise<WebSearchSaveResult>
 
   // 云端 Agent（远程 Hermes：API 走主进程 net 栈，SSE 由主进程解析后推帧）
+  dispatchConfigGet: () => Promise<DispatchConfigResult>
+  dispatchConfigSet: (patch: {
+    enabled?: boolean
+    workspaces?: Array<{ path?: string; id?: string; label?: string; description?: string }>
+  }) => Promise<DispatchConfigResult>
+  dispatchWorkspaceAdd: () => Promise<DispatchConfigResult & { canceled?: boolean }>
+  dispatchWorkspaceUpdate: (input: {
+    id: string
+    label?: string
+    description?: string
+  }) => Promise<DispatchConfigResult>
+  dispatchWorkspaceRemove: (id: string) => Promise<DispatchConfigResult>
+  dispatchState: () => Promise<DispatchConfigResult>
+  dispatchStop: () => Promise<DispatchConfigResult>
+  onDispatchState: (callback: (payload: DispatchWorkerState) => void) => () => void
   cloudConfigGet: () => Promise<CloudConfigGetResult>
   cloudConnect: () => Promise<CloudConnectResult>
   cloudDisconnect: () => Promise<{ success: boolean; error?: string }>
@@ -1690,6 +1705,51 @@ export interface AppInfoResult {
 export interface AppActiveWorkResult {
   success: boolean
   terminal: boolean
+}
+
+/** 派活：本机账本的一条记录 */
+export interface DispatchLedgerEntry {
+  taskId: string
+  workspaceId: string
+  workspaceLabel: string
+  state: 'completed' | 'failed' | 'canceled'
+  summary: string
+  sessionId: string | null
+  at: number
+}
+
+/** 派活 worker 的运行态（主进程推送，界面只读） */
+export interface DispatchWorkerState {
+  enabled: boolean
+  connected: boolean
+  lastFrameAt: number | null
+  lastError: string | null
+  runningTaskId: string | null
+  runningWorkspace: string | null
+  queued: number
+  publishedAt: number | null
+  recent: DispatchLedgerEntry[]
+}
+
+export interface DispatchWorkspaceView {
+  id: string
+  path: string
+  label: string
+  description: string
+  exists: boolean
+  published: boolean
+}
+
+export interface DispatchPublicConfig {
+  enabled: boolean
+  workspaces: DispatchWorkspaceView[]
+  state: DispatchWorkerState
+}
+
+export interface DispatchConfigResult {
+  success: boolean
+  config?: DispatchPublicConfig
+  error?: string
 }
 
 declare global {
