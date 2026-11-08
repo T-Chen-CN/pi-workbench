@@ -96,8 +96,11 @@ function makeExecutor(outcome?: () => Promise<{
         sessionId: `session-${task.taskId}`
       }
     },
+    // 真实执行器 abort 后 run 会立刻返回（带失败报告），这里同样放行，
+    // 否则「取消后 drain 收尾」的路径在测试里永远不会发生
     cancel: async (taskId: string) => {
       cancels.push(taskId)
+      self.release()
       return true
     }
   }
@@ -348,6 +351,10 @@ describe('dispatch worker', () => {
     await worker.stopNow()
     expect(executor.cancels).toEqual(['t-1'])
     expect(worker.getState().enabled).toBe(false)
+    // 急停与「关派活开关」要能分辨：账本里得是「本机急停」
+    await vi.waitFor(() =>
+      expect(readLedger(ledgerPath(tmp))[0]?.summary).toBe('本机急停')
+    )
     // 急停要落盘 enabled:false，否则重启后中继又自己连上
     expect(readDispatchConfig().enabled).toBe(false)
     // 并且把清单标成不可派活，让云端立刻停派；工作区本身留着，模型能据此判断该请人打开开关
@@ -373,6 +380,39 @@ describe('dispatch worker', () => {
           (call.body as { kind?: string }).kind === 'failed'
       )
     ).toBe(false)
+  })
+
+  it('cancels the running task when the switch is turned off', async () => {
+    const { client, reports } = makeClient()
+    const executor = makeExecutor()
+    const { worker } = createWorker(executor, client)
+    await worker.refresh()
+    await worker.handleFrame({ type: 'task.assigned', taskId: 't-off', workspaceId: wsId(), prompt: 'a' })
+    await vi.waitFor(() => expect(executor.runs).toHaveLength(1))
+
+    // 关开关走的是 refresh() → stop()：必须同样 abort，不能只断开中继把任务留在后台写文件
+    await writeDispatchConfig({
+      enabled: false,
+      workspaces: [{ id: '', path: workspace, label: 'Repo', description: '' }]
+    })
+    await worker.refresh()
+
+    expect(executor.cancels).toEqual(['t-off'])
+    await vi.waitFor(() =>
+      expect(readLedger(ledgerPath(tmp))[0]).toMatchObject({
+        taskId: 't-off',
+        state: 'canceled',
+        summary: '派活已关闭'
+      })
+    )
+    expect(
+      reports.some(
+        (call) =>
+          (call.body as { taskId?: string }).taskId === 't-off' &&
+          (call.body as { kind?: string }).kind === 'canceled'
+      )
+    ).toBe(true)
+    expect(worker.getState().runningTaskId).toBe(null)
   })
 
   it('cancels queued tasks on emergency stop instead of leaving them hanging', async () => {

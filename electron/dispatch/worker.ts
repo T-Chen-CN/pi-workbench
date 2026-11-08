@@ -185,9 +185,45 @@ export class DispatchWorker {
     await this.publishCatalog()
   }
 
-  async stop(): Promise<void> {
+  /**
+   * 停止派活：**正在跑的任务也停**。
+   *
+   * 只拒绝反问不 abort，会让工具错误被模型当成「云端回答」写进文件（实测写出过
+   * 「派活已关闭」这种内容），所以取消必须三件齐做：标原因、abort 会话、等 drain
+   * 收尾。回报要在中继断开**之前**发，否则云端只看到 `running` 一直等到租约超时。
+   */
+  async stop(reason = '派活已关闭'): Promise<void> {
     if (this.catalogTimer) clearInterval(this.catalogTimer)
     this.catalogTimer = null
+
+    // 队列里还没开跑的：先摘出队列再回报终态。顺序不能反 —— 先 abort 正在跑的任务，
+    // drain 会在我们清队列之前就领走下一个，那条任务既没被取消也没跑完。
+    const queued = this.queue
+    this.queue = []
+    for (const item of queued) {
+      await this.report(item.taskId, { kind: 'canceled', error: reason }).catch(
+        () => undefined
+      )
+      this.record({
+        taskId: item.taskId,
+        workspaceId: item.workspaceId,
+        workspaceLabel: item.workspaceId,
+        state: 'canceled',
+        summary: reason,
+        sessionId: null,
+      })
+    }
+
+    const running = this.state.runningTaskId
+    if (running) {
+      this.cancelReasons.set(running, reason)
+      this.rejectQuestion(running, reason)
+      await this.executor.cancel(running).catch((error: unknown) => {
+        this.deps.logger.warn('[Dispatch] cancelling running task failed', error)
+      })
+      await this.settleDrain()
+    }
+
     // 先告诉网关「这台设备不再接活」：云端必须立刻看到关着的开关，否则会在 90s 的
     // 「可能只是抖动」窗口里继续派活，任务排队到用户重新打开开关后才突然执行。
     await this.publishDisabledCatalog()
@@ -196,7 +232,7 @@ export class DispatchWorker {
     if (relay) await relay.stop()
     this.queue = []
     this.stopProgress()
-    for (const taskId of [...this.questions.keys()]) this.rejectQuestion(taskId, '派活已关闭')
+    for (const taskId of [...this.questions.keys()]) this.rejectQuestion(taskId, reason)
     this.patch({
       enabled: false,
       connected: false,
@@ -204,6 +240,14 @@ export class DispatchWorker {
       runningWorkspace: null,
       question: null,
     })
+  }
+
+  /** 等 drain 把当前任务收尾（abort 后通常几十毫秒，兜底 5s） */
+  private async settleDrain(timeoutMs = 3000): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (this.draining && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
   }
 
   /**
@@ -214,25 +258,14 @@ export class DispatchWorker {
    * 被中止的任务由 drain 里按 `canceled` 回报（见 `cancelReasons`）。
    */
   async stopNow(): Promise<void> {
-    const taskId = this.state.runningTaskId
     const config = readDispatchConfig()
     if (config.enabled || config.workspaces.length > 0) {
       await writeDispatchConfig({ ...config, enabled: false }).catch((error: unknown) => {
         this.deps.logger.warn('[Dispatch] persisting emergency stop failed', error)
       })
     }
-    // 队列里还没开跑的：直接给云端一个终态，否则它会一直等到超时
-    const queued = this.queue
-    this.queue = []
-    for (const item of queued) {
-      await this.report(item.taskId, { kind: 'canceled', error: '本机急停' }).catch(() => undefined)
-    }
-    if (taskId) {
-      this.cancelReasons.set(taskId, '本机急停')
-      this.rejectQuestion(taskId, '本机急停')
-      await this.executor.cancel(taskId)
-    }
-    await this.stop()
+    // 队列与运行中任务的收尾统一在 stop() 里做，只是原因写「本机急停」
+    await this.stop('本机急停')
   }
 
   /** 只要设备还配对着就能建客户端（关掉派活时也要用它把空清单报上去） */
@@ -589,7 +622,7 @@ export class DispatchWorker {
     this.questions.delete(taskId)
     clearTimeout(pending.timer)
     this.patch({ question: null })
-    pending.reject(new Error(reason))
+    pending.reject(new Error(`${reason}｜这不是云端回答，本次任务不要再写任何文件，直接结束`))
   }
 
   // -- 进度心跳 -----------------------------------------------------------
