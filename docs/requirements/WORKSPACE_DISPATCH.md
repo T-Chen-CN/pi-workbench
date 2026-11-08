@@ -109,11 +109,13 @@
 
 任务信封与状态机照 A2A v1.0 写（不自创）：`TASK_STATE_SUBMITTED` / `WORKING` / `INPUT_REQUIRED` / `COMPLETED` / `FAILED` / `CANCELED`。这样将来任何 A2A 客户端都能对接网关，我们也不用发明状态语义。
 
+**分级落地**：P1/P2 只实现内部工具与中继，**不暴露** Agent Card 与 `/a2a` JSON-RPC 端点（没有外部客户端要用，先少写 400 行）；对外兼容放在 P3，协议语义从第一天就按 A2A 写，所以 P3 只是加一层信封映射，不用改状态机。
+
 参考实现（仅作先例，不引代码）：rsclaw 的 hub-spoke A2A 中继、A2A 规范的 streaming / async 章节、GitHub Actions self-hosted runner 的拉取式队列参数。
 
-### 4.2 Agent Card
+### 4.2 Agent Card（P3）
 
-`GET /.well-known/agent-card.json`（管理密钥或 A2A bearer 认证），把**可派活工作区**投影成 skills：
+P1/P2 不实现本节；工具与目录 UI 直接读 store。P3 再加 `GET /.well-known/agent-card.json`（管理密钥或 A2A bearer 认证），把**可派活工作区**投影成 skills：
 
 ```json
 {
@@ -141,6 +143,7 @@
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `taskId` | string | 网关生成（`dt_<uuid>`），全局唯一 |
+| `clientToken` | string | **幂等键**，调用方给的稳定值（默认 `<contextId 或 sessionId>:<轮次序号>`）。同一个 token 重复调用只返回同一个任务，不重复派活（§5.2） |
 | `contextId` | string | 云端会话的一条连续上下文；同一 `contextId` 下的任务按创建顺序排列，供 `a2a_history` 式回看 |
 | `deviceId` / `workspaceId` | string | 目标；必须都在目录里且 `dispatchable=true` |
 | `state` | enum | 见 §5.2 |
@@ -161,7 +164,7 @@
 | 工具 | 语义 |
 | --- | --- |
 | `local_workspaces()` | 返回目录（设备 / 工作区 / 在线 / 可派活 / 忙闲） |
-| `local_dispatch(workspace, prompt, context_id?)` | 入队并**阻塞等待**：拿到终态或 90s 超时即返回 |
+| `local_dispatch(workspace, prompt, client_token?, context_id?)` | 入队并**阻塞等待**：拿到终态或 90s 超时即返回；同 `client_token` 重放直接返回已有任务 |
 | `local_task_get(task_id)` | 读当前状态（超时返回 `WORKING` 后用它续查） |
 | `local_task_reply(task_id, answer)` | 回答 `INPUT_REQUIRED`，让本地同一轮继续 |
 | `local_task_cancel(task_id)` | 取消（在工具边界生效） |
@@ -216,6 +219,7 @@
 ```sql
 CREATE TABLE IF NOT EXISTS dispatch_tasks (
   task_id          TEXT PRIMARY KEY,
+  client_token     TEXT NOT NULL,
   context_id       TEXT NOT NULL,
   device_id        TEXT NOT NULL,
   workspace_id     TEXT NOT NULL,
@@ -236,6 +240,8 @@ CREATE TABLE IF NOT EXISTS dispatch_tasks (
   finished_at      INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_dispatch_state ON dispatch_tasks (state, device_id);
+-- 幂等：同一个调用方的 token 只能对应一个任务，重放直接拿回原任务
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dispatch_token ON dispatch_tasks (client_token);
 
 CREATE TABLE IF NOT EXISTS dispatch_events (
   id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -272,6 +278,7 @@ queued ──claim──► running ──┬── done        → completed
 - **claim 必须原子**：`UPDATE dispatch_tasks SET state='running', claimed_at=?, attempt=attempt+1 WHERE task_id=? AND state='queued'`，`rowcount=0` 表示被别人抢走。
 - **`input_required` 不是终态**：本地会话挂住不结束（见 §7.2），云端 `local_task_reply` 后回到 `running`；超过 `deadlineAt` 仍无回答则 `expired`，本地那一轮被 abort。
 - **终态不可逆**：进入 `completed` / `failed` / `canceled` / `expired` 后不再接受任何回报（重复回报记事件、回 200 但不改状态）。
+- **幂等先于状态机**：入队先按 `client_token` 查（`INSERT ... ON CONFLICT(client_token) DO NOTHING`），命中就返回已有任务并走同样的等待逻辑。否则云端重试 / 双击会派两个活，两边同时改一棵树。
 
 ---
 
@@ -282,12 +289,12 @@ queued ──claim──► running ──┬── done        → completed
 | 文件 | 改动 |
 | --- | --- |
 | `hub/db.py` | schema 2 + 三张新表 + 迁移 |
-| `hub/dispatch.py` | 新增：任务 store、状态机、claim 原子性、目录读写、事件清理 |
-| `hub/a2a.py` | 新增：Agent Card 生成、`SendMessage` / `GetTask` / `SubscribeToTask` 的薄映射（JSON-RPC 信封） |
-| `hub/routes/a2a.py` | 新增：`/.well-known/agent-card.json`、`POST /a2a`、`GET /v1/hub/dispatch/workspaces` |
+| `hub/dispatch.py` | 新增：任务 store、状态机、claim 原子性、幂等（`client_token`）、目录读写、事件清理 |
+| `hub/routes/workspaces.py` | 新增：`GET /v1/hub/dispatch/workspaces`（目录的扁平版，给工具与设置页） |
+| `hub/routes/a2a.py` | **P3**：`/.well-known/agent-card.json`、`POST /a2a`（JSON-RPC 信封） |
 | `hub/routes/relay.py` | 新增：`GET /v1/hub/relay/stream`（SSE）、`POST /v1/hub/relay/report`、`POST /v1/hub/workspaces` |
 | `hub/routes/__init__.py` | 注册新路由 |
-| `tools.py` | 新增：`local_workspaces` / `local_dispatch` / `local_task_get` / `local_task_reply` / `local_task_cancel`，toolset `pi_workbench`；`check_fn` 在开关关闭时让工具不可见 |
+| `tools.py` | 新增：`local_workspaces` / `local_dispatch` / `local_task_get` / `local_task_reply` / `local_task_cancel`，toolset `pi_workbench`；开关关闭时工具仍可被调，但**直接返回** `dispatch_disabled`（隐掉工具会让模型以为能力不存在） |
 | `shim.py` | `register(ctx)` 里注册工具（**保持 shim 极薄**：只做注册与 store 注入）。真实签名是 `register_tool(name, toolset, schema, handler, check_fn=None, requires_env=None, is_async=False, description="", emoji="", override=False)`；`schema` 必须自带 `name`/`description`/`parameters` |
 | `adapter.py` | `connect()` 里把 store 实例挂到模块级，供工具 handler 使用（同进程，不另开服务） |
 | `plugin.yaml` | 版本 0.1.2 → 0.2.0（新增能力，非补丁）；`tools` 声明 |
@@ -301,6 +308,8 @@ queued ──claim──► running ──┬── done        → completed
 - `hermes --profile pi-cloud tools enable <toolset> --platform api_server`：会把整张白名单**规范化重写**（排序，并剔除被 `agent.disabled_toolsets` 关掉的项，实测 `code_execution` 被移除），不是纯追加。
 
 新装 / 升版后必须重启 gateway 单元才会重新注册工具（§13 ①）。
+
+**启动自检（必做）**：`register()` 里检查 `platform_toolsets.api_server` 是否包含我们的 toolset，不在就打一条显式 WARN，写清“派活工具对模型不可见”与要加的那一行。这个坑无声无息：插件装了、工具注册了、模型就是看不到，**不能只靠人记得**。只告警，**不自动改宿主的 `config.yaml`**（插件写宿主配置太危险）。
 
 ### 6.2 桌面端
 
@@ -365,28 +374,29 @@ Hermes → local_dispatch(workspace, prompt)
 
 | 期 | 内容 | 估量 |
 | --- | --- | --- |
-| **P1** | 目录 + 单向派活 + 阻塞等结果 + 审计 + 急停 | 插件 ~1000 行 / 桌面 ~900 行 / 测试 ~900 行，5–7 人日 |
+| **P1** | 目录 + 单向派活 + 阻塞等结果 + 审计 + 急停（**不含对外 A2A 端点**） | 插件 ~850 行 / 桌面 ~900 行 / 测试 ~800 行，4–6 人日 |
 | **P2** | `input_required` 续跑 + 断线重连（`SubscribeToTask`）+ 租约重投 | +2–3 人日 |
-| **P3** | 多设备路由调优（description）、外部 A2A 客户端互操作、push webhook | +2–3 人日 |
+| **P3** | Agent Card + `/a2a` JSON-RPC + `SubscribeToTask` 对外端点、多设备路由调优（description）、push webhook | +2–3 人日 |
 
 ### 8.1 P1 验收场景（必须手打）
 
 | # | 步骤 | 预期 |
 | --- | --- | --- |
 | D1 | 云端会话里说「让本地 Tyc 工作区把 README 里的测试命令跑一遍」 | 工具被调用；本地出现派活会话并真的执行；云端拿到摘要与变更列表 |
-| D2 | 关掉派活总开关后再派 | 工具不可见或明确回 `dispatch_disabled`，不出现排队任务 |
+| D2 | 关掉派活总开关后再派 | 工具仍在，但明确回 `dispatch_disabled`，不出现排队任务 |
 | D3 | 只勾选 A 工作区，要求派到 B | B 不在目录里；工具回报 `no_workspace` 并列出可用工作区 |
 | D4 | 关掉桌面（或用掉线设备）后派活 | 90s 内返回 `device_offline`/`working`，用户看到明确说明，无悬挂任务 |
 | D5 | 派活进行中在桌面点急停 | 本地会话 abort；任务 `canceled`；云端拿到 canceled 并告知用户 |
 | D6 | 查两端审计 | 本地 `audit.jsonl` 与 hub `audit_events` 各有一条派活记录；7 天后任务行被清理、审计行保留 |
+| D7 | 用同一个 `client_token` 连派两次 | 只有一个任务；第二次直接返回同一个 `taskId` 与它的状态 |
 
 ### 8.2 P2 验收场景
 
 | # | 步骤 | 预期 |
 | --- | --- | --- |
-| D7 | 指令故意含糊（"把那个删了"） | 本地 Agent 反问；云端自己决定或问用户；回答后同一轮继续并完成 |
-| D8 | 执行中断网（拔网线 30s） | 中继重连、任务状态不丢；云端的 `local_task_get` 能拿到真实状态 |
-| D9 | 设备在 claim 后失联 | 租约到期重投（`attempt=2`）；同一任务不被两台设备同时执行 |
+| D8 | 指令故意含糊（"把那个删了"） | 本地 Agent 反问；云端自己决定或问用户；回答后同一轮继续并完成 |
+| D9 | 执行中断网（拔网线 30s） | 中继重连、任务状态不丢；云端的 `local_task_get` 能拿到真实状态 |
+| D10 | 设备在 claim 后失联 | 租约到期重投（`attempt=2`）；同一任务不被两台设备同时执行 |
 
 ---
 
@@ -482,3 +492,9 @@ Hermes → local_dispatch(workspace, prompt)
 2. §6.1 新增部署步骤：`platform_toolsets.api_server` 必须登记我们的工具集，且新装 / 升版后要重启 gateway。
 3. §9 新增两条风险：取消后的孤儿任务、中继流与代理 SSE 的槽位冲突。
 4. §7.2 明确 P2 的落地方式：本地用阻塞式工具等云端答案，而不是"结束一轮再起一轮"。
+
+### 13.3 验证后定下的三处调整（2026-11-09）
+
+1. **P1 不含对外 A2A 端点**（§4.1 / §4.2 / §6.1 / §8）：Agent Card 与 `/a2a` JSON-RPC 推到 P3。P1/P2 内部工具就够跑通全链路，少写约 400 行；协议语义仍按 A2A 写，P3 只加信封映射。
+2. **工具集登记改成启动自检**（§6.1）：不登记就静默失效，这个坑只能靠一条显式 WARN 兜住；插件不自动改宿主配置。
+3. **`local_dispatch` 加幂等键 `client_token`**（§4.3 / §5.1 / §5.2）：云端重放或双击不会派两个活。默认值 `<contextId 或 sessionId>:<轮次序号>`，store 用唯一索引兜底。
