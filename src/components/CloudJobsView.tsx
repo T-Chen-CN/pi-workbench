@@ -178,7 +178,7 @@ export const CloudJobsView: React.FC<{ active: boolean; onNavigate?: (view: 'clo
 
   return (
     // 四个云端页面是叠放的常驻视图：必须 absolute inset-0 + 非激活时 inert，
-    // 否则会跑进文档流、盖在别的页面上（真机上出现过）
+    // 否则会跑进文档流、盖在别的页面上
     <div
       aria-hidden={!active}
       inert={!active}

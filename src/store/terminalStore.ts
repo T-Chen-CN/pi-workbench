@@ -167,7 +167,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       void spawn(workspacePath, cwd, cols, rows)
       return
     }
-    // 换工作树/会话导致 cwd 变化：与原来的 key 重挂一致，重开一个 shell
+    // 换工作树 / 会话导致 cwd 变化：按 key 重挂，重开一个 shell
     if (entry.cwd !== cwd && entry.status !== 'starting') {
       get().restart(workspacePath, cwd, cols, rows)
       return

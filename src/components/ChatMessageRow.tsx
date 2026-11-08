@@ -362,7 +362,7 @@ export const ChatMessageRow = React.memo(function ChatMessageRow({
   const { t, language } = useI18nStore()
 
   if (message.role === 'system') {
-    // 旧的压缩提示是纯文本分隔线；新结构下压缩点是 part，二者都能渲染
+    // 历史会话里的压缩提示是纯文本分隔线；现行结构是 part。两种都要能渲染。
     if (message.parts?.length) {
       return (
         <AgentParts

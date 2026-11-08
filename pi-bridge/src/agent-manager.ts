@@ -2329,7 +2329,7 @@ export class AgentManager {
           .join('\n')
       }
 
-      // 输出撞上限：如实报错，不再伪装成「成功但没有正文」
+      // 输出撞上限：如实报错（`success:false` + `errorCode`），不冒充成功
       if (lastAssistant.stopReason === 'length') {
         const limit = this.outputLimit()
         const output = usage?.output ?? 0

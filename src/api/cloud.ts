@@ -82,7 +82,7 @@ function api() {
 /**
  * `ipcRenderer.invoke` 在线路缺失时会直接 reject（「No handler registered …」）：
  * 渲染层拿到的不是 `{success:false}` 而是异常。折成结果对象，避免调用方卡在
- * loading 里（主进程还是上一版构建时最容易踩到）。
+ * loading 里（主进程与 preload 频道不一致时最容易踩到）。
  */
 function invokeError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error ?? '')

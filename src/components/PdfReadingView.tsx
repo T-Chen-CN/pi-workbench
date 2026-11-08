@@ -136,8 +136,8 @@ const PdfPage: React.FC<PdfPageProps> = ({ document, pageNumber, scale, size, on
 /**
  * PDF 阅读视图：pdf.js 自绘。
  *
- * 之前用 Chromium 内置查看器（iframe），滚动要在嵌套的 OOPIF 里做命中测试与合成，
- * 明显发涩；工具条也是它的黑盒 UI。这里换成单一滚动容器 + canvas 虚拟化，
+ * 不用 Chromium 内置查看器：它的滚动要在嵌套 OOPIF 里做命中测试与合成（发涩），
+ * 工具条也不可定制。这里用单一滚动容器 + canvas 虚拟化，
  * 模板与 Markdown / 媒体阅读视图一致。
  */
 export const PdfReadingView: React.FC<{ file: OpenFile }> = ({ file }) => {

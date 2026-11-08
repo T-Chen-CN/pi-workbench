@@ -259,7 +259,7 @@ export interface ChainLevelGrid {
  *
  * 列宽取这一层最宽的卡片（文件夹 176 / 文件 208），所以同层列距固定、列边对齐；
  * 各列高度按各自卡片高度累加（文件夹 76 与文件 64 混排也不会重叠），块高取最高列。
- * 一层只有几到十几张时就是单列，和以前一样。
+ * 一层只有几到十几张时就是单列（不折行）。
  */
 export function chainLevelGrid(kids: CanvasNodeInput[]): ChainLevelGrid {
   if (kids.length === 0) return { points: [], width: 0, height: 0 }

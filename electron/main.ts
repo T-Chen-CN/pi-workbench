@@ -1106,7 +1106,7 @@ app.on('will-quit', (event) => {
 
 app.on('window-all-closed', () => {
   // 收进托盘时窗口只是隐藏，不会走到这里；走到这里说明主窗口真的关了，
-  // 托盘常驻也没有意义，和以前一样退出（macOS 保留 Dock 行为）。
+  // 托盘常驻已无意义：直接退出（macOS 保留 Dock 行为）。
   if (process.platform !== 'darwin') {
     app.quit()
   }

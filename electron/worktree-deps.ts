@@ -322,7 +322,7 @@ export class WorktreeDepsInstaller {
     // 先登记再启动：启动时同步失败（命令不存在）会立刻结算并从表里删掉自己
     this.running.set(worktreePath, entry)
     if (this.active === 0) {
-      // 空闲：同步启动，和以前一样不耽误时间
+      // 空闲：同步启动，不耽误排在前面的调用
       this.active = 1
       entry.promise = this.launch(worktreePath, info, entry)
       return entry.promise

@@ -30,7 +30,7 @@ interface PolicyClient {
 
 /**
  * 读 / 写审批档位走**网关**（`/api/config` 由插件转发到控制台），
- * 只有设备 token 这一种凭据 —— 不再直连 `dash.`（C-1/C-2）。
+ * 只有设备 token 这一种凭据：不直连控制台域名，也不持有任何控制台凭据。
  */
 function client(): PolicyClient {
   const transport = cloudTransport()
