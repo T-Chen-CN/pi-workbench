@@ -14,7 +14,7 @@
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
 | 质量门槛 | `type-check` · `lint` · `npm test`（159 文件 / 1895 用例）· `design-system` 全绿 |
-| 网关插件 | `pi-workbench-gateway` **0.2.0**（独立公开仓库，已真机上线；0.2.0 新增工作区派活） |
+| 网关插件 | `pi-workbench-gateway` **0.2.1**（独立公开仓库，已真机上线；0.2.0 新增工作区派活，0.2.1 补「关闭派活时清排队任务」） |
 
 ## 正在做 / 下一步
 
@@ -22,7 +22,7 @@
 - **R-23 剩余子项**：B4 续写截断的后续动作、B7 上下文临界预警、B8 轻任务预算、`reasoning_effort` 联动——见 [BACKLOG](./BACKLOG.md) §3。
 - **平台手动验收** V-01（macOS dmg）/ V-02（Linux AppImage）尚未做。
 - **云端后置**：C-08 CDP 屏幕接管 → C-09 Kanban → C-10 拆窗 → C-11 IM / 语音 / 遥测 → C-12 对外写 MCP 门。见 [CLOUD_AGENT §9.4](../requirements/CLOUD_AGENT.md)。
-- **H3 工作区派活 P1 已落地**（插件 0.2.0 + 桌面开发版，端到端跑通：中继进真 hub、模型能调 `local_*`、任务落本机并回报）；P2（`input_required` / 租约重投）未开工——见 [WORKSPACE_DISPATCH](../requirements/WORKSPACE_DISPATCH.md) §15。
+- **H3 工作区派活 P1 已落地并 GUI 手打验收**（插件 0.2.1 + 桌面开发版）：中继进真 hub、模型能调 `local_*`、任务落本机并回报；急停 / 云端取消 / 幂等 / 断线重放 / 关掉派活拒派都实测通过；P2（`input_required` / 租约重投）未开工——见 [WORKSPACE_DISPATCH](../requirements/WORKSPACE_DISPATCH.md) §15。
 
 ## 已交付（一行一项，细节在 git）
 

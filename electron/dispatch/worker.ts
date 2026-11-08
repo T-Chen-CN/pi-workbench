@@ -19,6 +19,7 @@ import {
   publicWorkspaces,
   readDispatchConfig,
   findWorkspace,
+  writeDispatchConfig,
   type DispatchConfig,
 } from './config.js'
 import { DispatchExecutor } from './executor.js'
@@ -96,6 +97,12 @@ export class DispatchWorker {
   private executor: DispatchExecutorLike
   private state: DispatchWorkerState = { ...DEFAULT_STATE }
   private queue: Array<{ taskId: string; workspaceId: string; prompt: string }> = []
+  /**
+   * 本机收到的取消：taskId → 原因（「本机急停」/「云端取消」）。
+   * 这些任务的结果要报 canceled 而不是 failed —— abort 会让 chat() 抛错，
+   * 照原样上报会把一次刻意的取消写成失败。
+   */
+  private readonly cancelReasons = new Map<string, string>()
   private draining = false
   private catalogTimer: ReturnType<typeof setInterval> | null = null
 
@@ -146,6 +153,9 @@ export class DispatchWorker {
   async stop(): Promise<void> {
     if (this.catalogTimer) clearInterval(this.catalogTimer)
     this.catalogTimer = null
+    // 先告诉网关「这台设备不再接活」：云端必须立刻看到关着的开关，否则会在 90s 的
+    // 「可能只是抖动」窗口里继续派活，任务排队到用户重新打开开关后才突然执行。
+    await this.publishDisabledCatalog()
     const relay = this.relay
     this.relay = null
     if (relay) await relay.stop()
@@ -153,29 +163,71 @@ export class DispatchWorker {
     this.patch({ enabled: false, connected: false, runningTaskId: null, runningWorkspace: null })
   }
 
-  /** 界面「急停」：断中继 + 取消正在跑的任务 */
+  /**
+   * 界面「急停」：关掉派活 + 断中继 + 中止正在跑的任务。
+   *
+   * 三件事必须一起做：只断中继不 abort 会留下仍在写文件的会话；只 abort 不落盘
+   * `enabled:false`，界面上的开关和磁盘会不一致（下次重启又自己连上）。
+   * 被中止的任务由 drain 里按 `canceled` 回报（见 `cancelReasons`）。
+   */
   async stopNow(): Promise<void> {
     const taskId = this.state.runningTaskId
+    const config = readDispatchConfig()
+    if (config.enabled || config.workspaces.length > 0) {
+      await writeDispatchConfig({ ...config, enabled: false }).catch((error: unknown) => {
+        this.deps.logger.warn('[Dispatch] persisting emergency stop failed', error)
+      })
+    }
+    // 队列里还没开跑的：直接给云端一个终态，否则它会一直等到超时
+    const queued = this.queue
+    this.queue = []
+    for (const item of queued) {
+      await this.report(item.taskId, { kind: 'canceled', error: '本机急停' }).catch(() => undefined)
+    }
     if (taskId) {
+      this.cancelReasons.set(taskId, '本机急停')
       await this.executor.cancel(taskId)
-      await this.report(taskId, {
-        kind: 'canceled',
-        error: '本机用户急停',
-      }).catch(() => undefined)
     }
     await this.stop()
   }
 
-  private clientFor(config: DispatchConfig): CloudClient | null {
+  /** 只要设备还配对着就能建客户端（关掉派活时也要用它把空清单报上去） */
+  private cloudClient(): CloudClient | null {
     const cloud = readCloudConfig()
     if (!cloud.hasDeviceToken || !cloud.deviceToken || !cloud.gatewayUrl) return null
-    if (config.workspaces.length === 0) return null
     const factory = this.deps.createClient ?? createCloudClient
     try {
       return factory({ baseUrl: cloud.gatewayUrl, credential: cloud.deviceToken })
     } catch (error) {
       this.deps.logger.warn('[Dispatch] cannot build cloud client', error)
       return null
+    }
+  }
+
+  private clientFor(config: DispatchConfig): CloudClient | null {
+    if (config.workspaces.length === 0) return null
+    return this.cloudClient()
+  }
+
+  /**
+   * 停止 / 关闭派活时把清单标成「不可派活」。
+   *
+   * 保留工作区本身（不报空列表）：云端模型再派时会拿到「这个工作区没打开派活开关」，
+   * 而不是「这台机器上什么都没有」——前者能让它判断该请用户打开开关。
+   */
+  private async publishDisabledCatalog(): Promise<void> {
+    const client = this.cloudClient()
+    if (!client) return
+    const config = readDispatchConfig()
+    try {
+      await publishWorkspaces(
+        client,
+        { enabled: false, workspaces: publicWorkspaces(config) },
+        // 这条是「关开关 / 退出」路径上的，用户正等着界面响应，别等满 15s
+        { timeoutMs: 3_000 }
+      )
+    } catch (error) {
+      this.deps.logger.warn('[Dispatch] publishing disabled catalog failed', error)
     }
   }
 
@@ -257,6 +309,7 @@ export class DispatchWorker {
       return
     }
     if (this.state.runningTaskId === taskId) {
+      this.cancelReasons.set(taskId, '云端取消')
       await this.executor.cancel(taskId)
     }
   }
@@ -316,8 +369,14 @@ export class DispatchWorker {
           workspacePath: workspace.path,
           prompt: next.prompt,
         })
+        // 取消过的任务：报告与账本都按 canceled 落，不要被 abort 产生的失败覆盖
+        const cancelReason = this.cancelReasons.get(next.taskId)
+        this.cancelReasons.delete(next.taskId)
+        const base = cancelReason
+          ? { kind: 'canceled' as const, error: cancelReason }
+          : outcome.report
         // 本地会话 id 一定要带上（云端拿它做「派活 → 本机会话」的锚点）
-        const report = { ...outcome.report }
+        const report = { ...base }
         if (!report.localSessionId && outcome.sessionId) report.localSessionId = outcome.sessionId
         await this.report(next.taskId, report).catch((error: unknown) => {
           this.deps.logger.warn('[Dispatch] outcome report failed', error)
@@ -326,8 +385,8 @@ export class DispatchWorker {
           taskId: next.taskId,
           workspaceId: next.workspaceId,
           workspaceLabel: workspace.label,
-          state: outcome.report.kind === 'done' ? 'completed' : 'failed',
-          summary: outcome.report.summary ?? outcome.report.error ?? '',
+          state: cancelReason ? 'canceled' : report.kind === 'done' ? 'completed' : 'failed',
+          summary: report.summary ?? report.error ?? '',
           sessionId: outcome.sessionId,
         })
         this.patch({ runningTaskId: null, runningWorkspace: null })

@@ -143,3 +143,43 @@ describe('DispatchCard', () => {
     expect(screen.getByText(zh('cloudDispatchLocalOnly'))).toBeTruthy()
   })
 })
+
+describe('DispatchCard recent tasks', () => {
+  const entry = {
+    taskId: 'dt_1',
+    workspaceId: 'ws-1',
+    workspaceLabel: 'Repo',
+    state: 'completed' as const,
+    summary: '已完成：创建 ACCEPTANCE.md',
+    sessionId: 's-1',
+    at: 1,
+  }
+
+  it('fills the ledger from the first load instead of staying empty', async () => {
+    installBridge(config({ state: { ...config().config.state, recent: [entry] } }))
+    render(<DispatchCard connected />)
+    await waitFor(() => expect(screen.getByText('已完成：创建 ACCEPTANCE.md')).toBeTruthy())
+  })
+
+  it('merges pushed worker state (raw shape) into config and ledger', async () => {
+    const stub = installBridge(config())
+    render(<DispatchCard connected />)
+    await waitFor(() => expect(stub.listeners).toHaveLength(1))
+
+    // 主进程推送的是运行态本身，不是 {config, state}
+    stub.listeners[0]({
+      enabled: true,
+      connected: false,
+      lastFrameAt: null,
+      lastError: 'boom',
+      runningTaskId: null,
+      runningWorkspace: null,
+      queued: 0,
+      publishedAt: 1,
+      recent: [entry],
+    })
+
+    await waitFor(() => expect(screen.getByText(zh('cloudDispatchDisconnected'))).toBeTruthy())
+    expect(screen.getByText('已完成：创建 ACCEPTANCE.md')).toBeTruthy()
+  })
+})

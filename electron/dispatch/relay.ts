@@ -132,12 +132,13 @@ export class DispatchRelay {
 /** 上报工作区清单（全量替换）。失败只记日志：下一拍心跳会再报一次。 */
 export async function publishWorkspaces(
   client: CloudClient,
-  input: { enabled: boolean; workspaces: Array<{ id: string; label: string; description: string }> }
+  input: { enabled: boolean; workspaces: Array<{ id: string; label: string; description: string }> },
+  options: { timeoutMs?: number } = {}
 ): Promise<void> {
   await client.request('/v1/hub/workspaces', {
     method: 'POST',
     body: { dispatchable: input.enabled, workspaces: input.workspaces },
-    timeoutMs: 15_000,
+    timeoutMs: options.timeoutMs ?? 15_000,
   })
 }
 

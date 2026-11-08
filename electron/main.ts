@@ -635,10 +635,6 @@ const dispatchIpc = registerDispatchIpc({
   getLanguage: () => ((getAppSettingsCache().language ?? 'zh') === 'en' ? 'en' : 'zh'),
   logger: agentLogger
 })
-// 开机按已保存的配置拉起中继（没开派活时会立刻停掉，不留连接）
-void dispatchWorker.refresh().catch((error) => {
-  agentLogger.warn('[Dispatch] startup refresh failed', error)
-})
 
 // 初始化应用目录结构
 async function initAppDirectories() {
@@ -976,6 +972,12 @@ app.whenReady().then(async () => {
     await initializeWebSearch()
   })()
   void startupReady.catch((error) => console.warn('[Main] Startup preparation failed:', error))
+
+  // 派活中继在 ready 之后才拉起：它要读云端凭据（safeStorage 在 app ready 之前
+  // 不可用，模块顶层调用只会拿到一个解密失败的假配置）。
+  void startupReady.then(() => dispatchWorker.refresh()).catch((error) => {
+    agentLogger.warn('[Dispatch] startup refresh failed', error)
+  })
 
   // 更新后首次启动：让系统重建图标与桌面菜单缓存（三平台各自实现，失败只记日志）。
   // 与 Windows 安装器里的 SHChangeNotify / ie4uinit 互为兜底。

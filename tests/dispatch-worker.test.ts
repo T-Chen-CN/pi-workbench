@@ -39,7 +39,7 @@ vi.mock('../electron/cloud/config.js', () => ({
     },
 }))
 
-import { writeDispatchConfig, workspaceIdFor } from '../electron/dispatch/config'
+import { readDispatchConfig, writeDispatchConfig, workspaceIdFor } from '../electron/dispatch/config'
 import { DispatchWorker, type DispatchExecutorLike } from '../electron/dispatch/worker'
 import { readLedger, ledgerPath } from '../electron/dispatch/ledger'
 import type { CloudClient } from '../electron/cloud/client'
@@ -309,6 +309,8 @@ describe('dispatch worker', () => {
     await worker.refresh()
     expect(worker.getState().enabled).toBe(false)
     expect(worker.getState().connected).toBe(false)
+    // 关掉派活要先把清单标成不可派活，云端才立刻停派
+    expect(reports[reports.length - 1]?.body).toEqual({ dispatchable: false, workspaces: [] })
 
     // 关掉之后即使收到帧也不执行（网关侧同样会拒绝，这里是本机兜底）
     await worker.handleFrame({ type: 'task.assigned', taskId: 't-7', workspaceId: wsId(), prompt: 'a' })
@@ -335,7 +337,7 @@ describe('dispatch worker', () => {
     await worker.stop()
   })
 
-  it('stops the running task on emergency stop', async () => {
+  it('stops the running task on emergency stop and records it as canceled', async () => {
     const { client, reports } = makeClient()
     const executor = makeExecutor()
     const { worker } = createWorker(executor, client)
@@ -345,6 +347,18 @@ describe('dispatch worker', () => {
 
     await worker.stopNow()
     expect(executor.cancels).toEqual(['t-1'])
+    expect(worker.getState().enabled).toBe(false)
+    // 急停要落盘 enabled:false，否则重启后中继又自己连上
+    expect(readDispatchConfig().enabled).toBe(false)
+    // 并且把清单标成不可派活，让云端立刻停派；工作区本身留着，模型能据此判断该请人打开开关
+    expect(reports[reports.length - 1]?.body).toEqual({
+      dispatchable: false,
+      workspaces: [{ id: workspaceIdFor(workspace), label: 'Repo', description: '' }],
+    })
+
+    // abort 让执行器返回失败，但这条任务必须报 canceled（云端与账本都以取消为准）
+    executor.release()
+    await vi.waitFor(() => expect(readLedger(ledgerPath(tmp))[0]?.state).toBe('canceled'))
     expect(
       reports.some(
         (call) =>
@@ -352,7 +366,33 @@ describe('dispatch worker', () => {
           (call.body as { kind?: string }).kind === 'canceled'
       )
     ).toBe(true)
-    expect(worker.getState().enabled).toBe(false)
+    expect(
+      reports.some(
+        (call) =>
+          (call.body as { taskId?: string }).taskId === 't-1' &&
+          (call.body as { kind?: string }).kind === 'failed'
+      )
+    ).toBe(false)
+  })
+
+  it('cancels queued tasks on emergency stop instead of leaving them hanging', async () => {
+    const { client, reports } = makeClient()
+    const executor = makeExecutor()
+    const { worker } = createWorker(executor, client)
+    await worker.refresh()
+    await worker.handleFrame({ type: 'task.assigned', taskId: 't-1', workspaceId: wsId(), prompt: 'a' })
+    await vi.waitFor(() => expect(executor.runs).toHaveLength(1))
+    await worker.handleFrame({ type: 'task.assigned', taskId: 't-2', workspaceId: wsId(), prompt: 'b' })
+    expect(worker.getState().queued).toBe(1)
+
+    await worker.stopNow()
+    expect(
+      reports.some(
+        (call) =>
+          (call.body as { taskId?: string }).taskId === 't-2' &&
+          (call.body as { kind?: string }).kind === 'canceled'
+      )
+    ).toBe(true)
     executor.release()
   })
 })

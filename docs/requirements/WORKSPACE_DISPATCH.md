@@ -518,7 +518,7 @@ Hermes → local_dispatch(workspace, prompt)
 
 ### 15.1 交付内容
 
-- **网关插件 0.2.0**（`pi-workbench-gateway`，已 tag `v0.2.0` 并部署到 VPS）：`hub/dispatch.py`、`hub/relay.py`、`hub/routes/dispatch.py`、`tools.py`、`hub/db.py`（schema 2）、`shim.py`（工具注册 + 启动自检）、`plugin.yaml`。插件侧 139 条单测。
+- **网关插件 0.2.1**（`pi-workbench-gateway`，`v0.2.0` → `v0.2.1` 加「关闭派活时清排队任务」，已部署到 VPS）：`hub/dispatch.py`、`hub/relay.py`、`hub/routes/dispatch.py`、`tools.py`、`hub/db.py`（schema 2）、`shim.py`（工具注册 + 启动自检）、`plugin.yaml`。插件侧 139 条单测。
 - **桌面端**（本仓库）：`electron/dispatch/{config,relay,executor,worker,ledger}.ts`、`electron/ipc/dispatch.ts`、`src/api/dispatch.ts`、`src/store/dispatchStore.ts`、`src/components/DispatchCard.tsx`、preload / 类型 / `main.ts` 接线、i18n 文案。桌面侧新增 33 条单测（config / relay / worker / ledger / card / ipc）。
 - **部署动作**（每台云端机器都要做一次）：`config.yaml` 的 `platform_toolsets.api_server` 追加 `- pi_workbench`，重启 gateway 单元。**手改，不用 `hermes tools enable`**（§13 ①）。
 
@@ -529,7 +529,9 @@ Hermes → local_dispatch(workspace, prompt)
 | 每设备并发 | 网关侧 `running_count >= 1` 直接拒派；桌面侧再排一次本地队列（串行执行）。两端各兜一次，因为设备可能收到重放帧 |
 | 清单上报节奏 | 中继连上就报一次 + 每 30s 一次；重连成功后立刻补报（断线期间用户可能改了白名单） |
 | 目录不存在的工作区 | **不从白名单删掉**，只在界面上标「目录已不存在」并把上报清单过滤掉。外接盘没挂上不该静默丢掉授权 |
-| 急停 | 断中继 + `agent.abort` + **显式回报 `canceled`**（云端 stop 不会停设备，§13 ⑧）；急停后不自动重连，需要用户重新打开开关 |
+| 急停 | 断中继 + `agent.abort` + **显式回报 `canceled`**（云端 stop 不会停设备，§13 ⑧），并把 `enabled: false` 落盘、排队任务逐个回报 `canceled`；急停后不自动重连，需要用户重新打开开关 |
+| 关闭派活时上报什么 | 上报**不可派活**的完整清单（`dispatchable: false` + 工作区仍在），不是空列表：云端模型再派时拿到「这个工作区没打开派活开关」，能据此请用户打开；空列表只能得到「这台机器上什么都没有」 |
+| 关闭派活后的排队任务 | 网关在收到 `dispatchable: false` 时清掉该设备的 `queued` 任务（`cancel_pending`）。否则重连时重放，一条云端早已放弃的指令会在几分钟后突然执行 |
 | 本机账本 | `data/agent/dispatch-ledger.json` 最近 20 条（任务 id / 工作区 / 结果 / 摘要 / 本地会话 id）。会话本身不带派活标记（那是 pi-bridge 的落盘格式，P1 不动） |
 | 派活会话权限 | 固定 `auto` + `grants: []`，**不接 `approvalBroker`**；否则没有本地审批通道时会 fail-closed 挂死（§13 ⑨） |
 | 回报里的 `localSessionId` | worker 兜底补：执行器忘了带也能落进上报与账本，云端据此把任务锚到本机会话 |
@@ -560,15 +562,31 @@ Hermes → local_dispatch(workspace, prompt)
 | 摘要 / 用量 / 本地会话 id | **通过**：`summary` 为模型收尾文本，`usage.totalTokens=140`，`localSessionId` 落在报告里 |
 | 失败路径 | 未注入失败（`report.kind: failed` 由 `tests/dispatch-worker.test.ts` 覆盖） |
 
-### 15.4 只有单测、还没手打的验收项
+### 15.4 GUI 端到端验收（2026-11-09，dev build + 真 VPS + 真云端模型）
 
-| 场景 | 现状 |
-| --- | --- |
-| D1 真实工作区跑一轮（GUI 里手打，真模型） | 协议半程（网关 + 云端模型）与执行半程（真实 `AgentManager` + 假 provider）都跑通了；**只剩「真模型 + GUI 手点」这一步**，属于人工验收 |
-| D5 界面点急停 | 单测覆盖（`tests/dispatch-worker.test.ts`「急停」用例）；GUI 手打未做 |
-| D6 两端审计行 | 网关 `audit_events` 有派活记录；桌面侧账本已落盘，`audit.jsonl` 尚未接入派活事件 |
-| D7 同一 `client_token` 连派两次 | 插件单测覆盖（`tests/test_dispatch.py`）；真机双击未复现 |
+环境：`npm run dev` 起的 Electron（`--remote-debugging-port=9222`，用 CDP 驱动界面）、VPS 上 0.2.1 网关、真实云端模型（`deepseek-flash`）、真工作区 `D:/tmp/dispatch-acceptance`（临时 git 仓库）。
 
-### 15.5 下一步
+| 验收项 | 做法 | 结果 |
+| --- | --- | --- |
+| D1 真实工作区跑一轮 | 用配对探针设备发 `/v1/runs`，让云端模型自己 `local_dispatch` | **通过**：任务在本机 `auto` 会话里执行，`ACCEPTANCE.md` 落盘，两行内容（标记 + ISO 时间）正确，`git status` 只多这一个未跟踪文件 |
+| 面板「最近任务」 | 首屏 + 推送 | **通过**：连接页直接列出账本（修掉「推送的是裸 state、Store 只认 `{config,state}`」的合并缺陷后） |
+| D5 界面急停 | 慢任务跑到一半点「急停」并确认 | **通过**：本机 `enabled:false / connected:false / running:null`，账本记 `canceled`「本机急停」，`dispatch.json` 落盘 `enabled:false`；云端那条 `local_dispatch` 立刻返回「状态 canceled，原因是「本机急停」」；网关无残留 `queued` 任务 |
+| 云端取消（`local_task_cancel`） | 另起一条 run 让模型取消正在跑的任务 | **通过**：本机任务中止（`SLOW2.md` 停在第 4 行）、账本 `canceled`「云端取消」、hub `dispatch_tasks` 同步 `canceled` |
+| D7 幂等 | 一条 run 里连调两次 `local_dispatch`，`client_token` 相同 | **通过**：两次返回**同一个** taskId，文件只写一次 |
+| D2 关掉派活再派 | 关开关后在云端用目标 `设备/工作区` 直派 | **通过**：工具回「工作区 … 没有打开派活开关」，`local_workspaces` 里 `dispatchable: false`、`online: true`，本机不落任何文件 |
+| D3 断线不漏活 | 硬杀 Electron（不走优雅退出）→ 云端派活（排队）→ 重启 | **通过**：任务在 hub 里 `queued`，重启后中继连上即重放并执行，`RECONNECT.md` 写出；那条 `local_dispatch` 等待后返回 `completed` |
+| D6 审计 | 网关 `audit_events` + `dispatch_events` | 网关照常记 `dispatch.assigned/claimed/report/canceled`；**桌面侧不另写 `audit.jsonl`**（账本注释里已定的口径：本机只留最近 20 条供回看，审计归网关） |
+
+### 15.5 本轮验收中发现并修掉的问题
+
+| 问题 | 表现 | 修法 |
+| --- | --- | --- |
+| `safeStorage` 在 ready 前被用 | 启动日志 `safeStorage cannot be used before app is ready`，派活的解密路径跑了两次 | `dispatchWorker.refresh()` 移到 `app.whenReady()` 的 `startupReady` 之后 |
+| 面板不显示最近任务 | 主进程推送的是裸 state，Store 的 `extract` 只认 `{config,state}`，首屏也不填 `recent` | `dispatchStore` 重写 `extract`（兼容裸 state、`config.state.recent` 兜底）+ 统一 `merge()`；补 2 条单测 |
+| 急停被记成失败 | abort 让 `chat()` 抛错，`failed` 落账；`enabled` 没落盘，重启又自己连上；排队任务不给终态 | 急停写 `enabled:false` + 取消原因表（`cancelReasons`）+ 排队任务逐个回报 `canceled`；账本状态加 `canceled` |
+| 关掉派活后云端还能派 | 只断中继不报状态，网关在 90s「可能只是抖动」窗口里继续接受，任务排队到开关重新打开后才执行 | 停止/关闭时上报 `dispatchable:false` 的完整清单；网关 `cancel_pending` 清掉该设备的 `queued` 任务（插件 0.2.1，含单测） |
+| 取消原因不分来源 | 云端取消也写「本机已中止该任务」 | 取消原因表区分「本机急停」/「云端取消」，报告与账本都用它 |
+
+### 15.6 下一步
 
 P2：`input_required`（阻塞式工具等云端回答）、断线重连后的 `SubscribeToTask` 语义、claim 后失联的租约重投。P3 才做对外 A2A 端点。
