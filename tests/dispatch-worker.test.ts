@@ -396,3 +396,114 @@ describe('dispatch worker', () => {
     executor.release()
   })
 })
+
+describe('dispatch worker · input_required 与断线补发', () => {
+  it('reports the question, then resumes the same run with the cloud answer', async () => {
+    const { client, reports } = makeClient()
+    let askFn: ((question: string) => Promise<string>) | undefined
+    const executor = makeExecutor()
+    executor.run = async (task: any) => {
+      askFn = task.ask
+      const answer = await task.ask!('删哪个分支？')
+      return {
+        report: { kind: 'done' as const, summary: `按「${answer}」处理完毕` },
+        sessionId: 'session-ask'
+      }
+    }
+    const { worker } = createWorker(executor, client)
+    await worker.refresh()
+
+    await worker.handleFrame({
+      type: 'task.assigned',
+      taskId: 't-ask',
+      workspaceId: wsId(),
+      prompt: '把那个删了'
+    })
+    await vi.waitFor(() => expect(askFn).toBeTypeOf('function'))
+    await vi.waitFor(() =>
+      expect(worker.getState().question).toBe('删哪个分支？')
+    )
+    expect(reports[reports.length - 1]?.body).toMatchObject({
+      taskId: 't-ask',
+      kind: 'question',
+      question: '删哪个分支？'
+    })
+
+    await worker.handleFrame({ type: 'task.answered', taskId: 't-ask', answer: '删 feature/x' })
+    await vi.waitFor(() => expect(worker.getState().runningTaskId).toBeNull())
+    expect(reports[reports.length - 1]?.body).toMatchObject({
+      taskId: 't-ask',
+      kind: 'done',
+      summary: '按「删 feature/x」处理完毕'
+    })
+    expect(worker.getState().question).toBeNull()
+  })
+
+  it('rejects the pending question when the task is canceled', async () => {
+    const { client } = makeClient()
+    const executor = makeExecutor()
+    let failure = ''
+    executor.run = async (task: any) => {
+      try {
+        await task.ask!('要哪个？')
+        return { report: { kind: 'done' as const, summary: 'ok' }, sessionId: null }
+      } catch (error) {
+        failure = (error as Error).message
+        throw error
+      }
+    }
+    const { worker } = createWorker(executor, client)
+    await worker.refresh()
+    await worker.handleFrame({
+      type: 'task.assigned',
+      taskId: 't-cancel',
+      workspaceId: wsId(),
+      prompt: 'x'
+    })
+    await vi.waitFor(() => expect(worker.getState().question).toBe('要哪个？'))
+
+    await worker.handleFrame({ type: 'task.cancel', taskId: 't-cancel', reason: '云端取消' })
+    await vi.waitFor(() => expect(failure).toContain('云端取消'))
+    await vi.waitFor(() =>
+      expect(readLedger(ledgerPath(tmp))[0]).toMatchObject({ state: 'canceled' })
+    )
+  })
+
+  it('keeps a failed terminal report and replays it after reconnect', async () => {
+    const reports: Array<{ url: string; body: unknown }> = []
+    let online = true
+    const client = {
+      request: async (url: string, init?: { body?: unknown }) => {
+        reports.push({ url, body: init?.body })
+        if (online && url === '/v1/hub/relay/report') throw new Error('network down')
+        return {}
+      },
+      openStream: async () => ({ ok: true, status: 200, body: null }) as unknown as Response
+    } as unknown as CloudClient
+    const executor = makeExecutor()
+    const { worker } = createWorker(executor, client)
+    await worker.refresh()
+
+    await worker.handleFrame({
+      type: 'task.assigned',
+      taskId: 't-offline',
+      workspaceId: wsId(),
+      prompt: 'x'
+    })
+    await vi.waitFor(() => expect(executor.runs).toEqual(['t-offline@repo']))
+    executor.release()
+    await vi.waitFor(() => expect(worker.getState().runningTaskId).toBeNull())
+
+    // 网络恢复后重连：补发那条没送到的终态
+    online = false
+    const internals = worker as unknown as { flushPendingReports: () => Promise<void> }
+    await internals.flushPendingReports()
+    const done = reports.filter(
+      (call) =>
+        (call.body as { taskId?: string; kind?: string })?.taskId === 't-offline' &&
+        (call.body as { kind?: string }).kind === 'done'
+    )
+    // 第一次发失败 + 重连后补发成功
+    expect(done.length).toBeGreaterThanOrEqual(2)
+  })
+})

@@ -1726,6 +1726,8 @@ export interface DispatchWorkerState {
   lastError: string | null
   runningTaskId: string | null
   runningWorkspace: string | null
+  /** 本地 Agent 正在等云端回答的问题（`input_required`），null 表示没在等 */
+  question: string | null
   queued: number
   publishedAt: number | null
   recent: DispatchLedgerEntry[]

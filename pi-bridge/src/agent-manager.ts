@@ -95,6 +95,7 @@ import {
 } from './session-branch.js'
 import { createApprovalExtension } from './approval-extension.js'
 import { createPlanExtension } from './plan-extension.js'
+import { createDispatchAskExtension } from './dispatch-extension.js'
 import { createWorktreeExtension } from './worktree-extension.js'
 import type {
   AgentChatOptions,
@@ -254,6 +255,16 @@ interface SessionRuntime {
   thinkingDurationsThisMessage: number[]
   /** 最近一次已转发的 compaction entry id，用于 compaction_end 去重取锚点 */
   lastCompactionEntryId: string | null
+}
+
+/**
+ * 建会话时可注入的能力。
+ *
+ * 目前只有派活会话用到 `dispatchAsk`：它让本地 Agent 反问派活方（`input_required`）。
+ * 交互会话不传，工具表里就没有 `ask_cloud_operator`——用户在旁边时问云端是错的。
+ */
+export interface SessionCreateOptions {
+  dispatchAsk?: (question: string) => Promise<string>
 }
 
 /**
@@ -1435,7 +1446,10 @@ export class AgentManager {
   }
 
   /** 创建（或复用）一个会话运行时 */
-  private async createRuntime(sessionManager: SessionManager): Promise<SessionRuntime> {
+  private async createRuntime(
+    sessionManager: SessionManager,
+    options: SessionCreateOptions = {}
+  ): Promise<SessionRuntime> {
     const config = this.config
     const modelRuntime = this.modelRuntime
     if (!config || !modelRuntime) throw new Error('Agent not initialized.')
@@ -1524,6 +1538,13 @@ export class AgentManager {
             normalizeSessionPermission(runtimeRef.current?.extras.permission ?? fallbackPermission)
               .mode,
         }),
+        ...(options.dispatchAsk
+          ? [
+              createDispatchAskExtension({
+                ask: (question: string) => options.dispatchAsk!(question),
+              }),
+            ]
+          : []),
         createWorktreeExtension({
           sessionId: id,
           workspaceDir: config.workspaceDir,
@@ -1941,7 +1962,11 @@ export class AgentManager {
   }
 
   /** 新建会话（第一条消息前不落盘）；root 为会话绑定工作树，默认工作区根 */
-  async createSession(root?: string): Promise<SessionOpenResult> {
+  /**
+   * 新建会话。`options.dispatchAsk` 只给派活会话用：注入 `ask_cloud_operator`
+   * 工具，让本地 Agent 能反问派活方（见 `dispatch-extension.ts`）。
+   */
+  async createSession(root?: string, options: SessionCreateOptions = {}): Promise<SessionOpenResult> {
     try {
       if (!this.modelRuntime || !this.config) {
         return { success: false, error: 'Agent not initialized.' }
@@ -1951,7 +1976,7 @@ export class AgentManager {
           ? path.resolve(root)
           : this.config.workspaceDir
       const manager = SessionManager.create(targetRoot, this.sessionDir)
-      const runtime = await this.createRuntime(manager)
+      const runtime = await this.createRuntime(manager, options)
       this.lastSessionId = runtime.id
       return {
         success: true,

@@ -18,6 +18,7 @@ export type {
   MessageContext,
   MessageContextFile,
   MessageContextQuote,
+  SessionCreateOptions,
   SessionOpenResult,
   SessionSummary,
 } from './agent-manager.js'
@@ -50,6 +51,9 @@ export type {
   SessionPermission,
   ToolCategory,
 } from './approval-policy.js'
+export { createDispatchAskExtension, DISPATCH_ASK_TOOL } from './dispatch-extension.js'
+export type { DispatchAskContext } from './dispatch-extension.js'
+
 export type { SessionExtras } from './session-extras.js'
 
 

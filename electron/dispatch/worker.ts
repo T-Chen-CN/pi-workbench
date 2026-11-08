@@ -23,7 +23,13 @@ import {
   type DispatchConfig,
 } from './config.js'
 import { DispatchExecutor } from './executor.js'
-import { DispatchRelay, publishWorkspaces, reportTask, type RelayFrame } from './relay.js'
+import {
+  DispatchRelay,
+  publishWorkspaces,
+  reportTask,
+  type RelayFrame,
+  type ReportInput,
+} from './relay.js'
 import { appendLedger, readLedger, type DispatchLedgerEntry } from './ledger.js'
 
 export interface DispatchWorkerState {
@@ -34,6 +40,8 @@ export interface DispatchWorkerState {
   /** 当前正在执行的任务与工作区显示名 */
   runningTaskId: string | null
   runningWorkspace: string | null
+  /** 本地 Agent 正在等云端回答的问题（`input_required`） */
+  question: string | null
   /** 排队等执行的任务数 */
   queued: number
   publishedAt: number | null
@@ -70,6 +78,7 @@ export interface DispatchExecutorLike {
     workspaceId: string
     workspacePath: string
     prompt: string
+    ask?: (question: string) => Promise<string>
   }) => Promise<{
     report: Omit<Parameters<typeof reportTask>[1], 'taskId'>
     sessionId: string | null
@@ -79,6 +88,13 @@ export interface DispatchExecutorLike {
 
 /** 设备上报清单的节奏：与心跳同源，30s 一次足够 */
 const CATALOG_REFRESH_MS = 30_000
+/**
+ * 任务执行期间的心跳：网关租约 120s 靠它续命。
+ * 只在本地 Agent 真的在跑时发 —— 等云端回答（`input_required`）同样算活着。
+ */
+const PROGRESS_HEARTBEAT_MS = 30_000
+/** 反问最多等这么久；再久说明云端那轮已经放弃，本地不能一直挂住 */
+const QUESTION_TIMEOUT_MS = 9 * 60_000
 
 const DEFAULT_STATE: DispatchWorkerState = {
   enabled: false,
@@ -87,6 +103,7 @@ const DEFAULT_STATE: DispatchWorkerState = {
   lastError: null,
   runningTaskId: null,
   runningWorkspace: null,
+  question: null,
   queued: 0,
   publishedAt: null,
   recent: [],
@@ -103,6 +120,17 @@ export class DispatchWorker {
    * 照原样上报会把一次刻意的取消写成失败。
    */
   private readonly cancelReasons = new Map<string, string>()
+  /** 等云端回答的问句：taskId → 挂起的 resolve / reject */
+  private readonly questions = new Map<
+    string,
+    { resolve: (answer: string) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
+  >()
+  /** 上报失败的回报：重连后补发，否则设备白干一场，云端永远等不到结果 */
+  private readonly pendingReports: Array<{
+    taskId: string
+    input: Omit<ReportInput, 'taskId'>
+  }> = []
+  private progressTimer: ReturnType<typeof setInterval> | null = null
   private draining = false
   private catalogTimer: ReturnType<typeof setInterval> | null = null
 
@@ -160,7 +188,15 @@ export class DispatchWorker {
     this.relay = null
     if (relay) await relay.stop()
     this.queue = []
-    this.patch({ enabled: false, connected: false, runningTaskId: null, runningWorkspace: null })
+    this.stopProgress()
+    for (const taskId of [...this.questions.keys()]) this.rejectQuestion(taskId, '派活已关闭')
+    this.patch({
+      enabled: false,
+      connected: false,
+      runningTaskId: null,
+      runningWorkspace: null,
+      question: null,
+    })
   }
 
   /**
@@ -186,6 +222,7 @@ export class DispatchWorker {
     }
     if (taskId) {
       this.cancelReasons.set(taskId, '本机急停')
+      this.rejectQuestion(taskId, '本机急停')
       await this.executor.cancel(taskId)
     }
     await this.stop()
@@ -242,8 +279,8 @@ export class DispatchWorker {
           lastError: relayState.lastError,
         })
         if (relayState.connected) {
-          // 重连成功先补一次清单：断线期间用户可能改了白名单
-          void this.publishCatalog()
+          // 重连成功先补发没送到的回报，再补一次清单（断线期间用户可能改了白名单）
+          void this.flushPendingReports().then(() => this.publishCatalog())
         }
       },
       log: (message, error) => this.deps.logger.warn(message, error),
@@ -286,9 +323,13 @@ export class DispatchWorker {
       await this.cancelTask(taskId)
       return
     }
-    // task.answered 属于 P2；P1 只记下来，别让任务悬挂
     if (frame.type === 'task.answered') {
-      this.deps.logger.warn('[Dispatch] ignoring task.answered (P1 has no input-required)')
+      const pending = this.questions.get(taskId)
+      if (!pending) return
+      this.questions.delete(taskId)
+      clearTimeout(pending.timer)
+      this.patch({ question: null })
+      pending.resolve(String(frame.answer ?? ''))
     }
   }
 
@@ -310,6 +351,7 @@ export class DispatchWorker {
     }
     if (this.state.runningTaskId === taskId) {
       this.cancelReasons.set(taskId, '云端取消')
+      this.rejectQuestion(taskId, '云端取消了这个任务')
       await this.executor.cancel(taskId)
     }
   }
@@ -363,20 +405,36 @@ export class DispatchWorker {
           this.deps.logger.warn('[Dispatch] claim report failed', error)
         })
 
-        const outcome = await this.executor.run({
-          taskId: next.taskId,
-          workspaceId: next.workspaceId,
-          workspacePath: workspace.path,
-          prompt: next.prompt,
-        })
+        this.startProgress(next.taskId)
+        // 执行器承诺不抛（自己把失败包成 report），但反问被 reject / 取消这类
+        // 路径仍可能把异常带出来；漏掉就会让任务悬挂到 deadline
+        const outcome = await this.executor
+          .run({
+            taskId: next.taskId,
+            workspaceId: next.workspaceId,
+            workspacePath: workspace.path,
+            prompt: next.prompt,
+            ask: (question) => this.askCloud(next.taskId, question),
+          })
+          .catch((error: unknown) => {
+            this.deps.logger.warn('[Dispatch] executor threw', error)
+            return {
+              report: {
+                kind: 'failed' as const,
+                error: error instanceof Error ? error.message.slice(0, 2000) : String(error),
+              },
+              sessionId: null,
+            }
+          })
+        this.stopProgress()
         // 取消过的任务：报告与账本都按 canceled 落，不要被 abort 产生的失败覆盖
         const cancelReason = this.cancelReasons.get(next.taskId)
         this.cancelReasons.delete(next.taskId)
-        const base = cancelReason
-          ? { kind: 'canceled' as const, error: cancelReason }
+        const base: Omit<ReportInput, 'taskId'> = cancelReason
+          ? { kind: 'canceled', error: cancelReason }
           : outcome.report
         // 本地会话 id 一定要带上（云端拿它做「派活 → 本机会话」的锚点）
-        const report = { ...base }
+        const report: Omit<ReportInput, 'taskId'> = { ...base }
         if (!report.localSessionId && outcome.sessionId) report.localSessionId = outcome.sessionId
         await this.report(next.taskId, report).catch((error: unknown) => {
           this.deps.logger.warn('[Dispatch] outcome report failed', error)
@@ -389,7 +447,7 @@ export class DispatchWorker {
           summary: report.summary ?? report.error ?? '',
           sessionId: outcome.sessionId,
         })
-        this.patch({ runningTaskId: null, runningWorkspace: null })
+        this.patch({ runningTaskId: null, runningWorkspace: null, question: null })
       }
     } finally {
       this.draining = false
@@ -424,7 +482,72 @@ export class DispatchWorker {
   ): Promise<void> {
     const client = this.clientFor(readDispatchConfig())
     if (!client) return
-    await reportTask(client, { taskId, ...report })
+    try {
+      await reportTask(client, { taskId, ...report })
+    } catch (error) {
+      // 网络断了：先留着，重连后补发。终态丢了 = 云端永远等不到结果。
+      if (report.kind !== 'progress') this.pendingReports.push({ taskId, input: report })
+      throw error
+    }
+  }
+
+  /** 重连后补发失败的回报；同一任务只留最后一次（后到的状态覆盖先到的） */
+  private async flushPendingReports(): Promise<void> {
+    if (this.pendingReports.length === 0) return
+    const batch = this.pendingReports.splice(0, this.pendingReports.length)
+    for (const item of batch) {
+      await this.report(item.taskId, item.input).catch((error: unknown) => {
+        this.deps.logger.warn('[Dispatch] replaying report failed', error)
+        this.pendingReports.push(item)
+      })
+    }
+  }
+
+  // -- 反问（input_required） ---------------------------------------------
+
+  /**
+   * 本地 Agent 需要云端决定时走这里：先回报 `question`（网关状态变 `input_required`，
+   * 云端模型会看到问题），然后挂住等 `task.answered` 帧。
+   */
+  private async askCloud(taskId: string, question: string): Promise<string> {
+    const text = question.trim().slice(0, 2000) || '（本地 Agent 没有说明问题）'
+    this.patch({ question: text })
+    await this.report(taskId, { kind: 'question', question: text }).catch((error: unknown) => {
+      this.deps.logger.warn('[Dispatch] reporting question failed', error)
+    })
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.questions.delete(taskId)
+        reject(new Error('等云端回答超时'))
+      }, QUESTION_TIMEOUT_MS)
+      timer.unref?.()
+      this.questions.set(taskId, { resolve, reject, timer })
+    })
+  }
+
+  private rejectQuestion(taskId: string, reason: string): void {
+    const pending = this.questions.get(taskId)
+    if (!pending) return
+    this.questions.delete(taskId)
+    clearTimeout(pending.timer)
+    this.patch({ question: null })
+    pending.reject(new Error(reason))
+  }
+
+  // -- 进度心跳 -----------------------------------------------------------
+
+  private startProgress(taskId: string): void {
+    this.stopProgress()
+    this.progressTimer = setInterval(() => {
+      void this.report(taskId, { kind: 'progress' }).catch(() => undefined)
+    }, PROGRESS_HEARTBEAT_MS)
+    this.progressTimer.unref?.()
+  }
+
+  private stopProgress(): void {
+    if (!this.progressTimer) return
+    clearInterval(this.progressTimer)
+    this.progressTimer = null
   }
 
   private patch(patch: Partial<DispatchWorkerState>): void {

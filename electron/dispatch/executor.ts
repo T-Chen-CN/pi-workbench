@@ -17,6 +17,11 @@ export interface ExecuteTask {
   workspaceId: string
   workspacePath: string
   prompt: string
+  /**
+   * 本地 Agent 反问（`ask_cloud_operator`）的出口：worker 负责把问题报给网关、
+   * 等 `task.answered` 帧，再把答案 resolve 回来。任务被取消 / 超时会 reject。
+   */
+  ask?: (question: string) => Promise<string>
 }
 
 export interface ExecuteOutcome {
@@ -46,7 +51,8 @@ const SUMMARY_LIMIT = 4000
  */
 interface DispatchAgent {
   createSession: (
-    workspaceDir: string
+    workspaceDir: string,
+    options?: { dispatchAsk?: (question: string) => Promise<string> }
   ) => Promise<{ success: boolean; session?: { id: string }; error?: string }>
   setSessionPermission: (
     sessionId: string,
@@ -116,7 +122,10 @@ export class DispatchExecutor {
       }
     }
 
-    const created = await agent.createSession(task.workspacePath)
+    const created = await agent.createSession(
+      task.workspacePath,
+      task.ask ? { dispatchAsk: task.ask } : undefined
+    )
     const sessionId = created.success ? created.session?.id ?? null : null
     if (!sessionId) {
       return {

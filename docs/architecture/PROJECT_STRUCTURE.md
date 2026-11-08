@@ -46,7 +46,7 @@ pi-workbench/
 │   │   ├── config.ts             # 白名单 `data/agent/dispatch.json`（id 由路径哈希，不落路径上云）
 │   │   ├── relay.ts              # 出站 SSE 中继（退避重连）+ 清单上报 + 任务回报
 │   │   ├── executor.ts           # 把一条云任务变成一次真实本地会话（权限 auto，无本地审批门）
-│   │   ├── worker.ts             # 帧分发 / 串行队列 / 取消 / 账本写入
+│   │   ├── worker.ts             # 帧分发 / 串行队列 / 取消 / 反问 / 心跳 / 账本写入
 │   │   └── ledger.ts             # 本机账本 `data/agent/dispatch-ledger.json`（最近 20 条）
 │   ├── documents/                # 文档解析（零依赖）：zip / xml / ooxml / pdf / detect / preview / render-bridge
 │   │   ├── zip.ts                # node:zlib 手写 ZIP 中央目录（不引第三方）
@@ -233,6 +233,7 @@ pi-workbench/
 │   │   ├── tool-policy.ts        # 模式对应的工具集
 │   │   ├── approval-extension.ts # 审批请求扩展
 │   │   ├── plan.ts               # 结构化计划
+│   │   ├── dispatch-extension.ts # 派活反问工具 ask_cloud_operator（只注入派活会话）
 │   │   ├── plan-extension.ts     # 计划工具扩展
 │   │   ├── worktree-extension.ts # 工作树切换工具扩展
 │   │   ├── session-extras.ts     # 会话 sidecar（计划、权限）

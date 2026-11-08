@@ -105,6 +105,11 @@ export const DispatchCard: React.FC<{ connected: boolean }> = ({ connected }) =>
               <StatusText tone="accent">
                 {t('cloudDispatchRunning', { workspace: state.runningWorkspace ?? '' })}
               </StatusText>
+              {state.question && (
+                <Caption className="text-ink-subtle">
+                  {t('cloudDispatchQuestion', { question: state.question })}
+                </Caption>
+              )}
               {state.queued > 0 && (
                 <Caption className="text-ink-subtle">
                   {t('cloudDispatchQueued', { count: state.queued })}

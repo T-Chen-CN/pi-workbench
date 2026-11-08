@@ -292,7 +292,9 @@ queued ──claim──► running ──┬── done        → completed
 | `hub/dispatch.py` | 新增：任务 store、状态机、claim 原子性、幂等（`client_token`）、目录读写、事件清理 |
 | `hub/relay.py` | 新增：每设备一条 `queue.Queue` 的扇出（上限 64，满则丢弃并在下帧补发目录） |
 | `hub/routes/dispatch.py` | 新增：`GET /v1/hub/relay/stream`（SSE，连上重放 `queued`）、`POST /v1/hub/relay/report`、`POST /v1/hub/workspaces`、`GET /v1/hub/dispatch/workspaces`（**四个端点都在一个文件里**，没有单独的 `routes/relay.py` / `routes/workspaces.py`） |
-| `hub/routes/a2a.py` | **P3**：`/.well-known/agent-card.json`、`POST /a2a`（JSON-RPC 信封） |
+| `hub/routes/a2a.py` | **P3 已落地**：`/.well-known/agent-card.json`、`POST /a2a`（`message/send` / `tasks/get` / `tasks/cancel` / `tasks/resubscribe`） |
+| `hub/maintenance.py` | **P2 已落地**：后台线程做超时收尾、租约重投、7 天清理（`expire()` / `purge()` 的调用方） |
+| `hub/frames.py` | 中继帧载荷与 SSE 编码的唯一出处（请求线程与维护线程共用） |
 | `hub/routes/__init__.py` | 注册新路由 |
 | `tools.py` | 新增：`local_workspaces` / `local_dispatch` / `local_task_get` / `local_task_reply` / `local_task_cancel`，toolset `pi_workbench`；开关关闭时工具仍可被调，但**直接返回** `dispatch_disabled`（隐掉工具会让模型以为能力不存在） |
 | `shim.py` | `register(ctx)` 里注册工具（**保持 shim 极薄**：只做注册与 store 注入）。真实签名是 `register_tool(name, toolset, schema, handler, check_fn=None, requires_env=None, is_async=False, description="", emoji="", override=False)`；`schema` 必须自带 `name`/`description`/`parameters` |
@@ -376,8 +378,8 @@ Hermes → local_dispatch(workspace, prompt)
 | 期 | 内容 | 估量 |
 | --- | --- | --- |
 | **P1** | 目录 + 单向派活 + 阻塞等结果 + 审计 + 急停（**不含对外 A2A 端点**） | 插件 ~850 行 / 桌面 ~900 行 / 测试 ~800 行，4–6 人日 |
-| **P2** | `input_required` 续跑 + 断线重连（`SubscribeToTask`）+ 租约重投 | +2–3 人日 |
-| **P3** | Agent Card + `/a2a` JSON-RPC + `SubscribeToTask` 对外端点、多设备路由调优（description）、push webhook | +2–3 人日 |
+| **P2** ✅ | `input_required` 续跑 + 断线重连（`SubscribeToTask`）+ 租约重投 | 已完成（插件 0.3.0，见 §15.6） |
+| **P3** ✅ | Agent Card + `/a2a` JSON-RPC + `tasks/resubscribe`；多设备路由靠 description（已落地），push webhook 未做 | 已完成（同上） |
 
 ### 8.1 P1 验收场景（必须手打）
 
@@ -587,6 +589,39 @@ Hermes → local_dispatch(workspace, prompt)
 | 关掉派活后云端还能派 | 只断中继不报状态，网关在 90s「可能只是抖动」窗口里继续接受，任务排队到开关重新打开后才执行 | 停止/关闭时上报 `dispatchable:false` 的完整清单；网关 `cancel_pending` 清掉该设备的 `queued` 任务（插件 0.2.1，含单测） |
 | 取消原因不分来源 | 云端取消也写「本机已中止该任务」 | 取消原因表区分「本机急停」/「云端取消」，报告与账本都用它 |
 
-### 15.6 下一步
+### 15.6 P2 / P3 落地记录（2026-11-09，插件 0.3.0）
 
-P2：`input_required`（阻塞式工具等云端回答）、断线重连后的 `SubscribeToTask` 语义、claim 后失联的租约重投。P3 才做对外 A2A 端点。
+**P2：设备中途消失、结果要来回几轮**
+
+| 落地项 | 做法 |
+| --- | --- |
+| `input_required`（D8） | 派活会话额外注入阻塞式工具 `ask_cloud_operator`（`pi-bridge/src/dispatch-extension.ts`）；`AgentManager.createSession(root, { dispatchAsk })` 才会注册它，交互会话没有。工具 `execute` 挂住 → 桌面上报 `question` → 网关状态 `input_required` → 云端 `local_task_reply` → 推 `task.answered` → 工具返回答案，同一轮继续 |
+| 反问的边界 | 等 9 分钟；本机急停 / 云端取消 / 关开关都会 reject 这个 Promise（否则会话挂在工具里，abort 也收不干净）。任务卡在「等回答」时仍算活着，进度心跳继续续租约 |
+| 租约重投（D10） | `DispatchStore.reclaim()`：`running` / `input_required` **120s 没有任何回报**即回 `queued`；`attempt` 上限 2，用尽判 `failed`。按「有没有回报」而不是「设备在不在线」判断，本地还在发 `progress` 的任务不会被抢走 |
+| 重连接回（D9） | 中继连上补发 `queued` + `running` + `input_required`；桌面 worker 按 `taskId` 去重（正在跑的不重复起，等回答的继续等）。派活帧里的 `attempt` 改成「第几次投递」（1 起） |
+| 回报补发 | 终态回报失败时进 `pendingReports`，重连后先补发再报清单 —— 否则设备白干一场，云端永远等不到结果 |
+| 后台维护 | `hub/maintenance.py`：每 15s 扫超时（发 `task.cancel`）与租约；每 10 分钟清一次 7 天前的任务行。P1 时 `expire()` / `purge()` 只有实现没人调 |
+
+**P3：对外 A2A**
+
+| 落地项 | 做法 |
+| --- | --- |
+| Agent Card | `GET /.well-known/agent-card.json`（设备 token 或 admin）把**可派活**工作区投影成 skills，`id` = `设备/工作区`，description 保留用户写的触发词 |
+| `POST /a2a` | JSON-RPC 2.0：`message/send`（`messageId` 兼作幂等键，`configuration.blocking` 支持阻塞等结果）、`tasks/get`、`tasks/cancel`、`tasks/resubscribe`（SSE 状态帧） |
+| 状态映射 | `queued→submitted`、`running→working`、`input_required→input-required`、终态同名、`expired→failed`（A2A 无 expired）；`metadata` 带设备 / 工作区 / 改动文件 / 用量 / 本地会话 id |
+| 不做 | push webhook（卡片的 `capabilities.pushNotifications` 仍为 `false`）；`tasks/resubscribe` 用 1s 轮询 store，不引事件总线 |
+
+**真机验收（VPS 0.3.0 + 真实云端模型 + dev build）**
+
+| 验收项 | 结果 |
+| --- | --- |
+| D8 本地反问 | **通过**：本地 Agent 调 `ask_cloud_operator` 问「ANSWER.md 里写 A 还是写 B？」→ 云端 `local_task_reply` 答「写 A」→ 同一轮继续并写出 `ANSWER.md`（内容 `A`），任务 `completed` |
+| D9 断线接回 | **通过**（探针设备打真 hub）：claim 后关掉中继连接 → 重连立刻收到同一任务的 `task.assigned`，`tasks/get` 仍是 `working`，随后 `done` → `completed` |
+| D10 租约重投 | **通过**（真桌面 + 真云端）：任务跑到一半**硬杀 Electron** → 120s 后 hub 记 `task.requeued`（attempt=1）→ 重启桌面，重连收到 attempt=2 的派活帧 → 从零重跑并 `completed`，账本与云端都一致 |
+| P3 A2A | **通过**（真 hub）：Agent Card 列出两个可派活工作区；`message/send` / `tasks/get` / `tasks/cancel` 全通，状态映射正确 |
+
+### 15.7 仍未做
+
+- push webhook（`pushNotifications: false`）；
+- 跨设备重投（现在只重投给**原设备**；换设备需要迁移已有的本地会话，暂不做）；
+- `tasks/resubscribe` 的事件粒度是状态变化，不是逐条 trace。

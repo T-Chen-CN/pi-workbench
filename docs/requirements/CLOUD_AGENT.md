@@ -3,7 +3,7 @@
 > **面向**：实现、维护、验收云端 Agent 的人
 > **什么时候读**：动 `electron/cloud/*`、云端页面、网关插件、配对、设备身份、审批、部署之前
 > **什么时候要改**：协议、插件形态、权限口径、部署拓扑、验收标准变化时
-> **状态**：2026-11-09 · 桌面端 + 网关插件主链路已完成并随 0.8.0 发布；G0 / G1 真机全绿；H3 工作区派活 P1 已落地并 GUI 手打验收（插件 0.2.1，见 [WORKSPACE_DISPATCH](./WORKSPACE_DISPATCH.md)）；其余后置项（C-08 ~ C-12）未排期
+> **状态**：2026-11-09 · 桌面端 + 网关插件主链路已完成并随 0.8.0 发布；G0 / G1 真机全绿；H3 工作区派活 P1–P3 已落地并真机验收（插件 0.3.0，见 [WORKSPACE_DISPATCH](./WORKSPACE_DISPATCH.md)）；其余后置项（C-08 ~ C-12）未排期
 > **唯一事实源**：本文。历史方案、历史 ADR、历史研究报告已并入本文并从索引移除。
 > **运行期资产**：[hermes-bootstrap-prompt.md](./hermes-bootstrap-prompt.md) 仍单独存在，因为应用用 Vite `?raw` 在构建时内联它。
 
@@ -16,7 +16,7 @@
 | 应用仓库 | `main`，版本 `0.8.0`（2026-11-08 发布） |
 | 桌面端配对 | Phase 1 已完成：连接码、`cloud:gateway:pair`、配置收窄、旧入口删除 |
 | 桌面端云端功能 | 会话 / SSE / 审批 / 控制台 / 任务（含新建）/ 媒体 / 设备身份 / 心跳 / 耐久性已落地，随 0.8.0 发布 |
-| 网关插件 | `pi-workbench-gateway` **0.2.1**：P0–P5 + 工作区派活全部落地，已 `hermes plugins update` 装到真机 |
+| 网关插件 | `pi-workbench-gateway` **0.3.0**：P0–P5 + 工作区派活（含反问 / 重投 / A2A）全部落地，已 `hermes plugins update` 装到真机 |
 | 真实配对 | 可用：`/v1/devices/pairing` + `/v1/devices/pair` 已上线，连接码真机配对通过 |
 | 部署 | 已部署：`hub.` 网关在线（Caddy TLS + `flush_interval -1`），`dash.` 直连控制台；G0 / G1 全绿（§8.2） |
 | 测试基线 | `npm test`：153 文件 / 1857 用例全绿；`type-check` / `lint` / `build` 全绿 |
@@ -47,7 +47,7 @@
 - 桌面端保存管理密钥 / 控制台口令 / 直连 API Key。
 - 直连兜底、第二套客户端、自动降级。
 - 控制台 HTML 代理；dashboard 由桌面端直接打开。
-- H3 工作区派活 / `local_*` 工具已在 P1 落地并 GUI 手打验收（插件 0.2.1，桌面开发版），P2（`input_required`、租约重投）与 P3（对外 A2A 端点）仍未做。
+- H3 工作区派活 / `local_*` 工具 P1–P3 全部落地并真机验收（插件 0.3.0）：本地反问、租约重投、重连接回、对外 A2A 端点（Agent Card + `/a2a`）。
 - 预算熔断、用量面板、语义分类器、桌面截图 / Xvfb / VNC。
 
 ---
@@ -389,7 +389,7 @@ Content-Type: application/json
          （主仓库 `.gitignore` 排除，不是 submodule；应用侧只依赖 `PLUGIN_REPO` 常量）
 插件 id：pi-workbench-gateway
 类型：Hermes kind: platform
-版本：0.2.1
+版本：0.3.0
 ```
 
 目录：
@@ -435,7 +435,7 @@ pi-workbench-gateway/
 name: pi-workbench-gateway
 label: Pi Workbench Gateway
 kind: platform
-version: 0.2.1
+version: 0.3.0
 manifest_version: 2
 api_version: 1
 author: Pi Workbench
@@ -1161,7 +1161,7 @@ sudo ss -tnp state established | grep -v 127.0.0.1
 | C-10 | 云端页面拆窗 | 依赖 C-09 |
 | C-11 | IM 渠道 / 语音 / 出网遥测复核 | 一次性验收动作 |
 | C-12 | 对外写 MCP 门 + write-ahead 账本 | 账本已有，门是另一个量级 |
-| H3 | 工作区派活 / `local_*` 工具 / 任务邮箱 | 方案与落地记录见 [WORKSPACE_DISPATCH](./WORKSPACE_DISPATCH.md)（Hermes 代行权限 + A2A 语义 + 网关中继）；**P1 已落地并端到端实测**（插件 0.2.1），P2 未开工 |
+| H3 | 工作区派活 / `local_*` 工具 / 任务邮箱 | 方案与落地记录见 [WORKSPACE_DISPATCH](./WORKSPACE_DISPATCH.md)（Hermes 代行权限 + A2A 语义 + 网关中继）；**P1–P3 全部落地并真机实测**（插件 0.3.0） |
 
 ---
 

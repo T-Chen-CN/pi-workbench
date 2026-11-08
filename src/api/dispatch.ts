@@ -30,6 +30,7 @@ const DISABLED_STATE: DispatchWorkerState = {
   lastError: null,
   runningTaskId: null,
   runningWorkspace: null,
+  question: null,
   queued: 0,
   publishedAt: null,
   recent: [],
