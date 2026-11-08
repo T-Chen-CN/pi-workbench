@@ -4,7 +4,7 @@
 > **什么时候读**：动网关插件的 dispatch / 中继、桌面的派活 worker、权限与审计之前
 > **什么时候要改**：协议、权限模型、状态机或验收场景变化时
 
-**状态**：设计定稿 + 可行性已实测，P1 未开工（2026-11-08 定稿，2026-11-09 验证）
+**状态**：设计定稿 + 可行性已实测 + **P1 已落地**（网关 0.2.0 / 桌面 0.8.0 开发版），端到端跑通（2026-11-08 定稿，2026-11-09 验证与实现）
 **范围**：云端 Hermes 主动调起本地工作区 Agent、下达指令、接收结果、多轮跟进直到任务落地
 **不包含**：屏幕接管（C-08）、Kanban（C-09）、IM 渠道（C-11）、对外写 MCP 门（C-12）
 **上游事实出处**：Hermes 0.23.0 源码（`/home/ubuntu/.hermes/hermes-agent`）；网关现状见 [CLOUD_AGENT](./CLOUD_AGENT.md)
@@ -290,9 +290,9 @@ queued ──claim──► running ──┬── done        → completed
 | --- | --- |
 | `hub/db.py` | schema 2 + 三张新表 + 迁移 |
 | `hub/dispatch.py` | 新增：任务 store、状态机、claim 原子性、幂等（`client_token`）、目录读写、事件清理 |
-| `hub/routes/workspaces.py` | 新增：`GET /v1/hub/dispatch/workspaces`（目录的扁平版，给工具与设置页） |
+| `hub/relay.py` | 新增：每设备一条 `queue.Queue` 的扇出（上限 64，满则丢弃并在下帧补发目录） |
+| `hub/routes/dispatch.py` | 新增：`GET /v1/hub/relay/stream`（SSE，连上重放 `queued`）、`POST /v1/hub/relay/report`、`POST /v1/hub/workspaces`、`GET /v1/hub/dispatch/workspaces`（**四个端点都在一个文件里**，没有单独的 `routes/relay.py` / `routes/workspaces.py`） |
 | `hub/routes/a2a.py` | **P3**：`/.well-known/agent-card.json`、`POST /a2a`（JSON-RPC 信封） |
-| `hub/routes/relay.py` | 新增：`GET /v1/hub/relay/stream`（SSE）、`POST /v1/hub/relay/report`、`POST /v1/hub/workspaces` |
 | `hub/routes/__init__.py` | 注册新路由 |
 | `tools.py` | 新增：`local_workspaces` / `local_dispatch` / `local_task_get` / `local_task_reply` / `local_task_cancel`，toolset `pi_workbench`；开关关闭时工具仍可被调，但**直接返回** `dispatch_disabled`（隐掉工具会让模型以为能力不存在） |
 | `shim.py` | `register(ctx)` 里注册工具（**保持 shim 极薄**：只做注册与 store 注入）。真实签名是 `register_tool(name, toolset, schema, handler, check_fn=None, requires_env=None, is_async=False, description="", emoji="", override=False)`；`schema` 必须自带 `name`/`description`/`parameters` |
@@ -315,15 +315,16 @@ queued ──claim──► running ──┬── done        → completed
 
 | 文件 | 改动 |
 | --- | --- |
-| `electron/dispatch/store.ts` | 新增：`data/agent/dispatch.json`（开关、白名单、每工作区 description）读写的原子写封装 |
+| `electron/dispatch/config.ts` | 新增：`data/agent/dispatch.json`（开关、白名单、每工作区 description）的原子写封装；`workspaceIdFor`（路径 sha1 前 12 位）、`restoreDispatchTrust`、`publicWorkspaces`（不含路径） |
+| `electron/dispatch/relay.ts` | 新增：出站 SSE 常连（退避 1s→30s，空闲 90s 判死）、`publishWorkspaces`、`reportTask` |
+| `electron/dispatch/ledger.ts` | 新增：本机账本 `data/agent/dispatch-ledger.json`（最近 20 条，回答「这个任务动了哪个工作区、对应哪条本地会话」） |
 | `electron/dispatch/worker.ts` | 新增：中继 SSE 常连、心跳、claim 接收、执行、回报、重连退避、急停 |
 | `electron/dispatch/executor.ts` | 新增：用 `agent:initialize`（受信任目录即可）→ `createSession` → 固定"无本地审批门" → `chat()` → 收集摘要 / 变更文件 / usage |
-| `electron/ipc/dispatch.ts` | 新增 IPC：`dispatch:config:get/set`、`dispatch:workspaces:list/add/remove`、`dispatch:stop`、`dispatch:state` |
-| `electron/ipc/register.ts` | 注册上述域（**必须走 `handleIpc()`**） |
+| `electron/ipc/dispatch.ts` | 新增 IPC：`dispatch:config:get/set`、`dispatch:workspace:add/update/remove`、`dispatch:stop`、`dispatch:state`（全部走 `handleIpc()`） |
 | `electron/preload.cts` · `src/types/electron.d.ts` · `src/api/dispatch.ts` | 四步打通 + Web mock |
 | `electron/main.ts` | 启动时按开关拉起 worker；退出时停 worker（`will-quit` 收尾链里加一步） |
-| `src/components/CloudConnectionView.tsx` | 新增「派活」分组：总开关、工作区白名单、每工作区描述、当前任务与急停 |
-| `src/components/CloudSessionView.tsx` | 派活会话打标（谁派的、`taskId`），可点进去看 |
+| `src/components/DispatchCard.tsx` | 新增：云端页里的「派活」卡片（总开关、白名单与描述、发布状态、当前任务与急停、最近任务），挂进 `CloudConnectionView` |
+| `src/components/CloudSessionView.tsx` | **未做**：派活会话在云端会话列表里没有标记 —— 派活不产生云端会话，标记改由本机账本承担（见 §15 待办） |
 | `src/store/dispatchStore.ts` | 新增：配置与运行态（不进 cloudStore） |
 | `src/i18n/translations.ts` | 文案（zh + en） |
 
@@ -480,11 +481,11 @@ Hermes → local_dispatch(workspace, prompt)
 | ⑪ | 每设备 SSE 槽位是否够用 | 读 `hub/routes/proxy.py:96` 的 `sse_acquire(limit=2)` | **不够**。槽位只算代理流，2 条被会话流占满后，中继流要么被拒、要么挤掉会话 | 中继流用独立计数（§9） |
 | ⑫ | 未打开的工作区能不能初始化 Agent | 读 `electron/ipc/agent.ts:111` + `workspace-trust.ts` | **成立，但要多一步**。`agent:initialize` 只认 `trustedWorkspaceRoots` 里的路径（内存 Set） | 开机时把派活白名单逐条 `trustWorkspace()`（白名单本身就是一次授权，与 §2.3 一致） |
 
-### 13.1 仍然没有实测的三件事（P1 开工后补）
+### 13.1 当时没实测的三件事（后续进展）
 
-1. **中继路由接进真 hub**：spike 用的是独立 8599 端口，`hub/router.py` 的鉴权 / 限流 / 审计链路没有跑过中继流。
-2. **两台设备并发**：只验了单设备单任务；多设备抢任务、全部离线时的排队表现未跑。
-3. **P2 端到端**：两侧机制各自成立，但"本地反问 → 云端回答 → 同一轮继续"没有串起来跑过。
+1. **中继路由接进真 hub**：**已在 P1 落地后实测通过**（§15.3）。
+2. **两台设备并发**：仍未跑真机；`running_count >= 1` 的拒派由插件单测覆盖（`tests/test_tools.py`），多设备路由按 `device/workspace` 精确匹配。
+3. **P2 端到端**：仍未启动（P1 已完成，P2 未开工）。
 
 ### 13.2 这轮验证改掉的四处方案
 
@@ -510,3 +511,63 @@ Hermes → local_dispatch(workspace, prompt)
 | 插件工具集必须登记进 `platform_toolsets.api_server` | `hermes --profile pi-cloud tools list --platform api_server`，看 `pi_workbench` 是否在列 | 工具对模型静默不可见（启动自检会报 WARN，但能力等于没了） |
 | 运行中的工具不设执行超时 | 读 `tools/registry.py` 的 `register(... execution_timeout=...)`：插件走 `PluginContext.register_tool`，不传这个值 | 若某版开始给插件工具默认超时，90s 阻塞会被掐断，必须降阻塞时长并改用轮询 |
 | 事件流每 10s 发 `: keepalive` | 阻塞期间抓 `/v1/runs/{id}/events` 原始字节 | 若心跳消失，桌面 60s 空闲阈值会误判断流（`electron/cloud/events.ts:73`），得调大阈值 |
+
+---
+
+## 15. P1 落地记录（2026-11-09）
+
+### 15.1 交付内容
+
+- **网关插件 0.2.0**（`pi-workbench-gateway`，已 tag `v0.2.0` 并部署到 VPS）：`hub/dispatch.py`、`hub/relay.py`、`hub/routes/dispatch.py`、`tools.py`、`hub/db.py`（schema 2）、`shim.py`（工具注册 + 启动自检）、`plugin.yaml`。插件侧 139 条单测。
+- **桌面端**（本仓库）：`electron/dispatch/{config,relay,executor,worker,ledger}.ts`、`electron/ipc/dispatch.ts`、`src/api/dispatch.ts`、`src/store/dispatchStore.ts`、`src/components/DispatchCard.tsx`、preload / 类型 / `main.ts` 接线、i18n 文案。桌面侧新增 28 条单测（config / relay / worker / ledger / card）。
+- **部署动作**（每台云端机器都要做一次）：`config.yaml` 的 `platform_toolsets.api_server` 追加 `- pi_workbench`，重启 gateway 单元。**手改，不用 `hermes tools enable`**（§13 ①）。
+
+### 15.2 实现时补定的细节
+
+| 细节 | 取舍 |
+| --- | --- |
+| 每设备并发 | 网关侧 `running_count >= 1` 直接拒派；桌面侧再排一次本地队列（串行执行）。两端各兜一次，因为设备可能收到重放帧 |
+| 清单上报节奏 | 中继连上就报一次 + 每 30s 一次；重连成功后立刻补报（断线期间用户可能改了白名单） |
+| 目录不存在的工作区 | **不从白名单删掉**，只在界面上标「目录已不存在」并把上报清单过滤掉。外接盘没挂上不该静默丢掉授权 |
+| 急停 | 断中继 + `agent.abort` + **显式回报 `canceled`**（云端 stop 不会停设备，§13 ⑧）；急停后不自动重连，需要用户重新打开开关 |
+| 本机账本 | `data/agent/dispatch-ledger.json` 最近 20 条（任务 id / 工作区 / 结果 / 摘要 / 本地会话 id）。会话本身不带派活标记（那是 pi-bridge 的落盘格式，P1 不动） |
+| 派活会话权限 | 固定 `auto` + `grants: []`，**不接 `approvalBroker`**；否则没有本地审批通道时会 fail-closed 挂死（§13 ⑨） |
+| 回报里的 `localSessionId` | worker 兜底补：执行器忘了带也能落进上报与账本，云端据此把任务锚到本机会话 |
+
+### 15.3 端到端实测（真网关 + 真云端模型）
+
+做法：临时设备 `tmp-dispatch-probe`（配对发放 token，测试后 revoke）+ 真实 `DispatchWorker`（执行器用桩，只往临时仓库写文件）+ 从同一凭据发一条真实 `/v1/runs`，让模型自己选工具。
+
+| 验证点 | 结果 |
+| --- | --- |
+| 中继接进真 hub（鉴权 / 路由 / 公网 Caddy） | **通过**：`GET /v1/hub/dispatch/workspaces` 回读到本机目录，`online: true`、`relayStreams: 1` |
+| 中继流不占代理 SSE 槽位 | **通过**：派活中同时开 `/v1/runs/{id}/events`，中继始终保持 1 条（§13 ⑪ 的独立计数成立） |
+| 模型能看见并调用插件工具 | **通过**：`tool_describe` → `local_workspaces` → `local_dispatch` → `local_task_get`，四步 `error: false` |
+| 任务真的落到本机 | **通过**：`task.assigned` 帧到达，worker 状态 `runningTaskId=dt_95a72836…`，执行器真的写了文件 |
+| 本机回报回到云端工具结果 | **通过**：`local_dispatch` 返回 `completed` + 摘要 + `files`，模型据此作答 |
+| 本机账本 | **通过**：`recent[0]` = 该任务，状态 `completed`，带 `sessionId` |
+| 撤销设备后目录立即失效 | **通过**：`revoke` 后 `device_workspaces` 被清空（`drop_device`），任务行保留 |
+| 清理 | 临时设备已 revoke、探针测试文件与临时目录已删除 |
+
+本地执行那一段单独验了一次（同一个探针框架、`DispatchExecutor` 走**真实 `AgentManager`** + 本地假 provider）：
+
+| 验证点 | 结果 |
+| --- | --- |
+| `ensureWorkspaceAgent` → `createSession` → `setSessionPermission(auto)` → `chat()` 接线 | **通过**：2 次模型调用（先要 `write`，再收尾），报告 `kind: done` |
+| 工具真的执行、文件真的落盘 | **通过**：`HELLO.txt` 写入临时仓库，`files: ["HELLO.txt"]` |
+| 本地审批门 | **通过**：`requestApproval` 调用 **0 次** |
+| 摘要 / 用量 / 本地会话 id | **通过**：`summary` 为模型收尾文本，`usage.totalTokens=140`，`localSessionId` 落在报告里 |
+| 失败路径 | 未注入失败（`report.kind: failed` 由 `tests/dispatch-worker.test.ts` 覆盖） |
+
+### 15.4 只有单测、还没手打的验收项
+
+| 场景 | 现状 |
+| --- | --- |
+| D1 真实工作区跑一轮（GUI 里手打，真模型） | 协议半程（网关 + 云端模型）与执行半程（真实 `AgentManager` + 假 provider）都跑通了；**只剩「真模型 + GUI 手点」这一步**，属于人工验收 |
+| D5 界面点急停 | 单测覆盖（`tests/dispatch-worker.test.ts`「急停」用例）；GUI 手打未做 |
+| D6 两端审计行 | 网关 `audit_events` 有派活记录；桌面侧账本已落盘，`audit.jsonl` 尚未接入派活事件 |
+| D7 同一 `client_token` 连派两次 | 插件单测覆盖（`tests/test_dispatch.py`）；真机双击未复现 |
+
+### 15.5 下一步
+
+P2：`input_required`（阻塞式工具等云端回答）、断线重连后的 `SubscribeToTask` 语义、claim 后失联的租约重投。P3 才做对外 A2A 端点。

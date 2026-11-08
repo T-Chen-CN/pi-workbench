@@ -32,7 +32,7 @@ pi-workbench/
 │   ├── preload.cts               # contextBridge（编译为 CommonJS preload.cjs）
 │   ├── app-paths.ts              # 便携式应用目录
 │   ├── workspace-trust.ts        # 工作区信任与路径包含
-│   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / cloud-agent / documents / files / git / settings / system / web-search* / workspace）
+│   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / cloud-agent / dispatch / documents / files / git / settings / system / web-search* / workspace）
 │   ├── cloud/                    # 云端 Agent 主进程侧
 │   │   ├── config.ts             # 连接配置（网关地址 / 设备 token，safeStorage 加密）+ cloudTransport() 单入口
 │   │   ├── gateway.ts            # 网关：配对 / 我是谁 / 撤销 + 错误码翻译（与 CLOUD_AGENT 的错误码表对齐）
@@ -42,6 +42,12 @@ pi-workbench/
 │   │   ├── dashboard.ts          # 控制台原生视图（WebContentsView）宿主
 │   │   ├── media.ts              # 图片旁路（Bearer 设备 token）：上传 / 按路径读回
 │   │   ├── ledger.ts             # 未结算账本：分类 / 记账 / 结账 / 历史复核 / 剪枝
+│   ├── dispatch/                 # 工作区派活（云端 Hermes → 本机工作区）
+│   │   ├── config.ts             # 白名单 `data/agent/dispatch.json`（id 由路径哈希，不落路径上云）
+│   │   ├── relay.ts              # 出站 SSE 中继（退避重连）+ 清单上报 + 任务回报
+│   │   ├── executor.ts           # 把一条云任务变成一次真实本地会话（权限 auto，无本地审批门）
+│   │   ├── worker.ts             # 帧分发 / 串行队列 / 取消 / 账本写入
+│   │   └── ledger.ts             # 本机账本 `data/agent/dispatch-ledger.json`（最近 20 条）
 │   ├── documents/                # 文档解析（零依赖）：zip / xml / ooxml / pdf / detect / preview / render-bridge
 │   │   ├── zip.ts                # node:zlib 手写 ZIP 中央目录（不引第三方）
 │   │   ├── xml.ts                # 流式 XML 扇描（不建 DOM）
@@ -151,6 +157,7 @@ pi-workbench/
 │   │   ├── CloudSessionView.tsx  # 云端会话列表 + 时间线 + 输入框
 │   │   ├── CloudConsoleView.tsx  # 云端控制台全屏宿主（原生视图边界上报 / 失败与未连接态）
 │   │   ├── CloudConnectionView.tsx # 云端连接页（地址 / 密钥 / 连通性 / 能力回显）
+│   │   ├── DispatchCard.tsx       # 「云端 → 派活」卡片（开关 / 白名单 / 运行态 / 急停 / 最近任务）
 │   │   ├── CloudTrace.tsx        # 云端时间线（文本 / 思考折叠 / 分隔线）
 │   │   ├── CloudSubagentCard.tsx  # 子代理卡片（目标 / 状态 / token / 输出尾巴）
 │   │   ├── CloudLedgerDrawer.tsx  # 未结算账本抽屉（做了 / 没做 / 不管）
@@ -166,6 +173,7 @@ pi-workbench/
 │   │   ├── approvalStore.ts      # 待审批请求
 │   │   ├── chatStore.ts          # 消息、草稿、附件、排队、用量
 │   │   ├── cloudStore.ts         # 云端连接、会话列表、时间线片段、当前轮次、控制台状态
+│   │   ├── dispatchStore.ts      # 派活配置、运行态、最近任务（刻意与 cloudStore 分开）
 │   │   ├── dialogStore.ts        # 确认 / 输入对话框
 │   │   ├── diffStore.ts          # Diff 查看器（按工作区隔离）
 │   │   ├── editorStore.ts        # 标签页、当前文件、脏标记、面板开关（按工作区隔离）
@@ -201,6 +209,7 @@ pi-workbench/
 │   │   ├── index.ts              # IPC 封装 + Web dev mock
 │   │   ├── piAgentAPI.ts         # Agent 调用（Electron IPC / Web SSE 桥接）
 │   │   ├── cloud.ts              # 云端 Agent IPC 封装（浏览器下返回「未配置」）
+│   │   ├── dispatch.ts           # 派活 IPC 封装（浏览器下返回「不可用」空态）
 │   │   ├── chatContext.ts        # 上下文块拼装
 │   │   ├── documentRender.ts     # 扫描页渲染桥（渲染进程侧）
 │   │   ├── rendererLog.ts        # 渲染进程日志上报
@@ -372,6 +381,10 @@ ChatPanel.handleSubmit
 | `cloud:status` | main → renderer | 连接状态变化 |
 | `cloud:dashboard:open` / `close` / `bounds` / `reload` | invoke | 程序内控制台：`WebContentsView`（独立 partition、sandbox、无 preload）的开合、边界同步、重载。**可见性唯一真相是 `bounds.visible`**：为 false 时视图直接从窗口摘除；`bounds` 只接受主窗口上报 |
 | `cloud:dashboard:loaded` / `load-failed` / `dashboard:closed` | main → renderer | 控制台首帧加载完成 / 加载失败 / 页面内 Esc 关闭 |
+| `dispatch:config:get` / `config:set` | invoke | 派活总开关与工作区白名单（`data/agent/dispatch.json`）。写入时把每个目录登记进信任表（白名单本身就是一次授权），返回给渲染层的清单**带本机路径**（只在本机界面显示），上云的是 `publicWorkspaces()` 过滤后的 id / label / description |
+| `dispatch:workspace:add` / `workspace:update` / `workspace:remove` | invoke | 白名单增删改：`add` 走系统选目录对话框（用户点选即授权），`update` 只改显示名与描述 |
+| `dispatch:state` / `dispatch:stop` | invoke | 运行态快照（连没连上 / 在跑什么 / 排了几个 / 最近任务）与急停（断中继 + abort 当前会话 + 显式回报 `canceled`） |
+| `dispatch:state-changed` | main → renderer | 派活运行态或账本变化 |
 
 ---
 
