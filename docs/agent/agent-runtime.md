@@ -37,7 +37,7 @@
 - 失败一律降级不阻断轮次：无窗口 / 超时 60s / 文件 > 64MB / 单页渲染失败 → 工具结果里带一句中文说明，正文照常返回。
 - 旧格式（`.doc` `.xls` `.ppt` `.wps` …）不解析：OLE 魔数 → 中文提示让用户另存为 `.docx/.xlsx/.pptx`（`legacyOfficeMessage()`）。
 - 截断沿用内置约定：`DEFAULT_MAX_LINES = 2000` / 50KB，超出时提示用 `pages="1-20"` 之类继续读。
-- 设计取舍与备选方案见 [research-document-reading](../reports/research-document-reading-2026-10-30.md) 与 [design-office-documents](../reports/design-office-documents-2026-10-30.md)。
+- 被否方案（别再引入）：`officeparser`（+69MB，重复 pdfjs）· `superdoc` / OnlyOffice（AGPL）· `Univer`（付费 file IO）· SheetJS（CVE-2023-30533）· `tesseract.js`（不做 OCR）· `@napi-rs/canvas`（38MB 原生 canvas）· `mammoth` · `docx-preview`（自带字体与白纸背景，与主题打架）· LibreOffice（禁子进程 / 未安装）。
 
 ## 2. 权限模型（安全边界，改这里等于改安全策略）
 

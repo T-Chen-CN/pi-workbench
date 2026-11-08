@@ -262,54 +262,13 @@ npm run build
   - 过程组、工具行、结果预览与 Electron 一致。
   - 不出现“只有文本、没有思考和工具”的降级。
 
-## 5. 已知限制（v1 当时的边界）
+## 5. 已知限制
 
-> `tool_update` 实时输出与历史 thinking 时长（E-06 / E-07）已于 2026-10-23 交付，下列前两条仅作回顾；当前能力与待办以 [任务清单](../progress/BACKLOG.md) 为准。
+- 工具行的「查看修改」只对当前轮次、仍在内存里的 Diff 可用；历史工具行不保存 Diff 数据（2026-10-26 起明确不持久化）。
+- 工具结果的完整内容用 `ToolResultViewer` 打开（R-20）：分段读取、虚拟化、搜索、图片内嵌，只读且不重新注入上下文。
+- 脱敏 thinking 的占位取决于供应商是否返回 `redacted` / 空内容（B-02，依赖供应商）。
+- 旧会话没有 `parts` 时按普通文本显示，不会补造过程轨迹（B-03，不做）。
+- `tool_update` 实时输出与历史 thinking 时长（E-06 / E-07）均已交付；当前能力与待办以 [任务清单](../progress/BACKLOG.md) 为准。
 
-- ~~`tool_update` 在 v1 未启用~~ → 已交付：工具执行中结果预览实时刷新。
-- ~~thinking 时长仅实时可得~~ → 已交付：sidecar 记录历史时长。
-- 工具行的“查看修改”只对当前轮次仍在 Diff 队列中的工具可用；历史工具行不保存 Diff 数据（2026-10-26 起明确不持久化）。
-- 工具结果预览截断到约 2000 字符，完整内容仍在 Pi JSONL，UI 不提供全量查看器。（B-01，暂不排期）
-- 脱敏 thinking 的占位取决于供应商是否返回 `redacted` / 空内容。（B-02，依赖供应商）
-- 旧会话没有 `parts` 时按普通文本显示，不会补造过程轨迹。（B-03，不做）
-
-## 6. 缺陷记录模板
-
-```text
-环境: Electron / Web dev，版本/提交
-供应商 / 模型:
-会话 ID:
-提示词:
-预期:
-实际:
-复现步骤:
-证据:
-  - 截图（Paper / Ink）
-  - logs/main.log / agent.log / renderer.log 相关片段
-  - data/agent/sessions/<id>.jsonl 相关条目
-严重度: P0 阻断 / P1 核心功能 / P2 体验
-```
-
-## 7. 退出标准
-
-- `type-check`、`lint`、`test`、`build` 全部通过。
-- A1–A6、B1–B4、C1–C4 全部通过。
-- 至少一组 Paper / Ink 截图和 1024 / 1440 宽度检查通过。
-- 没有新的 console error、React key 警告或会话串流。
-- 旧会话、普通文本模型、多会话并行无回归。
-
-## 8. 执行记录
-
-| 用例 | 环境 | 结果 | 备注 |
-| --- | --- | --- | --- |
-| A1 | Electron / deepseek-flash | ☐ | |
-| A2 | Electron / deepseek-flash | ☐ | |
-| A3 | Electron / deepseek-flash | ☐ | |
-| A4 | Electron / deepseek-flash | ☐ | |
-| A5 | Electron / deepseek-flash | ☐ | |
-| A6 | Electron / deepseek-flash | ☐ | |
-| B1 | Electron | ☐ | |
-| B2 | Electron | ☐ | |
-| C1 | Electron | ☐ | |
-| D1 | Paper / Ink | ☐ | |
-| E1 | Web dev | ☐ | |
+**维护者**: Pi Workbench Team
+**最后更新**: 2026-11-08

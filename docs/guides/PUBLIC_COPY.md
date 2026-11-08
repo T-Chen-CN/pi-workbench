@@ -122,42 +122,6 @@ gh repo edit T-Chen-CN/pi-workbench \
 
 粘贴方式（**执行前确认**）：`gh release edit v0.8.0 --notes-file cache/release-notes-0.8.0.md`。
 
-### v0.7.9 成品（可直接粘贴覆盖现有说明）
-
-```markdown
-修好上一版没接上的那个开关。
-
-## Highlights
-
-- **输出上限现在真的能存住** — 0.7.8 新增的输出上限设置没有生效：主进程清洗配置时把这个字段丢了，所以选完保存又变回「自动」。本版修好了保存与读取，改档位会立刻重建模型并生效，重启后也还在。
-- **「自动」直接告诉你算出来是多少** — 下拉里现在显示「自动（64K）」这类字样，值随上下文档位变化（128K→16K、256K→64K、1M→128K），不用再猜自动档到底是多少。
-- **保存后以磁盘为准** — 保存成功后会回读一次配置，界面显示的是真正存下去的东西。以后这类「看着改了实际没改」的毛病会当场暴露。
-
-## Downloads
-
-| Platform | Asset |
-| --- | --- |
-| Windows | `Pi-Workbench-Setup-0.7.9.exe` |
-| macOS | `Pi-Workbench-0.7.9-universal.dmg` |
-| Linux | `Pi-Workbench-0.7.9.AppImage` |
-
-## Upgrade notes
-
-0.7.8 及更早版本可直接通过应用内更新升级：Windows / Linux 后台下载、点确认后安装，数据目录不受影响；macOS 请下载 dmg 覆盖安装。
-
-如果你在 0.7.8 里手动选过输出上限，那个值没有存下来，需要在设置里重选一次。不选也没关系，自动档在 256K 上下文档下是 64K。
-
-## Known issues
-
-- 构建未做代码签名与公证，首次启动需在 SmartScreen / Gatekeeper 中确认一次。
-- 截断只如实报错，不会自动提高上限重试，也不建议为此调低思考强度。
-- 旧格式 `.doc / .xls / .ppt / .wps` 不解析，只返回「另存为 .docx / .xlsx / .pptx」指引；扫描件不做 OCR。
-
-**Full Changelog**: https://github.com/T-Chen-CN/pi-workbench/compare/v0.7.8...v0.7.9
-```
-
-粘贴方式（**执行前确认**）：`gh release edit v0.7.9 --notes-file <上面这段存成的文件>`。
-
 ### 仍未接入
 
 `.github/workflows/release.yml` 目前用 `gh release create --generate-notes`，说明只有自动生成的 Full Changelog。要自动化成上面的结构，需要改该 workflow（属于 `.github/workflows` 变更，按 [AGENTS §3](../../AGENTS.md) 需先确认）：改为从 `.github/release-notes/<tag>.md` 取正文，取不到时回退 `--generate-notes`。

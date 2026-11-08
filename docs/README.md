@@ -48,10 +48,6 @@
 ### 📊 项目信息
 - **[项目状态](./progress/STATUS.md)** — 一页快照：版本、质量门槛、在建项与下一步
 - **[任务清单](./progress/BACKLOG.md)** — 唯一任务表：未完成项、平台验收、已决定不做；云端后置项见 [CLOUD_AGENT](./requirements/CLOUD_AGENT.md)
-- **[Phase 1 完成报告](./archive/PHASE-1-COMPLETE.md)** — Agent 集成实现细节（已归档）
-
-### 🗂️ 历史归档
-- `archive/` — 阶段报告与一次性设计稿；更早的内容查 Git 历史
 
 ---
 

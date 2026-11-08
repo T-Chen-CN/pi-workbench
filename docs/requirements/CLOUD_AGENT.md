@@ -860,7 +860,7 @@ gateway 启动时把 `.env` 装载进 `os.environ`。所以：
 | 插件单元 | 配置默认值、码生成、规范化、哈希、消费、过期、重放、并发、token 轮换、撤销、限流、审计脱敏、fsguard |
 | 插件集成 | 假 api_server / dashboard：方法、query、body、鉴权头替换、SSE 分块、错误映射、大请求体、路径穿越 |
 | 契约 | 配对、me、heartbeat、revoke、health、capabilities、sessions、runs + SSE |
-| 桌面端 | `tests/cloud-*.test.ts`；当前 151 文件 / 1779 用例 |
+| 桌面端 | `tests/cloud-*.test.ts`；全量 152 文件 / 1809 用例 |
 
 命令：
 
@@ -929,33 +929,14 @@ curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer pi_<token>" htt
 | AC-P09 | 自举 Prompt | 输出连接码链接，不写文件、不 scp |
 | AC-P10 | 旧凭证导入 | 无导入入口、无解析路径 |
 
-**网关插件**
-
-| ID | 场景 | 期望 |
-| --- | --- | --- |
-| AC-GW01 | health | 200，`upstreamOk` 正确 |
-| AC-GW02 | 生成码 | Admin 201，返回 code / expiresAt / pairingUrl |
-| AC-GW03 | 消费码 | 无凭据 201，返回 token + scopes，无 admin |
-| AC-GW04 | 重放 | 409 `pairing_used` |
-| AC-GW05 | 过期 | 410 `pairing_expired` |
-| AC-GW06 | 不存在 | 404 `pairing_not_found` |
-| AC-GW07 | 无 token 代理 | 401 `unauthorized` |
-| AC-GW08 | 撤销后 | 401 `device_revoked` |
-| AC-GW09 | 自注销 | 只能自己的 id；成功后 token 立即失效 |
-| AC-GW10 | 同设备重配对 | 旧 token 失效，新 token 可用 |
-| AC-GW11 | SSE | 文本 / 工具事件流式到达，不缓冲 |
-| AC-GW12 | 审批档位 | GET 白名单；PUT 只写 `approvals.mode` |
-| AC-GW13 | 图片 | 上传 / 读回可用；越权路径拒绝 |
-| AC-GW14 | 日志 | 不含 code / token / Authorization |
-| AC-GW15 | 部署 | 域名 + Caddy 后 G0 全绿 |
-| AC-GW16 | 桌面联调 | 配对 → 连接 → 对话 → 注销 → 再配对 |
+> 网关插件的逐条验收就是 §8.2 的 G0（已在真机全绿）；插件自身的单测在 `pi-workbench-gateway/tests/`。
 
 **桌面端云端功能**
 
 | ID | 场景 | 状态 |
 | --- | --- | --- |
 | AC-01 | 冷启动列会话 | 已完成 |
-| AC-02 | 发指令 + 流式 + 停止 | 已完成 |
+| AC-02 | 发指令 + 流式 | 已完成；「停止」按决定不做真机验收 |
 | AC-03 | 审批拒绝 | 已完成 |
 | AC-04 | 审批超时自动拒绝 | 已完成 |
 | AC-05 | CDP 屏幕 / 接管 | 后置 |
