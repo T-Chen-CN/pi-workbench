@@ -867,6 +867,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     patch({ answer: text })
 
     const result = await cloudApi.respondClarify({
+      runId: get().runId ?? undefined,
       requestId: promptId,
       generation: part.generation,
       answer: text,

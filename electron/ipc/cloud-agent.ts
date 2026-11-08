@@ -488,14 +488,18 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
 
   handleIpc(
     'cloud:clarify:respond',
-    async (_event, input: { requestId?: string; generation?: number; answer?: string }) => {
+    async (
+      _event,
+      input: { runId?: string; requestId?: string; generation?: number; answer?: string }
+    ) => {
       const requestId = String(input?.requestId ?? '')
       const answer = String(input?.answer ?? '')
       if (!requestId) return { success: false as const, error: '缺少提问 id' }
       if (!answer.trim()) return { success: false as const, error: '回答不能为空' }
       const generation = Number(input?.generation)
       if (!Number.isInteger(generation)) return { success: false as const, error: '缺少轮次代号' }
-      const runId = runner?.activeRunId ?? null
+      // 显式 runId 优先：并行两轮时「最近一轮」可能是另一条会话
+      const runId = String(input?.runId ?? '') || (runner?.activeRunId ?? null)
       if (!runId) return { success: false as const, error: '当前没有正在执行的一轮' }
       try {
         await createRemote(ensureClient()).clarifyRun({ runId, requestId, generation, answer })

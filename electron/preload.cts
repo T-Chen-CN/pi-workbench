@@ -495,7 +495,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('cloud:sessions:list', input),
   cloudSessionsUpdate: (input: unknown) => ipcRenderer.invoke('cloud:sessions:update', input),
   cloudSessionsDelete: (input: unknown) => ipcRenderer.invoke('cloud:sessions:delete', input),
-  cloudClarifyRespond: (input: { requestId: string; generation: number; answer: string }) =>
+  cloudClarifyRespond: (input: {
+    runId?: string
+    requestId: string
+    generation: number
+    answer: string
+  }) =>
     ipcRenderer.invoke('cloud:clarify:respond', input),
   cloudApprovalRespond: (input: {
     runId: string

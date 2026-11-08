@@ -280,6 +280,7 @@ export const cloudApi = {
   },
 
   async respondClarify(input: {
+    runId?: string
     requestId: string
     generation: number
     answer: string

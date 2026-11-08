@@ -714,6 +714,8 @@ export interface ElectronAPI {
     error?: string
   }>
   cloudClarifyRespond: (input: {
+    /** 并行跑两轮时不能靠主进程「最近一轮」猜 */
+    runId?: string
     requestId: string
     generation: number
     answer: string

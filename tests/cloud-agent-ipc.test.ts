@@ -1292,6 +1292,22 @@ describe('cloud clarify', () => {
     expect(body).toEqual({ request_id: 'cl_1', execution_generation: 4, answer: 'production' })
   })
 
+  it('answers into the run it was told about, not the most recent one', async () => {
+    // 并行两轮时「最近一轮」可能是另一条会话的 run：澄清必须显式带 runId
+    await call('cloud:run:start', { input: 'par a', idempotencyKey: 'key-par-a' })
+    await call('cloud:run:start', { input: 'par b', idempotencyKey: 'key-par-b' })
+    const before = mocks.state.requests.length
+    const result = await call<{ success: boolean }>('cloud:clarify:respond', {
+      runId: 'run_par_a',
+      requestId: 'cl_2',
+      generation: 3,
+      answer: '是',
+    })
+    expect(result.success).toBe(true)
+    const touched = mocks.state.requests.slice(before).filter((line) => line.includes('/clarify'))
+    expect(touched[0]).toContain('run_par_a')
+  })
+
   it('refuses an empty answer, a missing id or a missing generation', async () => {
     for (const input of [
       { requestId: 'cl_1', generation: 4, answer: '   ' },
