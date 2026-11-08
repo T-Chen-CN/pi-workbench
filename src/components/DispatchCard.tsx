@@ -84,7 +84,8 @@ export const DispatchCard: React.FC<{ connected: boolean }> = ({ connected }) =>
             disabled={busy || (!config.enabled && config.workspaces.length === 0)}
             onClick={() => void setEnabled(!config.enabled)}
           >
-            {config.enabled ? t('cloudDispatchOff') : t('cloudDispatchEnable')}
+            {/* 按钮写「动作」，状态写「结果」：开启时按钮不能显示「已关闭」 */}
+            {config.enabled ? t('cloudDispatchDisable') : t('cloudDispatchEnable')}
           </Button>
         }
       />

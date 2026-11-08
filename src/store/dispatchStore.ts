@@ -123,7 +123,11 @@ export const useDispatchStore = create<DispatchState>((set, get) => ({
     const { config, state, recent } = extract(payload)
     const next = config ?? get().config
     set({
-      config: state ? { ...next, state } : next,
+      // `enabled` 以 worker 推送的为准：任何改变开关的路径（本窗口、另一个窗口、
+      // 退出前落盘）都要能反映到界面上，不能只认「本窗口刚点过按钮」。
+      config: state
+        ? { ...next, enabled: state.enabled ?? next.enabled, state }
+        : next,
       recent: recent ?? get().recent,
     })
   },

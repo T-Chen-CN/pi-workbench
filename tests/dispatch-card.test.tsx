@@ -107,8 +107,17 @@ describe('DispatchCard', () => {
     const stub = installBridge(config())
     render(<DispatchCard connected />)
     await waitFor(() => expect(screen.getByText('Repo')).toBeTruthy())
-    screen.getByRole('button', { name: zh('cloudDispatchOff') }).click()
+    screen.getByRole('button', { name: zh('cloudDispatchDisable') }).click()
     await waitFor(() => expect(stub.set).toHaveBeenCalledWith({ enabled: false }))
+  })
+
+  it('labels the toggle with the action, not the current state', async () => {
+    // 开关开着时按钮要写「关闭派活」：写「已关闭」会让人以为派活已停
+    installBridge(config())
+    render(<DispatchCard connected />)
+    await waitFor(() => expect(screen.getByText('Repo')).toBeTruthy())
+    expect(screen.queryByRole('button', { name: zh('cloudDispatchOff') })).toBeNull()
+    expect(screen.getByRole('button', { name: zh('cloudDispatchDisable') })).toBeTruthy()
   })
 
   it('follows pushed state instead of keeping a local guess', async () => {

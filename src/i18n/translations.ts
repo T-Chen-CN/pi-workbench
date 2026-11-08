@@ -298,6 +298,7 @@ export const translations = {
     cloudDispatchHint:
       '开启后，云端 Hermes 可以把任务派到本机的这些工作区执行。设备主动连网关，本机不开放任何入站端口。',
     cloudDispatchEnable: '允许云端派活',
+    cloudDispatchDisable: '关闭派活',
     cloudDispatchOn: '已开启',
     cloudDispatchOff: '已关闭',
     cloudDispatchConnected: '已连上网关，云端能看到清单',
@@ -1437,6 +1438,7 @@ export const translations = {
     cloudDispatchHint:
       'When enabled, the cloud Hermes can send tasks to these workspaces on this machine. The device dials out to the gateway; no inbound port is opened.',
     cloudDispatchEnable: 'Allow cloud dispatch',
+    cloudDispatchDisable: 'Turn off dispatch',
     cloudDispatchOn: 'On',
     cloudDispatchOff: 'Off',
     cloudDispatchConnected: 'Connected — the cloud can see the list',

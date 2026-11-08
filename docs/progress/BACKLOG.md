@@ -23,7 +23,7 @@
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
 | C-08 ~ C-12 | 云端后置：屏幕接管 / Kanban / 拆窗 / IM / 对外写 MCP 门 | 后置 | ⬜ 未排期 |
-| H3 | 云端工作区派活（`local_*` 工具 / 任务邮箱） | P1–P3 | ✅ 全部落地（插件 0.3.1 + 桌面）并真机验收：急停 / 云端取消 / 幂等 / 断线重放 / 本地反问 / 租约重投 / 重连接回 / A2A 端点 / 轨迹可查。不做清单（push webhook、强提醒、逐条直播、跨设备重投）见 §10 —— [WORKSPACE_DISPATCH](../requirements/WORKSPACE_DISPATCH.md) §15 |
+| H3 | 云端工作区派活（`local_*` 工具 / 任务邮箱） | P1–P3 | ✅ 全部落地（插件 0.3.2 + 桌面）并真机验收（含一轮全量复验）：急停 / 云端取消 / 幂等 / 断线重放 / 本地反问 / 租约重投 / 重连接回 / A2A 端点 / 轨迹可查。不做清单（push webhook、强提醒、逐条直播、跨设备重投）见 §10 —— [WORKSPACE_DISPATCH](../requirements/WORKSPACE_DISPATCH.md) §15 |
 
 ### 已交付（只留一行，细节在 git）
 
