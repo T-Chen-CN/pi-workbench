@@ -6,7 +6,7 @@
 
 - **状态**: 已采纳（2026-10-28）
 - **影响范围**: `pi-bridge/src/session-entries.ts`（新增）、`pi-bridge/src/session-history.ts`、`pi-bridge/src/session-export.ts`、`pi-bridge/src/agent-manager.ts`、`src/store/chatStore.ts`、`src/components/AgentTrace.tsx`、`src/components/ChatMessageRow.tsx`
-- **相关文档**: [设计系统 6.14](../design/DESIGN_SYSTEM.md)、[STATUS 2026-10-28](../progress/STATUS.md)、[Backlog R-05 / R-10](../progress/BACKLOG.md)
+- **相关文档**: [设计系统 6.14](../design/DESIGN_SYSTEM.md)、[任务清单](../progress/BACKLOG.md)、[云端 Agent 方案](../requirements/CLOUD_AGENT.md)
 
 ## 背景
 

@@ -45,7 +45,7 @@ docs/
 
 | 类型 | 处理 |
 | --- | --- |
-| `docs/reports/` 里的临时报告 | 用户审查后决定：移入永久目录（`decisions/` / `architecture/`）、整合进 `AGENTS.md` / `docs/progress/STATUS.md`，或直接删除 |
+| `docs/reports/` 里的临时报告 | 用户审查后决定：移入永久目录（`decisions/` / `architecture/`）、整合进 `AGENTS.md` / `docs/progress/BACKLOG.md`，或直接删除 |
 | 永久文档 | 版本控制保留；过期就改或删，不留副本 |
 
 ## 一条硬规则

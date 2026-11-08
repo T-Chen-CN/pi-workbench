@@ -264,7 +264,7 @@ npm run build
 
 ## 5. 已知限制（v1 当时的边界）
 
-> `tool_update` 实时输出与历史 thinking 时长（E-06 / E-07）已于 2026-10-23 交付，下列前两条仅作回顾；当前能力以 [STATUS.md](../progress/STATUS.md) 为准。
+> `tool_update` 实时输出与历史 thinking 时长（E-06 / E-07）已于 2026-10-23 交付，下列前两条仅作回顾；当前能力与待办以 [任务清单](../progress/BACKLOG.md) 为准。
 
 - ~~`tool_update` 在 v1 未启用~~ → 已交付：工具执行中结果预览实时刷新。
 - ~~thinking 时长仅实时可得~~ → 已交付：sidecar 记录历史时长。

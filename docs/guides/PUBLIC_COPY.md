@@ -209,8 +209,8 @@ banner 的色值 / 字体 / 字号只允许取自 [DESIGN_SYSTEM](../design/DESI
 
 - [ ] banner 右侧的 `vX.Y.Z`（`banner-light.svg` / `banner-dark.svg` 各一处）；徽章自动，正文不再手写版本号
 - [ ] `README.md` 与 `README.en.md` 的节序、节数一致（改一边必须改另一边）
-- [ ] Highlights 与 STATUS.md 的最新条目一致，不写未交付的能力
-- [ ] 「开发情况」表的版本 / 发布数 / 用例数 / 已知边界与 STATUS 对齐
+- [ ] Highlights 与本次 Release 说明一致，不写未交付的能力
+- [ ] 「开发情况」表的版本 / 发布数 / 用例数与本次发布时的实测值一致
 - [ ] Release 说明按 §2 结构写，含 Downloads 与 Known issues
 - [ ] 仓库 About / Topics / Website 未过期
 - [ ] 新增功能先问一句「竞品有没有」：有就归入「其余能力」一行，没有才配得上独立小节

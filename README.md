@@ -177,7 +177,7 @@ npm run build
 | 依赖     | Electron 44 · React 19 · TypeScript 5.9 · Monaco 0.57 · `@earendil-works/pi-coding-agent` 1.3  |
 | 已知边界 | 未签名未公证；旧格式 Office 不解析；扫描件不做 OCR；Linux 托盘降级为最小化；平台手工验收仍未做 |
 
-**接下来在做的**：跨工作区的顶层 Agent（派发子会话、委派授权、headless 工作区）仍处于需求草案阶段，见 [TOP_LEVEL_AGENT_BRIEF](docs/requirements/TOP_LEVEL_AGENT_BRIEF.md)。阶段明细与逐条记录在 [STATUS](docs/progress/STATUS.md)，停放项在 [BACKLOG](docs/progress/BACKLOG.md)。
+**接下来在做的**：跨工作区的顶层 Agent（派发子会话、委派授权、headless 工作区）仍处于需求草案阶段，见 [TOP_LEVEL_AGENT_BRIEF](docs/requirements/TOP_LEVEL_AGENT_BRIEF.md)。当前状态见 [STATUS](docs/progress/STATUS.md)，任务与停放项在 [BACKLOG](docs/progress/BACKLOG.md)。
 
 ---
 

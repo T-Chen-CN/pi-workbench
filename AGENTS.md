@@ -4,7 +4,7 @@
 
 **一句话**：本地优先的 Agent 原生开发工作台 —— Electron 桌面应用，Pi Agent 跑在主进程里，直接读写工作区、执行命令。
 **栈**：Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57。**Node ≥ 24**（`node:sqlite`、构建脚本依赖）。
-**阶段**：Phase 6 持续优化（见 [STATUS](docs/progress/STATUS.md)）。
+**阶段**：云端 Agent 已发布 0.8.0，Phase 6 持续优化（快照见 [STATUS](docs/progress/STATUS.md)，待办见 [BACKLOG](docs/progress/BACKLOG.md)）。
 
 ---
 
@@ -132,7 +132,7 @@ npm run build      # 渲染层 + bridge + 主进程
 | [GIT_WORKTREE_SESSIONS](docs/requirements/GIT_WORKTREE_SESSIONS.md) | 工作树会话的完整需求与验收场景 |
 | [AGENT-TESTING](docs/guides/AGENT-TESTING.md) | Agent 功能手动验收步骤 |
 | [reporting](docs/agent/reporting.md) | 什么时候该写报告、写到哪、怎么清理 |
-| [STATUS](docs/progress/STATUS.md) · [BACKLOG](docs/progress/BACKLOG.md) | 当前进度与待办 |
+| [STATUS](docs/progress/STATUS.md) · [BACKLOG](docs/progress/BACKLOG.md) | 现状快照（STATUS）与唯一任务表（BACKLOG） |
 
 ---
 

@@ -1,305 +1,89 @@
-# Pi Workbench 后续开发清单（Backlog）
+# 任务清单（Backlog）
 
-> **面向**：要挑下一个任务的人
-> **什么时候读**：规划迭代、确认某个事项是否已被处理时
-> **什么时候要改**：新增待办、关闭待办或范围变化时
-
-> **状态**: ✅ 已收尾（2026-10-24，经项目所有者手动验收）；**2026-11-03 因云端 Agent 重新开启**，见第 7 节
-> **来源**: [ROADMAP v1](./ROADMAP.md) 收尾时未实现或按 v1 缩小范围的项目
-> **基线**: v0.7.4 · `main` · CI 通过
-> **相关**: [v1 方案（已归档）](./ROADMAP.md)、[项目状态](./STATUS.md)、[设计系统](../design/DESIGN_SYSTEM.md)
-
----
-
-## 0. 收尾记录（2026-10-24）
-
-- R-02 ~ R-20 的全部 P1–P3 开发项已完成实现、自动化测试与项目所有者手动验收，确认无遗留问题（R-02 排队消息持久化已于 2026-10-28 按项目所有者要求移除，见第 3 节）。
-- 图片附件按 2048 预处理重做，并补充“设置中按模型勾选图片能力”和消息内缩略图 / 全窗口预览。
-- 剩余仅 **V-01 / V-02 平台手动验收**与版本升级发布，按既定决定暂缓，不阻塞开发收尾。
-- 本文保留为已收尾清单；如出现新的开发项，在本文重新开启并更新状态，编号继续顺延。
+> **面向**：要挑下一个任务的人与 agent
+> **唯一任务表**：所有待办、平台验收、"已决定不做"都在本文件；想知道某件事做了没，也只查这里。
+> **什么时候改**：新增 / 关闭 / 范围变化。完成项在 §2 只留一行，实现细节交给 `git log` 与 Release 页。
+> **相关**：[项目状态](./STATUS.md)（一页快照）· [云端 Agent 方案](../requirements/CLOUD_AGENT.md) · [设计系统](../design/DESIGN_SYSTEM.md)
 
 ---
 
 ## 1. 维护规则
 
-- 本文是**当前唯一**的后续开发功能清单；ROADMAP 只保留 v1 交付记录，不再新增待办。
-- 完成一项：把该项标记为 ✅ 并写明日期与验证方式，同时在 [STATUS.md](./STATUS.md) 追加一条记录。
-- 新想法先进本文；若属于“已接受的能力边界”（B 类）则只记录、不排期。
-- 发版前提：三平台 CI 绿、本文没有未完成的 P1 项、真实供应商冒烟通过。
+- 完成一项：§2 状态改 ✅ 并写日期，正文条目删除（细节查提交与 Release 说明）。
+- 编号不复用；放弃的移到 §5，并写清为什么。
+- 发版前提：三平台 CI 绿、没有未完成的 P0 / P1 项、真实供应商冒烟通过。
 
 ## 2. 总览
 
-| ID | 项目 | 优先级 | 来源 | 依赖 |
-| --- | --- | --- | --- | --- |
-| R-02 | ⛔ 排队消息跨重启持久化（2026-10-28 按项目所有者要求移除） | P2 | AF-04 剩余 | chatStore + `.pi-workbench/` |
-| R-03 | ✅ 对话分支切换 UI（n/m） | P2 | AF-07 剩余 | Pi 会话树、fork |
-| R-04 | ✅ 任务列表基于结构化计划并跨压缩保留 | P2 | AF-12 剩余 + AF-02 升级 | Plan 模式结构化输出、compaction |
-| R-05 | ✅ 自动压缩分隔线 | P2 | AF-05 剩余 | `compaction_start/end` 事件 |
-| R-06 | ✅ 模型能力提示 | P2 | AF-08 剩余 | 模型元数据 |
-| R-08 | ✅ 图片 / 截图附件 | P1 | AF-09 剩余 | `PromptOptions.images` |
-| R-09 | ✅ `path:line` 跳转行 | P2 | AF-09 剩余 | Monaco revealLine |
-| R-10 | ✅ 导出 Markdown / HTML / JSONL | P2 | AF-13 剩余 | 会话 JSONL、HTML 生成 |
-| R-13 | ✅ 提示模板与技能命令 | P2 | AF-14 剩余 | Pi prompt templates / skills |
-| R-15 | ✅ 空状态建议个性化 | P3 | AF-18 剩余 | 最近操作记录 |
-| R-16 | ✅ 子 Agent 活动视图 | P3 | AF-17 剩余 | 工具轨迹、嵌套调用 |
-| R-19 | ✅ 重试倒计时实时化 | P3 | AF-11 剩余 | 重试事件 |
-| R-21 | ✅ 任意位置 / 任意格式文件附件（只给路径） | P1 | 使用反馈 | 原生文件选择、`buildContextPrompt` |
-| R-22 | ✅ PDF / Office 可读：Agent 读取 + 程序内只读预览 | P2 | R-21 后续 | 自写 ZIP+XML、pdf.js legacy、渲染进程画扫描页 |
-| R-20 | ✅ 工具结果全量查看器 | P2 | B-01 升级 | 会话 sidecar、工具结果存储 |
-| R-23 | 🟡 输出预算与截断的完整处理（防 / 检 / 修 / 呈现） | P0 | 现场故障：PW-Hermes 2026-11-06 连续 8 次空回复 | `AgentManager`、`model-config`、R-06 |
-| V-01 | macOS 手动验收 | 发布前 | 平台差异 | dmg 构建 |
-| V-02 | Linux 手动验收 | 发布前 | 平台差异 | AppImage 构建 |
+### 未完成
 
-建议顺序：R-08 → R-02 → R-03 → R-20 → R-10 → 其余按优先级与使用反馈穿插。编号不复用，已移除的编号见第 5 节。
+| ID | 项目 | 优先级 | 状态 |
+| --- | --- | --- | --- |
+| R-23 | 输出预算与截断的完整处理（详见 §3） | P0 | 🟡 部分完成（2026-11-06） |
+| V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
+| V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
+| C-08 ~ C-12 | 云端后置：屏幕接管 / Kanban / 拆窗 / IM / 对外写 MCP 门 | 后置 | ⬜ 未排期 |
+| H3 | 云端工作区派活（`local_*` 工具 / 任务邮箱） | 后置 | ⬜ 单独立项 |
+| TOP-1 | 顶层 Agent 跨工作区编排（详见 §7） | 草案 | ⬜ 未开工 |
 
-> **云端 Agent 不在本节**：方案、状态与路线见 [第 7 节](#7-云端-agent)。
+### 已交付（只留一行，细节在 git）
 
----
+- 2026-10-23 ~ 10-31 经项目所有者手动验收：R-03 分支切换 · R-04 结构化计划 · R-05 压缩分隔线 · R-06 模型能力提示 · R-08 图片附件 · R-09 `path:line` 跳转 · R-10 三格式导出 · R-13 模板与技能 · R-15 空状态建议 · R-16 子 Agent 活动 · R-19 重试倒计时 · R-20 工具结果查看器 · R-21 任意位置 / 格式附件（只给路径）· R-22 PDF / Office 可读与只读预览。
+- 已移除：R-02 排队消息跨重启持久化（2026-10-28 项目所有者决定，排队消息只存内存）。
 
-## 3. 详细条目
+## 3. R-23 输出预算与截断的完整处理 🟡
 
-### R-02 排队消息跨重启持久化 ⛔ 已移除（2026-10-28）
+**现状**：`length`（输出撞上限）已不再落进成功分支，也不再写占位文案；剩下的是"防"与"续写后续动作"两头的收尾。
 
-> **移除说明**：图片附件改为按 id 在提交时消费后，排队项需要携带自己的图片；跨重启保存图片会让 `.pi-workbench/pending-messages.json` 体积与安全面失控，而排队消息本身是运行期短命状态。经项目所有者确认，整条持久化链路（`chat:pending:get/set` IPC、`sanitizePendingSessions`、渲染层 hydrate 与回写）已删除，排队消息只保存在内存：会话切换保留，应用重启后不恢复。
+**已做**（0.7.7 ~ 0.7.9，详见 `agent-runtime` §6）：
 
-- 现状：待发送消息存在 `chatStore` 内存中，会话切换保留、应用重启丢失。
-- 目标：重启后恢复每个会话的待发送消息与排队 / 插话模式。
-- 技术：写入 `{workspace}/.pi-workbench/pending-messages.json`（明文、原子写、按会话分组），App 启动时 hydrate 进 chatStore；关闭标签或删除会话时清理。
-- 验收：运行中发一条排队消息，立即关闭应用并重启，卡片恢复且可继续发送 / 删除。
-- **完成情况**：新增 `chat:pending:get/set` IPC，主进程做结构与长度清洗后经 `writeJsonAtomic` 写入；ChatPanel 在工作区初始化时恢复各会话的待发送消息，并订阅 chatStore 变化（300ms 合并）回写快照，关闭标签 / 删除会话时快照自然移除该会话。
-- **验证**：`type-check` / `lint` / `npm test`（46 文件 426 用例）/ `npm run build` 通过；新增 IPC 清洗与拒绝未授权工作区、store 恢复、ChatPanel 重启恢复渲染测试。
+- 检：`stopReason === 'length'` 单独分支，`success:false` + `errorCode`（`output-truncated` / `empty-response`）+ `outputLimit`。
+- 呈现：两类文案分开（有正文被切 / 只有思考）；`AgentUsage.reasoning` 透出，气泡显示「思考 N」。
+- 修：空正文不进 `runtime.messageHistory`；catalog 退回供应商硬上限，推荐值交给档位。
+- 档位：设置页「输出上限」下拉（自动 / 16K / 32K / 64K / 128K / 256K），落 `api-config.json` 的 `maxTokens`；三层归一化（渲染层 / 主进程 / bridge）必须同步改。
+- **刻意不做**：自动提升上限重试、降低思考强度——出问题就如实报错。
 
-### R-03 对话分支切换 UI（n/m） ✅（2026-10-24）
+**剩余子项**：
 
-- 现状：支持重新生成与编辑重发，但新回复会覆盖原分支，没有兄弟回复切换。
-- 目标：同一用户消息的多次回复以 `1/2`、`2/2` 切换，分支互不覆盖；切换只影响该会话的对话树，工作区、打开的文件与代码状态不变，代码回退由 git 与单文件还原负责。
-- 技术：复用 Pi 会话树 fork / `getUserMessagesForForking`；消息需要稳定的分支标识；分支关系写入会话 sidecar。
-- 验收：对同一问题连续重新生成两次，出现 1/2、2/2；切换后内容与工具轨迹正确；工作区文件不变；重启后分支仍可切换。
-- **完成情况**：pi-bridge 新增 `listBranches` / `switchBranch`：从 `SessionManager.getTree()` 找出同一用户消息下的多个助手回复，`navigateTree` 只移动会话树叶子；sidecar 记录每条分支上次停留的叶子，切回时恢复完整后续。重新生成改为以当前分支的最后一条用户消息为准（避免切分支后回退到别的分支）。聊天头部显示 `‹ 1/2 ›` 切换器，历史恢复与每轮生成后刷新。
-- **验证**：`type-check` / `lint` / `npm test`（46 文件 433 用例）/ `npm run build` 通过；新增 bridge 分组 / 切换 / 运行中拒绝、sidecar 兼容旧文件、store 分组映射与 ChatPanel 切换渲染测试。真实会话树的分支验收留待界面手动确认。
+- **B4（修）** 区分「可续写截断」与「确定性截断」的后续动作（现在两者都只报错）。
+- **B7（防）** 长上下文下 `clampMaxTokensToContext` 压到临界值时提前提示。
+- **B8（防）** 标题生成、压缩摘要等轻任务单独预算或关思考。
+- **B9（回归）** 补 SDK 自动压缩重试的联动用例（现有四组：`length + thinking-only`、`length + 部分正文`、空正文不落 history、`usage.reasoning`）。
+- **思考强度 ↔ 预算联动** 接 `reasoning_effort`（DeepSeek 支持 `none/low/high/max`），让档位驱动思考深度而不只是调 `max_tokens`。当前 `model-config.ts` 生成的模型对象没有 `compat.thinkingFormat`，`openai-completions.js:670` 的 deepseek 分支从不执行。
 
-### R-04 任务列表基于结构化计划并跨压缩保留 ✅（2026-10-24）
+**关键事实**：pi-ai 的 `buildBaseOptions`（`simple-options.js:26`）强制 `options?.maxTokens ?? model.maxTokens`，**请求体永远带 `max_tokens`**——「不传、让供应商决定」在现有 SDK 下不可行；唯一绕过点是 `onPayload`（`openai-completions.js:188`），但 pi-bridge 未暴露。
 
-- 现状：“本轮任务”由工具步骤派生，不是模型的结构化计划；Plan 模式输出自由文本。
-- 目标：Plan 模式改为产出结构化计划（步骤、涉及文件、风险），计划卡**只读**展示，用户只能批准或拒绝；批准后任务列表由同一份结构化计划驱动，执行时更新状态，上下文压缩后仍保留。这会把 AF-02 从“自由文本计划”升级为“结构化计划”，属于本项的一部分。
-- 技术：增加仅 Plan 模式可用的计划提交工具 / JSON schema；计划写入会话 sidecar 并在压缩摘要中保留；计划卡与任务列表共用同一数据结构。
-- 验收：Plan 模式只产出结构化计划；计划卡不可编辑，只能批准 / 拒绝；批准后任务列表与计划步骤一致并随执行更新；手动压缩后任务列表仍在。
-- **完成情况**：新增 `submit_plan`（仅 Plan 模式）与 `update_plan_step` 两个会话内工具，Plan 提示词改为要求调用 `submit_plan` 提交结构化步骤（标题 / 文件 / 风险）；计划写入会话 sidecar（不进入模型上下文，压缩不受影响），并通过 `plan_submitted` / `plan_updated` 事件同步。聊天中新增只读计划卡：步骤不可编辑，仅“批准并执行 / 拒绝”；批准后第一步自动标记进行中、切回 Act 并按步骤发送执行指令，模型用 `update_plan_step` 更新状态；“本轮任务”区域在存在已批准计划时改为计划进度与当前步骤。计划工具归类为只读，不触发审批弹窗；历史恢复时从 sidecar 补回计划卡。
-- **验证**：`type-check` / `lint` / `npm test`（48 文件 470 用例）/ `npm run build` 通过；新增计划持久化 / 批准 / 拒绝、sidecar、store 与计划卡只读 / 批准交互测试。真实模型调用 `submit_plan` 与执行中更新步骤留待界面手动确认。
-
-### R-05 自动压缩分隔线 ✅（2026-10-24）
-
-- 现状：手动压缩有确认与提示；自动压缩发生时对话里没有可见事件。
-- 目标：自动压缩前后在对话中显示分隔线 / 系统事件，压缩后刷新上下文仪表。
-- 技术：把 `compaction_start` / `compaction_end` 转发到渲染层，作为系统消息或分隔条渲染。
-- 验收：触发自动压缩后对话中出现分隔线，仪表数值回落，历史内容按压缩结果展示。
-- **完成情况**：pi-bridge 转发 `compaction_start` / `compaction_end`（含原因与压缩前 tokens）；渲染层在 `compaction_end` 时插入 `system` 角色消息，聊天中以分隔线样式显示“上下文已压缩 · 自动/手动 · 压缩前 N tokens”，并立即重新读取上下文占用。压缩失败只保留原有错误处理，不插入分隔线。
-- **2026-10-28 修正**：原实现把压缩提示作为 `system` 消息追加到消息数组末尾，而一轮回复在 store 里是持续增生的同一消息，导致分隔线总落在轮末、多次压缩堆成一串，且重载后丢历史。改为以会话记录（entry 链）为单一真相源：压缩点变为消息 `parts` 里的 `compaction` part，实时与重载位置一致；文案统一为“上下文已压缩 · 压缩前 N tokens”，不再区分手动 / 自动；失败或取消（`aborted`）的压缩不画分隔线。见 `STATUS.md` 2026-10-28 条目与设计系统 §6.14。
-- **验证**：`type-check` / `lint` / `npm test`（46 文件 443 用例）/ `npm run build` 通过；新增 bridge 事件转发与分隔线渲染测试。真实阈值压缩留待长会话手动确认。
-
-### R-06 模型能力提示 ✅（2026-10-24）
-
-- 现状：模型选择只显示名称，不提示上下文窗口、是否支持思考或视觉输入，也不区分模型是否可用。
-- 目标：选择器显示上下文窗口、thinking 与图像输入能力；不支持的组合在选择时禁用并说明；列表里不可用的模型（如当前 `deepseek-v4-pro`）明确标注或隐藏，避免用户切过去才发现报错。
-- 技术：读取模型元数据（`contextWindow`、能力标记），经 IPC 提供给渲染层；自定义端点缺失元数据时显示“未知”而不是猜测。
-- 验收：切换模型时提示随之更新；选择不支持的思考级别或发送图片给纯文本模型会被阻止并说明原因。
-- **完成情况**：`models.json` 改为写入供应商返回的全部可选模型，并为已知模型附带能力元数据（当前内置目录仅 `deepseek-flash`：128K 上下文、支持思考与图像，依据项目所有者 2026-10-24 确认）；新增 `agent:models:capabilities` 返回每个模型的可用性、元数据来源（catalog / default）与支持的思考级别。模型选择器在不可用模型后标注“（不可用）”并禁用，思考选择器在不支持思考时禁用、对不支持的级别禁用对应选项；选择器下方显示“128k 上下文 · 支持思考 · 支持图像”或“供应商未提供元数据”。图像附件在模型不支持或未声明视觉时阻止并提示。
-- **2026-10-24 调整**：图像能力不再由内置目录猜，改为用户在“设置 → 供应商 → 支持图片的模型”逐模型勾选；勾选结果随 `api-config.json` 保存并写入 `models.json` 的 `input`，能力提示中的“图像”一项也以勾选为准。旧配置缺少该字段时预勾选 `deepseek-flash`。
-- **验证**：`type-check` / `lint` / `npm test`（46 文件 445 用例）/ `npm run build` 通过；新增 bridge 能力元数据 / 不可用标注 / models.json 全量模型测试与选择器能力提示渲染测试。真实 DeepSeek flash 的视觉与思考行为留待手动确认。
-
-### R-08 图片 / 截图附件 ✅（2026-10-24）
-
-- 现状：支持文件与选区片段附件；图片只能作为文件附加，模型收不到图像内容。
-- 目标：粘贴截图、拖入图片作为图像附件发送给支持视觉的模型；模型不支持图像输入时给出明确提示与大小限制。
-- 技术：`PromptOptions.images`（base64）、附件类型扩展、大小与格式校验；当前供应商实际可用模型只有 `deepseek-flash`（2026-10-24 确认，`deepseek-v4-pro` 当前不可用），R-08 以它作为验收模型；可通过 R-06 的能力提示标注模型是否支持视觉。
-- 验收：选择视觉模型时，粘贴的截图能作为图像发送并被模型描述；选择纯文本模型时给出明确提示而不是静默失败。
-- **完成情况**：粘贴 / 拖入图片进入附件条（缩略图 + 移除），限制 PNG/JPEG/WebP/GIF、单张 5MB、最多 4 张；图像走 `PromptOptions.images`，不注入文本上下文；主进程与 pi-bridge 双层校验。“纯文本模型明确提示”并入 R-06（模型能力标注）统一处理。
-- **2026-10-24 优化**：去掉 5MB / 4 张的保守限制，改为统一预处理与通用上限——长边 ≤2048 且体积正常的图片原样发送；超过时等比缩到 2048，截图 / 线稿优先 PNG（超限回退 JPEG），照片 JPEG，GIF 不重编码；单张编码后 ≤10MB、单条 ≤20 张、请求 base64 总量 ≤48MiB，渲染层 / 主进程 / pi-bridge 使用同一组数值并明确报错，不再静默丢图。模型是否接受图片改由“设置 → 供应商”里的模型勾选框声明，未勾选的模型在附加时即被阻止并提示；`models.json` 的 `input` 随勾选写入，避免 SDK 静默过滤图片。
-- **验证**：`type-check` / `lint` / `npm test`（49 文件 481 用例）/ `npm run build` 通过；新增预处理决策（缩放 / 编码 / 上限）、设置勾选持久化、`models.json` input 映射与 bridge 图片校验测试。预处理已在 Vite dev 的真实 Chromium 中验证：4000×1000 PNG 截图缩为 2048×512 的无损 PNG，4000×3000 JPEG 缩为 47KB，小图原样发送，GIF 不重编码、HEIC 明确报不支持；多图拖入与真实发送留待界面手动确认。
-- **验证**：`type-check` / `lint` / `npm test`（46 文件 422 用例）/ `npm run build` 通过；新增 bridge 图像断言与 store 图像唯一 ID 测试。真实模型视觉验收随 R-06 的模型能力提示一起做。
-
-### R-09 `path:line` 跳转行 ✅（2026-10-24）
-
-- 现状：点击输出中的 `path:line` 只打开文件，不定位到行。
-- 目标：打开后滚动到指定行并高亮。
-- 技术：编辑器打开请求携带 `line`，Monaco `revealLineInCenter` + 光标定位；跨工作区路径仍按当前工作区解析。
-- 验收：点击 `src/a.ts:42` 打开文件并定位第 42 行。
-- **完成情况**：`editorStore` 新增 `pendingReveal` / `revealLine` / `consumeReveal`；点击 Markdown 中的 `path:line` 在打开文件后登记目标行，Monaco 就绪（含首次打开、已打开标签）时 `revealLineInCenter` + 光标定位 + 聚焦，行号超出文件长度时夹到末行；相对路径仍按当前工作区解析。
-- **验证**：`type-check` / `lint` / `npm test`（46 文件 447 用例）/ `npm run build` 通过；新增 store 定位状态与 Markdown 路径点击测试。真实 Monaco 滚动高亮留待界面手动确认。
-
-### R-10 导出 Markdown / HTML / JSONL ✅（2026-10-24）
-
-- 现状：会话导出仅支持 Markdown。
-- 目标：同一入口同时支持 Markdown、带样式的 HTML 与原始 JSONL；Markdown / HTML 导出**全量内容**（用户与助手正文、思考、工具调用与完整结果），长过程默认收起。
-- 技术：Markdown 与 HTML 由渲染层从会话消息生成；思考与工具过程包在默认收起的 `<details>` 区块中（GitHub / VS Code 预览可直接折叠，不做额外交互设计）；HTML 内联样式、可离线打开，图片类结果以 base64 内嵌；JSONL 直接复制 Pi 会话原始文件，不清洗内部上下文块或 Plan 包装；保存走系统对话框，导出菜单选择格式。
-- 验收：三种格式均可导出；Markdown / HTML 包含完整思考与工具过程且默认收起，展开后内容完整；HTML 离线可读；JSONL 与原始会话文件一致、可被 Pi 重新导入。
-- **完成情况**：导出改由主进程完成（内容经 bridge 在进程内生成，不经过渲染层二次传输）：Markdown / HTML 包含正文、思考、工具参数与完整结果，思考与工具分别包在默认收起的 `<details>` 中，图片以 base64 内嵌；HTML 内联 Paper 风格样式，可离线打开；JSONL 直接复制原始会话文件。会话抽屉的导出按钮改为格式菜单（Markdown / HTML / 原始 JSONL），保存走系统对话框，默认文件名基于会话标题。
-- **2026-10-28 修正**：Markdown / HTML 原先从压缩后的模型上下文（`session.messages`）排版，压缩前历史与压缩标记均缺失。改为与聊天历史共用 `activeTimeline()` 重建的完整分支；压缩点输出为分隔线（Markdown `---` + 引用文案，HTML `<hr />` + `.compacted`）。JSONL 仍是原文件直接拷贝。
-- **验证**：`type-check` / `lint` / `npm test`（46 文件 441 用例）/ `npm run build` 通过；新增 bridge Markdown / HTML 完整输出测试与导出菜单测试。真实文件保存与 Pi 重新导入留待界面手动确认。
-
-### R-13 提示模板与技能命令 ✅（2026-10-24）
-
-- 现状：斜杠命令为内置固定集合。
-- 目标：接入 Pi prompt templates 与 skills，在斜杠菜单中可搜索并插入。
-- 技术：读取 SDK 的 prompt templates / skills 列表，命令面板与斜杠菜单共用数据源；模板或技能触发工具执行时，仍按现有审批策略与权限模式处理，不绕过审批。
-- 验收：新增一个模板文件后无需重启即可在菜单看到并展开；技能触发的工具调用会弹出审批（按策略）。
-- **完成情况**：bridge 新增 `listPromptResources`：读取前调用 `resourceLoader.reload()`，返回模板（名称 / 描述 / 参数提示 / 作用域）与技能（名称 / 描述 / 作用域），新增文件无需重启。斜杠菜单在输入 `/` 时显示内置命令、模板（`/<名称>`）与技能（`/skill:<名称>`）并按前缀过滤，点击插入输入框；发送时模板 / 技能交给 Pi SDK 展开，仍经过现有工具审批。命令面板通过同一 IPC 获取模板 / 技能并插入聊天输入框。
-- **验证**：`type-check` / `lint` / `npm test`（46 文件 450 用例）/ `npm run build` 通过；新增 bridge 资源读取与斜杠菜单、命令面板插入测试。技能触发审批的真实链路随现有审批机制留待手动确认。
-
-### R-15 空状态建议个性化 ✅（2026-10-24）
-
-- 现状：空会话固定三条建议。
-- 目标：根据最近打开的文件、最近命令或工作区类型给出建议。
-- 技术：本地规则即可（最近文件后缀、最近文件 / 命令），不依赖模型。
-- 验收：不同工作区 / 最近操作下建议不同且可填入输入框。
-- **完成情况**：新增 `src/utils/suggestions.ts` 本地规则：工作区按 `package.json` / `pyproject.toml` / `requirements.txt` / `Cargo.toml` / `go.mod` 推断类型；最近文件取当前文件与已打开标签（按最近打开排序、去重、相对路径）。有最近文件时优先给出“解释 {文件}”“审查 {文件}”，随后是按工作区类型定制的测试建议，最后是不变的查找未完成工作；最多三条，点击只填入输入框。
-- **验证**：`type-check` / `lint` / `npm test`（47 文件 455 用例）/ `npm run build` 通过；新增规则单测与 ChatPanel 类型化建议渲染测试。不同真实工作区的效果留待界面手动确认。
-
-### R-16 子 Agent 活动视图 ✅（2026-10-24）
-
-- 现状：顶栏活动数汇总运行中的会话；子 Agent（嵌套工具调用）在过程视图中缩进展示。Fleet 已于 2026-10-24 移除，不再计入活动数。
-- 目标：把嵌套调用作为层级展示，能区分主 Agent 与子 Agent 的状态。
-- 技术：工具事件已带 `parentToolCallId`，补充层级 UI 与过滤。
-- 验收：触发嵌套调用时活动视图显示父子关系。
-- **完成情况**：bridge 在 `tool_start` / `tool_update` / `tool_end` 转发 `parentToolCallId`；工具片段保存该字段，聊天过程视图对属于同一轮工具调用的嵌套调用缩进显示并标注“子 Agent”，主 Agent 与子 Agent 状态（运行 / 成功 / 失败 / 耗时）沿用原有行样式。
-- **验证**：`type-check` / `lint` / `npm test`（47 文件 458 用例）/ `npm run build` 通过；新增 bridge 嵌套事件、store 字段保留与过程视图缩进测试。真实嵌套调用留待界面手动确认。
-
-### R-19 重试倒计时实时化 ✅（2026-10-24）
-
-- 现状：自动重试提示显示“约 N 秒后继续”，是静态估算。
-- 目标：显示实时倒计时，重试结束或失败时立即更新。
-- 技术：用 `delayMs` 启动本地倒计时，收到 `retry_end` 或错误时取消。
-- 验收：倒计时与实际重试时间一致；成功 / 失败状态及时变化。
-- **完成情况**：chatStore 记录收到 `retry_start` 的本地时间；聊天面板在重试期间每 250ms 刷新剩余秒数（`retrySecondsRemaining`），倒计时归零显示“正在重试…”；`retry_end` 无论成功或失败都立即清除状态并停止计时器，失败原因由错误条展示。
-- **验证**：`type-check` / `lint` / `npm test`（48 文件 462 用例）/ `npm run build` 通过；新增倒计时换算与 store 时间戳测试。真实供应商重试节奏留待手动确认。
-
-### R-20 工具结果全量查看器 ✅（2026-10-24）
-
-- 现状：工具结果预览截断到约 2000 字符，完整结果只在 Pi JSONL 中，界面无法查看；此项原为 B-01 能力边界，2026-10-24 决定补做。
-- 目标：工具行提供“查看完整结果”，面向人阅读，完整展示该次调用的全部输出（含长命令输出和图片结果），支持搜索与复制，并可选择在系统编辑器中打开；图片按合适尺寸等比内嵌，点击打开大图预览；非文本非图片的结果显示文件大小并支持系统编辑器打开；查看行为只读，不改变也不重新注入 Agent 上下文。
-- 技术：优先按需读取 Pi JSONL 中的完整结果，避免再复制一份；若 `toolCallId` 到 JSONL 条目的映射不可靠，只在会话 sidecar 记录引用 / 偏移，不存内容。渲染层用虚拟化查看器和分段 IPC（按行 / 区间读取），超长结果不一次性塞进渲染进程；特别大的结果（例如 >20MB）提供“导出到 cache/temp 并用系统编辑器打开”，同时给出文件大小与行数。长度不设“不可查看”的硬上限，只决定用内嵌查看器还是外部打开。
-- 验收：10MB 级输出在界面中打开不卡死且能完整浏览；搜索、复制可用；图片按合适尺寸内嵌、点击可放大预览；非文本非图片结果显示大小并可外部打开；历史会话同样可查看；Agent 上下文不受影响；磁盘上不出现完整结果的第二份副本。
-- **完成情况**：pi-bridge 通过 `toolCallId` 从当前会话消息中按需读取完整结果（唯一副本仍在 Pi JSONL），提供元数据、按 UTF-16 字符分段读取、图片读取与完整文本导出；主进程新增 4 个只读 IPC，导出时写入 `{appDir}/cache/temp/tool-result-*.txt` 后调用系统编辑器，不进入 Agent 上下文。新增 `ToolResultViewer`：显示大小 / 行数 / 图片数，虚拟化行视图（无测量环境退化为前 200 行），支持搜索结果与复制、图片等比内嵌 + 点击放大 + 多图切换；超过 20MB 默认提示外部打开，也可选择仍在内嵌查看器分段加载。工具行展开后提供“查看完整结果”，当前与历史会话一致。
-- **验证**：`type-check` / `lint` / `npm test`（46 文件 437 用例）/ `npm run build` 通过；新增 bridge 元数据 / 分段 / 图片 / 未知道具调用测试与查看器渲染测试。10MB 级真实输出的流畅度留待界面手动确认。
-
-### R-21 任意位置 / 任意格式文件附件 ✅（2026-10-30）
-
-- 现状：附件只能来自工作区（`@` 搜索、已打开文件、拖入）与选区片段；整文件在发送时由渲染层 `fs:readFile()` 读成文本注入上下文，因此受工作区信任与 120k / 300k 字符上限双重限制，工作区外的文件、PDF / Office / 压缩包这类二进制一律「读取文件失败」。
-- 目标：对话框可以把本机任何一个文件交给 Agent（桌面 / 其他盘 / 网络盘 / 可移动盘；文本、PDF、Office、压缩包、音视频……），不限格式、不限大小；不再有「这文件读不到」的观感。
-- 技术：附件**不传内容，只传路径**——`buildContextPrompt()` 把绝对路径 + 元信息（大小 / MIME / mtime / 是否在工作区外）写进 `<pi-workbench-context>`，Agent 用自己的 `read` / `grep` / `bash` 读；新增 `attachment:pick`（原生 `openFile` + `multiSelections`，无格式过滤），除图片外不读内容，图片回 base64 走视觉通道；单条消息附件上限 10（文件 + 图片合计）；排队项与插话带走文件附件（只带路径）。
-- 不做（当轮明确定界）：PDF / Office 内容抽取、扫描件转图、内容快照副本（源文件被删 / 移走后 chip 不再校验，Agent 读时会报错）。
-- 验收：从桌面选一个 80MB 的 PDF 与一个 `.docx` 发出去，消息里只出现路径，Agent 引用路径并说明自己能否读取；删掉源文件后再问时错误信息明确；旧附件在重启后仍可按路径读；同一文件重复附加自动去重。
-- **完成情况**：新增 `electron/ipc/attachments.ts`（`attachment:pick`）与 preload / 类型 / `src/api`（含 Web mock）；`ChatAttachment` 补 `size` / `mime` / `mtime` / `external`；`buildContextPrompt` 改成分开渲染「文件（不内联）」与「引用片段（内联）」两类条目；附件菜单首行新增「选择本机文件…」；chip 增加「工作区外」标记与大小提示；`MAX_ATTACHMENTS = 10`，`MAX_IMAGE_COUNT` / `MAX_CHAT_IMAGES` 20 → 10；纯附件（无文本）消息允许发送；`@` 选中的路径改用会话工作树根拼接（原先用工作区根，工作树会话会指错）。
-- **验证**：`type-check` / `npm run lint` / `npm test`（109 文件 1095 用例）/ `npm run build:bridge` 通过；改写 `tests/chat-context.test.ts`（路径不内联、外区标记、引用仍内联）。真实文件选择与 Agent 读取留待界面手动确认。
-
-### R-22 PDF / Office 可读 ✅（2026-10-30）
-
-- 现状（R-21 之后）：PDF / Office 可以附加并如实告知路径，但模型看不见内容；扫描件 PDF（无文本层，如 `Microsoft: Print To PDF` 导出的图册）即使能抽取也是空字符串。
-- 用户定界：**外部成熟方案优先但组件数最少**；扫描件**渲染成图片走视觉通道**（不引 OCR）；**不做 Office 编辑**，先让 Agent 读、再做预览；**旧格式（`.doc` `.xls` `.ppt`）不支持**，检测到就提示另存为；**不改上游 SDK**（不推 `document` 内容块）；**只保留一个 `read` 工具**。
-- 方案：给内置 `read` 做**同名覆盖**（`pi-bridge/src/read-with-documents.ts`），参数补 `pages` / `sheet` / `slide`；工具表里仍只有一个 `read`，`READ_ONLY_TOOLS` 不变。真行业实践（Gemini CLI、Claude Code、MarkItDown MCP）也是「一个 read + 参数」。
-- 解析链（零新依赖，`electron/documents/`）：`zip.ts`（`node:zlib` 手写中央目录）→ `xml.ts`（流式扫描，不建 DOM）→ `ooxml.ts`（docx / xlsx / pptx / odt / epub）与 `pdf.ts`（`pdfjs-dist` legacy build）。`detect.ts` **按魔数**分流，扩展名不作数（`.pdf` 里是文本 → 交回内置 read；`.docx` 里是 OLE → 旧格式指引）。
-- 扫描页：主进程 `render-bridge.ts` 把字节（`Uint8Array`，非 base64）经 `documents:render-request` 下发给渲染进程，渲染进程用现成 pdf.js 画成 PNG（>3MB 退 JPEG），回 `documents:render-result`。无窗口 / 超时 60s / >64MB / 单页失败 → 降级为一句文字说明，**不阻断轮次**。
-- 预览（Phase B）：`electron/documents/preview.ts` 产出结构化模型（`word` / `sheet` / `slide` / `epub` / `legacy` / `error`），`documents:preview` 走与 `fs:readFile` 同一个 `resolveAllowedFileTarget()`；`OfficeDocumentView` 只负责画，**渲染层拿不到路径读能力**。`documents:extract` 故意不做 IPC。
-- 被否方案：`officeparser`（+69MB 重复 pdfjs）、`superdoc` / OnlyOffice（AGPL）、`Univer`（付费 file IO）、SheetJS（CVE-2023-30533）、`tesseract.js`（不做 OCR）、`@napi-rs/canvas`（38MB）、`mammoth`、`docx-preview`（自带字体与白纸背景与主题打架）、LibreOffice（禁子进程 / 未安装）。
-- **验证**：`type-check` / `npm run lint` / `npm test`（118 文件 1177 用例）/ `npm run build` 通过；新增 `documents-{zip,ooxml,pdf,detect,extract,preview}`、`read-with-documents`、`documents-agent-read`、`office-document-view` 与 `file-kind` 扩展用例；测试夹具运行时生成 ZIP / PDF 字节，仓库不放二进制样本。真实 docx / xlsx / pptx / 文字版 PDF / 扫描件 PDF / `.doc` / `.epub` 的界面验收待手动确认。
-- 设计取舍与备选评估留在 `docs/reports/research-document-reading-2026-10-30.md` 与 `docs/reports/design-office-documents-2026-10-30.md`。
-
-### R-22 原始定界（已过时，保留备查）⛔ 本轮未做（2026-10-30）
-
-（当时的备选路线已在上节「被否方案」里逐条记录，不再重复。）
-
-### R-23 输出预算与截断的完整处理 🟡 部分完成（2026-11-06）
-
-- **现状**：`AgentManager` 只把 `stopReason` 的 `error` / `aborted` 当失败；`length`（输出撞上限）落进「成功」分支，正文为空时被替换成 `Agent completed but returned no text response.` 并写入 `runtime.messageHistory`。`readUsage` 丢弃 `usage.reasoning`；渲染层没有任何「截断」概念（全项目仅 `agent-manager.ts` 与 `session-title.ts` 引用 `stopReason`）。2026-11-06 在 PW-Hermes 工作区 22 轮里出现 8 轮：`stopReason=length`、`content` 只有 1 个 thinking 块、`usage.output === usage.reasoning === 8192`，分布在 3 个会话，用户反复重发同一指令。
-- **已做的止血**：`9979fec` 把 deepseek-flash 的 catalog 上限与 256K 档配套值从 8K 提到 32K（供应商思考模式默认 64K，官方范围 1–384K）。触发率显著下降，但**不改变失败时的表现**——偶发时仍是那句占位文案。
-- **目标**：让「截断」在系统里成为显式状态，覆盖业界已有的防 / 检 / 修 / 呈现四类做法。
-- **子项**：
-  - **B1（检）✅** `agent-manager.ts` 增 `stopReason === 'length'` 单独分支，不再落进成功路径。
-  - **B2（修）✅** 返回 `success:false` + `errorCode`（`output-truncated` / `empty-response`）+ `outputLimit`，渲染层用 i18n 生成文案。**刻意不做自动提升上限重试，也不建议降低思考强度**——出问题就如实报错，思考强度是用户的选择。
-  - **B2b（呈现）✅** 两类文案分开：「有正文被切」给出 思考 X + 正文 Y / 上限 Z；「只有思考」明确说正文为 0。
-  - **B3（修）✅** 空正文不进 `runtime.messageHistory`（对齐 AstrBot #9035：空壳进历史会让下一轮 400）。
-  - **B4（修）⛔ 剩余** 区分「可续写截断」与「确定性截断」的**后续动作**（目前两者都只报错）。
-  - **B5（呈现）✅** `AgentUsage.reasoning` 透出（bridge / api / store 三处），聊天气泡显示「思考 N」。
-  - **B6（防）✅** catalog 改为供应商**硬上限**（`deepseek-flash` 393216，官方 1–384K），不再压死档位；`KNOWN_MODEL_METADATA` 只做天花板，推荐值交给档位。
-  - **档位 ✅（原 B6 的延伸）** 设置页新增输出上限下拉：自动 / 16K / 32K / 64K / 128K / 256K，写入 `api-config.json` 的 `maxTokens`；自动档配套值 8K / 16K / 64K / 128K。
-  - **B7（防）⛔ 剩余** 长上下文下 `clampMaxTokensToContext` 压到临界值时提前提示。
-  - **B8（防）⛔ 剩余** 标题生成、压缩摘要等轻任务单独预算或关思考。
-  - **B9（回归）🟡 部分** 已有 `length + thinking-only`、`length + 部分正文`、空正文不落 history、`usage.reasoning` 四组用例；缺 SDK 自动压缩重试的联动用例。
-  - **B10（文档）✅** `agent-runtime.md` §6 已更新档位与截断语义；`AGENT-TESTING.md` §6 补了截断验收步骤。
-  - **B11（回归）✅** 0.7.8 发布后发现「设置里选 64K 保存后又变回自动」：主进程 `normalizeApiModels` 是白名单，只留 `id / contextWindow / image`，`apiConfig:save` 与 `loadApiConfig` 两条路径都把 `maxTokens` 抹掉；`agentConfigKey` 也不含该字段，所以即使存上也不会重建 Agent。已修（`13f9083` / `4d556bb`），并在 `agent-runtime` §6 记下「三层归一化必须同步改」。**教训**：往返用例只断言 `success: true` 与旧字段，没带新字段；开发模式又走 `localStorage` 原样存对象，掩盖了生产路径。以后新增配置字段必须补「写入→读回」的往返断言。
-  - **思考强度 ↔ 预算联动 ⛔ 剩余** 接 `reasoning_effort`（DeepSeek 支持 `none/low/high/max`），让档位驱动思考深度而不是只调 `max_tokens`。现在 `model-config.ts` 生成的模型对象没有 `compat.thinkingFormat`，所以 `openai-completions.js:670` 的 deepseek 分支从不执行。
-- **关键事实**：pi-ai 的 `buildBaseOptions`（`simple-options.js:26`）强制 `options?.maxTokens ?? model.maxTokens`，**请求体永远带 `max_tokens`**——「不传、让供应商决定」在现有 SDK 下不可行。唯一绕过点是 `onPayload`（`openai-completions.js:188`），但 pi-bridge 未暴露。
-- **验收**：mock 供应商返回 `length + thinking-only` 时界面显示可操作错误而非占位文案；`messageHistory` 无空壳；用量面板能看到 reasoning 数字；`npm test` 覆盖上述三种场景。
-- **参考**：OpenRouter [Reasoning Tokens](https://openrouter.ai/docs/use-cases/reasoning-tokens)（检测公式、`max_output_tokens` 必须大于思考预算）、OpenAI [Reasoning](https://developers.openai.com/api/docs/guides/reasoning)（`incomplete_details.reason=max_output_tokens`）、AWS Bedrock [扩展思考](https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-extended-thinking.html)（`budget_tokens < max_tokens`）、vLLM [Reasoning Outputs](https://docs.vllm.ai/en/latest/features/reasoning_outputs)（`thinking_token_budget`）、Cline [#5645](https://github.com/cline/cline/issues/5645)（3 次退避重试）、oh-my-pi [#2774](https://github.com/can1357/oh-my-pi/issues/2774)（确定性截断不重试、抛可操作错误）、AstrBot [#9035](https://github.com/AstrBotDevs/AstrBot/issues/9035)（空壳入历史导致 400）、Signet-AI [#809](https://github.com/Signet-AI/signetai/issues/809)（`max_tokens` 过小导致 `content: null`）、llama.cpp [#20931](https://github.com/ggml-org/llama.cpp/discussions/20931)（`max_tokens` 低于思考预算即空响应）。
-
----
+**参考**：OpenRouter Reasoning Tokens（`max_output_tokens` 必须大于思考预算）· OpenAI `incomplete_details.reason=max_output_tokens` · AWS Bedrock 扩展思考（`budget_tokens < max_tokens`）· vLLM `thinking_token_budget` · oh-my-pi #2774（确定性截断不重试、抛可操作错误）· AstrBot #9035（空壳入历史导致 400）。
 
 ## 4. 平台验收（发布前）
 
-### V-01 macOS（universal dmg）
-
-- 覆盖：安装与首次启动、通知权限申请、通知点击前置、文件树刷新、终端、自动更新的“检查后引导下载”。
-- 记录：系统版本、是否签名（当前未签名需手动覆盖安装）、失败截图。
-
-### V-02 Linux（AppImage）
-
-- 覆盖：便携目录写权限、通知服务（依赖桌面环境）、文件树刷新、终端、自动更新。
-- 记录：发行版与桌面环境、是否需要额外依赖。
-
----
+- **V-01 macOS（universal dmg）** 覆盖：安装与首次启动、通知权限申请、通知点击前置、文件树刷新、终端、自动更新的「检查后引导下载」。记录：系统版本、是否签名（当前未签名，需手动覆盖安装）、失败截图。
+- **V-02 Linux（AppImage）** 覆盖：便携目录写权限、通知服务（依赖桌面环境）、文件树刷新、终端、自动更新。记录：发行版与桌面环境、是否需要额外依赖。
 
 ## 5. 已决定不做（保留备查）
 
-> 以下项目自 2026-10-24 起不再排期；v1 ROADMAP 中对应的“未实现”说明按现状接受，不再作为待办跟踪。
+- **2026-10-24 项目所有者决定**：R-07 成本对比与预算细化 · R-11 通知安静时段与阈值 · R-12 消息间键盘导航 · R-14 全量快捷键自定义 · R-17 插件面板级 UI / 菜单 / 状态项 · R-18 符号选择改用语言服务（维持正则实现）。
+- **更早的边界**：B-02 脱敏 thinking 占位（取决于供应商是否返回 `redacted`）· B-03 旧会话过程轨迹补造（无 `parts` 的旧会话按普通文本显示）· 转 DSH 内核（2026-10-23 放弃）。
 
-**2026-10-24 项目所有者决定不做（已从清单移除，编号不复用）**
+## 6. 云端 Agent
 
-- R-07 成本对比与预算细化
-- R-11 通知安静时段与阈值
-- R-12 消息间键盘导航
-- R-14 全量快捷键自定义
-- R-17 插件面板级 UI / 菜单 / 状态项
-- R-18 符号选择改用语言服务（符号选择维持现有正则实现）
-
-**更早确认的边界与放弃项**
-
-- **B-02 脱敏 thinking 占位**：取决于供应商是否返回 `redacted`。
-- **B-03 旧会话过程轨迹补造**：无 `parts` 的旧会话按普通文本显示。
-- **转 DSH 内核**：2026-10-23 经项目所有者确认放弃。
-
-> B-01 工具结果全量查看器已升级为待办 R-20（2026-10-24）。
-
----
-
-## 6. 风险与待确认
-
-- **R-20 的复杂度在 UI 传输，不在内容长度**：完整结果已经在 Agent 侧使用过，查看器只面向人阅读，长度本身不构成限制；需要设计的是按需读取（JSONL）与分段 / 虚拟化渲染，避免一次性把超大结果塞进渲染进程。特别大的结果可以用系统编辑器打开。
-- **R-08 验收模型固定**：当前供应商实际可用模型只有 `deepseek-flash`（2026-10-24 确认），R-08 以它作为视觉验收模型；`deepseek-v4-pro` 当前不可用，不作为回退或对比项。
-- **R-13 与审批扩展的兼容性**：接入提示模板 / 技能时，必须保留现有内联审批扩展与工作区插件边界，不能把 Pi extensions 变成工作台插件机制。
-- **R-04 的隐藏范围**：当前 Plan 模式输出自由文本；要做结构化任务列表，可能需要先把计划模式升级为结构化输出，属于额外工作。
-- **R-05 / R-16 依赖 SDK 事件**：自动压缩事件与嵌套调用 `parentToolCallId` 需要用真实会话确认，若 SDK 不提供则需降级方案。
-
-**暂缓（不阻塞，项目所有者 2026-10-24 决定先不处理）**
-
-- V-01 / V-02 平台验收
-- 版本升级与发布节奏
-
----
-
-## 7. 云端 Agent
-
-> 唯一方案、当前状态、路线、验收与安全边界：[CLOUD_AGENT](../requirements/CLOUD_AGENT.md)。
-> 本节不再维护第二份云端任务表；旧的 C-xx / G-xx / H-xx 条目已归档到 Git 历史。
+> 唯一方案、协议、验收与安全边界：[CLOUD_AGENT](../requirements/CLOUD_AGENT.md)。本节只记状态，不维护第二份云端任务表。
 
 | 项 | 状态 | 说明 |
 | --- | --- | --- |
-| Phase 1：桌面端配对 | ✅ 完成 | 连接码、`cloud:gateway:pair`、配置白名单、旧入口删除 |
-| Phase 2：网关插件 | ✅ 完成 | 新仓库 `pi-workbench-gateway` P0–P5；已用 `hermes plugins install` 装到真机，G0 全绿 |
-| Phase 3：应用联调 | ✅ 完成 | G1 真机验收通过（配对 / 对话 / SSE / 审批回执 / 插话 / 注销再配对 / 两种异常态），随 0.8.0 发布 |
-| C-08 ~ C-12 | 后置 | 屏幕 / Kanban / 拆窗 / IM / MCP 门 |
-| H3 工作区派活 | 后续单独立项 | 不在当前 P0–P5 |
+| Phase 1：桌面端配对 | ✅ | 一次性连接码、`cloud:gateway:pair`、配置白名单、旧入口删除 |
+| Phase 2：网关插件 | ✅ | `pi-workbench-gateway` P0–P5，`hermes plugins install` 装到真机，G0 全绿 |
+| Phase 3：应用联调 | ✅ | G1 真机通过（配对 / 对话 / SSE / 审批回执 / 插话 / 注销再配对 / 两种异常态），随 0.8.0 发布 |
+| 任务页新建 | ✅ | 0.8.0 之后补（`cloud:jobs:create`）；删除仍只在服务器上做 |
+| C-08 ~ C-12 / H3 | ⬜ 后置 | 见 §2 与 [CLOUD_AGENT §9.4](../requirements/CLOUD_AGENT.md) |
+| 停止按钮 / 跨重启接回 | ⛔ 不单独立项 | 2026-11-08 项目所有者决定不做真机验收 |
+
+## 7. 顶层 Agent 草案
+
+- 需求：[TOP_LEVEL_AGENT](../requirements/TOP_LEVEL_AGENT.md)（详版，术语 / 状态机 / 授权矩阵 / 验收编号）与 [BRIEF](../requirements/TOP_LEVEL_AGENT_BRIEF.md)（简版）。
+- 状态：草案，未开工；不在当前排期内。动工前先定授权矩阵与预算上限。
 
 ---
 
 **维护者**: Pi Workbench Team
-**最后更新**: 2026-11-08（云端 Phase 3 收口：G1 通过，随 0.8.0 发布）
+**最后更新**: 2026-11-08

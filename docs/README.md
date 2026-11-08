@@ -46,9 +46,8 @@
 - **[报告与文档规范](./agent/reporting.md)** — 什么时候写报告、放哪里、怎么清理
 
 ### 📊 项目信息
-- **[项目状态](./progress/STATUS.md)** — 各阶段状态、功能清单与最近提交
-- **[后续开发清单](./progress/BACKLOG.md)** — P1–P3 已收尾；云端 Phase 2 与停放项见 [CLOUD_AGENT](./requirements/CLOUD_AGENT.md)
-- **[v1 功能开发方案](./progress/ROADMAP.md)** — 已交付范围、验收记录与归档说明
+- **[项目状态](./progress/STATUS.md)** — 一页快照：版本、质量门槛、在建项与下一步
+- **[任务清单](./progress/BACKLOG.md)** — 唯一任务表：未完成项、平台验收、已决定不做；云端后置项见 [CLOUD_AGENT](./requirements/CLOUD_AGENT.md)
 - **[Phase 1 完成报告](./archive/PHASE-1-COMPLETE.md)** — Agent 集成实现细节（已归档）
 
 ### 🗂️ 历史归档
@@ -74,7 +73,6 @@
 | 查看思考与工具轨迹方案 | [AGENT_TRACE.md](./architecture/AGENT_TRACE.md) |
 | 查某个架构决定的理由 | [decisions/](./decisions/) |
 | 规划后续开发目标 | [BACKLOG.md](./progress/BACKLOG.md) |
-| 查看 v1 交付记录 | [ROADMAP.md](./progress/ROADMAP.md) |
 | 构建和发布应用 | [BUILD_AND_PACKAGE.md](./guides/BUILD_AND_PACKAGE.md) |
 | 改 README / 发版说明 / 仓库 About | [PUBLIC_COPY.md](./guides/PUBLIC_COPY.md) |
 | 验收 Agent 功能 | [AGENT-TESTING.md](./guides/AGENT-TESTING.md) |

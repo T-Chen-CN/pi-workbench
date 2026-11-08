@@ -6,7 +6,7 @@
 
 **最后更新**: 2026-10-29 · **当前阶段**: Phase 6 持续优化
 
-> 阶段状态见 [STATUS](./progress/STATUS.md)，交付记录见 [ROADMAP](./progress/ROADMAP.md)，待办见 [BACKLOG](./progress/BACKLOG.md)，代码结构与频道表见 [PROJECT_STRUCTURE](./architecture/PROJECT_STRUCTURE.md)。
+> 阶段状态见 [STATUS](./progress/STATUS.md)，任务与待办见 [BACKLOG](./progress/BACKLOG.md)，代码结构与频道表见 [PROJECT_STRUCTURE](./architecture/PROJECT_STRUCTURE.md)。
 
 ---
 
