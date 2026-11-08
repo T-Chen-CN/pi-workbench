@@ -4,7 +4,7 @@
 > **什么时候读**：动网关插件的 dispatch / 中继、桌面的派活 worker、权限与审计之前
 > **什么时候要改**：协议、权限模型、状态机或验收场景变化时
 
-**状态**：设计定稿，P1 未开工（2026-11-08）
+**状态**：设计定稿 + 可行性已实测，P1 未开工（2026-11-08 定稿，2026-11-09 验证）
 **范围**：云端 Hermes 主动调起本地工作区 Agent、下达指令、接收结果、多轮跟进直到任务落地
 **不包含**：屏幕接管（C-08）、Kanban（C-09）、IM 渠道（C-11）、对外写 MCP 门（C-12）
 **上游事实出处**：Hermes 0.23.0 源码（`/home/ubuntu/.hermes/hermes-agent`）；网关现状见 [CLOUD_AGENT](./CLOUD_AGENT.md)
@@ -184,8 +184,8 @@
 
 | 参数 | 值 | 依据 |
 | --- | --- | --- |
-| 工具阻塞上限 | 90s | 低于上游 120s 默认超时，避免工具调用被掐断 |
-| 设备中继 ping | 25s | 让中间层与 NAT 不回收连接 |
+| 工具阻塞上限 | 90s | **不是为了绕上游超时**（插件工具没有执行超时，实测阻塞 150s 正常）。定 90s 是为了让云端每次回来都能给用户一句进度，而不是长时间没回音 |
+| 设备中继 ping | 25s | 让中间层与 NAT 不回收连接；上游自有 SSE 心跳是 10s，桌面 60s 空闲阈值依赖它（见 §13 ④） |
 | 任务租约 | 120s | claim 后无 `task.progress` / 心跳即视为失联，可重投（`attempt ≤ 2`） |
 | 任务总超时 | 10 分钟 | 远低于 `agent.gateway_timeout`（30 分钟） |
 | 每设备并发 | 1 | 一个工作区一次只跑一件事，避免并发写同一棵树 |
@@ -288,12 +288,19 @@ queued ──claim──► running ──┬── done        → completed
 | `hub/routes/relay.py` | 新增：`GET /v1/hub/relay/stream`（SSE）、`POST /v1/hub/relay/report`、`POST /v1/hub/workspaces` |
 | `hub/routes/__init__.py` | 注册新路由 |
 | `tools.py` | 新增：`local_workspaces` / `local_dispatch` / `local_task_get` / `local_task_reply` / `local_task_cancel`，toolset `pi_workbench`；`check_fn` 在开关关闭时让工具不可见 |
-| `shim.py` | `register(ctx)` 里注册工具（**保持 shim 极薄**：只做注册与 store 注入） |
+| `shim.py` | `register(ctx)` 里注册工具（**保持 shim 极薄**：只做注册与 store 注入）。真实签名是 `register_tool(name, toolset, schema, handler, check_fn=None, requires_env=None, is_async=False, description="", emoji="", override=False)`；`schema` 必须自带 `name`/`description`/`parameters` |
 | `adapter.py` | `connect()` 里把 store 实例挂到模块级，供工具 handler 使用（同进程，不另开服务） |
 | `plugin.yaml` | 版本 0.1.2 → 0.2.0（新增能力，非补丁）；`tools` 声明 |
 | `docs/CONTRACT.md` | 新增 dispatch 与 relay 端点表 |
 
 约束：hub 包**仍然不知道 Hermes 存在**（`hub/*` 不 import `gateway.*` / `plugins.*`）；工具与 store 的粘合只在 `shim.py` / `tools.py` 里。
+
+**部署必须同时改一处配置**：`api_server` 平台的工具面是白名单（`platform_toolsets.api_server`），插件工具集默认不在里面，**不登记就永远调不到**（§13 ①）。两种写法：
+
+- 手改 `config.yaml` 追加一项（推荐，最小改动）；
+- `hermes --profile pi-cloud tools enable <toolset> --platform api_server`：会把整张白名单**规范化重写**（排序，并剔除被 `agent.disabled_toolsets` 关掉的项，实测 `code_execution` 被移除），不是纯追加。
+
+新装 / 升版后必须重启 gateway 单元才会重新注册工具（§13 ①）。
 
 ### 6.2 桌面端
 
@@ -312,6 +319,11 @@ queued ──claim──► running ──┬── done        → completed
 | `src/i18n/translations.ts` | 文案（zh + en） |
 
 约束：落盘走 `electron/atomic-json.ts`；路径校验用 `realpath` + `path.relative`（`electron/workspace-trust.ts`）；派活会话的权限**不走** `approvalBroker`（否则会 fail-closed 挂死）。
+
+两个实测得出的硬约束：
+
+- **开机要把白名单写进信任表**：`agent:initialize` 只认 `trustedWorkspaceRoots`（内存 Set）。启动时对 `dispatch.json` 的每个工作区调 `trustWorkspace()`，否则未打开过的目录 initialize 直接被拒（§13 ⑫）。
+- **中继流不占代理 SSE 槽位**：每设备 2 槽位的计数只属于 `routes/proxy.py`；`routes/relay.py` 自己计数（或干脆不限），否则两个会话在看流时设备收不到派活（§13 ⑪）。
 
 ### 6.3 文档
 
@@ -344,6 +356,8 @@ Hermes → local_dispatch(workspace, prompt)
 ```
 
 关键：本地会话**不结束**（运行时保持"等待外部输入"状态），答案作为同一轮的下一段输入；这样多轮语义靠"同一个本地 sessionId + 同一条云端 session"维持，不需要起新会话。
+
+落地方式（已验证可行）：本地 Agent 额外注册一个阻塞式工具（`ask_dispatch_operator`），它先回报 `task.question` 并把自己挂住，拿到云端答案后作为**该工具返回值**继续跑。`pi.registerTool` 的 `execute` 可以返回未完成的 Promise，`StallWatchdog` 在工具执行期间自动挂起、且没有整轮上限（§13 ⑩）。
 
 ---
 
@@ -381,6 +395,8 @@ Hermes → local_dispatch(workspace, prompt)
 | 风险 | 缓解 |
 | --- | --- |
 | 长任务撞 `agent.gateway_timeout`（30 分钟） | 任务总超时 10 分钟；工具单次阻塞 90s |
+| **取消后设备仍在跑（实测确认）** | `/v1/runs/{id}/stop` 只取消云端那一轮：工具约 4s 内被中断返回，但设备侧**继续执行**（实测：云端 6.1s 已 `cancelled`，设备仍干满 78s）。因此工具被中断 / 抛异常时必须由我们**显式置 `canceled` 并发 `task.cancel`**，否则留下孤儿任务 |
+| 中继流占满设备 SSE 槽位 | 每设备 2 条 SSE 槽位（`hub/routes/proxy.py:96`）只统计代理流；中继流必须**独立计数**，否则两个会话在看流时设备收不到派活 |
 | 同一工作区并发写 | 每设备并发 1 + 队列上限；派活会话只跑在指定工作区 |
 | 桌面休眠 / 关机导致任务悬挂 | 租约 120s + 重投；超过 `deadlineAt` 判 `expired` 并把原因交给云端 |
 | 提示注入 | 白名单 + 写账本 + 会话可回放 + 一键急停（§2.5 已接受残余风险） |
@@ -432,3 +448,37 @@ Hermes → local_dispatch(workspace, prompt)
 - `hermes_cli/plugins.py:463`（`register_tool` 签名）、`:607`（`post_message`）、`:935`（`register_hook`）
 - `plugins/platforms/a2a/tools.py:172`（`a2a_call` 一次性调用）、`:26`（`protocol.py` 的 Task 状态常量）
 - 网关：`hub/server.py:39`（`ThreadingHTTPServer`）、`hub/router.py:61`（`StreamResponse`）、`hub/db.py`（schema 1）
+
+---
+
+## 13. 可行性验证记录（2026-11-09 实测）
+
+方案定稿后做了一轮**真机验证**：VPS 上装一个临时的 spike 插件（工具 + sqlite 状态机 + SSE 中继 + A2A 端点），用一个 Python "设备"代替桌面端，跑真实的 `/v1/runs`；桌面侧用真实 SDK + 假 provider 跑无窗口会话。全部临时物已清理，gateway 已回到 0.1.2 生产状态。
+
+| # | 待验假设 | 怎么验的 | 结果 | 对方案的影响 |
+| --- | --- | --- | --- | --- |
+| ① | 插件注册的工具能被模型看见并调用 | 临时插件注册 `spike_dispatch`（toolset `pi_dispatch_spike`），登记进 `platform_toolsets.api_server`，重启 gateway，真实调用 | **成立**。模型先 `tool_describe`，再调 `spike_dispatch`；不登记工具集时插件工具**完全不可见**（白名单语义） | §6.1 增加"部署必须登记工具集"这一步；`hermes tools enable` 会重写整张白名单（实测剔除了 `code_execution`），推荐手改 config |
+| ② | 工具 handler 可以长时间阻塞 | 同一轮里阻塞 3s / 78s / **150s** 三档 | **成立**。插件工具**没有执行超时**（`execution_timeout` 只有内置注册路径才会传），150s 阻塞后正常返回，`run` 正常收尾 | 阻塞时长只由我们决定；90s 是 UX 选择而不是上游限制 |
+| ③ | 阻塞期间云端 SSE 不掉线 | 阻塞期间抓原始字节 | **成立**。每 10s 一条 `: keepalive` 注释帧 | 桌面 60s 空闲阈值（`electron/cloud/events.ts:73`）安全；**但依赖这条心跳**，上游改掉必须同步调大 |
+| ④ | 经公网反代（Caddy）的 SSE 不被缓冲 | 从公网域名 `hub.tchen-xiaoxiao.com` 跟 110s | **成立**。首帧 0–1s 到达，keepalive 间隔稳定 10.0s，无缓冲 | 中继走 Caddy 无需 `flush_interval` 特调 |
+| ⑤ | 工具线程与本机 HTTP 线程共用 sqlite 不冲突 | 工具 enqueue + HTTP claim/report 交替写同一张表（WAL + `busy_timeout`） | **成立**。全程无 `database is locked` | `dispatch.py` 用 WAL + `busy_timeout=10000` + autocommit 即可 |
+| ⑥ | 中继能实时把任务推给设备 | 设备侧 SSE 常连，工具入队后测到达 | **成立**。入队即达（同一秒内） | 目录 / 任务推送按 §4.4 实现 |
+| ⑦ | A2A 风格 `SendMessage` 阻塞到终态 | 临时端点收 JSON-RPC，enqueue 后阻塞，设备回报后返回 Task | **成立**。返回 `status.state=COMPLETED` + artifacts | §4.1 的 A2A 兼容层可以真做，不是纸面 |
+| ⑧ | 取消会不会连带停掉设备 | 云端 `POST /v1/runs/{id}/stop` | **不成立（重要）**。云端 6.1s 已 `cancelled`、工具 4s 内被中断，**设备仍在执行并干满 78s** | 工具中断时必须显式置 `canceled` + 下发 `task.cancel`，否则孤儿任务（§9） |
+| ⑨ | 桌面能在没有渲染层、没有审批通道时跑完一轮真会话 | 真实 `AgentManager` + 假 provider：`initialize` → `createSession` → `setSessionPermission(auto)` → `chat()` | **成立**。工具（`write`）真的执行、文件真的落盘、`requestApproval` **调用 0 次** | §6.2 的 `executor.ts` 就是这条路；派活会话不需要任何窗口 |
+| ⑩ | 本地能"挂住一轮"等云端回答（P2 的底座） | 读 SDK 能力 + 现有 `plan-extension.ts` 用法 + 看门狗实现 | **成立**。`pi.registerTool({ execute })` 可返回未完成的 Promise；`StallWatchdog` 在工具执行期间**自动挂起**且无整轮上限 | §7.2 的 `input_required` 用"阻塞式工具"实现，不必结束再起一轮 |
+| ⑪ | 每设备 SSE 槽位是否够用 | 读 `hub/routes/proxy.py:96` 的 `sse_acquire(limit=2)` | **不够**。槽位只算代理流，2 条被会话流占满后，中继流要么被拒、要么挤掉会话 | 中继流用独立计数（§9） |
+| ⑫ | 未打开的工作区能不能初始化 Agent | 读 `electron/ipc/agent.ts:111` + `workspace-trust.ts` | **成立，但要多一步**。`agent:initialize` 只认 `trustedWorkspaceRoots` 里的路径（内存 Set） | 开机时把派活白名单逐条 `trustWorkspace()`（白名单本身就是一次授权，与 §2.3 一致） |
+
+### 13.1 仍然没有实测的三件事（P1 开工后补）
+
+1. **中继路由接进真 hub**：spike 用的是独立 8599 端口，`hub/router.py` 的鉴权 / 限流 / 审计链路没有跑过中继流。
+2. **两台设备并发**：只验了单设备单任务；多设备抢任务、全部离线时的排队表现未跑。
+3. **P2 端到端**：两侧机制各自成立，但"本地反问 → 云端回答 → 同一轮继续"没有串起来跑过。
+
+### 13.2 这轮验证改掉的四处方案
+
+1. §4.5 工具阻塞理由：从"绕上游 120s 超时"改成"UX 选择"（上游根本没有工具超时）。
+2. §6.1 新增部署步骤：`platform_toolsets.api_server` 必须登记我们的工具集，且新装 / 升版后要重启 gateway。
+3. §9 新增两条风险：取消后的孤儿任务、中继流与代理 SSE 的槽位冲突。
+4. §7.2 明确 P2 的落地方式：本地用阻塞式工具等云端答案，而不是"结束一轮再起一轮"。

@@ -23,7 +23,7 @@
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
 | C-08 ~ C-12 | 云端后置：屏幕接管 / Kanban / 拆窗 / IM / 对外写 MCP 门 | 后置 | ⬜ 未排期 |
-| H3 | 云端工作区派活（`local_*` 工具 / 任务邮箱） | P1 | 🟡 设计定稿（[WORKSPACE_DISPATCH](../requirements/WORKSPACE_DISPATCH.md)），P1 未开工 |
+| H3 | 云端工作区派活（`local_*` 工具 / 任务邮箱） | P1 | 🟡 设计定稿 + 可行性实测通过（[WORKSPACE_DISPATCH](../requirements/WORKSPACE_DISPATCH.md) §13），P1 未开工 |
 
 ### 已交付（只留一行，细节在 git）
 

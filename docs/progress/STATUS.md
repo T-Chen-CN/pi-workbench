@@ -22,7 +22,7 @@
 - **R-23 剩余子项**：B4 续写截断的后续动作、B7 上下文临界预警、B8 轻任务预算、`reasoning_effort` 联动——见 [BACKLOG](./BACKLOG.md) §3。
 - **平台手动验收** V-01（macOS dmg）/ V-02（Linux AppImage）尚未做。
 - **云端后置**：C-08 CDP 屏幕接管 → C-09 Kanban → C-10 拆窗 → C-11 IM / 语音 / 遥测 → C-12 对外写 MCP 门。见 [CLOUD_AGENT §9.4](../requirements/CLOUD_AGENT.md)。
-- **H3 工作区派活**：方案已定稿（权限由 Hermes 代行、A2A 语义 + 网关中继），P1 未开工——见 [WORKSPACE_DISPATCH](../requirements/WORKSPACE_DISPATCH.md)。
+- **H3 工作区派活**：方案已定稿并做过真机可行性验证（插件工具注册 / 150s 阻塞工具 / 公网 SSE 心跳 / 取消语义 / 无窗口本地跑一轮），P1 未开工——见 [WORKSPACE_DISPATCH](../requirements/WORKSPACE_DISPATCH.md) §13。
 
 ## 已交付（一行一项，细节在 git）
 
