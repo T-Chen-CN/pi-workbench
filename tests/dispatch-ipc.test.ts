@@ -55,7 +55,10 @@ let repo = ''
 let other = ''
 
 beforeEach(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dispatch-ipc-'))
+  // 必须 realpath：CI 上 os.tmpdir() 可能是符号链接（macOS `/var`→`/private/var`）
+  // 或 8.3 短名（Windows `RUNNER~1`），而白名单落盘的是 canonical 路径，
+  // 直接用 mkdtemp 的返回值做断言会两边不等。
+  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dispatch-ipc-')))
   mocks.appDir = tmp
   mocks.handlers.clear()
   mocks.dialogPicks.length = 0
