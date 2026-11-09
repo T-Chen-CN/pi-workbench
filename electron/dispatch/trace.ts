@@ -68,6 +68,16 @@ function clip(text: string, limit: number): string {
 }
 
 /**
+ * 取路径末段。**不能用 `path.basename`**：它是平台相关的 —— 在 Linux 上
+ * `path.basename('D:\secret\keys.txt')` 原样返回（只认 `/`），脱敏会漏掉
+ * Windows 风格路径。CI 在 Linux 跑，这条被 `dispatch-trace.test.ts` 抓到过。
+ */
+function fileTail(target: string): string {
+  const parts = target.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean)
+  return parts.length > 0 ? parts[parts.length - 1] : target
+}
+
+/**
  * 摘要脱敏：把本机绝对路径压成相对工作区的写法。
  *
  * 参数与结果摘要里会出现 `D:\work\repo\src\a.ts` 这种路径，直接上报等于把本机
@@ -90,24 +100,16 @@ export function redact(text: string, workspacePath: string): string {
     out = out.split(variant).join('')
   }
   // 其它盘符的绝对路径 → 只留文件名
-  out = out.replace(/[A-Za-z]:[\\/][^\s"'`),;]+/g, (hit) =>
-    path.basename(hit.replace(/[\\/]+$/, ''))
-  )
+  out = out.replace(/[A-Za-z]:[\\/][^\s"'`),;]+/g, (hit) => fileTail(hit))
   // Unix 绝对路径（家目录 / 临时目录 / 系统目录）→ 只留文件名
   out = out.replace(
     /(^|[\s"'(])\/(?:home|Users|root|tmp|var|etc)\/[^\s"'`),;]+/g,
-    (hit: string, prefix: string) => {
-      const base = path.basename(hit.slice(prefix.length).replace(/[\\/]+$/, ''))
-      return `${prefix}${base}`
-    }
+    (hit: string, prefix: string) => `${prefix}${fileTail(hit.slice(prefix.length))}`
   )
   // git-bash 的盘符挂载写法（`/d/tmp/x`）同理 — 工作区根已在上面摘掉，剩下的都是外面的
   out = out.replace(
     /(^|[\s"'(])\/[a-z]\/[^\s"'`),;]+/g,
-    (hit: string, prefix: string) => {
-      const base = path.basename(hit.slice(prefix.length).replace(/[\\/]+$/, ''))
-      return `${prefix}${base}`
-    }
+    (hit: string, prefix: string) => `${prefix}${fileTail(hit.slice(prefix.length))}`
   )
   return out
 }
@@ -218,7 +220,7 @@ function relativeFile(filePath: string, workspacePath: string): string {
   const normalized = path.normalize(filePath)
   const root = path.normalize(workspacePath)
   const rel = path.relative(root, normalized)
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return path.basename(normalized)
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return fileTail(normalized)
   return rel.split(path.sep).join('/')
 }
 
