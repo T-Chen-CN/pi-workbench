@@ -377,8 +377,12 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
           send('cloud:event', frame)
         },
         log: (message, error) => logger?.warn(message, error ?? ''),
-        // 这一轮结束了：跨重启接回的记录用完即弃
-        onRunSettled: (runId) => clearActiveRun(runId)
+        // 这一轮结束了：先留一条终态日志（本机是事后唯一能查的地方），再放掉接回记录。
+        // 只清不记的话，跑完 30 轮之后日志里一条结果都没有。
+        onRunSettled: (runId, state) => {
+          logger?.info('[Cloud] run settled', { runId, state })
+          clearActiveRun(runId)
+        }
       },
       client
     )

@@ -14,6 +14,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { getAppDir } from '../app-paths.js'
+import { stripAnsi } from '../text-sanitize.js'
 import type { CloudApprovalChoice, CloudApprovalMode } from './types.js'
 
 const COMMAND_MAX_CHARS = 200
@@ -72,7 +73,7 @@ export function auditFile(): string {
 
 /** 折叠空白 + 截断：同一份逻辑给审计和卡片共用 */
 export function auditCommandSummary(command: string): string {
-  const flat = String(command ?? '')
+  const flat = stripAnsi(String(command ?? ''))
     .replace(/\s+/g, ' ')
     .trim()
   return flat.length <= COMMAND_MAX_CHARS
@@ -186,7 +187,7 @@ export function flushApprovalOutcome(runId: string): boolean {
 }
 
 function normalizePreview(raw: string): string {
-  return String(raw ?? '')
+  return stripAnsi(String(raw ?? ''))
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, PREVIEW_MAX_CHARS)

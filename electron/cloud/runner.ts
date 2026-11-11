@@ -231,6 +231,8 @@ export class CloudRunner {
     this.streams.get(runId)?.controller.abort()
     this.streams.set(runId, { runId, sessionId, controller, mapper })
     let terminal = false
+    /** 服务端明确说过「这一轮已经结束 / 没这一轮」：不再续订，收尾时要说清楚 */
+    let fatalStreamEnd = false
     const controlPoll = setInterval(() => {
       if (terminal || controller.signal.aborted) return
       void this.pollControls(runId, mapper, sessionId)
@@ -285,7 +287,7 @@ export class CloudRunner {
             controller.signal
           )
           if (!response.body) throw new Error('事件流没有响应正文')
-          await readSseStream(response.body, {
+          const endReason = await readSseStream(response.body, {
             signal: controller.signal,
             onFrame: (frame) => {
               if (typeof frame.id === 'number') lastSeq = frame.id
@@ -298,9 +300,26 @@ export class CloudRunner {
               }
             },
           })
+          // 流是「正常读完」的（服务端关流 / keepalive 静默超时），没抛错也就没有
+          // 失败日志 —— 不在这里记一条，这次断流在日志里根本不存在，只剩后面重订阅的后果。
+          if (!terminal && endReason !== 'aborted') {
+            this.deps.log?.('[Cloud] run stream ended without terminal frame', {
+              runId,
+              endReason,
+              lastSeq,
+            })
+          }
         } catch (error) {
           if (controller.signal.aborted) break
           this.deps.log?.('[Cloud] run stream failed', error)
+          // 服务端已经明确说「没有这一轮 / 这一轮已经结束了」：重订阅只会把退避
+          // 全花在一个不会变的答案上，最后还推一条「多次中断」的假故障。
+          // 实测 2026-11-09 10:34 就是这么连打四次 `这一轮已经结束了`。
+          if (isFatalStreamError(error)) {
+            this.deps.log?.('[Cloud] run stream stop following', { runId, code: error.code })
+            fatalStreamEnd = true
+            break
+          }
         }
 
         if (terminal || controller.signal.aborted) break
@@ -309,6 +328,7 @@ export class CloudRunner {
         const stillRunning = await this.isRunning(runId)
         if (!stillRunning) break
         if (attempt >= MAX_STREAM_RETRIES) {
+          this.deps.log?.('[Cloud] run stream give up', { runId, attempts: attempt + 1 })
           this.emit(
             {
               kind: 'error',
@@ -330,7 +350,19 @@ export class CloudRunner {
 
     // 第三个参数 = 「渲染层已经收到过终态」，而不是「后端已经结束」：
     // 接回时终态帧可能落在被丢弃的缓冲里，那就得由 reconcile 补一次。
-    await this.reconcile(runId, sessionId, deliveredTerminal)
+    const settledState = await this.reconcile(runId, sessionId, deliveredTerminal)
+    // 服务端说这一轮结束了、状态接口却说还在跑：把这条不一致说出来，
+    // 别留一个永远转圈的界面（也不像以前那样误报成「事件流多次中断」）。
+    if (fatalStreamEnd && (settledState === null || !isTerminalStatus(settledState))) {
+      this.emit(
+        {
+          kind: 'error',
+          runId,
+          error: '事件流已被服务端关闭（这一轮已收尾），但状态仍未终态；重新打开会话可看到最新进度',
+        },
+        sessionId
+      )
+    }
     // 实时帧只有 `error`、预览是空的：收尾时历史已经重拉过，该补的补上
     flushApprovalOutcome(runId)
   }
@@ -419,12 +451,16 @@ export class CloudRunner {
     )
   }
 
-  /** 流结束 / 断流后的收敛：拿最终状态 + 重拉历史（工具结果、token、花费都以历史为准） */
+  /**
+   * 流结束 / 断流后的收敛：拿最终状态 + 重拉历史（工具结果、token、花费都以历史为准）。
+   *
+   * 返回服务端最终报的状态（查不到时为 `null`）：调用方靠它判断「收尾后到底落没落终态」。
+   */
   private async reconcile(
     runId: string,
     sessionId: string | null,
     terminal: boolean
-  ): Promise<void> {
+  ): Promise<CloudRunStatus | null> {
     let session = sessionId
     let state: CloudRunStatus | null = null
     let error: string | null = null
@@ -465,11 +501,30 @@ export class CloudRunner {
         this.deps.log?.('[Cloud] history reconcile failed', historyError)
       }
     }
+    return state
   }
 }
 
 function isTerminalStatus(status: CloudRunStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled'
+}
+
+/**
+ * 这个流错误值不值得重订阅。
+ *
+ * 只有「网络断了 / 服务端 5xx / 429」这类**可能变好**的错误才退避重试；
+ * 4xx 里的「没这条 run」「这一轮已经结束了」「凭据不对」重试一万次也是同一个答案，
+ * 只是把 `MAX_STREAM_RETRIES` 的退避时间白白烧掉，还会误报成「事件流多次中断」。
+ */
+function isFatalStreamError(error: unknown): error is CloudApiError {
+  if (!(error instanceof CloudApiError)) return false
+  return (
+    error.code === 'not_found' ||
+    error.code === 'conflict' ||
+    error.code === 'bad_request' ||
+    error.code === 'unauthorized' ||
+    error.code === 'forbidden'
+  )
 }
 
 function delay(ms: number): Promise<void> {

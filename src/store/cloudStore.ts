@@ -309,7 +309,8 @@ interface CloudState {
   respondApproval: (requestId: string, choice: CloudApprovalChoice) => Promise<boolean>
   /** 本地倒计时归零：卡片置灰（服务端随后按自己的超时拒绝） */
   expireApproval: (requestId: string) => void
-  loadPolicy: () => Promise<void>
+  /** `force` 跳过失败退避（用户主动重试「审批策略」卡片时用） */
+  loadPolicy: (options?: { force?: boolean }) => Promise<void>
   setMode: (mode: CloudApprovalMode) => Promise<boolean>
   loadDiagnostics: () => Promise<void>
   loadJobs: () => Promise<void>
@@ -354,6 +355,26 @@ interface CloudState {
   revokeGateway: () => Promise<boolean>
   /** 清掉一次性提示 */
   clearGatewayNotice: () => void
+}
+
+/**
+ * 读审批策略的在飞请求与失败退避（模块级，不进 store 状态）。
+ *
+ * 为什么要合并：`cloud:policy:get` 由每个挂载点（连接页 + 会话页，多个常驻工作区
+ * 各一份）在 `connected` 翻转时各打一次。实测 502 期间 231ms 内出现 4 次请求，
+ * 而单次超时是 30s —— 服务端一挂，请求就叠在手上。
+ */
+let policyInFlight: Promise<void> | null = null
+let policyFailedAt = 0
+let policyFailedError: string | null = null
+/** 读失败后的静默期：网关 502 时没必要每次重渲染都重打一遍 */
+const POLICY_RETRY_BACKOFF_MS = 30_000
+
+/** 测试用：清掉在飞/退避状态（模块级状态不随 store 的 setState 重置） */
+export function resetPolicyLoadStateForTests(): void {
+  policyInFlight = null
+  policyFailedAt = 0
+  policyFailedError = null
 }
 
 export const useCloudStore = create<CloudState>()((set, get) => ({
@@ -954,21 +975,42 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   },
 
   /** 读服务端当前策略：只读白名单子集，从不本地缓存旧的档位 */
-  async loadPolicy() {
-    set({ policyLoading: true, policyError: null })
-    try {
-      const result = await cloudApi.getPolicy()
-      if (!result.success || !result.policy) {
-        set({ policyError: result.error ?? 'unknown' })
-        return
-      }
-      set({ policy: result.policy })
-    } catch (error) {
-      // 兜底：加载态必须收掉，否则控件会永远转圈且点不动
-      set({ policyError: error instanceof Error ? error.message : String(error) })
-    } finally {
-      set({ policyLoading: false })
+  async loadPolicy(options: { force?: boolean } = {}) {
+    // 已经在读：返回同一个 promise，别再打一次网关
+    if (policyInFlight) return policyInFlight
+    // 刚失败过：错误留在界面上，但静默期不再重打（除非调用方要求 force）
+    if (
+      !options.force &&
+      policyFailedError !== null &&
+      Date.now() - policyFailedAt < POLICY_RETRY_BACKOFF_MS
+    ) {
+      set({ policyLoading: false, policyError: policyFailedError })
+      return
     }
+    set({ policyLoading: true, policyError: null })
+    policyInFlight = (async () => {
+      try {
+        const result = await cloudApi.getPolicy()
+        if (!result.success || !result.policy) {
+          policyFailedAt = Date.now()
+          policyFailedError = result.error ?? 'unknown'
+          set({ policyError: policyFailedError })
+          return
+        }
+        policyFailedAt = 0
+        policyFailedError = null
+        set({ policy: result.policy })
+      } catch (error) {
+        // 兜底：加载态必须收掉，否则控件会永远转圈且点不动
+        policyFailedAt = Date.now()
+        policyFailedError = error instanceof Error ? error.message : String(error)
+        set({ policyError: policyFailedError })
+      } finally {
+        policyInFlight = null
+        set({ policyLoading: false })
+      }
+    })()
+    return policyInFlight
   },
 
   /**
@@ -985,6 +1027,9 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
         set({ policyError: result.error ?? 'unknown' })
         return false
       }
+      // 写成功说明网关现在读得到配置：把读侧的退避清掉
+      policyFailedAt = 0
+      policyFailedError = null
       set({ policy: result.policy })
       return true
     } catch (error) {

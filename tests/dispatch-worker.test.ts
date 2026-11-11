@@ -209,6 +209,48 @@ describe('dispatch worker', () => {
     await worker.stop()
   })
 
+  it('keeps a long report intact in the ledger and flags the truncated ones', async () => {
+    const { client } = makeClient()
+    // 旧行为是裸 slice(0,500)：实测 20 条里 15 条正好卡在 500，断在句子中间，
+    // 而界面上只有一行 caption —— 全文在本机没有可读位置。
+    const long = `${'报告开始。'.repeat(120)}结尾在这`
+    expect(long.length).toBeGreaterThan(500)
+    const executor = makeExecutor(async () => ({
+      report: { kind: 'done' as const, summary: long },
+      sessionId: 'session-long'
+    }))
+    const { worker } = createWorker(executor, client)
+    await worker.refresh()
+
+    await worker.handleFrame({ type: 'task.assigned', taskId: 't-long', workspaceId: wsId(), prompt: 'a' })
+    await vi.waitFor(() => expect(readLedger(ledgerPath(tmp))[0]?.state).toBe('completed'))
+
+    const entry = readLedger(ledgerPath(tmp))[0]
+    expect(entry?.summary).toBe(long)
+    expect(entry?.summary.endsWith('结尾在这')).toBe(true)
+    expect(entry?.truncated).toBeUndefined()
+    await worker.stop()
+  })
+
+  it('flags a report that hits the 4k local cap instead of dropping it silently', async () => {
+    const { client } = makeClient()
+    const huge = 'x'.repeat(5_000)
+    const executor = makeExecutor(async () => ({
+      report: { kind: 'done' as const, summary: huge },
+      sessionId: 'session-huge'
+    }))
+    const { worker } = createWorker(executor, client)
+    await worker.refresh()
+
+    await worker.handleFrame({ type: 'task.assigned', taskId: 't-huge', workspaceId: wsId(), prompt: 'a' })
+    await vi.waitFor(() => expect(readLedger(ledgerPath(tmp))[0]?.state).toBe('completed'))
+
+    const entry = readLedger(ledgerPath(tmp))[0]
+    expect(entry?.summary).toHaveLength(4_000)
+    expect(entry?.truncated).toBe(true)
+    await worker.stop()
+  })
+
   it('ignores a duplicated assignment for the same task', async () => {
     const { client } = makeClient()
     const executor = makeExecutor()

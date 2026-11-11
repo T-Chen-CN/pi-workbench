@@ -553,7 +553,7 @@ Hermes → local_dispatch(workspace, prompt)
 | 关闭派活开关 | **等于停止本机派活**：队列逐条回 `canceled`、运行中的会话 `abort`、账本记「派活已关闭」，再上报不可派活并断中继。只断中继会留下仍在写文件的会话（实测模型把「派活已关闭」当成云端回答写进了文件） |
 | 关闭派活时上报什么 | 上报**不可派活**的完整清单（`dispatchable: false` + 工作区仍在），不是空列表：云端模型再派时拿到「这个工作区没打开派活开关」，能据此请用户打开；空列表只能得到「这台机器上什么都没有」 |
 | 关闭派活后的排队任务 | 网关在收到 `dispatchable: false` 时清掉该设备的 `queued` 任务（`cancel_pending`）。否则重连时重放，一条云端早已放弃的指令会在几分钟后突然执行 |
-| 本机账本 | `data/agent/dispatch-ledger.json` 最近 20 条（任务 id / 工作区 / 结果 / 摘要 / 本地会话 id）。会话本身不带派活标记（那是 pi-bridge 的落盘格式，P1 不动） |
+| 本机账本 | `data/agent/dispatch-ledger.json` 最近 20 条（任务 id / 工作区 / 结果 / 摘要 / 本地会话 id）。摘要单条上限 4KB，超过记 `truncated: true`；面板「最近任务」一行预览 + 点开看全文（旧行为是硬切 500 字且没有入口）。会话本身不带派活标记（那是 pi-bridge 的落盘格式，P1 不动） |
 | 派活会话权限 | 固定 `auto` + `grants: []`，**不接 `approvalBroker`**；否则没有本地审批通道时会 fail-closed 挂死（§13 ⑨） |
 | 回报里的 `localSessionId` | worker 兜底补：执行器忘了带也能落进上报与账本，云端据此把任务锚到本机会话 |
 

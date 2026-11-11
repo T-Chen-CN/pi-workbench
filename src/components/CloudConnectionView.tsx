@@ -498,12 +498,27 @@ export const CloudConnectionView: React.FC<{ active: boolean }> = ({ active }) =
 const CloudPolicyCard: React.FC<{ connected: boolean }> = ({ connected }) => {
   const { t } = useI18nStore()
   const policy = useCloudStore((state) => state.policy)
+  const policyError = useCloudStore((state) => state.policyError)
+  const policyLoading = useCloudStore((state) => state.policyLoading)
+  const loadPolicy = useCloudStore((state) => state.loadPolicy)
 
   return (
     <Card>
       <CardHeader title={t('cloudPolicyTitle')} />
       <div className="flex flex-col gap-2 pt-3">
         <CloudModeSwitch disabled={!connected} />
+        {/* 读策略失败（网关 502 / 控制台 401）时给一条能自己动手的路：
+            否则卡片一直红字，用户只能重启应用碰运气 */}
+        {connected && policyError && !policyLoading && (
+          <div className="flex items-center justify-between gap-3">
+            <Caption className="min-w-0 truncate text-danger" title={policyError}>
+              {policyError}
+            </Caption>
+            <Button size="sm" variant="ghost" onClick={() => void loadPolicy({ force: true })}>
+              {t('cloudPolicyRetry')}
+            </Button>
+          </div>
+        )}
         {policy && (
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between gap-3">

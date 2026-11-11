@@ -108,6 +108,14 @@ const CATALOG_REFRESH_MS = 30_000
 const PROGRESS_HEARTBEAT_MS = 30_000
 /** 反问最多等这么久；再久说明云端那轮已经放弃，本地不能一直挂住 */
 const QUESTION_TIMEOUT_MS = 9 * 60_000
+/**
+ * 本机账本里一条报告保留多少字。
+ *
+ * 原本是 500：实测 20 条里 15 条正好卡在 500，断在句子中间（如 `…共 7 项（SecurityHealth、Rt`），
+ * 而界面上只有一行 caption，**全文在本机没有任何可读位置**。给到 4KB —— 一份完整的
+ * 排查报告通常在这个量级，同时 20 条 × 4KB 的账本文件也不至于膨胀。
+ */
+const SUMMARY_MAX_CHARS = 4_000
 
 const DEFAULT_STATE: DispatchWorkerState = {
   enabled: false,
@@ -587,9 +595,12 @@ export class DispatchWorker {
     sessionId: string | null
   }): void {
     try {
+      const full = input.summary ?? ''
       const entries = appendLedger(this.deps.ledgerPath, {
         ...input,
-        summary: input.summary.slice(0, 500),
+        summary: full.slice(0, SUMMARY_MAX_CHARS),
+        // 截断要留痕：界面能说「报告被截了」，而不是让用户以为报告本来就这么短
+        ...(full.length > SUMMARY_MAX_CHARS ? { truncated: true } : {}),
         at: this.deps.now?.() ?? Date.now(),
       })
       this.patch({ recent: entries })

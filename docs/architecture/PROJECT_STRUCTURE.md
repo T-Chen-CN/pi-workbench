@@ -72,6 +72,7 @@ pi-workbench/
 │   ├── watch-batcher.ts          # 文件监听事件批量合并
 │   ├── watch-filter.ts           # 监听忽略规则
 │   ├── atomic-json.ts            # 原子写 + .bak 恢复
+│   ├── text-sanitize.ts          # 剥终端颜色码（派活轨迹 / 审计预览，与 pi-bridge 同语义）
 │   ├── logger.ts                 # 主进程文件日志
 │   ├── updater.ts                # 自动更新
 │   ├── app-protocol.ts           # 自定义 scheme（pw-file:// 等）注册

@@ -4,6 +4,7 @@ import {
   filterSessions,
   isRunningEntry,
   isTerminalRun,
+  resetPolicyLoadStateForTests,
   upsertPart,
   useCloudStore,
 } from '../src/store/cloudStore'
@@ -17,6 +18,8 @@ const text = (id: string, body: string): CloudTracePart => ({
 })
 
 beforeEach(() => {
+  // 读策略的在飞 / 退避状态在模块级：不清掉会让上一个用例的 502 污染下一个
+  resetPolicyLoadStateForTests()
   useCloudStore.setState({
     activeSessionId: null,
     sessionMeta: null,
@@ -858,6 +861,62 @@ describe('审批档位', () => {
     await expect(useCloudStore.getState().setMode('off')).resolves.toBe(false)
     expect(useCloudStore.getState().policy?.mode).toBe('manual')
     expect(useCloudStore.getState().policyError).toContain('403')
+  })
+
+  it('shares one request between two mount points', async () => {
+    // 连接页 + 会话页（多个常驻工作区各一份）会在 connected 翻转时各读一次；
+    // 实测 502 期间 231ms 内出现 4 次请求，而单次超时是 30s。
+    let calls = 0
+    // 用对象装着 resolve：赋值在 Promise executor 里，TS 会把裸 let 缩成 null
+    const gate: { release?: (value: unknown) => void } = {}
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudPolicyGet: () => {
+        calls += 1
+        return new Promise((resolve) => {
+          gate.release = resolve
+        })
+      },
+    }
+
+    const first = useCloudStore.getState().loadPolicy()
+    const second = useCloudStore.getState().loadPolicy()
+    expect(calls).toBe(1)
+    gate.release?.({
+      success: true,
+      policy: {
+        mode: 'manual',
+        timeoutSeconds: 120,
+        denyCount: 0,
+        disabledToolsets: [],
+        terminalBackend: 'local',
+      },
+    })
+    await Promise.all([first, second])
+    expect(useCloudStore.getState().policy?.mode).toBe('manual')
+    expect(useCloudStore.getState().policyLoading).toBe(false)
+  })
+
+  it('backs off after a failed read until forced', async () => {
+    let calls = 0
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudPolicyGet: async () => {
+        calls += 1
+        return { success: false, error: '云端网关读取配置失败（502）' }
+      },
+    }
+
+    await useCloudStore.getState().loadPolicy()
+    expect(calls).toBe(1)
+    expect(useCloudStore.getState().policyError).toContain('502')
+
+    // 静默期内再挂载一次：不再打网关，但错误留着
+    await useCloudStore.getState().loadPolicy()
+    expect(calls).toBe(1)
+    expect(useCloudStore.getState().policyError).toContain('502')
+
+    // 用户点「重试」：force 跳过静默期
+    await useCloudStore.getState().loadPolicy({ force: true })
+    expect(calls).toBe(2)
   })
 })
 

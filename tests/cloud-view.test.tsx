@@ -7,7 +7,7 @@ import { CloudJobsView } from '../src/components/CloudJobsView'
 import { CloudTrace } from '../src/components/CloudTrace'
 import { CloudApprovalCard } from '../src/components/CloudApprovalCard'
 import { CloudModeSwitch } from '../src/components/CloudModeSwitch'
-import { useCloudStore } from '../src/store/cloudStore'
+import { useCloudStore, resetPolicyLoadStateForTests } from '../src/store/cloudStore'
 import { UNCONFIGURED_CONNECTION } from '../src/api/cloud'
 import { useI18nStore } from '../src/store/i18nStore'
 import { translations } from '../src/i18n/translations'
@@ -268,6 +268,9 @@ function resetStore() {
 
 beforeEach(() => {
   useI18nStore.getState().setLanguage('zh')
+  // 读策略的「在飞 / 失败退避」在模块级：不清掉，上一个用例的 502 会让
+  // 下一个用例的首次读直接被静默期吃掉
+  resetPolicyLoadStateForTests()
   resetStore()
 })
 

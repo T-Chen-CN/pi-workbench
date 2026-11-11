@@ -8,15 +8,16 @@
 import React, { useEffect, useState } from 'react'
 import { FolderPlus, PowerOff, Radio, Trash2 } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
-import { useDispatchStore } from '../store/dispatchStore'
+import { useDispatchStore, type DispatchRecentTask } from '../store/dispatchStore'
 import { dispatchApi } from '../api/dispatch'
+import { formatRelativeTime } from '../utils/relativeTime'
 import { Button, Caption, DataText, Input, Modal, Spinner } from './ui'
 import { Card, CardHeader, StatusText } from './patterns'
 
 const RECENT_SHOW = 5
 
 export const DispatchCard: React.FC<{ connected: boolean }> = ({ connected }) => {
-  const { t } = useI18nStore()
+  const { t, language } = useI18nStore()
   const config = useDispatchStore((state) => state.config)
   const loading = useDispatchStore((state) => state.loading)
   const busy = useDispatchStore((state) => state.busy)
@@ -34,6 +35,8 @@ export const DispatchCard: React.FC<{ connected: boolean }> = ({ connected }) =>
   const [draftLabel, setDraftLabel] = useState('')
   const [draftDescription, setDraftDescription] = useState('')
   const [confirmStop, setConfirmStop] = useState(false)
+  /** 打开完整报告的那一条（账本里一行放不下，全文在这里看） */
+  const [report, setReport] = useState<DispatchRecentTask | null>(null)
 
   useEffect(() => {
     if (!dispatchApi.hasBridge()) return
@@ -217,8 +220,14 @@ export const DispatchCard: React.FC<{ connected: boolean }> = ({ connected }) =>
             <Caption className="text-ink-subtle">{t('cloudDispatchRecentEmpty')}</Caption>
           ) : (
             recent.slice(0, RECENT_SHOW).map((entry) => (
-              <div key={`${entry.taskId}-${entry.at}`} className="flex flex-col gap-0.5">
-                <div className="flex items-center justify-between gap-3">
+              <button
+                key={`${entry.taskId}-${entry.at}`}
+                type="button"
+                className="flex w-full flex-col gap-0.5 rounded-sm text-left transition-colors hover:bg-hover focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+                title={t('cloudDispatchReportOpen')}
+                onClick={() => setReport(entry)}
+              >
+                <span className="flex w-full items-center justify-between gap-3">
                   <DataText className="truncate text-ink">{entry.workspaceLabel}</DataText>
                   <StatusText
                     tone={
@@ -235,13 +244,50 @@ export const DispatchCard: React.FC<{ connected: boolean }> = ({ connected }) =>
                         ? t('cloudDispatchStateCanceled')
                         : t('cloudDispatchStateFailed')}
                   </StatusText>
-                </div>
-                <Caption className="truncate text-ink-subtle">{entry.summary}</Caption>
-              </div>
+                </span>
+                {/* 一行预览：全文放不下，点开看报告 */}
+                <span className="w-full truncate type-caption text-ink-subtle">
+                  {entry.summary || t('cloudDispatchReportEmpty')}
+                </span>
+              </button>
             ))
           )}
         </div>
       </div>
+
+      <Modal
+        open={report !== null}
+        title={t('cloudDispatchReportTitle')}
+        size="lg"
+        onClose={() => setReport(null)}
+        footer={<Button onClick={() => setReport(null)}>{t('close')}</Button>}
+      >
+        {report && (
+          <div className="flex min-h-0 flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <DataText className="text-ink">{report.workspaceLabel}</DataText>
+              <Caption className="text-ink-muted">
+                {formatRelativeTime(report.at, language)}
+              </Caption>
+              {report.sessionId && (
+                <Caption className="text-ink-subtle">
+                  {t('cloudDispatchReportSession', { session: report.sessionId.slice(0, 8) })}
+                </Caption>
+              )}
+            </div>
+            {report.summary ? (
+              <pre className="m-0 max-h-[55vh] overflow-auto whitespace-pre-wrap break-words border border-rule-hairline bg-sunken p-2 type-data text-ink">
+                {report.summary}
+              </pre>
+            ) : (
+              <Caption className="text-ink-subtle">{t('cloudDispatchReportEmpty')}</Caption>
+            )}
+            {report.truncated && (
+              <Caption className="text-ink-subtle">{t('cloudDispatchReportTruncated')}</Caption>
+            )}
+          </div>
+        )}
+      </Modal>
 
       <Modal
         open={confirmStop}

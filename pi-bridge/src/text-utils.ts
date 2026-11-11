@@ -333,6 +333,28 @@ export function messageText(message: unknown): string {
 const TOOL_ARGS_LIMIT = 1_000
 const TOOL_RESULT_LIMIT = 2_000
 
+/**
+ * 终端控制序列（SGR 颜色码、OSC）。
+ *
+ * 工具结果里很常见：Windows PowerShell 的报错整段都是 `\u001b[31;1m…\u001b[0m`。
+ * 人眼看不见，但它占预算 —— 实测 160 字的截断预览里平均 47 个字节是颜色码，
+ * 而工具卡预览与派活轨迹（上报云端）都从这份摘要走。
+ *
+ * 与 `electron/text-sanitize.ts` 同语义（主进程与 bridge 独立构建，不能共享源码）。
+ * 控制字符用 `String.fromCharCode` 拼出来，否则会被 `no-control-regex` 正当拦下。
+ */
+const ESC = String.fromCharCode(27)
+const BEL = String.fromCharCode(7)
+const ANSI_PATTERN = new RegExp(
+  `${ESC}(?:\\[[0-9;?]*[ -/]*[@-~]|\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\))`,
+  'g'
+)
+
+export function stripAnsi(text: string): string {
+  if (!text || text.indexOf('\u001B') < 0) return text
+  return text.replace(ANSI_PATTERN, '')
+}
+
 export function truncateText(text: string, max: number, preferTail = false): string {
   if (text.length <= max) return text
   return preferTail ? `…${text.slice(-max)}` : `${text.slice(0, max)}…`
@@ -340,7 +362,8 @@ export function truncateText(text: string, max: number, preferTail = false): str
 
 function stringifyToolArgs(args: unknown): string {
   try {
-    return truncateText(JSON.stringify(args ?? {}), 500)
+    // JSON.stringify 会把 ESC 转成 `\u001b` 六个字符：先剥再序列化，否则摘要里多出占位正文的转义文本
+    return truncateText(stripAnsi(JSON.stringify(args ?? {})), 500)
   } catch {
     return ''
   }
@@ -363,7 +386,7 @@ export function summarizeToolArgs(toolName: string, args: any): string {
     }
     case 'bash':
     case 'powershell':
-      return truncateText(String(value.command ?? ''), TOOL_ARGS_LIMIT)
+      return truncateText(stripAnsi(String(value.command ?? '')), TOOL_ARGS_LIMIT)
     case 'grep':
     case 'find':
       return [value.pattern, value.path ?? value.glob]
@@ -378,7 +401,7 @@ export function summarizeToolArgs(toolName: string, args: any): string {
 export function summarizeToolResult(result: any, preferTail = false): string {
   if (!result) return ''
   if (typeof result === 'string') {
-    return truncateText(result, TOOL_RESULT_LIMIT, preferTail)
+    return truncateText(stripAnsi(result), TOOL_RESULT_LIMIT, preferTail)
   }
   const content = Array.isArray(result.content) ? result.content : []
   const text = content
@@ -389,7 +412,7 @@ export function summarizeToolResult(result: any, preferTail = false): string {
     })
     .filter(Boolean)
     .join('\n')
-  if (text) return truncateText(text, TOOL_RESULT_LIMIT, preferTail)
+  if (text) return truncateText(stripAnsi(text), TOOL_RESULT_LIMIT, preferTail)
   if (result.details != null) {
     try {
       return truncateText(JSON.stringify(result.details), TOOL_RESULT_LIMIT, preferTail)

@@ -14,6 +14,7 @@
 
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
+import { stripAnsi } from '../text-sanitize.js'
 
 /** 单步：一次工具调用（成功或失败） */
 export interface DispatchTraceStep {
@@ -63,7 +64,8 @@ function sanitize(taskId: string): string {
 }
 
 function clip(text: string, limit: number): string {
-  const flat = text.replace(/\s+/g, ' ').trim()
+  // 先剥终端颜色码再压空白：不然 160 字的预算里有三分之一花在 ESC 序列上
+  const flat = stripAnsi(text).replace(/\s+/g, ' ').trim()
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat
 }
 

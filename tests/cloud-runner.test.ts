@@ -52,7 +52,7 @@ interface Behavior {
 }
 
 /** 用假的 CloudClient 驱动 runner：只关心「断流后能不能续上」 */
-function makeRunner(streams: Response[], behavior: Behavior) {
+function makeRunner(streams: Array<Response | Error>, behavior: Behavior) {
   const frames: CloudFrame[] = []
   const opened: string[] = []
   let streamIndex = 0
@@ -86,6 +86,7 @@ function makeRunner(streams: Response[], behavior: Behavior) {
       opened.push(path)
       const response = streams[streamIndex] ?? sseStream([])
       streamIndex += 1
+      if (response instanceof Error) throw response
       return response
     },
   }
@@ -126,6 +127,39 @@ describe('CloudRunner 断流续订', () => {
     expect(frames.filter((item) => item.kind === 'part')).toHaveLength(2)
     expect(frames[frames.length - 1]?.kind).toBe('parts')
   })
+
+  it('stops following when the gateway says the run already ended', async () => {
+    // 实测故障（2026-11-09 10:34）：服务端回 `这一轮已经结束了`，客户端却按退避
+    // 又试了三次，8 秒后才推一条「事件流多次中断」的假故障。
+    const ended = new CloudApiError('not_found', '这一轮已经结束了', { status: 404 })
+    const { runner, frames, opened } = makeRunner([ended], { statuses: ['completed'] })
+
+    await runner.start({ input: 'hi', sessionId: 's-1', idempotencyKey: 'k-ended' })
+    await waitFor(() => frames.some((item) => item.kind === 'parts'))
+
+    // 只开了一次流：没有退避重试
+    expect(opened).toHaveLength(1)
+    // 也没有假故障：收尾用的是状态接口给的终态
+    expect(frames.some((item) => item.kind === 'error')).toBe(false)
+    const run = frames.filter((item) => item.kind === 'run').pop()
+    expect(run && 'state' in run ? run.state : '').toBe('completed')
+  }, 15_000)
+
+  it('says the stream was closed when the status still claims it is running', async () => {
+    // 服务端自相矛盾（事件流说结束、状态接口说 running）：不能留一个永远转圈的界面，
+    // 也不该谎称「多次中断」。
+    const ended = new CloudApiError('conflict', '这一轮已经结束了', { status: 409 })
+    const { runner, frames, opened } = makeRunner([ended], { statuses: ['running'] })
+
+    await runner.start({ input: 'hi', sessionId: 's-1', idempotencyKey: 'k-lie' })
+    await waitFor(() => frames.some((item) => item.kind === 'error'))
+
+    expect(opened).toHaveLength(1)
+    const error = frames.find((item) => item.kind === 'error')
+    const message = error && 'error' in error ? error.error : ''
+    expect(message).toContain('事件流已被服务端关闭')
+    expect(message).not.toContain('多次中断')
+  }, 15_000)
 
   it('gives up with an error frame when every retry dies and the run is still active', async () => {
     // 断流后状态一直是 running：续订到上限就报错收尾，不能把界面永久卡在「执行中」

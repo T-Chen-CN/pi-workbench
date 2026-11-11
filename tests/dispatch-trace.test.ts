@@ -63,6 +63,25 @@ describe('dispatch trace · 收集', () => {
     })
   })
 
+  it('strips terminal colour codes before clipping the result', () => {
+    // 实测：31% 的 powershell 结果是带色的，160 字的预算里平均 47 个字节是 ESC 码，
+    // 而这份摘要是回报给云端的那一份。
+    const trace = collector()
+    trace.note({ type: 'tool_start', toolCallId: 'c1', toolName: 'powershell', argsSummary: 'dotnet build' })
+    trace.note({
+      type: 'tool_end',
+      toolCallId: 'c1',
+      toolName: 'powershell',
+      status: 'error',
+      durationMs: 30,
+      resultPreview: '\u001b[31;1mdotnet: \u001b[0m\u001b[36;1mLine |\u001b[0m \u001b[31;1m命令未找到\u001b[0m'
+    })
+
+    const step = trace.snapshot().steps[0]
+    expect(step?.result).toBe('dotnet: Line | 命令未找到')
+    expect(step?.result).not.toContain('\u001b')
+  })
+
   it('keeps a failed step for calls that never ended (cancel / crash)', () => {
     const trace = collector()
     trace.note({ type: 'tool_start', toolCallId: 'c1', toolName: 'bash', argsSummary: 'sleep 900' })

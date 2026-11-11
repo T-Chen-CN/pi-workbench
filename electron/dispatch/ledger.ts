@@ -18,6 +18,8 @@ export interface DispatchLedgerEntry {
   workspaceLabel: string
   state: 'completed' | 'failed' | 'canceled'
   summary: string
+  /** 报告超过本机保留上限被截断（旧记录没有这个字段） */
+  truncated?: boolean
   sessionId: string | null
   at: number
 }
