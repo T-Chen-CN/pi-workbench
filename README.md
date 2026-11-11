@@ -170,10 +170,10 @@ npm run build
 
 | 项       | 现状                                                                                           |
 | -------- | ---------------------------------------------------------------------------------------------- |
-| 当前版本 | `0.9.0`（2026-11-09）                                                                          |
-| 发布     | 18 个 Release；三平台安装包与 `latest*.yml` 由 CI 在 tag 上产出                                |
+| 当前版本 | `0.9.1`（2026-11-11）                                                                          |
+| 发布     | 19 个 Release；三平台安装包与 `latest*.yml` 由 CI 在 tag 上产出                                |
 | 阶段     | Phase 0–4 完成 · Phase 5（Fleet 后台任务）已于 2026-10-24 整体移除 · Phase 6 持续优化          |
-| 质量     | type-check + lint + 1800+ Vitest 用例 + 全量 build；CI 另跑一次 Windows 打包冒烟               |
+| 质量     | type-check + lint + 1900+ Vitest 用例 + 全量 build；CI 另跑一次 Windows 打包冒烟               |
 | 依赖     | Electron 44 · React 19 · TypeScript 5.9 · Monaco 0.57 · `@earendil-works/pi-coding-agent` 1.3  |
 | 已知边界 | 未签名未公证；旧格式 Office 不解析；扫描件不做 OCR；Linux 托盘降级为最小化；平台手工验收仍未做 |
 

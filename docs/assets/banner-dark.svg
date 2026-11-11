@@ -21,7 +21,7 @@
 
   <line x1="1010" y1="100" x2="1010" y2="208" stroke="#EDE7DC" stroke-opacity="0.22" />
   <g font-family="'Geist Mono', Consolas, monospace" text-anchor="end">
-    <text x="1208" y="128" font-size="13" fill="#EDE7DC">v0.9.0</text>
+    <text x="1208" y="128" font-size="13" fill="#EDE7DC">v0.9.1</text>
     <text x="1208" y="154" font-size="10.5" letter-spacing="1.4" fill="#A8A093">WINDOWS · MACOS · LINUX</text>
     <text x="1208" y="178" font-size="10.5" letter-spacing="1.4" fill="#A8A093">ELECTRON 44 · REACT 19</text>
   </g>
