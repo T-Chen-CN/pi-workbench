@@ -797,6 +797,8 @@ export interface ElectronAPI {
     sessionId: string
     limit?: number
     offset?: number
+    /** 要最新的一段（打开会话 / 接回 / 收尾）：offset 由主进程按会话总条数算 */
+    tail?: boolean
   }) => Promise<CloudMessagesResult>
   cloudSessionExport: (input: {
     sessionId: string

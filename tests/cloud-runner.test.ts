@@ -63,6 +63,8 @@ function makeRunner(streams: Array<Response | Error>, behavior: Behavior) {
     rawBaseUrl: 'https://api.example.com',
     credential: 'key',
     request: async <T,>(path: string): Promise<T> => {
+      // 会话详情：取尾部要靠 message_count（0 = 按旧行为取第一页）
+      if (path === '/api/sessions/s-1') return { id: 's-1', message_count: 0 } as T
       if (path === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
       if (path === '/api/sessions/s-1/messages') {
         return {
@@ -190,13 +192,15 @@ describe('帧的会话归属', () => {
     )
 
     await runner.start({ input: 'hi', sessionId: 's-1', idempotencyKey: 'k-tag' })
-    await waitFor(() => frames.some((item) => item.kind === 'parts'))
+    await waitFor(() => frames.some((item) => item.kind === 'run' && item.state === 'completed'))
 
     const tagged = frames.filter((item) => item.kind !== 'session')
     expect(tagged.length).toBeGreaterThan(0)
     for (const item of tagged) expect(item.sessionId).toBe('s-1')
     // `session` 帧自己就是会话 id 的来源
     expect(frames.find((item) => item.kind === 'session')).toMatchObject({ sessionId: 's-1' })
+    // 这一轮流得很干净：收尾**不**推整段历史，否则会把刚上屏的消息替换掉
+    expect(frames.some((item) => item.kind === 'parts')).toBe(false)
   })
 })
 
@@ -222,6 +226,8 @@ describe('并行跑两轮', () => {
       rawBaseUrl: 'https://api.example.com',
       credential: 'key',
       request: async <T,>(requestPath: string): Promise<T> => {
+        // 会话详情：取尾部要靠 message_count（0 = 按旧行为取第一页）
+        if (requestPath === '/api/sessions/s-1') return { id: 's-1', message_count: 0 } as T
         if (requestPath === '/v1/runs') {
           created += 1
           return { run_id: `run-${created}`, status: 'queued' } as T
@@ -301,6 +307,8 @@ describe('clarify 兜底轮询', () => {
       rawBaseUrl: 'https://api.example.com',
       credential: 'key',
       request: async <T,>(path: string): Promise<T> => {
+        // 会话详情：取尾部要靠 message_count（0 = 按旧行为取第一页）
+        if (path === '/api/sessions/s-1') return { id: 's-1', message_count: 0 } as T
         if (path === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
         if (path === '/api/sessions/s-1/messages') {
           return { data: [], session_id: 's-1' } as T
@@ -361,6 +369,8 @@ describe('审批兜底轮询', () => {
       rawBaseUrl: 'https://api.example.com',
       credential: 'key',
       request: async <T,>(path: string): Promise<T> => {
+        // 会话详情：取尾部要靠 message_count（0 = 按旧行为取第一页）
+        if (path === '/api/sessions/s-1') return { id: 's-1', message_count: 0 } as T
         if (path === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
         if (path === '/api/sessions/s-1/messages') {
           return { data: [], session_id: 's-1' } as T
@@ -466,6 +476,8 @@ describe('审批结果对号', () => {
       rawBaseUrl: 'https://api.example.com',
       credential: 'key',
       request: async <T,>(p: string): Promise<T> => {
+        // 会话详情：取尾部要靠 message_count（0 = 按旧行为取第一页）
+        if (p === '/api/sessions/s-1') return { id: 's-1', message_count: 0 } as T
         if (p === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
         if (p === '/api/sessions/s-1/messages') return { data: [], session_id: 's-1' } as T
         return { status: 'running', session_id: 's-1' } as T
@@ -517,6 +529,8 @@ describe('审批结果对号', () => {
       rawBaseUrl: 'https://api.example.com',
       credential: 'key',
       request: async <T,>(p: string): Promise<T> => {
+        // 会话详情：取尾部要靠 message_count（0 = 按旧行为取第一页）
+        if (p === '/api/sessions/s-1') return { id: 's-1', message_count: 0 } as T
         if (p === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
         if (p.startsWith('/api/sessions/s-1/messages')) {
           return {
@@ -581,6 +595,8 @@ describe('审批结果对号', () => {
       rawBaseUrl: 'https://api.example.com',
       credential: 'key',
       request: async <T,>(p: string): Promise<T> => {
+        // 会话详情：取尾部要靠 message_count（0 = 按旧行为取第一页）
+        if (p === '/api/sessions/s-1') return { id: 's-1', message_count: 0 } as T
         if (p === '/v1/runs') return { run_id: 'run-1', status: 'queued' } as T
         if (p.startsWith('/api/sessions/s-1/messages')) {
           return {
@@ -663,6 +679,8 @@ describe('接回在跑的一轮（重启后 attach）', () => {
       rawBaseUrl: 'https://api.example.com',
       credential: 'key',
       request: async <T,>(path: string): Promise<T> => {
+        // 会话详情：取尾部要靠 message_count（0 = 按旧行为取第一页）
+        if (path === '/api/sessions/s-1') return { id: 's-1', message_count: 0 } as T
         if (path.startsWith('/api/sessions/s-1/messages')) {
           if (behavior.beforeMessages) await behavior.beforeMessages()
           return {

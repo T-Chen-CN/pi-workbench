@@ -480,6 +480,8 @@ export const cloudApi = {
     sessionId: string
     limit?: number
     offset?: number
+    /** 要最新的一段：offset 由主进程按会话总条数算，渲染层不用关心分页 */
+    tail?: boolean
   }): Promise<CloudMessagesResult> {
     const bridge = api()
     if (!bridge || typeof bridge.cloudMessagesList !== 'function') {

@@ -292,6 +292,24 @@ describe('openSession', () => {
     expect(useCloudStore.getState().activeSessionId).toBe('fast')
     expect(useCloudStore.getState().parts).toEqual([text('h:1', 'fast')])
   })
+
+  it('asks for the tail of the session, not the first page', async () => {
+    const calls: Array<Record<string, unknown>> = []
+    ;(window as unknown as { electronAPI: Record<string, unknown> }).electronAPI = {
+      cloudMessagesList: (input: Record<string, unknown>) => {
+        calls.push(input)
+        return Promise.resolve({ success: true, parts: [text('h:900', '最新')], hasMore: true })
+      },
+      cloudRunAttach: async () => ({ success: true, attached: false }),
+      cloudLedgerList: async () => ({ success: true, entries: [] }),
+    }
+
+    await useCloudStore.getState().openSession('long')
+    // `tail` 由主进程换算成 offset：渲染层不再自己写死 0（写死就只能看到最老的一页）
+    expect(calls[0]).toMatchObject({ sessionId: 'long', tail: true })
+    expect(useCloudStore.getState().parts).toEqual([text('h:900', '最新')])
+    expect(useCloudStore.getState().partsHasMore).toBe(true)
+  })
 })
 
 describe('session actions', () => {

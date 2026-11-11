@@ -258,7 +258,52 @@ export interface RunStatusSnapshot {
   pendingControls?: Array<Record<string, unknown>>
 }
 
+const HISTORY_PAGE_SIZE = 500
+/** 导出时最多翻多少页（500 × 20 = 1 万条），正常会话远用不到 */
+const MAX_HISTORY_PAGES = 20
+
+function clampPageSize(value: number): number {
+  return Math.min(Math.max(Math.trunc(value) || HISTORY_PAGE_SIZE, 1), HISTORY_PAGE_SIZE)
+}
+
+/**
+ * 历史行的方向。时间戳齐全时按首尾判断（首 > 尾 = 降序）；缺时间戳就当升序，
+ * 也就是「offset 0 = 最老」—— 这是聊天记录接口的惯例写法，不要瞎猜。
+ */
+function isDescendingRows(rows: RawMessage[]): boolean {
+  if (rows.length < 2) return false
+  const first = rows[0].timestamp
+  const last = rows[rows.length - 1].timestamp
+  if (typeof first !== 'number' || typeof last !== 'number') return false
+  return first > last
+}
+
+/** 行序归一：降序的部署翻成升序，否则时间线会倒着长 */
+function sortRowsAscending(rows: RawMessage[]): RawMessage[] {
+  return isDescendingRows(rows) ? rows.slice().reverse() : rows
+}
+
 export function createRemote(client: CloudClient) {
+  const fetchMessagePage = async (
+    sessionId: string,
+    limit: number,
+    offset: number
+  ): Promise<{ rows: RawMessage[]; returned: number; limit: number; offset: number }> => {
+    const size = clampPageSize(limit)
+    const start = Math.max(Math.trunc(offset) || 0, 0)
+    const raw = await client.request<RawMessagePage>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/messages` +
+        `?inline_images=false&limit=${size}&offset=${start}`
+    )
+    const rows = raw.data ?? []
+    return {
+      rows,
+      returned: typeof raw.pagination?.returned === 'number' ? raw.pagination.returned : rows.length,
+      limit: size,
+      offset: start,
+    }
+  }
+
   return {
     async capabilities(): Promise<CloudCapabilities> {
       const raw = await client.request<RawCapabilities>('/v1/capabilities', { timeoutMs: 15_000 })
@@ -390,18 +435,104 @@ export function createRemote(client: CloudClient) {
       limit?: number
       offset?: number
     }): Promise<{ parts: CloudTracePart[]; hasMore: boolean }> {
-      const limit = Math.min(Math.max(input.limit ?? 500, 1), 500)
-      const offset = Math.max(input.offset ?? 0, 0)
-      const raw = await client.request<RawMessagePage>(
-        `/api/sessions/${encodeURIComponent(input.sessionId)}/messages` +
-          `?inline_images=false&limit=${limit}&offset=${offset}`
-      )
-      const rows = raw.data ?? []
-      const returned = raw.pagination?.returned ?? rows.length
+      const page = await fetchMessagePage(input.sessionId, input.limit ?? 500, input.offset ?? 0)
       return {
-        parts: mapMessages(rows, { settled: true }),
-        hasMore: returned >= limit,
+        parts: mapMessages(sortRowsAscending(page.rows), { settled: true }),
+        hasMore: page.returned >= page.limit,
       }
+    },
+
+    async getSession(sessionId: string): Promise<CloudSession> {
+      const raw = await client.request<{ session?: RawSession } & RawSession>(
+        `/api/sessions/${encodeURIComponent(sessionId)}`,
+        { timeoutMs: 20_000 }
+      )
+      // 不同部署一个包一层、一个直接回本体，两种都认
+      const sessionRaw = raw?.session ?? raw
+      if (!sessionRaw || (!sessionRaw.id && sessionRaw.message_count === undefined)) {
+        throw new Error('云端没有返回会话详情')
+      }
+      return toCloudSession(sessionRaw)
+    },
+
+    /**
+     * **取尾部**：会话最新的一段，而不是从第一条开始的一段。
+     *
+     * 上游 `offset` 是「从第几条开始」，所以想拿最新消息就得把 offset 挪到
+     * `总数 - 页大小`。之前所有调用点都写死 `offset: 0`，会话一超过一页，
+     * 最新消息就落在页外，重开会话问的还是同一句 —— 怎么看都缺最新的。
+     *
+     * 总条数来自会话详情的 `message_count`；它和消息接口的行数口径可能不一致
+     * （比如是否计入 session_meta），所以取到空页就退回 `offset: 0`，退化成旧行为
+     * 而不是直接空屏。
+     */
+    async listMessageTail(input: { sessionId: string; limit?: number }): Promise<{
+      parts: CloudTracePart[]
+      hasMore: boolean
+      offset: number
+    }> {
+      const limit = clampPageSize(input.limit ?? HISTORY_PAGE_SIZE)
+      // 先取第一页探一下：不满一页说明整个会话就这么多，一次请求就够了
+      // （短会话是压倒性多数，不为它们多跑一趟网络）
+      const first = await fetchMessagePage(input.sessionId, limit, 0)
+      // 降序部署：offset 0 本身就是最新的一段，再「跳到尾部」就往回抹了
+      if (isDescendingRows(first.rows)) {
+        return {
+          parts: mapMessages(sortRowsAscending(first.rows), { settled: true }),
+          hasMore: first.returned >= limit,
+          offset: 0,
+        }
+      }
+      if (first.returned < limit) {
+        return {
+          parts: mapMessages(sortRowsAscending(first.rows), { settled: true }),
+          hasMore: false,
+          offset: 0,
+        }
+      }
+      // 满页 = 后面还有：问总数，直接跳到尾部，否则最新消息永远落在页外
+      let offset = 0
+      try {
+        const session = await this.getSession(input.sessionId)
+        if (session.messageCount > limit) offset = session.messageCount - limit
+      } catch {
+        // 拿不到条数就用刚才那页：宁可少给，也不要空屏
+      }
+      if (offset > 0) {
+        const tail = await fetchMessagePage(input.sessionId, limit, offset)
+        if (tail.rows.length > 0) {
+          return {
+            parts: mapMessages(sortRowsAscending(tail.rows), { settled: true }),
+            hasMore: true,
+            offset,
+          }
+        }
+        // 总条数和消息行数口径不一致（取到空页）：退回第一页
+      }
+      return {
+        parts: mapMessages(sortRowsAscending(first.rows), { settled: true }),
+        hasMore: true,
+        offset: 0,
+      }
+    },
+
+    /** 导出用：把整个会话按页拉全（有上限，避免异常分页把内存吃穿） */
+    async listAllMessages(input: { sessionId: string }): Promise<CloudTracePart[]> {
+      const rows: RawMessage[] = []
+      const seen = new Set<string>()
+      let offset = 0
+      for (let index = 0; index < MAX_HISTORY_PAGES; index += 1) {
+        const page = await fetchMessagePage(input.sessionId, HISTORY_PAGE_SIZE, offset)
+        for (const row of page.rows) {
+          const key = String(row.id ?? `${offset}:${rows.length}`)
+          if (seen.has(key)) continue
+          seen.add(key)
+          rows.push(row)
+        }
+        if (page.rows.length === 0 || page.returned < page.limit) break
+        offset += page.returned
+      }
+      return mapMessages(sortRowsAscending(rows), { settled: true })
     },
 
     async startRun(input: {

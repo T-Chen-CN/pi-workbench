@@ -198,6 +198,11 @@ interface CloudState {
   partsLoading: boolean
   partsError: string | null
   /**
+   * 本次打开的时间线前面还有更早的消息。
+   * 只上报事实，不在界面上做分页 —— 历史不会变，回头浏览靠显式重建。
+   */
+  partsHasMore: boolean
+  /**
    * 桌面通知点进来要定位的那张审批 / 澄清卡（requestId）。
    * 只负责“滚到它”，不代表任何状态：消费一次就清掉。
    */
@@ -400,6 +405,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
   parts: [],
   partsLoading: false,
   partsError: null,
+  partsHasMore: false,
   focusRequestId: null,
 
   sessionRuns: {},
@@ -516,6 +522,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       activeSessionId: null,
       sessionMeta: null,
       parts: [],
+      partsHasMore: false,
       partsError: null,
       // 断开后本机不再跟随任何一轮：留着的 entry 会一直显示「在跑」
       sessionRuns: {},
@@ -696,6 +703,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       partsLoading: true,
       partsError: null,
       parts: [],
+      partsHasMore: false,
       // 这个会话自己那一轮还在跑就照实恢复：后台继续，不因为「切走」而丢掉进度
       ...mirrorRunFields(get().sessionRuns[runKeyOf(sessionId)] ?? null),
       sendError: null,
@@ -705,7 +713,9 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       // 换了会话，上一张卡的定位请求就失效了
       focusRequestId: null,
     })
-    const result = await cloudApi.listMessages({ sessionId, limit: MESSAGES_PAGE_SIZE })
+    // 取**尾部**：用户要的是最新的一段。上游 offset 从 0 数，会话超过一页时
+    // 只拿第一页就等于永远看不到最新消息（以前就是这样，重开会话也没用）。
+    const result = await cloudApi.listMessages({ sessionId, limit: MESSAGES_PAGE_SIZE, tail: true })
     if (get().historyToken !== token) return
     if (!result.success) {
       set({ partsLoading: false, partsError: result.error ?? 'unknown' })
@@ -713,6 +723,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
     }
     set({
       parts: result.parts,
+      partsHasMore: result.hasMore === true,
       partsLoading: false,
       sessionMeta: result.session ?? get().sessionMeta,
     })
@@ -753,6 +764,7 @@ export const useCloudStore = create<CloudState>()((set, get) => ({
       activeSessionId: null,
       sessionMeta: null,
       parts: [],
+      partsHasMore: false,
       partsError: null,
       partsLoading: false,
       ...mirrorRunFields(get().sessionRuns[PENDING_SESSION_KEY] ?? null),

@@ -1065,10 +1065,10 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
       const language: 'zh' | 'en' = input?.language === 'en' ? 'en' : 'zh'
       try {
         const remote = createRemote(ensureClient())
-        const page = await remote.listMessages({ sessionId, limit: 500 })
+        const page = await remote.listAllMessages({ sessionId })
         const title = String(input?.title ?? '').trim()
         const content = renderCloudExport(
-          page.parts,
+          page,
           { sessionId, title, model: capabilities?.model ?? null, exportedAt: Date.now() },
           format,
           language
@@ -1105,16 +1105,25 @@ export function registerCloudAgentIpc(deps: CloudAgentIpcDeps): {
     }
   )
 
-  handleIpc('cloud:messages:list', async (_event, input: { sessionId?: string; limit?: number; offset?: number }) => {
-    const sessionId = String(input?.sessionId ?? '')
-    if (!sessionId) return { success: false, error: '缺少 sessionId' }
-    try {
-      const remote = createRemote(ensureClient())
-      const page = await remote.listMessages({
-        sessionId,
-        limit: input?.limit,
-        offset: input?.offset
-      })
+  handleIpc(
+    'cloud:messages:list',
+    async (
+      _event,
+      input: { sessionId?: string; limit?: number; offset?: number; tail?: boolean }
+    ) => {
+      const sessionId = String(input?.sessionId ?? '')
+      if (!sessionId) return { success: false, error: '缺少 sessionId' }
+      try {
+        const remote = createRemote(ensureClient())
+        // `tail` = 要最新的一段（打开会话 / 接回 / 收尾）：offset 由主进程算，
+        // 渲染层不用知道总条数，也不会因为忘了传 offset 就只拿到最前面一页。
+        const page = input?.tail
+          ? await remote.listMessageTail({ sessionId, limit: input?.limit })
+          : await remote.listMessages({
+              sessionId,
+              limit: input?.limit,
+              offset: input?.offset
+            })
       // 顺手复核账本：历史里有 tool_call_id 就说明那个工具真的跑完了
       try {
         const callIds = new Set<string>()

@@ -233,6 +233,8 @@ export class CloudRunner {
     let terminal = false
     /** 服务端明确说过「这一轮已经结束 / 没这一轮」：不再续订，收尾时要说清楚 */
     let fatalStreamEnd = false
+    /** 事件流断过 / 重订过 / 本身是接回：这一轮的时间线不完整，收尾要靠历史补齐 */
+    let degraded = Boolean(options.historyFirst)
     const controlPoll = setInterval(() => {
       if (terminal || controller.signal.aborted) return
       void this.pollControls(runId, mapper, sessionId)
@@ -311,6 +313,7 @@ export class CloudRunner {
           }
         } catch (error) {
           if (controller.signal.aborted) break
+          degraded = true
           this.deps.log?.('[Cloud] run stream failed', error)
           // 服务端已经明确说「没有这一轮 / 这一轮已经结束了」：重订阅只会把退避
           // 全花在一个不会变的答案上，最后还推一条「多次中断」的假故障。
@@ -328,6 +331,7 @@ export class CloudRunner {
         const stillRunning = await this.isRunning(runId)
         if (!stillRunning) break
         if (attempt >= MAX_STREAM_RETRIES) {
+          degraded = true
           this.deps.log?.('[Cloud] run stream give up', { runId, attempts: attempt + 1 })
           this.emit(
             {
@@ -339,6 +343,8 @@ export class CloudRunner {
           )
           break
         }
+        // 还有下一次订阅：中间这一段事件已经断了，收尾得靠历史补
+        degraded = true
         await delay(RETRY_BASE_DELAY_MS * 2 ** attempt)
       }
     } finally {
@@ -350,7 +356,14 @@ export class CloudRunner {
 
     // 第三个参数 = 「渲染层已经收到过终态」，而不是「后端已经结束」：
     // 接回时终态帧可能落在被丢弃的缓冲里，那就得由 reconcile 补一次。
-    const settledState = await this.reconcile(runId, sessionId, deliveredTerminal)
+    // 第四个参数 = 「这一轮流得很干净」：干净就只用历史核对审计，不拿它替掉时间线
+    // （整段替换会把请求期间刚到的最新消息顶掉）。
+    const settledState = await this.reconcile(
+      runId,
+      sessionId,
+      deliveredTerminal,
+      terminal && !degraded
+    )
     // 服务端说这一轮结束了、状态接口却说还在跑：把这条不一致说出来，
     // 别留一个永远转圈的界面（也不像以前那样误报成「事件流多次中断」）。
     if (fatalStreamEnd && (settledState === null || !isTerminalStatus(settledState))) {
@@ -442,7 +455,8 @@ export class CloudRunner {
    */
   private async loadHistoryFrames(runId: string, sessionId: string | null): Promise<void> {
     if (!sessionId) return
-    const page = await this.remote.listMessages({ sessionId, limit: 500 })
+    // 取**尾部**：接回时用户要看的是刚才那一段，不是会话最早的一页
+    const page = await this.remote.listMessageTail({ sessionId, limit: 500 })
     this.auditToolOutcome({ kind: 'parts', parts: page.parts }, runId)
     this.emit({ kind: 'parts', parts: page.parts }, sessionId)
     this.emit(
@@ -452,14 +466,21 @@ export class CloudRunner {
   }
 
   /**
-   * 流结束 / 断流后的收敛：拿最终状态 + 重拉历史（工具结果、token、花费都以历史为准）。
+   * 流结束 / 断流后的收敛：拿最终状态 + （必要时）重拉历史。
+   *
+   * `clean` = 这一轮的事件流从头到尾没断过、也收到过终态。这时**只拿历史核对审计，
+   * 不用它替掉时间线**：历史是不可变的，实时帧已经把这一轮的内容全给到了；
+   * 而历史帧是 `parts` 整段替换，会把请求期间刚推上界面的几条消息顶掉
+   * （实测症状：最新消息出现后又消失）。
+   * 时间线本来就残缺（断流 / 接回 / 漏帧）时历史才是权威，那时候替换才是对的。
    *
    * 返回服务端最终报的状态（查不到时为 `null`）：调用方靠它判断「收尾后到底落没落终态」。
    */
   private async reconcile(
     runId: string,
     sessionId: string | null,
-    terminal: boolean
+    terminal: boolean,
+    clean = false
   ): Promise<CloudRunStatus | null> {
     let session = sessionId
     let state: CloudRunStatus | null = null
@@ -493,10 +514,11 @@ export class CloudRunner {
 
     if (session) {
       try {
-        const page = await this.remote.listMessages({ sessionId: session, limit: 500 })
-        // 历史里也可能带着「那次审批的结果」：断流期间结果只走这条路回来
+        const page = await this.remote.listMessageTail({ sessionId: session, limit: 500 })
+        // 历史里也可能带着「那次审批的结果」：断流期间结果只走这条路回来；
+        // 实时帧的预览也可能是空的，所以**审计总要核对一次**（不推给界面就不会顶掉谁）
         this.auditToolOutcome({ kind: 'parts', parts: page.parts }, runId)
-        this.emit({ kind: 'parts', parts: page.parts }, session)
+        if (!clean) this.emit({ kind: 'parts', parts: page.parts }, session)
       } catch (historyError) {
         this.deps.log?.('[Cloud] history reconcile failed', historyError)
       }

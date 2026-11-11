@@ -369,7 +369,7 @@ ChatPanel.handleSubmit
 | `cloud:config:get` / `connect` / `disconnect` | invoke | 云端 Agent 连接配置（`data/cloud-agent/connection.json`，只允许 `gatewayUrl` / `deviceToken` / `deviceScopes` / `deviceId` / `dashboardUrl`；token 走 `safeStorage` 加密，渲染层只拿 `hasDeviceToken`）与连通性探测；旧字段（`baseUrl` / `apiKey` / `dashboardToken` / 管理密钥 / 控制台账号口令 / 旧凭证导入记录）在 `config:get` 时按白名单清掉 |
 | `cloud:gateway:status` / `gateway:pair` / `gateway:revoke` | invoke | 云端单入口（`hub.`）三件事：`status` = 配对了没有 + scope + 上游在不在 + 本机心跳状态（未配对时**不发任何请求**）；`pair` = 一次性连接码换设备 token（`deviceId` 钉死本地 `device.json` 的 id，明文 token 只留主进程，落盘 `enc:`；不带任何管理凭据；成功后清 active-run、pokes 心跳、渲染层刷新 config 并直接重连）；`revoke` = 设备自注销并只清设备凭据（保留 `gatewayUrl` / `dashboardUrl`） |
 | `cloud:device:get` / `device:set` / `device:reprobe` | invoke | 本机设备身份（`data/cloud-agent/device.json`，启动时即建）：`get` 首次会补一次系统友好名探测（`probedAt` 后不再自动探），`set` 只改 `name`（空串 = 恢复默认名），`reprobe` 是用户显式「重新读取系统名」。`id` 只读，随每轮 `POST /v1/runs` 的 `author` 发出（只做记忆归属，**不进 prompt**） |
-| `cloud:sessions:list` / `messages:list` | invoke | 云端会话列表与历史消息（主进程直接映射成时间线片段） |
+| `cloud:sessions:list` / `messages:list` | invoke | 云端会话列表与历史消息（主进程直接映射成时间线片段）。`messages:list` 带 `tail: true` 时取**最新一段**：offset 由主进程按会话 `message_count` 算，渲染层不写死分页 |
 | `cloud:sessions:update` / `sessions:delete` | invoke | 会话条目操作（PATCH 白名单字段 / 硬删除，不可恢复） |
 | `cloud:run:start` / `run:stop` / `run:status` / `run:steer` / `run:attach` | invoke | 云端轮次：POST `/v1/runs`（带幂等键）、停止、状态轮询、运行中插话（`queued` 不接受插话）；`run:attach` 用 `data/cloud-agent/active-run.json` 在重启后接回还在跑的那一轮（订阅带 `last_seq` 上限，只收新事件，先铺历史再放增量） |
 | `cloud:clarify:respond` | invoke | 回答 clarify 提问（body 严格 `{request_id, execution_generation, answer}`） |

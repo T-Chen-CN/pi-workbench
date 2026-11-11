@@ -552,6 +552,22 @@ vi.mock('electron', () => ({
       if (route === '/api/sessions/run_session' && init?.method === 'DELETE') {
         return Response.json({ object: 'hermes.session.deleted', id: 'run_session', deleted: true })
       }
+      if (route === '/api/sessions/long_session') {
+        return Response.json({ session: { id: 'long_session', message_count: 1200 } })
+      }
+      if (route === '/api/sessions/long_session/messages') {
+        const offset = Number(parsed.searchParams.get('offset') ?? 0)
+        const limit = Number(parsed.searchParams.get('limit') ?? 500)
+        return Response.json({
+          object: 'list',
+          session_id: 'long_session',
+          data: [
+            { id: offset + 1, role: 'assistant', content: `row ${offset + 1}` },
+            { id: offset + 2, role: 'assistant', content: `row ${offset + 2}` },
+          ],
+          pagination: { limit, offset, returned: limit },
+        })
+      }
       if (route === '/api/sessions/run_session/messages') {
         return Response.json({
           object: 'list',
@@ -685,7 +701,7 @@ describe('cloud IPC', () => {
     expect(listed.sessions[0].lastActive).toBe(1793733153100)
   })
 
-  it('runs a turn and streams mapped frames before the corrective history frame', async () => {
+  it('runs a turn and streams mapped frames without replacing the timeline', async () => {
     mocks.state.sent.length = 0
     const started = await call<{ success: boolean; runId?: string; sessionId?: string }>(
       'cloud:run:start',
@@ -697,7 +713,8 @@ describe('cloud IPC', () => {
       mocks.state.sent.some(
         (message) =>
           message.channel === 'cloud:event' &&
-          (message.payload as { kind?: string }).kind === 'parts'
+          (message.payload as { kind?: string }).kind === 'run' &&
+          (message.payload as { state?: string }).state === 'completed'
       )
     )
 
@@ -709,17 +726,13 @@ describe('cloud IPC', () => {
     expect(frames.some((frame) => frame.kind === 'part')).toBe(true)
     // 终态帧
     expect(frames.some((frame) => frame.kind === 'run' && frame.state === 'completed')).toBe(true)
-    // 校正帧：来自历史的完整时间线（含工具结果）
-    const partsFrame = frames.find((frame) => frame.kind === 'parts') as
-      | { parts: Array<{ type: string; resultPreview?: string }> }
-      | undefined
-    expect(partsFrame).toBeTruthy()
-    expect(partsFrame?.parts.map((part) => part.type)).toEqual([
-      'text',
-      'tool',
-      'text',
-    ])
-    expect(partsFrame?.parts[1].resultPreview).toBe('file.txt')
+    // 这一轮流得很干净：**不再**推整段历史。历史帧是全量替换，
+    // 会把请求期间刚上屏的消息顶掉（最新消息出现后又被更老的快照覆盖）。
+    expect(frames.some((frame) => frame.kind === 'parts')).toBe(false)
+    // 但历史仍然被拉了一次：审批结果、工具退出码要从历史核对
+    expect(
+      mocks.state.requests.some((line) => line.includes('/api/sessions/run_session/messages'))
+    ).toBe(true)
 
     expect(mocks.state.requests).toContain('POST https://hub.example.com/v1/runs')
     expect(mocks.state.requests.some((line) => line.endsWith('/v1/runs/run_test/events'))).toBe(true)
@@ -732,6 +745,23 @@ describe('cloud IPC', () => {
     )
     expect(result.success).toBe(true)
     expect(result.parts.map((part) => part.type)).toEqual(['text', 'tool', 'text'])
+  })
+
+  it('resolves tail to the newest page instead of the first one', async () => {
+    mocks.state.requests.length = 0
+    const result = await call<{ success: boolean; parts: Array<{ type: string; id: string }>; hasMore?: boolean }>(
+      'cloud:messages:list',
+      { sessionId: 'long_session', limit: 500, tail: true }
+    )
+    expect(result.success).toBe(true)
+    expect(result.hasMore).toBe(true)
+    // 1200 条：最新的一页从 offset 700 开始
+    expect(result.parts.map((part) => part.id)).toEqual(['h:701', 'h:702'])
+    expect(
+      mocks.state.requests.filter((line) => line.includes('/api/sessions/long_session/messages'))
+    ).toContain(
+      'GET https://hub.example.com/api/sessions/long_session/messages?inline_images=false&limit=500&offset=700'
+    )
   })
 
   it('requires a session id and an idempotency key', async () => {
