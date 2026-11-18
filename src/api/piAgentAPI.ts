@@ -373,13 +373,11 @@ export const piAgentAPI = {
     }
   },
 
-  /** 桌面通知点击：本地会话定位到工作区与会话；云端会话切到云端页并定位那张卡 */
+  /** 桌面通知点击：定位到工作区与会话 */
   onNotifyClick(
     callback: (payload: {
       workspaceDir: string | null
       sessionId: string
-      cloud?: boolean
-      requestId?: string
     }) => void
   ): () => void {
     if (typeof window.electronAPI?.onNotifyClick !== 'function') return () => {}

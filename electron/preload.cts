@@ -1,13 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 type NotifyClickPayload = {
-  /** 本地工作区会话才有；云端会话为 null */
+  /** 本地工作区会话才有 */
   workspaceDir: string | null
   sessionId: string
-  /** 云端会话：点击后切到云端页 */
-  cloud?: boolean
-  /** 云端审批 / 澄清卡：点击后定位到那张卡 */
-  requestId?: string
 }
 
 type AgentStreamPayload = {
