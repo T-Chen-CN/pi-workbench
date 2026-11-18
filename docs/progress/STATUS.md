@@ -13,7 +13,7 @@
 | 阶段 | 本地 Agent 工作台稳定期；云端 Agent 换内核（Pi）尚未开工 |
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
-| 质量门槛 | `type-check` · `lint` · `npm test`（131 文件 / 1405 用例）· `design-system` 全绿 |
+| 质量门槛 | `type-check` · `lint` · `npm test`（130 文件 / 1402 用例）· `design-system` 全绿 |
 | 云端 Agent | **Hermes 实现已于 0.10.0 移除**（代码 / 文档 / 网关插件）；替代方案见 [CLOUD_AGENT_LESSONS](../archive/CLOUD_AGENT_LESSONS.md) |
 
 ## 正在做 / 下一步
