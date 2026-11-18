@@ -21,7 +21,6 @@ import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
 import { installAuxWindowSupport, registerAuxWindowIpc } from './aux-window.js'
 import { appUrl, isAppUrl, registerAppProtocol } from './app-protocol.js'
-import { ensureDeviceIdentityOnBoot } from './cloud/device.js'
 import {
   destroyTray,
   installTray,
@@ -38,10 +37,6 @@ import { registerAgentIpc, type AgentIpcContext } from './ipc/agent.js'
 import { registerDocumentsIpc } from './ipc/documents.js'
 import { registerGitIpc } from './ipc/git.js'
 import { registerRepoMapIpc } from './ipc/repo-map.js'
-import { registerCloudAgentIpc } from './ipc/cloud-agent.js'
-import { registerDispatchIpc } from './ipc/dispatch.js'
-import { loadApiConfig } from './ipc/api-config.js'
-import { DispatchWorker } from './dispatch/worker.js'
 import { repoSync } from './repo-sync.js'
 import { registerWorkspaceIpc, closeAllWorkspaceWatchers } from './ipc/workspace.js'
 import { getActiveProviderApiKey, setRunningAgentsProvider } from './ipc/api-config.js'
@@ -406,9 +401,7 @@ const notificationRouter = new NotificationRouter(
       }
       mainWindow.webContents.send('app:notify-click', {
         workspaceDir: payload.workspaceDir,
-        sessionId: payload.sessionId,
-        cloud: payload.cloud === true,
-        requestId: payload.requestId
+        sessionId: payload.sessionId
       })
       setTimeout(() => {
         console.log('[Notifications] focus after click:', mainWindow?.isFocused())
@@ -605,38 +598,6 @@ registerSystemIpc({
 
 registerAuxWindowIpc({ getMainWindow: () => mainWindow })
 
-// 云端 Agent：配置 / 会话 / run / 程序内控制台（HTTP 与 SSE 都在主进程）
-const cloudAgentIpc = registerCloudAgentIpc({
-  getMainWindow: () => mainWindow,
-  logger: agentLogger,
-  getLanguage: () => getAppSettingsCache().language,
-  // 云端审批 / 澄清 / 终态：接入现有通知路由（只看得到“不在前台”的，和本地一致）
-  notify: (event) => notificationRouter.notify(event)
-})
-
-// 工作区派活：云端 Hermes 把任务推到本机，本机用真实会话执行
-const dispatchWorker = new DispatchWorker({
-  context: agentIpcContext,
-  readApiConfig: loadApiConfig,
-  logger: agentLogger,
-  ledgerPath: path.join(getAppDir(), 'data', 'agent', 'dispatch-ledger.json'),
-  traceDir: path.join(getAppDir(), 'cache', 'dispatch-traces'),
-  onState: (state) => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (win.isDestroyed()) continue
-      win.webContents.send('dispatch:state-changed', state)
-    }
-  }
-})
-
-const dispatchIpc = registerDispatchIpc({
-  worker: dispatchWorker,
-  agentContext: agentIpcContext,
-  getMainWindow: () => mainWindow,
-  getLanguage: () => ((getAppSettingsCache().language ?? 'zh') === 'en' ? 'en' : 'zh'),
-  logger: agentLogger
-})
-
 // 初始化应用目录结构
 async function initAppDirectories() {
   const appDir = getAppDir()
@@ -666,11 +627,6 @@ async function initAppDirectories() {
 
   // 设备身份在这里就落地（A 档）：只建 id + 机器名默认值，不做友好名探测（spawn 不上启动路径）。
   // 好处是「身份什么时候诞生」不再取决于用户何时第一次打开云端页，启动日志也有锚点。
-  const device = ensureDeviceIdentityOnBoot()
-  if (device) {
-    console.log(`[Boot] device=${device.name} (${device.id.slice(0, 8)})`)
-  }
-
   console.log('应用目录已初始化:', appDir)
 }
 
@@ -974,12 +930,6 @@ app.whenReady().then(async () => {
   })()
   void startupReady.catch((error) => console.warn('[Main] Startup preparation failed:', error))
 
-  // 派活中继在 ready 之后才拉起：它要读云端凭据（safeStorage 在 app ready 之前
-  // 不可用，模块顶层调用只会拿到一个解密失败的假配置）。
-  void startupReady.then(() => dispatchWorker.refresh()).catch((error) => {
-    agentLogger.warn('[Dispatch] startup refresh failed', error)
-  })
-
   // 更新后首次启动：让系统重建图标与桌面菜单缓存（三平台各自实现，失败只记日志）。
   // 与 Windows 安装器里的 SHChangeNotify / ie4uinit 互为兜底。
   // 同时记录版本变化，供渲染进程提示“已更新到 vX”。
@@ -1077,8 +1027,6 @@ async function shutdownApplication(): Promise<void> {
     await runShutdownSteps(
       [
         { name: 'approval-broker', timeoutMs: 400, run: () => approvalBroker.dispose() },
-        { name: 'cloud-agent', timeoutMs: 400, run: () => cloudAgentIpc.dispose() },
-        { name: 'dispatch', timeoutMs: 400, run: () => dispatchIpc.dispose() },
         { name: 'agents', timeoutMs: 2000, run: () => agentRegistry.disposeAll() },
         { name: 'worktree-deps', timeoutMs: 400, run: () => disposeAllCoordinators() },
         {

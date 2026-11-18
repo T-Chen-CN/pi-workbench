@@ -24,8 +24,7 @@ import { WelcomeScreen } from './components/WelcomeScreen'
 import { WorkspacePickerDialog } from './components/WorkspacePickerDialog'
 import { WindowControls } from './components/WindowControls'
 import { BootScreen } from './components/BootScreen'
-import { CloudWorkspaceView } from './components/CloudWorkspaceView'
-import { isCloudView, type AppView } from './types/navigation'
+import type { AppView } from './types/navigation'
 import { Button, IconButton, Modal, Spinner } from './components/ui'
 import { handleTabStripWheel, Tab } from './components/patterns'
 import { useToastStore, toast } from './store/toastStore'
@@ -37,7 +36,6 @@ import { disposeDiffStore } from './store/diffStore'
 import { useRepoMapStore } from './store/repoMapStore'
 import { useChatStore } from './store/chatStore'
 import { useSessionStore } from './store/sessionStore'
-import { useCloudStore } from './store/cloudStore'
 import { confirmDialog } from './store/dialogStore'
 import { useSettingsStore } from './store/settingsStore'
 import { useApprovalStore } from './store/approvalStore'
@@ -472,31 +470,15 @@ export default function App() {
     }
   }
 
-  // 桌面通知点击：本地会话→先切到对应工作区，再让 ChatPanel 激活会话；
-  // 云端会话没有工作区，只能切到云端页（会话 id 为空时连会话都不开）
+  // 桌面通知点击：先切到对应工作区，再让 ChatPanel 激活会话
   const openWorkspaceRef = useRef(openWorkspaceAt)
   useEffect(() => {
     openWorkspaceRef.current = openWorkspaceAt
   })
 
   useEffect(() => {
-    const off = piAgentAPI.onNotifyClick(({ workspaceDir, sessionId, cloud, requestId }) => {
+    const off = piAgentAPI.onNotifyClick(({ workspaceDir, sessionId }) => {
       void (async () => {
-        if (cloud) {
-          setView('cloud-session')
-          let cloudStore = useCloudStore.getState()
-          // 通知可能在云端页从未打开过时到达：先补水，否则拿到的还是默认的“未配对”
-          if (!cloudStore.hydrated) {
-            await cloudStore.hydrate()
-            cloudStore = useCloudStore.getState()
-          }
-          if (sessionId && cloudStore.config.hasDeviceToken) {
-            await cloudStore.openSession(sessionId)
-          }
-          // 审批 / 澄清卡：定位意图交给时间线自己消费（parts 加载完才找得到锚点）
-          if (requestId) useCloudStore.getState().requestFocus(requestId)
-          return
-        }
         if (workspaceDir) {
           await openWorkspaceRef.current(workspaceDir)
         }
@@ -709,17 +691,6 @@ export default function App() {
               onClick={() => setShowDebug((value) => !value)}
             />
           )}
-          <button
-            type="button"
-            className={headerLink}
-            onClick={() =>
-              setView(
-                isCloudView(view) ? (workspace ? 'workspace' : 'home') : 'cloud-session'
-              )
-            }
-          >
-            {t('cloudAgent')}
-          </button>
           <button type="button" className={headerLink} onClick={() => openSettings()}>
             {t('settings')}
           </button>
@@ -875,7 +846,6 @@ export default function App() {
             />
           ))}
         </Suspense>
-        {isCloudView(view) && <CloudWorkspaceView view={view} onNavigate={setView} />}
         {(view === 'home' || (view === 'workspace' && !workspace)) && (
           <div className="absolute inset-0 flex flex-col overflow-hidden bg-surface">
             <WelcomeScreen
@@ -884,7 +854,6 @@ export default function App() {
               onOpenWorkspace={(path) => void openWorkspaceAt(path)}
               onOpenSettings={(section) => openSettings(section)}
               onRefreshRecent={() => void refreshRecentWorkspaces()}
-              onOpenCloud={() => setView('cloud-session')}
             />
           </div>
         )}
