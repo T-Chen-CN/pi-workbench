@@ -20,7 +20,7 @@
 - **[ADR-002 主窗口托盘常驻](./decisions/ADR-002-tray-resident-main-window.md)** — 关闭按钮收托盘、真退出入口
 - **[ADR-003 会话记录作为单一真相源](./decisions/ADR-003-session-record-single-source.md)** — 历史与导出取 JSONL 分支，不取压缩后的上下文
 
-> 云端 Agent 的架构决策已并入 [CLOUD_AGENT.md](./requirements/CLOUD_AGENT.md) 的「关键决策摘要」，不再单独维护 ADR。
+> 云端 Agent 的架构决策已并入旧方案 [CLOUD_AGENT.md](./requirements/CLOUD_AGENT.md) 的「关键决策摘要」，随该方案于 0.10.0 归档；不再单独维护 ADR。
 
 ### 📌 需求文档
 - **[Git 会话工作流（会话-工作树绑定）](./requirements/GIT_WORKTREE_SESSIONS.md)** — 工作树会话的完整需求、边界执行顺序与验收场景
