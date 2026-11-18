@@ -177,7 +177,7 @@ npm run build
 | 依赖     | Electron 44 · React 19 · TypeScript 5.9 · Monaco 0.57 · `@earendil-works/pi-coding-agent` 1.3  |
 | 已知边界 | 未签名未公证；旧格式 Office 不解析；扫描件不做 OCR；Linux 托盘降级为最小化；平台手工验收仍未做 |
 
-**接下来在做的**：R-23 输出预算收尾（续写截断的后续动作、上下文临界预警、轻任务预算）、macOS / Linux 手工验收、云端后置项（屏幕接管 → 看板 → 拆窗 → IM / 语音 → 对外写 MCP 门）。当前状态见 [STATUS](docs/progress/STATUS.md)，任务与停放项在 [BACKLOG](docs/progress/BACKLOG.md)。
+**接下来在做的**：R-23 输出预算收尾（续写截断的后续动作、上下文临界预警、轻任务预算）、macOS / Linux 手工验收、以 Pi Agent 为内核重做云端 Agent。当前状态见 [STATUS](docs/progress/STATUS.md)，任务与停放项在 [BACKLOG](docs/progress/BACKLOG.md)。
 
 ---
 

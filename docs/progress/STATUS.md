@@ -9,30 +9,24 @@
 
 | 项 | 值 |
 | --- | --- |
-| 版本 | **0.9.1**（2026-11-11） |
-| 阶段 | 云端 Agent 主链路已完成并发布；Phase 6 持续优化 |
+| 版本 | **0.9.1** 已发布；主线在 0.10.0（云端 Agent 移除） |
+| 阶段 | 本地 Agent 工作台稳定期；云端 Agent 换内核（Pi）尚未开工 |
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
-| 质量门槛 | `type-check` · `lint` · `npm test`（165 文件 / 1964 用例）· `design-system` 全绿 |
-| 网关插件 | `pi-workbench-gateway` **0.3.2**（独立公开仓库，已真机上线；0.2 工作区派活，0.3 补本地反问 / 租约重投 / 重连接回 / 对外 A2A / 轨迹可查） |
+| 质量门槛 | `type-check` · `lint` · `npm test`（131 文件 / 1405 用例）· `design-system` 全绿 |
+| 云端 Agent | **Hermes 实现已于 0.10.0 移除**（代码 / 文档 / 网关插件）；替代方案见 [CLOUD_AGENT_LESSONS](../archive/CLOUD_AGENT_LESSONS.md) |
 
 ## 正在做 / 下一步
 
-- **云端事件通知已接进系统通知**（审批 / 澄清 / 终态，点击定位到卡）；下一步候选见 [BACKLOG](./BACKLOG.md) §6。
+- **云端 Agent 换内核**：以 Pi Agent 为基础自维护的常驻服务，方案未定稿（见 [BACKLOG](./BACKLOG.md) 的 C-01）；旧实现的全部结论已归档，动手前必读。
 - **R-23 剩余子项**：B4 续写截断的后续动作、B7 上下文临界预警、B8 轻任务预算、`reasoning_effort` 联动——见 [BACKLOG](./BACKLOG.md) §3。
 - **平台手动验收** V-01（macOS dmg）/ V-02（Linux AppImage）尚未做。
-- **云端后置**：C-08 CDP 屏幕接管 → C-09 Kanban → C-10 拆窗 → C-11 IM / 语音 / 遥测 → C-12 对外写 MCP 门。见 [CLOUD_AGENT §9.4](../requirements/CLOUD_AGENT.md)。
-- **H3 工作区派活 P1–P3 已落地并真机验收**（插件 0.3.2 + 桌面开发版）：中继进真 hub、模型能调 `local_*`、任务落本机并回报；急停 / 云端取消 / 幂等 / 断线重放 / 关掉派活拒派都实测通过；**P2 / P3 也已落地并两轮真机验收**（本地反问、租约重投、断线接回、A2A 端点；第二轮补了 A2A 回答反问、过期原因、取消原因透传、重发不重跑；随后补轨迹可查，并跑了一轮全量复验——见 §15.9 / §15.9.1）——见 [WORKSPACE_DISPATCH](../requirements/WORKSPACE_DISPATCH.md) §15.6。
 
 ## 已交付（一行一项，细节在 git）
 
 - **v0.1 ~ v0.7.9**：本地 Agent 工作台——编辑器 / 会话与分支 / 终端 / Git 与工作树 / 阅读视图 / 面板拆窗 / 托盘常驻 / 自动更新与三平台发布。
-- **v0.8.0**：云端 Agent——一次性连接码配对、会话与 SSE、审批闭环、内嵌控制台、任务与媒体，全部经自建网关插件（含设备身份、心跳、审计、`fsguard`）。
-- **v0.9.0**：云端工作区派活（H3）——云端 Agent 把任务派到本机工作区执行，本机不开放入站端口；派活会话无本地审批门、进度只在云端会话里看；急停 / 一键关派活 / 幂等 / 租约重投 / 断线接回 / 本地反问 / A2A 端点 / 轨迹可查，全部真机验收。配套插件 **0.3.2**。
-- **v0.9.1**：云端 Agent 可靠性修复（无新功能）——事件流按错误分级重试（4xx 不再白烧退避、不再误报「多次中断」）、工具卡预览剥掉 ANSI、派活账本全文可看（500 → 4KB + 截断标记）、会话历史取尾部页且干净收尾不再整段替换时间线（最新消息不再丢）。
-- **0.8.0 → 0.9.0 期间**：云端审批 / 澄清 / 终态接进系统通知（点击直落那张卡）；`hub.` 插件 0.1.1→0.3.2（白名单撤掉 `fork`、派活、A2A、轨迹）；云端验收结项（AC-14 Hermes 0.22.6→0.23.0 保留数据、AC-15 出网、AC-19 反代穿透，真机通过）。
-- **云端并行**：不同会话可各跑一轮（上限 2）；每帧带会话归属，切走的那轮在后台继续，会话行标「有轮次在跑」。
-- **已知边界**：Hermes 0.23 的 gateway 多路复用（`hermes gateway migrate --multiplex`）**暂时不能用** —— 宿主进程不读 profile 的 `.env`、也不起 profile 的 api_server，插件会变成没有管理密钥、没有上游的空壳（2026-11-08 实迁后当场回滚，配方见 [CLOUD_AGENT §7.5](../requirements/CLOUD_AGENT.md)）。
+- **v0.8.0 ~ v0.9.1**：云端 Agent 的 Hermes 实现（配对、会话与 SSE、审批闭环、内嵌控制台、任务与媒体、云端工作区派活 H3），**已在 0.10.0 整体移除**：代码在 `legacy/cloud-hermes-0.9.1` 标签与 `archive/cloud-hermes` 分支，结论在 [archive/CLOUD_AGENT_LESSONS](../archive/CLOUD_AGENT_LESSONS.md)。
+- **0.10.0（未发布）**：移除云端 Agent 的桌面层 / 派活 / 网关插件 / 相关文档与文案，主线只保留本地 Agent 能力；`electron/approval-broker.ts` 与 pi-bridge 的审批 / 计划 / 反问扩展保留，供下一代云端服务复用。
 
 ---
 

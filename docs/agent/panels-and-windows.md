@@ -48,7 +48,7 @@
 
 `electron/notifications.ts` 只在应用**不在前台**时发系统通知；类型 `approval` / `complete` / `error` 各有独立开关（`settings.json` 的通知配置），`enabled` 为总闸。新增通知类型时同步 `NotificationKind`、prefs 归一化和设置界面。
 
-本地 Agent 与云端 Agent 共用这一条通路（`notificationCopy` 是唯一文案来源），靠事件上的字段区分去处：本地带 `workspaceDir`，云端带 `cloud: true` + `sessionId`（可选 `requestId`）。点击后的去向由渲染层决定（`app:notify-click` 载荷）：本地会切工作区并激活会话，云端只切到云端页并定位那张审批 / 澄清卡（`focusRequestId` → 时间线的 `data-cloud-card` 锚点）。**云端会话没有工作区**，不要给它编一个。
+点击后的去向由渲染层决定（`app:notify-click` 载荷带 `workspaceDir` + `sessionId`）：切到对应工作区并激活会话。
 
 ## 4. 自定义协议
 

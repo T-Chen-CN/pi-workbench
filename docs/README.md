@@ -20,19 +20,17 @@
 - **[ADR-002 主窗口托盘常驻](./decisions/ADR-002-tray-resident-main-window.md)** — 关闭按钮收托盘、真退出入口
 - **[ADR-003 会话记录作为单一真相源](./decisions/ADR-003-session-record-single-source.md)** — 历史与导出取 JSONL 分支，不取压缩后的上下文
 
-> 云端 Agent 的架构决策已并入旧方案 [CLOUD_AGENT.md](./requirements/CLOUD_AGENT.md) 的「关键决策摘要」，随该方案于 0.10.0 归档；不再单独维护 ADR。
+> 历史：云端 Agent 的架构决策曾并入 `requirements/CLOUD_AGENT.md`（0.8.0–0.9.1 的 Hermes 实现），该方案于 0.10.0 移除；正文看 `git show legacy/cloud-hermes-0.9.1:docs/requirements/CLOUD_AGENT.md`，可复用的结论见 [archive/CLOUD_AGENT_LESSONS.md](./archive/CLOUD_AGENT_LESSONS.md)。
 
 ### 📌 需求文档
 - **[Git 会话工作流（会话-工作树绑定）](./requirements/GIT_WORKTREE_SESSIONS.md)** — 工作树会话的完整需求、边界执行顺序与验收场景
-- **[云端 Agent（唯一方案）](./requirements/CLOUD_AGENT.md)** — 桌面端 Phase 1（连接码配对）、会话 / SSE / 审批 / 配置面、设备身份与心跳、网关插件 P0–P5、部署、安全边界、验收与路线。历史方案、历史 ADR、历史研究报告已并入本文
-- **[工作区派活（H3）](./requirements/WORKSPACE_DISPATCH.md)** — 云端 Hermes 主动调起本地工作区 Agent：权限模型（Hermes 代行、人只管白名单）、A2A 语义与中继协议、hub.db schema、组件改动清单、三期验收场景
-- **[云端自举 Prompt（Phase 3 草案）](./requirements/hermes-bootstrap-prompt.md)** — 交给已部署的 Hermes 完成域名 / 反代 / 网关插件 / 管理密钥，并生成一次性连接码；插件发布前不可用
 
 ### 🔧 开发指南
 - **[构建和打包](./guides/BUILD_AND_PACKAGE.md)** — 构建、打包、发布与自动更新
 - **[对外文案](./guides/PUBLIC_COPY.md)** — 仓库门面（About / Topics）、Release 说明模板与 README 结构、截图槽位
-- **[Agent 测试清单](./guides/AGENT-TESTING.md)** — Agent 功能手动验收步骤；含云端 G1 入口与逐条手点，详细清单见 [CLOUD_AGENT](./requirements/CLOUD_AGENT.md)
+- **[Agent 测试清单](./guides/AGENT-TESTING.md)** — Agent 功能手动验收步骤
 - **[Agent 过程轨迹测试方案](./guides/AGENT_TRACE_TESTING.md)** — thinking / 工具步骤的自动化与手动验收
+- **[换代经验（已归档）](./archive/CLOUD_AGENT_LESSONS.md)** — Hermes 版云端 Agent 留下的可复用结论：安全边界、审批语义、流式与协议坑、部署坑
 
 ### 🧭 Agent 开发约束（从 AGENTS.md 拆出）
 - **[路径与持久化](./agent/paths-and-storage.md)** — 便携式目录、启动顺序、落盘文件清单、多工作区状态
@@ -46,7 +44,7 @@
 
 ### 📊 项目信息
 - **[项目状态](./progress/STATUS.md)** — 一页快照：版本、质量门槛、在建项与下一步
-- **[任务清单](./progress/BACKLOG.md)** — 唯一任务表：未完成项、平台验收、已决定不做；云端后置项见 [CLOUD_AGENT](./requirements/CLOUD_AGENT.md)
+- **[任务清单](./progress/BACKLOG.md)** — 唯一任务表：未完成项、平台验收、已决定不做
 
 ---
 
@@ -61,9 +59,6 @@
 | 改编辑区面板 / 仓库地图画布 | [agent/workspace-panel.md](./agent/workspace-panel.md) |
 | 改权限 / 审批 / 计划模式 | [agent/agent-runtime.md](./agent/agent-runtime.md) |
 | 改工作树会话 / Git 视图 | [agent/git-and-worktrees.md](./agent/git-and-worktrees.md) |
-| 做云端 Agent（配对 / 审批 / 设备 / 网关 / 部署） | [requirements/CLOUD_AGENT.md](./requirements/CLOUD_AGENT.md)（唯一事实源） |
-| 做「云端派活到本地工作区」（H3） | [requirements/WORKSPACE_DISPATCH.md](./requirements/WORKSPACE_DISPATCH.md) |
-| 从零开发云端网关插件 | [requirements/CLOUD_AGENT.md](./requirements/CLOUD_AGENT.md) §5 + §9（P0–P5、AC-GW） |
 | 改面板拆出 / 托盘行为 | [agent/panels-and-windows.md](./agent/panels-and-windows.md) |
 | 查看思考与工具轨迹方案 | [AGENT_TRACE.md](./architecture/AGENT_TRACE.md) |
 | 查某个架构决定的理由 | [decisions/](./decisions/) |

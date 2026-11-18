@@ -81,7 +81,9 @@ gh repo edit T-Chen-CN/pi-workbench \
 - **Known issues 诚实写**：未签名未公证、`.doc/.xls/.ppt` 旧格式只给另存为指引、扫描件不做 OCR。
 - 资产名由 `package.json` 的 `artifactName` 决定，改名时同步本节。
 
-### v0.8.0 成品（可直接粘贴覆盖现有说明）
+### v0.8.0 成品（结构示例）
+
+> 只当**结构样板**用：其中「云端 Agent」部分描述的是 0.8.0–0.9.1 的 Hermes 实现，该功能已在 0.10.0 移除，正文口径不再适用。写新版本说明时照结构，不要照内容。
 
 ```markdown
 云端 Agent 来了：这台机器上的工作台，现在能指挥跑在你自己服务器上的 Agent。

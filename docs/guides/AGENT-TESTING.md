@@ -151,15 +151,6 @@ npm run web:dev
 
 ---
 
-## ☁️ 云端单入口（G1）验收入口
-
-> 云端功能的完整验收清单（前置、逐条手点、两种失败语义、注销再配对、审计对账）已收口到
-> [CLOUD_AGENT](../requirements/CLOUD_AGENT.md) §8.2–8.3。
-> 本文件不再维护第二份云端步骤，避免口径漂移。
->
-> 插件侧先跑 `python -m unittest discover -s tests -t . -v` + `hermes plugins validate .`；
-> 桌面端先跑 `npx vitest run tests/cloud-*.test.ts tests/hermes-prompt.test.ts`。
-
 ## 🔧 常见问题
 
 | 现象 | 排查 |

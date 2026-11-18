@@ -32,23 +32,7 @@ pi-workbench/
 │   ├── preload.cts               # contextBridge（编译为 CommonJS preload.cjs）
 │   ├── app-paths.ts              # 便携式应用目录
 │   ├── workspace-trust.ts        # 工作区信任与路径包含
-│   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / cloud-agent / dispatch / documents / files / git / settings / system / web-search* / workspace）
-│   ├── cloud/                    # 云端 Agent 主进程侧
-│   │   ├── config.ts             # 连接配置（网关地址 / 设备 token，safeStorage 加密）+ cloudTransport() 单入口
-│   │   ├── gateway.ts            # 网关：配对 / 我是谁 / 撤销 + 错误码翻译（与 CLOUD_AGENT 的错误码表对齐）
-│   │   ├── client.ts / remote.ts # 网关客户端与 REST 调用（会话、轮次、停止、插话）
-│   │   ├── events.ts / map.ts    # SSE 事件解析与时间线映射（含插话回执）
-│   │   ├── runner.ts             # 轮次生命周期（断流重订阅、校帧、停止兜底）
-│   │   ├── dashboard.ts          # 控制台原生视图（WebContentsView）宿主
-│   │   ├── media.ts              # 图片旁路（Bearer 设备 token）：上传 / 按路径读回
-│   │   ├── ledger.ts             # 未结算账本：分类 / 记账 / 结账 / 历史复核 / 剪枝
-│   ├── dispatch/                 # 工作区派活（云端 Hermes → 本机工作区）
-│   │   ├── config.ts             # 白名单 `data/agent/dispatch.json`（id 由路径哈希，不落路径上云）
-│   │   ├── relay.ts              # 出站 SSE 中继（退避重连）+ 清单上报 + 任务回报
-│   │   ├── executor.ts           # 把一条云任务变成一次真实本地会话（权限 auto，无本地审批门）
-│   │   ├── worker.ts             # 帧分发 / 串行队列 / 取消 / 反问 / 心跳 / 账本写入
-│   │   ├── ledger.ts             # 本机账本 `data/agent/dispatch-ledger.json`（最近 20 条）
-│   │   └── trace.ts              # 派活轨迹 `cache/dispatch-traces/`（步骤上限 200，路径脱敏，仅事后查）
+│   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / documents / files / git / settings / system / web-search* / workspace）
 │   ├── documents/                # 文档解析（零依赖）：zip / xml / ooxml / pdf / detect / preview / render-bridge
 │   │   ├── zip.ts                # node:zlib 手写 ZIP 中央目录（不引第三方）
 │   │   ├── xml.ts                # 流式 XML 扇描（不建 DOM）
@@ -155,27 +139,11 @@ pi-workbench/
 │   │   ├── PanelDragHandle.tsx   # 面板拖拽把手
 │   │   ├── PanelWindowFrame.tsx  # 独立面板窗口外壳
 │   │   ├── PanelContextMenu.tsx  # 面板右键菜单
-│   │   ├── CloudWorkspaceView.tsx # 云端 Agent 外壳：会话 / 控制台 / 任务 / 连接四个常驻页签（切走只 hidden + inert）
-│   │   ├── CloudSessionView.tsx  # 云端会话列表 + 时间线 + 输入框
-│   │   ├── CloudConsoleView.tsx  # 云端控制台全屏宿主（原生视图边界上报 / 失败与未连接态）
-│   │   ├── CloudConnectionView.tsx # 云端连接页（地址 / 密钥 / 连通性 / 能力回显）
-│   │   ├── DispatchCard.tsx       # 「云端 → 派活」卡片（开关 / 白名单 / 运行态 / 急停 / 最近任务）
-│   │   ├── CloudTrace.tsx        # 云端时间线（文本 / 思考折叠 / 分隔线）
-│   │   ├── CloudSubagentCard.tsx  # 子代理卡片（目标 / 状态 / token / 输出尾巴）
-│   │   ├── CloudLedgerDrawer.tsx  # 未结算账本抽屉（做了 / 没做 / 不管）
-│   │   ├── CloudJobsView.tsx      # 定时任务页（列表 / 现在跑 / 暂停 / 恢复）
-│   │   ├── CloudDiagnosticsPanel.tsx # 自检折叠块（健康 / 工具集 / 技能 / 模型）
-│   │   ├── CloudClarifyCard.tsx   # clarify 提问卡（选项 + 自由回答）
-│   │   ├── CloudApprovalCard.tsx  # 审批卡（一次 / 本会话 / 拒绝；默认拒绝，`always` 永不渲染）
-│   │   ├── CloudModeSwitch.tsx    # 审批档位手动切（manual / smart / off；放宽到 off 要二次确认）
-│   │   ├── CloudToolCard.tsx     # 云端工具执行卡
 │   │   ├── ui.tsx                # Button / Input / Modal 等基础组件
 │   │   └── patterns.tsx          # Card / Stat / ListRow 等内容模式
 │   ├── store/                    # 每个功能域一个 store（16 个）
 │   │   ├── approvalStore.ts      # 待审批请求
 │   │   ├── chatStore.ts          # 消息、草稿、附件、排队、用量
-│   │   ├── cloudStore.ts         # 云端连接、会话列表、时间线片段、当前轮次、控制台状态
-│   │   ├── dispatchStore.ts      # 派活配置、运行态、最近任务（刻意与 cloudStore 分开）
 │   │   ├── dialogStore.ts        # 确认 / 输入对话框
 │   │   ├── diffStore.ts          # Diff 查看器（按工作区隔离）
 │   │   ├── editorStore.ts        # 标签页、当前文件、脏标记、面板开关（按工作区隔离）
@@ -201,30 +169,23 @@ pi-workbench/
 │   │   └── repoMapCanvas.ts      # 底层画布布局的读取与防抖落盘（上浮链状态不落盘）
 │   ├── theme/tokens.ts           # 从 CSS 变量读取颜色（Monaco / xterm）
 │   ├── hooks/                     # chatScroll（聊天贴底）/ useVirtualRows / useChatSessions / useChatPanelState / useRevertEdits
-│   │                             # useCloudBridge（主进程推来的云端事件 → store）
-│   │                             # useCloudImage（按路径读云端图片，带 24 条缓存）
 │   ├── utils/                    # 文件路径/树、快捷键、符号、图片、Markdown、剪贴板、diff 回退
 │   │                             # 仓库地图：repoMapText（文案）/ repoMapLayout（底层 + 上浮链 + 层级深度）
 │   │                             # repoMapCanvasState（落盘形状与迁移）/ repoMapLod
-│   │                             # cloudImages（`/image <path>` 指令的抽取 / 剥离 / 拼接）
 │   ├── api/
 │   │   ├── index.ts              # IPC 封装 + Web dev mock
 │   │   ├── piAgentAPI.ts         # Agent 调用（Electron IPC / Web SSE 桥接）
-│   │   ├── cloud.ts              # 云端 Agent IPC 封装（浏览器下返回「未配置」）
-│   │   ├── dispatch.ts           # 派活 IPC 封装（浏览器下返回「不可用」空态）
 │   │   ├── chatContext.ts        # 上下文块拼装
 │   │   ├── documentRender.ts     # 扫描页渲染桥（渲染进程侧）
 │   │   ├── rendererLog.ts        # 渲染进程日志上报
 │   │   └── diff.ts               # 行级 Diff 算法
 │   ├── types/
 │   │   ├── electron.d.ts         # window.electronAPI 与 IPC 结果类型
-│   │   ├── cloud.ts              # 云端时间线片段 / 会话 / 轮次状态（主进程有一份结构相同的副本）
 │   │   ├── navigation.ts         # 顶层视图 AppView
 │   │   └── index.ts              # 编辑器通用类型
 │   └── i18n/                     # 中英文文案与错误本地化
 │
 ├── tests/                        # 扁平测试目录（文件名与源码同名）
-├── docs/                         # 规范原文；云端方案唯一入口是 requirements/CLOUD_AGENT.md
 │
 ├── pi-bridge/                    # Agent 桥接层（主进程内运行）
 │   ├── src/
@@ -235,7 +196,7 @@ pi-workbench/
 │   │   ├── tool-policy.ts        # 模式对应的工具集
 │   │   ├── approval-extension.ts # 审批请求扩展
 │   │   ├── plan.ts               # 结构化计划
-│   │   ├── dispatch-extension.ts # 派活反问工具 ask_cloud_operator（只注入派活会话）
+│   │   ├── dispatch-extension.ts # 派活反问工具 ask_cloud_operator（当前无调用方，留给下一代云端服务）
 │   │   ├── plan-extension.ts     # 计划工具扩展
 │   │   ├── worktree-extension.ts # 工作树切换工具扩展
 │   │   ├── session-extras.ts     # 会话 sidecar（计划、权限）
@@ -351,7 +312,6 @@ ChatPanel.handleSubmit
 | `agent:sessions:*` / `agent:plan:*` / `agent:tool-result:*` | invoke | 会话、计划、工具结果 |
 | `agent:stream` / `agent:session-title` | main → renderer | 流式事件与会话标题 |
 | `agent:approval-request` / `approval-resolved` | main → renderer | 审批请求与解除 |
-| `app:notify-click` | main → renderer | 系统通知点击：本地带 `workspaceDir`（切工作区 + 激活会话）；云端带 `cloud` + `sessionId` + 可选 `requestId`（切云端页 + 打开会话 + 定位那张审批 / 澄清卡，`data-cloud-card` 锚点） |
 | `terminal:create` / `write` / `resize` / `close` / `flush` | invoke | 终端 PTY |
 | `plugins:list` / `invoke` / `reload` / `setEnabled` | invoke | 工作台插件 |
 | `draft:save` / `delete` / `list` / `clear` | invoke | 崩溃恢复草稿 |
@@ -366,28 +326,6 @@ ChatPanel.handleSubmit
 | `shell:openExternal` | invoke | 外部链接（https / http / mailto）交系统浏览器；白名单在 `electron/external-links.ts` |
 | `clipboard:writeText` | invoke | 写系统剪贴板（`pw-app://` 下 `navigator.clipboard` 不可用） |
 | `webSearch:get` / `save` | invoke | 联网搜索供应商与 Key（`safeStorage` 加密） |
-| `cloud:config:get` / `connect` / `disconnect` | invoke | 云端 Agent 连接配置（`data/cloud-agent/connection.json`，只允许 `gatewayUrl` / `deviceToken` / `deviceScopes` / `deviceId` / `dashboardUrl`；token 走 `safeStorage` 加密，渲染层只拿 `hasDeviceToken`）与连通性探测；旧字段（`baseUrl` / `apiKey` / `dashboardToken` / 管理密钥 / 控制台账号口令 / 旧凭证导入记录）在 `config:get` 时按白名单清掉 |
-| `cloud:gateway:status` / `gateway:pair` / `gateway:revoke` | invoke | 云端单入口（`hub.`）三件事：`status` = 配对了没有 + scope + 上游在不在 + 本机心跳状态（未配对时**不发任何请求**）；`pair` = 一次性连接码换设备 token（`deviceId` 钉死本地 `device.json` 的 id，明文 token 只留主进程，落盘 `enc:`；不带任何管理凭据；成功后清 active-run、pokes 心跳、渲染层刷新 config 并直接重连）；`revoke` = 设备自注销并只清设备凭据（保留 `gatewayUrl` / `dashboardUrl`） |
-| `cloud:device:get` / `device:set` / `device:reprobe` | invoke | 本机设备身份（`data/cloud-agent/device.json`，启动时即建）：`get` 首次会补一次系统友好名探测（`probedAt` 后不再自动探），`set` 只改 `name`（空串 = 恢复默认名），`reprobe` 是用户显式「重新读取系统名」。`id` 只读，随每轮 `POST /v1/runs` 的 `author` 发出（只做记忆归属，**不进 prompt**） |
-| `cloud:sessions:list` / `messages:list` | invoke | 云端会话列表与历史消息（主进程直接映射成时间线片段）。`messages:list` 带 `tail: true` 时取**最新一段**：offset 由主进程按会话 `message_count` 算，渲染层不写死分页 |
-| `cloud:sessions:update` / `sessions:delete` | invoke | 会话条目操作（PATCH 白名单字段 / 硬删除，不可恢复） |
-| `cloud:run:start` / `run:stop` / `run:status` / `run:steer` / `run:attach` | invoke | 云端轮次：POST `/v1/runs`（带幂等键）、停止、状态轮询、运行中插话（`queued` 不接受插话）；`run:attach` 用 `data/cloud-agent/active-run.json` 在重启后接回还在跑的那一轮（订阅带 `last_seq` 上限，只收新事件，先铺历史再放增量） |
-| `cloud:clarify:respond` | invoke | 回答 clarify 提问（body 严格 `{request_id, execution_generation, answer}`） |
-| `cloud:approval:respond` | invoke | 提交审批决定（只收 `once` / `session` / `deny`，`always` 一律拒；body **三个字段必填** `{request_id, execution_generation, choice}`，实测少一个就是 400 `invalid_params`）；回执一成功立刻写一条审计 |
-| `cloud:policy:get` / `policy:set` | invoke | 服务端原生审批档位（`approvals.mode` = `manual` / `smart` / `off`）：只读白名单子集（`mode` / `timeout` / deny 条数 / 禁用工具集 / 终端后端）、写最小 patch 并读回复核 |
-| `cloud:diagnostics` | invoke | 自检：`/health/detailed` + `/v1/{toolsets,skills,models}` 四块独立成败 |
-| `cloud:jobs:list` / `jobs:create` / `jobs:update` / `jobs:delete` / `jobs:run` / `jobs:pause` / `jobs:resume` | invoke | 定时任务：列表 + 新建 + 编辑 / 删除 + 三个动作 |
-| `cloud:ledger:list` / `ledger:resolve` / `ledger:note` | invoke | 未结算账本：列条目、人工三选一（做了 / 没做 / 不管）、手工补记 |
-| `cloud:run:resolve-unknown` | invoke | 收尾「主人进程丢了」的 run（凭据由主进程现查，渲染层只递 runId） |
-| `cloud:media:upload` / `media:read` | invoke | 图片上传与按路径读回（经网关旁路，凭据就是设备 token；插件转发给控制台） |
-| `cloud:event` | main → renderer | SSE 帧映射后的时间线增量 / 轮次状态 / 会话 id |
-| `cloud:status` | main → renderer | 连接状态变化 |
-| `cloud:dashboard:open` / `close` / `bounds` / `reload` | invoke | 程序内控制台：`WebContentsView`（独立 partition、sandbox、无 preload）的开合、边界同步、重载。**可见性唯一真相是 `bounds.visible`**：为 false 时视图直接从窗口摘除；`bounds` 只接受主窗口上报 |
-| `cloud:dashboard:loaded` / `load-failed` / `dashboard:closed` | main → renderer | 控制台首帧加载完成 / 加载失败 / 页面内 Esc 关闭 |
-| `dispatch:config:get` / `config:set` | invoke | 派活总开关与工作区白名单（`data/agent/dispatch.json`）。写入时把每个目录登记进信任表（白名单本身就是一次授权），返回给渲染层的清单**带本机路径**（只在本机界面显示），上云的是 `publicWorkspaces()` 过滤后的 id / label / description |
-| `dispatch:workspace:add` / `workspace:update` / `workspace:remove` | invoke | 白名单增删改：`add` 走系统选目录对话框（用户点选即授权），`update` 只改显示名与描述 |
-| `dispatch:state` / `dispatch:stop` | invoke | 运行态快照（连没连上 / 在跑什么 / 排了几个 / 最近任务）与急停（断中继 + abort 当前会话 + 显式回报 `canceled`） |
-| `dispatch:state-changed` | main → renderer | 派活运行态或账本变化 |
 
 ---
 
