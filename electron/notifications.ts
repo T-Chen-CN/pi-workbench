@@ -35,17 +35,10 @@ export interface NotificationCopy {
   approval: string
   complete: string
   error: string
-  /** 云端：命令要人点一下 */
-  cloudApproval: string
-  /** 云端：clarify 在等人回答（同样是“这轮卡住了”） */
-  cloudClarify: string
-  cloudComplete: string
-  cloudError: string
 }
 
 /**
- * 通知文案的唯一来源。主进程里本地 Agent 与云端 Agent 都用它，
- * 否则同一个应用会出现两套措辞（本地“会话已完成”/ 云端“任务结束”）。
+ * 通知文案的唯一来源。
  */
 export function notificationCopy(language: string | undefined): NotificationCopy {
   const zh = (language ?? 'zh') !== 'en'
@@ -53,20 +46,12 @@ export function notificationCopy(language: string | undefined): NotificationCopy
     ? {
         approval: '需要审批',
         complete: '会话已完成',
-        error: '会话运行失败',
-        cloudApproval: '云端需要审批',
-        cloudClarify: '云端在等你回答',
-        cloudComplete: '云端会话已完成',
-        cloudError: '云端会话运行失败'
+        error: '会话运行失败'
       }
     : {
         approval: 'Approval required',
         complete: 'Session finished',
-        error: 'Session failed',
-        cloudApproval: 'Cloud approval required',
-        cloudClarify: 'Cloud agent has a question',
-        cloudComplete: 'Cloud session finished',
-        cloudError: 'Cloud session failed'
+        error: 'Session failed'
       }
 }
 
@@ -81,15 +66,11 @@ export function notificationSummary(text: string): string {
 
 export interface SessionNotification {
   kind: NotificationKind
-  /** 本地工作区会话的目录；云端会话没有工作区，传 null */
+  /** 本地工作区会话的目录 */
   workspaceDir: string | null
   sessionId: string
   title: string
   body: string
-  /** 云端会话：点击后切到云端页，不去找同名工作区 */
-  cloud?: boolean
-  /** 云端审批 / 澄清卡：点击后定位到那张卡 */
-  requestId?: string
 }
 
 export class NotificationRouter {
@@ -99,8 +80,6 @@ export class NotificationRouter {
       body: string
       workspaceDir: string | null
       sessionId: string
-      cloud?: boolean
-      requestId?: string
     }) => void,
     private readonly getPrefs: () => unknown,
     private readonly isAppFocused: () => boolean,
@@ -137,9 +116,7 @@ export class NotificationRouter {
         title: event.title,
         body: event.body,
         workspaceDir: event.workspaceDir,
-        sessionId: event.sessionId,
-        cloud: event.cloud,
-        requestId: event.requestId
+        sessionId: event.sessionId
       })
       this.log?.info(`[Notifications] delivered "${event.kind}"`)
       return true
