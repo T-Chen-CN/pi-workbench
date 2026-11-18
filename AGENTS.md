@@ -130,7 +130,6 @@ npm run build      # 渲染层 + bridge + 主进程
 | [AGENT_TRACE](docs/architecture/AGENT_TRACE.md) | 流式事件协议与思考 / 工具轨迹数据模型 |
 | [GIT_WORKTREE_SESSIONS](docs/requirements/GIT_WORKTREE_SESSIONS.md) | 工作树会话的完整需求与验收场景 |
 | [AGENT-TESTING](docs/guides/AGENT-TESTING.md) | Agent 功能手动验收步骤 |
-| [CLOUD_AGENT_LESSONS](docs/archive/CLOUD_AGENT_LESSONS.md) | 写云端 Agent（Pi 内核）之前：已踩过的安全 / 审批 / 流式 / 部署坑 |
 | [reporting](docs/agent/reporting.md) | 什么时候该写报告、写到哪、怎么清理 |
 | [STATUS](docs/progress/STATUS.md) · [BACKLOG](docs/progress/BACKLOG.md) | 现状快照（STATUS）与唯一任务表（BACKLOG） |
 

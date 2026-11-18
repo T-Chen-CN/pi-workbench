@@ -20,8 +20,6 @@
 - **[ADR-002 主窗口托盘常驻](./decisions/ADR-002-tray-resident-main-window.md)** — 关闭按钮收托盘、真退出入口
 - **[ADR-003 会话记录作为单一真相源](./decisions/ADR-003-session-record-single-source.md)** — 历史与导出取 JSONL 分支，不取压缩后的上下文
 
-> 历史：云端 Agent 的架构决策曾并入 `requirements/CLOUD_AGENT.md`（0.8.0–0.9.1 的 Hermes 实现），该方案于 0.10.0 移除；正文看 `git show legacy/cloud-hermes-0.9.1:docs/requirements/CLOUD_AGENT.md`，可复用的结论见 [archive/CLOUD_AGENT_LESSONS.md](./archive/CLOUD_AGENT_LESSONS.md)。
-
 ### 📌 需求文档
 - **[Git 会话工作流（会话-工作树绑定）](./requirements/GIT_WORKTREE_SESSIONS.md)** — 工作树会话的完整需求、边界执行顺序与验收场景
 
@@ -30,7 +28,6 @@
 - **[对外文案](./guides/PUBLIC_COPY.md)** — 仓库门面（About / Topics）、Release 说明模板与 README 结构、截图槽位
 - **[Agent 测试清单](./guides/AGENT-TESTING.md)** — Agent 功能手动验收步骤
 - **[Agent 过程轨迹测试方案](./guides/AGENT_TRACE_TESTING.md)** — thinking / 工具步骤的自动化与手动验收
-- **[换代经验（已归档）](./archive/CLOUD_AGENT_LESSONS.md)** — Hermes 版云端 Agent 留下的可复用结论：安全边界、审批语义、流式与协议坑、部署坑
 
 ### 🧭 Agent 开发约束（从 AGENTS.md 拆出）
 - **[路径与持久化](./agent/paths-and-storage.md)** — 便携式目录、启动顺序、落盘文件清单、多工作区状态
