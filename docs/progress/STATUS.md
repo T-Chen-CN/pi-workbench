@@ -9,11 +9,11 @@
 
 | 项 | 值 |
 | --- | --- |
-| 版本 | **0.9.1** 已发布；主线在 0.10.0（云端 Agent 移除） |
+| 版本 | **0.10.0**（2026-11-11） |
 | 阶段 | 本地 Agent 工作台稳定期；云端 Agent 换内核（Pi）尚未开工 |
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
-| 质量门槛 | `type-check` · `lint` · `npm test`（130 文件 / 1402 用例）· `design-system` 全绿 |
+| 质量门槛 | `type-check` · `lint` · `npm test`（131 文件 / 1407 用例）· `design-system` 全绿 |
 | 云端 Agent | **旧实现（Hermes）已整体移除**：代码 / 文档 / 网关插件都不在仓库里；替代方案未定稿 |
 
 ## 正在做 / 下一步
@@ -26,7 +26,7 @@
 
 - **v0.1 ~ v0.7.9**：本地 Agent 工作台——编辑器 / 会话与分支 / 终端 / Git 与工作树 / 阅读视图 / 面板拆窗 / 托盘常驻 / 自动更新与三平台发布。
 - **v0.8.0 ~ v0.9.1**：云端 Agent 的 Hermes 实现（配对、会话与 SSE、审批闭环、内嵌控制台、任务与媒体、云端工作区派活 H3），**已整体移除**（代码与文档都不在仓库里，需要考古看 `git log`）。
-- **0.10.0（未发布）**：移除云端 Agent 的桌面层 / 派活 / 网关插件 / 相关文档与文案，主线只保留本地 Agent 能力；`electron/approval-broker.ts` 与 pi-bridge 的审批 / 计划扩展保留，供下一代云端服务复用。
+- **0.10.0**：移除云端 Agent 的桌面层 / 派活 / 网关插件 / 相关文档与文案，主线只保留本地 Agent 能力；`electron/approval-broker.ts` 与 pi-bridge 的审批 / 计划扩展保留，供下一代云端服务复用；升级首启清掉旧版留下的凭据类残留（`electron/legacy-cleanup.ts`，幂等 + 失败可重试）。
 
 ---
 

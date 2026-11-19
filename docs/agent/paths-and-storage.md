@@ -25,7 +25,7 @@ macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动�
 启动时 `main.ts` 的 `initAppDirectories()` 创建并维护四个目录：
 
 ```
-{appDir}/config/   settings.json、api-config.json、web-search.json、last-run-version.json
+{appDir}/config/   settings.json、api-config.json、web-search.json、last-run-version.json、migrations.json
 {appDir}/cache/    drafts/（崩溃恢复草稿）、temp/（含 Web dev 模式的 web-agent/，可随时删）、{updaterCacheDirName}/（Linux 更新包）
 {appDir}/data/     agent/（模型与会话）、profile/（Chromium userData）、workspaces.db
 {appDir}/logs/     main.log、renderer.log、agent.log
@@ -73,6 +73,7 @@ macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动�
 | `config/api-config.json` | `apiConfig:*` | provider / apiUrl / apiKey（`enc:` + safeStorage）/ 模型与容量 |
 | `config/web-search.json` | `webSearch:*` | 当前 provider + 各 provider 的 Key（`enc:`） |
 | `config/last-run-version.json` | `shell-refresh.ts` | 仅在版本变化时刷新 shell / 图标缓存 |
+| `config/migrations.json` | `electron/legacy-cleanup.ts` | 已执行的一次性迁移：`{applied: { [id]: 时间戳 }}`。**删了等于让迁移重跑**，而迁移是幂等的，所以代价只是白做一次 |
 | `data/workspaces.db` | `workspace-store.ts` | `node:sqlite`，表 `workspaces(path, opened_at, open_count)`；**最近工作区的唯一来源**，渲染层不再保存 `recentWorkspaces` |
 | `data/agent/models.json` | `model-config.ts` | Pi 模型配置；Key 只写变量名 `$PI_WORKBENCH_API_KEY`，不落盘 |
 | `data/agent/web-search.json` | `ipc/web-search.ts` | 下发给扩展的 `$PI_WORKBENCH_WEB_SEARCH_KEY_<PROVIDER>` 变量名 |

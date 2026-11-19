@@ -21,6 +21,7 @@ import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
 import { installAuxWindowSupport, registerAuxWindowIpc } from './aux-window.js'
 import { appUrl, isAppUrl, registerAppProtocol } from './app-protocol.js'
+import { runLegacyCleanups } from './legacy-cleanup.js'
 import {
   destroyTray,
   installTray,
@@ -625,8 +626,9 @@ async function initAppDirectories() {
     console.error('Failed to remove legacy checkpoint data:', error)
   }
 
-  // 设备身份在这里就落地（A 档）：只建 id + 机器名默认值，不做友好名探测（spawn 不上启动路径）。
-  // 好处是「身份什么时候诞生」不再取决于用户何时第一次打开云端页，启动日志也有锚点。
+  // 已移除功能的一次性迁移（幂等，失败不阻断启动）
+  runLegacyCleanups(appDir)
+
   console.log('应用目录已初始化:', appDir)
 }
 
