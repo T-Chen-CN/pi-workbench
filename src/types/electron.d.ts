@@ -677,6 +677,18 @@ export interface ElectronAPI {
     error?: string
   }>
   cloudListWorkspaces: () => Promise<{ success: boolean; workspaces: CloudWorkspaceEntry[] }>
+  cloudClientOpen: () => Promise<{ success: boolean; state: CloudClientState; error?: string }>
+  cloudClientClose: () => Promise<{ success: boolean }>
+  cloudClientSend: (frame: CloudClientOutgoingFrame) => Promise<{ success: boolean; error?: string }>
+  cloudClientState: () => Promise<{ success: boolean; state: CloudClientState }>
+  cloudGetConfig: () => Promise<CloudConfigResult>
+  cloudSaveConfig: (config: CloudConfigInput) => Promise<{
+    success: boolean
+    result?: { ok?: boolean; apiKeyMasked?: string; takesEffect?: string }
+    error?: string
+  }>
+  onCloudClientFrame: (callback: (frame: unknown) => void) => () => void
+  onCloudClientState: (callback: (state: CloudClientState) => void) => () => void
   onCloudState: (callback: (state: CloudDeviceState) => void) => () => void
 
   // Web search (内置联网能力)
@@ -713,6 +725,48 @@ export interface CloudWorkspaceEntry {
   defaultBranch?: string
   isGit: boolean
 }
+
+/** 云端模型配置（只回掩码，Key 永不出服务器） */
+export interface CloudConfigResult {
+  success: boolean
+  config?: {
+    configured: boolean
+    provider?: string
+    apiUrl?: string
+    model?: string
+    apiKeyMasked?: string
+    updatedAt?: number
+  }
+  error?: string
+}
+
+export interface CloudConfigInput {
+  provider: string
+  apiUrl: string
+  model: string
+  apiKey: string
+}
+
+/** 客户端通道状态（与 electron/cloud/client-link.ts 的 CloudClientState 对应） */
+export type CloudClientState =
+  | { status: 'closed' }
+  | { status: 'connecting' }
+  | { status: 'open'; lastSeq: number }
+  | { status: 'error'; error: string }
+
+/** 渲染层能发的客户端帧（不再新增类型：帧格式由 pi-bridge 冻结） */
+export type CloudClientOutgoingFrame =
+  | { type: 'say'; text: string; clientMessageId: string }
+  | {
+      type: 'confirm_plan'
+      planText: string
+      items: Array<{ deviceId: string; workspacePath: string }>
+      quota: number
+    }
+  | { type: 'stop_reply' }
+  | { type: 'stop_task'; taskId: string }
+  | { type: 'ack'; seq: number }
+  | { type: 'ping'; at: number }
 
 export interface CloudLinkStatusResult {
   success: boolean

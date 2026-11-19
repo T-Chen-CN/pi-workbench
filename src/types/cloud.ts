@@ -1,0 +1,100 @@
+/**
+ * 云端页的数据形状（渲染层视角）。
+ *
+ * 与 `pi-bridge/src/cloud-protocol.ts` 保持一一对应；渲染层只用类型导入，
+ * 不把 bridge 的运行时打进浏览器包。
+ */
+
+import type {
+  CloudClientState,
+  CloudDeviceState,
+  CloudLinkView,
+  CloudWorkspaceEntry,
+} from './electron'
+
+export type { CloudClientState, CloudDeviceState, CloudLinkView, CloudWorkspaceEntry }
+
+/**
+ * 与 `pi-bridge/src/cloud-protocol.ts` 的 CLOUD_PROTOCOL_VERSION 必须一致。
+ * 渲染层不能直接 import 那个模块（会把 Node 侧依赖打进浏览器包），
+ * 所以这里复制一份常量，由 `tests/cloud-protocol.test.ts` 交叉校验。
+ */
+export const CLOUD_PROTOCOL_VERSION = 1
+
+/** 会话消息：轻量渲染只保留正文与工具轨迹摘要（不引入 chatStore 的模型） */
+export interface CloudChatRow {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+  at: number
+  /** 流式中的消息：下一次 text_delta 直接追加 */
+  streaming?: boolean
+  traces: CloudTraceRow[]
+  error?: string
+}
+
+export interface CloudTraceRow {
+  id: string
+  toolName: string
+  summary: string
+  status: 'running' | 'ok' | 'error'
+}
+
+export type CloudTaskStatusName =
+  | 'queued'
+  | 'assigned'
+  | 'running'
+  | 'waiting_human'
+  | 'done'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted'
+  | 'expired'
+
+export interface CloudTaskRow {
+  id: string
+  title: string
+  deviceId: string
+  workspacePath: string
+  status: CloudTaskStatusName
+  createdAt: number
+  updatedAt: number
+  startedAt?: number
+  finishedAt?: number
+  terminalReason?: string
+  /** 终端回报的里程碑文本（最后一条） */
+  lastMilestone?: string
+  question?: { id: string; text: string; at: number }
+  result?: { summary: string; changedFiles: Array<{ path: string; kind: string }> }
+  error?: string
+  worktreePath?: string
+  branch?: string
+  /** 归属工作单元：同一单元的后续工单不需要重新确认（O-06） */
+  workUnitId: string
+}
+
+export interface CloudDeviceRow {
+  id: string
+  name: string
+  platform: string
+  online: boolean
+  workspaces: CloudWorkspaceEntry[]
+  lastSeenAt?: number
+}
+
+export interface CloudAuthorizationRow {
+  id: string
+  items: Array<{ deviceId: string; workspacePath: string }>
+  quota: number
+  used: number
+  confirmedAt: number
+  expiresAt: number
+  confirmedSummary: string
+}
+
+export interface CloudNotice {
+  level: 'info' | 'warn' | 'error'
+  text: string
+  at: number
+  key?: string
+}

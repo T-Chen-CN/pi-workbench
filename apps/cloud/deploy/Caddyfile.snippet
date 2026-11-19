@@ -1,0 +1,35 @@
+# Pi Cloud —— 贴进现有的 Caddyfile（站点块内），或作为独立站点块使用。
+#
+# 要点：
+#  1. WS 的两条路径必须走同一个 upstream，Caddy 会自动透传 Upgrade；
+#  2. 上传体积很小（配对 / 配置都是 JSON），限制 1MB 足够；
+#  3. 静态客户端与 API 同源，避免 CORS 与 cookie 跨站。
+
+tchen-xiaoxiao.com {
+	encode zstd gzip
+
+	@ws {
+		path /client/ws /device/ws
+	}
+	handle @ws {
+		reverse_proxy 127.0.0.1:8787 {
+			# 长连接：关掉响应缓冲，心跳由应用层维持
+			flush_interval -1
+		}
+	}
+
+	handle {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	log {
+		output file /var/log/caddy/pi-cloud.log {
+			roll_size 20MiB
+			roll_keep 5
+		}
+		format console
+	}
+}

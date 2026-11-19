@@ -612,6 +612,16 @@ const cloudIpcContext: CloudIpcContext = {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('cloud:state', state)
     }
+  },
+  onClientFrame: (frame) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('cloud:client-frame', frame)
+    }
+  },
+  onClientState: (state) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('cloud:client-state', state)
+    }
   }
 }
 

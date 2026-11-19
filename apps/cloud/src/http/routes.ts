@@ -61,6 +61,19 @@ export function buildRouter(deps: RouteDeps): Router {
     if (!payload) throw new HttpError(401, 'Login required', 'unauthorized')
   }
 
+  /**
+   * 桌面端只有设备 token（没有 cookie）：能改云端模型配置、读快照与授权。
+   * 账号与配对码仍然只认 cookie —— 那是浏览器登录态的职责。
+   */
+  const requireUser = (ctx: RequestContext): void => {
+    try {
+      requireSession(ctx)
+      return
+    } catch {
+      requireDevice(ctx)
+    }
+  }
+
   const requireDevice = (ctx: RequestContext): DeviceRecord => {
     const header = ctx.req.headers.authorization ?? ''
     const token = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
@@ -207,7 +220,7 @@ export function buildRouter(deps: RouteDeps): Router {
   })
 
   router.get('/v1/devices', (ctx) => {
-    requireSession(ctx)
+    requireUser(ctx)
     return { devices: deps.dispatcher.deviceSnapshots() }
   })
 
@@ -221,7 +234,7 @@ export function buildRouter(deps: RouteDeps): Router {
   })
 
   router.get('/v1/cloud-config', (ctx) => {
-    requireSession(ctx)
+    requireUser(ctx)
     const record = deps.store.getCloudConfig()
     if (!record) return { configured: false }
     let keyTail = ''
@@ -242,7 +255,7 @@ export function buildRouter(deps: RouteDeps): Router {
 
   /** F-10 ~ F-13：配置由客户端推上来，AES 加密落盘，只回掩码 */
   router.put('/v1/cloud-config', async (ctx) => {
-    requireSession(ctx)
+    requireUser(ctx)
     const body = await ctx.json<{
       provider?: string
       apiUrl?: string
@@ -268,18 +281,18 @@ export function buildRouter(deps: RouteDeps): Router {
   })
 
   router.get('/v1/snapshot', async (ctx) => {
-    requireSession(ctx)
+    requireUser(ctx)
     return deps.snapshot()
   })
 
   router.get('/v1/authorizations', (ctx) => {
-    requireSession(ctx)
+    requireUser(ctx)
     return { authorizations: deps.store.activeAuthorizations().map(toView) }
   })
 
   /** F-18：确认动作落盘，作为后续派活的授权凭据（只能由用户端触发） */
   router.post('/v1/authorizations', async (ctx) => {
-    requireSession(ctx)
+    requireUser(ctx)
     const body = await ctx.json<{
       planText?: string
       items?: Array<{ deviceId?: string; workspacePath?: string }>
@@ -309,7 +322,7 @@ export function buildRouter(deps: RouteDeps): Router {
   })
 
   router.delete('/v1/authorizations/:id', async (ctx) => {
-    requireSession(ctx)
+    requireUser(ctx)
     await deps.store.revokeAuthorization(ctx.params.id)
     return { ok: true }
   })

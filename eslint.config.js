@@ -51,6 +51,22 @@ export default tseslint.config(
     },
   },
   {
+    // Web 客户端：浏览器 ESM，零构建（apps/cloud/web/app.js）
+    files: ['apps/cloud/web/**/*.js'],
+    languageOptions: {
+      sourceType: 'module',
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        location: 'readonly',
+        fetch: 'readonly',
+        WebSocket: 'readonly',
+        setTimeout: 'readonly',
+        console: 'readonly',
+      },
+    },
+  },
+  {
     // 构建期脚本（Node ESM）
     files: ['scripts/**/*.js', 'docs/**/*.mjs'],
     languageOptions: {

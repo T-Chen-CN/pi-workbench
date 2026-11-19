@@ -5,6 +5,7 @@
  * 事件唤醒载荷形状、连接错误分级。帧字段本身由后续实现消费，不在这一层做 schema 校验。
  */
 
+import { CLOUD_PROTOCOL_VERSION as RENDERER_PROTOCOL_VERSION } from '../src/types/cloud'
 import { describe, expect, it } from 'vitest'
 import {
   CLOUD_PROTOCOL_VERSION,
@@ -16,6 +17,12 @@ import {
   encodeFrame,
   isTerminalTaskStatus,
 } from '../pi-bridge/src/cloud-protocol'
+
+describe('版本号只有一处真相', () => {
+  it('渲染层复制的协议版本与实际协议一致', () => {
+    expect(RENDERER_PROTOCOL_VERSION).toBe(CLOUD_PROTOCOL_VERSION)
+  })
+})
 
 describe('帧编解码', () => {
   it('编解码往返保持原样', () => {

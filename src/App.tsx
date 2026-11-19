@@ -17,6 +17,8 @@ import { BrandSeal } from './components/BrandSeal'
 import { Settings, type SettingsSection } from './components/Settings'
 import { UpdateDialog } from './components/UpdateDialog'
 import { UpdateStatusIndicator } from './components/UpdateStatusIndicator'
+import { CloudStatusIndicator } from './components/CloudStatusIndicator'
+import { CloudView } from './components/CloudView'
 import { CommandPalette } from './components/CommandPalette'
 import { ToastContainer } from './components/Toast'
 import { DialogHost } from './components/DialogHost'
@@ -846,6 +848,11 @@ export default function App() {
             />
           ))}
         </Suspense>
+        {view === 'cloud' && (
+          <div className="absolute inset-0 flex flex-col overflow-hidden bg-surface">
+            <CloudView onBackHome={() => setView(workspace ? 'workspace' : 'home')} />
+          </div>
+        )}
         {(view === 'home' || (view === 'workspace' && !workspace)) && (
           <div className="absolute inset-0 flex flex-col overflow-hidden bg-surface">
             <WelcomeScreen
@@ -869,6 +876,7 @@ export default function App() {
           </span>
         )}
         <div className="ml-auto flex items-center gap-4">
+          <CloudStatusIndicator onOpen={() => setView('cloud')} />
           <UpdateStatusIndicator onOpenSettings={() => openSettings('about')} />
           {currentFileName && <span>{fileLanguage}</span>}
           <span>UTF-8</span>

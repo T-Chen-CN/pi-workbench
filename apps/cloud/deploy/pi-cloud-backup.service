@@ -1,0 +1,15 @@
+[Unit]
+Description=Pi Cloud daily backup
+Documentation=https://github.com/T-Chen-CN/pi-workbench
+
+[Service]
+Type=oneshot
+User=pi-cloud
+Group=pi-cloud
+EnvironmentFile=/etc/pi-cloud/env
+ExecStart=/opt/pi-cloud/backup.sh
+# 备份要写 /var/backups/pi-cloud，读 /var/lib/pi-cloud
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/pi-cloud /var/backups/pi-cloud

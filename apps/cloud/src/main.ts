@@ -32,6 +32,7 @@ import {
 } from './agent/cloud-session.js'
 import { createCloudToolsExtension } from './agent/tools.js'
 import { buildRouter } from './http/routes.js'
+import { defaultWebDir, serveStatic } from './http/static.js'
 import { HttpError, readJsonBody, sendJson, sourceOf } from './http/router.js'
 import type { AuthorizationRecord } from './tasks/authorization.js'
 import { DEFAULT_AUTHORIZATION_TTL_MS, DEFAULT_QUOTA } from './tasks/authorization.js'
@@ -128,6 +129,10 @@ export async function createCloudServer(overrides: Partial<CloudConfig> = {}): P
     void (async () => {
       try {
         const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+        if ((req.method ?? 'GET') === 'GET') {
+          const served = await serveStatic(config.webDir || defaultWebDir(), url.pathname, res)
+          if (served) return
+        }
         const matched = router.match(req.method ?? 'GET', url.pathname)
         if (!matched) {
           sendJson(res, 404, { error: 'not-found' })

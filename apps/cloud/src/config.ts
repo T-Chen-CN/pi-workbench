@@ -26,6 +26,8 @@ export interface CloudConfig {
   secureCookies: boolean
   /** 服务版本，进 /v1/health 与协议握手 */
   version: string
+  /** Web 客户端静态目录；空表示用包内默认（apps/cloud/web） */
+  webDir: string
 }
 
 function required(name: string): string {
@@ -56,6 +58,7 @@ export function loadConfig(overrides: Partial<CloudConfig> = {}): CloudConfig {
     cookieSecret: overrides.cookieSecret ?? required('PI_CLOUD_COOKIE_SECRET'),
     secureCookies: process.env.NODE_ENV === 'production',
     version: process.env.PI_CLOUD_VERSION || '0.1.0',
+    webDir: process.env.PI_CLOUD_WEB_DIR || '',
     ...overrides,
   }
   if (!Number.isFinite(config.port) || config.port < 0) {

@@ -15,6 +15,10 @@ import type {
   CloudPairResult,
   CloudDeviceState,
   CloudWorkspaceEntry,
+  CloudClientState,
+  CloudClientOutgoingFrame,
+  CloudConfigInput,
+  CloudConfigResult,
   ListDirectoryResult,
   ReadFileResult,
   WriteFileResult,
@@ -456,6 +460,27 @@ const mockAPI = {
     workspaces: []
   }),
   onCloudState: (_callback: (state: CloudDeviceState) => void) => () => {},
+  cloudClientOpen: async () => ({
+    success: false,
+    state: { status: 'closed' } as CloudClientState,
+    error: 'Cloud connection is only available in the Electron app'
+  }),
+  cloudClientClose: async () => ({ success: true }),
+  cloudClientSend: async () => ({
+    success: false,
+    error: 'Cloud connection is only available in the Electron app'
+  }),
+  cloudClientState: async () => ({ success: true, state: { status: 'closed' } as CloudClientState }),
+  cloudGetConfig: async (): Promise<CloudConfigResult> => ({
+    success: false,
+    error: 'Cloud settings are only available in the Electron app'
+  }),
+  cloudSaveConfig: async () => ({
+    success: false,
+    error: 'Cloud settings are only available in the Electron app'
+  }),
+  onCloudClientFrame: (_callback: (frame: unknown) => void) => () => {},
+  onCloudClientState: (_callback: (state: CloudClientState) => void) => () => {},
 
   // Terminal（Web 模式没有 PTY，返回失败而不是抛异常）
   terminalCreate: async (): Promise<TerminalCreateResult> => ({
@@ -751,6 +776,15 @@ export const api = {
   cloudRefreshWorkspaces: () => electronAPI.cloudRefreshWorkspaces(),
   cloudListWorkspaces: () => electronAPI.cloudListWorkspaces(),
   onCloudState: (callback: (state: CloudDeviceState) => void) => electronAPI.onCloudState(callback),
+  cloudClientOpen: () => electronAPI.cloudClientOpen(),
+  cloudClientClose: () => electronAPI.cloudClientClose(),
+  cloudClientSend: (frame: CloudClientOutgoingFrame) => electronAPI.cloudClientSend(frame),
+  cloudClientState: () => electronAPI.cloudClientState(),
+  cloudGetConfig: () => electronAPI.cloudGetConfig(),
+  cloudSaveConfig: (config: CloudConfigInput) => electronAPI.cloudSaveConfig(config),
+  onCloudClientFrame: (callback: (frame: unknown) => void) => electronAPI.onCloudClientFrame(callback),
+  onCloudClientState: (callback: (state: CloudClientState) => void) =>
+    electronAPI.onCloudClientState(callback),
 
   // Git worktrees / read-only history / GitHub status
   gitRepoInfo: (workspaceDir: string) => electronAPI.gitRepoInfo(workspaceDir),

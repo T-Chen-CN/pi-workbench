@@ -1,0 +1,38 @@
+[Unit]
+Description=Pi Cloud control plane (Pi Workbench)
+Documentation=https://github.com/T-Chen-CN/pi-workbench
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi-cloud
+Group=pi-cloud
+WorkingDirectory=/opt/pi-cloud/current
+EnvironmentFile=/etc/pi-cloud/env
+ExecStart=/usr/bin/node /opt/pi-cloud/current/dist/main.js
+Restart=always
+RestartSec=2
+# 云端只监听 127.0.0.1，TLS 与 WS 升级交给 Caddy
+Environment=NODE_ENV=production
+
+# 收紧权限：只允许写数据目录与备份目录
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryMax=1500M
+ReadWritePaths=/var/lib/pi-cloud /var/backups/pi-cloud
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pi-cloud
+
+[Install]
+WantedBy=multi-user.target

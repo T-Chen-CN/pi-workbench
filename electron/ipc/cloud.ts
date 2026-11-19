@@ -19,6 +19,7 @@ import {
 } from '../cloud/link-store.js'
 import { describeWorkspaces } from '../cloud/inventory.js'
 import { DeviceAgent, type DeviceLinkState } from '../cloud/device-agent.js'
+import { CloudClientBridge, type CloudClientState } from '../cloud/client-link.js'
 
 export interface CloudIpcContext {
   logger: {
@@ -30,9 +31,33 @@ export interface CloudIpcContext {
   listWorkspacePaths: () => string[]
   /** 状态变化推给渲染层（托盘 / 云端页角标） */
   onStateChange: (state: DeviceLinkState) => void
+  /** 客户端通道的帧与状态推给云端页 */
+  onClientFrame: (frame: unknown) => void
+  onClientState: (state: CloudClientState) => void
 }
 
 let deviceAgent: DeviceAgent | null = null
+let clientBridge: CloudClientBridge | null = null
+
+/** 渲染层只能发这几种客户端帧；其余一律拒绝，避免把主进程当代理 */
+const CLIENT_FRAME_TYPES = new Set([
+  'say',
+  'confirm_plan',
+  'stop_reply',
+  'stop_task',
+  'ack',
+  'ping',
+])
+
+function ensureClientBridge(context: CloudIpcContext): CloudClientBridge {
+  if (clientBridge) return clientBridge
+  clientBridge = new CloudClientBridge({
+    logger: context.logger,
+    onFrame: (frame) => context.onClientFrame(frame),
+    onState: (state) => context.onClientState(state),
+  })
+  return clientBridge
+}
 
 async function ensureAgent(context: CloudIpcContext): Promise<DeviceAgent> {
   if (deviceAgent) return deviceAgent
@@ -78,6 +103,8 @@ export async function startCloudDeviceAgentIfLinked(context: CloudIpcContext): P
 
 /** 退出前把在跑的工单标 interrupted 并尽量送出队列 */
 export async function shutdownCloudDeviceAgent(): Promise<void> {
+  clientBridge?.close()
+  clientBridge = null
   if (!deviceAgent) return
   const agent = deviceAgent
   deviceAgent = null
@@ -152,11 +179,16 @@ export function registerCloudIpc(context: CloudIpcContext): void {
       })
       const agent = await ensureAgent(context)
       await agent.start()
+      // 换了 token：客户端通道必须重连，否则还在用旧凭据
+      clientBridge?.close()
+      clientBridge = null
       return { success: true, link: toLinkView(readCloudLink()), state: agent.getState() }
     }
   )
 
   handleIpc('cloud:unlink', async () => {
+    clientBridge?.close()
+    clientBridge = null
     const link = readCloudLink()
     if (link && deviceAgent) await deviceAgent.unlink()
     await clearCloudLink()
@@ -190,6 +222,77 @@ export function registerCloudIpc(context: CloudIpcContext): void {
     await deviceAgent.refreshWorkspaces()
     return { success: true, workspaces: await describeWorkspaces(context.listWorkspacePaths()) }
   })
+
+  /** 云端页：打开客户端通道（未配对时返回失败，由页面引导去配对） */
+  handleIpc('cloud:clientOpen', async () => {
+    const bridge = ensureClientBridge(context)
+    return { success: true, state: bridge.open() }
+  })
+
+  handleIpc('cloud:clientClose', async () => {
+    clientBridge?.close()
+    return { success: true }
+  })
+
+  handleIpc('cloud:clientSend', async (_event, frame: { type?: string }) => {
+    const bridge = ensureClientBridge(context)
+    const type = String(frame?.type ?? '')
+    if (!CLIENT_FRAME_TYPES.has(type)) {
+      return { success: false, error: `Unsupported frame type: ${type}` }
+    }
+    return bridge.send(frame as never)
+  })
+
+  /** 云端配置：桌面端通过主进程代理（渲染层不直接打云端，避免 CORS 与凭据外泄） */
+  handleIpc('cloud:getConfig', async () => {
+    const link = readCloudLink()
+    if (!link) return { success: false, error: 'This device is not paired' }
+    const token = readCloudToken(link)
+    if (!token) return { success: false, error: 'Saved token cannot be decrypted; pair again.' }
+    try {
+      const response = await fetch(`${link.baseUrl}/v1/cloud-config`, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (!response.ok) return { success: false, error: `HTTP ${response.status}` }
+      return { success: true, config: await response.json() }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  handleIpc('cloud:saveConfig', async (_event, config: unknown) => {
+    const link = readCloudLink()
+    if (!link) return { success: false, error: 'This device is not paired' }
+    const token = readCloudToken(link)
+    if (!token) return { success: false, error: 'Saved token cannot be decrypted; pair again.' }
+    try {
+      const response = await fetch(`${link.baseUrl}/v1/cloud-config`, {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(config ?? {}),
+        signal: AbortSignal.timeout(15_000),
+      })
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>
+      if (!response.ok) {
+        return {
+          success: false,
+          error: String(payload.error ?? `HTTP ${response.status}`),
+        }
+      }
+      return { success: true, result: payload }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  handleIpc('cloud:clientState', async () => ({
+    success: true,
+    state: clientBridge?.getState() ?? { status: 'closed' },
+  }))
 
   handleIpc('cloud:listWorkspaces', async () => ({
     success: true,
