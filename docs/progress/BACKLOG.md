@@ -22,7 +22,7 @@
 | R-23 | 输出预算与截断的完整处理（详见 §3） | P0 | 🟡 部分完成（2026-11-06） |
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
-| C-01 | 云端 Agent（开发调度）：Pi 内核 + 工单级委派 | P0 | 📋 需求与部署基线已定稿（[CLOUD_AGENT_PI](../requirements/CLOUD_AGENT_PI.md)），未开工；开始前先补 G1–G7（约 11 人日） |
+| C-01 | 云端 Agent（开发调度）：Pi 内核 + 工单级委派 | P0 | 📋 需求 v2 与部署基线已定稿（[CLOUD_AGENT_PI](../requirements/CLOUD_AGENT_PI.md)），未开工；开始前先补 G1–G7（P0 约 16 人日） |
 
 ### 已交付（只留一行，细节在 git）
 
