@@ -9,6 +9,7 @@ export default tseslint.config(
       'dist-electron/**',
       'release/**',
       'pi-bridge/dist/**',
+      'apps/cloud/dist/**',
       'node_modules/**',
       'cache/**',
       'data/**',

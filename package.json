@@ -18,7 +18,8 @@
   "main": "dist-electron/main.js",
   "type": "module",
   "workspaces": [
-    "pi-bridge"
+    "pi-bridge",
+    "apps/cloud"
   ],
   "scripts": {
     "predev": "npm run build:bridge && npm run build:main",
@@ -29,6 +30,9 @@
     "build:renderer": "cross-env NODE_OPTIONS=--max-old-space-size=4096 vite build",
     "build:main": "tsc -p electron/tsconfig.json && tsc -p electron/tsconfig.preload.json",
     "build:bridge": "cd pi-bridge && npm run build",
+    "build:cloud": "npm run build --workspace @pi-workbench/cloud",
+    "type-check:cloud": "npm run type-check --workspace @pi-workbench/cloud",
+    "cloud:start": "npm run start --workspace @pi-workbench/cloud",
     "type-check": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
     "package": "npm run build && electron-builder",
     "package:win": "npm run build && electron-builder --win",

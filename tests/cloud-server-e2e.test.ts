@@ -1,0 +1,412 @@
+/**
+ * 云端服务端到端（C2 的核心证据）：
+ * 建账号 → 登录 → 生成配对码 → 配对 → 设备通道 + 客户端通道 → 确认方案授权 →
+ * 派活 → 终端回流 → 完成；以及设备离线 → 工单 cancelled(device-offline)。
+ *
+ * 这里**不碰模型**：云端会话没有推配置，`ensureAgent()` 不启动。派活路径本身
+ * 不依赖模型，所以工单状态机与两条通道可以在无 Key 的环境里验收。
+ */
+
+// @vitest-environment node
+
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { promises as fs } from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+import { WebSocket } from 'ws'
+import { CLOUD_PROTOCOL_VERSION } from 'pi-bridge'
+import { createCloudServer, type CloudServer } from '../apps/cloud/src/main'
+
+const WORKSPACE = 'E:/tmp/cloud-e2e-repo'
+
+let tmpRoot: string
+let server: CloudServer
+let base: string
+let cookie: string
+let deviceId: string
+let token: string
+
+function jsonHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return { 'content-type': 'application/json', cookie, ...extra }
+}
+
+async function waitFor<T>(probe: () => T | Promise<T>, timeoutMs = 3000, label = 'condition'): Promise<T> {
+  const started = Date.now()
+  for (;;) {
+    const value = await probe()
+    if (value) return value
+    if (Date.now() - started > timeoutMs) throw new Error(`timeout waiting for ${label}`)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
+function openSocket(url: string, headers: Record<string, string>, sink: any[]): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url, { headers })
+    socket.on('message', (raw) => {
+      const text = typeof raw === 'string' ? raw : raw.toString()
+      sink.push(JSON.parse(text))
+    })
+    socket.once('open', () => resolve(socket))
+    socket.once('error', reject)
+  })
+}
+
+beforeAll(async () => {
+  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-cloud-e2e-'))
+  server = await createCloudServer({
+    dataDir: tmpRoot,
+    workspaceDir: path.join(tmpRoot, 'workspace'),
+    agentDir: path.join(tmpRoot, 'agent'),
+    port: 0,
+    encryptionKey: Buffer.alloc(32, 3),
+    cookieSecret: 'e2e-cookie-secret',
+    secureCookies: false,
+    version: 'e2e',
+  })
+  const port = await server.listen()
+  base = `http://127.0.0.1:${port}`
+
+  // 建账号（F-01）→ 登录（F-02）
+  const setup = await fetch(`${base}/v1/setup`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: 'password-1234' }),
+  })
+  expect(setup.status).toBe(200)
+  const again = await fetch(`${base}/v1/setup`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: 'password-1234' }),
+  })
+  expect(again.status).toBe(409)
+
+  const login = await fetch(`${base}/v1/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: 'password-1234' }),
+  })
+  expect(login.status).toBe(200)
+  const setCookie = login.headers.getSetCookie?.() ?? []
+  cookie = setCookie[0].split(';')[0]
+
+  // 配对码（F-04）→ 配对（F-05）
+  const codeResponse = await fetch(`${base}/v1/pair/code`, {
+    method: 'POST',
+    headers: jsonHeaders(),
+  })
+  const { code } = (await codeResponse.json()) as { code: string }
+  expect(code).toMatch(/^\d{6}$/)
+
+  const pair = await fetch(`${base}/v1/pair`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      code,
+      deviceName: 'e2e-device',
+      platform: 'win32',
+      workspaces: [{ path: WORKSPACE, name: 'cloud-e2e-repo', isGit: true }],
+    }),
+  })
+  expect(pair.status).toBe(200)
+  const paired = (await pair.json()) as { deviceId: string; token: string }
+  deviceId = paired.deviceId
+  token = paired.token
+
+  // 同一码二次使用失败（A-02 / A-03），且不透露细节
+  const reuse = await fetch(`${base}/v1/pair`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code, deviceName: 'x', platform: 'x', workspaces: [] }),
+  })
+  expect(reuse.status).toBe(401)
+  expect(await reuse.json()).toMatchObject({ code: 'invalid-credential' })
+}, 30_000)
+
+afterAll(async () => {
+  await server?.close().catch(() => undefined)
+  // 关闭后仍有 in-flight 的帧回调；等一拍再删目录，否则原子写会撞上被删的目录
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => undefined)
+})
+
+describe('控制面', () => {
+  it('健康检查与登录态互相独立', async () => {
+    const health = await (await fetch(`${base}/v1/health`)).json()
+    expect(health).toMatchObject({ ok: true, version: 'e2e', hasAccount: true })
+    const me = await (await fetch(`${base}/v1/me`, { headers: { cookie } })).json()
+    expect(me).toMatchObject({ authenticated: true, hasAccount: true })
+    const anonymous = await (await fetch(`${base}/v1/me`)).json()
+    expect(anonymous).toMatchObject({ authenticated: false })
+  })
+
+  it('未登录访问设备清单被拒', async () => {
+    const response = await fetch(`${base}/v1/devices`)
+    expect(response.status).toBe(401)
+  })
+
+  it('云端配置加密落盘、只回掩码（F-11 / F-12）', async () => {
+    const put = await fetch(`${base}/v1/cloud-config`, {
+      method: 'PUT',
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        provider: 'openai',
+        apiUrl: 'https://api.example.com/v1',
+        model: 'gpt-x',
+        apiKey: 'sk-live-abcd1234',
+      }),
+    })
+    expect(put.status).toBe(200)
+    const stored = await fs.readFile(path.join(tmpRoot, 'config.json'), 'utf-8')
+    expect(stored).not.toContain('sk-live-abcd1234')
+    const read = await (await fetch(`${base}/v1/cloud-config`, { headers: { cookie } })).json()
+    expect(read).toMatchObject({ configured: true, apiKeyMasked: '********1234' })
+  })
+
+  it('匹配错误时统一错误码，不区分「码不存在 / 已用过」', async () => {
+    const wrong = await fetch(`${base}/v1/pair`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: '000000', deviceName: 'x', platform: 'x', workspaces: [] }),
+    })
+    expect(wrong.status).toBe(401)
+    expect(await wrong.json()).toMatchObject({ code: 'invalid-credential' })
+  })
+})
+
+describe('派活闭环', () => {
+  let deviceFrames: any[] = []
+  let clientFrames: any[] = []
+  let device: WebSocket
+  let client: WebSocket
+
+  beforeAll(async () => {
+    deviceFrames = []
+    clientFrames = []
+    device = await openSocket(
+      `ws://127.0.0.1:${new URL(base).port}/device/ws`,
+      { authorization: `Bearer ${token}` },
+      deviceFrames
+    )
+    device.send(
+      JSON.stringify({
+        v: CLOUD_PROTOCOL_VERSION,
+        type: 'hello',
+        deviceId,
+        workspaces: [{ path: WORKSPACE, name: 'cloud-e2e-repo', isGit: true }],
+      })
+    )
+    client = await openSocket(
+      `ws://127.0.0.1:${new URL(base).port}/client/ws`,
+      { authorization: `Bearer ${token}` },
+      clientFrames
+    )
+    await waitFor(() => clientFrames.some((frame) => frame.type === 'snapshot'), 3000, 'snapshot')
+  })
+
+  afterAll(() => {
+    client?.close()
+    device?.close()
+  })
+
+  it('确认方案 → 派活 → 终端回流 → 完成（A-06 / A-08 / A-35）', async () => {
+    const auth = await fetch(`${base}/v1/authorizations`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        planText: '在 cloud-e2e-repo 里加一个脚本',
+        items: [{ deviceId, workspacePath: WORKSPACE }],
+        quota: 2,
+      }),
+    })
+    const { authorization } = (await auth.json()) as { authorization: { id: string } }
+    expect(authorization.id).toMatch(/^auth-/)
+
+    const outcome = await server.dispatcher.dispatch({
+      authorizationId: authorization.id,
+      workUnitId: 'unit-e2e',
+      deviceId,
+      workspacePath: WORKSPACE,
+      title: 'add script',
+      background: 'because',
+      goal: 'add script',
+      acceptance: 'script runs',
+      commit: false,
+    })
+    expect(outcome.ok).toBe(true)
+    const taskId = outcome.ok ? outcome.task.id : ''
+
+    // 终端收到 task 帧
+    const taskFrame = await waitFor(
+      () => deviceFrames.find((frame) => frame.type === 'task' && frame.task?.id === taskId),
+      3000,
+      'task frame'
+    )
+    expect(taskFrame.task.spec.workUnitId).toBe('unit-e2e')
+
+    // 接单 → 执行 → 完成
+    for (const status of ['assigned', 'running'] as const) {
+      device.send(
+        JSON.stringify({
+          v: CLOUD_PROTOCOL_VERSION,
+          type: 'task_status',
+          taskId,
+          status,
+          at: Date.now(),
+        })
+      )
+      await waitFor(
+        () => server.store.findTask(taskId)?.status === status,
+        3000,
+        `status ${status}`
+      )
+    }
+
+    device.send(
+      JSON.stringify({
+        v: CLOUD_PROTOCOL_VERSION,
+        type: 'task_result',
+        taskId,
+        at: Date.now(),
+        result: {
+          summary: 'added script',
+          changedFiles: [{ path: 'run.sh', kind: 'added' }],
+          tests: { command: 'bash run.sh', passed: true },
+          branch: 'pi/cloud-unit-e2e',
+          commit: 'abc1234',
+        },
+      })
+    )
+
+    const done = (await waitFor(
+      () => (server.store.findTask(taskId)?.status === 'done' ? server.store.findTask(taskId) : null),
+      3000,
+      'task done'
+    ))!
+    expect(done.terminalReason).toBe('completed')
+    expect(done.progress.changedFiles).toEqual([{ path: 'run.sh', kind: 'added' }])
+
+    // 客户端通过事件流看到这条工单终态
+    const events = await waitFor(
+      () =>
+        clientFrames.find(
+          (frame) => frame.type === 'event' && frame.event?.type === 'task' && frame.event.task?.id === taskId && frame.event.task.status === 'done'
+        ),
+      3000,
+      'client task event'
+    )
+    expect(events.seq).toBeGreaterThan(0)
+
+    // 授权额度被扣掉一次
+    const snapshot = await (await fetch(`${base}/v1/snapshot`, { headers: { cookie } })).json()
+    const used = snapshot.authorizations.find((item: any) => item.id === authorization.id)
+    expect(used.used).toBe(1)
+  })
+
+  it('设备离线 → 未完成工单直接 cancelled(device-offline)，不排队（A-41）', async () => {
+    const auth = await fetch(`${base}/v1/authorizations`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        planText: 'second plan',
+        items: [{ deviceId, workspacePath: WORKSPACE }],
+        quota: 2,
+      }),
+    })
+    const { authorization } = (await auth.json()) as { authorization: { id: string } }
+    const outcome = await server.dispatcher.dispatch({
+      authorizationId: authorization.id,
+      workUnitId: 'unit-offline',
+      deviceId,
+      workspacePath: WORKSPACE,
+      title: 'will be cancelled',
+      background: 'b',
+      goal: 'g',
+      acceptance: 'a',
+      commit: false,
+    })
+    expect(outcome.ok).toBe(true)
+    const taskId = outcome.ok ? outcome.task.id : ''
+
+    device.close()
+    const cancelled = (await waitFor(
+      () => {
+        const task = server.store.findTask(taskId)
+        return task?.status === 'cancelled' ? task : null
+      },
+      5000,
+      'cancelled task'
+    ))!
+    expect(cancelled.terminalReason).toBe('device-offline')
+  })
+
+  it('离线设备不接受新工单（F-15）', async () => {
+    const auth = await fetch(`${base}/v1/authorizations`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        planText: 'third plan',
+        items: [{ deviceId, workspacePath: WORKSPACE }],
+        quota: 2,
+      }),
+    })
+    const { authorization } = (await auth.json()) as { authorization: { id: string } }
+    await waitFor(() => !server.hub.isDeviceOnline(deviceId), 3000, 'device offline')
+    const outcome = await server.dispatcher.dispatch({
+      authorizationId: authorization.id,
+      workUnitId: 'unit-offline-2',
+      deviceId,
+      workspacePath: WORKSPACE,
+      title: 'rejected',
+      background: 'b',
+      goal: 'g',
+      acceptance: 'a',
+      commit: false,
+    })
+    expect(outcome).toMatchObject({ ok: false, code: 'device-offline' })
+  })
+
+  it('非 git 工作区与越界授权都被拒绝（G10 / A-07）', async () => {
+    // 上一个用例把设备断开了；派活前的在线校验先于仓库校验，所以这里重新连上
+    const revived: any[] = []
+    const reconnected = await openSocket(
+      `ws://127.0.0.1:${new URL(base).port}/device/ws`,
+      { authorization: `Bearer ${token}` },
+      revived
+    )
+    reconnected.send(
+      JSON.stringify({
+        v: CLOUD_PROTOCOL_VERSION,
+        type: 'hello',
+        deviceId,
+        workspaces: [{ path: WORKSPACE, name: 'cloud-e2e-repo', isGit: true }],
+      })
+    )
+    await waitFor(() => server.hub.isDeviceOnline(deviceId), 3000, 'device back online')
+
+    const auth = await fetch(`${base}/v1/authorizations`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        planText: 'fourth plan',
+        items: [{ deviceId, workspacePath: WORKSPACE }],
+        quota: 1,
+      }),
+    })
+    const { authorization } = (await auth.json()) as { authorization: { id: string } }
+
+    const otherRepo = await server.dispatcher.dispatch({
+      authorizationId: authorization.id,
+      workUnitId: 'unit-other',
+      deviceId,
+      workspacePath: 'E:/tmp/another-repo',
+      title: 'out of scope',
+      background: 'b',
+      goal: 'g',
+      acceptance: 'a',
+      commit: false,
+    })
+    expect(otherRepo).toMatchObject({ ok: false, code: 'unknown-workspace' })
+    reconnected.close()
+  })
+})

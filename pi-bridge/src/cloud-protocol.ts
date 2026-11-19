@@ -323,6 +323,19 @@ export interface CloudSnapshot {
   messages: CloudChatMessage[]
   tasks: CloudTaskSnapshot[]
   devices: CloudDeviceSnapshot[]
+  /** 当前有效的授权（UI 用来显示「已授权 N 张 / 剩 M 张」） */
+  authorizations: CloudAuthorizationView[]
+}
+
+/** 对客户端只暴露授权范围与额度，不暴露内部实现 */
+export interface CloudAuthorizationView {
+  id: string
+  items: Array<{ deviceId: string; workspacePath: string }>
+  quota: number
+  used: number
+  confirmedAt: number
+  confirmedSummary: string
+  expiresAt: number
 }
 
 /** 服务端 → 客户端的增量事件 */
@@ -351,6 +364,14 @@ export type ClientToServerFrame =
   | ({ type: 'resume'; lastAckSeq: number } & FrameBase)
   | ({ type: 'ack'; seq: number } & FrameBase)
   | ({ type: 'say'; text: string; clientMessageId: string } & FrameBase)
+  | ({
+      type: 'confirm_plan'
+      /** 方案原文（自然语言，不做结构化编辑） */
+      planText: string
+      /** 授权范围：设备 × 仓库；用户手选，避免模型自报 */
+      items: Array<{ deviceId: string; workspacePath: string }>
+      quota: number
+    } & FrameBase)
   | ({ type: 'stop_reply' } & FrameBase)
   | ({ type: 'stop_task'; taskId: string } & FrameBase)
   | ({ type: 'ping'; at: number } & FrameBase)
@@ -377,7 +398,7 @@ export interface CloudTaskMilestone {
   kind: CloudTaskMilestoneKind
   text: string
   at: number
-  changedFiles?: string[]
+  changedFiles?: CloudChangedFile[]
 }
 
 export type DeviceToServerFrame =
@@ -387,6 +408,14 @@ export type DeviceToServerFrame =
   | ({ type: 'workspaces'; workspaces: CloudWorkspaceInfo[] } & FrameBase)
   | ({ type: 'heartbeat'; at: number } & FrameBase)
   | ({ type: 'task_status'; taskId: string; status: CloudTaskStatus; at: number } & FrameBase)
+  | ({
+      type: 'task_worktree'
+      taskId: string
+      unitId: string
+      path: string
+      branch?: string
+      at: number
+    } & FrameBase)
   | ({ type: 'task_milestone'; taskId: string; milestone: CloudTaskMilestone } & FrameBase)
   | ({ type: 'task_question'; taskId: string; questionId: string; text: string; at: number } & FrameBase)
   | ({ type: 'task_result'; taskId: string; result: CloudTaskResult; at: number } & FrameBase)
@@ -405,6 +434,7 @@ export type ServerToDeviceFrame =
   | ({ type: 'task'; seq: number; task: CloudTaskSnapshot } & FrameBase)
   | ({ type: 'task_cancel'; seq: number; taskId: string; reason: string } & FrameBase)
   | ({ type: 'task_answer'; taskId: string; questionId: string; text: string; at: number } & FrameBase)
+  | ({ type: 'task_message'; seq: number; taskId: string; text: string; at: number } & FrameBase)
   | ({ type: 'pong'; at: number } & FrameBase)
   | ({ type: 'error'; code: CloudErrorCode; message: string; fatal: boolean } & FrameBase)
 
