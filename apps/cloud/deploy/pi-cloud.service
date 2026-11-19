@@ -10,7 +10,9 @@ User=pi-cloud
 Group=pi-cloud
 WorkingDirectory=/opt/pi-cloud/current
 EnvironmentFile=/etc/pi-cloud/env
-ExecStart=/usr/bin/node /opt/pi-cloud/current/dist/main.js
+# node 的安装位置因系统而异（apt 在 /usr/bin，nodejs.org tarball 在 /usr/local/bin）。
+# systemd 的服务 PATH 含 /usr/local/bin，用 env 解析即可，不要写死绝对路径。
+ExecStart=/usr/bin/env node /opt/pi-cloud/current/dist/main.js
 Restart=always
 RestartSec=2
 # 云端只监听 127.0.0.1，TLS 与 WS 升级交给 Caddy

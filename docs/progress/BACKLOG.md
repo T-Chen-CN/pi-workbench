@@ -22,7 +22,7 @@
 | R-23 | 输出预算与截断的完整处理（详见 §3） | P0 | 🟡 部分完成（2026-11-06） |
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
-| C-01 | 云端 Agent（开发调度）：Pi 内核 + 工单级委派 | P0 | 🟡 代码已落地（2026-11-21，见 [cloud-agent](../agent/cloud-agent.md)）：内核注入点 / 协议契约 / `apps/cloud` / 终端执行器 / 桌面端云端页 / Web 客户端 / 运维件 + 本机 127.0.0.1 全链路自测。**剩**：① 服务器部署（SSH 公钥未装到服务器，需用户把 `cache/pi-cloud-ed25519.pub` 加进 `ubuntu` 的 `authorized_keys`）；② 公网三端验收（A-19/A-20/A-21 与 §5 人工走查） |
+| C-01 | 云端 Agent（开发调度）：Pi 内核 + 工单级委派 | P0 | 🟡 代码 + 部署已落地（2026-11-21，见 [cloud-agent](../agent/cloud-agent.md)）：内核注入点 / 协议契约 / `apps/cloud` / 终端执行器 / 桌面端云端页 / Web 客户端 / 运维件；已部署到 `tchen-xiaoxiao.com`（systemd + Caddy + 每日备份），公网自检 32/32 通过（`apps/cloud/scripts/acceptance.mjs`）。**剩**：① 用户建管理员账号并从 Web 推模型配置；② 真派活闭环人工走查（A-19/A-20/A-21，需真实供应商 Key） |
 | C-03 | 云端 Agent P1 项（从 C-01 拆出） | P1 | ⬜ 未做：记忆自动抽取（挂 `session_before_compact`，内核钩子已就位）· 梦境整理 · 已读未读 · 追加指令打磨 · 结果 diff 回传 · 托盘角标 · 并发压测调优（含 A-25） |
 | C-02 | 云端工单停滞看门狗（P2，从 C-01 拆出） | P2 | ⬜ 未做：终端工具静默检测（工具 10 分钟无输出增量 → 上报 `task_stalled`）+ 云端定时主动检查（工单 20 分钟无事件 → 唤醒一轮 `get_task`）+ 终端 60 s 心跳 + 同一停滞只报一次 |
 

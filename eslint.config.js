@@ -68,13 +68,18 @@ export default tseslint.config(
   },
   {
     // 构建期脚本（Node ESM）
-    files: ['scripts/**/*.{js,mjs}', 'docs/**/*.mjs'],
+    files: ['scripts/**/*.{js,mjs}', 'docs/**/*.mjs', 'apps/cloud/scripts/**/*.mjs'],
     languageOptions: {
       sourceType: 'module',
       globals: {
         Buffer: 'readonly',
         console: 'readonly',
         process: 'readonly',
+        URL: 'readonly',
+        fetch: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        WebSocket: 'readonly',
       },
     },
   },

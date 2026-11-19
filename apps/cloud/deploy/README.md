@@ -7,6 +7,8 @@
 | `backup.sh` + `.service` + `.timer` | 每日 03:20 UTC 备份到 `/var/backups/pi-cloud`，留 7 天 |
 | `env.example` | `/etc/pi-cloud/env` 模板（`PI_CLOUD_ENC_KEY` 丢了就解不开云端模型 Key） |
 
+配套脚本：`../scripts/acceptance.mjs`（部署后跑一遍不依赖模型的自检，32 条断言）。
+
 目录约定：`/opt/pi-cloud/releases/<时间戳>` + `current` 软链；健康检查失败回滚上一条软链。
 
 完整部署与回滚步骤见 `docs/agent/cloud-agent.md`。

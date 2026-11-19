@@ -133,6 +133,17 @@ sudo systemctl enable --now pi-cloud pi-cloud-backup.timer
 # Caddyfile.snippet 贴进站点块后：sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
 ```
 
+本机打包脚本产出的是**自包含**运行包（`dist` + `web` + `node_modules` + `deploy`），服务器不跑 `npm install`：
+根 `package.json` 的 workspaces 带着桌面端的原生依赖（`node-pty`），即使 `--omit=dev` 也会被算进来。
+
+**已踩过的三个坑（照抄会省一轮）**：
+
+1. **node 路径**：单元里写 `ExecStart=/usr/bin/env node …`。apt 装在 `/usr/bin/node`，nodejs.org tarball 在
+   `/usr/local/bin/node`；systemd 服务的 `PATH` 含 `/usr/local/bin`，写死绝对路径在两种装法里必砸一个。
+2. **Caddy 日志目录**：站点块带 `log` 时，`/var/log/caddy` 必须存在且属主是运行 Caddy 的用户，否则 reload 直接 400。
+3. **`sudo caddy validate` 会以 root 创建那个日志文件**（0600 root:root），之后 caddy 用户再也打不开 →
+   reload 一直失败。validate 之后把该文件删掉（`sudo rm -f /var/log/caddy/*.log`）再 reload。
+
 切换版本（`current` 软链 + 健康检查 + 自动回滚）：
 
 ```bash
@@ -144,6 +155,33 @@ done || { sudo ln -sfn /opt/pi-cloud/releases/$PREV /opt/pi-cloud/current && sud
 ```
 
 回滚就是把 `current` 指回上一条 release 再 `restart`；更新只替换 `releases/`，不碰数据目录。
+
+### 5.1 验收脚本
+
+`apps/cloud/scripts/acceptance.mjs` 跑一遍**不依赖真实模型**的 F / A 项（账号、配对、双通道、快照、
+Key 掩码、协议拒绝、授权台账），32 条断言：
+
+```bash
+node apps/cloud/scripts/acceptance.mjs https://<域名>
+```
+
+前提：目标实例**还没建过账号**（脚本第一步会建临时账号）。跑完想恢复出厂：
+`systemctl stop pi-cloud` → 清空 `PI_CLOUD_DATA_DIR` → `start`。
+
+需要真实模型才能验的部分（真派活、里程碑、`ask_cloud` 追问、结果回流）在桌面端配对后手动走
+[AGENT-TESTING](../guides/AGENT-TESTING.md) 的云端段。
+
+### 5.2 现网记录
+
+| 项 | 值 |
+| --- | --- |
+| 域名 / 反代 | `tchen-xiaoxiao.com` → Caddy → `127.0.0.1:8787` |
+| 代码 | `/opt/pi-cloud/releases/<ts>` + `current` 软链 |
+| 数据 | `/var/lib/pi-cloud`（属主 `pi-cloud`） |
+| 配置 / 密钥 | `/etc/pi-cloud/env`（`0600 root:root`） |
+| 单元 | `pi-cloud.service`（`Restart=always`、`ProtectSystem=strict`）· `pi-cloud-backup.timer`（每日 03:20 UTC） |
+| 日志 | `journalctl -u pi-cloud` · `/var/log/caddy/pi-cloud.log`（20MiB × 5） |
+| 备份 | `/var/backups/pi-cloud/pi-cloud-<ts>.tar.gz`，留 7 天 |
 
 ## 6. 排障
 

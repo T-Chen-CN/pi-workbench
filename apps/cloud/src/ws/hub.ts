@@ -18,6 +18,8 @@ import {
   CLOUD_OUTBOX_MAX_ENTRIES,
   CLOUD_PROTOCOL_VERSION,
   decodeFrame,
+  CLIENT_TO_SERVER_TYPES,
+  DEVICE_TO_SERVER_TYPES,
   encodeFrame,
   type CloudErrorCode,
   type ClientToServerFrame,
@@ -478,11 +480,11 @@ export class Hub {
 export function decodeClientFrame(
   raw: string
 ): { ok: true; frame: ClientToServerFrame } | { ok: false; code: CloudErrorCode; message: string } {
-  return decodeFrame<ClientToServerFrame>(raw)
+  return decodeFrame<ClientToServerFrame>(raw, CLIENT_TO_SERVER_TYPES)
 }
 
 export function decodeDeviceFrame(
   raw: string
 ): { ok: true; frame: DeviceToServerFrame } | { ok: false; code: CloudErrorCode; message: string } {
-  return decodeFrame<DeviceToServerFrame>(raw)
+  return decodeFrame<DeviceToServerFrame>(raw, DEVICE_TO_SERVER_TYPES)
 }

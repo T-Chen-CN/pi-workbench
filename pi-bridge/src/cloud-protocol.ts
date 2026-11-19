@@ -104,11 +104,41 @@ export function encodeFrame(frame: unknown): string {
   return JSON.stringify(frame)
 }
 
+/** 已登记的上行帧类型：不认识就直接回 `invalid-frame`，否则会被静默丢弃、对端干等 */
+export const CLIENT_TO_SERVER_TYPES: ReadonlySet<string> = new Set([
+  'resume',
+  'ack',
+  'say',
+  'confirm_plan',
+  'stop_reply',
+  'stop_task',
+  'ping',
+])
+
+export const DEVICE_TO_SERVER_TYPES: ReadonlySet<string> = new Set([
+  'hello',
+  'resume',
+  'ack',
+  'workspaces',
+  'heartbeat',
+  'task_status',
+  'task_worktree',
+  'task_milestone',
+  'task_question',
+  'task_result',
+  'task_failed',
+  'task_interrupted',
+  'ping',
+])
+
 /**
- * 解帧：只做三类检查——JSON 合法、是对象、`v` 匹配。
+ * 解帧：JSON 合法、是对象、`v` 匹配、`type` 在本次通道的登记表里。
  * 具体字段校验交给各帧的处理分支（避免这里变成第二个 schema 定义）。
  */
-export function decodeFrame<T extends FrameBase>(raw: unknown): CloudFrameResult<T> {
+export function decodeFrame<T extends FrameBase>(
+  raw: unknown,
+  knownTypes?: ReadonlySet<string>
+): CloudFrameResult<T> {
   if (typeof raw !== 'string') return { ok: false, code: 'invalid-frame', message: 'Frame must be text.' }
   let parsed: unknown
   try {
@@ -127,8 +157,12 @@ export function decodeFrame<T extends FrameBase>(raw: unknown): CloudFrameResult
       message: `Protocol version ${String(version)} is not supported (need ${CLOUD_PROTOCOL_VERSION}).`,
     }
   }
-  if (typeof (parsed as { type?: unknown }).type !== 'string') {
+  const type = (parsed as { type?: unknown }).type
+  if (typeof type !== 'string') {
     return { ok: false, code: 'invalid-frame', message: 'Frame is missing type.' }
+  }
+  if (knownTypes && !knownTypes.has(type)) {
+    return { ok: false, code: 'invalid-frame', message: `Unknown frame type "${type}".` }
   }
   return { ok: true, frame: parsed as T }
 }

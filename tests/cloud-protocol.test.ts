@@ -8,9 +8,11 @@
 import { CLOUD_PROTOCOL_VERSION as RENDERER_PROTOCOL_VERSION } from '../src/types/cloud'
 import { describe, expect, it } from 'vitest'
 import {
+  CLIENT_TO_SERVER_TYPES,
   CLOUD_PROTOCOL_VERSION,
   CLOUD_TASK_EVENT_CUSTOM_TYPE,
   CLOUD_TASK_TERMINAL_STATUSES,
+  DEVICE_TO_SERVER_TYPES,
   buildTaskEventMessage,
   classifyConnectError,
   decodeFrame,
@@ -56,6 +58,39 @@ describe('帧编解码', () => {
       ok: false,
       code: 'protocol-version',
     })
+  })
+
+  it('给了登记表就拒绝未登记的帧类型（否则被静默丢弃、对端干等）', () => {
+    const unknown = JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, type: 'nope' })
+    expect(decodeFrame(unknown)).toMatchObject({ ok: true })
+    expect(decodeFrame(unknown, CLIENT_TO_SERVER_TYPES)).toMatchObject({
+      ok: false,
+      code: 'invalid-frame',
+    })
+    expect(decodeFrame(unknown, DEVICE_TO_SERVER_TYPES)).toMatchObject({
+      ok: false,
+      code: 'invalid-frame',
+    })
+  })
+
+  it('登记表覆盖两个方向的全部帧类型', () => {
+    for (const type of ['say', 'confirm_plan', 'stop_reply', 'stop_task', 'ack', 'ping', 'resume']) {
+      expect(CLIENT_TO_SERVER_TYPES.has(type)).toBe(true)
+    }
+    for (const type of [
+      'hello',
+      'workspaces',
+      'heartbeat',
+      'task_status',
+      'task_worktree',
+      'task_milestone',
+      'task_question',
+      'task_result',
+      'task_failed',
+      'task_interrupted',
+    ]) {
+      expect(DEVICE_TO_SERVER_TYPES.has(type)).toBe(true)
+    }
   })
 })
 
