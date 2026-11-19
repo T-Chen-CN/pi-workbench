@@ -10,15 +10,15 @@
 | 项 | 值 |
 | --- | --- |
 | 版本 | **0.10.0**（2026-11-11） |
-| 阶段 | 本地 Agent 工作台稳定期；云端 Agent 换内核（Pi）尚未开工 |
+| 阶段 | 本地 Agent 工作台稳定期；云端 Agent P0 代码落地，待服务器部署与公网验收 |
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
-| 质量门槛 | `type-check` · `lint` · `npm test`（131 文件 / 1407 用例）· `design-system` 全绿 |
-| 云端 Agent | **旧实现（Hermes）已整体移除**；替代方案（Pi 内核 + 工单级委派）**需求 v3.2 与部署基线均定稿**，开工前置 PoC（V1 双实例并发 / V2 压缩前历史）**已于 2026-11-20 跑通**，未开工 |
+| 质量门槛 | `type-check` · `lint` · `npm test`（141 文件 / 1519 用例）· `design-system` 全绿 |
+| 云端 Agent | **P0 代码已落地**（内核注入点 + 协议契约 + `apps/cloud` + 终端执行器 + 桌面端云端页 + Web 客户端 + 运维件），本机 127.0.0.1 全链路已验证；**服务器部署待办**（SSH 公钥尚未装到服务器，见 [BACKLOG](./BACKLOG.md)） |
 
 ## 正在做 / 下一步
 
-- **云端 Agent（开发调度）**：需求 v3.2 定稿（[CLOUD_AGENT_PI](../requirements/CLOUD_AGENT_PI.md)），服务器基线已验证，未开工。方向：云端只做调度 + 汇报（无 `fs` / `bash`），终端执行，工单级委派；三端可见（桌面端独立云端页 + Web 完整客户端），云端**单会话** + 记忆 / 知识库 / 梦境维护长内容；服务器 `43.160.211.128`（Ubuntu 26.04 · Node 24 · Caddy + systemd），WS 往返 p50 ≈ 54 ms。P0 约 27 人日（PoC 已花 0.5，剩 ≈ 26.5），开工前需补 §4.0 的 G1–G3、G6–G12（G5 已取消）；**V1/V2 PoC 已于 2026-11-20 通过**（双实例并发 30 轮互不干扰、一实例 `dispose` 不打断另一实例回合、`session_before_compact` 拿到完整 `branchEntries`，`process.env` Key 串写已实测确认为硬约束），见[实测报告](../reports/cloud-agent-poc-verification-2026-11-20.md)。
+- **云端 Agent（开发调度）P0**：需求 v3.2（[CLOUD_AGENT_PI](../requirements/CLOUD_AGENT_PI.md)），实现与运维见 [cloud-agent](../agent/cloud-agent.md)。已完成：PR1 内核注入点（扩展可剔除 / 工具白名单 / 权限入参 / 常驻 trace / 压缩前钩子）、PR2 协议契约、`apps/cloud`（控制面 + 双 WS + 单会话 + 六工具 + 状态机 + 事件唤醒）、终端执行器（G6/G7/G8/G10/G12 + `ask_cloud`）、桌面端云端页与状态栏指示器、Web 完整客户端、运维件（systemd / Caddy / 每日备份 / 自包含打包脚本）。**待办**：① 服务器部署（受 SSH 公钥未安装阻塞）；② 公网三端验收（A-19/A-20/A-21 与人工验收）；③ P1 项（记忆抽取 / 梦境 / 已读未读 / diff 回传 / 托盘角标，A-25）。
 - **R-23 剩余子项**：B4 续写截断的后续动作、B7 上下文临界预警、B8 轻任务预算、`reasoning_effort` 联动——见 [BACKLOG](./BACKLOG.md) §3。
 - **平台手动验收** V-01（macOS dmg）/ V-02（Linux AppImage）尚未做。
 
@@ -31,4 +31,4 @@
 ---
 
 **维护者**: Pi Workbench Team
-**最后更新**: 2026-11-11
+**最后更新**: 2026-11-21

@@ -31,8 +31,10 @@ npm run build      # 渲染层 + bridge + 主进程
 | `electron/ipc/register.ts` | `handleIpc` + `isTrustedIpcSender`：只接受主窗口与登记过的辅助窗口主框架，ready 之后 fail-closed |
 | `src/` | 渲染进程分层：`components/`（扁平，**禁建子目录**）· `store/`（一域一个 Zustand store）· `hooks/` · `utils/` · `workspace/` · `panelHost/` · `theme/` · `pdf/` · `api/`（IPC 封装 + 浏览器 mock 回退） |
 | `pi-bridge/` | 独立的 Agent 桥接包（`AgentManager`），有自己的 `package.json` / `tsconfig`；改完要 `npm run build:bridge` |
+| `apps/cloud/` | 云端服务（`@pi-workbench/cloud`，进 npm workspaces）：控制面 + 两条 WS + 单会话；`npm run build:cloud`；协议帧在 `pi-bridge/src/cloud-protocol.ts`；见 [cloud-agent](docs/agent/cloud-agent.md) |
 | `tests/` | 扁平目录，文件名与源码同名（`src/utils/fileTree.ts` → `tests/file-tree.test.ts`）；`tests/design-system.test.ts` 是强制门槛 |
 | `docs/` | 规范原文，`docs/README.md` 是唯一索引 |
+| `electron/cloud/` | 终端执行器（device agent / 工单 worktree / 工具守卫），只跑在桌面端主进程 |
 
 文件级完整目录见 [PROJECT_STRUCTURE](docs/architecture/PROJECT_STRUCTURE.md)。
 

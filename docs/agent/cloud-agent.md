@@ -1,0 +1,158 @@
+# 云端 Agent（apps/cloud）—— 实现与运维
+
+> 需求与验收在 [CLOUD_AGENT_PI](../requirements/CLOUD_AGENT_PI.md)（v3.2，唯一需求源）。
+> 本文只讲**怎么实现的、怎么部署、坏了怎么查**。设计与取舍去读需求文档的 D-01~D-34。
+
+---
+
+## 1. 组成
+
+| 位置 | 角色 | 有没有 fs / bash |
+| --- | --- | --- |
+| `apps/cloud`（`@pi-workbench/cloud`） | 云端控制面 + 数据面 + **唯一的云端会话** | **没有**（工具白名单只有 6 个） |
+| `pi-bridge/src/cloud-protocol.ts` | 协议契约（帧、状态机常量、事件载荷） | — |
+| `electron/cloud/*` | 桌面端内置的终端执行器（device agent） | 有（工单在自己的 worktree 里跑） |
+| `apps/cloud/web/*` | Web 客户端（纯 ESM，零构建） | — |
+| `src/components/CloudView.tsx` | 桌面端云端页（独立视图） | — |
+
+三端共用**一套帧格式**，渲染各自实现：桌面端不用 `chatStore` / `workspaceStore` / `diffStore`。
+
+## 2. 进程与目录
+
+```
+浏览器 / 桌面端 ──WSS /client/ws──┐
+                                  ├── Caddy :443 ──> 127.0.0.1:8787 (apps/cloud)
+终端 device agent ─WSS /device/ws─┘
+```
+
+云端数据目录（`PI_CLOUD_DATA_DIR`，默认 `/var/lib/pi-cloud`）：
+
+| 文件 / 目录 | 内容 |
+| --- | --- |
+| `accounts.json` | 唯一管理员：`scrypt` 哈希 + salt |
+| `devices.json` | 设备记录；token 只存 `SHA-256(token + salt)` |
+| `pairing.json` | 6 位一次性码（5 分钟，CAS 作废） |
+| `config.json` | 云端模型配置；API Key 为 AES-256-GCM 密文（`v1.iv.tag.ct`） |
+| `tasks.json` / `units.json` / `authorizations.json` | 工单、工作单元、授权台账 |
+| `agent/` | 云端会话（Pi SDK 的 agentDir）：`sessions/*.jsonl` 是历史与导出的唯一真相源 |
+
+桌面端只落两处：`{appDir}/config/cloud-link.json`（token，`safeStorage` 加密）与
+`{appDir}/data/cloud/`（工单台账 `units.json` / `tasks.json`、工单会话独立 `agent/`）。
+
+## 3. 关键实现点
+
+### 3.1 云端会话（单会话）
+
+- `initialize()` 之后用 `openSession()` 续**最近一个**会话 → 重启不丢上下文；从不 `createSession()`。
+- 用户消息：空闲时 `chat()` 开轮；忙时 `steer()` 插话（单会话串行）。
+- 工单事件：`sendCustomMessage({ customType: 'task-event', triggerTurn: true, deliverAs: 'followUp' })`，
+  2 秒合并一次（`CloudSession.wake`）。**不冒充用户授权**：事件消息带 `details`，模型看到的是事件。
+- `subscribeTrace` 是**常驻订阅**（PR1 的内核改造）：`sendCustomMessage` 起的轮次不经过 `chat()`，
+  一次性 `onTrace` 收不到它的轨迹。
+- 压缩前钩子 `session_before_compact` → `onSessionBeforeCompact`（P1 的记忆抽取挂这里）。
+
+### 3.2 工单
+
+- 状态机：`queued → assigned → running → waiting_human ⇄ running → done | failed | cancelled`；
+  终态先落者胜，后到的终态只作 `ignored` 附注。
+- 单设备并发 1；`queued` 60 秒未接单、`waiting_human` 2 小时未回答 → 超时收敛；
+  **设备离线 → 未完成工单直接 `cancelled(device-offline)`，不续跑**（F-21）。
+- 幂等：`idempotencyKey`（`workUnitId` + 内容摘要），重复派活返回同一张工单。
+- 派活强制校验（G9）：`authorizationId` × 设备 × 仓库（路径归一化后比较）× 额度 × 有效期。
+  同一工作单元追加的工单不扣额度（O-06）。
+
+### 3.3 终端执行器（`electron/cloud`）
+
+- **一个工作单元一个 worktree**：`coordinator.bind('cloud:<unitId>', 'new', base)`，一条合成绑定；
+  工单会话用 `createSession(worktreePath)` 建在工作树里，**自己不 bind**（G12）。
+- 工单会话的 AgentManager 用**独立 agentDir**（`data/cloud/agent`），不进用户会话列表（D-24），
+  但 `apiConfig` 复用用户当前配置（SDK 的 Key 是进程级串写的）。
+- 装配：`builtinExtensions: { plan: false, worktree: false }` +
+  `toolAllowlist: ['read','ls','grep','find','edit','write','bash']` + 权限 `mode: 'auto'`（G3）。
+- 守卫（G8 / D-32，`task-guard.ts`）：`write` / `edit` 的绝对路径必须落在工作树内；
+  `bash` / `powershell` 拦 `git push`、`curl … | sh`、工作树外的 `rm -rf`。
+  **handler 自己 catch**：`tool_call` 分发循环没有 try/catch，抛错会掀掉整轮。守卫是
+  **挡误伤与注入的主流路径，不是安全边界**（D-20：路径限制可被 bash 绕过，所以不做路径级硬限制）。
+- `ask_cloud`：上报问题后**结束本轮**，回答到达再起一轮（不做阻塞等待）。
+- 崩溃恢复（G6）：启动时把台账里残留的 `running` 工单改判 `interrupted` 并上报；
+  退出前把在跑的工单标 `interrupted` 并尽量把队列冲出去。
+
+### 3.4 通道与恢复
+
+- 心跳 25 秒；服务端 60 秒收不到 → 判离线；客户端/设备都是 `seq` 递增 + `lastAckSeq` 续传，
+  增量溢出（2000 条 / 24 小时）→ 回整份快照。
+- 设备离线期间的帧进有界队列（1000 条），重连后补发；终态工单会清掉它的待投递项。
+- 协议版本不符直接拒绝（`v !== 1`）。
+
+### 3.5 安全
+
+- 一机一 token（同一 token 开 `/client/ws` 与 `/device/ws`），云端只存加盐哈希。
+- 配对码 6 位一次性；`/v1/pair` 每来源 5 次 / 5 分钟 + 全局熔断 20 次 / 5 分钟；
+  所有凭据类失败对外同一个错误码（不透露「码是否存在 / 过期 / 用过」）。
+- 账号类操作（建账号、登录、生成配对码、移除设备）只认 cookie 会话；
+  设备 token 只够**改云端模型配置、读快照与授权**（桌面端没有 cookie）。
+- Web 客户端零 XSS：只用 `textContent` / DOM 构造，静态文件走白名单（`src/http/static.ts`）。
+- 云端 API Key 加密落盘、接口只回末四位；Web / 桌面端写的是同一份配置。
+
+## 4. 本机运行
+
+```bash
+npm install                      # 根 workspaces 含 apps/cloud
+npm run build:bridge && npm run build:cloud
+
+PI_CLOUD_ENC_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('base64'))") \
+PI_CLOUD_COOKIE_SECRET=dev-secret PI_CLOUD_DATA_DIR=./cache/pi-cloud-dev \
+PI_CLOUD_PORT=8787 npm run cloud:start
+```
+
+打开 `http://127.0.0.1:8787/` → 建管理员账号 → 生成 6 位配对码 → 桌面端「云端 → 连接云端」填入。
+`NODE_ENV !== 'production'` 时 cookie 不带 `Secure`（本机 http 调试）；生产口径不变。
+
+## 5. 部署（`/opt/pi-cloud`）
+
+```bash
+# 0) 本机打包（self-contained：dist + web + node_modules + deploy）
+node scripts/build-cloud-bundle.mjs
+
+# 1) 传上去
+ssh -i <key> ubuntu@<host> 'sudo mkdir -p /opt/pi-cloud/releases && sudo chown $USER /opt/pi-cloud/releases'
+STAMP=$(date +%Y%m%d%H%M%S)
+tar czf - -C cache/cloud-bundle . | ssh -i <key> ubuntu@<host> "tar xzf - -C /opt/pi-cloud/releases/$STAMP"
+
+# 2) 账号与目录（一次性）
+sudo useradd --system --home /var/lib/pi-cloud --shell /usr/sbin/nologin pi-cloud
+sudo install -d -o pi-cloud -g pi-cloud /var/lib/pi-cloud /var/backups/pi-cloud
+sudo install -m 600 deploy/env.example /etc/pi-cloud/env   # 填 PI_CLOUD_ENC_KEY / COOKIE_SECRET
+
+# 3) 单元、Caddy、备份
+sudo install -m 644 deploy/pi-cloud.service /etc/systemd/system/
+sudo install -m 755 deploy/backup.sh /opt/pi-cloud/backup.sh
+sudo install -m 644 deploy/pi-cloud-backup.service deploy/pi-cloud-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now pi-cloud pi-cloud-backup.timer
+# Caddyfile.snippet 贴进站点块后：sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+```
+
+切换版本（`current` 软链 + 健康检查 + 自动回滚）：
+
+```bash
+sudo ln -sfn /opt/pi-cloud/releases/$STAMP /opt/pi-cloud/current
+sudo systemctl restart pi-cloud
+for i in $(seq 1 15); do
+  curl -fsS http://127.0.0.1:8787/v1/health && break || sleep 1
+done || { sudo ln -sfn /opt/pi-cloud/releases/$PREV /opt/pi-cloud/current && sudo systemctl restart pi-cloud; }
+```
+
+回滚就是把 `current` 指回上一条 release 再 `restart`；更新只替换 `releases/`，不碰数据目录。
+
+## 6. 排障
+
+| 现象 | 先看 |
+| --- | --- |
+| 配对一直失败 | `journalctl -u pi-cloud`；确认 `PI_CLOUD_ENC_KEY` 没换过（换了要重新推模型配置） |
+| 设备显示在线但收不到工单 | 服务端 `devices.json` 的 `workspaces` 是否为仓库根、`isGit` 是否为 true |
+| 工单卡在 `queued` | 终端日志 `[Cloud Task]`；60 秒后会被判超时 |
+| 工单失败「not a git repository」 | 非 git 目录不接受派活（G10），先 `git init` |
+| 显示「设备离线，工单已取消」 | 正常语义：离线即刻取消，不排队等回来 |
+| Web 打不开 / 401 | Caddy 反代与 cookie 的 `Secure` 口径；`/v1/health` 是否能从服务器本机访问 |
+| 备份里没有会话记录 | `backup.sh` 排除了 `workspace` / `cache`，但包含 `agent/`；检查 `PI_CLOUD_DATA_DIR` |

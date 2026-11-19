@@ -4,7 +4,7 @@
 > **什么时候读**：新增模块 / 频道、接手陌生代码、写设计文档之前
 > **什么时候要改**：目录、频道、进程模型或关键数据流变化时
 
-**最后更新**: 2026-10-29
+**最后更新**: 2026-11-21
 
 ---
 
@@ -187,6 +187,28 @@ pi-workbench/
 │
 ├── tests/                        # 扁平测试目录（文件名与源码同名）
 │
+├── apps/cloud/                   # 云端服务（npm workspace，不依赖 Electron）
+│   ├── src/
+│   │   ├── main.ts               # 装配：存储 / 云端会话 / 派活器 / 两条 WS / 静态客户端
+│   │   ├── config.ts             # 环境变量（PI_CLOUD_*），加密 key 与 cookie secret 必填
+│   │   ├── http/                 # Router、REST 控制面、Web 客户端静态托管
+│   │   ├── ws/hub.ts             # 客户端与设备两条通道、seq/ack/resume、outbox
+│   │   ├── tasks/                # 工单状态机、授权强制点、派活器
+│   │   ├── agent/                # 云端单会话（6 个工具）与 trace 投影
+│   │   ├── auth/                 # scrypt 口令、token 哈希、限速熔断、cookie
+│   │   ├── secure/               # AES-256-GCM 配置加密
+│   │   └── store/                # 原子写 JSON 文档（accounts/devices/tasks/...）
+│   ├── web/                      # Web 客户端（纯 ESM，零构建，零 XSS）
+│   └── deploy/                   # systemd 单元、Caddy 片段、每日备份
+│
+├── electron/cloud/               # 终端执行器（device agent），只跑在桌面端主进程
+│   ├── device-agent.ts           # /device/ws、心跳、重连、离线队列、G6 恢复
+│   ├── task-runner.ts            # 单元 worktree + 工单会话 + 里程碑/结果回流
+│   ├── task-guard.ts             # 工具守卫（越界写、git push、curl|sh、越界 rm -rf）
+│   ├── client-link.ts            # 桌面端云端页的客户端通道（token 留在主进程）
+│   ├── link-store.ts             # 配对凭据（safeStorage 加密）
+│   └── inventory.ts              # 工作区上报清单（路径 / remote / 默认分支）
+│
 ├── pi-bridge/                    # Agent 桥接层（主进程内运行）
 │   ├── src/
 │   │   ├── agent-manager.ts      # 会话 / 模型配置 / 工具编辑捕获 / 历史 / 导出
@@ -196,7 +218,8 @@ pi-workbench/
 │   │   ├── tool-policy.ts        # 模式对应的工具集
 │   │   ├── approval-extension.ts # 审批请求扩展
 │   │   ├── plan.ts               # 结构化计划
-│   │   ├── dispatch-extension.ts # 派活反问工具 ask_cloud_operator（当前无调用方，留给下一代云端服务）
+│   │   ├── dispatch-extension.ts # 派活反问工具 ask_cloud_operator（当前无调用方；云端用 electron/cloud 的 ask_cloud）
+│   │   ├── cloud-protocol.ts     # 云端协议契约（帧、状态机常量、事件载荷；桌面端/云端/Web 共用）
 │   │   ├── plan-extension.ts     # 计划工具扩展
 │   │   ├── worktree-extension.ts # 工作树切换工具扩展
 │   │   ├── session-extras.ts     # 会话 sidecar（计划、权限）
@@ -326,6 +349,10 @@ ChatPanel.handleSubmit
 | `shell:openExternal` | invoke | 外部链接（https / http / mailto）交系统浏览器；白名单在 `electron/external-links.ts` |
 | `clipboard:writeText` | invoke | 写系统剪贴板（`pw-app://` 下 `navigator.clipboard` 不可用） |
 | `webSearch:get` / `save` | invoke | 联网搜索供应商与 Key（`safeStorage` 加密） |
+| `cloud:linkStatus` / `pair` / `unlink` / `reconnect` / `refreshWorkspaces` / `listWorkspaces` | invoke | 云端配对与终端执行器状态 |
+| `cloud:getConfig` / `saveConfig` | invoke | 云端模型配置（主进程代理，Key 不进渲染层） |
+| `cloud:clientOpen` / `clientSend` / `clientClose` / `clientState` | invoke | 云端页的客户端通道（token 留在主进程） |
+| `cloud:state` / `cloud:client-frame` / `cloud:client-state` | main → renderer | 执行器状态、云端帧与通道状态 |
 
 ---
 

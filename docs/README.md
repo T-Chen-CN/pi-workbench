@@ -22,7 +22,7 @@
 
 ### 📌 需求文档
 - **[Git 会话工作流（会话-工作树绑定）](./requirements/GIT_WORKTREE_SESSIONS.md)** — 工作树会话的完整需求、边界执行顺序与验收场景
-- **[云端 Agent（开发调度）](./requirements/CLOUD_AGENT_PI.md)** — 云端调度 + 终端执行 + 工单级委派的需求、边界、验收场景与分期（未开工）
+- **[云端 Agent（开发调度）](./requirements/CLOUD_AGENT_PI.md)** — 云端调度 + 终端执行 + 工单级委派的需求、边界、验收场景与分期（实现与运维见 [agent/cloud-agent.md](./agent/cloud-agent.md)）
 
 ### 🔧 开发指南
 - **[构建和打包](./guides/BUILD_AND_PACKAGE.md)** — 构建、打包、发布与自动更新
@@ -35,6 +35,7 @@
 - **[IPC 与信任边界](./agent/ipc-and-trust.md)** — `handleIpc`、来源校验、preload / API 层、CSP
 - **[Agent 运行时](./agent/agent-runtime.md)** — 会话、权限审批、计划模式、工具白名单、标题、压缩、导出、联网
 - **[Git 与工作树会话](./agent/git-and-worktrees.md)** — 工作树绑定、Git 视图、仓库同步、GitHub 关联
+- **[云端 Agent 实现与运维](./agent/cloud-agent.md)** — `apps/cloud` 组成、单会话与工单状态机、终端执行器与守卫、部署/回滚/备份/排障
 - **[面板、辅助窗口与托盘](./agent/panels-and-windows.md)** — 拆出窗口、托盘常驻、通知、自定义协议
 - **[仓库地图（工作区面板）](./agent/repo-map.md)** — 面板列出 Git 跟踪文件的职责：扫描口径、事实与缓存、增量指纹、降级与刷新
 - **[工作区面板实现说明](./agent/workspace-panel.md)** — 面板从入口到画布的全貌：视图切换、底层地图、上浮链与当前层、视口 / 拖动 / 吸附、落盘状态、测试与改动指引
@@ -57,6 +58,7 @@
 | 改编辑区面板 / 仓库地图画布 | [agent/workspace-panel.md](./agent/workspace-panel.md) |
 | 改权限 / 审批 / 计划模式 | [agent/agent-runtime.md](./agent/agent-runtime.md) |
 | 改工作树会话 / Git 视图 | [agent/git-and-worktrees.md](./agent/git-and-worktrees.md) |
+| 部署 / 排障云端 Agent | [agent/cloud-agent.md](./agent/cloud-agent.md) |
 | 改面板拆出 / 托盘行为 | [agent/panels-and-windows.md](./agent/panels-and-windows.md) |
 | 查看思考与工具轨迹方案 | [AGENT_TRACE.md](./architecture/AGENT_TRACE.md) |
 | 查某个架构决定的理由 | [decisions/](./decisions/) |
