@@ -55,4 +55,7 @@ export type {
 
 export type { SessionExtras } from './session-extras.js'
 
+/** 云端 Agent 的传输契约（帧格式 / 状态模型 / 默认值）；桌面端与 apps/cloud 共用一份 */
+export * from './cloud-protocol.js'
+
 
