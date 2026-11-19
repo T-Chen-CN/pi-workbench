@@ -129,6 +129,7 @@ npm run build      # 渲染层 + bridge + 主进程
 | [workspace-panel](docs/agent/workspace-panel.md) | 改编辑区面板 / 仓库地图画布（视图切换、上浮链、视口、落盘） |
 | [AGENT_TRACE](docs/architecture/AGENT_TRACE.md) | 流式事件协议与思考 / 工具轨迹数据模型 |
 | [GIT_WORKTREE_SESSIONS](docs/requirements/GIT_WORKTREE_SESSIONS.md) | 工作树会话的完整需求与验收场景 |
+| [CLOUD_AGENT_PI](docs/requirements/CLOUD_AGENT_PI.md) | 动云端 Agent / 终端派活（工单）之前的唯一需求源 |
 | [AGENT-TESTING](docs/guides/AGENT-TESTING.md) | Agent 功能手动验收步骤 |
 | [reporting](docs/agent/reporting.md) | 什么时候该写报告、写到哪、怎么清理 |
 | [STATUS](docs/progress/STATUS.md) · [BACKLOG](docs/progress/BACKLOG.md) | 现状快照（STATUS）与唯一任务表（BACKLOG） |

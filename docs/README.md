@@ -22,6 +22,7 @@
 
 ### 📌 需求文档
 - **[Git 会话工作流（会话-工作树绑定）](./requirements/GIT_WORKTREE_SESSIONS.md)** — 工作树会话的完整需求、边界执行顺序与验收场景
+- **[云端 Agent（开发调度）](./requirements/CLOUD_AGENT_PI.md)** — 云端调度 + 终端执行 + 工单级委派的需求、边界、验收场景与分期（未开工）
 
 ### 🔧 开发指南
 - **[构建和打包](./guides/BUILD_AND_PACKAGE.md)** — 构建、打包、发布与自动更新

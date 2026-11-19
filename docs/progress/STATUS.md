@@ -18,7 +18,7 @@
 
 ## 正在做 / 下一步
 
-- **云端 Agent 换内核**：以 Pi Agent 为基础自维护的常驻服务，方案未定稿（见 [BACKLOG](./BACKLOG.md) 的 C-01）。
+- **云端 Agent（开发调度）**：需求已定稿（[CLOUD_AGENT_PI](../requirements/CLOUD_AGENT_PI.md)），未开工。方向：云端只做调度 + 汇报（无 `fs` / `bash`），终端执行，工单级委派。
 - **R-23 剩余子项**：B4 续写截断的后续动作、B7 上下文临界预警、B8 轻任务预算、`reasoning_effort` 联动——见 [BACKLOG](./BACKLOG.md) §3。
 - **平台手动验收** V-01（macOS dmg）/ V-02（Linux AppImage）尚未做。
 
