@@ -14,11 +14,11 @@
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
 | 质量门槛 | `type-check` · `lint` · `npm test`（131 文件 / 1407 用例）· `design-system` 全绿 |
-| 云端 Agent | **旧实现（Hermes）已整体移除**；替代方案（Pi 内核 + 工单级委派）**需求 v2 与部署基线均定稿**，未开工 |
+| 云端 Agent | **旧实现（Hermes）已整体移除**；替代方案（Pi 内核 + 工单级委派）**需求 v3.2 与部署基线均定稿**，开工前置 PoC（V1 双实例并发 / V2 压缩前历史）**已于 2026-11-20 跑通**，未开工 |
 
 ## 正在做 / 下一步
 
-- **云端 Agent（开发调度）**：需求 v3 定稿（[CLOUD_AGENT_PI](../requirements/CLOUD_AGENT_PI.md)），服务器基线已验证，未开工。方向：云端只做调度 + 汇报（无 `fs` / `bash`），终端执行，工单级委派；三端可见（桌面端独立云端页 + Web 完整客户端），云端**单会话** + 记忆 / 知识库 / 梦境维护长内容；服务器 `43.160.211.128`（Ubuntu 26.04 · Node 24 · Caddy + systemd），WS 往返 p50 ≈ 54 ms。P0 约 16 人日，开工前需先补 §4.0 的 G1–G7。
+- **云端 Agent（开发调度）**：需求 v3.2 定稿（[CLOUD_AGENT_PI](../requirements/CLOUD_AGENT_PI.md)），服务器基线已验证，未开工。方向：云端只做调度 + 汇报（无 `fs` / `bash`），终端执行，工单级委派；三端可见（桌面端独立云端页 + Web 完整客户端），云端**单会话** + 记忆 / 知识库 / 梦境维护长内容；服务器 `43.160.211.128`（Ubuntu 26.04 · Node 24 · Caddy + systemd），WS 往返 p50 ≈ 54 ms。P0 约 27 人日（PoC 已花 0.5，剩 ≈ 26.5），开工前需补 §4.0 的 G1–G3、G6–G12（G5 已取消）；**V1/V2 PoC 已于 2026-11-20 通过**（双实例并发 30 轮互不干扰、一实例 `dispose` 不打断另一实例回合、`session_before_compact` 拿到完整 `branchEntries`，`process.env` Key 串写已实测确认为硬约束），见[实测报告](../reports/cloud-agent-poc-verification-2026-11-20.md)。
 - **R-23 剩余子项**：B4 续写截断的后续动作、B7 上下文临界预警、B8 轻任务预算、`reasoning_effort` 联动——见 [BACKLOG](./BACKLOG.md) §3。
 - **平台手动验收** V-01（macOS dmg）/ V-02（Linux AppImage）尚未做。
 
