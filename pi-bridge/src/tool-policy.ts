@@ -38,6 +38,8 @@ const MODE_ALLOWLIST: Record<SessionMode, readonly string[] | null> = {
   auto: null,
 }
 
+const PLAN_ONLY_TOOLS_SET = new Set<string>(PLAN_ONLY_TOOLS)
+
 /** 只在 Windows 上可用的 SDK 工具 */
 const WINDOWS_ONLY_TOOLS = new Set(['powershell'])
 
@@ -54,22 +56,23 @@ export function isToolAvailableOnPlatform(
  *
  * - readonly / plan：使用固定白名单
  * - ask / auto：所有已注册工具，减去 Plan-only 和当前平台不可用的工具
+ * - `allowlist`（G2）：给定时再与它取交集；空数组表示一个工具都不激活
  *
- * 结果只取决于模式、注册表和平台，不受会话历史影响。
+ * 结果只取决于模式、注册表、平台与白名单，不受会话历史影响。
  */
 export function resolveModeTools(
   mode: SessionMode,
   registered: readonly string[],
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  allowlist?: readonly string[]
 ): string[] {
   const available = registered.filter((name) => isToolAvailableOnPlatform(name, platform))
   const allow = MODE_ALLOWLIST[mode]
+  const byMode = allow
+    ? available.filter((name) => allow.includes(name))
+    : available.filter((name) => !PLAN_ONLY_TOOLS_SET.has(name))
 
-  if (allow) {
-    const allowed = new Set(allow)
-    return available.filter((name) => allowed.has(name))
-  }
-
-  const excluded = new Set<string>(PLAN_ONLY_TOOLS)
-  return available.filter((name) => !excluded.has(name))
+  if (!allowlist) return byMode
+  const allowed = new Set(allowlist)
+  return byMode.filter((name) => allowed.has(name))
 }

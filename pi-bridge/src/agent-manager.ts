@@ -12,6 +12,7 @@ import {
   SessionManager,
   SettingsManager,
   type AgentSession,
+  type ExtensionFactory,
   type ResourceLoader,
   type SessionEntry,
 } from '@earendil-works/pi-coding-agent'
@@ -96,6 +97,7 @@ import {
 import { createApprovalExtension } from './approval-extension.js'
 import { createPlanExtension } from './plan-extension.js'
 import { createWorktreeExtension } from './worktree-extension.js'
+import { createCompactHookExtension } from './compact-hook-extension.js'
 import type {
   AgentChatOptions,
   AgentChatResult,
@@ -130,6 +132,7 @@ export type {
   AgentChatOptions,
   AgentChatResult,
   AgentConfig,
+  AgentExtensionToggles,
   AgentLogger,
   AgentMessage,
   AgentTraceEvent,
@@ -142,6 +145,7 @@ export type {
   MessageContextQuote,
   ModelCapabilityInfo,
   PromptTemplateInfo,
+  SessionBeforeCompactInfo,
   SessionOpenResult,
   SessionSummary,
   SkillInfo,
@@ -227,7 +231,12 @@ interface SessionRuntime {
   unsubscribe: (() => void) | null
   isProcessing: boolean
   onTextDelta: ((delta: string) => void) | null
-  onTrace: ((event: AgentTraceEvent) => void) | null
+  /** 逐轮 trace 回调：只在 `chat()` 期间有效 */
+  turnTrace: ((event: AgentTraceEvent) => void) | null
+  /** 跨轮常驻订阅（事件唤醒的轮次没有 `chat()` 调用，只能靠它拿到流式事件） */
+  traceSinks: Set<(event: AgentTraceEvent) => void>
+  /** 统一分发入口：turnTrace + traceSinks。始终非空，plan 扩展也经由它上报 */
+  onTrace: (event: AgentTraceEvent) => void
   /** 本轮的空闲超时看门狗；工具执行与审批等待期间自动挂起 */
   watchdog: StallWatchdog | null
   /** 当前 assistant 消息中已经收到过增量的 thinking 块 */
@@ -285,6 +294,8 @@ export class AgentManager {
   private deletedSessions = new Set<string>()
   /** 上一次创建会话时使用的联网配置版本 */
   private lastWebAccessVersion: string | null = null
+  /** 新建会话的权限种子（G3）：只在 extras 还没有权限时生效，已有会话以落盘为准 */
+  private seedPermissions = new Map<string, SessionPermission>()
 
   /** 当前生效的输出上限（与 models.json 里写入的值一致），用于截断报错 */
   private outputLimit(): number {
@@ -358,6 +369,28 @@ export class AgentManager {
    * 订阅会话事件：转发文本 / 思考 / 工具步骤，并记录 write/edit 前后内容。
    * Pi 的 write / edit 工具参数分别为 { path, content } 和 { path, edits }。
    */
+  /**
+   * trace 统一分发：逐轮回调（chat 期间）+ 常驻订阅（事件唤醒的轮次）。
+   * 任何一个 sink 抛错都不能掀掉本轮，因此逐个 try/catch。
+   */
+  private dispatchTrace(runtime: SessionRuntime, event: AgentTraceEvent): void {
+    const turn = runtime.turnTrace
+    if (turn) {
+      try {
+        turn(event)
+      } catch (error) {
+        this.logger.warn('[Agent Manager] Trace handler failed:', error)
+      }
+    }
+    for (const sink of runtime.traceSinks) {
+      try {
+        sink(event)
+      } catch (error) {
+        this.logger.warn('[Agent Manager] Trace subscriber failed:', error)
+      }
+    }
+  }
+
   private subscribeToSessionEvents(runtime: SessionRuntime): () => void {
     return runtime.session.subscribe((event: any) => {
       try {
@@ -483,6 +516,11 @@ export class AgentManager {
           setTimeout(() => {
             void this.applyPendingRoot(runtime)
           }, 0)
+          try {
+            this.config?.onAgentSettled?.(runtime.id)
+          } catch (error) {
+            this.logger.warn('[Agent Manager] onAgentSettled failed:', error)
+          }
           return
         }
 
@@ -668,7 +706,7 @@ export class AgentManager {
   private applySessionModeTools(runtime: SessionRuntime, mode: SessionMode): void {
     try {
       runtime.session.setActiveToolsByName(
-        resolveModeTools(mode, runtime.registeredTools)
+        resolveModeTools(mode, runtime.registeredTools, process.platform, this.config?.toolAllowlist)
       )
     } catch (error) {
       this.logger.warn('[Agent Manager] Failed to apply session mode tools:', error)
@@ -1434,6 +1472,160 @@ export class AgentManager {
     }
   }
 
+  /**
+   * 常驻 trace 订阅，跨轮次有效。
+   *
+   * 事件唤醒（`sendCustomMessage({ triggerTurn })`）产生的轮次不经过 `chat()`，
+   * 没有逐轮回调可用；云端/设备侧只能靠常驻订阅拿到流式事件。
+   */
+  async subscribeTrace(
+    sessionId: string,
+    sink: (event: AgentTraceEvent) => void
+  ): Promise<() => void> {
+    const runtime = await this.ensureRuntime(sessionId)
+    runtime.traceSinks.add(sink)
+    return () => {
+      runtime.traceSinks.delete(sink)
+    }
+  }
+
+  /** 会话是否正在跑一轮；调用方据此决定 `chat()` 还是 `steer`（`chat()` 并发会直接报错） */
+  isSessionBusy(sessionId?: string): boolean {
+    const id = sessionId ?? this.lastSessionId
+    if (!id) return false
+    return this.runtimes.get(id)?.isProcessing ?? false
+  }
+
+  /**
+   * 投一条 custom message（事件唤醒入口）。
+   *
+   * 落盘为 `CustomMessageEntry` 而不是 user 消息，所以「事件不冒充授权」是结构性的。
+   * SDK 返回 `Promise<void>`，拿不到 entry id；回执/去重要由调用方把 `eventId`
+   * 放进 `details` 自行对账。
+   */
+  async sendCustomMessage(
+    sessionId: string,
+    message: {
+      customType: string
+      content: string | Array<{ type: 'text'; text: string }>
+      display?: boolean
+      details?: unknown
+    },
+    options?: { triggerTurn?: boolean; deliverAs?: 'steer' | 'followUp' | 'nextTurn' }
+  ): Promise<{ success: boolean; error?: string }> {
+    const customType = message.customType.trim()
+    if (!customType) return { success: false, error: 'customType is required.' }
+    try {
+      const runtime = await this.ensureRuntime(sessionId)
+      await runtime.session.sendCustomMessage(
+        {
+          customType,
+          content: message.content,
+          display: message.display ?? false,
+          details: message.details,
+        },
+        options
+      )
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /**
+   * 装配会话的扩展工厂（G1）。
+   *
+   * 三个内置扩展可按 `builtinExtensions` 剔除：工单会话必须去掉 worktree，
+   * 因为它把实例级 `workspaceDir` 写死成了 coordinator 的目标仓库。
+   * 压缩钩子扩展始终注入——它是内核供给，不是可选开关。外部工厂最后追加，
+   * 这样宿主守卫能看到内置扩展之后的注册表。
+   */
+  private buildExtensionFactories(input: {
+    id: string
+    config: AgentConfig
+    root: string
+    sessionManager: SessionManager
+    planContext: { runtime: SessionRuntime | null }
+    runtimeRef: { current: SessionRuntime | null }
+    fallbackPermission: SessionPermission
+  }): ExtensionFactory[] {
+    const { id, config, root, sessionManager, planContext, runtimeRef, fallbackPermission } = input
+    const toggles = config.builtinExtensions ?? {}
+    const factories: ExtensionFactory[] = []
+
+    if (toggles.approval !== false) {
+      factories.push(
+        createApprovalExtension(
+          {
+            workspaceDir: root,
+            logger: this.logger,
+            requestApproval: (request) => this.requestToolApproval(request),
+            isSwitchPending: () => this.pendingRoots.has(id),
+          },
+          id,
+          () =>
+            runtimeRef.current
+              ? normalizeSessionPermission(runtimeRef.current.extras.permission)
+              : fallbackPermission,
+          (category) => {
+            const runtime = runtimeRef.current
+            if (!runtime) return
+            const current = normalizeSessionPermission(runtime.extras.permission)
+            if (current.mode !== 'ask' || current.grants.includes(category)) return
+            runtime.extras.permission = {
+              mode: current.mode,
+              grants: [...current.grants, category],
+            }
+            this.persistExtras(runtime)
+            return runtime.extrasSave
+          }
+        )
+      )
+    }
+
+    if (toggles.plan !== false) {
+      factories.push(
+        createPlanExtension({
+          getRuntime: () => planContext.runtime,
+          persistExtras: (runtime) => this.persistExtras(runtime as SessionRuntime),
+          getMode: () =>
+            normalizeSessionPermission(runtimeRef.current?.extras.permission ?? fallbackPermission)
+              .mode,
+        })
+      )
+    }
+
+    if (toggles.worktree !== false) {
+      factories.push(
+        createWorktreeExtension({
+          sessionId: id,
+          workspaceDir: config.workspaceDir,
+          getRoot: () => sessionManager.getCwd() || config.workspaceDir,
+          onSwitch: (target, base) => this.requestWorktreeSwitch(id, target, base),
+          scheduleRoot: (nextRoot, branch) => this.scheduleRoot(id, nextRoot, branch),
+        })
+      )
+    }
+
+    factories.push(
+      createCompactHookExtension({
+        logger: this.logger,
+        onBeforeCompact: (event) => {
+          const handler = this.config?.onSessionBeforeCompact
+          if (!handler) return
+          try {
+            handler(id, event)
+          } catch (error) {
+            this.logger.warn('[Agent Manager] onSessionBeforeCompact failed:', error)
+          }
+        },
+      })
+    )
+
+    for (const factory of config.extensionFactories ?? []) factories.push(factory)
+    return factories
+  }
+
   /** 创建（或复用）一个会话运行时 */
   private async createRuntime(sessionManager: SessionManager): Promise<SessionRuntime> {
     const config = this.config
@@ -1450,10 +1642,14 @@ export class AgentManager {
     const planContext: { runtime: SessionRuntime | null } = { runtime: null }
     const runtimeRef: { current: SessionRuntime | null } = { current: null }
     const extras = this.extrasStore ? await this.extrasStore.load(id) : emptyExtras()
-    // 模式只在会话诞生时从全局默认档取一次，此后会话自行持有并落盘
+    // 模式只在会话诞生时从全局默认档取一次，此后会话自行持有并落盘。
+    // 工单会话（G3）用 `createSession(root, { permission })` 提前种好权限，
+    // 优先级：调用方种子 > 全局默认档；已落盘的会话一律以落盘为准。
     const seededPermission = extras.permission === null
     if (seededPermission) {
-      extras.permission = { mode: this.defaultPermissionLevel(), grants: [] }
+      const seed = this.seedPermissions.get(id)
+      this.seedPermissions.delete(id)
+      extras.permission = seed ?? { mode: this.defaultPermissionLevel(), grants: [] }
     }
     const fallbackPermission = normalizeSessionPermission(extras.permission)
     const root = sessionManager.getCwd() || config.workspaceDir
@@ -1491,47 +1687,15 @@ export class AgentManager {
       additionalExtensionPaths: config.webAccessExtensionPaths?.length
         ? config.webAccessExtensionPaths
         : undefined,
-      extensionFactories: [
-        createApprovalExtension(
-          {
-            workspaceDir: root,
-            logger: this.logger,
-            requestApproval: (request) => this.requestToolApproval(request),
-            isSwitchPending: () => this.pendingRoots.has(id),
-          },
-          id,
-          () =>
-            runtimeRef.current
-              ? normalizeSessionPermission(runtimeRef.current.extras.permission)
-              : fallbackPermission,
-          (category) => {
-            const runtime = runtimeRef.current
-            if (!runtime) return
-            const current = normalizeSessionPermission(runtime.extras.permission)
-            if (current.mode !== 'ask' || current.grants.includes(category)) return
-            runtime.extras.permission = {
-              mode: current.mode,
-              grants: [...current.grants, category],
-            }
-            this.persistExtras(runtime)
-            return runtime.extrasSave
-          }
-        ),
-        createPlanExtension({
-          getRuntime: () => planContext.runtime,
-          persistExtras: (runtime) => this.persistExtras(runtime as SessionRuntime),
-          getMode: () =>
-            normalizeSessionPermission(runtimeRef.current?.extras.permission ?? fallbackPermission)
-              .mode,
-        }),
-        createWorktreeExtension({
-          sessionId: id,
-          workspaceDir: config.workspaceDir,
-          getRoot: () => sessionManager.getCwd() || config.workspaceDir,
-          onSwitch: (target, base) => this.requestWorktreeSwitch(id, target, base),
-          scheduleRoot: (nextRoot, branch) => this.scheduleRoot(id, nextRoot, branch),
-        }),
-      ],
+      extensionFactories: this.buildExtensionFactories({
+        id,
+        config,
+        root,
+        sessionManager,
+        planContext,
+        runtimeRef,
+        fallbackPermission,
+      }),
     })
     await resourceLoader.reload()
 
@@ -1597,7 +1761,9 @@ export class AgentManager {
       unsubscribe: null,
       isProcessing: false,
       onTextDelta: null,
-      onTrace: null,
+      turnTrace: null,
+      traceSinks: new Set(),
+      onTrace: (event) => this.dispatchTrace(runtime, event),
       watchdog: null,
       thinkingDeltaSeen: new Set(),
       toolFiles: new Map(),
@@ -1941,7 +2107,16 @@ export class AgentManager {
   }
 
   /** 新建会话（第一条消息前不落盘）；root 为会话绑定工作树，默认工作区根 */
-  async createSession(root?: string): Promise<SessionOpenResult> {
+  /**
+   * 新建会话（第一条消息前不落盘）；root 为会话绑定工作树，默认工作区根。
+   *
+   * `permission` 只对**本次新建**的会话生效：工单会话（G3）靠它种成 `auto`，
+   * 不需要审批通道也不弹审批。已有会话的权限以落盘的 sidecar 为准，不会被覆盖。
+   */
+  async createSession(
+    root?: string,
+    options?: { permission?: SessionPermission }
+  ): Promise<SessionOpenResult> {
     try {
       if (!this.modelRuntime || !this.config) {
         return { success: false, error: 'Agent not initialized.' }
@@ -1951,6 +2126,12 @@ export class AgentManager {
           ? path.resolve(root)
           : this.config.workspaceDir
       const manager = SessionManager.create(targetRoot, this.sessionDir)
+      if (options?.permission) {
+        this.seedPermissions.set(
+          manager.getSessionId(),
+          normalizeSessionPermission(options.permission)
+        )
+      }
       const runtime = await this.createRuntime(manager)
       this.lastSessionId = runtime.id
       return {
@@ -2205,7 +2386,7 @@ export class AgentManager {
 
     try {
       runtime.onTextDelta = options?.onTextDelta ?? null
-      runtime.onTrace = options?.onTrace ?? null
+      runtime.turnTrace = options?.onTrace ?? null
       runtime.pendingEdits = []
       runtime.editSnapshots.clear()
       // 只认本轮新增的 assistant 消息，避免请求失败时把上一轮回复当成本轮结果
@@ -2428,7 +2609,7 @@ export class AgentManager {
       if (this.runtimes.get(runtime.id) === runtime) {
         runtime.isProcessing = false
         runtime.onTextDelta = null
-        runtime.onTrace = null
+        runtime.turnTrace = null
       }
     }
   }

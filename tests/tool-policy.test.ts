@@ -91,4 +91,39 @@ describe('resolveModeTools', () => {
   it('returns an empty list when nothing is registered', () => {
     expect(resolveModeTools('auto', [], 'win32')).toEqual([])
   })
+
+  describe('allowlist（G2）', () => {
+    it('再与白名单取交集，保持注册顺序', () => {
+      expect(
+        resolveModeTools('auto', REGISTERED, 'win32', ['bash', 'read', 'edit'])
+      ).toEqual(['read', 'edit', 'bash'])
+    })
+
+    it('不能把只读模式没允许的工具放回来', () => {
+      expect(
+        resolveModeTools('readonly', REGISTERED, 'win32', ['bash', 'read'])
+      ).toEqual(['read'])
+    })
+
+    it('不能把 plan 专属工具放进执行模式', () => {
+      expect(
+        resolveModeTools('auto', REGISTERED, 'win32', ['submit_plan', 'read'])
+      ).toEqual(['read'])
+    })
+
+    it('列全工单工具集时默认四件套不会被顶掉', () => {
+      const workItemTools = ['read', 'ls', 'grep', 'find', 'edit', 'write', 'bash']
+      const tools = resolveModeTools('auto', REGISTERED, 'linux', workItemTools)
+      for (const name of workItemTools) expect(tools).toContain(name)
+      expect(tools).not.toContain('submit_plan')
+      expect(tools).not.toContain('powershell')
+    })
+
+    it('空数组表示一个工具都不激活；undefined 表示不裁剪', () => {
+      expect(resolveModeTools('auto', REGISTERED, 'win32', [])).toEqual([])
+      expect(resolveModeTools('auto', REGISTERED, 'win32', undefined)).toEqual(
+        resolveModeTools('auto', REGISTERED, 'win32')
+      )
+    })
+  })
 })

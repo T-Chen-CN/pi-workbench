@@ -1,5 +1,6 @@
 /** AgentManager 的公开类型 */
 
+import type { ExtensionFactory } from '@earendil-works/pi-coding-agent'
 import type {
   ApprovalDecision,
   ApprovalRequestPayload,
@@ -127,6 +128,28 @@ export type AgentTraceEvent =
   | { type: 'plan_updated'; plan: StructuredPlan }
 
 
+/**
+ * 内置扩展的装载开关。
+ *
+ * 缺省全开（与历史行为一致）。工单会话必须关掉 worktree：它用的是实例级
+ * `workspaceDir`，而工单会话 cwd 是另一个仓库的工作树，留着会让 Agent 拿到
+ * 指向错误 coordinator 的 `switch_worktree`。
+ */
+export interface AgentExtensionToggles {
+  approval?: boolean
+  plan?: boolean
+  worktree?: boolean
+}
+
+/** 压缩前钩子收到的摘要；只传规模与原因，不复制整份历史 */
+export interface SessionBeforeCompactInfo {
+  reason: 'manual' | 'threshold' | 'overflow'
+  tokensBefore?: number
+  /** 压缩前分支条目数（`branchEntries.length`） */
+  entryCount: number
+  willRetry: boolean
+}
+
 export interface AgentConfig {
   workspaceDir: string
   /** Agent 数据目录（默认为 {workspace}/.pi-workbench/agent） */
@@ -178,6 +201,26 @@ export interface AgentConfig {
   }>
   /** 切换在轮次边界生效后回调 */
   onSessionRootChanged?: (sessionId: string, root: string) => void
+  /**
+   * 追加扩展工厂，在内置扩展之后按序注册（G1）。
+   * 宿主用它注入守卫 / 自定义工具；不要在这里重复内置扩展。
+   */
+  extensionFactories?: ExtensionFactory[]
+  /** 内置扩展开关；缺省全开 */
+  builtinExtensions?: AgentExtensionToggles
+  /**
+   * 工具白名单（G2）：与模式白名单取交集，缺省不裁剪。
+   * 注意 SDK 语义——白名单会顶掉默认四件套，工单会话必须写全
+   * （`read` / `ls` / `grep` / `find` / `edit` / `write` / `bash`）。
+   */
+  toolAllowlist?: string[]
+  /**
+   * 一轮真正结束（`agent_settled`，排队已空）时回调。
+   * 事件唤醒产生的轮次没有 `chat()` 调用，宿主要靠它复位「正在回复」。
+   */
+  onAgentSettled?: (sessionId: string) => void
+  /** 压缩前钩子（P1 记忆抽取用；P0 只留接口，不消费） */
+  onSessionBeforeCompact?: (sessionId: string, event: SessionBeforeCompactInfo) => void
 }
 
 export interface SessionSummary {

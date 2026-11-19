@@ -10,6 +10,7 @@ export type {
   AgentChatOptions,
   AgentChatResult,
   AgentConfig,
+  AgentExtensionToggles,
   AgentLogger,
   AgentMessage,
   AgentTraceEvent,
@@ -18,6 +19,7 @@ export type {
   MessageContext,
   MessageContextFile,
   MessageContextQuote,
+  SessionBeforeCompactInfo,
   SessionOpenResult,
   SessionSummary,
 } from './agent-manager.js'
