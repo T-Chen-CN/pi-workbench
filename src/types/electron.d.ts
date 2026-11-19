@@ -666,9 +666,73 @@ export interface ElectronAPI {
   apiConfigSave: (config: ApiConfig) => Promise<ApiConfigSaveResult>
   apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: ApiProvider) => Promise<FetchModelsResult>
 
+  // 云端连接（配对 / 解绑 / 状态）
+  cloudLinkStatus: () => Promise<CloudLinkStatusResult>
+  cloudPair: (input: CloudPairInput) => Promise<CloudPairResult>
+  cloudUnlink: () => Promise<{ success: boolean; error?: string }>
+  cloudReconnect: () => Promise<{ success: boolean; state?: CloudDeviceState; error?: string }>
+  cloudRefreshWorkspaces: () => Promise<{
+    success: boolean
+    workspaces?: CloudWorkspaceEntry[]
+    error?: string
+  }>
+  cloudListWorkspaces: () => Promise<{ success: boolean; workspaces: CloudWorkspaceEntry[] }>
+  onCloudState: (callback: (state: CloudDeviceState) => void) => () => void
+
   // Web search (内置联网能力)
   webSearchGet: () => Promise<WebSearchGetResult>
   webSearchSave: (config: WebSearchConfig) => Promise<WebSearchSaveResult>
+}
+
+/** 云端配对状态（与 electron/cloud/link-store.ts 的 CloudLinkView 对应） */
+export interface CloudLinkView {
+  linked: boolean
+  baseUrl?: string
+  deviceId?: string
+  deviceName?: string
+  pairedAt?: number
+  lastConnectedAt?: number
+}
+
+/** 终端侧连接状态（与 electron/cloud/device-agent.ts 的 DeviceLinkState 对应） */
+export interface CloudDeviceState {
+  status: 'unlinked' | 'connecting' | 'online' | 'offline' | 'error'
+  deviceId?: string
+  baseUrl?: string
+  lastError?: string
+  lastConnectedAt?: number
+  /** 离线队列里还没送出去的帧数 */
+  pending: number
+}
+
+/** 上报给云端的工作区条目（与 electron/cloud/inventory.ts 对应） */
+export interface CloudWorkspaceEntry {
+  path: string
+  name: string
+  remote?: string
+  defaultBranch?: string
+  isGit: boolean
+}
+
+export interface CloudLinkStatusResult {
+  success: boolean
+  link: CloudLinkView
+  state: CloudDeviceState
+  dataDir?: string
+  error?: string
+}
+
+export interface CloudPairInput {
+  baseUrl: string
+  code: string
+  deviceName?: string
+}
+
+export interface CloudPairResult {
+  success: boolean
+  link?: CloudLinkView
+  state?: CloudDeviceState
+  error?: string
 }
 
 export interface OpenDirectoryResult {

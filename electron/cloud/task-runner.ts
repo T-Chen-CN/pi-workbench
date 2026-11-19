@@ -1,0 +1,688 @@
+/**
+ * 工单执行器（G7 / G12 / G8 / G6）。
+ *
+ * 一个工作单元一个 git worktree，一个单元只写一条合成绑定 `cloud:<unitId>`：
+ * 工单会话本身**不 bind**（它直接用 `createSession(worktreePath)` 建在工作树里），
+ * 绑定只为了让 `cleanupOrphans()` 不收它、Git 视图能看见并有 diff 入口。
+ *
+ * 会话由独立的 AgentManager 承载（独立 agentDir，不进用户的会话列表，D-24），
+ * 但**必须复用用户当前的 API 配置**：SDK 的 Key 是进程级串写的。
+ */
+
+import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import * as fs from 'node:fs/promises'
+import * as path from 'node:path'
+import { promisify } from 'node:util'
+import type {
+  CloudChangedFile,
+  CloudTaskMilestone,
+  CloudTaskResult,
+  CloudTaskSpec,
+  CloudTaskStatus,
+} from 'pi-bridge'
+import { getBridgeEntryUrl } from '../app-paths.js'
+import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
+import { createTaskGuardExtension, type TaskGuardInfo } from './task-guard.js'
+
+const execFileAsync = promisify(execFile)
+
+/** 工单会话允许的工具：读、写、搜、看、跑命令；其余一律不激活 */
+export const TASK_TOOL_ALLOWLIST = ['read', 'ls', 'grep', 'find', 'edit', 'write', 'bash']
+
+/** 进度上报节流：终端一轮里可能几十次工具调用，全推上去会把通道打满 */
+const MILESTONE_THROTTLE_MS = 2_000
+const GIT_TIMEOUT_MS = 15_000
+
+export interface CloudTaskRunnerDeps {
+  logger: {
+    info: (...args: unknown[]) => void
+    warn: (...args: unknown[]) => void
+    error: (...args: unknown[]) => void
+  }
+  /** 工单数据目录（`{appDir}/data/cloud`）；会话 agentDir 在其下另开一层 */
+  dataDir: string
+  /** 与用户会话同一份配置（含解密后的 Key）；返回 null 表示尚未配置 */
+  getApiConfig: () => Promise<{
+    provider: string
+    apiUrl: string
+    apiKey: string
+    selectedModel: string
+  } | null>
+  /** 工作树协调器；非 git 仓库返回 null（G10 由此拒绝派活） */
+  getCoordinator: (
+    repoPath: string
+  ) => Promise<{
+    bind: (
+      sessionId: string,
+      target: string,
+      base?: string
+    ) => Promise<{ success: boolean; error?: string; worktree?: { path: string; branch: string | null } }>
+    getSessionBinding: (sessionId: string) => { key: string; path: string; branch: string | null }
+    hasBinding: (sessionId: string) => boolean
+    release: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+  } | null>
+  /** 上报给云端（device agent 负责成帧与离线队列） */
+  onStatus: (taskId: string, status: CloudTaskStatus) => void
+  onWorktree: (taskId: string, unitId: string, worktreePath: string, branch?: string) => void
+  onMilestone: (taskId: string, milestone: CloudTaskMilestone) => void
+  onQuestion: (taskId: string, questionId: string, text: string) => void
+  onResult: (taskId: string, result: CloudTaskResult) => void
+  onFailed: (taskId: string, error: string, changedFiles?: CloudChangedFile[]) => void
+  onInterrupted: (taskId: string, reason: string) => void
+}
+
+interface UnitRecord {
+  repoPath: string
+  worktreePath: string
+  branch: string | null
+  base?: string
+  createdAt: number
+}
+
+interface ActiveTask {
+  id: string
+  spec: CloudTaskSpec
+  unitId: string
+  repoPath: string
+  worktreePath: string
+  sessionId: string
+  status: CloudTaskStatus
+  startedAt: number
+  /** 最近一次进度上报时间（节流用） */
+  lastMilestoneAt: number
+  changed: Map<string, CloudChangedFile>
+  questionId?: string
+  /** `ask_cloud` 之后本轮要停：回答到达后重新起一轮 */
+  awaitingAnswer: boolean
+}
+
+interface PersistedTask {
+  id: string
+  unitId: string
+  repoPath: string
+  worktreePath: string
+  status: CloudTaskStatus
+  startedAt: number
+}
+
+const UNIT_BINDING_PREFIX = 'cloud:'
+
+export class CloudTaskRunner {
+  private deps: CloudTaskRunnerDeps
+  private manager: any = null
+  private managerKey = ''
+  private active = new Map<string, ActiveTask>()
+  private units = new Map<string, UnitRecord>()
+  private persistedTasks = new Map<string, PersistedTask>()
+  private cancelRequested = new Set<string>()
+  private disposed = false
+
+  constructor(deps: CloudTaskRunnerDeps) {
+    this.deps = deps
+  }
+
+  private unitsFile(): string {
+    return path.join(this.deps.dataDir, 'units.json')
+  }
+
+  private tasksFile(): string {
+    return path.join(this.deps.dataDir, 'tasks.json')
+  }
+
+  async load(): Promise<void> {
+    await fs.mkdir(this.deps.dataDir, { recursive: true })
+    const units = readJsonWithBackup<Record<string, UnitRecord>>(this.unitsFile())
+    if (units.data && typeof units.data === 'object') {
+      for (const [unitId, record] of Object.entries(units.data)) {
+        if (record && typeof record.worktreePath === 'string') this.units.set(unitId, record)
+      }
+    }
+    const tasks = readJsonWithBackup<Record<string, PersistedTask>>(this.tasksFile())
+    if (tasks.data && typeof tasks.data === 'object') {
+      for (const [taskId, record] of Object.entries(tasks.data)) {
+        if (record && typeof record.id === 'string') this.persistedTasks.set(taskId, record)
+      }
+    }
+  }
+
+  /**
+   * G6：上次进程留下的未完成工单改判 `interrupted` 并汇报。
+   * 不续跑 —— 工单的语义是「本次执行」，续跑会让用户以为失败被吞了。
+   */
+  async recoverInterrupted(): Promise<string[]> {
+    const interrupted: string[] = []
+    for (const record of this.persistedTasks.values()) {
+      if (!['queued', 'assigned', 'running', 'waiting_human'].includes(record.status)) continue
+      interrupted.push(record.id)
+      try {
+        this.deps.onInterrupted(record.id, 'device agent restarted')
+      } catch (error) {
+        this.deps.logger.warn('[Cloud Task] failed to report interrupted task:', error)
+      }
+    }
+    if (interrupted.length > 0) {
+      this.persistedTasks.clear()
+      await this.persistTasks()
+    }
+    return interrupted
+  }
+
+  private async persistUnits(): Promise<void> {
+    const data: Record<string, UnitRecord> = {}
+    for (const [unitId, record] of this.units) data[unitId] = record
+    await writeJsonAtomic(this.unitsFile(), data)
+  }
+
+  private async persistTasks(): Promise<void> {
+    const data: Record<string, PersistedTask> = {}
+    for (const [taskId, record] of this.persistedTasks) data[taskId] = record
+    await writeJsonAtomic(this.tasksFile(), data)
+  }
+
+  /** 该单元的工作树；没有就新建一个（G12：一单元一条绑定） */
+  private async ensureUnitWorktree(spec: CloudTaskSpec): Promise<{
+    ok: boolean
+    error?: string
+    record?: UnitRecord
+  }> {
+    const existing = this.units.get(spec.workUnitId)
+    if (existing && existsSync(existing.worktreePath)) return { ok: true, record: existing }
+
+    const repoPath = spec.repo.workspacePath
+    if (!existsSync(repoPath)) return { ok: false, error: `Repository not found: ${repoPath}` }
+    const coordinator = await this.deps.getCoordinator(repoPath)
+    if (!coordinator) {
+      return {
+        ok: false,
+        error: 'Not a git repository — delegated tasks need a worktree for isolation',
+      }
+    }
+
+    const bindingId = `${UNIT_BINDING_PREFIX}${spec.workUnitId}`
+    const base = spec.repo.baseBranch
+    const bound = await coordinator.bind(bindingId, 'new', base)
+    if (!bound.success || !bound.worktree) {
+      return { ok: false, error: bound.error ?? 'Unable to create a worktree for this task' }
+    }
+    const record: UnitRecord = {
+      repoPath,
+      worktreePath: bound.worktree.path,
+      branch: bound.worktree.branch,
+      base,
+      createdAt: Date.now(),
+    }
+    this.units.set(spec.workUnitId, record)
+    await this.persistUnits()
+    return { ok: true, record }
+  }
+
+  /** 复用用户当前 API 配置，按需建一个专属 AgentManager（独立 agentDir） */
+  private async ensureManager(): Promise<any> {
+    const config = await this.deps.getApiConfig()
+    if (!config || !config.apiKey || !config.selectedModel) {
+      throw new Error('API configuration is missing; configure the model in Settings first')
+    }
+    const key = `${config.provider}|${config.apiUrl}|${config.selectedModel}|${config.apiKey.length}`
+    if (this.manager && this.managerKey === key) return this.manager
+
+    const { AgentManager } = await import(getBridgeEntryUrl())
+    const agentDir = path.join(this.deps.dataDir, 'agent')
+    await fs.mkdir(agentDir, { recursive: true })
+    const manager = new AgentManager()
+    const result = await manager.initialize({
+      workspaceDir: path.join(this.deps.dataDir, 'workspace'),
+      agentDir,
+      apiConfig: config,
+      logger: this.deps.logger,
+      // 工单会话：不挂计划与工作树扩展（worktree 扩展用的是实例级 workspaceDir）
+      builtinExtensions: { plan: false, worktree: false },
+      toolAllowlist: [...TASK_TOOL_ALLOWLIST],
+      getDefaultPermissionLevel: () => 'auto',
+      extensionFactories: [
+        createTaskGuardExtension({
+          logger: this.deps.logger,
+          onBlocked: (info) => this.reportBlocked(info),
+        }),
+        this.createAskCloudExtension(),
+      ],
+    })
+    if (!result.success) throw new Error(result.error ?? 'failed to initialize the task agent')
+    this.manager = manager
+    this.managerKey = key
+    return manager
+  }
+
+  /** `ask_cloud`：把问题抛给用户，然后结束本轮等待回答（不做阻塞等待） */
+  private createAskCloudExtension(): (pi: any) => void {
+    return (pi) => {
+      pi.registerTool({
+        name: 'ask_cloud',
+        description:
+          'Ask the user (through the cloud console) when a decision cannot be made from the task itself. ' +
+          'Finish your turn right after calling this; the answer arrives as a follow-up message.',
+        parameters: {
+          type: 'object',
+          properties: { question: { type: 'string', description: 'The question to ask' } },
+          required: ['question'],
+        },
+        execute: async (_toolCallId: string, params: { question?: string }) => {
+          const question = String(params?.question ?? '').trim()
+          if (!question) {
+            return {
+              content: [{ type: 'text', text: 'A question is required.' }],
+              isError: true,
+              details: undefined,
+            }
+          }
+          const task = this.currentTaskForSession()
+          if (!task) {
+            return {
+              content: [{ type: 'text', text: 'No active task is attached to this session.' }],
+              isError: true,
+              details: undefined,
+            }
+          }
+          const questionId = `q-${Date.now().toString(36)}`
+          task.questionId = questionId
+          task.awaitingAnswer = true
+          this.deps.onQuestion(task.id, questionId, question)
+          this.setStatus(task.id, 'waiting_human')
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'The question was sent to the user. Stop here and wait for the answer.',
+              },
+            ],
+            isError: false,
+            details: undefined,
+          }
+        },
+      })
+    }
+  }
+
+  /** 目前同一演进里只有一个在跑的任务；`ask_cloud` 用它定位 taskId */
+  private currentTaskForSession(): ActiveTask | undefined {
+    for (const task of this.active.values()) {
+      if (task.awaitingAnswer) continue
+      return task
+    }
+    return this.active.values().next().value
+  }
+
+  private setStatus(taskId: string, status: CloudTaskStatus): void {
+    const task = this.active.get(taskId)
+    if (task) task.status = status
+    const persisted = this.persistedTasks.get(taskId)
+    if (persisted) {
+      persisted.status = status
+      void this.persistTasks()
+    }
+    this.deps.onStatus(taskId, status)
+  }
+
+  private reportBlocked(info: TaskGuardInfo): void {
+    const task = this.currentTaskForSession()
+    if (!task) return
+    this.deps.onMilestone(task.id, {
+      kind: 'progress',
+      text: `已拦截一次越界操作（${info.toolName}）：${truncate(info.reason, 200)}`,
+      at: Date.now(),
+    })
+  }
+
+  async start(taskId: string, spec: CloudTaskSpec, attempt = 0): Promise<void> {
+    if (this.disposed) return
+    if (this.active.has(taskId)) {
+      this.deps.logger.warn(`[Cloud Task] task ${taskId} is already running`)
+      return
+    }
+
+    const worktree = await this.ensureUnitWorktree(spec)
+    if (!worktree.ok || !worktree.record) {
+      this.deps.onFailed(taskId, worktree.error ?? 'Unable to prepare the worktree')
+      return
+    }
+    const unit = worktree.record
+    this.deps.onWorktree(taskId, spec.workUnitId, unit.worktreePath, unit.branch ?? undefined)
+
+    let manager: any
+    try {
+      manager = await this.ensureManager()
+    } catch (error) {
+      const reused = attempt === 0 && (await this.retryAfterConfigRefresh(taskId, spec))
+      if (!reused) {
+        this.deps.onFailed(taskId, error instanceof Error ? error.message : String(error))
+      }
+      return
+    }
+
+    let sessionId = ''
+    try {
+      const created = await manager.createSession(unit.worktreePath, {
+        permission: { mode: 'auto', grants: [] },
+      })
+      sessionId = String(created?.sessionId ?? created?.id ?? manager.getCurrentSessionId?.() ?? '')
+    } catch (error) {
+      this.deps.onFailed(taskId, error instanceof Error ? error.message : String(error))
+      return
+    }
+    if (!sessionId) {
+      this.deps.onFailed(taskId, 'Unable to create a task session')
+      return
+    }
+
+    const task: ActiveTask = {
+      id: taskId,
+      spec,
+      unitId: spec.workUnitId,
+      repoPath: spec.repo.workspacePath,
+      worktreePath: unit.worktreePath,
+      sessionId,
+      status: 'assigned',
+      startedAt: Date.now(),
+      lastMilestoneAt: 0,
+      changed: new Map(),
+      awaitingAnswer: false,
+    }
+    this.active.set(taskId, task)
+    this.persistedTasks.set(taskId, {
+      id: taskId,
+      unitId: spec.workUnitId,
+      repoPath: task.repoPath,
+      worktreePath: unit.worktreePath,
+      status: 'assigned',
+      startedAt: task.startedAt,
+    })
+    await this.persistTasks()
+    this.setStatus(taskId, 'assigned')
+
+    try {
+      manager.subscribeTrace?.(sessionId, (event: any) => this.onTrace(task, event))
+    } catch (error) {
+      this.deps.logger.warn('[Cloud Task] failed to subscribe trace:', error)
+    }
+
+    this.setStatus(taskId, 'running')
+    this.deps.onMilestone(taskId, { kind: 'accepted', text: '已接单，开始执行', at: Date.now() })
+
+    void this.runTurn(task, spec, buildTaskPrompt(spec, unit.worktreePath))
+  }
+
+  /** 配置刚改过时允许重试一次（例如用户刚在设置里填好 Key） */
+  private async retryAfterConfigRefresh(taskId: string, spec: CloudTaskSpec): Promise<boolean> {
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+    try {
+      await this.ensureManager()
+    } catch {
+      return false
+    }
+    void this.start(taskId, spec, 1)
+    return true
+  }
+
+  private async runTurn(task: ActiveTask, spec: CloudTaskSpec, prompt: string): Promise<void> {
+    try {
+      const outcome = await this.manager.chat(task.sessionId, prompt)
+      if (!task.awaitingAnswer && outcome && outcome.success === false) {
+        await this.finishFailed(task, outcome.error ?? 'task turn failed')
+        return
+      }
+      if (task.awaitingAnswer) return
+      await this.finishDone(task, spec, outcome)
+    } catch (error) {
+      if (this.cancelRequested.has(task.id)) return
+      await this.finishFailed(task, error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  private onTrace(task: ActiveTask, event: any): void {
+    if (!event || this.disposed) return
+    try {
+      if (event.type === 'tool_end' && event.status === 'success') {
+        const filePath = typeof event.filePath === 'string' ? event.filePath : ''
+        if (filePath && (event.toolName === 'write' || event.toolName === 'edit')) {
+          this.noteChanged(task, filePath, 'modified')
+        }
+        if (event.toolName === 'bash' || event.toolName === 'powershell') {
+          this.maybeMilestone(task, {
+            kind: 'progress',
+            text: `执行命令：${truncate(String(event.resultPreview ?? ''), 80) || event.toolName}`,
+            at: Date.now(),
+          })
+        }
+        return
+      }
+      if (event.type === 'tool_start') {
+        const toolName = String(event.toolName ?? '')
+        if (toolName === 'write' || toolName === 'edit') {
+          const args = String(event.argsSummary ?? '')
+          const match = args.match(/[\\/]?([\w.-]+\.[A-Za-z0-9]+)/)
+          if (match) this.noteChanged(task, match[0], 'modified')
+        }
+        this.maybeMilestone(task, {
+          kind: 'progress',
+          text: `${toolName} ${truncate(String(event.argsSummary ?? ''), 100)}`.trim(),
+          at: Date.now(),
+        })
+      }
+    } catch (error) {
+      this.deps.logger.warn('[Cloud Task] trace projection failed:', error)
+    }
+  }
+
+  private noteChanged(task: ActiveTask, filePath: string, kind: CloudChangedFile['kind']): void {
+    const relative = path.isAbsolute(filePath)
+      ? path.relative(task.worktreePath, filePath)
+      : filePath
+    if (!relative || relative.startsWith('..')) return
+    if (task.changed.has(relative)) return
+    task.changed.set(relative, { path: relative.replace(/\\/g, '/'), kind })
+    if (task.changed.size === 1) {
+      this.deps.onMilestone(task.id, {
+        kind: 'first-change',
+        text: `第一次改动：${relative}`,
+        at: Date.now(),
+        changedFiles: [...task.changed.values()],
+      })
+    }
+  }
+
+  private maybeMilestone(task: ActiveTask, milestone: CloudTaskMilestone): void {
+    const now = Date.now()
+    if (now - task.lastMilestoneAt < MILESTONE_THROTTLE_MS) return
+    task.lastMilestoneAt = now
+    this.deps.onMilestone(task.id, milestone)
+  }
+
+  private async finishDone(task: ActiveTask, spec: CloudTaskSpec, outcome: any): Promise<void> {
+    const changedFiles = await this.collectChangedFiles(task)
+    let commit = ''
+    let branch = ''
+    try {
+      const rev = await this.git(task.worktreePath, ['rev-parse', '--short', 'HEAD'])
+      commit = rev.trim()
+      const head = await this.git(task.worktreePath, ['rev-parse', '--abbrev-ref', 'HEAD'])
+      branch = head.trim()
+    } catch {
+      // 不是 git 仓库或还没提交：留空即可
+    }
+    const summary = String(outcome?.response ?? '').trim() || '(模型没有返回总结)'
+    const result: CloudTaskResult = {
+      summary,
+      changedFiles,
+      branch: branch && branch !== 'HEAD' ? branch : undefined,
+      commit: commit || undefined,
+    }
+    if (changedFiles.length === 0) {
+      result.notes = '没有检测到文件改动'
+    } else if (spec.commit && !commit) {
+      result.notes = '本单要求提交，但工作树里没有新提交'
+    }
+    this.active.delete(task.id)
+    this.persistedTasks.delete(task.id)
+    await this.persistTasks()
+    this.deps.onResult(task.id, result)
+  }
+
+  private async finishFailed(task: ActiveTask, error: string): Promise<void> {
+    const changedFiles = await this.collectChangedFiles(task).catch(() => [] as CloudChangedFile[])
+    this.active.delete(task.id)
+    this.persistedTasks.delete(task.id)
+    await this.persistTasks().catch(() => undefined)
+    this.deps.onFailed(task.id, error, changedFiles)
+  }
+
+  private async collectChangedFiles(task: ActiveTask): Promise<CloudChangedFile[]> {
+    const fromGit = new Map<string, CloudChangedFile>(task.changed)
+    try {
+      const output = await this.git(task.worktreePath, ['status', '--porcelain'])
+      for (const line of output.split(/\r?\n/)) {
+        if (!line.trim()) continue
+        const status = line.slice(0, 2).trim()
+        const raw = line.slice(3).trim()
+        const filePath = raw.replace(/^"|"$/g, '')
+        if (!filePath) continue
+        const kind: CloudChangedFile['kind'] =
+          status === '??'
+            ? 'added'
+            : status.includes('D')
+              ? 'deleted'
+              : status.includes('R')
+                ? 'renamed'
+                : 'modified'
+        fromGit.set(filePath, { path: filePath.replace(/\\/g, '/'), kind })
+      }
+    } catch {
+      // git 不可用：退回工具轨迹里记到的路径
+    }
+    return [...fromGit.values()].slice(0, 200)
+  }
+
+  private async git(cwd: string, args: string[]): Promise<string> {
+    const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
+      timeout: GIT_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
+    })
+    return stdout
+  }
+
+  /** 用户停止：中止本轮，工作树与分支保留（改动可能有用） */
+  async cancel(taskId: string, reason = 'user-cancel'): Promise<boolean> {
+    const task = this.active.get(taskId)
+    if (!task) return false
+    this.cancelRequested.add(taskId)
+    try {
+      await this.manager?.abort?.(task.sessionId)
+    } catch (error) {
+      this.deps.logger.warn('[Cloud Task] abort failed:', error)
+    }
+    this.active.delete(taskId)
+    this.persistedTasks.delete(taskId)
+    await this.persistTasks().catch(() => undefined)
+    this.deps.onInterrupted(taskId, reason)
+    return true
+  }
+
+  /** 用户回答 `ask_cloud` 的问题：以一条新用户轮次继续 */
+  async answer(taskId: string, text: string, questionId?: string): Promise<boolean> {
+    const task = this.active.get(taskId)
+    if (!task) return false
+    if (task.questionId && questionId && task.questionId !== questionId) return false
+    task.awaitingAnswer = false
+    task.questionId = undefined
+    this.setStatus(taskId, 'running')
+    try {
+      const outcome = await this.manager.chat(
+        task.sessionId,
+        `用户的回答（针对上一个问题）：\n\n${text.trim()}\n\n请继续执行工单。`
+      )
+      if (outcome && outcome.success === false) {
+        await this.finishFailed(task, outcome.error ?? 'task turn failed')
+        return false
+      }
+      await this.finishDone(task, task.spec, outcome)
+      return true
+    } catch (error) {
+      await this.finishFailed(task, error instanceof Error ? error.message : String(error))
+      return false
+    }
+  }
+
+  /** 插话：不结束本轮，按 steer 注入 */
+  async message(taskId: string, text: string): Promise<boolean> {
+    const task = this.active.get(taskId)
+    if (!task) return false
+    try {
+      if (this.manager?.isSessionBusy?.(task.sessionId)) {
+        await this.manager.steer?.(task.sessionId, text)
+      } else {
+        const outcome = await this.manager.chat(task.sessionId, text)
+        if (outcome && outcome.success !== false) await this.finishDone(task, task.spec, outcome)
+      }
+      return true
+    } catch (error) {
+      this.deps.logger.warn('[Cloud Task] steer failed:', error)
+      return false
+    }
+  }
+
+  isRunning(taskId: string): boolean {
+    return this.active.has(taskId)
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed = true
+    for (const task of [...this.active.values()]) {
+      try {
+        await this.manager?.abort?.(task.sessionId)
+      } catch {
+        // ignore
+      }
+    }
+    this.active.clear()
+    await this.manager?.dispose?.().catch(() => undefined)
+    this.manager = null
+  }
+}
+
+function truncate(text: string, limit: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > limit ? `${flat.slice(0, limit)}…` : flat
+}
+
+export function buildTaskPrompt(spec: CloudTaskSpec, worktreePath: string): string {
+  const lines = [
+    '你正在执行云端下发的一张工单。你跑在一个专用的 git worktree 里，改动不会碰用户的主工作区。',
+    '',
+    `工单标题：${spec.title}`,
+    `工作目录：${worktreePath}`,
+    '',
+    '## 背景',
+    spec.background || '(未提供)',
+    '',
+    '## 目标',
+    spec.goal,
+    '',
+    '## 验收标准',
+    spec.acceptance,
+  ]
+  if (spec.expectedChanges) {
+    lines.push('', '## 预期改动范围（沟通用，不是限制）', spec.expectedChanges)
+  }
+  if (spec.forbidden?.length) {
+    lines.push('', '## 禁止事项', ...spec.forbidden.map((item) => `- ${item}`))
+  }
+  lines.push(
+    '',
+    '## 规则',
+    '- 只在当前工作目录内写文件；工作目录之外的绝对路径会被拒绝。',
+    '- 不要 `git push`；需要提交时就地提交，并把分支与提交号写进总结。',
+    '- 需要用户决策（方案、取舍、权限之外的资源）时调用 `ask_cloud`，然后结束本轮等待回答。',
+    '- 结束时用中文写总结：做了什么、改了哪些文件、跑了什么验证、还有什么没做。'
+  )
+  return lines.join('\n')
+}

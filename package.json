@@ -49,7 +49,8 @@
     "node-pty": "^1.1.0",
     "pdfjs-dist": "^6.4.299",
     "pi-bridge": "*",
-    "pi-web-access": "0.45.0"
+    "pi-web-access": "0.45.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

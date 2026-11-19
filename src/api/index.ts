@@ -10,6 +10,11 @@ import type {
   RepoMapCanvasGetResult,
   RepoMapCanvasSetResult,
   OpenDirectoryResult,
+  CloudLinkStatusResult,
+  CloudPairInput,
+  CloudPairResult,
+  CloudDeviceState,
+  CloudWorkspaceEntry,
   ListDirectoryResult,
   ReadFileResult,
   WriteFileResult,
@@ -423,6 +428,35 @@ const mockAPI = {
   pluginsSetEnabled: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
   onPluginsChanged: (_callback: (payload: { workspaceDir: string }) => void) => () => {},
 
+  // 云端连接：Web 模式下没有主进程，一律按未配对处理
+  cloudLinkStatus: async (): Promise<CloudLinkStatusResult> => ({
+    success: true,
+    link: { linked: false },
+    state: { status: 'unlinked', pending: 0 },
+    error: 'Cloud pairing is only available in the Electron app'
+  }),
+  cloudPair: async (): Promise<CloudPairResult> => ({
+    success: false,
+    error: 'Cloud pairing is only available in the Electron app'
+  }),
+  cloudUnlink: async () => ({
+    success: false,
+    error: 'Cloud pairing is only available in the Electron app'
+  }),
+  cloudReconnect: async () => ({
+    success: false,
+    error: 'Cloud pairing is only available in the Electron app'
+  }),
+  cloudRefreshWorkspaces: async () => ({
+    success: false,
+    error: 'Cloud pairing is only available in the Electron app'
+  }),
+  cloudListWorkspaces: async (): Promise<{ success: boolean; workspaces: CloudWorkspaceEntry[] }> => ({
+    success: true,
+    workspaces: []
+  }),
+  onCloudState: (_callback: (state: CloudDeviceState) => void) => () => {},
+
   // Terminal（Web 模式没有 PTY，返回失败而不是抛异常）
   terminalCreate: async (): Promise<TerminalCreateResult> => ({
     success: false,
@@ -708,6 +742,15 @@ export const api = {
   pluginsSetEnabled: (workspaceDir: string, pluginId: string, enabled: boolean) =>
     electronAPI.pluginsSetEnabled(workspaceDir, pluginId, enabled),
   onPluginsChanged: (callback: (payload: { workspaceDir: string }) => void) => electronAPI.onPluginsChanged(callback),
+
+  // 云端连接（配对 / 解绑 / 状态）
+  cloudLinkStatus: () => electronAPI.cloudLinkStatus(),
+  cloudPair: (input: CloudPairInput) => electronAPI.cloudPair(input),
+  cloudUnlink: () => electronAPI.cloudUnlink(),
+  cloudReconnect: () => electronAPI.cloudReconnect(),
+  cloudRefreshWorkspaces: () => electronAPI.cloudRefreshWorkspaces(),
+  cloudListWorkspaces: () => electronAPI.cloudListWorkspaces(),
+  onCloudState: (callback: (state: CloudDeviceState) => void) => electronAPI.onCloudState(callback),
 
   // Git worktrees / read-only history / GitHub status
   gitRepoInfo: (workspaceDir: string) => electronAPI.gitRepoInfo(workspaceDir),

@@ -35,6 +35,12 @@ import { registerAttachmentsIpc } from './ipc/attachments.js'
 import { registerFileProtocol } from './file-protocol.js'
 import { registerSchemePrivileges } from './scheme-privileges.js'
 import { registerAgentIpc, type AgentIpcContext } from './ipc/agent.js'
+import {
+  registerCloudIpc,
+  shutdownCloudDeviceAgent,
+  startCloudDeviceAgentIfLinked,
+  type CloudIpcContext
+} from './ipc/cloud.js'
 import { registerDocumentsIpc } from './ipc/documents.js'
 import { registerGitIpc } from './ipc/git.js'
 import { registerRepoMapIpc } from './ipc/repo-map.js'
@@ -599,6 +605,18 @@ registerSystemIpc({
 
 registerAuxWindowIpc({ getMainWindow: () => mainWindow })
 
+const cloudIpcContext: CloudIpcContext = {
+  logger: agentLogger,
+  listWorkspacePaths: () => workspaceStore.list().map((record) => record.path),
+  onStateChange: (state) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('cloud:state', state)
+    }
+  }
+}
+
+registerCloudIpc(cloudIpcContext)
+
 // 初始化应用目录结构
 async function initAppDirectories() {
   const appDir = getAppDir()
@@ -929,6 +947,10 @@ app.whenReady().then(async () => {
   startupReady = (async () => {
     await seedTrustedWorkspaces()
     await initializeWebSearch()
+    // 已配对才连云端；失败只记日志，不影响应用启动
+    await startCloudDeviceAgentIfLinked(cloudIpcContext).catch((error) =>
+      console.warn('[Main] Cloud device agent unavailable:', error)
+    )
   })()
   void startupReady.catch((error) => console.warn('[Main] Startup preparation failed:', error))
 
@@ -1022,7 +1044,7 @@ function quitApplication(): void {
  * 清理一旦变慢，用户还能从托盘重新触发退出，而不是只能开任务管理器。
  *
  * 每一步都带超时；超时只记警告并继续，真正的兜底是 shutdown.ts 里的看门狗。
- * 各步超时之和（5.9s）必须小于 SHUTDOWN_TIMEOUT_MS（6s），否则看门狗会提前抢跑。
+ * 各步超时之和（7.1s）必须小于 SHUTDOWN_TIMEOUT_MS（7.5s），否则看门狗会提前抢跑。
  */
 async function shutdownApplication(): Promise<void> {
   try {
@@ -1030,6 +1052,12 @@ async function shutdownApplication(): Promise<void> {
       [
         { name: 'approval-broker', timeoutMs: 400, run: () => approvalBroker.dispose() },
         { name: 'agents', timeoutMs: 2000, run: () => agentRegistry.disposeAll() },
+        // 云端工单：先把自己标 interrupted 并冲队列，再释放执行器
+        {
+          name: 'cloud-device',
+          timeoutMs: 1200,
+          run: () => shutdownCloudDeviceAgent()
+        },
         { name: 'worktree-deps', timeoutMs: 400, run: () => disposeAllCoordinators() },
         {
           name: 'workspace-tasks',

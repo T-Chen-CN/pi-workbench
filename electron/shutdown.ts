@@ -10,12 +10,12 @@
  *
  * 这里刻意不引入 electron 依赖，全部通过参数注入，便于单测覆盖。
  *
- * 时长预算：main.ts 里各步 timeout 之和（5.9s）必须小于 SHUTDOWN_TIMEOUT_MS（6s），
+ * 时长预算：main.ts 里各步 timeout 之和（7.1s）必须小于 SHUTDOWN_TIMEOUT_MS（7.5s），
  * 否则看门狗会在某一步还在正常计时的时候抢先把进程 exit 掉。
  */
 import { withTimeout } from './async-utils.js'
 
-export const SHUTDOWN_TIMEOUT_MS = 6_000
+export const SHUTDOWN_TIMEOUT_MS = 7_500
 export const QUIT_STALL_TIMEOUT_MS = 10_000
 /** 单步耗时超过这个值就打警告，便于事后从日志定位慢在哪 */
 const SLOW_STEP_WARN_MS = 500
