@@ -68,7 +68,7 @@ export default tseslint.config(
   },
   {
     // 构建期脚本（Node ESM）
-    files: ['scripts/**/*.js', 'docs/**/*.mjs'],
+    files: ['scripts/**/*.{js,mjs}', 'docs/**/*.mjs'],
     languageOptions: {
       sourceType: 'module',
       globals: {
