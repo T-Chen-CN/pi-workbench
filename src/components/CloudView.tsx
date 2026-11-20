@@ -113,7 +113,15 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
             : ''}
         </StatusText>
         <div className="ml-auto flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => void store.refreshStatus()}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              void store.refreshStatus()
+              // 重报仓库清单：新开的 git 仓库不重报，云端就一直以为这台机器只有一个不可派活的目录
+              void store.refreshWorkspaces()
+            }}
+          >
             <RefreshCw size={13} />
             {t('cloudRefresh')}
           </Button>

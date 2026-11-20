@@ -39,6 +39,7 @@ interface CloudState {
 
   init: () => Promise<void>
   refreshStatus: () => Promise<void>
+  refreshWorkspaces: () => Promise<number>
   pair: (input: { baseUrl: string; code: string; deviceName?: string }) => Promise<boolean>
   unlink: () => Promise<void>
   reconnect: () => Promise<void>
@@ -123,6 +124,9 @@ export const useCloudStore = create<CloudState>((set, get) => ({
       api.onCloudClientFrame((frame) => get().applyFrame(frame))
     }
     await get().refreshStatus()
+    // 重启后必须重新开通道：快照（含历史消息）只在这一步之后才来，
+    // 不开就是「历史全没了」，而其实服务端一直有。
+    if (get().link.linked) await get().openClient()
     set({ initialized: true })
   },
 
@@ -156,6 +160,14 @@ export const useCloudStore = create<CloudState>((set, get) => ({
     } finally {
       set({ linking: false })
     }
+  },
+
+  refreshWorkspaces: async () => {
+    const result = await api.cloudRefreshWorkspaces()
+    if (!result.success) {
+      set({ error: result.error ?? null })
+    }
+    return result.workspaces?.length ?? 0
   },
 
   unlink: async () => {
@@ -310,6 +322,26 @@ export const useCloudStore = create<CloudState>((set, get) => ({
         set((state) => (frame.seq > state.lastSeq ? { lastSeq: frame.seq } : {}))
       }
       switch (event.type) {
+        case 'message_start': {
+          const id = String(event.messageId ?? messageId())
+          set((state) => {
+            if (state.messages.some((row) => row.id === id)) return {}
+            return {
+              messages: [
+                ...state.messages,
+                {
+                  id,
+                  role: event.role === 'user' ? ('user' as const) : ('assistant' as const),
+                  text: '',
+                  at: Number(event.at ?? Date.now()),
+                  streaming: event.role !== 'user',
+                  traces: [],
+                },
+              ].slice(-400),
+            }
+          })
+          return
+        }
         case 'text_delta': {
           const delta = String(event.delta ?? '')
           if (!delta) return
@@ -335,6 +367,17 @@ export const useCloudStore = create<CloudState>((set, get) => ({
         case 'message_end': {
           set((state) => {
             const messages = state.messages.slice()
+            const targetId = String(event.messageId ?? '')
+            const byId = targetId ? messages.findIndex((row) => row.id === targetId) : -1
+            if (byId >= 0) {
+              messages[byId] = {
+                ...messages[byId],
+                text: String(event.text ?? messages[byId].text),
+                streaming: false,
+                error: event.error,
+              }
+              return { messages }
+            }
             for (let index = messages.length - 1; index >= 0; index -= 1) {
               const row = messages[index]
               if (row.role !== 'assistant' || !row.streaming) continue

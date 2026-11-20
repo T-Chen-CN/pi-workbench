@@ -36,6 +36,7 @@ import { registerFileProtocol } from './file-protocol.js'
 import { registerSchemePrivileges } from './scheme-privileges.js'
 import { registerAgentIpc, type AgentIpcContext } from './ipc/agent.js'
 import {
+  notifyCloudWorkspacesChanged,
   registerCloudIpc,
   shutdownCloudDeviceAgent,
   startCloudDeviceAgentIfLinked,
@@ -586,7 +587,8 @@ registerWorkspaceIpc({
   pluginManager,
   terminalManager,
   workspaceStore,
-  waitForStartup: () => startupReady
+  waitForStartup: () => startupReady,
+    onWorkspacesChanged: () => notifyCloudWorkspacesChanged()
 })
 
 registerGitIpc({

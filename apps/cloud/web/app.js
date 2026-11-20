@@ -280,6 +280,20 @@ function applyFrame(frame) {
 
   const event = frame.event || {}
   switch (event.type) {
+    case 'message_start': {
+      const id = String(event.messageId || `m-${Date.now()}`)
+      if (state.messages.some((row) => row.id === id)) return
+      state.messages.push({
+        id,
+        role: event.role === 'user' ? 'user' : 'assistant',
+        text: '',
+        at: event.at || Date.now(),
+        streaming: event.role !== 'user',
+        traces: [],
+      })
+      renderTranscript()
+      return
+    }
     case 'text_delta': {
       const delta = String(event.delta || '')
       if (!delta) return
@@ -298,13 +312,21 @@ function applyFrame(frame) {
       return
     }
     case 'message_end': {
-      for (let index = state.messages.length - 1; index >= 0; index -= 1) {
-        const row = state.messages[index]
-        if (row.role !== 'assistant' || !row.streaming) continue
-        row.text = event.text || row.text
+      const target = String(event.messageId || '')
+      let row = target ? state.messages.find((item) => item.id === target) : undefined
+      if (!row) {
+        for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+          const candidate = state.messages[index]
+          if (candidate.role === 'assistant' && candidate.streaming) {
+            row = candidate
+            break
+          }
+        }
+      }
+      if (row) {
+        if (event.text) row.text = event.text
         row.streaming = false
         row.error = event.error
-        break
       }
       renderTranscript()
       return

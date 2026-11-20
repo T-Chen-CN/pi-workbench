@@ -178,6 +178,48 @@ describe('流式事件', () => {
     expect(state.notices[0]).toMatchObject({ level: 'warn', text: '终端离线' })
   })
 
+  it('用户消息：服务端回显按 id 去重，本端乐观追加的不会被画两遍', () => {
+    reset()
+    // 本端发送时先乐观追加一条（id 与 clientMessageId 一致）
+    useCloudStore.setState({
+      messages: [{ id: 'c-abc', role: 'user', text: '你好', at: 1, traces: [] }],
+    })
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: { type: 'message_start', messageId: 'c-abc', role: 'user', at: 2 },
+    })
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'message_end', messageId: 'c-abc', text: '你好', at: 3 },
+    })
+    const messages = useCloudStore.getState().messages
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ id: 'c-abc', role: 'user', text: '你好', streaming: false })
+  })
+
+  it('另一端的用户消息也会显示（之前只有 assistant 气泡）', () => {
+    reset()
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: { type: 'message_start', messageId: 'u-c-1', role: 'user', at: 1 },
+    })
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'message_end', messageId: 'u-c-1', text: '在 Web 上说的话', at: 2 },
+    })
+    const messages = useCloudStore.getState().messages
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ role: 'user', text: '在 Web 上说的话' })
+  })
+
   it('协议版本不符的帧被忽略', () => {
     reset()
     useCloudStore.getState().applyFrame({ v: 2, type: 'snapshot', snapshot: { messages: [{ id: 'x' }] } })

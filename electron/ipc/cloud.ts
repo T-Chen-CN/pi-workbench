@@ -330,6 +330,13 @@ export function registerCloudIpc(context: CloudIpcContext): void {
   }))
 }
 
+/** 工作区清单变化：让设备代理立刻重报（离线时进 outbox，重连后补） */
+export function notifyCloudWorkspacesChanged(): void {
+  void deviceAgent?.refreshWorkspaces().catch((error) => {
+    console.warn('[Cloud] failed to refresh workspaces:', error)
+  })
+}
+
 export function getCloudDeviceAgent(): DeviceAgent | null {
   return deviceAgent
 }

@@ -133,6 +133,10 @@ export class CloudSession {
     if (!body) return { success: false, error: 'Message is empty.' }
     if (!this.sessionId) return { success: false, error: 'Cloud session is not ready.' }
 
+    // 用户消息也要广播：多端（Web / 另一台设备）必须看到同一份对话。
+    // messageId 用客户端给的 id，发起的端可以据此去重（它本地已经乐观追加了）。
+    this.echoUserMessage(body, clientMessageId)
+
     if (this.deps.agent.isSessionBusy(this.sessionId)) {
       const steered = await this.deps.agent.steer(this.sessionId, body)
       if (steered.success) {
@@ -151,6 +155,13 @@ export class CloudSession {
     this.beginTurn()
     void this.runTurn(body)
     return { success: true }
+  }
+
+  /** 用户消息回显（两端都靠这一对帧渲染用户气泡，不再依赖「本端自己画」） */
+  private echoUserMessage(body: string, clientMessageId: string): void {
+    const messageId = `u-${clientMessageId || this.now()}`
+    this.deps.hub.publish({ type: 'message_start', messageId, role: 'user', at: this.now() })
+    this.deps.hub.publish({ type: 'message_end', messageId, text: body, at: this.now() })
   }
 
   private async runTurn(text: string): Promise<void> {

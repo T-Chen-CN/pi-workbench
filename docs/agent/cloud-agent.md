@@ -94,6 +94,18 @@
 - Web 客户端零 XSS：只用 `textContent` / DOM 构造，静态文件走白名单（`src/http/static.ts`）。
 - 云端 API Key 加密落盘、接口只回末四位；Web / 桌面端写的是同一份配置。
 
+### 3.5.1 对话气泡归谁画
+
+**用户消息也由服务端广播**（`say()` → `message_start(role:user)` + `message_end(text)`，
+`messageId = u-<clientMessageId>`）：多端必须看到同一份对话，只靠发起端本地乐观追加的话，
+换台设备（或 Web 页）就只看得到 Agent 说的话。发起的端按 id 去重，不会画两遍。
+
+客户端两条约定：收到 `message_start` 先占位（用户行 `streaming:false`），`message_end` **按 id** 收尾，
+按 id 找不到才回退到「最后一条 streaming 的 assistant」——启动时加载的历史消息用的是 `h-<序号>` 这类 id。
+
+桌面端 `cloudStore.init()` 必须在已配对时**重新打开客户端通道**：快照（含历史）只在开通道后下发，
+不开就是「重启后历史全没了」，而服务端其实一直有。
+
 ### 3.6 拉模型清单（`POST /v1/cloud-config/models`）
 
 浏览器直连供应商的 `/models` 会被 CORS 挡，所以由云端代跑一次，客户端只拿到 id 列表：

@@ -41,8 +41,11 @@ class FakeSocket {
   emit(type: string, event: any = {}) {
     for (const callback of this.listeners[type] ?? []) callback(event)
   }
+  sent: string[] = []
   close() {}
-  send() {}
+  send(data: any) {
+    this.sent.push(String(data))
+  }
 }
 
 let buttonByText: (text: string) => HTMLElement
@@ -122,6 +125,31 @@ describe('Web 客户端主界面', () => {
     )
     expect(after.find((node) => node.type === 'password')?.value).toBe('sk-typed-in-test')
     expect(document.body.textContent).toContain('model-a')
+  })
+
+  it('发出去的消息立刻以用户气泡出现（服务端 message_start/message_end 回显）', async () => {
+    buttonByText('会话').click()
+    await tick()
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement
+    textarea.value = '帮我看看仓库结构'
+    textarea.dispatchEvent(new Event('input'))
+    buttonByText('发送').click()
+    await tick(30)
+
+    const socket = FakeSocket.instances[0]
+    const sent = JSON.parse(String((socket as any).sent?.[0] ?? 'null'))
+    expect(sent?.type).toBe('say')
+
+    // 服务端按 clientMessageId 回显这一对帧
+    const messageId = `u-${sent.clientMessageId}`
+    socket.emit('message', {
+      data: JSON.stringify({ v: 1, type: 'event', seq: 2, event: { type: 'message_start', messageId, role: 'user', at: Date.now() } }),
+    })
+    socket.emit('message', {
+      data: JSON.stringify({ v: 1, type: 'event', seq: 3, event: { type: 'message_end', messageId, text: '帮我看看仓库结构', at: Date.now() } }),
+    })
+    await tick(30)
+    expect(document.body.textContent).toContain('帮我看看仓库结构')
   })
 
   it('流式帧到达触发重渲染时，聊天草稿与配置输入都保留', async () => {

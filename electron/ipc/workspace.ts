@@ -57,6 +57,8 @@ export interface WorkspaceIpcContext {
   workspaceStore: WorkspaceStore
   /** 启动期的 SQLite 播种与配置落盘；最近工作区列表要等它完成 */
   waitForStartup?: () => Promise<void>
+  /** 最近工作区变化（新开的仓库要立刻同步给云端设备清单） */
+  onWorkspacesChanged?: () => void
 }
 
 /** 最近工作区只列出仍然存在的目录：被删除或移走的目录不再出现在任何入口里 */
@@ -181,6 +183,7 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
         return { success: false, workspaces: [], error: 'Workspace is not approved' }
       }
       context.workspaceStore.recordOpen(workspacePath)
+      context.onWorkspacesChanged?.()
       const recent = context.workspaceStore
         .listRecent(10)
         .filter((item) => isTrustedWorkspacePath(item))
