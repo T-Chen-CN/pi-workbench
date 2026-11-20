@@ -405,10 +405,11 @@ function render() {
     ...renderPills(),
   ])
 
+  // 右栏只跟会话页搭配；工单 / 设备 / 设置页本来就是整页看同一批卡片，再放一遍就重复了
   const main =
     state.tab === 'chat'
       ? el('main', {}, [renderChat(), renderAside()])
-      : el('main', {}, [renderTabBody(), renderAside()])
+      : el('main', {}, [renderTabBody()])
 
   root.replaceChildren(
     header,
@@ -633,10 +634,20 @@ function renderTabBody() {
   return el('section', { class: 'transcript' }, [renderConfigCard()])
 }
 
+/**
+ * 右栏：工单 / 设备 / 授权 / 提示。
+ *
+ * 必须是**纯构造**并返回节点：之前写成去 `querySelector('aside')` 原地替换，可页面上
+ * 根本没有 aside（它本身就负责生成它），于是返回 undefined、整栏静默不渲染，
+ * 连带「点生成配对码没反应，切个页面才出现」。
+ */
 function renderAside() {
-  const aside = document.querySelector('aside')
-  if (!aside) return
-  aside.replaceChildren(renderTaskCard(), renderDeviceCard(), renderAuthCard(), renderNoticeCard())
+  return el('aside', {}, [
+    renderTaskCard(),
+    renderDeviceCard(),
+    renderAuthCard(),
+    renderNoticeCard(),
+  ])
 }
 
 function renderTaskCard() {
@@ -733,7 +744,7 @@ function renderDeviceCard() {
       const result = await request('POST', '/v1/pair/code')
       if (!result.ok) return
       state.pairCode = result.payload
-      renderAside()
+      render()
     },
   })
 
