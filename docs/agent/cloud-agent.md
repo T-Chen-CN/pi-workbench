@@ -94,6 +94,18 @@
 - Web 客户端零 XSS：只用 `textContent` / DOM 构造，静态文件走白名单（`src/http/static.ts`）。
 - 云端 API Key 加密落盘、接口只回末四位；Web / 桌面端写的是同一份配置。
 
+### 3.6 拉模型清单（`POST /v1/cloud-config/models`）
+
+浏览器直连供应商的 `/models` 会被 CORS 挡，所以由云端代跑一次，客户端只拿到 id 列表：
+
+- 请求体 `{ provider, apiUrl, apiKey }`，三项都可省：省了就回退到**已保存**的配置（解密后用），
+  所以「先保存再刷新列表」也能用；只回 `{ models, provider, apiUrl }`，不回显 Key、不回传供应商响应原文。
+- 鉴权头与桌面端一致：`anthropic` → `x-api-key` + `anthropic-version`，其余 → `Bearer`。
+- 兼容 `{ data: [{ id }] }` / `{ models: [...] }` / `[...]` 三种形状，去重后排序。
+- **SSRF 面**：设备 token 也能让它请求任意 http(s) 地址（单管理员部署的取舍），因此只允许 http(s)、
+  15 秒超时、响应截断 256KB；失败统一回 502 + `provider-unreachable` / `provider-error`。
+- 两边界面同一口径：拿到列表用下拉，拿到空列表或失败就允许手填（不是所有代理商都实现 `/models`）。
+
 ## 4. 本机运行
 
 ```bash
@@ -188,6 +200,7 @@ node apps/cloud/scripts/acceptance.mjs https://<域名>
 | 现象 | 先看 |
 | --- | --- |
 | 配对一直失败 | `journalctl -u pi-cloud`；确认 `PI_CLOUD_ENC_KEY` 没换过（换了要重新推模型配置） |
+| 「获取可用模型」报 502 | 供应商不实现 `/models` 或该 Base URL 不是 v1 根；直接手填模型名即可 |
 | 设备显示在线但收不到工单 | 服务端 `devices.json` 的 `workspaces` 是否为仓库根、`isGit` 是否为 true |
 | 工单卡在 `queued` | 终端日志 `[Cloud Task]`；60 秒后会被判超时 |
 | 工单失败「not a git repository」 | 非 git 目录不接受派活（G10），先 `git init` |

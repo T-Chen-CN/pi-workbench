@@ -21,6 +21,9 @@ const state = {
   notices: [],
   config: null,
   pairCode: null,
+  configDraft: null,
+  configModels: [],
+  fetchingModels: false,
   error: null,
   draft: '',
   answerDrafts: {},
@@ -798,43 +801,137 @@ function renderNoticeCard() {
   ])
 }
 
+/** 渠道预设：选中后自动填 Base URL（与桌面端 apiConfig 同一套口径） */
+const PROVIDER_PRESETS = [
+  { id: 'custom', label: 'custom（任意 OpenAI 兼容 / 代理）', apiUrl: '' },
+  { id: 'openai', label: 'openai', apiUrl: 'https://api.openai.com/v1' },
+  { id: 'anthropic', label: 'anthropic', apiUrl: 'https://api.anthropic.com/v1' },
+]
+
 function renderConfigCard() {
   const config = state.config || { configured: false }
-  const provider = el('input', { value: config.provider || 'custom' })
-  const apiUrl = el('input', { value: config.apiUrl || '', placeholder: 'https://api.example.com/v1' })
-  const model = el('input', { value: config.model || '' })
-  const apiKey = el('input', { type: 'password', placeholder: config.apiKeyMasked ? `已保存：${config.apiKeyMasked}` : '' })
+  const draft = state.configDraft || {
+    provider: config.provider || 'custom',
+    apiUrl: config.apiUrl || '',
+    model: config.model || '',
+    apiKey: '',
+  }
+  const models = state.configModels || []
   const status = el('p', { class: 'muted' })
+  const modelInput = el('input', {
+    value: draft.model || '',
+    placeholder: '可以手填，例如 claude-sonnet-4-5',
+  })
+
+  const providerSelect = el(
+    'select',
+    {
+      onchange: (event) => {
+        draft.provider = event.target.value
+        const preset = PROVIDER_PRESETS.find((entry) => entry.id === draft.provider)
+        if (preset && preset.apiUrl && !draft.apiUrl) draft.apiUrl = preset.apiUrl
+        state.configDraft = draft
+        render()
+      },
+    },
+    PROVIDER_PRESETS.map((entry) =>
+      el('option', { value: entry.id, text: entry.label, selected: entry.id === draft.provider })
+    )
+  )
+
+  const apiUrl = el('input', {
+    value: draft.apiUrl || '',
+    placeholder: 'https://api.example.com/v1',
+    oninput: (event) => {
+      draft.apiUrl = event.target.value
+    },
+  })
+
+  const apiKey = el('input', {
+    type: 'password',
+    autocomplete: 'off',
+    placeholder: config.apiKeyMasked ? `已保存：${config.apiKeyMasked}（留空表示不改）` : 'sk-...',
+    oninput: (event) => {
+      draft.apiKey = event.target.value
+    },
+  })
+
+  // 拿到列表就用下拉，拿不到就允许手填 —— 不是所有代理商都实现 /models
+  const modelField =
+    models.length > 0
+      ? el(
+          'select',
+          {
+            onchange: (event) => {
+              draft.model = event.target.value
+            },
+          },
+          models.map((id) => el('option', { value: id, text: id, selected: id === draft.model }))
+        )
+      : modelInput
+
+  const fetchButton = el('button', {
+    text: state.fetchingModels ? '拉取中…' : '获取可用模型',
+    onclick: async () => {
+      state.fetchingModels = true
+      state.configDraft = draft
+      render()
+      const result = await request('POST', '/v1/cloud-config/models', {
+        provider: draft.provider,
+        apiUrl: draft.apiUrl,
+        apiKey: draft.apiKey,
+      })
+      state.fetchingModels = false
+      if (result.ok) {
+        state.configModels = result.payload?.models || []
+        if (state.configModels.length === 0) status.textContent = '供应商返回了空列表，可以手填'
+        else if (!draft.model || !state.configModels.includes(draft.model)) draft.model = state.configModels[0]
+      } else {
+        status.textContent = `获取失败：${result.payload?.error || result.status}`
+      }
+      render()
+    },
+  })
 
   return el('div', { class: 'card stack' }, [
     el('h3', { text: '云端模型配置' }),
     el('p', { class: 'muted', text: '桌面端与 Web 写的是同一份配置；Key 加密落盘，只回末四位。' }),
     el('label', { class: 'mono muted', text: '渠道' }),
-    provider,
+    providerSelect,
     el('label', { class: 'mono muted', text: 'Base URL' }),
     apiUrl,
-    el('label', { class: 'mono muted', text: '模型' }),
-    model,
     el('label', { class: 'mono muted', text: 'API Key（留空表示不改）' }),
     apiKey,
+    el('div', { class: 'row' }, [fetchButton]),
+    el('label', { class: 'mono muted', text: models.length > 0 ? `模型（共 ${models.length} 个）` : '模型' }),
+    modelField,
     status,
     el('button', {
       class: 'primary',
       text: '保存',
       onclick: async () => {
         const body = {
-          provider: provider.value.trim(),
-          apiUrl: apiUrl.value.trim(),
-          model: model.value.trim(),
-          apiKey: apiKey.value.trim(),
+          provider: String(providerSelect.value || '').trim(),
+          apiUrl: String(apiUrl.value || '').trim(),
+          model: String(modelField.value || draft.model || '').trim(),
+          apiKey: String(apiKey.value || '').trim(),
         }
-        if (!body.provider || !body.apiUrl || !body.model || !body.apiKey) {
-          status.textContent = '四项都要填'
+        if (!body.provider || !body.apiUrl || !body.model) {
+          status.textContent = '渠道、Base URL、模型都要填'
+          return
+        }
+        if (!body.apiKey && !config.apiKeyMasked) {
+          status.textContent = '首次配置要填 API Key'
           return
         }
         const result = await request('PUT', '/v1/cloud-config', body)
         status.textContent = result.ok ? '已保存，下一轮生效' : result.payload?.error || '保存失败'
-        if (result.ok) void loadAuxiliary()
+        if (result.ok) {
+          state.configDraft = null
+          state.configModels = []
+          await loadAuxiliary()
+          render()
+        }
       },
     }),
     el('button', {

@@ -436,6 +436,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('agent:session-root-changed', listener)
   },
 
+  // 云端连接（配对 / 解绑 / 状态 / 云端页通道 / 云端模型配置）
+  cloudLinkStatus: () => ipcRenderer.invoke('cloud:linkStatus'),
+  cloudPair: (input: { baseUrl?: string; code?: string; deviceName?: string }) =>
+    ipcRenderer.invoke('cloud:pair', input),
+  cloudUnlink: () => ipcRenderer.invoke('cloud:unlink'),
+  cloudReconnect: () => ipcRenderer.invoke('cloud:reconnect'),
+  cloudRefreshWorkspaces: () => ipcRenderer.invoke('cloud:refreshWorkspaces'),
+  cloudListWorkspaces: () => ipcRenderer.invoke('cloud:listWorkspaces'),
+  cloudClientOpen: () => ipcRenderer.invoke('cloud:clientOpen'),
+  cloudClientClose: () => ipcRenderer.invoke('cloud:clientClose'),
+  cloudClientSend: (frame: unknown) => ipcRenderer.invoke('cloud:clientSend', frame),
+  cloudClientState: () => ipcRenderer.invoke('cloud:clientState'),
+  cloudGetConfig: () => ipcRenderer.invoke('cloud:getConfig'),
+  cloudSaveConfig: (config: unknown) => ipcRenderer.invoke('cloud:saveConfig', config),
+  cloudFetchModels: (input: unknown) => ipcRenderer.invoke('cloud:fetchModels', input),
+  onCloudState: (callback: (state: unknown) => void) => {
+    const listener = (_event: unknown, state: unknown) => callback(state)
+    ipcRenderer.on('cloud:state', listener)
+    return () => ipcRenderer.removeListener('cloud:state', listener)
+  },
+  onCloudClientFrame: (callback: (frame: unknown) => void) => {
+    const listener = (_event: unknown, frame: unknown) => callback(frame)
+    ipcRenderer.on('cloud:client-frame', listener)
+    return () => ipcRenderer.removeListener('cloud:client-frame', listener)
+  },
+  onCloudClientState: (callback: (state: unknown) => void) => {
+    const listener = (_event: unknown, state: unknown) => callback(state)
+    ipcRenderer.on('cloud:client-state', listener)
+    return () => ipcRenderer.removeListener('cloud:client-state', listener)
+  },
+
   // 工作台插件
   pluginsList: (workspaceDir: string) => ipcRenderer.invoke('plugins:list', workspaceDir),
   pluginsInvoke: (workspaceDir: string, commandId: string, args?: unknown) =>

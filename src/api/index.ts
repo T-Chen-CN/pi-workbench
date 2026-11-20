@@ -479,6 +479,11 @@ const mockAPI = {
     success: false,
     error: 'Cloud settings are only available in the Electron app'
   }),
+  cloudFetchModels: async (): Promise<{ success: boolean; models: string[]; error?: string }> => ({
+    success: false,
+    models: [],
+    error: 'Cloud settings are only available in the Electron app'
+  }),
   onCloudClientFrame: (_callback: (frame: unknown) => void) => () => {},
   onCloudClientState: (_callback: (state: CloudClientState) => void) => () => {},
 
@@ -782,6 +787,8 @@ export const api = {
   cloudClientState: () => electronAPI.cloudClientState(),
   cloudGetConfig: () => electronAPI.cloudGetConfig(),
   cloudSaveConfig: (config: CloudConfigInput) => electronAPI.cloudSaveConfig(config),
+  cloudFetchModels: (input: { provider?: string; apiUrl?: string; apiKey?: string }) =>
+    electronAPI.cloudFetchModels(input),
   onCloudClientFrame: (callback: (frame: unknown) => void) => electronAPI.onCloudClientFrame(callback),
   onCloudClientState: (callback: (state: CloudClientState) => void) =>
     electronAPI.onCloudClientState(callback),

@@ -13,7 +13,7 @@
 | 阶段 | 本地 Agent 工作台稳定期；云端 Agent P0 代码落地，待服务器部署与公网验收 |
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
-| 质量门槛 | `type-check` · `lint` · `npm test`（141 文件 / 1521 用例）· `design-system` 全绿 |
+| 质量门槛 | `type-check` · `lint` · `npm test`（143 文件 / 1532 用例）· `design-system` 全绿 |
 | 云端 Agent | **P0 代码 + 部署已落地**：`https://tchen-xiaoxiao.com`（systemd + Caddy + 每日备份，release 软链可回滚），公网自检 32/32 通过；剩「用户建号 + 推模型配置」与真派活人工走查 |
 
 ## 正在做 / 下一步

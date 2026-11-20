@@ -471,6 +471,8 @@ const CloudConfigCard: React.FC = () => {
   const [model, setModel] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [mask, setMask] = useState('')
+  const [models, setModels] = useState<string[]>([])
+  const [fetching, setFetching] = useState(false)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -483,6 +485,28 @@ const CloudConfigCard: React.FC = () => {
       setMask(result.apiKeyMasked ?? '')
     })()
   }, [])
+
+  /** 拉清单：浏览器直连供应商会被 CORS 挡，所以走主进程代理（Key 不进渲染层日志） */
+  const fetchModels = async () => {
+    setFetching(true)
+    try {
+      const { api } = await import('../api')
+      const result = await api.cloudFetchModels({ provider, apiUrl, apiKey })
+      if (!result.success) {
+        toast.error(t('cloudFetchModelsFailed', { error: result.error ?? t('unknownError') }))
+        return
+      }
+      setModels(result.models)
+      if (result.models.length === 0) {
+        toast.info(t('cloudModelsHint', { count: 0 }))
+        return
+      }
+      // 当前模型不在清单里（例如手填过）时，落到第一个，避免下拉显示为空
+      if (!result.models.includes(model)) setModel(result.models[0])
+    } finally {
+      setFetching(false)
+    }
+  }
 
   const save = async () => {
     setSaving(true)
@@ -514,6 +538,7 @@ const CloudConfigCard: React.FC = () => {
           >
             <option value="custom">custom</option>
             <option value="openai">openai</option>
+            <option value="anthropic">anthropic</option>
           </Select>
         </Field>
         <Field label={t('cloudApiUrl')} htmlFor="cloud-api-url">
@@ -523,9 +548,6 @@ const CloudConfigCard: React.FC = () => {
             onChange={(event) => setApiUrl(event.target.value)}
             placeholder="https://api.example.com/v1"
           />
-        </Field>
-        <Field label={t('cloudModel')} htmlFor="cloud-model">
-          <Input id="cloud-model" value={model} onChange={(event) => setModel(event.target.value)} />
         </Field>
         <Field
           label={t('cloudApiKey')}
@@ -539,6 +561,36 @@ const CloudConfigCard: React.FC = () => {
             type="password"
             autoComplete="off"
           />
+        </Field>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={() => void fetchModels()} disabled={fetching}>
+            {fetching ? <Spinner size={13} /> : null}
+            {fetching ? t('cloudFetchingModels') : t('cloudFetchModels')}
+          </Button>
+          {models.length > 0 ? (
+            <span className="type-caption text-ink-muted">
+              {t('cloudModelsHint', { count: models.length })}
+            </span>
+          ) : null}
+        </div>
+        <Field label={t('cloudModel')} htmlFor="cloud-model">
+          {/* 拿到清单就下拉，拿不到就允许手填：不是所有代理商都实现 /models */}
+          {models.length > 0 ? (
+            <Select id="cloud-model" value={model} onChange={(event) => setModel(event.target.value)}>
+              {models.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </Select>
+          ) : (
+            <Input
+              id="cloud-model"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              placeholder={t('cloudModelManual')}
+            />
+          )}
         </Field>
         <Button variant="primary" size="sm" onClick={() => void save()} disabled={saving}>
           {saving ? <Spinner size={13} /> : null}

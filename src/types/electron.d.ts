@@ -687,6 +687,11 @@ export interface ElectronAPI {
     result?: { ok?: boolean; apiKeyMasked?: string; takesEffect?: string }
     error?: string
   }>
+  cloudFetchModels: (input: {
+    provider?: string
+    apiUrl?: string
+    apiKey?: string
+  }) => Promise<{ success: boolean; models: string[]; error?: string }>
   onCloudClientFrame: (callback: (frame: unknown) => void) => () => void
   onCloudClientState: (callback: (state: CloudClientState) => void) => () => void
   onCloudState: (callback: (state: CloudDeviceState) => void) => () => void

@@ -52,6 +52,83 @@ export interface RouteDeps {
 /** 所有凭据类失败对外同一个错误码（不透露「码是否存在 / 是否过期」） */
 const CREDENTIAL_ERROR = 'invalid-credential'
 
+/** 供应商 `/models` 的鉴权头（与桌面端 apiConfig:fetchModels 保持同一口径） */
+function modelsHeaders(provider: string, apiKey: string): Record<string, string> {
+  return provider === 'anthropic'
+    ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
+    : { authorization: `Bearer ${apiKey}` }
+}
+
+/**
+ * 拉模型清单：浏览器直连供应商会被 CORS 挡，所以由服务端代跑一次。
+ * 这是**单管理员**部署的 SSRF 面：设备 token 就能让它去请求任意 http(s) 地址，
+ * 因此只允许 http(s)、15 秒超时、响应截断到 256KB，不回传供应商响应原文。
+ */
+async function fetchProviderModels(
+  provider: string,
+  rawApiUrl: string,
+  apiKey: string
+): Promise<string[]> {
+  const baseUrl = String(rawApiUrl ?? '')
+    .trim()
+    .replace(/\/+$/, '')
+  if (!baseUrl || baseUrl.includes('your-api-endpoint')) {
+    throw new HttpError(400, 'A valid API URL is required', 'invalid-api-url')
+  }
+  if (!/^https?:\/\//i.test(baseUrl)) {
+    throw new HttpError(400, 'API URL must start with http:// or https://', 'invalid-api-url')
+  }
+  if (!apiKey) throw new HttpError(400, 'API key is required', 'missing-api-key')
+
+  let response: Response
+  try {
+    response = await fetch(`${baseUrl}/models`, {
+      headers: modelsHeaders(provider, apiKey),
+      signal: AbortSignal.timeout(15_000),
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new HttpError(502, `Cannot reach the provider: ${message.slice(0, 160)}`, 'provider-unreachable')
+  }
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new HttpError(
+      502,
+      `Provider returned HTTP ${response.status}${body ? `: ${body.slice(0, 160)}` : ''}`,
+      'provider-error'
+    )
+  }
+
+  const text = (await response.text().catch(() => '')).slice(0, 256 * 1024)
+  let data: unknown
+  try {
+    data = JSON.parse(text)
+  } catch {
+    throw new HttpError(502, 'Provider did not return JSON', 'provider-error')
+  }
+
+  // 兼容三种常见形状：{ data: [{ id }] } / { models: [...] } / [...]; 元素也可能是纯字符串
+  const pick = (list: unknown[]): string[] =>
+    list
+      .map((item) =>
+        typeof item === 'string'
+          ? item
+          : typeof item === 'object' && item !== null
+            ? String((item as { id?: unknown; name?: unknown }).id ?? (item as { name?: unknown }).name ?? '')
+            : ''
+      )
+      .filter((id) => id.length > 0)
+
+  const record = data as { data?: unknown; models?: unknown } | null
+  let models: string[] = []
+  if (Array.isArray(data)) models = pick(data)
+  else if (Array.isArray(record?.data)) models = pick(record.data)
+  else if (Array.isArray(record?.models)) models = pick(record.models)
+
+  return [...new Set(models)].sort()
+}
+
 export function buildRouter(deps: RouteDeps): Router {
   const router = new Router()
 
@@ -278,6 +355,29 @@ export function buildRouter(deps: RouteDeps): Router {
     })
     deps.logger.info(`[cloud] cloud config updated for model ${model}`)
     return { ok: true, apiKeyMasked: maskSecret(apiKey), takesEffect: 'next-turn' }
+  })
+
+  /**
+   * F-10 辅助：拉模型清单。Key 可以不传（用已保存的），方便“先保存再刷新列表”。
+   * 只回模型 id 列表，不回传供应商响应原文，也不回显 Key。
+   */
+  router.post('/v1/cloud-config/models', async (ctx) => {
+    requireUser(ctx)
+    const body = await ctx.json<{ provider?: string; apiUrl?: string; apiKey?: string }>()
+    const saved = deps.store.getCloudConfig()
+    const provider = String(body.provider ?? saved?.provider ?? 'custom').trim() || 'custom'
+    const apiUrl = String(body.apiUrl ?? saved?.apiUrl ?? '').trim()
+    let apiKey = String(body.apiKey ?? '').trim()
+    if (!apiKey && saved) {
+      try {
+        apiKey = decryptSecret(saved.apiKeyCipher, deps.config.encryptionKey)
+      } catch {
+        apiKey = ''
+      }
+    }
+    const models = await fetchProviderModels(provider, apiUrl, apiKey)
+    deps.logger.info(`[cloud] fetched ${models.length} models from ${provider}`)
+    return { models, provider, apiUrl }
   })
 
   router.get('/v1/snapshot', async (ctx) => {
