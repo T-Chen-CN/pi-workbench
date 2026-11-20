@@ -106,6 +106,12 @@
   15 秒超时、响应截断 256KB；失败统一回 502 + `provider-unreachable` / `provider-error`。
 - 两边界面同一口径：拿到列表用下拉，拿到空列表或失败就允许手填（不是所有代理商都实现 `/models`）。
 
+**Web 客户端的输入必须存 state，不能只靠 DOM**：整页 `render()` 在收到任何 WS 帧（流式输出）时都会重跑，
+DOM 会被重建一次。值只挂在 input 上，等于「说一句话就把刚填的 Key / URL 抹掉」，
+拉模型时再整页 render 一次更是必丢。所以配置卡：输入从 `state.configDraft` 回填、`oninput` 立刻写回，
+拉模型只做局部更新（换模型字段 + 状态行），保存成功才清 draft。
+`tests/cloud-web-config-form.test.ts` 把这两条钉住了（Web 客户端零构建不导出函数，只能做源码断言）。
+
 ## 4. 本机运行
 
 ```bash

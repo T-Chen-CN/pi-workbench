@@ -23,7 +23,6 @@ const state = {
   pairCode: null,
   configDraft: null,
   configModels: [],
-  fetchingModels: false,
   error: null,
   draft: '',
   answerDrafts: {},
@@ -808,20 +807,26 @@ const PROVIDER_PRESETS = [
   { id: 'anthropic', label: 'anthropic', apiUrl: 'https://api.anthropic.com/v1' },
 ]
 
+/**
+ * 云端模型配置卡。
+ *
+ * **输入值必须存在 `state.configDraft` 里，不能只靠 DOM**：整页 `render()` 在收到任何
+ * WS 帧（流式输出）时都会重跑，DOM 会被重建一次；值只留在 input 上等于「说一句话就把
+ * 刚填的 Key / URL 抹掉」。所以输入都从 draft 回填，oninput 立刻写回 draft。
+ * 同理，拉模型时只做局部更新，不整页 render()。
+ */
 function renderConfigCard() {
   const config = state.config || { configured: false }
-  const draft = state.configDraft || {
-    provider: config.provider || 'custom',
-    apiUrl: config.apiUrl || '',
-    model: config.model || '',
-    apiKey: '',
+  if (!state.configDraft) {
+    state.configDraft = {
+      provider: config.provider || 'custom',
+      apiUrl: config.apiUrl || '',
+      model: config.model || '',
+      apiKey: '',
+    }
   }
-  const models = state.configModels || []
+  const draft = state.configDraft
   const status = el('p', { class: 'muted' })
-  const modelInput = el('input', {
-    value: draft.model || '',
-    placeholder: '可以手填，例如 claude-sonnet-4-5',
-  })
 
   const providerSelect = el(
     'select',
@@ -829,18 +834,18 @@ function renderConfigCard() {
       onchange: (event) => {
         draft.provider = event.target.value
         const preset = PROVIDER_PRESETS.find((entry) => entry.id === draft.provider)
-        if (preset && preset.apiUrl && !draft.apiUrl) draft.apiUrl = preset.apiUrl
-        state.configDraft = draft
-        render()
+        if (preset && preset.apiUrl) {
+          draft.apiUrl = preset.apiUrl
+          apiUrl.value = preset.apiUrl
+        }
       },
     },
-    PROVIDER_PRESETS.map((entry) =>
-      el('option', { value: entry.id, text: entry.label, selected: entry.id === draft.provider })
-    )
+    PROVIDER_PRESETS.map((entry) => el('option', { value: entry.id, text: entry.label }))
   )
+  providerSelect.value = draft.provider
 
   const apiUrl = el('input', {
-    value: draft.apiUrl || '',
+    value: draft.apiUrl,
     placeholder: 'https://api.example.com/v1',
     oninput: (event) => {
       draft.apiUrl = event.target.value
@@ -850,45 +855,98 @@ function renderConfigCard() {
   const apiKey = el('input', {
     type: 'password',
     autocomplete: 'off',
+    value: draft.apiKey,
     placeholder: config.apiKeyMasked ? `已保存：${config.apiKeyMasked}（留空表示不改）` : 'sk-...',
     oninput: (event) => {
       draft.apiKey = event.target.value
     },
   })
 
-  // 拿到列表就用下拉，拿不到就允许手填 —— 不是所有代理商都实现 /models
-  const modelField =
-    models.length > 0
-      ? el(
-          'select',
-          {
-            onchange: (event) => {
+  // 拿到列表用下拉，拿不到就手填 —— 不是所有代理商都实现 /models
+  const modelLabel = el('label', { class: 'mono muted', text: '模型' })
+  const modelSlot = el('div', {})
+
+  const paintModelField = () => {
+    const models = state.configModels || []
+    modelLabel.textContent = models.length > 0 ? `模型（共 ${models.length} 个）` : '模型'
+    const field =
+      models.length > 0
+        ? el(
+            'select',
+            {
+              onchange: (event) => {
+                draft.model = event.target.value
+              },
+            },
+            models.map((id) => el('option', { value: id, text: id }))
+          )
+        : el('input', {
+            value: draft.model,
+            placeholder: '可以手填，例如 claude-sonnet-4-5',
+            oninput: (event) => {
               draft.model = event.target.value
             },
-          },
-          models.map((id) => el('option', { value: id, text: id, selected: id === draft.model }))
-        )
-      : modelInput
+          })
+    if (models.length > 0 && models.includes(draft.model)) field.value = draft.model
+    modelSlot.replaceChildren(field)
+  }
+  paintModelField()
 
   const fetchButton = el('button', {
-    text: state.fetchingModels ? '拉取中…' : '获取可用模型',
+    text: '获取可用模型',
     onclick: async () => {
-      state.fetchingModels = true
-      state.configDraft = draft
-      render()
+      fetchButton.disabled = true
+      fetchButton.textContent = '拉取中…'
+      status.textContent = ''
       const result = await request('POST', '/v1/cloud-config/models', {
         provider: draft.provider,
         apiUrl: draft.apiUrl,
         apiKey: draft.apiKey,
       })
-      state.fetchingModels = false
-      if (result.ok) {
-        state.configModels = result.payload?.models || []
-        if (state.configModels.length === 0) status.textContent = '供应商返回了空列表，可以手填'
-        else if (!draft.model || !state.configModels.includes(draft.model)) draft.model = state.configModels[0]
-      } else {
+      fetchButton.disabled = false
+      fetchButton.textContent = '获取可用模型'
+      if (!result.ok) {
         status.textContent = `获取失败：${result.payload?.error || result.status}`
+        return
       }
+      state.configModels = result.payload?.models || []
+      if (state.configModels.length === 0) {
+        status.textContent = '供应商返回了空列表，可以手填'
+      } else if (!state.configModels.includes(draft.model)) {
+        draft.model = state.configModels[0]
+      }
+      paintModelField()
+    },
+  })
+
+  const saveButton = el('button', {
+    class: 'primary',
+    text: '保存',
+    onclick: async () => {
+      const body = {
+        provider: draft.provider.trim(),
+        apiUrl: draft.apiUrl.trim(),
+        model: draft.model.trim(),
+        apiKey: draft.apiKey.trim(),
+      }
+      if (!body.provider || !body.apiUrl || !body.model) {
+        status.textContent = '渠道、Base URL、模型都要填'
+        return
+      }
+      if (!body.apiKey && !config.apiKeyMasked) {
+        status.textContent = '首次配置要填 API Key'
+        return
+      }
+      const result = await request('PUT', '/v1/cloud-config', body)
+      if (!result.ok) {
+        status.textContent = result.payload?.error || '保存失败'
+        return
+      }
+      status.textContent = '已保存，下一轮生效'
+      // 落盘成功后清空 draft 与临时列表：Key 不再留在页面状态里
+      state.configDraft = null
+      state.configModels = []
+      await loadAuxiliary()
       render()
     },
   })
@@ -903,37 +961,10 @@ function renderConfigCard() {
     el('label', { class: 'mono muted', text: 'API Key（留空表示不改）' }),
     apiKey,
     el('div', { class: 'row' }, [fetchButton]),
-    el('label', { class: 'mono muted', text: models.length > 0 ? `模型（共 ${models.length} 个）` : '模型' }),
-    modelField,
+    modelLabel,
+    modelSlot,
     status,
-    el('button', {
-      class: 'primary',
-      text: '保存',
-      onclick: async () => {
-        const body = {
-          provider: String(providerSelect.value || '').trim(),
-          apiUrl: String(apiUrl.value || '').trim(),
-          model: String(modelField.value || draft.model || '').trim(),
-          apiKey: String(apiKey.value || '').trim(),
-        }
-        if (!body.provider || !body.apiUrl || !body.model) {
-          status.textContent = '渠道、Base URL、模型都要填'
-          return
-        }
-        if (!body.apiKey && !config.apiKeyMasked) {
-          status.textContent = '首次配置要填 API Key'
-          return
-        }
-        const result = await request('PUT', '/v1/cloud-config', body)
-        status.textContent = result.ok ? '已保存，下一轮生效' : result.payload?.error || '保存失败'
-        if (result.ok) {
-          state.configDraft = null
-          state.configModels = []
-          await loadAuxiliary()
-          render()
-        }
-      },
-    }),
+    saveButton,
     el('button', {
       text: '退出登录',
       onclick: async () => {

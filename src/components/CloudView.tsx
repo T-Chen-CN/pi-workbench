@@ -472,6 +472,7 @@ const CloudConfigCard: React.FC = () => {
   const [apiKey, setApiKey] = useState('')
   const [mask, setMask] = useState('')
   const [models, setModels] = useState<string[]>([])
+  const [manualModel, setManualModel] = useState(false)
   const [fetching, setFetching] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -574,8 +575,8 @@ const CloudConfigCard: React.FC = () => {
           ) : null}
         </div>
         <Field label={t('cloudModel')} htmlFor="cloud-model">
-          {/* 拿到清单就下拉，拿不到就允许手填：不是所有代理商都实现 /models */}
-          {models.length > 0 ? (
+          {/* 拿到清单就下拉；拿不到、或列表里没有想要的，就手填（不是所有代理商都实现 /models） */}
+          {models.length > 0 && !manualModel ? (
             <Select id="cloud-model" value={model} onChange={(event) => setModel(event.target.value)}>
               {models.map((id) => (
                 <option key={id} value={id}>
@@ -592,6 +593,11 @@ const CloudConfigCard: React.FC = () => {
             />
           )}
         </Field>
+        {models.length > 0 ? (
+          <Button variant="ghost" size="sm" onClick={() => setManualModel((prev) => !prev)}>
+            {manualModel ? t('cloudModelUseList', { count: models.length }) : t('cloudModelUseManual')}
+          </Button>
+        ) : null}
         <Button variant="primary" size="sm" onClick={() => void save()} disabled={saving}>
           {saving ? <Spinner size={13} /> : null}
           {t('cloudSave')}
