@@ -736,6 +736,51 @@ describe('工作树回收（A-43 / A-46）', () => {
     )
   }
 
+  it('设备重启时对「已请求回收但没回执」的单元重发一次（避免卡在回收中）', async () => {
+    const now = Date.now()
+    // 已请求回收、但设备一直没回执的单元
+    await server.store.saveUnit({
+      unitId: 'unit-stale',
+      deviceId,
+      workspacePath: WORKSPACE,
+      createdAt: now - 600_000,
+      closedAt: null,
+      closeRequestedAt: now - 300_000,
+    })
+    // 刚请求过（< 60 s）的不重发：避免设备每次重连都收一堆同一条请求
+    await server.store.saveUnit({
+      unitId: 'unit-fresh',
+      deviceId,
+      workspacePath: WORKSPACE,
+      createdAt: now,
+      closedAt: null,
+      closeRequestedAt: now - 1_000,
+    })
+    await server.store.saveUnit({
+      unitId: 'unit-sweep-dirty',
+      deviceId,
+      workspacePath: WORKSPACE,
+      createdAt: now,
+      closedAt: null,
+    })
+
+    send({ type: 'unit_state', unitId: 'unit-fresh', clean: true, at: now })
+    send({ type: 'unit_state', unitId: 'unit-sweep-dirty', clean: false, at: now })
+    send({
+      type: 'unit_state',
+      unitId: 'unit-stale',
+      clean: true,
+      worktreePath: 'E:/tmp/wt-stale',
+      at: now,
+    })
+
+    const resent = await waitFor(() => closeFrames('unit-stale')[0], 3000, 'stale close re-sent')
+    expect(resent.reason).toBe('sweep')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(closeFrames('unit-fresh')).toHaveLength(0)
+    expect(closeFrames('unit-sweep-dirty')).toHaveLength(0)
+  })
+
   it('快照里的已结束单元会封顶（否则快照随工单数量无上限变大）', async () => {
     const base = Date.now()
     for (let index = 0; index < 25; index += 1) {

@@ -505,8 +505,11 @@ export class TaskDispatcher {
       this.publishUnit(updated)
     }
     if (!frame.clean) return
-    if (unit.closedAt !== null || unit.closeRequestedAt) return
+    if (unit.closedAt !== null) return
     if (this.hasOpenTaskInUnit(frame.unitId)) return
+    // 已经请求过但设备一直没回执（旧终端不认 `close_unit`、或进程被杀）：
+    // 超过 60 s 就重发一次，否则会永远卡在“回收中”
+    if (unit.closeRequestedAt !== undefined && this.now() - unit.closeRequestedAt < 60_000) return
     await this.requestUnitClose(frame.unitId, 'sweep')
   }
 
