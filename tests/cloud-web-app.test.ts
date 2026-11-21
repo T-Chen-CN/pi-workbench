@@ -127,6 +127,14 @@ describe('Web 客户端主界面', () => {
     expect(document.body.textContent).toContain('model-a')
   })
 
+  it('首连不带 lastAckSeq：带 0 会让服务端走续传，历史就没了', async () => {
+    buttonByText('会话').click()
+    await tick()
+    const url = new URL(FakeSocket.instances[0].url)
+    expect(url.pathname).toBe('/client/ws')
+    expect(url.searchParams.has('lastAckSeq')).toBe(false)
+  })
+
   it('发出去的消息立刻以用户气泡出现（服务端 message_start/message_end 回显）', async () => {
     buttonByText('会话').click()
     await tick()

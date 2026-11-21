@@ -196,7 +196,10 @@ async function loadAuxiliary() {
 
 function connect() {
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const url = `${scheme}//${location.host}/client/ws?lastAckSeq=${state.lastSeq}`
+  // 没有游标时不能带 lastAckSeq=0：那会让服务端走「续传」分支、只重放旧事件，
+  // 而新连上的页面需要的是整份快照（含历史消息）
+  const cursor = state.lastSeq > 0 ? `?lastAckSeq=${state.lastSeq}` : ''
+  const url = `${scheme}//${location.host}/client/ws${cursor}`
   let socket
   try {
     socket = new WebSocket(url)

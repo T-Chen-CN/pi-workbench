@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { promises as fs } from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { WebSocket } from 'ws'
 import { createCloudServer, type CloudServer } from '../apps/cloud/src/main'
 
 let tmpRoot: string
@@ -106,6 +107,18 @@ afterAll(async () => {
   await fs.rm(tmpRoot, { recursive: true, force: true })
 })
 
+function openClient(path: string): Promise<{ first: any; socket: WebSocket }> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(`${base.replace('http', 'ws')}${path}`, { headers: { cookie } })
+    const timer = setTimeout(() => reject(new Error('ws timeout')), 5000)
+    socket.on('message', (raw) => {
+      clearTimeout(timer)
+      resolve({ first: JSON.parse(String(raw)), socket })
+    })
+    socket.on('error', reject)
+  })
+}
+
 describe('快照带历史', () => {
   it('进程刚起、还没人说话时，快照也应该拿到落盘的历史', async () => {
     const response = await fetch(`${base}/v1/snapshot`, { headers: { cookie } })
@@ -115,4 +128,35 @@ describe('快照带历史', () => {
     expect(texts).toContain('user:重启前的问候')
     expect(texts).toContain('assistant:重启前的回复')
   }, 60_000)
+
+  it('首次连接（lastAckSeq=0）也发快照，不能退化成只重放日志', async () => {
+    const { first, socket } = await openClient('/client/ws?lastAckSeq=0')
+    socket.close()
+    expect(first.type).toBe('snapshot')
+    expect((first.snapshot?.messages ?? []).length).toBeGreaterThan(0)
+  }, 30_000)
+
+  it('没有游标时同样发快照', async () => {
+    const { first, socket } = await openClient('/client/ws')
+    socket.close()
+    expect(first.type).toBe('snapshot')
+  }, 30_000)
+})
+
+describe('resume 帧带 0 游标', () => {
+  it('客户端主动发 resume(0) 也要回快照，不能只重放日志', async () => {
+    const { first, socket } = await openClient('/client/ws')
+    expect(first.type).toBe('snapshot')
+    const next = new Promise<any>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('ws timeout')), 5000)
+      socket.on('message', (raw) => {
+        clearTimeout(timer)
+        resolve(JSON.parse(String(raw)))
+      })
+    })
+    socket.send(JSON.stringify({ v: 1, type: 'resume', lastAckSeq: 0 }))
+    const frame = await next
+    socket.close()
+    expect(frame.type).toBe('snapshot')
+  }, 30_000)
 })

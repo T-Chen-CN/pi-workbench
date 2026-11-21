@@ -243,8 +243,11 @@ export class Hub {
 
   /** 连接内再次 `resume`：按增量补投，溢出时回快照 */
   async resumeClient(peer: ClientPeer, lastAckSeq: number): Promise<void> {
-    const { frames, overflow } = this.clientLog.since(lastAckSeq)
-    if (overflow) {
+    // 游标 <= 0 等于「手上什么都没有」：直接发快照。
+    // 按 0 去重放日志只会推一堆旧事件，客户端拿不到历史消息。
+    const { frames, overflow } = this.clientLog.since(Math.max(0, lastAckSeq))
+    const needsSnapshot = overflow || !(lastAckSeq > 0)
+    if (needsSnapshot) {
       const snapshot = await this.handlers.buildSnapshot()
       try {
         peer.socket.send(

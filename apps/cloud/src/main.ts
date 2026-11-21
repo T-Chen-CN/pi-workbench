@@ -168,9 +168,12 @@ export async function createCloudServer(overrides: Partial<CloudConfig> = {}): P
   server.on('upgrade', (req, socket, head) => {
     void (async () => {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
-      const resumeFrom = url.searchParams.has('lastAckSeq')
-        ? Number(url.searchParams.get('lastAckSeq'))
-        : null
+      // `lastAckSeq=0` 等于「没有任何游标」：必须当作首连发整份快照。
+      // 按 0 去重放日志的话，新连上的客户端会只收到一堆旧事件（没有快照里那些消息），
+      // 表现就是「刷新页面之后历史一片空白」。
+      const rawCursor = url.searchParams.get('lastAckSeq')
+      const parsedCursor = rawCursor === null ? NaN : Number(rawCursor)
+      const resumeFrom = Number.isFinite(parsedCursor) && parsedCursor > 0 ? parsedCursor : null
 
       if (url.pathname === CLOUD_WS_PATHS.device) {
         const device = authenticateDevice(req)

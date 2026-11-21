@@ -102,7 +102,10 @@ export class CloudClientBridge {
       return
     }
     this.updateState({ status: 'connecting' })
-    const url = `${wsUrl(baseUrl, CLOUD_WS_PATHS.client)}?lastAckSeq=${this.lastAckSeq}`
+    // 首次连（lastAckSeq 为 0）不要带游标：服务端会按「续传」处理，只重放旧事件、
+    // 不发快照，结果就是云端页历史空白
+    const cursor = this.lastAckSeq > 0 ? `?lastAckSeq=${this.lastAckSeq}` : ''
+    const url = `${wsUrl(baseUrl, CLOUD_WS_PATHS.client)}${cursor}`
     let socket: WebSocket
     try {
       socket = new WebSocket(url, { headers: { authorization: `Bearer ${token}` } })
