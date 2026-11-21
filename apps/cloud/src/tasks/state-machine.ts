@@ -11,8 +11,11 @@ import type { CloudTaskSnapshot, CloudTaskStatus, CloudTaskTerminalReason } from
 import { isTerminalTaskStatus } from 'pi-bridge'
 
 const TRANSITIONS: Record<CloudTaskStatus, readonly CloudTaskStatus[]> = {
-  queued: ['assigned', 'rejected', 'expired', 'cancelled'],
-  assigned: ['running', 'rejected', 'cancelled', 'interrupted'],
+  // `queued → failed/interrupted`：终端在“备好工作树、建会话”这一步就可能失败（没配 API Key 最常见）。
+  // 它此时还没发过 `assigned`，但已经真的收到并处理过了——不允许就会永远挂在 queued，
+  // 用户看到“执行中”且 FIFO 堵死（后续工单不会补投）。
+  queued: ['assigned', 'rejected', 'expired', 'cancelled', 'failed', 'interrupted'],
+  assigned: ['running', 'rejected', 'cancelled', 'interrupted', 'failed'],
   running: ['waiting_human', 'done', 'failed', 'cancelled', 'interrupted'],
   waiting_human: ['running', 'failed', 'cancelled', 'interrupted'],
   done: [],

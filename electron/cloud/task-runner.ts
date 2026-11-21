@@ -367,10 +367,14 @@ export class CloudTaskRunner {
       this.deps.logger.warn(`[Cloud Task] task ${taskId} is already running`)
       return
     }
+    // 先回一张 `assigned`：云端 `queued` 表示“已生成、终端未 ack”，而下面建工作树、建会话都可能失败。
+    // 不回这一帧，失败就落在云端不允许的 `queued → failed` 上，工单会永远挂在执行中并堵住 FIFO。
+    if (attempt === 0) this.deps.onStatus(taskId, 'assigned')
 
     const worktree = await this.ensureUnitWorktree(spec)
     if (!worktree.ok || !worktree.record) {
-      this.deps.onFailed(taskId, worktree.error ?? 'Unable to prepare the worktree')
+      // 树都没建起来：云端那个单元没有 worktree 可收，按「干净」报一次让它能收口
+      this.deps.onFailed(taskId, worktree.error ?? 'Unable to prepare the worktree', undefined, true)
       return
     }
     const unit = worktree.record
@@ -382,7 +386,8 @@ export class CloudTaskRunner {
     } catch (error) {
       const reused = attempt === 0 && (await this.retryAfterConfigRefresh(taskId, spec))
       if (!reused) {
-        this.deps.onFailed(taskId, error instanceof Error ? error.message : String(error))
+        // 准备阶段就失败（未配 Key 最常见）：必须带上 worktreeClean，否则云端不会回收这棵树
+        await this.failWithWorktree(taskId, error instanceof Error ? error.message : String(error), unit.worktreePath)
       }
       return
     }
@@ -394,11 +399,11 @@ export class CloudTaskRunner {
       })
       sessionId = String(created?.sessionId ?? created?.id ?? manager.getCurrentSessionId?.() ?? '')
     } catch (error) {
-      this.deps.onFailed(taskId, error instanceof Error ? error.message : String(error))
+      await this.failWithWorktree(taskId, error instanceof Error ? error.message : String(error), unit.worktreePath)
       return
     }
     if (!sessionId) {
-      this.deps.onFailed(taskId, 'Unable to create a task session')
+      await this.failWithWorktree(taskId, 'Unable to create a task session', unit.worktreePath)
       return
     }
 
@@ -440,6 +445,38 @@ export class CloudTaskRunner {
   }
 
   /** 配置刚改过时允许重试一次（例如用户刚在设置里填好 Key） */
+  /**
+   * 准备阶段失败（还没进 `active`）：也要把脏标记报上去。
+   * 这些失败点在工作树已建好之后，不报 `worktreeClean` 云端就永远不发回收请求，树一直挂在磁盘上。
+   */
+  private async failWithWorktree(
+    taskId: string,
+    error: string,
+    worktreePath: string
+  ): Promise<void> {
+    let changedFiles: CloudChangedFile[] = []
+    let clean = true
+    try {
+      const output = await this.git(worktreePath, ['status', '--porcelain'])
+      changedFiles = output
+        .split(/\r?\n/)
+        .filter((line) => line.trim())
+        .map((line) => ({
+          path: line.slice(3).trim().replace(/^"|"$/g, '').replace(/\\/g, '/'),
+          kind: (line.slice(0, 2).trim() === '??'
+            ? 'added'
+            : line.includes('D')
+              ? 'deleted'
+              : 'modified') as CloudChangedFile['kind'],
+        }))
+      clean = changedFiles.length === 0
+    } catch {
+      // git 不可用：按“不确定”处理，宁可保留树也不要误删
+      clean = false
+    }
+    this.deps.onFailed(taskId, error, changedFiles, clean)
+  }
+
   private async retryAfterConfigRefresh(taskId: string, spec: CloudTaskSpec): Promise<boolean> {
     await new Promise((resolve) => setTimeout(resolve, 1_000))
     try {

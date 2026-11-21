@@ -122,6 +122,11 @@ export interface ClientPeer extends PeerBase {
   role: 'client'
   /** 连接时声明的游标，用于决定先回 snapshot 还是补增量 */
   resumeFrom: number | null
+  /**
+   * 首包（快照 / 增量）是否发完。发完之前 `publish()` 不往这个对端推事件：
+   * 否则“快照还没建好”的窗口里推下来的事件会跑到快照前面，客户端拿到的第一帧就不是快照。
+   */
+  initialized: boolean
 }
 
 export interface DevicePeer extends PeerBase {
@@ -166,6 +171,7 @@ export class Hub {
       alive: true,
       lastSeenAt: this.now(),
       resumeFrom,
+      initialized: false,
     }
     this.clients.add(peer)
     socket.on('message', (raw: unknown) => this.handleClientMessage(peer, raw))
@@ -244,6 +250,8 @@ export class Hub {
 
   /** 连接内再次 `resume`：按增量补投，溢出时回快照 */
   async resumeClient(peer: ClientPeer, lastAckSeq: number): Promise<void> {
+    // 补包期间先停了实时推送，结束时统一按日志补上（否则快照会跑到事件后面）
+    peer.initialized = false
     // 游标 0 / 负数 / 非数字都归一成 null：直接回快照（见 normalizeResumeCursor）。
     // 客户端重载后本地状态已清空，也会主动发 resume(0) 要一份新的。
     const cursor = normalizeResumeCursor(lastAckSeq)
@@ -261,8 +269,10 @@ export class Hub {
           })
         )
       } catch {
-        // ignore
+        peer.initialized = true
+        return
       }
+      this.finishInitial(peer, snapshot.lastSeq)
       return
     }
     for (const entry of frames) {
@@ -276,9 +286,11 @@ export class Hub {
           })
         )
       } catch {
+        peer.initialized = true
         return
       }
     }
+    this.finishInitial(peer, frames.length > 0 ? frames[frames.length - 1].seq : (cursor ?? 0))
   }
 
   // ------------------------------ 投递 ------------------------------
@@ -294,6 +306,8 @@ export class Hub {
     }
     const text = encodeFrame(frame)
     for (const peer of this.clients) {
+      // 首包未发完的对端先不推：它在 sendInitial/resumeClient 结束时按日志补上，顺序就对了
+      if (!peer.initialized) continue
       try {
         peer.socket.send(text)
       } catch (error) {
@@ -434,7 +448,7 @@ export class Hub {
             return
           }
         }
-        this.handlers.onClientHello(peer)
+        this.finishInitial(peer, frames.length > 0 ? frames[frames.length - 1].seq : cursor)
         return
       }
     }
@@ -452,6 +466,30 @@ export class Hub {
       this.handlers.logger.warn('[cloud] failed to send snapshot:', error)
       return
     }
+    this.finishInitial(peer, snapshot.lastSeq)
+  }
+
+  /**
+   * 首包发完：补上期间错过的事件（`publish()` 在初始化窗口里跳过了这个对端），再开始实时推送。
+   * 补发与置位之间不能有 await，否则会漏掉恰好夹在中间的帧。
+   */
+  private finishInitial(peer: ClientPeer, fromSeq: number): void {
+    const { frames } = this.clientLog.since(fromSeq)
+    for (const entry of frames) {
+      try {
+        peer.socket.send(
+          encodeFrame({
+            v: CLOUD_PROTOCOL_VERSION,
+            type: 'event',
+            seq: entry.seq,
+            event: entry.frame,
+          })
+        )
+      } catch {
+        return
+      }
+    }
+    peer.initialized = true
     this.handlers.onClientHello(peer)
   }
 

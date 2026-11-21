@@ -32,6 +32,7 @@ import {
   authorizationView,
 } from './agent/cloud-session.js'
 import { createCloudToolsExtension } from './agent/tools.js'
+import { probeProviderConfig } from './agent/provider-models.js'
 import { buildRouter } from './http/routes.js'
 import { defaultWebDir, serveStatic } from './http/static.js'
 import { HttpError, readJsonBody, sendJson, sourceOf } from './http/router.js'
@@ -58,7 +59,18 @@ export interface CloudServer {
   close: () => Promise<void>
 }
 
-export async function createCloudServer(overrides: Partial<CloudConfig> = {}): Promise<CloudServer> {
+export interface CloudServerHooks {
+  /** 轮换前的配置探测（默认走供应商 `/models`；测试里注入替身，避免打外网） */
+  probeConfig?: (
+    config: { provider: string; apiUrl: string; apiKey: string; model: string }
+  ) => Promise<{ ok: true; warning?: string } | { ok: false; reason: string }>
+}
+
+export async function createCloudServer(
+  overrides: Partial<CloudConfig> = {},
+  hooks: CloudServerHooks = {}
+): Promise<CloudServer> {
+  const probeConfig = hooks.probeConfig ?? probeProviderConfig
   const config = loadConfig(overrides)
   await fs.mkdir(config.dataDir, { recursive: true })
   await fs.mkdir(config.workspaceDir, { recursive: true })
@@ -472,8 +484,9 @@ export async function createCloudServer(overrides: Partial<CloudConfig> = {}): P
    * 为什么不在 settle 里重建：`agent_settled` 在事件分发过程中触发，此时 `dispose()` 会销毁正在分发
    * 事件的会话；改在入口处重建还能顺带避开“settle 与新消息同 tick”的竞态（入口本来就要 await）。
    *
-   * 为什么只能“先拆后建 + 失败回滚”，不能“先起临时实例验证再切”：`initialize()` 会写进程级的
-   * Provider Key，校验失败时释放会把环境还原成**进程原值**而不是旧 Key，反而毒掉正在跑的旧实例（§3.1）。
+   * 为什么只有探测通过才“先拆后建”：`initialize()` 会写进程级的 Provider Key，失败时释放会把环境还原成
+   * **进程原值**而不是旧 Key，反而毒掉正在跑的旧实例（§3.1）。而 `initialize()` 本身不看 Key 与模型是否
+   * 真实存在（它查的 models.json 就是按这份配置生成的），所以“推错 Key 也报已生效”的坑只能靠探测堵。
    */
   async function applyConfig(): Promise<void> {
     if (applyingConfig) {
@@ -492,6 +505,28 @@ export async function createCloudServer(overrides: Partial<CloudConfig> = {}): P
         return
       }
       const previous = lastGoodConfig
+
+      // 先探测再拆：探测是纯 HTTP，不碰运行时，失败时旧实例毫发无伤
+      const probe = await probeConfig({
+        provider: resolved.provider,
+        apiUrl: resolved.apiUrl,
+        apiKey: resolved.apiKey,
+        model: resolved.model,
+      })
+      if (!probe.ok) {
+        failedConfigStamp = resolved.stamp
+        logger.warn(`[cloud] new cloud config rejected: ${probe.reason}`)
+        hub.publish({
+          type: 'notice',
+          level: 'warn',
+          text: `新配置不可用（${probe.reason}），已保留原配置继续运行；修正后重新推送即可`,
+          at: Date.now(),
+          key: `config-rejected-${resolved.stamp}`,
+        })
+        return
+      }
+      if (probe.warning) logger.warn(`[cloud] config probe: ${probe.warning}`)
+
       logger.info(`[cloud] applying new cloud config: ${resolved.provider} / ${resolved.model}`)
       agentReady = false
       runningConfigStamp = null
@@ -555,9 +590,12 @@ export async function createCloudServer(overrides: Partial<CloudConfig> = {}): P
         return false
       }
       // 刚失败过的那份配置不再重试；有上一份可用配置就用它起来
-      if (failedConfigStamp === resolved.stamp && lastGoodConfig) {
-        return startAgent(lastGoodConfig)
+      if (failedConfigStamp === resolved.stamp) {
+        if (lastGoodConfig) return startAgent(lastGoodConfig)
+        return false
       }
+      // 首次建运行时**不探测**：拉历史（buildSnapshot → 这里）不能依赖供应商可达，
+      // 否则网络抖一下连历史都看不见了。坏 Key 会在轮换时（有旧运行时可比）被拦下。
       const ok = await startAgent(resolved)
       if (!ok) failedConfigStamp = resolved.stamp
       return ok

@@ -56,8 +56,14 @@
 
 1. 比 `runningConfigStamp` 与磁盘配置的 `updatedAt`；相同就直接返回（最常见路径零成本）。
 2. 本轮在跑（`session.isBusy()`）就**不动**，等下一轮开始前再生效 —— 绝不打断进行中的轮次。
-3. 换配是“**先拆后建 + 失败回滚**”：`agent.dispose()` → `startAgent(新配置)`；失败则用内存里的
-   `lastGoodConfig` 重建并推一条回退 notice。
+3. 换配是“**先探测、再拆、后建 + 失败回滚**”：`dispose()` 之前先 `probeConfig()` 打一次供应商
+   `/models`（纯 HTTP，不碰运行时）。
+   - 探测失败（连不上 / 401 / 模型不在清单）→ **不拆**，`failedConfigStamp` 记下这份，推一条
+     “新配置不可用…已保留原配置运行”的 notice，旧实例毫发无伤。
+   - 为什么必须探测：`initialize()` 只校验“模型 id 在本地 models.json 里”，而那份文件正是按
+     apiConfig 生成的 —— 任何 Key 都能初始化成功，不探测就会出现“错 Key 报已生效、下一句话才炸”。
+   - 探测通过后仍可能建不起来（结构性失败）→ 用内存里的 `lastGoodConfig` 重建并推回退 notice。
+   - **首次建运行时（`ensureAgent` 冷启）不探测**：拉历史要经过这里，不能依赖供应商可达。
    为什么不“先起临时实例验证再切”：`initialize()` 会写进程级 Provider Key，校验失败释放会把环境
    还原成**进程原值**而不是旧 Key，反而毒掉旧实例（§3.1 的引用计数）。
 4. 同一份坏配置只试一次（`failedConfigStamp`），不会每个入口都拆一次运行时。
@@ -84,6 +90,13 @@
 | `result.worktreeClean === true` 且该 `unitId` **无非终态工单** | 自动下发 `close_unit`（无需用户点击） |
 | 干净但同单元还有排队/待派工单 | **不动**（此时删树会让下一张从 base 重开、丢掉上一张的 commit） |
 | 脏树 / 没上报 `worktreeClean` | 保留，等用户手动“结束工作单元” |
+
+终端侧两个前提（都是踩过的坑）：
+
+- **收到工单先回 `assigned`**，再建工作树 / 建会话。准备阶段失败（未配 API Key 最常见）时云端只有
+  `queued → failed` 这一条路，不回 `assigned` 会让工单永远挂在“执行中”并堵住 FIFO。
+- 准备阶段失败也要带 `worktreeClean`：工作树已经建好却不上报脏标记，云端就不会发 `close_unit`，
+  那棵树会一直躺在磁盘上直到桌面端重启（启动 sweep 才补报 `unit_state`）。
 
 配对握手：请求时只写 `closeRequestedAt`，**收到 `unit_closed` 回执才写 `closedAt`**；`dirty` 时
 `closedAt` 保持 null 并写 `dirtyAt`（= 待清理，清理后可再结束一次）；回执带 `error`（删树失败）时
