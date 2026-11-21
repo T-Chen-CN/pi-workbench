@@ -27,6 +27,40 @@ export const CLOUD_WS_PATHS = {
 export const CLOUD_TASK_EVENT_CUSTOM_TYPE = 'task-event'
 
 // ---------------------------------------------------------------------------
+// 连接游标（「我收到哪了」）
+// ---------------------------------------------------------------------------
+
+/**
+ * 解析续传游标：**只有正整数才算游标**。
+ *
+ * `0` / 负数 / `NaN` / 空串都等于「我手上什么都没有」，必须回整份快照。
+ * 按 0 去重放日志只会把旧事件播一遗，而快照里那些消息一条也到不了客户端——
+ * 表现就是「一刷新历史全没了」。三端（Web / 桌面桥 / 服务端）都走这个函数。
+ */
+export function normalizeResumeCursor(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === '') return null
+  const value = typeof raw === 'number' ? raw : Number(raw)
+  if (!Number.isFinite(value) || value <= 0) return null
+  return Math.floor(value)
+}
+
+/** 连接 URL 的游标参数；没有游标时返回空串（不能拼 `?lastAckSeq=0`） */
+export function clientCursorQuery(lastSeq: number): string {
+  const cursor = normalizeResumeCursor(lastSeq)
+  return cursor === null ? '' : `?lastAckSeq=${cursor}`
+}
+
+/**
+ * 「给我一份新快照」：`resume(0)` 就是游标为空。
+ *
+ * 客户端重载 / 页面重新挂载时用它——连接还活着但本地状态已清空，
+ * 不复用这条连接就只能一直白屏。
+ */
+export function buildSnapshotRequest(): { type: 'resume'; lastAckSeq: number } {
+  return { type: 'resume', lastAckSeq: 0 }
+}
+
+// ---------------------------------------------------------------------------
 // 时间与容量（F-21 / F-44 / F-46 / O-15 的默认值集中在这里，改一处即可）
 // ---------------------------------------------------------------------------
 

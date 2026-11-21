@@ -106,12 +106,21 @@
 桌面端 `cloudStore.init()` 必须在已配对时**重新打开客户端通道**：快照（含历史）只在开通道后下发，
 不开就是「重启后历史全没了」，而服务端其实一直有。
 
-**首连不能带 `lastAckSeq=0`**：有游标就走「续传」只重放事件日志，不发快照；游标 0 语义上等于
-「什么都没有」，两端（Web / 桌面桥）都只在 `> 0` 时才拼这个参数，服务端也把 `<= 0` 当没有游标
-（`resume` 帧同理）。否则新连上的客户端只会收到一堆旧事件，页面一片空白。
+**游标只有一处定义**：`pi-bridge/src/cloud-protocol.ts` 的 `normalizeResumeCursor()` —— 只有正整数才算
+「我收到哪了」，`0` / 负数 / `NaN` / 空串一律归为「没有游标」，此时必须回整份快照；照 0 去重放日志
+只会把旧事件播一遍，快照里的消息一条都到不了客户端。三处都用它：服务端 upgrade 解析、
+`Hub.sendInitial/resumeClient`（会话层再兜一次）。拼参数用 `clientCursorQuery(lastSeq)`，游标为空时
+返回空串（不能拼出 `?lastAckSeq=0`）。Web 客户端是零构建纯 ESM，import 不了协议模块，只能自己写
+同样两行（`apps/cloud/web/app.js` 的 `connect()`），改规则时两边一起改。
+
+**`resume(0)` 就是「给我一份快照」**（`buildSnapshotRequest()`）：桌面端 `CloudClientBridge.open()`
+在连接已活着时（渲染层重载、云端页重新挂载）主动发这一帧——主进程的 socket 和游标还在，但渲染层
+store 已经清空，不复用又不补快照就一直白屏。
 
 服务端同理：`buildSnapshot()` 里先 `ensureAgent()` 再取历史。云端会话是懒初始化的（只在 say / 派活时起），
 进程刚重启、还没人说话时 `sessionId` 还是 null，历史就会被投影成空——历史明明躺在 `agentDir/sessions/` 里。
+`listen()` 成功后会立刻 `void ensureAgent()` 预热，所以这一句在正常路径上只是兜底，不会把首屏卡在
+SDK 初始化上；配置解密失败时才每次快照都往 hub 推一条 `missing-cloud-config` 提示。
 
 ### 3.6 拉模型清单（`POST /v1/cloud-config/models`）
 

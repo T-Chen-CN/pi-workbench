@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const urls: string[] = []
+const sent: Array<Record<string, unknown>> = []
 
 vi.mock('ws', () => {
   class FakeSocket {
@@ -21,7 +22,9 @@ vi.mock('ws', () => {
     }
     on() {}
     close() {}
-    send() {}
+    send(payload: string) {
+      sent.push(JSON.parse(payload) as Record<string, unknown>)
+    }
     terminate() {}
   }
   return { WebSocket: FakeSocket }
@@ -47,6 +50,7 @@ function makeBridge() {
 describe('CloudClientBridge 连接 URL', () => {
   beforeEach(() => {
     urls.length = 0
+    sent.length = 0
   })
 
   it('首连不带 lastAckSeq（否则服务端只重放日志、不发快照）', () => {
@@ -62,5 +66,24 @@ describe('CloudClientBridge 连接 URL', () => {
     bridge.close()
     bridge.open()
     expect(urls[urls.length - 1]).toBe('wss://cloud.example/client/ws?lastAckSeq=42')
+  })
+
+  it('连接已活着时再 open 会主动要快照（渲染层重载后 store 是空的）', () => {
+    const bridge = makeBridge()
+    bridge.open()
+    // 模拟握手成功
+    const socket = (bridge as unknown as { socket: { readyState: number } }).socket
+    socket.readyState = 1
+    const before = urls.length
+
+    bridge.open()
+    expect(urls.length).toBe(before)
+    expect(sent[0]).toEqual({ v: 1, type: 'resume', lastAckSeq: 0 })
+  })
+
+  it('连接没起来时 requestSnapshot 不发送、也不抛', () => {
+    const bridge = makeBridge()
+    expect(bridge.requestSnapshot()).toBe(false)
+    expect(sent).toHaveLength(0)
   })
 })

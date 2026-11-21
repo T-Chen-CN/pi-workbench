@@ -10,6 +10,8 @@ import { WebSocket } from 'ws'
 import {
   CLOUD_PROTOCOL_VERSION,
   CLOUD_WS_PATHS,
+  buildSnapshotRequest,
+  clientCursorQuery,
   type ClientToServerFrame,
   type ServerToClientFrame,
 } from 'pi-bridge'
@@ -59,19 +61,41 @@ export class CloudClientBridge {
     return this.lastAckSeq
   }
 
-  /** 打开（或复用）连接；未配对时直接报错，不静默失败 */
+  /**
+   * 打开（或复用）连接；未配对时直接报错，不静默失败。
+   *
+   * 连接已活着时也要**主动要一份快照**：渲染层重载后 store 是空的，而主进程的
+   * socket 与游标都还在。复用它却不补快照，页面就一直白着（历史「消失」）。
+   */
   open(): CloudClientState {
     const link = readCloudLink()
     if (!link) {
       this.updateState({ status: 'error', error: 'This device is not paired' })
       return this.state
     }
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.requestSnapshot()
+      return this.state
+    }
+    if (this.socket && this.socket.readyState === WebSocket.CONNECTING) {
       return this.state
     }
     this.closed = false
     void this.connect(link.baseUrl, readCloudToken(link))
     return this.state
+  }
+
+  /** 让服务端重发整份快照：`resume(0)` 就是「游标为空」；连接没起来时什么也不做 */
+  requestSnapshot(): boolean {
+    const socket = this.socket
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false
+    try {
+      socket.send(JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, ...buildSnapshotRequest() }))
+      return true
+    } catch (error) {
+      this.deps.logger.warn('[Cloud Client] snapshot request failed:', error)
+      return false
+    }
   }
 
   send(frame: OutgoingClientFrame): { success: boolean; error?: string } {
@@ -102,10 +126,9 @@ export class CloudClientBridge {
       return
     }
     this.updateState({ status: 'connecting' })
-    // 首次连（lastAckSeq 为 0）不要带游标：服务端会按「续传」处理，只重放旧事件、
-    // 不发快照，结果就是云端页历史空白
-    const cursor = this.lastAckSeq > 0 ? `?lastAckSeq=${this.lastAckSeq}` : ''
-    const url = `${wsUrl(baseUrl, CLOUD_WS_PATHS.client)}${cursor}`
+    // 游标为空时不要拼 `?lastAckSeq=0`：那会让服务端按续传处理、只重放旧事件而不发快照。
+    // 归一化规则统一在 cloud-protocol 里（三端共用）。
+    const url = `${wsUrl(baseUrl, CLOUD_WS_PATHS.client)}${clientCursorQuery(this.lastAckSeq)}`
     let socket: WebSocket
     try {
       socket = new WebSocket(url, { headers: { authorization: `Bearer ${token}` } })

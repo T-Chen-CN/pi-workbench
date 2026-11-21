@@ -18,6 +18,7 @@ import {
   CLOUD_OUTBOX_MAX_ENTRIES,
   CLOUD_PROTOCOL_VERSION,
   decodeFrame,
+  normalizeResumeCursor,
   CLIENT_TO_SERVER_TYPES,
   DEVICE_TO_SERVER_TYPES,
   encodeFrame,
@@ -243,10 +244,11 @@ export class Hub {
 
   /** 连接内再次 `resume`：按增量补投，溢出时回快照 */
   async resumeClient(peer: ClientPeer, lastAckSeq: number): Promise<void> {
-    // 游标 <= 0 等于「手上什么都没有」：直接发快照。
-    // 按 0 去重放日志只会推一堆旧事件，客户端拿不到历史消息。
-    const { frames, overflow } = this.clientLog.since(Math.max(0, lastAckSeq))
-    const needsSnapshot = overflow || !(lastAckSeq > 0)
+    // 游标 0 / 负数 / 非数字都归一成 null：直接回快照（见 normalizeResumeCursor）。
+    // 客户端重载后本地状态已清空，也会主动发 resume(0) 要一份新的。
+    const cursor = normalizeResumeCursor(lastAckSeq)
+    const { frames, overflow } = cursor === null ? { frames: [], overflow: false } : this.clientLog.since(cursor)
+    const needsSnapshot = cursor === null || overflow
     if (needsSnapshot) {
       const snapshot = await this.handlers.buildSnapshot()
       try {
@@ -413,8 +415,10 @@ export class Hub {
   }
 
   private async sendInitial(peer: ClientPeer, resumeFrom: number | null): Promise<void> {
-    if (resumeFrom !== null) {
-      const { frames, overflow } = this.clientLog.since(resumeFrom)
+    // 与 resumeClient 同一条规则：只有真正的游标才走续传，其余一律发快照
+    const cursor = normalizeResumeCursor(resumeFrom)
+    if (cursor !== null) {
+      const { frames, overflow } = this.clientLog.since(cursor)
       if (!overflow) {
         for (const entry of frames) {
           try {

@@ -13,11 +13,14 @@ import {
   CLOUD_TASK_EVENT_CUSTOM_TYPE,
   CLOUD_TASK_TERMINAL_STATUSES,
   DEVICE_TO_SERVER_TYPES,
+  buildSnapshotRequest,
   buildTaskEventMessage,
   classifyConnectError,
+  clientCursorQuery,
   decodeFrame,
   encodeFrame,
   isTerminalTaskStatus,
+  normalizeResumeCursor,
 } from '../pi-bridge/src/cloud-protocol'
 
 describe('版本号只有一处真相', () => {
@@ -175,5 +178,31 @@ describe('连接错误分级（F-43）', () => {
     expect(classifyConnectError({ stage: 'resolve' })).toBe('dns')
     expect(classifyConnectError({ stage: 'connect' })).toBe('offline')
     expect(classifyConnectError({ stage: 'ws', code: 'protocol-version' })).toBe('protocol')
+  })
+})
+
+describe('连接游标只有一处真相', () => {
+  it('0 / 负数 / 非数字 / 空串都等于「没有游标」', () => {
+    for (const raw of [0, -1, '0', 'abc', '', null, undefined, NaN, '  ']) {
+      expect(normalizeResumeCursor(raw)).toBeNull()
+    }
+  })
+
+  it('正整数才算游标，字符串形式也认', () => {
+    expect(normalizeResumeCursor(3)).toBe(3)
+    expect(normalizeResumeCursor('7')).toBe(7)
+    expect(normalizeResumeCursor(2.9)).toBe(2)
+  })
+
+  it('没有游标时不拼 lastAckSeq 参数（拼 0 会让服务端只重放日志）', () => {
+    expect(clientCursorQuery(0)).toBe('')
+    expect(clientCursorQuery(-5)).toBe('')
+    expect(clientCursorQuery(Number.NaN)).toBe('')
+    expect(clientCursorQuery(4)).toBe('?lastAckSeq=4')
+  })
+
+  it('「给我快照」就是游标为空的 resume 帧', () => {
+    expect(buildSnapshotRequest()).toEqual({ type: 'resume', lastAckSeq: 0 })
+    expect(normalizeResumeCursor(buildSnapshotRequest().lastAckSeq)).toBeNull()
   })
 })
