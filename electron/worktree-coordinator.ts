@@ -49,6 +49,8 @@ export interface WorktreeView {
   missing: boolean
   boundSessionCount: number
   boundToActiveSession: boolean
+  /** 云端工作单元的工作树：合成绑定的 `cloud:<unitId>` 拆出来的 unitId（F-19a） */
+  cloudUnitId?: string | null
   dirtyCount: number
   ahead: number
   behind: number
@@ -142,6 +144,13 @@ function worktreePathFromKey(state: WorkspaceState, key: string): string | null 
   const target = path.join(state.workspaceDir, record.path)
   return canonicalizePath(target) ?? target
 }
+
+/**
+ * 云端工作单元用合成绑定 id `cloud:<unitId>`（D-31）。
+ * 这里只负责把它从绑定里拆出来，好让 Git 视图给用户一个“结束工作单元”的入口；
+ * 真正的回收仍走 `release()`，不经这条路径。
+ */
+const CLOUD_BINDING_PREFIX = 'cloud:'
 
 function boundSessionCount(state: WorkspaceState, key: string): number {
   return Object.values(state.data.sessions).filter((binding) => binding.worktree === key).length
@@ -352,6 +361,8 @@ async function toView(
     depsStatusFor(state, id, target, record),
   ])
   const bindings = Object.entries(state.data.sessions).filter(([, binding]) => binding.worktree === id)
+  // 云端工作单元用合成绑定 id `cloud:<unitId>`（D-31）：拆出来给 UI 一个“结束工作单元”入口
+  const cloudBinding = bindings.find(([session]) => session.startsWith(CLOUD_BINDING_PREFIX))
   return {
     id,
     path: target ?? '',
@@ -363,6 +374,7 @@ async function toView(
     missing: id !== MAIN_WORKTREE_KEY && info === null,
     boundSessionCount: bindings.length,
     boundToActiveSession: Boolean(activeSessionId && bindings.some(([session]) => session === activeSessionId)),
+    cloudUnitId: cloudBinding ? cloudBinding[0].slice(CLOUD_BINDING_PREFIX.length) : null,
     dirtyCount: status?.files.length ?? 0,
     ahead: status?.ahead ?? 0,
     behind: status?.behind ?? 0,

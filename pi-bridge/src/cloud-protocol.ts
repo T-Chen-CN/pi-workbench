@@ -146,6 +146,7 @@ export const CLIENT_TO_SERVER_TYPES: ReadonlySet<string> = new Set([
   'confirm_plan',
   'stop_reply',
   'stop_task',
+  'close_unit',
   'ping',
 ])
 
@@ -162,6 +163,8 @@ export const DEVICE_TO_SERVER_TYPES: ReadonlySet<string> = new Set([
   'task_result',
   'task_failed',
   'task_interrupted',
+  'unit_closed',
+  'unit_state',
   'ping',
 ])
 
@@ -322,6 +325,11 @@ export interface CloudTaskResult {
   commit?: string
   notes?: string
   secretHits?: CloudSecretHit[]
+  /**
+   * 工单结束时工作树是否干净（`git status --porcelain` 无输出；ignored 文件不算脏）。
+   * 服务端据此决定能不能自动回收：干净 = 什么都没留下来，删了不丢东西。
+   */
+  worktreeClean?: boolean
 }
 
 export interface CloudTaskQuestion {
@@ -391,8 +399,31 @@ export interface CloudSnapshot {
   messages: CloudChatMessage[]
   tasks: CloudTaskSnapshot[]
   devices: CloudDeviceSnapshot[]
+  /** 工作单元：一个单元一个工作树（F-19a），UI 据此提供「结束工作单元」 */
+  units: CloudUnitView[]
   /** 当前有效的授权（UI 用来显示「已授权 N 张 / 剩 M 张」） */
   authorizations: CloudAuthorizationView[]
+}
+
+/**
+ * 工作单元的对外视图。
+ *
+ * 回收语义（F-19a / A-43）：工单进终态且该单元无后续工单时，**干净树自动回收**；
+ * 脏树保留并在此处标 `dirtyAt`，由用户手动结束。`closedAt` 只在**设备回执后**才写。
+ */
+export interface CloudUnitView {
+  unitId: string
+  deviceId: string
+  workspacePath: string
+  worktreePath?: string
+  branch?: string
+  createdAt: number
+  /** 已回收；脏树保留时保持 null（表示“还在等用户处理”） */
+  closedAt: number | null
+  /** 已发出回收请求、还没收到设备回执 */
+  closeRequestedAt?: number
+  /** 最近一次回收因脏树被拒的时间（UI 标「待清理」） */
+  dirtyAt?: number
 }
 
 /** 对客户端只暴露授权范围与额度，不暴露内部实现 */
@@ -415,6 +446,7 @@ export type CloudEvent =
   | { type: 'cloud_status'; status: CloudAgentStatus; error?: string }
   | { type: 'task'; task: CloudTaskSnapshot }
   | { type: 'device'; device: CloudDeviceSnapshot }
+  | { type: 'unit'; unit: CloudUnitView }
   | {
       type: 'notice'
       level: 'info' | 'warn' | 'error'
@@ -442,6 +474,8 @@ export type ClientToServerFrame =
     } & FrameBase)
   | ({ type: 'stop_reply' } & FrameBase)
   | ({ type: 'stop_task'; taskId: string } & FrameBase)
+  /** F-19a：结束工作单元（回收工作树）；干净树才会真删，脏树只汇报 */
+  | ({ type: 'close_unit'; unitId: string } & FrameBase)
   | ({ type: 'ping'; at: number } & FrameBase)
 
 export type ServerToClientFrame =
@@ -492,9 +526,38 @@ export type DeviceToServerFrame =
       taskId: string
       error: string
       changedFiles?: CloudChangedFile[]
+      /** 同 `CloudTaskResult.worktreeClean`：干净才可以自动回收（F-19a） */
+      worktreeClean?: boolean
       at: number
     } & FrameBase)
-  | ({ type: 'task_interrupted'; taskId: string; reason: string; at: number } & FrameBase)
+  | ({
+      type: 'task_interrupted'
+      taskId: string
+      reason: string
+      /** 停止/退出时的工作树状态；干净则服务端可立即自动回收 */
+      worktreeClean?: boolean
+      at: number
+    } & FrameBase)
+  | ({
+      type: 'unit_closed'
+      unitId: string
+      /** 工作树是否真的被删了（脏树保留时为 false） */
+      removed: boolean
+      dirty: boolean
+      worktreePath?: string
+      /** 有提交时分支保留，commit 存活 */
+      branch?: string
+      error?: string
+      at: number
+    } & FrameBase)
+  /** 启动/重连时的兜底上报：让云端能对上“已收敛但树还留着”的单元（A-43） */
+  | ({
+      type: 'unit_state'
+      unitId: string
+      clean: boolean
+      worktreePath?: string
+      at: number
+    } & FrameBase)
   | ({ type: 'ping'; at: number } & FrameBase)
 
 export type ServerToDeviceFrame =
@@ -503,6 +566,12 @@ export type ServerToDeviceFrame =
   | ({ type: 'task_cancel'; seq: number; taskId: string; reason: string } & FrameBase)
   | ({ type: 'task_answer'; taskId: string; questionId: string; text: string; at: number } & FrameBase)
   | ({ type: 'task_message'; seq: number; taskId: string; text: string; at: number } & FrameBase)
+  | ({
+      type: 'close_unit'
+      seq: number
+      unitId: string
+      reason: 'converged' | 'user-close' | 'sweep'
+    } & FrameBase)
   | ({ type: 'pong'; at: number } & FrameBase)
   | ({ type: 'error'; code: CloudErrorCode; message: string; fatal: boolean } & FrameBase)
 

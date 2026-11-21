@@ -50,6 +50,8 @@ export interface GitWorktreeView {
   missing: boolean
   boundSessionCount: number
   boundToActiveSession: boolean
+  /** 云端工作单元复用合成绑定 `cloud:<unitId>`；有值时可从 Git 视图结束该单元（F-19a） */
+  cloudUnitId?: string | null
   dirtyCount: number
   ahead: number
   behind: number
@@ -770,6 +772,8 @@ export type CloudClientOutgoingFrame =
     }
   | { type: 'stop_reply' }
   | { type: 'stop_task'; taskId: string }
+  /** F-19a：结束工作单元（回收工作树）；脏树才会真的保留 */
+  | { type: 'close_unit'; unitId: string }
   | { type: 'ack'; seq: number }
   | { type: 'ping'; at: number }
 

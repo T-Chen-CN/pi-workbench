@@ -20,9 +20,10 @@ import {
   type CloudTaskEventKind,
   type CloudTaskEventPayload,
   type CloudTaskSnapshot,
+  type CloudUnitView,
   type DeviceToServerFrame,
 } from 'pi-bridge'
-import type { CloudStore, DeviceRecord } from '../store/store.js'
+import type { CloudStore, DeviceRecord, UnitRecord } from '../store/store.js'
 import type { Hub } from '../ws/hub.js'
 import type { CloudTaskSpec } from 'pi-bridge'
 import { checkDispatch, consumeQuota, type AuthorizationRecord } from './authorization.js'
@@ -57,6 +58,21 @@ export interface DispatchRequest {
 export type DispatchOutcome =
   | { ok: true; task: CloudTaskSnapshot }
   | { ok: false; code: string; message: string }
+
+/** 工作单元的对外视图（F-19a） */
+export function toUnitView(unit: UnitRecord): CloudUnitView {
+  return {
+    unitId: unit.unitId,
+    deviceId: unit.deviceId,
+    workspacePath: unit.workspacePath,
+    worktreePath: unit.worktreePath,
+    branch: unit.branch,
+    createdAt: unit.createdAt,
+    closedAt: unit.closedAt,
+    closeRequestedAt: unit.closeRequestedAt,
+    dirtyAt: unit.dirtyAt,
+  }
+}
 
 export class TaskDispatcher {
   constructor(
@@ -100,7 +116,16 @@ export class TaskDispatcher {
     }
 
     const authorization = store.findAuthorization(request.authorizationId)
-    const sameUnit = Boolean(store.findUnit(request.workUnitId) && !store.findUnit(request.workUnitId)?.closedAt)
+    // 已结束 / 正在回收的单元不再接新工单：工作树马上要消失，派下去只会重建一棵新的
+    const existingUnit = store.findUnit(request.workUnitId)
+    if (existingUnit && (existingUnit.closedAt !== null || existingUnit.closeRequestedAt)) {
+      return {
+        ok: false,
+        code: 'unit-closed',
+        message: 'This work unit is closed or being reclaimed; open a new unit for follow-up work.',
+      }
+    }
+    const sameUnit = Boolean(existingUnit && !existingUnit.closedAt)
     const check = checkDispatch(
       authorization,
       { deviceId: request.deviceId, workspacePath: request.workspacePath, sameUnit },
@@ -152,8 +177,7 @@ export class TaskDispatcher {
     await this.consumeAuthorization(authorization!, sameUnit)
 
     // 工作单元台账：一个单元只对应一个 worktree，后续工单沿用
-    const unit = store.findUnit(request.workUnitId)
-    if (!unit) {
+    if (!existingUnit) {
       await store.saveUnit({
         unitId: request.workUnitId,
         deviceId: request.deviceId,
@@ -263,6 +287,10 @@ export class TaskDispatcher {
           await this.deps.store.saveTask(moved.task)
           this.finish(moved.task)
           await this.wake(moved.task, 'done', frame.result.summary)
+          // FIFO：同一设备的下一张工单在终态后接力（A-35）；顺序不能反：
+          // 先补投下一张，`reclaimIfClean` 才看得出该单元还有后续工单（A-46）
+          await this.dispatchNextFor(moved.task.spec.deviceId)
+          await this.reclaimIfClean(moved.task, frame.result.worktreeClean, 'converged')
         }
         return
       }
@@ -279,6 +307,8 @@ export class TaskDispatcher {
           await this.deps.store.saveTask(moved.task)
           this.finish(moved.task)
           await this.wake(moved.task, 'failed', frame.error)
+          await this.dispatchNextFor(moved.task.spec.deviceId)
+          await this.reclaimIfClean(moved.task, frame.worktreeClean, 'converged')
         }
         return
       }
@@ -295,11 +325,21 @@ export class TaskDispatcher {
           await this.deps.store.saveTask(moved.task)
           this.finish(moved.task)
           await this.wake(moved.task, 'interrupted', frame.reason)
+          await this.dispatchNextFor(moved.task.spec.deviceId)
+          await this.reclaimIfClean(moved.task, frame.worktreeClean, 'converged')
         } else if (moved.ignored) {
           this.deps.logger.info(
             `[cloud] task ${task.id} already terminal (${task.status}); interrupted is an annotation only`
           )
         }
+        return
+      }
+      case 'unit_closed': {
+        await this.onUnitClosed(frame)
+        return
+      }
+      case 'unit_state': {
+        await this.onUnitState(frame)
         return
       }
       default:
@@ -332,11 +372,136 @@ export class TaskDispatcher {
   }): Promise<void> {
     const unit = this.deps.store.findUnit(frame.unitId)
     if (!unit) return
-    await this.deps.store.saveUnit({
+    const updated = {
       ...unit,
       worktreePath: frame.path,
       branch: frame.branch ?? unit.branch,
+    }
+    await this.deps.store.saveUnit(updated)
+    this.publishUnit(updated)
+  }
+
+  // ------------------------------ 工作树回收（F-19a / A-43 / A-46） ------------------------------
+
+  unitViews(): CloudUnitView[] {
+    return this.deps.store.listUnits().map(toUnitView)
+  }
+
+  /**
+   * 人工入口：结束一个工作单元（F-19a 要求保留人工入口）。
+   * 单元里还有非终态工单时直接拒绍，不去 auto-abort：先停工单再结束单元，
+   * 否则 aborted 的那一下还没落盘的文件会被当成脏树留下。
+   */
+  async requestUnitClose(
+    unitId: string,
+    reason: 'converged' | 'user-close' | 'sweep' = 'user-close'
+  ): Promise<{ ok: boolean; code?: string }> {
+    const unit = this.deps.store.findUnit(unitId)
+    if (!unit) return { ok: false, code: 'unknown-unit' }
+    if (unit.closedAt !== null) return { ok: false, code: 'already-closed' }
+    if (this.hasOpenTaskInUnit(unitId)) return { ok: false, code: 'task-running' }
+    const updated: UnitRecord = { ...unit, closeRequestedAt: this.now() }
+    await this.deps.store.saveUnit(updated)
+    this.publishUnit(updated)
+    // 设备离线时帧进有界队列，重连补发（F-44）：不需要另写一套排队
+    this.deps.hub.sendToDevice(unit.deviceId, {
+      v: 1,
+      type: 'close_unit',
+      seq: 0,
+      unitId,
+      reason,
     })
+    return { ok: true }
+  }
+
+  /**
+   * A-43：**干净就自动回收**。
+   *
+   * 判定放在云端是因为只有它知道该单元还有没有后续工单：干净但还有后续就不动，
+   * 否则下一张工单会从 base 重开一棵树、丢掉上一张的 commit（A-46）。
+   */
+  private async reclaimIfClean(
+    task: CloudTaskSnapshot,
+    worktreeClean: boolean | undefined,
+    reason: 'converged' | 'sweep'
+  ): Promise<void> {
+    if (worktreeClean !== true) return
+    const unit = this.deps.store.findUnit(task.spec.workUnitId)
+    if (!unit || unit.closedAt !== null || unit.closeRequestedAt) return
+    if (this.hasOpenTaskInUnit(task.spec.workUnitId)) return
+    await this.requestUnitClose(unit.unitId, reason)
+  }
+
+  private hasOpenTaskInUnit(unitId: string): boolean {
+    return this.deps.store
+      .listTasks()
+      .some((task) => task.spec.workUnitId === unitId && !isTerminalTaskStatus(task.status))
+  }
+
+  /** 设备回执：只有这里才写 `closedAt`，避免“云端说回收了、磁盘还在” */
+  private async onUnitClosed(frame: {
+    unitId: string
+    removed: boolean
+    dirty: boolean
+    worktreePath?: string
+    branch?: string
+    error?: string
+  }): Promise<void> {
+    const unit = this.deps.store.findUnit(frame.unitId)
+    if (!unit) return
+    await this.deps.store.settleUnitClose(frame.unitId, {
+      removed: frame.removed,
+      dirty: frame.dirty,
+      worktreePath: frame.worktreePath,
+      branch: frame.branch,
+      error: frame.error,
+    })
+    const updated = this.deps.store.findUnit(frame.unitId)
+    if (updated) this.publishUnit(updated)
+    const where = frame.worktreePath ?? unit.worktreePath ?? unit.workspacePath
+    if (frame.error) {
+      // 删树失败：单元保持未结束，用户可以重试（下一张工单也能接着用这棵树）
+      this.deps.hub.publish({
+        type: 'notice',
+        level: 'error',
+        text: `回收工作树失败：${where}（${frame.error}）；单元仍是未结束状态，可重试`,
+        at: this.now(),
+        key: `unit-close-failed-${frame.unitId}-${this.now()}`,
+      })
+      return
+    }
+    this.deps.hub.publish({
+      type: 'notice',
+      level: frame.dirty ? 'warn' : 'info',
+      text: frame.dirty
+        ? `工作树有未提交改动，已保留：${where}（清理后可再次结束这个工作单元）`
+        : `工作树已回收${frame.branch ? `，分支 ${frame.branch} 保留` : ''}`,
+      at: this.now(),
+      key: `unit-closed-${frame.unitId}-${this.now()}`,
+    })
+  }
+
+  /** 兜底：设备启动/重连上报工作树状态，帮云端对齐“已收敛但树还留着”的单元 */
+  private async onUnitState(frame: {
+    unitId: string
+    clean: boolean
+    worktreePath?: string
+  }): Promise<void> {
+    const unit = this.deps.store.findUnit(frame.unitId)
+    if (!unit) return
+    if (frame.worktreePath && unit.worktreePath !== frame.worktreePath) {
+      const updated = { ...unit, worktreePath: frame.worktreePath }
+      await this.deps.store.saveUnit(updated)
+      this.publishUnit(updated)
+    }
+    if (!frame.clean) return
+    if (unit.closedAt !== null || unit.closeRequestedAt) return
+    if (this.hasOpenTaskInUnit(frame.unitId)) return
+    await this.requestUnitClose(frame.unitId, 'sweep')
+  }
+
+  private publishUnit(unit: UnitRecord): void {
+    this.deps.hub.publish({ type: 'unit', unit: toUnitView(unit) })
   }
 
   // ------------------------------ 取消与离线 ------------------------------
@@ -394,6 +559,7 @@ export class TaskDispatcher {
         await this.deps.store.saveTask(moved.task)
         this.finish(moved.task)
         await this.wake(moved.task, 'expired', '工单超时未被终端接收（ack 窗口 60 s）')
+        await this.dispatchNextFor(moved.task.spec.deviceId)
         continue
       }
       if (isWaitingHumanExpired(task, now, CLOUD_WAITING_HUMAN_TIMEOUT_MS)) {
@@ -406,6 +572,7 @@ export class TaskDispatcher {
         await this.deps.store.saveTask(moved.task)
         this.finish(moved.task)
         await this.wake(moved.task, 'failed', '等待用户决定超时，工单已失败')
+        await this.dispatchNextFor(moved.task.spec.deviceId)
       }
     }
   }
@@ -474,7 +641,11 @@ export class TaskDispatcher {
   }
 
   private async dispatchNextFor(deviceId: string): Promise<void> {
-    const next = this.deps.store.queuedTasksFor(deviceId)[0]
+    // 已结束 / 正在回收的单元不再补投：工作树马上要消失
+    const next = this.deps.store.queuedTasksFor(deviceId).find((task) => {
+      const unit = this.deps.store.findUnit(task.spec.workUnitId)
+      return !unit || (unit.closedAt === null && !unit.closeRequestedAt)
+    })
     if (!next) return
     await this.tryDispatch(next)
   }

@@ -58,7 +58,12 @@ export interface UnitRecord {
   worktreePath?: string
   branch?: string
   createdAt: number
+  /** 已回收（设备回执后落盘）；脏树保留时保持 null */
   closedAt: number | null
+  /** 已发出回收请求、还没收到设备回执（防止 UI 提前显示“已回收”） */
+  closeRequestedAt?: number
+  /** 最近一次回收因脏树被拒的时间；UI 标「待清理」 */
+  dirtyAt?: number
 }
 
 interface AccountsFile {
@@ -263,11 +268,39 @@ export class CloudStore {
     }))
   }
 
-  async closeUnit(unitId: string, now = Date.now()): Promise<void> {
+  /**
+   * 设备回执：`dirty` 时不写 `closedAt`（保留 = 还要用户处理），只记 `dirtyAt`；
+   * 带 `error` 的回执也不能写：删树失败却标已回收，就是“云端说回收了、磁盘还在”。
+   */
+  async settleUnitClose(
+    unitId: string,
+    input: {
+      removed: boolean
+      dirty: boolean
+      worktreePath?: string
+      branch?: string
+      error?: string
+    },
+    now = Date.now()
+  ): Promise<void> {
+    const failed = Boolean(input.error)
     await this.units.update((current) => ({
-      units: current.units.map((unit) =>
-        unit.unitId === unitId ? { ...unit, closedAt: unit.closedAt ?? now } : unit
-      ),
+      units: current.units.map((unit) => {
+        if (unit.unitId !== unitId) return unit
+        const next: UnitRecord = { ...unit }
+        delete next.closeRequestedAt
+        if (input.worktreePath) next.worktreePath = input.worktreePath
+        if (input.branch) next.branch = input.branch
+        if (failed) return next
+        if (input.dirty) {
+          next.dirtyAt = now
+          next.closedAt = unit.closedAt
+        } else {
+          next.dirtyAt = undefined
+          next.closedAt = unit.closedAt ?? now
+        }
+        return next
+      }),
     }))
   }
 

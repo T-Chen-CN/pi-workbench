@@ -175,12 +175,16 @@ let deviceId = ''
   const snapshot = await nextFrame(client)
   ok('客户端通道握手 + 快照', snapshot.type === 'snapshot' && snapshot.v === 1 && snapshot.snapshot?.protocol === 1, `seq=${snapshot.seq}`)
   ok('快照带设备与工单', Array.isArray(snapshot.snapshot?.devices) && Array.isArray(snapshot.snapshot?.tasks))
+  ok('快照带工作单元', Array.isArray(snapshot.snapshot?.units), `units=${snapshot.snapshot?.units?.length ?? 'n/a'}`)
   client.send(JSON.stringify({ v: 1, type: 'ping', seq: 1, at: 1234 }))
   const pong = await nextFrame(client)
   ok('客户端 ping → pong', pong.type === 'pong' && pong.at === 1234)
 
   const httpSnapshot = await call('/v1/snapshot', { headers: { cookie } })
   ok('HTTP 快照', httpSnapshot.status === 200 && httpSnapshot.json?.protocol === 1)
+  // 结束工作单元的入口（F-19a）：未知单元必须 404，不能默默成功
+  const unknownUnit = await call('/v1/units/nope/close', { method: 'POST', headers: { cookie } })
+  ok('结束未知工作单元 → 404', unknownUnit.status === 404, `status=${unknownUnit.status}`)
   client.close()
 
   let rejected = false

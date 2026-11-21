@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Cloud, RefreshCw, Send, Square, Unplug } from 'lucide-react'
+import { ArrowLeft, Cloud, RefreshCw, Send, Square, Trash2, Unplug } from 'lucide-react'
 import { useCloudStore } from '../store/cloudStore'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
-import type { CloudTaskRow, CloudTaskStatusName } from '../types/cloud'
+import type { CloudTaskRow, CloudTaskStatusName, CloudUnitRow } from '../types/cloud'
 import { Button, EmptyState, Field, Input, Select, Spinner, Textarea } from './ui'
 import { Card, CardHeader, SectionHeader, StatusText } from './patterns'
 
@@ -248,6 +248,8 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
             }
           />
 
+          <UnitList units={store.units} onClose={(unitId) => void store.closeUnit(unitId)} />
+
           <Card density="compact">
             <CardHeader title={t('cloudDevices')} />
             {store.devices.length === 0 ? (
@@ -261,7 +263,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                         className={
                           device.online
                             ? 'h-1.5 w-1.5 rounded-full bg-accent'
-                            : 'h-1.5 w-1.5 rounded-full bg-ink-faint'
+                            : 'h-1.5 w-1.5 rounded-full bg-ink-subtle'
                         }
                         aria-hidden="true"
                       />
@@ -310,7 +312,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                       notice.level === 'error'
                         ? 'type-caption text-danger'
                         : notice.level === 'warn'
-                          ? 'type-caption text-warn'
+                          ? 'type-caption text-warning'
                           : 'type-caption text-ink-muted'
                     }
                   >
@@ -388,6 +390,76 @@ const PairingPane: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) => {
   )
 }
 
+/**
+ * 工作单元列表（F-19a / A-43）。
+ *
+ * 干净树在工单结束时就**自动回收**了，所以这里平时只有“使用中”的单元；
+ * 出现「待处理」的一定是脏树（有未提交改动），那才需要手动结束。
+ */
+const UnitList: React.FC<{
+  units: CloudUnitRow[]
+  onClose: (unitId: string) => void
+}> = ({ units, onClose }) => {
+  const { t } = useI18nStore()
+  return (
+    <Card density="compact">
+      <CardHeader title={t('cloudUnits')} />
+      {units.length === 0 ? (
+        <p className="type-caption text-ink-muted">{t('cloudNoUnits')}</p>
+      ) : (
+        <ul className="flex flex-col gap-2.5">
+          {units.slice(0, 8).map((unit) => {
+            const closing = unit.closedAt === null && Boolean(unit.closeRequestedAt)
+            const dirty = unit.closedAt === null && Boolean(unit.dirtyAt)
+            const label =
+              unit.closedAt !== null
+                ? t('cloudUnitClosed')
+                : closing
+                  ? t('cloudUnitClosing')
+                  : dirty
+                    ? t('cloudUnitDirty')
+                    : t('cloudUnitActive')
+            return (
+              <li key={unit.unitId} className="flex flex-col gap-1">
+                <span className="flex items-center gap-2 type-label text-ink">
+                  <span className="truncate" title={unit.unitId}>
+                    {unit.branch ?? unit.unitId}
+                  </span>
+                  <span
+                    className={
+                      dirty ? 'type-caption text-warning' : 'type-caption text-ink-muted'
+                    }
+                  >
+                    {label}
+                  </span>
+                </span>
+                <span
+                  className="truncate type-caption text-ink-muted"
+                  title={unit.worktreePath ?? unit.workspacePath}
+                >
+                  {unit.worktreePath ?? unit.workspacePath}
+                </span>
+                {unit.closedAt === null && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onClose(unit.unitId)}
+                    disabled={closing}
+                  >
+                    <Trash2 size={13} />
+                    {t('cloudUnitClose')}
+                  </Button>
+                )}
+              </li>
+            )
+          })}
+          <li className="type-caption text-ink-muted">{t('cloudUnitHint')}</li>
+        </ul>
+      )}
+    </Card>
+  )
+}
+
 const TaskList: React.FC<{
   title: string
   tasks: CloudTaskRow[]
@@ -426,7 +498,7 @@ const TaskList: React.FC<{
                 )}
                 {task.status === 'waiting_human' && task.question && (
                   <div className="flex flex-col gap-1">
-                    <span className="type-caption text-warn">{t('cloudQuestionWaiting')}</span>
+                    <span className="type-caption text-warning">{t('cloudQuestionWaiting')}</span>
                     <p className="type-caption text-ink">{task.question.text}</p>
                     <div className="flex items-center gap-2">
                       <Input

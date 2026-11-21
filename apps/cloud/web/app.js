@@ -16,6 +16,7 @@ const state = {
   canStopReply: false,
   messages: [],
   tasks: [],
+  units: [],
   devices: [],
   authorizations: [],
   notices: [],
@@ -268,6 +269,7 @@ function applyFrame(frame) {
     }))
     state.tasks = snapshot.tasks || []
     state.devices = snapshot.devices || []
+    state.units = snapshot.units || []
     state.authorizations = snapshot.authorizations || []
     state.agentStatus = snapshot.cloud?.status || 'idle'
     state.canStopReply = Boolean(snapshot.cloud?.canStopReply)
@@ -375,6 +377,15 @@ function applyFrame(frame) {
       const index = state.tasks.findIndex((item) => item.id === task.id)
       if (index >= 0) state.tasks[index] = task
       else state.tasks.unshift(task)
+      renderAside()
+      return
+    }
+    case 'unit': {
+      const unit = event.unit
+      if (!unit) return
+      const index = state.units.findIndex((item) => item.unitId === unit.unitId)
+      if (index >= 0) state.units[index] = unit
+      else state.units.unshift(unit)
       renderAside()
       return
     }
@@ -669,9 +680,48 @@ function renderTabBody() {
 function renderAside() {
   return el('aside', {}, [
     renderTaskCard(),
+    renderUnitCard(),
     renderDeviceCard(),
     renderAuthCard(),
     renderNoticeCard(),
+  ])
+}
+
+/**
+ * 工作单元（F-19a / A-43）：干净树在工单结束时就自动回收了，
+ * 这里出现「有未提交改动」才需要手动结束。
+ */
+function renderUnitCard() {
+  const units = state.units || []
+  const items = units.slice(0, 8).map((unit) => {
+    const closed = typeof unit.closedAt === 'number'
+    const closing = !closed && Boolean(unit.closeRequestedAt)
+    const dirty = !closed && Boolean(unit.dirtyAt)
+    const label = closed ? '已结束' : closing ? '回收中…' : dirty ? '有未提交改动' : '使用中'
+    return el('li', {}, [
+      el('div', { class: 'row' }, [
+        el('span', { text: unit.branch || unit.unitId }),
+        el('span', { class: 'spacer' }),
+        el('span', { class: dirty ? 'mono warn' : 'mono muted', text: label }),
+      ]),
+      el('div', { class: 'mono muted', text: unit.worktreePath || unit.workspacePath || '' }),
+      closed
+        ? null
+        : el('button', {
+            text: closing ? '回收中…' : '结束并回收',
+            disabled: closing ? 'disabled' : null,
+            onclick: () => send({ type: 'close_unit', unitId: unit.unitId }),
+          }),
+    ])
+  })
+  return el('div', { class: 'card' }, [
+    el('h3', { text: '工作单元' }),
+    items.length === 0
+      ? el('p', { class: 'muted', text: '还没有工作单元（派活后自动创建，一个单元一个工作树）' })
+      : el('ul', { class: 'list' }, items),
+    items.length === 0
+      ? null
+      : el('p', { class: 'muted', text: '工作树干净时工单结束就自动回收；这里只为脏树保留手动入口' }),
   ])
 }
 

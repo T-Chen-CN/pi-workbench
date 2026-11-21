@@ -60,7 +60,14 @@ export interface CloudTaskRunnerDeps {
     ) => Promise<{ success: boolean; error?: string; worktree?: { path: string; branch: string | null } }>
     getSessionBinding: (sessionId: string) => { key: string; path: string; branch: string | null }
     hasBinding: (sessionId: string) => boolean
-    release: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+    /** `release()` 的三态语义：脏树保留 / 干净无新提交删树删分支 / 有提交只删目录 */
+    release: (sessionId: string) => Promise<{
+      success: boolean
+      removed?: boolean
+      dirty?: boolean
+      worktreePath?: string
+      error?: string
+    }>
   } | null>
   /** 上报给云端（device agent 负责成帧与离线队列） */
   onStatus: (taskId: string, status: CloudTaskStatus) => void
@@ -68,8 +75,29 @@ export interface CloudTaskRunnerDeps {
   onMilestone: (taskId: string, milestone: CloudTaskMilestone) => void
   onQuestion: (taskId: string, questionId: string, text: string) => void
   onResult: (taskId: string, result: CloudTaskResult) => void
-  onFailed: (taskId: string, error: string, changedFiles?: CloudChangedFile[]) => void
-  onInterrupted: (taskId: string, reason: string) => void
+  onFailed: (
+    taskId: string,
+    error: string,
+    changedFiles?: CloudChangedFile[],
+    worktreeClean?: boolean
+  ) => void
+  onInterrupted: (taskId: string, reason: string, worktreeClean?: boolean) => void
+  /** 工作单元回收回执（F-19a / A-43）：只有这里才能让云端写 `closedAt` */
+  onUnitClosed: (
+    unitId: string,
+    result: {
+      removed: boolean
+      dirty: boolean
+      worktreePath?: string
+      branch?: string
+      error?: string
+    }
+  ) => void
+  /** 工作树状态的兜底上报（启动 / 重连）：干净且已收敛的单元会被云端自动回收 */
+  onUnitState: (
+    unitId: string,
+    state: { clean: boolean; worktreePath?: string }
+  ) => void
 }
 
 interface UnitRecord {
@@ -499,6 +527,8 @@ export class CloudTaskRunner {
 
   private async finishDone(task: ActiveTask, spec: CloudTaskSpec, outcome: any): Promise<void> {
     const changedFiles = await this.collectChangedFiles(task)
+    // F-19a：干净 = 什么都没留下来，服务端可以自动回收（脏树则保留等用户）
+    const worktreeClean = await this.isWorktreeClean(task.worktreePath)
     let commit = ''
     let branch = ''
     try {
@@ -515,6 +545,7 @@ export class CloudTaskRunner {
       changedFiles,
       branch: branch && branch !== 'HEAD' ? branch : undefined,
       commit: commit || undefined,
+      worktreeClean,
     }
     if (changedFiles.length === 0) {
       result.notes = '没有检测到文件改动'
@@ -529,10 +560,116 @@ export class CloudTaskRunner {
 
   private async finishFailed(task: ActiveTask, error: string): Promise<void> {
     const changedFiles = await this.collectChangedFiles(task).catch(() => [] as CloudChangedFile[])
+    const worktreeClean = await this.isWorktreeClean(task.worktreePath)
     this.active.delete(task.id)
     this.persistedTasks.delete(task.id)
     await this.persistTasks().catch(() => undefined)
-    this.deps.onFailed(task.id, error, changedFiles)
+    this.deps.onFailed(task.id, error, changedFiles, worktreeClean)
+  }
+
+  /** 工作树是否干净：`git status --porcelain` 无输出（ignored 文件不算脏，所以装了依赖也算干净） */
+  private async isWorktreeClean(worktreePath: string): Promise<boolean> {
+    try {
+      const output = await this.git(worktreePath, ['status', '--porcelain'])
+      return output.trim().length === 0
+    } catch {
+      // git 不可用 / 目录已不在：一律当脏，宁可不删
+      return false
+    }
+  }
+
+  // ------------------------------ 工作单元回收（F-19a / A-43） ------------------------------
+
+  /**
+   * 回收一个工作单元的工作树。
+   * 一律走 `coordinator.release()`：它内部有讲行队列、会终止依赖安装，并按三态处理
+   * （脏树保留 / 干净且无新提交删树删分支 / 有提交只删目录保留 `pi/*` 分支）。
+   */
+  async closeUnit(unitId: string): Promise<{ ok: boolean; error?: string }> {
+    const record = this.units.get(unitId)
+    for (const task of this.active.values()) {
+      // 云端已拦过；终端再兜一次，绝不在工单还在写文件时回收
+      if (task.unitId === unitId) return { ok: false, error: 'task-running' }
+    }
+    if (!record) {
+      // 没有台账（已回收 / 从未建树）：告知云端可以收口
+      this.deps.onUnitClosed(unitId, { removed: false, dirty: false })
+      return { ok: true }
+    }
+
+    const coordinator = await this.deps.getCoordinator(record.repoPath)
+    if (!coordinator) {
+      this.deps.onUnitClosed(unitId, {
+        removed: false,
+        dirty: false,
+        worktreePath: record.worktreePath,
+        branch: record.branch ?? undefined,
+        error: 'not-a-repo',
+      })
+      return { ok: false, error: 'not-a-repo' }
+    }
+
+    const binding = `${UNIT_BINDING_PREFIX}${unitId}`
+    let released: Awaited<ReturnType<typeof coordinator.release>>
+    try {
+      // 脏树那一次 `release()` 已经把绑定删了（但树留着）：不重挂的话第二次 `release()`
+      // 只会看到“没有绑定”直接返回成功，我们会错报“已回收”而磁盘上树还在。
+      if (!coordinator.hasBinding(binding) && existsSync(record.worktreePath)) {
+        await coordinator.bind(binding, record.worktreePath)
+      }
+      released = await coordinator.release(binding)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.deps.logger.warn(`[Cloud Task] failed to release ${binding}:`, message)
+      this.deps.onUnitClosed(unitId, {
+        removed: false,
+        dirty: false,
+        worktreePath: record.worktreePath,
+        error: message,
+      })
+      return { ok: false, error: message }
+    }
+
+    const dirty = released.dirty === true
+    const removed = released.removed === true
+    const settled = released.success !== false
+    // 只有“真处理掉了”（已删 / 目录本就不在 / 本来就脏）才删台账：
+    // 删树失败时保留台账，否则下次同 unitId 会再建一棵、旧树变孤儿
+    if (settled && !dirty) {
+      this.units.delete(unitId)
+      await this.persistUnits().catch(() => undefined)
+    }
+    this.deps.onUnitClosed(unitId, {
+      removed,
+      dirty,
+      worktreePath: released.worktreePath ?? record.worktreePath,
+      branch: record.branch ?? undefined,
+      error: settled ? undefined : released.error,
+    })
+    return { ok: settled, error: released.error }
+  }
+
+  /**
+   * 启动兜底（A-43）：把本地台账里每个单元的工作树状态上报一次。
+   * 覆盖“设备离线被取消 / 进程被杀，没来得及报 worktreeClean”的单元。
+   */
+  async sweepUnits(): Promise<void> {
+    for (const [unitId, record] of [...this.units]) {
+      if (!existsSync(record.worktreePath)) {
+        // 工作树已经不在了：丢台账，让云端能收口
+        this.units.delete(unitId)
+        this.deps.onUnitClosed(unitId, {
+          removed: false,
+          dirty: false,
+          worktreePath: record.worktreePath,
+          branch: record.branch ?? undefined,
+        })
+        continue
+      }
+      const clean = await this.isWorktreeClean(record.worktreePath)
+      this.deps.onUnitState(unitId, { clean, worktreePath: record.worktreePath })
+    }
+    await this.persistUnits().catch(() => undefined)
   }
 
   private async collectChangedFiles(task: ActiveTask): Promise<CloudChangedFile[]> {
@@ -580,10 +717,12 @@ export class CloudTaskRunner {
     } catch (error) {
       this.deps.logger.warn('[Cloud Task] abort failed:', error)
     }
+    // abort 之后再判：停止了但树是干净的，服务端可以直接自动回收（A-43）
+    const worktreeClean = await this.isWorktreeClean(task.worktreePath)
     this.active.delete(taskId)
     this.persistedTasks.delete(taskId)
     await this.persistTasks().catch(() => undefined)
-    this.deps.onInterrupted(taskId, reason)
+    this.deps.onInterrupted(taskId, reason, worktreeClean)
     return true
   }
 

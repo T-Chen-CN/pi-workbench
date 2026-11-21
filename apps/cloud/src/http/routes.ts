@@ -385,6 +385,24 @@ export function buildRouter(deps: RouteDeps): Router {
     return deps.snapshot()
   })
 
+  /**
+   * F-19a：结束工作单元（人工回收入口，Web 用；桌面端走客户端帧走同一个函数）。
+   * 真正删工作树的是终端；这里只落回收请求并下发 `close_unit`。
+   */
+  router.post('/v1/units/:id/close', async (ctx) => {
+    requireUser(ctx)
+    const unitId = ctx.params.id
+    const result = await deps.dispatcher.requestUnitClose(unitId, 'user-close')
+    if (!result.ok) {
+      throw new HttpError(
+        result.code === 'task-running' ? 409 : 404,
+        result.code ?? 'cannot-close-unit',
+        result.code ?? 'cannot-close-unit'
+      )
+    }
+    return { ok: true, unitId }
+  })
+
   router.get('/v1/authorizations', (ctx) => {
     requireUser(ctx)
     return { authorizations: deps.store.activeAuthorizations().map(toView) }

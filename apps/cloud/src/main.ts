@@ -75,6 +75,8 @@ export async function createCloudServer(overrides: Partial<CloudConfig> = {}): P
     hub: null as unknown as Hub,
     dispatcher: null as unknown as TaskDispatcher,
     logger,
+    // 入口屏障：重建窗口里运行时与 sessionId 都不可用（F-13）
+    ready: () => ensureAgent(),
   })
 
   const hub = new Hub(
@@ -115,6 +117,7 @@ export async function createCloudServer(overrides: Partial<CloudConfig> = {}): P
       messages: await session.history(),
       tasks: store.listTasks(),
       devices: dispatcher.deviceSnapshots(),
+      units: dispatcher.unitViews(),
       authorizations: store.activeAuthorizations().map(authorizationView),
     }
   }
@@ -256,6 +259,24 @@ export async function createCloudServer(overrides: Partial<CloudConfig> = {}): P
         }
         return
       }
+      case 'close_unit': {
+        const result = await dispatcher.requestUnitClose(frame.unitId, 'user-close')
+        if (!result.ok) {
+          hub.publish({
+            type: 'notice',
+            level: 'warn',
+            text:
+              result.code === 'task-running'
+                ? '这个工作单元还有工单在跑，先停止工单再结束单元'
+                : result.code === 'already-closed'
+                  ? '这个工作单元已经结束了'
+                  : '工作单元不存在',
+            at: Date.now(),
+            key: `close-unit-${frame.unitId}`,
+          })
+        }
+        return
+      }
       default:
         return
     }
@@ -356,17 +377,174 @@ export async function createCloudServer(overrides: Partial<CloudConfig> = {}): P
 
   let agentReady = false
   let agentInitializing: Promise<boolean> | null = null
+  /** 正在运行的那份配置的 `updatedAt`；null 表示没有可用运行时 */
+  let runningConfigStamp: number | null = null
+  /** 上次初始化成功的配置（含解密后的 Key，只在内存）：新配置失败时用它回滚 */
+  let lastGoodConfig: ResolvedCloudConfig | null = null
+  /** 正在进行的重建；所有入口（含 `ensureAgent()`）都要先等它结束 */
+  let applyingConfig: Promise<void> | null = null
+  /** 已经失败过的那份配置：同一份坏配置不反复重试（否则每次入口都会再拆一次运行时） */
+  let failedConfigStamp: number | null = null
+
+  interface ResolvedCloudConfig {
+    stamp: number
+    provider: string
+    apiUrl: string
+    apiKey: string
+    model: string
+  }
+
+  /** 读磁盘配置并解密 Key；解密失败返回 null（换过 `PI_CLOUD_ENC_KEY` 的典型表现） */
+  function resolveConfig(): ResolvedCloudConfig | null {
+    const record = store.getCloudConfig()
+    if (!record) return null
+    try {
+      return {
+        stamp: record.updatedAt,
+        provider: record.provider,
+        apiUrl: record.apiUrl,
+        apiKey: decryptSecret(record.apiKeyCipher, config.encryptionKey),
+        model: record.model,
+      }
+    } catch {
+      logger.error('[cloud] cannot decrypt the stored model config; re-push it from the client')
+      return null
+    }
+  }
+
+  /** 磁盘上的配置比运行中的新，且不是已失败的那份 → 返回它的 stamp */
+  function pendingConfigStamp(): number | null {
+    const record = store.getCloudConfig()
+    if (!record) return null
+    if (runningConfigStamp === record.updatedAt) return null
+    if (failedConfigStamp === record.updatedAt) return null
+    return record.updatedAt
+  }
+
+  /** 用给定配置建运行时并续上唯一会话 */
+  async function startAgent(resolved: ResolvedCloudConfig): Promise<boolean> {
+    const result = await agent.initialize({
+      workspaceDir: config.workspaceDir,
+      agentDir: config.agentDir,
+      apiConfig: {
+        provider: resolved.provider,
+        apiUrl: resolved.apiUrl,
+        apiKey: resolved.apiKey,
+        selectedModel: resolved.model,
+      },
+      logger,
+      // 云端会话：无审批（mode=auto）、不挂计划与工作树扩展、工具白名单只有六个
+      builtinExtensions: { approval: false, plan: false, worktree: false },
+      toolAllowlist: [...CLOUD_TOOL_NAMES],
+      extensionFactories: [createCloudToolsExtension({ store, hub, dispatcher })],
+      getDefaultPermissionLevel: () => 'auto',
+      onAgentSettled: () => {
+        hub.publish({ type: 'cloud_status', status: 'idle' })
+      },
+    })
+    if (!result.success) {
+      logger.error('[cloud] agent initialize failed:', result.error)
+      hub.publish({
+        type: 'notice',
+        level: 'error',
+        text: `云端 Agent 初始化失败：${result.error ?? 'unknown error'}`,
+        at: Date.now(),
+        key: 'agent-init-failed',
+      })
+      return false
+    }
+    const opened = await session.open()
+    if (!opened.ok) {
+      logger.error('[cloud] session open failed:', opened.error)
+      return false
+    }
+    agentReady = true
+    runningConfigStamp = resolved.stamp
+    lastGoodConfig = resolved
+    hub.publish({ type: 'cloud_status', status: 'idle' })
+    logger.info(`[cloud] cloud agent ready (${resolved.provider} / ${resolved.model})`)
+    return true
+  }
 
   /**
-   * 懒初始化：云端配置由客户端推上来（F-10），首启时可能还没有。
+   * F-13：配置轮换只在**轮次边界**生效——而且落在“下一轮开始之前”，不在 `agent_settled` 里重建。
+   *
+   * 为什么不在 settle 里重建：`agent_settled` 在事件分发过程中触发，此时 `dispose()` 会销毁正在分发
+   * 事件的会话；改在入口处重建还能顺带避开“settle 与新消息同 tick”的竞态（入口本来就要 await）。
+   *
+   * 为什么只能“先拆后建 + 失败回滚”，不能“先起临时实例验证再切”：`initialize()` 会写进程级的
+   * Provider Key，校验失败时释放会把环境还原成**进程原值**而不是旧 Key，反而毒掉正在跑的旧实例（§3.1）。
+   */
+  async function applyConfig(): Promise<void> {
+    if (applyingConfig) {
+      await applyingConfig
+      return
+    }
+    if (pendingConfigStamp() === null) return
+    // 本轮在跑就不动它：下一次入口（下一轮开始前）再生效
+    if (session.isBusy()) return
+
+    applyingConfig = (async () => {
+      const resolved = resolveConfig()
+      if (!resolved) {
+        const record = store.getCloudConfig()
+        if (record) failedConfigStamp = record.updatedAt
+        return
+      }
+      const previous = lastGoodConfig
+      logger.info(`[cloud] applying new cloud config: ${resolved.provider} / ${resolved.model}`)
+      agentReady = false
+      runningConfigStamp = null
+      await agent.dispose().catch((error) => {
+        logger.warn('[cloud] agent dispose failed:', error)
+      })
+
+      if (await startAgent(resolved)) {
+        failedConfigStamp = null
+        hub.publish({
+          type: 'notice',
+          level: 'info',
+          text: `云端模型配置已生效：${resolved.provider} / ${resolved.model}`,
+          at: Date.now(),
+          key: `config-applied-${resolved.stamp}`,
+        })
+        return
+      }
+
+      // 回滚：坏配置不能把云端打死，用上一份可用配置重建
+      failedConfigStamp = resolved.stamp
+      if (previous && (await startAgent(previous))) {
+        hub.publish({
+          type: 'notice',
+          level: 'warn',
+          text: '新配置不可用，已回退到上一份可用配置；检查后重新推送即可',
+          at: Date.now(),
+          key: `config-rollback-${resolved.stamp}`,
+        })
+      }
+    })()
+    try {
+      await applyingConfig
+    } finally {
+      applyingConfig = null
+    }
+  }
+
+  /**
+   * 懒初始化 + 轮次边界换配（F-10 / F-13）。
    * 没有配置时控制面照常工作（能看到设备、配对、健康检查），只是不能对话。
    */
   async function ensureAgent(): Promise<boolean> {
-    if (agentReady) return true
+    if (applyingConfig) await applyingConfig
+    if (agentReady) {
+      // 配置换过就在本轮开始前生效；这一句是 F-13 的唯一触发点
+      if (pendingConfigStamp() !== null) await applyConfig()
+      return agentReady
+    }
     if (agentInitializing) return agentInitializing
     agentInitializing = (async () => {
-      const record = store.getCloudConfig()
-      if (!record) {
+      const resolved = resolveConfig()
+      if (!resolved) {
         hub.publish({
           type: 'notice',
           level: 'warn',
@@ -376,52 +554,13 @@ export async function createCloudServer(overrides: Partial<CloudConfig> = {}): P
         })
         return false
       }
-      let apiKey: string
-      try {
-        apiKey = decryptSecret(record.apiKeyCipher, config.encryptionKey)
-      } catch {
-        logger.error('[cloud] cannot decrypt the stored model config; re-push it from the client')
-        return false
+      // 刚失败过的那份配置不再重试；有上一份可用配置就用它起来
+      if (failedConfigStamp === resolved.stamp && lastGoodConfig) {
+        return startAgent(lastGoodConfig)
       }
-      const result = await agent.initialize({
-        workspaceDir: config.workspaceDir,
-        agentDir: config.agentDir,
-        apiConfig: {
-          provider: record.provider,
-          apiUrl: record.apiUrl,
-          apiKey,
-          selectedModel: record.model,
-        },
-        logger,
-        // 云端会话：无审批（mode=auto）、不挂计划与工作树扩展、工具白名单只有六个
-        builtinExtensions: { approval: false, plan: false, worktree: false },
-        toolAllowlist: [...CLOUD_TOOL_NAMES],
-        extensionFactories: [createCloudToolsExtension({ store, hub, dispatcher })],
-        getDefaultPermissionLevel: () => 'auto',
-        onAgentSettled: () => {
-          hub.publish({ type: 'cloud_status', status: 'idle' })
-        },
-      })
-      if (!result.success) {
-        logger.error('[cloud] agent initialize failed:', result.error)
-        hub.publish({
-          type: 'notice',
-          level: 'error',
-          text: `云端 Agent 初始化失败：${result.error ?? 'unknown error'}`,
-          at: Date.now(),
-          key: 'agent-init-failed',
-        })
-        return false
-      }
-      const opened = await session.open()
-      if (!opened.ok) {
-        logger.error('[cloud] session open failed:', opened.error)
-        return false
-      }
-      agentReady = true
-      hub.publish({ type: 'cloud_status', status: 'idle' })
-      logger.info('[cloud] cloud agent ready')
-      return true
+      const ok = await startAgent(resolved)
+      if (!ok) failedConfigStamp = resolved.stamp
+      return ok
     })()
     try {
       return await agentInitializing

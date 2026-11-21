@@ -45,6 +45,7 @@ const CLIENT_FRAME_TYPES = new Set([
   'confirm_plan',
   'stop_reply',
   'stop_task',
+  'close_unit',
   'ack',
   'ping',
 ])

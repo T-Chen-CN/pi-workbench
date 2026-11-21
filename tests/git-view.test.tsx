@@ -40,6 +40,7 @@ vi.mock('../src/api', () => ({
     ),
     gitPrStatus: vi.fn(async () => ({ success: true, status: null })),
     gitForgetWorktree: vi.fn(async () => ({ success: true, worktrees: [] })),
+    cloudClientSend: vi.fn(async () => ({ success: true })),
     githubAuthStatus: vi.fn(
       () =>
         new Promise((resolve) => {
@@ -354,6 +355,7 @@ describe('GitView 工作树列表', () => {
     useGitStore.setState({ byWorkspace: {} })
     useDialogStore.setState({ current: null })
     vi.mocked(api.gitForgetWorktree).mockClear()
+    vi.mocked(api.cloudClientSend).mockClear()
   })
 
   afterEach(() => {
@@ -425,5 +427,45 @@ describe('GitView 工作树列表', () => {
     })
 
     expect(api.gitForgetWorktree).not.toHaveBeenCalled()
+  })
+
+  it('云端工作单元的工作树：标出“云端”并提供结束入口（A-43）', async () => {
+    repoWorktrees = [
+      worktree({ id: 'cloud-unit-a', branch: 'pi/wt-a', cloudUnitId: 'unit-a' }),
+    ]
+    render(<GitView workspacePath="/repo" />)
+    await openWorktreeList()
+
+    expect(await screen.findByText(translations.zh.cloudWorktreeChip)).not.toBeNull()
+    fireEvent.click(
+      await screen.findByRole('button', { name: translations.zh.cloudUnitClose })
+    )
+    await waitFor(() => expect(useDialogStore.getState().current?.kind).toBe('confirm'))
+    await act(async () => {
+      useDialogStore.getState().close(true)
+    })
+
+    await waitFor(() =>
+      expect(api.cloudClientSend).toHaveBeenCalledWith({ type: 'close_unit', unitId: 'unit-a' })
+    )
+    // 不走 forget：回收由终端 release() 负责，这里的按钮只是发请求
+    expect(api.gitForgetWorktree).not.toHaveBeenCalled()
+  })
+
+  it('取消确认时不发结束请求', async () => {
+    repoWorktrees = [
+      worktree({ id: 'cloud-unit-a', branch: 'pi/wt-a', cloudUnitId: 'unit-a' }),
+    ]
+    render(<GitView workspacePath="/repo" />)
+    await openWorktreeList()
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: translations.zh.cloudUnitClose })
+    )
+    await waitFor(() => expect(useDialogStore.getState().current?.kind).toBe('confirm'))
+    await act(async () => {
+      useDialogStore.getState().close(false)
+    })
+    expect(api.cloudClientSend).not.toHaveBeenCalled()
   })
 })

@@ -92,6 +92,22 @@ export interface CloudAuthorizationRow {
   confirmedSummary: string
 }
 
+/**
+ * 工作单元行（F-19a / A-43）：一个单元一个工作树。
+ * 干净就自动回收，脏树保留并出现在这里供用户手动结束。
+ */
+export interface CloudUnitRow {
+  unitId: string
+  deviceId: string
+  workspacePath: string
+  worktreePath?: string
+  branch?: string
+  createdAt: number
+  closedAt: number | null
+  closeRequestedAt?: number
+  dirtyAt?: number
+}
+
 export interface CloudNotice {
   level: 'info' | 'warn' | 'error'
   text: string

@@ -77,6 +77,19 @@ describe('WorktreeCoordinator', () => {
     expect(git(['branch', '--format=%(refname:short)'])).not.toContain('pi/')
   })
 
+  it('云端合成绑定 cloud:<unitId> 会让视图带上 cloudUnitId（F-19a 人工入口用）', async () => {
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    await coordinator!.bind('cloud:unit-x', 'new')
+    const root = coordinator!.getSessionRoot('cloud:unit-x')
+
+    const views = await coordinator!.listWorktrees('session-1')
+    const view = views.find((item) => item.path === root)
+    expect(view?.boundSessionCount).toBe(1)
+    expect(view?.cloudUnitId).toBe('unit-x')
+    // 普通会话绑定的工作树不带云端标记
+    expect(views.find((item) => item.path === workspace)?.cloudUnitId).toBeNull()
+  })
+
   it('shares a worktree between sessions and only removes it after the last binding', async () => {
     const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
     await coordinator!.bind('session-a', 'new')

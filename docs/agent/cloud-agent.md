@@ -51,15 +51,54 @@
   一次性 `onTrace` 收不到它的轨迹。
 - 压缩前钩子 `session_before_compact` → `onSessionBeforeCompact`（P1 的记忆抽取挂这里）。
 
+**配置轮换（F-13 / A-16）**：不在 `agent_settled` 里重建，而是放在**每个入口的 `ensureAgent()` 里**判定
+（`say` / `flushEvents` / 快照都会先过它）：
+
+1. 比 `runningConfigStamp` 与磁盘配置的 `updatedAt`；相同就直接返回（最常见路径零成本）。
+2. 本轮在跑（`session.isBusy()`）就**不动**，等下一轮开始前再生效 —— 绝不打断进行中的轮次。
+3. 换配是“**先拆后建 + 失败回滚**”：`agent.dispose()` → `startAgent(新配置)`；失败则用内存里的
+   `lastGoodConfig` 重建并推一条回退 notice。
+   为什么不“先起临时实例验证再切”：`initialize()` 会写进程级 Provider Key，校验失败释放会把环境
+   还原成**进程原值**而不是旧 Key，反而毒掉旧实例（§3.1 的引用计数）。
+4. 同一份坏配置只试一次（`failedConfigStamp`），不会每个入口都拆一次运行时。
+
+`cloud-session` 因此多了一个 `ready` 屏障：重建窗口里运行时与 `sessionId` 都不可用，
+用户消息与事件唤醒必须先 `await` 它，否则会撞到已 dispose 的会话。
+
 ### 3.2 工单
 
 - 状态机：`queued → assigned → running → waiting_human ⇄ running → done | failed | cancelled`；
   终态先落者胜，后到的终态只作 `ignored` 附注。
-- 单设备并发 1；`queued` 60 秒未接单、`waiting_human` 2 小时未回答 → 超时收敛；
+- 单设备并发 1；终态后自动补投下一张（FIFO）；`queued` 60 秒未接单、`waiting_human` 2 小时未回答 → 超时收敛；
   **设备离线 → 未完成工单直接 `cancelled(device-offline)`，不续跑**（F-21）。
 - 幂等：`idempotencyKey`（`workUnitId` + 内容摘要），重复派活返回同一张工单。
 - 派活强制校验（G9）：`authorizationId` × 设备 × 仓库（路径归一化后比较）× 额度 × 有效期。
-  同一工作单元追加的工单不扣额度（O-06）。
+  同一工作单元追加的工单不扣额度（O-06）。已结束 / 正在回收的单元拒绝新工单（`unit-closed`）。
+
+### 3.2.1 工作树回收（F-19a / A-43 / A-46）
+
+**干净就自动回收，脏才手动**。判定放在云端，因为只有它知道该单元还有没有后续工单：
+
+| 工单进终态时 | 动作 |
+| --- | --- |
+| `result.worktreeClean === true` 且该 `unitId` **无非终态工单** | 自动下发 `close_unit`（无需用户点击） |
+| 干净但同单元还有排队/待派工单 | **不动**（此时删树会让下一张从 base 重开、丢掉上一张的 commit） |
+| 脏树 / 没上报 `worktreeClean` | 保留，等用户手动“结束工作单元” |
+
+配对握手：请求时只写 `closeRequestedAt`，**收到 `unit_closed` 回执才写 `closedAt`**；`dirty` 时
+`closedAt` 保持 null 并写 `dirtyAt`（= 待清理，清理后可再结束一次）；回执带 `error`（删树失败）时
+只清 `closeRequestedAt`、什么都不写——单元仍是未结束状态，可以重试。
+
+回收的三种结果由 `coordinator.release('cloud:<unitId>')` 自身决定：脏树保留 / 干净且无新提交
+删工作树与分支 / 有提交只删目录并保留 `pi/*` 分支（commit 存活）。
+
+**人工入口**（同一个 `requestUnitClose`）：`POST /v1/units/:id/close`（Web）· 客户端帧 `close_unit`
+（桌面端云端页“工作单元”分区）· Git 视图里 `cloud:*` 工作树的「云端 / 结束并回收」（同一个帧，只是换了入口，
+因为用户在 Git 面板里才看得到这棵树）。单元里还有非终态工单时返回 `task-running`，提示先停工单——
+不去 auto-abort，否则 abort 那一刻还没落盘的文件会被当成脏树留下。
+
+**兜底**：设备启动 / 重连时 `sweepUnits()` 对本地台账里每个单元跑一次 `git status --porcelain`，
+发 `unit_state`；干净且已收敛的单元会被云端自动回收。覆盖“离线被取消 / 进程被杀”漏掉的那些。
 
 ### 3.3 终端执行器（`electron/cloud`）
 
@@ -76,12 +115,21 @@
 - `ask_cloud`：上报问题后**结束本轮**，回答到达再起一轮（不做阻塞等待）。
 - 崩溃恢复（G6）：启动时把台账里残留的 `running` 工单改判 `interrupted` 并上报；
   退出前把在跑的工单标 `interrupted` 并尽量把队列冲出去。
+- 工单结束会当场判一次工作树是否干净（`git status --porcelain`，ignored 文件不算脏 → 装了依赖也算干净），
+  写进 `task_result.worktreeClean`；停止 / 失败 / 退出也带上，服务端据此自动回收。
+- `closeUnit(unitId)`：走 `coordinator.release('cloud:<unitId>')`，成功后删 `units.json` 台账；
+  脏树保留台账，方便清理后再结束一次；
+  脏树那次回执已把绑定删掉，所以再次结束会先 `bind()` 重挂（否则 `release()` 只会空转并错报“已回收”）。
+  **不手写 `git worktree remove`**：`release()` 内部有串行队列并会终止依赖安装。
 
 ### 3.4 通道与恢复
 
 - 心跳 25 秒；服务端 60 秒收不到 → 判离线；客户端/设备都是 `seq` 递增 + `lastAckSeq` 续传，
   增量溢出（2000 条 / 24 小时）→ 回整份快照。
 - 设备离线期间的帧进有界队列（1000 条），重连后补发；终态工单会清掉它的待投递项。
+  `close_unit` 也走这条队列：设备离线时回收请求不会丢，重连后补发。
+- 单元相关帧：`close_unit`（服务端→设备，`reason: converged | user-close | sweep`）、
+  `unit_closed`（设备→服务端，回收回执）、`unit_state`（设备→服务端，启动/重连的工作树状态）。
 - 协议版本不符直接拒绝（`v !== 1`）。
 
 ### 3.5 安全

@@ -19,6 +19,7 @@ import {
 import { api } from '../api'
 import { useSessionStore } from '../store/sessionStore'
 import { useGitStore } from '../store/gitStore'
+import { useCloudStore } from '../store/cloudStore'
 import { useI18nStore } from '../store/i18nStore'
 import { usePanelContextMenu } from './PanelContextMenu'
 import { readPanelUi, writePanelUi } from '../panelHost/panelUiState'
@@ -519,6 +520,25 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     [activeSessionId, forgetWorktree, workspacePath, t]
   )
 
+  /** 结束云端工作单元（F-19a）：脏树会被拒，需先清理；回收请求也可能来自云端自动判定 */
+  const closeCloudUnit = useCloudStore((state) => state.closeUnit)
+  const endCloudUnit = useCallback(
+    async (worktree: GitWorktreeView) => {
+      const unitId = worktree.cloudUnitId
+      if (!unitId) return
+      const confirmed = await confirmDialog({
+        title: t('cloudUnitClose'),
+        message: t('cloudUnitCloseConfirm').replace('{path}', worktree.relativePath),
+        confirmLabel: t('cloudUnitClose'),
+        danger: true,
+      })
+      if (!confirmed) return
+      await closeCloudUnit(unitId)
+      toast.success(t('cloudUnitCloseSent'))
+    },
+    [closeCloudUnit, t]
+  )
+
   const copySha = useCallback(
     async (sha: string) => {
       if (await copyText(sha)) {
@@ -853,7 +873,20 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
             <span className="min-w-0 flex-1 truncate type-value text-ink">
               {worktree.branch ?? worktree.relativePath}
             </span>
-            {current ? (
+            {worktree.cloudUnitId ? (
+              <span className="flex flex-none items-center gap-1 type-caption text-ink-muted">
+                <span className="rounded-sm bg-hover px-1" title={worktree.cloudUnitId}>
+                  {t('cloudWorktreeChip')}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void endCloudUnit(worktree)}
+                  className="rounded-sm px-1 text-accent hover:bg-hover"
+                >
+                  {t('cloudUnitClose')}
+                </button>
+              </span>
+            ) : current ? (
               <span className="flex-none text-accent">{t('gitInUse')}</span>
             ) : worktree.missing ? (
               <span className="flex flex-none items-center gap-1 type-caption text-ink-subtle">

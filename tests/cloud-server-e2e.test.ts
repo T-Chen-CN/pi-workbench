@@ -410,3 +410,329 @@ describe('派活闭环', () => {
     reconnected.close()
   })
 })
+
+describe('工作树回收（A-43 / A-46）', () => {
+  let deviceFrames: any[] = []
+  let clientFrames: any[] = []
+  let device: WebSocket
+  let client: WebSocket
+
+  const send = (frame: Record<string, unknown>) =>
+    device.send(JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, ...frame }))
+
+  async function authorize(quota = 3): Promise<string> {
+    const response = await fetch(`${base}/v1/authorizations`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        planText: 'reclaim plan',
+        items: [{ deviceId, workspacePath: WORKSPACE }],
+        quota,
+      }),
+    })
+    const { authorization } = (await response.json()) as { authorization: { id: string } }
+    return authorization.id
+  }
+
+  async function dispatchTask(authorizationId: string, unitId: string, title: string) {
+    const outcome = await server.dispatcher.dispatch({
+      authorizationId,
+      workUnitId: unitId,
+      deviceId,
+      workspacePath: WORKSPACE,
+      title,
+      background: 'b',
+      goal: 'g',
+      acceptance: 'a',
+      commit: false,
+    })
+    expect(outcome.ok).toBe(true)
+    return outcome.ok ? outcome.task.id : ''
+  }
+
+  async function acceptAndRun(taskId: string): Promise<void> {
+    await waitFor(
+      () => deviceFrames.find((frame) => frame.type === 'task' && frame.task?.id === taskId),
+      3000,
+      `task frame ${taskId}`
+    )
+    for (const status of ['assigned', 'running'] as const) {
+      send({ type: 'task_status', taskId, status, at: Date.now() })
+      await waitFor(
+        () => server.store.findTask(taskId)?.status === status,
+        3000,
+        `${taskId} ${status}`
+      )
+    }
+  }
+
+  async function finish(
+    taskId: string,
+    worktreeClean: boolean | undefined,
+    unitId: string
+  ): Promise<void> {
+    send({
+      type: 'task_result',
+      taskId,
+      at: Date.now(),
+      result: {
+        summary: 'done',
+        changedFiles: worktreeClean ? [] : [{ path: 'run.sh', kind: 'modified' }],
+        branch: `pi/${unitId}`,
+        worktreeClean,
+      },
+    })
+    await waitFor(() => server.store.findTask(taskId)?.status === 'done', 3000, `${taskId} done`)
+  }
+
+  const closeFrames = (unitId: string) =>
+    deviceFrames.filter((frame) => frame.type === 'close_unit' && frame.unitId === unitId)
+
+  beforeAll(async () => {
+    deviceFrames = []
+    clientFrames = []
+    device = await openSocket(
+      `ws://127.0.0.1:${new URL(base).port}/device/ws`,
+      { authorization: `Bearer ${token}` },
+      deviceFrames
+    )
+    device.send(
+      JSON.stringify({
+        v: CLOUD_PROTOCOL_VERSION,
+        type: 'hello',
+        deviceId,
+        workspaces: [{ path: WORKSPACE, name: 'cloud-e2e-repo', isGit: true }],
+      })
+    )
+    await waitFor(() => server.hub.isDeviceOnline(deviceId), 3000, 'device online for reclaim')
+    clientFrames = []
+    client = await openSocket(
+      `ws://127.0.0.1:${new URL(base).port}/client/ws`,
+      { authorization: `Bearer ${token}` },
+      clientFrames
+    )
+    await waitFor(() => clientFrames.some((frame) => frame.type === 'snapshot'), 3000, 'snapshot')
+  })
+
+  afterAll(() => {
+    client?.close()
+    device?.close()
+  })
+
+  it('干净树：工单结束就自动回收，回执后才算结束（A-43）', async () => {
+    const authorizationId = await authorize()
+    const taskId = await dispatchTask(authorizationId, 'unit-auto', 'clean task')
+    await acceptAndRun(taskId)
+    await finish(taskId, true, 'unit-auto')
+
+    // 云端自动下发 close_unit，不需要用户点
+    const request = await waitFor(
+      () => closeFrames('unit-auto')[0],
+      3000,
+      'auto close_unit frame'
+    )
+    expect(request.reason).toBe('converged')
+    // 回执前不写 closedAt：避免“云端说回收了、磁盘还在”
+    expect(server.store.findUnit('unit-auto')?.closeRequestedAt).toBeTypeOf('number')
+    expect(server.store.findUnit('unit-auto')?.closedAt).toBeNull()
+
+    send({
+      type: 'unit_closed',
+      unitId: 'unit-auto',
+      removed: true,
+      dirty: false,
+      worktreePath: 'E:/tmp/wt-unit-auto',
+      branch: 'pi/unit-auto',
+      at: Date.now(),
+    })
+
+    const closed = await waitFor(
+      () => (server.store.findUnit('unit-auto')?.closedAt ? server.store.findUnit('unit-auto') : null),
+      3000,
+      'unit closed'
+    )
+    expect(closed!.closeRequestedAt).toBeUndefined()
+    // 客户端收到 unit 事件（多端一致）
+    await waitFor(
+      () =>
+        clientFrames.find(
+          (frame) =>
+            frame.type === 'event' &&
+            frame.event?.type === 'unit' &&
+            frame.event.unit?.unitId === 'unit-auto' &&
+            typeof frame.event.unit.closedAt === 'number'
+        ),
+      3000,
+      'client unit event'
+    )
+
+    // 已结束的单元不再接新工单（否则会重建一棵已回收的树）
+    const again = await server.dispatcher.dispatch({
+      authorizationId,
+      workUnitId: 'unit-auto',
+      deviceId,
+      workspacePath: WORKSPACE,
+      title: 'too late',
+      background: 'b',
+      goal: 'g',
+      acceptance: 'a',
+      commit: false,
+    })
+    expect(again).toMatchObject({ ok: false, code: 'unit-closed' })
+  })
+
+  it('同一单元连派：前一张结束不回收，最后一张结束才回收（A-46）', async () => {
+    const authorizationId = await authorize(5)
+    const first = await dispatchTask(authorizationId, 'unit-serial', 'first')
+    await acceptAndRun(first)
+    const second = await dispatchTask(authorizationId, 'unit-serial', 'second')
+    expect(server.store.findTask(second)?.status).toBe('queued')
+
+    await finish(first, true, 'unit-serial')
+    // 还有后续工单：不回收，工作树留给下一张复用
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(closeFrames('unit-serial')).toHaveLength(0)
+
+    // FIFO：下一张自动接力
+    await acceptAndRun(second)
+    await finish(second, true, 'unit-serial')
+    await waitFor(() => closeFrames('unit-serial')[0], 3000, 'close after last task')
+    expect(closeFrames('unit-serial')).toHaveLength(1)
+  })
+
+  it('脏树：不自动回收；用户手动结束后按回执标「待处理」（A-43）', async () => {
+    const authorizationId = await authorize(3)
+    const taskId = await dispatchTask(authorizationId, 'unit-dirty', 'dirty task')
+    await acceptAndRun(taskId)
+    await finish(taskId, false, 'unit-dirty')
+
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(closeFrames('unit-dirty')).toHaveLength(0)
+
+    // 人工入口：客户端帧（Web 走同样的 REST 端点）
+    client.send(JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, type: 'close_unit', unitId: 'unit-dirty' }))
+    const request = await waitFor(() => closeFrames('unit-dirty')[0], 3000, 'manual close_unit frame')
+    expect(request.reason).toBe('user-close')
+
+    send({
+      type: 'unit_closed',
+      unitId: 'unit-dirty',
+      removed: false,
+      dirty: true,
+      worktreePath: 'E:/tmp/wt-unit-dirty',
+      at: Date.now(),
+    })
+
+    const unit = await waitFor(
+      () => (server.store.findUnit('unit-dirty')?.dirtyAt ? server.store.findUnit('unit-dirty') : null),
+      3000,
+      'unit dirty recorded'
+    )
+    // 脏树保留：closedAt 仍是 null，用户清理后还能再结束一次
+    expect(unit!.closedAt).toBeNull()
+    expect(unit!.worktreePath).toBe('E:/tmp/wt-unit-dirty')
+  })
+
+  it('REST 结束单元：未知 404 / 有工单在跑 409 / 空闲 200；unit_state 能兑底回收（F-19a）', async () => {
+    // 未知单元
+    const missing = await fetch(`${base}/v1/units/nope/close`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+    })
+    expect(missing.status).toBe(404)
+
+    const authorizationId = await authorize(5)
+    const taskId = await dispatchTask(authorizationId, 'unit-rest', 'rest task')
+    await acceptAndRun(taskId)
+
+    // 还有工单在跑：拒绍，并要求先停工单（不能把正在写的文件当脏树）
+    const busy = await fetch(`${base}/v1/units/unit-rest/close`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+    })
+    expect(busy.status).toBe(409)
+    expect(await busy.json()).toMatchObject({ code: 'task-running' })
+
+    // 不报 worktreeClean（模拟旧终端 / 离线）：不会自动回收
+    send({
+      type: 'task_result',
+      taskId,
+      at: Date.now(),
+      result: { summary: 'done without cleanliness', changedFiles: [] },
+    })
+    await waitFor(() => server.store.findTask(taskId)?.status === 'done', 3000, 'rest task done')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(closeFrames('unit-rest')).toHaveLength(0)
+
+    // 空闲后 REST 回收
+    const ok = await fetch(`${base}/v1/units/unit-rest/close`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+    })
+    expect(ok.status).toBe(200)
+    await waitFor(() => closeFrames('unit-rest')[0], 3000, 'rest close frame')
+
+    // 设备重连/启动时的兑底上报：干净且已收敛 → 自动回收（A-43）
+    const sweepTask = await dispatchTask(authorizationId, 'unit-sweep', 'sweep task')
+    await acceptAndRun(sweepTask)
+    send({
+      type: 'task_result',
+      taskId: sweepTask,
+      at: Date.now(),
+      result: { summary: 'done', changedFiles: [] },
+    })
+    await waitFor(
+      () => server.store.findTask(sweepTask)?.status === 'done',
+      3000,
+      'sweep task done'
+    )
+    expect(closeFrames('unit-sweep')).toHaveLength(0)
+
+    send({
+      type: 'unit_state',
+      unitId: 'unit-sweep',
+      clean: true,
+      worktreePath: 'E:/tmp/wt-unit-sweep',
+      at: Date.now(),
+    })
+    const sweepFrame = await waitFor(() => closeFrames('unit-sweep')[0], 3000, 'sweep close frame')
+    expect(sweepFrame.reason).toBe('sweep')
+  })
+
+  it('回收失败的设备回执不能写成「已结束」（否则磁盘还在云端却说没了）', async () => {
+    const authorizationId = await authorize(3)
+    const taskId = await dispatchTask(authorizationId, 'unit-broken', 'broken task')
+    await acceptAndRun(taskId)
+    await finish(taskId, true, 'unit-broken')
+    await waitFor(() => closeFrames('unit-broken')[0], 3000, 'close frame for unit-broken')
+
+    send({
+      type: 'unit_closed',
+      unitId: 'unit-broken',
+      removed: false,
+      dirty: false,
+      worktreePath: 'E:/tmp/wt-unit-broken',
+      error: 'git worktree remove failed',
+      at: Date.now(),
+    })
+
+    // 等一轮事件循环：回执处理完才能断言
+    await clientFrameFor('unit-broken')
+    const unit = server.store.findUnit('unit-broken')!
+    expect(unit.closedAt).toBeNull()
+    // 回收请求已消耗，用户可以重试（不会被当成又一轮待处理）
+    expect(unit.closeRequestedAt).toBeUndefined()
+  })
+
+  /** 等到 unit 事件里该单元被 publish 过（回执处理完成） */
+  async function clientFrameFor(unitId: string): Promise<void> {
+    await waitFor(
+      () =>
+        clientFrames.filter(
+          (frame) => frame.type === 'event' && frame.event?.type === 'unit' && frame.event.unit?.unitId === unitId
+        ).length >= 2,
+      3000,
+      `unit event ${unitId}`
+    )
+  }
+})

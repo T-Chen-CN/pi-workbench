@@ -46,6 +46,12 @@ export interface CloudSessionDeps {
     error: (...args: unknown[]) => void
     debug: (...args: unknown[]) => void
   }
+  /**
+   * 入口屏障：F-13 的配置轮换会在轮次边界重建运行时（`dispose()` + `initialize()`）。
+   * 重建窗口里 `sessionId` 与运行时都不可用，所以用户消息与事件唤醒必须先等它结束。
+   * 返回 false 表示当前没有可用运行时（未推配置 / 重建失败）。
+   */
+  ready?: () => Promise<boolean>
   now?: () => number
 }
 
@@ -82,6 +88,11 @@ export class CloudSession {
 
   get currentSessionId(): string | null {
     return this.sessionId
+  }
+
+  /** 是否正在跑一轮；配置轮换要等它为 false（F-13：不许打断进行中的轮次） */
+  isBusy(): boolean {
+    return this.sessionId ? this.deps.agent.isSessionBusy(this.sessionId) : false
   }
 
   /**
@@ -131,6 +142,11 @@ export class CloudSession {
   ): Promise<{ success: boolean; error?: string }> {
     const body = text.trim()
     if (!body) return { success: false, error: 'Message is empty.' }
+    // 屏障必须放在读 sessionId 之前：重建期间旧 id 已失效
+    if (this.deps.ready) {
+      const ok = await this.deps.ready()
+      if (!ok) return { success: false, error: 'Cloud session is not ready.' }
+    }
     if (!this.sessionId) return { success: false, error: 'Cloud session is not ready.' }
 
     // 用户消息也要广播：多端（Web / 另一台设备）必须看到同一份对话。
@@ -208,6 +224,11 @@ export class CloudSession {
   }
 
   private async flushEvents(): Promise<void> {
+    if (this.pending.size === 0) return
+    if (this.deps.ready) {
+      const ok = await this.deps.ready()
+      if (!ok) return
+    }
     const sessionId = this.sessionId
     if (!sessionId || this.pending.size === 0) return
     const events = [...this.pending.values()]

@@ -10,6 +10,7 @@ import { WebSocket } from 'ws'
 import {
   CLOUD_PROTOCOL_VERSION,
   CLOUD_WS_PATHS,
+  type CloudChangedFile,
   type CloudTaskSpec,
   type DeviceToServerFrame,
   type ServerToDeviceFrame,
@@ -109,14 +110,26 @@ export class DeviceAgent {
         this.running.delete(taskId)
         this.send({ type: 'task_result', taskId, result, at: Date.now() })
       },
-      onFailed: (taskId, error, changedFiles) => {
+      onFailed: (taskId: string, error: string, changedFiles?: CloudChangedFile[], worktreeClean?: boolean) => {
         this.running.delete(taskId)
-        this.send({ type: 'task_failed', taskId, error, changedFiles, at: Date.now() })
+        this.send({
+          type: 'task_failed',
+          taskId,
+          error,
+          changedFiles,
+          worktreeClean,
+          at: Date.now(),
+        })
       },
-      onInterrupted: (taskId, reason) => {
+      onInterrupted: (taskId: string, reason: string, worktreeClean?: boolean) => {
         this.running.delete(taskId)
-        this.send({ type: 'task_interrupted', taskId, reason, at: Date.now() })
+        this.send({ type: 'task_interrupted', taskId, reason, worktreeClean, at: Date.now() })
       },
+      // 工作单元回收回执与兜底状态（F-19a / A-43）
+      onUnitClosed: (unitId, result) =>
+        this.send({ type: 'unit_closed', unitId, ...result, at: Date.now() }),
+      onUnitState: (unitId, state) =>
+        this.send({ type: 'unit_state', unitId, ...state, at: Date.now() }),
     })
   }
 
@@ -130,6 +143,10 @@ export class DeviceAgent {
     this.durableStop = false
     await this.runner.load()
     await this.runner.recoverInterrupted()
+    // A-43 兜底：上报本地台账里每个单元的工作树状态（干净且已收敛的会被云端自动回收）
+    await this.runner.sweepUnits().catch((error) =>
+      this.deps.logger.warn('[Cloud Device] unit sweep failed:', error)
+    )
     this.link = readCloudLink()
     if (!this.link) {
       this.updateState({ status: 'unlinked' })
@@ -355,6 +372,12 @@ export class DeviceAgent {
         return
       case 'task_message':
         void this.runner.message(frame.taskId, frame.text)
+        return
+      case 'close_unit':
+        // F-19a：回收工作单元（先判干净再删，脏树保留）
+        void this.runner.closeUnit(frame.unitId).catch((error) =>
+          this.deps.logger.error('[Cloud Device] close unit failed:', error)
+        )
         return
       case 'pong':
         return

@@ -16,6 +16,7 @@ function reset(): void {
     lastSeq: 0,
     agentStatus: 'idle',
     canStopReply: false,
+    units: [],
   })
 }
 
@@ -60,6 +61,18 @@ describe('snapshot', () => {
         authorizations: [
           { id: 'auth-1', items: [], quota: 5, used: 1, confirmedAt: 1, expiresAt: 2, confirmedSummary: 'x' },
         ],
+        units: [
+          {
+            unitId: 'u1',
+            deviceId: 'dev-1',
+            workspacePath: 'E:/repo',
+            worktreePath: 'E:/repo/.pi-workbench/worktrees/wt-1',
+            branch: 'pi/wt-1',
+            createdAt: 5,
+            closedAt: null,
+            dirtyAt: 9,
+          },
+        ],
       },
     })
 
@@ -69,7 +82,35 @@ describe('snapshot', () => {
     expect(state.tasks[0]).toMatchObject({ id: 'T-1', title: '构建', status: 'running', lastMilestone: '正在跑测试' })
     expect(state.devices[0]).toMatchObject({ id: 'dev-1', online: true })
     expect(state.authorizations[0].used).toBe(1)
+    expect(state.units[0]).toMatchObject({
+      unitId: 'u1',
+      branch: 'pi/wt-1',
+      closedAt: null,
+      dirtyAt: 9,
+    })
     expect(state.lastSeq).toBe(7)
+  })
+
+  it('unit 事件按 unitId 合并，不重复堆行（F-19a）', () => {
+    reset()
+    const store = useCloudStore.getState()
+    const frame = (unit: Record<string, unknown>, seq: number) => ({
+      v: 1,
+      type: 'event',
+      seq,
+      event: { type: 'unit', unit },
+    })
+    store.applyFrame(
+      frame(
+        { unitId: 'u1', deviceId: 'd', workspacePath: 'E:/repo', createdAt: 1, closedAt: null },
+        1
+      )
+    )
+    store.applyFrame(
+      frame({ unitId: 'u1', deviceId: 'd', workspacePath: 'E:/repo', createdAt: 1, closedAt: 8 }, 2)
+    )
+    expect(useCloudStore.getState().units).toHaveLength(1)
+    expect(useCloudStore.getState().units[0].closedAt).toBe(8)
   })
 })
 

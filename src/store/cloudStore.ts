@@ -18,6 +18,7 @@ import type {
   CloudNotice,
   CloudTaskRow,
   CloudTraceRow,
+  CloudUnitRow,
 } from '../types/cloud'
 
 interface CloudState {
@@ -30,6 +31,8 @@ interface CloudState {
   tasks: CloudTaskRow[]
   devices: CloudDeviceRow[]
   authorizations: CloudAuthorizationRow[]
+  /** 工作单元：回收状态就在这里（干净自动回收 / 脏树待手动结束） */
+  units: CloudUnitRow[]
   notices: CloudNotice[]
   /** 最近一次快照的游标：连接恢复时用于续读 */
   lastSeq: number
@@ -47,6 +50,8 @@ interface CloudState {
   say: (text: string) => Promise<void>
   stopReply: () => Promise<void>
   stopTask: (taskId: string) => Promise<void>
+  /** 结束工作单元（F-19a 的人工入口，脏树 / 用户放弃时用） */
+  closeUnit: (unitId: string) => Promise<void>
   answerQuestion: (taskId: string, text: string) => Promise<void>
   confirmPlan: (input: {
     planText: string
@@ -100,6 +105,31 @@ function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
   return next
 }
 
+function upsertUnit(list: CloudUnitRow[], unit: CloudUnitRow): CloudUnitRow[] {
+  const index = list.findIndex((entry) => entry.unitId === unit.unitId)
+  if (index < 0) return [unit, ...list].slice(0, 200)
+  const next = list.slice()
+  next[index] = unit
+  return next
+}
+
+function toUnitRow(raw: any): CloudUnitRow | null {
+  if (!raw || typeof raw !== 'object') return null
+  const unitId = String(raw.unitId ?? '')
+  if (!unitId) return null
+  return {
+    unitId,
+    deviceId: String(raw.deviceId ?? ''),
+    workspacePath: String(raw.workspacePath ?? ''),
+    worktreePath: raw.worktreePath ?? undefined,
+    branch: raw.branch ?? undefined,
+    createdAt: Number(raw.createdAt ?? Date.now()),
+    closedAt: typeof raw.closedAt === 'number' ? raw.closedAt : null,
+    closeRequestedAt: raw.closeRequestedAt ?? undefined,
+    dirtyAt: raw.dirtyAt ?? undefined,
+  }
+}
+
 export const useCloudStore = create<CloudState>((set, get) => ({
   link: { linked: false },
   deviceState: { status: 'unlinked', pending: 0 },
@@ -110,6 +140,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
   tasks: [],
   devices: [],
   authorizations: [],
+  units: [],
   notices: [],
   lastSeq: 0,
   linking: false,
@@ -181,6 +212,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
       tasks: [],
       devices: [],
       authorizations: [],
+      units: [],
       notices: [],
     })
   },
@@ -240,6 +272,11 @@ export const useCloudStore = create<CloudState>((set, get) => ({
 
   stopTask: async (taskId) => {
     await api.cloudClientSend({ type: 'stop_task', taskId })
+  },
+
+  closeUnit: async (unitId) => {
+    const result = await api.cloudClientSend({ type: 'close_unit', unitId })
+    if (!result.success) set({ error: result.error ?? '结束工作单元未送达' })
   },
 
   answerQuestion: async (taskId, text) => {
@@ -304,11 +341,17 @@ export const useCloudStore = create<CloudState>((set, get) => ({
             confirmedSummary: String(item.confirmedSummary ?? ''),
           }))
         : []
+      const units: CloudUnitRow[] = Array.isArray(snapshot.units)
+        ? snapshot.units
+            .map(toUnitRow)
+            .filter((row: CloudUnitRow | null): row is CloudUnitRow => !!row)
+        : []
       set({
         messages,
         tasks,
         devices,
         authorizations,
+        units,
         lastSeq: Number(frame.seq ?? snapshot.lastSeq ?? 0),
         agentStatus: snapshot.cloud?.status ?? 'idle',
         canStopReply: Boolean(snapshot.cloud?.canStopReply),
@@ -458,6 +501,11 @@ export const useCloudStore = create<CloudState>((set, get) => ({
               lastSeenAt: device.lastSeenAt,
             }),
           }))
+          return
+        }
+        case 'unit': {
+          const row = toUnitRow(event.unit)
+          if (row) set((state) => ({ units: upsertUnit(state.units, row) }))
           return
         }
         case 'notice': {
