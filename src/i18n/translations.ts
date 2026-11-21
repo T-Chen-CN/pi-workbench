@@ -722,6 +722,7 @@ export const translations = {
     cloudUnitHint: '工作树干净时工单结束就自动回收；这里只为脏树（未提交改动）保留手动入口',
     cloudUnitCloseConfirm: '结束工作单元会尝试回收工作树「{path}」。没提交的改动会阻止回收（脏树保留），已提交的 commit 会保留在 pi/* 分支上。',
     cloudUnitCloseSent: '已发送结束请求，等待终端回收',
+    cloudUnitCloseFailed: '结束请求没有送到云端（未连接或通道断开）',
     cloudWorktreeChip: '云端',
     cloudAuthorizations: '已确认的授权',
     cloudNoAuthorizations: '还没有授权：确认方案之后才允许派活',
@@ -1624,6 +1625,7 @@ export const translations = {
     cloudUnitCloseConfirm:
       'Ending the work unit reclaims the worktree at "{path}". Uncommitted changes block reclaim (the tree is kept); commits survive on the pi/* branch.',
     cloudUnitCloseSent: 'Close request sent; waiting for the device to reclaim',
+    cloudUnitCloseFailed: 'The close request was not delivered (cloud not connected)',
     cloudWorktreeChip: 'Cloud',
     cloudAuthorizations: 'Confirmed authorizations',
     cloudNoAuthorizations: 'No authorization yet: confirm a plan before dispatching',

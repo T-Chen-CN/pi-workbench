@@ -735,4 +735,34 @@ describe('工作树回收（A-43 / A-46）', () => {
       `unit event ${unitId}`
     )
   }
+
+  it('快照里的已结束单元会封顶（否则快照随工单数量无上限变大）', async () => {
+    const base = Date.now()
+    for (let index = 0; index < 25; index += 1) {
+      await server.store.saveUnit({
+        unitId: `unit-hist-${index}`,
+        deviceId,
+        workspacePath: WORKSPACE,
+        createdAt: base + index,
+        closedAt: base + index,
+      })
+    }
+    await server.store.saveUnit({
+      unitId: 'unit-hist-open',
+      deviceId,
+      workspacePath: WORKSPACE,
+      createdAt: base,
+      closedAt: null,
+    })
+
+    const views = server.dispatcher.unitViews()
+    expect(views.filter((unit) => unit.closedAt === null)).toContainEqual(
+      expect.objectContaining({ unitId: 'unit-hist-open' })
+    )
+    // 未结束的全量保留，已结束的只留最近 20 条（其他用例造的已结束单元也会被挤掉）
+    expect(views.filter((unit) => unit.closedAt !== null).length).toBe(20)
+    expect(views.filter((unit) => unit.closedAt !== null).map((unit) => unit.unitId)).toContain(
+      'unit-hist-24'
+    )
+  })
 })

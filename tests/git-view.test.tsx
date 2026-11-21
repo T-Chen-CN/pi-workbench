@@ -9,6 +9,10 @@ const pendingDetails: Array<{ sha: string; resolve: (value: unknown) => void }> 
 let logCommits: unknown[] = []
 let repoWorktrees: unknown[] = []
 
+vi.mock('../src/store/toastStore', () => ({
+  toast: { info: vi.fn(), error: vi.fn(), success: vi.fn() },
+}))
+
 vi.mock('../src/api', () => ({
   api: {
     gitRepoInfo: vi.fn(async () => ({
@@ -56,6 +60,7 @@ import { GitView } from '../src/components/GitView'
 import { api } from '../src/api'
 import { useDialogStore } from '../src/store/dialogStore'
 import { useGitStore } from '../src/store/gitStore'
+import { toast } from '../src/store/toastStore'
 import { translations } from '../src/i18n/translations'
 import type { GitCommitDetail } from '../src/types/electron'
 
@@ -356,6 +361,8 @@ describe('GitView 工作树列表', () => {
     useDialogStore.setState({ current: null })
     vi.mocked(api.gitForgetWorktree).mockClear()
     vi.mocked(api.cloudClientSend).mockClear()
+    vi.mocked(toast.success).mockClear()
+    vi.mocked(toast.error).mockClear()
   })
 
   afterEach(() => {
@@ -450,6 +457,30 @@ describe('GitView 工作树列表', () => {
     )
     // 不走 forget：回收由终端 release() 负责，这里的按钮只是发请求
     expect(api.gitForgetWorktree).not.toHaveBeenCalled()
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+  })
+
+  it('云端通道没连上时不假装成功（F-19a 的人工入口不能报假账）', async () => {
+    repoWorktrees = [
+      worktree({ id: 'cloud-unit-a', branch: 'pi/wt-a', cloudUnitId: 'unit-a' }),
+    ]
+    vi.mocked(api.cloudClientSend).mockResolvedValueOnce({
+      success: false,
+      error: 'Cloud connection is not open',
+    })
+    render(<GitView workspacePath="/repo" />)
+    await openWorktreeList()
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: translations.zh.cloudUnitClose })
+    )
+    await waitFor(() => expect(useDialogStore.getState().current?.kind).toBe('confirm'))
+    await act(async () => {
+      useDialogStore.getState().close(true)
+    })
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(translations.zh.cloudUnitCloseFailed))
+    expect(toast.success).not.toHaveBeenCalled()
   })
 
   it('取消确认时不发结束请求', async () => {

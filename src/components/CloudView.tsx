@@ -248,7 +248,15 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
             }
           />
 
-          <UnitList units={store.units} onClose={(unitId) => void store.closeUnit(unitId)} />
+          <UnitList
+            units={store.units}
+            onClose={(unitId) => {
+              void store.closeUnit(unitId).then((sent) => {
+                if (sent) toast.success(t('cloudUnitCloseSent'))
+                else toast.error(t('cloudUnitCloseFailed'))
+              })
+            }}
+          />
 
           <Card density="compact">
             <CardHeader title={t('cloudDevices')} />

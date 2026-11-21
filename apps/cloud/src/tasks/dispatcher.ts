@@ -383,8 +383,18 @@ export class TaskDispatcher {
 
   // ------------------------------ 工作树回收（F-19a / A-43 / A-46） ------------------------------
 
+  /**
+   * 快照里的工作单元：未结束的全给，已结束的只给最近 20 条。
+   * 每派一个单元就多一条记录，不封顶的话快照会随时日无上限变大（F-19a / F-44）。
+   */
   unitViews(): CloudUnitView[] {
-    return this.deps.store.listUnits().map(toUnitView)
+    const all = this.deps.store.listUnits().map(toUnitView)
+    const open = all.filter((unit) => unit.closedAt === null)
+    const closed = all
+      .filter((unit): unit is CloudUnitView & { closedAt: number } => unit.closedAt !== null)
+      .sort((a, b) => b.closedAt - a.closedAt)
+      .slice(0, 20)
+    return [...open, ...closed]
   }
 
   /**

@@ -50,8 +50,8 @@ interface CloudState {
   say: (text: string) => Promise<void>
   stopReply: () => Promise<void>
   stopTask: (taskId: string) => Promise<void>
-  /** 结束工作单元（F-19a 的人工入口，脏树 / 用户放弃时用） */
-  closeUnit: (unitId: string) => Promise<void>
+  /** 结束工作单元（F-19a 的人工入口，脏树 / 用户放弃时用）；false = 没送到，调用方要提示 */
+  closeUnit: (unitId: string) => Promise<boolean>
   answerQuestion: (taskId: string, text: string) => Promise<void>
   confirmPlan: (input: {
     planText: string
@@ -277,6 +277,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
   closeUnit: async (unitId) => {
     const result = await api.cloudClientSend({ type: 'close_unit', unitId })
     if (!result.success) set({ error: result.error ?? '结束工作单元未送达' })
+    return result.success
   },
 
   answerQuestion: async (taskId, text) => {

@@ -533,8 +533,9 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
         danger: true,
       })
       if (!confirmed) return
-      await closeCloudUnit(unitId)
-      toast.success(t('cloudUnitCloseSent'))
+      const sent = await closeCloudUnit(unitId)
+      if (sent) toast.success(t('cloudUnitCloseSent'))
+      else toast.error(t('cloudUnitCloseFailed'))
     },
     [closeCloudUnit, t]
   )
