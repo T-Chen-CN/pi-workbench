@@ -106,6 +106,9 @@
 桌面端 `cloudStore.init()` 必须在已配对时**重新打开客户端通道**：快照（含历史）只在开通道后下发，
 不开就是「重启后历史全没了」，而服务端其实一直有。
 
+服务端同理：`buildSnapshot()` 里先 `ensureAgent()` 再取历史。云端会话是懒初始化的（只在 say / 派活时起），
+进程刚重启、还没人说话时 `sessionId` 还是 null，历史就会被投影成空——历史明明躺在 `agentDir/sessions/` 里。
+
 ### 3.6 拉模型清单（`POST /v1/cloud-config/models`）
 
 浏览器直连供应商的 `/models` 会被 CORS 挡，所以由云端代跑一次，客户端只拿到 id 列表：

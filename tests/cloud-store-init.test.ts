@@ -34,7 +34,7 @@ const { useCloudStore } = await import('../src/store/cloudStore')
 beforeEach(() => {
   openClient.mockClear()
   useCloudStore.setState({
-    link: { linked: false },
+    link: { linked: false, baseUrl: '', deviceId: '' },
     clientState: { status: 'closed' },
     messages: [],
     initialized: false,
@@ -50,8 +50,12 @@ describe('云端页初始化', () => {
   })
 
   it('未配对时不尝试开通道', async () => {
-    linkStatus.mockResolvedValueOnce({ success: true, link: { linked: false }, state: { status: 'unlinked', pending: 0 } })
-    useCloudStore.setState({ link: { linked: false } })
+    linkStatus.mockResolvedValueOnce({
+      success: true,
+      link: { linked: false, baseUrl: '', deviceId: '' },
+      state: { status: 'unlinked', pending: 0 },
+    })
+    useCloudStore.setState({ link: { linked: false, baseUrl: '', deviceId: '' } })
     await useCloudStore.getState().init()
     expect(openClient).not.toHaveBeenCalled()
   })

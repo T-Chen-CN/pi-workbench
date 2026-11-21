@@ -102,6 +102,10 @@ export async function createCloudServer(overrides: Partial<CloudConfig> = {}): P
     dispatcher
 
   async function buildSnapshot(): Promise<CloudSnapshot> {
+    // 历史在落盘的会话里，但要经 AgentManager 投影就得先初始化。
+    // 不在这里拉一下：重启后没人说过话，`sessionId` 还是 null → 快照里历史空白，
+    // 表现就是「重启后对话全没了」。模拟配置未推时不报错，只是历史为空。
+    await ensureAgent().catch(() => false)
     return {
       serverVersion: config.version,
       protocol: CLOUD_PROTOCOL_VERSION,
