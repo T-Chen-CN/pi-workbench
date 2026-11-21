@@ -2,7 +2,19 @@
 
 // @vitest-environment jsdom
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+/** 发送只记账，不真的走 IPC；用例只用它拿到本端生成的 clientMessageId */
+const sent: Array<{ type: string; clientMessageId?: string }> = []
+vi.mock('../src/api', () => ({
+  api: {
+    cloudClientSend: vi.fn(async (frame: { type: string; clientMessageId?: string }) => {
+      sent.push(frame)
+      return { success: true }
+    }),
+  },
+}))
+
 import { useCloudStore } from '../src/store/cloudStore'
 
 function reset(): void {
@@ -18,6 +30,7 @@ function reset(): void {
     canStopReply: false,
     units: [],
   })
+  sent.length = 0
 }
 
 describe('snapshot', () => {
@@ -265,5 +278,62 @@ describe('流式事件', () => {
     reset()
     useCloudStore.getState().applyFrame({ v: 2, type: 'snapshot', snapshot: { messages: [{ id: 'x' }] } })
     expect(useCloudStore.getState().messages).toHaveLength(0)
+  })
+})
+
+describe('用户消息回显（多端同一份对话）', () => {
+  it('本端乐观追加 + 服务端回显只留一条（不能变成两个 YOU 气泡）', async () => {
+    reset()
+    const store = useCloudStore.getState()
+    await store.say('你列一下你可控的设备和工作区')
+
+    // 本端先乐观追加一条，id 是本端生成的 clientMessageId
+    expect(useCloudStore.getState().messages).toHaveLength(1)
+    const clientMessageId = sent[0]?.clientMessageId ?? ''
+    expect(clientMessageId).toMatch(/^c-/)
+    expect(useCloudStore.getState().messages[0]).toMatchObject({ role: 'user', id: clientMessageId })
+
+    // 服务端把这条消息广播回来（id 是 u-<clientMessageId>，两端都靠它渲染气泡）
+    const echoId = `u-${clientMessageId}`
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: { type: 'message_start', messageId: echoId, role: 'user', at: 1 },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'message_end', messageId: echoId, text: '你列一下你可控的设备和工作区', at: 2 },
+    })
+
+    const messages = useCloudStore.getState().messages
+    expect(messages).toHaveLength(1)
+    // 采纳服务端 id，后续 message_end / 重连快照都能对上
+    expect(messages[0]).toMatchObject({
+      id: echoId,
+      role: 'user',
+      text: '你列一下你可控的设备和工作区',
+    })
+  })
+
+  it('别的端发的消息照常新增（本地没有对应乐观气泡）', () => {
+    reset()
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: { type: 'message_start', messageId: 'u-c-from-web', role: 'user', at: 1 },
+    })
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'message_end', messageId: 'u-c-from-web', text: '来自 Web', at: 2 },
+    })
+    expect(useCloudStore.getState().messages).toEqual([
+      expect.objectContaining({ id: 'u-c-from-web', role: 'user', text: '来自 Web' }),
+    ])
   })
 })

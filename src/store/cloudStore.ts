@@ -65,6 +65,10 @@ interface CloudState {
 
 let listenersAttached = false
 
+/** 服务端回显用户消息的 id 前缀（`u-<clientMessageId>`，见 cloud-session.echoUserMessage） */
+const USER_ECHO_PREFIX = 'u-'
+
+
 function messageId(): string {
   return `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 }
@@ -368,17 +372,30 @@ export const useCloudStore = create<CloudState>((set, get) => ({
       switch (event.type) {
         case 'message_start': {
           const id = String(event.messageId ?? messageId())
+          const isUser = event.role === 'user'
           set((state) => {
             if (state.messages.some((row) => row.id === id)) return {}
+            // 服务端回显的用户消息 id 是 `u-<clientMessageId>`，而本端已经乐观追加过一条
+            // 以 clientMessageId 为 id 的气泡；这里把本地那条的 id 改成服务端 id，
+            // 否则同一个句子会出现两个气泡（后续 message_end / 编辑也找不到它）
+            if (isUser && id.startsWith(USER_ECHO_PREFIX)) {
+              const localId = id.slice(USER_ECHO_PREFIX.length)
+              const index = state.messages.findIndex((row) => row.id === localId)
+              if (index >= 0) {
+                const messages = state.messages.slice()
+                messages[index] = { ...messages[index], id }
+                return { messages }
+              }
+            }
             return {
               messages: [
                 ...state.messages,
                 {
                   id,
-                  role: event.role === 'user' ? ('user' as const) : ('assistant' as const),
+                  role: isUser ? ('user' as const) : ('assistant' as const),
                   text: '',
                   at: Number(event.at ?? Date.now()),
-                  streaming: event.role !== 'user',
+                  streaming: !isUser,
                   traces: [],
                 },
               ].slice(-400),
