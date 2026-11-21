@@ -146,3 +146,51 @@ describe('客户端通道：快照 vs 续传', () => {
     expect(socket.sent.map((frame) => frame.type)).toEqual(['event'])
   })
 })
+
+describe('首包顺序：快照不能被事件抢在前面', () => {
+  it('快照构建期间产生的事件排在快照之后补发（客户端的第一帧必须是快照）', async () => {
+    let releaseSnapshot: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => {
+      releaseSnapshot = resolve
+    })
+    const hub = new Hub(
+      {
+        onClientFrame: () => undefined,
+        onDeviceFrame: () => undefined,
+        onDeviceOnline: () => undefined,
+        onDeviceOffline: () => undefined,
+        onClientHello: () => undefined,
+        buildSnapshot: async () => {
+          // 模拟“建快照要等一下”，这期间 publish 会被触发
+          await gate
+          return {
+            serverVersion: 'test',
+            protocol: CLOUD_PROTOCOL_VERSION,
+            lastSeq: 0,
+            cloud: { status: 'idle', canStopReply: false },
+            messages: [],
+            tasks: [],
+            devices: [],
+            units: [],
+            authorizations: [],
+          } as any
+        },
+        logger: { warn: () => undefined, info: () => undefined },
+      },
+      () => 1_000
+    )
+
+    const socket = fakeSocket()
+    hub.addClient(socket as unknown as WebSocket, null)
+    // 快照还没建好就广播一条事件
+    publish(hub, 'config-applied')
+    await flush()
+    expect(socket.sent).toHaveLength(0)
+    releaseSnapshot()
+    await flush()
+
+    expect(socket.sent[0]?.type).toBe('snapshot')
+    expect(socket.sent.slice(1).map((frame) => frame.type)).toEqual(['event'])
+    expect(socket.sent[1]?.event?.text).toBe('config-applied')
+  })
+})

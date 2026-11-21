@@ -17,7 +17,15 @@ interface FakeConfig {
 }
 
 const calls = { initialize: 0, dispose: 0 }
-const state = { busy: false, rejectedModels: [] as string[], lastConfig: null as FakeConfig | null }
+const state = {
+  busy: false,
+  /** initialize 阶段被拒的模型（模拟“结构上就建不起来”：模型不存在等） */
+  rejectedModels: [] as string[],
+  /** 探测阶段被拒的模型（模拟“Key 无效 / 连不上供应商”）：旧运行时必须毫发无伤 */
+  invalidConfigs: [] as string[],
+  probes: 0,
+  lastConfig: null as FakeConfig | null,
+}
 
 class FakeAgentManager {
   async initialize(config: FakeConfig) {
@@ -108,16 +116,28 @@ function runningModel(): string | undefined {
 
 beforeAll(async () => {
   tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-cloud-config-'))
-  server = await createCloudServer({
-    dataDir: tmpRoot,
-    workspaceDir: path.join(tmpRoot, 'workspace'),
-    agentDir: path.join(tmpRoot, 'agent'),
-    port: 0,
-    encryptionKey: Buffer.alloc(32, 5),
-    cookieSecret: 'config-rotation-secret',
-    secureCookies: false,
-    version: 'test',
-  })
+  server = await createCloudServer(
+    {
+      dataDir: tmpRoot,
+      workspaceDir: path.join(tmpRoot, 'workspace'),
+      agentDir: path.join(tmpRoot, 'agent'),
+      port: 0,
+      encryptionKey: Buffer.alloc(32, 5),
+      cookieSecret: 'config-rotation-secret',
+      secureCookies: false,
+      version: 'test',
+    },
+    {
+      // 真探测要打供应商 `/models`：这里换成替身，只记次数并按名单拉黑
+      probeConfig: async (config) => {
+        state.probes += 1
+        if (state.invalidConfigs.includes(config.model)) {
+          return { ok: false, reason: `401 invalid api key for ${config.model}` }
+        }
+        return { ok: true }
+      },
+    }
+  )
   const port = await server.listen()
   base = `http://127.0.0.1:${port}`
 
@@ -142,6 +162,8 @@ afterAll(async () => {
 beforeEach(() => {
   state.busy = false
   state.rejectedModels = []
+  state.invalidConfigs = []
+  state.probes = 0
 })
 
 describe('云端配置轮换（F-13 / A-16）', () => {
@@ -199,5 +221,36 @@ describe('云端配置轮换（F-13 / A-16）', () => {
     await touchEntry()
     expect(calls.initialize).toBe(afterRollback)
     expect(runningModel()).toBe('model-c')
+  })
+})
+
+describe('探测失败：坏 Key 不许把旧运行时拆掉', () => {
+  it('探测判不可用 → 一次 initialize 都不发生，旧模型继续用', async () => {
+    // 先确保运行时在 model-c 上
+    await pushConfig('model-c')
+    await touchEntry()
+    expect(runningModel()).toBe('model-c')
+
+    await pushConfig('model-bad-key')
+    state.invalidConfigs = ['model-bad-key']
+    const beforeInit = calls.initialize
+    const beforeDispose = calls.dispose
+    await touchEntry()
+
+    expect(state.probes).toBeGreaterThan(0)
+    expect(calls.initialize).toBe(beforeInit)
+    expect(calls.dispose).toBe(beforeDispose)
+    expect(runningModel()).toBe('model-c')
+
+    // 同一份坏配置再进两次入口：不再探测（failedConfigStamp 生效）
+    const settledProbes = state.probes
+    await touchEntry()
+    await touchEntry()
+    expect(state.probes).toBe(settledProbes)
+
+    // 推一份好的立刻恢复轮换
+    await pushConfig('model-d')
+    await touchEntry()
+    expect(runningModel()).toBe('model-d')
   })
 })

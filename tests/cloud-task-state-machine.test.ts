@@ -52,6 +52,13 @@ describe('canTransition', () => {
     expect(canTransition('cancelled', 'running')).toBe(false)
   })
 
+  it('接单前就失败也算失败（终端在建工作树/建会话时就会挂）', () => {
+    // 不放开这两条：终端还没发过 assigned 的 failure 会被静默丢弃，工单永远挂在 queued
+    expect(canTransition('queued', 'failed')).toBe(true)
+    expect(canTransition('queued', 'interrupted')).toBe(true)
+    expect(canTransition('assigned', 'failed')).toBe(true)
+  })
+
   it('同状态不算变化', () => {
     expect(canTransition('running', 'running')).toBe(false)
   })
