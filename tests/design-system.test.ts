@@ -32,6 +32,27 @@ const FORBIDDEN = [
   { label: 'dark variant', pattern: /\bdark:/g },
 ]
 
+/**
+ * 语义词族下面**只有这些 token 存在**（`tailwind.config.js` 的 `colors`）。
+ * 名单外的名字（`text-warn` / `text-ink-faint`）不报错，只是**什么都没渲染**——
+ * 颜色静默失灵比报错难发现，所以把这类拼错体变成测试失败。
+ */
+const SEMANTIC_TOKENS: Record<string, string[]> = {
+  ink: ['muted', 'subtle', 'inverted'],
+  accent: ['hover', 'fg'],
+  success: ['hover'],
+  warning: ['hover'],
+  danger: ['hover', 'fg'],
+}
+/** 族名拼错体（`text-warn`）：颜色后缀根本没参与解析，shade 校验看不到它 */
+const SEMANTIC_ALIASES: Record<string, string> = {
+  warn: 'warning',
+  succes: 'success',
+  dange: 'danger',
+}
+const SEMANTIC_PATTERN =
+  /\b(?:text|bg|border)-(ink|accent|success|warning|danger|warn|succes|dange)(-[a-z0-9-]+)?(?=\/|\s|'|"|`|\)|\}|,)/g
+
 describe('design system usage', () => {
   it('does not allow raw typography outside ui.tsx and patterns.tsx', () => {
     const violations: string[] = []
@@ -45,6 +66,33 @@ describe('design system usage', () => {
             `${relative(SRC, file).replace(/\\/g, '/')}:${line} — ${rule.label}: ${match[0]}`
           )
         }
+      }
+    }
+
+    expect(violations, violations.join('\n')).toEqual([])
+  })
+
+  it('does not invent semantic color tokens that would render nothing', () => {
+    const violations: string[] = []
+
+    for (const file of businessFiles) {
+      const source = readFileSync(file, 'utf-8')
+      for (const match of source.matchAll(SEMANTIC_PATTERN)) {
+        const family = match[1]
+        if (SEMANTIC_ALIASES[family]) {
+          const line = source.slice(0, match.index).split('\n').length
+          violations.push(
+            `${relative(SRC, file).replace(/\\/g, '/')}:${line} — misspelled color family: ${match[0]} (use ${SEMANTIC_ALIASES[family]})`
+          )
+          continue
+        }
+        const shade = match[2]?.slice(1)
+        if (!shade) continue
+        if (SEMANTIC_TOKENS[family]?.includes(shade)) continue
+        const line = source.slice(0, match.index).split('\n').length
+        violations.push(
+          `${relative(SRC, file).replace(/\\/g, '/')}:${line} — unknown semantic color: ${match[0]}`
+        )
       }
     }
 

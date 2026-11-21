@@ -43,7 +43,7 @@ export const CloudStatusIndicator: React.FC<{ onOpen: () => void }> = ({ onOpen 
       ? 'text-accent'
       : status === 'error'
         ? 'text-danger'
-        : 'text-warn'
+        : 'text-warning'
 
   return (
     <button
