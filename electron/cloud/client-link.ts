@@ -25,7 +25,8 @@ export type CloudClientState =
   | { status: 'closed' }
   | { status: 'connecting' }
   | { status: 'open'; lastSeq: number }
-  | { status: 'error'; error: string }
+  /** `revoked`：设备已被云端解绑（F-08 / A-15），已停止重连，UI 应引导重新配对 */
+  | { status: 'error'; error: string; revoked?: boolean }
 
 type OutgoingClientFrame = ClientToServerFrame extends infer Frame
   ? Frame extends unknown
@@ -47,6 +48,8 @@ export class CloudClientBridge {
   private reconnectDelay = RECONNECT_MIN_MS
   private lastAckSeq = 0
   private closed = true
+  /** 解绑后永久停手（直到用户重新打开 / 重新配对） */
+  private durableStop = false
   private state: CloudClientState = { status: 'closed' }
 
   constructor(deps: CloudClientBridgeDeps) {
@@ -81,6 +84,7 @@ export class CloudClientBridge {
       return this.state
     }
     this.closed = false
+    this.durableStop = false
     void this.connect(link.baseUrl, readCloudToken(link))
     return this.state
   }
@@ -164,9 +168,28 @@ export class CloudClientBridge {
     socket.on('close', () => {
       if (this.socket === socket) this.socket = null
       this.stopHeartbeat()
-      if (this.closed) return
+      if (this.closed || this.durableStop) return
       this.updateState({ status: 'connecting' })
       this.scheduleReconnect(new Error('connection closed'))
+    })
+    // 升级阶段被拒（解绑后重连）：`ws` 不会发关闭码，只有 HTTP 状态码
+    socket.on('unexpected-response', (request, response) => {
+      const status = response.statusCode ?? 0
+      try {
+        response.resume()
+        request.destroy()
+      } catch {
+        // 清理失败不影响结论
+      }
+      if (this.socket === socket) this.socket = null
+      this.stopHeartbeat()
+      if (this.closed || this.durableStop) return
+      if (status === 401 || status === 403) {
+        this.markRevoked()
+        return
+      }
+      this.updateState({ status: 'connecting' })
+      this.scheduleReconnect(new Error(`handshake rejected with ${status}`))
     })
     socket.on('error', (error) => {
       this.deps.logger.warn('[Cloud Client] socket error:', error)
@@ -186,8 +209,20 @@ export class CloudClientBridge {
     this.heartbeat = null
   }
 
+  /** 已被云端解绑：停手，等用户重新配对（F-08 / A-15） */
+  private markRevoked(): void {
+    this.durableStop = true
+    this.closed = true
+    this.clearTimers()
+    this.updateState({
+      status: 'error',
+      revoked: true,
+      error: 'This device was removed from the cloud; pair it again.',
+    })
+  }
+
   private scheduleReconnect(_error: unknown): void {
-    if (this.closed || this.reconnectTimer) return
+    if (this.closed || this.durableStop || this.reconnectTimer) return
     const delay = this.reconnectDelay
     this.reconnectDelay = Math.min(RECONNECT_MAX_MS, Math.round(this.reconnectDelay * 1.8))
     const link = readCloudLink()

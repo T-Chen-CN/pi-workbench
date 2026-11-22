@@ -12,6 +12,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import {
   CLOUD_PROTOCOL_VERSION,
   CLOUD_WS_PATHS,
+  isTerminalTaskStatus,
   normalizeResumeCursor,
   type ClientToServerFrame,
   type CloudSnapshot,
@@ -350,6 +351,7 @@ export async function createCloudServer(
     if (frame.type === 'hello') {
       await store.updateDevice(peer.deviceId, { workspaces: sanitize(frame.workspaces) })
       publishDevice(peer.deviceId)
+      await reconcileTasksOnHello(peer.deviceId, frame.runningTasks)
       return
     }
     if (frame.type === 'workspaces') {
@@ -373,6 +375,39 @@ export async function createCloudServer(
     const device = store.findDevice(deviceId)
     if (!device) return
     hub.publish({ type: 'device', device: dispatcher.deviceSnapshot(device) })
+  }
+
+  /**
+   * 重连对账（F-21 / A-13 / A-41）：终端把自己认为还在跑的工单报上来，
+   * 服务端只纠正**不该继续跑**的那些——掉线期间已落终态（离线判定 / 用户停止 /
+   * 超时），以及服务端根本没有记录的孤儿（它已经无法汇报，留着只会堵住 FIFO）。
+   *
+   * 必须由服务端判定：终端本地台账在掉线那段时间拿不到任何新事实。
+   */
+  async function reconcileTasksOnHello(deviceId: string, running: unknown): Promise<void> {
+    if (!Array.isArray(running)) return
+    for (const raw of running) {
+      if (typeof raw !== 'string' || !raw.trim()) continue
+      const taskId = raw.trim()
+      const task = store.findTask(taskId)
+      // 别的设备的工单：不认，避免用一台设备停掉另一台的活
+      if (task && task.spec.deviceId !== deviceId) continue
+      if (task && !isTerminalTaskStatus(task.status)) continue
+      hub.sendToDevice(
+        deviceId,
+        {
+          v: CLOUD_PROTOCOL_VERSION,
+          type: 'task_cancel',
+          seq: 0,
+          taskId,
+          reason: task ? (task.terminalReason ?? 'server-terminal') : 'unknown-task',
+        },
+        taskId
+      )
+      logger.info(
+        `[cloud] reconcile: asked ${deviceId} to stop ${taskId} (${task ? task.status : 'unknown'})`
+      )
+    }
   }
 
   async function onDeviceOffline(deviceId: string): Promise<void> {

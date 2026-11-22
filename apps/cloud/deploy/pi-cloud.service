@@ -36,5 +36,8 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=pi-cloud
 
+# 需求 §3.5 的运维硬约束：默认 ulimit -n 只有 1024，两条 WS 通道 + 会话文件在并发下会先撞 fd 上限
+LimitNOFILE=65536
+
 [Install]
 WantedBy=multi-user.target

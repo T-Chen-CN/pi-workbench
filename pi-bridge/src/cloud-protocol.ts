@@ -504,7 +504,17 @@ export interface CloudTaskMilestone {
 }
 
 export type DeviceToServerFrame =
-  | ({ type: 'hello'; deviceId: string; workspaces: CloudWorkspaceInfo[] } & FrameBase)
+  | ({
+      type: 'hello'
+      deviceId: string
+      workspaces: CloudWorkspaceInfo[]
+      /**
+       * 终端**认为**还在跑的工单（重连对账用，F-21 / A-13）。
+       * 服务端只对已落终态的那些回 `task_cancel`：离线判定、用户停止、超时都发生
+       * 在终端掉线期间，终端不知道工单已经结束，不纠正会把“已取消”的活干完。
+       */
+      runningTasks?: string[]
+    } & FrameBase)
   | ({ type: 'resume'; lastAckSeq: number } & FrameBase)
   | ({ type: 'ack'; seq: number } & FrameBase)
   | ({ type: 'workspaces'; workspaces: CloudWorkspaceInfo[] } & FrameBase)

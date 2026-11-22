@@ -125,6 +125,8 @@ describe('连接与帧', () => {
     expect(hello.deviceId).toBe('dev-test')
     expect(hello.workspaces[0]).toMatchObject({ name: 'repo', isGit: true })
     expect(hello.v).toBe(CLOUD_PROTOCOL_VERSION)
+    // 重连对账（F-21 / A-13）：终端要把“自己认为还在跑的工单”报上去
+    expect(hello.runningTasks).toEqual([])
     expect(states[states.length - 1]?.status).toBe('online')
 
     await agent.refreshWorkspaces()

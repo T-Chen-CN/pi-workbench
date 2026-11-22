@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Cloud, RefreshCw, Send, Square, Trash2, Unplug } from 'lucide-react'
+import { ArrowLeft, Cloud, PenLine, RefreshCw, Send, Square, Trash2, Unplug } from 'lucide-react'
 import { useCloudStore } from '../store/cloudStore'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
+import { confirmDialog } from '../store/dialogStore'
 import type { CloudTaskRow, CloudTaskStatusName, CloudUnitRow } from '../types/cloud'
-import { Button, EmptyState, Field, Input, Select, Spinner, Textarea } from './ui'
+import { Button, EmptyState, Field, Input, Modal, Select, Spinner, Textarea } from './ui'
 import { Card, CardHeader, SectionHeader, StatusText } from './patterns'
 
 /**
@@ -45,6 +46,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
   const { t } = useI18nStore()
   const store = useCloudStore()
   const [draft, setDraft] = useState('')
+  const [authorizeOpen, setAuthorizeOpen] = useState(false)
   const [answerDraft, setAnswerDraft] = useState<Record<string, string>>({})
   const transcriptRef = useRef<HTMLDivElement | null>(null)
 
@@ -79,12 +81,22 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
 
   const running = store.tasks.filter((task) => ACTIVE_STATUSES.includes(task.status))
   const finished = store.tasks.filter((task) => !ACTIVE_STATUSES.includes(task.status))
+  // 已被云端解绑（F-08 / A-15）：两个通道都已停手，这里必须明说，否则只会看到“连接中”
+  const revoked =
+    Boolean(store.deviceState.revoked) ||
+    (store.clientState.status === 'error' && Boolean(store.clientState.revoked))
 
   const send = () => {
     const body = draft.trim()
     if (!body) return
     setDraft('')
     void store.say(body)
+  }
+
+  const unpair = async () => {
+    if (!(await confirmDialog({ message: t('cloudUnpairConfirm'), danger: true }))) return
+    await store.unlink()
+    toast.success(t('cloudUnpaired'))
   }
 
   return (
@@ -130,8 +142,22 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
               {t('cloudReconnect')}
             </Button>
           )}
+          {/* 解绑后（或被云端移除后）必须能从桌面端解除，否则只能重装：
+              解绑才能回到配对页，重新配对才能恢复两个通道 */}
+          {store.link.linked && (
+            <Button variant="ghost" size="sm" onClick={() => void unpair()}>
+              <Unplug size={13} />
+              {t('cloudUnpair')}
+            </Button>
+          )}
         </div>
       </header>
+
+      {revoked && (
+        <p className="flex-shrink-0 border-b border-rule-divide bg-panel px-4 py-2 type-caption text-danger">
+          {t('cloudRevoked')}
+        </p>
+      )}
 
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_360px]">
         <section className="flex min-h-0 flex-col border-r border-rule-divide">
@@ -288,7 +314,17 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
           </Card>
 
           <Card density="compact">
-            <CardHeader title={t('cloudAuthorizations')} />
+            <CardHeader
+              title={t('cloudAuthorizations')}
+              action={
+                store.link.linked ? (
+                  <Button variant="secondary" size="sm" onClick={() => setAuthorizeOpen(true)}>
+                    <PenLine size={13} />
+                    {t('cloudAuthorizeTitle')}
+                  </Button>
+                ) : undefined
+              }
+            />
             {store.authorizations.length === 0 ? (
               <p className="type-caption text-ink-muted">{t('cloudNoAuthorizations')}</p>
             ) : (
@@ -306,6 +342,8 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
               </ul>
             )}
           </Card>
+
+          <AuthorizeDialog open={authorizeOpen} onClose={() => setAuthorizeOpen(false)} />
 
           {store.link.linked && <CloudConfigCard />}
 
@@ -699,4 +737,134 @@ async function apiGetConfig() {
   const { api } = await import('../api')
   const result = await api.cloudGetConfig()
   return result.success ? result.config : undefined
+}
+
+/**
+ * 确认方案并授权（F-16 / F-17 / F-18）。
+ *
+ * 这个动作**不派活**，只把「设备 × 仓库 + 额度」落成凭据；`dispatch_task` 时由服务端
+ * 逐项校验（G9：模型自称“用户已同意”不算数）。桌面端与 Web 都是完整客户端（D-11），
+ * 所以两端都必须有这个入口，否则只用桌面端根本派不出活。
+ */
+const AuthorizeDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
+  const { t } = useI18nStore()
+  const store = useCloudStore()
+  const [planText, setPlanText] = useState('')
+  const [deviceId, setDeviceId] = useState('')
+  const [workspacePath, setWorkspacePath] = useState('')
+  const [quota, setQuota] = useState('5')
+  const [sending, setSending] = useState(false)
+
+  const device = store.devices.find((item) => item.id === deviceId) ?? store.devices[0]
+  const repos = useMemo(
+    () => (device?.workspaces ?? []).filter((workspace) => workspace.isGit !== false),
+    [device]
+  )
+
+  // 打开时补默认值，但**不覆盖用户的手选**：整页重渲染（任何流式帧都会触发）不能让选择弹回去
+  useEffect(() => {
+    if (!open) return
+    if (device && device.id !== deviceId) setDeviceId(device.id)
+    if (repos.length > 0 && !repos.some((repo) => repo.path === workspacePath)) {
+      setWorkspacePath(repos[0].path)
+    }
+  }, [open, device, deviceId, repos, workspacePath])
+
+  const submit = async () => {
+    const text = planText.trim()
+    if (!text || !device || !workspacePath) return
+    setSending(true)
+    const ok = await store.confirmPlan({
+      planText: text,
+      items: [{ deviceId: device.id, workspacePath }],
+      quota: Math.max(1, Math.min(50, Number(quota) || 5)),
+    })
+    setSending(false)
+    if (!ok) {
+      toast.error(t('cloudAuthorizeFailed'))
+      return
+    }
+    toast.success(t('cloudAuthorizeSent'))
+    setPlanText('')
+    onClose()
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={t('cloudAuthorizeTitle')}
+      size="md"
+      closeLabel={t('close')}
+      footer={
+        <>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            {t('cancel')}
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => void submit()}
+            disabled={sending || !planText.trim() || !device || !workspacePath}
+          >
+            {sending ? <Spinner size={13} /> : null}
+            {t('cloudAuthorizeAction')}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3 px-5 py-4">
+        <p className="type-caption text-ink-muted">{t('cloudAuthorizeHint')}</p>
+        <Field label={t('cloudPlanText')} htmlFor="cloud-plan-text">
+          <Textarea
+            id="cloud-plan-text"
+            rows={5}
+            value={planText}
+            onChange={(event) => setPlanText(event.target.value)}
+            placeholder={t('cloudPlanTextPlaceholder')}
+          />
+        </Field>
+        <Field label={t('cloudAuthorizeDevice')} htmlFor="cloud-plan-device">
+          <Select
+            id="cloud-plan-device"
+            value={device?.id ?? ''}
+            onChange={(event) => {
+              setDeviceId(event.target.value)
+              setWorkspacePath('')
+            }}
+          >
+            {store.devices.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label={t('cloudAuthorizeRepo')} htmlFor="cloud-plan-repo">
+          <Select
+            id="cloud-plan-repo"
+            value={workspacePath}
+            onChange={(event) => setWorkspacePath(event.target.value)}
+          >
+            {repos.map((repo) => (
+              <option key={repo.path} value={repo.path}>
+                {repo.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        {repos.length === 0 && <p className="type-caption text-warning">{t('cloudNoGitRepo')}</p>}
+        <Field label={t('cloudQuotaLabel')} htmlFor="cloud-plan-quota">
+          <Input
+            id="cloud-plan-quota"
+            type="number"
+            min={1}
+            max={50}
+            value={quota}
+            onChange={(event) => setQuota(event.target.value)}
+          />
+        </Field>
+      </div>
+    </Modal>
+  )
 }

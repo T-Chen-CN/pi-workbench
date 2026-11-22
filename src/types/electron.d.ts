@@ -720,6 +720,8 @@ export interface CloudDeviceState {
   baseUrl?: string
   lastError?: string
   lastConnectedAt?: number
+  /** 已被云端解绑（F-08 / A-15）：重连已停手，UI 应引导重新配对 */
+  revoked?: boolean
   /** 离线队列里还没送出去的帧数 */
   pending: number
 }
@@ -759,7 +761,7 @@ export type CloudClientState =
   | { status: 'closed' }
   | { status: 'connecting' }
   | { status: 'open'; lastSeq: number }
-  | { status: 'error'; error: string }
+  | { status: 'error'; error: string; revoked?: boolean }
 
 /** 渲染层能发的客户端帧（不再新增类型：帧格式由 pi-bridge 冻结） */
 export type CloudClientOutgoingFrame =

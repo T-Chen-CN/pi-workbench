@@ -1,6 +1,6 @@
 # 云端 Agent（apps/cloud）—— 实现与运维
 
-> 需求与验收在 [CLOUD_AGENT_PI](../requirements/CLOUD_AGENT_PI.md)（v3.2，唯一需求源）。
+> 需求与验收在 [CLOUD_AGENT_PI](../requirements/CLOUD_AGENT_PI.md)（v3.3，唯一需求源）。
 > 本文只讲**怎么实现的、怎么部署、坏了怎么查**。设计与取舍去读需求文档的 D-01~D-34。
 
 ---
@@ -119,6 +119,9 @@
   工单会话用 `createSession(worktreePath)` 建在工作树里，**自己不 bind**（G12）。
 - 工单会话的 AgentManager 用**独立 agentDir**（`data/cloud/agent`），不进用户会话列表（D-24），
   但 `apiConfig` 复用用户当前配置（SDK 的 Key 是进程级串写的）。
+- **压缩参数写在 `data/cloud/agent/settings.json`**（`compaction.reserveTokens 8192` / `keepRecentTokens 12000`）：
+  `models.json` 的 `contextWindow` 只有四档，写别的值会被静默回落成 128k，想让工单更早压缩只能改这里。
+  只覆盖这三个键，其它字段原样保留；模型配置同步只写 `models.json`，不会覆盖它。
 - 装配：`builtinExtensions: { plan: false, worktree: false }` +
   `toolAllowlist: ['read','ls','grep','find','edit','write','bash']` + 权限 `mode: 'auto'`（G3）。
 - 守卫（G8 / D-32，`task-guard.ts`）：`write` / `edit` 的绝对路径必须落在工作树内；
@@ -139,6 +142,14 @@
 
 - 心跳 25 秒；服务端 60 秒收不到 → 判离线；客户端/设备都是 `seq` 递增 + `lastAckSeq` 续传，
   增量溢出（2000 条 / 24 小时）→ 回整份快照。
+- **解绑（F-08 / A-15）**：服务端在 WS **升级阶段**回 `HTTP/1.1 401`，拿不到 WS 关闭码，
+  所以两个客户端都监听 `unexpected-response` 并按 401/403 判「已被云端移除」：
+  `durableStop` + 状态 `error` + `revoked: true`，**不再重连**；`open()` / `start()` 才会重新武装。
+  云端页据此显示横幅并给「解除配对」入口（否则桌面端只能重装才能重新配对）。
+- **重连对账（F-21 / A-13 / A-41）**：`hello` 带 `runningTasks`（终端**认为**在跑的工单）。
+  服务端只纠正不该继续跑的：已落终态的（离线判定 / 用户停止 / 超时）回 `task_cancel`
+  并带原 `terminalReason`；服务端没有记录的孤儿回 `reason: unknown-task`（它已无法汇报，
+  留着只会堵住单设备 FIFO）。还在跑的工单不会被这条机制打扰。
 - 设备离线期间的帧进有界队列（1000 条），重连后补发；终态工单会清掉它的待投递项。
   `close_unit` 也走这条队列：设备离线时回收请求不会丢，重连后补发。
 - 单元相关帧：`close_unit`（服务端→设备，`reason: converged | user-close | sweep`）、
@@ -148,6 +159,8 @@
 ### 3.5 安全
 
 - 一机一 token（同一 token 开 `/client/ws` 与 `/device/ws`），云端只存加盐哈希。
+- 授权入口两端都有：Web 的「确认方案并授权」弹层 + 桌面端云端页同一个弹层
+  （`AuthorizeDialog` → 帧 `confirm_plan`）。这个动作本身不派活，只落「设备 × 仓库 + 额度」凭据。
 - 配对码 6 位一次性；`/v1/pair` 每来源 5 次 / 5 分钟 + 全局熔断 20 次 / 5 分钟；
   所有凭据类失败对外同一个错误码（不透露「码是否存在 / 过期 / 用过」）。
 - 账号类操作（建账号、登录、生成配对码、移除设备）只认 cookie 会话；
@@ -293,7 +306,7 @@ node apps/cloud/scripts/acceptance.mjs https://<域名>
 | 代码 | `/opt/pi-cloud/releases/<ts>` + `current` 软链 |
 | 数据 | `/var/lib/pi-cloud`（属主 `pi-cloud`） |
 | 配置 / 密钥 | `/etc/pi-cloud/env`（`0600 root:root`） |
-| 单元 | `pi-cloud.service`（`Restart=always`、`ProtectSystem=strict`）· `pi-cloud-backup.timer`（每日 03:20 UTC） |
+| 单元 | `pi-cloud.service`（`Restart=always`、`ProtectSystem=strict`、`LimitNOFILE=65536`）· `pi-cloud-backup.timer`（每日 03:20 UTC） |
 | 日志 | `journalctl -u pi-cloud` · `/var/log/caddy/pi-cloud.log`（20MiB × 5） |
 | 备份 | `/var/backups/pi-cloud/pi-cloud-<ts>.tar.gz`，留 7 天 |
 

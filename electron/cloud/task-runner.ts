@@ -22,7 +22,7 @@ import type {
   CloudTaskStatus,
 } from 'pi-bridge'
 import { getBridgeEntryUrl } from '../app-paths.js'
-import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
+import { readJsonWithBackup, writeJsonAtomic, writeJsonAtomicAsync } from '../atomic-json.js'
 import { createTaskGuardExtension, type TaskGuardInfo } from './task-guard.js'
 
 const execFileAsync = promisify(execFile)
@@ -33,6 +33,36 @@ export const TASK_TOOL_ALLOWLIST = ['read', 'ls', 'grep', 'find', 'edit', 'write
 /** 进度上报节流：终端一轮里可能几十次工具调用，全推上去会把通道打满 */
 const MILESTONE_THROTTLE_MS = 2_000
 const GIT_TIMEOUT_MS = 15_000
+
+/**
+ * 工单会话的压缩参数（§4.0 实测约束 1）。
+ *
+ * `models.json` 的 `contextWindow` 只有四档（64k/128k/256k/1M），写别的值会被
+ * `normalizeContextWindow` 静默回落成 128k；想让工单更早压缩只能改 `settings.json`
+ * 的 `compaction`（自由数值）。默认值 16384/20000 对长工单太宽松。
+ */
+const TASK_COMPACTION_SETTINGS = { enabled: true, reserveTokens: 8_192, keepRecentTokens: 12_000 }
+
+/**
+ * 把更激进的压缩参数写进工单 agentDir 的 `settings.json`。
+ *
+ * 只覆盖 `compaction` 里的三个键：其它字段（本机设置、未来版本新增项）原样保留。
+ * 跟模型配置同步不冲突——同步只写 `models.json`，从不碰这里。
+ */
+async function ensureTaskAgentSettings(agentDir: string): Promise<void> {
+  const file = path.join(agentDir, 'settings.json')
+  const existing = readJsonWithBackup<Record<string, unknown>>(file).data ?? {}
+  const current = (existing.compaction ?? {}) as Record<string, unknown>
+  const merged = { ...current, ...TASK_COMPACTION_SETTINGS }
+  if (
+    current.enabled === merged.enabled &&
+    current.reserveTokens === merged.reserveTokens &&
+    current.keepRecentTokens === merged.keepRecentTokens
+  ) {
+    return
+  }
+  await writeJsonAtomicAsync(file, { ...existing, compaction: merged }, { backup: false })
+}
 
 export interface CloudTaskRunnerDeps {
   logger: {
@@ -257,6 +287,7 @@ export class CloudTaskRunner {
     const { AgentManager } = await import(getBridgeEntryUrl())
     const agentDir = path.join(this.deps.dataDir, 'agent')
     await fs.mkdir(agentDir, { recursive: true })
+    await ensureTaskAgentSettings(agentDir)
     const manager = new AgentManager()
     const result = await manager.initialize({
       workspaceDir: path.join(this.deps.dataDir, 'workspace'),
@@ -862,3 +893,6 @@ export function buildTaskPrompt(spec: CloudTaskSpec, worktreePath: string): stri
   )
   return lines.join('\n')
 }
+
+/** 给测试用的纯函数版本（压缩参数写入是纯文件行为，不需要起 AgentManager） */
+export const taskRunnerInternals = { ensureTaskAgentSettings, TASK_COMPACTION_SETTINGS }

@@ -44,6 +44,11 @@ export interface DeviceLinkState {
   baseUrl?: string
   lastError?: string
   lastConnectedAt?: number
+  /**
+   * 已被云端解绑（F-08 / A-15）：服务端在 WS 升级阶段直接回 401，
+   * 拿不到关闭码，只能看 HTTP 状态。这类失败重连没有意义，必须停手让用户重新配对。
+   */
+  revoked?: boolean
   /** 队列里还没送出去的帧数（离线时 > 0） */
   pending: number
 }
@@ -224,7 +229,7 @@ export class DeviceAgent {
 
   private async connect(): Promise<void> {
     if (this.stopped || this.durableStop || !this.link || !this.token) return
-    this.updateState({ status: 'connecting' })
+    this.updateState({ status: 'connecting', revoked: false })
     const url = `${wsUrl(this.link.baseUrl, CLOUD_WS_PATHS.device)}?lastAckSeq=${this.lastAckSeq}`
     let socket: WebSocket
     try {
@@ -246,12 +251,30 @@ export class DeviceAgent {
       this.stopHeartbeat()
       if (this.stopped || this.durableStop) return
       if (code === 1008 || code === 4401) {
-        this.updateState({ status: 'error', lastError: 'Device was removed or the token is invalid.' })
-        this.durableStop = true
+        this.markRevoked()
         return
       }
       this.updateState({ status: 'offline' })
       this.scheduleReconnect(new Error(`socket closed (${code})`))
+    })
+    // 升级阶段被拒（解绑后重连）：`ws` 不会发关闭码，只有 HTTP 状态码
+    socket.on('unexpected-response', (request, response) => {
+      const status = response.statusCode ?? 0
+      try {
+        response.resume()
+        request.destroy()
+      } catch {
+        // 清理失败不影响结论
+      }
+      if (this.socket === socket) this.socket = null
+      this.stopHeartbeat()
+      if (this.stopped || this.durableStop) return
+      if (status === 401 || status === 403) {
+        this.markRevoked()
+        return
+      }
+      this.updateState({ status: 'offline' })
+      this.scheduleReconnect(new Error(`handshake rejected with ${status}`))
     })
     socket.on('error', (error) => {
       this.deps.logger.warn('[Cloud Device] socket error:', error)
@@ -260,13 +283,20 @@ export class DeviceAgent {
 
   private async onOpen(): Promise<void> {
     this.reconnectDelay = RECONNECT_MIN_MS
-    this.updateState({ status: 'online', lastError: undefined, lastConnectedAt: Date.now() })
+    this.updateState({
+      status: 'online',
+      lastError: undefined,
+      revoked: false,
+      lastConnectedAt: Date.now(),
+    })
     if (this.link) void touchCloudLink(this.link)
     const workspaces = await this.deps.getWorkspaces().catch(() => [])
     this.send({
       type: 'hello',
       deviceId: this.link?.deviceId ?? '',
       workspaces,
+      // 重连对账（F-21 / A-13）：服务端据此把掉线期间已判终态的工单重新下发 cancel
+      runningTasks: [...this.running],
     })
     this.startHeartbeat()
     await this.flush(0)
@@ -283,6 +313,18 @@ export class DeviceAgent {
   private stopHeartbeat(): void {
     if (this.heartbeat) clearInterval(this.heartbeat)
     this.heartbeat = null
+  }
+
+  /** 已被云端解绑：停手，等用户重新配对（F-08 / A-15） */
+  private markRevoked(): void {
+    this.durableStop = true
+    this.clearTimers()
+    this.outbox = []
+    this.updateState({
+      status: 'error',
+      revoked: true,
+      lastError: 'This device was removed from the cloud; pair it again.',
+    })
   }
 
   private scheduleReconnect(error: unknown): void {

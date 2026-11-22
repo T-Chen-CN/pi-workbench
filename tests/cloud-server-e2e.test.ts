@@ -811,3 +811,134 @@ describe('工作树回收（A-43 / A-46）', () => {
     )
   })
 })
+
+describe('重连对账（A-13 / F-21）', () => {
+  /**
+   * 事故：只要设备掉线超过 60 s，服务端就把在跑工单判 `cancelled(device-offline)`；
+   * 但终端在本地还在跑，重连后不拉服务端状态就会把已经取消的活干完 ——
+   * 用户看到“已取消”，文件却被继续改。对账必须由服务端判定。
+   */
+  const frames: any[] = []
+  let device: WebSocket
+
+  beforeAll(async () => {
+    device = await openSocket(
+      `ws://127.0.0.1:${new URL(base).port}/device/ws`,
+      { authorization: `Bearer ${token}` },
+      frames
+    )
+    device.send(
+      JSON.stringify({
+        v: CLOUD_PROTOCOL_VERSION,
+        type: 'hello',
+        deviceId,
+        workspaces: [{ path: WORKSPACE, name: 'cloud-e2e-repo', isGit: true }],
+      })
+    )
+    await waitFor(() => server.hub.isDeviceOnline(deviceId), 3000, 'device online')
+  })
+
+  afterAll(() => {
+    device?.close()
+  })
+
+  async function dispatchRunning(unitId: string): Promise<string> {
+    const authorized = await fetch(`${base}/v1/authorizations`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        planText: 'reconcile plan',
+        items: [{ deviceId, workspacePath: WORKSPACE }],
+        quota: 3,
+      }),
+    })
+    const { authorization } = (await authorized.json()) as { authorization: { id: string } }
+    const outcome = await server.dispatcher.dispatch({
+      authorizationId: authorization.id,
+      workUnitId: unitId,
+      deviceId,
+      workspacePath: WORKSPACE,
+      title: 'reconcile',
+      background: 'b',
+      goal: 'g',
+      acceptance: 'a',
+      commit: false,
+    })
+    expect(outcome.ok).toBe(true)
+    const taskId = outcome.ok ? outcome.task.id : ''
+    // 状态机不允许 queued → running：终端总是先回 assigned 再回 running
+    for (const status of ['assigned', 'running'] as const) {
+      device.send(
+        JSON.stringify({
+          v: CLOUD_PROTOCOL_VERSION,
+          type: 'task_status',
+          taskId,
+          status,
+          at: Date.now(),
+        })
+      )
+      await waitFor(() => server.store.findTask(taskId)?.status === status, 3000, `task ${status}`)
+    }
+    return taskId
+  }
+
+  it('服务端已判终态的工单：重连 hello 时要求终端停手', async () => {
+    const taskId = await dispatchRunning('unit-reconcile-1')
+    // 掉线期间的终态（离线判定 / 用户停止 / 超时都是这条路径）
+    await server.dispatcher.cancelTask(taskId, 'device-offline')
+    frames.length = 0
+
+    device.send(
+      JSON.stringify({
+        v: CLOUD_PROTOCOL_VERSION,
+        type: 'hello',
+        deviceId,
+        workspaces: [{ path: WORKSPACE, name: 'cloud-e2e-repo', isGit: true }],
+        runningTasks: [taskId],
+      })
+    )
+    const cancel = await waitFor(
+      () => frames.find((frame) => frame.type === 'task_cancel' && frame.taskId === taskId),
+      3000,
+      'reconcile cancel'
+    )
+    expect(cancel.reason).toBe('device-offline')
+  })
+
+  it('服务端没有记录的孤儿工单：也要求终端停手（否则会堵住单设备 FIFO）', async () => {
+    frames.length = 0
+    device.send(
+      JSON.stringify({
+        v: CLOUD_PROTOCOL_VERSION,
+        type: 'hello',
+        deviceId,
+        workspaces: [{ path: WORKSPACE, name: 'cloud-e2e-repo', isGit: true }],
+        runningTasks: ['T-does-not-exist'],
+      })
+    )
+    const cancel = await waitFor(
+      () => frames.find((frame) => frame.type === 'task_cancel' && frame.taskId === 'T-does-not-exist'),
+      3000,
+      'orphan cancel'
+    )
+    expect(cancel.reason).toBe('unknown-task')
+  })
+
+  it('还在跑的工单不被打扰', async () => {
+    const taskId = await dispatchRunning('unit-reconcile-2')
+    frames.length = 0
+    device.send(
+      JSON.stringify({
+        v: CLOUD_PROTOCOL_VERSION,
+        type: 'hello',
+        deviceId,
+        workspaces: [{ path: WORKSPACE, name: 'cloud-e2e-repo', isGit: true }],
+        runningTasks: [taskId],
+      })
+    )
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(frames.some((frame) => frame.type === 'task_cancel' && frame.taskId === taskId)).toBe(false)
+    // 收尾：让后面的用例不受这张工单影响
+    await server.dispatcher.cancelTask(taskId, 'user-cancel')
+  })
+})
