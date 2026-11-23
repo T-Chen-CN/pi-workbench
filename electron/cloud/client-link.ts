@@ -25,8 +25,11 @@ export type CloudClientState =
   | { status: 'closed' }
   | { status: 'connecting' }
   | { status: 'open'; lastSeq: number }
-  /** `revoked`：设备已被云端解绑（F-08 / A-15），已停止重连，UI 应引导重新配对 */
-  | { status: 'error'; error: string; revoked?: boolean }
+  /**
+   * `revoked`：设备已被云端解绑（F-08 / A-15），已停止重连，UI 应引导重新配对。
+   * `fatal`：服务端以 `fatal` 错误帧拒绝（协议版本不匹配等，F-47 / A-27），重连也不会成功。
+   */
+  | { status: 'error'; error: string; revoked?: boolean; fatal?: boolean }
 
 type OutgoingClientFrame = ClientToServerFrame extends infer Frame
   ? Frame extends unknown
@@ -164,6 +167,10 @@ export class CloudClientBridge {
       } catch (error) {
         this.deps.logger.warn('[Cloud Client] frame handler failed:', error)
       }
+      const errorFrame = frame as { type?: string; fatal?: boolean; message?: string }
+      if (errorFrame.type === 'error' && errorFrame.fatal) {
+        this.markRejected(String(errorFrame.message ?? 'The cloud rejected this client'))
+      }
     })
     socket.on('close', () => {
       if (this.socket === socket) this.socket = null
@@ -219,6 +226,20 @@ export class CloudClientBridge {
       revoked: true,
       error: 'This device was removed from the cloud; pair it again.',
     })
+  }
+
+  /**
+   * 服务端以 `fatal` 错误帧拒绝（更新版本不匹配等）：重连永远不会成功，停手并让 UI 明说。
+   * 必须停掉退避定时器，否则就是「无限重连 + 提示看不见」的死循环。
+   */
+  private markRejected(message: string): void {
+    this.durableStop = true
+    this.closed = true
+    this.clearTimers()
+    this.updateState({ status: 'error', fatal: true, error: message })
+    const socket = this.socket
+    this.socket = null
+    socket?.close()
   }
 
   private scheduleReconnect(_error: unknown): void {

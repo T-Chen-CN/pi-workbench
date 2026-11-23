@@ -186,4 +186,16 @@ describe('Web 客户端主界面', () => {
     const after = [...document.querySelectorAll('input')] as HTMLInputElement[]
     expect(after.find((node) => node.type === 'password')?.value).toBe('sk-typed-in-test')
   })
+
+  it('登录态过期后不再无限“正在重连”，回登录页并说明原因', async () => {
+    // 升级阶段就被 401 拒：浏览器只给 1006，只能靠 /v1/me 反查
+    routes['GET /v1/me'] = () => jsonResult({ hasAccount: true, authenticated: false })
+    const socket = FakeSocket.instances[FakeSocket.instances.length - 1]
+    // 没经过 open 就 close = 握手就被拒
+    socket.emit('close')
+    await tick(1300)
+    expect(document.body.textContent).toContain('登录已过期，请重新登录')
+    expect(document.body.textContent).toContain('登录云端控制台')
+    expect(document.body.textContent).not.toContain('正在重连')
+  })
 })

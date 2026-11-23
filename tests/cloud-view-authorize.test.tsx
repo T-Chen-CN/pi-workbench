@@ -130,3 +130,16 @@ describe('解绑提示', () => {
     expect(screen.getByText('解除配对')).toBeTruthy()
   })
 })
+
+describe('致命拒绝提示（F-47 / A-27）', () => {
+  it('服务端以 fatal 拒绝时给常驻提示与重连入口（有历史消息也要看得见）', async () => {
+    useCloudStore.setState({
+      clientState: { status: 'error', fatal: true, error: 'Client must be updated' },
+      messages: [{ id: 'm-1', role: 'assistant', text: '历史消息', at: Date.now(), traces: [] }],
+    })
+    render(<CloudView onBackHome={() => undefined} />)
+    // 提示不能只活在「对话为空」的空状态里
+    expect(await screen.findByText(/Client must be updated/)).toBeTruthy()
+    expect(screen.getByText('重新连接')).toBeTruthy()
+  })
+})

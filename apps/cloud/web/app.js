@@ -77,7 +77,38 @@ async function request(method, path, body) {
   } catch {
     payload = null
   }
+  // 401 = cookie 过期/密钥轮换：回查 /v1/me 决定是否回登录页（登录接口自己的 401 不算）
+  if (response.status === 401 && path !== '/v1/login') void handleUnauthorized()
   return { ok: response.ok, status: response.status, payload }
+}
+
+/** 登录态失效：回登录页并说明原因。否则页面会停在“正在重连…”且永远不成功。 */
+function showExpired(me) {
+  if (me) state.me = me
+  const socket = state.ws
+  state.ws = null
+  state.wsStatus = 'closed'
+  try {
+    socket?.close()
+  } catch {
+    // 已经断了
+  }
+  if (state.me && !state.me.hasAccount) return renderSetup()
+  renderLogin('登录已过期，请重新登录')
+}
+
+let sessionProbe = false
+
+async function handleUnauthorized() {
+  // WS 升级阶段被 401 拒时浏览器只给 1006，拿不到状态码；只能靠 /v1/me 反查
+  if (sessionProbe) return
+  sessionProbe = true
+  try {
+    const me = await request('GET', '/v1/me')
+    if (me.ok && me.payload && me.payload.authenticated === false) showExpired(me.payload)
+  } finally {
+    sessionProbe = false
+  }
 }
 
 // --------------------------------------------------------------------- 引导
@@ -141,10 +172,11 @@ function renderSetup() {
   )
 }
 
-function renderLogin() {
+function renderLogin(notice) {
   root.className = 'center'
   const password = el('input', { type: 'password', autocomplete: 'current-password' })
   const error = el('p', { class: 'danger' })
+  if (notice) error.textContent = notice
   const submit = el('button', { class: 'primary', text: '登录' })
   const doLogin = async () => {
     error.textContent = ''
@@ -205,14 +237,16 @@ function connect() {
   try {
     socket = new WebSocket(url)
   } catch {
-    scheduleReconnect()
+    scheduleReconnect(true)
     return
   }
   state.ws = socket
   state.wsStatus = 'connecting'
+  let opened = false
   render()
 
   socket.addEventListener('open', () => {
+    opened = true
     state.wsStatus = 'open'
     state.reconnectDelay = 1000
     render()
@@ -230,17 +264,29 @@ function connect() {
     state.wsStatus = 'closed'
     state.ws = null
     render()
-    if (state.me?.authenticated) scheduleReconnect()
+    // 升级阶段就被拒（登录态过期 → 401）时只会看到 1006：标记一下，重连前先回查登录态，
+    // 否则就是无限“正在重连…”且永远不成功。
+    if (state.me?.authenticated) scheduleReconnect(!opened)
   })
   socket.addEventListener('error', () => {
     state.wsStatus = 'closed'
   })
 }
 
-function scheduleReconnect() {
+function scheduleReconnect(handshakeFailed = false) {
   const delay = state.reconnectDelay
   state.reconnectDelay = Math.min(30000, Math.round(state.reconnectDelay * 1.8))
-  setTimeout(() => connect(), delay)
+  setTimeout(async () => {
+    if (handshakeFailed) {
+      const me = await request('GET', '/v1/me')
+      // 服务端也够不着（/v1/me 自己失败）时继续退避重连，别把网络故障当成登录过期
+      if (me.ok && me.payload && me.payload.authenticated === false) {
+        showExpired(me.payload)
+        return
+      }
+    }
+    connect()
+  }, delay)
 }
 
 function send(frame) {

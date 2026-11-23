@@ -360,6 +360,8 @@ export const useCloudStore = create<CloudState>((set, get) => ({
         lastSeq: Number(frame.seq ?? snapshot.lastSeq ?? 0),
         agentStatus: snapshot.cloud?.status ?? 'idle',
         canStopReply: Boolean(snapshot.cloud?.canStopReply),
+        // 收到整份快照说明连接真的通了：清掉上一轮的失败文案，否则会永久挂在空状态里
+        error: null,
       })
       return
     }

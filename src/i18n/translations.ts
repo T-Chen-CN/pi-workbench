@@ -740,6 +740,8 @@ export const translations = {
     cloudQuotaLabel: '工单额度',
     cloudNoGitRepo: '这台设备上没有可派活的 git 仓库',
     cloudRevoked: '此设备已被云端移除，已停止重连。请在云端控制台重新生成配对码后重新配对。',
+    cloudRejected: '云端拒绝了这台设备的连接：{error}（多半是客户端版本过旧，更新后再试）',
+    cloudReconnectAction: '重新连接',
     cloudQuota: '额度 {used}/{quota}',
     cloudExpires: '有效至 {time}',
     cloudConfigTitle: '云端模型配置',
@@ -1661,6 +1663,9 @@ export const translations = {
     cloudNoGitRepo: 'This device has no git repository that can receive tasks',
     cloudRevoked:
       'This device was removed from the cloud and reconnecting has stopped. Generate a new pairing code in the cloud console, then pair again.',
+    cloudRejected:
+      'The cloud rejected this client: {error} (usually an outdated client — update and try again)',
+    cloudReconnectAction: 'Reconnect',
     cloudQuota: 'Quota {used}/{quota}',
     cloudExpires: 'Valid until {time}',
     cloudConfigTitle: 'Cloud model settings',

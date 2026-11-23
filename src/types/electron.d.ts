@@ -761,7 +761,7 @@ export type CloudClientState =
   | { status: 'closed' }
   | { status: 'connecting' }
   | { status: 'open'; lastSeq: number }
-  | { status: 'error'; error: string; revoked?: boolean }
+  | { status: 'error'; error: string; revoked?: boolean; fatal?: boolean }
 
 /** 渲染层能发的客户端帧（不再新增类型：帧格式由 pi-bridge 冻结） */
 export type CloudClientOutgoingFrame =

@@ -85,6 +85,12 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
   const revoked =
     Boolean(store.deviceState.revoked) ||
     (store.clientState.status === 'error' && Boolean(store.clientState.revoked))
+  // 服务端以 fatal 帧拒绝（协议版本不匹配等，F-47 / A-27）：重连不会成功，必须常驻提示
+  const clientState = store.clientState
+  const rejected =
+    clientState.status === 'error' && !clientState.revoked && clientState.fatal
+      ? clientState.error
+      : null
 
   const send = () => {
     const body = draft.trim()
@@ -157,6 +163,16 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
         <p className="flex-shrink-0 border-b border-rule-divide bg-panel px-4 py-2 type-caption text-danger">
           {t('cloudRevoked')}
         </p>
+      )}
+      {rejected && (
+        <div className="flex flex-shrink-0 items-center gap-3 border-b border-rule-divide bg-panel px-4 py-2">
+          <p className="flex-1 type-caption text-danger">
+            {t('cloudRejected', { error: rejected })}
+          </p>
+          <Button variant="ghost" size="sm" onClick={() => void store.openClient()}>
+            {t('cloudReconnectAction')}
+          </Button>
+        </div>
       )}
 
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_360px]">
