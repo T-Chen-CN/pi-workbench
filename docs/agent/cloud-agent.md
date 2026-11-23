@@ -80,6 +80,10 @@
 - 幂等：`idempotencyKey`（`workUnitId` + 内容摘要），重复派活返回同一张工单。
 - 派活强制校验（G9）：`authorizationId` × 设备 × 仓库（路径归一化后比较）× 额度 × 有效期。
   同一工作单元追加的工单不扣额度（O-06）。已结束 / 正在回收的单元拒绝新工单（`unit-closed`）。
+- **改动清单**（`task_result.changedFiles`）= 工具轨迹 ∪ `git status --porcelain` ∪ `git diff --name-status <base>...HEAD`。
+  第三个不能省：模型常用 bash（`printf > f && git commit`）改文件，工具轨迹里没有它、提交后 status 又是空的，
+  少了它就会在云端显示「没有检测到文件改动」而分支上明明有提交。工具报的路径必须归一化到工作树相对路径，
+  树外的（含 Windows 跨盘符，`path.relative` 会原样返回绝对路径）一律丢弃。
 
 ### 3.2.1 工作树回收（F-19a / A-43 / A-46）
 

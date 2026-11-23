@@ -570,10 +570,8 @@ export class CloudTaskRunner {
   }
 
   private noteChanged(task: ActiveTask, filePath: string, kind: CloudChangedFile['kind']): void {
-    const relative = path.isAbsolute(filePath)
-      ? path.relative(task.worktreePath, filePath)
-      : filePath
-    if (!relative || relative.startsWith('..')) return
+    const relative = toWorktreeRelative(task.worktreePath, filePath)
+    if (!relative) return
     if (task.changed.has(relative)) return
     task.changed.set(relative, { path: relative.replace(/\\/g, '/'), kind })
     if (task.changed.size === 1) {
@@ -741,29 +739,9 @@ export class CloudTaskRunner {
   }
 
   private async collectChangedFiles(task: ActiveTask): Promise<CloudChangedFile[]> {
-    const fromGit = new Map<string, CloudChangedFile>(task.changed)
-    try {
-      const output = await this.git(task.worktreePath, ['status', '--porcelain'])
-      for (const line of output.split(/\r?\n/)) {
-        if (!line.trim()) continue
-        const status = line.slice(0, 2).trim()
-        const raw = line.slice(3).trim()
-        const filePath = raw.replace(/^"|"$/g, '')
-        if (!filePath) continue
-        const kind: CloudChangedFile['kind'] =
-          status === '??'
-            ? 'added'
-            : status.includes('D')
-              ? 'deleted'
-              : status.includes('R')
-                ? 'renamed'
-                : 'modified'
-        fromGit.set(filePath, { path: filePath.replace(/\\/g, '/'), kind })
-      }
-    } catch {
-      // git 不可用：退回工具轨迹里记到的路径
-    }
-    return [...fromGit.values()].slice(0, 200)
+    return collectTaskChangedFiles(this.units.get(task.unitId)?.base, task.worktreePath, [
+      ...task.changed.values(),
+    ])
   }
 
   private async git(cwd: string, args: string[]): Promise<string> {
@@ -896,3 +874,89 @@ export function buildTaskPrompt(spec: CloudTaskSpec, worktreePath: string): stri
 
 /** 给测试用的纯函数版本（压缩参数写入是纯文件行为，不需要起 AgentManager） */
 export const taskRunnerInternals = { ensureTaskAgentSettings, TASK_COMPACTION_SETTINGS }
+
+function normalizeCloudPath(value: string): string {
+  return value.replace(/\\/g, '/').replace(/^"|"$/g, '')
+}
+
+/**
+ * 工具的路径参数 → 工作树里的相对路径；不在树里就返回 null。
+ *
+ * 必须同时排除跨盘符：Windows 上 `path.relative('C:\\tree', 'E:/x')` 会原样返回绝对路径，
+ * 只查 `startsWith('..')` 的话会把 `E:/second.txt` 这种外部路径当成改动写进清单。
+ */
+export function toWorktreeRelative(worktreePath: string, filePath: string): string | null {
+  const relative = path.isAbsolute(filePath) ? path.relative(worktreePath, filePath) : filePath
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null
+  return relative
+}
+
+/**
+ * 改动清单：三个来源合并。
+ *
+ * 1. 工具轨迹里记到的路径（文件工具写的，一定算）；
+ * 2. `git status --porcelain`：还没提交的现场；
+ * 3. `git diff --name-status <base>...HEAD`：**已提交**的改动。
+ *
+ * 第三个不能少：模型常用 bash（`printf > f && git commit`）改文件，工具轨迹里没有它，
+ * 提交后 status 又是空的，少了这一行就会在云端显示「没有检测到文件改动」—— 而磁盘上明明有提交。
+ */
+export async function collectTaskChangedFiles(
+  base: string | undefined,
+  worktreePath: string,
+  known: CloudChangedFile[]
+): Promise<CloudChangedFile[]> {
+  const files = new Map<string, CloudChangedFile>()
+  for (const file of known) {
+    const key = normalizeCloudPath(file.path)
+    if (key) files.set(key, { ...file, path: key })
+  }
+  const run = (args: string[]): Promise<string> =>
+    execFileAsync('git', ['-C', worktreePath, ...args], {
+      timeout: GIT_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
+    }).then((result) => result.stdout)
+
+  try {
+    const output = await run(['status', '--porcelain'])
+    for (const line of output.split(/\r?\n/)) {
+      if (!line.trim()) continue
+      const status = line.slice(0, 2).trim()
+      const filePath = normalizeCloudPath(line.slice(3).trim())
+      if (!filePath) continue
+      const kind: CloudChangedFile['kind'] =
+        status === '??' ? 'added' : status.includes('D') ? 'deleted' : status.includes('R') ? 'renamed' : 'modified'
+      files.set(filePath, { path: filePath, kind })
+    }
+  } catch {
+    // git 不可用：退回工具轨迹里记到的路径
+  }
+
+  if (base) {
+    try {
+      const output = await run(['diff', '--name-status', `${base}...HEAD`])
+      for (const line of output.split(/\r?\n/)) {
+        const [code, ...rest] = line.split('\t')
+        if (!code || rest.length === 0) continue
+        // 重命名/复制占两列：取目标路径
+        const filePath = normalizeCloudPath(rest[rest.length - 1] ?? '')
+        if (!filePath) continue
+        const kind: CloudChangedFile['kind'] =
+          code.startsWith('A') || code.startsWith('C')
+            ? 'added'
+            : code.startsWith('D')
+              ? 'deleted'
+              : code.startsWith('R')
+                ? 'renamed'
+                : 'modified'
+        // 未提交的现场优先（status 更准）
+        if (!files.has(filePath)) files.set(filePath, { path: filePath, kind })
+      }
+    } catch {
+      // base 分支没了 / 不是 git：退回到前两个来源
+    }
+  }
+
+  return [...files.values()].slice(0, 200)
+}
