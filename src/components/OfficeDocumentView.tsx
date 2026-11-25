@@ -9,7 +9,7 @@
  * 都由它定义，Paper 与 Ink 两套主题自动跟随）。
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ExternalLink, FileWarning, RefreshCw } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
@@ -191,10 +191,16 @@ export const OfficeDocumentView: React.FC<{ file: OpenFile }> = ({ file }) => {
   const [preview, setPreview] = useState<DocumentPreview | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const [sheetIndex, setSheetIndex] = useState(0)
+  const cancelLoadRef = useRef<(() => void) | null>(null)
 
-  // 加载与手动重载走同一条路径：外部改动后点刷新不必重挂组件
+  // 加载与手动重载走同一条路径：外部改动后点刷新不必重挂组件，同时取消上次在途加载
   const load = useCallback(() => {
+    cancelLoadRef.current?.()
     let cancelled = false
+    const cancel = () => {
+      cancelled = true
+    }
+    cancelLoadRef.current = cancel
     setPreview(null)
     setFailed(null)
     void api.documentsPreview(file.path).then((result) => {
@@ -205,14 +211,16 @@ export const OfficeDocumentView: React.FC<{ file: OpenFile }> = ({ file }) => {
       }
       setPreview(result.preview)
     })
-    return () => {
-      cancelled = true
-    }
+    return cancel
   }, [file.path])
 
   useEffect(() => {
     setSheetIndex(0)
-    return load()
+    const cancel = load()
+    return () => {
+      cancel()
+      if (cancelLoadRef.current === cancel) cancelLoadRef.current = null
+    }
   }, [load, file.version])
 
   const openExternal = async () => {

@@ -357,8 +357,8 @@ export const ChatMessageRow = React.memo(function ChatMessageRow({
   diffToolIds?: Set<string>
   onOpenDiff?: (toolCallId: string) => void
   onCopy?: (text: string) => void
-  onRetry?: () => void
-  onEdit?: () => void
+  onRetry?: (message: ChatMessage) => void
+  onEdit?: (message: ChatMessage) => void
   onSwitchBranch?: (entryId: string) => void
   onOpenToolResult?: (toolCallId: string, toolName: string) => void
   canActOnPlan?: boolean
@@ -469,7 +469,7 @@ export const ChatMessageRow = React.memo(function ChatMessageRow({
                 icon={RotateCcw}
                 label={t('retryMessage')}
                 size="sm"
-                onClick={onRetry}
+                onClick={() => onRetry(message)}
               />
             )}
             {onEdit && (
@@ -477,7 +477,7 @@ export const ChatMessageRow = React.memo(function ChatMessageRow({
                 icon={Pencil}
                 label={t('editMessage')}
                 size="sm"
-                onClick={onEdit}
+                onClick={() => onEdit(message)}
               />
             )}
           </span>

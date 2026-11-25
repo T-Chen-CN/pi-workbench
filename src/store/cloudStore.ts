@@ -198,16 +198,25 @@ export const useCloudStore = create<CloudState>((set, get) => ({
   },
 
   refreshWorkspaces: async () => {
-    const result = await api.cloudRefreshWorkspaces()
-    if (!result.success) {
-      set({ error: result.error ?? null })
+    try {
+      const result = await api.cloudRefreshWorkspaces()
+      if (!result.success) {
+        set({ error: result.error ?? null })
+      }
+      return result.workspaces?.length ?? 0
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : String(error) })
+      return 0
     }
-    return result.workspaces?.length ?? 0
   },
 
   unlink: async () => {
-    await api.cloudClientClose()
-    await api.cloudUnlink()
+    try {
+      await api.cloudClientClose()
+      await api.cloudUnlink()
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : String(error) })
+    }
     set({
       link: { linked: false },
       deviceState: { status: 'unlinked', pending: 0 },
@@ -218,24 +227,36 @@ export const useCloudStore = create<CloudState>((set, get) => ({
       authorizations: [],
       units: [],
       notices: [],
+      lastSeq: 0,
+      agentStatus: 'idle',
+      canStopReply: false,
+      error: null,
     })
   },
 
   reconnect: async () => {
-    const result = await api.cloudReconnect()
-    if (!result.success) {
-      set({ error: result.error ?? 'Reconnect failed' })
-      return
+    try {
+      const result = await api.cloudReconnect()
+      if (!result.success) {
+        set({ error: result.error ?? 'Reconnect failed' })
+        return
+      }
+      if (result.state) set({ deviceState: result.state })
+      await get().openClient()
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : String(error) })
     }
-    if (result.state) set({ deviceState: result.state })
-    await get().openClient()
   },
 
   openClient: async () => {
     if (!get().link.linked) return
-    const result = await api.cloudClientOpen()
-    if (result.state) set({ clientState: result.state })
-    if (!result.success) set({ error: result.error ?? null })
+    try {
+      const result = await api.cloudClientOpen()
+      if (result.state) set({ clientState: result.state })
+      if (!result.success) set({ error: result.error ?? null })
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : String(error) })
+    }
   },
 
   say: async (text) => {
@@ -368,15 +389,15 @@ export const useCloudStore = create<CloudState>((set, get) => ({
 
     if (frame.type === 'event') {
       const event = frame.event ?? {}
-      if (typeof frame.seq === 'number') {
-        set((state) => (frame.seq > state.lastSeq ? { lastSeq: frame.seq } : {}))
-      }
+      const seqPatch = (state: CloudState): Partial<CloudState> =>
+        typeof frame.seq === 'number' && frame.seq > state.lastSeq ? { lastSeq: frame.seq } : {}
       switch (event.type) {
         case 'message_start': {
           const id = String(event.messageId ?? messageId())
           const isUser = event.role === 'user'
           set((state) => {
-            if (state.messages.some((row) => row.id === id)) return {}
+            const seq = seqPatch(state)
+            if (state.messages.some((row) => row.id === id)) return seq
             // 服务端回显的用户消息 id 是 `u-<clientMessageId>`，而本端已经乐观追加过一条
             // 以 clientMessageId 为 id 的气泡；这里把本地那条的 id 改成服务端 id，
             // 否则同一个句子会出现两个气泡（后续 message_end / 编辑也找不到它）
@@ -386,10 +407,11 @@ export const useCloudStore = create<CloudState>((set, get) => ({
               if (index >= 0) {
                 const messages = state.messages.slice()
                 messages[index] = { ...messages[index], id }
-                return { messages }
+                return { ...seq, messages }
               }
             }
             return {
+              ...seq,
               messages: [
                 ...state.messages,
                 {
@@ -407,7 +429,12 @@ export const useCloudStore = create<CloudState>((set, get) => ({
         }
         case 'text_delta': {
           const delta = String(event.delta ?? '')
-          if (!delta) return
+          if (!delta) {
+            if (typeof frame.seq === 'number') {
+              set((state) => seqPatch(state))
+            }
+            return
+          }
           set((state) => {
             const messages = state.messages.slice()
             const last = messages[messages.length - 1]
@@ -423,7 +450,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
                 traces: [],
               })
             }
-            return { messages: messages.slice(-400) }
+            return { ...seqPatch(state), messages: messages.slice(-400) }
           })
           return
         }
@@ -439,7 +466,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
                 streaming: false,
                 error: event.error,
               }
-              return { messages }
+              return { ...seqPatch(state), messages }
             }
             for (let index = messages.length - 1; index >= 0; index -= 1) {
               const row = messages[index]
@@ -452,7 +479,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
               }
               break
             }
-            return { messages }
+            return { ...seqPatch(state), messages }
           })
           return
         }
@@ -493,25 +520,33 @@ export const useCloudStore = create<CloudState>((set, get) => ({
             const updated: CloudChatRow = { ...row, traces: traces.slice(-30) }
             if (sameRow) messages[lastIndex] = updated
             else messages.push(updated)
-            return { messages: messages.slice(-400) }
+            return { ...seqPatch(state), messages: messages.slice(-400) }
           })
           return
         }
         case 'cloud_status':
-          set({
+          set((state) => ({
+            ...seqPatch(state),
             agentStatus: event.status ?? 'idle',
             canStopReply: event.status === 'thinking' || event.status === 'replying',
-          })
+          }))
           return
         case 'task': {
           const row = toTaskRow(event.task)
-          if (row) set((state) => ({ tasks: upsertById(state.tasks, row) }))
+          set((state) => ({
+            ...seqPatch(state),
+            ...(row ? { tasks: upsertById(state.tasks, row) } : {}),
+          }))
           return
         }
         case 'device': {
           const device = event.device
-          if (!device) return
+          if (!device) {
+            if (typeof frame.seq === 'number') set((state) => seqPatch(state))
+            return
+          }
           set((state) => ({
+            ...seqPatch(state),
             devices: upsertById(state.devices, {
               id: String(device.id ?? ''),
               name: String(device.name ?? device.id ?? ''),
@@ -525,11 +560,15 @@ export const useCloudStore = create<CloudState>((set, get) => ({
         }
         case 'unit': {
           const row = toUnitRow(event.unit)
-          if (row) set((state) => ({ units: upsertUnit(state.units, row) }))
+          set((state) => ({
+            ...seqPatch(state),
+            ...(row ? { units: upsertUnit(state.units, row) } : {}),
+          }))
           return
         }
         case 'notice': {
           set((state) => ({
+            ...seqPatch(state),
             notices: [
               {
                 level: event.level ?? 'info',
@@ -543,6 +582,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
           return
         }
         default:
+          if (typeof frame.seq === 'number') set((state) => seqPatch(state))
           return
       }
     }
@@ -556,14 +596,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
   },
 
   applyDeviceState: (state) => set({ deviceState: state }),
-  applyClientState: (state) => {
-    if (state.status === 'open') {
-      // 重连成功：先拉快照，避免增量缺口
-      set({ clientState: state })
-      return
-    }
-    set({ clientState: state })
-  },
+  applyClientState: (state) => set({ clientState: state }),
 }))
 
 /** 判断两行是不是同一个对象引用（trace 里用来决定追加还是覆盖） */

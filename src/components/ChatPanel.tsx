@@ -318,6 +318,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                         useChatStore.getState().removePending(activeKey, item.id)
                         void handleSubmit(undefined, item.text, {
                           images: item.images,
+                          attachments: item.attachments,
                           consumeAttachments: false,
                         })
                       }}

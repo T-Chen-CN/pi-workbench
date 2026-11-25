@@ -7,7 +7,7 @@
  * - 画布本身（平移 / 缩放 / 拖动 / 落盘）在 `RepoMapCanvas` 里，面板只持有工具条状态。
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   GitBranch,
@@ -105,16 +105,24 @@ export const WorkspacePanel = React.memo(function WorkspacePanel({
 
   const files = state.files
 
+  const undescribedPaths = useMemo(() => {
+    const set = new Set<string>()
+    for (const file of files) {
+      if (!file.described) set.add(file.path)
+    }
+    return set
+  }, [files])
+
   const ensureDescribed = useCallback(
     (paths: string[]) => {
       if (!state.truncated) return
       const missing = paths
-        .filter((path) => files.some((file) => file.path === path && !file.described))
+        .filter((filePath) => undescribedPaths.has(filePath))
         .slice(0, DESCRIBE_BATCH)
       if (missing.length === 0) return
       void scan(workspacePath, { paths: missing })
     },
-    [files, scan, state.truncated, workspacePath]
+    [undescribedPaths, scan, state.truncated, workspacePath]
   )
 
   const openFile = useCallback(

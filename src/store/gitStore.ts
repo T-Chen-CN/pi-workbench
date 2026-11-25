@@ -205,9 +205,13 @@ export const useGitStore = create<GitState>((set, get) => ({
 
   loadBranches: async (workspaceDir) => {
     if (typeof api.gitBranches !== 'function') return
-    const result = await api.gitBranches(workspaceDir)
-    if (result.success) {
-      set((state) => patch(state, workspaceDir, { branches: result.branches ?? [] }))
+    try {
+      const result = await api.gitBranches(workspaceDir)
+      if (result.success) {
+        set((state) => patch(state, workspaceDir, { branches: result.branches ?? [] }))
+      }
+    } catch {
+      // 忽略瞬时 IPC 异常，避免未捕获拒绝
     }
   },
 
@@ -337,17 +341,25 @@ export const useGitStore = create<GitState>((set, get) => ({
 
   loadCommits: async (workspaceDir, limit = 200, branch, all = true) => {
     if (typeof api.gitLog !== 'function') return
-    const result = await api.gitLog(workspaceDir, limit, branch, all)
-    if (result.success) {
-      set((state) => patch(state, workspaceDir, { commits: result.commits ?? [] }))
+    try {
+      const result = await api.gitLog(workspaceDir, limit, branch, all)
+      if (result.success) {
+        set((state) => patch(state, workspaceDir, { commits: result.commits ?? [] }))
+      }
+    } catch {
+      // 忽略瞬时 IPC 异常
     }
   },
 
   loadCommitStats: async (workspaceDir, limit = 200, branch, all = true) => {
     if (typeof api.gitCommitStats !== 'function') return
-    const result = await api.gitCommitStats(workspaceDir, limit, branch, all)
-    if (result.success) {
-      set((state) => patch(state, workspaceDir, { stats: result.stats ?? {} }))
+    try {
+      const result = await api.gitCommitStats(workspaceDir, limit, branch, all)
+      if (result.success) {
+        set((state) => patch(state, workspaceDir, { stats: result.stats ?? {} }))
+      }
+    } catch {
+      // 忽略瞬时 IPC 异常
     }
   },
 

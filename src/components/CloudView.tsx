@@ -49,6 +49,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
   const [authorizeOpen, setAuthorizeOpen] = useState(false)
   const [answerDraft, setAnswerDraft] = useState<Record<string, string>>({})
   const transcriptRef = useRef<HTMLDivElement | null>(null)
+  const stickToBottomRef = useRef(true)
 
   useEffect(() => {
     void store.init()
@@ -56,12 +57,22 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 贴底：只有本来就在底部附近才跟随流式输出
+  // 贴底：按滚动事件提前记录是否在底部附近，避免单条 >64px 消息更新后才测量导致断跟随
   useEffect(() => {
     const element = transcriptRef.current
     if (!element) return
-    const distance = element.scrollHeight - element.scrollTop - element.clientHeight
-    if (distance < 64) element.scrollTop = element.scrollHeight
+    const onScroll = () => {
+      const distance = element.scrollHeight - element.scrollTop - element.clientHeight
+      stickToBottomRef.current = distance < 64
+    }
+    element.addEventListener('scroll', onScroll, { passive: true })
+    return () => element.removeEventListener('scroll', onScroll)
+  }, [])
+
+  useEffect(() => {
+    const element = transcriptRef.current
+    if (!element || !stickToBottomRef.current) return
+    element.scrollTop = element.scrollHeight
   }, [store.messages])
 
   const statusLabel = useMemo(() => {
@@ -95,6 +106,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
   const send = () => {
     const body = draft.trim()
     if (!body) return
+    stickToBottomRef.current = true
     setDraft('')
     void store.say(body)
   }

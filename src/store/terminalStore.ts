@@ -46,6 +46,8 @@ const listeners = new Map<string, Set<(chunk: string) => void>>()
 const owners = new Map<string, string>()
 /** 创建中的工作区，避免可见性抖动时重复建 PTY */
 const pending = new Set<string>()
+/** 回放缓冲放模块级非响应式 Map：高频终端输出不克隆 Zustand 状态、不触发 React 重渲染 */
+const replayBuffers = new Map<string, { chunks: string[]; bytes: number }>()
 let bridgeOff: (() => void) | null = null
 
 function emptyEntry(cwd: string | null): TerminalEntry {
@@ -68,19 +70,18 @@ function emit(workspacePath: string, chunk: string): void {
 }
 
 function appendChunk(workspacePath: string, chunk: string): void {
-  useTerminalStore.setState((state) => {
-    const entry = state.byWorkspace[workspacePath]
-    if (!entry) return state
-    const buffer = [...entry.buffer, chunk]
-    let bufferBytes = entry.bufferBytes + chunk.length
-    while (bufferBytes > REPLAY_LIMIT_BYTES && buffer.length > 1) {
-      bufferBytes -= buffer[0].length
-      buffer.shift()
-    }
-    return {
-      byWorkspace: { ...state.byWorkspace, [workspacePath]: { ...entry, buffer, bufferBytes } }
-    }
-  })
+  if (!useTerminalStore.getState().byWorkspace[workspacePath]) return
+  let buf = replayBuffers.get(workspacePath)
+  if (!buf) {
+    buf = { chunks: [], bytes: 0 }
+    replayBuffers.set(workspacePath, buf)
+  }
+  buf.chunks.push(chunk)
+  buf.bytes += chunk.length
+  while (buf.bytes > REPLAY_LIMIT_BYTES && buf.chunks.length > 1) {
+    buf.bytes -= buf.chunks[0].length
+    buf.chunks.shift()
+  }
 }
 
 function ensureBridge(): void {
@@ -223,6 +224,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       void api.terminalClose(entry.id)
     }
     listeners.delete(workspacePath)
+    replayBuffers.delete(workspacePath)
     set((state) => {
       const byWorkspace = { ...state.byWorkspace }
       delete byWorkspace[workspacePath]
@@ -239,12 +241,13 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
     }
     pending.clear()
     listeners.clear()
+    replayBuffers.clear()
     bridgeOff?.()
     set({ byWorkspace: {} })
   }
 }))
 
-/** 订阅某个工作区的实时输出（面板独享，回放用 store 里的缓冲） */
+/** 订阅某个工作区的实时输出（面板独享，回放用模块级缓冲） */
 export function subscribeTerminalData(workspacePath: string, listener: (chunk: string) => void): () => void {
   const set = listeners.get(workspacePath) ?? new Set()
   set.add(listener)
@@ -257,8 +260,8 @@ export function subscribeTerminalData(workspacePath: string, listener: (chunk: s
 
 /** 回放缓冲（拼接后的 ANSI 原文） */
 export function terminalReplay(workspacePath: string): string {
-  const entry = useTerminalStore.getState().byWorkspace[workspacePath]
-  return entry ? entry.buffer.join('') : ''
+  const buf = replayBuffers.get(workspacePath)
+  return buf ? buf.chunks.join('') : ''
 }
 
 /** 当前 PTY id（快捷方法，避免面板订阅整个 entry） */

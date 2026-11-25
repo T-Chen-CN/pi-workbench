@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Copy, ExternalLink } from 'lucide-react'
 import { piAgentAPI } from '../api/piAgentAPI'
 import type { ToolResultMeta } from '../types/electron'
@@ -44,15 +44,18 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
   const [showImage, setShowImage] = useState(false)
   const [opening, setOpening] = useState(false)
   const [started, setStarted] = useState(false)
+  const loadTokenRef = useRef(0)
 
   const loadText = useCallback(
     async (total: number) => {
+      const token = ++loadTokenRef.current
       setLoading(true)
       setError(null)
       let offset = 0
       let acc = ''
       try {
         for (;;) {
+          if (loadTokenRef.current !== token) return
           const chunk = await piAgentAPI.readToolResultChunk(
             workspacePath,
             sessionId,
@@ -60,6 +63,7 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
             offset,
             CHUNK_CHARS
           )
+          if (loadTokenRef.current !== token) return
           if (!chunk.success) {
             setError(chunk.error ?? t('toolResultLoadFailed', { error: '' }))
             break
@@ -71,10 +75,13 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
           offset = next
           if (total > 0) setProgress(Math.min(99, Math.round((offset / total) * 100)))
         }
+        if (loadTokenRef.current !== token) return
         setProgress(100)
       } finally {
-        setText(acc)
-        setLoading(false)
+        if (loadTokenRef.current === token) {
+          setText(acc)
+          setLoading(false)
+        }
       }
     },
     [workspacePath, sessionId, toolCallId, t]
@@ -123,6 +130,7 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
 
     return () => {
       cancelled = true
+      loadTokenRef.current += 1
     }
   }, [workspacePath, sessionId, toolCallId, loadText, t])
 
@@ -339,14 +347,13 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
                 )}
               />
             </div>
-            {matches !== null && rows.length === 0 && (
-              <Caption className="text-ink-muted">{t('toolResultNoMatches')}</Caption>
-            )}
           </>
         )}
 
         {!loading && !error && started && rows.length === 0 && (
-          <Caption className="text-ink-muted">{t('toolResultEmpty')}</Caption>
+          <Caption className="text-ink-muted">
+            {matches !== null ? t('toolResultNoMatches') : t('toolResultEmpty')}
+          </Caption>
         )}
       </div>
 

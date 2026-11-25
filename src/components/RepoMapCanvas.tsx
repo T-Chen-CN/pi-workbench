@@ -517,6 +517,7 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
         }
         window.addEventListener('pointermove', onWindowPointerMove)
         window.addEventListener('pointerup', onWindowPointerUp, { once: true })
+        window.addEventListener('pointercancel', onWindowPointerUp, { once: true })
       },
       [chainPositions, chainResult, onWindowPointerMove, onWindowPointerUp]
     )
@@ -556,6 +557,8 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
 
     dragEndRef.current = () => {
       window.removeEventListener('pointermove', onWindowPointerMove)
+      window.removeEventListener('pointerup', onWindowPointerUp)
+      window.removeEventListener('pointercancel', onWindowPointerUp)
       const drag = dragRef.current
       dragRef.current = null
       hideGuides()
@@ -606,6 +609,8 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
 
     panEndRef.current = () => {
       window.removeEventListener('pointermove', onWindowPointerMove)
+      window.removeEventListener('pointerup', onWindowPointerUp)
+      window.removeEventListener('pointercancel', onWindowPointerUp)
       const pan = panRef.current
       if (!pan) return
       panRef.current = null
@@ -642,7 +647,19 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       }
       window.addEventListener('pointermove', onWindowPointerMove)
       window.addEventListener('pointerup', onWindowPointerUp, { once: true })
+      window.addEventListener('pointercancel', onWindowPointerUp, { once: true })
     }
+
+    // 卸载时强制清理残留拖拽/平移监听，防止中途卸载泄漏 window 监听
+    useEffect(() => {
+      return () => {
+        window.removeEventListener('pointermove', onWindowPointerMove)
+        window.removeEventListener('pointerup', onWindowPointerUp)
+        window.removeEventListener('pointercancel', onWindowPointerUp)
+        dragRef.current = null
+        panRef.current = null
+      }
+    }, [onWindowPointerMove, onWindowPointerUp])
 
     const zoomBy = useCallback(
       (factor: number) => {

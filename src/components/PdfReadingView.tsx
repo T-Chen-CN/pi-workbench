@@ -36,32 +36,35 @@ interface PdfPageProps {
   scale: number
   size: PageSize
   onSize: (pageNumber: number, size: PageSize) => void
+  observePage: (element: HTMLElement, onVisibility: (visible: boolean) => void) => () => void
 }
 
 /**
  * 单页渲染：只有进入视口（含 ±2 页缓冲）才画 canvas，离开后保留占位与最后一次画面。
  * 缩放变化时取消未完成的渲染任务，避免旧分辨率拖住主线程。
  */
-const PdfPage: React.FC<PdfPageProps> = ({ document, pageNumber, scale, size, onSize }) => {
+const PdfPage: React.FC<PdfPageProps> = ({
+  document,
+  pageNumber,
+  scale,
+  size,
+  onSize,
+  observePage,
+}) => {
   const holderRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [visible, setVisible] = useState(false)
+  const pageWidth = size.width
+  const pageHeight = size.height
 
   useEffect(() => {
     const holder = holderRef.current
-    if (!holder || typeof IntersectionObserver === 'undefined') {
+    if (!holder) {
       setVisible(true)
       return
     }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) setVisible(entry.isIntersecting)
-      },
-      { rootMargin: '120% 0px' }
-    )
-    observer.observe(holder)
-    return () => observer.disconnect()
-  }, [])
+    return observePage(holder, setVisible)
+  }, [observePage])
 
   useEffect(() => {
     if (!visible) return
@@ -70,8 +73,8 @@ const PdfPage: React.FC<PdfPageProps> = ({ document, pageNumber, scale, size, on
     const canvasAtStart = canvasRef.current
     if (canvasAtStart) {
       // 缩放变化时先把绘制尺寸拉到新值：旧分辨率的位图不会短暂拉伸，也不用等 getPage
-      canvasAtStart.style.width = `${Math.round(size.width * scale)}px`
-      canvasAtStart.style.height = `${Math.round(size.height * scale)}px`
+      canvasAtStart.style.width = `${Math.round(pageWidth * scale)}px`
+      canvasAtStart.style.height = `${Math.round(pageHeight * scale)}px`
       canvasAtStart.dataset.rendered = 'false'
     }
 
@@ -113,12 +116,12 @@ const PdfPage: React.FC<PdfPageProps> = ({ document, pageNumber, scale, size, on
       if (canvas) {
         canvas.width = 0
         canvas.height = 0
-        canvas.style.width = `${Math.round(size.width * scale)}px`
-        canvas.style.height = `${Math.round(size.height * scale)}px`
+        canvas.style.width = `${Math.round(pageWidth * scale)}px`
+        canvas.style.height = `${Math.round(pageHeight * scale)}px`
         delete canvas.dataset.rendered
       }
     }
-  }, [document, pageNumber, scale, size, visible, onSize])
+  }, [document, pageNumber, scale, pageWidth, pageHeight, visible, onSize])
 
   return (
     <div
@@ -152,6 +155,44 @@ export const PdfReadingView: React.FC<{ file: OpenFile }> = ({ file }) => {
   const [failed, setFailed] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const frameRef = useRef<number | null>(null)
+  // 所有页共用一个 IntersectionObserver，避免 200 页 PDF 创建 200 个 observer
+  const pageVisibilityHandlersRef = useRef(new WeakMap<Element, (visible: boolean) => void>())
+  const sharedObserverRef = useRef<IntersectionObserver | null>(null)
+
+  const observePage = useCallback(
+    (element: HTMLElement, onVisibility: (visible: boolean) => void) => {
+      if (typeof IntersectionObserver === 'undefined') {
+        onVisibility(true)
+        return () => {}
+      }
+      if (!sharedObserverRef.current) {
+        sharedObserverRef.current = new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              pageVisibilityHandlersRef.current.get(entry.target)?.(entry.isIntersecting)
+            }
+          },
+          { rootMargin: '120% 0px' }
+        )
+      }
+      const observer = sharedObserverRef.current
+      pageVisibilityHandlersRef.current.set(element, onVisibility)
+      observer.observe(element)
+      return () => {
+        observer.unobserve(element)
+        pageVisibilityHandlersRef.current.delete(element)
+      }
+    },
+    []
+  )
+
+  useEffect(
+    () => () => {
+      sharedObserverRef.current?.disconnect()
+      sharedObserverRef.current = null
+    },
+    []
+  )
 
   const openExternal = async () => {
     const result = await api.openPathExternally(file.path)
@@ -392,6 +433,7 @@ export const PdfReadingView: React.FC<{ file: OpenFile }> = ({ file }) => {
                 scale={scale}
                 size={sizeFor(index + 1)}
                 onSize={handlePageSize}
+                observePage={observePage}
               />
             ))}
           </div>

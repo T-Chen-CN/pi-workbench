@@ -103,11 +103,18 @@ export const MonacoEditor = React.memo(function MonacoEditor({
 }) {
   const root = viewRoot ?? workspacePath
   const store = editorStoreFor(root)
+  const storeRef = useRef(store)
+  storeRef.current = store
   const { t } = useI18nStore()
   const resolvedTheme = useResolvedTheme()
   const editorRef = useRef<HTMLDivElement>(null)
   const monacoRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
-  const { currentFile, openFiles, pendingReveal, consumeReveal } = useEditorStore(root)
+  const currentFile = useEditorStore(root, (state) => state.currentFile)
+  const openFilePathsKey = useEditorStore(root, (state) =>
+    state.openFiles.map((file) => file.path).join('\0')
+  )
+  const pendingReveal = useEditorStore(root, (state) => state.pendingReveal)
+  const consumeReveal = useEditorStore(root, (state) => state.consumeReveal)
   // 每个文件一个 model：切换标签时保留撤销栈、光标与滚动位置
   const modelsRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map())
   /** 每个 model 里当前内容的来源（store 里的那一份）：按键级比较靠引用相等，不必回读全文 */
@@ -207,10 +214,10 @@ export const MonacoEditor = React.memo(function MonacoEditor({
     })
     monacoRef.current = editor
 
-    // 同步当前选区，供聊天面板附加片段
+    // 同步当前选区，供聊天面板附加片段（通过 storeRef 避免切换 worktree 后读旧 store）
     selectionSubRef.current?.dispose()
     selectionSubRef.current = editor.onDidChangeCursorSelection(() => {
-      const file = store.getState().currentFile
+      const file = storeRef.current.getState().currentFile
       const editorModel = editor.getModel()
       const range = editor.getSelection()
       if (!file || !editorModel || editorModel.isDisposed() || !range) {
@@ -319,7 +326,10 @@ export const MonacoEditor = React.memo(function MonacoEditor({
       editor.setModel(model)
       editor.restoreViewState(viewStatesRef.current.get(currentFile.path) ?? null)
     }
-    monaco.editor.setModelLanguage(model, detectLanguage(currentFile.name))
+    const nextLang = detectLanguage(currentFile.name)
+    if (model.getLanguageId?.() !== nextLang) {
+      monaco.editor.setModelLanguage(model, nextLang)
+    }
     activePathRef.current = currentFile.path
   }, [currentFile, editorReady, getOrCreateModel])
   // 打开带行号的路径后滚动到该行并高亮（R-09）
@@ -338,9 +348,9 @@ export const MonacoEditor = React.memo(function MonacoEditor({
     consumeReveal()
   }, [pendingReveal, currentFile, editorReady, consumeReveal])
 
-  // 标签关闭后释放对应 model，避免撤销栈和内容长期占用内存
+  // 标签关闭后释放对应 model，避免撤销栈和内容长期占用内存（只随打开路径集合变化，不在每次击键扫描）
   useEffect(() => {
-    const openPaths = new Set(openFiles.map((file) => file.path))
+    const openPaths = new Set(openFilePathsKey ? openFilePathsKey.split('\0') : [])
     for (const [filePath, model] of [...modelsRef.current.entries()]) {
       if (!openPaths.has(filePath)) {
         if (!model.isDisposed()) model.dispose()
@@ -349,7 +359,7 @@ export const MonacoEditor = React.memo(function MonacoEditor({
         viewStatesRef.current.delete(filePath)
       }
     }
-  }, [openFiles])
+  }, [openFilePathsKey])
 
   // 容器尺寸变化时重新布局（编辑器可能在面板尺寸或可见性变化时创建 / 恢复）
   useEffect(() => {

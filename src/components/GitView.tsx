@@ -314,7 +314,10 @@ const FilterChip: React.FC<{
   </button>
 )
 
-export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) => {
+export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
+  workspacePath,
+  active = true,
+}) => {
   const { t, language } = useI18nStore()
   const panelMenu = usePanelContextMenu('git')
   const [githubLinked, setGithubLinked] = useState<boolean | null>(null)
@@ -432,38 +435,45 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
 
   useEffect(() => {
     if (typeof api.onAgentSessionRootChanged !== 'function') return
+    const norm = (value: string) => {
+      const unix = value.replace(/\\/g, '/').replace(/\/+$/, '')
+      return /^[A-Za-z]:\//.test(unix) ? unix.toLowerCase() : unix
+    }
+    const target = norm(workspacePath)
     return api.onAgentSessionRootChanged(({ workspaceDir, sessionId }) => {
-      if (workspaceDir !== workspacePath) return
-      const active = useSessionStore.getState().byWorkspace[workspacePath]?.active ?? null
-      if (sessionId === active) void load(workspacePath, active)
+      if (norm(workspaceDir) !== target) return
+      const activeId = useSessionStore.getState().byWorkspace[workspacePath]?.active ?? null
+      if (sessionId === activeId) void load(workspacePath, activeId)
     })
   }, [workspacePath, load])
 
   useEffect(() => {
-    let active = true
+    let mounted = true
     const check = async () => {
       try {
         const result = await api.githubAuthStatus()
-        if (active) setGithubLinked(Boolean(result.success && result.configured))
+        if (mounted) setGithubLinked(Boolean(result.success && result.configured))
       } catch {
-        if (active) setGithubLinked(false)
+        if (mounted) setGithubLinked(false)
       }
     }
-    void check()
+    if (active) void check()
     const off =
       typeof api.onGithubAuthComplete === 'function'
         ? api.onGithubAuthComplete((payload) => {
             if (payload.success) setGithubLinked(true)
           })
         : () => {}
-    const onFocus = () => void check()
-    window.addEventListener('focus', onFocus)
+    const onFocus = () => {
+      if (active) void check()
+    }
+    if (active) window.addEventListener('focus', onFocus)
     return () => {
-      active = false
+      mounted = false
       off()
       window.removeEventListener('focus', onFocus)
     }
-  }, [])
+  }, [active])
 
   const refreshLocal = useCallback(() => {
     void load(workspacePath, activeSessionId)
@@ -657,10 +667,14 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
     })
   }, [commits, language, t])
 
+  const resizeCleanupRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => resizeCleanupRef.current?.(), [])
+
   const beginResize = useCallback(
     (key: ColumnKey) => (event: React.PointerEvent<HTMLElement>) => {
       event.preventDefault()
       event.stopPropagation()
+      resizeCleanupRef.current?.()
       const table = tableRef.current
       const tableLeft = table?.getBoundingClientRect().left ?? 0
       const handleRect = event.currentTarget.getBoundingClientRect()
@@ -684,7 +698,9 @@ export const GitView: React.FC<{ workspacePath: string }> = ({ workspacePath }) 
         window.removeEventListener('pointercancel', onUp)
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
+        if (resizeCleanupRef.current === onUp) resizeCleanupRef.current = null
       }
+      resizeCleanupRef.current = onUp
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
       window.addEventListener('pointermove', onMove)

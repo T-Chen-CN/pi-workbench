@@ -18,24 +18,40 @@ const RELOAD_DEBOUNCE_MS = 500
  * 才能按原始目录结构解析。iframe 不带 `allow-same-origin`：
  * 文档运行在不透明源里，拿不到父窗口与 Electron API，脚本仍可执行。
  */
-export const HtmlPreview: React.FC<{ file: OpenFile }> = ({ file }) => {
+export const HtmlPreview: React.FC<{ file: OpenFile; visible?: boolean }> = ({
+  file,
+  visible = true,
+}) => {
   const { t } = useI18nStore()
   const [reloadKey, setReloadKey] = useState(0)
   const lastPathRef = useRef(file.path)
   const lastContentRef = useRef(file.content)
+  const pendingReloadRef = useRef(false)
 
   useEffect(() => {
     if (file.path !== lastPathRef.current) {
       lastPathRef.current = file.path
       lastContentRef.current = file.content
+      pendingReloadRef.current = false
       setReloadKey(0)
       return
     }
     if (file.content === lastContentRef.current) return
     lastContentRef.current = file.content
+    // 源码编辑且预览隐藏时不后台重建 iframe，切回预览时补刷一次
+    if (!visible) {
+      pendingReloadRef.current = true
+      return
+    }
     const timer = setTimeout(() => setReloadKey((value) => value + 1), RELOAD_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [file.content, file.path])
+  }, [file.content, file.path, visible])
+
+  useEffect(() => {
+    if (!visible || !pendingReloadRef.current) return
+    pendingReloadRef.current = false
+    setReloadKey((value) => value + 1)
+  }, [visible])
 
   const openExternal = async () => {
     const result = await api.openPathExternally(file.path)

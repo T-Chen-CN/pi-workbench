@@ -194,24 +194,31 @@ export const FileExplorer: React.FC<{
     )
   }, [])
 
+  const loadSeqRef = useRef(0)
+
   const loadRootDirectory = useCallback(
     async (rootPath: string) => {
+      const seq = ++loadSeqRef.current
       try {
         setLoading(true)
         setError(null)
         const dirResult = await api.listDirectory(rootPath)
+        if (loadSeqRef.current !== seq) return
         if (dirResult.success && dirResult.items) {
           const merged = mergeTree(treeRef.current, sortTreeEntries(dirResult.items, sortOptionsRef.current))
-          setTree(await refreshExpanded(merged))
+          const refreshed = await refreshExpanded(merged)
+          if (loadSeqRef.current !== seq) return
+          setTree(refreshed)
         } else {
           setError(dirResult.error || 'Failed to list workspace directory')
         }
       } catch (err) {
+        if (loadSeqRef.current !== seq) return
         const errorMsg = err instanceof Error ? err.message : String(err)
         setError(localizeError(errorMsg))
         toast.error(t('loadWorkspaceFailed', { error: localizeError(errorMsg) }))
       } finally {
-        setLoading(false)
+        if (loadSeqRef.current === seq) setLoading(false)
       }
     },
     [refreshExpanded, t]
@@ -288,8 +295,12 @@ export const FileExplorer: React.FC<{
     }
     const unsubscribe = api.onFsChanged((payload) => {
       if (payload.type !== 'rename') return
-      const root = workspacePath.replace(/\\/g, '/')
-      const changed = payload.path.replace(/\\/g, '/')
+      const norm = (value: string) => {
+        const unix = value.replace(/\\/g, '/').replace(/\/+$/, '')
+        return /^[A-Za-z]:\//.test(unix) ? unix.toLowerCase() : unix
+      }
+      const root = norm(workspacePath)
+      const changed = norm(payload.path)
       if (changed !== root && !changed.startsWith(`${root}/`)) return
       scheduleRefresh()
     })

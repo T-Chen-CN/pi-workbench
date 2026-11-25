@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { ExternalLink, Minimize2, Maximize2 } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
@@ -14,6 +14,10 @@ export const MediaView: React.FC<{ file: OpenFile }> = ({ file }) => {
   const [failed, setFailed] = useState(false)
   const [fit, setFit] = useState(true)
   const src = filePreviewUrl(file.path, file.version)
+
+  useEffect(() => {
+    setFailed(false)
+  }, [file.path, file.version])
 
   const openExternal = async () => {
     const result = await api.openPathExternally(file.path)

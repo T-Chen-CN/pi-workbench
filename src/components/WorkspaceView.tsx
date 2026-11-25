@@ -255,9 +255,13 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
     })
   }, [workspacePath])
 
+  const resizeCleanupRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => resizeCleanupRef.current?.(), [])
+
   const startResize = useCallback(
     (target: 'sidebar' | 'chat') => (event: ReactPointerEvent<HTMLDivElement>) => {
       event.preventDefault()
+      resizeCleanupRef.current?.()
       const startX = event.clientX
       const initial =
         target === 'sidebar' ? Math.min(sidebarWidths[sidebarTab], maxSidebarWidth(sidebarTab)) : chatWidthShown
@@ -271,14 +275,18 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
           setChatWidth(clamp(initial - delta, CHAT_MIN, maxChatWidth()))
         }
       }
-      const onUp = () => {
+      const cleanup = () => {
         window.removeEventListener('pointermove', onMove)
-        window.removeEventListener('pointerup', onUp)
+        window.removeEventListener('pointerup', cleanup)
+        window.removeEventListener('pointercancel', cleanup)
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
+        if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null
       }
+      resizeCleanupRef.current = cleanup
       window.addEventListener('pointermove', onMove)
-      window.addEventListener('pointerup', onUp)
+      window.addEventListener('pointerup', cleanup)
+      window.addEventListener('pointercancel', cleanup)
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
     },
@@ -329,20 +337,24 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
               {(sidebarTab === 'files' || filesDetached) && (
                 <div className={sidebarTab === 'files' ? 'h-full' : 'hidden'} aria-hidden={sidebarTab !== 'files'}>
                   <PanelSlot panel="files">
-                    <FileExplorer
-                      workspacePath={viewRoot}
-                      onCollapse={filesDetached ? undefined : collapseSidebar}
-                      collapseButtonRef={sidebarCollapseRef}
-                      panelId={filePanelId}
-                      active={active || filesDetached}
-                    />
+                    <ErrorBoundary scope="pane" resetKey={`${viewRoot}:files`}>
+                      <FileExplorer
+                        workspacePath={viewRoot}
+                        onCollapse={filesDetached ? undefined : collapseSidebar}
+                        collapseButtonRef={sidebarCollapseRef}
+                        panelId={filePanelId}
+                        active={active || filesDetached}
+                      />
+                    </ErrorBoundary>
                   </PanelSlot>
                 </div>
               )}
               {(sidebarTab === 'git' || gitDetached) && (
                 <div className={sidebarTab === 'git' ? 'h-full' : 'hidden'} aria-hidden={sidebarTab !== 'git'}>
                   <PanelSlot panel="git">
-                    <GitView workspacePath={workspacePath} />
+                    <ErrorBoundary scope="pane" resetKey={`${workspacePath}:git`}>
+                      <GitView workspacePath={workspacePath} active={active || gitDetached} />
+                    </ErrorBoundary>
                   </PanelSlot>
                 </div>
               )}
@@ -399,13 +411,15 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
           {terminalMounted && (
             <div className={terminalDetached ? 'hidden' : 'contents'}>
               <PanelSlot panel="terminal">
-                <TerminalPanel
-                  workspacePath={workspacePath}
-                  cwd={viewRoot}
-                  visible={showTerminal}
-                  onClose={terminalDetached ? undefined : () => setShowTerminal(false)}
-                  active={active || terminalDetached}
-                />
+                <ErrorBoundary scope="pane" resetKey={`${workspacePath}:terminal`}>
+                  <TerminalPanel
+                    workspacePath={workspacePath}
+                    cwd={viewRoot}
+                    visible={showTerminal}
+                    onClose={terminalDetached ? undefined : () => setShowTerminal(false)}
+                    active={active || terminalDetached}
+                  />
+                </ErrorBoundary>
               </PanelSlot>
             </div>
           )}

@@ -976,17 +976,15 @@ export function useChatPanelState(props: ChatPanelProps) {
     return () => offAttach()
   }, [activeKey, t, active, workspacePath])
 
-  // 桌面通知点击后激活目标会话（工作区已由 App 切换）
+  // 桌面通知点击后激活目标会话（工作区已由 App 切换）：必须订阅 pendingActivation 并走 handleSelectSession
+  const pendingActivation = useSessionStore((state) => state.pendingActivation)
   useEffect(() => {
-    const pending = useSessionStore.getState().pendingActivation
-    if (!pending || pending.workspaceDir !== workspacePath || !initialized) return
-    if (!sessions.some((session) => session.id === pending.sessionId)) {
-      useSessionStore.getState().clearPendingActivation()
-      return
-    }
-    useSessionStore.getState().setActive(workspacePath, pending.sessionId)
+    if (!pendingActivation || pendingActivation.workspaceDir !== workspacePath || !initialized) return
+    const target = sessions.find((session) => session.id === pendingActivation.sessionId)
     useSessionStore.getState().clearPendingActivation()
-  }, [initialized, sessions, workspacePath])
+    if (!target) return
+    void handleSelectSession(target)
+  }, [pendingActivation, initialized, sessions, workspacePath, handleSelectSession])
 
   /** 运行中插话：把消息（含图片）注入当前轮 */
   const sendSteer = async (
@@ -1384,21 +1382,21 @@ export function useChatPanelState(props: ChatPanelProps) {
       void refreshContextUsage(sessionId)
       void refreshSessionStats(sessionId)
 
-      // 本轮结束：自动发送下一条待发送消息（用户主动停止时不自动发送）
+      // 本轮结束：自动发送下一条待发送消息（用户主动停止时不自动发送；走 submitRef 避免陈旧闭包）
       const queued = useChatStore.getState().conversations[key]?.pending[0]
       if (queued && !stoppedKeysRef.current.has(key)) {
         useChatStore.getState().removePending(key, queued.id)
         forceSendKeysRef.current.add(key)
-        // 附件在入队时已转入排队项，重发只带排队项自己的图片
-        window.setTimeout(
-          () =>
-            void handleSubmit(undefined, queued.text, {
-              images: queued.images,
-              attachments: queued.attachments,
-              consumeAttachments: false,
-            }),
-          0
-        )
+        // 附件在入队时已转入排队项，重发只带排队项自己的图片与附件
+        window.setTimeout(() => {
+          const currentOpen = useWorkspaceStore.getState().openWorkspaces
+          if (currentOpen.length > 0 && !currentOpen.includes(workspacePath)) return
+          void submitRef.current(undefined, queued.text, {
+            images: queued.images,
+            attachments: queued.attachments,
+            consumeAttachments: false,
+          })
+        }, 0)
       }
       const activeNow = useSessionStore.getState().byWorkspace[workspacePath]?.active
       if (succeeded) {
@@ -1602,13 +1600,17 @@ export function useChatPanelState(props: ChatPanelProps) {
 
   const handleModelChange = async (modelId: string) => {
     if (!activeSessionId || !activeKey || !modelId || isLoading) return
-    const previous = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
-    useChatStore
-      .getState()
-      .setSessionSettings(activeKey, { ...previous, modelId })
+    const prevModelId = useChatStore.getState().conversations[activeKey]?.sessionSettings?.modelId
+    useChatStore.getState().setSessionSettings(activeKey, {
+      ...(useChatStore.getState().conversations[activeKey]?.sessionSettings ?? {}),
+      modelId,
+    })
     const result = await piAgentAPI.setSessionModel(workspacePath, activeSessionId, modelId)
     if (!result.success) {
-      useChatStore.getState().setSessionSettings(activeKey, previous)
+      const latest = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
+      if (latest) {
+        useChatStore.getState().setSessionSettings(activeKey, { ...latest, modelId: prevModelId })
+      }
       toast.error(t('modelSwitchFailed', { error: localizeError(result.error ?? '') }))
       return
     }
@@ -1621,13 +1623,20 @@ export function useChatPanelState(props: ChatPanelProps) {
       toast.error(t('modelThinkingUnavailable'))
       return
     }
-    const previous = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
-    useChatStore
-      .getState()
-      .setSessionSettings(activeKey, { ...previous, thinkingLevel: level })
+    const prevLevel =
+      useChatStore.getState().conversations[activeKey]?.sessionSettings?.thinkingLevel
+    useChatStore.getState().setSessionSettings(activeKey, {
+      ...(useChatStore.getState().conversations[activeKey]?.sessionSettings ?? {}),
+      thinkingLevel: level,
+    })
     const result = await piAgentAPI.setSessionThinking(workspacePath, activeSessionId, level)
     if (!result.success) {
-      useChatStore.getState().setSessionSettings(activeKey, previous)
+      const latest = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
+      if (latest) {
+        useChatStore
+          .getState()
+          .setSessionSettings(activeKey, { ...latest, thinkingLevel: prevLevel })
+      }
       toast.error(t('thinkingSwitchFailed', { error: localizeError(result.error ?? '') }))
     }
   }
@@ -1637,17 +1646,26 @@ export function useChatPanelState(props: ChatPanelProps) {
     const sessionId = activeSessionId
     const key = activeKey
     if (!sessionId || !key) return false
-    const previous = useChatStore.getState().conversations[key]?.sessionSettings ?? null
-    useChatStore.getState().setSessionSettings(key, { ...previous, permission: next })
+    const prevPermission = useChatStore.getState().conversations[key]?.sessionSettings?.permission
+    useChatStore.getState().setSessionSettings(key, {
+      ...(useChatStore.getState().conversations[key]?.sessionSettings ?? {}),
+      permission: next,
+    })
     const result = await piAgentAPI.setSessionPermission(workspacePath, sessionId, next)
     if (!result.success || !result.permission) {
-      useChatStore.getState().setSessionSettings(key, previous)
+      const latest = useChatStore.getState().conversations[key]?.sessionSettings ?? null
+      if (latest) {
+        useChatStore
+          .getState()
+          .setSessionSettings(key, { ...latest, permission: prevPermission })
+      }
       toast.error(t('permissionSetFailed', { error: localizeError(result.error ?? '') }))
       return false
     }
-    useChatStore
-      .getState()
-      .setSessionSettings(key, { ...previous, permission: result.permission })
+    useChatStore.getState().setSessionSettings(key, {
+      ...(useChatStore.getState().conversations[key]?.sessionSettings ?? {}),
+      permission: result.permission,
+    })
     return true
   }
 
@@ -1742,6 +1760,16 @@ export function useChatPanelState(props: ChatPanelProps) {
   const handleRetryMessage = useCallback(
     async (message: ChatMessage) => {
       if (!activeSessionId || !activeKey || isLoading) return
+      const existingMessages = useChatStore.getState().conversations[activeKey]?.messages ?? []
+      const msgIndex = existingMessages.findIndex((item) => item.id === message.id)
+      // 图片挂在配对的用户消息上而非 assistant 消息上，回退前先取回用户图片避免丢图
+      let pairedUserImages = message.images
+      for (let i = (msgIndex >= 0 ? msgIndex : existingMessages.length) - 1; i >= 0; i -= 1) {
+        if (existingMessages[i].role === 'user') {
+          pairedUserImages = existingMessages[i].images ?? pairedUserImages
+          break
+        }
+      }
       const result = await piAgentAPI.rewindLastUser(workspacePath, activeSessionId)
       if (!result.success || !result.text) {
         toast.error(t('retryFailed', { error: localizeError(result.error ?? '') }))
@@ -1752,7 +1780,7 @@ export function useChatPanelState(props: ChatPanelProps) {
       const restored = result.context ? contextToAttachments(result.context) : []
       await submitRef.current(undefined, result.text, {
         skipUserMessage: true,
-        images: message.images,
+        images: pairedUserImages,
         ...(restored.length > 0 ? { attachments: restored } : {}),
         consumeAttachments: false,
       })
@@ -1810,11 +1838,19 @@ export function useChatPanelState(props: ChatPanelProps) {
     }
   }
 
-  /** 审批响应：成功即从队列移除并清除会话的待操作标记 */
+  /** 审批响应：成功即从队列移除，仅当该会话再无待审项时清除红点 */
   const handleApprovalResponse = async (
     requestId: string,
     decision: import('../types/electron').ApprovalDecision
   ) => {
+    const clearNeedsActionIfDone = (dir: string, sid: string) => {
+      const remaining = useApprovalStore
+        .getState()
+        .requests.some((item) => item.workspaceDir === dir && item.sessionId === sid)
+      if (!remaining) {
+        useSessionStore.getState().markNeedsAction(dir, sid, null)
+      }
+    }
     const result = await piAgentAPI.respondApproval(requestId, decision)
     if (!result.success) {
       toast.error(
@@ -1825,9 +1861,7 @@ export function useChatPanelState(props: ChatPanelProps) {
         .getState()
         .requests.find((item) => item.requestId === requestId)
       useApprovalStore.getState().remove(requestId)
-      if (stale) {
-        useSessionStore.getState().markNeedsAction(stale.workspaceDir, stale.sessionId, null)
-      }
+      if (stale) clearNeedsActionIfDone(stale.workspaceDir, stale.sessionId)
       return
     }
     const request = useApprovalStore
@@ -1835,7 +1869,7 @@ export function useChatPanelState(props: ChatPanelProps) {
       .requests.find((item) => item.requestId === requestId)
     useApprovalStore.getState().remove(requestId)
     if (request) {
-      useSessionStore.getState().markNeedsAction(request.workspaceDir, request.sessionId, null)
+      clearNeedsActionIfDone(request.workspaceDir, request.sessionId)
       // “始终允许”写入会话权限；重新读取以同步状态行里的授权提示
       if (decision.action === 'allow-always' && request.workspaceDir === workspacePath) {
         void refreshSessionSettings(request.sessionId)

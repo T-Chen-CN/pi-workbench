@@ -141,12 +141,12 @@ export const ChatTranscript: React.FC<ChatTranscriptProps> = ({
                   onRejectPlan={handleRejectPlan}
                   onRetry={
                     !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
-                      ? () => void handleRetryMessage(msg)
+                      ? handleRetryMessage
                       : undefined
                   }
                   onEdit={
                     !isLoading && msg.id === lastUserMessageId
-                      ? () => void handleEditMessage(msg)
+                      ? handleEditMessage
                       : undefined
                   }
                 />

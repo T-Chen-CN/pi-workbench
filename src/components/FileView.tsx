@@ -73,7 +73,8 @@ export const FileView: React.FC<FileViewProps> = ({
   const root = viewRoot ?? workspacePath
   const { t } = useI18nStore()
   const store = editorStoreFor(root)
-  const { currentFile, panelActive } = useEditorStore(root)
+  const currentFile = useEditorStore(root, (state) => state.currentFile)
+  const panelActive = useEditorStore(root, (state) => state.panelActive)
   const { conflicts, reloadFromDisk, keepLocal } = useFileDocument({ workspacePath, root, active })
 
   // Monaco 一经挂载就保留（隐藏而非卸载），这样切回源码视图时撤销栈还在
@@ -181,7 +182,7 @@ export const FileView: React.FC<FileViewProps> = ({
                       active={reading && !panelActive}
                     />
                   ) : (
-                    <HtmlPreview file={currentFile} />
+                    <HtmlPreview file={currentFile} visible={reading && !panelActive && active} />
                   )}
                 </div>
               )}
