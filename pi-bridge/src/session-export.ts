@@ -2,6 +2,17 @@
 
 import type { MessageContext } from './types.js'
 
+/** 离线 HTML 导出允许的位图 MIME 白名单（禁止 image/svg+xml 与属性注入） */
+const SAFE_EXPORT_IMAGE_MIMES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/gif',
+  'image/webp',
+  'image/bmp',
+  'image/avif',
+])
+
 /** 会话导出（R-10）的结构标签 */
 const EXPORT_LABELS = {
   zh: {
@@ -266,8 +277,12 @@ export function buildHtmlExport(
         `<pre>${escapeHtml(part.result)}</pre>`
       )
       for (const image of part.images) {
+        const mime = image.mimeType.trim().toLowerCase()
+        const safeMime = SAFE_EXPORT_IMAGE_MIMES.has(mime) ? mime : null
+        const safeData = typeof image.data === 'string' ? image.data.replace(/[^A-Za-z0-9+/=]/g, '') : ''
+        if (!safeMime || !safeData) continue
         body.push(
-          `<img alt="${labels.image}" src="data:${image.mimeType};base64,${image.data}" />`
+          `<img alt="${escapeHtml(labels.image)}" src="data:${safeMime};base64,${safeData}" />`
         )
       }
       body.push('</details>')

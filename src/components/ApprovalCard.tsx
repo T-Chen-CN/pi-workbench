@@ -28,6 +28,7 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({ request, onRespond, 
   const [denying, setDenying] = useState(false)
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
+  const [expandedCommand, setExpandedCommand] = useState(false)
 
   const respond = async (decision: ApprovalDecision) => {
     if (busy || disabled) return
@@ -65,9 +66,24 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({ request, onRespond, 
       {(details.command || details.preview) && (
         <div className="border-b border-rule-divide px-3 py-2">
           {details.command && (
-            <pre className="m-0 max-h-24 overflow-auto whitespace-pre-wrap break-all border border-rule-divide bg-sunken p-2 type-data text-ink">
-              {details.command}
-            </pre>
+            <div className="flex flex-col gap-1">
+              <pre
+                className={`m-0 overflow-auto whitespace-pre-wrap break-all border border-rule-divide bg-sunken p-2 type-data text-ink ${
+                  expandedCommand ? 'max-h-96' : 'max-h-24'
+                }`}
+              >
+                {details.command}
+              </pre>
+              {details.command.length > 240 && (
+                <button
+                  type="button"
+                  className="self-start type-caption text-ink-muted hover:text-ink"
+                  onClick={() => setExpandedCommand((prev) => !prev)}
+                >
+                  {expandedCommand ? '▲' : '▼'} ({details.command.length})
+                </button>
+              )}
+            </div>
           )}
           {details.preview && (
             <div className="flex flex-col gap-1">

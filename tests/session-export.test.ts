@@ -132,4 +132,30 @@ describe('导出里的引用与附件', () => {
     expect(content).not.toContain('**附件**')
     expect(content).toContain('Fix the build')
   })
+
+  it('blocks SVG and malformed image MIME types in HTML export', () => {
+    const unsafeTurns: ExportTurn[] = [
+      {
+        user: { text: 'look', timestamp: 1000 },
+        parts: [
+          {
+            type: 'tool',
+            name: 'read',
+            args: '{}',
+            result: '',
+            isError: false,
+            images: [
+              { mimeType: 'image/svg+xml', data: 'PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+PC9zdmc+' },
+              { mimeType: 'image/png" onerror="alert(1)', data: 'AAAA' },
+              { mimeType: 'image/png', data: 'iVBORw0KGgo=' },
+            ],
+          },
+        ],
+      },
+    ]
+    const { content } = buildHtmlExport('Img', unsafeTurns, 'en')
+    expect(content).not.toContain('image/svg+xml')
+    expect(content).not.toContain('onerror=')
+    expect(content).toContain('data:image/png;base64,iVBORw0KGgo=')
+  })
 })

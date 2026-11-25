@@ -21,9 +21,18 @@ export function credentialsPath(appDir: string = getAppDir()): string {
 /** 类型走函数返回，避免 electron 侧再声明一份 pi-ai 依赖 */
 export type DesktopCredentialStore = ReturnType<typeof createFileCredentialStore>
 
+/** 按路径共享单例：保证跨工作区 / 后台任务 / 设置页共用同一份 OAuth 刷新互斥锁与写锁 */
+const sharedStores = new Map<string, DesktopCredentialStore>()
+
 export function createDesktopCredentialStore(options: { path?: string } = {}): DesktopCredentialStore {
-  return createFileCredentialStore({
-    path: options.path ?? credentialsPath(),
+  const filePath = path.resolve(options.path ?? credentialsPath())
+  const key = process.platform === 'win32' ? filePath.toLowerCase() : filePath
+  const existing = sharedStores.get(key)
+  if (existing) return existing
+  const created = createFileCredentialStore({
+    path: filePath,
     cipher: { encrypt: encryptSecret, decrypt: decryptSecret },
   })
+  sharedStores.set(key, created)
+  return created
 }

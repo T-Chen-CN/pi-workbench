@@ -67,7 +67,16 @@ async function renameWithRetry(from: string, to: string, attempts = 6): Promise<
   }
 }
 
+export interface SessionExtrasLoadResult {
+  extras: SessionExtras
+  /** 文件存在但主文件与备份均损坏，调用方对安全敏感字段（如权限）必须 fail-closed */
+  corrupted: boolean
+}
+
 export class SessionExtrasStore {
+  /** 按会话串行化写操作，防止标题写入 / legacy 清理 / 正常保存互相踩踏临时文件 */
+  private readonly writeChains = new Map<string, Promise<void>>()
+
   constructor(private readonly baseDir: string) {}
 
   private pathFor(sessionId: string): string {
@@ -76,52 +85,115 @@ export class SessionExtrasStore {
     }
     return path.join(this.baseDir, `${sessionId}.json`)
   }
-  async load(sessionId: string): Promise<SessionExtras> {
-    try {
-      const filePath = this.pathFor(sessionId)
-      const raw = JSON.parse(await fs.readFile(filePath, 'utf-8'))
-      if (!raw || raw.version !== 1) return emptyExtras()
-      const extras: SessionExtras = {
-        version: 1,
-        thinkingDurations:
-          raw.thinkingDurations && typeof raw.thinkingDurations === 'object'
-            ? raw.thinkingDurations
-            : {},
-        branchLeaves:
-          raw.branchLeaves && typeof raw.branchLeaves === 'object' ? raw.branchLeaves : {},
-        plan: isStructuredPlan(raw.plan) ? raw.plan : null,
-        permission:
-          raw.permission && typeof raw.permission === 'object'
-            ? normalizeSessionPermission(raw.permission)
-            : null,
-        title:
-          typeof raw.title === 'string' && raw.title.trim()
-            ? raw.title.trim().slice(0, 80)
-            : null,
-      }
-      // 旧版本 sidecar 保存过完整文件内容；读取后异步重写一次，回收磁盘
-      if (raw.toolEdits && !legacyToolEditsPruned.has(filePath)) {
-        legacyToolEditsPruned.add(filePath)
-        await this.save(sessionId, extras).catch(() => undefined)
-      }
-      return extras
-    } catch {
-      return emptyExtras()
+
+  private parseExtras(raw: unknown): SessionExtras | null {
+    if (!raw || typeof raw !== 'object' || (raw as { version?: unknown }).version !== 1) {
+      return null
+    }
+    const value = raw as Record<string, unknown>
+    return {
+      version: 1,
+      thinkingDurations:
+        value.thinkingDurations && typeof value.thinkingDurations === 'object'
+          ? (value.thinkingDurations as Record<string, number[]>)
+          : {},
+      branchLeaves:
+        value.branchLeaves && typeof value.branchLeaves === 'object'
+          ? (value.branchLeaves as Record<string, string>)
+          : {},
+      plan: isStructuredPlan(value.plan) ? value.plan : null,
+      permission:
+        value.permission && typeof value.permission === 'object'
+          ? normalizeSessionPermission(value.permission)
+          : null,
+      title:
+        typeof value.title === 'string' && value.title.trim()
+          ? value.title.trim().slice(0, 80)
+          : null,
     }
   }
 
-  async save(sessionId: string, extras: SessionExtras): Promise<void> {
-    await fs.mkdir(this.baseDir, { recursive: true })
-    const target = this.pathFor(sessionId)
-    const temp = `${target}.tmp`
-    await fs.writeFile(temp, JSON.stringify(extras), 'utf-8')
-    await renameWithRetry(temp, target)
+  async loadWithStatus(sessionId: string): Promise<SessionExtrasLoadResult> {
+    let filePath: string
+    try {
+      filePath = this.pathFor(sessionId)
+    } catch {
+      return { extras: emptyExtras(), corrupted: false }
+    }
+
+    let primaryExisted = false
+    for (const candidate of [filePath, `${filePath}.bak`]) {
+      try {
+        const text = await fs.readFile(candidate, 'utf-8')
+        if (candidate === filePath) primaryExisted = true
+        const raw = JSON.parse(text) as Record<string, unknown>
+        const extras = this.parseExtras(raw)
+        if (!extras) continue
+        if (candidate === filePath && raw.toolEdits && !legacyToolEditsPruned.has(filePath)) {
+          legacyToolEditsPruned.add(filePath)
+          await this.save(sessionId, extras).catch(() => undefined)
+        }
+        return { extras, corrupted: false }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code !== 'ENOENT' && candidate === filePath) {
+          primaryExisted = true
+        }
+      }
+    }
+    return { extras: emptyExtras(), corrupted: primaryExisted }
   }
 
-  /** 会话删除时一并清理 sidecar，避免遗留权限与历史记录 */
+  async load(sessionId: string): Promise<SessionExtras> {
+    return (await this.loadWithStatus(sessionId)).extras
+  }
+
+  async save(sessionId: string, extras: SessionExtras): Promise<void> {
+    const target = this.pathFor(sessionId)
+    const previous = this.writeChains.get(sessionId) ?? Promise.resolve()
+    const run = previous
+      .catch(() => undefined)
+      .then(async () => {
+        await fs.mkdir(this.baseDir, { recursive: true })
+        const unique = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`
+        const temp = `${target}.${unique}.tmp`
+        const body = JSON.stringify(extras)
+        let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+        try {
+          handle = await fs.open(temp, 'w', 0o600)
+          await handle.writeFile(body, 'utf-8')
+          await handle.sync()
+        } catch (error) {
+          await handle?.close().catch(() => {})
+          await fs.rm(temp, { force: true }).catch(() => {})
+          throw error
+        }
+        await handle.close()
+        try {
+          await fs.copyFile(target, `${target}.bak`).catch(() => undefined)
+          await renameWithRetry(temp, target)
+        } catch (error) {
+          await fs.rm(temp, { force: true }).catch(() => {})
+          throw error
+        }
+      })
+    const tail = run.then(
+      () => undefined,
+      () => undefined
+    )
+    this.writeChains.set(sessionId, tail)
+    void tail.then(() => {
+      if (this.writeChains.get(sessionId) === tail) this.writeChains.delete(sessionId)
+    })
+    return run
+  }
+
+  /** 会话删除时一并清理 sidecar 与备份，避免遗留权限与历史记录 */
   async delete(sessionId: string): Promise<void> {
-    await fs.unlink(this.pathFor(sessionId)).catch((error: NodeJS.ErrnoException) => {
+    const target = this.pathFor(sessionId)
+    await fs.unlink(target).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
     })
+    await fs.unlink(`${target}.bak`).catch(() => undefined)
   }
 }

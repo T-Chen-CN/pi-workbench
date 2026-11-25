@@ -252,6 +252,9 @@ interface SessionRuntime {
   onTrace: (event: AgentTraceEvent) => void
   /** 本轮的空闲超时看门狗；工具执行与审批等待期间自动挂起 */
   watchdog: StallWatchdog | null
+  /** 事件唤醒轮次（sendCustomMessage triggerTurn）由 SDK 事件维护的运行态与后台看门狗 */
+  sdkStreaming: boolean
+  bgWatchdog: StallWatchdog | null
   /** 当前 assistant 消息中已经收到过增量的 thinking 块 */
   thinkingDeltaSeen: Set<number>
   /** write/edit 工具开始时的目标路径，供 tool_end 附带 */
@@ -356,11 +359,11 @@ export class AgentManager {
       : path.resolve(root ?? this.config?.workspaceDir ?? process.cwd(), toolPath)
   }
 
-  /** 工具路径是否位于工作区内（快照只关心工作区文件） */
-  private isInsideWorkspace(targetPath: string): boolean {
-    const root = this.config?.workspaceDir
-    if (!root) return false
-    const relative = path.relative(path.resolve(root), path.resolve(targetPath))
+  /** 工具路径是否位于会话根目录内（工单会话的根是独立 repo worktree，不是 workspaceDir） */
+  private isInsideWorkspace(targetPath: string, root?: string): boolean {
+    const base = root ?? this.config?.workspaceDir
+    if (!base) return false
+    const relative = path.relative(path.resolve(base), path.resolve(targetPath))
     return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
   }
 
@@ -368,7 +371,7 @@ export class AgentManager {
   private toolFilePath(toolName: string, args: any, root?: string): string | undefined {
     if (toolName !== 'write' && toolName !== 'edit') return undefined
     const target = this.resolveToolPath(args?.path, root)
-    if (!target || !this.isInsideWorkspace(target)) return undefined
+    if (!target || !this.isInsideWorkspace(target, root)) return undefined
     return target
   }
 
@@ -531,7 +534,36 @@ export class AgentManager {
           return
         }
 
+        if (event.type === 'agent_start') {
+          runtime.sdkStreaming = true
+          // 事件唤醒轮次（sendCustomMessage triggerTurn）不走 chat()，同样需要空闲超时看门狗
+          if (!runtime.watchdog) {
+            const bgWatchdog = new StallWatchdog({
+              timeoutMs: STALL_TIMEOUT_MS,
+              logger: this.logger,
+              onStall: (idleMs) => {
+                this.logger.warn(
+                  `[Agent Manager] Event-triggered turn stalled for ${Math.round(idleMs / 1000)}s; aborting session ${runtime.id}`
+                )
+                void runtime.session.abort().catch((error) => {
+                  this.logger.warn('[Agent Manager] Failed to abort stalled background turn:', error)
+                })
+              },
+            })
+            runtime.bgWatchdog = bgWatchdog
+            runtime.watchdog = bgWatchdog
+            bgWatchdog.start()
+          }
+          return
+        }
+
         if (event.type === 'agent_settled') {
+          runtime.sdkStreaming = false
+          if (runtime.bgWatchdog) {
+            runtime.bgWatchdog.stop()
+            if (runtime.watchdog === runtime.bgWatchdog) runtime.watchdog = null
+            runtime.bgWatchdog = null
+          }
           // 在事件回调外重建，避免销毁正在分发事件的会话
           setTimeout(() => {
             void this.applyPendingRoot(runtime)
@@ -546,6 +578,14 @@ export class AgentManager {
 
         // 一轮结束：丢弃本轮未闭合的工具快照，避免 Map 无限增长
         if (event.type === 'turn_end' || event.type === 'agent_end') {
+          if (event.type === 'agent_end') {
+            runtime.sdkStreaming = false
+            if (runtime.bgWatchdog) {
+              runtime.bgWatchdog.stop()
+              if (runtime.watchdog === runtime.bgWatchdog) runtime.watchdog = null
+              runtime.bgWatchdog = null
+            }
+          }
           runtime.editSnapshots.clear()
           runtime.toolFiles.clear()
           runtime.thinkingDeltaSeen.clear()
@@ -569,7 +609,7 @@ export class AgentManager {
 
           if (event.toolName !== 'write' && event.toolName !== 'edit') return
           const target = this.resolveToolPath(args.path, root)
-          if (!target || !this.isInsideWorkspace(target)) return
+          if (!target || !this.isInsideWorkspace(target, root)) return
           const existed = existsSync(target)
           const oldContent = existed ? readFileSync(target, 'utf-8') : ''
           runtime.editSnapshots.set(event.toolCallId, { path: target, oldContent, existed })
@@ -927,6 +967,14 @@ export class AgentManager {
     }
   }
 
+  /** 按 ADR-003 从完整分支时间线查找工具结果（压缩前的历史也能读到），兼顾未落盘缓冲 */
+  private findToolResult(runtime: SessionRuntime, toolCallId: string) {
+    return (
+      findToolResultPayload(this.timelineMessages(runtime), toolCallId) ??
+      findToolResultPayload(runtime.session.messages ?? [], toolCallId)
+    )
+  }
+
   /** 工具结果元数据（R-20）；不复制内容，只统计大小 */
   async getToolResultMeta(
     sessionId: string,
@@ -934,7 +982,7 @@ export class AgentManager {
   ): Promise<{ success: boolean; meta?: ToolResultMeta; error?: string }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      const payload = findToolResultPayload(runtime.session.messages ?? [], toolCallId)
+      const payload = this.findToolResult(runtime, toolCallId)
       if (!payload) return { success: false, error: 'No result recorded for this tool call.' }
       return { success: true, meta: describeToolResult(payload) }
     } catch (error) {
@@ -959,7 +1007,7 @@ export class AgentManager {
   }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      const payload = findToolResultPayload(runtime.session.messages ?? [], toolCallId)
+      const payload = this.findToolResult(runtime, toolCallId)
       if (!payload) return { success: false, error: 'No result recorded for this tool call.' }
       return { success: true, ...sliceToolResult(payload.text, offset, limit) }
     } catch (error) {
@@ -975,7 +1023,7 @@ export class AgentManager {
   ): Promise<{ success: boolean; data?: string; mimeType?: string; error?: string }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      const payload = findToolResultPayload(runtime.session.messages ?? [], toolCallId)
+      const payload = this.findToolResult(runtime, toolCallId)
       if (!payload || payload.images.length === 0) {
         return { success: false, error: 'No image result recorded for this tool call.' }
       }
@@ -993,7 +1041,7 @@ export class AgentManager {
   ): Promise<{ success: boolean; text?: string; toolName?: string; error?: string }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      const payload = findToolResultPayload(runtime.session.messages ?? [], toolCallId)
+      const payload = this.findToolResult(runtime, toolCallId)
       if (!payload) return { success: false, error: 'No result recorded for this tool call.' }
       return { success: true, text: payload.text, toolName: payload.toolName }
     } catch (error) {
@@ -1296,11 +1344,16 @@ export class AgentManager {
     }
   }
 
+  private isRuntimeBusy(runtime: SessionRuntime | undefined): boolean {
+    if (!runtime) return false
+    return Boolean(runtime.isProcessing || runtime.sdkStreaming || (runtime.session as any)?.isStreaming)
+  }
+
   /** 运行中的会话 ID；配置保存前用于避免打断正在跑的轮次 */
   hasRunningSessions(): string[] {
     const ids: string[] = []
     for (const [id, runtime] of this.runtimes) {
-      if (runtime.isProcessing) ids.push(id)
+      if (this.isRuntimeBusy(runtime)) ids.push(id)
     }
     return ids
   }
@@ -1611,7 +1664,7 @@ export class AgentManager {
   isSessionBusy(sessionId?: string): boolean {
     const id = sessionId ?? this.lastSessionId
     if (!id) return false
-    return this.runtimes.get(id)?.isProcessing ?? false
+    return this.isRuntimeBusy(this.runtimes.get(id))
   }
 
   /**
@@ -1759,15 +1812,21 @@ export class AgentManager {
 
     const planContext: { runtime: SessionRuntime | null } = { runtime: null }
     const runtimeRef: { current: SessionRuntime | null } = { current: null }
-    const extras = this.extrasStore ? await this.extrasStore.load(id) : emptyExtras()
+    const loadedExtras = this.extrasStore
+      ? await this.extrasStore.loadWithStatus(id)
+      : { extras: emptyExtras(), corrupted: false }
+    const extras = loadedExtras.extras
     // 模式只在会话诞生时从全局默认档取一次，此后会话自行持有并落盘。
-    // 工单会话（G3）用 `createSession(root, { permission })` 提前种好权限，
-    // 优先级：调用方种子 > 全局默认档；已落盘的会话一律以落盘为准。
+    // 若既有 sidecar 损坏导致权限丢失，fail-closed 降级到 readonly，绝不静默提权。
     const seededPermission = extras.permission === null
     if (seededPermission) {
       const seed = this.seedPermissions.get(id)
       this.seedPermissions.delete(id)
-      extras.permission = seed ?? { mode: this.defaultPermissionLevel(), grants: [] }
+      extras.permission =
+        seed ??
+        (loadedExtras.corrupted
+          ? { mode: 'readonly', grants: [] }
+          : { mode: this.defaultPermissionLevel(), grants: [] })
     }
     const fallbackPermission = normalizeSessionPermission(extras.permission)
     const root = sessionManager.getCwd() || config.workspaceDir
@@ -1883,6 +1942,8 @@ export class AgentManager {
       traceSinks: new Set(),
       onTrace: (event) => this.dispatchTrace(runtime, event),
       watchdog: null,
+      sdkStreaming: false,
+      bgWatchdog: null,
       thinkingDeltaSeen: new Set(),
       toolFiles: new Map(),
       editSnapshots: new Map(),
@@ -2560,6 +2621,8 @@ export class AgentManager {
         finalPrompt,
         images.length > 0 ? { images } : undefined
       )
+      // 防止 hardStopPromise 先触发后 promptPromise 迟到拒绝成为 Node 24 unhandledRejection
+      void promptPromise.catch(() => {})
       // 只监视“模型静默”：工具执行与审批等待期间看门狗自动挂起，不设整轮上限
       const watchdog = new StallWatchdog({
         timeoutMs: STALL_TIMEOUT_MS,

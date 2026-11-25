@@ -95,20 +95,34 @@ export function createFileModelsStore(options: FileModelsStoreOptions): TrackedM
 
   async function writeFile(catalogs: StoredCatalogs): Promise<void> {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
-    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
+    const unique = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`
+    const tmpPath = `${filePath}.${unique}.tmp`
     const body = JSON.stringify(catalogs, null, 2)
     let handle: Awaited<ReturnType<typeof fs.open>> | undefined
     try {
       handle = await fs.open(tmpPath, 'w', 0o600)
       await handle.writeFile(body, 'utf-8')
       await handle.sync()
-    } finally {
-      await handle?.close()
-    }
-    try {
-      await fs.rename(tmpPath, filePath)
     } catch (error) {
-      await fs.rm(tmpPath, { force: true })
+      await handle?.close().catch(() => {})
+      await fs.rm(tmpPath, { force: true }).catch(() => {})
+      throw error
+    }
+    await handle.close()
+    try {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await fs.rename(tmpPath, filePath)
+          return
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code
+          const transient = code === 'EPERM' || code === 'EBUSY' || code === 'EACCES'
+          if (!transient || attempt >= 5) throw error
+          await new Promise((resolve) => setTimeout(resolve, 15 * (attempt + 1)))
+        }
+      }
+    } catch (error) {
+      await fs.rm(tmpPath, { force: true }).catch(() => {})
       throw error
     }
   }

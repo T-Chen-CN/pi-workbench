@@ -60,6 +60,11 @@ export function createPlanExtension(context: {
         if (context.getMode() !== 'plan') {
           throw new Error('submit_plan is only available in Plan mode.')
         }
+        if (runtime.extras.plan && runtime.extras.plan.status !== 'rejected') {
+          throw new Error(
+            `A plan is already ${runtime.extras.plan.status}. Wait for the user to approve or reject it before submitting another.`
+          )
+        }
         const steps = normalizePlanSteps(params?.steps)
         if (steps.length === 0) {
           throw new Error('A plan needs at least one step with a title.')
@@ -105,6 +110,9 @@ export function createPlanExtension(context: {
         const runtime = context.getRuntime()
         const plan = runtime?.extras.plan
         if (!runtime || !plan) throw new Error('There is no active plan to update.')
+        if (plan.status !== 'approved' || context.getMode() === 'plan') {
+          throw new Error('Only steps of an approved plan can be updated.')
+        }
         const step = plan.steps.find((item) => item.id === params?.stepId)
         if (!step) throw new Error(`Unknown plan step "${String(params?.stepId ?? '')}".`)
         const status = String(params?.status ?? '')

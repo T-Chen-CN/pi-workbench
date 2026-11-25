@@ -139,14 +139,16 @@ export function createFileCredentialStore(options: FileCredentialStoreOptions): 
     return { version: fileVersion, entries: {} }
   }
 
-  async function readFile(): Promise<StoredFile> {
+  async function readFile(readOpts: { throwOnIoError?: boolean } = {}): Promise<StoredFile> {
     let raw: string
     try {
       raw = await fs.readFile(filePath, 'utf-8')
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
-      // 首次启动没有文件是正常状态；其余读取失败也不该让 Agent 起不来
-      if (code !== 'ENOENT') logger.warn('[Credentials] 读取失败，按空表处理:', error)
+      if (code === 'ENOENT') return emptyFile()
+      // 写前读取遇到瞬时 OS 错误（如 EBUSY/EPERM）必须抛错，绝不能当成空表抹掉其他供应商凭证
+      if (readOpts.throwOnIoError) throw error
+      logger.warn('[Credentials] 读取失败，按空表处理:', error)
       return emptyFile()
     }
     let parsed: unknown
@@ -159,22 +161,40 @@ export function createFileCredentialStore(options: FileCredentialStoreOptions): 
     return { version: fileVersion, entries: normalizeEntries(parsed, logger) }
   }
 
+  async function renameWithRetry(from: string, to: string, attempts = 6): Promise<void> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await fs.rename(from, to)
+        return
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        const transient = code === 'EPERM' || code === 'EBUSY' || code === 'EACCES'
+        if (!transient || attempt >= attempts - 1) throw error
+        await new Promise((resolve) => setTimeout(resolve, 15 * (attempt + 1)))
+      }
+    }
+  }
+
   async function writeFile(data: StoredFile): Promise<void> {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
-    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
+    const unique = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`
+    const tmpPath = `${filePath}.${unique}.tmp`
     const body = JSON.stringify({ version: data.version, entries: data.entries }, null, 2)
     let handle: Awaited<ReturnType<typeof fs.open>> | undefined
     try {
       handle = await fs.open(tmpPath, 'w', 0o600)
       await handle.writeFile(body, 'utf-8')
       await handle.sync()
-    } finally {
-      await handle?.close()
-    }
-    try {
-      await fs.rename(tmpPath, filePath)
     } catch (error) {
-      await fs.rm(tmpPath, { force: true })
+      await handle?.close().catch(() => {})
+      await fs.rm(tmpPath, { force: true }).catch(() => {})
+      throw error
+    }
+    await handle.close()
+    try {
+      await renameWithRetry(tmpPath, filePath)
+    } catch (error) {
+      await fs.rm(tmpPath, { force: true }).catch(() => {})
       throw error
     }
   }
@@ -260,14 +280,13 @@ export function createFileCredentialStore(options: FileCredentialStoreOptions): 
       return enqueue(
         providerId,
         async () => {
-          const current = decode(providerId, (await readFile()).entries[providerId])
+          const current = decode(providerId, (await readFile({ throwOnIoError: true })).entries[providerId])
           const next = await fn(current)
-          modifyOptions?.signal?.throwIfAborted()
-          // 返回 undefined = 不改动；解析为写后值，刷新逻辑依赖这一点
+          // 注意：fn(current) 若已向上游完成一次性 OAuth refresh token 轮换，绝不能因迟到的 abort 丢弃新凭证
           if (next === undefined) return current
           return await enqueueWrite(async () => {
-            // 锁内重读：合并其他 provider 期间写入的条目
-            const data = await readFile()
+            // 锁内重读：合并其他 provider 期间写入的条目；I/O 异常必须失败，严禁空表覆盖
+            const data = await readFile({ throwOnIoError: true })
             data.entries[providerId] = encode(next)
             await writeFile(data)
             return next
@@ -282,7 +301,7 @@ export function createFileCredentialStore(options: FileCredentialStoreOptions): 
         providerId,
         async () => {
           await enqueueWrite(async () => {
-            const data = await readFile()
+            const data = await readFile({ throwOnIoError: true })
             if (!(providerId in data.entries)) return
             delete data.entries[providerId]
             await writeFile(data)

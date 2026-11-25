@@ -10,6 +10,7 @@ export async function withTimeout<T>(
     timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
     timer.unref?.()
   })
+  void promise.catch(() => {})
   try {
     return await Promise.race([promise, timeout])
   } finally {
@@ -32,6 +33,7 @@ export async function withTimeoutResult<T>(
     }, timeoutMs)
     timer.unref?.()
   })
+  void promise.catch(() => {})
   try {
     return await Promise.race([promise.then((value) => ({ value })), timeout])
   } finally {

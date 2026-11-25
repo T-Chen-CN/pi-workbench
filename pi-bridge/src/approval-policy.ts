@@ -175,8 +175,14 @@ export interface ApprovalDetails {
   editCount?: number
 }
 
-const DETAIL_TEXT_LIMIT = 400
+const COMMAND_TEXT_LIMIT = 16_000
 const PREVIEW_LIMIT = 280
+
+/** 剥离 ANSI 转义序列，避免审批卡展示命令时被控制字符伪装隐藏载荷 */
+function stripAnsi(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
+}
 
 function truncate(value: string, limit: number): string {
   if (value.length <= limit) return value
@@ -186,13 +192,14 @@ function truncate(value: string, limit: number): string {
 /**
  * 生成审批卡展示用的参数摘要。
  * 刻意不包含完整 write 内容：审批只需要判断风险，完整内容留给 Diff 审阅。
+ * 命令文本保留高上限（16KB）并剥离 ANSI，防止长注释前缀隐藏尾部恶意命令。
  */
 export function buildApprovalDetails(toolName: string, args: unknown): ApprovalDetails {
   const value = (args ?? {}) as Record<string, any>
   const details: ApprovalDetails = {}
   if (typeof value.path === 'string' && value.path) details.path = value.path
   if (typeof value.command === 'string' && value.command) {
-    details.command = truncate(value.command, DETAIL_TEXT_LIMIT)
+    details.command = truncate(stripAnsi(value.command), COMMAND_TEXT_LIMIT)
   }
   if (toolName === 'write' && typeof value.content === 'string') {
     details.preview = truncate(value.content, PREVIEW_LIMIT)
