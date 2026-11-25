@@ -130,24 +130,22 @@ export function useChatSessions(options: ChatSessionsOptions) {
       setNeedsApiKey(false)
       setFatalError(null)
       try {
-        const configResult = await api.apiConfigGet()
+        // 供应商 / 模型 / 凭证都由主进程判定：这里只关心「有没有配好」
+        const providersResult = await api.providersList()
         if (seq !== initSeqRef.current) return
-        if (!configResult.success || !configResult.config || !configResult.config.apiKey) {
+        const activeProvider = providersResult.success
+          ? providersResult.providers?.find((provider) => provider.active)
+          : undefined
+        if (!providersResult.success || !activeProvider || !activeProvider.connected) {
           setNeedsApiKey(true)
           return
         }
+        // 图片能力来自 catalog：会话里只按模型 id 判断能不能收图
         setConfiguredImageModels(
-          Array.isArray(configResult.config.models)
-            ? configResult.config.models
-                .filter((entry) => entry.image)
-                .map((entry) => entry.id)
-            : []
+          (activeProvider.models ?? []).filter((model) => model.vision).map((model) => model.id)
         )
 
-        const initResult = await piAgentAPI.initialize({
-          workspaceDir: workspacePath,
-          apiConfig: configResult.config,
-        })
+        const initResult = await piAgentAPI.initialize({ workspaceDir: workspacePath })
         if (seq !== initSeqRef.current) return
         if (!initResult.success) {
           setFatalError(initResult.error ? localizeError(initResult.error) : t('agentInitFailed'))

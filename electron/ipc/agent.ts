@@ -6,10 +6,10 @@ import { shell, dialog, BrowserWindow } from 'electron'
 import { getAppDir, getBridgeEntryUrl } from '../app-paths.js'
 import { isTrustedWorkspacePath } from '../workspace-trust.js'
 import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
-import {
-  resolveAgentProviderConfig,
-  type LegacyAgentApiConfig,
-} from '../agent-provider-config.js'
+import { providerConfigKey } from '../agent-config-key.js'
+import { activeProviderConfig } from '../providers-service.js'
+import { createDesktopCredentialStore } from '../credentials-store.js'
+import { getModelsStore } from '../models-store.js'
 import { sanitizeApprovalDecision, type ApprovalBroker } from '../approval-broker.js'
 import type { AgentRegistry } from '../agent-registry.js'
 import type { PluginManager } from '../plugin-manager.js'
@@ -109,14 +109,31 @@ function broadcastToWindows(channel: string, payload: unknown): void {
 /** 确保某个工作区有一个可用 Agent（渲染层 IPC 与派活 worker 共用这一条路径）。 */
 export async function ensureWorkspaceAgent(
   context: AgentIpcContext,
-  workspaceDir: string,
-  apiConfig: LegacyAgentApiConfig
+  workspaceDir: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // 过渡层：旧设置页的 {provider, apiUrl, apiKey, selectedModel} → 预设供应商
-    const resolved = await resolveAgentProviderConfig(apiConfig)
-    if (!resolved.ok) return { success: false, error: resolved.error }
-    const { configKey, apiConfig: providerConfig, credentials, modelsStore } = resolved.value
+    // 唯一配置源：当前 active provider + 模型 + 凭证指纹（D4 / D21）
+    const active = await activeProviderConfig()
+    if (!active.ok) {
+      return {
+        success: false,
+        error:
+          active.error === 'NOT_CONNECTED'
+            ? 'No provider connected. Add one in Settings.'
+            : 'No provider selected. Pick one in Settings.',
+      }
+    }
+    const providerConfig = {
+      providerId: active.providerId,
+      modelId: active.modelId,
+      ...(active.overrides ? { overrides: active.overrides } : {}),
+    }
+    const configKey = providerConfigKey({
+      providerId: active.providerId,
+      modelId: active.modelId,
+      credentialFingerprint: active.fingerprint,
+      overrides: active.overrides?.[active.modelId],
+    })
 
     if (context.agentRegistry.shouldReuse(workspaceDir, configKey)) {
       console.log('[Main] Reusing agent for workspace:', workspaceDir)
@@ -133,8 +150,8 @@ export async function ensureWorkspaceAgent(
       workspaceDir,
       agentDir: path.join(getAppDir(), 'data', 'agent'),
       apiConfig: providerConfig,
-      credentials,
-      modelsStore,
+      credentials: createDesktopCredentialStore(),
+      modelsStore: getModelsStore(),
       allowModelNetwork: true,
       // 联网是应用基础能力：扩展随包内置，由 Agent 在每次创建会话时加载
       webAccessExtensionPaths: webAccessExtensionPaths(),
@@ -210,32 +227,16 @@ export function registerAgentIpc(context: AgentIpcContext): void {
 // ==================== Pi Agent Integration ====================
 
 // Agent 初始化（按工作区）
-handleIpc('agent:initialize', async (_event, config: {
-  workspaceDir: string
-  apiConfig: LegacyAgentApiConfig
-}) => {
+handleIpc('agent:initialize', async (_event, config: { workspaceDir: string }) => {
   try {
-    const { workspaceDir, apiConfig } = config
+    const { workspaceDir } = config
 
     if (!isTrustedWorkspacePath(workspaceDir)) {
       return { success: false, error: 'Workspace is not approved' }
     }
 
-    console.log('[Main] Initializing Pi Agent with config:', {
-      provider: apiConfig.provider,
-      model: apiConfig.selectedModel,
-      workspaceDir
-    })
-
-    // 验证 API Key
-    if (!apiConfig.apiKey) {
-      return {
-        success: false,
-        error: 'API key not configured. Please set it in Settings.'
-      }
-    }
-
-    return await ensureWorkspaceAgent(context, workspaceDir, apiConfig)
+    console.log('[Main] Initializing Pi Agent for workspace:', workspaceDir)
+    return await ensureWorkspaceAgent(context, workspaceDir)
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     console.error('[Main] Agent initialization error:', errorMessage)

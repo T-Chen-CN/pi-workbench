@@ -16,7 +16,7 @@ import {
   type ResourceLoader,
   type SessionEntry,
 } from '@earendil-works/pi-coding-agent'
-import type { Api, Model } from '@earendil-works/pi-ai'
+import type { Api, Model, ThinkingLevel } from '@earendil-works/pi-ai'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { existsSync, readFileSync } from 'fs'
@@ -1279,6 +1279,17 @@ export class AgentManager {
       if (!model) return { success: false, error: `Model "${modelId}" is unavailable.` }
       const runtime = await this.ensureRuntime(sessionId)
       await runtime.session.setModel(model)
+      // 换模型后思考档位可能不被支持：自动降级到最高可用档，都没有就关掉（D11）
+      const supported = thinkingLevelsOf(model)
+      const current = String(runtime.session.thinkingLevel ?? '')
+      if (current && !supported.includes(current)) {
+        const next = (supported[supported.length - 1] ?? 'off') as ThinkingLevel
+        try {
+          runtime.session.setThinkingLevel(next)
+        } catch {
+          // 极老模型没有思考档位接口：保持关闭即可
+        }
+      }
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }

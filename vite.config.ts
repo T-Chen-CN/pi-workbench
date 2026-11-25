@@ -6,75 +6,6 @@ import { existsSync } from 'fs'
 import { readFile, writeFile, mkdir, readdir } from 'fs/promises'
 import { createHash } from 'crypto'
 
-/**
- * 仅开发模式使用的模型列表代理。
- *
- * 浏览器里没有 Electron 主进程，无法直接请求供应商 API（且多数供应商不允许跨域），
- * 因此由 Vite dev server 代发请求，让纯 Web 调试也能真实拉取模型列表。
- * API Key 通过请求头传递，不写入 URL / 日志。
- */
-const DEV_MODELS_ENDPOINT = '/__pi/fetch-models'
-
-function devModelsProxy(): Plugin {
-  return {
-    name: 'pi-workbench-dev-models-proxy',
-    apply: 'serve',
-    configureServer(server) {
-      server.middlewares.use(DEV_MODELS_ENDPOINT, async (req, res) => {
-        const reply = (body: { success: boolean; models: string[]; error?: string }) => {
-          res.statusCode = 200
-          res.setHeader('Content-Type', 'application/json')
-          res.end(JSON.stringify(body))
-        }
-
-        try {
-          const requestUrl = new URL(req.url ?? '', 'http://localhost')
-          const apiUrl = (requestUrl.searchParams.get('apiUrl') ?? '').trim().replace(/\/+$/, '')
-          const provider = requestUrl.searchParams.get('provider') ?? 'custom'
-          const apiKey = String(req.headers['x-pi-api-key'] ?? '')
-
-          if (!/^https?:\/\//i.test(apiUrl)) {
-            return reply({ success: false, models: [], error: 'Invalid API URL' })
-          }
-
-          const headers: Record<string, string> = provider === 'anthropic'
-            ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
-            : { Authorization: `Bearer ${apiKey}` }
-
-          const response = await fetch(`${apiUrl}/models`, {
-            headers,
-            signal: AbortSignal.timeout(15_000),
-          })
-          if (!response.ok) {
-            const text = await response.text().catch(() => '')
-            return reply({
-              success: false,
-              models: [],
-              error: `HTTP ${response.status} ${response.statusText}${text ? `: ${text.slice(0, 200)}` : ''}`,
-            })
-          }
-
-          const data: any = await response.json()
-          const list = Array.isArray(data?.data) ? data.data
-            : Array.isArray(data?.models) ? data.models
-            : Array.isArray(data) ? data
-            : []
-          const models: string[] = list
-            .map((m: any) => (typeof m === 'string' ? m : m?.id))
-            .filter(Boolean)
-
-          reply({ success: true, models })
-        } catch (error) {
-          reply({
-            success: false,
-            models: [],
-            error: error instanceof Error ? error.message : String(error),
-          })
-        }
-      })
-    },
-  }
-}
 
 /**
  * 仅开发模式使用的 Agent 桥接。
@@ -551,7 +482,6 @@ export default defineConfig({
   plugins: [
     react(),
     pdfjsAssets(),
-    devModelsProxy(),
     devAgentBridge(),
     contentSecurityPolicy(),
     monacoLanguageFilter(),

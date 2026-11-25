@@ -24,6 +24,8 @@ import type {
 import { getBridgeEntryUrl } from '../app-paths.js'
 import { readJsonWithBackup, writeJsonAtomic, writeJsonAtomicAsync } from '../atomic-json.js'
 import { createTaskGuardExtension, type TaskGuardInfo } from './task-guard.js'
+import { createDesktopCredentialStore } from '../credentials-store.js'
+import { getModelsStore } from '../models-store.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -72,12 +74,15 @@ export interface CloudTaskRunnerDeps {
   }
   /** 工单数据目录（`{appDir}/data/cloud`）；会话 agentDir 在其下另开一层 */
   dataDir: string
-  /** 与用户会话同一份配置（含解密后的 Key）；返回 null 表示尚未配置 */
+  /**
+   * 与用户会话同一份供应商配置（工单跟随 activeProvider，D5）。
+   * 只给 provider / 模型 / 凭证指纹；Key 由 Agent 自己从 CredentialStore 取。
+   */
   getApiConfig: () => Promise<{
-    provider: string
-    apiUrl: string
-    apiKey: string
-    selectedModel: string
+    providerId: string
+    modelId: string
+    overrides?: Record<string, { contextWindow?: number; maxTokens?: number }>
+    fingerprint: string
   } | null>
   /** 工作树协调器；非 git 仓库返回 null（G10 由此拒绝派活） */
   getCoordinator: (
@@ -278,10 +283,11 @@ export class CloudTaskRunner {
   /** 复用用户当前 API 配置，按需建一个专属 AgentManager（独立 agentDir） */
   private async ensureManager(): Promise<any> {
     const config = await this.deps.getApiConfig()
-    if (!config || !config.apiKey || !config.selectedModel) {
+    if (!config || !config.modelId) {
       throw new Error('API configuration is missing; configure the model in Settings first')
     }
-    const key = `${config.provider}|${config.apiUrl}|${config.selectedModel}|${config.apiKey.length}`
+    // 指纹只在换 key 时变；OAuth token 刷新不重建工单运行时（D21）
+    const key = `${config.providerId}|${config.modelId}|${config.fingerprint}`
     if (this.manager && this.managerKey === key) return this.manager
 
     const { AgentManager } = await import(getBridgeEntryUrl())
@@ -292,7 +298,14 @@ export class CloudTaskRunner {
     const result = await manager.initialize({
       workspaceDir: path.join(this.deps.dataDir, 'workspace'),
       agentDir,
-      apiConfig: config,
+      apiConfig: {
+        providerId: config.providerId,
+        modelId: config.modelId,
+        ...(config.overrides ? { overrides: config.overrides } : {}),
+      },
+      credentials: createDesktopCredentialStore(),
+      modelsStore: getModelsStore(),
+      allowModelNetwork: true,
       logger: this.deps.logger,
       // 工单会话：不挂计划与工作树扩展（worktree 扩展用的是实例级 workspaceDir）
       builtinExtensions: { plan: false, worktree: false },

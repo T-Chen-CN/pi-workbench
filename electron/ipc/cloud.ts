@@ -8,7 +8,7 @@
 import { handleIpc } from './register.js'
 import { getAppDir } from '../app-paths.js'
 import { getCoordinator } from '../worktree-coordinator.js'
-import { loadApiConfig } from './api-config.js'
+import { activeProviderConfig } from '../providers-service.js'
 import {
   clearCloudLink,
   normalizeBaseUrl,
@@ -67,13 +67,14 @@ async function ensureAgent(context: CloudIpcContext): Promise<DeviceAgent> {
     dataDir: `${getAppDir()}/data/cloud`,
     getWorkspaces: async () => describeWorkspaces(context.listWorkspacePaths()),
     getApiConfig: async () => {
-      const config = await loadApiConfig()
-      if (!config || typeof config.apiKey !== 'string' || !config.apiKey) return null
+      // 设备端只上报 provider / 模型 / 指纹，从不把 Key 或片段发给云端（A5）
+      const active = await activeProviderConfig()
+      if (!active.ok) return null
       return {
-        provider: String(config.provider ?? 'custom'),
-        apiUrl: String(config.apiUrl ?? ''),
-        apiKey: config.apiKey,
-        selectedModel: String(config.selectedModel ?? ''),
+        providerId: active.providerId,
+        modelId: active.modelId,
+        ...(active.overrides ? { overrides: active.overrides } : {}),
+        fingerprint: active.fingerprint,
       }
     },
     getCoordinator: async (repoPath: string) => {

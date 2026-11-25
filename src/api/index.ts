@@ -28,10 +28,10 @@ import type {
   GetSettingsResult,
   SaveSettingsResult,
   WorkspaceResult,
-  ApiConfigGetResult,
-  ApiConfigSaveResult,
-  FetchModelsResult,
-  ApiProvider,
+  ProvidersListResult,
+  ProviderAuthEvent,
+  ProviderAuthMethod,
+  ProviderModelOverrides,
   WebSearchConfig,
   WebSearchGetResult,
   WebSearchSaveResult,
@@ -65,7 +65,6 @@ import { frameNameOf, type HostId } from '../panelHost/types'
 import { emptyCanvasState, sanitizeCanvasState } from '../utils/repoMapCanvasState'
 
 // Mock API for browser development
-const MOCK_CONFIG_KEY = 'pi-workbench-api-config'
 /** 旧 preload（未重启主进程）时的降级文案，语气与 repo-map 的失败文案一致 */
 const CANVAS_UNAVAILABLE = 'Restart the app to save the canvas layout'
 const MOCK_WEB_SEARCH_KEY = 'pi-workbench-web-search-config'
@@ -355,55 +354,39 @@ const mockAPI = {
     }
   },
 
-  apiConfigGet: async (): Promise<ApiConfigGetResult> => {
-    console.log('[Mock] apiConfigGet')
-    try {
-      const saved = localStorage.getItem(MOCK_CONFIG_KEY)
-      if (saved) {
-        const config = JSON.parse(saved)
-        // 只支持 OpenAI 兼容渠道；旧版供应商配置在 Web 模式下同样作废
-        if (config?.provider === 'custom') {
-          return { success: true, config }
-        }
-        localStorage.removeItem(MOCK_CONFIG_KEY)
-      }
-    } catch (error) {
-      console.warn('[Mock] Failed to read saved config:', error)
-    }
-    return {
-      success: true,
-      config: {
-        provider: 'custom',
-        apiUrl: '',
-        apiKey: '',
-        selectedModel: '',
-        models: []
-      }
-    }
+  // Web 模式下没有主进程：供应商列表只用于展示，登录 / 凭证不可用
+  providersList: async (): Promise<ProvidersListResult> => {
+    console.log('[Mock] providersList')
+    return { success: true, providers: [], activeProvider: null }
   },
-  apiConfigSave: async (config: any): Promise<ApiConfigSaveResult> => {
-    console.log('[Mock] apiConfigSave:', config.provider)
-    localStorage.setItem(MOCK_CONFIG_KEY, JSON.stringify(config))
-    return { success: true }
-  },
-  apiConfigFetchModels: async (apiUrl: string, apiKey: string, provider: string): Promise<FetchModelsResult> => {
-    console.log('[Mock] apiConfigFetchModels via dev proxy:', provider)
-    // 纯 Web 模式下走 Vite dev server 代理，真实请求供应商的 /models
-    try {
-      const response = await fetch(
-        `/__pi/fetch-models?apiUrl=${encodeURIComponent(apiUrl)}&provider=${encodeURIComponent(provider)}`,
-        { headers: { 'x-pi-api-key': apiKey } }
-      )
-      const result = await response.json()
-      return result as FetchModelsResult
-    } catch (error) {
-      return {
-        success: false,
-        models: [],
-        error: error instanceof Error ? error.message : String(error)
-      }
-    }
-  },
+  providersSetActive: async (): Promise<{ success: boolean; error?: string }> => ({
+    success: false,
+    error: 'Desktop only'
+  }),
+  providersSetOverrides: async (): Promise<{
+    success: boolean
+    error?: string
+    pending?: boolean
+  }> => ({ success: false, error: 'Desktop only' }),
+  providersRefresh: async (): Promise<{
+    success: boolean
+    added: number
+    removed: number
+    checkedAt: number
+    error?: string
+  }> => ({ success: false, added: 0, removed: 0, checkedAt: Date.now(), error: 'Desktop only' }),
+  providersSetApiKey: async (): Promise<{ success: boolean; error?: string }> => ({
+    success: false,
+    error: 'Desktop only'
+  }),
+  providersForget: async (): Promise<{ success: boolean }> => ({ success: false }),
+  providersLogin: async (): Promise<{ success: boolean; error?: string }> => ({
+    success: false,
+    error: 'Desktop only'
+  }),
+  providersAuthAnswer: async (): Promise<{ ok: boolean }> => ({ ok: false }),
+  providersCancelLogin: async (): Promise<{ ok: boolean }> => ({ ok: false }),
+  onProvidersAuthEvent: () => () => {},
 
   // 纯 Web 模式下联网配置只存在浏览器里，不参与实际搜索
   webSearchGet: async (): Promise<WebSearchGetResult> => {
@@ -755,10 +738,22 @@ export const api = {
       : Promise.resolve({ success: false, error: CANVAS_UNAVAILABLE }),
 
   // API Configuration management (portable architecture)
-  apiConfigGet: () => electronAPI.apiConfigGet(),
-  apiConfigSave: (config: any) => electronAPI.apiConfigSave(config),
-  apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: ApiProvider) =>
-    electronAPI.apiConfigFetchModels(apiUrl, apiKey, provider),
+  providersList: () => electronAPI.providersList(),
+  providersSetActive: (providerId: string, modelId?: string) =>
+    electronAPI.providersSetActive(providerId, modelId),
+  providersSetOverrides: (providerId: string, modelId: string, overrides: ProviderModelOverrides) =>
+    electronAPI.providersSetOverrides(providerId, modelId, overrides),
+  providersRefresh: (force?: boolean) => electronAPI.providersRefresh(force),
+  providersSetApiKey: (providerId: string, apiKey: string) =>
+    electronAPI.providersSetApiKey(providerId, apiKey),
+  providersForget: (providerId: string) => electronAPI.providersForget(providerId),
+  providersLogin: (providerId: string, type: ProviderAuthMethod) =>
+    electronAPI.providersLogin(providerId, type),
+  providersAuthAnswer: (requestId: string, value: string) =>
+    electronAPI.providersAuthAnswer(requestId, value),
+  providersCancelLogin: (providerId: string) => electronAPI.providersCancelLogin(providerId),
+  onProvidersAuthEvent: (callback: (payload: ProviderAuthEvent) => void) =>
+    electronAPI.onProvidersAuthEvent(callback),
 
   // Web search (内置联网能力)
   webSearchGet: () => electronAPI.webSearchGet(),

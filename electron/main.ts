@@ -47,7 +47,10 @@ import { registerGitIpc } from './ipc/git.js'
 import { registerRepoMapIpc } from './ipc/repo-map.js'
 import { repoSync } from './repo-sync.js'
 import { registerWorkspaceIpc, closeAllWorkspaceWatchers } from './ipc/workspace.js'
-import { getActiveProviderApiKey, setRunningAgentsProvider } from './ipc/api-config.js'
+import { registerProvidersIpc, broadcastAuthEvent } from './ipc/providers.js'
+import { createDesktopProvidersConfigStore } from './providers-config.js'
+import { configureAuthFlow } from './auth-flow.js'
+import { setRunningSessionsProbe } from './providers-service.js'
 import { WEB_SEARCH_KEY_ENV_PREFIX, initializeWebSearch } from './ipc/web-search.js'
 import { completeGithubOAuth, isGithubCallbackUrl, GITHUB_PROTOCOL } from './github-oauth.js'
 import {
@@ -364,8 +367,8 @@ if (process.platform === 'win32') {
 
 /** 每个打开的工作区一个 Agent 实例 */
 const agentRegistry = new AgentRegistry()
-// 配置保存前检查运行中会话：api-config 不直接持有注册表，由这里注入查询
-setRunningAgentsProvider(() => agentRegistry.listRunning())
+// 配置保存前检查运行中会话：providers-service 不直接持有注册表，由这里注入查询
+setRunningSessionsProbe(() => agentRegistry.listRunning().length > 0)
 /** settings.json 的内存副本；权限策略随工具调用实时读取 */
 
 /** 桌面通知文案（跟随应用语言）；文案本体在 notifications.ts，本地与云端共用 */
@@ -482,20 +485,12 @@ const terminalManager = new TerminalManager({
     }
   },
   logPathFor: (workspaceDir, terminalId) => path.join(workspaceDir, '.pi-workbench', `terminal-${terminalId}.log`),
-  // 只移除应用自己注入的供应商 Key；用户 shell 里同名的其他 Key 保持不变
+  // 供应商 Key 只存在于加密凭证文件，不再注入环境变量（D3）；
+  // 这里只清掉联网搜索的临时 Key，用户 shell 里的变量原样保留
   envSanitizer: (env) => {
     const sanitized = { ...env }
-    delete sanitized.PI_WORKBENCH_API_KEY
     for (const name of Object.keys(sanitized)) {
       if (name.startsWith(WEB_SEARCH_KEY_ENV_PREFIX)) delete sanitized[name]
-    }
-    const activeKey = getActiveProviderApiKey()
-    if (activeKey) {
-      for (const key of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
-        if (sanitized[key] === activeKey) {
-          delete sanitized[key]
-        }
-      }
     }
     return sanitized
   }
@@ -572,6 +567,10 @@ const agentIpcContext: AgentIpcContext = {
 }
 
 registerAgentIpc(agentIpcContext)
+
+// 供应商登录事件（授权链接 / 设备码 / 需要输入）广播到所有窗口
+configureAuthFlow({ emit: broadcastAuthEvent })
+registerProvidersIpc()
 
 registerAttachmentsIpc({
   getMainWindow: () => mainWindow,
@@ -944,6 +943,16 @@ app.whenReady().then(async () => {
   setAppSettingsCache(startupSettings)
   // 权限迁移会写 settings.json，必须在渲染层读取设置之前完成
   await migratePermissionLevel()
+  // 旧 api-config.json → providers.json + 加密凭证（必须在 ready 之后：要读 safeStorage），
+  // 早于任何 IPC / Agent 初始化，否则设置页会看到一份空配置
+  try {
+    const migration = await createDesktopProvidersConfigStore().migrateLegacy()
+    if (migration.migrated) {
+      console.log('[Main] Provider config migrated:', migration.providerId, migration.modelId)
+    }
+  } catch (error) {
+    console.warn('[Main] Provider config migration failed:', error)
+  }
   createWindow(startupSettings)
 
   // 托盘常驻：紧接建窗装好，否则 Windows 上首次点关闭会因为没有可用的托盘图标

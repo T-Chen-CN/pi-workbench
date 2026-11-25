@@ -8,7 +8,6 @@
 import type {
   AgentImagePayload,
   AgentStreamEvent,
-  ApiConfig,
   ApprovalDecision,
   ApprovalRequestPayload,
   ContextUsageInfo,
@@ -36,7 +35,6 @@ export interface AgentChatStreamHandlers {
 
 interface AgentInitConfig {
   workspaceDir: string
-  apiConfig: ApiConfig
 }
 
 interface AgentResponse {

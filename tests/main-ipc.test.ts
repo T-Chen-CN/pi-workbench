@@ -450,260 +450,87 @@ describe('workspace lifecycle handlers', () => {
   })
 })
 
-describe('API configuration handlers', () => {
-  it('encrypts the API key on disk and decrypts it on read', async () => {
-    const config = {
-      provider: 'custom',
-      apiUrl: 'https://api.example.com/v1',
-      apiKey: 'sk-123',
-      selectedModel: 'model-a',
-      models: [{ id: 'model-a', contextWindow: 128_000, image: false, maxTokens: 65_536 }],
-    }
-
-    await expect(call('apiConfig:save', config)).resolves.toMatchObject({ success: true })
-
-    const raw = await fs.readFile(path.join(appDir, 'config', 'api-config.json'), 'utf-8')
-    expect(raw).not.toContain('sk-123')
-    expect(JSON.parse(raw).apiKey).toMatch(/^enc:/)
-    // 输出上限档位必须落盘：曾经被白名单静默丢弃，用户在设置里选完又变回“自动”
-    expect(JSON.parse(raw).models[0].maxTokens).toBe(65_536)
-
-    const result = await call('apiConfig:get')
-    expect(result.config).toMatchObject({ ...config, apiKey: 'sk-123' })
+describe('provider settings handlers', () => {
+  // 配置时会有一次轻量 Key 探测（D24）：测试里给一个 200，避免真实网络请求
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('{}', { status: 200 }))
+    )
   })
 
-  it('drops unknown output limits and omits the automatic one', async () => {
-    const config = {
-      provider: 'custom',
-      apiUrl: 'https://api.example.com/v1',
-      apiKey: 'sk-123',
-      selectedModel: 'model-a',
-      models: [
-        { id: 'model-a', contextWindow: 128_000, image: false, maxTokens: 12_345 },
-        { id: 'model-b', contextWindow: 64_000, image: false, maxTokens: 0 },
-      ],
-    }
-
-    await expect(call('apiConfig:save', config)).resolves.toMatchObject({ success: true })
-
-    const raw = JSON.parse(await fs.readFile(path.join(appDir, 'config', 'api-config.json'), 'utf-8'))
-    const byId = (id: string) => raw.models.find((entry: { id: string }) => entry.id === id)
-    expect(byId('model-a')).not.toHaveProperty('maxTokens')
-    expect(byId('model-b')).not.toHaveProperty('maxTokens')
-
-    const result = await call('apiConfig:get')
-    expect((result.config as { models: Array<Record<string, unknown>> }).models).toEqual([
-      { id: 'model-a', contextWindow: 128_000, image: false },
-      { id: 'model-b', contextWindow: 64_000, image: false },
-    ])
-  })
-
-  it('falls back to defaults when no API config exists', async () => {
-    const result = await call('apiConfig:get')
+  it('lists the eight presets and never returns a key', async () => {
+    const result = await call('providers:list')
 
     expect(result.success).toBe(true)
-    expect(result.config).toMatchObject({
-      provider: 'custom',
-      apiUrl: '',
-      selectedModel: '',
-      models: [],
+    const providers = result.providers as Array<{ id: string; connected: boolean }>
+    expect(providers.map((provider) => provider.id)).toEqual([
+      'openai',
+      'anthropic',
+      'google',
+      'xai',
+      'deepseek',
+      'xiaomi',
+      'xiaomi-token-plan-cn',
+      'openai-codex',
+    ])
+    expect(providers.every((provider) => provider.connected === false)).toBe(true)
+    expect(JSON.stringify(result)).not.toContain('apiKey')
+  })
+
+  it('stores the api key encrypted and reports the provider as connected', async () => {
+    const saved = await call('providers:setApiKey', 'deepseek', 'sk-deepseek')
+    expect(saved.success).toBe(true)
+
+    const credentials = await fs.readFile(path.join(appDir, 'config', 'credentials.json'), 'utf-8')
+    expect(credentials).not.toContain('sk-deepseek')
+
+    const result = await call('providers:list')
+    const deepseek = (result.providers as Array<{ id: string; connected: boolean }>).find(
+      (provider) => provider.id === 'deepseek'
+    )
+    expect(deepseek?.connected).toBe(true)
+  })
+
+  it('rejects an unknown provider and an empty key', async () => {
+    await expect(call('providers:setApiKey', 'not-a-provider', 'sk-x')).resolves.toMatchObject({
+      success: false,
+    })
+    await expect(call('providers:setApiKey', 'deepseek', '   ')).resolves.toMatchObject({
+      success: false,
+      error: 'EMPTY_KEY',
     })
   })
 
-  it('reads legacy plaintext API keys', async () => {
-    await fs.writeFile(
-      path.join(appDir, 'config', 'api-config.json'),
-      JSON.stringify({ provider: 'custom', apiKey: 'legacy-key' }),
-      'utf-8'
-    )
+  it('clamps overrides to the catalog values and reports pending while running', async () => {
+    await call('providers:setApiKey', 'deepseek', 'sk-deepseek')
+    const list = await call('providers:list')
+    const models = (
+      list.providers as Array<{ id: string; models: Array<{ id: string; limits: unknown }> }>
+    ).find((provider) => provider.id === 'deepseek')!.models
+    const first = models[0]
 
-    const result = await call('apiConfig:get')
-    expect((result.config as Record<string, unknown>).apiKey).toBe('legacy-key')
-  })
-
-  it('clears legacy provider configs and keeps a backup', async () => {
-    const legacy = {
-      provider: 'anthropic',
-      apiUrl: 'https://api.anthropic.com/v1',
-      apiKey: 'enc:whatever',
-      availableModels: ['claude-model'],
-      selectedModel: 'claude-model',
-    }
-    await fs.writeFile(
-      path.join(appDir, 'config', 'api-config.json'),
-      JSON.stringify(legacy),
-      'utf-8'
-    )
-
-    const result = await call('apiConfig:get')
-
-    expect(result.config).toMatchObject({
-      provider: 'custom',
-      apiUrl: '',
-      apiKey: '',
-      selectedModel: '',
-      models: [],
+    // 请求超过 catalog 真值：主进程夹回真值，不报错
+    const result = await call('providers:setOverrides', 'deepseek', first.id, {
+      contextWindow: 99_000_000,
+      maxTokens: 99_000_000,
     })
-    await expect(
-      fs.readFile(path.join(appDir, 'config', 'api-config.legacy.json'), 'utf-8')
-    ).resolves.toContain('anthropic')
-    await expect(fs.access(path.join(appDir, 'config', 'api-config.json'))).rejects.toThrow()
+    expect(result.success).toBe(true)
+    const effective = result.effective as { contextWindow: number; maxTokens: number }
+    expect(effective.contextWindow).toBeLessThan(99_000_000)
+    expect(effective.maxTokens).toBeLessThanOrEqual(effective.contextWindow)
   })
 
-  it('converts the legacy model lists into model entries', async () => {
-    await fs.writeFile(
-      path.join(appDir, 'config', 'api-config.json'),
-      JSON.stringify({
-        provider: 'custom',
-        apiUrl: 'https://api.example.com/v1',
-        apiKey: 'enc:sk-legacy',
-        availableModels: ['model-a', 'model-b'],
-        imageModels: ['model-b'],
-        selectedModel: 'model-a',
-      }),
-      'utf-8'
+  it('forgets a provider: credentials and config both disappear', async () => {
+    await call('providers:setApiKey', 'deepseek', 'sk-deepseek')
+    await expect(call('providers:forget', 'deepseek')).resolves.toMatchObject({ success: true })
+
+    const result = await call('providers:list')
+    const deepseek = (result.providers as Array<{ id: string; connected: boolean }>).find(
+      (provider) => provider.id === 'deepseek'
     )
-
-    const result = await call('apiConfig:get')
-
-    const config = result.config as { models: unknown; [key: string]: unknown }
-    expect(config.models).toEqual([
-      { id: 'model-a', contextWindow: 128_000, image: false },
-      { id: 'model-b', contextWindow: 128_000, image: true },
-    ])
-    // 旧字段不再出现在返回值里
-    expect(config).not.toHaveProperty('availableModels')
-    expect(config).not.toHaveProperty('imageModels')
-  })
-
-  it('sanitizes model entries and restores a missing selected model', async () => {
-    await fs.writeFile(
-      path.join(appDir, 'config', 'api-config.json'),
-      JSON.stringify({
-        provider: 'custom',
-        apiUrl: 'https://api.example.com/v1',
-        apiKey: 'enc:sk-legacy',
-        selectedModel: 'ghost-model',
-        models: [
-          { id: ' model-a ', contextWindow: 32_000, image: 'yes' },
-          { id: 'model-a', contextWindow: 1_000_000, image: true },
-          { id: '', contextWindow: 256_000, image: false },
-          { id: 'model-b', contextWindow: 1_000_000, image: true },
-        ],
-      }),
-      'utf-8'
-    )
-
-    const result = await call('apiConfig:get')
-
-    expect((result.config as { models: unknown }).models).toEqual([
-      { id: 'ghost-model', contextWindow: 128_000, image: false },
-      { id: 'model-a', contextWindow: 128_000, image: false },
-      { id: 'model-b', contextWindow: 1_000_000, image: true },
-    ])
-  })
-
-  it('refuses to save while sessions are running', async () => {
-    const { setRunningAgentsProvider } = await import('../electron/ipc/api-config')
-    const before = {
-      provider: 'custom',
-      apiUrl: 'https://api.example.com/v1',
-      apiKey: 'sk-123',
-      selectedModel: 'model-a',
-      models: [{ id: 'model-a', contextWindow: 128_000, image: false }],
-    }
-    await expect(call('apiConfig:save', before)).resolves.toMatchObject({ success: true })
-
-    setRunningAgentsProvider(() => [{ workspaceDir: workDir, sessionIds: ['s1'] }])
-    try {
-      // 未改变 agentConfigKey 的保存直接放行，避免误伤无副作用的重复保存
-      await expect(call('apiConfig:save', before)).resolves.toMatchObject({ success: true })
-
-      const after = {
-        ...before,
-        models: [{ id: 'model-a', contextWindow: 1_000_000, image: false }],
-      }
-      await expect(call('apiConfig:save', after)).resolves.toMatchObject({
-        success: false,
-        code: 'AGENT_BUSY',
-        workspaces: [{ path: workDir, sessionIds: ['s1'] }],
-      })
-
-      const result = await call('apiConfig:get')
-      expect((result.config as { models: unknown }).models).toEqual([
-        { id: 'model-a', contextWindow: 128_000, image: false },
-      ])
-    } finally {
-      setRunningAgentsProvider(() => [])
-    }
-  })
-
-  it('fetches and normalizes models from a { data: [{ id }] } response', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        json: async () => ({ data: [{ id: 'model-a' }, { id: 'model-b' }] }),
-      }))
-    )
-
-    const result = await call(
-      'apiConfig:fetchModels',
-      'https://api.example.com/v1/',
-      'sk-123',
-      'openai'
-    )
-
-    expect(result).toEqual({ success: true, models: ['model-a', 'model-b'] })
-  })
-
-  it('normalizes plain array and { models: [] } responses', async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ['m1', { id: 'm2' }] })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ models: [{ id: 'm3' }] }) })
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(
-      call('apiConfig:fetchModels', 'https://api.example.com', 'k', 'openai')
-    ).resolves.toEqual({ success: true, models: ['m1', 'm2'] })
-    await expect(
-      call('apiConfig:fetchModels', 'https://api.example.com', 'k', 'openai')
-    ).resolves.toEqual({ success: true, models: ['m3'] })
-  })
-
-  it('rejects invalid API URLs', async () => {
-    const placeholder = await call(
-      'apiConfig:fetchModels',
-      'https://your-api-endpoint.com/v1',
-      'k',
-      'openai'
-    )
-    expect(placeholder.success).toBe(false)
-    expect(placeholder.error).toContain('valid API URL')
-
-    const badScheme = await call('apiConfig:fetchModels', 'api.example.com', 'k', 'openai')
-    expect(badScheme.success).toBe(false)
-    expect(badScheme.error).toContain('http://')
-  })
-
-  it('surfaces provider HTTP errors with a body excerpt', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        ok: false,
-        status: 500,
-        statusText: 'Internal Server Error',
-        text: async () => 'boom',
-      }))
-    )
-
-    const result = await call('apiConfig:fetchModels', 'https://api.example.com', 'k', 'openai')
-
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('HTTP 500')
-    expect(result.error).toContain('boom')
+    expect(deepseek?.connected).toBe(false)
+    expect(result.activeProvider).toBeNull()
   })
 })
 

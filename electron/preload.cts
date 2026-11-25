@@ -136,18 +136,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   draftClear: (workspacePath: string) => ipcRenderer.invoke('draft:clear', workspacePath),
 
   // Pi Agent API
-  agentInitialize: (config: {
-    workspaceDir: string
-    agentDir?: string
-    apiConfig: {
-      provider: string
-      apiUrl: string
-      apiKey: string
-      selectedModel: string
-      /** 每模型的上下文容量与图片能力；主进程据此生成 models.json */
-      models?: Array<{ id: string; contextWindow: number; image: boolean }>
-    }
-  }) => ipcRenderer.invoke('agent:initialize', config),
+  agentInitialize: (config: { workspaceDir: string; agentDir?: string }) =>
+    ipcRenderer.invoke('agent:initialize', config),
   agentChat: (
     message: string,
     requestId?: string,
@@ -480,11 +470,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('plugins:changed', listener)
   },
 
-  // API Configuration 管理（便携式架构）
-  apiConfigGet: () => ipcRenderer.invoke('apiConfig:get'),
-  apiConfigSave: (config: any) => ipcRenderer.invoke('apiConfig:save', config),
-  apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: string) =>
-    ipcRenderer.invoke('apiConfig:fetchModels', apiUrl, apiKey, provider),
+  // 供应商预设（凭证 + 模型目录）；从不返回密钥
+  providersList: () => ipcRenderer.invoke('providers:list'),
+  providersSetActive: (providerId: string, modelId?: string) =>
+    ipcRenderer.invoke('providers:setActive', providerId, modelId),
+  providersSetOverrides: (providerId: string, modelId: string, overrides: unknown) =>
+    ipcRenderer.invoke('providers:setOverrides', providerId, modelId, overrides),
+  providersRefresh: (force?: boolean) => ipcRenderer.invoke('providers:refresh', force === true),
+  providersSetApiKey: (providerId: string, apiKey: string) =>
+    ipcRenderer.invoke('providers:setApiKey', providerId, apiKey),
+  providersForget: (providerId: string) => ipcRenderer.invoke('providers:forget', providerId),
+  providersLogin: (providerId: string, type: string) =>
+    ipcRenderer.invoke('providers:login', providerId, type),
+  providersAuthAnswer: (requestId: string, value: string) =>
+    ipcRenderer.invoke('providers:authAnswer', requestId, value),
+  providersCancelLogin: (providerId: string) => ipcRenderer.invoke('providers:cancelLogin', providerId),
+  onProvidersAuthEvent: (callback: (payload: unknown) => void) => {
+    const listener = (_event: unknown, payload: unknown) => callback(payload)
+    ipcRenderer.on('providers:auth-event', listener)
+    return () => ipcRenderer.removeListener('providers:auth-event', listener)
+  },
 
   // 联网搜索（内置能力）
   webSearchGet: () => ipcRenderer.invoke('webSearch:get'),

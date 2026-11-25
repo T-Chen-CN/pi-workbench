@@ -21,11 +21,11 @@ import { api } from '../src/api'
 import { piAgentAPI } from '../src/api/piAgentAPI'
 import { clearPanelUi } from '../src/panelHost/panelUiState'
 import { extractSymbols } from '../src/utils/symbols'
-import type { ApiConfig } from '../src/types/electron'
+import type { ProvidersListResult, ProviderView } from '../src/types/electron'
 
 vi.mock('../src/api', () => ({
   api: {
-    apiConfigGet: vi.fn(),
+    providersList: vi.fn(),
     webSearchGet: vi.fn(async () => ({
       success: true,
       config: { provider: null, endpoint: 'china', keys: {} },
@@ -144,12 +144,34 @@ vi.mock('monaco-editor', () => {
   }
 })
 
-const configWithKey: ApiConfig = {
-  provider: 'anthropic',
-  apiUrl: 'https://example.test/v1',
-  apiKey: 'test-key',
-  selectedModel: 'test-model',
-  models: [{ id: 'test-model', contextWindow: 128_000, image: false }],
+/** 已连接的供应商视图：图片 / 思考能力都由它提供 */
+function providerView(patch: Partial<ProviderView> = {}): ProviderView {
+  return {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    connected: true,
+    credentialType: 'api_key',
+    authMethods: ['api_key'],
+    active: true,
+    model: 'test-model',
+    models: [
+      {
+        id: 'test-model',
+        name: 'Test Model',
+        limits: { contextWindow: 128_000, maxTokens: 16_384 },
+        reasoning: true,
+        vision: false,
+        api: 'openai-completions',
+        thinkingLevels: ['low', 'medium', 'high'],
+        input: ['text'],
+      },
+    ],
+    ...patch,
+  }
+}
+
+function providersResult(patch: Partial<ProviderView> = {}): ProvidersListResult {
+  return { success: true, providers: [providerView(patch)], activeProvider: 'deepseek' }
 }
 
 const session: SessionSummary = {
@@ -183,10 +205,7 @@ beforeEach(() => {
   useI18nStore.getState().setLanguage('zh')
   vi.clearAllMocks()
   Element.prototype.scrollIntoView = vi.fn()
-  vi.mocked(api.apiConfigGet).mockResolvedValue({
-    success: true,
-    config: configWithKey,
-  })
+  vi.mocked(api.providersList).mockResolvedValue(providersResult())
   vi.mocked(piAgentAPI.initialize).mockResolvedValue({ success: true })
   vi.mocked(piAgentAPI.sessionsList).mockResolvedValue({
     success: true,
@@ -250,18 +269,14 @@ afterEach(() => {
 
 describe('ChatPanel', () => {
   it('leaves the API key prompt after a configuration is saved', async () => {
-    vi.mocked(api.apiConfigGet).mockResolvedValue({
-      success: true,
-      config: { ...configWithKey, apiKey: '' },
-    })
+    vi.mocked(api.providersList).mockResolvedValue(
+      providersResult({ connected: false, credentialType: undefined, model: undefined })
+    )
 
     render(<ChatPanel workspacePath="/ws" />)
     await screen.findByText(translations.zh.apiConfigRequired)
 
-    vi.mocked(api.apiConfigGet).mockResolvedValue({
-      success: true,
-      config: configWithKey,
-    })
+    vi.mocked(api.providersList).mockResolvedValue(providersResult())
 
     act(() => {
       window.dispatchEvent(new CustomEvent('api-config-saved'))
@@ -637,13 +652,22 @@ describe('ChatPanel', () => {
   it('consumes image attachments as soon as the message is sent', async () => {
     const captured: { resolve: ((value: { success: boolean; response?: string }) => void) | null } =
       { resolve: null }
-    vi.mocked(api.apiConfigGet).mockResolvedValue({
-      success: true,
-      config: {
-        ...configWithKey,
-        models: [{ id: 'test-model', contextWindow: 128_000, image: true }],
-      },
-    })
+    vi.mocked(api.providersList).mockResolvedValue(
+      providersResult({
+        models: [
+          {
+            id: 'test-model',
+            name: 'Test Model',
+            limits: { contextWindow: 128_000, maxTokens: 16_384 },
+            reasoning: true,
+            vision: true,
+            api: 'openai-completions',
+            thinkingLevels: ['low', 'medium', 'high'],
+            input: ['text', 'image'],
+          },
+        ],
+      })
+    )
     vi.mocked(piAgentAPI.chat).mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -684,13 +708,22 @@ describe('ChatPanel', () => {
   it('keeps images added while streaming for the next message', async () => {
     const captured: { resolve: ((value: { success: boolean; response?: string }) => void) | null } =
       { resolve: null }
-    vi.mocked(api.apiConfigGet).mockResolvedValue({
-      success: true,
-      config: {
-        ...configWithKey,
-        models: [{ id: 'test-model', contextWindow: 128_000, image: true }],
-      },
-    })
+    vi.mocked(api.providersList).mockResolvedValue(
+      providersResult({
+        models: [
+          {
+            id: 'test-model',
+            name: 'Test Model',
+            limits: { contextWindow: 128_000, maxTokens: 16_384 },
+            reasoning: true,
+            vision: true,
+            api: 'openai-completions',
+            thinkingLevels: ['low', 'medium', 'high'],
+            input: ['text', 'image'],
+          },
+        ],
+      })
+    )
     vi.mocked(piAgentAPI.chat).mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -728,13 +761,22 @@ describe('ChatPanel', () => {
   })
 
   it('sends an image-only message without text', async () => {
-    vi.mocked(api.apiConfigGet).mockResolvedValue({
-      success: true,
-      config: {
-        ...configWithKey,
-        models: [{ id: 'test-model', contextWindow: 128_000, image: true }],
-      },
-    })
+    vi.mocked(api.providersList).mockResolvedValue(
+      providersResult({
+        models: [
+          {
+            id: 'test-model',
+            name: 'Test Model',
+            limits: { contextWindow: 128_000, maxTokens: 16_384 },
+            reasoning: true,
+            vision: true,
+            api: 'openai-completions',
+            thinkingLevels: ['low', 'medium', 'high'],
+            input: ['text', 'image'],
+          },
+        ],
+      })
+    )
     vi.mocked(piAgentAPI.chat).mockResolvedValue({ success: true, response: 'ok' })
 
     render(<ChatPanel workspacePath="/ws" />)
@@ -756,13 +798,22 @@ describe('ChatPanel', () => {
   })
 
   it('queues an image-only message with its images', async () => {
-    vi.mocked(api.apiConfigGet).mockResolvedValue({
-      success: true,
-      config: {
-        ...configWithKey,
-        models: [{ id: 'test-model', contextWindow: 128_000, image: true }],
-      },
-    })
+    vi.mocked(api.providersList).mockResolvedValue(
+      providersResult({
+        models: [
+          {
+            id: 'test-model',
+            name: 'Test Model',
+            limits: { contextWindow: 128_000, maxTokens: 16_384 },
+            reasoning: true,
+            vision: true,
+            api: 'openai-completions',
+            thinkingLevels: ['low', 'medium', 'high'],
+            input: ['text', 'image'],
+          },
+        ],
+      })
+    )
 
     render(<ChatPanel workspacePath="/ws" />)
     await screen.findByPlaceholderText(translations.zh.inputPlaceholder)
@@ -872,16 +923,32 @@ describe('ChatPanel', () => {
   })
 
   it('switches the model and thinking level from the status line menus', async () => {
-    vi.mocked(api.apiConfigGet).mockResolvedValue({
-      success: true,
-      config: {
-        ...configWithKey,
+    vi.mocked(api.providersList).mockResolvedValue(
+      providersResult({
         models: [
-          { id: 'test-model', contextWindow: 128_000, image: false },
-          { id: 'alt-model', contextWindow: 128_000, image: false },
+          {
+            id: 'test-model',
+            name: 'Test Model',
+            limits: { contextWindow: 128_000, maxTokens: 16_384 },
+            reasoning: true,
+            vision: false,
+            api: 'openai-completions',
+            thinkingLevels: ['low', 'medium', 'high'],
+            input: ['text'],
+          },
+          {
+            id: 'alt-model',
+            name: 'Alt Model',
+            limits: { contextWindow: 128_000, maxTokens: 16_384 },
+            reasoning: true,
+            vision: false,
+            api: 'openai-completions',
+            thinkingLevels: ['low', 'medium', 'high'],
+            input: ['text'],
+          },
         ],
-      },
-    })
+      })
+    )
     vi.mocked(piAgentAPI.setSessionModel).mockResolvedValue({ success: true })
     vi.mocked(piAgentAPI.setSessionThinking).mockResolvedValue({ success: true })
 
@@ -1650,10 +1717,7 @@ describe('WelcomeScreen', () => {
   }
 
   beforeEach(() => {
-    vi.mocked(api.apiConfigGet).mockResolvedValue({
-      success: true,
-      config: configWithKey,
-    })
+    vi.mocked(api.providersList).mockResolvedValue(providersResult())
   })
 
   it('shows every recent workspace and filters it by search', async () => {

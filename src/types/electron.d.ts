@@ -663,10 +663,33 @@ export interface ElectronAPI {
   ) => Promise<PluginsListResult>
   onPluginsChanged: (callback: (payload: { workspaceDir: string }) => void) => () => void
 
-  // API Configuration management (便携式架构)
-  apiConfigGet: () => Promise<ApiConfigGetResult>
-  apiConfigSave: (config: ApiConfig) => Promise<ApiConfigSaveResult>
-  apiConfigFetchModels: (apiUrl: string, apiKey: string, provider: ApiProvider) => Promise<FetchModelsResult>
+  // 供应商预设（凭证 + 模型目录）
+  providersList: () => Promise<ProvidersListResult>
+  providersSetActive: (providerId: string, modelId?: string) => Promise<{ success: boolean; error?: string }>
+  providersSetOverrides: (
+    providerId: string,
+    modelId: string,
+    overrides: ProviderModelOverrides
+  ) => Promise<{
+    success: boolean
+    error?: string
+    effective?: ProviderModelLimits
+    /** true：正在跑的会话会在轮次边界才用新上限（D23） */
+    pending?: boolean
+  }>
+  providersRefresh: (force?: boolean) => Promise<{
+    success: boolean
+    added: number
+    removed: number
+    checkedAt: number
+    error?: string
+  }>
+  providersSetApiKey: (providerId: string, apiKey: string) => Promise<{ success: boolean; error?: string }>
+  providersForget: (providerId: string) => Promise<{ success: boolean }>
+  providersLogin: (providerId: string, type: ProviderAuthMethod) => Promise<{ success: boolean; error?: string }>
+  providersAuthAnswer: (requestId: string, value: string) => Promise<{ ok: boolean }>
+  providersCancelLogin: (providerId: string) => Promise<{ ok: boolean }>
+  onProvidersAuthEvent: (callback: (payload: ProviderAuthEvent) => void) => () => void
 
   // 云端连接（配对 / 解绑 / 状态）
   cloudLinkStatus: () => Promise<CloudLinkStatusResult>
@@ -952,31 +975,91 @@ export interface WorkspaceResult {
 }
 
 // Pi Agent types
-export type ApiProvider = 'anthropic' | 'openai' | 'custom'
 
-/** 上下文容量档位：设置页只允许四档，存十进制整数 */
-export type ModelContextWindow = 64000 | 128000 | 256000 | 1000000
+/** 固定供应商白名单（8 家）；模型能力与协议由 Pi catalog 提供 */
+export type ProviderId =
+  | 'openai'
+  | 'anthropic'
+  | 'google'
+  | 'xai'
+  | 'deepseek'
+  | 'xiaomi'
+  | 'xiaomi-token-plan-cn'
+  | 'openai-codex'
 
-/** 输出上限档位；0 = 按上下文档位自动推导 */
-export type ModelMaxTokens = 0 | 16384 | 32768 | 65536 | 131072 | 262144
+export type ProviderAuthMethod = 'api_key' | 'oauth'
 
-/** 设置页维护的单个模型能力 */
-export interface ApiModelEntry {
+/** 按模型存的下调值；缺省 = catalog 真值 */
+export interface ProviderModelOverrides {
+  contextWindow?: number
+  maxTokens?: number
+}
+
+/** 生效容量：catalog 真值与用户下调值中的较小者 */
+export interface ProviderModelLimits {
+  contextWindow: number
+  maxTokens: number
+}
+
+export interface ProviderModelView {
   id: string
-  contextWindow: ModelContextWindow
-  image: boolean
-  /** 输出上限档位；缺省或 0 表示自动 */
-  maxTokens?: ModelMaxTokens
+  name: string
+  limits: ProviderModelLimits
+  /** 归一化后的下调值；没有覆盖时不出现 */
+  overrides?: ProviderModelOverrides
+  reasoning: boolean
+  vision: boolean
+  /** 请求协议（能力表展示） */
+  api: string
+  thinkingLevels: string[]
+  input: string[]
+  cost?: unknown
 }
 
-export interface ApiConfig {
-  provider: ApiProvider
-  apiUrl: string
-  apiKey: string
-  selectedModel: string
-  /** 模型列表：容量与图片能力由用户显式设置，是 models.json 的唯一来源 */
-  models: ApiModelEntry[]
+export interface ProviderView {
+  id: ProviderId
+  name: string
+  connected: boolean
+  credentialType?: 'api_key' | 'oauth'
+  authMethods: ProviderAuthMethod[]
+  active: boolean
+  model?: string
+  models: ProviderModelView[]
 }
+
+export interface ProvidersListResult {
+  success: boolean
+  providers?: ProviderView[]
+  activeProvider?: string | null
+  error?: string
+}
+
+/** 登录过程中需要用户输入的一步 */
+export interface ProviderAuthPrompt {
+  requestId: string
+  prompt: {
+    type: 'text' | 'secret' | 'select' | 'manual_code'
+    message: string
+    placeholder?: string
+    options?: Array<{ id: string; label: string; description?: string }>
+  }
+}
+
+/** 登录事件：授权链接 / 设备码 / 进度 / 需要输入 / 结果 */
+export type ProviderAuthEvent =
+  | { providerId: string; kind: 'prompt'; prompt: ProviderAuthPrompt }
+  | { providerId: string; kind: 'info'; message: string; links?: Array<{ url: string; label?: string }> }
+  | { providerId: string; kind: 'auth_url'; url: string; instructions?: string }
+  | {
+      providerId: string
+      kind: 'device_code'
+      userCode: string
+      verificationUri: string
+      intervalSeconds?: number
+      expiresInSeconds?: number
+    }
+  | { providerId: string; kind: 'progress'; message: string }
+  | { providerId: string; kind: 'result'; success: boolean; error?: string }
 
 // 联网搜索（内置能力）
 export type WebSearchProviderId =
@@ -1016,7 +1099,6 @@ export interface AgentInitConfig {
   workspaceDir: string
   /** Agent 数据目录（主进程默认使用 {appDir}/data/agent） */
   agentDir?: string
-  apiConfig: ApiConfig
 }
 
 export interface AgentInitResult {
@@ -1521,26 +1603,6 @@ export interface PluginCommandResult {
 export interface RecentWorkspacesResult {
   success: boolean
   workspaces: string[]
-  error?: string
-}
-
-export interface ApiConfigGetResult {
-  success: boolean
-  config?: ApiConfig
-  error?: string
-}
-
-export interface ApiConfigSaveResult {
-  success: boolean
-  error?: string
-  /** AGENT_BUSY：存在运行中会话，保存被拦下且未写盘 */
-  code?: 'AGENT_BUSY'
-  workspaces?: Array<{ path: string; sessionIds: string[] }>
-}
-
-export interface FetchModelsResult {
-  success: boolean
-  models?: string[]
   error?: string
 }
 

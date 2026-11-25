@@ -22,7 +22,7 @@ import {
 } from './patterns'
 import { Caption, DataText, Eyebrow, Label } from './ui'
 import { useI18nStore } from '../store/i18nStore'
-import type { ApiConfig, WebSearchConfig } from '../types/electron'
+import type { ProviderView, WebSearchConfig } from '../types/electron'
 import { basename } from '../utils/filePath'
 import { onAppEvent } from '../utils/appEvents'
 import { findWebSearchProvider } from '../utils/webSearchProviders'
@@ -47,7 +47,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
 }) => {
   const { t, language } = useI18nStore()
   const [query, setQuery] = useState('')
-  const [apiConfig, setApiConfig] = useState<ApiConfig | null>(null)
+  const [activeProvider, setActiveProvider] = useState<ProviderView | null>(null)
   const [webSearchConfig, setWebSearchConfig] = useState<WebSearchConfig | null>(null)
 
   useEffect(() => {
@@ -55,11 +55,17 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
 
     const loadConfig = async () => {
       try {
-        const result = await api.apiConfigGet()
-        if (!cancelled && result.success) setApiConfig(result.config ?? null)
+        const result = await api.providersList()
+        if (!cancelled) {
+          setActiveProvider(
+            result.success
+              ? (result.providers?.find((provider) => provider.active) ?? null)
+              : null
+          )
+        }
       } catch (error) {
-        console.error('[WelcomeScreen] Failed to load API config:', error)
-        if (!cancelled) setApiConfig(null)
+        console.error('[WelcomeScreen] Failed to load providers:', error)
+        if (!cancelled) setActiveProvider(null)
       }
       try {
         const result = await api.webSearchGet()
@@ -94,10 +100,8 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
 
   const latestWorkspace = recentWorkspaces[0]
   const latestName = latestWorkspace ? workspaceName(latestWorkspace) : ''
-  const apiReady = Boolean(
-    apiConfig?.apiUrl && apiConfig.apiKey && apiConfig.selectedModel
-  )
-  const model = apiConfig?.selectedModel?.trim() || t('welcomeModelUnset')
+  const apiReady = Boolean(activeProvider?.connected && activeProvider.model)
+  const model = activeProvider?.model?.trim() || t('welcomeModelUnset')
 
   const webSearchProvider = webSearchConfig?.provider
     ? findWebSearchProvider(webSearchConfig.provider)

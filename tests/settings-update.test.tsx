@@ -5,16 +5,30 @@ import { Settings } from '../src/components/Settings'
 import { useI18nStore } from '../src/store/i18nStore'
 import { INITIAL_UPDATE_STATE, useUpdaterStore } from '../src/store/updaterStore'
 import { api } from '../src/api'
-import { DialogHost } from '../src/components/DialogHost'
-import { useDialogStore } from '../src/store/dialogStore'
 import { translations } from '../src/i18n/translations'
 import type { UpdateState } from '../src/types/electron'
 
 vi.mock('../src/api', () => ({
   api: {
-    apiConfigGet: vi.fn(async () => ({ success: false })),
-    apiConfigSave: vi.fn(async () => ({ success: true })),
-    apiConfigFetchModels: vi.fn(async () => ({ success: true, models: [] })),
+    providersList: vi.fn(async () => ({ success: true, providers: [], activeProvider: null })),
+    providersSetActive: vi.fn(async () => ({ success: true })),
+    providersSetOverrides: vi.fn(async () => ({
+      success: true,
+      effective: { contextWindow: 128_000, maxTokens: 16_384 },
+      pending: false,
+    })),
+    providersRefresh: vi.fn(async () => ({
+      success: true,
+      added: 0,
+      removed: 0,
+      checkedAt: Date.now(),
+    })),
+    providersSetApiKey: vi.fn(async () => ({ success: true })),
+    providersForget: vi.fn(async () => ({ success: true })),
+    providersLogin: vi.fn(async () => ({ success: true })),
+    providersAuthAnswer: vi.fn(async () => ({ ok: true })),
+    providersCancelLogin: vi.fn(async () => ({ ok: true })),
+    onProvidersAuthEvent: vi.fn(() => () => {}),
     webSearchGet: vi.fn(async () => ({
       success: true,
       config: { provider: null, endpoint: 'china', keys: {} },
@@ -75,81 +89,78 @@ afterEach(() => {
   })
 })
 
-describe('settings provider model capabilities', () => {
-  it('persists the context window and image flag of each model', async () => {
-    vi.mocked(api.apiConfigGet).mockResolvedValue({
-      success: true,
-      config: {
-        provider: 'custom',
-        apiUrl: 'https://api.example.com/v1',
-        apiKey: 'sk-test',
-        selectedModel: 'deepseek-flash',
+function providerView(): {
+  success: true
+  providers: unknown[]
+  activeProvider: string
+} {
+  return {
+    success: true,
+    activeProvider: 'deepseek',
+    providers: [
+      {
+        id: 'deepseek',
+        name: 'DeepSeek',
+        connected: true,
+        credentialType: 'api_key',
+        authMethods: ['api_key'],
+        active: true,
+        model: 'deepseek-flash',
         models: [
-          { id: 'deepseek-flash', contextWindow: 128_000, image: true },
-          { id: 'text-only-model', contextWindow: 64_000, image: false },
+          {
+            id: 'deepseek-flash',
+            name: 'DeepSeek Flash',
+            limits: { contextWindow: 128_000, maxTokens: 16_384 },
+            reasoning: true,
+            vision: true,
+            api: 'openai-completions',
+            thinkingLevels: ['low', 'medium', 'high'],
+            input: ['text', 'image'],
+          },
+          {
+            id: 'text-only-model',
+            name: 'Text Only',
+            limits: { contextWindow: 64_000, maxTokens: 8_192 },
+            reasoning: false,
+            vision: false,
+            api: 'openai-completions',
+            thinkingLevels: [],
+            input: ['text'],
+          },
         ],
       },
-    })
+    ],
+  }
+}
+
+describe('settings provider model capabilities', () => {
+  it('writes the tuned context window back to the main process', async () => {
+    vi.mocked(api.providersList).mockResolvedValue(providerView() as never)
 
     render(<Settings initialSection="api" />)
 
-    // 只读模型的勾选状态：图片开关与容量下拉都在同一行
-    const flash = (await screen.findByRole('checkbox', {
-      name: 'deepseek-flash 图片',
-    })) as HTMLInputElement
-    expect(flash.checked).toBe(true)
+    // 能力表只读展示目录真值；下调走下拉，按模型存覆盖值
+    const select = (await screen.findByLabelText(
+      'text-only-model 上下文容量'
+    )) as HTMLSelectElement
+    expect(select.value).toBe('64000')
+    fireEvent.change(select, { target: { value: '32768' } })
 
-    fireEvent.click(screen.getByRole('checkbox', { name: 'text-only-model 图片' }))
-    fireEvent.change(screen.getByLabelText('text-only-model 上下文容量'), {
-      target: { value: '1000000' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: translations.zh.saveConfiguration }))
-
-    await waitFor(() => expect(api.apiConfigSave).toHaveBeenCalled())
-    const saved = vi.mocked(api.apiConfigSave).mock.calls[0][0] as {
-      models: Array<{ id: string; contextWindow: number; image: boolean }>
-    }
-    expect(saved.models).toEqual([
-      { id: 'deepseek-flash', contextWindow: 128_000, image: true },
-      { id: 'text-only-model', contextWindow: 1_000_000, image: true },
-    ])
+    await waitFor(() =>
+      expect(api.providersSetOverrides).toHaveBeenCalledWith('deepseek', 'text-only-model', {
+        contextWindow: 32_768
+      })
+    )
   })
 
-  it('explains why saving was blocked while sessions are running', async () => {
-    vi.mocked(api.apiConfigGet).mockResolvedValue({
-      success: true,
-      config: {
-        provider: 'custom',
-        apiUrl: 'https://api.example.com/v1',
-        apiKey: 'sk-test',
-        selectedModel: 'deepseek-flash',
-        models: [{ id: 'deepseek-flash', contextWindow: 128_000, image: false }],
-      },
-    })
-    vi.mocked(api.apiConfigSave).mockResolvedValue({
-      success: false,
-      error: 'Agent sessions are running',
-      code: 'AGENT_BUSY',
-      workspaces: [{ path: '/ws', sessionIds: ['s1'] }],
-    })
+  it('removes the stored credentials of the selected provider', async () => {
+    vi.mocked(api.providersList).mockResolvedValue(providerView() as never)
 
-    render(
-      <>
-        <Settings initialSection="api" />
-        <DialogHost />
-      </>
-    )
+    render(<Settings initialSection="api" />)
 
-    const saveButton = await screen.findByRole('button', {
-      name: translations.zh.saveConfiguration,
-    })
-    expect((saveButton as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(await screen.findByRole('button', { name: translations.zh.providerForget }))
 
-    fireEvent.click(saveButton)
-
-    expect(await screen.findByText(translations.zh.agentBusyMessage.replace('{count}', '1'))).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: translations.zh.dialogGotIt }))
-    await waitFor(() => expect(useDialogStore.getState().current).toBeNull())
+    await waitFor(() => expect(api.providersForget).toHaveBeenCalledWith('deepseek'))
   })
 })
 

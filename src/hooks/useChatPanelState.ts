@@ -1560,13 +1560,10 @@ export function useChatPanelState(props: ChatPanelProps) {
 
   useEffect(() => {
     let cancelled = false
-    void api.apiConfigGet().then((result) => {
+    void api.providersList().then((result) => {
       if (cancelled || !result.success) return
-      setAvailableModels(
-        Array.isArray(result.config?.models)
-          ? result.config.models.map((entry) => entry.id)
-          : []
-      )
+      const active = result.providers?.find((provider) => provider.active)
+      setAvailableModels((active?.models ?? []).map((model) => model.id))
     })
     return () => {
       cancelled = true
