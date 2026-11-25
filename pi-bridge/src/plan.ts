@@ -53,13 +53,30 @@ export function normalizePlanSteps(input: unknown): PlanStep[] {
   return steps
 }
 
-/** 从 sidecar 读回的宽松校验 */
+/** 从 sidecar 读回的结构校验 */
 export function isStructuredPlan(value: unknown): value is StructuredPlan {
   if (!value || typeof value !== 'object') return false
   const plan = value as Record<string, unknown>
-  return (
-    typeof plan.id === 'string' &&
-    Array.isArray(plan.steps) &&
-    (plan.status === 'proposed' || plan.status === 'approved' || plan.status === 'rejected')
-  )
+  if (
+    typeof plan.id !== 'string' ||
+    !plan.id.trim() ||
+    typeof plan.summary !== 'string' ||
+    !Array.isArray(plan.steps) ||
+    (plan.status !== 'proposed' && plan.status !== 'approved' && plan.status !== 'rejected')
+  ) {
+    return false
+  }
+  return plan.steps.every((step) => {
+    if (!step || typeof step !== 'object') return false
+    const record = step as Record<string, unknown>
+    return (
+      typeof record.id === 'string' &&
+      record.id.length > 0 &&
+      typeof record.title === 'string' &&
+      (record.status === 'pending' ||
+        record.status === 'in_progress' ||
+        record.status === 'done' ||
+        record.status === 'skipped')
+    )
+  })
 }

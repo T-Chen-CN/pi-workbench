@@ -20,14 +20,14 @@ export type TimelineItem =
       tokensBefore?: number
     }
 
-/** entry.timestamp 既可能是 ISO 字符串，也可能是毫秒数 */
+/** entry.timestamp 既可能是 ISO 字符串，也可能是毫秒数；缺失时返回稳定值 0，避免每次投影变化破坏分支匹配 */
 export function entryTimestamp(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value === 'string') {
     const parsed = Date.parse(value)
     if (Number.isFinite(parsed)) return parsed
   }
-  return Date.now()
+  return 0
 }
 
 /** 按 context_edit 的 replacement 改写消息内容，语义与 Pi 的投影保持一致 */

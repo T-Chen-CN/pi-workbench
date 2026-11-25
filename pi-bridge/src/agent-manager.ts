@@ -2506,6 +2506,10 @@ export class AgentManager {
         SessionManager.findById(root, sessionId, this.sessionDir)
       // 先标记 deletedSessions 并等待在途创建结束，避免删除瞬间创建完成的运行时回魂
       this.deletedSessions.add(sessionId)
+      if (this.deletedSessions.size > 500) {
+        const oldest = this.deletedSessions.values().next().value
+        if (oldest !== undefined) this.deletedSessions.delete(oldest)
+      }
       const inflight = this.creatingRuntimes.get(sessionId)
       if (inflight) {
         await inflight.catch(() => undefined)
@@ -3060,6 +3064,10 @@ export class AgentManager {
   /** 标记标题已确定（进程内 + sidecar）：之后只有手动重命名能改写 */
   private settleSessionTitle(runtime: SessionRuntime, title: string): void {
     this.settledTitles.set(runtime.id, title)
+    if (this.settledTitles.size > 500) {
+      const oldest = this.settledTitles.keys().next().value
+      if (oldest !== undefined) this.settledTitles.delete(oldest)
+    }
     if (runtime.extras.title === title) return
     runtime.extras.title = title
     this.persistExtras(runtime)

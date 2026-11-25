@@ -174,5 +174,15 @@ export function buildSessionMessagesFromEntries(
   }
 
   flushTurn()
+  // 历史中因崩溃截断未闭合的工具调用不能永久保持 running 状态，统一归一为 error
+  for (const message of result) {
+    if (!message.parts) continue
+    for (const part of message.parts) {
+      if (part.type === 'tool' && part.status === 'running') {
+        part.status = 'error'
+        part.isError = true
+      }
+    }
+  }
   return result
 }

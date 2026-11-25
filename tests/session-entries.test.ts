@@ -131,11 +131,12 @@ describe('activeTimeline', () => {
 })
 
 describe('entryTimestamp', () => {
-  it('accepts ISO strings, millisecond numbers and falls back to now', () => {
+  it('accepts ISO strings, millisecond numbers and falls back to 0 deterministically', () => {
     expect(entryTimestamp('2026-10-28T00:00:00.000Z')).toBe(
       Date.parse('2026-10-28T00:00:00.000Z')
     )
     expect(entryTimestamp(1_700_000_000_000)).toBe(1_700_000_000_000)
-    expect(entryTimestamp('not-a-date')).toBeGreaterThan(0)
+    expect(entryTimestamp('not-a-date')).toBe(0)
+    expect(entryTimestamp(undefined)).toBe(0)
   })
 })
