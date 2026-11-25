@@ -1576,11 +1576,19 @@ export function useChatPanelState(props: ChatPanelProps) {
     void piAgentAPI.getModelCapabilities(workspacePath).then((result) => {
       if (cancelled) return
       if (result.success && result.models) setModelCapabilities(result.models)
+      // 会话记录的模型已不在当前供应商目录里：主进程已静默回落，
+      // 这里把 chat store 对齐到实际生效的模型，避免头部显示一个用不了的 id（D22）
+      const selected = result.selected
+      if (!result.success || !selected || !activeKey) return
+      const current = useChatStore.getState().conversations[activeKey]?.sessionSettings
+      if (current?.modelId && current.modelId !== selected) {
+        useChatStore.getState().setSessionSettings(activeKey, { ...current, modelId: selected })
+      }
     })
     return () => {
       cancelled = true
     }
-  }, [initialized, workspacePath, configVersion])
+  }, [initialized, workspacePath, configVersion, activeKey])
 
   const handleModelChange = async (modelId: string) => {
     if (!activeSessionId || !activeKey || !modelId || isLoading) return
