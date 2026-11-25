@@ -1080,8 +1080,10 @@ export interface WebSearchConfig {
   /** null 表示尚未选择来源 */
   provider: WebSearchProviderId | null
   endpoint: WebSearchEndpoint
-  /** 按供应商保存的 Key；切换供应商时保留 */
+  /** 按供应商提交的新 Key（读取时永不返回明文） */
   keys: Partial<Record<WebSearchProviderId, string>>
+  /** 读取时标记哪些供应商已在主进程安全保存 Key */
+  configuredKeys?: Partial<Record<WebSearchProviderId, boolean>>
 }
 
 export interface WebSearchGetResult {

@@ -147,15 +147,36 @@ export function parseRangeHeader(value: string | null, size: number): ByteRange 
   return { start, end }
 }
 
-function baseHeaders(targetPath: string, size: number): Headers {
+const APP_ORIGIN = 'pw-app://bundle'
+
+function allowedCorsOrigin(originHeader: string | null): string | null {
+  if (!originHeader || originHeader === 'null') return null
+  if (originHeader === APP_ORIGIN) return APP_ORIGIN
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL
+  if (devServerUrl) {
+    try {
+      const devOrigin = new URL(devServerUrl).origin
+      if (originHeader === devOrigin) return devOrigin
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function baseHeaders(targetPath: string, size: number, originHeader: string | null = null): Headers {
   const headers = new Headers({
     'Content-Type': mimeForPath(targetPath),
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
-    // iframe 使用不透明 origin（sandbox 不含 allow-same-origin），子资源需要 CORS
-    'Access-Control-Allow-Origin': '*',
   })
+  // 只允许应用自身 origin 跨域读取（禁止 `*` 与不透明 `null` origin，防止沙箱 HTML 预览跨域窃取工作区文件）
+  const corsOrigin = allowedCorsOrigin(originHeader)
+  if (corsOrigin) {
+    headers.set('Access-Control-Allow-Origin', corsOrigin)
+    headers.set('Vary', 'Origin')
+  }
   if (size >= 0) headers.set('Content-Length', String(size))
   return headers
 }
@@ -166,7 +187,8 @@ function baseHeaders(targetPath: string, size: number): Headers {
 export async function serveFileRequest(
   rawUrl: string,
   method = 'GET',
-  rangeHeader: string | null = null
+  rangeHeader: string | null = null,
+  originHeader: string | null = null
 ): Promise<Response> {
   if (method !== 'GET' && method !== 'HEAD') {
     return new Response('Method Not Allowed', { status: 405 })
@@ -196,12 +218,12 @@ export async function serveFileRequest(
   }
 
   if (method === 'HEAD') {
-    const headers = baseHeaders(target, size)
+    const headers = baseHeaders(target, size, originHeader)
     if (range) headers.set('Content-Range', `bytes ${range.start}-${range.end}/${size}`)
     return new Response(null, { status: range ? 206 : 200, headers })
   }
 
-  const headers = baseHeaders(target, range ? range.end - range.start + 1 : size)
+  const headers = baseHeaders(target, range ? range.end - range.start + 1 : size, originHeader)
   if (range) headers.set('Content-Range', `bytes ${range.start}-${range.end}/${size}`)
 
   const stream = fs.createReadStream(target, range ? { start: range.start, end: range.end } : {})
@@ -216,7 +238,8 @@ export function registerFileProtocol(): void {
       return await serveFileRequest(
         request.url,
         request.method,
-        request.headers.get('range')
+        request.headers.get('range'),
+        request.headers.get('origin')
       )
     } catch (error) {
       console.error('[FileProtocol] Failed to serve:', request.url, error)

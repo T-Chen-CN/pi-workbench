@@ -56,7 +56,11 @@ export const WebSearchSettings: React.FC = () => {
   }
 
   const handleSave = async () => {
-    if (selected?.requiresKey && !config.keys[selected.id]?.trim()) {
+    const hasKey = Boolean(
+      selected &&
+        (config.keys[selected.id]?.trim() || config.configuredKeys?.[selected.id])
+    )
+    if (selected?.requiresKey && !hasKey) {
       toast.error(t('webSearchKeyRequired'))
       return
     }
@@ -64,6 +68,13 @@ export const WebSearchSettings: React.FC = () => {
     try {
       const result = await api.webSearchSave(config)
       if (result.success) {
+        if (selected && config.keys[selected.id]?.trim()) {
+          setConfig((prev) => ({
+            ...prev,
+            keys: { ...prev.keys, [selected.id]: '' },
+            configuredKeys: { ...prev.configuredKeys, [selected.id]: true },
+          }))
+        }
         toast.success(t('webSearchSaved'))
         emitAppEvent('web-search-saved')
       } else {
@@ -140,7 +151,13 @@ export const WebSearchSettings: React.FC = () => {
             type="password"
             value={config.keys[selected.id] ?? ''}
             onChange={(event) => updateKey(selected.id, event.target.value)}
-            placeholder={selected.requiresKey ? 'sk-...' : t('webSearchApiKeyOptional')}
+            placeholder={
+              config.configuredKeys?.[selected.id]
+                ? '••••••••'
+                : selected.requiresKey
+                  ? 'sk-...'
+                  : t('webSearchApiKeyOptional')
+            }
             className="type-code"
           />
         </Field>

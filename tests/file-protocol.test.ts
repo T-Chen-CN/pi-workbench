@@ -118,14 +118,20 @@ describe('serveFileRequest', () => {
     const target = path.join(workDir, 'a.txt')
     fs.writeFileSync(target, 'hello world')
 
-    const response = await serveFileRequest(toUrl(target), 'GET')
+    const response = await serveFileRequest(toUrl(target), 'GET', null, 'pw-app://bundle')
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe('text/plain; charset=utf-8')
     expect(response.headers.get('Accept-Ranges')).toBe('bytes')
     expect(response.headers.get('Cache-Control')).toBe('no-store')
     expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff')
-    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*')
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('pw-app://bundle')
     expect(await response.text()).toBe('hello world')
+
+    // 沙箱 iframe（Origin: null）或外部 origin 不得获得 CORS 读取权限
+    const sandboxRes = await serveFileRequest(toUrl(target), 'GET', null, 'null')
+    expect(sandboxRes.headers.get('Access-Control-Allow-Origin')).toBeNull()
+    const evilRes = await serveFileRequest(toUrl(target), 'GET', null, 'https://evil.example')
+    expect(evilRes.headers.get('Access-Control-Allow-Origin')).toBeNull()
   })
 
   it('answers a range request with 206 and Content-Range', async () => {

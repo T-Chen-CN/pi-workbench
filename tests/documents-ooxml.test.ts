@@ -106,6 +106,26 @@ describe('readSpreadsheet', () => {
     const zip = ZipArchive.open(buildZip([{ name: '[Content_Types].xml', content: '<Types/>' }]))
     expect(() => readSpreadsheet(zip)).toThrow(/xl\/workbook\.xml/)
   })
+
+  it('稀疏超大行号（如 r="1048576"）不会展开百万空行导致 OOM', () => {
+    const model = readSpreadsheet(
+      ZipArchive.open(
+        buildXlsx({
+          sheets: [
+            {
+              name: 'Sparse',
+              xml:
+                '<sheetData>' +
+                '<row r="1"><c r="A1"><v>1</v></c></row>' +
+                '<row r="1048576"><c r="A1048576"><v>99</v></c></row>' +
+                '</sheetData>',
+            },
+          ],
+        })
+      )
+    )
+    expect(model.sheets[0].rows).toEqual([['1'], ['99']])
+  })
 })
 
 describe('readPresentation', () => {

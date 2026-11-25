@@ -17,7 +17,9 @@ const EOCD_MIN_BYTES = 22
 /** ZIP 注释上限，决定从文件尾部往前搜多远 */
 const EOCD_MAX_SEARCH = 0xffff
 /** 单个条目的解压上限：超出按损坏处理，避免 zip 炸弹吃满内存 */
-const MAX_ENTRY_BYTES = 256 * 1024 * 1024
+const MAX_ENTRY_BYTES = 64 * 1024 * 1024
+/** 单个文档所有条目的累计解压上限：防止多条目 ZIP 炸弹累积耗尽内存 */
+const MAX_TOTAL_DECOMPRESSED_BYTES = 128 * 1024 * 1024
 
 export class ZipError extends Error {
   constructor(message: string) {
@@ -46,6 +48,8 @@ function findEndOfCentralDirectory(buffer: Buffer): number {
 }
 
 export class ZipArchive {
+  private totalDecompressedBytes = 0
+
   private constructor(
     private readonly buffer: Buffer,
     private readonly records: Map<string, ZipEntryRecord>
@@ -103,6 +107,12 @@ export class ZipArchive {
     return this.records.has(name)
   }
 
+  /** 返回中央目录声明的未压缩大小（读取前可用于预检，避免先解压超大媒体） */
+  entrySize(name: string): number | null {
+    const record = this.records.get(name)
+    return record ? record.uncompressedSize : null
+  }
+
   /** 直接位于 `prefix` 下的条目名（不递归） */
   children(prefix: string): string[] {
     const normalized = prefix.endsWith('/') ? prefix : `${prefix}/`
@@ -116,8 +126,13 @@ export class ZipArchive {
     const record = this.records.get(name)
     if (!record) return null
     if (record.flags & 0x1) throw new ZipError(`${name} 已加密，无法读取`)
-    if (record.uncompressedSize > MAX_ENTRY_BYTES) {
-      throw new ZipError(`${name} 解压后超过 ${MAX_ENTRY_BYTES / 1024 / 1024}MB，已跳过`)
+    const remainingBudget = MAX_TOTAL_DECOMPRESSED_BYTES - this.totalDecompressedBytes
+    if (remainingBudget <= 0) {
+      throw new ZipError(`文档累计解压体积超过 ${MAX_TOTAL_DECOMPRESSED_BYTES / 1024 / 1024}MB 上限`)
+    }
+    const maxAllowed = Math.min(MAX_ENTRY_BYTES, remainingBudget)
+    if (record.uncompressedSize > maxAllowed) {
+      throw new ZipError(`${name} 解压后超过大小上限，已跳过`)
     }
     const local = record.localOffset
     if (local + 30 > this.buffer.length || this.buffer.readUInt32LE(local) !== LOCAL_SIGNATURE) {
@@ -130,10 +145,18 @@ export class ZipArchive {
     if (end > this.buffer.length) throw new ZipError(`${name} 的数据被截断`)
     const raw = this.buffer.subarray(start, end)
 
-    if (record.method === 0) return Buffer.from(raw)
+    if (record.method === 0) {
+      if (raw.length > maxAllowed) {
+        throw new ZipError(`${name} 解压后超过大小上限，已跳过`)
+      }
+      this.totalDecompressedBytes += raw.length
+      return Buffer.from(raw)
+    }
     if (record.method === 8) {
       try {
-        return inflateRawSync(raw, { maxOutputLength: MAX_ENTRY_BYTES })
+        const inflated = inflateRawSync(raw, { maxOutputLength: maxAllowed })
+        this.totalDecompressedBytes += inflated.length
+        return inflated
       } catch (error) {
         throw new ZipError(`${name} 解压失败：${error instanceof Error ? error.message : '未知错误'}`)
       }

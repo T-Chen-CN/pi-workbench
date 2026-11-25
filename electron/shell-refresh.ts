@@ -16,6 +16,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { getAppDir } from './app-paths.js'
+import { sanitizedChildEnv } from './ipc/web-search-config.js'
 
 export interface RefreshCommand {
   command: string
@@ -89,7 +90,11 @@ function readLastRunVersion(filePath: string): string | null {
 
 function runCommand({ command, args }: RefreshCommand): void {
   try {
-    const child = spawn(command, args, { detached: true, stdio: 'ignore' })
+    const child = spawn(command, args, {
+      detached: true,
+      stdio: 'ignore',
+      env: sanitizedChildEnv(),
+    })
     child.on('error', (error) => {
       console.warn(`[ShellRefresh] ${command} failed:`, error)
     })

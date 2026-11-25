@@ -244,11 +244,20 @@ async function readPdf(
   }
 }
 
+const MAX_ZIP_DOCUMENT_BYTES = 100 * 1024 * 1024
+
 async function readZipDocument(
   targetPath: string,
   format: DocumentFormat,
   request: DocumentReadRequest
 ): Promise<DocumentReadResult> {
+  const stats = await fs.stat(targetPath)
+  if (stats.size > MAX_ZIP_DOCUMENT_BYTES) {
+    throw new DocumentError(
+      `文档体积超过 ${MAX_ZIP_DOCUMENT_BYTES / 1024 / 1024}MB 读取上限`,
+      'corrupt'
+    )
+  }
   const buffer = await fs.readFile(targetPath)
   const zip = ZipArchive.open(buffer)
   const sink = new TextSink()

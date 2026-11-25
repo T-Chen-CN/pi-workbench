@@ -13,11 +13,35 @@ import * as path from 'path'
 import * as fs from 'fs/promises'
 import { readJsonWithBackup, writeJsonAtomic } from './atomic-json.js'
 import { canonicalizePath, isPathInsideRoot } from './workspace-trust.js'
+import { sanitizedChildEnv } from './ipc/web-search-config.js'
 
 const execFileAsync = promisify(execFile)
 const GIT_TIMEOUT_MS = 30_000
 const FETCH_TIMEOUT_MS = 60_000
 const MAX_BUFFER = 32 * 1024 * 1024
+
+export { sanitizedChildEnv }
+
+/** 严格校验 git ref / branch / base 参数，阻断前导 `-` 选项注入（如 `--exec=` / `--output=`） */
+export function validateGitRef(value: string, label = 'git ref'): string {
+  if (typeof value !== 'string') throw new Error(`Invalid ${label}`)
+  const trimmed = value.trim()
+  if (
+    !trimmed ||
+    trimmed.length > 256 ||
+    trimmed.startsWith('-') ||
+    trimmed.endsWith('/') ||
+    trimmed.endsWith('.lock') ||
+    trimmed.includes('..') ||
+    trimmed.includes('//') ||
+    trimmed.includes('@{') ||
+    trimmed.includes('\\') ||
+    !/^[A-Za-z0-9._/@~^+:-]+$/.test(trimmed)
+  ) {
+    throw new Error(`Invalid ${label}`)
+  }
+  return trimmed
+}
 
 export const MAIN_WORKTREE_KEY = 'main'
 export const WORKTREE_DIR = '.pi-workbench/worktrees'
@@ -34,7 +58,7 @@ export async function fetchRemote(
   options: { timeoutMs?: number; interactive?: boolean } = {}
 ): Promise<{ ok: boolean; stderr: string; durationMs: number }> {
   const started = Date.now()
-  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+  const env: NodeJS.ProcessEnv = { ...sanitizedChildEnv(), GIT_TERMINAL_PROMPT: '0' }
   if (!options.interactive) {
     // 后台 fetch 不允许弹凭据窗口或等待输入；交互式（手动刷新）保留系统凭据助手
     env.GCM_INTERACTIVE = 'never'
@@ -87,6 +111,7 @@ async function git(cwd: string, args: string[], timeout = GIT_TIMEOUT_MS): Promi
       maxBuffer: MAX_BUFFER,
       windowsHide: true,
       encoding: 'utf8',
+      env: sanitizedChildEnv(),
     })
     return { ok: true, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') }
   } catch (error) {
@@ -214,12 +239,16 @@ export function loadSessionGit(workspaceDir: string): SessionGitFile {
   const result = readJsonWithBackup<Partial<SessionGitFile>>(file)
   const raw = result.data
   if (!raw || typeof raw !== 'object') return emptySessionGit()
+  const canonicalWorkspace = canonicalizePath(workspaceDir) ?? path.resolve(workspaceDir)
   const worktrees: Record<string, GitWorktreeRecord> = {}
   if (raw.worktrees && typeof raw.worktrees === 'object') {
     for (const [id, value] of Object.entries(raw.worktrees)) {
       if (!value || typeof value !== 'object') continue
       const record = value as Partial<GitWorktreeRecord>
       if (typeof record.path !== 'string' || !record.path) continue
+      // 仓库内提交的 session-git.json 不可信：record.path 必须落在工作区内，禁止 `../` 越界
+      const resolved = canonicalizePath(path.join(workspaceDir, record.path))
+      if (!resolved || !isPathInsideRoot(canonicalWorkspace, resolved)) continue
       worktrees[id] = {
         path: record.path,
         managed: record.managed === true,
@@ -440,11 +469,13 @@ export async function createWorktree(
   branch: string,
   base: string
 ): Promise<void> {
+  const safeBranch = validateGitRef(branch, 'branch name')
+  const safeBase = validateGitRef(base, 'base ref')
   await fs.mkdir(path.dirname(worktreePath), { recursive: true })
-  const add = await git(repoRoot, ['worktree', 'add', '-b', branch, worktreePath, base])
+  const add = await git(repoRoot, ['worktree', 'add', '-b', safeBranch, worktreePath, safeBase])
   if (!add.ok) {
     // 分支已存在时退化为直接检出该分支
-    const fallback = await git(repoRoot, ['worktree', 'add', worktreePath, branch])
+    const fallback = await git(repoRoot, ['worktree', 'add', worktreePath, safeBranch])
     if (!fallback.ok) {
       throw new Error(fallback.stderr.trim() || add.stderr.trim() || 'git worktree add failed')
     }
@@ -467,17 +498,27 @@ export async function branchHasNewCommits(
   base: string
 ): Promise<boolean> {
   if (!branch || !base) return false
-  const result = await git(repoRoot, ['rev-list', '--count', `${base}..${branch}`])
+  let safeBranch: string
+  let safeBase: string
+  try {
+    safeBranch = validateGitRef(branch, 'branch name')
+    safeBase = validateGitRef(base, 'base ref')
+  } catch {
+    return false
+  }
+  const result = await git(repoRoot, ['rev-list', '--count', `${safeBase}..${safeBranch}`, '--'])
   return result.ok && Number(result.stdout.trim()) > 0
 }
 
 export async function deleteBranch(repoRoot: string, branch: string): Promise<void> {
   if (!branch || branch === 'main' || branch === 'master') return
-  await git(repoRoot, ['branch', '-D', branch])
+  const safeBranch = validateGitRef(branch, 'branch name')
+  await git(repoRoot, ['branch', '-D', '--', safeBranch])
 }
 
 export async function checkout(worktreePath: string, branch: string): Promise<void> {
-  const result = await git(worktreePath, ['checkout', branch])
+  const safeBranch = validateGitRef(branch, 'branch name')
+  const result = await git(worktreePath, ['checkout', safeBranch])
   if (!result.ok) throw new Error(result.stderr.trim() || 'git checkout failed')
 }
 
@@ -486,12 +527,13 @@ export async function mergeBranch(
   branch: string,
   strategy: 'merge' | 'squash' | 'rebase' = 'merge'
 ): Promise<void> {
+  const safeBranch = validateGitRef(branch, 'branch name')
   const args =
     strategy === 'squash'
-      ? ['merge', '--squash', branch]
+      ? ['merge', '--squash', safeBranch]
       : strategy === 'rebase'
-        ? ['rebase', branch]
-        : ['merge', '--no-ff', branch]
+        ? ['rebase', safeBranch]
+        : ['merge', '--no-ff', safeBranch]
   const result = await git(worktreePath, args)
   if (!result.ok) throw new Error(result.stderr.trim() || 'git merge failed')
 }
@@ -505,7 +547,7 @@ export async function logCommits(
   const format = ['%H', '%h', '%an', '%ae', '%aI', '%s', '%D', '%P'].join('%x00')
   const args = ['log', `--format=${format}`, '-n', String(Math.max(1, Math.min(500, limit)))]
   if (all) args.push('--branches', '--remotes', '--tags', 'HEAD', '--topo-order')
-  else if (branch) args.push(branch)
+  else if (branch) args.push(validateGitRef(branch, 'branch name'), '--')
   const result = await git(worktreePath, args)
   if (!result.ok) return []
   const commits: GitCommitInfo[] = []
@@ -548,11 +590,11 @@ export async function logCommitStats(
 ): Promise<Record<string, GitCommitStats>> {
   const scope: string[] = []
   if (all) scope.push('--branches', '--remotes', '--tags', 'HEAD', '--topo-order')
-  else if (branch) scope.push(branch)
+  else if (branch) scope.push(validateGitRef(branch, 'branch name'))
   const count = String(Math.max(1, Math.min(500, limit)))
   const [numstat, nameStatus] = await Promise.all([
-    git(worktreePath, ['log', ...scope, '-n', count, '--numstat', '--format=%H']),
-    git(worktreePath, ['log', ...scope, '-n', count, '--name-status', '--format=%H']),
+    git(worktreePath, ['log', '-n', count, '--numstat', '--format=%H', ...scope, '--']),
+    git(worktreePath, ['log', '-n', count, '--name-status', '--format=%H', ...scope, '--']),
   ])
   const stats: Record<string, GitCommitStats> = {}
   const ensure = (sha: string): GitCommitStats => {
@@ -657,7 +699,9 @@ export async function fileDiffBetween(
   from: string,
   to: string
 ): Promise<string> {
-  const result = await git(worktreePath, ['diff', '--no-ext-diff', `${from}..${to}`])
+  const safeFrom = validateGitRef(from, 'from ref')
+  const safeTo = validateGitRef(to, 'to ref')
+  const result = await git(worktreePath, ['diff', '--no-ext-diff', `${safeFrom}..${safeTo}`, '--'])
   return result.ok ? result.stdout.slice(0, 400_000) : ''
 }
 

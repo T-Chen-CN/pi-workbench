@@ -78,14 +78,14 @@ export function resolveWatchableRoot(targetPath: string): string | null {
   return null
 }
 
-/** 文件写删改操作允许的范围：受信任工作区与应用缓存目录 */
+/** 文件写删改操作允许的范围：受信任工作区与应用临时缓存目录（不含 updater / drafts 等内部缓存） */
 export function resolveAllowedFileTarget(targetPath: string): string | null {
   const target = canonicalizePath(targetPath)
   if (!target) return null
 
   const roots = [...trustedWorkspaceRoots]
-  const cacheRoot = canonicalizePath(path.join(getAppDir(), 'cache'))
-  if (cacheRoot) roots.push(normalizeForComparison(cacheRoot))
+  const tempCacheRoot = canonicalizePath(path.join(getAppDir(), 'cache', 'temp'))
+  if (tempCacheRoot) roots.push(normalizeForComparison(tempCacheRoot))
 
   return roots.some((root) => isPathInsideRoot(root, target)) ? target : null
 }
@@ -94,8 +94,8 @@ export function resolveAllowedFileTarget(targetPath: string): string | null {
 export function isProtectedRoot(canonicalPath: string): boolean {
   const normalized = normalizeForComparison(canonicalPath)
   if (trustedWorkspaceRoots.has(normalized)) return true
-  const cacheRoot = canonicalizePath(path.join(getAppDir(), 'cache'))
-  return cacheRoot !== null && normalizeForComparison(cacheRoot) === normalized
+  const tempCacheRoot = canonicalizePath(path.join(getAppDir(), 'cache', 'temp'))
+  return tempCacheRoot !== null && normalizeForComparison(tempCacheRoot) === normalized
 }
 
 /** 校验工作区与文件路径，用于草稿等按文件持久化的能力 */

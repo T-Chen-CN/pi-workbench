@@ -1,6 +1,7 @@
 /** IPC 注册与来源校验 */
 
 import { app, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
+import { isAppUrl } from '../app-protocol.js'
 
 let getMainWindow: () => BrowserWindow | null = () => null
 
@@ -27,6 +28,21 @@ export function untrustIpcSender(webContentsId: number): void {
   trustedAuxSenders.delete(webContentsId)
 }
 
+function isTrustedFrameUrl(frameUrl: string, allowAuxBlank: boolean): boolean {
+  if (!frameUrl) return false
+  if (allowAuxBlank && frameUrl === 'about:blank') return true
+  if (isAppUrl(frameUrl)) return true
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL
+  if (devServerUrl) {
+    try {
+      return new URL(frameUrl).origin === new URL(devServerUrl).origin
+    } catch {
+      return false
+    }
+  }
+  return false
+}
+
 /** 只接受主窗口主框架（或已登记的辅助窗口）发来的 IPC；应用 ready 之后 fail-closed */
 export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
   // 测试替身没有 isReady，直接放行
@@ -35,9 +51,11 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
   const senderId = event.sender.id
   const mainWindow = getMainWindow()
   const fromMain = Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents)
-  if (!fromMain && !trustedAuxSenders.has(senderId)) return false
-  // 子框架不能借用窗口身份（about:blank 子框架会继承同一 webContents）
-  if (event.senderFrame && event.senderFrame !== event.sender.mainFrame) return false
+  const fromAux = !fromMain && trustedAuxSenders.has(senderId)
+  if (!fromMain && !fromAux) return false
+  // fail-closed：缺失 senderFrame 或来自子框架一律拒绝
+  if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) return false
+  if (!isTrustedFrameUrl(event.senderFrame.url, fromAux)) return false
   return true
 }
 

@@ -112,14 +112,27 @@ export function decodeAppPath(rawUrl: string): string[] | null {
   return decoded
 }
 
-/** 在 distDir 内解析目标文件；越界返回 null */
+/** 在 distDir 内解析目标文件（含 realpath 防符号链接逃逸）；越界返回 null */
 export function resolveAppTarget(segments: string[], distDir: string): string | null {
   const root = path.resolve(distDir)
+  let realRoot = root
+  try {
+    realRoot = fs.realpathSync.native(root)
+  } catch {
+    // distDir 不存在时退回词法根，后续 stat 会返回 404
+  }
   const target = segments.length === 0 ? path.join(root, 'index.html') : path.join(root, ...segments)
   const resolved = path.resolve(target)
-  const relative = path.relative(root, resolved)
-  if (relative.startsWith('..') || path.isAbsolute(relative)) return null
-  return resolved
+  const lexicalRel = path.relative(root, resolved)
+  if (lexicalRel.startsWith('..') || path.isAbsolute(lexicalRel)) return null
+  try {
+    const realTarget = fs.realpathSync.native(resolved)
+    const realRel = path.relative(realRoot, realTarget)
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) return null
+    return realTarget
+  } catch {
+    return resolved
+  }
 }
 
 function baseHeaders(targetPath: string, size: number): Headers {

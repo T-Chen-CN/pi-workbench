@@ -169,7 +169,21 @@ export function webAccessExtensionPaths(): string[] {
 
 handleIpc('webSearch:get', async () => {
   try {
-    return { success: true, config: await loadWebSearchConfig() }
+    const loaded = await loadWebSearchConfig()
+    // 永不向渲染层返回明文 API Key：只告知哪些供应商已配置
+    const configuredKeys: Partial<Record<WebSearchProviderId, boolean>> = {}
+    for (const id of WEB_SEARCH_PROVIDER_IDS) {
+      if (loaded.keys[id]) configuredKeys[id] = true
+    }
+    return {
+      success: true,
+      config: {
+        provider: loaded.provider,
+        endpoint: loaded.endpoint,
+        keys: {},
+        configuredKeys,
+      },
+    }
   } catch (error) {
     return {
       success: false,
@@ -194,10 +208,18 @@ handleIpc('webSearch:save', async (_event, input: unknown) => {
       return { success: false, error: 'Unknown web search provider' }
     }
 
+    const existing = await loadWebSearchConfig()
+    const incomingKeys = normalizeKeys(raw.keys)
+    // 保留未重新输入的既有密文 Key；若用户显式输入新值则覆盖
+    const mergedKeys: Partial<Record<WebSearchProviderId, string>> = { ...existing.keys }
+    for (const [id, value] of Object.entries(incomingKeys) as Array<[WebSearchProviderId, string]>) {
+      mergedKeys[id] = value
+    }
+
     const config: WebSearchConfig = {
       provider,
       endpoint: normalizeEndpoint(raw.endpoint),
-      keys: normalizeKeys(raw.keys),
+      keys: mergedKeys,
     }
 
     if (provider) {

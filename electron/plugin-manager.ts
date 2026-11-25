@@ -84,6 +84,8 @@ export interface PluginManagerOptions {
   watch?: boolean
   debounceMs?: number
   onChanged?: (workspaceDir: string) => void
+  /** 插件启用白名单文件（必须位于应用自有目录，绝不能读工作区内的不可信配置） */
+  stateFilePath?: string
 }
 
 const requireFromHere = createRequire(import.meta.url)
@@ -231,7 +233,9 @@ export class PluginManager {
 
     for (const plugin of state.plugins) {
       try {
-        plugin.deactivate?.()
+        void Promise.resolve(plugin.deactivate?.()).catch((error) => {
+          console.warn(`[Plugins] deactivate failed for ${plugin.info.id}:`, error)
+        })
       } catch (error) {
         console.warn(`[Plugins] deactivate failed for ${plugin.info.id}:`, error)
       }
@@ -403,36 +407,59 @@ export class PluginManager {
     }))
   }
 
-  private readEnabledIds(workspaceDir: string): string[] | null {
-    const configPath = path.join(workspaceDir, '.pi-workbench', 'config.json')
+  private readonly memoryEnabled = new Map<string, string[]>()
+
+  private stateFilePath(): string | null {
+    return this.options.stateFilePath ?? null
+  }
+
+  private workspaceKey(workspaceDir: string): string {
+    let resolved = path.resolve(workspaceDir)
     try {
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
-        enabledPlugins?: unknown
-        pluginsConfigured?: unknown
-      }
-      // 只有用户显式配置过（pluginsConfigured=true）才把列表当作启用白名单；
-      // 否则交给 isEnabled 处理，未配置时默认全部禁用。
-      if (config.pluginsConfigured === true && Array.isArray(config.enabledPlugins)) {
-        return config.enabledPlugins.filter((id): id is string => typeof id === 'string')
-      }
-      return null
+      resolved = fs.realpathSync.native(resolved)
     } catch {
+      // 目录尚未存在时退回 resolve 结果
+    }
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  }
+
+  private readStateStore(): Record<string, { enabledPlugins?: unknown }> {
+    const storePath = this.stateFilePath()
+    if (!storePath) return {}
+    const result = readJsonWithBackup<Record<string, unknown>>(storePath)
+    const raw = result.data
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+    const workspaces = (raw as { workspaces?: unknown }).workspaces
+    if (!workspaces || typeof workspaces !== 'object' || Array.isArray(workspaces)) return {}
+    return workspaces as Record<string, { enabledPlugins?: unknown }>
+  }
+
+  /**
+   * 启用白名单必须存放在应用自有配置目录（由主进程注入 stateFilePath），
+   * 绝不读取工作区内的 `.pi-workbench/config.json`，否则打开恶意仓库会直接触发主进程 RCE。
+   */
+  private readEnabledIds(workspaceDir: string): string[] | null {
+    const key = this.workspaceKey(workspaceDir)
+    if (!this.stateFilePath()) {
+      return this.memoryEnabled.get(key) ?? null
+    }
+    const entry = this.readStateStore()[key]
+    if (!entry || typeof entry !== 'object' || !Array.isArray(entry.enabledPlugins)) {
       return null
     }
+    return entry.enabledPlugins.filter((id): id is string => typeof id === 'string')
   }
 
   private writeEnabledIds(workspaceDir: string, ids: string[]): void {
-    const configDir = path.join(workspaceDir, '.pi-workbench')
-    const configPath = path.join(configDir, 'config.json')
-    const existing = readJsonWithBackup<Record<string, unknown>>(configPath)
-    const config: Record<string, unknown> =
-      existing.data && typeof existing.data === 'object' && !Array.isArray(existing.data)
-        ? existing.data
-        : { version: '1.0' }
-
-    config.enabledPlugins = ids
-    config.pluginsConfigured = true
-    writeJsonAtomicSync(configPath, config)
+    const key = this.workspaceKey(workspaceDir)
+    const storePath = this.stateFilePath()
+    if (!storePath) {
+      this.memoryEnabled.set(key, [...ids])
+      return
+    }
+    const workspaces = this.readStateStore()
+    workspaces[key] = { enabledPlugins: ids }
+    writeJsonAtomicSync(storePath, { version: 1, workspaces })
   }
 
   private isEnabled(id: string, enabledIds: string[] | null): boolean {

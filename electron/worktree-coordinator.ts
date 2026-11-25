@@ -29,7 +29,7 @@ import {
   type GitWorktreeRecord,
   type SessionGitFile,
 } from './git-worktrees.js'
-import { canonicalizePath } from './workspace-trust.js'
+import { canonicalizePath, isPathInsideRoot } from './workspace-trust.js'
 import {
   NO_DEPS,
   WorktreeDepsManager,
@@ -142,7 +142,9 @@ function worktreePathFromKey(state: WorkspaceState, key: string): string | null 
   const record = state.data.worktrees[key]
   if (!record) return null
   const target = path.join(state.workspaceDir, record.path)
-  return canonicalizePath(target) ?? target
+  const resolved = canonicalizePath(target)
+  if (!resolved || !isPathInsideRoot(state.workspaceDir, resolved)) return null
+  return resolved
 }
 
 /**

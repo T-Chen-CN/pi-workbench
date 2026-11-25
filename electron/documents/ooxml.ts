@@ -453,11 +453,21 @@ function readSheet(
 
   if (rows.size === 0 && maxColumns === 0) return { name, rows: [], dimension, merges }
   const ordered: string[][] = []
-  const highest = Math.max(...rows.keys())
-  for (let index = 0; index <= highest; index += 1) {
-    const row = rows.get(index) ?? []
-    while (row.length < maxColumns) row.push('')
-    ordered.push(row)
+  const sortedKeys = [...rows.keys()].sort((a, b) => a - b)
+  const highest = sortedKeys[sortedKeys.length - 1] ?? 0
+  // 防止稀疏超大行号（如 <row r="100000000">）展开成上亿空数组导致主进程 OOM
+  if (highest < MAX_ROWS_PER_SHEET) {
+    for (let index = 0; index <= highest; index += 1) {
+      const row = rows.get(index) ?? []
+      while (row.length < maxColumns) row.push('')
+      ordered.push(row)
+    }
+  } else {
+    for (const key of sortedKeys) {
+      const row = rows.get(key) ?? []
+      while (row.length < maxColumns) row.push('')
+      ordered.push(row)
+    }
   }
   return { name, rows: ordered, dimension, merges }
 }
@@ -549,6 +559,8 @@ function readPresentationImages(zip: ZipArchive): PresentationImage[] {
     if (images.length >= MAX_PRESENTATION_IMAGES) break
     const mime = RASTER_IMAGE_MIME[extensionOf(name)]
     if (!mime) continue
+    const declaredSize = zip.entrySize(name)
+    if (declaredSize !== null && declaredSize > MAX_PRESENTATION_IMAGE_BYTES) continue
     const buffer = zip.read(name)
     if (!buffer || buffer.length > MAX_PRESENTATION_IMAGE_BYTES) continue
     images.push({ name, dataUrl: `data:${mime};base64,${buffer.toString('base64')}` })

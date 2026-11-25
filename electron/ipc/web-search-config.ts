@@ -15,6 +15,16 @@ export function webSearchKeyEnv(provider: WebSearchProviderId): string {
   return `${WEB_SEARCH_KEY_ENV_PREFIX}_${provider.toUpperCase()}`
 }
 
+/** 子进程环境清理：剥离联网搜索密钥，避免 git hook / credential helper / 外部工具读取主进程秘密 */
+export function sanitizedChildEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(base)) {
+    if (key.startsWith(WEB_SEARCH_KEY_ENV_PREFIX)) continue
+    if (value !== undefined) env[key] = value
+  }
+  return env
+}
+
 export type WebSearchEndpoint = 'global' | 'china'
 
 export interface WebSearchConfig {

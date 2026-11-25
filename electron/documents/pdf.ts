@@ -88,10 +88,19 @@ export interface PdfTextOptions {
   maxPages?: number
 }
 
+const MAX_PDF_FILE_BYTES = 100 * 1024 * 1024
+
 export async function extractPdfText(
   targetPath: string,
   options: PdfTextOptions = {}
 ): Promise<PdfTextResult> {
+  const stats = await fs.stat(targetPath)
+  if (stats.size > MAX_PDF_FILE_BYTES) {
+    throw new DocumentError(
+      `PDF 文件超过 ${MAX_PDF_FILE_BYTES / 1024 / 1024}MB 读取上限`,
+      'corrupt'
+    )
+  }
   const buffer = await fs.readFile(targetPath)
   const pdfjs = await loadPdfjs()
   // 复制一份：pdf.js 会接管（并可能分离）传入的 TypedArray

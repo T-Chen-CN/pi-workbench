@@ -16,6 +16,7 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { readJsonWithBackup, writeJsonAtomic } from './atomic-json.js'
 import { getRepoInfo } from './git-worktrees.js'
+import { sanitizedChildEnv } from './ipc/web-search-config.js'
 import { canonicalizePath, isPathInsideRoot } from './workspace-trust.js'
 
 const execFileAsync = promisify(execFile)
@@ -132,6 +133,7 @@ async function runGit(cwd: string, args: string[]): Promise<GitRunResult> {
       maxBuffer: GIT_MAX_BUFFER,
       windowsHide: true,
       encoding: 'utf8',
+      env: sanitizedChildEnv(),
     })
     return { ok: true, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') }
   } catch (error) {

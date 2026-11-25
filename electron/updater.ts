@@ -512,10 +512,25 @@ export class UpdateController {
     }
   }
 
+  /** 只允许打开 https://github.com 下的发布页，避免恶意远端响应注入非预期协议或钓鱼域 */
+  private sanitizeGithubUrl(candidate: string | undefined): string {
+    if (candidate) {
+      try {
+        const parsed = new URL(candidate)
+        if (parsed.protocol === 'https:' && parsed.hostname === 'github.com') {
+          return parsed.toString()
+        }
+      } catch {
+        // fallback below
+      }
+    }
+    return this.releasePageUrl()
+  }
+
   /** macOS：打开 GitHub Release 页面手动下载 */
   async openDownloadPage(): Promise<UpdateActionResult> {
     try {
-      await this.openExternal(this.state.downloadUrl ?? this.releasePageUrl())
+      await this.openExternal(this.sanitizeGithubUrl(this.state.downloadUrl))
       return { success: true }
     } catch (error) {
       return { success: false, error: errorMessage(error) }
@@ -579,7 +594,7 @@ export class UpdateController {
         status: 'available',
         version: latest,
         releaseNotes: normalizeReleaseNotes(release.body),
-        downloadUrl: release.html_url ?? this.releasePageUrl(),
+        downloadUrl: this.sanitizeGithubUrl(release.html_url),
         checkedAt: Date.now(),
       })
     } else {

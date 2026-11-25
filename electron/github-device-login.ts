@@ -152,6 +152,20 @@ async function pollOnce(
  * 开始设备码登录：申请用户码、打开浏览器并启动轮询。
  * 同一时刻只保留一个会话，重复开始会取消上一个。
  */
+function safeGithubVerificationUri(candidate: string | undefined): string {
+  if (candidate) {
+    try {
+      const parsed = new URL(candidate)
+      if (parsed.protocol === 'https:' && parsed.hostname === 'github.com') {
+        return parsed.toString()
+      }
+    } catch {
+      // fallback below
+    }
+  }
+  return GITHUB_DEVICE_VERIFICATION_URI
+}
+
 export async function startGithubDeviceLogin(
   sinks: GithubDeviceLoginSinks
 ): Promise<GithubDeviceLoginStart> {
@@ -168,7 +182,7 @@ export async function startGithubDeviceLogin(
   const session: DeviceSession = {
     clientId,
     deviceCode: started.deviceCode,
-    verificationUri: started.verificationUri ?? GITHUB_DEVICE_VERIFICATION_URI,
+    verificationUri: safeGithubVerificationUri(started.verificationUri),
     interval: Math.max(1, started.interval ?? 5),
     expiresAt: Date.now() + (started.expiresIn ?? 900) * 1000,
     failures: 0,
@@ -191,7 +205,7 @@ export async function startGithubDeviceLogin(
 
 /** 重新打开设备授权页面（用于用户关掉了浏览器标签的情况） */
 export async function openGithubDeviceVerification(): Promise<boolean> {
-  const uri = activeSession?.verificationUri ?? GITHUB_DEVICE_VERIFICATION_URI
+  const uri = safeGithubVerificationUri(activeSession?.verificationUri)
   try {
     await shell.openExternal(uri)
     return true

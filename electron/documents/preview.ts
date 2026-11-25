@@ -92,21 +92,49 @@ function blocksFromLines(lines: string[]): PreviewBlock[] {
   return blocks
 }
 
+/** 预览允许读取的文档体积上限（字节） */
+const MAX_PREVIEW_FILE_BYTES = 100 * 1024 * 1024
+/** 单页幻灯片最多提取图片数 */
+const MAX_SLIDE_IMAGES = 12
+
 /** xx.xml → `../media/image1.png` 之类的相对目标解析成 ZIP 内路径 */
-function slideImages(zip: ZipArchive, slidePath: string): PresentationImage[] {
+function slideImages(
+  zip: ZipArchive,
+  slidePath: string,
+  cache: Map<string, PresentationImage | null>
+): PresentationImage[] {
   const relsPath = slidePath.replace(/slides\/([^/]+)$/, 'slides/_rels/$1.rels')
   const rels = zip.readText(relsPath)
   if (!rels) return []
   const images: PresentationImage[] = []
   for (const token of scanRelationships(rels)) {
+    if (images.length >= MAX_SLIDE_IMAGES) break
     if (!token) continue
     const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(slidePath), token))
     if (!resolved.startsWith('ppt/media/')) continue
+    if (cache.has(resolved)) {
+      const cached = cache.get(resolved)
+      if (cached) images.push(cached)
+      continue
+    }
     const mime = MIME_BY_EXTENSION[extensionOfPath(resolved)]
-    if (!mime) continue
+    if (!mime) {
+      cache.set(resolved, null)
+      continue
+    }
+    const declaredSize = zip.entrySize(resolved)
+    if (declaredSize !== null && declaredSize > 8 * 1024 * 1024) {
+      cache.set(resolved, null)
+      continue
+    }
     const buffer = zip.read(resolved)
-    if (!buffer || buffer.length > 8 * 1024 * 1024) continue
-    images.push({ name: resolved, dataUrl: `data:${mime};base64,${buffer.toString('base64')}` })
+    if (!buffer || buffer.length > 8 * 1024 * 1024) {
+      cache.set(resolved, null)
+      continue
+    }
+    const image = { name: resolved, dataUrl: `data:${mime};base64,${buffer.toString('base64')}` }
+    cache.set(resolved, image)
+    images.push(image)
   }
   return images
 }
@@ -167,12 +195,14 @@ function previewSheet(zip: ZipArchive, format: DocumentFormat): DocumentPreview 
 
 function previewSlide(zip: ZipArchive, format: DocumentFormat): DocumentPreview {
   const model = readPresentation(zip)
+  const imageCache = new Map<string, PresentationImage | null>()
+  for (const image of model.images) imageCache.set(image.name, image)
   const slides = model.slides.slice(0, PREVIEW_SLIDES).map((slide) => {
     const file = `ppt/slides/slide${slide.index}.xml`
     return {
       index: slide.index,
       lines: slide.lines.slice(0, PREVIEW_LINES_PER_SECTION),
-      images: slideImages(zip, file),
+      images: slideImages(zip, file, imageCache),
     }
   })
   // 幻灯片的图片挂在各自的 rels 上；解析不到时退回全局图片，至少别丢内容
@@ -208,6 +238,12 @@ export async function readDocumentPreview(targetPath: string): Promise<DocumentP
     const stats = await fs.stat(targetPath)
     if (!stats.isFile()) return { kind: 'error', message: '目标不是一个文件' }
     if (stats.size === 0) return { kind: 'error', message: '文件是空的' }
+    if (stats.size > MAX_PREVIEW_FILE_BYTES) {
+      return {
+        kind: 'error',
+        message: `文件超过 ${MAX_PREVIEW_FILE_BYTES / 1024 / 1024}MB 预览上限`,
+      }
+    }
 
     const sniff = await detectDocument(targetPath)
     if (sniff.legacy || sniff.format === 'legacy-office') {

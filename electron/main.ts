@@ -497,6 +497,7 @@ const terminalManager = new TerminalManager({
 })
 
 const pluginManager = new PluginManager({
+  stateFilePath: path.join(getAppDir(), 'config', 'workspace-plugins.json'),
   onChanged: (workspaceDir) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('plugins:changed', { workspaceDir })
@@ -894,9 +895,21 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
     }
   })
 
+  mainWindow.webContents.on('will-attach-webview', (event) => {
+    event.preventDefault()
+  })
+
   mainWindow.webContents.on('will-navigate', (event, url) => {
     const devServerUrl = process.env.VITE_DEV_SERVER_URL
-    const allowed = isAppUrl(url) || url.startsWith('file://') || (devServerUrl ? url.startsWith(devServerUrl) : false)
+    let sameDevOrigin = false
+    if (devServerUrl) {
+      try {
+        sameDevOrigin = new URL(url).origin === new URL(devServerUrl).origin
+      } catch {
+        sameDevOrigin = false
+      }
+    }
+    const allowed = isAppUrl(url) || sameDevOrigin
     if (!allowed) {
       event.preventDefault()
     }

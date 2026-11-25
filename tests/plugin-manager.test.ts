@@ -5,7 +5,13 @@ import * as path from 'path'
 import { PluginManager } from '../electron/plugin-manager'
 
 let workspace: string
+let appStateDir: string
+let stateFilePath: string
 let manager: PluginManager | null = null
+
+function createManager(): PluginManager {
+  return new PluginManager({ watch: false, stateFilePath })
+}
 
 async function writePlugin(
   id: string,
@@ -31,32 +37,20 @@ async function writePlugin(
   )
   await fs.writeFile(path.join(directory, 'index.js'), source, 'utf-8')
 
-  // 插件默认禁用：除显式关闭外，测试里把插件写进启用白名单
+  // 插件默认禁用：除显式关闭外，测试里把插件写进应用自有启用白名单
   if (options.enabled !== false) {
     const manifestId = typeof manifest.id === 'string' && manifest.id ? manifest.id : id
-    await enablePlugin(manifestId)
+    const helper = createManager()
+    helper.setEnabled(workspace, manifestId, true)
+    helper.disposeAll()
   }
   return directory
 }
 
-async function enablePlugin(id: string): Promise<void> {
-  const configPath = path.join(workspace, '.pi-workbench', 'config.json')
-  let config: { enabledPlugins?: string[] } = {}
-  try {
-    config = JSON.parse(await fs.readFile(configPath, 'utf-8'))
-  } catch {
-    config = {}
-  }
-  const enabled = new Set([...(config.enabledPlugins ?? []), id])
-  await fs.writeFile(
-    configPath,
-    JSON.stringify({ ...config, enabledPlugins: [...enabled], pluginsConfigured: true }),
-    'utf-8'
-  )
-}
-
 beforeEach(async () => {
   workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-plugins-test-'))
+  appStateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-plugins-state-'))
+  stateFilePath = path.join(appStateDir, 'workspace-plugins.json')
   await fs.mkdir(path.join(workspace, '.pi-workbench', 'plugins'), { recursive: true })
   ;(globalThis as Record<string, unknown>).__pluginHook = undefined
   ;(globalThis as Record<string, unknown>).__pluginDeactivated = false
@@ -66,6 +60,7 @@ afterEach(async () => {
   manager?.disposeAll()
   manager = null
   await fs.rm(workspace, { recursive: true, force: true })
+  await fs.rm(appStateDir, { recursive: true, force: true })
 })
 
 describe('PluginManager', () => {
@@ -78,7 +73,7 @@ describe('PluginManager', () => {
       { enabled: false }
     )
 
-    manager = new PluginManager({ watch: false })
+    manager = createManager()
     const plugins = manager.loadWorkspace(workspace)
 
     expect(plugins[0].enabled).toBe(false)
@@ -99,7 +94,7 @@ describe('PluginManager', () => {
       }`
     )
 
-    manager = new PluginManager({ watch: false })
+    manager = createManager()
     const plugins = manager.loadWorkspace(workspace)
 
     expect(plugins).toHaveLength(1)
@@ -118,7 +113,7 @@ describe('PluginManager', () => {
         },
       }`
     )
-    manager = new PluginManager({ watch: false })
+    manager = createManager()
     manager.loadWorkspace(workspace)
 
     await expect(manager.invoke(workspace, 'demo.run', 'value')).resolves.toEqual({
@@ -139,7 +134,7 @@ describe('PluginManager', () => {
         },
       }`
     )
-    manager = new PluginManager({ watch: false })
+    manager = createManager()
     manager.loadWorkspace(workspace)
 
     await expect(manager.invoke(workspace, 'demo.run')).resolves.toEqual({
@@ -158,7 +153,7 @@ describe('PluginManager', () => {
         },
       }`
     )
-    manager = new PluginManager({ watch: false })
+    manager = createManager()
     manager.loadWorkspace(workspace)
 
     await manager.emit(workspace, 'file:saved', { path: '/tmp/a.ts' })
@@ -176,7 +171,7 @@ describe('PluginManager', () => {
       `module.exports = { activate(api) { api.registerCommand('good.run', () => ({ success: true })) } }`
     )
 
-    manager = new PluginManager({ watch: false })
+    manager = createManager()
     const plugins = manager.loadWorkspace(workspace)
 
     expect(plugins).toHaveLength(2)
@@ -191,24 +186,43 @@ describe('PluginManager', () => {
       { main: '../outside.js' }
     )
 
-    manager = new PluginManager({ watch: false })
+    manager = createManager()
     const plugins = manager.loadWorkspace(workspace)
 
     expect(plugins[0].error).toContain('inside its own directory')
   })
 
-  it('respects explicit enabled plugin lists', async () => {
+  it('ignores untrusted enabledPlugins in repository .pi-workbench/config.json', async () => {
+    ;(globalThis as Record<string, unknown>).__pluginActivated = false
     await writePlugin(
-      'demo',
-      `module.exports = { activate(api) { api.registerCommand('demo.run', () => ({ success: true })) } }`
+      'evil',
+      `module.exports = { activate() { globalThis.__pluginActivated = true } }`,
+      {},
+      { enabled: false }
     )
     await fs.writeFile(
       path.join(workspace, '.pi-workbench', 'config.json'),
-      JSON.stringify({ enabledPlugins: [], pluginsConfigured: true }),
+      JSON.stringify({ enabledPlugins: ['evil'], pluginsConfigured: true }),
       'utf-8'
     )
 
-    manager = new PluginManager({ watch: false })
+    manager = createManager()
+    const plugins = manager.loadWorkspace(workspace)
+
+    expect(plugins[0].enabled).toBe(false)
+    expect((globalThis as Record<string, unknown>).__pluginActivated).toBe(false)
+    expect(manager.hasExplicitEnableList(workspace)).toBe(false)
+  })
+
+  it('respects explicit enabled plugin lists stored in app-owned config', async () => {
+    await writePlugin(
+      'demo',
+      `module.exports = { activate(api) { api.registerCommand('demo.run', () => ({ success: true })) } }`,
+      {},
+      { enabled: false }
+    )
+
+    manager = createManager()
     let plugins = manager.loadWorkspace(workspace)
 
     expect(plugins[0].enabled).toBe(false)
@@ -217,12 +231,12 @@ describe('PluginManager', () => {
 
     plugins = manager.setEnabled(workspace, 'demo', true)
     expect(plugins[0].enabled).toBe(true)
+    expect(manager.hasExplicitEnableList(workspace)).toBe(true)
 
-    const config = JSON.parse(
-      await fs.readFile(path.join(workspace, '.pi-workbench', 'config.json'), 'utf-8')
-    )
-    expect(config.pluginsConfigured).toBe(true)
-    expect(config.enabledPlugins).toEqual(['demo'])
+    const stored = JSON.parse(await fs.readFile(stateFilePath, 'utf-8')) as {
+      workspaces: Record<string, { enabledPlugins: string[] }>
+    }
+    expect(Object.values(stored.workspaces)[0]?.enabledPlugins).toEqual(['demo'])
   })
 
   it('rejects duplicate plugin ids without breaking the first plugin', async () => {
@@ -235,7 +249,7 @@ describe('PluginManager', () => {
     await writePlugin('first', source, { id: 'shared' })
     await writePlugin('second', source, { id: 'shared' })
 
-    manager = new PluginManager({ watch: false })
+    manager = createManager()
     const plugins = manager.loadWorkspace(workspace)
 
     const shared = plugins.filter((plugin) => plugin.id === 'shared')
@@ -256,7 +270,7 @@ describe('PluginManager', () => {
       'demo',
       `module.exports = { activate(api) { api.registerCommand('demo.run', () => ({ success: true, output: 'v1' })) } }`
     )
-    manager = new PluginManager({ watch: false })
+    manager = createManager()
     manager.loadWorkspace(workspace)
 
     await expect(manager.invoke(workspace, 'demo.run')).resolves.toMatchObject({ output: 'v1' })
@@ -278,7 +292,7 @@ describe('PluginManager', () => {
         deactivate() { globalThis.__pluginDeactivated = true },
       }`
     )
-    manager = new PluginManager({ watch: false })
+    manager = createManager()
     manager.loadWorkspace(workspace)
 
     manager.disposeAll()

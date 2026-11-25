@@ -24,6 +24,15 @@ export interface FilesIpcContext {
 
 /** 探测头部多少字节判断是否二进制 */
 const BINARY_PROBE_BYTES = 8192
+/** 文本文件读取上限：防止超大单文件一次读入主进程内存造成 OOM */
+const MAX_TEXT_FILE_BYTES = 32 * 1024 * 1024
+/** 禁止通过 shell.openPath 直接执行的可执行/脚本/快捷方式后缀 */
+const BLOCKED_EXTERNAL_OPEN_EXTENSIONS = new Set([
+  '.exe', '.msi', '.msp', '.bat', '.cmd', '.com', '.ps1', '.psm1', '.psd1',
+  '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.scr', '.pif', '.lnk',
+  '.hta', '.reg', '.cpl', '.msc', '.jar', '.sh', '.bash', '.zsh', '.command',
+  '.app', '.dmg', '.pkg', '.appimage', '.run',
+])
 
 /** 头部出现 NUL 字节即视为二进制：文本文件不会包含它 */
 async function looksBinary(targetPath: string, size: number): Promise<boolean> {
@@ -56,6 +65,12 @@ export function registerFilesIpc(context: FilesIpcContext): void {
           size: stats.size,
         }
       }
+      if (stats.size > MAX_TEXT_FILE_BYTES) {
+        return {
+          success: false,
+          error: `File exceeds the ${MAX_TEXT_FILE_BYTES / 1024 / 1024} MB text preview limit`,
+        }
+      }
       const content = await fs.readFile(target, 'utf-8')
       return { success: true, binary: false, content }
     } catch (error) {
@@ -63,12 +78,16 @@ export function registerFilesIpc(context: FilesIpcContext): void {
     }
   })
 
-  // 用系统默认程序打开：不支持预览的类型与媒体文件
+  // 用系统默认程序打开：不支持预览的类型与媒体文件（拒绝直接执行可执行文件）
   handleIpc('fs:openExternally', async (_event, filePath: string) => {
     try {
       const target = resolveAllowedFileTarget(filePath)
       if (!target) {
         return { success: false, error: 'Path is outside the open workspace' }
+      }
+      const ext = path.extname(target).toLowerCase()
+      if (BLOCKED_EXTERNAL_OPEN_EXTENSIONS.has(ext)) {
+        return { success: false, error: `Refusing to open executable file type: ${ext}` }
       }
       const error = await shell.openPath(target)
       return error ? { success: false, error } : { success: true }
