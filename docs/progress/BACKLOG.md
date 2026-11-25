@@ -11,7 +11,8 @@
 
 - 完成一项：§2 状态改 ✅ 并写日期，正文条目删除（细节查提交与 Release 说明）。
 - 编号不复用；放弃的移到 §6，并写清为什么。
-- 发版前提：三平台 CI 绿、没有未完成的 P0 / P1 项、真实供应商冒烟通过。
+- 发版前提：三平台 CI 绿、**本版范围内**没有未完成的 P0 / P1、真实供应商冒烟通过。
+- 跨版本的 P0 / P1 不阻塞发版，但每次发版必须在 §2 记一条「本版不阻塞」：日期 + 条目 + 理由，否则按未决处理。
 
 ## 2. 总览
 
@@ -20,8 +21,8 @@
 | ID | 项目 | 优先级 | 状态 |
 | --- | --- | --- | --- |
 | R-23 | 输出预算与截断的完整处理（详见 §3） | P0 | 🟡 部分完成（2026-11-06） |
-| P-01 | 供应商预设与鉴权（8 家）：固定 provider + safeStorage 凭证 + OAuth 登录 | P1 | 🟡 桌面端已完成（P0–P4，`71a572c`→`2e49819`）：凭证文件存储 / 旧配置迁移 / 运行时切 catalog / 协议与回落修正 / 设置页 + OAuth 登录（`providers:*` IPC）。方案见 [provider-presets](../architecture/provider-presets.md)，剩下的是 P-02 ~ P-07 |
-| P-02 | 云端 OAuth 登录（D18 / D19） | P1 | ⬜ 未做：服务端 auth flow（`start` / `events` / `answer` / `cancel`）+ 临时状态表（PKCE verifier、device code，**不可跨实例**）+ 云端配置页登录 UI + 成功凭证写回 `CloudConfigRecord.credentialCipher`。四条路径各一次：`xai` device code · `anthropic` copy-code · `openai-codex` device code · `openai` 粘贴回调 URL |
+| P-01 | 供应商预设与鉴权（8 家）：固定 provider + safeStorage 凭证 + OAuth 登录 | P1 | 🟡 桌面端随 0.11.0 发布（P0–P5 配置部分，`71a572c`→`5278080`）：凭证文件存储 / 旧配置迁移 / 运行时切 catalog / 协议与回落修正 / 设置页 + OAuth 登录（`providers:*` IPC）。方案见 [provider-presets](../architecture/provider-presets.md)，剩下的是 P-02 ~ P-07 |
+| P-02 | 云端 OAuth 登录（D18 / D19） | P2 | ⬜ 未做：服务端 auth flow（`start` / `events` / `answer` / `cancel`）+ 临时状态表（PKCE verifier、device code，**不可跨实例**）+ 云端配置页登录 UI + 成功凭证写回 `CloudConfigRecord.credentialCipher`。四条路径各一次：`xai` device code · `anthropic` copy-code · `openai-codex` device code · `openai` 粘贴回调 URL |
 | P-03 | 供应商预设的真实凭证手工验收（发布前必做） | P1 | ⬜ 未做（清单见 [provider-presets §11.2](../architecture/provider-presets.md)）：8 家 × api_key 各一次；4 条 OAuth；下调上下文/输出上限在**轮次边界**生效且不打断；换模型档位自动降级；会话模型回落不弹提示；云端配置页 Key 只回掩码 |
 | P-04 | 目录跟随的两个开关与来源展示（D6 / D12） | P2 | ⬜ 未做：目录刷新「默认开、可关」的设置项、`PI_OFFLINE` 总开关、设置页展示 `source`（bundled / remote）与目录时间戳 |
 | P-05 | SDK 行为实测清单（§13 遗留问题） | P2 | ⬜ 未做：`openai` 粘贴回填的 `client_id` 是否被 token 交换接受；各家订阅账号的额外策略；`deepseek` / `xiaomi*` 是否存在 `/models`（决定 Key 探测走「真校验」还是「404 放行」）；真实 `maxTokens` 与 SDK `clampMaxTokensToContext` 的边界 |
@@ -37,6 +38,8 @@
 | C-06 | 云端汇报与守卫收口（F-36 / F-51 / 4.6 指示器 / D-32） | P1 | ⬜ 未做（详情 §4.1）：改动清单不分组、不扫密钥；没有「你离开期间」汇总；状态栏只有计数；`pre-push` 兜底只有注释 |
 | C-02 | 云端工单停滞看门狗（P2，从 C-01 拆出） | P2 | ⬜ 未做：终端工具静默检测（工具 10 分钟无输出增量 → 上报 `task_stalled`）+ 云端定时主动检查（工单 20 分钟无事件 → 唤醒一轮 `get_task`）+ 终端 60 s 心跳 + 同一停滞只报一次 |
 | C-07 | 云端记账项（A-21 / F-23） | P2 | ⬜ 未做（详情 §4.2）：并发上限缺失 · `ask_cloud` 与需求 F-23 语义不一致（要二选一回填） |
+
+**2026-11-26 发版不阻塞记录（0.11.0 桌面端）**：R-23（输出截断的 B4/B7/`reasoning_effort` 联动，与本次配置链路改动无关，B8 标题预算已同版完成）· P-02（云端 OAuth 未做，云端继续用 API Key 配置，协议无变化）· C-01（云端真派活走查，需真实 Key，且生产补丁待部署）· C-03 / C-06（云端 P1 功能簇，桌面端不依赖）。P-03 保留 P1 并作为本次发版的冒烟项，**发布时未执行**，需在下一个版本前补上。
 
 ### 已交付（只留一行，细节在 git）
 
