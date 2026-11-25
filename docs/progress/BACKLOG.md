@@ -20,6 +20,7 @@
 | ID | 项目 | 优先级 | 状态 |
 | --- | --- | --- | --- |
 | R-23 | 输出预算与截断的完整处理（详见 §3） | P0 | 🟡 部分完成（2026-11-06） |
+| P-01 | 供应商预设与鉴权（8 家）：固定 provider + safeStorage 凭证 + OAuth 登录 | P1 | ⬜ 未做（方案见 [provider-presets](../architecture/provider-presets.md)，分 P0–P6 六阶段：凭据存储 → 配置迁移 → 运行时切内置 provider → 协议修正 → 鉴权 UI → 云端对齐 → 目录跟随） |
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
 | C-01 | 云端 Agent（开发调度）：Pi 内核 + 工单级委派 | P0 | 🟡 代码 + 部署已落地（2026-11-21，见 [cloud-agent](../agent/cloud-agent.md)）：内核注入点 / 协议契约 / `apps/cloud` / 终端执行器 / 桌面端云端页 / Web 客户端 / 运维件；已部署到 `tchen-xiaoxiao.com`（systemd + Caddy + 每日备份），公网自检 34/34 通过（`apps/cloud/scripts/acceptance.mjs`）。**剩**：真派活闭环人工走查（A-19/A-20/A-21，需真实供应商 Key），以及把 2026-11-22 的代码补丁重新部署（生产还在上一版） |
