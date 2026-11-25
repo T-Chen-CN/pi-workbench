@@ -28,6 +28,7 @@ export class StallWatchdog {
   private lastActivityAt = 0
   private readonly tools = new Set<string>()
   private approvals = 0
+  private compactions = 0
 
   constructor(options: StallWatchdogOptions) {
     this.timeoutMs = options.timeoutMs
@@ -47,6 +48,7 @@ export class StallWatchdog {
     this.started = false
     this.tools.clear()
     this.approvals = 0
+    this.compactions = 0
     this.clear()
   }
 
@@ -87,9 +89,31 @@ export class StallWatchdog {
     this.rearm()
   }
 
+  /** 上下文压缩期间挂起计时，避免长压缩被误杀 */
+  beginCompaction(): void {
+    this.compactions += 1
+    this.lastActivityAt = Date.now()
+    this.rearm()
+  }
+
+  /** 上下文压缩结束：恢复计时 */
+  endCompaction(): void {
+    this.compactions = Math.max(0, this.compactions - 1)
+    this.lastActivityAt = Date.now()
+    this.rearm()
+  }
+
+  /** 轮次结束时清空可能因工具异常未配对 endTool 残留的计数 */
+  resetTools(): void {
+    if (this.tools.size === 0) return
+    this.tools.clear()
+    this.lastActivityAt = Date.now()
+    this.rearm()
+  }
+
   /** 当前是否处于“等待模型”的计时状态 */
   get isArmed(): boolean {
-    return this.started && this.tools.size === 0 && this.approvals === 0
+    return this.started && this.tools.size === 0 && this.approvals === 0 && this.compactions === 0
   }
 
   /** 距离上次心跳的时长（毫秒） */

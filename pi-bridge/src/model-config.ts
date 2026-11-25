@@ -14,7 +14,7 @@
 
 import * as fs from 'fs/promises'
 import * as path from 'path'
-import { writeJsonAtomicSync } from './atomic-json.js'
+import { writeJsonAtomicAsync } from './atomic-json.js'
 import { isPresetProviderId, type ModelOverrides } from './provider-presets.js'
 
 /** 思考级别与 setSessionThinking 的允许值一致 */
@@ -78,6 +78,6 @@ export async function writeModelsConfig(
   }
 
   await fs.mkdir(agentDir, { recursive: true })
-  writeJsonAtomicSync(modelsPath, modelsConfig)
+  await writeJsonAtomicAsync(modelsPath, modelsConfig)
   return modelsPath
 }

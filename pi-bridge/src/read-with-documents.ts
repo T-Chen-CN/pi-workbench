@@ -13,6 +13,7 @@
  *   保证 pi-bridge 不引入任何新依赖。
  */
 
+import * as os from 'os'
 import * as path from 'path'
 import {
   DEFAULT_MAX_BYTES,
@@ -122,6 +123,44 @@ export interface ReadWithDocumentsArgs {
   slide?: string
 }
 
+/** 展开前导 `@` 和 `~`，避免 `~/report.pdf` 落回内建 read 输出 PDF 二进制乱码 */
+function expandReadPath(rawPath: string, cwd: string): string {
+  const cleaned = rawPath.startsWith('@') ? rawPath.slice(1) : rawPath
+  if (cleaned === '~') return os.homedir()
+  if (cleaned.startsWith('~/') || cleaned.startsWith('~\\')) {
+    return path.join(os.homedir(), cleaned.slice(2))
+  }
+  return path.isAbsolute(cleaned) ? cleaned : path.resolve(cwd, cleaned)
+}
+
+function shouldProbeDocument(targetPath: string): boolean {
+  if (isDocumentPath(targetPath)) return true
+  // 无扩展名文件放行给魔数检测（非文档会返回 null 并无缝回退内置 read）
+  return path.extname(targetPath) === ''
+}
+
+function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) {
+    void promise.catch(() => {})
+    return Promise.reject(new Error('Operation aborted'))
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new Error('Operation aborted'))
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      }
+    )
+  })
+}
+
 export function createReadWithDocumentsDefinition(
   options: CreateReadWithDocumentsOptions
 ): ToolDefinition<any, any> {
@@ -166,22 +205,25 @@ export function createReadWithDocumentsDefinition(
       ctx: Parameters<typeof builtin.execute>[4]
     ) {
       const rawPath = typeof args?.path === 'string' ? args.path : ''
+      const cwd = ctx?.cwd || options.cwd
+      const absolutePath = rawPath ? expandReadPath(rawPath, cwd) : ''
       // 非文档一律原样委托：内置行为（行号、截断、图片缩放）保持不变
-      if (!rawPath || !isDocumentPath(rawPath)) {
+      if (!absolutePath || !shouldProbeDocument(absolutePath)) {
         return builtin.execute(toolCallId, args, signal, onUpdate, ctx)
       }
       if (signal?.aborted) throw new Error('Operation aborted')
 
-      const cwd = ctx?.cwd || options.cwd
-      const absolutePath = path.isAbsolute(rawPath) ? rawPath : path.resolve(cwd, rawPath)
       let document: DocumentReadContent | null
       try {
-        document = await hook({
-          path: absolutePath,
-          pages: typeof args.pages === 'string' ? args.pages : undefined,
-          sheet: typeof args.sheet === 'string' ? args.sheet : undefined,
-          slide: typeof args.slide === 'string' ? args.slide : undefined,
-        })
+        document = await raceWithAbort(
+          hook({
+            path: absolutePath,
+            pages: typeof args.pages === 'string' ? args.pages : undefined,
+            sheet: typeof args.sheet === 'string' ? args.sheet : undefined,
+            slide: typeof args.slide === 'string' ? args.slide : undefined,
+          }),
+          signal
+        )
       } catch (error) {
         if (signal?.aborted) throw new Error('Operation aborted')
         const message = error instanceof Error ? error.message : String(error)

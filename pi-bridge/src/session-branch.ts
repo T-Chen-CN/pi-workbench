@@ -6,13 +6,15 @@ import { messageText } from './text-utils.js'
 
 export function sessionTreeNodes(tree: SessionTreeNode[]): Map<string, SessionTreeNode> {
   const nodes = new Map<string, SessionTreeNode>()
-  const visit = (list: SessionTreeNode[]) => {
-    for (const node of list) {
-      nodes.set(node.entry.id, node)
-      visit(node.children)
+  const stack: SessionTreeNode[] = [...tree]
+  while (stack.length > 0) {
+    const node = stack.pop()!
+    if (nodes.has(node.entry.id)) continue
+    nodes.set(node.entry.id, node)
+    for (let i = node.children.length - 1; i >= 0; i -= 1) {
+      stack.push(node.children[i])
     }
   }
-  visit(tree)
   return nodes
 }
 
@@ -66,23 +68,46 @@ export function isAncestorOrSelf(
 
 export function deepestLeaf(node: SessionTreeNode | undefined): string | undefined {
   if (!node) return undefined
+  // 迭代后序计算每个子树深度（记忆化 + 环路保护），避免深树 O(N^2) 或递归爆栈
+  const depths = new Map<string, number>()
+  const order: SessionTreeNode[] = []
+  const seen = new Set<string>()
+  const stack: SessionTreeNode[] = [node]
+  while (stack.length > 0) {
+    const cur = stack.pop()!
+    if (seen.has(cur.entry.id)) continue
+    seen.add(cur.entry.id)
+    order.push(cur)
+    for (const child of cur.children) {
+      if (!seen.has(child.entry.id)) stack.push(child)
+    }
+  }
+  for (let i = order.length - 1; i >= 0; i -= 1) {
+    const cur = order[i]
+    let maxChild = -1
+    for (const child of cur.children) {
+      const d = depths.get(child.entry.id) ?? 0
+      if (d > maxChild) maxChild = d
+    }
+    depths.set(cur.entry.id, maxChild + 1)
+  }
+
   let current = node
+  const walked = new Set<string>([current.entry.id])
   while (current.children.length > 0) {
-    let best = current.children[0]
+    let best: SessionTreeNode | null = null
     let bestDepth = -1
     for (const child of current.children) {
-      const depth = treeDepth(child)
+      if (walked.has(child.entry.id)) continue
+      const depth = depths.get(child.entry.id) ?? 0
       if (depth >= bestDepth) {
         best = child
         bestDepth = depth
       }
     }
+    if (!best) break
+    walked.add(best.entry.id)
     current = best
   }
   return current.entry.id
-}
-
-function treeDepth(node: SessionTreeNode): number {
-  if (node.children.length === 0) return 0
-  return 1 + Math.max(...node.children.map((child) => treeDepth(child)))
 }

@@ -196,14 +196,20 @@ export function createProvidersConfigStore(options: ProvidersConfigStoreOptions)
   }
 
   async function read(): Promise<ProvidersConfig> {
-    try {
-      const raw = await fs.readFile(configPath, 'utf-8')
-      return sanitize(JSON.parse(raw))
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code !== 'ENOENT') logger.warn('[Providers] 读取失败，按空配置处理:', error)
-      return emptyProvidersConfig()
+    let sawNonEnoentError: unknown = null
+    for (const candidate of [configPath, `${configPath}.bak`]) {
+      try {
+        const raw = await fs.readFile(candidate, 'utf-8')
+        return sanitize(JSON.parse(raw))
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code !== 'ENOENT') sawNonEnoentError = error
+      }
     }
+    if (sawNonEnoentError) {
+      logger.warn('[Providers] 读取主文件与 .bak 均失败，按空配置处理:', sawNonEnoentError)
+    }
+    return emptyProvidersConfig()
   }
 
   /** 纯函数：切换 active，只接受白名单内且已配置的 provider / 存在的模型 */

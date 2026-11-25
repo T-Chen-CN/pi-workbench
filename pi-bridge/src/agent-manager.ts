@@ -19,7 +19,7 @@ import {
 import type { Api, Model, ThinkingLevel } from '@earendil-works/pi-ai'
 import * as path from 'path'
 import * as fs from 'fs/promises'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, statSync } from 'fs'
 import {
   DEFAULT_PERMISSION_LEVEL,
   isPermissionLevel,
@@ -227,6 +227,8 @@ const IMAGE_ONLY_PROMPTS = ['请看这些图片。', 'Please look at the attache
 
 /** 标题结果不可用（空回复 / 纯推理）时的重试上限：超过就永久保留回退标题 */
 const TITLE_MAX_FAILURES = 3
+/** 单次编辑 diff 快照的最大读取字节数（超过则跳过快照，防止大文件同步读盘阻塞/OOM） */
+const MAX_EDIT_SNAPSHOT_BYTES = 2 * 1024 * 1024
 
 function isImageOnlyPrompt(text: string): boolean {
   const trimmed = text.trim()
@@ -301,6 +303,8 @@ export class AgentManager {
   /** 轮次边界待应用的工作树切换 */
   private pendingRoots = new Map<string, { root: string; branch?: string }>()
   private rebinding = new Set<string>()
+  /** 正在重建（切工作树）中的会话 Promise：并发 ensureRuntime 必须等待重建完成 */
+  private rebindingPromises = new Map<string, Promise<boolean>>()
   /** sessionId → 正在创建的运行时：并发打开同一个会话时共用一次创建 */
   private creatingRuntimes = new Map<string, Promise<SessionRuntime>>()
   /** sessionId → 已确定的标题：跨运行时重建仍然有效，只有手动重命名能改写 */
@@ -325,11 +329,18 @@ export class AgentManager {
     return [...builtinCatalogModels(providerId)]
   }
 
-  /** 当前生效的输出上限，用于截断报错；值来自 models.json 覆盖后的模型对象 */
-  private outputLimit(): number {
-    const config = this.config
-    if (!config) return 0
-    const model = this.modelRuntime?.getModel(config.apiConfig.providerId, config.apiConfig.modelId)
+  /** 解析会话当前生效的模型（优先会话已切换模型 + modelRuntime 覆盖，回退工作区默认模型） */
+  private resolveSessionModel(runtime?: SessionRuntime): Model<Api> | undefined {
+    const sessionModel = runtime?.session?.model as Model<Api> | undefined
+    if (sessionModel?.provider && sessionModel?.id) {
+      return this.modelRuntime?.getModel(sessionModel.provider, sessionModel.id) ?? sessionModel
+    }
+    return this.resolveActiveModel()
+  }
+
+  /** 当前生效的输出上限，用于截断报错；优先读会话自身已切换的模型 */
+  private outputLimit(runtime?: SessionRuntime): number {
+    const model = this.resolveSessionModel(runtime)
     if (!model) return 0
     return effectiveLimits(model).maxTokens
   }
@@ -502,12 +513,14 @@ export class AgentManager {
           return
         }
 
-        // 上下文压缩：转发开始 / 结束，渲染层据此插入分隔线（R-05）
+        // 上下文压缩：转发开始 / 结束，渲染层据此插入分隔线（R-05）；压缩期间挂起空闲看门狗
         if (event.type === 'compaction_start') {
+          runtime.watchdog?.beginCompaction()
           runtime.onTrace?.({ type: 'compaction_start', reason: event.reason })
           return
         }
         if (event.type === 'compaction_end') {
+          runtime.watchdog?.endCompaction()
           const error =
             typeof event.errorMessage === 'string' ? event.errorMessage : undefined
           const aborted = Boolean((event as any).aborted)
@@ -576,8 +589,9 @@ export class AgentManager {
           return
         }
 
-        // 一轮结束：丢弃本轮未闭合的工具快照，避免 Map 无限增长
+        // 一轮结束：丢弃本轮未闭合的工具快照并复位看门狗残留工具计数，避免 Map 无限增长或看门狗失能
         if (event.type === 'turn_end' || event.type === 'agent_end') {
+          runtime.watchdog?.resetTools()
           if (event.type === 'agent_end') {
             runtime.sdkStreaming = false
             if (runtime.bgWatchdog) {
@@ -611,7 +625,15 @@ export class AgentManager {
           const target = this.resolveToolPath(args.path, root)
           if (!target || !this.isInsideWorkspace(target, root)) return
           const existed = existsSync(target)
-          const oldContent = existed ? readFileSync(target, 'utf-8') : ''
+          let oldContent = ''
+          if (existed) {
+            try {
+              if (statSync(target).size > MAX_EDIT_SNAPSHOT_BYTES) return
+              oldContent = readFileSync(target, 'utf-8')
+            } catch {
+              return
+            }
+          }
           runtime.editSnapshots.set(event.toolCallId, { path: target, oldContent, existed })
           return
         }
@@ -641,10 +663,20 @@ export class AgentManager {
           runtime.toolFiles.delete(event.toolCallId)
 
           if (snapshot) {
-            const newContent = existsSync(snapshot.path)
-              ? readFileSync(snapshot.path, 'utf-8')
-              : ''
-            if (newContent !== snapshot.oldContent) {
+            let newContent = ''
+            let readable = true
+            if (existsSync(snapshot.path)) {
+              try {
+                if (statSync(snapshot.path).size > MAX_EDIT_SNAPSHOT_BYTES) {
+                  readable = false
+                } else {
+                  newContent = readFileSync(snapshot.path, 'utf-8')
+                }
+              } catch {
+                readable = false
+              }
+            }
+            if (readable && newContent !== snapshot.oldContent) {
               runtime.pendingEdits.push({
                 path: snapshot.path,
                 oldContent: snapshot.oldContent,
@@ -1961,6 +1993,15 @@ export class AgentManager {
       thinkingDurationsThisMessage: [],
       lastCompactionEntryId: null,
     }
+    // 异步创建期间若该会话已被 deleteSession 删除，立即释放，防止回魂
+    if (this.deletedSessions.has(id)) {
+      try {
+        runtime.session.dispose()
+      } catch {
+        // ignore
+      }
+      throw new Error('Session was deleted.')
+    }
     runtime.unsubscribe = this.subscribeToSessionEvents(runtime)
     planContext.runtime = runtime
     runtimeRef.current = runtime
@@ -2013,27 +2054,33 @@ export class AgentManager {
    * 否则同一个会话会存在两个 SessionManager，后写者看不到先写者写入的标题。
    */
   private async ensureRuntime(sessionId: string): Promise<SessionRuntime> {
+    const rebinding = this.rebindingPromises.get(sessionId)
+    if (rebinding) {
+      await rebinding.catch(() => undefined)
+    }
     const existing = this.runtimes.get(sessionId)
     if (existing) return existing
     const creating = this.creatingRuntimes.get(sessionId)
     if (creating) return creating
 
     const creation = (async () => {
-      try {
-        const config = this.config
-        if (!config) throw new Error('Agent not initialized.')
-        const root = config.resolveSessionRoot?.(sessionId) ?? config.workspaceDir
-        const file =
-          (await this.findSessionFile(sessionId)) ??
-          SessionManager.findById(root, sessionId, this.sessionDir)
-        if (!file) throw new Error('Session not found.')
-        const manager = SessionManager.open(file, this.sessionDir, root)
-        return await this.createRuntime(manager)
-      } finally {
-        this.creatingRuntimes.delete(sessionId)
-      }
+      const config = this.config
+      if (!config) throw new Error('Agent not initialized.')
+      const root = config.resolveSessionRoot?.(sessionId) ?? config.workspaceDir
+      const file =
+        (await this.findSessionFile(sessionId)) ??
+        SessionManager.findById(root, sessionId, this.sessionDir)
+      if (!file) throw new Error('Session not found.')
+      const manager = SessionManager.open(file, this.sessionDir, root)
+      return await this.createRuntime(manager)
     })()
     this.creatingRuntimes.set(sessionId, creation)
+    const cleanup = () => {
+      if (this.creatingRuntimes.get(sessionId) === creation) {
+        this.creatingRuntimes.delete(sessionId)
+      }
+    }
+    void creation.then(cleanup, cleanup)
     return creation
   }
 
@@ -2097,40 +2144,54 @@ export class AgentManager {
     const file = await this.resolvePersistedSessionFile(runtime)
     const pendingTitle = runtime.pendingTitle
     const sessionName = runtime.sessionManager.getSessionName()
+    // 迁移跨轮常驻 traceSinks，否则云端或工具订阅方在切工作树后静默失明
+    const preservedSinks = [...runtime.traceSinks]
 
     this.rebinding.add(id)
     this.pendingRoots.delete(id)
-    try {
-      await this.disposeRuntime(runtime)
-      const manager = this.openManagerForRoot(id, file, pending.root)
-      if (manager.getSessionId() !== id) {
-        throw new Error(
-          `Session id changed while switching worktrees (${id} -> ${manager.getSessionId()}).`
-        )
-      }
-      const next = await this.createRuntime(manager)
-      this.carrySessionIdentity(next, file, pendingTitle, sessionName)
-      this.lastSessionId = next.id
-      this.config?.onSessionRootChanged?.(next.id, pending.root)
-      this.logger.info(
-        `[Agent Manager] Session ${next.id} switched to worktree: ${pending.root}`
-      )
-      return true
-    } catch (error) {
-      this.logger.error('[Agent Manager] Failed to apply worktree switch:', error)
+    const task = (async (): Promise<boolean> => {
       try {
-        const manager = this.openManagerForRoot(id, file, oldRoot)
-        const restored = await this.createRuntime(manager)
-        this.carrySessionIdentity(restored, file, pendingTitle, sessionName)
-        this.lastSessionId = restored.id
-        this.config?.onSessionRootChanged?.(restored.id, oldRoot)
-      } catch (restoreError) {
-        this.logger.error('[Agent Manager] Failed to restore previous worktree:', restoreError)
+        await this.disposeRuntime(runtime)
+        const manager = this.openManagerForRoot(id, file, pending.root)
+        if (manager.getSessionId() !== id) {
+          throw new Error(
+            `Session id changed while switching worktrees (${id} -> ${manager.getSessionId()}).`
+          )
+        }
+        const next = await this.createRuntime(manager)
+        for (const sink of preservedSinks) next.traceSinks.add(sink)
+        this.carrySessionIdentity(next, file, pendingTitle, sessionName)
+        this.lastSessionId = next.id
+        this.config?.onSessionRootChanged?.(next.id, pending.root)
+        this.logger.info(
+          `[Agent Manager] Session ${next.id} switched to worktree: ${pending.root}`
+        )
+        return true
+      } catch (error) {
+        this.logger.error('[Agent Manager] Failed to apply worktree switch:', error)
+        try {
+          const manager = this.openManagerForRoot(id, file, oldRoot)
+          const restored = await this.createRuntime(manager)
+          for (const sink of preservedSinks) restored.traceSinks.add(sink)
+          this.carrySessionIdentity(restored, file, pendingTitle, sessionName)
+          this.lastSessionId = restored.id
+          this.config?.onSessionRootChanged?.(restored.id, oldRoot)
+        } catch (restoreError) {
+          this.logger.error('[Agent Manager] Failed to restore previous worktree:', restoreError)
+        }
+        return false
+      } finally {
+        this.rebinding.delete(id)
       }
-      return false
-    } finally {
-      this.rebinding.delete(id)
+    })()
+    this.rebindingPromises.set(id, task)
+    const cleanupRebind = () => {
+      if (this.rebindingPromises.get(id) === task) {
+        this.rebindingPromises.delete(id)
+      }
     }
+    void task.then(cleanupRebind, cleanupRebind)
+    return task
   }
 
   /** 会话在磁盘上的文件；未落盘的新会话返回 null */
@@ -2443,10 +2504,15 @@ export class AgentManager {
       const file =
         (await this.findSessionFile(sessionId)) ??
         SessionManager.findById(root, sessionId, this.sessionDir)
+      // 先标记 deletedSessions 并等待在途创建结束，避免删除瞬间创建完成的运行时回魂
+      this.deletedSessions.add(sessionId)
+      const inflight = this.creatingRuntimes.get(sessionId)
+      if (inflight) {
+        await inflight.catch(() => undefined)
+      }
       await this.closeSession(sessionId)
       this.settledTitles.delete(sessionId)
       this.creatingRuntimes.delete(sessionId)
-      this.deletedSessions.add(sessionId)
       if (!file) return { success: true }
       if (this.extrasStore) {
         await this.extrasStore.delete(sessionId).catch((error) => {
@@ -2608,7 +2674,7 @@ export class AgentManager {
         normalizeSessionPermission(runtime.extras.permission).mode === 'plan'
           ? wrapPlanPrompt(message)
           : message
-      const imagePromptText = this.withImagePlaceholder(promptText, chatImages.length)
+      const imagePromptText = this.withImagePlaceholder(promptText, chatImages.length, runtime)
       const finalPrompt = worktreeBlock
         ? `${worktreeBlock}\n\n${imagePromptText}`
         : imagePromptText
@@ -2693,7 +2759,7 @@ export class AgentManager {
 
       // 输出撞上限：如实报错（`success:false` + `errorCode`），不冒充成功
       if (lastAssistant.stopReason === 'length') {
-        const limit = this.outputLimit()
+        const limit = this.outputLimit(runtime)
         const output = usage?.output ?? 0
         const reasoning = usage?.reasoning ?? 0
         const body = Math.max(0, output - reasoning)
@@ -2717,19 +2783,15 @@ export class AgentManager {
           edits,
           usage,
           errorCode: 'empty-response',
-          outputLimit: this.outputLimit(),
+          outputLimit: this.outputLimit(runtime),
         }
       }
 
-      const aggregated = this.sessionMessages(runtime)
-      const lastTurn = [...aggregated].reverse().find((entry) => entry.role === 'assistant')
-      runtime.messageHistory.push(
-        lastTurn ?? {
-          role: 'assistant',
-          content: assistantResponse,
-          timestamp: Date.now(),
-        }
-      )
+      runtime.messageHistory.push({
+        role: 'assistant',
+        content: assistantResponse,
+        timestamp: Date.now(),
+      })
       runtime.updatedAt = Date.now()
 
       // 未落盘的临时标题在会话首次落盘后写入（手动重命名，确定后不再自动改写）
@@ -2817,6 +2879,7 @@ export class AgentManager {
   private async resetRuntimeAfterHardStop(runtime: SessionRuntime): Promise<void> {
     const id = runtime.id
     const root = runtime.sessionManager.getCwd()
+    const preservedSinks = [...runtime.traceSinks]
     await this.disposeRuntime(runtime)
     const config = this.config
     if (!config) return
@@ -2827,8 +2890,9 @@ export class AgentManager {
         SessionManager.findById(root, id, this.sessionDir)
       const manager = file
         ? SessionManager.open(file, this.sessionDir, root)
-        : SessionManager.create(root, this.sessionDir)
+        : SessionManager.create(root, this.sessionDir, { id })
       const next = await this.createRuntime(manager)
+      for (const sink of preservedSinks) next.traceSinks.add(sink)
       this.lastSessionId = next.id
     } catch (error) {
       this.logger.error('[Agent Manager] Failed to reinitialize after hard stop:', error)
@@ -2855,10 +2919,14 @@ export class AgentManager {
     return runtime ? this.sessionMessages(runtime) : []
   }
 
-  /** 纯图片消息的模型输入文本：仅 Anthropic Messages 需要非空 text 块 */
-  private withImagePlaceholder(text: string, imageCount: number): string {
+  /** 纯图片消息的模型输入文本：仅 Anthropic Messages 需要非空 text 块（优先读会话当前模型） */
+  private withImagePlaceholder(
+    text: string,
+    imageCount: number,
+    runtime?: SessionRuntime
+  ): string {
     if (imageCount === 0 || text.trim()) return text
-    if (this.resolveActiveModel()?.api !== 'anthropic-messages') return text
+    if (this.resolveSessionModel(runtime)?.api !== 'anthropic-messages') return text
     return this.config?.getLanguage?.() === 'en' ? IMAGE_ONLY_PROMPTS[1] : IMAGE_ONLY_PROMPTS[0]
   }
 
@@ -2910,7 +2978,7 @@ export class AgentManager {
       return
     }
 
-    const titleModel = this.resolveActiveModel()
+    const titleModel = this.resolveSessionModel(runtime)
     const raw = titleModel
       ? await requestSessionTitle(
           this.modelRuntime!,
@@ -3012,10 +3080,11 @@ export class AgentManager {
     if (this.sessionTitle(runtime) || this.settledTitles.has(id)) return
 
     try {
-      if (this.runtimes.get(id) === runtime) {
-        runtime.sessionManager.appendSessionInfo(value)
-        runtime.updatedAt = Date.now()
-        this.settleSessionTitle(runtime, value)
+      const liveRuntime = this.runtimes.get(id)
+      if (liveRuntime) {
+        liveRuntime.sessionManager.appendSessionInfo(value)
+        liveRuntime.updatedAt = Date.now()
+        this.settleSessionTitle(liveRuntime, value)
       } else if (await this.appendTitleToSessionRecord(id, value)) {
         this.settledTitles.set(id, value)
         void this.saveSessionTitleExtra(id, value)
