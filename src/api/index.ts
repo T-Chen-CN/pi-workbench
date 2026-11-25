@@ -573,7 +573,32 @@ const mockAPI = {
     id: string
     images?: { data: string; mimeType: string }[]
     error?: string
-  }) => ({ success: false })
+  }) => ({ success: false }),
+  searchWorkspaceFiles: async (_workspaceDir: string, _query: string, _limit?: number) => ({
+    success: true,
+    files: [] as string[]
+  }),
+  getPathForFile: (_file: File) => '',
+  agentSessionsMetaGet: async (_workspaceDir: string) => ({
+    success: true,
+    meta: { pinned: [] as string[], archived: [] as string[] }
+  }),
+  agentSessionsMetaSet: async (
+    _workspaceDir: string,
+    _meta: { pinned: string[]; archived: string[] }
+  ) => ({ success: true }),
+  writeClipboardText: async (text: string) => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        return { success: true }
+      }
+    } catch {
+      // fall through
+    }
+    return { success: false, error: 'Clipboard unavailable in web mock' }
+  },
+  onNotifyClick: (_callback: (payload: { workspaceDir: string; sessionId: string }) => void) => () => {}
 }
 
 const electronAPI = window.electronAPI || mockAPI

@@ -14,7 +14,6 @@ import { selectionForWorkspace, useSelectionStore } from '../store/selectionStor
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useApprovalStore } from '../store/approvalStore'
 import { useSettingsStore } from '../store/settingsStore'
-import { useHostKeydown } from '../panelHost/HostContext'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
 import { buildContextPrompt, CONTEXT_BLOCK_START, type ContextEntry } from '../api/chatContext'
@@ -32,24 +31,14 @@ import { MAX_TOTAL_IMAGE_BASE64_CHARS } from '../utils/imageAttachment'
 import { buildChatSuggestions, type WorkspaceType } from '../utils/suggestions'
 import { toast } from '../store/toastStore'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
-import { useVirtualRows } from './useVirtualRows'
 import { useChatAttachments } from './useChatAttachments'
-import {
-  distanceFromBottom,
-  pinToBottom as pinChatToBottom,
-  shouldFollow,
-  shouldShowScrollButton,
-} from './chatScroll'
+import { useChatScroll } from './useChatScroll'
+import { useChatSessionConfig } from './useChatSessionConfig'
 import { useChatSessions } from './useChatSessions'
 import type {
-  SessionSummary,
-  SessionMeta,
-  ModelCapabilityInfo,
   PromptTemplateInfo,
   SkillInfo,
   StructuredPlan,
-  SessionMode,
-  SessionPermission,
   FileEdit,
 } from '../types/electron'
 
@@ -115,9 +104,6 @@ export function useChatPanelState(props: ChatPanelProps) {
       break
     }
   }
-  const [availableModels, setAvailableModels] = useState<string[]>([])
-  /** 模型能力提示（R-06） */
-  const [modelCapabilities, setModelCapabilities] = useState<ModelCapabilityInfo[]>([])
   /** 设置中勾选的支持图片模型，用于能力接口尚未返回时的兜底 */
   const [configuredImageModels, setConfiguredImageModels] = useState<string[]>([])
   let lastUserMessageId: string | null = null
@@ -296,13 +282,9 @@ export function useChatPanelState(props: ChatPanelProps) {
     toolName: string
     sessionId: string
   } | null>(null)
-  const [sessionMeta, setSessionMeta] = useState<SessionMeta>({ pinned: [], archived: [] })
   const [showArchived, setShowArchived] = useState(false)
-  const [showScrollButton, setShowScrollButton] = useState(false)
-  const [newMessageCount, setNewMessageCount] = useState(0)
   /** 重试倒计时的本地时钟（R-19） */
   const [retryNow, setRetryNow] = useState(() => Date.now())
-  const lastMessageCountRef = useRef(0)
   const [mention, setMention] = useState<{
     start: number
     query: string
@@ -324,9 +306,7 @@ export function useChatPanelState(props: ChatPanelProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   /** 以下运行期标记按会话区分，避免同工作区并行会话互相影响 */
   const forceSendKeysRef = useRef(new Set<string>())
-  const budgetWarnedKeysRef = useRef(new Set<string>())
   const initSeqRef = useRef(0)
-  const stickToBottomRef = useRef(true)
   const stoppedKeysRef = useRef(new Set<string>())
 
   const {
@@ -351,39 +331,24 @@ export function useChatPanelState(props: ChatPanelProps) {
     setFatalError,
     setConfiguredImageModels,
   })
-  const { parentRef: transcriptRef, virtualizer } = useVirtualRows({
-    count: messages.length,
-    estimateSize: 96,
-    overscan: 8,
+
+  const {
+    transcriptRef,
+    virtualizer,
+    stickToBottomRef,
+    showScrollButton,
+    newMessageCount,
+    scrollToBottom,
+    scrollToBottomRef,
+    handleTranscriptScroll,
+  } = useChatScroll({
+    messages,
+    activeKey,
+    activeSessionId,
+    workspacePath,
+    active,
+    onSessionSwitch: () => setShowAttachMenu(false),
   })
-
-  /** 贴到滚动容器真实底部（消息列表之外的提示 / 错误块也算在内） */
-  const pinToBottom = useCallback(() => {
-    const element = transcriptRef.current
-    // 容器隐藏时 clientHeight 为 0，写入 scrollTop 会被钳回顶部；等恢复可见再补
-    if (!element || element.clientHeight === 0) return
-    pinChatToBottom(element)
-  }, [transcriptRef])
-
-  /** 回到底部并恢复跟随（发送消息、Alt+↓、点击回底按钮共用） */
-  const scrollToBottom = useCallback(() => {
-    stickToBottomRef.current = true
-    setShowScrollButton(false)
-    setNewMessageCount(0)
-    if (messages.length > 0) {
-      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
-    }
-    pinToBottom()
-    // 新行首帧只有 estimateSize 占位，measure 完成后总高度会变；下一帧按真实高度再贴一次
-    requestAnimationFrame(() => {
-      if (!stickToBottomRef.current) return
-      pinToBottom()
-    })
-  }, [messages.length, pinToBottom, virtualizer])
-
-  /** 供挂载 / 尺寸回调等非渲染期执行路径调用，避免闭包过期 */
-  const scrollToBottomRef = useRef(scrollToBottom)
-  scrollToBottomRef.current = scrollToBottom
 
   const setDraft = useCallback(
     (value: string) => {
@@ -510,13 +475,38 @@ export function useChatPanelState(props: ChatPanelProps) {
     return () => offInsert()
   }, [activeKey, active])
 
-  const selectedModelCapability =
-    modelCapabilities.find((item) => item.id === sessionSettings?.modelId) ?? null
-  const imagesAllowed = selectedModelCapability
-    ? selectedModelCapability.vision
-    : Boolean(
-        sessionSettings?.modelId && configuredImageModels.includes(sessionSettings.modelId)
-      )
+  const {
+    availableModels,
+    modelCapabilities,
+    sessionMeta,
+    selectedModelCapability,
+    imagesAllowed,
+    modelCapabilityText,
+    budgetWarnedKeysRef,
+    refreshContextUsage,
+    refreshSessionSettings,
+    refreshSessionStats,
+    handleModelChange,
+    handleThinkingChange,
+    applySessionPermission,
+    handleSessionModeChange,
+    handleResetPermissionGrants,
+    handleCompact,
+    togglePin,
+    toggleArchive,
+    exportSession,
+  } = useChatSessionConfig({
+    workspacePath,
+    activeSessionId,
+    activeKey,
+    initialized,
+    isLoading,
+    configVersion,
+    sessionSettings,
+    configuredImageModels,
+    language,
+    t,
+  })
 
   const {
     imageProcessing,
@@ -536,20 +526,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     setShowAttachMenu,
     setAttachMode,
   })
-  /** 模型菜单底部的能力脚注 */
-  const modelCapabilityText = selectedModelCapability
-    ? selectedModelCapability.available === false
-      ? t('modelUnavailableHint')
-      : [
-          t('modelContextWindow', {
-            tokens: formatTokenCount(selectedModelCapability.contextWindow),
-          }),
-          selectedModelCapability.reasoning ? t('modelSupportsThinking') : t('modelNoThinking'),
-          selectedModelCapability.vision ? t('modelSupportsVision') : t('modelNoVision'),
-        ]
-          .filter(Boolean)
-          .join(' · ')
-    : null
 
   /** 文案或档位变化后重新测量，避免沿用旧宽度一直把文字收着 */
   useEffect(() => {
@@ -645,43 +621,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     return () => window.clearInterval(timer)
   }, [retryStatus])
 
-  // 激活会话切换时回到最新位置
-  useEffect(() => {
-    stickToBottomRef.current = true
-    const key = activeKey
-    if (!key) return
-    useSessionStore.getState().markUnread(workspacePath, activeSessionId!, false)
-    setShowAttachMenu(false)
-  }, [activeKey, activeSessionId, workspacePath])
-
-  // 贴底时才跟随内容增长（流式输出、新消息、列表外的提示块）
-  useEffect(() => {
-    if (!stickToBottomRef.current || messages.length === 0) return
-    virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
-    pinToBottom()
-    const frame = requestAnimationFrame(() => {
-      if (!stickToBottomRef.current) return
-      pinToBottom()
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [messages, virtualizer, pinToBottom, activeKey])
-
-  // 容器尺寸变化（面板收起后展开、标签页切回、独立窗口接入、窗口缩放）时补一次贴底：
-  // 隐藏期间 clientHeight 为 0，滚动位置无法计算，内容也还在增长；节点搬移还会把 scrollTop 归零
-  useEffect(() => {
-    const element = transcriptRef.current
-    if (!element || typeof ResizeObserver === 'undefined') return
-    let height = element.clientHeight
-    const observer = new ResizeObserver(() => {
-      const next = element.clientHeight
-      const changed = next !== height
-      height = next
-      if (changed && next > 0 && stickToBottomRef.current) scrollToBottomRef.current()
-    })
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [transcriptRef, activeSessionId])
-
   /** 打开工具结果全量查看器（只读） */
   const handleOpenToolResult = useCallback(
     (toolCallId: string, toolName: string) => {
@@ -689,35 +628,6 @@ export function useChatPanelState(props: ChatPanelProps) {
       setToolResultView({ toolCallId, toolName, sessionId: activeSessionId })
     },
     [activeSessionId]
-  )
-
-  const handleTranscriptScroll = () => {
-    const element = transcriptRef.current
-    if (!element) return
-    // 布局未就绪（容器隐藏时 clientHeight 为 0）不参与判定，否则会把跟随状态误置为 false
-    const distance = distanceFromBottom(element)
-    stickToBottomRef.current = shouldFollow(distance)
-    setShowScrollButton(shouldShowScrollButton(distance))
-    if (stickToBottomRef.current) setNewMessageCount(0)
-  }
-
-  useEffect(() => {
-    const previous = lastMessageCountRef.current
-    lastMessageCountRef.current = messages.length
-    if (messages.length > previous && previous > 0 && !stickToBottomRef.current) {
-      setNewMessageCount((count) => count + (messages.length - previous))
-    }
-  }, [messages.length])
-
-  useHostKeydown(
-    (event) => {
-      if (event.altKey && event.key === 'ArrowDown') {
-        event.preventDefault()
-        scrollToBottom()
-      }
-    },
-    [messages.length],
-    active
   )
 
   useEffect(() => {
@@ -1279,247 +1189,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     void handleSubmit(undefined, t('planExecuteFallback'), { consumeAttachments: false })
   }
 
-  /** 读取上下文占用（每轮结束与会话切换后刷新） */
-  const refreshContextUsage = useCallback(
-    async (sessionId: string) => {
-      const key = conversationKey(workspacePath, sessionId)
-      const result = await piAgentAPI.getContextUsage(workspacePath, sessionId)
-      if (result.success) {
-        useChatStore.getState().setContextUsage(key, result.usage ?? null)
-      }
-    },
-    [workspacePath]
-  )
-
-  /** 读取会话级模型与思考级别 */
-  const refreshSessionSettings = useCallback(
-    async (sessionId: string) => {
-      const key = conversationKey(workspacePath, sessionId)
-      const result = await piAgentAPI.getSessionSettings(workspacePath, sessionId)
-      if (result.success) {
-        useChatStore.getState().setSessionSettings(key, {
-          modelId: result.modelId,
-          thinkingLevel: result.thinkingLevel,
-          permission: result.permission,
-        })
-      }
-    },
-    [workspacePath]
-  )
-
-  /** 读取会话累计用量并检查预算 */
-  const refreshSessionStats = useCallback(
-    async (sessionId: string) => {
-      const key = conversationKey(workspacePath, sessionId)
-      const result = await piAgentAPI.getSessionStats(workspacePath, sessionId)
-      if (!result.success || !result.stats) return
-      useChatStore.getState().setSessionStats(key, result.stats)
-      const budget = useSettingsStore.getState().budgetUsd
-      if (budget > 0 && result.stats.cost >= budget && !budgetWarnedKeysRef.current.has(key)) {
-        budgetWarnedKeysRef.current.add(key)
-        toast.warning(
-          t('budgetExceeded', {
-            cost: result.stats.cost.toFixed(2),
-            budget: budget.toFixed(2),
-          })
-        )
-      }
-    },
-    [workspacePath, t]
-  )
-
-  useEffect(() => {
-    if (!initialized || !activeSessionId) return
-    void refreshContextUsage(activeSessionId)
-    void refreshSessionSettings(activeSessionId)
-    void refreshSessionStats(activeSessionId)
-  }, [
-    initialized,
-    activeSessionId,
-    configVersion,
-    refreshContextUsage,
-    refreshSessionSettings,
-    refreshSessionStats,
-  ])
-
-  useEffect(() => {
-    let cancelled = false
-    void api.providersList().then((result) => {
-      if (cancelled || !result.success) return
-      const active = result.providers?.find((provider) => provider.active)
-      setAvailableModels((active?.models ?? []).map((model) => model.id))
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [configVersion])
-
-  useEffect(() => {
-    if (!initialized) return
-    let cancelled = false
-    void piAgentAPI.getModelCapabilities(workspacePath).then((result) => {
-      if (cancelled) return
-      if (result.success && result.models) setModelCapabilities(result.models)
-      // 会话记录的模型已不在当前供应商目录里：主进程已静默回落，
-      // 这里把 chat store 对齐到实际生效的模型，避免头部显示一个用不了的 id（D22）
-      const selected = result.selected
-      if (!result.success || !selected || !activeKey) return
-      const current = useChatStore.getState().conversations[activeKey]?.sessionSettings
-      if (current?.modelId && current.modelId !== selected) {
-        useChatStore.getState().setSessionSettings(activeKey, { ...current, modelId: selected })
-      }
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [initialized, workspacePath, configVersion, activeKey])
-
-  const handleModelChange = async (modelId: string) => {
-    if (!activeSessionId || !activeKey || !modelId || isLoading) return
-    const prevModelId = useChatStore.getState().conversations[activeKey]?.sessionSettings?.modelId
-    useChatStore.getState().setSessionSettings(activeKey, {
-      ...(useChatStore.getState().conversations[activeKey]?.sessionSettings ?? {}),
-      modelId,
-    })
-    const result = await piAgentAPI.setSessionModel(workspacePath, activeSessionId, modelId)
-    if (!result.success) {
-      const latest = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
-      if (latest) {
-        useChatStore.getState().setSessionSettings(activeKey, { ...latest, modelId: prevModelId })
-      }
-      toast.error(t('modelSwitchFailed', { error: localizeError(result.error ?? '') }))
-      return
-    }
-    void refreshContextUsage(activeSessionId)
-  }
-
-  const handleThinkingChange = async (level: string) => {
-    if (!activeSessionId || !activeKey || !level || isLoading) return
-    if (selectedModelCapability?.reasoning === false) {
-      toast.error(t('modelThinkingUnavailable'))
-      return
-    }
-    const prevLevel =
-      useChatStore.getState().conversations[activeKey]?.sessionSettings?.thinkingLevel
-    useChatStore.getState().setSessionSettings(activeKey, {
-      ...(useChatStore.getState().conversations[activeKey]?.sessionSettings ?? {}),
-      thinkingLevel: level,
-    })
-    const result = await piAgentAPI.setSessionThinking(workspacePath, activeSessionId, level)
-    if (!result.success) {
-      const latest = useChatStore.getState().conversations[activeKey]?.sessionSettings ?? null
-      if (latest) {
-        useChatStore
-          .getState()
-          .setSessionSettings(activeKey, { ...latest, thinkingLevel: prevLevel })
-      }
-      toast.error(t('thinkingSwitchFailed', { error: localizeError(result.error ?? '') }))
-    }
-  }
-
-  /** 修改会话模式：模式或额外授权，成功后同步状态行 */
-  const applySessionPermission = async (next: SessionPermission): Promise<boolean> => {
-    const sessionId = activeSessionId
-    const key = activeKey
-    if (!sessionId || !key) return false
-    const prevPermission = useChatStore.getState().conversations[key]?.sessionSettings?.permission
-    useChatStore.getState().setSessionSettings(key, {
-      ...(useChatStore.getState().conversations[key]?.sessionSettings ?? {}),
-      permission: next,
-    })
-    const result = await piAgentAPI.setSessionPermission(workspacePath, sessionId, next)
-    if (!result.success || !result.permission) {
-      const latest = useChatStore.getState().conversations[key]?.sessionSettings ?? null
-      if (latest) {
-        useChatStore
-          .getState()
-          .setSessionSettings(key, { ...latest, permission: prevPermission })
-      }
-      toast.error(t('permissionSetFailed', { error: localizeError(result.error ?? '') }))
-      return false
-    }
-    useChatStore.getState().setSessionSettings(key, {
-      ...(useChatStore.getState().conversations[key]?.sessionSettings ?? {}),
-      permission: result.permission,
-    })
-    return true
-  }
-
-  /** 切换模式会清空本会话的额外授权（后端同样会归一化） */
-  const handleSessionModeChange = (nextMode: SessionMode) => {
-    if (isLoading) return
-    void applySessionPermission({ mode: nextMode, grants: [] })
-  }
-
-  const handleResetPermissionGrants = () => {
-    const permission = sessionSettings?.permission ?? DEFAULT_SESSION_PERMISSION
-    void applySessionPermission({ mode: permission.mode, grants: [] })
-  }
-
-  /** 手动压缩上下文；运行中不允许 */
-  const handleCompact = async () => {
-    if (!activeSessionId || isLoading) return
-    const confirmed = await confirmDialog({ message: t('compactConfirm') })
-    if (!confirmed) return
-    const result = await piAgentAPI.compactContext(workspacePath, activeSessionId)
-    if (result.success) {
-      toast.info(t('compactDone'))
-      void refreshContextUsage(activeSessionId)
-    } else {
-      toast.error(t('compactFailed', { error: localizeError(result.error ?? '') }))
-    }
-  }
-
-  /** 会话置顶 / 归档元数据 */
-  useEffect(() => {
-    let cancelled = false
-    if (typeof api.getSessionMeta !== 'function') return
-    void api.getSessionMeta(workspacePath).then((result) => {
-      if (cancelled || !result.success || !result.meta) return
-      setSessionMeta(result.meta)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [workspacePath, configVersion])
-
-  const persistSessionMeta = async (next: SessionMeta) => {
-    setSessionMeta(next)
-    if (typeof api.setSessionMeta !== 'function') return
-    const result = await api.setSessionMeta(workspacePath, next)
-    if (!result.success) {
-      const detail = 'error' in result && typeof result.error === 'string' ? result.error : ''
-      toast.error(t('sessionMetaFailed', { error: localizeError(detail) }))
-    }
-  }
-
-  const togglePin = (session: SessionSummary) => {
-    const pinned = sessionMeta.pinned.includes(session.id)
-      ? sessionMeta.pinned.filter((id) => id !== session.id)
-      : [...sessionMeta.pinned, session.id]
-    void persistSessionMeta({ ...sessionMeta, pinned })
-  }
-
-  const toggleArchive = (session: SessionSummary) => {
-    const archived = sessionMeta.archived.includes(session.id)
-      ? sessionMeta.archived.filter((id) => id !== session.id)
-      : [...sessionMeta.archived, session.id]
-    void persistSessionMeta({ ...sessionMeta, archived })
-  }
-
-  /** 导出会话（R-10）：Markdown / HTML / 原始 JSONL，由主进程写盘 */
-  const exportSession = async (
-    session: SessionSummary,
-    format: import('../types/electron').ExportSessionFormat = 'md'
-  ) => {
-    const result = await piAgentAPI.exportSession(workspacePath, session.id, format, language)
-    if (result.success && !result.canceled) {
-      toast.info(t('exportDone'))
-    } else if (!result.success) {
-      toast.error(t('exportFailed', { error: localizeError(result.error ?? '') }))
-    }
-  }
-
   /** 复制整条消息 */
   const handleCopyMessage = useCallback(
     async (text: string) => {
@@ -1577,7 +1246,7 @@ export function useChatPanelState(props: ChatPanelProps) {
       await refreshBranches(activeSessionId)
       stickToBottomRef.current = true
     },
-    [activeSessionId, activeKey, isLoading, workspacePath, refreshBranches, t]
+    [activeSessionId, activeKey, isLoading, workspacePath, refreshBranches, stickToBottomRef, t]
   )
 
   /** 编辑最后一条用户消息并重发 */
