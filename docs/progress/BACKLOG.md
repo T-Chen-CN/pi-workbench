@@ -29,7 +29,7 @@
 | P-06 | 目录「删除同步」（D12 遗留） | P3 | ⬜ 未做：清空目录缓存后可能短暂回退到旧列表；需要一次确认式刷新或「删除以远端为准」的显式提示 |
 | P-07 | models.dev 富数据（价格 / 限额 / 模态） | P3 | ⬜ 未做：独立立项，见 [provider-presets §8.3](../architecture/provider-presets.md)；当前能力表只展示 catalog 可读字段 |
 | P-08 | 自建 OAuth 应用（用自己域名做回调） | P3 | ⬜ 未做：需向各家申请 client_id + 备案 + 自实现授权码交换；当前复用 pi-ai 内置的 redirect 配置，用户会被带到 `pi.dev` 的授权页 |
-| P-09 | 全量测试里 git 相关用例的偶发失败 | P2 | ⬜ 未做：`cloud-device-unit-e2e`（A-43 干净树回收）、`repo-sync-manager`（fetch 后广播）、`worktree-coordinator`（依赖安装哈希）在**高并发全量跑**时偶发失败，单文件跑均通过，且在 `b275592` 基线同样复现。方向：git 用例串行化 / 提高超时 / 排查共享临时仓库与锁竞争 |
+| P-09 | CI 红灯收尾（2026-11-26 已定位两类，剩一类） | P2 | 🟡 已修：① 裸导入 `pi-bridge` 在干净检出下解析不到 `dist`（v0.10.0 时代全用相对路径，云端工作引入 27 处裸导入后 CI 自 11-21 起红）→ 根 `package.json` 加 `prepare` 装完即建 bridge；② `toWorktreeRelative` 的跨盘符判据只在 Windows 生效（POSIX 上 `E:/x` 被当相对路径）→ 改比盘符前缀；③ 主工作树视图按 `isMain` 定位，不再比路径字符串（macOS `/private/var`、Windows 8.3 短名）。**剩**：`cloud-device-unit-e2e`（A-43 干净树回收）本机高并发全量跑时偶发失败，单跑通过 |
 | P-10 | `openai` 与 `openai-codex` 是两套独立凭证 | P3 | ⬜ 未做：设置页文案要讲清「登录一次不代表两边都能用」，否则用户会以为 Codex 订阅就是 OpenAI Key |
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |

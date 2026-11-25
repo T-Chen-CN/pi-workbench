@@ -32,6 +32,10 @@ npm install
 npm run dev
 ```
 
+`npm install` / `npm ci` 会通过根 `package.json` 的 `prepare` **自动构建** `pi-bridge`（`pi-bridge/dist`）。
+主进程、`apps/cloud` 与测试都用裸导入 `pi-bridge`，走 `node_modules` 解析到 `dist/index.d.ts`；该目录 gitignore，
+不建就 `type-check` / `test` 直接报 `TS2307`（干净检出与 CI 都是这条路径）。
+
 `npm run dev` 会通过 `predev` **自动先构建** `pi-bridge`（`pi-bridge/dist`）与 Electron 主进程（`dist-electron`），再并行启动：
 
 - Vite dev server：`http://localhost:5173`
