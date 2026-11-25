@@ -28,7 +28,9 @@ vi.mock('electron', () => ({
 let distDir = ''
 
 beforeAll(async () => {
-  distDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-app-protocol-'))
+  // resolveAppTarget 会经 realpath 规范化路径（macOS /var → /private/var，Windows 8.3 短名），
+  // 测试夹具同样先规范化，避免在 CI runner 上出现等价路径字符串不相等。
+  distDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'pi-app-protocol-')))
   await fs.mkdir(path.join(distDir, 'assets'), { recursive: true })
   await fs.writeFile(path.join(distDir, 'index.html'), '<!doctype html><title>ok</title>')
   await fs.writeFile(path.join(distDir, 'assets', 'main.js'), 'console.log(1)')
