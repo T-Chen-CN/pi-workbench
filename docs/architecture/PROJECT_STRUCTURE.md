@@ -32,7 +32,7 @@ pi-workbench/
 │   ├── preload.cts               # contextBridge（编译为 CommonJS preload.cjs）
 │   ├── app-paths.ts              # 便携式应用目录
 │   ├── workspace-trust.ts        # 工作区信任与路径包含
-│   ├── ipc/                      # 按域注册 IPC（agent / api-config / attachments / documents / files / git / settings / system / web-search* / workspace）
+│   ├── ipc/                      # 按域注册 IPC（agent / providers / attachments / documents / files / git / settings / system / web-search* / workspace）
 │   ├── documents/                # 文档解析（零依赖）：zip / xml / ooxml / pdf / detect / preview / render-bridge
 │   │   ├── zip.ts                # node:zlib 手写 ZIP 中央目录（不引第三方）
 │   │   ├── xml.ts                # 流式 XML 扇描（不建 DOM）
@@ -287,7 +287,7 @@ App.openWorkspace
   → api.watchWorkspace(path)
   → api.addRecentWorkspace(path)   # data/workspaces.db
   → WorkspaceView 常驻挂载（每个已打开工作区一份）
-  → ChatPanel 读取 api-config.json → agent:initialize
+  → ChatPanel 读取 providers.json（active provider + 模型）→ agent:initialize
   → agent:sessions:open → 恢复会话消息
 ```
 
@@ -330,7 +330,9 @@ ChatPanel.handleSubmit
 | `workspace:init` / `dispose` / `searchFiles` / `editorTabs:*` | invoke | 工作区生命周期与标签 |
 | `repo-map:scan` / `repo-map:describe` | invoke | 仓库地图扫描 / 降级模式下补齐描述（只读，缓存写在工作区 `.pi-workbench/`） |
 | `repo-map:canvas:get` / `repo-map:canvas:set` | invoke | 画布布局读写（`.pi-workbench/repo-map-canvas.json`，写前清洗坐标与路径键） |
-| `apiConfig:get` / `save` / `fetchModels` | invoke | 供应商配置与模型拉取 |
+| `providers:list` / `setActive` / `setOverrides` / `refresh` | invoke | 供应商列表、切换、容量下调、目录刷新 |
+| `providers:setApiKey` / `forget` / `login` / `authAnswer` / `cancelLogin` | invoke | 凭证录入、移除、OAuth 登录与交互 |
+| `providers:auth-event` | event | 登录过程中的提示 / 授权链接 / 设备码 / 需要输入 / 结果 |
 | `agent:initialize` / `chat` / `abort` / `dispose` / `steer` | invoke | Agent 生命周期与运行控制 |
 | `agent:sessions:*` / `agent:plan:*` / `agent:tool-result:*` | invoke | 会话、计划、工具结果 |
 | `agent:stream` / `agent:session-title` | main → renderer | 流式事件与会话标题 |

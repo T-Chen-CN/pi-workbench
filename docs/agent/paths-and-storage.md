@@ -25,7 +25,7 @@ macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动�
 启动时 `main.ts` 的 `initAppDirectories()` 创建并维护四个目录：
 
 ```
-{appDir}/config/   settings.json、api-config.json、web-search.json、last-run-version.json、migrations.json
+{appDir}/config/   settings.json、providers.json、credentials.json、web-search.json、device-id、last-run-version.json、migrations.json
 {appDir}/cache/    drafts/（崩溃恢复草稿）、temp/（含 Web dev 模式的 web-agent/，可随时删）、{updaterCacheDirName}/（Linux 更新包）
 {appDir}/data/     agent/（模型与会话）、profile/（Chromium userData）、workspaces.db
 {appDir}/logs/     main.log、renderer.log、agent.log
@@ -70,12 +70,16 @@ macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动�
 | 文件 | 写者 | 内容 / 恢复语义 |
 | --- | --- | --- |
 | `config/settings.json` | `app:saveSettings` | 语言、主题、自动保存、`closeToTray`、`permissionLevel`、通知开关、快捷键 |
-| `config/api-config.json` | `apiConfig:*` | provider / apiUrl / apiKey（`enc:` + safeStorage）/ 模型与容量 |
+| `config/providers.json` | `providers:*` | active provider、每家的选中模型与按模型的下调容量；无密钥 |
+| `config/credentials.json` | `providers:*` / 登录流程 | 每 provider 一份凭证（`api_key` 或 `oauth`），值为 `enc:` + safeStorage；**唯一密钥落盘点** |
+| `config/device-id` | `electron/device-id.ts` | OAuth 上报的稳定 UUID（OpenAI 会校验格式） |
+| `config/api-config.legacy.json` | 启动迁移 | 旧配置归档（迁移成功后改名，不再读取） |
 | `config/web-search.json` | `webSearch:*` | 当前 provider + 各 provider 的 Key（`enc:`） |
 | `config/last-run-version.json` | `shell-refresh.ts` | 仅在版本变化时刷新 shell / 图标缓存 |
 | `config/migrations.json` | `electron/legacy-cleanup.ts` | 已执行的一次性迁移：`{applied: { [id]: 时间戳 }}`。**删了等于让迁移重跑**，而迁移是幂等的，所以代价只是白做一次 |
 | `data/workspaces.db` | `workspace-store.ts` | `node:sqlite`，表 `workspaces(path, opened_at, open_count)`；**最近工作区的唯一来源**，渲染层不再保存 `recentWorkspaces` |
-| `data/agent/models.json` | `model-config.ts` | Pi 模型配置；Key 只写变量名 `$PI_WORKBENCH_API_KEY`，不落盘 |
+| `data/agent/models.json` | `model-config.ts` | 由应用整体覆盖生成：只含 8 家白名单 provider 的 `modelOverrides`，不含 baseUrl / api / apiKey |
+| `data/agent/models-store.json` | `models-store.ts` | 远端目录缓存（SDK 格式），`source` 与列表过滤共用一个判据 |
 | `data/agent/web-search.json` | `ipc/web-search.ts` | 下发给扩展的 `$PI_WORKBENCH_WEB_SEARCH_KEY_<PROVIDER>` 变量名 |
 | `data/agent/sessions/*.jsonl` | Pi SDK | 会话记录（按 cwd 过滤），历史与导出的唯一真相源 |
 | `data/agent/session-extras/<id>.json` | `AgentManager` | 会话 sidecar：`title`（标题备份）、`plan`（结构化计划，不进模型上下文、压缩后保留）、`permission`（会话权限，`null` 表示首次打开时从全局默认档生成）、`branchLeaves`（分支切换恢复）、`thinkingDurations` |

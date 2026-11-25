@@ -81,7 +81,7 @@ Agent 改完不是甩一句「已完成」。这一轮动过的文件都摆进�
 
 | 位置                         | 内容                                                                |
 | ---------------------------- | ------------------------------------------------------------------- |
-| `{appDir}/config/`           | `settings.json`、`api-config.json`、`web-search.json`（Key 已加密） |
+| `{appDir}/config/`           | `settings.json`、`providers.json`、`credentials.json`（Key 已加密）、`web-search.json` |
 | `{appDir}/data/`             | `models.json`、会话记录、`workspaces.db`                            |
 | `{appDir}/cache/`            | 临时文件、下载的更新包                                              |
 | `{appDir}/logs/`             | `main.log`、`agent.log`（5MB 轮转）                                 |
@@ -156,13 +156,13 @@ npm run build
 
 ## 配置
 
-首次启动打开**设置**，五步走完即可开始：
+首次启动打开**设置 → 供应商**，三步即可开始：
 
-1. **供应商** —— Anthropic、OpenAI，或任意 OpenAI 兼容端点（DeepSeek、中转站、本地服务）。
-2. **API 地址** —— 例如 `https://api.deepseek.com/v1`。
-3. **API Key** —— 经 `safeStorage` 以 `enc:<base64>` 存入 `config/api-config.json`，运行时通过环境变量交给 Agent。
-4. **拉取可用模型** —— 取供应商真实模型列表，再按模型设置上下文窗口（64K / 128K / 256K / 1M）与图像能力。
-5. **联网搜索**（可选）—— 十家服务商单选，Key 加密存入 `config/web-search.json`。
+1. **选供应商** —— 8 家内置：OpenAI、Anthropic、Google、xAI、DeepSeek、小米 MiMo、小米（Token 套餐）、OpenAI Codex。模型与协议来自 Pi 目录，不需要填 Base URL。
+2. **登录** —— 填 API Key，或用账号 OAuth 登录（部分供应商走设备码 / 浏览器回调，界面会给出链接与验证码）。凭证经 `safeStorage` 以 `enc:<base64>` 存入 `config/credentials.json`，不进环境变量、不进日志。
+3. **选模型** —— 目录里的全部模型可选；上下文窗口与输出上限可**向下调**，按模型保存，改完在下一轮对话生效。
+
+**联网搜索**（可选）：十家服务商单选，Key 加密存入 `config/web-search.json`。
 
 ---
 

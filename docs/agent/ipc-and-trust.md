@@ -10,7 +10,7 @@
 ## 1. 三条铁律
 
 1. **新增 handler 一律用 `handleIpc()`**（`electron/ipc/register.ts`）。仓库里唯一出现 `ipcMain.handle` 的地方就是 `register.ts` 自身。
-2. **频道落在 `electron/ipc/` 下**，按域就近归文件（不是一域一文件）：`agent.ts` = `agent`（36）；`git.ts` = `git`（22）+ `github`（7）；`files.ts` = `fs`（8）+ `draft`（4）+ `workspace`（1）；`workspace.ts` = `workspace`（4）+ `fs`（2）+ `dialog`（1）+ `app`（2）；`system.ts` = `terminal`（5）+ `update`（5）+ `window`（4）+ `plugins`（4）+ `app`（4）+ `shell`（1）+ `clipboard`（1）+ `log`（1）；`settings.ts` = `app`（2）；`api-config.ts` = `apiConfig`（3）；`web-search.ts` = `webSearch`（2）。几处跨域共处一文件是因为它们共享同一份上下文（例如 `files.ts` / `workspace.ts` 都要用工作区信任判定）。**唯一例外**：`aux:*`（4 个）在 `electron/aux-window.ts` 里注册——它要用该模块私有的窗口登记表。装配入口是 `main.ts` 调的 `register<Domain>Ipc(context)`。
+2. **频道落在 `electron/ipc/` 下**，按域就近归文件（不是一域一文件）：`agent.ts` = `agent`（36）；`git.ts` = `git`（22）+ `github`（7）；`files.ts` = `fs`（8）+ `draft`（4）+ `workspace`（1）；`workspace.ts` = `workspace`（4）+ `fs`（2）+ `dialog`（1）+ `app`（2）；`system.ts` = `terminal`（5）+ `update`（5）+ `window`（4）+ `plugins`（4）+ `app`（4）+ `shell`（1）+ `clipboard`（1）+ `log`（1）；`settings.ts` = `app`（2）；`providers.ts` = `providers`（10）；`web-search.ts` = `webSearch`（2）。几处跨域共处一文件是因为它们共享同一份上下文（例如 `files.ts` / `workspace.ts` 都要用工作区信任判定）。**唯一例外**：`aux:*`（4 个）在 `electron/aux-window.ts` 里注册——它要用该模块私有的窗口登记表。装配入口是 `main.ts` 调的 `register<Domain>Ipc(context)`。
 3. **不要绕过 contextBridge**：`nodeIntegration` 关闭，只暴露 `window.electronAPI`。
 
 直接写 `ipcMain.handle` 会跳过来源校验——这正是 `handleIpc` 存在的唯一原因：
@@ -52,7 +52,7 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
 
 ## 4. 频道分布（19 域 / 127 个 handler）
 
-`agent 36` · `git 22` · `fs 10` · `app 8` · `github 7` · `workspace 5` · `terminal 5` · `update 5` · `draft 4` · `plugins 4` · `window 4` · `aux 4` · `apiConfig 3` · `documents 3` · `webSearch 2` · `shell 1` · `log 1` · `dialog 1` · `clipboard 1` · `attachment 1`。
+`agent 36` · `git 22` · `fs 10` · `app 8` · `github 7` · `workspace 5` · `terminal 5` · `update 5` · `draft 4` · `plugins 4` · `window 4` · `aux 4` · `providers 10` · `documents 3` · `webSearch 2` · `shell 1` · `log 1` · `dialog 1` · `clipboard 1` · `attachment 1`。
 
 按域的频道摘要（含每个频道的作用）在 [PROJECT_STRUCTURE §5](../architecture/PROJECT_STRUCTURE.md)，新增频道时同步那一节。
 

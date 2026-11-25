@@ -450,26 +450,28 @@ SDK 的远端目录是**叠加**在打包快照上的（`mergeModels(baseline, r
 - 验收：`tests/providers-config.test.ts` + `build:bridge` + `type-check` + `lint` 全绿。
 - 关键：本阶段**不接线**（`main.ts` / IPC 仍走旧 `api-config`，零行为变化）；迁移调用点、`.legacy` 改名与 `models.json` 覆盖在 P2 一起生效，避免中间提交把应用变成不可配置。
 
-### P2 · 运行时切内置 provider（L，断点）— 进行中
-- 已完成：`pi-bridge/src/models-store.ts`（SDK 格式的文件缓存 + 只读快照 + 串行读改写）与 `isRemoteCatalogEffective()`（D26 判据），`tests/models-store.test.ts` 9 条。
-- 待做：`types.ts` / `model-config.ts` / `agent-manager.ts` / `environment.ts` 与 electron 侧接线（这一步必须与 IPC/UI 同批落地，否则中间提交会让应用无法配置）。
-- 验收：`npm run build:bridge` + `tests/agent-manager*.test.ts` + `tests/models-store.test.ts`；手工跑一轮 DeepSeek（工具调用 + 图片 + 截断文案）。
-- 关键：`models.json` 必须整体覆盖（清旧 provider，D25）；`modelsStore` 注入而不依赖 `modelsStorePath`。
+### P2 · 运行时切内置 provider（L）— 已完成（`abc92f9` / `b275592`）
+- 交付：`models-store.ts`（SDK 格式缓存 + 只读快照 + 串行读改写 + `isRemoteCatalogEffective()`）、`types.ts`（`apiConfig → {providerId, modelId, overrides?}` + `credentials` / `modelsStore` / `allowModelNetwork`）、`model-config.ts`（只写 `modelOverrides`）、`agent-manager.ts`（注入凭证与目录缓存、`refreshOnCreate: false`、后台刷新、能力表来自目录）、`environment.ts`（删除 env 租约）、`session-title.ts`（改走 SDK `completeSimple`）、`electron/models-store.ts`。
+- 验收：`build:bridge` + `type-check` + `tests/{agent-manager,agent-extension-injection,main-ipc,cloud-*}.test.ts` 全绿。
+- 关键：`models.json` 整体覆盖且只含白名单 provider（D25）；密钥不再进 `process.env`（D3）；标题生成必须走 SDK，否则等于自建第二个请求层。
 
-### P3 · 协议假设修正 + 交互细化（M）
-- 交付：标题生成改 `streamSimple`；纯图片占位改 `model.api`；env 注入清理；`getModelCapabilities` 改 catalog；换模型的思考档位自动降级（D11）；overrides 归一化与上限夹取（D9/D10）；会话模型归属校验与静默回落（D22，含 chat store 回写）。
-- 验收：`tests/session-title.test.ts`（四种 api 的路径）、`tests/agent-manager.test.ts`（能力/上限/档位降级/回落）。
-- 关键：标题请求显式 `reasoning: 'off'` + 小 `maxTokens`；回落时必须同步 `sessionSettings.modelId`。
+### P3 · 协议假设修正 + 交互细化（M）— 已完成（并入 `b275592` / `825da35`）
+- 交付：标题生成改走 SDK（`completeSimple`，512 `maxTokens` + `temperature 0.2`，不再自建 HTTP）；纯图片占位判据从 `provider` 改为 `model.api`；`getModelCapabilities` 改读目录对象；换模型的思考档位自动降级（D11）；overrides 归一化与上限夹取（D9/D10）；会话模型归属校验 + 静默回落 + chat store 回写（D22）。
+- 验收：`tests/agent-manager.test.ts`（能力表 / 上限 / 图片占位 / 回落）、`tests/renderer-components.test.tsx`。
+- 说明：标题请求不带 `reasoning: 'off'`（请求级 `ThinkingLevel` 没有 `off`），用小 `maxTokens` + 失败重试上限收敛成本。
 
-### P4 · 鉴权与 UI（L）
-- 交付：`providers-service.ts` / `auth-flow.ts` / `ipc/providers.ts` / preload / d.ts / api 层 + Web mock / `Settings.tsx` / `ProviderAuthPanel.tsx` / `ModelCapabilityTable.tsx` / i18n。
-- 验收：`tests/settings-providers.test.tsx` + `tests/main-ipc.test.ts` + `tests/design-system.test.ts`；Paper/Ink 双主题 + 1024/1440 截图；手工 OAuth 清单（§11.2）。
-- 关键：登录可取消；`auth:event` 只推受信窗口。
+### P4 · 鉴权与 UI（L）— 已完成（`2e49819`）
+- 交付：`electron/providers-service.ts`（常驻目录运行时 + 配置读写 + 能力视图 + 探测 + 刷新）、`electron/auth-flow.ts`（`AuthInteraction` → IPC 事件：`select` / `text` / `secret` / `manual_code` + 授权链接 / 设备码 / 进度 / 结果，可取消、5 分钟超时）、`electron/device-id.ts`（稳定 UUID，D27）、`electron/ipc/providers.ts`、preload / d.ts / api 层 + Web mock、`ProviderSettings.tsx` + `ProviderAuthPanel.tsx`、i18n。
+- 删除：`electron/ipc/api-config.ts` 整条链路、`src/utils/model-capabilities.ts`、dev server 的 `/__pi/fetch-models` 代理、`tests/model-capabilities.test.ts`。
+- 验收：`tests/main-ipc.test.ts`（providers 域 5 条）、`tests/settings-update.test.tsx`、`tests/renderer-components.test.tsx`、`tests/design-system.test.ts`、`npm run build`。
+- 关键：任何 IPC 响应都不含密钥（只回 `connected` / `credentialType`）；配置时一次轻量探测（401/403 拒绝，网络异常放行）；`providers:setOverrides` 运行中返回 `pending: true`（D23）。
+- 与方案的差异：`ModelCapabilityTable` 没有单独成文件，能力列直接做进 `ProviderSettings` 的表格（字段口径不变）。
 
-### P5 · 云端与工单对齐（M）
-- 交付：`task-runner.ts`（D16）、`ipc/cloud.ts`（不再读明文 key）、`apps/cloud`（白名单 + catalog 校验 + Key 探测保留 + 旧配置丢弃 + 云端凭证存储 + **云端 OAuth 登录 UI**）、`CloudView.tsx`。
-- 验收：`npm run build:cloud` + `tests/cloud-config-*.test.ts` + `tests/cloud-task-agent-settings.test.ts`；手工：`xai` device code、`anthropic` copy-code、`openai-codex` device code、`openai` 粘贴 URL 各 × 1。
-- 关键：云端凭证与桌面端各自独立（D19）；PKCE verifier 存服务端临时表，不可跨实例。
+### P5 · 云端与工单对齐（M）— 配置部分已完成（`5278080`），OAuth 登录待做
+- 已完成：`electron/cloud/task-runner.ts`（工单跟随 activeProvider，只取 provider / 模型 / 指纹）、`electron/ipc/cloud.ts`（不再读明文 Key，也不上报 Key 或片段）、`apps/cloud`（`CloudConfigRecord → {providerId, model, credentialCipher}`、旧记录读取即作废、catalog 校验、Key 探测保留在保存时、`secure/cloud-credentials.ts` 云端 `CredentialStore`、`/v1/cloud-config/catalog`、Web 配置卡改供应商下拉 + 能力摘要）。
+- 待做：**云端 OAuth 登录**（D18：`xai` device code；`anthropic` / `openai-codex` headless 分支；`openai` 粘贴回调 URL）+ Web 登录 UI + 临时状态表（PKCE / device code 不可跨实例）。
+- 验收：`npm run build:cloud` + `tests/{cloud-config-rotation,cloud-config-probe,cloud-model-list,cloud-server-e2e,cloud-snapshot-history,cloud-web-app,cloud-web-config-form}.test.ts`。
+- 关键：云端凭证与桌面端各自独立（D19）；`credentialCipher` 存的是整份凭证 JSON（api_key 与 oauth 同一路径）。
 
 ### P6 · 跟随上游 + 文档收尾（S）
 - 交付：`allowModelNetwork` 打开（限 8 家）、`providers:refresh` 接线、目录时间与 `source` 展示、两个开关。
