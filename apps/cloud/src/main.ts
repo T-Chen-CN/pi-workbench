@@ -415,9 +415,17 @@ export async function createCloudServer(
     )
   }
 
+  const deviceSeenPersistedAt = new Map<string, number>()
+  const DEVICE_LAST_SEEN_PERSIST_MS = 30_000
+
   async function onDeviceFrame(peer: DevicePeer, frame: DeviceToServerFrame): Promise<void> {
     if (closing) return
-    await store.updateDevice(peer.deviceId, { lastSeenAt: Date.now() })
+    const now = Date.now()
+    const lastPersisted = deviceSeenPersistedAt.get(peer.deviceId) ?? 0
+    if (now - lastPersisted >= DEVICE_LAST_SEEN_PERSIST_MS) {
+      deviceSeenPersistedAt.set(peer.deviceId, now)
+      await store.updateDevice(peer.deviceId, { lastSeenAt: now })
+    }
     if (frame.type === 'hello') {
       await store.updateDevice(peer.deviceId, { workspaces: sanitize(frame.workspaces) })
       publishDevice(peer.deviceId)
@@ -507,8 +515,12 @@ export async function createCloudServer(
     stamp: number
     providerId: string
     model: string
+    credentialCipher: string
     credential: { type: 'api_key'; key?: string } | { type: 'oauth'; [key: string]: unknown }
   }
+
+  /** 回滚到上一份可用配置时的内存凭证覆盖，避免读取磁盘上已写入的坏配置 */
+  let rollbackConfigOverride: { providerId: string; credentialCipher: string } | null = null
 
   /**
    * 云端凭证存储：读 `CloudStore` 里那条加密记录，凭证整体（含 OAuth token）
@@ -516,12 +528,20 @@ export async function createCloudServer(
    */
   const credentials = createCloudCredentialStore({
     readConfig: () => {
+      if (rollbackConfigOverride) return rollbackConfigOverride
       const record = store.getCloudConfig()
       return record ? { providerId: record.providerId, credentialCipher: record.credentialCipher } : null
     },
-    saveCredential: (providerId, credentialCipher) =>
-      store.saveCloudCredential(providerId, credentialCipher),
-    clearCredential: () => store.clearCloudConfig(),
+    saveCredential: (providerId, credentialCipher) => {
+      if (rollbackConfigOverride && rollbackConfigOverride.providerId === providerId) {
+        rollbackConfigOverride = { providerId, credentialCipher }
+      }
+      return store.saveCloudCredential(providerId, credentialCipher)
+    },
+    clearCredential: () => {
+      rollbackConfigOverride = null
+      return store.clearCloudConfig()
+    },
     encryptionKey: config.encryptionKey,
     logger,
   })
@@ -538,6 +558,7 @@ export async function createCloudServer(
         stamp: record.updatedAt,
         providerId: record.providerId,
         model: record.model,
+        credentialCipher: record.credentialCipher,
         credential,
       }
     } catch {
@@ -634,6 +655,7 @@ export async function createCloudServer(
       })
 
       if (await startAgent(resolved)) {
+        rollbackConfigOverride = null
         failedConfigStamp = null
         hub.publish({
           type: 'notice',
@@ -645,16 +667,24 @@ export async function createCloudServer(
         return
       }
 
-      // 回滚：坏配置不能把云端打死，用上一份可用配置重建
+      // 回滚：坏配置不能把云端打死，切回上一份可用配置的内存凭证重建，绝不读磁盘上的坏凭证
       failedConfigStamp = resolved.stamp
-      if (previous && (await startAgent(previous))) {
-        hub.publish({
-          type: 'notice',
-          level: 'warn',
-          text: '新配置不可用，已回退到上一份可用配置；检查后重新推送即可',
-          at: Date.now(),
-          key: `config-rollback-${resolved.stamp}`,
-        })
+      if (previous) {
+        rollbackConfigOverride = {
+          providerId: previous.providerId,
+          credentialCipher: previous.credentialCipher,
+        }
+        if (await startAgent(previous)) {
+          hub.publish({
+            type: 'notice',
+            level: 'warn',
+            text: '新配置不可用，已回退到上一份可用配置；检查后重新推送即可',
+            at: Date.now(),
+            key: `config-rollback-${resolved.stamp}`,
+          })
+        } else {
+          rollbackConfigOverride = null
+        }
       }
     })()
     try {
@@ -713,6 +743,8 @@ export async function createCloudServer(
   }, 5_000)
   sweeper.unref?.()
 
+  let closePromise: Promise<void> | null = null
+
   const cloudServer: CloudServer = {
     config,
     store,
@@ -733,14 +765,22 @@ export async function createCloudServer(
           resolve(port)
         })
       }),
-    close: async () => {
-      closing = true
-      clearInterval(sweeper)
-      hub.stop()
-      await session.stopReply().catch(() => undefined)
-      await agent.dispose().catch(() => undefined)
-      await store.flush().catch(() => undefined)
-      await new Promise<void>((resolve) => server.close(() => resolve()))
+    close: () => {
+      if (closePromise) return closePromise
+      closePromise = (async () => {
+        closing = true
+        clearInterval(sweeper)
+        hub.stop()
+        await session.stopReply().catch(() => undefined)
+        await agent.dispose().catch(() => undefined)
+        await store.flush().catch(() => undefined)
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve())
+          // 主动断开空闲 HTTP keep-alive 连接，防止优雅退出无限挂起
+          server.closeAllConnections?.()
+        })
+      })()
+      return closePromise
     },
   }
 
@@ -774,7 +814,10 @@ const invokedDirectly =
 if (invokedDirectly) {
   const server = await createCloudServer()
   await server.listen()
+  let shuttingDown = false
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return
+    shuttingDown = true
     console.log(`[cloud] ${signal} received, shutting down`)
     await server.close()
     process.exit(0)

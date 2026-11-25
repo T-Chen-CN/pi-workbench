@@ -72,11 +72,13 @@ export class BoundedLog {
     this.trim()
   }
 
-  /** 续读：返回 lastAckSeq 之后的帧；overflow 表示中间有丢失，调用方应回 snapshot */
+  /** 续读：返回 lastAckSeq 之后的帧；overflow 表示中间有丢失或服务端重启游标归零，调用方应回 snapshot */
   since(lastAckSeq: number): { frames: StoredFrame[]; overflow: boolean } {
     this.trim()
     const first = this.entries[0]
-    const overflow = Boolean(first && lastAckSeq > 0 && first.seq > lastAckSeq + 1)
+    const overflow =
+      lastAckSeq > this.lastSeq ||
+      Boolean(first && lastAckSeq > 0 && first.seq > lastAckSeq + 1)
     return {
       frames: this.entries.filter((entry) => entry.seq > lastAckSeq),
       overflow,

@@ -160,7 +160,9 @@ export class CloudClientBridge {
       if (!frame || typeof frame !== 'object') return
       if ((frame as { v?: number }).v !== CLOUD_PROTOCOL_VERSION) return
       if (typeof (frame as { seq?: number }).seq === 'number') {
-        this.lastAckSeq = Math.max(this.lastAckSeq, (frame as { seq: number }).seq)
+        const seq = (frame as { seq: number }).seq
+        // 服务端重启后游标可能从 0 重新开始；收到 snapshot 时必须直接重置游标，避免被旧大值钉死
+        this.lastAckSeq = frame.type === 'snapshot' ? seq : Math.max(this.lastAckSeq, seq)
       }
       try {
         this.deps.onFrame(frame)

@@ -308,27 +308,37 @@ export function registerCloudIpc(context: CloudIpcContext): void {
     }
   })
 
-  /** 云端页：代拉供应商模型清单（浏览器会被 CORS 挡，Key 也留在主进程日志之外） */
+  /** 云端页：代拉供应商模型清单（走云端 /v1/cloud-config/catalog） */
   handleIpc('cloud:fetchModels', async (_event, input: unknown) => {
     const link = readCloudLink()
     if (!link) return { success: false, error: 'This device is not paired', models: [] }
     const token = readCloudToken(link)
     if (!token) return { success: false, error: 'Saved token cannot be decrypted; pair again.', models: [] }
+    const providerId =
+      input && typeof input === 'object' && typeof (input as { providerId?: unknown }).providerId === 'string'
+        ? (input as { providerId: string }).providerId.trim()
+        : ''
+    if (!providerId) return { success: false, error: 'providerId is required', models: [] }
     try {
-      const response = await fetch(`${link.baseUrl}/v1/cloud-config/models`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-        body: JSON.stringify(input ?? {}),
+      const url = `${link.baseUrl}/v1/cloud-config/catalog?providerId=${encodeURIComponent(providerId)}`
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(20_000),
       })
       const payload = (await response.json().catch(() => ({}))) as {
-        models?: string[]
+        models?: Array<string | { id?: string }>
         error?: string
       }
       if (!response.ok) {
         return { success: false, error: String(payload.error ?? `HTTP ${response.status}`), models: [] }
       }
-      return { success: true, models: Array.isArray(payload.models) ? payload.models : [] }
+      const models = Array.isArray(payload.models)
+        ? payload.models
+            .map((entry) => (typeof entry === 'string' ? entry : entry?.id ?? ''))
+            .filter((id): id is string => Boolean(id))
+        : []
+      return { success: true, models }
     } catch (error) {
       return {
         success: false,

@@ -483,6 +483,12 @@ export class CloudTaskRunner {
       if (attempt === 0) this.deps.onStatus(taskId, 'assigned')
 
       const worktree = await this.ensureUnitWorktree(spec)
+      if (this.cancelRequested.has(taskId)) {
+        this.cancelRequested.delete(taskId)
+        const clean = worktree.ok && worktree.record ? await this.isWorktreeClean(worktree.record.worktreePath) : true
+        this.deps.onInterrupted(taskId, 'user-cancel', clean)
+        return
+      }
       if (!worktree.ok || !worktree.record) {
         // 树都没建起来：云端那个单元没有 worktree 可收，按「干净」报一次让它能收口
         this.deps.onFailed(taskId, worktree.error ?? 'Unable to prepare the worktree', undefined, true)
@@ -495,11 +501,23 @@ export class CloudTaskRunner {
       try {
         manager = await this.ensureManager()
       } catch (error) {
+        if (this.cancelRequested.has(taskId)) {
+          this.cancelRequested.delete(taskId)
+          const clean = await this.isWorktreeClean(unit.worktreePath)
+          this.deps.onInterrupted(taskId, 'user-cancel', clean)
+          return
+        }
         const reused = attempt === 0 && (await this.retryAfterConfigRefresh(taskId, spec))
         if (!reused) {
           // 准备阶段就失败（未配 Key 最常见）：必须带上 worktreeClean，否则云端不会回收这棵树
           await this.failWithWorktree(taskId, error instanceof Error ? error.message : String(error), unit.worktreePath)
         }
+        return
+      }
+      if (this.cancelRequested.has(taskId)) {
+        this.cancelRequested.delete(taskId)
+        const clean = await this.isWorktreeClean(unit.worktreePath)
+        this.deps.onInterrupted(taskId, 'user-cancel', clean)
         return
       }
 
@@ -622,6 +640,10 @@ export class CloudTaskRunner {
   private async runTurn(task: ActiveTask, spec: CloudTaskSpec, prompt: string): Promise<void> {
     try {
       const outcome = await this.manager.chat(task.sessionId, prompt)
+      if (this.cancelRequested.has(task.id)) {
+        this.cancelRequested.delete(task.id)
+        return
+      }
       if (!task.awaitingAnswer && outcome && outcome.success === false) {
         await this.finishFailed(task, outcome.error ?? 'task turn failed')
         return
@@ -629,7 +651,10 @@ export class CloudTaskRunner {
       if (task.awaitingAnswer) return
       await this.finishDone(task, spec, outcome)
     } catch (error) {
-      if (this.cancelRequested.has(task.id)) return
+      if (this.cancelRequested.has(task.id)) {
+        this.cancelRequested.delete(task.id)
+        return
+      }
       await this.finishFailed(task, error instanceof Error ? error.message : String(error))
     }
   }
@@ -719,6 +744,7 @@ export class CloudTaskRunner {
       result.notes = '本单要求提交，但工作树里没有新提交'
     }
     this.active.delete(task.id)
+    this.cancelRequested.delete(task.id)
     this.persistedTasks.delete(task.id)
     await this.persistTasks()
     this.deps.onResult(task.id, result)
@@ -728,6 +754,7 @@ export class CloudTaskRunner {
     const changedFiles = await this.collectChangedFiles(task).catch(() => [] as CloudChangedFile[])
     const worktreeClean = await this.isWorktreeClean(task.worktreePath)
     this.active.delete(task.id)
+    this.cancelRequested.delete(task.id)
     this.persistedTasks.delete(task.id)
     await this.persistTasks().catch(() => undefined)
     this.deps.onFailed(task.id, error, changedFiles, worktreeClean)
@@ -861,7 +888,14 @@ export class CloudTaskRunner {
   /** 用户停止：中止本轮，工作树与分支保留（改动可能有用） */
   async cancel(taskId: string, reason = 'user-cancel'): Promise<boolean> {
     const task = this.active.get(taskId)
-    if (!task) return false
+    if (!task) {
+      // 工单尚在准备阶段（建 worktree / 建会话）：登记取消标记，由 runStart 在下一个检查点结算
+      if (this.starting.has(taskId)) {
+        this.cancelRequested.add(taskId)
+        return true
+      }
+      return false
+    }
     this.cancelRequested.add(taskId)
     try {
       await this.manager?.abort?.(task.sessionId)
@@ -949,6 +983,7 @@ export class CloudTaskRunner {
       }
     }
     this.active.clear()
+    this.cancelRequested.clear()
     await this.manager?.dispose?.().catch(() => undefined)
     this.manager = null
   }

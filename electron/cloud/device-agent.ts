@@ -381,15 +381,35 @@ export class DeviceAgent {
     if (!socket || socket.readyState !== WebSocket.OPEN) return
     const pending = this.outbox
     this.outbox = []
-    for (const frame of pending) {
+    const sendPromises: Promise<void>[] = []
+    for (let i = 0; i < pending.length; i += 1) {
+      const frame = pending[i]
       try {
-        socket.send(JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, ...frame }))
+        const payload = JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, ...frame })
+        if (timeoutMs > 0) {
+          sendPromises.push(
+            new Promise<void>((resolve) => {
+              socket.send(payload, () => resolve())
+            })
+          )
+        } else {
+          socket.send(payload)
+        }
       } catch {
-        this.outbox.push(frame)
+        // 第 i 帧发送失败时必须把剩余未发帧全部放回队列，不能丢弃 i+1..n
+        this.outbox.unshift(...pending.slice(i))
         break
       }
     }
-    if (timeoutMs > 0) await new Promise((resolve) => setTimeout(resolve, 0))
+    if (timeoutMs > 0 && sendPromises.length > 0) {
+      await Promise.race([
+        Promise.all(sendPromises),
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, timeoutMs)
+          timer.unref?.()
+        }),
+      ])
+    }
     this.updateState({})
   }
 
@@ -408,25 +428,38 @@ export class DeviceAgent {
       return
     }
 
+    const ackIfSequenced = () => {
+      const seq = (frame as { seq?: unknown }).seq
+      if (typeof seq === 'number' && seq > 0) {
+        if (seq > this.lastAckSeq) this.lastAckSeq = seq
+        this.send({ type: 'ack', seq })
+      }
+    }
+
     switch (frame.type) {
       case 'ack':
         if (typeof frame.seq === 'number' && frame.seq > this.lastAckSeq) this.lastAckSeq = frame.seq
         return
       case 'task':
+        ackIfSequenced()
         this.running.add(frame.task.id)
         void this.runner.start(frame.task.id, frame.task.spec as CloudTaskSpec)
         return
       case 'task_cancel':
+        ackIfSequenced()
         this.running.delete(frame.taskId)
         void this.runner.cancel(frame.taskId, frame.reason)
         return
       case 'task_answer':
+        ackIfSequenced()
         void this.runner.answer(frame.taskId, frame.text, frame.questionId)
         return
       case 'task_message':
+        ackIfSequenced()
         void this.runner.message(frame.taskId, frame.text)
         return
       case 'close_unit':
+        ackIfSequenced()
         // F-19a：回收工作单元（先判干净再删，脏树保留）
         void this.runner.closeUnit(frame.unitId).catch((error) =>
           this.deps.logger.error('[Cloud Device] close unit failed:', error)

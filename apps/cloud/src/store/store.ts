@@ -5,14 +5,21 @@
  * 会话 JSONL 不在这里——那是 SDK 的 `agentDir/sessions`，也是唯一真相源（F-42）。
  */
 
+import { timingSafeEqual } from 'crypto'
 import * as path from 'path'
 import type {
   CloudWorkspaceInfo,
   CloudTaskSnapshot,
 } from 'pi-bridge'
 import { JsonDoc } from './atomic.js'
-import { hashToken, type TokenHash } from '../auth/credentials.js'
+import { verifyToken, type TokenHash } from '../auth/credentials.js'
 import type { AuthorizationRecord } from '../tasks/authorization.js'
+
+function constantTimeStringEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8')
+  const bufB = Buffer.from(b, 'utf8')
+  return bufA.length === bufB.length && timingSafeEqual(bufA, bufB)
+}
 
 export interface AccountRecord {
   passwordHash: string
@@ -167,7 +174,7 @@ export class CloudStore {
 
   findDeviceByToken(token: string): DeviceRecord | undefined {
     return this.devices.get().devices.find((device) =>
-      device.revokedAt ? false : hashToken(token, device.token.salt).hash === device.token.hash
+      device.revokedAt ? false : verifyToken(token, device.token)
     )
   }
 
@@ -226,7 +233,7 @@ export class CloudStore {
     await this.pairing.update((current) => {
       const codes = current.codes.map((code) => {
         if (matched || code.usedAt || code.expiresAt <= now) return code
-        if (code.hash !== candidateHash) return code
+        if (!constantTimeStringEqual(code.hash, candidateHash)) return code
         matched = { ...code, usedAt: now }
         return matched
       })
@@ -250,9 +257,19 @@ export class CloudStore {
   }
 
   async saveTask(task: CloudTaskSnapshot): Promise<void> {
-    await this.tasks.update((current) => ({
-      tasks: [...current.tasks.filter((item) => item.id !== task.id), task],
-    }))
+    await this.tasks.update((current) => {
+      const next = [...current.tasks.filter((item) => item.id !== task.id), task]
+      // 控制终态工单历史上限，防止持久化文件与 snapshot 无限膨胀
+      if (next.length <= 250) return { tasks: next }
+      const active = next.filter((t) =>
+        ['queued', 'assigned', 'running', 'waiting_human'].includes(t.status)
+      )
+      const terminal = next
+        .filter((t) => !['queued', 'assigned', 'running', 'waiting_human'].includes(t.status))
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 200)
+      return { tasks: [...terminal, ...active] }
+    })
   }
 
   /** 同一设备上的待执行工单按入队顺序（FIFO） */
