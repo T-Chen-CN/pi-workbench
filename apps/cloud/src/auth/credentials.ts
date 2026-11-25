@@ -6,7 +6,7 @@
  * - token 只存 `SHA-256(token + salt)`；明文只在配对响应里出现一次。
  */
 
-import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'crypto'
+import { createHash, randomBytes, randomInt, scrypt as scryptCallback, timingSafeEqual } from 'crypto'
 import { promisify } from 'util'
 
 const scrypt = promisify(scryptCallback) as (
@@ -71,6 +71,5 @@ export function verifyToken(token: string, stored: TokenHash): boolean {
  * 搜索空间只有 10^6，靠 TTL + 一次性 + 限速 + 熔断抹平；这里只负责生成与哈希。
  */
 export function createPairingCode(): string {
-  const value = randomBytes(4).readUInt32BE(0) % 1_000_000
-  return value.toString().padStart(6, '0')
+  return randomInt(0, 1_000_000).toString().padStart(6, '0')
 }

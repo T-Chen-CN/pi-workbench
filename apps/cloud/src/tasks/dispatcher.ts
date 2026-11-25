@@ -768,9 +768,22 @@ export class TaskDispatcher {
     await this.tryDispatch(next)
   }
 
+  private taskSeq = 0
+
   private nextTaskId(): string {
-    const count = this.deps.store.listTasks().length + 1
-    return `T-${String(count).padStart(3, '0')}`
+    if (this.taskSeq === 0) {
+      let max = 0
+      for (const task of this.deps.store.listTasks()) {
+        const match = /^T-(\d+)$/.exec(task.id)
+        if (match) {
+          const num = Number.parseInt(match[1], 10)
+          if (num > max) max = num
+        }
+      }
+      this.taskSeq = max
+    }
+    this.taskSeq += 1
+    return `T-${String(this.taskSeq).padStart(3, '0')}`
   }
 }
 

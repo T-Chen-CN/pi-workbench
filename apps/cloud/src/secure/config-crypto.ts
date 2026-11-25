@@ -23,12 +23,21 @@ export function encryptSecret(plaintext: string, key: Buffer): string {
 }
 
 export function decryptSecret(payload: string, key: Buffer): string {
-  const [version, ivPart, tagPart, dataPart] = payload.split('.')
-  if (version !== VERSION || !ivPart || !tagPart || !dataPart) {
+  const parts = payload.split('.')
+  if (parts.length !== 4) {
     throw new Error('Unsupported or malformed ciphertext')
   }
-  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivPart, 'base64url'))
-  decipher.setAuthTag(Buffer.from(tagPart, 'base64url'))
+  const [version, ivPart, tagPart, dataPart] = parts
+  if (version !== VERSION || !ivPart || !tagPart || dataPart === undefined) {
+    throw new Error('Unsupported or malformed ciphertext')
+  }
+  const iv = Buffer.from(ivPart, 'base64url')
+  const tag = Buffer.from(tagPart, 'base64url')
+  if (iv.length !== 12 || tag.length !== 16) {
+    throw new Error('Unsupported or malformed ciphertext')
+  }
+  const decipher = createDecipheriv('aes-256-gcm', key, iv)
+  decipher.setAuthTag(tag)
   const plaintext = Buffer.concat([
     decipher.update(Buffer.from(dataPart, 'base64url')),
     decipher.final(),

@@ -176,6 +176,7 @@ export async function createCloudServer(
     snapshot: buildSnapshot,
     probeConfig,
     onDeviceRevoked: (deviceId) => hub.disconnectDevice(deviceId),
+    onWorkspacesUpdated: (deviceId) => publishDevice(deviceId),
     logger,
   })
 

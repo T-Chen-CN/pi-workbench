@@ -83,7 +83,11 @@ export class Router {
       for (let index = 0; index < route.segments.length; index += 1) {
         const segment = route.segments[index]
         if (segment.startsWith(':')) {
-          params[segment.slice(1)] = decodeURIComponent(parts[index])
+          try {
+            params[segment.slice(1)] = decodeURIComponent(parts[index])
+          } catch {
+            throw new HttpError(400, 'Malformed path encoding')
+          }
           continue
         }
         if (segment !== parts[index]) {
@@ -147,11 +151,16 @@ export async function readJsonBody<T>(req: IncomingMessage, limitBytes = MAX_BOD
   }
   if (size === 0) return {} as T
   const text = Buffer.concat(chunks).toString('utf-8')
+  let parsed: unknown
   try {
-    return JSON.parse(text) as T
+    parsed = JSON.parse(text)
   } catch {
     throw new HttpError(400, 'Body must be JSON')
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new HttpError(400, 'Body must be a JSON object')
+  }
+  return parsed as T
 }
 
 export function sendJson(res: ServerResponse, status: number, value: unknown): void {

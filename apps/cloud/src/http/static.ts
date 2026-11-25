@@ -50,9 +50,11 @@ export async function serveStatic(
   res.writeHead(200, {
     'content-type': cached.type,
     'cache-control': 'no-cache',
-    // 客户端只需要连自己这一个源；不允许被别的站点嵌入
+    // 客户端只需要连自己这一个源；不允许被别的站点嵌入，并强制 CSP
     'x-frame-options': 'DENY',
     'x-content-type-options': 'nosniff',
+    'content-security-policy':
+      "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'",
   })
   res.end(cached.body)
   return true

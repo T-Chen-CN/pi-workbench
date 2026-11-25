@@ -252,7 +252,7 @@ export class DeviceAgent {
     this.socket = socket
 
     socket.on('open', () => {
-      void this.onOpen()
+      void this.onOpen(socket)
     })
     socket.on('message', (raw) => {
       this.onMessage(raw)
@@ -292,7 +292,8 @@ export class DeviceAgent {
     })
   }
 
-  private async onOpen(): Promise<void> {
+  private async onOpen(socket: WebSocket): Promise<void> {
+    if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) return
     this.reconnectDelay = RECONNECT_MIN_MS
     this.updateState({
       status: 'online',
@@ -302,6 +303,10 @@ export class DeviceAgent {
     })
     if (this.link) void touchCloudLink(this.link)
     const workspaces = await this.deps.getWorkspaces().catch(() => [])
+    // await 期间连接可能已断开或被替换，必须复检当前 socket
+    if (this.socket !== socket || socket.readyState !== WebSocket.OPEN || this.stopped || this.durableStop) {
+      return
+    }
     this.send({
       type: 'hello',
       deviceId: this.link?.deviceId ?? '',

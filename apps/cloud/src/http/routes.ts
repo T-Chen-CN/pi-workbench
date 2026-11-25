@@ -58,6 +58,8 @@ export interface RouteDeps {
   ) => Promise<{ ok: true; warning?: string } | { ok: false; reason: string }>
   /** 撤销设备后立即断开在线连接（可选，兼容只测 HTTP 的单测） */
   onDeviceRevoked?: (deviceId: string) => void
+  /** 工作区清单经 HTTP 更新后广播到 WS 客户端 */
+  onWorkspacesUpdated?: (deviceId: string) => void
   logger: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void }
 }
 
@@ -267,10 +269,11 @@ export function buildRouter(deps: RouteDeps): Router {
   router.put('/v1/workspaces', async (ctx) => {
     const device = requireDevice(ctx)
     const body = await ctx.json<{ workspaces?: CloudWorkspaceInfo[] }>()
-    await deps.store.updateDevice(device.id, {
+    const updated = await deps.store.updateDevice(device.id, {
       workspaces: sanitizeWorkspaces(body.workspaces),
       lastSeenAt: Date.now(),
     })
+    if (updated) deps.onWorkspacesUpdated?.(device.id)
     return { ok: true }
   })
 
