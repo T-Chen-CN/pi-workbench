@@ -507,10 +507,16 @@ const pluginManager = new PluginManager({
 
 /** 找到文件所属的已加载工作区（用于插件钩子） */
 function workspaceForPath(filePath: string): string | null {
+  const norm = (value: string) => {
+    const resolved = path.resolve(value)
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  }
+  const target = norm(filePath)
   for (const workspaceDir of pluginManager.loadedWorkspaces()) {
-    if (filePath === workspaceDir) return workspaceDir
-    const prefix = workspaceDir.endsWith(path.sep) ? workspaceDir : workspaceDir + path.sep
-    if (filePath.startsWith(prefix)) return workspaceDir
+    const base = norm(workspaceDir)
+    if (target === base) return workspaceDir
+    const prefix = base.endsWith(path.sep) ? base : base + path.sep
+    if (target.startsWith(prefix)) return workspaceDir
   }
   return null
 }
@@ -1106,9 +1112,9 @@ async function shutdownApplication(): Promise<void> {
         {
           name: 'child-processes',
           timeoutMs: 1500,
-          run: () => {
-            // PTY shell、npm install 等子进程的孙进程会绕过 kill()，这里收尾整棵树
-            const { killed, failed } = childRegistry.killAll()
+          run: async () => {
+            // PTY shell、npm install 等子进程的孙进程会绕过 kill()，异步并行收尾整棵树不卡看门狗
+            const { killed, failed } = await childRegistry.killAllAsync()
             if (killed > 0 || failed > 0) {
               console.log(`[Shutdown] child processes: killed=${killed} failed=${failed}`)
             }

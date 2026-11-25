@@ -70,6 +70,7 @@ export class RepoSyncManager {
   private entries = new Map<string, RepoEntry>()
   private workspaceRepos = new Map<string, string>()
   private attaching = new Map<string, Promise<void>>()
+  private desiredWorkspaces = new Set<string>()
   private context: RepoSyncContext | null = null
   private activeFetches = 0
   private fetchWaiters: Array<() => void> = []
@@ -81,20 +82,24 @@ export class RepoSyncManager {
   /** 确保该工作区的仓库已纳入监听；非 git 仓库直接跳过 */
   async ensure(workspaceDir: string): Promise<void> {
     const key = this.key(workspaceDir)
+    this.desiredWorkspaces.add(key)
     if (this.workspaceRepos.has(key)) return
     const inflight = this.attaching.get(key)
     if (inflight) return inflight
 
-    const task = this.attach(key, workspaceDir).finally(() => {
-      this.attaching.delete(key)
-    })
+    const task = this.attach(key, workspaceDir)
     this.attaching.set(key, task)
+    const cleanup = () => {
+      if (this.attaching.get(key) === task) this.attaching.delete(key)
+    }
+    void task.then(cleanup, cleanup)
     return task
   }
 
   /** 关闭工作区时释放监听与定时器（同一仓库还有其他工作区时保留） */
   detachWorkspace(workspaceDir: string): void {
     const key = this.key(workspaceDir)
+    this.desiredWorkspaces.delete(key)
     const repoRoot = this.workspaceRepos.get(key)
     if (!repoRoot) return
     this.workspaceRepos.delete(key)
@@ -124,22 +129,18 @@ export class RepoSyncManager {
     if (!entry?.fetcher) {
       return { success: false, error: 'Not a git repository' }
     }
-    const release = await this.acquireFetchSlot()
-    try {
-      const outcome = await entry.fetcher.fetchNow({
-        force: options.force ?? true,
-        interactive: options.interactive ?? true,
-      })
-      return { success: outcome.success, skipped: outcome.skipped, error: outcome.error }
-    } finally {
-      release()
-    }
+    const outcome = await entry.fetcher.fetchNow({
+      force: options.force ?? true,
+      interactive: options.interactive ?? true,
+    })
+    return { success: outcome.success, skipped: outcome.skipped, error: outcome.error }
   }
 
   disposeAll(): void {
     for (const entry of [...this.entries.values()]) this.disposeEntry(entry)
     this.workspaceRepos.clear()
     this.attaching.clear()
+    this.desiredWorkspaces.clear()
   }
 
   private key(workspaceDir: string): string {
@@ -153,12 +154,19 @@ export class RepoSyncManager {
 
   private async attach(key: string, workspaceDir: string): Promise<void> {
     const repo = await getRepoInfo(workspaceDir)
+    // await 期间工作区可能已被 detachWorkspace 关闭，绝不能再挂起泄漏的 watcher/fetcher
+    if (!this.desiredWorkspaces.has(key)) return
     if (!repo || repo.bare || !repo.root) return
 
     const entry = this.ensureEntry(repo)
     entry.workspaces.set(key, workspaceDir)
     this.workspaceRepos.set(key, repo.root)
     await this.startEntry(entry)
+    if (!this.desiredWorkspaces.has(key)) {
+      this.workspaceRepos.delete(key)
+      entry.workspaces.delete(key)
+      if (entry.workspaces.size === 0) this.disposeEntry(entry)
+    }
   }
 
   /** 同步登记仓库，避免并发 attach 建成两个 entry；监听等基线快照就绪后再启动 */
@@ -204,8 +212,14 @@ export class RepoSyncManager {
         repoRoot: entry.repoRoot,
         canFetch: () => this.canFetch(entry),
         fetch: async (root, options) => {
-          fetchBaseline = await readRefsSnapshot(root).catch(() => null)
-          return fetchRemote(root, { interactive: options.interactive })
+          const release = await this.acquireFetchSlot()
+          try {
+            if (entry.disposed) return { ok: false, stderr: 'Repository sync disposed' }
+            fetchBaseline = await readRefsSnapshot(root).catch(() => null)
+            return await fetchRemote(root, { interactive: options.interactive })
+          } finally {
+            release()
+          }
         },
         onFetched: () => this.enqueue(entry, ['refs'], 'fetch', fetchBaseline),
         logger: this.context?.logger,

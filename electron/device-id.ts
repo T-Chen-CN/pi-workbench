@@ -4,10 +4,10 @@
  */
 
 import { randomUUID } from 'crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import * as fs from 'fs/promises'
 import * as path from 'path'
-import { writeJsonAtomic } from './atomic-json.js'
+import { writeJsonAtomic, writeJsonAtomicSync } from './atomic-json.js'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -47,9 +47,7 @@ export function deviceIdSync(filePath: string): string {
   }
   if (!id) {
     id = randomUUID()
-    mkdirSync(path.dirname(filePath), { recursive: true })
-    writeFileSync(filePath, `${JSON.stringify({ id }, null, 2)}
-`, 'utf-8')
+    writeJsonAtomicSync(filePath, { id })
   }
   cache.set(filePath, id)
   return id

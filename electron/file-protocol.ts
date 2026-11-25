@@ -60,7 +60,9 @@ const MIME_BY_EXTENSION: Record<string, string> = {
 
 export function mimeForPath(targetPath: string): string {
   const extension = path.extname(targetPath).slice(1).toLowerCase()
-  return MIME_BY_EXTENSION[extension] ?? 'application/octet-stream'
+  return Object.prototype.hasOwnProperty.call(MIME_BY_EXTENSION, extension)
+    ? MIME_BY_EXTENSION[extension]
+    : 'application/octet-stream'
 }
 
 /**

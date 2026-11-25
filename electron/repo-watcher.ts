@@ -92,7 +92,8 @@ export class RepoWatcher {
     if (this.watchers.length === 0) {
       this.startPolling()
     } else {
-      this.failures = 0
+      // 不在 start() 同步清零 failures：异步 watcher error 往往在创建后立刻触发，
+      // 只有真正收到有效事件时才认定恢复，否则会陷入无限 1s 重试而不降级轮询
       this.stopPolling()
     }
   }
@@ -112,6 +113,7 @@ export class RepoWatcher {
 
   private onEvent(filename: string): void {
     if (this.disposed) return
+    this.failures = 0
     if (filename && IGNORED_PATH.test(filename)) return
 
     if (!filename) {

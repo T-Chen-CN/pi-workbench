@@ -18,13 +18,22 @@ export interface XmlToken {
   text: string
 }
 
-const ENTITIES: Record<string, string> = {
+const ENTITIES: Record<string, string> = Object.assign(Object.create(null), {
   amp: '&',
   lt: '<',
   gt: '>',
   quot: '"',
   apos: "'",
   nbsp: '\u00a0',
+})
+
+function isValidCodePoint(code: number): boolean {
+  return (
+    Number.isInteger(code) &&
+    code >= 0 &&
+    code <= 0x10ffff &&
+    !(code >= 0xd800 && code <= 0xdfff)
+  )
 }
 
 export function decodeXmlEntities(value: string): string {
@@ -32,13 +41,14 @@ export function decodeXmlEntities(value: string): string {
   return value.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, body: string) => {
     if (body.startsWith('#x') || body.startsWith('#X')) {
       const code = Number.parseInt(body.slice(2), 16)
-      return Number.isFinite(code) ? String.fromCodePoint(code) : match
+      return isValidCodePoint(code) ? String.fromCodePoint(code) : match
     }
     if (body.startsWith('#')) {
       const code = Number.parseInt(body.slice(1), 10)
-      return Number.isFinite(code) ? String.fromCodePoint(code) : match
+      return isValidCodePoint(code) ? String.fromCodePoint(code) : match
     }
-    return ENTITIES[body.toLowerCase()] ?? match
+    const lower = body.toLowerCase()
+    return Object.prototype.hasOwnProperty.call(ENTITIES, lower) ? ENTITIES[lower] : match
   })
 }
 

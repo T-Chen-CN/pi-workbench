@@ -136,7 +136,10 @@ export class ApprovalBroker {
 
   /** 工作区关闭 / Agent 释放时，取消该工作区所有待审批请求 */
   cancelForWorkspace(workspaceDir: string, reason = 'The workspace was closed.'): void {
-    this.cancelWhere((request) => request.workspaceDir === workspaceDir, reason)
+    const normalize = (p: string) =>
+      process.platform === 'win32' ? p.replace(/[\\/]+$/, '').toLowerCase() : p.replace(/\/+$/, '')
+    const target = normalize(workspaceDir)
+    this.cancelWhere((request) => normalize(request.workspaceDir) === target, reason)
   }
 
   /** 会话关闭时取消该会话的待审批请求 */

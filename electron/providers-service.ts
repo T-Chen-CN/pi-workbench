@@ -61,6 +61,7 @@ export interface ProviderView {
 }
 
 let catalogRuntime: ModelRuntime | null = null
+let catalogRuntimePromise: Promise<ModelRuntime> | null = null
 let lastRefreshAt: number | null = null
 
 function credentialsStore() {
@@ -73,21 +74,34 @@ function configStore() {
 
 /** 常驻目录运行时：只做模型清单 / 目录刷新 / 登录，不承载会话 */
 async function getCatalogRuntime(): Promise<ModelRuntime> {
-  if (!catalogRuntime) {
-    catalogRuntime = await ModelRuntime.create({
-      modelsPath: path.join(piAgentDir, 'models.json'),
-      credentials: credentialsStore(),
-      modelsStore: getModelsStore(),
-      refreshOnCreate: false,
-      allowModelNetwork: false,
-    })
-  }
-  return catalogRuntime
+  if (catalogRuntime) return catalogRuntime
+  if (catalogRuntimePromise) return catalogRuntimePromise
+  const task = ModelRuntime.create({
+    modelsPath: path.join(piAgentDir, 'models.json'),
+    credentials: credentialsStore(),
+    modelsStore: getModelsStore(),
+    refreshOnCreate: false,
+    allowModelNetwork: false,
+  })
+  catalogRuntimePromise = task
+  void task.then(
+    (runtime) => {
+      if (catalogRuntimePromise === task) {
+        catalogRuntime = runtime
+        catalogRuntimePromise = null
+      }
+    },
+    () => {
+      if (catalogRuntimePromise === task) catalogRuntimePromise = null
+    }
+  )
+  return task
 }
 
 /** 配置或凭证变化后必须重建：运行时缓存了 auth 解析结果 */
 export function resetCatalogRuntime(): void {
   catalogRuntime = null
+  catalogRuntimePromise = null
 }
 
 function modelView(model: Model<Api>, overrides: ModelOverrides | undefined): ProviderModelView {
@@ -365,6 +379,10 @@ export async function probeApiKey(providerId: string, apiKey: string): Promise<{
   const model = (runtime.getModels(providerId) as readonly Model<Api>[])[0]
   const baseUrl = (model as { baseUrl?: string } | undefined)?.baseUrl
   if (!baseUrl) return { ok: true }
+  // 含非法 HTTP 头字符（如换行 / 非 ASCII）在 fetch 中会抛 TypeError，必须判为无效 Key 而非网络不通
+  if (/[^\t\x20-\x7e]/.test(apiKey)) {
+    return { ok: false, error: 'INVALID_KEY' }
+  }
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 10_000)

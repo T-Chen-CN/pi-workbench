@@ -11,7 +11,10 @@
  *   子进程）不要登记。
  * - `killProcessTree` 是最后手段，可能在进程已退出时被调用，失败不抛错。
  */
-import { execFileSync } from 'child_process'
+import { execFile, execFileSync } from 'child_process'
+import { promisify } from 'util'
+
+const execFileAsync = promisify(execFile)
 
 export type ChildGroup = 'pty' | 'install' | 'git'
 
@@ -25,6 +28,7 @@ export interface TrackedChild {
 export interface KillProcessTreeDeps {
   platform?: NodeJS.Platform
   execFileSync?: (file: string, args: string[], options: Record<string, unknown>) => unknown
+  execFileAsync?: (file: string, args: string[], options: Record<string, unknown>) => Promise<unknown>
   kill?: (pid: number, signal: NodeJS.Signals) => void
 }
 
@@ -44,6 +48,30 @@ export function killProcessTree(pid: number, deps: KillProcessTreeDeps = {}): bo
         windowsHide: true,
         stdio: 'ignore',
         timeout: 3000,
+      })
+      return true
+    }
+    const kill = deps.kill ?? process.kill
+    kill(pid, 'SIGKILL')
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 异步结束整棵进程树：避免退出时同步 taskkill 阻塞事件循环与看门狗 */
+export async function killProcessTreeAsync(
+  pid: number,
+  deps: KillProcessTreeDeps = {}
+): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  const platform = deps.platform ?? process.platform
+  try {
+    if (platform === 'win32') {
+      const exec = deps.execFileAsync ?? ((file, args, opts) => execFileAsync(file, args, opts))
+      await exec('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        windowsHide: true,
+        timeout: 1200,
       })
       return true
     }
@@ -94,6 +122,27 @@ export class ChildRegistry {
       if (killProcessTree(child.pid, deps)) killed += 1
       else failed += 1
     }
+    return { killed, failed }
+  }
+
+  /** 并行异步回收全部已登记进程树，避免同步 taskkill 卡住退出看门狗 */
+  async killAllAsync(deps: KillProcessTreeDeps = {}): Promise<KillAllResult> {
+    const snapshot = [...this.children.values()]
+    this.children.clear()
+    let killed = 0
+    let failed = 0
+    await Promise.all(
+      snapshot.map(async (child) => {
+        try {
+          child.kill?.()
+        } catch {
+          // 进程可能已经退出
+        }
+        const ok = await killProcessTreeAsync(child.pid, deps)
+        if (ok) killed += 1
+        else failed += 1
+      })
+    )
     return { killed, failed }
   }
 }

@@ -182,41 +182,56 @@ function makeWorktreeId(state: WorkspaceState, sessionId: string): string {
   return id
 }
 
+const refreshingStates = new Map<string, Promise<WorkspaceState | null>>()
+
 async function refreshState(workspaceDir: string): Promise<WorkspaceState | null> {
   const key = keyFor(workspaceDir)
   const existing = states.get(key)
   if (existing) return existing
-  const repo = await getRepoInfo(workspaceDir)
-  if (!repo || repo.bare) return null
-  // 安装回调需要 state 本身（按路径映射回工作树 key 才能落盘与推送）
-  const ref: { state: WorkspaceState | null } = { state: null }
-  const deps = new WorktreeDepsManager({
-    repoRoot: repo.root,
-    logger: logging ?? SILENT_LOGGER,
-    isAutoInstallEnabled: () => depsConfig?.isAutoInstallEnabled() ?? true,
-    ...(depsConfig?.createInstaller
-      ? { installer: depsConfig.createInstaller(repo.root) }
-      : {}),
-    // 安装完成后的落盘必须走 serialize()，不能绕过协调器的写锁
-    onInstalled: (worktreePath, hash) => {
-      if (ref.state) persistInstalledHash(ref.state, worktreePath, hash)
-    },
-    onStatusChange: (worktreePath, status) => {
-      if (ref.state) publishDepsStatus(ref.state, worktreePath, status)
-    },
-  })
-  const state: WorkspaceState = {
-    workspaceDir: key,
-    repo,
-    data: loadSessionGit(key),
-    lock: Promise.resolve(),
-    deps,
+  const inflight = refreshingStates.get(key)
+  if (inflight) return inflight
+
+  const task = (async (): Promise<WorkspaceState | null> => {
+    const repo = await getRepoInfo(workspaceDir)
+    if (!repo || repo.bare) return null
+    const cached = states.get(key)
+    if (cached) return cached
+    // 安装回调需要 state 本身（按路径映射回工作树 key 才能落盘与推送）
+    const ref: { state: WorkspaceState | null } = { state: null }
+    const deps = new WorktreeDepsManager({
+      repoRoot: repo.root,
+      logger: logging ?? SILENT_LOGGER,
+      isAutoInstallEnabled: () => depsConfig?.isAutoInstallEnabled() ?? true,
+      ...(depsConfig?.createInstaller
+        ? { installer: depsConfig.createInstaller(repo.root) }
+        : {}),
+      // 安装完成后的落盘必须走 serialize()，不能绕过协调器的写锁
+      onInstalled: (worktreePath, hash) => {
+        if (ref.state) persistInstalledHash(ref.state, worktreePath, hash)
+      },
+      onStatusChange: (worktreePath, status) => {
+        if (ref.state) publishDepsStatus(ref.state, worktreePath, status)
+      },
+    })
+    const state: WorkspaceState = {
+      workspaceDir: key,
+      repo,
+      data: loadSessionGit(key),
+      lock: Promise.resolve(),
+      deps,
+    }
+    ref.state = state
+    states.set(key, state)
+    await ensureWorktreeIgnored(repo.root)
+    await pruneWorktrees(repo.root)
+    return state
+  })()
+  refreshingStates.set(key, task)
+  const cleanup = () => {
+    if (refreshingStates.get(key) === task) refreshingStates.delete(key)
   }
-  ref.state = state
-  states.set(key, state)
-  await ensureWorktreeIgnored(repo.root)
-  await pruneWorktrees(repo.root)
-  return state
+  void task.then(cleanup, cleanup)
+  return task
 }
 
 async function serialize<T>(state: WorkspaceState, task: () => Promise<T>): Promise<T> {
@@ -401,6 +416,11 @@ export class WorktreeCoordinator {
   }
 
   async listWorktrees(activeSessionId?: string | null): Promise<WorktreeView[]> {
+    return serialize(this.state, () => this.listWorktreesUnlocked(activeSessionId))
+  }
+
+  /** 必须由持有 serialize(state) 锁的路径或 listWorktrees() 调用 */
+  private async listWorktreesUnlocked(activeSessionId?: string | null): Promise<WorktreeView[]> {
     const state = this.state
     const infos = await gitListWorktrees(state.repo.root)
     const byPath = new Map(
@@ -648,7 +668,7 @@ export class WorktreeCoordinator {
     key: string,
     activeSessionId?: string | null
   ): Promise<WorktreeView | undefined> {
-    const views = await this.listWorktrees(activeSessionId)
+    const views = await this.listWorktreesUnlocked(activeSessionId)
     return views.find((view) => view.id === key)
   }
 
@@ -767,7 +787,7 @@ export class WorktreeCoordinator {
       if (target) state.deps.forget(target)
       delete state.data.worktrees[id]
       await persist(state)
-      return { success: true, worktrees: await this.listWorktrees(activeSessionId) }
+      return { success: true, worktrees: await this.listWorktreesUnlocked(activeSessionId) }
     })
   }
 

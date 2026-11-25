@@ -4,7 +4,7 @@
  */
 import * as fs from 'fs'
 import * as path from 'path'
-import { childRegistry } from './child-registry.js'
+import { childRegistry, killProcessTreeAsync } from './child-registry.js'
 
 export interface PtyProcess {
   /** shell 进程 pid；node-pty 会提供，测试替身可能没有 */
@@ -62,6 +62,8 @@ interface TerminalEntry {
   logPath: string | null
   /** 当前日志文件大小，用于轮转 */
   logBytes: number
+  /** 后台异步写日志的串行链，避免重叠 append / rotate */
+  logWriteChain: Promise<void>
   /** 最近一次输出时间，用于判断终端是否仍在执行任务 */
   lastActivityAt: number
   /** 从子进程登记表注销；进程退出 / 终端关闭时调用 */
@@ -70,6 +72,13 @@ interface TerminalEntry {
 
 const FLUSH_DELAY_MS = 500
 const MAX_LOG_BYTES = 5 * 1024 * 1024
+/** 待落盘内存缓冲上限，防止高频输出在写盘慢时耗尽内存 */
+const MAX_PENDING_LOG_BYTES = 1024 * 1024
+
+function workspacePathKey(dir: string): string {
+  const resolved = path.resolve(dir)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
 /** 终端子进程不应继承 Agent 的供应商密钥 */
 const SENSITIVE_ENV_KEYS = ['PI_WORKBENCH_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']
 /** 联网搜索按供应商注入的密钥，前缀整体剔除 */
@@ -141,6 +150,7 @@ export class TerminalManager {
         pending: '',
         logPath,
         logBytes: 0,
+        logWriteChain: Promise.resolve(),
         lastActivityAt: 0,
         unregisterChild: null,
       }
@@ -178,6 +188,9 @@ export class TerminalManager {
 
       pty.onData((data) => {
         entry.pending += data
+        if (entry.pending.length > MAX_PENDING_LOG_BYTES) {
+          entry.pending = entry.pending.slice(-MAX_PENDING_LOG_BYTES)
+        }
         entry.lastActivityAt = Date.now()
         this.scheduleFlush(entry)
         this.options.onData?.(id, data)
@@ -219,12 +232,19 @@ export class TerminalManager {
     if (!entry) return false
     this.terminals.delete(id)
     this.clearFlushTimer(id)
-    entry.unregisterChild?.()
-    entry.unregisterChild = null
+    const pid = typeof entry.pty.pid === 'number' && entry.pty.pid > 0 ? entry.pty.pid : null
     try {
       entry.pty.kill()
+      // Windows 上 pty.kill() 可能遗留孙进程，异步补杀整棵树
+      if (pid !== null && process.platform === 'win32') {
+        void killProcessTreeAsync(pid)
+      }
     } catch (error) {
       console.warn('[Terminal] Failed to kill terminal:', error)
+    } finally {
+      // 必须在发出终止后再注销 childRegistry，避免杀树前提前失去兜底记录
+      entry.unregisterChild?.()
+      entry.unregisterChild = null
     }
     this.flush(entry)
     return true
@@ -250,9 +270,9 @@ export class TerminalManager {
 
   /** 关闭某个工作区的全部终端（关闭工作区标签时调用） */
   closeWorkspace(workspaceDir: string): void {
-    const normalized = path.resolve(workspaceDir)
+    const normalized = workspacePathKey(workspaceDir)
     for (const [id, entry] of [...this.terminals.entries()]) {
-      if (path.resolve(entry.workspaceDir) === normalized) {
+      if (workspacePathKey(entry.workspaceDir) === normalized) {
         this.close(id)
       }
     }
@@ -271,7 +291,7 @@ export class TerminalManager {
     if (!entry.logPath || this.flushTimers.has(entry.id)) return
     const timer = setTimeout(() => {
       this.flushTimers.delete(entry.id)
-      this.flush(entry)
+      this.flushAsync(entry)
     }, FLUSH_DELAY_MS)
     timer.unref?.()
     this.flushTimers.set(entry.id, timer)
@@ -283,6 +303,28 @@ export class TerminalManager {
       clearTimeout(timer)
       this.flushTimers.delete(id)
     }
+  }
+
+  private flushAsync(entry: TerminalEntry): void {
+    if (!entry.logPath || !entry.pending) return
+    const text = entry.pending
+    entry.pending = ''
+    const logPath = entry.logPath
+    entry.logWriteChain = entry.logWriteChain
+      .then(async () => {
+        await fs.promises.mkdir(path.dirname(logPath), { recursive: true })
+        await fs.promises.appendFile(logPath, text, 'utf-8')
+        entry.logBytes += Buffer.byteLength(text, 'utf-8')
+        if (entry.logBytes > MAX_LOG_BYTES) {
+          const rotated = `${logPath}.1`
+          await fs.promises.rm(rotated, { force: true }).catch(() => undefined)
+          await fs.promises.rename(logPath, rotated).catch(() => undefined)
+          entry.logBytes = 0
+        }
+      })
+      .catch((error) => {
+        console.warn('[Terminal] Failed to write terminal log:', error)
+      })
   }
 
   private flush(entry: TerminalEntry): void {

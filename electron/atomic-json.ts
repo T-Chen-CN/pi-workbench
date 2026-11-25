@@ -83,9 +83,27 @@ export function writeJsonAtomicSync(filePath: string, value: unknown): void {
   }
 }
 
-/** 异步签名版本：内部仍是同步写，避免同一文件的并发写交错 */
+const asyncWriteQueues = new Map<string, Promise<void>>()
+
+function queueKeyFor(filePath: string): string {
+  const resolved = path.resolve(filePath)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+/** 异步原子写 JSON：按路径串行化，避免同一文件的并发写交错，同时不阻塞主进程 UI 线程 */
 export async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
-  writeJsonAtomicSync(filePath, value)
+  const key = queueKeyFor(filePath)
+  const previous = asyncWriteQueues.get(key) ?? Promise.resolve()
+  const run = previous.then(() => writeJsonAtomicAsync(filePath, value))
+  const tail = run.catch(() => undefined)
+  asyncWriteQueues.set(key, tail)
+  try {
+    await run
+  } finally {
+    if (asyncWriteQueues.get(key) === tail) {
+      asyncWriteQueues.delete(key)
+    }
+  }
 }
 
 export interface JsonWriteOptions {

@@ -6,7 +6,6 @@
  * {appDir}/config/github.json；应用从不把令牌写入日志或返回给渲染进程。
  */
 
-import * as fs from 'fs/promises'
 import * as path from 'path'
 import { safeStorage } from 'electron'
 import { getAppDir } from './app-paths.js'
@@ -63,18 +62,14 @@ function encryptToken(token: string | null): string | null {
 }
 
 async function readFile(): Promise<GithubAuthFile> {
-  try {
-    const raw = await fs.readFile(authFilePath(), 'utf8')
-    const parsed = JSON.parse(raw) as GithubAuthFile
-    return parsed && typeof parsed === 'object' ? parsed : {}
-  } catch {
-    return {}
-  }
+  const { readJsonWithBackup } = await import('./atomic-json.js')
+  const result = readJsonWithBackup<GithubAuthFile>(authFilePath())
+  return result.data && typeof result.data === 'object' ? result.data : {}
 }
 
 async function writeFile(data: GithubAuthFile): Promise<void> {
-  await fs.mkdir(path.dirname(authFilePath()), { recursive: true })
-  await fs.writeFile(authFilePath(), JSON.stringify(data), { encoding: 'utf8', mode: 0o600 })
+  const { writeJsonAtomic } = await import('./atomic-json.js')
+  await writeJsonAtomic(authFilePath(), data)
 }
 
 export async function readGithubAuth(): Promise<{

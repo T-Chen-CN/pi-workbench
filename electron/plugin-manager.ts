@@ -71,6 +71,7 @@ interface LoadedPlugin {
 }
 
 interface WorkspacePlugins {
+  workspaceDir: string
   plugins: LoadedPlugin[]
   commands: Map<string, { plugin: LoadedPlugin; handler: PluginCommandHandler; info: PluginCommandInfo }>
   watcher: fs.FSWatcher | null
@@ -108,18 +109,24 @@ export class PluginManager {
     this.options = options
   }
 
+  private mapKey(workspaceDir: string): string {
+    const resolved = path.resolve(workspaceDir)
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  }
+
   /** 加载（或重新加载）某个工作区的插件 */
   loadWorkspace(workspaceDir: string): PluginInfo[] {
     this.unload(workspaceDir)
 
     const pluginsDir = path.join(workspaceDir, '.pi-workbench', 'plugins')
     const state: WorkspacePlugins = {
+      workspaceDir,
       plugins: [],
       commands: new Map(),
       watcher: null,
       reloadTimer: null,
     }
-    this.workspaces.set(workspaceDir, state)
+    this.workspaces.set(this.mapKey(workspaceDir), state)
 
     try {
       fs.mkdirSync(pluginsDir, { recursive: true })
@@ -149,7 +156,7 @@ export class PluginManager {
 
   /** 当前工作区的插件信息 */
   list(workspaceDir: string): PluginInfo[] {
-    const state = this.workspaces.get(workspaceDir)
+    const state = this.workspaces.get(this.mapKey(workspaceDir))
     if (!state) {
       return this.loadWorkspace(workspaceDir)
     }
@@ -157,7 +164,7 @@ export class PluginManager {
   }
 
   loadedWorkspaces(): string[] {
-    return [...this.workspaces.keys()]
+    return [...this.workspaces.values()].map((state) => state.workspaceDir)
   }
 
   async invoke(
@@ -165,7 +172,7 @@ export class PluginManager {
     commandId: string,
     args?: unknown
   ): Promise<PluginCommandResult> {
-    const state = this.workspaces.get(workspaceDir)
+    const state = this.workspaces.get(this.mapKey(workspaceDir))
     const command = state?.commands.get(commandId)
     if (!command) {
       return { success: false, error: `Unknown command: ${commandId}` }
@@ -181,7 +188,7 @@ export class PluginManager {
 
   /** 向插件派发钩子事件 */
   async emit(workspaceDir: string, event: string, payload: unknown): Promise<void> {
-    const state = this.workspaces.get(workspaceDir)
+    const state = this.workspaces.get(this.mapKey(workspaceDir))
     if (!state) return
 
     for (const plugin of state.plugins) {
@@ -221,7 +228,8 @@ export class PluginManager {
   }
 
   unload(workspaceDir: string): void {
-    const state = this.workspaces.get(workspaceDir)
+    const key = this.mapKey(workspaceDir)
+    const state = this.workspaces.get(key)
     if (!state) return
 
     if (state.reloadTimer) {
@@ -241,12 +249,12 @@ export class PluginManager {
       }
     }
 
-    this.workspaces.delete(workspaceDir)
+    this.workspaces.delete(key)
   }
 
   disposeAll(): void {
-    for (const workspaceDir of [...this.workspaces.keys()]) {
-      this.unload(workspaceDir)
+    for (const state of [...this.workspaces.values()]) {
+      this.unload(state.workspaceDir)
     }
   }
 

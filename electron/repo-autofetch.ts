@@ -161,6 +161,10 @@ export class AutoFetcher {
         this.schedule(this.options.intervalMs ?? DEFAULT_INTERVAL_MS)
         return
       }
+      if (!this.canFetch()) {
+        this.schedule(this.options.intervalMs ?? DEFAULT_INTERVAL_MS)
+        return
+      }
       void this.run(false)
     }, delay)
   }

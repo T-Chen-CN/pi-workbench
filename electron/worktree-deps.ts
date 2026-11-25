@@ -14,7 +14,7 @@
  */
 
 import { spawn as nodeSpawn } from 'child_process'
-import { childRegistry, killProcessTree } from './child-registry.js'
+import { childRegistry, killProcessTreeAsync } from './child-registry.js'
 import { createHash } from 'crypto'
 import { existsSync } from 'fs'
 import * as fs from 'fs/promises'
@@ -278,7 +278,9 @@ const defaultSpawn: SpawnFn = (command, args, options) =>
 function terminateTree(child: SpawnedProcess | null): void {
   if (!child) return
   const pid = typeof child.pid === 'number' && child.pid > 0 ? child.pid : null
-  if (pid !== null && process.platform === 'win32' && killProcessTree(pid)) return
+  if (pid !== null && process.platform === 'win32') {
+    void killProcessTreeAsync(pid)
+  }
   try {
     child.kill('SIGTERM')
   } catch {
@@ -327,19 +329,43 @@ export class WorktreeDepsInstaller {
       entry.promise = this.launch(worktreePath, info, entry)
       return entry.promise
     }
-    // 忙：排队等上一个安装结束；排队期间被取消则不启动，直接按取消结算
-    entry.promise = this.waitForSlot().then(() => {
-      if (entry.cancelled) {
-        this.releaseSlot()
-        return { ok: false, cancelled: true }
+    // 忙：排队等上一个安装结束；排队期间被取消时立刻摘除等待项并结算，避免调用方挂起
+    entry.promise = new Promise<InstallResult>((resolve) => {
+      let settled = false
+      const waiter = () => {
+        if (settled) return
+        if (entry.cancelled) {
+          settled = true
+          this.releaseSlot()
+          resolve({ ok: false, cancelled: true })
+          return
+        }
+        entry.settle = null
+        void this.launch(worktreePath, info, entry).then(
+          (result) => {
+            if (!settled) {
+              settled = true
+              resolve(result)
+            }
+          },
+          (error) => {
+            if (!settled) {
+              settled = true
+              resolve({ ok: false, error: error instanceof Error ? error.message : String(error) })
+            }
+          }
+        )
       }
-      return this.launch(worktreePath, info, entry)
+      entry.settle = (result) => {
+        if (settled) return
+        settled = true
+        const idx = this.waiting.indexOf(waiter)
+        if (idx >= 0) this.waiting.splice(idx, 1)
+        resolve(result)
+      }
+      this.waiting.push(waiter)
     })
     return entry.promise
-  }
-
-  private waitForSlot(): Promise<void> {
-    return new Promise((resolve) => this.waiting.push(resolve))
   }
 
   /** 交还令牌：有排队的就把令牌直接转交，否则把空闲计数归零 */

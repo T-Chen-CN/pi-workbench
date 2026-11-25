@@ -4,6 +4,7 @@
  * 每个打开的工作区持有独立的 AgentManager 实例；配置未变化时复用，
  * 配置变化或工作区关闭时释放。
  */
+import * as path from 'path'
 import { withTimeout } from './async-utils.js'
 
 /**
@@ -255,8 +256,14 @@ export interface RegisteredAgent {
 }
 
 interface Entry {
+  workspaceDir: string
   agent: RegisteredAgent
   configKey: string
+}
+
+function registryKey(workspaceDir: string): string {
+  const resolved = path.resolve(workspaceDir)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
 }
 
 /** 带超时与异常隔离的单个 Agent 释放 */
@@ -277,27 +284,29 @@ export class AgentRegistry {
 
   /** 该工作区是否已有同配置且已初始化的 Agent */
   shouldReuse(workspaceDir: string, configKey: string): boolean {
-    const entry = this.entries.get(workspaceDir)
+    const entry = this.entries.get(registryKey(workspaceDir))
     return Boolean(entry && entry.configKey === configKey && entry.agent.isInitialized())
   }
 
   get(workspaceDir: string): RegisteredAgent | null {
-    return this.entries.get(workspaceDir)?.agent ?? null
+    return this.entries.get(registryKey(workspaceDir))?.agent ?? null
   }
 
   /** 登记新 Agent；若该工作区已有旧实例则先释放 */
   async set(workspaceDir: string, agent: RegisteredAgent, configKey: string): Promise<void> {
-    const existing = this.entries.get(workspaceDir)
-    if (existing) {
+    const key = registryKey(workspaceDir)
+    const existing = this.entries.get(key)
+    this.entries.set(key, { workspaceDir, agent, configKey })
+    if (existing && existing.agent !== agent) {
       await disposeAgent(existing.agent, 'previous agent')
     }
-    this.entries.set(workspaceDir, { agent, configKey })
   }
 
   async dispose(workspaceDir: string): Promise<void> {
-    const entry = this.entries.get(workspaceDir)
+    const key = registryKey(workspaceDir)
+    const entry = this.entries.get(key)
     if (!entry) return
-    this.entries.delete(workspaceDir)
+    this.entries.delete(key)
     await disposeAgent(entry.agent, 'agent')
   }
 
@@ -319,9 +328,9 @@ export class AgentRegistry {
   /** 存在运行中会话的工作区与会话 ID；配置保存前用于避免打断正在跑的轮次 */
   listRunning(): Array<{ workspaceDir: string; sessionIds: string[] }> {
     const running: Array<{ workspaceDir: string; sessionIds: string[] }> = []
-    for (const [workspaceDir, entry] of this.entries) {
+    for (const entry of this.entries.values()) {
       const sessionIds = entry.agent.hasRunningSessions?.() ?? []
-      if (sessionIds.length > 0) running.push({ workspaceDir, sessionIds })
+      if (sessionIds.length > 0) running.push({ workspaceDir: entry.workspaceDir, sessionIds })
     }
     return running
   }

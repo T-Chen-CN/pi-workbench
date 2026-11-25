@@ -45,6 +45,7 @@ export interface AuthFlowDeps {
 const ANSWER_TIMEOUT_MS = 5 * 60 * 1000
 
 interface PendingPrompt {
+  providerId: string
   resolve: (value: string) => void
   reject: (error: Error) => void
   timer: NodeJS.Timeout
@@ -97,6 +98,7 @@ export function cancelOAuthLogin(providerId: string): { ok: boolean } {
   controller.abort()
   flows.delete(providerId)
   for (const [requestId, pending] of pendingPrompts) {
+    if (pending.providerId !== providerId) continue
     pendingPrompts.delete(requestId)
     clearTimeout(pending.timer)
     pending.reject(new Error('LOGIN_CANCELLED'))
@@ -144,7 +146,9 @@ async function runLogin(
     const message = error instanceof Error ? error.message : String(error)
     deps.emit(providerId, { kind: 'result', success: false, error: message })
   } finally {
-    flows.delete(providerId)
+    if (flows.get(providerId) === controller) {
+      flows.delete(providerId)
+    }
   }
 }
 
@@ -165,7 +169,7 @@ function promptUser(
       reject(new Error('LOGIN_TIMEOUT'))
     }, ANSWER_TIMEOUT_MS)
 
-    pendingPrompts.set(requestId, { resolve, reject, timer })
+    pendingPrompts.set(requestId, { providerId, resolve, reject, timer })
 
     // 整个流程被取消时，未回答的提示一并失败
     signal.addEventListener(

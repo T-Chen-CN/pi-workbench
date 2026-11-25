@@ -16,6 +16,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { getAppDir } from './app-paths.js'
+import { writeJsonAtomicSync } from './atomic-json.js'
 import { sanitizedChildEnv } from './ipc/web-search-config.js'
 
 export interface RefreshCommand {
@@ -143,12 +144,10 @@ export function refreshShellCachesIfUpdated(): ShellRefreshResult {
   // 记录放在命令之后：命令本身是异步的，这里只表示“本版本已处理过”，
   // 中途退出不会留下“已刷新”的假记录。
   try {
-    fs.mkdirSync(path.dirname(versionFile), { recursive: true })
-    fs.writeFileSync(
-      versionFile,
-      `${JSON.stringify({ version: currentVersion, refreshedAt: new Date().toISOString() }, null, 2)}\n`,
-      'utf-8'
-    )
+    writeJsonAtomicSync(versionFile, {
+      version: currentVersion,
+      refreshedAt: new Date().toISOString(),
+    })
   } catch (error) {
     console.warn('[ShellRefresh] Failed to record refreshed version:', error)
   }

@@ -310,10 +310,12 @@ export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowS
       event.preventDefault()
     })
     child.on('closed', () => {
-      auxWindows.delete(frameName)
+      // 重开同名窗口时旧窗口 closed 绝不能误删新窗口的登记记录
+      const isCurrent = auxWindows.get(frameName) === child
+      if (isCurrent) auxWindows.delete(frameName)
       // 只碰创建时记下的 id：此时 child.webContents 已不可读（见上方注释）
       untrustIpcSender(senderId)
-      if (!host.isDestroyed()) options.onClosed(frameName)
+      if (isCurrent && !host.isDestroyed()) options.onClosed(frameName)
     })
   })
 }

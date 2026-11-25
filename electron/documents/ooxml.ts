@@ -720,7 +720,14 @@ export function readEpub(zip: ZipArchive): EpubModel {
   spine.forEach((idref, index) => {
     const href = manifest.get(idref)
     if (!href) return
-    const target = resolveZipPath(baseDir, decodeURIComponent(href.split('#')[0]))
+    const rawHref = href.split('#')[0]
+    let decodedHref = rawHref
+    try {
+      decodedHref = decodeURIComponent(rawHref)
+    } catch {
+      // 畸形百分号编码回退原路径，避免整本 EPUB 解析崩溃
+    }
+    const target = resolveZipPath(baseDir, decodedHref)
     const xml = zip.readText(target)
     if (!xml) return
     const lines = htmlToText(xml)

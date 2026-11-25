@@ -107,7 +107,31 @@ function broadcastToWindows(channel: string, payload: unknown): void {
 }
 
 /** 确保某个工作区有一个可用 Agent（渲染层 IPC 与派活 worker 共用这一条路径）。 */
+const initializingAgents = new Map<string, Promise<{ success: boolean; error?: string }>>()
+
+function agentInitKey(workspaceDir: string): string {
+  const resolved = path.resolve(workspaceDir)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
 export async function ensureWorkspaceAgent(
+  context: AgentIpcContext,
+  workspaceDir: string
+): Promise<{ success: boolean; error?: string }> {
+  const key = agentInitKey(workspaceDir)
+  const inflight = initializingAgents.get(key)
+  if (inflight) return inflight
+
+  const task = initializeWorkspaceAgent(context, workspaceDir)
+  initializingAgents.set(key, task)
+  const cleanup = () => {
+    if (initializingAgents.get(key) === task) initializingAgents.delete(key)
+  }
+  void task.then(cleanup, cleanup)
+  return task
+}
+
+async function initializeWorkspaceAgent(
   context: AgentIpcContext,
   workspaceDir: string
 ): Promise<{ success: boolean; error?: string }> {
