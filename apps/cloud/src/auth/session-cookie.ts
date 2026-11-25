@@ -14,14 +14,24 @@ const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 export interface SessionPayload {
   sid: string
   exp: number
+  /** 账号会话版本号；登出后服务端递增，使旧 Cookie 立即失效 */
+  sv?: number
 }
 
 function sign(secret: string, body: string): string {
   return createHmac('sha256', secret).update(body).digest('base64url')
 }
 
-export function issueSessionCookie(secret: string, now = Date.now()): string {
-  const payload: SessionPayload = { sid: randomBytes(16).toString('base64url'), exp: now + MAX_AGE_MS }
+export function issueSessionCookie(
+  secret: string,
+  now = Date.now(),
+  sessionVersion?: number
+): string {
+  const payload: SessionPayload = {
+    sid: randomBytes(16).toString('base64url'),
+    exp: now + MAX_AGE_MS,
+    ...(sessionVersion !== undefined ? { sv: sessionVersion } : {}),
+  }
   const body = Buffer.from(JSON.stringify(payload), 'utf-8').toString('base64url')
   return `${body}.${sign(secret, body)}`
 }
@@ -29,7 +39,8 @@ export function issueSessionCookie(secret: string, now = Date.now()): string {
 export function verifySessionCookie(
   secret: string,
   value: string | undefined,
-  now = Date.now()
+  now = Date.now(),
+  expectedSessionVersion?: number
 ): SessionPayload | null {
   if (!value) return null
   const [body, signature] = value.split('.')
@@ -42,6 +53,10 @@ export function verifySessionCookie(
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf-8')) as SessionPayload
     if (typeof payload?.sid !== 'string' || typeof payload?.exp !== 'number') return null
     if (payload.exp <= now) return null
+    if (expectedSessionVersion !== undefined) {
+      const version = typeof payload.sv === 'number' ? payload.sv : 1
+      if (version !== expectedSessionVersion) return null
+    }
     return payload
   } catch {
     return null

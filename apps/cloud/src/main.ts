@@ -177,6 +177,7 @@ export async function createCloudServer(
     probeConfig,
     onDeviceRevoked: (deviceId) => hub.disconnectDevice(deviceId),
     onWorkspacesUpdated: (deviceId) => publishDevice(deviceId),
+    onLogout: () => hub.disconnectWebClients(),
     logger,
   })
 
@@ -293,7 +294,10 @@ export async function createCloudServer(
     req: IncomingMessage
   ): { ok: true; deviceId?: string } | { ok: false; status: 401 | 403 } {
     const cookie = readCookie(req.headers.cookie, SESSION_COOKIE)
-    if (verifySessionCookie(config.cookieSecret, cookie)) {
+    if (
+      store.getAccount() &&
+      verifySessionCookie(config.cookieSecret, cookie, Date.now(), store.getSessionVersion())
+    ) {
       if (!isAllowedOrigin(req)) return { ok: false, status: 403 }
       return { ok: true }
     }

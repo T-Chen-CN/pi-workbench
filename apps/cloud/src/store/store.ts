@@ -26,6 +26,8 @@ export interface AccountRecord {
   salt: string
   createdAt: number
   updatedAt: number
+  /** 服务端会话版本号；登出后递增，令已签发的旧 Cookie 立即失效 */
+  sessionVersion?: number
 }
 
 export interface DeviceRecord {
@@ -160,6 +162,27 @@ export class CloudStore {
 
   async updateAccount(record: AccountRecord): Promise<void> {
     await this.accounts.update(() => ({ account: record }))
+  }
+
+  getSessionVersion(): number {
+    return this.accounts.get().account?.sessionVersion ?? 1
+  }
+
+  /** 递增管理员会话版本号，使旧的签名 Cookie 立即作废 */
+  async bumpSessionVersion(): Promise<number> {
+    let nextVersion = 1
+    await this.accounts.update((current) => {
+      if (!current.account) return current
+      nextVersion = (current.account.sessionVersion ?? 1) + 1
+      return {
+        account: {
+          ...current.account,
+          sessionVersion: nextVersion,
+          updatedAt: Date.now(),
+        },
+      }
+    })
+    return nextVersion
   }
 
   // ------------------------------ 设备 ------------------------------

@@ -108,6 +108,15 @@ describe('登录 cookie', () => {
     expect(verifySessionCookie('secret', cookie, 1000 + 31 * 24 * 60 * 60 * 1000)).toBeNull()
   })
 
+  it('会话版本号递增后旧 Cookie 立即失效', () => {
+    const v1 = issueSessionCookie('secret', 1000, 1)
+    expect(verifySessionCookie('secret', v1, 2000, 1)).not.toBeNull()
+    expect(verifySessionCookie('secret', v1, 2000, 2)).toBeNull()
+    const legacy = issueSessionCookie('secret', 1000)
+    expect(verifySessionCookie('secret', legacy, 2000, 1)).not.toBeNull()
+    expect(verifySessionCookie('secret', legacy, 2000, 2)).toBeNull()
+  })
+
   it('生产口径带 Secure / HttpOnly / SameSite=Lax；本地调试可关掉 Secure', () => {
     const secure = sessionCookieHeader({ value: 'v', secure: true })
     expect(secure).toContain('HttpOnly')

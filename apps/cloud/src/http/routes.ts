@@ -60,6 +60,8 @@ export interface RouteDeps {
   onDeviceRevoked?: (deviceId: string) => void
   /** 工作区清单经 HTTP 更新后广播到 WS 客户端 */
   onWorkspacesUpdated?: (deviceId: string) => void
+  /** 管理员登出后立即断开在线 Web 客户端 WS */
+  onLogout?: () => void
   logger: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void }
 }
 
@@ -93,11 +95,22 @@ export function buildRouter(deps: RouteDeps): Router {
     }
   }
 
+  const verifyCurrentSession = (ctx: RequestContext): boolean => {
+    if (!deps.store.getAccount()) return false
+    const value = readCookie(ctx.req.headers.cookie, SESSION_COOKIE)
+    return Boolean(
+      verifySessionCookie(
+        deps.config.cookieSecret,
+        value,
+        Date.now(),
+        deps.store.getSessionVersion()
+      )
+    )
+  }
+
   const requireSession = (ctx: RequestContext): void => {
     assertSameOriginForCookieMutation(ctx)
-    const value = readCookie(ctx.req.headers.cookie, SESSION_COOKIE)
-    const payload = verifySessionCookie(deps.config.cookieSecret, value)
-    if (!payload) throw new HttpError(401, 'Login required', 'unauthorized')
+    if (!verifyCurrentSession(ctx)) throw new HttpError(401, 'Login required', 'unauthorized')
   }
 
   /**
@@ -129,9 +142,7 @@ export function buildRouter(deps: RouteDeps): Router {
   }))
 
   router.get('/v1/me', (ctx) => {
-    const value = readCookie(ctx.req.headers.cookie, SESSION_COOKIE)
-    const payload = verifySessionCookie(deps.config.cookieSecret, value)
-    return { authenticated: Boolean(payload), hasAccount: deps.store.getAccount() !== null }
+    return { authenticated: verifyCurrentSession(ctx), hasAccount: deps.store.getAccount() !== null }
   })
 
   /** F-01：唯一的自助入口，只允许创建一次；之后必须登录 */
@@ -184,7 +195,11 @@ export function buildRouter(deps: RouteDeps): Router {
       throw new HttpError(401, CREDENTIAL_ERROR, CREDENTIAL_ERROR)
     }
     deps.loginLimiter.recordSuccess(source)
-    const cookie = issueSessionCookie(deps.config.cookieSecret)
+    const cookie = issueSessionCookie(
+      deps.config.cookieSecret,
+      Date.now(),
+      deps.store.getSessionVersion()
+    )
     ctx.res.setHeader(
       'Set-Cookie',
       sessionCookieHeader({ value: cookie, secure: deps.config.secureCookies })
@@ -192,8 +207,12 @@ export function buildRouter(deps: RouteDeps): Router {
     return { ok: true }
   })
 
-  router.post('/v1/logout', (ctx) => {
+  router.post('/v1/logout', async (ctx) => {
     assertSameOriginForCookieMutation(ctx)
+    if (verifyCurrentSession(ctx)) {
+      await deps.store.bumpSessionVersion()
+      deps.onLogout?.()
+    }
     ctx.res.setHeader('Set-Cookie', clearSessionCookieHeader(deps.config.secureCookies))
     return { ok: true }
   })

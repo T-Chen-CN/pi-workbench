@@ -219,6 +219,19 @@ export class Hub {
     this.deviceLogs.delete(deviceId)
   }
 
+  /** 管理员登出时立即断开全部 Web Cookie 鉴权的 `/client/ws` 连接（不影响设备 token 连接） */
+  disconnectWebClients(): void {
+    for (const client of [...this.clients]) {
+      if (client.deviceId) continue
+      this.clients.delete(client)
+      try {
+        client.socket.close(4401, 'Session logged out')
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   addDevice(socket: WebSocket, deviceId: string, resumeFrom: number | null): DevicePeer {
     Hub.counter += 1
     const previous = this.devices.get(deviceId)
