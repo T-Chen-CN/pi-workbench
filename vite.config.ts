@@ -72,6 +72,23 @@ function devAgentBridge(): Plugin {
           createHash('sha1').update(workspaceDir).digest('hex').slice(0, 16)
         )
 
+      // Web 调试用的临时配置：供应商 / 模型 / Key 全部来自环境变量，
+      // 凭证落在 cache/ 下，绝不碰桌面端的 config/credentials.json
+      const devProviderId = (): string => process.env.PI_DEV_PROVIDER || 'deepseek'
+      const devModelId = (): string => process.env.PI_DEV_MODEL || 'deepseek-flash'
+      const createDevCredentialStore = (): unknown => {
+        const key = process.env.PI_DEV_API_KEY || ''
+        const credential = key ? { type: 'api_key', key } : undefined
+        return {
+          read: async (providerId: string) =>
+            providerId === devProviderId() ? credential : undefined,
+          list: async () => (credential ? [{ providerId: devProviderId(), type: 'api_key' }] : []),
+          modify: async (_providerId: string, fn: (current: unknown) => Promise<unknown>) =>
+            (await fn(credential)) ?? undefined,
+          delete: async () => undefined,
+        }
+      }
+
       const sendSse = (res: any, event: string, data: unknown) => {
         res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
       }
@@ -107,7 +124,13 @@ function devAgentBridge(): Plugin {
           const result = await agentManager.initialize({
             workspaceDir,
             agentDir: agentDirFor(workspaceDir),
-            apiConfig: body.apiConfig,
+            // Web dev 桥没有设置页：用环境变量里的 key 建一份临时凭证，
+            // 只影响本地调试，不影响桌面端的凭证文件
+            apiConfig: {
+              providerId: devProviderId(),
+              modelId: devModelId(),
+            },
+            credentials: createDevCredentialStore(),
             // Web dev 桥没有审批 UI：开发环境默认全自动，仍走会话级权限模型
             getDefaultPermissionLevel: () => 'auto',
           })
