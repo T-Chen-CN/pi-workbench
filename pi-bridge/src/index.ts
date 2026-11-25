@@ -76,6 +76,7 @@ export {
   catalogLimits,
   isBuiltinCatalogProvider,
   isPresetProviderId,
+  isRemoteCatalogEffective,
   normalizeOverrides,
   presetDisplayName,
   resolveLimits,
@@ -103,5 +104,14 @@ export type {
   ProvidersConfigStoreOptions,
   SetActiveResult,
 } from './providers-config.js'
+
+/** 文件型目录缓存（SDK 格式）+ 只读快照 */
+export { createFileModelsStore } from './models-store.js'
+export type {
+  CatalogSnapshot,
+  FileModelsStoreOptions,
+  ModelsStoreLogger,
+  TrackedModelsStore,
+} from './models-store.js'
 
 

@@ -47,6 +47,17 @@ export function builtinCatalogGeneratedAt(): number | undefined {
   return getBuiltinModelDataGeneratedAt()
 }
 
+/**
+ * 远端目录是否真的生效：SDK 只在 `lastModified > 内置快照生成时间` 时用它。
+ * `source` 与列表过滤必须共此判据，否则会显示一个变少的假列表（D26）。
+ */
+export function isRemoteCatalogEffective(lastModified: number | undefined): boolean {
+  if (typeof lastModified !== 'number' || lastModified <= 0) return false
+  const generatedAt = builtinCatalogGeneratedAt()
+  if (generatedAt === undefined) return true
+  return lastModified > generatedAt
+}
+
 export function isBuiltinCatalogProvider(providerId: string): boolean {
   return getBuiltinProviders().includes(providerId as never)
 }

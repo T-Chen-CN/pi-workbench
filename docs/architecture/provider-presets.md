@@ -450,8 +450,9 @@ SDK 的远端目录是**叠加**在打包快照上的（`mergeModels(baseline, r
 - 验收：`tests/providers-config.test.ts` + `build:bridge` + `type-check` + `lint` 全绿。
 - 关键：本阶段**不接线**（`main.ts` / IPC 仍走旧 `api-config`，零行为变化）；迁移调用点、`.legacy` 改名与 `models.json` 覆盖在 P2 一起生效，避免中间提交把应用变成不可配置。
 
-### P2 · 运行时切内置 provider（L，断点）
-- 交付：`types.ts` / `model-config.ts` / `agent-manager.ts` / `models-store.ts` / `environment.ts`。
+### P2 · 运行时切内置 provider（L，断点）— 进行中
+- 已完成：`pi-bridge/src/models-store.ts`（SDK 格式的文件缓存 + 只读快照 + 串行读改写）与 `isRemoteCatalogEffective()`（D26 判据），`tests/models-store.test.ts` 9 条。
+- 待做：`types.ts` / `model-config.ts` / `agent-manager.ts` / `environment.ts` 与 electron 侧接线（这一步必须与 IPC/UI 同批落地，否则中间提交会让应用无法配置）。
 - 验收：`npm run build:bridge` + `tests/agent-manager*.test.ts` + `tests/models-store.test.ts`；手工跑一轮 DeepSeek（工具调用 + 图片 + 截断文案）。
 - 关键：`models.json` 必须整体覆盖（清旧 provider，D25）；`modelsStore` 注入而不依赖 `modelsStorePath`。
 
