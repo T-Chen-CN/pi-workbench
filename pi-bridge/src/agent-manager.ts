@@ -59,8 +59,13 @@ import {
   buildHtmlExport,
   buildMarkdownExport,
   type ExportLanguage,
-  type ExportTurn,
 } from './session-export.js'
+import {
+  IMAGE_ONLY_PROMPTS,
+  buildExportTurns,
+  extractMessageText,
+  extractTitleSourceTexts,
+} from './agent-projections.js'
 import { validateChatImages } from './chat-images.js'
 import { THINKING_LEVELS, writeModelsConfig } from './model-config.js'
 import { ensureBashOnPath } from './environment.js'
@@ -213,27 +218,10 @@ function findRunAssistant(messages: any[], startIndex: number, startedAt: number
   return null
 }
 
-/** 用户消息是否带图片块（纯图片对话用于跳过标题模型调用） */
-function hasImageBlocks(content: unknown): boolean {
-  if (!Array.isArray(content)) return false
-  return content.some((part: any) => part?.type === 'image')
-}
-
-/**
- * 纯图片消息的占位文本：Anthropic 拒绝空 text 块（400），
- * 其他 OpenAI 兼容端点接受空文本，因此只在需要时补。
- */
-const IMAGE_ONLY_PROMPTS = ['请看这些图片。', 'Please look at the attached image(s).'] as const
-
 /** 标题结果不可用（空回复 / 纯推理）时的重试上限：超过就永久保留回退标题 */
 const TITLE_MAX_FAILURES = 3
 /** 单次编辑 diff 快照的最大读取字节数（超过则跳过快照，防止大文件同步读盘阻塞/OOM） */
 const MAX_EDIT_SNAPSHOT_BYTES = 2 * 1024 * 1024
-
-function isImageOnlyPrompt(text: string): boolean {
-  const trimmed = text.trim()
-  return (IMAGE_ONLY_PROMPTS as readonly string[]).includes(trimmed)
-}
 
 export type { SessionMode }
 
@@ -1141,130 +1129,8 @@ export class AgentManager {
     ) as any[]
   }
 
-  private exportTurns(runtime: SessionRuntime): ExportTurn[] {
-    // 与界面同源：当前分支的完整 entry 路径（含压缩前历史与压缩点）
-    const items = activeTimeline(runtime.sessionManager)
-    const messages = items
-      .filter(
-        (item): item is Extract<(typeof items)[number], { kind: 'message' }> =>
-          item.kind === 'message'
-      )
-      .map((item) => item.message)
-
-    const results = new Map<string, any>()
-    for (const message of messages) {
-      if (message?.role === 'toolResult' && typeof message.toolCallId === 'string') {
-        results.set(message.toolCallId, message)
-      }
-    }
-
-    const turns: ExportTurn[] = []
-    const currentTurn = (timestamp: number): ExportTurn => {
-      const existing = turns[turns.length - 1]
-      if (existing) return existing
-      const created: ExportTurn = { user: { text: '', timestamp }, parts: [] }
-      turns.push(created)
-      return created
-    }
-
-    for (const item of items) {
-      if (item.kind === 'compaction') {
-        currentTurn(item.timestamp).parts.push({
-          type: 'compaction',
-          timestamp: item.timestamp,
-          tokensBefore: item.tokensBefore,
-        })
-        continue
-      }
-
-      const message = item.message as any
-
-      if (message?.role === 'user') {
-        const raw = toMessageText(message)
-        const context = parseContextBlock(raw)
-        const stripped = stripContextBlock(raw)
-        turns.push({
-          user: {
-            // 有引用 / 附件时导出渲染引用块，不再重复占位文案
-            text: context && stripped === '(attached files)' ? '' : stripped,
-            timestamp:
-              typeof message.timestamp === 'number' ? message.timestamp : Date.now(),
-            ...(context ? { context } : {}),
-          },
-          parts: [],
-        })
-        continue
-      }
-      const turn = turns[turns.length - 1]
-      if (!turn || message?.role !== 'assistant') continue
-      const content: any[] =
-        typeof message.content === 'string'
-          ? [{ type: 'text', text: message.content }]
-          : Array.isArray(message.content)
-            ? message.content
-            : []
-      for (const part of content) {
-        if (part?.type === 'text' && typeof part.text === 'string' && part.text) {
-          turn.parts.push({ type: 'text', text: part.text })
-        } else if (
-          part?.type === 'thinking' &&
-          !part.redacted &&
-          typeof part.thinking === 'string' &&
-          part.thinking
-        ) {
-          turn.parts.push({ type: 'thinking', text: part.thinking })
-        } else if (part?.type === 'toolCall') {
-          const raw = typeof part.id === 'string' ? results.get(part.id) : undefined
-          const payload = raw ? this.payloadFromMessage(raw) : null
-          turn.parts.push({
-            type: 'tool',
-            name: String(part.name ?? 'tool'),
-            args: this.serializeToolArgs(part.arguments),
-            result: payload?.text ?? '',
-            isError: Boolean(raw?.isError),
-            images: payload?.images ?? [],
-          })
-        }
-      }
-    }
-    return turns
-  }
-
-  private serializeToolArgs(args: unknown): string {
-    try {
-      return JSON.stringify(args ?? {}, null, 2)
-    } catch {
-      return String(args ?? '')
-    }
-  }
-
-  private payloadFromMessage(message: any): {
-    toolName: string
-    text: string
-    images: Array<{ data: string; mimeType: string }>
-  } {
-    const content: any[] = Array.isArray(message.content)
-      ? message.content
-      : typeof message.content === 'string'
-        ? [{ type: 'text', text: message.content }]
-        : []
-    const texts: string[] = []
-    const images: Array<{ data: string; mimeType: string }> = []
-    for (const part of content) {
-      if (part?.type === 'text' && typeof part.text === 'string') {
-        texts.push(part.text)
-      } else if (part?.type === 'image' && typeof part.data === 'string') {
-        images.push({
-          data: part.data,
-          mimeType: typeof part.mimeType === 'string' ? part.mimeType : 'image/png',
-        })
-      }
-    }
-    return {
-      toolName: typeof message.toolName === 'string' ? message.toolName : 'tool',
-      text: texts.join('\n'),
-      images,
-    }
+  private exportTurns(runtime: SessionRuntime) {
+    return buildExportTurns(runtime.sessionManager)
   }
 
   /** 会话累计用量与成本 */
@@ -2935,14 +2801,7 @@ export class AgentManager {
   }
 
   private messageText(content: unknown): string {
-    if (typeof content === 'string') return content
-    if (Array.isArray(content)) {
-      return content
-        .filter((part: any) => part.type === 'text')
-        .map((part: any) => part.text)
-        .join('\n')
-    }
-    return ''
+    return extractMessageText(content)
   }
 
   /**
@@ -3014,38 +2873,8 @@ export class AgentManager {
    * - 首条 assistant 常常只有 thinking / toolCall，必须跳过它们取第一条文本回复。
    * - 首轮始终没有文本回复时不消耗机会，留给后面的轮次。
    */
-  private titleSourceTexts(runtime: SessionRuntime): {
-    userText: string
-    assistantText: string
-    imageOnly: boolean
-  } {
-    let firstUser: any = null
-    let assistantText = ''
-    try {
-      for (const entry of runtime.sessionManager.getEntries() as any[]) {
-        if (entry?.type !== 'message' || !entry.message) continue
-        const message = entry.message
-        if (message.role === 'user') {
-          if (firstUser) continue
-          firstUser = message
-          continue
-        }
-        if (!firstUser || message.role !== 'assistant') continue
-        // 取最后一条带文本的回复：环境说明（工作目录 / 规矩 / 工作树状态）集中在开头，
-        // 结论段才描述这段对话到底做了什么
-        const text = this.messageText(message.content).trim()
-        if (text) assistantText = text
-      }
-    } catch (error) {
-      this.logger.warn('[Agent Manager] Failed to read the title source messages:', error)
-      return { userText: '', assistantText: '', imageOnly: false }
-    }
-
-    if (!firstUser) return { userText: '', assistantText, imageOnly: false }
-    const userText = stripContextBlock(this.messageText(firstUser.content)).trim()
-    const imageOnly =
-      hasImageBlocks(firstUser.content) && (!userText || isImageOnlyPrompt(userText))
-    return { userText: imageOnly ? '' : userText, assistantText, imageOnly }
+  private titleSourceTexts(runtime: SessionRuntime) {
+    return extractTitleSourceTexts(runtime.sessionManager, this.logger)
   }
 
   /** 已确定的标题：临时标题 → 会话记录 → 进程内已确定 → sidecar 快照 */

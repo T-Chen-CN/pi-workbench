@@ -5,6 +5,19 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./atomic-json": {
+      "types": "./dist/atomic-json.d.ts",
+      "import": "./dist/atomic-json.js",
+      "default": "./dist/atomic-json.js"
+    },
+    "./dist/*": "./dist/*"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",

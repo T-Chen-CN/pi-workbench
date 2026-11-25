@@ -1,71 +1,22 @@
 /**
- * 原子 JSON 落盘（服务器版）。
- *
- * 与 electron / pi-bridge 的同语义实现保持一致的**约束**：临时文件 + fsync + rename。
- * 这里用异步 API：云端进程同时在跑 WS、会话与模型请求，同步 fsync 会卡住整条事件循环。
- * 只有文档级（账号 / 设备 / 工单）写走这里；高频的会话 JSONL 由 SDK 自己维护。
+ * 原子 JSON 落盘（服务器版）：底层复用 `pi-bridge` 统一实现，上层提供 `JsonDoc` 串行文档封装。
  */
-
-import { promises as fs } from 'fs'
-import * as path from 'path'
-
-function tmpPathFor(filePath: string): string {
-  const random = Math.random().toString(36).slice(2, 8)
-  return path.join(
-    path.dirname(filePath),
-    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${random}.tmp`
-  )
-}
+import { readJsonAsyncWithBackup, writeJsonAtomicAsync } from 'pi-bridge/atomic-json'
 
 export async function writeJsonAtomic(
   filePath: string,
   value: unknown,
   options: { backup?: boolean } = {}
 ): Promise<void> {
-  const dir = path.dirname(filePath)
-  await fs.mkdir(dir, { recursive: true })
-  const tmpPath = tmpPathFor(filePath)
-  const content = JSON.stringify(value, null, 2)
-
-  let handle: Awaited<ReturnType<typeof fs.open>> | null = null
-  try {
-    handle = await fs.open(tmpPath, 'w', 0o600)
-    await handle.writeFile(content, 'utf-8')
-    await handle.sync()
-  } catch (error) {
-    await handle?.close().catch(() => {})
-    await fs.rm(tmpPath, { force: true }).catch(() => {})
-    throw error
-  }
-  await handle.close()
-
-  if (options.backup) {
-    try {
-      const previous = await fs.readFile(filePath, 'utf-8')
-      JSON.parse(previous)
-      await fs.copyFile(filePath, `${filePath}.bak`)
-    } catch {
-      // 文件不存在或已损坏：不把坏内容写进 .bak
-    }
-  }
-
-  try {
-    await fs.rename(tmpPath, filePath)
-  } catch (error) {
-    await fs.rm(tmpPath, { force: true }).catch(() => {})
-    throw error
-  }
+  await writeJsonAtomicAsync(filePath, value, {
+    backup: options.backup ?? false,
+    fsync: true,
+  })
 }
 
 export async function readJson<T>(filePath: string, fallback: T): Promise<T> {
-  for (const candidate of [filePath, `${filePath}.bak`]) {
-    try {
-      return JSON.parse(await fs.readFile(candidate, 'utf-8')) as T
-    } catch {
-      // 尝试回退 .bak
-    }
-  }
-  return fallback
+  const result = await readJsonAsyncWithBackup<T>(filePath)
+  return result.source !== undefined ? (result.data as T) : fallback
 }
 
 /**

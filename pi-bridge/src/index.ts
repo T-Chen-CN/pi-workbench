@@ -105,6 +105,15 @@ export type {
   SetActiveResult,
 } from './providers-config.js'
 
+/** 统一原子 JSON 持久化（electron / apps/cloud / pi-bridge 共用） */
+export {
+  readJsonAsyncWithBackup,
+  readJsonWithBackup,
+  writeJsonAtomicAsync,
+  writeJsonAtomicSync,
+} from './atomic-json.js'
+export type { JsonReadResult, JsonWriteOptions } from './atomic-json.js'
+
 /** 文件型目录缓存（SDK 格式）+ 只读快照 */
 export { createFileModelsStore } from './models-store.js'
 export type {
