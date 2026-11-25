@@ -86,8 +86,11 @@ describe('WorktreeCoordinator', () => {
     const view = views.find((item) => item.path === root)
     expect(view?.boundSessionCount).toBe(1)
     expect(view?.cloudUnitId).toBe('unit-x')
-    // 普通会话绑定的工作树不带云端标记
-    expect(views.find((item) => item.path === workspace)?.cloudUnitId).toBeNull()
+    // 普通工作树不带云端标记：按 isMain 找主工作树，不能比字符串路径
+    // （macOS 上 /var 与 /private/var、Windows 上 8.3 短名会让路径形式不一致）
+    const main = views.find((item) => item.isMain)
+    expect(main).toBeDefined()
+    expect(main?.cloudUnitId).toBeNull()
   })
 
   it('shares a worktree between sessions and only removes it after the last binding', async () => {
