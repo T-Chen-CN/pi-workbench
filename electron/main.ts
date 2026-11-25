@@ -1,5 +1,5 @@
 import { getAppDir, piAgentDir } from './app-paths.js'
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, screen, type Rectangle } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, screen } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import * as os from 'os'
@@ -29,7 +29,7 @@ import {
   resolveCloseAction,
   showTrayHintOnce
 } from './tray.js'
-import { animateBounds, type WindowBounds } from './window-morph.js'
+import { createBootWindowController } from './boot-window.js'
 import { registerFilesIpc } from './ipc/files.js'
 import { registerAttachmentsIpc } from './ipc/attachments.js'
 import { registerFileProtocol } from './file-protocol.js'
@@ -119,25 +119,15 @@ let quitting = false
  * 启动页：窗口先以 420×260 出现，面板数据就绪后放大到工作台尺寸。
  * 总视觉时长 = 停留（≥600ms）+ 放大（400ms），即最短 1 秒。
  */
-const BOOT_WINDOW_WIDTH = 420
-const BOOT_WINDOW_HEIGHT = 260
-const APP_WINDOW_WIDTH = 1200
-const APP_WINDOW_HEIGHT = 800
-const BOOT_HOLD_MS = 600
-const BOOT_EXPAND_MS = 400
-const BOOT_READY_TIMEOUT_MS = 8000
-
-let bootActive = false
-let bootStartedAt = 0
-let bootReadyAt: number | null = null
-let bootExpanded = false
-let bootCompleted = false
-let bootTimers: ReturnType<typeof setTimeout>[] = []
-let expandScheduled = false
-let cancelExpandAnimation: (() => void) | null = null
-
 /** 启动期的目录迁移、SQLite 播种与联网配置；最近工作区 IPC 会等它完成 */
 let startupReady: Promise<void> = Promise.resolve()
+
+const bootWindow = createBootWindowController({
+  getMainWindow: () => mainWindow,
+  onBootFinished: () => {
+    void ensureAppDirWritable()
+  },
+})
 
 function resolveTheme(settings: { theme?: unknown }): 'dark' | 'light' {
   if (settings.theme === 'dark') return 'dark'
@@ -149,120 +139,10 @@ function resolveLanguage(settings: { language?: unknown }): 'zh' | 'en' {
   return settings.language === 'en' || settings.language === 'en-US' ? 'en' : 'zh'
 }
 
-function centeredWindowBounds(workArea: Rectangle, width: number, height: number): WindowBounds {
-  const w = Math.min(width, workArea.width)
-  const h = Math.min(height, workArea.height)
-  return {
-    x: Math.round(workArea.x + (workArea.width - w) / 2),
-    y: Math.round(workArea.y + (workArea.height - h) / 2),
-    width: Math.round(w),
-    height: Math.round(h)
-  }
-}
-
-/** 放大目标以窗口当前中心为准（用户可能拖过小窗），并限制在所在显示器工作区内 */
-function expandedWindowBounds(win: BrowserWindow): WindowBounds {
-  const current = win.getBounds()
-  const workArea = screen.getDisplayMatching(current).workArea
-  const width = Math.min(APP_WINDOW_WIDTH, workArea.width)
-  const height = Math.min(APP_WINDOW_HEIGHT, workArea.height)
-  const centerX = current.x + current.width / 2
-  const centerY = current.y + current.height / 2
-  const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
-  return {
-    x: Math.round(clamp(centerX - width / 2, workArea.x, workArea.x + workArea.width - width)),
-    y: Math.round(clamp(centerY - height / 2, workArea.y, workArea.y + workArea.height - height)),
-    width: Math.round(width),
-    height: Math.round(height)
-  }
-}
-
-function clearBootTimers(): void {
-  for (const timer of bootTimers) clearTimeout(timer)
-  bootTimers = []
-}
-
-function beginBoot(win: BrowserWindow): void {
-  bootActive = true
-  bootStartedAt = Date.now()
-  bootReadyAt = null
-  bootExpanded = false
-  expandScheduled = false
-  clearBootTimers()
-  const fallback = setTimeout(() => {
-    if (bootExpanded) return
-    console.warn('[Boot] Renderer did not signal ready in time; expanding anyway')
-    scheduleExpansion(win)
-  }, BOOT_READY_TIMEOUT_MS)
-  bootTimers.push(fallback)
-}
-
-/** 渲染层启动数据就绪：满足最短停留后开始放大 */
-function handleBootReady(): void {
-  if (!bootActive || bootExpanded || !mainWindow || mainWindow.isDestroyed()) return
-  bootReadyAt = Date.now()
-  console.log('[Boot] Renderer ready after', bootReadyAt - bootStartedAt, 'ms')
-  scheduleExpansion(mainWindow)
-}
-
-function scheduleExpansion(win: BrowserWindow): void {
-  if (bootExpanded || expandScheduled || win.isDestroyed()) return
-  expandScheduled = true
-  const startAt = Math.max(bootStartedAt + BOOT_HOLD_MS, bootReadyAt ?? Date.now())
-  const timer = setTimeout(() => startExpansion(win), Math.max(0, startAt - Date.now()))
-  bootTimers.push(timer)
-}
-
-function startExpansion(win: BrowserWindow): void {
-  if (bootExpanded || win.isDestroyed()) return
-  const from = win.getBounds()
-  const to = expandedWindowBounds(win)
-  console.log('[Boot] Expanding window', `${from.width}×${from.height}`, '→', `${to.width}×${to.height}`)
-  cancelExpandAnimation = animateBounds({
-    from,
-    to,
-    durationMs: BOOT_EXPAND_MS,
-    apply: (bounds) => {
-      if (!win.isDestroyed()) win.setBounds(bounds)
-    },
-    onDone: () => finishBoot(win)
-  })
-}
-
-function finishBoot(win: BrowserWindow): void {
-  if (!bootActive || bootExpanded) return
-  bootActive = false
-  bootExpanded = true
-  bootCompleted = true
-  expandScheduled = false
-  cancelExpandAnimation = null
-  clearBootTimers()
-  console.log('[Boot] Window expanded after', Date.now() - bootStartedAt, 'ms')
-  if (!win.isDestroyed()) {
-    win.setResizable(true)
-    if (process.platform === 'darwin') {
-      try {
-        win.setWindowButtonVisibility(true)
-      } catch {
-        // 旧版本 macOS / 非 macOS 没有该方法
-      }
-    }
-    try {
-      win.webContents.send('app:boot-expanded')
-    } catch (error) {
-      console.warn('[Boot] Failed to notify renderer:', error)
-    }
-  }
-  // 安装目录不可写的提示等界面就绪后再弹，避免盖住启动页
-  if (app.isPackaged && process.platform !== 'darwin') {
-    void ensureAppDirWritable()
-  }
-}
-
 ipcMain.on('app:boot-ready', (event) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
   if (event.sender !== mainWindow.webContents) return
-  handleBootReady()
+  bootWindow.handleReady()
 })
 
 // GitHub OAuth 回调使用自定义协议；开发版需要带上脚本参数才能在 Windows 上回到 Electron
@@ -728,11 +608,9 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
   const theme = resolveTheme(settings)
   const language = resolveLanguage(settings)
   // 首次启动从小窗开始；macOS 关掉全部窗口再激活时直接进入正常尺寸
-  const skipBoot = bootCompleted
+  const skipBoot = bootWindow.isCompleted()
   const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
-  const initialBounds = skipBoot
-    ? centeredWindowBounds(workArea, APP_WINDOW_WIDTH, APP_WINDOW_HEIGHT)
-    : centeredWindowBounds(workArea, BOOT_WINDOW_WIDTH, BOOT_WINDOW_HEIGHT)
+  const initialBounds = bootWindow.initialBounds(workArea)
 
   mainWindow = new BrowserWindow({
     ...initialBounds,
@@ -816,13 +694,9 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
   }
 
   if (skipBoot) {
-    bootActive = false
-    expandScheduled = false
-    clearBootTimers()
-    cancelExpandAnimation?.()
-    cancelExpandAnimation = null
+    bootWindow.skip()
   } else {
-    beginBoot(mainWindow)
+    bootWindow.begin(mainWindow)
   }
 
   mainWindow.webContents.on('did-finish-load', () => {
@@ -851,11 +725,7 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
 
   mainWindow.on('closed', () => {
     // 启动动画与兜底定时器不能留到窗口销毁之后
-    clearBootTimers()
-    cancelExpandAnimation?.()
-    cancelExpandAnimation = null
-    expandScheduled = false
-    bootActive = false
+    bootWindow.reset()
     mainWindow = null
   })
 
@@ -931,14 +801,14 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error('[Main] Renderer process gone:', details.reason)
     // 渲染进程崩溃后不再有可能收到 boot-ready，直接结束启动态
-    if (mainWindow && !mainWindow.isDestroyed()) finishBoot(mainWindow)
+    if (mainWindow && !mainWindow.isDestroyed()) bootWindow.finish(mainWindow)
   })
 
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     // -3 是导航被主动中止（重定向等），不是失败
     if (!isMainFrame || errorCode === -3) return
     console.error('[Main] Page failed to load:', errorCode, errorDescription, validatedURL)
-    if (mainWindow && !mainWindow.isDestroyed()) finishBoot(mainWindow)
+    if (mainWindow && !mainWindow.isDestroyed()) bootWindow.finish(mainWindow)
   })
 }
 

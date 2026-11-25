@@ -788,23 +788,22 @@ describe('repo map handlers', () => {
 
 describe('agent config signature', () => {
   it('changes when the output limit changes', async () => {
-    const { agentConfigKey } = await import('../electron/agent-config-key')
+    const { providerConfigKey } = await import('../electron/agent-config-key')
     const base = {
-      provider: 'custom',
-      apiUrl: 'https://api.example.com/v1',
-      apiKey: 'sk-123',
-      selectedModel: 'model-a',
-      models: [{ id: 'model-a', contextWindow: 256_000, image: false }],
+      providerId: 'openai',
+      modelId: 'gpt-5',
+      credentialFingerprint: 'sha256:abc',
+      overrides: {},
     }
 
-    // 改档位必须重建 Agent，否则 models.json 不会重写，设置白改
+    // 改档位必须重建 Agent，否则模型覆盖不会重新生效
     expect(
-      agentConfigKey({ ...base, models: [{ ...base.models[0], maxTokens: 65_536 }] })
-    ).not.toBe(agentConfigKey(base))
+      providerConfigKey({ ...base, overrides: { maxTokens: 65_536 } })
+    ).not.toBe(providerConfigKey(base))
 
     // 缺省与 0 同义：都表示自动，不应多触发一次重建
     expect(
-      agentConfigKey({ ...base, models: [{ ...base.models[0], maxTokens: 0 }] })
-    ).toBe(agentConfigKey(base))
+      providerConfigKey({ ...base, overrides: { maxTokens: 0 } })
+    ).toBe(providerConfigKey(base))
   })
 })
