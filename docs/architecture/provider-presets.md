@@ -445,10 +445,10 @@ SDK 的远端目录是**叠加**在打包快照上的（`mergeModels(baseline, r
 - 验收：`npx vitest run tests/credentials-store.test.ts` + `npm run build:bridge` + `npm run type-check` + `npm run lint` 全绿。
 - 关键：`modify` 串行且返回 post-write 值（OAuth 刷新在 `modify` 内跑，双刷会让 token 失效）；不同 provider 的写入必须全局串行，否则会互相覆盖（已由用例锁定）。
 
-### P1 · 配置与迁移（M）
-- 交付：`pi-bridge/src/provider-presets.ts`（白名单 + catalog 视图）/ `electron/providers-config.ts` / 迁移 / `agent-config-key` 新签名 + 单测。
-- 验收：`tests/providers-config.test.ts` 迁移矩阵全绿；失败不阻塞启动。
-- 关键：迁移在注册 IPC 之前完成。
+### P1 · 配置与迁移（M）— 已完成
+- 交付：`pi-bridge/src/provider-presets.ts`（白名单 + catalog 容量口径）/ `pi-bridge/src/providers-config.ts`（配置读写 + 迁移）/ `electron/providers-config.ts`（适配层）/ `providerConfigKey` + `tests/providers-config.test.ts`（17 条）。
+- 验收：`tests/providers-config.test.ts` + `build:bridge` + `type-check` + `lint` 全绿。
+- 关键：本阶段**不接线**（`main.ts` / IPC 仍走旧 `api-config`，零行为变化）；迁移调用点、`.legacy` 改名与 `models.json` 覆盖在 P2 一起生效，避免中间提交把应用变成不可配置。
 
 ### P2 · 运行时切内置 provider（L，断点）
 - 交付：`types.ts` / `model-config.ts` / `agent-manager.ts` / `models-store.ts` / `environment.ts`。

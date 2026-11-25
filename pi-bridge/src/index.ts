@@ -66,4 +66,42 @@ export type {
   FileCredentialStoreOptions,
 } from './credentials-store.js'
 
+/** 固定供应商白名单与模型容量口径；桌面端与云端必须用同一份 */
+export {
+  PRESET_PROVIDER_IDS,
+  PROVIDER_PRESETS,
+  builtinCatalogGeneratedAt,
+  builtinCatalogModel,
+  builtinCatalogModels,
+  catalogLimits,
+  isBuiltinCatalogProvider,
+  isPresetProviderId,
+  normalizeOverrides,
+  presetDisplayName,
+  resolveLimits,
+} from './provider-presets.js'
+export type { ModelLimits, ModelOverrides, ProviderPreset } from './provider-presets.js'
+
+/** 供应商配置与旧配置迁移 */
+export {
+  LEGACY_API_CONFIG_FILE,
+  LEGACY_AUTH_FILE,
+  PROVIDERS_CONFIG_FILE,
+  PROVIDERS_CONFIG_VERSION,
+  createProvidersConfigStore,
+  credentialFingerprint,
+  emptyProvidersConfig,
+  legacyProviderFromUrl,
+} from './providers-config.js'
+export type {
+  LegacyMigrationReason,
+  LegacyMigrationResult,
+  ProviderConfigEntry,
+  ProvidersConfig,
+  ProvidersConfigLogger,
+  ProvidersConfigStore,
+  ProvidersConfigStoreOptions,
+  SetActiveResult,
+} from './providers-config.js'
+
 
