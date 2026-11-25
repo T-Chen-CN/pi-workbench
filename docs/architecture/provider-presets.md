@@ -88,10 +88,16 @@
 ### 3.2 `config/credentials.json`（新，密文）
 
 ```json
-{ "version": 1, "entries": { "deepseek": "enc:<base64>", "openai": "enc:<base64>" } }
+{
+  "version": 1,
+  "entries": {
+    "deepseek": { "type": "api_key", "secret": "enc:<base64>" },
+    "openai": { "type": "oauth", "secret": "enc:<base64>" }
+  }
+}
 ```
 
-`enc:` 的值是 pi-ai `Credential` 的序列化密文：
+`type` 必须**明文**旁挂：pi-ai 要求 `list()` 在不返回也不解密的前提下给出凭证类型（状态徽标、重建指纹都靠它）。`secret` 是整条 `Credential` 的序列化密文：
 
 ```ts
 type Credential =
@@ -100,7 +106,7 @@ type Credential =
 ```
 
 - 加解密复用 `electron/secret-crypto.ts`（Windows DPAPI / macOS Keychain / Linux libsecret；不可用则明文回退并警告）。
-- 写盘走 `writeJsonAtomic`，权限尽量 `0600`（Windows 忽略）。
+- 写盘走原子替换（临时文件 + fsync + rename），**不留 `.bak`**：旧密文没有回滚价值，而 OAuth 刷新会让写入变频繁。
 - **应用级**文件，跨工作区共享；不能放 `{workspace}/.pi-workbench/`。
 
 ### 3.3 `data/agent/models.json`（派生，覆盖写）
@@ -190,7 +196,7 @@ SDK 自带两级处理，不需要我们造：
 
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
-| 内核 | `pi-bridge/src/credentials-store.ts` | 序列化、**按 provider 串行**、原子写；加解密通过**注入**的 `encrypt/decrypt` 函数。`FileModelsStore` / `AuthStorage` / `FileAuthStorageBackend` 都**没有**从 `pi-coding-agent` 导出（`exports` 只有 `.` 和 `./rpc-entry`），锁与原子写必须自己实现 |
+| 内核 | `pi-bridge/src/credentials-store.ts` | 序列化、**按 provider 串行** + **全文件写入互斥**（不同 provider 的 `fn` 并行、落盘串行，否则后写用旧快照覆盖别的 provider）、原子写；加解密通过**注入**的 `encrypt/decrypt` 函数。`FileModelsStore` / `AuthStorage` / `FileAuthStorageBackend` 都**没有**从 `pi-coding-agent` 导出（`exports` 只有 `.` 和 `./rpc-entry`），锁与原子写必须自己实现 |
 | 桌面适配 | `electron/credentials-store.ts` | 注入 `secret-crypto.ts`（safeStorage），路径 `config/credentials.json` |
 | 云端适配 | `apps/cloud/src/agent/credentials-store.ts` | 注入 `encryptSecret/decryptSecret(encryptionKey)`，路径 `data/cloud/credentials.json` |
 
@@ -433,10 +439,11 @@ SDK 的远端目录是**叠加**在打包快照上的（`mergeModels(baseline, r
 
 > 用户已确认：中间期不发版，P2 与 P4 分开提交导致的"设置页暂不可配"可接受。
 
-### P0 · 凭据存储（S）
-- 交付：`pi-bridge/src/credentials-store.ts`（内核，注入 `encrypt/decrypt`）+ `electron/credentials-store.ts`（safeStorage 适配）+ 单测。零行为变化。
-- 验收：`npx vitest run tests/credentials-store.test.ts` + `npm run type-check`。
-- 关键：`modify` 串行且返回 post-write 值（OAuth 刷新在 `modify` 内跑，双刷会让 token 失效）。
+### P0 · 凭据存储（S）— 已完成
+
+- 交付：`pi-bridge/src/credentials-store.ts`（内核，注入 `encrypt/decrypt`）+ `electron/credentials-store.ts`（safeStorage 适配）+ `tests/credentials-store.test.ts`（14 条）。零行为变化。
+- 验收：`npx vitest run tests/credentials-store.test.ts` + `npm run build:bridge` + `npm run type-check` + `npm run lint` 全绿。
+- 关键：`modify` 串行且返回 post-write 值（OAuth 刷新在 `modify` 内跑，双刷会让 token 失效）；不同 provider 的写入必须全局串行，否则会互相覆盖（已由用例锁定）。
 
 ### P1 · 配置与迁移（M）
 - 交付：`pi-bridge/src/provider-presets.ts`（白名单 + catalog 视图）/ `electron/providers-config.ts` / 迁移 / `agent-config-key` 新签名 + 单测。
