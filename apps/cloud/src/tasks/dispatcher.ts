@@ -26,7 +26,7 @@ import {
 import type { CloudStore, DeviceRecord, UnitRecord } from '../store/store.js'
 import type { Hub } from '../ws/hub.js'
 import type { CloudTaskSpec } from 'pi-bridge'
-import { checkDispatch, consumeQuota, type AuthorizationRecord } from './authorization.js'
+import { checkDispatch, consumeQuota } from './authorization.js'
 import {
   isAckExpired,
   isWaitingHumanExpired,
@@ -75,6 +75,9 @@ export function toUnitView(unit: UnitRecord): CloudUnitView {
 }
 
 export class TaskDispatcher {
+  /** 单设备在途已下发但尚未收到 assigned 的工单（防并发 tryDispatch 同时下发多条 queued） */
+  private inFlightDispatches = new Map<string, string>()
+
   constructor(
     private readonly deps: {
       store: CloudStore
@@ -115,7 +118,6 @@ export class TaskDispatcher {
       return { ok: false, code: 'not-a-repo', message: 'Workspace is not a git repository.' }
     }
 
-    const authorization = store.findAuthorization(request.authorizationId)
     // 已结束 / 正在回收的单元不再接新工单：工作树马上要消失，派下去只会重建一棵新的
     const existingUnit = store.findUnit(request.workUnitId)
     if (existingUnit && (existingUnit.closedAt !== null || existingUnit.closeRequestedAt)) {
@@ -125,20 +127,46 @@ export class TaskDispatcher {
         message: 'This work unit is closed or being reclaimed; open a new unit for follow-up work.',
       }
     }
-    const sameUnit = Boolean(existingUnit && !existingUnit.closedAt)
-    const check = checkDispatch(
-      authorization,
-      { deviceId: request.deviceId, workspacePath: request.workspacePath, sameUnit },
-      now
-    )
-    if (!check.ok) {
-      return { ok: false, code: check.code, message: authorizationError(check.code) }
+    // 复用工作单元必须匹配同一设备与同一仓库，防跨目标借 sameUnit 绕过授权配额
+    if (
+      existingUnit &&
+      (existingUnit.deviceId !== request.deviceId ||
+        normalize(existingUnit.workspacePath) !== normalize(request.workspacePath))
+    ) {
+      return {
+        ok: false,
+        code: 'unit-target-mismatch',
+        message: 'Work unit belongs to a different device or repository.',
+      }
     }
+    const sameUnit = Boolean(existingUnit && !existingUnit.closedAt)
 
-    // 幂等：同一 idempotencyKey 只生成一张工单
+    // 幂等：同一 idempotencyKey 只生成一张工单（先于配额扣减检查，避免重复扣减）
     const key = request.idempotencyKey ?? `key-${request.workUnitId}-${now}`
     const existing = store.listTasks().find((task) => task.idempotencyKey === key)
     if (existing) return { ok: true, task: existing }
+
+    // 原子校验并扣减授权配额，防止并发 dispatch TOCTOU 超额派活
+    let checkCode: string | null = null
+    const consumed = await store.updateAuthorization(request.authorizationId, (current) => {
+      const check = checkDispatch(
+        current,
+        { deviceId: request.deviceId, workspacePath: request.workspacePath, sameUnit },
+        now
+      )
+      if (!check.ok) {
+        checkCode = check.code
+        return undefined
+      }
+      return consumeQuota(current!, sameUnit)
+    })
+    if (!consumed) {
+      return {
+        ok: false,
+        code: checkCode ?? 'unknown-authorization',
+        message: authorizationError(checkCode ?? 'unknown-authorization'),
+      }
+    }
 
     const spec: CloudTaskSpec = {
       workUnitId: request.workUnitId,
@@ -170,11 +198,11 @@ export class TaskDispatcher {
       status: 'queued',
       idempotencyKey: key,
       createdAt: now,
+      dispatchedAt: null,
       updatedAt: now,
       progress: { step: 0, lastEventAt: now },
     }
     await store.saveTask(task)
-    await this.consumeAuthorization(authorization!, sameUnit)
 
     // 工作单元台账：一个单元只对应一个 worktree，后续工单沿用
     if (!existingUnit) {
@@ -193,10 +221,15 @@ export class TaskDispatcher {
     return { ok: true, task: latest }
   }
 
-  /** 设备空下来时派队首（FIFO）；同一设备同时只能有一张在跑 */
+  /** 设备空下来时派队首（FIFO）；同一设备同时只能有一张在跑或在途待 ACK */
   async tryDispatch(task: CloudTaskSnapshot): Promise<void> {
     const store = this.deps.store
     const deviceId = task.spec.deviceId
+    const inFlight = this.inFlightDispatches.get(deviceId)
+    if (inFlight && inFlight !== task.id) {
+      this.deps.logger.info(`[cloud] task ${task.id} queued behind in-flight ${inFlight}`)
+      return
+    }
     const running = store
       .listTasks()
       .filter(
@@ -211,17 +244,62 @@ export class TaskDispatcher {
       return
     }
     if (!this.deps.hub.isDeviceOnline(deviceId)) return
-    const delivered = this.deps.hub.sendToDevice(deviceId, {
-      v: 1,
-      type: 'task',
-      seq: 0,
-      task,
-    }, task.id)
-    if (!delivered) return
+    // 同步占位，防止并发 dispatch 在 await saveTask 期间同时发第二张工单
+    this.inFlightDispatches.set(deviceId, task.id)
+    const dispatched: CloudTaskSnapshot = { ...task, dispatchedAt: this.now() }
+    const delivered = this.deps.hub.sendToDevice(
+      deviceId,
+      {
+        v: 1,
+        type: 'task',
+        seq: 0,
+        task: dispatched,
+      },
+      task.id
+    )
+    if (!delivered) {
+      if (this.inFlightDispatches.get(deviceId) === task.id) {
+        this.inFlightDispatches.delete(deviceId)
+      }
+      return
+    }
+    await store.saveTask(dispatched)
     // 投递成功不等于被接收：等终端 ack（`task_status: assigned`）才离开 queued
   }
 
   // ------------------------------ 设备回流 ------------------------------
+
+  private clearInFlight(deviceId: string, taskId: string): void {
+    if (this.inFlightDispatches.get(deviceId) === taskId) {
+      this.inFlightDispatches.delete(deviceId)
+    }
+  }
+
+  /** 向处于 waiting_human 的工单下发回答并恢复为 running */
+  async answerTask(taskId: string, text: string, questionId?: string): Promise<boolean> {
+    const task = this.deps.store.findTask(taskId)
+    if (!task || task.status !== 'waiting_human') return false
+    if (!this.deps.hub.isDeviceOnline(task.spec.deviceId)) return false
+    const now = this.now()
+    const moved = transition(task, 'running', { now })
+    if (!moved.changed) return false
+    const updated: CloudTaskSnapshot = { ...moved.task, question: undefined }
+    await this.deps.store.saveTask(updated)
+    this.publishTask(updated)
+    this.deps.hub.sendToDevice(
+      task.spec.deviceId,
+      {
+        v: 1,
+        type: 'task_answer',
+        taskId: task.id,
+        questionId: questionId ?? task.question?.id ?? `q-${now}`,
+        text,
+        at: now,
+      },
+      task.id
+    )
+    return true
+  }
 
   async handleDeviceFrame(deviceId: string, frame: DeviceToServerFrame): Promise<void> {
     switch (frame.type) {
@@ -238,11 +316,12 @@ export class TaskDispatcher {
         await this.onTaskStatus(deviceId, frame.taskId, frame.status, frame.at)
         return
       case 'task_worktree':
-        await this.onTaskWorktree(frame)
+        await this.onTaskWorktree(deviceId, frame)
         return
       case 'task_milestone': {
+        if (!frame.milestone || typeof frame.milestone.text !== 'string') return
         const task = this.deps.store.findTask(frame.taskId)
-        if (!task || isTerminalTaskStatus(task.status)) return
+        if (!task || task.spec.deviceId !== deviceId || isTerminalTaskStatus(task.status)) return
         const changes = frame.milestone.changedFiles
         const updated: CloudTaskSnapshot = {
           ...task,
@@ -260,19 +339,33 @@ export class TaskDispatcher {
         return
       }
       case 'task_question': {
+        if (typeof frame.text !== 'string') return
         const task = this.deps.store.findTask(frame.taskId)
-        if (!task) return
-        const moved = transition(task, 'waiting_human', { now: this.now() })
+        if (!task || task.spec.deviceId !== deviceId) return
+        const now = this.now()
+        const moved = transition(task, 'waiting_human', { now })
         if (moved.changed) {
-          await this.deps.store.saveTask(moved.task)
-          this.publishTask(moved.task)
+          const withQuestion: CloudTaskSnapshot = {
+            ...moved.task,
+            question: {
+              id: typeof frame.questionId === 'string' && frame.questionId ? frame.questionId : `q-${now}`,
+              text: frame.text,
+              at: typeof frame.at === 'number' ? frame.at : now,
+            },
+          }
+          await this.deps.store.saveTask(withQuestion)
+          this.publishTask(withQuestion)
+          await this.wake(withQuestion, 'question', frame.text)
+          return
         }
         await this.wake(moved.task, 'question', frame.text)
         return
       }
       case 'task_result': {
+        if (!frame.result || typeof frame.result.summary !== 'string') return
         const task = this.deps.store.findTask(frame.taskId)
-        if (!task) return
+        if (!task || task.spec.deviceId !== deviceId) return
+        this.clearInFlight(deviceId, task.id)
         const moved = transition(task, 'done', {
           now: this.now(),
           reason: 'completed',
@@ -295,8 +388,10 @@ export class TaskDispatcher {
         return
       }
       case 'task_failed': {
+        if (typeof frame.error !== 'string') return
         const task = this.deps.store.findTask(frame.taskId)
-        if (!task) return
+        if (!task || task.spec.deviceId !== deviceId) return
+        this.clearInFlight(deviceId, task.id)
         const moved = transition(task, 'failed', {
           now: this.now(),
           reason: 'failed',
@@ -313,8 +408,10 @@ export class TaskDispatcher {
         return
       }
       case 'task_interrupted': {
+        if (typeof frame.reason !== 'string') return
         const task = this.deps.store.findTask(frame.taskId)
-        if (!task) return
+        if (!task || task.spec.deviceId !== deviceId) return
+        this.clearInFlight(deviceId, task.id)
         // 服务端已先落终态时，后到的 interrupted 只是附注（F-21 终态优先级）
         const moved = transition(task, 'interrupted', {
           now: this.now(),
@@ -335,11 +432,11 @@ export class TaskDispatcher {
         return
       }
       case 'unit_closed': {
-        await this.onUnitClosed(frame)
+        await this.onUnitClosed(deviceId, frame)
         return
       }
       case 'unit_state': {
-        await this.onUnitState(frame)
+        await this.onUnitState(deviceId, frame)
         return
       }
       default:
@@ -355,6 +452,7 @@ export class TaskDispatcher {
   ): Promise<void> {
     const task = this.deps.store.findTask(taskId)
     if (!task || task.spec.deviceId !== deviceId) return
+    if (status !== 'queued') this.clearInFlight(deviceId, taskId)
     const moved = transition(task, status, { now: at || this.now() })
     if (!moved.changed) return
     await this.deps.store.saveTask(moved.task)
@@ -364,21 +462,23 @@ export class TaskDispatcher {
     }
   }
 
-  private async onTaskWorktree(frame: {
-    taskId: string
-    unitId: string
-    path: string
-    branch?: string
-  }): Promise<void> {
-    const unit = this.deps.store.findUnit(frame.unitId)
-    if (!unit) return
-    const updated = {
+  private async onTaskWorktree(
+    deviceId: string,
+    frame: {
+      taskId: string
+      unitId: string
+      path: string
+      branch?: string
+    }
+  ): Promise<void> {
+    const existing = this.deps.store.findUnit(frame.unitId)
+    if (!existing || existing.deviceId !== deviceId) return
+    const updated = await this.deps.store.patchUnit(frame.unitId, (unit) => ({
       ...unit,
       worktreePath: frame.path,
       branch: frame.branch ?? unit.branch,
-    }
-    await this.deps.store.saveUnit(updated)
-    this.publishUnit(updated)
+    }))
+    if (updated) this.publishUnit(updated)
   }
 
   // ------------------------------ 工作树回收（F-19a / A-43 / A-46） ------------------------------
@@ -449,16 +549,19 @@ export class TaskDispatcher {
   }
 
   /** 设备回执：只有这里才写 `closedAt`，避免“云端说回收了、磁盘还在” */
-  private async onUnitClosed(frame: {
-    unitId: string
-    removed: boolean
-    dirty: boolean
-    worktreePath?: string
-    branch?: string
-    error?: string
-  }): Promise<void> {
+  private async onUnitClosed(
+    deviceId: string,
+    frame: {
+      unitId: string
+      removed: boolean
+      dirty: boolean
+      worktreePath?: string
+      branch?: string
+      error?: string
+    }
+  ): Promise<void> {
     const unit = this.deps.store.findUnit(frame.unitId)
-    if (!unit) return
+    if (!unit || unit.deviceId !== deviceId) return
     await this.deps.store.settleUnitClose(frame.unitId, {
       removed: frame.removed,
       dirty: frame.dirty,
@@ -492,24 +595,30 @@ export class TaskDispatcher {
   }
 
   /** 兜底：设备启动/重连上报工作树状态，帮云端对齐“已收敛但树还留着”的单元 */
-  private async onUnitState(frame: {
-    unitId: string
-    clean: boolean
-    worktreePath?: string
-  }): Promise<void> {
+  private async onUnitState(
+    deviceId: string,
+    frame: {
+      unitId: string
+      clean: boolean
+      worktreePath?: string
+    }
+  ): Promise<void> {
     const unit = this.deps.store.findUnit(frame.unitId)
-    if (!unit) return
+    if (!unit || unit.deviceId !== deviceId) return
     if (frame.worktreePath && unit.worktreePath !== frame.worktreePath) {
-      const updated = { ...unit, worktreePath: frame.worktreePath }
-      await this.deps.store.saveUnit(updated)
-      this.publishUnit(updated)
+      const updated = await this.deps.store.patchUnit(frame.unitId, (current) => ({
+        ...current,
+        worktreePath: frame.worktreePath,
+      }))
+      if (updated) this.publishUnit(updated)
     }
     if (!frame.clean) return
-    if (unit.closedAt !== null) return
+    const latest = this.deps.store.findUnit(frame.unitId) ?? unit
+    if (latest.closedAt !== null) return
     if (this.hasOpenTaskInUnit(frame.unitId)) return
     // 已经请求过但设备一直没回执（旧终端不认 `close_unit`、或进程被杀）：
     // 超过 60 s 就重发一次，否则会永远卡在“回收中”
-    if (unit.closeRequestedAt !== undefined && this.now() - unit.closeRequestedAt < 60_000) return
+    if (latest.closeRequestedAt !== undefined && this.now() - latest.closeRequestedAt < 60_000) return
     await this.requestUnitClose(frame.unitId, 'sweep')
   }
 
@@ -527,6 +636,7 @@ export class TaskDispatcher {
     if (!task || isTerminalTaskStatus(task.status)) return false
     const moved = transition(task, 'cancelled', { now: this.now(), reason })
     if (!moved.changed) return false
+    this.clearInFlight(task.spec.deviceId, taskId)
     await this.deps.store.saveTask(moved.task)
     this.finish(moved.task)
 
@@ -551,6 +661,7 @@ export class TaskDispatcher {
   }
 
   async onDeviceOffline(deviceId: string): Promise<void> {
+    this.inFlightDispatches.delete(deviceId)
     const pending = tasksToCancelOnOffline(this.deps.store.listTasks(), deviceId)
     for (const task of pending) {
       await this.cancelTask(task.id, 'device-offline')
@@ -569,6 +680,7 @@ export class TaskDispatcher {
       if (isAckExpired(task, now, CLOUD_QUEUED_ACK_WINDOW_MS)) {
         const moved = transition(task, 'expired', { now, reason: 'ack-timeout' })
         if (!moved.changed) continue
+        this.clearInFlight(task.spec.deviceId, task.id)
         await this.deps.store.saveTask(moved.task)
         this.finish(moved.task)
         await this.wake(moved.task, 'expired', '工单超时未被终端接收（ack 窗口 60 s）')
@@ -616,13 +728,6 @@ export class TaskDispatcher {
   }
 
   // ------------------------------ 内部 ------------------------------
-
-  private async consumeAuthorization(
-    authorization: AuthorizationRecord,
-    sameUnit: boolean
-  ): Promise<void> {
-    await this.deps.store.saveAuthorization(consumeQuota(authorization, sameUnit))
-  }
 
   private finish(task: CloudTaskSnapshot): void {
     this.deps.hub.dropDeviceTask(task.spec.deviceId, task.id)

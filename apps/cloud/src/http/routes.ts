@@ -34,7 +34,7 @@ import {
   sessionCookieHeader,
   verifySessionCookie,
 } from '../auth/session-cookie.js'
-import { HttpError, Router, sendJson, type RequestContext } from './router.js'
+import { HttpError, isAllowedOrigin, Router, sendJson, type RequestContext } from './router.js'
 import { decryptSecret, encryptSecret, maskSecret } from '../secure/config-crypto.js'
 import {
   DEFAULT_AUTHORIZATION_TTL_MS,
@@ -56,6 +56,8 @@ export interface RouteDeps {
   probeConfig: (
     input: { providerId: string; apiKey: string }
   ) => Promise<{ ok: true; warning?: string } | { ok: false; reason: string }>
+  /** 撤销设备后立即断开在线连接（可选，兼容只测 HTTP 的单测） */
+  onDeviceRevoked?: (deviceId: string) => void
   logger: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void }
 }
 
@@ -77,7 +79,20 @@ function decryptCredential(
 export function buildRouter(deps: RouteDeps): Router {
   const router = new Router()
 
+  /** 限制并发 scrypt 次数，防止未鉴权并发登录瞬间打爆服务器内存 */
+  const MAX_CONCURRENT_SCRYPT = 4
+  let activeScrypt = 0
+
+  const assertSameOriginForCookieMutation = (ctx: RequestContext): void => {
+    const method = (ctx.req.method ?? 'GET').toUpperCase()
+    if (method === 'GET' || method === 'HEAD') return
+    if (!isAllowedOrigin(ctx.req)) {
+      throw new HttpError(403, 'Cross-origin request rejected', 'forbidden-origin')
+    }
+  }
+
   const requireSession = (ctx: RequestContext): void => {
+    assertSameOriginForCookieMutation(ctx)
     const value = readCookie(ctx.req.headers.cookie, SESSION_COOKIE)
     const payload = verifySessionCookie(deps.config.cookieSecret, value)
     if (!payload) throw new HttpError(401, 'Login required', 'unauthorized')
@@ -137,17 +152,31 @@ export function buildRouter(deps: RouteDeps): Router {
   })
 
   router.post('/v1/login', async (ctx) => {
+    assertSameOriginForCookieMutation(ctx)
     const account = deps.store.getAccount()
     if (!account) throw new HttpError(409, 'No account yet', 'conflict')
     const source = ctx.source
-    if (!deps.loginLimiter.canAttempt(source).allowed) {
+    // 先读并校验请求体，再原子占位限流，防止慢速/并发连接同时越过 canAttempt
+    const body = await ctx.json<{ password?: string }>(16 * 1024)
+    const lease = deps.loginLimiter.tryAcquire(source)
+    if (!lease.allowed) {
       throw new HttpError(429, CREDENTIAL_ERROR, 'rate-limited')
     }
-    const body = await ctx.json<{ password?: string }>()
-    const ok = await verifyPassword(String(body.password ?? ''), {
-      hash: account.passwordHash,
-      salt: account.salt,
-    })
+    if (activeScrypt >= MAX_CONCURRENT_SCRYPT) {
+      lease.release()
+      throw new HttpError(429, CREDENTIAL_ERROR, 'rate-limited')
+    }
+    activeScrypt += 1
+    let ok = false
+    try {
+      ok = await verifyPassword(String(body.password ?? ''), {
+        hash: account.passwordHash,
+        salt: account.salt,
+      })
+    } finally {
+      activeScrypt -= 1
+      lease.release()
+    }
     if (!ok) {
       deps.loginLimiter.recordFailure(source)
       throw new HttpError(401, CREDENTIAL_ERROR, CREDENTIAL_ERROR)
@@ -162,16 +191,17 @@ export function buildRouter(deps: RouteDeps): Router {
   })
 
   router.post('/v1/logout', (ctx) => {
+    assertSameOriginForCookieMutation(ctx)
     ctx.res.setHeader('Set-Cookie', clearSessionCookieHeader(deps.config.secureCookies))
     return { ok: true }
   })
 
   /** F-04：6 位纯数字、一次性、5 分钟、只显示一次 */
-  router.post('/v1/pair/code', (ctx) => {
+  router.post('/v1/pair/code', async (ctx) => {
     requireSession(ctx)
     const code = createPairingCode()
     const hashed = hashToken(code)
-    void deps.store.issuePairingCode({ codeHash: hashed.hash, salt: hashed.salt })
+    await deps.store.issuePairingCode({ codeHash: hashed.hash, salt: hashed.salt })
     return { code, expiresAt: Date.now() + PAIRING_CODE_TTL_MS }
   })
 
@@ -181,37 +211,40 @@ export function buildRouter(deps: RouteDeps): Router {
    */
   router.post('/v1/pair', async (ctx) => {
     const source = ctx.source
-    const gate = deps.pairLimiter.canAttempt(source)
-    if (!gate.allowed) throw new HttpError(429, CREDENTIAL_ERROR, 'rate-limited')
-
     const body = await ctx.json<{
       code?: string
       deviceName?: string
       platform?: string
       workspaces?: CloudWorkspaceInfo[]
-    }>()
-    const code = String(body.code ?? '').trim()
-    if (!/^\d{6}$/.test(code)) {
-      deps.pairLimiter.recordFailure(source)
-      throw new HttpError(401, CREDENTIAL_ERROR, CREDENTIAL_ERROR)
-    }
+    }>(64 * 1024)
+    const lease = deps.pairLimiter.tryAcquire(source)
+    if (!lease.allowed) throw new HttpError(429, CREDENTIAL_ERROR, 'rate-limited')
 
-    // 用每个未使用码的 salt 逐条比对哈希
-    const candidates = deps.store.listPairingCodes()
-    let consumed: string | null = null
-    for (const candidate of candidates) {
-      const hashed = hashToken(code, candidate.salt)
-      if (hashed.hash !== candidate.hash) continue
-      const record = await deps.store.consumePairingCode(hashed.hash)
-      if (!record) break
-      consumed = hashed.hash
-      break
+    try {
+      const code = String(body.code ?? '').trim()
+      if (!/^\d{6}$/.test(code)) {
+        deps.pairLimiter.recordFailure(source)
+        throw new HttpError(401, CREDENTIAL_ERROR, CREDENTIAL_ERROR)
+      }
+
+      // 用每个未使用码的 salt 逐条常量时间比对哈希
+      const candidates = deps.store.listPairingCodes()
+      let consumed: string | null = null
+      for (const candidate of candidates) {
+        if (!verifyToken(code, candidate)) continue
+        const record = await deps.store.consumePairingCode(candidate.hash)
+        if (!record) break
+        consumed = candidate.hash
+        break
+      }
+      if (!consumed) {
+        deps.pairLimiter.recordFailure(source)
+        throw new HttpError(401, CREDENTIAL_ERROR, CREDENTIAL_ERROR)
+      }
+      deps.pairLimiter.recordSuccess(source)
+    } finally {
+      lease.release()
     }
-    if (!consumed) {
-      deps.pairLimiter.recordFailure(source)
-      throw new HttpError(401, CREDENTIAL_ERROR, CREDENTIAL_ERROR)
-    }
-    deps.pairLimiter.recordSuccess(source)
 
     const token = createToken()
     const deviceId = `dev-${randomBytes(4).toString('hex')}`
@@ -246,12 +279,24 @@ export function buildRouter(deps: RouteDeps): Router {
     return { devices: deps.dispatcher.deviceSnapshots() }
   })
 
-  /** F-08：解绑 → 该端重连 401，提示「已被云端移除」 */
+  /** F-08：解绑 → 立即断开在线 WS，后续重连 401；允许管理员会话或设备本人自吊销 */
   router.delete('/v1/devices/:id', async (ctx) => {
-    requireSession(ctx)
+    let authorized = false
+    try {
+      requireSession(ctx)
+      authorized = true
+    } catch {
+      const self = requireDevice(ctx)
+      if (self.id !== ctx.params.id) {
+        throw new HttpError(403, 'A device may only revoke itself', 'forbidden')
+      }
+      authorized = true
+    }
+    if (!authorized) throw new HttpError(401, 'Unauthorized', 'unauthorized')
     const device = deps.store.findDevice(ctx.params.id)
     if (!device) throw new HttpError(404, 'Unknown device')
     await deps.store.updateDevice(device.id, { revokedAt: Date.now() })
+    deps.onDeviceRevoked?.(device.id)
     return { ok: true }
   })
 

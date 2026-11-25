@@ -8,6 +8,7 @@
 import { handleIpc } from './register.js'
 import { getAppDir } from '../app-paths.js'
 import { getCoordinator } from '../worktree-coordinator.js'
+import { canonicalizePath, isTrustedWorkspacePath, normalizeForComparison } from '../workspace-trust.js'
 import { activeProviderConfig } from '../providers-service.js'
 import {
   clearCloudLink,
@@ -66,6 +67,16 @@ async function ensureAgent(context: CloudIpcContext): Promise<DeviceAgent> {
     logger: context.logger,
     dataDir: `${getAppDir()}/data/cloud`,
     getWorkspaces: async () => describeWorkspaces(context.listWorkspacePaths()),
+    isAllowedWorkspace: (workspacePath: string) => {
+      if (isTrustedWorkspacePath(workspacePath)) return true
+      const target = canonicalizePath(workspacePath)
+      if (!target) return false
+      const normalized = normalizeForComparison(target)
+      return context.listWorkspacePaths().some((item) => {
+        const canonical = canonicalizePath(item)
+        return canonical !== null && normalizeForComparison(canonical) === normalized
+      })
+    },
     getApiConfig: async () => {
       // 设备端只上报 provider / 模型 / 指纹，从不把 Key 或片段发给云端（A5）
       const active = await activeProviderConfig()
@@ -192,18 +203,24 @@ export function registerCloudIpc(context: CloudIpcContext): void {
     clientBridge?.close()
     clientBridge = null
     const link = readCloudLink()
-    if (link && deviceAgent) await deviceAgent.unlink()
+    const agent = deviceAgent
+    // 必须置空 deviceAgent：unlink 会把内部 runner.disposed 置 true，否则同进程重新配对会永久丢单
+    deviceAgent = null
+    if (link && agent) await agent.unlink()
     await clearCloudLink()
-    // 尽力通知云端吊销；失败不影响本机解绑
+    // 尽力通知云端吊销（服务端已支持设备用自身 Bearer Token 自吊销并踢线）
     if (link) {
       try {
         const token = readCloudToken(link)
         if (token) {
-          await fetch(`${link.baseUrl}/v1/devices/${encodeURIComponent(link.deviceId)}`, {
+          const response = await fetch(`${link.baseUrl}/v1/devices/${encodeURIComponent(link.deviceId)}`, {
             method: 'DELETE',
             headers: { authorization: `Bearer ${token}` },
             signal: AbortSignal.timeout(8_000),
           })
+          if (!response.ok) {
+            context.logger.warn(`[Cloud] revoke returned HTTP ${response.status}`)
+          }
         }
       } catch (error) {
         context.logger.warn('[Cloud] failed to revoke the device on the cloud:', error)

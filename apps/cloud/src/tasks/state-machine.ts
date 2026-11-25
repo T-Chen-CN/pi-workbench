@@ -83,9 +83,12 @@ export function tasksToCancelOnOffline(tasks: CloudTaskSnapshot[], deviceId: str
   )
 }
 
-/** `queued` 超时未 ack（F-21：窗口 60 s） */
+/** `queued` 超时未 ack（F-21：窗口 60 s）；尚未下发（dispatchedAt === null，仍在 FIFO 排队）不计超时 */
 export function isAckExpired(task: CloudTaskSnapshot, now: number, windowMs: number): boolean {
-  return task.status === 'queued' && now - task.createdAt > windowMs
+  if (task.status !== 'queued') return false
+  if (task.dispatchedAt === null) return false
+  const since = task.dispatchedAt ?? task.createdAt
+  return now - since > windowMs
 }
 
 /** `waiting_human` 超时（F-25：2 小时 → failed） */

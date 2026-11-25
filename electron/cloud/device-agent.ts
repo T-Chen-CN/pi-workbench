@@ -63,6 +63,8 @@ export interface DeviceAgentDeps {
   getWorkspaces: () => Promise<
     Array<{ path: string; name: string; remote?: string; defaultBranch?: string; isGit: boolean }>
   >
+  /** 校验云端下发的 repo 路径是否属于受信任工作区（可选；省略时按 getWorkspaces() 列表校验） */
+  isAllowedWorkspace?: (workspacePath: string) => boolean | Promise<boolean>
   getApiConfig: CloudTaskRunnerDeps_Pick
   getCoordinator: CloudTaskRunnerDeps_Coordinator
   onStateChange?: (state: DeviceLinkState) => void
@@ -96,6 +98,15 @@ export class DeviceAgent {
     this.runner = new CloudTaskRunner({
       logger: deps.logger,
       dataDir: deps.dataDir,
+      isAllowedWorkspace: async (workspacePath: string) => {
+        if (deps.isAllowedWorkspace) {
+          return await deps.isAllowedWorkspace(workspacePath)
+        }
+        const workspaces = await deps.getWorkspaces()
+        const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+        const target = norm(workspacePath)
+        return workspaces.some((ws) => norm(ws.path) === target)
+      },
       getApiConfig: deps.getApiConfig,
       getCoordinator: deps.getCoordinator,
       onStatus: (taskId, status) => this.send({ type: 'task_status', taskId, status, at: Date.now() }),

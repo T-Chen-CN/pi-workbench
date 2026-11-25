@@ -99,11 +99,41 @@ export class Router {
 
 const MAX_BODY_BYTES = 256 * 1024
 
+function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
+}
+
+/** 只在来自本机反代（Caddy）时信任 X-Forwarded-For 末跳或 X-Real-IP，防客户端伪造 XFF 绕过限速 */
 export function sourceOf(req: IncomingMessage): string {
-  const forwarded = req.headers['x-forwarded-for']
-  const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded
-  const first = raw?.split(',')[0]?.trim()
-  return first || req.socket.remoteAddress || 'unknown'
+  const remote = req.socket.remoteAddress
+  if (isLoopbackAddress(remote)) {
+    const realIp = req.headers['x-real-ip']
+    const realValue = (Array.isArray(realIp) ? realIp[0] : realIp)?.trim()
+    if (realValue) return realValue
+    const forwarded = req.headers['x-forwarded-for']
+    const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded
+    const hops = raw
+      ?.split(',')
+      .map((part) => part.trim())
+      .filter(Boolean)
+    const last = hops && hops.length > 0 ? hops[hops.length - 1] : undefined
+    if (last) return last
+  }
+  return remote || 'unknown'
+}
+
+/** 校验浏览器请求 Origin 与当前 Host 一致（防 CSWSH 与跨站 CSRF） */
+export function isAllowedOrigin(req: IncomingMessage): boolean {
+  const origin = req.headers.origin
+  if (!origin) return true
+  const host = req.headers.host
+  if (!host) return false
+  try {
+    return new URL(origin).host.toLowerCase() === host.toLowerCase()
+  } catch {
+    return false
+  }
 }
 
 export async function readJsonBody<T>(req: IncomingMessage, limitBytes = MAX_BODY_BYTES): Promise<T> {

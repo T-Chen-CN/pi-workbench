@@ -279,6 +279,22 @@ export class CloudStore {
     }))
   }
 
+  /** 在写锁内增量修改单元，避免并发帧（如 task_worktree vs unit_closed）互相覆写 closedAt */
+  async patchUnit(
+    unitId: string,
+    mutate: (unit: UnitRecord) => UnitRecord
+  ): Promise<UnitRecord | undefined> {
+    let updated: UnitRecord | undefined
+    await this.units.update((current) => ({
+      units: current.units.map((unit) => {
+        if (unit.unitId !== unitId) return unit
+        updated = mutate(unit)
+        return updated
+      }),
+    }))
+    return updated
+  }
+
   /**
    * 设备回执：`dirty` 时不写 `closedAt`（保留 = 还要用户处理），只记 `dirtyAt`；
    * 带 `error` 的回执也不能写：删树失败却标已回收，就是“云端说回收了、磁盘还在”。
@@ -357,6 +373,24 @@ export class CloudStore {
       .get()
       .items.filter((item) => !item.revokedAt && item.expiresAt > now)
       .sort((a, b) => b.confirmedAt - a.confirmedAt)
+  }
+
+  /** 在写锁内原子执行授权校验与扣减，避免并发 dispatch 绕过配额（TOCTOU） */
+  async updateAuthorization(
+    id: string,
+    mutate: (current: AuthorizationRecord | undefined) => AuthorizationRecord | undefined
+  ): Promise<AuthorizationRecord | undefined> {
+    let result: AuthorizationRecord | undefined
+    await this.authorizations.update((doc) => {
+      const existing = doc.items.find((item) => item.id === id)
+      const next = mutate(existing)
+      result = next
+      if (!next) return doc
+      return {
+        items: [...doc.items.filter((item) => item.id !== id), next],
+      }
+    })
+    return result
   }
 
   async saveAuthorization(record: AuthorizationRecord): Promise<void> {

@@ -107,10 +107,16 @@ describe('健壮性', () => {
     await expect(handler(undefined, undefined)).resolves.toBeUndefined()
   })
 
-  it('没有 cwd 时不做判断（不能因为信息缺失误伤）', async () => {
+  it('写/命令工具缺失 cwd 时 fail-closed 拦截', async () => {
     const handler = captureHandler()
     await expect(
       handler({ toolName: 'write', input: { path: '/etc/passwd' } }, {})
-    ).resolves.toBeUndefined()
+    ).resolves.toMatchObject({ block: true })
+  })
+
+  it('拦相对通配符 rm -rf ../* 与多行 git push 绕过', async () => {
+    expect((await invoke('bash', { command: 'rm -rf ../*' }))?.block).toBe(true)
+    expect((await invoke('bash', { command: 'rm --recursive --force ../other' }))?.block).toBe(true)
+    expect((await invoke('bash', { command: 'git \\\n push origin main' }))?.block).toBe(true)
   })
 })

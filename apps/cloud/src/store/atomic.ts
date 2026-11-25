@@ -32,9 +32,12 @@ export async function writeJsonAtomic(
     handle = await fs.open(tmpPath, 'w', 0o600)
     await handle.writeFile(content, 'utf-8')
     await handle.sync()
-  } finally {
-    await handle?.close()
+  } catch (error) {
+    await handle?.close().catch(() => {})
+    await fs.rm(tmpPath, { force: true }).catch(() => {})
+    throw error
   }
+  await handle.close()
 
   if (options.backup) {
     try {
@@ -49,17 +52,20 @@ export async function writeJsonAtomic(
   try {
     await fs.rename(tmpPath, filePath)
   } catch (error) {
-    await fs.rm(tmpPath, { force: true })
+    await fs.rm(tmpPath, { force: true }).catch(() => {})
     throw error
   }
 }
 
 export async function readJson<T>(filePath: string, fallback: T): Promise<T> {
-  try {
-    return JSON.parse(await fs.readFile(filePath, 'utf-8')) as T
-  } catch {
-    return fallback
+  for (const candidate of [filePath, `${filePath}.bak`]) {
+    try {
+      return JSON.parse(await fs.readFile(candidate, 'utf-8')) as T
+    } catch {
+      // 尝试回退 .bak
+    }
   }
+  return fallback
 }
 
 /**
@@ -87,24 +93,26 @@ export class JsonDoc<T> {
     return this.value
   }
 
-  /** 修改后再落盘；返回落盘完成（不是发起落盘）的 Promise */
+  /** 修改后再落盘；单次 I/O 失败不会毒化后续写队列 */
   async update(mutate: (current: T) => T | void): Promise<T> {
     const next = mutate(this.value) ?? this.value
     this.value = next
-    this.queue = this.queue.then(() =>
+    const run = this.queue.then(() =>
       writeJsonAtomic(this.filePath, this.value, { backup: true })
     )
-    await this.queue
+    this.queue = run.catch(() => undefined)
+    await run
     return this.value
   }
 
   /** 直接替换整份文档（用于一次性重置） */
   async replace(next: T): Promise<void> {
     this.value = next
-    this.queue = this.queue.then(() =>
+    const run = this.queue.then(() =>
       writeJsonAtomic(this.filePath, this.value, { backup: true })
     )
-    await this.queue
+    this.queue = run.catch(() => undefined)
+    await run
   }
 
   /** 等到在途写入结束；退出流程用 */

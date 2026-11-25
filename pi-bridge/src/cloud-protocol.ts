@@ -307,11 +307,15 @@ export interface CloudTaskSnapshot {
   status: CloudTaskStatus
   idempotencyKey: string
   createdAt: number
+  /** 实际下发给终端的时间；`null` 表示仍在 FIFO 队列等前序工单，不计入 60s ACK 超时 */
+  dispatchedAt?: number | null
   updatedAt: number
   startedAt?: number
   finishedAt?: number
   terminalReason?: CloudTaskTerminalReason
   progress: CloudTaskProgress
+  /** 当前等待回答的问题（status === 'waiting_human' 时存在） */
+  question?: { id: string; text: string; at: number }
   error?: string
 }
 

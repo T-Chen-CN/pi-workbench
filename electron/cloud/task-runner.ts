@@ -29,8 +29,18 @@ import { getModelsStore } from '../models-store.js'
 
 const execFileAsync = promisify(execFile)
 
-/** 工单会话允许的工具：读、写、搜、看、跑命令；其余一律不激活 */
-export const TASK_TOOL_ALLOWLIST = ['read', 'ls', 'grep', 'find', 'edit', 'write', 'bash']
+/** 工单会话允许的工具：读、写、搜、看、跑命令与 ask_cloud；其余一律不激活 */
+export const TASK_TOOL_ALLOWLIST = [
+  'read',
+  'ls',
+  'grep',
+  'find',
+  'edit',
+  'write',
+  'bash',
+  ...(process.platform === 'win32' ? ['powershell'] : []),
+  'ask_cloud',
+]
 
 /** 进度上报节流：终端一轮里可能几十次工具调用，全推上去会把通道打满 */
 const MILESTONE_THROTTLE_MS = 2_000
@@ -84,6 +94,8 @@ export interface CloudTaskRunnerDeps {
     overrides?: Record<string, { contextWindow?: number; maxTokens?: number }>
     fingerprint: string
   } | null>
+  /** 工作区白名单校验：绝不允许在未登记/未受信任目录建 worktree 或跑 auto 权限 Agent */
+  isAllowedWorkspace?: (workspacePath: string) => boolean | Promise<boolean>
   /** 工作树协调器；非 git 仓库返回 null（G10 由此拒绝派活） */
   getCoordinator: (
     repoPath: string
@@ -176,6 +188,12 @@ export class CloudTaskRunner {
   private manager: any = null
   private managerKey = ''
   private active = new Map<string, ActiveTask>()
+  /** 正在准备阶段（建 worktree / 建会话）的工单：防并发 start 与 closeUnit 竞态 */
+  private starting = new Map<string, string>()
+  /** 按工作单元串行化 worktree 创建与回收，避免并发 start 建重复 worktree */
+  private unitLocks = new Map<string, Promise<unknown>>()
+  /** 单设备串行启动锁：确保同一设备并发收到多条 task 帧时严格 FIFO 执行 */
+  private startChain: Promise<void> = Promise.resolve()
   private units = new Map<string, UnitRecord>()
   private persistedTasks = new Map<string, PersistedTask>()
   private cancelRequested = new Set<string>()
@@ -183,6 +201,20 @@ export class CloudTaskRunner {
 
   constructor(deps: CloudTaskRunnerDeps) {
     this.deps = deps
+  }
+
+  private withUnitLock<T>(unitId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.unitLocks.get(unitId) ?? Promise.resolve()
+    const run = prev.catch(() => undefined).then(fn)
+    const tail = run.then(
+      () => undefined,
+      () => undefined
+    )
+    this.unitLocks.set(unitId, tail)
+    void tail.then(() => {
+      if (this.unitLocks.get(unitId) === tail) this.unitLocks.delete(unitId)
+    })
+    return run
   }
 
   private unitsFile(): string {
@@ -194,6 +226,7 @@ export class CloudTaskRunner {
   }
 
   async load(): Promise<void> {
+    this.disposed = false
     await fs.mkdir(this.deps.dataDir, { recursive: true })
     const units = readJsonWithBackup<Record<string, UnitRecord>>(this.unitsFile())
     if (units.data && typeof units.data === 'object') {
@@ -243,41 +276,52 @@ export class CloudTaskRunner {
     await writeJsonAtomic(this.tasksFile(), data)
   }
 
-  /** 该单元的工作树；没有就新建一个（G12：一单元一条绑定） */
+  /** 该单元的工作树；没有就新建一个（G12：一单元一条绑定，同单元加锁防并发重复建树） */
   private async ensureUnitWorktree(spec: CloudTaskSpec): Promise<{
     ok: boolean
     error?: string
     record?: UnitRecord
   }> {
-    const existing = this.units.get(spec.workUnitId)
-    if (existing && existsSync(existing.worktreePath)) return { ok: true, record: existing }
+    return this.withUnitLock(spec.workUnitId, async () => {
+      const existing = this.units.get(spec.workUnitId)
+      if (existing && existsSync(existing.worktreePath)) return { ok: true, record: existing }
 
-    const repoPath = spec.repo.workspacePath
-    if (!existsSync(repoPath)) return { ok: false, error: `Repository not found: ${repoPath}` }
-    const coordinator = await this.deps.getCoordinator(repoPath)
-    if (!coordinator) {
-      return {
-        ok: false,
-        error: 'Not a git repository — delegated tasks need a worktree for isolation',
+      const repoPath = spec.repo.workspacePath
+      if (this.deps.isAllowedWorkspace) {
+        const allowed = await this.deps.isAllowedWorkspace(repoPath)
+        if (!allowed) {
+          return {
+            ok: false,
+            error: `Workspace is not trusted or registered on this device: ${repoPath}`,
+          }
+        }
       }
-    }
+      if (!existsSync(repoPath)) return { ok: false, error: `Repository not found: ${repoPath}` }
+      const coordinator = await this.deps.getCoordinator(repoPath)
+      if (!coordinator) {
+        return {
+          ok: false,
+          error: 'Not a git repository — delegated tasks need a worktree for isolation',
+        }
+      }
 
-    const bindingId = `${UNIT_BINDING_PREFIX}${spec.workUnitId}`
-    const base = spec.repo.baseBranch
-    const bound = await coordinator.bind(bindingId, 'new', base)
-    if (!bound.success || !bound.worktree) {
-      return { ok: false, error: bound.error ?? 'Unable to create a worktree for this task' }
-    }
-    const record: UnitRecord = {
-      repoPath,
-      worktreePath: bound.worktree.path,
-      branch: bound.worktree.branch,
-      base,
-      createdAt: Date.now(),
-    }
-    this.units.set(spec.workUnitId, record)
-    await this.persistUnits()
-    return { ok: true, record }
+      const bindingId = `${UNIT_BINDING_PREFIX}${spec.workUnitId}`
+      const base = spec.repo.baseBranch
+      const bound = await coordinator.bind(bindingId, 'new', base)
+      if (!bound.success || !bound.worktree) {
+        return { ok: false, error: bound.error ?? 'Unable to create a worktree for this task' }
+      }
+      const record: UnitRecord = {
+        repoPath,
+        worktreePath: bound.worktree.path,
+        branch: bound.worktree.branch,
+        base,
+        createdAt: Date.now(),
+      }
+      this.units.set(spec.workUnitId, record)
+      await this.persistUnits()
+      return { ok: true, record }
+    })
   }
 
   /** 复用用户当前 API 配置，按需建一个专属 AgentManager（独立 agentDir） */
@@ -406,86 +450,129 @@ export class CloudTaskRunner {
   }
 
   async start(taskId: string, spec: CloudTaskSpec, attempt = 0): Promise<void> {
+    if (attempt > 0) {
+      return this.runStart(taskId, spec, attempt)
+    }
     if (this.disposed) return
-    if (this.active.has(taskId)) {
+    if (this.active.has(taskId) || this.starting.has(taskId)) {
       this.deps.logger.warn(`[Cloud Task] task ${taskId} is already running`)
       return
     }
-    // 先回一张 `assigned`：云端 `queued` 表示“已生成、终端未 ack”，而下面建工作树、建会话都可能失败。
-    // 不回这一帧，失败就落在云端不允许的 `queued → failed` 上，工单会永远挂在执行中并堵住 FIFO。
-    if (attempt === 0) this.deps.onStatus(taskId, 'assigned')
+    // 立即登记启动占位，阻断同一单元在准备期被 closeUnit 误删
+    this.starting.set(taskId, spec.workUnitId)
+    const run = this.startChain
+      .catch(() => undefined)
+      .then(() => this.runStart(taskId, spec, 0))
+    this.startChain = run.catch(() => undefined)
+    return run
+  }
 
-    const worktree = await this.ensureUnitWorktree(spec)
-    if (!worktree.ok || !worktree.record) {
-      // 树都没建起来：云端那个单元没有 worktree 可收，按「干净」报一次让它能收口
-      this.deps.onFailed(taskId, worktree.error ?? 'Unable to prepare the worktree', undefined, true)
+  private async runStart(taskId: string, spec: CloudTaskSpec, attempt: number): Promise<void> {
+    if (this.disposed) {
+      this.starting.delete(taskId)
       return
     }
-    const unit = worktree.record
-    this.deps.onWorktree(taskId, spec.workUnitId, unit.worktreePath, unit.branch ?? undefined)
-
-    let manager: any
+    if (this.cancelRequested.has(taskId)) {
+      this.starting.delete(taskId)
+      this.cancelRequested.delete(taskId)
+      return
+    }
     try {
-      manager = await this.ensureManager()
-    } catch (error) {
-      const reused = attempt === 0 && (await this.retryAfterConfigRefresh(taskId, spec))
-      if (!reused) {
-        // 准备阶段就失败（未配 Key 最常见）：必须带上 worktreeClean，否则云端不会回收这棵树
-        await this.failWithWorktree(taskId, error instanceof Error ? error.message : String(error), unit.worktreePath)
+      // 先回一张 `assigned`：云端 `queued` 表示“已生成、终端未 ack”，而下面建工作树、建会话都可能失败。
+      // 不回这一帧，失败就落在云端不允许的 `queued → failed` 上，工单会永远挂在执行中并堵住 FIFO。
+      if (attempt === 0) this.deps.onStatus(taskId, 'assigned')
+
+      const worktree = await this.ensureUnitWorktree(spec)
+      if (!worktree.ok || !worktree.record) {
+        // 树都没建起来：云端那个单元没有 worktree 可收，按「干净」报一次让它能收口
+        this.deps.onFailed(taskId, worktree.error ?? 'Unable to prepare the worktree', undefined, true)
+        return
       }
-      return
-    }
+      const unit = worktree.record
+      this.deps.onWorktree(taskId, spec.workUnitId, unit.worktreePath, unit.branch ?? undefined)
 
-    let sessionId = ''
-    try {
-      const created = await manager.createSession(unit.worktreePath, {
-        permission: { mode: 'auto', grants: [] },
+      let manager: any
+      try {
+        manager = await this.ensureManager()
+      } catch (error) {
+        const reused = attempt === 0 && (await this.retryAfterConfigRefresh(taskId, spec))
+        if (!reused) {
+          // 准备阶段就失败（未配 Key 最常见）：必须带上 worktreeClean，否则云端不会回收这棵树
+          await this.failWithWorktree(taskId, error instanceof Error ? error.message : String(error), unit.worktreePath)
+        }
+        return
+      }
+
+      let sessionId = ''
+      try {
+        const created = await manager.createSession(unit.worktreePath, {
+          permission: { mode: 'auto', grants: [] },
+        })
+        // 严禁在 createSession 失败时回落到 getCurrentSessionId()，否则会静默劫持上一张工单的会话与 worktree
+        if (created && created.success === false) {
+          await this.failWithWorktree(
+            taskId,
+            String(created.error ?? 'Unable to create a task session'),
+            unit.worktreePath
+          )
+          return
+        }
+        sessionId = String(created?.session?.id ?? created?.sessionId ?? created?.id ?? '')
+      } catch (error) {
+        await this.failWithWorktree(taskId, error instanceof Error ? error.message : String(error), unit.worktreePath)
+        return
+      }
+      if (!sessionId) {
+        await this.failWithWorktree(taskId, 'Unable to create a task session', unit.worktreePath)
+        return
+      }
+
+      if (this.cancelRequested.has(taskId)) {
+        this.cancelRequested.delete(taskId)
+        const clean = await this.isWorktreeClean(unit.worktreePath)
+        this.deps.onInterrupted(taskId, 'user-cancel', clean)
+        return
+      }
+
+      const task: ActiveTask = {
+        id: taskId,
+        spec,
+        unitId: spec.workUnitId,
+        repoPath: spec.repo.workspacePath,
+        worktreePath: unit.worktreePath,
+        sessionId,
+        status: 'assigned',
+        startedAt: Date.now(),
+        lastMilestoneAt: 0,
+        changed: new Map(),
+        awaitingAnswer: false,
+      }
+      this.active.set(taskId, task)
+      this.starting.delete(taskId)
+      this.persistedTasks.set(taskId, {
+        id: taskId,
+        unitId: spec.workUnitId,
+        repoPath: task.repoPath,
+        worktreePath: unit.worktreePath,
+        status: 'assigned',
+        startedAt: task.startedAt,
       })
-      sessionId = String(created?.sessionId ?? created?.id ?? manager.getCurrentSessionId?.() ?? '')
-    } catch (error) {
-      await this.failWithWorktree(taskId, error instanceof Error ? error.message : String(error), unit.worktreePath)
-      return
-    }
-    if (!sessionId) {
-      await this.failWithWorktree(taskId, 'Unable to create a task session', unit.worktreePath)
-      return
-    }
+      await this.persistTasks()
+      this.setStatus(taskId, 'assigned')
 
-    const task: ActiveTask = {
-      id: taskId,
-      spec,
-      unitId: spec.workUnitId,
-      repoPath: spec.repo.workspacePath,
-      worktreePath: unit.worktreePath,
-      sessionId,
-      status: 'assigned',
-      startedAt: Date.now(),
-      lastMilestoneAt: 0,
-      changed: new Map(),
-      awaitingAnswer: false,
+      try {
+        manager.subscribeTrace?.(sessionId, (event: any) => this.onTrace(task, event))
+      } catch (error) {
+        this.deps.logger.warn('[Cloud Task] failed to subscribe trace:', error)
+      }
+
+      this.setStatus(taskId, 'running')
+      this.deps.onMilestone(taskId, { kind: 'accepted', text: '已接单，开始执行', at: Date.now() })
+
+      await this.runTurn(task, spec, buildTaskPrompt(spec, unit.worktreePath))
+    } finally {
+      this.starting.delete(taskId)
     }
-    this.active.set(taskId, task)
-    this.persistedTasks.set(taskId, {
-      id: taskId,
-      unitId: spec.workUnitId,
-      repoPath: task.repoPath,
-      worktreePath: unit.worktreePath,
-      status: 'assigned',
-      startedAt: task.startedAt,
-    })
-    await this.persistTasks()
-    this.setStatus(taskId, 'assigned')
-
-    try {
-      manager.subscribeTrace?.(sessionId, (event: any) => this.onTrace(task, event))
-    } catch (error) {
-      this.deps.logger.warn('[Cloud Task] failed to subscribe trace:', error)
-    }
-
-    this.setStatus(taskId, 'running')
-    this.deps.onMilestone(taskId, { kind: 'accepted', text: '已接单，开始执行', at: Date.now() })
-
-    void this.runTurn(task, spec, buildTaskPrompt(spec, unit.worktreePath))
   }
 
   /** 配置刚改过时允许重试一次（例如用户刚在设置里填好 Key） */
@@ -665,67 +752,72 @@ export class CloudTaskRunner {
    * （脏树保留 / 干净且无新提交删树删分支 / 有提交只删目录保留 `pi/*` 分支）。
    */
   async closeUnit(unitId: string): Promise<{ ok: boolean; error?: string }> {
-    const record = this.units.get(unitId)
-    for (const task of this.active.values()) {
-      // 云端已拦过；终端再兜一次，绝不在工单还在写文件时回收
-      if (task.unitId === unitId) return { ok: false, error: 'task-running' }
-    }
-    if (!record) {
-      // 没有台账（已回收 / 从未建树）：告知云端可以收口
-      this.deps.onUnitClosed(unitId, { removed: false, dirty: false })
-      return { ok: true }
-    }
-
-    const coordinator = await this.deps.getCoordinator(record.repoPath)
-    if (!coordinator) {
-      this.deps.onUnitClosed(unitId, {
-        removed: false,
-        dirty: false,
-        worktreePath: record.worktreePath,
-        branch: record.branch ?? undefined,
-        error: 'not-a-repo',
-      })
-      return { ok: false, error: 'not-a-repo' }
-    }
-
-    const binding = `${UNIT_BINDING_PREFIX}${unitId}`
-    let released: Awaited<ReturnType<typeof coordinator.release>>
-    try {
-      // 脏树那一次 `release()` 已经把绑定删了（但树留着）：不重挂的话第二次 `release()`
-      // 只会看到“没有绑定”直接返回成功，我们会错报“已回收”而磁盘上树还在。
-      if (!coordinator.hasBinding(binding) && existsSync(record.worktreePath)) {
-        await coordinator.bind(binding, record.worktreePath)
+    return this.withUnitLock(unitId, async () => {
+      const record = this.units.get(unitId)
+      for (const task of this.active.values()) {
+        // 云端已拦过；终端再兜一次，绝不在工单还在写文件时回收
+        if (task.unitId === unitId) return { ok: false, error: 'task-running' }
       }
-      released = await coordinator.release(binding)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      this.deps.logger.warn(`[Cloud Task] failed to release ${binding}:`, message)
-      this.deps.onUnitClosed(unitId, {
-        removed: false,
-        dirty: false,
-        worktreePath: record.worktreePath,
-        error: message,
-      })
-      return { ok: false, error: message }
-    }
+      for (const startingUnitId of this.starting.values()) {
+        if (startingUnitId === unitId) return { ok: false, error: 'task-running' }
+      }
+      if (!record) {
+        // 没有台账（已回收 / 从未建树）：告知云端可以收口
+        this.deps.onUnitClosed(unitId, { removed: false, dirty: false })
+        return { ok: true }
+      }
 
-    const dirty = released.dirty === true
-    const removed = released.removed === true
-    const settled = released.success !== false
-    // 只有“真处理掉了”（已删 / 目录本就不在 / 本来就脏）才删台账：
-    // 删树失败时保留台账，否则下次同 unitId 会再建一棵、旧树变孤儿
-    if (settled && !dirty) {
-      this.units.delete(unitId)
-      await this.persistUnits().catch(() => undefined)
-    }
-    this.deps.onUnitClosed(unitId, {
-      removed,
-      dirty,
-      worktreePath: released.worktreePath ?? record.worktreePath,
-      branch: record.branch ?? undefined,
-      error: settled ? undefined : released.error,
+      const coordinator = await this.deps.getCoordinator(record.repoPath)
+      if (!coordinator) {
+        this.deps.onUnitClosed(unitId, {
+          removed: false,
+          dirty: false,
+          worktreePath: record.worktreePath,
+          branch: record.branch ?? undefined,
+          error: 'not-a-repo',
+        })
+        return { ok: false, error: 'not-a-repo' }
+      }
+
+      const binding = `${UNIT_BINDING_PREFIX}${unitId}`
+      let released: Awaited<ReturnType<typeof coordinator.release>>
+      try {
+        // 脏树那一次 `release()` 已经把绑定删了（但树留着）：不重挂的话第二次 `release()`
+        // 只会看到“没有绑定”直接返回成功，我们会错报“已回收”而磁盘上树还在。
+        if (!coordinator.hasBinding(binding) && existsSync(record.worktreePath)) {
+          await coordinator.bind(binding, record.worktreePath)
+        }
+        released = await coordinator.release(binding)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        this.deps.logger.warn(`[Cloud Task] failed to release ${binding}:`, message)
+        this.deps.onUnitClosed(unitId, {
+          removed: false,
+          dirty: false,
+          worktreePath: record.worktreePath,
+          error: message,
+        })
+        return { ok: false, error: message }
+      }
+
+      const dirty = released.dirty === true
+      const removed = released.removed === true
+      const settled = released.success !== false
+      // 只有“真处理掉了”（已删 / 目录本就不在 / 本来就脏）才删台账：
+      // 删树失败时保留台账，否则下次同 unitId 会再建一棵、旧树变孤儿
+      if (settled && !dirty) {
+        this.units.delete(unitId)
+        await this.persistUnits().catch(() => undefined)
+      }
+      this.deps.onUnitClosed(unitId, {
+        removed,
+        dirty,
+        worktreePath: released.worktreePath ?? record.worktreePath,
+        branch: record.branch ?? undefined,
+        error: settled ? undefined : released.error,
+      })
+      return { ok: settled, error: released.error }
     })
-    return { ok: settled, error: released.error }
   }
 
   /**
@@ -798,6 +890,12 @@ export class CloudTaskRunner {
         task.sessionId,
         `用户的回答（针对上一个问题）：\n\n${text.trim()}\n\n请继续执行工单。`
       )
+      if (this.cancelRequested.has(task.id)) {
+        this.cancelRequested.delete(task.id)
+        return false
+      }
+      // 回答后模型若再次调用 ask_cloud 提问，本轮必须停手等待下一次回答，不能误结算
+      if (task.awaitingAnswer) return true
       if (outcome && outcome.success === false) {
         await this.finishFailed(task, outcome.error ?? 'task turn failed')
         return false
@@ -805,6 +903,10 @@ export class CloudTaskRunner {
       await this.finishDone(task, task.spec, outcome)
       return true
     } catch (error) {
+      if (this.cancelRequested.has(task.id)) {
+        this.cancelRequested.delete(task.id)
+        return false
+      }
       await this.finishFailed(task, error instanceof Error ? error.message : String(error))
       return false
     }
@@ -819,6 +921,11 @@ export class CloudTaskRunner {
         await this.manager.steer?.(task.sessionId, text)
       } else {
         const outcome = await this.manager.chat(task.sessionId, text)
+        if (this.cancelRequested.has(task.id)) {
+          this.cancelRequested.delete(task.id)
+          return false
+        }
+        if (task.awaitingAnswer) return true
         if (outcome && outcome.success !== false) await this.finishDone(task, task.spec, outcome)
       }
       return true

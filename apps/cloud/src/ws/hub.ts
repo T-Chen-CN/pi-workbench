@@ -120,6 +120,8 @@ interface PeerBase {
 
 export interface ClientPeer extends PeerBase {
   role: 'client'
+  /** 若由设备 Bearer Token 鉴权，记录其 deviceId 以便撤销设备时立即踢线 */
+  deviceId?: string
   /** 连接时声明的游标，用于决定先回 snapshot 还是补增量 */
   resumeFrom: number | null
   /**
@@ -162,11 +164,12 @@ export class Hub {
 
   // ------------------------------ 连接 ------------------------------
 
-  addClient(socket: WebSocket, resumeFrom: number | null): ClientPeer {
+  addClient(socket: WebSocket, resumeFrom: number | null, deviceId?: string): ClientPeer {
     Hub.counter += 1
     const peer: ClientPeer = {
       id: `client-${Hub.counter}`,
       role: 'client',
+      deviceId,
       socket,
       alive: true,
       lastSeenAt: this.now(),
@@ -184,8 +187,34 @@ export class Hub {
       this.handlers.logger.warn('[cloud] client socket error:', error.message)
       this.clients.delete(peer)
     })
-    void this.sendInitial(peer, resumeFrom)
+    void this.sendInitial(peer, resumeFrom).catch((error) => {
+      this.handlers.logger.warn('[cloud] failed to send initial client snapshot:', error)
+    })
     return peer
+  }
+
+  /** 撤销设备时立即断开其 `/device/ws` 及由该设备 token 鉴权的全部 `/client/ws` 连接 */
+  disconnectDevice(deviceId: string): void {
+    const dev = this.devices.get(deviceId)
+    if (dev) {
+      this.devices.delete(deviceId)
+      try {
+        dev.socket.close(4401, 'Device revoked')
+      } catch {
+        // ignore
+      }
+      this.handlers.onDeviceOffline(deviceId)
+    }
+    for (const client of [...this.clients]) {
+      if (client.deviceId !== deviceId) continue
+      this.clients.delete(client)
+      try {
+        client.socket.close(4401, 'Device revoked')
+      } catch {
+        // ignore
+      }
+    }
+    this.deviceLogs.delete(deviceId)
   }
 
   addDevice(socket: WebSocket, deviceId: string, resumeFrom: number | null): DevicePeer {

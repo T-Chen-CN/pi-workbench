@@ -186,10 +186,19 @@ export function createCloudToolsExtension(deps: CloudToolsDeps): ExtensionFactor
       async execute(_id: string, params: { taskId?: string; text?: string }) {
         const task = params.taskId ? deps.store.findTask(params.taskId) : undefined
         if (!task) return toolError(`Unknown task: ${String(params.taskId)}`)
+        if (['done', 'failed', 'cancelled', 'expired', 'rejected', 'interrupted'].includes(task.status)) {
+          return toolError(`Task ${task.id} is already ${task.status}.`)
+        }
         const text = String(params.text ?? '').trim()
         if (!text) return toolError('text is required.')
         const online = deps.hub.isDeviceOnline(task.spec.deviceId)
         if (!online) return toolError('The device is offline; the instruction was not delivered.')
+        // 若工单正处于 waiting_human，走 task_answer 把状态推进回 running，避免撞死状态机
+        if (task.status === 'waiting_human') {
+          const answered = await deps.dispatcher.answerTask(task.id, text, task.question?.id)
+          if (!answered) return toolError(`Task ${task.id} could not accept an answer right now.`)
+          return toolText(`Answer delivered to ${task.id}.`)
+        }
         deps.hub.sendToDevice(
           task.spec.deviceId,
           { v: 1, type: 'task_message', seq: 0, taskId: task.id, text, at: Date.now() },

@@ -258,6 +258,11 @@ export class CloudSession {
     if (!busy) this.beginTurn()
   }
 
+  /** SDK `agent_settled` 钩子：收尾事件唤醒轮次的流式消息并复位状态 */
+  onSettled(): void {
+    this.endTurn('idle')
+  }
+
   // ------------------------------ 内部 ------------------------------
 
   private beginTurn(): void {

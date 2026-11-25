@@ -102,14 +102,18 @@ beforeEach(() => {
   received = []
 })
 
-function makeAgent(overrides: { dataDir?: string; getCoordinator?: any } = {}) {
+function makeAgent(
+  overrides: { dataDir?: string; getCoordinator?: any; getWorkspaces?: any } = {}
+) {
   const states: DeviceLinkState[] = []
   const agent = new (DeviceAgent as any)({
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     dataDir: overrides.dataDir ?? path.join(tmpRoot, 'cloud'),
-    getWorkspaces: async () => [
-      { path: path.join(tmpRoot, 'repo'), name: 'repo', isGit: true, defaultBranch: 'main' },
-    ],
+    getWorkspaces:
+      overrides.getWorkspaces ??
+      (async () => [
+        { path: path.join(tmpRoot, 'repo'), name: 'repo', isGit: true, defaultBranch: 'main' },
+      ]),
     getApiConfig: async () => null,
     getCoordinator: overrides.getCoordinator ?? (async () => null),
     onStateChange: (state: DeviceLinkState) => states.push(state),
@@ -135,7 +139,13 @@ describe('连接与帧', () => {
   })
 
   it('工单在非 git 仓库上直接失败，并把原因回传', async () => {
-    const { agent } = makeAgent()
+    const nonGitPath = path.join(tmpRoot, 'not-a-repo')
+    const { agent } = makeAgent({
+      getWorkspaces: async () => [
+        { path: path.join(tmpRoot, 'repo'), name: 'repo', isGit: true, defaultBranch: 'main' },
+        { path: nonGitPath, name: 'not-a-repo', isGit: false },
+      ],
+    })
     await agent.start()
     await waitFor(() => frame('hello'), 'hello')
     const socket = sockets[sockets.length - 1]!
@@ -154,7 +164,7 @@ describe('连接与帧', () => {
           spec: {
             workUnitId: 'unit-1',
             deviceId: 'dev-test',
-            repo: { workspacePath: path.join(tmpRoot, 'not-a-repo') },
+            repo: { workspacePath: nonGitPath },
             title: 't',
             background: 'b',
             goal: 'g',
@@ -169,6 +179,44 @@ describe('连接与帧', () => {
     const failed = await waitFor(() => frame('task_failed'), 'task_failed')
     expect(failed.taskId).toBe('T-1')
     expect(String(failed.error)).toMatch(/not found|git repository/i)
+    await agent.stop()
+  })
+
+  it('拒绝未在设备登记/受信任的工作区路径', async () => {
+    const { agent } = makeAgent()
+    await agent.start()
+    await waitFor(() => frame('hello'), 'hello')
+    const socket = sockets[sockets.length - 1]!
+    socket.send(
+      JSON.stringify({
+        v: CLOUD_PROTOCOL_VERSION,
+        type: 'task',
+        seq: 1,
+        task: {
+          id: 'T-untrusted',
+          status: 'queued',
+          idempotencyKey: 'k-untrusted',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          progress: { step: 0, lastEventAt: Date.now() },
+          spec: {
+            workUnitId: 'unit-untrusted',
+            deviceId: 'dev-test',
+            repo: { workspacePath: path.join(tmpRoot, 'unregistered-dir') },
+            title: 't',
+            background: 'b',
+            goal: 'g',
+            acceptance: 'a',
+            output: { summary: true, changeList: true, testResult: true },
+            commit: false,
+            authorizationId: 'auth-1',
+          },
+        },
+      })
+    )
+    const failed = await waitFor(() => frame('task_failed'), 'task_failed')
+    expect(failed.taskId).toBe('T-untrusted')
+    expect(String(failed.error)).toMatch(/not trusted or registered/i)
     await agent.stop()
   })
 

@@ -37,7 +37,7 @@ import { probeProviderKey } from './agent/provider-models.js'
 import { createCloudCredentialStore } from './secure/cloud-credentials.js'
 import { buildRouter } from './http/routes.js'
 import { defaultWebDir, serveStatic } from './http/static.js'
-import { HttpError, readJsonBody, sendJson, sourceOf } from './http/router.js'
+import { HttpError, isAllowedOrigin, readJsonBody, sendJson, sourceOf } from './http/router.js'
 import type { AuthorizationRecord } from './tasks/authorization.js'
 import { DEFAULT_AUTHORIZATION_TTL_MS, DEFAULT_QUOTA } from './tasks/authorization.js'
 import { randomBytes } from 'crypto'
@@ -93,14 +93,44 @@ export async function createCloudServer(
     ready: () => ensureAgent(),
   })
 
+  /** 按设备串行化设备帧处理，避免同一设备的 task_worktree 与 unit_closed 跨 await 乱序覆盖 */
+  const deviceFrameChains = new Map<string, Promise<void>>()
+  const enqueueDeviceFrame = (peer: DevicePeer, frame: DeviceToServerFrame): void => {
+    const prev = deviceFrameChains.get(peer.deviceId) ?? Promise.resolve()
+    const next = prev
+      .catch(() => undefined)
+      .then(() => onDeviceFrame(peer, frame))
+      .catch((error) => {
+        logger.error('[cloud] device frame handler failed:', error)
+      })
+    deviceFrameChains.set(peer.deviceId, next)
+    void next.then(() => {
+      if (deviceFrameChains.get(peer.deviceId) === next) {
+        deviceFrameChains.delete(peer.deviceId)
+      }
+    })
+  }
+
   const hub = new Hub(
     {
       logger,
       buildSnapshot: () => buildSnapshot(),
-      onClientFrame: (peer, frame) => void onClientFrame(peer, frame),
-      onDeviceFrame: (peer, frame) => void onDeviceFrame(peer, frame),
-      onDeviceOffline: (deviceId) => void onDeviceOffline(deviceId),
-      onDeviceOnline: (deviceId) => void onDeviceOnline(deviceId),
+      onClientFrame: (peer, frame) => {
+        void onClientFrame(peer, frame).catch((error) => {
+          logger.error('[cloud] client frame handler failed:', error)
+        })
+      },
+      onDeviceFrame: (peer, frame) => enqueueDeviceFrame(peer, frame),
+      onDeviceOffline: (deviceId) => {
+        void onDeviceOffline(deviceId).catch((error) => {
+          logger.error('[cloud] device offline handler failed:', error)
+        })
+      },
+      onDeviceOnline: (deviceId) => {
+        void onDeviceOnline(deviceId).catch((error) => {
+          logger.error('[cloud] device online handler failed:', error)
+        })
+      },
       onClientHello: () => undefined,
     },
     () => Date.now()
@@ -145,6 +175,7 @@ export async function createCloudServer(
     pairLimiter,
     snapshot: buildSnapshot,
     probeConfig,
+    onDeviceRevoked: (deviceId) => hub.disconnectDevice(deviceId),
     logger,
   })
 
@@ -183,40 +214,66 @@ export async function createCloudServer(
     })()
   })
 
-  const wsServer = new WebSocketServer({ noServer: true })
+  const wsServer = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 })
   server.on('upgrade', (req, socket, head) => {
     void (async () => {
-      const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
-      // 游标 0 / 非数字都等于「没有游标」→ 首连必须发整份快照（见 normalizeResumeCursor）
-      const resumeFrom = normalizeResumeCursor(url.searchParams.get('lastAckSeq'))
-
-      if (url.pathname === CLOUD_WS_PATHS.device) {
-        const device = authenticateDevice(req)
-        if (!device) {
-          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+      try {
+        let url: URL
+        try {
+          url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+        } catch {
+          socket.write('HTTP/1.1 400 Bad Request\r\n\r\n')
           socket.destroy()
           return
         }
-        wsServer.handleUpgrade(req, socket, head, (ws) => {
-          hub.addDevice(ws, device.id, Number.isFinite(resumeFrom) ? resumeFrom : null)
-        })
-        return
-      }
+        // 游标 0 / 非数字都等于「没有游标」→ 首连必须发整份快照（见 normalizeResumeCursor）
+        const resumeFrom = normalizeResumeCursor(url.searchParams.get('lastAckSeq'))
 
-      if (url.pathname === CLOUD_WS_PATHS.client) {
-        if (!authenticateClient(req)) {
-          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
-          socket.destroy()
+        if (url.pathname === CLOUD_WS_PATHS.device) {
+          const device = authenticateDevice(req)
+          if (!device) {
+            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+            socket.destroy()
+            return
+          }
+          wsServer.handleUpgrade(req, socket, head, (ws) => {
+            hub.addDevice(ws, device.id, Number.isFinite(resumeFrom) ? resumeFrom : null)
+          })
           return
         }
-        wsServer.handleUpgrade(req, socket, head, (ws) => {
-          hub.addClient(ws, Number.isFinite(resumeFrom) ? resumeFrom : null)
-        })
-        return
-      }
 
-      socket.write('HTTP/1.1 404 Not Found\r\n\r\n')
-      socket.destroy()
+        if (url.pathname === CLOUD_WS_PATHS.client) {
+          const clientAuth = authenticateClient(req)
+          if (!clientAuth.ok) {
+            socket.write(
+              clientAuth.status === 403
+                ? 'HTTP/1.1 403 Forbidden\r\n\r\n'
+                : 'HTTP/1.1 401 Unauthorized\r\n\r\n'
+            )
+            socket.destroy()
+            return
+          }
+          wsServer.handleUpgrade(req, socket, head, (ws) => {
+            hub.addClient(
+              ws,
+              Number.isFinite(resumeFrom) ? resumeFrom : null,
+              clientAuth.deviceId
+            )
+          })
+          return
+        }
+
+        socket.write('HTTP/1.1 404 Not Found\r\n\r\n')
+        socket.destroy()
+      } catch (error) {
+        logger.error('[cloud] ws upgrade failed:', error)
+        try {
+          socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n')
+          socket.destroy()
+        } catch {
+          // ignore
+        }
+      }
     })()
   })
 
@@ -226,15 +283,22 @@ export async function createCloudServer(
     if (!token) return undefined
     const device = store.findDeviceByToken(token)
     if (!device) return undefined
-    void store.updateDevice(device.id, { lastSeenAt: Date.now() })
+    void store.updateDevice(device.id, { lastSeenAt: Date.now() }).catch(() => undefined)
     return device
   }
 
-  /** 一机一 token（D-22）：设备 token 也能开客户端通道；Web 用 cookie */
-  function authenticateClient(req: IncomingMessage): boolean {
+  /** 一机一 token（D-22）：设备 token 也能开客户端通道；Web 用 cookie 且必须同源（防 CSWSH） */
+  function authenticateClient(
+    req: IncomingMessage
+  ): { ok: true; deviceId?: string } | { ok: false; status: 401 | 403 } {
     const cookie = readCookie(req.headers.cookie, SESSION_COOKIE)
-    if (verifySessionCookie(config.cookieSecret, cookie)) return true
-    return Boolean(authenticateDevice(req))
+    if (verifySessionCookie(config.cookieSecret, cookie)) {
+      if (!isAllowedOrigin(req)) return { ok: false, status: 403 }
+      return { ok: true }
+    }
+    const device = authenticateDevice(req)
+    if (device) return { ok: true, deviceId: device.id }
+    return { ok: false, status: 401 }
   }
 
   let closing = false
@@ -251,10 +315,12 @@ export async function createCloudServer(
         peer.socket.send(JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, type: 'pong', at: frame.at }))
         return
       case 'say':
+        if (typeof frame.text !== 'string') return
         await ensureAgent()
-        await session.say(frame.text, frame.clientMessageId)
+        await session.say(frame.text, typeof frame.clientMessageId === 'string' ? frame.clientMessageId : `say-${Date.now()}`)
         return
       case 'confirm_plan':
+        if (typeof frame.planText !== 'string' || !Array.isArray(frame.items)) return
         await ensureAgent()
         await confirmPlan(frame.planText, frame.items, frame.quota)
         return
@@ -262,6 +328,7 @@ export async function createCloudServer(
         await session.stopReply()
         return
       case 'stop_task': {
+        if (typeof frame.taskId !== 'string' || !frame.taskId) return
         const cancelled = await dispatcher.cancelTask(frame.taskId, 'user-cancel')
         if (!cancelled) {
           hub.publish({
@@ -275,6 +342,7 @@ export async function createCloudServer(
         return
       }
       case 'close_unit': {
+        if (typeof frame.unitId !== 'string' || !frame.unitId) return
         const result = await dispatcher.requestUnitClose(frame.unitId, 'user-close')
         if (!result.ok) {
           hub.publish({
@@ -503,7 +571,7 @@ export async function createCloudServer(
       extensionFactories: [createCloudToolsExtension({ store, hub, dispatcher })],
       getDefaultPermissionLevel: () => 'auto',
       onAgentSettled: () => {
-        hub.publish({ type: 'cloud_status', status: 'idle' })
+        session.onSettled()
       },
     })
     if (!result.success) {

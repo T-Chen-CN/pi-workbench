@@ -29,8 +29,11 @@ interface AttemptWindow {
   stamps: number[]
 }
 
+const MAX_TRACKED_SOURCES = 4096
+
 export class AttemptLimiter {
   private perSource = new Map<string, AttemptWindow>()
+  private inFlight = new Map<string, number>()
   private globalFailures: number[] = []
   private blockedUntil = 0
 
@@ -43,17 +46,48 @@ export class AttemptLimiter {
   canAttempt(source: string): { allowed: boolean; reason?: 'source' | 'global' } {
     const now = this.now()
     if (now < this.blockedUntil) return { allowed: false, reason: 'global' }
+    const active = this.inFlight.get(source) ?? 0
     const window = this.perSource.get(source)
-    if (!window) return { allowed: true }
+    if (!window) {
+      return active >= this.options.limit ? { allowed: false, reason: 'source' } : { allowed: true }
+    }
     const fresh = window.stamps.filter((stamp) => now - stamp < this.options.windowMs)
     window.stamps = fresh
-    if (fresh.length >= this.options.limit) return { allowed: false, reason: 'source' }
+    if (fresh.length + active >= this.options.limit) return { allowed: false, reason: 'source' }
     return { allowed: true }
+  }
+
+  /**
+   * 原子占位一次在途尝试：防止并发请求在 async verifyPassword 完成前同时越过 canAttempt。
+   * 必须配对调用返回的 release()。
+   */
+  tryAcquire(source: string): { allowed: true; release: () => void } | { allowed: false; reason?: 'source' | 'global' } {
+    const gate = this.canAttempt(source)
+    if (!gate.allowed) return { allowed: false, reason: gate.reason }
+    this.inFlight.set(source, (this.inFlight.get(source) ?? 0) + 1)
+    let released = false
+    return {
+      allowed: true,
+      release: () => {
+        if (released) return
+        released = true
+        const next = (this.inFlight.get(source) ?? 1) - 1
+        if (next <= 0) this.inFlight.delete(source)
+        else this.inFlight.set(source, next)
+      },
+    }
   }
 
   /** 记录一次失败；返回是否因此触发全局熔断 */
   recordFailure(source: string): { tripped: boolean } {
     const now = this.now()
+    if (!this.perSource.has(source) && this.perSource.size >= MAX_TRACKED_SOURCES) {
+      this.prune()
+      if (this.perSource.size >= MAX_TRACKED_SOURCES) {
+        const oldestKey = this.perSource.keys().next().value
+        if (oldestKey !== undefined) this.perSource.delete(oldestKey)
+      }
+    }
     const window = this.perSource.get(source) ?? { stamps: [] }
     window.stamps.push(now)
     this.perSource.set(source, window)
