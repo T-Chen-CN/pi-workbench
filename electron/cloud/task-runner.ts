@@ -892,13 +892,20 @@ function normalizeCloudPath(value: string): string {
   return value.replace(/\\/g, '/').replace(/^"|"$/g, '')
 }
 
+const WINDOWS_DRIVE_PATH = /^([A-Za-z]):[\\/]/
+
 /**
  * 工具的路径参数 → 工作树里的相对路径；不在树里就返回 null。
  *
  * 必须同时排除跨盘符：Windows 上 `path.relative('C:\\tree', 'E:/x')` 会原样返回绝对路径，
  * 只查 `startsWith('..')` 的话会把 `E:/second.txt` 这种外部路径当成改动写进清单。
+ * 盘符前缀要显式判断，否则同一份代码在 POSIX 上（CI 跑 Linux）会把 `E:/x` 当成相对路径放行。
  */
 export function toWorktreeRelative(worktreePath: string, filePath: string): string | null {
+  const reportedDrive = WINDOWS_DRIVE_PATH.exec(filePath)?.[1]?.toLowerCase()
+  if (reportedDrive && reportedDrive !== WINDOWS_DRIVE_PATH.exec(worktreePath)?.[1]?.toLowerCase()) {
+    return null
+  }
   const relative = path.isAbsolute(filePath) ? path.relative(worktreePath, filePath) : filePath
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null
   return relative

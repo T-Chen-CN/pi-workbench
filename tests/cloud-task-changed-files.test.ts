@@ -92,7 +92,7 @@ describe('collectTaskChangedFiles', () => {
     expect(toWorktreeRelative(repo, path.join(repo, 'src', 'a.ts'))).toBe(path.join('src', 'a.ts'))
     expect(toWorktreeRelative(repo, 'src/a.ts')).toBe('src/a.ts')
     expect(toWorktreeRelative(repo, path.join(repo, '..', 'outside.txt'))).toBeNull()
-    // Windows 跨盘符：path.relative 会原样返回绝对路径
+    // 跨盘符：Windows 上 path.relative 原样返回绝对路径，POSIX 上 "E:/x" 又会被当成相对路径，两处都要拦
     expect(toWorktreeRelative(repo, 'E:/second.txt')).toBeNull()
   })
 })
