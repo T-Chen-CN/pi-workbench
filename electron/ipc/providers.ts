@@ -9,7 +9,6 @@
 import { BrowserWindow } from 'electron'
 import { handleIpc } from './register.js'
 import {
-  activeProviderConfig,
   forgetProvider,
   listProviders,
   probeApiKey,
@@ -40,11 +39,6 @@ export function registerProvidersIpc(): void {
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
-  })
-
-  handleIpc('providers:activeConfig', async () => {
-    const result = await activeProviderConfig()
-    return result.ok ? { success: true, ...result } : { success: false, error: result.error }
   })
 
   handleIpc('providers:setActive', async (_event, providerId: string, modelId?: string) => {

@@ -167,75 +167,77 @@ export function webAccessExtensionPaths(): string[] {
   }
 }
 
-handleIpc('webSearch:get', async () => {
-  try {
-    const loaded = await loadWebSearchConfig()
-    // 永不向渲染层返回明文 API Key：只告知哪些供应商已配置
-    const configuredKeys: Partial<Record<WebSearchProviderId, boolean>> = {}
-    for (const id of WEB_SEARCH_PROVIDER_IDS) {
-      if (loaded.keys[id]) configuredKeys[id] = true
-    }
-    return {
-      success: true,
-      config: {
-        provider: loaded.provider,
-        endpoint: loaded.endpoint,
-        keys: {},
-        configuredKeys,
-      },
-    }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-    }
-  }
-})
-
-handleIpc('webSearch:save', async (_event, input: unknown) => {
-  try {
-    if (!input || typeof input !== 'object' || Array.isArray(input)) {
-      return { success: false, error: 'Invalid web search configuration' }
-    }
-    const raw = input as Record<string, unknown>
-    const provider =
-      raw.provider === null || raw.provider === undefined
-        ? null
-        : isWebSearchProviderId(raw.provider)
-          ? raw.provider
-          : undefined
-    if (provider === undefined) {
-      return { success: false, error: 'Unknown web search provider' }
-    }
-
-    const existing = await loadWebSearchConfig()
-    const incomingKeys = normalizeKeys(raw.keys)
-    // 保留未重新输入的既有密文 Key；若用户显式输入新值则覆盖
-    const mergedKeys: Partial<Record<WebSearchProviderId, string>> = { ...existing.keys }
-    for (const [id, value] of Object.entries(incomingKeys) as Array<[WebSearchProviderId, string]>) {
-      mergedKeys[id] = value
-    }
-
-    const config: WebSearchConfig = {
-      provider,
-      endpoint: normalizeEndpoint(raw.endpoint),
-      keys: mergedKeys,
-    }
-
-    if (provider) {
-      const spec = getWebSearchProvider(provider)
-      if (providerRequiresKey(spec) && !config.keys[provider]) {
-        return { success: false, error: 'API key is required for this provider' }
+export function registerWebSearchIpc(): void {
+  handleIpc('webSearch:get', async () => {
+    try {
+      const loaded = await loadWebSearchConfig()
+      // 永不向渲染层返回明文 API Key：只告知哪些供应商已配置
+      const configuredKeys: Partial<Record<WebSearchProviderId, boolean>> = {}
+      for (const id of WEB_SEARCH_PROVIDER_IDS) {
+        if (loaded.keys[id]) configuredKeys[id] = true
+      }
+      return {
+        success: true,
+        config: {
+          provider: loaded.provider,
+          endpoint: loaded.endpoint,
+          keys: {},
+          configuredKeys,
+        },
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
       }
     }
+  })
 
-    await writeStoredConfig(config)
-    await applyWebSearchConfig(config)
-    return { success: true }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
+  handleIpc('webSearch:save', async (_event, input: unknown) => {
+    try {
+      if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        return { success: false, error: 'Invalid web search configuration' }
+      }
+      const raw = input as Record<string, unknown>
+      const provider =
+        raw.provider === null || raw.provider === undefined
+          ? null
+          : isWebSearchProviderId(raw.provider)
+            ? raw.provider
+            : undefined
+      if (provider === undefined) {
+        return { success: false, error: 'Unknown web search provider' }
+      }
+
+      const existing = await loadWebSearchConfig()
+      const incomingKeys = normalizeKeys(raw.keys)
+      // 保留未重新输入的既有密文 Key；若用户显式输入新值则覆盖
+      const mergedKeys: Partial<Record<WebSearchProviderId, string>> = { ...existing.keys }
+      for (const [id, value] of Object.entries(incomingKeys) as Array<[WebSearchProviderId, string]>) {
+        mergedKeys[id] = value
+      }
+
+      const config: WebSearchConfig = {
+        provider,
+        endpoint: normalizeEndpoint(raw.endpoint),
+        keys: mergedKeys,
+      }
+
+      if (provider) {
+        const spec = getWebSearchProvider(provider)
+        if (providerRequiresKey(spec) && !config.keys[provider]) {
+          return { success: false, error: 'API key is required for this provider' }
+        }
+      }
+
+      await writeStoredConfig(config)
+      await applyWebSearchConfig(config)
+      return { success: true }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      }
     }
-  }
-})
+  })
+}

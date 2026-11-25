@@ -16,6 +16,7 @@ export async function withTimeout<T>(
     timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
     timer.unref?.()
   })
+  void promise.catch(() => {})
   try {
     return await Promise.race([promise, timeout])
   } finally {
@@ -23,17 +24,25 @@ export async function withTimeout<T>(
   }
 }
 
-/** 超时返回 null：调用方继续往下走，只记一条警告 */
+/** 超时返回 null；非超时错误如实透传（与 pi-bridge/src/async-utils.ts 对齐） */
 export async function withTimeoutResult<T>(
   promise: Promise<T>,
   timeoutMs: number,
   label: string,
   logger: { warn: (...args: unknown[]) => void }
 ): Promise<{ value: T } | null> {
+  let timer: NodeJS.Timeout | null = null
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      logger.warn(`[Async] ${label} timed out after ${timeoutMs}ms`)
+      resolve(null)
+    }, timeoutMs)
+    timer.unref?.()
+  })
+  void promise.catch(() => {})
   try {
-    return { value: await withTimeout(promise, timeoutMs, label) }
-  } catch (error) {
-    logger.warn(`[Async] ${label} 超时（${timeoutMs}ms），继续后续清理:`, error)
-    return null
+    return await Promise.race([promise.then((value) => ({ value })), timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }

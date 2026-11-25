@@ -21,7 +21,8 @@ import {
 } from './web-search.js'
 import { handleIpc } from './register.js'
 
-const MAX_CHAT_IMAGES = 20
+// 与 pi-bridge/src/chat-images.ts 和 docs/agent/agent-runtime.md 保持一致
+const MAX_CHAT_IMAGES = 10
 const MAX_IMAGE_BASE64_CHARS = Math.ceil((10 * 1024 * 1024 * 4) / 3)
 const MAX_TOTAL_IMAGE_BASE64_CHARS = 48 * 1024 * 1024
 const CHAT_IMAGE_MIME = /^image\/(png|jpe?g|webp|gif)$/i

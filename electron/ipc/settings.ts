@@ -93,57 +93,59 @@ export async function migratePermissionLevel(): Promise<void> {
   }
 }
 
-handleIpc('app:getSettings', async () => {
-  try {
-    return { success: true, settings: await loadSettingsFile() }
-  } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : String(error) }
-  }
-})
+export function registerSettingsIpc(): void {
+  handleIpc('app:getSettings', async () => {
+    try {
+      return { success: true, settings: await loadSettingsFile() }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
 
-handleIpc('app:saveSettings', async (_event, settings: any) => {
-  try {
-    const sanitized = { ...(settings ?? {}) }
-    // 最近工作区由主进程的 SQLite 独占管理，渲染层不再保存该字段
-    delete sanitized.recentWorkspaces
-    // 权限档位只接受三个合法值；缺失时保留现有值（旧前端不会发送该字段）
-    const level = normalizePermissionLevel(sanitized.permissionLevel)
-    if (level) {
-      sanitized.permissionLevel = level
-    } else {
-      const currentLevel = normalizePermissionLevel(settingsCache.permissionLevel)
-      if (currentLevel) sanitized.permissionLevel = currentLevel
-      else delete sanitized.permissionLevel
-    }
-    // 文件树排序：只接受已知排序键与布尔开关，非法值落回默认
-    if (sanitized.explorerSortBy !== 'name' && sanitized.explorerSortBy !== 'type') {
-      delete sanitized.explorerSortBy
-    }
-    for (const key of ['explorerFoldersFirst', 'explorerSortReverse'] as const) {
-      if (typeof sanitized[key] !== 'boolean') delete sanitized[key]
-    }
-    // 关闭按钮行为：缺失时保留现有值，不把旧前端没发过的字段写丢
-    if (typeof sanitized.closeToTray !== 'boolean') {
-      if (typeof settingsCache.closeToTray === 'boolean') {
-        sanitized.closeToTray = settingsCache.closeToTray
+  handleIpc('app:saveSettings', async (_event, settings: any) => {
+    try {
+      const sanitized = { ...(settings ?? {}) }
+      // 最近工作区由主进程的 SQLite 独占管理，渲染层不再保存该字段
+      delete sanitized.recentWorkspaces
+      // 权限档位只接受三个合法值；缺失时保留现有值（旧前端不会发送该字段）
+      const level = normalizePermissionLevel(sanitized.permissionLevel)
+      if (level) {
+        sanitized.permissionLevel = level
       } else {
-        delete sanitized.closeToTray
+        const currentLevel = normalizePermissionLevel(settingsCache.permissionLevel)
+        if (currentLevel) sanitized.permissionLevel = currentLevel
+        else delete sanitized.permissionLevel
       }
-    }
-    // 工作树依赖自动安装：同上，缺失时保留现有值
-    if (typeof sanitized.autoInstallWorktreeDeps !== 'boolean') {
-      if (typeof settingsCache.autoInstallWorktreeDeps === 'boolean') {
-        sanitized.autoInstallWorktreeDeps = settingsCache.autoInstallWorktreeDeps
-      } else {
-        delete sanitized.autoInstallWorktreeDeps
+      // 文件树排序：只接受已知排序键与布尔开关，非法值落回默认
+      if (sanitized.explorerSortBy !== 'name' && sanitized.explorerSortBy !== 'type') {
+        delete sanitized.explorerSortBy
       }
+      for (const key of ['explorerFoldersFirst', 'explorerSortReverse'] as const) {
+        if (typeof sanitized[key] !== 'boolean') delete sanitized[key]
+      }
+      // 关闭按钮行为：缺失时保留现有值，不把旧前端没发过的字段写丢
+      if (typeof sanitized.closeToTray !== 'boolean') {
+        if (typeof settingsCache.closeToTray === 'boolean') {
+          sanitized.closeToTray = settingsCache.closeToTray
+        } else {
+          delete sanitized.closeToTray
+        }
+      }
+      // 工作树依赖自动安装：同上，缺失时保留现有值
+      if (typeof sanitized.autoInstallWorktreeDeps !== 'boolean') {
+        if (typeof settingsCache.autoInstallWorktreeDeps === 'boolean') {
+          sanitized.autoInstallWorktreeDeps = settingsCache.autoInstallWorktreeDeps
+        } else {
+          delete sanitized.autoInstallWorktreeDeps
+        }
+      }
+      await saveSettingsFile(sanitized)
+      updateAppSettingsCache(sanitized)
+      // 托盘开关与菜单文案跟随设置即时生效
+      refreshTray()
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
-    await saveSettingsFile(sanitized)
-    updateAppSettingsCache(sanitized)
-    // 托盘开关与菜单文案跟随设置即时生效
-    refreshTray()
-    return { success: true }
-  } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : String(error) }
-  }
-})
+  })
+}

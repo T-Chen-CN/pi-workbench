@@ -51,12 +51,17 @@ import { registerProvidersIpc, broadcastAuthEvent } from './ipc/providers.js'
 import { createDesktopProvidersConfigStore } from './providers-config.js'
 import { configureAuthFlow } from './auth-flow.js'
 import { setRunningSessionsProbe } from './providers-service.js'
-import { WEB_SEARCH_KEY_ENV_PREFIX, initializeWebSearch } from './ipc/web-search.js'
+import {
+  WEB_SEARCH_KEY_ENV_PREFIX,
+  initializeWebSearch,
+  registerWebSearchIpc
+} from './ipc/web-search.js'
 import { completeGithubOAuth, isGithubCallbackUrl, GITHUB_PROTOCOL } from './github-oauth.js'
 import {
   getAppSettingsCache,
   loadSettingsFile,
   migratePermissionLevel,
+  registerSettingsIpc,
   saveSettingsFile,
   setAppSettingsCache
 } from './ipc/settings.js'
@@ -633,6 +638,8 @@ const cloudIpcContext: CloudIpcContext = {
   }
 }
 
+registerSettingsIpc()
+registerWebSearchIpc()
 registerCloudIpc(cloudIpcContext)
 
 // 初始化应用目录结构
@@ -786,10 +793,10 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
     mainWindow.webContents.once('did-finish-load', async () => {
       try {
         const apiType = await mainWindow?.webContents.executeJavaScript('typeof window.electronAPI')
-        const hasFetchModels = await mainWindow?.webContents.executeJavaScript(
-          'typeof window.electronAPI?.apiConfigFetchModels'
+        const hasProvidersList = await mainWindow?.webContents.executeJavaScript(
+          'typeof window.electronAPI?.providersList'
         )
-        console.log(`[Main] Preload check: window.electronAPI = ${apiType}, apiConfigFetchModels = ${hasFetchModels}`)
+        console.log(`[Main] Preload check: window.electronAPI = ${apiType}, providersList = ${hasProvidersList}`)
       } catch (error) {
         console.error('[Main] Preload check failed:', error)
       }
