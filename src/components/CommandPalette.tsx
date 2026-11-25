@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw, Search, X } from 'lucide-react'
 import { api } from '../api'
 import { useI18nStore } from '../store/i18nStore'
-import { useSelectionStore } from '../store/selectionStore'
+import { selectionForWorkspace, useSelectionStore } from '../store/selectionStore'
 import { useSessionStore } from '../store/sessionStore'
 import { localizeError } from '../i18n/errors'
 import { toast } from '../store/toastStore'
@@ -197,7 +197,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     const builtin = BUILTIN_COMMANDS.find((item) => item.id === command.id)
     if (builtin) {
       if (command.id === ATTACH_SELECTION_COMMAND_ID) {
-        const selection = useSelectionStore.getState().selection
+        const selection = selectionForWorkspace(useSelectionStore.getState(), workspacePath)
         if (!selection) {
           setOutput({ title: command.title, text: t('selectionEmpty'), success: false })
           toast.error(`${command.title}: ${t('selectionEmpty')}`)

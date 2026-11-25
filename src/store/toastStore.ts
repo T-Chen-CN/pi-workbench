@@ -6,6 +6,7 @@ interface ToastState {
   messages: ToastMessage[]
   show: (message: string, type?: ToastType, duration?: number, host?: string) => void
   remove: (id: string) => void
+  clearHost: (host: string) => void
 }
 
 export const useToastStore = create<ToastState>((set) => ({
@@ -23,6 +24,11 @@ export const useToastStore = create<ToastState>((set) => ({
   remove: (id) =>
     set((state) => ({
       messages: state.messages.filter((m) => m.id !== id),
+    })),
+
+  clearHost: (host) =>
+    set((state) => ({
+      messages: state.messages.filter((m) => (m.host ?? 'main') !== host),
     })),
 }))
 

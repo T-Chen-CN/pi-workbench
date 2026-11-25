@@ -10,7 +10,8 @@ import { useSessionStore } from '../store/sessionStore'
 import { diffStoreFor } from '../store/diffStore'
 import { editorStoreFor, sameOpenFileTabs, useEditorStore } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
-import { useSelectionStore } from '../store/selectionStore'
+import { selectionForWorkspace, useSelectionStore } from '../store/selectionStore'
+import { useWorkspaceStore } from '../store/workspaceStore'
 import { useApprovalStore } from '../store/approvalStore'
 import { useSettingsStore } from '../store/settingsStore'
 import { useHostKeydown } from '../panelHost/HostContext'
@@ -79,7 +80,7 @@ const SYMBOL_SCAN_DEBOUNCE_MS = 400
 export function useChatPanelState(props: ChatPanelProps) {
   const { workspacePath, viewRoot, active = true } = props
 
-  const diffStore = diffStoreFor(workspacePath)
+  const diffStore = diffStoreFor(viewRoot ?? workspacePath)
   const { t, language } = useI18nStore()
   const sessionsState = useSessionStore((state) => state.byWorkspace[workspacePath])
   const sessions = sessionsState?.sessions ?? EMPTY_SESSIONS
@@ -238,7 +239,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     () => buildChatSuggestions({ workspaceType, recentFiles, translate: t }),
     [workspaceType, recentFiles, t]
   )
-  const selection = useSelectionStore((state) => state.selection)
+  const selection = useSelectionStore((state) => selectionForWorkspace(state, workspacePath))
   const approvalRequests = useApprovalStore((state) => state.requests)
   const pendingApprovals = useMemo(
     () =>
@@ -952,7 +953,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     if (!active) return
     const onAttachSelection = () => {
       const key = activeKey
-      const current = useSelectionStore.getState().selection
+      const current = selectionForWorkspace(useSelectionStore.getState(), workspacePath)
       if (!key) {
         toast.error(t('noActiveSession'))
         return
@@ -973,7 +974,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     }
     const offAttach = onAppEvent('attach-selection', onAttachSelection)
     return () => offAttach()
-  }, [activeKey, t, active])
+  }, [activeKey, t, active, workspacePath])
 
   // 桌面通知点击后激活目标会话（工作区已由 App 切换）
   useEffect(() => {
@@ -1412,14 +1413,23 @@ export function useChatPanelState(props: ChatPanelProps) {
         useSessionStore.getState().markUnread(workspacePath, sessionId, false)
         if (activeNow === sessionId) inputRef.current?.focus()
       }
-      const currentMessages = useChatStore.getState().conversations[key]?.messages.length ?? 0
-      useSessionStore.getState().updateSession(workspacePath, sessionId, {
-        messageCount: currentMessages,
-        updatedAt: Date.now(),
-      })
-      void refreshSessions()
-      // 自动标题是异步生成的；稍后再拉一次列表，Web 模式也能显示标题
-      window.setTimeout(() => void refreshSessions(), 1500)
+      // 若工作区已关闭，绝不再回写 sessionStore 或触发延迟刷新（避免已关闭工作区回魂）
+      const openWorkspaces = useWorkspaceStore.getState().openWorkspaces
+      const workspaceStillOpen = openWorkspaces.length === 0 || openWorkspaces.includes(workspacePath)
+      if (workspaceStillOpen) {
+        const currentMessages = useChatStore.getState().conversations[key]?.messages.length ?? 0
+        useSessionStore.getState().updateSession(workspacePath, sessionId, {
+          messageCount: currentMessages,
+          updatedAt: Date.now(),
+        })
+        void refreshSessions()
+        // 自动标题是异步生成的；稍后再拉一次列表，Web 模式也能显示标题
+        window.setTimeout(() => {
+          const currentOpen = useWorkspaceStore.getState().openWorkspaces
+          if (currentOpen.length > 0 && !currentOpen.includes(workspacePath)) return
+          void refreshSessions()
+        }, 1500)
+      }
     }
   }
 

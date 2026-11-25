@@ -69,6 +69,8 @@ interface RepoMapStore {
   reset: (workspaceDir: string) => void
 }
 
+const generationByWorkspace = new Map<string, number>()
+
 export const useRepoMapStore = create<RepoMapStore>((set) => ({
   byWorkspace: {},
 
@@ -76,11 +78,14 @@ export const useRepoMapStore = create<RepoMapStore>((set) => ({
     if (typeof api.repoMapScan !== 'function') return
     if (inFlight.has(workspaceDir)) return
     inFlight.add(workspaceDir)
+    const generation = generationByWorkspace.get(workspaceDir) ?? 0
     set((state) => patch(state, workspaceDir, { scanning: true, error: null }))
     try {
       const result = options?.paths?.length
         ? await api.repoMapDescribe(workspaceDir, options.paths)
         : await api.repoMapScan(workspaceDir, options?.force ? { force: true } : undefined)
+      // 扫描期间若工作区已关闭并 reset，绝不再把已关闭工作区的数据回写进 store
+      if ((generationByWorkspace.get(workspaceDir) ?? 0) !== generation) return
       if (!result.success) {
         set((state) =>
           patch(state, workspaceDir, {
@@ -107,6 +112,7 @@ export const useRepoMapStore = create<RepoMapStore>((set) => ({
         })
       )
     } catch (error) {
+      if ((generationByWorkspace.get(workspaceDir) ?? 0) !== generation) return
       set((state) =>
         patch(state, workspaceDir, {
           scanning: false,
@@ -120,6 +126,7 @@ export const useRepoMapStore = create<RepoMapStore>((set) => ({
   },
 
   reset: (workspaceDir) => {
+    generationByWorkspace.set(workspaceDir, (generationByWorkspace.get(workspaceDir) ?? 0) + 1)
     inFlight.delete(workspaceDir)
     set((state) => {
       const next = { ...state.byWorkspace }
@@ -131,6 +138,7 @@ export const useRepoMapStore = create<RepoMapStore>((set) => ({
 
 /** 仅测试用：清空所有工作区的缓存 */
 export function resetRepoMapStore(): void {
+  generationByWorkspace.clear()
   inFlight.clear()
   useRepoMapStore.setState({ byWorkspace: {} })
 }

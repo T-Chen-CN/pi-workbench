@@ -169,15 +169,19 @@ export const useGitStore = create<GitState>((set, get) => ({
         const result = await api.gitBranches(workspaceDir)
         branches = result.branches ?? []
       }
-      set((state) =>
-        patch(state, workspaceDir, {
+      set((state) => {
+        const prevBindings = state.byWorkspace[workspaceDir]?.bindings ?? {}
+        return patch(state, workspaceDir, {
           repo,
           worktrees: info.worktrees ?? [],
           branches,
           loading: false,
-          bindings: binding && activeSessionId ? { [activeSessionId]: binding } : {},
+          bindings:
+            binding && activeSessionId
+              ? { ...prevBindings, [activeSessionId]: binding }
+              : prevBindings,
         })
-      )
+      })
     } catch (error) {
       set((state) =>
         patch(state, workspaceDir, {

@@ -7,6 +7,8 @@ import { useI18nStore } from '../store/i18nStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useWorkspaceScope } from '../workspace/WorkspaceScope'
 import { useChatStore, type ChatMessage } from '../store/chatStore'
+import { useSessionStore } from '../store/sessionStore'
+import { useGitStore } from '../store/gitStore'
 import { diffStoreFor } from '../store/diffStore'
 import { useRevertEdits } from '../hooks/useRevertEdits'
 import { useHostDocument, useHostKeydown } from '../panelHost/HostContext'
@@ -87,8 +89,13 @@ const TurnEditSummary: React.FC<{
   const [open, setOpen] = useState(false)
   const scopeWorkspace = useWorkspaceScope()
   const workspacePath = scopeWorkspace ?? useWorkspaceStore.getState().workspacePath ?? ''
+  const activeSessionId = useSessionStore((state) => state.byWorkspace[workspacePath]?.active ?? null)
+  const boundRoot = useGitStore((state) =>
+    activeSessionId ? (state.byWorkspace[workspacePath]?.bindings[activeSessionId]?.path ?? null) : null
+  )
+  const diffRoot = boundRoot || workspacePath
   const { busy, handleRevert, handleRevertAll } = useRevertEdits({
-    workspacePath,
+    workspacePath: diffRoot,
     onReverted: (edit) =>
       useChatStore.getState().removeMessageEdit(messageKey, messageId, edit.path),
   })
@@ -138,7 +145,7 @@ const TurnEditSummary: React.FC<{
             </span>
             <button
               type="button"
-              onClick={() => diffStoreFor(workspacePath).getState().openEdits([edit])}
+              onClick={() => diffStoreFor(diffRoot).getState().openEdits([edit])}
               className="type-caption text-ink-muted transition-colors hover:text-ink"
             >
               {t('viewChanges')}

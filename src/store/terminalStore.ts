@@ -132,10 +132,24 @@ async function spawn(workspacePath: string, cwd: string | null, cols: number, ro
   ensureBridge()
   patch(workspacePath, { status: 'starting', error: null, buffer: [], bufferBytes: 0 })
 
-  const result = cwd
-    ? await api.terminalCreate(workspacePath, cols, rows, cwd)
-    : await api.terminalCreate(workspacePath, cols, rows)
-  pending.delete(workspacePath)
+  let result: Awaited<ReturnType<typeof api.terminalCreate>>
+  try {
+    result = cwd
+      ? await api.terminalCreate(workspacePath, cols, rows, cwd)
+      : await api.terminalCreate(workspacePath, cols, rows)
+  } catch (error) {
+    const message = error instanceof Error ? localizeError(error.message) : useI18nStore.getState().t('terminalCreateFailed')
+    patch(workspacePath, { id: null, status: 'error', error: message })
+    return
+  } finally {
+    pending.delete(workspacePath)
+  }
+
+  // 创建期间若工作区已关闭，立刻销毁刚建好的 PTY，防止主进程孤儿 PTY 永久泄漏
+  if (!useTerminalStore.getState().byWorkspace[workspacePath]) {
+    if (result.success && result.id) void api.terminalClose(result.id)
+    return
+  }
 
   if (result.success && result.id) {
     owners.set(result.id, workspacePath)

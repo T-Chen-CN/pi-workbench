@@ -21,11 +21,13 @@ export interface QuoteRequest {
   title: string
   /** 来源文件路径；对话引用没有路径 */
   sourcePath?: string
+  /** 明确归属的工作区（拆窗面板内必须传入，避免引用落到主窗口当前工作区） */
+  workspacePath?: string
 }
 
 /** 当前激活会话的 conversationKey；没有打开的会话时返回 null */
-export function activeConversationKey(): string | null {
-  const workspacePath = useWorkspaceStore.getState().workspacePath
+export function activeConversationKey(scopeWorkspacePath?: string): string | null {
+  const workspacePath = scopeWorkspacePath || useWorkspaceStore.getState().workspacePath
   if (!workspacePath) return null
   const sessionId = useSessionStore.getState().byWorkspace[workspacePath]?.active
   if (!sessionId) return null
@@ -34,11 +36,11 @@ export function activeConversationKey(): string | null {
 
 let quoteSeq = 0
 
-export function addChatQuote({ text, title, sourcePath }: QuoteRequest): QuoteResult {
+export function addChatQuote({ text, title, sourcePath, workspacePath }: QuoteRequest): QuoteResult {
   const content = text.trim()
   if (!content) return 'empty'
   if (content.length > MAX_QUOTE_CHARS) return 'too-long'
-  const key = activeConversationKey()
+  const key = activeConversationKey(workspacePath)
   if (!key) return 'no-session'
 
   const chat = useChatStore.getState()

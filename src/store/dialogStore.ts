@@ -48,6 +48,8 @@ interface DialogState {
   currentHost: string
   open: (dialog: DialogRequest) => void
   close: (result: boolean | string | null) => void
+  /** 宿主窗口关闭或归位时按“取消”结算该窗口上未决的弹窗，避免 Promise 永久挂起 */
+  cancelForHost: (host: string) => void
 }
 
 export const useDialogStore = create<DialogState>((set, get) => ({
@@ -76,6 +78,12 @@ export const useDialogStore = create<DialogState>((set, get) => ({
     } else {
       current.resolve()
     }
+  },
+
+  cancelForHost: (host) => {
+    const state = get()
+    if (!state.current || state.currentHost !== host) return
+    state.close(state.current.kind === 'confirm' ? false : null)
   },
 }))
 

@@ -18,7 +18,9 @@ import {
 } from '../panelHost/types'
 import { basename } from '../utils/filePath'
 import { useI18nStore } from './i18nStore'
-import { toast } from './toastStore'
+import { toast, useToastStore } from './toastStore'
+import { useDialogStore } from './dialogStore'
+import { useWorkspaceStore } from './workspaceStore'
 
 interface PanelWindowEntry {
   workspaceDir: string
@@ -76,6 +78,9 @@ export function rectFromPointer(clientX: number, clientY: number): AnchorRect {
   }
 }
 
+/** 正在异步打开独立窗口的面板键，防止双击拆窗并发开出两个孤儿窗口 */
+const detachingPanels = new Set<string>()
+
 function removePanelHost(
   panelHost: PanelHostState['panelHost'],
   workspaceDir: string,
@@ -85,7 +90,13 @@ function removePanelHost(
   if (!current || current[panel] === undefined) return panelHost
   const nextWorkspace = { ...current }
   delete nextWorkspace[panel]
-  return { ...panelHost, [workspaceDir]: nextWorkspace }
+  const nextPanelHost = { ...panelHost }
+  if (Object.keys(nextWorkspace).length === 0) {
+    delete nextPanelHost[workspaceDir]
+  } else {
+    nextPanelHost[workspaceDir] = nextWorkspace
+  }
+  return nextPanelHost
 }
 
 export const usePanelStore = create<PanelHostState>((set, get) => ({
@@ -95,6 +106,9 @@ export const usePanelStore = create<PanelHostState>((set, get) => ({
   detachPanel: async (workspaceDir, panel, options) => {
     const state = get()
     if ((state.panelHost[workspaceDir]?.[panel] ?? MAIN_HOST) !== MAIN_HOST) return
+    const lockKey = `${workspaceDir}\u0000${panel}`
+    if (detachingPanels.has(lockKey)) return
+    detachingPanels.add(lockKey)
 
     const hostId = `aux:${nextHostSeq++}`
     let handle: AuxWindowHandle
@@ -109,6 +123,16 @@ export const usePanelStore = create<PanelHostState>((set, get) => ({
       const reason = error instanceof Error ? error.message : String(error)
       const { t } = useI18nStore.getState()
       toast.error(t(reason === 'aux-window-blocked' ? 'panelDetachBlocked' : 'panelDetachFailed'))
+      return
+    } finally {
+      detachingPanels.delete(lockKey)
+    }
+
+    // 异步开窗期间若工作区已关闭或面板已不在主窗，立刻回收新窗口，避免孤儿窗口泄漏
+    const openWorkspaces = useWorkspaceStore.getState().openWorkspaces
+    const workspaceStillOpen = openWorkspaces.length === 0 || openWorkspaces.includes(workspaceDir)
+    if (!workspaceStillOpen || (get().panelHost[workspaceDir]?.[panel] ?? MAIN_HOST) !== MAIN_HOST) {
+      handle.dispose()
       return
     }
 
@@ -129,6 +153,8 @@ export const usePanelStore = create<PanelHostState>((set, get) => ({
     const hostId = state.panelHost[workspaceDir]?.[panel]
     if (!hostId || hostId === MAIN_HOST) return
     const entry = state.windows[hostId]
+    useDialogStore.getState().cancelForHost(hostId)
+    useToastStore.getState().clearHost(hostId)
     set((current) => {
       const windows = { ...current.windows }
       delete windows[hostId]
@@ -148,15 +174,21 @@ export const usePanelStore = create<PanelHostState>((set, get) => ({
   },
 
   disposeAllWindows: () => {
-    const entries = Object.values(get().windows)
-    if (entries.length === 0) return
+    const windowEntries = Object.entries(get().windows)
+    if (windowEntries.length === 0) return
+    for (const [hostId] of windowEntries) {
+      useDialogStore.getState().cancelForHost(hostId)
+      useToastStore.getState().clearHost(hostId)
+    }
     set({ panelHost: {}, windows: {} })
-    for (const entry of entries) entry.handle.dispose()
+    for (const [, entry] of windowEntries) entry.handle.dispose()
   },
 
   handleWindowClosed: (hostId) => {
     const entry = get().windows[hostId]
     if (!entry) return
+    useDialogStore.getState().cancelForHost(hostId)
+    useToastStore.getState().clearHost(hostId)
     set((current) => {
       const windows = { ...current.windows }
       delete windows[hostId]

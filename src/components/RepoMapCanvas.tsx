@@ -82,6 +82,8 @@ export interface RepoMapCanvasProps {
   files: RepoMapFile[]
   /** 搜索词：命中亮点亮、其余淡出，并自动把祖先目录逐层抬起来 */
   query: string
+  /** 仅在画布真正可见激活时监听全局 Space 键，避免隐藏态劫持全应用空格行为 */
+  active?: boolean
   onOpenFile: (file: RepoMapFile) => void
   /** 降级模式下补齐描述 */
   onEnsureDescribed: (paths: string[]) => void
@@ -94,7 +96,7 @@ function hasAnyPosition(state: RepoMapCanvasState): boolean {
 
 export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>(
   function RepoMapCanvas(
-    { workspacePath, files, query, onOpenFile, onEnsureDescribed, onZoomChange },
+    { workspacePath, files, query, active = true, onOpenFile, onEnsureDescribed, onZoomChange },
     ref
   ) {
     const { t, language } = useI18nStore()
@@ -752,6 +754,16 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
     // 只认平移，卡片的点击 / 拖动 / 小地图跳转 / 双击适应窗口全部让位。
     // 监听挂在 window 上：焦点可能不在画布，而且必须赶在卡片（<button>）被空格激活之前拦掉。
     useEffect(() => {
+      const setHeld = (held: boolean) => {
+        if (spaceRef.current === held) return
+        spaceRef.current = held
+        setSpaceHeld(held)
+      }
+      // 画布被文件视图盖住或所在工作区隐藏时绝不挂全局 Space 监听
+      if (!active) {
+        setHeld(false)
+        return
+      }
       const isEditable = (target: EventTarget | null) => {
         const element = target as HTMLElement | null
         if (!element || !element.tagName) return false
@@ -760,11 +772,6 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
           element.tagName === 'TEXTAREA' ||
           element.isContentEditable
         )
-      }
-      const setHeld = (held: boolean) => {
-        if (spaceRef.current === held) return
-        spaceRef.current = held
-        setSpaceHeld(held)
       }
       const onKeyDown = (event: KeyboardEvent) => {
         if (event.code !== 'Space' || isEditable(event.target)) return
@@ -784,12 +791,13 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       window.addEventListener('blur', reset)
       document.addEventListener('visibilitychange', reset)
       return () => {
+        setHeld(false)
         window.removeEventListener('keydown', onKeyDown)
         window.removeEventListener('keyup', onKeyUp)
         window.removeEventListener('blur', reset)
         document.removeEventListener('visibilitychange', reset)
       }
-    }, [])
+    }, [active])
 
     /* ------------------------------ 键盘 ------------------------------ */
 

@@ -214,31 +214,34 @@ export const MonacoEditor = React.memo(function MonacoEditor({
       const editorModel = editor.getModel()
       const range = editor.getSelection()
       if (!file || !editorModel || editorModel.isDisposed() || !range) {
-        useSelectionStore.getState().clearSelection()
+        useSelectionStore.getState().clearSelection(workspacePath)
         return
       }
       const empty =
         range.startLineNumber === range.endLineNumber &&
         range.startColumn === range.endColumn
       if (empty) {
-        useSelectionStore.getState().clearSelection()
+        useSelectionStore.getState().clearSelection(workspacePath)
         return
       }
       const endLine =
         range.endColumn === 1 && range.endLineNumber > range.startLineNumber
           ? range.endLineNumber - 1
           : range.endLineNumber
-      useSelectionStore.getState().setSelection({
-        path: file.path,
-        name: file.name,
-        startLine: range.startLineNumber,
-        endLine,
-        text: editorModel.getValueInRange(range),
-      })
+      useSelectionStore.getState().setSelection(
+        {
+          path: file.path,
+          name: file.name,
+          startLine: range.startLineNumber,
+          endLine,
+          text: editorModel.getValueInRange(range),
+        },
+        workspacePath
+      )
     })
 
     setEditorReady(true)
-  }, [currentFile, resolvedTheme, getOrCreateModel, store])
+  }, [currentFile, resolvedTheme, getOrCreateModel, store, workspacePath])
 
   // 主题切换时重新读取 token 并更新编辑器配色
   useEffect(() => {
@@ -274,10 +277,10 @@ export const MonacoEditor = React.memo(function MonacoEditor({
     })
   }, [largeFile, editorReady])
 
-  // 切换文件后清掉不属于当前文件的选区
+  // 切换文件后清掉不属于当前文件的选区（按工作区隔离）
   useEffect(() => {
-    useSelectionStore.getState().clearForPath(currentFile?.path ?? '')
-  }, [currentFile?.path])
+    useSelectionStore.getState().clearForPath(currentFile?.path ?? '', workspacePath)
+  }, [currentFile?.path, workspacePath])
 
   // 组件卸载时释放编辑器与所有 model
   useEffect(() => {
@@ -287,7 +290,7 @@ export const MonacoEditor = React.memo(function MonacoEditor({
     return () => {
       selectionSubRef.current?.dispose()
       selectionSubRef.current = null
-      useSelectionStore.getState().clearSelection()
+      useSelectionStore.getState().clearSelection(workspacePath)
       monacoRef.current?.dispose()
       monacoRef.current = null
       for (const model of models.values()) {
@@ -297,7 +300,7 @@ export const MonacoEditor = React.memo(function MonacoEditor({
       modelContents.clear()
       viewStates.clear()
     }
-  }, [])
+  }, [workspacePath])
 
   // 切换当前文件：保存上一个文件的视图状态，并切换到它自己的 model。
   // 依赖里带 `currentFile`（每按键换身份）是有意的：外部把磁盘内容改过时要靠它推进 model；

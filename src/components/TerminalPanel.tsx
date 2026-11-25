@@ -48,6 +48,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 }) => {
   const { t } = useI18nStore()
   const resolvedTheme = useResolvedTheme()
+  const resolvedThemeRef = useRef(resolvedTheme)
+  resolvedThemeRef.current = resolvedTheme
   // 独立窗口里没有编辑器可让位，终端铺满整个窗口
   const detached = useHostId() !== MAIN_HOST
   const panelMenu = usePanelContextMenu('terminal')
@@ -62,16 +64,17 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const logPath = useTerminalStore((state) => state.byWorkspace[workspacePath]?.logPath ?? null)
   const activeSessionId = useSessionStore((state) => state.byWorkspace[workspacePath]?.active ?? null)
 
-  // 面板卸下时只销毁 xterm，PTY 留给 store
+  // 面板卸下时只销毁 xterm 并复位标记（StrictMode 重挂也必须重建），PTY 留给 store
   useEffect(() => {
     return () => {
+      startedRef.current = false
       termRef.current?.dispose()
       termRef.current = null
       fitRef.current = null
     }
   }, [])
 
-  // 面板首次可见时挂上 xterm：先回放缓冲，再接管实时输出
+  // 面板首次可见时挂上 xterm 并回放历史缓冲（不因主题/cwd 变化反复撕毁输出订阅）
   useEffect(() => {
     if (!visible || startedRef.current || !containerRef.current) return
     startedRef.current = true
@@ -80,7 +83,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       fontSize: 13,
       fontFamily: '"Geist Mono Variable", "Geist Mono", "Noto Sans SC Variable", Consolas, monospace',
       cursorBlink: true,
-      theme: terminalTheme(resolvedTheme === 'dark')
+      theme: terminalTheme(resolvedThemeRef.current === 'dark')
     })
     const fit = new FitAddon()
     terminal.loadAddon(fit)
@@ -92,21 +95,28 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     const replay = terminalReplay(workspacePath)
     if (replay) terminal.write(replay)
 
-    const offData = subscribeTerminalData(workspacePath, (chunk) => {
-      termRef.current?.write(chunk)
-    })
-
     terminal.onData((data) => {
       const id = terminalId(workspacePath)
       if (id) void api.terminalWrite(id, data)
     })
+  }, [visible, workspacePath])
 
-    useTerminalStore.getState().ensure(workspacePath, cwd ?? null, terminal.cols || 80, terminal.rows || 24)
+  // 独立的实时 PTY 输出订阅：切换主题或 worktree 时绝不静默断流
+  useEffect(() => {
+    if (!visible) return
+    return subscribeTerminalData(workspacePath, (chunk) => {
+      termRef.current?.write(chunk)
+    })
+  }, [visible, workspacePath])
 
-    return () => {
-      offData()
-    }
-  }, [visible, workspacePath, cwd, resolvedTheme])
+  // 首次可见或切换 Git worktree（cwd 变化）时确保 PTY 就绪
+  useEffect(() => {
+    if (!visible) return
+    const terminal = termRef.current
+    useTerminalStore
+      .getState()
+      .ensure(workspacePath, cwd ?? null, terminal?.cols || 80, terminal?.rows || 24)
+  }, [visible, workspacePath, cwd])
 
   // PTY 建好（或换新）后同步一次尺寸
   useEffect(() => {

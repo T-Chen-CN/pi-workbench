@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useSelectionStore, type TextSelection } from '../src/store/selectionStore'
+import {
+  selectionForWorkspace,
+  useSelectionStore,
+  type TextSelection,
+} from '../src/store/selectionStore'
 
 const selection: TextSelection = {
   path: '/tmp/a.ts',
@@ -34,5 +38,26 @@ describe('selectionStore', () => {
 
     useSelectionStore.getState().clearForPath('/tmp/a.ts')
     expect(useSelectionStore.getState().selection).toEqual(selection)
+  })
+
+  it('isolates selections by workspace and clears on workspace close', () => {
+    const other: TextSelection = {
+      path: '/ws-b/b.ts',
+      name: 'b.ts',
+      startLine: 1,
+      endLine: 1,
+      text: 'x',
+    }
+    useSelectionStore.getState().setSelection(selection, '/ws-a')
+    expect(selectionForWorkspace(useSelectionStore.getState(), '/ws-a')).toEqual(selection)
+    expect(selectionForWorkspace(useSelectionStore.getState(), '/ws-b')).toBeNull()
+
+    useSelectionStore.getState().setSelection(other, '/ws-b')
+    expect(selectionForWorkspace(useSelectionStore.getState(), '/ws-a')).toEqual(selection)
+    expect(selectionForWorkspace(useSelectionStore.getState(), '/ws-b')).toEqual(other)
+
+    useSelectionStore.getState().clearWorkspace('/ws-a')
+    expect(selectionForWorkspace(useSelectionStore.getState(), '/ws-a')).toBeNull()
+    expect(selectionForWorkspace(useSelectionStore.getState(), '/ws-b')).toEqual(other)
   })
 })

@@ -36,6 +36,8 @@ import { useWorkspaceStore } from './store/workspaceStore'
 import { useEditorStore, editorStoreFor, disposeEditorStore } from './store/editorStore'
 import { disposeDiffStore } from './store/diffStore'
 import { useRepoMapStore } from './store/repoMapStore'
+import { useGitStore } from './store/gitStore'
+import { useSelectionStore } from './store/selectionStore'
 import { useChatStore } from './store/chatStore'
 import { useSessionStore } from './store/sessionStore'
 import { confirmDialog } from './store/dialogStore'
@@ -306,11 +308,26 @@ export default function App() {
     }
   }, [])
 
+  /** 工作区自身及其关联的全部 Git worktree 根目录（脏检查与关标签回收都要覆盖） */
+  const workspaceRootsFor = (targetPath: string): string[] => {
+    const roots = new Set<string>([targetPath])
+    const git = useGitStore.getState().byWorkspace[targetPath]
+    if (git) {
+      for (const wt of git.worktrees) {
+        if (wt.path) roots.add(wt.path)
+      }
+      for (const binding of Object.values(git.bindings)) {
+        if (binding?.path) roots.add(binding.path)
+      }
+    }
+    return [...roots]
+  }
+
   // 有未保存修改或运行中的任务时阻止关闭窗口；关闭前尽力把固定状态落盘
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {
-      const dirty = openWorkspaces.some((path) =>
-        editorStoreFor(path).getState().hasDirtyFiles()
+      const dirty = openWorkspaces.some((wsPath) =>
+        workspaceRootsFor(wsPath).some((root) => editorStoreFor(root).getState().hasDirtyFiles())
       )
       if (dirty || hasRunningWork()) {
         event.preventDefault()
@@ -324,7 +341,7 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [openWorkspaces])
 
-  // 面板辅助窗口：用户关窗即回位；主窗口卸载前统一回收，不留孤儿窗口
+  // 面板辅助窗口：用户关窗即回位；主窗口真正卸载（pagehide/unload）时统一回收，避免取消关闭时提前摧毁拆窗
   useEffect(() => {
     const unsubscribe = api.onAuxWindowClosed((frameName) => {
       const hostId = hostIdFromFrameName(frameName)
@@ -332,11 +349,11 @@ export default function App() {
     })
     const disposeAll = () => usePanelStore.getState().disposeAllWindows()
     window.addEventListener('pagehide', disposeAll)
-    window.addEventListener('beforeunload', disposeAll)
+    window.addEventListener('unload', disposeAll)
     return () => {
       unsubscribe()
       window.removeEventListener('pagehide', disposeAll)
-      window.removeEventListener('beforeunload', disposeAll)
+      window.removeEventListener('unload', disposeAll)
     }
   }, [])
 
@@ -364,7 +381,9 @@ export default function App() {
   }
 
   const confirmCloseWorkspace = async (targetPath: string): Promise<boolean> => {
-    const dirty = editorStoreFor(targetPath).getState().hasDirtyFiles()
+    const dirty = workspaceRootsFor(targetPath).some((root) =>
+      editorStoreFor(root).getState().hasDirtyFiles()
+    )
     const active = hasRunningWork(targetPath)
     if (!dirty && !active) return true
     const message = dirty
@@ -528,6 +547,8 @@ export default function App() {
   const closeWorkspaceTab = async (targetPath: string) => {
     if (!(await confirmCloseWorkspace(targetPath))) return
 
+    const rootsToDispose = workspaceRootsFor(targetPath)
+
     // 固定状态先落盘，再释放运行时；关闭标签不删除磁盘上的固定状态
     await saveEditorTabs(targetPath)
     await piAgentAPI.dispose(targetPath)
@@ -536,6 +557,9 @@ export default function App() {
     // 面板辅助窗口属于运行时：工作区关闭就一并回收（重新打开从默认布局开始）
     usePanelStore.getState().dockWorkspace(targetPath)
     useTerminalStore.getState().close(targetPath)
+    useApprovalStore.getState().clearWorkspace(targetPath)
+    useSelectionStore.getState().clearWorkspace(targetPath)
+    useGitStore.getState().reset(targetPath)
     clearPanelUi(targetPath)
     clearWorkspaceChat(targetPath)
 
@@ -547,10 +571,12 @@ export default function App() {
       setView('home')
     }
 
-    // 视图卸载后再释放按工作区的 store（仓库地图的扫描缓存也要清，否则重开工作区拿到的是旧结果）
+    // 视图卸载后再释放按工作区及关联 worktree 的 store（仓库地图的扫描缓存也要清）
     window.setTimeout(() => {
-      disposeEditorStore(targetPath)
-      disposeDiffStore(targetPath)
+      for (const root of rootsToDispose) {
+        disposeEditorStore(root)
+        disposeDiffStore(root)
+      }
       useRepoMapStore.getState().reset(targetPath)
     }, 0)
   }

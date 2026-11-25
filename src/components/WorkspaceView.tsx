@@ -334,7 +334,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
                       onCollapse={filesDetached ? undefined : collapseSidebar}
                       collapseButtonRef={sidebarCollapseRef}
                       panelId={filePanelId}
-                      active={active}
+                      active={active || filesDetached}
                     />
                   </PanelSlot>
                 </div>
@@ -404,7 +404,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
                   cwd={viewRoot}
                   visible={showTerminal}
                   onClose={terminalDetached ? undefined : () => setShowTerminal(false)}
-                  active={active}
+                  active={active || terminalDetached}
                 />
               </PanelSlot>
             </div>
@@ -434,7 +434,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
                   onCollapse={chatDetached ? undefined : collapseChat}
                   collapseButtonRef={chatCollapseRef}
                   panelId={chatPanelId}
-                  active={active}
+                  active={active || chatDetached}
                 />
               </ErrorBoundary>
             </PanelSlot>

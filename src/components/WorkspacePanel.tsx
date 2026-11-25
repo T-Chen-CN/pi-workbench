@@ -41,12 +41,15 @@ const MANY_NODES_HINT = 600
 
 export interface WorkspacePanelProps {
   workspacePath: string
+  /** 当前会话绑定的工作树根（缺省同 workspacePath），打开文件时落到对应 editorStore */
+  viewRoot?: string
   /** 面板是否可见（被文件视图盖住时不扫描，也不补描述） */
   active: boolean
 }
 
 export const WorkspacePanel = React.memo(function WorkspacePanel({
   workspacePath,
+  viewRoot,
   active,
 }: WorkspacePanelProps) {
   const { t } = useI18nStore()
@@ -116,10 +119,11 @@ export const WorkspacePanel = React.memo(function WorkspacePanel({
 
   const openFile = useCallback(
     (file: RepoMapFile) => {
-      const base = state.repoRoot ?? workspacePath
-      void openFileInEditor(base, joinPath(base, file.path))
+      const storeRoot = viewRoot ?? workspacePath
+      const fileBase = viewRoot ?? state.repoRoot ?? workspacePath
+      void openFileInEditor(storeRoot, joinPath(fileBase, file.path))
     },
-    [state.repoRoot, workspacePath]
+    [state.repoRoot, viewRoot, workspacePath]
   )
 
   const refresh = () => void scan(workspacePath, { force: true })
@@ -204,6 +208,7 @@ export const WorkspacePanel = React.memo(function WorkspacePanel({
             workspacePath={workspacePath}
             files={files}
             query={query}
+            active={active}
             onOpenFile={openFile}
             onEnsureDescribed={ensureDescribed}
             onZoomChange={setZoom}

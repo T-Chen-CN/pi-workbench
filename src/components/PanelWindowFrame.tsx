@@ -2,10 +2,13 @@ import React from 'react'
 import { PanelRightClose } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { usePanelStore } from '../store/panelStore'
-import { MAIN_HOST, type HostId, type PanelId } from '../panelHost/types'
+import { useToastStore } from '../store/toastStore'
+import { frameNameOf, MAIN_HOST, type HostId, type PanelId } from '../panelHost/types'
 import { basename } from '../utils/filePath'
 import { isMacPlatform } from '../utils/keybindings'
 import { IconButton } from './ui'
+import { DialogHost } from './DialogHost'
+import { ToastContainer } from './Toast'
 import { WindowControls } from './WindowControls'
 
 /**
@@ -26,13 +29,15 @@ export const PanelWindowFrame: React.FC<{
 }> = ({ panel, workspacePath, host = MAIN_HOST, children }) => {
   const { t } = useI18nStore()
   const dockPanel = usePanelStore((state) => state.dockPanel)
+  const toastMessages = useToastStore((state) => state.messages)
+  const removeToast = useToastStore((state) => state.remove)
   const isMac = isMacPlatform()
   const api = typeof window !== 'undefined' ? window.electronAPI : undefined
   const isAux = host !== MAIN_HOST
 
   const toggleMaximize = () => {
     if (!api) return
-    if (isAux) void api.auxWindowCommand(host, 'toggleMaximize')
+    if (isAux) void api.auxWindowCommand(frameNameOf(host), 'toggleMaximize')
     else void api.toggleMaximizeWindow()
   }
 
@@ -63,6 +68,9 @@ export const PanelWindowFrame: React.FC<{
         </div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
+      {/* 每个独立辅助窗口必须挂载自己的 DialogHost 与 ToastContainer，否则拆窗内弹窗会永久死锁 */}
+      {isAux && <DialogHost host={host} />}
+      {isAux && <ToastContainer host={host} messages={toastMessages} onClose={removeToast} />}
     </div>
   )
 }

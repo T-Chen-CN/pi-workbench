@@ -136,7 +136,7 @@ export const FileView: React.FC<FileViewProps> = ({
       <div className="relative flex min-h-0 min-w-0 flex-1">
         {/* 面板：预览区的默认内容 */}
         <div className={panelActive ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}>
-          <WorkspacePanel workspacePath={workspacePath} active={panelActive && active} />
+          <WorkspacePanel workspacePath={workspacePath} viewRoot={root} active={panelActive && active} />
         </div>
 
         {/* 文件视图常驻 DOM，面板激活时只是藏起来（撤销栈 / 滚动位置都留着） */}

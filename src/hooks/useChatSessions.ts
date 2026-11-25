@@ -337,6 +337,7 @@ export function useChatSessions(options: ChatSessionsOptions) {
       }
       await piAgentAPI.sessionsClose(workspacePath, sessionId)
       useChatStore.getState().removeConversation(key)
+      useApprovalStore.getState().clearSession(workspacePath, sessionId)
       useSessionStore.getState().markStreaming(workspacePath, sessionId, false)
       useSessionStore.getState().markUnread(workspacePath, sessionId, false)
       useSessionStore.getState().markError(workspacePath, sessionId, null)
@@ -402,6 +403,7 @@ export function useChatSessions(options: ChatSessionsOptions) {
       }
       const key = conversationKey(workspacePath, session.id)
       useChatStore.getState().removeConversation(key)
+      useApprovalStore.getState().clearSession(workspacePath, session.id)
       useSessionStore.getState().markStreaming(workspacePath, session.id, false)
       useSessionStore.getState().markUnread(workspacePath, session.id, false)
       useSessionStore.getState().markError(workspacePath, session.id, null)

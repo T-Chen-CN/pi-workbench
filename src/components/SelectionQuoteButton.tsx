@@ -14,6 +14,7 @@ import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
 import { basename } from '../utils/filePath'
 import { MAX_QUOTE_CHARS, addChatQuote } from '../workspace/quoteSelection'
+import { useWorkspaceScope } from '../workspace/WorkspaceScope'
 
 interface SelectionInfo {
   text: string
@@ -39,6 +40,7 @@ export interface SelectionQuoteButtonProps {
 
 export const SelectionQuoteButton: React.FC<SelectionQuoteButtonProps> = ({ doc }) => {
   const { t } = useI18nStore()
+  const scopeWorkspace = useWorkspaceScope()
   const [selection, setSelection] = useState<SelectionInfo | null>(null)
   const rangeRef = useRef<Range | null>(null)
   const documentRef = doc ?? (typeof document === 'undefined' ? null : document)
@@ -116,7 +118,8 @@ export const SelectionQuoteButton: React.FC<SelectionQuoteButtonProps> = ({ doc 
     const result = addChatQuote({
       text: selection.text,
       title: selection.title,
-      sourcePath: selection.docPath ?? undefined
+      sourcePath: selection.docPath ?? undefined,
+      workspacePath: scopeWorkspace ?? undefined,
     })
     if (result === 'ok') toast.info(t('quotedToChat'))
     else if (result === 'too-long') toast.error(t('quoteTooLong', { count: MAX_QUOTE_CHARS }))
