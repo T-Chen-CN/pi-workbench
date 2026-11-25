@@ -81,7 +81,7 @@ This is not an IDE plugin but a standalone workbench: closing the window only pa
 
 | Location                     | Contents                                                                               |
 | ---------------------------- | -------------------------------------------------------------------------------------- |
-| `{appDir}/config/`           | `settings.json`, `api-config.json`, `web-search.json` (keys encrypted)                 |
+| `{appDir}/config/`           | `settings.json`, `providers.json`, `credentials.json` (keys encrypted), `web-search.json` |
 | `{appDir}/data/`             | `models.json`, session records, `workspaces.db`                                        |
 | `{appDir}/cache/`            | temp files, downloaded update packages                                                 |
 | `{appDir}/logs/`             | `main.log`, `agent.log` (rotated at 5MB)                                               |
@@ -156,13 +156,13 @@ npm run build
 
 ## Configuration
 
-Open **Settings** on first run and complete five steps:
+Open **Settings → Providers** on first run and complete three steps:
 
-1. **Provider** — Anthropic, OpenAI, or any OpenAI-compatible endpoint (DeepSeek, a gateway, a local server).
-2. **API URL** — base endpoint, e.g. `https://api.deepseek.com/v1`.
-3. **API key** — stored as `enc:<base64>` in `config/api-config.json` via `safeStorage`; the agent reads it from an environment variable at runtime.
-4. **Fetch available models** — pull the provider's real model list, then set the context window (64K / 128K / 256K / 1M) and image capability per model.
-5. **Web search** (optional) — pick one of ten providers; the key is encrypted into `config/web-search.json`.
+1. **Pick a provider** — 8 built-in presets: OpenAI, Anthropic, Google, xAI, DeepSeek, Xiaomi MiMo, Xiaomi (Token Plan), and OpenAI Codex. Models and protocols come from the Pi catalog, so no Base URL is needed.
+2. **Sign in** — enter an API key, or sign in with OAuth (device code / browser callback; the UI displays the link and code). Credentials are encrypted via `safeStorage` as `enc:<base64>` in `config/credentials.json` — never in environment variables or logs.
+3. **Choose a model** — any model in the catalog is selectable; context window and max output tokens can be **lowered** per model and take effect on the next turn.
+
+**Web search** (optional): pick one of ten providers; the key is encrypted into `config/web-search.json`.
 
 ---
 
@@ -170,14 +170,14 @@ Open **Settings** on first run and complete five steps:
 
 | Item            | State                                                                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Current version | `0.8.0` (2026-11-08)                                                                                                                                          |
-| Releases        | 17 GitHub releases; installers and `latest*.yml` produced by CI on tags                                                                                       |
+| Current version | `0.11.1` (2026-11-26)                                                                                                                                         |
+| Releases        | 21 GitHub releases; installers and `latest*.yml` produced by CI on tags                                                                                       |
 | Phases          | Phase 0–4 done · Phase 5 (Fleet background jobs) removed 2026-10-24 · Phase 6 ongoing                                                                         |
-| Quality         | type-check + lint + 1,800+ Vitest cases + full build; CI also runs a Windows packaging smoke test                                                             |
+| Quality         | type-check + lint + 1,600+ Vitest cases + full build; CI also runs a Windows packaging smoke test                                                             |
 | Stack           | Electron 44 · React 19 · TypeScript 5.9 · Monaco 0.57 · `@earendil-works/pi-coding-agent` 1.3                                                                 |
 | Known limits    | Not signed or notarized; legacy Office formats are not parsed; no OCR for scans; Linux tray degrades to minimize; manual platform acceptance is still pending |
 
-**Next up**: wrapping up R-23 output budgeting (follow-up actions for truncated output, context-limit warnings, dedicated budgets for light tasks), manual macOS / Linux acceptance, and the parked cloud items (screen takeover → kanban → detached panels → IM / voice → outbound MCP gate). Current state is in [STATUS](docs/progress/STATUS.md); tasks and parked items in [BACKLOG](docs/progress/BACKLOG.md).
+**Next up**: wrapping up R-23 output budgeting (follow-up actions for truncated output, context-limit warnings, dedicated budgets for light tasks), manual macOS / Linux acceptance, and completing the Pi-kernel cloud agent rollout. Current state is in [STATUS](docs/progress/STATUS.md); tasks and parked items in [BACKLOG](docs/progress/BACKLOG.md).
 
 ---
 
