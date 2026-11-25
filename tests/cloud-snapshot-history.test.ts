@@ -63,16 +63,20 @@ beforeAll(async () => {
     'utf-8'
   )
 
-  server = await createCloudServer({
-    dataDir: tmpRoot,
-    workspaceDir,
-    agentDir,
-    port: 0,
-    encryptionKey: Buffer.alloc(32, 7),
-    cookieSecret: 'history-cookie-secret',
-    secureCookies: false,
-    version: 'test',
-  })
+  server = await createCloudServer(
+    {
+      dataDir: tmpRoot,
+      workspaceDir,
+      agentDir,
+      port: 0,
+      encryptionKey: Buffer.alloc(32, 7),
+      cookieSecret: 'history-cookie-secret',
+      secureCookies: false,
+      version: 'test',
+    },
+    // 配置保存会做一次 Key 探测：测试不打外网
+    { probeConfig: async () => ({ ok: true }) }
+  )
   const port = await server.listen()
   base = `http://127.0.0.1:${port}`
 
@@ -93,8 +97,7 @@ beforeAll(async () => {
     method: 'PUT',
     headers: { 'content-type': 'application/json', cookie },
     body: JSON.stringify({
-      provider: 'deepseek',
-      apiUrl: 'https://api.deepseek.com/v1',
+      providerId: 'deepseek',
       model: 'deepseek-flash',
       apiKey: 'sk-probe',
     }),

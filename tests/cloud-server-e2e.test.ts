@@ -145,8 +145,8 @@ describe('控制面', () => {
     expect(response.status).toBe(401)
   })
 
-  it('云端配置加密落盘、只回掩码（F-11 / F-12）', async () => {
-    const put = await fetch(`${base}/v1/cloud-config`, {
+  it('云端配置只收预设供应商，白名单外的端点被拒（D1 / D20）', async () => {
+    const legacy = await fetch(`${base}/v1/cloud-config`, {
       method: 'PUT',
       headers: jsonHeaders(),
       body: JSON.stringify({
@@ -156,11 +156,15 @@ describe('控制面', () => {
         apiKey: 'sk-live-abcd1234',
       }),
     })
-    expect(put.status).toBe(200)
-    const stored = await fs.readFile(path.join(tmpRoot, 'config.json'), 'utf-8')
-    expect(stored).not.toContain('sk-live-abcd1234')
-    const read = await (await fetch(`${base}/v1/cloud-config`, { headers: { cookie } })).json()
-    expect(read).toMatchObject({ configured: true, apiKeyMasked: '********1234' })
+    expect(legacy.status).toBe(400)
+
+    // 白名单内但模型不在 catalog 里：同样拒绝
+    const badModel = await fetch(`${base}/v1/cloud-config`, {
+      method: 'PUT',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ providerId: 'deepseek', model: 'gpt-x', apiKey: 'sk-live-abcd1234' }),
+    })
+    expect(badModel.status).toBe(400)
   })
 
   it('匹配错误时统一错误码，不区分「码不存在 / 已用过」', async () => {

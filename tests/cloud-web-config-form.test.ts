@@ -18,16 +18,21 @@ import * as path from 'path'
 const source = readFileSync(path.resolve(__dirname, '../apps/cloud/web/app.js'), 'utf-8')
 
 describe('云端配置卡的输入保持', () => {
-  it('三个输入都从 state.configDraft 回填（否则任何一帧到达就清空）', () => {
+  it('输入都从 state.configDraft 回填（否则任何一帧到达就清空）', () => {
     expect(source).toContain('if (!state.configDraft) {')
-    expect(source).toContain('value: draft.apiUrl')
     expect(source).toContain('value: draft.apiKey')
-    expect(source).toContain('draft.apiUrl = event.target.value')
     expect(source).toContain('draft.apiKey = event.target.value')
+    expect(source).toContain('draft.providerId = event.target.value')
   })
 
-  it('拉模型的处理器里不整页 render()，只局部刷新模型字段', () => {
-    const start = source.indexOf('const fetchButton = el(')
+  it('不再有自建端点字段（供应商白名单取代 Base URL）', () => {
+    expect(source).not.toContain('draft.apiUrl')
+    expect(source).not.toContain('apiConfig')
+    expect(source).toContain('固定供应商白名单')
+  })
+
+  it('刷新目录只做局部更新，不整页 render()', () => {
+    const start = source.indexOf('const loadCatalog = async () => {')
     const end = source.indexOf('const saveButton = el(')
     expect(start).toBeGreaterThan(0)
     expect(end).toBeGreaterThan(start)
@@ -40,6 +45,5 @@ describe('云端配置卡的输入保持', () => {
     const start = source.indexOf('const saveButton = el(')
     const handler = source.slice(start, start + 1600)
     expect(handler).toContain('state.configDraft = null')
-    expect(handler).toContain('state.configModels = []')
   })
 })

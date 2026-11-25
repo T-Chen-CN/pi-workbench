@@ -41,13 +41,24 @@ export interface PairingCodeRecord {
   usedAt: number | null
 }
 
-/** 云端模型配置；`apiKeyCipher` 是 AES-256-GCM 密文，明文永不落盘 */
+/**
+ * 云端模型配置；`credentialCipher` 是 AES-256-GCM 密文，明文永不落盘。
+ *
+ * 旧记录（`provider` + `apiUrl` + `apiKeyCipher`）在读取时整体作废，必须重配（D20）：
+ * 白名单换了，旧端点对应的 provider 无法可靠映射到 catalog。
+ */
 export interface CloudConfigRecord {
-  provider: string
-  apiUrl: string
+  providerId: string
   model: string
-  apiKeyCipher: string
+  credentialCipher: string
   updatedAt: number
+}
+
+/** 旧记录形态（只用于识别并丢弃） */
+function isLegacyConfigRecord(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return typeof record.provider === 'string' || typeof record.apiUrl === 'string'
 }
 
 export interface UnitRecord {
@@ -307,11 +318,27 @@ export class CloudStore {
   // ------------------------------ 云端配置 ------------------------------
 
   getCloudConfig(): CloudConfigRecord | null {
-    return this.config.get().config
+    const stored = this.config.get().config as unknown
+    // 旧配置整体丢弃：不返回、不迁移，UI 看到的是「未配置」（D20）
+    if (isLegacyConfigRecord(stored)) return null
+    return stored as CloudConfigRecord | null
   }
 
   async saveCloudConfig(record: CloudConfigRecord): Promise<void> {
     await this.config.update(() => ({ config: record }))
+  }
+
+  async clearCloudConfig(): Promise<void> {
+    await this.config.update(() => ({ config: null }))
+  }
+
+  /** 只换凭证，保留 provider / 模型（OAuth 刷新与重新登录都走这条路径） */
+  async saveCloudCredential(providerId: string, credentialCipher: string): Promise<void> {
+    await this.config.update((current) => {
+      const record = current.config as CloudConfigRecord | null
+      if (!record || record.providerId !== providerId) return current
+      return { config: { ...record, credentialCipher, updatedAt: Date.now() } }
+    })
   }
 
   // ------------------------------ 方案授权 ------------------------------

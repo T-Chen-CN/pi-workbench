@@ -19,12 +19,12 @@ import {
   type CloudWorkspaceInfo,
   type DeviceToServerFrame,
 } from 'pi-bridge'
-import { AgentManager, createFileCredentialStore, legacyProviderFromUrl } from 'pi-bridge'
+import { AgentManager, createFileModelsStore } from 'pi-bridge'
 import { loadConfig, type CloudConfig } from './config.js'
 import { CloudStore } from './store/store.js'
 import { AttemptLimiter } from './auth/rate-limit.js'
 import { readCookie, SESSION_COOKIE, verifySessionCookie } from './auth/session-cookie.js'
-import { decryptSecret, encryptSecret } from './secure/config-crypto.js'
+import { decryptSecret } from './secure/config-crypto.js'
 import { Hub, type ClientPeer, type DevicePeer } from './ws/hub.js'
 import { TaskDispatcher } from './tasks/dispatcher.js'
 import {
@@ -33,7 +33,8 @@ import {
   authorizationView,
 } from './agent/cloud-session.js'
 import { createCloudToolsExtension } from './agent/tools.js'
-import { probeProviderConfig } from './agent/provider-models.js'
+import { probeProviderKey } from './agent/provider-models.js'
+import { createCloudCredentialStore } from './secure/cloud-credentials.js'
 import { buildRouter } from './http/routes.js'
 import { defaultWebDir, serveStatic } from './http/static.js'
 import { HttpError, readJsonBody, sendJson, sourceOf } from './http/router.js'
@@ -61,9 +62,9 @@ export interface CloudServer {
 }
 
 export interface CloudServerHooks {
-  /** 轮换前的配置探测（默认走供应商 `/models`；测试里注入替身，避免打外网） */
+  /** 保存配置前的 Key 探测（默认打 catalog 的 baseUrl；测试里注入替身，避免外网） */
   probeConfig?: (
-    config: { provider: string; apiUrl: string; apiKey: string; model: string }
+    input: { providerId: string; apiKey: string }
   ) => Promise<{ ok: true; warning?: string } | { ok: false; reason: string }>
 }
 
@@ -71,7 +72,7 @@ export async function createCloudServer(
   overrides: Partial<CloudConfig> = {},
   hooks: CloudServerHooks = {}
 ): Promise<CloudServer> {
-  const probeConfig = hooks.probeConfig ?? probeProviderConfig
+  const probeConfig = hooks.probeConfig ?? probeProviderKey
   const config = loadConfig(overrides)
   await fs.mkdir(config.dataDir, { recursive: true })
   await fs.mkdir(config.workspaceDir, { recursive: true })
@@ -143,6 +144,7 @@ export async function createCloudServer(
     loginLimiter,
     pairLimiter,
     snapshot: buildSnapshot,
+    probeConfig,
     logger,
   })
 
@@ -435,39 +437,43 @@ export async function createCloudServer(
 
   interface ResolvedCloudConfig {
     stamp: number
-    provider: string
-    apiUrl: string
-    apiKey: string
+    providerId: string
     model: string
+    credential: { type: 'api_key'; key?: string } | { type: 'oauth'; [key: string]: unknown }
   }
 
   /**
-   * 云端凭证落盘位置。P5 之前云端仍用自己的配置页写 key，这里把它翻译成
-   * 预设供应商 + CredentialStore，Agent 运行时不再读明文 Key。
+   * 云端凭证存储：读 `CloudStore` 里那条加密记录，凭证整体（含 OAuth token）
+   * 只在内存里解密。与设备端各自独立、互不同步（D19）。
    */
-  const credentials = createFileCredentialStore({
-    path: path.join(config.dataDir, 'credentials.json'),
-    cipher: {
-      encrypt: (plain) => encryptSecret(plain, config.encryptionKey),
-      decrypt: (stored) => decryptSecret(stored, config.encryptionKey),
+  const credentials = createCloudCredentialStore({
+    readConfig: () => {
+      const record = store.getCloudConfig()
+      return record ? { providerId: record.providerId, credentialCipher: record.credentialCipher } : null
     },
+    saveCredential: (providerId, credentialCipher) =>
+      store.saveCloudCredential(providerId, credentialCipher),
+    clearCredential: () => store.clearCloudConfig(),
+    encryptionKey: config.encryptionKey,
     logger,
   })
 
-  /** 读磁盘配置并解密 Key；解密失败返回 null（换过 `PI_CLOUD_ENC_KEY` 的典型表现） */
+  /** 读磁盘配置并解密凭证；解密失败返回 null（换过 `PI_CLOUD_ENC_KEY` 的典型表现） */
   function resolveConfig(): ResolvedCloudConfig | null {
     const record = store.getCloudConfig()
     if (!record) return null
     try {
+      const credential = JSON.parse(
+        decryptSecret(record.credentialCipher, config.encryptionKey)
+      ) as ResolvedCloudConfig['credential']
       return {
         stamp: record.updatedAt,
-        provider: record.provider,
-        apiUrl: record.apiUrl,
-        apiKey: decryptSecret(record.apiKeyCipher, config.encryptionKey),
+        providerId: record.providerId,
         model: record.model,
+        credential,
       }
     } catch {
-      logger.error('[cloud] cannot decrypt the stored model config; re-push it from the client')
+      logger.error('[cloud] cannot decrypt the stored credential; re-push it from the client')
       return null
     }
   }
@@ -483,17 +489,12 @@ export async function createCloudServer(
 
   /** 用给定配置建运行时并续上唯一会话 */
   async function startAgent(resolved: ResolvedCloudConfig): Promise<boolean> {
-    const providerId = legacyProviderFromUrl(resolved.apiUrl) ?? resolved.provider
-    // 旧配置里的明文 Key 转成预设供应商凭证；P5 会换成配置页 + OAuth 登录
-    await credentials.modify(providerId, async () => ({
-      type: 'api_key',
-      key: resolved.apiKey,
-    }))
     const result = await agent.initialize({
       workspaceDir: config.workspaceDir,
       agentDir: config.agentDir,
-      apiConfig: { providerId, modelId: resolved.model },
+      apiConfig: { providerId: resolved.providerId, modelId: resolved.model },
       credentials,
+      modelsStore: createFileModelsStore({ path: path.join(config.dataDir, 'models-store.json') }),
       allowModelNetwork: true,
       logger,
       // 云端会话：无审批（mode=auto）、不挂计划与工作树扩展、工具白名单只有六个
@@ -525,7 +526,7 @@ export async function createCloudServer(
     runningConfigStamp = resolved.stamp
     lastGoodConfig = resolved
     hub.publish({ type: 'cloud_status', status: 'idle' })
-    logger.info(`[cloud] cloud agent ready (${resolved.provider} / ${resolved.model})`)
+    logger.info(`[cloud] cloud agent ready (${resolved.providerId} / ${resolved.model})`)
     return true
   }
 
@@ -557,28 +558,7 @@ export async function createCloudServer(
       }
       const previous = lastGoodConfig
 
-      // 先探测再拆：探测是纯 HTTP，不碰运行时，失败时旧实例毫发无伤
-      const probe = await probeConfig({
-        provider: resolved.provider,
-        apiUrl: resolved.apiUrl,
-        apiKey: resolved.apiKey,
-        model: resolved.model,
-      })
-      if (!probe.ok) {
-        failedConfigStamp = resolved.stamp
-        logger.warn(`[cloud] new cloud config rejected: ${probe.reason}`)
-        hub.publish({
-          type: 'notice',
-          level: 'warn',
-          text: `新配置不可用（${probe.reason}），已保留原配置继续运行；修正后重新推送即可`,
-          at: Date.now(),
-          key: `config-rejected-${resolved.stamp}`,
-        })
-        return
-      }
-      if (probe.warning) logger.warn(`[cloud] config probe: ${probe.warning}`)
-
-      logger.info(`[cloud] applying new cloud config: ${resolved.provider} / ${resolved.model}`)
+      logger.info(`[cloud] applying new cloud config: ${resolved.providerId} / ${resolved.model}`)
       agentReady = false
       runningConfigStamp = null
       await agent.dispose().catch((error) => {
@@ -590,7 +570,7 @@ export async function createCloudServer(
         hub.publish({
           type: 'notice',
           level: 'info',
-          text: `云端模型配置已生效：${resolved.provider} / ${resolved.model}`,
+          text: `云端模型配置已生效：${resolved.providerId} / ${resolved.model}`,
           at: Date.now(),
           key: `config-applied-${resolved.stamp}`,
         })

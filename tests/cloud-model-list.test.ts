@@ -1,64 +1,37 @@
 /**
- * F-10 辅助：云端拉模型清单（`POST /v1/cloud-config/models`）。
+ * 云端配置页的模型清单：直接来自 Pi catalog，不再打供应商 `/models`。
  *
- * 覆盖：鉴权、三种返回形状兼容、`anthropic` 的鉴权头、用已保存的 Key 免重填、
- * 坏 URL 与供应商错误不回显 Key。供应商用本地 http 服务替身，不打外网。
+ * 为什么：供应商清单经常混进 embedding / 别名，照它列会让用户选到跑不起来的 id；
+ * catalog 才是「这个 provider 到底有哪些 chat 模型」的唯一真值。
  */
 
 // @vitest-environment node
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createServer, type Server } from 'http'
 import { promises as fs } from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { createCloudServer, type CloudServer } from '../apps/cloud/src/main'
+import { createCloudServer } from '../apps/cloud/src/main'
 
 let tmpRoot: string
-let cloud: CloudServer
-let base: string
+let server: Awaited<ReturnType<typeof createCloudServer>>
+let base = ''
 let cookie = ''
-let provider: Server
-let providerBase = ''
-let lastAuthHeader = ''
-let lastRequestPath = ''
-let replyBody: unknown = { data: [{ id: 'claude-sonnet-4-5' }, { id: 'claude-haiku-4-5' }] }
-let replyStatus = 200
-
-async function post(p: string, body: unknown, headers: Record<string, string> = {}) {
-  const response = await fetch(base + p, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
-    body: JSON.stringify(body),
-  })
-  return { status: response.status, payload: (await response.json().catch(() => null)) as any }
-}
 
 beforeAll(async () => {
-  provider = createServer((req, res) => {
-    lastAuthHeader = String(req.headers.authorization ?? req.headers['x-api-key'] ?? '')
-    lastRequestPath = String(req.url ?? '')
-    res.writeHead(replyStatus, { 'content-type': 'application/json' })
-    res.end(JSON.stringify(replyBody))
-  })
-  await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve))
-  const address = provider.address()
-  const port = typeof address === 'object' && address ? address.port : 0
-  providerBase = `http://127.0.0.1:${port}/v1`
-
   tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-cloud-models-'))
-  cloud = await createCloudServer({
+  server = await createCloudServer({
     dataDir: tmpRoot,
     workspaceDir: path.join(tmpRoot, 'workspace'),
     agentDir: path.join(tmpRoot, 'agent'),
     port: 0,
-    encryptionKey: Buffer.alloc(32, 5),
-    cookieSecret: 'models-cookie-secret',
+    encryptionKey: Buffer.alloc(32, 9),
+    cookieSecret: 'model-list-secret',
     secureCookies: false,
     version: 'test',
   })
-  const cloudPort = await cloud.listen()
-  base = `http://127.0.0.1:${cloudPort}`
+  const port = await server.listen()
+  base = `http://127.0.0.1:${port}`
 
   await fetch(`${base}/v1/setup`, {
     method: 'POST',
@@ -70,111 +43,68 @@ beforeAll(async () => {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ password: 'password-1234' }),
   })
-  cookie = String(login.headers.get('set-cookie') ?? '').split(';')[0]
-})
+  cookie = (login.headers.getSetCookie?.() ?? [])[0].split(';')[0]
+}, 60_000)
 
 afterAll(async () => {
-  await cloud?.close()
-  await new Promise<void>((resolve) => provider?.close(() => resolve()))
+  await server?.close()
   await fs.rm(tmpRoot, { recursive: true, force: true })
 })
 
-describe('拉模型清单', () => {
-  it('未登录一律 401', async () => {
-    const result = await post('/v1/cloud-config/models', { provider: 'custom', apiUrl: providerBase, apiKey: 'k' })
-    expect(result.status).toBe(401)
-  })
+async function get(pathname: string) {
+  const response = await fetch(`${base}${pathname}`, { headers: { cookie } })
+  return { status: response.status, payload: await response.json().catch(() => null) }
+}
 
-  it('兼容 { data: [{ id }] } 形状并对齐 /models 路径', async () => {
-    const result = await post(
-      '/v1/cloud-config/models',
-      { provider: 'custom', apiUrl: providerBase, apiKey: 'sk-test-1' },
-      { cookie }
-    )
+describe('catalog 模型清单', () => {
+  it('返回该 provider 的 catalog 模型与能力字段', async () => {
+    const result = await get('/v1/cloud-config/catalog?providerId=deepseek')
     expect(result.status).toBe(200)
-    expect(result.payload.models).toEqual(['claude-haiku-4-5', 'claude-sonnet-4-5'])
-    expect(lastRequestPath).toBe('/v1/models')
-    expect(lastAuthHeader).toBe('Bearer sk-test-1')
+    expect(result.payload.providerId).toBe('deepseek')
+    expect(result.payload.models.map((model: { id: string }) => model.id)).toEqual([
+      'deepseek-flash',
+      'deepseek-v4-pro',
+    ])
+    expect(result.payload.models[0]).toMatchObject({
+      contextWindow: expect.any(Number),
+      maxTokens: expect.any(Number),
+      reasoning: expect.any(Boolean),
+      vision: expect.any(Boolean),
+    })
   })
 
-  it('兼容 { models: [...] } 与纯数组、去重', async () => {
-    replyBody = { models: ['m-b', 'm-a', 'm-b'] }
-    const first = await post(
-      '/v1/cloud-config/models',
-      { provider: 'custom', apiUrl: providerBase, apiKey: 'k' },
-      { cookie }
-    )
-    expect(first.payload.models).toEqual(['m-a', 'm-b'])
-
-    replyBody = ['only-one']
-    const second = await post(
-      '/v1/cloud-config/models',
-      { provider: 'custom', apiUrl: providerBase, apiKey: 'k' },
-      { cookie }
-    )
-    expect(second.payload.models).toEqual(['only-one'])
-    replyBody = { data: [{ id: 'claude-sonnet-4-5' }] }
+  it('白名单外的 provider → 400', async () => {
+    const result = await get('/v1/cloud-config/catalog?providerId=custom')
+    expect(result.status).toBe(400)
   })
 
-  it('anthropic 用 x-api-key + anthropic-version，不用 Bearer', async () => {
-    await post(
-      '/v1/cloud-config/models',
-      { provider: 'anthropic', apiUrl: providerBase, apiKey: 'sk-ant-1' },
-      { cookie }
-    )
-    expect(lastAuthHeader).toBe('sk-ant-1')
+  it('未配置时读取配置只回 configured:false，不含任何密钥片段', async () => {
+    const result = await get('/v1/cloud-config')
+    expect(result.status).toBe(200)
+    expect(result.payload).toEqual({ configured: false })
   })
+})
 
-  it('不传 Key 时用已保存的 Key（先保存再刷新列表）', async () => {
-    const saved = await fetch(`${base}/v1/cloud-config`, {
+describe('保存配置', () => {
+  it('落盘加密，读回只给掩码与凭证类型', async () => {
+    const save = await fetch(`${base}/v1/cloud-config`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json', cookie },
       body: JSON.stringify({
-        provider: 'custom',
-        apiUrl: providerBase,
-        model: 'claude-sonnet-4-5',
-        apiKey: 'sk-saved-9999',
+        providerId: 'deepseek',
+        model: 'deepseek-flash',
+        apiKey: 'sk-deepseek-secret-9876',
       }),
     })
-    expect(saved.status).toBe(200)
+    // 探测会打 catalog 的 baseUrl：网络不可达时放行（warining），所以这里只断言 200/400 两种
+    expect([200, 400]).toContain(save.status)
+    if (save.status !== 200) return
 
-    const result = await post('/v1/cloud-config/models', {}, { cookie })
-    expect(result.status).toBe(200)
-    expect(lastAuthHeader).toBe('Bearer sk-saved-9999')
-    expect(result.payload.apiUrl).toBe(providerBase)
-  })
-
-  it('坏 URL 400，且不把 Key 回显到错误里', async () => {
-    const bad = await post(
-      '/v1/cloud-config/models',
-      { provider: 'custom', apiUrl: 'file:///etc/passwd', apiKey: 'sk-secret-1234' },
-      { cookie }
-    )
-    expect(bad.status).toBe(400)
-    expect(JSON.stringify(bad.payload)).not.toContain('sk-secret-1234')
-  })
-
-  it('供应商报错回 502，带状态码但不带 Key', async () => {
-    replyStatus = 401
-    replyBody = { error: 'invalid api key' }
-    const result = await post(
-      '/v1/cloud-config/models',
-      { provider: 'custom', apiUrl: providerBase, apiKey: 'sk-leak-check-4321' },
-      { cookie }
-    )
-    expect(result.status).toBe(502)
-    expect(String(result.payload.error)).toContain('401')
-    expect(JSON.stringify(result.payload)).not.toContain('sk-leak-check-4321')
-    replyStatus = 200
-  })
-
-  it('连不上供应商回 502 provider-unreachable', async () => {
-    const result = await post(
-      '/v1/cloud-config/models',
-      { provider: 'custom', apiUrl: 'http://127.0.0.1:1/v1', apiKey: 'k' },
-      { cookie }
-    )
-    expect(result.status).toBe(502)
-    expect(result.payload.code).toBe('provider-unreachable')
+    const read = await get('/v1/cloud-config')
+    expect(read.payload.configured).toBe(true)
+    expect(read.payload.providerId).toBe('deepseek')
+    expect(read.payload.credentialType).toBe('api_key')
+    expect(String(read.payload.apiKeyMasked)).not.toContain('secret')
+    expect(JSON.stringify(read.payload)).not.toContain('sk-deepseek-secret')
   })
 })

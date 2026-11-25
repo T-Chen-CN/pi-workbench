@@ -23,7 +23,9 @@ function jsonResult(payload: unknown, ok = true, status = 200) {
 
 const fetchMock = vi.fn(async (input: any, init?: any) => {
   const path = String(typeof input === 'string' ? input : input.url)
-  const key = `${init?.method ?? 'GET'} ${path}`
+  // 目录接口带 query，按 pathname 匹配替身
+  const clean = path.split('?')[0]
+  const key = `${init?.method ?? 'GET'} ${clean}`
   const handler = routes[key]
   if (!handler) return jsonResult({ error: `no stub for ${key}` }, false, 404)
   return handler(JSON.parse(String(init?.body ?? 'null')))
@@ -61,8 +63,28 @@ beforeAll(async () => {
   routes['GET /v1/authorizations'] = () => jsonResult({ authorizations: [] })
   routes['GET /v1/cloud-config'] = () => jsonResult({ configured: false })
   routes['POST /v1/pair/code'] = () => jsonResult({ code: PAIR_CODE, expiresAt: Date.now() + 300_000 })
-  routes['POST /v1/cloud-config/models'] = () =>
-    jsonResult({ models: ['model-a', 'model-b'], provider: 'custom', apiUrl: 'https://x/v1' })
+  routes['GET /v1/cloud-config/catalog'] = () =>
+    jsonResult({
+      providerId: 'deepseek',
+      models: [
+        {
+          id: 'deepseek-flash',
+          name: 'DeepSeek Flash',
+          contextWindow: 1_000_000,
+          maxTokens: 384_000,
+          reasoning: true,
+          vision: true,
+        },
+        {
+          id: 'deepseek-v4-pro',
+          name: 'DeepSeek V4 Pro',
+          contextWindow: 1_000_000,
+          maxTokens: 384_000,
+          reasoning: true,
+          vision: false,
+        },
+      ],
+    })
 
   // Web 客户端是零构建的 .js，没有类型声明，用相对路径让 vite 直接转译
   // @ts-expect-error 该模块是纯 JS（无 .d.ts）
@@ -102,29 +124,27 @@ describe('Web 客户端主界面', () => {
     expect(document.body.textContent).toContain('在桌面端')
   })
 
-  it('拉模型后输入框里的值仍在（Key / URL 不被重渲染抹掉）', async () => {
+  it('刷新目录后输入框里的 Key 仍在（不被重渲染抹掉）', async () => {
     buttonByText('设置').click()
     await tick()
-    const inputs = [...document.querySelectorAll('input')] as HTMLInputElement[]
-    const url = inputs.find((node) => node.placeholder.includes('api.example.com'))
-    const key = inputs.find((node) => node.type === 'password')
-    expect(url).toBeTruthy()
+    const key = [...document.querySelectorAll('input')].find(
+      (node) => node.type === 'password'
+    ) as HTMLInputElement
     expect(key).toBeTruthy()
 
-    url!.value = 'https://provider.test/v1'
-    url!.dispatchEvent(new Event('input'))
-    key!.value = 'sk-typed-in-test'
-    key!.dispatchEvent(new Event('input'))
+    key.value = 'sk-typed-in-test'
+    key.dispatchEvent(new Event('input'))
 
-    buttonByText('获取可用模型').click()
+    buttonByText('刷新目录').click()
     await tick(50)
 
-    const after = [...document.querySelectorAll('input')] as HTMLInputElement[]
-    expect(after.find((node) => node.placeholder.includes('api.example.com'))?.value).toBe(
-      'https://provider.test/v1'
-    )
-    expect(after.find((node) => node.type === 'password')?.value).toBe('sk-typed-in-test')
-    expect(document.body.textContent).toContain('model-a')
+    const after = [...document.querySelectorAll('input')].find(
+      (node) => node.type === 'password'
+    ) as HTMLInputElement
+    expect(after.value).toBe('sk-typed-in-test')
+    // 模型下拉来自 catalog，能力字段直接展示
+    expect(document.body.textContent).toContain('DeepSeek Flash')
+    expect(document.body.textContent).toContain('上下文 1M')
   })
 
   it('首连不带 lastAckSeq：带 0 会让服务端走续传，历史就没了', async () => {

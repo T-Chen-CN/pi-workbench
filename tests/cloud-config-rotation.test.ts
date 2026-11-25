@@ -2,7 +2,10 @@
  * F-13 / A-16：云端模型配置轮换必须在**轮次边界**生效，而且不许打断进行中的轮次。
  *
  * 这里把 `AgentManager` 换成假类（真实现要真实供应商 Key），只验证调度语义：
- * ① 推配置后入口处重建一次；② 本轮在跑时不动；③ 新配置不可用就回退到上一份可用配置。
+ * ① 写配置后入口处重建一次；② 本轮在跑时不动；③ 新配置不可用时回退到上一份可用配置。
+ *
+ * 配置写入走 `store.saveCloudConfig`（等价于 PUT 落盘后的状态），这样用例只验证轮换，
+ * 不与「PUT 时校验白名单 / catalog / Key 探测」纠缠（那是 routes 的职责）。
  */
 
 // @vitest-environment node
@@ -21,8 +24,8 @@ const state = {
   busy: false,
   /** initialize 阶段被拒的模型（模拟“结构上就建不起来”：模型不存在等） */
   rejectedModels: [] as string[],
-  /** 探测阶段被拒的模型（模拟“Key 无效 / 连不上供应商”）：旧运行时必须毫发无伤 */
-  invalidConfigs: [] as string[],
+  /** 探测阶段被拒的 provider（模拟“Key 无效”）：旧运行时必须毫发无伤 */
+  invalidProviders: [] as string[],
   probes: 0,
   lastConfig: null as FakeConfig | null,
 }
@@ -82,57 +85,33 @@ vi.mock('pi-bridge', async (importOriginal) => {
 
 // 必须放在 vi.mock 之后：main.ts 会通过被 mock 的模块拿 AgentManager
 const { createCloudServer } = await import('../apps/cloud/src/main')
+const { encryptSecret } = await import('../apps/cloud/src/secure/config-crypto')
 
 let tmpRoot: string
 let server: Awaited<ReturnType<typeof createCloudServer>>
 let base = ''
 let cookie = ''
-
-const headers = () => ({ 'content-type': 'application/json', cookie })
-
-async function pushConfig(model: string): Promise<void> {
-  const response = await fetch(`${base}/v1/cloud-config`, {
-    method: 'PUT',
-    headers: headers(),
-    body: JSON.stringify({
-      provider: 'custom',
-      apiUrl: 'https://example.invalid/v1',
-      model,
-      apiKey: `key-for-${model}`,
-    }),
-  })
-  expect(response.status).toBe(200)
-}
-
-/** 所有入口都会先 `ensureAgent()`，所以拉一次快照就等于「开始下一轮前的检查」 */
-async function touchEntry(): Promise<void> {
-  const response = await fetch(`${base}/v1/snapshot`, { headers: headers() })
-  expect(response.status).toBe(200)
-}
-
-function runningModel(): string | undefined {
-  return state.lastConfig?.apiConfig.modelId
-}
+const encryptionKey = Buffer.alloc(32, 5)
 
 beforeAll(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-cloud-config-'))
+  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-cloud-rotation-'))
   server = await createCloudServer(
     {
       dataDir: tmpRoot,
       workspaceDir: path.join(tmpRoot, 'workspace'),
       agentDir: path.join(tmpRoot, 'agent'),
       port: 0,
-      encryptionKey: Buffer.alloc(32, 5),
+      encryptionKey,
       cookieSecret: 'config-rotation-secret',
       secureCookies: false,
       version: 'test',
     },
     {
       // 真探测要打供应商 `/models`：这里换成替身，只记次数并按名单拉黑
-      probeConfig: async (config) => {
+      probeConfig: async (input) => {
         state.probes += 1
-        if (state.invalidConfigs.includes(config.model)) {
-          return { ok: false, reason: `401 invalid api key for ${config.model}` }
+        if (state.invalidProviders.includes(input.providerId)) {
+          return { ok: false, reason: `401 invalid api key for ${input.providerId}` }
         }
         return { ok: true }
       },
@@ -162,17 +141,42 @@ afterAll(async () => {
 beforeEach(() => {
   state.busy = false
   state.rejectedModels = []
-  state.invalidConfigs = []
+  state.invalidProviders = []
   state.probes = 0
 })
 
+const headers = () => ({ 'content-type': 'application/json', cookie })
+
+/** 直接写盘（等价于 PUT 成功后的状态），避免用例依赖路由校验 */
+async function pushConfig(model: string, providerId = 'deepseek'): Promise<void> {
+  await server.store.saveCloudConfig({
+    providerId,
+    model,
+    credentialCipher: encryptSecret(
+      JSON.stringify({ type: 'api_key', key: `key-for-${model}` }),
+      encryptionKey
+    ),
+    updatedAt: Date.now(),
+  })
+}
+
+/** 所有入口都会先 `ensureAgent()`，所以拉一次快照就等于「开始下一轮前的检查」 */
+async function touchEntry(): Promise<void> {
+  const response = await fetch(`${base}/v1/snapshot`, { headers: headers() })
+  expect(response.status).toBe(200)
+}
+
+function runningModel(): string | undefined {
+  return state.lastConfig?.apiConfig.modelId
+}
+
 describe('云端配置轮换（F-13 / A-16）', () => {
-  it('首次推送配置在入口处初始化一次，同一份配置不会重复重建', async () => {
+  it('首次写配置在入口处初始化一次，同一份配置不会重复重建', async () => {
     const before = calls.initialize
-    await pushConfig('model-a')
+    await pushConfig('deepseek-flash')
     await touchEntry()
     expect(calls.initialize).toBe(before + 1)
-    expect(runningModel()).toBe('model-a')
+    expect(runningModel()).toBe('deepseek-flash')
 
     // 同一份配置再进一次入口：不重建
     const settled = calls.initialize
@@ -180,77 +184,96 @@ describe('云端配置轮换（F-13 / A-16）', () => {
     expect(calls.initialize).toBe(settled)
   })
 
-  it('推新配置后，下一次入口重建运行时并用新模型（不重启进程）', async () => {
-    await pushConfig('model-b')
+  it('写新配置后，下一次入口重建运行时并用新模型（不重启进程）', async () => {
+    await pushConfig('deepseek-v4-pro')
     const beforeInit = calls.initialize
     const beforeDispose = calls.dispose
     await touchEntry()
 
     expect(calls.initialize).toBe(beforeInit + 1)
     expect(calls.dispose).toBe(beforeDispose + 1)
-    expect(runningModel()).toBe('model-b')
+    expect(runningModel()).toBe('deepseek-v4-pro')
   })
 
   it('本轮在跑时不重建；轮次结束后才生效', async () => {
-    await pushConfig('model-c')
+    await pushConfig('deepseek-flash')
     state.busy = true
     const whileBusy = calls.initialize
     await touchEntry()
     expect(calls.initialize).toBe(whileBusy)
-    expect(runningModel()).toBe('model-b')
+    expect(runningModel()).toBe('deepseek-v4-pro')
 
     state.busy = false
     await touchEntry()
     expect(calls.initialize).toBe(whileBusy + 1)
-    expect(runningModel()).toBe('model-c')
+    expect(runningModel()).toBe('deepseek-flash')
   })
 
-  it('新配置不可用时回退到上一份可用配置，服务不被坏配置打死', async () => {
-    await pushConfig('model-broken')
-    state.rejectedModels = ['model-broken']
+  it('initialize 失败时回退到上一份可用配置，服务不被坏配置打死', async () => {
+    await pushConfig('deepseek-v4-pro')
+    state.rejectedModels = ['deepseek-v4-pro']
     const beforeInit = calls.initialize
     await touchEntry()
 
     // 一次失败的尝试 + 一次回滚
     expect(calls.initialize).toBe(beforeInit + 2)
-    expect(runningModel()).toBe('model-c')
+    expect(runningModel()).toBe('deepseek-flash')
 
     // 同一份坏配置不再反复重试
     const afterRollback = calls.initialize
     await touchEntry()
     await touchEntry()
     expect(calls.initialize).toBe(afterRollback)
-    expect(runningModel()).toBe('model-c')
+    expect(runningModel()).toBe('deepseek-flash')
   })
 })
 
-describe('探测失败：坏 Key 不许把旧运行时拆掉', () => {
-  it('探测判不可用 → 一次 initialize 都不发生，旧模型继续用', async () => {
-    // 先确保运行时在 model-c 上
-    await pushConfig('model-c')
-    await touchEntry()
-    expect(runningModel()).toBe('model-c')
-
-    await pushConfig('model-bad-key')
-    state.invalidConfigs = ['model-bad-key']
-    const beforeInit = calls.initialize
-    const beforeDispose = calls.dispose
-    await touchEntry()
-
+describe('保存配置时探测 Key（D24）', () => {
+  it('探测判不可用 → 400 且不改动已保存的配置', async () => {
+    state.invalidProviders = ['google']
+    const response = await fetch(`${base}/v1/cloud-config`, {
+      method: 'PUT',
+      headers: headers(),
+      body: JSON.stringify({
+        providerId: 'google',
+        model: 'gemini-2.5-computer-use-preview-10-2025',
+        apiKey: 'sk-bad',
+      }),
+    })
+    expect(response.status).toBe(400)
     expect(state.probes).toBeGreaterThan(0)
-    expect(calls.initialize).toBe(beforeInit)
-    expect(calls.dispose).toBe(beforeDispose)
-    expect(runningModel()).toBe('model-c')
+    expect(server.store.getCloudConfig()?.providerId).toBe('deepseek')
+  })
 
-    // 同一份坏配置再进两次入口：不再探测（failedConfigStamp 生效）
-    const settledProbes = state.probes
-    await touchEntry()
-    await touchEntry()
-    expect(state.probes).toBe(settledProbes)
+  it('白名单外的 provider 与 catalog 外的模型都被拒', async () => {
+    const unknownProvider = await fetch(`${base}/v1/cloud-config`, {
+      method: 'PUT',
+      headers: headers(),
+      body: JSON.stringify({ providerId: 'custom', model: 'x', apiKey: 'k' }),
+    })
+    expect(unknownProvider.status).toBe(400)
 
-    // 推一份好的立刻恢复轮换
-    await pushConfig('model-d')
-    await touchEntry()
-    expect(runningModel()).toBe('model-d')
+    const unknownModel = await fetch(`${base}/v1/cloud-config`, {
+      method: 'PUT',
+      headers: headers(),
+      body: JSON.stringify({ providerId: 'deepseek', model: 'no-such-model', apiKey: 'k' }),
+    })
+    expect(unknownModel.status).toBe(400)
+  })
+
+  it('旧记录（provider + apiUrl 形态）整体作废', async () => {
+    await server.store.saveCloudConfig({
+      // 直接写一条旧形态的行，模拟升级前留下的记录
+      provider: 'custom',
+      apiUrl: 'https://api.example.com/v1',
+      model: 'model-a',
+      apiKeyCipher: 'enc:x',
+      updatedAt: Date.now(),
+    } as never)
+    expect(server.store.getCloudConfig()).toBeNull()
+
+    const response = await fetch(`${base}/v1/cloud-config`, { headers: headers() })
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ configured: false })
   })
 })

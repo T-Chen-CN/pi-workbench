@@ -82,7 +82,7 @@ export class CloudSession {
       status: this.status,
       canStopReply: busy,
       error: this.error,
-      model: config ? { provider: config.provider, id: config.model } : undefined,
+      model: config ? { provider: config.providerId, id: config.model } : undefined,
     }
   }
 

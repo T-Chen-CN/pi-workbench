@@ -8,7 +8,12 @@
 
 import { randomBytes } from 'crypto'
 import type { CloudSnapshot, CloudWorkspaceInfo } from 'pi-bridge'
-import { fetchProviderModels } from '../agent/provider-models.js'
+import type { Credential } from '@earendil-works/pi-ai'
+import {
+  catalogModelList,
+  isCatalogModel,
+  isKnownProvider,
+} from '../agent/provider-models.js'
 import type { CloudConfig } from '../config.js'
 import type { CloudStore, DeviceRecord } from '../store/store.js'
 import { PAIRING_CODE_TTL_MS } from '../store/store.js'
@@ -47,23 +52,25 @@ export interface RouteDeps {
   loginLimiter: AttemptLimiter
   pairLimiter: AttemptLimiter
   snapshot: () => Promise<CloudSnapshot>
+  /** 配置保存前的轻量 Key 探测（D24） */
+  probeConfig: (
+    input: { providerId: string; apiKey: string }
+  ) => Promise<{ ok: true; warning?: string } | { ok: false; reason: string }>
   logger: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void }
 }
 
 /** 所有凭据类失败对外同一个错误码（不透露「码是否存在 / 是否过期」） */
 const CREDENTIAL_ERROR = 'invalid-credential'
 
-/** 把探测结果映射成 HTTP 错误（码与文案保持原样：设置页与测试都依赖它们） */
-function modelsError(result: { kind: string; detail: string }): HttpError {
-  switch (result.kind) {
-    case 'invalid-url':
-      return new HttpError(400, result.detail, 'invalid-api-url')
-    case 'missing-key':
-      return new HttpError(400, result.detail, 'missing-api-key')
-    case 'unreachable':
-      return new HttpError(502, result.detail, 'provider-unreachable')
-    default:
-      return new HttpError(502, result.detail, 'provider-error')
+/** 解密已保存的凭证；坏了就当作未配置，让用户重配 */
+function decryptCredential(
+  cipher: string,
+  encryptionKey: Buffer
+): Credential | undefined {
+  try {
+    return JSON.parse(decryptSecret(cipher, encryptionKey)) as Credential
+  } catch {
+    return undefined
   }
 }
 
@@ -248,75 +255,73 @@ export function buildRouter(deps: RouteDeps): Router {
     return { ok: true }
   })
 
+  /**
+   * 云端配置读取。Key 只回掩码（掩的是云端自己保存的那把，与设备端无关），
+   * 旧记录（provider + apiUrl 形态）一律当作未配置（D20）。
+   */
   router.get('/v1/cloud-config', (ctx) => {
     requireUser(ctx)
     const record = deps.store.getCloudConfig()
     if (!record) return { configured: false }
-    let keyTail = ''
-    try {
-      keyTail = maskSecret(decryptSecret(record.apiKeyCipher, deps.config.encryptionKey))
-    } catch {
-      keyTail = '********'
-    }
+    const credential = decryptCredential(record.credentialCipher, deps.config.encryptionKey)
+    if (!credential) return { configured: false }
     return {
       configured: true,
-      provider: record.provider,
-      apiUrl: record.apiUrl,
+      providerId: record.providerId,
       model: record.model,
-      apiKeyMasked: keyTail,
+      credentialType: credential.type,
+      ...(credential.type === 'api_key' && credential.key
+        ? { apiKeyMasked: maskSecret(credential.key) }
+        : {}),
       updatedAt: record.updatedAt,
     }
   })
 
-  /** F-10 ~ F-13：配置由客户端推上来，AES 加密落盘，只回掩码 */
-  router.put('/v1/cloud-config', async (ctx) => {
+  /** 该 provider 的 catalog 模型清单（含能力字段，供配置页展示） */
+  router.get('/v1/cloud-config/catalog', (ctx) => {
     requireUser(ctx)
-    const body = await ctx.json<{
-      provider?: string
-      apiUrl?: string
-      model?: string
-      apiKey?: string
-    }>()
-    const provider = String(body.provider ?? '').trim()
-    const apiUrl = String(body.apiUrl ?? '').trim()
-    const model = String(body.model ?? '').trim()
-    const apiKey = String(body.apiKey ?? '').trim()
-    if (!provider || !apiUrl || !model || !apiKey) {
-      throw new HttpError(400, 'provider, apiUrl, model and apiKey are required')
-    }
-    await deps.store.saveCloudConfig({
-      provider,
-      apiUrl,
-      model,
-      apiKeyCipher: encryptSecret(apiKey, deps.config.encryptionKey),
-      updatedAt: Date.now(),
-    })
-    deps.logger.info(`[cloud] cloud config updated for model ${model}`)
-    return { ok: true, apiKeyMasked: maskSecret(apiKey), takesEffect: 'next-turn' }
+    const providerId = String(ctx.url.searchParams.get('providerId') ?? '').trim()
+    if (!isKnownProvider(providerId)) throw new HttpError(400, 'Unknown provider')
+    return { providerId, models: catalogModelList(providerId) }
   })
 
   /**
-   * F-10 辅助：拉模型清单。Key 可以不传（用已保存的），方便“先保存再刷新列表”。
-   * 只回模型 id 列表，不回传供应商响应原文，也不回显 Key。
+   * F-10 ~ F-13：保存配置。只接受白名单 provider + catalog 内模型；
+   * 保存前做一次轻量 Key 探测（D24）。Key 加密落盘，只回掩码。
    */
-  router.post('/v1/cloud-config/models', async (ctx) => {
+  router.put('/v1/cloud-config', async (ctx) => {
     requireUser(ctx)
-    const body = await ctx.json<{ provider?: string; apiUrl?: string; apiKey?: string }>()
-    const saved = deps.store.getCloudConfig()
-    const provider = String(body.provider ?? saved?.provider ?? 'custom').trim() || 'custom'
-    const apiUrl = String(body.apiUrl ?? saved?.apiUrl ?? '').trim()
-    let apiKey = String(body.apiKey ?? '').trim()
-    if (!apiKey && saved) {
-      try {
-        apiKey = decryptSecret(saved.apiKeyCipher, deps.config.encryptionKey)
-      } catch {
-        apiKey = ''
-      }
+    const body = await ctx.json<{ providerId?: string; model?: string; apiKey?: string }>()
+    const providerId = String(body.providerId ?? '').trim()
+    const model = String(body.model ?? '').trim()
+    const apiKey = String(body.apiKey ?? '').trim()
+    if (!isKnownProvider(providerId)) throw new HttpError(400, 'Unknown provider')
+    if (!model || !isCatalogModel(providerId, model)) {
+      throw new HttpError(400, `Model ${model || '(empty)'} is not in the Pi catalog for ${providerId}`)
     }
-    const models = await fetchProviderModels({ provider, apiUrl, apiKey })
-    if (!models.ok) throw modelsError(models)
-    deps.logger.info(`[cloud] fetched ${models.models.length} models from ${provider}`)
-    return { models: models.models, provider, apiUrl }
+    if (!apiKey) throw new HttpError(400, 'apiKey is required')
+
+    const probe = await deps.probeConfig({ providerId, apiKey })
+    if (!probe.ok) throw new HttpError(400, probe.reason)
+    if (probe.warning) deps.logger.warn(`[cloud] key probe: ${probe.warning}`)
+
+    const credentialCipher = encryptSecret(
+      JSON.stringify({ type: 'api_key', key: apiKey }),
+      deps.config.encryptionKey
+    )
+    await deps.store.saveCloudConfig({
+      providerId,
+      model,
+      credentialCipher,
+      updatedAt: Date.now(),
+    })
+    deps.logger.info(`[cloud] cloud config updated for ${providerId} / ${model}`)
+    return {
+      ok: true,
+      apiKeyMasked: maskSecret(apiKey),
+      takesEffect: 'next-turn',
+      ...(probe.warning ? { warning: probe.warning } : {}),
+    }
   })
 
   router.get('/v1/snapshot', async (ctx) => {

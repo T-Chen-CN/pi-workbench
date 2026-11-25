@@ -932,27 +932,37 @@ function renderNoticeCard() {
   ])
 }
 
-/** 渠道预设：选中后自动填 Base URL（与桌面端 apiConfig 同一套口径） */
+/** 固定供应商白名单（与桌面端同一份；模型能力全部来自 Pi catalog） */
 const PROVIDER_PRESETS = [
-  { id: 'custom', label: 'custom（任意 OpenAI 兼容 / 代理）', apiUrl: '' },
-  { id: 'openai', label: 'openai', apiUrl: 'https://api.openai.com/v1' },
-  { id: 'anthropic', label: 'anthropic', apiUrl: 'https://api.anthropic.com/v1' },
+  { id: 'openai', label: 'OpenAI' },
+  { id: 'anthropic', label: 'Anthropic' },
+  { id: 'google', label: 'Google' },
+  { id: 'xai', label: 'xAI' },
+  { id: 'deepseek', label: 'DeepSeek' },
+  { id: 'xiaomi', label: '小米 MiMo' },
+  { id: 'xiaomi-token-plan-cn', label: '小米（Token 套餐）' },
+  { id: 'openai-codex', label: 'OpenAI Codex' },
 ]
+
+function formatTokens(value) {
+  if (!value) return '-'
+  if (value >= 1_000_000) return `${Math.round((value / 1_000_000) * 10) / 10}M`
+  return `${Math.round(value / 1024)}K`
+}
 
 /**
  * 云端模型配置卡。
  *
  * **输入值必须存在 `state.configDraft` 里，不能只靠 DOM**：整页 `render()` 在收到任何
  * WS 帧（流式输出）时都会重跑，DOM 会被重建一次；值只留在 input 上等于「说一句话就把
- * 刚填的 Key / URL 抹掉」。所以输入都从 draft 回填，oninput 立刻写回 draft。
- * 同理，拉模型时只做局部更新，不整页 render()。
+ * 刚填的 Key 抹掉」。所以输入都从 draft 回填，oninput 立刻写回 draft。
+ * 同理，切换供应商时只做局部更新，不整页 render()。
  */
 function renderConfigCard() {
   const config = state.config || { configured: false }
   if (!state.configDraft) {
     state.configDraft = {
-      provider: config.provider || 'custom',
-      apiUrl: config.apiUrl || '',
+      providerId: config.providerId || 'deepseek',
       model: config.model || '',
       apiKey: '',
     }
@@ -964,109 +974,98 @@ function renderConfigCard() {
     'select',
     {
       onchange: (event) => {
-        draft.provider = event.target.value
-        const preset = PROVIDER_PRESETS.find((entry) => entry.id === draft.provider)
-        if (preset && preset.apiUrl) {
-          draft.apiUrl = preset.apiUrl
-          apiUrl.value = preset.apiUrl
-        }
+        draft.providerId = event.target.value
+        draft.model = ''
+        state.configModels = []
+        void loadCatalog()
       },
     },
     PROVIDER_PRESETS.map((entry) => el('option', { value: entry.id, text: entry.label }))
   )
-  providerSelect.value = draft.provider
-
-  const apiUrl = el('input', {
-    value: draft.apiUrl,
-    placeholder: 'https://api.example.com/v1',
-    oninput: (event) => {
-      draft.apiUrl = event.target.value
-    },
-  })
+  providerSelect.value = draft.providerId
 
   const apiKey = el('input', {
     type: 'password',
     autocomplete: 'off',
     value: draft.apiKey,
-    placeholder: config.apiKeyMasked ? `已保存：${config.apiKeyMasked}（留空表示不改）` : 'sk-...',
+    placeholder: config.apiKeyMasked
+      ? `已保存：${config.apiKeyMasked}（留空表示不改）`
+      : 'sk-...',
     oninput: (event) => {
       draft.apiKey = event.target.value
     },
   })
 
-  // 拿到列表用下拉，拿不到就手填 —— 不是所有代理商都实现 /models
   const modelLabel = el('label', { class: 'mono muted', text: '模型' })
   const modelSlot = el('div', {})
+  const capabilitySlot = el('p', { class: 'muted mono' })
 
   const paintModelField = () => {
     const models = state.configModels || []
-    modelLabel.textContent = models.length > 0 ? `模型（共 ${models.length} 个）` : '模型'
-    const field =
-      models.length > 0
-        ? el(
-            'select',
-            {
-              onchange: (event) => {
-                draft.model = event.target.value
-              },
-            },
-            models.map((id) => el('option', { value: id, text: id }))
-          )
-        : el('input', {
-            value: draft.model,
-            placeholder: '可以手填，例如 claude-sonnet-4-5',
-            oninput: (event) => {
-              draft.model = event.target.value
-            },
-          })
-    if (models.length > 0 && models.includes(draft.model)) field.value = draft.model
-    modelSlot.replaceChildren(field)
+    modelLabel.textContent = `模型（catalog 内 ${models.length} 个）`
+    if (models.length === 0) {
+      modelSlot.replaceChildren(el('p', { class: 'muted', text: '目录里没有这个供应商的模型' }))
+      capabilitySlot.textContent = ''
+      return
+    }
+    if (!models.some((model) => model.id === draft.model)) draft.model = models[0].id
+    const select = el(
+      'select',
+      {
+        onchange: (event) => {
+          draft.model = event.target.value
+          paintCapabilities()
+        },
+      },
+      models.map((model) => el('option', { value: model.id, text: model.name || model.id }))
+    )
+    select.value = draft.model
+    modelSlot.replaceChildren(select)
+    paintCapabilities()
   }
-  paintModelField()
 
-  const fetchButton = el('button', {
-    text: '获取可用模型',
-    onclick: async () => {
-      fetchButton.disabled = true
-      fetchButton.textContent = '拉取中…'
-      status.textContent = ''
-      const result = await request('POST', '/v1/cloud-config/models', {
-        provider: draft.provider,
-        apiUrl: draft.apiUrl,
-        apiKey: draft.apiKey,
-      })
-      fetchButton.disabled = false
-      fetchButton.textContent = '获取可用模型'
-      if (!result.ok) {
-        status.textContent = `获取失败：${result.payload?.error || result.status}`
-        return
-      }
-      state.configModels = result.payload?.models || []
-      if (state.configModels.length === 0) {
-        status.textContent = '供应商返回了空列表，可以手填'
-      } else if (!state.configModels.includes(draft.model)) {
-        draft.model = state.configModels[0]
-      }
-      paintModelField()
-    },
-  })
+  const paintCapabilities = () => {
+    const model = (state.configModels || []).find((entry) => entry.id === draft.model)
+    if (!model) {
+      capabilitySlot.textContent = ''
+      return
+    }
+    capabilitySlot.textContent = [
+      `上下文 ${formatTokens(model.contextWindow)}`,
+      `输出 ${formatTokens(model.maxTokens)}`,
+      model.reasoning ? '支持思考' : '不支持思考',
+      model.vision ? '图片输入' : '纯文本',
+    ].join(' · ')
+  }
+
+  const loadCatalog = async () => {
+    const result = await request(
+      'GET',
+      `/v1/cloud-config/catalog?providerId=${encodeURIComponent(draft.providerId)}`
+    )
+    state.configModels = result.ok ? result.payload?.models || [] : []
+    paintModelField()
+  }
 
   const saveButton = el('button', {
     class: 'primary',
     text: '保存',
     onclick: async () => {
       const body = {
-        provider: draft.provider.trim(),
-        apiUrl: draft.apiUrl.trim(),
+        providerId: draft.providerId.trim(),
         model: draft.model.trim(),
         apiKey: draft.apiKey.trim(),
       }
-      if (!body.provider || !body.apiUrl || !body.model) {
-        status.textContent = '渠道、Base URL、模型都要填'
+      if (!body.providerId || !body.model) {
+        status.textContent = '供应商与模型都要选'
         return
       }
       if (!body.apiKey && !config.apiKeyMasked) {
         status.textContent = '首次配置要填 API Key'
+        return
+      }
+      if (!body.apiKey) {
+        status.textContent = '这里需要重新填一次 Key（云端不保存明文可回填的那份）'
         return
       }
       const result = await request('PUT', '/v1/cloud-config', body)
@@ -1074,29 +1073,40 @@ function renderConfigCard() {
         status.textContent = result.payload?.error || '保存失败'
         return
       }
-      status.textContent = '已保存，下一轮生效'
-      // 落盘成功后清空 draft 与临时列表：Key 不再留在页面状态里
+      status.textContent = result.payload?.warning
+        ? `已保存，下一轮生效（${result.payload.warning}）`
+        : '已保存，下一轮生效'
+      // 落盘成功后清空 draft：Key 不再留在页面状态里
       state.configDraft = null
-      state.configModels = []
       await loadAuxiliary()
       render()
     },
   })
 
+  // 首次进来目录还没拉过：渲染完成后补一次（此时 DOM 节点已建好，直接局部更新）
+  if (!state.configModels || state.configModels.length === 0) void loadCatalog()
+
   return el('div', { class: 'card stack' }, [
     el('h3', { text: '云端模型配置' }),
-    el('p', { class: 'muted', text: '桌面端与 Web 写的是同一份配置；Key 加密落盘，只回末四位。' }),
-    el('label', { class: 'mono muted', text: '渠道' }),
+    el('p', {
+      class: 'muted',
+      text: '只支持 8 家内置供应商；模型能力来自 Pi catalog。Key 加密落盘，只回末四位，设备端的 Key 不会上传到这里。',
+    }),
+    el('label', { class: 'mono muted', text: '供应商' }),
     providerSelect,
-    el('label', { class: 'mono muted', text: 'Base URL' }),
-    apiUrl,
-    el('label', { class: 'mono muted', text: 'API Key（留空表示不改）' }),
+    el('label', { class: 'mono muted', text: 'API Key' }),
     apiKey,
-    el('div', { class: 'row' }, [fetchButton]),
     modelLabel,
     modelSlot,
+    capabilitySlot,
     status,
-    saveButton,
+    el('div', { class: 'row' }, [
+      saveButton,
+      el('button', {
+        text: '刷新目录',
+        onclick: () => void loadCatalog(),
+      }),
+    ]),
     el('button', {
       text: '退出登录',
       onclick: async () => {
