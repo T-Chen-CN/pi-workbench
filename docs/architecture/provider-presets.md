@@ -537,3 +537,7 @@ SDK 的远端目录是**叠加**在打包快照上的（`mergeModels(baseline, r
 2. **models.dev 富数据**（§8.3）需要独立条目与独立评审。
 3. `openai` 与 `openai-codex` 是两套独立凭证，ChatGPT 订阅额度在上游如何共享不在我们控制范围内，UI 只做说明。
 4. **自建 OAuth 应用（用自己的域名做回调）**：需要向每家厂商申请 client_id + 备案回调域名，并自行实现授权码交换（SDK 不暴露 client_id 覆写）。若将来做成，云端 UX 可去掉粘贴步骤（§3.8）。
+5. **云端 OAuth 登录本身尚未实现**（P5 只落了配置、校验与云端凭证存储），见 BACKLOG P-02。
+6. **需实测的 SDK 假设**（`openai` 粘贴回填的 `client_id`、各家订阅策略、部分供应商 `/models` 是否存在、真实 `maxTokens` 与 clamp 边界）见 BACKLOG P-05。
+
+> 以上 1–6 已逐条登记为 [BACKLOG](../progress/BACKLOG.md) 的 P-02 / P-04 / P-05 / P-06 / P-07 / P-08 / P-10，本文件只保留技术背景。

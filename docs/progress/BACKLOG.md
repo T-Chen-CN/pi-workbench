@@ -20,7 +20,16 @@
 | ID | 项目 | 优先级 | 状态 |
 | --- | --- | --- | --- |
 | R-23 | 输出预算与截断的完整处理（详见 §3） | P0 | 🟡 部分完成（2026-11-06） |
-| P-01 | 供应商预设与鉴权（8 家）：固定 provider + safeStorage 凭证 + OAuth 登录 | P1 | 🟡 P0–P4 已落地，P5 只剩云端 OAuth 登录 UI（见 [provider-presets](../architecture/provider-presets.md) §10）。桌面端已完成：凭证文件存储 / 旧配置迁移 / 运行时切 catalog / 协议与回落修正 / 设置页 + OAuth 登录（`providers:*` IPC） | |
+| P-01 | 供应商预设与鉴权（8 家）：固定 provider + safeStorage 凭证 + OAuth 登录 | P1 | 🟡 桌面端已完成（P0–P4，`71a572c`→`2e49819`）：凭证文件存储 / 旧配置迁移 / 运行时切 catalog / 协议与回落修正 / 设置页 + OAuth 登录（`providers:*` IPC）。方案见 [provider-presets](../architecture/provider-presets.md)，剩下的是 P-02 ~ P-07 |
+| P-02 | 云端 OAuth 登录（D18 / D19） | P1 | ⬜ 未做：服务端 auth flow（`start` / `events` / `answer` / `cancel`）+ 临时状态表（PKCE verifier、device code，**不可跨实例**）+ 云端配置页登录 UI + 成功凭证写回 `CloudConfigRecord.credentialCipher`。四条路径各一次：`xai` device code · `anthropic` copy-code · `openai-codex` device code · `openai` 粘贴回调 URL |
+| P-03 | 供应商预设的真实凭证手工验收（发布前必做） | P1 | ⬜ 未做（清单见 [provider-presets §11.2](../architecture/provider-presets.md)）：8 家 × api_key 各一次；4 条 OAuth；下调上下文/输出上限在**轮次边界**生效且不打断；换模型档位自动降级；会话模型回落不弹提示；云端配置页 Key 只回掩码 |
+| P-04 | 目录跟随的两个开关与来源展示（D6 / D12） | P2 | ⬜ 未做：目录刷新「默认开、可关」的设置项、`PI_OFFLINE` 总开关、设置页展示 `source`（bundled / remote）与目录时间戳 |
+| P-05 | SDK 行为实测清单（§13 遗留问题） | P2 | ⬜ 未做：`openai` 粘贴回填的 `client_id` 是否被 token 交换接受；各家订阅账号的额外策略；`deepseek` / `xiaomi*` 是否存在 `/models`（决定 Key 探测走「真校验」还是「404 放行」）；真实 `maxTokens` 与 SDK `clampMaxTokensToContext` 的边界 |
+| P-06 | 目录「删除同步」（D12 遗留） | P3 | ⬜ 未做：清空目录缓存后可能短暂回退到旧列表；需要一次确认式刷新或「删除以远端为准」的显式提示 |
+| P-07 | models.dev 富数据（价格 / 限额 / 模态） | P3 | ⬜ 未做：独立立项，见 [provider-presets §8.3](../architecture/provider-presets.md)；当前能力表只展示 catalog 可读字段 |
+| P-08 | 自建 OAuth 应用（用自己域名做回调） | P3 | ⬜ 未做：需向各家申请 client_id + 备案 + 自实现授权码交换；当前复用 pi-ai 内置的 redirect 配置，用户会被带到 `pi.dev` 的授权页 |
+| P-09 | 全量测试里 git 相关用例的偶发失败 | P2 | ⬜ 未做：`cloud-device-unit-e2e`（A-43 干净树回收）、`repo-sync-manager`（fetch 后广播）、`worktree-coordinator`（依赖安装哈希）在**高并发全量跑**时偶发失败，单文件跑均通过，且在 `b275592` 基线同样复现。方向：git 用例串行化 / 提高超时 / 排查共享临时仓库与锁竞争 |
+| P-10 | `openai` 与 `openai-codex` 是两套独立凭证 | P3 | ⬜ 未做：设置页文案要讲清「登录一次不代表两边都能用」，否则用户会以为 Codex 订阅就是 OpenAI Key |
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
 | C-01 | 云端 Agent（开发调度）：Pi 内核 + 工单级委派 | P0 | 🟡 代码 + 部署已落地（2026-11-21，见 [cloud-agent](../agent/cloud-agent.md)）：内核注入点 / 协议契约 / `apps/cloud` / 终端执行器 / 桌面端云端页 / Web 客户端 / 运维件；已部署到 `tchen-xiaoxiao.com`（systemd + Caddy + 每日备份），公网自检 34/34 通过（`apps/cloud/scripts/acceptance.mjs`）。**剩**：真派活闭环人工走查（A-19/A-20/A-21，需真实供应商 Key），以及把 2026-11-22 的代码补丁重新部署（生产还在上一版） |
@@ -46,7 +55,7 @@
 - 检：`stopReason === 'length'` 单独分支，`success:false` + `errorCode`（`output-truncated` / `empty-response`）+ `outputLimit`。
 - 呈现：两类文案分开（有正文被切 / 只有思考）；`AgentUsage.reasoning` 透出，气泡显示「思考 N」。
 - 修：空正文不进 `runtime.messageHistory`；catalog 退回供应商硬上限，推荐值交给档位。
-- 档位：设置页「输出上限」下拉（自动 / 16K / 32K / 64K / 128K / 256K），落 `api-config.json` 的 `maxTokens`；三层归一化（渲染层 / 主进程 / bridge）必须同步改。
+- 档位：设置页「输出上限」下拉，落 `config/providers.json` 的 `overrides[modelId].maxTokens`（catalog 真值为上限）；生效值由 `resolveLimits()` 单点计算。
 - **刻意不做**：自动提升上限重试、降低思考强度——出问题就如实报错。
 
 **剩余子项**：
@@ -97,4 +106,4 @@ C-04（配置轮换）与 C-05（工作树回收）已于同日修完并进 §2 
 ---
 
 **维护者**: Pi Workbench Team
-**最后更新**: 2026-11-21
+**最后更新**: 2026-11-26
