@@ -197,7 +197,8 @@ const mockAPI = {
       language: 'zh',
       theme: 'light',
       autoSave: true,
-      autoSaveDelay: 2000
+      autoSaveDelay: 2000,
+      useSystemProxy: true
     }
     try {
       const saved = localStorage.getItem(MOCK_SETTINGS_KEY)

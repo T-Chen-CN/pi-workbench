@@ -29,6 +29,9 @@ export const DEFAULT_CLOSE_TO_TRAY = true
 /** 新建 / 首次复用的链接工作树自动后台安装依赖（会执行仓库里的 install 脚本） */
 export const DEFAULT_AUTO_INSTALL_WORKTREE_DEPS = true
 
+/** 主进程请求（AI 供应商 / GitHub / 联网搜索）跟随系统代理 */
+export const DEFAULT_USE_SYSTEM_PROXY = true
+
 export function isPermissionLevel(value: unknown): value is PermissionLevel {
   return value === 'readonly' || value === 'ask' || value === 'auto'
 }
@@ -78,6 +81,8 @@ interface SettingsState {
   closeToTray: boolean
   /** 链接工作树自动安装依赖；主进程读取同一字段 */
   autoInstallWorktreeDeps: boolean
+  /** 主进程请求跟随操作系统代理；主进程读取同一字段 */
+  useSystemProxy: boolean
   setAutoSave: (enabled: boolean) => void
   setAutoSaveDelay: (delayMs: number) => void
   setPermissionLevel: (level: PermissionLevel) => void
@@ -91,6 +96,7 @@ interface SettingsState {
   setExplorerSortReverse: (enabled: boolean) => void
   setCloseToTray: (enabled: boolean) => void
   setAutoInstallWorktreeDeps: (enabled: boolean) => void
+  setUseSystemProxy: (enabled: boolean) => void
   hydrate: (settings: {
     autoSave?: unknown
     autoSaveDelay?: unknown
@@ -104,6 +110,7 @@ interface SettingsState {
     explorerSortReverse?: unknown
     closeToTray?: unknown
     autoInstallWorktreeDeps?: unknown
+    useSystemProxy?: unknown
   }) => void
 }
 
@@ -121,6 +128,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   explorerSortReverse: DEFAULT_SORT_OPTIONS.reverse,
   closeToTray: DEFAULT_CLOSE_TO_TRAY,
   autoInstallWorktreeDeps: DEFAULT_AUTO_INSTALL_WORKTREE_DEPS,
+  useSystemProxy: DEFAULT_USE_SYSTEM_PROXY,
 
   setAutoSave: (enabled) => set({ autoSave: enabled }),
 
@@ -152,6 +160,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setCloseToTray: (enabled) => set({ closeToTray: enabled }),
 
   setAutoInstallWorktreeDeps: (enabled) => set({ autoInstallWorktreeDeps: enabled }),
+
+  setUseSystemProxy: (enabled) => set({ useSystemProxy: enabled }),
 
   hydrate: (settings) =>
     set((state) => ({
@@ -199,5 +209,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         typeof settings.autoInstallWorktreeDeps === 'boolean'
           ? settings.autoInstallWorktreeDeps
           : state.autoInstallWorktreeDeps,
+      useSystemProxy:
+        typeof settings.useSystemProxy === 'boolean'
+          ? settings.useSystemProxy
+          : state.useSystemProxy,
     })),
 }))

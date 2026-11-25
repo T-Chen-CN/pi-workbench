@@ -595,6 +595,11 @@ export const translations = {
       '新建或首次复用链接工作树时在后台执行仓库的安装命令（会运行仓库里的安装脚本）；关掉后可在工作树 chip 里手动安装',
     autoInstallWorktreeDepsOn: '自动安装',
     autoInstallWorktreeDepsOff: '手动安装',
+    useSystemProxy: '使用系统代理',
+    useSystemProxyHint:
+      '让模型供应商、GitHub 与联网搜索请求跟随操作系统的代理设置，切换后立即生效',
+    useSystemProxyOn: '已开启',
+    useSystemProxyOff: '已关闭',
     autoSaveDelay: '自动保存延迟',
     runWhileBusy: '任务运行时发送消息',
     runWhileBusyHint: '运行中发送的默认处理方式',
@@ -1538,6 +1543,11 @@ export const translations = {
       'Run the repository install command in the background when a linked worktree is created or first reused (this executes install scripts from the repo). When off, install manually from the worktree chip.',
     autoInstallWorktreeDepsOn: 'Install automatically',
     autoInstallWorktreeDepsOff: 'Install manually',
+    useSystemProxy: 'Use system proxy',
+    useSystemProxyHint:
+      'Route model provider, GitHub, and web search requests through the operating system proxy. Takes effect immediately.',
+    useSystemProxyOn: 'Enabled',
+    useSystemProxyOff: 'Disabled',
     autoSaveDelay: 'Auto-save delay',
     runWhileBusy: 'Messages while a task is running',
     runWhileBusyHint: 'Default handling for messages sent mid-task',

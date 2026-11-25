@@ -69,7 +69,7 @@ macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动�
 
 | 文件 | 写者 | 内容 / 恢复语义 |
 | --- | --- | --- |
-| `config/settings.json` | `app:saveSettings` | 语言、主题、自动保存、`closeToTray`、`permissionLevel`、通知开关、快捷键 |
+| `config/settings.json` | `app:saveSettings` | 语言、主题、自动保存、`closeToTray`、`useSystemProxy`、`permissionLevel`、通知开关、快捷键 |
 | `config/providers.json` | `providers:*` | active provider、每家的选中模型与按模型的下调容量；无密钥 |
 | `config/credentials.json` | `providers:*` / 登录流程 | 每 provider 一份凭证（`api_key` 或 `oauth`），值为 `enc:` + safeStorage；**唯一密钥落盘点** |
 | `config/device-id` | `electron/device-id.ts` | OAuth 上报的稳定 UUID（OpenAI 会校验格式） |

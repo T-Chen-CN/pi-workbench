@@ -86,6 +86,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     keybindings,
     closeToTray,
     autoInstallWorktreeDeps,
+    useSystemProxy,
     setAutoSave,
     setAutoSaveDelay,
     setPermissionLevel,
@@ -94,6 +95,7 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     setRunWhileBusy,
     setCloseToTray,
     setAutoInstallWorktreeDeps,
+    setUseSystemProxy,
     setKeybinding,
     resetKeybindings,
   } = useSettingsStore()
@@ -225,6 +227,11 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
   const handleAutoInstallDepsChange = (enabled: boolean) => {
     setAutoInstallWorktreeDeps(enabled)
     void persistAppSettings({ autoInstallWorktreeDeps: enabled })
+  }
+
+  const handleUseSystemProxyChange = (enabled: boolean) => {
+    setUseSystemProxy(enabled)
+    void persistAppSettings({ useSystemProxy: enabled })
   }
 
   const shortcutName = (id: ShortcutId) =>
@@ -462,6 +469,23 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                 {autoInstallWorktreeDeps
                   ? t('autoInstallWorktreeDepsOn')
                   : t('autoInstallWorktreeDepsOff')}
+              </label>
+            </Field>
+
+            <Field
+              label={t('useSystemProxy')}
+              hint={t('useSystemProxyHint')}
+              htmlFor="use-system-proxy"
+            >
+              <label className="flex h-8 items-center gap-2 type-value text-ink">
+                <input
+                  id="use-system-proxy"
+                  type="checkbox"
+                  className="h-3 w-3 accent-[rgb(var(--accent))]"
+                  checked={useSystemProxy}
+                  onChange={(event) => handleUseSystemProxyChange(event.target.checked)}
+                />
+                {useSystemProxy ? t('useSystemProxyOn') : t('useSystemProxyOff')}
               </label>
             </Field>
           </div>

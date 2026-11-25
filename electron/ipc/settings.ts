@@ -4,6 +4,7 @@ import * as path from 'path'
 import { getAppDir, getBridgeEntryUrl } from '../app-paths.js'
 import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
 import { refreshTray } from '../tray.js'
+import { refreshSystemProxy } from '../system-proxy.js'
 import { handleIpc } from './register.js'
 
 const DEFAULT_SETTINGS = {
@@ -21,6 +22,8 @@ const DEFAULT_SETTINGS = {
   closeToTray: true,
   /** 新建 / 首次复用的链接工作树自动后台安装依赖（会执行仓库里的 install 脚本） */
   autoInstallWorktreeDeps: true,
+  /** 主进程请求（AI 供应商 / GitHub / 联网搜索）跟随操作系统代理 */
+  useSystemProxy: true,
 }
 
 let settingsCache: Record<string, any> = {}
@@ -139,10 +142,19 @@ export function registerSettingsIpc(): void {
           delete sanitized.autoInstallWorktreeDeps
         }
       }
+      // 系统代理：缺失时保留现有值，不把旧前端没发过的字段写丢
+      if (typeof sanitized.useSystemProxy !== 'boolean') {
+        if (typeof settingsCache.useSystemProxy === 'boolean') {
+          sanitized.useSystemProxy = settingsCache.useSystemProxy
+        } else {
+          delete sanitized.useSystemProxy
+        }
+      }
       await saveSettingsFile(sanitized)
       updateAppSettingsCache(sanitized)
-      // 托盘开关与菜单文案跟随设置即时生效
+      // 托盘开关、菜单文案与系统代理跟随设置即时生效
       refreshTray()
+      refreshSystemProxy()
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }

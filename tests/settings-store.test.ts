@@ -3,6 +3,7 @@ import {
   DEFAULT_AUTO_SAVE_DELAY,
   DEFAULT_CLOSE_TO_TRAY,
   DEFAULT_RUN_WHILE_BUSY,
+  DEFAULT_USE_SYSTEM_PROXY,
   MAX_AUTO_SAVE_DELAY,
   MIN_AUTO_SAVE_DELAY,
   clampAutoSaveDelay,
@@ -136,5 +137,27 @@ describe('close to tray', () => {
     expect(useSettingsStore.getState().closeToTray).toBe(false)
     useSettingsStore.getState().setCloseToTray(true)
     expect(useSettingsStore.getState().closeToTray).toBe(true)
+  })
+})
+
+describe('system proxy', () => {
+  it('enables system proxy by default', () => {
+    expect(useSettingsStore.getState().useSystemProxy).toBe(DEFAULT_USE_SYSTEM_PROXY)
+    expect(DEFAULT_USE_SYSTEM_PROXY).toBe(true)
+  })
+
+  it('hydrates the persisted choice and ignores malformed values', () => {
+    useSettingsStore.getState().hydrate({ useSystemProxy: false })
+    expect(useSettingsStore.getState().useSystemProxy).toBe(false)
+
+    useSettingsStore.getState().hydrate({ useSystemProxy: 'yes' })
+    expect(useSettingsStore.getState().useSystemProxy).toBe(false)
+  })
+
+  it('round-trips through the setter', () => {
+    useSettingsStore.getState().setUseSystemProxy(false)
+    expect(useSettingsStore.getState().useSystemProxy).toBe(false)
+    useSettingsStore.getState().setUseSystemProxy(true)
+    expect(useSettingsStore.getState().useSystemProxy).toBe(true)
   })
 })

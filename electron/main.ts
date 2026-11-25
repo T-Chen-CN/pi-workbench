@@ -29,6 +29,7 @@ import {
   resolveCloseAction,
   showTrayHintOnce
 } from './tray.js'
+import { installSystemProxy } from './system-proxy.js'
 import { createBootWindowController } from './boot-window.js'
 import { registerFilesIpc } from './ipc/files.js'
 import { registerAttachmentsIpc } from './ipc/attachments.js'
@@ -837,6 +838,10 @@ app.whenReady().then(async () => {
     console.error('[Main] Failed to load settings before window creation:', error)
   }
   setAppSettingsCache(startupSettings)
+  // 系统代理包装必须在任何出站请求（云端连接、供应商刷新、Agent、GitHub）之前装好；设置里的开关热生效
+  installSystemProxy({
+    getEnabled: () => getAppSettingsCache().useSystemProxy !== false
+  })
   // 权限迁移会写 settings.json，必须在渲染层读取设置之前完成
   await migratePermissionLevel()
   // 旧 api-config.json → providers.json + 加密凭证（必须在 ready 之后：要读 safeStorage），
