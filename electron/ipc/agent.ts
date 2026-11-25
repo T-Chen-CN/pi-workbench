@@ -6,7 +6,10 @@ import { shell, dialog, BrowserWindow } from 'electron'
 import { getAppDir, getBridgeEntryUrl } from '../app-paths.js'
 import { isTrustedWorkspacePath } from '../workspace-trust.js'
 import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
-import { agentConfigKey } from '../agent-config-key.js'
+import {
+  resolveAgentProviderConfig,
+  type LegacyAgentApiConfig,
+} from '../agent-provider-config.js'
 import { sanitizeApprovalDecision, type ApprovalBroker } from '../approval-broker.js'
 import type { AgentRegistry } from '../agent-registry.js'
 import type { PluginManager } from '../plugin-manager.js'
@@ -107,16 +110,14 @@ function broadcastToWindows(channel: string, payload: unknown): void {
 export async function ensureWorkspaceAgent(
   context: AgentIpcContext,
   workspaceDir: string,
-  apiConfig: {
-    provider: string
-    apiUrl: string
-    apiKey: string
-    selectedModel: string
-    models?: Array<{ id: string; contextWindow: number; image: boolean }>
-  }
+  apiConfig: LegacyAgentApiConfig
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const configKey = agentConfigKey(apiConfig)
+    // 过渡层：旧设置页的 {provider, apiUrl, apiKey, selectedModel} → 预设供应商
+    const resolved = await resolveAgentProviderConfig(apiConfig)
+    if (!resolved.ok) return { success: false, error: resolved.error }
+    const { configKey, apiConfig: providerConfig, credentials, modelsStore } = resolved.value
+
     if (context.agentRegistry.shouldReuse(workspaceDir, configKey)) {
       console.log('[Main] Reusing agent for workspace:', workspaceDir)
       return { success: true }
@@ -131,7 +132,10 @@ export async function ensureWorkspaceAgent(
     const result = await agent.initialize({
       workspaceDir,
       agentDir: path.join(getAppDir(), 'data', 'agent'),
-      apiConfig,
+      apiConfig: providerConfig,
+      credentials,
+      modelsStore,
+      allowModelNetwork: true,
       // 联网是应用基础能力：扩展随包内置，由 Agent 在每次创建会话时加载
       webAccessExtensionPaths: webAccessExtensionPaths(),
       getWebAccessConfigVersion: () => currentWebSearchConfigVersion(),
@@ -208,13 +212,7 @@ export function registerAgentIpc(context: AgentIpcContext): void {
 // Agent 初始化（按工作区）
 handleIpc('agent:initialize', async (_event, config: {
   workspaceDir: string
-  apiConfig: {
-    provider: string
-    apiUrl: string
-    apiKey: string
-    selectedModel: string
-    models?: Array<{ id: string; contextWindow: number; image: boolean }>
-  }
+  apiConfig: LegacyAgentApiConfig
 }) => {
   try {
     const { workspaceDir, apiConfig } = config

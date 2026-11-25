@@ -93,9 +93,9 @@ beforeAll(async () => {
     method: 'PUT',
     headers: { 'content-type': 'application/json', cookie },
     body: JSON.stringify({
-      provider: 'custom',
-      apiUrl: 'https://api.example.com/v1',
-      model: 'probe-model',
+      provider: 'deepseek',
+      apiUrl: 'https://api.deepseek.com/v1',
+      model: 'deepseek-flash',
       apiKey: 'sk-probe',
     }),
   })

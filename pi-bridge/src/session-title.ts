@@ -1,6 +1,6 @@
 /** 会话标题生成（首轮后，不阻塞聊天） */
 
-import type { ApiConfigInput } from './model-config.js'
+import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions } from '@earendil-works/pi-ai'
 
 const TITLE_TIMEOUT_MS = 15_000
 
@@ -104,69 +104,59 @@ export function isEchoOfUserText(title: string, userText: string): boolean {
   return Boolean(left) && left === right
 }
 
-/** 用配置的供应商生成一个短标题（OpenAI 兼容 / Anthropic） */
+/** 只需要 `completeSimple`，测试注入替身即可（不必起真运行时） */
+export interface TitleModelRunner {
+  completeSimple(
+    model: Model<Api>,
+    context: Context,
+    options?: SimpleStreamOptions
+  ): Promise<AssistantMessage>
+}
+
+/**
+ * 用当前会话的模型生成一个短标题。
+ *
+ * 走 SDK 的 `completeSimple`，协议差异（responses / messages / completions /
+ * codex）由 catalog 决定，这里不再按 URL 猜接口，也不用自己拿 key 发请求（D3）。
+ * 标题请求显式 `reasoning: 'off'`：推理预算会把内容挤空。
+ */
 export async function requestSessionTitle(
-  apiConfig: ApiConfigInput,
+  runner: TitleModelRunner,
+  model: Model<Api>,
   prompt: string,
   logger: TitleLogger
 ): Promise<string | null> {
-  const { provider, apiUrl, apiKey, selectedModel } = apiConfig
-  const base = apiUrl.replace(/\/+$/, '')
-  if (!base) return null
-
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS)
   try {
-    if (provider === 'anthropic') {
-      const response = await fetch(`${base}/messages`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: selectedModel,
-          max_tokens: TITLE_MAX_TOKENS,
-          temperature: 0.2,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-        signal: controller.signal,
-      })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const data = (await response.json()) as any
-      const text = data?.content?.[0]?.text
-      if (typeof text === 'string' && text.trim()) return text
-      logger.warn(
-        '[Agent Manager] Title generation returned no text:',
-        JSON.stringify({ stopReason: data?.stop_reason })
-      )
-      return null
-    }
-
-    const response = await fetch(`${base}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${apiKey}`,
+    const message = await runner.completeSimple(
+      model,
+      {
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: prompt }],
+            timestamp: Date.now(),
+          } as Context['messages'][number],
+        ],
       },
-      body: JSON.stringify({
-        model: selectedModel,
-        max_tokens: TITLE_MAX_TOKENS,
+      {
+        // 请求级 ThinkingLevel 没有 'off'（只有 minimal…max），所以这里不指定档位；
+        // 靠小 maxTokens + 失败重试兜住「推理把预算吃光」的情况
+        maxTokens: TITLE_MAX_TOKENS,
         temperature: 0.2,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-      signal: controller.signal,
-    })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const data = (await response.json()) as any
-    const choice = data?.choices?.[0]
-    const content = choice?.message?.content
-    if (typeof content === 'string' && content.trim()) return content
-    // 推理型模型把预算花在 reasoning 上时这里会是空字符串，交给调用方决定是否重试
+        signal: controller.signal,
+      }
+    )
+    const text = message.content
+      .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+      .map((part) => part.text)
+      .join('')
+    if (text.trim()) return text
+    // 预算被推理吃光时这里会是空字符串，交给调用方决定是否重试
     logger.warn(
       '[Agent Manager] Title generation returned no text:',
-      JSON.stringify({ finishReason: choice?.finish_reason, content: content ?? null })
+      JSON.stringify({ stopReason: message.stopReason, model: message.model })
     )
     return null
   } catch (error) {

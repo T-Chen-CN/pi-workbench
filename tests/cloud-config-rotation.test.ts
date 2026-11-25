@@ -13,7 +13,7 @@ import * as os from 'os'
 import * as path from 'path'
 
 interface FakeConfig {
-  apiConfig: { provider: string; apiUrl: string; apiKey: string; selectedModel: string }
+  apiConfig: { providerId: string; modelId: string }
 }
 
 const calls = { initialize: 0, dispose: 0 }
@@ -30,7 +30,7 @@ const state = {
 class FakeAgentManager {
   async initialize(config: FakeConfig) {
     calls.initialize += 1
-    const model = config.apiConfig.selectedModel
+    const model = config.apiConfig.modelId
     if (state.rejectedModels.includes(model)) {
       return { success: false, error: `${model} rejected` }
     }
@@ -111,7 +111,7 @@ async function touchEntry(): Promise<void> {
 }
 
 function runningModel(): string | undefined {
-  return state.lastConfig?.apiConfig.selectedModel
+  return state.lastConfig?.apiConfig.modelId
 }
 
 beforeAll(async () => {

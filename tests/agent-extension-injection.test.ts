@@ -158,12 +158,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     workspaceDir,
     agentDir,
-    apiConfig: {
-      provider: 'openai',
-      apiUrl: 'https://api.example.com/v1/',
-      apiKey: 'sk-secret',
-      selectedModel: 'test-model',
-    },
+    apiConfig: { providerId: 'deepseek', modelId: 'test-model' },
     ...overrides,
   }
 }

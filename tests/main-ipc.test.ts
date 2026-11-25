@@ -959,25 +959,6 @@ describe('repo map handlers', () => {
   })
 })
 
-describe('model context window options', () => {
-  it('keeps the main-process list in sync with pi-bridge', async () => {
-    const { CONTEXT_WINDOW_VALUES } = await import('../electron/ipc/api-config')
-    const { CONTEXT_WINDOW_OPTIONS } = await import('../pi-bridge/src/model-config')
-
-    expect([...CONTEXT_WINDOW_VALUES]).toEqual([...CONTEXT_WINDOW_OPTIONS])
-  })
-})
-
-describe('model output limit options', () => {
-  it('keeps the main-process list in sync with pi-bridge', async () => {
-    const { MAX_TOKENS_VALUES } = await import('../electron/ipc/api-config')
-    const { MAX_TOKENS_OPTIONS } = await import('../pi-bridge/src/model-config')
-
-    // 主进程不存 0：0 / 缺省都表示自动
-    expect([...MAX_TOKENS_VALUES]).toEqual(MAX_TOKENS_OPTIONS.filter((value) => value > 0))
-  })
-})
-
 describe('agent config signature', () => {
   it('changes when the output limit changes', async () => {
     const { agentConfigKey } = await import('../electron/agent-config-key')

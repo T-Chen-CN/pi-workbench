@@ -1,12 +1,14 @@
 /** AgentManager 的公开类型 */
 
 import type { ExtensionFactory } from '@earendil-works/pi-coding-agent'
+import type { CredentialStore, ModelsStore } from '@earendil-works/pi-ai'
 import type {
   ApprovalDecision,
   ApprovalRequestPayload,
 } from './approval-policy.js'
 import type { StructuredPlan } from './plan.js'
 import type { DocumentReadHook } from './read-with-documents.js'
+import type { ModelOverrides } from './provider-presets.js'
 
 export interface AgentLogger {
   info: (...args: unknown[]) => void
@@ -14,32 +16,6 @@ export interface AgentLogger {
   error: (...args: unknown[]) => void
   debug: (...args: unknown[]) => void
 }
-
-/**
- * 上下文容量档位（十进制整数）。
- * 下限 64K：Pi 默认 reserveTokens=16384 + keepRecentTokens=20000，
- * 32K 窗口的触发点会低于保留量，导致反复压缩。
- */
-export const CONTEXT_WINDOW_OPTIONS = [64_000, 128_000, 256_000, 1_000_000] as const
-
-export type ModelContextWindow = (typeof CONTEXT_WINDOW_OPTIONS)[number]
-
-/** 设置页维护的单个模型能力；contextWindow 与 image 均由用户显式指定 */
-export interface ApiModelEntry {
-  id: string
-  contextWindow: ModelContextWindow
-  image: boolean
-  /** 输出上限档位；缺省或 0 表示按上下文档位自动推导 */
-  maxTokens?: ModelMaxTokens
-}
-
-/**
- * 输出上限档位（0 = 自动，按上下文档位推导）。
- * 上限 256K：再高会被 SDK 的 clampMaxTokensToContext 按上下文余量压回，UI 上没有意义。
- */
-export const MAX_TOKENS_OPTIONS = [0, 16_384, 32_768, 65_536, 131_072, 262_144] as const
-
-export type ModelMaxTokens = (typeof MAX_TOKENS_OPTIONS)[number]
 
 /** 可展示的工具步骤 */
 export type AgentTracePart =
@@ -154,14 +130,21 @@ export interface AgentConfig {
   workspaceDir: string
   /** Agent 数据目录（默认为 {workspace}/.pi-workbench/agent） */
   agentDir?: string
+  /**
+   * 供应商预设时代的模型选择。密钥不在这里（走 `credentials`），
+   * `overrides` 是当前 provider 下按模型存的下调值，写进 models.json。
+   */
   apiConfig: {
-    provider: string
-    apiUrl: string
-    apiKey: string
-    selectedModel: string
-    /** 模型列表：容量档位与图片能力由用户设定，是 models.json 的唯一来源 */
-    models?: ApiModelEntry[]
+    providerId: string
+    modelId: string
+    overrides?: Record<string, ModelOverrides>
   }
+  /** 凭证存储（pi-ai `CredentialStore`）；缺省时退化为只读环境变量 */
+  credentials?: CredentialStore
+  /** 目录缓存（SDK 格式）；缺省时 SDK 用内存缓存 */
+  modelsStore?: ModelsStore
+  /** 是否允许启动后联网刷新模型目录（pi.dev）；缺省 false */
+  allowModelNetwork?: boolean
   /** 日志出口；主进程注入 agent.log，未注入时退回 console */
   logger?: AgentLogger
   /** 模型生成会话标题后回调（主进程转发给渲染层） */
@@ -237,8 +220,8 @@ export interface ModelCapabilityInfo {
   available: boolean
   contextWindow: number
   maxTokens: number | null
-  /** 生效值来源：auto=档位推导，user=用户档位，clamped=被 catalog 封顶 */
-  maxTokensSource?: 'auto' | 'user' | 'clamped'
+  /** 生效值来源：catalog=目录真值，user=用户下调，clamped=被上下文/目录夹取 */
+  maxTokensSource?: 'catalog' | 'user' | 'clamped'
   reasoning: boolean | null
   vision: boolean
   thinkingLevels: string[]

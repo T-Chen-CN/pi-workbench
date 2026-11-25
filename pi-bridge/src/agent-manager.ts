@@ -16,6 +16,7 @@ import {
   type ResourceLoader,
   type SessionEntry,
 } from '@earendil-works/pi-coding-agent'
+import type { Api, Model } from '@earendil-works/pi-ai'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { existsSync, readFileSync } from 'fs'
@@ -61,20 +62,14 @@ import {
   type ExportTurn,
 } from './session-export.js'
 import { validateChatImages } from './chat-images.js'
+import { THINKING_LEVELS, writeModelsConfig } from './model-config.js'
+import { ensureBashOnPath } from './environment.js'
 import {
-  DEFAULT_CONTEXT_WINDOW,
-  KNOWN_MODEL_METADATA,
-  THINKING_LEVELS,
-  WORKBENCH_PROVIDER_ID,
-  normalizeModelEntries,
-  resolveMaxTokensDetail,
-  writeModelsConfig,
-} from './model-config.js'
-import {
-  acquireProviderEnv,
-  ensureBashOnPath,
-  releaseProviderEnv,
-} from './environment.js'
+  PRESET_PROVIDER_IDS,
+  builtinCatalogModels,
+  catalogLimits,
+  type ModelLimits,
+} from './provider-presets.js'
 import {
   buildTitlePrompt,
   isEchoOfUserText,
@@ -162,6 +157,24 @@ const ABORT_TIMEOUT_MS = 5_000
 const EXTRAS_SAVE_TIMEOUT_MS = 1_000
 /** 初始化（模型运行时 + 会话创建）超时 */
 const INIT_TIMEOUT_MS = 30_000
+
+/**
+ * 模型的生效容量。`models.json` 的 `modelOverrides` 已被 SDK 应用，
+ * 这里只做最后一道夹取（输出上限不得超过上下文窗口）。
+ */
+function effectiveLimits(model: { contextWindow?: number; maxTokens?: number }): ModelLimits {
+  return catalogLimits(model)
+}
+
+/**
+ * 模型支持的思考档位。`thinkingLevelMap` 里值为 null 表示该档不支持；
+ * 整张表缺失时视为全部档位可用（老模型条目没有这张表）。
+ */
+function thinkingLevelsOf(model: { thinkingLevelMap?: Record<string, unknown> }): string[] {
+  const map = model.thinkingLevelMap
+  if (!map) return [...THINKING_LEVELS]
+  return THINKING_LEVELS.filter((level) => map[level] !== null && map[level] !== undefined).map(String)
+}
 /** 单次工具审批的等待上限；超时按拒绝处理（fail-closed） */
 export const APPROVAL_TIMEOUT_MS = 120_000
 
@@ -280,7 +293,6 @@ export class AgentManager {
   private agentDir = ''
   private extrasStore: SessionExtrasStore | null = null
   private sessionDir = ''
-  private envLease = false
   private runtimes = new Map<string, SessionRuntime>()
   private lastSessionId: string | null = null
   /** 轮次边界待应用的工作树切换 */
@@ -297,18 +309,26 @@ export class AgentManager {
   /** 新建会话的权限种子（G3）：只在 extras 还没有权限时生效，已有会话以落盘为准 */
   private seedPermissions = new Map<string, SessionPermission>()
 
-  /** 当前生效的输出上限（与 models.json 里写入的值一致），用于截断报错 */
+  /**
+   * 目录里的模型列表。优先用运行时的（含远端增量与 models.json 覆盖），
+   * 运行时没暴露 `getModels`（测试替身 / 老版本）时回退内置快照。
+   */
+  private catalogModels(): Model<Api>[] {
+    const providerId = this.config?.apiConfig.providerId
+    if (!providerId) return []
+    const runtime = this.modelRuntime as (ModelRuntime & { getModels?: (id: string) => readonly Model<Api>[] }) | null
+    const fromRuntime = runtime?.getModels?.(providerId)
+    if (fromRuntime && fromRuntime.length > 0) return [...fromRuntime]
+    return [...builtinCatalogModels(providerId)]
+  }
+
+  /** 当前生效的输出上限，用于截断报错；值来自 models.json 覆盖后的模型对象 */
   private outputLimit(): number {
-    const apiConfig = this.config?.apiConfig
-    if (!apiConfig) return 0
-    const id = apiConfig.selectedModel
-    const entry = normalizeModelEntries(apiConfig).find((item) => item.id === id)
-    const known = KNOWN_MODEL_METADATA[id]
-    return resolveMaxTokensDetail(
-      entry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-      known?.maxTokens,
-      entry?.maxTokens
-    ).value
+    const config = this.config
+    if (!config) return 0
+    const model = this.modelRuntime?.getModel(config.apiConfig.providerId, config.apiConfig.modelId)
+    if (!model) return 0
+    return effectiveLimits(model).maxTokens
   }
 
   /** 从 assistant 消息中提取 usage（Pi 保证 assistant 消息带 usage） */
@@ -624,43 +644,45 @@ export class AgentManager {
     try {
       await this.disposeAllRuntimes()
       this.lastWebAccessVersion = null
-      if (this.envLease) {
-        releaseProviderEnv()
-        this.envLease = false
-      }
 
       this.config = config
-      const { provider, apiUrl, apiKey, selectedModel } = config.apiConfig
+      const { providerId, modelId, overrides } = config.apiConfig
 
       this.logger.info('[Agent Manager] Initializing agent...')
       this.logger.info('[Agent Manager] Workspace:', config.workspaceDir)
-      this.logger.info('[Agent Manager] Provider:', provider)
-      this.logger.info('[Agent Manager] API URL:', apiUrl)
-      this.logger.info('[Agent Manager] Model:', selectedModel)
+      this.logger.info('[Agent Manager] Provider:', providerId)
+      this.logger.info('[Agent Manager] Model:', modelId)
 
       this.agentDir =
         config.agentDir || path.join(config.workspaceDir, '.pi-workbench', 'agent')
       this.extrasStore = new SessionExtrasStore(path.join(this.agentDir, 'session-extras'))
-      const modelsPath = await writeModelsConfig(this.agentDir, config.apiConfig)
+      // 覆盖写：旧版本的 pi-workbench 条目必须一起消失（D13/D25）
+      const modelsPath = await writeModelsConfig(this.agentDir, { providerId, overrides })
       ensureBashOnPath(this.logger)
-
-      acquireProviderEnv(apiKey, provider)
-      this.envLease = true
 
       this.modelRuntime = await withTimeout(
         ModelRuntime.create({
           modelsPath,
-          authPath: path.join(this.agentDir, 'auth.json'),
+          // 凭证由宿主注入，不再写 process.env，也不再用 auth.json（D3）
+          credentials: config.credentials,
+          modelsStore: config.modelsStore,
           refreshOnCreate: false,
+          allowModelNetwork: false,
         }),
         INIT_TIMEOUT_MS,
         'Agent model runtime'
       )
 
-      const model = this.modelRuntime.getModel(WORKBENCH_PROVIDER_ID, selectedModel)
+      // 记录里的模型可能已经不在目录里（上游下架 / 切过供应商）：回落到目录首个（D22）
+      const model = this.resolveActiveModel()
       if (!model) {
-        throw new Error(`Model "${selectedModel}" not found. Please fetch models again in Settings.`)
+        throw new Error(
+          `Provider "${providerId}" has no available model. Pick another provider in Settings.`
+        )
       }
+
+      // 目录刷新不阻塞启动：就绪后在后台跑（D6/D14）
+      if (config.allowModelNetwork) void this.refreshCatalog()
 
       this.sessionDir = path.join(this.agentDir, 'sessions')
       const sessionManager = SessionManager.continueRecent(config.workspaceDir, this.sessionDir)
@@ -688,10 +710,6 @@ export class AgentManager {
       if (!initialized) {
         this.runtimes.clear()
         this.modelRuntime = null
-        if (this.envLease) {
-          releaseProviderEnv()
-          this.envLease = false
-        }
       }
     }
   }
@@ -1255,7 +1273,9 @@ export class AgentManager {
   ): Promise<{ success: boolean; error?: string }> {
     try {
       if (!this.modelRuntime) return { success: false, error: 'Agent not initialized.' }
-      const model = this.modelRuntime.getModel(WORKBENCH_PROVIDER_ID, modelId)
+      const providerId = this.config?.apiConfig.providerId
+      if (!providerId) return { success: false, error: 'Agent not initialized.' }
+      const model = this.modelRuntime.getModel(providerId, modelId)
       if (!model) return { success: false, error: `Model "${modelId}" is unavailable.` }
       const runtime = await this.ensureRuntime(sessionId)
       await runtime.session.setModel(model)
@@ -1274,7 +1294,34 @@ export class AgentManager {
     return ids
   }
 
-  /** 模型能力提示（R-06）：容量来自用户设置，思考与图片能力来自设置或 catalog */
+  /**
+   * 当前会话要用的模型：active provider + 记录里的模型。
+   *
+   * 记录里的模型可能属于别的 provider（切过供应商 / 老会话），这时**静默回落**到
+   * 该 provider 的目录首个模型（D22）；渲染层通过 `providers:list` 拿到回落结果
+   * 并同步 chat store，所以这里不抛错。
+   */
+  private resolveActiveModel(): Model<Api> | undefined {
+    const config = this.config
+    const modelRuntime = this.modelRuntime
+    if (!config || !modelRuntime) return undefined
+    const { providerId, modelId } = config.apiConfig
+    const recorded = modelRuntime.getModel(providerId, modelId)
+    if (recorded) return recorded
+    const models = this.catalogModels()
+    const fallback = models[0]
+    if (fallback) {
+      this.logger.warn(
+        `[Agent Manager] Model ${providerId}/${modelId} is unavailable; falling back to ${fallback.id}`
+      )
+    }
+    return fallback
+  }
+
+  /**
+   * 模型能力：全部来自 catalog（含 models.json 里烘进去的覆盖值）。
+   * `maxTokensSource` 只用来解释生效值的来源，UI 只做展示。
+   */
   async getModelCapabilities(): Promise<{
     success: boolean
     models?: ModelCapabilityInfo[]
@@ -1285,47 +1332,107 @@ export class AgentManager {
       if (!this.modelRuntime || !this.config) {
         return { success: false, error: 'Agent not initialized.' }
       }
-      const config = this.config
-      const entries = normalizeModelEntries(config.apiConfig)
+      const { overrides } = this.config.apiConfig
+      const active = this.resolveActiveModel()
 
-      const models = entries.map((entry): ModelCapabilityInfo => {
-        const model = this.modelRuntime!.getModel(WORKBENCH_PROVIDER_ID, entry.id)
-        const known = KNOWN_MODEL_METADATA[entry.id]
-        const resolved = resolveMaxTokensDetail(entry.contextWindow, known?.maxTokens, entry.maxTokens)
-        const maxTokens = resolved.value
-        const maxTokensSource = resolved.source
-        if (!model) {
+      const models = this.catalogModels().map((model): ModelCapabilityInfo => {
+          const limits = effectiveLimits(model)
+          const override = overrides?.[model.id]
+          const userSet =
+            (typeof override?.contextWindow === 'number' && override.contextWindow > 0) ||
+            (typeof override?.maxTokens === 'number' && override.maxTokens > 0)
+          const supportsThinking = Boolean(model.reasoning)
           return {
-            id: entry.id,
-            available: false,
-            contextWindow: entry.contextWindow,
-            maxTokens,
-            maxTokensSource,
-            reasoning: known?.reasoning ?? null,
-            vision: entry.image,
-            thinkingLevels: [],
+            id: model.id,
+            available: true,
+            contextWindow: limits.contextWindow,
+            maxTokens: limits.maxTokens,
+            maxTokensSource: userSet ? 'user' : limits.maxTokens < (model.maxTokens ?? 0) ? 'clamped' : 'catalog',
+            reasoning: supportsThinking,
+            vision: Array.isArray(model.input) && model.input.includes('image'),
+            thinkingLevels: supportsThinking ? thinkingLevelsOf(model) : [],
           }
-        }
-        const supportsThinking = Boolean(model.reasoning)
-        return {
-          id: entry.id,
-          available: true,
-          contextWindow: entry.contextWindow,
-          maxTokens,
-          maxTokensSource,
-          reasoning: Boolean(known?.reasoning),
-          vision: entry.image,
-          thinkingLevels: supportsThinking
-            ? THINKING_LEVELS.filter(
-                (level) => model.thinkingLevelMap?.[level] !== null
-              ).map((level) => String(level))
-            : [],
-        }
-      })
+        })
 
-      return { success: true, models, selected: config.apiConfig.selectedModel }
+      return { success: true, models, selected: active?.id ?? this.config.apiConfig.modelId }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 供应商目录视图所需的最小信息（P4 的 providers:models 在此基础上补 UI 字段） */
+  async getProviderCatalog(): Promise<{
+    success: boolean
+    providerId?: string
+    models?: Array<{ id: string; name: string; limits: ModelLimits; reasoning: boolean }>
+    error?: string
+  }> {
+    if (!this.modelRuntime || !this.config) {
+      return { success: false, error: 'Agent not initialized.' }
+    }
+    const { providerId } = this.config.apiConfig
+    return {
+      success: true,
+      providerId,
+      models: this.catalogModels().map((model) => ({
+        id: model.id,
+        name: model.name ?? model.id,
+        limits: effectiveLimits(model),
+        reasoning: Boolean(model.reasoning),
+      })),
+    }
+  }
+
+  /**
+   * 刷新模型目录（pi.dev）。`force` 绕过 SDK 的 4h 节流（手动刷新按钮必须传）。
+   * `added` / `removed` 由我们自己对比快照算，SDK 的 refresh() 只返回 errors。
+   */
+  async refreshCatalog(options: { force?: boolean } = {}): Promise<{
+    success: boolean
+    added: number
+    removed: number
+    checkedAt?: number
+    error?: string
+  }> {
+    const modelRuntime = this.modelRuntime
+    if (!modelRuntime || !this.config) {
+      return { success: false, added: 0, removed: 0, error: 'Agent not initialized.' }
+    }
+    const store = this.config.modelsStore
+    const snapshotter = store && 'snapshot' in store ? (store as { snapshot(): Promise<Array<{ providerId: string; ids: string[]; checkedAt?: number }>> }) : null
+    const before = snapshotter ? await snapshotter.snapshot() : []
+    try {
+      const result = await modelRuntime.refresh({
+        allowNetwork: true,
+        providers: [...PRESET_PROVIDER_IDS],
+        force: options.force === true,
+      })
+      if (result.errors.size > 0) {
+        const first = [...result.errors.entries()][0]
+        return {
+          success: false,
+          added: 0,
+          removed: 0,
+          error: `${first[0]}: ${first[1].message}`,
+        }
+      }
+      const after = snapshotter ? await snapshotter.snapshot() : []
+      let added = 0
+      let removed = 0
+      for (const next of after) {
+        const previous = before.find((entry) => entry.providerId === next.providerId)
+        const beforeIds = new Set(previous?.ids ?? [])
+        const afterIds = new Set(next.ids)
+        for (const id of afterIds) if (!beforeIds.has(id)) added++
+        for (const id of beforeIds) if (!afterIds.has(id)) removed++
+      }
+      const checkedAt = after.reduce<number | undefined>(
+        (latest, entry) => (entry.checkedAt && (!latest || entry.checkedAt > latest) ? entry.checkedAt : latest),
+        undefined
+      )
+      return { success: true, added, removed, checkedAt }
+    } catch (error) {
+      return { success: false, added: 0, removed: 0, error: error instanceof Error ? error.message : String(error) }
     }
   }
 
@@ -1636,7 +1743,7 @@ export class AgentManager {
     const existing = this.runtimes.get(id)
     if (existing) return existing
 
-    const model = modelRuntime.getModel(WORKBENCH_PROVIDER_ID, config.apiConfig.selectedModel)
+    const model = this.resolveActiveModel()
     if (!model) throw new Error('Selected model is unavailable.')
 
     const planContext: { runtime: SessionRuntime | null } = { runtime: null }
@@ -2674,11 +2781,11 @@ export class AgentManager {
     return runtime ? this.sessionMessages(runtime) : []
   }
 
-  /** 纯图片消息的模型输入文本：仅 Anthropic 需要非空 text 块 */
+  /** 纯图片消息的模型输入文本：仅 Anthropic Messages 需要非空 text 块 */
   private withImagePlaceholder(text: string, imageCount: number): string {
     if (imageCount === 0 || text.trim()) return text
-    if (this.config?.apiConfig.provider !== 'anthropic') return text
-    return this.config.getLanguage?.() === 'en' ? IMAGE_ONLY_PROMPTS[1] : IMAGE_ONLY_PROMPTS[0]
+    if (this.resolveActiveModel()?.api !== 'anthropic-messages') return text
+    return this.config?.getLanguage?.() === 'en' ? IMAGE_ONLY_PROMPTS[1] : IMAGE_ONLY_PROMPTS[0]
   }
 
   private messageText(content: unknown): string {
@@ -2729,11 +2836,15 @@ export class AgentManager {
       return
     }
 
-    const raw = await requestSessionTitle(
-      config.apiConfig,
-      buildTitlePrompt(turn.userText, turn.assistantText),
-      this.logger
-    )
+    const titleModel = this.resolveActiveModel()
+    const raw = titleModel
+      ? await requestSessionTitle(
+          this.modelRuntime!,
+          titleModel,
+          buildTitlePrompt(turn.userText, turn.assistantText),
+          this.logger
+        )
+      : null
     const title = raw ? parseTitleResponse(raw) : ''
     // 空结果或直接复述用户原话（等于回退标题，没有信息量）都算不可用
     if (!title || isEchoOfUserText(title, turn.userText)) {
@@ -2882,10 +2993,6 @@ export class AgentManager {
     this.settledTitles.clear()
     this.creatingRuntimes.clear()
     this.deletedSessions.clear()
-    if (this.envLease) {
-      releaseProviderEnv()
-      this.envLease = false
-    }
     this.config = null
     this.modelRuntime = null
     this.sessionDir = ''

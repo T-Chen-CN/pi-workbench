@@ -101,7 +101,16 @@ interface FakeSession {
     totalMessages: number
   }
   getUserMessagesForForking: () => Array<{ entryId: string; text: string }>
-  model: { provider: string; id: string } | undefined
+  model:
+    | {
+        provider: string
+        id: string
+        api?: string
+        input?: string[]
+        contextWindow?: number
+        maxTokens?: number
+      }
+    | undefined
   thinkingLevel: string
   setModel: (model: { provider: string; id: string }) => Promise<void>
   setThinkingLevel: (level: string) => void
@@ -151,7 +160,14 @@ function createFakeSession(
       { entryId: 'u1', text: 'first question' },
       { entryId: 'u2', text: 'second question' },
     ],
-    model: { provider: 'pi-workbench', id: 'test-model' },
+    model: {
+      provider: 'deepseek',
+      id: 'test-model',
+      api: 'openai-completions',
+      input: ['text'],
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+    },
     thinkingLevel: 'medium',
     setModel: async (model) => {
       session.model = model
@@ -319,12 +335,63 @@ function createTreeSessionManager(id: string, entries: FakeTreeEntry[], leafId: 
   }
 }
 
+/**
+ * 标题生成已经改走 SDK 的 completeSimple。既有用例通过 stub 全局 fetch 控制
+ * 返回值，这里把 completeSimple 映射回同一套 stub，避免逐条重写用例。
+ */
+async function fakeCompleteSimple(
+  _model: { id?: string },
+  context: { messages: Array<{ content: unknown }> },
+  options?: { maxTokens?: number }
+): Promise<Record<string, unknown>> {
+  const prompt = context.messages
+    .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+    .map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
+    .join('')
+  const fetchImpl = globalThis.fetch as unknown as (url: string, init?: unknown) => Promise<any>
+  const response = await fetchImpl('http://local/chat/completions', {
+    method: 'POST',
+    body: JSON.stringify({
+      model: _model?.id ?? 'test-model',
+      max_tokens: options?.maxTokens,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  })
+  if (!response?.ok) throw new Error(`HTTP ${response?.status ?? 'error'}`)
+  const data = await response.json()
+  const text =
+    typeof data?.choices?.[0]?.message?.content === 'string'
+      ? data.choices[0].message.content
+      : typeof data?.content?.[0]?.text === 'string'
+        ? data.content[0].text
+        : ''
+  return {
+    role: 'assistant',
+    api: 'openai-completions',
+    provider: 'deepseek',
+    model: 'test-model',
+    content: text ? [{ type: 'text', text }] : [],
+    usage: {},
+    stopReason: 'stop',
+  }
+}
+
 function primeSdk(
   session: FakeSession,
-  model: Record<string, unknown> | null = { provider: 'pi-workbench', id: 'test-model' }
+  model: Record<string, unknown> | null = {
+    provider: 'deepseek',
+    id: 'test-model',
+    api: 'openai-completions',
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+  }
 ): void {
   sdk.modelRuntimeCreate.mockResolvedValue({
     getModel: vi.fn(() => model),
+    getModels: vi.fn(() =>
+      model ? [{ api: 'openai-completions', input: ['text'], ...model }] : []
+    ),
+    completeSimple: fakeCompleteSimple,
   })
   sdk.continueRecent.mockImplementation(() => createFakeSessionManager('session-1', session))
   sdk.sessionCreate.mockImplementation(() =>
@@ -350,10 +417,8 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     workspaceDir,
     agentDir,
     apiConfig: {
-      provider: 'openai',
-      apiUrl: 'https://api.example.com/v1/',
-      apiKey: 'sk-secret',
-      selectedModel: 'test-model',
+      providerId: 'deepseek',
+      modelId: 'test-model',
     },
     ...overrides,
   }
@@ -414,47 +479,31 @@ describe('AgentManager initialization', () => {
     )
   })
 
-  it('writes models.json for an OpenAI-compatible endpoint without the key on disk', async () => {
+  it('writes models.json without any key or endpoint data', async () => {
     primeSdk(createFakeSession())
 
-    const result = await manager.initialize(makeConfig())
-
-    expect(result.success).toBe(true)
-    expect(manager.isInitialized()).toBe(true)
-
-    const modelsPath = path.join(agentDir, 'models.json')
-    const raw = await fs.readFile(modelsPath, 'utf-8')
-    const parsed = JSON.parse(raw)
-
-    expect(parsed.providers['pi-workbench']).toEqual({
-      baseUrl: 'https://api.example.com/v1',
-      api: 'openai-completions',
-      apiKey: '$PI_WORKBENCH_API_KEY',
-      models: [{ id: 'test-model', contextWindow: 128_000, maxTokens: 16_384, input: ['text'] }],
-    })
-    expect(raw).not.toContain('sk-secret')
-    expect(process.env.PI_WORKBENCH_API_KEY).toBe('sk-secret')
-    expect(process.env.OPENAI_API_KEY).toBe('sk-secret')
-  })
-
-  it('uses the anthropic-messages API for Anthropic providers', async () => {
-    primeSdk(createFakeSession())
-
-    await manager.initialize(
+    const result = await manager.initialize(
       makeConfig({
         apiConfig: {
-          provider: 'anthropic',
-          apiUrl: 'https://api.anthropic.com/v1/',
-          apiKey: 'sk-ant',
-          selectedModel: 'claude-model',
+          providerId: 'deepseek',
+          modelId: 'deepseek-flash',
+          overrides: { 'deepseek-flash': { contextWindow: 256_000 } },
         },
       })
     )
 
-    const parsed = JSON.parse(await fs.readFile(path.join(agentDir, 'models.json'), 'utf-8'))
-    expect(parsed.providers['pi-workbench'].api).toBe('anthropic-messages')
-    expect(parsed.providers['pi-workbench'].baseUrl).toBe('https://api.anthropic.com/v1')
-    expect(process.env.ANTHROPIC_API_KEY).toBe('sk-ant')
+    expect(result.success).toBe(true)
+    expect(manager.isInitialized()).toBe(true)
+
+    const raw = await fs.readFile(path.join(agentDir, 'models.json'), 'utf-8')
+    // 只有 modelOverrides：provider 定义、baseUrl、api 协议全部来自内置 catalog
+    expect(JSON.parse(raw).providers).toEqual({
+      deepseek: { modelOverrides: { 'deepseek-flash': { contextWindow: 256_000 } } },
+    })
+    expect(raw).not.toContain('apiKey')
+    // 密钥不再写入进程环境（D3）
+    expect(process.env.PI_WORKBENCH_API_KEY).toBeUndefined()
+    expect(process.env.OPENAI_API_KEY).toBeUndefined()
   })
 
   it('defaults agentDir to the workspace .pi-workbench directory', async () => {
@@ -465,18 +514,7 @@ describe('AgentManager initialization', () => {
     await manager.initialize(config)
 
     const modelsPath = path.join(workspaceDir, '.pi-workbench', 'agent', 'models.json')
-    await expect(fs.readFile(modelsPath, 'utf-8')).resolves.toContain('pi-workbench')
-  })
-
-  it('fails when the selected model is not available', async () => {
-    primeSdk(createFakeSession(), null)
-
-    const result = await manager.initialize(makeConfig())
-
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('not found')
-    expect(manager.isInitialized()).toBe(false)
-    expect(sdk.createAgentSession).not.toHaveBeenCalled()
+    await expect(fs.readFile(modelsPath, 'utf-8')).resolves.toContain('"providers"')
   })
 
   it('disposes the previous session when re-initialized', async () => {
@@ -536,14 +574,13 @@ describe('AgentManager chat', () => {
   })
 
   it('adds a placeholder text only for Anthropic image-only messages', async () => {
-    const run = async (provider: string, language: 'zh' | 'en'): Promise<string> => {
+    const run = async (api: string, language: 'zh' | 'en'): Promise<string> => {
       const session = createFakeSession(async (s, message) => {
         s.messages.push({ role: 'user', content: message })
         s.messages.push({ role: 'assistant', content: 'ok' })
       })
-      primeSdk(session)
+      primeSdk(session, { provider: 'deepseek', id: 'test-model', api })
       const config = makeConfig({ getLanguage: () => language })
-      config.apiConfig.provider = provider
       await manager.initialize(config)
       await manager.chat('', { images: [{ data: 'AAAA', mimeType: 'image/png' }] })
       const prompt = session.lastPrompt ?? ''
@@ -551,12 +588,12 @@ describe('AgentManager chat', () => {
       return prompt
     }
 
-    // Anthropic 拒绝空 text 块，补占位文本；OpenAI 兼容端点保持空文本
-    await expect(run('anthropic', 'zh')).resolves.toBe('请看这些图片。')
-    await expect(run('anthropic', 'en')).resolves.toBe(
+    // Anthropic Messages 拒绝空 text 块，补占位文本；其余协议保持空文本
+    await expect(run('anthropic-messages', 'zh')).resolves.toBe('请看这些图片。')
+    await expect(run('anthropic-messages', 'en')).resolves.toBe(
       'Please look at the attached image(s).'
     )
-    await expect(run('openai', 'zh')).resolves.toBe('')
+    await expect(run('openai-completions', 'zh')).resolves.toBe('')
   })
 
   it('omits images when none are valid', async () => {
@@ -2025,19 +2062,18 @@ describe('AgentManager dispose', () => {
     expect(session.disposed).toBe(true)
   })
 
-  it('restores provider environment variables after the last instance is disposed', async () => {
+  it('never writes the key into the process environment', async () => {
     process.env.OPENAI_API_KEY = 'previous-key'
     const session = createFakeSession()
     primeSdk(session)
     await manager.initialize(makeConfig())
 
-    expect(process.env.OPENAI_API_KEY).toBe('sk-secret')
-    expect(process.env.PI_WORKBENCH_API_KEY).toBe('sk-secret')
-
-    await manager.dispose()
-
+    // 密钥只走 CredentialStore，终端与 bash 工具拿不到（D3）
     expect(process.env.OPENAI_API_KEY).toBe('previous-key')
     expect(process.env.PI_WORKBENCH_API_KEY).toBeUndefined()
+
+    await manager.dispose()
+    expect(process.env.OPENAI_API_KEY).toBe('previous-key')
   })
 })
 
@@ -2614,21 +2650,22 @@ describe('conversation branches', () => {
 })
 
 describe('model capabilities', () => {
-  it('reports user-set context windows and marks unavailable models', async () => {
+  it('reports catalog capabilities with models.json overrides applied', async () => {
     const session = createFakeSession()
-    const models: Record<string, Record<string, unknown>> = {
-      'deepseek-flash': {
-        provider: 'pi-workbench',
-        id: 'deepseek-flash',
-        reasoning: true,
-        input: ['text'],
-        contextWindow: 64_000,
-        maxTokens: 8_192,
-        thinkingLevelMap: { high: null },
-      },
+    // 模拟 models.json 覆盖后的模型对象（SDK 会把 overrides 烘进 getModel 结果）
+    const flash = {
+      provider: 'deepseek',
+      id: 'deepseek-flash',
+      api: 'openai-completions',
+      reasoning: true,
+      input: ['text', 'image'],
+      contextWindow: 128_000,
+      maxTokens: 65_536,
+      thinkingLevelMap: { low: 'low', high: 'high', max: 'max' },
     }
     sdk.modelRuntimeCreate.mockResolvedValue({
-      getModel: vi.fn((_provider: string, id: string) => models[id]),
+      getModel: vi.fn(() => flash),
+      getModels: vi.fn(() => [flash]),
     })
     sdk.continueRecent.mockImplementation(() => createFakeSessionManager())
     sdk.createAgentSession.mockResolvedValue({ session })
@@ -2636,117 +2673,70 @@ describe('model capabilities', () => {
     await manager.initialize(
       makeConfig({
         apiConfig: {
-          provider: 'openai',
-          apiUrl: 'https://api.example.com/v1/',
-          apiKey: 'sk-secret',
-          selectedModel: 'deepseek-flash',
-          models: [
-            { id: 'deepseek-flash', contextWindow: 128_000, image: true },
-            { id: 'deepseek-v4-pro', contextWindow: 256_000, image: false },
-          ],
+          providerId: 'deepseek',
+          modelId: 'deepseek-flash',
+          overrides: { 'deepseek-flash': { contextWindow: 128_000, maxTokens: 65_536 } },
         },
       })
     )
 
     const result = await manager.getModelCapabilities()
-
     expect(result.success).toBe(true)
-    // 容量以用户设置为准，不采用 catalog / SDK 里的值
+    expect(result.selected).toBe('deepseek-flash')
     expect(result.models?.[0]).toMatchObject({
       id: 'deepseek-flash',
       available: true,
       contextWindow: 128_000,
+      maxTokens: 65_536,
+      maxTokensSource: 'user',
       reasoning: true,
       vision: true,
     })
-    expect(result.models?.[0].thinkingLevels).not.toContain('high')
-    expect(result.models?.[1]).toMatchObject({
-      id: 'deepseek-v4-pro',
-      available: false,
-      contextWindow: 256_000,
-      vision: false,
+    expect(result.models?.[0].thinkingLevels).toEqual(['low', 'high', 'max'])
+
+    // models.json 只放 modelOverrides，不再自造 provider（D13/D25）
+    const modelsJson = JSON.parse(
+      await fs.readFile(path.join(agentDir, 'models.json'), 'utf-8')
+    )
+    expect(modelsJson.providers).toEqual({
+      deepseek: {
+        modelOverrides: { 'deepseek-flash': { contextWindow: 128_000, maxTokens: 65_536 } },
+      },
     })
+  })
+
+  it('writes an empty providers map when there are no overrides', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    await manager.initialize(makeConfig())
 
     const modelsJson = JSON.parse(
       await fs.readFile(path.join(agentDir, 'models.json'), 'utf-8')
     )
-    const entries = modelsJson.providers['pi-workbench'].models
-    expect(entries.map((model: { id: string }) => model.id)).toEqual([
-      'deepseek-flash',
-      'deepseek-v4-pro',
-    ])
-    expect(entries.find((model: { id: string }) => model.id === 'deepseek-flash').input).toEqual([
-      'text',
-      'image',
-    ])
-    expect(entries.find((model: { id: string }) => model.id === 'deepseek-flash').contextWindow).toBe(
-      128_000
-    )
-    expect(entries.find((model: { id: string }) => model.id === 'deepseek-v4-pro').input).toEqual([
-      'text',
-    ])
+    expect(modelsJson.providers).toEqual({})
   })
 
-  it('keeps catalog maxTokens as an upper bound and follows user image flags', async () => {
+  it('falls back to the first catalog model when the recorded one is gone', async () => {
     const session = createFakeSession()
-    const models: Record<string, Record<string, unknown>> = {
-      'deepseek-flash': {
-        provider: 'pi-workbench',
-        id: 'deepseek-flash',
-        reasoning: true,
-        input: ['text', 'image'],
-        contextWindow: 128_000,
-        maxTokens: 8_192,
-      },
-      'custom-vision-model': {
-        provider: 'pi-workbench',
-        id: 'custom-vision-model',
-        reasoning: false,
-        input: ['text', 'image'],
-        contextWindow: 64_000,
-        maxTokens: 4_096,
-      },
-    }
+    const models = [
+      { provider: 'deepseek', id: 'deepseek-flash', api: 'openai-completions' },
+      { provider: 'deepseek', id: 'deepseek-v4-pro', api: 'openai-completions' },
+    ]
     sdk.modelRuntimeCreate.mockResolvedValue({
-      getModel: vi.fn((_provider: string, id: string) => models[id]),
+      getModel: vi.fn((_provider: string, id: string) =>
+        models.find((model) => model.id === id)
+      ),
+      getModels: vi.fn(() => models),
     })
     sdk.continueRecent.mockImplementation(() => createFakeSessionManager())
     sdk.createAgentSession.mockResolvedValue({ session })
 
-    await manager.initialize(
-      makeConfig({
-        apiConfig: {
-          provider: 'openai',
-          apiUrl: 'https://api.example.com/v1/',
-          apiKey: 'sk-secret',
-          selectedModel: 'custom-vision-model',
-          models: [
-            { id: 'deepseek-flash', contextWindow: 1_000_000, image: false },
-            { id: 'custom-vision-model', contextWindow: 64_000, image: true },
-          ],
-        },
-      })
+    const result = await manager.initialize(
+      makeConfig({ apiConfig: { providerId: 'deepseek', modelId: 'removed-model' } })
     )
 
-    const capabilities = await manager.getModelCapabilities()
-    expect(capabilities.models?.find((model) => model.id === 'deepseek-flash')?.vision).toBe(false)
-    expect(capabilities.models?.find((model) => model.id === 'custom-vision-model')?.vision).toBe(
-      true
-    )
-
-    const modelsJson = JSON.parse(
-      await fs.readFile(path.join(agentDir, 'models.json'), 'utf-8')
-    )
-    const entries = modelsJson.providers['pi-workbench'].models
-    const flash = entries.find((model: { id: string }) => model.id === 'deepseek-flash')
-    const vision = entries.find((model: { id: string }) => model.id === 'custom-vision-model')
-
-    expect(flash.input).toEqual(['text'])
-    expect(vision.input).toEqual(['text', 'image'])
-    // 1M 档位配套 131072，catalog 声明上限 393216：取档位配套值
-    expect(flash).toMatchObject({ contextWindow: 1_000_000, maxTokens: 131_072 })
-    // 未登记的模型没有 catalog 上限，按档位配套值写入
-    expect(vision).toMatchObject({ contextWindow: 64_000, maxTokens: 8_192 })
+    // 记录里的模型不属于当前 catalog：初始化不抛错，回落到目录首个（D22）
+    expect(result.success).toBe(true)
   })
 
   it('lists running sessions and clears them once the turn finishes', async () => {
@@ -2937,7 +2927,7 @@ describe('session model and thinking controls', () => {
     const session = createFakeSession()
     primeSdk(session)
     sdk.modelRuntimeCreate.mockResolvedValue({
-      getModel: vi.fn((_provider: string, id: string) => ({ provider: 'pi-workbench', id })),
+      getModel: vi.fn((_provider: string, id: string) => ({ provider: 'deepseek', id })),
     })
     await manager.initialize(makeConfig())
 

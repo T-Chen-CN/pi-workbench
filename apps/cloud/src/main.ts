@@ -19,12 +19,12 @@ import {
   type CloudWorkspaceInfo,
   type DeviceToServerFrame,
 } from 'pi-bridge'
-import { AgentManager } from 'pi-bridge'
+import { AgentManager, createFileCredentialStore, legacyProviderFromUrl } from 'pi-bridge'
 import { loadConfig, type CloudConfig } from './config.js'
 import { CloudStore } from './store/store.js'
 import { AttemptLimiter } from './auth/rate-limit.js'
 import { readCookie, SESSION_COOKIE, verifySessionCookie } from './auth/session-cookie.js'
-import { decryptSecret } from './secure/config-crypto.js'
+import { decryptSecret, encryptSecret } from './secure/config-crypto.js'
 import { Hub, type ClientPeer, type DevicePeer } from './ws/hub.js'
 import { TaskDispatcher } from './tasks/dispatcher.js'
 import {
@@ -441,6 +441,19 @@ export async function createCloudServer(
     model: string
   }
 
+  /**
+   * 云端凭证落盘位置。P5 之前云端仍用自己的配置页写 key，这里把它翻译成
+   * 预设供应商 + CredentialStore，Agent 运行时不再读明文 Key。
+   */
+  const credentials = createFileCredentialStore({
+    path: path.join(config.dataDir, 'credentials.json'),
+    cipher: {
+      encrypt: (plain) => encryptSecret(plain, config.encryptionKey),
+      decrypt: (stored) => decryptSecret(stored, config.encryptionKey),
+    },
+    logger,
+  })
+
   /** 读磁盘配置并解密 Key；解密失败返回 null（换过 `PI_CLOUD_ENC_KEY` 的典型表现） */
   function resolveConfig(): ResolvedCloudConfig | null {
     const record = store.getCloudConfig()
@@ -470,15 +483,18 @@ export async function createCloudServer(
 
   /** 用给定配置建运行时并续上唯一会话 */
   async function startAgent(resolved: ResolvedCloudConfig): Promise<boolean> {
+    const providerId = legacyProviderFromUrl(resolved.apiUrl) ?? resolved.provider
+    // 旧配置里的明文 Key 转成预设供应商凭证；P5 会换成配置页 + OAuth 登录
+    await credentials.modify(providerId, async () => ({
+      type: 'api_key',
+      key: resolved.apiKey,
+    }))
     const result = await agent.initialize({
       workspaceDir: config.workspaceDir,
       agentDir: config.agentDir,
-      apiConfig: {
-        provider: resolved.provider,
-        apiUrl: resolved.apiUrl,
-        apiKey: resolved.apiKey,
-        selectedModel: resolved.model,
-      },
+      apiConfig: { providerId, modelId: resolved.model },
+      credentials,
+      allowModelNetwork: true,
       logger,
       // 云端会话：无审批（mode=auto）、不挂计划与工作树扩展、工具白名单只有六个
       builtinExtensions: { approval: false, plan: false, worktree: false },
