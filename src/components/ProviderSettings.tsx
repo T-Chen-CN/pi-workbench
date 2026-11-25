@@ -7,7 +7,7 @@
  * 3. 任何接口都不回传密钥，UI 只知道「已连接 / 未连接」和凭证类型。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw, Trash2 } from 'lucide-react'
 import type {
   ProviderAuthMethod,
@@ -115,6 +115,14 @@ export function ProviderSettings() {
     }
   }
 
+  const oauthRefreshTimerRef = useRef<number | null>(null)
+  useEffect(
+    () => () => {
+      if (oauthRefreshTimerRef.current !== null) window.clearTimeout(oauthRefreshTimerRef.current)
+    },
+    []
+  )
+
   const handleOAuth = async (method: ProviderAuthMethod) => {
     if (!selected) return
     setBusy('oauth')
@@ -129,7 +137,9 @@ export function ProviderSettings() {
       return
     }
     // 登录结果通过 providers:auth-event 回来；成功后刷新列表
-    window.setTimeout(() => {
+    if (oauthRefreshTimerRef.current !== null) window.clearTimeout(oauthRefreshTimerRef.current)
+    oauthRefreshTimerRef.current = window.setTimeout(() => {
+      oauthRefreshTimerRef.current = null
       void load().then(notifyAgent)
     }, 1500)
   }

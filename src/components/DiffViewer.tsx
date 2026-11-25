@@ -213,14 +213,14 @@ const UnifiedDiffView: React.FC<DiffViewProps> = ({ diff }) => {
         <span className="text-ink-muted">→</span>
         <span className="truncate type-data text-ink">{diff.modifiedFile}</span>
       </div>
-      <VirtualDiffLines lines={diff.lines} side="original" />
+      <VirtualDiffLines lines={diff.lines} side="unified" />
     </div>
   )
 }
 
 const DIFF_ROW_HEIGHT = 22
 
-const VirtualDiffLines: React.FC<{ lines: DiffLine[]; side: 'original' | 'modified' }> = ({
+const VirtualDiffLines: React.FC<{ lines: DiffLine[]; side: 'original' | 'modified' | 'unified' }> = ({
   lines,
   side,
 }) => {
@@ -245,7 +245,7 @@ const VirtualDiffLines: React.FC<{ lines: DiffLine[]; side: 'original' | 'modifi
 
 interface DiffLineElementProps {
   line: DiffLine
-  side: 'original' | 'modified'
+  side: 'original' | 'modified' | 'unified'
 }
 
 const DiffLineElement: React.FC<DiffLineElementProps> = ({ line, side }) => {
@@ -253,7 +253,13 @@ const DiffLineElement: React.FC<DiffLineElementProps> = ({ line, side }) => {
   let prefix = ' '
   let prefixColor = 'text-ink-muted'
   const lineNumber =
-    side === 'modified' ? line.modifiedLineNumber : line.originalLineNumber
+    side === 'unified'
+      ? line.type === DiffLineType.Added
+        ? line.modifiedLineNumber
+        : line.originalLineNumber
+      : side === 'modified'
+        ? line.modifiedLineNumber
+        : line.originalLineNumber
 
   if (line.type === DiffLineType.Added) {
     bgColor = 'bg-success/10'

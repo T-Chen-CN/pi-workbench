@@ -1,4 +1,4 @@
-import React, { useDeferredValue, useMemo, useRef, useState } from 'react'
+import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -47,14 +47,26 @@ const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({ valu
 const CodeBlock: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   const { t } = useI18nStore()
   const preRef = useRef<HTMLPreElement>(null)
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [copied, setCopied] = useState(false)
+
+  useEffect(
+    () => () => {
+      if (resetTimerRef.current) clearTimeout(resetTimerRef.current)
+    },
+    []
+  )
 
   const copy = async () => {
     const text = preRef.current?.textContent ?? ''
     if (!text) return
     if (await copyText(text)) {
       setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
+      if (resetTimerRef.current) clearTimeout(resetTimerRef.current)
+      resetTimerRef.current = setTimeout(() => {
+        resetTimerRef.current = null
+        setCopied(false)
+      }, 1500)
     } else {
       toast.error(t('copyFailedPlain'))
     }

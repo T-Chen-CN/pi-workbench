@@ -69,12 +69,15 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [selected, setSelected] = useState(0)
   const [output, setOutput] = useState<CommandOutput | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const refreshSeqRef = useRef(0)
 
   const refresh = useCallback(async () => {
+    const seq = ++refreshSeqRef.current
     setLoading(true)
     setError(null)
     try {
       const result = await api.pluginsList(workspacePath)
+      if (refreshSeqRef.current !== seq) return
       if (result.success) {
         setPlugins(result.plugins)
       } else {
@@ -84,15 +87,17 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       const active = useSessionStore.getState().byWorkspace[workspacePath]?.active
       if (active) {
         const prompts = await piAgentAPI.listPromptResources(workspacePath, active)
+        if (refreshSeqRef.current !== seq) return
         setResources({
           templates: prompts.success ? prompts.templates ?? [] : [],
           skills: prompts.success ? prompts.skills ?? [] : [],
         })
       }
     } catch (err) {
+      if (refreshSeqRef.current !== seq) return
       setError(localizeError(err instanceof Error ? err.message : String(err)))
     } finally {
-      setLoading(false)
+      if (refreshSeqRef.current === seq) setLoading(false)
     }
   }, [workspacePath, t])
 
@@ -118,10 +123,16 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   }, [paletteShortcut])
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      refreshSeqRef.current += 1
+      return
+    }
     void refresh()
     const timer = setTimeout(() => inputRef.current?.focus(), 0)
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(timer)
+      refreshSeqRef.current += 1
+    }
   }, [open, refresh])
 
   useEffect(() => {
@@ -205,7 +216,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         }
         emitAppEvent('attach-selection')
         setOutput({ title: command.title, text: t('selectionAttached'), success: true })
-        toast.success(`${command.title}: ${t('selectionAttached')}`)
         return
       }
 

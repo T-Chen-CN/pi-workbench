@@ -110,8 +110,16 @@ const mockAPI = {
     error: 'Only available in the Electron app',
   }),
   openExternalUrl: async (url: string): Promise<WorkspaceResult> => {
-    window.open(url, '_blank', 'noopener,noreferrer')
-    return { success: true }
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return { success: false, error: 'Only http/https URLs can be opened externally' }
+      }
+      window.open(parsed.toString(), '_blank', 'noopener,noreferrer')
+      return { success: true }
+    } catch {
+      return { success: false, error: 'Invalid URL' }
+    }
   },
   exists: async (filePath: string): Promise<ExistsResult> => {
     console.log('[Mock] exists:', filePath)

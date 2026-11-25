@@ -133,33 +133,35 @@ const TurnEditSummary: React.FC<{
           {t('revertAll')}
         </button>
       </div>
-      {open &&
-        edits.map((edit) => (
-          <div
-            key={edit.path}
-            id={contentId}
-            className="flex items-center gap-2 border-b border-rule-divide px-3 py-1 last:border-b-0"
-          >
-            <span className="min-w-0 flex-1 truncate type-data text-ink-muted" title={edit.path}>
-              {fileName(edit.path)}
-            </span>
-            <button
-              type="button"
-              onClick={() => diffStoreFor(diffRoot).getState().openEdits([edit])}
-              className="type-caption text-ink-muted transition-colors hover:text-ink"
+      {open && (
+        <div id={contentId}>
+          {edits.map((edit) => (
+            <div
+              key={edit.path}
+              className="flex items-center gap-2 border-b border-rule-divide px-3 py-1 last:border-b-0"
             >
-              {t('viewChanges')}
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void handleRevert(edit)}
-              className="type-caption text-ink-muted transition-colors hover:text-danger disabled:opacity-40"
-            >
-              {t('revertFile')}
-            </button>
-          </div>
-        ))}
+              <span className="min-w-0 flex-1 truncate type-data text-ink-muted" title={edit.path}>
+                {fileName(edit.path)}
+              </span>
+              <button
+                type="button"
+                onClick={() => diffStoreFor(diffRoot).getState().openEdits([edit])}
+                className="type-caption text-ink-muted transition-colors hover:text-ink"
+              >
+                {t('viewChanges')}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void handleRevert(edit)}
+                className="type-caption text-ink-muted transition-colors hover:text-danger disabled:opacity-40"
+              >
+                {t('revertFile')}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

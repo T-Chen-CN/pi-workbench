@@ -28,7 +28,7 @@ const LANGUAGE_BY_EXTENSION: Record<string, string> = {
 }
 
 function detectLanguage(fileName: string): string {
-  const extension = fileName.split('.').pop() || 'txt'
+  const extension = (fileName.split('.').pop() || 'txt').toLowerCase()
   return LANGUAGE_BY_EXTENSION[extension] || 'plaintext'
 }
 

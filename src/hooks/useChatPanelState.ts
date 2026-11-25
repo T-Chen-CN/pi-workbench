@@ -26,23 +26,14 @@ import {
 import { localizeError } from '../i18n/errors'
 import { createTraceBuffer } from '../utils/streamBuffer'
 import { copyText } from '../utils/clipboard'
-import { formatBytes } from '../utils/formatBytes'
 import { SESSION_MODE_ICON } from '../utils/sessionModePresentation'
-import { extractSymbols, sliceSymbol, type ExtractedSymbol } from '../utils/symbols'
-import { isPathInside, joinPath } from '../utils/filePath'
+import { joinPath } from '../utils/filePath'
+import { MAX_TOTAL_IMAGE_BASE64_CHARS } from '../utils/imageAttachment'
 import { buildChatSuggestions, type WorkspaceType } from '../utils/suggestions'
-import {
-  ALLOWED_IMAGE_TYPES,
-  ImagePrepareError,
-  MAX_IMAGE_COUNT,
-  MAX_IMAGE_OUTPUT_BYTES,
-  MAX_TOTAL_IMAGE_BASE64_CHARS,
-  base64ToFile,
-  prepareImageFile,
-} from '../utils/imageAttachment'
 import { toast } from '../store/toastStore'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { useVirtualRows } from './useVirtualRows'
+import { useChatAttachments } from './useChatAttachments'
 import {
   distanceFromBottom,
   pinToBottom as pinChatToBottom,
@@ -65,7 +56,6 @@ import type {
 import type { ChatPanelProps } from '../utils/chatPanelShared'
 import { emitAppEvent, onAppEvent } from '../utils/appEvents'
 import {
-  MAX_ATTACHMENTS,
   MAX_CONTEXT_SNIPPET_CHARS,
   MAX_CONTEXT_TOTAL_CHARS,
   DEFAULT_SESSION_PERMISSION,
@@ -73,9 +63,6 @@ import {
   EMPTY_MESSAGES,
   formatTokenCount,
 } from '../utils/chatPanelShared'
-
-/** 「附加符号」全文扫描的防抖窗口：停手后才重算一次 */
-const SYMBOL_SCAN_DEBOUNCE_MS = 400
 
 export function useChatPanelState(props: ChatPanelProps) {
   const { workspacePath, viewRoot, active = true } = props
@@ -313,10 +300,6 @@ export function useChatPanelState(props: ChatPanelProps) {
   const [showArchived, setShowArchived] = useState(false)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [newMessageCount, setNewMessageCount] = useState(0)
-  /** 正在预处理（缩放 / 编码）的图片数量 */
-  const [imageProcessing, setImageProcessing] = useState(0)
-  /** 同一计数的同步镜像：发送路径需要在事件回调里立即判断，不等渲染 */
-  const imageProcessingRef = useRef(0)
   /** 重试倒计时的本地时钟（R-19） */
   const [retryNow, setRetryNow] = useState(() => Date.now())
   const lastMessageCountRef = useRef(0)
@@ -326,6 +309,12 @@ export function useChatPanelState(props: ChatPanelProps) {
     results: string[]
   } | null>(null)
   const mentionTimer = useRef<number | null>(null)
+  useEffect(
+    () => () => {
+      if (mentionTimer.current) window.clearTimeout(mentionTimer.current)
+    },
+    []
+  )
   /** 提示模板与技能（R-13） */
   const [promptResources, setPromptResources] = useState<{
     templates: PromptTemplateInfo[]
@@ -521,39 +510,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     return () => offInsert()
   }, [activeKey, active])
 
-  /**
-   * 「附加符号」要扫全文：不能跟着每按键重算。
-   * 这里只在停止输入 `SYMBOL_SCAN_DEBOUNCE_MS` 之后重算一次（切文件立即重算），
-   * 扫的是那一次的快照，用户真从菜单里选符号时再从 store 现取原文切片。
-   */
-  const [symbolSource, setSymbolSource] = useState<{ name: string; content: string } | null>(null)
-  useEffect(() => {
-    const store = editorStoreFor(editorRoot)
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const snapshot = (immediate: boolean) => {
-      if (timer) clearTimeout(timer)
-      const publish = () => {
-        timer = null
-        const file = store.getState().currentFile
-        setSymbolSource(file ? { name: file.name, content: file.content } : null)
-      }
-      if (immediate) publish()
-      else timer = setTimeout(publish, SYMBOL_SCAN_DEBOUNCE_MS)
-    }
-    snapshot(true)
-    // 内容变化高频：交给定时器合并，只有停手后才 setState（不触发按键级重渲染）
-    const unsubscribe = store.subscribe(() => snapshot(false))
-    return () => {
-      if (timer) clearTimeout(timer)
-      unsubscribe()
-    }
-  }, [editorRoot])
-
-  const currentSymbols = useMemo(
-    () => (symbolSource ? extractSymbols(symbolSource.content, symbolSource.name) : []),
-    [symbolSource]
-  )
-
   const selectedModelCapability =
     modelCapabilities.find((item) => item.id === sessionSettings?.modelId) ?? null
   const imagesAllowed = selectedModelCapability
@@ -561,6 +517,25 @@ export function useChatPanelState(props: ChatPanelProps) {
     : Boolean(
         sessionSettings?.modelId && configuredImageModels.includes(sessionSettings.modelId)
       )
+
+  const {
+    imageProcessing,
+    imageProcessingRef,
+    currentSymbols,
+    attachSymbol,
+    handlePaste,
+    handlePickFiles,
+    handleDropFiles,
+  } = useChatAttachments({
+    workspacePath,
+    viewRoot,
+    editorRoot,
+    activeKey,
+    imagesAllowed,
+    t,
+    setShowAttachMenu,
+    setAttachMode,
+  })
   /** 模型菜单底部的能力脚注 */
   const modelCapabilityText = selectedModelCapability
     ? selectedModelCapability.available === false
@@ -655,205 +630,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     language,
     sessionPermission.mode,
   ])
-
-  /** 附加单个符号（函数 / 类等）作为上下文 */
-  const attachSymbol = (symbol: ExtractedSymbol) => {
-    // 切片取当下的正文（符号列表是防抖后的快照，可能比文件旧）
-    const file = editorStoreFor(editorRoot).getState().currentFile
-    if (!activeKey || !file) return
-    useChatStore.getState().addAttachment(activeKey, {
-      kind: 'snippet',
-      path: file.path,
-      name: `${file.name}#${symbol.name}`,
-      startLine: symbol.startLine,
-      endLine: symbol.endLine,
-      content: sliceSymbol(file.content, symbol),
-    })
-    setShowAttachMenu(false)
-    setAttachMode('files')
-  }
-
-  /** 图像附件：统一预处理（长边 2048）后进入附件区，不写入上下文文本 */
-  const addImageFiles = (files: File[]): void => {
-    const key = activeKey
-    if (!key) return
-    if (!imagesAllowed) {
-      toast.error(t('modelImageDisabled'))
-      return
-    }
-    const imageFiles = files.filter((file) => file.type.startsWith('image/'))
-    if (imageFiles.length === 0) return
-
-    void (async () => {
-      imageProcessingRef.current += 1
-      setImageProcessing((count) => count + 1)
-      try {
-        const existing = useChatStore.getState().conversations[key]?.attachments ?? []
-        let imageCount = existing.filter((attachment) => attachment.kind === 'image').length
-        // 图片与文件共用同一条消息的总量上限
-        let attachmentCount = existing.length
-        let totalChars = existing.reduce(
-          (total, attachment) =>
-            attachment.kind === 'image' ? total + (attachment.data?.length ?? 0) : total,
-          0
-        )
-
-        for (const file of imageFiles) {
-          if (attachmentCount >= MAX_ATTACHMENTS) {
-            toast.error(t('attachmentLimit', { count: MAX_ATTACHMENTS }))
-            break
-          }
-          if (imageCount >= MAX_IMAGE_COUNT) {
-            toast.error(t('imageLimit', { count: MAX_IMAGE_COUNT }))
-            break
-          }
-          try {
-            const prepared = await prepareImageFile(file)
-            if (totalChars + prepared.data.length > MAX_TOTAL_IMAGE_BASE64_CHARS) {
-              toast.error(t('imageTotalTooLarge'))
-              break
-            }
-            useChatStore.getState().addAttachment(key, {
-              kind: 'image',
-              path: '',
-              name:
-                prepared.name ||
-                `image-${Date.now()}.${prepared.mimeType.split('/')[1] || 'png'}`,
-              mimeType: prepared.mimeType,
-              data: prepared.data,
-              size: prepared.size,
-            })
-            imageCount += 1
-            attachmentCount += 1
-            totalChars += prepared.data.length
-          } catch (error) {
-            const code = error instanceof ImagePrepareError ? error.code : 'encodeFailed'
-            if (code === 'unsupported') toast.error(t('imageUnsupported'))
-            else if (code === 'tooLarge') {
-              toast.error(t('imageTooLarge', { size: formatBytes(MAX_IMAGE_OUTPUT_BYTES) }))
-            } else if (code === 'tooManyPixels') toast.error(t('imageTooManyPixels'))
-            else toast.error(t('imageEncodeFailed'))
-          }
-        }
-      } finally {
-        imageProcessingRef.current = Math.max(0, imageProcessingRef.current - 1)
-        setImageProcessing((count) => Math.max(0, count - 1))
-      }
-    })()
-  }
-
-  /** 粘贴截图作为图像附件 */
-  const handlePaste = (event: React.ClipboardEvent) => {
-    const files = Array.from(event.clipboardData?.files ?? []).filter((file) =>
-      file.type.startsWith('image/')
-    )
-    if (files.length === 0) return
-    event.preventDefault()
-    addImageFiles(files)
-  }
-
-  /** 拖入 / 选中的文件统一转成附件：补元信息、去重、守住总量上限 */
-  const attachFiles = useCallback(
-    (
-      key: string,
-      files: Array<{
-        path: string
-        name: string
-        size?: number
-        mime?: string
-        mtime?: number
-      }>
-    ) => {
-      const store = useChatStore.getState()
-      const existing = store.conversations[key]?.attachments ?? []
-      const seen = new Set(existing.map((attachment) => attachment.path))
-      let count = existing.length
-      let overflow = false
-      for (const file of files) {
-        if (count >= MAX_ATTACHMENTS) {
-          overflow = true
-          break
-        }
-        if (seen.has(file.path)) continue
-        seen.add(file.path)
-        count += 1
-        store.addAttachment(key, {
-          kind: 'file',
-          path: file.path,
-          name: file.name,
-          size: file.size,
-          mime: file.mime,
-          mtime: file.mtime,
-          // 工作区外的文件同样能附加，只在 UI 与 prompt 里标明来源
-          external: !isPathInside(viewRoot ?? workspacePath, file.path)
-        })
-      }
-      if (overflow) toast.error(t('attachmentLimit', { count: MAX_ATTACHMENTS }))
-    },
-    [t, viewRoot, workspacePath]
-  )
-
-  /** 原生文件选择：任意位置、任意格式；除图片外只拿路径 */
-  const handlePickFiles = async () => {
-    setShowAttachMenu(false)
-    if (!activeKey) return
-    const result = await api.pickAttachments()
-    if (!result.success) {
-      toast.error(t('attachmentPickFailed'))
-      return
-    }
-    if (result.canceled || result.files.length === 0) return
-
-    // 图片走视觉通道，其余文件只交路径
-    const images: File[] = []
-    const plain: Array<{ path: string; name: string; size?: number; mime?: string; mtime?: number }> = []
-    for (const file of result.files) {
-      // 只把视觉通道支持的位图当图片；SVG 之类仍按普通文件交路径
-      if (ALLOWED_IMAGE_TYPES.has(file.mime) && file.data) {
-        try {
-          images.push(base64ToFile(file.data, file.name, file.mime))
-          continue
-        } catch {
-          // 解码失败就退化为普通文件附件
-        }
-      }
-      plain.push({
-        path: file.path,
-        name: file.name,
-        size: file.size,
-        mime: file.mime,
-        mtime: file.mtime
-      })
-    }
-    attachFiles(activeKey, plain)
-    if (images.length > 0) addImageFiles(images)
-  }
-
-  /** 拖入文件作为附件 */
-  const handleDropFiles = (event: React.DragEvent) => {
-    event.preventDefault()
-    if (!activeKey) return
-    const images: File[] = []
-    const plain: Array<{ path: string; name: string; size?: number; mime?: string; mtime?: number }> = []
-    for (const file of Array.from(event.dataTransfer.files)) {
-      // 只有位图走视觉通道；SVG 等其他图片格式按普通文件附加（模型可读源码）
-      if (ALLOWED_IMAGE_TYPES.has(file.type)) {
-        images.push(file)
-        continue
-      }
-      const target = api.getPathForFile(file)
-      if (!target) continue
-      plain.push({
-        path: target,
-        name: file.name,
-        size: file.size,
-        mime: file.type || undefined,
-        mtime: file.lastModified || undefined
-      })
-    }
-    attachFiles(activeKey, plain)
-    if (images.length > 0) addImageFiles(images)
-  }
 
   useEffect(() => {
     const onConfigSaved = () => setConfigVersion((version) => version + 1)
