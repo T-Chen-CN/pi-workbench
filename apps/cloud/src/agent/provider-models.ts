@@ -10,13 +10,17 @@
  * 一个跑不起来的 id。
  */
 
-import { builtinCatalogModel, builtinCatalogModels, isPresetProviderId } from 'pi-bridge'
+import {
+  builtinCatalogModel,
+  builtinCatalogModels,
+  isPresetProviderId,
+  providerModelsHeaders,
+  providerModelsProbeRequest,
+} from 'pi-bridge'
 
 /** 供应商 `/models` 的鉴权头 */
 export function modelsHeaders(providerId: string, apiKey: string): Record<string, string> {
-  return providerId === 'anthropic'
-    ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
-    : { authorization: `Bearer ${apiKey}` }
+  return providerModelsHeaders(providerId, apiKey)
 }
 
 export type CatalogModelSummary = {
@@ -64,10 +68,11 @@ export async function probeProviderKey(
   const baseUrl = model?.baseUrl?.replace(/\/+$/, '')
   if (!baseUrl) return { ok: true, warning: 'catalog 里没有 baseUrl，跳过探测' }
 
+  const request = providerModelsProbeRequest(input.providerId, baseUrl, input.apiKey)
   let response: Response
   try {
-    response = await fetch(`${baseUrl}/models`, {
-      headers: modelsHeaders(input.providerId, input.apiKey),
+    response = await fetch(request.url, {
+      headers: request.headers,
       signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (error) {

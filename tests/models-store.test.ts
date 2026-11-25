@@ -3,7 +3,12 @@ import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
 import { createFileModelsStore } from '../pi-bridge/src/models-store'
-import { isRemoteCatalogEffective } from '../pi-bridge/src/provider-presets'
+import {
+  diffCatalogSnapshots,
+  filterEffectiveCatalogModels,
+  isRemoteCatalogEffective,
+  providerModelsProbeRequest,
+} from '../pi-bridge/src/provider-presets'
 import type { ModelsStoreEntry } from '@earendil-works/pi-ai'
 
 const model = (id: string): any => ({
@@ -124,6 +129,69 @@ describe('目录缓存与远端判据', () => {
       // 2026-10-15 之前 → 远端比内置旧，SDK 会忽略
       expect(isRemoteCatalogEffective(Date.parse('2026-01-01T00:00:00Z'))).toBe(false)
       expect(isRemoteCatalogEffective(Date.parse('2030-01-01T00:00:00Z'))).toBe(true)
+    })
+  })
+
+  describe('filterEffectiveCatalogModels (D12 / D26)', () => {
+    const models = [{ id: 'keep-1' }, { id: 'removed-upstream' }, { id: 'added-remote' }]
+
+    it('远端比内置新时剔除上游已下架的模型，保留远端新增模型', () => {
+      const filtered = filterEffectiveCatalogModels(models, {
+        lastModified: Date.parse('2030-01-01T00:00:00Z'),
+        ids: ['keep-1', 'added-remote'],
+      })
+      expect(filtered.map((m) => m.id)).toEqual(['keep-1', 'added-remote'])
+    })
+
+    it('无快照 / 远端比内置旧 / 交集为空时原样保留', () => {
+      expect(filterEffectiveCatalogModels(models, undefined)).toEqual(models)
+      expect(
+        filterEffectiveCatalogModels(models, {
+          lastModified: Date.parse('2026-01-01T00:00:00Z'),
+          ids: ['keep-1'],
+        })
+      ).toEqual(models)
+      expect(
+        filterEffectiveCatalogModels(models, {
+          lastModified: Date.parse('2030-01-01T00:00:00Z'),
+          ids: ['nonexistent'],
+        })
+      ).toEqual(models)
+    })
+  })
+
+  describe('diffCatalogSnapshots', () => {
+    it('按 provider 精确统计增删数量，不把增删相互抵消', () => {
+      const diff = diffCatalogSnapshots(
+        [{ providerId: 'google', ids: ['a', 'b'] }],
+        [{ providerId: 'google', ids: ['a', 'c', 'd'] }]
+      )
+      expect(diff).toEqual({ added: 2, removed: 1 })
+    })
+  })
+
+  describe('providerModelsProbeRequest', () => {
+    it('Google 使用 x-goog-api-key，Anthropic 补全 /v1/models 并用 x-api-key', () => {
+      expect(
+        providerModelsProbeRequest('google', 'https://generativelanguage.googleapis.com/v1beta', 'g-key')
+      ).toEqual({
+        url: 'https://generativelanguage.googleapis.com/v1beta/models',
+        headers: { 'x-goog-api-key': 'g-key' },
+      })
+
+      expect(providerModelsProbeRequest('anthropic', 'https://api.anthropic.com', 'a-key')).toEqual({
+        url: 'https://api.anthropic.com/v1/models',
+        headers: { 'x-api-key': 'a-key', 'anthropic-version': '2023-06-01' },
+      })
+
+      expect(providerModelsProbeRequest('anthropic', 'https://api.anthropic.com/v1/', 'a-key').url).toBe(
+        'https://api.anthropic.com/v1/models'
+      )
+
+      expect(providerModelsProbeRequest('openai', 'https://api.openai.com/v1', 'o-key')).toEqual({
+        url: 'https://api.openai.com/v1/models',
+        headers: { authorization: 'Bearer o-key' },
+      })
     })
   })
 })

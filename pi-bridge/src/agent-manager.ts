@@ -73,8 +73,11 @@ import {
   PRESET_PROVIDER_IDS,
   builtinCatalogModels,
   catalogLimits,
+  diffCatalogSnapshots,
+  filterEffectiveCatalogModels,
   type ModelLimits,
 } from './provider-presets.js'
+import type { CatalogSnapshot } from './models-store.js'
 import {
   buildTitlePrompt,
   isEchoOfUserText,
@@ -303,9 +306,27 @@ export class AgentManager {
   private lastWebAccessVersion: string | null = null
   /** 新建会话的权限种子（G3）：只在 extras 还没有权限时生效，已有会话以落盘为准 */
   private seedPermissions = new Map<string, SessionPermission>()
+  /** 当前 provider 的远端目录快照（D12/D26）：用于过滤内置快照里上游已下架的模型 */
+  private remoteCatalogSnapshot: CatalogSnapshot | undefined = undefined
+
+  private async syncRemoteCatalogSnapshot(providerId: string): Promise<void> {
+    const store = this.config?.modelsStore
+    if (!store || !('snapshotFor' in store) || typeof store.snapshotFor !== 'function') {
+      this.remoteCatalogSnapshot = undefined
+      return
+    }
+    try {
+      this.remoteCatalogSnapshot = await (
+        store as { snapshotFor(id: string): Promise<CatalogSnapshot | undefined> }
+      ).snapshotFor(providerId)
+    } catch {
+      this.remoteCatalogSnapshot = undefined
+    }
+  }
 
   /**
    * 目录里的模型列表。优先用运行时的（含远端增量与 models.json 覆盖），
+   * 并按生效的远端快照剔除上游已下架的内置残留（D12/D26）；
    * 运行时没暴露 `getModels`（测试替身 / 老版本）时回退内置快照。
    */
   private catalogModels(): Model<Api>[] {
@@ -313,8 +334,8 @@ export class AgentManager {
     if (!providerId) return []
     const runtime = this.modelRuntime as (ModelRuntime & { getModels?: (id: string) => readonly Model<Api>[] }) | null
     const fromRuntime = runtime?.getModels?.(providerId)
-    if (fromRuntime && fromRuntime.length > 0) return [...fromRuntime]
-    return [...builtinCatalogModels(providerId)]
+    const raw = fromRuntime && fromRuntime.length > 0 ? fromRuntime : builtinCatalogModels(providerId)
+    return filterEffectiveCatalogModels(raw, this.remoteCatalogSnapshot)
   }
 
   /** 解析会话当前生效的模型（优先会话已切换模型 + modelRuntime 覆盖，回退工作区默认模型） */
@@ -720,6 +741,7 @@ export class AgentManager {
       const modelsPath = await writeModelsConfig(this.agentDir, { providerId, overrides })
       ensureBashOnPath(this.logger)
 
+      this.remoteCatalogSnapshot = undefined
       this.modelRuntime = await withTimeout(
         ModelRuntime.create({
           modelsPath,
@@ -732,6 +754,13 @@ export class AgentManager {
         INIT_TIMEOUT_MS,
         'Agent model runtime'
       )
+
+      // 只从本地 models-store.json 恢复已缓存的远端目录（不发网络），确保 resolveActiveModel
+      // 能识别上游新增模型并按 D12/D26 过滤已下架模型（测试替身可能不实现 refresh）
+      if (typeof this.modelRuntime.refresh === 'function') {
+        await this.modelRuntime.refresh({ allowNetwork: false, providers: [providerId] })
+      }
+      await this.syncRemoteCatalogSnapshot(providerId)
 
       // 记录里的模型可能已经不在目录里（上游下架 / 切过供应商）：回落到目录首个（D22）
       const model = this.resolveActiveModel()
@@ -1268,9 +1297,13 @@ export class AgentManager {
     const modelRuntime = this.modelRuntime
     if (!config || !modelRuntime) return undefined
     const { providerId, modelId } = config.apiConfig
-    const recorded = modelRuntime.getModel(providerId, modelId)
-    if (recorded) return recorded
     const models = this.catalogModels()
+    const recorded = models.find((model) => model.id === modelId)
+    if (recorded) return recorded
+    if (models.length === 0) {
+      const direct = modelRuntime.getModel(providerId, modelId)
+      if (direct) return direct
+    }
     const fallback = models[0]
     if (fallback) {
       this.logger.warn(
@@ -1369,6 +1402,7 @@ export class AgentManager {
         providers: [...PRESET_PROVIDER_IDS],
         force: options.force === true,
       })
+      await this.syncRemoteCatalogSnapshot(this.config.apiConfig.providerId)
       if (result.errors.size > 0) {
         const first = [...result.errors.entries()][0]
         return {
@@ -1379,15 +1413,7 @@ export class AgentManager {
         }
       }
       const after = snapshotter ? await snapshotter.snapshot() : []
-      let added = 0
-      let removed = 0
-      for (const next of after) {
-        const previous = before.find((entry) => entry.providerId === next.providerId)
-        const beforeIds = new Set(previous?.ids ?? [])
-        const afterIds = new Set(next.ids)
-        for (const id of afterIds) if (!beforeIds.has(id)) added++
-        for (const id of beforeIds) if (!afterIds.has(id)) removed++
-      }
+      const { added, removed } = diffCatalogSnapshots(before, after)
       const checkedAt = after.reduce<number | undefined>(
         (latest, entry) => (entry.checkedAt && (!latest || entry.checkedAt > latest) ? entry.checkedAt : latest),
         undefined

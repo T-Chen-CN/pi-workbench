@@ -19,9 +19,13 @@ import {
   PROVIDER_PRESETS,
   catalogLimits,
   credentialFingerprint,
+  diffCatalogSnapshots,
+  filterEffectiveCatalogModels,
   isPresetProviderId,
   normalizeOverrides,
+  providerModelsProbeRequest,
   resolveLimits,
+  type CatalogSnapshot,
   type ModelLimits,
   type ModelOverrides,
   type ProvidersConfig,
@@ -68,21 +72,25 @@ function credentialsStore() {
   return createDesktopCredentialStore()
 }
 
-function configStore() {
-  return createDesktopProvidersConfigStore({ credentials: credentialsStore() })
-}
-
 /** 常驻目录运行时：只做模型清单 / 目录刷新 / 登录，不承载会话 */
 async function getCatalogRuntime(): Promise<ModelRuntime> {
   if (catalogRuntime) return catalogRuntime
   if (catalogRuntimePromise) return catalogRuntimePromise
-  const task = ModelRuntime.create({
-    modelsPath: path.join(piAgentDir, 'models.json'),
-    credentials: credentialsStore(),
-    modelsStore: getModelsStore(),
-    refreshOnCreate: false,
-    allowModelNetwork: false,
-  })
+  const task = (async () => {
+    const runtime = await ModelRuntime.create({
+      modelsPath: path.join(piAgentDir, 'models.json'),
+      credentials: credentialsStore(),
+      modelsStore: getModelsStore(),
+      refreshOnCreate: false,
+      allowModelNetwork: false,
+    })
+    // 仅从本地 models-store.json 恢复缓存到内存（不发网络），否则 dynamicModels 始终为空
+    await runtime.refresh({
+      allowNetwork: false,
+      providers: [...PRESET_PROVIDER_IDS],
+    })
+    return runtime
+  })()
   catalogRuntimePromise = task
   void task.then(
     (runtime) => {
@@ -96,6 +104,43 @@ async function getCatalogRuntime(): Promise<ModelRuntime> {
     }
   )
   return task
+}
+
+/**
+ * 统一构造目录视图与配置 store：
+ * 1. runtime 已从本地 models-store.json 恢复远端增量；
+ * 2. 按 D12/D26 用远端快照过滤内置快照里上游已下架的模型；
+ * 3. `providers.json` 的读写校验复用同一份过滤后的模型表，确保远端新增模型可选且不被清洗掉。
+ */
+async function loadCatalogContext(): Promise<{
+  runtime: ModelRuntime
+  snapshots: Map<string, CatalogSnapshot>
+  modelsByProvider: Map<string, readonly Model<Api>[]>
+  store: ReturnType<typeof createDesktopProvidersConfigStore>
+}> {
+  const [runtime, snapshotList] = await Promise.all([
+    getCatalogRuntime(),
+    getModelsStore().snapshot(),
+  ])
+  const snapshots = new Map(snapshotList.map((item) => [item.providerId, item]))
+  const modelsByProvider = new Map<string, readonly Model<Api>[]>()
+  for (const preset of PROVIDER_PRESETS) {
+    const raw = runtime.getModels(preset.id) as readonly Model<Api>[]
+    modelsByProvider.set(
+      preset.id,
+      filterEffectiveCatalogModels(raw, snapshots.get(preset.id))
+    )
+  }
+  const store = createDesktopProvidersConfigStore({
+    credentials: credentialsStore(),
+    listModels: (providerId) =>
+      (modelsByProvider.get(providerId) ?? []).map((model) => ({
+        id: model.id,
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+      })),
+  })
+  return { runtime, snapshots, modelsByProvider, store }
 }
 
 /** 配置或凭证变化后必须重建：运行时缓存了 auth 解析结果 */
@@ -133,16 +178,16 @@ export async function listProviders(): Promise<{
   providers: ProviderView[]
   activeProvider: string | null
 }> {
-  const [config, credentialInfo] = await Promise.all([
-    configStore().read(),
+  const [{ runtime, modelsByProvider, store }, credentialInfo] = await Promise.all([
+    loadCatalogContext(),
     credentialsStore().list(),
   ])
+  const config = await store.read()
   const connected = new Map(credentialInfo.map((info) => [info.providerId, info.type]))
-  const runtime = await getCatalogRuntime()
 
   const providers = PROVIDER_PRESETS.map((preset): ProviderView => {
     const entry = config.providers[preset.id]
-    const models = (runtime.getModels(preset.id) as readonly Model<Api>[]).map((model) =>
+    const models = (modelsByProvider.get(preset.id) ?? []).map((model) =>
       modelView(model, entry?.overrides?.[model.id])
     )
     const credentialType = connected.get(preset.id)
@@ -183,7 +228,7 @@ export async function setActiveProvider(
   modelId: string | undefined
 ): Promise<{ ok: true; config: ProvidersConfig } | { ok: false; code: string }> {
   if (!isPresetProviderId(providerId)) return { ok: false, code: 'PROVIDER_UNKNOWN' }
-  const store = configStore()
+  const { store } = await loadCatalogContext()
   const config = await store.read()
   const target = modelId ?? config.providers[providerId]?.model
   if (!target) return { ok: false, code: 'MODEL_UNKNOWN' }
@@ -209,7 +254,7 @@ export async function setModelOverrides(
   | { ok: false; code: string }
 > {
   if (!isPresetProviderId(providerId)) return { ok: false, code: 'PROVIDER_UNKNOWN' }
-  const store = configStore()
+  const { store } = await loadCatalogContext()
   const config = await store.read()
   const result = store.setOverrides(config, providerId, modelId, overrides)
   if ('error' in result) return { ok: false, code: result.error }
@@ -244,11 +289,10 @@ export async function saveApiKey(
   await credentials.modify(providerId, async () => ({ type: 'api_key', key }))
 
   // 有 Key 就等于「已配置」：写进 providers.json 并设为 active
-  const store = configStore()
+  const { modelsByProvider, store } = await loadCatalogContext()
   const config = await store.read()
   if (!config.providers[providerId]) {
-    const runtime = await getCatalogRuntime()
-    const first = (runtime.getModels(providerId) as readonly Model<Api>[])[0]
+    const first = (modelsByProvider.get(providerId) ?? [])[0]
     if (!first) return { ok: false, error: 'NO_MODEL' }
     store.write({
       ...config,
@@ -267,11 +311,10 @@ export async function saveOAuthCredential(
 ): Promise<void> {
   if (!isPresetProviderId(providerId)) return
   await credentialsStore().modify(providerId, async () => credential)
-  const store = configStore()
+  const { modelsByProvider, store } = await loadCatalogContext()
   const config = await store.read()
   if (!config.providers[providerId]) {
-    const runtime = await getCatalogRuntime()
-    const first = (runtime.getModels(providerId) as readonly Model<Api>[])[0]
+    const first = (modelsByProvider.get(providerId) ?? [])[0]
     if (first) {
       store.write({
         ...config,
@@ -287,7 +330,7 @@ export async function saveOAuthCredential(
 export async function forgetProvider(providerId: string): Promise<{ ok: boolean }> {
   if (!isPresetProviderId(providerId)) return { ok: false }
   await credentialsStore().delete(providerId)
-  const store = configStore()
+  const { store } = await loadCatalogContext()
   const config = await store.read()
   const providers = { ...config.providers }
   delete providers[providerId]
@@ -311,7 +354,8 @@ export async function activeProviderConfig(): Promise<
     }
   | { ok: false; error: string }
 > {
-  const config = await configStore().read()
+  const { store } = await loadCatalogContext()
+  const config = await store.read()
   const providerId = config.activeProvider
   if (!providerId) return { ok: false, error: 'NO_ACTIVE_PROVIDER' }
   const entry = config.providers[providerId]
@@ -344,8 +388,9 @@ export async function refreshProviders(force = false): Promise<{
     .filter((id): id is string => PRESET_PROVIDER_IDS.includes(id))
   if (providers.length === 0) return { success: true, added: 0, removed: 0, checkedAt: Date.now() }
 
+  let refreshResult: Awaited<ReturnType<ModelRuntime['refresh']>>
   try {
-    await runtime.refresh({ allowNetwork: true, providers, force })
+    refreshResult = await runtime.refresh({ allowNetwork: true, providers, force })
   } catch (error) {
     return {
       success: false,
@@ -357,14 +402,26 @@ export async function refreshProviders(force = false): Promise<{
   }
 
   const after = await store.snapshot()
-  const count = (snapshot: typeof before): number =>
-    snapshot.reduce((total, entry) => total + entry.ids.length, 0)
+  const { added, removed } = diffCatalogSnapshots(before, after)
   lastRefreshAt = Date.now()
+  // 重置后下一次 getCatalogRuntime 会立刻通过 allowNetwork:false 重新从 models-store.json 载入
   resetCatalogRuntime()
+
+  if (refreshResult.errors.size > 0 && refreshResult.errors.size >= providers.length) {
+    const first = [...refreshResult.errors.entries()][0]
+    return {
+      success: false,
+      added,
+      removed,
+      checkedAt: lastRefreshAt,
+      error: `${first[0]}: ${first[1].message}`,
+    }
+  }
+
   return {
     success: true,
-    added: Math.max(0, count(after) - count(before)),
-    removed: Math.max(0, count(before) - count(after)),
+    added,
+    removed,
     checkedAt: lastRefreshAt,
   }
 }
@@ -386,12 +443,10 @@ export async function probeApiKey(providerId: string, apiKey: string): Promise<{
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 10_000)
+  const request = providerModelsProbeRequest(providerId, baseUrl, apiKey)
   try {
-    const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/models`, {
-      headers:
-        providerId === 'anthropic'
-          ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
-          : { authorization: `Bearer ${apiKey}` },
+    const response = await fetch(request.url, {
+      headers: request.headers,
       signal: controller.signal,
     })
     if (response.status === 401 || response.status === 403) {

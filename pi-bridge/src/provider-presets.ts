@@ -58,6 +58,68 @@ export function isRemoteCatalogEffective(lastModified: number | undefined): bool
   return lastModified > generatedAt
 }
 
+/**
+ * 按远端目录快照过滤运行时模型列表（D12 / D26）。
+ * SDK 的 `withRemoteCatalog` 只把远端模型叠加到内置快照，不会删掉上游已下架的模型；
+ * 仅当远端快照比内置更新且非空时按远端 id 集合收敛，离线或远端更旧时原样保留。
+ */
+export function filterEffectiveCatalogModels<T extends { id: string }>(
+  models: readonly T[],
+  snapshot: { lastModified?: number; ids: readonly string[] } | undefined
+): T[] {
+  if (!snapshot || snapshot.ids.length === 0 || !isRemoteCatalogEffective(snapshot.lastModified)) {
+    return [...models]
+  }
+  const allowed = new Set(snapshot.ids)
+  const filtered = models.filter((model) => allowed.has(model.id))
+  return filtered.length > 0 ? filtered : [...models]
+}
+
+/** 按 provider 对比刷新前后的模型 id 集合，避免总计相减把「增 1 删 1」抵消成 0 */
+export function diffCatalogSnapshots(
+  before: ReadonlyArray<{ providerId: string; ids: readonly string[] }>,
+  after: ReadonlyArray<{ providerId: string; ids: readonly string[] }>
+): { added: number; removed: number } {
+  const beforeByProvider = new Map(before.map((entry) => [entry.providerId, new Set(entry.ids)]))
+  const afterByProvider = new Map(after.map((entry) => [entry.providerId, new Set(entry.ids)]))
+  const providers = new Set([...beforeByProvider.keys(), ...afterByProvider.keys()])
+  let added = 0
+  let removed = 0
+  for (const providerId of providers) {
+    const prev = beforeByProvider.get(providerId) ?? new Set<string>()
+    const next = afterByProvider.get(providerId) ?? new Set<string>()
+    for (const id of next) if (!prev.has(id)) added += 1
+    for (const id of prev) if (!next.has(id)) removed += 1
+  }
+  return { added, removed }
+}
+
+/** 各家 `/models` 探测的鉴权头：Anthropic 用 x-api-key，Google 用 x-goog-api-key，其余走 Bearer */
+export function providerModelsHeaders(providerId: string, apiKey: string): Record<string, string> {
+  if (providerId === 'anthropic') {
+    return { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
+  }
+  if (providerId === 'google') {
+    return { 'x-goog-api-key': apiKey }
+  }
+  return { authorization: `Bearer ${apiKey}` }
+}
+
+/** 各家轻量 Key 探测请求（D24）：Anthropic 的 baseUrl 不含 /v1，需补上 `/v1/models` */
+export function providerModelsProbeRequest(
+  providerId: string,
+  baseUrl: string,
+  apiKey: string
+): { url: string; headers: Record<string, string> } {
+  const trimmed = baseUrl.replace(/\/+$/, '')
+  const endpoint =
+    providerId === 'anthropic' && !trimmed.endsWith('/v1') ? '/v1/models' : '/models'
+  return {
+    url: `${trimmed}${endpoint}`,
+    headers: providerModelsHeaders(providerId, apiKey),
+  }
+}
+
 export function isBuiltinCatalogProvider(providerId: string): boolean {
   return getBuiltinProviders().includes(providerId as never)
 }

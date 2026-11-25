@@ -107,6 +107,8 @@ export function ProviderSettings() {
         return
       }
       setApiKey('')
+      // 首次连接后按 4h 缓存节流拉一次最新目录（离线/失败静默回退内置快照）
+      await api.providersRefresh(false).catch(() => {})
       await load()
       notifyAgent()
       toast.success(t('providerConnected', { name: selected.name }))

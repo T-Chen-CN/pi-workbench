@@ -53,6 +53,29 @@ describe('Key 探测', () => {
     expect(headers.authorization).toBe('Bearer sk-test')
   })
 
+  it('Google 使用 x-goog-api-key，Anthropic 请求 /v1/models + x-api-key', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    stubFetch((url, init) => {
+      calls.push({ url, init })
+      return new Response('{}', { status: 200 })
+    })
+
+    await expect(probeProviderKey({ providerId: 'google', apiKey: 'AIza-test' })).resolves.toEqual({
+      ok: true,
+    })
+    expect(calls[0].url).toBe('https://generativelanguage.googleapis.com/v1beta/models')
+    expect(calls[0].init?.headers).toEqual({ 'x-goog-api-key': 'AIza-test' })
+
+    await expect(probeProviderKey({ providerId: 'anthropic', apiKey: 'sk-ant-test' })).resolves.toEqual({
+      ok: true,
+    })
+    expect(calls[1].url).toBe('https://api.anthropic.com/v1/models')
+    expect(calls[1].init?.headers).toEqual({
+      'x-api-key': 'sk-ant-test',
+      'anthropic-version': '2023-06-01',
+    })
+  })
+
   it('Key 无效（401）→ 不通过，并说清原因', async () => {
     stubFetch(() => new Response('{}', { status: 401 }))
     const result = await probeProviderKey({ providerId: 'deepseek', apiKey: 'sk-bad' })

@@ -6,7 +6,11 @@
  */
 
 import * as path from 'path'
-import { createProvidersConfigStore, PROVIDERS_CONFIG_FILE } from 'pi-bridge'
+import {
+  createProvidersConfigStore,
+  PROVIDERS_CONFIG_FILE,
+  type ProvidersConfigStoreOptions,
+} from 'pi-bridge'
 import { piAgentDir } from './app-paths.js'
 import { getAppDir } from './app-paths.js'
 import { decryptSecret } from './secret-crypto.js'
@@ -20,6 +24,8 @@ export interface DesktopProvidersConfigOptions {
   appDir?: string
   /** 复用同一个凭证 store（主进程只有一个实例） */
   credentials?: DesktopCredentialStore
+  /** 传入已恢复远端缓存并按 D12/D26 过滤的模型清单，避免仅校验内置快照 */
+  listModels?: ProvidersConfigStoreOptions['listModels']
 }
 
 export function createDesktopProvidersConfigStore(
@@ -30,5 +36,6 @@ export function createDesktopProvidersConfigStore(
     agentDir: piAgentDir,
     decryptSecret,
     credentials: options.credentials ?? createDesktopCredentialStore(),
+    ...(options.listModels ? { listModels: options.listModels } : {}),
   })
 }

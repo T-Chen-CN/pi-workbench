@@ -339,6 +339,19 @@ describe('app settings handlers', () => {
     })
   })
 
+  it('defaults useSystemProxy to true and preserves the stored choice when omitted or malformed', async () => {
+    let result = await call('app:getSettings')
+    expect(result.settings).toMatchObject({ useSystemProxy: true })
+
+    await call('app:saveSettings', { useSystemProxy: false })
+    result = await call('app:getSettings')
+    expect(result.settings).toMatchObject({ useSystemProxy: false })
+
+    await call('app:saveSettings', { language: 'en', useSystemProxy: 'yes' })
+    result = await call('app:getSettings')
+    expect(result.settings).toMatchObject({ language: 'en', useSystemProxy: false })
+  })
+
   it('recovers settings from the backup when settings.json is corrupted', async () => {
     const settingsPath = path.join(appDir, 'config', 'settings.json')
     await fs.writeFile(settingsPath, '{ truncated', 'utf-8')
@@ -531,6 +544,94 @@ describe('provider settings handlers', () => {
     )
     expect(deepseek?.connected).toBe(false)
     expect(result.activeProvider).toBeNull()
+  })
+
+  it('hydrates cached remote catalog, filters removed builtin models, and accepts remote-only models', async () => {
+    const { resetCatalogRuntime } = await import('../electron/providers-service')
+    const storePath = path.join(appDir, 'data', 'agent', 'models-store.json')
+    await fs.mkdir(path.dirname(storePath), { recursive: true })
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        google: {
+          models: [
+            {
+              id: 'gemini-2.5-flash',
+              name: 'Gemini 2.5 Flash',
+              api: 'google-generative-ai',
+              provider: 'google',
+              baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+              reasoning: true,
+              input: ['text', 'image'],
+              cost: { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
+              contextWindow: 1048576,
+              maxTokens: 65536,
+              type: 'chat',
+            },
+            {
+              id: 'gemini-4-neon',
+              name: 'Gemini 4 Neon',
+              api: 'google-generative-ai',
+              provider: 'google',
+              baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+              reasoning: true,
+              input: ['text', 'image'],
+              cost: { input: 3, output: 15, cacheRead: 0.15, cacheWrite: 0 },
+              contextWindow: 1048576,
+              maxTokens: 65536,
+              type: 'chat',
+            },
+          ],
+          lastModified: Date.parse('2030-01-01T00:00:00Z'),
+          checkedAt: Date.parse('2030-01-01T00:00:00Z'),
+        },
+      }),
+      'utf-8'
+    )
+    resetCatalogRuntime()
+
+    const probeHeaders: Array<Record<string, string>> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        probeHeaders.push((init?.headers ?? {}) as Record<string, string>)
+        return new Response('{}', { status: 200 })
+      })
+    )
+
+    try {
+      const list = await call('providers:list')
+      const google = (
+        list.providers as Array<{ id: string; models: Array<{ id: string }> }>
+      ).find((provider) => provider.id === 'google')
+      const ids = google?.models.map((m) => m.id) ?? []
+      expect(ids).toContain('gemini-4-neon')
+      expect(ids).toContain('gemini-2.5-flash')
+      // 上游已删掉的内置模型必须按 D12/D26 过滤掉
+      expect(ids).not.toContain('gemini-3.1-flash-lite-image')
+      expect(ids).not.toContain('gemini-3.1-flash-live-preview')
+
+      // Google Key 探测必须使用 x-goog-api-key 而非 Authorization: Bearer
+      await expect(call('providers:setApiKey', 'google', 'AIza-demo')).resolves.toMatchObject({
+        success: true,
+      })
+      expect(probeHeaders[0]).toEqual({ 'x-goog-api-key': 'AIza-demo' })
+
+      // 允许选中并落盘仅存在于远端目录缓存的新模型
+      await expect(
+        call('providers:setActive', 'google', 'gemini-4-neon')
+      ).resolves.toMatchObject({
+        success: true,
+      })
+      const after = await call('providers:list')
+      const activeGoogle = (
+        after.providers as Array<{ id: string; active: boolean; model?: string }>
+      ).find((provider) => provider.id === 'google')
+      expect(activeGoogle).toMatchObject({ active: true, model: 'gemini-4-neon' })
+    } finally {
+      await fs.rm(storePath, { force: true }).catch(() => undefined)
+      resetCatalogRuntime()
+    }
   })
 })
 

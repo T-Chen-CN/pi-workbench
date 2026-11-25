@@ -74,11 +74,15 @@ export {
   builtinCatalogModel,
   builtinCatalogModels,
   catalogLimits,
+  diffCatalogSnapshots,
+  filterEffectiveCatalogModels,
   isBuiltinCatalogProvider,
   isPresetProviderId,
   isRemoteCatalogEffective,
   normalizeOverrides,
   presetDisplayName,
+  providerModelsHeaders,
+  providerModelsProbeRequest,
   resolveLimits,
 } from './provider-presets.js'
 export type { ModelLimits, ModelOverrides, ProviderPreset } from './provider-presets.js'
