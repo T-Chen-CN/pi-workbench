@@ -20,12 +20,9 @@
 
 | ID | 项目 | 优先级 | 状态 |
 | --- | --- | --- | --- |
-| P-01 | 供应商预设与鉴权（8 家）：固定 provider + safeStorage 凭证 + OAuth 登录 | P1 | 🟡 桌面端随 0.11.0 发布（P0–P5 配置部分，`71a572c`→`5278080`）：凭证文件存储 / 旧配置迁移 / 运行时切 catalog / 协议与回落修正 / 设置页 + OAuth 登录（`providers:*` IPC）。方案见 [provider-presets](../architecture/provider-presets.md)，剩下的是 P-02 / P-03 / P-05 / P-07 / P-08 |
+| P-01 | 供应商预设与鉴权（8 家）：固定 provider + safeStorage 凭证 + OAuth 登录 | P1 | 🟡 桌面端随 0.11.0 发布（P0–P5 配置部分，`71a572c`→`5278080`）：凭证文件存储 / 旧配置迁移 / 运行时切 catalog / 协议与回落修正 / 设置页 + OAuth 登录（`providers:*` IPC）。方案见 [provider-presets](../architecture/provider-presets.md)，剩下的是 P-02 / P-03 |
 | P-02 | 云端 OAuth 登录（D18 / D19） | P2 | ⬜ 未做：服务端 auth flow（`start` / `events` / `answer` / `cancel`）+ 临时状态表（PKCE verifier、device code，**不可跨实例**）+ 云端配置页登录 UI + 成功凭证写回 `CloudConfigRecord.credentialCipher`。四条路径各一次：`xai` device code · `anthropic` copy-code · `openai-codex` device code · `openai` 粘贴回调 URL |
-| P-03 | 供应商预设的真实凭证手工验收（发布前必做） | P1 | ⬜ 未做（清单见 [provider-presets §11.2](../architecture/provider-presets.md)）：8 家 × api_key 各一次；4 条 OAuth；下调上下文/输出上限在**轮次边界**生效且不打断；换模型档位自动降级；会话模型回落不弹提示；云端配置页 Key 只回掩码 |
-| P-05 | SDK 行为实测清单（§13 遗留问题） | P2 | ⬜ 未做：`openai` 粘贴回填的 `client_id` 是否被 token 交换接受；各家订阅账号的额外策略；`deepseek` / `xiaomi*` 是否存在 `/models`（决定 Key 探测走「真校验」还是「404 放行」）；真实 `maxTokens` 与 SDK `clampMaxTokensToContext` 的边界 |
-| P-07 | models.dev 富数据（价格 / 限额 / 模态） | P3 | ⬜ 未做：独立立项，见 [provider-presets §8.3](../architecture/provider-presets.md)；当前能力表只展示 catalog 可读字段 |
-| P-08 | 自建 OAuth 应用（用自己域名做回调） | P3 | ⬜ 未做：需向各家申请 client_id + 备案 + 自实现授权码交换；当前复用 pi-ai 内置的 redirect 配置，用户会被带到 `pi.dev` 的授权页 |
+| P-03 | 供应商预设的真实凭证手工验收（发布前必做） | P1 | ⬜ 未做（清单见 [provider-presets §11.2](../architecture/provider-presets.md)）：8 家 × api_key 各一次；4 条 OAuth（含验证 `openai` 粘贴回调 `client_id` 换 token 与各家订阅策略）；下调上下文/输出上限在**轮次边界**生效且不打断；换模型档位自动降级；会话模型回落不弹提示；云端配置页 Key 只回掩码 |
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
 | C-03 | 云端 Agent P1 项（从 C-01 拆出） | P1 | ⬜ 未做：记忆自动抽取（挂 `session_before_compact`，内核钩子已就位）· 梦境整理 · 已读未读 · 追加指令打磨 · 结果 diff 回传 · 托盘角标 · 并发压测调优（含 A-25） |
@@ -34,6 +31,7 @@
 
 ### 已交付（只留一行，细节在 git）
 
+- 2026-11-26 **P-05 & P-07（SDK 实测收口与探测修复 + models.dev 独立富数据）**：实测 8 家 `/models` 端点（全部存在；修复桌面端对 Google / xAI 无效 Key 返回 HTTP 400 的误放行并避免误判地区受限）、核实并单测钉住 `clampMaxTokensToContext` 边界与 `openai` 粘贴回调解析；落地完全解耦于 Pi catalog 的 `models.dev` 富数据模块与 `cache/models-dev.json`（ETag / 12h TTL / `PI_OFFLINE` 与失败静默降级），在供应商设置页展示模型价格、多模态、知识截止、发布时间、开源权重与废弃状态。
 - 2026-11-26 **C-01 云端 Agent（P0 部署与真派活闭环验收完成）**：最新版本（含 0.11.0 预设供应商、C-02/C-04/C-05/C-06/C-07/P-09 与授权提示增强、Key 探测报错透出、Web 重渲染模型下拉修复）部署至 `https://tchen-xiaoxiao.com`（release `20261126103114` + `pi-warp-proxy` 用户态出口），本地自包含包 35/35 + 30 个云端测试文件 211/211 全绿；线上完成真实 Google 模型对话、配对、确认授权、隔离 worktree 派活执行、里程碑实时唤醒、结果汇报、干净工作树自动回收、服务重启重连与安全/真相源隔离全项复核。
 - 2026-11-26 **C-02 & C-07（工单停滞看门狗 + 全站并发上限 + F-23 语义对齐）**：落地终端工具 10 分钟无输出增量上报 `task_stalled`（同一停滞只报一次）、工单运行期 60 s `task_heartbeat`（刷新设备活跃但不洗白静默计时）、云端 20 分钟无事件主动唤醒巡检；落地全站并发上限（默认 8，超出排队提示并在终态按 FIFO 补投，A-21 / D-15）；将需求 F-23 / A-10 对齐到非阻塞 `ask_cloud` 实现并补齐单测。
 - 2026-11-26 **P-04 / P-06 / P-10（模型目录跟随开关、来源展示与凭证提示）**：新增 `autoRefreshCatalog` 设置项与 `PI_OFFLINE` 总开关，统一接入主进程与工单执行器；`providers:list` 透出目录 `source`（`remote` / `bundled`）与更新时间；设置页增加自动更新开关、远端/内置快照与下架移除说明，以及 `openai` / `openai-codex` 独立凭证说明。
@@ -52,6 +50,7 @@
 
 ## 4. 已决定不做（保留备查）
 
+- **2026-11-26 项目所有者决定**：P-08 自建 OAuth 应用（用自己域名做回调）暂不做。理由：需向各家厂商逐个申请审批第三方 `client_id` 与回调域名（部分厂商不对第三方开放自助申请），且 `@earendil-works/pi-ai` 不暴露 `client_id` 覆写，继续复用 SDK 内置 OAuth。
 - **2026-10-24 项目所有者决定**：R-07 成本对比与预算细化 · R-11 通知安静时段与阈值 · R-12 消息间键盘导航 · R-14 全量快捷键自定义 · R-17 插件面板级 UI / 菜单 / 状态项 · R-18 符号选择改用语言服务（维持正则实现）。
 - **2026-11-08 项目所有者决定**：顶层 Agent 跨工作区编排（首页常驻顶层会话 + 派发子会话 + 委派授权 + headless 工作区）不做。理由：编排带来的复杂度在于授权、预算与工作区隔离，而单机工作台的跨工作区需求已能用「多工作区常驻视图 + 工作树会话」直接覆盖。原需求草案（`TOP_LEVEL_AGENT.md` / `TOP_LEVEL_AGENT_BRIEF.md`）已删除，恢复看 `git log`。
 - **2026-11-11 项目所有者决定**：云端 Agent 不再建立在第三方 Agent（Hermes）之上，改为以 Pi Agent 为基础自维护的常驻服务；旧的桌面端云端层、网关插件与派活实现整体移除，不做双轨。

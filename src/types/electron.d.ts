@@ -1003,6 +1003,24 @@ export interface ProviderModelLimits {
   maxTokens: number
 }
 
+export interface ProviderModelEnrichmentCost {
+  input?: number
+  output?: number
+  cacheRead?: number
+  cacheWrite?: number
+  reasoning?: number
+}
+
+export interface ProviderModelEnrichment {
+  description?: string
+  cost?: ProviderModelEnrichmentCost
+  modalities?: { input: string[]; output: string[] }
+  knowledge?: string
+  releaseDate?: string
+  openWeights?: boolean
+  status?: string
+}
+
 export interface ProviderModelView {
   id: string
   name: string
@@ -1018,6 +1036,8 @@ export interface ProviderModelView {
   thinkingLevels: string[]
   input: string[]
   cost?: unknown
+  /** models.dev 独立富数据（可选展示增强） */
+  enrichment?: ProviderModelEnrichment
 }
 
 export interface ProviderDirectoryView {

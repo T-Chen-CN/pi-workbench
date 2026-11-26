@@ -172,4 +172,44 @@ describe('ProviderSettings（P-04 / P-06 / P-10）', () => {
     expect(optionValues).toContain(131_072)
     expect(optionValues).toContain(262_144)
   })
+
+  it('有 models.dev 富数据时展示价格、多模态、知识截止、发布时间与废弃标记（P-07）', async () => {
+    vi.mocked(api.providersList).mockResolvedValueOnce({
+      success: true,
+      providers: [
+        {
+          ...sampleProviders[0],
+          models: [
+            {
+              ...sampleProviders[0].models[0],
+              enrichment: {
+                description: 'Flagship multimodal reasoning model',
+                cost: { input: 2.5, output: 10, cacheRead: 0.25 },
+                modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+                knowledge: '2026-01',
+                releaseDate: '2026-02-01',
+                openWeights: true,
+                status: 'deprecated',
+              },
+            },
+          ],
+        },
+      ],
+      activeProvider: 'openai',
+      offline: false,
+      builtinGeneratedAt: Date.UTC(2026, 9, 15),
+    })
+
+    render(<ProviderSettings />)
+    await waitFor(() => {
+      expect(screen.getByText('Flagship multimodal reasoning model')).toBeTruthy()
+    })
+    expect(screen.getByText('已废弃')).toBeTruthy()
+    expect(screen.getByText(/输入 \$2.5 \/ 输出 \$10（每百万 token）/)).toBeTruthy()
+    expect(screen.getByText(/缓存读取 \$0.25/)).toBeTruthy()
+    expect(screen.getByText(/输入模态：text \/ image \/ pdf/)).toBeTruthy()
+    expect(screen.getByText(/知识截止：2026-01/)).toBeTruthy()
+    expect(screen.getByText(/发布于 2026-02-01/)).toBeTruthy()
+    expect(screen.getByText(/开源权重/)).toBeTruthy()
+  })
 })

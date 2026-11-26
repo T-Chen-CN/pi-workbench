@@ -404,14 +404,13 @@ SDK 的远端目录是**叠加**在打包快照上的（`mergeModels(baseline, r
 
 局限（写进 UI 文案）：从未成功刷新 / 离线的机器仍显示内置快照；下架模型在重装或清空缓存后可能重新出现一次，直到再次刷新。pi.dev 返回的 `Last-Modified` 比内置快照旧时（`lastModified <= generatedAt`），SDK 直接忽略远端——此时必须显示 `source: 'bundled'`，不能按远端过滤。
 
-### 8.3 models.dev 富数据（独立增量，本次不做）
+### 8.3 models.dev 富数据（独立解耦，已落地 P-07）
 
-用户已确认可以引入，但必须**解耦**：
+按以下边界完全解耦于 Pi catalog：
 
-- 独立数据源与独立缓存（不与 Pi catalog 混写）；
-- 独立映射（`models.dev` 的 `modalities` / `capabilities` / `benchmarks` → 我们的展示字段）；
-- 失败不影响主流程（拿不到就只显示 catalog 字段）；
-- 需求单独立项（BACKLOG 新条目），不改动本次的 `providers.json` / `models.json` 形状。
+- 独立数据源（`https://models.dev/api.json`）与独立缓存（`cache/models-dev.json`，只落盘 8 家预设对应的 6 个上游命名空间，`pi-bridge/src/models-dev.ts` + `electron/models-dev-store.ts`），绝不与 `models-store.json` / `providers.json` / `models.json` 混写；
+- 独立映射：提取 `cost`（$/1M tokens）、`modalities`、`knowledge`、`releaseDate`、`openWeights`、`status` 与 `description`，在 `providers:list` 透出为可选 `enrichment` 字段并在设置页展示；
+- 遵循 `PI_OFFLINE` 与 `autoRefreshCatalog`，ETag 304 续期 + 12 小时 TTL；任何拉取失败静默降级，不影响主流程。
 
 ---
 
@@ -531,13 +530,14 @@ SDK 的远端目录是**叠加**在打包快照上的（`mergeModels(baseline, r
 
 ---
 
-## 13. 遗留问题（不阻塞本次）
+## 13. 遗留问题与实测结论
 
-1. **D12 的"删除同步"**：远端快照只覆盖已成功刷新的 provider；清缓存后可能短暂回退旧列表。
-2. **models.dev 富数据**（§8.3）需要独立条目与独立评审。
-3. `openai` 与 `openai-codex` 是两套独立凭证，ChatGPT 订阅额度在上游如何共享不在我们控制范围内，UI 只做说明。
-4. **自建 OAuth 应用（用自己的域名做回调）**：需要向每家厂商申请 client_id + 备案回调域名，并自行实现授权码交换（SDK 不暴露 client_id 覆写）。若将来做成，云端 UX 可去掉粘贴步骤（§3.8）。
+1. **D12 的"删除同步"**：已落地（P-04 / P-06），远端快照只覆盖已成功刷新的 provider；清缓存后可能短暂回退旧列表，设置页已说明。
+2. **models.dev 富数据**（§8.3）：已按解耦方案落地（P-07）。
+3. `openai` 与 `openai-codex` 是两套独立凭证，ChatGPT 订阅额度在上游如何共享不在我们控制范围内，设置页已做说明（P-10）。
+4. **自建 OAuth 应用（用自己的域名做回调，P-08）**：2026-11-26 决定暂不做——需向各家厂商申请审批第三方 `client_id` + 回调域名，且 SDK 不暴露 `client_id` 覆写，继续复用 `pi-ai` 内置 OAuth。
 5. **云端 OAuth 登录本身尚未实现**（P5 只落了配置、校验与云端凭证存储），见 BACKLOG P-02。
-6. **需实测的 SDK 假设**（`openai` 粘贴回填的 `client_id`、各家订阅策略、部分供应商 `/models` 是否存在、真实 `maxTokens` 与 clamp 边界）见 BACKLOG P-05。
-
-> 以上 1–6 已逐条登记为 [BACKLOG](../progress/BACKLOG.md) 的 P-02 / P-04 / P-05 / P-06 / P-07 / P-08 / P-10，本文件只保留技术背景。
+6. **SDK 行为实测结论（P-05，2026-11-26 收口）**：
+   - `/models` 探测实测：8 家全部存在 `/models` 端点。`openai` / `anthropic` / `deepseek` / `xiaomi` / `xiaomi-token-plan-cn` / `openai-codex` 无效 Key 返回 `HTTP 401`；`google`（`API_KEY_INVALID`）与 `xai`（`Incorrect API key provided`）返回 `HTTP 400`（Google 地区受限同样返回 400，探测已按响应体区分避免误判）。
+   - `clampMaxTokensToContext`：SDK 按 `Math.min(maxTokens, Math.max(1, contextWindow - estimateContextTokens(context) - 4096))` 下夹，`overrides` 与该边界已加单测钉住。
+   - `openai` 粘贴回调 URL：源码确认 `authorizationResultFromManualInput` 解析回调参数里动态签发的 `client_id` 传给 `exchangeAuthorizationCode`；真实订阅号在线实测并入 BACKLOG P-03。

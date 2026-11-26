@@ -58,17 +58,90 @@ function limitOptions(max: number): number[] {
   return [...values, max]
 }
 
+function formatUsd(value: number): string {
+  if (value === 0) return '0'
+  if (value >= 10) return Number(value.toFixed(1)).toString()
+  if (value >= 1) return Number(value.toFixed(2)).toString()
+  return Number(value.toFixed(3)).toString()
+}
+
+function resolveModelCost(model: ProviderModelView): {
+  input?: number
+  output?: number
+  cacheRead?: number
+} | null {
+  const fromEnrichment = model.enrichment?.cost
+  if (fromEnrichment && (fromEnrichment.input !== undefined || fromEnrichment.output !== undefined)) {
+    return fromEnrichment
+  }
+  if (model.cost && typeof model.cost === 'object' && !Array.isArray(model.cost)) {
+    const raw = model.cost as Record<string, unknown>
+    const input = typeof raw.input === 'number' && Number.isFinite(raw.input) ? raw.input : undefined
+    const output = typeof raw.output === 'number' && Number.isFinite(raw.output) ? raw.output : undefined
+    const cacheRead =
+      typeof raw.cacheRead === 'number' && Number.isFinite(raw.cacheRead) ? raw.cacheRead : undefined
+    if (input !== undefined || output !== undefined) return { input, output, cacheRead }
+  }
+  return null
+}
+
 function capabilityCells(
   model: ProviderModelView,
-  t: (key: Parameters<ReturnType<typeof useI18nStore.getState>['t']>[0]) => string
+  t: (
+    key: Parameters<ReturnType<typeof useI18nStore.getState>['t']>[0],
+    params?: Record<string, string | number>
+  ) => string
 ) {
+  const modalities = model.enrichment?.modalities?.input?.length
+    ? model.enrichment.modalities.input
+    : model.input
+  const extraModalities = modalities.filter((item) => item !== 'text' && item !== 'image')
   const parts = [
     `${t('modelContextColumn')} ${formatTokens(model.limits.contextWindow)}`,
     `${t('modelMaxTokensColumn')} ${formatTokens(model.limits.maxTokens)}`,
     model.reasoning ? t('providerReasoningYes') : t('providerReasoningNo'),
     model.vision ? t('providerVisionYes') : t('providerVisionNo')
   ]
+  if (extraModalities.length > 0) parts.push(extraModalities.join('/'))
+  const cost = resolveModelCost(model)
+  if (cost && cost.input !== undefined && cost.output !== undefined) {
+    parts.push(`$${formatUsd(cost.input)}/$${formatUsd(cost.output)}`)
+  }
+  if (model.enrichment?.status === 'deprecated') parts.push(t('providerModelDeprecated'))
   return parts.join(' · ')
+}
+
+function enrichmentMetaItems(
+  model: ProviderModelView,
+  t: (
+    key: Parameters<ReturnType<typeof useI18nStore.getState>['t']>[0],
+    params?: Record<string, string | number>
+  ) => string
+): string[] {
+  const items: string[] = []
+  const cost = resolveModelCost(model)
+  if (cost && cost.input !== undefined && cost.output !== undefined) {
+    items.push(
+      t('providerModelPrice', { input: formatUsd(cost.input), output: formatUsd(cost.output) })
+    )
+    if (cost.cacheRead !== undefined && cost.cacheRead > 0) {
+      items.push(t('providerModelCacheReadPrice', { price: formatUsd(cost.cacheRead) }))
+    }
+  }
+  const enrichment = model.enrichment
+  if (enrichment?.modalities?.input?.length) {
+    items.push(t('providerModelModalities', { input: enrichment.modalities.input.join(' / ') }))
+  }
+  if (enrichment?.knowledge) {
+    items.push(t('providerModelKnowledge', { date: enrichment.knowledge }))
+  }
+  if (enrichment?.releaseDate) {
+    items.push(t('providerModelReleaseDate', { date: enrichment.releaseDate }))
+  }
+  if (enrichment?.openWeights) {
+    items.push(t('providerModelOpenWeights'))
+  }
+  return items
 }
 
 export function ProviderSettings() {
@@ -112,6 +185,17 @@ export function ProviderSettings() {
   const selected = useMemo(
     () => providers.find((provider) => provider.id === selectedId) ?? null,
     [providers, selectedId]
+  )
+  const selectedModel = useMemo(
+    () =>
+      selected?.models.find((item) => item.id === selected.model) ??
+      selected?.models[0] ??
+      null,
+    [selected]
+  )
+  const selectedMetaItems = useMemo(
+    () => (selectedModel ? enrichmentMetaItems(selectedModel, t) : []),
+    [selectedModel, t]
   )
 
   const notifyAgent = () => {
@@ -359,6 +443,34 @@ export function ProviderSettings() {
               )}
             </Select>
           </Field>
+
+          {selectedModel &&
+            (selectedMetaItems.length > 0 ||
+              selectedModel.enrichment?.description ||
+              selectedModel.enrichment?.status === 'deprecated') && (
+              <div className="flex flex-col gap-1 rounded border border-rule-divide bg-surface px-3 py-2">
+                {(selectedModel.enrichment?.description ||
+                  selectedModel.enrichment?.status === 'deprecated') && (
+                  <div className="flex items-center gap-2">
+                    {selectedModel.enrichment?.status === 'deprecated' && (
+                      <span className="shrink-0 type-caption text-danger">
+                        {t('providerModelDeprecated')}
+                      </span>
+                    )}
+                    {selectedModel.enrichment?.description && (
+                      <p className="m-0 min-w-0 flex-1 type-caption text-ink">
+                        {selectedModel.enrichment.description}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {selectedMetaItems.length > 0 && (
+                  <p className="m-0 type-caption text-ink-muted">
+                    {selectedMetaItems.join(' · ')}
+                  </p>
+                )}
+              </div>
+            )}
 
           {selected.models.length > 0 && (
             <div className="flex flex-col gap-2">

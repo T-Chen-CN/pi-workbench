@@ -120,6 +120,31 @@ export function providerModelsProbeRequest(
   }
 }
 
+/**
+ * 判定 `/models` 探测响应是否明确表明 API Key 无效（P-05 实测结论）：
+ * - OpenAI / Anthropic / DeepSeek / Xiaomi / Codex：无效 Key 返回 401/403；
+ * - Google（API_KEY_INVALID）与 xAI（Incorrect API key provided）：无效 Key 返回 400。
+ *   Google 的地区限制同样返回 400（User location is not supported），不能误判为 Key 无效。
+ */
+export function isInvalidKeyProbeResponse(
+  providerId: string,
+  status: number,
+  bodyText = ''
+): boolean {
+  if (status === 401 || status === 403) return true
+  if (status === 400 && (providerId === 'google' || providerId === 'xai')) {
+    const lower = bodyText.toLowerCase()
+    if (lower.includes('location is not supported')) return false
+    return (
+      lower.includes('api_key_invalid') ||
+      lower.includes('api key not valid') ||
+      lower.includes('incorrect api key') ||
+      lower.includes('invalid api key')
+    )
+  }
+  return false
+}
+
 export function isBuiltinCatalogProvider(providerId: string): boolean {
   return getBuiltinProviders().includes(providerId as never)
 }

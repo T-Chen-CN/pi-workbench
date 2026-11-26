@@ -22,20 +22,27 @@ import {
   credentialFingerprint,
   diffCatalogSnapshots,
   filterEffectiveCatalogModels,
+  isInvalidKeyProbeResponse,
   isPresetProviderId,
   isRemoteCatalogEffective,
+  lookupModelsDevEnrichment,
   normalizeOverrides,
   providerModelsProbeRequest,
   resolveLimits,
   type CatalogSnapshot,
   type ModelLimits,
   type ModelOverrides,
+  type ModelsDevEnrichment,
   type ProvidersConfig,
 } from 'pi-bridge'
 import { getAppDir, piAgentDir } from './app-paths.js'
 import { createDesktopCredentialStore } from './credentials-store.js'
 import { createDesktopProvidersConfigStore } from './providers-config.js'
 import { getModelsStore } from './models-store.js'
+import {
+  getModelsDevSnapshot,
+  refreshModelsDevSnapshot,
+} from './models-dev-store.js'
 import { deviceId } from './device-id.js'
 import { getAppSettingsCache } from './ipc/settings.js'
 
@@ -76,6 +83,8 @@ export interface ProviderModelView {
   /** 输入模态 */
   input: string[]
   cost?: unknown
+  /** models.dev 独立富数据（可选展示增强，P-07） */
+  enrichment?: ModelsDevEnrichment
 }
 
 export interface ProviderView {
@@ -176,7 +185,11 @@ export function resetCatalogRuntime(): void {
   catalogRuntimePromise = null
 }
 
-function modelView(model: Model<Api>, overrides: ModelOverrides | undefined): ProviderModelView {
+function modelView(
+  model: Model<Api>,
+  overrides: ModelOverrides | undefined,
+  enrichment: ModelsDevEnrichment | undefined
+): ProviderModelView {
   const catalog = catalogLimits(model)
   const normalized = normalizeOverrides(catalog, overrides)
   return {
@@ -191,6 +204,7 @@ function modelView(model: Model<Api>, overrides: ModelOverrides | undefined): Pr
     thinkingLevels: thinkingLevels(model),
     input: Array.isArray(model.input) ? [...model.input] : ['text'],
     ...(model.cost ? { cost: model.cost } : {}),
+    ...(enrichment ? { enrichment } : {}),
   }
 }
 
@@ -219,17 +233,19 @@ export async function listProviders(): Promise<{
   offline: boolean
   builtinGeneratedAt?: number
 }> {
-  const [{ runtime, snapshots, modelsByProvider, store }, credentialInfo] = await Promise.all([
-    loadCatalogContext(),
-    credentialsStore().list(),
-  ])
+  const [{ runtime, snapshots, modelsByProvider, store }, credentialInfo, modelsDevSnapshot] =
+    await Promise.all([loadCatalogContext(), credentialsStore().list(), getModelsDevSnapshot()])
   const config = await store.read()
   const connected = new Map(credentialInfo.map((info) => [info.providerId, info.type]))
 
   const providers = PROVIDER_PRESETS.map((preset): ProviderView => {
     const entry = config.providers[preset.id]
     const models = (modelsByProvider.get(preset.id) ?? []).map((model) =>
-      modelView(model, entry?.overrides?.[model.id])
+      modelView(
+        model,
+        entry?.overrides?.[model.id],
+        lookupModelsDevEnrichment(modelsDevSnapshot, preset.id, model.id)
+      )
     )
     const credentialType = connected.get(preset.id)
     return {
@@ -440,6 +456,9 @@ export async function refreshProviders(force = false): Promise<{
     return { success: true, added: 0, removed: 0, checkedAt: Date.now() }
   }
 
+  // models.dev 富数据独立刷新（失败静默降级，不影响 Pi catalog 刷新结果）
+  const modelsDevPromise = refreshModelsDevSnapshot({ force, allowNetwork: true }).catch(() => null)
+
   const runtime = await getCatalogRuntime()
   const store = getModelsStore()
   const before = await store.snapshot()
@@ -447,12 +466,16 @@ export async function refreshProviders(force = false): Promise<{
   const providers = configured
     .map((info) => info.providerId)
     .filter((id): id is string => PRESET_PROVIDER_IDS.includes(id))
-  if (providers.length === 0) return { success: true, added: 0, removed: 0, checkedAt: Date.now() }
+  if (providers.length === 0) {
+    await modelsDevPromise
+    return { success: true, added: 0, removed: 0, checkedAt: Date.now() }
+  }
 
   let refreshResult: Awaited<ReturnType<ModelRuntime['refresh']>>
   try {
     refreshResult = await runtime.refresh({ allowNetwork: true, providers, force })
   } catch (error) {
+    await modelsDevPromise
     return {
       success: false,
       added: 0,
@@ -461,6 +484,7 @@ export async function refreshProviders(force = false): Promise<{
       error: error instanceof Error ? error.message : String(error),
     }
   }
+  await modelsDevPromise
 
   const after = await store.snapshot()
   const { added, removed } = diffCatalogSnapshots(before, after)
@@ -510,7 +534,8 @@ export async function probeApiKey(providerId: string, apiKey: string): Promise<{
       headers: request.headers,
       signal: controller.signal,
     })
-    if (response.status === 401 || response.status === 403) {
+    const bodyText = response.status === 400 ? await response.text().catch(() => '') : ''
+    if (isInvalidKeyProbeResponse(providerId, response.status, bodyText)) {
       return { ok: false, error: 'INVALID_KEY' }
     }
     return { ok: true }

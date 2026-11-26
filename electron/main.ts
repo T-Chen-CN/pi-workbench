@@ -930,6 +930,15 @@ app.whenReady().then(async () => {
   const initialGithubCallback = process.argv.find((arg) => isGithubCallbackUrl(arg))
   if (initialGithubCallback) void handleGithubCallback(initialGithubCallback)
 
+  // 启动后静默预热 models.dev 独立富数据缓存（受 PI_OFFLINE 与 autoRefreshCatalog 约束，失败静默降级）
+  void import('./providers-service.js')
+    .then(async ({ isCatalogNetworkAllowed }) => {
+      if (!isCatalogNetworkAllowed()) return
+      const { refreshModelsDevSnapshot } = await import('./models-dev-store.js')
+      await refreshModelsDevSnapshot({ force: false, allowNetwork: true })
+    })
+    .catch(() => undefined)
+
   // 启动后静默检查更新：Windows / Linux 发现新版本会自动下载，但不会自动安装。
   setTimeout(() => {
     void checkForUpdates()

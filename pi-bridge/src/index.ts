@@ -77,6 +77,7 @@ export {
   diffCatalogSnapshots,
   filterEffectiveCatalogModels,
   isBuiltinCatalogProvider,
+  isInvalidKeyProbeResponse,
   isPresetProviderId,
   isRemoteCatalogEffective,
   normalizeOverrides,
@@ -126,5 +127,21 @@ export type {
   ModelsStoreLogger,
   TrackedModelsStore,
 } from './models-store.js'
+
+/** models.dev 富数据解析与映射（P-07，独立于 Pi catalog） */
+export {
+  MODELS_DEV_API_URL,
+  MODELS_DEV_CACHE_VERSION,
+  MODELS_DEV_UPSTREAM_PROVIDERS,
+  extractModelsDevSnapshot,
+  lookupModelsDevEnrichment,
+  parseModelsDevCacheSnapshot,
+} from './models-dev.js'
+export type {
+  ModelsDevCacheSnapshot,
+  ModelsDevCost,
+  ModelsDevEnrichment,
+  ModelsDevModalities,
+} from './models-dev.js'
 
 

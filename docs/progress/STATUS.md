@@ -13,7 +13,7 @@
 | 阶段 | 本地 Agent 工作台稳定期；模型配置改为 8 家固定供应商 + OAuth（0.11.x）；云端 Agent 已部署运行，剩 P1/P2 待办 |
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
-| 质量门槛 | `type-check` · `lint` · `npm test`（168 文件 / 1706 用例）· `design-system` 全绿 |
+| 质量门槛 | `type-check` · `lint` · `npm test`（169 文件 / 1712 用例）· `design-system` 全绿 |
 | 云端 Agent | **P0（C-01）与收口项（C-02/C-04/C-05/C-06/C-07/P-09）全部落地并验收通过**：`https://tchen-xiaoxiao.com`（release `20261126103114`，回滚点 `20261124032938`；systemd + Caddy + `pi-warp-proxy` + 每日备份），`/v1/health` 返回 `ok/hasAccount/ready` 全为 true；本地自包含包 35/35、30 个云端测试文件 211/211 全绿，线上真实模型派活、隔离工作树、里程碑唤醒、结果回流、干净树自动回收、服务重启重连与安全/隔离复核全部通过。剩余 P1 待办集中在 **C-03** |
 
 ## 正在做 / 下一步
