@@ -239,7 +239,20 @@ PI_CLOUD_PORT=8787 npm run cloud:start
 打开 `http://127.0.0.1:8787/` → 建管理员账号 → 生成 6 位配对码 → 桌面端「云端 → 连接云端」填入。
 `NODE_ENV !== 'production'` 时 cookie 不带 `Secure`（本机 http 调试）；生产口径不变。
 
-## 5. 部署（`/opt/pi-cloud`）
+## 5. 部署与自动更新（`/opt/pi-cloud`）
+
+### 5.0 推荐：GitHub Actions 打包 + 云端自拉取（Pull 模式，服务器零构建）
+
+- 仓库内置 `.github/workflows/cloud-release.yml`：`push` 到 `main`（触及 `apps/cloud/`、`pi-bridge/` 或云端共用前端组件）或手动 `workflow_dispatch` 时，在 GitHub Linux Runner 上执行 `node scripts/build-cloud-bundle.mjs`，把 `pi-cloud-bundle.tar.gz` 与 `pi-cloud-manifest.json`（含 `releaseId` / `sha256`）发布到滚动预发布 `cloud-latest`（`--prerelease --latest=false`，**绝不劫持桌面端 `v*` 的 `/releases/latest`**）。
+- 服务器端安装 `apps/cloud/deploy/update.sh`、`pi-cloud-update.service` 与 `pi-cloud-update.timer`（每 5 分钟巡检一次）：主动出站 HTTPS 拉取 `pi-cloud-manifest.json`，SHA-256 变化时才下载压缩包并校验，原子切换 `/opt/pi-cloud/current` 重启 `pi-cloud.service`，健康检查失败自动回滚到上一版本，并自动清理保留最近 5 个版本。无需把 SSH 私钥交给 GitHub，也不必对 GitHub Runner 放开 22 端口。
+- 手动触发或检查：
+  ```bash
+  sudo /opt/pi-cloud/update.sh --dry-run   # 只检查不更新
+  sudo /opt/pi-cloud/update.sh             # 立即拉取并更新（有新版时）
+  sudo /opt/pi-cloud/update.sh --force     # 强制重装当前线上同版
+  ```
+
+### 5.0.1 手工本地打包上传（兜底）
 
 ```bash
 # 0) 本机打包（self-contained：dist + web + node_modules + deploy）
@@ -310,8 +323,8 @@ node apps/cloud/scripts/acceptance.mjs https://<域名>
 | 代码 | `/opt/pi-cloud/releases/<ts>` + `current` 软链（当前 `20261126123544`，回滚点 `20261126122700`） |
 | 数据 | `/var/lib/pi-cloud`（属主 `pi-cloud`） |
 | 配置 / 密钥 | `/etc/pi-cloud/env`（`0600 root:root`）；出口代理启用 `NODE_USE_ENV_PROXY=1` + `HTTPS_PROXY=http://127.0.0.1:8118`（`NO_PROXY` 排除本机与国内供应商） |
-| 单元 | `pi-cloud.service`（`Restart=always`、`ProtectSystem=strict`、`LimitNOFILE=65536`）· `pi-warp-proxy.service`（`wireproxy` 用户态 WARP 出口，仅监听 `127.0.0.1:8118`，不改路由表）· `pi-cloud-backup.timer`（每日 03:20 UTC） |
-| 日志 | `journalctl -u pi-cloud` · `journalctl -u pi-warp-proxy` · `/var/log/caddy/pi-cloud.log`（20MiB × 5） |
+| 单元 | `pi-cloud.service`（`Restart=always`、`ProtectSystem=strict`、`LimitNOFILE=65536`）· `pi-cloud-update.timer`（每 5 分钟拉取 `cloud-latest` 校验更新 + 自动回滚）· `pi-warp-proxy.service`（`wireproxy` 用户态 WARP 出口，仅监听 `127.0.0.1:8118`，不改路由表）· `pi-cloud-backup.timer`（每日 03:20 UTC） |
+| 日志 | `journalctl -u pi-cloud` · `journalctl -u pi-cloud-update` · `journalctl -u pi-warp-proxy` · `/var/log/caddy/pi-cloud.log`（20MiB × 5） |
 | 备份 | `/var/backups/pi-cloud/pi-cloud-<ts>.tar.gz`，留 7 天 |
 
 ## 6. 排障

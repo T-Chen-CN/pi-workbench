@@ -1,0 +1,16 @@
+[Unit]
+Description=Pi Cloud self-updater (pull prebuilt bundle from GitHub Release)
+Documentation=https://github.com/T-Chen-CN/pi-workbench
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+# 必须允许切 /opt/pi-cloud/current 软链、chown pi-cloud 与重启 pi-cloud.service
+ExecStart=/opt/pi-cloud/update.sh
+TimeoutStartSec=360
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pi-cloud-update

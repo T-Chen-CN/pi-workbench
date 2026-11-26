@@ -1,0 +1,104 @@
+name: Cloud Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/cloud/**'
+      - 'pi-bridge/**'
+      - 'src/components/StreamdownView.tsx'
+      - 'src/components/CloudTraceSection.tsx'
+      - 'src/components/StreamingTranscript.tsx'
+      - 'src/components/TaskResultSection.tsx'
+      - 'src/components/BrandSeal.tsx'
+      - 'src/components/ui.tsx'
+      - 'src/components/patterns.tsx'
+      - 'src/utils/shikiHighlighter.ts'
+      - 'src/types/cloud.ts'
+      - 'src/index.css'
+      - 'tailwind.config.js'
+      - 'vite.config.cloud-web.ts'
+      - 'scripts/build-cloud-bundle.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/cloud-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  # 串行发布滚动云端产物，禁止并发覆盖或中断上传
+  group: cloud-release
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-24.04
+    env:
+      # 云端运行包不依赖 Electron 二进制
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build self-contained cloud bundle
+        run: node scripts/build-cloud-bundle.mjs
+
+      - name: Pack bundle and generate manifest
+        run: |
+          set -euo pipefail
+          STAMP="$(date -u +%Y%m%d%H%M%S)"
+          SHORT_SHA="$(echo "$GITHUB_SHA" | cut -c1-7)"
+          RELEASE_ID="${STAMP}-${SHORT_SHA}"
+          ARCHIVE="cache/pi-cloud-bundle.tar.gz"
+          tar -czf "$ARCHIVE" -C cache/cloud-bundle .
+          SHA256="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
+          RELEASE_ID="$RELEASE_ID" SHORT_SHA="$SHORT_SHA" SHA256="$SHA256" node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const manifest = {
+              releaseId: process.env.RELEASE_ID,
+              commit: process.env.GITHUB_SHA,
+              shortSha: process.env.SHORT_SHA,
+              builtAt: new Date().toISOString(),
+              version: pkg.version,
+              asset: "pi-cloud-bundle.tar.gz",
+              sha256: process.env.SHA256,
+            };
+            fs.writeFileSync("cache/pi-cloud-manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+          '
+          cat cache/pi-cloud-manifest.json
+          echo "RELEASE_ID=$RELEASE_ID" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"
+          echo "SHA256=$SHA256" >> "$GITHUB_ENV"
+
+      - name: Publish rolling prerelease (never overrides desktop latest)
+        run: |
+          set -euo pipefail
+          TAG="cloud-latest"
+          NOTES="Pi Cloud rolling bundle built from \`${GITHUB_SHA}\` (\`${RELEASE_ID}\`).\n\nSHA-256: \`${SHA256}\`"
+          # 必须保持 prerelease 且 latest=false，否则会劫持桌面端 electron-updater 的 /releases/latest
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --prerelease \
+              --latest=false \
+              --title "Pi Cloud Rolling Bundle" \
+              --notes "$(printf '%b' "$NOTES")"
+          fi
+          # 必须先传压缩包再传 manifest，确保服务器读到新 manifest 时新包已就位
+          gh release upload "$TAG" cache/pi-cloud-bundle.tar.gz --clobber
+          gh release upload "$TAG" cache/pi-cloud-manifest.json --clobber
+          gh release edit "$TAG" \
+            --prerelease \
+            --latest=false \
+            --title "Pi Cloud Rolling Bundle" \
+            --notes "$(printf '%b' "$NOTES")"

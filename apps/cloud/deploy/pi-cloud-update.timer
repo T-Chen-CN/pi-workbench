@@ -1,0 +1,11 @@
+[Unit]
+Description=Pi Cloud self-update timer (checks rolling GitHub Release every 5 min)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -5,6 +5,7 @@
 | `pi-cloud.service` | systemd 单元（只监听 127.0.0.1，权限收紧，`Restart=always`） |
 | `Caddyfile.snippet` | 站点块：`/client/ws`、`/device/ws` 与其余 API 都反代到 `127.0.0.1:8787` |
 | `backup.sh` + `.service` + `.timer` | 每日 03:20 UTC 备份到 `/var/backups/pi-cloud`，留 7 天 |
+| `update.sh` + `pi-cloud-update.{service,timer}` | 每 5 分钟拉取 GitHub Release（`cloud-latest`）manifest，校验 SHA-256 后切软链重启，失败自动回滚，保留最近 5 版 |
 | `env.example` | `/etc/pi-cloud/env` 模板（`PI_CLOUD_ENC_KEY` 丢了就解不开云端模型 Key） |
 
 配套脚本：`../scripts/acceptance.mjs`（部署后跑一遍不依赖模型的自检，32 条断言）。
