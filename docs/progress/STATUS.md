@@ -9,7 +9,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 版本 | **0.11.1**（2026-11-26） |
+| 版本 | **0.11.2**（2026-11-26） |
 | 阶段 | 本地 Agent 工作台稳定期；模型配置改为 8 家固定供应商 + OAuth（0.11.x）；云端 Agent 已部署运行，剩 P1/P2 待办 |
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
@@ -26,6 +26,7 @@
 
 - **v0.1 ~ v0.7.9**：本地 Agent 工作台——编辑器 / 会话与分支 / 终端 / Git 与工作树 / 阅读视图 / 面板拆窗 / 托盘常驻 / 自动更新与三平台发布。
 - **v0.8.0 ~ v0.9.1**：云端 Agent 的 Hermes 实现（配对、会话与 SSE、审批闭环、内嵌控制台、任务与媒体、云端工作区派活 H3），**已整体移除**（代码与文档都不在仓库里，需要考古看 `git log`）。
+- **0.11.2**：云端 Agent 全面进阶（P0 真派活闭环 + P1 全部落地：脱敏 diff 按需审查、多端已读同步与托盘角标、持久记忆压缩前抽取 / 梦境整理 / `AGENTS.md` 与 `SOUL.md` 双端可视化编辑、运行中工单直发追加指令、停滞看门狗与全站并发上限 8、改动清单 `attention` 分组与密钥位置告警、工单 worktree 独立 `pre-push` 守卫、离线期汇报汇总）；供应商设置接入独立 `models.dev` 富数据与目录自动刷新 / `PI_OFFLINE` 开关，修复 Google / xAI 无效 Key 400 误判；补齐压缩进行中状态与压缩期排队、上下文覆写同步已有会话与高并发派单竞态修复。
 - **0.11.1**：新增「使用系统代理」热生效开关（主进程 `globalThis.fetch` 按开关走 Electron `net.fetch`）；修复远端模型目录缓存未加载与 D12/D26 下架过滤、配置校验放行远端新增模型，修正 Google（`x-goog-api-key`）与 Anthropic（`/v1/models`）Key 探测；合入 0.11.0 后 17 项安全边界、拆窗/终端流、pi-bridge 运行时与云端会话登出加固。
 - **0.11.0**：模型配置改为固定供应商预设——8 家内置 provider（OpenAI / Anthropic / Google / xAI / DeepSeek / 小米 MiMo / 小米 Token 套餐 / OpenAI Codex），模型能力与协议来自 Pi catalog（内置快照 + pi.dev 增量），凭证改为 `config/credentials.json`（safeStorage）并支持 OAuth 登录（浏览器回调 / 设备码 / 粘贴回调地址），容量可按模型向下调且轮次边界生效；删除自定义端点链路（`apiConfig:*` IPC、dev 代理、`model-capabilities`），旧 `api-config.json` 首启迁移并归档 `.legacy`。
 - **0.10.0**：移除云端 Agent 的桌面层 / 派活 / 网关插件 / 相关文档与文案，主线只保留本地 Agent 能力；`electron/approval-broker.ts` 与 pi-bridge 的审批 / 计划扩展保留，供下一代云端服务复用；升级首启清掉旧版留下的凭据类残留（`electron/legacy-cleanup.ts`，幂等 + 失败可重试）。
@@ -33,4 +34,4 @@
 ---
 
 **维护者**: Pi Workbench Team
-**最后更新**: 2026-11-26（0.11.1 发版）
+**最后更新**: 2026-11-26（0.11.2 发版）

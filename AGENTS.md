@@ -4,7 +4,7 @@
 
 **一句话**：本地优先的 Agent 原生开发工作台 —— Electron 桌面应用，Pi Agent 跑在主进程里，直接读写工作区、执行命令。
 **栈**：Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57。**Node ≥ 24**（`node:sqlite`、构建脚本依赖）。
-**阶段**：本地 Agent 工作台（0.11.1）；云端 Agent 的 Hermes 实现已在 0.10.0 移除，Pi 内核版本另起（快照见 [STATUS](docs/progress/STATUS.md)，待办见 [BACKLOG](docs/progress/BACKLOG.md)）。
+**阶段**：本地 Agent 工作台（0.11.2）；云端 Agent 的 Hermes 实现已在 0.10.0 移除，Pi 内核版本另起（快照见 [STATUS](docs/progress/STATUS.md)，待办见 [BACKLOG](docs/progress/BACKLOG.md)）。
 
 ---
 
