@@ -3,6 +3,7 @@ import {
   ArrowRight,
   ArrowUpRight,
   Check,
+  Cloud,
   Folder,
   FolderOpen,
   RefreshCw,
@@ -21,6 +22,7 @@ import {
   StatusText,
 } from './patterns'
 import { Caption, DataText, Eyebrow, Label } from './ui'
+import { useCloudStore } from '../store/cloudStore'
 import { useI18nStore } from '../store/i18nStore'
 import type { ProviderView, WebSearchConfig } from '../types/electron'
 import { basename } from '../utils/filePath'
@@ -34,6 +36,7 @@ interface WelcomeScreenProps {
   onOpenWorkspace: (path: string) => void
   onOpenSettings: (section?: SettingsSection) => void
   onRefreshRecent: () => void
+  onOpenCloud?: () => void
 }
 
 const workspaceName = (path: string) => basename(path) ?? path
@@ -44,8 +47,12 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   onOpenWorkspace,
   onOpenSettings,
   onRefreshRecent,
+  onOpenCloud,
 }) => {
   const { t, language } = useI18nStore()
+  const cloudLinked = useCloudStore((store) => store.link.linked)
+  const cloudStatus = useCloudStore((store) => store.deviceState.status)
+  const cloudUnread = useCloudStore((store) => store.unreadCount)
   const [query, setQuery] = useState('')
   const [activeProvider, setActiveProvider] = useState<ProviderView | null>(null)
   const [webSearchConfig, setWebSearchConfig] = useState<WebSearchConfig | null>(null)
@@ -107,6 +114,20 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
     ? findWebSearchProvider(webSearchConfig.provider)
     : undefined
   const webSearchReady = Boolean(webSearchConfig?.provider)
+
+  const cloudStatusLabel = !cloudLinked
+    ? t('cloudStatusUnlinked')
+    : cloudStatus === 'online'
+      ? t('cloudStatusOnline')
+      : cloudStatus === 'connecting'
+        ? t('cloudStatusConnecting')
+        : cloudStatus === 'error'
+          ? t('cloudStatusError')
+          : t('cloudStatusOffline')
+  const cloudSummary =
+    cloudLinked && cloudUnread > 0
+      ? `${cloudStatusLabel} · ${t('cloudUnreadCount', { count: cloudUnread })}`
+      : cloudStatusLabel
 
   const steps = [
     { label: t('welcomeStepApi'), done: apiReady, action: () => onOpenSettings('api') },
@@ -223,6 +244,13 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   label={t('welcomeQuickSettings')}
                   onClick={onOpenSettings}
                 />
+                {onOpenCloud && (
+                  <QuickAction
+                    icon={Cloud}
+                    label={t('welcomeQuickCloud')}
+                    onClick={onOpenCloud}
+                  />
+                )}
               </div>
             </div>
           </section>
@@ -260,7 +288,23 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 <Stat
                   label={t('welcomeBackend')}
                   value={t('welcomeLocal')}
-                  className="col-span-2"
+                />
+                <Stat
+                  label={t('welcomeCloudLabel')}
+                  value={
+                    onOpenCloud ? (
+                      <button
+                        type="button"
+                        onClick={onOpenCloud}
+                        className="inline-flex max-w-full items-center gap-1 truncate text-accent transition-colors hover:underline"
+                      >
+                        <span className="truncate">{cloudSummary}</span>
+                        <ArrowUpRight size={11} className="flex-shrink-0" aria-hidden="true" />
+                      </button>
+                    ) : (
+                      cloudSummary
+                    )
+                  }
                 />
               </StatGrid>
             </Card>

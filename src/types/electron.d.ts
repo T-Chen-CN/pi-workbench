@@ -711,14 +711,12 @@ export interface ElectronAPI {
   cloudGetConfig: () => Promise<CloudConfigResult>
   cloudSaveConfig: (config: CloudConfigInput) => Promise<{
     success: boolean
-    result?: { ok?: boolean; apiKeyMasked?: string; takesEffect?: string }
+    result?: { ok?: boolean; apiKeyMasked?: string; takesEffect?: string; warning?: string }
     error?: string
   }>
   cloudFetchModels: (input: {
-    provider?: string
-    apiUrl?: string
-    apiKey?: string
-  }) => Promise<{ success: boolean; models: string[]; error?: string }>
+    providerId: string
+  }) => Promise<{ success: boolean; models: string[]; catalog?: CloudCatalogModel[]; error?: string }>
   cloudGetMemoryData: () => Promise<{
     success: boolean
     memories?: import('./cloud').CloudMemoryItem[]
@@ -790,14 +788,24 @@ export interface CloudWorkspaceEntry {
   isGit: boolean
 }
 
+/** 云端模型目录条目（来自 /v1/cloud-config/catalog） */
+export interface CloudCatalogModel {
+  id: string
+  name?: string
+  contextWindow?: number
+  maxTokens?: number
+  reasoning?: boolean
+  vision?: boolean
+}
+
 /** 云端模型配置（只回掩码，Key 永不出服务器） */
 export interface CloudConfigResult {
   success: boolean
   config?: {
     configured: boolean
-    provider?: string
-    apiUrl?: string
+    providerId?: string
     model?: string
+    credentialType?: string
     apiKeyMasked?: string
     updatedAt?: number
   }
@@ -805,8 +813,7 @@ export interface CloudConfigResult {
 }
 
 export interface CloudConfigInput {
-  provider: string
-  apiUrl: string
+  providerId: string
   model: string
   apiKey: string
 }

@@ -212,4 +212,55 @@ describe('ProviderSettings（P-04 / P-06 / P-10）', () => {
     expect(screen.getByText(/发布于 2026-02-01/)).toBeTruthy()
     expect(screen.getByText(/开源权重/)).toBeTruthy()
   })
+
+  it('能力表将当前激活模型高亮置顶，并支持按模型名/ID 搜索过滤（P-02）', async () => {
+    vi.mocked(api.providersList).mockResolvedValueOnce({
+      success: true,
+      providers: [
+        {
+          ...sampleProviders[0],
+          model: 'gpt-5-pro',
+          models: [
+            {
+              ...sampleProviders[0].models[0],
+              id: 'gpt-4.1',
+              name: 'GPT-4.1',
+            },
+            {
+              ...sampleProviders[0].models[0],
+              id: 'gpt-5-mini',
+              name: 'GPT-5 Mini',
+            },
+            {
+              ...sampleProviders[0].models[0],
+              id: 'gpt-5-pro',
+              name: 'GPT-5 Pro',
+            },
+          ],
+        },
+      ],
+      activeProvider: 'openai',
+      offline: false,
+      builtinGeneratedAt: Date.UTC(2026, 9, 15),
+    })
+
+    const { container } = render(<ProviderSettings />)
+    await waitFor(() => {
+      expect(screen.getByLabelText('gpt-5-pro 上下文容量')).toBeTruthy()
+    })
+
+    // 激活模型 gpt-5-pro 虽然在目录末尾，但在能力表里必须置顶显示
+    const rows = [...container.querySelectorAll('.max-h-72 > div')]
+    expect(rows[0]?.textContent).toContain('gpt-5-pro')
+    expect(rows[0]?.textContent).toContain('当前')
+
+    const search = screen.getByLabelText('搜索模型名或 ID…') as HTMLInputElement
+    fireEvent.change(search, { target: { value: 'mini' } })
+    expect(screen.getByText('1 / 3')).toBeTruthy()
+    expect(screen.queryByLabelText('gpt-4.1 上下文容量')).toBeNull()
+    expect(screen.getByLabelText('gpt-5-mini 上下文容量')).toBeTruthy()
+
+    fireEvent.change(search, { target: { value: 'nonexistent-model' } })
+    expect(screen.getByText('没有匹配的模型')).toBeTruthy()
+  })
 })

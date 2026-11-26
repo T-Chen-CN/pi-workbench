@@ -313,14 +313,21 @@ export function registerCloudIpc(context: CloudIpcContext): void {
   /** 云端页：代拉供应商模型清单（走云端 /v1/cloud-config/catalog） */
   handleIpc('cloud:fetchModels', async (_event, input: unknown) => {
     const link = readCloudLink()
-    if (!link) return { success: false, error: 'This device is not paired', models: [] }
+    if (!link) return { success: false, error: 'This device is not paired', models: [], catalog: [] }
     const token = readCloudToken(link)
-    if (!token) return { success: false, error: 'Saved token cannot be decrypted; pair again.', models: [] }
+    if (!token) {
+      return {
+        success: false,
+        error: 'Saved token cannot be decrypted; pair again.',
+        models: [],
+        catalog: [],
+      }
+    }
     const providerId =
       input && typeof input === 'object' && typeof (input as { providerId?: unknown }).providerId === 'string'
         ? (input as { providerId: string }).providerId.trim()
         : ''
-    if (!providerId) return { success: false, error: 'providerId is required', models: [] }
+    if (!providerId) return { success: false, error: 'providerId is required', models: [], catalog: [] }
     try {
       const url = `${link.baseUrl}/v1/cloud-config/catalog?providerId=${encodeURIComponent(providerId)}`
       const response = await fetch(url, {
@@ -329,23 +336,51 @@ export function registerCloudIpc(context: CloudIpcContext): void {
         signal: AbortSignal.timeout(20_000),
       })
       const payload = (await response.json().catch(() => ({}))) as {
-        models?: Array<string | { id?: string }>
+        models?: Array<
+          | string
+          | {
+              id?: string
+              name?: string
+              contextWindow?: number
+              maxTokens?: number
+              reasoning?: boolean
+              vision?: boolean
+            }
+        >
         error?: string
       }
       if (!response.ok) {
-        return { success: false, error: String(payload.error ?? `HTTP ${response.status}`), models: [] }
+        return {
+          success: false,
+          error: String(payload.error ?? `HTTP ${response.status}`),
+          models: [],
+          catalog: [],
+        }
       }
-      const models = Array.isArray(payload.models)
+      const catalog = Array.isArray(payload.models)
         ? payload.models
-            .map((entry) => (typeof entry === 'string' ? entry : entry?.id ?? ''))
-            .filter((id): id is string => Boolean(id))
+            .map((entry) =>
+              typeof entry === 'string'
+                ? { id: entry }
+                : {
+                    id: String(entry?.id ?? ''),
+                    name: typeof entry?.name === 'string' ? entry.name : undefined,
+                    contextWindow: typeof entry?.contextWindow === 'number' ? entry.contextWindow : undefined,
+                    maxTokens: typeof entry?.maxTokens === 'number' ? entry.maxTokens : undefined,
+                    reasoning: typeof entry?.reasoning === 'boolean' ? entry.reasoning : undefined,
+                    vision: typeof entry?.vision === 'boolean' ? entry.vision : undefined,
+                  }
+            )
+            .filter((entry) => Boolean(entry.id))
         : []
-      return { success: true, models }
+      const models = catalog.map((entry) => entry.id)
+      return { success: true, models, catalog }
     } catch (error) {
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
         models: [],
+        catalog: [],
       }
     }
   })

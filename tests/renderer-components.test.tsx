@@ -1770,6 +1770,28 @@ describe('WelcomeScreen', () => {
     ).toBeTruthy()
     expect(screen.getByText(translations.zh.webSearchProviderBocha)).toBeTruthy()
   })
+
+  it('provides a Cloud Agent status stat and quick action to open cloud view (P-03)', async () => {
+    const onOpenCloud = vi.fn()
+    render(
+      <WelcomeScreen
+        recentWorkspaces={recent}
+        onOpenProject={vi.fn()}
+        onOpenWorkspace={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onRefreshRecent={vi.fn()}
+        onOpenCloud={onOpenCloud}
+      />
+    )
+
+    const quickCloud = await screen.findByRole('button', { name: translations.zh.welcomeQuickCloud })
+    fireEvent.click(quickCloud)
+    expect(onOpenCloud).toHaveBeenCalledTimes(1)
+
+    const statusButton = screen.getByRole('button', { name: translations.zh.cloudStatusUnlinked })
+    fireEvent.click(statusButton)
+    expect(onOpenCloud).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('FileExplorer', () => {

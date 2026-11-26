@@ -17,6 +17,7 @@ import type {
   CloudWorkspaceEntry,
   CloudClientState,
   CloudClientOutgoingFrame,
+  CloudCatalogModel,
   CloudConfigInput,
   CloudConfigResult,
   ListDirectoryResult,
@@ -472,9 +473,15 @@ const mockAPI = {
     success: false,
     error: 'Cloud settings are only available in the Electron app'
   }),
-  cloudFetchModels: async (): Promise<{ success: boolean; models: string[]; error?: string }> => ({
+  cloudFetchModels: async (): Promise<{
+    success: boolean
+    models: string[]
+    catalog?: CloudCatalogModel[]
+    error?: string
+  }> => ({
     success: false,
     models: [],
+    catalog: [],
     error: 'Cloud settings are only available in the Electron app'
   }),
   cloudGetMemoryData: async () => ({
@@ -841,7 +848,7 @@ export const api = {
   cloudClientState: () => electronAPI.cloudClientState(),
   cloudGetConfig: () => electronAPI.cloudGetConfig(),
   cloudSaveConfig: (config: CloudConfigInput) => electronAPI.cloudSaveConfig(config),
-  cloudFetchModels: (input: { provider?: string; apiUrl?: string; apiKey?: string }) =>
+  cloudFetchModels: (input: { providerId: string }) =>
     electronAPI.cloudFetchModels(input),
   cloudGetMemoryData: () => electronAPI.cloudGetMemoryData(),
   cloudAddMemory: (input: { kind?: string; content: string; tags?: string[]; pinned?: boolean }) =>

@@ -887,6 +887,7 @@ export default function App() {
               onOpenWorkspace={(path) => void openWorkspaceAt(path)}
               onOpenSettings={(section) => openSettings(section)}
               onRefreshRecent={() => void refreshRecentWorkspaces()}
+              onOpenCloud={() => setView('cloud')}
             />
           </div>
         )}

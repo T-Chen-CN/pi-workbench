@@ -23,7 +23,7 @@ import { localizeError } from '../i18n/errors'
 import { emitAppEvent } from '../utils/appEvents'
 import { persistAppSettings } from '../utils/persistSettings'
 import { Button, Field, Input, Select } from './ui'
-import { SettingsTable, SettingsTableRow } from './patterns'
+import { SearchField, SettingsTable, SettingsTableRow } from './patterns'
 import { ProviderAuthPanel } from './ProviderAuthPanel'
 
 function formatCatalogTime(timestamp: number | undefined): string {
@@ -154,6 +154,7 @@ export function ProviderSettings() {
   const [offline, setOffline] = useState(false)
   const [builtinGeneratedAt, setBuiltinGeneratedAt] = useState<number | undefined>(undefined)
   const [apiKey, setApiKey] = useState('')
+  const [modelQuery, setModelQuery] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -197,6 +198,26 @@ export function ProviderSettings() {
     () => (selectedModel ? enrichmentMetaItems(selectedModel, t) : []),
     [selectedModel, t]
   )
+
+  const displayedModels = useMemo(() => {
+    if (!selected) return []
+    const needle = modelQuery.trim().toLowerCase()
+    const filtered = needle
+      ? selected.models.filter(
+          (model) =>
+            model.id.toLowerCase().includes(needle) || model.name.toLowerCase().includes(needle)
+        )
+      : selected.models
+    const activeId = selected.model
+    if (!activeId) return filtered
+    const activeIndex = filtered.findIndex((model) => model.id === activeId)
+    if (activeIndex <= 0) return filtered
+    return [
+      filtered[activeIndex],
+      ...filtered.slice(0, activeIndex),
+      ...filtered.slice(activeIndex + 1),
+    ]
+  }, [selected, modelQuery])
 
   const notifyAgent = () => {
     // 各工作区的 Agent 用新配置重建（会话本身不受影响）
@@ -349,6 +370,7 @@ export function ProviderSettings() {
           onChange={(event) => {
             setSelectedId(event.target.value)
             setApiKey('')
+            setModelQuery('')
           }}
         >
           {providers.map((provider) => (
@@ -474,7 +496,26 @@ export function ProviderSettings() {
 
           {selected.models.length > 0 && (
             <div className="flex flex-col gap-2">
-              <span className="type-label text-ink">{t('modelCapabilityTable')}</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-baseline gap-2">
+                  <span className="type-label text-ink">{t('modelCapabilityTable')}</span>
+                  {modelQuery.trim() && (
+                    <span className="type-caption text-ink-muted">
+                      {t('providerModelsFilteredCount', {
+                        shown: displayedModels.length,
+                        total: selected.models.length,
+                      })}
+                    </span>
+                  )}
+                </span>
+                <SearchField
+                  value={modelQuery}
+                  onChange={setModelQuery}
+                  placeholder={t('providerModelSearchPlaceholder')}
+                  ariaLabel={t('providerModelSearchPlaceholder')}
+                  className="w-52"
+                />
+              </div>
               <SettingsTable
                 columns={[
                   { label: t('modelColumn'), className: 'min-w-0 flex-1' },
@@ -484,61 +525,69 @@ export function ProviderSettings() {
                 ]}
               >
                 <div className="max-h-72 overflow-y-auto">
-                  {selected.models.map((model) => (
-                    <SettingsTableRow key={model.id} selected={model.id === selected.model}>
-                      <span
-                        className="min-w-0 flex-1 truncate type-data text-ink"
-                        title={model.id}
-                      >
-                        {model.id}
-                      </span>
-                      <div className="w-24">
-                        <Select
-                          value={model.limits.contextWindow}
-                          aria-label={`${model.id} ${t('modelContextColumn')}`}
-                          onChange={(event) =>
-                            void handleOverride(model, {
-                              contextWindow: Number(event.target.value)
-                            })
-                          }
+                  {displayedModels.length === 0 ? (
+                    <p className="m-0 px-3 py-3 type-caption text-ink-muted">
+                      {t('providerModelsNoMatch')}
+                    </p>
+                  ) : (
+                    displayedModels.map((model) => (
+                      <SettingsTableRow key={model.id} selected={model.id === selected.model}>
+                        <span className="flex min-w-0 flex-1 items-center gap-1.5" title={model.id}>
+                          <span className="min-w-0 truncate type-data text-ink">{model.id}</span>
+                          {model.id === selected.model && (
+                            <span className="flex-shrink-0 rounded border border-accent px-1 type-caption text-accent">
+                              {t('providerActiveShort')}
+                            </span>
+                          )}
+                        </span>
+                        <div className="w-24">
+                          <Select
+                            value={model.limits.contextWindow}
+                            aria-label={`${model.id} ${t('modelContextColumn')}`}
+                            onChange={(event) =>
+                              void handleOverride(model, {
+                                contextWindow: Number(event.target.value)
+                              })
+                            }
+                          >
+                            {limitOptions(
+                              model.catalogLimits?.contextWindow ?? model.limits.contextWindow
+                            ).map((value) => (
+                              <option key={value} value={value}>
+                                {formatTokens(value)}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
+                        <div className="w-24">
+                          <Select
+                            value={model.limits.maxTokens}
+                            aria-label={`${model.id} ${t('modelMaxTokensColumn')}`}
+                            onChange={(event) =>
+                              void handleOverride(model, { maxTokens: Number(event.target.value) })
+                            }
+                          >
+                            {limitOptions(
+                              Math.min(
+                                model.catalogLimits?.maxTokens ?? model.limits.maxTokens,
+                                model.limits.contextWindow
+                              )
+                            ).map((value) => (
+                              <option key={value} value={value}>
+                                {formatTokens(value)}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
+                        <span
+                          className="w-40 truncate type-caption text-ink-muted"
+                          title={capabilityCells(model, t)}
                         >
-                          {limitOptions(
-                            model.catalogLimits?.contextWindow ?? model.limits.contextWindow
-                          ).map((value) => (
-                            <option key={value} value={value}>
-                              {formatTokens(value)}
-                            </option>
-                          ))}
-                        </Select>
-                      </div>
-                      <div className="w-24">
-                        <Select
-                          value={model.limits.maxTokens}
-                          aria-label={`${model.id} ${t('modelMaxTokensColumn')}`}
-                          onChange={(event) =>
-                            void handleOverride(model, { maxTokens: Number(event.target.value) })
-                          }
-                        >
-                          {limitOptions(
-                            Math.min(
-                              model.catalogLimits?.maxTokens ?? model.limits.maxTokens,
-                              model.limits.contextWindow
-                            )
-                          ).map((value) => (
-                            <option key={value} value={value}>
-                              {formatTokens(value)}
-                            </option>
-                          ))}
-                        </Select>
-                      </div>
-                      <span
-                        className="w-40 truncate type-caption text-ink-muted"
-                        title={capabilityCells(model, t)}
-                      >
-                        {capabilityCells(model, t)}
-                      </span>
-                    </SettingsTableRow>
-                  ))}
+                          {capabilityCells(model, t)}
+                        </span>
+                      </SettingsTableRow>
+                    ))
+                  )}
                 </div>
               </SettingsTable>
               <span className="type-caption text-ink-muted">{t('modelContextHint')}</span>

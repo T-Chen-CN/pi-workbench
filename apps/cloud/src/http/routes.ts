@@ -154,7 +154,11 @@ export function buildRouter(deps: RouteDeps): Router {
   }))
 
   router.get('/v1/me', (ctx) => {
-    return { authenticated: verifyCurrentSession(ctx), hasAccount: deps.store.getAccount() !== null }
+    return {
+      authenticated: verifyCurrentSession(ctx),
+      hasAccount: deps.store.getAccount() !== null,
+      version: deps.config.version,
+    }
   })
 
   /** F-01：唯一的自助入口，只允许创建一次；之后必须登录 */

@@ -256,3 +256,67 @@ describe('design system usage', () => {
     expect(close).toContain('h-6 w-6')
   })
 })
+
+describe('cloud web design system compliance (D-06)', () => {
+  const CLOUD_WEB = resolve(__dirname, '../apps/cloud/web')
+  const appCss = readFileSync(resolve(CLOUD_WEB, 'app.css'), 'utf-8')
+  const appJs = readFileSync(resolve(CLOUD_WEB, 'app.js'), 'utf-8')
+  const indexHtml = readFileSync(resolve(CLOUD_WEB, 'index.html'), 'utf-8')
+  const faviconSvg = readFileSync(resolve(CLOUD_WEB, 'favicon.svg'), 'utf-8')
+
+  it('uses Paper & Ink Pine tokens, four surfaces, and three derived ink rules', () => {
+    expect(appCss).toContain('--accent: 47 93 78;')
+    expect(appCss).toContain('--accent: 143 199 180;')
+    for (const token of [
+      '--surface:',
+      '--panel:',
+      '--raised:',
+      '--sunken:',
+      '--rule-control:',
+      '--rule-divide:',
+      '--rule-hairline:',
+      '--accent-fg:',
+      '--success:',
+    ]) {
+      expect(appCss).toContain(token)
+    }
+    expect(appCss.toLowerCase()).not.toContain('#8a5a2b')
+    expect(appCss.toLowerCase()).not.toContain('#d0a068')
+    expect(faviconSvg).toContain('#2F5D4E')
+  })
+
+  it('forbids 999px capsule buttons and legacy .pill classes', () => {
+    expect(appCss).not.toMatch(/\.pill\b/)
+    expect(appJs).not.toMatch(/['"]pill(?:\s|['"])/)
+    expect(appCss).not.toMatch(/border-radius:\s*999px\b/)
+    // 9999px 圆角只允许给 6px 状态小圆点使用，不得用于按钮/卡片/输入框
+    const radiusMatches = [...appCss.matchAll(/([^{}]+)\{[^{}]*border-radius:\s*9999px[^{}]*\}/g)]
+    for (const match of radiusMatches) {
+      const selector = match[1].trim()
+      expect(selector).toMatch(/^\.(?:status-dot|msg-streaming)$/)
+    }
+  })
+
+  it('forbids innerHTML and HTML string injection in app.js', () => {
+    for (const forbidden of [
+      /[.]innerHTML\b/,
+      /[.]outerHTML\b/,
+      /insertAdjacentHTML/,
+      /document[.]write\(/,
+      /\beval\(/,
+    ]) {
+      expect(forbidden.test(appJs), `forbidden pattern ${forbidden}`).toBe(false)
+    }
+  })
+
+  it('keeps Chinese card titles and form labels in UI sans without uppercase', () => {
+    const cardH3 = appCss.match(/\.card\s+h3\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(cardH3).toContain('var(--font-ui)')
+    expect(cardH3).not.toContain('uppercase')
+    expect(cardH3).not.toContain('letter-spacing')
+    // 表单中文字段标签不得套 .mono
+    expect(appJs).not.toMatch(/el\('label',\s*\{\s*class:\s*'[^']*mono/)
+    expect(indexHtml).toContain('href="/fonts.css"')
+    expect(indexHtml).toContain('viewport-fit=cover')
+  })
+})

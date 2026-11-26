@@ -58,11 +58,44 @@ beforeAll(async () => {
   vi.stubGlobal('fetch', fetchMock)
   vi.stubGlobal('WebSocket', FakeSocket as unknown as typeof WebSocket)
 
-  routes['GET /v1/me'] = () => jsonResult({ hasAccount: true, authenticated: true })
+  routes['GET /v1/me'] = () => jsonResult({ hasAccount: true, authenticated: true, version: '0.11.2' })
   routes['GET /v1/devices'] = () => jsonResult({ devices: [] })
   routes['GET /v1/authorizations'] = () => jsonResult({ authorizations: [] })
   routes['GET /v1/cloud-config'] = () => jsonResult({ configured: false })
   routes['POST /v1/pair/code'] = () => jsonResult({ code: PAIR_CODE, expiresAt: Date.now() + 300_000 })
+  routes['GET /v1/memories'] = () =>
+    jsonResult({
+      memories: [
+        {
+          id: 'mem-1',
+          kind: 'fact',
+          content: '旧记忆内容',
+          tags: ['initial'],
+          source: 'auto',
+          pinned: false,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ],
+    })
+  routes['GET /v1/cloud-docs'] = () =>
+    jsonResult({
+      docs: [{ name: 'AGENTS.md', content: '# 规则\n保持简洁', exists: true, updatedAt: Date.now() }],
+    })
+  routes['GET /v1/dreams'] = () => jsonResult({ dreams: [] })
+  routes['PATCH /v1/memories/mem-1'] = (body: any) =>
+    jsonResult({
+      memory: {
+        id: 'mem-1',
+        kind: body.kind ?? 'fact',
+        content: body.content ?? '旧记忆内容',
+        tags: body.tags ?? [],
+        source: 'manual',
+        pinned: Boolean(body.pinned),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    })
   routes['GET /v1/cloud-config/catalog'] = () =>
     jsonResult({
       providerId: 'deepseek',
@@ -209,6 +242,226 @@ describe('Web 客户端主界面', () => {
     expect(document.querySelectorAll('select').length).toBeGreaterThanOrEqual(2)
     expect(document.body.textContent).toContain('DeepSeek Flash')
     expect(document.body.textContent).toContain('上下文 1M')
+  })
+
+  it('顶栏带松绿印面与 Paper/Ink 主题切换，底栏显示真实版本号（D-05）', () => {
+    expect(document.querySelector('header.top svg.brand-seal')).not.toBeNull()
+    expect(document.querySelector('footer.bottom')?.textContent).toContain('v0.11.2')
+
+    const themeBtn = [...document.querySelectorAll('header.top button')].find((node) =>
+      ['Paper', 'Ink'].includes((node.textContent ?? '').trim())
+    ) as HTMLButtonElement | undefined
+    expect(themeBtn).toBeTruthy()
+    const before = themeBtn!.textContent?.trim()
+    themeBtn!.click()
+    const after = themeBtn!.textContent?.trim()
+    expect(after).not.toBe(before)
+    expect(localStorage.getItem('pi-cloud-theme')).toMatch(/^(light|dark)$/)
+    expect(document.documentElement.getAttribute('data-theme')).toBe(
+      localStorage.getItem('pi-cloud-theme')
+    )
+  })
+
+  it('收到 cloud_status / device / unit / notice 实时刷新 DOM，点击停止回复发 stop_reply（F-02 / F-03）', async () => {
+    buttonByText('会话').click()
+    await tick()
+    const socket = FakeSocket.instances[0]
+    const beforeSent = socket.sent.length
+
+    socket.emit('message', {
+      data: JSON.stringify({ v: 1, type: 'event', seq: 10, event: { type: 'cloud_status', status: 'replying' } }),
+    })
+    await tick()
+    const stopBtn = buttonByText('停止回复') as HTMLButtonElement
+    expect(stopBtn.disabled).toBe(false)
+    expect(document.querySelector('header.top')?.textContent).toContain('回复中')
+    stopBtn.click()
+    expect(socket.sent.length).toBe(beforeSent + 1)
+    expect(JSON.parse(socket.sent[socket.sent.length - 1])).toMatchObject({ type: 'stop_reply' })
+
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 11,
+        event: {
+          type: 'device',
+          device: { id: 'dev-live', name: '主力机', platform: 'win32', online: true, workspaces: [] },
+        },
+      }),
+    })
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 12,
+        event: {
+          type: 'unit',
+          unit: {
+            unitId: 'u-live',
+            deviceId: 'dev-live',
+            workspacePath: '/repo',
+            branch: 'pi/feat-live',
+            closedAt: null,
+          },
+        },
+      }),
+    })
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 13,
+        event: { type: 'notice', level: 'info', text: '梦境整理已完成' },
+      }),
+    })
+    await tick()
+
+    const asideText = document.querySelector('aside')?.textContent ?? ''
+    expect(asideText).toContain('主力机')
+    expect(asideText).toContain('pi/feat-live')
+    expect(asideText).toContain('梦境整理已完成')
+    expect(document.querySelector('header.top')?.textContent).toContain('1/1 台设备在线')
+  })
+
+  it('助手回复按安全 DOM Markdown 渲染，且拒绝 javascript: 协议链接（U-01）', async () => {
+    buttonByText('会话').click()
+    await tick()
+    const socket = FakeSocket.instances[0]
+    const md = [
+      '## 检查结果',
+      '包含 **重点** 与 `npm test` 以及 [文档](https://example.com) 和 [危险](javascript:alert(1))',
+      '- 第一条',
+      '- 第二条',
+      '```ts',
+      'const ok = true',
+      '```',
+    ].join('\n')
+
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 20,
+        event: { type: 'message_start', messageId: 'm-md', role: 'assistant', at: Date.now() },
+      }),
+    })
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 21,
+        event: { type: 'message_end', messageId: 'm-md', text: md, at: Date.now() },
+      }),
+    })
+    await tick()
+
+    const body = document.querySelector('.md-body')
+    expect(body).not.toBeNull()
+    expect(body?.querySelector('h2')?.textContent).toBe('检查结果')
+    expect(body?.querySelector('strong')?.textContent).toBe('重点')
+    expect(body?.querySelector('code.md-inline-code')?.textContent).toBe('npm test')
+    expect(body?.querySelectorAll('ul li').length).toBe(2)
+    expect(body?.querySelector('.md-code-block pre code')?.textContent).toBe('const ok = true')
+    expect(body?.querySelector('.md-code-head button')?.textContent).toBe('复制')
+    const anchors = [...(body?.querySelectorAll('a') ?? [])]
+    expect(anchors.length).toBe(1)
+    expect(anchors[0].getAttribute('href')).toBe('https://example.com')
+  })
+
+  it('Enter 发送、Shift+Enter 与输入法组合态不误发，并显示快捷键提示（U-02）', async () => {
+    buttonByText('会话').click()
+    await tick()
+    expect(document.querySelector('.composer')?.textContent).toContain('Enter 发送')
+
+    const socket = FakeSocket.instances[0]
+    const textarea = document.querySelector('.composer textarea') as HTMLTextAreaElement
+
+    textarea.value = '先换行'
+    textarea.dispatchEvent(new Event('input'))
+    const beforeShift = socket.sent.length
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }))
+    expect(socket.sent.length).toBe(beforeShift)
+
+    // 组合输入中按 Enter 不应发送
+    const imeEvent = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
+    Object.defineProperty(imeEvent, 'isComposing', { value: true })
+    textarea.dispatchEvent(imeEvent)
+    expect(socket.sent.length).toBe(beforeShift)
+
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(socket.sent.length).toBe(beforeShift + 1)
+    expect(JSON.parse(socket.sent[socket.sent.length - 1])).toMatchObject({ type: 'say', text: '先换行' })
+  })
+
+  it('确认方案弹窗使用遮罩并支持 Esc 关闭（D-04）', async () => {
+    buttonByText('会话').click()
+    await tick()
+    buttonByText('确认方案…').click()
+    await tick()
+    expect(document.querySelector('.modal-backdrop .panel')).not.toBeNull()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await tick()
+    expect(document.querySelector('.modal-backdrop')).toBeNull()
+  })
+
+  it('记忆页编辑 AGENTS.md 时收到 task / read_state 不重建 DOM 不丢焦点，且支持记忆内联编辑（F-04 / U-03）', async () => {
+    buttonByText('记忆').click()
+    await tick(60)
+    const docArea = document.querySelector('textarea') as HTMLTextAreaElement
+    expect(docArea).not.toBeNull()
+    docArea.focus()
+    expect(document.activeElement).toBe(docArea)
+
+    const socket = FakeSocket.instances[0]
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 30,
+        event: {
+          type: 'task',
+          task: {
+            id: 'T-focus',
+            status: 'running',
+            spec: { title: '后台跑单', deviceId: 'dev-live', repo: { workspacePath: '/repo' } },
+          },
+        },
+      }),
+    })
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 31,
+        event: { type: 'read_state', lastReadSeq: 30, unreadCount: 1 },
+      }),
+    })
+    await tick()
+
+    // 同一个 textarea 实例仍在文档中且保持焦点
+    expect(document.contains(docArea)).toBe(true)
+    expect(document.activeElement).toBe(docArea)
+
+    // 内联编辑记忆条目
+    buttonByText('编辑').click()
+    await tick()
+    const editArea = document.querySelector('.mem-edit-box textarea') as HTMLTextAreaElement
+    const tagsInput = document.querySelector('.mem-edit-box input') as HTMLInputElement
+    expect(editArea).not.toBeNull()
+    editArea.value = '更新后的长期规则'
+    editArea.dispatchEvent(new Event('input'))
+    tagsInput.value = 'arch, cloud'
+    tagsInput.dispatchEvent(new Event('input'))
+
+    const saveBtn = document.querySelector('.mem-edit-box button.primary') as HTMLButtonElement
+    saveBtn.click()
+    await tick(50)
+
+    expect(document.body.textContent).toContain('更新后的长期规则')
+    expect(document.body.textContent).toContain('手工')
+    expect(document.body.textContent).toContain('arch')
+    expect(document.body.textContent).toContain('cloud')
   })
 
   it('登录态过期后不再无限“正在重连”，回登录页并说明原因', async () => {

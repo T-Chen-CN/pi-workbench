@@ -33,7 +33,13 @@ vi.mock('../src/api', () => ({
     cloudRefreshWorkspaces: vi.fn(async () => ({ success: true, workspaces: [] })),
     cloudGetConfig: vi.fn(async () => ({ success: false })),
     cloudSaveConfig: vi.fn(async () => ({ success: false })),
-    cloudFetchModels: vi.fn(async () => ({ success: false, models: [] })),
+    cloudFetchModels: vi.fn(async () => ({ success: false, models: [], catalog: [] })),
+    cloudGetMemoryData: vi.fn(async () => ({ success: true, memories: [], docs: [], dreams: [] })),
+    cloudAddMemory: vi.fn(async () => ({ success: false })),
+    cloudUpdateMemory: vi.fn(async () => ({ success: false })),
+    cloudDeleteMemory: vi.fn(async () => ({ success: true })),
+    cloudSaveDoc: vi.fn(async () => ({ success: false })),
+    cloudRunDream: vi.fn(async () => ({ success: true, dream: null })),
     cloudPair: vi.fn(async () => ({ success: false })),
     cloudUnlink: vi.fn(async () => ({ success: true })),
     cloudListWorkspaces: vi.fn(async () => ({ success: true, workspaces: [] })),
@@ -43,6 +49,7 @@ vi.mock('../src/api', () => ({
   },
 }))
 
+import { api } from '../src/api'
 import { CloudView } from '../src/components/CloudView'
 import { useCloudStore } from '../src/store/cloudStore'
 import { useI18nStore } from '../src/store/i18nStore'
@@ -141,5 +148,148 @@ describe('致命拒绝提示（F-47 / A-27）', () => {
     // 提示不能只活在「对话为空」的空状态里
     expect(await screen.findByText(/Client must be updated/)).toBeTruthy()
     expect(screen.getByText('重新连接')).toBeTruthy()
+  })
+})
+
+describe('云端页交互与配置升级（F-01 / U-01 / U-02 / U-03 / U-04）', () => {
+  it('顶栏弹窗配置云端模型：传 providerId 拉目录并回显保存（F-01 / U-04）', async () => {
+    vi.mocked(api.cloudGetConfig).mockResolvedValueOnce({
+      success: true,
+      config: {
+        configured: true,
+        providerId: 'openai',
+        model: 'gpt-5',
+        apiKeyMasked: 'sk-****9999',
+      },
+    })
+    vi.mocked(api.cloudFetchModels).mockResolvedValueOnce({
+      success: true,
+      models: ['gpt-5', 'gpt-5-mini'],
+      catalog: [
+        { id: 'gpt-5', name: 'GPT-5', contextWindow: 128_000, maxTokens: 16_384, reasoning: true, vision: true },
+        { id: 'gpt-5-mini', name: 'GPT-5 Mini', contextWindow: 128_000, maxTokens: 16_384, reasoning: true, vision: true },
+      ],
+    })
+    vi.mocked(api.cloudSaveConfig).mockResolvedValueOnce({
+      success: true,
+      result: { ok: true, apiKeyMasked: 'sk-****1234', takesEffect: 'next-turn' },
+    })
+
+    render(<CloudView onBackHome={() => undefined} />)
+    fireEvent.click(screen.getByRole('button', { name: '云端模型配置' }))
+
+    await waitFor(() => {
+      expect(api.cloudFetchModels).toHaveBeenCalledWith({ providerId: 'openai' })
+    })
+    const providerSelect = screen.getByLabelText('供应商') as HTMLSelectElement
+    expect(providerSelect.value).toBe('openai')
+    const modelSelect = screen.getByLabelText('模型') as HTMLSelectElement
+    expect(modelSelect.value).toBe('gpt-5')
+    expect(screen.getByText(/sk-\*\*\*\*9999/)).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-new-1234' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(api.cloudSaveConfig).toHaveBeenCalledWith({
+        providerId: 'openai',
+        model: 'gpt-5',
+        apiKey: 'sk-new-1234',
+      })
+    })
+  })
+
+  it('助手回复按 Markdown 渲染，且输入框支持 Enter 发送与 Shift+Enter 换行（U-01 / U-02）', () => {
+    useCloudStore.setState({
+      messages: [
+        {
+          id: 'm-md',
+          role: 'assistant',
+          text: '包含 **关键结论** 与 `npm test`',
+          at: Date.now(),
+          traces: [],
+        },
+      ],
+    })
+    const { container } = render(<CloudView onBackHome={() => undefined} />)
+    expect(container.querySelector('.chat-markdown strong')?.textContent).toBe('关键结论')
+    expect(container.querySelector('.chat-markdown code')?.textContent).toBe('npm test')
+    expect(screen.getByText('Enter 发送 · Shift+Enter 换行')).toBeTruthy()
+
+    const textarea = screen.getByPlaceholderText('说说你想让终端做什么…') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'hello cloud' } })
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true })
+    expect(sent.length).toBe(0)
+
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(sent.length).toBe(1)
+    expect(sent[0]).toMatchObject({ type: 'say', text: 'hello cloud' })
+  })
+
+  it('右栏支持一键折叠成窄条并展开（U-04）', () => {
+    render(<CloudView onBackHome={() => undefined} />)
+    expect(screen.getByText('已确认的授权')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '收起运行态面板' }))
+    expect(screen.queryByText('已确认的授权')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '展开运行态面板' }))
+    expect(screen.getByText('已确认的授权')).toBeTruthy()
+  })
+
+  it('记忆弹窗支持内联编辑条目并保存标签（U-03）', async () => {
+    vi.mocked(api.cloudGetMemoryData).mockResolvedValueOnce({
+      success: true,
+      memories: [
+        {
+          id: 'mem-1',
+          kind: 'fact',
+          content: '原内容',
+          tags: ['old'],
+          source: 'auto',
+          pinned: false,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ],
+      docs: [],
+      dreams: [],
+    })
+    vi.mocked(api.cloudUpdateMemory).mockResolvedValueOnce({
+      success: true,
+      memory: {
+        id: 'mem-1',
+        kind: 'decision',
+        content: '新决定',
+        tags: ['frontend', 'cloud'],
+        source: 'manual',
+        pinned: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    })
+
+    render(<CloudView onBackHome={() => undefined} />)
+    fireEvent.click(screen.getByRole('button', { name: '记忆与留存文档' }))
+    expect(await screen.findByText('原内容')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    fireEvent.change(screen.getByDisplayValue('原内容'), { target: { value: '新决定' } })
+    fireEvent.change(screen.getByDisplayValue('old'), { target: { value: 'frontend, cloud' } })
+    const kindSelects = screen.getAllByDisplayValue('事实')
+    fireEvent.change(kindSelects[kindSelects.length - 1], { target: { value: 'decision' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      expect(api.cloudUpdateMemory).toHaveBeenCalledWith({
+        id: 'mem-1',
+        kind: 'decision',
+        content: '新决定',
+        tags: ['frontend', 'cloud'],
+      })
+    })
+    expect(await screen.findByText('新决定')).toBeTruthy()
+    expect(screen.getByText('frontend')).toBeTruthy()
+    expect(screen.getByText('cloud')).toBeTruthy()
   })
 })
