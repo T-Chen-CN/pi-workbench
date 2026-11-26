@@ -31,7 +31,7 @@ npm run build      # 渲染层 + bridge + 主进程
 | `electron/ipc/register.ts` | `handleIpc` + `isTrustedIpcSender`：只接受主窗口与登记过的辅助窗口主框架，ready 之后 fail-closed |
 | `src/` | 渲染进程分层：`components/`（扁平，**禁建子目录**）· `store/`（一域一个 Zustand store）· `hooks/` · `utils/` · `workspace/` · `panelHost/` · `theme/` · `pdf/` · `api/`（IPC 封装 + 浏览器 mock 回退） |
 | `pi-bridge/` | 独立的 Agent 桥接包（`AgentManager`），有自己的 `package.json` / `tsconfig`；改完要 `npm run build:bridge` |
-| `apps/cloud/` | 云端服务（`@pi-workbench/cloud`，进 npm workspaces）：控制面 + 两条 WS + 单会话 + Web 控制台源码（`web-src/`，本地 Vite + React 构建到 `web-dist/`）；`npm run build:cloud`；协议帧在 `pi-bridge/src/cloud-protocol.ts`；见 [cloud-agent](docs/agent/cloud-agent.md) |
+| `apps/cloud/` | 云端服务（`@pi-workbench/cloud`，进 npm workspaces）：控制面 + 两条 WS + 单会话 + Web 控制台源码（`web-src/`，本地 Vite + React 构建到 `web-dist/`）；`npm run build:cloud`；协议帧在 `pi-bridge/src/cloud-protocol.ts`；推送 `main` 由 `.github/workflows/cloud-release.yml` 自动备包到 `cloud-latest`，**上线需按需手动跑服务器 `/opt/pi-cloud/update.sh`（不设自动重启）**，见 [cloud-agent §5](docs/agent/cloud-agent.md#5-部署与主动更新-sopoptpi-cloud) |
 | `tests/` | 扁平目录，文件名与源码同名（`src/utils/fileTree.ts` → `tests/file-tree.test.ts`）；`tests/design-system.test.ts` 是强制门槛 |
 | `docs/` | 规范原文，`docs/README.md` 是唯一索引 |
 | `electron/cloud/` | 终端执行器（device agent / 工单 worktree / 工具守卫），只跑在桌面端主进程 |
@@ -133,6 +133,7 @@ npm run build      # 渲染层 + bridge + 主进程
 | [AGENT_TRACE](docs/architecture/AGENT_TRACE.md) | 流式事件协议与思考 / 工具轨迹数据模型 |
 | [GIT_WORKTREE_SESSIONS](docs/requirements/GIT_WORKTREE_SESSIONS.md) | 工作树会话的完整需求与验收场景 |
 | [CLOUD_AGENT_PI](docs/requirements/CLOUD_AGENT_PI.md) | 动云端 Agent / 终端派活（工单）之前的唯一需求源 |
+| [cloud-agent](docs/agent/cloud-agent.md) | 云端服务架构、本地运行、现网部署与**按需主动更新 SOP（方式 B）**、排障 |
 | [AGENT-TESTING](docs/guides/AGENT-TESTING.md) | Agent 功能手动验收步骤 |
 | [reporting](docs/agent/reporting.md) | 什么时候该写报告、写到哪、怎么清理 |
 | [STATUS](docs/progress/STATUS.md) · [BACKLOG](docs/progress/BACKLOG.md) | 现状快照（STATUS）与唯一任务表（BACKLOG） |

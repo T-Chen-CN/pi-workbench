@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pi Cloud 自动拉取更新脚本（Pull 模式，服务器零构建）：
+# Pi Cloud 按需拉取更新脚本（Pull 模式，服务器零构建；手动触发，不设定时自动重启）：
 # 1. 拉取 GitHub Release (cloud-latest) 的 pi-cloud-manifest.json，对比已安装 sha256；
 # 2. 有新版才下载 pi-cloud-bundle.tar.gz 并严格校验 SHA-256；
 # 3. 解压到 /opt/pi-cloud/releases/<releaseId>，原子切 current 软链并重启 pi-cloud；
