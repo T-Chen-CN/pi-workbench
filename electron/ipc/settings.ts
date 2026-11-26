@@ -24,6 +24,8 @@ const DEFAULT_SETTINGS = {
   autoInstallWorktreeDeps: true,
   /** 主进程请求（AI 供应商 / GitHub / 联网搜索）跟随操作系统代理 */
   useSystemProxy: true,
+  /** 后台自动跟随 pi.dev 模型目录；PI_OFFLINE=1 时总开关优先关闭（D6） */
+  autoRefreshCatalog: true,
 }
 
 let settingsCache: Record<string, any> = {}
@@ -148,6 +150,14 @@ export function registerSettingsIpc(): void {
           sanitized.useSystemProxy = settingsCache.useSystemProxy
         } else {
           delete sanitized.useSystemProxy
+        }
+      }
+      // 自动更新模型目录：同上，缺失时保留现有值
+      if (typeof sanitized.autoRefreshCatalog !== 'boolean') {
+        if (typeof settingsCache.autoRefreshCatalog === 'boolean') {
+          sanitized.autoRefreshCatalog = settingsCache.autoRefreshCatalog
+        } else {
+          delete sanitized.autoRefreshCatalog
         }
       }
       await saveSettingsFile(sanitized)

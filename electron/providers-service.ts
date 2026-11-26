@@ -17,11 +17,13 @@ import type { Api, Model } from '@earendil-works/pi-ai'
 import {
   PRESET_PROVIDER_IDS,
   PROVIDER_PRESETS,
+  builtinCatalogGeneratedAt,
   catalogLimits,
   credentialFingerprint,
   diffCatalogSnapshots,
   filterEffectiveCatalogModels,
   isPresetProviderId,
+  isRemoteCatalogEffective,
   normalizeOverrides,
   providerModelsProbeRequest,
   resolveLimits,
@@ -35,6 +37,27 @@ import { createDesktopCredentialStore } from './credentials-store.js'
 import { createDesktopProvidersConfigStore } from './providers-config.js'
 import { getModelsStore } from './models-store.js'
 import { deviceId } from './device-id.js'
+import { getAppSettingsCache } from './ipc/settings.js'
+
+/** `PI_OFFLINE` 总开关（D6）：任意非 0/false 值都视为离线模式，禁止请求远端模型目录 */
+export function isPiOffline(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.PI_OFFLINE
+  if (typeof raw !== 'string') return false
+  const normalized = raw.trim().toLowerCase()
+  return normalized !== '' && normalized !== '0' && normalized !== 'false'
+}
+
+/** 是否允许后台自动联网刷新模型目录（D6：`PI_OFFLINE` 优先于应用设置） */
+export function isCatalogNetworkAllowed(): boolean {
+  if (isPiOffline()) return false
+  return getAppSettingsCache().autoRefreshCatalog !== false
+}
+
+export interface ProviderDirectoryView {
+  source: 'remote' | 'bundled'
+  checkedAt?: number
+  lastModified?: number
+}
 
 export interface ProviderModelView {
   id: string
@@ -62,6 +85,8 @@ export interface ProviderView {
   active: boolean
   model?: string
   models: ProviderModelView[]
+  /** 模型目录来源与时间戳（D12 / D26） */
+  directory: ProviderDirectoryView
 }
 
 let catalogRuntime: ModelRuntime | null = null
@@ -173,12 +198,25 @@ function thinkingLevels(model: Model<Api>): string[] {
   return levels.filter((level) => map[level] !== null && map[level] !== undefined)
 }
 
+function directoryView(snapshot: CatalogSnapshot | undefined): ProviderDirectoryView {
+  const effectiveRemote = Boolean(
+    snapshot && snapshot.ids.length > 0 && isRemoteCatalogEffective(snapshot.lastModified)
+  )
+  return {
+    source: effectiveRemote ? 'remote' : 'bundled',
+    ...(typeof snapshot?.checkedAt === 'number' ? { checkedAt: snapshot.checkedAt } : {}),
+    ...(typeof snapshot?.lastModified === 'number' ? { lastModified: snapshot.lastModified } : {}),
+  }
+}
+
 /** 供应商列表（含能力表）；`activeProvider` 指向的那个额外标 active */
 export async function listProviders(): Promise<{
   providers: ProviderView[]
   activeProvider: string | null
+  offline: boolean
+  builtinGeneratedAt?: number
 }> {
-  const [{ runtime, modelsByProvider, store }, credentialInfo] = await Promise.all([
+  const [{ runtime, snapshots, modelsByProvider, store }, credentialInfo] = await Promise.all([
     loadCatalogContext(),
     credentialsStore().list(),
   ])
@@ -200,10 +238,16 @@ export async function listProviders(): Promise<{
       active: config.activeProvider === preset.id,
       ...(entry?.model ? { model: entry.model } : {}),
       models,
+      directory: directoryView(snapshots.get(preset.id)),
     }
   })
 
-  return { providers, activeProvider: config.activeProvider }
+  return {
+    providers,
+    activeProvider: config.activeProvider,
+    offline: isPiOffline(),
+    builtinGeneratedAt: builtinCatalogGeneratedAt(),
+  }
 }
 
 /**
@@ -379,6 +423,20 @@ export async function refreshProviders(force = false): Promise<{
   checkedAt: number
   error?: string
 }> {
+  if (isPiOffline()) {
+    return {
+      success: false,
+      added: 0,
+      removed: 0,
+      checkedAt: Date.now(),
+      error: 'PI_OFFLINE',
+    }
+  }
+  // 关闭自动更新时，后台/自动刷新（force=false）静默跳过；用户手动点刷新（force=true）仍放行
+  if (!force && !isCatalogNetworkAllowed()) {
+    return { success: true, added: 0, removed: 0, checkedAt: Date.now() }
+  }
+
   const runtime = await getCatalogRuntime()
   const store = getModelsStore()
   const before = await store.snapshot()

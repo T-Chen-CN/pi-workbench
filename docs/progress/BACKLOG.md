@@ -20,15 +20,12 @@
 
 | ID | 项目 | 优先级 | 状态 |
 | --- | --- | --- | --- |
-| P-01 | 供应商预设与鉴权（8 家）：固定 provider + safeStorage 凭证 + OAuth 登录 | P1 | 🟡 桌面端随 0.11.0 发布（P0–P5 配置部分，`71a572c`→`5278080`）：凭证文件存储 / 旧配置迁移 / 运行时切 catalog / 协议与回落修正 / 设置页 + OAuth 登录（`providers:*` IPC）。方案见 [provider-presets](../architecture/provider-presets.md)，剩下的是 P-02 ~ P-07 |
+| P-01 | 供应商预设与鉴权（8 家）：固定 provider + safeStorage 凭证 + OAuth 登录 | P1 | 🟡 桌面端随 0.11.0 发布（P0–P5 配置部分，`71a572c`→`5278080`）：凭证文件存储 / 旧配置迁移 / 运行时切 catalog / 协议与回落修正 / 设置页 + OAuth 登录（`providers:*` IPC）。方案见 [provider-presets](../architecture/provider-presets.md)，剩下的是 P-02 / P-03 / P-05 / P-07 / P-08 |
 | P-02 | 云端 OAuth 登录（D18 / D19） | P2 | ⬜ 未做：服务端 auth flow（`start` / `events` / `answer` / `cancel`）+ 临时状态表（PKCE verifier、device code，**不可跨实例**）+ 云端配置页登录 UI + 成功凭证写回 `CloudConfigRecord.credentialCipher`。四条路径各一次：`xai` device code · `anthropic` copy-code · `openai-codex` device code · `openai` 粘贴回调 URL |
 | P-03 | 供应商预设的真实凭证手工验收（发布前必做） | P1 | ⬜ 未做（清单见 [provider-presets §11.2](../architecture/provider-presets.md)）：8 家 × api_key 各一次；4 条 OAuth；下调上下文/输出上限在**轮次边界**生效且不打断；换模型档位自动降级；会话模型回落不弹提示；云端配置页 Key 只回掩码 |
-| P-04 | 目录跟随的两个开关与来源展示（D6 / D12） | P2 | ⬜ 未做：目录刷新「默认开、可关」的设置项、`PI_OFFLINE` 总开关、设置页展示 `source`（bundled / remote）与目录时间戳 |
 | P-05 | SDK 行为实测清单（§13 遗留问题） | P2 | ⬜ 未做：`openai` 粘贴回填的 `client_id` 是否被 token 交换接受；各家订阅账号的额外策略；`deepseek` / `xiaomi*` 是否存在 `/models`（决定 Key 探测走「真校验」还是「404 放行」）；真实 `maxTokens` 与 SDK `clampMaxTokensToContext` 的边界 |
-| P-06 | 目录「删除同步」（D12 遗留） | P3 | ⬜ 未做：清空目录缓存后可能短暂回退到旧列表；需要一次确认式刷新或「删除以远端为准」的显式提示 |
 | P-07 | models.dev 富数据（价格 / 限额 / 模态） | P3 | ⬜ 未做：独立立项，见 [provider-presets §8.3](../architecture/provider-presets.md)；当前能力表只展示 catalog 可读字段 |
 | P-08 | 自建 OAuth 应用（用自己域名做回调） | P3 | ⬜ 未做：需向各家申请 client_id + 备案 + 自实现授权码交换；当前复用 pi-ai 内置的 redirect 配置，用户会被带到 `pi.dev` 的授权页 |
-| P-10 | `openai` 与 `openai-codex` 是两套独立凭证 | P3 | ⬜ 未做：设置页文案要讲清「登录一次不代表两边都能用」，否则用户会以为 Codex 订阅就是 OpenAI Key |
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
 | C-01 | 云端 Agent（开发调度）：Pi 内核 + 工单级委派 | P0 | 🟡 代码 + 部署已落地（2026-11-21，见 [cloud-agent](../agent/cloud-agent.md)）：内核注入点 / 协议契约 / `apps/cloud` / 终端执行器 / 桌面端云端页 / Web 客户端 / 运维件；已部署到 `tchen-xiaoxiao.com`（systemd + Caddy + 每日备份），公网自检 34/34 通过（`apps/cloud/scripts/acceptance.mjs`）。**剩**：真派活闭环人工走查（A-19/A-20/A-21，需真实供应商 Key），以及把 2026-11-22 的代码补丁重新部署（生产还在上一版） |
@@ -40,6 +37,7 @@
 
 ### 已交付（只留一行，细节在 git）
 
+- 2026-11-26 **P-04 / P-06 / P-10（模型目录跟随开关、来源展示与凭证提示）**：新增 `autoRefreshCatalog` 设置项与 `PI_OFFLINE` 总开关，统一接入主进程与工单执行器；`providers:list` 透出目录 `source`（`remote` / `bundled`）与更新时间；设置页增加自动更新开关、远端/内置快照与下架移除说明，以及 `openai` / `openai-codex` 独立凭证说明。
 - 2026-11-26 **P-09 & C-06（云端汇报/守卫收口 + 回收竞态修复）**：修复 `CloudTaskRunner.runStart()` 准备期失败先发帧再清 `starting` 导致的 `closeUnit` 偶发竞态；落地改动清单 `attention` 分组与 diff 疑似密钥扫描（只报位置不打印值，F-36 / A-29）、工单 worktree 独立 `pre-push` hook（`extensions.worktreeConfig` 隔离主工作树，D-32 / A-44）、重连快照「你离开期间…」离线汇总（F-51 / A-23）、桌面端状态栏与 Web 顶栏细化指示器与停止入口（4.6 / A-08）。
 - 2026-11-26 **R-23 输出预算与截断**：0.7.7–0.7.9 落地截断报错、用量拆分、历史防污染与上限下调；0.11.0 升 Pi SDK 1.3.0 与切官方 catalog 后，自动压缩留白（`reserveTokens`）、`isRecoverableLength` 单次压缩重试、压缩摘要预算、标题 512 token 预算与 `thinkingFormat` / `reasoning_effort` 已全部原生覆盖；补齐溢出压缩重试联动回归并修复看门狗挂载时序。
 - 2026-11-22 **解绑识别 / 重连对账 / 桌面端授权入口**（F-08 · A-15 · A-13 · A-41 · F-21 · D-11 · F-16 / F-17 / F-18）：升级阶段 401 → `revoked` 并停止重连 + 桌面端「解除配对」；`hello` 带 `runningTasks`，服务端对已落终态 / 孤儿工单回 `task_cancel`（终端不再把已取消的活干完）；桌面端补 `confirm_plan` 入口。同类小修：工单 agentDir 的 `compaction` 参数、systemd `LimitNOFILE`。

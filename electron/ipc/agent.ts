@@ -4,7 +4,7 @@ import * as path from 'path'
 import { getAppDir, getBridgeEntryUrl } from '../app-paths.js'
 import { isTrustedWorkspacePath } from '../workspace-trust.js'
 import { providerConfigKey } from '../agent-config-key.js'
-import { activeProviderConfig } from '../providers-service.js'
+import { activeProviderConfig, isCatalogNetworkAllowed } from '../providers-service.js'
 import { createDesktopCredentialStore } from '../credentials-store.js'
 import { getModelsStore } from '../models-store.js'
 import { sanitizeApprovalDecision } from '../approval-broker.js'
@@ -96,7 +96,7 @@ async function initializeWorkspaceAgent(
       apiConfig: providerConfig,
       credentials: createDesktopCredentialStore(),
       modelsStore: getModelsStore(),
-      allowModelNetwork: true,
+      allowModelNetwork: isCatalogNetworkAllowed(),
       // 联网是应用基础能力：扩展随包内置，由 Agent 在每次创建会话时加载
       webAccessExtensionPaths: webAccessExtensionPaths(),
       getWebAccessConfigVersion: () => currentWebSearchConfigVersion(),

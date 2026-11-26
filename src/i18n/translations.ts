@@ -818,6 +818,16 @@ export const translations = {
     providerRefreshCatalog: '刷新模型目录',
     providerRefreshed: '目录已更新（新增 {added} / 移除 {removed}）',
     providerRefreshFailed: '刷新失败：{error}',
+    providerAutoRefreshCatalog: '自动更新模型目录',
+    providerAutoRefreshCatalogOn: '已开启（跟随 pi.dev 目录）',
+    providerAutoRefreshCatalogOff: '已关闭（仅手动刷新时同步）',
+    providerAutoRefreshCatalogHint: '开启后在后台跟随 pi.dev 最新模型与能力；设置环境变量 PI_OFFLINE=1 可全局强制离线。',
+    providerCatalogOffline: '已启用离线模式（PI_OFFLINE），禁止联网刷新目录，当前使用本地缓存或内置快照。',
+    providerCatalogSourceRemote: '目录来源：远端同步 · 更新于 {time}（列表以最近一次远端目录为准）',
+    providerCatalogSourceBundled: '目录来源：内置快照（{time}）· 点击「刷新模型目录」同步远端后会移除上游已下架模型',
+    providerCatalogSourceBundledNoDate: '目录来源：内置快照 · 点击「刷新模型目录」同步远端后会移除上游已下架模型',
+    providerOpenAICodexSeparateHint:
+      'OpenAI（API Key）与 OpenAI Codex（ChatGPT 订阅）是两套独立凭证，登录其中一个不会自动解锁另一个。',
     providerCapabilitiesColumn: '能力',
     providerReasoningYes: '支持思考',
     providerReasoningNo: '不支持思考',
@@ -1783,6 +1793,21 @@ export const translations = {
     providerRefreshCatalog: 'Refresh model catalog',
     providerRefreshed: 'Catalog updated ({added} added / {removed} removed)',
     providerRefreshFailed: 'Refresh failed: {error}',
+    providerAutoRefreshCatalog: 'Auto-update model catalog',
+    providerAutoRefreshCatalogOn: 'Enabled (follows pi.dev)',
+    providerAutoRefreshCatalogOff: 'Disabled (manual refresh only)',
+    providerAutoRefreshCatalogHint:
+      'Follows model capabilities and updates from pi.dev in the background. Set PI_OFFLINE=1 to disable catalog networking globally.',
+    providerCatalogOffline:
+      'Offline mode (PI_OFFLINE) is active; remote catalog refresh is disabled and local cache or bundled snapshot is used.',
+    providerCatalogSourceRemote:
+      'Catalog source: remote · updated {time} (list reflects the latest remote catalog)',
+    providerCatalogSourceBundled:
+      'Catalog source: bundled snapshot ({time}) · click "Refresh model catalog" to sync with upstream and remove retired models',
+    providerCatalogSourceBundledNoDate:
+      'Catalog source: bundled snapshot · click "Refresh model catalog" to sync with upstream and remove retired models',
+    providerOpenAICodexSeparateHint:
+      'OpenAI (API key) and OpenAI Codex (ChatGPT subscription) use separate credentials; signing into one does not unlock the other.',
     providerCapabilitiesColumn: 'Capabilities',
     providerReasoningYes: 'reasoning',
     providerReasoningNo: 'no reasoning',

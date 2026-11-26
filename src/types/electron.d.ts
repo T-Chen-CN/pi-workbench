@@ -1016,6 +1016,12 @@ export interface ProviderModelView {
   cost?: unknown
 }
 
+export interface ProviderDirectoryView {
+  source: 'remote' | 'bundled'
+  checkedAt?: number
+  lastModified?: number
+}
+
 export interface ProviderView {
   id: ProviderId
   name: string
@@ -1025,12 +1031,15 @@ export interface ProviderView {
   active: boolean
   model?: string
   models: ProviderModelView[]
+  directory?: ProviderDirectoryView
 }
 
 export interface ProvidersListResult {
   success: boolean
   providers?: ProviderView[]
   activeProvider?: string | null
+  offline?: boolean
+  builtinGeneratedAt?: number
   error?: string
 }
 

@@ -32,6 +32,9 @@ export const DEFAULT_AUTO_INSTALL_WORKTREE_DEPS = true
 /** 主进程请求（AI 供应商 / GitHub / 联网搜索）跟随系统代理 */
 export const DEFAULT_USE_SYSTEM_PROXY = true
 
+/** 后台自动跟随 pi.dev 模型目录；PI_OFFLINE=1 时总开关优先关闭（D6） */
+export const DEFAULT_AUTO_REFRESH_CATALOG = true
+
 export function isPermissionLevel(value: unknown): value is PermissionLevel {
   return value === 'readonly' || value === 'ask' || value === 'auto'
 }
@@ -83,6 +86,8 @@ interface SettingsState {
   autoInstallWorktreeDeps: boolean
   /** 主进程请求跟随操作系统代理；主进程读取同一字段 */
   useSystemProxy: boolean
+  /** 后台自动更新模型目录；主进程读取同一字段（D6） */
+  autoRefreshCatalog: boolean
   setAutoSave: (enabled: boolean) => void
   setAutoSaveDelay: (delayMs: number) => void
   setPermissionLevel: (level: PermissionLevel) => void
@@ -97,6 +102,7 @@ interface SettingsState {
   setCloseToTray: (enabled: boolean) => void
   setAutoInstallWorktreeDeps: (enabled: boolean) => void
   setUseSystemProxy: (enabled: boolean) => void
+  setAutoRefreshCatalog: (enabled: boolean) => void
   hydrate: (settings: {
     autoSave?: unknown
     autoSaveDelay?: unknown
@@ -111,6 +117,7 @@ interface SettingsState {
     closeToTray?: unknown
     autoInstallWorktreeDeps?: unknown
     useSystemProxy?: unknown
+    autoRefreshCatalog?: unknown
   }) => void
 }
 
@@ -129,6 +136,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   closeToTray: DEFAULT_CLOSE_TO_TRAY,
   autoInstallWorktreeDeps: DEFAULT_AUTO_INSTALL_WORKTREE_DEPS,
   useSystemProxy: DEFAULT_USE_SYSTEM_PROXY,
+  autoRefreshCatalog: DEFAULT_AUTO_REFRESH_CATALOG,
 
   setAutoSave: (enabled) => set({ autoSave: enabled }),
 
@@ -162,6 +170,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setAutoInstallWorktreeDeps: (enabled) => set({ autoInstallWorktreeDeps: enabled }),
 
   setUseSystemProxy: (enabled) => set({ useSystemProxy: enabled }),
+
+  setAutoRefreshCatalog: (enabled) => set({ autoRefreshCatalog: enabled }),
 
   hydrate: (settings) =>
     set((state) => ({
@@ -213,5 +223,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         typeof settings.useSystemProxy === 'boolean'
           ? settings.useSystemProxy
           : state.useSystemProxy,
+      autoRefreshCatalog:
+        typeof settings.autoRefreshCatalog === 'boolean'
+          ? settings.autoRefreshCatalog
+          : state.autoRefreshCatalog,
     })),
 }))

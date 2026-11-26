@@ -13,7 +13,7 @@
 | 阶段 | 本地 Agent 工作台稳定期；模型配置改为 8 家固定供应商 + OAuth（0.11.x）；云端 Agent 已部署运行，剩 P1/P2 待办 |
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
-| 质量门槛 | `type-check` · `lint` · `npm test`（165 文件 / 1682 用例）· `design-system` 全绿 |
+| 质量门槛 | `type-check` · `lint` · `npm test`（167 文件 / 1690 用例）· `design-system` 全绿 |
 | 云端 Agent | **P0 代码 + 部署已落地并在线上运行**：`https://tchen-xiaoxiao.com`（systemd + Caddy + 每日备份，release 软链可回滚），`/v1/health` 返回 `ok/hasAccount/ready` 全为 true（账号与云端模型配置已就位），公网自检 34/34；**2026-11-22 补丁**：解绑识别（A-15）、重连对账（A-13/A-41）、桌面端「确认方案并授权」入口（D-11）、工单压缩参数与 `LimitNOFILE`；**2026-11-26 C-06 收口**：改动清单 `attention` 分组、diff 密钥扫描、离线期汇报、状态栏/Web 细化指示器与停止入口、工单 worktree 专属 `pre-push` hook。剩真派活人工走查 + 重新部署 + P1/P2 待办（C-03 / C-02 / C-07） |
 
 ## 正在做 / 下一步

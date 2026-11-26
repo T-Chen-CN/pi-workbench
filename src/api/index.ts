@@ -198,7 +198,8 @@ const mockAPI = {
       theme: 'light',
       autoSave: true,
       autoSaveDelay: 2000,
-      useSystemProxy: true
+      useSystemProxy: true,
+      autoRefreshCatalog: true
     }
     try {
       const saved = localStorage.getItem(MOCK_SETTINGS_KEY)
@@ -366,7 +367,7 @@ const mockAPI = {
   // Web 模式下没有主进程：供应商列表只用于展示，登录 / 凭证不可用
   providersList: async (): Promise<ProvidersListResult> => {
     console.log('[Mock] providersList')
-    return { success: true, providers: [], activeProvider: null }
+    return { success: true, providers: [], activeProvider: null, offline: false }
   },
   providersSetActive: async (): Promise<{ success: boolean; error?: string }> => ({
     success: false,

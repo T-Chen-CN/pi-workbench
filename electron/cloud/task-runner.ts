@@ -32,6 +32,7 @@ import {
 import { annotateChangedFiles, scanWorktreeSecrets } from './task-report.js'
 import { createDesktopCredentialStore } from '../credentials-store.js'
 import { getModelsStore } from '../models-store.js'
+import { isCatalogNetworkAllowed } from '../providers-service.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -367,7 +368,7 @@ export class CloudTaskRunner {
       },
       credentials: createDesktopCredentialStore(),
       modelsStore: getModelsStore(),
-      allowModelNetwork: true,
+      allowModelNetwork: isCatalogNetworkAllowed(),
       logger: this.deps.logger,
       // 工单会话：不挂计划与工作树扩展（worktree 扩展用的是实例级 workspaceDir）
       builtinExtensions: { plan: false, worktree: false },

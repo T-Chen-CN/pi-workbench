@@ -17,12 +17,34 @@ import type {
 } from '../types/electron'
 import { api } from '../api'
 import { useI18nStore } from '../store/i18nStore'
+import { useSettingsStore } from '../store/settingsStore'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
 import { emitAppEvent } from '../utils/appEvents'
+import { persistAppSettings } from '../utils/persistSettings'
 import { Button, Field, Input, Select } from './ui'
 import { SettingsTable, SettingsTableRow } from './patterns'
 import { ProviderAuthPanel } from './ProviderAuthPanel'
+
+function formatCatalogTime(timestamp: number | undefined): string {
+  if (!timestamp || !Number.isFinite(timestamp)) return ''
+  const date = new Date(timestamp)
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  const hh = String(date.getHours()).padStart(2, '0')
+  const mm = String(date.getMinutes()).padStart(2, '0')
+  return `${y}-${m}-${d} ${hh}:${mm}`
+}
+
+function formatCatalogDate(timestamp: number | undefined): string {
+  if (!timestamp || !Number.isFinite(timestamp)) return ''
+  const date = new Date(timestamp)
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
 
 function formatTokens(value: number): string {
   if (value >= 1_000_000) return `${Math.round((value / 1_000_000) * 10) / 10}M`
@@ -51,9 +73,13 @@ function capabilityCells(
 
 export function ProviderSettings() {
   const t = useI18nStore((store) => store.t)
+  const autoRefreshCatalog = useSettingsStore((store) => store.autoRefreshCatalog)
+  const setAutoRefreshCatalog = useSettingsStore((store) => store.setAutoRefreshCatalog)
   const [providers, setProviders] = useState<ProviderView[]>([])
   const [activeProvider, setActiveProvider] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [offline, setOffline] = useState(false)
+  const [builtinGeneratedAt, setBuiltinGeneratedAt] = useState<number | undefined>(undefined)
   const [apiKey, setApiKey] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -67,6 +93,8 @@ export function ProviderSettings() {
       }
       setProviders(result.providers)
       setActiveProvider(result.activeProvider ?? null)
+      setOffline(result.offline === true)
+      setBuiltinGeneratedAt(result.builtinGeneratedAt)
       setSelectedId((current) => {
         if (current && result.providers!.some((provider) => provider.id === current)) return current
         return result.activeProvider ?? result.providers![0]?.id ?? null
@@ -181,15 +209,26 @@ export function ProviderSettings() {
     notifyAgent()
   }
 
+  const handleAutoRefreshChange = (enabled: boolean) => {
+    setAutoRefreshCatalog(enabled)
+    void persistAppSettings({ autoRefreshCatalog: enabled })
+  }
+
   const handleRefresh = async () => {
+    if (offline) {
+      toast.info(t('providerCatalogOffline'))
+      return
+    }
     setRefreshing(true)
     try {
       const result = await api.providersRefresh(true)
       if (!result.success) {
         toast.error(
-          t('providerRefreshFailed', {
-            error: localizeError(result.error ?? '') || t('unknownError')
-          })
+          result.error === 'PI_OFFLINE'
+            ? t('providerCatalogOffline')
+            : t('providerRefreshFailed', {
+                error: localizeError(result.error ?? '') || t('unknownError')
+              })
         )
         return
       }
@@ -201,6 +240,20 @@ export function ProviderSettings() {
       setRefreshing(false)
     }
   }
+
+  const directorySummary = useMemo(() => {
+    if (!selected) return null
+    if (offline) return t('providerCatalogOffline')
+    const dir = selected.directory
+    if (dir?.source === 'remote') {
+      const stamp = formatCatalogTime(dir.checkedAt ?? dir.lastModified)
+      return t('providerCatalogSourceRemote', { time: stamp || '-' })
+    }
+    const bundledDate = formatCatalogDate(builtinGeneratedAt)
+    return bundledDate
+      ? t('providerCatalogSourceBundled', { time: bundledDate })
+      : t('providerCatalogSourceBundledNoDate')
+  }, [selected, offline, builtinGeneratedAt, t])
 
   return (
     <div className="flex max-w-2xl flex-col gap-4">
@@ -281,6 +334,12 @@ export function ProviderSettings() {
               )}
               <ProviderAuthPanel providerId={selected.id} />
             </div>
+          )}
+
+          {(selected.id === 'openai' || selected.id === 'openai-codex') && (
+            <p className="m-0 type-caption text-ink-muted">
+              {t('providerOpenAICodexSeparateHint')}
+            </p>
           )}
 
           <Field label={t('model')} hint={t('modelsAvailable', { count: selected.models.length })}>
@@ -372,16 +431,45 @@ export function ProviderSettings() {
         </>
       )}
 
-      <div className="flex items-center gap-3">
-        <Button
-          variant="secondary"
-          size="sm"
-          icon={RefreshCw}
-          loading={refreshing}
-          onClick={() => void handleRefresh()}
+      <div className="flex flex-col gap-3 border-t border-rule-divide pt-3">
+        <Field
+          label={t('providerAutoRefreshCatalog')}
+          hint={t('providerAutoRefreshCatalogHint')}
+          htmlFor="auto-refresh-catalog"
         >
-          {t('providerRefreshCatalog')}
-        </Button>
+          <label className="flex h-8 items-center gap-2 type-value text-ink">
+            <input
+              id="auto-refresh-catalog"
+              type="checkbox"
+              className="h-3 w-3 accent-[rgb(var(--accent))]"
+              checked={!offline && autoRefreshCatalog}
+              disabled={offline}
+              onChange={(event) => handleAutoRefreshChange(event.target.checked)}
+            />
+            {offline
+              ? t('providerCatalogOffline')
+              : autoRefreshCatalog
+                ? t('providerAutoRefreshCatalogOn')
+                : t('providerAutoRefreshCatalogOff')}
+          </label>
+        </Field>
+
+        {directorySummary && (
+          <p className="m-0 type-caption text-ink-muted">{directorySummary}</p>
+        )}
+
+        <div className="flex items-center gap-3">
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={RefreshCw}
+            loading={refreshing}
+            disabled={offline}
+            onClick={() => void handleRefresh()}
+          >
+            {t('providerRefreshCatalog')}
+          </Button>
+        </div>
       </div>
     </div>
   )
