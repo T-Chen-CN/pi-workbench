@@ -45,7 +45,7 @@ function decodeKey(raw: string): Buffer {
 }
 
 export function loadConfig(overrides: Partial<CloudConfig> = {}): CloudConfig {
-  const dataDir = process.env.PI_CLOUD_DATA_DIR || '/var/lib/pi-cloud'
+  const dataDir = overrides.dataDir || process.env.PI_CLOUD_DATA_DIR || '/var/lib/pi-cloud'
   const config: CloudConfig = {
     domain: process.env.PI_CLOUD_DOMAIN || 'tchen-xiaoxiao.com',
     host: process.env.PI_CLOUD_HOST || '127.0.0.1',

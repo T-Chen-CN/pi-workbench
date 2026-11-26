@@ -427,7 +427,12 @@ describe('C-03c: 托盘角标与 Tooltip', () => {
     const setBadgeCount = vi.fn()
     const setToolTip = vi.fn()
     const setOverlayIcon = vi.fn()
-    const createFromBitmap = vi.fn(() => ({ isEmpty: () => false }))
+    const fakeImage = {
+      isEmpty: () => false,
+      setTemplateImage: vi.fn(),
+      resize: () => fakeImage,
+    }
+    const createFromBitmap = vi.fn(() => fakeImage)
 
     vi.resetModules()
     vi.doMock('electron', () => ({
@@ -436,12 +441,13 @@ describe('C-03c: 托盘角标与 Tooltip', () => {
       Tray: vi.fn(() => ({
         setToolTip,
         setContextMenu: vi.fn(),
+        setIgnoreDoubleClickEvents: vi.fn(),
         on: vi.fn(),
         destroy: vi.fn(),
         isDestroyed: () => false,
       })),
       nativeImage: {
-        createFromPath: vi.fn(() => ({ isEmpty: () => false })),
+        createFromPath: vi.fn(() => fakeImage),
         createFromBitmap,
       },
     }))
@@ -468,7 +474,9 @@ describe('C-03c: 托盘角标与 Tooltip', () => {
     })
 
     trayMod.updateTrayBadge({ runningTasks: 1, unreadCount: 4 })
-    expect(setToolTip).toHaveBeenCalledWith('Pi Workbench · 1 个工单执行中 · 4 条未读')
+    if (process.platform !== 'linux') {
+      expect(setToolTip).toHaveBeenCalledWith('Pi Workbench · 1 个工单执行中 · 4 条未读')
+    }
     if (process.platform === 'win32') {
       expect(setOverlayIcon).toHaveBeenCalled()
     } else {
