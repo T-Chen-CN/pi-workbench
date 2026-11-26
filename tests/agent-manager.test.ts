@@ -3135,6 +3135,167 @@ describe('compaction events', () => {
       })
     )
   })
+
+  it('recovers the retried reply after overflow compaction shrinks session.messages', async () => {
+    const session = createFakeSession(async (s) => {
+      // 模拟 SDK 溢出/提前截断恢复：先压缩重建更短的 messages 数组，再重试并成功回复
+      s.emit({ type: 'compaction_start', reason: 'overflow' })
+      s.messages = [
+        { role: 'compactionSummary', content: 'earlier summary', timestamp: Date.now() - 10 },
+        { role: 'user', content: 'hi', timestamp: Date.now() },
+      ]
+      s.emit({
+        type: 'compaction_end',
+        reason: 'overflow',
+        result: { tokensBefore: 90_000 },
+        aborted: false,
+        willRetry: true,
+      })
+      s.messages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Recovered after compaction' }],
+        stopReason: 'stop',
+        timestamp: Date.now(),
+      })
+    })
+    // 预置多条历史消息，使压缩后的数组长度小于 chat 开始时的 messageStartIndex
+    const oldTime = Date.now() - 60_000
+    session.messages = [
+      { role: 'user', content: 'u1', timestamp: oldTime },
+      { role: 'assistant', content: 'a1', timestamp: oldTime + 1 },
+      { role: 'user', content: 'u2', timestamp: oldTime + 2 },
+      { role: 'assistant', content: 'a2', timestamp: oldTime + 3 },
+      { role: 'user', content: 'u3', timestamp: oldTime + 4 },
+      { role: 'assistant', content: 'a3', timestamp: oldTime + 5 },
+    ]
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const events: Array<Record<string, unknown>> = []
+    const result = await manager.chat('hi', { onTrace: (event) => events.push(event) })
+
+    expect(result.success).toBe(true)
+    expect(result.response).toBe('Recovered after compaction')
+    expect(events).toContainEqual({ type: 'compaction_start', reason: 'overflow' })
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'compaction_end',
+        reason: 'overflow',
+        tokensBefore: 90_000,
+        willRetry: true,
+      })
+    )
+    expect(manager.getMessageHistory().filter((m) => m.role === 'assistant')).toHaveLength(1)
+  })
+
+  it('still reports output-truncated and keeps history clean if retry hits length again', async () => {
+    const session = createFakeSession(async (s) => {
+      s.emit({ type: 'compaction_start', reason: 'overflow' })
+      s.messages = [
+        { role: 'compactionSummary', content: 'earlier summary', timestamp: Date.now() - 10 },
+        { role: 'user', content: 'hi', timestamp: Date.now() },
+      ]
+      s.emit({
+        type: 'compaction_end',
+        reason: 'overflow',
+        result: { tokensBefore: 90_000 },
+        aborted: false,
+        willRetry: true,
+      })
+      s.messages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'still cut off' }],
+        stopReason: 'length',
+        timestamp: Date.now(),
+        usage: {
+          input: 20_000,
+          output: 8192,
+          reasoning: 7000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 28_192,
+        },
+      })
+      s.emit({
+        type: 'compaction_end',
+        reason: 'overflow',
+        result: undefined,
+        aborted: false,
+        willRetry: false,
+        errorMessage: 'Truncated response recovery failed after one compact-and-retry attempt.',
+      })
+    })
+    const oldTime = Date.now() - 60_000
+    session.messages = [
+      { role: 'user', content: 'u1', timestamp: oldTime },
+      { role: 'assistant', content: 'a1', timestamp: oldTime + 1 },
+      { role: 'user', content: 'u2', timestamp: oldTime + 2 },
+      { role: 'assistant', content: 'a2', timestamp: oldTime + 3 },
+      { role: 'user', content: 'u3', timestamp: oldTime + 4 },
+      { role: 'assistant', content: 'a3', timestamp: oldTime + 5 },
+    ]
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const events: Array<Record<string, unknown>> = []
+    const result = await manager.chat('hi', { onTrace: (event) => events.push(event) })
+
+    expect(result.success).toBe(false)
+    expect(result.errorCode).toBe('output-truncated')
+    expect(result.usage?.reasoning).toBe(7000)
+    expect(manager.getMessageHistory().filter((m) => m.role === 'assistant')).toHaveLength(0)
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'compaction_end',
+        reason: 'overflow',
+        willRetry: false,
+        error: 'Truncated response recovery failed after one compact-and-retry attempt.',
+      })
+    )
+  })
+
+  it('pauses the stall watchdog during slow overflow compaction and retry', async () => {
+    let finishCompaction = () => {}
+    const session = createFakeSession(async (s) => {
+      s.emit({ type: 'compaction_start', reason: 'overflow' })
+      await new Promise<void>((resolve) => {
+        finishCompaction = resolve
+      })
+      s.emit({
+        type: 'compaction_end',
+        reason: 'overflow',
+        result: { tokensBefore: 80_000 },
+        aborted: false,
+        willRetry: true,
+      })
+      s.messages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Completed after slow compaction' }],
+        stopReason: 'stop',
+        timestamp: Date.now(),
+      })
+    })
+    session.abort = vi.fn(async () => {})
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    vi.useFakeTimers()
+    try {
+      const pending = manager.chat('hi')
+      // 压缩耗时超过空闲看门狗阈值，也不得误判停滞而中止
+      await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS + 10_000)
+      expect(session.abort).not.toHaveBeenCalled()
+
+      finishCompaction()
+      const result = await pending
+
+      expect(session.abort).not.toHaveBeenCalled()
+      expect(result.success).toBe(true)
+      expect(result.response).toBe('Completed after slow compaction')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('session export', () => {

@@ -2579,13 +2579,9 @@ export class AgentManager {
         data: image.data,
         mimeType: image.mimeType,
       }))
-      const promptPromise = session.prompt(
-        finalPrompt,
-        images.length > 0 ? { images } : undefined
-      )
-      // 防止 hardStopPromise 先触发后 promptPromise 迟到拒绝成为 Node 24 unhandledRejection
-      void promptPromise.catch(() => {})
-      // 只监视“模型静默”：工具执行与审批等待期间看门狗自动挂起，不设整轮上限
+      // 必须在 session.prompt() 之前挂好看门狗：否则 prompt 同步发出的
+      // compaction_start / agent_start 会漏掉挂起信号或误建后台看门狗
+      // 只监视“模型静默”：工具执行、审批等待与压缩期间看门狗自动挂起，不设整轮上限
       const watchdog = new StallWatchdog({
         timeoutMs: STALL_TIMEOUT_MS,
         logger: this.logger,
@@ -2608,6 +2604,13 @@ export class AgentManager {
       })
       runtime.watchdog = watchdog
       watchdog.start()
+
+      const promptPromise = session.prompt(
+        finalPrompt,
+        images.length > 0 ? { images } : undefined
+      )
+      // 防止 hardStopPromise 先触发后 promptPromise 迟到拒绝成为 Node 24 unhandledRejection
+      void promptPromise.catch(() => {})
       await Promise.race([promptPromise, hardStopPromise])
 
       if (hardStopTimer) clearTimeout(hardStopTimer)
