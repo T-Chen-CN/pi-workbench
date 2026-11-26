@@ -50,7 +50,7 @@ const AUTH_FAILURE = new RegExp(
     'could not read Username',
     'could not read Password',
     'terminal prompts disabled',
-    'Permission denied (publickey)',
+    'Permission denied \\(publickey\\)',
     'Host key verification failed',
     'Invalid username or password',
   ].join('|'),

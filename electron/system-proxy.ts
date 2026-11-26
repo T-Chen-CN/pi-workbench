@@ -7,7 +7,12 @@
  * 系统代理 / PAC / SOCKS5），关闭时直接回退到原始 `fetch`，切换即时生效无需重启。
  */
 
-import { app, net } from 'electron'
+import * as electron from 'electron'
+import * as http from 'http'
+import * as https from 'https'
+import * as tls from 'tls'
+import type { ClientRequestArgs } from 'http'
+import type { Duplex } from 'stream'
 
 export type FetchInput = string | URL | Request
 
@@ -24,6 +29,22 @@ export interface SystemProxyFetchDeps {
   isAppReady: () => boolean
   baseFetch: FetchLike
   netFetch: NetFetchLike | null
+}
+
+/** 回环地址直连不走系统代理，防止本机 Vite / OAuth 回调 / 局部测试服务被代理劫持 */
+export function isLoopbackUrl(rawUrl: string): boolean {
+  try {
+    const hostname = new URL(rawUrl).hostname.toLowerCase()
+    return (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '::1' ||
+      hostname === '[::1]' ||
+      hostname.endsWith('.localhost')
+    )
+  } catch {
+    return false
+  }
 }
 
 /** 提取 http(s) URL；非 http(s)（如 file:/data:/blob: 或非法地址）返回 null，交回原始 fetch */
@@ -54,7 +75,8 @@ export function createSystemProxyFetch(deps: SystemProxyFetchDeps): FetchLike {
     if (!deps.isEnabled() || !deps.netFetch || !deps.isAppReady()) {
       return deps.baseFetch(input, init)
     }
-    if (!extractHttpUrl(input)) {
+    const httpUrl = extractHttpUrl(input)
+    if (!httpUrl || isLoopbackUrl(httpUrl)) {
       return deps.baseFetch(input, init)
     }
     const target: string | Request = input instanceof URL ? input.toString() : input
@@ -63,6 +85,83 @@ export function createSystemProxyFetch(deps: SystemProxyFetchDeps): FetchLike {
       : { bypassCustomProtocolHandlers: true }
     return deps.netFetch(target, nextInit)
   }
+}
+
+/** 解析 Chromium `resolveProxy()` 返回的 PAC 字符串，取首个 HTTP(S) 代理项 */
+export function parseFirstHttpProxy(pacResult: string): { host: string; port: number } | null {
+  for (const rawEntry of pacResult.split(';')) {
+    const trimmed = rawEntry.trim()
+    if (!trimmed) continue
+    const [scheme, authority] = trimmed.split(/\s+/, 2)
+    const upper = scheme?.toUpperCase()
+    if (upper === 'DIRECT') return null
+    if ((upper === 'PROXY' || upper === 'HTTP' || upper === 'HTTPS') && authority) {
+      try {
+        const parsed = new URL(`${upper === 'HTTPS' ? 'https' : 'http'}://${authority}`)
+        const port = Number(parsed.port || (upper === 'HTTPS' ? '443' : '80'))
+        if (parsed.hostname && Number.isInteger(port) && port > 0 && port <= 65535) {
+          return { host: parsed.hostname, port }
+        }
+      } catch {
+        continue
+      }
+    }
+  }
+  return null
+}
+
+/** 为 `ws` 客户端构造走 HTTP CONNECT 隧道的 Agent（仅在系统代理开启且非直连/非回环时返回） */
+function createHttpConnectAgent(
+  proxy: { host: string; port: number },
+  secureTarget: boolean
+): http.Agent {
+  const BaseAgent = secureTarget ? https.Agent : http.Agent
+  class ConnectProxyAgent extends BaseAgent {
+    override createConnection(
+      options: ClientRequestArgs & { servername?: string },
+      callback?: (err: Error | null, stream: Duplex) => void
+    ): Duplex | null | undefined {
+      const targetHost = String(options.hostname || options.host || '')
+      const targetPort = Number(options.port) || (secureTarget ? 443 : 80)
+      const authority = `${targetHost}:${targetPort}`
+      const req = http.request({
+        host: proxy.host,
+        port: proxy.port,
+        method: 'CONNECT',
+        path: authority,
+        headers: { Host: authority },
+      })
+      let settled = false
+      const done = (err: Error | null, socket?: Duplex) => {
+        if (settled) return
+        settled = true
+        callback?.(err, socket as Duplex)
+      }
+      req.once('connect', (res, socket, head) => {
+        if (res.statusCode !== 200) {
+          socket.destroy()
+          done(new Error(`Proxy CONNECT rejected with HTTP ${res.statusCode}`))
+          return
+        }
+        if (head && head.length > 0) socket.unshift(head)
+        if (!secureTarget) {
+          done(null, socket)
+          return
+        }
+        const tlsSocket = tls.connect({
+          socket,
+          servername: options.servername || targetHost,
+        })
+        tlsSocket.once('error', (err) => done(err))
+        done(null, tlsSocket)
+      })
+      req.once('error', (err) => done(err))
+      req.end()
+      // createConnection 异步返回 undefined，ws 通过 callback 接收已建立的隧道 socket
+      return undefined
+    }
+  }
+  return new ConnectProxyAgent({ keepAlive: false })
 }
 
 export interface SystemProxyOptions {
@@ -74,6 +173,57 @@ let installed = false
 let originalFetch: typeof globalThis.fetch | null = null
 let proxyOptions: SystemProxyOptions | null = null
 let lastLoggedEnabled: boolean | null = null
+
+function getIsolatedProxySession(): Electron.Session | null {
+  try {
+    const sess = electron.session
+    if (typeof sess?.fromPartition !== 'function') return null
+    // 独立非持久分区：主进程 API 请求不读写渲染层 defaultSession 的 Cookie 与 HSTS
+    return sess.fromPartition('pi-system-proxy', { cache: false })
+  } catch {
+    return null
+  }
+}
+
+/** 当前主进程系统代理开关是否启用且 Electron app 已就绪（同步快速路径，避免关闭态引入微任务延迟） */
+export function isSystemProxyActive(): boolean {
+  if (!proxyOptions?.getEnabled()) return false
+  try {
+    return typeof electron.app?.isReady === 'function' && electron.app.isReady()
+  } catch {
+    return false
+  }
+}
+
+/** 为主进程 `ws` WebSocket 解析系统代理 Agent；关闭、直连或回环地址返回 undefined */
+export async function resolveWebSocketProxyAgent(wsUrl: string): Promise<http.Agent | undefined> {
+  if (!isSystemProxyActive()) return undefined
+  let parsed: URL
+  try {
+    parsed = new URL(wsUrl)
+  } catch {
+    return undefined
+  }
+  if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') return undefined
+  if (isLoopbackUrl(wsUrl)) return undefined
+  const httpEquivalent = `${parsed.protocol === 'wss:' ? 'https:' : 'http:'}//${parsed.host}${parsed.pathname}`
+  let defaultSession: Electron.Session | undefined
+  try {
+    defaultSession = electron.session?.defaultSession
+  } catch {
+    defaultSession = undefined
+  }
+  const targetSession = getIsolatedProxySession() ?? defaultSession
+  if (typeof targetSession?.resolveProxy !== 'function') return undefined
+  try {
+    const pac = await targetSession.resolveProxy(httpEquivalent)
+    const proxy = parseFirstHttpProxy(pac)
+    if (!proxy) return undefined
+    return createHttpConnectAgent(proxy, parsed.protocol === 'wss:')
+  } catch {
+    return undefined
+  }
+}
 
 function logStateIfChanged(): void {
   if (!proxyOptions) return
@@ -92,9 +242,23 @@ export function installSystemProxy(options: SystemProxyOptions): void {
     const baseFetch: FetchLike = originalFetch.bind(globalThis)
     const wrapped = createSystemProxyFetch({
       isEnabled: () => Boolean(proxyOptions?.getEnabled()),
-      isAppReady: () => typeof app?.isReady === 'function' && app.isReady(),
+      isAppReady: () => {
+        try {
+          return typeof electron.app?.isReady === 'function' && electron.app.isReady()
+        } catch {
+          return false
+        }
+      },
       baseFetch,
-      netFetch: typeof net?.fetch === 'function' ? (input, init) => net.fetch(input, init) : null,
+      netFetch:
+        typeof electron.net?.fetch === 'function'
+          ? (input, init) => {
+              const isolated = getIsolatedProxySession()
+              return isolated && typeof isolated.fetch === 'function'
+                ? isolated.fetch(input, init)
+                : electron.net.fetch(input, init)
+            }
+          : null,
     })
     globalThis.fetch = wrapped as typeof globalThis.fetch
     installed = true

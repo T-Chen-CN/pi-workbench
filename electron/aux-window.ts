@@ -14,7 +14,7 @@
  */
 
 import { screen, shell, type BrowserWindow, type BrowserWindowConstructorOptions, type Rectangle } from 'electron'
-import { handleIpc, trustIpcSender, untrustIpcSender } from './ipc/register.js'
+import { handleIpc } from './ipc/register.js'
 import { isExternalUrl } from './external-links.js'
 
 /** window.open 的 frameName 前缀；只有带前缀的 about:blank 会被放行 */
@@ -240,7 +240,13 @@ export interface AuxWindowSupportOptions {
  * - 登记窗口引用，并转发最大化状态给渲染层。
  */
 export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowSupportOptions): void {
-  host.webContents.setWindowOpenHandler(({ url, frameName, features }) => {
+  host.webContents.setWindowOpenHandler((details) => {
+    const { url, frameName, features } = details
+    const referrerUrl = typeof details.referrer?.url === 'string' ? details.referrer.url : ''
+    // 禁止来自 pw-file:// 预览子框或空来源子框拉起任何窗口或外部协议（防沙箱 HTML 逃逸）
+    if (referrerUrl.startsWith('pw-file:') || referrerUrl === 'about:blank') {
+      return { action: 'deny' }
+    }
     // 外部链接（文档 / 对话里的 http(s)）交给系统浏览器，不开内部窗口
     if (isExternalUrl(url)) {
       void shell.openExternal(url).catch(() => undefined)
@@ -261,6 +267,13 @@ export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowS
       minWidth: AUX_MIN_WIDTH,
       minHeight: AUX_MIN_HEIGHT,
       backgroundColor: parsed.backgroundColor,
+      // 辅助窗仅为 React Portal DOM 宿主：禁止继承 preload，IPC 全部经主窗口 JS Realm 调用
+      webPreferences: {
+        preload: undefined,
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+      },
       // 与主窗口同一套外壳：无边框 + 自绘窗口按钮，标题栏由 PanelWindowFrame 提供
       ...(process.platform === 'darwin'
         ? {
@@ -278,13 +291,7 @@ export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowS
 
   host.webContents.on('did-create-window', (child, details) => {
     const frameName = details.frameName
-    // 窗口销毁后读 `child.webContents`（以及它上面的 id）都会抛
-    // `Object has been destroyed`，而下面的 `closed` 回调正好跑在销毁之后。
-    // 所以 id 必须在窗口活着时取好，之后只带数字走动。
-    const senderId = child.webContents.id
     auxWindows.set(frameName, child)
-    // 拆出的面板与主窗口同源，需要继续用 IPC（链接、剪贴板、会话），因此加入可信发送者
-    trustIpcSender(senderId)
     try {
       // 不给子窗口单独设菜单：BrowserWindow 会自动继承应用菜单（Windows / Linux 上是
       // 该窗口的菜单栏），Ctrl +/-/0、Ctrl+W 等默认快捷键依附在这份菜单上。
@@ -313,8 +320,6 @@ export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowS
       // 重开同名窗口时旧窗口 closed 绝不能误删新窗口的登记记录
       const isCurrent = auxWindows.get(frameName) === child
       if (isCurrent) auxWindows.delete(frameName)
-      // 只碰创建时记下的 id：此时 child.webContents 已不可读（见上方注释）
-      untrustIpcSender(senderId)
       if (isCurrent && !host.isDestroyed()) options.onClosed(frameName)
     })
   })

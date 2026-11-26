@@ -85,7 +85,7 @@ export const HtmlPreview: React.FC<{ file: OpenFile; visible?: boolean }> = ({
         key={`${file.path}-${file.version}-${reloadKey}`}
         title={file.name}
         src={filePreviewUrl(file.path, file.version + reloadKey)}
-        sandbox="allow-scripts allow-forms allow-popups"
+        sandbox="allow-scripts allow-forms"
         className="min-h-0 w-full flex-1 border-0 bg-surface"
       />
     </div>

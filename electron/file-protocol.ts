@@ -9,7 +9,14 @@
  * - 保留目录结构，HTML 里的相对路径资源可以被正常解析。
  */
 
-import { protocol } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  protocol,
+  session,
+  type WebContents,
+} from 'electron'
 import * as fs from 'fs'
 import * as fsp from 'fs/promises'
 import * as path from 'path'
@@ -166,13 +173,34 @@ function allowedCorsOrigin(originHeader: string | null): string | null {
   return null
 }
 
+const HTML_PREVIEW_CSP = [
+  "default-src pw-file: http: https: ws: wss: data: blob:",
+  "script-src pw-file: http: https: 'unsafe-inline'",
+  "style-src pw-file: http: https: 'unsafe-inline'",
+  "img-src pw-file: http: https: data: blob:",
+  "media-src pw-file: http: https: data: blob:",
+  "font-src pw-file: http: https: data:",
+  "connect-src pw-file: http: https: ws: wss:",
+  // 禁止在预览页里派生独立 Worker（否则脱离 WebFrameMain 归属，绕过按文件拦截）
+  "worker-src 'none'",
+  "form-action 'none'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors pw-app: http://localhost:5173 http://127.0.0.1:5173",
+].join('; ')
+
 function baseHeaders(targetPath: string, size: number, originHeader: string | null = null): Headers {
+  const mime = mimeForPath(targetPath)
   const headers = new Headers({
-    'Content-Type': mimeForPath(targetPath),
+    'Content-Type': mime,
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
   })
+  // HTML 预览页强制结构性沙箱 CSP；实际外网访问由主进程 webRequest.onBeforeRequest 按文件弹窗拦截
+  if (mime.startsWith('text/html')) {
+    headers.set('Content-Security-Policy', HTML_PREVIEW_CSP)
+  }
   // 只允许应用自身 origin 跨域读取（禁止 `*` 与不透明 `null` origin，防止沙箱 HTML 预览跨域窃取工作区文件）
   const corsOrigin = allowedCorsOrigin(originHeader)
   if (corsOrigin) {
@@ -233,8 +261,191 @@ export async function serveFileRequest(
   return new Response(body, { status: range ? 206 : 200, headers })
 }
 
+export interface PreviewFrameLike {
+  url?: string
+  parent?: PreviewFrameLike | null
+}
+
+export interface PreviewNetworkRequest {
+  url: string
+  frame?: PreviewFrameLike | null
+  initiatorOrigin?: string
+  referrer?: string
+  webContents?: WebContents | unknown
+}
+
+export interface PreviewNetworkPromptPayload {
+  filePath: string
+  requestUrl: string
+  targetHost: string
+  webContents?: WebContents | unknown
+}
+
+export interface PreviewNetworkGuard {
+  handleRequest: (
+    details: PreviewNetworkRequest,
+    callback: (response: { cancel?: boolean }) => void
+  ) => void
+  clearDecisions: () => void
+}
+
+const PREVIEW_ORIGIN = `${FILE_SCHEME}://${FILE_HOST}`
+
+/** 沿 frame 祖先链追溯触发外网请求的本地预览文件路径；已销毁的 frame 访问可能抛错，必须兜底 */
+export function resolvePreviewFilePath(
+  details: Pick<PreviewNetworkRequest, 'frame' | 'referrer'>
+): string | null {
+  let cursor: PreviewFrameLike | null = details.frame ?? null
+  for (let depth = 0; depth < 32 && cursor; depth += 1) {
+    let frameUrl = ''
+    try {
+      frameUrl = typeof cursor.url === 'string' ? cursor.url : ''
+    } catch {
+      frameUrl = ''
+    }
+    if (frameUrl.startsWith(`${FILE_SCHEME}://`)) {
+      return decodeFilePath(frameUrl)
+    }
+    try {
+      cursor = cursor.parent ?? null
+    } catch {
+      cursor = null
+    }
+  }
+  if (typeof details.referrer === 'string' && details.referrer.startsWith(`${FILE_SCHEME}://`)) {
+    return decodeFilePath(details.referrer)
+  }
+  return null
+}
+
+function extractTargetHost(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).host || rawUrl
+  } catch {
+    return rawUrl
+  }
+}
+
+function previewDecisionKey(filePath: string): string {
+  return process.platform === 'win32' ? filePath.toLowerCase() : filePath
+}
+
+/**
+ * 本地 HTML 预览的外网按需审批守卫：
+ * - 非 `pw-file://` 来源请求直接放行（不影响应用本身与开发服务器）；
+ * - `pw-file://` 预览页默认离线，首次发起 http(s)/ws(s) 请求时在主进程暂停并弹一次确认框；
+ * - 同一文件并发多个外网请求共享同一个待决 Promise，避免弹窗风暴；
+ * - 确认结果按文件路径在本会话期内缓存；无法定位文件或弹窗异常时一律 fail-closed 拒绝。
+ */
+export function createPreviewNetworkGuard(options: {
+  prompt: (payload: PreviewNetworkPromptPayload) => Promise<boolean>
+}): PreviewNetworkGuard {
+  const decisions = new Map<string, 'allow' | 'deny'>()
+  const inFlight = new Map<string, Promise<boolean>>()
+
+  const handleRequest: PreviewNetworkGuard['handleRequest'] = (details, callback) => {
+    const filePath = resolvePreviewFilePath(details)
+    if (!filePath) {
+      if (details.initiatorOrigin === PREVIEW_ORIGIN) {
+        callback({ cancel: true })
+        return
+      }
+      callback({})
+      return
+    }
+
+    const key = previewDecisionKey(filePath)
+    const decided = decisions.get(key)
+    if (decided === 'allow') {
+      callback({ cancel: false })
+      return
+    }
+    if (decided === 'deny') {
+      callback({ cancel: true })
+      return
+    }
+
+    let pending = inFlight.get(key)
+    if (!pending) {
+      const targetHost = extractTargetHost(details.url)
+      pending = Promise.resolve()
+        .then(() =>
+          options.prompt({
+            filePath,
+            requestUrl: details.url,
+            targetHost,
+            webContents: details.webContents,
+          })
+        )
+        .then((allowed) => Boolean(allowed))
+        .catch(() => false)
+        .then((allowed) => {
+          decisions.set(key, allowed ? 'allow' : 'deny')
+          inFlight.delete(key)
+          return allowed
+        })
+      inFlight.set(key, pending)
+    }
+
+    void pending.then((allowed) => callback({ cancel: !allowed }))
+  }
+
+  return {
+    handleRequest,
+    clearDecisions: () => {
+      decisions.clear()
+      inFlight.clear()
+    },
+  }
+}
+
+export interface RegisterFileProtocolOptions {
+  getLanguage?: () => string | undefined
+}
+
+async function promptPreviewNetworkAccess(
+  payload: PreviewNetworkPromptPayload,
+  getLanguage?: () => string | undefined
+): Promise<boolean> {
+  if (typeof dialog?.showMessageBox !== 'function') return false
+  const lang = getLanguage?.()
+  const zh =
+    lang === 'zh'
+      ? true
+      : lang === 'en'
+        ? false
+        : (app?.getLocale?.().toLowerCase().startsWith('zh') ?? true)
+  const fileName = path.basename(payload.filePath)
+  const displayUrl =
+    payload.requestUrl.length > 180
+      ? `${payload.requestUrl.slice(0, 177)}...`
+      : payload.requestUrl
+  const owner =
+    payload.webContents && typeof BrowserWindow?.fromWebContents === 'function'
+      ? BrowserWindow.fromWebContents(payload.webContents as WebContents) ?? undefined
+      : undefined
+  const boxOptions: Electron.MessageBoxOptions = {
+    type: 'question',
+    buttons: zh ? ['拒绝（保持离线）', '允许访问外网'] : ['Block (stay offline)', 'Allow network access'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    title: zh ? '允许 HTML 预览访问外部网络？' : 'Allow HTML preview to access the network?',
+    message: zh
+      ? `「${fileName}」正在请求访问外部网络（${payload.targetHost}）`
+      : `"${fileName}" is requesting access to an external address (${payload.targetHost})`,
+    detail: zh
+      ? `文件：${payload.filePath}\n目标：${displayUrl}\n\n本地 HTML 预览默认保持离线。仅在你信任此 HTML 文件时选择允许；本次选择在应用重启前对该文件持续有效。`
+      : `File: ${payload.filePath}\nTarget: ${displayUrl}\n\nLocal HTML previews stay offline by default. Allow only if you trust this HTML file; this decision applies to this file until the app restarts.`,
+  }
+  const result = owner
+    ? await dialog.showMessageBox(owner, boxOptions)
+    : await dialog.showMessageBox(boxOptions)
+  return result.response === 1
+}
+
 /** app ready 之后调用 */
-export function registerFileProtocol(): void {
+export function registerFileProtocol(options: RegisterFileProtocolOptions = {}): void {
   protocol.handle(FILE_SCHEME, async (request) => {
     try {
       return await serveFileRequest(
@@ -248,4 +459,14 @@ export function registerFileProtocol(): void {
       return new Response('Internal Error', { status: 500 })
     }
   })
+
+  if (session?.defaultSession?.webRequest?.onBeforeRequest) {
+    const guard = createPreviewNetworkGuard({
+      prompt: (payload) => promptPreviewNetworkAccess(payload, options.getLanguage),
+    })
+    session.defaultSession.webRequest.onBeforeRequest(
+      { urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] },
+      (details, callback) => guard.handleRequest(details, callback)
+    )
+  }
 }

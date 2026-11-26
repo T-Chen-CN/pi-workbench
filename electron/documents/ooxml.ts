@@ -45,6 +45,8 @@ export interface SpreadsheetModel {
 
 export interface PresentationSlide {
   index: number
+  /** ZIP 内真实幻灯片路径（重排幻灯片后 `slide.index` 未必等于 `slideN.xml`） */
+  sourcePath: string
   lines: string[]
 }
 
@@ -56,6 +58,8 @@ export interface PresentationImage {
 export interface PresentationModel {
   slides: PresentationSlide[]
   images: PresentationImage[]
+  /** 演示文稿内识别到的栅格/SVG 媒体图片总数（文本抽取时可不解码原图即得知数量） */
+  imageCount: number
 }
 
 export interface OpenDocumentModel {
@@ -74,6 +78,8 @@ export interface EpubModel {
 /** 单个 sheet 读取上限：超出按「文件异常」处理，避免超大表吃满内存 */
 const MAX_ROWS_PER_SHEET = 20000
 const MAX_COLUMNS_PER_SHEET = 1024
+/** 工作簿总单元格预算：防止 5KB 稀疏 .xlsx（50 表 × AMJ19999）展开成上亿槽位瞬间 OOM */
+const MAX_TOTAL_CELLS_PER_WORKBOOK = 500_000
 const MAX_SHARED_STRINGS = 200000
 /** 预览时最多解码的内嵌图片数 */
 const MAX_PRESENTATION_IMAGES = 60
@@ -352,7 +358,8 @@ export function columnIndexFromRef(ref: string): number {
 function readSheet(
   xml: string,
   name: string,
-  sharedStrings: string[]
+  sharedStrings: string[],
+  budget: { remainingCells: number }
 ): SpreadsheetSheet | null {
   const rows = new Map<number, string[]>()
   const merges: string[] = []
@@ -455,18 +462,26 @@ function readSheet(
   const ordered: string[][] = []
   const sortedKeys = [...rows.keys()].sort((a, b) => a - b)
   const highest = sortedKeys[sortedKeys.length - 1] ?? 0
-  // 防止稀疏超大行号（如 <row r="100000000">）展开成上亿空数组导致主进程 OOM
-  if (highest < MAX_ROWS_PER_SHEET) {
+  const safeMaxColumns = Math.min(maxColumns, MAX_COLUMNS_PER_SHEET)
+  const expandedCells = (highest + 1) * Math.max(1, safeMaxColumns)
+  // 防止稀疏超大行号或 50 表 × AMJ19999 组合炸弹超出工作簿总单元格预算导致主进程 OOM
+  const canExpand = highest < MAX_ROWS_PER_SHEET && expandedCells <= budget.remainingCells
+  if (canExpand) {
     for (let index = 0; index <= highest; index += 1) {
-      const row = rows.get(index) ?? []
-      while (row.length < maxColumns) row.push('')
+      if (budget.remainingCells <= 0) break
+      const row = (rows.get(index) ?? []).slice(0, safeMaxColumns)
+      while (row.length < safeMaxColumns) row.push('')
       ordered.push(row)
+      budget.remainingCells -= Math.max(1, row.length)
     }
   } else {
     for (const key of sortedKeys) {
-      const row = rows.get(key) ?? []
-      while (row.length < maxColumns) row.push('')
+      if (budget.remainingCells <= 0) break
+      const maxColsThisRow = Math.min(safeMaxColumns, Math.max(1, budget.remainingCells))
+      const row = (rows.get(key) ?? []).slice(0, maxColsThisRow)
+      while (row.length < maxColsThisRow) row.push('')
       ordered.push(row)
+      budget.remainingCells -= Math.max(1, row.length)
     }
   }
   return { name, rows: ordered, dimension, merges }
@@ -503,11 +518,12 @@ export function readSpreadsheet(zip: ZipArchive): SpreadsheetModel {
     return { name: entry.name, path: resolved && zip.has(resolved) ? resolved : fallback }
   })
 
+  const budget = { remainingCells: MAX_TOTAL_CELLS_PER_WORKBOOK }
   for (const target of targets) {
     if (!target.path) continue
     const xml = zip.readText(target.path)
     if (!xml) continue
-    const sheet = readSheet(xml, target.name, sharedStrings)
+    const sheet = readSheet(xml, target.name, sharedStrings, budget)
     if (sheet) sheets.push(sheet)
   }
   if (sheets.length === 0) {
@@ -549,13 +565,16 @@ function readSlideLines(xml: string): string[] {
   return lines
 }
 
+function listPresentationImageNames(zip: ZipArchive): string[] {
+  return zip
+    .names()
+    .filter((name) => name.startsWith('ppt/media/') && Boolean(RASTER_IMAGE_MIME[extensionOf(name)]))
+    .sort((a, b) => a.localeCompare(b, 'en'))
+}
+
 function readPresentationImages(zip: ZipArchive): PresentationImage[] {
   const images: PresentationImage[] = []
-  const names = zip
-    .names()
-    .filter((name) => name.startsWith('ppt/media/'))
-    .sort((a, b) => a.localeCompare(b, 'en'))
-  for (const name of names) {
+  for (const name of listPresentationImageNames(zip)) {
     if (images.length >= MAX_PRESENTATION_IMAGES) break
     const mime = RASTER_IMAGE_MIME[extensionOf(name)]
     if (!mime) continue
@@ -568,7 +587,10 @@ function readPresentationImages(zip: ZipArchive): PresentationImage[] {
   return images
 }
 
-export function readPresentation(zip: ZipArchive): PresentationModel {
+export function readPresentation(
+  zip: ZipArchive,
+  options: { includeImages?: boolean } = {}
+): PresentationModel {
   const presentationXml = zip.readText('ppt/presentation.xml')
   if (!presentationXml) {
     throw new DocumentError('这个 .pptx 里没有 ppt/presentation.xml，文件可能已损坏', 'corrupt')
@@ -588,12 +610,17 @@ export function readPresentation(zip: ZipArchive): PresentationModel {
   files.forEach((file, index) => {
     const xml = zip.readText(file)
     if (!xml) return
-    slides.push({ index: index + 1, lines: readSlideLines(xml) })
+    slides.push({ index: index + 1, sourcePath: file, lines: readSlideLines(xml) })
   })
   if (slides.length === 0) {
     throw new DocumentError('这个 .pptx 里没有可读的幻灯片', 'corrupt')
   }
-  return { slides, images: readPresentationImages(zip) }
+  if (options.includeImages === false) {
+    const imageCount = Math.min(listPresentationImageNames(zip).length, MAX_PRESENTATION_IMAGES)
+    return { slides, images: [], imageCount }
+  }
+  const images = readPresentationImages(zip)
+  return { slides, images, imageCount: images.length }
 }
 
 // ==================== OpenDocument（odt / ods / odp） ====================

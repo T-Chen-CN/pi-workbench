@@ -194,7 +194,12 @@ interface FakeChild {
 
 function createHost() {
   let openHandler:
-    | ((details: { url: string; frameName: string; features: string }) => {
+    | ((details: {
+        url: string
+        frameName: string
+        features: string
+        referrer?: { url: string; policy?: string }
+      }) => {
         action: string
         overrideBrowserWindowOptions?: Record<string, unknown>
       })
@@ -220,8 +225,12 @@ function createHost() {
     sent,
     webContents,
     isDestroyed: () => false,
-    open: (details: { url: string; frameName: string; features: string }) =>
-      openHandler?.(details) ?? { action: 'missing' },
+    open: (details: {
+      url: string
+      frameName: string
+      features: string
+      referrer?: { url: string; policy?: string }
+    }) => openHandler?.(details) ?? { action: 'missing' },
     createWindow: (frameName: string) => {
       let webContentsReadable = true
       const contents: Record<string, unknown> = {
@@ -299,6 +308,52 @@ describe('installAuxWindowSupport', () => {
     expect(host.open({ url: 'https://example.com', frameName: 'x', features: '' }).action).toBe('deny')
     expect(host.open({ url: 'about:blank', frameName: 'other', features: '' }).action).toBe('deny')
     expect(host.open({ url: 'about:blank', frameName: `${AUX_FRAME_PREFIX}aux:1`, features: '' }).action).toBe('allow')
+  })
+
+  it('denies popups and external links from pw-file:// preview iframes and strips preload (SEC-02)', () => {
+    mocks.externalUrls.length = 0
+    const host = createHost()
+    installAuxWindowSupport(host as never, { onClosed: () => {} })
+
+    expect(
+      host.open({
+        url: 'https://evil.example',
+        frameName: '_blank',
+        features: '',
+        referrer: { url: 'pw-file://local/workspace/index.html' },
+      }).action
+    ).toBe('deny')
+    expect(
+      host.open({
+        url: 'about:blank',
+        frameName: `${AUX_FRAME_PREFIX}aux:hijack`,
+        features: '',
+        referrer: { url: 'pw-file://local/workspace/index.html' },
+      }).action
+    ).toBe('deny')
+    expect(
+      host.open({
+        url: 'https://evil.example',
+        frameName: '_blank',
+        features: '',
+        referrer: { url: 'about:blank' },
+      }).action
+    ).toBe('deny')
+    expect(mocks.externalUrls).toEqual([])
+
+    const allowed = host.open({
+      url: 'about:blank',
+      frameName: `${AUX_FRAME_PREFIX}aux:safe`,
+      features: '',
+      referrer: { url: 'pw-app://bundle/index.html' },
+    }) as { action: string; overrideBrowserWindowOptions?: { webPreferences?: Record<string, unknown> } }
+    expect(allowed.action).toBe('allow')
+    expect(allowed.overrideBrowserWindowOptions?.webPreferences).toMatchObject({
+      preload: undefined,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    })
   })
 
   it('returns hardened window options with the same chrome as the main window', () => {

@@ -5,9 +5,19 @@ import * as path from 'path'
 
 // 协议层只依赖 electron 的 protocol 注册与路径信任校验，单测里替换掉两者
 vi.mock('electron', () => ({
+  app: { getLocale: () => 'zh-CN' },
+  BrowserWindow: { fromWebContents: () => null },
+  dialog: { showMessageBox: vi.fn(async () => ({ response: 0 })) },
   protocol: {
     registerSchemesAsPrivileged: vi.fn(),
     handle: vi.fn(),
+  },
+  session: {
+    defaultSession: {
+      webRequest: {
+        onBeforeRequest: vi.fn(),
+      },
+    },
   },
 }))
 
@@ -23,6 +33,7 @@ vi.mock('../electron/workspace-trust', () => ({
 }))
 
 const {
+  createPreviewNetworkGuard,
   decodeFilePath,
   mimeForPath,
   parseRangeHeader,
@@ -171,5 +182,144 @@ describe('serveFileRequest', () => {
     const dir = path.join(workDir, 'dir')
     fs.mkdirSync(dir)
     expect((await serveFileRequest(toUrl(dir))).status).toBe(404)
+  })
+
+  it('attaches structural sandbox CSP header to HTML preview responses (SEC-02)', async () => {
+    const htmlFile = path.join(workDir, 'preview.html')
+    fs.writeFileSync(htmlFile, '<html><body>hi</body></html>')
+    const txtFile = path.join(workDir, 'note.txt')
+    fs.writeFileSync(txtFile, 'plain')
+
+    const htmlRes = await serveFileRequest(toUrl(htmlFile), 'GET')
+    expect(htmlRes.status).toBe(200)
+    const csp = htmlRes.headers.get('Content-Security-Policy') ?? ''
+    expect(csp).toContain("worker-src 'none'")
+    expect(csp).toContain("form-action 'none'")
+    expect(csp).toContain("object-src 'none'")
+    expect(csp).toContain("base-uri 'none'")
+    expect(csp).toContain('frame-ancestors pw-app:')
+
+    const txtRes = await serveFileRequest(toUrl(txtFile), 'GET')
+    expect(txtRes.headers.get('Content-Security-Policy')).toBeNull()
+  })
+})
+
+describe('createPreviewNetworkGuard', () => {
+  const callGuard = (
+    guard: ReturnType<typeof createPreviewNetworkGuard>,
+    details: Parameters<ReturnType<typeof createPreviewNetworkGuard>['handleRequest']>[0]
+  ) =>
+    new Promise<{ cancel?: boolean }>((resolve) => {
+      guard.handleRequest(details, resolve)
+    })
+
+  it('passes through requests from non-preview frames without prompting', async () => {
+    const prompt = vi.fn(async () => false)
+    const guard = createPreviewNetworkGuard({ prompt })
+
+    const res = await callGuard(guard, {
+      url: 'https://api.example.com/v1/health',
+      frame: { url: 'pw-app://bundle/index.html', parent: null },
+      initiatorOrigin: 'pw-app://bundle',
+    })
+    expect(res).toEqual({})
+    expect(prompt).not.toHaveBeenCalled()
+  })
+
+  it('deduplicates concurrent external requests for the same HTML file and caches deny', async () => {
+    let resolvePrompt!: (allowed: boolean) => void
+    const prompt = vi.fn(
+      (_payload: { filePath: string; requestUrl: string; targetHost: string }) =>
+        new Promise<boolean>((resolve) => {
+          resolvePrompt = resolve
+        })
+    )
+    const guard = createPreviewNetworkGuard({ prompt })
+    const previewUrl = toUrl(path.join(workDir, 'demo.html'))
+
+    const p1 = callGuard(guard, {
+      url: 'https://cdn.example.com/a.js',
+      frame: { url: previewUrl, parent: null },
+    })
+    const p2 = callGuard(guard, {
+      url: 'https://fonts.example.com/b.css',
+      frame: { url: previewUrl, parent: null },
+    })
+
+    await Promise.resolve()
+    expect(prompt).toHaveBeenCalledTimes(1)
+    expect(prompt.mock.calls[0][0]).toMatchObject({
+      filePath: path.resolve(path.join(workDir, 'demo.html')),
+      targetHost: 'cdn.example.com',
+    })
+
+    resolvePrompt(false)
+    expect(await Promise.all([p1, p2])).toEqual([{ cancel: true }, { cancel: true }])
+
+    // 后续同文件请求直接按缓存拒绝，不再重复弹窗
+    expect(
+      await callGuard(guard, {
+        url: 'https://api.example.com/data',
+        frame: { url: `${previewUrl}?v=2`, parent: null },
+      })
+    ).toEqual({ cancel: true })
+    expect(prompt).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows a permitted file (including nested iframes and reloads) while prompting other files independently', async () => {
+    const prompt = vi.fn(async ({ filePath }: { filePath: string }) =>
+      filePath.endsWith('trusted.html')
+    )
+    const guard = createPreviewNetworkGuard({ prompt })
+    const trustedUrl = toUrl(path.join(workDir, 'trusted.html'))
+    const otherUrl = toUrl(path.join(workDir, 'other.html'))
+
+    expect(
+      await callGuard(guard, {
+        url: 'https://cdn.example.com/lib.js',
+        frame: { url: trustedUrl, parent: null },
+      })
+    ).toEqual({ cancel: false })
+
+    // 同文件刷新与嵌套子 iframe 自动继承放行
+    expect(
+      await callGuard(guard, {
+        url: 'https://cdn.example.com/style.css',
+        frame: { url: 'about:blank', parent: { url: `${trustedUrl}?v=5`, parent: null } },
+      })
+    ).toEqual({ cancel: false })
+    expect(prompt).toHaveBeenCalledTimes(1)
+
+    // 另一个 HTML 文件仍独立询问并拒绝
+    expect(
+      await callGuard(guard, {
+        url: 'https://cdn.example.com/evil.js',
+        frame: { url: otherUrl, parent: null },
+      })
+    ).toEqual({ cancel: true })
+    expect(prompt).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails closed when prompt throws or frame is missing for pw-file initiator', async () => {
+    const prompt = vi.fn(async () => {
+      throw new Error('dialog failed')
+    })
+    const guard = createPreviewNetworkGuard({ prompt })
+
+    expect(
+      await callGuard(guard, {
+        url: 'https://evil.example/leak',
+        frame: null,
+        initiatorOrigin: 'pw-file://local',
+      })
+    ).toEqual({ cancel: true })
+    expect(prompt).not.toHaveBeenCalled()
+
+    expect(
+      await callGuard(guard, {
+        url: 'https://evil.example/leak',
+        frame: { url: toUrl(path.join(workDir, 'err.html')), parent: null },
+      })
+    ).toEqual({ cancel: true })
   })
 })

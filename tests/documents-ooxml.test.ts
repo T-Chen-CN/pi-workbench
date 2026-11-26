@@ -139,8 +139,8 @@ describe('readPresentation', () => {
     })
     const model = readPresentation(ZipArchive.open(buffer))
     expect(model.slides).toEqual([
-      { index: 1, lines: ['标题一', '正文一'] },
-      { index: 2, lines: ['第二页'] },
+      { index: 1, sourcePath: 'ppt/slides/slide1.xml', lines: ['标题一', '正文一'] },
+      { index: 2, sourcePath: 'ppt/slides/slide2.xml', lines: ['第二页'] },
     ])
     expect(model.images).toHaveLength(1)
     expect(model.images[0].dataUrl.startsWith('data:image/png;base64,')).toBe(true)

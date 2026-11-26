@@ -114,7 +114,9 @@ async function getCatalogRuntime(): Promise<ModelRuntime> {
   if (catalogRuntimePromise) return catalogRuntimePromise
   const task = (async () => {
     const runtime = await ModelRuntime.create({
-      modelsPath: path.join(piAgentDir, 'models.json'),
+      // 目录运行时必须读原始内置/远端目录，不能叠加已落盘的 models.json 覆写，
+      // 否则下调 contextWindow/maxTokens 后会被当成新的目录上限造成不可逆的单向棘轮
+      modelsPath: null,
       credentials: credentialsStore(),
       modelsStore: getModelsStore(),
       refreshOnCreate: false,
@@ -212,7 +214,8 @@ function thinkingLevels(model: Model<Api>): string[] {
   const levels = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
   const map = (model as { thinkingLevelMap?: Record<string, unknown> }).thinkingLevelMap
   if (!map) return levels
-  return levels.filter((level) => map[level] !== null && map[level] !== undefined)
+  // pi-ai 稀疏表语义：只有显式 null 表示禁用，未列出档位默认支持
+  return levels.filter((level) => map[level] !== null)
 }
 
 function directoryView(snapshot: CatalogSnapshot | undefined): ProviderDirectoryView {
@@ -291,14 +294,16 @@ export async function setActiveProvider(
   modelId: string | undefined
 ): Promise<{ ok: true; config: ProvidersConfig } | { ok: false; code: string }> {
   if (!isPresetProviderId(providerId)) return { ok: false, code: 'PROVIDER_UNKNOWN' }
+  const credential = await credentialsStore().read(providerId)
+  if (!credential) return { ok: false, code: 'NOT_CONNECTED' }
   const { store } = await loadCatalogContext()
   const config = await store.read()
   const target = modelId ?? config.providers[providerId]?.model
   if (!target) return { ok: false, code: 'MODEL_UNKNOWN' }
 
-  const connected = config.providers[providerId]
+  const existing = config.providers[providerId]
   const next = store.setActive(
-    connected ? config : { ...config, providers: { ...config.providers, [providerId]: { model: target } } },
+    existing ? config : { ...config, providers: { ...config.providers, [providerId]: { model: target } } },
     providerId,
     target
   )

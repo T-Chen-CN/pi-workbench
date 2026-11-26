@@ -72,7 +72,7 @@ const CANDIDATES: ReadonlyArray<{
   { lockfile: 'uv.lock', manager: 'uv', depsDir: '.venv' },
 ]
 
-/** 安装命令固定使用「按 lockfile 精确安装」的形态，绝不改动 lockfile */
+/** 安装命令固定使用「按 lockfile 精确安装」的形态，绝不改动 lockfile（自动安装默认关闭，手动或主动开启时允许正常构建原生依赖） */
 export function installCommand(
   manager: PackageManager,
   repoRoot: string
@@ -83,14 +83,10 @@ export function installCommand(
     case 'bun':
       return { command: 'bun', args: ['install', '--frozen-lockfile'] }
     case 'yarn':
-      // yarn berry 用的是 --immutable；v1 没有这个参数
-      return {
-        command: 'yarn',
-        args: [
-          'install',
-          existsSync(path.join(repoRoot, '.yarnrc.yml')) ? '--immutable' : '--frozen-lockfile',
-        ],
-      }
+      // yarn berry 用的是 --immutable；v1 用 --frozen-lockfile
+      return existsSync(path.join(repoRoot, '.yarnrc.yml'))
+        ? { command: 'yarn', args: ['install', '--immutable'] }
+        : { command: 'yarn', args: ['install', '--frozen-lockfile'] }
     case 'npm':
       return { command: 'npm', args: ['ci'] }
     case 'uv':
@@ -100,16 +96,17 @@ export function installCommand(
 
 /**
  * 安装脚本不能拿到 Agent 的供应商密钥，也不能看到应用自己的敏感环境变量。
- * 与终端同样的思路：按名单 + 前缀剔除，其余原样继承。
+ * 必须按大小写无关剔除（Windows 环境变量名大小写不敏感）。
  */
-const SENSITIVE_ENV_KEYS = ['PI_WORKBENCH_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']
+const SENSITIVE_ENV_KEYS = new Set(['PI_WORKBENCH_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'])
 const SENSITIVE_ENV_PREFIXES = ['PI_WORKBENCH_']
 
 export function sanitizeInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const sanitized: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(env)) {
-    if (SENSITIVE_ENV_KEYS.includes(key)) continue
-    if (SENSITIVE_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) continue
+    const upper = key.toUpperCase()
+    if (SENSITIVE_ENV_KEYS.has(upper)) continue
+    if (SENSITIVE_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix))) continue
     sanitized[key] = value
   }
   return sanitized
@@ -278,14 +275,19 @@ const defaultSpawn: SpawnFn = (command, args, options) =>
 function terminateTree(child: SpawnedProcess | null): void {
   if (!child) return
   const pid = typeof child.pid === 'number' && child.pid > 0 ? child.pid : null
+  const killSelf = () => {
+    try {
+      child.kill('SIGTERM')
+    } catch {
+      // 进程可能已经退出；取消语义已经满足
+    }
+  }
   if (pid !== null && process.platform === 'win32') {
-    void killProcessTreeAsync(pid)
+    // 必须等 taskkill /T /F 先收完进程树再补 SIGTERM，否则根进程先死会让 taskkill 找不到孙进程
+    void killProcessTreeAsync(pid).finally(killSelf)
+    return
   }
-  try {
-    child.kill('SIGTERM')
-  } catch {
-    // 进程可能已经退出；取消语义已经满足
-  }
+  killSelf()
 }
 
 /**

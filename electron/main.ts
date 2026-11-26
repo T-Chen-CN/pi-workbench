@@ -11,7 +11,7 @@ import { AgentRegistry } from './agent-registry.js'
 import { childRegistry } from './child-registry.js'
 import { createQuitSequencer, runShutdownSteps } from './shutdown.js'
 import { disposeAllCoordinators } from './worktree-coordinator.js'
-import { TerminalManager } from './terminal-manager.js'
+import { TerminalManager, sanitizeTerminalEnv } from './terminal-manager.js'
 import { PluginManager } from './plugin-manager.js'
 import { DraftStore } from './draft-store.js'
 import { ApprovalBroker } from './approval-broker.js'
@@ -45,6 +45,7 @@ import {
   type CloudIpcContext
 } from './ipc/cloud.js'
 import { registerDocumentsIpc } from './ipc/documents.js'
+import { configureRenderBridge } from './documents/render-bridge.js'
 import { registerGitIpc } from './ipc/git.js'
 import { registerRepoMapIpc } from './ipc/repo-map.js'
 import { repoSync } from './repo-sync.js'
@@ -54,7 +55,6 @@ import { createDesktopProvidersConfigStore } from './providers-config.js'
 import { configureAuthFlow } from './auth-flow.js'
 import { setRunningSessionsProbe } from './providers-service.js'
 import {
-  WEB_SEARCH_KEY_ENV_PREFIX,
   initializeWebSearch,
   registerWebSearchIpc
 } from './ipc/web-search.js'
@@ -185,41 +185,8 @@ app.on('open-url', (event, url) => {
   event.preventDefault()
   void handleGithubCallback(url)
 })
-/** 系统语言是否中文（ready 之前可用） */
-function systemPrefersChinese(): boolean {
-  try {
-    const first = app.getPreferredSystemLanguages?.()[0] ?? ''
-    if (first) return first.toLowerCase().startsWith('zh')
-  } catch {
-    // 拿不到系统语言时退回英文，宁可文案不地道也不要抢在初始化前报错
-  }
-  return false
-}
-
-/**
- * 单实例锁被拒绝时的提示。
- *
- * 为什么不在 ready 之后弹：ready 一到，模块顶层的 whenReady 回调就会初始化
- * 目录、SQLite、托盘与窗口 —— 第二个进程同样会跑一遗（同一份 userData 与
- * workspaces.db 被两个进程同时写）。`showErrorBox` 是 ready 之前就能用的原生
- * 弹框，弹完立即退出，全程不做任何初始化。
- */
-function reportExistingInstance(): void {
-  const zh = systemPrefersChinese()
-  try {
-    dialog.showErrorBox(
-      zh ? 'Pi Workbench 已在运行' : 'Pi Workbench is already running',
-      zh
-        ? '已请求唤回正在运行的窗口。如果窗口没有出现，请检查任务栏或托盘图标；仍找不到时，在任务管理器结束残留的 “Pi Workbench” 进程后再启动。'
-        : 'The running window has been brought to the front. If no window appears, check the taskbar or the tray icon. If it is still missing, end any leftover “Pi Workbench” process in Task Manager and start again.'
-    )
-  } catch (error) {
-    // 弹框失败也必须退出，不能因为提示失败多留一个进程
-    console.error('[Boot] Failed to show single instance notice:', error)
-  }
-}
-
 // 只允许一个实例：避免两个进程同时写同一份配置和数据库。
+// 第二实例（托盘唤回或 GitHub OAuth 自定义协议回调）交由主实例 second-instance 静默处理，不弹错误框。
 const singleInstanceLock = typeof app.requestSingleInstanceLock === 'function' ? app.requestSingleInstanceLock() : true
 if (!singleInstanceLock) {
   // 退出前必须先落日志：残留实例占着锁时，这是唯一的现场证据
@@ -227,7 +194,6 @@ if (!singleInstanceLock) {
     pid: process.pid,
     argv: process.argv.slice(1)
   })
-  reportExistingInstance()
   if (typeof app.exit === 'function') app.exit(0)
   else app.quit()
 } else {
@@ -372,15 +338,8 @@ const terminalManager = new TerminalManager({
     }
   },
   logPathFor: (workspaceDir, terminalId) => path.join(workspaceDir, '.pi-workbench', `terminal-${terminalId}.log`),
-  // 供应商 Key 只存在于加密凭证文件，不再注入环境变量（D3）；
-  // 这里只清掉联网搜索的临时 Key，用户 shell 里的变量原样保留
-  envSanitizer: (env) => {
-    const sanitized = { ...env }
-    for (const name of Object.keys(sanitized)) {
-      if (name.startsWith(WEB_SEARCH_KEY_ENV_PREFIX)) delete sanitized[name]
-    }
-    return sanitized
-  }
+  // 复用统一的环境清洗：同时剔除已知供应商 Key 与 PI_WORKBENCH_* 内部凭据（Windows 大小写不敏感）
+  envSanitizer: (env) => sanitizeTerminalEnv(env)
 })
 
 const pluginManager = new PluginManager({
@@ -437,7 +396,21 @@ async function seedTrustedWorkspaces(): Promise<void> {
   }
 }
 
-const workspaceStore = createWorkspaceStore(path.join(getAppDir(), 'data', 'workspaces.db'))
+// 若安装目录只读，模块顶层建库不能直接未捕获崩溃，必须降级到内存替身以让 whenReady 里的 ensureAppDirWritable 正常提示
+const workspaceStore = (() => {
+  try {
+    return createWorkspaceStore(path.join(getAppDir(), 'data', 'workspaces.db'))
+  } catch (error) {
+    console.error('[Main] Failed to initialize workspaceStore; falling back to in-memory store:', error)
+    return {
+      recordOpen: () => undefined,
+      list: () => [],
+      listRecent: () => [],
+      remove: () => undefined,
+      close: () => undefined,
+    }
+  }
+})()
 const draftStore = new DraftStore(path.join(getAppDir(), 'cache', 'drafts'))
 
 registerFilesIpc({
@@ -471,6 +444,7 @@ registerAttachmentsIpc({
   getLanguage: () => ((getAppSettingsCache().language ?? 'zh') === 'en' ? 'en' : 'zh')
 })
 
+configureRenderBridge({ getMainWindow: () => mainWindow })
 registerDocumentsIpc()
 
 registerRepoMapIpc()
@@ -803,9 +777,12 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
   // Electron 会保持窗口打开但不给用户任何提示；这里用原生对话框把选择权交给用户。
   mainWindow.webContents.on('will-prevent-unload', (event) => {
     if (!mainWindow || mainWindow.isDestroyed()) return
+    // 必须先暂停退出卡死看门狗，否则用户在阻塞的原生确认框里思考超过 10s 会被强杀并跳过清理
+    quitSequencer.cancel()
     // 从托盘退出时窗口是隐藏的，原生确认框必须挂在可见窗口上
     if (!mainWindow.isVisible()) mainWindow.show()
     if (typeof dialog.showMessageBoxSync !== 'function') {
+      if (quitting) quitSequencer.handleBeforeQuit()
       event.preventDefault()
       return
     }
@@ -825,7 +802,8 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
         : 'Closing will discard unsaved changes and stop running sessions and pending approvals.'
     })
     if (choice === 1) {
-      // 用户明确继续关闭：清掉已加载工作区的草稿，避免下次启动又提示恢复
+      // 用户明确继续关闭：若处于退出流程则重新武装看门狗；清掉已加载工作区的草稿避免下次又提示恢复
+      if (quitting) quitSequencer.handleBeforeQuit()
       for (const loaded of pluginManager.loadedWorkspaces()) {
         const canonical = canonicalizePath(loaded)
         if (canonical) draftStore.clear(canonical)
@@ -834,7 +812,6 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
     } else {
       // 取消退出：关闭按钮回到「收进托盘」语义，下次点 X 不应该直接退掉
       quitting = false
-      // 撤掉 before-quit 武装的看门狗，否则它会在这个被取消的退出里强制结束进程
       quitSequencer.cancel()
     }
   })
@@ -896,8 +873,13 @@ app.whenReady().then(async () => {
   await initAppDirectories()
   // 外壳协议必须在任何 loadURL 之前注册；辅助窗口依赖它拿到同源文档
   registerAppProtocol(path.join(__dirname, '../dist'))
-  // 只读文件协议：图片 / 音视频 / PDF / HTML 预览
-  registerFileProtocol()
+  // 只读文件协议：图片 / 音视频 / PDF / HTML 预览（外网请求按文件弹窗拦截）
+  registerFileProtocol({
+    getLanguage: () =>
+      typeof getAppSettingsCache().language === 'string'
+        ? getAppSettingsCache().language
+        : undefined,
+  })
 
   // 启动页要尽早出现：只读设置（主题与语言）就建窗，其余初始化与页面加载并行。
   let startupSettings: Record<string, any> = {}
@@ -1052,11 +1034,11 @@ async function shutdownApplication(): Promise<void> {
     await runShutdownSteps(
       [
         { name: 'approval-broker', timeoutMs: 400, run: () => approvalBroker.dispose() },
-        { name: 'agents', timeoutMs: 2000, run: () => agentRegistry.disposeAll() },
-        // 云端工单：先把自己标 interrupted 并冲队列，再释放执行器
+        { name: 'agents', timeoutMs: 1600, run: () => agentRegistry.disposeAll() },
+        // 云端工单：先把自己标 interrupted 并冲队列（内部 flush 1.5s），超时必须大于 flush 上限
         {
           name: 'cloud-device',
-          timeoutMs: 1200,
+          timeoutMs: 1800,
           run: () => shutdownCloudDeviceAgent()
         },
         { name: 'worktree-deps', timeoutMs: 400, run: () => disposeAllCoordinators() },

@@ -139,8 +139,9 @@ export function registerAgentSessionIpc(context: AgentIpcContext): void {
       if (typeof agent.closeSession !== 'function') {
         return { success: false, error: 'Sessions are not supported by this agent' }
       }
-      await agent.closeSession(sessionId)
+      // 必须先释放挂起审批，避免 closeSession 内部 abort 与 tool_call 死锁
       context.approvalBroker.cancelForSession(sessionId)
+      await agent.closeSession(sessionId)
       const coordinator = await getCoordinator(workspaceDir)
       const released = coordinator ? await coordinator.release(sessionId) : null
       return { success: true, ...(released ?? {}) }
@@ -291,9 +292,10 @@ export function registerAgentSessionIpc(context: AgentIpcContext): void {
       if (typeof agent.deleteSession !== 'function') {
         return { success: false, error: 'Sessions are not supported by this agent' }
       }
+      // 必须先释放挂起审批，避免 deleteSession 内部关闭会话时等待 tool_call 死锁
+      context.approvalBroker.cancelForSession(sessionId)
       const result = await agent.deleteSession(sessionId)
       if (result.success) {
-        context.approvalBroker.cancelForSession(sessionId)
         const coordinator = await getCoordinator(workspaceDir)
         const released = coordinator ? await coordinator.release(sessionId) : null
         return { ...result, ...(released ?? {}) }

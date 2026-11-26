@@ -94,9 +94,9 @@ async function restoreWorktreeBinding(
 export function registerGitIpc(context: GitIpcContext): void {
   const cleanedWorkspaces = new Set<string>()
   configureWorktreeLogging(context.logger)
-  // 依赖安装会执行仓库里的 install 脚本，所以自动安装的开关交给设置项
+  // 依赖安装会执行仓库里的 install 脚本，默认关闭，须用户在设置中主动开启（fail-closed）
   configureWorktreeDeps({
-    isAutoInstallEnabled: () => getAppSettingsCache().autoInstallWorktreeDeps !== false,
+    isAutoInstallEnabled: () => getAppSettingsCache().autoInstallWorktreeDeps === true,
     onStatusChange: ({ workspaceDir, key, status }) => {
       const window = context.getMainWindow()
       if (!window || window.isDestroyed()) return

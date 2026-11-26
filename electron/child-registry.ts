@@ -114,12 +114,14 @@ export class ChildRegistry {
     let killed = 0
     let failed = 0
     for (const child of snapshot) {
+      // 先收整棵进程树再调用优雅 kill：Windows 上根进程若先退出，taskkill /T 将找不到孙进程
+      const ok = killProcessTree(child.pid, deps)
       try {
         child.kill?.()
       } catch {
         // 进程可能已经退出
       }
-      if (killProcessTree(child.pid, deps)) killed += 1
+      if (ok) killed += 1
       else failed += 1
     }
     return { killed, failed }
@@ -133,12 +135,12 @@ export class ChildRegistry {
     let failed = 0
     await Promise.all(
       snapshot.map(async (child) => {
+        const ok = await killProcessTreeAsync(child.pid, deps)
         try {
           child.kill?.()
         } catch {
           // 进程可能已经退出
         }
-        const ok = await killProcessTreeAsync(child.pid, deps)
         if (ok) killed += 1
         else failed += 1
       })

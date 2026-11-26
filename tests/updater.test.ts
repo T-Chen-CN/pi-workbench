@@ -406,6 +406,34 @@ describe('external update cache', () => {
     expect(fs.existsSync(legacy)).toBe(false)
   })
 
+  it('on non-Windows only deletes the updater subdir and preserves drafts/temp cache', async () => {
+    const appDir = makeTempDir()
+    const cacheBase = path.join(appDir, 'cache')
+    const updaterSubdir = path.join(cacheBase, 'pi-workbench-updater')
+    const draftsDir = path.join(cacheBase, 'drafts')
+    const tempDir = path.join(cacheBase, 'temp')
+    fs.mkdirSync(updaterSubdir, { recursive: true })
+    fs.mkdirSync(draftsDir, { recursive: true })
+    fs.mkdirSync(tempDir, { recursive: true })
+    fs.writeFileSync(path.join(updaterSubdir, 'update.zip'), 'zip')
+    fs.writeFileSync(path.join(draftsDir, 'unsaved.json'), '{"content":"keep"}')
+    fs.writeFileSync(path.join(tempDir, 'img.png'), 'png')
+    fs.writeFileSync(`${cacheBase}.flag`, '1')
+
+    const cleaned = await cleanupCompletedUpdateCache({
+      appDir,
+      platform: 'darwin',
+      retries: 1,
+      delayMs: 0,
+    })
+
+    expect(cleaned).toBe(true)
+    expect(fs.existsSync(`${cacheBase}.flag`)).toBe(false)
+    expect(fs.existsSync(updaterSubdir)).toBe(false)
+    expect(fs.existsSync(path.join(draftsDir, 'unsaved.json'))).toBe(true)
+    expect(fs.existsSync(path.join(tempDir, 'img.png'))).toBe(true)
+  })
+
   it('keeps the differential base when no update is available', async () => {
     const local = makeTempDir()
     const appDir = makeTempDir()

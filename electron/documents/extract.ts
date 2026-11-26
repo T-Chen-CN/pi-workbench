@@ -287,7 +287,8 @@ async function readZipDocument(
   }
 
   if (format === 'pptx' || zip.has('ppt/presentation.xml')) {
-    const model = readPresentation(zip)
+    // 文本抽取模式不解码内嵌图片，避免白白同步解压并 Base64 编码多达 60 张图片
+    const model = readPresentation(zip, { includeImages: false })
     const wanted = parsePageRange(request.slide, model.slides.length)
     const slides = wanted ? model.slides.filter((slide) => wanted.includes(slide.index)) : model.slides
     sink.push(`--- document: ${name} (${model.slides.length} slides) ---`)
@@ -296,8 +297,8 @@ async function readZipDocument(
       if (slide.lines.length === 0) sink.push('（这一页只有图或表格，没有可提取的文字）')
       else sink.pushAll(slide.lines)
     }
-    if (model.images.length > 0) {
-      sink.push(`（演示文稿内含 ${model.images.length} 张图片，可在程序内的预览里查看）`)
+    if (model.imageCount > 0) {
+      sink.push(`（演示文稿内含 ${model.imageCount} 张图片，可在程序内的预览里查看）`)
     }
     return {
       text: sink.toString(),

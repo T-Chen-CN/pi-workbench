@@ -6,9 +6,10 @@
  * {appDir}/config/github.json；应用从不把令牌写入日志或返回给渲染进程。
  */
 
+import * as fs from 'fs/promises'
 import * as path from 'path'
-import { safeStorage } from 'electron'
 import { getAppDir } from './app-paths.js'
+import { decryptSecret, encryptSecret } from './secret-crypto.js'
 
 export const GITHUB_DEVICE_VERIFICATION_URI = 'https://github.com/login/device'
 export const GITHUB_OAUTH_SCOPES = 'repo read:user'
@@ -47,18 +48,14 @@ function authFilePath(): string {
 
 function decryptToken(value: unknown): string | null {
   if (typeof value !== 'string' || !value.startsWith('enc:')) return null
-  if (!safeStorage.isEncryptionAvailable()) return null
-  try {
-    return safeStorage.decryptString(Buffer.from(value.slice(4), 'base64'))
-  } catch {
-    return null
-  }
+  const plain = decryptSecret(value)
+  return plain || null
 }
 
 function encryptToken(token: string | null): string | null {
   if (!token) return null
-  if (!safeStorage.isEncryptionAvailable()) return null
-  return `enc:${safeStorage.encryptString(token).toString('base64')}`
+  // 复用 secret-crypto 的 fail-closed 加密：系统安全存储不可用时直接抛错，绝不静默清空 Token 报成功
+  return encryptSecret(token)
 }
 
 async function readFile(): Promise<GithubAuthFile> {
@@ -67,9 +64,9 @@ async function readFile(): Promise<GithubAuthFile> {
   return result.data && typeof result.data === 'object' ? result.data : {}
 }
 
-async function writeFile(data: GithubAuthFile): Promise<void> {
-  const { writeJsonAtomic } = await import('./atomic-json.js')
-  await writeJsonAtomic(authFilePath(), data)
+async function writeFile(data: GithubAuthFile, options?: { backup?: boolean }): Promise<void> {
+  const { writeJsonAtomicAsync } = await import('./atomic-json.js')
+  await writeJsonAtomicAsync(authFilePath(), data, options)
 }
 
 export async function readGithubAuth(): Promise<{
@@ -95,7 +92,12 @@ export async function saveGithubClientId(clientId: string | null): Promise<void>
 }
 
 export async function clearGithubToken(): Promise<void> {
-  await saveGithubToken(null)
+  const current = await readFile()
+  const next: GithubAuthFile = { ...current }
+  delete next.token
+  // 登出清凭据不能保留含旧密文的 .bak，否则旧 token 仍滞留磁盘
+  await writeFile(next, { backup: false })
+  await fs.rm(`${authFilePath()}.bak`, { force: true }).catch(() => undefined)
 }
 
 export async function startDeviceFlow(

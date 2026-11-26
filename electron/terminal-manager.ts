@@ -4,7 +4,7 @@
  */
 import * as fs from 'fs'
 import * as path from 'path'
-import { childRegistry, killProcessTreeAsync } from './child-registry.js'
+import { childRegistry, killProcessTree } from './child-registry.js'
 
 export interface PtyProcess {
   /** shell 进程 pid；node-pty 会提供，测试替身可能没有 */
@@ -79,20 +79,18 @@ function workspacePathKey(dir: string): string {
   const resolved = path.resolve(dir)
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved
 }
-/** 终端子进程不应继承 Agent 的供应商密钥 */
-const SENSITIVE_ENV_KEYS = ['PI_WORKBENCH_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']
-/** 联网搜索按供应商注入的密钥，前缀整体剔除 */
-const SENSITIVE_ENV_PREFIXES = ['PI_WORKBENCH_WEB_SEARCH_KEY']
+/** 终端与子进程不应继承 Agent 的供应商密钥及应用内部凭据 */
+const SENSITIVE_ENV_KEYS = new Set(['PI_WORKBENCH_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'])
+/** 应用注入的敏感环境变量前缀（Windows 环境变量名大小写不敏感，必须统一大写比对） */
+const SENSITIVE_ENV_PREFIXES = ['PI_WORKBENCH_']
 
 export function sanitizeTerminalEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const sanitized: NodeJS.ProcessEnv = { ...env }
-  for (const key of SENSITIVE_ENV_KEYS) {
-    delete sanitized[key]
-  }
-  for (const key of Object.keys(sanitized)) {
-    if (SENSITIVE_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
-      delete sanitized[key]
-    }
+  const sanitized: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(env)) {
+    const upper = key.toUpperCase()
+    if (SENSITIVE_ENV_KEYS.has(upper)) continue
+    if (SENSITIVE_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix))) continue
+    sanitized[key] = value
   }
   return sanitized
 }
@@ -233,26 +231,32 @@ export class TerminalManager {
     this.terminals.delete(id)
     this.clearFlushTimer(id)
     const pid = typeof entry.pty.pid === 'number' && entry.pty.pid > 0 ? entry.pty.pid : null
+    // Windows 上先 taskkill /T 杀整棵进程树再 kill PTY，避免根进程先死导致孙进程变为孤儿
+    if (pid !== null && process.platform === 'win32') {
+      killProcessTree(pid)
+    }
     try {
       entry.pty.kill()
-      // Windows 上 pty.kill() 可能遗留孙进程，异步补杀整棵树
-      if (pid !== null && process.platform === 'win32') {
-        void killProcessTreeAsync(pid)
-      }
     } catch (error) {
       console.warn('[Terminal] Failed to kill terminal:', error)
     } finally {
-      // 必须在发出终止后再注销 childRegistry，避免杀树前提前失去兜底记录
       entry.unregisterChild?.()
       entry.unregisterChild = null
     }
-    this.flush(entry)
+    if (this.activeAsyncWrites.has(id)) {
+      this.flushAsync(entry)
+    } else {
+      this.flush(entry)
+    }
     return true
   }
 
   closeAll(): void {
     for (const id of [...this.terminals.keys()]) {
+      const entry = this.terminals.get(id)
       this.close(id)
+      // 进程退出兜底：若前面因异步写链让路而仍有残余缓冲，同步落盘
+      if (entry) this.flush(entry)
     }
   }
 
@@ -278,12 +282,19 @@ export class TerminalManager {
     }
   }
 
-  /** 立即把待写入内容刷到日志文件 */
+  /** 正在执行异步写/轮转的终端集合，防止 flushNow 同步写与后台异步轮转并发竞态 */
+  private activeAsyncWrites = new Set<string>()
+
+  /** 立即把待写入内容刷到日志文件：空闲时同步落盘，异步写进行中则排进串行链防轮转竞态 */
   flushNow(id: string): boolean {
     const entry = this.terminals.get(id)
     if (!entry) return false
     this.clearFlushTimer(id)
-    this.flush(entry)
+    if (this.activeAsyncWrites.has(id)) {
+      this.flushAsync(entry)
+    } else {
+      this.flush(entry)
+    }
     return true
   }
 
@@ -310,6 +321,7 @@ export class TerminalManager {
     const text = entry.pending
     entry.pending = ''
     const logPath = entry.logPath
+    this.activeAsyncWrites.add(entry.id)
     entry.logWriteChain = entry.logWriteChain
       .then(async () => {
         await fs.promises.mkdir(path.dirname(logPath), { recursive: true })
@@ -324,6 +336,9 @@ export class TerminalManager {
       })
       .catch((error) => {
         console.warn('[Terminal] Failed to write terminal log:', error)
+      })
+      .finally(() => {
+        this.activeAsyncWrites.delete(entry.id)
       })
   }
 

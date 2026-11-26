@@ -20,8 +20,8 @@ const DEFAULT_SETTINGS = {
   explorerSortReverse: false,
   /** 关闭主窗口时收进托盘而不是退出；Linux 降级为最小化 */
   closeToTray: true,
-  /** 新建 / 首次复用的链接工作树自动后台安装依赖（会执行仓库里的 install 脚本） */
-  autoInstallWorktreeDeps: true,
+  /** 新建 / 首次复用的链接工作树自动后台安装依赖（默认关闭，需用户在设置中主动开启） */
+  autoInstallWorktreeDeps: false,
   /** 主进程请求（AI 供应商 / GitHub / 联网搜索）跟随操作系统代理 */
   useSystemProxy: true,
   /** 后台自动跟随 pi.dev 模型目录；PI_OFFLINE=1 时总开关优先关闭（D6） */

@@ -11,6 +11,7 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import { shell } from 'electron'
 import { getAppDir } from './app-paths.js'
+import { decryptSecret } from './secret-crypto.js'
 import {
   fetchGithubUser,
   readGithubAuth,
@@ -53,8 +54,9 @@ export async function readGithubOAuthConfig(): Promise<OAuthConfig | null> {
     const raw = await fs.readFile(oauthConfigPath(), 'utf8')
     const parsed = JSON.parse(raw) as Partial<OAuthConfig>
     const clientId = typeof parsed.clientId === 'string' ? parsed.clientId.trim() : ''
-    const clientSecret =
+    const rawSecret =
       typeof parsed.clientSecret === 'string' ? parsed.clientSecret.trim() : ''
+    const clientSecret = rawSecret.startsWith('enc:') ? decryptSecret(rawSecret) : rawSecret
     if (clientId && clientSecret) return { clientId, clientSecret }
   } catch {
     // 配置缺失时由调用方返回可读错误
@@ -120,6 +122,22 @@ export async function completeGithubOAuth(url: string): Promise<{
     return { success: false, error: 'Unexpected callback URL' }
   }
 
+  const state = parsed.searchParams.get('state') ?? ''
+  const pending = pendingLogin
+  // 必须先校验 state 再处理 error 或消耗 pendingLogin，防外部恶意 pi-workbench://oauth?error=... 伪造报错或取消正常登录
+  if (
+    !pending ||
+    !state ||
+    pending.state !== state ||
+    Date.now() - pending.createdAt > LOGIN_TTL_MS
+  ) {
+    if (pending && Date.now() - pending.createdAt > LOGIN_TTL_MS) {
+      pendingLogin = null
+    }
+    return { success: false, error: 'OAuth state is invalid or expired. Start again.' }
+  }
+  pendingLogin = null
+
   const errorParam = parsed.searchParams.get('error')
   if (errorParam) {
     return {
@@ -129,19 +147,7 @@ export async function completeGithubOAuth(url: string): Promise<{
   }
 
   const code = parsed.searchParams.get('code') ?? ''
-  const state = parsed.searchParams.get('state') ?? ''
   if (!code) return { success: false, error: 'Missing authorization code' }
-
-  const pending = pendingLogin
-  pendingLogin = null
-  if (
-    !pending ||
-    !state ||
-    pending.state !== state ||
-    Date.now() - pending.createdAt > LOGIN_TTL_MS
-  ) {
-    return { success: false, error: 'OAuth state is invalid or expired. Start again.' }
-  }
 
   const config = await readGithubOAuthConfig()
   if (!config) return { success: false, error: 'OAUTH_APP_NOT_CONFIGURED' }

@@ -84,8 +84,37 @@ export function isDocumentExtension(extension: string): boolean {
   return extension === 'pdf' || extension in ZIP_FORMAT_BY_EXTENSION || LEGACY_EXTENSIONS.has(extension)
 }
 
-function isPdf(head: Buffer): boolean {
-  return head.subarray(0, HEAD_BYTES).includes('%PDF-')
+/**
+ * 判定 PDF 魔数：
+ * - 按 PDF 规范，文件头 `%PDF-x.y` 必须出现在前 1024 字节内；
+ * - 若前面有前缀字节（如 UTF-8 BOM 或少量空白/空字节），仅允许空白/控制/BOM 或 .pdf 后缀，
+ *   防止包含 `'%PDF-'` 字符串的源码/文档（如 detect.ts 自身）被误判为 PDF。
+ */
+function isPdf(head: Buffer, extension: string): boolean {
+  const window = head.subarray(0, Math.min(head.length, 1024))
+  const idx = window.indexOf('%PDF-')
+  if (idx < 0) return false
+  // 校验版本号格式（如 %PDF-1.4 / %PDF-2.0），拒绝源码里的裸字面量 '%PDF-'
+  if (idx + 8 > window.length) return false
+  const major = window[idx + 5]
+  const dot = window[idx + 6]
+  const minor = window[idx + 7]
+  if (major < 0x30 || major > 0x39 || dot !== 0x2e || minor < 0x30 || minor > 0x39) {
+    return false
+  }
+  if (idx === 0 || extension === 'pdf') return true
+  // 非 .pdf 扩展名且偏移 > 0 时，只允许 UTF-8 BOM / 空白 / NUL 前缀
+  let offset = 0
+  if (idx >= 3 && window[0] === 0xef && window[1] === 0xbb && window[2] === 0xbf) {
+    offset = 3
+  }
+  for (let i = offset; i < idx; i += 1) {
+    const b = window[i]
+    if (b !== 0x00 && b !== 0x09 && b !== 0x0a && b !== 0x0d && b !== 0x20) {
+      return false
+    }
+  }
+  return true
 }
 
 function isZip(head: Buffer): boolean {
@@ -118,7 +147,7 @@ export function sniffDocument(targetPath: string, head: Buffer): DocumentSniffRe
     // 扩展名写 .docx 但内容是 OLE 的情况（改后缀）：同样按旧格式拒绝
     return { format: 'legacy-office', isDocument: true, legacy: true, extension }
   }
-  if (isPdf(head)) {
+  if (isPdf(head, extension)) {
     return { format: 'pdf', isDocument: true, legacy: false, extension }
   }
   if (isZip(head)) {

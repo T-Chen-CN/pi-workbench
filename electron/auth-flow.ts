@@ -16,10 +16,10 @@ import type { AuthEvent, AuthInteraction, AuthPrompt } from '@earendil-works/pi-
 import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import * as path from 'path'
 import { isPresetProviderId } from 'pi-bridge'
-import { getAppDir, piAgentDir } from './app-paths.js'
+import { getAppDir } from './app-paths.js'
 import { createDesktopCredentialStore } from './credentials-store.js'
 import { getModelsStore } from './models-store.js'
-import { saveOAuthCredential } from './providers-service.js'
+import { resetCatalogRuntime, saveApiKey, saveOAuthCredential } from './providers-service.js'
 import { deviceIdSync } from './device-id.js'
 
 export interface AuthPromptPayload {
@@ -113,7 +113,7 @@ async function runLogin(
 ): Promise<void> {
   try {
     const runtime = await ModelRuntime.create({
-      modelsPath: path.join(piAgentDir, 'models.json'),
+      modelsPath: null,
       credentials: createDesktopCredentialStore(),
       modelsStore: getModelsStore(),
       refreshOnCreate: false,
@@ -134,11 +134,12 @@ async function runLogin(
 
     if (credential.type === 'oauth') {
       await saveOAuthCredential(providerId, credential)
+    } else if (credential.type === 'api_key' && credential.key) {
+      const saved = await saveApiKey(providerId, credential.key)
+      if (!saved.ok) throw new Error(saved.error)
     } else {
-      const stored = await createDesktopCredentialStore().modify(providerId, async () => credential)
-      if (stored?.type === 'api_key' && stored.key) {
-        // api_key 登录由 SDK 自己问过 Key；这里只落盘
-      }
+      await createDesktopCredentialStore().modify(providerId, async () => credential)
+      resetCatalogRuntime()
     }
 
     deps.emit(providerId, { kind: 'result', success: true })

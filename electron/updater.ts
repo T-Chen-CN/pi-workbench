@@ -253,7 +253,8 @@ export async function cleanupCompletedUpdateCache(
         if (options.platform === 'win32') {
           pruneUpdateCache(cacheBase, DEFAULT_PUBLISH_TARGET.updaterCacheDirName)
         } else {
-          fs.rmSync(cacheBase, { recursive: true, force: true })
+          // 非 Windows 下 cacheBase 是 {appDir}/cache，只允许删更新子目录，绝不能误删 drafts/temp
+          fs.rmSync(path.join(cacheBase, legacyDirName), { recursive: true, force: true })
         }
         fs.rmSync(flagPath, { force: true })
         logger.info(
@@ -650,8 +651,13 @@ export class UpdateController {
     if (this.platform === 'win32') {
       // 固定安装器目标为当前应用目录：不依赖注册表 InstallLocation，
       // 避免卸载旧目录、却把新版装到默认目录的分叉。
-      updater.installDirectory = this.appDir
-      this.logger.info('[Updater] Install directory pinned:', this.appDir)
+      // NSIS /D= 不允许尾随反斜杠；若路径含空格，uv_spawn 加引号可能导致 NSIS 忽略 /D=，记录警告。
+      const pinnedDir = this.appDir.replace(/[\\/]+$/, '')
+      if (/\s/.test(pinnedDir)) {
+        this.logger.warn('[Updater] Install directory contains spaces; NSIS /D= may ignore quoted paths:', pinnedDir)
+      }
+      updater.installDirectory = pinnedDir
+      this.logger.info('[Updater] Install directory pinned:', pinnedDir)
     }
     this.attachEvents(updater)
     this.updater = updater

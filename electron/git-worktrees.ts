@@ -497,17 +497,20 @@ export async function branchHasNewCommits(
   branch: string,
   base: string
 ): Promise<boolean> {
-  if (!branch || !base) return false
+  // fail-closed：无法确定是否存在未合并提交时必须按「有新提交」处理，绝不误执行 git branch -D
+  if (!branch || !base) return true
   let safeBranch: string
   let safeBase: string
   try {
     safeBranch = validateGitRef(branch, 'branch name')
     safeBase = validateGitRef(base, 'base ref')
   } catch {
-    return false
+    return true
   }
   const result = await git(repoRoot, ['rev-list', '--count', `${safeBase}..${safeBranch}`, '--'])
-  return result.ok && Number(result.stdout.trim()) > 0
+  if (!result.ok) return true
+  const count = Number(result.stdout.trim())
+  return !Number.isFinite(count) || count > 0
 }
 
 export async function deleteBranch(repoRoot: string, branch: string): Promise<void> {

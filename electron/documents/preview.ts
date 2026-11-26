@@ -198,7 +198,7 @@ function previewSlide(zip: ZipArchive, format: DocumentFormat): DocumentPreview 
   const imageCache = new Map<string, PresentationImage | null>()
   for (const image of model.images) imageCache.set(image.name, image)
   const slides = model.slides.slice(0, PREVIEW_SLIDES).map((slide) => {
-    const file = `ppt/slides/slide${slide.index}.xml`
+    const file = slide.sourcePath || `ppt/slides/slide${slide.index}.xml`
     return {
       index: slide.index,
       lines: slide.lines.slice(0, PREVIEW_LINES_PER_SECTION),

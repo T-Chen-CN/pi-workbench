@@ -47,8 +47,17 @@ export interface RenderResultPayload {
   error?: string
 }
 
-/** 优先用聚焦窗口（一定没被后台节流），否则退回任意可用窗口 */
+let mainWindowGetter: (() => BrowserWindow | null) | null = null
+
+/** 固定由主窗口承接扫描页渲染：拆出的辅助窗口无 preload，发给它必然 60s 超时 */
+export function configureRenderBridge(options: { getMainWindow: () => BrowserWindow | null }): void {
+  mainWindowGetter = options.getMainWindow
+}
+
+/** 必须优先使用主窗口（挂载了 preload 与 documents:render-request 监听）；仅在未注入时回退 */
 function pickTargetWindow(): BrowserWindow | null {
+  const main = mainWindowGetter?.() ?? null
+  if (main && !main.isDestroyed() && !main.webContents.isDestroyed()) return main
   const focused = BrowserWindow.getFocusedWindow()
   if (focused && !focused.isDestroyed() && !focused.webContents.isDestroyed()) return focused
   for (const win of BrowserWindow.getAllWindows()) {

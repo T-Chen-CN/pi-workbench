@@ -383,8 +383,10 @@ describe('git IPC worktree dependencies', () => {
     ])
   })
 
-  it('自动安装开关跟随设置项，默认开', () => {
+  it('自动安装开关跟随设置项，默认关', () => {
     settingsHolder.current = {}
+    expect(depsConfigHolder.current.isAutoInstallEnabled()).toBe(false)
+    settingsHolder.current = { autoInstallWorktreeDeps: true }
     expect(depsConfigHolder.current.isAutoInstallEnabled()).toBe(true)
     settingsHolder.current = { autoInstallWorktreeDeps: false }
     expect(depsConfigHolder.current.isAutoInstallEnabled()).toBe(false)

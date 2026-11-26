@@ -454,10 +454,10 @@ export function registerAgentIpc(context: AgentIpcContext): void {
       if (typeof agent.abort !== 'function') {
         return { success: false, error: 'Agent does not support abort' }
       }
-      await agent.abort(sessionId)
-      // 中止后挂起的审批已无意义，通知渲染层移除卡片
+      // 必须先释放挂起审批再 abort，否则 tool_call 钩子阻塞会话队列导致死锁
       if (sessionId) context.approvalBroker.cancelForSession(sessionId)
       else if (workspaceDir) context.approvalBroker.cancelForWorkspace(workspaceDir)
+      await agent.abort(sessionId)
       return { success: true }
     } catch (error) {
       return {
@@ -479,8 +479,9 @@ export function registerAgentIpc(context: AgentIpcContext): void {
         return { success: false, error: 'Workspace is not approved' }
       }
       if (workspaceDir) {
-        await context.agentRegistry.dispose(workspaceDir)
+        // 必须先解除该工作区的挂起审批，避免 dispose 内部 abort 等待 tool_call 死锁
         context.approvalBroker.cancelForWorkspace(workspaceDir)
+        await context.agentRegistry.dispose(workspaceDir)
         console.log('[Main] Agent disposed:', workspaceDir)
       }
       return { success: true }
