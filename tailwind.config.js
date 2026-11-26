@@ -2,11 +2,28 @@
 export default {
   content: [
     "./src/**/*.{js,jsx,ts,tsx}",
+    "./apps/cloud/web-src/**/*.{js,jsx,ts,tsx}",
+    "./node_modules/streamdown/dist/*.js",
   ],
   darkMode: 'class',
   theme: {
     extend: {
       colors: {
+        // Streamdown 内置组件语义变量桥接到 Paper & Ink token，不新增独立色板
+        background: 'rgb(var(--surface) / <alpha-value>)',
+        foreground: 'rgb(var(--ink) / <alpha-value>)',
+        muted: {
+          DEFAULT: 'rgb(var(--sunken) / <alpha-value>)',
+          foreground: 'rgb(var(--ink-muted) / <alpha-value>)',
+        },
+        border: 'var(--rule-divide)',
+        sidebar: 'rgb(var(--code-bg) / <alpha-value>)',
+        card: 'rgb(var(--raised) / <alpha-value>)',
+        popover: {
+          DEFAULT: 'rgb(var(--raised) / <alpha-value>)',
+          foreground: 'rgb(var(--ink) / <alpha-value>)',
+        },
+        primary: 'rgb(var(--accent) / <alpha-value>)',
         surface: 'rgb(var(--surface) / <alpha-value>)',
         panel: 'rgb(var(--panel) / <alpha-value>)',
         raised: 'rgb(var(--raised) / <alpha-value>)',

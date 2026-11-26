@@ -58,6 +58,14 @@ export type { SessionExtras } from './session-extras.js'
 /** 云端 Agent 的传输契约（帧格式 / 状态模型 / 默认值）；桌面端与 apps/cloud 共用一份 */
 export * from './cloud-protocol.js'
 
+/** 有序流式事件合帧器（pi-bridge / apps/cloud 共用） */
+export { createStreamCoalescer } from './stream-coalescer.js'
+export type {
+  CoalescableStreamEvent,
+  StreamCoalescer,
+  StreamCoalescerOptions,
+} from './stream-coalescer.js'
+
 /** 凭证文件存储内核；桌面端注入 safeStorage，云端注入自己的 encryptionKey */
 export { createFileCredentialStore } from './credentials-store.js'
 export type {

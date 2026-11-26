@@ -4,21 +4,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { OpenFile } from '../src/types'
 
 /**
- * `rehype-highlight` 每被调用一次就会 `createLowlight(common)`，现场注册整套语法
- * （单次约 20ms）。这里统计它被调用的次数：Markdown 每次重渲染都会走一遍插件，
- * 必须只构建一次变换、之后复用。
+ * 零 WASM Shiki JS 高亮器必须是全局单例：多次渲染和切换代码块不能重复初始化引擎，
+ * 否则每次重渲染都要交一次冷启动开销。
  */
-const rehypeHighlight = vi.fn(() => () => {})
-vi.mock('rehype-highlight', () => ({ default: rehypeHighlight }))
-
 const { MarkdownBody } = await import('../src/components/AgentMarkdown')
+const { getShikiInitCount, piShikiCodePlugin } = await import('../src/utils/shikiHighlighter')
 
 afterEach(() => {
-  rehypeHighlight.mockClear()
+  vi.clearAllMocks()
 })
 
 describe('MarkdownBody', () => {
-  it('builds the highlight transform once and reuses it across renders', () => {
+  it('initializes the Shiki JS highlighter singleton once across renders', async () => {
     const view = render(
       <>
         <MarkdownBody content={'```js\nconst a = 1\n```'} highlight />
@@ -32,8 +29,10 @@ describe('MarkdownBody', () => {
       </>
     )
 
-    // 4 次渲染（含一次重渲染）只应该注册一遍语法
-    expect(rehypeHighlight).toHaveBeenCalledTimes(1)
+    // 多次渲染与多次高亮触发最多初始化一次 Shiki JS 单例
+    piShikiCodePlugin.highlight({ code: 'const x = 1', language: 'ts', themes: piShikiCodePlugin.getThemes() }, () => {})
+    piShikiCodePlugin.highlight({ code: 'x = 2', language: 'py', themes: piShikiCodePlugin.getThemes() }, () => {})
+    expect(getShikiInitCount()).toBeLessThanOrEqual(1)
   })
 
   it('still renders markdown content', () => {

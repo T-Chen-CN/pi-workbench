@@ -9,7 +9,7 @@
  * 产物：cache/cloud-bundle/ —— dist / web / node_modules / package.json
  */
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -28,38 +28,9 @@ mkdirSync(stage, { recursive: true })
 run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:bridge'])
 run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:cloud'])
 
-// 2) 代码与静态资源
+// 2) 代码与静态资源（apps/cloud/web-dist 已由 Vite 内联并打包全部 @fontsource 与 KaTeX 字体）
 cpSync(path.join(root, 'apps', 'cloud', 'dist'), path.join(stage, 'dist'), { recursive: true })
-cpSync(path.join(root, 'apps', 'cloud', 'web'), path.join(stage, 'web'), { recursive: true })
-
-// 2b) 自托管 @fontsource 字体（与桌面端 src/main.tsx 完全一致，避免运行包缺少字体文件）
-const FONT_PACKAGES = [
-  { slug: 'instrument-serif', pkgPath: ['@fontsource', 'instrument-serif'], cssFiles: ['400.css', '400-italic.css'] },
-  { slug: 'noto-serif-sc', pkgPath: ['@fontsource-variable', 'noto-serif-sc'], cssFiles: ['index.css'] },
-  { slug: 'noto-sans', pkgPath: ['@fontsource-variable', 'noto-sans'], cssFiles: ['index.css'] },
-  { slug: 'noto-sans-sc', pkgPath: ['@fontsource-variable', 'noto-sans-sc'], cssFiles: ['index.css'] },
-  { slug: 'geist-mono', pkgPath: ['@fontsource-variable', 'geist-mono'], cssFiles: ['index.css'] },
-]
-const fontsRoot = path.join(stage, 'web', 'fonts')
-mkdirSync(fontsRoot, { recursive: true })
-const combinedFontsCss = []
-for (const pkg of FONT_PACKAGES) {
-  const sourceDir = path.join(root, 'node_modules', ...pkg.pkgPath)
-  const filesDir = path.join(sourceDir, 'files')
-  if (!existsSync(filesDir)) continue
-  const targetDir = path.join(fontsRoot, pkg.slug)
-  mkdirSync(path.join(targetDir, 'files'), { recursive: true })
-  cpSync(filesDir, path.join(targetDir, 'files'), { recursive: true })
-  for (const cssFile of pkg.cssFiles) {
-    const cssPath = path.join(sourceDir, cssFile)
-    if (!existsSync(cssPath)) continue
-    const raw = readFileSync(cssPath, 'utf8')
-    combinedFontsCss.push(
-      raw.replace(/url\(\s*['"]?\.\/files\/([^'")]+)['"]?\s*\)/g, `url('/fonts/${pkg.slug}/$1')`)
-    )
-  }
-}
-writeFileSync(path.join(fontsRoot, 'fonts.css'), combinedFontsCss.join('\n') + '\n')
+cpSync(path.join(root, 'apps', 'cloud', 'web-dist'), path.join(stage, 'web'), { recursive: true })
 
 // 3) 运行期依赖
 writeFileSync(

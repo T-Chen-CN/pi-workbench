@@ -3,7 +3,7 @@ import { AlertCircle, Check, ChevronRight, ListChecks, Loader2 } from 'lucide-re
 import type { AgentTracePart, StructuredPlan } from '../types/electron'
 import { useI18nStore } from '../store/i18nStore'
 import type { TranslationKey, TranslationParams } from '../i18n/translations'
-import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
+import { StreamingMarkdown } from './AgentMarkdown'
 import { Button, Caption, DataText, Label } from './ui'
 
 type Translator = (key: TranslationKey, params?: TranslationParams) => string
@@ -144,16 +144,15 @@ export const AgentParts: React.FC<AgentPartsProps> = React.memo(function AgentPa
       {groups.map((group, index) => {
         if (group.type === 'text') {
           const isLast = index === lastSignificant
+          const activeStream = isStreaming && isLast
           return (
             <div key={group.key} className="chat-markdown text-ink">
-              {isStreaming && isLast ? (
-                <StreamingMarkdown content={group.part.text} />
-              ) : (
-                <MarkdownBody
-                  content={group.part.text}
-                  highlight={group.part.text.length <= 20_000}
-                />
-              )}
+              <StreamingMarkdown
+                content={group.part.text}
+                isStreaming={activeStream}
+                showCursor={activeStream}
+                highlight={group.part.text.length <= 20_000}
+              />
             </div>
           )
         }
@@ -429,11 +428,12 @@ const ThinkingRow = React.memo(function ThinkingRow({
 
   return (
     <div className="chat-markdown agent-trace-markdown py-1 text-ink-muted">
-      {streaming ? (
-        <StreamingMarkdown content={part.text} showCursor={false} />
-      ) : (
-        <MarkdownBody content={part.text} highlight={false} />
-      )}
+      <StreamingMarkdown
+        content={part.text}
+        isStreaming={streaming}
+        showCursor={false}
+        highlight={false}
+      />
     </div>
   )
 })

@@ -12,12 +12,15 @@
 import {
   buildTaskEventMessage,
   CLOUD_EVENT_THROTTLE_MS,
+  createStreamCoalescer,
   type CloudAgentStatus,
   type CloudChatMessage,
+  type CloudChatTraceItem,
   type CloudRuntimeState,
   type CloudTaskEventPayload,
   type CloudTaskSnapshot,
   type AgentTraceEvent,
+  type StreamCoalescer,
 } from 'pi-bridge'
 import type { AgentManager } from 'pi-bridge'
 import type { CloudStore } from '../store/store.js'
@@ -53,6 +56,8 @@ export interface CloudSessionDeps {
    */
   ready?: () => Promise<boolean>
   now?: () => number
+  /** 流式增量合帧窗口（毫秒，默认 50ms）；测试可显式调整 */
+  traceFlushMs?: number
 }
 
 interface PendingEvent {
@@ -68,8 +73,18 @@ export class CloudSession {
   private pending = new Map<string, PendingEvent>()
   private flushTimer: NodeJS.Timeout | null = null
   private error: string | undefined
+  private readonly traceCoalescer: StreamCoalescer<AgentTraceEvent>
 
-  constructor(private readonly deps: CloudSessionDeps) {}
+  constructor(private readonly deps: CloudSessionDeps) {
+    this.traceCoalescer = createStreamCoalescer<AgentTraceEvent>(
+      (events) => this.emitCoalescedTraces(events),
+      {
+        intervalMs: deps.traceFlushMs ?? 50,
+        maxChars: 4000,
+        flushOnBoundary: true,
+      }
+    )
+  }
 
   private now(): number {
     return this.deps.now?.() ?? Date.now()
@@ -115,7 +130,7 @@ export class CloudSession {
     return { ok: true }
   }
 
-  /** 会话历史 → 快照消息（唯一真相源是 JSONL，这里只做投影） */
+  /** 会话历史 → 快照消息（唯一真相源是 JSONL，这里只做投影，含思考与工具轨迹） */
   async history(): Promise<CloudChatMessage[]> {
     if (!this.sessionId) return []
     const opened = await this.deps.agent.openSession(this.sessionId)
@@ -123,11 +138,36 @@ export class CloudSession {
     const messages: CloudChatMessage[] = []
     ;(opened.history ?? []).forEach((message, index) => {
       if (message.role !== 'user' && message.role !== 'assistant') return
+      const parts = message.parts ?? []
+      let thinking = ''
+      let thinkingRedacted = false
+      let thinkingDurationMs = 0
+      const traces: CloudChatTraceItem[] = []
+      for (const part of parts) {
+        if (part.type === 'thinking') {
+          if (part.text) thinking = thinking ? `${thinking}\n\n${part.text}` : part.text
+          if (part.redacted) thinkingRedacted = true
+          if (typeof part.durationMs === 'number') thinkingDurationMs += part.durationMs
+        } else if (part.type === 'tool') {
+          traces.push({
+            id: part.toolCallId,
+            toolName: part.toolName,
+            summary: part.resultPreview || part.argsSummary || '',
+            status: part.status === 'error' || part.isError ? 'error' : part.status === 'running' ? 'running' : 'ok',
+            durationMs: part.durationMs,
+            resultPreview: part.resultPreview,
+          })
+        }
+      }
       messages.push({
         id: `h-${index}`,
         role: message.role,
         text: message.content,
         at: message.timestamp || this.now(),
+        ...(thinking ? { thinking } : {}),
+        ...(thinkingRedacted ? { thinkingRedacted: true } : {}),
+        ...(thinkingDurationMs > 0 ? { thinkingDurationMs } : {}),
+        ...(traces.length > 0 ? { traces: traces.slice(-30) } : {}),
       })
     })
     return messages.slice(-200)
@@ -271,41 +311,59 @@ export class CloudSession {
   }
 
   private endTurn(status: CloudAgentStatus): void {
+    // 轮次结束前必须刷出剩余缓冲增量，否则最后 50ms 的文字或思考会丢失或晚于 message_end
+    this.traceCoalescer.flush()
     if (this.streamingMessageId) this.finishStreamingMessage()
     this.status = status
     this.deps.hub.publish({ type: 'cloud_status', status })
   }
 
-  /** 流式：把 text_delta 拼成一条消息，tool/thinking 作为独立 trace 帧转发 */
+  /** 流式：经有序合帧器合并 50ms 内的 text_delta / thinking_delta，保护 2000 条 WS outbox */
   private onTrace(event: AgentTraceEvent): void {
-    if (event.type === 'text_delta') {
-      if (!this.streamingMessageId) {
-        this.streamingMessageId = `msg-${this.now()}-${Math.random().toString(36).slice(2, 8)}`
-        this.streamingText = ''
-        this.status = 'replying'
-        this.deps.hub.publish({ type: 'cloud_status', status: 'replying' })
-        this.deps.hub.publish({
-          type: 'message_start',
-          messageId: this.streamingMessageId,
-          role: 'assistant',
-          at: this.now(),
-        })
-      }
-      this.streamingText += event.delta
-      this.deps.hub.publish({
-        type: 'text_delta',
-        messageId: this.streamingMessageId,
-        delta: event.delta,
-      })
-      return
-    }
-
-    // 思考 / 工具调用属于「协调过程」，可见但不进会话正文（F-28 / F-45）
+    // 压缩属于执行细节，对话流不转发（F-45）
     if (event.type === 'compaction_start' || event.type === 'compaction_end') return
-    this.deps.hub.publish({ type: 'trace', messageId: this.streamingMessageId ?? undefined, trace: event })
+    this.traceCoalescer.push(event)
+  }
+
+  private emitCoalescedTraces(events: AgentTraceEvent[]): void {
+    for (const event of events) {
+      if (event.type === 'text_delta') {
+        if (!this.streamingMessageId) {
+          this.streamingMessageId = `msg-${this.now()}-${Math.random().toString(36).slice(2, 8)}`
+          this.streamingText = ''
+          this.status = 'replying'
+          this.deps.hub.publish({ type: 'cloud_status', status: 'replying' })
+          this.deps.hub.publish({
+            type: 'message_start',
+            messageId: this.streamingMessageId,
+            role: 'assistant',
+            at: this.now(),
+          })
+        }
+        this.streamingText += event.delta
+        this.deps.hub.publish({
+          type: 'text_delta',
+          messageId: this.streamingMessageId,
+          delta: event.delta,
+        })
+        continue
+      }
+
+      if (event.type === 'thinking_delta' && this.status === 'idle') {
+        this.status = 'thinking'
+        this.deps.hub.publish({ type: 'cloud_status', status: 'thinking' })
+      }
+      // 思考与工具调用合并后作为有序 trace 帧下发，由桌面云端页与 Web 端折叠渲染（F-45）
+      this.deps.hub.publish({
+        type: 'trace',
+        messageId: this.streamingMessageId ?? undefined,
+        trace: event,
+      })
+    }
   }
 
   private finishStreamingMessage(): void {
+    this.traceCoalescer.flush()
     const id = this.streamingMessageId
     if (!id) return
     this.deps.hub.publish({

@@ -437,4 +437,104 @@ describe('已读游标、流式插话与解绑清理（P0-2 / P1）', () => {
     expect(state.awaySummary).toBeNull()
     expect(state.stoppingTaskIds).toEqual({})
   })
+
+  it('thinking_delta / thinking_redacted / tool_update 实时归并并在正文到达时收敛思考耗时', () => {
+    reset()
+    const store = useCloudStore.getState()
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: { type: 'trace', messageId: 'm-think', trace: { type: 'thinking_delta', delta: '第一步：' } },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'trace', messageId: 'm-think', trace: { type: 'thinking_delta', delta: '查设备' } },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 3,
+      event: { type: 'trace', messageId: 'm-think', trace: { type: 'thinking_redacted' } },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 4,
+      event: {
+        type: 'trace',
+        messageId: 'm-think',
+        trace: { type: 'tool_start', toolCallId: 'tc-1', toolName: 'list_devices', argsSummary: '{}' },
+      },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 5,
+      event: {
+        type: 'trace',
+        messageId: 'm-think',
+        trace: { type: 'tool_update', toolCallId: 'tc-1', resultPreview: '正在查询…' },
+      },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 6,
+      event: { type: 'text_delta', messageId: 'm-think', delta: '查到了' },
+    })
+
+    const msg = useCloudStore.getState().messages[0]
+    expect(msg).toMatchObject({
+      id: 'm-think',
+      thinking: '第一步：查设备',
+      thinkingRedacted: true,
+      text: '查到了',
+      streaming: true,
+    })
+    expect(typeof msg.thinkingDurationMs).toBe('number')
+    expect(msg.traces[0]).toMatchObject({
+      id: 'tc-1',
+      toolName: 'list_devices',
+      resultPreview: '正在查询…',
+    })
+  })
+
+  it('snapshot 水合持久化的 thinking 与 traces 字段', () => {
+    reset()
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'snapshot',
+      seq: 5,
+      snapshot: {
+        lastSeq: 5,
+        cloud: { status: 'idle', canStopReply: false },
+        messages: [
+          {
+            id: 'h-0',
+            role: 'assistant',
+            text: '已完成检查',
+            at: 100,
+            thinking: '先看状态再汇总',
+            thinkingDurationMs: 1500,
+            traces: [{ id: 'tc-s', toolName: 'get_task', summary: 'done', status: 'ok', durationMs: 42 }],
+          },
+        ],
+        tasks: [],
+        devices: [],
+        authorizations: [],
+        units: [],
+      },
+    })
+    const msg = useCloudStore.getState().messages[0]
+    expect(msg).toMatchObject({
+      id: 'h-0',
+      thinking: '先看状态再汇总',
+      thinkingDurationMs: 1500,
+    })
+    expect(msg.traces).toHaveLength(1)
+    expect(msg.traces[0]).toMatchObject({ id: 'tc-s', toolName: 'get_task', status: 'ok', durationMs: 42 })
+  })
 })

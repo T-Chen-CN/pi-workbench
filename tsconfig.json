@@ -17,6 +17,6 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "tests"],
+  "include": ["src", "apps/cloud/web-src", "tests"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

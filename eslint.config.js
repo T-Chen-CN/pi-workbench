@@ -10,6 +10,7 @@ export default tseslint.config(
       'release/**',
       'pi-bridge/dist/**',
       'apps/cloud/dist/**',
+      'apps/cloud/web-dist/**',
       'node_modules/**',
       'cache/**',
       'data/**',
@@ -47,22 +48,6 @@ export default tseslint.config(
         window: 'readonly',
         document: 'readonly',
         URLSearchParams: 'readonly',
-      },
-    },
-  },
-  {
-    // Web 客户端：浏览器 ESM，零构建（apps/cloud/web/app.js）
-    files: ['apps/cloud/web/**/*.js'],
-    languageOptions: {
-      sourceType: 'module',
-      globals: {
-        window: 'readonly',
-        document: 'readonly',
-        location: 'readonly',
-        fetch: 'readonly',
-        WebSocket: 'readonly',
-        setTimeout: 'readonly',
-        console: 'readonly',
       },
     },
   },

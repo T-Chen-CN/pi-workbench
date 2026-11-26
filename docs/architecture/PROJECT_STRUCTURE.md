@@ -87,7 +87,10 @@ pi-workbench/
 │
 ├── src/                          # React 渲染进程
 │   ├── components/               # 扁平结构，无子目录
-│   │   ├── AgentMarkdown.tsx     # 流式 / 完整 Markdown 渲染
+│   │   ├── AgentMarkdown.tsx     # 桌面端 Markdown 包装（注入路径打开与外链 IPC）
+│   │   ├── StreamdownView.tsx    # 统一流式 Markdown 渲染原语（Streamdown v2 + CJK/KaTeX/Mermaid + 零 WASM Shiki）
+│   │   ├── CloudTraceSection.tsx # 可折叠思考与工具轨迹块（桌面端云端页与 Web 共用）
+│   │   ├── StreamingTranscript.tsx # 统一贴底滚动容器与回底浮动按钮（use-stick-to-bottom）
 │   │   ├── AgentTrace.tsx        # 思考、文本、工具步骤时间线
 │   │   ├── ApprovalCard.tsx      # 工具审批卡
 │   │   ├── ChatPanel.tsx         # 会话面板入口（调用 controller hook）
@@ -198,7 +201,7 @@ pi-workbench/
 │   │   ├── auth/                 # scrypt 口令、token 哈希、限速熔断、cookie
 │   │   ├── secure/               # AES-256-GCM 配置加密
 │   │   └── store/                # 原子写 JSON 文档（accounts/devices/tasks/...）
-│   ├── web/                      # Web 客户端（纯 ESM，零构建，零 XSS）
+│   ├── web-src/                  # Web 控制台源码（React + Tailwind + 共用流式渲染原语，本地 Vite 构建到 web-dist/）
 │   └── deploy/                   # systemd 单元、Caddy 片段、每日备份
 │
 ├── electron/cloud/               # 终端执行器（device agent），只跑在桌面端主进程
@@ -385,4 +388,5 @@ ChatPanel.handleSubmit
 | `dist/` | 渲染进程 | 否 |
 | `dist-electron/` | 主进程 + preload | 否 |
 | `pi-bridge/dist/` | AgentManager | 否（`predev`/`build` 自动生成） |
+| `apps/cloud/web-dist/` | 云端 Web 静态产物 | 否（`build:cloud-web` / `build:cloud` 生成） |
 | `release/` | 安装包/解包目录 | 否 |

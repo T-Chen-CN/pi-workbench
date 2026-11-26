@@ -12,10 +12,10 @@
 | `apps/cloud`（`@pi-workbench/cloud`） | 云端控制面 + 数据面 + **唯一的云端会话** | **没有**（工具白名单只有 6 个） |
 | `pi-bridge/src/cloud-protocol.ts` | 协议契约（帧、状态机常量、事件载荷） | — |
 | `electron/cloud/*` | 桌面端内置的终端执行器（device agent） | 有（工单在自己的 worktree 里跑） |
-| `apps/cloud/web/*` | Web 客户端（纯 ESM，零构建） | — |
+| `apps/cloud/web-src/*` | Web 客户端（React + Tailwind + 共用流式渲染原语，本地 Vite 构建到 `web-dist/`） | — |
 | `src/components/CloudView.tsx` | 桌面端云端页（独立视图） | — |
 
-三端共用**一套帧格式**，渲染各自实现：桌面端不用 `chatStore` / `workspaceStore` / `diffStore`。
+三端共用**一套帧格式与流式渲染原语**（`StreamdownView` + `CloudTraceSection` + `StreamingTranscript`），状态归并仍按端解耦：桌面端云端页不用 `chatStore` / `workspaceStore` / `diffStore`。
 
 ## 2. 进程与目录
 
@@ -177,7 +177,7 @@
   所有凭据类失败对外同一个错误码（不透露「码是否存在 / 过期 / 用过」）。
 - 账号类操作（建账号、登录、生成配对码、移除设备）只认 cookie 会话；
   设备 token 只够**改云端模型配置、读快照与授权**（桌面端没有 cookie）。
-- Web 客户端零 XSS：只用 `textContent` / DOM 构造，静态文件走白名单（`src/http/static.ts`）。
+- Web 客户端零 XSS：源码禁用 `innerHTML` / `dangerouslySetInnerHTML` / `eval`，Markdown 经 `StreamdownView`（`rehype-sanitize`）净化，静态文件走白名单与严格单段 `/assets/` 校验（`src/http/static.ts`）+ 无 `eval`/WASM CSP。
 - 云端 API Key 加密落盘、接口只回末四位；Web / 桌面端写的是同一份配置。
 
 ### 3.5.1 对话气泡归谁画
@@ -196,8 +196,7 @@
 「我收到哪了」，`0` / 负数 / `NaN` / 空串一律归为「没有游标」，此时必须回整份快照；照 0 去重放日志
 只会把旧事件播一遍，快照里的消息一条都到不了客户端。三处都用它：服务端 upgrade 解析、
 `Hub.sendInitial/resumeClient`（会话层再兜一次）。拼参数用 `clientCursorQuery(lastSeq)`，游标为空时
-返回空串（不能拼出 `?lastAckSeq=0`）。Web 客户端是零构建纯 ESM，import 不了协议模块，只能自己写
-同样两行（`apps/cloud/web/app.js` 的 `connect()`），改规则时两边一起改。
+返回空串（不能拼出 `?lastAckSeq=0`）。Web 客户端在 `apps/cloud/web-src/CloudWebApp.tsx` 的 `connectSocket()` 保持同样口径（`lastSeq > 0 ? ... : ''`），改规则时两边一起改。
 
 **`resume(0)` 就是「给我一份快照」**（`buildSnapshotRequest()`）：桌面端 `CloudClientBridge.open()`
 在连接已活着时（渲染层重载、云端页重新挂载）主动发这一帧——主进程的 socket 和游标还在，但渲染层
@@ -222,16 +221,9 @@ SDK 初始化上；配置解密失败时才每次快照都往 hub 推一条 `mis
 
 **Web 客户端的两条铁律**：
 
-1. **渲染函数只负责构造并返回节点**。`renderAside()` 曾经写成「去 `querySelector('aside')` 原地替换」——
-   可页面里的 `<aside>` 本来就由它生成，于是它永远返回 `undefined`、整栏静默不渲染，
-   连带「点生成配对码没反应，切个页面才出现」这类现象。
-2. **输入必须存 state，不能只靠 DOM**：整页 `render()` 在收到任何 WS 帧（流式输出）时都会重跑，
-DOM 会被重建一次。值只挂在 input 上，等于「说一句话就把刚填的 Key / URL 抹掉」，
-拉模型时再整页 render 一次更是必丢。所以配置卡：输入从 `state.configDraft` 回填、`oninput` 立刻写回，
-拉模型只做局部更新（换模型字段 + 状态行），保存成功才清 draft。
-`tests/cloud-web-config-form.test.ts` 把这两条钉住了（Web 客户端零构建不导出函数，只能做源码断言）；
-`tests/cloud-web-app.test.ts` 用 jsdom 起**真实**Web 客户端（打桩 fetch / WebSocket）跑行为：
-右栏必须渲染、点配对码当场出现、拉模型不抹输入、流式帧重渲染后草稿与 Key 仍在。
+1. **草稿与配置态留在父级状态，不因标签切换或 WS 帧丢失**：聊天草稿（`draft`）、配置草稿（`configDraft`）、目录缓存（`configModels`）与文档草稿（`docDrafts`）全部由 `CloudWebApp` 持有，拉取模型目录通过函数式状态更新只补默认模型，绝不覆盖用户已输入的 API Key；保存成功后才清 `configDraft`。
+2. **折叠右栏与 WS 增量更新绝不重建聊天区与编辑器 DOM**：消息行按 `React.memo` 隔离，右栏折叠只切换侧栏节点，会话输入框与记忆页 `AGENTS.md` 文本框在收到流式 / `task` / `read_state` 帧时始终保持 DOM 实例与焦点。
+`tests/cloud-web-config-form.test.tsx` 与 `tests/cloud-web-app.test.tsx` 通过 Testing Library + jsdom 覆盖上述行为及流式思考块与 Streamdown 安全渲染回归。
 
 ## 4. 本机运行
 

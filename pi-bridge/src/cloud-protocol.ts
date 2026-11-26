@@ -400,6 +400,15 @@ export interface CloudRuntimeState {
 
 export type CloudChatRole = 'user' | 'assistant' | 'system' | 'event'
 
+export interface CloudChatTraceItem {
+  id: string
+  toolName: string
+  summary: string
+  status: 'running' | 'ok' | 'error'
+  durationMs?: number
+  resultPreview?: string
+}
+
 export interface CloudChatMessage {
   id: string
   role: CloudChatRole
@@ -407,6 +416,12 @@ export interface CloudChatMessage {
   at: number
   streaming?: boolean
   error?: string
+  /** 助手思考过程文本（重连快照保留，实时流由 thinking_delta trace 追加） */
+  thinking?: string
+  thinkingRedacted?: boolean
+  thinkingDurationMs?: number
+  /** 工具调用摘要列表（重连快照保留） */
+  traces?: CloudChatTraceItem[]
   /** 由工单事件唤醒的一轮：UI 上要与用户发言区分（A-31） */
   taskEvent?: { taskId?: string; kind: string }
   usage?: { input?: number; output?: number; reasoning?: number; cost?: number }

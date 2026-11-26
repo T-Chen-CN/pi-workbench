@@ -207,6 +207,7 @@ describe('design system usage', () => {
       'components/FileExplorer.tsx',
       'components/PanelContextMenu.tsx',
       'components/SelectionQuoteButton.tsx',
+      'components/StreamingTranscript.tsx',
       'components/Toast.tsx'
     ])
     const violations: string[] = []
@@ -288,65 +289,86 @@ describe('design system usage', () => {
 })
 
 describe('cloud web design system compliance (D-06)', () => {
-  const CLOUD_WEB = resolve(__dirname, '../apps/cloud/web')
-  const appCss = readFileSync(resolve(CLOUD_WEB, 'app.css'), 'utf-8')
-  const appJs = readFileSync(resolve(CLOUD_WEB, 'app.js'), 'utf-8')
-  const indexHtml = readFileSync(resolve(CLOUD_WEB, 'index.html'), 'utf-8')
-  const faviconSvg = readFileSync(resolve(CLOUD_WEB, 'favicon.svg'), 'utf-8')
+  const CLOUD_WEB_SRC = resolve(__dirname, '../apps/cloud/web-src')
+  const webTsxFiles = walk(CLOUD_WEB_SRC).filter((file) => file.endsWith('.tsx'))
+  const webAllTsFiles = walk(CLOUD_WEB_SRC).filter((file) => /\.(ts|tsx)$/.test(file))
+  const indexHtml = readFileSync(resolve(CLOUD_WEB_SRC, 'index.html'), 'utf-8')
+  const faviconSvg = readFileSync(resolve(CLOUD_WEB_SRC, 'public/favicon.svg'), 'utf-8')
+  const mainTsx = readFileSync(resolve(CLOUD_WEB_SRC, 'main.tsx'), 'utf-8')
 
-  it('uses Paper & Ink Pine tokens, four surfaces, and three derived ink rules', () => {
-    expect(appCss).toContain('--accent: 47 93 78;')
-    expect(appCss).toContain('--accent: 143 199 180;')
-    for (const token of [
-      '--surface:',
-      '--panel:',
-      '--raised:',
-      '--sunken:',
-      '--rule-control:',
-      '--rule-divide:',
-      '--rule-hairline:',
-      '--accent-fg:',
-      '--success:',
-    ]) {
-      expect(appCss).toContain(token)
-    }
-    expect(appCss.toLowerCase()).not.toContain('#8a5a2b')
-    expect(appCss.toLowerCase()).not.toContain('#d0a068')
+  it('reuses shared Paper & Ink stylesheet, bundled fonts, and Pine favicon', () => {
+    expect(mainTsx).toContain("import '../../../src/index.css'")
+    expect(mainTsx).toContain('@fontsource/instrument-serif')
+    expect(mainTsx).toContain('@fontsource-variable/noto-sans-sc')
+    expect(mainTsx).toContain('@fontsource-variable/geist-mono')
     expect(faviconSvg).toContain('#2F5D4E')
+    expect(indexHtml).toContain('viewport-fit=cover')
   })
 
-  it('forbids 999px capsule buttons and legacy .pill classes', () => {
-    expect(appCss).not.toMatch(/\.pill\b/)
-    expect(appJs).not.toMatch(/['"]pill(?:\s|['"])/)
-    expect(appCss).not.toMatch(/border-radius:\s*999px\b/)
-    // 9999px 圆角只允许给 6px 状态小圆点使用，不得用于按钮/卡片/输入框
-    const radiusMatches = [...appCss.matchAll(/([^{}]+)\{[^{}]*border-radius:\s*9999px[^{}]*\}/g)]
-    for (const match of radiusMatches) {
-      const selector = match[1].trim()
-      expect(selector).toMatch(/^\.(?:status-dot|msg-streaming)$/)
+  it('obeys the same Paper & Ink typography, palette, and semantic token rules as desktop', () => {
+    const violations: string[] = []
+    for (const file of webTsxFiles) {
+      const rel = relative(CLOUD_WEB_SRC, file).replace(/\\/g, '/')
+      const source = readFileSync(file, 'utf-8')
+      for (const rule of FORBIDDEN) {
+        for (const match of source.matchAll(rule.pattern)) {
+          const line = source.slice(0, match.index).split('\n').length
+          violations.push(`${rel}:${line} — ${rule.label}: ${match[0]}`)
+        }
+      }
+      for (const match of source.matchAll(SEMANTIC_PATTERN)) {
+        const family = match[1]
+        if (SEMANTIC_ALIASES[family]) {
+          const line = source.slice(0, match.index).split('\n').length
+          violations.push(`${rel}:${line} — misspelled color family: ${match[0]}`)
+          continue
+        }
+        const shade = match[2]?.slice(1)
+        if (!shade || SEMANTIC_TOKENS[family]?.includes(shade)) continue
+        const line = source.slice(0, match.index).split('\n').length
+        violations.push(`${rel}:${line} — unknown semantic color: ${match[0]}`)
+      }
+      for (const match of source.matchAll(/#[0-9A-Fa-f]{3,8}\b/g)) {
+        const line = source.slice(0, match.index).split('\n').length
+        violations.push(`${rel}:${line} — hardcoded color: ${match[0]}`)
+      }
+      for (const match of source.matchAll(/role="tab"/g)) {
+        const line = source.slice(0, match.index).split('\n').length
+        violations.push(`${rel}:${line} — 自行拼装 role="tab"，改用 patterns.tsx 的 Tab`)
+      }
     }
+    expect(violations, violations.join('\n')).toEqual([])
   })
 
-  it('forbids innerHTML and HTML string injection in app.js', () => {
-    for (const forbidden of [
+  it('reserves full-ink borders for floating layers in Cloud Web', () => {
+    const CLOUD_WEB_FLOATING = new Set(['CloudWebApp.tsx'])
+    const violations: string[] = []
+    for (const file of webTsxFiles) {
+      const rel = relative(CLOUD_WEB_SRC, file).replace(/\\/g, '/')
+      if (CLOUD_WEB_FLOATING.has(rel)) continue
+      const source = readFileSync(file, 'utf-8')
+      for (const match of source.matchAll(/\bborder-line\b/g)) {
+        const line = source.slice(0, match.index).split('\n').length
+        violations.push(`${rel}:${line} — full-ink border outside a floating layer`)
+      }
+    }
+    expect(violations, violations.join('\n')).toEqual([])
+  })
+
+  it('forbids innerHTML, dangerouslySetInnerHTML, and eval in Cloud Web sources', () => {
+    const forbidden = [
       /[.]innerHTML\b/,
       /[.]outerHTML\b/,
       /insertAdjacentHTML/,
       /document[.]write\(/,
       /\beval\(/,
-    ]) {
-      expect(forbidden.test(appJs), `forbidden pattern ${forbidden}`).toBe(false)
+      /\bdangerouslySetInnerHTML\b/,
+    ]
+    for (const file of webAllTsFiles) {
+      const source = readFileSync(file, 'utf-8')
+      for (const pattern of forbidden) {
+        expect(pattern.test(source), `${pattern} in ${file}`).toBe(false)
+      }
     }
-  })
-
-  it('keeps Chinese card titles and form labels in UI sans without uppercase', () => {
-    const cardH3 = appCss.match(/\.card\s+h3\s*\{([^}]*)\}/)?.[1] ?? ''
-    expect(cardH3).toContain('var(--font-ui)')
-    expect(cardH3).not.toContain('uppercase')
-    expect(cardH3).not.toContain('letter-spacing')
-    // 表单中文字段标签不得套 .mono
-    expect(appJs).not.toMatch(/el\('label',\s*\{\s*class:\s*'[^']*mono/)
-    expect(indexHtml).toContain('href="/fonts.css"')
-    expect(indexHtml).toContain('viewport-fit=cover')
   })
 })

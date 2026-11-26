@@ -128,7 +128,7 @@
 
 **为什么是 WebSocket（一句话）**：它是一条双向长连接，服务端随时能推、客户端随时能发，不需要客户端反复问"有新消息吗"；流式输出、工单状态变化、停止指令都靠它即时送达。
 
-**三端共用一套事件帧**：客户端通道与设备通道都发 `AgentTraceEvent`（`text_delta` / `thinking_delta` / `tool_start` / `tool_update` / `tool_end` / `compaction`）以及状态快照帧。共用的是**帧格式与状态模型**；**渲染各自实现，都不复用现有聊天组件**：桌面端云端页另写轻量渲染（不依赖 `chatStore` / `workspaceStore` / `diffStore` / `panelHost`），Web 用纯 ESM 轻量实现（见 D-19）。
+**三端共用一套事件帧与流式渲染栈**：客户端通道与设备通道都发 `AgentTraceEvent`（`text_delta` / `thinking_delta` / `thinking_redacted` / `tool_start` / `tool_update` / `tool_end`）以及状态快照帧。桌面端本地会话、桌面端云端页与 Web 控制台共用同一套流式渲染原语（`StreamdownView` + 零 WASM Shiki JS 引擎 + `CloudTraceSection` + `StreamingTranscript`），Web 端通过本地轻量 Vite + React 打包为纯静态产物，服务器依然零构建部署（见 D-19）。
 
 ### 3.5 部署形态（定稿）与服务器基线
 
@@ -416,7 +416,7 @@ G1–G3、G8–G12 是注入与守卫改造，**不改变现有行为**；G5 **�
 
 - **F-43** 所有通道都由客户端**主动出站反连**云端（NAT 后不开放端口）。
 - **F-44** 云端为每条通道维护 outbox：单调 `seq`，对端 `ack(seq)` 后删除；重连发 `resume(lastAckSeq)` 按序补投 —— 保证工单、取消、汇报不丢。**必须有上限与 TTL**：客户端通道（浏览器标签关了很久）的 outbox 超过上限（建议 2000 条 / 24 h）就丢弃旧增量并在 `resume` 时回 `snapshot` 优先（F-49 已支持），否则 59 GB 磁盘会被拖满；设备通道的待投递项在工单进终态时立即清除（F-21）。
-- **F-45** 事件帧沿用 `AgentTraceEvent`，**不复刻旧的 `/v1/runs`**。真实成员（`pi-bridge/src/types.ts:76`）：`text_delta` / `thinking_delta` / **`thinking_redacted`** / `tool_start` / `tool_update` / `tool_end` / **`retry_start` / `retry_end`** / **`compaction_start` / `compaction_end`** / **`plan_submitted` / `plan_updated`**。注意 `compaction` 是**历史 part 类型**，不是流式事件名。**2026-11-22 口径**：帧格式仍然统一，但云端的会话流**不转发** `compaction_start/end`（`cloud-session.onTrace` 显式过滤）——压缩属于执行细节，对话里只保留文字与工具轨迹；终端本地会话照旧。
+- **F-45** 事件帧沿用 `AgentTraceEvent`，**不复刻旧的 `/v1/runs`**。真实成员（`pi-bridge/src/types.ts:76`）：`text_delta` / `thinking_delta` / **`thinking_redacted`** / `tool_start` / `tool_update` / `tool_end` / **`retry_start` / `retry_end`** / **`compaction_start` / `compaction_end`** / **`plan_submitted` / `plan_updated`**。注意 `compaction` 是**历史 part 类型**，不是流式事件名。**2026-11-26 修订**：云端会话经服务端合帧器（50ms / 4000 字）转发 `text_delta`、`thinking_delta`、`thinking_redacted` 与工具轨迹（`tool_start` / `tool_update` / `tool_end`），两端均以可折叠思考块实时呈现，同时保护客户端 2000 条 `BoundedLog` outbox；`compaction_start/end` 仍显式过滤（不打扰对话流）；终端本地会话照旧。
 - **F-46** 心跳 25 s；空闲 60 s 判定断线；重连指数退避 + 抖动（1 s → 30 s 封顶）。
 - **F-47** **不维护旧客户端兼容**：协议随服务端版本走，不匹配直接拒绝并提示"客户端需更新"；不写版本协商矩阵。SSE 降级留 P2。
 
@@ -533,14 +533,14 @@ G1–G3、G8–G12 是注入与守卫改造，**不改变现有行为**；G5 **�
 | D-16 | **一个域名 = 一个用户（单账号）** | 不做多租户、不做团队协作；因此不做租户隔离，但仍需登录（域名不是秘密，证书透明日志里全是） |
 | D-17 | 云端**只有一个会话**，长内容靠记忆 / 知识库 / 梦境维护 | 用户明确要求；省掉会话管理与切换，也避免"事实散落在多个会话里"；代价是压缩与记忆必须做对 |
 | D-18 | **不维护旧客户端兼容** | 旧客户端没有这个功能，直接不维护；协议随服务端走，不匹配即拒绝 |
-| D-19 | 三端共用**事件帧**，**渲染各自实现且都不复用现有聊天组件** | 帧格式与状态模型统一，桌面端与 Web 显示同一份会话与指示器。现有 `ChatMessageRow` 依赖 `chatStore` / `workspaceStore` / `diffStore` / `panelHost` / `i18n`，搬到云端页等于再写一套 store。所以：桌面端云端页另写轻量渲染，Web 用纯 ESM 轻量实现；P1 若要合并，先解决 Web 端无构建链的问题 |
+| D-19 | **2026-11-26 修订**：三端共用**事件帧与流式渲染原语**；Web 端本地轻量构建为纯静态包 | 桌面端本地会话、桌面端云端页与 Web 控制台统一使用 `StreamdownView`（Streamdown v2 + CJK + KaTeX + Mermaid + 零 WASM Shiki JS 引擎）、`CloudTraceSection`（可折叠思考/工具轨迹）与 `StreamingTranscript`（贴底滚动），状态归并仍按端解耦（云端页不依赖 `chatStore` / `workspaceStore` / `panelHost`）。Web 源码在 `apps/cloud/web-src/`，本地 `npm run build:cloud-web` 产出纯静态包到 `apps/cloud/web-dist/`，部署到服务器仍保持零构建 rsync（D-28） |
 | D-20 | 终端工单**不做路径级硬限制**（只留越界写守卫 G8） | 本地 Agent 与用户直接对话时的能力一致：能读改任意文件，因为开发确实需要（`.env` 加变量、CI 改步骤、lock 跟依赖走）。**不做宣称“完全隔离”的路径限制**：它可被 `bash` 绕过，只增加摩擦不增加安全；保留 G8 的越界写守卫（拒绝工作树外绝对路径），定位是**挡误伤与注入的主流路径，不是安全边界**。隔离由 **G7 独立 worktree** 负责，可见性由**改动清单 + 不自动 push** 负责。**注意**：Agent 工具层**没有**“工作区外不可写”这条边界（它只存在于 IPC 文件接口），所以工单能力事实上等同本机 Agent；**2026-11-20 决定：配对页不做风险确认入口**，风险只在本文件写明；**2026-11-21 补充**：命令级拒绝清单 + 单元 worktree 的 `pre-push` hook 作为成本极低的纵深防御（D-32） |
 | D-21 | 云端**不提供阻塞型工具**，推进靠事件唤醒 | 阻塞工具会把模型卡在工具调用里：你插话要排队或打断、长工单每 30 s 空转烧 token。事件唤醒下云端派完就回到可对话状态，只在有变化时跑一轮 |
 | D-22 | **一机一 token，双通道** | 同一台机器既是客户端又是执行器，没必要配两次码；token 不分角色，`/client/ws` 与 `/device/ws` 按用途区分。另一台机器才需要新的配对码 |
 | D-23 | **不设 token 上限、不做成本计量** | 用户明确不要限额配置；上下文控制靠压缩与模型档位（`models.json`），不靠预算门。代价：长会话会持续烧钱，自己盯 |
 | D-24 | 工单会话用**独立 `agentDir`**（`data/cloud/agent`） | 与用户会话目录物理隔离：`listSessions` 天然看不到，不需要 `origin` 过滤（G5 取消）；代价是工单会话没有任何 UI 入口与清理入口，排障看磁盘（F-29 / O-03） |
 | D-25 | 服务端**允许新增 `ws` 依赖**（2026-11-20 批准） | 全项目唯一新增运行时依赖；Node 内置 `WebSocket` 只是客户端，服务端必须 `ws`。不加就只能回到 SSE + POST，会推翻 D-10 |
-| D-26 | Web 端**零 XSS 渲染口径**（2026-11-20 决定） | 手写 markdown 渲染器 + 会话 cookie 是最现实的注入面：**一律用 `textContent` 拼接，不用 `innerHTML` 插模型输出**；只做代码块 / 行内代码 / 列表 / 粗体 / 标题，不做代码高亮与 HTML 透传 |
+| D-26 | Web 端**零 XSS 渲染口径**（2026-11-26 修订） | 源码禁止 `innerHTML` / `dangerouslySetInnerHTML` / `eval`；Markdown 统一走 `StreamdownView`（`rehype-sanitize` 白名单净化 + 禁止 `javascript:` 协议）并配合严格同源 CSP（无 `unsafe-eval` / `wasm-unsafe-eval` / 外网源）；代码高亮采用纯 JS 正则版 Shiki（零 WASM） |
 | D-27 | **不做开机自启**（2026-11-20 决定） | 不是首要考虑的事；代偿是 F-15“只给在线设备派新工单”：app 没启动 = 设备离线 = 不会给新活；已派工单在离线判定后直接 `cancelled（device-offline）` 并汇报（F-21） |
 | D-28 | 部署：**本地构建 + rsync 产物**（2026-11-20 决定） | 本地构建 `apps/cloud` 与 `packages/agent-core` → rsync 到 `/opt/pi-cloud` → 服务器 `npm ci --omit=dev`。服务器**不 clone 服务代码仓库、不跑构建**（D-01 的“服务器不放仓库”指用户仓库） |
 | D-29 | 云端 Agent 的**交互能力对齐本地**（工具能力仍按 D-03） | P0：停止本轮（F-30a）、插话（`steer`，A-30）；P1：重试 / 编辑重发（`rewindToLastUser` 现成）。工具集仍只有派活类 6 个，不给 `fs` / `bash` / `git` |

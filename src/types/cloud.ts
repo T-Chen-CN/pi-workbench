@@ -21,7 +21,7 @@ export type { CloudClientState, CloudDeviceState, CloudLinkView, CloudWorkspaceE
  */
 export const CLOUD_PROTOCOL_VERSION = 1
 
-/** 会话消息：轻量渲染只保留正文与工具轨迹摘要（不引入 chatStore 的模型） */
+/** 会话消息：承载正文、思考过程与工具轨迹摘要（不引入 chatStore 的工作区模型） */
 export interface CloudChatRow {
   id: string
   role: 'user' | 'assistant'
@@ -29,8 +29,13 @@ export interface CloudChatRow {
   at: number
   /** 流式中的消息：下一次 text_delta 直接追加 */
   streaming?: boolean
-  /** 工具先于正文时创建的占位行，下一条 assistant message_start 到达时原地复用 */
+  /** 思考/工具先于正文时创建的占位行，下一条 assistant message_start 到达时原地复用 */
   pendingTrace?: boolean
+  /** 实时流式与重连快照恢复的思考过程文本 */
+  thinking?: string
+  thinkingRedacted?: boolean
+  thinkingStartedAt?: number
+  thinkingDurationMs?: number
   traces: CloudTraceRow[]
   error?: string
 }
@@ -40,6 +45,8 @@ export interface CloudTraceRow {
   toolName: string
   summary: string
   status: 'running' | 'ok' | 'error'
+  durationMs?: number
+  resultPreview?: string
 }
 
 export type CloudTaskStatusName =

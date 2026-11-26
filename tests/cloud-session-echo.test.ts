@@ -66,3 +66,147 @@ describe('用户消息回显', () => {
     expect(published).toHaveLength(0)
   })
 })
+
+describe('云端流式合帧与思考过程投影', () => {
+  it('高频 thinking_delta + text_delta 合帧发送，工具事件前自动冲刷保持顺序，轮次结束无遗漏', async () => {
+    const published: any[] = []
+    const hooks: {
+      traceListener?: (event: any) => void
+      resolveChat?: (value: { success: boolean }) => void
+    } = {}
+
+    const session = new CloudSession({
+      agent: {
+        isSessionBusy: () => false,
+        openSession: async () => ({ success: true, session: { id: 'sess-stream' }, history: [] }),
+        subscribeTrace: async (_id: string, cb: (event: any) => void) => {
+          hooks.traceListener = cb
+          return () => {}
+        },
+        chat: () =>
+          new Promise<{ success: boolean }>((resolve) => {
+            hooks.resolveChat = resolve
+          }),
+      } as any,
+      hub: { publish: (frame: any) => published.push(frame) } as any,
+      store: { getCloudConfig: () => null } as any,
+      dispatcher: {} as any,
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      now: () => 2000,
+      traceFlushMs: 50,
+    })
+
+    await session.open()
+    await session.say('分析仓库并派活', 'c-stream')
+
+    // 连续推送 80 段 thinking_delta → 工具事件 → 80 段 text_delta
+    for (let i = 0; i < 80; i += 1) {
+      hooks.traceListener?.({ type: 'thinking_delta', delta: `思${i}` })
+    }
+    hooks.traceListener?.({ type: 'tool_start', toolCallId: 'tc-1', toolName: 'list_devices', argsSummary: '{}' })
+    hooks.traceListener?.({
+      type: 'tool_end',
+      toolCallId: 'tc-1',
+      toolName: 'list_devices',
+      status: 'success',
+      resultPreview: '1 device',
+    })
+    for (let i = 0; i < 80; i += 1) {
+      hooks.traceListener?.({ type: 'text_delta', delta: `文${i}` })
+    }
+
+    // 结束轮次应自动冲刷合帧缓冲
+    hooks.resolveChat?.({ success: true })
+    await flushPromises()
+
+    const thinkingFrames = published.filter(
+      (f) => f.type === 'trace' && f.trace?.type === 'thinking_delta'
+    )
+    const textFrames = published.filter((f) => f.type === 'text_delta')
+    const toolStartIdx = published.findIndex(
+      (f) => f.type === 'trace' && f.trace?.type === 'tool_start'
+    )
+    const firstThinkingIdx = published.findIndex(
+      (f) => f.type === 'trace' && f.trace?.type === 'thinking_delta'
+    )
+    const firstTextIdx = published.findIndex((f) => f.type === 'text_delta')
+    const endFrame = published.find(
+      (f) => f.type === 'message_end' && f.messageId !== 'u-c-stream'
+    )
+
+    // 80 + 80 条高频增量被合并成极少数帧（保护 2000 条 BoundedLog）
+    expect(thinkingFrames.length).toBeGreaterThanOrEqual(1)
+    expect(thinkingFrames.length).toBeLessThan(10)
+    expect(textFrames.length).toBeGreaterThanOrEqual(1)
+    expect(textFrames.length).toBeLessThan(10)
+
+    // 拼接后的完整文本一字不丢
+    expect(thinkingFrames.map((f) => f.trace.delta).join('')).toBe(
+      Array.from({ length: 80 }, (_, i) => `思${i}`).join('')
+    )
+    expect(textFrames.map((f) => f.delta).join('')).toBe(
+      Array.from({ length: 80 }, (_, i) => `文${i}`).join('')
+    )
+    expect(endFrame?.text).toBe(Array.from({ length: 80 }, (_, i) => `文${i}`).join(''))
+
+    // 顺序边界：thinking 先于 tool_start，tool_start 先于后续 text_delta
+    expect(firstThinkingIdx).toBeLessThan(toolStartIdx)
+    expect(toolStartIdx).toBeLessThan(firstTextIdx)
+  })
+
+  it('history() 将持久化会话中的 thinking 与 tool 轨迹投影到快照消息', async () => {
+    const session = new CloudSession({
+      agent: {
+        isSessionBusy: () => false,
+        openSession: async () => ({
+          success: true,
+          session: { id: 'sess-hist' },
+          history: [
+            {
+              role: 'assistant',
+              content: '已经查完设备。',
+              timestamp: 3000,
+              parts: [
+                { type: 'thinking', text: '先查在线设备再决定', durationMs: 1200 },
+                {
+                  type: 'tool',
+                  toolCallId: 'tc-h1',
+                  toolName: 'list_devices',
+                  argsSummary: '{}',
+                  resultPreview: '主力机在线',
+                  status: 'success',
+                  durationMs: 80,
+                },
+              ],
+            },
+          ],
+        }),
+        subscribeTrace: async () => () => {},
+      } as any,
+      hub: { publish: () => {} } as any,
+      store: { getCloudConfig: () => null } as any,
+      dispatcher: {} as any,
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      now: () => 3000,
+    })
+
+    await session.open()
+    const history = await session.history()
+    expect(history).toHaveLength(1)
+    expect(history[0]).toMatchObject({
+      role: 'assistant',
+      text: '已经查完设备。',
+      thinking: '先查在线设备再决定',
+      thinkingDurationMs: 1200,
+    })
+    expect(history[0].traces).toEqual([
+      expect.objectContaining({
+        id: 'tc-h1',
+        toolName: 'list_devices',
+        summary: '主力机在线',
+        status: 'ok',
+        durationMs: 80,
+      }),
+    ])
+  })
+})

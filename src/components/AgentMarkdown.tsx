@@ -1,9 +1,5 @@
-import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import ReactMarkdown, { type Components } from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
-import { Check, Copy } from 'lucide-react'
-import { copyText } from '../utils/clipboard'
+import React, { useMemo } from 'react'
+import type { Components } from 'streamdown'
 import { toast } from '../store/toastStore'
 import { useI18nStore } from '../store/i18nStore'
 import { useWorkspaceScope } from '../workspace/WorkspaceScope'
@@ -11,8 +7,9 @@ import { useWorkspaceStore } from '../store/workspaceStore'
 import { openFileInEditor } from '../workspace/openFileInEditor'
 import { useMarkdownLinkScope } from '../workspace/MarkdownLinkScope'
 import { openMarkdownLink, resolveMarkdownLink } from '../workspace/linkTarget'
-import { splitMarkdownBlocks } from '../utils/markdownBlocks'
 import { looksLikePath, joinPath, splitPathLine } from '../utils/filePath'
+import { useHostDocument } from '../panelHost/HostContext'
+import { StreamdownView, defaultComponents } from './StreamdownView'
 
 /** 点击文件路径打开编辑器（相对路径按当前工作区 / 工作树根解析） */
 const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({ value, children }) => {
@@ -51,63 +48,6 @@ const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({ valu
   )
 }
 
-/** 代码块：带复制按钮 */
-const CodeBlock: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
-  const { t } = useI18nStore()
-  const preRef = useRef<HTMLPreElement>(null)
-  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [copied, setCopied] = useState(false)
-
-  useEffect(
-    () => () => {
-      if (resetTimerRef.current) clearTimeout(resetTimerRef.current)
-    },
-    []
-  )
-
-  const copy = async () => {
-    const text = preRef.current?.textContent ?? ''
-    if (!text) return
-    if (await copyText(text)) {
-      setCopied(true)
-      if (resetTimerRef.current) clearTimeout(resetTimerRef.current)
-      resetTimerRef.current = setTimeout(() => {
-        resetTimerRef.current = null
-        setCopied(false)
-      }, 1500)
-    } else {
-      toast.error(t('copyFailedPlain'))
-    }
-  }
-
-  return (
-    <div className="group/code relative">
-      <pre ref={preRef}>{children}</pre>
-      <button
-        type="button"
-        onClick={() => void copy()}
-        aria-label={t('copyCode')}
-        className="absolute right-2 top-2 flex items-center gap-1 rounded border border-rule-control bg-raised px-1.5 py-1 type-caption text-ink-muted opacity-0 transition-opacity hover:text-ink focus-visible:opacity-100 group-hover/code:opacity-100 group-focus-within/code:opacity-100"
-      >
-        {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
-        {copied ? t('copied') : t('copyCode')}
-      </button>
-    </div>
-  )
-}
-
-const REMARK_PLUGINS = [remarkGfm]
-/**
- * `rehypeHighlight` 每次被调用都会 `createLowlight(common)`，现场把整套语法
- * （js/ts/css/php/sql…）注册一遍，单次约 20ms。它返回的变换只依赖固定选项，
- * 所以只构建一次、后续复用，否则每个 Markdown 块每次重渲染都要交这笔钱。
- */
-let highlightTransform: ReturnType<typeof rehypeHighlight> | null = null
-const rehypeHighlightShared = (() =>
-  (highlightTransform ??= rehypeHighlight())) as unknown as typeof rehypeHighlight
-const HIGHLIGHT_PLUGINS = [rehypeHighlightShared]
-const NO_PLUGINS: [] = []
-
 /**
  * 链接：外链交系统浏览器，仓库内路径交编辑器，`#anchor` 站内滚动。
  *
@@ -128,7 +68,7 @@ const MarkdownAnchor: React.FC<{ href?: string; children: React.ReactNode }> = (
       docDir: scope.docDir,
       workspaceDir,
       openRoot: scope.openRoot ?? workspaceDir,
-      anchorElement: event.currentTarget
+      anchorElement: event.currentTarget,
     })
     if (!opened) toast.error(t('linkOpenFailed', { target: href ?? '' }))
   }
@@ -140,68 +80,53 @@ const MarkdownAnchor: React.FC<{ href?: string; children: React.ReactNode }> = (
   )
 }
 
-const MARKDOWN_COMPONENTS: Components = {
+const DefaultCode = defaultComponents.code
+
+const DESKTOP_COMPONENTS: Components = {
   a: ({ href, children }) => <MarkdownAnchor href={href}>{children}</MarkdownAnchor>,
-  code: ({ className, children }) => {
-    const text = typeof children === 'string' ? children : String(children ?? '')
-    if (!className && looksLikePath(text)) {
-      return <PathCode value={text}>{children}</PathCode>
+  code: (props) => {
+    // Streamdown 用 data-block 区分围栏代码块与行内代码；仅行内路径代码走 PathCode，其余交回 Streamdown 渲染 Shiki/Mermaid
+    const isBlock = 'data-block' in props
+    if (!isBlock && !props.className) {
+      const text = typeof props.children === 'string' ? props.children : String(props.children ?? '')
+      if (looksLikePath(text)) {
+        return <PathCode value={text}>{props.children}</PathCode>
+      }
     }
-    return <code className={className}>{children}</code>
+    return <DefaultCode {...props} />
   },
-  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
 }
 
-/**
- * 流式期间按顶层块拆分 Markdown，只有正在增长的尾块需要重新解析。
- * 引用式链接等跨块定义在流式阶段可能不完整，结束时整体重渲染一次即可恢复。
- */
-const MarkdownBlock = React.memo(
-  function MarkdownBlock({ content }: { content: string }) {
-    return (
-      <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={NO_PLUGINS}
-        components={MARKDOWN_COMPONENTS}
-      >
-        {content}
-      </ReactMarkdown>
-    )
-  },
-  (prev, next) => prev.content === next.content
-)
-
-const StreamingBlocks = React.memo(function StreamingBlocks({ content }: { content: string }) {
-  const blocks = useMemo(() => splitMarkdownBlocks(content), [content])
-  return (
-    <>
-      {blocks.map((block, index) => (
-        <MarkdownBlock key={index} content={block} />
-      ))}
-    </>
-  )
-})
-
-/** 流式消息：解析降到低优先级，点击/输入可以先被处理，长输出不会堵住整个面板 */
+/** 流式消息：底层复用 Streamdown v2（Remend 语法自愈 + 块级冻结 + Shiki JS 引擎 + 公式/图表/CJK） */
 export const StreamingMarkdown = React.memo(function StreamingMarkdown({
   content,
   showCursor = true,
+  isStreaming = true,
+  highlight = true,
 }: {
   content: string
   showCursor?: boolean
+  isStreaming?: boolean
+  highlight?: boolean
 }) {
-  const deferred = useDeferredValue(content)
+  const language = useI18nStore((state) => state.language)
+  const hostDocument = useHostDocument()
+  const portal = useMemo(() => () => hostDocument.body, [hostDocument])
+
   return (
-    <>
-      <StreamingBlocks content={deferred} />
-      {showCursor && (
-        <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom" />
-      )}
-    </>
+    <StreamdownView
+      content={content}
+      isStreaming={isStreaming}
+      showCursor={showCursor}
+      highlight={highlight}
+      language={language}
+      components={DESKTOP_COMPONENTS}
+      portal={portal}
+    />
   )
 })
 
-/** 已完成消息：整段解析一次，保留完整 GFM 与代码高亮 */
+/** 已完成消息 / 静态 Markdown 文档：与 StreamingMarkdown 共用同一套 Streamdown 渲染内核，流式结束零闪烁 */
 export const MarkdownBody = React.memo(function MarkdownBody({
   content,
   highlight,
@@ -209,13 +134,19 @@ export const MarkdownBody = React.memo(function MarkdownBody({
   content: string
   highlight: boolean
 }) {
+  const language = useI18nStore((state) => state.language)
+  const hostDocument = useHostDocument()
+  const portal = useMemo(() => () => hostDocument.body, [hostDocument])
+
   return (
-    <ReactMarkdown
-      remarkPlugins={REMARK_PLUGINS}
-      rehypePlugins={highlight ? HIGHLIGHT_PLUGINS : NO_PLUGINS}
-      components={MARKDOWN_COMPONENTS}
-    >
-      {content}
-    </ReactMarkdown>
+    <StreamdownView
+      content={content}
+      isStreaming={false}
+      showCursor={false}
+      highlight={highlight}
+      language={language}
+      components={DESKTOP_COMPONENTS}
+      portal={portal}
+    />
   )
 })

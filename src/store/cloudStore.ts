@@ -432,7 +432,30 @@ export const useCloudStore = create<CloudState>((set, get) => ({
             text: String(message.text ?? ''),
             at: Number(message.at ?? Date.now()),
             streaming: Boolean(message.streaming),
-            traces: [],
+            ...(typeof message.thinking === 'string' && message.thinking
+              ? { thinking: message.thinking }
+              : {}),
+            ...(message.thinkingRedacted ? { thinkingRedacted: true } : {}),
+            ...(typeof message.thinkingDurationMs === 'number'
+              ? { thinkingDurationMs: message.thinkingDurationMs }
+              : {}),
+            traces: Array.isArray(message.traces)
+              ? message.traces.map((trace: any) => ({
+                  id: String(trace.id ?? ''),
+                  toolName: String(trace.toolName ?? 'tool'),
+                  summary: String(trace.summary ?? ''),
+                  status:
+                    trace.status === 'error'
+                      ? 'error'
+                      : trace.status === 'running'
+                        ? 'running'
+                        : 'ok',
+                  ...(typeof trace.durationMs === 'number' ? { durationMs: trace.durationMs } : {}),
+                  ...(typeof trace.resultPreview === 'string'
+                    ? { resultPreview: trace.resultPreview }
+                    : {}),
+                }))
+              : [],
             error: message.error,
           }))
         : []
@@ -578,11 +601,18 @@ export const useCloudStore = create<CloudState>((set, get) => ({
             }
             if (targetIndex >= 0) {
               const target = messages[targetIndex]
+              const now = Date.now()
+              const thinkingDurationMs =
+                target.thinkingStartedAt && target.thinkingDurationMs === undefined
+                  ? Math.max(0, now - target.thinkingStartedAt)
+                  : target.thinkingDurationMs
               messages[targetIndex] = {
                 ...target,
                 text: target.text + delta,
                 streaming: true,
                 pendingTrace: false,
+                thinkingStartedAt: undefined,
+                ...(thinkingDurationMs !== undefined ? { thinkingDurationMs } : {}),
               }
             } else {
               messages.push({
@@ -605,27 +635,31 @@ export const useCloudStore = create<CloudState>((set, get) => ({
             const isAssistantUnread =
               !targetId.startsWith(USER_ECHO_PREFIX) && String(event.text ?? '').trim().length > 0
             const nextUnread = isAssistantUnread ? state.unreadCount + 1 : state.unreadCount
-            const byId = targetId ? messages.findIndex((row) => row.id === targetId) : -1
-            if (byId >= 0) {
-              messages[byId] = {
-                ...messages[byId],
-                text: String(event.text ?? messages[byId].text),
+            const finalizeRow = (row: CloudChatRow): CloudChatRow => {
+              const now = Date.now()
+              const thinkingDurationMs =
+                row.thinkingStartedAt && row.thinkingDurationMs === undefined
+                  ? Math.max(0, now - row.thinkingStartedAt)
+                  : row.thinkingDurationMs
+              return {
+                ...row,
+                text: String(event.text ?? row.text),
                 streaming: false,
                 pendingTrace: false,
+                thinkingStartedAt: undefined,
+                ...(thinkingDurationMs !== undefined ? { thinkingDurationMs } : {}),
                 error: event.error,
               }
+            }
+            const byId = targetId ? messages.findIndex((row) => row.id === targetId) : -1
+            if (byId >= 0) {
+              messages[byId] = finalizeRow(messages[byId])
               return { ...seqPatch(state), messages, unreadCount: nextUnread }
             }
             for (let index = messages.length - 1; index >= 0; index -= 1) {
               const row = messages[index]
               if (row.role !== 'assistant' || !row.streaming) continue
-              messages[index] = {
-                ...row,
-                text: String(event.text ?? row.text),
-                streaming: false,
-                pendingTrace: false,
-                error: event.error,
-              }
+              messages[index] = finalizeRow(row)
               break
             }
             return { ...seqPatch(state), messages, unreadCount: nextUnread }
@@ -634,41 +668,106 @@ export const useCloudStore = create<CloudState>((set, get) => ({
         }
         case 'trace': {
           const trace = event.trace ?? {}
+          const traceType = String(trace.type ?? '')
+          if (
+            traceType !== 'thinking_delta' &&
+            traceType !== 'thinking_redacted' &&
+            traceType !== 'tool_start' &&
+            traceType !== 'tool_update' &&
+            traceType !== 'tool_end'
+          ) {
+            if (typeof frame.seq === 'number') set((state) => seqPatch(state))
+            return
+          }
           set((state) => {
             const messages = state.messages.slice()
-            const lastIndex = messages.length - 1
-            const base = messages[lastIndex]
-            const sameRow = Boolean(base && base.role === 'assistant' && base.streaming)
-            const row: CloudChatRow = sameRow
-              ? base
-              : {
-                  id: messageId(),
-                  role: 'assistant',
-                  text: '',
-                  at: Date.now(),
-                  streaming: true,
-                  pendingTrace: true,
-                  traces: [],
+            const targetId = String(event.messageId ?? '')
+            let rowIndex = -1
+            if (targetId) {
+              for (let i = messages.length - 1; i >= 0; i -= 1) {
+                if (messages[i].id === targetId) {
+                  rowIndex = i
+                  break
                 }
-            const traces = row.traces.slice()
-            const id = String(trace.toolCallId ?? '')
-            const index = traces.findIndex((item) => item.id === id)
-            if (trace.type === 'tool_start') {
-              traces.push({
-                id,
-                toolName: String(trace.toolName ?? 'tool'),
-                summary: String(trace.argsSummary ?? ''),
-                status: 'running',
-              })
-            } else if (trace.type === 'tool_end' && index >= 0) {
-              traces[index] = {
-                ...traces[index],
-                status: trace.status === 'error' ? 'error' : 'ok',
-                summary: String(trace.resultPreview ?? traces[index].summary),
               }
             }
-            const updated: CloudChatRow = { ...row, traces: traces.slice(-30) }
-            if (sameRow) messages[lastIndex] = updated
+            if (rowIndex < 0) {
+              const lastIndex = messages.length - 1
+              const base = messages[lastIndex]
+              if (base && base.role === 'assistant' && base.streaming) {
+                rowIndex = lastIndex
+              }
+            }
+            const now = Date.now()
+            const row: CloudChatRow =
+              rowIndex >= 0
+                ? messages[rowIndex]
+                : {
+                    id: targetId || messageId(),
+                    role: 'assistant',
+                    text: '',
+                    at: now,
+                    streaming: true,
+                    pendingTrace: !targetId,
+                    traces: [],
+                  }
+
+            let updated: CloudChatRow = row
+            if (traceType === 'thinking_delta') {
+              const delta = String(trace.delta ?? '')
+              if (!delta) return seqPatch(state)
+              updated = {
+                ...row,
+                thinking: (row.thinking ?? '') + delta,
+                thinkingStartedAt: row.thinkingStartedAt ?? now,
+              }
+            } else if (traceType === 'thinking_redacted') {
+              updated = { ...row, thinkingRedacted: true }
+            } else {
+              const traces = row.traces.slice()
+              const id = String(trace.toolCallId ?? '')
+              const index = traces.findIndex((item) => item.id === id)
+              const closedDuration =
+                row.thinkingStartedAt && row.thinkingDurationMs === undefined
+                  ? Math.max(0, now - row.thinkingStartedAt)
+                  : row.thinkingDurationMs
+              if (traceType === 'tool_start') {
+                const nextTrace: CloudTraceRow = {
+                  id,
+                  toolName: String(trace.toolName ?? 'tool'),
+                  summary: String(trace.argsSummary ?? ''),
+                  status: 'running',
+                }
+                if (index >= 0) traces[index] = nextTrace
+                else traces.push(nextTrace)
+              } else if (traceType === 'tool_update' && index >= 0) {
+                traces[index] = {
+                  ...traces[index],
+                  resultPreview:
+                    typeof trace.resultPreview === 'string'
+                      ? trace.resultPreview
+                      : traces[index].resultPreview,
+                }
+              } else if (traceType === 'tool_end' && index >= 0) {
+                traces[index] = {
+                  ...traces[index],
+                  status: trace.status === 'error' ? 'error' : 'ok',
+                  summary: String(trace.resultPreview ?? traces[index].summary),
+                  ...(typeof trace.durationMs === 'number' ? { durationMs: trace.durationMs } : {}),
+                  ...(typeof trace.resultPreview === 'string'
+                    ? { resultPreview: trace.resultPreview }
+                    : {}),
+                }
+              }
+              updated = {
+                ...row,
+                thinkingStartedAt: undefined,
+                ...(closedDuration !== undefined ? { thinkingDurationMs: closedDuration } : {}),
+                traces: traces.slice(-30),
+              }
+            }
+
+            if (rowIndex >= 0) messages[rowIndex] = updated
             else messages.push(updated)
             return { ...seqPatch(state), messages: messages.slice(-400) }
           })

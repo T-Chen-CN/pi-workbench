@@ -323,4 +323,31 @@ describe('云端页交互与配置升级（F-01 / U-01 / U-02 / U-03 / U-04）',
     expect(screen.getByText(/手动/)).toBeTruthy()
     expect(screen.queryByText(/还没有梦境整理记录/)).toBeNull()
   })
+
+  it('助手消息携带思考过程与工具轨迹时渲染可折叠思考块', () => {
+    useCloudStore.setState({
+      messages: [
+        {
+          id: 'm-think-ui',
+          role: 'assistant',
+          text: '最终结论',
+          at: Date.now(),
+          thinking: '先核对在线设备清单，再决定派活目标',
+          thinkingDurationMs: 2400,
+          traces: [
+            { id: 'tc-1', toolName: 'list_devices', summary: '工作站在线', status: 'ok', durationMs: 55 },
+          ],
+        },
+      ],
+    })
+    render(<CloudView onBackHome={() => undefined} />)
+    const toggle = screen.getByRole('button', { name: /思考/ })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText(/先核对在线设备清单/)).toBeNull()
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText(/先核对在线设备清单/)).toBeTruthy()
+    expect(screen.getByText('list_devices')).toBeTruthy()
+  })
 })

@@ -1,136 +1,55 @@
 /**
- * Web 客户端静态文件（D-19 / D-26）。
+ * Web 客户端静态文件服务（D-19 修订版 / D-26）。
  *
- * 零构建：固定白名单路由 + 本地自托管 `@fontsource` 字体，不接受任意路径拼接，
- * 因此不存在路径穿越。渲染侧只用 `textContent`，不写 `innerHTML`。
+ * 本地由 Vite + React 构建纯静态产物到 `apps/cloud/web-dist/`（部署包位于 `web/`），
+ * 服务器端零构建、固定白名单路由与严格单段 `/assets/<file>` 校验，彻底防路径穿越并强制 CSP。
  */
 
-import { promises as fs } from 'fs'
+import { existsSync, promises as fs } from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
 import type { ServerResponse } from 'http'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
-/** 默认取 `apps/cloud/web`（源码布局与打包布局一致：dist/http → ../../web） */
+/**
+ * 默认静态产物目录：
+ * - 生产运行包（`cache/cloud-bundle/`）：`dist/http → ../../web`
+ * - 开发仓库（`apps/cloud/`）：`dist/http` 或 `src/http` → `../../web-dist`
+ */
 export function defaultWebDir(): string {
+  const built = path.resolve(HERE, '..', '..', 'web-dist')
+  if (existsSync(path.join(built, 'index.html'))) return built
   return path.resolve(HERE, '..', '..', 'web')
 }
 
-const FILES: Record<string, { file: string; type: string }> = {
+const ROOT_FILES: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/index.html': { file: 'index.html', type: 'text/html; charset=utf-8' },
-  '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
-  '/app.css': { file: 'app.css', type: 'text/css; charset=utf-8' },
   '/favicon.svg': { file: 'favicon.svg', type: 'image/svg+xml' },
 }
 
+const ASSET_MIME: Record<string, string> = {
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.ttf': 'font/ttf',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+}
+
+/** 仅允许单段安全文件名（无 `/`、`..` 等），防止路径穿越 */
+const SAFE_ASSET_FILE = /^[a-zA-Z0-9._-]+\.(?:js|css|woff2|woff|ttf|svg|png)$/
+
 /**
- * 与桌面端 `src/main.tsx` 保持完全一致的 5 套 `@fontsource` 字体包。
- * 生产运行包由 `scripts/build-cloud-bundle.mjs` 预置到 `<webDir>/fonts/<slug>/`；
- * 本地开发与单测回落到仓库根 `node_modules/`。
+ * 严格 CSP：零 `eval`、零 `wasm-unsafe-eval`、零外网资源；
+ * `img-src` 允许 `data:` 与 `blob:` 以支持 Mermaid SVG/PNG 预览与导出。
  */
-const FONT_PACKAGES: ReadonlyArray<{
-  slug: string
-  pkgPath: string[]
-  cssFiles: string[]
-}> = [
-  {
-    slug: 'instrument-serif',
-    pkgPath: ['@fontsource', 'instrument-serif'],
-    cssFiles: ['400.css', '400-italic.css'],
-  },
-  {
-    slug: 'noto-serif-sc',
-    pkgPath: ['@fontsource-variable', 'noto-serif-sc'],
-    cssFiles: ['index.css'],
-  },
-  {
-    slug: 'noto-sans',
-    pkgPath: ['@fontsource-variable', 'noto-sans'],
-    cssFiles: ['index.css'],
-  },
-  {
-    slug: 'noto-sans-sc',
-    pkgPath: ['@fontsource-variable', 'noto-sans-sc'],
-    cssFiles: ['index.css'],
-  },
-  {
-    slug: 'geist-mono',
-    pkgPath: ['@fontsource-variable', 'geist-mono'],
-    cssFiles: ['index.css'],
-  },
-]
-
-const FONT_PACKAGE_BY_SLUG = new Map(FONT_PACKAGES.map((entry) => [entry.slug, entry]))
-const SAFE_WOFF2 = /^[a-z0-9._-]+\.woff2$/i
-
 const CSP_HEADER =
-  "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
+  "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
 
 const cache = new Map<string, { body: Buffer; type: string; immutable?: boolean }>()
-
-async function firstExisting(candidates: string[]): Promise<string | null> {
-  for (const candidate of candidates) {
-    try {
-      await fs.access(candidate)
-      return candidate
-    } catch {
-      // 继续尝试下一个候选路径
-    }
-  }
-  return null
-}
-
-function repoNodeModulesDir(): string {
-  // apps/cloud/dist/http → 仓库根 node_modules
-  return path.resolve(HERE, '..', '..', '..', '..', 'node_modules')
-}
-
-async function resolveFontPackageDir(webDir: string, slug: string): Promise<string | null> {
-  const pkg = FONT_PACKAGE_BY_SLUG.get(slug)
-  if (!pkg) return null
-  return firstExisting([
-    path.join(webDir, 'fonts', slug),
-    path.join(repoNodeModulesDir(), ...pkg.pkgPath),
-  ])
-}
-
-async function loadFontsCss(webDir: string): Promise<Buffer> {
-  const prebuilt = path.join(webDir, 'fonts', 'fonts.css')
-  try {
-    return await fs.readFile(prebuilt)
-  } catch {
-    // 开发/测试环境按 5 个 @fontsource 包现场拼接并改写为 /fonts/<slug>/<file>
-  }
-  const chunks: string[] = []
-  for (const pkg of FONT_PACKAGES) {
-    const dir = await resolveFontPackageDir(webDir, pkg.slug)
-    if (!dir) continue
-    for (const cssFile of pkg.cssFiles) {
-      try {
-        const raw = await fs.readFile(path.join(dir, cssFile), 'utf8')
-        const rewritten = raw.replace(/url\(\s*['"]?\.\/files\/([^'")]+)['"]?\s*\)/g, `url('/fonts/${pkg.slug}/$1')`)
-        chunks.push(rewritten)
-      } catch {
-        // 单个 css 缺失时跳过，保持系统字体回退可用
-      }
-    }
-  }
-  return Buffer.from(chunks.join('\n'), 'utf8')
-}
-
-async function loadFontFile(webDir: string, slug: string, fileName: string): Promise<Buffer | null> {
-  if (!SAFE_WOFF2.test(fileName)) return null
-  const dir = await resolveFontPackageDir(webDir, slug)
-  if (!dir) return null
-  const candidate = await firstExisting([
-    path.join(dir, 'files', fileName),
-    path.join(dir, fileName),
-  ])
-  if (!candidate) return null
-  return fs.readFile(candidate)
-}
 
 function writeResponse(
   res: ServerResponse,
@@ -139,7 +58,6 @@ function writeResponse(
   res.writeHead(200, {
     'content-type': cached.type,
     'cache-control': cached.immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
-    // 客户端只需要连自己这一个源；不允许被别的站点嵌入，并强制 CSP
     'x-frame-options': 'DENY',
     'x-content-type-options': 'nosniff',
     'content-security-policy': CSP_HEADER,
@@ -152,40 +70,30 @@ export async function serveStatic(
   pathname: string,
   res: ServerResponse
 ): Promise<boolean> {
-  if (pathname === '/fonts.css') {
-    const key = `${webDir}:fonts.css`
+  if (pathname.startsWith('/assets/')) {
+    const fileName = pathname.slice('/assets/'.length)
+    if (!SAFE_ASSET_FILE.test(fileName)) return false
+    const ext = path.extname(fileName).toLowerCase()
+    const mime = ASSET_MIME[ext]
+    if (!mime) return false
+    const key = `${webDir}:asset:${fileName}`
     let cached = cache.get(key)
     if (!cached) {
-      const body = await loadFontsCss(webDir)
-      cached = { body, type: 'text/css; charset=utf-8' }
-      cache.set(key, cached)
-    }
-    writeResponse(res, cached)
-    return true
-  }
-
-  if (pathname.startsWith('/fonts/')) {
-    const parts = pathname.slice('/fonts/'.length).split('/')
-    if (parts.length !== 2) return false
-    const [slug, fileName] = parts
-    if (!FONT_PACKAGE_BY_SLUG.has(slug) || !SAFE_WOFF2.test(fileName)) return false
-    const key = `${webDir}:font:${slug}:${fileName}`
-    let cached = cache.get(key)
-    if (!cached) {
-      const body = await loadFontFile(webDir, slug, fileName)
-      if (!body) {
+      try {
+        const body = await fs.readFile(path.join(webDir, 'assets', fileName))
+        cached = { body, type: mime, immutable: true }
+        cache.set(key, cached)
+      } catch {
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
         res.end('Not found')
         return true
       }
-      cached = { body, type: 'font/woff2', immutable: true }
-      cache.set(key, cached)
     }
     writeResponse(res, cached)
     return true
   }
 
-  const entry = FILES[pathname]
+  const entry = ROOT_FILES[pathname]
   if (!entry) return false
   const key = `${webDir}:${entry.file}`
   let cached = cache.get(key)

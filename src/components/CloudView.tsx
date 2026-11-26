@@ -31,7 +31,9 @@ import type {
 } from '../types/cloud'
 import type { CloudCatalogModel } from '../types/electron'
 import { api } from '../api'
-import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
+import { StreamingMarkdown } from './AgentMarkdown'
+import { CloudTraceSection } from './CloudTraceSection'
+import { StreamingTranscript, type StreamingTranscriptHandle } from './StreamingTranscript'
 import { Button, EmptyState, Field, IconButton, Input, Modal, Select, Spinner, Textarea } from './ui'
 import { Card, CardHeader, SectionHeader, StatusText, Tab } from './patterns'
 
@@ -103,8 +105,64 @@ function parseTagsInput(raw: string): string[] {
     .slice(0, 12)
 }
 
+const CloudMessageItem = React.memo(function CloudMessageItem({
+  message,
+  language,
+}: {
+  message: import('../types/cloud').CloudChatRow
+  language: 'zh' | 'en'
+}) {
+  return (
+    <article
+      className={
+        message.role === 'user'
+          ? 'flex flex-col gap-1 border-l-2 border-accent pl-3'
+          : 'flex flex-col gap-1 border-l-2 border-rule-divide pl-3'
+      }
+    >
+      <div className="flex items-center gap-2 type-caption text-ink-muted">
+        <span className="type-eyebrow">{message.role === 'user' ? 'YOU' : 'CLOUD'}</span>
+        <span className="type-data">{formatTime(message.at)}</span>
+        {message.streaming && (
+          <span
+            aria-hidden="true"
+            className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
+          />
+        )}
+      </div>
+      {message.role === 'assistant' && (
+        <CloudTraceSection
+          messageId={message.id}
+          thinking={message.thinking}
+          thinkingRedacted={message.thinkingRedacted}
+          thinkingDurationMs={message.thinkingDurationMs}
+          traces={message.traces}
+          isStreaming={Boolean(message.streaming)}
+          hasBodyText={Boolean(message.text)}
+          language={language}
+        />
+      )}
+      {message.text &&
+        (message.role === 'user' ? (
+          <p className="whitespace-pre-wrap break-words type-body text-ink">{message.text}</p>
+        ) : (
+          <div className="chat-markdown text-ink">
+            <StreamingMarkdown
+              content={message.text}
+              isStreaming={Boolean(message.streaming)}
+              showCursor={Boolean(message.streaming)}
+              highlight={message.text.length <= 20_000}
+            />
+          </div>
+        ))}
+      {message.error && <p className="type-data text-danger">{message.error}</p>}
+    </article>
+  )
+})
+
 export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) => {
   const t = useI18nStore((state) => state.t)
+  const language = useI18nStore((state) => state.language)
   const linked = useCloudStore((state) => state.link.linked)
   const deviceState = useCloudStore((state) => state.deviceState)
   const clientState = useCloudStore((state) => state.clientState)
@@ -143,8 +201,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
   const [asideCollapsed, setAsideCollapsed] = useState(false)
   const [answerDraft, setAnswerDraft] = useState<Record<string, string>>({})
   const [instructionDraft, setInstructionDraft] = useState<Record<string, string>>({})
-  const transcriptRef = useRef<HTMLDivElement | null>(null)
-  const stickToBottomRef = useRef(true)
+  const transcriptHandleRef = useRef<StreamingTranscriptHandle | null>(null)
   const composingRef = useRef(false)
   const collapseRailRef = useRef<HTMLButtonElement | null>(null)
   const expandRailRef = useRef<HTMLButtonElement | null>(null)
@@ -170,31 +227,6 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
       window.removeEventListener('focus', onVisible)
     }
   }, [clientState.status, unreadCount, markRead])
-
-  // 贴底：依赖 linked，确保冷启动/配对完成后 transcriptRef 挂载即立刻绑上滚动监听
-  useEffect(() => {
-    const element = transcriptRef.current
-    if (!element) return
-    const onScroll = () => {
-      const distance = element.scrollHeight - element.scrollTop - element.clientHeight
-      stickToBottomRef.current = distance < 64
-    }
-    element.addEventListener('scroll', onScroll, { passive: true })
-    return () => element.removeEventListener('scroll', onScroll)
-  }, [linked])
-
-  useEffect(() => {
-    const element = transcriptRef.current
-    if (!element || !stickToBottomRef.current) return
-    element.scrollTop = element.scrollHeight
-    // StreamingMarkdown 使用 useDeferredValue，补一帧确保延迟提交的高度也能贴底
-    const raf = window.requestAnimationFrame(() => {
-      if (stickToBottomRef.current && transcriptRef.current) {
-        transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight
-      }
-    })
-    return () => window.cancelAnimationFrame(raf)
-  }, [messages])
 
   const statusLabel = useMemo(() => {
     switch (deviceState.status) {
@@ -232,7 +264,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
   const send = () => {
     const body = draft.trim()
     if (!body) return
-    stickToBottomRef.current = true
+    transcriptHandleRef.current?.scrollToBottom()
     setDraft('')
     void say(body)
   }
@@ -347,11 +379,16 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
         <section className="flex min-h-0 min-w-0 flex-1 flex-col">
           {linked ? (
             <>
-              <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              <StreamingTranscript
+                ref={transcriptHandleRef}
+                messageCount={messages.length}
+                scrollToBottomLabel={t('scrollToBottom')}
+                newMessagesLabel={(count) => t('newMessages', { count })}
+              >
                 {awaySummary && (
                   <div
                     role="status"
-                    className="mb-4 rounded border border-rule-divide bg-panel px-3 py-2"
+                    className="rounded border border-rule-divide bg-panel px-3 py-2"
                   >
                     <p className="type-label text-ink">{t('cloudAwaySummaryTitle')}</p>
                     <p className="mt-0.5 type-caption text-ink-muted">{awaySummary.text}</p>
@@ -364,67 +401,11 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                     description={error ?? t('cloudSessionEmpty')}
                   />
                 ) : (
-                  <div className="flex flex-col gap-4">
-                    {messages.map((message) => (
-                      <article
-                        key={message.id}
-                        className={
-                          message.role === 'user'
-                            ? 'flex flex-col gap-1 border-l-2 border-accent pl-3'
-                            : 'flex flex-col gap-1 border-l-2 border-rule-divide pl-3'
-                        }
-                      >
-                        <div className="flex items-center gap-2 type-caption text-ink-muted">
-                          <span className="type-eyebrow">
-                            {message.role === 'user' ? 'YOU' : 'CLOUD'}
-                          </span>
-                          <span className="type-data">{formatTime(message.at)}</span>
-                          {message.streaming && <span className="text-accent">···</span>}
-                        </div>
-                        {message.text &&
-                          (message.role === 'user' ? (
-                            <p className="whitespace-pre-wrap break-words type-body text-ink">
-                              {message.text}
-                            </p>
-                          ) : (
-                            <div className="chat-markdown text-ink">
-                              {message.streaming ? (
-                                <StreamingMarkdown content={message.text} />
-                              ) : (
-                                <MarkdownBody
-                                  content={message.text}
-                                  highlight={message.text.length <= 20_000}
-                                />
-                              )}
-                            </div>
-                          ))}
-                        {message.traces.length > 0 && (
-                          <details className="type-caption text-ink-muted">
-                            <summary className="cursor-pointer select-none">
-                              {t('cloudToolCallsSummary', { count: message.traces.length })}
-                            </summary>
-                            <ul className="mt-1 flex flex-col gap-0.5">
-                              {message.traces.map((trace) => (
-                                <li key={trace.id} className="truncate type-data">
-                                  <span
-                                    className={
-                                      trace.status === 'error' ? 'text-danger' : 'text-ink-muted'
-                                    }
-                                  >
-                                    {trace.toolName}
-                                  </span>{' '}
-                                  {trace.summary}
-                                </li>
-                              ))}
-                            </ul>
-                          </details>
-                        )}
-                        {message.error && <p className="type-data text-danger">{message.error}</p>}
-                      </article>
-                    ))}
-                  </div>
+                  messages.map((message) => (
+                    <CloudMessageItem key={message.id} message={message} language={language} />
+                  ))
                 )}
-              </div>
+              </StreamingTranscript>
 
               <div className="flex flex-shrink-0 flex-col gap-2 border-t border-rule-divide bg-panel px-4 py-3">
                 <Textarea

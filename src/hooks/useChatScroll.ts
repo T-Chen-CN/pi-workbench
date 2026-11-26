@@ -90,21 +90,26 @@ export function useChatScroll(params: UseChatScrollParams) {
     return () => cancelAnimationFrame(frame)
   }, [messages, virtualizer, pinToBottom, activeKey])
 
-  // 容器尺寸变化（面板收起后展开、标签页切回、独立窗口接入、窗口缩放）时补一次贴底：
-  // 隐藏期间 clientHeight 为 0，滚动位置无法计算，内容也还在增长；节点搬移还会把 scrollTop 归零
+  // 容器与内容区尺寸变化（面板展开、拆窗接入、窗口缩放、Mermaid/KaTeX/代码块异步增高）时补一次贴底：
+  // 隐藏期间 clientHeight 为 0，滚动位置无法计算；监听内容子树高度可确保异步排版撑高后仍贴底
   useEffect(() => {
     const element = transcriptRef.current
     if (!element || typeof ResizeObserver === 'undefined') return
     let height = element.clientHeight
+    let scrollHeight = element.scrollHeight
     const observer = new ResizeObserver(() => {
-      const next = element.clientHeight
-      const changed = next !== height
-      height = next
-      if (changed && next > 0 && stickToBottomRef.current) scrollToBottomRef.current()
+      const nextHeight = element.clientHeight
+      const nextScrollHeight = element.scrollHeight
+      const changed = nextHeight !== height || nextScrollHeight !== scrollHeight
+      height = nextHeight
+      scrollHeight = nextScrollHeight
+      if (changed && nextHeight > 0 && stickToBottomRef.current) pinToBottom()
     })
     observer.observe(element)
+    const contentChild = element.firstElementChild
+    if (contentChild) observer.observe(contentChild)
     return () => observer.disconnect()
-  }, [transcriptRef, activeSessionId])
+  }, [transcriptRef, activeSessionId, messages.length, pinToBottom])
 
   const handleTranscriptScroll = () => {
     const element = transcriptRef.current

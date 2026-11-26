@@ -15,7 +15,7 @@ import { useHostDocument, useHostKeydown } from '../panelHost/HostContext'
 import type { AgentTracePart, FileEdit, StructuredPlan } from '../types/electron'
 import { Caption, IconButton, Label, Spinner } from './ui'
 import { AgentParts } from './AgentTrace'
-import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
+import { StreamingMarkdown } from './AgentMarkdown'
 import { basename } from '../utils/filePath'
 import { formatBytes } from '../utils/formatBytes'
 
@@ -528,14 +528,12 @@ export const ChatMessageRow = React.memo(function ChatMessageRow({
             />
           ) : (
             <div className="chat-markdown text-ink">
-              {message.isStreaming ? (
-                <StreamingMarkdown content={message.content} />
-              ) : (
-                <MarkdownBody
-                  content={message.content}
-                  highlight={message.content.length <= 20_000}
-                />
-              )}
+              <StreamingMarkdown
+                content={message.content}
+                isStreaming={Boolean(message.isStreaming)}
+                showCursor={Boolean(message.isStreaming)}
+                highlight={message.content.length <= 20_000}
+              />
             </div>
           )}
           {message.usage && (

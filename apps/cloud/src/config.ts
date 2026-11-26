@@ -26,7 +26,7 @@ export interface CloudConfig {
   secureCookies: boolean
   /** 服务版本，进 /v1/health 与协议握手 */
   version: string
-  /** Web 客户端静态目录；空表示用包内默认（apps/cloud/web） */
+  /** Web 客户端静态目录；空表示用包内默认（apps/cloud/web-dist 或部署包内 web） */
   webDir: string
 }
 
