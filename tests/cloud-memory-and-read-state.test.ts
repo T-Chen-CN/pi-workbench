@@ -116,9 +116,13 @@ async function setupServerWithDevice(hooks: Parameters<typeof createCloudServer>
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ code, name: 'Test-PC', platform: 'win32' }),
   })
-  const { deviceId, token } = (await pairRes.json()) as { deviceId: string; token: string }
+  const { deviceId, token, clientToken } = (await pairRes.json()) as {
+    deviceId: string
+    token: string
+    clientToken: string
+  }
 
-  return { srv, port, baseUrl, cookie, deviceId, token }
+  return { srv, port, baseUrl, cookie, deviceId, token, clientToken }
 }
 
 describe('C-03a: 云端记忆自动抽取、手工保护、留存文档与梦境整理', () => {
@@ -201,12 +205,12 @@ describe('C-03a: 云端记忆自动抽取、手工保护、留存文档与梦境
     })
     const auto1 = await store.addMemory({
       kind: 'fact',
-      content: '服务器部署在新加坡 43.160.211.128。',
+      content: '服务器部署在新加坡 203.0.113.10。',
       source: 'auto',
     })
     const auto2 = await store.addMemory({
       kind: 'fact',
-      content: '生产服务器 IP 为 43.160.211.128（新加坡节点）。',
+      content: '生产服务器 IP 为 203.0.113.10（新加坡节点）。',
       source: 'auto',
     })
 
@@ -218,7 +222,7 @@ describe('C-03a: 云端记忆自动抽取、手工保护、留存文档与梦境
         upsert: [
           {
             kind: 'fact',
-            content: '生产服务器位于新加坡节点 43.160.211.128。',
+            content: '生产服务器位于新加坡节点 203.0.113.10。',
             tags: ['prod'],
           },
         ],
@@ -232,7 +236,7 @@ describe('C-03a: 云端记忆自动抽取、手工保护、留存文档与梦境
     const list = store.listMemories()
     expect(list.some((m) => m.id === manual.id && m.source === 'manual')).toBe(true)
     expect(list.some((m) => m.id === auto1.id)).toBe(false)
-    expect(list.some((m) => m.content.includes('新加坡节点 43.160.211.128'))).toBe(true)
+    expect(list.some((m) => m.content.includes('新加坡节点 203.0.113.10'))).toBe(true)
 
     // 注入块里置顶的手工记忆优先出现
     const block = await buildMemoryContextBlock(store, '任意问题')
@@ -310,13 +314,13 @@ describe('C-03a: 云端记忆自动抽取、手工保护、留存文档与梦境
 
 describe('C-03c & C-03d: 多端已读同步与 task_message 直达终端', () => {
   it('F-52：服务端累计未读数，一个端 mark_read 后同步广播 read_state 给其他在线端', async () => {
-    const { srv, port, token } = await setupServerWithDevice()
+    const { srv, port, clientToken } = await setupServerWithDevice()
 
     const wsA = new WebSocket(`ws://127.0.0.1:${port}/client/ws`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${clientToken}` },
     })
     const wsB = new WebSocket(`ws://127.0.0.1:${port}/client/ws`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${clientToken}` },
     })
     await Promise.all([
       waitForEvent(wsA, (f) => f.type === 'snapshot'),
@@ -355,7 +359,7 @@ describe('C-03c & C-03d: 多端已读同步与 task_message 直达终端', () =>
   })
 
   it('C-03d：客户端发送 task_message 时，运行中工单直接转发 task_message 到对应设备', async () => {
-    const { srv, port, deviceId, token } = await setupServerWithDevice()
+    const { srv, port, deviceId, token, clientToken } = await setupServerWithDevice()
 
     const devWs = new WebSocket(`ws://127.0.0.1:${port}/device/ws`, {
       headers: { authorization: `Bearer ${token}` },
@@ -400,7 +404,7 @@ describe('C-03c & C-03d: 多端已读同步与 task_message 直达终端', () =>
     })
 
     const clientWs = new WebSocket(`ws://127.0.0.1:${port}/client/ws`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${clientToken}` },
     })
     await waitForEvent(clientWs, (f) => f.type === 'snapshot')
 

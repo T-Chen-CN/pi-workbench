@@ -160,10 +160,12 @@ async function pushConfig(model: string, providerId = 'deepseek'): Promise<void>
   })
 }
 
-/** 所有入口都会先 `ensureAgent()`，所以拉一次快照就等于「开始下一轮前的检查」 */
+let turnSeq = 0
+
+/** 轮次入口（session.say → ensureAgent）才会触发配置轮换；只读 GET /v1/snapshot 不拆运行时 */
 async function touchEntry(): Promise<void> {
-  const response = await fetch(`${base}/v1/snapshot`, { headers: headers() })
-  expect(response.status).toBe(200)
+  turnSeq += 1
+  await server.session.say(`turn-check-${turnSeq}`, `rot-${turnSeq}`)
 }
 
 function runningModel(): string | undefined {
@@ -184,14 +186,35 @@ describe('云端配置轮换（F-13 / A-16）', () => {
     expect(calls.initialize).toBe(settled)
   })
 
-  it('写新配置后，下一次入口重建运行时并用新模型（不重启进程）', async () => {
+  it('只读 GET /v1/snapshot 绝不拆毁重建正在运行的 Agent，轮换严格延后到下一轮入口', async () => {
     await pushConfig('deepseek-v4-pro')
+    const beforeInit = calls.initialize
+    const beforeDispose = calls.dispose
+
+    const snap = await fetch(`${base}/v1/snapshot`, { headers: headers() })
+    expect(snap.status).toBe(200)
+    expect(calls.initialize).toBe(beforeInit)
+    expect(calls.dispose).toBe(beforeDispose)
+    expect(runningModel()).toBe('deepseek-flash')
+
+    await touchEntry()
+    expect(calls.initialize).toBe(beforeInit + 1)
+    expect(calls.dispose).toBe(beforeDispose + 1)
+    expect(runningModel()).toBe('deepseek-v4-pro')
+  })
+
+  it('写新配置后，下一次入口重建运行时并用新模型（不重启进程）', async () => {
+    await pushConfig('deepseek-flash')
     const beforeInit = calls.initialize
     const beforeDispose = calls.dispose
     await touchEntry()
 
     expect(calls.initialize).toBe(beforeInit + 1)
     expect(calls.dispose).toBe(beforeDispose + 1)
+    expect(runningModel()).toBe('deepseek-flash')
+
+    await pushConfig('deepseek-v4-pro')
+    await touchEntry()
     expect(runningModel()).toBe('deepseek-v4-pro')
   })
 

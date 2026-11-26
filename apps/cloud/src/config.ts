@@ -28,6 +28,8 @@ export interface CloudConfig {
   version: string
   /** Web 客户端静态目录；空表示用包内默认（apps/cloud/web-dist 或部署包内 web） */
   webDir: string
+  /** 可选：首次初始化 `/v1/setup` 所需的启动令牌，公网部署建议设置防抢注 */
+  setupToken?: string
 }
 
 function required(name: string): string {
@@ -46,8 +48,9 @@ function decodeKey(raw: string): Buffer {
 
 export function loadConfig(overrides: Partial<CloudConfig> = {}): CloudConfig {
   const dataDir = overrides.dataDir || process.env.PI_CLOUD_DATA_DIR || '/var/lib/pi-cloud'
+  const envSetupToken = process.env.PI_CLOUD_SETUP_TOKEN?.trim()
   const config: CloudConfig = {
-    domain: process.env.PI_CLOUD_DOMAIN || 'tchen-xiaoxiao.com',
+    domain: process.env.PI_CLOUD_DOMAIN || 'cloud.example.com',
     host: process.env.PI_CLOUD_HOST || '127.0.0.1',
     port: Number(process.env.PI_CLOUD_PORT || 8787),
     dataDir,
@@ -59,6 +62,7 @@ export function loadConfig(overrides: Partial<CloudConfig> = {}): CloudConfig {
     secureCookies: process.env.NODE_ENV === 'production',
     version: process.env.PI_CLOUD_VERSION || '0.1.0',
     webDir: process.env.PI_CLOUD_WEB_DIR || '',
+    ...(envSetupToken ? { setupToken: envSetupToken } : {}),
     ...overrides,
   }
   if (!Number.isFinite(config.port) || config.port < 0) {

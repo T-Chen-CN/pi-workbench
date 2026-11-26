@@ -89,6 +89,7 @@ async function registerOnlineDevice(
   const workspaces = [{ path: `/repos/${name}/r1`, name: `${name}-r1`, isGit: true }]
   let deviceId: string
   let token: string
+  let clientToken: string
   if (viaPair) {
     const codeRes = await fetch(`${baseUrl}/v1/pair/code`, {
       method: 'POST',
@@ -105,18 +106,21 @@ async function registerOnlineDevice(
         workspaces,
       }),
     })
-    const paired = (await pairRes.json()) as { deviceId: string; token: string }
+    const paired = (await pairRes.json()) as { deviceId: string; token: string; clientToken: string }
     deviceId = paired.deviceId
     token = paired.token
+    clientToken = paired.clientToken
   } else {
     // 避开单 IP /v1/pair 限速（5 次/窗），直接写设备凭据后走真实 /device/ws 建连
     deviceId = `dev-${name}`
     token = createToken()
+    clientToken = createToken()
     await srv.store.addDevice({
       id: deviceId,
       name,
       platform: 'win32',
       token: hashToken(token),
+      clientToken: hashToken(clientToken),
       workspaces,
       createdAt: Date.now(),
       lastSeenAt: Date.now(),
@@ -143,7 +147,7 @@ async function registerOnlineDevice(
     if (srv.hub.isDeviceOnline(deviceId) && dev && dev.workspaces.length >= 1) break
     await new Promise((r) => setTimeout(r, 15))
   }
-  return { deviceId, token, ws, workspacePath: workspaces[0].path, workspaces }
+  return { deviceId, token, clientToken, ws, workspacePath: workspaces[0].path, workspaces }
 }
 
 describe('C-03d: 并发与事件风暴压力测试', () => {
@@ -354,7 +358,7 @@ describe('C-03d: 并发与事件风暴压力测试', () => {
 
     // 客户端连接并在前 50 条后断开，剩余 170 条期间离线，然后用 lastSeq 重连补齐
     const ws1 = new WebSocket(`ws://127.0.0.1:${port}/client/ws`, {
-      headers: { authorization: `Bearer ${dev.token}` },
+      headers: { authorization: `Bearer ${dev.clientToken}` },
     })
     const received1: number[] = []
     ws1.on('message', (raw) => {
@@ -376,7 +380,7 @@ describe('C-03d: 并发与事件风暴压力测试', () => {
     }
 
     const ws2 = new WebSocket(`ws://127.0.0.1:${port}/client/ws`, {
-      headers: { authorization: `Bearer ${dev.token}` },
+      headers: { authorization: `Bearer ${dev.clientToken}` },
     })
     const replayed: number[] = []
     ws2.on('message', (raw) => {

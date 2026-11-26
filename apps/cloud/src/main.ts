@@ -94,7 +94,9 @@ export async function createCloudServer(
 
   const store = await CloudStore.open(config.dataDir)
   const memoryStore = await CloudMemoryStore.open(config.dataDir)
-  const loginLimiter = new AttemptLimiter()
+  // 登录限速保留每源 5/5m + 并发 scrypt 上限，但不启用全局熔断（防外部伪造错误请求永久锁死管理员登录）；
+  // 6 位配对码仍启用全局熔断防分布式穷举（A-45）。
+  const loginLimiter = new AttemptLimiter({ globalLimit: Number.POSITIVE_INFINITY })
   const pairLimiter = new AttemptLimiter()
 
   const agent = new AgentManager()
@@ -257,9 +259,8 @@ export async function createCloudServer(
 
   async function buildSnapshot(): Promise<CloudSnapshot> {
     // 历史在落盘的会话里，但要经 AgentManager 投影就得先初始化。
-    // 不在这里拉一下：重启后没人说过话，`sessionId` 还是 null → 快照里历史空白，
-    // 表现就是「重启后对话全没了」。模拟配置未推时不报错，只是历史为空。
-    await ensureAgent().catch(() => false)
+    // GET /v1/snapshot 保持无破坏性：仅在尚未初始化时懒启动，绝不触发已运行实例的销毁/重建（配置轮换只在轮次边界生效）。
+    await ensureAgent({ applyPendingConfig: false }).catch(() => false)
     // 覆盖 HTTP GET /v1/snapshot 直接拉取（尚未建 WS 时同样能拿到离线期汇总）
     if (store.getLastClientLeftAt() !== null) {
       latchAwaySummary()
@@ -273,7 +274,9 @@ export async function createCloudServer(
       unreadCount: computeUnreadCount(messages),
       cloud: session.runtimeState(),
       messages,
-      tasks: store.listTasks(),
+      tasks: store.listTasks().map((task) =>
+        task.progress.diff ? { ...task, progress: { ...task.progress, diff: undefined } } : task
+      ),
       devices: dispatcher.deviceSnapshots(),
       units: dispatcher.unitViews(),
       authorizations: store.activeAuthorizations().map(authorizationView),
@@ -407,7 +410,7 @@ export async function createCloudServer(
     return device
   }
 
-  /** 一机一 token（D-22）：设备 token 也能开客户端通道；Web 用 cookie 且必须同源（防 CSWSH） */
+  /** 一机双 token：执行通道 token 仅限 /device/ws，控制面 /client/ws 只认 Cookie（强制非空精确 Origin 防 CSWSH）或桌面控制面 clientToken */
   function authenticateClient(
     req: IncomingMessage
   ): { ok: true; deviceId?: string } | { ok: false; status: 401 | 403 } {
@@ -416,11 +419,18 @@ export async function createCloudServer(
       store.getAccount() &&
       verifySessionCookie(config.cookieSecret, cookie, Date.now(), store.getSessionVersion())
     ) {
-      if (!isAllowedOrigin(req)) return { ok: false, status: 403 }
+      if (!isAllowedOrigin(req, { requireOrigin: true })) return { ok: false, status: 403 }
       return { ok: true }
     }
-    const device = authenticateDevice(req)
-    if (device) return { ok: true, deviceId: device.id }
+    const header = req.headers.authorization ?? ''
+    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
+    if (token) {
+      const device = store.findDeviceByClientToken(token)
+      if (device) {
+        void store.updateDevice(device.id, { lastSeenAt: Date.now() }).catch(() => undefined)
+        return { ok: true, deviceId: device.id }
+      }
+    }
     return { ok: false, status: 401 }
   }
 
@@ -921,12 +931,14 @@ export async function createCloudServer(
   /**
    * 懒初始化 + 轮次边界换配（F-10 / F-13）。
    * 没有配置时控制面照常工作（能看到设备、配对、健康检查），只是不能对话。
+   * `applyPendingConfig: false` 用于只读快照路径：冷启时拉历史，但不销毁重建已有运行时。
    */
-  async function ensureAgent(): Promise<boolean> {
+  async function ensureAgent(options: { applyPendingConfig?: boolean } = {}): Promise<boolean> {
+    const applyPendingConfig = options.applyPendingConfig !== false
     if (applyingConfig) await applyingConfig
     if (agentReady) {
       // 配置换过就在本轮开始前生效；这一句是 F-13 的唯一触发点
-      if (pendingConfigStamp() !== null) await applyConfig()
+      if (applyPendingConfig && pendingConfigStamp() !== null) await applyConfig()
       return agentReady
     }
     if (agentInitializing) return agentInitializing
@@ -1011,7 +1023,9 @@ export async function createCloudServer(
         hub.stop()
         await session.stopReply().catch(() => undefined)
         await agent.dispose().catch(() => undefined)
+        await memoryStore.flush().catch(() => undefined)
         await store.flush().catch(() => undefined)
+        store.close()
         await new Promise<void>((resolve) => {
           server.close(() => resolve())
           // 主动断开空闲 HTTP keep-alive 连接，防止优雅退出无限挂起

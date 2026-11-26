@@ -112,7 +112,9 @@ afterAll(async () => {
 
 function openClient(path: string): Promise<{ first: any; socket: WebSocket }> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(`${base.replace('http', 'ws')}${path}`, { headers: { cookie } })
+    const socket = new WebSocket(`${base.replace('http', 'ws')}${path}`, {
+      headers: { cookie, origin: base },
+    })
     const timer = setTimeout(() => reject(new Error('ws timeout')), 5000)
     socket.on('message', (raw) => {
       clearTimeout(timer)

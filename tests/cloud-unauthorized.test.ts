@@ -27,6 +27,7 @@ vi.mock('electron', () => ({
 vi.mock('../electron/cloud/link-store.js', () => ({
   readCloudLink: () => ({ baseUrl: link.baseUrl, deviceId: 'dev-unauthorized', linked: true }),
   readCloudToken: () => 'token-1',
+  readCloudClientToken: () => 'client-token-1',
   touchCloudLink: async () => undefined,
   wsUrl: (baseUrl: string, pathname: string) => `${baseUrl.replace(/^http/, 'ws')}${pathname}`,
 }))

@@ -47,7 +47,7 @@ const SAFE_ASSET_FILE = /^[a-zA-Z0-9._-]+\.(?:js|css|woff2|woff|ttf|svg|png)$/
  * `img-src` 允许 `data:` 与 `blob:` 以支持 Mermaid SVG/PNG 预览与导出。
  */
 const CSP_HEADER =
-  "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
+  "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
 
 const cache = new Map<string, { body: Buffer; type: string; immutable?: boolean }>()
 

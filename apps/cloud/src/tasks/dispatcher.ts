@@ -13,6 +13,7 @@
 import {
   CLOUD_MAX_CONCURRENT_SESSIONS,
   CLOUD_MAX_DIFF_LIMIT_BYTES,
+  CLOUD_OFFLINE_TIMEOUT_MS,
   CLOUD_QUEUED_ACK_WINDOW_MS,
   CLOUD_TASK_SILENCE_CHECK_MS,
   CLOUD_WAITING_HUMAN_TIMEOUT_MS,
@@ -77,15 +78,22 @@ export function toUnitView(unit: UnitRecord): CloudUnitView {
   }
 }
 
+/** 同一工作单元内通过 sameUnit 派发的工单上限，防止 quota=1 时无限循环派单绕过额度 */
+const MAX_TASKS_PER_UNIT = 20
+
 export class TaskDispatcher {
   /** 单设备在途已下发但尚未收到 assigned 的工单（防并发 tryDispatch 同时下发多条 queued） */
   private inFlightDispatches = new Map<string, string>()
+  /** 同一幂等键并发派单合并，避免重复创建工单 */
+  private inFlightIdempotency = new Map<string, Promise<DispatchOutcome>>()
   private drainingQueue = false
   private drainQueuePending = false
   /** 同一工具停滞只报一次（收到新里程碑/终态后清除，C-02） */
   private reportedToolStalls = new Set<string>()
   /** 同一静默窗口只唤醒一次：记录已告警时的 lastEventAt（C-02） */
   private reportedSilenceAt = new Map<string, number>()
+  /** 启动时间戳：用于服务重启宽限期后收敛离线设备的僵尸活跃工单 */
+  private readonly bootAt: number
 
   constructor(
     private readonly deps: {
@@ -98,9 +106,13 @@ export class TaskDispatcher {
       maxConcurrentTasks?: number
       /** 云端静默巡检阈值（C-02，默认 20 分钟） */
       silenceCheckMs?: number
+      /** 服务重启后对未重连设备的僵尸运行中工单宽限时长（默认 60s） */
+      offlineRecoveryGraceMs?: number
       now?: () => number
     }
-  ) {}
+  ) {
+    this.bootAt = deps.now?.() ?? Date.now()
+  }
 
   private maxConcurrent(): number {
     return Math.max(1, this.deps.maxConcurrentTasks ?? CLOUD_MAX_CONCURRENT_SESSIONS)
@@ -108,6 +120,10 @@ export class TaskDispatcher {
 
   private silenceCheckMs(): number {
     return Math.max(1_000, this.deps.silenceCheckMs ?? CLOUD_TASK_SILENCE_CHECK_MS)
+  }
+
+  private offlineRecoveryGraceMs(): number {
+    return Math.max(1_000, this.deps.offlineRecoveryGraceMs ?? CLOUD_OFFLINE_TIMEOUT_MS)
   }
 
   /** 全站当前活跃或已下发待 ACK 的工单总数（D-15 / A-21） */
@@ -139,6 +155,22 @@ export class TaskDispatcher {
   // ------------------------------ 派活 ------------------------------
 
   async dispatch(request: DispatchRequest): Promise<DispatchOutcome> {
+    const key = request.idempotencyKey
+    if (key) {
+      const inflight = this.inFlightIdempotency.get(key)
+      if (inflight) return inflight
+      const promise = this.runDispatch(request, key).finally(() => {
+        if (this.inFlightIdempotency.get(key) === promise) {
+          this.inFlightIdempotency.delete(key)
+        }
+      })
+      this.inFlightIdempotency.set(key, promise)
+      return promise
+    }
+    return this.runDispatch(request, `key-${request.workUnitId}-${this.now()}-${Math.random().toString(36).slice(2, 8)}`)
+  }
+
+  private async runDispatch(request: DispatchRequest, key: string): Promise<DispatchOutcome> {
     const store = this.deps.store
     const now = this.now()
 
@@ -182,12 +214,36 @@ export class TaskDispatcher {
         message: 'Work unit belongs to a different device or repository.',
       }
     }
+    // 复用已有单元时禁止跨授权蹭额度，且限制同单元最多跟单数防无限循环
+    if (
+      existingUnit &&
+      existingUnit.authorizationId &&
+      existingUnit.authorizationId !== request.authorizationId
+    ) {
+      return {
+        ok: false,
+        code: 'unit-authorization-mismatch',
+        message: 'Work unit was created under a different authorization; open a new unit or reuse the original authorization.',
+      }
+    }
     const sameUnit = Boolean(existingUnit && !existingUnit.closedAt)
 
     // 幂等：同一 idempotencyKey 只生成一张工单（先于配额扣减检查，避免重复扣减）
-    const key = request.idempotencyKey ?? `key-${request.workUnitId}-${now}`
     const existing = store.listTasks().find((task) => task.idempotencyKey === key)
     if (existing) return { ok: true, task: existing }
+
+    if (sameUnit) {
+      const tasksInUnit = store
+        .listTasks()
+        .filter((task) => task.spec.workUnitId === request.workUnitId).length
+      if (tasksInUnit >= MAX_TASKS_PER_UNIT) {
+        return {
+          ok: false,
+          code: 'unit-task-limit',
+          message: `Work unit reached the maximum of ${MAX_TASKS_PER_UNIT} tasks; ask the user to confirm a new plan.`,
+        }
+      }
+    }
 
     // 原子校验并扣减授权配额，防止并发 dispatch TOCTOU 超额派活
     let checkCode: string | null = null
@@ -253,6 +309,7 @@ export class TaskDispatcher {
         unitId: request.workUnitId,
         deviceId: request.deviceId,
         workspacePath: request.workspacePath,
+        authorizationId: request.authorizationId,
         createdAt: now,
         closedAt: null,
       })
@@ -310,6 +367,12 @@ export class TaskDispatcher {
     // 必须先落盘 dispatchedAt 再发往设备，否则极快回包的 `task_status: assigned/running`
     // 会被后完成的 `saveTask(dispatched)` 覆盖回 `queued`，导致全站并发计数失真
     await store.saveTask(dispatched)
+    // await 期间工单可能已被取消或设备已下线，必须复检状态避免把已取消工单发往设备
+    const afterSave = store.findTask(fresh.id)
+    if (!afterSave || afterSave.status !== 'queued') {
+      this.clearInFlight(deviceId, fresh.id)
+      return
+    }
     const delivered = this.deps.hub.sendToDevice(
       deviceId,
       {
@@ -321,9 +384,9 @@ export class TaskDispatcher {
       fresh.id
     )
     if (!delivered) {
-      if (this.inFlightDispatches.get(deviceId) === fresh.id) {
-        this.inFlightDispatches.delete(deviceId)
-      }
+      // 发送失败时必须立刻清除写入 deviceLog 的 task 帧，否则重连重放会与 dispatchNextFor 触发双派单
+      this.deps.hub.dropDeviceTask(deviceId, fresh.id)
+      this.clearInFlight(deviceId, fresh.id)
       const current = store.findTask(fresh.id)
       if (current && current.status === 'queued') {
         await store.saveTask({ ...current, dispatchedAt: null })
@@ -458,6 +521,10 @@ export class TaskDispatcher {
         if (!task || task.spec.deviceId !== deviceId) return
         this.clearInFlight(deviceId, task.id)
         const sanitizedDiff = sanitizeIncomingDiff(frame.result.diff)
+        // 脱敏 diff 单独落盘到 task-diffs/<taskId>.json，不进 tasks.json 与前端广播快照（get_task 按需加载）
+        if (sanitizedDiff && typeof this.deps.store.saveTaskDiff === 'function') {
+          await this.deps.store.saveTaskDiff(task.id, sanitizedDiff)
+        }
         const moved = transition(task, 'done', {
           now: this.now(),
           reason: 'completed',
@@ -467,7 +534,6 @@ export class TaskDispatcher {
             commit: frame.result.commit,
             changedFiles: frame.result.changedFiles,
             secretHits: frame.result.secretHits,
-            ...(sanitizedDiff ? { diff: sanitizedDiff } : {}),
           },
         })
         if (moved.changed) {
@@ -744,7 +810,7 @@ export class TaskDispatcher {
     await this.deps.store.saveTask(moved.task)
     this.finish(moved.task)
 
-    // 在线才下发 cancel；离线时终端本来就不再执行（F-30）
+    // 在线才下发 cancel；this.finish() 已先清理旧的 task 帧，这里绝不能在发完 cancel 后再 dropDeviceTask 把刚入队的取消帧抹掉
     if (this.deps.hub.isDeviceOnline(task.spec.deviceId)) {
       this.deps.hub.sendToDevice(
         task.spec.deviceId,
@@ -752,7 +818,6 @@ export class TaskDispatcher {
         taskId
       )
     }
-    this.deps.hub.dropDeviceTask(task.spec.deviceId, taskId)
     await this.wake(
       moved.task,
       reason === 'device-offline' ? 'device-offline' : 'cancelled',
@@ -777,9 +842,11 @@ export class TaskDispatcher {
     await this.dispatchNextFor(deviceId)
   }
 
-  /** 超时收敛：`queued` 未 ack → expired；`waiting_human` 超 2 h → failed（F-21 / F-25） */
+  /** 超时收敛：`queued` 未 ack → expired；`waiting_human` 超 2 h → failed；服务重启后离线设备的僵尸活跃工单宽限期后取消（F-21 / F-25） */
   async sweepTimeouts(): Promise<void> {
     const now = this.now()
+    const offlineGraceMs = this.offlineRecoveryGraceMs()
+    const pastBootGrace = now - this.bootAt >= offlineGraceMs
     for (const task of this.deps.store.listTasks()) {
       if (isAckExpired(task, now, CLOUD_QUEUED_ACK_WINDOW_MS)) {
         const moved = transition(task, 'expired', { now, reason: 'ack-timeout' })
@@ -802,6 +869,16 @@ export class TaskDispatcher {
         this.finish(moved.task)
         await this.wake(moved.task, 'failed', '等待用户决定超时，工单已失败')
         await this.dispatchNextFor(moved.task.spec.deviceId)
+        continue
+      }
+      // 服务端重启后若原执行设备未在宽限期内重连，必须取消残留活跃工单，防止永久占死单设备锁与全站 8 并发上限
+      if (
+        pastBootGrace &&
+        (task.status === 'assigned' || task.status === 'running' || task.status === 'waiting_human') &&
+        !this.deps.hub.isDeviceOnline(task.spec.deviceId) &&
+        now - task.updatedAt >= offlineGraceMs
+      ) {
+        await this.cancelTask(task.id, 'device-offline')
         continue
       }
       // C-02：running 工单 20 分钟无进度事件 → 主动唤醒一轮检查（同一静默只报一次）
@@ -855,7 +932,11 @@ export class TaskDispatcher {
   }
 
   private publishTask(task: CloudTaskSnapshot): void {
-    const event: CloudEvent = { type: 'task', task }
+    // 防御纵深：广播给客户端的工单快照绝不附带大体积 diff 正文
+    const sanitized: CloudTaskSnapshot = task.progress.diff
+      ? { ...task, progress: { ...task.progress, diff: undefined } }
+      : task
+    const event: CloudEvent = { type: 'task', task: sanitized }
     this.deps.hub.publish(event)
   }
 

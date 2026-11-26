@@ -170,9 +170,10 @@ export class CloudMemoryStore {
       createdAt: now,
       updatedAt: now,
     }
-    this.memories = [item, ...this.memories].slice(0, MAX_MEMORIES)
-    await this.persistMemories()
-    return item
+    return this.mutateMemories(() => ({
+      next: [item, ...this.memories].slice(0, MAX_MEMORIES),
+      result: item,
+    }))
   }
 
   /** 用户手工编辑记忆时自动提升为 source='manual'，避免后续被自动抽取或梦境覆盖（F-39） */
@@ -181,32 +182,35 @@ export class CloudMemoryStore {
     patch: { kind?: unknown; content?: string; tags?: unknown; pinned?: boolean },
     now = Date.now()
   ): Promise<CloudMemoryItem | null> {
-    const index = this.memories.findIndex((item) => item.id === id)
-    if (index < 0) return null
-    const current = this.memories[index]
-    const nextContent =
-      typeof patch.content === 'string' ? patch.content.trim().slice(0, MAX_CONTENT_LEN) : current.content
-    if (!nextContent) throw new Error('Memory content cannot be empty')
-    const updated: CloudMemoryItem = {
-      ...current,
-      kind: patch.kind !== undefined ? normalizeMemoryKind(patch.kind) : current.kind,
-      content: nextContent,
-      tags: patch.tags !== undefined ? normalizeTags(patch.tags) : current.tags,
-      pinned: typeof patch.pinned === 'boolean' ? patch.pinned : current.pinned,
-      source: 'manual',
-      updatedAt: now,
-    }
-    this.memories = this.memories.map((item, idx) => (idx === index ? updated : item))
-    await this.persistMemories()
-    return updated
+    return this.mutateMemories(() => {
+      const index = this.memories.findIndex((item) => item.id === id)
+      if (index < 0) return { next: this.memories, result: null, changed: false }
+      const current = this.memories[index]
+      const nextContent =
+        typeof patch.content === 'string' ? patch.content.trim().slice(0, MAX_CONTENT_LEN) : current.content
+      if (!nextContent) throw new Error('Memory content cannot be empty')
+      const updated: CloudMemoryItem = {
+        ...current,
+        kind: patch.kind !== undefined ? normalizeMemoryKind(patch.kind) : current.kind,
+        content: nextContent,
+        tags: patch.tags !== undefined ? normalizeTags(patch.tags) : current.tags,
+        pinned: typeof patch.pinned === 'boolean' ? patch.pinned : current.pinned,
+        source: 'manual',
+        updatedAt: now,
+      }
+      return {
+        next: this.memories.map((item, idx) => (idx === index ? updated : item)),
+        result: updated,
+      }
+    })
   }
 
   async deleteMemory(id: string): Promise<boolean> {
-    const before = this.memories.length
-    this.memories = this.memories.filter((item) => item.id !== id)
-    if (this.memories.length === before) return false
-    await this.persistMemories()
-    return true
+    return this.mutateMemories(() => {
+      const next = this.memories.filter((item) => item.id !== id)
+      const changed = next.length !== this.memories.length
+      return { next, result: changed, changed }
+    })
   }
 
   /**
@@ -220,30 +224,32 @@ export class CloudMemoryStore {
     source: 'auto' | 'dream' = 'auto',
     now = Date.now()
   ): Promise<CloudMemoryItem[]> {
-    const existingKeys = new Set(this.memories.map((item) => normalizeTextKey(item.content)))
-    const added: CloudMemoryItem[] = []
-    for (const candidate of candidates) {
-      if (typeof candidate.content !== 'string') continue
-      const content = candidate.content.trim().slice(0, MAX_CONTENT_LEN)
-      const key = normalizeTextKey(content)
-      if (!key || key.length < 4 || existingKeys.has(key)) continue
-      existingKeys.add(key)
-      added.push({
-        id: `mem-${randomBytes(4).toString('hex')}`,
-        kind: normalizeMemoryKind(candidate.kind),
-        content,
-        tags: normalizeTags(candidate.tags),
-        source,
-        pinned: false,
-        createdAt: now,
-        updatedAt: now,
-      })
-    }
-    if (added.length === 0) return []
-    const combined = [...added, ...this.memories]
-    this.memories = trimMemories(combined, MAX_MEMORIES)
-    await this.persistMemories()
-    return added
+    return this.mutateMemories(() => {
+      const existingKeys = new Set(this.memories.map((item) => normalizeTextKey(item.content)))
+      const added: CloudMemoryItem[] = []
+      for (const candidate of candidates) {
+        if (typeof candidate.content !== 'string') continue
+        const content = candidate.content.trim().slice(0, MAX_CONTENT_LEN)
+        const key = normalizeTextKey(content)
+        if (!key || key.length < 4 || existingKeys.has(key)) continue
+        existingKeys.add(key)
+        added.push({
+          id: `mem-${randomBytes(4).toString('hex')}`,
+          kind: normalizeMemoryKind(candidate.kind),
+          content,
+          tags: normalizeTags(candidate.tags),
+          source,
+          pinned: false,
+          createdAt: now,
+          updatedAt: now,
+        })
+      }
+      if (added.length === 0) return { next: this.memories, result: [], changed: false }
+      return {
+        next: trimMemories([...added, ...this.memories], MAX_MEMORIES),
+        result: added,
+      }
+    })
   }
 
   /**
@@ -256,26 +262,52 @@ export class CloudMemoryStore {
     },
     now = Date.now()
   ): Promise<{ added: number; removed: number }> {
-    const removable = new Set(
-      this.memories.filter((item) => item.source !== 'manual').map((item) => item.id)
-    )
-    const toRemove = new Set(input.removeIds.filter((id) => removable.has(id)))
-    let removed = 0
-    if (toRemove.size > 0) {
-      const before = this.memories.length
-      this.memories = this.memories.filter((item) => !toRemove.has(item.id))
-      removed = before - this.memories.length
-    }
-    const added = await this.mergeAutoMemories(input.upsert, 'dream', now)
-    if (removed > 0 && added.length === 0) {
-      await this.persistMemories()
-    }
-    return { added: added.length, removed }
+    return this.mutateMemories(() => {
+      const removable = new Set(
+        this.memories.filter((item) => item.source !== 'manual').map((item) => item.id)
+      )
+      const toRemove = new Set(input.removeIds.filter((id) => removable.has(id)))
+      const kept =
+        toRemove.size > 0 ? this.memories.filter((item) => !toRemove.has(item.id)) : this.memories
+      const removed = this.memories.length - kept.length
+
+      const existingKeys = new Set(kept.map((item) => normalizeTextKey(item.content)))
+      const added: CloudMemoryItem[] = []
+      for (const candidate of input.upsert) {
+        if (typeof candidate.content !== 'string') continue
+        const content = candidate.content.trim().slice(0, MAX_CONTENT_LEN)
+        const key = normalizeTextKey(content)
+        if (!key || key.length < 4 || existingKeys.has(key)) continue
+        existingKeys.add(key)
+        added.push({
+          id: `mem-${randomBytes(4).toString('hex')}`,
+          kind: normalizeMemoryKind(candidate.kind),
+          content,
+          tags: normalizeTags(candidate.tags),
+          source: 'dream',
+          pinned: false,
+          createdAt: now,
+          updatedAt: now,
+        })
+      }
+      const changed = removed > 0 || added.length > 0
+      const next = changed ? trimMemories([...added, ...kept], MAX_MEMORIES) : this.memories
+      return { next, result: { added: added.length, removed }, changed }
+    })
   }
 
-  private async persistMemories(): Promise<void> {
-    const snapshot: MemoriesFile = { items: [...this.memories] }
-    await this.enqueueWrite(() => writeJsonAtomicAsync(this.memoriesPath, snapshot))
+  /** 在串行写锁内执行内存更新 + 落盘，写入失败时保持原内存状态避免磁盘与内存分叉 */
+  private async mutateMemories<R>(fn: () => { next: CloudMemoryItem[]; result: R; changed?: boolean }): Promise<R> {
+    let outcome!: R
+    await this.enqueueWrite(async () => {
+      const { next, result, changed = true } = fn()
+      outcome = result
+      if (!changed) return
+      const snapshot: MemoriesFile = { items: [...next] }
+      await writeJsonAtomicAsync(this.memoriesPath, snapshot)
+      this.memories = next
+    })
+    return outcome
   }
 
   // ------------------------------ 梦境记录 ------------------------------
@@ -293,9 +325,12 @@ export class CloudMemoryStore {
       id: `dream-${randomBytes(4).toString('hex')}`,
       ...record,
     }
-    this.dreams = [full, ...this.dreams].slice(0, MAX_DREAMS)
-    const snapshot: DreamsFile = { dreams: [...this.dreams] }
-    await this.enqueueWrite(() => writeJsonAtomicAsync(this.dreamsPath, snapshot))
+    await this.enqueueWrite(async () => {
+      const next = [full, ...this.dreams].slice(0, MAX_DREAMS)
+      const snapshot: DreamsFile = { dreams: [...next] }
+      await writeJsonAtomicAsync(this.dreamsPath, snapshot)
+      this.dreams = next
+    })
     return full
   }
 

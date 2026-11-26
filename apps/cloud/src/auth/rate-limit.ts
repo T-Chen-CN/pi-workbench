@@ -37,10 +37,14 @@ export class AttemptLimiter {
   private globalFailures: number[] = []
   private blockedUntil = 0
 
+  private readonly options: RateLimitOptions
+
   constructor(
-    private readonly options: RateLimitOptions = DEFAULT_CREDENTIAL_LIMITS,
+    options: Partial<RateLimitOptions> = {},
     private readonly now: () => number = Date.now
-  ) {}
+  ) {
+    this.options = { ...DEFAULT_CREDENTIAL_LIMITS, ...options }
+  }
 
   /** 是否允许该来源再试一次；熔断期内一律拒绝 */
   canAttempt(source: string): { allowed: boolean; reason?: 'source' | 'global' } {
@@ -92,6 +96,9 @@ export class AttemptLimiter {
     window.stamps.push(now)
     this.perSource.set(source, window)
 
+    if (!Number.isFinite(this.options.globalLimit)) {
+      return { tripped: false }
+    }
     this.globalFailures = this.globalFailures.filter(
       (stamp) => now - stamp < this.options.windowMs
     )

@@ -42,6 +42,8 @@ interface StoredFrame {
 export class BoundedLog {
   private entries: StoredFrame[] = []
   private lastSeq = 0
+  /** 已因容量/过期被淘汰的最大 seq；用于判断空日志下旧游标是否已发生溢出 */
+  private evictedUpTo = 0
 
   constructor(
     private readonly maxEntries = CLOUD_OUTBOX_MAX_ENTRIES,
@@ -72,12 +74,13 @@ export class BoundedLog {
     this.trim()
   }
 
-  /** 续读：返回 lastAckSeq 之后的帧；overflow 表示中间有丢失或服务端重启游标归零，调用方应回 snapshot */
+  /** 续读：返回 lastAckSeq 之后的帧；overflow 表示中间有丢失或服务端重启游标归零，调用方应回 snapshot / 重置游标 */
   since(lastAckSeq: number): { frames: StoredFrame[]; overflow: boolean } {
     this.trim()
     const first = this.entries[0]
     const overflow =
       lastAckSeq > this.lastSeq ||
+      (lastAckSeq > 0 && this.evictedUpTo > lastAckSeq) ||
       Boolean(first && lastAckSeq > 0 && first.seq > lastAckSeq + 1)
     return {
       frames: this.entries.filter((entry) => entry.seq > lastAckSeq),
@@ -105,10 +108,18 @@ export class BoundedLog {
   private trim(): void {
     const now = this.now()
     if (this.entries.length > this.maxEntries) {
-      this.entries = this.entries.slice(this.entries.length - this.maxEntries)
+      const cut = this.entries.length - this.maxEntries
+      const dropped = this.entries[cut - 1]
+      if (dropped) this.evictedUpTo = Math.max(this.evictedUpTo, dropped.seq)
+      this.entries = this.entries.slice(cut)
     }
     if (this.entries.length > 0 && now - this.entries[0].at > this.maxAgeMs) {
-      this.entries = this.entries.filter((entry) => now - entry.at <= this.maxAgeMs)
+      const kept: StoredFrame[] = []
+      for (const entry of this.entries) {
+        if (now - entry.at <= this.maxAgeMs) kept.push(entry)
+        else this.evictedUpTo = Math.max(this.evictedUpTo, entry.seq)
+      }
+      this.entries = kept
     }
   }
 }
@@ -477,8 +488,23 @@ export class Hub {
 
   private replayDeviceLog(peer: DevicePeer, resumeFrom: number | null): void {
     const log = this.deviceLog(peer.deviceId)
-    const { frames } = log.since(resumeFrom ?? 0)
-    for (const entry of frames) {
+    const { frames, overflow } = log.since(resumeFrom ?? 0)
+    // 服务端重启游标归零或设备日志溢出：发送 ack(seq: 0) 重置终端游标并重放当前全部待投递帧，防止静默丢帧
+    const toReplay = overflow ? log.since(0).frames : frames
+    if (overflow) {
+      try {
+        peer.socket.send(
+          encodeFrame({
+            v: CLOUD_PROTOCOL_VERSION,
+            type: 'ack',
+            seq: 0,
+          })
+        )
+      } catch {
+        return
+      }
+    }
+    for (const entry of toReplay) {
       try {
         peer.socket.send(encodeFrame(entry.frame))
       } catch {

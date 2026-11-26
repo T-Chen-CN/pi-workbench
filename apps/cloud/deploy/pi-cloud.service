@@ -18,7 +18,7 @@ RestartSec=2
 # 云端只监听 127.0.0.1，TLS 与 WS 升级交给 Caddy
 Environment=NODE_ENV=production
 
-# 收紧权限：只允许写数据目录与备份目录
+# 收紧权限：只允许写数据目录（/var/backups/pi-cloud 仅限独立备份任务写入，防运行期被篡改）
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -30,7 +30,7 @@ RestrictSUIDSGID=true
 RestrictNamespaces=true
 LockPersonality=true
 MemoryMax=1500M
-ReadWritePaths=/var/lib/pi-cloud /var/backups/pi-cloud
+ReadWritePaths=/var/lib/pi-cloud
 
 StandardOutput=journal
 StandardError=journal

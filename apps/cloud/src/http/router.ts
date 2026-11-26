@@ -106,19 +106,20 @@ export class Router {
 }
 
 const MAX_BODY_BYTES = 256 * 1024
+const BODY_READ_TIMEOUT_MS = 15_000
 
 function isLoopbackAddress(address: string | undefined): boolean {
   if (!address) return false
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
 }
 
-/** 只在来自本机反代（Caddy）时信任 X-Forwarded-For 末跳或 X-Real-IP，防客户端伪造 XFF 绕过限速 */
+/**
+ * 只在来自本机反代（Caddy）时信任 X-Forwarded-For 末跳；
+ * 绝不读取 X-Real-IP（Caddy 会透传客户端伪造的 X-Real-IP，会被用于绕过限速）。
+ */
 export function sourceOf(req: IncomingMessage): string {
   const remote = req.socket.remoteAddress
   if (isLoopbackAddress(remote)) {
-    const realIp = req.headers['x-real-ip']
-    const realValue = (Array.isArray(realIp) ? realIp[0] : realIp)?.trim()
-    if (realValue) return realValue
     const forwarded = req.headers['x-forwarded-for']
     const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded
     const hops = raw
@@ -131,14 +132,26 @@ export function sourceOf(req: IncomingMessage): string {
   return remote || 'unknown'
 }
 
-/** 校验浏览器请求 Origin 与当前 Host 一致（防 CSWSH 与跨站 CSRF） */
-export function isAllowedOrigin(req: IncomingMessage): boolean {
+/** 校验浏览器请求 Origin 与当前 Host 及协议一致（防 CSWSH 与跨站 CSRF） */
+export function isAllowedOrigin(
+  req: IncomingMessage,
+  options?: { requireOrigin?: boolean }
+): boolean {
   const origin = req.headers.origin
-  if (!origin) return true
+  if (!origin) return !options?.requireOrigin
   const host = req.headers.host
   if (!host) return false
   try {
-    return new URL(origin).host.toLowerCase() === host.toLowerCase()
+    const parsed = new URL(origin)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+    if (parsed.host.toLowerCase() !== host.toLowerCase()) return false
+    // 经 HTTPS 反代或 TLS 接入时拒绝明文 http:// Origin
+    const remote = req.socket?.remoteAddress
+    const rawProto = isLoopbackAddress(remote) ? req.headers['x-forwarded-proto'] : undefined
+    const proto = (Array.isArray(rawProto) ? rawProto[0] : rawProto)?.split(',')[0]?.trim().toLowerCase()
+    const isHttps = proto === 'https' || Boolean((req.socket as { encrypted?: boolean })?.encrypted)
+    if (isHttps && parsed.protocol !== 'https:') return false
+    return true
   } catch {
     return false
   }
@@ -147,13 +160,31 @@ export function isAllowedOrigin(req: IncomingMessage): boolean {
 export async function readJsonBody<T>(req: IncomingMessage, limitBytes = MAX_BODY_BYTES): Promise<T> {
   const chunks: Buffer[] = []
   let size = 0
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-    size += buffer.length
-    if (size > limitBytes) throw new HttpError(413, 'Body is too large')
-    chunks.push(buffer)
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    req.destroy()
+  }, BODY_READ_TIMEOUT_MS)
+  timer.unref?.()
+  try {
+    for await (const chunk of req) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      size += buffer.length
+      if (size > limitBytes) throw new HttpError(413, 'Body is too large')
+      chunks.push(buffer)
+    }
+  } catch (error) {
+    if (timedOut) throw new HttpError(408, 'Request body timeout')
+    throw error
+  } finally {
+    clearTimeout(timer)
   }
   if (size === 0) return {} as T
+  // 有请求体时强制校验 Content-Type 为 application/json，阻断 text/plain 简单 CORS CSRF
+  const contentType = String(req.headers['content-type'] ?? '').trim().toLowerCase()
+  if (!contentType.startsWith('application/json')) {
+    throw new HttpError(415, 'Content-Type must be application/json')
+  }
   const text = Buffer.concat(chunks).toString('utf-8')
   let parsed: unknown
   try {
@@ -172,6 +203,8 @@ export function sendJson(res: ServerResponse, status: number, value: unknown): v
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
     'Content-Length': Buffer.byteLength(body),
   })
   res.end(body)

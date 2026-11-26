@@ -12,7 +12,7 @@ import { createRequire } from 'node:module'
 const require_ = createRequire(new URL('../../../package.json', import.meta.url))
 const WebSocket = require_('ws')
 
-const BASE = (process.argv[2] ?? process.env.PI_CLOUD_ACCEPT_BASE ?? 'https://tchen-xiaoxiao.com').replace(
+const BASE = (process.argv[2] ?? process.env.PI_CLOUD_ACCEPT_BASE ?? 'https://cloud.example.com').replace(
   /\/+$/,
   ''
 )
@@ -63,7 +63,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   ok('健康端点', health.status === 200 && health.json?.ok === true, JSON.stringify(health.json))
   const page = await call('/')
   ok('Web 首屏（HTTPS）', page.status === 200 && page.text.includes('<title>'), `status=${page.status}`)
-  ok('静态资源白名单', (await call('/app.css')).status === 200)
+  ok('静态资源白名单', (await call('/favicon.svg')).status === 200)
   const escape = await call('/../package.json')
   ok('目录穿越被拒', escape.status >= 400 || !escape.text.includes('"name"'), `status=${escape.status}`)
 }
@@ -90,6 +90,7 @@ let cookie = ''
 
 // ---- 配对 ----
 let deviceToken = ''
+let clientToken = ''
 let deviceId = ''
 {
   const code = await call('/v1/pair/code', post(null, { headers: { cookie } }))
@@ -102,19 +103,22 @@ let deviceId = ''
     workspaces: [{ path: '/srv/pi-accept-repo', name: 'pi-accept-repo', isGit: true }],
   }))
   deviceToken = pair.json?.token ?? ''
+  clientToken = pair.json?.clientToken ?? deviceToken
   deviceId = pair.json?.deviceId ?? ''
-  ok('配对换 token', pair.status === 200 && /^pk_/.test(deviceToken) && pair.json?.protocol === 1, deviceId)
+  ok('配对换 token', pair.status === 200 && /^pk_/.test(deviceToken) && /^pk_/.test(clientToken) && pair.json?.protocol === 1, deviceId)
   ok('配对码一次性', (await call('/v1/pair', post({ code: pairCode, deviceName: 'x', platform: 'linux', workspaces: [] }))).status === 401)
   const devices = await call('/v1/devices', { headers: { cookie } })
   ok('设备清单', devices.json?.devices?.some((d) => d.id === deviceId), JSON.stringify(devices.json?.devices?.map((d) => d.name)))
 }
 
-// ---- 云端配置（设备 token 可读目录与校验；传入 PI_CLOUD_ACCEPT_API_KEY 时一并验写入与掩码）----
+// ---- 云端配置（控制面 clientToken 可读目录与校验；执行通道 deviceToken 必须被拒）----
 {
-  const before = await call('/v1/cloud-config', { headers: { authorization: `Bearer ${deviceToken}` } })
-  ok('设备 token 读云端配置', before.status === 200 && before.json?.configured === false, JSON.stringify(before.json))
+  const devDenied = await call('/v1/cloud-config', { headers: { authorization: `Bearer ${deviceToken}` } })
+  ok('执行通道 token 禁止读控制面配置', devDenied.status === 401, `status=${devDenied.status}`)
+  const before = await call('/v1/cloud-config', { headers: { authorization: `Bearer ${clientToken}` } })
+  ok('控制面 clientToken 读云端配置', before.status === 200 && before.json?.configured === false, JSON.stringify(before.json))
   const catalog = await call('/v1/cloud-config/catalog?providerId=deepseek', {
-    headers: { authorization: `Bearer ${deviceToken}` },
+    headers: { authorization: `Bearer ${clientToken}` },
   })
   ok(
     '拉取预设供应商模型目录',
@@ -123,13 +127,13 @@ let deviceId = ''
   )
   const badProvider = await call('/v1/cloud-config', {
     method: 'PUT',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${deviceToken}` },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${clientToken}` },
     body: JSON.stringify({ providerId: 'accept-provider', model: 'accept-model', apiKey: 'sk-accept-1234567890' }),
   })
   ok('拒绝白名单外的供应商', badProvider.status === 400, `status=${badProvider.status}`)
   const badModel = await call('/v1/cloud-config', {
     method: 'PUT',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${deviceToken}` },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${clientToken}` },
     body: JSON.stringify({ providerId: 'deepseek', model: 'non-existent-model', apiKey: 'sk-accept-1234567890' }),
   })
   ok('拒绝不在 catalog 中的模型', badModel.status === 400, `status=${badModel.status}`)
@@ -140,11 +144,11 @@ let deviceId = ''
     const model = process.env.PI_CLOUD_ACCEPT_MODEL?.trim() || catalog.json?.models?.[0]?.id || 'deepseek-chat'
     const save = await call('/v1/cloud-config', {
       method: 'PUT',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${deviceToken}` },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${clientToken}` },
       body: JSON.stringify({ providerId, model, apiKey: acceptKey }),
     })
     ok('写入云端配置', save.status === 200, `status=${save.status}`)
-    const after = await call('/v1/cloud-config', { headers: { authorization: `Bearer ${deviceToken}` } })
+    const after = await call('/v1/cloud-config', { headers: { authorization: `Bearer ${clientToken}` } })
     const shown = JSON.stringify(after.json ?? {})
     const tail = acceptKey.slice(-4)
     ok('Key 只回末四位', !shown.includes(acceptKey) && shown.includes(tail), shown.slice(0, 120))
@@ -197,7 +201,7 @@ let deviceId = ''
 
 // ---- 客户端通道 ----
 {
-  const client = await wsOpen('/client/ws', { authorization: `Bearer ${deviceToken}` })
+  const client = await wsOpen('/client/ws', { authorization: `Bearer ${clientToken}` })
   const snapshot = await nextFrame(client)
   ok('客户端通道握手 + 快照', snapshot.type === 'snapshot' && snapshot.v === 1 && snapshot.snapshot?.protocol === 1, `seq=${snapshot.seq}`)
   ok('快照带设备与工单', Array.isArray(snapshot.snapshot?.devices) && Array.isArray(snapshot.snapshot?.tasks))

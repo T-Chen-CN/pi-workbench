@@ -8,7 +8,9 @@
  *   模型自称「用户已同意」不会生效。
  */
 
+import { createHash } from 'crypto'
 import type { ExtensionFactory } from '@earendil-works/pi-coding-agent'
+import type { CloudTaskResult } from 'pi-bridge'
 import { CLOUD_TOOL_NAMES } from './cloud-session.js'
 import { toolError, toolText } from './cloud-session.js'
 import type { CloudStore } from '../store/store.js'
@@ -24,7 +26,7 @@ export interface CloudToolsDeps {
 
 function summarizeTask(
   task: ReturnType<CloudStore['findTask']>,
-  options?: { includeDiff?: boolean }
+  options?: { includeDiff?: boolean; diff?: NonNullable<CloudTaskResult['diff']> }
 ): string {
   if (!task) return 'unknown task'
   const lines = [
@@ -54,14 +56,15 @@ function summarizeTask(
   if (task.progress.commit) lines.push(`commit: ${task.progress.commit}`)
   if (task.terminalReason) lines.push(`terminal: ${task.terminalReason}`)
   if (task.error) lines.push(`error: ${task.error}`)
-  if (task.progress.diff) {
+  const diff = options?.diff ?? task.progress.diff
+  if (diff) {
     if (options?.includeDiff) {
       lines.push(
-        `diff (${task.progress.diff.bytes} bytes${task.progress.diff.truncated ? ', truncated' : ''}):\n${task.progress.diff.excerpt}`
+        `diff (${diff.bytes} bytes${diff.truncated ? ', truncated' : ''}):\n${diff.excerpt}`
       )
     } else {
       lines.push(
-        `diff: available (${task.progress.diff.bytes} bytes; call get_task with includeDiff=true only when code review or follow-up coordination requires it)`
+        `diff: available (${diff.bytes} bytes; call get_task with includeDiff=true only when code review or follow-up coordination requires it)`
       )
     }
   }
@@ -186,11 +189,33 @@ export function createCloudToolsExtension(deps: CloudToolsDeps): ExtensionFactor
           acceptance: String(params.acceptance ?? ''),
           expectedChanges: params.expectedChanges ? String(params.expectedChanges) : undefined,
           commit: Boolean(params.commit),
+          idempotencyKey:
+            typeof params.idempotencyKey === 'string' && params.idempotencyKey.trim()
+              ? params.idempotencyKey.trim()
+              : undefined,
         }
         if (!request.authorizationId || !request.workUnitId) {
           return toolError('authorizationId and workUnitId are required.')
         }
-        const outcome = await deps.dispatcher.dispatch(request)
+        // 未传 idempotencyKey 时按请求内容生成确定性指纹，防止模型重试同一工具调用时重复派单
+        const idempotencyKey =
+          request.idempotencyKey ??
+          `auto-${createHash('sha256')
+            .update(
+              JSON.stringify([
+                request.authorizationId,
+                request.workUnitId,
+                request.deviceId,
+                request.workspacePath,
+                request.title,
+                request.background,
+                request.goal,
+                request.acceptance,
+              ])
+            )
+            .digest('hex')
+            .slice(0, 24)}`
+        const outcome = await deps.dispatcher.dispatch({ ...request, idempotencyKey })
         if (!outcome.ok) return toolError(`${outcome.code}: ${outcome.message}`)
         return toolText(
           `Dispatched ${outcome.task.id} (status ${outcome.task.status}). Do not wait; you will be woken by task events.`
@@ -222,7 +247,11 @@ export function createCloudToolsExtension(deps: CloudToolsDeps): ExtensionFactor
       async execute(_id: string, params: { taskId?: string; includeDiff?: boolean }) {
         const task = params.taskId ? deps.store.findTask(params.taskId) : undefined
         if (!task) return toolError(`Unknown task: ${String(params.taskId)}`)
-        return toolText(summarizeTask(task, { includeDiff: params.includeDiff === true }))
+        const diff =
+          (typeof deps.store.loadTaskDiff === 'function'
+            ? await deps.store.loadTaskDiff(task.id)
+            : undefined) ?? task.progress.diff
+        return toolText(summarizeTask(task, { includeDiff: params.includeDiff === true, diff }))
       },
     })
 

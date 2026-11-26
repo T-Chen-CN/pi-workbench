@@ -6,7 +6,7 @@
  * 那是 `/client/ws` 的事，避免一条逻辑连接被劈成两条腿（D-10）。
  */
 
-import { randomBytes } from 'crypto'
+import { randomBytes, timingSafeEqual } from 'crypto'
 import type { CloudSnapshot, CloudWorkspaceInfo } from 'pi-bridge'
 import type { Credential } from '@earendil-works/pi-ai'
 import {
@@ -125,17 +125,27 @@ export function buildRouter(deps: RouteDeps): Router {
     if (!verifyCurrentSession(ctx)) throw new HttpError(401, 'Login required', 'unauthorized')
   }
 
+  type UserPrincipal = { kind: 'admin' } | { kind: 'device-client'; device: DeviceRecord }
+
   /**
-   * 桌面端只有设备 token（没有 cookie）：能改云端模型配置、读快照与授权。
-   * 账号与配对码仍然只认 cookie —— 那是浏览器登录态的职责。
+   * 桌面控制面使用独立 clientToken（不再接受仅限执行通道的设备 token），
+   * 并返回调用方身份，供授权 / 回收等高敏接口实施跨设备范围约束。
    */
-  const requireUser = (ctx: RequestContext): void => {
+  const requireUserPrincipal = (ctx: RequestContext): UserPrincipal => {
     try {
       requireSession(ctx)
-      return
+      return { kind: 'admin' }
     } catch {
-      requireDevice(ctx)
+      const header = ctx.req.headers.authorization ?? ''
+      const token = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
+      const device = token ? deps.store.findDeviceByClientToken(token) : undefined
+      if (!device) throw new HttpError(401, 'Unauthorized', 'unauthorized')
+      return { kind: 'device-client', device }
     }
+  }
+
+  const requireUser = (ctx: RequestContext): void => {
+    requireUserPrincipal(ctx)
   }
 
   const requireDevice = (ctx: RequestContext): DeviceRecord => {
@@ -151,6 +161,7 @@ export function buildRouter(deps: RouteDeps): Router {
     version: deps.config.version,
     ready: deps.session.currentSessionId !== null,
     hasAccount: deps.store.getAccount() !== null,
+    hasConfig: deps.store.getCloudConfig() !== null,
   }))
 
   router.get('/v1/me', (ctx) => {
@@ -161,23 +172,45 @@ export function buildRouter(deps: RouteDeps): Router {
     }
   })
 
-  /** F-01：唯一的自助入口，只允许创建一次；之后必须登录 */
+  /** F-01：唯一的自助入口，只允许创建一次；防跨站、防爆破，配置了 setupToken 时强制核验启动令牌 */
   router.post('/v1/setup', async (ctx) => {
+    assertSameOriginForCookieMutation(ctx)
     if (deps.store.getAccount()) throw new HttpError(409, 'Account already exists', 'conflict')
-    const body = await ctx.json<{ password?: string }>()
-    const password = String(body.password ?? '')
-    if (password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters')
-    const hashed = await hashPassword(password)
-    const now = Date.now()
-    const created = await deps.store.createAccount({
-      passwordHash: hashed.hash,
-      salt: hashed.salt,
-      createdAt: now,
-      updatedAt: now,
-    })
-    if (!created) throw new HttpError(409, 'Account already exists', 'conflict')
-    deps.logger.info('[cloud] admin account created')
-    return { ok: true }
+    const source = ctx.source
+    const body = await ctx.json<{ password?: string; setupToken?: string }>(16 * 1024)
+    const lease = deps.loginLimiter.tryAcquire(source)
+    if (!lease.allowed) throw new HttpError(429, CREDENTIAL_ERROR, 'rate-limited')
+    try {
+      const expectedToken = deps.config.setupToken?.trim()
+      if (expectedToken) {
+        const headerToken = ctx.req.headers['x-setup-token']
+        const provided = String(
+          body.setupToken ?? (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? ''
+        ).trim()
+        const a = Buffer.from(provided, 'utf8')
+        const b = Buffer.from(expectedToken, 'utf8')
+        if (a.length !== b.length || !timingSafeEqual(a, b)) {
+          deps.loginLimiter.recordFailure(source)
+          throw new HttpError(403, 'Invalid or missing setup token', 'invalid-setup-token')
+        }
+      }
+      const password = String(body.password ?? '')
+      if (password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters')
+      const hashed = await hashPassword(password)
+      const now = Date.now()
+      const created = await deps.store.createAccount({
+        passwordHash: hashed.hash,
+        salt: hashed.salt,
+        createdAt: now,
+        updatedAt: now,
+      })
+      if (!created) throw new HttpError(409, 'Account already exists', 'conflict')
+      deps.loginLimiter.recordSuccess(source)
+      deps.logger.info('[cloud] admin account created')
+      return { ok: true }
+    } finally {
+      lease.release()
+    }
   })
 
   router.post('/v1/login', async (ctx) => {
@@ -283,7 +316,9 @@ export function buildRouter(deps: RouteDeps): Router {
       lease.release()
     }
 
+    // 拆分设备执行通道 token（仅 /device/ws 与本机工作区上报）与桌面控制面 clientToken（/client/ws 与管理接口）
     const token = createToken()
+    const clientToken = createToken()
     const deviceId = `dev-${randomBytes(4).toString('hex')}`
     const now = Date.now()
     await deps.store.addDevice({
@@ -291,13 +326,14 @@ export function buildRouter(deps: RouteDeps): Router {
       name: String(body.deviceName ?? 'Device').slice(0, 60),
       platform: String(body.platform ?? 'unknown').slice(0, 40),
       token: hashToken(token),
+      clientToken: hashToken(clientToken),
       createdAt: now,
       lastSeenAt: now,
       workspaces: sanitizeWorkspaces(body.workspaces),
       revokedAt: null,
     })
     deps.logger.info(`[cloud] device paired: ${deviceId}`)
-    return { deviceId, token, protocol: 1 }
+    return { deviceId, token, clientToken, protocol: 1 }
   })
 
   /** F-09：工作区清单上报（终端 token 鉴权，可随时刷新） */
@@ -446,7 +482,7 @@ export function buildRouter(deps: RouteDeps): Router {
     return { authorizations: deps.store.activeAuthorizations().map(toView) }
   })
 
-  /** F-18：确认动作落盘，作为后续派活的授权凭据（只能由用户端触发） */
+  /** F-18：确认动作落盘，作为后续派活的授权凭据（Web 管理员与桌面端 clientToken 均支持跨设备授权） */
   router.post('/v1/authorizations', async (ctx) => {
     requireUser(ctx)
     const body = await ctx.json<{
@@ -597,11 +633,13 @@ function toView(record: AuthorizationRecord) {
   }
 }
 
-/** 只接受结构合法的仓库条目；路径与名称都做长度裁剪（不信任客户端上报的内容） */
+const MAX_WORKSPACES_PER_DEVICE = 200
+
+/** 只接受结构合法的仓库条目；限制数量与长度（不信任客户端上报的内容） */
 function sanitizeWorkspaces(input: unknown): CloudWorkspaceInfo[] {
   if (!Array.isArray(input)) return []
   const result: CloudWorkspaceInfo[] = []
-  for (const item of input) {
+  for (const item of input.slice(0, MAX_WORKSPACES_PER_DEVICE)) {
     if (!item || typeof item !== 'object') continue
     const record = item as Record<string, unknown>
     const workspacePath = String(record.path ?? '').trim()

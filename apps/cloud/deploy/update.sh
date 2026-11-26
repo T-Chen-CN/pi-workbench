@@ -140,7 +140,12 @@ systemctl restart "$SERVICE_NAME"
 HEALTHY=0
 for _ in $(seq 1 20); do
   BODY="$(curl -fsS --max-time 3 "$HEALTH_URL" 2>/dev/null || true)"
-  if echo "$BODY" | grep -q '"ok":true'; then
+  if [ -n "$BODY" ] && node -e '
+    const h = JSON.parse(process.argv[1]);
+    if (h.ok !== true) process.exit(1);
+    // 已配置模型时必须等 Agent 会话就绪（ready === true），避免损坏的 SDK/SQLite 版本通过健康检查
+    if (h.hasConfig === true && h.ready !== true) process.exit(1);
+  ' "$BODY" 2>/dev/null; then
     HEALTHY=1
     break
   fi

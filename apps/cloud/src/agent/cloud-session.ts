@@ -254,12 +254,18 @@ export class CloudSession {
    * 不打断本轮，也不并发调 chat）。
    */
   wake(payload: CloudTaskEventPayload): void {
-    this.pending.set(payload.taskId, { payload, at: this.now() })
+    const existing = this.pending.get(payload.taskId)
+    const nextPayload = existing ? mergeTaskEventPayloads(existing.payload, payload) : payload
+    this.pending.set(payload.taskId, { payload: nextPayload, at: this.now() })
+    this.scheduleFlush()
+  }
+
+  private scheduleFlush(delayMs = CLOUD_EVENT_THROTTLE_MS): void {
     if (this.flushTimer) return
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null
       void this.flushEvents()
-    }, CLOUD_EVENT_THROTTLE_MS)
+    }, delayMs)
     this.flushTimer.unref?.()
   }
 
@@ -267,24 +273,43 @@ export class CloudSession {
     if (this.pending.size === 0) return
     if (this.deps.ready) {
       const ok = await this.deps.ready()
-      if (!ok) return
+      if (!ok) {
+        // 运行时暂不可用（重建窗口或暂未就绪）时必须重排定时器，绝不让 pending 事件永久搁浅
+        this.scheduleFlush(CLOUD_EVENT_THROTTLE_MS * 2)
+        return
+      }
     }
     const sessionId = this.sessionId
-    if (!sessionId || this.pending.size === 0) return
+    if (!sessionId || this.pending.size === 0) {
+      if (!sessionId && this.pending.size > 0) this.scheduleFlush(CLOUD_EVENT_THROTTLE_MS * 2)
+      return
+    }
     const events = [...this.pending.values()]
     this.pending.clear()
 
     const busy = this.deps.agent.isSessionBusy(sessionId)
-    // 多条事件合并成一条 custom message：一轮只跑一次，避免刷屏与重复唤醒
+    // 多条事件合并成一条 custom message：保留最高优先级 kind，完整汇聚 changedFiles 与 secretHits
+    const mergedChangedFiles = mergeBatchChangedFiles(events.map((item) => item.payload.changedFiles))
+    const mergedSecretHits = mergeBatchSecretHits(events.map((item) => item.payload.secretHits))
+    const highestKind = events.reduce(
+      (best, item) =>
+        eventKindPriority(item.payload.kind) > eventKindPriority(best) ? item.payload.kind : best,
+      events[0].payload.kind
+    )
     const merged: CloudTaskEventPayload = {
       eventId: `evt-batch-${this.now()}`,
-      kind: events.length === 1 ? events[0].payload.kind : 'milestone',
+      kind: highestKind,
       taskId: events.map((item) => item.payload.taskId).join(','),
-      deviceId: events.map((item) => item.payload.deviceId).join(','),
+      deviceId: [...new Set(events.map((item) => item.payload.deviceId))].join(','),
       at: this.now(),
-      summary: events.map((item) => `${item.payload.taskId}: ${item.payload.summary}`).join(' / '),
+      summary:
+        events.length === 1
+          ? events[0].payload.summary
+          : events.map((item) => `${item.payload.taskId}: ${item.payload.summary}`).join(' / '),
       status: events[events.length - 1].payload.status,
       terminalReason: events[events.length - 1].payload.terminalReason,
+      ...(mergedChangedFiles.length > 0 ? { changedFiles: mergedChangedFiles } : {}),
+      ...(mergedSecretHits.length > 0 ? { secretHits: mergedSecretHits } : {}),
     }
     const message = buildTaskEventMessage(merged)
     const result = await this.deps.agent.sendCustomMessage(sessionId, message, {
@@ -403,6 +428,82 @@ export function toolError(reason: string) {
 
 export function toolText(text: string) {
   return { content: [{ type: 'text' as const, text }], isError: false, details: undefined }
+}
+
+/** 事件唤醒优先级：提问 > 失败/异常终态 > 完成 > 停滞 > 里程碑/接单 */
+function eventKindPriority(kind: CloudTaskEventPayload['kind']): number {
+  switch (kind) {
+    case 'question':
+      return 5
+    case 'failed':
+    case 'cancelled':
+    case 'interrupted':
+    case 'device-offline':
+    case 'expired':
+      return 4
+    case 'done':
+      return 3
+    case 'stalled':
+      return 2
+    default:
+      return 1
+  }
+}
+
+function mergeBatchChangedFiles(
+  lists: Array<CloudTaskEventPayload['changedFiles']>
+): NonNullable<CloudTaskEventPayload['changedFiles']> {
+  const byPath = new Map<string, NonNullable<CloudTaskEventPayload['changedFiles']>[number]>()
+  for (const list of lists) {
+    if (!list) continue
+    for (const item of list) {
+      const prev = byPath.get(item.path)
+      byPath.set(item.path, prev?.attention && !item.attention ? { ...item, attention: prev.attention } : item)
+    }
+  }
+  return [...byPath.values()]
+}
+
+function mergeBatchSecretHits(
+  lists: Array<CloudTaskEventPayload['secretHits']>
+): NonNullable<CloudTaskEventPayload['secretHits']> {
+  const seen = new Set<string>()
+  const merged: NonNullable<CloudTaskEventPayload['secretHits']> = []
+  for (const list of lists) {
+    if (!list) continue
+    for (const hit of list) {
+      const key = `${hit.path}:${hit.line}:${hit.kind}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      merged.push(hit)
+    }
+  }
+  return merged
+}
+
+/** 同一工单在 2s 节流窗口内收到多条事件时，保留更高优先级的 kind 并汇聚改动与密钥告警 */
+function mergeTaskEventPayloads(
+  prev: CloudTaskEventPayload,
+  next: CloudTaskEventPayload
+): CloudTaskEventPayload {
+  const keepPrevKind = eventKindPriority(prev.kind) > eventKindPriority(next.kind)
+  const changedFiles = mergeBatchChangedFiles([prev.changedFiles, next.changedFiles])
+  const secretHits = mergeBatchSecretHits([prev.secretHits, next.secretHits])
+  const summary =
+    prev.summary === next.summary
+      ? next.summary
+      : keepPrevKind
+        ? `${prev.summary} / ${next.summary}`
+        : `${next.summary} (${prev.summary})`
+  return {
+    ...next,
+    kind: keepPrevKind ? prev.kind : next.kind,
+    summary,
+    status: next.status ?? prev.status,
+    terminalReason: next.terminalReason ?? prev.terminalReason,
+    ...(changedFiles.length > 0 ? { changedFiles } : {}),
+    ...(secretHits.length > 0 ? { secretHits } : {}),
+  }
 }
 
 export type { CloudTaskSnapshot }

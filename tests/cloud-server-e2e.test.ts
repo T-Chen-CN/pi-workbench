@@ -25,6 +25,7 @@ let base: string
 let cookie: string
 let deviceId: string
 let token: string
+let clientToken: string
 
 function jsonHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return { 'content-type': 'application/json', cookie, ...extra }
@@ -109,9 +110,10 @@ beforeAll(async () => {
     }),
   })
   expect(pair.status).toBe(200)
-  const paired = (await pair.json()) as { deviceId: string; token: string }
+  const paired = (await pair.json()) as { deviceId: string; token: string; clientToken: string }
   deviceId = paired.deviceId
   token = paired.token
+  clientToken = paired.clientToken
 
   // 同一码二次使用失败（A-02 / A-03），且不透露细节
   const reuse = await fetch(`${base}/v1/pair`, {
@@ -202,7 +204,7 @@ describe('派活闭环', () => {
     )
     client = await openSocket(
       `ws://127.0.0.1:${new URL(base).port}/client/ws`,
-      { authorization: `Bearer ${token}` },
+      { authorization: `Bearer ${clientToken}` },
       clientFrames
     )
     await waitFor(() => clientFrames.some((frame) => frame.type === 'snapshot'), 3000, 'snapshot')
@@ -512,7 +514,7 @@ describe('工作树回收（A-43 / A-46）', () => {
     clientFrames = []
     client = await openSocket(
       `ws://127.0.0.1:${new URL(base).port}/client/ws`,
-      { authorization: `Bearer ${token}` },
+      { authorization: `Bearer ${clientToken}` },
       clientFrames
     )
     await waitFor(() => clientFrames.some((frame) => frame.type === 'snapshot'), 3000, 'snapshot')
