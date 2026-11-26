@@ -26,8 +26,8 @@ export const DEFAULT_PERMISSION_LEVEL: PermissionLevel = 'ask'
 /** 关闭主窗口时收进托盘（Linux 上降级为最小化），而不是退出进程 */
 export const DEFAULT_CLOSE_TO_TRAY = true
 
-/** 新建 / 首次复用的链接工作树自动后台安装依赖（会执行仓库里的 install 脚本） */
-export const DEFAULT_AUTO_INSTALL_WORKTREE_DEPS = true
+/** 新建 / 首次复用的链接工作树自动后台安装依赖（默认关闭，需用户主动开启） */
+export const DEFAULT_AUTO_INSTALL_WORKTREE_DEPS = false
 
 /** 主进程请求（AI 供应商 / GitHub / 联网搜索）跟随系统代理 */
 export const DEFAULT_USE_SYSTEM_PROXY = true

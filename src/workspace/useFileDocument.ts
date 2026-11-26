@@ -67,6 +67,9 @@ export function useFileDocument({
   /** 每个文件最近一次已排程保存的内容，避免重复触发 */
   const scheduledContent = useRef(new Map<string, string>())
   const saveRef = useRef<(pathOverride?: string) => Promise<void>>(async () => undefined)
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const pendingRefreshRef = useRef(false)
 
   const clearTimers = useCallback((filePath: string) => {
     const pendingSave = saveTimers.current.get(filePath)
@@ -282,8 +285,13 @@ export function useFileDocument({
       await syncFile(payload.path)
     })
 
-    // Agent 直接写盘不经过编辑器 IPC，也不一定每个工作树都能收到 watcher 事件：回合结束时兜底重读一次
+    // Agent 直接写盘不经过编辑器 IPC，也不一定每个工作树都能收到 watcher 事件：回合结束时兜底重读一次；
+    // 隐藏的工作区只记待刷新标记，切回可见时再补读，避免常驻工作区并发磁盘 IPC 风暴。
     const offRefresh = onAppEvent('pi:refresh-files', () => {
+      if (!activeRef.current) {
+        pendingRefreshRef.current = true
+        return
+      }
       for (const file of store.getState().openFiles) {
         void syncFile(file.path)
       }
@@ -294,6 +302,23 @@ export function useFileDocument({
       offRefresh()
     }
   }, [clearTimers, store, workspacePath])
+
+  // 隐藏期间收到过刷新事件，切回当前工作区时统一补一次同步
+  useEffect(() => {
+    if (!active || !pendingRefreshRef.current) return
+    pendingRefreshRef.current = false
+    for (const file of store.getState().openFiles) {
+      if (!file.isDirty) {
+        void api.readFile(file.path).then((result) => {
+          if (!result.success || typeof result.content !== 'string') return
+          const latest = store.getState().openFiles.find((item) => samePath(item.path, file.path))
+          if (latest && !latest.isDirty && latest.content !== result.content) {
+            store.getState().updateOpenFile(latest.path, { content: result.content })
+          }
+        })
+      }
+    }
+  }, [active, store])
 
   /** 用磁盘内容覆盖缓冲区（用户在冲突提示里选“重新加载”） */
   const reloadFromDisk = useCallback(
@@ -320,11 +345,11 @@ export function useFileDocument({
     })
   }, [])
 
-  // Ctrl/Cmd+S：只有可见工作区响应
+  // Ctrl/Cmd+S：只有可见工作区响应（不区分大小写，兼容开启 Caps Lock）
   useEffect(() => {
     if (!active) return
     const handler = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key === 's') {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault()
         void saveRef.current()
       }

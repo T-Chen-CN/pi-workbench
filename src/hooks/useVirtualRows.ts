@@ -6,6 +6,8 @@ export interface UseVirtualRowsOptions {
   /** 预估行高；动态行高时作为初始值，渲染后由 measureElement 校正 */
   estimateSize: number
   overscan?: number
+  /** 稳定行身份键：切换会话或增删行时防止复用旧行高缓存引发跳动/重叠 */
+  getItemKey?: (index: number) => string | number
 }
 
 /**
@@ -18,6 +20,7 @@ export function useVirtualRows({
   count,
   estimateSize,
   overscan = 8,
+  getItemKey,
 }: UseVirtualRowsOptions) {
   const parentRef = useRef<HTMLDivElement | null>(null)
   const virtualizer = useVirtualizer({
@@ -25,6 +28,7 @@ export function useVirtualRows({
     getScrollElement: () => parentRef.current,
     estimateSize: () => estimateSize,
     overscan,
+    ...(getItemKey ? { getItemKey } : {}),
     // 首帧（以及 jsdom 等无 ResizeObserver 的环境）先按一个视口估算，避免空渲染
     initialRect: { width: 0, height: 800 },
   })

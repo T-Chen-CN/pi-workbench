@@ -632,20 +632,23 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
     }
 
     const handleViewportPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-      if (event.button !== 0) return
+      // 允许中键（button === 1）在任意处拖动画布，左键按住空格拖动画布，不按空格点空白退一层
+      if (event.button !== 0 && event.button !== 1) return
       const target = event.target as HTMLElement
       const onCard = Boolean(target.closest('[data-kind]'))
       const onMinimap = Boolean(target.closest('[data-testid="repo-map-minimap"]'))
       const space = spaceRef.current
-      // 不按空格：卡片 / 小地图各自处理自己的手势，只有空白处记一笔「点击判定」
-      if (!space && (onCard || onMinimap)) return
+      const isMiddle = event.button === 1
+      const fromBackground = !onCard && !onMinimap
+      if (!isMiddle && !space && !fromBackground) return
+      if (isMiddle) event.preventDefault()
       panRef.current = {
         startClientX: event.clientX,
         startClientY: event.clientY,
         origin: { ...viewRef.current.pan },
         moved: false,
-        canPan: space,
-        fromBackground: !onCard && !onMinimap,
+        canPan: isMiddle || space,
+        fromBackground,
       }
       window.addEventListener('pointermove', onWindowPointerMove)
       window.addEventListener('pointerup', onWindowPointerUp, { once: true })
@@ -879,6 +882,26 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
     /* ------------------------------ 渲染 ------------------------------ */
 
     const chainOpen = chain.length > 0
+    const fileByPathRef = useRef(fileByPath)
+    fileByPathRef.current = fileByPath
+    const onOpenFileRef = useRef(onOpenFile)
+    onOpenFileRef.current = onOpenFile
+
+    // 保持传给 React.memo(RepoMapNodeCard) 的回调引用稳定，避免平移/缩放刷新时全量重渲染卡片
+    const handleCardOpenFolder = useCallback(
+      (path: string) => {
+        // 空格按住时卡片完全不作动；刚拖完/刚平移完的那次 click 也吞掉
+        if (spaceRef.current || suppressClickRef.current) return
+        openFolder(path)
+      },
+      [openFolder]
+    )
+
+    const handleCardOpenFile = useCallback((path: string) => {
+      if (spaceRef.current || suppressClickRef.current) return
+      const target = fileByPathRef.current.get(path)
+      if (target) onOpenFileRef.current(target)
+    }, [])
 
     const renderCard = (node: CanvasNodeInput, elevated: boolean) => {
       const positions = elevated ? chainPositions : layout.positions
@@ -909,16 +932,8 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
           // 上浮链之外的文件卡在搜索时淡出；链上的不淡（它是当前的焦点）
           dimmed={!elevated && matchIds !== null && !matched && node.kind === 'file'}
           muted={!elevated && chainOpen}
-          onOpenFolder={(path) => {
-            // 空格按住时卡片完全不作动；刚拖完/刚平移完的那次 click 也吞掉
-            if (spaceRef.current || suppressClickRef.current) return
-            openFolder(path)
-          }}
-          onOpenFile={(path) => {
-            if (spaceRef.current || suppressClickRef.current) return
-            const target = fileByPath.get(path)
-            if (target) onOpenFile(target)
-          }}
+          onOpenFolder={handleCardOpenFolder}
+          onOpenFile={handleCardOpenFile}
           onPointerDown={handleNodePointerDown}
         />
       )

@@ -581,68 +581,6 @@ button {
   color: rgb(var(--ink-muted));
 }
 
-/* highlight.js 语法着色（跟随主题 token） */
-.hljs-keyword,
-.hljs-selector-tag,
-.hljs-literal,
-.hljs-doctag {
-  color: rgb(var(--hl-keyword));
-}
-
-.hljs-string,
-.hljs-regexp,
-.hljs-addition,
-.hljs-meta-string {
-  color: rgb(var(--hl-string));
-}
-
-.hljs-number,
-.hljs-symbol,
-.hljs-bullet {
-  color: rgb(var(--hl-number));
-}
-
-.hljs-comment,
-.hljs-quote {
-  color: rgb(var(--hl-comment));
-  font-style: italic;
-}
-
-.hljs-title,
-.hljs-title.function_,
-.hljs-section,
-.hljs-name {
-  color: rgb(var(--hl-function));
-}
-
-.hljs-type,
-.hljs-built_in,
-.hljs-class .hljs-title {
-  color: rgb(var(--hl-type));
-}
-
-.hljs-attr,
-.hljs-attribute,
-.hljs-variable,
-.hljs-template-variable,
-.hljs-selector-attr,
-.hljs-selector-class,
-.hljs-selector-id {
-  color: rgb(var(--hl-attr));
-}
-
-.hljs-deletion {
-  color: rgb(var(--danger));
-}
-
-.hljs-emphasis {
-  font-style: italic;
-}
-
-.hljs-strong {
-  font-weight: 700;
-}
-
 /* ── 仓库地图画布 ───────────────────────────────────────────────
    点阵底随平移 / 缩放同步（由 RepoMapCanvas 直接写 background-position /
    background-size），缩放分级只切显隐，不重建 DOM。 */

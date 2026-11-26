@@ -1,6 +1,24 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+
+/** 过滤 @fontsource 中非中/英字体子集（西里尔/天城文/希腊/越南语），显著缩减公网包与内存占用 */
+const DROP_FONT_SUBSETS = /(?:cyrillic|devanagari|greek|vietnamese)/i
+
+function fontSubsetFilter(): Plugin {
+  return {
+    name: 'pi-workbench-font-subset-filter',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.includes('@fontsource') || !id.endsWith('.css')) return null
+      const filtered = code.replace(
+        /(?:\/\*[^*]*\*\/\s*)?@font-face\s*\{[^}]*\}\s*/g,
+        (block) => (DROP_FONT_SUBSETS.test(block) ? '' : block)
+      )
+      return filtered === code ? null : { code: filtered, map: null }
+    },
+  }
+}
 
 /**
  * 云端 Web 控制台独立轻量构建（B1）：
@@ -11,7 +29,7 @@ export default defineConfig({
   root: path.resolve(__dirname, 'apps/cloud/web-src'),
   publicDir: path.resolve(__dirname, 'apps/cloud/web-src/public'),
   base: '/',
-  plugins: [react()],
+  plugins: [fontSubsetFilter(), react()],
   css: {
     postcss: path.resolve(__dirname, 'postcss.config.js'),
   },
@@ -22,9 +40,6 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('node_modules/mermaid') || id.includes('@streamdown/mermaid')) {
-            return 'mermaid'
-          }
           if (id.includes('node_modules/katex') || id.includes('@streamdown/math')) {
             return 'katex'
           }

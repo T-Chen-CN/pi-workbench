@@ -162,7 +162,7 @@ export function ProviderSettings() {
     try {
       const result = await api.providersList()
       if (!result.success || !result.providers) {
-        toast.error(t('loadProvidersFailed'))
+        toast.error(useI18nStore.getState().t('loadProvidersFailed'))
         return
       }
       setProviders(result.providers)
@@ -175,9 +175,9 @@ export function ProviderSettings() {
       })
     } catch (error) {
       console.error('[Providers] load failed:', error)
-      toast.error(t('loadProvidersFailed'))
+      toast.error(useI18nStore.getState().t('loadProvidersFailed'))
     }
-  }, [t])
+  }, [])
 
   useEffect(() => {
     void load()

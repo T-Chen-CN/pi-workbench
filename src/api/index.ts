@@ -634,7 +634,19 @@ const mockAPI = {
   onNotifyClick: (_callback: (payload: { workspaceDir: string; sessionId: string }) => void) => () => {}
 }
 
-const electronAPI = window.electronAPI || mockAPI
+const prodFallbackAPI = new Proxy(
+  { platform: 'unknown' },
+  {
+    get(target, prop) {
+      if (prop in target) return (target as Record<PropertyKey, unknown>)[prop]
+      if (typeof prop === 'string' && prop.startsWith('on')) return () => () => {}
+      return async () => ({ success: false, error: 'Electron preload bridge is unavailable' })
+    },
+  }
+) as unknown as typeof mockAPI
+
+// 生产包由 import.meta.env.DEV 编译期常量裁掉全部 555 行 mockAPI（含 localStorage）
+const electronAPI = window.electronAPI || (import.meta.env.DEV ? mockAPI : prodFallbackAPI)
 
 if (!window.electronAPI) {
   console.warn(

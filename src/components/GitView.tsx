@@ -23,6 +23,7 @@ import { useCloudStore } from '../store/cloudStore'
 import { useI18nStore } from '../store/i18nStore'
 import { usePanelContextMenu } from './PanelContextMenu'
 import { readPanelUi, writePanelUi } from '../panelHost/panelUiState'
+import { useHostWindow } from '../panelHost/HostContext'
 import { PanelDragHandle } from './PanelDragHandle'
 import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
@@ -447,6 +448,8 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
     })
   }, [workspacePath, load])
 
+  const hostWindow = useHostWindow()
+
   useEffect(() => {
     let mounted = true
     const check = async () => {
@@ -467,13 +470,13 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
     const onFocus = () => {
       if (active) void check()
     }
-    if (active) window.addEventListener('focus', onFocus)
+    if (active) hostWindow.addEventListener('focus', onFocus)
     return () => {
       mounted = false
       off()
-      window.removeEventListener('focus', onFocus)
+      hostWindow.removeEventListener('focus', onFocus)
     }
-  }, [active])
+  }, [active, hostWindow])
 
   const refreshLocal = useCallback(() => {
     void load(workspacePath, activeSessionId)

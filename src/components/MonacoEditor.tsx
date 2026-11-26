@@ -392,10 +392,9 @@ export const MonacoEditor = React.memo(function MonacoEditor({
       if (editor.getModel()?.isDisposed()) return
       const nextContent = editor.getValue()
       if (nextContent === file.content) return
-      // 记下 model 里这份内容的出处：上面「切换当前文件」的效应靠它做 O(1) 比较
+      // 记下 model 里这份内容的出处：上面「切换当前文件」的效应靠它做 O(1) 比较；合并单次 store 更新减半重渲染
       modelContentRef.current.set(file.path, nextContent)
-      store.getState().updateOpenFile(file.path, { content: nextContent })
-      store.getState().markDirty(file.path)
+      store.getState().updateOpenFile(file.path, { content: nextContent, isDirty: true })
     })
     return () => subscription.dispose()
   }, [editorReady, store])

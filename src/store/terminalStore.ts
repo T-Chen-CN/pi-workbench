@@ -127,10 +127,16 @@ function patch(workspacePath: string, next: Partial<TerminalEntry>): void {
   })
 }
 
+/** 代次令牌：防止 restart/close 并发触发时旧的 terminalCreate 回包覆盖新 PTY 或泄漏孤儿 PTY */
+const spawnGeneration = new Map<string, number>()
+
 async function spawn(workspacePath: string, cwd: string | null, cols: number, rows: number): Promise<void> {
   if (pending.has(workspacePath)) return
+  const gen = (spawnGeneration.get(workspacePath) ?? 0) + 1
+  spawnGeneration.set(workspacePath, gen)
   pending.add(workspacePath)
   ensureBridge()
+  replayBuffers.delete(workspacePath)
   patch(workspacePath, { status: 'starting', error: null, buffer: [], bufferBytes: 0 })
 
   let result: Awaited<ReturnType<typeof api.terminalCreate>>
@@ -139,15 +145,19 @@ async function spawn(workspacePath: string, cwd: string | null, cols: number, ro
       ? await api.terminalCreate(workspacePath, cols, rows, cwd)
       : await api.terminalCreate(workspacePath, cols, rows)
   } catch (error) {
+    if (spawnGeneration.get(workspacePath) !== gen) return
     const message = error instanceof Error ? localizeError(error.message) : useI18nStore.getState().t('terminalCreateFailed')
     patch(workspacePath, { id: null, status: 'error', error: message })
     return
   } finally {
-    pending.delete(workspacePath)
+    if (spawnGeneration.get(workspacePath) === gen) pending.delete(workspacePath)
   }
 
-  // 创建期间若工作区已关闭，立刻销毁刚建好的 PTY，防止主进程孤儿 PTY 永久泄漏
-  if (!useTerminalStore.getState().byWorkspace[workspacePath]) {
+  // 创建期间若工作区已关闭或已被新一轮 restart 取代，立刻销毁刚建好的旧 PTY，防止孤儿泄漏
+  if (
+    spawnGeneration.get(workspacePath) !== gen ||
+    !useTerminalStore.getState().byWorkspace[workspacePath]
+  ) {
     if (result.success && result.id) void api.terminalClose(result.id)
     return
   }
@@ -191,6 +201,10 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
   },
 
   restart: (workspacePath, cwd, cols, rows) => {
+    // 推进代次并清掉旧回放缓冲与 pending 门锁：允许立即重启且不重放上次终端的旧输出
+    spawnGeneration.set(workspacePath, (spawnGeneration.get(workspacePath) ?? 0) + 1)
+    pending.delete(workspacePath)
+    replayBuffers.delete(workspacePath)
     const entry = get().byWorkspace[workspacePath]
     const previousId = entry?.id ?? null
     if (previousId) {
@@ -217,6 +231,8 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
   },
 
   close: (workspacePath) => {
+    spawnGeneration.set(workspacePath, (spawnGeneration.get(workspacePath) ?? 0) + 1)
+    pending.delete(workspacePath)
     const entry = get().byWorkspace[workspacePath]
     if (!entry) return
     if (entry.id) {

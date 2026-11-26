@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useChatPanelState } from '../hooks/useChatPanelState'
 import type { ChatPanelProps } from '../utils/chatPanelShared'
 import { THINKING_LEVELS, THINKING_LABEL_KEYS, formatTokenCount } from '../utils/chatPanelShared'
@@ -276,6 +276,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
   // 纯图片 / 纯附件（无文本）也可以发送；预处理中的图片不算可发送内容
   const hasSendableInput = Boolean(input.trim()) || attachments.length > 0
 
+  // 保持上下文对象引用稳定，避免每次流式 delta 击穿 ChatMessageRow / AgentMarkdown 的 React.memo
+  const linkScope = useMemo(
+    () => ({ docDir: null as string | null, openRoot: viewRoot ?? workspacePath }),
+    [viewRoot, workspacePath]
+  )
+
   if (needsApiKey) {
     return (
       <ChatApiKeyPrompt
@@ -305,7 +311,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
         handleCloseTab={handleCloseTab}
       />
 
-      <MarkdownLinkScopeProvider value={{ docDir: null, openRoot: viewRoot ?? workspacePath }}>
+      <MarkdownLinkScopeProvider value={linkScope}>
         <ChatTranscript
           activeSessionId={activeSessionId}
           activeKey={activeKey}

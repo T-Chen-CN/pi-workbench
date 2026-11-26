@@ -12,14 +12,11 @@ import {
 } from 'lucide-react'
 import { api } from './api'
 import { piAgentAPI } from './api/piAgentAPI'
-import { IPCDebug } from './components/IPCDebug'
 import { BrandSeal } from './components/BrandSeal'
-import { Settings, type SettingsSection } from './components/Settings'
+import type { SettingsSection } from './components/Settings'
 import { UpdateDialog } from './components/UpdateDialog'
 import { UpdateStatusIndicator } from './components/UpdateStatusIndicator'
 import { CloudStatusIndicator } from './components/CloudStatusIndicator'
-import { CloudView } from './components/CloudView'
-import { CommandPalette } from './components/CommandPalette'
 import { ToastContainer } from './components/Toast'
 import { DialogHost } from './components/DialogHost'
 import { WelcomeScreen } from './components/WelcomeScreen'
@@ -54,9 +51,21 @@ import { restoreEditorTabs, saveEditorTabs } from './workspace/editorTabs'
 import { basename } from './utils/filePath'
 import { emitAppEvent, onAppEvent } from './utils/appEvents'
 
-// 工作区视图（终端、聊天、Markdown）只在真正打开工作区时加载，不进入启动路径
+// 非首屏重组件（工作区、云端视图、设置页、命令面板、开发调试面板）均走按需分包，不阻塞启动页
 const WorkspaceView = lazy(() =>
   import('./components/WorkspaceView').then((module) => ({ default: module.WorkspaceView }))
+)
+const CloudView = lazy(() =>
+  import('./components/CloudView').then((module) => ({ default: module.CloudView }))
+)
+const Settings = lazy(() =>
+  import('./components/Settings').then((module) => ({ default: module.Settings }))
+)
+const CommandPalette = lazy(() =>
+  import('./components/CommandPalette').then((module) => ({ default: module.CommandPalette }))
+)
+const IPCDebug = lazy(() =>
+  import('./components/IPCDebug').then((module) => ({ default: module.IPCDebug }))
 )
 
 type BootPhase = 'boot' | 'reveal' | 'ready'
@@ -121,22 +130,81 @@ export default function App() {
   }
 
   const fileLanguage = (() => {
-    const ext = currentFileName.split('.').pop()?.toLowerCase()
+    const baseName = currentFileName.toLowerCase()
+    if (baseName === 'dockerfile' || baseName.startsWith('dockerfile.')) return 'Dockerfile'
+    const ext = baseName.includes('.') ? baseName.split('.').pop() : ''
     switch (ext) {
       case 'ts':
       case 'tsx':
+      case 'mts':
+      case 'cts':
         return 'TypeScript'
       case 'js':
       case 'jsx':
+      case 'mjs':
+      case 'cjs':
         return 'JavaScript'
       case 'json':
+      case 'jsonc':
         return 'JSON'
       case 'md':
+      case 'mdx':
         return 'Markdown'
       case 'css':
-        return 'CSS'
+      case 'scss':
+      case 'less':
+        return ext.toUpperCase()
       case 'html':
+      case 'htm':
         return 'HTML'
+      case 'py':
+        return 'Python'
+      case 'rs':
+        return 'Rust'
+      case 'go':
+        return 'Go'
+      case 'yaml':
+      case 'yml':
+        return 'YAML'
+      case 'toml':
+        return 'TOML'
+      case 'xml':
+      case 'svg':
+        return 'XML'
+      case 'sh':
+      case 'bash':
+      case 'zsh':
+        return 'Shell'
+      case 'ps1':
+      case 'psm1':
+        return 'PowerShell'
+      case 'sql':
+        return 'SQL'
+      case 'c':
+      case 'h':
+        return 'C'
+      case 'cc':
+      case 'cpp':
+      case 'cxx':
+      case 'hpp':
+        return 'C++'
+      case 'java':
+        return 'Java'
+      case 'cs':
+        return 'C#'
+      case 'rb':
+        return 'Ruby'
+      case 'php':
+        return 'PHP'
+      case 'swift':
+        return 'Swift'
+      case 'kt':
+      case 'kts':
+        return 'Kotlin'
+      case 'vue':
+        return 'Vue'
+      case 'svelte':
+        return 'Svelte'
       default:
         return 'Plain Text'
     }
@@ -165,13 +233,13 @@ export default function App() {
       .consumeUpdateNotice()
       .then((result) => {
         if (!active || !result.success || !result.notice) return
-        toast.info(t('updatedToVersion', { version: result.notice.to }))
+        toast.info(useI18nStore.getState().t('updatedToVersion', { version: result.notice.to }))
       })
       .catch((err) => console.error('Failed to read update notice:', err))
     return () => {
       active = false
     }
-  }, [t])
+  }, [])
 
   // 窗口标题、文档语言与主题跟随设置
   useEffect(() => {
@@ -560,7 +628,9 @@ export default function App() {
     useApprovalStore.getState().clearWorkspace(targetPath)
     useSelectionStore.getState().clearWorkspace(targetPath)
     useGitStore.getState().reset(targetPath)
-    clearPanelUi(targetPath)
+    for (const root of rootsToDispose) {
+      clearPanelUi(root)
+    }
     clearWorkspaceChat(targetPath)
 
     const wasActive = targetPath === workspace
@@ -624,10 +694,18 @@ export default function App() {
           size="lg"
           closeLabel={t('close')}
         >
-          <Settings
-            onClose={() => setShowSettings(false)}
-            initialSection={settingsSection}
-          />
+          <Suspense
+            fallback={
+              <div className="flex min-h-[240px] items-center justify-center gap-2 type-label text-ink-muted">
+                <Spinner size={14} />
+              </div>
+            }
+          >
+            <Settings
+              onClose={() => setShowSettings(false)}
+              initialSection={settingsSection}
+            />
+          </Suspense>
         </Modal>
       )}
 
@@ -874,12 +952,18 @@ export default function App() {
 
       <UpdateDialog />
       <ToastContainer messages={toastMessages} onClose={removeToast} />
-      {workspace && <CommandPalette workspacePath={workspace} active={view === 'workspace'} />}
+      {workspace && (
+        <Suspense fallback={null}>
+          <CommandPalette workspacePath={workspace} active={view === 'workspace'} />
+        </Suspense>
+      )}
 
       {/* Debug panel */}
       {showDebug && (
         <div className="fixed bottom-4 right-4 z-30 max-h-80 w-96 overflow-y-auto border border-line bg-raised p-3 shadow-print">
-          <IPCDebug />
+          <Suspense fallback={null}>
+            <IPCDebug />
+          </Suspense>
         </div>
       )}
 
@@ -903,7 +987,15 @@ export default function App() {
         </Suspense>
         {view === 'cloud' && (
           <div className="absolute inset-0 flex flex-col overflow-hidden bg-surface">
-            <CloudView onBackHome={() => setView(workspace ? 'workspace' : 'home')} />
+            <Suspense
+              fallback={
+                <div className="flex flex-1 items-center justify-center gap-2 type-label text-ink-muted">
+                  <Spinner size={14} />
+                </div>
+              }
+            >
+              <CloudView onBackHome={() => setView(workspace ? 'workspace' : 'home')} />
+            </Suspense>
           </div>
         )}
         {(view === 'home' || (view === 'workspace' && !workspace)) && (

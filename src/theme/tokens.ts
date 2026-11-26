@@ -41,7 +41,10 @@ export function readThemeTokens(dark: boolean): ThemeTokens {
 
   const root = document.documentElement
   const hadDark = root.classList.contains('dark')
-  root.classList.toggle('dark', dark)
+  // 目标主题与当前一致时不切换 DOM class，避免白白触发全文档样式重算与拆窗 MutationObserver
+  if (hadDark !== dark) {
+    root.classList.toggle('dark', dark)
+  }
 
   try {
     const styles = getComputedStyle(root)
@@ -52,7 +55,9 @@ export function readThemeTokens(dark: boolean): ThemeTokens {
     }
     return tokens
   } finally {
-    root.classList.toggle('dark', hadDark)
+    if (hadDark !== dark) {
+      root.classList.toggle('dark', hadDark)
+    }
   }
 }
 

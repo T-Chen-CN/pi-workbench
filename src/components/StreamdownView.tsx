@@ -6,7 +6,7 @@
  * - 云端 Web 直接复用本组件，彻底避免把桌面端状态与 mock 层打进 Web 静态包。
  */
 
-import React, { useMemo } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   Streamdown,
   defaultComponents,
@@ -22,22 +22,42 @@ import 'streamdown/styles.css'
 import 'katex/dist/katex.min.css'
 import { cjk } from '@streamdown/cjk'
 import { createMathPlugin } from '@streamdown/math'
-import { createMermaidPlugin } from '@streamdown/mermaid'
 import { PI_SHIKI_THEMES, piShikiCodePlugin } from '../utils/shikiHighlighter'
 
 const mathPlugin = createMathPlugin({ singleDollarTextMath: true })
-const mermaidPlugin = createMermaidPlugin()
 
-const FULL_PLUGINS: PluginConfig = {
+const CODE_PLUGINS: PluginConfig = {
   code: piShikiCodePlugin,
   cjk,
   math: mathPlugin,
-  mermaid: mermaidPlugin,
 }
 
 const LIGHT_PLUGINS: PluginConfig = {
   cjk,
   math: mathPlugin,
+}
+
+const MERMAID_FENCE_RE = /(?:^|\n)[ \t]{0,3}(?:```+|~~~+)[ \t]*mermaid\b/i
+
+let cachedMermaidPlugin: PluginConfig['mermaid'] | null = null
+let mermaidLoadPromise: Promise<PluginConfig['mermaid'] | null> | null = null
+
+/** 按需动态加载 @streamdown/mermaid（含 mermaid/cytoscape/d3 重依赖），非图表消息不进入首屏包 */
+function loadMermaidPlugin(): Promise<PluginConfig['mermaid'] | null> {
+  if (cachedMermaidPlugin) return Promise.resolve(cachedMermaidPlugin)
+  if (!mermaidLoadPromise) {
+    mermaidLoadPromise = import('@streamdown/mermaid')
+      .then((mod) => {
+        cachedMermaidPlugin = mod.createMermaidPlugin()
+        return cachedMermaidPlugin
+      })
+      .catch((err) => {
+        console.error('[StreamdownView] Failed to load @streamdown/mermaid:', err)
+        mermaidLoadPromise = null
+        return null
+      })
+  }
+  return mermaidLoadPromise
 }
 
 /**
@@ -162,7 +182,38 @@ export const StreamdownView = React.memo(function StreamdownView({
     [components]
   )
 
-  const plugins = highlight ? FULL_PLUGINS : LIGHT_PLUGINS
+  const needsMermaid = highlight && MERMAID_FENCE_RE.test(content)
+  const [mermaidPlugin, setMermaidPlugin] = useState<PluginConfig['mermaid'] | null>(() =>
+    needsMermaid ? cachedMermaidPlugin : null
+  )
+
+  useEffect(() => {
+    if (!needsMermaid) return
+    if (cachedMermaidPlugin) {
+      setMermaidPlugin((current) => current ?? cachedMermaidPlugin)
+      return
+    }
+    let cancelled = false
+    void loadMermaidPlugin().then((plugin) => {
+      if (!cancelled && plugin) setMermaidPlugin(plugin)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [needsMermaid])
+
+  const plugins = useMemo<PluginConfig>(() => {
+    if (!highlight) return LIGHT_PLUGINS
+    if (needsMermaid && mermaidPlugin) {
+      return {
+        code: piShikiCodePlugin,
+        cjk,
+        math: mathPlugin,
+        mermaid: mermaidPlugin,
+      }
+    }
+    return CODE_PLUGINS
+  }, [highlight, needsMermaid, mermaidPlugin])
 
   return (
     <div className={className}>

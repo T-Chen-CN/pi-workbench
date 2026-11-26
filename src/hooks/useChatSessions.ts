@@ -60,6 +60,9 @@ export function useChatSessions(options: ChatSessionsOptions) {
     setConfiguredImageModels,
   } = options
 
+  const tRef = useRef(t)
+  tRef.current = t
+
   const persistTabs = useCallback(() => {
     const state = useSessionStore.getState().byWorkspace[workspacePath]
     if (!state) return
@@ -150,7 +153,9 @@ export function useChatSessions(options: ChatSessionsOptions) {
         const initResult = await piAgentAPI.initialize({ workspaceDir: workspacePath })
         if (seq !== initSeqRef.current) return
         if (!initResult.success) {
-          setFatalError(initResult.error ? localizeError(initResult.error) : t('agentInitFailed'))
+          setFatalError(
+            initResult.error ? localizeError(initResult.error) : tRef.current('agentInitFailed')
+          )
           setNeedsApiKey(true)
           return
         }
@@ -185,7 +190,7 @@ export function useChatSessions(options: ChatSessionsOptions) {
             setFatalError(
               opened.error
                 ? localizeError(opened.error)
-                : t('sessionOpenFailed', { error: '' })
+                : tRef.current('sessionOpenFailed', { error: '' })
             )
             return
           }
@@ -246,7 +251,7 @@ export function useChatSessions(options: ChatSessionsOptions) {
       initSeqRef.current++
       offTitle()
     }
-  }, [workspacePath, loadHistory, persistTabs, t, configVersion, initSeqRef, inputRef, setConfiguredImageModels, setFatalError, setInitialized, onAgentReady, setNeedsApiKey])
+  }, [workspacePath, loadHistory, persistTabs, configVersion, initSeqRef, inputRef, setConfiguredImageModels, setFatalError, setInitialized, onAgentReady, setNeedsApiKey])
 
   const openSessionById = useCallback(
     async (sessionId: string, showError = true): Promise<boolean> => {

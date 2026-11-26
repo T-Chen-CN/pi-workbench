@@ -4,7 +4,7 @@ import path from 'path'
 import { pathToFileURL } from 'url'
 import { existsSync } from 'fs'
 import { readFile, writeFile, mkdir, readdir } from 'fs/promises'
-import { createHash } from 'crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'crypto'
 
 
 /**
@@ -27,20 +27,85 @@ const DEV_AGENT_SESSIONS_DELETE = '/__pi/agent/sessions/delete'
 const DEV_AGENT_SESSIONS_TABS_GET = '/__pi/agent/sessions/tabs/get'
 const DEV_AGENT_SESSIONS_TABS_SET = '/__pi/agent/sessions/tabs/set'
 
+/** 每次 Vite dev server 启动生成的一次性令牌；防本地网页跨站 POST 滥用开发桥 */
+const DEV_AGENT_TOKEN = randomBytes(24).toString('hex')
+const DEV_AGENT_HEADER = 'x-pi-dev-token'
+const DEV_AGENT_MAX_BODY_BYTES = 16 * 1024 * 1024
+
+function isTrustedDevBridgeRequest(req: any): { ok: true } | { ok: false; status: number; error: string } {
+  const host = String(req.headers?.host ?? '').toLowerCase()
+  if (host !== 'localhost:5173' && host !== '127.0.0.1:5173') {
+    return { ok: false, status: 403, error: 'Untrusted Host header' }
+  }
+  const origin = req.headers?.origin
+  if (typeof origin === 'string' && origin.length > 0) {
+    try {
+      const parsed = new URL(origin)
+      const expected = parsed.protocol === 'http:' && (parsed.host.toLowerCase() === 'localhost:5173' || parsed.host.toLowerCase() === '127.0.0.1:5173')
+      if (!expected) return { ok: false, status: 403, error: 'Cross-origin request rejected' }
+    } catch {
+      return { ok: false, status: 403, error: 'Malformed Origin header' }
+    }
+  }
+  const contentType = String(req.headers?.['content-type'] ?? '').toLowerCase()
+  if (!contentType.startsWith('application/json')) {
+    return { ok: false, status: 415, error: 'Content-Type must be application/json' }
+  }
+  const rawToken = req.headers?.[DEV_AGENT_HEADER]
+  const provided = typeof rawToken === 'string' ? rawToken : ''
+  const a = Buffer.from(provided, 'utf8')
+  const b = Buffer.from(DEV_AGENT_TOKEN, 'utf8')
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return { ok: false, status: 403, error: 'Missing or invalid dev bridge token' }
+  }
+  return { ok: true }
+}
+
 function devAgentBridge(): Plugin {
   return {
     name: 'pi-workbench-dev-agent-bridge',
     apply: 'serve',
+    config() {
+      return {
+        define: {
+          __PI_DEV_AGENT_TOKEN__: JSON.stringify(DEV_AGENT_TOKEN),
+        },
+      }
+    },
     configureServer(server) {
       // 每个工作区一个 Agent 实例（Web 调试也能模拟多工作区）
       const agents = new Map<string, any>()
 
+      // 统一前置守卫：所有 /__pi/agent/* 端点必须通过同源 + JSON + 一次性令牌校验
+      server.middlewares.use('/__pi/agent', (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') return next()
+        const check = isTrustedDevBridgeRequest(req)
+        if (!check.ok) {
+          res.statusCode = check.status
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ success: false, error: check.error }))
+          return
+        }
+        next()
+      })
+
       const readJson = (req: any): Promise<any> =>
         new Promise((resolve, reject) => {
-          let data = ''
-          req.on('data', (chunk: any) => { data += chunk })
+          const chunks: Buffer[] = []
+          let size = 0
+          req.on('data', (chunk: any) => {
+            const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+            size += buf.length
+            if (size > DEV_AGENT_MAX_BODY_BYTES) {
+              req.destroy()
+              reject(new Error('Request body too large'))
+              return
+            }
+            chunks.push(buf)
+          })
           req.on('end', () => {
             try {
+              const data = Buffer.concat(chunks).toString('utf8')
               resolve(data ? JSON.parse(data) : {})
             } catch (error) {
               reject(error)
@@ -421,9 +486,8 @@ export function contentSecurityPolicy(): Plugin {
 }
 
 /**
- * 只保留工作台实际使用的 Monaco 语言分词器。
- * editor.main 会注册几十种语言；把未使用的 register 模块替换为空模块，
- * 可以在不改变入口与特性装配的前提下减小 Monaco chunk。
+ * 保留工作台常用开发语言的 Monaco 分词器（覆盖前端 / 后端 / 脚本 / 配置 / 容器）。
+ * 其余冷门语言 register 模块替换为空模块，在完整支持主流开发语言的同时控制 Monaco chunk 体积。
  */
 const KEEP_MONACO_LANGUAGES = new Set([
   'typescript',
@@ -432,10 +496,25 @@ const KEEP_MONACO_LANGUAGES = new Set([
   'markdown',
   'html',
   'css',
+  'scss',
+  'less',
   'python',
   'rust',
   'go',
   'ruby',
+  'yaml',
+  'shell',
+  'sql',
+  'dockerfile',
+  'cpp',
+  'java',
+  'powershell',
+  'xml',
+  'php',
+  'csharp',
+  'swift',
+  'kotlin',
+  'ini',
 ])
 const EMPTY_MONACO_MODULE = '\0monaco-language-filter:empty'
 
@@ -455,12 +534,27 @@ function monacoLanguageFilter(): Plugin {
   }
 }
 
+/** 过滤 @fontsource 中非中/英字体子集（西里尔/天城文/希腊/越南语），减少桌面产物冗余字体 */
+const DROP_FONT_SUBSETS = /(?:cyrillic|devanagari|greek|vietnamese)/i
+
+function fontSubsetFilter(): Plugin {
+  return {
+    name: 'pi-workbench-font-subset-filter',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.includes('@fontsource') || !id.endsWith('.css')) return null
+      const filtered = code.replace(
+        /(?:\/\*[^*]*\*\/\s*)?@font-face\s*\{[^}]*\}\s*/g,
+        (block) => (DROP_FONT_SUBSETS.test(block) ? '' : block)
+      )
+      return filtered === code ? null : { code: filtered, map: null }
+    },
+  }
+}
+
 /**
- * pdf.js 的 CMap / 标准字体 / wasm 解码器需要随包分发。
- *
- * 不走 `?inline` asset：Vite 对 node_modules 里的二进制 asset 处理不稳定（部分会
- * 退化成 `new URL(…).href`）；这里由 Node 直接读字节、生成 base64 虚拟模块，
- * 三类资源各一个 chunk，`src/pdf/pdfAssets.ts` 按需动态导入。
+ * pdf.js 的 CMap / 标准字体 / wasm 解码器以原始二进制静态文件随包分发（`dist/pdfjs/<group>/<file>`）。
+ * 生产环境运行在 `pw-app://bundle`，开发态由 Vite dev middleware 直出，避免 Base64 33% 膨胀与 JS 解析开销。
  */
 const PDFJS_ASSET_GROUPS = {
   cmaps: ['.bcmap'],
@@ -471,38 +565,72 @@ const PDFJS_ASSET_GROUPS = {
 type PdfjsAssetGroup = keyof typeof PDFJS_ASSET_GROUPS
 
 export function pdfjsAssets(): Plugin {
-  const prefix = 'virtual:pdfjs-assets/'
-  const resolvedPrefix = '\0' + prefix
   const root = process.cwd()
 
   return {
     name: 'pi-workbench-pdfjs-assets',
-    resolveId(id) {
-      return id.startsWith(prefix) ? '\0' + id : null
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        const pathname = (req.url ?? '').split('?')[0]
+        const match = /^\/pdfjs\/(cmaps|standard_fonts|wasm)\/([^/]+)$/.exec(pathname)
+        if (!match) return next()
+        const group = match[1] as PdfjsAssetGroup
+        let filename: string
+        try {
+          filename = decodeURIComponent(match[2])
+        } catch {
+          res.statusCode = 400
+          res.end('Bad Request')
+          return
+        }
+        if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+          res.statusCode = 400
+          res.end('Bad Request')
+          return
+        }
+        const suffixes = PDFJS_ASSET_GROUPS[group]
+        if (!(suffixes as readonly string[]).some((suffix) => filename.endsWith(suffix))) {
+          res.statusCode = 404
+          res.end('Not Found')
+          return
+        }
+        try {
+          const bytes = await readFile(path.join(root, 'node_modules', 'pdfjs-dist', group, filename))
+          res.setHeader(
+            'Content-Type',
+            filename.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream'
+          )
+          res.end(bytes)
+        } catch {
+          res.statusCode = 404
+          res.end('Not Found')
+        }
+      })
     },
-    async load(id) {
-      if (!id.startsWith(resolvedPrefix)) return null
-      const group = id.slice(resolvedPrefix.length) as PdfjsAssetGroup
-      const suffixes = PDFJS_ASSET_GROUPS[group]
-      if (!suffixes) throw new Error(`Unknown pdf.js asset group: ${group}`)
-      const dir = path.join(root, 'node_modules', 'pdfjs-dist', group)
-      const files = (await readdir(dir)).filter((name) =>
-        (suffixes as readonly string[]).some((suffix) => name.endsWith(suffix))
-      )
-      const entries: string[] = []
-      for (const name of files) {
-        const bytes = await readFile(path.join(dir, name))
-        entries.push(
-          `${JSON.stringify(name)}: ${JSON.stringify(`data:application/octet-stream;base64,${bytes.toString('base64')}`)}`
+    async generateBundle() {
+      for (const [group, suffixes] of Object.entries(PDFJS_ASSET_GROUPS) as Array<
+        [PdfjsAssetGroup, readonly string[]]
+      >) {
+        const dir = path.join(root, 'node_modules', 'pdfjs-dist', group)
+        const files = (await readdir(dir)).filter((name) =>
+          suffixes.some((suffix) => name.endsWith(suffix))
         )
+        for (const name of files) {
+          const source = await readFile(path.join(dir, name))
+          this.emitFile({
+            type: 'asset',
+            fileName: `pdfjs/${group}/${name}`,
+            source,
+          })
+        }
       }
-      return `export default {${entries.join(',\n')}}`
     },
   }
 }
 
 export default defineConfig({
   plugins: [
+    fontSubsetFilter(),
     react(),
     pdfjsAssets(),
     devAgentBridge(),
@@ -528,7 +656,7 @@ export default defineConfig({
     minify: 'esbuild',
     rollupOptions: {
       output: {
-        // Monaco 体积约 3.5MB，与业务代码分开，避免主 chunk 过大
+        // Monaco / Mermaid 等重型引擎独立分包，按需懒加载，避免主 chunk 过大
         manualChunks(id) {
           if (!id.includes('node_modules')) {
             // Vite 的 preload helper 是虚拟模块，若落进 monaco chunk 会让入口静态依赖它
@@ -540,12 +668,12 @@ export default defineConfig({
           if (id.includes('monaco-editor')) {
             return 'monaco'
           }
+          if (id.includes('node_modules/mermaid') || id.includes('@streamdown/mermaid')) {
+            return 'mermaid'
+          }
           if (
-            id.includes('react-markdown') ||
             id.includes('remark-') ||
             id.includes('rehype-') ||
-            id.includes('highlight.js') ||
-            id.includes('lowlight') ||
             id.includes('micromark') ||
             id.includes('/marked/') ||
             id.includes('/mdast') ||

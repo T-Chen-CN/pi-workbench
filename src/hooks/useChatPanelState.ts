@@ -373,13 +373,15 @@ export function useChatPanelState(props: ChatPanelProps) {
     [activeKey]
   )
 
-  /** @ 文件搜索（防抖），结果落到 mention 弹层 */
+  /** @ 文件搜索（防抖 + 序号防乱序），避免慢请求结果覆写更新后的输入 */
+  const mentionSeqRef = useRef(0)
   const searchMention = useCallback(
     (query: string, start: number) => {
       if (mentionTimer.current) window.clearTimeout(mentionTimer.current)
+      const seq = ++mentionSeqRef.current
       mentionTimer.current = window.setTimeout(async () => {
         const result = await api.searchWorkspaceFiles(viewRoot ?? workspacePath, query, 12)
-        if (!result.success) return
+        if (mentionSeqRef.current !== seq || !result.success) return
         setMention((current) =>
           current && current.start === start
             ? { ...current, results: result.files ?? [] }

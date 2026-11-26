@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronLeft, ChevronRight, Columns2, Rows3, X } from 'lucide-react'
 import { useDiffStore } from '../store/diffStore'
 import { useI18nStore } from '../store/i18nStore'
@@ -182,9 +182,63 @@ interface DiffViewProps {
   diff: DiffResult
 }
 
+interface SplitRow {
+  left: DiffLine | null
+  right: DiffLine | null
+}
+
+/** 把连续的删除段与新增段并排对齐，缺侧补占位空行，保证左右两栏行号与滚动位置严格同步 */
+function alignSplitRows(lines: DiffLine[]): SplitRow[] {
+  const rows: SplitRow[] = []
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i]
+    if (line.type === DiffLineType.Unchanged) {
+      rows.push({ left: line, right: line })
+      i += 1
+      continue
+    }
+    const removed: DiffLine[] = []
+    const added: DiffLine[] = []
+    while (i < lines.length && lines[i].type !== DiffLineType.Unchanged) {
+      if (lines[i].type === DiffLineType.Removed) removed.push(lines[i])
+      else added.push(lines[i])
+      i += 1
+    }
+    const span = Math.max(removed.length, added.length)
+    for (let k = 0; k < span; k += 1) {
+      rows.push({ left: removed[k] ?? null, right: added[k] ?? null })
+    }
+  }
+  return rows
+}
+
 const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
-  const originalLines = diff.lines.filter((l) => l.type !== DiffLineType.Added)
-  const modifiedLines = diff.lines.filter((l) => l.type !== DiffLineType.Removed)
+  const aligned = useMemo(() => alignSplitRows(diff.lines), [diff.lines])
+  const originalLines = useMemo(
+    () => aligned.map((row) => row.left),
+    [aligned]
+  )
+  const modifiedLines = useMemo(
+    () => aligned.map((row) => row.right),
+    [aligned]
+  )
+  const leftElRef = useRef<HTMLDivElement | null>(null)
+  const rightElRef = useRef<HTMLDivElement | null>(null)
+  const syncingRef = useRef<'left' | 'right' | null>(null)
+
+  const syncScroll = (source: 'left' | 'right') => {
+    if (syncingRef.current && syncingRef.current !== source) return
+    const from = source === 'left' ? leftElRef.current : rightElRef.current
+    const to = source === 'left' ? rightElRef.current : leftElRef.current
+    if (!from || !to) return
+    syncingRef.current = source
+    to.scrollTop = from.scrollTop
+    to.scrollLeft = from.scrollLeft
+    requestAnimationFrame(() => {
+      if (syncingRef.current === source) syncingRef.current = null
+    })
+  }
 
   return (
     <div className="flex h-full divide-x divide-rule-divide">
@@ -195,7 +249,12 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
             -{diff.removedCount}
           </span>
         </div>
-        <VirtualDiffLines lines={originalLines} side="original" />
+        <VirtualDiffLines
+          lines={originalLines}
+          side="original"
+          scrollRef={leftElRef}
+          onScroll={() => syncScroll('left')}
+        />
       </div>
 
       <div className="flex flex-1 flex-col overflow-hidden">
@@ -205,7 +264,12 @@ const SplitDiffView: React.FC<DiffViewProps> = ({ diff }) => {
             +{diff.addedCount}
           </span>
         </div>
-        <VirtualDiffLines lines={modifiedLines} side="modified" />
+        <VirtualDiffLines
+          lines={modifiedLines}
+          side="modified"
+          scrollRef={rightElRef}
+          onScroll={() => syncScroll('right')}
+        />
       </div>
     </div>
   )
@@ -226,17 +290,26 @@ const UnifiedDiffView: React.FC<DiffViewProps> = ({ diff }) => {
 
 const DIFF_ROW_HEIGHT = 22
 
-const VirtualDiffLines: React.FC<{ lines: DiffLine[]; side: 'original' | 'modified' | 'unified' }> = ({
-  lines,
-  side,
-}) => {
+const VirtualDiffLines: React.FC<{
+  lines: Array<DiffLine | null>
+  side: 'original' | 'modified' | 'unified'
+  scrollRef?: React.MutableRefObject<HTMLDivElement | null>
+  onScroll?: () => void
+}> = ({ lines, side, scrollRef, onScroll }) => {
   const { parentRef, virtualizer } = useVirtualRows({
     count: lines.length,
     estimateSize: DIFF_ROW_HEIGHT,
   })
 
   return (
-    <div ref={parentRef} className="flex-1 overflow-auto">
+    <div
+      ref={(node) => {
+        parentRef.current = node
+        if (scrollRef) scrollRef.current = node
+      }}
+      onScroll={onScroll}
+      className="flex-1 overflow-auto"
+    >
       <VirtualRows
         virtualizer={virtualizer}
         items={lines}
@@ -250,11 +323,25 @@ const VirtualDiffLines: React.FC<{ lines: DiffLine[]; side: 'original' | 'modifi
 }
 
 interface DiffLineElementProps {
-  line: DiffLine
+  line: DiffLine | null
   side: 'original' | 'modified' | 'unified'
 }
 
 const DiffLineElement: React.FC<DiffLineElementProps> = ({ line, side }) => {
+  if (!line) {
+    return (
+      <div
+        aria-hidden="true"
+        className="flex h-[22px] items-center border-b border-rule-divide bg-sunken/40 type-code"
+        style={{ minWidth: '100%', width: 'max-content' }}
+      >
+        <span className="w-6 flex-shrink-0 select-none text-center text-ink-subtle" />
+        <span className="w-10 flex-shrink-0 select-none pr-2 text-right text-ink-subtle" />
+        <span className="flex-1 whitespace-pre px-2" />
+      </div>
+    )
+  }
+
   let bgColor = 'bg-surface'
   let prefix = ' '
   let prefixColor = 'text-ink-muted'

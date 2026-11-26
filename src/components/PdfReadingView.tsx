@@ -43,7 +43,7 @@ interface PdfPageProps {
  * 单页渲染：只有进入视口（含 ±2 页缓冲）才画 canvas，离开后保留占位与最后一次画面。
  * 缩放变化时取消未完成的渲染任务，避免旧分辨率拖住主线程。
  */
-const PdfPage: React.FC<PdfPageProps> = ({
+const PdfPage: React.FC<PdfPageProps> = React.memo(({
   document,
   pageNumber,
   scale,
@@ -54,8 +54,10 @@ const PdfPage: React.FC<PdfPageProps> = ({
   const holderRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [visible, setVisible] = useState(false)
-  const pageWidth = size.width
-  const pageHeight = size.height
+  const sizeRef = useRef(size)
+  sizeRef.current = size
+  const onSizeRef = useRef(onSize)
+  onSizeRef.current = onSize
 
   useEffect(() => {
     const holder = holderRef.current
@@ -66,6 +68,8 @@ const PdfPage: React.FC<PdfPageProps> = ({
     return observePage(holder, setVisible)
   }, [observePage])
 
+  // 绝不能把 size.width / size.height / onSize 放进渲染依赖：
+  // getPage 回调 onSize 更新真实尺寸时若触发重跑，cleanup 会清零刚画好的 canvas 造成每页双绘闪烁。
   useEffect(() => {
     if (!visible) return
     let cancelled = false
@@ -73,8 +77,8 @@ const PdfPage: React.FC<PdfPageProps> = ({
     const canvasAtStart = canvasRef.current
     if (canvasAtStart) {
       // 缩放变化时先把绘制尺寸拉到新值：旧分辨率的位图不会短暂拉伸，也不用等 getPage
-      canvasAtStart.style.width = `${Math.round(pageWidth * scale)}px`
-      canvasAtStart.style.height = `${Math.round(pageHeight * scale)}px`
+      canvasAtStart.style.width = `${Math.round(sizeRef.current.width * scale)}px`
+      canvasAtStart.style.height = `${Math.round(sizeRef.current.height * scale)}px`
       canvasAtStart.dataset.rendered = 'false'
     }
 
@@ -83,10 +87,12 @@ const PdfPage: React.FC<PdfPageProps> = ({
       .then((loaded) => {
         if (cancelled) return
         const base = loaded.getViewport({ scale: 1 })
-        onSize(pageNumber, { width: base.width, height: base.height })
+        onSizeRef.current(pageNumber, { width: base.width, height: base.height })
 
         const canvas = canvasAtStart
         if (!canvas) return
+        canvas.style.width = `${Math.round(base.width * scale)}px`
+        canvas.style.height = `${Math.round(base.height * scale)}px`
         const dpr = Math.min(window.devicePixelRatio || 1, 2)
         let renderScale = scale * dpr
         const pixels = base.width * base.height * renderScale * renderScale
@@ -116,12 +122,12 @@ const PdfPage: React.FC<PdfPageProps> = ({
       if (canvas) {
         canvas.width = 0
         canvas.height = 0
-        canvas.style.width = `${Math.round(pageWidth * scale)}px`
-        canvas.style.height = `${Math.round(pageHeight * scale)}px`
+        canvas.style.width = `${Math.round(sizeRef.current.width * scale)}px`
+        canvas.style.height = `${Math.round(sizeRef.current.height * scale)}px`
         delete canvas.dataset.rendered
       }
     }
-  }, [document, pageNumber, scale, pageWidth, pageHeight, visible, onSize])
+  }, [document, pageNumber, scale, visible])
 
   return (
     <div
@@ -134,7 +140,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
       <canvas ref={canvasRef} className="block" aria-label={`page ${pageNumber}`} />
     </div>
   )
-}
+})
 
 /**
  * PDF 阅读视图：pdf.js 自绘。

@@ -65,7 +65,7 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
           )
           if (loadTokenRef.current !== token) return
           if (!chunk.success) {
-            setError(chunk.error ?? t('toolResultLoadFailed', { error: '' }))
+            setError(chunk.error ?? useI18nStore.getState().t('toolResultLoadFailed', { error: '' }))
             break
           }
           acc += chunk.text ?? ''
@@ -84,7 +84,7 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
         }
       }
     },
-    [workspacePath, sessionId, toolCallId, t]
+    [workspacePath, sessionId, toolCallId]
   )
 
   useEffect(() => {
@@ -101,7 +101,7 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
       const result = await piAgentAPI.getToolResultMeta(workspacePath, sessionId, toolCallId)
       if (cancelled) return
       if (!result.success || !result.meta) {
-        setError(t('toolResultLoadFailed', { error: result.error ?? '' }))
+        setError(useI18nStore.getState().t('toolResultLoadFailed', { error: result.error ?? '' }))
         setLoading(false)
         return
       }
@@ -132,7 +132,7 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
       cancelled = true
       loadTokenRef.current += 1
     }
-  }, [workspacePath, sessionId, toolCallId, loadText, t])
+  }, [workspacePath, sessionId, toolCallId, loadText])
 
   const lines = useMemo(() => (text.length > 0 ? text.split('\n') : []), [text])
 

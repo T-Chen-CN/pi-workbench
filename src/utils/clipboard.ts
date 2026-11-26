@@ -7,7 +7,16 @@
  * 暴露的 Electron 原生剪贴板，再退回浏览器实现，最后退回 execCommand。
  */
 
-type ClipboardBridge = (text: string) => boolean | Promise<boolean>
+type ClipboardBridgeResult = boolean | { success?: boolean }
+type ClipboardBridge = (text: string) => ClipboardBridgeResult | Promise<ClipboardBridgeResult>
+
+function isBridgeSuccess(result: unknown): boolean {
+  if (typeof result === 'boolean') return result
+  if (result && typeof result === 'object' && 'success' in result) {
+    return (result as { success?: unknown }).success === true
+  }
+  return false
+}
 
 function bridgeWriter(): ClipboardBridge | null {
   const api = window.electronAPI as { writeClipboardText?: ClipboardBridge } | undefined
@@ -42,8 +51,8 @@ export async function copyText(text: string): Promise<boolean> {
   const bridge = bridgeWriter()
   if (bridge) {
     try {
-      // Electron 桥返回 Promise（主进程写剪贴板）；Web dev 桥可能是同步的
-      if (await bridge(value)) return true
+      // 主进程 IPC 返回 `{ success: boolean }`，Web dev 桥或测试替身可能返回 boolean
+      if (isBridgeSuccess(await bridge(value))) return true
     } catch (error) {
       console.error('Failed to copy through Electron clipboard:', error)
     }

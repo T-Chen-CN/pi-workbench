@@ -121,7 +121,37 @@ export function mirrorDocumentAttributes(source: Document, target: Document): ()
   if (source.body) {
     observer.observe(source.body, { attributes: true, attributeFilter: ['class'] })
   }
-  return () => observer.disconnect()
+  // 监听主文档 <head> 后续动态插入的懒加载样式（CSS chunk / Shiki / KaTeX），同步镜像到拆出窗口
+  const headObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      for (const added of Array.from(mutation.addedNodes)) {
+        if (!(added instanceof Element)) continue
+        const isStylesheet =
+          added.tagName === 'STYLE' ||
+          (added.tagName === 'LINK' && added.getAttribute('rel') === 'stylesheet')
+        if (!isStylesheet) continue
+        const clone = added.cloneNode(true) as HTMLElement
+        if (clone.tagName === 'LINK') {
+          const href = clone.getAttribute('href')
+          if (href) {
+            const absoluteHref = new URL(href, source.baseURI).href
+            if (target.head.querySelector(`link[rel="stylesheet"][href="${CSS.escape(absoluteHref)}"]`)) {
+              continue
+            }
+            clone.setAttribute('href', absoluteHref)
+          }
+        }
+        target.head.appendChild(clone)
+      }
+    }
+  })
+  if (source.head) {
+    headObserver.observe(source.head, { childList: true })
+  }
+  return () => {
+    observer.disconnect()
+    headObserver.disconnect()
+  }
 }
 
 /** 初始 about:blank 在个别时机还没有 body；等一拍再取 */

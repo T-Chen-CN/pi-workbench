@@ -81,7 +81,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       if (result.success) {
         setPlugins(result.plugins)
       } else {
-        setError(t('loadPluginsFailed', { error: localizeError(result.error) || t('unknownError') }))
+        const translate = useI18nStore.getState().t
+        setError(
+          translate('loadPluginsFailed', {
+            error: localizeError(result.error) || translate('unknownError'),
+          })
+        )
       }
 
       const active = useSessionStore.getState().byWorkspace[workspacePath]?.active
@@ -99,7 +104,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     } finally {
       if (refreshSeqRef.current === seq) setLoading(false)
     }
-  }, [workspacePath, t])
+  }, [workspacePath])
 
   // 全局快捷键与外部打开事件
   const paletteShortcut = useSettingsStore((state) => state.keybindings.commandPalette)

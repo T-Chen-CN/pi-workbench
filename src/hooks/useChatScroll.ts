@@ -32,10 +32,21 @@ export function useChatScroll(params: UseChatScrollParams) {
   const lastMessageCountRef = useRef(0)
   const stickToBottomRef = useRef(true)
 
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
+  const getItemKey = useCallback(
+    (index: number) => {
+      const msg = messagesRef.current[index]
+      return msg ? `${activeKey ?? ''}:${msg.id}` : `${activeKey ?? ''}:${index}`
+    },
+    [activeKey]
+  )
+
   const { parentRef: transcriptRef, virtualizer } = useVirtualRows({
     count: messages.length,
     estimateSize: 96,
     overscan: 8,
+    getItemKey,
   })
 
   /** 贴到滚动容器真实底部（消息列表之外的提示 / 错误块也算在内） */
@@ -69,9 +80,12 @@ export function useChatScroll(params: UseChatScrollParams) {
   const onSessionSwitchRef = useRef(onSessionSwitch)
   onSessionSwitchRef.current = onSessionSwitch
 
-  // 激活会话切换时回到最新位置并清除未读
+  // 激活会话切换时回到最新位置、清除回底按钮与未读计数
   useEffect(() => {
     stickToBottomRef.current = true
+    lastMessageCountRef.current = messagesRef.current.length
+    setShowScrollButton(false)
+    setNewMessageCount(0)
     const key = activeKey
     if (!key) return
     useSessionStore.getState().markUnread(workspacePath, activeSessionId!, false)
@@ -91,7 +105,7 @@ export function useChatScroll(params: UseChatScrollParams) {
   }, [messages, virtualizer, pinToBottom, activeKey])
 
   // 容器与内容区尺寸变化（面板展开、拆窗接入、窗口缩放、Mermaid/KaTeX/代码块异步增高）时补一次贴底：
-  // 隐藏期间 clientHeight 为 0，滚动位置无法计算；监听内容子树高度可确保异步排版撑高后仍贴底
+  // 不依赖 messages.length，避免每来一条消息就销毁重建 ResizeObserver
   useEffect(() => {
     const element = transcriptRef.current
     if (!element || typeof ResizeObserver === 'undefined') return
@@ -109,7 +123,7 @@ export function useChatScroll(params: UseChatScrollParams) {
     const contentChild = element.firstElementChild
     if (contentChild) observer.observe(contentChild)
     return () => observer.disconnect()
-  }, [transcriptRef, activeSessionId, messages.length, pinToBottom])
+  }, [transcriptRef, activeSessionId, pinToBottom])
 
   const handleTranscriptScroll = () => {
     const element = transcriptRef.current

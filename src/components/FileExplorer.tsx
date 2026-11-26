@@ -224,18 +224,23 @@ export const FileExplorer: React.FC<{
           if (loadSeqRef.current !== seq) return
           setTree(refreshed)
         } else {
-          setError(localizeError(dirResult.error || '') || t('loadWorkspaceFailed', { error: '' }))
+          setError(
+            localizeError(dirResult.error || '') ||
+              useI18nStore.getState().t('loadWorkspaceFailed', { error: '' })
+          )
         }
       } catch (err) {
         if (loadSeqRef.current !== seq) return
         const errorMsg = err instanceof Error ? err.message : String(err)
         setError(localizeError(errorMsg))
-        toast.error(t('loadWorkspaceFailed', { error: localizeError(errorMsg) }))
+        toast.error(
+          useI18nStore.getState().t('loadWorkspaceFailed', { error: localizeError(errorMsg) })
+        )
       } finally {
         if (loadSeqRef.current === seq) setLoading(false)
       }
     },
-    [refreshExpanded, t]
+    [refreshExpanded]
   )
 
   // 拆窗重建时把展开的目录与滚动位置带过来（面板在另一个 document 里重挂）

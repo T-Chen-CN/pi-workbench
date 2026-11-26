@@ -84,14 +84,26 @@ const DEV_AGENT_SESSIONS_DELETE = '/__pi/agent/sessions/delete'
 const DEV_AGENT_SESSIONS_TABS_GET = '/__pi/agent/sessions/tabs/get'
 const DEV_AGENT_SESSIONS_TABS_SET = '/__pi/agent/sessions/tabs/set'
 
+declare const __PI_DEV_AGENT_TOKEN__: string | undefined
+
+function devBridgeHeaders(): Record<string, string> {
+  const token = typeof __PI_DEV_AGENT_TOKEN__ === 'string' ? __PI_DEV_AGENT_TOKEN__ : ''
+  return token
+    ? { 'Content-Type': 'application/json', 'X-Pi-Dev-Token': token }
+    : { 'Content-Type': 'application/json' }
+}
+
 function hasElectronAgent(): boolean {
   return Boolean(window.electronAPI?.agentInitialize)
 }
 
 async function callDevBridge<T>(endpoint: string, body: unknown): Promise<T> {
+  if (!import.meta.env.DEV) {
+    throw new Error('Electron agent bridge is unavailable in production')
+  }
   const response = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: devBridgeHeaders(),
     body: JSON.stringify(body),
   })
   if (!response.ok) {
@@ -114,9 +126,12 @@ async function streamDevChat(
   sessionId?: string,
   images?: AgentImagePayload[]
 ): Promise<AgentChatResponse> {
+  if (!import.meta.env.DEV) {
+    throw new Error('Electron agent stream bridge is unavailable in production')
+  }
   const response = await fetch(DEV_AGENT_CHAT_STREAM, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: devBridgeHeaders(),
     body: JSON.stringify({ message, workspaceDir, sessionId, images }),
   })
   if (!response.ok || !response.body) {

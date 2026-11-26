@@ -85,9 +85,14 @@ export const MarkdownReadingView: React.FC<{
 
   const draftRows = Math.min(28, Math.max(4, draft.split('\n').length + 1))
 
+  const linkScope = useMemo(
+    () => ({ docDir: dirname(file.path), openRoot: root }),
+    [file.path, root]
+  )
+
   return (
     <div className="min-h-0 flex-1 overflow-auto bg-surface" data-testid="markdown-reading-view">
-      <MarkdownLinkScopeProvider value={{ docDir: dirname(file.path), openRoot: root }}>
+      <MarkdownLinkScopeProvider value={linkScope}>
         {/* pb 给右下角的视图切换浮层留位：滚到底时最后一行不被压住 */}
         <article
           className="file-markdown chat-markdown mx-auto w-full max-w-[64rem] px-8 pt-6 pb-12"
