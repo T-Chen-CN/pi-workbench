@@ -205,6 +205,10 @@ describe('Web 客户端主界面', () => {
     await tick()
     const after = [...document.querySelectorAll('input')] as HTMLInputElement[]
     expect(after.find((node) => node.type === 'password')?.value).toBe('sk-typed-in-test')
+    // 已有目录缓存时切回或 WS 重渲染必须把模型下拉与能力摘要一起重画出来
+    expect(document.querySelectorAll('select').length).toBeGreaterThanOrEqual(2)
+    expect(document.body.textContent).toContain('DeepSeek Flash')
+    expect(document.body.textContent).toContain('上下文 1M')
   })
 
   it('登录态过期后不再无限“正在重连”，回登录页并说明原因', async () => {

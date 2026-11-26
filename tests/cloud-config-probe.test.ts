@@ -90,6 +90,28 @@ describe('Key 探测', () => {
     if (result.ok) expect(result.warning).toContain('404')
   })
 
+  it('400 等非 2xx 错误 → 透出供应商返回的 error.message 且脱敏原始 Key', async () => {
+    stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 400,
+              message: 'User location is not supported for the API use. key=AIza-secret-123',
+            },
+          }),
+          { status: 400 }
+        )
+    )
+    const result = await probeProviderKey({ providerId: 'google', apiKey: 'AIza-secret-123' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.reason).toContain('HTTP 400')
+      expect(result.reason).toContain('User location is not supported')
+      expect(result.reason).not.toContain('AIza-secret-123')
+    }
+  })
+
   it('连不上供应商 → 放行但带警告（不因抖动拒绝有效 Key）', async () => {
     stubFetch(() => {
       throw new Error('ECONNREFUSED')

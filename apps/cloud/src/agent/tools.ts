@@ -75,6 +75,23 @@ export function createCloudToolsExtension(deps: CloudToolsDeps): ExtensionFactor
             repoOrEmpty(repos),
           ].join('\n')
         })
+        const now = (deps.now ?? Date.now)()
+        const activeAuths = deps.store
+          .listAuthorizations()
+          .filter((auth) => !auth.revokedAt && auth.expiresAt > now && auth.used < auth.quota)
+        if (activeAuths.length > 0) {
+          lines.push(
+            [
+              'Active user-confirmed authorizations:',
+              ...activeAuths.map(
+                (auth) =>
+                  `  - ${auth.id} (remaining ${auth.quota - auth.used}/${auth.quota}): ${auth.items
+                    .map((item) => `${item.deviceId} -> ${item.workspacePath}`)
+                    .join(', ')}`
+              ),
+            ].join('\n')
+          )
+        }
         return toolText(lines.join('\n\n'))
       },
     })
@@ -104,10 +121,11 @@ export function createCloudToolsExtension(deps: CloudToolsDeps): ExtensionFactor
       name: 'dispatch_task',
       label: 'Dispatch task',
       description:
-        'Dispatch a self-contained task to a device. Requires the authorizationId of a user-confirmed plan. The task runs in an isolated git worktree on that device.',
-      promptSnippet: 'dispatch_task: send one self-contained task to a device',
+        'Dispatch a self-contained task to a device. Requires a real authorizationId (auth-...) created by the user clicking the UI confirm-plan button ("确认方案并授权" on Desktop or "确认方案…" on Web); plain-text replies like "确认" do NOT create an authorization. The task runs in an isolated git worktree on that device.',
+      promptSnippet: 'dispatch_task: send one self-contained task to a device (requires UI-issued auth-... authorizationId)',
       promptGuidelines: [
-        'Always pass the authorizationId from the user-confirmed plan; dispatching without it is rejected.',
+        'Never invent or guess authorizationId (e.g. "user-confirmed"). Plain-text replies in chat cannot authorize dispatch, and there is no propose_plan tool.',
+        'If you do not yet have a valid auth-... authorizationId covering the target device and repository (from a "【已确认方案 / 授权派活】" message or list_devices), write out the plan clearly and instruct the user to click "确认方案并授权" (Desktop Cloud view) or "确认方案…" (Web chat bar), select the device and repository, and submit.',
         'The task must be self-contained: the terminal cannot see this conversation.',
         'Do not wait for the result; events will wake you when the task progresses.',
       ],

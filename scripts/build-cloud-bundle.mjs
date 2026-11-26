@@ -24,9 +24,9 @@ function run(command, args, cwd = root) {
 rmSync(stage, { recursive: true, force: true })
 mkdirSync(stage, { recursive: true })
 
-// 1) 编译产物
-run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:cloud'])
+// 1) 编译产物（先 bridge 后 cloud，确保 cloud 编译针对最新的协议与类型）
 run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:bridge'])
+run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:cloud'])
 
 // 2) 代码与静态资源
 cpSync(path.join(root, 'apps', 'cloud', 'dist'), path.join(stage, 'dist'), { recursive: true })
@@ -41,6 +41,7 @@ writeFileSync(
       private: true,
       type: 'module',
       dependencies: {
+        '@earendil-works/pi-ai': '^1.3.0',
         '@earendil-works/pi-coding-agent': '^1.3.0',
         ws: '^8.18.0',
       },

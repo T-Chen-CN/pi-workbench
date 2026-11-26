@@ -1160,8 +1160,9 @@ function renderConfigCard() {
     },
   })
 
-  // 首次进来目录还没拉过：渲染完成后补一次（此时 DOM 节点已建好，直接局部更新）
+  // 首次进来目录还没拉过则拉取；已有缓存时重渲染必须立刻把模型下拉重画进新 DOM
   if (!state.configModels || state.configModels.length === 0) void loadCatalog()
+  else paintModelField()
 
   return el('div', { class: 'card stack' }, [
     el('h3', { text: '云端模型配置' }),

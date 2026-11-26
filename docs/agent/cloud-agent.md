@@ -311,11 +311,11 @@ node apps/cloud/scripts/acceptance.mjs https://<域名>
 | 项 | 值 |
 | --- | --- |
 | 域名 / 反代 | `tchen-xiaoxiao.com` → Caddy → `127.0.0.1:8787` |
-| 代码 | `/opt/pi-cloud/releases/<ts>` + `current` 软链 |
+| 代码 | `/opt/pi-cloud/releases/<ts>` + `current` 软链（当前 `20261126103114`，回滚点 `20261124032938`） |
 | 数据 | `/var/lib/pi-cloud`（属主 `pi-cloud`） |
-| 配置 / 密钥 | `/etc/pi-cloud/env`（`0600 root:root`） |
-| 单元 | `pi-cloud.service`（`Restart=always`、`ProtectSystem=strict`、`LimitNOFILE=65536`）· `pi-cloud-backup.timer`（每日 03:20 UTC） |
-| 日志 | `journalctl -u pi-cloud` · `/var/log/caddy/pi-cloud.log`（20MiB × 5） |
+| 配置 / 密钥 | `/etc/pi-cloud/env`（`0600 root:root`）；出口代理启用 `NODE_USE_ENV_PROXY=1` + `HTTPS_PROXY=http://127.0.0.1:8118`（`NO_PROXY` 排除本机与国内供应商） |
+| 单元 | `pi-cloud.service`（`Restart=always`、`ProtectSystem=strict`、`LimitNOFILE=65536`）· `pi-warp-proxy.service`（`wireproxy` 用户态 WARP 出口，仅监听 `127.0.0.1:8118`，不改路由表）· `pi-cloud-backup.timer`（每日 03:20 UTC） |
+| 日志 | `journalctl -u pi-cloud` · `journalctl -u pi-warp-proxy` · `/var/log/caddy/pi-cloud.log`（20MiB × 5） |
 | 备份 | `/var/backups/pi-cloud/pi-cloud-<ts>.tar.gz`，留 7 天 |
 
 ## 6. 排障

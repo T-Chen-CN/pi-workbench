@@ -78,7 +78,11 @@ let cookie = ''
   const login = await call('/v1/login', post({ password: PW }))
   const setCookie = login.headers.get('set-cookie') ?? ''
   cookie = setCookie.split(';')[0]
-  ok('登录下发安全 cookie', login.status === 200 && /HttpOnly/i.test(setCookie) && /Secure/i.test(setCookie))
+  const needSecure = BASE.startsWith('https://')
+  ok(
+    '登录下发安全 cookie',
+    login.status === 200 && /HttpOnly/i.test(setCookie) && (!needSecure || /Secure/i.test(setCookie))
+  )
   ok('cookie 会话有效', (await call('/v1/me', { headers: { cookie } })).json?.authenticated === true)
   ok('无凭据读设备 401', (await call('/v1/devices')).status === 401)
   ok('弱口令被拒', (await call('/v1/setup', post({ password: '123' }))).status >= 400)
@@ -105,24 +109,46 @@ let deviceId = ''
   ok('设备清单', devices.json?.devices?.some((d) => d.id === deviceId), JSON.stringify(devices.json?.devices?.map((d) => d.name)))
 }
 
-// ---- 云端配置（设备 token 可读写，Key 只回末四位）----
+// ---- 云端配置（设备 token 可读目录与校验；传入 PI_CLOUD_ACCEPT_API_KEY 时一并验写入与掩码）----
 {
   const before = await call('/v1/cloud-config', { headers: { authorization: `Bearer ${deviceToken}` } })
   ok('设备 token 读云端配置', before.status === 200 && before.json?.configured === false, JSON.stringify(before.json))
-  const save = await call('/v1/cloud-config', {
+  const catalog = await call('/v1/cloud-config/catalog?providerId=deepseek', {
+    headers: { authorization: `Bearer ${deviceToken}` },
+  })
+  ok(
+    '拉取预设供应商模型目录',
+    catalog.status === 200 && Array.isArray(catalog.json?.models) && catalog.json.models.length > 0,
+    `count=${catalog.json?.models?.length ?? 0}`
+  )
+  const badProvider = await call('/v1/cloud-config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${deviceToken}` },
-    body: JSON.stringify({
-      provider: 'accept-provider',
-      apiUrl: 'https://api.example.com/v1',
-      model: 'accept-model',
-      apiKey: 'sk-accept-1234567890',
-    }),
+    body: JSON.stringify({ providerId: 'accept-provider', model: 'accept-model', apiKey: 'sk-accept-1234567890' }),
   })
-  ok('写入云端配置', save.status === 200, `status=${save.status}`)
-  const after = await call('/v1/cloud-config', { headers: { authorization: `Bearer ${deviceToken}` } })
-  const shown = JSON.stringify(after.json ?? {})
-  ok('Key 只回末四位', !shown.includes('sk-accept-1234567890') && shown.includes('7890'), shown.slice(0, 120))
+  ok('拒绝白名单外的供应商', badProvider.status === 400, `status=${badProvider.status}`)
+  const badModel = await call('/v1/cloud-config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${deviceToken}` },
+    body: JSON.stringify({ providerId: 'deepseek', model: 'non-existent-model', apiKey: 'sk-accept-1234567890' }),
+  })
+  ok('拒绝不在 catalog 中的模型', badModel.status === 400, `status=${badModel.status}`)
+
+  const acceptKey = process.env.PI_CLOUD_ACCEPT_API_KEY?.trim()
+  if (acceptKey) {
+    const providerId = process.env.PI_CLOUD_ACCEPT_PROVIDER?.trim() || 'deepseek'
+    const model = process.env.PI_CLOUD_ACCEPT_MODEL?.trim() || catalog.json?.models?.[0]?.id || 'deepseek-chat'
+    const save = await call('/v1/cloud-config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${deviceToken}` },
+      body: JSON.stringify({ providerId, model, apiKey: acceptKey }),
+    })
+    ok('写入云端配置', save.status === 200, `status=${save.status}`)
+    const after = await call('/v1/cloud-config', { headers: { authorization: `Bearer ${deviceToken}` } })
+    const shown = JSON.stringify(after.json ?? {})
+    const tail = acceptKey.slice(-4)
+    ok('Key 只回末四位', !shown.includes(acceptKey) && shown.includes(tail), shown.slice(0, 120))
+  }
 }
 
 // ---- 授权台账 ----

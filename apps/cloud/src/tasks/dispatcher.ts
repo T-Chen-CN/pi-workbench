@@ -934,7 +934,7 @@ function normalize(value: string): string {
 function authorizationError(code: string): string {
   switch (code) {
     case 'unknown-authorization':
-      return 'No confirmed plan authorizes this dispatch.'
+      return 'No confirmed plan authorizes this dispatch. Plain-text replies cannot create an authorization; ask the user to click "确认方案并授权" (Desktop) or "确认方案…" (Web) in the UI to generate a real authorizationId (auth-...).'
     case 'expired':
       return 'The confirmed plan has expired; ask the user to confirm again.'
     case 'revoked':

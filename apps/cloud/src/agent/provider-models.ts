@@ -54,6 +54,30 @@ export function isKnownProvider(providerId: string): boolean {
 
 export type KeyProbeResult = { ok: true; warning?: string } | { ok: false; reason: string }
 
+/** 从非 2xx 响应体提取简短可读错误信息（绝不回显原始 Key） */
+async function readProbeErrorDetail(response: Response, apiKey: string): Promise<string> {
+  try {
+    const raw = (await response.text()).slice(0, 4096)
+    let detail = ''
+    try {
+      const parsed = JSON.parse(raw) as { error?: { message?: unknown } | string; message?: unknown }
+      if (typeof parsed?.error === 'string') detail = parsed.error
+      else if (parsed?.error && typeof parsed.error.message === 'string') detail = parsed.error.message
+      else if (typeof parsed?.message === 'string') detail = parsed.message
+    } catch {
+      // 非 JSON 响应体：忽略 HTML 整页，只取简短纯文本
+      if (raw && !/^\s*</.test(raw)) detail = raw
+    }
+    const clean = (apiKey ? detail.split(apiKey).join('***') : detail)
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 160)
+    return clean
+  } catch {
+    return ''
+  }
+}
+
 /**
  * 一次性 Key 探测：拿 catalog 里的 baseUrl 请求 `/models`。
  *
@@ -81,13 +105,23 @@ export async function probeProviderKey(
   }
 
   if (response.status === 401 || response.status === 403) {
-    return { ok: false, reason: `供应商拒绝了这把 Key（HTTP ${response.status}）` }
+    const detail = await readProbeErrorDetail(response, input.apiKey)
+    return {
+      ok: false,
+      reason: detail
+        ? `供应商拒绝了这把 Key（HTTP ${response.status}）：${detail}`
+        : `供应商拒绝了这把 Key（HTTP ${response.status}）`,
+    }
   }
   if ([404, 405, 501].includes(response.status)) {
     return { ok: true, warning: `供应商不提供模型清单（HTTP ${response.status}）` }
   }
   if (!response.ok) {
-    return { ok: false, reason: `供应商返回 HTTP ${response.status}` }
+    const detail = await readProbeErrorDetail(response, input.apiKey)
+    return {
+      ok: false,
+      reason: detail ? `供应商返回 HTTP ${response.status}：${detail}` : `供应商返回 HTTP ${response.status}`,
+    }
   }
   return { ok: true }
 }
