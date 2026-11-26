@@ -75,8 +75,9 @@
 
 - 状态机：`queued → assigned → running → waiting_human ⇄ running → done | failed | cancelled`；
   终态先落者胜，后到的终态只作 `ignored` 附注。
-- 单设备并发 1；终态后自动补投下一张（FIFO）；`queued` 60 秒未接单、`waiting_human` 2 小时未回答 → 超时收敛；
+- 单设备并发 1、全站活跃工单并发上限 8（`CLOUD_MAX_CONCURRENT_SESSIONS`，A-21 / D-15）：超出上限保持 `queued`（`dispatchedAt: null`，不计 ACK 超时）并推送可读排队提示；任意工单进终态后按 FIFO 补投同设备与全站队首。`queued` 60 秒未接单、`waiting_human` 2 小时未回答 → 超时收敛；
   **设备离线 → 未完成工单直接 `cancelled(device-offline)`，不续跑**（F-21）。
+- **停滞看门狗（C-02）**：终端跟踪 `tool_start` / `tool_update` / `tool_end`，同一工具连续 10 分钟无输出增量上报 `task_stalled`（同一停滞只报一次），工单运行期每 60 s 发 `task_heartbeat`（只刷新设备在线时间，不重置静默计时）；云端 `sweepTimeouts()` 对 20 分钟无进度事件的 `running` 工单主动唤醒一轮 `get_task` 检查（同一静默只报一次）。
 - 幂等：`idempotencyKey`（`workUnitId` + 内容摘要），重复派活返回同一张工单。
 - 派活强制校验（G9）：`authorizationId` × 设备 × 仓库（路径归一化后比较）× 额度 × 有效期。
   同一工作单元追加的工单不扣额度（O-06）。已结束 / 正在回收的单元拒绝新工单（`unit-closed`）。

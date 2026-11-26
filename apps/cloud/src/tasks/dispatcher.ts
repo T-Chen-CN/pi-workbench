@@ -11,7 +11,9 @@
  */
 
 import {
+  CLOUD_MAX_CONCURRENT_SESSIONS,
   CLOUD_QUEUED_ACK_WINDOW_MS,
+  CLOUD_TASK_SILENCE_CHECK_MS,
   CLOUD_WAITING_HUMAN_TIMEOUT_MS,
   isTerminalTaskStatus,
   type CloudChangedFile,
@@ -77,6 +79,10 @@ export function toUnitView(unit: UnitRecord): CloudUnitView {
 export class TaskDispatcher {
   /** 单设备在途已下发但尚未收到 assigned 的工单（防并发 tryDispatch 同时下发多条 queued） */
   private inFlightDispatches = new Map<string, string>()
+  /** 同一工具停滞只报一次（收到新里程碑/终态后清除，C-02） */
+  private reportedToolStalls = new Set<string>()
+  /** 同一静默窗口只唤醒一次：记录已告警时的 lastEventAt（C-02） */
+  private reportedSilenceAt = new Map<string, number>()
 
   constructor(
     private readonly deps: {
@@ -85,9 +91,43 @@ export class TaskDispatcher {
       /** 把工单事件投进云端会话（事件唤醒）；由 agent 层实现 */
       wake: (payload: CloudTaskEventPayload) => Promise<void> | void
       logger: DispatcherLogger
+      /** 全局活跃工单并发上限（D-15 / A-21，默认 8） */
+      maxConcurrentTasks?: number
+      /** 云端静默巡检阈值（C-02，默认 20 分钟） */
+      silenceCheckMs?: number
       now?: () => number
     }
   ) {}
+
+  private maxConcurrent(): number {
+    return Math.max(1, this.deps.maxConcurrentTasks ?? CLOUD_MAX_CONCURRENT_SESSIONS)
+  }
+
+  private silenceCheckMs(): number {
+    return Math.max(1_000, this.deps.silenceCheckMs ?? CLOUD_TASK_SILENCE_CHECK_MS)
+  }
+
+  /** 全站当前活跃或已下发待 ACK 的工单总数（D-15 / A-21） */
+  private activeGlobalCount(excludingTaskId?: string): number {
+    const ids = new Set<string>()
+    for (const task of this.deps.store.listTasks()) {
+      if (task.id === excludingTaskId) continue
+      if (['assigned', 'running', 'waiting_human'].includes(task.status)) {
+        ids.add(task.id)
+      }
+    }
+    for (const inFlightId of this.inFlightDispatches.values()) {
+      if (inFlightId !== excludingTaskId) ids.add(inFlightId)
+    }
+    return ids.size
+  }
+
+  private clearStallMarkers(taskId: string): void {
+    this.reportedSilenceAt.delete(taskId)
+    for (const key of [...this.reportedToolStalls]) {
+      if (key.startsWith(`${taskId}:`)) this.reportedToolStalls.delete(key)
+    }
+  }
 
   private now(): number {
     return this.deps.now?.() ?? Date.now()
@@ -243,6 +283,21 @@ export class TaskDispatcher {
       )
       return
     }
+    // D-15 / A-21：全站并发上限保护——超出上限保持 queued（dispatchedAt 仍为 null，不计 ACK 超时）并提示
+    const limit = this.maxConcurrent()
+    if (this.activeGlobalCount(task.id) >= limit) {
+      this.deps.logger.info(
+        `[cloud] task ${task.id} queued: global concurrency limit (${limit}) reached`
+      )
+      this.deps.hub.publish({
+        type: 'notice',
+        level: 'info',
+        text: `已达并发上限（${limit} 个工单执行中），${task.id}（${task.spec.title}）已进入排队等待`,
+        at: this.now(),
+        key: `concurrency-limit-${task.id}`,
+      })
+      return
+    }
     if (!this.deps.hub.isDeviceOnline(deviceId)) return
     // 同步占位，防止并发 dispatch 在 await saveTask 期间同时发第二张工单
     this.inFlightDispatches.set(deviceId, task.id)
@@ -306,6 +361,30 @@ export class TaskDispatcher {
       case 'heartbeat':
         await this.deps.store.updateDevice(deviceId, { lastSeenAt: frame.at })
         return
+      case 'task_heartbeat':
+        // 工单运行期 60s 心跳：只更新设备在线活跃时间，不改 task.progress.lastEventAt（防止洗白 20 分钟静默巡检，C-02）
+        await this.deps.store.updateDevice(deviceId, { lastSeenAt: frame.at || this.now() })
+        return
+      case 'task_stalled': {
+        const task = this.deps.store.findTask(frame.taskId)
+        if (!task || task.spec.deviceId !== deviceId || isTerminalTaskStatus(task.status)) return
+        const toolName = typeof frame.toolName === 'string' && frame.toolName ? frame.toolName : undefined
+        const stallKey = `${task.id}:${toolName ?? ''}`
+        if (this.reportedToolStalls.has(stallKey)) return
+        this.reportedToolStalls.add(stallKey)
+        const minutes = Math.max(1, Math.round((Number(frame.idleMs) || 0) / 60_000))
+        const label = toolName ? `工具 ${toolName}` : '当前操作'
+        const summary = `工单 ${task.id} 的${label}已 ${minutes} 分钟无输出增量，可能已停滞；请用 get_task 查看并告知用户是否需要停止。`
+        this.deps.hub.publish({
+          type: 'notice',
+          level: 'warn',
+          text: `工单 ${task.id} 可能停滞：${label}已 ${minutes} 分钟无输出`,
+          at: this.now(),
+          key: `task-stalled-${stallKey}`,
+        })
+        await this.wake(task, 'stalled', summary)
+        return
+      }
       case 'workspaces':
         await this.deps.store.updateDevice(deviceId, {
           workspaces: frame.workspaces,
@@ -322,6 +401,7 @@ export class TaskDispatcher {
         if (!frame.milestone || typeof frame.milestone.text !== 'string') return
         const task = this.deps.store.findTask(frame.taskId)
         if (!task || task.spec.deviceId !== deviceId || isTerminalTaskStatus(task.status)) return
+        this.clearStallMarkers(task.id)
         const changes = frame.milestone.changedFiles
         const updated: CloudTaskSnapshot = {
           ...task,
@@ -709,6 +789,21 @@ export class TaskDispatcher {
         this.finish(moved.task)
         await this.wake(moved.task, 'failed', '等待用户决定超时，工单已失败')
         await this.dispatchNextFor(moved.task.spec.deviceId)
+        continue
+      }
+      // C-02：running 工单 20 分钟无进度事件 → 主动唤醒一轮检查（同一静默只报一次）
+      if (task.status === 'running') {
+        const lastEventAt = task.progress.lastEventAt || task.startedAt || task.createdAt
+        const silentMs = now - lastEventAt
+        if (silentMs >= this.silenceCheckMs() && this.reportedSilenceAt.get(task.id) !== lastEventAt) {
+          this.reportedSilenceAt.set(task.id, lastEventAt)
+          const minutes = Math.max(1, Math.round(silentMs / 60_000))
+          await this.wake(
+            task,
+            'stalled',
+            `工单 ${task.id} 已超过 ${minutes} 分钟无进度事件，请调用 get_task 主动检查状态并向用户汇报。`
+          )
+        }
       }
     }
   }
@@ -741,6 +836,7 @@ export class TaskDispatcher {
   // ------------------------------ 内部 ------------------------------
 
   private finish(task: CloudTaskSnapshot): void {
+    this.clearStallMarkers(task.id)
     this.deps.hub.dropDeviceTask(task.spec.deviceId, task.id)
     this.publishTask(task)
   }
@@ -781,8 +877,24 @@ export class TaskDispatcher {
       const unit = this.deps.store.findUnit(task.spec.workUnitId)
       return !unit || (unit.closedAt === null && !unit.closeRequestedAt)
     })
-    if (!next) return
-    await this.tryDispatch(next)
+    if (next) await this.tryDispatch(next)
+    // 全站并发槽位空出后，顺手按 FIFO 补投其他在线设备的排队工单（A-21）
+    await this.dispatchNextQueued()
+  }
+
+  private async dispatchNextQueued(): Promise<void> {
+    if (this.activeGlobalCount() >= this.maxConcurrent()) return
+    const queued = this.deps.store
+      .listTasks()
+      .filter((task) => task.status === 'queued' && task.dispatchedAt === null)
+      .sort((a, b) => a.createdAt - b.createdAt)
+    for (const task of queued) {
+      if (this.activeGlobalCount() >= this.maxConcurrent()) break
+      const unit = this.deps.store.findUnit(task.spec.workUnitId)
+      if (unit && (unit.closedAt !== null || unit.closeRequestedAt)) continue
+      if (!this.deps.hub.isDeviceOnline(task.spec.deviceId)) continue
+      await this.tryDispatch(task)
+    }
   }
 
   private taskSeq = 0

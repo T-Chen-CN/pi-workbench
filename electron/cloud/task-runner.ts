@@ -14,13 +14,15 @@ import { existsSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
-import type {
-  CloudChangedFile,
-  CloudSecretHit,
-  CloudTaskMilestone,
-  CloudTaskResult,
-  CloudTaskSpec,
-  CloudTaskStatus,
+import {
+  CLOUD_TASK_HEARTBEAT_MS,
+  CLOUD_TOOL_STALL_MS,
+  type CloudChangedFile,
+  type CloudSecretHit,
+  type CloudTaskMilestone,
+  type CloudTaskResult,
+  type CloudTaskSpec,
+  type CloudTaskStatus,
 } from 'pi-bridge'
 import { getBridgeEntryUrl } from '../app-paths.js'
 import { readJsonWithBackup, writeJsonAtomic, writeJsonAtomicAsync } from '../atomic-json.js'
@@ -128,6 +130,14 @@ export interface CloudTaskRunnerDeps {
   onWorktree: (taskId: string, unitId: string, worktreePath: string, branch?: string) => void
   onMilestone: (taskId: string, milestone: CloudTaskMilestone) => void
   onQuestion: (taskId: string, questionId: string, text: string) => void
+  /** 工具静默超阈值时上报停滞（C-02：同一次停滞只报一次） */
+  onStalled?: (taskId: string, info: { toolName?: string; idleMs: number; at: number }) => void
+  /** 工单运行期 60s 心跳（C-02；普通心跳不重置工具停滞计时） */
+  onTaskHeartbeat?: (taskId: string, at: number) => void
+  /** 可覆盖默认阈值（测试用） */
+  toolStallMs?: number
+  taskHeartbeatMs?: number
+  now?: () => number
   onResult: (taskId: string, result: CloudTaskResult) => void
   onFailed: (
     taskId: string,
@@ -163,6 +173,12 @@ interface UnitRecord {
   createdAt: number
 }
 
+interface RunningToolState {
+  toolName: string
+  lastOutputAt: number
+  reported: boolean
+}
+
 interface ActiveTask {
   id: string
   spec: CloudTaskSpec
@@ -175,6 +191,10 @@ interface ActiveTask {
   /** 最近一次进度上报时间（节流用） */
   lastMilestoneAt: number
   changed: Map<string, CloudChangedFile>
+  /** 当前运行中的工具（C-02 停滞检测：只认 tool_update 为输出增量） */
+  runningTools: Map<string, RunningToolState>
+  stallTimer?: NodeJS.Timeout
+  heartbeatTimer?: NodeJS.Timeout
   questionId?: string
   /** `ask_cloud` 之后本轮要停：回答到达后重新起一轮 */
   awaitingAnswer: boolean
@@ -421,6 +441,7 @@ export class CloudTaskRunner {
           const questionId = `q-${Date.now().toString(36)}`
           task.questionId = questionId
           task.awaitingAnswer = true
+          this.stopTaskWatchdogs(task)
           this.deps.onQuestion(task.id, questionId, question)
           this.setStatus(task.id, 'waiting_human')
           return {
@@ -585,9 +606,10 @@ export class CloudTaskRunner {
         worktreePath: unit.worktreePath,
         sessionId,
         status: 'assigned',
-        startedAt: Date.now(),
+        startedAt: this.now(),
         lastMilestoneAt: 0,
         changed: new Map(),
+        runningTools: new Map(),
         awaitingAnswer: false,
       }
       this.active.set(taskId, task)
@@ -610,7 +632,8 @@ export class CloudTaskRunner {
       }
 
       this.setStatus(taskId, 'running')
-      this.deps.onMilestone(taskId, { kind: 'accepted', text: '已接单，开始执行', at: Date.now() })
+      this.startTaskWatchdogs(task)
+      this.deps.onMilestone(taskId, { kind: 'accepted', text: '已接单，开始执行', at: this.now() })
 
       await this.runTurn(task, spec, buildTaskPrompt(spec, unit.worktreePath))
     } finally {
@@ -695,10 +718,64 @@ export class CloudTaskRunner {
     }
   }
 
+  private now(): number {
+    return this.deps.now?.() ?? Date.now()
+  }
+
+  /** 启动工单运行期看门狗：工具静默检测（10 分钟）+ 工单心跳（60 s）（C-02） */
+  private startTaskWatchdogs(task: ActiveTask): void {
+    this.stopTaskWatchdogs(task)
+    const stallMs = Math.max(50, this.deps.toolStallMs ?? CLOUD_TOOL_STALL_MS)
+    const pollMs = Math.min(30_000, Math.max(25, Math.floor(stallMs / 4)))
+    task.stallTimer = setInterval(() => {
+      if (this.disposed || task.awaitingAnswer || task.status !== 'running') return
+      const now = this.now()
+      for (const tool of task.runningTools.values()) {
+        if (tool.reported) continue
+        const idleMs = now - tool.lastOutputAt
+        if (idleMs >= stallMs) {
+          tool.reported = true
+          this.deps.onStalled?.(task.id, { toolName: tool.toolName, idleMs, at: now })
+        }
+      }
+    }, pollMs)
+    task.stallTimer.unref?.()
+
+    const heartbeatMs = Math.max(50, this.deps.taskHeartbeatMs ?? CLOUD_TASK_HEARTBEAT_MS)
+    task.heartbeatTimer = setInterval(() => {
+      if (this.disposed || task.awaitingAnswer || task.status !== 'running') return
+      this.deps.onTaskHeartbeat?.(task.id, this.now())
+    }, heartbeatMs)
+    task.heartbeatTimer.unref?.()
+  }
+
+  private stopTaskWatchdogs(task: ActiveTask): void {
+    if (task.stallTimer) {
+      clearInterval(task.stallTimer)
+      task.stallTimer = undefined
+    }
+    if (task.heartbeatTimer) {
+      clearInterval(task.heartbeatTimer)
+      task.heartbeatTimer = undefined
+    }
+    task.runningTools.clear()
+  }
+
   private onTrace(task: ActiveTask, event: any): void {
     if (!event || this.disposed) return
     try {
-      if (event.type === 'tool_end' && event.status === 'success') {
+      const toolKey = String(event.toolCallId ?? event.toolName ?? '')
+      if (event.type === 'tool_update') {
+        const running = toolKey ? task.runningTools.get(toolKey) : undefined
+        if (running) {
+          running.lastOutputAt = this.now()
+          running.reported = false
+        }
+        return
+      }
+      if (event.type === 'tool_end') {
+        if (toolKey) task.runningTools.delete(toolKey)
+        if (event.status !== 'success') return
         const filePath = typeof event.filePath === 'string' ? event.filePath : ''
         if (filePath && (event.toolName === 'write' || event.toolName === 'edit')) {
           this.noteChanged(task, filePath, 'modified')
@@ -707,13 +784,20 @@ export class CloudTaskRunner {
           this.maybeMilestone(task, {
             kind: 'progress',
             text: `执行命令：${truncate(String(event.resultPreview ?? ''), 80) || event.toolName}`,
-            at: Date.now(),
+            at: this.now(),
           })
         }
         return
       }
       if (event.type === 'tool_start') {
         const toolName = String(event.toolName ?? '')
+        if (toolKey) {
+          task.runningTools.set(toolKey, {
+            toolName: toolName || 'tool',
+            lastOutputAt: this.now(),
+            reported: false,
+          })
+        }
         if (toolName === 'write' || toolName === 'edit') {
           const args = String(event.argsSummary ?? '')
           const match = args.match(/[\\/]?([\w.-]+\.[A-Za-z0-9]+)/)
@@ -722,7 +806,7 @@ export class CloudTaskRunner {
         this.maybeMilestone(task, {
           kind: 'progress',
           text: `${toolName} ${truncate(String(event.argsSummary ?? ''), 100)}`.trim(),
-          at: Date.now(),
+          at: this.now(),
         })
       }
     } catch (error) {
@@ -784,6 +868,7 @@ export class CloudTaskRunner {
     } else if (spec.commit && !commit) {
       result.notes = '本单要求提交，但工作树里没有新提交'
     }
+    this.stopTaskWatchdogs(task)
     this.active.delete(task.id)
     this.cancelRequested.delete(task.id)
     this.persistedTasks.delete(task.id)
@@ -792,6 +877,7 @@ export class CloudTaskRunner {
   }
 
   private async finishFailed(task: ActiveTask, error: string): Promise<void> {
+    this.stopTaskWatchdogs(task)
     const changedFiles = await this.collectChangedFiles(task).catch(() => [] as CloudChangedFile[])
     const worktreeClean = await this.isWorktreeClean(task.worktreePath)
     const secretHits = await scanWorktreeSecrets(
@@ -953,6 +1039,7 @@ export class CloudTaskRunner {
     } catch (error) {
       this.deps.logger.warn('[Cloud Task] abort failed:', error)
     }
+    this.stopTaskWatchdogs(task)
     // abort 之后再判：停止了但树是干净的，服务端可以直接自动回收（A-43）
     const worktreeClean = await this.isWorktreeClean(task.worktreePath)
     this.active.delete(taskId)
@@ -970,6 +1057,7 @@ export class CloudTaskRunner {
     task.awaitingAnswer = false
     task.questionId = undefined
     this.setStatus(taskId, 'running')
+    this.startTaskWatchdogs(task)
     try {
       const outcome = await this.manager.chat(
         task.sessionId,
@@ -1027,6 +1115,7 @@ export class CloudTaskRunner {
   async dispose(): Promise<void> {
     this.disposed = true
     for (const task of [...this.active.values()]) {
+      this.stopTaskWatchdogs(task)
       try {
         await this.manager?.abort?.(task.sessionId)
       } catch {

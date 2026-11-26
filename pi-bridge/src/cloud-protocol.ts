@@ -74,8 +74,14 @@ export const CLOUD_EVENT_THROTTLE_MS = 2_000
 /** 客户端通道 outbox 上限：超过就丢掉旧增量，resume 时回 snapshot */
 export const CLOUD_OUTBOX_MAX_ENTRIES = 2_000
 export const CLOUD_OUTBOX_MAX_AGE_MS = 24 * 60 * 60 * 1000
-/** 单进程并发会话上限（D-15：超出排队而不是全放） */
+/** 单进程并发会话/活跃工单上限（D-15 / A-21：超出排队而不是全放） */
 export const CLOUD_MAX_CONCURRENT_SESSIONS = 8
+/** 终端工单工具静默阈值：超过后上报 task_stalled（C-02） */
+export const CLOUD_TOOL_STALL_MS = 10 * 60 * 1000
+/** 云端工单静默巡检阈值：超过后主动唤醒一轮检查（C-02） */
+export const CLOUD_TASK_SILENCE_CHECK_MS = 20 * 60 * 1000
+/** 终端运行期工单心跳间隔（C-02） */
+export const CLOUD_TASK_HEARTBEAT_MS = 60 * 1000
 /** 客户端连接超时：把“静默被墙”变成可读错误（F-43 / A-19） */
 export const CLOUD_CONNECT_TIMEOUT_MS = 8_000
 
@@ -160,6 +166,8 @@ export const DEVICE_TO_SERVER_TYPES: ReadonlySet<string> = new Set([
   'task_worktree',
   'task_milestone',
   'task_question',
+  'task_stalled',
+  'task_heartbeat',
   'task_result',
   'task_failed',
   'task_interrupted',
@@ -555,6 +563,14 @@ export type DeviceToServerFrame =
     } & FrameBase)
   | ({ type: 'task_milestone'; taskId: string; milestone: CloudTaskMilestone } & FrameBase)
   | ({ type: 'task_question'; taskId: string; questionId: string; text: string; at: number } & FrameBase)
+  | ({
+      type: 'task_stalled'
+      taskId: string
+      toolName?: string
+      idleMs: number
+      at: number
+    } & FrameBase)
+  | ({ type: 'task_heartbeat'; taskId: string; at: number } & FrameBase)
   | ({ type: 'task_result'; taskId: string; result: CloudTaskResult; at: number } & FrameBase)
   | ({
       type: 'task_failed'
@@ -619,6 +635,7 @@ export type CloudTaskEventKind =
   | 'accepted'
   | 'milestone'
   | 'question'
+  | 'stalled'
   | 'done'
   | 'failed'
   | 'cancelled'

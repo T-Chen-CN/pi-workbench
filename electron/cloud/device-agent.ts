@@ -122,6 +122,15 @@ export class DeviceAgent {
       onMilestone: (taskId, milestone) => this.send({ type: 'task_milestone', taskId, milestone }),
       onQuestion: (taskId, questionId, text) =>
         this.send({ type: 'task_question', taskId, questionId, text, at: Date.now() }),
+      onStalled: (taskId, info) =>
+        this.send({
+          type: 'task_stalled',
+          taskId,
+          toolName: info.toolName,
+          idleMs: info.idleMs,
+          at: info.at,
+        }),
+      onTaskHeartbeat: (taskId, at) => this.send({ type: 'task_heartbeat', taskId, at }),
       onResult: (taskId, result) => {
         this.running.delete(taskId)
         this.send({ type: 'task_result', taskId, result, at: Date.now() })
