@@ -45,6 +45,22 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
     promptGuidelines: [],
     execute: async () => ({ content: [{ type: 'text', text: '' }] }),
   }),
+  createBashToolDefinition: () => ({
+    name: 'bash',
+    label: 'bash',
+    description: 'Run bash',
+    parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+    promptGuidelines: [],
+    execute: async () => ({ content: [{ type: 'text', text: '' }] }),
+  }),
+  createPowerShellToolDefinition: () => ({
+    name: 'powershell',
+    label: 'powershell',
+    description: 'Run PowerShell',
+    parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+    promptGuidelines: [],
+    execute: async () => ({ content: [{ type: 'text', text: '' }] }),
+  }),
   SessionManager: {
     continueRecent: sdk.continueRecent,
     create: sdk.sessionCreate,

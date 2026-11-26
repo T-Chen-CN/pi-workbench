@@ -7,6 +7,8 @@
 
 import {
   createAgentSession,
+  createBashToolDefinition,
+  createPowerShellToolDefinition,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
@@ -15,6 +17,7 @@ import {
   type ExtensionFactory,
   type ResourceLoader,
   type SessionEntry,
+  type ToolDefinition,
 } from '@earendil-works/pi-coding-agent'
 import type { Api, Model, ThinkingLevel } from '@earendil-works/pi-ai'
 import * as path from 'path'
@@ -39,6 +42,25 @@ import {
 } from './plan.js'
 
 export type { PlanStep, PlanStepStatus, PlanStatus, StructuredPlan }
+
+const AGENT_SHELL_SENSITIVE_KEYS = new Set([
+  'PI_WORKBENCH_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+])
+const AGENT_SHELL_SENSITIVE_PREFIXES = ['PI_WORKBENCH_']
+
+/** 清洗 Agent 派生 shell 子进程的敏感环境变量（Windows 大小写不敏感），防止联网搜索 Key 经 bash 暴露 */
+export function sanitizeAgentShellEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const sanitized: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(env)) {
+    const upper = key.toUpperCase()
+    if (AGENT_SHELL_SENSITIVE_KEYS.has(upper)) continue
+    if (AGENT_SHELL_SENSITIVE_PREFIXES.some((prefix) => upper.startsWith(prefix))) continue
+    sanitized[key] = value
+  }
+  return sanitized
+}
 import {
   SessionExtrasStore,
   emptyExtras,
@@ -186,7 +208,8 @@ function effectiveLimits(model: { contextWindow?: number; maxTokens?: number }):
 function thinkingLevelsOf(model: { thinkingLevelMap?: Record<string, unknown> }): string[] {
   const map = model.thinkingLevelMap
   if (!map) return [...THINKING_LEVELS]
-  return THINKING_LEVELS.filter((level) => map[level] !== null && map[level] !== undefined).map(String)
+  // pi-ai 稀疏表语义：只有显式 null 表示该档禁用，缺失键视为沿用默认支持
+  return THINKING_LEVELS.filter((level) => map[level] !== null).map(String)
 }
 /** 单次工具审批的等待上限；超时按拒绝处理（fail-closed） */
 export const APPROVAL_TIMEOUT_MS = 120_000
@@ -1731,13 +1754,12 @@ export class AgentManager {
   private buildExtensionFactories(input: {
     id: string
     config: AgentConfig
-    root: string
     sessionManager: SessionManager
     planContext: { runtime: SessionRuntime | null }
     runtimeRef: { current: SessionRuntime | null }
     fallbackPermission: SessionPermission
   }): ExtensionFactory[] {
-    const { id, config, root, sessionManager, planContext, runtimeRef, fallbackPermission } = input
+    const { id, config, sessionManager, planContext, runtimeRef, fallbackPermission } = input
     const toggles = config.builtinExtensions ?? {}
     const factories: ExtensionFactory[] = []
 
@@ -1745,7 +1767,8 @@ export class AgentManager {
       factories.push(
         createApprovalExtension(
           {
-            workspaceDir: root,
+            // 必须传主工作区根路径而非链接工作树路径：渲染层按主工作区路径路由审批卡与取消审批
+            workspaceDir: config.workspaceDir,
             logger: this.logger,
             requestApproval: (request) => this.requestToolApproval(request),
             isSwitchPending: () => this.pendingRoots.has(id),
@@ -1914,18 +1937,22 @@ export class AgentManager {
         restoredPendingTitle = extras.title
       }
     }
-    const settingsManager = SettingsManager.create(config.workspaceDir, this.agentDir)
+    // 禁止自动信任工作区内的 .pi/settings.json 与 .pi/extensions/*（防打开任意仓库即触发主进程 RCE）；
+    // 应用内置扩展一律通过 additionalExtensionPaths 与 extensionFactories 显式白名单注入。
+    const settingsManager = SettingsManager.create(config.workspaceDir, this.agentDir, {
+      projectTrusted: false,
+    })
     const resourceLoader = new DefaultResourceLoader({
       cwd: root,
       agentDir: this.agentDir,
       settingsManager,
+      noExtensions: true,
       additionalExtensionPaths: config.webAccessExtensionPaths?.length
         ? config.webAccessExtensionPaths
         : undefined,
       extensionFactories: this.buildExtensionFactories({
         id,
         config,
-        root,
         sessionManager,
         planContext,
         runtimeRef,
@@ -1945,6 +1972,26 @@ export class AgentManager {
     }
     if (webAccessVersion) this.lastWebAccessVersion = webAccessVersion
 
+    // Agent 派生 shell 子进程必须清洗应用内部敏感环境变量（尤其是联网搜索 Key），防止模型读取 process.env 外泄
+    const sanitizeShellSpawn = <T extends { env: NodeJS.ProcessEnv }>(ctx: T): T => ({
+      ...ctx,
+      env: sanitizeAgentShellEnv(ctx.env),
+    })
+    const customTools: ToolDefinition<any, any>[] = [
+      createReadWithDocumentsDefinition({
+        cwd: root,
+        readDocument: config.readDocument,
+      }),
+      createBashToolDefinition(root, { spawnHook: sanitizeShellSpawn }) as unknown as ToolDefinition<any, any>,
+      ...(process.platform === 'win32'
+        ? [
+            createPowerShellToolDefinition(root, {
+              spawnHook: sanitizeShellSpawn,
+            }) as unknown as ToolDefinition<any, any>,
+          ]
+        : []),
+    ]
+
     const sessionPromise = createAgentSession({
       cwd: root,
       agentDir: this.agentDir,
@@ -1953,14 +2000,8 @@ export class AgentManager {
       sessionManager,
       settingsManager,
       resourceLoader,
-      // 同名 `read` 覆盖内置定义：文档（pdf/docx/xlsx/pptx…）走主进程抽取，
-      // 其余原样委托内置 read。未注入 readDocument 时这里是内置定义本身。
-      customTools: [
-        createReadWithDocumentsDefinition({
-          cwd: root,
-          readDocument: config.readDocument,
-        }),
-      ],
+      // 同名 `read` / `bash` / `powershell` 覆盖内置定义：文档抽取 + 子进程敏感环境变量清洗
+      customTools,
     })
     const sessionOutcome = await withTimeoutResult(
       sessionPromise,
@@ -1980,6 +2021,19 @@ export class AgentManager {
         })
         .catch(() => undefined)
       throw new Error(`Agent session creation timed out after ${INIT_TIMEOUT_MS}ms`)
+    }
+
+    // 必须调用 bindExtensions 触发扩展生命周期（session_start / resources_discover / session_shutdown），
+    // 否则链接工作树的技能/模板发现与 pi-web-access 临时目录清理均不会运行。
+    if (typeof sessionOutcome.value.session.bindExtensions === 'function') {
+      await sessionOutcome.value.session.bindExtensions({
+        onError: (err) => {
+          this.logger.warn(
+            `[Agent Manager] Extension error (${err.extensionPath}/${err.event}):`,
+            err.error
+          )
+        },
+      })
     }
 
     const header = sessionManager.getHeader()
@@ -2112,11 +2166,23 @@ export class AgentManager {
     return creation
   }
 
-  /** 会话文件按 id 查找；不依赖 header cwd（工作树会话的 header 可能仍是旧路径） */
+  /** 会话文件按 id 查找，同时强制校验归属当前工作区（防跨工作区打开/改名/删除共享 sessionDir 下的他人会话） */
   private async findSessionFile(sessionId: string): Promise<string | null> {
+    const config = this.config
+    if (!config) return null
     try {
       const infos = await SessionManager.listAll(this.sessionDir)
-      return infos.find((info) => info.id === sessionId)?.path ?? null
+      const matched = infos.find((info) => info.id === sessionId)
+      if (!matched) return null
+      if (config.isSessionOfWorkspace) {
+        if (!config.isSessionOfWorkspace(matched.id, matched.cwd)) return null
+      } else {
+        const workspaceRoot = path.resolve(config.workspaceDir)
+        const infoCwd = matched.cwd ? path.resolve(matched.cwd) : workspaceRoot
+        const norm = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p)
+        if (norm(infoCwd) !== norm(workspaceRoot)) return null
+      }
+      return matched.path
     } catch (error) {
       this.logger.warn('[Agent Manager] Failed to locate session file:', error)
       return null

@@ -30,8 +30,12 @@ export function createApprovalExtension(
   onAlwaysAllow: (category: ToolCategory) => void | Promise<void>
 ): ExtensionFactory {
   return (pi) => {
-    pi.on('tool_call', async (event: any) => {
+    pi.on('tool_call', async (event: any, ctx?: { signal?: AbortSignal }) => {
       try {
+        const signal = ctx?.signal
+        if (signal?.aborted) {
+          return { block: true, reason: 'Tool call was aborted.' }
+        }
         const toolName = String(event?.toolName ?? '')
         const args = event?.input ?? event?.args ?? {}
         const category = categorizeTool(toolName)
@@ -82,7 +86,7 @@ export function createApprovalExtension(
           expiresAt: Date.now() + APPROVAL_TIMEOUT_MS,
         }
 
-        const decision = await context.requestApproval(request)
+        const decision = await raceApprovalWithAbort(context.requestApproval(request), signal)
         if (!decision || typeof decision.action !== 'string') {
           return { block: true, reason: 'Tool approval failed closed (missing decision).' }
         }
@@ -114,4 +118,31 @@ export function createApprovalExtension(
       }
     })
   }
+}
+
+/** 审批挂起期间若会话被 abort，必须立即解除阻塞并 fail-closed 拒绝，否则会卡死 abort/shutdown */
+function raceApprovalWithAbort(
+  pending: Promise<ApprovalDecision>,
+  signal?: AbortSignal
+): Promise<ApprovalDecision> {
+  if (!signal) return pending
+  if (signal.aborted) {
+    return Promise.resolve({ action: 'deny', reason: 'Tool call was aborted.' })
+  }
+  return new Promise<ApprovalDecision>((resolve, reject) => {
+    const onAbort = () => {
+      resolve({ action: 'deny', reason: 'Tool call was aborted.' })
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    pending.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      }
+    )
+  })
 }

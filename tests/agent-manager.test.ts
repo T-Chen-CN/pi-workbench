@@ -41,12 +41,28 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
     }
   },
   SettingsManager: { create: () => ({}) },
-  // 内置 read 定义由本仓库扩展（文档能力），测试里给个最小替身
+  // 内置 read / bash / powershell 定义由本仓库包装，测试里给最小替身
   createReadToolDefinition: () => ({
     name: 'read',
     label: 'read',
     description: 'Read a file',
     parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    promptGuidelines: [],
+    execute: async () => ({ content: [{ type: 'text', text: '' }] }),
+  }),
+  createBashToolDefinition: () => ({
+    name: 'bash',
+    label: 'bash',
+    description: 'Run bash',
+    parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+    promptGuidelines: [],
+    execute: async () => ({ content: [{ type: 'text', text: '' }] }),
+  }),
+  createPowerShellToolDefinition: () => ({
+    name: 'powershell',
+    label: 'powershell',
+    description: 'Run PowerShell',
+    parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
     promptGuidelines: [],
     execute: async () => ({ content: [{ type: 'text', text: '' }] }),
   }),
@@ -2843,7 +2859,16 @@ describe('model capabilities', () => {
       input: ['text', 'image'],
       contextWindow: 128_000,
       maxTokens: 65_536,
-      thinkingLevelMap: { low: 'low', high: 'high', max: 'max' },
+      // pi-ai 稀疏表语义：显式 null 表示禁用该思考档位
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: 'low',
+        medium: null,
+        high: 'high',
+        xhigh: null,
+        max: 'max',
+      },
     }
     sdk.modelRuntimeCreate.mockResolvedValue({
       getModel: vi.fn(() => flash),
