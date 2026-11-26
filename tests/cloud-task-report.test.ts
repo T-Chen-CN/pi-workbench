@@ -12,9 +12,13 @@ import { buildTaskEventMessage } from 'pi-bridge'
 import {
   annotateChangedFiles,
   classifyAttentionPath,
+  collectTaskDiff,
+  sanitizeDiffExcerpt,
   scanDiffForSecrets,
   scanWorktreeSecrets,
 } from '../electron/cloud/task-report'
+import { createCloudToolsExtension } from '../apps/cloud/src/agent/tools'
+import { CloudStore } from '../apps/cloud/src/store/store'
 
 const execFileAsync = promisify(execFile)
 
@@ -128,4 +132,136 @@ describe('scanDiffForSecrets / scanWorktreeSecrets（F-36 / A-29）', () => {
       await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined)
     }
   }, 20_000)
+})
+
+describe('C-03b：脱敏 diff 采集与云端 get_task 按需拉取', () => {
+  it('sanitizeDiffExcerpt 跳过 .env* 与 lockfile，脱敏密钥行并按字节上限截断', () => {
+    const fakeKey = ['sk-proj-', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456'].join('')
+    const raw = [
+      'diff --git a/.env.local b/.env.local',
+      '--- a/.env.local',
+      '+++ b/.env.local',
+      '@@ -0,0 +1,1 @@',
+      '+SECRET=super-secret-env',
+      'diff --git a/package-lock.json b/package-lock.json',
+      '--- a/package-lock.json',
+      '+++ b/package-lock.json',
+      '@@ -1,1 +1,1 @@',
+      '+{"lock":true}',
+      'diff --git a/src/app.ts b/src/app.ts',
+      '--- a/src/app.ts',
+      '+++ b/src/app.ts',
+      '@@ -1,2 +1,3 @@',
+      ' export const ok = true',
+      `+const leaked = "${fakeKey}"`,
+      '+export const safe = 42',
+    ].join('\n')
+
+    const clean = sanitizeDiffExcerpt(raw, 4096)
+    expect(clean).toBeDefined()
+    expect(clean?.excerpt).toContain('[omitted: env-file]')
+    expect(clean?.excerpt).toContain('[omitted: lockfile]')
+    expect(clean?.excerpt).not.toContain('super-secret-env')
+    expect(clean?.excerpt).not.toContain('{"lock":true}')
+    expect(clean?.excerpt).toContain('+[REDACTED: api-key]')
+    expect(clean?.excerpt).not.toContain(fakeKey)
+    expect(clean?.excerpt).toContain('+export const safe = 42')
+    expect(clean?.truncated).toBeUndefined()
+
+    const huge = `diff --git a/src/big.ts b/src/big.ts\n${'+line-content-0123456789\n'.repeat(80)}`
+    const clipped = sanitizeDiffExcerpt(huge, 512)
+    expect(clipped?.truncated).toBe(true)
+    expect(clipped?.excerpt).toContain('[truncated, total')
+    expect(Buffer.byteLength(clipped?.excerpt ?? '', 'utf8')).toBeLessThanOrEqual(512)
+  })
+
+  it('collectTaskDiff 在真实 git 工作树里同时采集已提交与未跟踪文件并排除 .env', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-diff-collect-'))
+    const git = (args: string[]) => execFileAsync('git', ['-C', tmp, ...args])
+    const fakeGh = ['ghp_', '1234567890abcdefghijklmnopqrstuvwxyz'].join('')
+    try {
+      await git(['init', '-b', 'main'])
+      await git(['config', 'user.email', 'test@example.com'])
+      await git(['config', 'user.name', 'Test'])
+      await fs.writeFile(path.join(tmp, 'a.ts'), 'export const a = 1\n')
+      await git(['add', '.'])
+      await git(['commit', '-m', 'init'])
+
+      await git(['checkout', '-b', 'pi/diff-unit'])
+      await fs.writeFile(path.join(tmp, 'a.ts'), 'export const a = 2\n')
+      await git(['add', 'a.ts'])
+      await git(['commit', '-m', 'update a'])
+      await fs.writeFile(path.join(tmp, 'new.ts'), `const token = "${fakeGh}"\nexport const n = 1\n`)
+      await fs.writeFile(path.join(tmp, '.env'), 'DB_PASS=never-leak\n')
+
+      const diff = await collectTaskDiff('main', tmp, 8192)
+      expect(diff).toBeDefined()
+      expect(diff?.excerpt).toContain('export const a = 2')
+      expect(diff?.excerpt).toContain('export const n = 1')
+      expect(diff?.excerpt).toContain('+[REDACTED: github-token]')
+      expect(diff?.excerpt).not.toContain(fakeGh)
+      expect(diff?.excerpt).not.toContain('never-leak')
+      expect(diff?.excerpt).toContain('[omitted: env-file]')
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined)
+    }
+  }, 20_000)
+
+  it('云端 get_task 默认不附 diff（省上下文），传 includeDiff=true 才返回脱敏 diff', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-diff-tool-'))
+    try {
+      const store = await CloudStore.open(tmp)
+      await store.saveTask({
+        id: 'T-010',
+        spec: {
+          workUnitId: 'u-diff',
+          deviceId: 'dev-1',
+          repo: { workspacePath: '/repo' },
+          title: 'Refactor auth',
+          background: 'b',
+          goal: 'g',
+          acceptance: 'a',
+          output: { summary: true, changeList: true, testResult: true },
+          commit: true,
+          authorizationId: 'auth-1',
+        },
+        status: 'done',
+        idempotencyKey: 'k-diff',
+        createdAt: 1,
+        dispatchedAt: 2,
+        updatedAt: 3,
+        progress: {
+          step: 2,
+          lastEventAt: 3,
+          summary: 'Refactored auth helper',
+          changedFiles: [{ path: 'src/auth.ts', kind: 'modified' }],
+          diff: { bytes: 64, excerpt: 'diff --git a/src/auth.ts b/src/auth.ts\n+export const v = 2' },
+        },
+      })
+
+      const tools = new Map<string, { execute: (id: string, params: Record<string, unknown>) => Promise<any> }>()
+      const ext = createCloudToolsExtension({
+        store,
+        hub: {} as never,
+        dispatcher: {} as never,
+      })
+      ext({
+        registerTool: (def: { name: string; execute: (id: string, params: Record<string, unknown>) => Promise<any> }) => {
+          tools.set(def.name, def)
+        },
+      } as never)
+
+      const getTask = tools.get('get_task')!
+      const withoutDiff = await getTask.execute('call-1', { taskId: 'T-010' })
+      const textWithout = withoutDiff.content[0].text as string
+      expect(textWithout).toContain('includeDiff=true')
+      expect(textWithout).not.toContain('+export const v = 2')
+
+      const withDiff = await getTask.execute('call-2', { taskId: 'T-010', includeDiff: true })
+      const textWith = withDiff.content[0].text as string
+      expect(textWith).toContain('+export const v = 2')
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined)
+    }
+  })
 })

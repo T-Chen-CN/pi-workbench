@@ -42,6 +42,12 @@ import {
   type AuthorizationRecord,
 } from '../tasks/authorization.js'
 import type { CloudSession } from '../agent/cloud-session.js'
+import {
+  CLOUD_DOC_MAX_BYTES,
+  isWhitelistedDocName,
+  type CloudDreamRecord,
+  type CloudMemoryStore,
+} from '../memory/memory-store.js'
 import type { TaskDispatcher } from '../tasks/dispatcher.js'
 
 export interface RouteDeps {
@@ -62,6 +68,12 @@ export interface RouteDeps {
   onWorkspacesUpdated?: (deviceId: string) => void
   /** 管理员登出后立即断开在线 Web 客户端 WS */
   onLogout?: () => void
+  /** 客户端上报已读游标（F-52 / C-03c） */
+  onMarkRead?: (seq?: number) => Promise<{ lastReadSeq: number; unreadCount: number }>
+  /** 云端记忆与留存文档存储（C-03a） */
+  memoryStore?: CloudMemoryStore
+  /** 手动触发一次梦境整理（F-41 / C-03a） */
+  onRunDream?: () => Promise<CloudDreamRecord | null>
   logger: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void }
 }
 
@@ -396,6 +408,17 @@ export function buildRouter(deps: RouteDeps): Router {
     return deps.snapshot()
   })
 
+  router.post('/v1/read', async (ctx) => {
+    requireUser(ctx)
+    const body = await ctx.json<{ seq?: number }>().catch(() => ({}) as { seq?: number })
+    const seq = typeof body.seq === 'number' && Number.isFinite(body.seq) ? body.seq : undefined
+    if (deps.onMarkRead) return deps.onMarkRead(seq)
+    const now = Date.now()
+    const nextSeq = Math.max(0, Math.floor(seq ?? 0))
+    await deps.store.setReadState(nextSeq, now)
+    return { lastReadSeq: nextSeq, unreadCount: 0 }
+  })
+
   /**
    * F-19a：结束工作单元（人工回收入口，Web 用；桌面端走客户端帧走同一个函数）。
    * 真正删工作树的是终端；这里只落回收请求并下发 `close_unit`。
@@ -454,6 +477,105 @@ export function buildRouter(deps: RouteDeps): Router {
     requireUser(ctx)
     await deps.store.revokeAuthorization(ctx.params.id)
     return { ok: true }
+  })
+
+  // ------------------------------ 云端记忆、留存文档与梦境（F-39 / F-41 / C-03a） ------------------------------
+
+  const requireMemoryStore = (): CloudMemoryStore => {
+    if (!deps.memoryStore) throw new HttpError(503, 'Memory store not initialized')
+    return deps.memoryStore
+  }
+
+  router.get('/v1/memories', (ctx) => {
+    requireUser(ctx)
+    return { memories: requireMemoryStore().listMemories() }
+  })
+
+  router.post('/v1/memories', async (ctx) => {
+    requireUser(ctx)
+    const body = await ctx.json<{
+      kind?: string
+      content?: string
+      tags?: string[]
+      pinned?: boolean
+    }>()
+    const content = String(body.content ?? '').trim()
+    if (!content) throw new HttpError(400, 'content is required')
+    const item = await requireMemoryStore().addMemory({
+      kind: body.kind,
+      content,
+      tags: body.tags,
+      pinned: body.pinned,
+      source: 'manual',
+    })
+    return { memory: item }
+  })
+
+  router.patch('/v1/memories/:id', async (ctx) => {
+    requireUser(ctx)
+    const body = await ctx.json<{
+      kind?: string
+      content?: string
+      tags?: string[]
+      pinned?: boolean
+    }>()
+    try {
+      const updated = await requireMemoryStore().updateMemory(ctx.params.id, body)
+      if (!updated) throw new HttpError(404, 'Memory not found')
+      return { memory: updated }
+    } catch (error) {
+      if (error instanceof HttpError) throw error
+      throw new HttpError(400, error instanceof Error ? error.message : 'Invalid memory update')
+    }
+  })
+
+  router.delete('/v1/memories/:id', async (ctx) => {
+    requireUser(ctx)
+    const removed = await requireMemoryStore().deleteMemory(ctx.params.id)
+    if (!removed) throw new HttpError(404, 'Memory not found')
+    return { ok: true }
+  })
+
+  router.get('/v1/cloud-docs', async (ctx) => {
+    requireUser(ctx)
+    return { docs: await requireMemoryStore().listDocs() }
+  })
+
+  router.get('/v1/cloud-docs/:name', async (ctx) => {
+    requireUser(ctx)
+    const name = decodeURIComponent(ctx.params.name ?? '')
+    if (!isWhitelistedDocName(name)) {
+      throw new HttpError(400, 'Unsupported cloud document name')
+    }
+    return { doc: await requireMemoryStore().readDoc(name) }
+  })
+
+  router.put('/v1/cloud-docs/:name', async (ctx) => {
+    requireUser(ctx)
+    const name = decodeURIComponent(ctx.params.name ?? '')
+    if (!isWhitelistedDocName(name)) {
+      throw new HttpError(400, 'Unsupported cloud document name')
+    }
+    const body = await ctx.json<{ content?: string }>(CLOUD_DOC_MAX_BYTES + 4096)
+    if (typeof body.content !== 'string') throw new HttpError(400, 'content must be a string')
+    try {
+      const doc = await requireMemoryStore().writeDoc(name, body.content)
+      return { doc }
+    } catch (error) {
+      throw new HttpError(400, error instanceof Error ? error.message : 'Failed to write document')
+    }
+  })
+
+  router.get('/v1/dreams', (ctx) => {
+    requireUser(ctx)
+    return { dreams: requireMemoryStore().listDreams() }
+  })
+
+  router.post('/v1/dreams/run', async (ctx) => {
+    requireUser(ctx)
+    if (!deps.onRunDream) throw new HttpError(503, 'Dream runner unavailable')
+    const dream = await deps.onRunDream()
+    return { ok: true, dream }
   })
 
   return router

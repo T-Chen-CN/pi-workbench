@@ -3148,6 +3148,59 @@ export class AgentManager {
   }
 
   /**
+   * 复用当前已初始化的模型与凭证做一次轻量辅助请求（云端记忆抽取 / 梦境整理用）。
+   * 走 SDK 原生 `completeSimple`，绝不另起请求层或碰明文 Key；失败返回 null。
+   */
+  async completeAuxiliaryPrompt(
+    systemPrompt: string,
+    userPrompt: string,
+    options?: { maxTokens?: number; timeoutMs?: number }
+  ): Promise<string | null> {
+    const runtime = this.modelRuntime
+    const config = this.config
+    if (!runtime || !config) return null
+    const model = runtime.getModel(
+      config.apiConfig.providerId as never,
+      config.apiConfig.modelId as never
+    )
+    if (!model) return null
+    const controller = new AbortController()
+    const timeoutMs = options?.timeoutMs ?? 20_000
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const response = await runtime.completeSimple(
+        model,
+        {
+          systemPrompt,
+          messages: [
+            {
+              role: 'user',
+              content: [{ type: 'text', text: userPrompt }],
+              timestamp: Date.now(),
+            } as never,
+          ],
+        },
+        {
+          maxTokens: options?.maxTokens ?? 1024,
+          temperature: 0.2,
+          signal: controller.signal,
+        }
+      )
+      const text = (response.content ?? [])
+        .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+        .map((part) => part.text)
+        .join('')
+        .trim()
+      return text || null
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Auxiliary prompt failed:', error)
+      return null
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
    * 清理所有会话与共享资源
    */
   async dispose() {

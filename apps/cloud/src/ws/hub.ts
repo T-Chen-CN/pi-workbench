@@ -149,6 +149,8 @@ export interface HubHandlers {
   /** 客户端连接数从 0 变为 1 或从 1 变为 0 时通知，用于离线期汇总（F-51 / A-23） */
   onClientConnected?: (wasEmpty: boolean) => void
   onClientsEmpty?: () => void
+  /** 每次发布客户端事件后的通知（用于服务端维护未读计数，F-52 / C-03c） */
+  onPublished?: (seq: number, event: CloudEvent) => void
   /** 需要一个新鲜快照（首次连接 / 增量溢出） */
   buildSnapshot: () => Promise<CloudSnapshot>
   logger: { warn: (...args: unknown[]) => void; info: (...args: unknown[]) => void }
@@ -354,6 +356,7 @@ export class Hub {
   /** 广播一条客户端事件（分配全局 seq 并写进客户端日志） */
   publish(event: CloudEvent): number {
     const seq = this.clientLog.append(event)
+    this.handlers.onPublished?.(seq, event)
     const frame: ServerToClientFrame = {
       v: CLOUD_PROTOCOL_VERSION,
       type: 'event',

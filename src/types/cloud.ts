@@ -141,3 +141,33 @@ export interface CloudNotice {
   at: number
   key?: string
 }
+
+export type CloudMemoryKind = 'fact' | 'preference' | 'project' | 'decision' | 'todo'
+
+export interface CloudMemoryItem {
+  id: string
+  kind: CloudMemoryKind
+  content: string
+  tags: string[]
+  source: 'auto' | 'dream' | 'manual'
+  pinned: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface CloudDocItem {
+  name: 'AGENTS.md' | 'SOUL.md'
+  content: string
+  exists: boolean
+  updatedAt: number | null
+}
+
+export interface CloudDreamItem {
+  id: string
+  at: number
+  trigger: 'idle' | 'manual'
+  summary: string
+  added: number
+  merged: number
+  removed: number
+}

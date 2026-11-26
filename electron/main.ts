@@ -27,7 +27,8 @@ import {
   installTray,
   isTrayReady,
   resolveCloseAction,
-  showTrayHintOnce
+  showTrayHintOnce,
+  updateTrayBadge
 } from './tray.js'
 import { installSystemProxy } from './system-proxy.js'
 import { createBootWindowController } from './boot-window.js'
@@ -499,15 +500,83 @@ registerSystemIpc({
 
 registerAuxWindowIpc({ getMainWindow: () => mainWindow })
 
+// 主进程同步追踪云端运行中工单数与未读数，即使窗口收进托盘也能刷新角标（F-32 / C-03c）
+const cloudTrayTaskStatuses = new Map<string, string>()
+let cloudTrayUnreadCount = 0
+const CLOUD_ACTIVE_TRAY_STATUSES = new Set(['assigned', 'running', 'waiting_human'])
+
+function syncCloudTrayBadge(): void {
+  let runningTasks = 0
+  for (const status of cloudTrayTaskStatuses.values()) {
+    if (CLOUD_ACTIVE_TRAY_STATUSES.has(status)) runningTasks += 1
+  }
+  updateTrayBadge({ runningTasks, unreadCount: cloudTrayUnreadCount })
+}
+
+function updateCloudTrayFromFrame(raw: unknown): void {
+  if (!raw || typeof raw !== 'object') return
+  const frame = raw as Record<string, unknown>
+  if (frame.type === 'snapshot' && frame.snapshot && typeof frame.snapshot === 'object') {
+    const snap = frame.snapshot as Record<string, unknown>
+    cloudTrayTaskStatuses.clear()
+    if (Array.isArray(snap.tasks)) {
+      for (const item of snap.tasks) {
+        if (item && typeof item === 'object') {
+          const id = String((item as Record<string, unknown>).id ?? '')
+          const status = String((item as Record<string, unknown>).status ?? '')
+          if (id && status) cloudTrayTaskStatuses.set(id, status)
+        }
+      }
+    }
+    cloudTrayUnreadCount =
+      typeof snap.unreadCount === 'number' && Number.isFinite(snap.unreadCount)
+        ? Math.max(0, Math.floor(snap.unreadCount))
+        : 0
+    syncCloudTrayBadge()
+    return
+  }
+  if (frame.type === 'event' && frame.event && typeof frame.event === 'object') {
+    const event = frame.event as Record<string, unknown>
+    if (event.type === 'task' && event.task && typeof event.task === 'object') {
+      const task = event.task as Record<string, unknown>
+      const id = String(task.id ?? '')
+      const status = String(task.status ?? '')
+      if (id && status) {
+        cloudTrayTaskStatuses.set(id, status)
+        syncCloudTrayBadge()
+      }
+    } else if (event.type === 'read_state') {
+      cloudTrayUnreadCount =
+        typeof event.unreadCount === 'number' && Number.isFinite(event.unreadCount)
+          ? Math.max(0, Math.floor(event.unreadCount))
+          : 0
+      syncCloudTrayBadge()
+    } else if (event.type === 'message_end') {
+      const messageId = String(event.messageId ?? '')
+      const text = String(event.text ?? '').trim()
+      if (!messageId.startsWith('u-') && text) {
+        cloudTrayUnreadCount += 1
+        syncCloudTrayBadge()
+      }
+    }
+  }
+}
+
 const cloudIpcContext: CloudIpcContext = {
   logger: agentLogger,
   listWorkspacePaths: () => workspaceStore.list().map((record) => record.path),
   onStateChange: (state) => {
+    if (state.status === 'unlinked') {
+      cloudTrayTaskStatuses.clear()
+      cloudTrayUnreadCount = 0
+      syncCloudTrayBadge()
+    }
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('cloud:state', state)
     }
   },
   onClientFrame: (frame) => {
+    updateCloudTrayFromFrame(frame)
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('cloud:client-frame', frame)
     }
@@ -862,7 +931,8 @@ app.whenReady().then(async () => {
     getEnabled: () => getAppSettingsCache().closeToTray !== false,
     getLanguage: () => getAppSettingsCache().language,
     showMainWindow: () => showMainWindow(),
-    quit: () => quitApplication()
+    quit: () => quitApplication(),
+    getMainWindow: () => mainWindow
   })
 
   // SQLite 播种与联网配置不阻塞首屏；最近工作区 IPC 会等它完成。

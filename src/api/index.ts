@@ -477,6 +477,30 @@ const mockAPI = {
     models: [],
     error: 'Cloud settings are only available in the Electron app'
   }),
+  cloudGetMemoryData: async () => ({
+    success: false,
+    error: 'Cloud memory is only available in the Electron app',
+  }),
+  cloudAddMemory: async () => ({
+    success: false,
+    error: 'Cloud memory is only available in the Electron app',
+  }),
+  cloudUpdateMemory: async () => ({
+    success: false,
+    error: 'Cloud memory is only available in the Electron app',
+  }),
+  cloudDeleteMemory: async () => ({
+    success: false,
+    error: 'Cloud memory is only available in the Electron app',
+  }),
+  cloudSaveDoc: async () => ({
+    success: false,
+    error: 'Cloud memory is only available in the Electron app',
+  }),
+  cloudRunDream: async () => ({
+    success: false,
+    error: 'Cloud memory is only available in the Electron app',
+  }),
   onCloudClientFrame: (_callback: (frame: unknown) => void) => () => {},
   onCloudClientState: (_callback: (state: CloudClientState) => void) => () => {},
 
@@ -819,6 +843,20 @@ export const api = {
   cloudSaveConfig: (config: CloudConfigInput) => electronAPI.cloudSaveConfig(config),
   cloudFetchModels: (input: { provider?: string; apiUrl?: string; apiKey?: string }) =>
     electronAPI.cloudFetchModels(input),
+  cloudGetMemoryData: () => electronAPI.cloudGetMemoryData(),
+  cloudAddMemory: (input: { kind?: string; content: string; tags?: string[]; pinned?: boolean }) =>
+    electronAPI.cloudAddMemory(input),
+  cloudUpdateMemory: (input: {
+    id: string
+    kind?: string
+    content?: string
+    tags?: string[]
+    pinned?: boolean
+  }) => electronAPI.cloudUpdateMemory(input),
+  cloudDeleteMemory: (id: string) => electronAPI.cloudDeleteMemory(id),
+  cloudSaveDoc: (input: { name: 'AGENTS.md' | 'SOUL.md'; content: string }) =>
+    electronAPI.cloudSaveDoc(input),
+  cloudRunDream: () => electronAPI.cloudRunDream(),
   onCloudClientFrame: (callback: (frame: unknown) => void) => electronAPI.onCloudClientFrame(callback),
   onCloudClientState: (callback: (state: CloudClientState) => void) =>
     electronAPI.onCloudClientState(callback),

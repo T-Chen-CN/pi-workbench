@@ -47,6 +47,8 @@ const CLIENT_FRAME_TYPES = new Set([
   'stop_reply',
   'stop_task',
   'close_unit',
+  'mark_read',
+  'task_message',
   'ack',
   'ping',
 ])
@@ -357,6 +359,108 @@ export function registerCloudIpc(context: CloudIpcContext): void {
     success: true,
     workspaces: await describeWorkspaces(context.listWorkspacePaths()),
   }))
+
+  // ------------------------------ 云端记忆、留存文档与梦境代理（F-39 / F-41 / C-03a） ------------------------------
+
+  const cloudRequest = async (
+    method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
+    apiPath: string,
+    body?: unknown
+  ): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> => {
+    const link = readCloudLink()
+    if (!link) return { ok: false, error: 'This device is not paired' }
+    const token = readCloudToken(link)
+    if (!token) return { ok: false, error: 'Saved token cannot be decrypted; pair again.' }
+    try {
+      const response = await fetch(`${link.baseUrl}${apiPath}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(25_000),
+      })
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>
+      if (!response.ok) {
+        return { ok: false, error: String(payload.error ?? `HTTP ${response.status}`) }
+      }
+      return { ok: true, data: payload }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  handleIpc('cloud:getMemoryData', async () => {
+    const [memRes, docRes, dreamRes] = await Promise.all([
+      cloudRequest('GET', '/v1/memories'),
+      cloudRequest('GET', '/v1/cloud-docs'),
+      cloudRequest('GET', '/v1/dreams'),
+    ])
+    if (!memRes.ok) return { success: false, error: memRes.error }
+    if (!docRes.ok) return { success: false, error: docRes.error }
+    if (!dreamRes.ok) return { success: false, error: dreamRes.error }
+    return {
+      success: true,
+      memories: Array.isArray(memRes.data.memories) ? memRes.data.memories : [],
+      docs: Array.isArray(docRes.data.docs) ? docRes.data.docs : [],
+      dreams: Array.isArray(dreamRes.data.dreams) ? dreamRes.data.dreams : [],
+    }
+  })
+
+  handleIpc(
+    'cloud:addMemory',
+    async (_event, input: { kind?: string; content: string; tags?: string[]; pinned?: boolean }) => {
+      const res = await cloudRequest('POST', '/v1/memories', input)
+      if (!res.ok) return { success: false, error: res.error }
+      return { success: true, memory: res.data.memory }
+    }
+  )
+
+  handleIpc(
+    'cloud:updateMemory',
+    async (
+      _event,
+      input: { id: string; kind?: string; content?: string; tags?: string[]; pinned?: boolean }
+    ) => {
+      const id = String(input?.id ?? '').trim()
+      if (!id) return { success: false, error: 'id is required' }
+      const res = await cloudRequest('PATCH', `/v1/memories/${encodeURIComponent(id)}`, {
+        kind: input.kind,
+        content: input.content,
+        tags: input.tags,
+        pinned: input.pinned,
+      })
+      if (!res.ok) return { success: false, error: res.error }
+      return { success: true, memory: res.data.memory }
+    }
+  )
+
+  handleIpc('cloud:deleteMemory', async (_event, id: string) => {
+    const clean = String(id ?? '').trim()
+    if (!clean) return { success: false, error: 'id is required' }
+    const res = await cloudRequest('DELETE', `/v1/memories/${encodeURIComponent(clean)}`)
+    if (!res.ok) return { success: false, error: res.error }
+    return { success: true }
+  })
+
+  handleIpc('cloud:saveDoc', async (_event, input: { name: string; content: string }) => {
+    const name = String(input?.name ?? '').trim()
+    if (name !== 'AGENTS.md' && name !== 'SOUL.md') {
+      return { success: false, error: 'Unsupported document name' }
+    }
+    const res = await cloudRequest('PUT', `/v1/cloud-docs/${encodeURIComponent(name)}`, {
+      content: typeof input?.content === 'string' ? input.content : '',
+    })
+    if (!res.ok) return { success: false, error: res.error }
+    return { success: true, doc: res.data.doc }
+  })
+
+  handleIpc('cloud:runDream', async () => {
+    const res = await cloudRequest('POST', '/v1/dreams/run', {})
+    if (!res.ok) return { success: false, error: res.error }
+    return { success: true, dream: res.data.dream ?? null }
+  })
 }
 
 /** 工作区清单变化：让设备代理立刻重报（离线时进 outbox，重连后补） */

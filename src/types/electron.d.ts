@@ -719,6 +719,36 @@ export interface ElectronAPI {
     apiUrl?: string
     apiKey?: string
   }) => Promise<{ success: boolean; models: string[]; error?: string }>
+  cloudGetMemoryData: () => Promise<{
+    success: boolean
+    memories?: import('./cloud').CloudMemoryItem[]
+    docs?: import('./cloud').CloudDocItem[]
+    dreams?: import('./cloud').CloudDreamItem[]
+    error?: string
+  }>
+  cloudAddMemory: (input: {
+    kind?: string
+    content: string
+    tags?: string[]
+    pinned?: boolean
+  }) => Promise<{ success: boolean; memory?: import('./cloud').CloudMemoryItem; error?: string }>
+  cloudUpdateMemory: (input: {
+    id: string
+    kind?: string
+    content?: string
+    tags?: string[]
+    pinned?: boolean
+  }) => Promise<{ success: boolean; memory?: import('./cloud').CloudMemoryItem; error?: string }>
+  cloudDeleteMemory: (id: string) => Promise<{ success: boolean; error?: string }>
+  cloudSaveDoc: (input: {
+    name: 'AGENTS.md' | 'SOUL.md'
+    content: string
+  }) => Promise<{ success: boolean; doc?: import('./cloud').CloudDocItem; error?: string }>
+  cloudRunDream: () => Promise<{
+    success: boolean
+    dream?: import('./cloud').CloudDreamItem | null
+    error?: string
+  }>
   onCloudClientFrame: (callback: (frame: unknown) => void) => () => void
   onCloudClientState: (callback: (state: CloudClientState) => void) => () => void
   onCloudState: (callback: (state: CloudDeviceState) => void) => () => void
@@ -801,6 +831,10 @@ export type CloudClientOutgoingFrame =
   | { type: 'stop_task'; taskId: string }
   /** F-19a：结束工作单元（回收工作树）；脏树才会真的保留 */
   | { type: 'close_unit'; unitId: string }
+  /** F-52 / C-03c：客户端上报已读游标 */
+  | { type: 'mark_read'; seq?: number; at?: number }
+  /** C-03d：向运行中或待回答工单发送追加指令 / 回复 */
+  | { type: 'task_message'; taskId: string; text: string; at?: number }
   | { type: 'ack'; seq: number }
   | { type: 'ping'; at: number }
 

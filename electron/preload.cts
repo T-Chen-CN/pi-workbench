@@ -441,6 +441,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cloudGetConfig: () => ipcRenderer.invoke('cloud:getConfig'),
   cloudSaveConfig: (config: unknown) => ipcRenderer.invoke('cloud:saveConfig', config),
   cloudFetchModels: (input: unknown) => ipcRenderer.invoke('cloud:fetchModels', input),
+  cloudGetMemoryData: () => ipcRenderer.invoke('cloud:getMemoryData'),
+  cloudAddMemory: (input: unknown) => ipcRenderer.invoke('cloud:addMemory', input),
+  cloudUpdateMemory: (input: unknown) => ipcRenderer.invoke('cloud:updateMemory', input),
+  cloudDeleteMemory: (id: string) => ipcRenderer.invoke('cloud:deleteMemory', id),
+  cloudSaveDoc: (input: unknown) => ipcRenderer.invoke('cloud:saveDoc', input),
+  cloudRunDream: () => ipcRenderer.invoke('cloud:runDream'),
   onCloudState: (callback: (state: unknown) => void) => {
     const listener = (_event: unknown, state: unknown) => callback(state)
     ipcRenderer.on('cloud:state', listener)

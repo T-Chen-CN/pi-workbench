@@ -1,10 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Cloud, PenLine, RefreshCw, Send, Square, Trash2, Unplug } from 'lucide-react'
+import { ArrowLeft, BookOpen, Cloud, PenLine, Pin, RefreshCw, Send, Sparkles, Square, Trash2, Unplug } from 'lucide-react'
 import { useCloudStore } from '../store/cloudStore'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
 import { confirmDialog } from '../store/dialogStore'
-import type { CloudTaskRow, CloudTaskStatusName, CloudUnitRow } from '../types/cloud'
+import type {
+  CloudDocItem,
+  CloudDreamItem,
+  CloudMemoryItem,
+  CloudMemoryKind,
+  CloudTaskRow,
+  CloudTaskStatusName,
+  CloudUnitRow,
+} from '../types/cloud'
+import { api } from '../api'
 import { Button, EmptyState, Field, Input, Modal, Select, Spinner, Textarea } from './ui'
 import { Card, CardHeader, SectionHeader, StatusText } from './patterns'
 
@@ -47,7 +56,9 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
   const store = useCloudStore()
   const [draft, setDraft] = useState('')
   const [authorizeOpen, setAuthorizeOpen] = useState(false)
+  const [memoryOpen, setMemoryOpen] = useState(false)
   const [answerDraft, setAnswerDraft] = useState<Record<string, string>>({})
+  const [instructionDraft, setInstructionDraft] = useState<Record<string, string>>({})
   const transcriptRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = useRef(true)
 
@@ -56,6 +67,26 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
     // init 只跑一次；store 的方法引用稳定，不放进依赖
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 云端页处于可见态时自动上报已读（多端同步清零未读数，F-52 / C-03c）
+  useEffect(() => {
+    if (store.clientState.status !== 'open') return
+    if (store.unreadCount > 0 || store.lastSeq > store.lastReadSeq) {
+      if (typeof document === 'undefined' || !document.hidden) {
+        void store.markRead()
+      }
+    }
+    const onVisible = () => {
+      if (!document.hidden) void useCloudStore.getState().markRead()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store.clientState.status, store.unreadCount, store.lastSeq, store.lastReadSeq])
 
   // 贴底：按滚动事件提前记录是否在底部附近，避免单条 >64px 消息更新后才测量导致断跟随
   useEffect(() => {
@@ -155,6 +186,12 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
             <RefreshCw size={13} />
             {t('cloudRefresh')}
           </Button>
+          {store.link.linked && (
+            <Button variant="ghost" size="sm" onClick={() => setMemoryOpen(true)}>
+              <BookOpen size={13} />
+              {t('cloudMemorySection')}
+            </Button>
+          )}
           {store.link.linked && (
             <Button variant="ghost" size="sm" onClick={() => void store.reconnect()}>
               {t('cloudReconnect')}
@@ -313,6 +350,14 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
             onAnswerDraft={(taskId, text) =>
               setAnswerDraft((current) => ({ ...current, [taskId]: text }))
             }
+            onSendInstruction={(taskId, text) => {
+              void store.sendTaskMessage(taskId, text)
+              setInstructionDraft((current) => ({ ...current, [taskId]: '' }))
+            }}
+            instructionDraft={instructionDraft}
+            onInstructionDraft={(taskId, text) =>
+              setInstructionDraft((current) => ({ ...current, [taskId]: text }))
+            }
           />
 
           <UnitList
@@ -385,6 +430,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
           </Card>
 
           <AuthorizeDialog open={authorizeOpen} onClose={() => setAuthorizeOpen(false)} />
+          <CloudMemoryModal open={memoryOpen} onClose={() => setMemoryOpen(false)} />
 
           {store.link.linked && <CloudConfigCard />}
 
@@ -556,7 +602,22 @@ const TaskList: React.FC<{
   onAnswer: (taskId: string, text: string) => void
   answerDraft: Record<string, string>
   onAnswerDraft: (taskId: string, text: string) => void
-}> = ({ title, tasks, devices, stoppingTaskIds, onStop, onAnswer, answerDraft, onAnswerDraft }) => {
+  onSendInstruction: (taskId: string, text: string) => void
+  instructionDraft: Record<string, string>
+  onInstructionDraft: (taskId: string, text: string) => void
+}> = ({
+  title,
+  tasks,
+  devices,
+  stoppingTaskIds,
+  onStop,
+  onAnswer,
+  answerDraft,
+  onAnswerDraft,
+  onSendInstruction,
+  instructionDraft,
+  onInstructionDraft,
+}) => {
   const { t } = useI18nStore()
   const onlineById = useMemo(() => {
     const map = new Map<string, boolean>()
@@ -621,6 +682,29 @@ const TaskList: React.FC<{
                         {t('cloudSend')}
                       </Button>
                     </div>
+                  </div>
+                )}
+                {task.status === 'running' && !deviceOffline && (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={instructionDraft[task.id] ?? ''}
+                      onChange={(event) => onInstructionDraft(task.id, event.target.value)}
+                      placeholder={t('cloudSendInstructionPlaceholder')}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && (instructionDraft[task.id] ?? '').trim()) {
+                          event.preventDefault()
+                          onSendInstruction(task.id, instructionDraft[task.id] ?? '')
+                        }
+                      }}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onSendInstruction(task.id, instructionDraft[task.id] ?? '')}
+                      disabled={!(instructionDraft[task.id] ?? '').trim()}
+                    >
+                      {t('cloudSendInstruction')}
+                    </Button>
                   </div>
                 )}
                 {hasDetails && (
@@ -950,6 +1034,306 @@ const AuthorizeDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
             onChange={(event) => setQuota(event.target.value)}
           />
         </Field>
+      </div>
+    </Modal>
+  )
+}
+
+/**
+ * 云端记忆、留存文档（AGENTS.md / SOUL.md）与梦境整理弹窗（F-39 / F-41 / C-03a）。
+ * 所有云端落盘文件透明可见、可编辑，手工记忆永不被自动抽取或梦境覆盖。
+ */
+const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
+  const { t } = useI18nStore()
+  const [tab, setTab] = useState<'memories' | 'docs' | 'dreams'>('memories')
+  const [loading, setLoading] = useState(false)
+  const [memories, setMemories] = useState<CloudMemoryItem[]>([])
+  const [docs, setDocs] = useState<CloudDocItem[]>([])
+  const [dreams, setDreams] = useState<CloudDreamItem[]>([])
+  const [kind, setKind] = useState<CloudMemoryKind>('fact')
+  const [content, setContent] = useState('')
+  const [selectedDoc, setSelectedDoc] = useState<'AGENTS.md' | 'SOUL.md'>('AGENTS.md')
+  const [docDrafts, setDocDrafts] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState(false)
+
+  const refresh = async () => {
+    setLoading(true)
+    try {
+      const res = await api.cloudGetMemoryData()
+      if (res.success) {
+        setMemories(res.memories ?? [])
+        const nextDocs = res.docs ?? []
+        setDocs(nextDocs)
+        setDocDrafts((prev) => {
+          const updated = { ...prev }
+          for (const doc of nextDocs) {
+            if (!(doc.name in updated)) updated[doc.name] = doc.content
+          }
+          return updated
+        })
+        setDreams(res.dreams ?? [])
+      } else if (res.error) {
+        toast.error(res.error)
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (open) void refresh()
+  }, [open])
+
+  const addMemory = async () => {
+    const trimmed = content.trim()
+    if (!trimmed) return
+    setBusy(true)
+    try {
+      const res = await api.cloudAddMemory({ kind, content: trimmed })
+      if (res.success && res.memory) {
+        setMemories((prev) => [res.memory!, ...prev])
+        setContent('')
+        toast.success(t('cloudSaved'))
+      } else {
+        toast.error(res.error ?? t('unknownError'))
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const togglePin = async (item: CloudMemoryItem) => {
+    const res = await api.cloudUpdateMemory({ id: item.id, pinned: !item.pinned })
+    if (res.success && res.memory) {
+      setMemories((prev) => prev.map((entry) => (entry.id === item.id ? res.memory! : entry)))
+    } else if (res.error) {
+      toast.error(res.error)
+    }
+  }
+
+  const removeMemory = async (id: string) => {
+    const res = await api.cloudDeleteMemory(id)
+    if (res.success) {
+      setMemories((prev) => prev.filter((entry) => entry.id !== id))
+    } else if (res.error) {
+      toast.error(res.error)
+    }
+  }
+
+  const saveDoc = async () => {
+    setBusy(true)
+    try {
+      const res = await api.cloudSaveDoc({
+        name: selectedDoc,
+        content: docDrafts[selectedDoc] ?? '',
+      })
+      if (res.success && res.doc) {
+        const saved = res.doc
+        setDocs((prev) =>
+          prev.some((d) => d.name === saved.name)
+            ? prev.map((d) => (d.name === saved.name ? saved : d))
+            : [...prev, saved]
+        )
+        setDocDrafts((prev) => ({ ...prev, [saved.name]: saved.content }))
+        toast.success(t('cloudDocSaved'))
+      } else {
+        toast.error(res.error ?? t('unknownError'))
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const runDream = async () => {
+    setBusy(true)
+    try {
+      const res = await api.cloudRunDream()
+      if (res.success) {
+        await refresh()
+        toast.success(res.dream?.summary || t('cloudSaved'))
+      } else {
+        toast.error(res.error ?? t('unknownError'))
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const currentDoc = docs.find((d) => d.name === selectedDoc)
+
+  return (
+    <Modal open={open} onClose={onClose} title={t('cloudMemorySection')} size="lg">
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-2 border-b border-rule-divide pb-2">
+          <Button
+            variant={tab === 'memories' ? 'primary' : 'ghost'}
+            size="sm"
+            onClick={() => setTab('memories')}
+          >
+            {t('cloudMemoryItemsTab')} ({memories.length})
+          </Button>
+          <Button
+            variant={tab === 'docs' ? 'primary' : 'ghost'}
+            size="sm"
+            onClick={() => setTab('docs')}
+          >
+            {t('cloudMemoryDocsTab')}
+          </Button>
+          <Button
+            variant={tab === 'dreams' ? 'primary' : 'ghost'}
+            size="sm"
+            onClick={() => setTab('dreams')}
+          >
+            {t('cloudMemoryDreamsTab')} ({dreams.length})
+          </Button>
+          <div className="ml-auto">
+            <Button variant="ghost" size="sm" onClick={() => void refresh()} disabled={loading}>
+              {loading ? <Spinner size={13} /> : <RefreshCw size={13} />}
+              {t('cloudRefresh')}
+            </Button>
+          </div>
+        </div>
+
+        {tab === 'memories' && (
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center gap-2">
+              <Select
+                value={kind}
+                onChange={(event) => setKind(event.target.value as CloudMemoryKind)}
+                className="w-28"
+              >
+                <option value="fact">fact</option>
+                <option value="preference">preference</option>
+                <option value="project">project</option>
+                <option value="decision">decision</option>
+                <option value="todo">todo</option>
+              </Select>
+              <Input
+                value={content}
+                onChange={(event) => setContent(event.target.value)}
+                placeholder={t('cloudMemoryAddPlaceholder')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && content.trim()) {
+                    event.preventDefault()
+                    void addMemory()
+                  }
+                }}
+              />
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => void addMemory()}
+                disabled={busy || !content.trim()}
+              >
+                {t('cloudMemoryAdd')}
+              </Button>
+            </div>
+            {memories.length === 0 ? (
+              <p className="type-caption text-ink-muted">{t('cloudMemoryEmpty')}</p>
+            ) : (
+              <ul className="flex max-h-80 flex-col gap-2 overflow-y-auto">
+                {memories.map((item) => (
+                  <li
+                    key={item.id}
+                    className="flex flex-col gap-1 rounded border border-rule-divide bg-panel px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="type-caption text-ink-muted">
+                        {item.kind} · {item.source}
+                      </span>
+                      <div className="ml-auto flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void togglePin(item)}
+                          title={item.pinned ? t('cloudMemoryUnpin') : t('cloudMemoryPin')}
+                        >
+                          <Pin size={12} className={item.pinned ? 'text-accent' : undefined} />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void removeMemory(item.id)}
+                          title={t('delete')}
+                        >
+                          <Trash2 size={12} />
+                        </Button>
+                      </div>
+                    </div>
+                    <p className="type-body text-ink">{item.content}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {tab === 'docs' && (
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center gap-2">
+              {(['AGENTS.md', 'SOUL.md'] as const).map((name) => (
+                <Button
+                  key={name}
+                  variant={selectedDoc === name ? 'primary' : 'secondary'}
+                  size="sm"
+                  onClick={() => setSelectedDoc(name)}
+                >
+                  {name}
+                </Button>
+              ))}
+              <span className="ml-auto type-caption text-ink-muted">
+                {currentDoc?.updatedAt
+                  ? new Date(currentDoc.updatedAt).toLocaleString()
+                  : t('cloudDocUnsaved')}
+              </span>
+            </div>
+            <Textarea
+              rows={12}
+              value={docDrafts[selectedDoc] ?? currentDoc?.content ?? ''}
+              onChange={(event) =>
+                setDocDrafts((prev) => ({ ...prev, [selectedDoc]: event.target.value }))
+              }
+              placeholder={t('cloudDocPlaceholder')}
+            />
+            <div className="flex justify-end">
+              <Button variant="primary" size="sm" onClick={() => void saveDoc()} disabled={busy}>
+                {busy ? <Spinner size={13} /> : null}
+                {t('cloudDocSave')}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {tab === 'dreams' && (
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <span className="type-caption text-ink-muted">{t('cloudDreamsEmpty')}</span>
+              <Button variant="secondary" size="sm" onClick={() => void runDream()} disabled={busy}>
+                {busy ? <Spinner size={13} /> : <Sparkles size={13} />}
+                {t('cloudMemoryRunDream')}
+              </Button>
+            </div>
+            {dreams.length > 0 && (
+              <ul className="flex max-h-80 flex-col gap-2 overflow-y-auto">
+                {dreams.map((dream) => (
+                  <li
+                    key={dream.id}
+                    className="flex flex-col gap-1 rounded border border-rule-divide bg-panel px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2 type-caption text-ink-muted">
+                      <span>{new Date(dream.at).toLocaleString()}</span>
+                      <span>· {dream.trigger}</span>
+                      <span className="ml-auto">
+                        +{dream.added} / -{dream.removed}
+                      </span>
+                    </div>
+                    <p className="type-body text-ink">{dream.summary}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
     </Modal>
   )

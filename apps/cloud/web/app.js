@@ -11,6 +11,8 @@ const state = {
   wsStatus: 'closed',
   reconnectDelay: 1000,
   lastSeq: 0,
+  lastReadSeq: 0,
+  unreadCount: 0,
   tab: 'chat',
   agentStatus: 'idle',
   canStopReply: false,
@@ -29,6 +31,17 @@ const state = {
   error: null,
   draft: '',
   answerDrafts: {},
+  instructionDrafts: {},
+  memories: [],
+  docs: [],
+  dreams: [],
+  memoryLoaded: false,
+  memoryBusy: false,
+  memoryKindDraft: 'fact',
+  memoryContentDraft: '',
+  selectedDoc: 'AGENTS.md',
+  docDrafts: {},
+  memoryFeedback: '',
 }
 
 const root = document.getElementById('root')
@@ -320,9 +333,15 @@ function applyFrame(frame) {
     state.units = snapshot.units || []
     state.authorizations = snapshot.authorizations || []
     state.awaySummary = snapshot.awaySummary || null
+    state.lastReadSeq = Number(snapshot.lastReadSeq || 0)
+    state.unreadCount = Number(snapshot.unreadCount || 0)
     state.stoppingTaskIds = {}
     state.agentStatus = snapshot.cloud?.status || 'idle'
     state.canStopReply = Boolean(snapshot.cloud?.canStopReply)
+    updateDocumentTitle()
+    if (state.tab === 'chat' && !document.hidden && state.unreadCount > 0) {
+      markRead()
+    }
     render()
     return
   }
@@ -382,6 +401,9 @@ function applyFrame(frame) {
         if (event.text) row.text = event.text
         row.streaming = false
         row.error = event.error
+      }
+      if (!target.startsWith('u-') && String(event.text || '').trim()) {
+        onUnreadWorthyEvent()
       }
       renderTranscript()
       return
@@ -454,9 +476,46 @@ function applyFrame(frame) {
     case 'notice':
       pushNotice(event.level || 'info', event.text || '')
       return
+    case 'read_state':
+      state.lastReadSeq = Number(event.lastReadSeq || 0)
+      state.unreadCount = Number(event.unreadCount || 0)
+      updateDocumentTitle()
+      render()
+      return
     default:
       return
   }
+}
+
+function updateDocumentTitle() {
+  document.title = state.unreadCount > 0 ? `(${state.unreadCount}) Pi Cloud` : 'Pi Cloud'
+}
+
+function markRead() {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return
+  const seq = state.lastSeq
+  state.lastReadSeq = Math.max(state.lastReadSeq, seq)
+  state.unreadCount = 0
+  updateDocumentTitle()
+  send({ type: 'mark_read', seq, at: Date.now() })
+}
+
+function onUnreadWorthyEvent() {
+  if (state.tab === 'chat' && !document.hidden) {
+    markRead()
+    return
+  }
+  state.unreadCount += 1
+  updateDocumentTitle()
+  render()
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && state.tab === 'chat' && state.unreadCount > 0) {
+      markRead()
+    }
+  })
 }
 
 function pushNotice(level, text) {
@@ -485,9 +544,10 @@ function render() {
   const header = el('header', { class: 'top' }, [
     el('span', { class: 'brand', text: 'PI CLOUD' }),
     el('div', { class: 'tabs' }, [
-      tabButton('chat', '会话'),
+      tabButton('chat', state.unreadCount > 0 ? `会话 (${state.unreadCount})` : '会话'),
       tabButton('tasks', '工单'),
       tabButton('devices', '设备'),
+      tabButton('memory', '记忆'),
       tabButton('settings', '设置'),
     ]),
     el('span', { class: 'spacer' }),
@@ -519,6 +579,12 @@ function tabButton(id, label) {
     text: label,
     onclick: () => {
       state.tab = id
+      if (id === 'chat' && !document.hidden && state.unreadCount > 0) {
+        markRead()
+      }
+      if (id === 'memory' && !state.memoryLoaded) {
+        void loadMemoryData()
+      }
       render()
     },
   })
@@ -758,6 +824,7 @@ function renderConfirmPlan() {
 function renderTabBody() {
   if (state.tab === 'tasks') return el('section', { class: 'transcript' }, [renderTaskCard()])
   if (state.tab === 'devices') return el('section', { class: 'transcript' }, [renderDeviceCard()])
+  if (state.tab === 'memory') return el('section', { class: 'transcript' }, [renderMemoryTab()])
   return el('section', { class: 'transcript' }, [renderConfigCard()])
 }
 
@@ -859,10 +926,32 @@ function renderTaskCard() {
                   const text = (state.answerDrafts[task.id] || '').trim()
                   if (!text) return
                   state.answerDrafts[task.id] = ''
-                  send({ type: 'say', text: `关于工单 ${task.id}：${text}`, clientMessageId: `c-${Date.now().toString(36)}` })
+                  send({ type: 'task_message', taskId: task.id, text })
+                  render()
                 },
               }),
             ]),
+          ])
+        : null,
+      task.status === 'running' && !offline
+        ? el('div', { class: 'row' }, [
+            el('input', {
+              placeholder: '向运行中工单追加指令…',
+              value: state.instructionDrafts[task.id] || '',
+              oninput: (event) => {
+                state.instructionDrafts[task.id] = event.target.value
+              },
+            }),
+            el('button', {
+              text: '追加指令',
+              onclick: () => {
+                const text = (state.instructionDrafts[task.id] || '').trim()
+                if (!text) return
+                state.instructionDrafts[task.id] = ''
+                send({ type: 'task_message', taskId: task.id, text })
+                render()
+              },
+            }),
           ])
         : null,
       hasDetails
@@ -1192,6 +1281,245 @@ function renderConfigCard() {
         location.reload()
       },
     }),
+  ])
+}
+
+const MEMORY_KIND_LABELS = {
+  fact: '事实',
+  preference: '偏好',
+  project: '项目',
+  decision: '决策',
+  todo: '待办',
+}
+
+async function loadMemoryData() {
+  state.memoryBusy = true
+  state.memoryFeedback = ''
+  render()
+  try {
+    const [memRes, docRes, dreamRes] = await Promise.all([
+      request('GET', '/v1/memories'),
+      request('GET', '/v1/cloud-docs'),
+      request('GET', '/v1/dreams'),
+    ])
+    if (memRes.ok && Array.isArray(memRes.payload?.memories)) {
+      state.memories = memRes.payload.memories
+    }
+    if (docRes.ok && Array.isArray(docRes.payload?.docs)) {
+      state.docs = docRes.payload.docs
+      for (const doc of state.docs) {
+        if (!(doc.name in state.docDrafts)) {
+          state.docDrafts[doc.name] = doc.content || ''
+        }
+      }
+    }
+    if (dreamRes.ok && Array.isArray(dreamRes.payload?.dreams)) {
+      state.dreams = dreamRes.payload.dreams
+    }
+    state.memoryLoaded = true
+  } catch (error) {
+    state.memoryFeedback = String(error)
+  } finally {
+    state.memoryBusy = false
+    render()
+  }
+}
+
+function renderMemoryTab() {
+  const kindSelect = el('select', {
+    onchange: (event) => {
+      state.memoryKindDraft = event.target.value
+    },
+  }, Object.entries(MEMORY_KIND_LABELS).map(([value, label]) =>
+    el('option', {
+      value,
+      text: label,
+      selected: value === state.memoryKindDraft ? 'selected' : null,
+    })
+  ))
+
+  const memInput = el('input', {
+    placeholder: '手工记录一条长期记忆（不会被自动抽取或梦境覆盖）…',
+    value: state.memoryContentDraft,
+    oninput: (event) => {
+      state.memoryContentDraft = event.target.value
+    },
+  })
+
+  const memoryItems = state.memories.map((item) => {
+    const kindText = MEMORY_KIND_LABELS[item.kind] || item.kind
+    const sourceText = item.source === 'manual' ? '手工' : item.source === 'dream' ? '梦境' : '自动'
+    return el('li', {}, [
+      el('div', { class: 'row' }, [
+        el('span', { class: 'mono muted', text: `[${kindText} · ${sourceText}]${item.pinned ? ' ★' : ''}` }),
+        el('span', { class: 'spacer' }),
+        el('button', {
+          text: item.pinned ? '取消置顶' : '置顶',
+          onclick: async () => {
+            const res = await request('PATCH', `/v1/memories/${encodeURIComponent(item.id)}`, {
+              pinned: !item.pinned,
+            })
+            if (res.ok && res.payload?.memory) {
+              state.memories = state.memories.map((m) => (m.id === item.id ? res.payload.memory : m))
+              render()
+            }
+          },
+        }),
+        el('button', {
+          text: '删除',
+          onclick: async () => {
+            const res = await request('DELETE', `/v1/memories/${encodeURIComponent(item.id)}`)
+            if (res.ok) {
+              state.memories = state.memories.filter((m) => m.id !== item.id)
+              render()
+            }
+          },
+        }),
+      ]),
+      el('div', { class: 'body', text: item.content }),
+    ])
+  })
+
+  const currentDocName = state.selectedDoc || 'AGENTS.md'
+  const currentDocMeta = state.docs.find((doc) => doc.name === currentDocName)
+  const docTextarea = el('textarea', {
+    rows: 10,
+    placeholder:
+      currentDocName === 'SOUL.md'
+        ? '定义云端 Agent 的人格、语气与沟通风格…'
+        : '定义云端 Agent 必须遵守的长期工作约定与规则…',
+    value: state.docDrafts[currentDocName] ?? currentDocMeta?.content ?? '',
+    oninput: (event) => {
+      state.docDrafts[currentDocName] = event.target.value
+    },
+  })
+
+  const dreamItems = state.dreams.map((dream) =>
+    el('li', {}, [
+      el('div', { class: 'row' }, [
+        el('span', { class: 'mono muted', text: `${time(dream.at)} · ${dream.trigger === 'manual' ? '手动' : '空闲自动'}` }),
+        el('span', { class: 'spacer' }),
+        el('span', { class: 'mono muted', text: `+${dream.added} / -${dream.removed}` }),
+      ]),
+      el('div', { text: dream.summary }),
+    ])
+  )
+
+  return el('div', { class: 'stack' }, [
+    el('div', { class: 'card stack' }, [
+      el('div', { class: 'row' }, [
+        el('h3', { text: '结构化长期记忆' }),
+        el('span', { class: 'spacer' }),
+        el('button', {
+          text: state.memoryBusy ? '刷新中…' : '刷新',
+          disabled: state.memoryBusy,
+          onclick: () => void loadMemoryData(),
+        }),
+      ]),
+      el('div', { class: 'row' }, [
+        kindSelect,
+        memInput,
+        el('button', {
+          class: 'primary',
+          text: '新增记忆',
+          onclick: async () => {
+            const content = state.memoryContentDraft.trim()
+            if (!content) return
+            const res = await request('POST', '/v1/memories', {
+              kind: state.memoryKindDraft,
+              content,
+            })
+            if (res.ok && res.payload?.memory) {
+              state.memoryContentDraft = ''
+              state.memories = [res.payload.memory, ...state.memories]
+              state.memoryFeedback = '已添加手工记忆'
+              render()
+            } else {
+              state.memoryFeedback = res.payload?.error || `保存失败 (HTTP ${res.status})`
+              render()
+            }
+          },
+        }),
+      ]),
+      state.memoryFeedback ? el('p', { class: 'muted', text: state.memoryFeedback }) : null,
+      memoryItems.length === 0
+        ? el('p', { class: 'muted', text: '还没有保存任何长期记忆。对话压缩前会自动提炼，也可以手工新增。' })
+        : el('ul', { class: 'list' }, memoryItems),
+    ]),
+
+    el('div', { class: 'card stack' }, [
+      el('div', { class: 'row' }, [
+        el('h3', { text: '云端留存文档（实时生效）' }),
+        el('span', { class: 'spacer' }),
+        ...['AGENTS.md', 'SOUL.md'].map((name) =>
+          el('button', {
+            class: currentDocName === name ? 'primary' : '',
+            text: name,
+            onclick: () => {
+              state.selectedDoc = name
+              render()
+            },
+          })
+        ),
+      ]),
+      el('p', {
+        class: 'muted',
+        text: currentDocMeta?.updatedAt
+          ? `上次保存：${new Date(currentDocMeta.updatedAt).toLocaleString()}`
+          : '尚未创建（保存后立即对下一轮生效）',
+      }),
+      docTextarea,
+      el('div', { class: 'row' }, [
+        el('button', {
+          class: 'primary',
+          text: '保存文档',
+          onclick: async () => {
+            const content = state.docDrafts[currentDocName] ?? ''
+            const res = await request('PUT', `/v1/cloud-docs/${encodeURIComponent(currentDocName)}`, {
+              content,
+            })
+            if (res.ok && res.payload?.doc) {
+              const saved = res.payload.doc
+              state.docs = state.docs.some((d) => d.name === saved.name)
+                ? state.docs.map((d) => (d.name === saved.name ? saved : d))
+                : [...state.docs, saved]
+              state.docDrafts[saved.name] = saved.content
+              state.memoryFeedback = `已保存 ${saved.name}`
+              render()
+            } else {
+              state.memoryFeedback = res.payload?.error || `保存失败 (HTTP ${res.status})`
+              render()
+            }
+          },
+        }),
+      ]),
+    ]),
+
+    el('div', { class: 'card stack' }, [
+      el('div', { class: 'row' }, [
+        el('h3', { text: '梦境整理记录' }),
+        el('span', { class: 'spacer' }),
+        el('button', {
+          text: '立即整理（梦境）',
+          onclick: async () => {
+            state.memoryFeedback = '正在整理记忆…'
+            render()
+            const res = await request('POST', '/v1/dreams/run', {})
+            if (res.ok) {
+              await loadMemoryData()
+              state.memoryFeedback = res.payload?.dream?.summary || '梦境整理完成'
+              render()
+            } else {
+              state.memoryFeedback = res.payload?.error || `整理失败 (HTTP ${res.status})`
+              render()
+            }
+          },
+        }),
+      ]),
+      dreamItems.length === 0
+        ? el('p', { class: 'muted', text: '还没有梦境整理记录（空闲 ≥30 分钟且无活跃工单时自动运行，也可手动触发）' })
+        : el('ul', { class: 'list' }, dreamItems),
+    ]),
   ])
 }
 

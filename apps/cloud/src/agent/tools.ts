@@ -22,7 +22,10 @@ export interface CloudToolsDeps {
   now?: () => number
 }
 
-function summarizeTask(task: ReturnType<CloudStore['findTask']>): string {
+function summarizeTask(
+  task: ReturnType<CloudStore['findTask']>,
+  options?: { includeDiff?: boolean }
+): string {
   if (!task) return 'unknown task'
   const lines = [
     `${task.id} [${task.status}] ${task.spec.title}`,
@@ -51,6 +54,17 @@ function summarizeTask(task: ReturnType<CloudStore['findTask']>): string {
   if (task.progress.commit) lines.push(`commit: ${task.progress.commit}`)
   if (task.terminalReason) lines.push(`terminal: ${task.terminalReason}`)
   if (task.error) lines.push(`error: ${task.error}`)
+  if (task.progress.diff) {
+    if (options?.includeDiff) {
+      lines.push(
+        `diff (${task.progress.diff.bytes} bytes${task.progress.diff.truncated ? ', truncated' : ''}):\n${task.progress.diff.excerpt}`
+      )
+    } else {
+      lines.push(
+        `diff: available (${task.progress.diff.bytes} bytes; call get_task with includeDiff=true only when code review or follow-up coordination requires it)`
+      )
+    }
+  }
   return lines.join('\n')
 }
 
@@ -187,17 +201,28 @@ export function createCloudToolsExtension(deps: CloudToolsDeps): ExtensionFactor
     pi.registerTool({
       name: 'get_task',
       label: 'Get task',
-      description: 'Read the live snapshot of one task (no cache; never blocks).',
-      promptSnippet: 'get_task: live task snapshot',
+      description:
+        'Read the live snapshot of one task (no cache; never blocks). Set includeDiff=true only when you need to inspect the sanitized code diff (e.g. reviewing changes, verifying attention files, or writing follow-up tasks in the same unit).',
+      promptSnippet: 'get_task: live task snapshot (optional includeDiff=true for sanitized diff)',
+      promptGuidelines: [
+        'Leave includeDiff false for trivial or read-only tasks to keep the single cloud session concise.',
+        'Pass includeDiff=true when you need to verify code quality, inspect attention-flagged changes, or align follow-up tasks in the same work unit.',
+      ],
       parameters: {
         type: 'object',
-        properties: { taskId: { type: 'string' } },
+        properties: {
+          taskId: { type: 'string' },
+          includeDiff: {
+            type: 'boolean',
+            description: 'Include sanitized diff excerpt when available (default false)',
+          },
+        },
         required: ['taskId'],
       } as any,
-      async execute(_id: string, params: { taskId?: string }) {
+      async execute(_id: string, params: { taskId?: string; includeDiff?: boolean }) {
         const task = params.taskId ? deps.store.findTask(params.taskId) : undefined
         if (!task) return toolError(`Unknown task: ${String(params.taskId)}`)
-        return toolText(summarizeTask(task))
+        return toolText(summarizeTask(task, { includeDiff: params.includeDiff === true }))
       },
     })
 

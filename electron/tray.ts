@@ -11,7 +11,15 @@
  *   找不回来，因此降级为「最小化到任务栏」，不创建托盘。
  */
 
-import { Menu, Tray, nativeImage, type MenuItemConstructorOptions, type NativeImage } from 'electron'
+import {
+  Menu,
+  Tray,
+  app,
+  nativeImage,
+  type BrowserWindow,
+  type MenuItemConstructorOptions,
+  type NativeImage,
+} from 'electron'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -74,17 +82,73 @@ export function trayMenuTemplate(
   ]
 }
 
+export interface TrayBadgeState {
+  runningTasks: number
+  unreadCount: number
+}
+
+export function formatTrayTooltip(language: unknown, status?: TrayBadgeState): string {
+  const lang = normalizeTrayLanguage(language)
+  const base = TRAY_LABELS[lang].tooltip
+  if (!status) return base
+  const running = Math.max(0, Math.floor(status.runningTasks))
+  const unread = Math.max(0, Math.floor(status.unreadCount))
+  if (running === 0 && unread === 0) return base
+  const parts: string[] = [base]
+  if (running > 0) {
+    parts.push(lang === 'en' ? `${running} task${running > 1 ? 's' : ''} running` : `${running} 个工单执行中`)
+  }
+  if (unread > 0) {
+    parts.push(lang === 'en' ? `${unread} unread` : `${unread} 条未读`)
+  }
+  return parts.join(' · ')
+}
+
+/** 生成 16x16 纯色圆点角标位图，供 Windows 任务栏 setOverlayIcon 使用（零外部绘图依赖） */
+function createOverlayBadgeIcon(count: number): NativeImage | null {
+  if (count <= 0 || typeof nativeImage.createFromBuffer !== 'function') return null
+  const size = 16
+  const buf = Buffer.alloc(size * size * 4)
+  const cx = 7.5
+  const cy = 7.5
+  const radius = 6.5
+  // 琥珀强调色（#D97706 → BGRA on Windows/Electron raw bitmap: B=6, G=119, R=217, A=255）
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const dx = x - cx
+      const dy = y - cy
+      const dist = Math.sqrt(dx * dx + dy * dy)
+      if (dist <= radius) {
+        const idx = (y * size + x) * 4
+        const border = dist > radius - 1.2
+        buf[idx] = border ? 255 : 6
+        buf[idx + 1] = border ? 255 : 119
+        buf[idx + 2] = border ? 255 : 217
+        buf[idx + 3] = 255
+      }
+    }
+  }
+  try {
+    return nativeImage.createFromBuffer(buf, { width: size, height: size })
+  } catch {
+    return null
+  }
+}
+
 export interface TrayOptions {
   /** 用户偏好：关闭按钮是否收进托盘 */
   getEnabled: () => boolean
   getLanguage: () => unknown
   showMainWindow: () => void
   quit: () => void
+  /** 可选：用于 Windows 任务栏覆盖角标（F-32 / C-03c） */
+  getMainWindow?: () => BrowserWindow | null
 }
 
 let tray: Tray | null = null
 let options: TrayOptions | null = null
 let hintShown = false
+let badgeState: TrayBadgeState = { runningTasks: 0, unreadCount: 0 }
 
 export function isTrayReady(): boolean {
   return Boolean(tray && !tray.isDestroyed())
@@ -127,7 +191,7 @@ export function refreshTray(): void {
   const isMac = process.platform === 'darwin'
   const instance = tray
   if (!instance) return
-  instance.setToolTip(TRAY_LABELS[normalizeTrayLanguage(options.getLanguage())].tooltip)
+  instance.setToolTip(formatTrayTooltip(options.getLanguage(), badgeState))
   const menu = trayMenuTemplate(options.getLanguage(), {
     showMainWindow: () => options?.showMainWindow(),
     quit: () => options?.quit()
@@ -137,12 +201,59 @@ export function refreshTray(): void {
   if (isMac) instance.setIgnoreDoubleClickEvents(true)
 }
 
+/** 更新托盘提示与系统角标（F-32 / C-03c）：显示运行中工单数与云端未读数 */
+export function updateTrayBadge(next: Partial<TrayBadgeState>): void {
+  badgeState = {
+    runningTasks:
+      typeof next.runningTasks === 'number' && Number.isFinite(next.runningTasks)
+        ? Math.max(0, Math.floor(next.runningTasks))
+        : badgeState.runningTasks,
+    unreadCount:
+      typeof next.unreadCount === 'number' && Number.isFinite(next.unreadCount)
+        ? Math.max(0, Math.floor(next.unreadCount))
+        : badgeState.unreadCount,
+  }
+  const total = badgeState.runningTasks + badgeState.unreadCount
+  const tooltip = formatTrayTooltip(options?.getLanguage(), badgeState)
+
+  if (isTrayReady() && tray) {
+    tray.setToolTip(tooltip)
+  }
+
+  // macOS / Linux 原生应用角标
+  if (process.platform !== 'win32' && typeof app?.setBadgeCount === 'function') {
+    try {
+      app.setBadgeCount(total)
+    } catch {
+      // 部分 Linux 桌面环境不支持角标，静默忽略
+    }
+  }
+
+  // Windows 任务栏覆盖角标
+  if (process.platform === 'win32') {
+    const win = options?.getMainWindow?.()
+    if (win && !win.isDestroyed() && typeof win.setOverlayIcon === 'function') {
+      try {
+        if (total > 0) {
+          const icon = createOverlayBadgeIcon(total)
+          win.setOverlayIcon(icon, tooltip)
+        } else {
+          win.setOverlayIcon(null, '')
+        }
+      } catch {
+        // 忽略无头或窗口销毁时的竞态
+      }
+    }
+  }
+}
+
 export function installTray(next: TrayOptions): void {
   options = next
   refreshTray()
 }
 
 export function destroyTray(): void {
+  badgeState = { runningTasks: 0, unreadCount: 0 }
   if (!tray) return
   try {
     tray.destroy()

@@ -13,13 +13,13 @@
 | 阶段 | 本地 Agent 工作台稳定期；模型配置改为 8 家固定供应商 + OAuth（0.11.x）；云端 Agent 已部署运行，剩 P1/P2 待办 |
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
-| 质量门槛 | `type-check` · `lint` · `npm test`（169 文件 / 1712 用例）· `design-system` 全绿 |
-| 云端 Agent | **P0（C-01）与收口项（C-02/C-04/C-05/C-06/C-07/P-09）全部落地并验收通过**：`https://tchen-xiaoxiao.com`（release `20261126103114`，回滚点 `20261124032938`；systemd + Caddy + `pi-warp-proxy` + 每日备份），`/v1/health` 返回 `ok/hasAccount/ready` 全为 true；本地自包含包 35/35、30 个云端测试文件 211/211 全绿，线上真实模型派活、隔离工作树、里程碑唤醒、结果回流、干净树自动回收、服务重启重连与安全/隔离复核全部通过。剩余 P1 待办集中在 **C-03** |
+| 质量门槛 | `type-check` · `lint` · `npm test`（171 文件 / 1724 用例）· `design-system` 全绿 |
+| 云端 Agent | **P0（C-01）与 P1（C-02 ~ C-07 / P-09）全部落地**：`https://tchen-xiaoxiao.com`（systemd + Caddy + `pi-warp-proxy` + 每日备份），支持脱敏 diff 按需审查、多端已读未读同步与托盘角标、压缩前记忆抽取 + 梦境整理 + `AGENTS.md`/`SOUL.md` 双端可视化编辑、运行中工单 `task_message` 追加指令；剩余仅 P2（`P-02` 云端 OAuth 登录） |
 
 ## 正在做 / 下一步
 
-- **云端 Agent P1（[BACKLOG](./BACKLOG.md) C-03）**：P0（C-01）已全部交付并在 `tchen-xiaoxiao.com` 完成真派活闭环验收；下一阶段推进 C-03（记忆自动抽取挂 `session_before_compact` / 梦境整理 / 已读未读 / 追加指令打磨 / 结果 diff 回传 / 托盘角标 / 并发压测含 A-25）。
 - **供应商预设的真实凭证手工验收**（[BACKLOG](./BACKLOG.md) P-03）：0.11.0 发布时未执行，需补 8 家 API Key、4 条 OAuth、容量下调在轮次边界生效、会话模型静默回落各一次。
+- **云端 OAuth 登录**（[BACKLOG](./BACKLOG.md) P-02，P2）：4 条 OAuth 路径接入云端配置页。
 - **平台手动验收** V-01（macOS dmg）/ V-02（Linux AppImage）尚未做。
 
 ## 已交付（一行一项，细节在 git）

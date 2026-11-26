@@ -117,6 +117,10 @@ interface AuthorizationsFile {
 interface ClientStateFile {
   /** 最后一个客户端断开连接的时间；重连快照据此生成「你离开期间…」汇总（F-51 / A-23） */
   lastClientLeftAt: number | null
+  /** 服务端记录的最后已读游标（F-52 / C-03c） */
+  lastReadSeq?: number
+  /** 最后标记已读的时间戳（服务端重启 seq 归零后用于兜底计算未读） */
+  lastReadAt?: number | null
 }
 
 export const PAIRING_CODE_TTL_MS = 5 * 60 * 1000
@@ -462,8 +466,28 @@ export class CloudStore {
 
   async setLastClientLeftAt(at: number | null): Promise<void> {
     await this.clientState.update((current) =>
-      current.lastClientLeftAt === at ? current : { lastClientLeftAt: at }
+      current.lastClientLeftAt === at ? current : { ...current, lastClientLeftAt: at }
     )
+  }
+
+  getReadState(): { lastReadSeq: number; lastReadAt: number | null } {
+    const state = this.clientState.get()
+    return {
+      lastReadSeq:
+        typeof state.lastReadSeq === 'number' && Number.isFinite(state.lastReadSeq) && state.lastReadSeq > 0
+          ? Math.floor(state.lastReadSeq)
+          : 0,
+      lastReadAt: typeof state.lastReadAt === 'number' && Number.isFinite(state.lastReadAt) ? state.lastReadAt : null,
+    }
+  }
+
+  async setReadState(lastReadSeq: number, lastReadAt: number): Promise<void> {
+    const normalizedSeq = Math.max(0, Math.floor(lastReadSeq))
+    await this.clientState.update((current) => ({
+      ...current,
+      lastReadSeq: normalizedSeq,
+      lastReadAt,
+    }))
   }
 
   /** 退出流程用：等所有在途写入落盘 */

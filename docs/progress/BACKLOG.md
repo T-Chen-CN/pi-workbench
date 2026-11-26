@@ -25,12 +25,12 @@
 | P-03 | 供应商预设的真实凭证手工验收（发布前必做） | P1 | ⬜ 未做（清单见 [provider-presets §11.2](../architecture/provider-presets.md)）：8 家 × api_key 各一次；4 条 OAuth（含验证 `openai` 粘贴回调 `client_id` 换 token 与各家订阅策略）；下调上下文/输出上限在**轮次边界**生效且不打断；换模型档位自动降级；会话模型回落不弹提示；云端配置页 Key 只回掩码 |
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
-| C-03 | 云端 Agent P1 项（从 C-01 拆出） | P1 | ⬜ 未做：记忆自动抽取（挂 `session_before_compact`，内核钩子已就位）· 梦境整理 · 已读未读 · 追加指令打磨 · 结果 diff 回传 · 托盘角标 · 并发压测调优（含 A-25） |
 
 **2026-11-26 发版不阻塞记录（0.11.0 桌面端）**：R-23（输出截断的 B4/B7/`reasoning_effort` 联动，与本次配置链路改动无关，B8 标题预算已同版完成）· P-02（云端 OAuth 未做，云端继续用 API Key 配置，协议无变化）· C-01（云端真派活走查，需真实 Key，且生产补丁待部署）· C-03 / C-06（云端 P1 功能簇，桌面端不依赖）。P-03 保留 P1 并作为本次发版的冒烟项，**发布时未执行**，需在下一个版本前补上。
 
 ### 已交付（只留一行，细节在 git）
 
+- 2026-11-26 **C-03 云端 Agent P1 功能簇（全部落地并上线验证）**：落地脱敏结果 diff 回传（终端 `collectTaskDiff` 排除敏感/二进制/锁文件、命中密钥脱敏、按 32KB/128KB 上限裁剪，云端 `get_task({ includeDiff: true })` 按需拉取，不推 UI / 不塞 `done` 唤醒帧）；落地多端已读未读同步（F-52，`mark_read` / `POST /v1/read` / `read_state` 广播，Web 标题与标签角标 + 桌面端状态栏角标 + 托盘 Tooltip / `setBadgeCount` / Windows `setOverlayIcon`）；落地云端持久记忆（`${dataDir}/memory/`，`session_before_compact` 压缩前自动抽取、`before_agent_start` 预算内 Top-K 注入、空闲 30m 梦境整理与手工记忆硬保护、白名单留存文档 `AGENTS.md` / `SOUL.md` 在 Web 与桌面端透明可查可编辑，覆盖 A-25）；打磨运行中/提问中工单 `task_message` 直达追加指令与终端确认里程碑，并补齐并发压测（10 设备 20 工单并发上限 8 + FIFO 补发、配额原子防超发、220 事件风暴重连补齐），同时修复并发 `tryDispatch` 落盘与极速回包的竞态。
 - 2026-11-26 **P-05 & P-07（SDK 实测收口与探测修复 + models.dev 独立富数据）**：实测 8 家 `/models` 端点（全部存在；修复桌面端对 Google / xAI 无效 Key 返回 HTTP 400 的误放行并避免误判地区受限）、核实并单测钉住 `clampMaxTokensToContext` 边界与 `openai` 粘贴回调解析；落地完全解耦于 Pi catalog 的 `models.dev` 富数据模块与 `cache/models-dev.json`（ETag / 12h TTL / `PI_OFFLINE` 与失败静默降级），在供应商设置页展示模型价格、多模态、知识截止、发布时间、开源权重与废弃状态。
 - 2026-11-26 **C-01 云端 Agent（P0 部署与真派活闭环验收完成）**：最新版本（含 0.11.0 预设供应商、C-02/C-04/C-05/C-06/C-07/P-09 与授权提示增强、Key 探测报错透出、Web 重渲染模型下拉修复）部署至 `https://tchen-xiaoxiao.com`（release `20261126103114` + `pi-warp-proxy` 用户态出口），本地自包含包 35/35 + 30 个云端测试文件 211/211 全绿；线上完成真实 Google 模型对话、配对、确认授权、隔离 worktree 派活执行、里程碑实时唤醒、结果汇报、干净工作树自动回收、服务重启重连与安全/真相源隔离全项复核。
 - 2026-11-26 **C-02 & C-07（工单停滞看门狗 + 全站并发上限 + F-23 语义对齐）**：落地终端工具 10 分钟无输出增量上报 `task_stalled`（同一停滞只报一次）、工单运行期 60 s `task_heartbeat`（刷新设备活跃但不洗白静默计时）、云端 20 分钟无事件主动唤醒巡检；落地全站并发上限（默认 8，超出排队提示并在终态按 FIFO 补投，A-21 / D-15）；将需求 F-23 / A-10 对齐到非阻塞 `ask_cloud` 实现并补齐单测。

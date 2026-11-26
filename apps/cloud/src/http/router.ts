@@ -69,6 +69,10 @@ export class Router {
     return this.add('PUT', pattern, handler)
   }
 
+  patch(pattern: string, handler: Handler): this {
+    return this.add('PATCH', pattern, handler)
+  }
+
   delete(pattern: string, handler: Handler): this {
     return this.add('DELETE', pattern, handler)
   }

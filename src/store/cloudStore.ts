@@ -43,6 +43,9 @@ interface CloudState {
   stoppingTaskIds: Record<string, true>
   /** 最近一次快照的游标：连接恢复时用于续读 */
   lastSeq: number
+  /** 服务端持久化的已读游标与未读数（F-52 / C-03c） */
+  lastReadSeq: number
+  unreadCount: number
   linking: boolean
   error: string | null
   initialized: boolean
@@ -60,6 +63,10 @@ interface CloudState {
   /** 结束工作单元（F-19a 的人工入口，脏树 / 用户放弃时用）；false = 没送到，调用方要提示 */
   closeUnit: (unitId: string) => Promise<boolean>
   answerQuestion: (taskId: string, text: string) => Promise<void>
+  /** 向运行中/等待回答的工单直接发送追加指令或回复（C-03d） */
+  sendTaskMessage: (taskId: string, text: string) => Promise<boolean>
+  /** 上报已读游标并多端清零未读数（F-52 / C-03c） */
+  markRead: () => Promise<void>
   confirmPlan: (input: {
     planText: string
     items: Array<{ deviceId: string; workspacePath: string }>
@@ -188,6 +195,8 @@ export const useCloudStore = create<CloudState>((set, get) => ({
   awaySummary: null,
   stoppingTaskIds: {},
   lastSeq: 0,
+  lastReadSeq: 0,
+  unreadCount: 0,
   linking: false,
   error: null,
   initialized: false,
@@ -358,8 +367,35 @@ export const useCloudStore = create<CloudState>((set, get) => ({
   },
 
   answerQuestion: async (taskId, text) => {
-    // 回答以普通用户消息进入云端会话，云端再把结论转给终端（F-23）
-    await get().say(`关于工单 ${taskId}：${text}`)
+    const ok = await get().sendTaskMessage(taskId, text)
+    if (!ok) {
+      // 回退：发送普通用户消息
+      await get().say(`关于工单 ${taskId}：${text}`)
+    }
+  },
+
+  sendTaskMessage: async (taskId, text) => {
+    const body = text.trim()
+    if (!taskId || !body) return false
+    const result = await api.cloudClientSend({
+      type: 'task_message',
+      taskId,
+      text: body,
+      at: Date.now(),
+    })
+    if (!result.success) {
+      set({ error: result.error ?? '补充指令未送达' })
+      return false
+    }
+    return true
+  },
+
+  markRead: async () => {
+    const { lastSeq, unreadCount, lastReadSeq, clientState } = get()
+    if (clientState.status !== 'open') return
+    if (unreadCount === 0 && lastSeq <= lastReadSeq) return
+    set({ unreadCount: 0, lastReadSeq: Math.max(lastReadSeq, lastSeq) })
+    await api.cloudClientSend({ type: 'mark_read', seq: lastSeq, at: Date.now() })
   },
 
   confirmPlan: async (input) => {
@@ -442,6 +478,8 @@ export const useCloudStore = create<CloudState>((set, get) => ({
         awaySummary,
         stoppingTaskIds: {},
         lastSeq: Number(frame.seq ?? snapshot.lastSeq ?? 0),
+        lastReadSeq: Number(snapshot.lastReadSeq ?? 0),
+        unreadCount: Number(snapshot.unreadCount ?? 0),
         agentStatus: snapshot.cloud?.status ?? 'idle',
         canStopReply: Boolean(snapshot.cloud?.canStopReply),
         // 收到整份快照说明连接真的通了：清掉上一轮的失败文案，否则会永久挂在空状态里
@@ -521,6 +559,9 @@ export const useCloudStore = create<CloudState>((set, get) => ({
           set((state) => {
             const messages = state.messages.slice()
             const targetId = String(event.messageId ?? '')
+            const isAssistantUnread =
+              !targetId.startsWith(USER_ECHO_PREFIX) && String(event.text ?? '').trim().length > 0
+            const nextUnread = isAssistantUnread ? state.unreadCount + 1 : state.unreadCount
             const byId = targetId ? messages.findIndex((row) => row.id === targetId) : -1
             if (byId >= 0) {
               messages[byId] = {
@@ -529,7 +570,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
                 streaming: false,
                 error: event.error,
               }
-              return { ...seqPatch(state), messages }
+              return { ...seqPatch(state), messages, unreadCount: nextUnread }
             }
             for (let index = messages.length - 1; index >= 0; index -= 1) {
               const row = messages[index]
@@ -542,7 +583,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
               }
               break
             }
-            return { ...seqPatch(state), messages }
+            return { ...seqPatch(state), messages, unreadCount: nextUnread }
           })
           return
         }
@@ -655,6 +696,14 @@ export const useCloudStore = create<CloudState>((set, get) => ({
               },
               ...state.notices,
             ].slice(0, 20),
+          }))
+          return
+        }
+        case 'read_state': {
+          set((state) => ({
+            ...seqPatch(state),
+            lastReadSeq: Number(event.lastReadSeq ?? state.lastReadSeq),
+            unreadCount: Number(event.unreadCount ?? 0),
           }))
           return
         }

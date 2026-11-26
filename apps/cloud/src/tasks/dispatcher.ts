@@ -12,6 +12,7 @@
 
 import {
   CLOUD_MAX_CONCURRENT_SESSIONS,
+  CLOUD_MAX_DIFF_LIMIT_BYTES,
   CLOUD_QUEUED_ACK_WINDOW_MS,
   CLOUD_TASK_SILENCE_CHECK_MS,
   CLOUD_WAITING_HUMAN_TIMEOUT_MS,
@@ -79,6 +80,8 @@ export function toUnitView(unit: UnitRecord): CloudUnitView {
 export class TaskDispatcher {
   /** 单设备在途已下发但尚未收到 assigned 的工单（防并发 tryDispatch 同时下发多条 queued） */
   private inFlightDispatches = new Map<string, string>()
+  private drainingQueue = false
+  private drainQueuePending = false
   /** 同一工具停滞只报一次（收到新里程碑/终态后清除，C-02） */
   private reportedToolStalls = new Set<string>()
   /** 同一静默窗口只唤醒一次：记录已告警时的 lastEventAt（C-02） */
@@ -264,10 +267,12 @@ export class TaskDispatcher {
   /** 设备空下来时派队首（FIFO）；同一设备同时只能有一张在跑或在途待 ACK */
   async tryDispatch(task: CloudTaskSnapshot): Promise<void> {
     const store = this.deps.store
-    const deviceId = task.spec.deviceId
+    const fresh = store.findTask(task.id)
+    if (!fresh || fresh.status !== 'queued' || fresh.dispatchedAt !== null) return
+    const deviceId = fresh.spec.deviceId
     const inFlight = this.inFlightDispatches.get(deviceId)
-    if (inFlight && inFlight !== task.id) {
-      this.deps.logger.info(`[cloud] task ${task.id} queued behind in-flight ${inFlight}`)
+    if (inFlight && inFlight !== fresh.id) {
+      this.deps.logger.info(`[cloud] task ${fresh.id} queued behind in-flight ${inFlight}`)
       return
     }
     const running = store
@@ -279,29 +284,32 @@ export class TaskDispatcher {
       )
     if (running.length > 0) {
       this.deps.logger.info(
-        `[cloud] task ${task.id} queued behind ${running.map((item) => item.id).join(',')}`
+        `[cloud] task ${fresh.id} queued behind ${running.map((item) => item.id).join(',')}`
       )
       return
     }
     // D-15 / A-21：全站并发上限保护——超出上限保持 queued（dispatchedAt 仍为 null，不计 ACK 超时）并提示
     const limit = this.maxConcurrent()
-    if (this.activeGlobalCount(task.id) >= limit) {
+    if (this.activeGlobalCount(fresh.id) >= limit) {
       this.deps.logger.info(
-        `[cloud] task ${task.id} queued: global concurrency limit (${limit}) reached`
+        `[cloud] task ${fresh.id} queued: global concurrency limit (${limit}) reached`
       )
       this.deps.hub.publish({
         type: 'notice',
         level: 'info',
-        text: `已达并发上限（${limit} 个工单执行中），${task.id}（${task.spec.title}）已进入排队等待`,
+        text: `已达并发上限（${limit} 个工单执行中），${fresh.id}（${fresh.spec.title}）已进入排队等待`,
         at: this.now(),
-        key: `concurrency-limit-${task.id}`,
+        key: `concurrency-limit-${fresh.id}`,
       })
       return
     }
     if (!this.deps.hub.isDeviceOnline(deviceId)) return
-    // 同步占位，防止并发 dispatch 在 await saveTask 期间同时发第二张工单
-    this.inFlightDispatches.set(deviceId, task.id)
-    const dispatched: CloudTaskSnapshot = { ...task, dispatchedAt: this.now() }
+    // 同步占位，防止并发 dispatch 在 await saveTask 期间同时发第二张工单或绕过全站上限
+    this.inFlightDispatches.set(deviceId, fresh.id)
+    const dispatched: CloudTaskSnapshot = { ...fresh, dispatchedAt: this.now() }
+    // 必须先落盘 dispatchedAt 再发往设备，否则极快回包的 `task_status: assigned/running`
+    // 会被后完成的 `saveTask(dispatched)` 覆盖回 `queued`，导致全站并发计数失真
+    await store.saveTask(dispatched)
     const delivered = this.deps.hub.sendToDevice(
       deviceId,
       {
@@ -310,15 +318,18 @@ export class TaskDispatcher {
         seq: 0,
         task: dispatched,
       },
-      task.id
+      fresh.id
     )
     if (!delivered) {
-      if (this.inFlightDispatches.get(deviceId) === task.id) {
+      if (this.inFlightDispatches.get(deviceId) === fresh.id) {
         this.inFlightDispatches.delete(deviceId)
+      }
+      const current = store.findTask(fresh.id)
+      if (current && current.status === 'queued') {
+        await store.saveTask({ ...current, dispatchedAt: null })
       }
       return
     }
-    await store.saveTask(dispatched)
     // 投递成功不等于被接收：等终端 ack（`task_status: assigned`）才离开 queued
   }
 
@@ -446,6 +457,7 @@ export class TaskDispatcher {
         const task = this.deps.store.findTask(frame.taskId)
         if (!task || task.spec.deviceId !== deviceId) return
         this.clearInFlight(deviceId, task.id)
+        const sanitizedDiff = sanitizeIncomingDiff(frame.result.diff)
         const moved = transition(task, 'done', {
           now: this.now(),
           reason: 'completed',
@@ -455,6 +467,7 @@ export class TaskDispatcher {
             commit: frame.result.commit,
             changedFiles: frame.result.changedFiles,
             secretHits: frame.result.secretHits,
+            ...(sanitizedDiff ? { diff: sanitizedDiff } : {}),
           },
         })
         if (moved.changed) {
@@ -883,17 +896,29 @@ export class TaskDispatcher {
   }
 
   private async dispatchNextQueued(): Promise<void> {
-    if (this.activeGlobalCount() >= this.maxConcurrent()) return
-    const queued = this.deps.store
-      .listTasks()
-      .filter((task) => task.status === 'queued' && task.dispatchedAt === null)
-      .sort((a, b) => a.createdAt - b.createdAt)
-    for (const task of queued) {
-      if (this.activeGlobalCount() >= this.maxConcurrent()) break
-      const unit = this.deps.store.findUnit(task.spec.workUnitId)
-      if (unit && (unit.closedAt !== null || unit.closeRequestedAt)) continue
-      if (!this.deps.hub.isDeviceOnline(task.spec.deviceId)) continue
-      await this.tryDispatch(task)
+    if (this.drainingQueue) {
+      this.drainQueuePending = true
+      return
+    }
+    this.drainingQueue = true
+    try {
+      do {
+        this.drainQueuePending = false
+        if (this.activeGlobalCount() >= this.maxConcurrent()) break
+        const queued = this.deps.store
+          .listTasks()
+          .filter((task) => task.status === 'queued' && task.dispatchedAt === null)
+          .sort((a, b) => a.createdAt - b.createdAt)
+        for (const task of queued) {
+          if (this.activeGlobalCount() >= this.maxConcurrent()) break
+          const unit = this.deps.store.findUnit(task.spec.workUnitId)
+          if (unit && (unit.closedAt !== null || unit.closeRequestedAt)) continue
+          if (!this.deps.hub.isDeviceOnline(task.spec.deviceId)) continue
+          await this.tryDispatch(task)
+        }
+      } while (this.drainQueuePending)
+    } finally {
+      this.drainingQueue = false
     }
   }
 
@@ -929,6 +954,26 @@ function mergeChangedFiles(
 
 function normalize(value: string): string {
   return value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+/** 服务端二次夹取 diff 大小，避免异常终端帧把 tasks.json 撑爆（C-03b） */
+function sanitizeIncomingDiff(
+  raw: { bytes: number; excerpt: string; truncated?: boolean } | undefined
+): { bytes: number; excerpt: string; truncated?: boolean } | undefined {
+  if (!raw || typeof raw.excerpt !== 'string') return undefined
+  const excerpt = raw.excerpt.trim()
+  if (!excerpt) return undefined
+  const bytes =
+    typeof raw.bytes === 'number' && Number.isFinite(raw.bytes) && raw.bytes >= 0
+      ? Math.floor(raw.bytes)
+      : Buffer.byteLength(excerpt, 'utf8')
+  if (Buffer.byteLength(excerpt, 'utf8') <= CLOUD_MAX_DIFF_LIMIT_BYTES) {
+    return { bytes, excerpt, ...(raw.truncated ? { truncated: true } : {}) }
+  }
+  const clipped = Buffer.from(excerpt, 'utf8')
+    .subarray(0, CLOUD_MAX_DIFF_LIMIT_BYTES)
+    .toString('utf8')
+  return { bytes, excerpt: `${clipped}\n... [clipped by server]`, truncated: true }
 }
 
 function authorizationError(code: string): string {

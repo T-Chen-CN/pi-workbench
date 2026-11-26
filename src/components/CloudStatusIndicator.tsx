@@ -40,6 +40,7 @@ export const CloudStatusIndicator: React.FC<{ onOpen: () => void }> = ({ onOpen 
   const pending = useCloudStore((store) => store.deviceState.pending)
   const tasks = useCloudStore((store) => store.tasks)
   const devices = useCloudStore((store) => store.devices)
+  const unreadCount = useCloudStore((store) => store.unreadCount)
   const stoppingTaskIds = useCloudStore((store) => store.stoppingTaskIds)
   const stopTask = useCloudStore((store) => store.stopTask)
   const init = useCloudStore((store) => store.init)
@@ -193,6 +194,11 @@ export const CloudStatusIndicator: React.FC<{ onOpen: () => void }> = ({ onOpen 
         >
           <Cloud size={12} className={tone} />
           <span className={tone}>{label}</span>
+          {linked && unreadCount > 0 && (
+            <span className="tabular-nums text-accent">
+              {t('cloudUnreadCount', { count: unreadCount })}
+            </span>
+          )}
           {linked && pending > 0 && (
             <span className="text-ink-muted">{t('cloudPendingFrames', { count: pending })}</span>
           )}

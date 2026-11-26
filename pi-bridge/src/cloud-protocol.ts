@@ -76,6 +76,9 @@ export const CLOUD_OUTBOX_MAX_ENTRIES = 2_000
 export const CLOUD_OUTBOX_MAX_AGE_MS = 24 * 60 * 60 * 1000
 /** 单进程并发会话/活跃工单上限（D-15 / A-21：超出排队而不是全放） */
 export const CLOUD_MAX_CONCURRENT_SESSIONS = 8
+/** 工单结果默认/最大回传 diff 字节上限（C-03b：供云端 Agent 按需审查，不向用户界面铺开） */
+export const CLOUD_DEFAULT_DIFF_LIMIT_BYTES = 32 * 1024
+export const CLOUD_MAX_DIFF_LIMIT_BYTES = 128 * 1024
 /** 终端工单工具静默阈值：超过后上报 task_stalled（C-02） */
 export const CLOUD_TOOL_STALL_MS = 10 * 60 * 1000
 /** 云端工单静默巡检阈值：超过后主动唤醒一轮检查（C-02） */
@@ -153,6 +156,8 @@ export const CLIENT_TO_SERVER_TYPES: ReadonlySet<string> = new Set([
   'stop_reply',
   'stop_task',
   'close_unit',
+  'mark_read',
+  'task_message',
   'ping',
 ])
 
@@ -276,6 +281,8 @@ export interface CloudTaskProgress {
   changedFiles?: CloudChangedFile[]
   /** 疑似密钥命中：只存位置与类型，绝不存值（F-36 / A-29） */
   secretHits?: CloudSecretHit[]
+  /** 脱敏且受字节上限控制的精简 diff（C-03b，供云端 Agent 调 get_task 按需审查） */
+  diff?: { bytes: number; excerpt: string; truncated?: boolean }
   branch?: string
   /** 工作单元收敛后的提交（同一 unit 只能有一次，F-19a） */
   commit?: string
@@ -334,7 +341,7 @@ export interface CloudTaskResult {
   summary: string
   changedFiles: CloudChangedFile[]
   tests?: { command: string; passed: boolean; excerpt?: string }
-  diff?: { bytes: number; excerpt: string }
+  diff?: { bytes: number; excerpt: string; truncated?: boolean }
   branch?: string
   commit?: string
   notes?: string
@@ -426,6 +433,10 @@ export interface CloudSnapshot {
   serverVersion: string
   protocol: typeof CLOUD_PROTOCOL_VERSION
   lastSeq: number
+  /** 服务端持久化的最后已读游标（F-52 / C-03c） */
+  lastReadSeq?: number
+  /** 未读数：助手回复、工单终态或需决定通知（F-52 / C-03c） */
+  unreadCount?: number
   cloud: CloudRuntimeState
   messages: CloudChatMessage[]
   tasks: CloudTaskSnapshot[]
@@ -488,6 +499,13 @@ export type CloudEvent =
       /** 稳定键：同一件事重复通知时去重（例如“你离开期间…”） */
       key?: string
     }
+  /** 已读状态多端同步（F-52 / C-03c） */
+  | {
+      type: 'read_state'
+      lastReadSeq: number
+      unreadCount: number
+      at: number
+    }
 
 // ---------------------------------------------------------------------------
 // 客户端通道（桌面端 / Web）
@@ -509,6 +527,10 @@ export type ClientToServerFrame =
   | ({ type: 'stop_task'; taskId: string } & FrameBase)
   /** F-19a：结束工作单元（回收工作树）；干净树才会真删，脏树只汇报 */
   | ({ type: 'close_unit'; unitId: string } & FrameBase)
+  /** F-52 / C-03c：客户端上报已读游标，多端同步清零未读数 */
+  | ({ type: 'mark_read'; seq?: number; at?: number } & FrameBase)
+  /** C-03d：直接向运行中 / 等待回答的工单发送追加指令或回复 */
+  | ({ type: 'task_message'; taskId: string; text: string; at?: number } & FrameBase)
   | ({ type: 'ping'; at: number } & FrameBase)
 
 export type ServerToClientFrame =

@@ -11,7 +11,13 @@ import { execFile } from 'node:child_process'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
-import type { CloudChangedFile, CloudSecretHit } from 'pi-bridge'
+import {
+  CLOUD_DEFAULT_DIFF_LIMIT_BYTES,
+  CLOUD_MAX_DIFF_LIMIT_BYTES,
+  type CloudChangedFile,
+  type CloudSecretHit,
+  type CloudTaskResult,
+} from 'pi-bridge'
 
 const execFileAsync = promisify(execFile)
 
@@ -279,4 +285,175 @@ export async function scanWorktreeSecrets(
   }
 
   return hits
+}
+
+const EXCLUDED_DIFF_ATTENTION = new Set(['env-file', 'lockfile'])
+const MAX_UNTRACKED_DIFF_BYTES = 64 * 1024
+
+function shouldSkipDiffPath(filePath: string): boolean {
+  const attention = classifyAttentionPath(filePath)
+  return attention !== undefined && EXCLUDED_DIFF_ATTENTION.has(attention)
+}
+
+function redactDiffLine(line: string): string {
+  // diff 文件头（+++ / --- / @@）不含密钥载荷，保持原样
+  if (
+    line.startsWith('diff --git ') ||
+    line.startsWith('+++ ') ||
+    line.startsWith('--- ') ||
+    line.startsWith('@@ ') ||
+    line.startsWith('index ')
+  ) {
+    return line
+  }
+  const kind = detectSecretKind(line)
+  if (!kind) return line
+  const prefix = line.startsWith('+') || line.startsWith('-') || line.startsWith(' ') ? line[0] : ''
+  return `${prefix}[REDACTED: ${kind}]`
+}
+
+function clampDiffLimit(limitBytes?: number): number {
+  if (typeof limitBytes !== 'number' || !Number.isFinite(limitBytes) || limitBytes <= 0) {
+    return CLOUD_DEFAULT_DIFF_LIMIT_BYTES
+  }
+  return Math.max(512, Math.min(CLOUD_MAX_DIFF_LIMIT_BYTES, Math.floor(limitBytes)))
+}
+
+/**
+ * 清洗并截断 unified diff（C-03b）：
+ * - 跳过 `.env*`、依赖锁文件与二进制块（只保留一句省略提示）；
+ * - 命中疑似密钥的任意行替换为 `[REDACTED: <kind>]`，绝不把原值传离终端；
+ * - 按 UTF-8 字节预算在行边界截断。
+ */
+export function sanitizeDiffExcerpt(
+  rawDiff: string,
+  limitBytes?: number
+): NonNullable<CloudTaskResult['diff']> | undefined {
+  const maxBytes = clampDiffLimit(limitBytes)
+  const trimmed = rawDiff.trim()
+  if (!trimmed) return undefined
+
+  const rawLines = rawDiff.split(/\r?\n/)
+  const filtered: string[] = []
+  let skippingFile = false
+
+  for (const line of rawLines) {
+    if (line.startsWith('diff --git ')) {
+      const match = /^diff --git a\/(.+?) b\/(.+)$/.exec(line)
+      const target = match ? normalizePosix(match[2]) : ''
+      if (target && shouldSkipDiffPath(target)) {
+        skippingFile = true
+        filtered.push(`diff --git a/${target} b/${target}`)
+        filtered.push(`[omitted: ${classifyAttentionPath(target)}]`)
+        continue
+      }
+      skippingFile = false
+      filtered.push(line)
+      continue
+    }
+    if (skippingFile) continue
+    if (line.startsWith('Binary files ') || line === 'GIT binary patch') {
+      filtered.push(line)
+      skippingFile = true
+      continue
+    }
+    filtered.push(redactDiffLine(line))
+  }
+
+  const fullText = filtered.join('\n').trim()
+  if (!fullText) return undefined
+  const totalBytes = Buffer.byteLength(fullText, 'utf8')
+  if (totalBytes <= maxBytes) {
+    return { bytes: totalBytes, excerpt: fullText }
+  }
+
+  const notice = `\n... [truncated, total ${totalBytes} bytes > limit ${maxBytes} bytes]`
+  const budget = Math.max(128, maxBytes - Buffer.byteLength(notice, 'utf8'))
+  const kept: string[] = []
+  let used = 0
+  for (const line of fullText.split('\n')) {
+    const lineBytes = Buffer.byteLength(line, 'utf8') + (kept.length > 0 ? 1 : 0)
+    if (used + lineBytes > budget) {
+      if (kept.length === 0) {
+        kept.push(Buffer.from(line, 'utf8').subarray(0, budget).toString('utf8'))
+      }
+      break
+    }
+    kept.push(line)
+    used += lineBytes
+  }
+  return {
+    bytes: totalBytes,
+    excerpt: kept.join('\n') + notice,
+    truncated: true,
+  }
+}
+
+/**
+ * 采集工单工作树里的脱敏 diff（含相对 base 的已提交 + 未提交改动 + 未跟踪文本文件）。
+ * 任何 git / 读取异常静默降级为 undefined，绝不阻断工单结单。
+ */
+export async function collectTaskDiff(
+  base: string | undefined,
+  worktreePath: string,
+  limitBytes?: number
+): Promise<NonNullable<CloudTaskResult['diff']> | undefined> {
+  const runGit = (args: string[]): Promise<string> =>
+    execFileAsync('git', ['-C', worktreePath, ...args], {
+      timeout: GIT_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+    }).then((result) => result.stdout)
+
+  const parts: string[] = []
+  const diffSpecs: string[][] = base
+    ? [['diff', '--no-color', '-U3', base]]
+    : [
+        ['diff', '--no-color', '-U3', 'HEAD'],
+        ['diff', '--no-color', '-U3'],
+      ]
+  for (const args of diffSpecs) {
+    try {
+      const diff = await runGit(args)
+      if (diff.trim()) parts.push(diff.trimEnd())
+      if (base) break
+    } catch {
+      // base 不可用时继续尝试回退 diff
+    }
+  }
+
+  // 未跟踪新文件：构造标准 unified diff 片段，排除 .env* / lockfile / 二进制 / 超大文件
+  try {
+    const output = await runGit(['ls-files', '--others', '--exclude-standard'])
+    const untracked = output
+      .split(/\r?\n/)
+      .map((line) => normalizePosix(line.trim()))
+      .filter(Boolean)
+      .slice(0, MAX_UNTRACKED_FILES)
+    for (const relPath of untracked) {
+      if (shouldSkipDiffPath(relPath)) {
+        parts.push(`diff --git a/${relPath} b/${relPath}\n[omitted: ${classifyAttentionPath(relPath)}]`)
+        continue
+      }
+      const fullPath = path.join(worktreePath, relPath)
+      try {
+        const stat = await fs.stat(fullPath)
+        if (!stat.isFile() || stat.size > MAX_UNTRACKED_DIFF_BYTES) continue
+        const content = await fs.readFile(fullPath, 'utf-8')
+        if (content.includes('\0')) continue
+        const lines = content.split(/\r?\n/)
+        const body = lines.map((line) => `+${line}`).join('\n')
+        parts.push(
+          `diff --git a/${relPath} b/${relPath}\nnew file\n--- /dev/null\n+++ b/${relPath}\n@@ -0,0 +1,${lines.length} @@\n${body}`
+        )
+      } catch {
+        // 跳过不可读或已删文件
+      }
+    }
+  } catch {
+    // 非 git 目录时忽略
+  }
+
+  if (parts.length === 0) return undefined
+  return sanitizeDiffExcerpt(parts.join('\n'), limitBytes)
 }

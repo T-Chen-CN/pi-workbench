@@ -34,6 +34,8 @@
 | `pairing.json` | 6 位一次性码（5 分钟，CAS 作废） |
 | `config.json` | 云端模型配置；API Key 为 AES-256-GCM 密文（`v1.iv.tag.ct`） |
 | `tasks.json` / `units.json` / `authorizations.json` | 工单、工作单元、授权台账 |
+| `client-state.json` | 多端已读游标（`lastReadSeq` / `lastReadAt`）与离线期基准 |
+| `memory/` | 持久记忆与留存文档（每日 `backup.sh` 自动备份）：`memories.json`（结构化记忆，手工条目硬保护）、`dreams.json`（梦境整理记录）、`AGENTS.md` / `SOUL.md`（白名单留存文档，Web 与桌面端透明可查可编辑） |
 | `agent/` | 云端会话（Pi SDK 的 agentDir）：`sessions/*.jsonl` 是历史与导出的唯一真相源 |
 
 桌面端只落两处：`{appDir}/config/cloud-link.json`（token，`safeStorage` 加密）与
@@ -49,7 +51,9 @@
   2 秒合并一次（`CloudSession.wake`）。**不冒充用户授权**：事件消息带 `details`，模型看到的是事件。
 - `subscribeTrace` 是**常驻订阅**（PR1 的内核改造）：`sendCustomMessage` 起的轮次不经过 `chat()`，
   一次性 `onTrace` 收不到它的轨迹。
-- 压缩前钩子 `session_before_compact` → `onSessionBeforeCompact`（P1 的记忆抽取挂这里）。
+- 压缩前自动记忆抽取与动态注入（`apps/cloud/src/memory/`，C-03a / F-38 ~ F-41 / A-25）：通过 SDK 原生扩展同时注册 `session_before_compact`（压缩前抽取结构化记忆）与 `before_agent_start`（每轮在 6000 字符预算内注入 `SOUL.md` + `AGENTS.md` + 置顶/高相关记忆），并在空闲 ≥30 分钟且无活跃工单时运行梦境整理；`source === 'manual'` 的手工记忆永不被自动抽取或梦境覆盖。
+- 多端已读同步与托盘角标（C-03c / F-52 / F-32）：客户端上报 `mark_read` 或 `POST /v1/read` 后，服务端广播 `read_state`；Web 顶栏与标题、桌面端底部状态栏及系统托盘 Tooltip / `setBadgeCount` / Windows `setOverlayIcon` 同步反映执行中工单数与未读数。
+- 脱敏 diff 按需审查（C-03b）：终端 `collectTaskDiff` 采集已提交与工作树改动并排除 `.env*`/锁文件/二进制、对疑似密钥行脱敏后按字节上限裁剪上报；服务端仅存于 `task.progress.diff`，不推给 UI、也不自动塞入 `done` 唤醒事件，云端 Agent 仅在需要复核代码时调 `get_task({ taskId, includeDiff: true })` 按需拉取。
 
 **配置轮换（F-13 / A-16）**：不在 `agent_settled` 里重建，而是放在**每个入口的 `ensureAgent()` 里**判定
 （`say` / `flushEvents` / 快照都会先过它）：

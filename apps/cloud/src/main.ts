@@ -17,6 +17,7 @@ import {
   type ClientToServerFrame,
   type CloudAwaySummary,
   type CloudAwaySummaryItem,
+  type CloudEvent,
   type CloudSnapshot,
   type CloudTaskSnapshot,
   type CloudWorkspaceInfo,
@@ -38,6 +39,13 @@ import {
 import { createCloudToolsExtension } from './agent/tools.js'
 import { probeProviderKey } from './agent/provider-models.js'
 import { createCloudCredentialStore } from './secure/cloud-credentials.js'
+import { CloudMemoryStore } from './memory/memory-store.js'
+import {
+  CLOUD_DREAM_IDLE_MS,
+  createCloudMemoryExtension,
+  runDreamConsolidation,
+  type AuxiliaryCompleter,
+} from './memory/memory-engine.js'
 import { buildRouter } from './http/routes.js'
 import { defaultWebDir, serveStatic } from './http/static.js'
 import { HttpError, isAllowedOrigin, readJsonBody, sendJson, sourceOf } from './http/router.js'
@@ -55,6 +63,7 @@ const logger = {
 export interface CloudServer {
   config: CloudConfig
   store: CloudStore
+  memoryStore: CloudMemoryStore
   hub: Hub
   dispatcher: TaskDispatcher
   session: CloudSession
@@ -69,6 +78,8 @@ export interface CloudServerHooks {
   probeConfig?: (
     input: { providerId: string; apiKey: string }
   ) => Promise<{ ok: true; warning?: string } | { ok: false; reason: string }>
+  /** 覆盖记忆抽取 / 梦境整理的辅助模型调用（测试不走公网） */
+  completeAuxiliary?: AuxiliaryCompleter
 }
 
 export async function createCloudServer(
@@ -82,6 +93,7 @@ export async function createCloudServer(
   await fs.mkdir(config.agentDir, { recursive: true })
 
   const store = await CloudStore.open(config.dataDir)
+  const memoryStore = await CloudMemoryStore.open(config.dataDir)
   const loginLimiter = new AttemptLimiter()
   const pairLimiter = new AttemptLimiter()
 
@@ -124,10 +136,83 @@ export async function createCloudServer(
     void store.setLastClientLeftAt(null).catch(() => undefined)
   }
 
+  // ------------------------------ 已读 / 未读游标（F-52 / C-03c） ------------------------------
+
+  const unreadEventSeqs: number[] = []
+  const seenTaskUnreadKeys = new Set<string>()
+  const initialReadState = store.getReadState()
+  /** 重启后尚未有新事件前，基于 lastReadAt 估算历史未读数；首次 markRead 清零 */
+  let persistedUnreadAtBaseline = initialReadState.lastReadAt
+  let lastReadSeqRuntime = 0
+
+  function recordPublishedEvent(seq: number, event: CloudEvent): void {
+    if (event.type === 'message_end') {
+      if (event.messageId.startsWith('u-') || !event.text.trim()) return
+      unreadEventSeqs.push(seq)
+    } else if (event.type === 'task') {
+      const status = event.task.status
+      if (status !== 'waiting_human' && !isTerminalTaskStatus(status)) return
+      const key = `${event.task.id}:${status}:${event.task.updatedAt}`
+      if (seenTaskUnreadKeys.has(key)) return
+      seenTaskUnreadKeys.add(key)
+      if (seenTaskUnreadKeys.size > 500) seenTaskUnreadKeys.clear()
+      unreadEventSeqs.push(seq)
+    } else {
+      return
+    }
+    if (unreadEventSeqs.length > 500) unreadEventSeqs.splice(0, unreadEventSeqs.length - 500)
+  }
+
+  function computeUnreadCount(messages?: CloudSnapshot['messages']): number {
+    const liveUnread = unreadEventSeqs.filter((seq) => seq > lastReadSeqRuntime).length
+    if (persistedUnreadAtBaseline === null) return liveUnread
+    // 进程重启后 lastSeq 归零：若用户上次已读时间早于已落盘的助手消息/终态工单，补计它们
+    let persisted = 0
+    if (messages) {
+      for (const message of messages) {
+        if (message.role === 'assistant' && message.at > persistedUnreadAtBaseline) persisted += 1
+      }
+    }
+    for (const task of store.listTasks()) {
+      const doneAt = task.finishedAt ?? task.updatedAt
+      if (
+        (task.status === 'waiting_human' || isTerminalTaskStatus(task.status)) &&
+        doneAt > persistedUnreadAtBaseline
+      ) {
+        persisted += 1
+      }
+    }
+    return Math.max(liveUnread, persisted)
+  }
+
+  async function markRead(requestedSeq?: number): Promise<{ lastReadSeq: number; unreadCount: number }> {
+    const now = Date.now()
+    const currentLastSeq = hub.lastClientSeq()
+    const targetSeq =
+      typeof requestedSeq === 'number' && Number.isFinite(requestedSeq)
+        ? Math.min(Math.max(0, Math.floor(requestedSeq)), currentLastSeq)
+        : currentLastSeq
+    lastReadSeqRuntime = Math.max(lastReadSeqRuntime, targetSeq)
+    persistedUnreadAtBaseline = null
+    while (unreadEventSeqs.length > 0 && unreadEventSeqs[0] <= lastReadSeqRuntime) {
+      unreadEventSeqs.shift()
+    }
+    const unreadCount = unreadEventSeqs.length
+    await store.setReadState(lastReadSeqRuntime, now)
+    hub.publish({
+      type: 'read_state',
+      lastReadSeq: lastReadSeqRuntime,
+      unreadCount,
+      at: now,
+    })
+    return { lastReadSeq: lastReadSeqRuntime, unreadCount }
+  }
+
   const hub = new Hub(
     {
       logger,
       buildSnapshot: () => buildSnapshot(),
+      onPublished: (seq, event) => recordPublishedEvent(seq, event),
       onClientFrame: (peer, frame) => {
         void onClientFrame(peer, frame).catch((error) => {
           logger.error('[cloud] client frame handler failed:', error)
@@ -179,12 +264,15 @@ export async function createCloudServer(
     if (store.getLastClientLeftAt() !== null) {
       latchAwaySummary()
     }
+    const messages = await session.history()
     return {
       serverVersion: config.version,
       protocol: CLOUD_PROTOCOL_VERSION,
       lastSeq: hub.lastClientSeq(),
+      lastReadSeq: lastReadSeqRuntime,
+      unreadCount: computeUnreadCount(messages),
       cloud: session.runtimeState(),
-      messages: await session.history(),
+      messages,
       tasks: store.listTasks(),
       devices: dispatcher.deviceSnapshots(),
       units: dispatcher.unitViews(),
@@ -205,6 +293,9 @@ export async function createCloudServer(
     onDeviceRevoked: (deviceId) => hub.disconnectDevice(deviceId),
     onWorkspacesUpdated: (deviceId) => publishDevice(deviceId),
     onLogout: () => hub.disconnectWebClients(),
+    onMarkRead: (seq) => markRead(seq),
+    memoryStore,
+    onRunDream: () => triggerDream('manual'),
     logger,
   })
 
@@ -348,16 +439,69 @@ export async function createCloudServer(
         return
       case 'say':
         if (typeof frame.text !== 'string') return
-        // 用户回到会话发言后清空离线汇总，避免旧汇总一直挂着
+        lastActivityAt = Date.now()
+        // 用户回到会话发言后清空离线汇总与未读数，避免旧提醒一直挂着
         activeAwaySummary = undefined
+        await markRead()
         await ensureAgent()
         await session.say(frame.text, typeof frame.clientMessageId === 'string' ? frame.clientMessageId : `say-${Date.now()}`)
         return
       case 'confirm_plan':
         if (typeof frame.planText !== 'string' || !Array.isArray(frame.items)) return
+        await markRead()
         await ensureAgent()
         await confirmPlan(frame.planText, frame.items, frame.quota)
         return
+      case 'mark_read':
+        await markRead(typeof frame.seq === 'number' ? frame.seq : undefined)
+        return
+      case 'task_message': {
+        if (typeof frame.taskId !== 'string' || typeof frame.text !== 'string') return
+        const text = frame.text.trim()
+        if (!frame.taskId || !text) return
+        const task = store.findTask(frame.taskId)
+        if (!task || isTerminalTaskStatus(task.status)) {
+          hub.publish({
+            type: 'notice',
+            level: 'warn',
+            text: `工单 ${frame.taskId} 已结束或不存在，补充指令未送达`,
+            at: Date.now(),
+            key: `task-msg-${frame.taskId}`,
+          })
+          return
+        }
+        if (!hub.isDeviceOnline(task.spec.deviceId)) {
+          hub.publish({
+            type: 'notice',
+            level: 'warn',
+            text: `设备离线，补充指令未能送达 ${task.id}`,
+            at: Date.now(),
+            key: `task-msg-offline-${task.id}`,
+          })
+          return
+        }
+        if (task.status === 'waiting_human') {
+          await dispatcher.answerTask(task.id, text, task.question?.id)
+        } else {
+          hub.sendToDevice(
+            task.spec.deviceId,
+            { v: 1, type: 'task_message', seq: 0, taskId: task.id, text, at: Date.now() },
+            task.id
+          )
+        }
+        await markRead()
+        hub.publish({
+          type: 'notice',
+          level: 'info',
+          text:
+            task.status === 'waiting_human'
+              ? `已向 ${task.id} 回复提问`
+              : `已向 ${task.id} 发送补充指令`,
+          at: Date.now(),
+          key: `task-msg-ok-${task.id}-${Date.now()}`,
+        })
+        return
+      }
       case 'stop_reply':
         await session.stopReply()
         return
@@ -610,6 +754,45 @@ export async function createCloudServer(
     return record.updatedAt
   }
 
+  let lastActivityAt = Date.now()
+  let dreamRunning = false
+
+  const completeAuxiliary: AuxiliaryCompleter =
+    hooks.completeAuxiliary ??
+    ((systemPrompt, userPrompt, options) =>
+      agent.completeAuxiliaryPrompt(systemPrompt, userPrompt, options))
+
+  async function triggerDream(trigger: 'idle' | 'manual') {
+    if (dreamRunning) return null
+    dreamRunning = true
+    try {
+      if (trigger === 'manual') {
+        await ensureAgent().catch(() => false)
+      }
+      const record = await runDreamConsolidation(memoryStore, trigger, completeAuxiliary)
+      if (record) {
+        hub.publish({
+          type: 'notice',
+          level: 'info',
+          text: `梦境整理：${record.summary}`,
+          at: record.at,
+          key: `dream-${record.id}`,
+        })
+        logger.info(`[cloud] dream (${trigger}): ${record.summary}`)
+      }
+      return record
+    } catch (error) {
+      logger.warn('[cloud] dream consolidation failed:', error)
+      return null
+    } finally {
+      dreamRunning = false
+    }
+  }
+
+  function hasActiveTasks(): boolean {
+    return store.listTasks().some((task) => !isTerminalTaskStatus(task.status))
+  }
+
   /** 用给定配置建运行时并续上唯一会话 */
   async function startAgent(resolved: ResolvedCloudConfig): Promise<boolean> {
     const result = await agent.initialize({
@@ -623,9 +806,16 @@ export async function createCloudServer(
       // 云端会话：无审批（mode=auto）、不挂计划与工作树扩展、工具白名单只有六个
       builtinExtensions: { approval: false, plan: false, worktree: false },
       toolAllowlist: [...CLOUD_TOOL_NAMES],
-      extensionFactories: [createCloudToolsExtension({ store, hub, dispatcher })],
+      extensionFactories: [
+        createCloudToolsExtension({ store, hub, dispatcher }),
+        createCloudMemoryExtension(memoryStore, {
+          complete: completeAuxiliary,
+          logger,
+        }),
+      ],
       getDefaultPermissionLevel: () => 'auto',
       onAgentSettled: () => {
+        lastActivityAt = Date.now()
         session.onSettled()
       },
     })
@@ -774,6 +964,19 @@ export async function createCloudServer(
     void dispatcher.sweepTimeouts().catch((error) => logger.warn('[cloud] sweeper failed:', error))
     loginLimiter.prune()
     pairLimiter.prune()
+    // F-41：无活跃工单且空闲 ≥30 分钟、且自上次整理以来有新活动或自动记忆可整理时，触发梦境整理
+    const now = Date.now()
+    if (
+      agentReady &&
+      !dreamRunning &&
+      !session.isBusy() &&
+      !hasActiveTasks() &&
+      now - lastActivityAt >= CLOUD_DREAM_IDLE_MS &&
+      lastActivityAt > memoryStore.lastDreamAt() &&
+      memoryStore.listMemories().some((item) => item.source !== 'manual')
+    ) {
+      void triggerDream('idle')
+    }
   }, 5_000)
   sweeper.unref?.()
 
@@ -782,6 +985,7 @@ export async function createCloudServer(
   const cloudServer: CloudServer = {
     config,
     store,
+    memoryStore,
     hub,
     dispatcher,
     session,

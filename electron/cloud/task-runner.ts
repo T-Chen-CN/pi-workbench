@@ -31,7 +31,7 @@ import {
   installWorktreePrePushHook,
   type TaskGuardInfo,
 } from './task-guard.js'
-import { annotateChangedFiles, scanWorktreeSecrets } from './task-report.js'
+import { annotateChangedFiles, collectTaskDiff, scanWorktreeSecrets } from './task-report.js'
 import { createDesktopCredentialStore } from '../credentials-store.js'
 import { getModelsStore } from '../models-store.js'
 import { isCatalogNetworkAllowed } from '../providers-service.js'
@@ -844,6 +844,11 @@ export class CloudTaskRunner {
       this.units.get(task.unitId)?.base,
       task.worktreePath
     ).catch(() => [] as CloudSecretHit[])
+    const diff = await collectTaskDiff(
+      this.units.get(task.unitId)?.base,
+      task.worktreePath,
+      spec.output.diffLimitBytes
+    ).catch(() => undefined)
     let commit = ''
     let branch = ''
     try {
@@ -861,6 +866,7 @@ export class CloudTaskRunner {
       branch: branch && branch !== 'HEAD' ? branch : undefined,
       commit: commit || undefined,
       secretHits: secretHits.length > 0 ? secretHits : undefined,
+      ...(diff ? { diff } : {}),
       worktreeClean,
     }
     if (changedFiles.length === 0) {
@@ -1085,10 +1091,18 @@ export class CloudTaskRunner {
     }
   }
 
-  /** 插话：不结束本轮，按 steer 注入 */
+  /** 插话：不结束本轮，按 steer 注入，并回送一条确认里程碑（C-03d） */
   async message(taskId: string, text: string): Promise<boolean> {
     const task = this.active.get(taskId)
     if (!task) return false
+    const preview = text.trim().replace(/\s+/g, ' ').slice(0, 80)
+    if (preview) {
+      this.deps.onMilestone(task.id, {
+        kind: 'progress',
+        text: `已收到追加指令：${preview}`,
+        at: this.now(),
+      })
+    }
     try {
       if (this.manager?.isSessionBusy?.(task.sessionId)) {
         await this.manager.steer?.(task.sessionId, text)
