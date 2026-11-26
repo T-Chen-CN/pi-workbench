@@ -47,6 +47,7 @@ vi.mock('ws', () => {
 vi.mock('../electron/cloud/link-store.js', () => ({
   readCloudLink: () => ({ baseUrl: 'https://cloud.example', deviceId: 'dev-1', linked: true }),
   readCloudToken: () => 'token-1',
+  readCloudClientToken: () => 'client-token-1',
   wsUrl: (baseUrl: string, path: string) =>
     `${baseUrl.replace('https', 'wss')}${path}`,
 }))

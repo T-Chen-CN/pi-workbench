@@ -6,18 +6,21 @@
  */
 
 import * as path from 'node:path'
+import * as fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { getAppDir } from '../app-paths.js'
-import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
+import { readJsonWithBackup, writeJsonAtomic, writeJsonAtomicAsync } from '../atomic-json.js'
 import { decryptSecret, encryptSecret } from '../secret-crypto.js'
 
 export interface CloudLinkRecord {
-  /** 云端根地址，如 https://tchen-xiaoxiao.com（不带尾斜杠） */
+  /** 云端根地址，如 https://cloud.example.com（不带尾斜杠） */
   baseUrl: string
   deviceId: string
   deviceName: string
-  /** safeStorage 加密后的 token（`enc:` 前缀） */
+  /** safeStorage 加密后的设备执行 token（`enc:` 前缀，仅用于 /device/ws 与工作区上报） */
   token: string
+  /** safeStorage 加密后的桌面用户控制面 token（`enc:` 前缀，用于 /client/ws 与管理 REST；缺省时回退 token 兼容旧配对） */
+  clientToken?: string
   pairedAt: number
   /** 上次成功连上的时间，用于 UI 展示 */
   lastConnectedAt?: number
@@ -48,9 +51,16 @@ export function readCloudLink(): CloudLinkRecord | null {
   return record
 }
 
-/** 解密后的 token；解不出来（换机 / 系统密钥失效）时返回空串，调用方按未连接处理 */
+/** 解密后的设备执行 token；解不出来（换机 / 系统密钥失效）时返回空串，调用方按未连接处理 */
 export function readCloudToken(record: CloudLinkRecord | null): string {
   if (!record) return ''
+  return decryptSecret(record.token)
+}
+
+/** 解密后的桌面控制面 token；老配对记录没有独立 clientToken 时回退设备 token */
+export function readCloudClientToken(record: CloudLinkRecord | null): string {
+  if (!record) return ''
+  if (record.clientToken) return decryptSecret(record.clientToken)
   return decryptSecret(record.token)
 }
 
@@ -71,12 +81,16 @@ export async function saveCloudLink(input: {
   deviceId: string
   deviceName: string
   token: string
+  clientToken?: string
 }): Promise<CloudLinkRecord> {
+  const normalizedBaseUrl = normalizeBaseUrl(input.baseUrl)
+  if (!normalizedBaseUrl) throw new Error('Invalid cloud base URL')
   const record: CloudLinkRecord = {
-    baseUrl: normalizeBaseUrl(input.baseUrl),
+    baseUrl: normalizedBaseUrl,
     deviceId: input.deviceId,
     deviceName: input.deviceName,
     token: encryptSecret(input.token),
+    ...(input.clientToken ? { clientToken: encryptSecret(input.clientToken) } : {}),
     pairedAt: Date.now(),
   }
   await writeJsonAtomic(linkPath(), record)
@@ -89,14 +103,25 @@ export async function touchCloudLink(record: CloudLinkRecord): Promise<void> {
 
 export async function clearCloudLink(): Promise<void> {
   const file = linkPath()
-  if (!existsSync(file)) return
-  await writeJsonAtomic(file, {})
+  if (existsSync(file)) {
+    // 清理连接凭据不能写 .bak，否则旧加密 token 会滞留磁盘
+    await writeJsonAtomicAsync(file, {}, { backup: false })
+  }
+  await fs.rm(`${file}.bak`, { force: true }).catch(() => undefined)
 }
 
 export function normalizeBaseUrl(input: string): string {
   const trimmed = input.trim().replace(/\/+$/, '')
-  if (!/^https?:\/\//i.test(trimmed)) return `https://${trimmed}`
-  return trimmed
+  if (!trimmed) return ''
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+  try {
+    const parsed = new URL(candidate)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+    if (!parsed.hostname) return ''
+    return parsed.origin + parsed.pathname.replace(/\/+$/, '')
+  } catch {
+    return ''
+  }
 }
 
 /** ws(s) 根地址：与云端同源，路径由协议常量给出 */

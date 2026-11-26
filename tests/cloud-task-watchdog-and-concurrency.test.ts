@@ -24,12 +24,14 @@ vi.mock('electron', () => ({
 const { CloudTaskRunner } = await import('../electron/cloud/task-runner')
 
 let tmpDir = ''
+const openStores: CloudStore[] = []
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-cloud-c02-c07-'))
 })
 
 afterEach(async () => {
+  while (openStores.length > 0) openStores.pop()?.close()
   await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined)
 })
 
@@ -39,6 +41,7 @@ async function setupDispatcher(options: {
   nowRef: { value: number }
 }) {
   const store = await CloudStore.open(path.join(tmpDir, 'cloud'))
+  openStores.push(store)
   const onlineDevices = new Set<string>(['dev-1', 'dev-2', 'dev-3'])
   const sentFrames: Array<{ deviceId: string; frame: any }> = []
   const publishedEvents: CloudEvent[] = []

@@ -14,9 +14,11 @@
 import { execFile } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
+import * as os from 'node:os'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
 import type { ExtensionFactory } from '@earendil-works/pi-coding-agent'
+import { sanitizeTerminalEnv } from '../terminal-manager.js'
 
 const execFileAsync = promisify(execFile)
 const HOOK_GIT_TIMEOUT_MS = 10_000
@@ -25,13 +27,17 @@ const PRE_PUSH_SCRIPT =
 
 const WRITE_TOOLS = new Set(['write', 'edit'])
 const SHELL_TOOLS = new Set(['bash', 'powershell'])
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g
 
-/** 管道执行：下载内容直接进 shell / 解释器，是把远端内容变成命令的标准注入手法 */
+/** 管道执行：下载内容直接进 shell / 解释器，或下载落地后直接执行 */
 const PIPE_TO_SHELL =
-  /(?:^|[^\w])(curl|wget|iwr|invoke-webrequest)\b[\s\S]*?(?:\||>\s*\S*\s*)[\s\S]*?\b(?:sudo\s+)?(?:(?:ba|z|k|da)?sh|pwsh|powershell|iex|invoke-expression|python3?|node|eval)\b/i
-/** 提示词挡不住注入，推送必须硬拦（F-19）；pre-push hook 是第二道 */
-const GIT_PUSH = /\bgit\b[\s\S]*?\bpush\b/i
-const RM_COMMAND = /(?:^|[\s;&|(])(rm|del|rmdir|remove-item|ri)\s+([^\n;&|]*)/gi
+  /(?:^|[^\w])(curl|wget|iwr|invoke-webrequest)\b[\s\S]*?(?:\||>\s*\S*\s*|(?:-o|--output|-O|--output-document|-OutFile)\s+\S+[\s\S]*?(?:&&|;|\n))[\s\S]*?\b(?:sudo\s+)?(?:(?:ba|z|k|da)?sh|pwsh|powershell|iex|invoke-expression|python3?|node|eval)\b/i
+/** 提示词挡不住注入，推送必须硬拦（F-19）；只拦截 git 子命令位置的 push，避免误杀 commit message */
+const GIT_PUSH =
+  /(?:^|[;&|\n`($]\s*|\s)(?:(?:\/[^\s"']*\/)?g['"]*i['"]*t(?:\.exe)?)(?:\s+(?:-[Cc]\s+\S+|-[^\s]+|--[a-z-]+(?:=\S+)?))*\s+p['"]*u['"]*s['"]*h\b/i
+const RM_COMMAND =
+  /(?:^|[\s;&|(])(?:(?:\/[^\s;&|]*\/)?(rm|del|rmdir|remove-item|ri))(?:\.exe)?\s+([^\n;&|]*)/gi
+const CD_COMMAND = /(?:^|[;&|\n]\s*)(?:cd|set-location|sl|chdir)\s+([^\n;&|]+)/i
 
 export interface TaskGuardInfo {
   toolName: string
@@ -45,15 +51,28 @@ export interface TaskGuardContext {
   onBlocked?: (info: TaskGuardInfo) => void
 }
 
-/** 规范化真实路径（目标尚不存在时逐级向上 realpath 已存在祖先，阻断符号链接逃逸） */
+/** 规范化真实路径（含悬挂符号链接解析，阻断工作树外逃逸） */
 function canonicalize(targetPath: string): string {
   let current = path.resolve(targetPath)
   const missing: string[] = []
+  let symlinkHops = 0
   for (let depth = 0; depth < 64; depth += 1) {
     try {
       const resolved = fs.realpathSync.native(current)
       return missing.length > 0 ? path.join(resolved, ...missing.reverse()) : resolved
     } catch {
+      try {
+        const stat = fs.lstatSync(current)
+        if (stat.isSymbolicLink()) {
+          symlinkHops += 1
+          if (symlinkHops > 20) return path.resolve(targetPath)
+          const linkTarget = fs.readlinkSync(current)
+          current = path.resolve(path.dirname(current), linkTarget)
+          continue
+        }
+      } catch {
+        // 确实不存在：继续向父目录回退
+      }
       const parent = path.dirname(current)
       if (parent === current) return path.resolve(targetPath)
       missing.push(path.basename(current))
@@ -76,9 +95,19 @@ function normalizeForCompare(root: string, target: string): { root: string; targ
   return { root: root.toLowerCase(), target: target.toLowerCase() }
 }
 
-/** 解析工具参数里的路径；相对路径按会话 cwd 展开并用 realpath 防符号链接逃逸 */
+/**
+ * 解析工具参数里的路径，与 Pi SDK `resolveToCwd` 对齐：
+ * 剥离前导 `@`、归一化 Unicode 空格、展开 `~` / `~/`，再按 cwd 解析并 canonicalize。
+ */
 function resolveToolPath(cwd: string, input: string): string {
-  const resolved = path.isAbsolute(input) ? path.resolve(input) : path.resolve(cwd, input)
+  let normalized = input.replace(UNICODE_SPACES, ' ')
+  if (normalized.startsWith('@')) normalized = normalized.slice(1)
+  if (normalized === '~') {
+    normalized = os.homedir()
+  } else if (normalized.startsWith('~/') || normalized.startsWith('~\\')) {
+    normalized = path.join(os.homedir(), normalized.slice(2))
+  }
+  const resolved = path.isAbsolute(normalized) ? path.resolve(normalized) : path.resolve(cwd, normalized)
   return canonicalize(resolved)
 }
 
@@ -92,54 +121,101 @@ function writeTargets(input: Record<string, unknown>): string[] {
   return targets
 }
 
-/** 折叠行续接（`\\\n`）以便多行命令无法绕过正则 */
+/** 折叠行续接（`\\\n` 与 PowerShell `` `\n ``）以便多行命令无法绕过正则 */
 function flattenCommand(command: string): string {
-  return command.replace(/\\\r?\n/g, ' ')
+  return command.replace(/(?:\\|`)\r?\n/g, ' ')
+}
+
+/** 简单按 shell 引号切分参数，保留含空格的带引号路径 */
+function tokenizeShellArgs(args: string): string[] {
+  const tokens: string[] = []
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(args)) !== null) {
+    const val = m[1] ?? m[2] ?? m[3] ?? ''
+    if (val) tokens.push(val)
+  }
+  return tokens
 }
 
 /** 从 rm / del / rmdir / Remove-Item 段里取出目标路径；返回越界的那一个（有则拒绝） */
 function escapingRmTarget(cwd: string, root: string, command: string): string | null {
   const flat = flattenCommand(command)
   const canonicalRoot = canonicalize(root)
-  RM_COMMAND.lastIndex = 0
-  let match: RegExpExecArray | null
-  while ((match = RM_COMMAND.exec(flat)) !== null) {
-    const cmd = (match[1] ?? '').toLowerCase()
-    const args = match[2] ?? ''
-    const hasRecursiveOrForce =
-      cmd === 'del' || cmd === 'rmdir'
-        ? /(^|\s)\/[sqf]\b/i.test(args) || /(^|\s)-[a-zA-Z]*(r|f)/i.test(args)
-        : cmd === 'remove-item' || cmd === 'ri'
-          ? /(^|\s)-(recurse|force|r|fo)\b/i.test(args)
-          : /(^|\s)-[a-zA-Z]*(r|f)/.test(args) || /(^|\s)--(recursive|force)\b/i.test(args)
-    if (!hasRecursiveOrForce) continue
-
-    const tokens = args
-      .split(/\s+/)
-      .filter((token) => token && !token.startsWith('-') && !/^\/[a-zA-Z]$/i.test(token))
-    if (tokens.length === 0) continue
-    for (const token of tokens) {
-      const cleaned = token.replace(/^['"]|['"]$/g, '')
-      if (!cleaned) continue
-      // 通配符、环境变量或家目录展开若可能逃出工作树（绝对路径、..、~、$），一律拦截
-      if (/[$*?~]/.test(cleaned)) {
-        if (
-          cleaned.startsWith('/') ||
-          cleaned.startsWith('~') ||
-          cleaned.includes('$') ||
-          cleaned.includes('..') ||
-          /^[A-Za-z]:/.test(cleaned)
-        ) {
-          return cleaned
-        }
-        continue
+  // 若命令前段含 cd/Set-Location 切目录，跟踪有效工作目录避免 `cd .. && rm -rf dir` 绕过
+  let effectiveCwd = canonicalize(cwd)
+  const segments = flat.split(/(?:&&|\|\||[;\n|])+/)
+  for (const segment of segments) {
+    const cdMatch = CD_COMMAND.exec(segment)
+    if (cdMatch) {
+      const cdTarget = tokenizeShellArgs(cdMatch[1] ?? '')[0]
+      if (!cdTarget || cdTarget === '-' || cdTarget.includes('$')) {
+        effectiveCwd = os.homedir()
+      } else {
+        effectiveCwd = resolveToolPath(effectiveCwd, cdTarget)
       }
-      const target = resolveToolPath(cwd, cleaned)
-      const { root: compareRoot, target: compareTarget } = normalizeForCompare(
-        canonicalRoot,
-        target
-      )
-      if (!isInside(compareRoot, compareTarget)) return target
+      continue
+    }
+
+    RM_COMMAND.lastIndex = 0
+    let match: RegExpExecArray | null
+    while ((match = RM_COMMAND.exec(segment)) !== null) {
+      const cmd = (match[1] ?? '').toLowerCase()
+      const args = match[2] ?? ''
+      const hasRecursiveOrForce =
+        cmd === 'del' || cmd === 'rmdir'
+          ? /(^|\s)\/[sqf]\b/i.test(args) || /(^|\s)-[a-zA-Z]*(r|f)/i.test(args)
+          : cmd === 'remove-item' || cmd === 'ri'
+            ? /(^|\s)-(recurse|force|r|fo)\b/i.test(args)
+            : /(^|\s)-[a-zA-Z]*(r|f)/.test(args) || /(^|\s)--(recursive|force)\b/i.test(args)
+      if (!hasRecursiveOrForce) continue
+
+      const rawTokens = tokenizeShellArgs(args)
+      const targets: string[] = []
+      for (let i = 0; i < rawTokens.length; i += 1) {
+        const token = rawTokens[i]
+        // 处理 PowerShell `-Path=...` / `-LiteralPath=...` 与 `-Path <val>`
+        const psPathEq = /^-(?:literal)?path=(.+)$/i.exec(token)
+        if (psPathEq) {
+          targets.push(psPathEq[1])
+          continue
+        }
+        if (/^-(?:literal)?path$/i.test(token) && i + 1 < rawTokens.length) {
+          targets.push(rawTokens[++i])
+          continue
+        }
+        if (token.startsWith('-') || /^\/[a-zA-Z]$/i.test(token)) continue
+        targets.push(token)
+      }
+      if (targets.length === 0) continue
+
+      for (const raw of targets) {
+        const cleaned = raw.replace(/^['"]|['"]$/g, '')
+        if (!cleaned) continue
+        // 通配符、环境变量或家目录展开：先检查静态前缀（阻断 `rm -rf link/*` 符号链接父目录）
+        if (/[$*?~]/.test(cleaned)) {
+          if (
+            cleaned.startsWith('/') ||
+            cleaned.startsWith('~') ||
+            cleaned.includes('$') ||
+            cleaned.includes('..') ||
+            /^[A-Za-z]:/.test(cleaned)
+          ) {
+            return cleaned
+          }
+          const staticPrefix = cleaned.split(/[*?]/)[0].replace(/[\\/]+$/, '')
+          const prefixTarget = resolveToolPath(effectiveCwd, staticPrefix || '.')
+          const cmpPrefix = normalizeForCompare(canonicalRoot, prefixTarget)
+          if (!isInside(cmpPrefix.root, cmpPrefix.target)) return cleaned
+          continue
+        }
+        const target = resolveToolPath(effectiveCwd, cleaned)
+        const { root: compareRoot, target: compareTarget } = normalizeForCompare(
+          canonicalRoot,
+          target
+        )
+        if (!isInside(compareRoot, compareTarget)) return target
+      }
     }
   }
   return null
@@ -242,6 +318,7 @@ export async function installWorktreePrePushHook(
     execFileAsync('git', ['-C', cwd, ...args], {
       timeout: HOOK_GIT_TIMEOUT_MS,
       windowsHide: true,
+      env: sanitizeTerminalEnv(process.env),
     }).then((result) => result.stdout.trim())
 
   try {

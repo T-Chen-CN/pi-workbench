@@ -15,7 +15,8 @@ import {
   type ClientToServerFrame,
   type ServerToClientFrame,
 } from 'pi-bridge'
-import { readCloudLink, readCloudToken, wsUrl } from './link-store.js'
+import { readCloudClientToken, readCloudLink, readCloudToken, wsUrl } from './link-store.js'
+import { isSystemProxyActive, resolveWebSocketProxyAgent } from '../system-proxy.js'
 
 const HEARTBEAT_MS = 25_000
 const RECONNECT_MIN_MS = 1_000
@@ -86,9 +87,12 @@ export class CloudClientBridge {
     if (this.socket && this.socket.readyState === WebSocket.CONNECTING) {
       return this.state
     }
+    // 必须先清掉挂起的重连定时器，否则手动 open() 与定时器会并发建立两条客户端 WS
+    this.clearTimers()
     this.closed = false
     this.durableStop = false
-    void this.connect(link.baseUrl, readCloudToken(link))
+    const resolveToken = typeof readCloudClientToken === 'function' ? readCloudClientToken : readCloudToken
+    void this.connect(link.baseUrl, resolveToken(link))
     return this.state
   }
 
@@ -136,9 +140,16 @@ export class CloudClientBridge {
     // 游标为空时不要拼 `?lastAckSeq=0`：那会让服务端按续传处理、只重放旧事件而不发快照。
     // 归一化规则统一在 cloud-protocol 里（三端共用）。
     const url = `${wsUrl(baseUrl, CLOUD_WS_PATHS.client)}${clientCursorQuery(this.lastAckSeq)}`
+    const agent = isSystemProxyActive()
+      ? await resolveWebSocketProxyAgent(url).catch(() => undefined)
+      : undefined
+    if (this.closed) return
     let socket: WebSocket
     try {
-      socket = new WebSocket(url, { headers: { authorization: `Bearer ${token}` } })
+      socket = new WebSocket(url, {
+        headers: { authorization: `Bearer ${token}` },
+        ...(agent ? { agent } : {}),
+      })
     } catch (error) {
       this.scheduleReconnect(error)
       return
@@ -257,7 +268,8 @@ export class CloudClientBridge {
       this.reconnectTimer = null
       const current = readCloudLink()
       if (!current) return
-      void this.connect(current.baseUrl, readCloudToken(current))
+      const resolveToken = typeof readCloudClientToken === 'function' ? readCloudClientToken : readCloudToken
+      void this.connect(current.baseUrl, resolveToken(current))
     }, delay)
     this.reconnectTimer.unref?.()
     this.updateState({ status: 'connecting' })

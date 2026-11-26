@@ -23,6 +23,7 @@ import {
   type CloudLinkRecord,
 } from './link-store.js'
 import { CloudTaskRunner } from './task-runner.js'
+import { isSystemProxyActive, resolveWebSocketProxyAgent } from '../system-proxy.js'
 
 /** 出站帧不带 v（序列化时统一补），否则联合类型要求每条调用都手写版本号 */
 type OutgoingDeviceFrame = DeviceToServerFrame extends infer Frame
@@ -87,6 +88,7 @@ export class DeviceAgent {
   private reconnectDelay = RECONNECT_MIN_MS
   private outbox: OutgoingDeviceFrame[] = []
   private lastAckSeq = 0
+  private handshaking = false
   private stopped = false
   private durableStop = false
   private state: DeviceLinkState = { status: 'unlinked', pending: 0 }
@@ -258,14 +260,22 @@ export class DeviceAgent {
     if (this.stopped || this.durableStop || !this.link || !this.token) return
     this.updateState({ status: 'connecting', revoked: false })
     const url = `${wsUrl(this.link.baseUrl, CLOUD_WS_PATHS.device)}?lastAckSeq=${this.lastAckSeq}`
+    const agent = isSystemProxyActive()
+      ? await resolveWebSocketProxyAgent(url).catch(() => undefined)
+      : undefined
+    if (this.stopped || this.durableStop || !this.link || !this.token) return
     let socket: WebSocket
     try {
-      socket = new WebSocket(url, { headers: { authorization: `Bearer ${this.token}` } })
+      socket = new WebSocket(url, {
+        headers: { authorization: `Bearer ${this.token}` },
+        ...(agent ? { agent } : {}),
+      })
     } catch (error) {
       this.scheduleReconnect(error)
       return
     }
     this.socket = socket
+    this.handshaking = true
 
     socket.on('open', () => {
       void this.onOpen(socket)
@@ -274,7 +284,10 @@ export class DeviceAgent {
       this.onMessage(raw)
     })
     socket.on('close', (code) => {
-      if (this.socket === socket) this.socket = null
+      if (this.socket === socket) {
+        this.socket = null
+        this.handshaking = false
+      }
       this.stopHeartbeat()
       if (this.stopped || this.durableStop) return
       if (code === 1008 || code === 4401) {
@@ -293,7 +306,10 @@ export class DeviceAgent {
       } catch {
         // 清理失败不影响结论
       }
-      if (this.socket === socket) this.socket = null
+      if (this.socket === socket) {
+        this.socket = null
+        this.handshaking = false
+      }
       this.stopHeartbeat()
       if (this.stopped || this.durableStop) return
       if (status === 401 || status === 403) {
@@ -310,6 +326,7 @@ export class DeviceAgent {
 
   private async onOpen(socket: WebSocket): Promise<void> {
     if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) return
+    this.handshaking = true
     this.reconnectDelay = RECONNECT_MIN_MS
     this.updateState({
       status: 'online',
@@ -321,17 +338,33 @@ export class DeviceAgent {
     const workspaces = await this.deps.getWorkspaces().catch(() => [])
     // await 期间连接可能已断开或被替换，必须复检当前 socket
     if (this.socket !== socket || socket.readyState !== WebSocket.OPEN || this.stopped || this.durableStop) {
+      if (this.socket === socket) this.handshaking = false
       return
     }
-    this.send({
-      type: 'hello',
-      deviceId: this.link?.deviceId ?? '',
-      workspaces,
-      // 重连对账（F-21 / A-13）：服务端据此把掉线期间已判终态的工单重新下发 cancel
-      runningTasks: [...this.running],
-    })
+    // 必须保证 hello 作为连接上的第一帧发出，再释放 handshaking 并补发 outbox，防止并发帧乱序抢在 hello 前
+    try {
+      socket.send(
+        JSON.stringify({
+          v: CLOUD_PROTOCOL_VERSION,
+          type: 'hello',
+          deviceId: this.link?.deviceId ?? '',
+          workspaces,
+          // 重连对账（F-21 / A-13）：服务端据此把掉线期间已判终态的工单重新下发 cancel
+          runningTasks: [...this.running],
+        })
+      )
+    } catch (error) {
+      this.deps.logger.warn('[Cloud Device] failed to send hello:', error)
+      this.handshaking = false
+      return
+    }
+    this.handshaking = false
     this.startHeartbeat()
     await this.flush(0)
+    // 重连兜底：上报离线期间可能已结束/残留的工作单元状态，让服务端及时回收干净工作树
+    void this.runner.sweepUnits().catch((error) =>
+      this.deps.logger.warn('[Cloud Device] reconnect unit sweep failed:', error)
+    )
   }
 
   private startHeartbeat(): void {
@@ -383,7 +416,7 @@ export class DeviceAgent {
 
   private send(frame: OutgoingDeviceFrame): void {
     const socket = this.socket
-    if (socket && socket.readyState === WebSocket.OPEN) {
+    if (socket && socket.readyState === WebSocket.OPEN && !this.handshaking) {
       try {
         socket.send(JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, ...frame }))
         return
@@ -459,7 +492,11 @@ export class DeviceAgent {
 
     switch (frame.type) {
       case 'ack':
-        if (typeof frame.seq === 'number' && frame.seq > this.lastAckSeq) this.lastAckSeq = frame.seq
+        if (typeof frame.seq === 'number') {
+          // 服务端下发 ack(seq: 0) 表示重启或日志溢出后的游标重置，必须清零避免后续重连永远传旧高位游标导致丢帧
+          if (frame.seq === 0) this.lastAckSeq = 0
+          else if (frame.seq > this.lastAckSeq) this.lastAckSeq = frame.seq
+        }
         return
       case 'task':
         ackIfSequenced()

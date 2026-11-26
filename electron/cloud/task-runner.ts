@@ -35,6 +35,7 @@ import { annotateChangedFiles, collectTaskDiff, scanWorktreeSecrets } from './ta
 import { createDesktopCredentialStore } from '../credentials-store.js'
 import { getModelsStore } from '../models-store.js'
 import { isCatalogNetworkAllowed } from '../providers-service.js'
+import { sanitizeTerminalEnv } from '../terminal-manager.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -73,9 +74,14 @@ const TASK_COMPACTION_SETTINGS = { enabled: true, reserveTokens: 8_192, keepRece
 async function ensureTaskAgentSettings(agentDir: string): Promise<void> {
   const file = path.join(agentDir, 'settings.json')
   const existing = readJsonWithBackup<Record<string, unknown>>(file).data ?? {}
-  const current = (existing.compaction ?? {}) as Record<string, unknown>
+  const current = { ...((existing.compaction ?? {}) as Record<string, unknown>) }
+  // 必须删除 initialize() 写入的 modelOverrides（16k/20k），否则其优先级高于顶层 compaction，
+  // 会导致工单专属 8k/12k 压缩阈值完全失效。
+  const hadOverrides = 'modelOverrides' in current
+  delete current.modelOverrides
   const merged = { ...current, ...TASK_COMPACTION_SETTINGS }
   if (
+    !hadOverrides &&
     current.enabled === merged.enabled &&
     current.reserveTokens === merged.reserveTokens &&
     current.keepRecentTokens === merged.keepRecentTokens
@@ -193,6 +199,7 @@ interface ActiveTask {
   changed: Map<string, CloudChangedFile>
   /** 当前运行中的工具（C-02 停滞检测：只认 tool_update 为输出增量） */
   runningTools: Map<string, RunningToolState>
+  unsubscribeTrace?: () => void
   stallTimer?: NodeJS.Timeout
   heartbeatTimer?: NodeJS.Timeout
   questionId?: string
@@ -311,16 +318,8 @@ export class CloudTaskRunner {
     record?: UnitRecord
   }> {
     return this.withUnitLock(spec.workUnitId, async () => {
-      const existing = this.units.get(spec.workUnitId)
-      if (existing && existsSync(existing.worktreePath)) {
-        const hook = await installWorktreePrePushHook(existing.repoPath, existing.worktreePath)
-        if (!hook.ok) {
-          this.deps.logger.warn('[Cloud Task] Failed to ensure worktree pre-push hook:', hook.error)
-        }
-        return { ok: true, record: existing }
-      }
-
       const repoPath = spec.repo.workspacePath
+      // 无论单元是否已缓存，每次派活都必须复核工作区信任边界
       if (this.deps.isAllowedWorkspace) {
         const allowed = await this.deps.isAllowedWorkspace(repoPath)
         if (!allowed) {
@@ -330,6 +329,24 @@ export class CloudTaskRunner {
           }
         }
       }
+
+      const existing = this.units.get(spec.workUnitId)
+      if (existing && existsSync(existing.worktreePath)) {
+        const normPath = (p: string) =>
+          process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p)
+        if (normPath(existing.repoPath) !== normPath(repoPath)) {
+          return {
+            ok: false,
+            error: `Work unit ${spec.workUnitId} is bound to a different repository.`,
+          }
+        }
+        const hook = await installWorktreePrePushHook(existing.repoPath, existing.worktreePath)
+        if (!hook.ok) {
+          this.deps.logger.warn('[Cloud Task] Failed to ensure worktree pre-push hook:', hook.error)
+        }
+        return { ok: true, record: existing }
+      }
+
       if (!existsSync(repoPath)) return { ok: false, error: `Repository not found: ${repoPath}` }
       const coordinator = await this.deps.getCoordinator(repoPath)
       if (!coordinator) {
@@ -402,9 +419,19 @@ export class CloudTaskRunner {
         this.createAskCloudExtension(),
       ],
     })
-    if (!result.success) throw new Error(result.error ?? 'failed to initialize the task agent')
+    if (!result.success) {
+      await manager.dispose?.().catch(() => undefined)
+      throw new Error(result.error ?? 'failed to initialize the task agent')
+    }
+    // initialize() 会把默认 16k/20k 的 modelOverrides 写进 settings.json；
+    // 必须在初始化后再落一次工单专属 8k/12k 压缩配置并清掉 modelOverrides，确保后续 createSession 生效。
+    await ensureTaskAgentSettings(agentDir)
+    const previous = this.manager
     this.manager = manager
     this.managerKey = key
+    if (previous && previous !== manager) {
+      await previous.dispose?.().catch(() => undefined)
+    }
     return manager
   }
 
@@ -421,7 +448,13 @@ export class CloudTaskRunner {
           properties: { question: { type: 'string', description: 'The question to ask' } },
           required: ['question'],
         },
-        execute: async (_toolCallId: string, params: { question?: string }) => {
+        execute: async (
+          _toolCallId: string,
+          params: { question?: string },
+          _signal?: AbortSignal,
+          _onUpdate?: unknown,
+          ctx?: { sessionManager?: { getSessionId?: () => string }; cwd?: string }
+        ) => {
           const question = String(params?.question ?? '').trim()
           if (!question) {
             return {
@@ -430,7 +463,8 @@ export class CloudTaskRunner {
               details: undefined,
             }
           }
-          const task = this.currentTaskForSession()
+          const sessionId = ctx?.sessionManager?.getSessionId?.()
+          const task = this.currentTaskForSession(sessionId, ctx?.cwd)
           if (!task) {
             return {
               content: [{ type: 'text', text: 'No active task is attached to this session.' }],
@@ -459,8 +493,19 @@ export class CloudTaskRunner {
     }
   }
 
-  /** 目前同一演进里只有一个在跑的任务；`ask_cloud` 用它定位 taskId */
-  private currentTaskForSession(): ActiveTask | undefined {
+  /** 优先按 sessionId / cwd 精确匹配工单，找不到时再退回首个活跃工单 */
+  private currentTaskForSession(sessionId?: string, cwd?: string): ActiveTask | undefined {
+    if (sessionId) {
+      for (const task of this.active.values()) {
+        if (task.sessionId === sessionId) return task
+      }
+    }
+    if (cwd) {
+      const target = path.resolve(cwd).toLowerCase()
+      for (const task of this.active.values()) {
+        if (path.resolve(task.worktreePath).toLowerCase() === target) return task
+      }
+    }
     for (const task of this.active.values()) {
       if (task.awaitingAnswer) continue
       return task
@@ -480,7 +525,7 @@ export class CloudTaskRunner {
   }
 
   private reportBlocked(info: TaskGuardInfo): void {
-    const task = this.currentTaskForSession()
+    const task = this.currentTaskForSession(undefined, info.cwd)
     if (!task) return
     this.deps.onMilestone(task.id, {
       kind: 'progress',
@@ -508,6 +553,7 @@ export class CloudTaskRunner {
   }
 
   private async runStart(taskId: string, spec: CloudTaskSpec, attempt: number): Promise<void> {
+    let handedOffToRetry = false
     if (this.disposed) {
       this.starting.delete(taskId)
       return
@@ -552,7 +598,10 @@ export class CloudTaskRunner {
           return
         }
         const reused = attempt === 0 && (await this.retryAfterConfigRefresh(taskId, spec))
-        if (!reused) {
+        if (reused) {
+          // 重试期间必须持续持有 starting 锁，防止 closeUnit 在重试窗口误删工作树
+          handedOffToRetry = true
+        } else {
           // 准备阶段就失败（未配 Key 最常见）：必须带上 worktreeClean，否则云端不会回收这棵树
           await this.failWithWorktree(taskId, error instanceof Error ? error.message : String(error), unit.worktreePath)
         }
@@ -592,6 +641,7 @@ export class CloudTaskRunner {
 
       if (this.cancelRequested.has(taskId)) {
         this.cancelRequested.delete(taskId)
+        void manager.closeSession?.(sessionId)?.catch?.(() => undefined)
         const clean = await this.isWorktreeClean(unit.worktreePath)
         this.starting.delete(taskId)
         this.deps.onInterrupted(taskId, 'user-cancel', clean)
@@ -626,7 +676,8 @@ export class CloudTaskRunner {
       this.setStatus(taskId, 'assigned')
 
       try {
-        manager.subscribeTrace?.(sessionId, (event: any) => this.onTrace(task, event))
+        const unsub = await manager.subscribeTrace?.(sessionId, (event: any) => this.onTrace(task, event))
+        if (typeof unsub === 'function') task.unsubscribeTrace = unsub
       } catch (error) {
         this.deps.logger.warn('[Cloud Task] failed to subscribe trace:', error)
       }
@@ -637,7 +688,7 @@ export class CloudTaskRunner {
 
       await this.runTurn(task, spec, buildTaskPrompt(spec, unit.worktreePath))
     } finally {
-      this.starting.delete(taskId)
+      if (!handedOffToRetry) this.starting.delete(taskId)
     }
   }
 
@@ -875,6 +926,7 @@ export class CloudTaskRunner {
       result.notes = '本单要求提交，但工作树里没有新提交'
     }
     this.stopTaskWatchdogs(task)
+    this.releaseTaskSession(task)
     this.active.delete(task.id)
     this.cancelRequested.delete(task.id)
     this.persistedTasks.delete(task.id)
@@ -884,6 +936,7 @@ export class CloudTaskRunner {
 
   private async finishFailed(task: ActiveTask, error: string): Promise<void> {
     this.stopTaskWatchdogs(task)
+    this.releaseTaskSession(task)
     const changedFiles = await this.collectChangedFiles(task).catch(() => [] as CloudChangedFile[])
     const worktreeClean = await this.isWorktreeClean(task.worktreePath)
     const secretHits = await scanWorktreeSecrets(
@@ -901,6 +954,17 @@ export class CloudTaskRunner {
       worktreeClean,
       secretHits.length > 0 ? secretHits : undefined
     )
+  }
+
+  /** 退订流式轨迹并释放工单会话句柄，防止每单泄漏监听与 SDK 会话内存 */
+  private releaseTaskSession(task: ActiveTask): void {
+    try {
+      task.unsubscribeTrace?.()
+    } catch {
+      // ignore
+    }
+    task.unsubscribeTrace = undefined
+    void this.manager?.closeSession?.(task.sessionId)?.catch?.(() => undefined)
   }
 
   /** 工作树是否干净：`git status --porcelain` 无输出（ignored 文件不算脏，所以装了依赖也算干净） */
@@ -1024,6 +1088,7 @@ export class CloudTaskRunner {
       timeout: GIT_TIMEOUT_MS,
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
+      env: sanitizeTerminalEnv(process.env),
     })
     return stdout
   }
@@ -1046,6 +1111,7 @@ export class CloudTaskRunner {
       this.deps.logger.warn('[Cloud Task] abort failed:', error)
     }
     this.stopTaskWatchdogs(task)
+    this.releaseTaskSession(task)
     // abort 之后再判：停止了但树是干净的，服务端可以直接自动回收（A-43）
     const worktreeClean = await this.isWorktreeClean(task.worktreePath)
     this.active.delete(taskId)
@@ -1103,8 +1169,9 @@ export class CloudTaskRunner {
         at: this.now(),
       })
     }
+    const busy = Boolean(this.manager?.isSessionBusy?.(task.sessionId))
     try {
-      if (this.manager?.isSessionBusy?.(task.sessionId)) {
+      if (busy) {
         await this.manager.steer?.(task.sessionId, text)
       } else {
         const outcome = await this.manager.chat(task.sessionId, text)
@@ -1113,11 +1180,18 @@ export class CloudTaskRunner {
           return false
         }
         if (task.awaitingAnswer) return true
-        if (outcome && outcome.success !== false) await this.finishDone(task, task.spec, outcome)
+        if (outcome && outcome.success === false) {
+          await this.finishFailed(task, outcome.error ?? 'task turn failed')
+          return false
+        }
+        await this.finishDone(task, task.spec, outcome)
       }
       return true
     } catch (error) {
-      this.deps.logger.warn('[Cloud Task] steer failed:', error)
+      this.deps.logger.warn('[Cloud Task] steer/message failed:', error)
+      if (!busy && this.active.has(task.id)) {
+        await this.finishFailed(task, error instanceof Error ? error.message : String(error))
+      }
       return false
     }
   }
@@ -1130,6 +1204,7 @@ export class CloudTaskRunner {
     this.disposed = true
     for (const task of [...this.active.values()]) {
       this.stopTaskWatchdogs(task)
+      this.releaseTaskSession(task)
       try {
         await this.manager?.abort?.(task.sessionId)
       } catch {
@@ -1232,6 +1307,7 @@ export async function collectTaskChangedFiles(
       timeout: GIT_TIMEOUT_MS,
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
+      env: sanitizeTerminalEnv(process.env),
     }).then((result) => result.stdout)
 
   try {

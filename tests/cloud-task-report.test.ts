@@ -209,8 +209,9 @@ describe('C-03b：脱敏 diff 采集与云端 get_task 按需拉取', () => {
 
   it('云端 get_task 默认不附 diff（省上下文），传 includeDiff=true 才返回脱敏 diff', async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-diff-tool-'))
+    let store: CloudStore | null = null
     try {
-      const store = await CloudStore.open(tmp)
+      store = await CloudStore.open(tmp)
       await store.saveTask({
         id: 'T-010',
         spec: {
@@ -261,6 +262,7 @@ describe('C-03b：脱敏 diff 采集与云端 get_task 按需拉取', () => {
       const textWith = withDiff.content[0].text as string
       expect(textWith).toContain('+export const v = 2')
     } finally {
+      store?.close()
       await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined)
     }
   })

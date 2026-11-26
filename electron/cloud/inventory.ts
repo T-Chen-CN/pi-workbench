@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
+import { sanitizeTerminalEnv } from '../terminal-manager.js'
 
 const execFileAsync = promisify(execFile)
 const GIT_TIMEOUT_MS = 8_000
@@ -25,6 +26,7 @@ async function git(cwd: string, args: string[]): Promise<string | null> {
     const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
       timeout: GIT_TIMEOUT_MS,
       windowsHide: true,
+      env: sanitizeTerminalEnv(process.env),
     })
     return stdout.trim()
   } catch {

@@ -13,6 +13,7 @@ import { activeProviderConfig } from '../providers-service.js'
 import {
   clearCloudLink,
   normalizeBaseUrl,
+  readCloudClientToken,
   readCloudLink,
   readCloudToken,
   saveCloudLink,
@@ -181,7 +182,11 @@ export function registerCloudIpc(context: CloudIpcContext): void {
               : 'The pairing code is invalid or expired.',
         }
       }
-      const payload = (await response.json()) as { deviceId?: string; token?: string }
+      const payload = (await response.json()) as {
+        deviceId?: string
+        token?: string
+        clientToken?: string
+      }
       if (!payload.deviceId || !payload.token) {
         return { success: false, error: 'The cloud returned an unexpected pairing response' }
       }
@@ -191,6 +196,7 @@ export function registerCloudIpc(context: CloudIpcContext): void {
         deviceId: payload.deviceId,
         deviceName: input?.deviceName || 'Pi Workbench',
         token: payload.token,
+        ...(payload.clientToken ? { clientToken: payload.clientToken } : {}),
       })
       const agent = await ensureAgent(context)
       await agent.start()
@@ -268,7 +274,7 @@ export function registerCloudIpc(context: CloudIpcContext): void {
   handleIpc('cloud:getConfig', async () => {
     const link = readCloudLink()
     if (!link) return { success: false, error: 'This device is not paired' }
-    const token = readCloudToken(link)
+    const token = readCloudClientToken(link)
     if (!token) return { success: false, error: 'Saved token cannot be decrypted; pair again.' }
     try {
       const response = await fetch(`${link.baseUrl}/v1/cloud-config`, {
@@ -285,7 +291,7 @@ export function registerCloudIpc(context: CloudIpcContext): void {
   handleIpc('cloud:saveConfig', async (_event, config: unknown) => {
     const link = readCloudLink()
     if (!link) return { success: false, error: 'This device is not paired' }
-    const token = readCloudToken(link)
+    const token = readCloudClientToken(link)
     if (!token) return { success: false, error: 'Saved token cannot be decrypted; pair again.' }
     try {
       const response = await fetch(`${link.baseUrl}/v1/cloud-config`, {
@@ -314,7 +320,7 @@ export function registerCloudIpc(context: CloudIpcContext): void {
   handleIpc('cloud:fetchModels', async (_event, input: unknown) => {
     const link = readCloudLink()
     if (!link) return { success: false, error: 'This device is not paired', models: [], catalog: [] }
-    const token = readCloudToken(link)
+    const token = readCloudClientToken(link)
     if (!token) {
       return {
         success: false,
@@ -404,7 +410,7 @@ export function registerCloudIpc(context: CloudIpcContext): void {
   ): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> => {
     const link = readCloudLink()
     if (!link) return { ok: false, error: 'This device is not paired' }
-    const token = readCloudToken(link)
+    const token = readCloudClientToken(link)
     if (!token) return { ok: false, error: 'Saved token cannot be decrypted; pair again.' }
     try {
       const response = await fetch(`${link.baseUrl}${apiPath}`, {
