@@ -31,9 +31,14 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
   const unread = useSessionStore((store) => store.unread)
   const errors = useSessionStore((store) => store.errors)
   const needsAction = useSessionStore((store) => store.needsAction)
-  const conversations = useChatStore((store) => store.conversations)
   const open = state?.open ?? []
   const active = state?.active ?? null
+  // 只订阅每个已打开会话是否有草稿的签名字符串，避免每 50ms 流式输出都把 SessionTabs 重渲染一遍
+  const draftSignature = useChatStore((store) =>
+    open
+      .map((id) => (store.conversations[conversationKey(workspacePath, id)]?.draftInput.trim() ? '1' : '0'))
+      .join('')
+  )
 
   const byId = new Map(sessions.map((session) => [session.id, session]))
   /** 已打开但还没有标题的会话；多于一个时追加序号，避免多开时无从区分 */
@@ -59,8 +64,9 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
           const isUnread = Boolean(unread[key])
           const error = errors[key]
           const actionReason = needsAction[key]
-          const draft = Boolean(conversations[key]?.draftInput.trim())
+          const draft = draftSignature[index] === '1'
           const title = session?.title?.trim() || untitledLabel(id)
+          // 优先级严格遵循 DESIGN_SYSTEM §6.5：运行中 > 错误 > 待操作 > 未读
           const statusLabel = isStreaming
             ? t('sessionRunning')
             : error

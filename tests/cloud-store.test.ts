@@ -12,6 +12,7 @@ vi.mock('../src/api', () => ({
       sent.push(frame)
       return { success: true }
     }),
+    cloudUnlink: vi.fn(async () => ({ success: true })),
   },
 }))
 
@@ -335,5 +336,105 @@ describe('用户消息回显（多端同一份对话）', () => {
     expect(useCloudStore.getState().messages).toEqual([
       expect.objectContaining({ id: 'u-c-from-web', role: 'user', text: '来自 Web' }),
     ])
+  })
+})
+
+describe('已读游标、流式插话与解绑清理（P0-2 / P1）', () => {
+  it('unreadCount 为 0 时 markRead 不发帧，read_state 推进 lastSeq 也不会触发死循环（P0-2）', async () => {
+    reset()
+    useCloudStore.setState({
+      clientState: { status: 'open', lastSeq: 10 },
+      lastSeq: 10,
+      lastReadSeq: 5,
+      unreadCount: 2,
+    })
+    await useCloudStore.getState().markRead()
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ type: 'mark_read', seq: 10 })
+
+    // 服务端广播 read_state（带有更高 seq=11，但 unreadCount 归零）
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 11,
+      event: { type: 'read_state', lastReadSeq: 10, unreadCount: 0 },
+    })
+    const state = useCloudStore.getState()
+    expect(state.unreadCount).toBe(0)
+    expect(state.lastReadSeq).toBe(11)
+
+    // 再次调用 markRead 必须静默，不得形成 mark_read <-> read_state 风暴
+    await useCloudStore.getState().markRead()
+    expect(sent).toHaveLength(1)
+  })
+
+  it('先来 trace 再来 message_start 时复用占位行，流式插话按 messageId 归并', () => {
+    reset()
+    const store = useCloudStore.getState()
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: {
+        type: 'trace',
+        trace: { type: 'tool_start', toolCallId: 't-1', toolName: 'dispatch_task', argsSummary: 'build' },
+      },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'message_start', messageId: 'a-1', role: 'assistant', at: 10 },
+    })
+    // 流式过程中插入一条用户消息
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 3,
+      event: { type: 'message_start', messageId: 'u-steer', role: 'user', at: 11 },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 4,
+      event: { type: 'message_end', messageId: 'u-steer', text: '补充一下', at: 12 },
+    })
+    // 助手继续按 messageId 追加 delta 并结束
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 5,
+      event: { type: 'text_delta', messageId: 'a-1', delta: '收到补充' },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 6,
+      event: { type: 'message_end', messageId: 'a-1', text: '收到补充', at: 13 },
+    })
+
+    const messages = useCloudStore.getState().messages
+    expect(messages).toHaveLength(2)
+    expect(messages[0]).toMatchObject({ id: 'a-1', role: 'assistant', text: '收到补充', streaming: false })
+    expect(messages[0].traces).toHaveLength(1)
+    expect(messages[1]).toMatchObject({ id: 'u-steer', role: 'user', text: '补充一下' })
+  })
+
+  it('unlink 清空未读计数、离开摘要与停止中工单集合', async () => {
+    reset()
+    useCloudStore.setState({
+      lastSeq: 9,
+      lastReadSeq: 4,
+      unreadCount: 3,
+      awaySummary: { since: 1, until: 9, text: '你离开期间完成了 1 个工单', items: [] },
+      stoppingTaskIds: { 'T-1': true },
+    })
+    await useCloudStore.getState().unlink()
+    const state = useCloudStore.getState()
+    expect(state.link.linked).toBe(false)
+    expect(state.unreadCount).toBe(0)
+    expect(state.lastReadSeq).toBe(0)
+    expect(state.awaySummary).toBeNull()
+    expect(state.stoppingTaskIds).toEqual({})
   })
 })

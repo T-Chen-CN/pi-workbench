@@ -816,6 +816,8 @@ export function useChatPanelState(props: ChatPanelProps) {
     override?: string,
     options?: {
       skipUserMessage?: boolean
+      /** 后台会话排队出队时显式指定目标会话，避免切会话后串发到当前激活会话 */
+      targetSessionId?: string
       /** 随本次请求发送的图片；与 consumeAttachments: false 搭配用于重试 / 编辑重发 */
       images?: import('../types/electron').AgentImagePayload[]
       /** 排队重发时带回的文件附件（仅路径与元信息） */
@@ -826,8 +828,8 @@ export function useChatPanelState(props: ChatPanelProps) {
   ) => {
     e?.preventDefault()
 
-    const sessionId = activeSessionId
-    const key = activeKey
+    const sessionId = options?.targetSessionId ?? activeSessionId
+    const key = sessionId ? conversationKey(workspacePath, sessionId) : activeKey
     const userMessage = (override ?? input).trim()
     if (!sessionId || !key) return
     const takeComposerAttachments = options?.consumeAttachments !== false
@@ -888,7 +890,8 @@ export function useChatPanelState(props: ChatPanelProps) {
     }
 
     // 运行中：按设置默认值排队到下一轮，或立即插入当前轮（压缩期间暂不插话，等压缩结束再续）
-    if (isLoading && !forceSendKeysRef.current.has(key)) {
+    const targetLoading = Boolean(chat.conversations[key]?.isLoading)
+    if (targetLoading && !forceSendKeysRef.current.has(key)) {
       chat.setDraftInput(key, '')
       // 附件随排队项一起带走，否则排队会让本轮附件凭空消失
       const pendingAttachments = composerAttachments.filter(
@@ -1154,6 +1157,7 @@ export function useChatPanelState(props: ChatPanelProps) {
           const currentOpen = useWorkspaceStore.getState().openWorkspaces
           if (currentOpen.length > 0 && !currentOpen.includes(workspacePath)) return
           void submitRef.current(undefined, queued.text, {
+            targetSessionId: sessionId,
             images: queued.images,
             attachments: queued.attachments,
             consumeAttachments: false,
@@ -1356,7 +1360,7 @@ export function useChatPanelState(props: ChatPanelProps) {
   )
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
       e.preventDefault()
       void handleSubmit()
     }

@@ -114,7 +114,7 @@ const CompactionDivider: React.FC<{ part: CompactionPart }> = ({ part }) => {
   return (
     <div className="flex items-center gap-3 py-1" role="separator">
       <div className="h-px flex-1 bg-rule-divide" />
-      <Caption className="shrink-0 text-ink-subtle">{label}</Caption>
+      <Caption className="shrink-0 text-ink-muted">{label}</Caption>
       <div className="h-px flex-1 bg-rule-divide" />
     </div>
   )
@@ -491,7 +491,7 @@ const ToolRow = React.memo(function ToolRow({
       >
         {icon}
         {nested && (
-          <span className="flex-shrink-0 type-caption text-ink-subtle">
+          <span className="flex-shrink-0 type-caption text-ink-muted">
             {t('subAgent')}
           </span>
         )}
@@ -539,23 +539,27 @@ const ToolRow = React.memo(function ToolRow({
           {part.status === 'error' && !part.resultPreview && (
             <Caption className="text-danger">{t('toolError')}</Caption>
           )}
-          {hasDiff && onOpenDiff && (
-            <button
-              type="button"
-              onClick={() => onOpenDiff(part.toolCallId)}
-              className="type-label text-accent underline underline-offset-2 hover:text-ink"
-            >
-              {t('viewChanges')}
-            </button>
-          )}
-          {onOpenResult && (
-            <button
-              type="button"
-              onClick={onOpenResult}
-              className="type-label text-accent underline underline-offset-2 hover:text-ink"
-            >
-              {t('viewFullResult')}
-            </button>
+          {((hasDiff && onOpenDiff) || onOpenResult) && (
+            <div className="flex flex-wrap items-center gap-3">
+              {hasDiff && onOpenDiff && (
+                <button
+                  type="button"
+                  onClick={() => onOpenDiff(part.toolCallId)}
+                  className="type-label text-accent underline underline-offset-2 hover:text-ink"
+                >
+                  {t('viewChanges')}
+                </button>
+              )}
+              {onOpenResult && (
+                <button
+                  type="button"
+                  onClick={onOpenResult}
+                  className="type-label text-accent underline underline-offset-2 hover:text-ink"
+                >
+                  {t('viewFullResult')}
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}

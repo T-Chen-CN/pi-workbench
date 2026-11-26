@@ -21,6 +21,18 @@ function interpolate(template: string, params?: TranslationParams): string {
 }
 
 /**
+ * 按当前 store 状态生成新的翻译函数引用：
+ * - `setLanguage` 切换时换发新引用，触发只订阅 `s.t` 或 `useMemo(..., [t])` 的组件刷新；
+ * - 调用时仍动态读取 `get().language`，兼容测试直接 `useI18nStore.setState({ language })`。
+ */
+function makeTranslator(get: () => I18nState): I18nState['t'] {
+  return (key: TranslationKey, params?: TranslationParams): string => {
+    const lang = get().language
+    return interpolate(translations[lang]?.[key] || key, params)
+  }
+}
+
+/**
  * 语言状态。
  *
  * 语言偏好的持久化由 App/Settings 通过 `{appDir}/config/settings.json` 完成，
@@ -30,11 +42,8 @@ export const useI18nStore = create<I18nState>()((set, get) => ({
   language: 'zh',
 
   setLanguage: (lang: Language) => {
-    set({ language: lang })
+    set({ language: lang, t: makeTranslator(get) })
   },
 
-  t: (key: TranslationKey, params?: TranslationParams): string => {
-    const { language } = get()
-    return interpolate(translations[language]?.[key] || key, params)
-  },
+  t: makeTranslator(get),
 }))

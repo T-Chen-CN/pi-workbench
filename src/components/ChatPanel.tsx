@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useChatPanelState } from '../hooks/useChatPanelState'
 import type { ChatPanelProps } from '../utils/chatPanelShared'
 import { THINKING_LEVELS, THINKING_LABEL_KEYS, formatTokenCount } from '../utils/chatPanelShared'
@@ -158,6 +158,120 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
   // 聊天拆进辅助窗口后，选区在那个 document 里：单独挂一个只监听宿主文档的引用按钮
   const hostId = useHostId()
   const hostDocument = useHostDocument()
+  const attachMenuContainerRef = useRef<HTMLDivElement>(null)
+  const [slashIndex, setSlashIndex] = useState(0)
+  const [slashDismissed, setSlashDismissed] = useState(false)
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const [mentionDismissed, setMentionDismissed] = useState(false)
+  const activeSlashOptionRef = useRef<HTMLButtonElement | null>(null)
+  const activeMentionOptionRef = useRef<HTMLButtonElement | null>(null)
+
+  const showSlashMenu = slashActive && slashItems.length > 0 && !slashDismissed
+  const showMentionMenu =
+    !showSlashMenu && Boolean(mention && mention.results.length > 0) && !mentionDismissed
+  const clampedSlashIndex =
+    slashItems.length > 0 ? Math.min(slashIndex, slashItems.length - 1) : 0
+  const clampedMentionIndex =
+    mention && mention.results.length > 0
+      ? Math.min(mentionIndex, mention.results.length - 1)
+      : 0
+
+  useEffect(() => {
+    setSlashIndex(0)
+    setSlashDismissed(false)
+  }, [input])
+
+  useEffect(() => {
+    setMentionIndex(0)
+    setMentionDismissed(false)
+  }, [mention])
+
+  useEffect(() => {
+    if (showSlashMenu) {
+      activeSlashOptionRef.current?.scrollIntoView?.({ block: 'nearest' })
+    }
+  }, [showSlashMenu, clampedSlashIndex])
+
+  useEffect(() => {
+    if (showMentionMenu) {
+      activeMentionOptionRef.current?.scrollIntoView?.({ block: 'nearest' })
+    }
+  }, [showMentionMenu, clampedMentionIndex])
+
+  // 附件菜单必须支持点击外部与 Esc 关闭，并绑定到当前宿主 document 以兼容拆出的独立窗口
+  useEffect(() => {
+    if (!showAttachMenu) return
+    const onPointerDown = (event: MouseEvent) => {
+      if (!attachMenuContainerRef.current?.contains(event.target as Node)) {
+        setShowAttachMenu(false)
+      }
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      setShowAttachMenu(false)
+    }
+    hostDocument.addEventListener('mousedown', onPointerDown)
+    hostDocument.addEventListener('keydown', onKeyDown)
+    return () => {
+      hostDocument.removeEventListener('mousedown', onPointerDown)
+      hostDocument.removeEventListener('keydown', onKeyDown)
+    }
+  }, [showAttachMenu, hostDocument, setShowAttachMenu])
+
+  const handleComposerKeyDown = (event: React.KeyboardEvent) => {
+    const composing = event.nativeEvent.isComposing || event.keyCode === 229
+    if (showSlashMenu) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setSlashIndex((index) => (index + 1) % slashItems.length)
+        return
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setSlashIndex((index) => (index - 1 + slashItems.length) % slashItems.length)
+        return
+      }
+      if ((event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) && !composing) {
+        event.preventDefault()
+        const target = slashItems[clampedSlashIndex]
+        if (target) insertSlashItem(target.insert)
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        setSlashDismissed(true)
+        return
+      }
+    }
+    if (showMentionMenu && mention) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setMentionIndex((index) => (index + 1) % mention.results.length)
+        return
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setMentionIndex((index) => (index - 1 + mention.results.length) % mention.results.length)
+        return
+      }
+      if ((event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) && !composing) {
+        event.preventDefault()
+        const target = mention.results[clampedMentionIndex]
+        if (target) addMention(target)
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        setMentionDismissed(true)
+        return
+      }
+    }
+    handleKeyDown(event)
+  }
 
   // 纯图片 / 纯附件（无文本）也可以发送；预处理中的图片不算可发送内容
   const hasSendableInput = Boolean(input.trim()) || attachments.length > 0
@@ -325,7 +439,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                           consumeAttachments: false,
                         })
                       }}
-                      className="p-0.5 text-ink-muted transition-colors hover:text-ink"
+                      className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-sm text-ink-muted transition-colors hover:bg-hover hover:text-ink"
                       aria-label={t('sendNow')}
                       title={t('sendNow')}
                     >
@@ -337,7 +451,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                     onClick={() =>
                       activeKey && useChatStore.getState().removePending(activeKey, item.id)
                     }
-                    className="p-0.5 text-ink-muted transition-colors hover:text-ink"
+                    className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-sm text-ink-muted transition-colors hover:bg-hover hover:text-ink"
                     aria-label={t('removePending')}
                   >
                     <X size={11} />
@@ -402,7 +516,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                         }
                         title={t('removeAttachment')}
                         aria-label={t('removeAttachment')}
-                        className="p-0.5 text-ink-muted hover:text-ink"
+                        className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-sm text-ink-muted transition-colors hover:bg-hover hover:text-ink"
                       >
                         <X size={10} />
                       </button>
@@ -446,7 +560,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                       }
                       title={t('removeAttachment')}
                       aria-label={t('removeAttachment')}
-                      className="ml-0.5 p-0.5 text-ink-muted hover:text-ink"
+                      className="ml-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-sm text-ink-muted transition-colors hover:bg-hover hover:text-ink"
                     >
                       <X size={10} />
                     </button>
@@ -456,37 +570,61 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
             </div>
           )}
 
-          {slashActive && slashItems.length > 0 && (
-            <div className="mb-1 max-h-60 overflow-y-auto border border-line bg-raised shadow-print">
-              {slashItems.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => insertSlashItem(item.insert)}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-hover"
-                >
-                  <span className="flex-shrink-0 type-data text-ink">{item.label}</span>
-                  <span className="min-w-0 truncate type-caption text-ink-muted">
-                    {item.description}
-                  </span>
-                </button>
-              ))}
+          {showSlashMenu && (
+            <div
+              role="listbox"
+              className="mb-1 max-h-60 overflow-y-auto border border-line bg-raised shadow-print"
+            >
+              {slashItems.map((item, index) => {
+                const selected = index === clampedSlashIndex
+                return (
+                  <button
+                    key={item.id}
+                    ref={selected ? activeSlashOptionRef : null}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onMouseEnter={() => setSlashIndex(index)}
+                    onClick={() => insertSlashItem(item.insert)}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors ${
+                      selected ? 'bg-hover' : 'hover:bg-hover'
+                    }`}
+                  >
+                    <span className="flex-shrink-0 type-data text-ink">{item.label}</span>
+                    <span className="min-w-0 truncate type-caption text-ink-muted">
+                      {item.description}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
           )}
 
-          {mention && mention.results.length > 0 && (
-            <div className="mb-1 max-h-52 overflow-y-auto border border-line bg-raised shadow-print">
-              {mention.results.map((file) => (
-                <button
-                  key={file}
-                  type="button"
-                  onClick={() => addMention(file)}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-data text-ink transition-colors hover:bg-hover"
-                >
-                  <FileText size={11} className="flex-shrink-0 text-ink-muted" />
-                  <span className="truncate">{file}</span>
-                </button>
-              ))}
+          {showMentionMenu && mention && (
+            <div
+              role="listbox"
+              className="mb-1 max-h-52 overflow-y-auto border border-line bg-raised shadow-print"
+            >
+              {mention.results.map((file, index) => {
+                const selected = index === clampedMentionIndex
+                return (
+                  <button
+                    key={file}
+                    ref={selected ? activeMentionOptionRef : null}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onMouseEnter={() => setMentionIndex(index)}
+                    onClick={() => addMention(file)}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left type-data text-ink transition-colors ${
+                      selected ? 'bg-hover' : 'hover:bg-hover'
+                    }`}
+                  >
+                    <FileText size={11} className="flex-shrink-0 text-ink-muted" />
+                    <span className="truncate">{file}</span>
+                  </button>
+                )
+              })}
             </div>
           )}
 
@@ -502,7 +640,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
               onChange={(event) =>
                 handleDraftChange(event.target.value, event.target.selectionStart ?? 0)
               }
-              onKeyDown={handleKeyDown}
+              onKeyDown={handleComposerKeyDown}
               onPaste={handlePaste}
               placeholder={t('inputPlaceholder')}
               disabled={!initialized}
@@ -510,7 +648,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
               className="min-h-[68px] max-h-40 border-none bg-transparent px-3 py-2 focus:ring-0"
             />
             <div className="flex items-center justify-between gap-2 px-2 pb-2">
-              <div className="relative flex items-center gap-1">
+              <div ref={attachMenuContainerRef} className="relative flex items-center gap-1">
                 <IconButton
                   icon={Paperclip}
                   label={t('attachContext')}
@@ -955,7 +1093,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                 <span className="relative flex flex-shrink-0 items-center">
                   <button
                     type="button"
-                    aria-haspopup="menu"
+                    aria-haspopup="dialog"
                     aria-expanded={statusMenu === 'context'}
                     aria-label={t('contextUsageLabel')}
                     onClick={() =>

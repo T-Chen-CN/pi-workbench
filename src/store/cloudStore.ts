@@ -209,9 +209,8 @@ export const useCloudStore = create<CloudState>((set, get) => ({
       api.onCloudClientFrame((frame) => get().applyFrame(frame))
     }
     await get().refreshStatus()
-    // 重启后必须重新开通道：快照（含历史消息）只在这一步之后才来，
-    // 不开就是「历史全没了」，而其实服务端一直有。
-    if (get().link.linked) await get().openClient()
+    // 通道已打开时不再重复 requestSnapshot()，避免切回云端页时冲掉进行中的工具轨迹与未落盘流式前缀
+    if (get().link.linked && get().clientState.status !== 'open') await get().openClient()
     set({ initialized: true })
   },
 
@@ -261,11 +260,12 @@ export const useCloudStore = create<CloudState>((set, get) => ({
   },
 
   unlink: async () => {
+    let unlinkError: string | null = null
     try {
       await api.cloudClientClose()
       await api.cloudUnlink()
     } catch (error) {
-      set({ error: error instanceof Error ? error.message : String(error) })
+      unlinkError = error instanceof Error ? error.message : String(error)
     }
     set({
       link: { linked: false },
@@ -277,10 +277,14 @@ export const useCloudStore = create<CloudState>((set, get) => ({
       authorizations: [],
       units: [],
       notices: [],
+      awaySummary: null,
+      stoppingTaskIds: {},
       lastSeq: 0,
+      lastReadSeq: 0,
+      unreadCount: 0,
       agentStatus: 'idle',
       canStopReply: false,
-      error: null,
+      error: unlinkError,
     })
   },
 
@@ -393,7 +397,8 @@ export const useCloudStore = create<CloudState>((set, get) => ({
   markRead: async () => {
     const { lastSeq, unreadCount, lastReadSeq, clientState } = get()
     if (clientState.status !== 'open') return
-    if (unreadCount === 0 && lastSeq <= lastReadSeq) return
+    // 只在确实存在未读时上报：read_state 广播自身会递增 seq，按 lastSeq > lastReadSeq 触发会造成无限循环风暴
+    if (unreadCount <= 0) return
     set({ unreadCount: 0, lastReadSeq: Math.max(lastReadSeq, lastSeq) })
     await api.cloudClientSend({ type: 'mark_read', seq: lastSeq, at: Date.now() })
   },
@@ -511,6 +516,22 @@ export const useCloudStore = create<CloudState>((set, get) => ({
                 return { ...seq, messages }
               }
             }
+            if (!isUser) {
+              // 工具先于正文到达时会先建一条 pendingTrace 占位行；正文开始时原地复用，避免出现双气泡与永久 streaming
+              const lastIndex = state.messages.length - 1
+              const last = state.messages[lastIndex]
+              if (last && last.role === 'assistant' && last.pendingTrace && !last.text) {
+                const messages = state.messages.slice()
+                messages[lastIndex] = {
+                  ...last,
+                  id,
+                  at: Number(event.at ?? last.at),
+                  streaming: true,
+                  pendingTrace: false,
+                }
+                return { ...seq, messages }
+              }
+            }
             return {
               ...seq,
               messages: [
@@ -538,12 +559,34 @@ export const useCloudStore = create<CloudState>((set, get) => ({
           }
           set((state) => {
             const messages = state.messages.slice()
-            const last = messages[messages.length - 1]
-            if (last && last.role === 'assistant' && last.streaming) {
-              messages[messages.length - 1] = { ...last, text: last.text + delta }
+            const targetId = String(event.messageId ?? '')
+            // 流式期间用户插话会把 user 气泡插在末尾；优先按 messageId 匹配避免复制同 id 气泡
+            let targetIndex = -1
+            if (targetId) {
+              for (let i = messages.length - 1; i >= 0; i -= 1) {
+                if (messages[i].id === targetId) {
+                  targetIndex = i
+                  break
+                }
+              }
+            }
+            if (targetIndex < 0) {
+              const last = messages[messages.length - 1]
+              if (last && last.role === 'assistant' && last.streaming) {
+                targetIndex = messages.length - 1
+              }
+            }
+            if (targetIndex >= 0) {
+              const target = messages[targetIndex]
+              messages[targetIndex] = {
+                ...target,
+                text: target.text + delta,
+                streaming: true,
+                pendingTrace: false,
+              }
             } else {
               messages.push({
-                id: String(event.messageId ?? messageId()),
+                id: targetId || messageId(),
                 role: 'assistant',
                 text: delta,
                 at: Date.now(),
@@ -568,6 +611,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
                 ...messages[byId],
                 text: String(event.text ?? messages[byId].text),
                 streaming: false,
+                pendingTrace: false,
                 error: event.error,
               }
               return { ...seqPatch(state), messages, unreadCount: nextUnread }
@@ -579,6 +623,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
                 ...row,
                 text: String(event.text ?? row.text),
                 streaming: false,
+                pendingTrace: false,
                 error: event.error,
               }
               break
@@ -593,7 +638,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
             const messages = state.messages.slice()
             const lastIndex = messages.length - 1
             const base = messages[lastIndex]
-            const sameRow = Boolean(base && base.role === 'assistant')
+            const sameRow = Boolean(base && base.role === 'assistant' && base.streaming)
             const row: CloudChatRow = sameRow
               ? base
               : {
@@ -602,6 +647,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
                   text: '',
                   at: Date.now(),
                   streaming: true,
+                  pendingTrace: true,
                   traces: [],
                 }
             const traces = row.traces.slice()
@@ -700,11 +746,20 @@ export const useCloudStore = create<CloudState>((set, get) => ({
           return
         }
         case 'read_state': {
-          set((state) => ({
-            ...seqPatch(state),
-            lastReadSeq: Number(event.lastReadSeq ?? state.lastReadSeq),
-            unreadCount: Number(event.unreadCount ?? 0),
-          }))
+          set((state) => {
+            const unreadCount = Number(event.unreadCount ?? 0)
+            const seq = seqPatch(state)
+            const reportedReadSeq = Number(event.lastReadSeq ?? state.lastReadSeq)
+            const nextLastReadSeq =
+              unreadCount === 0 && typeof frame.seq === 'number'
+                ? Math.max(reportedReadSeq, frame.seq)
+                : reportedReadSeq
+            return {
+              ...seq,
+              lastReadSeq: nextLastReadSeq,
+              unreadCount,
+            }
+          })
           return
         }
         default:

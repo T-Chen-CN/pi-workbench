@@ -76,16 +76,21 @@ export function eventToShortcut(event: KeyboardEvent): string | null {
   return parts.join('+')
 }
 
-/** 人类可读的组合串 */
-export function formatShortcut(combo: string, mac = isMacPlatform()): string {
+/** 组合串拆成按平台本地化的按键标签数组（供 KeyCap 渲染） */
+export function shortcutTokens(combo: string, mac = isMacPlatform()): string[] {
   const parsed = parseShortcut(combo)
-  if (!parsed) return combo
+  if (!parsed) return [combo]
   const parts: string[] = []
   if (parsed.mod || parsed.ctrl || parsed.meta) parts.push(mac ? '⌘' : 'Ctrl')
   if (parsed.shift) parts.push(mac ? '⇧' : 'Shift')
   if (parsed.alt) parts.push(mac ? '⌥' : 'Alt')
   parts.push(parsed.key === ',' ? ',' : parsed.key.toUpperCase())
-  return parts.join(mac ? '' : '+')
+  return parts
+}
+
+/** 人类可读的组合串 */
+export function formatShortcut(combo: string, mac = isMacPlatform()): string {
+  return shortcutTokens(combo, mac).join(mac ? '' : '+')
 }
 
 export function findConflict(

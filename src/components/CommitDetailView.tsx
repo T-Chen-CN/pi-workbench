@@ -24,7 +24,11 @@ export const CommitDetailView: React.FC<CommitDetailViewProps> = ({
   useEffect(() => {
     if (!active) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      // 有更高层模态框（如确认弹窗、命令面板、设置）打开时，Esc 归模态框不穿透关闭详情页
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return
+      event.preventDefault()
+      onClose()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -48,7 +52,7 @@ export const CommitDetailView: React.FC<CommitDetailViewProps> = ({
         {!detail ? (
           <div className="flex items-center gap-2 type-caption text-ink-muted">
             <Spinner size={12} />
-            <span className="type-data text-ink-subtle">{pending?.slice(0, 7) ?? ''}</span>
+            <span className="type-data text-ink-muted">{pending?.slice(0, 7) ?? ''}</span>
           </div>
         ) : (
           <article className="mx-auto flex max-w-4xl flex-col">
@@ -64,11 +68,11 @@ export const CommitDetailView: React.FC<CommitDetailViewProps> = ({
               <span aria-hidden="true">·</span>
               <span>{date && !Number.isNaN(date.getTime()) ? date.toLocaleString(locale) : ''}</span>
               <span aria-hidden="true">·</span>
-              <span className="type-data text-ink-subtle" title={detail.commit.sha}>
+              <span className="type-data text-ink-muted" title={detail.commit.sha}>
                 {detail.commit.shortSha}
               </span>
               {detail.commit.parents.length > 0 && (
-                <span className="type-data text-ink-subtle">
+                <span className="type-data text-ink-muted">
                   {detail.commit.parents.slice(0, 2).map((parent) => parent.slice(0, 7)).join(' · ')}
                 </span>
               )}

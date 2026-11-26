@@ -1,12 +1,13 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Loader2, X, type LucideIcon } from 'lucide-react'
 import { useHostDocument } from '../panelHost/HostContext'
+import { useI18nStore } from '../store/i18nStore'
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
 type ControlSize = 'sm' | 'md'
 
 const BUTTON_BASE =
-  'inline-flex items-center justify-center gap-1.5 font-medium rounded-sm transition-colors select-none ' +
+  'inline-flex items-center justify-center gap-1.5 whitespace-nowrap font-medium rounded-sm transition-colors select-none ' +
   'disabled:opacity-50 disabled:cursor-not-allowed'
 
 const BUTTON_SIZES: Record<ControlSize, string> = {
@@ -80,6 +81,7 @@ export interface IconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonEl
   variant?: 'ghost' | 'secondary'
   active?: boolean
   size?: ControlSize
+  iconClassName?: string
 }
 
 export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
@@ -90,6 +92,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
       variant = 'ghost',
       active = false,
       size = 'md',
+      iconClassName,
       className = '',
       ...rest
     },
@@ -110,7 +113,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
       } ${className}`}
       {...rest}
     >
-      <Icon size={size === 'sm' ? 14 : 16} />
+      <Icon size={size === 'sm' ? 14 : 16} className={iconClassName} />
     </button>
   )
 )
@@ -460,6 +463,8 @@ export interface ModalProps {
   footer?: React.ReactNode
   size?: 'sm' | 'md' | 'lg'
   closeLabel?: string
+  /** 叠加在 DiffViewer / CommandPalette 之上的全局对话框需传更高层级（如 z-[60]） */
+  zIndexClass?: string
 }
 
 const MODAL_SIZES = {
@@ -468,6 +473,30 @@ const MODAL_SIZES = {
   lg: 'max-w-4xl',
 }
 
+/** 按宿主文档维护模态栈：嵌套弹窗（如 Settings → UpdateDialog、DiffViewer → DialogHost）按 Esc 只关最顶层 */
+const modalStacks = new WeakMap<Document, Array<symbol>>()
+
+function pushModalToken(doc: Document, token: symbol): void {
+  const stack = modalStacks.get(doc) ?? []
+  stack.push(token)
+  modalStacks.set(doc, stack)
+}
+
+function removeModalToken(doc: Document, token: symbol): void {
+  const stack = modalStacks.get(doc)
+  if (!stack) return
+  const index = stack.lastIndexOf(token)
+  if (index >= 0) stack.splice(index, 1)
+}
+
+function isTopModalToken(doc: Document, token: symbol): boolean {
+  const stack = modalStacks.get(doc)
+  return Boolean(stack && stack[stack.length - 1] === token)
+}
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
 export const Modal: React.FC<ModalProps> = ({
   open,
   onClose,
@@ -475,32 +504,92 @@ export const Modal: React.FC<ModalProps> = ({
   children,
   footer,
   size = 'md',
-  closeLabel = 'Close',
+  closeLabel,
+  zIndexClass = 'z-40',
 }) => {
   const hostDocument = useHostDocument()
+  const t = useI18nStore((state) => state.t)
+  const titleId = useId()
+  const dialogRef = useRef<HTMLDivElement | null>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
   useEffect(() => {
     if (!open) return
+    const token = Symbol('modal')
+    pushModalToken(hostDocument, token)
+    const previousFocus = hostDocument.activeElement as HTMLElement | null
+
+    // 若内容中没有元素主动 autoFocus 到弹窗内，则把焦点移入对话框容器
+    const raf = hostDocument.defaultView?.requestAnimationFrame(() => {
+      const container = dialogRef.current
+      if (!container) return
+      if (!container.contains(hostDocument.activeElement)) {
+        const first = container.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+        ;(first ?? container).focus()
+      }
+    })
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (!isTopModalToken(hostDocument, token)) return
+      if (event.key === 'Escape') {
+        if (event.defaultPrevented) return
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        onCloseRef.current()
+        return
+      }
+      if (event.key === 'Tab') {
+        const container = dialogRef.current
+        if (!container) return
+        const focusables = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+        if (focusables.length === 0) return
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        const active = hostDocument.activeElement as HTMLElement | null
+        if (event.shiftKey) {
+          if (!active || active === first || !container.contains(active)) {
+            event.preventDefault()
+            last.focus()
+          }
+        } else if (!active || active === last || !container.contains(active)) {
+          event.preventDefault()
+          first.focus()
+        }
+      }
     }
     hostDocument.addEventListener('keydown', onKeyDown)
-    return () => hostDocument.removeEventListener('keydown', onKeyDown)
-  }, [open, onClose, hostDocument])
+    return () => {
+      if (raf !== undefined) hostDocument.defaultView?.cancelAnimationFrame(raf)
+      hostDocument.removeEventListener('keydown', onKeyDown)
+      removeModalToken(hostDocument, token)
+      if (previousFocus && hostDocument.contains(previousFocus)) {
+        previousFocus.focus()
+      }
+    }
+  }, [open, hostDocument])
 
   if (!open) return null
 
+  const resolvedCloseLabel = closeLabel ?? t('close')
+
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center p-6">
+    <div className={`fixed inset-0 ${zIndexClass} flex items-center justify-center p-6`}>
       <div className="absolute inset-0 bg-overlay/35" onClick={onClose} />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        className={`relative flex max-h-[85vh] w-full ${MODAL_SIZES[size]} flex-col overflow-hidden border border-line bg-raised shadow-print`}
+        aria-labelledby={title ? titleId : undefined}
+        tabIndex={-1}
+        className={`relative flex max-h-[85vh] w-full ${MODAL_SIZES[size]} flex-col overflow-hidden border border-line bg-raised shadow-print focus:outline-none`}
       >
         {title && (
           <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-rule-divide px-5">
-            <h2 className="m-0 type-subtitle text-ink">{title}</h2>
-            <IconButton icon={X} label={closeLabel} onClick={onClose} size="sm" />
+            <h2 id={titleId} className="m-0 type-subtitle text-ink">
+              {title}
+            </h2>
+            <IconButton icon={X} label={resolvedCloseLabel} onClick={onClose} size="sm" />
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>

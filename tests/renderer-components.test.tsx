@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPanel } from '../src/components/ChatPanel'
 import { FileExplorer } from '../src/components/FileExplorer'
 import { WelcomeScreen } from '../src/components/WelcomeScreen'
+import { SessionTabs } from '../src/components/SessionTabs'
 import { ToolResultViewer } from '../src/components/ToolResultViewer'
 import { MarkdownBody } from '../src/components/AgentMarkdown'
 import { AgentParts } from '../src/components/AgentTrace'
@@ -2069,5 +2070,65 @@ describe('ToolResultViewer', () => {
 
     expect(await screen.findByText('alpha')).toBeTruthy()
     expect(screen.getByText('beta')).toBeTruthy()
+  })
+})
+
+describe('WelcomeScreen、SessionTabs 与 i18nStore 回归（P0-3 / P1）', () => {
+  it('欢迎页点击设置按钮以无参调用 onOpenSettings，不会误把 MouseEvent 当 section（P0-3）', () => {
+    const onOpenSettings = vi.fn()
+    render(
+      <WelcomeScreen
+        recentWorkspaces={[]}
+        onOpenProject={() => {}}
+        onOpenWorkspace={() => {}}
+        onOpenSettings={onOpenSettings}
+        onRefreshRecent={() => {}}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(translations.zh.settings) }))
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+    expect(onOpenSettings).toHaveBeenCalledWith()
+  })
+
+  it('SessionTabs 草稿图标随草稿文本实时切换', () => {
+    useSessionStore.setState({
+      byWorkspace: {
+        '/ws': {
+          sessions: [session],
+          open: ['s1'],
+          active: 's2',
+          panelOpen: false,
+        },
+      },
+      streaming: {},
+      unread: {},
+      needsAction: {},
+    })
+    useChatStore.getState().ensureConversation(sessionKey)
+    useChatStore.getState().setDraftInput(sessionKey, 'draft text')
+
+    render(
+      <SessionTabs
+        workspacePath="/ws"
+        sessions={[session]}
+        onSelect={() => {}}
+        onNew={() => {}}
+        onClose={() => {}}
+        onOpenList={() => {}}
+      />
+    )
+    const tab = screen.getByRole('tab', { name: /Session 1/ })
+    expect(tab.getAttribute('title')).toContain(translations.zh.sessionDraft)
+  })
+
+  it('i18nStore 切换语言时刷新 t 引用，仅订阅 s.t 的组件也能实时切换文案', () => {
+    const before = useI18nStore.getState().t
+    expect(before('settings')).toBe(translations.zh.settings)
+    act(() => {
+      useI18nStore.getState().setLanguage('en')
+    })
+    const after = useI18nStore.getState().t
+    expect(after).not.toBe(before)
+    expect(after('settings')).toBe(translations.en.settings)
   })
 })

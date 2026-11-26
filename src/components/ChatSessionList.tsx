@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   Archive,
   ArchiveRestore,
@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { useSessionStore } from '../store/sessionStore'
+import { useHostDocument } from '../panelHost/HostContext'
 import { Caption, DataText, EmptyState, IconButton } from './ui'
 import { SearchField } from './patterns'
 import { formatRelativeTime } from '../utils/relativeTime'
@@ -58,6 +59,7 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
   onExport = () => {},
 }) => {
   const { t, language } = useI18nStore()
+  const hostDocument = useHostDocument()
   const state = useSessionStore((store) => store.byWorkspace[workspacePath])
   const streaming = useSessionStore((store) => store.streaming)
   const openIds = state?.open ?? []
@@ -80,6 +82,28 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
         return bPinned - aPinned
       })
   }, [sessions, query, showArchived, archivedIds, pinnedIds])
+
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      if (hostDocument.querySelector('[role="dialog"][aria-modal="true"]')) return
+      event.preventDefault()
+      if (exportMenuId) setExportMenuId(null)
+      else onClose()
+    }
+    const onPointerDown = (event: MouseEvent) => {
+      if (!exportMenuId) return
+      const target = event.target as HTMLElement | null
+      if (!target?.closest('[data-export-menu]')) setExportMenuId(null)
+    }
+    hostDocument.addEventListener('keydown', onKeyDown)
+    hostDocument.addEventListener('mousedown', onPointerDown)
+    return () => {
+      hostDocument.removeEventListener('keydown', onKeyDown)
+      hostDocument.removeEventListener('mousedown', onPointerDown)
+    }
+  }, [open, exportMenuId, onClose, hostDocument])
 
   if (!open) return null
 
@@ -127,17 +151,18 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
             return (
               <div
                 key={session.id}
-                className={`group flex items-center gap-2 border-b border-rule-divide border-l-2 px-3 py-2 transition-colors ${
+                className={`group flex items-stretch border-b border-rule-divide border-l-2 transition-colors ${
                   isActive
                     ? 'border-l-accent bg-accent/[0.06]'
                     : 'border-l-transparent hover:bg-hover'
                 }`}
               >
+                {/* 内边距长在按钮本体上，消除四边死区（DESIGN_SYSTEM §4.5） */}
                 <button
                   type="button"
                   onClick={() => onSelect(session)}
                   title={session.title}
-                  className="flex min-w-0 flex-1 flex-col items-start gap-0.5 bg-transparent text-left"
+                  className="flex min-w-0 flex-1 flex-col items-start gap-0.5 bg-transparent py-2 pl-3 pr-2 text-left"
                 >
                   <span className="flex w-full items-center gap-1.5">
                     {isPinned && (
@@ -165,7 +190,13 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                     </Caption>
                   </span>
                 </button>
-                <div className="flex flex-shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                <div
+                  className={`flex flex-shrink-0 items-center gap-0.5 pr-2 transition-opacity ${
+                    exportMenuId === session.id
+                      ? 'opacity-100'
+                      : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+                  }`}
+                >
                   <IconButton
                     icon={Pin}
                     label={isPinned ? t('unpinSession') : t('pinSession')}
@@ -179,7 +210,7 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                     size="sm"
                     onClick={() => onToggleArchive(session)}
                   />
-                  <span className="relative">
+                  <span className="relative" data-export-menu="">
                     <IconButton
                       icon={Download}
                       label={t('exportSession')}

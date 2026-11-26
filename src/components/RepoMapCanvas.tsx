@@ -538,10 +538,12 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       }
       const others: Rect[] = []
       for (const other of [...baseRects, ...chainRects]) {
+        // 排除被拖卡片自己原本的起始位置，而不是当前位置 rect，否则拖出 0.5px 后会吸附回原起点
         if (
-          Math.abs(other.x - rect.x) < 0.5 &&
-          Math.abs(other.y - rect.y) < 0.5 &&
-          other.width === rect.width
+          Math.abs(other.x - drag.originX) < 0.5 &&
+          Math.abs(other.y - drag.originY) < 0.5 &&
+          other.width === drag.width &&
+          other.height === drag.height
         ) {
           continue
         }
@@ -781,23 +783,41 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
         setHeld(false)
         return
       }
-      const isEditable = (target: EventTarget | null) => {
+      const shouldBypassSpace = (target: EventTarget | null) => {
+        // 只要窗口里有打开的模态弹窗/浮层对话框，画布绝不劫持空格键
+        if (document.querySelector('[role="dialog"], [aria-modal="true"]')) return true
         const element = target as HTMLElement | null
         if (!element || !element.tagName) return false
-        return (
+        if (
           element.tagName === 'INPUT' ||
           element.tagName === 'TEXTAREA' ||
+          element.tagName === 'SELECT' ||
           element.isContentEditable
-        )
+        ) {
+          return true
+        }
+        // 画布外部的按钮/链接/标签栏保留原生空格激活，只拦截画布内卡片按钮的空格触发
+        const inCanvas = Boolean(viewportRef.current?.contains(element))
+        if (
+          !inCanvas &&
+          (element.tagName === 'BUTTON' ||
+            element.tagName === 'A' ||
+            element.getAttribute('role') === 'tab' ||
+            element.getAttribute('role') === 'button')
+        ) {
+          return true
+        }
+        return false
       }
       const onKeyDown = (event: KeyboardEvent) => {
-        if (event.code !== 'Space' || isEditable(event.target)) return
+        if (event.code !== 'Space' || shouldBypassSpace(event.target)) return
         // 拦掉滚动与「空格 = 激活按钮」，否则按住空格会顺手打开焦点所在的卡片
         event.preventDefault()
         setHeld(true)
       }
       const onKeyUp = (event: KeyboardEvent) => {
-        if (event.code !== 'Space' || isEditable(event.target)) return
+        if (event.code !== 'Space') return
+        if (!spaceRef.current && shouldBypassSpace(event.target)) return
         event.preventDefault()
         setHeld(false)
       }
@@ -918,7 +938,7 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
         // 浏览器就会把它当成原生划词（选择锚点在 pointerdown 那一刻就种下了），
         // 拖动 60fps 的样式改动拦不住它 —— 只能在容器上直接关掉 user-select。
         style={{ touchAction: 'none' }}
-        className="repo-map-canvas relative min-h-0 flex-1 select-none overflow-hidden bg-surface focus-visible:outline-none"
+        className="repo-map-canvas relative min-h-0 flex-1 select-none overflow-hidden bg-surface focus-visible:outline-offset-[-2px]"
         onPointerDown={handleViewportPointerDown}
         onKeyDown={handleKeyDown}
       >

@@ -30,6 +30,9 @@ export function ProviderAuthPanel({ providerId }: { providerId: string }) {
   const [value, setValue] = useState('')
 
   useEffect(() => {
+    // 切换供应商时重置面板，避免把上一个供应商的登录态/报错带过来
+    setState(null)
+    setValue('')
     const off = api.onProvidersAuthEvent((payload: ProviderAuthEvent) => {
       if (payload.providerId !== providerId) return
       setState((prev) => {
@@ -62,7 +65,10 @@ export function ProviderAuthPanel({ providerId }: { providerId: string }) {
             return next
         }
       })
-      setValue('')
+      // 只在新 prompt 或终态 result 时清输入框，防止后台 progress/info 事件抹掉用户正在输入的验证码/回调 URL
+      if (payload.kind === 'prompt' || payload.kind === 'result') {
+        setValue('')
+      }
     })
     return () => off()
   }, [providerId])
@@ -83,8 +89,13 @@ export function ProviderAuthPanel({ providerId }: { providerId: string }) {
   const { prompt, link, deviceCode, progress, info, done, error } = state
   const finished = done || !!error
 
+  const openUrl = (event: React.MouseEvent<HTMLAnchorElement>, url: string) => {
+    event.preventDefault()
+    void api.openExternalUrl(url)
+  }
+
   return (
-    <div className="flex flex-col gap-2 border border-rule bg-surface-sunken p-3">
+    <div className="flex flex-col gap-2 rounded border border-rule-control bg-sunken p-3">
       {progress && <span className="type-caption text-ink-muted">{progress}</span>}
 
       {info && <span className="type-caption text-ink-muted">{info}</span>}
@@ -97,8 +108,7 @@ export function ProviderAuthPanel({ providerId }: { providerId: string }) {
           <a
             className="type-caption inline-flex items-center gap-1 text-accent hover:underline"
             href={link.url}
-            target="_blank"
-            rel="noreferrer"
+            onClick={(event) => openUrl(event, link.url)}
           >
             <ExternalLink size={12} />
             {link.label ?? t('providerOpenAuthLink')}
@@ -114,8 +124,7 @@ export function ProviderAuthPanel({ providerId }: { providerId: string }) {
             <a
               className="type-caption inline-flex items-center gap-1 text-accent hover:underline"
               href={deviceCode.verificationUri}
-              target="_blank"
-              rel="noreferrer"
+              onClick={(event) => openUrl(event, deviceCode.verificationUri)}
             >
               <ExternalLink size={12} />
               {deviceCode.verificationUri}
@@ -149,7 +158,14 @@ export function ProviderAuthPanel({ providerId }: { providerId: string }) {
                 placeholder={prompt.prompt.placeholder}
                 onChange={(event) => setValue(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' && value.trim()) void answer(value.trim())
+                  if (
+                    event.key === 'Enter' &&
+                    !event.nativeEvent.isComposing &&
+                    event.keyCode !== 229 &&
+                    value.trim()
+                  ) {
+                    void answer(value.trim())
+                  }
                 }}
                 className="type-code"
               />

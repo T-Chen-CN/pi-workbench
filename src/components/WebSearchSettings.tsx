@@ -114,7 +114,7 @@ export const WebSearchSettings: React.FC = () => {
               <span className="block type-value text-ink">
                 {t('webSearchProviderDefault')}
               </span>
-              <span className="block type-caption text-ink-subtle">
+              <span className="block type-caption text-ink-muted">
                 {t('webSearchDefaultHint')}
               </span>
             </span>
@@ -133,7 +133,7 @@ export const WebSearchSettings: React.FC = () => {
               />
               <span className="min-w-0 flex-1">
                 <span className="block type-value text-ink">{t(provider.labelKey)}</span>
-                <span className="block type-caption text-ink-subtle">{t(provider.noteKey)}</span>
+                <span className="block type-caption text-ink-muted">{t(provider.noteKey)}</span>
               </span>
             </label>
           ))}

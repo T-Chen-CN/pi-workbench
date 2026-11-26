@@ -10,6 +10,7 @@
 import { api } from '../api'
 import { editorStoreFor } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
+import { confirmDialog } from '../store/dialogStore'
 import { basename } from '../utils/filePath'
 import {
   defaultViewFor,
@@ -120,7 +121,6 @@ export async function openFileInEditor(
     const confirm =
       options.confirmLargeFile ??
       (async (info: { name: string; size: number }) => {
-        const { confirmDialog } = await import('../store/dialogStore')
         const t = useI18nStore.getState().t
         return confirmDialog({
           message: t('openLargeFileConfirm', {

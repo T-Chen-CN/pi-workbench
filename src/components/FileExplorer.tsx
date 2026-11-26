@@ -181,6 +181,20 @@ export const FileExplorer: React.FC<{
     setTree((previous) => (previous.length > 0 ? sortTreeNodes(previous, sortOptions) : previous))
   }, [sortOptions])
 
+  // 右键菜单支持按 Esc 关闭，必须监听当前宿主 document 以兼容拆出的独立窗口
+  useEffect(() => {
+    if (!contextMenu) return
+    const doc = treeScrollRef.current?.ownerDocument ?? document
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      setContextMenu(null)
+    }
+    doc.addEventListener('keydown', onKeyDown)
+    return () => doc.removeEventListener('keydown', onKeyDown)
+  }, [contextMenu, treeScrollRef])
+
   /** 递归刷新所有已展开目录的子节点，保持展开状态 */
   const refreshExpanded = useCallback(async function refresh(nodes: TreeNode[]): Promise<TreeNode[]> {
     return Promise.all(
@@ -210,7 +224,7 @@ export const FileExplorer: React.FC<{
           if (loadSeqRef.current !== seq) return
           setTree(refreshed)
         } else {
-          setError(dirResult.error || 'Failed to list workspace directory')
+          setError(localizeError(dirResult.error || '') || t('loadWorkspaceFailed', { error: '' }))
         }
       } catch (err) {
         if (loadSeqRef.current !== seq) return
@@ -460,8 +474,12 @@ export const FileExplorer: React.FC<{
     })
   }
 
+  const creatingFileRef = useRef(false)
+
   const handleCreateFile = async () => {
-    if (!createDialog.fileName.trim()) {
+    if (creatingFileRef.current) return
+    const trimmedName = createDialog.fileName.trim()
+    if (!trimmedName) {
       setError(t('fileNameEmpty'))
       return
     }
@@ -471,8 +489,9 @@ export const FileExplorer: React.FC<{
       return
     }
 
+    creatingFileRef.current = true
     try {
-      const filePath = joinPath(createDialog.parentPath, createDialog.fileName)
+      const filePath = joinPath(createDialog.parentPath, trimmedName)
       const result = await api.writeFile(filePath, '')
       if (!result.success) {
         throw new Error(result.error || 'Failed to create file')
@@ -494,6 +513,8 @@ export const FileExplorer: React.FC<{
       const errorMsg = err instanceof Error ? err.message : String(err)
       toast.error(t('createFileFailed', { error: localizeError(errorMsg) }))
       setError(localizeError(errorMsg))
+    } finally {
+      creatingFileRef.current = false
     }
   }
 
@@ -523,6 +544,7 @@ export const FileExplorer: React.FC<{
       <div
         key={node.path}
         role="treeitem"
+        tabIndex={0}
         aria-selected={active}
         aria-expanded={node.isDirectory ? !!node.isExpanded : undefined}
         className={`flex h-7 cursor-pointer select-none items-center gap-1.5 border-l-2 pr-2 type-value transition-colors ${
@@ -532,9 +554,18 @@ export const FileExplorer: React.FC<{
         }`}
         style={{ paddingLeft: `${depth * 14 + 8}px` }}
         onClick={() => handleFileClick(node)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            handleFileClick(node)
+          }
+        }}
         onContextMenu={(event) => {
           event.preventDefault()
-          setContextMenu({ node, x: event.clientX, y: event.clientY })
+          const ownerWin = event.currentTarget.ownerDocument.defaultView ?? window
+          const x = Math.min(event.clientX, Math.max(8, ownerWin.innerWidth - 168))
+          const y = Math.min(event.clientY, Math.max(8, ownerWin.innerHeight - 96))
+          setContextMenu({ node, x, y })
         }}
       >
         <NodeIcon size={14} className="flex-shrink-0 text-ink-muted" />
@@ -665,8 +696,17 @@ export const FileExplorer: React.FC<{
             value={createDialog.fileName}
             onChange={(e) => setCreateDialog({ ...createDialog, fileName: e.target.value })}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') handleCreateFile()
-              if (e.key === 'Escape') setCreateDialog({ isOpen: false, fileName: '', parentPath: null })
+              if (
+                e.key === 'Enter' &&
+                !e.nativeEvent.isComposing &&
+                e.keyCode !== 229
+              ) {
+                void handleCreateFile()
+              }
+              if (e.key === 'Escape') {
+                e.stopPropagation()
+                setCreateDialog({ isOpen: false, fileName: '', parentPath: null })
+              }
             }}
             autoFocus
           />

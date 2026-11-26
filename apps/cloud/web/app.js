@@ -15,6 +15,7 @@ const state = {
   ws: null,
   wsStatus: 'closed',
   reconnectDelay: 1000,
+  reconnectTimer: null,
   lastSeq: 0,
   lastReadSeq: 0,
   unreadCount: 0,
@@ -28,14 +29,19 @@ const state = {
   devices: [],
   authorizations: [],
   notices: [],
+  errorBanner: null,
   awaySummary: null,
   stoppingTaskIds: {},
   config: null,
   pairCode: null,
   configDraft: null,
   configModels: [],
+  configFeedback: '',
+  configSaving: false,
+  catalogReqSeq: 0,
   error: null,
   draft: '',
+  forceScrollBottom: false,
   answerDrafts: {},
   instructionDrafts: {},
   memories: [],
@@ -43,6 +49,9 @@ const state = {
   dreams: [],
   memoryLoaded: false,
   memoryBusy: false,
+  memorySubmitting: false,
+  docSaving: false,
+  dreamRunning: false,
   memoryKindDraft: 'fact',
   memoryContentDraft: '',
   editingMemoryId: null,
@@ -50,7 +59,10 @@ const state = {
   selectedDoc: 'AGENTS.md',
   docDrafts: {},
   memoryFeedback: '',
+  docFeedback: '',
+  dreamFeedback: '',
   openDetails: new Set(),
+  activeModalClose: null,
 }
 
 /** 持久外壳 DOM 句柄：局部事件只刷新对应槽位，避免整页重建冲掉焦点与折叠状态 */
@@ -59,8 +71,13 @@ const ui = {
   tabButtons: {},
   statusStrip: null,
   themeButton: null,
+  noticeBanner: null,
   main: null,
   footer: null,
+  chatSection: null,
+  asideNode: null,
+  collapseAsideBtn: null,
+  expandAsideBtn: null,
   transcript: null,
   composerTextarea: null,
   sendButton: null,
@@ -198,7 +215,7 @@ function parseTagsInput(raw) {
 }
 
 function makeDetails(key, summaryText, bodyNodes) {
-  const details = el(
+  return el(
     'details',
     {
       class: 'trace',
@@ -210,7 +227,6 @@ function makeDetails(key, summaryText, bodyNodes) {
     },
     [el('summary', { text: summaryText }), ...bodyNodes.filter(Boolean)]
   )
-  return details
 }
 
 async function copyToClipboard(text) {
@@ -315,6 +331,37 @@ function isTableSeparator(line) {
   return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line)
 }
 
+/**
+ * 块级起始判定：必须与 renderMarkdown 里的块分支条件完全一致，
+ * 避免流式半成品行（如 `"## "` 或带属性的围栏）既不进块分支又打断段落循环导致死循环。
+ */
+const FENCE_OPEN_RE = /^(`{3,})(.*)$/
+const HR_RE = /^\s*(?:---+|\*\*\*+|___+)\s*$/
+const HEADING_RE = /^(#{1,3})\s+(.+)$/
+const QUOTE_RE = /^\s*>\s?/
+const UL_RE = /^\s*[-*+]\s+/
+const OL_RE = /^\s*\d+\.\s+/
+
+function isFenceOpen(line) {
+  const match = line.match(FENCE_OPEN_RE)
+  if (!match) return null
+  // 行内围栏代码（如 ```code```）不作为块级围栏，交给段落行内解析
+  if (match[2].includes('`')) return null
+  return { ticks: match[1].length, lang: match[2].trim().split(/\s+/)[0] || '' }
+}
+
+function isBlockStart(lines, idx) {
+  const line = lines[idx]
+  if (isFenceOpen(line)) return true
+  if (HR_RE.test(line)) return true
+  if (HEADING_RE.test(line)) return true
+  if (QUOTE_RE.test(line)) return true
+  if (UL_RE.test(line)) return true
+  if (OL_RE.test(line)) return true
+  if (line.includes('|') && idx + 1 < lines.length && isTableSeparator(lines[idx + 1])) return true
+  return false
+}
+
 /** 块级安全 DOM Markdown 渲染（零依赖、零 HTML 注入） */
 function renderMarkdown(source) {
   const container = el('div', { class: 'md-body' })
@@ -329,30 +376,30 @@ function renderMarkdown(source) {
       continue
     }
 
-    // 围栏代码块
-    const fenceMatch = line.match(/^```([A-Za-z0-9_+-]*)\s*$/)
-    if (fenceMatch) {
-      const lang = fenceMatch[1] || ''
+    // 围栏代码块（支持 ≥3 反引号与任意 info string）
+    const fence = isFenceOpen(line)
+    if (fence) {
+      const closeRe = new RegExp(`^\`{${fence.ticks},}\\s*$`)
       const codeLines = []
       i += 1
-      while (i < lines.length && !/^```\s*$/.test(lines[i])) {
+      while (i < lines.length && !closeRe.test(lines[i])) {
         codeLines.push(lines[i])
         i += 1
       }
       if (i < lines.length) i += 1
-      container.append(renderCodeBlock(lang, codeLines.join('\n')))
+      container.append(renderCodeBlock(fence.lang, codeLines.join('\n')))
       continue
     }
 
     // 分隔线
-    if (/^\s*(?:---+|\*\*\*+|___+)\s*$/.test(line)) {
+    if (HR_RE.test(line)) {
       container.append(el('hr'))
       i += 1
       continue
     }
 
     // 标题
-    const headingMatch = line.match(/^(#{1,3})\s+(.+)$/)
+    const headingMatch = line.match(HEADING_RE)
     if (headingMatch) {
       const level = headingMatch[1].length
       container.append(el(`h${level}`, {}, renderInlineNodes(headingMatch[2].trim())))
@@ -361,10 +408,10 @@ function renderMarkdown(source) {
     }
 
     // 引用块
-    if (/^\s*>\s?/.test(line)) {
+    if (QUOTE_RE.test(line)) {
       const quoteLines = []
-      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
-        quoteLines.push(lines[i].replace(/^\s*>\s?/, ''))
+      while (i < lines.length && QUOTE_RE.test(lines[i])) {
+        quoteLines.push(lines[i].replace(QUOTE_RE, ''))
         i += 1
       }
       container.append(el('blockquote', {}, [el('p', {}, renderInlineNodes(quoteLines.join(' ')))]))
@@ -403,10 +450,10 @@ function renderMarkdown(source) {
     }
 
     // 无序列表
-    if (/^\s*[-*+]\s+/.test(line)) {
+    if (UL_RE.test(line)) {
       const items = []
-      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
-        items.push(el('li', {}, renderInlineNodes(lines[i].replace(/^\s*[-*+]\s+/, ''))))
+      while (i < lines.length && UL_RE.test(lines[i])) {
+        items.push(el('li', {}, renderInlineNodes(lines[i].replace(UL_RE, ''))))
         i += 1
       }
       container.append(el('ul', {}, items))
@@ -414,29 +461,20 @@ function renderMarkdown(source) {
     }
 
     // 有序列表
-    if (/^\s*\d+\.\s+/.test(line)) {
+    if (OL_RE.test(line)) {
       const items = []
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
-        items.push(el('li', {}, renderInlineNodes(lines[i].replace(/^\s*\d+\.\s+/, ''))))
+      while (i < lines.length && OL_RE.test(lines[i])) {
+        items.push(el('li', {}, renderInlineNodes(lines[i].replace(OL_RE, ''))))
         i += 1
       }
       container.append(el('ol', {}, items))
       continue
     }
 
-    // 段落
-    const paraLines = []
-    while (
-      i < lines.length &&
-      lines[i].trim() &&
-      !/^```/.test(lines[i]) &&
-      !/^(#{1,3})\s+/.test(lines[i]) &&
-      !/^\s*>\s?/.test(lines[i]) &&
-      !/^\s*[-*+]\s+/.test(lines[i]) &&
-      !/^\s*\d+\.\s+/.test(lines[i]) &&
-      !/^\s*(?:---+|\*\*\*+|___+)\s*$/.test(lines[i]) &&
-      !(lines[i].includes('|') && i + 1 < lines.length && isTableSeparator(lines[i + 1]))
-    ) {
+    // 段落：至少消费当前行，保证循环严格推进，永不死循环
+    const paraLines = [lines[i]]
+    i += 1
+    while (i < lines.length && lines[i].trim() && !isBlockStart(lines, i)) {
       paraLines.push(lines[i])
       i += 1
     }
@@ -454,12 +492,17 @@ function renderMarkdown(source) {
 // ----------------------------------------------------------------- HTTP 通信
 
 async function request(method, path, body) {
-  const response = await fetch(path, {
-    method,
-    headers: body ? { 'content-type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-    credentials: 'same-origin',
-  })
+  let response
+  try {
+    response = await fetch(path, {
+      method,
+      headers: body ? { 'content-type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      credentials: 'same-origin',
+    })
+  } catch {
+    return { ok: false, status: 0, payload: null, networkError: true }
+  }
   let payload = null
   try {
     payload = await response.json()
@@ -471,13 +514,32 @@ async function request(method, path, body) {
   return { ok: response.ok, status: response.status, payload }
 }
 
+function clearReconnectTimer() {
+  if (state.reconnectTimer !== null) {
+    window.clearTimeout(state.reconnectTimer)
+    state.reconnectTimer = null
+  }
+}
+
+function closeActiveModal() {
+  const close = state.activeModalClose
+  state.activeModalClose = null
+  if (typeof close === 'function') close()
+}
+
 function resetShellRefs() {
+  closeActiveModal()
   ui.mounted = false
   ui.tabButtons = {}
   ui.statusStrip = null
   ui.themeButton = null
+  ui.noticeBanner = null
   ui.main = null
   ui.footer = null
+  ui.chatSection = null
+  ui.asideNode = null
+  ui.collapseAsideBtn = null
+  ui.expandAsideBtn = null
   ui.transcript = null
   ui.composerTextarea = null
   ui.sendButton = null
@@ -489,6 +551,8 @@ function resetShellRefs() {
 
 /** 登录态失效：回登录页并说明原因。否则页面会停在“正在重连…”且永远不成功。 */
 function showExpired(me) {
+  clearReconnectTimer()
+  closeActiveModal()
   if (me) state.me = me
   const socket = state.ws
   state.ws = null
@@ -532,6 +596,7 @@ async function boot() {
 }
 
 function renderFatal(message) {
+  clearReconnectTimer()
   resetShellRefs()
   root.className = 'center'
   root.replaceChildren(
@@ -543,10 +608,11 @@ function renderFatal(message) {
 }
 
 function renderSetup() {
+  clearReconnectTimer()
   resetShellRefs()
   root.className = 'center'
-  const password = el('input', { type: 'password', autocomplete: 'new-password' })
-  const confirm = el('input', { type: 'password', autocomplete: 'new-password' })
+  const password = el('input', { id: 'setup-password', type: 'password', autocomplete: 'new-password' })
+  const confirm = el('input', { id: 'setup-confirm', type: 'password', autocomplete: 'new-password' })
   const error = el('p', { class: 'danger caption' })
   const submit = el('button', { class: 'primary', type: 'button', text: '创建管理员账号' })
   submit.addEventListener('click', async () => {
@@ -559,12 +625,17 @@ function renderSetup() {
       error.textContent = '两次输入的密码不一致'
       return
     }
-    const result = await request('POST', '/v1/setup', { password: password.value })
-    if (!result.ok) {
-      error.textContent = result.payload?.error || '创建失败'
-      return
+    submit.disabled = true
+    try {
+      const result = await request('POST', '/v1/setup', { password: password.value })
+      if (!result.ok) {
+        error.textContent = result.payload?.error || '创建失败'
+        return
+      }
+      renderLogin()
+    } finally {
+      submit.disabled = false
     }
-    renderLogin()
   })
   root.replaceChildren(
     el('div', { class: 'panel stack' }, [
@@ -572,8 +643,14 @@ function renderSetup() {
         el('div', { class: 'row' }, [createBrandSeal(24), el('h1', { text: 'Pi Cloud' })]),
       ]),
       el('p', { class: 'muted', text: '首次使用：创建唯一的管理员账号。' }),
-      el('div', { class: 'field' }, [el('label', { class: 'field-label', text: '密码' }), password]),
-      el('div', { class: 'field' }, [el('label', { class: 'field-label', text: '确认密码' }), confirm]),
+      el('div', { class: 'field' }, [
+        el('label', { class: 'field-label', for: 'setup-password', text: '密码' }),
+        password,
+      ]),
+      el('div', { class: 'field' }, [
+        el('label', { class: 'field-label', for: 'setup-confirm', text: '确认密码' }),
+        confirm,
+      ]),
       error,
       submit,
     ])
@@ -581,26 +658,36 @@ function renderSetup() {
 }
 
 function renderLogin(notice) {
+  clearReconnectTimer()
   resetShellRefs()
   root.className = 'center'
-  const password = el('input', { type: 'password', autocomplete: 'current-password' })
+  const password = el('input', { id: 'login-password', type: 'password', autocomplete: 'current-password' })
   const error = el('p', { class: 'danger caption' })
   if (notice) error.textContent = notice
   const submit = el('button', { class: 'primary', type: 'button', text: '登录' })
+  let loggingIn = false
   const doLogin = async () => {
+    if (loggingIn) return
+    loggingIn = true
+    submit.disabled = true
     error.textContent = ''
-    const result = await request('POST', '/v1/login', { password: password.value })
-    if (!result.ok) {
-      error.textContent = result.status === 429 ? '尝试过于频繁，稍后再试' : '密码不正确'
-      return
+    try {
+      const result = await request('POST', '/v1/login', { password: password.value })
+      if (!result.ok) {
+        error.textContent = result.status === 429 ? '尝试过于频繁，稍后再试' : '密码不正确'
+        return
+      }
+      const me = await request('GET', '/v1/me')
+      if (me.ok && me.payload) state.me = me.payload
+      await enterApp()
+    } finally {
+      loggingIn = false
+      submit.disabled = false
     }
-    const me = await request('GET', '/v1/me')
-    if (me.ok && me.payload) state.me = me.payload
-    await enterApp()
   }
   submit.addEventListener('click', () => void doLogin())
   password.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') void doLogin()
+    if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) void doLogin()
   })
   root.replaceChildren(
     el('div', { class: 'panel stack' }, [
@@ -608,7 +695,10 @@ function renderLogin(notice) {
         el('div', { class: 'row' }, [createBrandSeal(24), el('h1', { text: 'Pi Cloud' })]),
       ]),
       el('p', { class: 'muted', text: '登录云端控制台。' }),
-      el('div', { class: 'field' }, [el('label', { class: 'field-label', text: '密码' }), password]),
+      el('div', { class: 'field' }, [
+        el('label', { class: 'field-label', for: 'login-password', text: '密码' }),
+        password,
+      ]),
       error,
       submit,
     ])
@@ -640,11 +730,22 @@ async function loadAuxiliary() {
   updateFooter()
   updateAsideSection('devices')
   updateAsideSection('auth')
-  if (state.tab === 'devices') renderTabPageContent()
+  if (state.tab === 'devices' || state.tab === 'tasks') renderTabPageContent()
   if (state.tab === 'settings' && !state.configDraft) renderTabPageContent()
 }
 
 function connect() {
+  clearReconnectTimer()
+  const prev = state.ws
+  state.ws = null
+  if (prev) {
+    try {
+      prev.close()
+    } catch {
+      // 忽略旧连接关闭异常
+    }
+  }
+
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
   // 没有游标时不能带 lastAckSeq=0：那会让服务端走「续传」分支、只重放旧事件，
   // 而新连上的页面需要的是整份快照（含历史消息）
@@ -664,6 +765,7 @@ function connect() {
   updateFooter()
 
   socket.addEventListener('open', () => {
+    if (state.ws !== socket) return
     opened = true
     state.wsStatus = 'open'
     state.reconnectDelay = 1000
@@ -671,6 +773,7 @@ function connect() {
     updateFooter()
   })
   socket.addEventListener('message', (event) => {
+    if (state.ws !== socket) return
     let frame
     try {
       frame = JSON.parse(event.data)
@@ -680,15 +783,17 @@ function connect() {
     applyFrame(frame)
   })
   socket.addEventListener('close', () => {
+    if (state.ws !== socket) return
     state.wsStatus = 'closed'
     state.ws = null
     updateStatusStrip()
     updateFooter()
     // 升级阶段就被拒（登录态过期 → 401）时只会看到 1006：标记一下，重连前先回查登录态，
     // 否则就是无限“正在重连…”且永远不成功。
-    if (state.me?.authenticated) scheduleReconnect(!opened)
+    if (state.me?.authenticated && ui.mounted) scheduleReconnect(!opened)
   })
   socket.addEventListener('error', () => {
+    if (state.ws !== socket) return
     state.wsStatus = 'closed'
     updateStatusStrip()
     updateFooter()
@@ -696,14 +801,21 @@ function connect() {
 }
 
 function scheduleReconnect(handshakeFailed = false) {
+  clearReconnectTimer()
   const delay = state.reconnectDelay
   state.reconnectDelay = Math.min(30000, Math.round(state.reconnectDelay * 1.8))
-  setTimeout(async () => {
+  state.reconnectTimer = setTimeout(async () => {
+    state.reconnectTimer = null
+    if (!ui.mounted || !state.me?.authenticated) return
     if (handshakeFailed) {
       const me = await request('GET', '/v1/me')
-      // 服务端也够不着（/v1/me 自己失败）时继续退避重连，别把网络故障当成登录过期
+      // 服务端也够不着（/v1/me 网络失败）时继续退避重连，别把网络故障当成登录过期
       if (me.ok && me.payload && me.payload.authenticated === false) {
         showExpired(me.payload)
+        return
+      }
+      if (!me.ok) {
+        scheduleReconnect(true)
         return
       }
     }
@@ -722,13 +834,11 @@ function send(frame) {
 
 function applyFrame(frame) {
   if (!frame || frame.v !== 1) return
-  if (typeof frame.seq === 'number' && frame.seq > state.lastSeq) {
-    state.lastSeq = frame.seq
-    updateFooter()
-  }
 
   if (frame.type === 'snapshot') {
     const snapshot = frame.snapshot || {}
+    // 服务重启后 seq 可能从 0 重计：snapshot 必须重置游标，不能只取 max
+    state.lastSeq = Number(frame.seq ?? snapshot.lastSeq ?? 0)
     state.messages = (snapshot.messages || []).map((message) => ({
       id: message.id,
       role: message.role,
@@ -761,6 +871,11 @@ function applyFrame(frame) {
     return
   }
 
+  if (typeof frame.seq === 'number' && frame.seq > state.lastSeq) {
+    state.lastSeq = frame.seq
+    updateFooter()
+  }
+
   if (frame.type === 'error') {
     pushNotice('error', frame.message || 'cloud error')
     return
@@ -772,12 +887,24 @@ function applyFrame(frame) {
     case 'message_start': {
       const id = String(event.messageId || `m-${Date.now()}`)
       if (state.messages.some((row) => row.id === id)) return
+      const isUser = event.role === 'user'
+      if (!isUser) {
+        const last = state.messages[state.messages.length - 1]
+        if (last && last.role === 'assistant' && last.pendingTrace && !last.text) {
+          last.id = id
+          last.at = event.at || last.at
+          last.streaming = true
+          last.pendingTrace = false
+          renderTranscript()
+          return
+        }
+      }
       state.messages.push({
         id,
-        role: event.role === 'user' ? 'user' : 'assistant',
+        role: isUser ? 'user' : 'assistant',
         text: '',
         at: event.at || Date.now(),
-        streaming: event.role !== 'user',
+        streaming: !isUser,
         traces: [],
       })
       renderTranscript()
@@ -786,17 +913,34 @@ function applyFrame(frame) {
     case 'text_delta': {
       const delta = String(event.delta || '')
       if (!delta) return
-      const last = state.messages[state.messages.length - 1]
-      if (last && last.role === 'assistant' && last.streaming) last.text += delta
-      else
+      const targetId = String(event.messageId || '')
+      let row = null
+      if (targetId) {
+        for (let idx = state.messages.length - 1; idx >= 0; idx -= 1) {
+          if (state.messages[idx].id === targetId) {
+            row = state.messages[idx]
+            break
+          }
+        }
+      }
+      if (!row) {
+        const last = state.messages[state.messages.length - 1]
+        if (last && last.role === 'assistant' && last.streaming) row = last
+      }
+      if (row) {
+        row.text += delta
+        row.streaming = true
+        row.pendingTrace = false
+      } else {
         state.messages.push({
-          id: event.messageId || `m-${Date.now()}`,
+          id: targetId || `m-${Date.now()}`,
           role: 'assistant',
           text: delta,
           at: Date.now(),
           streaming: true,
           traces: [],
         })
+      }
       renderTranscript()
       return
     }
@@ -815,6 +959,7 @@ function applyFrame(frame) {
       if (row) {
         if (event.text) row.text = event.text
         row.streaming = false
+        row.pendingTrace = false
         row.error = event.error
       }
       if (!target.startsWith('u-') && String(event.text || '').trim()) {
@@ -826,13 +971,14 @@ function applyFrame(frame) {
     case 'trace': {
       const trace = event.trace || {}
       let row = state.messages[state.messages.length - 1]
-      if (!row || row.role !== 'assistant') {
+      if (!row || row.role !== 'assistant' || !row.streaming) {
         row = {
           id: `m-${Date.now()}`,
           role: 'assistant',
           text: '',
           at: Date.now(),
           streaming: true,
+          pendingTrace: true,
           traces: [],
         }
         state.messages.push(row)
@@ -864,10 +1010,17 @@ function applyFrame(frame) {
       const task = event.task
       if (!task) return
       const index = state.tasks.findIndex((item) => item.id === task.id)
+      const prevStatus = index >= 0 ? state.tasks[index].status : null
       if (index >= 0) state.tasks[index] = task
       else state.tasks.unshift(task)
       if (!ACTIVE_STATUS.includes(task.status)) {
         delete state.stoppingTaskIds[task.id]
+      }
+      if (
+        prevStatus !== task.status &&
+        (task.status === 'waiting_human' || !ACTIVE_STATUS.includes(task.status))
+      ) {
+        onUnreadWorthyEvent()
       }
       updateStatusStrip()
       updateAsideSection('tasks')
@@ -881,6 +1034,7 @@ function applyFrame(frame) {
       if (index >= 0) state.units[index] = unit
       else state.units.unshift(unit)
       updateAsideSection('units')
+      if (state.tab === 'tasks') renderTabPageContent()
       return
     }
     case 'device': {
@@ -942,10 +1096,38 @@ if (typeof document !== 'undefined') {
   })
 }
 
+function updateNoticeBanner() {
+  if (!ui.noticeBanner) return
+  if (!state.errorBanner) {
+    ui.noticeBanner.replaceChildren()
+    ui.noticeBanner.style.display = 'none'
+    return
+  }
+  ui.noticeBanner.style.display = ''
+  ui.noticeBanner.replaceChildren(
+    el('span', { class: 'spacer', text: state.errorBanner }),
+    el('button', {
+      class: 'ghost sm',
+      type: 'button',
+      'aria-label': '关闭提示',
+      text: '关闭',
+      onclick: () => {
+        state.errorBanner = null
+        updateNoticeBanner()
+      },
+    })
+  )
+}
+
 function pushNotice(level, text) {
   state.notices.unshift({ level, text, at: Date.now() })
   state.notices = state.notices.slice(0, 20)
+  if (level === 'error' && text) {
+    state.errorBanner = text
+    updateNoticeBanner()
+  }
   updateAsideSection('notices')
+  if (state.tab === 'tasks') renderTabPageContent()
 }
 
 // ------------------------------------------------------------------ 外壳与局部刷新
@@ -985,13 +1167,35 @@ function mountAppShell() {
   const tabButtons = {}
   const tabsNode = el(
     'div',
-    { class: 'tabs', role: 'tablist', 'aria-label': 'Pi Cloud 视图' },
+    {
+      class: 'tabs',
+      role: 'tablist',
+      'aria-label': 'Pi Cloud 视图',
+      onkeydown: (event) => {
+        const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
+        if (!keys.includes(event.key)) return
+        const ids = TAB_ITEMS.map((item) => item.id)
+        const currentIndex = ids.indexOf(state.tab)
+        if (currentIndex < 0) return
+        event.preventDefault()
+        let nextIndex = currentIndex
+        if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % ids.length
+        else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + ids.length) % ids.length
+        else if (event.key === 'Home') nextIndex = 0
+        else if (event.key === 'End') nextIndex = ids.length - 1
+        const nextId = ids[nextIndex]
+        switchTab(nextId)
+        tabButtons[nextId]?.focus()
+      },
+    },
     TAB_ITEMS.map(({ id, label }) => {
+      const active = state.tab === id
       const btn = el('button', {
-        class: state.tab === id ? 'tab active' : 'tab',
+        class: active ? 'tab active' : 'tab',
         type: 'button',
         role: 'tab',
-        'aria-selected': state.tab === id ? 'true' : 'false',
+        tabindex: active ? '0' : '-1',
+        'aria-selected': active ? 'true' : 'false',
         onclick: () => switchTab(id),
       })
       btn.append(document.createTextNode(label))
@@ -1020,18 +1224,27 @@ function mountAppShell() {
     el('div', { class: 'header-right' }, [statusStrip, themeButton]),
   ])
 
+  const noticeBanner = el('div', { class: 'notice-banner', role: 'alert' })
+  noticeBanner.style.display = 'none'
   const main = el('main', { class: 'workspace' })
+  const mainContainer = el('div', { style: 'display:flex;flex-direction:column;min-height:0;height:100%;overflow:hidden;' }, [
+    noticeBanner,
+    main,
+  ])
+  main.style.flex = '1'
   const footer = el('footer', { class: 'bottom' })
 
   ui.mounted = true
   ui.tabButtons = tabButtons
   ui.statusStrip = statusStrip
   ui.themeButton = themeButton
+  ui.noticeBanner = noticeBanner
   ui.main = main
   ui.footer = footer
 
   updateThemeButton()
-  root.replaceChildren(header, main, footer)
+  updateNoticeBanner()
+  root.replaceChildren(header, mainContainer, footer)
 }
 
 function switchTab(id) {
@@ -1063,6 +1276,7 @@ function updateTabs() {
     const active = state.tab === id
     btn.className = active ? 'tab active' : 'tab'
     btn.setAttribute('aria-selected', active ? 'true' : 'false')
+    btn.setAttribute('tabindex', active ? '0' : '-1')
     if (id === 'chat' && state.unreadCount > 0) {
       btn.replaceChildren(
         document.createTextNode(label),
@@ -1100,7 +1314,7 @@ function updateStatusStrip() {
 
   if (state.agentStatus === 'thinking' || state.agentStatus === 'replying') {
     nodes.push(
-      el('span', { class: 'status-item ok' }, [
+      el('span', { class: 'status-item ok status-agent' }, [
         el('span', { class: 'status-dot', 'aria-hidden': 'true' }),
         el('span', { text: AGENT_STATUS_LABELS[state.agentStatus] || state.agentStatus }),
       ])
@@ -1124,7 +1338,7 @@ function updateStatusStrip() {
           text: `${deviceName} · ${latest.spec?.title || latest.id} · ${statusText} ${duration(latest.startedAt || latest.createdAt)}`,
         }),
         el('button', {
-          class: 'sm',
+          class: 'sm status-task-stop',
           type: 'button',
           text: state.stoppingTaskIds[latest.id]
             ? '正在停止…'
@@ -1133,8 +1347,8 @@ function updateStatusStrip() {
               : '停止工单',
           disabled: Boolean(state.stoppingTaskIds[latest.id]) || offline,
           onclick: () => {
+            if (!send({ type: 'stop_task', taskId: latest.id })) return
             state.stoppingTaskIds[latest.id] = true
-            send({ type: 'stop_task', taskId: latest.id })
             updateStatusStrip()
             updateAsideSection('tasks')
             if (state.tab === 'tasks') renderTabPageContent()
@@ -1173,6 +1387,10 @@ function updateFooter() {
 
 function renderMain() {
   if (!ui.mounted || !ui.main) return
+  ui.chatSection = null
+  ui.asideNode = null
+  ui.collapseAsideBtn = null
+  ui.expandAsideBtn = null
   ui.transcript = null
   ui.composerTextarea = null
   ui.sendButton = null
@@ -1185,6 +1403,8 @@ function renderMain() {
     ui.main.className = state.asideCollapsed ? 'workspace aside-collapsed' : 'workspace'
     const chatNode = renderChat()
     const asideNode = state.asideCollapsed ? renderCollapsedAsideStrip() : renderAside()
+    ui.chatSection = chatNode
+    ui.asideNode = asideNode
     ui.main.replaceChildren(chatNode, asideNode)
     renderTranscript()
     updateChatControls()
@@ -1198,11 +1418,37 @@ function renderMain() {
   renderTabPageContent()
 }
 
+/** 折叠/展开右栏只替换右栏节点，不重建聊天区 DOM，保留输入焦点与滚动位置 */
+function toggleAsideCollapsed(collapsed) {
+  state.asideCollapsed = collapsed
+  if (!ui.main || state.tab !== 'chat' || !ui.asideNode) {
+    renderMain()
+    return
+  }
+  ui.main.className = collapsed ? 'workspace aside-collapsed' : 'workspace'
+  ui.asideSlots = null
+  ui.collapseAsideBtn = null
+  ui.expandAsideBtn = null
+  const nextAside = collapsed ? renderCollapsedAsideStrip() : renderAside()
+  ui.asideNode.replaceWith(nextAside)
+  ui.asideNode = nextAside
+  if (collapsed) ui.expandAsideBtn?.focus()
+  else ui.collapseAsideBtn?.focus()
+}
+
 function renderTabPageContent() {
   if (!ui.tabPageInner) return
   const focusSnapshot = captureTaskInputFocus(ui.tabPageInner)
   if (state.tab === 'tasks') {
-    ui.tabPageInner.replaceChildren(renderTaskCard())
+    ui.tabPageInner.replaceChildren(
+      renderTaskCard(),
+      // <=960px 窄屏下隐藏了右栏，在工单页底部兜底呈现工作单元、授权与最近提示，确保手机端不丢功能
+      el('div', { class: 'narrow-only stack' }, [
+        renderUnitCard(),
+        renderAuthCard(),
+        renderNoticeCard(),
+      ])
+    )
     restoreTaskInputFocus(ui.tabPageInner, focusSnapshot)
     return
   }
@@ -1302,7 +1548,7 @@ function renderChat() {
   const confirm = el('button', {
     type: 'button',
     text: '确认方案…',
-    onclick: () => renderConfirmPlan(),
+    onclick: () => renderConfirmPlan(confirm),
   })
 
   const agentStatusLabel = el('span', { class: 'caption' })
@@ -1334,9 +1580,10 @@ function renderChat() {
 function sendChat() {
   const body = state.draft.trim()
   if (!body) return
+  if (!send({ type: 'say', text: body, clientMessageId: `c-${Date.now().toString(36)}` })) return
   state.draft = ''
   state.awaySummary = null
-  send({ type: 'say', text: body, clientMessageId: `c-${Date.now().toString(36)}` })
+  state.forceScrollBottom = true
   if (ui.composerTextarea) ui.composerTextarea.value = ''
   updateChatControls()
 }
@@ -1345,6 +1592,8 @@ function renderTranscript() {
   const container = ui.transcript || document.getElementById('transcript')
   if (!container) return
   const distance = container.scrollHeight - container.scrollTop - container.clientHeight
+  const shouldStick = state.forceScrollBottom || distance < 64
+  state.forceScrollBottom = false
   const nodes = []
   if (state.awaySummary?.text) {
     nodes.push(
@@ -1395,22 +1644,28 @@ function renderTranscript() {
     )
   }
   container.replaceChildren(...nodes)
-  if (distance < 64) container.scrollTop = container.scrollHeight
+  if (shouldStick) container.scrollTop = container.scrollHeight
 }
 
 // ------------------------------------------------------------------ 浮层弹窗
 
-function renderConfirmPlan() {
-  const planText = el('textarea', { rows: 4, placeholder: '方案原文（会写进会话记录）' })
-  const quota = el('input', { type: 'number', min: '1', max: '50', value: '5' })
+function renderConfirmPlan(triggerEl) {
+  closeActiveModal()
+  const opener = triggerEl || document.activeElement
+  const planText = el('textarea', {
+    id: 'confirm-plan-text',
+    rows: 4,
+    placeholder: '方案原文（会写进会话记录）',
+  })
+  const quota = el('input', { id: 'confirm-plan-quota', type: 'number', min: '1', max: '50', value: '5' })
   const deviceSelect = el(
     'select',
-    {},
+    { id: 'confirm-plan-device' },
     state.devices.map((device) =>
       el('option', { value: device.id, text: `${device.name} (${device.id})` })
     )
   )
-  const repoSelect = el('select', {})
+  const repoSelect = el('select', { id: 'confirm-plan-repo' })
   const refreshRepos = () => {
     const device = state.devices.find((item) => item.id === deviceSelect.value)
     const workspaces = (device?.workspaces || []).filter((workspace) => workspace.isGit)
@@ -1427,7 +1682,11 @@ function renderConfirmPlan() {
 
   const closeModal = () => {
     document.removeEventListener('keydown', onKeyDown)
+    if (state.activeModalClose === closeModal) state.activeModalClose = null
     if (overlay.parentNode) overlay.parentNode.removeChild(overlay)
+    if (opener && typeof opener.focus === 'function' && document.contains(opener)) {
+      opener.focus()
+    }
   }
 
   const onKeyDown = (event) => {
@@ -1437,6 +1696,7 @@ function renderConfirmPlan() {
     }
   }
   document.addEventListener('keydown', onKeyDown)
+  state.activeModalClose = closeModal
 
   const overlay = el(
     'div',
@@ -1444,7 +1704,7 @@ function renderConfirmPlan() {
       class: 'modal-backdrop',
       role: 'dialog',
       'aria-modal': 'true',
-      'aria-label': '确认方案并授权派活',
+      'aria-labelledby': 'confirm-plan-title',
       onclick: (event) => {
         if (event.target === overlay) closeModal()
       },
@@ -1452,7 +1712,7 @@ function renderConfirmPlan() {
     [
       el('div', { class: 'panel stack' }, [
         el('div', { class: 'panel-head' }, [
-          el('h1', { text: '确认方案并授权派活' }),
+          el('h1', { id: 'confirm-plan-title', text: '确认方案并授权派活' }),
           el('button', {
             class: 'ghost sm',
             type: 'button',
@@ -1463,19 +1723,19 @@ function renderConfirmPlan() {
         ]),
         el('p', { class: 'caption', text: '授权范围是「设备 × 仓库」，换设备或换仓库必须重新确认。' }),
         el('div', { class: 'field' }, [
-          el('label', { class: 'field-label', text: '方案原文' }),
+          el('label', { class: 'field-label', for: 'confirm-plan-text', text: '方案原文' }),
           planText,
         ]),
         el('div', { class: 'field' }, [
-          el('label', { class: 'field-label', text: '设备' }),
+          el('label', { class: 'field-label', for: 'confirm-plan-device', text: '设备' }),
           deviceSelect,
         ]),
         el('div', { class: 'field' }, [
-          el('label', { class: 'field-label', text: '仓库（仅 git）' }),
+          el('label', { class: 'field-label', for: 'confirm-plan-repo', text: '仓库（仅 git）' }),
           repoSelect,
         ]),
         el('div', { class: 'field' }, [
-          el('label', { class: 'field-label', text: '工单额度' }),
+          el('label', { class: 'field-label', for: 'confirm-plan-quota', text: '工单额度' }),
           quota,
         ]),
         error,
@@ -1521,18 +1781,17 @@ function renderConfirmPlan() {
 // ------------------------------------------------------------------ 右侧运行态栏
 
 function renderCollapsedAsideStrip() {
-  return el('button', {
+  const strip = el('button', {
     class: 'side-collapsed-strip',
     type: 'button',
     title: '展开运行态面板',
     'aria-label': '展开运行态面板',
     'aria-expanded': 'false',
     text: '‹',
-    onclick: () => {
-      state.asideCollapsed = false
-      renderMain()
-    },
+    onclick: () => toggleAsideCollapsed(false),
   })
+  ui.expandAsideBtn = strip
+  return strip
 }
 
 function renderAside() {
@@ -1545,20 +1804,20 @@ function renderAside() {
   }
   ui.asideSlots = slots
 
+  const collapseBtn = el('button', {
+    class: 'ghost sm',
+    type: 'button',
+    title: '收起运行态面板',
+    'aria-label': '收起运行态面板',
+    'aria-expanded': 'true',
+    text: '收起',
+    onclick: () => toggleAsideCollapsed(true),
+  })
+  ui.collapseAsideBtn = collapseBtn
+
   return el('aside', { class: 'side-rail' }, [
     el('div', { class: 'side-rail-head' }, [
-      el('button', {
-        class: 'ghost sm',
-        type: 'button',
-        title: '收起运行态面板',
-        'aria-label': '收起运行态面板',
-        'aria-expanded': 'true',
-        text: '收起',
-        onclick: () => {
-          state.asideCollapsed = true
-          renderMain()
-        },
-      }),
+      collapseBtn,
       el('span', { class: 'side-rail-title', text: '运行态' }),
     ]),
     el('div', { class: 'side-scroll' }, [
@@ -1667,7 +1926,12 @@ function renderTaskCard() {
         el('span', { class: 'value', text: spec.title || task.id }),
         el('span', { class: 'spacer' }),
         el('span', {
-          class: task.status === 'failed' ? 'caption danger' : task.status === 'waiting_human' ? 'caption warn' : 'caption',
+          class:
+            task.status === 'failed'
+              ? 'caption danger'
+              : task.status === 'waiting_human'
+                ? 'caption warn'
+                : 'caption',
           text: stopping ? '正在停止…' : TASK_STATUS[task.status] || task.status,
         }),
       ]),
@@ -1693,8 +1957,8 @@ function renderTaskCard() {
                 onclick: () => {
                   const text = (state.answerDrafts[task.id] || '').trim()
                   if (!text) return
+                  if (!send({ type: 'task_message', taskId: task.id, text })) return
                   state.answerDrafts[task.id] = ''
-                  send({ type: 'task_message', taskId: task.id, text })
                   updateAsideSection('tasks')
                   if (state.tab === 'tasks') renderTabPageContent()
                 },
@@ -1719,8 +1983,8 @@ function renderTaskCard() {
               onclick: () => {
                 const text = (state.instructionDrafts[task.id] || '').trim()
                 if (!text) return
+                if (!send({ type: 'task_message', taskId: task.id, text })) return
                 state.instructionDrafts[task.id] = ''
-                send({ type: 'task_message', taskId: task.id, text })
                 updateAsideSection('tasks')
                 if (state.tab === 'tasks') renderTabPageContent()
               },
@@ -1758,8 +2022,8 @@ function renderTaskCard() {
             text: stopping ? '正在停止…' : offline ? '设备离线，工单已取消' : '停止工单',
             disabled: stopping || offline,
             onclick: () => {
+              if (!send({ type: 'stop_task', taskId: task.id })) return
               state.stoppingTaskIds[task.id] = true
-              send({ type: 'stop_task', taskId: task.id })
               updateStatusStrip()
               updateAsideSection('tasks')
               if (state.tab === 'tasks') renderTabPageContent()
@@ -1923,15 +2187,18 @@ function renderConfigCard() {
     }
   }
   const draft = state.configDraft
-  const status = el('p', { class: 'caption' })
+  const status = el('p', { class: 'caption accent', text: state.configFeedback || '' })
 
   const providerSelect = el(
     'select',
     {
+      id: 'cloud-config-provider',
       onchange: (event) => {
         draft.providerId = event.target.value
         draft.model = ''
         state.configModels = []
+        state.configFeedback = ''
+        status.textContent = ''
         void loadCatalog()
       },
     },
@@ -1940,18 +2207,19 @@ function renderConfigCard() {
   providerSelect.value = draft.providerId
 
   const apiKey = el('input', {
+    id: 'cloud-config-apikey',
     type: 'password',
     autocomplete: 'off',
     value: draft.apiKey,
     placeholder: config.apiKeyMasked
-      ? `已保存：${config.apiKeyMasked}（留空表示不改）`
+      ? `已保存：${config.apiKeyMasked}（保存变更时需重新填入 Key）`
       : 'sk-...',
     oninput: (event) => {
       draft.apiKey = event.target.value
     },
   })
 
-  const modelLabel = el('label', { class: 'field-label', text: '模型' })
+  const modelLabel = el('label', { class: 'field-label', for: 'cloud-config-model', text: '模型' })
   const modelSlot = el('div', {})
   const capabilitySlot = el('p', { class: 'caption' })
 
@@ -1967,6 +2235,7 @@ function renderConfigCard() {
     const select = el(
       'select',
       {
+        id: 'cloud-config-model',
         onchange: (event) => {
           draft.model = event.target.value
           paintCapabilities()
@@ -1994,10 +2263,13 @@ function renderConfigCard() {
   }
 
   const loadCatalog = async () => {
+    const reqId = ++state.catalogReqSeq
+    const targetProvider = draft.providerId
     const result = await request(
       'GET',
-      `/v1/cloud-config/catalog?providerId=${encodeURIComponent(draft.providerId)}`
+      `/v1/cloud-config/catalog?providerId=${encodeURIComponent(targetProvider)}`
     )
+    if (reqId !== state.catalogReqSeq || draft.providerId !== targetProvider) return
     state.configModels = result.ok ? result.payload?.models || [] : []
     paintModelField()
   }
@@ -2006,35 +2278,49 @@ function renderConfigCard() {
     class: 'primary',
     type: 'button',
     text: '保存',
+    disabled: state.configSaving,
     onclick: async () => {
+      if (state.configSaving) return
       const body = {
         providerId: draft.providerId.trim(),
         model: draft.model.trim(),
         apiKey: draft.apiKey.trim(),
       }
       if (!body.providerId || !body.model) {
-        status.textContent = '供应商与模型都要选'
+        state.configFeedback = '供应商与模型都要选'
+        status.textContent = state.configFeedback
         return
       }
       if (!body.apiKey && !config.apiKeyMasked) {
-        status.textContent = '首次配置要填 API Key'
+        state.configFeedback = '首次配置要填 API Key'
+        status.textContent = state.configFeedback
         return
       }
       if (!body.apiKey) {
-        status.textContent = '这里需要重新填一次 Key（云端不保存明文可回填的那份）'
+        state.configFeedback = '这里需要重新填一次 Key（云端不保存明文可回填的那份）'
+        status.textContent = state.configFeedback
         return
       }
-      const result = await request('PUT', '/v1/cloud-config', body)
-      if (!result.ok) {
-        status.textContent = result.payload?.error || '保存失败'
-        return
+      state.configSaving = true
+      saveButton.disabled = true
+      try {
+        const result = await request('PUT', '/v1/cloud-config', body)
+        if (!result.ok) {
+          state.configFeedback = result.payload?.error || '保存失败'
+          status.textContent = state.configFeedback
+          return
+        }
+        state.configFeedback = result.payload?.warning
+          ? `已保存，下一轮生效（${result.payload.warning}）`
+          : '已保存，下一轮生效'
+        status.textContent = state.configFeedback
+        // 落盘成功后清空 draft：Key 不再留在页面状态里
+        state.configDraft = null
+        await loadAuxiliary()
+      } finally {
+        state.configSaving = false
+        saveButton.disabled = false
       }
-      status.textContent = result.payload?.warning
-        ? `已保存，下一轮生效（${result.payload.warning}）`
-        : '已保存，下一轮生效'
-      // 落盘成功后清空 draft：Key 不再留在页面状态里
-      state.configDraft = null
-      await loadAuxiliary()
     },
   })
 
@@ -2048,8 +2334,14 @@ function renderConfigCard() {
       class: 'caption',
       text: '只支持 8 家内置供应商；模型能力来自 Pi catalog。Key 加密落盘，只回末四位，设备端的 Key 不会上传到这里。',
     }),
-    el('div', { class: 'field' }, [el('label', { class: 'field-label', text: '供应商' }), providerSelect]),
-    el('div', { class: 'field' }, [el('label', { class: 'field-label', text: 'API Key' }), apiKey]),
+    el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', for: 'cloud-config-provider', text: '供应商' }),
+      providerSelect,
+    ]),
+    el('div', { class: 'field' }, [
+      el('label', { class: 'field-label', for: 'cloud-config-apikey', text: 'API Key' }),
+      apiKey,
+    ]),
     el('div', { class: 'field' }, [modelLabel, modelSlot]),
     capabilitySlot,
     status,
@@ -2099,11 +2391,6 @@ async function loadMemoryData() {
     }
     if (docRes.ok && Array.isArray(docRes.payload?.docs)) {
       state.docs = docRes.payload.docs
-      for (const doc of state.docs) {
-        if (!(doc.name in state.docDrafts)) {
-          state.docDrafts[doc.name] = doc.content || ''
-        }
-      }
     }
     if (dreamRes.ok && Array.isArray(dreamRes.payload?.dreams)) {
       state.dreams = dreamRes.payload.dreams
@@ -2121,6 +2408,7 @@ function renderMemoryTab() {
   const kindSelect = el(
     'select',
     {
+      'aria-label': '记忆分类',
       onchange: (event) => {
         state.memoryKindDraft = event.target.value
       },
@@ -2152,6 +2440,7 @@ function renderMemoryTab() {
       const editKindSelect = el(
         'select',
         {
+          'aria-label': '编辑记忆分类',
           onchange: (event) => {
             editDraft.kind = event.target.value
           },
@@ -2188,22 +2477,29 @@ function renderMemoryTab() {
               class: 'primary sm',
               type: 'button',
               text: '保存',
+              disabled: state.memorySubmitting,
               onclick: async () => {
+                if (state.memorySubmitting) return
                 const nextContent = editDraft.content.trim()
                 if (!nextContent) return
-                const res = await request('PATCH', `/v1/memories/${encodeURIComponent(item.id)}`, {
-                  kind: editDraft.kind,
-                  content: nextContent,
-                  tags: parseTagsInput(editDraft.tagsText),
-                })
-                if (res.ok && res.payload?.memory) {
-                  state.memories = state.memories.map((m) => (m.id === item.id ? res.payload.memory : m))
-                  state.editingMemoryId = null
-                  state.editingMemoryDraft = null
-                  state.memoryFeedback = '已保存（已升为手工保护）'
-                  renderTabPageContent()
-                } else {
-                  state.memoryFeedback = res.payload?.error || `保存失败 (HTTP ${res.status})`
+                state.memorySubmitting = true
+                renderTabPageContent()
+                try {
+                  const res = await request('PATCH', `/v1/memories/${encodeURIComponent(item.id)}`, {
+                    kind: editDraft.kind,
+                    content: nextContent,
+                    tags: parseTagsInput(editDraft.tagsText),
+                  })
+                  if (res.ok && res.payload?.memory) {
+                    state.memories = state.memories.map((m) => (m.id === item.id ? res.payload.memory : m))
+                    state.editingMemoryId = null
+                    state.editingMemoryDraft = null
+                    state.memoryFeedback = '已保存（已升为手工保护）'
+                  } else {
+                    state.memoryFeedback = res.payload?.error || `保存失败 (HTTP ${res.status})`
+                  }
+                } finally {
+                  state.memorySubmitting = false
                   renderTabPageContent()
                 }
               },
@@ -2212,6 +2508,7 @@ function renderMemoryTab() {
               class: 'ghost sm',
               type: 'button',
               text: '取消',
+              disabled: state.memorySubmitting,
               onclick: () => {
                 state.editingMemoryId = null
                 state.editingMemoryDraft = null
@@ -2281,13 +2578,16 @@ function renderMemoryTab() {
 
   const currentDocName = state.selectedDoc || 'AGENTS.md'
   const currentDocMeta = state.docs.find((doc) => doc.name === currentDocName)
+  // docDrafts 仅记录用户动手编辑过的脏草稿；未编辑文档在刷新时永远读取最新服务端内容
+  const currentDocValue =
+    currentDocName in state.docDrafts ? state.docDrafts[currentDocName] : (currentDocMeta?.content ?? '')
   const docTextarea = el('textarea', {
     rows: 10,
     placeholder:
       currentDocName === 'SOUL.md'
         ? '定义云端 Agent 的人格、语气与沟通风格…'
         : '定义云端 Agent 必须遵守的长期工作约定与规则…',
-    value: state.docDrafts[currentDocName] ?? currentDocMeta?.content ?? '',
+    value: currentDocValue,
     oninput: (event) => {
       state.docDrafts[currentDocName] = event.target.value
     },
@@ -2324,20 +2624,27 @@ function renderMemoryTab() {
           class: 'primary',
           type: 'button',
           text: '新增记忆',
+          disabled: state.memorySubmitting,
           onclick: async () => {
+            if (state.memorySubmitting) return
             const content = state.memoryContentDraft.trim()
             if (!content) return
-            const res = await request('POST', '/v1/memories', {
-              kind: state.memoryKindDraft,
-              content,
-            })
-            if (res.ok && res.payload?.memory) {
-              state.memoryContentDraft = ''
-              state.memories = [res.payload.memory, ...state.memories]
-              state.memoryFeedback = '已添加手工记忆'
-              renderTabPageContent()
-            } else {
-              state.memoryFeedback = res.payload?.error || `保存失败 (HTTP ${res.status})`
+            state.memorySubmitting = true
+            renderTabPageContent()
+            try {
+              const res = await request('POST', '/v1/memories', {
+                kind: state.memoryKindDraft,
+                content,
+              })
+              if (res.ok && res.payload?.memory) {
+                state.memoryContentDraft = ''
+                state.memories = [res.payload.memory, ...state.memories]
+                state.memoryFeedback = '已添加手工记忆'
+              } else {
+                state.memoryFeedback = res.payload?.error || `保存失败 (HTTP ${res.status})`
+              }
+            } finally {
+              state.memorySubmitting = false
               renderTabPageContent()
             }
           },
@@ -2362,6 +2669,7 @@ function renderMemoryTab() {
               text: name,
               onclick: () => {
                 state.selectedDoc = name
+                state.docFeedback = ''
                 renderTabPageContent()
               },
             })
@@ -2375,26 +2683,37 @@ function renderMemoryTab() {
           : '尚未创建（保存后立即对下一轮生效）',
       }),
       docTextarea,
+      state.docFeedback ? el('p', { class: 'caption accent', text: state.docFeedback }) : null,
       el('div', { class: 'row' }, [
         el('button', {
           class: 'primary',
           type: 'button',
-          text: '保存文档',
+          text: state.docSaving ? '保存中…' : '保存文档',
+          disabled: state.docSaving,
           onclick: async () => {
-            const content = state.docDrafts[currentDocName] ?? ''
-            const res = await request('PUT', `/v1/cloud-docs/${encodeURIComponent(currentDocName)}`, {
-              content,
-            })
-            if (res.ok && res.payload?.doc) {
-              const saved = res.payload.doc
-              state.docs = state.docs.some((d) => d.name === saved.name)
-                ? state.docs.map((d) => (d.name === saved.name ? saved : d))
-                : [...state.docs, saved]
-              state.docDrafts[saved.name] = saved.content
-              state.memoryFeedback = `已保存 ${saved.name}`
-              renderTabPageContent()
-            } else {
-              state.memoryFeedback = res.payload?.error || `保存失败 (HTTP ${res.status})`
+            if (state.docSaving) return
+            state.docSaving = true
+            renderTabPageContent()
+            try {
+              const content =
+                currentDocName in state.docDrafts
+                  ? state.docDrafts[currentDocName]
+                  : (currentDocMeta?.content ?? '')
+              const res = await request('PUT', `/v1/cloud-docs/${encodeURIComponent(currentDocName)}`, {
+                content,
+              })
+              if (res.ok && res.payload?.doc) {
+                const saved = res.payload.doc
+                state.docs = state.docs.some((d) => d.name === saved.name)
+                  ? state.docs.map((d) => (d.name === saved.name ? saved : d))
+                  : [...state.docs, saved]
+                delete state.docDrafts[saved.name]
+                state.docFeedback = `已保存 ${saved.name}`
+              } else {
+                state.docFeedback = res.payload?.error || `保存失败 (HTTP ${res.status})`
+              }
+            } finally {
+              state.docSaving = false
               renderTabPageContent()
             }
           },
@@ -2408,22 +2727,29 @@ function renderMemoryTab() {
         el('button', {
           class: 'sm',
           type: 'button',
-          text: '立即整理（梦境）',
+          text: state.dreamRunning ? '整理中…' : '立即整理（梦境）',
+          disabled: state.dreamRunning,
           onclick: async () => {
-            state.memoryFeedback = '正在整理记忆…'
+            if (state.dreamRunning) return
+            state.dreamRunning = true
+            state.dreamFeedback = '正在整理记忆…'
             renderTabPageContent()
-            const res = await request('POST', '/v1/dreams/run', {})
-            if (res.ok) {
-              await loadMemoryData()
-              state.memoryFeedback = res.payload?.dream?.summary || '梦境整理完成'
-              renderTabPageContent()
-            } else {
-              state.memoryFeedback = res.payload?.error || `整理失败 (HTTP ${res.status})`
+            try {
+              const res = await request('POST', '/v1/dreams/run', {})
+              if (res.ok) {
+                await loadMemoryData()
+                state.dreamFeedback = res.payload?.dream?.summary || '梦境整理完成'
+              } else {
+                state.dreamFeedback = res.payload?.error || `整理失败 (HTTP ${res.status})`
+              }
+            } finally {
+              state.dreamRunning = false
               renderTabPageContent()
             }
           },
         }),
       ]),
+      state.dreamFeedback ? el('p', { class: 'caption accent', text: state.dreamFeedback }) : null,
       dreamItems.length === 0
         ? el('p', { class: 'caption', text: '还没有梦境整理记录（空闲 ≥30 分钟且无活跃工单时自动运行，也可手动触发）' })
         : el('ul', { class: 'list' }, dreamItems),

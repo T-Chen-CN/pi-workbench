@@ -103,12 +103,18 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   // 全局快捷键与外部打开事件
   const paletteShortcut = useSettingsStore((state) => state.keybindings.commandPalette)
+  const listRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (matchShortcut(event, paletteShortcut)) {
         event.preventDefault()
         setOpen((value) => !value)
-      } else if (event.key === 'Escape') {
+      } else if (event.key === 'Escape' && open && !event.defaultPrevented) {
+        if (document.querySelector('[role="dialog"][aria-modal="true"]:not([data-command-palette])')) {
+          return
+        }
+        event.preventDefault()
+        event.stopImmediatePropagation()
         setOpen(false)
       }
     }
@@ -120,7 +126,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       window.removeEventListener('keydown', onKeyDown)
       offOpen()
     }
-  }, [paletteShortcut])
+  }, [paletteShortcut, open])
+
+  // 键盘上下选择时确保高亮项滚入可视区
+  useEffect(() => {
+    if (!open) return
+    const item = listRef.current?.querySelector<HTMLElement>(`[data-cmd-index="${selected}"]`)
+    item?.scrollIntoView?.({ block: 'nearest' })
+  }, [open, selected])
 
   useEffect(() => {
     if (!open) {
@@ -251,8 +264,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         return
       }
       if (builtin.event) {
+        // 先关闭命令面板，避免后续弹窗（如重命名/删除确认 DialogHost）被 z-50 的面板遮住
+        setOpen(false)
         emitAppEvent(builtin.event as Parameters<typeof emitAppEvent>[0])
-        setOutput({ title: command.title, text: command.title, success: true })
       }
       return
     }
@@ -310,6 +324,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     <div
       role="dialog"
       aria-modal="true"
+      aria-label={t('commandPalette')}
+      data-command-palette="true"
       className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-20"
     >
       <div className="absolute inset-0 bg-overlay/50" onClick={() => setOpen(false)} />
@@ -342,7 +358,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
               } else if (event.key === 'ArrowUp') {
                 event.preventDefault()
                 setSelected((value) => Math.max(value - 1, 0))
-              } else if (event.key === 'Enter') {
+              } else if (
+                event.key === 'Enter' &&
+                !event.nativeEvent.isComposing &&
+                event.keyCode !== 229
+              ) {
                 event.preventDefault()
                 const command = filtered[selected]
                 if (command && !loading) void runCommand(command)
@@ -397,7 +417,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           </div>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto">
           {filtered.length === 0 ? (
             <div className="px-3 py-8 text-center type-caption text-ink-muted">
               {loading ? t('loading') : t('noPluginCommands')}
@@ -406,6 +426,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             filtered.map((command, index) => (
               <button
                 key={command.id}
+                data-cmd-index={index}
                 type="button"
                 onClick={() => void runCommand(command)}
                 onMouseEnter={() => setSelected(index)}

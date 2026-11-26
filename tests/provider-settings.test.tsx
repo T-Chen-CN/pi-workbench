@@ -2,10 +2,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProviderSettings } from '../src/components/ProviderSettings'
+import { ProviderAuthPanel } from '../src/components/ProviderAuthPanel'
 import { useI18nStore } from '../src/store/i18nStore'
 import { useSettingsStore } from '../src/store/settingsStore'
 import { api } from '../src/api'
-import type { ProviderView } from '../src/types/electron'
+import type { ProviderAuthEvent, ProviderView } from '../src/types/electron'
 
 vi.mock('../src/api', () => ({
   api: {
@@ -16,7 +17,10 @@ vi.mock('../src/api', () => ({
     providersSetOverrides: vi.fn(async () => ({ success: true, pending: false })),
     providersForget: vi.fn(async () => ({ success: true })),
     providersLogin: vi.fn(async () => ({ success: true })),
+    providersAuthAnswer: vi.fn(async () => ({ ok: true })),
+    providersCancelLogin: vi.fn(async () => ({ ok: true })),
     onProvidersAuthEvent: vi.fn(() => () => {}),
+    openExternalUrl: vi.fn(async () => ({ success: true })),
     getSettings: vi.fn(async () => ({ success: true, settings: {} })),
     saveSettings: vi.fn(async () => ({ success: true })),
   },
@@ -262,5 +266,68 @@ describe('ProviderSettings（P-04 / P-06 / P-10）', () => {
 
     fireEvent.change(search, { target: { value: 'nonexistent-model' } })
     expect(screen.getByText('没有匹配的模型')).toBeTruthy()
+  })
+
+  it('OAuth 登录在收到 result success 后刷新供应商列表并通知 Agent', async () => {
+    const listeners: Array<(event: ProviderAuthEvent) => void> = []
+    vi.mocked(api.onProvidersAuthEvent).mockImplementation((cb) => {
+      listeners.push(cb)
+      return () => {
+        const index = listeners.indexOf(cb)
+        if (index >= 0) listeners.splice(index, 1)
+      }
+    })
+    const savedListener = vi.fn()
+    window.addEventListener('api-config-saved', savedListener)
+
+    try {
+      render(<ProviderSettings />)
+      await waitFor(() => expect(api.providersList).toHaveBeenCalledTimes(1))
+
+      for (const listener of listeners) {
+        listener({ providerId: 'openai-codex', kind: 'result', success: true })
+      }
+      await waitFor(() => expect(api.providersList).toHaveBeenCalledTimes(2))
+      expect(savedListener).toHaveBeenCalledTimes(1)
+    } finally {
+      window.removeEventListener('api-config-saved', savedListener)
+    }
+  })
+
+  it('ProviderAuthPanel 切换 providerId 时重置状态，且 progress 事件不清空用户输入', async () => {
+    const listeners: Array<(event: ProviderAuthEvent) => void> = []
+    vi.mocked(api.onProvidersAuthEvent).mockImplementation((cb) => {
+      listeners.push(cb)
+      return () => {
+        const index = listeners.indexOf(cb)
+        if (index >= 0) listeners.splice(index, 1)
+      }
+    })
+
+    const { rerender } = render(<ProviderAuthPanel providerId="openai-codex" />)
+    for (const listener of listeners) {
+      listener({
+        providerId: 'openai-codex',
+        kind: 'prompt',
+        prompt: {
+          requestId: 'req-1',
+          prompt: { type: 'text', message: '输入验证码', placeholder: 'code' },
+        },
+      })
+    }
+    const input = (await screen.findByPlaceholderText('code')) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '123456' } })
+
+    for (const listener of listeners) {
+      listener({
+        providerId: 'openai-codex',
+        kind: 'progress',
+        message: '等待中',
+      })
+    }
+    expect((screen.getByPlaceholderText('code') as HTMLInputElement).value).toBe('123456')
+
+    rerender(<ProviderAuthPanel providerId="anthropic" />)
+    expect(screen.queryByPlaceholderText('code')).toBeNull()
   })
 })

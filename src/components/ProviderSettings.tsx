@@ -7,7 +7,7 @@
  * 3. 任何接口都不回传密钥，UI 只知道「已连接 / 未连接」和凭证类型。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RefreshCw, Trash2 } from 'lucide-react'
 import type {
   ProviderAuthMethod,
@@ -219,10 +219,24 @@ export function ProviderSettings() {
     ]
   }, [selected, modelQuery])
 
-  const notifyAgent = () => {
+  const notifyAgent = useCallback(() => {
     // 各工作区的 Agent 用新配置重建（会话本身不受影响）
     emitAppEvent('api-config-saved')
-  }
+  }, [])
+
+  // OAuth 登录是异步流（providers:login 立即返回），必须在收到 result 成功事件后再刷新与通知 Agent
+  useEffect(() => {
+    const off = api.onProvidersAuthEvent((payload) => {
+      if (payload.kind !== 'result' || !payload.success) return
+      void api
+        .providersRefresh(false)
+        .catch(() => {})
+        .finally(() => {
+          void load().then(notifyAgent)
+        })
+    })
+    return () => off()
+  }, [load, notifyAgent])
 
   const handleSaveKey = async () => {
     if (!selected || !apiKey.trim()) return
@@ -250,14 +264,6 @@ export function ProviderSettings() {
     }
   }
 
-  const oauthRefreshTimerRef = useRef<number | null>(null)
-  useEffect(
-    () => () => {
-      if (oauthRefreshTimerRef.current !== null) window.clearTimeout(oauthRefreshTimerRef.current)
-    },
-    []
-  )
-
   const handleOAuth = async (method: ProviderAuthMethod) => {
     if (!selected) return
     setBusy('oauth')
@@ -271,12 +277,6 @@ export function ProviderSettings() {
       )
       return
     }
-    // 登录结果通过 providers:auth-event 回来；成功后刷新列表
-    if (oauthRefreshTimerRef.current !== null) window.clearTimeout(oauthRefreshTimerRef.current)
-    oauthRefreshTimerRef.current = window.setTimeout(() => {
-      oauthRefreshTimerRef.current = null
-      void load().then(notifyAgent)
-    }, 1500)
   }
 
   const handleSelectModel = async (modelId: string) => {
@@ -409,7 +409,13 @@ export function ProviderSettings() {
                       value={apiKey}
                       onChange={(event) => setApiKey(event.target.value)}
                       onKeyDown={(event) => {
-                        if (event.key === 'Enter') void handleSaveKey()
+                        if (
+                          event.key === 'Enter' &&
+                          !event.nativeEvent.isComposing &&
+                          event.keyCode !== 229
+                        ) {
+                          void handleSaveKey()
+                        }
                       }}
                       placeholder="sk-..."
                       className="type-code"

@@ -45,6 +45,7 @@ import {
   findConflict,
   formatShortcut,
   isMacPlatform,
+  shortcutTokens,
   type ShortcutId,
 } from '../utils/keybindings'
 
@@ -101,10 +102,15 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
   } = useSettingsStore()
   const [capturingShortcut, setCapturingShortcut] = useState<ShortcutId | null>(null)
   const [section, setSection] = useState<SettingsSection>(initialSection)
+  const [budgetDraft, setBudgetDraft] = useState(() => String(budgetUsd))
   const isMac = isMacPlatform()
   const mod = isMac ? '⌘' : 'Ctrl'
   const shift = isMac ? '⇧' : 'Shift'
   const alt = isMac ? '⌥' : 'Alt'
+
+  useEffect(() => {
+    setBudgetDraft(String(budgetUsd))
+  }, [budgetUsd])
 
   const update = useUpdaterStore((store) => store.state)
   const applyUpdateState = useUpdaterStore((store) => store.applyState)
@@ -207,8 +213,12 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
     void persistAppSettings({ notifications: next })
   }
 
-  const handleBudgetChange = (value: number) => {
-    const next = Number.isFinite(value) ? Math.max(0, value) : 0
+  const commitBudgetDraft = (raw: string) => {
+    const trimmed = raw.trim()
+    const parsed = trimmed === '' ? 0 : Number(trimmed)
+    const next = Number.isFinite(parsed) ? Math.max(0, parsed) : budgetUsd
+    setBudgetDraft(String(next))
+    if (next === budgetUsd) return
     setBudgetUsd(next)
     void persistAppSettings({ budgetUsd: next })
   }
@@ -288,10 +298,10 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
       items: [
         {
           label: t('shortcutCommandPalette'),
-          keys: [mod, shift, 'P'],
+          keys: shortcutTokens(keybindings.commandPalette, isMac),
           note: t('shortcutCommandPaletteNote'),
         },
-        { label: t('shortcutSettings'), keys: [mod, ','] },
+        { label: t('shortcutSettings'), keys: shortcutTokens(keybindings.settings, isMac) },
         { label: t('shortcutReload'), keys: [mod, 'R'] },
         {
           label: t('shortcutDevTools'),
@@ -348,8 +358,9 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
       <div className="min-w-0 flex-1 overflow-y-auto p-5">
         {section === 'general' && (
           <div className="flex max-w-sm flex-col gap-5">
-            <Field label={t('language')}>
+            <Field label={t('language')} htmlFor="settings-language">
               <Select
+                id="settings-language"
                 value={language}
                 onChange={(e) => handleLanguageChange(e.target.value as 'zh' | 'en')}
               >
@@ -358,8 +369,9 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
               </Select>
             </Field>
 
-            <Field label={t('theme')}>
+            <Field label={t('theme')} htmlFor="settings-theme">
               <Select
+                id="settings-theme"
                 value={mode}
                 onChange={(e) => handleThemeChange(e.target.value as ThemeMode)}
               >
@@ -381,8 +393,9 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
               </label>
             </Field>
 
-            <Field label={t('autoSaveDelay')}>
+            <Field label={t('autoSaveDelay')} htmlFor="settings-autosave-delay">
               <Select
+                id="settings-autosave-delay"
                 value={String(autoSaveDelay)}
                 disabled={!autoSave}
                 onChange={(event) => handleAutoSaveDelayChange(Number(event.target.value))}
@@ -394,8 +407,9 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
                 ))}
               </Select>
             </Field>
-            <Field label={t('runWhileBusy')} hint={t('runWhileBusyHint')}>
+            <Field label={t('runWhileBusy')} hint={t('runWhileBusyHint')} htmlFor="settings-run-while-busy">
               <Select
+                id="settings-run-while-busy"
                 value={runWhileBusy}
                 onChange={(event) => handleRunWhileBusyChange(event.target.value)}
               >
@@ -404,13 +418,25 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
               </Select>
             </Field>
 
-            <Field label={t('budgetUsd')} hint={t('budgetUsdHint')}>
+            <Field label={t('budgetUsd')} hint={t('budgetUsdHint')} htmlFor="settings-budget-usd">
               <Input
+                id="settings-budget-usd"
                 type="number"
                 min={0}
                 step={0.5}
-                value={String(budgetUsd)}
-                onChange={(event) => handleBudgetChange(Number(event.target.value))}
+                value={budgetDraft}
+                onChange={(event) => setBudgetDraft(event.target.value)}
+                onBlur={() => commitBudgetDraft(budgetDraft)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === 'Enter' &&
+                    !event.nativeEvent.isComposing &&
+                    event.keyCode !== 229
+                  ) {
+                    commitBudgetDraft(budgetDraft)
+                    event.currentTarget.blur()
+                  }
+                }}
               />
             </Field>
 

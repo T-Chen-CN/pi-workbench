@@ -142,9 +142,9 @@ export default function App() {
     }
   })()
 
-  // 允许子组件（如 ChatPanel）请求打开设置面板
+  // 允许子组件（如 ChatPanel / WelcomeScreen）请求打开设置面板；防御误传事件对象导致空内容
   const openSettings = useCallback((section: SettingsSection = 'general') => {
-    setSettingsSection(section)
+    setSettingsSection(typeof section === 'string' ? section : 'general')
     setShowSettings(true)
   }, [])
 
@@ -584,6 +584,33 @@ export default function App() {
   const headerLink =
     'type-label text-ink-muted transition-colors hover:text-ink'
 
+  const activityRef = useRef<HTMLDivElement | null>(null)
+
+  // 无运行中会话时自动收起活动下拉，避免下次有会话开始时莫名弹开
+  useEffect(() => {
+    if (activeCount === 0 && showActivity) setShowActivity(false)
+  }, [activeCount, showActivity])
+
+  // 活动下拉支持点外部与 Esc 关闭
+  useEffect(() => {
+    if (!showActivity) return
+    const onPointerDown = (event: MouseEvent) => {
+      if (!activityRef.current?.contains(event.target as Node)) setShowActivity(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setShowActivity(false)
+      }
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [showActivity])
+
   // 启动阶段只渲染启动页，放大动画期间窗口里没有别的 DOM 需要重排
   if (bootPhase === 'boot') return <BootScreen />
 
@@ -653,10 +680,11 @@ export default function App() {
                 <span className="type-key text-ink-muted">{formatShortcut(paletteShortcut)}</span>
               </button>
               {workspace && activeCount > 0 && (
-                <div className="relative">
+                <div ref={activityRef} className="relative">
                   <button
                     type="button"
                     className={headerLink}
+                    aria-expanded={showActivity}
                     onClick={() => setShowActivity((value) => !value)}
                   >
                     <span className="inline-flex items-center gap-1">
@@ -845,9 +873,8 @@ export default function App() {
       )}
 
       <UpdateDialog />
-      <DialogHost />
       <ToastContainer messages={toastMessages} onClose={removeToast} />
-      {workspace && <CommandPalette workspacePath={workspace} active={!showHome} />}
+      {workspace && <CommandPalette workspacePath={workspace} active={view === 'workspace'} />}
 
       {/* Debug panel */}
       {showDebug && (
@@ -910,6 +937,9 @@ export default function App() {
           <span>{resolvedTheme === 'dark' ? 'INK' : 'PAPER'}</span>
         </div>
       </footer>
+
+      {/* 全局确认/输入/提示弹窗放在主视图与 CommandPalette 之后并以 z-[60] 置顶，避免被 DiffViewer 或命令面板遮挡 */}
+      <DialogHost />
 
       {/* 放大结束后的遮罩：外壳已在下面完成首帧，淡出后即为完整工作台 */}
       {bootPhase === 'reveal' && (

@@ -114,7 +114,12 @@ export const MarkdownReadingView: React.FC<{
                       event.preventDefault()
                       cancel()
                     }
-                    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                    if (
+                      (event.ctrlKey || event.metaKey) &&
+                      event.key === 'Enter' &&
+                      !event.nativeEvent.isComposing &&
+                      event.keyCode !== 229
+                    ) {
                       event.preventDefault()
                       commit()
                     }

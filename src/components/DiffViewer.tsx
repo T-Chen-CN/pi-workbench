@@ -36,7 +36,11 @@ export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> =
   useEffect(() => {
     if (!isOpen || !active) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') clearDiff()
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      // 若确认撤销弹窗（DialogHost）等上层模态框已打开，不连带关掉 DiffViewer
+      if (document.querySelector('[role="dialog"][aria-modal="true"]:not([data-diff-viewer])')) return
+      event.preventDefault()
+      clearDiff()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -65,6 +69,8 @@ export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> =
     <div
       role="dialog"
       aria-modal="true"
+      aria-label={t('reviewChanges')}
+      data-diff-viewer="true"
       className="fixed inset-0 z-40 flex items-center justify-center p-6"
     >
       <div className="absolute inset-0 bg-overlay/50" onClick={handleClose} />

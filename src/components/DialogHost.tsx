@@ -35,6 +35,7 @@ export const DialogHost: React.FC<{ host?: string }> = ({ host = 'main' }) => {
       onClose={cancel}
       title={options.title ?? t('confirm')}
       size="sm"
+      zIndexClass="z-[60]"
       closeLabel={t('close')}
       footer={
         isAlert ? (
@@ -53,7 +54,7 @@ export const DialogHost: React.FC<{ host?: string }> = ({ host = 'main' }) => {
         )
       }
     >
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-3 px-5 py-4">
         {options.message && (
           <p className="m-0 type-reading text-ink-muted">
             {options.message}
@@ -66,11 +67,16 @@ export const DialogHost: React.FC<{ host?: string }> = ({ host = 'main' }) => {
             placeholder={options.placeholder}
             onChange={(event) => setValue(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === 'Enter') {
+              if (
+                event.key === 'Enter' &&
+                !event.nativeEvent.isComposing &&
+                event.keyCode !== 229
+              ) {
                 event.preventDefault()
                 confirm()
               } else if (event.key === 'Escape') {
                 event.preventDefault()
+                event.stopPropagation()
                 cancel()
               }
             }}

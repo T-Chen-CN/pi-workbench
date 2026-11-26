@@ -33,7 +33,7 @@ import type { CloudCatalogModel } from '../types/electron'
 import { api } from '../api'
 import { MarkdownBody, StreamingMarkdown } from './AgentMarkdown'
 import { Button, EmptyState, Field, IconButton, Input, Modal, Select, Spinner, Textarea } from './ui'
-import { Card, CardHeader, SectionHeader, StatusText } from './patterns'
+import { Card, CardHeader, SectionHeader, StatusText, Tab } from './patterns'
 
 /**
  * 云端页（F-27 / D-19）：独立视图，与工作区无关，保留顶栏与底部状态栏。
@@ -104,8 +104,38 @@ function parseTagsInput(raw: string): string[] {
 }
 
 export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) => {
-  const { t } = useI18nStore()
-  const store = useCloudStore()
+  const t = useI18nStore((state) => state.t)
+  const linked = useCloudStore((state) => state.link.linked)
+  const deviceState = useCloudStore((state) => state.deviceState)
+  const clientState = useCloudStore((state) => state.clientState)
+  const initialized = useCloudStore((state) => state.initialized)
+  const error = useCloudStore((state) => state.error)
+  const messages = useCloudStore((state) => state.messages)
+  const awaySummary = useCloudStore((state) => state.awaySummary)
+  const tasks = useCloudStore((state) => state.tasks)
+  const units = useCloudStore((state) => state.units)
+  const devices = useCloudStore((state) => state.devices)
+  const authorizations = useCloudStore((state) => state.authorizations)
+  const notices = useCloudStore((state) => state.notices)
+  const stoppingTaskIds = useCloudStore((state) => state.stoppingTaskIds)
+  const agentStatus = useCloudStore((state) => state.agentStatus)
+  const canStopReply = useCloudStore((state) => state.canStopReply)
+  const unreadCount = useCloudStore((state) => state.unreadCount)
+
+  const init = useCloudStore((state) => state.init)
+  const markRead = useCloudStore((state) => state.markRead)
+  const refreshStatus = useCloudStore((state) => state.refreshStatus)
+  const refreshWorkspaces = useCloudStore((state) => state.refreshWorkspaces)
+  const reconnect = useCloudStore((state) => state.reconnect)
+  const openClient = useCloudStore((state) => state.openClient)
+  const unlink = useCloudStore((state) => state.unlink)
+  const say = useCloudStore((state) => state.say)
+  const stopReply = useCloudStore((state) => state.stopReply)
+  const stopTask = useCloudStore((state) => state.stopTask)
+  const answerQuestion = useCloudStore((state) => state.answerQuestion)
+  const sendTaskMessage = useCloudStore((state) => state.sendTaskMessage)
+  const closeUnit = useCloudStore((state) => state.closeUnit)
+
   const [draft, setDraft] = useState('')
   const [authorizeOpen, setAuthorizeOpen] = useState(false)
   const [memoryOpen, setMemoryOpen] = useState(false)
@@ -120,21 +150,18 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
   const expandRailRef = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => {
-    void store.init()
-    // init 只跑一次；store 的方法引用稳定，不放进依赖
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    void init()
+  }, [init])
 
-  // 云端页处于可见态时自动上报已读（多端同步清零未读数，F-52 / C-03c）
+  // 云端页处于可见态且确实存在未读时上报已读：绝不能用 lastSeq > lastReadSeq 触发，否则 read_state 广播自身递增 seq 会引发无限风暴
   useEffect(() => {
-    if (store.clientState.status !== 'open') return
-    if (store.unreadCount > 0 || store.lastSeq > store.lastReadSeq) {
-      if (typeof document === 'undefined' || !document.hidden) {
-        void store.markRead()
-      }
+    if (clientState.status !== 'open') return
+    if (unreadCount > 0 && (typeof document === 'undefined' || !document.hidden)) {
+      void markRead()
     }
     const onVisible = () => {
-      if (!document.hidden) void useCloudStore.getState().markRead()
+      const current = useCloudStore.getState()
+      if (!document.hidden && current.unreadCount > 0) void current.markRead()
     }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
@@ -142,10 +169,9 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store.clientState.status, store.unreadCount, store.lastSeq, store.lastReadSeq])
+  }, [clientState.status, unreadCount, markRead])
 
-  // 贴底：按滚动事件提前记录是否在底部附近，避免单条 >64px 消息更新后才测量导致断跟随
+  // 贴底：依赖 linked，确保冷启动/配对完成后 transcriptRef 挂载即立刻绑上滚动监听
   useEffect(() => {
     const element = transcriptRef.current
     if (!element) return
@@ -155,16 +181,23 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
     }
     element.addEventListener('scroll', onScroll, { passive: true })
     return () => element.removeEventListener('scroll', onScroll)
-  }, [])
+  }, [linked])
 
   useEffect(() => {
     const element = transcriptRef.current
     if (!element || !stickToBottomRef.current) return
     element.scrollTop = element.scrollHeight
-  }, [store.messages])
+    // StreamingMarkdown 使用 useDeferredValue，补一帧确保延迟提交的高度也能贴底
+    const raf = window.requestAnimationFrame(() => {
+      if (stickToBottomRef.current && transcriptRef.current) {
+        transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight
+      }
+    })
+    return () => window.cancelAnimationFrame(raf)
+  }, [messages])
 
   const statusLabel = useMemo(() => {
-    switch (store.deviceState.status) {
+    switch (deviceState.status) {
       case 'online':
         return t('cloudStatusOnline')
       case 'connecting':
@@ -176,16 +209,21 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
       default:
         return t('cloudStatusUnlinked')
     }
-  }, [store.deviceState.status, t])
+  }, [deviceState.status, t])
 
-  const running = store.tasks.filter((task) => ACTIVE_STATUSES.includes(task.status))
-  const finished = store.tasks.filter((task) => !ACTIVE_STATUSES.includes(task.status))
+  const running = useMemo(
+    () => tasks.filter((task) => ACTIVE_STATUSES.includes(task.status)),
+    [tasks]
+  )
+  const finished = useMemo(
+    () => tasks.filter((task) => !ACTIVE_STATUSES.includes(task.status)),
+    [tasks]
+  )
   // 已被云端解绑（F-08 / A-15）：两个通道都已停手，这里必须明说，否则只会看到“连接中”
   const revoked =
-    Boolean(store.deviceState.revoked) ||
-    (store.clientState.status === 'error' && Boolean(store.clientState.revoked))
+    Boolean(deviceState.revoked) ||
+    (clientState.status === 'error' && Boolean(clientState.revoked))
   // 服务端以 fatal 帧拒绝（协议版本不匹配等，F-47 / A-27）：重连不会成功，必须常驻提示
-  const clientState = store.clientState
   const rejected =
     clientState.status === 'error' && !clientState.revoked && clientState.fatal
       ? clientState.error
@@ -196,12 +234,12 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
     if (!body) return
     stickToBottomRef.current = true
     setDraft('')
-    void store.say(body)
+    void say(body)
   }
 
   const unpair = async () => {
     if (!(await confirmDialog({ message: t('cloudUnpairConfirm'), danger: true }))) return
-    await store.unlink()
+    await unlink()
     toast.success(t('cloudUnpaired'))
   }
 
@@ -214,6 +252,13 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
     setAsideCollapsed(false)
     window.requestAnimationFrame(() => collapseRailRef.current?.focus())
   }
+
+  const agentStatusText =
+    agentStatus === 'thinking'
+      ? t('cloudAgentThinking')
+      : agentStatus === 'replying'
+        ? t('cloudAgentReplying')
+        : ''
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-surface">
@@ -228,17 +273,17 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
         </span>
         <StatusText
           tone={
-            store.deviceState.status === 'online'
+            deviceState.status === 'online'
               ? 'accent'
-              : store.deviceState.status === 'error'
+              : deviceState.status === 'error'
                 ? 'danger'
                 : 'muted'
           }
           dot
         >
           {statusLabel}
-          {store.deviceState.pending > 0
-            ? ` · ${t('cloudPendingFrames', { count: store.deviceState.pending })}`
+          {deviceState.pending > 0
+            ? ` · ${t('cloudPendingFrames', { count: deviceState.pending })}`
             : ''}
         </StatusText>
         <div className="ml-auto flex items-center gap-2">
@@ -246,34 +291,34 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
             variant="ghost"
             size="sm"
             onClick={() => {
-              void store.refreshStatus()
+              void refreshStatus()
               // 重报仓库清单：新开的 git 仓库不重报，云端就一直以为这台机器只有一个不可派活的目录
-              void store.refreshWorkspaces()
+              void refreshWorkspaces()
             }}
           >
             <RefreshCw size={13} />
             {t('cloudRefresh')}
           </Button>
-          {store.link.linked && (
+          {linked && (
             <Button variant="ghost" size="sm" onClick={() => setConfigOpen(true)}>
               <SlidersHorizontal size={13} />
               {t('cloudConfigTitle')}
             </Button>
           )}
-          {store.link.linked && (
+          {linked && (
             <Button variant="ghost" size="sm" onClick={() => setMemoryOpen(true)}>
               <BookOpen size={13} />
               {t('cloudMemorySection')}
             </Button>
           )}
-          {store.link.linked && (
-            <Button variant="ghost" size="sm" onClick={() => void store.reconnect()}>
+          {linked && (
+            <Button variant="ghost" size="sm" onClick={() => void reconnect()}>
               {t('cloudReconnect')}
             </Button>
           )}
           {/* 解绑后（或被云端移除后）必须能从桌面端解除，否则只能重装：
               解绑才能回到配对页，重新配对才能恢复两个通道 */}
-          {store.link.linked && (
+          {linked && (
             <Button variant="ghost" size="sm" onClick={() => void unpair()}>
               <Unplug size={13} />
               {t('cloudUnpair')}
@@ -292,7 +337,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
           <p className="flex-1 type-caption text-danger">
             {t('cloudRejected', { error: rejected })}
           </p>
-          <Button variant="ghost" size="sm" onClick={() => void store.openClient()}>
+          <Button variant="ghost" size="sm" onClick={() => void openClient()}>
             {t('cloudReconnectAction')}
           </Button>
         </div>
@@ -300,29 +345,27 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {store.link.linked ? (
+          {linked ? (
             <>
               <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-                {store.awaySummary && (
+                {awaySummary && (
                   <div
                     role="status"
                     className="mb-4 rounded border border-rule-divide bg-panel px-3 py-2"
                   >
                     <p className="type-label text-ink">{t('cloudAwaySummaryTitle')}</p>
-                    <p className="mt-0.5 type-caption text-ink-muted">
-                      {store.awaySummary.text}
-                    </p>
+                    <p className="mt-0.5 type-caption text-ink-muted">{awaySummary.text}</p>
                   </div>
                 )}
-                {!store.initialized || store.messages.length === 0 ? (
+                {!initialized || messages.length === 0 ? (
                   <EmptyState
                     icon={Cloud}
                     title={t('cloudSession')}
-                    description={store.error ?? t('cloudSessionEmpty')}
+                    description={error ?? t('cloudSessionEmpty')}
                   />
                 ) : (
                   <div className="flex flex-col gap-4">
-                    {store.messages.map((message) => (
+                    {messages.map((message) => (
                       <article
                         key={message.id}
                         className={
@@ -332,8 +375,10 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                         }
                       >
                         <div className="flex items-center gap-2 type-caption text-ink-muted">
-                          <span>{message.role === 'user' ? 'YOU' : 'CLOUD'}</span>
-                          <span>{formatTime(message.at)}</span>
+                          <span className="type-eyebrow">
+                            {message.role === 'user' ? 'YOU' : 'CLOUD'}
+                          </span>
+                          <span className="type-data">{formatTime(message.at)}</span>
                           {message.streaming && <span className="text-accent">···</span>}
                         </div>
                         {message.text &&
@@ -356,11 +401,11 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                         {message.traces.length > 0 && (
                           <details className="type-caption text-ink-muted">
                             <summary className="cursor-pointer select-none">
-                              {message.traces.length} tool calls
+                              {t('cloudToolCallsSummary', { count: message.traces.length })}
                             </summary>
                             <ul className="mt-1 flex flex-col gap-0.5">
                               {message.traces.map((trace) => (
-                                <li key={trace.id} className="truncate">
+                                <li key={trace.id} className="truncate type-data">
                                   <span
                                     className={
                                       trace.status === 'error' ? 'text-danger' : 'text-ink-muted'
@@ -374,7 +419,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                             </ul>
                           </details>
                         )}
-                        {message.error && <p className="type-caption text-danger">{message.error}</p>}
+                        {message.error && <p className="type-data text-danger">{message.error}</p>}
                       </article>
                     ))}
                   </div>
@@ -414,18 +459,14 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => void store.stopReply()}
-                    disabled={!store.canStopReply}
+                    onClick={() => void stopReply()}
+                    disabled={!canStopReply}
                   >
                     <Square size={13} />
                     {t('cloudStopReply')}
                   </Button>
                   <span className="type-caption text-ink-muted">{t('cloudSendShortcutHint')}</span>
-                  <span className="ml-auto type-caption text-ink-muted">
-                    {store.agentStatus === 'thinking' || store.agentStatus === 'replying'
-                      ? store.agentStatus
-                      : ''}
-                  </span>
+                  <span className="ml-auto type-caption text-ink-muted">{agentStatusText}</span>
                 </div>
               </div>
             </>
@@ -456,11 +497,11 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
               <TaskList
                 title={t('cloudTasks')}
                 tasks={[...running, ...finished]}
-                devices={store.devices}
-                stoppingTaskIds={store.stoppingTaskIds}
-                onStop={(taskId) => void store.stopTask(taskId)}
+                devices={devices}
+                stoppingTaskIds={stoppingTaskIds}
+                onStop={(taskId) => void stopTask(taskId)}
                 onAnswer={(taskId, text) => {
-                  void store.answerQuestion(taskId, text)
+                  void answerQuestion(taskId, text)
                   setAnswerDraft((current) => ({ ...current, [taskId]: '' }))
                 }}
                 answerDraft={answerDraft}
@@ -468,7 +509,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                   setAnswerDraft((current) => ({ ...current, [taskId]: text }))
                 }
                 onSendInstruction={(taskId, text) => {
-                  void store.sendTaskMessage(taskId, text)
+                  void sendTaskMessage(taskId, text)
                   setInstructionDraft((current) => ({ ...current, [taskId]: '' }))
                 }}
                 instructionDraft={instructionDraft}
@@ -478,9 +519,9 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
               />
 
               <UnitList
-                units={store.units}
+                units={units}
                 onClose={(unitId) => {
-                  void store.closeUnit(unitId).then((sent) => {
+                  void closeUnit(unitId).then((sent) => {
                     if (sent) toast.success(t('cloudUnitCloseSent'))
                     else toast.error(t('cloudUnitCloseFailed'))
                   })
@@ -489,11 +530,11 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
 
               <Card density="compact">
                 <CardHeader title={t('cloudDevices')} />
-                {store.devices.length === 0 ? (
-                  <p className="type-caption text-ink-muted">{t('cloudNoWorkspaces')}</p>
+                {devices.length === 0 ? (
+                  <p className="mt-2 type-caption text-ink-muted">{t('cloudNoWorkspaces')}</p>
                 ) : (
-                  <ul className="flex flex-col gap-2">
-                    {store.devices.map((device) => (
+                  <ul className="mt-2 flex flex-col gap-2">
+                    {devices.map((device) => (
                       <li key={device.id} className="flex flex-col gap-0.5">
                         <span className="flex items-center gap-2 type-label text-ink">
                           <span
@@ -505,10 +546,10 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                             aria-hidden="true"
                           />
                           {device.name}
-                          <span className="type-caption text-ink-muted">{device.platform}</span>
+                          <span className="type-data text-ink-muted">{device.platform}</span>
                         </span>
                         <span className="type-caption text-ink-muted">
-                          {device.workspaces.length} workspace(s)
+                          {t('cloudWorkspaceCount', { count: device.workspaces.length })}
                         </span>
                       </li>
                     ))}
@@ -520,7 +561,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                 <CardHeader
                   title={t('cloudAuthorizations')}
                   action={
-                    store.link.linked ? (
+                    linked ? (
                       <Button variant="secondary" size="sm" onClick={() => setAuthorizeOpen(true)}>
                         <PenLine size={13} />
                         {t('cloudAuthorizeTitle')}
@@ -528,11 +569,11 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                     ) : undefined
                   }
                 />
-                {store.authorizations.length === 0 ? (
-                  <p className="type-caption text-ink-muted">{t('cloudNoAuthorizations')}</p>
+                {authorizations.length === 0 ? (
+                  <p className="mt-2 type-caption text-ink-muted">{t('cloudNoAuthorizations')}</p>
                 ) : (
-                  <ul className="flex flex-col gap-2">
-                    {store.authorizations.map((item) => (
+                  <ul className="mt-2 flex flex-col gap-2">
+                    {authorizations.map((item) => (
                       <li key={item.id} className="flex flex-col gap-0.5">
                         <span className="type-label text-ink">
                           {t('cloudQuota', { used: item.used, quota: item.quota })}
@@ -546,11 +587,11 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                 )}
               </Card>
 
-              {store.notices.length > 0 && (
+              {notices.length > 0 && (
                 <Card density="compact">
                   <CardHeader title={t('cloudNotices')} />
-                  <ul className="flex flex-col gap-1">
-                    {store.notices.slice(0, 6).map((notice, index) => (
+                  <ul className="mt-2 flex flex-col gap-1">
+                    {notices.slice(0, 6).map((notice, index) => (
                       <li
                         key={`${notice.at}-${index}`}
                         className={
@@ -561,7 +602,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                               : 'type-caption text-ink-muted'
                         }
                       >
-                        {formatTime(notice.at)} {notice.text}
+                        <span className="type-data">{formatTime(notice.at)}</span> {notice.text}
                       </li>
                     ))}
                   </ul>
@@ -593,14 +634,16 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
 }
 
 const PairingPane: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) => {
-  const { t } = useI18nStore()
-  const store = useCloudStore()
+  const t = useI18nStore((state) => state.t)
+  const pair = useCloudStore((state) => state.pair)
+  const error = useCloudStore((state) => state.error)
+  const linking = useCloudStore((state) => state.linking)
   const [baseUrl, setBaseUrl] = useState('tchen-xiaoxiao.com')
   const [code, setCode] = useState('')
   const [deviceName, setDeviceName] = useState('Pi Workbench')
 
   const submit = async () => {
-    const ok = await store.pair({ baseUrl, code: code.trim(), deviceName })
+    const ok = await pair({ baseUrl, code: code.trim(), deviceName })
     if (ok) toast.success(t('cloudStatusConnecting'))
   }
 
@@ -634,15 +677,15 @@ const PairingPane: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) => {
             onChange={(event) => setDeviceName(event.target.value)}
           />
         </Field>
-        {store.error && <p className="type-caption text-danger">{store.error}</p>}
+        {error && <p className="type-caption text-danger">{error}</p>}
         <div className="flex items-center gap-2">
           <Button
             variant="primary"
             size="sm"
             onClick={() => void submit()}
-            disabled={store.linking || code.length !== 6}
+            disabled={linking || code.length !== 6}
           >
-            {store.linking ? <Spinner size={13} /> : <Unplug size={13} />}
+            {linking ? <Spinner size={13} /> : <Unplug size={13} />}
             {t('cloudPairAction')}
           </Button>
           <Button variant="ghost" size="sm" onClick={onBackHome}>
@@ -664,14 +707,14 @@ const UnitList: React.FC<{
   units: CloudUnitRow[]
   onClose: (unitId: string) => void
 }> = ({ units, onClose }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   return (
     <Card density="compact">
       <CardHeader title={t('cloudUnits')} />
       {units.length === 0 ? (
-        <p className="type-caption text-ink-muted">{t('cloudNoUnits')}</p>
+        <p className="mt-2 type-caption text-ink-muted">{t('cloudNoUnits')}</p>
       ) : (
-        <ul className="flex flex-col gap-2.5">
+        <ul className="mt-2 flex flex-col gap-2.5">
           {units.slice(0, 8).map((unit) => {
             const closing = unit.closedAt === null && Boolean(unit.closeRequestedAt)
             const dirty = unit.closedAt === null && Boolean(unit.dirtyAt)
@@ -685,20 +728,22 @@ const UnitList: React.FC<{
                     : t('cloudUnitActive')
             return (
               <li key={unit.unitId} className="flex flex-col gap-1">
-                <span className="flex items-center gap-2 type-label text-ink">
-                  <span className="truncate" title={unit.unitId}>
+                <span className="flex items-center gap-2">
+                  <span className="truncate type-data text-ink" title={unit.unitId}>
                     {unit.branch ?? unit.unitId}
                   </span>
                   <span
                     className={
-                      dirty ? 'type-caption text-warning' : 'type-caption text-ink-muted'
+                      dirty
+                        ? 'flex-shrink-0 type-caption text-warning'
+                        : 'flex-shrink-0 type-caption text-ink-muted'
                     }
                   >
                     {label}
                   </span>
                 </span>
                 <span
-                  className="truncate type-caption text-ink-muted"
+                  className="truncate type-data text-ink-muted"
                   title={unit.worktreePath ?? unit.workspacePath}
                 >
                   {unit.worktreePath ?? unit.workspacePath}
@@ -749,7 +794,7 @@ const TaskList: React.FC<{
   instructionDraft,
   onInstructionDraft,
 }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const onlineById = useMemo(() => {
     const map = new Map<string, boolean>()
     for (const device of devices) map.set(device.id, device.online)
@@ -760,9 +805,9 @@ const TaskList: React.FC<{
     <Card density="compact">
       <CardHeader title={title} />
       {tasks.length === 0 ? (
-        <p className="type-caption text-ink-muted">{t('cloudNoTasks')}</p>
+        <p className="mt-2 type-caption text-ink-muted">{t('cloudNoTasks')}</p>
       ) : (
-        <ul className="flex flex-col gap-3">
+        <ul className="mt-2 flex flex-col gap-3">
           {tasks.map((task) => {
             const active = ACTIVE_STATUSES.includes(task.status)
             const deviceOffline = onlineById.get(task.deviceId) === false
@@ -787,7 +832,7 @@ const TaskList: React.FC<{
                       : t(TASK_STATUS_KEY[task.status] as Parameters<typeof t>[0])}
                   </span>
                 </span>
-                <span className="type-caption text-ink-muted">
+                <span className="truncate type-data text-ink-muted">
                   {task.deviceId} · {task.workspacePath}
                   {elapsed ? ` · ${elapsed}` : ''}
                 </span>
@@ -807,6 +852,7 @@ const TaskList: React.FC<{
                       <Button
                         variant="ghost"
                         size="sm"
+                        className="flex-shrink-0"
                         onClick={() => onAnswer(task.id, answerDraft[task.id] ?? '')}
                         disabled={!(answerDraft[task.id] ?? '').trim()}
                       >
@@ -822,7 +868,12 @@ const TaskList: React.FC<{
                       onChange={(event) => onInstructionDraft(task.id, event.target.value)}
                       placeholder={t('cloudSendInstructionPlaceholder')}
                       onKeyDown={(event) => {
-                        if (event.key === 'Enter' && (instructionDraft[task.id] ?? '').trim()) {
+                        if (
+                          event.key === 'Enter' &&
+                          !event.nativeEvent.isComposing &&
+                          event.keyCode !== 229 &&
+                          (instructionDraft[task.id] ?? '').trim()
+                        ) {
                           event.preventDefault()
                           onSendInstruction(task.id, instructionDraft[task.id] ?? '')
                         }
@@ -831,6 +882,7 @@ const TaskList: React.FC<{
                     <Button
                       variant="ghost"
                       size="sm"
+                      className="flex-shrink-0"
                       onClick={() => onSendInstruction(task.id, instructionDraft[task.id] ?? '')}
                       disabled={!(instructionDraft[task.id] ?? '').trim()}
                     >
@@ -845,7 +897,7 @@ const TaskList: React.FC<{
                       <p className="mt-1 whitespace-pre-wrap text-ink">{task.result.summary}</p>
                     )}
                     {attentionFiles.length > 0 && (
-                      <p className="mt-1 text-warning">
+                      <p className="mt-1 type-data text-warning">
                         {t('cloudChangedAttention')}:{' '}
                         {attentionFiles
                           .map((file) => `${file.path} (${file.attention})`)
@@ -853,19 +905,19 @@ const TaskList: React.FC<{
                       </p>
                     )}
                     {normalFiles.length > 0 && (
-                      <p className="mt-1">
+                      <p className="mt-1 type-data">
                         {t('cloudChangedNormal')}: {normalFiles.map((file) => file.path).join(', ')}
                       </p>
                     )}
                     {secretHits.length > 0 && (
-                      <p className="mt-1 text-danger">
+                      <p className="mt-1 type-data text-danger">
                         {t('cloudSecretHits')}:{' '}
                         {secretHits.map((hit) => `${hit.path}:${hit.line} (${hit.kind})`).join(', ')}
                       </p>
                     )}
                   </details>
                 )}
-                {task.error && <span className="type-caption text-danger">{task.error}</span>}
+                {task.error && <span className="type-data text-danger">{task.error}</span>}
                 {active && (
                   <Button
                     variant="ghost"
@@ -896,7 +948,7 @@ const TaskList: React.FC<{
  * 从右栏收进顶栏弹窗，避免窄窗口下右栏过度拥挤。
  */
 const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const [providerId, setProviderId] = useState('deepseek')
   const [model, setModel] = useState('')
   const [apiKey, setApiKey] = useState('')
@@ -904,14 +956,18 @@ const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
   const [catalog, setCatalog] = useState<CloudCatalogModel[]>([])
   const [fetching, setFetching] = useState(false)
   const [saving, setSaving] = useState(false)
+  const catalogReqRef = useRef(0)
 
   const loadCatalog = useCallback(
     async (targetProviderId: string, preferredModel?: string) => {
+      const reqId = ++catalogReqRef.current
       setFetching(true)
       try {
         const result = await api.cloudFetchModels({ providerId: targetProviderId })
+        if (reqId !== catalogReqRef.current) return
         if (!result.success) {
           setCatalog([])
+          setModel('')
           toast.error(t('cloudFetchModelsFailed', { error: result.error ?? t('unknownError') }))
           return
         }
@@ -926,14 +982,17 @@ const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
           return entries[0]?.id ?? ''
         })
       } finally {
-        setFetching(false)
+        if (reqId === catalogReqRef.current) setFetching(false)
       }
     },
     [t]
   )
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      catalogReqRef.current += 1
+      return
+    }
     let cancelled = false
     void (async () => {
       const result = await api.cloudGetConfig()
@@ -955,6 +1014,7 @@ const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
     })()
     return () => {
       cancelled = true
+      catalogReqRef.current += 1
     }
   }, [open, loadCatalog])
 
@@ -1115,15 +1175,16 @@ const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
  * 所以两端都必须有这个入口，否则只用桌面端根本派不出活。
  */
 const AuthorizeDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
-  const { t } = useI18nStore()
-  const store = useCloudStore()
+  const t = useI18nStore((state) => state.t)
+  const devices = useCloudStore((state) => state.devices)
+  const confirmPlan = useCloudStore((state) => state.confirmPlan)
   const [planText, setPlanText] = useState('')
   const [deviceId, setDeviceId] = useState('')
   const [workspacePath, setWorkspacePath] = useState('')
   const [quota, setQuota] = useState('5')
   const [sending, setSending] = useState(false)
 
-  const device = store.devices.find((item) => item.id === deviceId) ?? store.devices[0]
+  const device = devices.find((item) => item.id === deviceId) ?? devices[0]
   const repos = useMemo(
     () => (device?.workspaces ?? []).filter((workspace) => workspace.isGit !== false),
     [device]
@@ -1142,7 +1203,7 @@ const AuthorizeDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
     const text = planText.trim()
     if (!text || !device || !workspacePath) return
     setSending(true)
-    const ok = await store.confirmPlan({
+    const ok = await confirmPlan({
       planText: text,
       items: [{ deviceId: device.id, workspacePath }],
       quota: Math.max(1, Math.min(50, Number(quota) || 5)),
@@ -1201,7 +1262,7 @@ const AuthorizeDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
               setWorkspacePath('')
             }}
           >
-            {store.devices.map((item) => (
+            {devices.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name}
               </option>
@@ -1242,7 +1303,7 @@ const AuthorizeDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
  * 所有云端落盘文件透明可见、可编辑，手工记忆永不被自动抽取或梦境覆盖。
  */
 const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const [tab, setTab] = useState<'memories' | 'docs' | 'dreams'>('memories')
   const [loading, setLoading] = useState(false)
   const [memories, setMemories] = useState<CloudMemoryItem[]>([])
@@ -1255,24 +1316,17 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
   const [editContent, setEditContent] = useState('')
   const [editTags, setEditTags] = useState('')
   const [selectedDoc, setSelectedDoc] = useState<'AGENTS.md' | 'SOUL.md'>('AGENTS.md')
+  // docDrafts 仅存用户动手改过的脏草稿；未修改文档刷新时直接读服务端最新内容
   const [docDrafts, setDocDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setLoading(true)
     try {
       const res = await api.cloudGetMemoryData()
       if (res.success) {
         setMemories(res.memories ?? [])
-        const nextDocs = res.docs ?? []
-        setDocs(nextDocs)
-        setDocDrafts((prev) => {
-          const updated = { ...prev }
-          for (const doc of nextDocs) {
-            if (!(doc.name in updated)) updated[doc.name] = doc.content
-          }
-          return updated
-        })
+        setDocs(res.docs ?? [])
         setDreams(res.dreams ?? [])
       } else if (res.error) {
         toast.error(res.error)
@@ -1280,14 +1334,15 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     if (open) void refresh()
     else setEditingId(null)
-  }, [open])
+  }, [open, refresh])
 
   const addMemory = async () => {
+    if (busy) return
     const trimmed = content.trim()
     if (!trimmed) return
     setBusy(true)
@@ -1313,7 +1368,7 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
   }
 
   const saveEdit = async () => {
-    if (!editingId) return
+    if (!editingId || busy) return
     const trimmed = editContent.trim()
     if (!trimmed) return
     setBusy(true)
@@ -1356,11 +1411,15 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
   }
 
   const saveDoc = async () => {
+    if (busy) return
     setBusy(true)
     try {
+      const current = docs.find((d) => d.name === selectedDoc)
+      const nextContent =
+        selectedDoc in docDrafts ? docDrafts[selectedDoc] : (current?.content ?? '')
       const res = await api.cloudSaveDoc({
         name: selectedDoc,
-        content: docDrafts[selectedDoc] ?? '',
+        content: nextContent,
       })
       if (res.success && res.doc) {
         const saved = res.doc
@@ -1369,7 +1428,11 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
             ? prev.map((d) => (d.name === saved.name ? saved : d))
             : [...prev, saved]
         )
-        setDocDrafts((prev) => ({ ...prev, [saved.name]: saved.content }))
+        setDocDrafts((prev) => {
+          const next = { ...prev }
+          delete next[saved.name]
+          return next
+        })
         toast.success(t('cloudDocSaved'))
       } else {
         toast.error(res.error ?? t('unknownError'))
@@ -1380,6 +1443,7 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
   }
 
   const runDream = async () => {
+    if (busy) return
     setBusy(true)
     try {
       const res = await api.cloudRunDream()
@@ -1395,6 +1459,8 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
   }
 
   const currentDoc = docs.find((d) => d.name === selectedDoc)
+  const currentDocValue =
+    selectedDoc in docDrafts ? docDrafts[selectedDoc] : (currentDoc?.content ?? '')
   const memorySourceLabel = (source: CloudMemoryItem['source']) =>
     source === 'manual'
       ? t('cloudMemorySourceManual')
@@ -1405,29 +1471,28 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
   return (
     <Modal open={open} onClose={onClose} title={t('cloudMemorySection')} size="lg" closeLabel={t('close')}>
       <div className="flex flex-col gap-3 px-5 py-4">
-        <div className="flex items-center gap-2 border-b border-rule-divide pb-2">
-          <Button
-            variant={tab === 'memories' ? 'primary' : 'ghost'}
-            size="sm"
-            onClick={() => setTab('memories')}
-          >
-            {t('cloudMemoryItemsTab')} ({memories.length})
-          </Button>
-          <Button
-            variant={tab === 'docs' ? 'primary' : 'ghost'}
-            size="sm"
-            onClick={() => setTab('docs')}
-          >
-            {t('cloudMemoryDocsTab')}
-          </Button>
-          <Button
-            variant={tab === 'dreams' ? 'primary' : 'ghost'}
-            size="sm"
-            onClick={() => setTab('dreams')}
-          >
-            {t('cloudMemoryDreamsTab')} ({dreams.length})
-          </Button>
-          <div className="ml-auto">
+        <div className="flex items-center gap-2 border-b border-rule-divide">
+          <div role="tablist" aria-label={t('cloudMemorySection')} className="flex items-center gap-1">
+            <Tab
+              size="sm"
+              active={tab === 'memories'}
+              label={`${t('cloudMemoryItemsTab')} (${memories.length})`}
+              onSelect={() => setTab('memories')}
+            />
+            <Tab
+              size="sm"
+              active={tab === 'docs'}
+              label={t('cloudMemoryDocsTab')}
+              onSelect={() => setTab('docs')}
+            />
+            <Tab
+              size="sm"
+              active={tab === 'dreams'}
+              label={`${t('cloudMemoryDreamsTab')} (${dreams.length})`}
+              onSelect={() => setTab('dreams')}
+            />
+          </div>
+          <div className="ml-auto pb-1">
             <Button variant="ghost" size="sm" onClick={() => void refresh()} disabled={loading}>
               {loading ? <Spinner size={13} /> : <RefreshCw size={13} />}
               {t('cloudRefresh')}
@@ -1438,23 +1503,30 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
         {tab === 'memories' && (
           <div className="flex flex-col gap-3">
             <div className="flex items-center gap-2">
-              <Select
-                value={kind}
-                onChange={(event) => setKind(event.target.value as CloudMemoryKind)}
-                className="w-28"
-              >
-                {(['fact', 'preference', 'project', 'decision', 'todo'] as const).map((value) => (
-                  <option key={value} value={value}>
-                    {t(MEMORY_KIND_KEY[value] as Parameters<typeof t>[0])}
-                  </option>
-                ))}
-              </Select>
+              <div className="w-28 flex-shrink-0">
+                <Select
+                  value={kind}
+                  onChange={(event) => setKind(event.target.value as CloudMemoryKind)}
+                >
+                  {(['fact', 'preference', 'project', 'decision', 'todo'] as const).map((value) => (
+                    <option key={value} value={value}>
+                      {t(MEMORY_KIND_KEY[value] as Parameters<typeof t>[0])}
+                    </option>
+                  ))}
+                </Select>
+              </div>
               <Input
                 value={content}
                 onChange={(event) => setContent(event.target.value)}
                 placeholder={t('cloudMemoryAddPlaceholder')}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' && content.trim()) {
+                  if (
+                    event.key === 'Enter' &&
+                    !event.nativeEvent.isComposing &&
+                    event.keyCode !== 229 &&
+                    !busy &&
+                    content.trim()
+                  ) {
                     event.preventDefault()
                     void addMemory()
                   }
@@ -1463,6 +1535,7 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
               <Button
                 variant="primary"
                 size="sm"
+                className="flex-shrink-0"
                 onClick={() => void addMemory()}
                 disabled={busy || !content.trim()}
               >
@@ -1484,19 +1557,20 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
                           <span className="type-caption text-ink-muted">
                             {t('cloudMemoryEditHint')}
                           </span>
-                          <Select
-                            value={editKind}
-                            onChange={(event) => setEditKind(event.target.value as CloudMemoryKind)}
-                            className="w-28"
-                          >
-                            {(['fact', 'preference', 'project', 'decision', 'todo'] as const).map(
-                              (value) => (
-                                <option key={value} value={value}>
-                                  {t(MEMORY_KIND_KEY[value] as Parameters<typeof t>[0])}
-                                </option>
-                              )
-                            )}
-                          </Select>
+                          <div className="w-28 flex-shrink-0">
+                            <Select
+                              value={editKind}
+                              onChange={(event) => setEditKind(event.target.value as CloudMemoryKind)}
+                            >
+                              {(['fact', 'preference', 'project', 'decision', 'todo'] as const).map(
+                                (value) => (
+                                  <option key={value} value={value}>
+                                    {t(MEMORY_KIND_KEY[value] as Parameters<typeof t>[0])}
+                                  </option>
+                                )
+                              )}
+                            </Select>
+                          </div>
                         </div>
                         <Textarea
                           rows={3}
@@ -1607,7 +1681,7 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
             </div>
             <Textarea
               rows={12}
-              value={docDrafts[selectedDoc] ?? currentDoc?.content ?? ''}
+              value={currentDocValue}
               onChange={(event) =>
                 setDocDrafts((prev) => ({ ...prev, [selectedDoc]: event.target.value }))
               }
@@ -1625,7 +1699,9 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
         {tab === 'dreams' && (
           <div className="flex flex-col gap-3">
             <div className="flex items-center justify-between">
-              <span className="type-caption text-ink-muted">{t('cloudDreamsEmpty')}</span>
+              <span className="type-caption text-ink-muted">
+                {dreams.length === 0 ? t('cloudDreamsEmpty') : ''}
+              </span>
               <Button variant="secondary" size="sm" onClick={() => void runDream()} disabled={busy}>
                 {busy ? <Spinner size={13} /> : <Sparkles size={13} />}
                 {t('cloudMemoryRunDream')}
@@ -1639,9 +1715,14 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
                     className="flex flex-col gap-1 rounded border border-rule-divide bg-panel px-3 py-2"
                   >
                     <div className="flex items-center gap-2 type-caption text-ink-muted">
-                      <span>{new Date(dream.at).toLocaleString()}</span>
-                      <span>· {dream.trigger}</span>
-                      <span className="ml-auto">
+                      <span className="type-data">{new Date(dream.at).toLocaleString()}</span>
+                      <span>
+                        ·{' '}
+                        {dream.trigger === 'manual'
+                          ? t('cloudDreamTriggerManual')
+                          : t('cloudDreamTriggerIdle')}
+                      </span>
+                      <span className="ml-auto type-data">
                         +{dream.added} / -{dream.removed}
                       </span>
                     </div>

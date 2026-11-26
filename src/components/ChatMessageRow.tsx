@@ -33,10 +33,14 @@ export const TurnTaskList: React.FC<{ parts: AgentTracePart[] }> = ({
   const done = tools.filter((tool) => tool.status !== 'running').length
   const running = done < tools.length
 
+  const taskListId = `turn-tasks-${tools[0]?.id ?? 'list'}`
+
   return (
     <div className="border border-rule-hairline bg-raised">
       <button
         type="button"
+        aria-expanded={open}
+        aria-controls={taskListId}
         onClick={() => setOpen((value) => !value)}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
       >
@@ -51,7 +55,7 @@ export const TurnTaskList: React.FC<{ parts: AgentTracePart[] }> = ({
         {running && <Spinner size={10} />}
       </button>
       {open && (
-        <div className="border-t border-rule-divide">
+        <div id={taskListId} className="border-t border-rule-divide">
           {tools.map((tool) => (
             <div
               key={tool.id}
@@ -289,9 +293,9 @@ const MessageQuoteBlock: React.FC<{
             type="button"
             onClick={() => onCopy(quote.content)}
             aria-label={t('copyMessage')}
-            className="text-ink-muted transition-colors hover:text-accent"
+            className="flex h-6 w-6 items-center justify-center rounded-sm text-ink-muted transition-colors hover:bg-hover hover:text-accent"
           >
-            <Copy size={10} />
+            <Copy size={11} />
           </button>
         )}
       </div>

@@ -292,4 +292,35 @@ describe('云端页交互与配置升级（F-01 / U-01 / U-02 / U-03 / U-04）',
     expect(screen.getByText('frontend')).toBeTruthy()
     expect(screen.getByText('cloud')).toBeTruthy()
   })
+
+  it('梦境整理有记录时不显示空态，并展示本地化触发方式；未读为 0 时不发 mark_read', async () => {
+    vi.mocked(api.cloudGetMemoryData).mockResolvedValueOnce({
+      success: true,
+      memories: [],
+      docs: [],
+      dreams: [
+        {
+          id: 'dream-1',
+          at: Date.now(),
+          trigger: 'manual',
+          summary: '整理了 2 条记忆',
+          added: 1,
+          merged: 1,
+          removed: 0,
+        },
+      ],
+    })
+    useCloudStore.setState({ lastSeq: 12, lastReadSeq: 10, unreadCount: 0 })
+
+    render(<CloudView onBackHome={() => undefined} />)
+    expect(sent.filter((frame) => frame.type === 'mark_read')).toHaveLength(0)
+
+    fireEvent.click(screen.getByRole('button', { name: '记忆与留存文档' }))
+    const dreamTab = await screen.findByRole('tab', { name: /梦境记录/ })
+    fireEvent.click(dreamTab)
+
+    expect(await screen.findByText('整理了 2 条记忆')).toBeTruthy()
+    expect(screen.getByText(/手动/)).toBeTruthy()
+    expect(screen.queryByText(/还没有梦境整理记录/)).toBeNull()
+  })
 })

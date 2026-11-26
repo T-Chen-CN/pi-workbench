@@ -140,6 +140,10 @@ body {
   overflow: hidden;
 }
 
+#root.center {
+  overflow-y: auto;
+}
+
 .app {
   display: grid;
   grid-template-rows: 45px minmax(0, 1fr) 28px;
@@ -153,7 +157,8 @@ body {
   place-items: center;
   min-height: 100vh;
   min-height: 100dvh;
-  padding: 24px;
+  padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
   background: rgb(var(--surface));
   overflow-y: auto;
 }
@@ -170,7 +175,7 @@ header.top {
   align-items: stretch;
   gap: 12px;
   height: 45px;
-  padding: 0 16px;
+  padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
   background: rgb(var(--panel));
   border-bottom: 1px solid var(--rule-divide);
   min-width: 0;
@@ -269,6 +274,11 @@ button.tab.active {
 
 button.tab:focus-visible {
   outline-offset: -2px;
+}
+
+button.tab:active:not(:disabled),
+button.side-collapsed-strip:active:not(:disabled) {
+  transform: none;
 }
 
 .tab-badge {
@@ -872,6 +882,11 @@ details.trace summary:hover {
   min-width: 0;
 }
 
+.row-nowrap select {
+  width: auto;
+  flex-shrink: 0;
+}
+
 .spacer {
   flex: 1;
 }
@@ -982,13 +997,24 @@ button.ghost:hover:not(:disabled) {
   color: rgb(var(--ink));
 }
 
+select {
+  width: 100%;
+  max-width: 100%;
+}
+
 button.danger-btn {
   border-color: rgb(var(--danger) / 0.6);
   color: rgb(var(--danger));
 }
 
-button.danger-btn:hover:not(:disabled) {
+button.ghost.danger-btn {
+  border-color: transparent;
+}
+
+button.danger-btn:hover:not(:disabled),
+button.ghost.danger-btn:hover:not(:disabled) {
   background: rgb(var(--danger) / 0.1);
+  color: rgb(var(--danger));
 }
 
 button.sm {
@@ -1131,18 +1157,39 @@ button:disabled {
   color: rgb(var(--ink-muted));
 }
 
+.narrow-only {
+  display: none;
+}
+
+.notice-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--rule-divide);
+  background: rgb(var(--panel));
+  color: rgb(var(--danger));
+  font-size: 12px;
+}
+
 /* --------------------------------------------------------------- 窄屏 / 移动端 */
 
 @media (max-width: 960px) {
   header.top {
-    padding: 0 10px;
-    gap: 8px;
+    padding: 0 max(10px, env(safe-area-inset-right)) 0 max(10px, env(safe-area-inset-left));
+    gap: 6px;
   }
 
   .brand-words,
   .status-task-tag,
+  .status-task-stop,
+  .status-agent,
   .status-devices {
     display: none;
+  }
+
+  .narrow-only {
+    display: flex;
   }
 
   main.workspace,
@@ -1160,7 +1207,8 @@ button:disabled {
   }
 
   .composer {
-    padding: 10px 12px;
+    padding: 10px max(12px, env(safe-area-inset-right))
+      max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   }
 
   .tab-page {
@@ -1168,7 +1216,7 @@ button:disabled {
   }
 
   footer.bottom {
-    padding: 0 10px;
+    padding: 0 max(10px, env(safe-area-inset-right)) 0 max(10px, env(safe-area-inset-left));
     gap: 10px;
   }
 }

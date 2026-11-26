@@ -514,7 +514,8 @@ export function handleTabListKeyDown(event: React.KeyboardEvent<HTMLElement>): v
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' '].includes(key)) return
   // 关闭按钮等次级控件自己处理按键，不参与标签间移动
   if ((event.target as HTMLElement).closest('[data-tab-aux]')) return
-  const strip = event.currentTarget.parentElement
+  // 向上找真正的 [role="tablist"]：固定面板标签可能包了 sticky 容器，取直接 parentElement 会导致方向键被困在单个标签里
+  const strip = event.currentTarget.closest('[role="tablist"]') ?? event.currentTarget.parentElement
   if (!strip) return
   const tabs = Array.from(strip.querySelectorAll<HTMLElement>('[role="tab"]'))
   const index = tabs.indexOf(event.currentTarget as HTMLElement)

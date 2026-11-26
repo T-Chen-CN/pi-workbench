@@ -359,6 +359,17 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
 
       {showImage && image && (
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={toolName}
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              event.stopPropagation()
+              setShowImage(false)
+            }
+          }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/70 p-6"
           onClick={() => setShowImage(false)}
         >

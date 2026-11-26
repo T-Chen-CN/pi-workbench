@@ -201,6 +201,7 @@ describe('design system usage', () => {
       'App.tsx',
       'components/ChatPanel.tsx',
       'components/ChatSessionList.tsx',
+      'components/CloudStatusIndicator.tsx',
       'components/CommandPalette.tsx',
       'components/DiffViewer.tsx',
       'components/FileExplorer.tsx',
@@ -216,6 +217,35 @@ describe('design system usage', () => {
       for (const match of source.matchAll(/\bborder-line\b/g)) {
         const line = source.slice(0, match.index).split('\n').length
         violations.push(`${rel}:${line} — full-ink border outside a floating layer`)
+      }
+    }
+    expect(violations, violations.join('\n')).toEqual([])
+  })
+
+  it('rejects undefined rule, surface, and shadow utility classes across all TSX files', () => {
+    const UNDEFINED_UTILITIES = [
+      {
+        label: 'undefined rule token (use rule-control|rule-divide|rule-hairline|rule-seam)',
+        pattern: /(?<!-)\b(?:border|bg|text|divide)-rule(?!-(?:control|divide|hairline|seam)\b)(?:-[a-z0-9-]+)?(?=\/|\s|'|"|`|\)|\}|,|$)/g,
+      },
+      {
+        label: 'undefined surface shade (use surface|panel|raised|sunken)',
+        pattern: /(?<!-)\b(?:bg|text|border)-surface-[a-z0-9-]+(?=\/|\s|'|"|`|\)|\}|,|$)/g,
+      },
+      {
+        label: 'undefined shadow token (only shadow-print, shadow-panel, shadow-none exist)',
+        pattern: /(?<!-)\bshadow-(?!print\b|panel\b|none\b)[a-z0-9-]+(?=\s|'|"|`|\)|\}|,|$)/g,
+      },
+    ]
+    const violations: string[] = []
+    for (const file of files) {
+      const rel = relative(SRC, file).replace(/\\/g, '/')
+      const source = readFileSync(file, 'utf-8')
+      for (const rule of UNDEFINED_UTILITIES) {
+        for (const match of source.matchAll(rule.pattern)) {
+          const line = source.slice(0, match.index).split('\n').length
+          violations.push(`${rel}:${line} — ${rule.label}: ${match[0]}`)
+        }
       }
     }
     expect(violations, violations.join('\n')).toEqual([])

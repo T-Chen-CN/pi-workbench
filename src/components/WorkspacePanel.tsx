@@ -161,7 +161,7 @@ export const WorkspacePanel = React.memo(function WorkspacePanel({
             label={t('repoMapRefresh')}
             aria-busy={state.scanning || undefined}
             disabled={state.scanning}
-            className={state.scanning ? 'animate-spin' : undefined}
+            iconClassName={state.scanning ? 'animate-spin' : undefined}
             onClick={refresh}
           />
         </div>

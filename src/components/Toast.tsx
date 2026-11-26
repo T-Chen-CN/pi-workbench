@@ -70,7 +70,7 @@ const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
         type="button"
         onClick={handleClose}
         aria-label={t('close')}
-        className="flex-shrink-0 rounded p-0.5 text-ink-muted transition-colors hover:bg-ink/10 hover:text-ink"
+        className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-sm text-ink-muted transition-colors hover:bg-ink/10 hover:text-ink"
       >
         <X size={13} />
       </button>

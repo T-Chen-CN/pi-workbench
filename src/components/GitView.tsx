@@ -247,7 +247,7 @@ const ChangeRing: React.FC<{ stats?: GitCommitStats; title: string }> = ({ stats
   const radius = 6
   const circumference = 2 * Math.PI * radius
   const track = (
-    <circle cx={center} cy={center} r={radius} fill="none" stroke="rgb(var(--rule-hairline))" strokeWidth={2.8} />
+    <circle cx={center} cy={center} r={radius} fill="none" stroke="var(--rule-hairline)" strokeWidth={2.8} />
   )
   let arcs: React.ReactNode = null
   if (total > 0) {
@@ -675,6 +675,9 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
       event.preventDefault()
       event.stopPropagation()
       resizeCleanupRef.current?.()
+      // 拆到独立辅助窗口时事件与光标必须挂在所属窗口/文档，不能绑主窗口
+      const ownerDoc = event.currentTarget.ownerDocument
+      const ownerWin = ownerDoc.defaultView ?? window
       const table = tableRef.current
       const tableLeft = table?.getBoundingClientRect().left ?? 0
       const handleRect = event.currentTarget.getBoundingClientRect()
@@ -693,54 +696,56 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
       }
       const onUp = () => {
         setResizeGuide(null)
-        window.removeEventListener('pointermove', onMove)
-        window.removeEventListener('pointerup', onUp)
-        window.removeEventListener('pointercancel', onUp)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
+        ownerWin.removeEventListener('pointermove', onMove)
+        ownerWin.removeEventListener('pointerup', onUp)
+        ownerWin.removeEventListener('pointercancel', onUp)
+        ownerDoc.body.style.cursor = ''
+        ownerDoc.body.style.userSelect = ''
         if (resizeCleanupRef.current === onUp) resizeCleanupRef.current = null
       }
       resizeCleanupRef.current = onUp
-      document.body.style.cursor = 'col-resize'
-      document.body.style.userSelect = 'none'
-      window.addEventListener('pointermove', onMove)
-      window.addEventListener('pointerup', onUp)
-      window.addEventListener('pointercancel', onUp)
+      ownerDoc.body.style.cursor = 'col-resize'
+      ownerDoc.body.style.userSelect = 'none'
+      ownerWin.addEventListener('pointermove', onMove)
+      ownerWin.addEventListener('pointerup', onUp)
+      ownerWin.addEventListener('pointercancel', onUp)
     },
     [columnWidths]
   )
 
   const renderActionButtons = (commit: GitCommitInfo) => (
     <>
-      <span
-        role="button"
-        tabIndex={-1}
+      <button
+        type="button"
+        data-git-aux=""
         title={t('gitCopySha')}
+        aria-label={t('gitCopySha')}
         onClick={(event) => {
           event.stopPropagation()
           void copySha(commit.sha)
         }}
-        className="flex h-5 w-5 items-center justify-center rounded-sm text-ink-muted hover:bg-hover hover:text-ink"
+        className="flex h-6 w-6 items-center justify-center rounded-sm text-ink-muted hover:bg-hover hover:text-ink"
       >
         <Copy size={12} />
-      </span>
-      <span
-        role="button"
-        tabIndex={-1}
+      </button>
+      <button
+        type="button"
+        data-git-aux=""
         title={t('gitCreateBranchHere')}
+        aria-label={t('gitCreateBranchHere')}
         onClick={(event) => {
           event.stopPropagation()
           void createBranchHere(commit.sha)
         }}
-        className="flex h-5 w-5 items-center justify-center rounded-sm text-ink-muted hover:bg-hover hover:text-ink"
+        className="flex h-6 w-6 items-center justify-center rounded-sm text-ink-muted hover:bg-hover hover:text-ink"
       >
         <GitBranch size={12} />
-      </span>
+      </button>
     </>
   )
 
   const actionVisibility = (commit: GitCommitInfo) =>
-    selectedSha === commit.sha ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'
+    selectedSha === commit.sha ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
 
   const renderRow = (commit: GitCommitInfo, index: number) => {
     const graphRow = graph.rows[index]
@@ -754,13 +759,24 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
     const relative = formatRelativeTime(commit.date, language)
     const author = authorLabel(commit)
     return (
-      <button
+      <div
         key={commit.sha}
-        type="button"
-        onClick={() => void openCommitDetail(workspacePath, commit.sha)}
+        role="button"
+        tabIndex={0}
+        onClick={(event) => {
+          if ((event.target as HTMLElement).closest('[data-git-aux]')) return
+          void openCommitDetail(workspacePath, commit.sha)
+        }}
+        onKeyDown={(event) => {
+          if ((event.target as HTMLElement).closest('[data-git-aux]')) return
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            void openCommitDetail(workspacePath, commit.sha)
+          }
+        }}
         aria-label={`${commit.subject} ${author}`}
         style={{ gridTemplateColumns: rowGrid, height: rowHeight }}
-        className={`group relative grid w-full items-center border-l-2 pr-2 text-left transition-colors ${
+        className={`group relative grid w-full cursor-pointer items-center border-l-2 pr-2 text-left transition-colors ${
           selected ? 'border-accent bg-accent/[0.07]' : 'border-transparent hover:bg-hover focus-visible:bg-hover'
         }`}
       >
@@ -791,7 +807,7 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
               <span className="min-w-0 flex-1 truncate type-value text-ink">{commit.subject}</span>
             </span>
             <span className="relative flex min-w-0 items-center justify-end">
-              <span className="min-w-0 truncate type-caption text-ink-subtle">{relative}</span>
+              <span className="min-w-0 truncate type-caption text-ink-muted">{relative}</span>
               <span
                 className={`absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-sm bg-panel px-0.5 ${actionVisibility(commit)}`}
               >
@@ -808,7 +824,7 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
                 </span>
               )}
             </span>
-            <span className="min-w-0 truncate text-right type-data text-ink-subtle">{commit.shortSha}</span>
+            <span className="min-w-0 truncate text-right type-data text-ink-muted">{commit.shortSha}</span>
           </span>
         ) : (
           <>
@@ -829,7 +845,7 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
               <ChangeRing stats={stats[commit.sha]} title={ringTitle(commit.sha)} />
             </span>
             <span className="truncate pl-0.5 type-caption text-ink-muted">{relative}</span>
-            <span className="truncate pl-0.5 type-data text-ink-subtle">{commit.shortSha}</span>
+            <span className="truncate pl-0.5 type-data text-ink-muted">{commit.shortSha}</span>
             <span className={`flex flex-none items-center gap-0.5 ${actionVisibility(commit)}`}>
               {renderActionButtons(commit)}
             </span>
@@ -840,7 +856,7 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
           className="pointer-events-none absolute bottom-0 right-0 border-b border-rule-hairline"
           style={{ left: graphWidth }}
         />
-      </button>
+      </div>
     )
   }
 
@@ -871,7 +887,11 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
                   : 'text-danger'
             }`}
           >
-            {pr.checks.state}
+            {pr.checks.state === 'success'
+              ? t('gitPrStateSuccess')
+              : pr.checks.state === 'pending'
+                ? t('gitPrStatePending')
+                : t('gitPrStateFailure')}
           </span>
         )}
       </div>
@@ -942,7 +962,7 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
             <PanelDragHandle panel="git" />
             <span className="h-2 w-2 flex-none rounded-full bg-accent" aria-hidden="true" />
             <span className="min-w-0 truncate type-label text-ink">{t('gitWorkingTree')}</span>
-            <span className="ml-auto flex-none type-caption text-ink-subtle">{dayLabel}</span>
+            <span className="ml-auto flex-none type-caption text-ink-muted">{dayLabel}</span>
             <IconButton
               icon={FolderGit2}
               label={t('gitWorktrees')}
@@ -1034,7 +1054,7 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
           {!narrow && (
             <div
-              className="sticky top-0 z-[3] grid h-[26px] items-center border-b border-l-2 border-l-transparent border-rule-divide bg-panel pr-2 text-ink-subtle type-caption"
+              className="sticky top-0 z-[3] grid h-[26px] items-center border-b border-l-2 border-l-transparent border-rule-divide bg-panel pr-2 text-ink-muted type-caption"
               style={{ gridTemplateColumns: rowGrid }}
             >
               <span aria-hidden="true" />
@@ -1107,7 +1127,7 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
           {detailPending && !detail && (
             <div className="flex items-center gap-1.5 border-b border-rule-hairline px-2.5 py-1.5">
               <Spinner size={12} className="text-ink-muted" />
-              <span className="type-data text-ink-subtle">{detailPending.slice(0, 7)}</span>
+              <span className="type-data text-ink-muted">{detailPending.slice(0, 7)}</span>
             </div>
           )}
 

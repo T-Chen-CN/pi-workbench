@@ -209,7 +209,7 @@ export const CloudStatusIndicator: React.FC<{ onOpen: () => void }> = ({ onOpen 
         <div
           role="dialog"
           aria-label={t('cloudTasks')}
-          className="absolute bottom-full right-0 z-50 mb-1.5 flex w-80 flex-col gap-2 rounded border border-rule bg-panel p-2.5 shadow-popover"
+          className="absolute bottom-full right-0 z-50 mb-1.5 flex w-80 flex-col gap-2 rounded border border-line bg-raised p-2.5 shadow-print"
         >
           <div className="flex items-center justify-between border-b border-rule-divide pb-1.5">
             <span className="type-label text-ink">
@@ -245,7 +245,7 @@ export const CloudStatusIndicator: React.FC<{ onOpen: () => void }> = ({ onOpen 
                     type="button"
                     onClick={() => void stopTask(task.id)}
                     disabled={stopping || offline}
-                    className="flex flex-shrink-0 items-center gap-1 rounded border border-rule px-1.5 py-0.5 type-caption text-ink-muted transition-colors hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+                    className="flex flex-shrink-0 items-center gap-1 rounded border border-rule-control px-1.5 py-0.5 type-caption text-ink-muted transition-colors hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
                     title={offline ? t('cloudOfflineTaskCancelled') : t('cloudStopTask')}
                   >
                     <Square size={10} />

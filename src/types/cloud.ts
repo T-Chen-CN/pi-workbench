@@ -29,6 +29,8 @@ export interface CloudChatRow {
   at: number
   /** 流式中的消息：下一次 text_delta 直接追加 */
   streaming?: boolean
+  /** 工具先于正文时创建的占位行，下一条 assistant message_start 到达时原地复用 */
+  pendingTrace?: boolean
   traces: CloudTraceRow[]
   error?: string
 }

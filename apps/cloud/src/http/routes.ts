@@ -547,7 +547,7 @@ export function buildRouter(deps: RouteDeps): Router {
 
   router.get('/v1/cloud-docs/:name', async (ctx) => {
     requireUser(ctx)
-    const name = decodeURIComponent(ctx.params.name ?? '')
+    const name = ctx.params.name ?? ''
     if (!isWhitelistedDocName(name)) {
       throw new HttpError(400, 'Unsupported cloud document name')
     }
@@ -556,7 +556,7 @@ export function buildRouter(deps: RouteDeps): Router {
 
   router.put('/v1/cloud-docs/:name', async (ctx) => {
     requireUser(ctx)
-    const name = decodeURIComponent(ctx.params.name ?? '')
+    const name = ctx.params.name ?? ''
     if (!isWhitelistedDocName(name)) {
       throw new HttpError(400, 'Unsupported cloud document name')
     }

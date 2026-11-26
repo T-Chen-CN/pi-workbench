@@ -464,13 +464,171 @@ describe('Web 客户端主界面', () => {
     expect(document.body.textContent).toContain('cloud')
   })
 
-  it('登录态过期后不再无限“正在重连”，回登录页并说明原因', async () => {
+  it('流式残缺标题与扩展围栏信息串不会卡死 Markdown 解析器（P0-1）', async () => {
+    buttonByText('会话').click()
+    await tick()
+    const socket = FakeSocket.instances[0]
+    const tricky = [
+      '## ',
+      '```ts title="demo.ts"',
+      'const n = 1',
+      '```',
+      '````md',
+      '```',
+      'nested',
+      '```',
+      '````',
+    ].join('\n')
+
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 40,
+        event: { type: 'message_start', messageId: 'm-tricky', role: 'assistant', at: Date.now() },
+      }),
+    })
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 41,
+        event: { type: 'message_end', messageId: 'm-tricky', text: tricky, at: Date.now() },
+      }),
+    })
+    await tick()
+
+    expect(document.body.textContent).toContain('const n = 1')
+    expect(document.body.textContent).toContain('nested')
+  })
+
+  it('先来 trace 再来 message_start/message_end 时合并到同一条回复且收敛 streaming', async () => {
+    buttonByText('会话').click()
+    await tick()
+    const socket = FakeSocket.instances[0]
+
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 42,
+        event: {
+          type: 'trace',
+          trace: { type: 'tool_start', toolCallId: 'tc-1', toolName: 'dispatch_task', argsSummary: 'run' },
+        },
+      }),
+    })
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 43,
+        event: { type: 'message_start', messageId: 'm-after-trace', role: 'assistant', at: Date.now() },
+      }),
+    })
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 44,
+        event: { type: 'message_end', messageId: 'm-after-trace', text: '工具跑完了', at: Date.now() },
+      }),
+    })
+    await tick()
+
+    expect(document.body.textContent).toContain('dispatch_task')
+    expect(document.body.textContent).toContain('工具跑完了')
+    expect(document.querySelectorAll('.msg-streaming').length).toBe(0)
+  })
+
+  it('折叠与展开右栏不重建聊天区 DOM，输入框实例保留', async () => {
+    buttonByText('会话').click()
+    await tick()
+    const textarea = document.querySelector('.composer textarea') as HTMLTextAreaElement
+    expect(textarea).not.toBeNull()
+
+    const collapseBtn = document.querySelector('button[aria-label="收起运行态面板"]') as HTMLButtonElement
+    expect(collapseBtn).not.toBeNull()
+    collapseBtn.click()
+    await tick()
+    expect(document.contains(textarea)).toBe(true)
+
+    const expandBtn = document.querySelector('button[aria-label="展开运行态面板"]') as HTMLButtonElement
+    expect(expandBtn).not.toBeNull()
+    expandBtn.click()
+    await tick()
+    expect(document.contains(textarea)).toBe(true)
+  })
+
+  it('保存云端模型配置后，后台刷新不冲掉「已保存，下一轮生效」反馈', async () => {
+    routes['PUT /v1/cloud-config'] = () =>
+      jsonResult({ ok: true, apiKeyMasked: 'sk-****9999', takesEffect: 'next-turn' })
+    routes['GET /v1/cloud-config'] = () =>
+      jsonResult({ configured: true, providerId: 'deepseek', model: 'deepseek-flash', apiKeyMasked: 'sk-****9999' })
+
+    buttonByText('设置').click()
+    await tick()
+    buttonByText('保存').click()
+    await tick(80)
+
+    expect(document.body.textContent).toContain('已保存，下一轮生效')
+  })
+
+  it('收到服务端重启后的低 seq snapshot 会重置游标，后续事件不会被误吞', async () => {
+    buttonByText('会话').click()
+    await tick()
+    const socket = FakeSocket.instances[0]
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'snapshot',
+        seq: 1,
+        snapshot: {
+          lastSeq: 1,
+          cloud: { status: 'idle', canStopReply: false },
+          messages: [],
+          tasks: [],
+          devices: [],
+          authorizations: [],
+          units: [],
+        },
+      }),
+    })
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 2,
+        event: { type: 'message_start', messageId: 'm-after-restart', role: 'assistant', at: Date.now() },
+      }),
+    })
+    socket.emit('message', {
+      data: JSON.stringify({
+        v: 1,
+        type: 'event',
+        seq: 3,
+        event: { type: 'message_end', messageId: 'm-after-restart', text: '重启后新回复', at: Date.now() },
+      }),
+    })
+    await tick()
+
+    expect(document.body.textContent).toContain('重启后新回复')
+  })
+
+  it('登录态过期后关闭已打开的弹窗并回登录页，不再无限“正在重连”', async () => {
+    buttonByText('会话').click()
+    await tick()
+    buttonByText('确认方案…').click()
+    await tick()
+    expect(document.querySelector('.modal-backdrop')).not.toBeNull()
+
     // 升级阶段就被 401 拒：浏览器只给 1006，只能靠 /v1/me 反查
     routes['GET /v1/me'] = () => jsonResult({ hasAccount: true, authenticated: false })
     const socket = FakeSocket.instances[FakeSocket.instances.length - 1]
     // 没经过 open 就 close = 握手就被拒
     socket.emit('close')
     await tick(1300)
+    expect(document.querySelector('.modal-backdrop')).toBeNull()
     expect(document.body.textContent).toContain('登录已过期，请重新登录')
     expect(document.body.textContent).toContain('登录云端控制台')
     expect(document.body.textContent).not.toContain('正在重连')

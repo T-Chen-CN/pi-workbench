@@ -242,7 +242,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 <QuickAction
                   icon={SettingsIcon}
                   label={t('welcomeQuickSettings')}
-                  onClick={onOpenSettings}
+                  onClick={() => onOpenSettings()}
                 />
                 {onOpenCloud && (
                   <QuickAction
