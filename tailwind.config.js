@@ -3,6 +3,7 @@ export default {
   content: [
     "./src/**/*.{js,jsx,ts,tsx}",
     "./apps/cloud/web-src/**/*.{js,jsx,ts,tsx}",
+    "./packages/cloud-ui/src/**/*.{js,jsx,ts,tsx}",
     "./node_modules/streamdown/dist/*.js",
   ],
   darkMode: 'class',

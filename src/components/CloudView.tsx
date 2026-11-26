@@ -16,6 +16,18 @@ import {
   Trash2,
   Unplug,
 } from 'lucide-react'
+import {
+  CLOUD_ACTIVE_TASK_STATUSES,
+  CLOUD_PROVIDER_PRESETS,
+  CloudAuthorizationCard,
+  CloudConfirmPlanModal,
+  CloudNoticeCard,
+  CloudTaskCard,
+  CloudUnitCard,
+  formatCloudTime,
+  formatCloudTokens,
+  parseCloudTagsInput,
+} from '@pi-workbench/cloud-ui'
 import { useCloudStore } from '../store/cloudStore'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
@@ -25,15 +37,13 @@ import type {
   CloudDreamItem,
   CloudMemoryItem,
   CloudMemoryKind,
-  CloudTaskRow,
   CloudTaskStatusName,
-  CloudUnitRow,
 } from '../types/cloud'
 import type { CloudCatalogModel } from '../types/electron'
 import { api } from '../api'
 import { StreamingMarkdown } from './AgentMarkdown'
 import { CloudTraceSection } from './CloudTraceSection'
-import { TaskResultSection, summarizeTaskPreview } from './TaskResultSection'
+import { TaskResultSection } from './TaskResultSection'
 import { StreamingTranscript, type StreamingTranscriptHandle } from './StreamingTranscript'
 import { Button, EmptyState, Field, IconButton, Input, Modal, Select, Spinner, Textarea } from './ui'
 import { Card, CardHeader, SectionHeader, StatusText, Tab } from './patterns'
@@ -41,11 +51,11 @@ import { Card, CardHeader, SectionHeader, StatusText, Tab } from './patterns'
 /**
  * 云端页（F-27 / D-19）：独立视图，与工作区无关，保留顶栏与底部状态栏。
  *
- * 渲染自己写，不复用 chatStore / workspaceStore / diffStore：帧格式与状态模型
- * 与 Web 客户端共享，渲染各自实现，避免云端页被工作区生命周期牵扯。
+ * 工单 / 工作单元 / 授权 / 提示 / 确认授权弹窗统一复用 `@pi-workbench/cloud-ui`，
+ * 桌面端通过 `t(...)` 注入中英文案，与云端 Web 共享同一套状态投影与组件契约。
  */
 
-const TASK_STATUS_KEY: Record<CloudTaskStatusName, string> = {
+const TASK_STATUS_KEY: Partial<Record<CloudTaskStatusName, string>> = {
   queued: 'cloudTaskQueued',
   assigned: 'cloudTaskAssigned',
   running: 'cloudTaskRunning',
@@ -57,19 +67,7 @@ const TASK_STATUS_KEY: Record<CloudTaskStatusName, string> = {
   expired: 'cloudTaskExpired',
 }
 
-const ACTIVE_STATUSES: CloudTaskStatusName[] = ['queued', 'assigned', 'running', 'waiting_human']
-
-/** 固定供应商白名单（与云端 Web 及桌面端预设一致；模型能力来自 Pi catalog） */
-const CLOUD_PROVIDER_PRESETS: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'anthropic', label: 'Anthropic' },
-  { id: 'google', label: 'Google' },
-  { id: 'xai', label: 'xAI' },
-  { id: 'deepseek', label: 'DeepSeek' },
-  { id: 'xiaomi', label: '小米 MiMo' },
-  { id: 'xiaomi-token-plan-cn', label: '小米（Token 套餐）' },
-  { id: 'openai-codex', label: 'OpenAI Codex' },
-]
+const ACTIVE_STATUSES = CLOUD_ACTIVE_TASK_STATUSES
 
 const MEMORY_KIND_KEY: Record<CloudMemoryKind, string> = {
   fact: 'cloudMemoryKindFact',
@@ -79,32 +77,9 @@ const MEMORY_KIND_KEY: Record<CloudMemoryKind, string> = {
   todo: 'cloudMemoryKindTodo',
 }
 
-function formatTime(value?: number): string {
-  if (!value) return ''
-  const date = new Date(value)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-function formatDuration(from: number, to: number): string {
-  const seconds = Math.max(0, Math.round((to - from) / 1000))
-  const minutes = Math.floor(seconds / 60)
-  const rest = seconds % 60
-  return minutes > 0 ? `${minutes}:${String(rest).padStart(2, '0')}` : `${rest}s`
-}
-
-function formatTokens(value?: number): string {
-  if (!value) return '-'
-  if (value >= 1_000_000) return `${Math.round((value / 1_000_000) * 10) / 10}M`
-  return `${Math.round(value / 1024)}K`
-}
-
-function parseTagsInput(raw: string): string[] {
-  return raw
-    .split(/[,，\s]+/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .slice(0, 12)
-}
+const formatTime = (value?: number) => formatCloudTime(value, false)
+const formatTokens = formatCloudTokens
+const parseTagsInput = parseCloudTagsInput
 
 const CloudMessageItem = React.memo(function CloudMessageItem({
   message,
@@ -476,17 +451,35 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
-              <TaskList
-                title={t('cloudTasks')}
+              <CloudTaskCard
+                compact
+                showElapsed
                 tasks={[...running, ...finished]}
                 devices={devices}
                 stoppingTaskIds={stoppingTaskIds}
-                onStop={(taskId) => void stopTask(taskId)}
-                onAnswer={(taskId, text) => {
+                answerDrafts={answerDraft}
+                instructionDrafts={instructionDraft}
+                labels={{
+                  title: t('cloudTasks'),
+                  empty: t('cloudNoTasks'),
+                  stopping: t('cloudStoppingTask'),
+                  stopTask: t('cloudStopTask'),
+                  offlineCancelled: t('cloudOfflineTaskCancelled'),
+                  questionWaiting: t('cloudQuestionWaiting'),
+                  answerPlaceholder: t('cloudAnswer'),
+                  send: t('cloudSend'),
+                  instructionPlaceholder: t('cloudSendInstructionPlaceholder'),
+                  sendInstruction: t('cloudSendInstruction'),
+                  statusLabel: (status) => {
+                    const key = TASK_STATUS_KEY[status as CloudTaskStatusName]
+                    return key ? t(key as Parameters<typeof t>[0]) : status
+                  },
+                }}
+                onStopTask={(taskId) => void stopTask(taskId)}
+                onSendAnswer={(taskId, text) => {
                   void answerQuestion(taskId, text)
                   setAnswerDraft((current) => ({ ...current, [taskId]: '' }))
                 }}
-                answerDraft={answerDraft}
                 onAnswerDraft={(taskId, text) =>
                   setAnswerDraft((current) => ({ ...current, [taskId]: text }))
                 }
@@ -494,15 +487,34 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                   void sendTaskMessage(taskId, text)
                   setInstructionDraft((current) => ({ ...current, [taskId]: '' }))
                 }}
-                instructionDraft={instructionDraft}
                 onInstructionDraft={(taskId, text) =>
                   setInstructionDraft((current) => ({ ...current, [taskId]: text }))
                 }
+                renderResult={(task) => (
+                  <TaskResultSection
+                    taskId={task.id}
+                    summary={task.result?.summary}
+                    changedFiles={task.changedFiles ?? task.result?.changedFiles ?? []}
+                    secretHits={task.secretHits ?? task.result?.secretHits ?? []}
+                    compact
+                    language={language}
+                  />
+                )}
               />
 
-              <UnitList
+              <CloudUnitCard
                 units={units}
-                onClose={(unitId) => {
+                labels={{
+                  title: t('cloudUnits'),
+                  empty: t('cloudNoUnits'),
+                  active: t('cloudUnitActive'),
+                  closed: t('cloudUnitClosed'),
+                  closing: t('cloudUnitClosing'),
+                  dirty: t('cloudUnitDirty'),
+                  closeAction: t('cloudUnitClose'),
+                  hint: t('cloudUnitHint'),
+                }}
+                onCloseUnit={(unitId) => {
                   void closeUnit(unitId).then((sent) => {
                     if (sent) toast.success(t('cloudUnitCloseSent'))
                     else toast.error(t('cloudUnitCloseFailed'))
@@ -539,56 +551,33 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                 )}
               </Card>
 
-              <Card density="compact">
-                <CardHeader
-                  title={t('cloudAuthorizations')}
-                  action={
-                    linked ? (
-                      <Button variant="secondary" size="sm" onClick={() => setAuthorizeOpen(true)}>
-                        <PenLine size={13} />
-                        {t('cloudAuthorizeTitle')}
-                      </Button>
-                    ) : undefined
-                  }
-                />
-                {authorizations.length === 0 ? (
-                  <p className="mt-2 type-caption text-ink-muted">{t('cloudNoAuthorizations')}</p>
-                ) : (
-                  <ul className="mt-2 flex flex-col gap-2">
-                    {authorizations.map((item) => (
-                      <li key={item.id} className="flex flex-col gap-0.5">
-                        <span className="type-label text-ink">
-                          {t('cloudQuota', { used: item.used, quota: item.quota })}
-                        </span>
-                        <span className="truncate type-caption text-ink-muted">
-                          {item.confirmedSummary}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </Card>
+              <CloudAuthorizationCard
+                authorizations={authorizations}
+                showTargets={false}
+                action={
+                  linked ? (
+                    <Button variant="secondary" size="sm" onClick={() => setAuthorizeOpen(true)}>
+                      <PenLine size={13} />
+                      {t('cloudAuthorizeTitle')}
+                    </Button>
+                  ) : undefined
+                }
+                labels={{
+                  title: t('cloudAuthorizations'),
+                  empty: t('cloudNoAuthorizations'),
+                  quotaText: (used, quota) => t('cloudQuota', { used, quota }),
+                  expiresText: undefined,
+                }}
+              />
 
               {notices.length > 0 && (
-                <Card density="compact">
-                  <CardHeader title={t('cloudNotices')} />
-                  <ul className="mt-2 flex flex-col gap-1">
-                    {notices.slice(0, 6).map((notice, index) => (
-                      <li
-                        key={`${notice.at}-${index}`}
-                        className={
-                          notice.level === 'error'
-                            ? 'type-caption text-danger'
-                            : notice.level === 'warn'
-                              ? 'type-caption text-warning'
-                              : 'type-caption text-ink-muted'
-                        }
-                      >
-                        <span className="type-data">{formatTime(notice.at)}</span> {notice.text}
-                      </li>
-                    ))}
-                  </ul>
-                </Card>
+                <CloudNoticeCard
+                  notices={notices}
+                  labels={{
+                    title: t('cloudNotices'),
+                    empty: '',
+                  }}
+                />
               )}
             </div>
           </aside>
@@ -620,12 +609,12 @@ const PairingPane: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) => {
   const pair = useCloudStore((state) => state.pair)
   const error = useCloudStore((state) => state.error)
   const linking = useCloudStore((state) => state.linking)
-  const [baseUrl, setBaseUrl] = useState('tchen-xiaoxiao.com')
+  const [baseUrl, setBaseUrl] = useState('')
   const [code, setCode] = useState('')
   const [deviceName, setDeviceName] = useState('Pi Workbench')
 
   const submit = async () => {
-    const ok = await pair({ baseUrl, code: code.trim(), deviceName })
+    const ok = await pair({ baseUrl: baseUrl.trim(), code: code.trim(), deviceName })
     if (ok) toast.success(t('cloudStatusConnecting'))
   }
 
@@ -640,7 +629,7 @@ const PairingPane: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) => {
             id="cloud-base-url"
             value={baseUrl}
             onChange={(event) => setBaseUrl(event.target.value)}
-            placeholder="https://tchen-xiaoxiao.com"
+            placeholder="https://cloud.example.com"
           />
         </Field>
         <Field label={t('cloudCode')} htmlFor="cloud-code">
@@ -665,7 +654,7 @@ const PairingPane: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) => {
             variant="primary"
             size="sm"
             onClick={() => void submit()}
-            disabled={linking || code.length !== 6}
+            disabled={linking || !baseUrl.trim() || code.length !== 6}
           >
             {linking ? <Spinner size={13} /> : <Unplug size={13} />}
             {t('cloudPairAction')}
@@ -676,233 +665,6 @@ const PairingPane: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) => {
         </div>
       </div>
     </div>
-  )
-}
-
-/**
- * 工作单元列表（F-19a / A-43）。
- *
- * 干净树在工单结束时就**自动回收**了，所以这里平时只有“使用中”的单元；
- * 出现「待处理」的一定是脏树（有未提交改动），那才需要手动结束。
- */
-const UnitList: React.FC<{
-  units: CloudUnitRow[]
-  onClose: (unitId: string) => void
-}> = ({ units, onClose }) => {
-  const t = useI18nStore((state) => state.t)
-  return (
-    <Card density="compact">
-      <CardHeader title={t('cloudUnits')} />
-      {units.length === 0 ? (
-        <p className="mt-2 type-caption text-ink-muted">{t('cloudNoUnits')}</p>
-      ) : (
-        <ul className="mt-2 flex flex-col gap-2.5">
-          {units.slice(0, 8).map((unit) => {
-            const closing = unit.closedAt === null && Boolean(unit.closeRequestedAt)
-            const dirty = unit.closedAt === null && Boolean(unit.dirtyAt)
-            const label =
-              unit.closedAt !== null
-                ? t('cloudUnitClosed')
-                : closing
-                  ? t('cloudUnitClosing')
-                  : dirty
-                    ? t('cloudUnitDirty')
-                    : t('cloudUnitActive')
-            return (
-              <li key={unit.unitId} className="flex flex-col gap-1">
-                <span className="flex items-center gap-2">
-                  <span className="truncate type-data text-ink" title={unit.unitId}>
-                    {unit.branch ?? unit.unitId}
-                  </span>
-                  <span
-                    className={
-                      dirty
-                        ? 'flex-shrink-0 type-caption text-warning'
-                        : 'flex-shrink-0 type-caption text-ink-muted'
-                    }
-                  >
-                    {label}
-                  </span>
-                </span>
-                <span
-                  className="truncate type-data text-ink-muted"
-                  title={unit.worktreePath ?? unit.workspacePath}
-                >
-                  {unit.worktreePath ?? unit.workspacePath}
-                </span>
-                {unit.closedAt === null && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onClose(unit.unitId)}
-                    disabled={closing}
-                  >
-                    <Trash2 size={13} />
-                    {t('cloudUnitClose')}
-                  </Button>
-                )}
-              </li>
-            )
-          })}
-          <li className="type-caption text-ink-muted">{t('cloudUnitHint')}</li>
-        </ul>
-      )}
-    </Card>
-  )
-}
-
-const TaskList: React.FC<{
-  title: string
-  tasks: CloudTaskRow[]
-  devices: Array<{ id: string; online: boolean }>
-  stoppingTaskIds: Record<string, true>
-  onStop: (taskId: string) => void
-  onAnswer: (taskId: string, text: string) => void
-  answerDraft: Record<string, string>
-  onAnswerDraft: (taskId: string, text: string) => void
-  onSendInstruction: (taskId: string, text: string) => void
-  instructionDraft: Record<string, string>
-  onInstructionDraft: (taskId: string, text: string) => void
-}> = ({
-  title,
-  tasks,
-  devices,
-  stoppingTaskIds,
-  onStop,
-  onAnswer,
-  answerDraft,
-  onAnswerDraft,
-  onSendInstruction,
-  instructionDraft,
-  onInstructionDraft,
-}) => {
-  const t = useI18nStore((state) => state.t)
-  const language = useI18nStore((state) => state.language)
-  const onlineById = useMemo(() => {
-    const map = new Map<string, boolean>()
-    for (const device of devices) map.set(device.id, device.online)
-    return map
-  }, [devices])
-
-  return (
-    <Card density="compact">
-      <CardHeader title={title} />
-      {tasks.length === 0 ? (
-        <p className="mt-2 type-caption text-ink-muted">{t('cloudNoTasks')}</p>
-      ) : (
-        <ul className="mt-2 flex flex-col gap-3">
-          {tasks.map((task) => {
-            const active = ACTIVE_STATUSES.includes(task.status)
-            const deviceOffline = onlineById.get(task.deviceId) === false
-            const stopping = Boolean(stoppingTaskIds[task.id])
-            const elapsed = task.startedAt
-              ? formatDuration(task.startedAt, task.finishedAt ?? Date.now())
-              : ''
-            const changedFiles = task.changedFiles ?? task.result?.changedFiles ?? []
-            const secretHits = task.secretHits ?? task.result?.secretHits ?? []
-            const milestonePreview = summarizeTaskPreview(task.lastMilestone || task.result?.summary)
-
-            return (
-              <li key={task.id} className="flex flex-col gap-1">
-                <span className="flex items-center gap-2 type-label text-ink">
-                  <span className="truncate">{task.title}</span>
-                  <span className="ml-auto flex-shrink-0 type-caption text-ink-muted">
-                    {stopping
-                      ? t('cloudStoppingTask')
-                      : t(TASK_STATUS_KEY[task.status] as Parameters<typeof t>[0])}
-                  </span>
-                </span>
-                <span className="truncate type-data text-ink-muted">
-                  {task.deviceId} · {task.workspacePath}
-                  {elapsed ? ` · ${elapsed}` : ''}
-                </span>
-                {milestonePreview && (
-                  <span className="truncate type-caption text-ink-muted" title={milestonePreview}>
-                    {milestonePreview}
-                  </span>
-                )}
-                {task.status === 'waiting_human' && task.question && (
-                  <div className="flex flex-col gap-1">
-                    <span className="type-caption text-warning">{t('cloudQuestionWaiting')}</span>
-                    <p className="type-caption text-ink">{task.question.text}</p>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        value={answerDraft[task.id] ?? ''}
-                        onChange={(event) => onAnswerDraft(task.id, event.target.value)}
-                        placeholder={t('cloudAnswer')}
-                      />
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="flex-shrink-0"
-                        onClick={() => onAnswer(task.id, answerDraft[task.id] ?? '')}
-                        disabled={!(answerDraft[task.id] ?? '').trim()}
-                      >
-                        {t('cloudSend')}
-                      </Button>
-                    </div>
-                  </div>
-                )}
-                {task.status === 'running' && !deviceOffline && (
-                  <div className="flex items-center gap-2">
-                    <Input
-                      value={instructionDraft[task.id] ?? ''}
-                      onChange={(event) => onInstructionDraft(task.id, event.target.value)}
-                      placeholder={t('cloudSendInstructionPlaceholder')}
-                      onKeyDown={(event) => {
-                        if (
-                          event.key === 'Enter' &&
-                          !event.nativeEvent.isComposing &&
-                          event.keyCode !== 229 &&
-                          (instructionDraft[task.id] ?? '').trim()
-                        ) {
-                          event.preventDefault()
-                          onSendInstruction(task.id, instructionDraft[task.id] ?? '')
-                        }
-                      }}
-                    />
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="flex-shrink-0"
-                      onClick={() => onSendInstruction(task.id, instructionDraft[task.id] ?? '')}
-                      disabled={!(instructionDraft[task.id] ?? '').trim()}
-                    >
-                      {t('cloudSendInstruction')}
-                    </Button>
-                  </div>
-                )}
-                <TaskResultSection
-                  taskId={task.id}
-                  summary={task.result?.summary}
-                  changedFiles={changedFiles}
-                  secretHits={secretHits}
-                  compact
-                  language={language}
-                />
-                {task.error && <span className="type-data text-danger">{task.error}</span>}
-                {active && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onStop(task.id)}
-                    disabled={stopping || deviceOffline}
-                    title={deviceOffline ? t('cloudOfflineTaskCancelled') : t('cloudStopTask')}
-                  >
-                    <Square size={12} />
-                    {stopping
-                      ? t('cloudStoppingTask')
-                      : deviceOffline
-                        ? t('cloudOfflineTaskCancelled')
-                        : t('cloudStopTask')}
-                  </Button>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      )}
-    </Card>
   )
 }
 
@@ -1131,133 +893,42 @@ const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
 }
 
 /**
- * 确认方案并授权（F-16 / F-17 / F-18）。
- *
- * 这个动作**不派活**，只把「设备 × 仓库 + 额度」落成凭据；`dispatch_task` 时由服务端
- * 逐项校验（G9：模型自称“用户已同意”不算数）。桌面端与 Web 都是完整客户端（D-11），
- * 所以两端都必须有这个入口，否则只用桌面端根本派不出活。
+ * 确认方案并授权（F-16 / F-17 / F-18）：薄包装 `@pi-workbench/cloud-ui` 的 `CloudConfirmPlanModal`，
+ * 负责接入桌面端 store、双语文案与 toast 提示。
  */
 const AuthorizeDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const t = useI18nStore((state) => state.t)
   const devices = useCloudStore((state) => state.devices)
   const confirmPlan = useCloudStore((state) => state.confirmPlan)
-  const [planText, setPlanText] = useState('')
-  const [deviceId, setDeviceId] = useState('')
-  const [workspacePath, setWorkspacePath] = useState('')
-  const [quota, setQuota] = useState('5')
-  const [sending, setSending] = useState(false)
-
-  const device = devices.find((item) => item.id === deviceId) ?? devices[0]
-  const repos = useMemo(
-    () => (device?.workspaces ?? []).filter((workspace) => workspace.isGit !== false),
-    [device]
-  )
-
-  // 打开时补默认值，但**不覆盖用户的手选**：整页重渲染（任何流式帧都会触发）不能让选择弹回去
-  useEffect(() => {
-    if (!open) return
-    if (device && device.id !== deviceId) setDeviceId(device.id)
-    if (repos.length > 0 && !repos.some((repo) => repo.path === workspacePath)) {
-      setWorkspacePath(repos[0].path)
-    }
-  }, [open, device, deviceId, repos, workspacePath])
-
-  const submit = async () => {
-    const text = planText.trim()
-    if (!text || !device || !workspacePath) return
-    setSending(true)
-    const ok = await confirmPlan({
-      planText: text,
-      items: [{ deviceId: device.id, workspacePath }],
-      quota: Math.max(1, Math.min(50, Number(quota) || 5)),
-    })
-    setSending(false)
-    if (!ok) {
-      toast.error(t('cloudAuthorizeFailed'))
-      return
-    }
-    toast.success(t('cloudAuthorizeSent'))
-    setPlanText('')
-    onClose()
-  }
 
   return (
-    <Modal
+    <CloudConfirmPlanModal
       open={open}
+      devices={devices}
       onClose={onClose}
-      title={t('cloudAuthorizeTitle')}
-      size="md"
-      closeLabel={t('close')}
-      footer={
-        <>
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            {t('cancel')}
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => void submit()}
-            disabled={sending || !planText.trim() || !device || !workspacePath}
-          >
-            {sending ? <Spinner size={13} /> : null}
-            {t('cloudAuthorizeAction')}
-          </Button>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-3 px-5 py-4">
-        <p className="type-caption text-ink-muted">{t('cloudAuthorizeHint')}</p>
-        <Field label={t('cloudPlanText')} htmlFor="cloud-plan-text">
-          <Textarea
-            id="cloud-plan-text"
-            rows={5}
-            value={planText}
-            onChange={(event) => setPlanText(event.target.value)}
-            placeholder={t('cloudPlanTextPlaceholder')}
-          />
-        </Field>
-        <Field label={t('cloudAuthorizeDevice')} htmlFor="cloud-plan-device">
-          <Select
-            id="cloud-plan-device"
-            value={device?.id ?? ''}
-            onChange={(event) => {
-              setDeviceId(event.target.value)
-              setWorkspacePath('')
-            }}
-          >
-            {devices.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label={t('cloudAuthorizeRepo')} htmlFor="cloud-plan-repo">
-          <Select
-            id="cloud-plan-repo"
-            value={workspacePath}
-            onChange={(event) => setWorkspacePath(event.target.value)}
-          >
-            {repos.map((repo) => (
-              <option key={repo.path} value={repo.path}>
-                {repo.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        {repos.length === 0 && <p className="type-caption text-warning">{t('cloudNoGitRepo')}</p>}
-        <Field label={t('cloudQuotaLabel')} htmlFor="cloud-plan-quota">
-          <Input
-            id="cloud-plan-quota"
-            type="number"
-            min={1}
-            max={50}
-            value={quota}
-            onChange={(event) => setQuota(event.target.value)}
-          />
-        </Field>
-      </div>
-    </Modal>
+      labels={{
+        title: t('cloudAuthorizeTitle'),
+        close: t('close'),
+        cancel: t('cancel'),
+        confirm: t('cloudAuthorizeAction'),
+        hint: t('cloudAuthorizeHint'),
+        planLabel: t('cloudPlanText'),
+        planPlaceholder: t('cloudPlanTextPlaceholder'),
+        deviceLabel: t('cloudAuthorizeDevice'),
+        repoLabel: t('cloudAuthorizeRepo'),
+        noGitRepo: t('cloudNoGitRepo'),
+        quotaLabel: t('cloudQuotaLabel'),
+      }}
+      onSubmit={async (payload) => {
+        const ok = await confirmPlan(payload)
+        if (!ok) {
+          toast.error(t('cloudAuthorizeFailed'))
+          return false
+        }
+        toast.success(t('cloudAuthorizeSent'))
+        return true
+      }}
+    />
   )
 }
 

@@ -8,8 +8,8 @@
 
 import React, { useEffect, useRef, useState } from 'react'
 import { AlertCircle, Check, ChevronRight, Loader2 } from 'lucide-react'
+import { Caption, DataText } from '@pi-workbench/cloud-ui'
 import { StreamdownView } from './StreamdownView'
-import { Caption, DataText } from './ui'
 
 export interface CloudProcessTraceItem {
   id: string
@@ -97,7 +97,11 @@ export const CloudTraceSection = React.memo(function CloudTraceSection({
   } else {
     const bits: string[] = []
     if (failedCount > 0) {
-      bits.push(zh ? `${failedCount} 个工具失败` : `${failedCount} tool failed`)
+      bits.push(
+        zh
+          ? `${failedCount} 个工具失败`
+          : `${failedCount} ${failedCount === 1 ? 'tool' : 'tools'} failed`
+      )
       dangerDetail = true
     }
     if (thinkingDurationMs && thinkingDurationMs > 0) {
@@ -110,7 +114,11 @@ export const CloudTraceSection = React.memo(function CloudTraceSection({
       bits.push(zh ? '含思考过程' : 'Thinking')
     }
     if (traces.length > 0) {
-      bits.push(zh ? `${traces.length} 个工具` : `${traces.length} tools`)
+      bits.push(
+        zh
+          ? `${traces.length} 个工具`
+          : `${traces.length} ${traces.length === 1 ? 'tool' : 'tools'}`
+      )
     }
     detail = bits.join(' · ')
   }

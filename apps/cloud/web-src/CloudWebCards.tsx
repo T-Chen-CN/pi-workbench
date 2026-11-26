@@ -1,9 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Button, Caption, DataText, Field, Input, Modal, Select, Textarea } from '../../../src/components/ui'
-import { Card, CardHeader, StatusText } from '../../../src/components/patterns'
-import { TaskResultSection, summarizeTaskPreview } from '../../../src/components/TaskResultSection'
 import {
-  ACTIVE_TASK_STATUSES,
+  Button,
+  Caption,
+  Card,
+  CardHeader,
+  CloudAuthorizationCard,
+  CloudConfirmPlanModal,
+  CloudNoticeCard,
+  CloudTaskCard,
+  CloudUnitCard,
+  DataText,
+  Field,
+  Input,
+  Select,
+  StatusText,
+  Textarea,
+} from '@pi-workbench/cloud-ui'
+import { TaskResultSection } from '../../../src/components/TaskResultSection'
+import {
   MEMORY_KIND_LABELS,
   PROVIDER_PRESETS,
   TASK_STATUS_LABELS,
@@ -41,217 +55,29 @@ export const TaskCard: React.FC<{
   onSendAnswer: (taskId: string, text: string) => void
   onSendInstruction: (taskId: string, text: string) => void
   onStopTask: (taskId: string) => void
-}> = ({
-  tasks,
-  devices,
-  stoppingTaskIds,
-  answerDrafts,
-  instructionDrafts,
-  compact = false,
-  onAnswerDraft,
-  onInstructionDraft,
-  onSendAnswer,
-  onSendInstruction,
-  onStopTask,
-}) => {
-  return (
-    <Card density={compact ? 'compact' : 'default'}>
-      <CardHeader title="工单" status={<Caption className="text-ink-muted">{tasks.length}</Caption>} />
-      {tasks.length === 0 ? (
-        <Caption className="mt-2 block text-ink-muted">还没有工单</Caption>
-      ) : (
-        <ul className="m-0 mt-2 flex list-none flex-col gap-3 p-0">
-          {tasks.map((task) => {
-            const active = (ACTIVE_TASK_STATUSES as readonly string[]).includes(task.status)
-            const spec = task.spec || {}
-            const device = devices.find((item) => item.id === spec.deviceId)
-            const offline = device ? !device.online : false
-            const stopping = Boolean(stoppingTaskIds[task.id])
-            const changedFiles = task.result?.changedFiles || task.progress?.changedFiles || []
-            const secretHits = task.result?.secretHits || task.progress?.secretHits || []
-            const summaryPreview = summarizeTaskPreview(task.progress?.summary || task.result?.summary)
-
-            return (
-              <li
-                key={task.id}
-                className="flex flex-col gap-1.5 border-b border-rule-divide pb-2.5 last:border-b-0 last:pb-0"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 flex-1 truncate type-value text-ink">
-                    {spec.title || task.id}
-                  </span>
-                  <span
-                    className={`flex-shrink-0 type-caption ${
-                      task.status === 'failed'
-                        ? 'text-danger'
-                        : task.status === 'waiting_human'
-                          ? 'text-warning'
-                          : 'text-ink-muted'
-                    }`}
-                  >
-                    {stopping ? '正在停止…' : TASK_STATUS_LABELS[task.status] || task.status}
-                  </span>
-                </div>
-                <DataText className="truncate text-ink-muted">
-                  {spec.deviceId || ''} · {spec.repo?.workspacePath || ''}
-                </DataText>
-                {summaryPreview && (
-                  <Caption className="truncate text-ink-muted" title={summaryPreview}>
-                    {summaryPreview}
-                  </Caption>
-                )}
-                {task.status === 'waiting_human' && task.question && (
-                  <div className="flex flex-col gap-1.5 border border-rule-hairline bg-sunken p-2">
-                    <Caption className="text-warning">终端在等你回答</Caption>
-                    <span className="type-value text-ink">{task.question.text}</span>
-                    <div className="flex items-center gap-1.5">
-                      <Input
-                        placeholder="回答"
-                        value={answerDrafts[task.id] || ''}
-                        onChange={(event) => onAnswerDraft(task.id, event.target.value)}
-                        onKeyDown={(event) => {
-                          if (
-                            event.key === 'Enter' &&
-                            !event.nativeEvent.isComposing &&
-                            event.keyCode !== 229
-                          ) {
-                            const text = (answerDrafts[task.id] || '').trim()
-                            if (text) onSendAnswer(task.id, text)
-                          }
-                        }}
-                      />
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        className="flex-shrink-0"
-                        onClick={() => {
-                          const text = (answerDrafts[task.id] || '').trim()
-                          if (text) onSendAnswer(task.id, text)
-                        }}
-                      >
-                        发送
-                      </Button>
-                    </div>
-                  </div>
-                )}
-                {task.status === 'running' && !offline && (
-                  <div className="flex items-center gap-1.5">
-                    <Input
-                      placeholder="向运行中工单追加指令…"
-                      value={instructionDrafts[task.id] || ''}
-                      onChange={(event) => onInstructionDraft(task.id, event.target.value)}
-                      onKeyDown={(event) => {
-                        if (
-                          event.key === 'Enter' &&
-                          !event.nativeEvent.isComposing &&
-                          event.keyCode !== 229
-                        ) {
-                          const text = (instructionDrafts[task.id] || '').trim()
-                          if (text) onSendInstruction(task.id, text)
-                        }
-                      }}
-                    />
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="flex-shrink-0"
-                      onClick={() => {
-                        const text = (instructionDrafts[task.id] || '').trim()
-                        if (text) onSendInstruction(task.id, text)
-                      }}
-                    >
-                      追加指令
-                    </Button>
-                  </div>
-                )}
-                <TaskResultSection
-                  taskId={task.id}
-                  summary={task.result?.summary}
-                  changedFiles={changedFiles}
-                  secretHits={secretHits}
-                  compact={compact}
-                  language="zh"
-                />
-                {task.error && <DataText className="text-danger">{task.error}</DataText>}
-                {active && (
-                  <div>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={stopping || offline}
-                      onClick={() => onStopTask(task.id)}
-                    >
-                      {stopping ? '正在停止…' : offline ? '设备离线，工单已取消' : '停止工单'}
-                    </Button>
-                  </div>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      )}
-    </Card>
-  )
-}
+}> = ({ compact = false, ...rest }) => (
+  <CloudTaskCard
+    {...rest}
+    compact={compact}
+    showCount
+    labels={{ statusLabel: (status) => TASK_STATUS_LABELS[status] || status }}
+    renderResult={(task) => (
+      <TaskResultSection
+        taskId={task.id}
+        summary={task.result?.summary ?? (task.status === 'done' ? task.lastMilestone : undefined)}
+        changedFiles={task.changedFiles ?? task.result?.changedFiles ?? []}
+        secretHits={task.secretHits ?? task.result?.secretHits ?? []}
+        compact={compact}
+        language="zh"
+      />
+    )}
+  />
+)
 
 export const UnitCard: React.FC<{
   units: CloudUnitRow[]
   onCloseUnit: (unitId: string) => void
-}> = ({ units, onCloseUnit }) => {
-  const visible = units.slice(0, 8)
-  return (
-    <Card density="compact">
-      <CardHeader title="工作单元" />
-      {visible.length === 0 ? (
-        <Caption className="mt-2 block text-ink-muted">
-          还没有工作单元（派活后自动创建，一个单元一个工作树）
-        </Caption>
-      ) : (
-        <ul className="m-0 mt-2 flex list-none flex-col gap-2.5 p-0">
-          {visible.map((unit) => {
-            const closed = typeof unit.closedAt === 'number'
-            const closing = !closed && Boolean(unit.closeRequestedAt)
-            const dirty = !closed && Boolean(unit.dirtyAt)
-            const label = closed ? '已结束' : closing ? '回收中…' : dirty ? '有未提交改动' : '使用中'
-            return (
-              <li
-                key={unit.unitId}
-                className="flex flex-col gap-1 border-b border-rule-divide pb-2 last:border-b-0 last:pb-0"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <DataText className="min-w-0 truncate text-ink">
-                    {unit.branch || unit.unitId}
-                  </DataText>
-                  <Caption className={dirty ? 'flex-shrink-0 text-warning' : 'flex-shrink-0 text-ink-muted'}>
-                    {label}
-                  </Caption>
-                </div>
-                <DataText className="truncate text-ink-muted">
-                  {unit.worktreePath || unit.workspacePath || ''}
-                </DataText>
-                {!closed && (
-                  <div>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={closing}
-                      onClick={() => onCloseUnit(unit.unitId)}
-                    >
-                      {closing ? '回收中…' : '结束并回收'}
-                    </Button>
-                  </div>
-                )}
-              </li>
-            )
-          })}
-          <li className="type-caption text-ink-muted">
-            工作树干净时工单结束就自动回收；这里只为脏树保留手动入口
-          </li>
-        </ul>
-      )}
-    </Card>
-  )
-}
+}> = ({ units, onCloseUnit }) => <CloudUnitCard units={units} onCloseUnit={onCloseUnit} />
 
 export const DeviceCard: React.FC<{
   devices: CloudDeviceRow[]
@@ -344,72 +170,11 @@ export const AuthCard: React.FC<{
   authorizations: CloudAuthorizationRow[]
   onRevoke: (id: string) => Promise<void>
 }> = ({ authorizations, onRevoke }) => (
-  <Card density="compact">
-    <CardHeader title="已确认的授权" />
-    {authorizations.length === 0 ? (
-      <Caption className="mt-2 block text-ink-muted">还没有授权：确认方案之后才允许派活</Caption>
-    ) : (
-      <ul className="m-0 mt-2 flex list-none flex-col gap-2.5 p-0">
-        {authorizations.map((item) => (
-          <li
-            key={item.id}
-            className="flex flex-col gap-1 border-b border-rule-divide pb-2 last:border-b-0 last:pb-0"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="type-value text-ink">
-                额度 {item.used}/{item.quota}
-              </span>
-              <Caption className="text-ink-muted">至 {formatTime(item.expiresAt)}</Caption>
-            </div>
-            <Caption className="text-ink-muted">{item.confirmedSummary}</Caption>
-            <div className="flex flex-col gap-0.5">
-              {item.items.map((target, idx) => (
-                <DataText key={`${target.deviceId}-${target.workspacePath}-${idx}`} className="truncate text-ink-muted">
-                  {target.deviceId} → {target.workspacePath}
-                </DataText>
-              ))}
-            </div>
-            <div>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-danger hover:bg-danger/10 hover:text-danger"
-                onClick={() => void onRevoke(item.id)}
-              >
-                撤销
-              </Button>
-            </div>
-          </li>
-        ))}
-      </ul>
-    )}
-  </Card>
+  <CloudAuthorizationCard authorizations={authorizations} onRevoke={onRevoke} />
 )
 
 export const NoticeCard: React.FC<{ notices: CloudNotice[] }> = ({ notices }) => (
-  <Card density="compact">
-    <CardHeader title="最近提示" />
-    {notices.length === 0 ? (
-      <Caption className="mt-2 block text-ink-muted">暂无提示</Caption>
-    ) : (
-      <ul className="m-0 mt-2 flex list-none flex-col gap-1.5 p-0">
-        {notices.slice(0, 6).map((notice, idx) => (
-          <li
-            key={`${notice.at}-${idx}`}
-            className={`type-caption ${
-              notice.level === 'error'
-                ? 'text-danger'
-                : notice.level === 'warn'
-                  ? 'text-warning'
-                  : 'text-ink-muted'
-            }`}
-          >
-            {formatTime(notice.at)} {notice.text}
-          </li>
-        ))}
-      </ul>
-    )}
-  </Card>
+  <CloudNoticeCard notices={notices} withSeconds />
 )
 
 export const ConfigCard: React.FC<{
@@ -1059,123 +824,13 @@ export const ConfirmPlanModal: React.FC<{
     items: Array<{ deviceId: string; workspacePath: string }>
     quota: number
   }) => boolean
-}> = ({ open, devices, onClose, onSubmit }) => {
-  const [planText, setPlanText] = useState('')
-  const [deviceId, setDeviceId] = useState('')
-  const [workspacePath, setWorkspacePath] = useState('')
-  const [quota, setQuota] = useState('5')
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    if (!open) return
-    setError('')
-    const firstDevice = devices[0]
-    const nextDeviceId = firstDevice?.id ?? ''
-    setDeviceId(nextDeviceId)
-    const gitWorkspaces = (firstDevice?.workspaces || []).filter((ws) => ws.isGit)
-    setWorkspacePath(gitWorkspaces[0]?.path ?? '')
-  }, [open, devices])
-
-  const selectedDevice = devices.find((item) => item.id === deviceId)
-  const gitWorkspaces = (selectedDevice?.workspaces || []).filter((ws) => ws.isGit)
-
-  const handleConfirm = () => {
-    const trimmed = planText.trim()
-    if (!trimmed) {
-      setError('请填写方案原文')
-      return
-    }
-    if (!deviceId || !workspacePath) {
-      setError('请选择设备与仓库')
-      return
-    }
-    const ok = onSubmit({
-      planText: trimmed,
-      items: [{ deviceId, workspacePath }],
-      quota: Math.max(1, Math.min(50, Number(quota) || 5)),
-    })
-    if (ok) {
-      setPlanText('')
-      onClose()
-    }
-  }
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="确认方案并授权派活"
-      size="md"
-      closeLabel="关闭"
-      footer={
-        <>
-          <Button variant="secondary" size="sm" onClick={onClose}>
-            取消
-          </Button>
-          <Button variant="primary" size="sm" onClick={handleConfirm}>
-            确认
-          </Button>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-3 px-5 py-4">
-        <Caption className="text-ink-muted">
-          授权范围是「设备 × 仓库」，换设备或换仓库必须重新确认。
-        </Caption>
-        <Field label="方案原文" htmlFor="confirm-plan-text">
-          <Textarea
-            id="confirm-plan-text"
-            rows={4}
-            value={planText}
-            placeholder="方案原文（会写进会话记录）"
-            onChange={(event) => setPlanText(event.target.value)}
-            autoFocus
-          />
-        </Field>
-        <Field label="设备" htmlFor="confirm-plan-device">
-          <Select
-            id="confirm-plan-device"
-            value={deviceId}
-            onChange={(event) => {
-              const nextId = event.target.value
-              setDeviceId(nextId)
-              const nextDevice = devices.find((item) => item.id === nextId)
-              const nextRepos = (nextDevice?.workspaces || []).filter((ws) => ws.isGit)
-              setWorkspacePath(nextRepos[0]?.path ?? '')
-            }}
-          >
-            {devices.map((device) => (
-              <option key={device.id} value={device.id}>
-                {device.name} ({device.id})
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="仓库（仅 git）" htmlFor="confirm-plan-repo">
-          <Select
-            id="confirm-plan-repo"
-            value={workspacePath}
-            onChange={(event) => setWorkspacePath(event.target.value)}
-          >
-            {gitWorkspaces.map((ws) => (
-              <option key={ws.path} value={ws.path}>
-                {ws.name} — {ws.path}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="工单额度" htmlFor="confirm-plan-quota">
-          <Input
-            id="confirm-plan-quota"
-            type="number"
-            min={1}
-            max={50}
-            value={quota}
-            onChange={(event) => setQuota(event.target.value)}
-          />
-        </Field>
-        {error && <Caption className="text-danger">{error}</Caption>}
-      </div>
-    </Modal>
-  )
-}
+}> = ({ open, devices, onClose, onSubmit }) => (
+  <CloudConfirmPlanModal
+    open={open}
+    devices={devices}
+    showDeviceIdInOption
+    showRepoPathInOption
+    onClose={onClose}
+    onSubmit={onSubmit}
+  />
+)

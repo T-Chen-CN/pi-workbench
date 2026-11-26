@@ -16,6 +16,7 @@ const TASK_STATUS_LABEL_KEY: Record<CloudTaskStatusName, string> = {
   cancelled: 'cloudTaskCancelled',
   interrupted: 'cloudTaskInterrupted',
   expired: 'cloudTaskExpired',
+  rejected: 'cloudTaskFailed',
 }
 
 function formatElapsed(startedAt: number | undefined, now: number): string {

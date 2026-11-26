@@ -8,8 +8,10 @@
 
 import React, { useState } from 'react'
 import { ChevronRight } from 'lucide-react'
+import { DataText, summarizeCloudTaskPreview as summarizeTaskPreview } from '@pi-workbench/cloud-ui'
 import { StreamdownView } from './StreamdownView'
-import { DataText } from './ui'
+
+export { summarizeTaskPreview }
 
 export interface TaskChangedFileItem {
   path: string
@@ -21,38 +23,6 @@ export interface TaskSecretHitItem {
   path: string
   line: number
   kind: string
-}
-
-/** 将可能包含 Markdown 标题、表格与加粗符号的长文本收成干净的单行纯文本预览 */
-export function summarizeTaskPreview(raw?: string, maxChars = 140): string {
-  if (!raw) return ''
-  const lines = raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !/^[-*_]{3,}$/.test(line) && !/^\|?(?:\s*:?-+:?\s*\|)+$/.test(line))
-  if (lines.length === 0) return ''
-
-  const cleaned = lines
-    .slice(0, 3)
-    .map((line) =>
-      line
-        .replace(/^#{1,6}\s+/, '')
-        .replace(/^>\s*/, '')
-        .replace(/^[-*+]\s+/, '')
-        .replace(/^\d+\.\s+/, '')
-        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-        .replace(/[*_`~]+/g, '')
-        .replace(/\s*\|\s*/g, ' · ')
-        .replace(/\s+/g, ' ')
-        .trim()
-    )
-    .filter(Boolean)
-    .join(' · ')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  if (cleaned.length <= maxChars) return cleaned
-  return `${cleaned.slice(0, maxChars - 1).trimEnd()}…`
 }
 
 export interface TaskResultSectionProps {

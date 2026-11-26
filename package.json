@@ -19,7 +19,8 @@
   "type": "module",
   "workspaces": [
     "pi-bridge",
-    "apps/cloud"
+    "apps/cloud",
+    "packages/cloud-ui"
   ],
   "scripts": {
     "predev": "npm run build:bridge && npm run build:main",
@@ -35,7 +36,7 @@
     "build:cloud": "npm run build:cloud-web && npm run build --workspace @pi-workbench/cloud",
     "type-check:cloud": "npm run type-check --workspace @pi-workbench/cloud",
     "cloud:start": "npm run start --workspace @pi-workbench/cloud",
-    "type-check": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "type-check": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit && tsc -p electron/tsconfig.json --noEmit && tsc -p electron/tsconfig.preload.json --noEmit && npm run type-check --workspace pi-bridge && npm run type-check --workspace @pi-workbench/cloud && npm run type-check --workspace @pi-workbench/cloud-ui",
     "package": "npm run build && electron-builder",
     "package:win": "npm run build && electron-builder --win",
     "package:mac": "npm run build && electron-builder --mac",
@@ -88,8 +89,6 @@
     "prettier": "^3.9.10",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-markdown": "^10.1.0",
-    "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "shiki": "^4.6.0",

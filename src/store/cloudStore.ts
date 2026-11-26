@@ -1,51 +1,36 @@
 /**
  * 云端页状态（全局单例：云端只有一个会话，与工作区无关，F-27）。
  *
- * 数据来自两处：主进程的配对状态（device agent）与客户端通道的帧。
- * 帧格式由 `pi-bridge/src/cloud-protocol.ts` 冻结，这里只做投影，不改协议。
+ * 协议帧投影与状态归并统一复用 `@pi-workbench/cloud-ui` 的 `applyCloudFrame`，
+ * 保证桌面端与云端 Web 共享同一份思考流 / 工具轨迹 / 未读游标 / 工单状态机逻辑。
  */
 
 import { create } from 'zustand'
+import {
+  INITIAL_CLOUD_SESSION_STATE,
+  applyCloudFrame,
+  type CloudSessionState,
+} from '@pi-workbench/cloud-ui'
 import { api } from '../api'
 import { CLOUD_PROTOCOL_VERSION } from '../types/cloud'
 import type {
   CloudAuthorizationRow,
   CloudAwaySummaryRow,
-  CloudChangedFileRow,
   CloudChatRow,
   CloudClientState,
   CloudDeviceRow,
   CloudDeviceState,
   CloudLinkView,
   CloudNotice,
-  CloudSecretHitRow,
   CloudTaskRow,
   CloudTraceRow,
   CloudUnitRow,
 } from '../types/cloud'
 
-interface CloudState {
+interface CloudState extends CloudSessionState {
   link: CloudLinkView
   deviceState: CloudDeviceState
   clientState: CloudClientState
-  agentStatus: 'idle' | 'thinking' | 'replying' | 'error'
-  canStopReply: boolean
-  messages: CloudChatRow[]
-  tasks: CloudTaskRow[]
-  devices: CloudDeviceRow[]
-  authorizations: CloudAuthorizationRow[]
-  /** 工作单元：回收状态就在这里（干净自动回收 / 脏树待手动结束） */
-  units: CloudUnitRow[]
-  notices: CloudNotice[]
-  /** 客户端离线期间的工单汇总（F-51 / A-23） */
-  awaySummary: CloudAwaySummaryRow | null
-  /** 已点击停止、等待终态回执的工单 id（F-30 显示「正在停止」） */
-  stoppingTaskIds: Record<string, true>
-  /** 最近一次快照的游标：连接恢复时用于续读 */
-  lastSeq: number
-  /** 服务端持久化的已读游标与未读数（F-52 / C-03c） */
-  lastReadSeq: number
-  unreadCount: number
   linking: boolean
   error: string | null
   initialized: boolean
@@ -78,125 +63,46 @@ interface CloudState {
 }
 
 let listenersAttached = false
+const listenerUnsubs: Array<() => void> = []
 
-/** 服务端回显用户消息的 id 前缀（`u-<clientMessageId>`，见 cloud-session.echoUserMessage） */
-const USER_ECHO_PREFIX = 'u-'
-
+export function disposeCloudStoreListeners(): void {
+  while (listenerUnsubs.length > 0) {
+    try {
+      listenerUnsubs.pop()?.()
+    } catch {
+      // ignore
+    }
+  }
+  listenersAttached = false
+}
 
 function messageId(): string {
   return `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 }
 
-function toChangedFiles(raw: unknown): CloudChangedFileRow[] {
-  if (!Array.isArray(raw)) return []
-  return raw
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-    .map((item) => ({
-      path: String(item.path ?? ''),
-      kind: String(item.kind ?? 'modified'),
-      ...(typeof item.attention === 'string' && item.attention ? { attention: item.attention } : {}),
-    }))
-    .filter((item) => Boolean(item.path))
-}
-
-function toSecretHits(raw: unknown): CloudSecretHitRow[] {
-  if (!Array.isArray(raw)) return []
-  return raw
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-    .map((item) => ({
-      path: String(item.path ?? ''),
-      line: Number(item.line ?? 0),
-      kind: String(item.kind ?? ''),
-    }))
-    .filter((item) => Boolean(item.path) && item.line > 0 && Boolean(item.kind))
-}
-
-function toTaskRow(raw: any): CloudTaskRow | null {
-  if (!raw || typeof raw !== 'object') return null
-  const spec = raw.spec ?? {}
-  const changedFiles = toChangedFiles(raw.result?.changedFiles ?? raw.progress?.changedFiles)
-  const secretHits = toSecretHits(raw.result?.secretHits ?? raw.progress?.secretHits)
-  const summary = raw.result?.summary ?? (raw.status === 'done' ? raw.progress?.summary : undefined)
+function pickSessionSlice(state: CloudState): CloudSessionState {
   return {
-    id: String(raw.id ?? ''),
-    title: String(spec.title ?? '(未命名工单)'),
-    deviceId: String(spec.deviceId ?? spec.repo?.deviceId ?? ''),
-    workspacePath: String(spec.repo?.workspacePath ?? ''),
-    workUnitId: String(spec.workUnitId ?? ''),
-    status: String(raw.status ?? 'queued') as CloudTaskRow['status'],
-    createdAt: Number(raw.createdAt ?? Date.now()),
-    updatedAt: Number(raw.updatedAt ?? Date.now()),
-    startedAt: raw.startedAt ?? undefined,
-    finishedAt: raw.finishedAt ?? undefined,
-    terminalReason: raw.terminalReason ?? undefined,
-    lastMilestone: raw.progress?.summary ?? undefined,
-    question: raw.question && typeof raw.question.text === 'string' ? raw.question : undefined,
-    worktreePath: raw.worktreePath ?? undefined,
-    branch: raw.progress?.branch ?? undefined,
-    ...(changedFiles.length > 0 ? { changedFiles } : {}),
-    ...(secretHits.length > 0 ? { secretHits } : {}),
-    result:
-      summary || changedFiles.length > 0 || secretHits.length > 0
-        ? {
-            summary: String(summary ?? ''),
-            changedFiles,
-            ...(secretHits.length > 0 ? { secretHits } : {}),
-          }
-        : undefined,
-    error: raw.error ?? undefined,
-  }
-}
-
-function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
-  const index = list.findIndex((entry) => entry.id === item.id)
-  if (index < 0) return [item, ...list].slice(0, 200)
-  const next = list.slice()
-  next[index] = item
-  return next
-}
-
-function upsertUnit(list: CloudUnitRow[], unit: CloudUnitRow): CloudUnitRow[] {
-  const index = list.findIndex((entry) => entry.unitId === unit.unitId)
-  if (index < 0) return [unit, ...list].slice(0, 200)
-  const next = list.slice()
-  next[index] = unit
-  return next
-}
-
-function toUnitRow(raw: any): CloudUnitRow | null {
-  if (!raw || typeof raw !== 'object') return null
-  const unitId = String(raw.unitId ?? '')
-  if (!unitId) return null
-  return {
-    unitId,
-    deviceId: String(raw.deviceId ?? ''),
-    workspacePath: String(raw.workspacePath ?? ''),
-    worktreePath: raw.worktreePath ?? undefined,
-    branch: raw.branch ?? undefined,
-    createdAt: Number(raw.createdAt ?? Date.now()),
-    closedAt: typeof raw.closedAt === 'number' ? raw.closedAt : null,
-    closeRequestedAt: raw.closeRequestedAt ?? undefined,
-    dirtyAt: raw.dirtyAt ?? undefined,
+    messages: state.messages,
+    tasks: state.tasks,
+    devices: state.devices,
+    units: state.units,
+    authorizations: state.authorizations,
+    notices: state.notices,
+    awaySummary: state.awaySummary,
+    lastSeq: state.lastSeq,
+    lastReadSeq: state.lastReadSeq,
+    unreadCount: state.unreadCount,
+    agentStatus: state.agentStatus,
+    canStopReply: state.canStopReply,
+    stoppingTaskIds: state.stoppingTaskIds,
   }
 }
 
 export const useCloudStore = create<CloudState>((set, get) => ({
+  ...INITIAL_CLOUD_SESSION_STATE,
   link: { linked: false },
   deviceState: { status: 'unlinked', pending: 0 },
   clientState: { status: 'closed' },
-  agentStatus: 'idle',
-  canStopReply: false,
-  messages: [],
-  tasks: [],
-  devices: [],
-  authorizations: [],
-  units: [],
-  notices: [],
-  awaySummary: null,
-  stoppingTaskIds: {},
-  lastSeq: 0,
-  lastReadSeq: 0,
-  unreadCount: 0,
   linking: false,
   error: null,
   initialized: false,
@@ -204,9 +110,11 @@ export const useCloudStore = create<CloudState>((set, get) => ({
   init: async () => {
     if (!listenersAttached && typeof window !== 'undefined' && window.electronAPI) {
       listenersAttached = true
-      api.onCloudState((state) => get().applyDeviceState(state))
-      api.onCloudClientState((state) => get().applyClientState(state))
-      api.onCloudClientFrame((frame) => get().applyFrame(frame))
+      listenerUnsubs.push(
+        api.onCloudState((state) => get().applyDeviceState(state)),
+        api.onCloudClientState((state) => get().applyClientState(state)),
+        api.onCloudClientFrame((frame) => get().applyFrame(frame))
+      )
     }
     await get().refreshStatus()
     // 通道已打开时不再重复 requestSnapshot()，避免切回云端页时冲掉进行中的工具轨迹与未落盘流式前缀
@@ -268,22 +176,10 @@ export const useCloudStore = create<CloudState>((set, get) => ({
       unlinkError = error instanceof Error ? error.message : String(error)
     }
     set({
+      ...INITIAL_CLOUD_SESSION_STATE,
       link: { linked: false },
       deviceState: { status: 'unlinked', pending: 0 },
       clientState: { status: 'closed' },
-      messages: [],
-      tasks: [],
-      devices: [],
-      authorizations: [],
-      units: [],
-      notices: [],
-      awaySummary: null,
-      stoppingTaskIds: {},
-      lastSeq: 0,
-      lastReadSeq: 0,
-      unreadCount: 0,
-      agentStatus: 'idle',
-      canStopReply: false,
       error: unlinkError,
     })
   },
@@ -419,472 +315,44 @@ export const useCloudStore = create<CloudState>((set, get) => ({
 
   applyFrame: (raw) => {
     const frame = raw as any
-    if (!frame || typeof frame !== 'object') return
-    // 版本不符直接丢弃：宁可空着等快照，也不把未知帧当已知帧渲染
-    if (frame.v !== CLOUD_PROTOCOL_VERSION) return
-
-    if (frame.type === 'snapshot') {
-      const snapshot = frame.snapshot ?? {}
-      const messages: CloudChatRow[] = Array.isArray(snapshot.messages)
-        ? snapshot.messages.map((message: any) => ({
-            id: String(message.id ?? messageId()),
-            role: message.role === 'user' ? 'user' : 'assistant',
-            text: String(message.text ?? ''),
-            at: Number(message.at ?? Date.now()),
-            streaming: Boolean(message.streaming),
-            ...(typeof message.thinking === 'string' && message.thinking
-              ? { thinking: message.thinking }
-              : {}),
-            ...(message.thinkingRedacted ? { thinkingRedacted: true } : {}),
-            ...(typeof message.thinkingDurationMs === 'number'
-              ? { thinkingDurationMs: message.thinkingDurationMs }
-              : {}),
-            traces: Array.isArray(message.traces)
-              ? message.traces.map((trace: any) => ({
-                  id: String(trace.id ?? ''),
-                  toolName: String(trace.toolName ?? 'tool'),
-                  summary: String(trace.summary ?? ''),
-                  status:
-                    trace.status === 'error'
-                      ? 'error'
-                      : trace.status === 'running'
-                        ? 'running'
-                        : 'ok',
-                  ...(typeof trace.durationMs === 'number' ? { durationMs: trace.durationMs } : {}),
-                  ...(typeof trace.resultPreview === 'string'
-                    ? { resultPreview: trace.resultPreview }
-                    : {}),
-                }))
-              : [],
-            error: message.error,
-          }))
-        : []
-      const tasks = Array.isArray(snapshot.tasks)
-        ? snapshot.tasks.map(toTaskRow).filter((row: CloudTaskRow | null): row is CloudTaskRow => !!row)
-        : []
-      const devices: CloudDeviceRow[] = Array.isArray(snapshot.devices)
-        ? snapshot.devices.map((device: any) => ({
-            id: String(device.id ?? ''),
-            name: String(device.name ?? device.id ?? ''),
-            platform: String(device.platform ?? ''),
-            online: Boolean(device.online),
-            workspaces: Array.isArray(device.workspaces) ? device.workspaces : [],
-            lastSeenAt: device.lastSeenAt,
-          }))
-        : []
-      const authorizations: CloudAuthorizationRow[] = Array.isArray(snapshot.authorizations)
-        ? snapshot.authorizations.map((item: any) => ({
-            id: String(item.id ?? ''),
-            items: Array.isArray(item.items) ? item.items : [],
-            quota: Number(item.quota ?? 0),
-            used: Number(item.used ?? 0),
-            confirmedAt: Number(item.confirmedAt ?? 0),
-            expiresAt: Number(item.expiresAt ?? 0),
-            confirmedSummary: String(item.confirmedSummary ?? ''),
-          }))
-        : []
-      const units: CloudUnitRow[] = Array.isArray(snapshot.units)
-        ? snapshot.units
-            .map(toUnitRow)
-            .filter((row: CloudUnitRow | null): row is CloudUnitRow => !!row)
-        : []
-      const awaySummary: CloudAwaySummaryRow | null =
-        snapshot.awaySummary && typeof snapshot.awaySummary.text === 'string'
-          ? {
-              since: Number(snapshot.awaySummary.since ?? 0),
-              until: Number(snapshot.awaySummary.until ?? 0),
-              text: String(snapshot.awaySummary.text),
-              items: Array.isArray(snapshot.awaySummary.items) ? snapshot.awaySummary.items : [],
-            }
-          : null
-      set({
-        messages,
-        tasks,
-        devices,
-        authorizations,
-        units,
-        awaySummary,
-        stoppingTaskIds: {},
-        lastSeq: Number(frame.seq ?? snapshot.lastSeq ?? 0),
-        lastReadSeq: Number(snapshot.lastReadSeq ?? 0),
-        unreadCount: Number(snapshot.unreadCount ?? 0),
-        agentStatus: snapshot.cloud?.status ?? 'idle',
-        canStopReply: Boolean(snapshot.cloud?.canStopReply),
-        // 收到整份快照说明连接真的通了：清掉上一轮的失败文案，否则会永久挂在空状态里
-        error: null,
-      })
+    if (!frame || typeof frame !== 'object' || frame.v !== CLOUD_PROTOCOL_VERSION) return
+    if (frame.type === 'ack') {
+      set((state) => ({ lastSeq: Math.max(state.lastSeq, Number(frame.seq ?? 0)) }))
       return
     }
-
-    if (frame.type === 'event') {
-      const event = frame.event ?? {}
-      const seqPatch = (state: CloudState): Partial<CloudState> =>
-        typeof frame.seq === 'number' && frame.seq > state.lastSeq ? { lastSeq: frame.seq } : {}
-      switch (event.type) {
-        case 'message_start': {
-          const id = String(event.messageId ?? messageId())
-          const isUser = event.role === 'user'
-          set((state) => {
-            const seq = seqPatch(state)
-            if (state.messages.some((row) => row.id === id)) return seq
-            // 服务端回显的用户消息 id 是 `u-<clientMessageId>`，而本端已经乐观追加过一条
-            // 以 clientMessageId 为 id 的气泡；这里把本地那条的 id 改成服务端 id，
-            // 否则同一个句子会出现两个气泡（后续 message_end / 编辑也找不到它）
-            if (isUser && id.startsWith(USER_ECHO_PREFIX)) {
-              const localId = id.slice(USER_ECHO_PREFIX.length)
-              const index = state.messages.findIndex((row) => row.id === localId)
-              if (index >= 0) {
-                const messages = state.messages.slice()
-                messages[index] = { ...messages[index], id }
-                return { ...seq, messages }
-              }
-            }
-            if (!isUser) {
-              // 工具先于正文到达时会先建一条 pendingTrace 占位行；正文开始时原地复用，避免出现双气泡与永久 streaming
-              const lastIndex = state.messages.length - 1
-              const last = state.messages[lastIndex]
-              if (last && last.role === 'assistant' && last.pendingTrace && !last.text) {
-                const messages = state.messages.slice()
-                messages[lastIndex] = {
-                  ...last,
-                  id,
-                  at: Number(event.at ?? last.at),
-                  streaming: true,
-                  pendingTrace: false,
-                }
-                return { ...seq, messages }
-              }
-            }
-            return {
-              ...seq,
-              messages: [
-                ...state.messages,
-                {
-                  id,
-                  role: isUser ? ('user' as const) : ('assistant' as const),
-                  text: '',
-                  at: Number(event.at ?? Date.now()),
-                  streaming: !isUser,
-                  traces: [],
-                },
-              ].slice(-400),
-            }
-          })
-          return
-        }
-        case 'text_delta': {
-          const delta = String(event.delta ?? '')
-          if (!delta) {
-            if (typeof frame.seq === 'number') {
-              set((state) => seqPatch(state))
-            }
-            return
-          }
-          set((state) => {
-            const messages = state.messages.slice()
-            const targetId = String(event.messageId ?? '')
-            // 流式期间用户插话会把 user 气泡插在末尾；优先按 messageId 匹配避免复制同 id 气泡
-            let targetIndex = -1
-            if (targetId) {
-              for (let i = messages.length - 1; i >= 0; i -= 1) {
-                if (messages[i].id === targetId) {
-                  targetIndex = i
-                  break
-                }
-              }
-            }
-            if (targetIndex < 0) {
-              const last = messages[messages.length - 1]
-              if (last && last.role === 'assistant' && last.streaming) {
-                targetIndex = messages.length - 1
-              }
-            }
-            if (targetIndex >= 0) {
-              const target = messages[targetIndex]
-              const now = Date.now()
-              const thinkingDurationMs =
-                target.thinkingStartedAt && target.thinkingDurationMs === undefined
-                  ? Math.max(0, now - target.thinkingStartedAt)
-                  : target.thinkingDurationMs
-              messages[targetIndex] = {
-                ...target,
-                text: target.text + delta,
-                streaming: true,
-                pendingTrace: false,
-                thinkingStartedAt: undefined,
-                ...(thinkingDurationMs !== undefined ? { thinkingDurationMs } : {}),
-              }
-            } else {
-              messages.push({
-                id: targetId || messageId(),
-                role: 'assistant',
-                text: delta,
-                at: Date.now(),
-                streaming: true,
-                traces: [],
-              })
-            }
-            return { ...seqPatch(state), messages: messages.slice(-400) }
-          })
-          return
-        }
-        case 'message_end': {
-          set((state) => {
-            const messages = state.messages.slice()
-            const targetId = String(event.messageId ?? '')
-            const isAssistantUnread =
-              !targetId.startsWith(USER_ECHO_PREFIX) && String(event.text ?? '').trim().length > 0
-            const nextUnread = isAssistantUnread ? state.unreadCount + 1 : state.unreadCount
-            const finalizeRow = (row: CloudChatRow): CloudChatRow => {
-              const now = Date.now()
-              const thinkingDurationMs =
-                row.thinkingStartedAt && row.thinkingDurationMs === undefined
-                  ? Math.max(0, now - row.thinkingStartedAt)
-                  : row.thinkingDurationMs
-              return {
-                ...row,
-                text: String(event.text ?? row.text),
-                streaming: false,
-                pendingTrace: false,
-                thinkingStartedAt: undefined,
-                ...(thinkingDurationMs !== undefined ? { thinkingDurationMs } : {}),
-                error: event.error,
-              }
-            }
-            const byId = targetId ? messages.findIndex((row) => row.id === targetId) : -1
-            if (byId >= 0) {
-              messages[byId] = finalizeRow(messages[byId])
-              return { ...seqPatch(state), messages, unreadCount: nextUnread }
-            }
-            for (let index = messages.length - 1; index >= 0; index -= 1) {
-              const row = messages[index]
-              if (row.role !== 'assistant' || !row.streaming) continue
-              messages[index] = finalizeRow(row)
-              break
-            }
-            return { ...seqPatch(state), messages, unreadCount: nextUnread }
-          })
-          return
-        }
-        case 'trace': {
-          const trace = event.trace ?? {}
-          const traceType = String(trace.type ?? '')
-          if (
-            traceType !== 'thinking_delta' &&
-            traceType !== 'thinking_redacted' &&
-            traceType !== 'tool_start' &&
-            traceType !== 'tool_update' &&
-            traceType !== 'tool_end'
-          ) {
-            if (typeof frame.seq === 'number') set((state) => seqPatch(state))
-            return
-          }
-          set((state) => {
-            const messages = state.messages.slice()
-            const targetId = String(event.messageId ?? '')
-            let rowIndex = -1
-            if (targetId) {
-              for (let i = messages.length - 1; i >= 0; i -= 1) {
-                if (messages[i].id === targetId) {
-                  rowIndex = i
-                  break
-                }
-              }
-            }
-            if (rowIndex < 0) {
-              const lastIndex = messages.length - 1
-              const base = messages[lastIndex]
-              if (base && base.role === 'assistant' && base.streaming) {
-                rowIndex = lastIndex
-              }
-            }
-            const now = Date.now()
-            const row: CloudChatRow =
-              rowIndex >= 0
-                ? messages[rowIndex]
-                : {
-                    id: targetId || messageId(),
-                    role: 'assistant',
-                    text: '',
-                    at: now,
-                    streaming: true,
-                    pendingTrace: !targetId,
-                    traces: [],
-                  }
-
-            let updated: CloudChatRow = row
-            if (traceType === 'thinking_delta') {
-              const delta = String(trace.delta ?? '')
-              if (!delta) return seqPatch(state)
-              updated = {
-                ...row,
-                thinking: (row.thinking ?? '') + delta,
-                thinkingStartedAt: row.thinkingStartedAt ?? now,
-              }
-            } else if (traceType === 'thinking_redacted') {
-              updated = { ...row, thinkingRedacted: true }
-            } else {
-              const traces = row.traces.slice()
-              const id = String(trace.toolCallId ?? '')
-              const index = traces.findIndex((item) => item.id === id)
-              const closedDuration =
-                row.thinkingStartedAt && row.thinkingDurationMs === undefined
-                  ? Math.max(0, now - row.thinkingStartedAt)
-                  : row.thinkingDurationMs
-              if (traceType === 'tool_start') {
-                const nextTrace: CloudTraceRow = {
-                  id,
-                  toolName: String(trace.toolName ?? 'tool'),
-                  summary: String(trace.argsSummary ?? ''),
-                  status: 'running',
-                }
-                if (index >= 0) traces[index] = nextTrace
-                else traces.push(nextTrace)
-              } else if (traceType === 'tool_update' && index >= 0) {
-                traces[index] = {
-                  ...traces[index],
-                  resultPreview:
-                    typeof trace.resultPreview === 'string'
-                      ? trace.resultPreview
-                      : traces[index].resultPreview,
-                }
-              } else if (traceType === 'tool_end' && index >= 0) {
-                traces[index] = {
-                  ...traces[index],
-                  status: trace.status === 'error' ? 'error' : 'ok',
-                  summary: String(trace.resultPreview ?? traces[index].summary),
-                  ...(typeof trace.durationMs === 'number' ? { durationMs: trace.durationMs } : {}),
-                  ...(typeof trace.resultPreview === 'string'
-                    ? { resultPreview: trace.resultPreview }
-                    : {}),
-                }
-              }
-              updated = {
-                ...row,
-                thinkingStartedAt: undefined,
-                ...(closedDuration !== undefined ? { thinkingDurationMs: closedDuration } : {}),
-                traces: traces.slice(-30),
-              }
-            }
-
-            if (rowIndex >= 0) messages[rowIndex] = updated
-            else messages.push(updated)
-            return { ...seqPatch(state), messages: messages.slice(-400) }
-          })
-          return
-        }
-        case 'cloud_status':
-          set((state) => ({
-            ...seqPatch(state),
-            agentStatus: event.status ?? 'idle',
-            canStopReply: event.status === 'thinking' || event.status === 'replying',
-          }))
-          return
-        case 'task': {
-          const row = toTaskRow(event.task)
-          set((state) => {
-            if (!row) return seqPatch(state)
-            const active =
-              row.status === 'queued' ||
-              row.status === 'assigned' ||
-              row.status === 'running' ||
-              row.status === 'waiting_human'
-            let stoppingTaskIds = state.stoppingTaskIds
-            if (!active && stoppingTaskIds[row.id]) {
-              stoppingTaskIds = { ...stoppingTaskIds }
-              delete stoppingTaskIds[row.id]
-            }
-            return {
-              ...seqPatch(state),
-              tasks: upsertById(state.tasks, row),
-              stoppingTaskIds,
-            }
-          })
-          return
-        }
-        case 'device': {
-          const device = event.device
-          if (!device) {
-            if (typeof frame.seq === 'number') set((state) => seqPatch(state))
-            return
-          }
-          set((state) => ({
-            ...seqPatch(state),
-            devices: upsertById(state.devices, {
-              id: String(device.id ?? ''),
-              name: String(device.name ?? device.id ?? ''),
-              platform: String(device.platform ?? ''),
-              online: Boolean(device.online),
-              workspaces: Array.isArray(device.workspaces) ? device.workspaces : [],
-              lastSeenAt: device.lastSeenAt,
-            }),
-          }))
-          return
-        }
-        case 'unit': {
-          const row = toUnitRow(event.unit)
-          set((state) => ({
-            ...seqPatch(state),
-            ...(row ? { units: upsertUnit(state.units, row) } : {}),
-          }))
-          return
-        }
-        case 'notice': {
-          set((state) => ({
-            ...seqPatch(state),
-            notices: [
-              {
-                level: event.level ?? 'info',
-                text: String(event.text ?? ''),
-                at: Number(event.at ?? Date.now()),
-                key: event.key,
-              },
-              ...state.notices,
-            ].slice(0, 20),
-          }))
-          return
-        }
-        case 'read_state': {
-          set((state) => {
-            const unreadCount = Number(event.unreadCount ?? 0)
-            const seq = seqPatch(state)
-            const reportedReadSeq = Number(event.lastReadSeq ?? state.lastReadSeq)
-            const nextLastReadSeq =
-              unreadCount === 0 && typeof frame.seq === 'number'
-                ? Math.max(reportedReadSeq, frame.seq)
-                : reportedReadSeq
-            return {
-              ...seq,
-              lastReadSeq: nextLastReadSeq,
-              unreadCount,
-            }
-          })
-          return
-        }
-        default:
-          if (typeof frame.seq === 'number') set((state) => seqPatch(state))
-          return
+    set((state) => {
+      const applied = applyCloudFrame(pickSessionSlice(state), frame, {
+        matchOptimisticUserEcho: true,
+        incrementUnreadOnEvents: true,
+      })
+      if (frame.type === 'snapshot') {
+        // 收到整份快照说明连接真的通了：清掉上一轮的失败文案，否则会永久挂在空状态里
+        return { ...applied.state, error: null }
       }
-    }
-
-    if (frame.type === 'error') {
-      set({ error: String(frame.message ?? 'cloud error') })
-    }
-    if (frame.type === 'ack') {
-      set({ lastSeq: Math.max(get().lastSeq, Number(frame.seq ?? 0)) })
-    }
+      if (applied.frameError) {
+        return { ...applied.state, error: applied.frameError }
+      }
+      return applied.state
+    })
   },
 
   applyDeviceState: (state) => set({ deviceState: state }),
   applyClientState: (state) => set({ clientState: state }),
 }))
 
-/** 判断两行是不是同一个对象引用（trace 里用来决定追加还是覆盖） */
-
 export function selectRunningTasks(state: CloudState): CloudTaskRow[] {
   return state.tasks.filter(
-    (task) => task.status === 'assigned' || task.status === 'running' || task.status === 'waiting_human'
+    (task) =>
+      task.status === 'assigned' || task.status === 'running' || task.status === 'waiting_human'
   )
 }
 
-export type { CloudChatRow, CloudTraceRow }
+export type {
+  CloudAuthorizationRow,
+  CloudAwaySummaryRow,
+  CloudChatRow,
+  CloudDeviceRow,
+  CloudNotice,
+  CloudTraceRow,
+  CloudUnitRow,
+}

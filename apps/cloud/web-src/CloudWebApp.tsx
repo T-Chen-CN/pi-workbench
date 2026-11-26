@@ -1,5 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Cloud, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
+import {
+  Button,
+  Caption,
+  DataText,
+  EmptyState,
+  Field,
+  Input,
+  StatusText,
+  Tab,
+  Textarea,
+} from '@pi-workbench/cloud-ui'
 import { BrandSeal } from '../../../src/components/BrandSeal'
 import { CloudTraceSection } from '../../../src/components/CloudTraceSection'
 import { StreamdownView } from '../../../src/components/StreamdownView'
@@ -7,8 +18,6 @@ import {
   StreamingTranscript,
   type StreamingTranscriptHandle,
 } from '../../../src/components/StreamingTranscript'
-import { StatusText, Tab } from '../../../src/components/patterns'
-import { Button, Caption, DataText, EmptyState, Field, Input, Textarea } from '../../../src/components/ui'
 import {
   ACTIVE_TASK_STATUSES,
   AGENT_STATUS_LABELS,
@@ -716,7 +725,7 @@ export const CloudWebApp: React.FC = () => {
               <div className="flex items-center gap-1.5">
                 <Caption className="text-ink-muted">
                   {runningTasks.length === 1
-                    ? `${runningTasks[0].spec?.title || runningTasks[0].id}`
+                    ? `${runningTasks[0].title || runningTasks[0].id}`
                     : `${runningTasks.length} 个工单执行中`}
                 </Caption>
                 {runningTasks.length === 1 && (

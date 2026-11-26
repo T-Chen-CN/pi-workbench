@@ -1,7 +1,6 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Loader2, X, type LucideIcon } from 'lucide-react'
 import { useHostDocument } from '../panelHost/HostContext'
-import { useI18nStore } from '../store/i18nStore'
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
 type ControlSize = 'sm' | 'md'
@@ -264,7 +263,12 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
   useEffect(() => {
     if (!open) return
     const doc = menuRef.current?.ownerDocument ?? document
-    const previousFocus = doc.activeElement instanceof HTMLElement ? doc.activeElement : null
+    const activeEl = doc.activeElement
+    // 跨拆窗 Realm 时 `instanceof HTMLElement` 永远为 false，改用能力判断以支持拆窗内焦点恢复
+    const previousFocus =
+      activeEl && typeof (activeEl as HTMLElement).focus === 'function'
+        ? (activeEl as HTMLElement)
+        : null
     let restoreFocus = true
 
     const isMenu = role === 'menu'
@@ -288,6 +292,7 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        event.preventDefault()
         event.stopPropagation()
         onClose()
         return
@@ -504,11 +509,10 @@ export const Modal: React.FC<ModalProps> = ({
   children,
   footer,
   size = 'md',
-  closeLabel,
+  closeLabel = 'Close',
   zIndexClass = 'z-40',
 }) => {
   const hostDocument = useHostDocument()
-  const t = useI18nStore((state) => state.t)
   const titleId = useId()
   const dialogRef = useRef<HTMLDivElement | null>(null)
   const onCloseRef = useRef(onClose)
@@ -571,8 +575,6 @@ export const Modal: React.FC<ModalProps> = ({
 
   if (!open) return null
 
-  const resolvedCloseLabel = closeLabel ?? t('close')
-
   return (
     <div className={`fixed inset-0 ${zIndexClass} flex items-center justify-center p-6`}>
       <div className="absolute inset-0 bg-overlay/35" onClick={onClose} />
@@ -589,7 +591,7 @@ export const Modal: React.FC<ModalProps> = ({
             <h2 id={titleId} className="m-0 type-subtitle text-ink">
               {title}
             </h2>
-            <IconButton icon={X} label={resolvedCloseLabel} onClick={onClose} size="sm" />
+            <IconButton icon={X} label={closeLabel} onClick={onClose} size="sm" />
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
