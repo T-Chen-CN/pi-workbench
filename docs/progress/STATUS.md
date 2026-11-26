@@ -14,7 +14,7 @@
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程） |
 | 质量门槛 | `type-check` · `lint` · `npm test`（171 文件 / 1724 用例）· `design-system` 全绿 |
-| 云端 Agent | **P0（C-01）与 P1（C-02 ~ C-07 / P-09）全部落地**：`https://tchen-xiaoxiao.com`（systemd + Caddy + `pi-warp-proxy` + 每日备份），支持脱敏 diff 按需审查、多端已读未读同步与托盘角标、压缩前记忆抽取 + 梦境整理 + `AGENTS.md`/`SOUL.md` 双端可视化编辑、运行中工单 `task_message` 追加指令；剩余仅 P2（`P-02` 云端 OAuth 登录） |
+| 云端 Agent | **P0（C-01）与 P1（C-02 ~ C-07 / P-09）全部落地**：自托管云端实例（systemd + Caddy + 出口代理 + 每日备份），支持脱敏 diff 按需审查、多端已读未读同步与托盘角标、压缩前记忆抽取 + 梦境整理 + `AGENTS.md`/`SOUL.md` 双端可视化编辑、运行中工单 `task_message` 追加指令；剩余仅 P2（`P-02` 云端 OAuth 登录） |
 
 ## 正在做 / 下一步
 

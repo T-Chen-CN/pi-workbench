@@ -191,6 +191,9 @@ pi-workbench/
 │
 ├── tests/                        # 扁平测试目录（文件名与源码同名）
 │
+├── packages/cloud-ui/            # 桌面端与云端 Web 共享 UI（npm workspace，零 Electron / zustand / 桌面 store 依赖）
+│   └── src/                      # types / format / frameReducer / primitives / cards
+│
 ├── apps/cloud/                   # 云端服务（npm workspace，不依赖 Electron）
 │   ├── src/
 │   │   ├── main.ts               # 装配：存储 / 云端会话 / 派活器 / 两条 WS / 静态客户端
@@ -201,9 +204,9 @@ pi-workbench/
 │   │   ├── agent/                # 云端单会话（6 个工具）与 trace 投影
 │   │   ├── auth/                 # scrypt 口令、token 哈希、限速熔断、cookie
 │   │   ├── secure/               # AES-256-GCM 配置加密
-│   │   └── store/                # 原子写 JSON 文档（accounts/devices/tasks/...）
-│   ├── web-src/                  # Web 控制台源码（React + Tailwind + 共用流式渲染原语，本地 Vite 构建到 web-dist/）
-│   └── deploy/                   # systemd 单元、Caddy 片段、每日备份
+│   │   └── store/                # Node 24 node:sqlite (WAL + 独立 task_diffs 表 + 旧 JSON 自动迁移)
+│   ├── web-src/                  # Web 控制台源码（React + Tailwind + @pi-workbench/cloud-ui，本地 Vite 构建到 web-dist/）
+│   └── deploy/                   # systemd 单元、Caddy 片段、每日备份、按需拉取更新脚本
 │
 ├── electron/cloud/               # 终端执行器（device agent），只跑在桌面端主进程
 │   ├── device-agent.ts           # /device/ws、心跳、重连、离线队列、G6 恢复

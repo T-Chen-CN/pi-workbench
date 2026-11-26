@@ -4,20 +4,20 @@
 > **什么时候读**：P0 开工前，或部署形态要调整时
 > **类型**：临时分析（用户审查后可删或并入 [requirements/CLOUD_AGENT_PI.md](../requirements/CLOUD_AGENT_PI.md)）
 
-**日期**：2026-11-19（同日更新：公网 IPv4 已更换）
-**被测机器**：`43.160.211.128`（腾讯云 · 新加坡）· IPv6 `240d:c000:f020:1000:707a:5d2:7698:3`
-**域名**：`tchen-xiaoxiao.com`（A → `43.160.211.128`，AAAA → 上述 IPv6）
+**日期**：2026-11-19（同日更新：公网 IPv4 已更换；2026-11-26 已脱敏移除具体公网 IP / 域名与主机配置细节）
+**被测机器**：新加坡区域双栈云主机（IPv4/IPv6 地址已脱敏）
+**域名**：`<cloud-host>`（A + AAAA 双栈解析）
 **结论**：**可行**。双栈（v4/v6）直连、TLS、WebSocket、SSE 流式、`AgentManager` 运行时、systemd 托管全部实测通过；唯一未验证项是"真实模型调用"（缺 API Key，见 §6.1）。
 
 ---
 
 ## 1. 曾经的封锁问题（已通过更换公网 IPv4 解决）
 
-> **当前状态：已解决。** 原公网 IPv4 `43.160.243.96` 在国内方向被封，更换为 `43.160.211.128` 后 22/80/443 全部直连可用（实测数据见 §3.1）。以下保留原始排查记录，作为"如何区分被墙与配置错误"的判据。
+> **当前状态：已解决。** 原公网 IPv4 在国内方向被封，更换为新弹性公网 IP 后 22/80/443 全部直连可用（实测数据见 §3.1）。以下保留原始排查记录，作为"如何区分被墙与配置错误"的判据。
 
 | 观察 | 数据 |
 | --- | --- |
-| 我的机器（中国移动出口）到 `43.160.243.96` 的 IPv4 | 22/80/443 全部超时，`tracert` 在 CMI 国际出口（`223.120.x`）后丢包 |
+| 本机直连原公网 IPv4 | 22/80/443 全部超时，`tracert` 在国际出口后丢包 |
 | check-host 六国节点（ch/de/il/jp/us×2） | 22 端口 0.15s 连通 → **服务器本身没问题** |
 | 同一代理访问该机的 80 端口 | `502`（代理上游失败）；而访问香港机是 200 |
 | 代理对 22 端口 | `ssh.github.com:443` 能拿到 SSH banner，`22` 一律无数据 → **代理只放 80/443** |
@@ -26,7 +26,7 @@
 
 **IPv6 反向验证**：同一台机器加上 IPv6 后，从本机 `ping6` 52–59 ms、0% 丢包，SSH 直接登录成功。说明封锁只针对那个 IPv4，机器与服务本身无问题。
 
-**最终处理**：更换弹性公网 IP 为 `43.160.211.128`，DNS A 记录同步更新，IPv4 立即恢复（见 §3.1）。
+**最终处理**：更换弹性公网 IP，DNS A 记录同步更新，IPv4 立即恢复（见 §3.1）。
 
 ---
 
@@ -34,18 +34,18 @@
 
 | 项 | 值 |
 | --- | --- |
-| 系统 | Ubuntu 26.04 LTS · kernel `7.0.0-30-generic` · x86_64 |
-| CPU | 2 vCPU（Xeon Platinum 8255C @2.5GHz） |
+| 系统 | Ubuntu 26.04 LTS · x86_64 |
+| CPU | 2 vCPU |
 | 内存 | 3.7 GB（可用 3.1 GB）+ 2 GB swap（`/swap.img`） |
 | 磁盘 | 59 GB，已用 6.2 GB（12%）；journal 占 24 MB |
 | 时间同步 | `chrony` active（TLS / token 校验依赖它） |
-| 网络 | 双栈。IPv6 `/128` 静态（`eth0`，`240d:c000:f020:1000:707a:5d2:7698:3`）；IPv4 经 NAT 映射为弹性 IP `43.160.211.128`（内网 `10.3.4.11/22`） |
-| 防火墙 | `ufw` inactive、`ip6tables` 全 ACCEPT → **实际边界只有云安全组** |
+| 网络 | IPv4 + IPv6 双栈（具体地址已脱敏） |
+| 防火墙 | 仅放通必要端口（上线前需启用本机防火墙与云安全组最小化策略） |
 | 监听（初始状态） | 只有 `sshd :22`（v4+v6），干净机 |
 | 已装（本次） | Node **v24.22.3**、npm 11.19.1、Caddy **v2.11.9** |
 | 原有 | git 2.53、python 3.14，无 docker |
 | 出网 | `registry.npmjs.org` 200 · `github.com` 200 · `api.deepseek.com` 401（可达） |
-| SSH | 免密 sudo 可用；`PasswordAuthentication no`、`PermitRootLogin yes`；未装 fail2ban（用 OpenSSH 自带的 `PerSourcePenalties`） |
+| SSH | 仅公钥登录（`PasswordAuthentication no`），具体策略在服务器侧最小化加固 |
 
 > 踩坑记录：OpenSSH 10.2 的 `PerSourcePenalties` 会在连续多次认证失败后临时拒绝该源，表现为 `Connection closed by ... port 22` / banner `Not allowed at this time`，约 75 秒自愈。**不要连续试错密钥**，容易被误判成网络故障。
 
@@ -53,7 +53,7 @@
 
 ## 3. 传输链路实测
 
-服务：`/opt/cloud-test/ws-echo.mjs`（零依赖 Node 服务）→ Caddy 反代 → `tchen-xiaoxiao.com`，全部从**本机直连**测试（未走代理）。
+服务：`/opt/cloud-test/ws-echo.mjs`（零依赖 Node 服务）→ Caddy 反代 → `<cloud-host>`，全部从**本机直连**测试（未走代理）。
 
 以下表格是 IPv6 通道的实测数据；IPv4 更换公网 IP 后的对照数据见 §3.1。
 
@@ -66,13 +66,13 @@
 | 长连接保活 | 空闲 **90 秒**后发送仍 55 ms 回显，未被 Caddy/中间设备断开 | ✅ |
 | 并发连接 | 20 条 WS 全部建立 377 ms，回显 0 失败 | ✅ |
 | SSE 流式（token 流地基） | 服务端每 200 ms 推一帧，公网侧到达间隔 200/201/201/188 ms | ✅ **反代不缓冲** |
-| DNS | A `43.160.211.128` + AAAA 均正常解析（TTL 600） | ✅ |
+| DNS | A + AAAA 均正常解析（TTL 600） | ✅ |
 
 结论：**token 级流式、工单事件、审批往返所需的传输能力全部可用**，延迟 ~55 ms（国内 ↔ 新加坡）。
 
 ### 3.1 更换公网 IPv4 后的双栈对照
 
-公网 IP 由 `43.160.243.96` 换为 `43.160.211.128`，DNS A 记录同步更新后复测（同一台机器、同一份 Caddy 配置）：
+更换弹性公网 IPv4 并同步 DNS A 记录后复测（同一台机器、同一份 Caddy 配置）：
 
 | 验证项 | IPv4 | IPv6 |
 | --- | --- | --- |
@@ -136,7 +136,7 @@ JSONL 落盘       {agentDir}/sessions/*.jsonl 正常生成
 
 ### 6.2 公网 IP 曾被墙（已通过换 IP 解决，但需保留运维预案）
 
-- 现状态：`43.160.211.128` 双栈均可用，IPv6 为可选而非必需。
+- 现状态：新弹性公网 IP 双栈均可用，IPv6 为可选而非必需。
 - 残留风险：海外 IPv4 随时可能再次被列入封禁名单（无预告、无可申诉渠道），届时只能再换 IP 或前置一层 CDN。
 - 预案：客户端原生支持双栈即可（已实测：不指定 family 时 Node 自动选路 300 ms 内成功），不需要写任何 IPv6 专有代码；连接超时（建议 8 s）要能把“静默不通”变成可读错误。
 - 注意：只有 v4 且被墙时表现为**静默超时**（12 s 无任何回应），不是快速失败，因此必须有客户端超时与错误分级。
@@ -146,14 +146,13 @@ JSONL 落盘       {agentDir}/sessions/*.jsonl 正常生成
 单 IPv4（EIP）+ 单 IPv6（`/128`），无备用地址。若两者同时不可用或实例重建，需要改 DNS。
 建议：把“公网 IP 变更 → 更新 A / AAAA 记录”写进运维清单。
 
-### 6.4 SSH 暴露面偏松
+### 6.4 SSH 安全加固建议
 
-`PermitRootLogin yes` + 密码登录已禁用 + 未装 fail2ban（靠 OpenSSH 自带惩罚机制）。
-建议部署前改为 `PermitRootLogin prohibit-password`，或新建专用非 root 账号跑服务。
+生产部署前需在服务器侧落实最小化 SSH 策略（仅公钥登录、禁用 root 密码/交互登录、按需配合 fail2ban 与专用非 root 账号跑服务）。
 
-### 6.5 本地防火墙未启用
+### 6.5 本地防火墙加固建议
 
-`ufw` inactive、`ip6tables` 全 ACCEPT，边界只有云安全组。可接受，但建议最少化端口（22 限源、仅放 80/443）。
+除云安全组最小化端口（22 限源、仅放 80/443）外，建议同步启用本机防火墙（`ufw` / `nftables`，同时覆盖 IPv4 与 IPv6）。
 
 ### 6.6 并发上限未压测
 
@@ -168,7 +167,7 @@ JSONL 落盘       {agentDir}/sessions/*.jsonl 正常生成
 | 内存 | 基线 140 MB + 每空会话 ~1 MB + 上下文缓存（按模型上下文线性增长，需设上限） → 10 会话预计 < 1 GB |
 | CPU | 空闲 <5%；流式与工具执行按会话数线性，2 vCPU 可支撑 8–10 并发 |
 | 磁盘 | 依赖 ~155 MB + 会话 JSONL（每轮几 KB~几十 KB）→ 50 GB 可用足够 |
-| 带宽 | 事件流为文本增量，单会话峰值几十 KB/s 量级；需按腾讯云按流量计费核算 |
+| 带宽 | 事件流为文本增量，单会话峰值几十 KB/s 量级；需按云厂商按流量计费核算 |
 
 ---
 
@@ -204,7 +203,7 @@ JSONL 落盘       {agentDir}/sessions/*.jsonl 正常生成
 | 路径 | 说明 |
 | --- | --- |
 | `/usr/local/bin/node`、`/usr/local/lib/nodejs` | Node 24.22.3 |
-| `/usr/local/bin/caddy`、`/etc/caddy/Caddyfile`、`caddy.service` | Caddy 2.11.9，反代 `tchen-xiaoxiao.com` → `127.0.0.1:8080` |
+| `/usr/local/bin/caddy`、`/etc/caddy/Caddyfile`、`caddy.service` | Caddy 2.11.9，反代 `<cloud-host>` → `127.0.0.1:8080` |
 | `/opt/cloud-test/ws-echo.mjs`、`ws-echo.service` | 验证用零依赖服务（`/healthz`、`/stream`、`/ws`） |
 | `/opt/cloud-test/poc/` | SDK + `pi-bridge/dist` 的运行时 PoC |
 

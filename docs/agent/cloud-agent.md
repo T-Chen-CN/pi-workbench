@@ -252,16 +252,16 @@ PI_CLOUD_PORT=8787 npm run cloud:start
 2. **主动触发服务器拉包上线**（服务器仅装 `/opt/pi-cloud/update.sh`，零构建、零源码、不把 SSH 私钥放 GitHub）：
    ```bash
    # 先确认有新版可拉（只查 manifest，不下包）
-   ssh -i <本机SSH私钥路径> ubuntu@tchen-xiaoxiao.com 'sudo /opt/pi-cloud/update.sh --dry-run'
+   ssh -i <本机SSH私钥路径> ubuntu@<cloud-host> 'sudo /opt/pi-cloud/update.sh --dry-run'
 
    # 确认上线：下载 -> 校验 SHA-256 -> 解压 -> 原子切 current 软链 -> 重启 pi-cloud -> 20s /v1/health 校验（失败自动回滚）-> 保留最近 5 版
-   ssh -i <本机SSH私钥路径> ubuntu@tchen-xiaoxiao.com 'sudo /opt/pi-cloud/update.sh'
+   ssh -i <本机SSH私钥路径> ubuntu@<cloud-host> 'sudo /opt/pi-cloud/update.sh'
    ```
    - 常用参数：`--dry-run`（仅检查）、`--force`（强制重装同 SHA 版本）。若改过 `apps/cloud/deploy/update.sh` 本身，上线后顺手执行 `sudo install -m 755 /opt/pi-cloud/current/deploy/update.sh /opt/pi-cloud/update.sh` 同步脚本。
    - **本机 SSH 私钥注意**：公钥已配在服务器 `ubuntu` 账号；若当前会话未告知本机私钥路径，先向用户索取（严禁写入仓库）。在 Windows 下若私钥文件继承了目录宽权限被 OpenSSH 拒载，不要修改原盘文件权限，可在 `%TEMP%` 建临时副本用 `icacls <tmp> /inheritance:r /grant:r "$env:USERNAME:(R)"` 收紧后执行并在 `finally` 中立即删除。
 3. **上线后验收**：
-   - 检查 `https://tchen-xiaoxiao.com/v1/health` 返回 `{"ok":true,"ready":true,"hasAccount":true}`；
-   - 检查 `https://tchen-xiaoxiao.com/` 返回 `200` 及新 `/assets/index-*.js`。
+   - 检查 `https://<cloud-host>/v1/health` 返回 `{"ok":true,"ready":true,"hasAccount":true}`；
+   - 检查 `https://<cloud-host>/` 返回 `200` 及新 `/assets/index-*.js`。
 
 ### 5.0.1 手工本地打包上传（GitHub 不可用时的兜底）
 
@@ -330,7 +330,7 @@ node apps/cloud/scripts/acceptance.mjs https://<域名>
 
 | 项 | 值 |
 | --- | --- |
-| 域名 / 反代 | `tchen-xiaoxiao.com` → Caddy → `127.0.0.1:8787` |
+| 域名 / 反代 | `<cloud-host>` → Caddy → `127.0.0.1:8787` |
 | 代码 | `/opt/pi-cloud/releases/<ts>` + `current` 软链（当前 `20261126125255-f031b7b`，回滚点 `20261126123544`） |
 | 数据 | `/var/lib/pi-cloud`（属主 `pi-cloud`） |
 | 配置 / 密钥 | `/etc/pi-cloud/env`（`0600 root:root`）；出口代理启用 `NODE_USE_ENV_PROXY=1` + `HTTPS_PROXY=http://127.0.0.1:8118`（`NO_PROXY` 排除本机与国内供应商） |

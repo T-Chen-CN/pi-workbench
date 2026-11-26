@@ -15,7 +15,7 @@ npm run dev        # Vite + Electron（predev 会自动构建 pi-bridge 与主�
 npm test           # Vitest 全量
 npx vitest run tests/<file>.test.ts   # 单个文件（加 -t "<名称>" 只跑一条）
 npm run lint       # ESLint
-npm run type-check # tsc --noEmit + tsconfig.node.json
+npm run type-check # 全仓 7 份 tsconfig（src / tsconfig.node / electron / preload / pi-bridge / cloud / cloud-ui）
 npm run build      # 渲染层 + bridge + 主进程
 ```
 
@@ -31,7 +31,8 @@ npm run build      # 渲染层 + bridge + 主进程
 | `electron/ipc/register.ts` | `handleIpc` + `isTrustedIpcSender`：只接受主窗口与登记过的辅助窗口主框架，ready 之后 fail-closed |
 | `src/` | 渲染进程分层：`components/`（扁平，**禁建子目录**）· `store/`（一域一个 Zustand store）· `hooks/` · `utils/` · `workspace/` · `panelHost/` · `theme/` · `pdf/` · `api/`（IPC 封装 + 浏览器 mock 回退） |
 | `pi-bridge/` | 独立的 Agent 桥接包（`AgentManager`），有自己的 `package.json` / `tsconfig`；改完要 `npm run build:bridge` |
-| `apps/cloud/` | 云端服务（`@pi-workbench/cloud`，进 npm workspaces）：控制面 + 两条 WS + 单会话 + Web 控制台源码（`web-src/`，本地 Vite + React 构建到 `web-dist/`）；`npm run build:cloud`；协议帧在 `pi-bridge/src/cloud-protocol.ts`；推送 `main` 由 `.github/workflows/cloud-release.yml` 自动备包到 `cloud-latest`，**上线需按需手动跑服务器 `/opt/pi-cloud/update.sh`（不设自动重启）**，见 [cloud-agent §5](docs/agent/cloud-agent.md#5-部署与主动更新-sopoptpi-cloud) |
+| `packages/cloud-ui/` | 桌面端与云端 Web 共享 UI workspace（`@pi-workbench/cloud-ui`：类型、WS 帧归并器、Paper & Ink 零桌面 store 原语与共享卡片/弹窗），禁止引入桌面 store / `translations.ts` / Electron |
+| `apps/cloud/` | 云端服务（`@pi-workbench/cloud`，进 npm workspaces）：控制面 + 两条 WS + 单会话 + `node:sqlite` 持久化 + Web 控制台源码（`web-src/`，本地 Vite + React 构建到 `web-dist/`）；`npm run build:cloud`；协议帧在 `pi-bridge/src/cloud-protocol.ts`；推送 `main` 由 `.github/workflows/cloud-release.yml` 自动备包到 `cloud-latest`，**上线需按需手动跑服务器 `/opt/pi-cloud/update.sh`（不设自动重启）**，见 [cloud-agent §5](docs/agent/cloud-agent.md#5-部署与主动更新-sopoptpi-cloud) |
 | `tests/` | 扁平目录，文件名与源码同名（`src/utils/fileTree.ts` → `tests/file-tree.test.ts`）；`tests/design-system.test.ts` 是强制门槛 |
 | `docs/` | 规范原文，`docs/README.md` 是唯一索引 |
 | `electron/cloud/` | 终端执行器（device agent / 工单 worktree / 工具守卫），只跑在桌面端主进程 |
