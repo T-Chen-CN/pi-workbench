@@ -81,3 +81,105 @@ export async function writeModelsConfig(
   await writeJsonAtomicAsync(modelsPath, modelsConfig)
   return modelsPath
 }
+
+/** 自动压缩默认目标占比（85%，留 15% buffer），与主流 Coding Agent 口径对齐 */
+const DEFAULT_COMPACTION_TARGET_RATIO = 0.85
+/** 最小预留 token，保证模型有足够输出与系统开销空间 */
+const MIN_COMPACTION_RESERVE_TOKENS = 16_384
+/** 极小窗口保护：预留不超过总窗口的 35%，避免 32K 以下过早触发压缩 */
+const MAX_COMPACTION_RESERVE_RATIO = 0.35
+const DEFAULT_KEEP_RECENT_TOKENS = 20_000
+const MIN_KEEP_RECENT_TOKENS = 2_048
+
+export interface CompactionThresholds {
+  reserveTokens: number
+  keepRecentTokens: number
+  /** 近似触发百分比（整数，如 85） */
+  triggerPercent: number
+}
+
+/**
+ * 按模型生效的上下文窗口计算自动压缩参数。
+ * - 大窗口（>=128K）：约 85% 触发（留 15% buffer）
+ * - 64K 窗口：75% 触发（留 16,384 tokens）
+ * - 极小窗口（<=32K）：按 35% 上限夹取预留，并同比收缩 keepRecentTokens 避免压不动
+ */
+export function computeCompactionThresholds(contextWindow: number): CompactionThresholds {
+  const windowTokens = Math.max(1, Math.floor(contextWindow))
+  const desiredReserve = Math.max(
+    MIN_COMPACTION_RESERVE_TOKENS,
+    Math.round(windowTokens * (1 - DEFAULT_COMPACTION_TARGET_RATIO))
+  )
+  const reserveTokens = Math.min(
+    desiredReserve,
+    Math.max(1, Math.floor(windowTokens * MAX_COMPACTION_RESERVE_RATIO))
+  )
+  const usableBudget = Math.max(1, windowTokens - reserveTokens)
+  const keepRecentTokens = Math.min(
+    DEFAULT_KEEP_RECENT_TOKENS,
+    Math.max(MIN_KEEP_RECENT_TOKENS, Math.floor(usableBudget * 0.35))
+  )
+  const triggerPercent = Math.max(
+    1,
+    Math.min(99, Math.round(((windowTokens - reserveTokens) / windowTokens) * 100))
+  )
+  return { reserveTokens, keepRecentTokens, triggerPercent }
+}
+
+/**
+ * 将当前供应商各生效模型的自动压缩参数写入 `{agentDir}/settings.json`。
+ * 只更新当前 `providerId/*` 对应的 `compaction.modelOverrides`，保留其他设置项与其他供应商条目。
+ */
+export async function writeCompactionSettings(
+  agentDir: string,
+  providerId: string,
+  models: ReadonlyArray<{ id: string; contextWindow: number }>
+): Promise<string> {
+  const settingsPath = path.join(agentDir, 'settings.json')
+  let existing: Record<string, unknown> = {}
+  try {
+    const raw = await fs.readFile(settingsPath, 'utf-8')
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      existing = parsed as Record<string, unknown>
+    }
+  } catch {
+    existing = {}
+  }
+
+  const currentCompaction =
+    existing.compaction && typeof existing.compaction === 'object' && !Array.isArray(existing.compaction)
+      ? ({ ...(existing.compaction as Record<string, unknown>) } as Record<string, unknown>)
+      : {}
+  const existingOverrides =
+    currentCompaction.modelOverrides &&
+    typeof currentCompaction.modelOverrides === 'object' &&
+    !Array.isArray(currentCompaction.modelOverrides)
+      ? ({ ...(currentCompaction.modelOverrides as Record<string, unknown>) } as Record<
+          string,
+          unknown
+        >)
+      : {}
+
+  const prefix = `${providerId}/`
+  for (const key of Object.keys(existingOverrides)) {
+    if (key.startsWith(prefix)) delete existingOverrides[key]
+  }
+  for (const model of models) {
+    if (!model.id || !Number.isFinite(model.contextWindow) || model.contextWindow <= 0) continue
+    const { reserveTokens, keepRecentTokens } = computeCompactionThresholds(model.contextWindow)
+    existingOverrides[`${providerId}/${model.id}`] = { reserveTokens, keepRecentTokens }
+  }
+
+  const next = {
+    ...existing,
+    compaction: {
+      ...currentCompaction,
+      enabled: currentCompaction.enabled ?? true,
+      modelOverrides: existingOverrides,
+    },
+  }
+  await fs.mkdir(agentDir, { recursive: true })
+  await writeJsonAtomicAsync(settingsPath, next, { backup: false })
+  return settingsPath
+}

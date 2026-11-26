@@ -390,7 +390,9 @@ export function ProviderSettings() {
                             })
                           }
                         >
-                          {limitOptions(model.limits.contextWindow).map((value) => (
+                          {limitOptions(
+                            model.catalogLimits?.contextWindow ?? model.limits.contextWindow
+                          ).map((value) => (
                             <option key={value} value={value}>
                               {formatTokens(value)}
                             </option>
@@ -406,7 +408,10 @@ export function ProviderSettings() {
                           }
                         >
                           {limitOptions(
-                            Math.min(model.limits.maxTokens, model.limits.contextWindow)
+                            Math.min(
+                              model.catalogLimits?.maxTokens ?? model.limits.maxTokens,
+                              model.limits.contextWindow
+                            )
                           ).map((value) => (
                             <option key={value} value={value}>
                               {formatTokens(value)}

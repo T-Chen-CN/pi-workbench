@@ -76,12 +76,13 @@ export function useChatPanelState(props: ChatPanelProps) {
   const contextUsage = conversation?.contextUsage ?? null
   const contextPercent = contextUsage?.percent ?? null
   const contextPercentRounded = contextPercent == null ? null : Math.round(contextPercent)
+  const autoCompactAt = contextUsage?.autoCompactPercent ?? 85
   const contextTone: 'accent' | 'warning' | 'danger' =
     contextPercent == null
       ? 'accent'
-      : contextPercent >= 95
+      : contextPercent >= autoCompactAt
         ? 'danger'
-        : contextPercent >= 80
+        : contextPercent >= Math.max(0, autoCompactAt - 10)
           ? 'warning'
           : 'accent'
   const contextTokensText = contextUsage
@@ -304,6 +305,19 @@ export function useChatPanelState(props: ChatPanelProps) {
     skills: SkillInfo[]
   }>({ templates: [], skills: [] })
   const [configVersion, setConfigVersion] = useState(0)
+  const [agentReadyVersion, setAgentReadyVersion] = useState(0)
+  const pendingConfigReloadRef = useRef(false)
+  const workspaceBusy = useChatStore((state) => {
+    const prefix = `${workspacePath}\u0000`
+    return Object.entries(state.conversations).some(
+      ([key, conv]) => key.startsWith(prefix) && (conv.isLoading || conv.isCompacting)
+    )
+  })
+  const workspaceBusyRef = useRef(workspaceBusy)
+  workspaceBusyRef.current = workspaceBusy
+  const handleAgentReady = useCallback(() => {
+    setAgentReadyVersion((version) => version + 1)
+  }, [])
   const inputRef = useRef<HTMLTextAreaElement>(null)
   /** 以下运行期标记按会话区分，避免同工作区并行会话互相影响 */
   const forceSendKeysRef = useRef(new Set<string>())
@@ -328,6 +342,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     initSeqRef,
     inputRef,
     setInitialized,
+    onAgentReady: handleAgentReady,
     setNeedsApiKey,
     setFatalError,
     setConfiguredImageModels,
@@ -502,7 +517,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     activeKey,
     initialized,
     isLoading,
-    configVersion,
+    configVersion: agentReadyVersion,
     sessionSettings,
     configuredImageModels,
     language,
@@ -609,10 +624,24 @@ export function useChatPanelState(props: ChatPanelProps) {
   ])
 
   useEffect(() => {
-    const onConfigSaved = () => setConfigVersion((version) => version + 1)
+    const onConfigSaved = () => {
+      // 运行中或压缩中延后到本轮结束后再重建，避免打断当前轮（D23）
+      if (workspaceBusyRef.current) {
+        pendingConfigReloadRef.current = true
+        return
+      }
+      setConfigVersion((version) => version + 1)
+    }
     const offConfig = onAppEvent('api-config-saved', onConfigSaved)
     return () => offConfig()
   }, [])
+
+  useEffect(() => {
+    if (!workspaceBusy && pendingConfigReloadRef.current) {
+      pendingConfigReloadRef.current = false
+      setConfigVersion((version) => version + 1)
+    }
+  }, [workspaceBusy])
 
   // 自动重试期间每 250ms 刷新倒计时；重试结束或失败时状态清空、计时器释放
   useEffect(() => {

@@ -76,7 +76,7 @@ async function initializeWorkspaceAgent(
       providerId: active.providerId,
       modelId: active.modelId,
       credentialFingerprint: active.fingerprint,
-      overrides: active.overrides?.[active.modelId],
+      overridesByModel: active.overrides,
     })
 
     if (context.agentRegistry.shouldReuse(workspaceDir, configKey)) {

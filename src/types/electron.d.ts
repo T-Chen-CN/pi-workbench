@@ -1007,6 +1007,8 @@ export interface ProviderModelView {
   id: string
   name: string
   limits: ProviderModelLimits
+  /** 目录原始上限（用于设置下拉允许把已下调的值调回更高档位） */
+  catalogLimits?: ProviderModelLimits
   /** 归一化后的下调值；没有覆盖时不出现 */
   overrides?: ProviderModelOverrides
   reasoning: boolean
@@ -1178,6 +1180,8 @@ export interface ContextUsageInfo {
   tokens: number | null
   contextWindow: number
   percent: number | null
+  /** 触发自动压缩的近似占比（整数百分比） */
+  autoCompactPercent?: number
 }
 
 /** 会话置顶 / 归档元数据 */

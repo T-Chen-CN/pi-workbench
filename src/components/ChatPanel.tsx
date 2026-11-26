@@ -1049,6 +1049,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                           </DataText>
                         </div>
                       </div>
+                      {contextUsage.autoCompactPercent != null && (
+                        <Caption className="mt-2 block text-ink-muted">
+                          {t('contextAutoCompactHint', {
+                            percent: contextUsage.autoCompactPercent,
+                          })}
+                        </Caption>
+                      )}
                       {contextUsage.tokens == null && (
                         <Caption className="mt-2 block text-ink-muted">
                           {t('contextUnknownHint')}

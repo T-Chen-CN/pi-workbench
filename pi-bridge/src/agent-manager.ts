@@ -67,7 +67,12 @@ import {
   extractTitleSourceTexts,
 } from './agent-projections.js'
 import { validateChatImages } from './chat-images.js'
-import { THINKING_LEVELS, writeModelsConfig } from './model-config.js'
+import {
+  THINKING_LEVELS,
+  computeCompactionThresholds,
+  writeCompactionSettings,
+  writeModelsConfig,
+} from './model-config.js'
 import { ensureBashOnPath } from './environment.js'
 import {
   PRESET_PROVIDER_IDS,
@@ -765,6 +770,14 @@ export class AgentManager {
         await this.modelRuntime.refresh({ allowNetwork: false, providers: [providerId] })
       }
       await this.syncRemoteCatalogSnapshot(providerId)
+
+      // 同步按生效容量计算自动压缩阈值到 settings.json，使各档位均在约 85%（小窗口保底）触发
+      const providerModels = this.catalogModels()
+        .map((entry) => ({ id: entry.id, contextWindow: effectiveLimits(entry).contextWindow }))
+        .filter((entry) => entry.contextWindow > 0)
+      if (providerModels.length > 0) {
+        await writeCompactionSettings(this.agentDir, providerId, providerModels)
+      }
 
       // 记录里的模型可能已经不在目录里（上游下架 / 切过供应商）：回落到目录首个（D22）
       const model = this.resolveActiveModel()
@@ -1490,10 +1503,49 @@ export class AgentManager {
   /** 读取当前上下文占用（会话空闲时也有效） */
   async getContextUsage(
     sessionId: string
-  ): Promise<{ success: boolean; usage?: { tokens: number | null; contextWindow: number; percent: number | null }; error?: string }> {
+  ): Promise<{
+    success: boolean
+    usage?: {
+      tokens: number | null
+      contextWindow: number
+      percent: number | null
+      autoCompactPercent?: number
+    }
+    error?: string
+  }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
       const usage = runtime.session.getContextUsage()
+      let autoCompactPercent: number | undefined
+      if (usage && usage.contextWindow > 0) {
+        const settingsManager = (
+          runtime.session as {
+            settingsManager?: {
+              getCompactionSettings?: (model?: unknown) => {
+                enabled?: boolean
+                reserveTokens?: number
+              }
+            }
+          }
+        ).settingsManager
+        const compactionSettings = settingsManager?.getCompactionSettings?.(runtime.session.model)
+        if (compactionSettings) {
+          if (compactionSettings.enabled !== false && typeof compactionSettings.reserveTokens === 'number') {
+            autoCompactPercent = Math.max(
+              1,
+              Math.min(
+                99,
+                Math.round(
+                  ((usage.contextWindow - compactionSettings.reserveTokens) / usage.contextWindow) *
+                    100
+                )
+              )
+            )
+          }
+        } else {
+          autoCompactPercent = computeCompactionThresholds(usage.contextWindow).triggerPercent
+        }
+      }
       return {
         success: true,
         usage: usage
@@ -1501,6 +1553,7 @@ export class AgentManager {
               tokens: usage.tokens ?? null,
               contextWindow: usage.contextWindow,
               percent: usage.percent ?? null,
+              ...(autoCompactPercent !== undefined ? { autoCompactPercent } : {}),
             }
           : undefined,
       }
@@ -1758,6 +1811,47 @@ export class AgentManager {
     return factories
   }
 
+  /**
+   * 为即将创建的会话运行时解析模型：
+   * 若老会话分支里记录了当前供应商下仍可用的模型，优先保留它（同时取新 modelRuntime 里已应用最新 overrides 的对象），
+   * 避免配置刷新重建 Agent 后把老会话强行重置回全局默认模型。
+   */
+  private resolveSessionInitialModel(sessionManager: SessionManager): Model<Api> | undefined {
+    const providerId = this.config?.apiConfig.providerId
+    if (providerId && this.modelRuntime) {
+      try {
+        const branch = sessionManager.getBranch() as Array<Record<string, any>>
+        for (let index = branch.length - 1; index >= 0; index -= 1) {
+          const entry = branch[index]
+          let recordedProvider: string | undefined
+          let recordedModelId: string | undefined
+          if (entry?.type === 'model_change') {
+            recordedProvider = typeof entry.provider === 'string' ? entry.provider : undefined
+            recordedModelId = typeof entry.modelId === 'string' ? entry.modelId : undefined
+          } else if (entry?.type === 'message' && entry.message?.role === 'assistant') {
+            recordedProvider =
+              typeof entry.message.provider === 'string' ? entry.message.provider : undefined
+            recordedModelId =
+              typeof entry.message.model === 'string' ? entry.message.model : undefined
+          }
+          if (!recordedProvider || !recordedModelId) continue
+          if (recordedProvider !== providerId) break
+          const found = this.modelRuntime.getModel(providerId, recordedModelId)
+          if (found) {
+            const allowed = this.catalogModels()
+            if (allowed.length === 0 || allowed.some((item) => item.id === found.id)) {
+              return found
+            }
+          }
+          break
+        }
+      } catch {
+        // 读取分支失败时回退工作区默认模型
+      }
+    }
+    return this.resolveActiveModel()
+  }
+
   /** 创建（或复用）一个会话运行时 */
   private async createRuntime(sessionManager: SessionManager): Promise<SessionRuntime> {
     const config = this.config
@@ -1768,7 +1862,7 @@ export class AgentManager {
     const existing = this.runtimes.get(id)
     if (existing) return existing
 
-    const model = this.resolveActiveModel()
+    const model = this.resolveSessionInitialModel(sessionManager)
     if (!model) throw new Error('Selected model is unavailable.')
 
     const planContext: { runtime: SessionRuntime | null } = { runtime: null }

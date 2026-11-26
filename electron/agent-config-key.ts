@@ -11,17 +11,46 @@ export interface ProviderConfigKeyInput {
   providerId: string
   modelId: string
   credentialFingerprint: string
+  /** 兼容旧调用方：单模型覆盖，归并到当前 modelId */
   overrides?: ModelOverrides
+  /** 当前 provider 下按模型存的全部覆盖；改任意模型上限都必须触发重建 */
+  overridesByModel?: Record<string, ModelOverrides>
+}
+
+function normalizeOverrideEntry(value: ModelOverrides | undefined): {
+  contextWindow: number | null
+  maxTokens: number | null
+} | null {
+  if (!value) return null
+  const contextWindow = value.contextWindow || null
+  const maxTokens = value.maxTokens || null
+  if (contextWindow === null && maxTokens === null) return null
+  return { contextWindow, maxTokens }
 }
 
 export function providerConfigKey(input: ProviderConfigKeyInput): string {
-  const overrides = input.overrides ?? {}
+  const merged: Record<string, { contextWindow: number | null; maxTokens: number | null }> = {}
+  if (input.overridesByModel) {
+    for (const modelId of Object.keys(input.overridesByModel).sort()) {
+      const normalized = normalizeOverrideEntry(input.overridesByModel[modelId])
+      if (normalized) merged[modelId] = normalized
+    }
+  }
+  const single = normalizeOverrideEntry(input.overrides)
+  if (single) merged[input.modelId] = single
+
+  const sortedOverrides: Record<
+    string,
+    { contextWindow: number | null; maxTokens: number | null }
+  > = {}
+  for (const modelId of Object.keys(merged).sort()) {
+    sortedOverrides[modelId] = merged[modelId]
+  }
+
   return JSON.stringify({
     providerId: input.providerId,
     modelId: input.modelId,
     credentialFingerprint: input.credentialFingerprint,
-    // 字段顺序固定，避免同一份覆盖因键序不同而重建；缺省与 0 均表示使用默认上限
-    contextWindow: overrides.contextWindow || null,
-    maxTokens: overrides.maxTokens || null,
+    overrides: sortedOverrides,
   })
 }

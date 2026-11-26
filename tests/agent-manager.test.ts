@@ -2369,7 +2369,12 @@ describe('context usage and compaction', () => {
 
     await expect(manager.getContextUsage('session-1')).resolves.toEqual({
       success: true,
-      usage: { tokens: 40_000, contextWindow: 96_000, percent: 41.7 },
+      usage: {
+        tokens: 40_000,
+        contextWindow: 96_000,
+        percent: 41.7,
+        autoCompactPercent: 83,
+      },
     })
   })
 
@@ -2520,6 +2525,68 @@ describe('context usage and compaction', () => {
     expect(chatResult.success).toBe(false)
     expect(chatResult.compactionFailed).toBe(true)
     expect(promptSpy).not.toHaveBeenCalled()
+  })
+
+  it('preserves the recorded session model on reopen instead of resetting to workspace default', async () => {
+    const session = createFakeSession()
+    primeSdk(session)
+    const baseSm = sdk.continueRecent.mock.results[0]?.value ?? sdk.continueRecent()
+    sdk.continueRecent.mockReturnValue({
+      ...baseSm,
+      getBranch: () => [
+        {
+          type: 'model_change',
+          id: 'm1',
+          parentId: null,
+          provider: 'deepseek',
+          modelId: 'deepseek-v4-pro',
+        },
+      ],
+    })
+    const altModel = {
+      id: 'deepseek-v4-pro',
+      name: 'DeepSeek V4 Pro',
+      api: 'openai-completions',
+      provider: 'deepseek',
+      contextWindow: 65_536,
+      maxTokens: 8_192,
+      reasoning: true,
+      input: ['text'],
+    }
+    sdk.modelRuntimeCreate.mockResolvedValue({
+      getModel: (_provider: string, id: string) =>
+        id === 'deepseek-v4-pro'
+          ? altModel
+          : {
+              id,
+              name: id,
+              api: 'openai-completions',
+              provider: 'deepseek',
+              contextWindow: 131_072,
+              maxTokens: 16_384,
+              reasoning: false,
+              input: ['text'],
+            },
+      getModels: () => [
+        altModel,
+        {
+          id: 'test-model',
+          name: 'test-model',
+          api: 'openai-completions',
+          provider: 'deepseek',
+          contextWindow: 131_072,
+          maxTokens: 16_384,
+          reasoning: false,
+          input: ['text'],
+        },
+      ],
+    })
+
+    await manager.initialize(makeConfig())
+    const calls = sdk.createAgentSession.mock.calls
+    const createArgs = calls[calls.length - 1]?.[0]
+    expect(createArgs?.model?.id).toBe('deepseek-v4-pro')
+    expect(createArgs?.model?.contextWindow).toBe(65_536)
   })
 })
 

@@ -86,7 +86,12 @@ export interface RegisteredAgent {
   /** 上下文占用 */
   getContextUsage?: (sessionId: string) => Promise<{
     success: boolean
-    usage?: { tokens: number | null; contextWindow: number; percent: number | null }
+    usage?: {
+      tokens: number | null
+      contextWindow: number
+      percent: number | null
+      autoCompactPercent?: number
+    }
     error?: string
   }>
   /** 手动压缩上下文 */

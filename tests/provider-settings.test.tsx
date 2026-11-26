@@ -143,4 +143,33 @@ describe('ProviderSettings（P-04 / P-06 / P-10）', () => {
     const refreshButton = screen.getByRole('button', { name: '刷新模型目录' }) as HTMLButtonElement
     expect(refreshButton.disabled).toBe(true)
   })
+
+  it('下调上下文容量后下拉框仍保留直到目录上限的更高档位', async () => {
+    vi.mocked(api.providersList).mockResolvedValueOnce({
+      success: true,
+      providers: [
+        {
+          ...sampleProviders[0],
+          models: [
+            {
+              ...sampleProviders[0].models[0],
+              limits: { contextWindow: 65_536, maxTokens: 16_384 },
+              catalogLimits: { contextWindow: 262_144, maxTokens: 32_768 },
+              overrides: { contextWindow: 65_536, maxTokens: 16_384 },
+            },
+          ],
+        },
+      ],
+      activeProvider: 'openai',
+      offline: false,
+      builtinGeneratedAt: Date.UTC(2026, 9, 15),
+    })
+
+    render(<ProviderSettings />)
+    const contextSelect = (await screen.findByLabelText('gpt-5 上下文容量')) as HTMLSelectElement
+    const optionValues = Array.from(contextSelect.options).map((option) => Number(option.value))
+    expect(optionValues).toContain(65_536)
+    expect(optionValues).toContain(131_072)
+    expect(optionValues).toContain(262_144)
+  })
 })

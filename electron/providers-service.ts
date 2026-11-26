@@ -63,6 +63,8 @@ export interface ProviderModelView {
   id: string
   name: string
   limits: ModelLimits
+  /** 目录原始上限（用于设置下拉允许把已下调的值调回更高档位） */
+  catalogLimits?: ModelLimits
   /** 归一化后的下调值；缺省 = 跟 catalog 一致 */
   overrides?: ModelOverrides
   reasoning: boolean
@@ -181,6 +183,7 @@ function modelView(model: Model<Api>, overrides: ModelOverrides | undefined): Pr
     id: model.id,
     name: model.name ?? model.id,
     limits: resolveLimits(catalog, overrides),
+    catalogLimits: catalog,
     ...(Object.keys(normalized).length > 0 ? { overrides: normalized } : {}),
     reasoning: model.reasoning === true,
     vision: Array.isArray(model.input) && model.input.includes('image'),

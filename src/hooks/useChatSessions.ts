@@ -25,6 +25,7 @@ export interface ChatSessionsOptions {
   initSeqRef: MutableRefObject<number>
   inputRef: RefObject<HTMLTextAreaElement | null>
   setInitialized: (value: boolean) => void
+  onAgentReady?: () => void
   setNeedsApiKey: (value: boolean) => void
   setFatalError: (value: string | null) => void
   setConfiguredImageModels: (value: string[]) => void
@@ -53,6 +54,7 @@ export function useChatSessions(options: ChatSessionsOptions) {
     initSeqRef,
     inputRef,
     setInitialized,
+    onAgentReady,
     setNeedsApiKey,
     setFatalError,
     setConfiguredImageModels,
@@ -207,6 +209,7 @@ export function useChatSessions(options: ChatSessionsOptions) {
         }
 
         setInitialized(true)
+        onAgentReady?.()
         persistTabs()
 
         const pending = useChatStore.getState().pendingDraft
@@ -243,7 +246,7 @@ export function useChatSessions(options: ChatSessionsOptions) {
       initSeqRef.current++
       offTitle()
     }
-  }, [workspacePath, loadHistory, persistTabs, t, configVersion, initSeqRef, inputRef,  setConfiguredImageModels, setFatalError, setInitialized, setNeedsApiKey])
+  }, [workspacePath, loadHistory, persistTabs, t, configVersion, initSeqRef, inputRef, setConfiguredImageModels, setFatalError, setInitialized, onAgentReady, setNeedsApiKey])
 
   const openSessionById = useCallback(
     async (sessionId: string, showError = true): Promise<boolean> => {

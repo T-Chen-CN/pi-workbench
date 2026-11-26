@@ -12,6 +12,10 @@ import {
 } from '../pi-bridge/src/providers-config'
 import { createFileCredentialStore } from '../pi-bridge/src/credentials-store'
 import { normalizeOverrides, resolveLimits } from '../pi-bridge/src/provider-presets'
+import {
+  computeCompactionThresholds,
+  writeCompactionSettings,
+} from '../pi-bridge/src/model-config'
 import { providerConfigKey } from '../electron/agent-config-key'
 
 const PREFIX = 'enc:'
@@ -317,10 +321,94 @@ describe('供应商配置', () => {
       expect(
         providerConfigKey({ ...base, overrides: { contextWindow: 1, maxTokens: 2 } })
       ).toBe(providerConfigKey({ ...base, overrides: { maxTokens: 2, contextWindow: 1 } }))
+      // 改非默认模型的上下文上限也要改变签名，确保老会话会重建并刷新 models.json
+      expect(
+        providerConfigKey({
+          ...base,
+          overridesByModel: { 'deepseek-v4-pro': { contextWindow: 65_536 } },
+        })
+      ).not.toBe(providerConfigKey(base))
+      expect(
+        providerConfigKey({
+          ...base,
+          overridesByModel: {
+            'deepseek-v4-pro': { contextWindow: 65_536 },
+            'deepseek-flash': { maxTokens: 8_192 },
+          },
+        })
+      ).toBe(
+        providerConfigKey({
+          ...base,
+          overridesByModel: {
+            'deepseek-flash': { maxTokens: 8_192 },
+            'deepseek-v4-pro': { contextWindow: 65_536 },
+          },
+        })
+      )
       // OAuth 刷新不改指纹 → 不触发重建
       expect(providerConfigKey({ ...base, credentialFingerprint: 'oauth' })).toBe(
         providerConfigKey({ ...base, credentialFingerprint: 'oauth' })
       )
+    })
+
+    it('computeCompactionThresholds 按 85% 与小窗口下限计算自动压缩参数', () => {
+      expect(computeCompactionThresholds(1_000_000)).toMatchObject({
+        reserveTokens: 150_000,
+        keepRecentTokens: 20_000,
+        triggerPercent: 85,
+      })
+      expect(computeCompactionThresholds(262_144)).toMatchObject({
+        reserveTokens: 39_322,
+        keepRecentTokens: 20_000,
+        triggerPercent: 85,
+      })
+      expect(computeCompactionThresholds(131_072)).toMatchObject({
+        reserveTokens: 19_661,
+        keepRecentTokens: 20_000,
+        triggerPercent: 85,
+      })
+      expect(computeCompactionThresholds(65_536)).toMatchObject({
+        reserveTokens: 16_384,
+        triggerPercent: 75,
+      })
+      const small = computeCompactionThresholds(32_768)
+      expect(small.triggerPercent).toBe(65)
+      expect(small.keepRecentTokens).toBeLessThan(32_768 - small.reserveTokens)
+    })
+
+    it('writeCompactionSettings 写入当前供应商模型覆盖并保留其他设置', async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-compaction-settings-'))
+      try {
+        await fs.writeFile(
+          path.join(dir, 'settings.json'),
+          JSON.stringify({
+            theme: 'dark',
+            compaction: {
+              modelOverrides: {
+                'openai/gpt-5.4': { reserveTokens: 30_000, keepRecentTokens: 20_000 },
+                'deepseek/stale-model': { reserveTokens: 16_384, keepRecentTokens: 20_000 },
+              },
+            },
+          })
+        )
+        const file = await writeCompactionSettings(dir, 'deepseek', [
+          { id: 'deepseek-flash', contextWindow: 262_144 },
+        ])
+        const saved = JSON.parse(await fs.readFile(file, 'utf-8'))
+        expect(saved.theme).toBe('dark')
+        expect(saved.compaction.enabled).toBe(true)
+        expect(saved.compaction.modelOverrides['openai/gpt-5.4']).toEqual({
+          reserveTokens: 30_000,
+          keepRecentTokens: 20_000,
+        })
+        expect(saved.compaction.modelOverrides['deepseek/stale-model']).toBeUndefined()
+        expect(saved.compaction.modelOverrides['deepseek/deepseek-flash']).toEqual({
+          reserveTokens: 39_322,
+          keepRecentTokens: 20_000,
+        })
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+      }
     })
   })
 })
