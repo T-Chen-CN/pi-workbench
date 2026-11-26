@@ -71,6 +71,7 @@ export function useChatPanelState(props: ChatPanelProps) {
   )
   const messages = conversation?.messages ?? EMPTY_MESSAGES
   const isLoading = conversation?.isLoading ?? false
+  const isCompacting = conversation?.isCompacting ?? false
   const pendingMessages = conversation?.pending ?? []
   const contextUsage = conversation?.contextUsage ?? null
   const contextPercent = contextUsage?.percent ?? null
@@ -678,6 +679,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     key: string,
     item: import('../store/chatStore').PendingMessage
   ) => {
+    if (useChatStore.getState().conversations[key]?.isCompacting) return
     // 插话也走同一套上下文块：附件否则会随输入框消费而凭空消失
     const steerEntries = item.attachments ? attachmentsToContextEntries(item.attachments) : []
     const steerText =
@@ -856,7 +858,7 @@ export function useChatPanelState(props: ChatPanelProps) {
       )
     }
 
-    // 运行中：按设置默认值排队到下一轮，或立即插入当前轮
+    // 运行中：按设置默认值排队到下一轮，或立即插入当前轮（压缩期间暂不插话，等压缩结束再续）
     if (isLoading && !forceSendKeysRef.current.has(key)) {
       chat.setDraftInput(key, '')
       // 附件随排队项一起带走，否则排队会让本轮附件凭空消失
@@ -864,13 +866,19 @@ export function useChatPanelState(props: ChatPanelProps) {
         (attachment) => attachment.kind !== 'image'
       )
       const item = chat.addPending(key, userMessage, promptImages, pendingAttachments)
-      if (useSettingsStore.getState().runWhileBusy === 'steer') {
+      if (
+        !useChatStore.getState().conversations[key]?.isCompacting &&
+        useSettingsStore.getState().runWhileBusy === 'steer'
+      ) {
         void sendSteer(sessionId, key, item)
       }
       return
     }
     // 真正发出这一轮才复位开关：排队期间保留，下一轮仍带上当前文档
-    if (takeComposerAttachments && chat.conversations[key]?.quoteCurrentFile) {
+    const hadQuoteCurrentFile = Boolean(
+      takeComposerAttachments && chat.conversations[key]?.quoteCurrentFile
+    )
+    if (hadQuoteCurrentFile) {
       chat.setQuoteCurrentFile(key, false)
     }
     forceSendKeysRef.current.delete(key)
@@ -899,6 +907,7 @@ export function useChatPanelState(props: ChatPanelProps) {
       snippetChars += content.length
       return true
     })
+    let addedUserMessageId: string | null = null
     if (!options?.skipUserMessage) {
       const attachmentCount = acceptedAttachments.filter(
         (attachment) => attachment.kind !== 'image'
@@ -908,7 +917,7 @@ export function useChatPanelState(props: ChatPanelProps) {
         acceptedAttachments,
         quoteFile ? [{ path: quoteFile.path, name: quoteFile.name }] : []
       )
-      chat.addMessage(key, {
+      addedUserMessageId = chat.addMessage(key, {
         role: 'user',
         // 有引用 / 附件时由气泡里的 chip 表达，不再用占位文案；纯文本除外
         content:
@@ -929,6 +938,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     scrollToBottomRef.current()
 
     const assistantId = chat.startStreamingMessage(key)
+    let autoCompacting = false
     // 文本 / 思考 / 工具事件共用一条有序缓冲，50ms 合并，保证 parts 顺序
     const traceBuffer = createTraceBuffer((events) => {
       const store = useChatStore.getState()
@@ -965,10 +975,18 @@ export function useChatPanelState(props: ChatPanelProps) {
             store.setRetryStatus(key, null)
             break
           case 'compaction_start':
+            autoCompacting = true
+            store.setCompacting(key, true)
             break
           case 'compaction_end': {
-            // 失败或被取消的压缩不产生分隔线
-            if (event.error || event.aborted) break
+            autoCompacting = false
+            store.setCompacting(key, false)
+            if (event.error) {
+              toast.error(t('compactFailed', { error: localizeError(event.error) }))
+              break
+            }
+            // 被取消的压缩不产生分隔线
+            if (event.aborted) break
             store.appendCompactionPart(key, {
               type: 'compaction',
               id: `compaction-${event.entryId ?? event.timestamp ?? Date.now()}`,
@@ -994,6 +1012,7 @@ export function useChatPanelState(props: ChatPanelProps) {
       }
     })
     let succeeded = false
+    let abortedByCompaction = false
 
     try {
       const contextEntries: ContextEntry[] = attachmentsToContextEntries(acceptedAttachments)
@@ -1038,6 +1057,31 @@ export function useChatPanelState(props: ChatPanelProps) {
         if (result.plan) {
           useChatStore.getState().appendPlanPart(key, assistantId, result.plan)
         }
+      } else if (result.compactionFailed) {
+        // 前置手动压缩失败：未发给模型的消息从对话流撤回并退回输入框，失败提醒由压缩流程弹出
+        abortedByCompaction = true
+        const latestStore = useChatStore.getState()
+        if (addedUserMessageId) latestStore.removeMessage(key, addedUserMessageId)
+        latestStore.removeMessage(key, assistantId)
+        latestStore.setError(key, null)
+        useSessionStore.getState().markError(workspacePath, sessionId, null)
+        const currentDraft = latestStore.conversations[key]?.draftInput ?? ''
+        const restoredDraft = userMessage
+          ? currentDraft
+            ? `${userMessage}\n${currentDraft}`
+            : userMessage
+          : currentDraft
+        if (restoredDraft !== currentDraft) {
+          latestStore.setDraftInput(key, restoredDraft)
+        }
+        if (takeComposerAttachments && composerAttachments.length > 0) {
+          for (const attachment of composerAttachments) {
+            latestStore.addAttachment(key, attachment)
+          }
+        }
+        if (hadQuoteCurrentFile) {
+          latestStore.setQuoteCurrentFile(key, true)
+        }
       } else {
         const errorMessage = describeAgentFailure(result)
         if (stoppedKeysRef.current.has(key)) {
@@ -1062,15 +1106,18 @@ export function useChatPanelState(props: ChatPanelProps) {
       }
     } finally {
       traceBuffer.dispose()
+      if (autoCompacting) {
+        useChatStore.getState().setCompacting(key, false)
+      }
       useChatStore.getState().setLoading(key, false)
       useSessionStore.getState().markStreaming(workspacePath, sessionId, false)
       useChatStore.getState().setRetryStatus(key, null)
       void refreshContextUsage(sessionId)
       void refreshSessionStats(sessionId)
 
-      // 本轮结束：自动发送下一条待发送消息（用户主动停止时不自动发送；走 submitRef 避免陈旧闭包）
+      // 本轮结束：自动发送下一条待发送消息（用户主动停止或前置压缩失败时不自动发送；走 submitRef 避免陈旧闭包）
       const queued = useChatStore.getState().conversations[key]?.pending[0]
-      if (queued && !stoppedKeysRef.current.has(key)) {
+      if (queued && !stoppedKeysRef.current.has(key) && !abortedByCompaction) {
         useChatStore.getState().removePending(key, queued.id)
         forceSendKeysRef.current.add(key)
         // 附件在入队时已转入排队项，重发只带排队项自己的图片与附件
@@ -1123,8 +1170,11 @@ export function useChatPanelState(props: ChatPanelProps) {
 
   const handleStop = async () => {
     if (!activeSessionId || stopping) return
+    const key = conversationKey(workspacePath, activeSessionId)
+    // 压缩过程不可终止
+    if (useChatStore.getState().conversations[key]?.isCompacting) return
     setStopping(true)
-    stoppedKeysRef.current.add(conversationKey(workspacePath, activeSessionId))
+    stoppedKeysRef.current.add(key)
     try {
       await piAgentAPI.abort(workspacePath, activeSessionId)
     } finally {
@@ -1380,6 +1430,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     input,
     inputRef,
     insertSlashItem,
+    isCompacting,
     isLoading,
     lastAssistantMessage,
     lastMessageId,

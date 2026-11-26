@@ -3,6 +3,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AgentParts } from '../src/components/AgentTrace'
 import { ChatMessageRow } from '../src/components/ChatMessageRow'
+import { ChatTranscript } from '../src/components/ChatTranscript'
 import type { ChatMessage } from '../src/store/chatStore'
 import { useI18nStore } from '../src/store/i18nStore'
 import { translations } from '../src/i18n/translations'
@@ -85,6 +86,50 @@ describe('compaction divider rendering', () => {
 
     expect(screen.getByRole('separator')).toBeTruthy()
     expect(screen.queryByText(translations.zh.piAgent)).toBeNull()
+  })
+
+  it('shows compacting indicator in transcript during manual or auto compaction', () => {
+    const t = (key: keyof typeof translations.zh) => translations.zh[key]
+    const fakeVirtualizer = {
+      getVirtualItems: () => [],
+      getTotalSize: () => 0,
+      measureElement: () => {},
+    } as any
+    render(
+      <ChatTranscript
+        activeSessionId="s1"
+        activeKey="ws\u0000s1"
+        handleNewSession={() => {}}
+        t={t}
+        transcriptRef={{ current: null }}
+        handleTranscriptScroll={() => {}}
+        messages={[]}
+        isLoading={false}
+        isCompacting={true}
+        initialized={true}
+        emptySuggestions={[]}
+        inputRef={{ current: null }}
+        virtualizer={fakeVirtualizer}
+        diffToolIds={new Set()}
+        openToolDiff={() => {}}
+        handleCopyMessage={() => {}}
+        handleSwitchBranch={() => {}}
+        handleOpenToolResult={() => {}}
+        latestProposedPlan={null}
+        handleApprovePlan={() => {}}
+        handleRejectPlan={() => {}}
+        lastMessageId={null}
+        lastUserMessageId={null}
+        handleRetryMessage={() => {}}
+        handleEditMessage={() => {}}
+        error={null}
+        fatalError={null}
+        lastAssistantMessage={null}
+      />
+    )
+
+    const indicator = screen.getByTestId('compacting-indicator')
+    expect(indicator.textContent).toContain(translations.zh.compactingContext)
   })
 
   it('keeps the header when the divider shares the turn with text', () => {

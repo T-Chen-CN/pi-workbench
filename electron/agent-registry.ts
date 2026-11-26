@@ -94,6 +94,8 @@ export interface RegisteredAgent {
     success: boolean
     tokensBefore?: number
     estimatedTokensAfter?: number
+    entryId?: string
+    timestamp?: number
     error?: string
   }>
   /** 回退到最后一条用户消息（重试 / 编辑重发） */

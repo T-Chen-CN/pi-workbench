@@ -98,6 +98,8 @@ export interface PendingMessage {
 export interface ConversationState {
   messages: ChatMessage[]
   isLoading: boolean
+  /** 正在执行上下文压缩（手动或自动）；压缩期间不可中止 */
+  isCompacting: boolean
   error: string | null
   attachments: ChatAttachment[]
   draftInput: string
@@ -125,6 +127,7 @@ export interface ConversationState {
 const EMPTY_CONVERSATION: ConversationState = {
   messages: [],
   isLoading: false,
+  isCompacting: false,
   error: null,
   attachments: [],
   draftInput: '',
@@ -155,7 +158,7 @@ interface ChatState {
   removeConversation: (key: string) => void
   setPendingDraft: (value: string, workspacePath?: string) => void
   clearPendingDraft: () => void
-  addMessage: (key: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => void
+  addMessage: (key: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => string
   startStreamingMessage: (key: string) => string
   appendTextPart: (key: string, id: string, delta: string) => void
   appendThinkingPart: (
@@ -212,7 +215,8 @@ interface ChatState {
    */
   appendCompactionPart: (
     key: string,
-    part: Extract<AgentTracePart, { type: 'compaction' }>
+    part: Extract<AgentTracePart, { type: 'compaction' }>,
+    options?: { beforePendingTurn?: boolean }
   ) => void
   /** 按计划 id 更新所有计划卡（R-04） */
   applyPlanUpdate: (key: string, plan: StructuredPlan) => void
@@ -221,6 +225,7 @@ interface ChatState {
   truncateLastTurn: (key: string) => void
   setMessages: (key: string, messages: Array<Omit<ChatMessage, 'id'>>) => void
   setLoading: (key: string, loading: boolean) => void
+  setCompacting: (key: string, compacting: boolean) => void
   setError: (key: string, error: string | null) => void
   reset: () => void
 }
@@ -316,7 +321,8 @@ export const useChatStore = create<ChatState>((set) => ({
       return { conversations }
     }),
 
-  addMessage: (key, message) =>
+  addMessage: (key, message) => {
+    const id = `msg-${Date.now()}-${Math.random()}`
     set((state) => ({
       conversations: {
         ...state.conversations,
@@ -326,13 +332,15 @@ export const useChatStore = create<ChatState>((set) => ({
             ...conversation(state, key).messages,
             {
               ...message,
-              id: `msg-${Date.now()}-${Math.random()}`,
+              id,
               timestamp: Date.now(),
             },
           ],
         },
       },
-    })),
+    }))
+    return id
+  },
 
   startStreamingMessage: (key) => {
     const id = `msg-${Date.now()}-${Math.random()}`
@@ -694,10 +702,57 @@ export const useChatStore = create<ChatState>((set) => ({
       })
     ),
 
-  appendCompactionPart: (key, part) =>
+  appendCompactionPart: (key, part, options) =>
     set((state) =>
       updateExisting(state, key, (current) => {
+        if (
+          part.entryId &&
+          current.messages.some((msg) =>
+            msg.parts?.some((p) => p.type === 'compaction' && p.entryId === part.entryId)
+          )
+        ) {
+          return current
+        }
         const messages = [...current.messages]
+        // 手动压缩期间若已有新消息在末尾等待续跑，分隔线必须落在这条等待中的用户消息之前，与 JSONL 顺序一致
+        let pendingTurnStart = -1
+        if (options?.beforePendingTurn && messages.length >= 2) {
+          const last = messages[messages.length - 1]
+          const prev = messages[messages.length - 2]
+          if (
+            last.role === 'assistant' &&
+            last.isStreaming &&
+            !last.content &&
+            (!last.parts || last.parts.length === 0) &&
+            prev.role === 'user'
+          ) {
+            pendingTurnStart = messages.length - 2
+          }
+        }
+
+        if (pendingTurnStart >= 0) {
+          let index = -1
+          for (let cursor = pendingTurnStart - 1; cursor >= 0; cursor -= 1) {
+            if (messages[cursor].role === 'assistant') {
+              index = cursor
+              break
+            }
+          }
+          if (index < 0) {
+            messages.splice(pendingTurnStart, 0, {
+              id: `msg-${Date.now()}-${Math.random()}`,
+              role: 'assistant',
+              content: '',
+              timestamp: part.timestamp,
+              parts: [part],
+            })
+          } else {
+            const target = messages[index]
+            messages[index] = { ...target, parts: [...(target.parts ?? []), part] }
+          }
+          return { ...current, messages }
+        }
+
         let index = -1
         for (let cursor = messages.length - 1; cursor >= 0; cursor -= 1) {
           if (messages[cursor].role === 'assistant' && messages[cursor].isStreaming) {
@@ -785,6 +840,11 @@ export const useChatStore = create<ChatState>((set) => ({
   setLoading: (key, loading) =>
     set((state) =>
       updateExisting(state, key, (current) => ({ ...current, isLoading: loading }))
+    ),
+
+  setCompacting: (key, compacting) =>
+    set((state) =>
+      updateExisting(state, key, (current) => ({ ...current, isCompacting: compacting }))
     ),
 
   setError: (key, error) =>

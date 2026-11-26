@@ -254,17 +254,39 @@ export function useChatSessionConfig(params: UseChatSessionConfigParams) {
     void applySessionPermission({ mode: permission.mode, grants: [] })
   }
 
-  /** 手动压缩上下文；运行中不允许 */
+  /** 手动压缩上下文；运行中或已在压缩中不允许重复触发 */
   const handleCompact = async () => {
-    if (!activeSessionId || isLoading) return
+    const sessionId = activeSessionId
+    if (!sessionId || isLoading) return
+    const key = conversationKey(workspacePath, sessionId)
+    if (useChatStore.getState().conversations[key]?.isCompacting) return
     const confirmed = await confirmDialog({ message: t('compactConfirm') })
     if (!confirmed) return
-    const result = await piAgentAPI.compactContext(workspacePath, activeSessionId)
-    if (result.success) {
-      toast.info(t('compactDone'))
-      void refreshContextUsage(activeSessionId)
-    } else {
-      toast.error(t('compactFailed', { error: localizeError(result.error ?? '') }))
+    const current = useChatStore.getState().conversations[key]
+    if (current?.isLoading || current?.isCompacting) return
+    useChatStore.getState().ensureConversation(key)
+    useChatStore.getState().setCompacting(key, true)
+    try {
+      const result = await piAgentAPI.compactContext(workspacePath, sessionId)
+      if (result.success) {
+        useChatStore.getState().appendCompactionPart(
+          key,
+          {
+            type: 'compaction',
+            id: `compaction-${result.entryId ?? result.timestamp ?? Date.now()}`,
+            entryId: result.entryId,
+            timestamp: result.timestamp ?? Date.now(),
+            tokensBefore: result.tokensBefore,
+          },
+          { beforePendingTurn: true }
+        )
+        toast.info(t('compactDone'))
+        void refreshContextUsage(sessionId)
+      } else {
+        toast.error(t('compactFailed', { error: localizeError(result.error ?? '') }))
+      }
+    } finally {
+      useChatStore.getState().setCompacting(key, false)
     }
   }
 

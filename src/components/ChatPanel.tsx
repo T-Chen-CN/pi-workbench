@@ -101,6 +101,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
     input,
     inputRef,
     insertSlashItem,
+    isCompacting,
     isLoading,
     lastAssistantMessage,
     lastMessageId,
@@ -200,6 +201,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
           handleTranscriptScroll={handleTranscriptScroll}
           messages={messages}
           isLoading={isLoading}
+          isCompacting={isCompacting}
           initialized={initialized}
           emptySuggestions={emptySuggestions}
           inputRef={inputRef}
@@ -302,11 +304,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                   {isLoading ? (
                     <button
                       type="button"
+                      disabled={isCompacting}
                       onClick={() => {
-                        if (!activeKey || !activeSessionId) return
+                        if (!activeKey || !activeSessionId || isCompacting) return
                         void sendSteer(activeSessionId, activeKey, item)
                       }}
-                      className="type-caption text-ink-muted transition-colors hover:text-ink"
+                      className="type-caption text-ink-muted transition-colors enabled:hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       {t('insertNow')}
                     </button>
@@ -676,7 +679,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                   </div>
                 )}
               </div>
-              {isLoading && !hasSendableInput ? (
+              {isLoading && !isCompacting && !hasSendableInput ? (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -1054,19 +1057,23 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
                     </div>
                     <button
                       type="button"
-                      disabled={isLoading}
+                      disabled={isLoading || isCompacting}
                       onClick={() => {
                         closeStatusMenu()
                         void handleCompact()
                       }}
                       className="flex w-full items-center gap-2 border-t border-rule-divide px-3 py-2 text-left type-value text-ink transition-colors enabled:hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <Minimize2
-                        size={13}
-                        aria-hidden="true"
-                        className="flex-shrink-0 text-ink-muted"
-                      />
-                      {t('compactContext')}
+                      {isCompacting ? (
+                        <Spinner size={12} />
+                      ) : (
+                        <Minimize2
+                          size={13}
+                          aria-hidden="true"
+                          className="flex-shrink-0 text-ink-muted"
+                        />
+                      )}
+                      {isCompacting ? t('compactingContext') : t('compactContext')}
                     </button>
                   </PopoverMenu>
                 </span>

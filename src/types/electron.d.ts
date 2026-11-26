@@ -350,6 +350,8 @@ export interface ElectronAPI {
     success: boolean
     tokensBefore?: number
     estimatedTokensAfter?: number
+    entryId?: string
+    timestamp?: number
     error?: string
   }>
   agentRewind: (
@@ -1382,6 +1384,8 @@ export interface AgentChatResult {
   success: boolean
   response?: string
   error?: string
+  /** 前置手动压缩失败导致本轮未发送即终止 */
+  compactionFailed?: boolean
   /** Agent 本轮修改过的文件（用于 Diff 展示） */
   edits?: FileEdit[]
   /** 本轮 Plan 模式新提交的结构化计划（R-04） */

@@ -272,6 +272,10 @@ interface SessionRuntime {
   thinkingDurationsThisMessage: number[]
   /** 最近一次已转发的 compaction entry id，用于 compaction_end 去重取锚点 */
   lastCompactionEntryId: string | null
+  /** 最近一次已落盘的 compaction entry 元信息，供手动压缩返回稳定锚点 */
+  lastCompactionEntry: { id: string; timestamp?: number; tokensBefore?: number } | null
+  /** 正在进行的手动压缩 Promise；并发 chat() 必须等待其结束再决定继续或终止 */
+  compactingPromise: Promise<{ success: boolean; error?: string }> | null
 }
 
 /**
@@ -1505,13 +1509,15 @@ export class AgentManager {
     }
   }
 
-  /** 手动压缩上下文；运行中不压缩，避免打断当前轮 */
+  /** 手动压缩上下文；运行中或已在压缩中不重复触发 */
   async compactContext(
     sessionId: string
   ): Promise<{
     success: boolean
     tokensBefore?: number
     estimatedTokensAfter?: number
+    entryId?: string
+    timestamp?: number
     error?: string
   }> {
     try {
@@ -1519,11 +1525,39 @@ export class AgentManager {
       if (runtime.isProcessing) {
         return { success: false, error: 'Session is running; wait for it to finish before compacting.' }
       }
-      const result = await runtime.session.compact()
-      return {
-        success: true,
-        tokensBefore: result.tokensBefore,
-        estimatedTokensAfter: result.estimatedTokensAfter,
+      if (runtime.compactingPromise) {
+        return { success: false, error: 'Context compaction is already in progress.' }
+      }
+      const prevEntryId = runtime.lastCompactionEntry?.id ?? runtime.lastCompactionEntryId
+      const compactPromise = (async () => {
+        try {
+          const result = await runtime.session.compact()
+          this.resolveCompactionEntry(runtime)
+          const latestEntry =
+            runtime.lastCompactionEntry && runtime.lastCompactionEntry.id !== prevEntryId
+              ? runtime.lastCompactionEntry
+              : null
+          return {
+            success: true as const,
+            tokensBefore: result.tokensBefore,
+            estimatedTokensAfter: result.estimatedTokensAfter,
+            entryId: latestEntry?.id,
+            timestamp: latestEntry?.timestamp,
+          }
+        } catch (error) {
+          return {
+            success: false as const,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        }
+      })()
+      runtime.compactingPromise = compactPromise
+      try {
+        return await compactPromise
+      } finally {
+        if (runtime.compactingPromise === compactPromise) {
+          runtime.compactingPromise = null
+        }
       }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -1544,6 +1578,9 @@ export class AgentManager {
     }
     try {
       const runtime = await this.ensureRuntime(sessionId)
+      if (runtime.compactingPromise) {
+        return { success: false, error: 'Context compaction is in progress.' }
+      }
       if (!runtime.isProcessing) {
         return { success: false, error: 'Session is not running.' }
       }
@@ -1884,6 +1921,8 @@ export class AgentManager {
       thinkingStart: null,
       thinkingDurationsThisMessage: [],
       lastCompactionEntryId: null,
+      lastCompactionEntry: null,
+      compactingPromise: null,
     }
     // 异步创建期间若该会话已被 deleteSession 删除，立即释放，防止回魂
     if (this.deletedSessions.has(id)) {
@@ -2163,6 +2202,11 @@ export class AgentManager {
         if (entry?.type !== 'compaction') continue
         if (entry.id === runtime.lastCompactionEntryId) return null
         runtime.lastCompactionEntryId = entry.id
+        runtime.lastCompactionEntry = {
+          id: entry.id,
+          timestamp: entryTimestamp(entry.timestamp),
+          tokensBefore: typeof entry.tokensBefore === 'number' ? entry.tokensBefore : undefined,
+        }
         return entry
       }
     } catch (error) {
@@ -2526,6 +2570,21 @@ export class AgentManager {
     })
 
     try {
+      // 若手动压缩正在进行，必须先等待压缩完成；压缩失败时一并终止本轮（不写入会话历史）
+      if (runtime.compactingPromise) {
+        const compactOutcome = await runtime.compactingPromise
+        if (this.runtimes.get(runtime.id) !== runtime) {
+          return { success: false, error: 'Agent request was aborted.' }
+        }
+        if (!compactOutcome.success) {
+          return {
+            success: false,
+            error: compactOutcome.error || 'Context compaction failed.',
+            compactionFailed: true,
+          }
+        }
+      }
+
       runtime.onTextDelta = options?.onTextDelta ?? null
       runtime.turnTrace = options?.onTrace ?? null
       runtime.pendingEdits = []

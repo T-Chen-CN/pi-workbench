@@ -58,6 +58,8 @@ interface AgentChatResponse {
   success: boolean
   response?: string
   error?: string
+  /** 前置手动压缩失败导致本轮未发送即终止 */
+  compactionFailed?: boolean
   /** 可本地化的错误码（截断类） */
   errorCode?: 'output-truncated' | 'empty-response'
   /** 本轮生效的输出上限 */
@@ -422,6 +424,8 @@ export const piAgentAPI = {
     success: boolean
     tokensBefore?: number
     estimatedTokensAfter?: number
+    entryId?: string
+    timestamp?: number
     error?: string
   }> {
     if (!hasElectronAgent()) {

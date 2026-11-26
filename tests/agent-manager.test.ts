@@ -2406,6 +2406,121 @@ describe('context usage and compaction', () => {
     release()
     await pendingChat
   })
+
+  it('refuses a second compactContext while compaction is already in progress', async () => {
+    let finishCompact!: (value: {
+      summary: string
+      firstKeptEntryId: string
+      tokensBefore: number
+      estimatedTokensAfter?: number
+    }) => void
+    const session = createFakeSession()
+    session.compact = () =>
+      new Promise((resolve) => {
+        finishCompact = resolve
+      })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const first = manager.compactContext('session-1')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const second = await manager.compactContext('session-1')
+    expect(second.success).toBe(false)
+    expect(second.error).toContain('already in progress')
+
+    finishCompact({
+      summary: 'ok',
+      firstKeptEntryId: 'e1',
+      tokensBefore: 10_000,
+      estimatedTokensAfter: 2_000,
+    })
+    const firstResult = await first
+    expect(firstResult.success).toBe(true)
+    expect(firstResult.tokensBefore).toBe(10_000)
+  })
+
+  it('queues chat sent during manual compaction and continues once compaction succeeds', async () => {
+    const order: string[] = []
+    let finishCompact!: (value: {
+      summary: string
+      firstKeptEntryId: string
+      tokensBefore: number
+      estimatedTokensAfter?: number
+    }) => void
+    const session = createFakeSession(async (currentSession, msg) => {
+      order.push(`prompt:${msg}`)
+      currentSession.messages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'after compact reply' }],
+        timestamp: Date.now(),
+      })
+    })
+    session.compact = () => {
+      order.push('compact:start')
+      return new Promise((resolve) => {
+        finishCompact = (val) => {
+          order.push('compact:end')
+          resolve(val)
+        }
+      })
+    }
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const compactPromise = manager.compactContext('session-1')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // 压缩进行中发起 chat：不得立即调用 prompt
+    const chatPromise = manager.chat('session-1', 'follow up')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(order).toEqual(['compact:start'])
+
+    // 压缩期间 steer 也应被拒绝
+    const steerResult = await manager.steer('session-1', 'interrupt')
+    expect(steerResult.success).toBe(false)
+    expect(steerResult.error).toContain('compaction is in progress')
+
+    finishCompact({
+      summary: 'summary',
+      firstKeptEntryId: 'e1',
+      tokensBefore: 12_000,
+      estimatedTokensAfter: 3_000,
+    })
+
+    const [compactResult, chatResult] = await Promise.all([compactPromise, chatPromise])
+    expect(compactResult.success).toBe(true)
+    expect(chatResult.success).toBe(true)
+    expect(chatResult.response).toBe('after compact reply')
+    expect(order).toEqual(['compact:start', 'compact:end', 'prompt:follow up'])
+  })
+
+  it('aborts queued chat without calling prompt when manual compaction fails', async () => {
+    let failCompact!: (err: Error) => void
+    const promptSpy = vi.fn(async () => {})
+    const session = createFakeSession(promptSpy)
+    session.compact = () =>
+      new Promise((_resolve, reject) => {
+        failCompact = reject
+      })
+    primeSdk(session)
+    await manager.initialize(makeConfig())
+
+    const compactPromise = manager.compactContext('session-1')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const chatPromise = manager.chat('session-1', 'should not send')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    failCompact(new Error('compaction model timeout'))
+
+    const [compactResult, chatResult] = await Promise.all([compactPromise, chatPromise])
+    expect(compactResult.success).toBe(false)
+    expect(compactResult.error).toContain('compaction model timeout')
+    expect(chatResult.success).toBe(false)
+    expect(chatResult.compactionFailed).toBe(true)
+    expect(promptSpy).not.toHaveBeenCalled()
+  })
 })
 
 

@@ -340,6 +340,8 @@ export interface AgentChatResult {
   success: boolean
   response?: string
   error?: string
+  /** 前置手动压缩失败导致本轮未发送即终止 */
+  compactionFailed?: boolean
   /** 可本地化的错误码；渲染层优先用它生成文案，error 作为日志兑底 */
   errorCode?: 'output-truncated' | 'empty-response'
   /** 本轮生效的输出上限（errorCode 为截断类时提供） */

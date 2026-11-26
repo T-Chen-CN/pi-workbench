@@ -80,4 +80,46 @@ describe('appendCompactionPart', () => {
 
     expect(useChatStore.getState().conversations.missing).toBeUndefined()
   })
+
+  it('deduplicates dividers that share the same entryId', () => {
+    useChatStore.getState().appendCompactionPart(key, compactionPart)
+    useChatStore.getState().appendCompactionPart(key, {
+      ...compactionPart,
+      id: 'compaction-duplicate',
+    })
+
+    expect(messages()).toHaveLength(1)
+    expect(messages()[0].parts).toHaveLength(1)
+  })
+
+  it('places manual compaction divider before a pending turn waiting for compaction', () => {
+    useChatStore.getState().addMessage(key, { role: 'user', content: 'first' })
+    const a1 = useChatStore.getState().startStreamingMessage(key)
+    useChatStore.getState().appendTextPart(key, a1, 'reply 1')
+    useChatStore.getState().finishStreamingMessage(key, a1)
+
+    // 手动压缩期间发出的新消息与空流式占位
+    useChatStore.getState().addMessage(key, { role: 'user', content: 'queued during compact' })
+    useChatStore.getState().startStreamingMessage(key)
+
+    useChatStore
+      .getState()
+      .appendCompactionPart(key, compactionPart, { beforePendingTurn: true })
+
+    expect(messages()).toHaveLength(4)
+    expect(messages()[1].parts?.map((part) => part.type)).toEqual(['text', 'compaction'])
+    expect(messages()[3].parts ?? []).toEqual([])
+  })
+
+  it('tracks isCompacting state per conversation', () => {
+    const otherKey = conversationKey('/ws', 's2')
+    useChatStore.getState().ensureConversation(otherKey)
+
+    useChatStore.getState().setCompacting(key, true)
+    expect(useChatStore.getState().conversations[key].isCompacting).toBe(true)
+    expect(useChatStore.getState().conversations[otherKey].isCompacting).toBe(false)
+
+    useChatStore.getState().setCompacting(key, false)
+    expect(useChatStore.getState().conversations[key].isCompacting).toBe(false)
+  })
 })

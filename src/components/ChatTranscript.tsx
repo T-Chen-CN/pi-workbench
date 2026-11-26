@@ -25,6 +25,7 @@ export interface ChatTranscriptProps {
   handleTranscriptScroll: () => void
   messages: ChatMessage[]
   isLoading: boolean
+  isCompacting: boolean
   initialized: boolean
   emptySuggestions: Suggestion[]
   inputRef: React.RefObject<HTMLTextAreaElement | null>
@@ -55,6 +56,7 @@ export const ChatTranscript: React.FC<ChatTranscriptProps> = ({
   handleTranscriptScroll,
   messages,
   isLoading,
+  isCompacting,
   initialized,
   emptySuggestions,
   inputRef,
@@ -95,7 +97,7 @@ export const ChatTranscript: React.FC<ChatTranscriptProps> = ({
           data-testid="chat-transcript"
           className="flex-1 overflow-y-auto px-3.5 py-3"
         >
-          {messages.length === 0 && !isLoading ? (
+          {messages.length === 0 && !isLoading && !isCompacting ? (
             <div className="flex h-full flex-col items-center justify-center gap-3">
               <EmptyState
                 compact
@@ -136,16 +138,16 @@ export const ChatTranscript: React.FC<ChatTranscriptProps> = ({
                   onCopy={handleCopyMessage}
                   onSwitchBranch={handleSwitchBranch}
                   onOpenToolResult={handleOpenToolResult}
-                  canActOnPlan={!isLoading && msg.id === latestProposedPlan?.messageId}
+                  canActOnPlan={!isLoading && !isCompacting && msg.id === latestProposedPlan?.messageId}
                   onApprovePlan={handleApprovePlan}
                   onRejectPlan={handleRejectPlan}
                   onRetry={
-                    !isLoading && msg.id === lastMessageId && msg.role === 'assistant'
+                    !isLoading && !isCompacting && msg.id === lastMessageId && msg.role === 'assistant'
                       ? handleRetryMessage
                       : undefined
                   }
                   onEdit={
-                    !isLoading && msg.id === lastUserMessageId
+                    !isLoading && !isCompacting && msg.id === lastUserMessageId
                       ? handleEditMessage
                       : undefined
                   }
@@ -153,11 +155,22 @@ export const ChatTranscript: React.FC<ChatTranscriptProps> = ({
               )}
             />
           )}
-          {isLoading && !messages.some((msg) => msg.isStreaming && msg.content) && (
-            <div className="flex items-center gap-2 border-b border-rule-divide py-3 type-value text-ink-muted last:border-b-0">
+          {isCompacting ? (
+            <div
+              data-testid="compacting-indicator"
+              className="flex items-center gap-2 border-b border-rule-divide py-3 type-value text-ink-muted last:border-b-0"
+            >
               <Spinner size={12} />
-              {t('thinking')}
+              {t('compactingContext')}
             </div>
+          ) : (
+            isLoading &&
+            !messages.some((msg) => msg.isStreaming && msg.content) && (
+              <div className="flex items-center gap-2 border-b border-rule-divide py-3 type-value text-ink-muted last:border-b-0">
+                <Spinner size={12} />
+                {t('thinking')}
+              </div>
+            )
           )}
 
           {(error || fatalError) && (
