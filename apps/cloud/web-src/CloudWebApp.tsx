@@ -83,7 +83,7 @@ const WebChatMessageRow = React.memo(function WebChatMessageRow({
           thinkingDurationMs={message.thinkingDurationMs}
           traces={message.traces}
           isStreaming={Boolean(message.streaming)}
-          hasBodyText={Boolean(message.text)}
+          hasBodyText={Boolean(message.text.trim())}
           language="zh"
         />
       )}

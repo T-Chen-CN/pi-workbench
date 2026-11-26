@@ -472,8 +472,11 @@ export class AgentManager {
           const update = event.assistantMessageEvent
           if (update?.type === 'text_delta' && typeof update.delta === 'string') {
             runtime.watchdog?.touch()
-            runtime.onTextDelta?.(update.delta)
-            runtime.onTrace?.({ type: 'text_delta', delta: update.delta })
+            // Gemini 等供应商会在 toolUse 末尾附带空串 delta，不得透传以免切碎过程轨迹
+            if (update.delta.length > 0) {
+              runtime.onTextDelta?.(update.delta)
+              runtime.onTrace?.({ type: 'text_delta', delta: update.delta })
+            }
           } else if (update?.type === 'thinking_start') {
             if (typeof update.contentIndex === 'number') {
               runtime.thinkingDeltaSeen.delete(update.contentIndex)

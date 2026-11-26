@@ -85,6 +85,8 @@ export function createTraceBuffer(
 
   const push = (event: AgentStreamEvent) => {
     if (event.type === 'text_delta' || event.type === 'thinking_delta') {
+      // 忽略空增量，避免生成空 text part 切碎过程轨迹
+      if (!event.delta) return
       const last = pending[pending.length - 1]
       if (last && last.type === event.type) {
         pending[pending.length - 1] = {

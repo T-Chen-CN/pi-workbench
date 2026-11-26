@@ -205,4 +205,35 @@ describe('buildSessionMessagesFromEntries', () => {
     expect(history[0].content).not.toContain('pi-workbench-context')
     expect(history[0].context?.quotes).toEqual([{ content: '被引用的原文', label: '对话引用' }])
   })
+
+  it('drops trailing empty or whitespace-only text blocks from multi-turn tool calls (Gemini toolUse)', () => {
+    const history = buildSessionMessagesFromEntries(
+      [
+        userMessage('发布 v0.11.2'),
+        assistantMessage(
+          [
+            { type: 'thinking', thinking: '先检查状态' },
+            { type: 'toolCall', id: 'c-1', name: 'bash', arguments: { command: 'git status' } },
+            { type: 'text', text: '' },
+          ],
+          1100
+        ),
+        toolResult('c-1', [{ type: 'text', text: 'clean' }], 1200),
+        assistantMessage(
+          [
+            { type: 'toolCall', id: 'c-2', name: 'bash', arguments: { command: 'npm test' } },
+            { type: 'text', text: '   \n\n  ' },
+          ],
+          1300
+        ),
+        toolResult('c-2', [{ type: 'text', text: 'ok' }], 1400),
+        assistantMessage([{ type: 'text', text: 'Pi Workbench v0.11.2 已发布完成。' }], 1500),
+      ],
+      options
+    )
+
+    expect(history).toHaveLength(2)
+    expect(types(history[1])).toEqual(['thinking', 'tool', 'tool', 'text'])
+    expect(history[1].content).toBe('Pi Workbench v0.11.2 已发布完成。')
+  })
 })

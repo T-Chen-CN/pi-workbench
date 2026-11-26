@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, Check, ChevronRight, ListChecks, Loader2 } from 'lucide-react'
 import type { AgentTracePart, StructuredPlan } from '../types/electron'
 import { useI18nStore } from '../store/i18nStore'
@@ -8,7 +8,7 @@ import { Button, Caption, DataText, Label } from './ui'
 
 type Translator = (key: TranslationKey, params?: TranslationParams) => string
 
-type WorkPart = Extract<AgentTracePart, { type: 'thinking' | 'tool' }>
+type WorkPart = Extract<AgentTracePart, { type: 'thinking' | 'tool' | 'text' }>
 type CompactionPart = Extract<AgentTracePart, { type: 'compaction' }>
 
 type RenderGroup =
@@ -17,36 +17,69 @@ type RenderGroup =
       key: string
       part: Extract<AgentTracePart, { type: 'text' }>
     }
-  | { type: 'work'; key: string; parts: WorkPart[] }
+  | { type: 'work'; key: string; parts: WorkPart[]; hasTrailingText: boolean }
   | { type: 'plan'; key: string; part: Extract<AgentTracePart, { type: 'plan' }> }
   | { type: 'compaction'; key: string; part: CompactionPart }
 
+/**
+ * 将同段内的思考、工具及工具间的过渡旁白归入唯一工作组（1A），
+ * 仅保留最后一个工作项之后的非空文本作为最终正文；PlanCard 与 CompactionDivider 保持独立在外。
+ */
 function buildGroups(parts: AgentTracePart[]): RenderGroup[] {
   const groups: RenderGroup[] = []
-  let work: WorkPart[] = []
+  let segment: WorkPart[] = []
 
-  const flushWork = () => {
-    if (work.length === 0) return
-    groups.push({ type: 'work', key: `work-${work[0].id}`, parts: work })
-    work = []
+  const flushSegment = () => {
+    if (segment.length === 0) return
+    let lastWorkIdx = -1
+    for (let i = segment.length - 1; i >= 0; i -= 1) {
+      if (segment[i].type === 'thinking' || segment[i].type === 'tool') {
+        lastWorkIdx = i
+        break
+      }
+    }
+    if (lastWorkIdx < 0) {
+      for (const part of segment) {
+        if (part.type === 'text') {
+          groups.push({ type: 'text', key: `text-${part.id}`, part })
+        }
+      }
+    } else {
+      const workParts = segment.slice(0, lastWorkIdx + 1)
+      const firstWork =
+        workParts.find((item) => item.type === 'thinking' || item.type === 'tool') ?? workParts[0]
+      const trailingTexts = segment
+        .slice(lastWorkIdx + 1)
+        .filter((item): item is Extract<AgentTracePart, { type: 'text' }> => item.type === 'text')
+      groups.push({
+        type: 'work',
+        key: `work-${firstWork.id}`,
+        parts: workParts,
+        hasTrailingText: trailingTexts.length > 0,
+      })
+      for (const part of trailingTexts) {
+        groups.push({ type: 'text', key: `text-${part.id}`, part })
+      }
+    }
+    segment = []
   }
 
   for (const part of parts) {
-    if (part.type === 'text') {
-      flushWork()
-      groups.push({ type: 'text', key: `text-${part.id}`, part })
-    } else if (part.type === 'plan') {
-      flushWork()
+    if (part.type === 'plan') {
+      flushSegment()
       groups.push({ type: 'plan', key: `plan-${part.plan.id}`, part })
     } else if (part.type === 'compaction') {
       // 压缩点单独成组：跟随 parts 顺序，不能被折进可收起的工作块
-      flushWork()
+      flushSegment()
       groups.push({ type: 'compaction', key: `compaction-${part.id}`, part })
+    } else if (part.type === 'text') {
+      // 忽略空串与纯空白文本，避免 Gemini toolUse 尾部的 text:"" 切碎工作组或误触发正文态
+      if (part.text.trim()) segment.push(part)
     } else {
-      work.push(part)
+      segment.push(part)
     }
   }
-  flushWork()
+  flushSegment()
   return groups
 }
 
@@ -86,6 +119,7 @@ function formatDuration(ms: number): string {
 }
 
 function formatSeconds(ms: number): string {
+  if (ms > 0 && ms < 100) return '<0.1'
   const seconds = ms / 1000
   return seconds >= 10 ? String(Math.round(seconds)) : seconds.toFixed(1).replace(/\.0$/, '')
 }
@@ -175,6 +209,7 @@ export const AgentParts: React.FC<AgentPartsProps> = React.memo(function AgentPa
             key={group.key}
             parts={group.parts}
             isStreaming={isStreaming && index === lastSignificant}
+            hasTrailingText={group.hasTrailingText}
             diffToolIds={diffToolIds}
             onOpenDiff={onOpenDiff}
             onOpenToolResult={onOpenToolResult}
@@ -288,6 +323,7 @@ const PlanCard: React.FC<{
 interface WorkGroupProps {
   parts: WorkPart[]
   isStreaming: boolean
+  hasTrailingText: boolean
   diffToolIds?: Set<string>
   onOpenDiff?: (toolCallId: string) => void
   onOpenToolResult?: (toolCallId: string, toolName: string) => void
@@ -296,15 +332,41 @@ interface WorkGroupProps {
 const WorkGroup: React.FC<WorkGroupProps> = ({
   parts,
   isStreaming,
+  hasTrailingText,
   diffToolIds,
   onOpenDiff,
   onOpenToolResult,
 }) => {
   const { t } = useI18nStore()
-  const [open, setOpen] = useState(false)
+  // 三态控制：null 跟随两阶段自动展开/收起，非 null 时完全尊重用户手动切换
+  const [userOverride, setUserOverride] = useState<boolean | null>(null)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const stickToBottomRef = useRef(true)
+
+  const liveAutoOpen = isStreaming && !hasTrailingText
+  const open = userOverride ?? liveAutoOpen
+  const isConstrainedLive = open && liveAutoOpen && userOverride === null
   const contentId = `trace-${parts[0].id}`
 
   const last = parts[parts.length - 1]
+  const scrollSignal =
+    parts.length * 100000 +
+    (last?.type === 'thinking' || last?.type === 'text'
+      ? last.text.length
+      : last?.type === 'tool'
+        ? (last.resultPreview?.length ?? 0) + (last.status === 'running' ? 1 : 2)
+        : 0)
+
+  useEffect(() => {
+    if (!isConstrainedLive) {
+      stickToBottomRef.current = true
+      return
+    }
+    const el = scrollRef.current
+    if (!el || !stickToBottomRef.current) return
+    el.scrollTop = el.scrollHeight
+  }, [isConstrainedLive, scrollSignal])
+
   const runningTool = [...parts]
     .reverse()
     .find((part): part is Extract<WorkPart, { type: 'tool' }> => {
@@ -331,6 +393,7 @@ const WorkGroup: React.FC<WorkGroupProps> = ({
   } else if (failedTools > 0) {
     const bits = [t('traceToolFailed', { count: failedTools })]
     if (thinkingMs > 0) bits.push(t('traceThinkingSeconds', { seconds: formatSeconds(thinkingMs) }))
+    if (toolCount > failedTools) bits.push(t('traceToolCount', { count: toolCount }))
     detail = bits.join(' · ')
     dangerDetail = true
   } else {
@@ -354,7 +417,7 @@ const WorkGroup: React.FC<WorkGroupProps> = ({
         type="button"
         aria-expanded={open}
         aria-controls={contentId}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => setUserOverride(!open)}
         className="flex w-full items-center gap-1.5 text-left type-label text-ink-muted hover:text-ink focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
       >
         <ChevronRight
@@ -376,9 +439,21 @@ const WorkGroup: React.FC<WorkGroupProps> = ({
 
       {open && (
         <div
+          ref={scrollRef}
           id={contentId}
           aria-busy={running}
-          className="mt-1.5 border-l border-rule-hairline pl-3"
+          data-live-scroll={isConstrainedLive ? 'true' : undefined}
+          onScroll={
+            isConstrainedLive
+              ? (event) => {
+                  const el = event.currentTarget
+                  stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+                }
+              : undefined
+          }
+          className={`mt-1.5 border-l border-rule-hairline pl-3 ${
+            isConstrainedLive ? 'max-h-60 overflow-y-auto pr-1' : ''
+          }`}
         >
           {parts.map((part, index) =>
             part.type === 'thinking' ? (
@@ -387,6 +462,18 @@ const WorkGroup: React.FC<WorkGroupProps> = ({
                 part={part}
                 streaming={isStreaming && index === parts.length - 1}
               />
+            ) : part.type === 'text' ? (
+              <div
+                key={part.id}
+                className="chat-markdown agent-trace-markdown py-1 text-ink-muted"
+              >
+                <StreamingMarkdown
+                  content={part.text}
+                  isStreaming={isStreaming && index === parts.length - 1}
+                  showCursor={false}
+                  highlight={false}
+                />
+              </div>
             ) : (
               <ToolRow
                 key={part.id}

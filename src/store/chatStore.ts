@@ -367,19 +367,24 @@ export const useChatStore = create<ChatState>((set) => ({
   },
 
   appendTextPart: (key, id, delta) =>
-    set((state) =>
-      updateMessage(state, key, id, (message) => {
+    set((state) => {
+      if (!delta) return state
+      return updateMessage(state, key, id, (message) => {
+        const existingParts = message.parts ?? []
+        const last = existingParts[existingParts.length - 1]
+        // 尚未进入可见正文时忽略纯空白前导增量，避免误截断思考计时或切碎过程组
+        if (last?.type !== 'text' && !delta.trim()) return message
         const next = closeThinking(message)
         const parts = next.parts ? [...next.parts] : []
-        const last = parts[parts.length - 1]
-        if (last?.type === 'text') {
-          parts[parts.length - 1] = { ...last, text: last.text + delta }
+        const tail = parts[parts.length - 1]
+        if (tail?.type === 'text') {
+          parts[parts.length - 1] = { ...tail, text: tail.text + delta }
         } else {
           parts.push({ type: 'text', id: nextPartId(parts, 'text'), text: delta })
         }
         return { ...next, parts, content: next.content + delta }
       })
-    ),
+    }),
 
   appendThinkingPart: (key, id, delta, options) =>
     set((state) =>

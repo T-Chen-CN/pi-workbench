@@ -132,4 +132,18 @@ describe('createTraceBuffer', () => {
     expect(flush).toHaveBeenCalledTimes(1)
     expect(flush.mock.calls[0][0][0]).toMatchObject({ delta: 'abcd' })
   })
+
+  it('ignores empty text_delta and thinking_delta without splitting adjacent events', () => {
+    const flush = vi.fn()
+    const buffer = createTraceBuffer(flush, 50)
+
+    buffer.push({ type: 'thinking_delta', delta: 'part-1 ' })
+    buffer.push({ type: 'text_delta', delta: '' })
+    buffer.push({ type: 'thinking_delta', delta: '' })
+    buffer.push({ type: 'thinking_delta', delta: 'part-2' })
+
+    vi.advanceTimersByTime(50)
+    expect(flush).toHaveBeenCalledTimes(1)
+    expect(flush.mock.calls[0][0]).toEqual([{ type: 'thinking_delta', delta: 'part-1 part-2' }])
+  })
 })

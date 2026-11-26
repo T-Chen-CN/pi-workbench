@@ -1313,7 +1313,7 @@ describe('ChatPanel', () => {
     await waitFor(() => expect(screen.getByText('file body')).toBeTruthy())
   })
 
-  it('keeps a manually expanded process group open when text keeps streaming', async () => {
+  it('auto-collapses live thinking once text starts streaming, and respects manual re-expand', async () => {
     useSessionStore.getState().setSessions('/ws', [session])
     useSessionStore.getState().setOpen('/ws', [session.id], session.id)
     useChatStore.getState().setMessages(sessionKey, [
@@ -1328,20 +1328,35 @@ describe('ChatPanel', () => {
 
     render(<ChatPanel workspacePath="/ws" />)
 
-    const trigger = await screen.findByRole('button', {
+    // 干活直播态自动展开，无需点击即可看到实时思考
+    const liveTrigger = await screen.findByRole('button', {
       name: new RegExp(translations.zh.thinkingInProgress),
     })
-    fireEvent.click(trigger)
-    await waitFor(() => expect(screen.getByText('live thinking')).toBeTruthy())
+    expect(liveTrigger.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText('live thinking')).toBeTruthy()
 
+    // 正文开始输出后自动收起
     const messageId = useChatStore.getState().conversations[sessionKey].messages[0].id
     act(() => {
       useChatStore.getState().appendTextPart(sessionKey, messageId, 'answer')
     })
 
     await waitFor(() => {
-      expect(screen.getByText('live thinking')).toBeTruthy()
       expect(screen.getByText('answer')).toBeTruthy()
+      expect(screen.queryByText('live thinking')).toBeNull()
+    })
+    const summaryTrigger = screen.getByRole('button', { name: /过程/ })
+    expect(summaryTrigger.getAttribute('aria-expanded')).toBe('false')
+
+    // 用户手动展开后，后续流式正文不会再把它强行收起
+    fireEvent.click(summaryTrigger)
+    await waitFor(() => expect(screen.getByText('live thinking')).toBeTruthy())
+    act(() => {
+      useChatStore.getState().appendTextPart(sessionKey, messageId, ' more')
+    })
+    await waitFor(() => {
+      expect(screen.getByText('live thinking')).toBeTruthy()
+      expect(screen.getByText('answer more')).toBeTruthy()
     })
     expect(
       screen.getByRole('button', { name: /过程/ }).getAttribute('aria-expanded')

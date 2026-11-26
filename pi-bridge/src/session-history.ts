@@ -119,7 +119,7 @@ export function buildSessionMessagesFromEntries(
       }
 
       if (typeof msg.content === 'string') {
-        if (msg.content) {
+        if (msg.content.trim()) {
           turn.parts.push({ type: 'text', id: nextId('text'), text: msg.content })
         }
       } else if (Array.isArray(msg.content)) {
@@ -127,7 +127,10 @@ export function buildSessionMessagesFromEntries(
         for (const part of msg.content) {
           if (!part) continue
           if (part.type === 'text' && typeof part.text === 'string') {
-            turn.parts.push({ type: 'text', id: nextId('text'), text: part.text })
+            // 跳过空串与纯空白 text 块（Gemini toolUse 末尾会附带 text:""），避免切碎过程轨迹与产生前导空行
+            if (part.text.trim()) {
+              turn.parts.push({ type: 'text', id: nextId('text'), text: part.text })
+            }
           } else if (part.type === 'thinking') {
             const durations = thinkingDurations[String(msg.timestamp)] ?? []
             turn.parts.push({

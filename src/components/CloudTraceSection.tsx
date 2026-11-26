@@ -1,12 +1,12 @@
 /**
  * 云端会话（桌面端 CloudView + 云端 Web）共用的思考过程与工具调用折叠块。
  *
- * 设计对齐 DESIGN_SYSTEM §6.5 过程轨迹：默认收起，流式期间头部显示脉冲点与实时状态，
- * 展开后以降低一级排版呈现思考正文（无光标）及工具调用步骤与耗时。
+ * 设计对齐 DESIGN_SYSTEM §6.5 过程轨迹：干活中（流式且尚无最终正文）自动以限高滚窗展开并跟随底部，
+ * 一旦开始输出正文或本轮结束自动收拢成单条摘要；用户手动切换后优先保留用户选择（手动展开不限高）。
  * 零桌面端 store / Electron 依赖，可直接被打进云端 Web 静态包。
  */
 
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { AlertCircle, Check, ChevronRight, Loader2 } from 'lucide-react'
 import { StreamdownView } from './StreamdownView'
 import { Caption, DataText } from './ui'
@@ -38,6 +38,7 @@ function formatDuration(ms: number): string {
 }
 
 function formatSeconds(ms: number): string {
+  if (ms > 0 && ms < 100) return '<0.1'
   const seconds = ms / 1000
   return seconds >= 10 ? String(Math.round(seconds)) : seconds.toFixed(1).replace(/\.0$/, '')
 }
@@ -52,8 +53,31 @@ export const CloudTraceSection = React.memo(function CloudTraceSection({
   hasBodyText,
   language = 'zh',
 }: CloudTraceSectionProps) {
-  const [open, setOpen] = useState(false)
+  // 三态控制：null 跟随两阶段自动展开/收起，非 null 时完全尊重用户手动切换
+  const [userOverride, setUserOverride] = useState<boolean | null>(null)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const stickToBottomRef = useRef(true)
+
   const hasThinking = Boolean(thinking || thinkingRedacted)
+  const liveAutoOpen = isStreaming && !hasBodyText
+  const open = userOverride ?? liveAutoOpen
+  const isConstrainedLive = open && liveAutoOpen && userOverride === null
+  const lastTrace = traces[traces.length - 1]
+  const scrollSignal =
+    (thinking?.length ?? 0) +
+    traces.length * 10000 +
+    (lastTrace ? (lastTrace.summary?.length ?? 0) + (lastTrace.status === 'running' ? 1 : 2) : 0)
+
+  useEffect(() => {
+    if (!isConstrainedLive) {
+      stickToBottomRef.current = true
+      return
+    }
+    const el = scrollRef.current
+    if (!el || !stickToBottomRef.current) return
+    el.scrollTop = el.scrollHeight
+  }, [isConstrainedLive, scrollSignal])
+
   if (!hasThinking && traces.length === 0) return null
 
   const zh = language === 'zh'
@@ -99,7 +123,7 @@ export const CloudTraceSection = React.memo(function CloudTraceSection({
         type="button"
         aria-expanded={open}
         aria-controls={contentId}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => setUserOverride(!open)}
         className="flex w-full items-center gap-1.5 text-left type-label text-ink-muted transition-colors hover:text-ink"
       >
         <ChevronRight
@@ -125,9 +149,21 @@ export const CloudTraceSection = React.memo(function CloudTraceSection({
 
       {open && (
         <div
+          ref={scrollRef}
           id={contentId}
           aria-busy={running}
-          className="mt-1.5 flex flex-col gap-1.5 border-l border-rule-hairline pl-3"
+          data-live-scroll={isConstrainedLive ? 'true' : undefined}
+          onScroll={
+            isConstrainedLive
+              ? (event) => {
+                  const el = event.currentTarget
+                  stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+                }
+              : undefined
+          }
+          className={`mt-1.5 flex flex-col gap-1.5 border-l border-rule-hairline pl-3 ${
+            isConstrainedLive ? 'max-h-60 overflow-y-auto pr-1' : ''
+          }`}
         >
           {thinkingRedacted && (
             <Caption className="text-ink-muted">
