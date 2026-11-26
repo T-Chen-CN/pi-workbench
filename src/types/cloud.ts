@@ -51,6 +51,31 @@ export type CloudTaskStatusName =
   | 'interrupted'
   | 'expired'
 
+export interface CloudChangedFileRow {
+  path: string
+  kind: string
+  attention?: string
+}
+
+export interface CloudSecretHitRow {
+  path: string
+  line: number
+  kind: string
+}
+
+export interface CloudAwaySummaryRow {
+  since: number
+  until: number
+  text: string
+  items: Array<{
+    taskId: string
+    title: string
+    status: CloudTaskStatusName
+    terminalReason?: string
+    at: number
+  }>
+}
+
 export interface CloudTaskRow {
   id: string
   title: string
@@ -65,7 +90,9 @@ export interface CloudTaskRow {
   /** 终端回报的里程碑文本（最后一条） */
   lastMilestone?: string
   question?: { id: string; text: string; at: number }
-  result?: { summary: string; changedFiles: Array<{ path: string; kind: string }> }
+  changedFiles?: CloudChangedFileRow[]
+  secretHits?: CloudSecretHitRow[]
+  result?: { summary: string; changedFiles: CloudChangedFileRow[]; secretHits?: CloudSecretHitRow[] }
   error?: string
   worktreePath?: string
   branch?: string

@@ -20,6 +20,8 @@ const state = {
   devices: [],
   authorizations: [],
   notices: [],
+  awaySummary: null,
+  stoppingTaskIds: {},
   config: null,
   pairCode: null,
   configDraft: null,
@@ -317,6 +319,8 @@ function applyFrame(frame) {
     state.devices = snapshot.devices || []
     state.units = snapshot.units || []
     state.authorizations = snapshot.authorizations || []
+    state.awaySummary = snapshot.awaySummary || null
+    state.stoppingTaskIds = {}
     state.agentStatus = snapshot.cloud?.status || 'idle'
     state.canStopReply = Boolean(snapshot.cloud?.canStopReply)
     render()
@@ -423,7 +427,10 @@ function applyFrame(frame) {
       const index = state.tasks.findIndex((item) => item.id === task.id)
       if (index >= 0) state.tasks[index] = task
       else state.tasks.unshift(task)
-      renderAside()
+      if (!ACTIVE_STATUS.includes(task.status)) {
+        delete state.stoppingTaskIds[task.id]
+      }
+      render()
       return
     }
     case 'unit': {
@@ -530,15 +537,44 @@ function renderPills() {
   const running = state.tasks.filter((task) => ACTIVE_STATUS.includes(task.status))
   if (running.length > 0) {
     const latest = running[0]
-    pills.push(
-      el('span', {
-        class: 'pill on',
-        text:
-          running.length === 1
-            ? `${latest.spec?.title || latest.id} · ${TASK_STATUS[latest.status] || latest.status} ${duration(latest.startedAt)}`
-            : `${running.length} 个工单执行中 · ${latest.spec?.title || latest.id}`,
-      })
-    )
+    const device = state.devices.find((item) => item.id === latest.spec?.deviceId)
+    const deviceName = device?.name || latest.spec?.deviceId || ''
+    const statusText = state.stoppingTaskIds[latest.id]
+      ? '正在停止…'
+      : TASK_STATUS[latest.status] || latest.status
+    if (running.length === 1) {
+      const offline = device ? !device.online : false
+      pills.push(
+        el('span', {
+          class: 'pill on',
+          text: `${deviceName} · ${latest.spec?.title || latest.id} · ${statusText} ${duration(latest.startedAt || latest.createdAt)}`,
+        }),
+        el('button', {
+          text: state.stoppingTaskIds[latest.id]
+            ? '正在停止…'
+            : offline
+              ? '设备离线，工单已取消'
+              : '停止工单',
+          disabled: Boolean(state.stoppingTaskIds[latest.id]) || offline,
+          onclick: () => {
+            state.stoppingTaskIds[latest.id] = true
+            send({ type: 'stop_task', taskId: latest.id })
+            render()
+          },
+        })
+      )
+    } else {
+      pills.push(
+        el('button', {
+          class: 'pill on',
+          text: `${running.length} 个工单执行中 · 最近：${latest.id} ${statusText} ${duration(latest.startedAt || latest.createdAt)}`,
+          onclick: () => {
+            state.tab = 'tasks'
+            render()
+          },
+        })
+      )
+    }
   }
   return pills
 }
@@ -592,6 +628,7 @@ function sendChat() {
   const body = state.draft.trim()
   if (!body) return
   state.draft = ''
+  state.awaySummary = null
   send({ type: 'say', text: body, clientMessageId: `c-${Date.now().toString(36)}` })
   const textarea = document.querySelector('textarea')
   if (textarea) textarea.value = ''
@@ -602,6 +639,14 @@ function renderTranscript() {
   if (!container) return
   const distance = container.scrollHeight - container.scrollTop - container.clientHeight
   const nodes = []
+  if (state.awaySummary?.text) {
+    nodes.push(
+      el('article', { class: 'msg' }, [
+        el('div', { class: 'meta' }, [el('span', { text: '离线期间汇总' })]),
+        el('p', { class: 'body', text: state.awaySummary.text }),
+      ])
+    )
+  }
   if (state.messages.length === 0) {
     nodes.push(
       el('p', { class: 'muted', text: '还没有消息。直接说你想让终端做什么。' })
@@ -776,11 +821,23 @@ function renderTaskCard() {
     const active = ACTIVE_STATUS.includes(task.status)
     const spec = task.spec || {}
     const question = task.question
+    const device = state.devices.find((item) => item.id === spec.deviceId)
+    const offline = device ? !device.online : false
+    const stopping = Boolean(state.stoppingTaskIds[task.id])
+    const changedFiles = task.result?.changedFiles || task.progress?.changedFiles || []
+    const attentionFiles = changedFiles.filter((file) => Boolean(file.attention))
+    const normalFiles = changedFiles.filter((file) => !file.attention)
+    const secretHits = task.result?.secretHits || task.progress?.secretHits || []
+    const hasDetails = Boolean(task.result?.summary) || changedFiles.length > 0 || secretHits.length > 0
+
     return el('li', {}, [
       el('div', { class: 'row' }, [
         el('span', { text: spec.title || task.id }),
         el('span', { class: 'spacer' }),
-        el('span', { class: 'mono muted', text: TASK_STATUS[task.status] || task.status }),
+        el('span', {
+          class: 'mono muted',
+          text: stopping ? '正在停止…' : TASK_STATUS[task.status] || task.status,
+        }),
       ]),
       el('div', { class: 'mono muted', text: `${spec.deviceId || ''} · ${spec.repo?.workspacePath || ''}` }),
       task.progress?.summary ? el('div', { class: 'muted', text: task.progress.summary }) : null,
@@ -808,20 +865,40 @@ function renderTaskCard() {
             ]),
           ])
         : null,
-      task.status === 'done' && task.result?.summary
+      hasDetails
         ? el('details', { class: 'trace' }, [
             el('summary', { text: '结果与改动清单' }),
-            el('p', { class: 'body', text: task.result.summary }),
-            task.result.changedFiles?.length
-              ? el('div', { class: 'mono muted', text: task.result.changedFiles.map((file) => file.path).join(', ') })
+            task.result?.summary ? el('p', { class: 'body', text: task.result.summary }) : null,
+            attentionFiles.length > 0
+              ? el('div', {
+                  class: 'mono warn',
+                  text: `注意：${attentionFiles.map((file) => `${file.path} (${file.attention})`).join(', ')}`,
+                })
+              : null,
+            normalFiles.length > 0
+              ? el('div', {
+                  class: 'mono muted',
+                  text: `普通：${normalFiles.map((file) => file.path).join(', ')}`,
+                })
+              : null,
+            secretHits.length > 0
+              ? el('div', {
+                  class: 'mono danger',
+                  text: `疑似密钥（仅报位置）：${secretHits.map((hit) => `${hit.path}:${hit.line} (${hit.kind})`).join(', ')}`,
+                })
               : null,
           ])
         : null,
       task.error ? el('div', { class: 'danger mono', text: task.error }) : null,
       active
         ? el('button', {
-            text: '停止工单',
-            onclick: () => send({ type: 'stop_task', taskId: task.id }),
+            text: stopping ? '正在停止…' : offline ? '设备离线，工单已取消' : '停止工单',
+            disabled: stopping || offline,
+            onclick: () => {
+              state.stoppingTaskIds[task.id] = true
+              send({ type: 'stop_task', taskId: task.id })
+              render()
+            },
           })
         : null,
     ])

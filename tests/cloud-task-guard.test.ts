@@ -3,9 +3,17 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from 'vitest'
+import { execFile } from 'node:child_process'
+import * as fs from 'node:fs/promises'
 import * as os from 'os'
 import * as path from 'path'
-import { createTaskGuardExtension } from '../electron/cloud/task-guard'
+import { promisify } from 'node:util'
+import {
+  createTaskGuardExtension,
+  installWorktreePrePushHook,
+} from '../electron/cloud/task-guard'
+
+const execFileAsync = promisify(execFile)
 
 const ROOT = path.join(os.tmpdir(), 'pi-cloud-guard-worktree')
 
@@ -119,4 +127,55 @@ describe('健壮性', () => {
     expect((await invoke('bash', { command: 'rm --recursive --force ../other' }))?.block).toBe(true)
     expect((await invoke('bash', { command: 'git \\\n push origin main' }))?.block).toBe(true)
   })
+})
+
+describe('installWorktreePrePushHook（D-32 / A-44）', () => {
+  it('只在工单工作树拦 git push，不影响主工作树正常推送', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-pre-push-'))
+    const originDir = path.join(tmp, 'origin.git')
+    const mainDir = path.join(tmp, 'main')
+    const taskWtDir = path.join(tmp, 'task-wt')
+    const git = (cwd: string, args: string[]) => execFileAsync('git', ['-C', cwd, ...args])
+
+    try {
+      await fs.mkdir(originDir, { recursive: true })
+      await git(originDir, ['init', '--bare', '-b', 'main'])
+
+      await fs.mkdir(mainDir, { recursive: true })
+      await git(mainDir, ['init', '-b', 'main'])
+      await git(mainDir, ['config', 'user.email', 'test@example.com'])
+      await git(mainDir, ['config', 'user.name', 'Test'])
+      await fs.writeFile(path.join(mainDir, 'a.txt'), 'init\n')
+      await git(mainDir, ['add', '.'])
+      await git(mainDir, ['commit', '-m', 'init'])
+      await git(mainDir, ['remote', 'add', 'origin', originDir])
+      await git(mainDir, ['push', '-u', 'origin', 'main'])
+
+      // 拒绝给主工作树自己装钩子
+      const mainGuard = await installWorktreePrePushHook(mainDir, mainDir)
+      expect(mainGuard.ok).toBe(false)
+
+      // 给链接出来的工单工作树装 pre-push hook
+      await git(mainDir, ['worktree', 'add', '-b', 'pi/task-1', taskWtDir, 'main'])
+      const installed = await installWorktreePrePushHook(mainDir, taskWtDir)
+      expect(installed.ok).toBe(true)
+      expect(installed.hookPath).toBeTruthy()
+
+      // 工单工作树提交后尝试绕过 tool_call 直接 git push → 被 pre-push hook 硬拦
+      await fs.writeFile(path.join(taskWtDir, 'task.txt'), 'from task\n')
+      await git(taskWtDir, ['add', '.'])
+      await git(taskWtDir, ['commit', '-m', 'task commit'])
+      await expect(git(taskWtDir, ['push', 'origin', 'pi/task-1'])).rejects.toThrow(
+        /git push is blocked/i
+      )
+
+      // 主工作树完全不受影响，照常推送成功
+      await fs.writeFile(path.join(mainDir, 'main.txt'), 'from main\n')
+      await git(mainDir, ['add', '.'])
+      await git(mainDir, ['commit', '-m', 'main commit'])
+      await expect(git(mainDir, ['push', 'origin', 'main'])).resolves.toBeTruthy()
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined)
+    }
+  }, 30_000)
 })

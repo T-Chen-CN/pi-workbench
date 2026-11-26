@@ -146,6 +146,9 @@ export interface HubHandlers {
   onDeviceOnline: (deviceId: string) => void
   onDeviceOffline: (deviceId: string) => void
   onClientHello: (peer: ClientPeer) => void
+  /** 客户端连接数从 0 变为 1 或从 1 变为 0 时通知，用于离线期汇总（F-51 / A-23） */
+  onClientConnected?: (wasEmpty: boolean) => void
+  onClientsEmpty?: () => void
   /** 需要一个新鲜快照（首次连接 / 增量溢出） */
   buildSnapshot: () => Promise<CloudSnapshot>
   logger: { warn: (...args: unknown[]) => void; info: (...args: unknown[]) => void }
@@ -167,6 +170,7 @@ export class Hub {
   // ------------------------------ 连接 ------------------------------
 
   addClient(socket: WebSocket, resumeFrom: number | null, deviceId?: string): ClientPeer {
+    const wasEmpty = this.clients.size === 0
     Hub.counter += 1
     const peer: ClientPeer = {
       id: `client-${Hub.counter}`,
@@ -179,20 +183,28 @@ export class Hub {
       initialized: false,
     }
     this.clients.add(peer)
+    this.handlers.onClientConnected?.(wasEmpty)
     socket.on('message', (raw: unknown) => this.handleClientMessage(peer, raw))
     socket.on('pong', () => {
       peer.alive = true
       peer.lastSeenAt = this.now()
     })
-    socket.on('close', () => this.clients.delete(peer))
+    socket.on('close', () => this.removeClient(peer))
     socket.on('error', (error: Error) => {
       this.handlers.logger.warn('[cloud] client socket error:', error.message)
-      this.clients.delete(peer)
+      this.removeClient(peer)
     })
     void this.sendInitial(peer, resumeFrom).catch((error) => {
       this.handlers.logger.warn('[cloud] failed to send initial client snapshot:', error)
     })
     return peer
+  }
+
+  private removeClient(peer: ClientPeer): void {
+    if (!this.clients.delete(peer)) return
+    if (this.clients.size === 0) {
+      this.handlers.onClientsEmpty?.()
+    }
   }
 
   /** 撤销设备时立即断开其 `/device/ws` 及由该设备 token 鉴权的全部 `/client/ws` 连接 */
@@ -209,7 +221,7 @@ export class Hub {
     }
     for (const client of [...this.clients]) {
       if (client.deviceId !== deviceId) continue
-      this.clients.delete(client)
+      this.removeClient(client)
       try {
         client.socket.close(4401, 'Device revoked')
       } catch {
@@ -223,7 +235,7 @@ export class Hub {
   disconnectWebClients(): void {
     for (const client of [...this.clients]) {
       if (client.deviceId) continue
-      this.clients.delete(client)
+      this.removeClient(client)
       try {
         client.socket.close(4401, 'Session logged out')
       } catch {
@@ -422,14 +434,14 @@ export class Hub {
     for (const peer of [...this.clients]) {
       if (!peer.alive || now - peer.lastSeenAt > CLOUD_OFFLINE_TIMEOUT_MS) {
         peer.socket.terminate()
-        this.clients.delete(peer)
+        this.removeClient(peer)
         continue
       }
       peer.alive = false
       try {
         peer.socket.ping()
       } catch {
-        this.clients.delete(peer)
+        this.removeClient(peer)
       }
     }
     for (const [deviceId, peer] of [...this.devices]) {

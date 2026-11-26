@@ -10,12 +10,15 @@ import { api } from '../api'
 import { CLOUD_PROTOCOL_VERSION } from '../types/cloud'
 import type {
   CloudAuthorizationRow,
+  CloudAwaySummaryRow,
+  CloudChangedFileRow,
   CloudChatRow,
   CloudClientState,
   CloudDeviceRow,
   CloudDeviceState,
   CloudLinkView,
   CloudNotice,
+  CloudSecretHitRow,
   CloudTaskRow,
   CloudTraceRow,
   CloudUnitRow,
@@ -34,6 +37,10 @@ interface CloudState {
   /** 工作单元：回收状态就在这里（干净自动回收 / 脏树待手动结束） */
   units: CloudUnitRow[]
   notices: CloudNotice[]
+  /** 客户端离线期间的工单汇总（F-51 / A-23） */
+  awaySummary: CloudAwaySummaryRow | null
+  /** 已点击停止、等待终态回执的工单 id（F-30 显示「正在停止」） */
+  stoppingTaskIds: Record<string, true>
   /** 最近一次快照的游标：连接恢复时用于续读 */
   lastSeq: number
   linking: boolean
@@ -73,9 +80,36 @@ function messageId(): string {
   return `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 }
 
+function toChangedFiles(raw: unknown): CloudChangedFileRow[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+    .map((item) => ({
+      path: String(item.path ?? ''),
+      kind: String(item.kind ?? 'modified'),
+      ...(typeof item.attention === 'string' && item.attention ? { attention: item.attention } : {}),
+    }))
+    .filter((item) => Boolean(item.path))
+}
+
+function toSecretHits(raw: unknown): CloudSecretHitRow[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+    .map((item) => ({
+      path: String(item.path ?? ''),
+      line: Number(item.line ?? 0),
+      kind: String(item.kind ?? ''),
+    }))
+    .filter((item) => Boolean(item.path) && item.line > 0 && Boolean(item.kind))
+}
+
 function toTaskRow(raw: any): CloudTaskRow | null {
   if (!raw || typeof raw !== 'object') return null
   const spec = raw.spec ?? {}
+  const changedFiles = toChangedFiles(raw.result?.changedFiles ?? raw.progress?.changedFiles)
+  const secretHits = toSecretHits(raw.result?.secretHits ?? raw.progress?.secretHits)
+  const summary = raw.result?.summary ?? (raw.status === 'done' ? raw.progress?.summary : undefined)
   return {
     id: String(raw.id ?? ''),
     title: String(spec.title ?? '(未命名工单)'),
@@ -89,14 +123,19 @@ function toTaskRow(raw: any): CloudTaskRow | null {
     finishedAt: raw.finishedAt ?? undefined,
     terminalReason: raw.terminalReason ?? undefined,
     lastMilestone: raw.progress?.summary ?? undefined,
+    question: raw.question && typeof raw.question.text === 'string' ? raw.question : undefined,
     worktreePath: raw.worktreePath ?? undefined,
     branch: raw.progress?.branch ?? undefined,
-    result: raw.result
-      ? {
-          summary: String(raw.result.summary ?? ''),
-          changedFiles: Array.isArray(raw.result.changedFiles) ? raw.result.changedFiles : [],
-        }
-      : undefined,
+    ...(changedFiles.length > 0 ? { changedFiles } : {}),
+    ...(secretHits.length > 0 ? { secretHits } : {}),
+    result:
+      summary || changedFiles.length > 0 || secretHits.length > 0
+        ? {
+            summary: String(summary ?? ''),
+            changedFiles,
+            ...(secretHits.length > 0 ? { secretHits } : {}),
+          }
+        : undefined,
     error: raw.error ?? undefined,
   }
 }
@@ -146,6 +185,8 @@ export const useCloudStore = create<CloudState>((set, get) => ({
   authorizations: [],
   units: [],
   notices: [],
+  awaySummary: null,
+  stoppingTaskIds: {},
   lastSeq: 0,
   linking: false,
   error: null,
@@ -264,6 +305,7 @@ export const useCloudStore = create<CloudState>((set, get) => ({
     if (!body) return
     const id = messageId()
     set((state) => ({
+      awaySummary: null,
       messages: [
         ...state.messages,
         { id, role: 'user' as const, text: body, at: Date.now(), traces: [] },
@@ -296,7 +338,17 @@ export const useCloudStore = create<CloudState>((set, get) => ({
   },
 
   stopTask: async (taskId) => {
-    await api.cloudClientSend({ type: 'stop_task', taskId })
+    set((state) => ({
+      stoppingTaskIds: { ...state.stoppingTaskIds, [taskId]: true },
+    }))
+    const result = await api.cloudClientSend({ type: 'stop_task', taskId })
+    if (!result.success) {
+      set((state) => {
+        const next = { ...state.stoppingTaskIds }
+        delete next[taskId]
+        return { stoppingTaskIds: next }
+      })
+    }
   },
 
   closeUnit: async (unitId) => {
@@ -372,12 +424,23 @@ export const useCloudStore = create<CloudState>((set, get) => ({
             .map(toUnitRow)
             .filter((row: CloudUnitRow | null): row is CloudUnitRow => !!row)
         : []
+      const awaySummary: CloudAwaySummaryRow | null =
+        snapshot.awaySummary && typeof snapshot.awaySummary.text === 'string'
+          ? {
+              since: Number(snapshot.awaySummary.since ?? 0),
+              until: Number(snapshot.awaySummary.until ?? 0),
+              text: String(snapshot.awaySummary.text),
+              items: Array.isArray(snapshot.awaySummary.items) ? snapshot.awaySummary.items : [],
+            }
+          : null
       set({
         messages,
         tasks,
         devices,
         authorizations,
         units,
+        awaySummary,
+        stoppingTaskIds: {},
         lastSeq: Number(frame.seq ?? snapshot.lastSeq ?? 0),
         agentStatus: snapshot.cloud?.status ?? 'idle',
         canStopReply: Boolean(snapshot.cloud?.canStopReply),
@@ -533,10 +596,24 @@ export const useCloudStore = create<CloudState>((set, get) => ({
           return
         case 'task': {
           const row = toTaskRow(event.task)
-          set((state) => ({
-            ...seqPatch(state),
-            ...(row ? { tasks: upsertById(state.tasks, row) } : {}),
-          }))
+          set((state) => {
+            if (!row) return seqPatch(state)
+            const active =
+              row.status === 'queued' ||
+              row.status === 'assigned' ||
+              row.status === 'running' ||
+              row.status === 'waiting_human'
+            let stoppingTaskIds = state.stoppingTaskIds
+            if (!active && stoppingTaskIds[row.id]) {
+              stoppingTaskIds = { ...stoppingTaskIds }
+              delete stoppingTaskIds[row.id]
+            }
+            return {
+              ...seqPatch(state),
+              tasks: upsertById(state.tasks, row),
+              stoppingTaskIds,
+            }
+          })
           return
         }
         case 'device': {

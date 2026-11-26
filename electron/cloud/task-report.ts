@@ -1,0 +1,282 @@
+/**
+ * 工单改动清单分类与疑似密钥扫描（F-36 / A-29）。
+ *
+ * 定位：**只做信息提示，不做拦截**（D-20）。
+ * 两条硬规则：
+ * 1. `classifyAttentionPath` 为 `.env*`、依赖锁、CI 工作流、git hooks、发布配置打上 `attention` 原因；
+ * 2. 密钥扫描**绝不返回或记录原始密钥值**，只输出 `{ path, line, kind }`。
+ */
+
+import { execFile } from 'node:child_process'
+import * as fs from 'node:fs/promises'
+import * as path from 'node:path'
+import { promisify } from 'node:util'
+import type { CloudChangedFile, CloudSecretHit } from 'pi-bridge'
+
+const execFileAsync = promisify(execFile)
+
+const GIT_TIMEOUT_MS = 15_000
+const MAX_SECRET_HITS = 50
+const MAX_UNTRACKED_FILES = 50
+const MAX_UNTRACKED_BYTES = 256 * 1024
+
+const LOCKFILE_NAMES = new Set([
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'bun.lock',
+  'bun.lockb',
+  'cargo.lock',
+  'poetry.lock',
+  'pipfile.lock',
+  'gemfile.lock',
+  'go.sum',
+  'composer.lock',
+  'uv.lock',
+  'npm-shrinkwrap.json',
+])
+
+const RELEASE_CONFIG_NAMES = new Set([
+  '.npmrc',
+  '.pypirc',
+  'dockerfile',
+  'electron-builder.yml',
+  'electron-builder.yaml',
+  'electron-builder.json',
+  'electron-builder.json5',
+  'release.config.js',
+  'release.config.cjs',
+  'release.config.mjs',
+  '.releaserc',
+  '.releaserc.json',
+  '.releaserc.yml',
+  '.releaserc.yaml',
+])
+
+const GIT_HOOK_CONFIG_NAMES = new Set([
+  'lefthook.yml',
+  'lefthook.yaml',
+  '.lefthook.yml',
+  '.lefthook.yaml',
+  '.pre-commit-config.yaml',
+  '.pre-commit-config.yml',
+])
+
+function normalizePosix(filePath: string): string {
+  return filePath.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '')
+}
+
+/**
+ * 判断改动路径是否属于需要点名的敏感/高影响类别（F-36）。
+ * 返回简短稳定标识，供云端与两端 UI 按「注意 / 普通」分组。
+ */
+export function classifyAttentionPath(filePath: string): string | undefined {
+  const normalized = normalizePosix(filePath)
+  if (!normalized) return undefined
+  const lower = normalized.toLowerCase()
+  const base = lower.split('/').pop() ?? lower
+
+  if (base === '.env' || base.startsWith('.env.')) return 'env-file'
+  if (LOCKFILE_NAMES.has(base)) return 'lockfile'
+  if (
+    lower.startsWith('.github/workflows/') ||
+    lower.startsWith('.circleci/') ||
+    lower.startsWith('.buildkite/') ||
+    lower === '.gitlab-ci.yml' ||
+    lower === 'azure-pipelines.yml' ||
+    base === 'jenkinsfile'
+  ) {
+    return 'ci-workflow'
+  }
+  if (
+    lower.startsWith('.husky/') ||
+    lower.startsWith('.githooks/') ||
+    lower.startsWith('.git/hooks/') ||
+    GIT_HOOK_CONFIG_NAMES.has(base)
+  ) {
+    return 'git-hook'
+  }
+  if (
+    RELEASE_CONFIG_NAMES.has(base) ||
+    base.startsWith('dockerfile.') ||
+    base.startsWith('docker-compose.') ||
+    lower.startsWith('build/installer.') ||
+    lower.startsWith('scripts/release')
+  ) {
+    return 'release-config'
+  }
+  return undefined
+}
+
+/** 给改动清单逐条补上 `attention`（已有原因时保留） */
+export function annotateChangedFiles(files: CloudChangedFile[]): CloudChangedFile[] {
+  return files.map((file) => {
+    const attention = file.attention ?? classifyAttentionPath(file.path)
+    return attention ? { ...file, attention } : { path: file.path, kind: file.kind }
+  })
+}
+
+interface SecretRule {
+  kind: string
+  pattern: RegExp
+}
+
+const SECRET_RULES: readonly SecretRule[] = [
+  { kind: 'private-key', pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----/ },
+  { kind: 'aws-access-key', pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
+  { kind: 'github-token', pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b/ },
+  { kind: 'github-token', pattern: /\bgithub_pat_[A-Za-z0-9_]{22,}\b/ },
+  { kind: 'slack-token', pattern: /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/ },
+  { kind: 'google-api-key', pattern: /\bAIza[0-9A-Za-z_-]{35}\b/ },
+  { kind: 'api-key', pattern: /\bsk-(?:proj-|ant-api\d+-)?[A-Za-z0-9_-]{20,}\b/ },
+  {
+    kind: 'secret-assignment',
+    pattern:
+      /(?:api[_-]?key|secret[_-]?key|access[_-]?token|private[_-]?key|client[_-]?secret|auth[_-]?token)\s*[:=]\s*['"]([A-Za-z0-9/+=._-]{16,})['"]/i,
+  },
+]
+
+const PLACEHOLDER_RE = /(?:example|placeholder|your[_-]?|changeme|dummy|sample|fake|mock|test[_-]?key|xxxx|0000|123456)/i
+
+function detectSecretKind(line: string): string | null {
+  for (const rule of SECRET_RULES) {
+    const match = rule.pattern.exec(line)
+    if (!match) continue
+    // 泛化赋值规则要跳过明显的占位符示例，减少误报
+    if (rule.kind === 'secret-assignment') {
+      const value = match[1] ?? ''
+      if (PLACEHOLDER_RE.test(value) || /^([a-z0-9])\1{7,}$/i.test(value)) continue
+    }
+    return rule.kind
+  }
+  return null
+}
+
+/** 扫描单个纯文本内容（用于未跟踪的新文件）；只返回位置与类型 */
+export function scanTextForSecrets(filePath: string, content: string): CloudSecretHit[] {
+  const normalized = normalizePosix(filePath)
+  if (!normalized || content.includes('\0')) return []
+  const hits: CloudSecretHit[] = []
+  const lines = content.split(/\r?\n/)
+  for (let index = 0; index < lines.length; index += 1) {
+    const kind = detectSecretKind(lines[index] ?? '')
+    if (!kind) continue
+    hits.push({ path: normalized, line: index + 1, kind })
+    if (hits.length >= MAX_SECRET_HITS) break
+  }
+  return hits
+}
+
+/** 扫描 unified diff 的新增行（`+` 开头，不含 `+++` 头）；只返回位置与类型，绝不返回原值 */
+export function scanDiffForSecrets(diffText: string): CloudSecretHit[] {
+  const hits: CloudSecretHit[] = []
+  const seen = new Set<string>()
+  let currentPath = ''
+  let currentLine = 0
+
+  for (const rawLine of diffText.split(/\r?\n/)) {
+    if (rawLine.startsWith('+++ ')) {
+      const target = rawLine.slice(4).trim()
+      currentPath =
+        target === '/dev/null'
+          ? ''
+          : normalizePosix(target.replace(/^b\//, '').replace(/^"|"$/g, ''))
+      currentLine = 0
+      continue
+    }
+    if (rawLine.startsWith('@@ ')) {
+      const match = /\+(\d+)/.exec(rawLine)
+      currentLine = match ? Number.parseInt(match[1], 10) : 0
+      continue
+    }
+    if (!currentPath || currentLine <= 0) continue
+    if (rawLine.startsWith('+') && !rawLine.startsWith('+++')) {
+      const kind = detectSecretKind(rawLine.slice(1))
+      if (kind) {
+        const key = `${currentPath}:${currentLine}:${kind}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          hits.push({ path: currentPath, line: currentLine, kind })
+          if (hits.length >= MAX_SECRET_HITS) break
+        }
+      }
+      currentLine += 1
+    } else if (rawLine.startsWith(' ')) {
+      currentLine += 1
+    }
+  }
+  return hits
+}
+
+/**
+ * 扫描工单工作树里的全部新增改动（已提交 + 已暂存 + 未暂存 + 未跟踪新文件）。
+ * 任何 git / 读取异常都静默降级，绝不阻断工单结单。
+ */
+export async function scanWorktreeSecrets(
+  base: string | undefined,
+  worktreePath: string
+): Promise<CloudSecretHit[]> {
+  const hits: CloudSecretHit[] = []
+  const seen = new Set<string>()
+  const push = (incoming: CloudSecretHit[]) => {
+    for (const hit of incoming) {
+      if (hits.length >= MAX_SECRET_HITS) return
+      const key = `${hit.path}:${hit.line}:${hit.kind}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      hits.push(hit)
+    }
+  }
+
+  const runGit = (args: string[]): Promise<string> =>
+    execFileAsync('git', ['-C', worktreePath, ...args], {
+      timeout: GIT_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+    }).then((result) => result.stdout)
+
+  // 1. 相对 base 的全部 diff（含已提交 + 工作区修改）；没有 base 时退回 HEAD 与工作区
+  const diffSpecs: string[][] = base
+    ? [['diff', '--no-color', '-U0', base]]
+    : [
+        ['diff', '--no-color', '-U0', 'HEAD'],
+        ['diff', '--no-color', '-U0'],
+      ]
+  for (const args of diffSpecs) {
+    try {
+      const diff = await runGit(args)
+      if (diff) push(scanDiffForSecrets(diff))
+      if (base) break
+    } catch {
+      // base 不可用时继续尝试回退 diff
+    }
+  }
+
+  // 2. 未跟踪的新文件（git diff 看不到它们）
+  if (hits.length < MAX_SECRET_HITS) {
+    try {
+      const output = await runGit(['ls-files', '--others', '--exclude-standard'])
+      const untracked = output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(0, MAX_UNTRACKED_FILES)
+      for (const relPath of untracked) {
+        if (hits.length >= MAX_SECRET_HITS) break
+        const fullPath = path.join(worktreePath, relPath)
+        try {
+          const stat = await fs.stat(fullPath)
+          if (!stat.isFile() || stat.size > MAX_UNTRACKED_BYTES) continue
+          const content = await fs.readFile(fullPath, 'utf-8')
+          push(scanTextForSecrets(relPath, content))
+        } catch {
+          // 跳过不可读或已删文件
+        }
+      }
+    } catch {
+      // 非 git 目录时忽略
+    }
+  }
+
+  return hits
+}

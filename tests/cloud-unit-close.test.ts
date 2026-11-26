@@ -222,6 +222,65 @@ describe('closeUnit（F-19a）', () => {
     const stored = JSON.parse(await fs.readFile(path.join(dataDir, 'units.json'), 'utf-8'))
     expect(stored['unit-fail']).toBeDefined()
   })
+
+  it('准备阶段失败后立刻收到 closeUnit 不会被 starting 占位误拒（P-09 回归）', async () => {
+    const worktreePath = path.join(tmpRoot, 'clean')
+    let closePromise: Promise<{ ok: boolean; error?: string }> | null = null
+    const runner = new CloudTaskRunner({
+      logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      dataDir,
+      getApiConfig: async () => null,
+      getCoordinator: async () => ({
+        bind: async (sessionId: string) => {
+          bindings.add(sessionId)
+          return { success: true, worktree: { path: worktreePath, branch: 'pi/wt-race' } }
+        },
+        getSessionBinding: () => ({ key: '', path: worktreePath, branch: 'pi/wt-race' }),
+        hasBinding: (sessionId: string) => bindings.has(sessionId),
+        release: async (sessionId: string) => {
+          releaseCalls.push(sessionId)
+          bindings.delete(sessionId)
+          return { success: true, removed: true, dirty: false, worktreePath }
+        },
+      }),
+      onStatus: () => undefined,
+      onWorktree: () => undefined,
+      onMilestone: () => undefined,
+      onQuestion: () => undefined,
+      onResult: () => undefined,
+      // 模拟云端收到 task_failed 后在同一个 tick 立刻回发 close_unit
+      onFailed: () => {
+        closePromise = runner.closeUnit('unit-race')
+      },
+      onInterrupted: () => undefined,
+      onUnitClosed: (unitId, result) => closed.push({ unitId, result }),
+      onUnitState: (unitId, state) => states.push({ unitId, ...state }),
+    })
+    await runner.load()
+
+    await runner.start('T-race', {
+      workUnitId: 'unit-race',
+      deviceId: 'dev-1',
+      repo: { workspacePath: worktreePath, baseBranch: 'main' },
+      title: 'race',
+      background: 'b',
+      goal: 'g',
+      acceptance: 'a',
+      output: { summary: true, changeList: true, testResult: false },
+      commit: false,
+      authorizationId: 'auth-1',
+    })
+
+    expect(closePromise).not.toBeNull()
+    const closeResult = await closePromise!
+    expect(closeResult).toEqual({ ok: true, error: undefined })
+    expect(releaseCalls).toEqual(['cloud:unit-race'])
+    expect(closed).toHaveLength(1)
+    expect(closed[0]).toMatchObject({
+      unitId: 'unit-race',
+      result: { removed: true, dirty: false },
+    })
+  })
 })
 
 describe('sweepUnits（A-43 兜底）', () => {

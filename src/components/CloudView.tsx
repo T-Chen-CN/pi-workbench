@@ -192,6 +192,17 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
           {store.link.linked ? (
             <>
               <div ref={transcriptRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                {store.awaySummary && (
+                  <div
+                    role="status"
+                    className="mb-4 rounded border border-rule bg-panel px-3 py-2"
+                  >
+                    <p className="type-label text-ink">{t('cloudAwaySummaryTitle')}</p>
+                    <p className="mt-0.5 type-caption text-ink-muted">
+                      {store.awaySummary.text}
+                    </p>
+                  </div>
+                )}
                 {!store.initialized || store.messages.length === 0 ? (
                   <EmptyState
                     icon={Cloud}
@@ -291,6 +302,8 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
           <TaskList
             title={t('cloudTasks')}
             tasks={[...running, ...finished]}
+            devices={store.devices}
+            stoppingTaskIds={store.stoppingTaskIds}
             onStop={(taskId) => void store.stopTask(taskId)}
             onAnswer={(taskId, text) => {
               void store.answerQuestion(taskId, text)
@@ -537,12 +550,20 @@ const UnitList: React.FC<{
 const TaskList: React.FC<{
   title: string
   tasks: CloudTaskRow[]
+  devices: Array<{ id: string; online: boolean }>
+  stoppingTaskIds: Record<string, true>
   onStop: (taskId: string) => void
   onAnswer: (taskId: string, text: string) => void
   answerDraft: Record<string, string>
   onAnswerDraft: (taskId: string, text: string) => void
-}> = ({ title, tasks, onStop, onAnswer, answerDraft, onAnswerDraft }) => {
+}> = ({ title, tasks, devices, stoppingTaskIds, onStop, onAnswer, answerDraft, onAnswerDraft }) => {
   const { t } = useI18nStore()
+  const onlineById = useMemo(() => {
+    const map = new Map<string, boolean>()
+    for (const device of devices) map.set(device.id, device.online)
+    return map
+  }, [devices])
+
   return (
     <Card density="compact">
       <CardHeader title={title} />
@@ -552,15 +573,26 @@ const TaskList: React.FC<{
         <ul className="flex flex-col gap-3">
           {tasks.map((task) => {
             const active = ACTIVE_STATUSES.includes(task.status)
+            const deviceOffline = onlineById.get(task.deviceId) === false
+            const stopping = Boolean(stoppingTaskIds[task.id])
             const elapsed = task.startedAt
               ? formatDuration(task.startedAt, task.finishedAt ?? Date.now())
               : ''
+            const changedFiles = task.changedFiles ?? task.result?.changedFiles ?? []
+            const attentionFiles = changedFiles.filter((file) => Boolean(file.attention))
+            const normalFiles = changedFiles.filter((file) => !file.attention)
+            const secretHits = task.secretHits ?? task.result?.secretHits ?? []
+            const hasDetails =
+              Boolean(task.result?.summary) || changedFiles.length > 0 || secretHits.length > 0
+
             return (
               <li key={task.id} className="flex flex-col gap-1">
                 <span className="flex items-center gap-2 type-label text-ink">
                   <span className="truncate">{task.title}</span>
                   <span className="ml-auto flex-shrink-0 type-caption text-ink-muted">
-                    {t(TASK_STATUS_KEY[task.status] as Parameters<typeof t>[0])}
+                    {stopping
+                      ? t('cloudStoppingTask')
+                      : t(TASK_STATUS_KEY[task.status] as Parameters<typeof t>[0])}
                   </span>
                 </span>
                 <span className="type-caption text-ink-muted">
@@ -591,22 +623,48 @@ const TaskList: React.FC<{
                     </div>
                   </div>
                 )}
-                {task.result?.summary && (
+                {hasDetails && (
                   <details className="type-caption text-ink-muted">
-                    <summary className="cursor-pointer select-none">{t('cloudTaskDone')}</summary>
-                    <p className="mt-1 whitespace-pre-wrap text-ink">{task.result.summary}</p>
-                    {task.result.changedFiles.length > 0 && (
+                    <summary className="cursor-pointer select-none">{t('cloudChangedFiles')}</summary>
+                    {task.result?.summary && (
+                      <p className="mt-1 whitespace-pre-wrap text-ink">{task.result.summary}</p>
+                    )}
+                    {attentionFiles.length > 0 && (
+                      <p className="mt-1 text-warning">
+                        {t('cloudChangedAttention')}:{' '}
+                        {attentionFiles
+                          .map((file) => `${file.path} (${file.attention})`)
+                          .join(', ')}
+                      </p>
+                    )}
+                    {normalFiles.length > 0 && (
                       <p className="mt-1">
-                        {t('cloudChangedFiles')}: {task.result.changedFiles.map((file) => file.path).join(', ')}
+                        {t('cloudChangedNormal')}: {normalFiles.map((file) => file.path).join(', ')}
+                      </p>
+                    )}
+                    {secretHits.length > 0 && (
+                      <p className="mt-1 text-danger">
+                        {t('cloudSecretHits')}:{' '}
+                        {secretHits.map((hit) => `${hit.path}:${hit.line} (${hit.kind})`).join(', ')}
                       </p>
                     )}
                   </details>
                 )}
                 {task.error && <span className="type-caption text-danger">{task.error}</span>}
                 {active && (
-                  <Button variant="ghost" size="sm" onClick={() => onStop(task.id)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onStop(task.id)}
+                    disabled={stopping || deviceOffline}
+                    title={deviceOffline ? t('cloudOfflineTaskCancelled') : t('cloudStopTask')}
+                  >
                     <Square size={12} />
-                    {t('cloudStopTask')}
+                    {stopping
+                      ? t('cloudStoppingTask')
+                      : deviceOffline
+                        ? t('cloudOfflineTaskCancelled')
+                        : t('cloudStopTask')}
                   </Button>
                 )}
               </li>

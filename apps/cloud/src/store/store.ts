@@ -114,6 +114,11 @@ interface AuthorizationsFile {
   items: AuthorizationRecord[]
 }
 
+interface ClientStateFile {
+  /** 最后一个客户端断开连接的时间；重连快照据此生成「你离开期间…」汇总（F-51 / A-23） */
+  lastClientLeftAt: number | null
+}
+
 export const PAIRING_CODE_TTL_MS = 5 * 60 * 1000
 
 export class CloudStore {
@@ -124,7 +129,8 @@ export class CloudStore {
     private readonly tasks: JsonDoc<TasksFile>,
     private readonly units: JsonDoc<UnitsFile>,
     private readonly config: JsonDoc<ConfigFile>,
-    private readonly authorizations: JsonDoc<AuthorizationsFile>
+    private readonly authorizations: JsonDoc<AuthorizationsFile>,
+    private readonly clientState: JsonDoc<ClientStateFile>
   ) {}
 
   static async open(dataDir: string): Promise<CloudStore> {
@@ -136,7 +142,8 @@ export class CloudStore {
       await JsonDoc.open<TasksFile>(dir('tasks.json'), () => ({ tasks: [] })),
       await JsonDoc.open<UnitsFile>(dir('units.json'), () => ({ units: [] })),
       await JsonDoc.open<ConfigFile>(dir('config.json'), () => ({ config: null })),
-      await JsonDoc.open<AuthorizationsFile>(dir('authorizations.json'), () => ({ items: [] }))
+      await JsonDoc.open<AuthorizationsFile>(dir('authorizations.json'), () => ({ items: [] })),
+      await JsonDoc.open<ClientStateFile>(dir('client-state.json'), () => ({ lastClientLeftAt: null }))
     )
   }
 
@@ -447,6 +454,18 @@ export class CloudStore {
     }))
   }
 
+  // ------------------------------ 客户端离线游标（F-51） ------------------------------
+
+  getLastClientLeftAt(): number | null {
+    return this.clientState.get().lastClientLeftAt
+  }
+
+  async setLastClientLeftAt(at: number | null): Promise<void> {
+    await this.clientState.update((current) =>
+      current.lastClientLeftAt === at ? current : { lastClientLeftAt: at }
+    )
+  }
+
   /** 退出流程用：等所有在途写入落盘 */
   async flush(): Promise<void> {
     await Promise.all([
@@ -457,6 +476,7 @@ export class CloudStore {
       this.units.flush(),
       this.config.flush(),
       this.authorizations.flush(),
+      this.clientState.flush(),
     ])
   }
 }

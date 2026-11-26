@@ -126,13 +126,20 @@ export class DeviceAgent {
         this.running.delete(taskId)
         this.send({ type: 'task_result', taskId, result, at: Date.now() })
       },
-      onFailed: (taskId: string, error: string, changedFiles?: CloudChangedFile[], worktreeClean?: boolean) => {
+      onFailed: (
+        taskId: string,
+        error: string,
+        changedFiles?: CloudChangedFile[],
+        worktreeClean?: boolean,
+        secretHits?: import('pi-bridge').CloudSecretHit[]
+      ) => {
         this.running.delete(taskId)
         this.send({
           type: 'task_failed',
           taskId,
           error,
           changedFiles,
+          secretHits,
           worktreeClean,
           at: Date.now(),
         })

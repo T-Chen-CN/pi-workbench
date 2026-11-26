@@ -266,6 +266,8 @@ export interface CloudTaskProgress {
   summary?: string
   currentTool?: string
   changedFiles?: CloudChangedFile[]
+  /** 疑似密钥命中：只存位置与类型，绝不存值（F-36 / A-29） */
+  secretHits?: CloudSecretHit[]
   branch?: string
   /** 工作单元收敛后的提交（同一 unit 只能有一次，F-19a） */
   commit?: string
@@ -395,6 +397,23 @@ export interface CloudChatMessage {
   usage?: { input?: number; output?: number; reasoning?: number; cost?: number }
 }
 
+/** 离线期汇总条目（F-51 / A-23）：客户端离开期间落终态或进入 waiting_human 的工单 */
+export interface CloudAwaySummaryItem {
+  taskId: string
+  title: string
+  status: CloudTaskStatus
+  terminalReason?: CloudTaskTerminalReason
+  at: number
+}
+
+/** 服务端产出的离线期汇报，随重连快照下发（不重复触发大模型调用） */
+export interface CloudAwaySummary {
+  since: number
+  until: number
+  items: CloudAwaySummaryItem[]
+  text: string
+}
+
 export interface CloudSnapshot {
   serverVersion: string
   protocol: typeof CLOUD_PROTOCOL_VERSION
@@ -407,6 +426,8 @@ export interface CloudSnapshot {
   units: CloudUnitView[]
   /** 当前有效的授权（UI 用来显示「已授权 N 张 / 剩 M 张」） */
   authorizations: CloudAuthorizationView[]
+  /** 客户端离线期间的工单汇总（F-51 / A-23）；无变化时省略 */
+  awaySummary?: CloudAwaySummary
 }
 
 /**
@@ -540,6 +561,7 @@ export type DeviceToServerFrame =
       taskId: string
       error: string
       changedFiles?: CloudChangedFile[]
+      secretHits?: CloudSecretHit[]
       /** 同 `CloudTaskResult.worktreeClean`：干净才可以自动回收（F-19a） */
       worktreeClean?: boolean
       at: number
@@ -614,6 +636,10 @@ export interface CloudTaskEventPayload {
   summary: string
   status?: CloudTaskStatus
   terminalReason?: CloudTaskTerminalReason
+  /** 改动清单（按 attention 分组汇报，F-36） */
+  changedFiles?: CloudChangedFile[]
+  /** 疑似密钥命中（只报位置与类型，绝不带值，F-36） */
+  secretHits?: CloudSecretHit[]
 }
 
 /** 事件 message 的完整形状，直接喂给 `AgentManager.sendCustomMessage` */
@@ -634,6 +660,23 @@ export function buildTaskEventMessage(payload: CloudTaskEventPayload): CloudTask
   const lines = [`[task-event] ${payload.kind} ${payload.taskId}`, payload.summary]
   if (payload.status) lines.push(`status: ${payload.status}`)
   if (payload.terminalReason) lines.push(`reason: ${payload.terminalReason}`)
+  if (payload.changedFiles?.length) {
+    const attention = payload.changedFiles.filter((file) => Boolean(file.attention))
+    const normal = payload.changedFiles.filter((file) => !file.attention)
+    if (attention.length > 0) {
+      lines.push(
+        `attention-files: ${attention.map((file) => `${file.path} (${file.attention})`).join(', ')}`
+      )
+    }
+    if (normal.length > 0) {
+      lines.push(`changed-files: ${normal.map((file) => file.path).join(', ')}`)
+    }
+  }
+  if (payload.secretHits?.length) {
+    lines.push(
+      `secret-hits (locations only): ${payload.secretHits.map((hit) => `${hit.path}:${hit.line} (${hit.kind})`).join(', ')}`
+    )
+  }
   return {
     customType: CLOUD_TASK_EVENT_CUSTOM_TYPE,
     content: lines.join('\n'),

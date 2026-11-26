@@ -11,9 +11,17 @@
  * 所以任何异常都必须在这里 catch 掉并按拒绝处理（fail-closed）。
  */
 
+import { execFile } from 'node:child_process'
 import * as fs from 'node:fs'
+import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
+import { promisify } from 'node:util'
 import type { ExtensionFactory } from '@earendil-works/pi-coding-agent'
+
+const execFileAsync = promisify(execFile)
+const HOOK_GIT_TIMEOUT_MS = 10_000
+const PRE_PUSH_SCRIPT =
+  '#!/bin/sh\necho "[pi-workbench] git push is blocked in delegated task worktrees." >&2\nexit 1\n'
 
 const WRITE_TOOLS = new Set(['write', 'edit'])
 const SHELL_TOOLS = new Set(['bash', 'powershell'])
@@ -215,6 +223,56 @@ export function createTaskGuardExtension(context: TaskGuardContext): ExtensionFa
         }
       }
     })
+  }
+}
+
+/**
+ * 为工单工作树安装专属 `pre-push` hook（D-32 / A-44）。
+ *
+ * 必须通过 `extensions.worktreeConfig` + `git config --worktree core.hooksPath`
+ * 把钩子限定在工单工作树私有的 `.git/worktrees/<name>/cloud-hooks` 里，
+ * 绝不写入共享的 `.git/hooks`——否则会把用户自己在主工作树的正常推送一起拦掉。
+ * 随 `git worktree remove` 自动清理。
+ */
+export async function installWorktreePrePushHook(
+  repoPath: string,
+  worktreePath: string
+): Promise<{ ok: boolean; hookPath?: string; error?: string }> {
+  const runGit = (cwd: string, args: string[]): Promise<string> =>
+    execFileAsync('git', ['-C', cwd, ...args], {
+      timeout: HOOK_GIT_TIMEOUT_MS,
+      windowsHide: true,
+    }).then((result) => result.stdout.trim())
+
+  try {
+    const rawGitDir = await runGit(worktreePath, ['rev-parse', '--git-dir'])
+    const rawCommonDir = await runGit(worktreePath, ['rev-parse', '--git-common-dir'])
+    const gitDir = canonicalize(path.resolve(worktreePath, rawGitDir))
+    const commonDir = canonicalize(path.resolve(worktreePath, rawCommonDir))
+    const compared = normalizeForCompare(commonDir, gitDir)
+    if (compared.root === compared.target) {
+      return { ok: false, error: 'Refusing to install pre-push hook on the main worktree' }
+    }
+
+    const hooksDir = path.join(gitDir, 'cloud-hooks')
+    const hookPath = path.join(hooksDir, 'pre-push')
+    await fsp.mkdir(hooksDir, { recursive: true })
+    await fsp.writeFile(hookPath, PRE_PUSH_SCRIPT, { encoding: 'utf-8', mode: 0o755 })
+    await fsp.chmod(hookPath, 0o755).catch(() => undefined)
+
+    await runGit(repoPath, ['config', 'extensions.worktreeConfig', 'true'])
+    await runGit(worktreePath, [
+      'config',
+      '--worktree',
+      'core.hooksPath',
+      hooksDir.replace(/\\/g, '/'),
+    ])
+    return { ok: true, hookPath }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    }
   }
 }
 

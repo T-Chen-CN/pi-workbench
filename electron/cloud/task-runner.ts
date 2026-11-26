@@ -16,6 +16,7 @@ import * as path from 'node:path'
 import { promisify } from 'node:util'
 import type {
   CloudChangedFile,
+  CloudSecretHit,
   CloudTaskMilestone,
   CloudTaskResult,
   CloudTaskSpec,
@@ -23,7 +24,12 @@ import type {
 } from 'pi-bridge'
 import { getBridgeEntryUrl } from '../app-paths.js'
 import { readJsonWithBackup, writeJsonAtomic, writeJsonAtomicAsync } from '../atomic-json.js'
-import { createTaskGuardExtension, type TaskGuardInfo } from './task-guard.js'
+import {
+  createTaskGuardExtension,
+  installWorktreePrePushHook,
+  type TaskGuardInfo,
+} from './task-guard.js'
+import { annotateChangedFiles, scanWorktreeSecrets } from './task-report.js'
 import { createDesktopCredentialStore } from '../credentials-store.js'
 import { getModelsStore } from '../models-store.js'
 
@@ -126,7 +132,8 @@ export interface CloudTaskRunnerDeps {
     taskId: string,
     error: string,
     changedFiles?: CloudChangedFile[],
-    worktreeClean?: boolean
+    worktreeClean?: boolean,
+    secretHits?: CloudSecretHit[]
   ) => void
   onInterrupted: (taskId: string, reason: string, worktreeClean?: boolean) => void
   /** 工作单元回收回执（F-19a / A-43）：只有这里才能让云端写 `closedAt` */
@@ -284,7 +291,13 @@ export class CloudTaskRunner {
   }> {
     return this.withUnitLock(spec.workUnitId, async () => {
       const existing = this.units.get(spec.workUnitId)
-      if (existing && existsSync(existing.worktreePath)) return { ok: true, record: existing }
+      if (existing && existsSync(existing.worktreePath)) {
+        const hook = await installWorktreePrePushHook(existing.repoPath, existing.worktreePath)
+        if (!hook.ok) {
+          this.deps.logger.warn('[Cloud Task] Failed to ensure worktree pre-push hook:', hook.error)
+        }
+        return { ok: true, record: existing }
+      }
 
       const repoPath = spec.repo.workspacePath
       if (this.deps.isAllowedWorkspace) {
@@ -310,6 +323,11 @@ export class CloudTaskRunner {
       const bound = await coordinator.bind(bindingId, 'new', base)
       if (!bound.success || !bound.worktree) {
         return { ok: false, error: bound.error ?? 'Unable to create a worktree for this task' }
+      }
+      // D-32 / A-44：在单元工作树装独立 pre-push hook，防止绕过 tool_call 推送远端
+      const hook = await installWorktreePrePushHook(repoPath, bound.worktree.path)
+      if (!hook.ok) {
+        this.deps.logger.warn('[Cloud Task] Failed to install worktree pre-push hook:', hook.error)
       }
       const record: UnitRecord = {
         repoPath,
@@ -486,11 +504,14 @@ export class CloudTaskRunner {
       if (this.cancelRequested.has(taskId)) {
         this.cancelRequested.delete(taskId)
         const clean = worktree.ok && worktree.record ? await this.isWorktreeClean(worktree.record.worktreePath) : true
+        // 必须先释放 starting 占位再发终态帧，否则云端立刻回发的 close_unit 会被误判为 task-running（P-09）
+        this.starting.delete(taskId)
         this.deps.onInterrupted(taskId, 'user-cancel', clean)
         return
       }
       if (!worktree.ok || !worktree.record) {
         // 树都没建起来：云端那个单元没有 worktree 可收，按「干净」报一次让它能收口
+        this.starting.delete(taskId)
         this.deps.onFailed(taskId, worktree.error ?? 'Unable to prepare the worktree', undefined, true)
         return
       }
@@ -504,6 +525,7 @@ export class CloudTaskRunner {
         if (this.cancelRequested.has(taskId)) {
           this.cancelRequested.delete(taskId)
           const clean = await this.isWorktreeClean(unit.worktreePath)
+          this.starting.delete(taskId)
           this.deps.onInterrupted(taskId, 'user-cancel', clean)
           return
         }
@@ -517,6 +539,7 @@ export class CloudTaskRunner {
       if (this.cancelRequested.has(taskId)) {
         this.cancelRequested.delete(taskId)
         const clean = await this.isWorktreeClean(unit.worktreePath)
+        this.starting.delete(taskId)
         this.deps.onInterrupted(taskId, 'user-cancel', clean)
         return
       }
@@ -548,6 +571,7 @@ export class CloudTaskRunner {
       if (this.cancelRequested.has(taskId)) {
         this.cancelRequested.delete(taskId)
         const clean = await this.isWorktreeClean(unit.worktreePath)
+        this.starting.delete(taskId)
         this.deps.onInterrupted(taskId, 'user-cancel', clean)
         return
       }
@@ -607,23 +631,34 @@ export class CloudTaskRunner {
     let clean = true
     try {
       const output = await this.git(worktreePath, ['status', '--porcelain'])
-      changedFiles = output
-        .split(/\r?\n/)
-        .filter((line) => line.trim())
-        .map((line) => ({
-          path: line.slice(3).trim().replace(/^"|"$/g, '').replace(/\\/g, '/'),
-          kind: (line.slice(0, 2).trim() === '??'
-            ? 'added'
-            : line.includes('D')
-              ? 'deleted'
-              : 'modified') as CloudChangedFile['kind'],
-        }))
+      changedFiles = annotateChangedFiles(
+        output
+          .split(/\r?\n/)
+          .filter((line) => line.trim())
+          .map((line) => ({
+            path: line.slice(3).trim().replace(/^"|"$/g, '').replace(/\\/g, '/'),
+            kind: (line.slice(0, 2).trim() === '??'
+              ? 'added'
+              : line.includes('D')
+                ? 'deleted'
+                : 'modified') as CloudChangedFile['kind'],
+          }))
+      )
       clean = changedFiles.length === 0
     } catch {
       // git 不可用：按“不确定”处理，宁可保留树也不要误删
       clean = false
     }
-    this.deps.onFailed(taskId, error, changedFiles, clean)
+    const secretHits = clean ? [] : await scanWorktreeSecrets(undefined, worktreePath).catch(() => [])
+    // 必须先释放 starting 占位再发 task_failed，否则云端立刻回发 close_unit 会被 closeUnit 误判为 task-running（P-09）
+    this.starting.delete(taskId)
+    this.deps.onFailed(
+      taskId,
+      error,
+      changedFiles,
+      clean,
+      secretHits.length > 0 ? secretHits : undefined
+    )
   }
 
   private async retryAfterConfigRefresh(taskId: string, spec: CloudTaskSpec): Promise<boolean> {
@@ -720,6 +755,10 @@ export class CloudTaskRunner {
     const changedFiles = await this.collectChangedFiles(task)
     // F-19a：干净 = 什么都没留下来，服务端可以自动回收（脏树则保留等用户）
     const worktreeClean = await this.isWorktreeClean(task.worktreePath)
+    const secretHits = await scanWorktreeSecrets(
+      this.units.get(task.unitId)?.base,
+      task.worktreePath
+    ).catch(() => [] as CloudSecretHit[])
     let commit = ''
     let branch = ''
     try {
@@ -736,6 +775,7 @@ export class CloudTaskRunner {
       changedFiles,
       branch: branch && branch !== 'HEAD' ? branch : undefined,
       commit: commit || undefined,
+      secretHits: secretHits.length > 0 ? secretHits : undefined,
       worktreeClean,
     }
     if (changedFiles.length === 0) {
@@ -753,11 +793,21 @@ export class CloudTaskRunner {
   private async finishFailed(task: ActiveTask, error: string): Promise<void> {
     const changedFiles = await this.collectChangedFiles(task).catch(() => [] as CloudChangedFile[])
     const worktreeClean = await this.isWorktreeClean(task.worktreePath)
+    const secretHits = await scanWorktreeSecrets(
+      this.units.get(task.unitId)?.base,
+      task.worktreePath
+    ).catch(() => [] as CloudSecretHit[])
     this.active.delete(task.id)
     this.cancelRequested.delete(task.id)
     this.persistedTasks.delete(task.id)
     await this.persistTasks().catch(() => undefined)
-    this.deps.onFailed(task.id, error, changedFiles, worktreeClean)
+    this.deps.onFailed(
+      task.id,
+      error,
+      changedFiles,
+      worktreeClean,
+      secretHits.length > 0 ? secretHits : undefined
+    )
   }
 
   /** 工作树是否干净：`git status --porcelain` 无输出（ignored 文件不算脏，所以装了依赖也算干净） */
@@ -1120,5 +1170,5 @@ export async function collectTaskChangedFiles(
     }
   }
 
-  return [...files.values()].slice(0, 200)
+  return annotateChangedFiles([...files.values()].slice(0, 200))
 }

@@ -31,7 +31,21 @@ function summarizeTask(task: ReturnType<CloudStore['findTask']>): string {
   ]
   if (task.progress.summary) lines.push(`last: ${task.progress.summary}`)
   if (task.progress.changedFiles?.length) {
-    lines.push(`changed: ${task.progress.changedFiles.map((file) => file.path).join(', ')}`)
+    const attention = task.progress.changedFiles.filter((file) => Boolean(file.attention))
+    const normal = task.progress.changedFiles.filter((file) => !file.attention)
+    if (attention.length > 0) {
+      lines.push(
+        `attention: ${attention.map((file) => `${file.path} (${file.attention})`).join(', ')}`
+      )
+    }
+    if (normal.length > 0) {
+      lines.push(`changed: ${normal.map((file) => file.path).join(', ')}`)
+    }
+  }
+  if (task.progress.secretHits?.length) {
+    lines.push(
+      `secret-hits (locations only): ${task.progress.secretHits.map((hit) => `${hit.path}:${hit.line} (${hit.kind})`).join(', ')}`
+    )
   }
   if (task.progress.branch) lines.push(`branch: ${task.progress.branch}`)
   if (task.progress.commit) lines.push(`commit: ${task.progress.commit}`)

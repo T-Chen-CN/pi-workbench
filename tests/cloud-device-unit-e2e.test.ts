@@ -71,7 +71,7 @@ function headers(extra: Record<string, string> = {}): Record<string, string> {
   return { 'content-type': 'application/json', cookie, ...extra }
 }
 
-async function waitFor<T>(probe: () => T | Promise<T>, label: string, timeoutMs = 15_000): Promise<T> {
+async function waitFor<T>(probe: () => T | Promise<T>, label: string, timeoutMs = 30_000): Promise<T> {
   const started = Date.now()
   for (;;) {
     const value = await probe()

@@ -374,12 +374,16 @@ export class TaskDispatcher {
             branch: frame.result.branch,
             commit: frame.result.commit,
             changedFiles: frame.result.changedFiles,
+            secretHits: frame.result.secretHits,
           },
         })
         if (moved.changed) {
           await this.deps.store.saveTask(moved.task)
           this.finish(moved.task)
-          await this.wake(moved.task, 'done', frame.result.summary)
+          await this.wake(moved.task, 'done', frame.result.summary, {
+            changedFiles: frame.result.changedFiles,
+            secretHits: frame.result.secretHits,
+          })
           // FIFO：同一设备的下一张工单在终态后接力（A-35）；顺序不能反：
           // 先补投下一张，`reclaimIfClean` 才看得出该单元还有后续工单（A-46）
           await this.dispatchNextFor(moved.task.spec.deviceId)
@@ -392,16 +396,23 @@ export class TaskDispatcher {
         const task = this.deps.store.findTask(frame.taskId)
         if (!task || task.spec.deviceId !== deviceId) return
         this.clearInFlight(deviceId, task.id)
+        const mergedChanges = mergeChangedFiles(task.progress.changedFiles, frame.changedFiles)
         const moved = transition(task, 'failed', {
           now: this.now(),
           reason: 'failed',
           error: frame.error,
-          progress: { changedFiles: mergeChangedFiles(task.progress.changedFiles, frame.changedFiles) },
+          progress: {
+            changedFiles: mergedChanges,
+            ...(frame.secretHits?.length ? { secretHits: frame.secretHits } : {}),
+          },
         })
         if (moved.changed) {
           await this.deps.store.saveTask(moved.task)
           this.finish(moved.task)
-          await this.wake(moved.task, 'failed', frame.error)
+          await this.wake(moved.task, 'failed', frame.error, {
+            changedFiles: mergedChanges,
+            secretHits: frame.secretHits,
+          })
           await this.dispatchNextFor(moved.task.spec.deviceId)
           await this.reclaimIfClean(moved.task, frame.worktreeClean, 'converged')
         }
@@ -742,7 +753,11 @@ export class TaskDispatcher {
   private async wake(
     task: CloudTaskSnapshot,
     kind: CloudTaskEventKind,
-    summary: string
+    summary: string,
+    extra?: {
+      changedFiles?: CloudChangedFile[]
+      secretHits?: import('pi-bridge').CloudSecretHit[]
+    }
   ): Promise<void> {
     const payload: CloudTaskEventPayload = {
       eventId: `evt-${task.id}-${kind}-${this.now()}`,
@@ -753,6 +768,8 @@ export class TaskDispatcher {
       summary,
       status: task.status,
       terminalReason: task.terminalReason,
+      ...(extra?.changedFiles?.length ? { changedFiles: extra.changedFiles } : {}),
+      ...(extra?.secretHits?.length ? { secretHits: extra.secretHits } : {}),
     }
     // 事件载荷同时进 details：形状由 buildTaskEventMessage 定义，投递在 wake 实现里完成
     await this.deps.wake(payload)

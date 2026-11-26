@@ -15,7 +15,10 @@ import {
   isTerminalTaskStatus,
   normalizeResumeCursor,
   type ClientToServerFrame,
+  type CloudAwaySummary,
+  type CloudAwaySummaryItem,
   type CloudSnapshot,
+  type CloudTaskSnapshot,
   type CloudWorkspaceInfo,
   type DeviceToServerFrame,
 } from 'pi-bridge'
@@ -111,6 +114,16 @@ export async function createCloudServer(
     })
   }
 
+  let activeAwaySummary: CloudAwaySummary | undefined
+
+  function latchAwaySummary(): void {
+    const since = store.getLastClientLeftAt()
+    if (since === null) return
+    const now = Date.now()
+    activeAwaySummary = buildAwaySummary(store.listTasks(), since, now)
+    void store.setLastClientLeftAt(null).catch(() => undefined)
+  }
+
   const hub = new Hub(
     {
       logger,
@@ -132,6 +145,15 @@ export async function createCloudServer(
         })
       },
       onClientHello: () => undefined,
+      onClientConnected: (wasEmpty) => {
+        if (wasEmpty) latchAwaySummary()
+      },
+      onClientsEmpty: () => {
+        activeAwaySummary = undefined
+        if (!closing) {
+          void store.setLastClientLeftAt(Date.now()).catch(() => undefined)
+        }
+      },
     },
     () => Date.now()
   )
@@ -153,6 +175,10 @@ export async function createCloudServer(
     // 不在这里拉一下：重启后没人说过话，`sessionId` 还是 null → 快照里历史空白，
     // 表现就是「重启后对话全没了」。模拟配置未推时不报错，只是历史为空。
     await ensureAgent().catch(() => false)
+    // 覆盖 HTTP GET /v1/snapshot 直接拉取（尚未建 WS 时同样能拿到离线期汇总）
+    if (store.getLastClientLeftAt() !== null) {
+      latchAwaySummary()
+    }
     return {
       serverVersion: config.version,
       protocol: CLOUD_PROTOCOL_VERSION,
@@ -163,6 +189,7 @@ export async function createCloudServer(
       devices: dispatcher.deviceSnapshots(),
       units: dispatcher.unitViews(),
       authorizations: store.activeAuthorizations().map(authorizationView),
+      ...(activeAwaySummary ? { awaySummary: activeAwaySummary } : {}),
     }
   }
 
@@ -321,6 +348,8 @@ export async function createCloudServer(
         return
       case 'say':
         if (typeof frame.text !== 'string') return
+        // 用户回到会话发言后清空离线汇总，避免旧汇总一直挂着
+        activeAwaySummary = undefined
         await ensureAgent()
         await session.say(frame.text, typeof frame.clientMessageId === 'string' ? frame.clientMessageId : `say-${Date.now()}`)
         return
@@ -790,6 +819,65 @@ export async function createCloudServer(
   }
 
   return cloudServer
+}
+
+function formatAwayItemStatus(item: CloudAwaySummaryItem): string {
+  switch (item.status) {
+    case 'done':
+      return '已完成'
+    case 'failed':
+      return '失败'
+    case 'waiting_human':
+      return '等待决定'
+    case 'interrupted':
+      return '因退出应用中断'
+    case 'cancelled':
+      return item.terminalReason === 'device-offline' ? '因设备离线取消' : '已取消'
+    case 'expired':
+      return '派发超时'
+    case 'rejected':
+      return '被拒绝'
+    default:
+      return item.status
+  }
+}
+
+/** 构造「你离开期间…」汇总（F-51 / A-23）；无终态或等待决定工单时返回 undefined */
+export function buildAwaySummary(
+  tasks: CloudTaskSnapshot[],
+  since: number,
+  until: number
+): CloudAwaySummary | undefined {
+  const items: CloudAwaySummaryItem[] = []
+  for (const task of tasks) {
+    if (isTerminalTaskStatus(task.status)) {
+      const at = task.finishedAt ?? task.updatedAt
+      if (at >= since) {
+        items.push({
+          taskId: task.id,
+          title: task.spec.title,
+          status: task.status,
+          terminalReason: task.terminalReason,
+          at,
+        })
+      }
+      continue
+    }
+    if (task.status === 'waiting_human' && task.updatedAt >= since) {
+      items.push({
+        taskId: task.id,
+        title: task.spec.title,
+        status: task.status,
+        at: task.updatedAt,
+      })
+    }
+  }
+  if (items.length === 0) return undefined
+  items.sort((a, b) => a.at - b.at)
+  const text = `你离开期间：${items
+    .map((item) => `${item.taskId}（${item.title}）${formatAwayItemStatus(item)}`)
+    .join('；')}`
+  return { since, until, items, text }
 }
 
 function sanitize(input: unknown): CloudWorkspaceInfo[] {
