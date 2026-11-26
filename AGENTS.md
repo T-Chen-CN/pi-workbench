@@ -80,14 +80,15 @@ npm run build      # 渲染层 + bridge + 主进程
 - 面板宽度、终端开关、窗口句柄、面板宿主属于运行期状态，**不落盘**；会话的权限模式与授权、结构化计划、分支选中叶子会随会话落盘（`data/agent/session-extras/`）。
 - 注释只写「怎么实现 + 什么约束」（用「必须 / 否则」表述），不写「以前怎么错」；演进史交给 `git log`。
 
-## 6. 验证矩阵（收尾前按改动区域执行）
+## 6. 验证矩阵（按改动粒度分层，避免小改动反复跑全量）
 
 | 改动范围 | 必须跑 |
 | --- | --- |
-| `src/` 任意 | 对应单文件 vitest → 收尾 `npm test` + `npm run lint` |
+| 日常小功能 / 局部修复（`src/` / `apps/cloud/web-src/`） | 相关单测（或 `npx vitest related <改动文件>`）+ `npx eslint <改动文件>` + `npm run type-check`（不跑全量 `npm test` 与生产打包） |
 | `electron/` | `npm run type-check` + 相关 `tests/{main-ipc,*-manager,updater,...}.test.ts` |
-| `pi-bridge/` | `npm run build:bridge` + `tests/{session-*,agent-*}.test.ts` |
-| UI / 样式 | `tests/design-system.test.ts` + Paper / Ink 两套截图 + 1024 / 1440 宽度 |
+| `pi-bridge/` | `npm run build:bridge` + 相关 `tests/{session-*,agent-*}.test.ts` |
+| UI / 样式 | `tests/design-system.test.ts`（大视觉改版再补 Paper / Ink + 1024 / 1440 截图） |
+| 公共底座 / 依赖升级 / 跨模块重构 / 发版前 | 全量 `npm test` + `npm run lint` + 对应 `npm run build` / `npm run build:cloud` |
 | 打包 / 更新 / NSIS | `npx electron-builder --win --dir --publish never` |
 
 渲染层测试用 `// @vitest-environment jsdom`；Monaco / xterm 用 `vi.mock` 替身。改交互后补或改用例 —— 测试是这类改动的唯一回归网。
