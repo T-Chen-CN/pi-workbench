@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Button, Caption, DataText, Field, Input, Modal, Select, Textarea } from '../../../src/components/ui'
 import { Card, CardHeader, StatusText } from '../../../src/components/patterns'
+import { TaskResultSection, summarizeTaskPreview } from '../../../src/components/TaskResultSection'
 import {
   ACTIVE_TASK_STATUSES,
   MEMORY_KIND_LABELS,
@@ -34,6 +35,7 @@ export const TaskCard: React.FC<{
   stoppingTaskIds: Record<string, true>
   answerDrafts: Record<string, string>
   instructionDrafts: Record<string, string>
+  compact?: boolean
   onAnswerDraft: (taskId: string, value: string) => void
   onInstructionDraft: (taskId: string, value: string) => void
   onSendAnswer: (taskId: string, text: string) => void
@@ -45,6 +47,7 @@ export const TaskCard: React.FC<{
   stoppingTaskIds,
   answerDrafts,
   instructionDrafts,
+  compact = false,
   onAnswerDraft,
   onInstructionDraft,
   onSendAnswer,
@@ -52,7 +55,7 @@ export const TaskCard: React.FC<{
   onStopTask,
 }) => {
   return (
-    <Card density="compact">
+    <Card density={compact ? 'compact' : 'default'}>
       <CardHeader title="工单" status={<Caption className="text-ink-muted">{tasks.length}</Caption>} />
       {tasks.length === 0 ? (
         <Caption className="mt-2 block text-ink-muted">还没有工单</Caption>
@@ -65,11 +68,8 @@ export const TaskCard: React.FC<{
             const offline = device ? !device.online : false
             const stopping = Boolean(stoppingTaskIds[task.id])
             const changedFiles = task.result?.changedFiles || task.progress?.changedFiles || []
-            const attentionFiles = changedFiles.filter((file) => Boolean(file.attention))
-            const normalFiles = changedFiles.filter((file) => !file.attention)
             const secretHits = task.result?.secretHits || task.progress?.secretHits || []
-            const hasDetails =
-              Boolean(task.result?.summary) || changedFiles.length > 0 || secretHits.length > 0
+            const summaryPreview = summarizeTaskPreview(task.progress?.summary || task.result?.summary)
 
             return (
               <li
@@ -95,8 +95,10 @@ export const TaskCard: React.FC<{
                 <DataText className="truncate text-ink-muted">
                   {spec.deviceId || ''} · {spec.repo?.workspacePath || ''}
                 </DataText>
-                {task.progress?.summary && (
-                  <Caption className="text-ink-muted">{task.progress.summary}</Caption>
+                {summaryPreview && (
+                  <Caption className="truncate text-ink-muted" title={summaryPreview}>
+                    {summaryPreview}
+                  </Caption>
                 )}
                 {task.status === 'waiting_human' && task.question && (
                   <div className="flex flex-col gap-1.5 border border-rule-hairline bg-sunken p-2">
@@ -162,39 +164,14 @@ export const TaskCard: React.FC<{
                     </Button>
                   </div>
                 )}
-                {hasDetails && (
-                  <details className="type-caption text-ink-muted">
-                    <summary className="cursor-pointer select-none">结果与改动清单</summary>
-                    <div className="mt-1.5 flex flex-col gap-1 border-l border-rule-hairline pl-2.5">
-                      {task.result?.summary && (
-                        <p className="m-0 whitespace-pre-wrap type-caption text-ink">
-                          {task.result.summary}
-                        </p>
-                      )}
-                      {attentionFiles.length > 0 && (
-                        <DataText className="text-warning">
-                          注意：
-                          {attentionFiles
-                            .map((file) => `${file.path} (${file.attention})`)
-                            .join(', ')}
-                        </DataText>
-                      )}
-                      {normalFiles.length > 0 && (
-                        <DataText className="text-ink-muted">
-                          普通：{normalFiles.map((file) => file.path).join(', ')}
-                        </DataText>
-                      )}
-                      {secretHits.length > 0 && (
-                        <DataText className="text-danger">
-                          疑似密钥（仅报位置）：
-                          {secretHits
-                            .map((hit) => `${hit.path}:${hit.line} (${hit.kind})`)
-                            .join(', ')}
-                        </DataText>
-                      )}
-                    </div>
-                  </details>
-                )}
+                <TaskResultSection
+                  taskId={task.id}
+                  summary={task.result?.summary}
+                  changedFiles={changedFiles}
+                  secretHits={secretHits}
+                  compact={compact}
+                  language="zh"
+                />
                 {task.error && <DataText className="text-danger">{task.error}</DataText>}
                 {active && (
                   <div>

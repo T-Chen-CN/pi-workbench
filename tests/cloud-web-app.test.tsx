@@ -494,6 +494,36 @@ describe('云端 Web 控制台主界面', () => {
     expect(document.body.textContent).toContain('重启后新回复')
   })
 
+  it('工单页长 Markdown 报告外层单行预览、展开后按 Streamdown 排版渲染', async () => {
+    const { socket } = await mountApp()
+    const longReport = '## 项目调研\n\n- **核心**：`InkBoard` 正常\n- 共 16 组测试'
+
+    emitFrame(socket, {
+      v: 1,
+      type: 'event',
+      seq: 50,
+      event: {
+        type: 'task',
+        task: {
+          id: 'T-md-web',
+          status: 'done',
+          spec: { title: '只读检查项目现状', deviceId: 'dev-1', repo: { workspacePath: 'E:/Projects/画板开发' } },
+          progress: { summary: longReport },
+          result: { summary: longReport, changedFiles: [] },
+        },
+      },
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: '工单' }))
+    expect(screen.getByText(/项目调研 · 核心：InkBoard 正常/)).toBeTruthy()
+    expect(document.getElementById('task-result-T-md-web')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /结果与改动清单/ }))
+    const panel = document.getElementById('task-result-T-md-web')
+    expect(panel?.querySelector('h2')?.textContent).toBe('项目调研')
+    expect(panel?.querySelector('strong')?.textContent).toBe('核心')
+  })
+
   it('记忆页编辑 AGENTS.md 收到 WS 事件不丢焦点，并支持记忆内联编辑', async () => {
     const { socket } = await mountApp()
 

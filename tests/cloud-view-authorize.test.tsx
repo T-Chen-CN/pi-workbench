@@ -350,4 +350,38 @@ describe('云端页交互与配置升级（F-01 / U-01 / U-02 / U-03 / U-04）',
     expect(screen.getByText(/先核对在线设备清单/)).toBeTruthy()
     expect(screen.getByText('list_devices')).toBeTruthy()
   })
+
+  it('工单长 Markdown 报告外层只显示清洗后的单行预览，点开结果区按 Markdown 渲染', () => {
+    const report = '# 「画板开发」现状报告\n\n- **技术栈**：`WinUI 3`\n- 构建通过'
+    useCloudStore.setState({
+      tasks: [
+        {
+          id: 'T-report',
+          workUnitId: 'u-1',
+          title: '只读检查「画板开发」',
+          status: 'done',
+          deviceId: 'dev-1',
+          workspacePath: 'E:/Projects/画板开发',
+          createdAt: 1,
+          updatedAt: 2,
+          lastMilestone: report,
+          result: { summary: report, changedFiles: [{ path: 'README.md', kind: 'modified' }] },
+        },
+      ],
+    })
+
+    const { container } = render(<CloudView onBackHome={() => undefined} />)
+    // 外层摘要已剥离 Markdown 符号且单行截断，未展开前不渲染 Markdown 标题
+    expect(screen.getByText(/「画板开发」现状报告 · 技术栈：WinUI 3/)).toBeTruthy()
+    expect(container.querySelector('#task-result-T-report')).toBeNull()
+
+    const toggle = screen.getByRole('button', { name: /结果与改动清单/ })
+    expect(toggle.textContent).toContain('1 个文件')
+    fireEvent.click(toggle)
+
+    const panel = container.querySelector('#task-result-T-report')
+    expect(panel?.querySelector('h1')?.textContent).toBe('「画板开发」现状报告')
+    expect(panel?.querySelector('strong')?.textContent).toBe('技术栈')
+    expect(panel?.textContent).toContain('README.md')
+  })
 })

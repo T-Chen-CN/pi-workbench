@@ -90,6 +90,7 @@ pi-workbench/
 │   │   ├── AgentMarkdown.tsx     # 桌面端 Markdown 包装（注入路径打开与外链 IPC）
 │   │   ├── StreamdownView.tsx    # 统一流式 Markdown 渲染原语（Streamdown v2 + CJK/KaTeX/Mermaid + 零 WASM Shiki）
 │   │   ├── CloudTraceSection.tsx # 可折叠思考与工具轨迹块（桌面端云端页与 Web 共用）
+│   │   ├── TaskResultSection.tsx # 工单单行去噪摘要与折叠 Markdown 结果报告（桌面端云端页与 Web 共用）
 │   │   ├── StreamingTranscript.tsx # 统一贴底滚动容器与回底浮动按钮（use-stick-to-bottom）
 │   │   ├── AgentTrace.tsx        # 思考、文本、工具步骤时间线
 │   │   ├── ApprovalCard.tsx      # 工具审批卡

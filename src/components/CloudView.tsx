@@ -33,6 +33,7 @@ import type { CloudCatalogModel } from '../types/electron'
 import { api } from '../api'
 import { StreamingMarkdown } from './AgentMarkdown'
 import { CloudTraceSection } from './CloudTraceSection'
+import { TaskResultSection, summarizeTaskPreview } from './TaskResultSection'
 import { StreamingTranscript, type StreamingTranscriptHandle } from './StreamingTranscript'
 import { Button, EmptyState, Field, IconButton, Input, Modal, Select, Spinner, Textarea } from './ui'
 import { Card, CardHeader, SectionHeader, StatusText, Tab } from './patterns'
@@ -776,6 +777,7 @@ const TaskList: React.FC<{
   onInstructionDraft,
 }) => {
   const t = useI18nStore((state) => state.t)
+  const language = useI18nStore((state) => state.language)
   const onlineById = useMemo(() => {
     const map = new Map<string, boolean>()
     for (const device of devices) map.set(device.id, device.online)
@@ -797,11 +799,8 @@ const TaskList: React.FC<{
               ? formatDuration(task.startedAt, task.finishedAt ?? Date.now())
               : ''
             const changedFiles = task.changedFiles ?? task.result?.changedFiles ?? []
-            const attentionFiles = changedFiles.filter((file) => Boolean(file.attention))
-            const normalFiles = changedFiles.filter((file) => !file.attention)
             const secretHits = task.secretHits ?? task.result?.secretHits ?? []
-            const hasDetails =
-              Boolean(task.result?.summary) || changedFiles.length > 0 || secretHits.length > 0
+            const milestonePreview = summarizeTaskPreview(task.lastMilestone || task.result?.summary)
 
             return (
               <li key={task.id} className="flex flex-col gap-1">
@@ -817,8 +816,10 @@ const TaskList: React.FC<{
                   {task.deviceId} · {task.workspacePath}
                   {elapsed ? ` · ${elapsed}` : ''}
                 </span>
-                {task.lastMilestone && (
-                  <span className="truncate type-caption text-ink-muted">{task.lastMilestone}</span>
+                {milestonePreview && (
+                  <span className="truncate type-caption text-ink-muted" title={milestonePreview}>
+                    {milestonePreview}
+                  </span>
                 )}
                 {task.status === 'waiting_human' && task.question && (
                   <div className="flex flex-col gap-1">
@@ -871,33 +872,14 @@ const TaskList: React.FC<{
                     </Button>
                   </div>
                 )}
-                {hasDetails && (
-                  <details className="type-caption text-ink-muted">
-                    <summary className="cursor-pointer select-none">{t('cloudChangedFiles')}</summary>
-                    {task.result?.summary && (
-                      <p className="mt-1 whitespace-pre-wrap text-ink">{task.result.summary}</p>
-                    )}
-                    {attentionFiles.length > 0 && (
-                      <p className="mt-1 type-data text-warning">
-                        {t('cloudChangedAttention')}:{' '}
-                        {attentionFiles
-                          .map((file) => `${file.path} (${file.attention})`)
-                          .join(', ')}
-                      </p>
-                    )}
-                    {normalFiles.length > 0 && (
-                      <p className="mt-1 type-data">
-                        {t('cloudChangedNormal')}: {normalFiles.map((file) => file.path).join(', ')}
-                      </p>
-                    )}
-                    {secretHits.length > 0 && (
-                      <p className="mt-1 type-data text-danger">
-                        {t('cloudSecretHits')}:{' '}
-                        {secretHits.map((hit) => `${hit.path}:${hit.line} (${hit.kind})`).join(', ')}
-                      </p>
-                    )}
-                  </details>
-                )}
+                <TaskResultSection
+                  taskId={task.id}
+                  summary={task.result?.summary}
+                  changedFiles={changedFiles}
+                  secretHits={secretHits}
+                  compact
+                  language={language}
+                />
                 {task.error && <span className="type-data text-danger">{task.error}</span>}
                 {active && (
                   <Button
