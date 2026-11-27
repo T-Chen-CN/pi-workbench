@@ -485,11 +485,7 @@ const WorkGroup: React.FC<WorkGroupProps> = ({
                 nested={Boolean(
                   part.parentToolCallId && toolCallIds.has(part.parentToolCallId)
                 )}
-                onOpenResult={
-                  part.status !== 'running' && onOpenToolResult
-                    ? () => onOpenToolResult(part.toolCallId, part.toolName)
-                    : undefined
-                }
+                onOpenResult={onOpenToolResult}
               />
             )
           )}
@@ -537,12 +533,13 @@ const ToolRow = React.memo(function ToolRow({
   part: Extract<AgentTracePart, { type: 'tool' }>
   hasDiff: boolean
   onOpenDiff?: (toolCallId: string) => void
-  onOpenResult?: () => void
+  onOpenResult?: (toolCallId: string, toolName: string) => void
   nested?: boolean
 }) {
   const { t } = useI18nStore()
   const [open, setOpen] = useState(false)
   const hasDetail = Boolean(part.argsSummary || part.resultPreview || part.filePath)
+  const canOpenResult = Boolean(part.status !== 'running' && onOpenResult)
   const contentId = `tool-${part.id}`
   const label = toolLabel(t, part.toolName)
   const statusText =
@@ -628,7 +625,7 @@ const ToolRow = React.memo(function ToolRow({
           {part.status === 'error' && !part.resultPreview && (
             <Caption className="text-danger">{t('toolError')}</Caption>
           )}
-          {((hasDiff && onOpenDiff) || onOpenResult) && (
+          {((hasDiff && onOpenDiff) || canOpenResult) && (
             <div className="flex flex-wrap items-center gap-3">
               {hasDiff && onOpenDiff && (
                 <button
@@ -639,10 +636,10 @@ const ToolRow = React.memo(function ToolRow({
                   {t('viewChanges')}
                 </button>
               )}
-              {onOpenResult && (
+              {canOpenResult && onOpenResult && (
                 <button
                   type="button"
-                  onClick={onOpenResult}
+                  onClick={() => onOpenResult(part.toolCallId, part.toolName)}
                   className="type-label text-accent underline underline-offset-2 hover:text-ink"
                 >
                   {t('viewFullResult')}

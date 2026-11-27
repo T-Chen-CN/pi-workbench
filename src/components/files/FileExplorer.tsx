@@ -131,7 +131,13 @@ export const FileExplorer: React.FC<{
   collapseButtonRef?: React.Ref<HTMLButtonElement>
   panelId?: string
   active?: boolean
-}> = ({ workspacePath, onCollapse, collapseButtonRef, panelId = 'file-panel', active = true }) => {
+}> = React.memo(function FileExplorer({
+  workspacePath,
+  onCollapse,
+  collapseButtonRef,
+  panelId = 'file-panel',
+  active = true,
+}) {
   const t = useI18nStore((state) => state.t)
   const panelMenu = usePanelContextMenu('files')
   const [tree, setTree] = useState<TreeNode[]>([])
@@ -281,8 +287,13 @@ export const FileExplorer: React.FC<{
     }
   }, [workspacePath, treeScrollRef])
 
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const pendingFsRefreshRef = useRef(false)
+
   // Initialize tree when workspace changes
   useEffect(() => {
+    pendingFsRefreshRef.current = false
     if (workspacePath) {
       void loadRootDirectory(workspacePath).then(() => {
         hydratedRef.current = true
@@ -301,8 +312,8 @@ export const FileExplorer: React.FC<{
     return () => cancelAnimationFrame(frame)
   }, [loading, treeScrollRef])
 
-  // 文件系统变化时刷新目录树（只在新增/删除/重命名时刷新，忽略编辑器保存）
-  // 防抖合并批量事件，避免一次批量操作触发多次根目录重建
+  // 文件系统变化时刷新目录树（只在新增/删除/重命名时刷新，忽略编辑器保存）；
+  // 非激活工作区仅记录待刷新标记，不立刻在后台递归发 listDirectory IPC，回到前台再单次合并刷新
   useEffect(() => {
     if (!workspacePath) return
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -322,11 +333,19 @@ export const FileExplorer: React.FC<{
       const root = norm(workspacePath)
       const changed = norm(payload.path)
       if (changed !== root && !changed.startsWith(`${root}/`)) return
+      if (!activeRef.current) {
+        pendingFsRefreshRef.current = true
+        return
+      }
       scheduleRefresh()
     })
     // Agent 直接写盘时，渲染层在收到本轮修改后主动要求刷新
     const onManualRefresh = () => {
-      if (active) scheduleRefresh()
+      if (!activeRef.current) {
+        pendingFsRefreshRef.current = true
+        return
+      }
+      scheduleRefresh()
     }
     const offRefresh = onAppEvent('pi:refresh-files', onManualRefresh)
     return () => {
@@ -334,7 +353,14 @@ export const FileExplorer: React.FC<{
       offRefresh()
       if (timer) clearTimeout(timer)
     }
-  }, [workspacePath, loadRootDirectory, active])
+  }, [workspacePath, loadRootDirectory])
+
+  // 后台休眠期间积攒的文件树变更在切回前台时一次性补刷
+  useEffect(() => {
+    if (!active || !workspacePath || !pendingFsRefreshRef.current) return
+    pendingFsRefreshRef.current = false
+    void loadRootDirectory(workspacePath)
+  }, [active, workspacePath, loadRootDirectory])
 
   const loadDirectory = async (path: string): Promise<FileEntry[]> => {
     try {
@@ -837,4 +863,4 @@ export const FileExplorer: React.FC<{
       {panelMenu.menu}
     </div>
   )
-}
+})

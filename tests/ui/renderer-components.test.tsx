@@ -452,7 +452,7 @@ describe('ChatPanel', () => {
     expect(vi.mocked(piAgentAPI.chat).mock.calls[0][0] as string).toContain('/ws/README.md')
   })
 
-  it('scans symbols once after typing settles instead of on every keystroke', async () => {
+  it('scans symbols only when symbol picker is open and debounces edits while open', async () => {
     const extract = vi.mocked(extractSymbols)
     extract.mockClear()
 
@@ -468,10 +468,15 @@ describe('ChatPanel', () => {
         isSaving: false,
       })
     })
-    // 打开文件后先算一次：附加符号菜单要能马上列出符号
+    // 符号选择器未打开时绝不触发全文正则扫描（防止后台工作区每次按键后 400ms 白扫）
+    expect(extract).toHaveBeenCalledTimes(0)
+
+    // 打开附件菜单并切到符号视图后才按需扫描一次
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.attachContext }))
+    fireEvent.click(screen.getByRole('button', { name: translations.zh.attachSymbol }))
     await waitFor(() => expect(extract).toHaveBeenCalledTimes(1))
 
-    // 连续输入：内容变了，但全文扫描不应该跟着跑
+    // 连续输入：内容变了，但全文扫描不应该跟着每击键重跑
     act(() => {
       for (let index = 0; index < 5; index++) {
         editorStoreFor('/ws').getState().updateOpenFile('/ws/a.ts', {

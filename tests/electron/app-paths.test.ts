@@ -1,12 +1,34 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 
+const mockState = vi.hoisted(() => ({
+  isPackaged: false,
+  appPath: '',
+  exePath: '',
+  appDataPath: '',
+  existsSync: vi.fn<(target: string) => boolean>(() => false),
+}))
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    existsSync: (target: string) => mockState.existsSync(target),
+  }
+})
+
 vi.mock('electron', () => ({
   app: {
-    isPackaged: false,
-    getAppPath: () => '',
-    getPath: () => '',
+    get isPackaged() {
+      return mockState.isPackaged
+    },
+    getAppPath: () => mockState.appPath,
+    getPath: (name: string) => {
+      if (name === 'exe') return mockState.exePath
+      if (name === 'appData') return mockState.appDataPath
+      return ''
+    },
   },
 }))
 
@@ -14,8 +36,11 @@ import {
   APP_DATA_DIR_NAME,
   getAppDir,
   getBridgeEntryUrl,
+  getInstallDir,
+  isPortableMode,
   piAgentDir,
   PORTABLE_MARKER_FILE,
+  resetAppPathsCache,
   resolveAppPaths,
 } from '../../electron/app-paths'
 
@@ -136,5 +161,100 @@ describe('Pi SDK directories', () => {
     expect(piAgentDir).toBe(path.join(getAppDir(), 'data', 'agent'))
     expect(process.env.PI_CODING_AGENT_DIR).toBe(piAgentDir)
     expect(process.env.PI_CODING_AGENT_SESSION_DIR).toBe(path.join(piAgentDir, 'sessions'))
+  })
+})
+
+describe('resolveAppPaths 无参生产调用缓存', () => {
+  const originalAppImage = process.env.APPIMAGE
+
+  afterEach(() => {
+    mockState.isPackaged = false
+    mockState.appPath = ''
+    mockState.exePath = ''
+    mockState.appDataPath = ''
+    mockState.existsSync.mockReset()
+    mockState.existsSync.mockReturnValue(false)
+    if (originalAppImage === undefined) delete process.env.APPIMAGE
+    else process.env.APPIMAGE = originalAppImage
+    resetAppPathsCache()
+  })
+
+  it('打包模式下重复调用 getAppDir / getInstallDir / isPortableMode / resolveAppPaths 只触发一次 fs.existsSync', () => {
+    resetAppPathsCache()
+    mockState.isPackaged = true
+    mockState.exePath = '/opt/pi/Pi Workbench.exe'
+    mockState.appDataPath = '/users/me/appdata'
+    delete process.env.APPIMAGE
+    mockState.existsSync.mockClear()
+    mockState.existsSync.mockReturnValue(false)
+
+    const firstDataDir = getAppDir()
+    const firstInstallDir = getInstallDir()
+    const firstPortable = isPortableMode()
+    const snapshot = resolveAppPaths()
+
+    expect(firstDataDir).toBe(path.join('/users/me/appdata', APP_DATA_DIR_NAME))
+    expect(firstInstallDir).toBe(path.dirname('/opt/pi/Pi Workbench.exe'))
+    expect(firstPortable).toBe(false)
+    expect(snapshot).toEqual({
+      dataDir: firstDataDir,
+      installDir: firstInstallDir,
+      portable: false,
+    })
+
+    // 多次热路径访问全部命中缓存，不重复同步探盘
+    for (let i = 0; i < 20; i += 1) {
+      expect(getAppDir()).toBe(firstDataDir)
+      expect(getInstallDir()).toBe(firstInstallDir)
+      expect(isPortableMode()).toBe(false)
+      expect(resolveAppPaths()).toEqual(snapshot)
+    }
+
+    const expectedCalls = process.platform === 'darwin' ? 0 : 1
+    expect(mockState.existsSync).toHaveBeenCalledTimes(expectedCalls)
+  })
+
+  it('resetAppPathsCache 与环境键变化都会正确失效缓存，显式传 options 不污染默认缓存', () => {
+    resetAppPathsCache()
+    mockState.isPackaged = true
+    mockState.exePath = '/opt/pi-a/Pi Workbench.exe'
+    mockState.appDataPath = '/users/me/appdata'
+    delete process.env.APPIMAGE
+    mockState.existsSync.mockClear()
+    mockState.existsSync.mockReturnValue(false)
+
+    expect(isPortableMode()).toBe(false)
+    const firstCount = mockState.existsSync.mock.calls.length
+
+    // 显式传 options 始终即时计算且不改写默认缓存
+    const custom = resolveAppPaths({
+      isPackaged: true,
+      platform: 'win32',
+      exePath: '/portable/pi/Pi Workbench.exe',
+      appDataPath: '/users/me/appdata',
+      appImagePath: '',
+      argv: [],
+      existsSync: () => true,
+    })
+    expect(custom.portable).toBe(true)
+    expect(isPortableMode()).toBe(false)
+    expect(mockState.existsSync).toHaveBeenCalledTimes(firstCount)
+
+    // resetAppPathsCache 后重新探测 portable 标记
+    mockState.existsSync.mockReturnValue(true)
+    resetAppPathsCache()
+    if (process.platform !== 'darwin') {
+      expect(isPortableMode()).toBe(true)
+      expect(mockState.existsSync).toHaveBeenCalledTimes(firstCount + 1)
+    }
+
+    // 启动环境键变化（如 exePath 变化）无需手动 reset 也会自动失效缓存
+    mockState.exePath = '/opt/pi-b/Pi Workbench.exe'
+    mockState.existsSync.mockReturnValue(false)
+    expect(getInstallDir()).toBe(path.dirname('/opt/pi-b/Pi Workbench.exe'))
+    expect(isPortableMode()).toBe(false)
+    if (process.platform !== 'darwin') {
+      expect(mockState.existsSync).toHaveBeenCalledTimes(firstCount + 2)
+    }
   })
 })

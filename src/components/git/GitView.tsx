@@ -317,10 +317,8 @@ const FilterChip: React.FC<{
   </button>
 )
 
-export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
-  workspacePath,
-  active = true,
-}) => {
+export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = React.memo(
+  function GitView({ workspacePath, active = true }) {
   const t = useI18nStore((state) => state.t)
   const language = useI18nStore((state) => state.language)
   const panelMenu = usePanelContextMenu('git')
@@ -335,9 +333,9 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
   })
   const [filters, setFilters] = useState({ branches: true, remotes: true, tags: true })
   const [worktreesOpen, setWorktreesOpen] = useState(false)
-  const [resizeGuide, setResizeGuide] = useState<number | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const tableRef = useRef<HTMLDivElement>(null)
+  const resizeGuideRef = useRef<HTMLSpanElement>(null)
   /** 提交行所在的滚动容器；它的宽度扣掉滚动条，才是行的实际宽度 */
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -399,9 +397,19 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
   }, [commitVirtualizer, rowHeight])
   const nodeRadius = narrow ? 6.5 : 4.5
   const graphStrokeWidth = narrow ? 2.4 : 2
+  const tableStyle = useMemo(
+    () =>
+      ({
+        '--git-col-author': `${columnWidths.author}px`,
+        '--git-col-ring': `${columnWidths.ring}px`,
+        '--git-col-date': `${columnWidths.date}px`,
+        '--git-col-sha': `${columnWidths.sha}px`,
+      }) as React.CSSProperties,
+    [columnWidths]
+  )
   const rowGrid = narrow
     ? `${graphWidth}px minmax(0,1fr)`
-    : `${graphWidth}px minmax(0,1fr) ${columnWidths.author}px ${columnWidths.ring}px ${columnWidths.date}px ${columnWidths.sha}px 36px`
+    : `${graphWidth}px minmax(0,1fr) var(--git-col-author, ${columnWidths.author}px) var(--git-col-ring, ${columnWidths.ring}px) var(--git-col-date, ${columnWidths.date}px) var(--git-col-sha, ${columnWidths.sha}px) 36px`
 
   const currentWorktree =
     worktrees.find((worktree) => worktree.path === binding?.path) ??
@@ -421,14 +429,15 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
     const rows = scrollRef.current
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
+        if (entry.contentRect.width <= 0) continue
         if (entry.target === panel) setPanelWidth(entry.contentRect.width)
         else if (entry.target === rows) setRowAreaWidth(entry.contentRect.width)
       }
     })
     observer.observe(panel)
     if (rows) observer.observe(rows)
-    setPanelWidth(panel.clientWidth)
-    setRowAreaWidth(rows?.clientWidth ?? 0)
+    if (panel.clientWidth > 0) setPanelWidth(panel.clientWidth)
+    if (rows && rows.clientWidth > 0) setRowAreaWidth(rows.clientWidth)
     return () => observer.disconnect()
   }, [])
 
@@ -698,6 +707,7 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
       const ownerDoc = event.currentTarget.ownerDocument
       const ownerWin = ownerDoc.defaultView ?? window
       const table = tableRef.current
+      const guide = resizeGuideRef.current
       const tableLeft = table?.getBoundingClientRect().left ?? 0
       const handleRect = event.currentTarget.getBoundingClientRect()
       // 手柄以列边界为中心，取它的中心作为参考线的起点
@@ -705,22 +715,32 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
       const startX = event.clientX
       const startWidth = columnWidths[key]
       const limits = COLUMN_LIMITS[key]
-      setResizeGuide(startBoundary - tableLeft)
+      let latestWidth = startWidth
+      if (guide) {
+        guide.style.left = `${startBoundary - tableLeft}px`
+        guide.style.display = 'block'
+      }
 
       const onMove = (move: PointerEvent) => {
-        // 边界跟随指针，但夹在列的最小/最大宽度内，参考线取夹住后的实际位置
+        // 边界跟随指针，但夹在列的最小/最大宽度内，直接写 CSS 变量与参考线 DOM 避免 60fps 重渲染整张提交表
         const dx = clamp(move.clientX - startX, startWidth - limits.max, startWidth - limits.min)
-        setColumnWidths((current) => ({ ...current, [key]: startWidth - dx }))
-        setResizeGuide(startBoundary + dx - tableLeft)
+        latestWidth = startWidth - dx
+        table?.style.setProperty(`--git-col-${key}`, `${latestWidth}px`)
+        if (guide) {
+          guide.style.left = `${startBoundary + dx - tableLeft}px`
+        }
       }
       const onUp = () => {
-        setResizeGuide(null)
+        if (guide) guide.style.display = 'none'
         ownerWin.removeEventListener('pointermove', onMove)
         ownerWin.removeEventListener('pointerup', onUp)
         ownerWin.removeEventListener('pointercancel', onUp)
         ownerDoc.body.style.cursor = ''
         ownerDoc.body.style.userSelect = ''
         if (resizeCleanupRef.current === onUp) resizeCleanupRef.current = null
+        if (latestWidth !== startWidth) {
+          setColumnWidths((current) => ({ ...current, [key]: latestWidth }))
+        }
       }
       resizeCleanupRef.current = onUp
       ownerDoc.body.style.cursor = 'col-resize'
@@ -1069,7 +1089,7 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
         </>
       )}
 
-      <div ref={tableRef} className="relative flex min-h-0 flex-1">
+      <div ref={tableRef} style={tableStyle} className="relative flex min-h-0 flex-1">
         <div
           ref={(node) => {
             scrollRef.current = node
@@ -1167,13 +1187,12 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
           )}
         </div>
 
-        {resizeGuide !== null && (
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 z-20 w-px bg-accent"
-            style={{ left: resizeGuide }}
-          />
-        )}
+        <span
+          ref={resizeGuideRef}
+          aria-hidden="true"
+          style={{ display: 'none' }}
+          className="pointer-events-none absolute inset-y-0 z-20 w-px bg-accent"
+        />
       </div>
 
       {githubLinked === false && (
@@ -1192,4 +1211,4 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
       {panelMenu.menu}
     </div>
   )
-}
+})

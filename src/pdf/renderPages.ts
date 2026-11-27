@@ -34,7 +34,46 @@ async function loadFromBytes(bytes: Uint8Array) {
   return { document: await task.promise, destroy: () => void task.destroy() }
 }
 
-function toDataUrl(canvas: HTMLCanvasElement): RenderedPageImage {
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to encode image blob'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+async function canvasToBlobAsync(
+  canvas: HTMLCanvasElement | OffscreenCanvas,
+  mimeType: string,
+  quality?: number
+): Promise<Blob | null> {
+  if (typeof OffscreenCanvas !== 'undefined' && canvas instanceof OffscreenCanvas) {
+    if (typeof canvas.convertToBlob === 'function') {
+      return canvas.convertToBlob({ type: mimeType, quality })
+    }
+    return null
+  }
+  const htmlCanvas = canvas as HTMLCanvasElement
+  if (typeof htmlCanvas.toBlob !== 'function') return null
+  return new Promise<Blob | null>((resolve) => {
+    htmlCanvas.toBlob((blob) => resolve(blob), mimeType, quality)
+  })
+}
+
+/** 优先通过异步 toBlob / convertToBlob 离主线程编码，避免扫描件 PNG 压缩阻塞渲染帧 */
+async function encodeCanvasAsync(canvas: HTMLCanvasElement): Promise<RenderedPageImage> {
+  const pngBlob = await canvasToBlobAsync(canvas, 'image/png')
+  if (pngBlob) {
+    if (pngBlob.size <= MAX_PNG_BYTES) {
+      return { data: await blobToDataUrl(pngBlob), mimeType: 'image/png' }
+    }
+    const jpegBlob = await canvasToBlobAsync(canvas, 'image/jpeg', 0.9)
+    if (jpegBlob) {
+      return { data: await blobToDataUrl(jpegBlob), mimeType: 'image/jpeg' }
+    }
+  }
+  // jsdom 等无异步 Blob 编码能力的测试环境回退到同步 toDataURL
   const png = canvas.toDataURL('image/png')
   // base64 长度 ≈ 字节 × 4/3
   if (png.length * 0.75 <= MAX_PNG_BYTES) return { data: png, mimeType: 'image/png' }
@@ -67,7 +106,7 @@ export async function renderPdfPagesToImages(
       context.fillStyle = PDF_PAGE_BACKGROUND_HEX
       context.fillRect(0, 0, canvas.width, canvas.height)
       await page.render({ canvas, canvasContext: context, viewport }).promise
-      images.push(toDataUrl(canvas))
+      images.push(await encodeCanvasAsync(canvas))
       page.cleanup()
       canvas.width = 0
       canvas.height = 0

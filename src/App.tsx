@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react'
+import React, { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react'
 import {
   Activity,
   AlertCircle,
@@ -70,14 +70,266 @@ const IPCDebug = lazy(() =>
 
 type BootPhase = 'boot' | 'reveal' | 'ready'
 
+const HEADER_LINK_CLASS = 'type-label text-ink-muted transition-colors hover:text-ink'
+
+function languageLabelForFile(currentFileName: string): string {
+  const baseName = currentFileName.toLowerCase()
+  if (baseName === 'dockerfile' || baseName.startsWith('dockerfile.')) return 'Dockerfile'
+  const ext = baseName.includes('.') ? baseName.split('.').pop() : ''
+  switch (ext) {
+    case 'ts':
+    case 'tsx':
+    case 'mts':
+    case 'cts':
+      return 'TypeScript'
+    case 'js':
+    case 'jsx':
+    case 'mjs':
+    case 'cjs':
+      return 'JavaScript'
+    case 'json':
+    case 'jsonc':
+      return 'JSON'
+    case 'md':
+    case 'mdx':
+      return 'Markdown'
+    case 'css':
+    case 'scss':
+    case 'less':
+      return ext.toUpperCase()
+    case 'html':
+    case 'htm':
+      return 'HTML'
+    case 'py':
+      return 'Python'
+    case 'rs':
+      return 'Rust'
+    case 'go':
+      return 'Go'
+    case 'yaml':
+    case 'yml':
+      return 'YAML'
+    case 'toml':
+      return 'TOML'
+    case 'xml':
+    case 'svg':
+      return 'XML'
+    case 'sh':
+    case 'bash':
+    case 'zsh':
+      return 'Shell'
+    case 'ps1':
+    case 'psm1':
+      return 'PowerShell'
+    case 'sql':
+      return 'SQL'
+    case 'c':
+    case 'h':
+      return 'C'
+    case 'cc':
+    case 'cpp':
+    case 'cxx':
+    case 'hpp':
+      return 'C++'
+    case 'java':
+      return 'Java'
+    case 'cs':
+      return 'C#'
+    case 'rb':
+      return 'Ruby'
+    case 'php':
+      return 'PHP'
+    case 'swift':
+      return 'Swift'
+    case 'kt':
+    case 'kts':
+      return 'Kotlin'
+    case 'vue':
+      return 'Vue'
+    case 'svelte':
+      return 'Svelte'
+    default:
+      return 'Plain Text'
+  }
+}
+
+/** 隔离全局 Toast 订阅，避免提示弹出/消失触发整棵 App 与常驻工作区重渲染 */
+const AppToasts: React.FC = React.memo(function AppToasts() {
+  const messages = useToastStore((state) => state.messages)
+  const remove = useToastStore((state) => state.remove)
+  return <ToastContainer messages={messages} onClose={remove} />
+})
+
+/** 隔离底栏文件语言订阅，切换文件时不重渲染 App */
+const FooterFileLanguage: React.FC<{ workspace: string | null }> = React.memo(
+  function FooterFileLanguage({ workspace }) {
+    const currentFileName = useEditorStore(workspace, (state) => state.currentFile?.name ?? '')
+    if (!currentFileName) return null
+    return <span>{languageLabelForFile(currentFileName)}</span>
+  }
+)
+
+/** 隔离运行中会话活动下拉的 sessionStore 订阅，流式心跳不波及 App */
+const ActivityDropdown: React.FC<{
+  onSelectSession: (workspacePath: string, sessionId: string) => void
+}> = React.memo(function ActivityDropdown({ onSelectSession }) {
+  const t = useI18nStore((state) => state.t)
+  const openWorkspaces = useWorkspaceStore((state) => state.openWorkspaces)
+  const sessionsByWorkspace = useSessionStore((state) => state.byWorkspace)
+  const streamingMap = useSessionStore((state) => state.streaming)
+  const [showActivity, setShowActivity] = useState(false)
+  const activityRef = useRef<HTMLDivElement | null>(null)
+
+  const streamingSessions = openWorkspaces.flatMap((path) => {
+    const sessions = sessionsByWorkspace[path]?.sessions ?? []
+    return sessions
+      .filter((session) => streamingMap[`${path}\u0000${session.id}`])
+      .map((session) => ({ session, workspacePath: path }))
+  })
+  const activeCount = streamingSessions.length
+
+  // 无运行中会话时自动收起活动下拉，避免下次有会话开始时莫名弹开
+  useEffect(() => {
+    if (activeCount === 0 && showActivity) setShowActivity(false)
+  }, [activeCount, showActivity])
+
+  // 活动下拉支持点外部与 Esc 关闭
+  useEffect(() => {
+    if (!showActivity) return
+    const onPointerDown = (event: MouseEvent) => {
+      if (!activityRef.current?.contains(event.target as Node)) setShowActivity(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setShowActivity(false)
+      }
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [showActivity])
+
+  if (activeCount === 0) return null
+
+  return (
+    <div ref={activityRef} className="relative">
+      <button
+        type="button"
+        className={HEADER_LINK_CLASS}
+        aria-expanded={showActivity}
+        onClick={() => setShowActivity((value) => !value)}
+      >
+        <span className="inline-flex items-center gap-1">
+          <Activity size={11} />
+          {t('activityCount', { count: activeCount })}
+        </span>
+      </button>
+      {showActivity && (
+        <div className="absolute right-0 top-full z-30 mt-1 w-64 border border-line bg-raised shadow-print">
+          {streamingSessions.length > 0 && (
+            <div className="border-b border-rule-divide py-1">
+              {streamingSessions.map(({ session, workspacePath: streamingWorkspace }) => (
+                <button
+                  key={`${streamingWorkspace}\u0000${session.id}`}
+                  type="button"
+                  onClick={() => {
+                    onSelectSession(streamingWorkspace, session.id)
+                    setShowActivity(false)
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink transition-colors hover:bg-hover"
+                >
+                  <span className="h-1 w-1 flex-shrink-0 animate-pulse rounded-full bg-accent" />
+                  <span className="truncate">
+                    {session.title || t('untitledSession')}
+                  </span>
+                  {openWorkspaces.length > 1 && (
+                    <span className="ml-auto flex-shrink-0 type-caption text-ink-muted">
+                      {basename(streamingWorkspace)}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+})
+
+/** 单个工作区标签：只订阅自身工作区的最高优先级状态原始值，不因其他工作区变化重渲染 */
+const WorkspaceTabItem: React.FC<{
+  path: string
+  active: boolean
+  onSelect: (path: string) => void
+  onClose: (path: string) => void
+}> = React.memo(function WorkspaceTabItem({ path, active, onSelect, onClose }) {
+  const t = useI18nStore((state) => state.t)
+  const status = useSessionStore((state): 'needsAction' | 'error' | 'running' | null => {
+    const prefix = `${path}\u0000`
+    if (Object.keys(state.needsAction).some((key) => key.startsWith(prefix))) return 'needsAction'
+    if (Object.keys(state.errors).some((key) => key.startsWith(prefix))) return 'error'
+    if (Object.keys(state.streaming).some((key) => key.startsWith(prefix))) return 'running'
+    return null
+  })
+  const name = basename(path) ?? path
+  const statusLabel =
+    status === 'needsAction'
+      ? t('sessionNeedsAction')
+      : status === 'error'
+        ? t('sessionError')
+        : status === 'running'
+          ? t('sessionRunning')
+          : ''
+  const accessible = statusLabel ? `${name} · ${statusLabel}` : name
+
+  return (
+    <Tab
+      size="sm"
+      active={active}
+      title={statusLabel ? `${path} · ${statusLabel}` : path}
+      ariaLabel={accessible}
+      busy={status === 'running'}
+      onSelect={() => onSelect(path)}
+      onClose={() => onClose(path)}
+      closeLabel={t('close')}
+      className="max-w-[240px]"
+      labelClassName="max-w-[200px]"
+      leading={<Folder size={11} className="flex-shrink-0 opacity-70" />}
+      label={name}
+      trailing={
+        status === 'running' ? (
+          <span
+            aria-hidden="true"
+            className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-accent"
+          />
+        ) : status === 'error' ? (
+          <AlertCircle
+            size={10}
+            className="flex-shrink-0 text-danger"
+            aria-hidden="true"
+          />
+        ) : status === 'needsAction' ? (
+          <span
+            aria-hidden="true"
+            className="relative flex h-1.5 w-1.5 flex-shrink-0 items-center justify-center rounded-full border border-warning shadow-[0_0_0_2px_rgb(var(--warning)_/_0.18)] animate-breathe"
+          />
+        ) : null
+      }
+    />
+  )
+})
+
 export default function App() {
-  const {
-    workspacePath: workspace,
-    openWorkspaces,
-    recentWorkspaces,
-    openWorkspace: activateWorkspace,
-    setRecentWorkspaces,
-  } = useWorkspaceStore()
+  const workspace = useWorkspaceStore((state) => state.workspacePath)
+  const openWorkspaces = useWorkspaceStore((state) => state.openWorkspaces)
+  const recentWorkspaces = useWorkspaceStore((state) => state.recentWorkspaces)
+  const activateWorkspace = useWorkspaceStore((state) => state.openWorkspace)
+  const setRecentWorkspaces = useWorkspaceStore((state) => state.setRecentWorkspaces)
   const [error, setError] = useState<string | null>(null)
   const openingWorkspaceRef = useRef(false)
   const [showDebug, setShowDebug] = useState(false)
@@ -85,7 +337,6 @@ export default function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
   const [view, setView] = useState<AppView>('home')
   const showHome = view === 'home'
-  const [showActivity, setShowActivity] = useState(false)
   // 标签栏 `+` 的内置弹窗：选择历史工作区或新增工作区
   const [addMenuOpen, setAddMenuOpen] = useState(false)
   // boot：只显示启动页；reveal：外壳已挂载、遮罩正在淡出；ready：正常工作台
@@ -97,25 +348,11 @@ export default function App() {
   )
   const [overlayFading, setOverlayFading] = useState(false)
   const bootReadySentRef = useRef(false)
-  const toastMessages = useToastStore((state) => state.messages)
-  const removeToast = useToastStore((state) => state.remove)
-  const sessionsByWorkspace = useSessionStore((state) => state.byWorkspace)
-  const streamingMap = useSessionStore((state) => state.streaming)
-  const errorsMap = useSessionStore((state) => state.errors)
-  const needsActionMap = useSessionStore((state) => state.needsAction)
-  const streamingSessions = openWorkspaces.flatMap((path) => {
-    const sessions = sessionsByWorkspace[path]?.sessions ?? []
-    return sessions
-      .filter((session) => streamingMap[`${path}\u0000${session.id}`])
-      .map((session) => ({ session, workspacePath: path }))
-  })
-  const activeCount = streamingSessions.length
-  const { t, setLanguage, language } = useI18nStore()
-  const { setMode } = useThemeStore()
+  const t = useI18nStore((state) => state.t)
+  const setLanguage = useI18nStore((state) => state.setLanguage)
+  const language = useI18nStore((state) => state.language)
+  const setMode = useThemeStore((state) => state.setMode)
   const resolvedTheme = useResolvedTheme()
-  // 只订阅文件名：`currentFile` 对象每次按键都会换身份，订阅它会让整个外壳
-  // （所有常驻工作区、侧栏、聊天、仓库地图）跟着每按键重渲染
-  const currentFileName = useEditorStore(workspace, (state) => state.currentFile?.name ?? '')
   const platform = typeof window !== 'undefined' ? window.electronAPI?.platform : undefined
   const usesMacTrafficLights = platform === 'darwin'
   const usesNativeTitleBarOverlay = Boolean(
@@ -123,96 +360,6 @@ export default function App() {
   )
   const usesCustomWindowControls =
     !!platform && platform !== 'darwin' && platform !== 'web' && !usesNativeTitleBarOverlay
-
-  /** 工作区标签上只显示一个最高优先级的状态标记 */
-  const workspaceActivity = (path: string): 'needsAction' | 'error' | 'running' | null => {
-    const prefix = `${path}\u0000`
-    if (Object.keys(needsActionMap).some((key) => key.startsWith(prefix))) return 'needsAction'
-    if (Object.keys(errorsMap).some((key) => key.startsWith(prefix))) return 'error'
-    if (Object.keys(streamingMap).some((key) => key.startsWith(prefix))) return 'running'
-    return null
-  }
-
-  const fileLanguage = (() => {
-    const baseName = currentFileName.toLowerCase()
-    if (baseName === 'dockerfile' || baseName.startsWith('dockerfile.')) return 'Dockerfile'
-    const ext = baseName.includes('.') ? baseName.split('.').pop() : ''
-    switch (ext) {
-      case 'ts':
-      case 'tsx':
-      case 'mts':
-      case 'cts':
-        return 'TypeScript'
-      case 'js':
-      case 'jsx':
-      case 'mjs':
-      case 'cjs':
-        return 'JavaScript'
-      case 'json':
-      case 'jsonc':
-        return 'JSON'
-      case 'md':
-      case 'mdx':
-        return 'Markdown'
-      case 'css':
-      case 'scss':
-      case 'less':
-        return ext.toUpperCase()
-      case 'html':
-      case 'htm':
-        return 'HTML'
-      case 'py':
-        return 'Python'
-      case 'rs':
-        return 'Rust'
-      case 'go':
-        return 'Go'
-      case 'yaml':
-      case 'yml':
-        return 'YAML'
-      case 'toml':
-        return 'TOML'
-      case 'xml':
-      case 'svg':
-        return 'XML'
-      case 'sh':
-      case 'bash':
-      case 'zsh':
-        return 'Shell'
-      case 'ps1':
-      case 'psm1':
-        return 'PowerShell'
-      case 'sql':
-        return 'SQL'
-      case 'c':
-      case 'h':
-        return 'C'
-      case 'cc':
-      case 'cpp':
-      case 'cxx':
-      case 'hpp':
-        return 'C++'
-      case 'java':
-        return 'Java'
-      case 'cs':
-        return 'C#'
-      case 'rb':
-        return 'Ruby'
-      case 'php':
-        return 'PHP'
-      case 'swift':
-        return 'Swift'
-      case 'kt':
-      case 'kts':
-        return 'Kotlin'
-      case 'vue':
-        return 'Vue'
-      case 'svelte':
-        return 'Svelte'
-      default:
-        return 'Plain Text'
-    }
-  })()
 
   // 允许子组件（如 ChatPanel / WelcomeScreen）请求打开设置面板；防御误传事件对象导致空内容
   const openSettings = useCallback((section: SettingsSection = 'general') => {
@@ -655,35 +802,29 @@ export default function App() {
     }, 0)
   }
 
-  const headerLink =
-    'type-label text-ink-muted transition-colors hover:text-ink'
+  const closeWorkspaceRef = useRef(closeWorkspaceTab)
+  closeWorkspaceRef.current = closeWorkspaceTab
 
-  const activityRef = useRef<HTMLDivElement | null>(null)
+  const handleSelectWorkspaceTab = useCallback(
+    (targetPath: string) => {
+      activateWorkspace(targetPath)
+      setView('workspace')
+    },
+    [activateWorkspace]
+  )
 
-  // 无运行中会话时自动收起活动下拉，避免下次有会话开始时莫名弹开
-  useEffect(() => {
-    if (activeCount === 0 && showActivity) setShowActivity(false)
-  }, [activeCount, showActivity])
+  const handleCloseWorkspaceTab = useCallback((targetPath: string) => {
+    void closeWorkspaceRef.current(targetPath)
+  }, [])
 
-  // 活动下拉支持点外部与 Esc 关闭
-  useEffect(() => {
-    if (!showActivity) return
-    const onPointerDown = (event: MouseEvent) => {
-      if (!activityRef.current?.contains(event.target as Node)) setShowActivity(false)
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        setShowActivity(false)
-      }
-    }
-    document.addEventListener('mousedown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [showActivity])
+  const handleSelectActivitySession = useCallback(
+    (streamingWorkspace: string, sessionId: string) => {
+      activateWorkspace(streamingWorkspace)
+      setView('workspace')
+      useSessionStore.getState().setActive(streamingWorkspace, sessionId)
+    },
+    [activateWorkspace]
+  )
 
   // 启动阶段只渲染启动页，放大动画期间窗口里没有别的 DOM 需要重排
   if (bootPhase === 'boot') return <BootScreen />
@@ -755,62 +896,17 @@ export default function App() {
             <>
               <button
                 type="button"
-                className={headerLink}
+                className={HEADER_LINK_CLASS}
                 onClick={() => emitAppEvent('open-command-palette')}
               >
                 {t('commandPalette')}{' '}
                 <span className="type-key text-ink-muted">{formatShortcut(paletteShortcut)}</span>
               </button>
-              {workspace && activeCount > 0 && (
-                <div ref={activityRef} className="relative">
-                  <button
-                    type="button"
-                    className={headerLink}
-                    aria-expanded={showActivity}
-                    onClick={() => setShowActivity((value) => !value)}
-                  >
-                    <span className="inline-flex items-center gap-1">
-                      <Activity size={11} />
-                      {t('activityCount', { count: activeCount })}
-                    </span>
-                  </button>
-                  {showActivity && (
-                    <div className="absolute right-0 top-full z-30 mt-1 w-64 border border-line bg-raised shadow-print">
-                      {streamingSessions.length > 0 && (
-                        <div className="border-b border-rule-divide py-1">
-                          {streamingSessions.map(({ session, workspacePath: streamingWorkspace }) => (
-                            <button
-                              key={`${streamingWorkspace}\u0000${session.id}`}
-                              type="button"
-                              onClick={() => {
-                                activateWorkspace(streamingWorkspace)
-                                setView('workspace')
-                                useSessionStore.getState().setActive(streamingWorkspace, session.id)
-                                setShowActivity(false)
-                              }}
-                              className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink transition-colors hover:bg-hover"
-                            >
-                              <span className="h-1 w-1 flex-shrink-0 animate-pulse rounded-full bg-accent" />
-                              <span className="truncate">
-                                {session.title || t('untitledSession')}
-                              </span>
-                              {openWorkspaces.length > 1 && (
-                                <span className="ml-auto flex-shrink-0 type-caption text-ink-muted">
-                                  {basename(streamingWorkspace)}
-                                </span>
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
+              <ActivityDropdown onSelectSession={handleSelectActivitySession} />
               {view === 'workspace' && (
                 <button
                   type="button"
-                  className={headerLink}
+                  className={HEADER_LINK_CLASS}
                   onClick={() =>
                     emitAppEvent('workspace-toggle-terminal')
                   }
@@ -829,7 +925,7 @@ export default function App() {
               onClick={() => setShowDebug((value) => !value)}
             />
           )}
-          <button type="button" className={headerLink} onClick={() => openSettings()}>
+          <button type="button" className={HEADER_LINK_CLASS} onClick={() => openSettings()}>
             {t('settings')}
           </button>
           {workspace ? (
@@ -866,59 +962,15 @@ export default function App() {
             onWheel={handleTabStripWheel}
             className="tab-strip-scroll flex min-w-0 flex-none max-w-[calc(100%_-_2rem)] items-center overflow-x-auto"
           >
-            {openWorkspaces.map((path) => {
-              const name = basename(path) ?? path
-              const active = path === workspace
-              const status = workspaceActivity(path)
-              const statusLabel =
-                status === 'needsAction'
-                  ? t('sessionNeedsAction')
-                  : status === 'error'
-                    ? t('sessionError')
-                    : status === 'running'
-                      ? t('sessionRunning')
-                      : ''
-              const accessible = statusLabel ? `${name} · ${statusLabel}` : name
-              return (
-                <Tab
-                  key={path}
-                  size="sm"
-                  active={active}
-                  title={statusLabel ? `${path} · ${statusLabel}` : path}
-                  ariaLabel={accessible}
-                  busy={status === 'running'}
-                  onSelect={() => {
-                    activateWorkspace(path)
-                    setView('workspace')
-                  }}
-                  onClose={() => void closeWorkspaceTab(path)}
-                  closeLabel={t('close')}
-                  className="max-w-[240px]"
-                  labelClassName="max-w-[200px]"
-                  leading={<Folder size={11} className="flex-shrink-0 opacity-70" />}
-                  label={name}
-                  trailing={
-                    status === 'running' ? (
-                      <span
-                        aria-hidden="true"
-                        className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-accent"
-                      />
-                    ) : status === 'error' ? (
-                      <AlertCircle
-                        size={10}
-                        className="flex-shrink-0 text-danger"
-                        aria-hidden="true"
-                      />
-                    ) : status === 'needsAction' ? (
-                      <span
-                        aria-hidden="true"
-                        className="relative flex h-1.5 w-1.5 flex-shrink-0 items-center justify-center rounded-full border border-warning shadow-[0_0_0_2px_rgb(var(--warning)_/_0.18)] animate-breathe"
-                      />
-                    ) : null
-                  }
-                />
-              )
-            })}
+            {openWorkspaces.map((path) => (
+              <WorkspaceTabItem
+                key={path}
+                path={path}
+                active={path === workspace}
+                onSelect={handleSelectWorkspaceTab}
+                onClose={handleCloseWorkspaceTab}
+              />
+            ))}
           </div>
           <div className="flex-shrink-0">
             <IconButton
@@ -955,7 +1007,7 @@ export default function App() {
       )}
 
       <UpdateDialog />
-      <ToastContainer messages={toastMessages} onClose={removeToast} />
+      <AppToasts />
       {workspace && (
         <Suspense fallback={null}>
           <CommandPalette workspacePath={workspace} active={view === 'workspace'} />
@@ -1028,7 +1080,7 @@ export default function App() {
         <div className="ml-auto flex items-center gap-4">
           <CloudStatusIndicator onOpen={() => setView('cloud')} />
           <UpdateStatusIndicator onOpenSettings={() => openSettings('about')} />
-          {currentFileName && <span>{fileLanguage}</span>}
+          <FooterFileLanguage workspace={workspace} />
           <span>UTF-8</span>
           <span>{resolvedTheme === 'dark' ? 'INK' : 'PAPER'}</span>
         </div>

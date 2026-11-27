@@ -161,6 +161,38 @@ export type {
 } from './types.js'
 export type { SessionMode }
 
+/** 读取会话文件首行 header 的 cwd（仅读前 16KB，避免扫描整份 JSONL 正文） */
+async function readSessionHeaderInfo(
+  filePath: string
+): Promise<{ exists: false } | { exists: true; cwd?: string }> {
+  let handle: fs.FileHandle | null = null
+  try {
+    handle = await fs.open(filePath, 'r')
+    const buffer = Buffer.alloc(16 * 1024)
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    if (bytesRead === 0) return { exists: true }
+    const chunk = buffer.subarray(0, bytesRead).toString('utf8')
+    const newline = chunk.indexOf('\n')
+    const firstLine = (newline >= 0 ? chunk.slice(0, newline) : chunk).trim()
+    if (!firstLine) return { exists: true }
+    const parsed = JSON.parse(firstLine) as { type?: unknown; cwd?: unknown }
+    if (parsed && typeof parsed === 'object' && parsed.type === 'session') {
+      return {
+        exists: true,
+        cwd: typeof parsed.cwd === 'string' ? parsed.cwd : undefined,
+      }
+    }
+    return { exists: true }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return { exists: false }
+    }
+    return { exists: true }
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
+}
+
 /**
  * Agent Manager 类
  *
@@ -1645,30 +1677,57 @@ export class AgentManager {
       const config = this.config
       if (!config) throw new Error('Agent not initialized.')
       const root = config.resolveSessionRoot?.(sessionId) ?? config.workspaceDir
-      const file =
-        (await this.findSessionFile(sessionId)) ??
-        SessionManager.findById(root, sessionId, this.sessionDir)
+      const file = await this.findSessionFile(sessionId, root)
       if (!file) throw new Error('Session not found.')
       const manager = SessionManager.open(file, this.sessionDir, root)
       return await this.createRuntime(manager)
     })
   }
 
-  /** 会话文件按 id 查找，同时强制校验归属当前工作区（防跨工作区打开/改名/删除共享 sessionDir 下的他人会话） */
-  private async findSessionFile(sessionId: string): Promise<string | null> {
+  /** 校验会话记录的 cwd 是否归属当前工作区（Windows 大小写不敏感） */
+  private sessionBelongsToWorkspace(sessionId: string, cwd: string | undefined | null): boolean {
+    const config = this.config
+    if (!config) return false
+    if (config.isSessionOfWorkspace) {
+      return config.isSessionOfWorkspace(sessionId, cwd ?? '')
+    }
+    const workspaceRoot = normalizePathForCompare(config.workspaceDir)
+    const infoCwd = cwd ? normalizePathForCompare(cwd) : workspaceRoot
+    return infoCwd === workspaceRoot
+  }
+
+  /**
+   * 会话文件按 id 查找，同时强制校验归属当前工作区（防跨工作区打开/改名/删除共享 sessionDir 下的他人会话）。
+   * 优先走 O(1) 仅读首行 header 的 `SessionManager.findById`，避免每次打开/重命名/删除都全量扫盘读取所有 `.jsonl`；
+   * 仅当按已知工作区根未命中（例如历史链接工作树已解绑）时才回退 `SessionManager.listAll`。
+   */
+  private async findSessionFile(sessionId: string, preferredRoot?: string): Promise<string | null> {
     const config = this.config
     if (!config) return null
     try {
+      const resolvedRoot = preferredRoot ?? config.resolveSessionRoot?.(sessionId) ?? config.workspaceDir
+      const candidateRoots = [resolvedRoot]
+      if (normalizePathForCompare(resolvedRoot) !== normalizePathForCompare(config.workspaceDir)) {
+        candidateRoots.push(config.workspaceDir)
+      }
+
+      if (typeof SessionManager.findById === 'function') {
+        for (const candidateRoot of candidateRoots) {
+          const direct = SessionManager.findById(candidateRoot, sessionId, this.sessionDir)
+          if (!direct) continue
+          const header = await readSessionHeaderInfo(direct)
+          const owned = header.exists
+            ? this.sessionBelongsToWorkspace(sessionId, header.cwd)
+            : this.sessionBelongsToWorkspace(sessionId, candidateRoot)
+          return owned ? direct : null
+        }
+      }
+
+      if (typeof SessionManager.listAll !== 'function') return null
       const infos = await SessionManager.listAll(this.sessionDir)
       const matched = infos.find((info) => info.id === sessionId)
       if (!matched) return null
-      if (config.isSessionOfWorkspace) {
-        if (!config.isSessionOfWorkspace(matched.id, matched.cwd)) return null
-      } else {
-        const workspaceRoot = normalizePathForCompare(config.workspaceDir)
-        const infoCwd = matched.cwd ? normalizePathForCompare(matched.cwd) : workspaceRoot
-        if (infoCwd !== workspaceRoot) return null
-      }
+      if (!this.sessionBelongsToWorkspace(matched.id, matched.cwd)) return null
       return matched.path
     } catch (error) {
       this.logger.warn('[Agent Manager] Failed to locate session file:', error)
@@ -1803,7 +1862,8 @@ export class AgentManager {
   private async resolvePersistedSessionFile(runtime: SessionRuntime): Promise<string | null> {
     const file = runtime.sessionManager.getSessionFile()
     if (file && existsSync(file)) return file
-    return this.findSessionFile(runtime.id)
+    const found = await this.findSessionFile(runtime.id, runtime.sessionManager.getCwd())
+    return found && existsSync(found) ? found : null
   }
 
   /**
@@ -2064,9 +2124,7 @@ export class AgentManager {
       const config = this.config
       if (!config) return { success: false, error: 'Agent not initialized.' }
       const root = config.resolveSessionRoot?.(sessionId) ?? config.workspaceDir
-      const file =
-        (await this.findSessionFile(sessionId)) ??
-        SessionManager.findById(root, sessionId, this.sessionDir)
+      const file = await this.findSessionFile(sessionId, root)
       if (!file) return { success: false, error: 'Session not found.' }
       const manager = SessionManager.open(file, this.sessionDir, root)
       manager.appendSessionInfo(title)
@@ -2091,9 +2149,7 @@ export class AgentManager {
       const root = config.resolveSessionRoot?.(sessionId) ?? config.workspaceDir
       const hadLocalRuntime =
         this.runtimes.has(sessionId) || this.creatingRuntimes.has(sessionId)
-      const file =
-        (await this.findSessionFile(sessionId)) ??
-        SessionManager.findById(root, sessionId, this.sessionDir)
+      const file = await this.findSessionFile(sessionId, root)
       if (!file && !hadLocalRuntime && (await this.isForeignSessionOnDisk(sessionId))) {
         return { success: true }
       }
@@ -2526,9 +2582,7 @@ export class AgentManager {
 
     try {
       const next = await this.trackRuntimeCreation(id, async () => {
-        const file =
-          (await this.findSessionFile(id)) ??
-          SessionManager.findById(root, id, this.sessionDir)
+        const file = await this.findSessionFile(id, root)
         const manager = file
           ? SessionManager.open(file, this.sessionDir, root)
           : SessionManager.create(root, this.sessionDir, { id })

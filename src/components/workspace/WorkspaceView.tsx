@@ -15,7 +15,6 @@ import { ErrorBoundary } from '../ui/ErrorBoundary'
 import { DiffViewer } from '../editor/DiffViewer'
 import { SelectionQuoteButton } from '../ui/SelectionQuoteButton'
 import { PanelSlot } from '../panels/PanelSlot'
-import { TerminalPanel } from '../editor/TerminalPanel'
 import { GitView } from '../git/GitView'
 import { CommitDetailView } from '../git/CommitDetailView'
 import { Spinner } from '../ui/ui'
@@ -26,6 +25,8 @@ import { useSessionStore } from '../../store/sessionStore'
 import { useGitStore } from '../../store/gitStore'
 import { useEditorStore } from '../../store/editorStore'
 import { usePanelStore } from '../../store/panelStore'
+import { useSettingsStore } from '../../store/settingsStore'
+import { persistAppSettings } from '../../utils/persistSettings'
 import { onAppEvent } from '../../utils/appEvents'
 import { api } from '../../api'
 import type { GitChangeScope } from '../../types/electron'
@@ -33,12 +34,17 @@ import type { GitChangeScope } from '../../types/electron'
 const FileView = lazy(() =>
   import('../editor/FileView').then((module) => ({ default: module.FileView }))
 )
+const TerminalPanel = lazy(() =>
+  import('../editor/TerminalPanel').then((module) => ({ default: module.TerminalPanel }))
+)
 
 const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 420
 const GIT_SIDEBAR_MAX = 720
 const CHAT_MIN = 280
 const CHAT_MAX = 560
+const TERMINAL_MIN = 100
+const TERMINAL_MAX = 700
 /** 两侧可拖拽面板都给编辑器留出的最小宽度，低于这个值预览区就只剩一道缝 */
 const EDITOR_MIN = 260
 
@@ -61,19 +67,26 @@ interface WorkspaceViewProps {
 
 /**
  * 一个打开的工作区对应一个常驻视图。
- * 切换工作区 / 回首页只切换可见性，不卸载、不重置，编辑器和终端实例都保留。
+ * 切换工作区 / 回首页时使用 `hidden`（display: none）休眠非活动工作区的布局与绘制，
+ * 同时保持组件与所有 Agent / 审批 / PTY 订阅常驻不卸载。
  */
-export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, active }) => {
-  const { t } = useI18nStore()
+export const WorkspaceView: React.FC<WorkspaceViewProps> = React.memo(function WorkspaceView({
+  workspacePath,
+  active,
+}) {
+  const t = useI18nStore((state) => state.t)
   const [showSidebar, setShowSidebar] = useState(true)
   const [showChat, setShowChat] = useState(true)
   const [showTerminal, setShowTerminal] = useState(false)
-  // 侧栏宽度按标签分别记忆：文件树保持原宽度，Git 提交图可以拉宽到 720
-  const [sidebarWidths, setSidebarWidths] = useState<Record<SidebarTab, number>>({
-    files: 232,
-    git: 560
-  })
-  const [chatWidth, setChatWidth] = useState(336)
+  // 侧栏宽度按标签分别记忆：文件树从持久化偏好初始化，Git 提交图可以拉宽到 720
+  const [sidebarWidths, setSidebarWidths] = useState<Record<SidebarTab, number>>(() => ({
+    files: useSettingsStore.getState().panelWidths.sidebar,
+    git: 560,
+  }))
+  const [chatWidth, setChatWidth] = useState(() => useSettingsStore.getState().panelWidths.chat)
+  const [terminalHeight, setTerminalHeight] = useState(
+    () => useSettingsStore.getState().panelWidths.terminalHeight
+  )
   // 面板拆到独立窗口后：主窗口这一侧完全让位（不占宽、不占高、不留占位）。
   // 但 PanelSlot 必须继续挂载 —— portal 的 fiber 挂在这里，卸载会把独立窗口里的面板一起拆掉。
   const detached = usePanelStore((state) => state.panelHost[workspacePath])
@@ -182,17 +195,17 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
     }
   }, [active])
 
-  // 容器宽度变化时重新计算侧栏上限（窗口缩放、聊天列收起/展开）
+  // 容器宽度变化时重新计算侧栏上限（窗口缩放、聊天列收起/展开）；隐藏态 width=0 时忽略，避免休眠工作区白跑渲染
   useEffect(() => {
     const element = containerRef.current
     if (!element) return
     if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0]
-      if (entry) setContainerWidth(entry.contentRect.width)
+      if (entry && entry.contentRect.width > 0) setContainerWidth(entry.contentRect.width)
     })
     observer.observe(element)
-    setContainerWidth(element.clientWidth)
+    if (element.clientWidth > 0) setContainerWidth(element.clientWidth)
     return () => observer.disconnect()
   }, [])
 
@@ -264,15 +277,21 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
       resizeCleanupRef.current?.()
       const startX = event.clientX
       const initial =
-        target === 'sidebar' ? Math.min(sidebarWidths[sidebarTab], maxSidebarWidth(sidebarTab)) : chatWidthShown
+        target === 'sidebar'
+          ? Math.min(sidebarWidths[sidebarTab], maxSidebarWidth(sidebarTab))
+          : chatWidthShown
+      let latest = initial
 
       const onMove = (moveEvent: PointerEvent) => {
         const delta = moveEvent.clientX - startX
         if (target === 'sidebar') {
           const width = clamp(initial + delta, SIDEBAR_MIN, maxSidebarWidth(sidebarTab))
+          latest = width
           setSidebarWidths((current) => ({ ...current, [sidebarTab]: width }))
         } else {
-          setChatWidth(clamp(initial - delta, CHAT_MIN, maxChatWidth()))
+          const width = clamp(initial - delta, CHAT_MIN, maxChatWidth())
+          latest = width
+          setChatWidth(width)
         }
       }
       const cleanup = () => {
@@ -282,6 +301,15 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
         if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null
+        if (latest !== initial) {
+          if (target === 'sidebar' && sidebarTab === 'files') {
+            useSettingsStore.getState().setPanelWidths({ sidebar: latest })
+            void persistAppSettings({ panelWidths: useSettingsStore.getState().panelWidths })
+          } else if (target === 'chat') {
+            useSettingsStore.getState().setPanelWidths({ chat: latest })
+            void persistAppSettings({ panelWidths: useSettingsStore.getState().panelWidths })
+          }
+        }
       }
       resizeCleanupRef.current = cleanup
       window.addEventListener('pointermove', onMove)
@@ -293,14 +321,50 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
     [sidebarWidths, sidebarTab, maxSidebarWidth, chatWidthShown, maxChatWidth]
   )
 
+  const startTerminalResize = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault()
+      resizeCleanupRef.current?.()
+      const startY = event.clientY
+      const initial = terminalHeight
+      let latest = initial
+
+      const onMove = (moveEvent: PointerEvent) => {
+        const delta = startY - moveEvent.clientY
+        const height = clamp(initial + delta, TERMINAL_MIN, TERMINAL_MAX)
+        latest = height
+        setTerminalHeight(height)
+      }
+      const cleanup = () => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', cleanup)
+        window.removeEventListener('pointercancel', cleanup)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null
+        if (latest !== initial) {
+          useSettingsStore.getState().setPanelWidths({ terminalHeight: latest })
+          void persistAppSettings({ panelWidths: useSettingsStore.getState().panelWidths })
+        }
+      }
+      resizeCleanupRef.current = cleanup
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', cleanup)
+      window.addEventListener('pointercancel', cleanup)
+      document.body.style.cursor = 'row-resize'
+      document.body.style.userSelect = 'none'
+    },
+    [terminalHeight]
+  )
+
   return (
     <div
       ref={containerRef}
       tabIndex={-1}
       aria-hidden={!active}
       inert={!active}
-      className={`absolute inset-0 flex bg-surface outline-none ${
-        active ? 'visible' : 'pointer-events-none invisible'
+      className={`absolute inset-0 bg-surface outline-none ${
+        active ? 'flex' : 'hidden'
       }`}
     >
       <WorkspaceScopeProvider value={workspacePath}>
@@ -408,17 +472,36 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
           </div>
           {/* 终端拆出后，主窗口这一侧不留行高；`visible` 仍是面板自身的可见性，
               否则独立窗口里的 xterm 会拿到 visible=false 而不初始化 / 不适配尺寸 */}
+          {terminalMounted && !terminalDetached && showTerminal && (
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              className="h-0.5 flex-shrink-0 cursor-row-resize bg-rule-seam transition-colors hover:bg-accent"
+              onPointerDown={startTerminalResize}
+            />
+          )}
           {terminalMounted && (
-            <div className={terminalDetached ? 'hidden' : 'contents'}>
+            <div
+              className={
+                terminalDetached
+                  ? 'hidden'
+                  : showTerminal
+                    ? 'flex flex-shrink-0 flex-col [&>*]:!h-full'
+                    : 'hidden'
+              }
+              style={!terminalDetached && showTerminal ? { height: terminalHeight } : undefined}
+            >
               <PanelSlot panel="terminal">
                 <ErrorBoundary scope="pane" resetKey={`${workspacePath}:terminal`}>
-                  <TerminalPanel
-                    workspacePath={workspacePath}
-                    cwd={viewRoot}
-                    visible={showTerminal}
-                    onClose={terminalDetached ? undefined : () => setShowTerminal(false)}
-                    active={active || terminalDetached}
-                  />
+                  <Suspense fallback={null}>
+                    <TerminalPanel
+                      workspacePath={workspacePath}
+                      cwd={viewRoot}
+                      visible={showTerminal}
+                      onClose={terminalDetached ? undefined : () => setShowTerminal(false)}
+                      active={active || terminalDetached}
+                    />
+                  </Suspense>
                 </ErrorBoundary>
               </PanelSlot>
             </div>
@@ -475,4 +558,4 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({ workspacePath, act
       </WorkspaceScopeProvider>
     </div>
   )
-}
+})

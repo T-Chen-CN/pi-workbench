@@ -100,6 +100,7 @@ export function deriveMessages(
     timestamp?: number
     usage?: AgentUsage
   } | null = null
+  const toolPartsById = new Map<string, Extract<AgentTracePart, { type: 'tool' }>>()
   let partSeq = 0
   let lastTimestamp = 0
 
@@ -122,6 +123,7 @@ export function deriveMessages(
   }
 
   const flushTurn = () => {
+    toolPartsById.clear()
     if (!turn || turn.parts.length === 0) {
       turn = null
       partSeq = 0
@@ -240,7 +242,7 @@ export function deriveMessages(
             const toolCallId = String(part.id ?? nextId('tool', entryId))
             const parentToolCallId =
               typeof part.parentToolCallId === 'string' ? part.parentToolCallId : undefined
-            turn.parts.push({
+            const toolPart: Extract<AgentTracePart, { type: 'tool' }> = {
               type: 'tool',
               id: toolCallId,
               toolCallId,
@@ -249,7 +251,11 @@ export function deriveMessages(
               status: 'running',
               filePath: toolFilePath(toolName, part.arguments ?? {}),
               ...(parentToolCallId ? { parentToolCallId } : {}),
-            })
+            }
+            turn.parts.push(toolPart)
+            if (!toolPartsById.has(toolCallId)) {
+              toolPartsById.set(toolCallId, toolPart)
+            }
           }
         }
       }
@@ -258,12 +264,9 @@ export function deriveMessages(
 
     if (msg.role === 'toolResult') {
       if (!turn) continue
-      const toolPartIndex = turn.parts.findIndex(
-        (part) => part.type === 'tool' && part.toolCallId === msg.toolCallId
-      )
-      if (toolPartIndex < 0) continue
-      const toolPart = turn.parts[toolPartIndex]
-      if (toolPart.type !== 'tool') continue
+      const toolPart =
+        typeof msg.toolCallId === 'string' ? toolPartsById.get(msg.toolCallId) : undefined
+      if (!toolPart) continue
       toolPart.status = msg.isError ? 'error' : 'success'
       toolPart.isError = Boolean(msg.isError)
       if (typeof msg.durationMs === 'number') toolPart.durationMs = msg.durationMs
@@ -278,17 +281,12 @@ export function deriveMessages(
       // 投影子工具/嵌套调用记录（SDK 保存在 toolResult.nestedCalls.calls），使轮末对账与重载不丢失嵌套轨迹
       const nestedRaw = msg.nestedCalls?.calls
       if (Array.isArray(nestedRaw) && nestedRaw.length > 0) {
-        const existingIds = new Set<string>()
-        for (const existingPart of turn.parts) {
-          if (existingPart.type === 'tool') existingIds.add(existingPart.toolCallId)
-        }
         const nestedParts: Array<Extract<AgentTracePart, { type: 'tool' }>> = []
         for (const call of nestedRaw) {
           if (!call || typeof call !== 'object') continue
           const nestedId =
             typeof call.id === 'string' && call.id ? call.id : nextId('nested-tool', entryId)
-          if (existingIds.has(nestedId)) continue
-          existingIds.add(nestedId)
+          if (toolPartsById.has(nestedId)) continue
           const nestedName = typeof call.name === 'string' && call.name ? call.name : 'tool'
           const hasArgs = Boolean(call.arguments && typeof call.arguments === 'object')
           const nestedArgs = hasArgs ? call.arguments : {}
@@ -300,11 +298,11 @@ export function deriveMessages(
           const isOk = call.status === 'ok'
           const slashIndex = nestedId.lastIndexOf('/')
           const directParent =
-            slashIndex > 0 && existingIds.has(nestedId.slice(0, slashIndex))
+            slashIndex > 0 && toolPartsById.has(nestedId.slice(0, slashIndex))
               ? nestedId.slice(0, slashIndex)
               : toolPart.toolCallId
           const nestedFilePath = hasArgs ? toolFilePath(nestedName, nestedArgs) : undefined
-          nestedParts.push({
+          const nestedPart: Extract<AgentTracePart, { type: 'tool' }> = {
             type: 'tool',
             id: nestedId,
             toolCallId: nestedId,
@@ -318,10 +316,15 @@ export function deriveMessages(
               : {}),
             ...(nestedFilePath ? { filePath: nestedFilePath } : {}),
             parentToolCallId: directParent,
-          })
+          }
+          toolPartsById.set(nestedId, nestedPart)
+          nestedParts.push(nestedPart)
         }
         if (nestedParts.length > 0) {
-          turn.parts.splice(toolPartIndex + 1, 0, ...nestedParts)
+          const toolPartIndex = turn.parts.indexOf(toolPart)
+          if (toolPartIndex >= 0) {
+            turn.parts.splice(toolPartIndex + 1, 0, ...nestedParts)
+          }
         }
       }
     }

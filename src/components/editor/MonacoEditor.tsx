@@ -412,26 +412,6 @@ export const MonacoEditor = React.memo(function MonacoEditor({
     }
   }, [openFilePathsKey])
 
-  // 容器尺寸变化时重新布局（编辑器可能在面板尺寸或可见性变化时创建 / 恢复）
-  useEffect(() => {
-    if (!editorReady) return
-    const editor = monacoRef.current
-    const container = editorRef.current
-    if (!editor || !container) return
-
-    const layout = () => editor.layout()
-    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(layout) : null
-    observer?.observe(container)
-    window.addEventListener('resize', layout)
-    const timer = setTimeout(layout, 50)
-
-    return () => {
-      observer?.disconnect()
-      window.removeEventListener('resize', layout)
-      clearTimeout(timer)
-    }
-  }, [editorReady])
-
   // 内容变化只更新 store：保存 / 草稿由 useFileDocument 统一调度
   useEffect(() => {
     if (!editorReady || !monacoRef.current) return
@@ -450,9 +430,20 @@ export const MonacoEditor = React.memo(function MonacoEditor({
     return () => subscription.dispose()
   }, [editorReady, store])
 
-  // 隐藏期间尺寸不变；回到前台时补一次布局，避免 Monaco 使用过期尺寸
+  // 容器常规缩放已由 automaticLayout: true 托管；仅在隐藏态回到前台时通过 rAF 补一次布局，
+  // 避免额外的 ResizeObserver / window resize 监听与 Monaco 内置布局器互相打架
+  const wasInactiveRef = useRef(!active)
   useEffect(() => {
-    if (active && editorReady) monacoRef.current?.layout()
+    if (!active) {
+      wasInactiveRef.current = true
+      return
+    }
+    if (!editorReady || !wasInactiveRef.current) return
+    wasInactiveRef.current = false
+    const frame = window.requestAnimationFrame(() => {
+      monacoRef.current?.layout()
+    })
+    return () => window.cancelAnimationFrame(frame)
   }, [active, editorReady])
 
   return (

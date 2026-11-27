@@ -41,7 +41,6 @@ import { localizeError } from '../i18n/errors'
 import { createTraceBuffer } from '../utils/streamBuffer'
 import { copyText } from '../utils/clipboard'
 import { SESSION_MODE_ICON } from '../utils/sessionModePresentation'
-import { joinPath } from '../utils/filePath'
 import { MAX_TOTAL_IMAGE_BASE64_CHARS } from '../utils/imageAttachment'
 import { buildChatSuggestions, type WorkspaceType } from '../utils/suggestions'
 import { toast } from '../store/toastStore'
@@ -136,7 +135,6 @@ export function useChatPanelState(props: ChatPanelProps) {
   const lastMessageId = messages.length > 0 ? messages[messages.length - 1].id : null
   const error = conversation?.error ?? null
   const attachments = conversation?.attachments ?? []
-  const input = conversation?.draftInput ?? ''
   const quoteCurrentFile = conversation?.quoteCurrentFile ?? false
 
   /** 最新一份待批准的计划（R-04）及其所在消息，用于只读计划卡的操作 */
@@ -309,23 +307,17 @@ export function useChatPanelState(props: ChatPanelProps) {
     sessionId: string
   } | null>(null)
   const [showArchived, setShowArchived] = useState(false)
-  const [mention, setMention] = useState<{
-    start: number
-    query: string
-    results: string[]
-  } | null>(null)
-  const mentionTimer = useRef<number | null>(null)
-  useEffect(
-    () => () => {
-      if (mentionTimer.current) window.clearTimeout(mentionTimer.current)
-    },
-    []
-  )
-  /** 提示模板与技能（R-13） */
-  const [promptResources, setPromptResources] = useState<{
+  /** 提示模板与技能缓存（由独立输入组件拉取并回填，避免输入击键把 ChatPanel 拖入重渲染） */
+  const promptResourcesRef = useRef<{
     templates: PromptTemplateInfo[]
     skills: SkillInfo[]
   }>({ templates: [], skills: [] })
+  const syncPromptResources = useCallback(
+    (next: { templates: PromptTemplateInfo[]; skills: SkillInfo[] }) => {
+      promptResourcesRef.current = next
+    },
+    []
+  )
   const [configVersion, setConfigVersion] = useState(0)
   const [agentReadyVersion, setAgentReadyVersion] = useState(0)
   const pendingConfigReloadRef = useRef(false)
@@ -381,119 +373,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     active,
     onSessionSwitch: () => setShowAttachMenu(false),
   })
-
-  const setDraft = useCallback(
-    (value: string) => {
-      if (activeKey) useChatStore.getState().setDraftInput(activeKey, value)
-    },
-    [activeKey]
-  )
-
-  /** @ 文件搜索（防抖 + 序号防乱序），避免慢请求结果覆写更新后的输入 */
-  const mentionSeqRef = useRef(0)
-  const searchMention = useCallback(
-    (query: string, start: number) => {
-      if (mentionTimer.current) window.clearTimeout(mentionTimer.current)
-      const seq = ++mentionSeqRef.current
-      mentionTimer.current = window.setTimeout(async () => {
-        const result = await api.searchWorkspaceFiles(viewRoot ?? workspacePath, query, 12)
-        if (mentionSeqRef.current !== seq || !result.success) return
-        setMention((current) =>
-          current && current.start === start
-            ? { ...current, results: result.files ?? [] }
-            : current
-        )
-      }, 120)
-    },
-    [workspacePath, viewRoot]
-  )
-
-  const handleDraftChange = (value: string, caret: number) => {
-    setDraft(value)
-    const before = value.slice(0, caret)
-    const match = before.match(/(^|\s)@([\w./\\-]{0,60})$/)
-    if (!match) {
-      setMention(null)
-      return
-    }
-    const start = caret - match[2].length - 1
-    setMention({ start, query: match[2], results: [] })
-    searchMention(match[2], start)
-  }
-
-  /** 选择 @ 文件：插入引用文本并作为附件附加 */
-  const addMention = (relative: string) => {
-    if (!activeKey || !mention) return
-    const value = useChatStore.getState().conversations[activeKey]?.draftInput ?? ''
-    const tokenEnd = mention.start + 1 + mention.query.length
-    const next = `${value.slice(0, mention.start)}@${relative} ${value.slice(tokenEnd)}`
-    useChatStore.getState().setDraftInput(activeKey, next)
-    // 搜索以会话工作树根为基准，附件路径必须落在同一根上（否则 Agent 读不到）
-    useChatStore.getState().addAttachment(activeKey, {
-      kind: 'file',
-      path: joinPath(viewRoot ?? workspacePath, relative),
-      name: relative.split('/').pop() || relative
-    })
-    setMention(null)
-    inputRef.current?.focus()
-  }
-
-  /** 斜杠菜单：内置命令 + Pi 提示模板 + 技能（R-13） */
-  const slashActive =
-    initialized && input.startsWith('/') && !input.includes(' ') && !input.includes('\n')
-  const slashQuery = slashActive ? input.slice(1).toLowerCase() : ''
-  const slashItems = useMemo(() => {
-    if (!slashActive) return []
-    const builtIns = [
-      { id: 'help', insert: '/help ', label: '/help', description: t('slashCommandHelp') },
-      { id: 'plan', insert: '/plan', label: '/plan', description: t('slashCommandPlan') },
-      { id: 'act', insert: '/act', label: '/act', description: t('slashCommandAct') },
-      {
-        id: 'compact',
-        insert: '/compact',
-        label: '/compact',
-        description: t('slashCommandCompact'),
-      },
-      { id: 'clear', insert: '/clear ', label: '/clear', description: t('slashCommandClear') },
-      { id: 'model', insert: '/model ', label: '/model', description: t('slashCommandModel') },
-    ]
-    const templates = promptResources.templates.map((template) => ({
-      id: `template:${template.name}`,
-      insert: `/${template.name} `,
-      label: `/${template.name}`,
-      description: template.description || t('slashTemplate'),
-    }))
-    const skills = promptResources.skills.map((skill) => ({
-      id: `skill:${skill.name}`,
-      insert: `/skill:${skill.name} `,
-      label: `/skill:${skill.name}`,
-      description: skill.description || t('slashSkill'),
-    }))
-    return [...builtIns, ...templates, ...skills].filter((item) =>
-      item.label.slice(1).toLowerCase().startsWith(slashQuery)
-    )
-  }, [slashActive, slashQuery, promptResources, t])
-
-  const insertSlashItem = (insert: string) => {
-    if (!activeKey) return
-    useChatStore.getState().setDraftInput(activeKey, insert)
-    inputRef.current?.focus()
-  }
-
-  // 打开斜杠菜单时重新扫描模板 / 技能文件，新增文件无需重启
-  useEffect(() => {
-    if (!slashActive || !activeSessionId) return
-    let cancelled = false
-    void piAgentAPI.listPromptResources(workspacePath, activeSessionId).then((result) => {
-      if (cancelled) return
-      if (result.success) {
-        setPromptResources({ templates: result.templates ?? [], skills: result.skills ?? [] })
-      }
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [slashActive, workspacePath, activeSessionId])
 
   // 命令面板插入模板 / 技能时写入输入框（R-13）
   useEffect(() => {
@@ -555,6 +434,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     editorRoot,
     activeKey,
     imagesAllowed,
+    symbolsActive: showAttachMenu && attachMode === 'symbols',
     t,
     setShowAttachMenu,
     setAttachMode,
@@ -785,7 +665,7 @@ export function useChatPanelState(props: ChatPanelProps) {
       }
       default: {
         // 提示模板 / 技能交给 Pi SDK 展开（仍走现有审批）
-        let resources = promptResources
+        let resources = promptResourcesRef.current
         if (
           resources.templates.length === 0 &&
           resources.skills.length === 0 &&
@@ -797,7 +677,7 @@ export function useChatPanelState(props: ChatPanelProps) {
               templates: fetched.templates ?? [],
               skills: fetched.skills ?? [],
             }
-            setPromptResources(resources)
+            promptResourcesRef.current = resources
           }
         }
         const name = command.slice(1)
@@ -839,13 +719,12 @@ export function useChatPanelState(props: ChatPanelProps) {
 
     const sessionId = options?.targetSessionId ?? activeSessionId
     const key = sessionId ? conversationKey(workspacePath, sessionId) : activeKey
-    const userMessage = (override ?? input).trim()
+    const chat = useChatStore.getState()
+    const userMessage = (override ?? (key ? (chat.draftInputs[key] ?? '') : '')).trim()
     if (!sessionId || !key) return
     const takeComposerAttachments = options?.consumeAttachments !== false
     // 输入框图片仍在预处理：此时提交会与正在写入的附件竞争，静默忽略（系统触发的发送不受影响）
     if (takeComposerAttachments && imageProcessingRef.current > 0) return
-
-    const chat = useChatStore.getState()
 
     // 斜杠命令不进入对话
     if (!options?.skipUserMessage && userMessage.startsWith('/')) {
@@ -980,75 +859,24 @@ export function useChatPanelState(props: ChatPanelProps) {
 
     const assistantId = chat.startStreamingMessage(key)
     let autoCompacting = false
-    // 文本 / 思考 / 工具事件共用一条有序缓冲，50ms 合并，保证 parts 顺序
+    // 文本 / 思考 / 工具事件共用一条有序缓冲，50ms 合并并通过单次 applyTraceEvents 原子入库
     const traceBuffer = createTraceBuffer((events) => {
-      const store = useChatStore.getState()
+      useChatStore.getState().applyTraceEvents(key, assistantId, events)
       for (const event of events) {
-        switch (event.type) {
-          case 'text_delta':
-            store.appendTextPart(key, assistantId, event.delta)
-            break
-          case 'thinking_delta':
-            store.appendThinkingPart(key, assistantId, event.delta)
-            break
-          case 'thinking_redacted':
-            store.appendThinkingPart(key, assistantId, '', { redacted: true })
-            break
-          case 'tool_start':
-            store.startToolPart(key, assistantId, event)
-            break
-          case 'tool_update':
-            store.updateToolPart(key, assistantId, event)
-            break
-          case 'tool_end':
-            store.endToolPart(key, assistantId, event)
-            break
-          case 'retry_start':
-            store.setRetryStatus(key, {
-              attempt: event.attempt,
-              maxAttempts: event.maxAttempts,
-              delayMs: event.delayMs,
-              message: event.message,
-            })
-            break
-          case 'retry_end':
-            // 成功或失败都立即结束倒计时，失败原因由错误条展示（R-19）
-            store.setRetryStatus(key, null)
-            break
-          case 'compaction_start':
-            autoCompacting = true
-            store.setCompacting(key, true)
-            break
-          case 'compaction_end': {
-            autoCompacting = false
-            store.setCompacting(key, false)
-            if (event.error) {
-              toast.error(t('compactFailed', { error: localizeError(event.error) }))
-              break
-            }
-            // 被取消的压缩不产生分隔线
-            if (event.aborted) break
-            store.appendCompactionPart(key, {
-              type: 'compaction',
-              id: `compaction-${event.entryId ?? event.timestamp ?? Date.now()}`,
-              entryId: event.entryId,
-              timestamp: event.timestamp ?? Date.now(),
-              tokensBefore: event.tokensBefore,
-            })
+        if (event.type === 'compaction_start') {
+          autoCompacting = true
+        } else if (event.type === 'compaction_end') {
+          autoCompacting = false
+          if (event.error) {
+            toast.error(t('compactFailed', { error: localizeError(event.error) }))
+          } else if (!event.aborted) {
             // 压缩后上下文仪表立即回落
             void piAgentAPI.getContextUsage(workspacePath, sessionId).then((result) => {
               if (result.success) {
                 useChatStore.getState().setContextUsage(key, result.usage ?? null)
               }
             })
-            break
           }
-          case 'plan_submitted':
-            store.appendPlanPart(key, assistantId, event.plan)
-            break
-          case 'plan_updated':
-            store.applyPlanUpdate(key, event.plan)
-            break
         }
       }
     })
@@ -1104,7 +932,7 @@ export function useChatPanelState(props: ChatPanelProps) {
         latestStore.removeMessage(key, assistantId)
         latestStore.setError(key, null)
         useSessionStore.getState().markError(workspacePath, sessionId, null)
-        const currentDraft = latestStore.conversations[key]?.draftInput ?? ''
+        const currentDraft = latestStore.draftInputs[key] ?? ''
         const restoredDraft = userMessage
           ? currentDraft
             ? `${userMessage}\n${currentDraft}`
@@ -1447,7 +1275,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     activeKey,
     activePlan,
     activeSessionId,
-    addMention,
     attachMode,
     attachSymbol,
     attachments,
@@ -1477,7 +1304,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     handleApprovePlan,
     handleCompact,
     handleCopyMessage,
-    handleDraftChange,
     handleDropFiles,
     handleEditMessage,
     handleExecutePlan,
@@ -1497,16 +1323,13 @@ export function useChatPanelState(props: ChatPanelProps) {
     handleTranscriptScroll,
     imageProcessing,
     initialized,
-    input,
     inputRef,
-    insertSlashItem,
     isCompacting,
     isLoading,
     lastAssistantMessage,
     lastMessageId,
     lastUserMessageId,
     latestProposedPlan,
-    mention,
     messages,
     modelCapabilities,
     modelCapabilityText,
@@ -1540,11 +1363,10 @@ export function useChatPanelState(props: ChatPanelProps) {
     showContextTokens,
     showPermissionLabel,
     showScrollButton,
-    slashActive,
-    slashItems,
     statusMenu,
     statusStripRef,
     stopping,
+    syncPromptResources,
     t,
     toggleArchive,
     togglePin,

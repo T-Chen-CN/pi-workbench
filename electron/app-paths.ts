@@ -53,11 +53,31 @@ function readDataDirArg(argv: string[]): string | null {
   return null
 }
 
-/**
- * 纯函数路径解析，便于单测验证三平台与便携开关组合。
- * 生产调用省略参数时从 Electron `app` 与 `process` 读取真实环境。
- */
-export function resolveAppPaths(options?: ResolveAppPathsOptions): ResolvedAppPaths {
+let cachedDefaultPaths: { key: string; value: ResolvedAppPaths } | null = null
+
+/** 清除默认路径解析缓存（仅用于测试切换模拟环境） */
+export function resetAppPathsCache(): void {
+  cachedDefaultPaths = null
+}
+
+function computeDefaultPathsCacheKey(): string {
+  const isPackaged = Boolean(app.isPackaged)
+  const platform = process.platform
+  const appImagePath = process.env.APPIMAGE ?? ''
+  if (!isPackaged) {
+    return `dev\0${platform}\0${app.getAppPath()}`
+  }
+  const exeKey = appImagePath ? '' : app.getPath('exe')
+  let appDataKey = ''
+  try {
+    appDataKey = app.getPath('appData')
+  } catch {
+    appDataKey = ''
+  }
+  return `pkg\0${platform}\0${appImagePath}\0${exeKey}\0${appDataKey}\0${process.argv.join('\0')}`
+}
+
+function resolveAppPathsUncached(options?: ResolveAppPathsOptions): ResolvedAppPaths {
   const isPackaged = options?.isPackaged ?? app.isPackaged
   const platform = options?.platform ?? process.platform
   const appImagePath = options?.appImagePath ?? process.env.APPIMAGE
@@ -94,19 +114,41 @@ export function resolveAppPaths(options?: ResolveAppPathsOptions): ResolvedAppPa
   return { dataDir, installDir, portable: false }
 }
 
+function resolveDefaultAppPaths(): ResolvedAppPaths {
+  const key = computeDefaultPathsCacheKey()
+  if (cachedDefaultPaths && cachedDefaultPaths.key === key) {
+    return cachedDefaultPaths.value
+  }
+  const resolved = resolveAppPathsUncached()
+  cachedDefaultPaths = { key, value: resolved }
+  return resolved
+}
+
+/**
+ * 纯函数路径解析，便于单测验证三平台与便携开关组合。
+ * 生产调用省略参数时从 Electron `app` 与 `process` 读取真实环境，并按启动环境键缓存，
+ * 避免高频 IPC / `pw-file://` 请求重复触发同步 `fs.existsSync`。
+ */
+export function resolveAppPaths(options?: ResolveAppPathsOptions): ResolvedAppPaths {
+  if (options === undefined) {
+    return { ...resolveDefaultAppPaths() }
+  }
+  return resolveAppPathsUncached(options)
+}
+
 /** 返回应用唯一数据目录（config / data / cache / logs 的共同根） */
 export function getAppDir(): string {
-  return resolveAppPaths().dataDir
+  return resolveDefaultAppPaths().dataDir
 }
 
 /** 返回程序安装目录（只读程序文件所在目录） */
 export function getInstallDir(): string {
-  return resolveAppPaths().installDir
+  return resolveDefaultAppPaths().installDir
 }
 
 /** 当前是否以单目录便携模式运行（Windows 便携 zip 或 --data-dir） */
 export function isPortableMode(): boolean {
-  return resolveAppPaths().portable
+  return resolveDefaultAppPaths().portable
 }
 
 /**

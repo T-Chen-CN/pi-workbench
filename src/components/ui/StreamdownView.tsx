@@ -19,28 +19,25 @@ import {
   type StreamdownTranslations,
 } from 'streamdown'
 import 'streamdown/styles.css'
-import 'katex/dist/katex.min.css'
 import { cjk } from '@streamdown/cjk'
-import { createMathPlugin } from '@streamdown/math'
 import { PI_SHIKI_THEMES, piShikiCodePlugin } from '../../utils/shikiHighlighter'
-
-const mathPlugin = createMathPlugin({ singleDollarTextMath: true })
 
 const CODE_PLUGINS: PluginConfig = {
   code: piShikiCodePlugin,
   cjk,
-  math: mathPlugin,
 }
 
 const LIGHT_PLUGINS: PluginConfig = {
   cjk,
-  math: mathPlugin,
 }
 
 const MERMAID_FENCE_RE = /(?:^|\n)[ \t]{0,3}(?:```+|~~~+)[ \t]*mermaid\b/i
+const MATH_DELIMITER_RE = /\$|\\[([]/
 
 let cachedMermaidPlugin: PluginConfig['mermaid'] | null = null
 let mermaidLoadPromise: Promise<PluginConfig['mermaid'] | null> | null = null
+let cachedMathPlugin: PluginConfig['math'] | null = null
+let mathLoadPromise: Promise<PluginConfig['math'] | null> | null = null
 
 /** 按需动态加载 @streamdown/mermaid（含 mermaid/cytoscape/d3 重依赖），非图表消息不进入首屏包 */
 function loadMermaidPlugin(): Promise<PluginConfig['mermaid'] | null> {
@@ -58,6 +55,27 @@ function loadMermaidPlugin(): Promise<PluginConfig['mermaid'] | null> {
       })
   }
   return mermaidLoadPromise
+}
+
+/** 按需动态加载 @streamdown/math 与 KaTeX 样式表，避免 KaTeX CSS/字体进入首屏启动包 */
+function loadMathPlugin(): Promise<PluginConfig['math'] | null> {
+  if (cachedMathPlugin) return Promise.resolve(cachedMathPlugin)
+  if (!mathLoadPromise) {
+    mathLoadPromise = Promise.all([
+      import('@streamdown/math'),
+      import('katex/dist/katex.min.css'),
+    ])
+      .then(([mod]) => {
+        cachedMathPlugin = mod.createMathPlugin({ singleDollarTextMath: true })
+        return cachedMathPlugin
+      })
+      .catch((err) => {
+        console.error('[StreamdownView] Failed to load @streamdown/math:', err)
+        mathLoadPromise = null
+        return null
+      })
+  }
+  return mathLoadPromise
 }
 
 /**
@@ -183,8 +201,12 @@ export const StreamdownView = React.memo(function StreamdownView({
   )
 
   const needsMermaid = highlight && MERMAID_FENCE_RE.test(content)
+  const needsMath = MATH_DELIMITER_RE.test(content)
   const [mermaidPlugin, setMermaidPlugin] = useState<PluginConfig['mermaid'] | null>(() =>
     needsMermaid ? cachedMermaidPlugin : null
+  )
+  const [mathPlugin, setMathPlugin] = useState<PluginConfig['math'] | null>(() =>
+    needsMath ? cachedMathPlugin : null
   )
 
   useEffect(() => {
@@ -202,18 +224,35 @@ export const StreamdownView = React.memo(function StreamdownView({
     }
   }, [needsMermaid])
 
-  const plugins = useMemo<PluginConfig>(() => {
-    if (!highlight) return LIGHT_PLUGINS
-    if (needsMermaid && mermaidPlugin) {
-      return {
-        code: piShikiCodePlugin,
-        cjk,
-        math: mathPlugin,
-        mermaid: mermaidPlugin,
-      }
+  useEffect(() => {
+    if (!needsMath) return
+    if (cachedMathPlugin) {
+      setMathPlugin((current) => current ?? cachedMathPlugin)
+      return
     }
-    return CODE_PLUGINS
-  }, [highlight, needsMermaid, mermaidPlugin])
+    let cancelled = false
+    void loadMathPlugin().then((plugin) => {
+      if (!cancelled && plugin) setMathPlugin(plugin)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [needsMath])
+
+  const plugins = useMemo<PluginConfig>(() => {
+    const activeMath = needsMath && mathPlugin ? mathPlugin : null
+    if (!highlight) {
+      return activeMath ? { cjk, math: activeMath } : LIGHT_PLUGINS
+    }
+    const activeMermaid = needsMermaid && mermaidPlugin ? mermaidPlugin : null
+    if (!activeMath && !activeMermaid) return CODE_PLUGINS
+    return {
+      code: piShikiCodePlugin,
+      cjk,
+      ...(activeMath ? { math: activeMath } : {}),
+      ...(activeMermaid ? { mermaid: activeMermaid } : {}),
+    }
+  }, [highlight, needsMath, mathPlugin, needsMermaid, mermaidPlugin])
 
   return (
     <div className={className}>

@@ -158,6 +158,56 @@ const loadingLangs = new Map<string, Promise<boolean>>()
 const tokenCache = new Map<string, HighlightResult>()
 const MAX_CACHE_ENTRIES = 200
 
+/** 流式未闭合代码块节流缓存：避免 50ms 渲染周期对同一不断增长的代码块做 O(N²) 全量同步分词 */
+interface StreamHighlightEntry {
+  code: string
+  result: HighlightResult
+  at: number
+}
+const streamCache = new Map<string, StreamHighlightEntry>()
+const MAX_STREAM_CACHE_ENTRIES = 64
+const STREAM_THROTTLE_MS = 250
+const STREAM_LARGE_CODE_CHARS = 1000
+
+function themesCacheKey(themes: HighlightOptions['themes']): string {
+  return themes
+    .map((theme) => (typeof theme === 'string' ? theme : theme.name ?? ''))
+    .join('|')
+}
+
+/** 在不重新分词的情况下，把流式新增片段以纯文本 token 追加到上次高亮结果末尾，兼顾实时显示与零闪烁 */
+function appendPlainDelta(
+  prev: HighlightResult,
+  baseOffset: number,
+  delta: string
+): HighlightResult {
+  const lines = prev.tokens.slice()
+  const chunks = delta.split('\n')
+  let offset = baseOffset
+  if (chunks[0].length > 0) {
+    const lastIdx = Math.max(0, lines.length - 1)
+    const lastLine = lines[lastIdx] ? lines[lastIdx].slice() : []
+    lastLine.push({ content: chunks[0], offset })
+    lines[lastIdx] = lastLine
+    offset += chunks[0].length
+  }
+  for (let i = 1; i < chunks.length; i += 1) {
+    offset += 1
+    const chunk = chunks[i]
+    lines.push(chunk.length > 0 ? [{ content: chunk, offset }] : [])
+    offset += chunk.length
+  }
+  return { bg: prev.bg, fg: prev.fg, tokens: lines }
+}
+
+function storeStreamEntry(key: string, entry: StreamHighlightEntry): void {
+  if (streamCache.size >= MAX_STREAM_CACHE_ENTRIES && !streamCache.has(key)) {
+    const oldest = streamCache.keys().next().value
+    if (oldest !== undefined) streamCache.delete(oldest)
+  }
+  streamCache.set(key, entry)
+}
+
 /** 仅供性能回归测试核验单例初始化次数 */
 export function getShikiInitCount(): number {
   return initCount
@@ -207,18 +257,56 @@ async function ensureLanguage(lang: string): Promise<HighlighterCore | null> {
   }
 }
 
-function runHighlight(instance: HighlighterCore, code: string, lang: string, isIncomplete?: boolean): HighlightResult {
-  const cacheKey = `${lang}\u0000${code}`
-  if (!isIncomplete) {
-    const cached = tokenCache.get(cacheKey)
-    if (cached) return cached
+function runHighlight(
+  instance: HighlighterCore,
+  code: string,
+  lang: string,
+  themesKey: string,
+  isIncomplete?: boolean
+): HighlightResult {
+  const streamKey = `${lang}\u0000${themesKey}`
+  if (isIncomplete) {
+    const now = Date.now()
+    const cachedStream = streamCache.get(streamKey)
+    if (cachedStream) {
+      if (code === cachedStream.code) return cachedStream.result
+      if (code.startsWith(cachedStream.code)) {
+        const delta = code.slice(cachedStream.code.length)
+        const elapsed = now - cachedStream.at
+        if (
+          elapsed < STREAM_THROTTLE_MS &&
+          (!delta.includes('\n') || code.length >= STREAM_LARGE_CODE_CHARS)
+        ) {
+          return appendPlainDelta(cachedStream.result, cachedStream.code.length, delta)
+        }
+      }
+    }
+    const formatted = tokenize(instance, code, lang)
+    storeStreamEntry(streamKey, { code, result: formatted, at: now })
+    return formatted
   }
+
+  streamCache.delete(streamKey)
+  const cacheKey = `${lang}\u0000${code}`
+  const cached = tokenCache.get(cacheKey)
+  if (cached) return cached
+
+  const formatted = tokenize(instance, code, lang)
+  if (tokenCache.size >= MAX_CACHE_ENTRIES) {
+    const oldest = tokenCache.keys().next().value
+    if (oldest !== undefined) tokenCache.delete(oldest)
+  }
+  tokenCache.set(cacheKey, formatted)
+  return formatted
+}
+
+function tokenize(instance: HighlighterCore, code: string, lang: string): HighlightResult {
   const result = instance.codeToTokens(code, {
     lang,
     themes: { light: 'pi-paper', dark: 'pi-ink' },
     defaultColor: 'light',
   })
-  const formatted: HighlightResult = {
+  return {
     bg: 'transparent',
     fg: result.fg,
     tokens: result.tokens.map((line) =>
@@ -232,14 +320,6 @@ function runHighlight(instance: HighlighterCore, code: string, lang: string, isI
       }))
     ),
   }
-  if (!isIncomplete) {
-    if (tokenCache.size >= MAX_CACHE_ENTRIES) {
-      const oldest = tokenCache.keys().next().value
-      if (oldest !== undefined) tokenCache.delete(oldest)
-    }
-    tokenCache.set(cacheKey, formatted)
-  }
-  return formatted
 }
 
 /** 创建零 WASM Shiki 纯 JS 代码高亮插件（传入 Streamdown `plugins.code`） */
@@ -253,9 +333,10 @@ export function createPiShikiPlugin(): CodeHighlighterPlugin {
     highlight(options: HighlightOptions, callback?: (result: HighlightResult) => void): HighlightResult | null {
       const lang = normalizeLanguage(options.language)
       if (!lang || options.code.length > 50_000) return null
+      const tKey = themesCacheKey(options.themes)
       if (highlighterInstance && loadedLangs.has(lang)) {
         try {
-          return runHighlight(highlighterInstance, options.code, lang, options.isIncomplete)
+          return runHighlight(highlighterInstance, options.code, lang, tKey, options.isIncomplete)
         } catch {
           return null
         }
@@ -264,7 +345,7 @@ export function createPiShikiPlugin(): CodeHighlighterPlugin {
         void ensureLanguage(lang).then((instance) => {
           if (!instance) return
           try {
-            callback(runHighlight(instance, options.code, lang, options.isIncomplete))
+            callback(runHighlight(instance, options.code, lang, tKey, options.isIncomplete))
           } catch {
             // 忽略冷门语法偶发解析失败，保持纯文本可读
           }

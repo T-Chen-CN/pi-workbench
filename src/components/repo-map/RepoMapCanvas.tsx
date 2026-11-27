@@ -72,6 +72,8 @@ const PAN_STEP = 96
 const REVEAL_PADDING = 24
 /** 视口裁剪缓冲区（世界坐标像素），保证平滑拖拽时不闪现白边 */
 const VIEWPORT_CULL_MARGIN = 240
+/** 连续平移 / 滚轮缩放期间 React 视口与缩放百分比的尾随节流窗口（ms），避免 60fps 全树重渲染 */
+const VIEW_SYNC_DELAY_MS = 120
 
 export interface RepoMapSearchMatchInfo {
   total: number
@@ -132,7 +134,13 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
     const guideYRef = useRef<HTMLDivElement | null>(null)
     const stateRef = useRef<RepoMapCanvasState | null>(null)
     const viewRef = useRef<{ zoom: number; pan: Point }>({ zoom: 1, pan: { x: 0, y: 0 } })
-    const saverRef = useRef(createRepoMapCanvasSaver(workspacePath))
+    // 懒初始化：避免每次重渲染都重复创建 saver 闭包对象再被 useRef 丢弃
+    const saverRef = useRef<ReturnType<typeof createRepoMapCanvasSaver> | null>(null)
+    const saverWorkspaceRef = useRef<string | null>(null)
+    if (!saverRef.current) {
+      saverRef.current = createRepoMapCanvasSaver(workspacePath)
+      saverWorkspaceRef.current = workspacePath
+    }
     /** 上浮链上卡片的手动位置：只在本次会话有效，收起链即清空 */
     const sessionRef = useRef<Map<string, Point>>(new Map())
     const dragRef = useRef<{
@@ -166,7 +174,7 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
     const [panning, setPanning] = useState(false)
     const [draggingId, setDraggingId] = useState<string | null>(null)
     const suppressClickRef = useRef(false)
-    const frameRef = useRef<number | null>(null)
+    const syncTimerRef = useRef<number | null>(null)
     const pendingFitRef = useRef(false)
     const [loaded, setLoaded] = useState(false)
     const [revision, setRevision] = useState(0)
@@ -250,7 +258,7 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
     const allRects = useMemo(() => [...baseRects, ...chainRects], [baseRects, chainRects])
 
     const save = useCallback((state: RepoMapCanvasState) => {
-      saverRef.current.save(state)
+      saverRef.current?.save(state)
     }, [])
 
     const worldViewport = useCallback((): Rect => {
@@ -282,14 +290,26 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       }
     }, [])
 
-    /** 视口变化后按帧节流同步给 React（小地图 / 百分比），避免每像素一次渲染 */
+    /** 立即把 DOM 视口与缩放同步给 React（用于离散动作与平移松手） */
+    const flushSync = useCallback(() => {
+      if (syncTimerRef.current !== null) {
+        window.clearTimeout(syncTimerRef.current)
+        syncTimerRef.current = null
+      }
+      setViewportRect(worldViewport())
+      onZoomChange?.(viewRef.current.zoom)
+    }, [onZoomChange, worldViewport])
+
+    /** 连续平移 / 滚轮缩放期间以 120ms 尾随防抖同步给 React，避免 60fps 触发整树重渲染 */
     const scheduleSync = useCallback(() => {
-      if (frameRef.current !== null) return
-      frameRef.current = window.requestAnimationFrame(() => {
-        frameRef.current = null
+      if (syncTimerRef.current !== null) {
+        window.clearTimeout(syncTimerRef.current)
+      }
+      syncTimerRef.current = window.setTimeout(() => {
+        syncTimerRef.current = null
         setViewportRect(worldViewport())
         onZoomChange?.(viewRef.current.zoom)
-      })
+      }, VIEW_SYNC_DELAY_MS)
     }, [onZoomChange, worldViewport])
 
     const commitView = useCallback(
@@ -298,7 +318,7 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
         if (!state) return
         state.zoom = viewRef.current.zoom
         state.pan = { ...viewRef.current.pan }
-        if (immediate) void saverRef.current.flush()
+        if (immediate) void saverRef.current?.flush()
         else save(state)
       },
       [save]
@@ -313,9 +333,9 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       })
       viewRef.current = next
       applyView()
-      scheduleSync()
+      flushSync()
       commitView()
-    }, [allRects, applyView, commitView, scheduleSync])
+    }, [allRects, applyView, commitView, flushSync])
 
     const resetLayout = useCallback(() => {
       const state = stateRef.current
@@ -327,7 +347,7 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       pendingFitRef.current = true
       // 还原是显式动作：立刻落盘，不留 400ms 的窗口
       save(state)
-      void saverRef.current.flush()
+      void saverRef.current?.flush()
       setRevision((value) => value + 1)
     }, [save])
 
@@ -335,7 +355,11 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
     useEffect(() => {
       let cancelled = false
       setLoaded(false)
-      saverRef.current = createRepoMapCanvasSaver(workspacePath)
+      if (!saverRef.current || saverWorkspaceRef.current !== workspacePath) {
+        saverRef.current?.dispose()
+        saverRef.current = createRepoMapCanvasSaver(workspacePath)
+        saverWorkspaceRef.current = workspacePath
+      }
       void loadRepoMapCanvas(workspacePath).then((loadedState) => {
         if (cancelled) return
         const migrated = migrateCanvasLayout(loadedState)
@@ -351,13 +375,15 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       })
       return () => {
         cancelled = true
-        if (frameRef.current !== null) {
-          window.cancelAnimationFrame(frameRef.current)
-          frameRef.current = null
+        if (syncTimerRef.current !== null) {
+          window.clearTimeout(syncTimerRef.current)
+          syncTimerRef.current = null
         }
         const state = stateRef.current
-        if (state) void saverRef.current.flush()
-        saverRef.current.dispose()
+        if (state) void saverRef.current?.flush()
+        saverRef.current?.dispose()
+        saverRef.current = null
+        saverWorkspaceRef.current = null
       }
     }, [workspacePath, save])
 
@@ -480,10 +506,10 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
           },
         }
         applyView(true)
-        scheduleSync()
+        flushSync()
         commitView()
       },
-      [applyView, commitView, scheduleSync]
+      [applyView, commitView, flushSync]
     )
 
     /**
@@ -528,10 +554,10 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
         if (Math.abs(nextPanX - view.pan.x) < 1 && Math.abs(nextPanY - view.pan.y) < 1) return
         viewRef.current = { zoom, pan: { x: nextPanX, y: nextPanY } }
         applyView(true)
-        scheduleSync()
+        flushSync()
         commitView()
       },
-      [applyView, commitView, scheduleSync]
+      [applyView, commitView, flushSync]
     )
 
     /* ------------------------------ 上浮链 ------------------------------ */
@@ -648,7 +674,7 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
         height: drag.height,
       }
       const others: Rect[] = []
-      for (const other of [...baseRects, ...chainRects]) {
+      for (const other of allRects) {
         // 排除被拖卡片自己原本的起始位置，而不是当前位置 rect，否则拖出 0.5px 后会吸附回原起点
         if (
           Math.abs(other.x - drag.originX) < 0.5 &&
@@ -731,6 +757,7 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       setPanning(false)
       if (pan.moved) {
         if (!pan.canPan) return
+        flushSync()
         commitView()
         // 空格平移常常是在卡片上抬手：拦掉随之而来的 click，别顺手把文件打开
         suppressClickRef.current = true
@@ -785,10 +812,10 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
         const point = { x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 }
         viewRef.current = zoomAt(viewRef.current, viewRef.current.zoom * factor, point)
         applyView()
-        scheduleSync()
+        flushSync()
         commitView()
       },
-      [applyView, commitView, scheduleSync]
+      [applyView, commitView, flushSync]
     )
 
     const navigateTo = useCallback(
@@ -805,10 +832,10 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
           },
         }
         applyView()
-        scheduleSync()
+        flushSync()
         commitView()
       },
-      [applyView, commitView, scheduleSync]
+      [applyView, commitView, flushSync]
     )
 
     // 滚轮缩放：用原生监听器（React 的 wheel 是 passive，拦不住页面滚动）
@@ -829,11 +856,14 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       return () => viewport.removeEventListener('wheel', handleWheel)
     }, [applyView, commitView, scheduleSync])
 
-    // 视口尺寸变化（窗口缩放 / 面板拖宽）：只更新小地图，不改用户的缩放
+    // 视口尺寸变化（窗口缩放 / 面板拖宽）：只更新小地图，不改用户的缩放；隐藏态 width=0 时跳过
     useEffect(() => {
       const viewport = viewportRef.current
       if (!viewport) return
-      const sync = () => setViewportRect(worldViewport())
+      const sync = () => {
+        if (viewport.clientWidth <= 0 || viewport.clientHeight <= 0) return
+        setViewportRect(worldViewport())
+      }
       sync()
       if (typeof ResizeObserver === 'undefined') return
       const observer = new ResizeObserver(sync)
@@ -1053,7 +1083,7 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
           pan: { x: viewRef.current.pan.x + delta.x, y: viewRef.current.pan.y + delta.y },
         }
         applyView()
-        scheduleSync()
+        flushSync()
         commitView()
       }
     }

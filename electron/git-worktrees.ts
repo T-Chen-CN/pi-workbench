@@ -283,42 +283,95 @@ export async function saveSessionGit(
   await writeJsonAtomic(sessionGitPath(workspaceDir), data)
 }
 
+const GIT_COMMIT_SHA_RE = /^[0-9a-f]{40,64}$/i
+
+function parseSymbolicBranch(symbolicFull: string | undefined): string | null {
+  if (!symbolicFull || symbolicFull === 'HEAD') return null
+  if (symbolicFull.startsWith('refs/heads/')) {
+    return symbolicFull.slice('refs/heads/'.length) || null
+  }
+  if (symbolicFull.startsWith('refs/')) {
+    return symbolicFull.slice('refs/'.length) || null
+  }
+  return null
+}
+
+function splitOutputLines(stdout: string): string[] {
+  const trimmed = stdout.replace(/\r?\n$/, '')
+  return trimmed ? trimmed.split(/\r?\n/) : []
+}
+
 export async function getRepoInfo(workspaceDir: string): Promise<GitRepoInfo | null> {
-  const inside = await git(workspaceDir, ['rev-parse', '--is-inside-work-tree'])
-  if (!inside.ok || inside.stdout.trim() !== 'true') return null
-
-  const rootResult = await git(workspaceDir, ['rev-parse', '--show-toplevel'])
-  if (!rootResult.ok) return null
-  const root = canonicalizePath(rootResult.stdout.trim())
-  if (!root) return null
-
-  // 7 条只读 git 查询互不依赖，并行执行避免启动/切会话串行拉起 7 次 git.exe
-  const [
-    gitDirResult,
-    commonDirResult,
-    bareResult,
-    branchResult,
-    headResult,
-    remoteResult,
-    emailResult,
-  ] = await Promise.all([
-    git(root, ['rev-parse', '--absolute-git-dir']),
-    git(root, ['rev-parse', '--git-common-dir']),
-    git(root, ['rev-parse', '--is-bare-repository']),
-    git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
-    git(root, ['rev-parse', 'HEAD']),
-    git(root, ['remote', 'get-url', 'origin']),
-    git(root, ['config', 'user.email']),
+  // 合并 5 项仓库目录/状态查询 + HEAD SHA + 符号分支到单次 git rev-parse，避免 Windows 上进程扇出
+  const combined = await git(workspaceDir, [
+    'rev-parse',
+    '--is-inside-work-tree',
+    '--show-toplevel',
+    '--absolute-git-dir',
+    '--git-common-dir',
+    '--is-bare-repository',
+    'HEAD',
+    '--symbolic-full-name',
+    'HEAD',
   ])
 
-  const gitDir = gitDirResult.ok ? canonicalizePath(gitDirResult.stdout.trim()) : null
-  const commonDirRaw = commonDirResult.ok ? commonDirResult.stdout.trim() : ''
+  let lines = splitOutputLines(combined.stdout)
+  let head: string | null = null
+  let branch: string | null = null
+  let needsSymbolicRef = false
+
+  if (combined.ok && lines.length >= 7 && lines[0] === 'true' && GIT_COMMIT_SHA_RE.test(lines[5])) {
+    head = lines[5]
+    branch = parseSymbolicBranch(lines[6])
+  } else if (lines.length >= 5 && lines[0] === 'true') {
+    // 尚无提交的 unborn 仓库：rev-parse 先输出前 5 行仓库信息，再在解析 HEAD 时非零退出
+    needsSymbolicRef = true
+  } else if (
+    lines[0] === 'false' ||
+    /not a git repository|must be run in a work tree/i.test(combined.stderr)
+  ) {
+    return null
+  } else {
+    // 兜底：若特定 git 版本在 unborn HEAD 报错前未刷新 stdout，单独做一次不含 HEAD 的目录查询
+    const fallback = await git(workspaceDir, [
+      'rev-parse',
+      '--is-inside-work-tree',
+      '--show-toplevel',
+      '--absolute-git-dir',
+      '--git-common-dir',
+      '--is-bare-repository',
+    ])
+    lines = splitOutputLines(fallback.stdout)
+    if (!fallback.ok || lines.length < 5 || lines[0] !== 'true') return null
+    needsSymbolicRef = true
+  }
+
+  const root = canonicalizePath(lines[1].trim())
+  if (!root) return null
+
+  const gitDirRaw = lines[2].trim()
+  const gitDir = gitDirRaw ? canonicalizePath(gitDirRaw) : null
+  // --git-common-dir 的相对路径基于 rev-parse 执行目录（workspaceDir），不可改用 root 拼接
+  const commonDirRaw = lines[3].trim()
   const commonDir = commonDirRaw
-    ? canonicalizePath(path.isAbsolute(commonDirRaw) ? commonDirRaw : path.join(root, commonDirRaw))
+    ? canonicalizePath(
+        path.isAbsolute(commonDirRaw) ? commonDirRaw : path.resolve(workspaceDir, commonDirRaw)
+      )
     : null
-  const bare = bareResult.ok && bareResult.stdout.trim() === 'true'
-  const branch = branchResult.ok && branchResult.stdout.trim() ? branchResult.stdout.trim() : null
-  const head = headResult.ok && headResult.stdout.trim() ? headResult.stdout.trim() : null
+  const bare = lines[4].trim() === 'true'
+
+  const [remoteResult, emailResult, symbolicResult] = await Promise.all([
+    git(root, ['remote', 'get-url', 'origin']),
+    git(root, ['config', 'user.email']),
+    needsSymbolicRef
+      ? git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
+      : Promise.resolve<GitCommandResult | null>(null),
+  ])
+
+  if (needsSymbolicRef && symbolicResult?.ok && symbolicResult.stdout.trim()) {
+    branch = symbolicResult.stdout.trim()
+  }
+
   const remoteUrl = remoteResult.ok && remoteResult.stdout.trim() ? remoteResult.stdout.trim() : null
   const userEmail = emailResult.ok && emailResult.stdout.trim() ? emailResult.stdout.trim() : null
   const linkedWorktree = Boolean(gitDir && commonDir && gitDir !== commonDir)

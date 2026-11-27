@@ -21,6 +21,7 @@ import { MAX_ATTACHMENTS } from '../utils/chatPanelShared'
 
 /** 「附加符号」全文扫描的防抖窗口：停手后才重算一次 */
 const SYMBOL_SCAN_DEBOUNCE_MS = 400
+const EMPTY_SYMBOLS: ExtractedSymbol[] = []
 
 export interface UseChatAttachmentsOptions {
   workspacePath: string
@@ -28,6 +29,8 @@ export interface UseChatAttachmentsOptions {
   editorRoot: string
   activeKey: string | null
   imagesAllowed: boolean
+  /** 仅在符号选择浮层实际打开时扫描当前文件符号，避免背景工作区每次按键后 400ms 跑全文正则 */
+  symbolsActive: boolean
   t: (key: any, params?: Record<string, string | number>) => string
   setShowAttachMenu: (open: boolean) => void
   setAttachMode: (mode: 'files' | 'symbols') => void
@@ -40,6 +43,7 @@ export function useChatAttachments(options: UseChatAttachmentsOptions) {
     editorRoot,
     activeKey,
     imagesAllowed,
+    symbolsActive,
     t,
     setShowAttachMenu,
     setAttachMode,
@@ -51,37 +55,33 @@ export function useChatAttachments(options: UseChatAttachmentsOptions) {
   const imageProcessingRef = useRef(0)
 
   /**
-   * 「附加符号」要扫全文：不能跟着每按键重算。
-   * 这里只在停止输入 `SYMBOL_SCAN_DEBOUNCE_MS` 之后重算一次（切文件立即重算），
-   * 扫的是那一次的快照，用户真从菜单里选符号时再从 store 现取原文切片。
+   * 「附加符号」要扫全文：未打开符号选择器时不订阅 editorStore、不启动定时器、不执行正则扫描。
+   * 打开后立即按当前文件计算，编辑期间以 `SYMBOL_SCAN_DEBOUNCE_MS` 防抖刷新。
    */
-  const [symbolSource, setSymbolSource] = useState<{ name: string; content: string } | null>(null)
+  const [symbolTick, setSymbolTick] = useState(0)
   useEffect(() => {
+    if (!symbolsActive) return
     const store = editorStoreFor(editorRoot)
     let timer: ReturnType<typeof setTimeout> | null = null
-    const snapshot = (immediate: boolean) => {
+    const unsubscribe = store.subscribe(() => {
       if (timer) clearTimeout(timer)
-      const publish = () => {
+      timer = setTimeout(() => {
         timer = null
-        const file = store.getState().currentFile
-        setSymbolSource(file ? { name: file.name, content: file.content } : null)
-      }
-      if (immediate) publish()
-      else timer = setTimeout(publish, SYMBOL_SCAN_DEBOUNCE_MS)
-    }
-    snapshot(true)
-    // 内容变化高频：交给定时器合并，只有停手后才 setState（不触发按键级重渲染）
-    const unsubscribe = store.subscribe(() => snapshot(false))
+        setSymbolTick((tick) => tick + 1)
+      }, SYMBOL_SCAN_DEBOUNCE_MS)
+    })
     return () => {
       if (timer) clearTimeout(timer)
       unsubscribe()
     }
-  }, [editorRoot])
+  }, [editorRoot, symbolsActive])
 
-  const currentSymbols = useMemo(
-    () => (symbolSource ? extractSymbols(symbolSource.content, symbolSource.name) : []),
-    [symbolSource]
-  )
+  const currentSymbols = useMemo(() => {
+    if (!symbolsActive) return EMPTY_SYMBOLS
+    void symbolTick
+    const file = editorStoreFor(editorRoot).getState().currentFile
+    return file ? extractSymbols(file.content, file.name) : EMPTY_SYMBOLS
+  }, [editorRoot, symbolsActive, symbolTick])
 
   /** 附加单个符号（函数 / 类等）作为上下文 */
   const attachSymbol = (symbol: ExtractedSymbol) => {

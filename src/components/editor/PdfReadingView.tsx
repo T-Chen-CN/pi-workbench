@@ -35,12 +35,13 @@ interface PdfPageProps {
   pageNumber: number
   scale: number
   size: PageSize
+  active: boolean
   onSize: (pageNumber: number, size: PageSize) => void
   observePage: (element: HTMLElement, onVisibility: (visible: boolean) => void) => () => void
 }
 
 /**
- * 单页渲染：只有进入视口（含 ±2 页缓冲）才画 canvas，离开后保留占位与最后一次画面。
+ * 单页渲染：只有进入视口（含 ±2 页缓冲）且视图激活时才画 canvas，离开视口或工作区休眠后立即释放像素内存。
  * 缩放变化时取消未完成的渲染任务，避免旧分辨率拖住主线程。
  */
 const PdfPage: React.FC<PdfPageProps> = React.memo(({
@@ -48,11 +49,13 @@ const PdfPage: React.FC<PdfPageProps> = React.memo(({
   pageNumber,
   scale,
   size,
+  active,
   onSize,
   observePage,
 }) => {
   const holderRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const renderedRef = useRef(false)
   const [visible, setVisible] = useState(false)
   const sizeRef = useRef(size)
   sizeRef.current = size
@@ -71,10 +74,18 @@ const PdfPage: React.FC<PdfPageProps> = React.memo(({
   // 绝不能把 size.width / size.height / onSize 放进渲染依赖：
   // getPage 回调 onSize 更新真实尺寸时若触发重跑，cleanup 会清零刚画好的 canvas 造成每页双绘闪烁。
   useEffect(() => {
-    if (!visible) return
+    const canvasAtStart = canvasRef.current
+    if (!active || !visible) {
+      renderedRef.current = false
+      if (canvasAtStart && (canvasAtStart.width !== 0 || canvasAtStart.height !== 0)) {
+        canvasAtStart.width = 0
+        canvasAtStart.height = 0
+        delete canvasAtStart.dataset.rendered
+      }
+      return
+    }
     let cancelled = false
     let task: { cancel: () => void; promise: Promise<void> } | null = null
-    const canvasAtStart = canvasRef.current
     if (canvasAtStart) {
       // 缩放变化时先把绘制尺寸拉到新值：旧分辨率的位图不会短暂拉伸，也不用等 getPage
       canvasAtStart.style.width = `${Math.round(sizeRef.current.width * scale)}px`
@@ -107,7 +118,10 @@ const PdfPage: React.FC<PdfPageProps> = React.memo(({
         task = loaded.render({ canvas, canvasContext: context, viewport })
         void task.promise
           .then(() => {
-            if (!cancelled) canvas.dataset.rendered = 'true'
+            if (!cancelled) {
+              renderedRef.current = true
+              canvas.dataset.rendered = 'true'
+            }
           })
           .catch(() => undefined)
       })
@@ -115,9 +129,10 @@ const PdfPage: React.FC<PdfPageProps> = React.memo(({
 
     return () => {
       cancelled = true
+      renderedRef.current = false
       task?.cancel()
-      // 离开视口就释放 canvas 占用的像素内存：单页 1224×1584 @dpr2 约 31MB，
-      // 留着让长文档滚一遍就吃掉上 GB。pdf.js 缓存了解析结果，回滚时重绘很快。
+      // 离开视口或切到后台工作区就释放 canvas 占用的像素内存：单页 1224×1584 @dpr2 约 31MB，
+      // 留着会让长文档或后台 PDF 吃掉数百 MB。pdf.js 缓存了解析结果，切回时重绘很快。
       const canvas = canvasAtStart
       if (canvas) {
         canvas.width = 0
@@ -127,7 +142,7 @@ const PdfPage: React.FC<PdfPageProps> = React.memo(({
         delete canvas.dataset.rendered
       }
     }
-  }, [document, pageNumber, scale, visible])
+  }, [document, pageNumber, scale, visible, active])
 
   return (
     <div
@@ -149,7 +164,8 @@ const PdfPage: React.FC<PdfPageProps> = React.memo(({
  * 工具条也不可定制。这里用单一滚动容器 + canvas 虚拟化，
  * 模板与 Markdown / 媒体阅读视图一致。
  */
-export const PdfReadingView: React.FC<{ file: OpenFile }> = ({ file }) => {
+export const PdfReadingView: React.FC<{ file: OpenFile; active?: boolean }> = React.memo(
+  function PdfReadingView({ file, active = true }) {
   const { t } = useI18nStore()
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null)
   const [numPages, setNumPages] = useState(0)
@@ -161,7 +177,7 @@ export const PdfReadingView: React.FC<{ file: OpenFile }> = ({ file }) => {
   const [failed, setFailed] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const frameRef = useRef<number | null>(null)
-  // 所有页共用一个 IntersectionObserver，避免 200 页 PDF 创建 200 个 observer
+  // 所有页共用一个以 scrollRef 为 root 的 IntersectionObserver，避免 200 页 PDF 创建 200 个 observer
   const pageVisibilityHandlersRef = useRef(new WeakMap<Element, (visible: boolean) => void>())
   const sharedObserverRef = useRef<IntersectionObserver | null>(null)
 
@@ -178,7 +194,7 @@ export const PdfReadingView: React.FC<{ file: OpenFile }> = ({ file }) => {
               pageVisibilityHandlersRef.current.get(entry.target)?.(entry.isIntersecting)
             }
           },
-          { rootMargin: '120% 0px' }
+          { root: scrollRef.current, rootMargin: '120% 0px' }
         )
       }
       const observer = sharedObserverRef.current
@@ -244,15 +260,17 @@ export const PdfReadingView: React.FC<{ file: OpenFile }> = ({ file }) => {
     }
   }, [file.path, file.version])
 
-  // 适应宽度需要知道容器宽度：面板拖拽、窗口缩放都要跟
+  // 适应宽度需要知道容器宽度：面板拖拽、窗口缩放都要跟；隐藏态 width=0 时忽略，避免休眠触发缩放重排
   useEffect(() => {
     const element = scrollRef.current
     if (!element || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) setContainerWidth(entry.contentRect.width)
+      for (const entry of entries) {
+        if (entry.contentRect.width > 0) setContainerWidth(entry.contentRect.width)
+      }
     })
     observer.observe(element)
-    setContainerWidth(element.clientWidth)
+    if (element.clientWidth > 0) setContainerWidth(element.clientWidth)
     return () => observer.disconnect()
   }, [])
 
@@ -440,6 +458,7 @@ export const PdfReadingView: React.FC<{ file: OpenFile }> = ({ file }) => {
                 pageNumber={index + 1}
                 scale={scale}
                 size={sizeFor(index + 1)}
+                active={active}
                 onSize={handlePageSize}
                 observePage={observePage}
               />
@@ -449,4 +468,4 @@ export const PdfReadingView: React.FC<{ file: OpenFile }> = ({ file }) => {
       </div>
     </div>
   )
-}
+})

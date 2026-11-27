@@ -146,6 +146,8 @@ export function conversationKey(workspacePath: string, sessionId: string): strin
   return `${workspacePath}\u0000${sessionId}`
 }
 
+export type TraceBatchEvent = AgentStreamEvent
+
 type ToolStartEvent = Extract<AgentStreamEvent, { type: 'tool_start' }>
 type ToolUpdateEvent = Extract<AgentStreamEvent, { type: 'tool_update' }>
 type ToolEndEvent = Extract<AgentStreamEvent, { type: 'tool_end' }>
@@ -176,6 +178,11 @@ function adjustWorkspaceBusy(
 
 interface ChatState {
   conversations: Record<string, ConversationState>
+  /**
+   * 独立存储每个会话的输入框草稿，与 `conversations[key]` 解耦：
+   * 输入框每次击键只更新此表，绝不替换 `conversations[key]` 对象，避免触发整条消息列表重渲染。
+   */
+  draftInputs: Record<string, string>
   /** 每个工作区当前处于 isLoading 或 isCompacting 的会话计数（避免 50ms 流式帧触发全量遍历） */
   busyCountByWorkspace: Record<string, number>
   /** 欢迎页带入的草稿，等工作区会话初始化后写入激活会话 */
@@ -188,6 +195,8 @@ interface ChatState {
   clearPendingDraft: () => void
   addMessage: (key: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => string
   startStreamingMessage: (key: string) => string
+  /** 原子批量应用 50ms trace 缓冲中的多条事件，单次 set() 完成状态提交 */
+  applyTraceEvents: (key: string, assistantId: string, events: TraceBatchEvent[]) => void
   appendTextPart: (key: string, id: string, delta: string) => void
   appendThinkingPart: (
     key: string,
@@ -264,16 +273,38 @@ function conversation(state: ChatState, key: string): ConversationState {
   return state.conversations[key] ?? EMPTY_CONVERSATION
 }
 
+/**
+ * 在 ConversationState 上挂载指向 `draftInputs[key]` 的实时 getter，
+ * 让仅读 `conversations[key]?.draftInput` 的消费方（如 SessionTabs 草稿标记）无需改动，
+ * 同时保证 `setDraftInput` 永远不替换 `conversations[key]` 的对象引用。
+ */
+function attachDraftInput(
+  key: string,
+  conv: ConversationState,
+  get: () => ChatState
+): ConversationState {
+  return Object.defineProperty(conv, 'draftInput', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      return get().draftInputs[key] ?? ''
+    },
+  })
+}
+
 /** 只更新已存在的会话；关闭标签后迟到的流式回调不能把会话重新创建出来 */
 function updateExisting(
   state: ChatState,
   key: string,
-  updater: (current: ConversationState) => ConversationState
+  updater: (current: ConversationState) => ConversationState,
+  get: () => ChatState
 ): Partial<ChatState> | ChatState {
   const current = state.conversations[key]
   if (!current) return state
+  const next = updater(current)
+  if (next === current) return state
   return {
-    conversations: { ...state.conversations, [key]: updater(current) },
+    conversations: { ...state.conversations, [key]: attachDraftInput(key, next, get) },
   }
 }
 
@@ -282,18 +313,25 @@ function updateMessage(
   state: ChatState,
   key: string,
   id: string,
-  updater: (message: ChatMessage) => ChatMessage
+  updater: (message: ChatMessage) => ChatMessage,
+  get: () => ChatState
 ): Partial<ChatState> | ChatState {
-  return updateExisting(state, key, (current) => {
-    let found = false
-    const messages = current.messages.map((message) => {
-      if (message.id !== id) return message
-      found = true
-      return updater(message)
-    })
-    if (!found) return current
-    return { ...current, messages }
-  })
+  return updateExisting(
+    state,
+    key,
+    (current) => {
+      let changed = false
+      const messages = current.messages.map((message) => {
+        if (message.id !== id) return message
+        const next = updater(message)
+        if (next !== message) changed = true
+        return next
+      })
+      if (!changed) return current
+      return { ...current, messages }
+    },
+    get
+  )
 }
 
 function nextPartId(parts: AgentTracePart[], prefix: string): string {
@@ -327,8 +365,230 @@ function closeThinking(message: ChatMessage, now = Date.now()): ChatMessage {
   return { ...message, parts, thinkingStartedAt: undefined }
 }
 
-export const useChatStore = create<ChatState>((set) => ({
+function reduceAppendTextPart(message: ChatMessage, delta: string, now: number): ChatMessage {
+  if (!delta) return message
+  const existingParts = message.parts ?? []
+  const last = existingParts[existingParts.length - 1]
+  // 尚未进入可见正文时忽略纯空白前导增量，避免误截断思考计时或切碎过程组
+  if (last?.type !== 'text' && !delta.trim()) return message
+  const next = closeThinking(message, now)
+  const parts = next.parts ? [...next.parts] : []
+  const tail = parts[parts.length - 1]
+  if (tail?.type === 'text') {
+    parts[parts.length - 1] = { ...tail, text: tail.text + delta }
+  } else {
+    parts.push({ type: 'text', id: nextPartId(parts, 'text'), text: delta })
+  }
+  return { ...next, parts, content: next.content + delta }
+}
+
+function reduceAppendThinkingPart(
+  message: ChatMessage,
+  delta: string,
+  redacted: boolean,
+  now: number
+): ChatMessage {
+  const parts = message.parts ? [...message.parts] : []
+  const last = parts[parts.length - 1]
+  if (last?.type === 'thinking' && !last.redacted && !redacted) {
+    parts[parts.length - 1] = { ...last, text: last.text + delta }
+  } else {
+    parts.push({
+      type: 'thinking',
+      id: nextPartId(parts, 'thinking'),
+      text: delta,
+      redacted,
+    })
+  }
+  return {
+    ...message,
+    parts,
+    thinkingStartedAt: message.thinkingStartedAt ?? now,
+  }
+}
+
+function reduceStartToolPart(message: ChatMessage, event: ToolStartEvent, now: number): ChatMessage {
+  const next = closeThinking(message, now)
+  const parts = next.parts ? [...next.parts] : []
+  const part: AgentTracePart = {
+    type: 'tool',
+    id: event.toolCallId,
+    toolCallId: event.toolCallId,
+    toolName: event.toolName,
+    argsSummary: event.argsSummary,
+    status: 'running',
+    parentToolCallId: event.parentToolCallId,
+  }
+  const existing = parts.findIndex(
+    (item) => item.type === 'tool' && item.toolCallId === event.toolCallId
+  )
+  if (existing >= 0) parts[existing] = part
+  else parts.push(part)
+  return { ...next, parts }
+}
+
+function reduceUpdateToolPart(message: ChatMessage, event: ToolUpdateEvent): ChatMessage {
+  if (!message.parts) return message
+  const parts = message.parts.map((part) =>
+    part.type === 'tool' && part.toolCallId === event.toolCallId
+      ? { ...part, resultPreview: event.resultPreview ?? part.resultPreview }
+      : part
+  )
+  return { ...message, parts }
+}
+
+function reduceEndToolPart(message: ChatMessage, event: ToolEndEvent): ChatMessage {
+  if (!message.parts) return message
+  let found = false
+  const parts = message.parts.map((part) => {
+    if (part.type !== 'tool' || part.toolCallId !== event.toolCallId) return part
+    found = true
+    return {
+      ...part,
+      status: event.status,
+      isError: event.status === 'error',
+      durationMs: event.durationMs,
+      resultPreview: event.resultPreview ?? part.resultPreview,
+      filePath: event.filePath ?? part.filePath,
+    }
+  })
+  if (!found) {
+    parts.push({
+      type: 'tool',
+      id: event.toolCallId,
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      argsSummary: '',
+      status: event.status,
+      isError: event.status === 'error',
+      durationMs: event.durationMs,
+      resultPreview: event.resultPreview,
+      filePath: event.filePath,
+      parentToolCallId: event.parentToolCallId,
+    })
+  }
+  return { ...message, parts }
+}
+
+function reduceAppendPlanPart(message: ChatMessage, plan: StructuredPlan, now: number): ChatMessage {
+  const next = closeThinking(message, now)
+  const parts = next.parts ? [...next.parts] : []
+  const existing = parts.findIndex(
+    (part) => part.type === 'plan' && part.plan.id === plan.id
+  )
+  const planPart: AgentTracePart = {
+    type: 'plan',
+    id: `plan-part-${plan.id}`,
+    plan,
+  }
+  if (existing >= 0) parts[existing] = planPart
+  else parts.push(planPart)
+  return { ...next, parts }
+}
+
+function reduceApplyPlanUpdate(messages: ChatMessage[], plan: StructuredPlan): ChatMessage[] | null {
+  let changed = false
+  const next = messages.map((message) => {
+    if (!message.parts?.some((part) => part.type === 'plan' && part.plan.id === plan.id)) {
+      return message
+    }
+    changed = true
+    return {
+      ...message,
+      parts: message.parts.map((part) =>
+        part.type === 'plan' && part.plan.id === plan.id ? { ...part, plan } : part
+      ),
+    }
+  })
+  return changed ? next : null
+}
+
+function reduceAppendCompactionPart(
+  messages: ChatMessage[],
+  part: Extract<AgentTracePart, { type: 'compaction' }>,
+  options?: { beforePendingTurn?: boolean }
+): ChatMessage[] | null {
+  if (
+    part.entryId &&
+    messages.some((msg) =>
+      msg.parts?.some((p) => p.type === 'compaction' && p.entryId === part.entryId)
+    )
+  ) {
+    return null
+  }
+  const nextMessages = [...messages]
+  // 手动压缩期间若已有新消息在末尾等待续跑，分隔线必须落在这条等待中的用户消息之前，与 JSONL 顺序一致
+  let pendingTurnStart = -1
+  if (options?.beforePendingTurn && nextMessages.length >= 2) {
+    const last = nextMessages[nextMessages.length - 1]
+    const prev = nextMessages[nextMessages.length - 2]
+    if (
+      last.role === 'assistant' &&
+      last.isStreaming &&
+      !last.content &&
+      (!last.parts || last.parts.length === 0) &&
+      prev.role === 'user'
+    ) {
+      pendingTurnStart = nextMessages.length - 2
+    }
+  }
+
+  if (pendingTurnStart >= 0) {
+    let index = -1
+    for (let cursor = pendingTurnStart - 1; cursor >= 0; cursor -= 1) {
+      if (nextMessages[cursor].role === 'assistant') {
+        index = cursor
+        break
+      }
+    }
+    if (index < 0) {
+      nextMessages.splice(pendingTurnStart, 0, {
+        id: `msg-${Date.now()}-${Math.random()}`,
+        role: 'assistant',
+        content: '',
+        timestamp: part.timestamp,
+        parts: [part],
+      })
+    } else {
+      const target = nextMessages[index]
+      nextMessages[index] = { ...target, parts: [...(target.parts ?? []), part] }
+    }
+    return nextMessages
+  }
+
+  let index = -1
+  for (let cursor = nextMessages.length - 1; cursor >= 0; cursor -= 1) {
+    if (nextMessages[cursor].role === 'assistant' && nextMessages[cursor].isStreaming) {
+      index = cursor
+      break
+    }
+  }
+  if (index < 0) {
+    for (let cursor = nextMessages.length - 1; cursor >= 0; cursor -= 1) {
+      if (nextMessages[cursor].role === 'assistant') {
+        index = cursor
+        break
+      }
+    }
+  }
+  if (index < 0) {
+    nextMessages.push({
+      id: `msg-${Date.now()}-${Math.random()}`,
+      role: 'assistant',
+      content: '',
+      timestamp: part.timestamp,
+      parts: [part],
+    })
+  } else {
+    const target = nextMessages[index]
+    nextMessages[index] = { ...target, parts: [...(target.parts ?? []), part] }
+  }
+  return nextMessages
+}
+
+export const useChatStore = create<ChatState>((set, get) => ({
   conversations: {},
+  draftInputs: {},
   busyCountByWorkspace: {},
   pendingDraft: '',
   pendingDraftWorkspace: null,
@@ -341,18 +601,27 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) =>
       state.conversations[key]
         ? state
-        : { conversations: { ...state.conversations, [key]: { ...EMPTY_CONVERSATION } } }
+        : {
+            conversations: {
+              ...state.conversations,
+              [key]: attachDraftInput(key, { ...EMPTY_CONVERSATION }, get),
+            },
+          }
     ),
 
   removeConversation: (key) =>
     set((state) => {
       const existing = state.conversations[key]
-      if (!existing) return state
-      const conversations = { ...state.conversations }
-      delete conversations[key]
-      const wasBusy = Boolean(existing.isLoading || existing.isCompacting)
+      const hasDraft = key in state.draftInputs
+      if (!existing && !hasDraft) return state
+      const conversations = existing ? { ...state.conversations } : state.conversations
+      if (existing) delete conversations[key]
+      const draftInputs = hasDraft ? { ...state.draftInputs } : state.draftInputs
+      if (hasDraft) delete draftInputs[key]
+      const wasBusy = Boolean(existing?.isLoading || existing?.isCompacting)
       return {
         conversations,
+        draftInputs,
         busyCountByWorkspace: adjustWorkspaceBusy(state.busyCountByWorkspace, key, wasBusy, false),
       }
     }),
@@ -362,17 +631,21 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) => ({
       conversations: {
         ...state.conversations,
-        [key]: {
-          ...conversation(state, key),
-          messages: [
-            ...conversation(state, key).messages,
-            {
-              ...message,
-              id,
-              timestamp: Date.now(),
-            },
-          ],
-        },
+        [key]: attachDraftInput(
+          key,
+          {
+            ...conversation(state, key),
+            messages: [
+              ...conversation(state, key).messages,
+              {
+                ...message,
+                id,
+                timestamp: Date.now(),
+              },
+            ],
+          },
+          get
+        ),
       },
     }))
     return id
@@ -383,226 +656,333 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) => ({
       conversations: {
         ...state.conversations,
-        [key]: {
-          ...conversation(state, key),
-          messages: [
-            ...conversation(state, key).messages,
-            {
-              id,
-              role: 'assistant',
-              content: '',
-              parts: [],
-              timestamp: Date.now(),
-              isStreaming: true,
-            },
-          ],
-        },
+        [key]: attachDraftInput(
+          key,
+          {
+            ...conversation(state, key),
+            messages: [
+              ...conversation(state, key).messages,
+              {
+                id,
+                role: 'assistant',
+                content: '',
+                parts: [],
+                timestamp: Date.now(),
+                isStreaming: true,
+              },
+            ],
+          },
+          get
+        ),
       },
     }))
     return id
   },
 
+  applyTraceEvents: (key, assistantId, events) =>
+    set((state) => {
+      if (events.length === 0) return state
+      const existing = state.conversations[key]
+      if (!existing) return state
+
+      const now = Date.now()
+      const wasBusy = Boolean(existing.isLoading || existing.isCompacting)
+      let messages = existing.messages
+      let messagesCloned = false
+      let assistantIdx = messages.findIndex((msg) => msg.id === assistantId)
+      let retryStatus = existing.retryStatus
+      let isCompacting = existing.isCompacting
+      let changed = false
+
+      const mutateAssistant = (fn: (message: ChatMessage) => ChatMessage) => {
+        if (assistantIdx < 0) return
+        const currentMsg = messages[assistantIdx]
+        const nextMsg = fn(currentMsg)
+        if (nextMsg === currentMsg) return
+        if (!messagesCloned) {
+          messages = [...messages]
+          messagesCloned = true
+        }
+        messages[assistantIdx] = nextMsg
+        changed = true
+      }
+
+      for (const event of events) {
+        switch (event.type) {
+          case 'text_delta':
+            if (event.delta) {
+              mutateAssistant((msg) => reduceAppendTextPart(msg, event.delta, now))
+            }
+            break
+          case 'thinking_delta':
+            mutateAssistant((msg) => reduceAppendThinkingPart(msg, event.delta, false, now))
+            break
+          case 'thinking_redacted':
+            mutateAssistant((msg) => reduceAppendThinkingPart(msg, '', true, now))
+            break
+          case 'tool_start':
+            mutateAssistant((msg) => reduceStartToolPart(msg, event, now))
+            break
+          case 'tool_update':
+            mutateAssistant((msg) => reduceUpdateToolPart(msg, event))
+            break
+          case 'tool_end':
+            mutateAssistant((msg) => reduceEndToolPart(msg, event))
+            break
+          case 'retry_start':
+            retryStatus = {
+              attempt: event.attempt,
+              maxAttempts: event.maxAttempts,
+              delayMs: event.delayMs,
+              message: event.message,
+              receivedAt: now,
+            }
+            changed = true
+            break
+          case 'retry_end':
+            if (retryStatus !== null) {
+              retryStatus = null
+              changed = true
+            }
+            break
+          case 'compaction_start':
+            if (!isCompacting) {
+              isCompacting = true
+              changed = true
+            }
+            break
+          case 'compaction_end': {
+            if (isCompacting) {
+              isCompacting = false
+              changed = true
+            }
+            if (!event.error && !event.aborted) {
+              const nextMessages = reduceAppendCompactionPart(messages, {
+                type: 'compaction',
+                id: `compaction-${event.entryId ?? event.timestamp ?? now}`,
+                entryId: event.entryId,
+                timestamp: event.timestamp ?? now,
+                tokensBefore: event.tokensBefore,
+              })
+              if (nextMessages) {
+                messages = nextMessages
+                messagesCloned = true
+                assistantIdx = messages.findIndex((msg) => msg.id === assistantId)
+                changed = true
+              }
+            }
+            break
+          }
+          case 'plan_submitted':
+            mutateAssistant((msg) => reduceAppendPlanPart(msg, event.plan, now))
+            break
+          case 'plan_updated': {
+            const nextMessages = reduceApplyPlanUpdate(messages, event.plan)
+            if (nextMessages) {
+              messages = nextMessages
+              messagesCloned = true
+              changed = true
+            }
+            break
+          }
+        }
+      }
+
+      if (!changed) return state
+      const nextConversation = attachDraftInput(
+        key,
+        {
+          ...existing,
+          messages,
+          retryStatus,
+          isCompacting,
+        },
+        get
+      )
+      const isBusy = Boolean(nextConversation.isLoading || nextConversation.isCompacting)
+      const busyCountByWorkspace = adjustWorkspaceBusy(
+        state.busyCountByWorkspace,
+        key,
+        wasBusy,
+        isBusy
+      )
+      return {
+        conversations: {
+          ...state.conversations,
+          [key]: nextConversation,
+        },
+        ...(busyCountByWorkspace !== state.busyCountByWorkspace
+          ? { busyCountByWorkspace }
+          : {}),
+      }
+    }),
+
   appendTextPart: (key, id, delta) =>
     set((state) => {
       if (!delta) return state
-      return updateMessage(state, key, id, (message) => {
-        const existingParts = message.parts ?? []
-        const last = existingParts[existingParts.length - 1]
-        // 尚未进入可见正文时忽略纯空白前导增量，避免误截断思考计时或切碎过程组
-        if (last?.type !== 'text' && !delta.trim()) return message
-        const next = closeThinking(message)
-        const parts = next.parts ? [...next.parts] : []
-        const tail = parts[parts.length - 1]
-        if (tail?.type === 'text') {
-          parts[parts.length - 1] = { ...tail, text: tail.text + delta }
-        } else {
-          parts.push({ type: 'text', id: nextPartId(parts, 'text'), text: delta })
-        }
-        return { ...next, parts, content: next.content + delta }
-      })
+      return updateMessage(
+        state,
+        key,
+        id,
+        (message) => reduceAppendTextPart(message, delta, Date.now()),
+        get
+      )
     }),
 
   appendThinkingPart: (key, id, delta, options) =>
     set((state) =>
-      updateMessage(state, key, id, (message) => {
-        const parts = message.parts ? [...message.parts] : []
-        const last = parts[parts.length - 1]
-        const redacted = options?.redacted === true
-        if (last?.type === 'thinking' && !last.redacted && !redacted) {
-          parts[parts.length - 1] = { ...last, text: last.text + delta }
-        } else {
-          parts.push({
-            type: 'thinking',
-            id: nextPartId(parts, 'thinking'),
-            text: delta,
-            redacted,
-          })
-        }
-        return {
-          ...message,
-          parts,
-          thinkingStartedAt: message.thinkingStartedAt ?? Date.now(),
-        }
-      })
+      updateMessage(
+        state,
+        key,
+        id,
+        (message) =>
+          reduceAppendThinkingPart(message, delta, options?.redacted === true, Date.now()),
+        get
+      )
     ),
 
   startToolPart: (key, id, event) =>
     set((state) =>
-      updateMessage(state, key, id, (message) => {
-        const next = closeThinking(message)
-        const parts = next.parts ? [...next.parts] : []
-        const part: AgentTracePart = {
-          type: 'tool',
-          id: event.toolCallId,
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          argsSummary: event.argsSummary,
-          status: 'running',
-          parentToolCallId: event.parentToolCallId,
-        }
-        const existing = parts.findIndex(
-          (item) => item.type === 'tool' && item.toolCallId === event.toolCallId
-        )
-        if (existing >= 0) parts[existing] = part
-        else parts.push(part)
-        return { ...next, parts }
-      })
+      updateMessage(
+        state,
+        key,
+        id,
+        (message) => reduceStartToolPart(message, event, Date.now()),
+        get
+      )
     ),
 
   updateToolPart: (key, id, event) =>
     set((state) =>
-      updateMessage(state, key, id, (message) => {
-        if (!message.parts) return message
-        const parts = message.parts.map((part) =>
-          part.type === 'tool' && part.toolCallId === event.toolCallId
-            ? { ...part, resultPreview: event.resultPreview ?? part.resultPreview }
-            : part
-        )
-        return { ...message, parts }
-      })
+      updateMessage(state, key, id, (message) => reduceUpdateToolPart(message, event), get)
     ),
 
   endToolPart: (key, id, event) =>
     set((state) =>
-      updateMessage(state, key, id, (message) => {
-        if (!message.parts) return message
-        let found = false
-        const parts = message.parts.map((part) => {
-          if (part.type !== 'tool' || part.toolCallId !== event.toolCallId) return part
-          found = true
-          return {
-            ...part,
-            status: event.status,
-            isError: event.status === 'error',
-            durationMs: event.durationMs,
-            resultPreview: event.resultPreview ?? part.resultPreview,
-            filePath: event.filePath ?? part.filePath,
-          }
-        })
-        if (!found) {
-          parts.push({
-            type: 'tool',
-            id: event.toolCallId,
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            argsSummary: '',
-            status: event.status,
-            isError: event.status === 'error',
-            durationMs: event.durationMs,
-            resultPreview: event.resultPreview,
-            filePath: event.filePath,
-            parentToolCallId: event.parentToolCallId,
-          })
-        }
-        return { ...message, parts }
-      })
+      updateMessage(state, key, id, (message) => reduceEndToolPart(message, event), get)
     ),
 
   finishStreamingMessage: (key, id, content) =>
     set((state) =>
-      updateMessage(state, key, id, (message) => {
-        const next = closeThinking(message)
-        let parts = (next.parts ?? []).map((part) =>
-          part.type === 'tool' && part.status === 'running'
-            ? { ...part, status: 'error' as const, isError: true }
-            : part
-        )
-        if (parts.length === 0) {
-          const text = content ?? next.content
-          parts = text
-            ? [{ type: 'text', id: nextPartId(parts, 'text'), text }]
-            : []
-        } else if (!parts.some((part) => part.type === 'text') && content) {
-          parts.push({ type: 'text', id: nextPartId(parts, 'text'), text: content })
-        }
-        return {
-          ...next,
-          parts,
-          content: textFromParts(parts) || next.content,
-          isStreaming: false,
-          thinkingStartedAt: undefined
-        }
-      })
+      updateMessage(
+        state,
+        key,
+        id,
+        (message) => {
+          const next = closeThinking(message)
+          let parts = (next.parts ?? []).map((part) =>
+            part.type === 'tool' && part.status === 'running'
+              ? { ...part, status: 'error' as const, isError: true }
+              : part
+          )
+          if (parts.length === 0) {
+            const text = content ?? next.content
+            parts = text
+              ? [{ type: 'text', id: nextPartId(parts, 'text'), text }]
+              : []
+          } else if (!parts.some((part) => part.type === 'text') && content) {
+            parts.push({ type: 'text', id: nextPartId(parts, 'text'), text: content })
+          }
+          return {
+            ...next,
+            parts,
+            content: textFromParts(parts) || next.content,
+            isStreaming: false,
+            thinkingStartedAt: undefined,
+          }
+        },
+        get
+      )
     ),
 
   setMessageUsage: (key, id, usage) =>
     set((state) =>
-      updateMessage(state, key, id, (message) => ({ ...message, usage }))
+      updateMessage(state, key, id, (message) => ({ ...message, usage }), get)
     ),
 
   setMessageEdits: (key, id, edits) =>
-    set((state) => updateMessage(state, key, id, (message) => ({ ...message, edits }))),
+    set((state) =>
+      updateMessage(state, key, id, (message) => ({ ...message, edits }), get)
+    ),
 
   removeMessageEdit: (key, id, path) =>
     set((state) =>
-      updateMessage(state, key, id, (message) => ({
-        ...message,
-        edits: (message.edits ?? []).filter((edit) => edit.path !== path),
-      }))
+      updateMessage(
+        state,
+        key,
+        id,
+        (message) => ({
+          ...message,
+          edits: (message.edits ?? []).filter((edit) => edit.path !== path),
+        }),
+        get
+      )
     ),
 
   addAttachment: (key, attachment) =>
     set((state) =>
-      updateExisting(state, key, (current) => {
-        const id =
-          attachment.id ??
-          (attachment.kind === 'snippet'
-            ? `snippet:${attachment.path}:${attachment.startLine}-${attachment.endLine}`
-            : attachment.kind === 'image'
-              ? `image:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-              : `file:${attachment.path}`)
-        if (current.attachments.some((item) => item.id === id)) return current
-        return {
-          ...current,
-          attachments: [...current.attachments, { ...attachment, id }],
-        }
-      })
+      updateExisting(
+        state,
+        key,
+        (current) => {
+          const id =
+            attachment.id ??
+            (attachment.kind === 'snippet'
+              ? `snippet:${attachment.path}:${attachment.startLine}-${attachment.endLine}`
+              : attachment.kind === 'image'
+                ? `image:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+                : `file:${attachment.path}`)
+          if (current.attachments.some((item) => item.id === id)) return current
+          return {
+            ...current,
+            attachments: [...current.attachments, { ...attachment, id }],
+          }
+        },
+        get
+      )
     ),
 
   removeAttachment: (key, id) =>
     set((state) =>
-      updateExisting(state, key, (current) => ({
-        ...current,
-        attachments: current.attachments.filter((item) => item.id !== id),
-      }))
+      updateExisting(
+        state,
+        key,
+        (current) => ({
+          ...current,
+          attachments: current.attachments.filter((item) => item.id !== id),
+        }),
+        get
+      )
     ),
 
   consumeAttachments: (key, ids) =>
     set((state) => {
       if (ids.length === 0) return state
-      return updateExisting(state, key, (current) => ({
-        ...current,
-        attachments: current.attachments.filter((item) => !ids.includes(item.id)),
-      }))
+      return updateExisting(
+        state,
+        key,
+        (current) => ({
+          ...current,
+          attachments: current.attachments.filter((item) => !ids.includes(item.id)),
+        }),
+        get
+      )
     }),
 
   setDraftInput: (key, value) =>
-    set((state) =>
-      updateExisting(state, key, (current) => ({ ...current, draftInput: value }))
-    ),
+    set((state) => {
+      if (!state.conversations[key]) return state
+      if ((state.draftInputs[key] ?? '') === value) return state
+      const draftInputs = { ...state.draftInputs }
+      if (value) draftInputs[key] = value
+      else delete draftInputs[key]
+      return { draftInputs }
+    }),
 
   setQuoteCurrentFile: (key, value) =>
-    set((state) => updateExisting(state, key, (current) => ({ ...current, quoteCurrentFile: value }))),
+    set((state) =>
+      updateExisting(state, key, (current) => ({ ...current, quoteCurrentFile: value }), get)
+    ),
 
   addPending: (key, text, images, attachments) => {
     const item: PendingMessage = {
@@ -612,348 +992,320 @@ export const useChatStore = create<ChatState>((set) => ({
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
     }
     set((state) =>
-      updateExisting(state, key, (current) => ({
-        ...current,
-        pending: [...current.pending, item],
-      }))
+      updateExisting(
+        state,
+        key,
+        (current) => ({
+          ...current,
+          pending: [...current.pending, item],
+        }),
+        get
+      )
     )
     return item
   },
 
   removePending: (key, id) =>
     set((state) =>
-      updateExisting(state, key, (current) => ({
-        ...current,
-        pending: current.pending.filter((item) => item.id !== id),
-      }))
+      updateExisting(
+        state,
+        key,
+        (current) => ({
+          ...current,
+          pending: current.pending.filter((item) => item.id !== id),
+        }),
+        get
+      )
     ),
 
   setContextUsage: (key, usage) =>
-    set((state) => updateExisting(state, key, (current) => ({ ...current, contextUsage: usage }))),
+    set((state) =>
+      updateExisting(state, key, (current) => ({ ...current, contextUsage: usage }), get)
+    ),
 
   setSessionSettings: (key, settings) =>
     set((state) =>
-      updateExisting(state, key, (current) => ({ ...current, sessionSettings: settings }))
+      updateExisting(state, key, (current) => ({ ...current, sessionSettings: settings }), get)
     ),
 
   setRetryStatus: (key, status) =>
     set((state) =>
-      updateExisting(state, key, (current) => ({
-        ...current,
-        retryStatus: status ? { ...status, receivedAt: Date.now() } : null,
-      }))
+      updateExisting(
+        state,
+        key,
+        (current) => ({
+          ...current,
+          retryStatus: status ? { ...status, receivedAt: Date.now() } : null,
+        }),
+        get
+      )
     ),
 
   setSessionStats: (key, stats) =>
-    set((state) => updateExisting(state, key, (current) => ({ ...current, sessionStats: stats }))),
+    set((state) =>
+      updateExisting(state, key, (current) => ({ ...current, sessionStats: stats }), get)
+    ),
 
   setMessageBranches: (key, groups) =>
     set((state) =>
-      updateExisting(state, key, (current) => {
-        if (current.messages.length === 0) return current
-        const byEntryId = new Map<string, ConversationBranchGroup>()
-        const byTimestamp = new Map<number, ConversationBranchGroup>()
-        for (const group of groups) {
-          if (group.userEntryId) byEntryId.set(group.userEntryId, group)
-          byTimestamp.set(group.userTimestamp, group)
-        }
-        let activeUserEntryId: string | undefined
-        let userTimestamp: number | null = null
-        const messages = current.messages.map((message) => {
-          if (message.role === 'user') {
-            activeUserEntryId = message.entryId
-            userTimestamp = message.timestamp
-            return message
+      updateExisting(
+        state,
+        key,
+        (current) => {
+          if (current.messages.length === 0) return current
+          const byEntryId = new Map<string, ConversationBranchGroup>()
+          const byTimestamp = new Map<number, ConversationBranchGroup>()
+          for (const group of groups) {
+            if (group.userEntryId) byEntryId.set(group.userEntryId, group)
+            byTimestamp.set(group.userTimestamp, group)
           }
-          let group =
-            (activeUserEntryId ? byEntryId.get(activeUserEntryId) : undefined) ??
-            (userTimestamp !== null ? byTimestamp.get(userTimestamp) : undefined)
-          // 实时流式乐观用户消息在轮末对账前时间戳可能与主进程差几百毫秒，放宽 5s 就近兜底
-          if (!group && userTimestamp !== null) {
-            let bestDelta = 5000
-            for (const candidate of groups) {
-              const delta = Math.abs(candidate.userTimestamp - userTimestamp)
-              if (delta <= bestDelta) {
-                bestDelta = delta
-                group = candidate
+          let activeUserEntryId: string | undefined
+          let userTimestamp: number | null = null
+          const messages = current.messages.map((message) => {
+            if (message.role === 'user') {
+              activeUserEntryId = message.entryId
+              userTimestamp = message.timestamp
+              return message
+            }
+            let group =
+              (activeUserEntryId ? byEntryId.get(activeUserEntryId) : undefined) ??
+              (userTimestamp !== null ? byTimestamp.get(userTimestamp) : undefined)
+            // 实时流式乐观用户消息在轮末对账前时间戳可能与主进程差几百毫秒，放宽 5s 就近兜底
+            if (!group && userTimestamp !== null) {
+              let bestDelta = 5000
+              for (const candidate of groups) {
+                const delta = Math.abs(candidate.userTimestamp - userTimestamp)
+                if (delta <= bestDelta) {
+                  bestDelta = delta
+                  group = candidate
+                }
               }
             }
-          }
-          if (!group) {
-            if (!message.branch) return message
-            const next = { ...message }
-            delete next.branch
-            return next
-          }
-          return {
-            ...message,
-            branch: {
-              userTimestamp: group.userTimestamp,
-              activeIndex: group.activeIndex,
-              entryIds: group.branches.map((option) => option.entryId),
-            },
-          }
-        })
-        return { ...current, messages }
-      })
+            if (!group) {
+              if (!message.branch) return message
+              const next = { ...message }
+              delete next.branch
+              return next
+            }
+            return {
+              ...message,
+              branch: {
+                userTimestamp: group.userTimestamp,
+                activeIndex: group.activeIndex,
+                entryIds: group.branches.map((option) => option.entryId),
+              },
+            }
+          })
+          return { ...current, messages }
+        },
+        get
+      )
     ),
 
   appendPlanPart: (key, messageId, plan) =>
     set((state) =>
-      updateMessage(state, key, messageId, (message) => {
-        const next = closeThinking(message)
-        const parts = next.parts ? [...next.parts] : []
-        const existing = parts.findIndex(
-          (part) => part.type === 'plan' && part.plan.id === plan.id
-        )
-        const planPart: AgentTracePart = {
-          type: 'plan',
-          id: `plan-part-${plan.id}`,
-          plan,
-        }
-        if (existing >= 0) parts[existing] = planPart
-        else parts.push(planPart)
-        return { ...next, parts }
-      })
+      updateMessage(
+        state,
+        key,
+        messageId,
+        (message) => reduceAppendPlanPart(message, plan, Date.now()),
+        get
+      )
     ),
 
   applyPlanUpdate: (key, plan) =>
     set((state) =>
-      updateExisting(state, key, (current) => {
-        let changed = false
-        const messages = current.messages.map((message) => {
-          if (!message.parts?.some((part) => part.type === 'plan' && part.plan.id === plan.id)) {
-            return message
-          }
-          changed = true
-          return {
-            ...message,
-            parts: message.parts.map((part) =>
-              part.type === 'plan' && part.plan.id === plan.id ? { ...part, plan } : part
-            ),
-          }
-        })
-        return changed ? { ...current, messages } : current
-      })
+      updateExisting(
+        state,
+        key,
+        (current) => {
+          const messages = reduceApplyPlanUpdate(current.messages, plan)
+          return messages ? { ...current, messages } : current
+        },
+        get
+      )
     ),
 
   appendPlanMessage: (key, plan) =>
     set((state) =>
-      updateExisting(state, key, (current) => {
-        if (
-          current.messages.some((message) =>
-            message.parts?.some((part) => part.type === 'plan' && part.plan.id === plan.id)
-          )
-        ) {
-          return current
-        }
-        return {
-          ...current,
-          messages: [
-            ...current.messages,
-            {
-              id: `msg-plan-${plan.id}`,
-              role: 'assistant',
-              content: '',
-              timestamp: plan.createdAt,
-              parts: [{ type: 'plan', id: `plan-part-${plan.id}`, plan }],
-            },
-          ],
-        }
-      })
+      updateExisting(
+        state,
+        key,
+        (current) => {
+          if (
+            current.messages.some((message) =>
+              message.parts?.some((part) => part.type === 'plan' && part.plan.id === plan.id)
+            )
+          ) {
+            return current
+          }
+          return {
+            ...current,
+            messages: [
+              ...current.messages,
+              {
+                id: `msg-plan-${plan.id}`,
+                role: 'assistant',
+                content: '',
+                timestamp: plan.createdAt,
+                parts: [{ type: 'plan', id: `plan-part-${plan.id}`, plan }],
+              },
+            ],
+          }
+        },
+        get
+      )
     ),
 
   appendCompactionPart: (key, part, options) =>
     set((state) =>
-      updateExisting(state, key, (current) => {
-        if (
-          part.entryId &&
-          current.messages.some((msg) =>
-            msg.parts?.some((p) => p.type === 'compaction' && p.entryId === part.entryId)
-          )
-        ) {
-          return current
-        }
-        const messages = [...current.messages]
-        // 手动压缩期间若已有新消息在末尾等待续跑，分隔线必须落在这条等待中的用户消息之前，与 JSONL 顺序一致
-        let pendingTurnStart = -1
-        if (options?.beforePendingTurn && messages.length >= 2) {
-          const last = messages[messages.length - 1]
-          const prev = messages[messages.length - 2]
-          if (
-            last.role === 'assistant' &&
-            last.isStreaming &&
-            !last.content &&
-            (!last.parts || last.parts.length === 0) &&
-            prev.role === 'user'
-          ) {
-            pendingTurnStart = messages.length - 2
-          }
-        }
-
-        if (pendingTurnStart >= 0) {
-          let index = -1
-          for (let cursor = pendingTurnStart - 1; cursor >= 0; cursor -= 1) {
-            if (messages[cursor].role === 'assistant') {
-              index = cursor
-              break
-            }
-          }
-          if (index < 0) {
-            messages.splice(pendingTurnStart, 0, {
-              id: `msg-${Date.now()}-${Math.random()}`,
-              role: 'assistant',
-              content: '',
-              timestamp: part.timestamp,
-              parts: [part],
-            })
-          } else {
-            const target = messages[index]
-            messages[index] = { ...target, parts: [...(target.parts ?? []), part] }
-          }
-          return { ...current, messages }
-        }
-
-        let index = -1
-        for (let cursor = messages.length - 1; cursor >= 0; cursor -= 1) {
-          if (messages[cursor].role === 'assistant' && messages[cursor].isStreaming) {
-            index = cursor
-            break
-          }
-        }
-        if (index < 0) {
-          for (let cursor = messages.length - 1; cursor >= 0; cursor -= 1) {
-            if (messages[cursor].role === 'assistant') {
-              index = cursor
-              break
-            }
-          }
-        }
-        if (index < 0) {
-          messages.push({
-            id: `msg-${Date.now()}-${Math.random()}`,
-            role: 'assistant',
-            content: '',
-            timestamp: part.timestamp,
-            parts: [part],
-          })
-        } else {
-          const target = messages[index]
-          messages[index] = { ...target, parts: [...(target.parts ?? []), part] }
-        }
-        return { ...current, messages }
-      })
+      updateExisting(
+        state,
+        key,
+        (current) => {
+          const messages = reduceAppendCompactionPart(current.messages, part, options)
+          return messages ? { ...current, messages } : current
+        },
+        get
+      )
     ),
 
   removeMessage: (key, id) =>
     set((state) =>
-      updateExisting(state, key, (current) => ({
-        ...current,
-        messages: current.messages.filter((message) => message.id !== id),
-      }))
+      updateExisting(
+        state,
+        key,
+        (current) => ({
+          ...current,
+          messages: current.messages.filter((message) => message.id !== id),
+        }),
+        get
+      )
     ),
 
   /** 删除最后一条用户消息及其后的全部消息（编辑重发前调用） */
   truncateLastTurn: (key) =>
     set((state) =>
-      updateExisting(state, key, (current) => {
-        let lastUser = -1
-        for (let index = current.messages.length - 1; index >= 0; index--) {
-          if (current.messages[index].role === 'user') {
-            lastUser = index
-            break
+      updateExisting(
+        state,
+        key,
+        (current) => {
+          let lastUser = -1
+          for (let index = current.messages.length - 1; index >= 0; index--) {
+            if (current.messages[index].role === 'user') {
+              lastUser = index
+              break
+            }
           }
-        }
-        if (lastUser < 0) return current
-        return { ...current, messages: current.messages.slice(0, lastUser) }
-      })
+          if (lastUser < 0) return current
+          return { ...current, messages: current.messages.slice(0, lastUser) }
+        },
+        get
+      )
     ),
 
   setMessages: (key, messages) =>
     set((state) => ({
       conversations: {
         ...state.conversations,
-        [key]: {
-          ...conversation(state, key),
-          messages: messages.map((message, index) => {
-            const parts =
-              message.parts ??
-              (message.role === 'assistant' && message.content
-                ? [
-                    {
-                      type: 'text' as const,
-                      id: `text-${index + 1}`,
-                      text: message.content,
-                    },
-                  ]
-                : undefined)
-            return {
-              ...message,
-              id: message.entryId ? `entry-${message.entryId}` : `msg-${message.timestamp}-${index}`,
-              parts,
-              thinkingStartedAt: undefined,
-            }
-          }),
-        },
+        [key]: attachDraftInput(
+          key,
+          {
+            ...conversation(state, key),
+            messages: messages.map((message, index) => {
+              const parts =
+                message.parts ??
+                (message.role === 'assistant' && message.content
+                  ? [
+                      {
+                        type: 'text' as const,
+                        id: `text-${index + 1}`,
+                        text: message.content,
+                      },
+                    ]
+                  : undefined)
+              return {
+                ...message,
+                id: message.entryId
+                  ? `entry-${message.entryId}`
+                  : `msg-${message.timestamp}-${index}`,
+                parts,
+                thinkingStartedAt: undefined,
+              }
+            }),
+          },
+          get
+        ),
       },
     })),
 
   reconcileMessages: (key, diskMessages) =>
     set((state) =>
-      updateExisting(state, key, (current) => {
-        if (diskMessages.length === 0) return current
-        // 收集内存中仅在实时态持有的 edits / plan 卡片与原 React id，避免轮末对账丢卡或整屏闪动
-        const prevByEntryId = new Map<string, ChatMessage>()
-        const prevAssistants: ChatMessage[] = []
-        for (const msg of current.messages) {
-          if (msg.entryId) prevByEntryId.set(msg.entryId, msg)
-          if (msg.role === 'assistant') prevAssistants.push(msg)
-        }
-        let assistantCursor = 0
-        const nextMessages: ChatMessage[] = diskMessages.map((message, index) => {
-          const prev =
-            (message.entryId ? prevByEntryId.get(message.entryId) : undefined) ??
-            (message.role === 'assistant' ? prevAssistants[assistantCursor] : current.messages[index])
-          if (message.role === 'assistant') assistantCursor += 1
+      updateExisting(
+        state,
+        key,
+        (current) => {
+          if (diskMessages.length === 0) return current
+          // 收集内存中仅在实时态持有的 edits / plan 卡片与原 React id，避免轮末对账丢卡或整屏闪动
+          const prevByEntryId = new Map<string, ChatMessage>()
+          const prevAssistants: ChatMessage[] = []
+          for (const msg of current.messages) {
+            if (msg.entryId) prevByEntryId.set(msg.entryId, msg)
+            if (msg.role === 'assistant') prevAssistants.push(msg)
+          }
+          let assistantCursor = 0
+          const nextMessages: ChatMessage[] = diskMessages.map((message, index) => {
+            const prev =
+              (message.entryId ? prevByEntryId.get(message.entryId) : undefined) ??
+              (message.role === 'assistant'
+                ? prevAssistants[assistantCursor]
+                : current.messages[index])
+            if (message.role === 'assistant') assistantCursor += 1
 
-          const baseParts =
-            message.parts ??
-            (message.role === 'assistant' && message.content
-              ? [{ type: 'text' as const, id: `text-${index + 1}`, text: message.content }]
-              : undefined)
+            const baseParts =
+              message.parts ??
+              (message.role === 'assistant' && message.content
+                ? [{ type: 'text' as const, id: `text-${index + 1}`, text: message.content }]
+                : undefined)
 
-          // 保留仅挂在内存态的 plan 卡片（不写入 JSONL entries）
-          const prevPlanParts = (prev?.parts ?? []).filter((part) => part.type === 'plan')
-          let mergedParts = baseParts
-          if (prevPlanParts.length > 0 && message.role === 'assistant') {
-            const existingPlanIds = new Set(
-              (baseParts ?? [])
-                .filter((p): p is Extract<AgentTracePart, { type: 'plan' }> => p.type === 'plan')
-                .map((p) => p.plan.id)
-            )
-            const missingPlans = prevPlanParts.filter(
-              (p) => p.type === 'plan' && !existingPlanIds.has(p.plan.id)
-            )
-            if (missingPlans.length > 0) {
-              mergedParts = [...(baseParts ?? []), ...missingPlans]
+            // 保留仅挂在内存态的 plan 卡片（不写入 JSONL entries）
+            const prevPlanParts = (prev?.parts ?? []).filter((part) => part.type === 'plan')
+            let mergedParts = baseParts
+            if (prevPlanParts.length > 0 && message.role === 'assistant') {
+              const existingPlanIds = new Set(
+                (baseParts ?? [])
+                  .filter(
+                    (p): p is Extract<AgentTracePart, { type: 'plan' }> => p.type === 'plan'
+                  )
+                  .map((p) => p.plan.id)
+              )
+              const missingPlans = prevPlanParts.filter(
+                (p) => p.type === 'plan' && !existingPlanIds.has(p.plan.id)
+              )
+              if (missingPlans.length > 0) {
+                mergedParts = [...(baseParts ?? []), ...missingPlans]
+              }
             }
-          }
 
-          return {
-            ...message,
-            id:
-              prev?.id ??
-              (message.entryId ? `entry-${message.entryId}` : `msg-${message.timestamp}-${index}`),
-            parts: mergedParts,
-            usage: message.usage ?? prev?.usage,
-            edits: prev?.edits && prev.edits.length > 0 ? prev.edits : message.edits,
-            branch: prev?.branch ?? message.branch,
-            isStreaming: false,
-            thinkingStartedAt: undefined,
-          }
-        })
-        return { ...current, messages: nextMessages }
-      })
+            return {
+              ...message,
+              id:
+                prev?.id ??
+                (message.entryId
+                  ? `entry-${message.entryId}`
+                  : `msg-${message.timestamp}-${index}`),
+              parts: mergedParts,
+              usage: message.usage ?? prev?.usage,
+              edits: prev?.edits && prev.edits.length > 0 ? prev.edits : message.edits,
+              branch: prev?.branch ?? message.branch,
+              isStreaming: false,
+              thinkingStartedAt: undefined,
+            }
+          })
+          return { ...current, messages: nextMessages }
+        },
+        get
+      )
     ),
 
   setLoading: (key, loading) =>
@@ -963,7 +1315,10 @@ export const useChatStore = create<ChatState>((set) => ({
       const wasBusy = Boolean(current.isLoading || current.isCompacting)
       const isBusy = Boolean(loading || current.isCompacting)
       return {
-        conversations: { ...state.conversations, [key]: { ...current, isLoading: loading } },
+        conversations: {
+          ...state.conversations,
+          [key]: attachDraftInput(key, { ...current, isLoading: loading }, get),
+        },
         busyCountByWorkspace: adjustWorkspaceBusy(state.busyCountByWorkspace, key, wasBusy, isBusy),
       }
     }),
@@ -975,19 +1330,23 @@ export const useChatStore = create<ChatState>((set) => ({
       const wasBusy = Boolean(current.isLoading || current.isCompacting)
       const isBusy = Boolean(current.isLoading || compacting)
       return {
-        conversations: { ...state.conversations, [key]: { ...current, isCompacting: compacting } },
+        conversations: {
+          ...state.conversations,
+          [key]: attachDraftInput(key, { ...current, isCompacting: compacting }, get),
+        },
         busyCountByWorkspace: adjustWorkspaceBusy(state.busyCountByWorkspace, key, wasBusy, isBusy),
       }
     }),
 
   setError: (key, error) =>
     set((state) =>
-      updateExisting(state, key, (current) => ({ ...current, error }))
+      updateExisting(state, key, (current) => ({ ...current, error }), get)
     ),
 
   reset: () =>
     set({
       conversations: {},
+      draftInputs: {},
       busyCountByWorkspace: {},
       pendingDraft: '',
       pendingDraftWorkspace: null,

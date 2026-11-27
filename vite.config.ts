@@ -562,6 +562,9 @@ const PDFJS_ASSET_GROUPS = {
   wasm: ['.wasm'],
 } as const
 
+/** 只读 PDF 预览不需要 XFA 表单脚本引擎（quickjs-eval.wasm ~469 KB），构建与开发态均排除 */
+const EXCLUDED_PDFJS_WASM = new Set(['quickjs-eval.wasm'])
+
 type PdfjsAssetGroup = keyof typeof PDFJS_ASSET_GROUPS
 
 export function pdfjsAssets(): Plugin {
@@ -589,7 +592,10 @@ export function pdfjsAssets(): Plugin {
           return
         }
         const suffixes = PDFJS_ASSET_GROUPS[group]
-        if (!(suffixes as readonly string[]).some((suffix) => filename.endsWith(suffix))) {
+        if (
+          !(suffixes as readonly string[]).some((suffix) => filename.endsWith(suffix)) ||
+          (group === 'wasm' && EXCLUDED_PDFJS_WASM.has(filename))
+        ) {
           res.statusCode = 404
           res.end('Not Found')
           return
@@ -612,8 +618,10 @@ export function pdfjsAssets(): Plugin {
         [PdfjsAssetGroup, readonly string[]]
       >) {
         const dir = path.join(root, 'node_modules', 'pdfjs-dist', group)
-        const files = (await readdir(dir)).filter((name) =>
-          suffixes.some((suffix) => name.endsWith(suffix))
+        const files = (await readdir(dir)).filter(
+          (name) =>
+            suffixes.some((suffix) => name.endsWith(suffix)) &&
+            !(group === 'wasm' && EXCLUDED_PDFJS_WASM.has(name))
         )
         for (const name of files) {
           const source = await readFile(path.join(dir, name))
@@ -667,6 +675,15 @@ export default defineConfig({
           }
           if (id.includes('monaco-editor')) {
             return 'monaco'
+          }
+          // KaTeX 与 @streamdown/math 独立分包，避免在 markdown 与 mermaid chunk 中重复打包
+          if (
+            id.includes('node_modules/katex') ||
+            id.includes('@streamdown/math') ||
+            id.includes('rehype-katex') ||
+            id.includes('remark-math')
+          ) {
+            return 'katex'
           }
           if (id.includes('node_modules/mermaid') || id.includes('@streamdown/mermaid')) {
             return 'mermaid'

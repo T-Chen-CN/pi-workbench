@@ -65,11 +65,11 @@ export interface FileViewProps {
  * （Markdown / HTML）；媒体类始终是预览。保存与草稿由 `useFileDocument` 承担，
  * 因此阅读视图里的修改与 Monaco 里的修改走同一条落盘路径。
  */
-export const FileView: React.FC<FileViewProps> = ({
+export const FileView: React.FC<FileViewProps> = React.memo(function FileView({
   workspacePath,
   viewRoot,
   active = true,
-}) => {
+}) {
   const root = viewRoot ?? workspacePath
   const { t } = useI18nStore()
   const store = editorStoreFor(root)
@@ -179,7 +179,7 @@ export const FileView: React.FC<FileViewProps> = ({
                     <MarkdownReadingView
                       root={root}
                       file={currentFile}
-                      active={reading && !panelActive}
+                      active={reading && !panelActive && active}
                     />
                   ) : (
                     <HtmlPreview file={currentFile} visible={reading && !panelActive && active} />
@@ -189,7 +189,9 @@ export const FileView: React.FC<FileViewProps> = ({
               {fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' ? (
                 <MediaView file={currentFile} />
               ) : null}
-              {fileKind === 'pdf' && <PdfReadingView file={currentFile} />}
+              {fileKind === 'pdf' && (
+                <PdfReadingView file={currentFile} active={!panelActive && active} />
+              )}
               {/* Office / EPUB：主进程解析成结构化模型，这里只负责画 */}
               {fileKind && isOfficeDocumentKind(fileKind) && (
                 <OfficeDocumentView file={currentFile} />
@@ -214,4 +216,4 @@ export const FileView: React.FC<FileViewProps> = ({
       </div>
     </div>
   )
-}
+})
