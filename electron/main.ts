@@ -46,6 +46,7 @@ import {
 } from './ipc/cloud.js'
 import { registerDocumentsIpc } from './ipc/documents.js'
 import { configureRenderBridge } from './documents/render-bridge.js'
+import { disposeAllWorkers } from './worker-runner.js'
 import { registerGitIpc } from './ipc/git.js'
 import { registerRepoMapIpc } from './ipc/repo-map.js'
 import { repoSync } from './repo-sync.js'
@@ -1048,7 +1049,7 @@ async function shutdownApplication(): Promise<void> {
           run: async () => {
             closeAllWorkspaceWatchers()
             repoSync.disposeAll()
-            await pluginManager.disposeAllAsync()
+            await Promise.allSettled([pluginManager.disposeAllAsync(), disposeAllWorkers()])
           }
         },
         { name: 'terminals', timeoutMs: 400, run: () => terminalManager.closeAll() },

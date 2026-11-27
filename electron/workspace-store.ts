@@ -37,6 +37,8 @@ export function createWorkspaceStore(dbPath: string): WorkspaceStore {
   const requireFromHere = createRequire(import.meta.url)
   const { DatabaseSync } = requireFromHere('node:sqlite') as typeof import('node:sqlite')
   const db = new DatabaseSync(dbPath)
+  // 启用 WAL + busy_timeout：缩短主进程写盘停顿并避免多窗口/更新瞬态锁冲突
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
   db.exec(
     'CREATE TABLE IF NOT EXISTS workspaces (' +
       'path TEXT PRIMARY KEY, opened_at INTEGER NOT NULL, open_count INTEGER NOT NULL DEFAULT 1)'

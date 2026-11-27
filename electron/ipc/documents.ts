@@ -12,7 +12,7 @@
 import { handleIpc } from './register.js'
 import { resolveAllowedFileTarget } from '../workspace-trust.js'
 import { settleRenderRequest, type RenderResultPayload } from '../documents/render-bridge.js'
-import { readDocumentPreview } from '../documents/preview.js'
+import { readDocumentPreviewOffThread } from '../documents/worker-client.js'
 
 export function registerDocumentsIpc(): void {
   handleIpc('documents:preview', async (_event, filePath: string) => {
@@ -22,7 +22,7 @@ export function registerDocumentsIpc(): void {
       if (!target) {
         return { success: false, error: '路径不在当前工作区内' }
       }
-      return { success: true, preview: await readDocumentPreview(target) }
+      return { success: true, preview: await readDocumentPreviewOffThread(target) }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

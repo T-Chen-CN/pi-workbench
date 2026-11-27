@@ -7,7 +7,7 @@
  */
 
 import { detectDocument } from './detect.js'
-import { readDocument } from './extract.js'
+import { readDocumentOffThread } from './worker-client.js'
 import { renderDocumentPages } from './render-bridge.js'
 
 export interface AgentDocumentRequest {
@@ -38,7 +38,7 @@ export async function readDocumentForAgent(
   }
   if (!isDocument) return null
 
-  const result = await readDocument(
+  const result = await readDocumentOffThread(
     {
       path: request.path,
       pages: request.pages,

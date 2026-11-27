@@ -14,10 +14,10 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { readJsonWithBackup, writeJsonAtomic } from './atomic-json.js'
+import { writeJsonAtomicAsync } from './atomic-json.js'
 import { getRepoInfo } from './git-worktrees.js'
 import { sanitizedChildEnv } from './ipc/web-search-config.js'
-import { canonicalizePath, isPathInsideRoot } from './workspace-trust.js'
+import { canonicalizePath, isPathInsideRoot } from './path-safety.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -395,11 +395,24 @@ function sanitizeFacts(value: unknown): RepoMapFacts | null {
   }
 }
 
-function readCache(workspaceDir: string): {
+async function readCacheAsync(workspaceDir: string): Promise<{
   repoRoot: string
   files: Record<string, RepoMapFacts>
-} {
-  const { data } = readJsonWithBackup<RepoMapCacheFile>(repoMapCachePath(workspaceDir))
+}> {
+  const cachePath = repoMapCachePath(workspaceDir)
+  let data: RepoMapCacheFile | null = null
+  for (const candidate of [cachePath, `${cachePath}.bak`]) {
+    try {
+      const raw = await fs.promises.readFile(candidate, 'utf-8')
+      const parsed = JSON.parse(raw) as RepoMapCacheFile
+      if (parsed && typeof parsed === 'object') {
+        data = parsed
+        break
+      }
+    } catch {
+      // 主缓存不存在或损坏时回退 .bak
+    }
+  }
   if (!data || data.version !== REPO_MAP_CACHE_VERSION) return { repoRoot: '', files: {} }
   if (!data.files || typeof data.files !== 'object') return { repoRoot: '', files: {} }
   const files: Record<string, RepoMapFacts> = {}
@@ -471,7 +484,7 @@ async function scanUncached(
     tracked.push(rel)
   }
 
-  const cache = readCache(workspaceDir)
+  const cache = await readCacheAsync(workspaceDir)
   const cacheValid = cache.repoRoot === repo.root
   const cachedFiles = cacheValid ? cache.files : {}
   const limit = options.limit && options.limit > 0 ? options.limit : REPO_MAP_FULL_SCAN_LIMIT
@@ -545,12 +558,16 @@ async function scanUncached(
   }
 
   if (dirty || Object.keys(nextCache).length !== Object.keys(cachedFiles).length) {
-    await writeJsonAtomic(repoMapCachePath(workspaceDir), {
-      version: REPO_MAP_CACHE_VERSION,
-      repoRoot: repo.root,
-      updatedAt: Date.now(),
-      files: nextCache,
-    }).catch(() => undefined)
+    await writeJsonAtomicAsync(
+      repoMapCachePath(workspaceDir),
+      {
+        version: REPO_MAP_CACHE_VERSION,
+        repoRoot: repo.root,
+        updatedAt: Date.now(),
+        files: nextCache,
+      },
+      { backup: false }
+    ).catch(() => undefined)
   }
 
   const described = files.reduce((count, file) => (file.described ? count + 1 : count), 0)

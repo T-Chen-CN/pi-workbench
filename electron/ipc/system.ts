@@ -249,13 +249,44 @@ export function registerSystemIpc(context: SystemIpcContext): void {
     terminal: context.terminalManager.hasRecentActivity(3000),
   }))
 
-  // ---- 渲染进程日志 ----
+  // ---- 渲染进程日志（按发送方限速 + 单条体积上限，防止渲染异常刷爆磁盘） ----
   const RENDERER_LOG_LEVELS: LogLevel[] = ['INFO', 'WARN', 'ERROR', 'DEBUG']
-  handleIpc('log:renderer', async (_event, level: unknown, args: unknown) => {
+  const RENDERER_LOG_MAX_PER_SEC = 120
+  const RENDERER_LOG_MAX_CHARS = 8192
+  const rendererLogBudget = new Map<number, { windowStart: number; count: number; dropped: number }>()
+
+  handleIpc('log:renderer', async (event, level: unknown, args: unknown) => {
+    const senderId = event.sender?.id ?? 0
+    const now = Date.now()
+    let bucket = rendererLogBudget.get(senderId)
+    if (!bucket || now - bucket.windowStart >= 1000) {
+      if (bucket && bucket.dropped > 0) {
+        try {
+          context.getRendererLogger()?.write('WARN', [
+            `[RendererLog] Dropped ${bucket.dropped} rate-limited log message(s)`,
+          ])
+        } catch {
+          // ignore
+        }
+      }
+      bucket = { windowStart: now, count: 0, dropped: 0 }
+      rendererLogBudget.set(senderId, bucket)
+    }
+    bucket.count += 1
+    if (bucket.count > RENDERER_LOG_MAX_PER_SEC) {
+      bucket.dropped += 1
+      return { success: true }
+    }
+
     const normalized = RENDERER_LOG_LEVELS.includes(String(level).toUpperCase() as LogLevel)
       ? (String(level).toUpperCase() as LogLevel)
       : 'INFO'
-    const values = Array.isArray(args) ? args : [args]
+    const values = (Array.isArray(args) ? args : [args]).slice(0, 16).map((item) => {
+      if (typeof item === 'string' && item.length > RENDERER_LOG_MAX_CHARS) {
+        return `${item.slice(0, RENDERER_LOG_MAX_CHARS)}…`
+      }
+      return item
+    })
     try {
       context.getRendererLogger()?.write(normalized, values)
     } catch {

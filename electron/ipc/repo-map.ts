@@ -8,6 +8,7 @@
 import { handleIpc } from './register.js'
 import { isTrustedWorkspacePath } from '../workspace-trust.js'
 import { scanRepoMap, type RepoMapResult, type RepoMapScanOptions } from '../repo-map.js'
+import { WorkerClient } from '../worker-runner.js'
 import {
   emptyCanvasState,
   readRepoMapCanvas,
@@ -15,6 +16,21 @@ import {
   type RepoMapCanvasReadResult,
   type RepoMapCanvasWriteResult
 } from '../repo-map-canvas.js'
+
+const repoMapWorker = new WorkerClient(
+  new URL('../repo-map-worker.js', import.meta.url),
+  'repo-map'
+)
+
+async function scanRepoMapOffThread(
+  workspaceDir: string,
+  options: RepoMapScanOptions
+): Promise<RepoMapResult> {
+  if (!repoMapWorker.isWorkerAvailable()) {
+    return scanRepoMap(workspaceDir, options)
+  }
+  return repoMapWorker.call<RepoMapResult>('scan', { workspaceDir, options })
+}
 
 /** 降级模式下补描述时最多一次点名多少文件：防止渲染层误传整个仓库 */
 const MAX_DESCRIBE_PATHS = 500
@@ -57,7 +73,7 @@ export function registerRepoMapIpc(): void {
         return failed('Workspace is not approved')
       }
       try {
-        return await scanRepoMap(workspaceDir, sanitizeOptions(options))
+        return await scanRepoMapOffThread(workspaceDir, sanitizeOptions(options))
       } catch (error) {
         return failed(error instanceof Error ? error.message : String(error))
       }
@@ -73,7 +89,7 @@ export function registerRepoMapIpc(): void {
       const options = sanitizeOptions({ paths })
       if (!options.paths) return failed('No paths requested')
       try {
-        return await scanRepoMap(workspaceDir, options)
+        return await scanRepoMapOffThread(workspaceDir, options)
       } catch (error) {
         return failed(error instanceof Error ? error.message : String(error))
       }

@@ -12,7 +12,7 @@ import { promisify } from 'util'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { readJsonWithBackup, writeJsonAtomic } from './atomic-json.js'
-import { canonicalizePath, isPathInsideRoot } from './workspace-trust.js'
+import { canonicalizePath, isPathInsideRoot } from './path-safety.js'
 import { sanitizedChildEnv } from './ipc/web-search-config.js'
 
 const execFileAsync = promisify(execFile)

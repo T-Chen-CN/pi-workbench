@@ -280,7 +280,7 @@ export function registerFilesIpc(context: FilesIpcContext): void {
       if (!target) {
         return { success: false, error: 'Path is outside the open workspace' }
       }
-      context.draftStore.remove(target.workspace, target.file)
+      await context.draftStore.removeAsync(target.workspace, target.file)
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -293,7 +293,7 @@ export function registerFilesIpc(context: FilesIpcContext): void {
         return { success: false, drafts: [], error: 'Workspace is not approved' }
       }
       const workspace = canonicalizePath(workspacePath) ?? workspacePath
-      return { success: true, drafts: context.draftStore.list(workspace) }
+      return { success: true, drafts: await context.draftStore.listAsync(workspace) }
     } catch (error) {
       return {
         success: false,
@@ -308,7 +308,7 @@ export function registerFilesIpc(context: FilesIpcContext): void {
       if (!isTrustedWorkspacePath(workspacePath)) {
         return { success: false, error: 'Workspace is not approved' }
       }
-      context.draftStore.clear(canonicalizePath(workspacePath) ?? workspacePath)
+      await context.draftStore.clearAsync(canonicalizePath(workspacePath) ?? workspacePath)
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }

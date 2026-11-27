@@ -5,6 +5,7 @@
  * 正常保存后删除对应草稿。应用异常退出后，下次打开工作区可以恢复这些内容。
  */
 import * as fs from 'fs'
+import * as fsp from 'fs/promises'
 import * as path from 'path'
 import { createHash } from 'crypto'
 import { readJsonWithBackup, writeJsonAtomicAsync } from './atomic-json.js'
@@ -71,8 +72,61 @@ export class DraftStore {
     }
   }
 
+  async removeAsync(workspace: string, filePath: string): Promise<void> {
+    try {
+      await fsp.rm(this.fileFor(workspace, filePath), { force: true })
+    } catch {
+      // ignore
+    }
+  }
+
   list(workspace: string): DraftRecord[] {
     return this.allForWorkspace(workspace).slice(0, MAX_DRAFTS_PER_WORKSPACE)
+  }
+
+  /** 异步读取工作区草稿，避免打开工作区时在主线程同步扫描全部草稿文件 */
+  async listAsync(workspace: string): Promise<DraftRecord[]> {
+    const all = await this.allForWorkspaceAsync(workspace)
+    return all.slice(0, MAX_DRAFTS_PER_WORKSPACE)
+  }
+
+  private async readDraftAsync(filePath: string): Promise<DraftRecord | null> {
+    for (const candidate of [filePath, `${filePath}.bak`]) {
+      try {
+        const raw = await fsp.readFile(candidate, 'utf-8')
+        const parsed = JSON.parse(raw) as DraftRecord
+        if (
+          parsed &&
+          typeof parsed === 'object' &&
+          typeof parsed.workspace === 'string' &&
+          typeof parsed.path === 'string' &&
+          typeof parsed.content === 'string'
+        ) {
+          return parsed
+        }
+      } catch {
+        // 主文件损坏或不存在时尝试 .bak
+      }
+    }
+    return null
+  }
+
+  private async allForWorkspaceAsync(workspace: string): Promise<DraftRecord[]> {
+    let files: string[] = []
+    try {
+      files = (await fsp.readdir(this.rootDir)).filter((name) => name.endsWith('.json'))
+    } catch {
+      return []
+    }
+    const loaded = await Promise.all(
+      files.map((name) => this.readDraftAsync(path.join(this.rootDir, name)))
+    )
+    const records: DraftRecord[] = []
+    for (const item of loaded) {
+      if (!item || item.workspace !== workspace) continue
+      records.push(item)
+    }
+    return records.sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
   /** 不截断的工作区草稿集合（清理时使用） */
@@ -99,5 +153,10 @@ export class DraftStore {
     for (const draft of this.allForWorkspace(workspace)) {
       this.remove(workspace, draft.path)
     }
+  }
+
+  async clearAsync(workspace: string): Promise<void> {
+    const drafts = await this.allForWorkspaceAsync(workspace)
+    await Promise.all(drafts.map((draft) => this.removeAsync(workspace, draft.path)))
   }
 }
