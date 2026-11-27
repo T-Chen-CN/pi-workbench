@@ -213,22 +213,9 @@ export function useFileDocument({
     return unsubscribe
   }, [store, workspacePath, clearTimers, scheduleSave])
 
-  // 外部文件变化：文本同步 / 媒体刷新 / 被删除时关闭标签
-  useEffect(() => {
-    /** 读盘并覆盖缓冲区；返回读取到的内容，读不到返回 null */
-    const pullFromDisk = async (filePath: string): Promise<string | null> => {
-      const result = await api.readFile(filePath)
-      if (result.binary) {
-        store.getState().updateOpenFile(filePath, { kind: 'binary', content: '', view: 'source' })
-        store.getState().markClean(filePath)
-        return null
-      }
-      if (!result.success || typeof result.content !== 'string') return null
-      return result.content
-    }
-
-    /** 外部的磁盘变更：干净缓冲直接重载，脏缓冲留冲突提示由用户决定 */
-    const syncFile = async (filePath: string) => {
+  /** 外部的磁盘变更：干净缓冲直接重载，脏缓冲留冲突提示由用户决定，媒体/Office 仅递增版本号 */
+  const syncFile = useCallback(
+    async (filePath: string) => {
       const target = store.getState().openFiles.find((file) => samePath(file.path, filePath))
       if (!target) return
 
@@ -250,6 +237,17 @@ export function useFileDocument({
       ) {
         store.getState().touchFile(target.path)
         return
+      }
+
+      const pullFromDisk = async (targetPath: string): Promise<string | null> => {
+        const result = await api.readFile(targetPath)
+        if (result.binary) {
+          store.getState().updateOpenFile(targetPath, { kind: 'binary', content: '', view: 'source' })
+          store.getState().markClean(targetPath)
+          return null
+        }
+        if (!result.success || typeof result.content !== 'string') return null
+        return result.content
       }
 
       if (!target.isDirty) {
@@ -276,8 +274,12 @@ export function useFileDocument({
       }
       if (dismissedDisk.current.get(latest.path) === diskContent) return
       setConflicts((current) => ({ ...current, [latest.path]: diskContent }))
-    }
+    },
+    [clearTimers, store, workspacePath]
+  )
 
+  // 外部文件变化：文本同步 / 媒体刷新 / 被删除时关闭标签
+  useEffect(() => {
     const unsubscribe = api.onFsChanged(async (payload) => {
       const state = store.getState()
       const target = state.openFiles.find((file) => samePath(file.path, payload.path))
@@ -301,24 +303,16 @@ export function useFileDocument({
       unsubscribe()
       offRefresh()
     }
-  }, [clearTimers, store, workspacePath])
+  }, [store, syncFile])
 
-  // 隐藏期间收到过刷新事件，切回当前工作区时统一补一次同步
+  // 隐藏期间收到过刷新事件，切回当前工作区时统一走 syncFile（不盲目对媒体/PDF/Office 调 readFile）
   useEffect(() => {
     if (!active || !pendingRefreshRef.current) return
     pendingRefreshRef.current = false
     for (const file of store.getState().openFiles) {
-      if (!file.isDirty) {
-        void api.readFile(file.path).then((result) => {
-          if (!result.success || typeof result.content !== 'string') return
-          const latest = store.getState().openFiles.find((item) => samePath(item.path, file.path))
-          if (latest && !latest.isDirty && latest.content !== result.content) {
-            store.getState().updateOpenFile(latest.path, { content: result.content })
-          }
-        })
-      }
+      void syncFile(file.path)
     }
-  }, [active, store])
+  }, [active, store, syncFile])
 
   /** 用磁盘内容覆盖缓冲区（用户在冲突提示里选“重新加载”） */
   const reloadFromDisk = useCallback(

@@ -180,6 +180,19 @@ async function streamDevChat(
     }
   }
 
+  // 流结束时冲刷解码器残余字节与缺少尾随 \n\n 的最后一帧（避免丢掉最终 done 事件）
+  buffer += decoder.decode()
+  let boundary = buffer.indexOf('\n\n')
+  while (boundary >= 0) {
+    const chunk = buffer.slice(0, boundary)
+    buffer = buffer.slice(boundary + 2)
+    boundary = buffer.indexOf('\n\n')
+    consume(chunk)
+  }
+  if (buffer.trim()) {
+    consume(buffer)
+  }
+
   if (!final) throw new Error('Dev agent stream ended without a result')
   return final
 }

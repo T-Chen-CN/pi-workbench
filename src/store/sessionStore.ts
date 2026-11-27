@@ -1,6 +1,10 @@
 import { create } from 'zustand'
 import type { SessionSummary } from '../types/electron'
 import { conversationKey } from './chatStore'
+import {
+  clearWorkspaceTurnControl,
+  resetAllChatTurnControl,
+} from '../workspace/chatTurnControl'
 
 export const MAX_OPEN_SESSIONS = 8
 
@@ -289,7 +293,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       return { needsAction }
     }),
 
-  resetWorkspace: (path) =>
+  resetWorkspace: (path) => {
+    clearWorkspaceTurnControl(path)
     set((state) => {
       const byWorkspace = { ...state.byWorkspace }
       delete byWorkspace[path]
@@ -310,9 +315,11 @@ export const useSessionStore = create<SessionState>((set) => ({
         Object.entries(state.pinnedTitles).filter(([key]) => !key.startsWith(prefix))
       )
       return { byWorkspace, streaming, unread, errors, needsAction, pinnedTitles }
-    }),
+    })
+  },
 
-  reset: () =>
+  reset: () => {
+    resetAllChatTurnControl()
     set({
       byWorkspace: {},
       streaming: {},
@@ -321,5 +328,6 @@ export const useSessionStore = create<SessionState>((set) => ({
       needsAction: {},
       pendingActivation: null,
       pinnedTitles: {},
-    }),
+    })
+  },
 }))

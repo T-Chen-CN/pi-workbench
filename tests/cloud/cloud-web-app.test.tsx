@@ -8,6 +8,7 @@
 
 // @vitest-environment jsdom
 
+import React from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CloudWebApp } from '../../apps/cloud/web-src/CloudWebApp'
@@ -587,5 +588,40 @@ describe('云端 Web 控制台主界面', () => {
       { timeout: 2500 }
     )
     expect(document.body.textContent).not.toContain('正在重连')
+  })
+
+  it('StrictMode 下收到未读消息帧只发送一次 mark_read，不因 updater 双调发送重复帧', async () => {
+    render(
+      <React.StrictMode>
+        <CloudWebApp />
+      </React.StrictMode>
+    )
+    await waitFor(() => {
+      expect(document.querySelector('header.top')).not.toBeNull()
+      expect(FakeSocket.instances.length).toBeGreaterThan(0)
+    })
+    const socket = FakeSocket.instances[FakeSocket.instances.length - 1]
+    socket.sent = []
+
+    emitFrame(socket, {
+      v: 1,
+      type: 'event',
+      seq: 100,
+      event: { type: 'message_start', messageId: 'm-strict', role: 'assistant', at: Date.now() },
+    })
+    emitFrame(socket, {
+      v: 1,
+      type: 'event',
+      seq: 101,
+      event: { type: 'message_end', messageId: 'm-strict', text: '你好', at: Date.now() },
+    })
+
+    await waitFor(() => {
+      const markReads = socket.sent
+        .map((raw) => JSON.parse(raw))
+        .filter((frame) => frame.type === 'mark_read')
+      expect(markReads).toHaveLength(1)
+      expect(markReads[0].seq).toBe(101)
+    })
   })
 })

@@ -518,7 +518,11 @@ describe('卡片上浮', () => {
 })
 
 describe('空格手形工具', () => {
-  const pressSpace = () => fireEvent.keyDown(window, { code: 'Space' })
+  const pressSpace = (canvas?: HTMLElement) => {
+    const target = canvas ?? screen.getByTestId('repo-map-canvas')
+    fireEvent.pointerEnter(target)
+    fireEvent.keyDown(window, { code: 'Space' })
+  }
   const releaseSpace = () => fireEvent.keyUp(window, { code: 'Space' })
   const stageTransform = () => screen.getByTestId('repo-map-stage').style.transform
   const panDrag = (element: HTMLElement, dx: number, dy: number) => {
@@ -612,5 +616,37 @@ describe('空格手形工具', () => {
     fireEvent.doubleClick(canvas)
     expect(canvasSet.mock.calls.length).toBe(savedBefore)
     releaseSpace()
+  })
+
+  it('画布无焦点且光标不在画布上时绝不劫持外部面板的空格键', async () => {
+    canvasGet.mockResolvedValue({ success: true, state: empty() })
+    render(
+      <div>
+        <div data-testid="outside-chat-pane" tabIndex={0}>
+          chat transcript
+        </div>
+        <RepoMapCanvas
+          workspacePath="/ws"
+          files={FILES}
+          query=""
+          onOpenFile={onOpenFile}
+          onEnsureDescribed={vi.fn()}
+        />
+      </div>
+    )
+    const canvas = await screen.findByTestId('repo-map-canvas')
+    const outside = screen.getByTestId('outside-chat-pane')
+    outside.focus()
+
+    const spaceEvent = new KeyboardEvent('keydown', {
+      code: 'Space',
+      key: ' ',
+      bubbles: true,
+      cancelable: true,
+    })
+    outside.dispatchEvent(spaceEvent)
+
+    expect(spaceEvent.defaultPrevented).toBe(false)
+    expect(canvas.dataset.space).toBe('false')
   })
 })

@@ -9,6 +9,7 @@
 
 import { PDF_PAGE_BACKGROUND_HEX } from '../theme/tokens'
 import { BundledBinaryDataFactory } from './pdfAssets'
+import { ensurePdfWorker } from './worker'
 
 /** 单页最长边上限：2 倍缩放后再收敛，避免 4K 屏上生成 8000px 的大图 */
 const MAX_EDGE = 2400
@@ -22,11 +23,7 @@ export interface RenderedPageImage {
 
 async function loadFromBytes(bytes: Uint8Array) {
   const pdfjs = await import('pdfjs-dist')
-  // worker 已在 loadPdf 里装配；这里也装一次以防先渲染后阅读
-  const PdfWorker = (await import('pdfjs-dist/build/pdf.worker.min.mjs?worker')).default
-  if (!pdfjs.GlobalWorkerOptions.workerPort) {
-    pdfjs.GlobalWorkerOptions.workerPort = new PdfWorker()
-  }
+  await ensurePdfWorker(pdfjs)
   const task = pdfjs.getDocument({
     data: bytes,
     BinaryDataFactory: BundledBinaryDataFactory,

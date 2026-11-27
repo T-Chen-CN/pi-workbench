@@ -10,6 +10,9 @@
 type ClipboardBridgeResult = boolean | { success?: boolean }
 type ClipboardBridge = (text: string) => ClipboardBridgeResult | Promise<ClipboardBridgeResult>
 
+let shimmedWriteText: ((text: string) => Promise<void>) | null = null
+let nativeWriteText: ((text: string) => Promise<void>) | null = null
+
 function isBridgeSuccess(result: unknown): boolean {
   if (typeof result === 'boolean') return result
   if (result && typeof result === 'object' && 'success' in result) {
@@ -44,6 +47,82 @@ function legacyCopy(text: string): boolean {
   }
 }
 
+/**
+ * 打包后的 Electron 运行在 `pw-app://` 下，第三方组件（如 Streamdown 代码/表格/Mermaid
+ * 复制按钮）直接调用 `navigator.clipboard.writeText()` 会恒定 reject。
+ * 在渲染进程启动时把 `navigator.clipboard.writeText` 委派给主进程原生剪贴板，
+ * 并通过引用标记避免与 `copyText()` 发生回环递归。
+ */
+export function installElectronClipboardShim(): void {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return
+  if (!bridgeWriter()) return
+
+  const existing = navigator.clipboard
+  if (existing && shimmedWriteText && existing.writeText === shimmedWriteText) return
+
+  const originalWrite =
+    typeof existing?.writeText === 'function' ? existing.writeText.bind(existing) : null
+  nativeWriteText = originalWrite
+
+  const writeText = async (text: string): Promise<void> => {
+    const value = typeof text === 'string' ? text : String(text ?? '')
+    const bridge = bridgeWriter()
+    if (bridge) {
+      try {
+        if (isBridgeSuccess(await bridge(value))) return
+      } catch {
+        // 桥接失败时继续回退到原生实现
+      }
+    }
+    if (originalWrite) {
+      await originalWrite(value)
+      return
+    }
+    if (legacyCopy(value)) return
+    throw new Error('Failed to write text to clipboard')
+  }
+
+  shimmedWriteText = writeText
+
+  const patchedClipboard = existing
+    ? new Proxy(existing, {
+        get(target, prop) {
+          if (prop === 'writeText') return writeText
+          const value = Reflect.get(target, prop, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+    : ({ writeText } as unknown as Clipboard)
+
+  try {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: patchedClipboard,
+      configurable: true,
+    })
+    if (navigator.clipboard?.writeText === writeText) return
+  } catch {
+    // 某些宿主禁止重定义 navigator.clipboard，尝试直接覆盖 writeText
+  }
+
+  if (existing) {
+    try {
+      Object.defineProperty(existing, 'writeText', {
+        value: writeText,
+        configurable: true,
+        writable: true,
+      })
+    } catch {
+      try {
+        ;(existing as { writeText: typeof writeText }).writeText = writeText
+      } catch {
+        shimmedWriteText = null
+      }
+    }
+  } else {
+    shimmedWriteText = null
+  }
+}
+
 export async function copyText(text: string): Promise<boolean> {
   const value = typeof text === 'string' ? text : ''
   if (!value) return false
@@ -59,8 +138,13 @@ export async function copyText(text: string): Promise<boolean> {
   }
 
   try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value)
+    const currentWriteText = navigator.clipboard?.writeText
+    const fallbackWriteText =
+      currentWriteText && currentWriteText === shimmedWriteText
+        ? nativeWriteText
+        : currentWriteText?.bind(navigator.clipboard)
+    if (fallbackWriteText) {
+      await fallbackWriteText(value)
       return true
     }
   } catch (error) {

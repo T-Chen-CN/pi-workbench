@@ -346,4 +346,44 @@ describe('useFileDocument', () => {
     expect(media?.version).toBe(1)
     expect(api.readFile).not.toHaveBeenCalled()
   })
+
+  it('uses syncFile on pendingRefresh recovery so PDFs/media are touched instead of readFile', async () => {
+    vi.mocked(api.readFile).mockResolvedValue({
+      success: true,
+      binary: false,
+      content: 'updated-text',
+    })
+    const { rerender } = render(<Harness workspacePath="/ws" active={false} />)
+    act(() => {
+      editorStoreFor('/ws').getState().addOpenFile(file('/ws/a.ts', 'old-text'))
+      editorStoreFor('/ws').getState().addOpenFile({
+        ...file('/ws/report.pdf', ''),
+        kind: 'pdf',
+        view: 'reading',
+      })
+    })
+
+    // 隐藏期间收到刷新事件，仅挂起待刷新标记
+    act(() => {
+      window.dispatchEvent(new CustomEvent('pi:refresh-files'))
+    })
+    expect(api.readFile).not.toHaveBeenCalled()
+
+    // 切回可见时按 syncFile 同步：文本重读，PDF 仅递增版本号而不调 readFile
+    rerender(<Harness workspacePath="/ws" active={true} />)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(api.readFile).toHaveBeenCalledTimes(1)
+    expect(api.readFile).toHaveBeenCalledWith('/ws/a.ts')
+    const pdf = editorStoreFor('/ws')
+      .getState()
+      .openFiles.find((item) => item.path === '/ws/report.pdf')
+    expect(pdf?.version).toBe(1)
+    const text = editorStoreFor('/ws')
+      .getState()
+      .openFiles.find((item) => item.path === '/ws/a.ts')
+    expect(text?.content).toBe('updated-text')
+  })
 })

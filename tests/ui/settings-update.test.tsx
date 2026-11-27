@@ -217,4 +217,14 @@ describe('settings mode legend', () => {
     expect(screen.getByText(translations.zh.modeSessionOnly)).toBeTruthy()
     expect(screen.getAllByText(translations.zh.modeDefaultAllowed)).toHaveLength(3)
   })
+
+  it('syncs the active section when initialSection changes while Settings is open', async () => {
+    const { rerender } = render(<Settings open initialSection="general" />)
+    expect(screen.getByLabelText(translations.zh.language)).toBeTruthy()
+    expect(screen.queryByText('版本 0.2.0')).toBeNull()
+
+    rerender(<Settings open initialSection="about" />)
+    await waitFor(() => expect(screen.getByText('版本 0.2.0')).toBeTruthy())
+    expect(screen.queryByLabelText(translations.zh.language)).toBeNull()
+  })
 })

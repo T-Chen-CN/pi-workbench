@@ -1,6 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react'
 import { useI18nStore } from '../../store/i18nStore'
+import { useHostDocument } from '../../panelHost/HostContext'
 
 export type ToastType = 'success' | 'error' | 'info' | 'warning'
 
@@ -30,30 +32,49 @@ const TOAST_EXIT_MS = 160
 const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
   const { t } = useI18nStore()
   const [isExiting, setIsExiting] = useState(false)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const closedRef = useRef(false)
+
+  const handleClose = useCallback(() => {
+    if (closedRef.current) return
+    closedRef.current = true
+    if (autoTimerRef.current) {
+      clearTimeout(autoTimerRef.current)
+      autoTimerRef.current = null
+    }
+    setIsExiting(true)
+    if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
+    exitTimerRef.current = setTimeout(() => {
+      exitTimerRef.current = null
+      onCloseRef.current(message.id)
+    }, TOAST_EXIT_MS)
+  }, [message.id])
 
   useEffect(() => {
     return () => {
+      if (autoTimerRef.current) clearTimeout(autoTimerRef.current)
       if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
     }
   }, [])
 
   useEffect(() => {
-    if (message.duration === 0) return
+    if (message.duration === 0 || closedRef.current) return
 
-    const timer = setTimeout(() => {
-      setIsExiting(true)
-      exitTimerRef.current = setTimeout(() => onClose(message.id), TOAST_EXIT_MS)
+    autoTimerRef.current = setTimeout(() => {
+      autoTimerRef.current = null
+      handleClose()
     }, message.duration || 3000)
 
-    return () => clearTimeout(timer)
-  }, [message, onClose])
-
-  const handleClose = () => {
-    setIsExiting(true)
-    if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
-    exitTimerRef.current = setTimeout(() => onClose(message.id), TOAST_EXIT_MS)
-  }
+    return () => {
+      if (autoTimerRef.current) {
+        clearTimeout(autoTimerRef.current)
+        autoTimerRef.current = null
+      }
+    }
+  }, [message.id, message.duration, handleClose])
 
   const { border, icon, Icon } = TOAST_STYLES[message.type]
 
@@ -84,9 +105,13 @@ export const ToastContainer: React.FC<{
   /** 只渲染属于该宿主窗口的提示；辅助窗口各挂一份 */
   host?: string
 }> = ({ messages, onClose, host = 'main' }) => {
+  const hostDocument = useHostDocument()
   const visible = messages.filter((msg) => (msg.host ?? 'main') === host)
-  return (
-    <div className="pointer-events-none fixed right-4 top-14 z-50 flex w-80 flex-col gap-2">
+  const content = (
+    <div
+      data-toast-portal="true"
+      className="pointer-events-none fixed right-4 top-14 z-50 flex w-80 flex-col gap-2"
+    >
       {visible.map((msg) => (
         <div key={msg.id} className="pointer-events-auto">
           <Toast message={msg} onClose={onClose} />
@@ -94,4 +119,5 @@ export const ToastContainer: React.FC<{
       ))}
     </div>
   )
+  return hostDocument.body ? createPortal(content, hostDocument.body) : content
 }

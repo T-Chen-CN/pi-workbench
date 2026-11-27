@@ -2,7 +2,7 @@
  * 会话级模型、思考深度、权限模式、上下文压缩、统计预算与会话元数据（置顶/归档/导出）。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { piAgentAPI } from '../api/piAgentAPI'
 import { api } from '../api'
 import { useChatStore, conversationKey, type SessionSettings } from '../store/chatStore'
@@ -10,6 +10,7 @@ import { useSettingsStore } from '../store/settingsStore'
 import { toast } from '../store/toastStore'
 import { confirmDialog } from '../store/dialogStore'
 import { localizeError } from '../i18n/errors'
+import { isBudgetWarned, markBudgetWarned } from '../workspace/chatTurnControl'
 import type {
   ExportSessionFormat,
   ModelCapabilityInfo,
@@ -52,7 +53,6 @@ export function useChatSessionConfig(params: UseChatSessionConfigParams) {
   /** 模型能力提示（R-06） */
   const [modelCapabilities, setModelCapabilities] = useState<ModelCapabilityInfo[]>([])
   const [sessionMeta, setSessionMeta] = useState<SessionMeta>({ pinned: [], archived: [] })
-  const budgetWarnedKeysRef = useRef(new Set<string>())
 
   const selectedModelCapability =
     modelCapabilities.find((item) => item.id === sessionSettings?.modelId) ?? null
@@ -113,8 +113,8 @@ export function useChatSessionConfig(params: UseChatSessionConfigParams) {
       if (!result.success || !result.stats) return
       useChatStore.getState().setSessionStats(key, result.stats)
       const budget = useSettingsStore.getState().budgetUsd
-      if (budget > 0 && result.stats.cost >= budget && !budgetWarnedKeysRef.current.has(key)) {
-        budgetWarnedKeysRef.current.add(key)
+      if (budget > 0 && result.stats.cost >= budget && !isBudgetWarned(key)) {
+        markBudgetWarned(key)
         toast.warning(
           t('budgetExceeded', {
             cost: result.stats.cost.toFixed(2),
@@ -344,7 +344,6 @@ export function useChatSessionConfig(params: UseChatSessionConfigParams) {
     selectedModelCapability,
     imagesAllowed,
     modelCapabilityText,
-    budgetWarnedKeysRef,
     refreshContextUsage,
     refreshSessionSettings,
     refreshSessionStats,

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { AlertCircle, Check, ChevronRight, ListChecks, Loader2 } from 'lucide-react'
 import type { AgentTracePart, StructuredPlan } from '../../types/electron'
 import { useI18nStore } from '../../store/i18nStore'
@@ -344,10 +344,11 @@ const WorkGroup: React.FC<WorkGroupProps> = ({
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = useRef(true)
 
+  const instanceId = useId()
   const liveAutoOpen = isStreaming && !hasTrailingText
   const open = userOverride ?? liveAutoOpen
   const isConstrainedLive = open && liveAutoOpen && userOverride === null
-  const contentId = `trace-${parts[0].id}`
+  const contentId = `trace-${instanceId}-${parts[0]?.id ?? 'group'}`
 
   const last = parts[parts.length - 1]
   const scrollSignal =

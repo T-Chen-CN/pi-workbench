@@ -22,6 +22,21 @@ import {
   attachmentsToMessageContext,
   contextToAttachments,
 } from '../workspace/chatAttachments'
+import {
+  clearBudgetWarned,
+  clearForceSend,
+  clearTurnStopped,
+  getChatSubmitHandler,
+  getWorkspaceChatImageModels,
+  isForceSend,
+  isTurnStopped,
+  isWorkspaceChatInitialized,
+  markForceSend,
+  markTurnStopped,
+  registerChatSubmitHandler,
+  unregisterChatSubmitHandler,
+  type ChatSubmitHandler,
+} from '../workspace/chatTurnControl'
 import { localizeError } from '../i18n/errors'
 import { createTraceBuffer } from '../utils/streamBuffer'
 import { copyText } from '../utils/clipboard'
@@ -108,7 +123,9 @@ export function useChatPanelState(props: ChatPanelProps) {
     }
   }
   /** 设置中勾选的支持图片模型，用于能力接口尚未返回时的兜底 */
-  const [configuredImageModels, setConfiguredImageModels] = useState<string[]>([])
+  const [configuredImageModels, setConfiguredImageModels] = useState<string[]>(() =>
+    getWorkspaceChatImageModels(workspacePath)
+  )
   let lastUserMessageId: string | null = null
   for (let index = messages.length - 1; index >= 0; index--) {
     if (messages[index].role === 'user') {
@@ -256,7 +273,13 @@ export function useChatPanelState(props: ChatPanelProps) {
     [diffStore]
   )
 
-  const [initialized, setInitialized] = useState(false)
+  const [initialized, setInitialized] = useState(() => {
+    const live = useSessionStore.getState().byWorkspace[workspacePath]
+    return (
+      isWorkspaceChatInitialized(workspacePath) &&
+      Boolean(live && live.open.length > 0 && live.active)
+    )
+  })
   const [needsApiKey, setNeedsApiKey] = useState(false)
   const [fatalError, setFatalError] = useState<string | null>(null)
   const [showAttachMenu, setShowAttachMenu] = useState(false)
@@ -315,10 +338,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     setAgentReadyVersion((version) => version + 1)
   }, [])
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  /** 以下运行期标记按会话区分，避免同工作区并行会话互相影响 */
-  const forceSendKeysRef = useRef(new Set<string>())
   const initSeqRef = useRef(0)
-  const stoppedKeysRef = useRef(new Set<string>())
 
   const {
     refreshSessions,
@@ -496,7 +516,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     selectedModelCapability,
     imagesAllowed,
     modelCapabilityText,
-    budgetWarnedKeysRef,
     refreshContextUsage,
     refreshSessionSettings,
     refreshSessionStats,
@@ -881,7 +900,7 @@ export function useChatPanelState(props: ChatPanelProps) {
 
     // 运行中：按设置默认值排队到下一轮，或立即插入当前轮（压缩期间暂不插话，等压缩结束再续）
     const targetLoading = Boolean(chat.conversations[key]?.isLoading)
-    if (targetLoading && !forceSendKeysRef.current.has(key)) {
+    if (targetLoading && !isForceSend(key)) {
       chat.setDraftInput(key, '')
       // 附件随排队项一起带走，否则排队会让本轮附件凭空消失
       const pendingAttachments = composerAttachments.filter(
@@ -903,10 +922,10 @@ export function useChatPanelState(props: ChatPanelProps) {
     if (hadQuoteCurrentFile) {
       chat.setQuoteCurrentFile(key, false)
     }
-    forceSendKeysRef.current.delete(key)
-    budgetWarnedKeysRef.current.delete(key)
+    clearForceSend(key)
+    clearBudgetWarned(key)
 
-    stoppedKeysRef.current.delete(key)
+    clearTurnStopped(key)
     useSessionStore.getState().markError(workspacePath, sessionId, null)
     useSessionStore.getState().markUnread(workspacePath, sessionId, false)
     chat.setDraftInput(key, '')
@@ -1104,7 +1123,7 @@ export function useChatPanelState(props: ChatPanelProps) {
         }
       } else {
         const errorMessage = describeAgentFailure(result)
-        if (stoppedKeysRef.current.has(key)) {
+        if (isTurnStopped(key)) {
           chat.setError(key, null)
           chat.finishStreamingMessage(key, assistantId)
         } else {
@@ -1135,7 +1154,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     } catch (err) {
       traceBuffer.flush()
       const errorMsg = localizeError(err instanceof Error ? err.message : String(err))
-      if (stoppedKeysRef.current.has(key)) {
+      if (isTurnStopped(key)) {
         chat.setError(key, null)
         chat.finishStreamingMessage(key, assistantId)
       } else {
@@ -1154,16 +1173,17 @@ export function useChatPanelState(props: ChatPanelProps) {
       void refreshContextUsage(sessionId)
       void refreshSessionStats(sessionId)
 
-      // 本轮结束：自动发送下一条待发送消息（用户主动停止或前置压缩失败时不自动发送；走 submitRef 避免陈旧闭包）
+      // 本轮结束：自动发送下一条待发送消息（用户主动停止或前置压缩失败时不自动发送；优先走模块级当前存活句柄，避免拆窗后落进旧实例闭包）
       const queued = useChatStore.getState().conversations[key]?.pending[0]
-      if (queued && !stoppedKeysRef.current.has(key) && !abortedByCompaction) {
+      if (queued && !isTurnStopped(key) && !abortedByCompaction) {
         useChatStore.getState().removePending(key, queued.id)
-        forceSendKeysRef.current.add(key)
+        markForceSend(key)
         // 附件在入队时已转入排队项，重发只带排队项自己的图片与附件
         window.setTimeout(() => {
           const currentOpen = useWorkspaceStore.getState().openWorkspaces
           if (currentOpen.length > 0 && !currentOpen.includes(workspacePath)) return
-          void submitRef.current(undefined, queued.text, {
+          const nextSubmit = getChatSubmitHandler(workspacePath) ?? submitRef.current
+          void nextSubmit(undefined, queued.text, {
             targetSessionId: sessionId,
             images: queued.images,
             attachments: queued.attachments,
@@ -1205,8 +1225,18 @@ export function useChatPanelState(props: ChatPanelProps) {
   }
 
   /** 供稳定的行回调调用，避免把整个 handleSubmit 暴露给消息行 */
-  const submitRef = useRef(handleSubmit)
+  const submitRef = useRef<ChatSubmitHandler>(handleSubmit)
   submitRef.current = handleSubmit
+  const dispatchSubmit = useCallback<ChatSubmitHandler>(
+    (...args) => submitRef.current(...args),
+    []
+  )
+  useEffect(() => {
+    registerChatSubmitHandler(workspacePath, dispatchSubmit)
+    return () => {
+      unregisterChatSubmitHandler(workspacePath, dispatchSubmit)
+    }
+  }, [workspacePath, dispatchSubmit])
 
   const handleStop = async () => {
     if (!activeSessionId || stopping) return
@@ -1214,7 +1244,7 @@ export function useChatPanelState(props: ChatPanelProps) {
     // 压缩过程不可终止
     if (useChatStore.getState().conversations[key]?.isCompacting) return
     setStopping(true)
-    stoppedKeysRef.current.add(key)
+    markTurnStopped(key)
     try {
       await piAgentAPI.abort(workspacePath, activeSessionId)
     } finally {

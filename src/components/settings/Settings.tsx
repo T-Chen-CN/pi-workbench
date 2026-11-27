@@ -72,10 +72,14 @@ const ShortcutKeys: React.FC<{ keys: string[] }> = ({ keys }) => (
 
 interface SettingsProps {
   onClose?: () => void
+  open?: boolean
   initialSection?: SettingsSection
 }
 
-export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }) => {
+export const Settings: React.FC<SettingsProps> = ({
+  open = true,
+  initialSection = 'general',
+}) => {
   const { language, setLanguage, t } = useI18nStore()
   const { mode, setMode } = useThemeStore()
   const {
@@ -104,6 +108,12 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
   const [capturingShortcut, setCapturingShortcut] = useState<ShortcutId | null>(null)
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const [budgetDraft, setBudgetDraft] = useState(() => String(budgetUsd))
+
+  useEffect(() => {
+    if (open && initialSection) {
+      setSection(initialSection)
+    }
+  }, [open, initialSection])
   const isMac = isMacPlatform()
   const mod = isMac ? '⌘' : 'Ctrl'
   const shift = isMac ? '⇧' : 'Shift'

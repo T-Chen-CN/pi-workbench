@@ -12,6 +12,13 @@ import { localizeError } from '../i18n/errors'
 import type { TranslationKey, TranslationParams } from '../i18n/translations'
 import type { SessionSummary } from '../types/electron'
 import { onAppEvent } from '../utils/appEvents'
+import {
+  clearConversationTurnControl,
+  clearWorkspaceChatInitialized,
+  getWorkspaceChatImageModels,
+  isWorkspaceChatInitialized,
+  markWorkspaceChatInitialized,
+} from '../workspace/chatTurnControl'
 
 type Translate = (key: TranslationKey, params?: TranslationParams) => string
 
@@ -130,7 +137,39 @@ export function useChatSessions(options: ChatSessionsOptions) {
   useEffect(() => {
     const seq = ++initSeqRef.current
 
+    const consumePendingDraft = (active: string | null) => {
+      const pending = useChatStore.getState().pendingDraft
+      const pendingWorkspace = useChatStore.getState().pendingDraftWorkspace
+      if (
+        pending &&
+        active &&
+        (!pendingWorkspace || pendingWorkspace === workspacePath)
+      ) {
+        const key = conversationKey(workspacePath, active)
+        useChatStore.getState().setDraftInput(key, pending)
+        useChatStore.getState().clearPendingDraft()
+        inputRef.current?.focus()
+      }
+    }
+
+    // 面板拆出/回位重挂时，工作区已初始化且内存会话标签存活：直接复用，不重置状态也不拿磁盘旧标签覆盖内存态
+    const liveWorkspace = useSessionStore.getState().byWorkspace[workspacePath]
+    const canReuseLiveSession =
+      configVersion === 0 &&
+      isWorkspaceChatInitialized(workspacePath) &&
+      Boolean(liveWorkspace && liveWorkspace.open.length > 0 && liveWorkspace.active)
+
     const run = async () => {
+      if (canReuseLiveSession && liveWorkspace) {
+        setNeedsApiKey(false)
+        setFatalError(null)
+        setConfiguredImageModels(getWorkspaceChatImageModels(workspacePath))
+        setInitialized(true)
+        onAgentReady?.()
+        consumePendingDraft(liveWorkspace.active)
+        return
+      }
+
       setInitialized(false)
       setNeedsApiKey(false)
       setFatalError(null)
@@ -142,17 +181,20 @@ export function useChatSessions(options: ChatSessionsOptions) {
           ? providersResult.providers?.find((provider) => provider.active)
           : undefined
         if (!providersResult.success || !activeProvider || !activeProvider.connected) {
+          clearWorkspaceChatInitialized(workspacePath)
           setNeedsApiKey(true)
           return
         }
         // 图片能力来自 catalog：会话里只按模型 id 判断能不能收图
-        setConfiguredImageModels(
-          (activeProvider.models ?? []).filter((model) => model.vision).map((model) => model.id)
-        )
+        const imageModels = (activeProvider.models ?? [])
+          .filter((model) => model.vision)
+          .map((model) => model.id)
+        setConfiguredImageModels(imageModels)
 
         const initResult = await piAgentAPI.initialize({ workspaceDir: workspacePath })
         if (seq !== initSeqRef.current) return
         if (!initResult.success) {
+          clearWorkspaceChatInitialized(workspacePath)
           setFatalError(
             initResult.error ? localizeError(initResult.error) : tRef.current('agentInitFailed')
           )
@@ -213,22 +255,11 @@ export function useChatSessions(options: ChatSessionsOptions) {
           }
         }
 
+        markWorkspaceChatInitialized(workspacePath, imageModels)
         setInitialized(true)
         onAgentReady?.()
         persistTabs()
-
-        const pending = useChatStore.getState().pendingDraft
-        const pendingWorkspace = useChatStore.getState().pendingDraftWorkspace
-        if (
-          pending &&
-          active &&
-          (!pendingWorkspace || pendingWorkspace === workspacePath)
-        ) {
-          const key = conversationKey(workspacePath, active)
-          useChatStore.getState().setDraftInput(key, pending)
-          useChatStore.getState().clearPendingDraft()
-          inputRef.current?.focus()
-        }
+        consumePendingDraft(active)
       } catch (err) {
         if (seq !== initSeqRef.current) return
         const message = err instanceof Error ? err.message : String(err)
@@ -344,6 +375,7 @@ export function useChatSessions(options: ChatSessionsOptions) {
         if (!ok) return
       }
       await piAgentAPI.sessionsClose(workspacePath, sessionId)
+      clearConversationTurnControl(key)
       useChatStore.getState().removeConversation(key)
       useApprovalStore.getState().clearSession(workspacePath, sessionId)
       useSessionStore.getState().markStreaming(workspacePath, sessionId, false)
@@ -410,6 +442,7 @@ export function useChatSessions(options: ChatSessionsOptions) {
         return
       }
       const key = conversationKey(workspacePath, session.id)
+      clearConversationTurnControl(key)
       useChatStore.getState().removeConversation(key)
       useApprovalStore.getState().clearSession(workspacePath, session.id)
       useSessionStore.getState().markStreaming(workspacePath, session.id, false)

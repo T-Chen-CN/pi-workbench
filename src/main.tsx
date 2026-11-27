@@ -10,6 +10,7 @@ import App from './App'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { installRendererLogging } from './api/rendererLog'
 import { installDocumentRenderBridge } from './api/documentRender'
+import { installElectronClipboardShim } from './utils/clipboard'
 import { useI18nStore } from './store/i18nStore'
 import { useThemeStore, type ThemeMode } from './store/themeStore'
 import './index.css'
@@ -17,6 +18,8 @@ import './index.css'
 installRendererLogging()
 // 扫描件按页渲成图片（Agent 视觉通道与 read 工具共用这条回调）
 installDocumentRenderBridge()
+// Electron 自定义协议下让 Streamdown 等组件内建的 navigator.clipboard.writeText 走主进程剪贴板
+installElectronClipboardShim()
 
 // 主进程把已保存的主题与语言带在 URL 上：在首帧之前写入 store，
 // 否则 App 第一个 effect 会按默认浅色重画一次，暗色主题会闪。

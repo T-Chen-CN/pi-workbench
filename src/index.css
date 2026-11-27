@@ -8,6 +8,7 @@
    RGB 三元组便于 Tailwind 使用透明度修饰符
 ------------------------------------------------------------------- */
 :root {
+  color-scheme: light;
   --titlebar-height: 45px;
 
   /* 纸面 */
@@ -64,6 +65,7 @@
 }
 
 html.dark {
+  color-scheme: dark;
   /* 墨面 */
   --surface: 20 19 17;
   --panel: 26 24 21;
@@ -130,10 +132,12 @@ body {
   overflow: hidden;
 }
 
-/* 统一滚动条，纸面细墨线风格 */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: rgb(var(--ink-subtle) / 0.45) transparent;
+/* 统一滚动条，纸面细墨线风格；仅在不支持 ::-webkit-scrollbar 的引擎使用标准属性，避免 Chromium 忽略自定义样式 */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--ink-subtle) / 0.45) transparent;
+  }
 }
 
 *::-webkit-scrollbar {
@@ -632,7 +636,7 @@ button {
   cursor: grabbing;
 }
 
-/* 尊重系统“减少动态效果”偏好：全局压缩动画与过渡时长 */
+/* 尊重系统“减少动态效果”偏好：全局压缩动画与过渡时长；保留加载旋转指示器（降速）避免看起来冻结 */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -641,6 +645,11 @@ button {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  .animate-spin {
+    animation-duration: 1.5s !important;
+    animation-iteration-count: infinite !important;
   }
 
   .repo-map-card {

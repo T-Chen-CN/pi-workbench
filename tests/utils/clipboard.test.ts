@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { copyText } from '../../src/utils/clipboard'
+import { copyText, installElectronClipboardShim } from '../../src/utils/clipboard'
 
 /**
  * 打包后渲染层跑在 `pw-app://` 上，`navigator.clipboard` 不可用，
@@ -80,5 +80,34 @@ describe('copyText', () => {
 
   it('ignores empty input', async () => {
     await expect(copyText('')).resolves.toBe(false)
+  })
+
+  it('installs Electron clipboard shim on getter-only navigator.clipboard without recursion', async () => {
+    const writeClipboardText = vi.fn(async () => ({ success: true }))
+    ;(window as { electronAPI?: unknown }).electronAPI = { writeClipboardText }
+    const nativeWrite = vi.fn(async (): Promise<void> => {
+      throw new Error('NotAllowedError under pw-app://')
+    })
+    const fakeNav = {}
+    Object.defineProperty(fakeNav, 'clipboard', {
+      get: () => ({ writeText: nativeWrite }),
+      configurable: true,
+    })
+    vi.stubGlobal('navigator', fakeNav)
+
+    installElectronClipboardShim()
+
+    // Streamdown 等第三方组件直接调 navigator.clipboard.writeText 时走 Electron 主进程剪贴板
+    await expect(navigator.clipboard.writeText('SELECT 1;')).resolves.toBeUndefined()
+    expect(writeClipboardText).toHaveBeenCalledWith('SELECT 1;')
+    expect(nativeWrite).not.toHaveBeenCalled()
+
+    // 主进程失败时 copyText 退回原生实现（不回环递归调用 shim）
+    writeClipboardText.mockResolvedValueOnce({ success: false })
+    nativeWrite.mockResolvedValueOnce(undefined)
+    await expect(copyText('fallback')).resolves.toBe(true)
+    expect(writeClipboardText).toHaveBeenCalledTimes(2)
+    expect(nativeWrite).toHaveBeenCalledTimes(1)
+    expect(nativeWrite).toHaveBeenCalledWith('fallback')
   })
 })

@@ -13,22 +13,73 @@ import { detectLargeFile, type LargeFileInfo } from '../../utils/largeFile'
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   ts: 'typescript',
   tsx: 'typescript',
+  mts: 'typescript',
+  cts: 'typescript',
   js: 'javascript',
   jsx: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
   json: 'json',
+  jsonc: 'json',
   md: 'markdown',
   markdown: 'markdown',
+  mdx: 'markdown',
   html: 'html',
   htm: 'html',
   css: 'css',
+  scss: 'scss',
+  less: 'less',
   py: 'python',
+  pyw: 'python',
+  pyi: 'python',
   rs: 'rust',
   go: 'go',
   rb: 'ruby',
+  yaml: 'yaml',
+  yml: 'yaml',
+  sh: 'shell',
+  bash: 'shell',
+  zsh: 'shell',
+  sql: 'sql',
+  dockerfile: 'dockerfile',
+  c: 'cpp',
+  h: 'cpp',
+  cpp: 'cpp',
+  cc: 'cpp',
+  cxx: 'cpp',
+  hpp: 'cpp',
+  hh: 'cpp',
+  hxx: 'cpp',
+  java: 'java',
+  ps1: 'powershell',
+  psm1: 'powershell',
+  psd1: 'powershell',
+  xml: 'xml',
+  svg: 'xml',
+  plist: 'xml',
+  php: 'php',
+  cs: 'csharp',
+  swift: 'swift',
+  kt: 'kotlin',
+  kts: 'kotlin',
+  ini: 'ini',
+  cfg: 'ini',
+  conf: 'ini',
+  env: 'ini',
+  toml: 'ini',
+  properties: 'ini',
 }
 
-function detectLanguage(fileName: string): string {
-  const extension = (fileName.split('.').pop() || 'txt').toLowerCase()
+/** 将文件名映射到 vite.config.ts KEEP_MONACO_LANGUAGES 打包的全部 25 种语言 */
+export function detectLanguage(fileName: string): string {
+  const baseName = (fileName.split(/[\\/]/).pop() ?? '').toLowerCase()
+  if (!baseName) return 'plaintext'
+  if (baseName === 'dockerfile' || baseName.startsWith('dockerfile.')) return 'dockerfile'
+  if (baseName === '.env' || baseName.startsWith('.env.')) return 'ini'
+  if (baseName === '.bashrc' || baseName === '.zshrc' || baseName === '.profile') return 'shell'
+  const dotIndex = baseName.lastIndexOf('.')
+  if (dotIndex <= 0 || dotIndex === baseName.length - 1) return 'plaintext'
+  const extension = baseName.slice(dotIndex + 1)
   return LANGUAGE_BY_EXTENSION[extension] || 'plaintext'
 }
 

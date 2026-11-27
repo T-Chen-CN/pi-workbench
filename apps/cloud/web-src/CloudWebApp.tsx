@@ -275,7 +275,10 @@ export const CloudWebApp: React.FC = () => {
   const [config, setConfig] = useState<WebCloudConfig | null>(null)
   const [configDraft, setConfigDraft] = useState<WebConfigDraft | null>(null)
   const [configModels, setConfigModels] = useState<WebCatalogModel[]>([])
-  const [configFeedback, setConfigFeedback] = useState('')
+  const [configFeedback, setConfigFeedback] = useState<{ text: string; tone: 'info' | 'error' }>({
+    text: '',
+    tone: 'info',
+  })
 
   const [memories, setMemories] = useState<CloudMemoryItem[]>([])
   const [docs, setDocs] = useState<CloudDocItem[]>([])
@@ -373,6 +376,7 @@ export const CloudWebApp: React.FC = () => {
     const seq = lastSeqRef.current
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
     if (unreadRef.current <= 0) return
+    unreadRef.current = 0
     setSession((prev) => ({
       ...prev,
       unreadCount: 0,
@@ -486,37 +490,14 @@ export const CloudWebApp: React.FC = () => {
       if (frame?.type === 'error' && frame.message) {
         setBannerError(String(frame.message))
       }
+      // 状态更新器保持纯函数（不在 updater 内发 WS 帧，避免 React 19 StrictMode 双调导致重复 mark_read）；
+      // 前台可见会话页的已读回执统一交给下方的 visibility/unread effect 在提交后上报。
       setSession((current) => {
         const applied = applyWebFrame(current, frame)
-        let nextState = applied.state
         if (applied.unreadWorthy) {
-          if (tabRef.current === 'chat' && !document.hidden) {
-            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-              wsRef.current.send(
-                JSON.stringify({ v: 1, type: 'mark_read', seq: nextState.lastSeq, at: Date.now() })
-              )
-              nextState = {
-                ...nextState,
-                unreadCount: 0,
-                lastReadSeq: Math.max(nextState.lastReadSeq, nextState.lastSeq),
-              }
-            }
-          } else {
-            nextState = { ...nextState, unreadCount: nextState.unreadCount + 1 }
-          }
-        } else if (applied.snapshotUnread && tabRef.current === 'chat' && !document.hidden) {
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(
-              JSON.stringify({ v: 1, type: 'mark_read', seq: nextState.lastSeq, at: Date.now() })
-            )
-            nextState = {
-              ...nextState,
-              unreadCount: 0,
-              lastReadSeq: Math.max(nextState.lastReadSeq, nextState.lastSeq),
-            }
-          }
+          return { ...applied.state, unreadCount: applied.state.unreadCount + 1 }
         }
-        return nextState
+        return applied.state
       })
     })
 
@@ -600,7 +581,7 @@ export const CloudWebApp: React.FC = () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
     }
-  }, [view, tab, session.unreadCount, markRead])
+  }, [view, tab, wsStatus, session.unreadCount, session.lastSeq, markRead])
 
   const toggleTheme = () => {
     const next: WebTheme = theme === 'dark' ? 'light' : 'dark'
@@ -1030,10 +1011,11 @@ export const CloudWebApp: React.FC = () => {
                   config={config}
                   draft={configDraft}
                   models={configModels}
-                  feedback={configFeedback}
+                  feedback={configFeedback.text}
+                  feedbackTone={configFeedback.tone}
                   onDraftChange={setConfigDraft}
                   onModelsChange={setConfigModels}
-                  onFeedbackChange={setConfigFeedback}
+                  onFeedbackChange={(text, tone = 'info') => setConfigFeedback({ text, tone })}
                   onReloadAuxiliary={loadAuxiliary}
                   request={request}
                 />

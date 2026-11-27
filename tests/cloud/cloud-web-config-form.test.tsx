@@ -10,7 +10,7 @@
 import { useState } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ConfigCard, type WebRequestFn } from '../../apps/cloud/web-src/CloudWebCards'
+import { ConfigCard, MemoryTab, type WebRequestFn } from '../../apps/cloud/web-src/CloudWebCards'
 import {
   PROVIDER_PRESETS,
   type WebCatalogModel,
@@ -143,8 +143,81 @@ describe('云端配置卡的输入保持与白名单约束', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => expect(screen.getByText('已保存，下一轮生效')).toBeTruthy())
+    expect(screen.getByText('已保存，下一轮生效').className).toContain('text-accent')
     expect(onReloadAuxiliary).toHaveBeenCalledTimes(1)
     // draft 已清零，Key 不再留在页面状态里
     expect((screen.getByLabelText('API Key') as HTMLInputElement).value).toBe('')
+  })
+
+  it('校验与保存失败提示使用 text-danger 而非品牌绿 text-accent', async () => {
+    const request = vi.fn(async (method: string, path: string) => {
+      if (method === 'GET' && path.startsWith('/v1/cloud-config/catalog')) {
+        return {
+          ok: true,
+          status: 200,
+          payload: {
+            models: [{ id: 'deepseek-flash', name: 'DeepSeek Flash', contextWindow: 128_000 }],
+          },
+        }
+      }
+      if (method === 'PUT' && path === '/v1/cloud-config') {
+        return { ok: false, status: 400, payload: { error: '无效 API Key' } }
+      }
+      return { ok: false, status: 500, payload: { error: '服务端异常' } }
+    }) as unknown as WebRequestFn
+
+    render(<ConfigCardHarness request={request} />)
+    await screen.findByText(/DeepSeek Flash/)
+
+    // 空 Key 校验失败
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    const emptyErr = await screen.findByText('首次配置要填 API Key')
+    expect(emptyErr.className).toContain('text-danger')
+    expect(emptyErr.className).not.toContain('text-accent')
+
+    // 接口保存失败
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-bad' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    const saveErr = await screen.findByText('无效 API Key')
+    expect(saveErr.className).toContain('text-danger')
+    expect(saveErr.className).not.toContain('text-accent')
+  })
+
+  it('MemoryTab 在新增记忆、保存文档与梦境整理失败时使用 text-danger', async () => {
+    const request = vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      payload: { error: '写入失败' },
+    })) as unknown as WebRequestFn
+
+    render(
+      <MemoryTab
+        memories={[]}
+        docs={[]}
+        dreams={[]}
+        busy={false}
+        docDrafts={{}}
+        onDocDraftChange={() => {}}
+        onClearDocDraft={() => {}}
+        onMemoriesChange={() => {}}
+        onDocsChange={() => {}}
+        onRefresh={async () => {}}
+        request={request}
+      />
+    )
+
+    fireEvent.change(screen.getByPlaceholderText(/手工记录一条长期记忆/), {
+      target: { value: '记住一条规则' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '新增记忆' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存文档' }))
+    fireEvent.click(screen.getByRole('button', { name: '立即整理（梦境）' }))
+
+    const notices = await screen.findAllByText('写入失败')
+    expect(notices).toHaveLength(3)
+    for (const el of notices) {
+      expect(el.className).toContain('text-danger')
+      expect(el.className).not.toContain('text-accent')
+    }
   })
 })

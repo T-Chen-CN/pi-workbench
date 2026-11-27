@@ -41,7 +41,7 @@ import { persistAppSettings } from '../../utils/persistSettings'
 import { useVirtualRows } from '../../hooks/useVirtualRows'
 import { VirtualRows } from '../ui/VirtualRows'
 import { Button, EmptyState, IconButton, Input, MenuOption, Modal, PopoverMenu } from '../ui/ui'
-import { dirname, joinPath } from '../../utils/filePath'
+import { dirname, isPathInside, joinPath, samePath } from '../../utils/filePath'
 import { onAppEvent } from '../../utils/appEvents'
 import { detectFileKind } from '../../utils/fileKind'
 import { openFileInEditor } from '../../workspace/openFileInEditor'
@@ -417,6 +417,17 @@ export const FileExplorer: React.FC<{
     }
   }
 
+  const closeAffectedEditorTabs = (node: TreeNode) => {
+    const store = editorStore?.getState()
+    if (!store) return
+    const matches = store.openFiles.filter((file) =>
+      node.isDirectory ? isPathInside(node.path, file.path) : samePath(node.path, file.path)
+    )
+    for (const file of matches) {
+      store.removeOpenFile(file.path)
+    }
+  }
+
   const handleRename = async (node: TreeNode) => {
     setContextMenu(null)
     const newName = await promptDialog({
@@ -434,8 +445,8 @@ export const FileExplorer: React.FC<{
         throw new Error(result.error || 'Failed to rename')
       }
 
-      // 关闭旧的编辑器标签（路径已失效）
-      editorStore?.getState().removeOpenFile(node.path)
+      // 关闭旧的编辑器标签（含目录改名后失效的所有子文件标签）
+      closeAffectedEditorTabs(node)
       toast.success(`${t('rename')}: ${newName}`)
       if (workspacePath) await loadRootDirectory(workspacePath)
     } catch (err) {
@@ -462,7 +473,7 @@ export const FileExplorer: React.FC<{
         throw new Error(result.error || 'Failed to delete')
       }
 
-      editorStore?.getState().removeOpenFile(node.path)
+      closeAffectedEditorTabs(node)
       toast.success(`${t('delete')}: ${node.name}`)
       if (workspacePath) await loadRootDirectory(workspacePath)
     } catch (err) {
@@ -498,9 +509,11 @@ export const FileExplorer: React.FC<{
     creatingFileRef.current = true
     try {
       const filePath = joinPath(createDialog.parentPath, trimmedName)
-      const result = await api.writeFile(filePath, '')
+      const result = await api.createFile(filePath)
       if (!result.success) {
-        throw new Error(result.error || 'Failed to create file')
+        const detail =
+          result.code === 'EEXIST' ? 'File already exists' : result.error || 'Failed to create file'
+        throw new Error(detail)
       }
 
       // Add to editor

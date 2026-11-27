@@ -23,6 +23,7 @@ import type {
   ListDirectoryResult,
   ReadFileResult,
   WriteFileResult,
+  CreateFileResult,
   ExistsResult,
   StatResult,
   GetAppDirResult,
@@ -78,6 +79,8 @@ const mockUpdateState: UpdateState = {
   canAutoInstall: false
 }
 
+const mockExistingFiles = new Set<string>(['/mock/src', '/mock/package.json'])
+
 const mockAPI = {
   platform: 'web',
   openDirectoryDialog: async (): Promise<OpenDirectoryResult> => {
@@ -104,6 +107,15 @@ const mockAPI = {
   },
   writeFile: async (filePath: string, content: string): Promise<WriteFileResult> => {
     console.log('[Mock] writeFile:', filePath, content.length, 'bytes')
+    mockExistingFiles.add(filePath)
+    return { success: true }
+  },
+  createFile: async (filePath: string): Promise<CreateFileResult> => {
+    console.log('[Mock] createFile:', filePath)
+    if (mockExistingFiles.has(filePath)) {
+      return { success: false, code: 'EEXIST', error: 'File already exists' }
+    }
+    mockExistingFiles.add(filePath)
     return { success: true }
   },
   openPathExternally: async (_filePath: string): Promise<WorkspaceResult> => ({
@@ -132,6 +144,7 @@ const mockAPI = {
   },
   deletePath: async (targetPath: string): Promise<WorkspaceResult> => {
     console.log('[Mock] deletePath:', targetPath)
+    mockExistingFiles.delete(targetPath)
     return { success: true }
   },
   renamePath: async (oldPath: string, newPath: string): Promise<WorkspaceResult> => {
@@ -683,6 +696,11 @@ export const api = {
       : Promise.resolve({ success: true }),
   readFile: (path: string) => electronAPI.readFile(path),
   writeFile: (path: string, content: string) => electronAPI.writeFile(path, content),
+  createFile: (filePath: string) => electronAPI.createFile(filePath),
+  writeClipboardText: (text: string) =>
+    typeof electronAPI.writeClipboardText === 'function'
+      ? electronAPI.writeClipboardText(text)
+      : Promise.resolve({ success: false, error: 'Clipboard unavailable' }),
   openPathExternally: (path: string) =>
     typeof electronAPI.openPathExternally === 'function'
       ? electronAPI.openPathExternally(path)

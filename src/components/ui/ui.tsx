@@ -222,6 +222,8 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
   children,
 }) => {
   const menuRef = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
   /** Horizontal offset from the anchor; null until measured */
   const [offset, setOffset] = useState<number | null>(null)
 
@@ -288,14 +290,15 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
       // Clicks on the trigger toggle the popover themselves.
       if (anchor && anchor.contains(target)) return
       restoreFocus = false
-      onClose()
+      onCloseRef.current()
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
         event.stopPropagation()
-        onClose()
+        event.stopImmediatePropagation()
+        onCloseRef.current()
         return
       }
       if (!isMenu) return
@@ -313,7 +316,8 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
     }
 
     doc.addEventListener('mousedown', onPointerDown)
-    doc.addEventListener('keydown', onKeyDown)
+    // 捕获阶段监听：保证位于 Modal 内的 PopoverMenu 优先消费 Escape，不连带关掉外层弹窗
+    doc.addEventListener('keydown', onKeyDown, true)
 
     if (isMenu) {
       const checked = menuRef.current?.querySelector<HTMLButtonElement>(
@@ -326,12 +330,12 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
 
     return () => {
       doc.removeEventListener('mousedown', onPointerDown)
-      doc.removeEventListener('keydown', onKeyDown)
+      doc.removeEventListener('keydown', onKeyDown, true)
       if (restoreFocus && previousFocus && doc.body.contains(previousFocus)) {
         previousFocus.focus()
       }
     }
-  }, [open, onClose, role])
+  }, [open, role])
 
   if (!open) return null
 
@@ -492,7 +496,13 @@ function pushModalToken(doc: Document, token: symbol): void {
   if (wasEmpty && doc.body) {
     const marked = new Set<Element>()
     for (const child of Array.from(doc.body.children)) {
-      if (child.hasAttribute('data-modal-portal') || child.hasAttribute('inert')) continue
+      if (
+        child.hasAttribute('data-modal-portal') ||
+        child.hasAttribute('data-toast-portal') ||
+        child.hasAttribute('inert')
+      ) {
+        continue
+      }
       child.setAttribute('inert', '')
       marked.add(child)
     }
@@ -551,9 +561,14 @@ export const Modal: React.FC<ModalProps> = ({
 
   useEffect(() => {
     if (!open) return
+    // 必须在 pushModalToken 设置 inert 之前记录焦点：一旦给背景加上 inert，浏览器会立刻把焦点清回 body
+    const activeEl = hostDocument.activeElement
+    const previousFocus =
+      activeEl && typeof (activeEl as HTMLElement).focus === 'function'
+        ? (activeEl as HTMLElement)
+        : null
     const token = Symbol('modal')
     pushModalToken(hostDocument, token)
-    const previousFocus = hostDocument.activeElement as HTMLElement | null
 
     // 若内容中没有元素主动 autoFocus 到弹窗内，则把焦点移入对话框容器
     const raf = hostDocument.defaultView?.requestAnimationFrame(() => {

@@ -7,16 +7,8 @@
  */
 import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
-import PdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker'
 import { BundledBinaryDataFactory } from './pdfAssets'
-
-let workerReady = false
-
-function ensureWorker(): void {
-  if (workerReady) return
-  pdfjsLib.GlobalWorkerOptions.workerPort = new PdfWorker()
-  workerReady = true
-}
+import { ensurePdfWorker } from './worker'
 
 export interface LoadPdfResult {
   document: PDFDocumentProxy
@@ -24,7 +16,7 @@ export interface LoadPdfResult {
 }
 
 export async function loadPdf(url: string): Promise<LoadPdfResult> {
-  ensureWorker()
+  await ensurePdfWorker(pdfjsLib)
   const task = pdfjsLib.getDocument({
     url,
     // 资源随包分发，不让 worker 自己去 fetch

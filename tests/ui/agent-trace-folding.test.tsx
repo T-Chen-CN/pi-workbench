@@ -106,6 +106,26 @@ describe('AgentParts 两阶段渐进收展与整轮归并（1A + 2A）', () => {
     rerender(<AgentParts parts={step2} isStreaming={true} />)
     expect(screen.getByRole('button', { name: /运行命令…/ }).getAttribute('aria-expanded')).toBe('false')
   })
+
+  it('为同会话内多个消息的思考块生成互不重复的 DOM id', () => {
+    const parts: AgentTracePart[] = [
+      { type: 'thinking', id: 'thinking-1', text: '分析问题' },
+      { type: 'text', id: 'text-1', text: '结论' },
+    ]
+    render(
+      <div>
+        <AgentParts parts={parts} isStreaming={false} />
+        <AgentParts parts={parts} isStreaming={false} />
+      </div>
+    )
+    const toggles = screen.getAllByRole('button', { name: /过程/ })
+    expect(toggles).toHaveLength(2)
+    const id1 = toggles[0].getAttribute('aria-controls')
+    const id2 = toggles[1].getAttribute('aria-controls')
+    expect(id1).toBeTruthy()
+    expect(id2).toBeTruthy()
+    expect(id1).not.toBe(id2)
+  })
 })
 
 describe('CloudTraceSection 两阶段渐进收展与限高滚窗', () => {

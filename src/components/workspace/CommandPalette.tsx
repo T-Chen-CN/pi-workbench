@@ -153,6 +153,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       if (event.key !== 'Tab') return
       const container = dialogRef.current
       if (!container) return
+      const hostDocument = container.ownerDocument ?? document
+      // 若有更高层级的 Modal（如 z-[60] 的 DialogHost）打开，让出 Tab 焦点循环
+      if (hostDocument.querySelector('[data-modal-portal]')) return
       const focusables = Array.from(
         container.querySelectorAll<HTMLElement>(
           'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
@@ -161,7 +164,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       if (focusables.length === 0) return
       const first = focusables[0]
       const last = focusables[focusables.length - 1]
-      const active = document.activeElement as HTMLElement | null
+      const active = hostDocument.activeElement as HTMLElement | null
       if (event.shiftKey) {
         if (!active || active === first || !container.contains(active)) {
           event.preventDefault()

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MonacoEditor } from '../../src/components/editor/MonacoEditor'
+import { MonacoEditor, detectLanguage } from '../../src/components/editor/MonacoEditor'
 import { editorStoreFor, resetEditorStores } from '../../src/store/editorStore'
 import { useSelectionStore } from '../../src/store/selectionStore'
 import { api } from '../../src/api'
@@ -262,5 +262,70 @@ describe('MonacoEditor', () => {
 
     expect(model.getValue()).toBe('from disk')
     expect(editorStoreFor('/ws').getState().currentFile?.content).toBe('from disk')
+  })
+
+  it('maps all 25 bundled Monaco languages instead of falling back to plaintext', () => {
+    const cases: Array<[string, string]> = [
+      ['app.ts', 'typescript'],
+      ['mod.mts', 'typescript'],
+      ['mod.cts', 'typescript'],
+      ['mod.mjs', 'javascript'],
+      ['mod.cjs', 'javascript'],
+      ['config.jsonc', 'json'],
+      ['doc.mdx', 'markdown'],
+      ['index.htm', 'html'],
+      ['theme.css', 'css'],
+      ['theme.scss', 'scss'],
+      ['theme.less', 'less'],
+      ['script.py', 'python'],
+      ['main.rs', 'rust'],
+      ['main.go', 'go'],
+      ['app.rb', 'ruby'],
+      ['ci.yaml', 'yaml'],
+      ['docker-compose.yml', 'yaml'],
+      ['build.sh', 'shell'],
+      ['init.bash', 'shell'],
+      ['env.zsh', 'shell'],
+      ['schema.sql', 'sql'],
+      ['Dockerfile', 'dockerfile'],
+      ['Dockerfile.prod', 'dockerfile'],
+      ['main.c', 'cpp'],
+      ['types.h', 'cpp'],
+      ['engine.cpp', 'cpp'],
+      ['engine.cc', 'cpp'],
+      ['engine.cxx', 'cpp'],
+      ['engine.hpp', 'cpp'],
+      ['Main.java', 'java'],
+      ['deploy.ps1', 'powershell'],
+      ['helpers.psm1', 'powershell'],
+      ['pom.xml', 'xml'],
+      ['logo.svg', 'xml'],
+      ['Info.plist', 'xml'],
+      ['index.php', 'php'],
+      ['Program.cs', 'csharp'],
+      ['App.swift', 'swift'],
+      ['Main.kt', 'kotlin'],
+      ['build.gradle.kts', 'kotlin'],
+      ['settings.ini', 'ini'],
+      ['app.cfg', 'ini'],
+      ['nginx.conf', 'ini'],
+      ['.env', 'ini'],
+      ['.env.local', 'ini'],
+      ['Cargo.toml', 'ini'],
+      ['README', 'plaintext'],
+    ]
+    for (const [name, expected] of cases) {
+      expect(detectLanguage(name), name).toBe(expected)
+    }
+
+    render(<MonacoEditor workspacePath="/ws" />)
+    act(() => {
+      editorStoreFor('/ws').getState().addOpenFile(makeFile('/tmp/Dockerfile', 'FROM node:24'))
+    })
+    expect(mocks.createModel).toHaveBeenCalledWith(
+      'FROM node:24',
+      'dockerfile',
+      expect.objectContaining({ path: '/tmp/Dockerfile' })
+    )
   })
 })

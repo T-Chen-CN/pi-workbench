@@ -222,12 +222,13 @@ export interface ElectronAPI {
   openDirectoryDialog: () => Promise<OpenDirectoryResult>
   readFile: (path: string) => Promise<ReadFileResult>
   writeFile: (path: string, content: string) => Promise<WriteFileResult>
+  createFile: (filePath: string) => Promise<CreateFileResult>
   /** 用系统默认程序打开文件（媒体与不支持预览的类型） */
   openPathExternally: (path: string) => Promise<WorkspaceResult>
   /** 外部链接（http / https / mailto）：交给系统浏览器打开 */
   openExternalUrl: (url: string) => Promise<WorkspaceResult>
   /** 写入系统剪贴板（自定义协议下 navigator.clipboard 不可用；由主进程执行） */
-  writeClipboardText: (text: string) => Promise<boolean>
+  writeClipboardText: (text: string) => Promise<{ success: boolean; error?: string }>
   listDirectory: (path: string) => Promise<ListDirectoryResult>
   exists: (path: string) => Promise<ExistsResult>
   stat: (path: string) => Promise<StatResult>
@@ -974,6 +975,12 @@ export interface ReadFileResult {
 
 export interface WriteFileResult {
   success: boolean
+  error?: string
+}
+
+export interface CreateFileResult {
+  success: boolean
+  code?: string
   error?: string
 }
 

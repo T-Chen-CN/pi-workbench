@@ -289,9 +289,9 @@ const zh = {
     agentInitFailed: 'Agent 初始化失败',
     agentResponseFailed: '未能获取 Agent 回复',
     agentOutputTruncated:
-      '输出被截断：思考 {{reasoning}} + 正文 {{body}} token，已用满上限 {{limit}}。可在「设置 → 模型能力 → 输出上限」调高后重试。',
+      '输出被截断：思考 {reasoning} + 正文 {body} token，已用满上限 {limit}。可在「设置 → 模型能力 → 输出上限」调高后重试。',
     agentEmptyResponse:
-      '本轮没有产出正文：思考用完了 {{limit}} token 的输出上限。可在「设置 → 模型能力 → 输出上限」调高后重试。',
+      '本轮没有产出正文：思考用完了 {limit} token 的输出上限。可在「设置 → 模型能力 → 输出上限」调高后重试。',
     agentModifiedFiles: 'Agent 修改了 {count} 个文件',
     turnChanges: '本轮修改了 {count} 个文件',
     approvalTitle: '需要你确认后才能继续',
@@ -892,7 +892,7 @@ const zh = {
     modelMaxTokensColumn: '输出上限',
     modelMaxTokensHint:
       '自动档按上下文容量推导（128K→16K、256K→64K、1M→128K）；实际生效值还会受模型能力与上下文余量约束，超出时会被自动压回。',
-    usageReasoningTokens: '思考 {{count}}',
+    usageReasoningTokens: '思考 {count}',
     modelContextHint:
       '上下文容量只影响应用侧的用量统计与压缩时机，不会真正扩容模型；最低 64K，窗口过小会导致频繁压缩。',
     noModelsAvailable: '暂无可用模型，请先获取',
@@ -911,6 +911,7 @@ const zh = {
 
     // Errors returned by the main process
     errPathOutsideWorkspace: '路径不在当前工作区内',
+    errFileAlreadyExists: '文件已存在',
     errWorkspaceNotInitialized: '工作区未初始化',
     errWorkspaceNotApproved: '工作区未获授权',
     errAgentNotInitialized: '该工作区的 Agent 尚未初始化',
@@ -1279,9 +1280,9 @@ const en: Record<TranslationKey, string> = {
     agentInitFailed: 'Failed to initialize agent',
     agentResponseFailed: 'Failed to get response from agent',
     agentOutputTruncated:
-      'Output truncated: reasoning {{reasoning}} + text {{body}} of {{limit}} tokens. Raise the output limit in Settings → Model capabilities → Output limit, then retry.',
+      'Output truncated: reasoning {reasoning} + text {body} of {limit} tokens. Raise the output limit in Settings → Model capabilities → Output limit, then retry.',
     agentEmptyResponse:
-      'No reply body: reasoning used the whole {{limit}}-token output limit. Raise the output limit in Settings → Model capabilities → Output limit, then retry.',
+      'No reply body: reasoning used the whole {limit}-token output limit. Raise the output limit in Settings → Model capabilities → Output limit, then retry.',
     agentModifiedFiles: 'Agent modified {count} file(s)',
     turnChanges: 'This turn changed {count} file(s)',
     approvalTitle: 'Approval required to continue',
@@ -1899,7 +1900,7 @@ const en: Record<TranslationKey, string> = {
     modelMaxTokensColumn: 'Output limit',
     modelMaxTokensHint:
       'Auto derives the limit from the context window (128K→16K, 256K→64K, 1M→128K). The effective value is still capped by model capability and remaining context; higher values are clamped automatically.',
-    usageReasoningTokens: 'thinking {{count}}',
+    usageReasoningTokens: 'thinking {count}',
     modelContextHint:
       'The context window only affects token accounting and compaction timing in this app; it does not enlarge the model. Minimum 64K — smaller windows compact frequently.',
     noModelsAvailable: 'No models available - fetch first',
@@ -1918,6 +1919,7 @@ const en: Record<TranslationKey, string> = {
 
     // Errors returned by the main process
     errPathOutsideWorkspace: 'Path is outside the open workspace',
+    errFileAlreadyExists: 'File already exists',
     errWorkspaceNotInitialized: 'Workspace not initialized',
     errWorkspaceNotApproved: 'Workspace is not approved',
     errAgentNotInitialized: 'Agent not initialized for this workspace',

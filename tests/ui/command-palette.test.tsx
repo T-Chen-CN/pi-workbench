@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CommandPalette } from '../../src/components/workspace/CommandPalette'
+import { Modal } from '../../src/components/ui/ui'
 import { useI18nStore } from '../../src/store/i18nStore'
 import { useSelectionStore } from '../../src/store/selectionStore'
 import { useSessionStore } from '../../src/store/sessionStore'
@@ -185,5 +186,26 @@ describe('CommandPalette', () => {
     expect(listener).not.toHaveBeenCalled()
     expect(screen.getByText(new RegExp(translations.zh.noActiveSession))).toBeTruthy()
     window.removeEventListener('session-new', listener)
+  })
+
+  it('yields Tab focus trap when a higher-priority Modal portal is open', async () => {
+    render(
+      <>
+        <CommandPalette workspacePath="/ws" />
+        <Modal open onClose={() => {}} title="Confirm" zIndexClass="z-[60]">
+          <button type="button">Modal Action</button>
+        </Modal>
+      </>
+    )
+    openPalette()
+    await screen.findByText('Git Status')
+
+    const modalButton = screen.getByRole('button', { name: 'Modal Action' })
+    modalButton.focus()
+    expect(document.activeElement).toBe(modalButton)
+
+    fireEvent.keyDown(document, { key: 'Tab' })
+    // 焦点留在 Modal 内，不被 CommandPalette 的 onTabTrap 抢回
+    expect(document.activeElement?.closest('[data-modal-portal]')).toBeTruthy()
   })
 })

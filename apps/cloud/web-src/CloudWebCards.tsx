@@ -42,6 +42,8 @@ import {
 
 export type WebRequestFn = <T = any>(method: string, path: string, body?: unknown) => Promise<RequestResult<T>>
 export type WebSendFn = (frame: Record<string, unknown>) => boolean
+export type FeedbackTone = 'info' | 'error'
+type FeedbackState = { text: string; tone: FeedbackTone } | null
 
 export const TaskCard: React.FC<{
   tasks: WebTaskItem[]
@@ -182,9 +184,10 @@ export const ConfigCard: React.FC<{
   draft: WebConfigDraft | null
   models: WebCatalogModel[]
   feedback: string
+  feedbackTone?: FeedbackTone
   onDraftChange: React.Dispatch<React.SetStateAction<WebConfigDraft | null>>
   onModelsChange: (models: WebCatalogModel[]) => void
-  onFeedbackChange: (message: string) => void
+  onFeedbackChange: (message: string, tone?: FeedbackTone) => void
   onReloadAuxiliary: () => Promise<void>
   request: WebRequestFn
 }> = ({
@@ -192,6 +195,7 @@ export const ConfigCard: React.FC<{
   draft,
   models,
   feedback,
+  feedbackTone,
   onDraftChange,
   onModelsChange,
   onFeedbackChange,
@@ -199,7 +203,14 @@ export const ConfigCard: React.FC<{
   request,
 }) => {
   const [saving, setSaving] = useState(false)
+  const [localFeedbackTone, setLocalFeedbackTone] = useState<FeedbackTone>('info')
   const catalogReqRef = useRef(0)
+
+  const effectiveFeedbackTone = feedbackTone ?? localFeedbackTone
+  const updateFeedback = (message: string, tone: FeedbackTone = 'info') => {
+    setLocalFeedbackTone(tone)
+    onFeedbackChange(message, tone)
+  }
 
   const effectiveDraft: WebConfigDraft = draft ?? {
     providerId: config?.providerId || 'deepseek',
@@ -260,28 +271,29 @@ export const ConfigCard: React.FC<{
       apiKey: effectiveDraft.apiKey.trim(),
     }
     if (!body.providerId || !body.model) {
-      onFeedbackChange('供应商与模型都要选')
+      updateFeedback('供应商与模型都要选', 'error')
       return
     }
     if (!body.apiKey && !config?.apiKeyMasked) {
-      onFeedbackChange('首次配置要填 API Key')
+      updateFeedback('首次配置要填 API Key', 'error')
       return
     }
     if (!body.apiKey) {
-      onFeedbackChange('这里需要重新填一次 Key（云端不保存明文可回填的那份）')
+      updateFeedback('这里需要重新填一次 Key（云端不保存明文可回填的那份）', 'error')
       return
     }
     setSaving(true)
     try {
       const result = await request<{ warning?: string; error?: string }>('PUT', '/v1/cloud-config', body)
       if (!result.ok) {
-        onFeedbackChange(result.payload?.error || '保存失败')
+        updateFeedback(result.payload?.error || '保存失败', 'error')
         return
       }
-      onFeedbackChange(
+      updateFeedback(
         result.payload?.warning
           ? `已保存，下一轮生效（${result.payload.warning}）`
-          : '已保存，下一轮生效'
+          : '已保存，下一轮生效',
+        'info'
       )
       // 落盘成功后清空 draft：Key 不再留在页面状态里
       onDraftChange(null)
@@ -311,7 +323,7 @@ export const ConfigCard: React.FC<{
               }
               onDraftChange(nextDraft)
               onModelsChange([])
-              onFeedbackChange('')
+              updateFeedback('', 'info')
               void loadCatalog(nextProvider)
             }}
           >
@@ -358,7 +370,11 @@ export const ConfigCard: React.FC<{
           )}
         </Field>
         {capabilityText && <Caption className="text-ink-muted">{capabilityText}</Caption>}
-        {feedback && <Caption className="text-accent">{feedback}</Caption>}
+        {feedback && (
+          <Caption className={effectiveFeedbackTone === 'error' ? 'text-danger' : 'text-accent'}>
+            {feedback}
+          </Caption>
+        )}
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <Button variant="primary" size="sm" disabled={saving} onClick={() => void handleSave()}>
             保存
@@ -417,7 +433,7 @@ export const MemoryTab: React.FC<{
   const [kind, setKind] = useState<CloudMemoryKind>('fact')
   const [content, setContent] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [memoryFeedback, setMemoryFeedback] = useState('')
+  const [memoryFeedback, setMemoryFeedback] = useState<FeedbackState>(null)
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editKind, setEditKind] = useState<CloudMemoryKind>('fact')
@@ -426,10 +442,10 @@ export const MemoryTab: React.FC<{
 
   const [selectedDoc, setSelectedDoc] = useState<'AGENTS.md' | 'SOUL.md'>('AGENTS.md')
   const [docSaving, setDocSaving] = useState(false)
-  const [docFeedback, setDocFeedback] = useState('')
+  const [docFeedback, setDocFeedback] = useState<FeedbackState>(null)
 
   const [dreamRunning, setDreamRunning] = useState(false)
-  const [dreamFeedback, setDreamFeedback] = useState('')
+  const [dreamFeedback, setDreamFeedback] = useState<FeedbackState>(null)
 
   const currentDocMeta = docs.find((doc) => doc.name === selectedDoc)
   const currentDocValue =
@@ -448,9 +464,12 @@ export const MemoryTab: React.FC<{
       if (res.ok && res.payload?.memory) {
         setContent('')
         onMemoriesChange([res.payload.memory, ...memories])
-        setMemoryFeedback('已添加手工记忆')
+        setMemoryFeedback({ text: '已添加手工记忆', tone: 'info' })
       } else {
-        setMemoryFeedback(res.payload?.error || `保存失败 (HTTP ${res.status})`)
+        setMemoryFeedback({
+          text: res.payload?.error || `保存失败 (HTTP ${res.status})`,
+          tone: 'error',
+        })
       }
     } finally {
       setSubmitting(false)
@@ -476,9 +495,12 @@ export const MemoryTab: React.FC<{
         const updated = res.payload.memory
         onMemoriesChange(memories.map((m) => (m.id === id ? updated : m)))
         setEditingId(null)
-        setMemoryFeedback('已保存（已升为手工保护）')
+        setMemoryFeedback({ text: '已保存（已升为手工保护）', tone: 'info' })
       } else {
-        setMemoryFeedback(res.payload?.error || `保存失败 (HTTP ${res.status})`)
+        setMemoryFeedback({
+          text: res.payload?.error || `保存失败 (HTTP ${res.status})`,
+          tone: 'error',
+        })
       }
     } finally {
       setSubmitting(false)
@@ -501,9 +523,12 @@ export const MemoryTab: React.FC<{
           : [...docs, saved]
         onDocsChange(nextDocs)
         onClearDocDraft(saved.name)
-        setDocFeedback(`已保存 ${saved.name}`)
+        setDocFeedback({ text: `已保存 ${saved.name}`, tone: 'info' })
       } else {
-        setDocFeedback(res.payload?.error || `保存失败 (HTTP ${res.status})`)
+        setDocFeedback({
+          text: res.payload?.error || `保存失败 (HTTP ${res.status})`,
+          tone: 'error',
+        })
       }
     } finally {
       setDocSaving(false)
@@ -513,14 +538,17 @@ export const MemoryTab: React.FC<{
   const runDream = async () => {
     if (dreamRunning) return
     setDreamRunning(true)
-    setDreamFeedback('正在整理记忆…')
+    setDreamFeedback({ text: '正在整理记忆…', tone: 'info' })
     try {
       const res = await request<{ dream?: { summary?: string }; error?: string }>('POST', '/v1/dreams/run', {})
       if (res.ok) {
         await onRefresh()
-        setDreamFeedback(res.payload?.dream?.summary || '梦境整理完成')
+        setDreamFeedback({ text: res.payload?.dream?.summary || '梦境整理完成', tone: 'info' })
       } else {
-        setDreamFeedback(res.payload?.error || `整理失败 (HTTP ${res.status})`)
+        setDreamFeedback({
+          text: res.payload?.error || `整理失败 (HTTP ${res.status})`,
+          tone: 'error',
+        })
       }
     } finally {
       setDreamRunning(false)
@@ -580,7 +608,11 @@ export const MemoryTab: React.FC<{
               新增记忆
             </Button>
           </div>
-          {memoryFeedback && <Caption className="text-accent">{memoryFeedback}</Caption>}
+          {memoryFeedback && (
+            <Caption className={memoryFeedback.tone === 'error' ? 'text-danger' : 'text-accent'}>
+              {memoryFeedback.text}
+            </Caption>
+          )}
           {memories.length === 0 ? (
             <Caption className="text-ink-muted">
               还没有保存任何长期记忆。对话压缩前会自动提炼，也可以手工新增。
@@ -739,7 +771,7 @@ export const MemoryTab: React.FC<{
                   size="sm"
                   onClick={() => {
                     setSelectedDoc(name)
-                    setDocFeedback('')
+                    setDocFeedback(null)
                   }}
                 >
                   {name}
@@ -764,7 +796,11 @@ export const MemoryTab: React.FC<{
             }
             onChange={(event) => onDocDraftChange(selectedDoc, event.target.value)}
           />
-          {docFeedback && <Caption className="text-accent">{docFeedback}</Caption>}
+          {docFeedback && (
+            <Caption className={docFeedback.tone === 'error' ? 'text-danger' : 'text-accent'}>
+              {docFeedback.text}
+            </Caption>
+          )}
           <div>
             <Button variant="primary" size="sm" disabled={docSaving} onClick={() => void saveDoc()}>
               {docSaving ? '保存中…' : '保存文档'}
@@ -783,7 +819,11 @@ export const MemoryTab: React.FC<{
           }
         />
         <div className="mt-3 flex flex-col gap-2">
-          {dreamFeedback && <Caption className="text-accent">{dreamFeedback}</Caption>}
+          {dreamFeedback && (
+            <Caption className={dreamFeedback.tone === 'error' ? 'text-danger' : 'text-accent'}>
+              {dreamFeedback.text}
+            </Caption>
+          )}
           {dreams.length === 0 ? (
             <Caption className="text-ink-muted">
               还没有梦境整理记录（空闲 ≥30 分钟且无活跃工单时自动运行，也可手动触发）

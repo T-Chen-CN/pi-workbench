@@ -161,8 +161,10 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
     } | null>(null)
     /** 空格手形工具：按住空格时画布只认平移，卡片全部让位 */
     const spaceRef = useRef(false)
+    const pointerInsideRef = useRef(false)
     const [spaceHeld, setSpaceHeld] = useState(false)
     const [panning, setPanning] = useState(false)
+    const [draggingId, setDraggingId] = useState<string | null>(null)
     const suppressClickRef = useRef(false)
     const frameRef = useRef<number | null>(null)
     const pendingFitRef = useRef(false)
@@ -633,8 +635,11 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       if (!drag) return
       const dx = event.clientX - drag.startClientX
       const dy = event.clientY - drag.startClientY
-      if (!drag.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return
-      drag.moved = true
+      if (!drag.moved) {
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return
+        drag.moved = true
+        setDraggingId(drag.id)
+      }
       const zoom = viewRef.current.zoom
       const rect: Rect = {
         x: drag.originX + dx / zoom,
@@ -669,6 +674,7 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       window.removeEventListener('pointercancel', onWindowPointerUp)
       const drag = dragRef.current
       dragRef.current = null
+      setDraggingId(null)
       hideGuides()
       if (!drag) return
       delete drag.element.dataset.dragging
@@ -944,26 +950,40 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
         'radio',
         'switch',
       ])
+      const isEditableElement = (element: HTMLElement | null) =>
+        Boolean(
+          element &&
+            (element.tagName === 'INPUT' ||
+              element.tagName === 'TEXTAREA' ||
+              element.tagName === 'SELECT' ||
+              element.isContentEditable)
+        )
+      const isOutsideInteractive = (element: HTMLElement | null, viewport: HTMLElement) => {
+        if (!element || !element.tagName || viewport.contains(element)) return false
+        if (element.closest('button, a, summary')) return true
+        const roleHost = element.closest('[role]')
+        const role = roleHost?.getAttribute('role')
+        return Boolean(role && INTERACTIVE_ROLES.has(role))
+      }
       const shouldBypassSpace = (target: EventTarget | null) => {
+        const viewport = viewportRef.current
+        if (!viewport) return true
         // 只要窗口里有打开的模态弹窗/浮层对话框，画布绝不劫持空格键
         if (document.querySelector('[role="dialog"], [aria-modal="true"]')) return true
-        const element = target as HTMLElement | null
-        if (!element || !element.tagName) return false
-        if (
-          element.tagName === 'INPUT' ||
-          element.tagName === 'TEXTAREA' ||
-          element.tagName === 'SELECT' ||
-          element.isContentEditable
-        ) {
+        const element = target instanceof HTMLElement ? target : null
+        const activeEl = document.activeElement instanceof HTMLElement ? document.activeElement : null
+        if (isEditableElement(element) || isEditableElement(activeEl)) {
           return true
         }
-        // 画布外部的按钮/链接/菜单/树项/折叠摘要保留原生空格激活，只拦截画布内卡片按钮的空格触发
-        const inCanvas = Boolean(viewportRef.current?.contains(element))
-        if (!inCanvas) {
-          if (element.closest('button, a, summary')) return true
-          const roleHost = element.closest('[role]')
-          const role = roleHost?.getAttribute('role')
-          if (role && INTERACTIVE_ROLES.has(role)) return true
+        // 画布外部的按钮/链接/菜单/树项/折叠摘要保留原生空格激活，即使光标恰好停留在画布上
+        if (isOutsideInteractive(element, viewport) || isOutsideInteractive(activeEl, viewport)) {
+          return true
+        }
+        // 仅当画布本身（或其子元素）拥有焦点或指针悬停时才启用空格手形工具，避免劫持聊天/文件树/Git 面板的空格滚动
+        const targetInCanvas = Boolean(target instanceof Node && viewport.contains(target))
+        const focusInCanvas = Boolean(activeEl && viewport.contains(activeEl))
+        if (!targetInCanvas && !focusInCanvas && !pointerInsideRef.current) {
+          return true
         }
         return false
       }
@@ -980,12 +1000,16 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
         setHeld(false)
       }
       // 切窗口 / 切标签 / 失焦：必须复位，否则空格状态会卡住（光标永远是手、卡片永远点不动）
-      const reset = () => setHeld(false)
+      const reset = () => {
+        pointerInsideRef.current = false
+        setHeld(false)
+      }
       window.addEventListener('keydown', onKeyDown)
       window.addEventListener('keyup', onKeyUp)
       window.addEventListener('blur', reset)
       document.addEventListener('visibilitychange', reset)
       return () => {
+        pointerInsideRef.current = false
         setHeld(false)
         window.removeEventListener('keydown', onKeyDown)
         window.removeEventListener('keyup', onKeyUp)
@@ -1098,7 +1122,6 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
     const cullingActive = viewportRect.width > 1 && viewportRect.height > 1
     const activeMatchNode = matchedNodes[activeMatchIndex]
     const activeMatchId = activeMatchNode ? nodeId(activeMatchNode) : null
-    const draggingId = dragRef.current?.id ?? null
 
     const visibleBaseNodes = useMemo(() => {
       if (!cullingActive) return baseNodes
@@ -1144,6 +1167,12 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
         // 拖动 60fps 的样式改动拦不住它 —— 只能在容器上直接关掉 user-select。
         style={{ touchAction: 'none' }}
         className="repo-map-canvas relative min-h-0 flex-1 select-none overflow-hidden bg-surface focus-visible:outline-offset-[-2px]"
+        onPointerEnter={() => {
+          pointerInsideRef.current = true
+        }}
+        onPointerLeave={() => {
+          pointerInsideRef.current = false
+        }}
         onPointerDown={handleViewportPointerDown}
         onKeyDown={handleKeyDown}
       >
