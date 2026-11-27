@@ -50,6 +50,7 @@ import {
 import { buildRouter } from './http/routes.js'
 import { defaultWebDir, serveStatic } from './http/static.js'
 import { HttpError, isAllowedOrigin, readJsonBody, sendJson, sourceOf } from './http/router.js'
+import { loadCloudMcpServers, redactCloudMcpOutput } from './mcp/cloud-mcp.js'
 import type { AuthorizationRecord } from './tasks/authorization.js'
 import { DEFAULT_AUTHORIZATION_TTL_MS, DEFAULT_QUOTA } from './tasks/authorization.js'
 import { randomBytes } from 'crypto'
@@ -324,6 +325,9 @@ export async function createCloudServer(
     onMarkRead: (seq) => markRead(seq),
     memoryStore,
     onRunDream: () => triggerDream('manual'),
+    getMcpStatuses: () =>
+      typeof agent.getMcpStatuses === 'function' ? agent.getMcpStatuses() : [],
+    onMcpChanged: () => scheduleMcpReload(),
     isProduction,
     logger,
   })
@@ -747,6 +751,9 @@ export async function createCloudServer(
   let applyingConfig: Promise<void> | null = null
   /** 已经失败过的那份配置：同一份坏配置不反复重试（否则每次入口都会再拆一次运行时） */
   let failedConfigStamp: number | null = null
+  /** 云端 MCP 服务器变更版本号；与 `appliedMcpRevision` 不一致时需在空闲或下一轮边界重载 */
+  let mcpRevision = 0
+  let appliedMcpRevision = 0
 
   interface ResolvedCloudConfig {
     stamp: number
@@ -813,6 +820,23 @@ export async function createCloudServer(
     return record.updatedAt
   }
 
+  function hasPendingMcpReload(): boolean {
+    return mcpRevision !== appliedMcpRevision
+  }
+
+  /**
+   * 云端 MCP 配置变更后触发刷新：
+   * - 空闲且已初始化时立即平滑重建运行时（卸载旧 MCP 宿主、装载新 MCP 工具集）
+   * - 会话正在执行轮次时绝不打断，保留 `mcpRevision > appliedMcpRevision` 延迟到下一轮边界 `ensureAgent()` 生效
+   */
+  function scheduleMcpReload(): void {
+    mcpRevision += 1
+    if (closing || !agentReady || session.isBusy()) return
+    void applyConfig().catch((error) => {
+      logger.warn('[cloud] scheduled MCP reload failed:', error)
+    })
+  }
+
   let lastActivityAt = Date.now()
   let dreamRunning = false
 
@@ -854,6 +878,10 @@ export async function createCloudServer(
 
   /** 用给定配置建运行时并续上唯一会话 */
   async function startAgent(resolved: ResolvedCloudConfig): Promise<boolean> {
+    const targetMcpRevision = mcpRevision
+    const enabledMcpServers = loadCloudMcpServers(store, config.encryptionKey, logger).filter(
+      (server) => server.enabled
+    )
     const result = await agent.initialize({
       workspaceDir: config.workspaceDir,
       agentDir: config.agentDir,
@@ -862,9 +890,13 @@ export async function createCloudServer(
       modelsStore: createFileModelsStore({ path: path.join(config.dataDir, 'models-store.json') }),
       allowModelNetwork: true,
       logger,
-      // 云端会话：无审批（mode=auto）、不挂计划与工作树扩展、工具白名单只有六个
+      // 云端会话：无审批（mode=auto）、不挂计划与工作树扩展；六个内置云端工具 + 管理员配置的云端 MCP 工具直接放行
       builtinExtensions: { approval: false, plan: false, worktree: false },
       toolAllowlist: [...CLOUD_TOOL_NAMES],
+      allowMcpTools: true,
+      mcpServers: enabledMcpServers,
+      mcpCwd: config.workspaceDir,
+      mcpOutputRedactor: redactCloudMcpOutput,
       extensionFactories: [
         createCloudToolsExtension({ store, hub, dispatcher }),
         createCloudMemoryExtension(memoryStore, {
@@ -896,6 +928,7 @@ export async function createCloudServer(
     }
     agentReady = true
     runningConfigStamp = resolved.stamp
+    appliedMcpRevision = targetMcpRevision
     lastGoodConfig = resolved
     hub.publish({ type: 'cloud_status', status: 'idle' })
     logger.info(`[cloud] cloud agent ready (${resolved.providerId} / ${resolved.model})`)
@@ -917,11 +950,30 @@ export async function createCloudServer(
       await applyingConfig
       return
     }
-    if (pendingConfigStamp() === null) return
+    const configPending = pendingConfigStamp() !== null
+    const mcpPending = hasPendingMcpReload()
+    if (!configPending && !mcpPending) return
     // 本轮在跑就不动它：下一次入口（下一轮开始前）再生效
     if (session.isBusy()) return
 
+    let restarted = false
     applyingConfig = (async () => {
+      if (!configPending && mcpPending) {
+        const current = lastGoodConfig ?? resolveConfig()
+        if (!current) return
+        logger.info('[cloud] reloading cloud agent to apply MCP server changes')
+        agentReady = false
+        runningConfigStamp = null
+        await agent.dispose().catch((error) => {
+          logger.warn('[cloud] agent dispose failed during MCP reload:', error)
+        })
+        restarted = await startAgent(current)
+        if (!restarted) {
+          logger.warn('[cloud] cloud agent restart failed after MCP change')
+        }
+        return
+      }
+
       const resolved = resolveConfig()
       if (!resolved) {
         const record = store.getCloudConfig()
@@ -938,6 +990,7 @@ export async function createCloudServer(
       })
 
       if (await startAgent(resolved)) {
+        restarted = true
         rollbackConfigOverride = null
         failedConfigStamp = null
         hub.publish({
@@ -958,6 +1011,7 @@ export async function createCloudServer(
           credentialCipher: previous.credentialCipher,
         }
         if (await startAgent(previous)) {
+          restarted = true
           hub.publish({
             type: 'notice',
             level: 'warn',
@@ -975,6 +1029,10 @@ export async function createCloudServer(
     } finally {
       applyingConfig = null
     }
+    // 重载窗口内若又有新的 MCP 变更且当前空闲，顺手补齐最后一版
+    if (restarted && !closing && !session.isBusy() && (pendingConfigStamp() !== null || hasPendingMcpReload())) {
+      await applyConfig()
+    }
   }
 
   /**
@@ -986,8 +1044,10 @@ export async function createCloudServer(
     const applyPendingConfig = options.applyPendingConfig !== false
     if (applyingConfig) await applyingConfig
     if (agentReady) {
-      // 配置换过就在本轮开始前生效；这一句是 F-13 的唯一触发点
-      if (applyPendingConfig && pendingConfigStamp() !== null) await applyConfig()
+      // 模型配置或 MCP 服务器换过就在本轮开始前生效；这一句是轮次边界重载的唯一触发点
+      if (applyPendingConfig && (pendingConfigStamp() !== null || hasPendingMcpReload())) {
+        await applyConfig()
+      }
       return agentReady
     }
     if (agentInitializing) return agentInitializing
@@ -1105,7 +1165,9 @@ export async function createCloudServer(
         wsServer.close()
         await serverClosed
         await Promise.allSettled([...deviceFrameChains.values()])
-        // 3. 停止并释放云端 Agent
+        // 3. 停止并释放云端 Agent（先等在途初始化/重载收尾，确保 McpClientHost 全部子进程与传输被完整关闭）
+        if (applyingConfig) await applyingConfig.catch(() => undefined)
+        if (agentInitializing) await agentInitializing.catch(() => undefined)
         await session.stopReply().catch(() => undefined)
         await agent.dispose().catch(() => undefined)
         // 4. 最后刷盘并关闭 store，确保上述所有收尾逻辑都不碰已关闭句柄
@@ -1218,4 +1280,5 @@ if (invokedDirectly) {
   process.on('SIGINT', () => void shutdown('SIGINT'))
 }
 
+export { loadCloudMcpServers }
 export type { WebSocket }

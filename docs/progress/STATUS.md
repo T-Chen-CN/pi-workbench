@@ -9,21 +9,22 @@
 
 | 项 | 值 |
 | --- | --- |
-| 版本 | **0.11.2+**（2026-11-28，59 项纯 Bug 修复 + Phase A–E 全量架构升级已在 main 本地提交） |
-| 阶段 | 本地 Agent 工作台与云端 Agent 完成 Phase A–E 全面升级：安全边界与云端 SQLite 关系化、性能/体积瘦身与后台休眠、6 大手写底层替换、Zustand 5 / `@pi-workbench/{ui,i18n,cloud-ui}` / 单源 Typed IPC / 上帝文件拆解 / 严格门禁与 Playwright E2E、`utilityProcess` 进程隔离与原生多 `BrowserWindow` 拆窗 |
+| 版本 | **0.11.2+**（2026-11-28，59 项纯 Bug 修复 + Phase A–F 全量架构升级与统一 MCP 接入已在 main 本地完成） |
+| 阶段 | 本地 Agent 工作台与云端 Agent 完成 Phase A–F 全面升级：安全边界与云端 SQLite 关系化、性能/体积瘦身与后台休眠、6 大手写底层替换、Zustand 5 / `@pi-workbench/{ui,i18n,cloud-ui}` / 单源 Typed IPC / 上帝文件拆解 / 严格门禁与 Playwright E2E、`utilityProcess` 进程隔离与原生多 `BrowserWindow` 拆窗，以及全栈统一 MCP 服务器接入（桌面全局/项目级 SHA-256 信任 + 云端远程/本地 stdio 与双端共享管理 UI） |
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 5 + Tailwind 3 + Monaco 0.57 + Zod 4 + i18next + Playwright (`_electron`) |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（独立 Electron `utilityProcess` + 直连 `MessagePort` 流式；重 CPU 非 Agent 解析走 `worker_threads`） |
-| 质量门槛 | 全仓 9 份 `type-check` · `eslint . --max-warnings 0`（含 `no-explicit-any` / `no-floating-promises` / `jsx-a11y` / 跨包边界 / AST 色值）· `npm test`（199 文件 / 2,062 用例）· `design-system`（AST）· `build` / `build:cloud` · Playwright `_electron` 冒烟（本地与打包版）全绿 |
-| 云端 Agent | **P0/P1 + Phase A/B/D 全面收口：Node 24 `node:sqlite` (WAL) 关系化索引 + 记忆/梦境入库 + 生产首启口令 + 锁全量传递依赖不可变发布 + Cloud Web 体积降至 8.11 MiB（br/gzip + 中英切换）+ `@pi-workbench/cloud-ui` 去重**；剩余仅 P2（`P-02` 云端 OAuth 登录） |
+| 质量门槛 | 全仓 9 份 `type-check` · `eslint . --max-warnings 0`（含 `no-explicit-any` / `no-floating-promises` / `jsx-a11y` / 跨包边界 / AST 色值）· `npm test` · `design-system`（AST）· `build` / `build:cloud` · Playwright `_electron` 冒烟（本地与打包版）全绿 |
+| 云端 Agent | **P0/P1 + Phase A/B/D/F 全面收口：Node 24 `node:sqlite` (WAL) v3 关系化索引 + 记忆/梦境/加密 MCP 表入库 + 生产首启口令 + 锁全量传递依赖不可变发布 + Cloud Web 体积降至 8.11 MiB（br/gzip + 中英切换）+ `@pi-workbench/cloud-ui` 去重与双端 Cloud MCP 管理**；剩余仅 P2（`P-02` 云端 OAuth 登录） |
 
 ## 正在做 / 下一步
 
-- **Phase F（另行讨论后启动）**：远端工单可选 OS/Docker 沙箱默认策略 & MCP 配置范围（按所有者要求留待 Phase E 之后单独讨论）。
 - **供应商预设的真实凭证手工验收**（[BACKLOG](./BACKLOG.md) P-03）：0.11.0 发布时未执行，需补 8 家 API Key、4 条 OAuth、容量下调在轮次边界生效、会话模型静默回落各一次。
 - **架构待单独讨论项**（[BACKLOG](./BACKLOG.md) `D-02`）：托管工作树存放位置（当前保持仓库内 `.pi-workbench/worktrees/`）。
 - **云端 OAuth 登录**（[BACKLOG](./BACKLOG.md) P-02，P2）与 **平台手动验收** V-01（macOS dmg）/ V-02（Linux AppImage）。
 
 ## 已交付（一行一项，细节在 git）
+
+- **Phase F · 统一 MCP 接入（2026-11-28）**：基于 `@modelcontextprotocol/sdk` 落地 `pi-bridge` `McpClientHost` 与浏览器安全 `pi-bridge/mcp` 子路径（`stdio` / Streamable HTTP / SSE、`readOnlyHint` 权限分类、`allowMcpTools` 策略、128 KB 截断与脱敏）；桌面端落地 `safeStorage` 加密全局配置、只读项目配置发现与 SHA-256 指纹 fail-closed 信任，贯通 `utilityProcess`、云端派活工单与设置页 `McpSettings`；云端落地 SQLite v3 `mcp_servers` 加密表、`/v1/mcp*` REST、远程 HTTP/SSE + 云主机本地 `stdio`（`pi-cloud.service` 兼容 `/opt/pi-cloud/mcp`）、轮次边界热重载及 `@pi-workbench/cloud-ui` `CloudMcpManager`（Web 与桌面 `CloudView` 共享管理）；远端工单 OS/Docker 沙箱按所有者决定不实施并归档至 BACKLOG §4。
 
 - **Phase A–E 整体架构升级与 59 项纯 Bug 修复（2026-11-28）**：
   - **59 项纯代码 Bug 修复**（`8fd5ec1`..`cdd1a28`）：补齐 5 套回归测试，修复 `pi-bridge`、`electron/`、云端栈与渲染层全部确定性缺陷。

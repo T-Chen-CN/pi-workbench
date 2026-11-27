@@ -18,14 +18,18 @@ import {
   CloudConfigForm,
   CloudConfirmPlanModal,
   CloudDeviceList,
+  CloudMcpManager,
   CloudMemoryManager,
   CloudNoticeCard,
   CloudTaskCard,
   CloudTraceSection,
   CloudUnitCard,
+  Tab,
   TaskResultSection,
+  cloudMcpStatusToInput,
   formatCloudTime,
 } from '@pi-workbench/cloud-ui'
+import type { McpServerInput, McpServerStatus } from 'pi-bridge/mcp'
 import { useCloudStore } from '../../store/cloudStore'
 import { useI18nStore } from '../../store/i18nStore'
 import { toast } from '../../store/toastStore'
@@ -546,11 +550,13 @@ const PairingPane: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) => {
 }
 
 /**
- * 云端模型配置弹窗（F-01 / U-04）：薄包装 `@pi-workbench/cloud-ui` 的 `CloudConfigForm`。
+ * 云端设置弹窗（模型配置 + 云端 MCP 服务器，F-01 / U-04 / Phase F）：
+ * 薄包装 `@pi-workbench/cloud-ui` 的 `CloudConfigForm` 与 `CloudMcpManager`。
  */
 const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const t = useI18nStore((state) => state.t)
   const language = useI18nStore((state) => state.language)
+  const [settingsTab, setSettingsTab] = useState<'model' | 'mcp'>('model')
   const [providerId, setProviderId] = useState('deepseek')
   const [model, setModel] = useState('')
   const [apiKey, setApiKey] = useState('')
@@ -559,6 +565,27 @@ const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
   const [fetching, setFetching] = useState(false)
   const [saving, setSaving] = useState(false)
   const catalogReqRef = useRef(0)
+
+  const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([])
+  const [mcpLoading, setMcpLoading] = useState(false)
+  const [mcpLoaded, setMcpLoaded] = useState(false)
+  const [mcpBusyId, setMcpBusyId] = useState<string | null>(null)
+
+  const loadMcpServers = useCallback(async () => {
+    if (typeof api.cloudMcpList !== 'function') return
+    setMcpLoading(true)
+    try {
+      const res = await api.cloudMcpList()
+      if (res.success) {
+        setMcpServers(res.servers)
+      } else if (res.error) {
+        toast.error(res.error)
+      }
+      setMcpLoaded(true)
+    } finally {
+      setMcpLoading(false)
+    }
+  }, [])
 
   const loadCatalog = useCallback(
     async (targetProviderId: string, preferredModel?: string) => {
@@ -593,6 +620,8 @@ const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
   useEffect(() => {
     if (!open) {
       catalogReqRef.current += 1
+      setSettingsTab('model')
+      setMcpLoaded(false)
       return
     }
     let cancelled = false
@@ -619,6 +648,12 @@ const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
       catalogReqRef.current += 1
     }
   }, [open, loadCatalog])
+
+  useEffect(() => {
+    if (open && settingsTab === 'mcp' && !mcpLoaded && !mcpLoading) {
+      void loadMcpServers()
+    }
+  }, [open, settingsTab, mcpLoaded, mcpLoading, loadMcpServers])
 
   const save = async () => {
     const cleanKey = apiKey.trim()
@@ -659,54 +694,138 @@ const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
       open={open}
       onClose={onClose}
       title={t('cloudConfigTitle')}
-      size="md"
+      size="lg"
       closeLabel={t('close')}
       footer={
-        <>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => void loadCatalog(providerId)}
-            disabled={fetching}
-          >
-            {fetching ? <Spinner size={13} /> : <RefreshCw size={13} />}
-            {fetching ? t('cloudFetchingModels') : t('cloudFetchModels')}
-          </Button>
+        settingsTab === 'model' ? (
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void loadCatalog(providerId)}
+              disabled={fetching}
+            >
+              {fetching ? <Spinner size={13} /> : <RefreshCw size={13} />}
+              {fetching ? t('cloudFetchingModels') : t('cloudFetchModels')}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              {t('close')}
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => void save()}
+              disabled={saving || !providerId.trim() || !model.trim()}
+            >
+              {saving ? <Spinner size={13} /> : null}
+              {t('cloudSave')}
+            </Button>
+          </>
+        ) : (
           <Button variant="ghost" size="sm" onClick={onClose}>
             {t('close')}
           </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => void save()}
-            disabled={saving || !providerId.trim() || !model.trim()}
-          >
-            {saving ? <Spinner size={13} /> : null}
-            {t('cloudSave')}
-          </Button>
-        </>
+        )
       }
     >
-      <CloudConfigForm
-        className="px-5 py-4"
-        idPrefix="cloud"
-        providerId={providerId}
-        model={model}
-        apiKey={apiKey}
-        apiKeyMasked={mask}
-        models={catalog}
-        fetching={fetching}
-        language={language}
-        showMaskedKeyInHint
-        showModelIdInOption
-        onProviderChange={(next) => {
-          setProviderId(next)
-          setModel('')
-          void loadCatalog(next, '')
-        }}
-        onModelChange={setModel}
-        onApiKeyChange={setApiKey}
-      />
+      <div
+        role="tablist"
+        aria-label={t('cloudConfigTitle')}
+        className="flex border-b border-rule-divide bg-panel px-4"
+      >
+        <Tab
+          active={settingsTab === 'model'}
+          label={t('cloudConfigTitle')}
+          onSelect={() => setSettingsTab('model')}
+        />
+        <Tab
+          active={settingsTab === 'mcp'}
+          label={t('mcpCloudSection')}
+          onSelect={() => setSettingsTab('mcp')}
+        />
+      </div>
+
+      {settingsTab === 'model' ? (
+        <CloudConfigForm
+          className="px-5 py-4"
+          idPrefix="cloud"
+          providerId={providerId}
+          model={model}
+          apiKey={apiKey}
+          apiKeyMasked={mask}
+          models={catalog}
+          fetching={fetching}
+          language={language}
+          showMaskedKeyInHint
+          showModelIdInOption
+          onProviderChange={(next) => {
+            setProviderId(next)
+            setModel('')
+            void loadCatalog(next, '')
+          }}
+          onModelChange={setModel}
+          onApiKeyChange={setApiKey}
+        />
+      ) : (
+        <div className="p-4">
+          <CloudMcpManager
+            language={language}
+            servers={mcpServers}
+            loading={mcpLoading}
+            busyId={mcpBusyId}
+            onRefresh={loadMcpServers}
+            onSave={async (input: McpServerInput) => {
+              const res = await api.cloudMcpSave(input)
+              if (!res.success) {
+                toast.error(res.error ?? t('unknownError'))
+                return { ok: false, error: res.error }
+              }
+              toast.success(t('mcpSaved'))
+              await loadMcpServers()
+              return { ok: true }
+            }}
+            onToggle={async (server, enabled) => {
+              setMcpBusyId(server.id)
+              try {
+                const res = await api.cloudMcpSave(cloudMcpStatusToInput(server, enabled))
+                if (!res.success) {
+                  toast.error(res.error ?? t('unknownError'))
+                  return { ok: false, error: res.error }
+                }
+                await loadMcpServers()
+                return { ok: true }
+              } finally {
+                setMcpBusyId(null)
+              }
+            }}
+            onDelete={async (id) => {
+              setMcpBusyId(id)
+              try {
+                const res = await api.cloudMcpDelete(id)
+                if (!res.success) {
+                  toast.error(res.error ?? t('unknownError'))
+                  return { ok: false, error: res.error }
+                }
+                toast.success(t('mcpDeleted'))
+                await loadMcpServers()
+                return { ok: true }
+              } finally {
+                setMcpBusyId(null)
+              }
+            }}
+            onTest={async (payload) => {
+              const res = await api.cloudMcpTest(payload)
+              if (res.success && res.result) return res.result
+              return {
+                ok: false,
+                tools: [],
+                latencyMs: 0,
+                error: res.error ?? t('unknownError'),
+              }
+            }}
+          />
+        </div>
+      )}
     </Modal>
   )
 }

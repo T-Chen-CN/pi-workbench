@@ -1126,17 +1126,24 @@ const zh = {
     mcpProjectHint:
       '自动发现自工作区中的 .pi-workbench/mcp.json 与 .mcp.json。项目级配置默认关闭，须手动信任批准；一旦配置文件内容发生改动，授权将自动失效并需重新确认。',
     mcpCloudSection: '云端 MCP 服务器',
-    mcpCloudHint: '供云端总控 Agent 调用的远程工具服务器。',
+    mcpCloudHint:
+      '供云端总控 Agent 直接调用的远程（HTTP / SSE）或云主机本地（stdio）工具服务器；环境变量与请求头密钥在服务端加密落盘。',
     mcpGlobalEmpty: '尚未配置全局 MCP 服务器',
     mcpGlobalEmptyDesc: '添加一台 MCP 服务器以扩展 Agent 的外部工具能力。',
     mcpProjectEmpty: '当前工作区未发现 .pi-workbench/mcp.json 或 .mcp.json 配置。',
     mcpProjectNoWorkspace: '打开一个工作区后即可查看并管理项目级 MCP 服务器。',
     mcpCloudEmpty: '尚未配置云端 MCP 服务器',
+    mcpCloudEmptyDesc:
+      '添加远程 HTTP / SSE 或部署在云端主机上的 stdio MCP 服务器，扩展云端 Agent 的外部工具能力。',
+    mcpCloudCwdPlaceholder: '例如 /opt/pi-cloud/mcp（留空则默认使用云端工作目录）',
+    mcpCloudStdioHint:
+      'stdio 服务器将在云端主机上作为子进程运行（推荐部署在 /opt/pi-cloud/mcp 或 /var/lib/pi-cloud/mcp）。',
     mcpAddServer: '添加服务器',
     mcpEditServer: '编辑服务器',
     mcpDeleteServer: '删除服务器',
     mcpDeleteConfirmTitle: '删除 MCP 服务器',
     mcpDeleteConfirmBody: '确定要删除全局 MCP 服务器「{name}」({id}) 吗？此操作无法撤销。',
+    mcpCloudDeleteConfirmBody: '确定要删除云端 MCP 服务器「{name}」({id}) 吗？此操作无法撤销。',
     mcpTestConnection: '测试连接',
     mcpTesting: '测试中…',
     mcpRefresh: '刷新',
@@ -2350,17 +2357,24 @@ const en: Record<TranslationKey, string> = {
     mcpProjectHint:
       'Discovered from .pi-workbench/mcp.json and .mcp.json in the active workspace. Project configs are disabled by default until approved; any file change automatically revokes trust.',
     mcpCloudSection: 'Cloud MCP servers',
-    mcpCloudHint: 'Remote MCP tool servers available to the Cloud Agent.',
+    mcpCloudHint:
+      'Remote (HTTP / SSE) or cloud-host local (stdio) MCP tool servers available directly to the Cloud Agent. Secrets are encrypted at rest on the server.',
     mcpGlobalEmpty: 'No global MCP servers configured',
     mcpGlobalEmptyDesc: 'Add an MCP server to extend the agent with external tools.',
     mcpProjectEmpty: 'No .pi-workbench/mcp.json or .mcp.json found in the current workspace.',
     mcpProjectNoWorkspace: 'Open a workspace to inspect and approve project-level MCP servers.',
     mcpCloudEmpty: 'No cloud MCP servers configured',
+    mcpCloudEmptyDesc:
+      'Add a remote HTTP / SSE or cloud-host stdio MCP server to extend the Cloud Agent with external tools.',
+    mcpCloudCwdPlaceholder: 'e.g. /opt/pi-cloud/mcp (defaults to the cloud workspace directory)',
+    mcpCloudStdioHint:
+      'stdio servers run as child processes on the cloud host (recommended under /opt/pi-cloud/mcp or /var/lib/pi-cloud/mcp).',
     mcpAddServer: 'Add server',
     mcpEditServer: 'Edit server',
     mcpDeleteServer: 'Delete server',
     mcpDeleteConfirmTitle: 'Delete MCP server',
     mcpDeleteConfirmBody: 'Delete global MCP server "{name}" ({id})? This cannot be undone.',
+    mcpCloudDeleteConfirmBody: 'Delete cloud MCP server "{name}" ({id})? This cannot be undone.',
     mcpTestConnection: 'Test connection',
     mcpTesting: 'Testing…',
     mcpRefresh: 'Refresh',

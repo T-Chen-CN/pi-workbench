@@ -11,6 +11,7 @@ import {
   Button,
   Caption,
   CloudChatComposer,
+  CloudMcpManager,
   CloudTraceSection,
   DataText,
   EmptyState,
@@ -18,7 +19,9 @@ import {
   Input,
   StatusText,
   Tab,
+  cloudMcpStatusToInput,
 } from '@pi-workbench/cloud-ui'
+import type { McpServerInput, McpServerStatus, McpTestResult } from 'pi-bridge/mcp'
 import {
   ACTIVE_TASK_STATUSES,
   INITIAL_WEB_SESSION_STATE,
@@ -350,6 +353,11 @@ export const CloudWebApp: React.FC = () => {
   const [memoryBusy, setMemoryBusy] = useState(false)
   const [memoryLoaded, setMemoryLoaded] = useState(false)
 
+  const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([])
+  const [mcpBusy, setMcpBusy] = useState(false)
+  const [mcpLoaded, setMcpLoaded] = useState(false)
+  const [mcpMutatingId, setMcpMutatingId] = useState<string | null>(null)
+
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reconnectDelayRef = useRef(1000)
@@ -488,6 +496,19 @@ export const CloudWebApp: React.FC = () => {
       setMemoryLoaded(true)
     } finally {
       setMemoryBusy(false)
+    }
+  }, [request])
+
+  const loadMcpServers = useCallback(async () => {
+    setMcpBusy(true)
+    try {
+      const res = await request<{ servers?: McpServerStatus[] }>('GET', '/v1/mcp')
+      if (res.ok && Array.isArray(res.payload?.servers)) {
+        setMcpServers(res.payload.servers)
+      }
+      setMcpLoaded(true)
+    } finally {
+      setMcpBusy(false)
     }
   }, [request])
 
@@ -638,6 +659,13 @@ export const CloudWebApp: React.FC = () => {
       void loadMemoryData()
     }
   }, [view, tab, memoryLoaded, memoryBusy, loadMemoryData])
+
+  // 切到设置页按需加载云端 MCP 服务器
+  useEffect(() => {
+    if (view === 'app' && tab === 'settings' && !mcpLoaded && !mcpBusy) {
+      void loadMcpServers()
+    }
+  }, [view, tab, mcpLoaded, mcpBusy, loadMcpServers])
 
   // 浏览器标题未读角标与可见性已读上报
   useEffect(() => {
@@ -1117,19 +1145,96 @@ export const CloudWebApp: React.FC = () => {
                 />
               )}
               {tab === 'settings' && (
-                <ConfigCard
-                  config={config}
-                  draft={configDraft}
-                  models={configModels}
-                  feedback={configFeedback.text}
-                  feedbackTone={configFeedback.tone}
-                  language={language}
-                  onDraftChange={setConfigDraft}
-                  onModelsChange={setConfigModels}
-                  onFeedbackChange={(text, tone = 'info') => setConfigFeedback({ text, tone })}
-                  onReloadAuxiliary={loadAuxiliary}
-                  request={request}
-                />
+                <>
+                  <ConfigCard
+                    config={config}
+                    draft={configDraft}
+                    models={configModels}
+                    feedback={configFeedback.text}
+                    feedbackTone={configFeedback.tone}
+                    language={language}
+                    onDraftChange={setConfigDraft}
+                    onModelsChange={setConfigModels}
+                    onFeedbackChange={(text, tone = 'info') => setConfigFeedback({ text, tone })}
+                    onReloadAuxiliary={loadAuxiliary}
+                    request={request}
+                  />
+                  <CloudMcpManager
+                    language={language}
+                    servers={mcpServers}
+                    loading={mcpBusy}
+                    busyId={mcpMutatingId}
+                    onRefresh={loadMcpServers}
+                    onSave={async (input: McpServerInput) => {
+                      const targetId = input.id?.trim()
+                      if (!targetId) return { ok: false, error: 'Server id is required' }
+                      const res = await request<{ server?: McpServerStatus; error?: string }>(
+                        'PUT',
+                        `/v1/mcp/${encodeURIComponent(targetId)}`,
+                        input
+                      )
+                      if (!res.ok) {
+                        return { ok: false, error: res.payload?.error || `HTTP ${res.status}` }
+                      }
+                      await loadMcpServers()
+                      return { ok: true }
+                    }}
+                    onToggle={async (server, enabled) => {
+                      setMcpMutatingId(server.id)
+                      try {
+                        const res = await request<{ server?: McpServerStatus; error?: string }>(
+                          'PUT',
+                          `/v1/mcp/${encodeURIComponent(server.id)}`,
+                          cloudMcpStatusToInput(server, enabled)
+                        )
+                        if (!res.ok) {
+                          return { ok: false, error: res.payload?.error || `HTTP ${res.status}` }
+                        }
+                        await loadMcpServers()
+                        return { ok: true }
+                      } finally {
+                        setMcpMutatingId(null)
+                      }
+                    }}
+                    onDelete={async (id) => {
+                      setMcpMutatingId(id)
+                      try {
+                        const res = await request<{ ok?: boolean; error?: string }>(
+                          'DELETE',
+                          `/v1/mcp/${encodeURIComponent(id)}`
+                        )
+                        if (!res.ok) {
+                          return { ok: false, error: res.payload?.error || `HTTP ${res.status}` }
+                        }
+                        await loadMcpServers()
+                        return { ok: true }
+                      } finally {
+                        setMcpMutatingId(null)
+                      }
+                    }}
+                    onTest={async (payload) => {
+                      const res = await request<McpTestResult & { error?: string }>(
+                        'POST',
+                        '/v1/mcp/test',
+                        payload
+                      )
+                      if (!res.ok || !res.payload) {
+                        return {
+                          ok: false,
+                          tools: [],
+                          latencyMs: 0,
+                          error: res.payload?.error || `HTTP ${res.status}`,
+                        }
+                      }
+                      return {
+                        ok: Boolean(res.payload.ok),
+                        tools: Array.isArray(res.payload.tools) ? res.payload.tools : [],
+                        latencyMs: typeof res.payload.latencyMs === 'number' ? res.payload.latencyMs : 0,
+                        ...(res.payload.error ? { error: res.payload.error } : {}),
+                      }
+                    }}
+                  />
+                </>
               )}
             </div>
           </div>

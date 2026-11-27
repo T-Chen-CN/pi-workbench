@@ -90,6 +90,19 @@ export interface CloudConfigRecord {
   credentialUpdatedAt?: number
 }
 
+/**
+ * 云端 MCP 服务器持久化记录；`configCipher` 是 AES-256-GCM 密文（完整 `McpServerConfig` JSON），
+ * `env`、`headers`、`command`/`args`/`cwd`、`url` 均不以明文落入 `cloud.db`。
+ */
+export interface CloudMcpServerRecord {
+  id: string
+  name: string
+  transport: string
+  enabled: boolean
+  configCipher: string
+  updatedAt: number
+}
+
 /** 旧记录形态（只用于识别并丢弃） */
 function isLegacyConfigRecord(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false
@@ -152,7 +165,7 @@ interface ClientStateFile {
   lastReadAt?: number | null
 }
 
-export const CLOUD_DB_SCHEMA_VERSION = 2
+export const CLOUD_DB_SCHEMA_VERSION = 3
 export const PAIRING_CODE_TTL_MS = 5 * 60 * 1000
 export const MAX_ACTIVE_PAIRING_CODES = 5
 export const MAX_CLOSED_UNITS_RETENTION = 500
@@ -216,6 +229,26 @@ interface DreamDbRow {
   added: number
   merged: number
   removed: number
+}
+
+interface McpServerDbRow {
+  id: string
+  name: string
+  transport: string
+  enabled: number
+  config_cipher: string
+  updated_at: number
+}
+
+function rowToMcpServerRecord(row: McpServerDbRow): CloudMcpServerRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    transport: row.transport,
+    enabled: Boolean(row.enabled),
+    configCipher: row.config_cipher,
+    updatedAt: row.updated_at,
+  }
 }
 
 function rowToMemoryItem(row: MemoryDbRow): CloudMemoryItem {
@@ -301,6 +334,11 @@ interface PreparedStatements {
   maxDreamAt: SqliteStatementSync
   insertDream: SqliteStatementSync
   pruneDreams: SqliteStatementSync
+
+  listMcpServers: SqliteStatementSync
+  getMcpServer: SqliteStatementSync
+  upsertMcpServer: SqliteStatementSync
+  deleteMcpServer: SqliteStatementSync
 }
 
 function prepareAllStatements(db: SqliteDatabaseSync): PreparedStatements {
@@ -422,6 +460,17 @@ function prepareAllStatements(db: SqliteDatabaseSync): PreparedStatements {
     pruneDreams: db.prepare(
       'DELETE FROM dreams WHERE id IN (SELECT id FROM dreams ORDER BY at DESC LIMIT -1 OFFSET ?)'
     ),
+
+    listMcpServers: db.prepare(
+      'SELECT id, name, transport, enabled, config_cipher, updated_at FROM mcp_servers ORDER BY updated_at DESC, id ASC'
+    ),
+    getMcpServer: db.prepare(
+      'SELECT id, name, transport, enabled, config_cipher, updated_at FROM mcp_servers WHERE id = ?'
+    ),
+    upsertMcpServer: db.prepare(
+      'INSERT INTO mcp_servers (id, name, transport, enabled, config_cipher, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, transport = excluded.transport, enabled = excluded.enabled, config_cipher = excluded.config_cipher, updated_at = excluded.updated_at'
+    ),
+    deleteMcpServer: db.prepare('DELETE FROM mcp_servers WHERE id = ?'),
   }
 }
 
@@ -456,6 +505,10 @@ export class CloudStore {
 
       if (readSchemaVersion(db) < 2) {
         CloudStore.applyMigrationV2(db)
+      }
+
+      if (readSchemaVersion(db) < 3) {
+        CloudStore.applyMigrationV3(db)
       }
 
       return new CloudStore(db)
@@ -637,6 +690,36 @@ export class CloudStore {
       )
 
       db.exec('PRAGMA user_version = 2')
+      db.exec('COMMIT')
+    } catch (error) {
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        // ignore
+      }
+      throw error
+    }
+  }
+
+  /** v2 → v3：云端 MCP 服务器加密配置表 */
+  private static applyMigrationV3(db: SqliteDatabaseSync): void {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS mcp_servers (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          transport TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          config_cipher TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mcp_servers_updated
+          ON mcp_servers(updated_at DESC);
+
+        PRAGMA user_version = 3;
+      `)
       db.exec('COMMIT')
     } catch (error) {
       try {
@@ -1564,6 +1647,40 @@ export class CloudStore {
         )
       }
       this.stmts.pruneDreams.run(maxDreams)
+    })
+  }
+
+  // ------------------------------ 云端 MCP 服务器（加密落盘） ------------------------------
+
+  listMcpServerRecords(): CloudMcpServerRecord[] {
+    if (this.closed) return []
+    const rows = this.stmts.listMcpServers.all() as unknown as McpServerDbRow[]
+    return rows.map(rowToMcpServerRecord)
+  }
+
+  getMcpServerRecord(id: string): CloudMcpServerRecord | null {
+    if (this.closed) return null
+    const row = this.stmts.getMcpServer.get(id) as unknown as McpServerDbRow | undefined
+    return row ? rowToMcpServerRecord(row) : null
+  }
+
+  upsertMcpServerRecord(record: CloudMcpServerRecord): void {
+    this.runTransaction(() => {
+      this.stmts.upsertMcpServer.run(
+        record.id,
+        record.name,
+        record.transport,
+        record.enabled ? 1 : 0,
+        record.configCipher,
+        record.updatedAt
+      )
+    })
+  }
+
+  deleteMcpServerRecord(id: string): boolean {
+    return this.runTransaction(() => {
+      const info = this.stmts.deleteMcpServer.run(id)
+      return Number(info.changes) > 0
     })
   }
 

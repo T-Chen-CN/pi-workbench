@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 export const CLOUD_RUNTIME_DEPS = [
   '@earendil-works/pi-ai',
   '@earendil-works/pi-coding-agent',
+  '@modelcontextprotocol/sdk',
   'ws',
   'zod',
 ]

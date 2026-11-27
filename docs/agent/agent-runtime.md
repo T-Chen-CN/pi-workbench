@@ -134,6 +134,15 @@ Pi tool_call 钩子 → AgentManager 归类 + 生成摘要 → ApprovalBroker（
 - 扩展按 cwd 缓存工厂；联网配置变化后 `AgentManager` 会再 `reload()` 一次以读到新配置。
 - 联网工具归 `read` 类，只读与计划模式都可用。
 
+## 7.5 统一 MCP 服务器接入（Phase F）
+
+- **共享客户端宿主（`pi-bridge` + `pi-bridge/mcp`）**：基于 `@modelcontextprotocol/sdk` 实现 `McpClientHost`，同时支持 `stdio`（环境变量经 `sanitizeAgentShellEnv` 清洗，子进程 PID 登记进 `childRegistry`）、Streamable HTTP（自动回退 SSE）与 SSE；多服务器并行连接且单台故障隔离；工具名统一归一化为碰撞安全的 `mcp__<server>__<tool>`（≤ 64 字符）；工具结果支持超时/中止、128 KB UTF-8 安全截断与密钥脱敏。
+- **权限与工具策略集成**：MCP 工具的只读判定依据服务器声明的 `annotations.readOnlyHint`——仅 `readOnlyHint === true` 时归为 `read` 类（允许在 `readonly` / `plan` 模式直接调用），其余归 `other` 类（`readonly` / `plan` 拒绝，`ask` 模式经 `ApprovalBroker` 审批，`auto` 模式放行）。当会话传入 `toolAllowlist` 且 `allowMcpTools: true` 时（如云端总控 Agent 与工单执行器），放行通过模式检查的 MCP 工具而不放开未在白名单内的内置工具。
+- **桌面端两层配置与 fail-closed 信任（`electron/mcp-store.ts`）**：
+  - **全局配置**：落盘于 `{appDir}/config/mcp.json`（原子写 + `.bak`），所有非空 `env` / `headers` 值经 `safeStorage`（`enc:`）静置加密，对本机全部工作区及云端派活工单生效。
+  - **项目级配置**：只读发现工作区根目录 `.pi-workbench/mcp.json` 与 `.mcp.json`（前者同名优先），**绝不信任**仓库文件内的启用字段；批准状态与规范化 SHA-256 指纹强制钉住于 `{appDir}/config/mcp-trust.json`，未批准或仓库配置文件任意改动导致指纹漂移时一律 fail-closed 关闭并要求重新确认。
+- **IPC 与进程隔离**：`electron/ipc/mcp.ts` 注册 6 条强类型通道（`mcp:list` / `mcp:saveGlobal` / `mcp:deleteGlobal` / `mcp:setGlobalEnabled` / `mcp:setProjectTrust` / `mcp:test`），面向渲染层仅返回掩码（`envMasked` / `headersMasked`）。Agent `utilityProcess` 通过受控宿主 RPC 拉取有效 MCP 配置并热刷新；云端派活工单（`CloudTaskRunner`）自动合并全局与已批准项目级 MCP 服务器并绑定工单独立 worktree `cwd`。云端总控 Agent 的 MCP 能力见 [cloud-agent §3.7](cloud-agent.md#37-云端-mcp-服务器phase-fgetputdelete-v1mcp-与-post-v1mcptest)。
+
 ## 8. 工作台插件（与 Agent 扩展无关）
 
 - 插件只扩展 Pi Workbench 本身：`PluginApi = { workspaceDir, pluginDir, pluginId, registerCommand, on, log }`，事件为 `workspace:opened` / `file:saved` / `chat:message`。

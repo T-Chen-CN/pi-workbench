@@ -5,8 +5,14 @@
  * 那是 Web 客户端与云端之间的通道（F-34）。
  */
 
+import type { McpServerInput, McpServerStatus, McpToolInfo } from 'pi-bridge'
 import { handleIpc } from './register.js'
-import { cloudPairSchema, cloudSaveConfigSchema, parseIpcInput } from './schemas.js'
+import {
+  cloudPairSchema,
+  cloudSaveConfigSchema,
+  mcpServerIdInputSchema,
+  parseIpcInput,
+} from './schemas.js'
 import { getAppDir } from '../app-paths.js'
 import { getCoordinator } from '../worktree-coordinator.js'
 import { canonicalizePath, isTrustedWorkspacePath, normalizeForComparison } from '../workspace-trust.js'
@@ -420,7 +426,8 @@ export function registerCloudIpc(context: CloudIpcContext): void {
   const cloudRequest = async (
     method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
     apiPath: string,
-    body?: unknown
+    body?: unknown,
+    timeoutMs = 25_000
   ): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> => {
     const link = readCloudLink()
     if (!link) return { ok: false, error: 'This device is not paired' }
@@ -434,7 +441,7 @@ export function registerCloudIpc(context: CloudIpcContext): void {
           ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(timeoutMs),
       })
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>
       if (!response.ok) {
@@ -516,6 +523,78 @@ export function registerCloudIpc(context: CloudIpcContext): void {
     if (!res.ok) return { success: false, error: res.error }
     return { success: true, dream: res.data.dream ?? null }
   })
+
+  // ------------------------------ 云端 MCP 服务器管理代理（Phase F · Step F3） ------------------------------
+
+  const deriveCloudMcpId = (name: string): string => {
+    const slug = name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^[^a-z0-9]+/, '')
+      .replace(/-+$/g, '')
+      .slice(0, 56)
+    return slug && mcpServerIdInputSchema.safeParse(slug).success
+      ? slug
+      : `mcp-${Date.now().toString(36)}`
+  }
+
+  handleIpc('cloud:mcp:list', async () => {
+    const res = await cloudRequest('GET', '/v1/mcp')
+    if (!res.ok) return { success: false, servers: [], error: res.error }
+    return {
+      success: true,
+      servers: Array.isArray(res.data.servers) ? (res.data.servers as McpServerStatus[]) : [],
+    }
+  })
+
+  handleIpc('cloud:mcp:save', async (_event, input: McpServerInput) => {
+    const candidateId =
+      typeof input?.id === 'string' && input.id.trim().length > 0
+        ? input.id.trim()
+        : deriveCloudMcpId(String(input?.name ?? ''))
+    const idCheck = parseIpcInput(mcpServerIdInputSchema, candidateId)
+    if (!idCheck.ok) return { success: false, error: idCheck.error }
+    const res = await cloudRequest(
+      'PUT',
+      `/v1/mcp/${encodeURIComponent(idCheck.data)}`,
+      { ...input, id: idCheck.data }
+    )
+    if (!res.ok) return { success: false, error: res.error }
+    return {
+      success: true,
+      ...(res.data.server ? { server: res.data.server as McpServerStatus } : {}),
+    }
+  })
+
+  handleIpc('cloud:mcp:delete', async (_event, id: string) => {
+    const parsed = parseIpcInput(mcpServerIdInputSchema, id)
+    if (!parsed.ok) return { success: false, error: parsed.error }
+    const res = await cloudRequest('DELETE', `/v1/mcp/${encodeURIComponent(parsed.data)}`)
+    if (!res.ok) return { success: false, error: res.error }
+    return { success: true }
+  })
+
+  handleIpc(
+    'cloud:mcp:test',
+    async (_event, payload: { id?: string; config?: McpServerInput }) => {
+      const requestedTimeout =
+        typeof payload?.config?.timeoutMs === 'number' && Number.isFinite(payload.config.timeoutMs)
+          ? Math.min(130_000, Math.max(30_000, payload.config.timeoutMs + 10_000))
+          : 45_000
+      const res = await cloudRequest('POST', '/v1/mcp/test', payload ?? {}, requestedTimeout)
+      if (!res.ok) return { success: false, error: res.error }
+      return {
+        success: true,
+        result: {
+          ok: Boolean(res.data.ok),
+          tools: Array.isArray(res.data.tools) ? (res.data.tools as McpToolInfo[]) : [],
+          latencyMs: typeof res.data.latencyMs === 'number' ? res.data.latencyMs : 0,
+          ...(typeof res.data.error === 'string' ? { error: res.data.error } : {}),
+        },
+      }
+    }
+  )
 }
 
 /** 工作区清单变化：让设备代理立刻重报（离线时进 outbox，重连后补） */

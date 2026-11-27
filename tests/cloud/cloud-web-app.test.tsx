@@ -69,6 +69,7 @@ function resetDefaultRoutes(): void {
     'GET /v1/devices': () => jsonResult({ devices: [] }),
     'GET /v1/authorizations': () => jsonResult({ authorizations: [] }),
     'GET /v1/cloud-config': () => jsonResult({ configured: false }),
+    'GET /v1/mcp': () => jsonResult({ servers: [] }),
     'POST /v1/pair/code': () => jsonResult({ code: PAIR_CODE, expiresAt: Date.now() + 300_000 }),
     'GET /v1/memories': () =>
       jsonResult({
@@ -716,5 +717,68 @@ describe('云端 Web 控制台主界面', () => {
     fireEvent.click(screen.getByRole('tab', { name: '记忆' }))
     expect(await screen.findByLabelText('新增长期记忆内容')).toBeTruthy()
     expect(screen.getByLabelText('编辑 AGENTS.md 文档内容')).toBeTruthy()
+  })
+
+  it('设置页挂载共享 CloudMcpManager，支持查看、添加、测试与删除云端 MCP 服务器', async () => {
+    let storedServers: Array<Record<string, unknown>> = []
+    routes['GET /v1/mcp'] = () => jsonResult({ servers: storedServers })
+    routes['PUT /v1/mcp/web-docs'] = (body: any) => {
+      const server = {
+        id: 'web-docs',
+        name: body.name,
+        transport: body.transport,
+        enabled: body.enabled ?? true,
+        source: 'cloud',
+        url: body.url,
+        state: 'connected',
+        tools: [],
+      }
+      storedServers = [server]
+      return jsonResult({ ok: true, server })
+    }
+    routes['POST /v1/mcp/test'] = () =>
+      jsonResult({
+        ok: true,
+        latencyMs: 15,
+        tools: [
+          {
+            serverId: 'web-docs',
+            serverName: 'Web Docs',
+            name: 'read_doc',
+            qualifiedName: 'mcp__web-docs__read_doc',
+            readOnly: true,
+            inputSchema: { type: 'object', properties: {} },
+          },
+        ],
+      })
+    routes['DELETE /v1/mcp/web-docs'] = () => {
+      storedServers = []
+      return jsonResult({ ok: true })
+    }
+
+    await mountApp()
+    fireEvent.click(screen.getByRole('tab', { name: '设置' }))
+
+    expect(await screen.findByText('云端 MCP 服务器')).toBeTruthy()
+    expect(await screen.findByText('尚未配置云端 MCP 服务器')).toBeTruthy()
+
+    const addButtons = screen.getAllByRole('button', { name: '添加服务器' })
+    fireEvent.click(addButtons[0])
+    fireEvent.change(screen.getByLabelText('显示名称'), { target: { value: 'Web Docs' } })
+    fireEvent.change(screen.getByLabelText('服务器 ID'), { target: { value: 'web-docs' } })
+    fireEvent.change(screen.getByLabelText('服务地址 (URL)'), {
+      target: { value: 'https://docs.example.com/mcp' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存服务器' }))
+
+    expect(await screen.findByText('Web Docs')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    expect(await screen.findByText(/连接成功 · 发现 1 个工具（15 ms）/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '删除服务器 Web Docs' }))
+    expect(await screen.findByText(/确定要删除云端 MCP 服务器「Web Docs」/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '删除' }))
+    expect(await screen.findByText('尚未配置云端 MCP 服务器')).toBeTruthy()
   })
 })

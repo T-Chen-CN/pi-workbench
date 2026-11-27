@@ -782,6 +782,35 @@ export interface McpTestCallResult {
   error?: string
 }
 
+// 云端 MCP 服务器管理代理（桌面端转发云端 /v1/mcp*）
+export interface CloudMcpListResult {
+  success: boolean
+  servers: McpServerStatus[]
+  error?: string
+}
+
+export interface CloudMcpSaveResult {
+  success: boolean
+  server?: McpServerStatus
+  error?: string
+}
+
+export interface CloudMcpDeleteResult {
+  success: boolean
+  error?: string
+}
+
+export interface CloudMcpTestInput {
+  id?: string
+  config?: McpServerSaveInput
+}
+
+export interface CloudMcpTestResult {
+  success: boolean
+  result?: McpTestResult
+  error?: string
+}
+
 export interface AgentInitConfig {
   workspaceDir: string
   /** Agent 数据目录（主进程默认使用 {appDir}/data/agent） */
@@ -1600,6 +1629,10 @@ export const IPC_INVOKE_CHANNELS = {
   cloudDeleteMemory: 'cloud:deleteMemory',
   cloudSaveDoc: 'cloud:saveDoc',
   cloudRunDream: 'cloud:runDream',
+  cloudMcpList: 'cloud:mcp:list',
+  cloudMcpSave: 'cloud:mcp:save',
+  cloudMcpDelete: 'cloud:mcp:delete',
+  cloudMcpTest: 'cloud:mcp:test',
 
   // 工作台插件
   pluginsList: 'plugins:list',
@@ -2093,6 +2126,10 @@ export interface IpcInvokeContract {
     args: []
     result: { success: boolean; dream?: CloudDreamItemContract | null; error?: string }
   }
+  'cloud:mcp:list': { args: []; result: CloudMcpListResult }
+  'cloud:mcp:save': { args: [input: McpServerSaveInput]; result: CloudMcpSaveResult }
+  'cloud:mcp:delete': { args: [id: string]; result: CloudMcpDeleteResult }
+  'cloud:mcp:test': { args: [payload: CloudMcpTestInput]; result: CloudMcpTestResult }
 
   // 工作台插件
   'plugins:list': { args: [workspaceDir: string]; result: PluginsListResult }
@@ -2491,6 +2528,18 @@ function buildIpcInvokeSchemas(): Partial<Record<IpcInvokeChannel, z.ZodType<rea
     'mcp:setGlobalEnabled': z.tuple([mcpServerId, z.boolean()]),
     'mcp:setProjectTrust': z.tuple([safePath, mcpServerId, z.boolean()]),
     'mcp:test': z.tuple([mcpTestRequest]),
+    'cloud:mcp:save': z.tuple([mcpServerInput]),
+    'cloud:mcp:delete': z.tuple([mcpServerId]),
+    'cloud:mcp:test': z.tuple([
+      z
+        .object({
+          id: mcpServerId.optional(),
+          config: mcpServerInput.optional(),
+        })
+        .refine((v) => Boolean(v.id || v.config), {
+          message: 'Either id or config is required.',
+        }),
+    ]),
   }
 }
 

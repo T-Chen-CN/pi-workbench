@@ -81,6 +81,7 @@ pi-workbench/
 │   ├── github-device-login.ts    # 设备码登录
 │   ├── github-app.ts             # GitHub 设置装配
 │   ├── secret-crypto.ts          # safeStorage 加解密封装
+│   ├── mcp-store.ts              # 桌面全局 MCP 配置（safeStorage 加密）+ 项目级 MCP 发现与 SHA-256 信任钉住
 │   ├── agent-config-key.ts       # 模型配置 key 解析
 │   ├── legacy-paths.ts           # 旧版本路径回收
 │   ├── shell-refresh.ts          # 安装后刷新 shell 缓存
@@ -96,7 +97,7 @@ pi-workbench/
 │   │   ├── git/                  # CommitDetailView / GitView / WorktreeChip
 │   │   ├── panels/               # PanelContextMenu / PanelDragHandle / PanelSlot / PanelWindowFrame
 │   │   ├── repo-map/             # RepoMapCanvas / RepoMapMinimap / RepoMapNodeCard / WorkspacePanel
-│   │   ├── settings/             # GithubSettings / ProviderAuthPanel / ProviderSettings / Settings / UpdateDialog / UpdateStatusIndicator / WebSearchSettings
+│   │   ├── settings/             # GithubSettings / McpSettings / ProviderAuthPanel / ProviderSettings / Settings / UpdateDialog / UpdateStatusIndicator / WebSearchSettings
 │   │   ├── ui/                   # ui / patterns / BrandSeal / BootScreen / DialogHost / ErrorBoundary / SelectionQuoteButton / Toast / VirtualRows / WindowControls / StreamdownView / StreamingTranscript / IPCDebug
 │   │   └── workspace/            # CommandPalette / WelcomeScreen / WorkspacePickerDialog / WorkspaceView
 │   ├── store/                    # 每个功能域一个 store（16 个）
@@ -151,19 +152,20 @@ pi-workbench/
 │   ├── i18n/                     # 类型安全 i18next 词条与错误目录（@pi-workbench/i18n，供桌面端渲染层、主进程与云端 Web 共用）
 │   │   └── src/                  # resources / errors / index
 │   └── cloud-ui/                 # 桌面端与云端 Web 共享云端业务 UI（@pi-workbench/cloud-ui，基于 @pi-workbench/ui & @pi-workbench/i18n）
-│       └── src/                  # types / format / frameReducer / primitives（再导出）/ cards / Cloud* 组件
+│       └── src/                  # types / format / frameReducer / primitives（再导出）/ cards / Cloud* 组件（含 CloudMcpManager）
 │
 ├── apps/cloud/                   # 云端服务（npm workspace，不依赖 Electron）
 │   ├── src/
 │   │   ├── main.ts               # 装配：存储 / 云端会话 / 派活器 / 两条 WS / 静态客户端
 │   │   ├── config.ts             # 环境变量（PI_CLOUD_*），加密 key 与 cookie secret 必填
-│   │   ├── http/                 # Router、REST 控制面、Web 客户端静态托管
+│   │   ├── http/                 # Router、REST 控制面（含 /v1/mcp）、Web 客户端静态托管
+│   │   ├── mcp/                  # 云端 MCP 配置加密存储、脱敏、连接测试与输出脱敏
 │   │   ├── ws/hub.ts             # 客户端与设备两条通道、seq/ack/resume、outbox
 │   │   ├── tasks/                # 工单状态机、授权强制点、派活器
-│   │   ├── agent/                # 云端单会话（6 个工具）与 trace 投影
+│   │   ├── agent/                # 云端单会话（内置工具 + 云端 MCP 工具）与 trace 投影
 │   │   ├── auth/                 # scrypt 口令、token 哈希、限速熔断、cookie
 │   │   ├── secure/               # AES-256-GCM 配置加密
-│   │   └── store/                # Node 24 node:sqlite (WAL + 独立 task_diffs 表 + 旧 JSON 自动迁移)
+│   │   └── store/                # Node 24 node:sqlite (WAL + 独立 task_diffs / mcp_servers 表 + 自动迁移)
 │   ├── web-src/                  # Web 控制台源码（React + Tailwind + @pi-workbench/cloud-ui，本地 Vite 构建到 web-dist/）
 │   └── deploy/                   # systemd 单元、Caddy 片段、每日备份、按需拉取更新脚本
 │
@@ -175,7 +177,7 @@ pi-workbench/
 │   ├── link-store.ts             # 配对凭据（safeStorage 加密）
 │   └── inventory.ts              # 工作区上报清单（路径 / remote / 默认分支）
 │
-├── pi-bridge/                    # Agent 桥接层（主进程内运行；子路径导出：. / protocol / presets / images / atomic-json）
+├── pi-bridge/                    # Agent 桥接层（主进程内运行；子路径导出：. / protocol / presets / images / atomic-json / mcp）
 │   ├── src/
 │   │   ├── agent-manager.ts      # 会话协调入口（拆分出 agent-runtime-types / agent-session-events / agent-title-service / agent-catalog）
 │   │   ├── session-controller.ts # 会话控制编排（轮次状态、工作树边界切换、扩展装配）
@@ -184,6 +186,9 @@ pi-workbench/
 │   │   ├── protocol.ts           # 子路径入口 `pi-bridge/protocol`（云端协议帧与 Zod 契约）
 │   │   ├── presets.ts            # 子路径入口 `pi-bridge/presets`（内置供应商预设）
 │   │   ├── images.ts             # 子路径入口 `pi-bridge/images`（图片附件预处理）
+│   │   ├── mcp.ts                # 子路径入口 `pi-bridge/mcp`（纯 MCP 类型与脱敏/规范化工具，浏览器安全）
+│   │   ├── mcp-host.ts           # 统一 MCP 客户端宿主（stdio / Streamable HTTP / SSE 传输、并行容错同步与测试）
+│   │   ├── mcp-extension.ts      # MCP 工具注册到 Pi Agent 的扩展（含 readOnlyHint 与 128 KB 截断）
 │   │   ├── environment.ts        # 环境租约（工作区级共享资源）
 │   │   ├── model-config.ts       # models.json 读写与 key 插值
 │   │   ├── approval-policy.ts    # 会话模式与审批策略
@@ -319,8 +324,10 @@ ChatPanel.handleSubmit
 | `shell:openExternal` | invoke | 外部链接（https / http / mailto）交系统浏览器；白名单在 `electron/external-links.ts` |
 | `clipboard:writeText` | invoke | 写系统剪贴板（`pw-app://` 下 `navigator.clipboard` 不可用） |
 | `webSearch:get` / `save` | invoke | 联网搜索供应商与 Key（`safeStorage` 加密） |
+| `mcp:list` / `saveGlobal` / `deleteGlobal` / `approveProject` / `test` / `statuses` | invoke | 桌面全局与项目级 MCP 服务器管理、信任审批、连接测试与运行状态 |
 | `cloud:linkStatus` / `pair` / `unlink` / `reconnect` / `refreshWorkspaces` / `listWorkspaces` | invoke | 云端配对与终端执行器状态 |
 | `cloud:getConfig` / `saveConfig` | invoke | 云端模型配置（主进程代理，Key 不进渲染层） |
+| `cloud:mcp:list` / `save` / `delete` / `test` | invoke | 云端 MCP 服务器管理与测试（主进程代理，凭据不进渲染层） |
 | `cloud:clientOpen` / `clientSend` / `clientClose` / `clientState` | invoke | 云端页的客户端通道（token 留在主进程） |
 | `cloud:state` / `cloud:client-frame` / `cloud:client-state` | main → renderer | 执行器状态、云端帧与通道状态 |
 

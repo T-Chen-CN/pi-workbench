@@ -7,7 +7,14 @@
  */
 
 import { randomBytes, timingSafeEqual } from 'crypto'
-import type { CloudSnapshot, CloudWorkspaceInfo } from 'pi-bridge'
+import type {
+  CloudSnapshot,
+  CloudWorkspaceInfo,
+  McpServerConfig,
+  McpServerStatus,
+  McpTestResult,
+} from 'pi-bridge'
+import { mcpServerIdSchema } from 'pi-bridge/mcp'
 import type { Credential } from '@earendil-works/pi-ai'
 import {
   catalogModelList,
@@ -56,6 +63,14 @@ import {
   type CloudDreamRecord,
   type CloudMemoryStore,
 } from '../memory/memory-store.js'
+import {
+  buildMaskedCloudMcpStatus,
+  decryptCloudMcpRecord,
+  listCloudMcpStatuses,
+  normalizeCloudMcpSaveInput,
+  resolveCloudMcpTestTarget,
+  testCloudMcpServer,
+} from '../mcp/cloud-mcp.js'
 import type { TaskDispatcher } from '../tasks/dispatcher.js'
 
 export interface RouteDeps {
@@ -82,9 +97,20 @@ export interface RouteDeps {
   memoryStore?: CloudMemoryStore
   /** 手动触发一次梦境整理（F-41 / C-03a） */
   onRunDream?: () => Promise<CloudDreamRecord | null>
+  /** 获取云端 Agent 当前已连接的 MCP 运行期状态（Phase F） */
+  getMcpStatuses?: () => McpServerStatus[]
+  /** 云端 MCP 配置变更通知（空闲立即热重载，忙时延后到下一轮边界） */
+  onMcpChanged?: () => void
+  /** 隔离测试单台 MCP 服务器（默认走 McpClientHost.testServer；测试可注入替身） */
+  testMcpServer?: (config: McpServerConfig) => Promise<McpTestResult>
   /** 是否运行在生产模式（默认按 NODE_ENV === 'production' 判定） */
   isProduction?: boolean
-  logger: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void }
+  logger: {
+    info: (...args: unknown[]) => void
+    warn: (...args: unknown[]) => void
+    error?: (...args: unknown[]) => void
+    debug?: (...args: unknown[]) => void
+  }
 }
 
 /** 所有凭据类失败对外同一个错误码（不透露「码是否存在 / 是否过期」） */
@@ -673,6 +699,113 @@ export function buildRouter(deps: RouteDeps): Router {
     if (!deps.onRunDream) throw new HttpError(503, 'Dream runner unavailable')
     const dream = await deps.onRunDream()
     return { ok: true, dream }
+  })
+
+  // ------------------------------ 云端 MCP 服务器（Phase F · Step F3） ------------------------------
+
+  const mcpLogger = {
+    info: (...args: unknown[]) => deps.logger.info(...args),
+    warn: (...args: unknown[]) => deps.logger.warn(...args),
+    error: (...args: unknown[]) => (deps.logger.error ?? deps.logger.warn)(...args),
+    debug: (...args: unknown[]) => (deps.logger.debug ?? (() => undefined))(...args),
+  }
+
+  router.get('/v1/mcp', (ctx) => {
+    requireUser(ctx)
+    const liveStatuses = deps.getMcpStatuses ? deps.getMcpStatuses() : []
+    return {
+      servers: listCloudMcpStatuses(
+        deps.store,
+        deps.config.encryptionKey,
+        liveStatuses,
+        deps.logger
+      ),
+    }
+  })
+
+  router.put('/v1/mcp/:id', async (ctx) => {
+    requireUser(ctx)
+    const rawId = ctx.params.id ?? ''
+    const idCheck = mcpServerIdSchema.safeParse(rawId)
+    if (!idCheck.success) {
+      throw new HttpError(400, idCheck.error.issues[0]?.message ?? 'Invalid MCP server id')
+    }
+    const body = await ctx.json<unknown>(64 * 1024)
+    const existingRow = deps.store.getMcpServerRecord(idCheck.data)
+    const existingConfig = existingRow
+      ? decryptCloudMcpRecord(existingRow, deps.config.encryptionKey, deps.logger)
+      : null
+
+    const normalized = normalizeCloudMcpSaveInput(idCheck.data, body, existingConfig)
+    if (!normalized.ok) {
+      throw new HttpError(400, normalized.error)
+    }
+
+    const configCipher = encryptSecret(
+      JSON.stringify(normalized.config),
+      deps.config.encryptionKey
+    )
+    deps.store.upsertMcpServerRecord({
+      id: normalized.config.id,
+      name: normalized.config.name,
+      transport: normalized.config.transport,
+      enabled: normalized.config.enabled,
+      configCipher,
+      updatedAt: Date.now(),
+    })
+    deps.logger.info(
+      `[cloud] MCP server saved: ${normalized.config.id} (${normalized.config.transport}, enabled=${normalized.config.enabled})`
+    )
+    deps.onMcpChanged?.()
+
+    const liveStatuses = deps.getMcpStatuses ? deps.getMcpStatuses() : []
+    const live = liveStatuses.find((item) => item.id === normalized.config.id)
+    return {
+      ok: true,
+      server: buildMaskedCloudMcpStatus(normalized.config, live),
+    }
+  })
+
+  router.delete('/v1/mcp/:id', (ctx) => {
+    requireUser(ctx)
+    const rawId = ctx.params.id ?? ''
+    const idCheck = mcpServerIdSchema.safeParse(rawId)
+    if (!idCheck.success) {
+      throw new HttpError(400, idCheck.error.issues[0]?.message ?? 'Invalid MCP server id')
+    }
+    const deleted = deps.store.deleteMcpServerRecord(idCheck.data)
+    if (!deleted) {
+      throw new HttpError(404, 'MCP server not found')
+    }
+    deps.logger.info(`[cloud] MCP server deleted: ${idCheck.data}`)
+    deps.onMcpChanged?.()
+    return { ok: true }
+  })
+
+  router.post('/v1/mcp/test', async (ctx) => {
+    requireUser(ctx)
+    const body = await ctx.json<{ id?: unknown; config?: unknown }>(64 * 1024)
+    const target = resolveCloudMcpTestTarget(
+      body ?? {},
+      deps.store,
+      deps.config.encryptionKey,
+      deps.logger
+    )
+    if (!target.ok) {
+      throw new HttpError(target.status, target.error)
+    }
+    const result = deps.testMcpServer
+      ? await deps.testMcpServer(target.config)
+      : await testCloudMcpServer(target.config, {
+          defaultCwd: deps.config.workspaceDir,
+          logger: mcpLogger,
+        })
+    return {
+      ok: result.ok,
+      tools: result.tools,
+      latencyMs: result.latencyMs,
+      ...(result.error !== undefined ? { error: result.error } : {}),
+    }
   })
 
   return router

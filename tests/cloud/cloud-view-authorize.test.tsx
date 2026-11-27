@@ -40,6 +40,13 @@ vi.mock('../../src/api', () => ({
     cloudDeleteMemory: vi.fn(async () => ({ success: true })),
     cloudSaveDoc: vi.fn(async () => ({ success: false })),
     cloudRunDream: vi.fn(async () => ({ success: true, dream: null })),
+    cloudMcpList: vi.fn(async () => ({ success: true, servers: [] })),
+    cloudMcpSave: vi.fn(async () => ({ success: true })),
+    cloudMcpDelete: vi.fn(async () => ({ success: true })),
+    cloudMcpTest: vi.fn(async () => ({
+      success: true,
+      result: { ok: true, tools: [], latencyMs: 12 },
+    })),
     cloudPair: vi.fn(async () => ({ success: false })),
     cloudUnlink: vi.fn(async () => ({ success: true })),
     cloudListWorkspaces: vi.fn(async () => ({ success: true, workspaces: [] })),

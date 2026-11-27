@@ -42,6 +42,10 @@ import type {
   McpDeleteGlobalResult,
   McpSetEnabledResult,
   McpTestCallResult,
+  CloudMcpListResult,
+  CloudMcpSaveResult,
+  CloudMcpDeleteResult,
+  CloudMcpTestResult,
   RecentWorkspacesResult,
   PluginsListResult,
   PluginCommandResult,
@@ -581,6 +585,23 @@ const mockAPI = {
     success: false,
     error: 'Cloud memory is only available in the Electron app',
   }),
+  cloudMcpList: async (): Promise<CloudMcpListResult> => ({
+    success: false,
+    servers: [],
+    error: 'Cloud MCP settings are only available in the Electron app',
+  }),
+  cloudMcpSave: async (): Promise<CloudMcpSaveResult> => ({
+    success: false,
+    error: 'Cloud MCP settings are only available in the Electron app',
+  }),
+  cloudMcpDelete: async (): Promise<CloudMcpDeleteResult> => ({
+    success: false,
+    error: 'Cloud MCP settings are only available in the Electron app',
+  }),
+  cloudMcpTest: async (): Promise<CloudMcpTestResult> => ({
+    success: false,
+    error: 'Cloud MCP settings are only available in the Electron app',
+  }),
   onCloudClientFrame: (_callback: (frame: unknown) => void) => () => {},
   onCloudClientState: (_callback: (state: CloudClientState) => void) => () => {},
 
@@ -1008,6 +1029,13 @@ export const api = {
   cloudDeleteMemory: createContractApiCall(getBridge, 'cloudDeleteMemory'),
   cloudSaveDoc: createContractApiCall(getBridge, 'cloudSaveDoc'),
   cloudRunDream: createContractApiCall(getBridge, 'cloudRunDream'),
+  cloudMcpList: createContractApiCall(getBridge, 'cloudMcpList', {
+    fallback: () => ({ success: true, servers: [] }),
+    onError: (error) => ({ success: false, servers: [], error }),
+  }),
+  cloudMcpSave: createContractApiCall(getBridge, 'cloudMcpSave'),
+  cloudMcpDelete: createContractApiCall(getBridge, 'cloudMcpDelete'),
+  cloudMcpTest: createContractApiCall(getBridge, 'cloudMcpTest'),
   onCloudClientFrame: createContractEventSub(getBridge, 'onCloudClientFrame'),
   onCloudClientState: createContractEventSub(getBridge, 'onCloudClientState'),
 

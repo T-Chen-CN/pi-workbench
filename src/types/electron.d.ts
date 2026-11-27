@@ -109,6 +109,11 @@ export type {
   McpDeleteGlobalResult,
   McpSetEnabledResult,
   McpTestCallResult,
+  CloudMcpListResult,
+  CloudMcpSaveResult,
+  CloudMcpDeleteResult,
+  CloudMcpTestInput,
+  CloudMcpTestResult,
   AgentInitConfig,
   AgentInitResult,
   AgentHostInfoResult,
@@ -222,6 +227,10 @@ export interface ElectronAPI extends IpcInvokeBridge, IpcEventBridge, IpcSendBri
   cloudDeleteMemory: IpcInvokeBridge['cloudDeleteMemory']
   cloudSaveDoc: IpcInvokeBridge['cloudSaveDoc']
   cloudRunDream: IpcInvokeBridge['cloudRunDream']
+  cloudMcpList: IpcInvokeBridge['cloudMcpList']
+  cloudMcpSave: IpcInvokeBridge['cloudMcpSave']
+  cloudMcpDelete: IpcInvokeBridge['cloudMcpDelete']
+  cloudMcpTest: IpcInvokeBridge['cloudMcpTest']
   onCloudClientFrame: IpcEventBridge['onCloudClientFrame']
   onCloudClientState: IpcEventBridge['onCloudClientState']
   onCloudState: IpcEventBridge['onCloudState']

@@ -9,7 +9,7 @@
 
 | 位置 | 角色 | 有没有 fs / bash |
 | --- | --- | --- |
-| `apps/cloud`（`@pi-workbench/cloud`） | 云端控制面 + 数据面 + **唯一的云端会话** | **没有**（工具白名单只有 6 个） |
+| `apps/cloud`（`@pi-workbench/cloud`） | 云端控制面 + 数据面 + **唯一的云端会话** | **没有**（仅 6 个内置派活工具 + 管理员配置的云端 MCP 工具） |
 | `packages/cloud-ui`（`@pi-workbench/cloud-ui`） | 桌面端与 Web 共享类型、WS 帧归并器、Paper & Ink 零桌面 store 原语与共享卡片/弹窗 | — |
 | `pi-bridge/src/cloud-protocol.ts` | 协议契约（Zod v4 帧校验、能力协商 `capabilities`、状态机常量、事件载荷） | — |
 | `electron/cloud/*` | 桌面端内置的终端执行器（device agent） | 有（工单在自己的 worktree 里跑） |
@@ -30,7 +30,7 @@
 
 | 文件 / 目录 | 内容 |
 | --- | --- |
-| `cloud.db`（WAL） | Node 24 原生 `node:sqlite` 统一存储（`PRAGMA user_version` 版本化迁移 + 预编译语句缓存 + 嵌套 `SAVEPOINT` 事务）：管理员账号（PHC `scrypt` `N=131072,r=8,p=1`）、设备与分权 token 哈希（`pk_<kid>.<secret>` 经 `token_kid` / `client_token_kid` O(1) 索引定位）、6 位配对码（SQL `WHERE used_at IS NULL` 原子 CAS 作废，最多保留 5 个并发活跃码）、云端模型配置（AES-256-GCM 密文）、工单与持久化单调 `task_seq`、独立 `task_diffs` 表、工作单元（已关闭保留最近 500 条）、授权台账（过期/撤销保留最近 500 条）、多端已读游标，以及统一入库的 `memories` 与 `dreams` 表；首次升级自动一次性导入旧 JSON（`memories.json` / `dreams.json` 导入后重命名为 `.migrated`） |
+| `cloud.db`（WAL） | Node 24 原生 `node:sqlite` 统一存储（`PRAGMA user_version` 版本化迁移 v3 + 预编译语句缓存 + 嵌套 `SAVEPOINT` 事务）：管理员账号（PHC `scrypt` `N=131072,r=8,p=1`）、设备与分权 token 哈希（`pk_<kid>.<secret>` 经 `token_kid` / `client_token_kid` O(1) 索引定位）、6 位配对码（SQL `WHERE used_at IS NULL` 原子 CAS 作废，最多保留 5 个并发活跃码）、云端模型配置（AES-256-GCM 密文）、云端 MCP 服务器表 `mcp_servers`（完整配置经 AES-256-GCM 加密存 `config_cipher`，永不明文落盘）、工单与持久化单调 `task_seq`、独立 `task_diffs` 表、工作单元（已关闭保留最近 500 条）、授权台账（过期/撤销保留最近 500 条）、多端已读游标，以及统一入库的 `memories` 与 `dreams` 表；首次升级自动一次性导入旧 JSON（`memories.json` / `dreams.json` 导入后重命名为 `.migrated`） |
 | `memory/` | 留存文档目录（每日 `backup.sh` 自动备份）：`AGENTS.md` / `SOUL.md` 白名单留存 Markdown 文档，Web 与桌面端透明可查可编辑（结构化记忆与梦境记录已迁入 `cloud.db`） |
 | `agent/` | 云端会话（Pi SDK 的 agentDir）：`sessions/*.jsonl` 是历史与导出的唯一真相源 |
 
@@ -213,6 +213,16 @@ SDK 初始化上；配置解密失败时才每次快照都往 hub 推一条 `mis
 - `GET /v1/cloud-config/catalog` 返回白名单 8 家供应商与模型能力摘要（来自 `pi-bridge` 再导出的 catalog）。
 - `PUT /v1/cloud-config` 校验 `providerId` 与 `model` 在目录白名单内，并对新填入的 API Key 执行一次轻量 `/models` 探测（401/403 拒绝，网络异常按策略处理）；凭证经 `AES-256-GCM` 加密落盘，响应仅返回脱敏掩码。
 - 两边界面（Web 控制台与桌面端云端页）共用 `@pi-workbench/cloud-ui` 配置表单与同一套服务端配置。
+
+### 3.7 云端 MCP 服务器（Phase F：`GET/PUT/DELETE /v1/mcp*` 与 `POST /v1/mcp/test`）
+
+云端总控 Agent 支持同时挂载**远程 Streamable HTTP / SSE** 与**部署在自托管云主机本地的 `stdio`** 两类 MCP 服务器：
+
+- **加密落盘（`cloud.db` schema v3 `mcp_servers` 表）**：完整配置（含 `env`、`headers`、`command`/`args`/`cwd`、`url`）经 `AES-256-GCM` 加密后存入 `config_cipher`，数据库不保存明文密钥；所有管理接口仅回脱敏掩码（`••••••••`），更新时自动保留未改动的既有密钥。
+- **直接执行、无需二次审批**：云端会话以 `builtinExtensions.approval = false`、`mode = 'auto'`、`allowMcpTools = true` 运行，管理员配置的云端 MCP 工具与 6 个内置云端工具一同直接放行（本地 `fs`/`bash`/`git` 仍严格禁止）；工具输出经 128 KB 截断与密钥脱敏。
+- **热重载与轮次边界隔离**：新增/编辑/启停/删除 MCP 服务器后，空闲时立即平滑重建云端 Agent 运行时以刷新工具注册表与实时连接状态；若当前正执行轮次则**绝不打断**，延迟至下一轮次边界 `ensureAgent()` 生效；服务关闭时 `agent.dispose()` 统一关闭全部 MCP 传输与 stdio 子进程。
+- **接口与双端共享管理 UI**：控制面提供 `GET /v1/mcp`、`PUT /v1/mcp/:id`、`DELETE /v1/mcp/:id`、`POST /v1/mcp/test`（复用 `requireUser`：Cookie 写操作强制同源 CSRF 校验，桌面端经 `cloud:mcp:{list,save,delete,test}` IPC 持 `clientToken` 代理）；Web 控制台「设置」页与桌面端 `CloudView` 设置弹窗共用 `@pi-workbench/cloud-ui` 的 `CloudMcpManager`（支持中英文）。
+- **云主机本地 `stdio` 部署位置**：`apps/cloud/deploy/pi-cloud.service` 在保留 `ProtectSystem=strict` 等全部加固项的前提下新增可选 `ReadOnlyPaths=-/opt/pi-cloud/mcp`（目录不存在时自动忽略）；自托管 VPS 可将只读 stdio MCP 可执行脚本/包部署于 `/opt/pi-cloud/mcp`，需写状态的放 `/var/lib/pi-cloud/mcp`。
 
 **Web 客户端的两条铁律**：
 

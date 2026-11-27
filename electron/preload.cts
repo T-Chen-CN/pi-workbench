@@ -8,10 +8,12 @@ import {
   type CloudClientState,
   type CloudConfigInput,
   type CloudDeviceState,
+  type CloudMcpTestInput,
   type CloudPairInput,
   type ElectronAPIContract,
   type IpcInvokeChannel,
   type IpcInvokeContract,
+  type McpServerSaveInput,
 } from './ipc/contract.js'
 
 function invoke<K extends IpcInvokeChannel>(
@@ -140,6 +142,10 @@ const electronAPI: ElectronAPIContract = {
   cloudSaveDoc: (input: { name: 'AGENTS.md' | 'SOUL.md'; content: string }) =>
     invoke('cloud:saveDoc', input),
   cloudRunDream: () => invoke('cloud:runDream'),
+  cloudMcpList: () => invoke('cloud:mcp:list'),
+  cloudMcpSave: (input: McpServerSaveInput) => invoke('cloud:mcp:save', input),
+  cloudMcpDelete: (id: string) => invoke('cloud:mcp:delete', id),
+  cloudMcpTest: (payload: CloudMcpTestInput) => invoke('cloud:mcp:test', payload),
   onCloudState: (callback: (state: CloudDeviceState) => void) => {
     const listener = (_event: IpcRendererEvent, state: CloudDeviceState) => callback(state)
     ipcRenderer.on('cloud:state', listener)

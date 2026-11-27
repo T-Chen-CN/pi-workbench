@@ -43,6 +43,9 @@ SystemCallFilter=@system-service
 LockPersonality=true
 MemoryMax=1500M
 ReadWritePaths=/var/lib/pi-cloud
+# 云主机本地 stdio MCP 服务器可部署在 /opt/pi-cloud/mcp（只读可执行）或 /var/lib/pi-cloud/mcp（可读写）；
+# 前缀 `-` 表示目录不存在时忽略，确保既有未创建该目录的实例正常启动。
+ReadOnlyPaths=-/opt/pi-cloud/mcp
 
 StandardOutput=journal
 StandardError=journal

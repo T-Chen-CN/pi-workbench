@@ -25,7 +25,6 @@
 | P-03 | 供应商预设的真实凭证手工验收（发布前必做） | P1 | ⬜ 未做（清单见 [provider-presets §11.2](../architecture/provider-presets.md)）：8 家 × api_key 各一次；4 条 OAuth（含验证 `openai` 粘贴回调 `client_id` 换 token 与各家订阅策略）；下调上下文/输出上限在**轮次边界**生效且不打断；换模型档位自动降级；会话模型回落不弹提示；云端配置页 Key 只回掩码 |
 | S-01 | 工作区级 `.pi/extensions` / `.pi/settings.json` 显式信任机制 | P2 | ⬜ 未做：阶段 0 已默认以 `projectTrusted: false` + `noExtensions: true` 封堵打开不可信仓库即执行扩展的 RCE 风险；后续按需评估是否增加类似 VS Code Workspace Trust 的按工作区显式弹窗授权与持久化信任开关 |
 | D-02 | 托管工作树存放位置（仓库内 `.pi-workbench/worktrees/` vs 仓库外独立缓存目录） | P2 | ⬜ 待单独讨论：暂保持 `.pi-workbench/worktrees/` 不变（兼顾项目所在盘空间与直观查找）；后续按需评估是否开放目录选项 |
-| F-01 | Phase F：远端工单可选 OS/Docker 沙箱默认策略 & MCP 配置范围 | P2 | ⬜ 待单独讨论：按所有者要求留待 Phase E 之后再评估默认沙箱形态与 MCP 接入边界 |
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
 
@@ -35,6 +34,7 @@
 
 ### 已交付（只留一行，细节在 git）
 
+- 2026-11-28 **Phase F · 统一 MCP 接入（`pi-bridge` + 桌面端全局/项目级 + 云端 Agent 双端管理）**：在 `pi-bridge` 基于 `@modelcontextprotocol/sdk` 落地 `McpClientHost`（`stdio` / Streamable HTTP / SSE、环境清洗、子进程 PID 清理、128 KB 截断与脱敏、`readOnlyHint` 权限分类与 `allowMcpTools` 策略）及浏览器安全子路径 `pi-bridge/mcp`；桌面端落地 `safeStorage` 加密全局配置（`config/mcp.json`）、只读项目配置发现（`.pi-workbench/mcp.json` / `.mcp.json`）与 SHA-256 指纹 fail-closed 信任（`config/mcp-trust.json`），贯通 Agent `utilityProcess`、云端派活工单 worktree 与设置页 `McpSettings`；云端落地 SQLite v3 `mcp_servers` 表（AES-256-GCM 加密）、`/v1/mcp*` REST（含 CSRF 与掩码保留）、支持远程 HTTP/SSE 与云主机本地 `stdio`（`pi-cloud.service` 增加 `ReadOnlyPaths=-/opt/pi-cloud/mcp`）、轮次边界重载与共享 `@pi-workbench/cloud-ui` `CloudMcpManager`（Web 控制台与桌面 `CloudView` 双端同步管理）。
 - 2026-11-28 **Phase A–E 全面架构升级与 59 项纯 Bug 修复**：完成 59 项纯代码 Bug 修复（5 commits）；完成 Phase A（安全边界与自动缓存清理、云端首启口令/SQLite 关系化与记忆入库、锁全量传递依赖不可变发布）、Phase B（Cloud Web 减重至 8.11 MiB + br/gzip、后台工作区休眠不中断 Agent、面板宽度持久化、错误 Toast 8s 暂停与 Paper & Ink `≥ 12px`）、Phase C（`fflate`+`saxes`、`https/socks-proxy-agent`、`chokidar` v4、Monaco `createDiffEditor`+`fast-diff`、`web-tree-sitter`、`@base-ui/react`+`@floating-ui/react`+`cmdk` 6 大替换）、Phase D（Zustand v5、`@pi-workbench/{ui,i18n,cloud-ui}` 统一与 Cloud Web 英文支持、单源 Typed IPC、`AgentManager`/`ChatPanel` 拆解、`eslint --max-warnings 0` 与 Playwright `_electron` 冒烟 E2E）及 Phase E（Agent 与插件 `utilityProcess` 进程隔离 + 直连 `MessagePort`、原生多 `BrowserWindow` 拆窗与 Q5 托盘/回位语义，修订 ADR-001）；199 文件 2,062 单测与本地/打包版 Electron E2E 全绿。
 
 - 2026-11-27 **D-01 严格两目录模型 + Windows 安装版/便携版双发行包**：三平台打包版统一采用「程序安装目录 + 唯一数据目录 `<appData>/pi-workbench`」（更新缓存同步收口到 `{dataDir}/cache/pi-workbench-updater/`，彻底消除 `%LOCALAPPDATA%` 第 3 目录）；新增旧版安装目录同步无损迁移（`migrateLegacyInstallDirSync`）与设置页「打开数据目录」（`app:openDataDir`）；`build/installer.nsh` 瘦身移除 244 行清单卸载脚本与 `afterPack` manifest 脚本；新增 `scripts/build-win-portable.mjs` 与 `release.yml` Windows 便携 `.zip`（根级 `portable` 标记，引导手动更新不跑 NSIS）并修正 `release.yml` 构建测试顺序。
@@ -59,6 +59,7 @@
 
 ## 4. 已决定不做（保留备查）
 
+- **2026-11-28 项目所有者决定**：`F-01` 远端工单可选 OS/Docker 沙箱不做。理由：本地自托管工单已运行在受信任工作区独立 git worktree 并配有 `task-guard` 与工具/权限护栏，叠加 OS/Docker 沙箱会显著抬高跨平台部署、依赖缓存与容器维护门槛且收益不成正比；Phase F 聚焦于全栈统一 MCP 接入（已同日交付）。
 - **2026-11-26 项目所有者决定**：P-08 自建 OAuth 应用（用自己域名做回调）暂不做。理由：需向各家厂商逐个申请审批第三方 `client_id` 与回调域名（部分厂商不对第三方开放自助申请），且 `@earendil-works/pi-ai` 不暴露 `client_id` 覆写，继续复用 SDK 内置 OAuth。
 - **2026-10-24 项目所有者决定**：R-07 成本对比与预算细化 · R-11 通知安静时段与阈值 · R-12 消息间键盘导航 · R-14 全量快捷键自定义 · R-17 插件面板级 UI / 菜单 / 状态项 · R-18 符号选择改用语言服务（维持正则实现）。
 - **2026-11-08 项目所有者决定**：顶层 Agent 跨工作区编排（首页常驻顶层会话 + 派发子会话 + 委派授权 + headless 工作区）不做。理由：编排带来的复杂度在于授权、预算与工作区隔离，而单机工作台的跨工作区需求已能用「多工作区常驻视图 + 工作树会话」直接覆盖。原需求草案（`TOP_LEVEL_AGENT.md` / `TOP_LEVEL_AGENT_BRIEF.md`）已删除，恢复看 `git log`。

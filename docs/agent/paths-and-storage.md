@@ -23,7 +23,7 @@
 启动时 `main.ts` 的 `initAppDirectories()` 在 `getAppDir()` 内创建并维护四个子目录：
 
 ```
-{dataDir}/config/   settings.json、providers.json、credentials.json、web-search.json、device-id、last-run-version.json、migrations.json
+{dataDir}/config/   settings.json、providers.json、credentials.json、web-search.json、mcp.json、mcp-trust.json、device-id、last-run-version.json、migrations.json
 {dataDir}/cache/    drafts/（崩溃恢复草稿）、temp/（含 Web dev 模式的 web-agent/，可随时删）、pi-workbench-updater/（差分更新缓存）
 {dataDir}/data/     agent/（模型与会话）、profile/（Chromium userData）、workspaces.db、cloud/
 {dataDir}/logs/     main.log、renderer.log、agent.log
@@ -73,6 +73,8 @@
 | `config/device-id` | `electron/device-id.ts` | OAuth 上报的稳定 UUID（OpenAI 会校验格式） |
 | `config/api-config.legacy.json` | 启动迁移 | 旧配置归档（迁移成功后改名，不再读取） |
 | `config/web-search.json` | `webSearch:*` | 当前 provider + 各 provider 的 Key（`enc:`） |
+| `config/mcp.json` | `mcp:*` | 桌面全局 MCP 服务器配置（`env` / `headers` 密钥值用 `enc:` + safeStorage 加密） |
+| `config/mcp-trust.json` | `mcp:approveProject` | 工作区项目级 MCP（`.pi-workbench/mcp.json` / `.mcp.json`）显式审批与 SHA-256 指纹钉住记录 |
 | `config/last-run-version.json` | `shell-refresh.ts` | 仅在版本变化时刷新 shell / 图标缓存 |
 | `config/migrations.json` | `electron/legacy-cleanup.ts` | 已执行的一次性迁移：`{applied: { [id]: 时间戳 }}`。**删了等于让迁移重跑**，而迁移是幂等的，所以代价只是白做一次 |
 | `config/workspace-plugins.json` | `plugin-manager.ts` | 各工作区已启用插件白名单与全目录 SHA-256 哈希钉住记录（绝不读仓库内 `.pi-workbench/config.json`） |
@@ -96,6 +98,7 @@
 | `sessions-meta.json` | `pinned` / `archived` 会话 id 列表 |
 | `session-git.json` | `{ version: 1, worktrees, sessions }`：会话 ↔ 工作树绑定（见 [git-and-worktrees](git-and-worktrees.md)） |
 | `plugins/` | 工作区插件（见 [agent-runtime](agent-runtime.md) 之外的插件约束） |
+| `mcp.json` | 可选的项目级 MCP 配置（只读发现，须经用户在设置页显式审批并钉住 SHA-256 指纹后才会连接；兼容仓库根 `.mcp.json`） |
 | `worktrees/` | 托管工作树 checkout 目录 |
 | `terminal-{id}.log` | 每个终端的输出日志（5 MB 轮转，最多保留 `.1`–`.3` 三份备份并自动裁剪旧轮转文件） |
 
