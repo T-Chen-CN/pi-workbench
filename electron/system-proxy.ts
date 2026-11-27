@@ -1,19 +1,54 @@
 /**
- * 主进程系统代理适配：让 Node 运行时的全局 `fetch` 跟随操作系统代理设置。
+ * 主进程系统代理适配：让 Node 运行时的全局 `fetch` 与 `ws` 跟随操作系统代理设置。
  *
  * Pi Agent、供应商目录、GitHub 与联网搜索均在主进程调用 `globalThis.fetch`；
  * Node 内置 undici `fetch` 默认忽略操作系统代理（Windows WinINET / macOS / Linux）。
  * 开启后把 `http:` / `https:` 请求路由给 Electron `net.fetch`（走 Chromium 网络栈与
- * 系统代理 / PAC / SOCKS5），关闭时直接回退到原始 `fetch`，切换即时生效无需重启。
+ * 系统代理 / PAC / SOCKS5），`ws:` / `wss:` 连接经 Chromium `resolveProxy()` 解析后
+ * 通过 `https-proxy-agent` / `socks-proxy-agent` 建隧道；关闭时直接回退到原始 `fetch`。
  */
 
 import * as electron from 'electron'
+import { EventEmitter } from 'events'
 import * as http from 'http'
-import * as https from 'https'
+import { createRequire } from 'module'
 import * as net from 'net'
 import * as tls from 'tls'
 import type { ClientRequestArgs } from 'http'
 import type { Duplex } from 'stream'
+
+interface ProxyAgentConnectOpts extends Omit<ClientRequestArgs, 'host' | 'port'> {
+  host?: string | null
+  port?: number | string | null
+  secureEndpoint?: boolean
+  servername?: string
+}
+
+interface ProxyAgentBase extends http.Agent {
+  isSecureEndpoint(options?: ProxyAgentConnectOpts): boolean
+  connect(req: http.ClientRequest, opts: ProxyAgentConnectOpts): Promise<net.Socket>
+  createConnection(
+    options?: ClientRequestArgs,
+    callback?: (err: Error | null, stream: Duplex) => void
+  ): Duplex
+}
+
+interface ProxyAgentConstructor {
+  new (
+    proxy: string | URL,
+    opts?: http.AgentOptions & { timeout?: number }
+  ): ProxyAgentBase
+}
+
+const requireProxyAgent = createRequire(import.meta.url)
+// https-proxy-agent@9 / socks-proxy-agent@10 仅声明 package.json exports（无顶层 main/types），
+// 通过 Node 24 createRequire 按 exports 同步加载，同时兼容 electron/tsconfig.json (node) 与根 tsconfig.json (bundler)
+const { HttpsProxyAgent } = requireProxyAgent('https-proxy-agent') as {
+  HttpsProxyAgent: ProxyAgentConstructor
+}
+const { SocksProxyAgent } = requireProxyAgent('socks-proxy-agent') as {
+  SocksProxyAgent: ProxyAgentConstructor
+}
 
 export type FetchInput = string | URL | Request
 
@@ -88,10 +123,90 @@ export function createSystemProxyFetch(deps: SystemProxyFetchDeps): FetchLike {
   }
 }
 
+export type ProxyProtocol =
+  | 'http:'
+  | 'https:'
+  | 'socks:'
+  | 'socks4:'
+  | 'socks4a:'
+  | 'socks5:'
+  | 'socks5h:'
+
+export interface ParsedProxyEntry {
+  host: string
+  port: number
+  protocol: ProxyProtocol
+  username?: string
+  password?: string
+}
+
 export interface ParsedHttpProxyEntry {
   host: string
   port: number
   protocol: 'http:' | 'https:'
+  username?: string
+  password?: string
+}
+
+function defaultPortForProtocol(protocol: ProxyProtocol): number {
+  if (protocol === 'https:') return 443
+  if (protocol === 'http:') return 80
+  return 1080
+}
+
+function parseAuthorityWithProtocol(
+  protocol: ProxyProtocol,
+  authority: string
+): ParsedProxyEntry | null {
+  try {
+    const parsed = new URL(`${protocol}//${authority}`)
+    const port = Number(parsed.port || String(defaultPortForProtocol(protocol)))
+    if (!parsed.hostname || !Number.isInteger(port) || port <= 0 || port > 65535) {
+      return null
+    }
+    const entry: ParsedProxyEntry = {
+      host: parsed.hostname,
+      port,
+      protocol,
+    }
+    if (parsed.username) entry.username = decodeURIComponent(parsed.username)
+    if (parsed.password) entry.password = decodeURIComponent(parsed.password)
+    return entry
+  } catch {
+    return null
+  }
+}
+
+const PAC_SCHEME_MAP: Record<string, ProxyProtocol> = {
+  PROXY: 'http:',
+  HTTP: 'http:',
+  HTTPS: 'https:',
+  SOCKS: 'socks:',
+  SOCKS4: 'socks4:',
+  SOCKS4A: 'socks4a:',
+  SOCKS5: 'socks5:',
+  SOCKS5H: 'socks5h:',
+}
+
+/**
+ * 解析 Chromium `resolveProxy()` 返回的通用 PAC 字符串：
+ * 支持 `DIRECT`、`PROXY`、`HTTP`、`HTTPS`、`SOCKS`、`SOCKS4`、`SOCKS4A`、`SOCKS5`、`SOCKS5H`，
+ * 以及可选 `user:pass@host:port` 认证与 IPv6 `[::1]:port`。
+ */
+export function parseFirstProxyEntry(pacResult: string): ParsedProxyEntry | null {
+  for (const rawEntry of pacResult.split(';')) {
+    const trimmed = rawEntry.trim()
+    if (!trimmed) continue
+    const [scheme, authority] = trimmed.split(/\s+/, 2)
+    const upper = scheme?.toUpperCase()
+    if (upper === 'DIRECT') return null
+    const protocol = upper ? PAC_SCHEME_MAP[upper] : undefined
+    if (protocol && authority) {
+      const parsed = parseAuthorityWithProtocol(protocol, authority)
+      if (parsed) return parsed
+    }
+  }
+  return null
 }
 
 /** 解析 Chromium `resolveProxy()` 返回的 PAC 字符串，取首个 HTTP(S) 代理项（含协议） */
@@ -103,15 +218,17 @@ export function parseFirstHttpProxyEntry(pacResult: string): ParsedHttpProxyEntr
     const upper = scheme?.toUpperCase()
     if (upper === 'DIRECT') return null
     if ((upper === 'PROXY' || upper === 'HTTP' || upper === 'HTTPS') && authority) {
-      try {
-        const protocol: 'http:' | 'https:' = upper === 'HTTPS' ? 'https:' : 'http:'
-        const parsed = new URL(`${protocol}//${authority}`)
-        const port = Number(parsed.port || (protocol === 'https:' ? '443' : '80'))
-        if (parsed.hostname && Number.isInteger(port) && port > 0 && port <= 65535) {
-          return { host: parsed.hostname, port, protocol }
+      const protocol: 'http:' | 'https:' = upper === 'HTTPS' ? 'https:' : 'http:'
+      const parsed = parseAuthorityWithProtocol(protocol, authority)
+      if (parsed) {
+        const entry: ParsedHttpProxyEntry = {
+          host: parsed.host,
+          port: parsed.port,
+          protocol,
         }
-      } catch {
-        continue
+        if (parsed.username !== undefined) entry.username = parsed.username
+        if (parsed.password !== undefined) entry.password = parsed.password
+        return entry
       }
     }
   }
@@ -131,91 +248,311 @@ function stripIpv6Brackets(host: string): string {
   return trimmed.startsWith('[') && trimmed.endsWith(']') ? trimmed.slice(1, -1) : trimmed
 }
 
-function formatConnectAuthority(host: string, port: number): string {
+function formatAuthority(host: string, port: number): string {
   const trimmed = host.trim()
   const bracketed =
     trimmed.includes(':') && !trimmed.startsWith('[') ? `[${trimmed}]` : trimmed
   return `${bracketed}:${port}`
 }
 
-/** 为 `ws` 客户端构造走 HTTP(S) CONNECT 隧道的 Agent（仅在系统代理开启且非直连/非回环时返回） */
-export function createHttpConnectAgent(
-  proxy: { host: string; port: number; protocol?: 'http:' | 'https:' },
+function buildProxyUrl(proxy: {
+  host: string
+  port: number
+  protocol: ProxyProtocol
+  username?: string
+  password?: string
+}): URL {
+  // SOCKS5 默认使用代理端 DNS（socks5h），避免本地 DNS 污染或内网隔离导致建连前就 ENOTFOUND
+  const effectiveProtocol: ProxyProtocol =
+    proxy.protocol === 'socks5:' || proxy.protocol === 'socks:' ? 'socks5h:' : proxy.protocol
+  const url = new URL(`${effectiveProtocol}//${formatAuthority(proxy.host, proxy.port)}`)
+  if (proxy.username !== undefined) url.username = proxy.username
+  if (proxy.password !== undefined) url.password = proxy.password
+  return url
+}
+
+function normalizeConnectOpts(
+  opts: ProxyAgentConnectOpts,
+  defaultSecure: boolean
+): ProxyAgentConnectOpts & { host: string; port: number; secureEndpoint: boolean } {
+  const rawHost = stripIpv6Brackets(String(opts.host || opts.hostname || ''))
+  const secureEndpoint =
+    typeof opts.secureEndpoint === 'boolean'
+      ? opts.secureEndpoint
+      : typeof opts.protocol === 'string'
+        ? opts.protocol === 'https:'
+        : defaultSecure
+  const port = Number(opts.port) || (secureEndpoint ? 443 : 80)
+  const rawSni = opts.servername || rawHost
+  const servername =
+    secureEndpoint && rawSni && net.isIP(rawSni) === 0 ? rawSni : undefined
+
+  return {
+    ...opts,
+    host: rawHost,
+    port,
+    secureEndpoint,
+    ...(servername ? { servername } : {}),
+  }
+}
+
+function withConnectTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+  onLateResolve: (value: T) => void
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`))
+    }, timeoutMs)
+    timer.unref?.()
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        if (settled) {
+          onLateResolve(value)
+          return
+        }
+        settled = true
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(timer)
+        if (settled) return
+        settled = true
+        reject(error)
+      }
+    )
+  })
+}
+
+function waitForTlsHandshake(
+  tlsSocket: tls.TLSSocket,
+  timeoutMs: number
+): Promise<tls.TLSSocket> {
+  return new Promise<tls.TLSSocket>((resolve, reject) => {
+    if (tlsSocket.destroyed) {
+      reject(new Error('TLS socket closed before handshake completed'))
+      return
+    }
+    let settled = false
+    const cleanup = () => {
+      clearTimeout(timer)
+      tlsSocket.removeListener('secureConnect', onSecureConnect)
+      tlsSocket.removeListener('error', onError)
+      tlsSocket.removeListener('close', onClose)
+    }
+    const onSecureConnect = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(tlsSocket)
+    }
+    const onError = (err: Error) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      tlsSocket.destroy()
+      reject(err)
+    }
+    const onClose = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(new Error('Proxy TLS connection closed before handshake completed'))
+    }
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      cleanup()
+      const err = new Error(`Proxy TLS handshake timed out after ${timeoutMs}ms`)
+      tlsSocket.destroy(err)
+      reject(err)
+    }, timeoutMs)
+    timer.unref?.()
+
+    tlsSocket.once('secureConnect', onSecureConnect)
+    tlsSocket.once('error', onError)
+    tlsSocket.once('close', onClose)
+  })
+}
+
+function createStubClientRequest(): http.ClientRequest {
+  const emitter = new EventEmitter() as EventEmitter & { destroy?: () => void }
+  emitter.destroy = () => {}
+  return emitter as unknown as http.ClientRequest
+}
+
+class TimeoutHttpsProxyAgent extends HttpsProxyAgent {
+  private readonly defaultSecureTarget: boolean
+  private readonly connectTimeoutMs: number
+
+  constructor(proxyUrl: URL, secureTarget: boolean, connectTimeoutMs: number) {
+    super(proxyUrl, { keepAlive: false, timeout: connectTimeoutMs })
+    this.defaultSecureTarget = secureTarget
+    this.connectTimeoutMs = connectTimeoutMs
+  }
+
+  override isSecureEndpoint(options?: ProxyAgentConnectOpts): boolean {
+    if (options) {
+      if (typeof options.secureEndpoint === 'boolean') return options.secureEndpoint
+      if (typeof options.protocol === 'string') return options.protocol === 'https:'
+    }
+    return this.defaultSecureTarget
+  }
+
+  override async connect(req: http.ClientRequest, opts: ProxyAgentConnectOpts): Promise<net.Socket> {
+    const normalized = normalizeConnectOpts(opts, this.defaultSecureTarget)
+    const socket = await withConnectTimeout(
+      super.connect(req, normalized),
+      this.connectTimeoutMs,
+      'Proxy CONNECT',
+      (lateSocket) => lateSocket.destroy()
+    )
+    if (socket instanceof tls.TLSSocket) {
+      // HttpsProxyAgent 仅在 `req.once('socket')` 才恢复底层可读流；提前等待握手时必须解除暂停
+      socket.resume()
+      await waitForTlsHandshake(socket, this.connectTimeoutMs)
+    }
+    return socket
+  }
+
+  override createConnection(
+    connOptions?: ClientRequestArgs & { servername?: string },
+    callback?: (err: Error | null, stream: Duplex) => void
+  ): Duplex {
+    // 走 http.request / https.request / ws 路径时，agent-base 已准备好 currentSocket，直接同步返回
+    try {
+      return super.createConnection()
+    } catch {
+      // 直接调用 createConnection(opts, cb) 的兼容路径
+    }
+    const stubReq = createStubClientRequest()
+    let proxyStatusCode: number | null = null
+    stubReq.once('proxyConnect', (info: { statusCode?: number }) => {
+      if (typeof info?.statusCode === 'number') proxyStatusCode = info.statusCode
+    })
+    const connectOpts = normalizeConnectOpts(connOptions ?? {}, this.defaultSecureTarget)
+    void this.connect(stubReq, connectOpts).then(
+      (socket) => {
+        if (proxyStatusCode !== null && proxyStatusCode !== 200) {
+          socket.destroy()
+          callback?.(
+            new Error(`Proxy CONNECT rejected with HTTP ${proxyStatusCode}`),
+            undefined as unknown as Duplex
+          )
+          return
+        }
+        callback?.(null, socket)
+      },
+      (error: unknown) => {
+        callback?.(
+          error instanceof Error ? error : new Error(String(error)),
+          undefined as unknown as Duplex
+        )
+      }
+    )
+    return undefined as unknown as Duplex
+  }
+}
+
+class TimeoutSocksProxyAgent extends SocksProxyAgent {
+  private readonly defaultSecureTarget: boolean
+  private readonly connectTimeoutMs: number
+
+  constructor(proxyUrl: URL, secureTarget: boolean, connectTimeoutMs: number) {
+    super(proxyUrl, { keepAlive: false, timeout: connectTimeoutMs })
+    this.defaultSecureTarget = secureTarget
+    this.connectTimeoutMs = connectTimeoutMs
+  }
+
+  override isSecureEndpoint(options?: ProxyAgentConnectOpts): boolean {
+    if (options) {
+      if (typeof options.secureEndpoint === 'boolean') return options.secureEndpoint
+      if (typeof options.protocol === 'string') return options.protocol === 'https:'
+    }
+    return this.defaultSecureTarget
+  }
+
+  override async connect(req: http.ClientRequest, opts: ProxyAgentConnectOpts): Promise<net.Socket> {
+    const normalized = normalizeConnectOpts(opts, this.defaultSecureTarget)
+    const socket = await withConnectTimeout(
+      super.connect(req, normalized),
+      this.connectTimeoutMs,
+      'SOCKS proxy connect',
+      (lateSocket) => lateSocket.destroy()
+    )
+    if (socket instanceof tls.TLSSocket) {
+      await waitForTlsHandshake(socket, this.connectTimeoutMs)
+    }
+    return socket
+  }
+
+  override createConnection(
+    connOptions?: ClientRequestArgs & { servername?: string },
+    callback?: (err: Error | null, stream: Duplex) => void
+  ): Duplex {
+    try {
+      return super.createConnection()
+    } catch {
+      // 直接调用 createConnection(opts, cb) 的兼容路径
+    }
+    const stubReq = createStubClientRequest()
+    const connectOpts = normalizeConnectOpts(connOptions ?? {}, this.defaultSecureTarget)
+    void this.connect(stubReq, connectOpts).then(
+      (socket) => callback?.(null, socket),
+      (error: unknown) =>
+        callback?.(
+          error instanceof Error ? error : new Error(String(error)),
+          undefined as unknown as Duplex
+        )
+    )
+    return undefined as unknown as Duplex
+  }
+}
+
+/** 为 `ws` 客户端构造 HTTP(S) 或 SOCKS4/5 代理 Agent */
+export function createWsProxyAgent(
+  proxy: ParsedProxyEntry,
   secureTarget: boolean,
   options?: { connectTimeoutMs?: number }
 ): http.Agent {
-  const BaseAgent = secureTarget ? https.Agent : http.Agent
   const timeoutMs = options?.connectTimeoutMs ?? CONNECT_TIMEOUT_MS
-  const proxyHost = stripIpv6Brackets(proxy.host)
-  const requestFn = proxy.protocol === 'https:' ? https.request : http.request
-
-  class ConnectProxyAgent extends BaseAgent {
-    override createConnection(
-      connOptions: ClientRequestArgs & { servername?: string },
-      callback?: (err: Error | null, stream: Duplex) => void
-    ): Duplex | null | undefined {
-      const rawTargetHost = String(connOptions.hostname || connOptions.host || '')
-      const targetPort = Number(connOptions.port) || (secureTarget ? 443 : 80)
-      const authority = formatConnectAuthority(rawTargetHost, targetPort)
-      const req = requestFn({
-        host: proxyHost,
-        port: proxy.port,
-        method: 'CONNECT',
-        path: authority,
-        headers: { Host: authority },
-      })
-      let settled = false
-      const done = (err: Error | null, socket?: Duplex) => {
-        if (settled) return
-        settled = true
-        callback?.(err, socket as Duplex)
-      }
-      req.setTimeout(timeoutMs, () => {
-        req.destroy(new Error(`Proxy CONNECT timed out after ${timeoutMs}ms`))
-      })
-      req.once('connect', (res, socket, head) => {
-        req.setTimeout(0)
-        if (res.statusCode !== 200) {
-          socket.destroy()
-          done(new Error(`Proxy CONNECT rejected with HTTP ${res.statusCode}`))
-          return
-        }
-        if (head && head.length > 0) socket.unshift(head)
-        if (!secureTarget) {
-          done(null, socket)
-          return
-        }
-        const rawSni = connOptions.servername || stripIpv6Brackets(rawTargetHost)
-        const servername = rawSni && net.isIP(rawSni) === 0 ? rawSni : undefined
-        const tlsSocket = tls.connect({
-          socket,
-          ...(servername ? { servername } : {}),
-        })
-        const onTlsError = (err: Error) => {
-          tlsSocket.destroy()
-          done(err)
-        }
-        const onTlsTimeout = () => {
-          const err = new Error(`Proxy TLS handshake timed out after ${timeoutMs}ms`)
-          tlsSocket.destroy(err)
-          done(err)
-        }
-        tlsSocket.setTimeout(timeoutMs, onTlsTimeout)
-        tlsSocket.once('error', onTlsError)
-        // 必须等到 TLS 握手完成（secureConnect）才 resolve，否则上面的 error 监听永远成为死代码
-        tlsSocket.once('secureConnect', () => {
-          tlsSocket.setTimeout(0)
-          tlsSocket.removeListener('error', onTlsError)
-          done(null, tlsSocket)
-        })
-      })
-      req.once('error', (err) => done(err))
-      req.end()
-      // createConnection 异步返回 undefined，ws 通过 callback 接收已建立的隧道 socket
-      return undefined
-    }
+  const proxyUrl = buildProxyUrl(proxy)
+  if (proxy.protocol === 'http:' || proxy.protocol === 'https:') {
+    return new TimeoutHttpsProxyAgent(proxyUrl, secureTarget, timeoutMs)
   }
-  return new ConnectProxyAgent({ keepAlive: false })
+  return new TimeoutSocksProxyAgent(proxyUrl, secureTarget, timeoutMs)
+}
+
+/** 为 `ws` 客户端构造走 HTTP(S) CONNECT 隧道的 Agent（底层委托给 `https-proxy-agent`） */
+export function createHttpConnectAgent(
+  proxy: {
+    host: string
+    port: number
+    protocol?: 'http:' | 'https:'
+    username?: string
+    password?: string
+  },
+  secureTarget: boolean,
+  options?: { connectTimeoutMs?: number }
+): http.Agent {
+  return createWsProxyAgent(
+    {
+      host: proxy.host,
+      port: proxy.port,
+      protocol: proxy.protocol ?? 'http:',
+      ...(proxy.username !== undefined ? { username: proxy.username } : {}),
+      ...(proxy.password !== undefined ? { password: proxy.password } : {}),
+    },
+    secureTarget,
+    options
+  )
 }
 
 export interface SystemProxyOptions {
@@ -271,9 +608,9 @@ export async function resolveWebSocketProxyAgent(wsUrl: string): Promise<http.Ag
   if (typeof targetSession?.resolveProxy !== 'function') return undefined
   try {
     const pac = await targetSession.resolveProxy(httpEquivalent)
-    const proxy = parseFirstHttpProxyEntry(pac)
+    const proxy = parseFirstProxyEntry(pac)
     if (!proxy) return undefined
-    return createHttpConnectAgent(proxy, parsed.protocol === 'wss:')
+    return createWsProxyAgent(proxy, parsed.protocol === 'wss:')
   } catch {
     return undefined
   }

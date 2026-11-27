@@ -1,16 +1,18 @@
 /**
- * 极简 XML 扫描器（只为抽取文本，不建树、不校验）。
+ * 流式 XML 扫描器（基于 `saxes` SAX 解析器，不建 DOM 树、不展开外部实体）。
  *
- * OOXML / ODF / XHTML 的分析需求只有三件事：认标签、取属性、取文本。引入完整
- * XML 解析器会带来 DTD / 实体展开等风险，也会增加体积；这里按 `<` `>` 逐段扫描，
- * 跳过注释、处理指令与 DOCTYPE，返回三种 token，交给各格式的处理函数自己走栈。
+ * OOXML / ODF / XHTML 的文本抽取只需识别开闭标签、属性与文本；`saxes` 默认不解析
+ * DTD 实体声明也不加载外部资源（天然防 XXE / 实体炸弹），这里按块喂给 `SaxesParser`，
+ * 产出与各格式解析器兼容的 `open` / `close` / `text` token 流。
  */
+
+import { SaxesParser } from 'saxes'
 
 export interface XmlToken {
   type: 'open' | 'close' | 'text'
   /** 去掉命名空间前缀后的本地名，例如 `w:p` → `p` */
   name: string
-  /** 属性：本地名 → 值（`w:val` → `val`） */
+  /** 属性：保留带前缀全名（如 `r:id`），未冲突时同时提供本地名别名（如 `val`） */
   attrs: Record<string, string>
   /** 自闭合标签（`<w:tab/>`） */
   selfClosing: boolean
@@ -26,6 +28,10 @@ const ENTITIES: Record<string, string> = Object.assign(Object.create(null), {
   apos: "'",
   nbsp: '\u00a0',
 })
+
+const FORBIDDEN_ATTR_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+/** 分块喂给 saxes 的字符长度：兼顾流式提前终止与低内存占用 */
+const SCAN_CHUNK_CHARS = 65_536
 
 function isValidCodePoint(code: number): boolean {
   return (
@@ -63,34 +69,10 @@ export function attr(attrs: Record<string, string>, name: string): string | unde
   return attrs[name]
 }
 
-/** 标签内部的 `>` 可能出现在属性值里，扫描时跳过引号内的内容 */
-function findTagEnd(xml: string, from: number): number {
-  let quote: string | null = null
-  for (let index = from + 1; index < xml.length; index += 1) {
-    const char = xml[index]
-    if (quote) {
-      if (char === quote) quote = null
-      continue
-    }
-    if (char === '"' || char === "'") {
-      quote = char
-      continue
-    }
-    if (char === '>') return index
-  }
-  return -1
-}
-
-const FORBIDDEN_ATTR_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
-
-function parseAttributes(source: string): Record<string, string> {
+function normalizeAttributes(rawAttrs: Record<string, string>): Record<string, string> {
   const attrs: Record<string, string> = {}
-  const pattern = /([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(source)) !== null) {
-    const fullName = match[1]
+  for (const [fullName, value] of Object.entries(rawAttrs)) {
     const local = localName(fullName)
-    const value = decodeXmlEntities(match[2] ?? match[3] ?? '')
     // 保留带命名空间前缀的完整名（如 `r:id`），避免 `<p:sldId r:id="rId2" id="256"/>`
     // 被同名无前缀属性覆盖导致幻灯片顺序错乱；同时在未冲突时提供本地名别名
     if (!FORBIDDEN_ATTR_KEYS.has(fullName)) {
@@ -107,95 +89,99 @@ function parseAttributes(source: string): Record<string, string> {
   return attrs
 }
 
-/** 扫描 `<!DOCTYPE ...>` 等声明：必须追踪内部子集 `[...]` 深度与引号，避免把 `]>` 漏进正文 */
-function findDeclarationEnd(xml: string, from: number): number {
-  let bracketDepth = 0
-  let quote: string | null = null
-  for (let index = from + 2; index < xml.length; index += 1) {
-    const char = xml[index]
-    if (quote) {
-      if (char === quote) quote = null
-      continue
-    }
-    if (bracketDepth > 0 && xml.startsWith('<!--', index)) {
-      const commentEnd = xml.indexOf('-->', index + 4)
-      if (commentEnd < 0) return -1
-      index = commentEnd + 2
-      continue
-    }
-    if (char === '"' || char === "'") {
-      quote = char
-      continue
-    }
-    if (char === '[') {
-      bracketDepth += 1
-      continue
-    }
-    if (char === ']' && bracketDepth > 0) {
-      bracketDepth -= 1
-      continue
-    }
-    if (char === '>' && bracketDepth === 0) return index
-  }
-  return -1
-}
-
 /** 顺序遍历 XML token；遇到无法闭合的脏数据就结束，不抛错 */
 export function* scanXml(xml: string): Generator<XmlToken> {
-  let index = 0
-  while (index < xml.length) {
-    const lt = xml.indexOf('<', index)
-    if (lt < 0) {
-      const tail = xml.slice(index)
-      if (tail) yield textToken(tail)
-      return
-    }
-    if (lt > index) yield textToken(xml.slice(index, lt))
+  if (!xml) return
 
-    if (xml.startsWith('<!--', lt)) {
-      const end = xml.indexOf('-->', lt + 4)
-      index = end < 0 ? xml.length : end + 3
-      continue
-    }
-    if (xml.startsWith('<![CDATA[', lt)) {
-      const end = xml.indexOf(']]>', lt + 9)
-      const raw = xml.slice(lt + 9, end < 0 ? xml.length : end)
-      if (raw) yield { type: 'text', name: '', attrs: {}, selfClosing: false, text: raw }
-      index = end < 0 ? xml.length : end + 3
-      continue
-    }
-    if (xml.startsWith('<?', lt)) {
-      const end = xml.indexOf('?>', lt + 2)
-      index = end < 0 ? xml.length : end + 2
-      continue
-    }
-    if (xml.startsWith('<!', lt)) {
-      const end = findDeclarationEnd(xml, lt)
-      index = end < 0 ? xml.length : end + 1
-      continue
-    }
+  const parser = new SaxesParser({ xmlns: false, position: false })
+  parser.ENTITIES.nbsp = '\u00a0'
 
-    const gt = findTagEnd(xml, lt)
-    if (gt < 0) return
-    const raw = xml.slice(lt + 1, gt).trim()
-    index = gt + 1
-    if (!raw) continue
+  const queue: XmlToken[] = []
+  let stopped = false
 
-    if (raw.startsWith('/')) {
-      yield { type: 'close', name: localName(raw.slice(1).trim()), attrs: {}, selfClosing: false, text: '' }
-      continue
+  // saxes 遇到非严格 XML（片段、未定义实体、未闭合尾部）时走 error 事件；
+  // 截断在标签/属性/注释内部时 `end()` 会触发 `unexpected end.`，此时立即停产避免泄漏残片。
+  parser.on('error', (error) => {
+    if (error.message.includes('unexpected end.')) {
+      stopped = true
     }
-    const selfClosing = raw.endsWith('/')
-    const body = selfClosing ? raw.slice(0, -1) : raw
-    const space = body.search(/[\s]/)
-    const name = localName(space < 0 ? body : body.slice(0, space))
-    const attrs = space < 0 ? {} : parseAttributes(body.slice(space))
-    yield { type: 'open', name, attrs, selfClosing, text: '' }
+  })
+
+  // DTD 仅跳过、不解析也不展开任何实体（防 XXE / Billion Laughs）
+  parser.on('doctype', () => {
+    // intentionally ignored
+  })
+
+  parser.on('opentag', (tag) => {
+    if (stopped) return
+    queue.push({
+      type: 'open',
+      name: localName(tag.name),
+      attrs: normalizeAttributes(tag.attributes),
+      selfClosing: tag.isSelfClosing,
+      text: '',
+    })
+  })
+
+  parser.on('closetag', (tag) => {
+    // 自闭合标签在 saxes 中会紧随 opentag 触发一次 closetag；
+    // 下游 ooxml.ts 约定自闭合标签仅产出 `open(selfClosing: true)`，不产出 `close`
+    if (stopped || tag.isSelfClosing) return
+    queue.push({
+      type: 'close',
+      name: localName(tag.name),
+      attrs: {},
+      selfClosing: false,
+      text: '',
+    })
+  })
+
+  parser.on('text', (text) => {
+    if (stopped || !text) return
+    queue.push({
+      type: 'text',
+      name: '',
+      attrs: {},
+      selfClosing: false,
+      text,
+    })
+  })
+
+  parser.on('cdata', (cdata) => {
+    if (stopped || !cdata) return
+    queue.push({
+      type: 'text',
+      name: '',
+      attrs: {},
+      selfClosing: false,
+      text: cdata,
+    })
+  })
+
+  for (let offset = 0; offset < xml.length && !stopped; offset += SCAN_CHUNK_CHARS) {
+    try {
+      parser.write(xml.slice(offset, offset + SCAN_CHUNK_CHARS))
+    } catch {
+      stopped = true
+    }
+    if (queue.length > 0) {
+      const batch = queue.splice(0, queue.length)
+      for (const token of batch) yield token
+    }
   }
-}
 
-function textToken(raw: string): XmlToken {
-  return { type: 'text', name: '', attrs: {}, selfClosing: false, text: decodeXmlEntities(raw) }
+  if (!stopped) {
+    try {
+      parser.close()
+    } catch {
+      // 脏尾部不抛错
+    }
+  }
+
+  if (queue.length > 0) {
+    const batch = queue.splice(0, queue.length)
+    for (const token of batch) yield token
+  }
 }
 
 /** 块级元素关闭时换行：XHTML 与 ODF 共用的近似规则 */
