@@ -11,6 +11,7 @@ import { getAppDir } from '../app-paths.js'
 import { getCoordinator } from '../worktree-coordinator.js'
 import { canonicalizePath, isTrustedWorkspacePath, normalizeForComparison } from '../workspace-trust.js'
 import { activeProviderConfig } from '../providers-service.js'
+import { resolveEffectiveMcpServers } from '../mcp-store.js'
 import {
   clearCloudLink,
   normalizeBaseUrl,
@@ -103,6 +104,8 @@ async function ensureAgent(context: CloudIpcContext): Promise<DeviceAgent> {
         release: (sessionId: string) => coordinator.release(sessionId),
       }
     },
+    getMcpServers: (workspacePath: string, worktreePath: string) =>
+      resolveEffectiveMcpServers(workspacePath, { cwdOverride: worktreePath }),
     onStateChange: (state) => context.onStateChange(state),
   })
   return deviceAgent

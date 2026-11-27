@@ -65,6 +65,7 @@ import {
   initializeWebSearch,
   registerWebSearchIpc
 } from './ipc/web-search.js'
+import { registerMcpIpc } from './ipc/mcp.js'
 import { completeGithubOAuth, isGithubCallbackUrl, GITHUB_PROTOCOL } from './github-oauth.js'
 import {
   getAppSettingsCache,
@@ -696,6 +697,7 @@ const cloudIpcContext: CloudIpcContext = {
 
 registerSettingsIpc({ onSettingsSaved: (saved) => syncAllTitleBarOverlays(saved.theme) })
 registerWebSearchIpc()
+registerMcpIpc({ agentRegistry, logger: agentLogger })
 registerCloudIpc(cloudIpcContext)
 
 // 初始化应用目录结构

@@ -69,14 +69,16 @@ export interface DeviceAgentDeps {
   isAllowedWorkspace?: (workspacePath: string) => boolean | Promise<boolean>
   getApiConfig: CloudTaskRunnerDeps_Pick
   getCoordinator: CloudTaskRunnerDeps_Coordinator
+  getMcpServers?: CloudTaskRunnerDeps_Mcp
   onStateChange?: (state: DeviceLinkState) => void
 }
 
-// 只取 task-runner 需要的两个依赖，避免把整个类型面暴露给上层
+// 只取 task-runner 需要的依赖，避免把整个类型面暴露给上层
 type CloudTaskRunnerDeps_Pick = ConstructorParameters<typeof CloudTaskRunner>[0]['getApiConfig']
 type CloudTaskRunnerDeps_Coordinator = ConstructorParameters<
   typeof CloudTaskRunner
 >[0]['getCoordinator']
+type CloudTaskRunnerDeps_Mcp = ConstructorParameters<typeof CloudTaskRunner>[0]['getMcpServers']
 
 export class DeviceAgent {
   private deps: DeviceAgentDeps
@@ -114,6 +116,7 @@ export class DeviceAgent {
       },
       getApiConfig: deps.getApiConfig,
       getCoordinator: deps.getCoordinator,
+      getMcpServers: deps.getMcpServers,
       onStatus: (taskId, status) => this.send({ type: 'task_status', taskId, status, at: Date.now() }),
       onWorktree: (taskId, unitId, worktreePath, branch) =>
         this.send({

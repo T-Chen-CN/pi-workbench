@@ -204,6 +204,24 @@ export const cloudSaveConfigSchema = z
   })
   .loose()
 
+export const mcpServerIdInputSchema = z
+  .string()
+  .trim()
+  .min(1, 'Server id is required')
+  .max(64, 'Server id is too long')
+  .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid MCP server id')
+
+export const mcpSetGlobalEnabledSchema = z.object({
+  id: mcpServerIdInputSchema,
+  enabled: z.boolean(),
+})
+
+export const mcpSetProjectTrustSchema = z.object({
+  workspaceDir: safePathSchema,
+  serverId: mcpServerIdInputSchema,
+  enabled: z.boolean(),
+})
+
 export function parseIpcInput<T>(
   schema: z.ZodType<T>,
   input: unknown

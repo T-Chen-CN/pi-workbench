@@ -16,6 +16,8 @@ import type {
   AgentLogger,
   ApprovalDecision,
   ApprovalRequestPayload,
+  McpServerConfig,
+  McpServerStatus,
   TrackedModelsStore,
 } from 'pi-bridge'
 import type {
@@ -24,10 +26,11 @@ import type {
   SessionPermissionPayload,
   StructuredPlanPayload,
 } from './agent-registry.js'
-import { childRegistry, type ChildRegistry } from './child-registry.js'
+import { childRegistry, killProcessTreeAsync, type ChildRegistry } from './child-registry.js'
 import type {
   AgentChatRpcInput,
   AgentHostCallbackMethod,
+  AgentHostEventName,
   AgentHostInitPayload,
   AgentHostRpcMethod,
   AgentHostSyncState,
@@ -111,6 +114,7 @@ export interface AgentHostCallbacks {
   onSessionTitle: (sessionId: string, title: string) => void
   onSessionRootChanged: (sessionId: string, root: string) => void
   onAgentSettled?: (sessionId: string) => void
+  resolveMcpServers?: () => McpServerConfig[] | Promise<McpServerConfig[]>
   logger: AgentLogger
 }
 
@@ -215,6 +219,7 @@ export class AgentHostClient implements RegisteredAgent {
   private readonly activeChatCallbacks = new Map<string, ActiveChatCallback>()
   private readonly activeChatSessions = new Map<string, number>()
   private readonly attachedSenders = new Map<number, string>()
+  private readonly mcpChildUnregisters = new Map<number, () => void>()
 
   private initialized = false
   private disposing = false
@@ -383,12 +388,27 @@ export class AgentHostClient implements RegisteredAgent {
     return child
   }
 
+  private clearMcpChildPids(killOrphans: boolean): void {
+    for (const [pid, unregister] of [...this.mcpChildUnregisters.entries()]) {
+      this.mcpChildUnregisters.delete(pid)
+      try {
+        unregister()
+      } catch {
+        // ignore
+      }
+      if (killOrphans) {
+        void killProcessTreeAsync(pid).catch(() => undefined)
+      }
+    }
+  }
+
   private handleProcessExit(code: number): void {
     this.unregisterChild?.()
     this.unregisterChild = null
     this.child = null
     this.currentPid = null
     this.attachedSenders.clear()
+    this.clearMcpChildPids(!this.disposing && !this.disposed)
 
     if (this.disposing || this.disposed) {
       this.initialized = false
@@ -507,7 +527,7 @@ export class AgentHostClient implements RegisteredAgent {
   }
 
   private handleHostEvent(
-    event: 'session-title' | 'session-root-changed' | 'agent-settled' | 'log',
+    event: AgentHostEventName,
     payload: unknown
   ): void {
     const data = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {}
@@ -527,6 +547,20 @@ export class AgentHostClient implements RegisteredAgent {
           this.hostCallbacks.onAgentSettled?.(data.sessionId)
         }
         return
+      case 'mcp-child-pid': {
+        const pid = typeof data.pid === 'number' && Number.isInteger(data.pid) ? data.pid : 0
+        if (pid <= 0) return
+        if (data.action === 'register') {
+          this.mcpChildUnregisters.get(pid)?.()
+          const unreg = this.registry.register({ pid, group: 'utility' })
+          this.mcpChildUnregisters.set(pid, unreg)
+        } else if (data.action === 'unregister') {
+          const unreg = this.mcpChildUnregisters.get(pid)
+          this.mcpChildUnregisters.delete(pid)
+          unreg?.()
+        }
+        return
+      }
       case 'log': {
         const level = typeof data.level === 'string' ? data.level : 'info'
         const args = Array.isArray(data.args) ? data.args : [data.args]
@@ -655,6 +689,11 @@ export class AgentHostClient implements RegisteredAgent {
           break
         case 'getWebAccessConfigVersion':
           result = this.hostCallbacks.getSyncState().webAccessConfigVersion
+          break
+        case 'mcp:resolveServers':
+          result = this.hostCallbacks.resolveMcpServers
+            ? await this.hostCallbacks.resolveMcpServers()
+            : []
           break
       }
 
@@ -842,6 +881,7 @@ export class AgentHostClient implements RegisteredAgent {
     this.disposed = true
     this.unregisterChild?.()
     this.unregisterChild = null
+    this.clearMcpChildPids(true)
     this.child = null
     this.currentPid = null
     this.attachedSenders.clear()
@@ -1130,5 +1170,19 @@ export class AgentHostClient implements RegisteredAgent {
     error?: string
   }> {
     return this.callRpc('getSessionStats', [sessionId])
+  }
+
+  async getMcpStatuses(): Promise<McpServerStatus[]> {
+    if (!this.isInitialized()) return []
+    return this.callRpc<McpServerStatus[]>('mcp:getStatuses', [])
+  }
+
+  async refreshMcpServers(servers?: McpServerConfig[]): Promise<McpServerStatus[]> {
+    if (!this.isInitialized()) return []
+    return this.callRpc<McpServerStatus[]>(
+      'mcp:refreshServers',
+      servers !== undefined ? [servers] : [],
+      LONG_RPC_TIMEOUT_MS
+    )
   }
 }

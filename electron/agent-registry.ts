@@ -5,6 +5,7 @@
  * 配置变化或工作区关闭时释放。
  */
 import * as path from 'path'
+import type { McpServerConfig, McpServerStatus } from 'pi-bridge'
 import { withTimeout } from './async-utils.js'
 
 /**
@@ -266,6 +267,10 @@ export interface RegisteredAgent {
     error?: string
   }>
   getCurrentSessionId?: () => string | null
+  /** MCP 服务器运行时状态快照 */
+  getMcpStatuses?: () => Promise<McpServerStatus[]> | McpServerStatus[]
+  /** 热刷新已连接的 MCP 服务器配置 */
+  refreshMcpServers?: (servers?: McpServerConfig[]) => Promise<McpServerStatus[]>
 }
 
 interface Entry {
@@ -345,6 +350,11 @@ export class AgentRegistry {
   /** 已登记的工作区数量（测试与诊断用） */
   size(): number {
     return this.entries.size
+  }
+
+  /** 返回所有已登记的工作区根路径 */
+  listWorkspaces(): string[] {
+    return [...this.entries.values()].map((entry) => entry.workspaceDir)
   }
 
   /** 存在运行中会话的工作区与会话 ID；配置保存前用于避免打断正在跑的轮次 */

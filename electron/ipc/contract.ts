@@ -8,6 +8,25 @@
  */
 
 import { z } from 'zod'
+import type {
+  McpServerInput,
+  McpServerSource,
+  McpServerState,
+  McpServerStatus,
+  McpTestResult,
+  McpToolInfo,
+  McpTransportType,
+} from 'pi-bridge/mcp'
+
+export type {
+  McpServerInput,
+  McpServerSource,
+  McpServerState,
+  McpServerStatus,
+  McpTestResult,
+  McpToolInfo,
+  McpTransportType,
+}
 
 // ============================================================================
 // 1. 领域契约类型（主进程 / 预加载 / 渲染层共用）
@@ -722,6 +741,44 @@ export interface WebSearchGetResult {
 
 export interface WebSearchSaveResult {
   success: boolean
+  error?: string
+}
+
+// MCP 服务器管理（全局与项目级）
+export type McpServerSaveInput = McpServerInput
+
+export type McpTestRequest =
+  | { scope: 'global'; id: string }
+  | { scope: 'project'; workspaceDir: string; id: string }
+  | { scope: 'inline'; config: McpServerSaveInput; workspaceDir?: string }
+
+export interface McpListResult {
+  success: boolean
+  global: McpServerStatus[]
+  project: McpServerStatus[]
+  error?: string
+}
+
+export interface McpSaveGlobalResult {
+  success: boolean
+  server?: McpServerStatus
+  error?: string
+}
+
+export interface McpDeleteGlobalResult {
+  success: boolean
+  error?: string
+}
+
+export interface McpSetEnabledResult {
+  success: boolean
+  server?: McpServerStatus
+  error?: string
+}
+
+export interface McpTestCallResult {
+  success: boolean
+  result?: McpTestResult
   error?: string
 }
 
@@ -1565,6 +1622,14 @@ export const IPC_INVOKE_CHANNELS = {
   webSearchGet: 'webSearch:get',
   webSearchSave: 'webSearch:save',
 
+  // MCP 服务器管理
+  mcpList: 'mcp:list',
+  mcpSaveGlobal: 'mcp:saveGlobal',
+  mcpDeleteGlobal: 'mcp:deleteGlobal',
+  mcpSetGlobalEnabled: 'mcp:setGlobalEnabled',
+  mcpSetProjectTrust: 'mcp:setProjectTrust',
+  mcpTest: 'mcp:test',
+
   // 文档预览与扫描页渲染回传
   documentsPreview: 'documents:preview',
   documentRenderResult: 'documents:render-result',
@@ -2083,6 +2148,17 @@ export interface IpcInvokeContract {
   'webSearch:get': { args: []; result: WebSearchGetResult }
   'webSearch:save': { args: [config: WebSearchConfig]; result: WebSearchSaveResult }
 
+  // MCP 服务器管理
+  'mcp:list': { args: [workspaceDir?: string]; result: McpListResult }
+  'mcp:saveGlobal': { args: [input: McpServerSaveInput]; result: McpSaveGlobalResult }
+  'mcp:deleteGlobal': { args: [id: string]; result: McpDeleteGlobalResult }
+  'mcp:setGlobalEnabled': { args: [id: string, enabled: boolean]; result: McpSetEnabledResult }
+  'mcp:setProjectTrust': {
+    args: [workspaceDir: string, serverId: string, enabled: boolean]
+    result: McpSetEnabledResult
+  }
+  'mcp:test': { args: [request: McpTestRequest]; result: McpTestCallResult }
+
   // 文档预览与扫描页渲染回传
   'documents:preview': { args: [path: string]; result: DocumentPreviewResult }
   'documents:render-result': {
@@ -2290,6 +2366,37 @@ function buildIpcInvokeSchemas(): Partial<Record<IpcInvokeChannel, z.ZodType<rea
     permissions: z.record(z.string().max(32), z.enum(['allow', 'ask', 'deny'])).optional(),
   })
 
+  const mcpServerId = z
+    .string()
+    .trim()
+    .min(1, 'Server id is required.')
+    .max(64, 'Server id must be at most 64 characters.')
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid MCP server id')
+  const mcpSecretMap = z.record(z.string().min(1).max(128), z.string().max(4096))
+  const mcpServerInput = z.object({
+    id: mcpServerId.optional(),
+    name: z.string().trim().min(1).max(120),
+    enabled: z.boolean().optional(),
+    transport: z.enum(['stdio', 'http', 'sse']),
+    command: z.string().trim().max(1024).optional(),
+    args: z.array(z.string().max(2048)).max(64).optional(),
+    cwd: z.string().trim().max(1024).optional(),
+    env: mcpSecretMap.optional(),
+    url: z.string().trim().max(2048).optional(),
+    headers: mcpSecretMap.optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+    source: z.enum(['global', 'project', 'cloud']).optional(),
+  })
+  const mcpTestRequest = z.discriminatedUnion('scope', [
+    z.object({ scope: z.literal('global'), id: mcpServerId }),
+    z.object({ scope: z.literal('project'), workspaceDir: safePath, id: mcpServerId }),
+    z.object({
+      scope: z.literal('inline'),
+      config: mcpServerInput,
+      workspaceDir: safePath.optional(),
+    }),
+  ])
+
   return {
     'fs:createFile': z.tuple([safePath]),
     'fs:writeFile': z.tuple([
@@ -2379,6 +2486,11 @@ function buildIpcInvokeSchemas(): Partial<Record<IpcInvokeChannel, z.ZodType<rea
         })
         .loose(),
     ]),
+    'mcp:saveGlobal': z.tuple([mcpServerInput]),
+    'mcp:deleteGlobal': z.tuple([mcpServerId]),
+    'mcp:setGlobalEnabled': z.tuple([mcpServerId, z.boolean()]),
+    'mcp:setProjectTrust': z.tuple([safePath, mcpServerId, z.boolean()]),
+    'mcp:test': z.tuple([mcpTestRequest]),
   }
 }
 

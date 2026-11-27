@@ -97,6 +97,8 @@ export type AgentHostRpcMethod =
   | 'getCurrentSessionId'
   | 'hasRunningSessions'
   | 'credentials:runModify'
+  | 'mcp:getStatuses'
+  | 'mcp:refreshServers'
 
 export type AgentHostCallbackMethod =
   | 'credentials:get'
@@ -119,12 +121,14 @@ export type AgentHostCallbackMethod =
   | 'getDefaultPermissionLevel'
   | 'getLanguage'
   | 'getWebAccessConfigVersion'
+  | 'mcp:resolveServers'
 
 export type AgentHostEventName =
   | 'session-title'
   | 'session-root-changed'
   | 'agent-settled'
   | 'log'
+  | 'mcp-child-pid'
 
 export interface AgentChatRpcInput {
   sessionId?: string

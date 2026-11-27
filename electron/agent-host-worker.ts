@@ -20,12 +20,15 @@ import {
   type ApprovalDecision,
   type ApprovalRequestPayload,
   type CatalogSnapshot,
+  type McpServerConfig,
+  type McpServerStatus,
   type TrackedModelsStore,
 } from 'pi-bridge'
 import {
   serializeLogArgs,
   type AgentChatRpcInput,
   type AgentHostCallbackMethod,
+  type AgentHostEventName,
   type AgentHostInitPayload,
   type AgentHostRpcMethod,
   type AgentHostSyncState,
@@ -104,6 +107,8 @@ export interface AgentRuntimeInstance {
   getMessageHistory: (sessionId?: string) => unknown
   getCurrentSessionId: () => string | null
   hasRunningSessions: () => string[]
+  getMcpStatuses?: () => McpServerStatus[]
+  refreshMcpServers?: (servers: McpServerConfig[]) => Promise<McpServerStatus[]>
 }
 
 export interface AgentHostWorkerDeps {
@@ -222,7 +227,7 @@ export function attachAgentHostWorker(
   }
 
   const emitHostEvent = (
-    event: 'session-title' | 'session-root-changed' | 'agent-settled' | 'log',
+    event: AgentHostEventName,
     payload: unknown
   ): void => {
     post({ type: 'host:event', event, payload })
@@ -386,6 +391,17 @@ export function attachAgentHostWorker(
           onAgentSettled: (sessionId: string) => {
             emitHostEvent('agent-settled', { sessionId })
             notifyRunningSessions()
+          },
+          getMcpServers: () => hostRequest<McpServerConfig[]>('mcp:resolveServers', {}),
+          allowMcpTools: true,
+          onMcpChildPid: (pid: number) => {
+            emitHostEvent('mcp-child-pid', { action: 'register', pid })
+            let unregistered = false
+            return () => {
+              if (unregistered) return
+              unregistered = true
+              emitHostEvent('mcp-child-pid', { action: 'unregister', pid })
+            }
           },
         }
         const res = await agent.initialize(config)
@@ -570,6 +586,17 @@ export function attachAgentHostWorker(
           throw new Error(`No pending credential modify callback for ${req.modifyId}`)
         }
         return await fn(req.current)
+      }
+
+      case 'mcp:getStatuses':
+        return agent.getMcpStatuses?.() ?? []
+
+      case 'mcp:refreshServers': {
+        const provided = args[0] as McpServerConfig[] | undefined
+        const servers = Array.isArray(provided)
+          ? provided
+          : await hostRequest<McpServerConfig[]>('mcp:resolveServers', {})
+        return (await agent.refreshMcpServers?.(servers)) ?? []
       }
     }
   }

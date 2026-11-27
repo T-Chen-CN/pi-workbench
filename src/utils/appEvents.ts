@@ -6,6 +6,7 @@ export interface AppEventMap {
       | 'general'
       | 'api'
       | 'websearch'
+      | 'mcp'
       | 'github'
       | 'permissions'
       | 'shortcuts'

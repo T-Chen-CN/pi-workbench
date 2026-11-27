@@ -3,6 +3,8 @@
 import * as path from 'path'
 import { getAppDir } from '../app-paths.js'
 import type { RegisteredAgent } from '../agent-registry.js'
+import { childRegistry } from '../child-registry.js'
+import { resolveEffectiveMcpServers } from '../mcp-store.js'
 import {
   AgentHostClient,
   isAgentUtilityProcessAvailable,
@@ -176,6 +178,7 @@ async function initializeWorkspaceAgent(
             broadcastToWindows('agent:session-title', { workspaceDir, sessionId, title })
           },
           onSessionRootChanged: handleSessionRootChanged,
+          resolveMcpServers: () => resolveEffectiveMcpServers(workspaceDir),
           logger: context.logger,
         },
         onCrash: ({ workspaceDir: crashedWs, exitCode, interruptedSessionIds }) => {
@@ -249,6 +252,10 @@ async function initializeWorkspaceAgent(
       getWorktreeContext: (sessionId: string) => coordinator?.contextFor(sessionId) ?? '',
       onWorktreeSwitch: handleWorktreeSwitch,
       onSessionRootChanged: handleSessionRootChanged,
+      getMcpServers: () => resolveEffectiveMcpServers(workspaceDir),
+      allowMcpTools: true,
+      onMcpChildPid: (pid: number, kill: () => void) =>
+        childRegistry.register({ pid, group: 'utility', kill }),
     })
 
     if (result.success) {

@@ -37,6 +37,11 @@ import type {
   WebSearchConfig,
   WebSearchGetResult,
   WebSearchSaveResult,
+  McpListResult,
+  McpSaveGlobalResult,
+  McpDeleteGlobalResult,
+  McpSetEnabledResult,
+  McpTestCallResult,
   RecentWorkspacesResult,
   PluginsListResult,
   PluginCommandResult,
@@ -454,6 +459,29 @@ const mockAPI = {
     localStorage.setItem(MOCK_WEB_SEARCH_KEY, JSON.stringify(config))
     return { success: true }
   },
+
+  // MCP 服务器（Web 开发模式没有主进程，返回空列表与明确提示）
+  mcpList: async (): Promise<McpListResult> => ({ success: true, global: [], project: [] }),
+  mcpSaveGlobal: async (): Promise<McpSaveGlobalResult> => ({
+    success: false,
+    error: 'MCP servers are only available in the Electron app',
+  }),
+  mcpDeleteGlobal: async (): Promise<McpDeleteGlobalResult> => ({
+    success: false,
+    error: 'MCP servers are only available in the Electron app',
+  }),
+  mcpSetGlobalEnabled: async (): Promise<McpSetEnabledResult> => ({
+    success: false,
+    error: 'MCP servers are only available in the Electron app',
+  }),
+  mcpSetProjectTrust: async (): Promise<McpSetEnabledResult> => ({
+    success: false,
+    error: 'MCP servers are only available in the Electron app',
+  }),
+  mcpTest: async (): Promise<McpTestCallResult> => ({
+    success: false,
+    error: 'MCP servers are only available in the Electron app',
+  }),
 
   // Workbench plugins（Web 模式没有主进程，返回空列表）
   pluginsList: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
@@ -917,6 +945,17 @@ export const api = {
   // Web search (内置联网能力)
   webSearchGet: createContractApiCall(getBridge, 'webSearchGet'),
   webSearchSave: createContractApiCall(getBridge, 'webSearchSave'),
+
+  // MCP 服务器管理（全局与项目级）
+  mcpList: createContractApiCall(getBridge, 'mcpList', {
+    fallback: () => ({ success: true, global: [], project: [] }),
+    onError: (error) => ({ success: false, global: [], project: [], error }),
+  }),
+  mcpSaveGlobal: createContractApiCall(getBridge, 'mcpSaveGlobal'),
+  mcpDeleteGlobal: createContractApiCall(getBridge, 'mcpDeleteGlobal'),
+  mcpSetGlobalEnabled: createContractApiCall(getBridge, 'mcpSetGlobalEnabled'),
+  mcpSetProjectTrust: createContractApiCall(getBridge, 'mcpSetProjectTrust'),
+  mcpTest: createContractApiCall(getBridge, 'mcpTest'),
 
   // Workbench plugins
   pluginsList: createContractApiCall(getBridge, 'pluginsList', {

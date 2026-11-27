@@ -17,15 +17,18 @@ import { promisify } from 'node:util'
 import {
   CLOUD_TASK_HEARTBEAT_MS,
   CLOUD_TOOL_STALL_MS,
+  computeMcpServerFingerprint,
   type CloudChangedFile,
   type CloudSecretHit,
   type CloudTaskMilestone,
   type CloudTaskResult,
   type CloudTaskSpec,
   type CloudTaskStatus,
+  type McpServerConfig,
 } from 'pi-bridge'
 import { getBridgeEntryUrl } from '../app-paths.js'
 import { readJsonWithBackup, writeJsonAtomic, writeJsonAtomicAsync } from '../atomic-json.js'
+import { childRegistry } from '../child-registry.js'
 import {
   createTaskGuardExtension,
   installWorktreePrePushHook,
@@ -151,6 +154,13 @@ export interface CloudTaskRunnerDeps {
   now?: () => number
   /** 可覆盖 pre-push hook 安装实现（测试注入用，缺省走真实 installWorktreePrePushHook） */
   installPrePushHook?: typeof installWorktreePrePushHook
+  /** 按工作区与工单工作树解析已启用的全局 + 已信任项目级 MCP 服务器（相对 cwd 绑定到 worktreePath） */
+  getMcpServers?: (
+    workspacePath: string,
+    worktreePath: string
+  ) => McpServerConfig[] | Promise<McpServerConfig[]>
+  /** 可覆盖工单 AgentManager 构造器（测试注入用，缺省动态加载 pi-bridge AgentManager） */
+  createAgentManager?: () => TaskAgentManager | Promise<TaskAgentManager>
   onResult: (taskId: string, result: CloudTaskResult) => void
   onFailed: (
     taskId: string,
@@ -499,22 +509,35 @@ export class CloudTaskRunner {
   }
 
   /** 复用用户当前 API 配置，按需建一个专属 AgentManager（独立 agentDir） */
-  private async ensureManager(): Promise<TaskAgentManager> {
+  private async ensureManager(
+    workspacePath?: string,
+    worktreePath?: string
+  ): Promise<TaskAgentManager> {
     const config = await this.deps.getApiConfig()
     if (!config || !config.modelId) {
       throw new Error('API configuration is missing; configure the model in Settings first')
     }
-    // 指纹只在换 key 时变；OAuth token 刷新不重建工单运行时（D21），但 overrides 变化必须重建
-    const key = `${config.providerId}|${config.modelId}|${config.fingerprint}|${serializeApiOverrides(config.overrides)}`
+    const resolvedMcpServers =
+      workspacePath && worktreePath && this.deps.getMcpServers
+        ? await this.deps.getMcpServers(workspacePath, worktreePath)
+        : []
+    const mcpServers = Array.isArray(resolvedMcpServers) ? resolvedMcpServers : []
+    const mcpKey = serializeMcpServersKey(mcpServers, mcpServers.length > 0 ? worktreePath : undefined)
+    // 指纹只在换 key 时变；OAuth token 刷新不重建工单运行时（D21），但 overrides 或生效 MCP 变化必须重建
+    const key = `${config.providerId}|${config.modelId}|${config.fingerprint}|${serializeApiOverrides(config.overrides)}|${mcpKey}`
     if (this.manager && this.managerKey === key) return this.manager
 
-    const { AgentManager } = (await import(getBridgeEntryUrl())) as {
-      AgentManager: new () => TaskAgentManager
-    }
+    const manager = this.deps.createAgentManager
+      ? await this.deps.createAgentManager()
+      : await (async () => {
+          const { AgentManager } = (await import(getBridgeEntryUrl())) as {
+            AgentManager: new () => TaskAgentManager
+          }
+          return new AgentManager()
+        })()
     const agentDir = path.join(this.deps.dataDir, 'agent')
     await fs.mkdir(agentDir, { recursive: true })
     await ensureTaskAgentSettings(agentDir)
-    const manager = new AgentManager()
     const result = await manager.initialize({
       workspaceDir: path.join(this.deps.dataDir, 'workspace'),
       agentDir,
@@ -530,6 +553,12 @@ export class CloudTaskRunner {
       // 工单会话：不挂计划与工作树扩展（worktree 扩展用的是实例级 workspaceDir）
       builtinExtensions: { plan: false, worktree: false },
       toolAllowlist: [...TASK_TOOL_ALLOWLIST],
+      allowMcpTools: true,
+      mcpServers,
+      ...(worktreePath ? { mcpCwd: worktreePath } : {}),
+      mcpOutputRedactor: (text: string) => redactSecrets(text),
+      onMcpChildPid: (pid: number, kill: () => void) =>
+        childRegistry.register({ pid, group: 'utility', kill }),
       getDefaultPermissionLevel: () => 'auto',
       extensionFactories: [
         createTaskGuardExtension({
@@ -727,7 +756,7 @@ export class CloudTaskRunner {
 
       let manager: TaskAgentManager
       try {
-        manager = await this.ensureManager()
+        manager = await this.ensureManager(spec.repo.workspacePath, unit.worktreePath)
       } catch (error) {
         if (this.disposed) {
           this.starting.delete(taskId)
@@ -741,7 +770,10 @@ export class CloudTaskRunner {
           return
         }
         // 在 startChain 内部原地重试一次（例如用户刚在设置里填好 Key），既持有 starting 占位也不绕过串行链
-        const refreshed = attempt === 0 ? await this.retryAfterConfigRefresh(taskId) : null
+        const refreshed =
+          attempt === 0
+            ? await this.retryAfterConfigRefresh(taskId, spec.repo.workspacePath, unit.worktreePath)
+            : null
         if (this.disposed) {
           this.starting.delete(taskId)
           return
@@ -882,11 +914,15 @@ export class CloudTaskRunner {
   }
 
   /** 配置刚改过时在当前 startChain 内延迟 1s 重试一次 ensureManager，绝不绕过串行链 */
-  private async retryAfterConfigRefresh(taskId: string): Promise<TaskAgentManager | null> {
+  private async retryAfterConfigRefresh(
+    taskId: string,
+    workspacePath?: string,
+    worktreePath?: string
+  ): Promise<TaskAgentManager | null> {
     await new Promise((resolve) => setTimeout(resolve, 1_000))
     if (this.disposed || this.cancelRequested.has(taskId)) return null
     try {
-      return await this.ensureManager()
+      return await this.ensureManager(workspacePath, worktreePath)
     } catch {
       return null
     }
@@ -1454,6 +1490,23 @@ function serializeApiOverrides(
     .sort()
     .map((key) => [key, overrides[key]?.contextWindow ?? null, overrides[key]?.maxTokens ?? null])
   return JSON.stringify(entries)
+}
+
+/** 生成不含明文密钥的确定性 MCP 签名，供 managerKey 判断是否需要切换 MCP 连接集合 */
+function serializeMcpServersKey(
+  servers: readonly McpServerConfig[],
+  worktreePath?: string
+): string {
+  if (servers.length === 0) return ''
+  const entries = servers.map((server) => ({
+    id: server.id,
+    name: server.name,
+    enabled: server.enabled,
+    source: server.source ?? '',
+    timeoutMs: server.timeoutMs ?? null,
+    fingerprint: computeMcpServerFingerprint(server),
+  }))
+  return JSON.stringify({ cwd: worktreePath ?? '', entries })
 }
 
 /** 仅按 porcelain 前两位状态码判定文件改动类型，绝不对文件名本身做 includes('D') */

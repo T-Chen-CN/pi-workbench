@@ -7,6 +7,7 @@ import {
   Info,
   KeyRound,
   Keyboard,
+  Plug,
   RefreshCw,
   ShieldCheck,
   SlidersHorizontal,
@@ -30,6 +31,7 @@ import { localizeError } from '../../i18n/errors'
 import type { AppInfo, PermissionLevel } from '../../types/electron'
 import { Button, Field, Input, Select } from '../ui/ui'
 import { GithubSettings } from './GithubSettings'
+import { McpSettings } from './McpSettings'
 import { WebSearchSettings } from './WebSearchSettings'
 import { KeyCap, LegendRow, Meter } from '../ui/patterns'
 import { ProviderSettings } from './ProviderSettings'
@@ -54,6 +56,7 @@ export type SettingsSection =
   | 'general'
   | 'api'
   | 'websearch'
+  | 'mcp'
   | 'github'
   | 'permissions'
   | 'shortcuts'
@@ -294,6 +297,7 @@ export const Settings: React.FC<SettingsProps> = ({
     { id: 'general', label: t('general'), icon: SlidersHorizontal },
     { id: 'api', label: t('providerConfiguration'), icon: KeyRound },
     { id: 'websearch', label: t('webSearch'), icon: Globe },
+    { id: 'mcp', label: t('mcpSettings'), icon: Plug },
     { id: 'github', label: t('githubIntegration'), icon: GitPullRequest },
     { id: 'permissions', label: t('permissions'), icon: ShieldCheck },
     { id: 'shortcuts', label: t('shortcuts'), icon: Keyboard },
@@ -531,6 +535,8 @@ export const Settings: React.FC<SettingsProps> = ({
         {section === 'github' && <GithubSettings />}
 
         {section === 'websearch' && <WebSearchSettings />}
+
+        {section === 'mcp' && <McpSettings />}
 
         {section === 'api' && <ProviderSettings />}
 
