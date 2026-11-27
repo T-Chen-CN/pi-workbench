@@ -36,6 +36,7 @@ import {
   chainLayout,
   collectFiles,
   fitView,
+  intersects,
   nextChain,
   nodeId,
   rectOf,
@@ -69,12 +70,24 @@ const ZOOM_STEP = 1.2
 const PAN_STEP = 96
 /** 镜头跟随的视口留白 */
 const REVEAL_PADDING = 24
+/** 视口裁剪缓冲区（世界坐标像素），保证平滑拖拽时不闪现白边 */
+const VIEWPORT_CULL_MARGIN = 240
+
+export interface RepoMapSearchMatchInfo {
+  total: number
+  index: number
+}
 
 export interface RepoMapCanvasHandle {
   fit: () => void
   resetLayout: () => void
   /** 按倍率缩放（工具条的 +/- 按钮） */
   zoomBy: (factor: number) => void
+  /** 多命中搜索导航 */
+  nextMatch: () => void
+  prevMatch: () => void
+  /** 面包屑回跳：depth=0 回到根层，depth=k 截断到第 k 层 */
+  collapseToDepth: (depth: number) => void
 }
 
 export interface RepoMapCanvasProps {
@@ -88,6 +101,8 @@ export interface RepoMapCanvasProps {
   /** 降级模式下补齐描述 */
   onEnsureDescribed: (paths: string[]) => void
   onZoomChange?: (zoom: number) => void
+  onMatchInfo?: (info: RepoMapSearchMatchInfo) => void
+  onChainChange?: (chain: string[]) => void
 }
 
 function hasAnyPosition(state: RepoMapCanvasState): boolean {
@@ -96,10 +111,21 @@ function hasAnyPosition(state: RepoMapCanvasState): boolean {
 
 export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>(
   function RepoMapCanvas(
-    { workspacePath, files, query, active = true, onOpenFile, onEnsureDescribed, onZoomChange },
+    {
+      workspacePath,
+      files,
+      query,
+      active = true,
+      onOpenFile,
+      onEnsureDescribed,
+      onZoomChange,
+      onMatchInfo,
+      onChainChange,
+    },
     ref
   ) {
-    const { t, language } = useI18nStore()
+    const t = useI18nStore((state) => state.t)
+    const language = useI18nStore((state) => state.language)
     const viewportRef = useRef<HTMLDivElement | null>(null)
     const stageRef = useRef<HTMLDivElement | null>(null)
     const guideXRef = useRef<HTMLDivElement | null>(null)
@@ -143,7 +169,12 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
     const [loaded, setLoaded] = useState(false)
     const [revision, setRevision] = useState(0)
     const [chain, setChain] = useState<Chain>([])
+    const [activeMatchIndex, setActiveMatchIndex] = useState(0)
     const [viewportRect, setViewportRect] = useState<Rect>({ x: 0, y: 0, width: 1, height: 1 })
+
+    useEffect(() => {
+      onChainChange?.(chain)
+    }, [chain, onChainChange])
 
     const tree = useMemo(() => buildCanvasTree(files), [files])
     const fileByPath = useMemo(() => {
@@ -367,22 +398,31 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       setViewportRect(worldViewport())
     }, [loaded, applyView, worldViewport])
 
-    const matchIds = useMemo(() => {
+    const { matchIds, matchedNodes } = useMemo(() => {
       const needle = query.trim().toLowerCase()
-      if (!needle) return null
+      if (!needle) return { matchIds: null as Set<string> | null, matchedNodes: [] as CanvasNodeInput[] }
       const matched = new Set<string>()
+      const filesMatched: CanvasNodeInput[] = []
+      const foldersMatched: CanvasNodeInput[] = []
       for (const node of tree.nodes) {
         if (node.kind === 'folder') {
-          if (node.path.toLowerCase().includes(needle)) matched.add(nodeId(node))
+          if (node.path.toLowerCase().includes(needle)) {
+            matched.add(nodeId(node))
+            foldersMatched.push(node)
+          }
           continue
         }
         const file = fileByPath.get(node.path)
         const description = file ? describe(file).toLowerCase() : ''
         if (node.path.toLowerCase().includes(needle) || description.includes(needle)) {
           matched.add(nodeId(node))
+          filesMatched.push(node)
         }
       }
-      return matched
+      return {
+        matchIds: matched,
+        matchedNodes: filesMatched.length > 0 ? filesMatched : foldersMatched,
+      }
     }, [tree, fileByPath, query, describe])
 
     const showGuides = useCallback((guides: SnapGuide[]) => {
@@ -444,6 +484,54 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       [applyView, commitView, scheduleSync]
     )
 
+    /**
+     * 展开大目录时的温和镜头平移：若新展开的子块超出视口右/上/下边界，只挪动刚好能露出的偏移，
+     * 同时强制把父锚卡留在视口内（绝不把刚点的锚卡甩出视野）。
+     */
+    const panForExpandedFolder = useCallback(
+      (anchorRect: Rect, childRects: Rect[]) => {
+        const viewport = viewportRef.current
+        if (!viewport || viewport.clientWidth <= 1 || viewport.clientHeight <= 1) return
+        const childrenBounds = boundsOf(childRects)
+        if (!childrenBounds) return
+        const view = viewRef.current
+        const width = viewport.clientWidth
+        const height = viewport.clientHeight
+        const zoom = view.zoom
+        let nextPanX = view.pan.x
+        let nextPanY = view.pan.y
+
+        const childRightPx = (childrenBounds.x + childrenBounds.width) * zoom + nextPanX
+        const anchorLeftPx = anchorRect.x * zoom + nextPanX
+        if (childRightPx > width - REVEAL_PADDING) {
+          const wantShiftLeft = childRightPx - (width - REVEAL_PADDING)
+          const maxShiftLeft = Math.max(0, anchorLeftPx - REVEAL_PADDING)
+          nextPanX -= Math.min(wantShiftLeft, maxShiftLeft)
+        }
+
+        const childTopPx = childrenBounds.y * zoom + nextPanY
+        const childBottomPx = (childrenBounds.y + childrenBounds.height) * zoom + nextPanY
+        const anchorTopPx = anchorRect.y * zoom + nextPanY
+        const anchorBottomPx = (anchorRect.y + anchorRect.height) * zoom + nextPanY
+        if (childTopPx < REVEAL_PADDING && childBottomPx <= height - REVEAL_PADDING) {
+          const wantShiftDown = REVEAL_PADDING - childTopPx
+          const maxShiftDown = Math.max(0, height - REVEAL_PADDING - anchorBottomPx)
+          nextPanY += Math.min(wantShiftDown, maxShiftDown)
+        } else if (childBottomPx > height - REVEAL_PADDING && childTopPx >= REVEAL_PADDING) {
+          const wantShiftUp = childBottomPx - (height - REVEAL_PADDING)
+          const maxShiftUp = Math.max(0, anchorTopPx - REVEAL_PADDING)
+          nextPanY -= Math.min(wantShiftUp, maxShiftUp)
+        }
+
+        if (Math.abs(nextPanX - view.pan.x) < 1 && Math.abs(nextPanY - view.pan.y) < 1) return
+        viewRef.current = { zoom, pan: { x: nextPanX, y: nextPanY } }
+        applyView(true)
+        scheduleSync()
+        commitView()
+      },
+      [applyView, commitView, scheduleSync]
+    )
+
     /* ------------------------------ 上浮链 ------------------------------ */
 
     const openFolder = useCallback(
@@ -462,10 +550,21 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
             .slice(0, 200)
         )
 
-        // 展开只长卡片，**不动镜头**：父卡是锚点，镜头一跟随就会把它甩出视野
-        // （子块一大就成了「整块居中」）。想看全就按 `0` / 工具条的「适应窗口」。
+        const nextLayout = chainLayout(currentTree, layoutRef.current.positions, next)
+        const anchorPoint = nextLayout.positions.get(`folder:${path}`)
+        if (anchorPoint) {
+          const anchorRect = rectOf({ path, kind: 'folder', parent: null }, anchorPoint)
+          const kids = currentTree.children.get(path) ?? []
+          const childRects = kids
+            .map((kid) => {
+              const p = nextLayout.positions.get(nodeId(kid))
+              return p ? rectOf(kid, p) : null
+            })
+            .filter((rect): rect is Rect => rect !== null)
+          panForExpandedFolder(anchorRect, childRects)
+        }
       },
-      [onEnsureDescribed]
+      [onEnsureDescribed, panForExpandedFolder]
     )
 
     /** 退一层：空白单击与 `Esc` 共用这一段，保证两条路永远一致（链空时无动作） */
@@ -473,6 +572,13 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       if (chainRef.current.length === 0) return
       sessionRef.current.clear()
       setChain((current) => current.slice(0, -1))
+    }, [])
+
+    const collapseToDepth = useCallback((depth: number) => {
+      const clamped = Math.max(0, Math.floor(depth))
+      if (chainRef.current.length <= clamped) return
+      sessionRef.current.clear()
+      setChain((current) => current.slice(0, clamped))
     }, [])
 
     /* ------------------------------ 拖动 / 平移 ------------------------------ */
@@ -679,8 +785,6 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       [applyView, commitView, scheduleSync]
     )
 
-    useImperativeHandle(ref, () => ({ fit, resetLayout, zoomBy }), [fit, resetLayout, zoomBy])
-
     const navigateTo = useCallback(
       (world: Point) => {
         if (spaceRef.current) return
@@ -733,42 +837,81 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
 
     /* ------------------------------ 搜索定位 ------------------------------ */
 
-    const revealFile = useCallback(
-      (filePath: string) => {
+    const revealMatchNode = useCallback(
+      (target: CanvasNodeInput) => {
         const currentTree = treeRef.current
-        const ancestors = ancestorFolders(filePath).filter((folder) =>
+        const ancestors = ancestorFolders(target.path).filter((folder) =>
           currentTree.children.has(folder)
         )
-        if (ancestors.length === 0) return
         sessionRef.current.clear()
         setChain(ancestors)
-        const nextLayout = chainLayout(currentTree, layoutRef.current.positions, ancestors)
-        const point = nextLayout.positions.get(`file:${filePath}`)
-        if (!point) return
-        centerOnRects([rectOf({ path: filePath, kind: 'file', parent: null }, point)])
-        onEnsureDescribed(
-          collectFiles(currentTree, ancestors[0])
-            .map((node) => node.path)
-            .slice(0, 200)
-        )
+        if (ancestors.length > 0) {
+          const nextLayout = chainLayout(currentTree, layoutRef.current.positions, ancestors)
+          const point = nextLayout.positions.get(nodeId(target))
+          if (point) centerOnRects([rectOf(target, point)])
+          onEnsureDescribed(
+            collectFiles(currentTree, ancestors[0])
+              .map((node) => node.path)
+              .slice(0, 200)
+          )
+        } else {
+          const point = layoutRef.current.positions.get(nodeId(target))
+          if (point) centerOnRects([rectOf(target, point)])
+        }
       },
       [onEnsureDescribed, centerOnRects]
     )
 
+    const matchedNodesRef = useRef(matchedNodes)
+    matchedNodesRef.current = matchedNodes
+    const activeMatchIndexRef = useRef(activeMatchIndex)
+    activeMatchIndexRef.current = activeMatchIndex
+
     const revealedRef = useRef('')
+
+    const stepMatch = useCallback(
+      (delta: 1 | -1) => {
+        const list = matchedNodesRef.current
+        if (list.length === 0) return
+        const nextIndex = (activeMatchIndexRef.current + delta + list.length) % list.length
+        const needle = query.trim().toLowerCase()
+        if (needle) revealedRef.current = needle
+        setActiveMatchIndex(nextIndex)
+        revealMatchNode(list[nextIndex])
+      },
+      [query, revealMatchNode]
+    )
+
+    const nextMatch = useCallback(() => stepMatch(1), [stepMatch])
+    const prevMatch = useCallback(() => stepMatch(-1), [stepMatch])
+
+    useImperativeHandle(
+      ref,
+      () => ({ fit, resetLayout, zoomBy, nextMatch, prevMatch, collapseToDepth }),
+      [fit, resetLayout, zoomBy, nextMatch, prevMatch, collapseToDepth]
+    )
+
+    useEffect(() => {
+      const total = matchedNodes.length
+      const clamped = total > 0 ? Math.min(activeMatchIndex, total - 1) : 0
+      onMatchInfo?.({ total, index: clamped })
+    }, [matchedNodes.length, activeMatchIndex, onMatchInfo])
+
     useEffect(() => {
       if (!loaded) return
       const needle = query.trim().toLowerCase()
       if (!needle) {
         revealedRef.current = ''
+        setActiveMatchIndex(0)
         return
       }
       if (revealedRef.current === needle) return
-      const first = tree.nodes.find((node) => node.kind === 'file' && matchIds?.has(nodeId(node)))
+      setActiveMatchIndex(0)
+      const first = matchedNodes[0]
       if (!first) return
       revealedRef.current = needle
-      revealFile(first.path)
-    }, [loaded, query, matchIds, tree, revealFile])
+      revealMatchNode(first)
+    }, [loaded, query, matchedNodes, revealMatchNode])
 
     /* ------------------------------ 空格手形工具 ------------------------------ */
 
@@ -786,6 +929,21 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
         setHeld(false)
         return
       }
+      const INTERACTIVE_ROLES = new Set([
+        'tab',
+        'button',
+        'menu',
+        'menuitem',
+        'menuitemradio',
+        'menuitemcheckbox',
+        'treeitem',
+        'option',
+        'listbox',
+        'combobox',
+        'checkbox',
+        'radio',
+        'switch',
+      ])
       const shouldBypassSpace = (target: EventTarget | null) => {
         // 只要窗口里有打开的模态弹窗/浮层对话框，画布绝不劫持空格键
         if (document.querySelector('[role="dialog"], [aria-modal="true"]')) return true
@@ -799,16 +957,13 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
         ) {
           return true
         }
-        // 画布外部的按钮/链接/标签栏保留原生空格激活，只拦截画布内卡片按钮的空格触发
+        // 画布外部的按钮/链接/菜单/树项/折叠摘要保留原生空格激活，只拦截画布内卡片按钮的空格触发
         const inCanvas = Boolean(viewportRef.current?.contains(element))
-        if (
-          !inCanvas &&
-          (element.tagName === 'BUTTON' ||
-            element.tagName === 'A' ||
-            element.getAttribute('role') === 'tab' ||
-            element.getAttribute('role') === 'button')
-        ) {
-          return true
+        if (!inCanvas) {
+          if (element.closest('button, a, summary')) return true
+          const roleHost = element.closest('[role]')
+          const role = roleHost?.getAttribute('role')
+          if (role && INTERACTIVE_ROLES.has(role)) return true
         }
         return false
       }
@@ -939,6 +1094,40 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
       )
     }
 
+    // 视口裁剪：仅在视口完成真实布局（宽、高均大于 1px）时过滤视口外卡片，兼顾大型仓库性能与测试环境
+    const cullingActive = viewportRect.width > 1 && viewportRect.height > 1
+    const activeMatchNode = matchedNodes[activeMatchIndex]
+    const activeMatchId = activeMatchNode ? nodeId(activeMatchNode) : null
+    const draggingId = dragRef.current?.id ?? null
+
+    const visibleBaseNodes = useMemo(() => {
+      if (!cullingActive) return baseNodes
+      return baseNodes.filter((node) => {
+        const id = nodeId(node)
+        if (id === draggingId || id === activeMatchId) return true
+        const point = layout.positions.get(id)
+        return point ? intersects(rectOf(node, point), viewportRect, VIEWPORT_CULL_MARGIN) : false
+      })
+    }, [cullingActive, baseNodes, layout.positions, viewportRect, draggingId, activeMatchId])
+
+    const visibleChainNodes = useMemo(() => {
+      if (!cullingActive) return chainResult.nodes
+      return chainResult.nodes.filter((node) => {
+        const id = nodeId(node)
+        if (id === draggingId || id === activeMatchId || id === chainResult.anchor) return true
+        const point = chainPositions.get(id)
+        return point ? intersects(rectOf(node, point), viewportRect, VIEWPORT_CULL_MARGIN) : false
+      })
+    }, [
+      cullingActive,
+      chainResult.nodes,
+      chainResult.anchor,
+      chainPositions,
+      viewportRect,
+      draggingId,
+      activeMatchId,
+    ])
+
     return (
       <div
         ref={viewportRef}
@@ -972,8 +1161,8 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
             aria-hidden="true"
             className="pointer-events-none absolute -left-[10000px] w-[20000px] h-px bg-accent opacity-0"
           />
-          {baseNodes.map((node) => renderCard(node, false))}
-          {chainResult.nodes.map((node) => renderCard(node, true))}
+          {visibleBaseNodes.map((node) => renderCard(node, false))}
+          {visibleChainNodes.map((node) => renderCard(node, true))}
         </div>
 
         {!loaded && (

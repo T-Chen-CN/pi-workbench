@@ -138,6 +138,35 @@ function resolveTheme(settings: { theme?: unknown }): 'dark' | 'light' {
   return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
 }
 
+/** Windows / Linux 原生 TitleBarOverlay 配色（与 index.css 的 --panel / --ink-muted 严格一致） */
+function titleBarOverlayFor(theme: 'dark' | 'light', height: number): {
+  color: string
+  symbolColor: string
+  height: number
+} {
+  return theme === 'dark'
+    ? { color: '#1A1815', symbolColor: '#A8A093', height }
+    : { color: '#FBF9F4', symbolColor: '#615C52', height }
+}
+
+function syncAllTitleBarOverlays(themeSetting?: unknown): void {
+  if (process.platform === 'darwin') return
+  const theme = resolveTheme({ theme: themeSetting ?? getAppSettingsCache().theme })
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    const height = win === mainWindow ? 45 : 34
+    try {
+      win.setTitleBarOverlay?.(titleBarOverlayFor(theme, height))
+    } catch {
+      // 旧平台或测试环境未实现 setTitleBarOverlay 时静默跳过
+    }
+  }
+}
+
+nativeTheme.on?.('updated', () => {
+  syncAllTitleBarOverlays()
+})
+
 function resolveLanguage(settings: { language?: unknown }): 'zh' | 'en' {
   return settings.language === 'en' || settings.language === 'en-US' ? 'en' : 'zh'
 }
@@ -563,7 +592,7 @@ const cloudIpcContext: CloudIpcContext = {
   }
 }
 
-registerSettingsIpc()
+registerSettingsIpc({ onSettingsSaved: (saved) => syncAllTitleBarOverlays(saved.theme) })
 registerWebSearchIpc()
 registerCloudIpc(cloudIpcContext)
 
@@ -660,7 +689,7 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
   mainWindow = new BrowserWindow({
     ...initialBounds,
     backgroundColor: theme === 'dark' ? '#141311' : '#F4F1EA',
-    resizable: skipBoot,
+    resizable: true,
     autoHideMenuBar: true,
     ...(isMac
       ? {
@@ -668,7 +697,8 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
           trafficLightPosition: { x: 14, y: 15 }
         }
       : {
-          frame: false
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: titleBarOverlayFor(theme, 45)
         }),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -682,15 +712,6 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
   // Windows/Linux：隐藏默认菜单栏，但保留菜单角色提供的快捷键
   if (!isMac) {
     mainWindow.setMenuBarVisibility(false)
-  }
-
-  // 启动页期间隐藏 macOS 红绿灯：小窗里没有可用的标题栏布局
-  if (isMac && !skipBoot) {
-    try {
-      mainWindow.setWindowButtonVisibility(false)
-    } catch {
-      // 旧版本 macOS 没有该方法
-    }
   }
 
   // 通知渲染进程最大化状态，用于自绘窗口按钮的图标切换

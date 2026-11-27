@@ -99,7 +99,11 @@ export async function migratePermissionLevel(): Promise<void> {
   }
 }
 
-export function registerSettingsIpc(): void {
+export interface SettingsIpcOptions {
+  onSettingsSaved?: (settings: Record<string, unknown>) => void
+}
+
+export function registerSettingsIpc(options?: SettingsIpcOptions): void {
   handleIpc('app:getSettings', async () => {
     try {
       return { success: true, settings: await loadSettingsFile() }
@@ -136,9 +140,10 @@ export function registerSettingsIpc(): void {
       }
       await saveSettingsFile(sanitized)
       updateAppSettingsCache(sanitized)
-      // 托盘开关、菜单文案与系统代理跟随设置即时生效
+      // 托盘开关、菜单文案、系统代理与标题栏配色跟随设置即时生效
       refreshTray()
       refreshSystemProxy()
+      options?.onSettingsSaved?.(sanitized)
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }

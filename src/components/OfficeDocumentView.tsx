@@ -10,6 +10,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { ExternalLink, FileWarning, RefreshCw } from 'lucide-react'
 import { useI18nStore } from '../store/i18nStore'
 import { api } from '../api'
@@ -97,14 +98,40 @@ const Blocks: React.FC<{ blocks: DocumentPreviewBlock[] }> = ({ blocks }) => {
   )
 }
 
-const SheetTable: React.FC<{ sheet: DocumentPreviewSheet }> = ({ sheet }) => {
+const SHEET_ROW_HEIGHT = 26
+
+const SheetTable: React.FC<{
+  sheet: DocumentPreviewSheet
+  scrollParentRef: React.RefObject<HTMLDivElement | null>
+}> = ({ sheet, scrollParentRef }) => {
+  const columns = useMemo(
+    () => (sheet.rows.length > 0 ? Math.max(...sheet.rows.map((row) => row.length)) : 0),
+    [sheet.rows]
+  )
+  const virtualizer = useVirtualizer({
+    count: sheet.rows.length,
+    getScrollElement: () => scrollParentRef.current,
+    estimateSize: () => SHEET_ROW_HEIGHT,
+    overscan: 16,
+    initialRect: { width: 0, height: 800 },
+  })
   if (sheet.rows.length === 0) return null
-  const columns = Math.max(...sheet.rows.map((row) => row.length))
+
+  const virtualItems = virtualizer.getVirtualItems()
+  const useFallback = virtualItems.length === 0
+  const renderedRows = useFallback
+    ? sheet.rows.slice(0, 100).map((row, index) => ({ index, row }))
+    : virtualItems.map((item) => ({ index: item.index, row: sheet.rows[item.index] }))
+  const topPad = useFallback ? 0 : (virtualItems[0]?.start ?? 0)
+  const bottomPad = useFallback
+    ? 0
+    : Math.max(0, virtualizer.getTotalSize() - (virtualItems[virtualItems.length - 1]?.end ?? 0))
+
   return (
     <table className="border-collapse type-data">
       <thead>
         <tr>
-          <th className="sticky left-0 top-0 bg-panel px-2 py-1 text-ink-subtle" />
+          <th className="sticky left-0 top-0 z-10 bg-panel px-2 py-1 text-ink-muted" />
           {Array.from({ length: columns }, (_, index) => (
             <th
               key={index}
@@ -116,9 +143,14 @@ const SheetTable: React.FC<{ sheet: DocumentPreviewSheet }> = ({ sheet }) => {
         </tr>
       </thead>
       <tbody>
-        {sheet.rows.map((row, rowIndex) => (
+        {topPad > 0 && (
+          <tr aria-hidden="true" style={{ height: topPad }}>
+            <td colSpan={columns + 1} className="p-0" />
+          </tr>
+        )}
+        {renderedRows.map(({ index: rowIndex, row }) => (
           <tr key={rowIndex} className="hover:bg-hover">
-            <td className="sticky left-0 border border-rule-hairline bg-panel px-2 py-1 text-right text-ink-subtle">
+            <td className="sticky left-0 border border-rule-hairline bg-panel px-2 py-1 text-right text-ink-muted">
               {rowIndex + 1}
             </td>
             {Array.from({ length: columns }, (_, columnIndex) => (
@@ -132,28 +164,33 @@ const SheetTable: React.FC<{ sheet: DocumentPreviewSheet }> = ({ sheet }) => {
             ))}
           </tr>
         ))}
+        {bottomPad > 0 && (
+          <tr aria-hidden="true" style={{ height: bottomPad }}>
+            <td colSpan={columns + 1} className="p-0" />
+          </tr>
+        )}
       </tbody>
     </table>
   )
 }
 
 const SlideCards: React.FC<{ slides: DocumentPreviewSlide[] }> = ({ slides }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   return (
     <div className="flex flex-col gap-3 pb-12">
       {slides.map((slide) => (
         <section key={slide.index} className="border border-rule-hairline bg-surface">
           <header className="flex items-center gap-2 border-b border-rule-hairline bg-panel px-3 py-1">
-            <Caption className="text-ink-subtle">
+            <Caption className="text-ink-muted">
               {t('documentSlideLabel', { index: slide.index })}
             </Caption>
-            <Caption className="ml-auto text-ink-subtle">
+            <Caption className="ml-auto text-ink-muted">
               {t('documentSlideTextCount', { count: slide.lines.length })}
             </Caption>
           </header>
           <div className="flex flex-col gap-2 px-4 py-3">
             {slide.lines.length === 0 ? (
-              <p className="type-reading text-ink-subtle">{t('documentSlideEmpty')}</p>
+              <p className="type-reading text-ink-muted">{t('documentSlideEmpty')}</p>
             ) : (
               slide.lines.map((line, index) => (
                 <p key={index} className={index === 0 ? 'type-reading text-ink' : 'type-body text-ink-muted'}>
@@ -187,7 +224,8 @@ const SlideCards: React.FC<{ slides: DocumentPreviewSlide[] }> = ({ slides }) =>
  * 明确的另存为指引，而不是一句 unsupported。
  */
 export const OfficeDocumentView: React.FC<{ file: OpenFile }> = ({ file }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
+  const sheetScrollRef = useRef<HTMLDivElement | null>(null)
   const [preview, setPreview] = useState<DocumentPreview | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const [sheetIndex, setSheetIndex] = useState(0)
@@ -239,7 +277,7 @@ export const OfficeDocumentView: React.FC<{ file: OpenFile }> = ({ file }) => {
     <div className="flex min-h-0 flex-1 flex-col bg-surface" data-testid="office-document-view">
       <div className="flex flex-shrink-0 items-center gap-2 border-b border-rule-divide bg-panel px-3 py-1">
         <Caption className="truncate text-ink-muted">{file.name}</Caption>
-        <Caption className="flex-shrink-0 text-ink-subtle">{t('documentReadOnly')}</Caption>
+        <Caption className="flex-shrink-0 text-ink-muted">{t('documentReadOnly')}</Caption>
         {preview?.kind === 'sheet' && sheets.length > 1 && (
           <div className="ml-2 flex min-w-0 items-center gap-1 overflow-x-auto">
             {sheets.map((sheet, index) => (
@@ -300,16 +338,16 @@ export const OfficeDocumentView: React.FC<{ file: OpenFile }> = ({ file }) => {
           <p className="type-reading text-ink-muted">{preview.message}</p>
         </div>
       ) : preview.kind === 'sheet' ? (
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div ref={sheetScrollRef} className="min-h-0 flex-1 overflow-auto">
           {activeSheet ? (
             <>
               {activeSheet.rows.length === 0 ? (
-                <p className="px-4 py-6 type-reading text-ink-subtle">{t('documentSheetEmpty')}</p>
+                <p className="px-4 py-6 type-reading text-ink-muted">{t('documentSheetEmpty')}</p>
               ) : (
-                <SheetTable sheet={activeSheet} />
+                <SheetTable sheet={activeSheet} scrollParentRef={sheetScrollRef} />
               )}
               {(activeSheet.truncated || activeSheet.merges.length > 0) && (
-                <p className="px-3 py-2 type-caption text-ink-subtle">
+                <p className="px-3 py-2 type-caption text-ink-muted">
                   {activeSheet.truncated
                     ? t('documentSheetTruncated')
                     : t('documentSheetMerged', { count: activeSheet.merges.length })}
@@ -327,7 +365,7 @@ export const OfficeDocumentView: React.FC<{ file: OpenFile }> = ({ file }) => {
           <div className="chat-markdown file-markdown mx-auto w-full max-w-[64rem] px-8 pt-6 pb-12">
             {preview.chapters.map((chapter, index) => (
               <section key={`${chapter.label}-${index}`}>
-                <h2 className="type-label text-ink-subtle">{chapter.label}</h2>
+                <h2 className="type-label text-ink-muted">{chapter.label}</h2>
                 {chapter.lines.map((line, lineIndex) => (
                   <p key={lineIndex}>{line}</p>
                 ))}
@@ -340,7 +378,7 @@ export const OfficeDocumentView: React.FC<{ file: OpenFile }> = ({ file }) => {
           <div className="chat-markdown file-markdown mx-auto w-full max-w-[64rem] px-8 pt-6 pb-12">
             <Blocks blocks={preview.blocks} />
             {preview.truncated && (
-              <p className="type-caption text-ink-subtle">{t('documentPreviewTruncated')}</p>
+              <p className="type-caption text-ink-muted">{t('documentPreviewTruncated')}</p>
             )}
           </div>
         </div>

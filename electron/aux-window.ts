@@ -259,6 +259,7 @@ export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowS
     const workArea = screen.getDisplayNearestPoint(point).workArea
     const parsed = parseAuxWindowFeatures(features, workArea)
 
+    const isDarkAux = parsed.backgroundColor.toLowerCase().startsWith('#1')
     const override: BrowserWindowConstructorOptions = {
       x: parsed.x,
       y: parsed.y,
@@ -274,14 +275,17 @@ export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowS
         contextIsolation: true,
         sandbox: true,
       },
-      // 与主窗口同一套外壳：无边框 + 自绘窗口按钮，标题栏由 PanelWindowFrame 提供
+      // 与主窗口同一套外壳：Windows / Linux 使用原生 titleBarOverlay 保留系统贴靠（Snap Layouts）
       ...(process.platform === 'darwin'
         ? {
             titleBarStyle: 'hiddenInset' as const,
             trafficLightPosition: { x: 12, y: 10 }
           }
         : {
-            frame: false
+            titleBarStyle: 'hidden' as const,
+            titleBarOverlay: isDarkAux
+              ? { color: '#1A1815', symbolColor: '#A8A093', height: 34 }
+              : { color: '#FBF9F4', symbolColor: '#615C52', height: 34 }
           }),
       autoHideMenuBar: true,
       show: true

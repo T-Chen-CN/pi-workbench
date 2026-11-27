@@ -39,7 +39,7 @@ export interface SelectionQuoteButtonProps {
 }
 
 export const SelectionQuoteButton: React.FC<SelectionQuoteButtonProps> = ({ doc }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const scopeWorkspace = useWorkspaceScope()
   const [selection, setSelection] = useState<SelectionInfo | null>(null)
   const rangeRef = useRef<Range | null>(null)
@@ -80,22 +80,42 @@ export const SelectionQuoteButton: React.FC<SelectionQuoteButtonProps> = ({ doc 
     if (!documentRef) return
     const view = documentRef.defaultView
     let timer: number | null = null
+    let scrollRaf: number | null = null
     const schedule = () => {
       if (timer !== null) view?.clearTimeout(timer)
       timer = view?.setTimeout(measure, 120) ?? null
     }
-    const onScroll = () => {
+    const updatePosition = () => {
+      scrollRaf = null
       if (!rangeRef.current) return
       const rect = rangeRef.current.getBoundingClientRect()
+      const viewWidth = view?.innerWidth ?? 1280
+      const viewHeight = view?.innerHeight ?? 800
+      // 选区滚出视口后隐藏浮起按钮，避免悬在无关区域
+      if (
+        (rect.width === 0 && rect.height === 0) ||
+        rect.bottom < 0 ||
+        rect.top > viewHeight ||
+        rect.right < 0 ||
+        rect.left > viewWidth
+      ) {
+        setSelection(null)
+        return
+      }
       setSelection((prev) =>
         prev ? { ...prev, rect: { top: rect.top, right: rect.right, bottom: rect.bottom } } : prev
       )
+    }
+    const onScroll = () => {
+      if (!rangeRef.current || scrollRaf !== null) return
+      scrollRaf = (view ?? window).requestAnimationFrame(updatePosition)
     }
     documentRef.addEventListener('selectionchange', schedule)
     documentRef.addEventListener('scroll', onScroll, true)
     view?.addEventListener('resize', onScroll)
     return () => {
       if (timer !== null) view?.clearTimeout(timer)
+      if (scrollRaf !== null) (view ?? window).cancelAnimationFrame(scrollRaf)
       documentRef.removeEventListener('selectionchange', schedule)
       documentRef.removeEventListener('scroll', onScroll, true)
       view?.removeEventListener('resize', onScroll)

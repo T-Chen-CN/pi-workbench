@@ -8,8 +8,8 @@ import { filePreviewUrl } from '../utils/fileKind'
 import { Caption, IconButton } from './ui'
 import type { OpenFile } from '../types'
 
-/** 源码保存后延迟刷新，避免连续输入时反复重载 iframe */
-const RELOAD_DEBOUNCE_MS = 500
+/** 落盘完成后短防抖再刷新 iframe，避免连续保存闪烁 */
+const RELOAD_DEBOUNCE_MS = 150
 
 /**
  * HTML 阅读视图。
@@ -22,22 +22,40 @@ export const HtmlPreview: React.FC<{ file: OpenFile; visible?: boolean }> = ({
   file,
   visible = true,
 }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const [reloadKey, setReloadKey] = useState(0)
   const lastPathRef = useRef(file.path)
   const lastContentRef = useRef(file.content)
+  const wasDirtyRef = useRef(file.isDirty)
+  const pendingFlushRef = useRef(false)
   const pendingReloadRef = useRef(false)
 
   useEffect(() => {
     if (file.path !== lastPathRef.current) {
       lastPathRef.current = file.path
       lastContentRef.current = file.content
+      wasDirtyRef.current = file.isDirty
+      pendingFlushRef.current = false
       pendingReloadRef.current = false
       setReloadKey(0)
       return
     }
-    if (file.content === lastContentRef.current) return
-    lastContentRef.current = file.content
+    const contentChanged = file.content !== lastContentRef.current
+    if (contentChanged) {
+      lastContentRef.current = file.content
+    }
+    const justSaved = wasDirtyRef.current && !file.isDirty
+    wasDirtyRef.current = file.isDirty
+
+    // 草稿尚未落盘（isDirty=true）时不刷 pw-file://，避免反复读到磁盘旧内容
+    if (file.isDirty) {
+      if (contentChanged) pendingFlushRef.current = true
+      return
+    }
+    const shouldReload = justSaved || pendingFlushRef.current || contentChanged
+    if (!shouldReload) return
+    pendingFlushRef.current = false
+
     // 源码编辑且预览隐藏时不后台重建 iframe，切回预览时补刷一次
     if (!visible) {
       pendingReloadRef.current = true
@@ -45,13 +63,13 @@ export const HtmlPreview: React.FC<{ file: OpenFile; visible?: boolean }> = ({
     }
     const timer = setTimeout(() => setReloadKey((value) => value + 1), RELOAD_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [file.content, file.path, visible])
+  }, [file.content, file.path, file.isDirty, visible])
 
   useEffect(() => {
-    if (!visible || !pendingReloadRef.current) return
+    if (!visible || file.isDirty || !pendingReloadRef.current) return
     pendingReloadRef.current = false
     setReloadKey((value) => value + 1)
-  }, [visible])
+  }, [visible, file.isDirty])
 
   const openExternal = async () => {
     const result = await api.openPathExternally(file.path)

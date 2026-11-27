@@ -5,6 +5,7 @@ import { THINKING_LEVELS, THINKING_LABEL_KEYS, formatTokenCount } from '../utils
 import { ArrowDown, BookMarked, ChevronDown, FileText, FolderOpen, Minimize2, Paperclip, Send, Square, X } from 'lucide-react'
 import { useChatStore } from '../store/chatStore'
 import { useSessionStore } from '../store/sessionStore'
+import { useI18nStore } from '../store/i18nStore'
 import { retrySecondsRemaining } from '../utils/retryCountdown'
 import { basename } from '../utils/filePath'
 import { formatBytes } from '../utils/formatBytes'
@@ -38,6 +39,43 @@ import {
   Textarea,
   Value,
 } from './ui'
+
+type ActiveRetryStatus = NonNullable<ReturnType<typeof useChatPanelState>['retryStatus']>
+
+/** 隔离自动重试的 250ms 倒计时时钟，避免每秒 4 次触发整棵 ChatPanel 重渲染 */
+const RetryStatusBanner: React.FC<{ retryStatus: ActiveRetryStatus }> = React.memo(
+  function RetryStatusBanner({ retryStatus }) {
+    const t = useI18nStore((state) => state.t)
+    const [now, setNow] = useState(() => Date.now())
+    useEffect(() => {
+      setNow(Date.now())
+      const timer = window.setInterval(() => setNow(Date.now()), 250)
+      return () => window.clearInterval(timer)
+    }, [retryStatus])
+
+    const remaining = retrySecondsRemaining(retryStatus, now)
+    return (
+      <div className="mb-2 flex items-center gap-2 type-caption text-warning">
+        <Spinner size={10} />
+        <span>
+          {remaining > 0
+            ? t('retryInProgress', {
+                attempt: retryStatus.attempt,
+                max: retryStatus.maxAttempts,
+                seconds: remaining,
+              })
+            : t('retryStarting', {
+                attempt: retryStatus.attempt,
+                max: retryStatus.maxAttempts,
+              })}
+        </span>
+        {retryStatus.message && (
+          <span className="min-w-0 truncate text-ink-muted">{retryStatus.message}</span>
+        )}
+      </div>
+    )
+  }
+)
 
 export type { ChatPanelProps }
 
@@ -121,7 +159,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
     quoteCurrentFile,
     toggleQuoteCurrentFile,
     permissionLabelRef,
-    retryNow,
     retryStatus,
     scrollToBottom,
     selectedModelCapability,
@@ -363,26 +400,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = (props) => {
       )}
       {activeSessionId && (
         <div className="flex-shrink-0 p-2.5">
-          {retryStatus && (
-            <div className="mb-2 flex items-center gap-2 type-caption text-warning">
-              <Spinner size={10} />
-              <span>
-                {retrySecondsRemaining(retryStatus, retryNow) > 0
-                  ? t('retryInProgress', {
-                      attempt: retryStatus.attempt,
-                      max: retryStatus.maxAttempts,
-                      seconds: retrySecondsRemaining(retryStatus, retryNow),
-                    })
-                  : t('retryStarting', {
-                      attempt: retryStatus.attempt,
-                      max: retryStatus.maxAttempts,
-                    })}
-              </span>
-              {retryStatus.message && (
-                <span className="min-w-0 truncate text-ink-muted">{retryStatus.message}</span>
-              )}
-            </div>
-          )}
+          {retryStatus && <RetryStatusBanner retryStatus={retryStatus} />}
           {activePlan ? (
             <div className="mb-2 flex items-center justify-between gap-2 border border-rule-hairline bg-raised px-3 py-2">
               <Caption className="text-ink-muted">

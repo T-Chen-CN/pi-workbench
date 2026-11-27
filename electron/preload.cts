@@ -41,6 +41,8 @@ type WindowMaximizedState = { host: string; maximized: boolean }
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  /** Windows / Linux 主窗口与辅助窗口启用原生 titleBarOverlay，渲染层不再重复绘制窗口按钮 */
+  nativeTitleBarOverlay: process.platform !== 'darwin',
   // 文件系统操作
   openDirectoryDialog: () => ipcRenderer.invoke('dialog:openDirectory'),
   readFile: (path: string) => ipcRenderer.invoke('fs:readFile', path),

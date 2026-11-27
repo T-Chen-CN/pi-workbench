@@ -54,7 +54,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   workspacePath,
   active: workspaceActive = true,
 }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const [open, setOpen] = useState(false)
   const [plugins, setPlugins] = useState<PluginInfo[]>([])
   /** 与斜杠菜单共用的提示模板 / 技能数据源（R-13） */
@@ -68,6 +68,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [args, setArgs] = useState('')
   const [selected, setSelected] = useState(0)
   const [output, setOutput] = useState<CommandOutput | null>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const refreshSeqRef = useRef(0)
 
@@ -145,11 +146,40 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       refreshSeqRef.current += 1
       return
     }
+    const previousFocus = document.activeElement as HTMLElement | null
     void refresh()
     const timer = setTimeout(() => inputRef.current?.focus(), 0)
+    const onTabTrap = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      const container = dialogRef.current
+      if (!container) return
+      const focusables = Array.from(
+        container.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      )
+      if (focusables.length === 0) return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      const active = document.activeElement as HTMLElement | null
+      if (event.shiftKey) {
+        if (!active || active === first || !container.contains(active)) {
+          event.preventDefault()
+          last.focus()
+        }
+      } else if (!active || active === last || !container.contains(active)) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onTabTrap)
     return () => {
       clearTimeout(timer)
+      document.removeEventListener('keydown', onTabTrap)
       refreshSeqRef.current += 1
+      if (previousFocus && document.contains(previousFocus)) {
+        previousFocus.focus()
+      }
     }
   }, [open, refresh])
 
@@ -334,7 +364,10 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-20"
     >
       <div className="absolute inset-0 bg-overlay/50" onClick={() => setOpen(false)} />
-      <div className="relative flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden border border-line bg-raised shadow-print">
+      <div
+        ref={dialogRef}
+        className="relative flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden border border-line bg-raised shadow-print"
+      >
         <div className="flex h-10 flex-shrink-0 items-center justify-between border-b border-rule-divide px-3">
           <h3 className="m-0 type-label text-ink-muted">
             {t('commandPalette')}

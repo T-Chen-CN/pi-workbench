@@ -29,6 +29,8 @@ import { toast } from '../store/toastStore'
 import { localizeError } from '../i18n/errors'
 import { confirmDialog, promptDialog } from '../store/dialogStore'
 import { IconButton, Spinner } from './ui'
+import { useVirtualRows } from '../hooks/useVirtualRows'
+import { VirtualRows } from './VirtualRows'
 import { emitAppEvent } from '../utils/appEvents'
 import { buildCommitGraph, type GraphRow } from '../utils/commitGraph'
 import { parseGitRefs, type GitRefChip } from '../utils/gitRefs'
@@ -127,7 +129,7 @@ const RefBadge: React.FC<{
 const RefOverflowBadge: React.FC<{ chips: GitRefChip[] }> = ({ chips }) => (
   <span
     title={chips.map((chip) => chip.title).join(', ')}
-    className="inline-flex h-4 flex-none items-center rounded-sm border border-rule-hairline bg-raised px-1 type-caption text-ink-subtle"
+    className="inline-flex h-4 flex-none items-center rounded-sm border border-rule-hairline bg-raised px-1 type-caption text-ink-muted"
   >
     +{chips.length}
   </span>
@@ -319,7 +321,8 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
   workspacePath,
   active = true,
 }) => {
-  const { t, language } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
+  const language = useI18nStore((state) => state.language)
   const panelMenu = usePanelContextMenu('git')
   const [githubLinked, setGithubLinked] = useState<boolean | null>(null)
   const [panelWidth, setPanelWidth] = useState(0)
@@ -385,6 +388,15 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
   const graphWidth = GRAPH_PAD_LEFT + graph.laneCount * LANE_WIDTH + GRAPH_PAD_RIGHT
   const narrow = panelWidth > 0 && panelWidth < NARROW_BREAKPOINT
   const rowHeight = narrow ? ROW_HEIGHT_NARROW : ROW_HEIGHT
+  const { parentRef: commitParentRef, virtualizer: commitVirtualizer } = useVirtualRows({
+    count: commits.length,
+    estimateSize: rowHeight,
+    overscan: 10,
+    getItemKey: (index) => commits[index]?.sha ?? index,
+  })
+  useEffect(() => {
+    commitVirtualizer.measure()
+  }, [commitVirtualizer, rowHeight])
   const nodeRadius = narrow ? 6.5 : 4.5
   const graphStrokeWidth = narrow ? 2.4 : 2
   const rowGrid = narrow
@@ -420,15 +432,19 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
     return () => observer.disconnect()
   }, [])
 
+  // 切会话只刷新会话工作树绑定，不重复全量拉 200 条 git log 和远端 fetch
   useEffect(() => {
     void load(workspacePath, activeSessionId)
+  }, [workspacePath, activeSessionId, load])
+
+  useEffect(() => {
     void loadCommits(workspacePath, COMMIT_LIMIT, undefined, true)
     void loadCommitStats(workspacePath, COMMIT_LIMIT, undefined, true)
     // 打开面板时补一次远端同步；失败静默，手动刷新会给出提示
     if (typeof api.gitFetch === 'function') {
       void api.gitFetch(workspacePath).catch(() => undefined)
     }
-  }, [workspacePath, activeSessionId, load, loadCommits, loadCommitStats])
+  }, [workspacePath, loadCommits, loadCommitStats])
 
   useEffect(() => {
     void loadPr(workspacePath, binding?.path)
@@ -929,7 +945,7 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
             ) : current ? (
               <span className="flex-none text-accent">{t('gitInUse')}</span>
             ) : worktree.missing ? (
-              <span className="flex flex-none items-center gap-1 type-caption text-ink-subtle">
+              <span className="flex flex-none items-center gap-1 type-caption text-ink-muted">
                 {t('worktreeMissing')}
                 <button
                   type="button"
@@ -1054,7 +1070,13 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
       )}
 
       <div ref={tableRef} className="relative flex min-h-0 flex-1">
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
+        <div
+          ref={(node) => {
+            scrollRef.current = node
+            commitParentRef.current = node
+          }}
+          className="min-h-0 flex-1 overflow-auto"
+        >
           {!narrow && (
             <div
               className="sticky top-0 z-[3] grid h-[26px] items-center border-b border-l-2 border-l-transparent border-rule-divide bg-panel pr-2 text-ink-muted type-caption"
@@ -1125,7 +1147,13 @@ export const GitView: React.FC<{ workspacePath: string; active?: boolean }> = ({
             />
           </div>
 
-          {commits.map((commit, index) => renderRow(commit, index))}
+          <VirtualRows
+            virtualizer={commitVirtualizer}
+            items={commits}
+            getKey={(commit) => commit.sha}
+            fallbackCount={40}
+            renderItem={(commit, index) => renderRow(commit, index)}
+          />
 
           {detailPending && !detail && (
             <div className="flex items-center gap-1.5 border-b border-rule-hairline px-2.5 py-1.5">

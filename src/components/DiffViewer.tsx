@@ -13,7 +13,8 @@ export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> =
   workspacePath,
   active = true,
 }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
+  const dialogRef = useRef<HTMLDivElement | null>(null)
   const {
     edits,
     currentIndex,
@@ -35,15 +36,54 @@ export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> =
 
   useEffect(() => {
     if (!isOpen || !active) return
+    const previousFocus = document.activeElement as HTMLElement | null
+    const raf = window.requestAnimationFrame(() => {
+      const container = dialogRef.current
+      if (!container || container.contains(document.activeElement)) return
+      const first = container.querySelector<HTMLElement>(
+        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+      ;(first ?? container).focus()
+    })
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return
-      // 若确认撤销弹窗（DialogHost）等上层模态框已打开，不连带关掉 DiffViewer
+      // 若确认撤销弹窗（DialogHost）等上层模态框已打开，不抢占其按键
       if (document.querySelector('[role="dialog"][aria-modal="true"]:not([data-diff-viewer])')) return
-      event.preventDefault()
-      clearDiff()
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        event.preventDefault()
+        clearDiff()
+        return
+      }
+      if (event.key === 'Tab') {
+        const container = dialogRef.current
+        if (!container) return
+        const focusables = Array.from(
+          container.querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        )
+        if (focusables.length === 0) return
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        const activeEl = document.activeElement as HTMLElement | null
+        if (event.shiftKey) {
+          if (!activeEl || activeEl === first || !container.contains(activeEl)) {
+            event.preventDefault()
+            last.focus()
+          }
+        } else if (!activeEl || activeEl === last || !container.contains(activeEl)) {
+          event.preventDefault()
+          first.focus()
+        }
+      }
     }
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    return () => {
+      window.cancelAnimationFrame(raf)
+      window.removeEventListener('keydown', onKeyDown)
+      if (previousFocus && document.contains(previousFocus)) {
+        previousFocus.focus()
+      }
+    }
   }, [isOpen, clearDiff, active])
 
   const edit = edits[currentIndex]
@@ -74,7 +114,11 @@ export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> =
       className="fixed inset-0 z-40 flex items-center justify-center p-6"
     >
       <div className="absolute inset-0 bg-overlay/50" onClick={handleClose} />
-      <div className="relative flex h-[85vh] w-full max-w-6xl flex-col overflow-hidden border border-line bg-raised shadow-print">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="relative flex h-[85vh] w-full max-w-6xl flex-col overflow-hidden border border-line bg-raised shadow-print focus:outline-none"
+      >
         {/* Header */}
         <div className="flex flex-shrink-0 items-center justify-between gap-4 border-b border-rule-divide px-4 py-2">
           <div className="flex min-w-0 items-center gap-3">

@@ -216,6 +216,8 @@ export interface GitWorktreeDepsPayload {
 
 export interface ElectronAPI {
   platform: string
+  /** Windows / Linux 原生 titleBarOverlay 已启用时为 true，渲染层仅预留右侧安全区不重复渲染按钮 */
+  nativeTitleBarOverlay?: boolean
   // File system operations
   openDirectoryDialog: () => Promise<OpenDirectoryResult>
   readFile: (path: string) => Promise<ReadFileResult>

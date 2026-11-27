@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Check, ChevronDown, Loader2, X, type LucideIcon } from 'lucide-react'
 import { useHostDocument } from '../panelHost/HostContext'
 
@@ -480,11 +481,23 @@ const MODAL_SIZES = {
 
 /** 按宿主文档维护模态栈：嵌套弹窗（如 Settings → UpdateDialog、DiffViewer → DialogHost）按 Esc 只关最顶层 */
 const modalStacks = new WeakMap<Document, Array<symbol>>()
+/** 记录因打开模态框而被加上 inert 的 body 直接子节点，栈清空时精确恢复 */
+const modalInertNodes = new WeakMap<Document, Set<Element>>()
 
 function pushModalToken(doc: Document, token: symbol): void {
   const stack = modalStacks.get(doc) ?? []
+  const wasEmpty = stack.length === 0
   stack.push(token)
   modalStacks.set(doc, stack)
+  if (wasEmpty && doc.body) {
+    const marked = new Set<Element>()
+    for (const child of Array.from(doc.body.children)) {
+      if (child.hasAttribute('data-modal-portal') || child.hasAttribute('inert')) continue
+      child.setAttribute('inert', '')
+      marked.add(child)
+    }
+    modalInertNodes.set(doc, marked)
+  }
 }
 
 function removeModalToken(doc: Document, token: symbol): void {
@@ -492,6 +505,15 @@ function removeModalToken(doc: Document, token: symbol): void {
   if (!stack) return
   const index = stack.lastIndexOf(token)
   if (index >= 0) stack.splice(index, 1)
+  if (stack.length === 0) {
+    const marked = modalInertNodes.get(doc)
+    if (marked) {
+      for (const el of marked) {
+        el.removeAttribute('inert')
+      }
+      marked.clear()
+    }
+  }
 }
 
 function isTopModalToken(doc: Document, token: symbol): boolean {
@@ -501,6 +523,15 @@ function isTopModalToken(doc: Document, token: symbol): boolean {
 
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+function getVisibleFocusables(container: HTMLElement, doc: Document): HTMLElement[] {
+  const view = doc.defaultView ?? window
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((el) => {
+    if (el.closest('[hidden], [inert], [aria-hidden="true"]')) return false
+    const style = view.getComputedStyle(el)
+    return style.display !== 'none' && style.visibility !== 'hidden'
+  })
+}
 
 export const Modal: React.FC<ModalProps> = ({
   open,
@@ -529,7 +560,7 @@ export const Modal: React.FC<ModalProps> = ({
       const container = dialogRef.current
       if (!container) return
       if (!container.contains(hostDocument.activeElement)) {
-        const first = container.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+        const first = getVisibleFocusables(container, hostDocument)[0]
         ;(first ?? container).focus()
       }
     })
@@ -546,8 +577,12 @@ export const Modal: React.FC<ModalProps> = ({
       if (event.key === 'Tab') {
         const container = dialogRef.current
         if (!container) return
-        const focusables = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
-        if (focusables.length === 0) return
+        const focusables = getVisibleFocusables(container, hostDocument)
+        if (focusables.length === 0) {
+          event.preventDefault()
+          container.focus()
+          return
+        }
         const first = focusables[0]
         const last = focusables[focusables.length - 1]
         const active = hostDocument.activeElement as HTMLElement | null
@@ -575,8 +610,11 @@ export const Modal: React.FC<ModalProps> = ({
 
   if (!open) return null
 
-  return (
-    <div className={`fixed inset-0 ${zIndexClass} flex items-center justify-center p-6`}>
+  const content = (
+    <div
+      data-modal-portal="true"
+      className={`fixed inset-0 ${zIndexClass} flex items-center justify-center p-6`}
+    >
       <div className="absolute inset-0 bg-overlay/35" onClick={onClose} />
       <div
         ref={dialogRef}
@@ -603,6 +641,8 @@ export const Modal: React.FC<ModalProps> = ({
       </div>
     </div>
   )
+
+  return hostDocument.body ? createPortal(content, hostDocument.body) : content
 }
 
 export const Spinner: React.FC<{ size?: number; className?: string }> = ({

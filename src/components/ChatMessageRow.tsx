@@ -23,7 +23,7 @@ import { formatBytes } from '../utils/formatBytes'
 export const TurnTaskList: React.FC<{ parts: AgentTracePart[] }> = ({
   parts,
 }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const [open, setOpen] = useState(false)
   const tools = parts.filter(
     (part): part is Extract<AgentTracePart, { type: 'tool' }> =>
@@ -88,7 +88,7 @@ const TurnEditSummary: React.FC<{
   messageKey: string
   messageId: string
 }> = ({ edits, messageKey, messageId }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   // 默认收起：一轮可能改十几个文件，全部平铺会把对话吃掉
   const [open, setOpen] = useState(false)
   const scopeWorkspace = useWorkspaceScope()
@@ -175,7 +175,7 @@ const TurnEditSummary: React.FC<{
 const MessageImages: React.FC<{
   images: Array<{ data: string; mimeType: string }>
 }> = ({ images }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const hostDocument = useHostDocument()
   const [preview, setPreview] = useState<number | null>(null)
 
@@ -252,7 +252,7 @@ const MessageQuoteBlock: React.FC<{
   quote: import('../types/electron').MessageContextQuote
   onCopy?: (text: string) => void
 }> = ({ quote, onCopy }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const [expanded, setExpanded] = useState(false)
   // 与输入区 chip 一致：显示文件名，完整路径放 title
   const source = quote.path
@@ -319,7 +319,7 @@ const MessageQuoteBlock: React.FC<{
 const MessageContextFiles: React.FC<{
   files: import('../types/electron').MessageContextFile[]
 }> = ({ files }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   if (files.length === 0) return null
   return (
     <div className="mb-1.5 flex flex-wrap gap-1.5" data-testid="message-files">
@@ -332,12 +332,12 @@ const MessageContextFiles: React.FC<{
           <FileText size={10} className="text-ink-muted" />
           {file.name || basename(file.path)}
           {file.size !== undefined && (
-            <span className="type-caption text-ink-subtle">
+            <span className="type-caption text-ink-muted">
               {formatBytes(file.size)}
             </span>
           )}
           {file.external && (
-            <span className="type-caption text-ink-subtle">{t('attachmentExternal')}</span>
+            <span className="type-caption text-ink-muted">{t('attachmentExternal')}</span>
           )}
         </span>
       ))}
@@ -372,7 +372,8 @@ export const ChatMessageRow = React.memo(function ChatMessageRow({
   onRejectPlan?: (plan: StructuredPlan) => void
   conversationKey?: string
 }) {
-  const { t, language } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
+  const language = useI18nStore((state) => state.language)
 
   if (message.role === 'system') {
     // 历史会话里的压缩提示是纯文本分隔线；现行结构是 part。两种都要能渲染。
@@ -532,7 +533,7 @@ export const ChatMessageRow = React.memo(function ChatMessageRow({
                 content={message.content}
                 isStreaming={Boolean(message.isStreaming)}
                 showCursor={Boolean(message.isStreaming)}
-                highlight={message.content.length <= 20_000}
+                highlight={!message.isStreaming || message.content.length <= 100_000}
               />
             </div>
           )}

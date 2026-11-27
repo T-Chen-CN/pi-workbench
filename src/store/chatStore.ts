@@ -150,8 +150,34 @@ type ToolStartEvent = Extract<AgentStreamEvent, { type: 'tool_start' }>
 type ToolUpdateEvent = Extract<AgentStreamEvent, { type: 'tool_update' }>
 type ToolEndEvent = Extract<AgentStreamEvent, { type: 'tool_end' }>
 
+/** 从会话键解析工作区路径（O(1) 维护工作区忙碌计数） */
+function workspaceFromKey(key: string): string {
+  const sep = key.indexOf('\u0000')
+  return sep >= 0 ? key.slice(0, sep) : key
+}
+
+function adjustWorkspaceBusy(
+  counts: Record<string, number>,
+  key: string,
+  wasBusy: boolean,
+  isBusy: boolean
+): Record<string, number> {
+  if (wasBusy === isBusy) return counts
+  const workspace = workspaceFromKey(key)
+  const next = Math.max(0, (counts[workspace] ?? 0) + (isBusy ? 1 : -1))
+  if (next === 0) {
+    if (!(workspace in counts)) return counts
+    const copy = { ...counts }
+    delete copy[workspace]
+    return copy
+  }
+  return { ...counts, [workspace]: next }
+}
+
 interface ChatState {
   conversations: Record<string, ConversationState>
+  /** 每个工作区当前处于 isLoading 或 isCompacting 的会话计数（避免 50ms 流式帧触发全量遍历） */
+  busyCountByWorkspace: Record<string, number>
   /** 欢迎页带入的草稿，等工作区会话初始化后写入激活会话 */
   pendingDraft: string
   pendingDraftWorkspace: string | null
@@ -303,6 +329,7 @@ function closeThinking(message: ChatMessage, now = Date.now()): ChatMessage {
 
 export const useChatStore = create<ChatState>((set) => ({
   conversations: {},
+  busyCountByWorkspace: {},
   pendingDraft: '',
   pendingDraftWorkspace: null,
 
@@ -319,10 +346,15 @@ export const useChatStore = create<ChatState>((set) => ({
 
   removeConversation: (key) =>
     set((state) => {
-      if (!state.conversations[key]) return state
+      const existing = state.conversations[key]
+      if (!existing) return state
       const conversations = { ...state.conversations }
       delete conversations[key]
-      return { conversations }
+      const wasBusy = Boolean(existing.isLoading || existing.isCompacting)
+      return {
+        conversations,
+        busyCountByWorkspace: adjustWorkspaceBusy(state.busyCountByWorkspace, key, wasBusy, false),
+      }
     }),
 
   addMessage: (key, message) => {
@@ -925,19 +957,39 @@ export const useChatStore = create<ChatState>((set) => ({
     ),
 
   setLoading: (key, loading) =>
-    set((state) =>
-      updateExisting(state, key, (current) => ({ ...current, isLoading: loading }))
-    ),
+    set((state) => {
+      const current = state.conversations[key]
+      if (!current) return state
+      const wasBusy = Boolean(current.isLoading || current.isCompacting)
+      const isBusy = Boolean(loading || current.isCompacting)
+      return {
+        conversations: { ...state.conversations, [key]: { ...current, isLoading: loading } },
+        busyCountByWorkspace: adjustWorkspaceBusy(state.busyCountByWorkspace, key, wasBusy, isBusy),
+      }
+    }),
 
   setCompacting: (key, compacting) =>
-    set((state) =>
-      updateExisting(state, key, (current) => ({ ...current, isCompacting: compacting }))
-    ),
+    set((state) => {
+      const current = state.conversations[key]
+      if (!current) return state
+      const wasBusy = Boolean(current.isLoading || current.isCompacting)
+      const isBusy = Boolean(current.isLoading || compacting)
+      return {
+        conversations: { ...state.conversations, [key]: { ...current, isCompacting: compacting } },
+        busyCountByWorkspace: adjustWorkspaceBusy(state.busyCountByWorkspace, key, wasBusy, isBusy),
+      }
+    }),
 
   setError: (key, error) =>
     set((state) =>
       updateExisting(state, key, (current) => ({ ...current, error }))
     ),
 
-  reset: () => set({ conversations: {}, pendingDraft: '', pendingDraftWorkspace: null }),
+  reset: () =>
+    set({
+      conversations: {},
+      busyCountByWorkspace: {},
+      pendingDraft: '',
+      pendingDraftWorkspace: null,
+    }),
 }))

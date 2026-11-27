@@ -118,7 +118,11 @@ export default function App() {
   const currentFileName = useEditorStore(workspace, (state) => state.currentFile?.name ?? '')
   const platform = typeof window !== 'undefined' ? window.electronAPI?.platform : undefined
   const usesMacTrafficLights = platform === 'darwin'
-  const usesCustomWindowControls = !!platform && platform !== 'darwin' && platform !== 'web'
+  const usesNativeTitleBarOverlay = Boolean(
+    typeof window !== 'undefined' && window.electronAPI?.nativeTitleBarOverlay
+  )
+  const usesCustomWindowControls =
+    !!platform && platform !== 'darwin' && platform !== 'web' && !usesNativeTitleBarOverlay
 
   /** 工作区标签上只显示一个最高优先级的状态标记 */
   const workspaceActivity = (path: string): 'needsAction' | 'error' | 'running' | null => {
@@ -713,7 +717,7 @@ export default function App() {
       <header
         className={`app-drag flex h-[var(--titlebar-height)] flex-shrink-0 select-none items-center justify-between gap-4 border-b border-rule-divide bg-panel ${
           usesMacTrafficLights ? 'pl-[78px]' : 'pl-4'
-        } ${usesCustomWindowControls ? 'pr-0' : 'pr-4'}`}
+        } ${usesCustomWindowControls ? 'pr-0' : usesNativeTitleBarOverlay ? 'pr-[140px]' : 'pr-4'}`}
         onDoubleClick={(event) => {
           if (!usesCustomWindowControls) return
           const target = event.target as HTMLElement

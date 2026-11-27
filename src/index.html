@@ -131,6 +131,12 @@
         transform: rotate(360deg);
       }
     }
+
+    @media (prefers-reduced-motion: reduce) {
+      .boot-spinner {
+        animation: none;
+      }
+    }
   </style>
 </head>
 <body>

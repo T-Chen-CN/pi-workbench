@@ -5,6 +5,7 @@ import type { ToolResultMeta } from '../types/electron'
 import { useI18nStore } from '../store/i18nStore'
 import { toast } from '../store/toastStore'
 import { useVirtualRows } from '../hooks/useVirtualRows'
+import { useHostDocument } from '../panelHost/HostContext'
 import { VirtualRows } from './VirtualRows'
 import { Button, Caption, IconButton, Modal, Spinner } from './ui'
 import { SearchField } from './patterns'
@@ -32,7 +33,9 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
   toolName,
   onClose,
 }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
+  const hostDocument = useHostDocument()
+  const lightboxRef = useRef<HTMLDivElement | null>(null)
   const [meta, setMeta] = useState<ToolResultMeta | null>(null)
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(true)
@@ -164,6 +167,20 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
   useEffect(() => {
     parentRef.current?.scrollTo({ top: 0 })
   }, [query, parentRef])
+
+  // 大图灯箱在捕获阶段独占 Escape，防止关闭灯箱时顺手把外层 ToolResultViewer 弹窗一起关掉
+  useEffect(() => {
+    if (!showImage) return
+    lightboxRef.current?.focus()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      setShowImage(false)
+    }
+    hostDocument.addEventListener('keydown', onKeyDown, true)
+    return () => hostDocument.removeEventListener('keydown', onKeyDown, true)
+  }, [showImage, hostDocument])
 
   const handleCopy = async () => {
     const content = matches ? matches.map((match) => match.text).join('\n') : text
@@ -359,18 +376,12 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
 
       {showImage && image && (
         <div
+          ref={lightboxRef}
           role="dialog"
           aria-modal="true"
           aria-label={toolName}
           tabIndex={-1}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              event.preventDefault()
-              event.stopPropagation()
-              setShowImage(false)
-            }
-          }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/70 p-6"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/70 p-6 focus:outline-none"
           onClick={() => setShowImage(false)}
         >
           <img src={image} alt={toolName} className="max-h-full max-w-full object-contain" />

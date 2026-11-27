@@ -27,12 +27,13 @@ export const PanelWindowFrame: React.FC<{
   host?: HostId
   children: React.ReactNode
 }> = ({ panel, workspacePath, host = MAIN_HOST, children }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const dockPanel = usePanelStore((state) => state.dockPanel)
   const toastMessages = useToastStore((state) => state.messages)
   const removeToast = useToastStore((state) => state.remove)
   const isMac = isMacPlatform()
   const api = typeof window !== 'undefined' ? window.electronAPI : undefined
+  const usesNativeOverlay = Boolean(api?.nativeTitleBarOverlay)
   const isAux = host !== MAIN_HOST
 
   const toggleMaximize = () => {
@@ -46,9 +47,9 @@ export const PanelWindowFrame: React.FC<{
       <div
         className={`app-drag flex h-[34px] flex-shrink-0 select-none items-center justify-between gap-2 border-b border-rule-divide bg-panel ${
           isMac ? 'pl-[84px]' : 'pl-3'
-        } ${isMac ? 'pr-3' : 'pr-0'}`}
+        } ${isMac ? 'pr-3' : usesNativeOverlay ? 'pr-[140px]' : 'pr-0'}`}
         onDoubleClick={(event) => {
-          if (isMac) return
+          if (isMac || usesNativeOverlay) return
           if ((event.target as HTMLElement).closest('button, a, input, select, textarea')) return
           toggleMaximize()
         }}
@@ -64,7 +65,7 @@ export const PanelWindowFrame: React.FC<{
               onClick={() => dockPanel(workspacePath, panel)}
             />
           </div>
-          {!isMac && <WindowControls host={host} compact />}
+          {!isMac && !usesNativeOverlay && <WindowControls host={host} compact />}
         </div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>

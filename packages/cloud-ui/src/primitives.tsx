@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useId, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { Loader2, X, type LucideIcon } from 'lucide-react'
 
 export type CloudButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
@@ -229,6 +230,14 @@ const MODAL_SIZES = {
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
+function getVisibleFocusables(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((el) => {
+    if (el.closest('[hidden], [inert], [aria-hidden="true"]')) return false
+    const style = window.getComputedStyle(el)
+    return style.display !== 'none' && style.visibility !== 'hidden'
+  })
+}
+
 export const Modal: React.FC<ModalProps> = ({
   open,
   onClose,
@@ -247,11 +256,19 @@ export const Modal: React.FC<ModalProps> = ({
   useEffect(() => {
     if (!open || typeof document === 'undefined') return
     const previousFocus = document.activeElement as HTMLElement | null
+    const markedInert: Element[] = []
+    if (document.body) {
+      for (const child of Array.from(document.body.children)) {
+        if (child.hasAttribute('data-modal-portal') || child.hasAttribute('inert')) continue
+        child.setAttribute('inert', '')
+        markedInert.push(child)
+      }
+    }
     const raf = window.requestAnimationFrame(() => {
       const container = dialogRef.current
       if (!container) return
       if (!container.contains(document.activeElement)) {
-        const first = container.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+        const first = getVisibleFocusables(container)[0]
         ;(first ?? container).focus()
       }
     })
@@ -259,12 +276,36 @@ export const Modal: React.FC<ModalProps> = ({
       if (event.key === 'Escape' && !event.defaultPrevented) {
         event.preventDefault()
         onCloseRef.current()
+        return
+      }
+      if (event.key === 'Tab') {
+        const container = dialogRef.current
+        if (!container) return
+        const focusables = getVisibleFocusables(container)
+        if (focusables.length === 0) {
+          event.preventDefault()
+          container.focus()
+          return
+        }
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        const active = document.activeElement as HTMLElement | null
+        if (event.shiftKey) {
+          if (!active || active === first || !container.contains(active)) {
+            event.preventDefault()
+            last.focus()
+          }
+        } else if (!active || active === last || !container.contains(active)) {
+          event.preventDefault()
+          first.focus()
+        }
       }
     }
     document.addEventListener('keydown', onKeyDown)
     return () => {
       window.cancelAnimationFrame(raf)
       document.removeEventListener('keydown', onKeyDown)
+      for (const el of markedInert) el.removeAttribute('inert')
       if (previousFocus && document.contains(previousFocus)) {
         previousFocus.focus()
       }
@@ -273,8 +314,11 @@ export const Modal: React.FC<ModalProps> = ({
 
   if (!open) return null
 
-  return (
-    <div className={`fixed inset-0 ${zIndexClass} flex items-center justify-center p-6`}>
+  const content = (
+    <div
+      data-modal-portal="true"
+      className={`fixed inset-0 ${zIndexClass} flex items-center justify-center p-6`}
+    >
       <div className="absolute inset-0 bg-overlay/35" onClick={onClose} />
       <div
         ref={dialogRef}
@@ -301,6 +345,10 @@ export const Modal: React.FC<ModalProps> = ({
       </div>
     </div>
   )
+
+  return typeof document !== 'undefined' && document.body
+    ? createPortal(content, document.body)
+    : content
 }
 
 export const Spinner: React.FC<{ size?: number; className?: string }> = ({
@@ -332,7 +380,12 @@ export const CardHeader: React.FC<{
     className={`flex items-center justify-between gap-3 border-b border-rule-divide pb-2 ${className}`}
   >
     <Label className="text-ink">{title}</Label>
-    {status ?? action}
+    {(status || action) && (
+      <div className="flex items-center gap-2">
+        {status}
+        {action}
+      </div>
+    )}
   </div>
 )
 

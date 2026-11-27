@@ -375,14 +375,17 @@ describe('installAuxWindowSupport', () => {
       x: 40,
       y: 40
     })
-    // 与主窗口一致：Windows / Linux 无边框（自绘标题栏），macOS 保留红绿灯
+    // 与主窗口一致：Windows / Linux 用原生 hidden + titleBarOverlay（保留 Win11 Snap），macOS 保留红绿灯
     if (process.platform === 'darwin') {
       expect(result.overrideBrowserWindowOptions.frame).toBeUndefined()
       expect(result.overrideBrowserWindowOptions.titleBarStyle).toBe('hiddenInset')
       expect(result.overrideBrowserWindowOptions.trafficLightPosition).toEqual({ x: 12, y: 10 })
     } else {
-      expect(result.overrideBrowserWindowOptions.frame).toBe(false)
-      expect(result.overrideBrowserWindowOptions.titleBarStyle).toBeUndefined()
+      expect(result.overrideBrowserWindowOptions.frame).toBeUndefined()
+      expect(result.overrideBrowserWindowOptions.titleBarStyle).toBe('hidden')
+      expect(result.overrideBrowserWindowOptions.titleBarOverlay).toMatchObject({
+        height: 34,
+      })
     }
   })
 

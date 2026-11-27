@@ -57,7 +57,8 @@ export function useChatPanelState(props: ChatPanelProps) {
   const { workspacePath, viewRoot, active = true } = props
 
   const diffStore = diffStoreFor(viewRoot ?? workspacePath)
-  const { t, language } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
+  const language = useI18nStore((state) => state.language)
   const sessionsState = useSessionStore((state) => state.byWorkspace[workspacePath])
   const sessions = sessionsState?.sessions ?? EMPTY_SESSIONS
   const activeSessionId = sessionsState?.active ?? null
@@ -285,8 +286,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     sessionId: string
   } | null>(null)
   const [showArchived, setShowArchived] = useState(false)
-  /** 重试倒计时的本地时钟（R-19） */
-  const [retryNow, setRetryNow] = useState(() => Date.now())
   const [mention, setMention] = useState<{
     start: number
     query: string
@@ -307,12 +306,9 @@ export function useChatPanelState(props: ChatPanelProps) {
   const [configVersion, setConfigVersion] = useState(0)
   const [agentReadyVersion, setAgentReadyVersion] = useState(0)
   const pendingConfigReloadRef = useRef(false)
-  const workspaceBusy = useChatStore((state) => {
-    const prefix = `${workspacePath}\u0000`
-    return Object.entries(state.conversations).some(
-      ([key, conv]) => key.startsWith(prefix) && (conv.isLoading || conv.isCompacting)
-    )
-  })
+  const workspaceBusy = useChatStore(
+    (state) => (state.busyCountByWorkspace[workspacePath] ?? 0) > 0
+  )
   const workspaceBusyRef = useRef(workspaceBusy)
   workspaceBusyRef.current = workspaceBusy
   const handleAgentReady = useCallback(() => {
@@ -644,14 +640,6 @@ export function useChatPanelState(props: ChatPanelProps) {
       setConfigVersion((version) => version + 1)
     }
   }, [workspaceBusy])
-
-  // 自动重试期间每 250ms 刷新倒计时；重试结束或失败时状态清空、计时器释放
-  useEffect(() => {
-    if (!retryStatus) return
-    setRetryNow(Date.now())
-    const timer = window.setInterval(() => setRetryNow(Date.now()), 250)
-    return () => window.clearInterval(timer)
-  }, [retryStatus])
 
   /** 打开工具结果全量查看器（只读） */
   const handleOpenToolResult = useCallback(
@@ -1502,7 +1490,6 @@ export function useChatPanelState(props: ChatPanelProps) {
     quoteCurrentFile,
     toggleQuoteCurrentFile,
     permissionLabelRef,
-    retryNow,
     retryStatus,
     scrollToBottom,
     selectedModelCapability,

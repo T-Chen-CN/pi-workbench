@@ -318,10 +318,12 @@ export function chainLayout(
 
   // 链根目录：用底层坐标，原地抬起
   const rootNode: CanvasNodeInput = { path: rootPath, kind: 'folder', parent: null }
-  positions.set(nodeId(rootNode), { x: rootPoint.x, y: rootPoint.y })
+  const rootId = nodeId(rootNode)
+  const seenNodes = new Set<string>([rootId])
+  positions.set(rootId, { x: rootPoint.x, y: rootPoint.y })
   nodes.push(rootNode)
-  elevated.add(nodeId(rootNode))
-  depths.set(nodeId(rootNode), 0)
+  elevated.add(rootId)
+  depths.set(rootId, 0)
 
   for (let depth = 0; depth < chain.length; depth++) {
     const folder = chain[depth]
@@ -335,10 +337,14 @@ export function chainLayout(
     const top = Math.round(point.y + (NODE_SIZES.folder.height - grid.height) / 2)
     kids.forEach((kid, index) => {
       const offset = grid.points[index]
-      positions.set(nodeId(kid), { x: childX + offset.x, y: top + offset.y })
-      elevated.add(nodeId(kid))
-      depths.set(nodeId(kid), depth + 1)
-      if (!nodes.some((node) => nodeId(node) === nodeId(kid))) nodes.push(kid)
+      const kidId = nodeId(kid)
+      positions.set(kidId, { x: childX + offset.x, y: top + offset.y })
+      elevated.add(kidId)
+      depths.set(kidId, depth + 1)
+      if (!seenNodes.has(kidId)) {
+        seenNodes.add(kidId)
+        nodes.push(kid)
+      }
     })
   }
 

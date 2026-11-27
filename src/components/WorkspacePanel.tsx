@@ -10,6 +10,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
   GitBranch,
   Maximize2,
   RefreshCw,
@@ -25,7 +28,11 @@ import { joinPath, samePath } from '../utils/filePath'
 import { openFileInEditor } from '../workspace/openFileInEditor'
 import { Button, Caption, EmptyState, IconButton, Spinner } from './ui'
 import { SearchField } from './patterns'
-import { RepoMapCanvas, type RepoMapCanvasHandle } from './RepoMapCanvas'
+import {
+  RepoMapCanvas,
+  type RepoMapCanvasHandle,
+  type RepoMapSearchMatchInfo,
+} from './RepoMapCanvas'
 
 /** 与主进程 `REPO_MAP_FULL_SCAN_LIMIT` 保持一致：超出后描述按需补齐 */
 const FULL_SCAN_LIMIT = 5000
@@ -52,7 +59,7 @@ export const WorkspacePanel = React.memo(function WorkspacePanel({
   viewRoot,
   active,
 }: WorkspacePanelProps) {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const state = useRepoMapStore((s) => repoMapStateFor(s, workspacePath))
   const scan = useRepoMapStore((s) => s.scan)
   const canvasRef = useRef<RepoMapCanvasHandle | null>(null)
@@ -60,6 +67,8 @@ export const WorkspacePanel = React.memo(function WorkspacePanel({
   const rescanPendingRef = useRef(false)
   const [query, setQuery] = useState('')
   const [zoom, setZoom] = useState(1)
+  const [matchInfo, setMatchInfo] = useState<RepoMapSearchMatchInfo>({ total: 0, index: 0 })
+  const [chain, setChain] = useState<string[]>([])
 
   /**
    * 首次可见时扫一次：面板是编辑区默认视图，启动时不该做无谓的磁盘扫描。
@@ -152,10 +161,38 @@ export const WorkspacePanel = React.memo(function WorkspacePanel({
           <SearchField
             value={query}
             onChange={setQuery}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && query.trim()) {
+                event.preventDefault()
+                if (event.shiftKey) canvasRef.current?.prevMatch()
+                else canvasRef.current?.nextMatch()
+              }
+            }}
             placeholder={t('repoMapSearchPlaceholder')}
             ariaLabel={t('repoMapSearchLabel')}
             className="w-52"
           />
+          {query.trim().length > 0 && (
+            <div className="flex items-center gap-0.5" data-testid="repo-map-search-nav">
+              <Caption className="px-1 text-ink-muted">
+                {matchInfo.total > 0 ? `${matchInfo.index + 1}/${matchInfo.total}` : '0/0'}
+              </Caption>
+              <IconButton
+                icon={ChevronUp}
+                label={t('repoMapSearchPrev')}
+                size="sm"
+                disabled={matchInfo.total <= 1}
+                onClick={() => canvasRef.current?.prevMatch()}
+              />
+              <IconButton
+                icon={ChevronDown}
+                label={t('repoMapSearchNext')}
+                size="sm"
+                disabled={matchInfo.total <= 1}
+                onClick={() => canvasRef.current?.nextMatch()}
+              />
+            </div>
+          )}
           <IconButton
             icon={RefreshCw}
             label={t('repoMapRefresh')}
@@ -166,6 +203,41 @@ export const WorkspacePanel = React.memo(function WorkspacePanel({
           />
         </div>
       </div>
+
+      {chain.length > 0 && (
+        <nav
+          aria-label={t('repoMapCanvasLabel')}
+          data-testid="repo-map-breadcrumbs"
+          className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-rule-divide bg-panel px-3 py-1 type-caption text-ink-muted"
+        >
+          <button
+            type="button"
+            onClick={() => canvasRef.current?.collapseToDepth(0)}
+            className="rounded-sm px-1 text-ink-muted transition-colors hover:bg-hover hover:text-ink"
+          >
+            {t('repoMapCanvasRoot')}
+          </button>
+          {chain.map((folderPath, index) => {
+            const label = folderPath.split('/').pop() ?? folderPath
+            const isLast = index === chain.length - 1
+            return (
+              <React.Fragment key={folderPath}>
+                <ChevronRight size={10} aria-hidden="true" className="flex-shrink-0 text-ink-muted" />
+                <button
+                  type="button"
+                  aria-current={isLast ? 'location' : undefined}
+                  onClick={() => canvasRef.current?.collapseToDepth(index + 1)}
+                  className={`rounded-sm px-1 transition-colors ${
+                    isLast ? 'text-accent' : 'text-ink-muted hover:bg-hover hover:text-ink'
+                  }`}
+                >
+                  {label}
+                </button>
+              </React.Fragment>
+            )
+          })}
+        </nav>
+      )}
 
       {state.truncated && (
         <div
@@ -220,6 +292,8 @@ export const WorkspacePanel = React.memo(function WorkspacePanel({
             onOpenFile={openFile}
             onEnsureDescribed={ensureDescribed}
             onZoomChange={setZoom}
+            onMatchInfo={setMatchInfo}
+            onChainChange={setChain}
           />
 
           <div
@@ -263,7 +337,7 @@ export const WorkspacePanel = React.memo(function WorkspacePanel({
           {state.total >= MANY_NODES_HINT && (
             <Caption
               role="status"
-              className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 text-ink-subtle"
+              className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 text-ink-muted"
             >
               {t('repoMapCanvasManyNodes', { count: state.total })}
             </Caption>

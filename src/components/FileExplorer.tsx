@@ -132,9 +132,10 @@ export const FileExplorer: React.FC<{
   panelId?: string
   active?: boolean
 }> = ({ workspacePath, onCollapse, collapseButtonRef, panelId = 'file-panel', active = true }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const panelMenu = usePanelContextMenu('files')
   const [tree, setTree] = useState<TreeNode[]>([])
+  const [focusedPath, setFocusedPath] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
@@ -541,15 +542,45 @@ export const FileExplorer: React.FC<{
     void persistAppSettings({ explorerSortReverse: next })
   }
 
-  const renderRow = (node: TreeNode, depth: number) => {
+  const focusRowAt = useCallback(
+    (index: number) => {
+      const target = flatRows[index]
+      if (!target) return
+      setFocusedPath(target.node.path)
+      virtualizer.scrollToIndex(index, { align: 'auto' })
+      const scrollEl = treeScrollRef.current
+      if (!scrollEl) return
+      const doc = scrollEl.ownerDocument
+      ;(doc.defaultView ?? window).requestAnimationFrame(() => {
+        const items = scrollEl.querySelectorAll<HTMLElement>('[role="treeitem"]')
+        for (const item of items) {
+          if (item.dataset.path === target.node.path) {
+            item.focus()
+            break
+          }
+        }
+      })
+    },
+    [flatRows, virtualizer, treeScrollRef]
+  )
+
+  const activeFocusPath = useMemo(() => {
+    if (focusedPath && flatRows.some((row) => row.node.path === focusedPath)) return focusedPath
+    if (currentFilePath && flatRows.some((row) => row.node.path === currentFilePath)) return currentFilePath
+    return flatRows[0]?.node.path ?? null
+  }, [focusedPath, currentFilePath, flatRows])
+
+  const renderRow = (node: TreeNode, depth: number, rowIndex: number) => {
     const active = currentFilePath === node.path
+    const isTabbable = activeFocusPath === node.path
     const NodeIcon = node.isDirectory ? (node.isExpanded ? FolderOpen : Folder) : fileIconFor(node.name)
 
     return (
       <div
         key={node.path}
+        data-path={node.path}
         role="treeitem"
-        tabIndex={0}
+        tabIndex={isTabbable ? 0 : -1}
         aria-selected={active}
         aria-expanded={node.isDirectory ? !!node.isExpanded : undefined}
         className={`flex h-7 cursor-pointer select-none items-center gap-1.5 border-l-2 pr-2 type-value transition-colors ${
@@ -558,11 +589,60 @@ export const FileExplorer: React.FC<{
             : 'border-transparent text-ink-muted hover:bg-hover hover:text-ink'
         }`}
         style={{ paddingLeft: `${depth * 14 + 8}px` }}
-        onClick={() => handleFileClick(node)}
+        onFocus={() => setFocusedPath(node.path)}
+        onClick={() => {
+          setFocusedPath(node.path)
+          handleFileClick(node)
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault()
             handleFileClick(node)
+            return
+          }
+          if (event.key === 'ArrowDown') {
+            event.preventDefault()
+            if (rowIndex + 1 < flatRows.length) focusRowAt(rowIndex + 1)
+            return
+          }
+          if (event.key === 'ArrowUp') {
+            event.preventDefault()
+            if (rowIndex > 0) focusRowAt(rowIndex - 1)
+            return
+          }
+          if (event.key === 'Home') {
+            event.preventDefault()
+            if (flatRows.length > 0) focusRowAt(0)
+            return
+          }
+          if (event.key === 'End') {
+            event.preventDefault()
+            if (flatRows.length > 0) focusRowAt(flatRows.length - 1)
+            return
+          }
+          if (event.key === 'ArrowRight') {
+            event.preventDefault()
+            if (node.isDirectory) {
+              if (!node.isExpanded) {
+                handleFileClick(node)
+              } else if (rowIndex + 1 < flatRows.length && flatRows[rowIndex + 1].depth > depth) {
+                focusRowAt(rowIndex + 1)
+              }
+            }
+            return
+          }
+          if (event.key === 'ArrowLeft') {
+            event.preventDefault()
+            if (node.isDirectory && node.isExpanded) {
+              handleFileClick(node)
+            } else if (depth > 0) {
+              for (let i = rowIndex - 1; i >= 0; i -= 1) {
+                if (flatRows[i].depth < depth) {
+                  focusRowAt(i)
+                  break
+                }
+              }
+            }
           }
         }}
         onContextMenu={(event) => {
@@ -708,10 +788,6 @@ export const FileExplorer: React.FC<{
               ) {
                 void handleCreateFile()
               }
-              if (e.key === 'Escape') {
-                e.stopPropagation()
-                setCreateDialog({ isOpen: false, fileName: '', parentPath: null })
-              }
             }}
             autoFocus
           />
@@ -732,7 +808,7 @@ export const FileExplorer: React.FC<{
             items={flatRows}
             getKey={(row) => row.node.path}
             fallbackCount={40}
-            renderItem={(row) => renderRow(row.node, row.depth)}
+            renderItem={(row, index) => renderRow(row.node, row.depth, index)}
           />
         )}
       </div>

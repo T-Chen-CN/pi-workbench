@@ -46,7 +46,12 @@ export const CardHeader: React.FC<CardHeaderProps> = ({
     className={`flex items-center justify-between gap-3 border-b border-rule-divide pb-2 ${className}`}
   >
     <Label className="text-ink">{title}</Label>
-    {status ?? action}
+    {(status || action) && (
+      <div className="flex items-center gap-2">
+        {status}
+        {action}
+      </div>
+    )}
   </div>
 )
 
@@ -374,6 +379,7 @@ export const RingMeter: React.FC<RingMeterProps> = ({
 export interface SearchFieldProps {
   value: string
   onChange: (value: string) => void
+  onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>
   placeholder: string
   ariaLabel: string
   className?: string
@@ -382,6 +388,7 @@ export interface SearchFieldProps {
 export const SearchField: React.FC<SearchFieldProps> = ({
   value,
   onChange,
+  onKeyDown,
   placeholder,
   ariaLabel,
   className = '',
@@ -393,6 +400,7 @@ export const SearchField: React.FC<SearchFieldProps> = ({
     <input
       value={value}
       onChange={(event) => onChange(event.target.value)}
+      onKeyDown={onKeyDown}
       placeholder={placeholder}
       aria-label={ariaLabel}
       className="min-w-0 flex-1 bg-transparent type-value text-ink placeholder:text-ink-muted focus:outline-none"
@@ -454,36 +462,39 @@ export const Tab = React.forwardRef<HTMLDivElement, TabProps>(function Tab(
   return (
     <div
       ref={ref}
-      role="tab"
-      aria-selected={active}
-      aria-busy={busy || undefined}
-      aria-label={ariaLabel}
-      title={title}
-      tabIndex={(tabbable ?? active) ? 0 : -1}
       data-tab=""
-      onClick={(event) => {
-        // 次级动作自己阻断冒泡之外再兜一层：将来漏写 stopPropagation 也不会误切标签
-        if ((event.target as HTMLElement).closest('[data-tab-aux]')) return
-        onSelect()
-      }}
       onAuxClick={(event) => {
         if (event.button !== 1 || !onClose) return
         event.preventDefault()
         onClose()
       }}
-      onKeyDown={handleTabListKeyDown}
-      className={`group flex ${TAB_SIZES[size]} flex-shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-rule-divide pl-3 pr-1 type-label transition-colors focus-visible:outline-offset-[-2px] ${
+      className={`group flex ${TAB_SIZES[size]} flex-shrink-0 select-none items-center border-r border-rule-divide pr-1 type-label transition-colors ${
         active
           ? 'bg-surface text-ink shadow-[inset_0_2px_0_rgb(var(--accent))]'
           : 'text-ink-muted hover:bg-hover hover:text-ink'
       } ${className}`}
     >
-      {/* 文字与装饰不接触指针事件：整块矩形都落到标签本体 */}
-      <span className="pointer-events-none flex min-w-0 items-center gap-1.5">
-        {leading}
-        <span className={`truncate ${labelClassName}`}>{label}</span>
-        {trailing}
-      </span>
+      {/* 主按钮承担完整 role="tab" 语义与点击区域，关闭按钮作为同级兄弟元素消除 WAI-ARIA nested-interactive */}
+      <button
+        type="button"
+        role="tab"
+        aria-selected={active}
+        aria-busy={busy || undefined}
+        aria-label={ariaLabel}
+        title={title}
+        tabIndex={(tabbable ?? active) ? 0 : -1}
+        onClick={onSelect}
+        onKeyDown={handleTabListKeyDown}
+        className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 pl-3 text-left focus-visible:outline-offset-[-2px] ${
+          onClose ? 'pr-0.5' : 'pr-2'
+        }`}
+      >
+        <span className="pointer-events-none flex min-w-0 items-center gap-1.5">
+          {leading}
+          <span className={`truncate ${labelClassName}`}>{label}</span>
+          {trailing}
+        </span>
+      </button>
       {onClose && (
         <button
           data-tab-aux=""
@@ -494,7 +505,7 @@ export const Tab = React.forwardRef<HTMLDivElement, TabProps>(function Tab(
             event.stopPropagation()
             onClose()
           }}
-          className={`ml-1 flex h-6 w-6 flex-shrink-0 items-center justify-center text-ink-muted transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 ${
+          className={`ml-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center text-ink-muted transition-opacity hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 ${
             active ? 'opacity-100' : 'opacity-0'
           }`}
         >

@@ -632,8 +632,17 @@ button {
   cursor: grabbing;
 }
 
-/* 上浮链的卡片：位置 / 尺寸不变，越深越靠上（层级与阴影由内联 --depth 梯度给出） */
+/* 尊重系统“减少动态效果”偏好：全局压缩动画与过渡时长 */
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
   .repo-map-card {
     transition: none;
   }

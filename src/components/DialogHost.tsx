@@ -10,7 +10,7 @@ import { Button, Input, Modal } from './ui'
 export const DialogHost: React.FC<{ host?: string }> = ({ host = 'main' }) => {
   const current = useDialogStore((state) => (state.currentHost === host ? state.current : null))
   const close = useDialogStore((state) => state.close)
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const [value, setValue] = useState('')
 
   useEffect(() => {
@@ -74,10 +74,6 @@ export const DialogHost: React.FC<{ host?: string }> = ({ host = 'main' }) => {
               ) {
                 event.preventDefault()
                 confirm()
-              } else if (event.key === 'Escape') {
-                event.preventDefault()
-                event.stopPropagation()
-                cancel()
               }
             }}
           />

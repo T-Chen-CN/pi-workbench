@@ -60,7 +60,7 @@ export const WindowControls: React.FC<{ host?: HostId; compact?: boolean }> = ({
   host = MAIN_HOST,
   compact = false
 }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const [maximized, setMaximized] = useState(false)
   const api = typeof window !== 'undefined' ? window.electronAPI : undefined
   const isAux = host !== MAIN_HOST

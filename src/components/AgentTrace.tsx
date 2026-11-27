@@ -140,7 +140,7 @@ export interface AgentPartsProps {
 
 /** 上下文压缩分隔线：位置由 parts 顺序决定，文案随语言切换重算 */
 const CompactionDivider: React.FC<{ part: CompactionPart }> = ({ part }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
   const label =
     typeof part.tokensBefore === 'number'
       ? t('compactionDividerTokens', { tokens: part.tokensBefore.toLocaleString() })
@@ -185,7 +185,8 @@ export const AgentParts: React.FC<AgentPartsProps> = React.memo(function AgentPa
                 content={group.part.text}
                 isStreaming={activeStream}
                 showCursor={activeStream}
-                highlight={group.part.text.length <= 20_000}
+                // Streamdown v2 已按块冻结，仅在超长流式回复（>100k）时暂缓高亮，彻底消除 20k 断崖
+                highlight={!activeStream || group.part.text.length <= 100_000}
               />
             </div>
           )
@@ -259,7 +260,7 @@ const PlanCard: React.FC<{
   onApprove?: (plan: StructuredPlan, targetMode: 'ask' | 'auto') => void
   onReject?: (plan: StructuredPlan) => void
 }> = ({ plan, canAct, onApprove, onReject }) => {
-  const { t } = useI18nStore()
+  const t = useI18nStore((state) => state.t)
 
   return (
     <div className="my-2 border border-rule-hairline bg-raised">
