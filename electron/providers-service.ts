@@ -361,19 +361,25 @@ export async function saveApiKey(
   const key = apiKey.trim()
   if (!key) return { ok: false, error: 'EMPTY_KEY' }
 
+  // 必须先校验模型目录存在可用模型，再落盘凭证，避免校验失败后在 credentials.json 留下孤立 API Key
+  const { modelsByProvider, store } = await loadCatalogContext()
+  const config = await store.read()
+  const firstModel = !config.providers[providerId]
+    ? (modelsByProvider.get(providerId) ?? [])[0]
+    : undefined
+  if (!config.providers[providerId] && !firstModel) {
+    return { ok: false, error: 'NO_MODEL' }
+  }
+
   const credentials = credentialsStore()
   await credentials.modify(providerId, async () => ({ type: 'api_key', key }))
 
   // 有 Key 就等于「已配置」：写进 providers.json 并设为 active
-  const { modelsByProvider, store } = await loadCatalogContext()
-  const config = await store.read()
-  if (!config.providers[providerId]) {
-    const first = (modelsByProvider.get(providerId) ?? [])[0]
-    if (!first) return { ok: false, error: 'NO_MODEL' }
+  if (!config.providers[providerId] && firstModel) {
     store.write({
       ...config,
       activeProvider: config.activeProvider ?? providerId,
-      providers: { ...config.providers, [providerId]: { model: first.id } },
+      providers: { ...config.providers, [providerId]: { model: firstModel.id } },
     })
   }
   resetCatalogRuntime()

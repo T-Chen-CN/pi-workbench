@@ -25,14 +25,14 @@ const pendingCallbacks = new Map<
   { resolve: (value: unknown) => void; reject: (error: Error) => void }
 >()
 
-function invokeHostCallback<T>(name: string, payload: unknown): Promise<T> {
+function invokeHostCallback<T>(requestId: number, name: string, payload: unknown): Promise<T> {
   const callId = nextCallId++
   return new Promise<T>((resolve, reject) => {
     pendingCallbacks.set(callId, {
       resolve: resolve as (value: unknown) => void,
       reject,
     })
-    const msg: WorkerCallbackMessage = { type: 'cb', callId, name, payload }
+    const msg: WorkerCallbackMessage = { type: 'cb', requestId, callId, name, payload }
     port.postMessage(msg)
   })
 }
@@ -58,7 +58,7 @@ port.on('message', (msg: WorkerRequestMessage | WorkerCallbackReplyMessage) => {
         const request = msg.payload as DocumentReadRequest
         result = await readDocument(request, {
           renderPages: (renderReq: RenderPagesRequest) =>
-            invokeHostCallback<DocumentImage[]>('renderPages', renderReq),
+            invokeHostCallback<DocumentImage[]>(msg.id, 'renderPages', renderReq),
         })
       } else {
         throw new Error(`Unknown documents-worker method: ${msg.method}`)

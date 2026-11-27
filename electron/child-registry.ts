@@ -37,6 +37,28 @@ export interface KillAllResult {
   failed: number
 }
 
+function killPosixProcessTree(
+  pid: number,
+  kill: (pid: number, signal: NodeJS.Signals) => void
+): boolean {
+  try {
+    // 优先按进程组（-pid）回收整棵树；若子进程不是进程组组长（ESRCH / EPERM），回退单进程
+    kill(-pid, 'SIGKILL')
+    return true
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code
+    if (code && code !== 'ESRCH' && code !== 'EPERM') {
+      return false
+    }
+    try {
+      kill(pid, 'SIGKILL')
+      return true
+    } catch {
+      return false
+    }
+  }
+}
+
 /** 结束整棵进程树；返回是否成功发出终止信号 */
 export function killProcessTree(pid: number, deps: KillProcessTreeDeps = {}): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false
@@ -52,8 +74,7 @@ export function killProcessTree(pid: number, deps: KillProcessTreeDeps = {}): bo
       return true
     }
     const kill = deps.kill ?? process.kill
-    kill(pid, 'SIGKILL')
-    return true
+    return killPosixProcessTree(pid, kill)
   } catch {
     return false
   }
@@ -76,8 +97,7 @@ export async function killProcessTreeAsync(
       return true
     }
     const kill = deps.kill ?? process.kill
-    kill(pid, 'SIGKILL')
-    return true
+    return killPosixProcessTree(pid, kill)
   } catch {
     return false
   }

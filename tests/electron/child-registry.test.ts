@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ChildRegistry, childRegistry, killProcessTree } from '../../electron/child-registry'
+import {
+  ChildRegistry,
+  childRegistry,
+  killProcessTree,
+  killProcessTreeAsync,
+} from '../../electron/child-registry'
 
 describe('killProcessTree', () => {
   it('Windows 上用 taskkill /T /F 收整棵进程树', () => {
@@ -19,10 +24,22 @@ describe('killProcessTree', () => {
     expect(killProcessTree(4321, { platform: 'win32', execFileSync })).toBe(false)
   })
 
-  it('非 Windows 平台直接 SIGKILL', () => {
+  it('非 Windows 平台优先按进程组 -pid 发送 SIGKILL，ESRCH 时回退单进程 pid', async () => {
     const kill = vi.fn()
     expect(killProcessTree(4321, { platform: 'linux', kill })).toBe(true)
-    expect(kill).toHaveBeenCalledWith(4321, 'SIGKILL')
+    expect(kill).toHaveBeenCalledTimes(1)
+    expect(kill).toHaveBeenCalledWith(-4321, 'SIGKILL')
+
+    const fallbackKill = vi.fn((pid: number) => {
+      if (pid < 0) {
+        const err = new Error('no such process group') as NodeJS.ErrnoException
+        err.code = 'ESRCH'
+        throw err
+      }
+    })
+    expect(await killProcessTreeAsync(4321, { platform: 'darwin', kill: fallbackKill })).toBe(true)
+    expect(fallbackKill).toHaveBeenNthCalledWith(1, -4321, 'SIGKILL')
+    expect(fallbackKill).toHaveBeenNthCalledWith(2, 4321, 'SIGKILL')
   })
 
   it('非法 pid 不做任何事', () => {

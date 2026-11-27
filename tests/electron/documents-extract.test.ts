@@ -2,6 +2,19 @@ import { describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
+
+const pdfSpy = vi.hoisted(() => ({ count: 0 }))
+vi.mock('../../electron/documents/pdf', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../electron/documents/pdf')>()
+  return {
+    ...actual,
+    extractPdfText: (...args: Parameters<typeof actual.extractPdfText>) => {
+      pdfSpy.count += 1
+      return actual.extractPdfText(...args)
+    },
+  }
+})
+
 import {
   readDocument,
   type DocumentReaderDeps,
@@ -98,11 +111,14 @@ describe('readDocument', () => {
     expect(result.images).toEqual([])
   })
 
-  it('文字版 PDF：pages 参数只解析指定页', async () => {
-    const target = await tempFile('多页.pdf', buildPdf({ text: 'Body text of the report', pageCount: 4 }))
-    const result = await readDocument({ path: target, pages: '3' }, deps())
-    expect(result.text).toContain('--- page 3 ---')
+  it('文字版 PDF：pages 参数只解析指定页且仅读取文件一次', async () => {
+    const target = await tempFile('多页.pdf', buildPdf({ text: 'Body text of the report', pageCount: 25 }))
+    pdfSpy.count = 0
+    const result = await readDocument({ path: target, pages: '22-23' }, deps())
+    expect(result.text).toContain('--- page 22 ---')
+    expect(result.text).toContain('--- page 23 ---')
     expect(result.text).not.toContain('--- page 1 ---')
+    expect(pdfSpy.count).toBe(1)
   })
 
   it('扫描版 PDF：回调渲染层，把图片交给视觉通道', async () => {

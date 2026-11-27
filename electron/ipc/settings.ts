@@ -118,32 +118,50 @@ export function registerSettingsIpc(options?: SettingsIpcOptions): void {
       if (!parsed.ok) {
         return { success: false, error: parsed.error }
       }
-      const sanitized: Record<string, unknown> = {}
-      for (const [key, value] of Object.entries(parsed.data)) {
-        if (value !== undefined) sanitized[key] = value
+      const rawIncoming =
+        settings && typeof settings === 'object' && !Array.isArray(settings)
+          ? (settings as Record<string, unknown>)
+          : {}
+
+      // 从磁盘读回所有现存合法字段作为基底，避免部分保存时覆盖擦除未传入字段
+      const settingsPath = path.join(getAppDir(), 'config', 'settings.json')
+      const disk = readJsonWithBackup<Record<string, unknown>>(settingsPath)
+      const merged: Record<string, unknown> = {}
+      if (disk.data && typeof disk.data === 'object' && !Array.isArray(disk.data)) {
+        for (const [key, fieldSchema] of Object.entries(appSaveSettingsSchema.shape)) {
+          if (!Object.prototype.hasOwnProperty.call(disk.data, key)) continue
+          const fieldResult = fieldSchema.safeParse(disk.data[key])
+          if (fieldResult.success && fieldResult.data !== undefined) {
+            merged[key] = fieldResult.data
+          }
+        }
       }
-      // 权限档位缺失时保留现有值（旧前端不会发送该字段）
-      if (!sanitized.permissionLevel) {
-        const currentLevel = normalizePermissionLevel(settingsCache.permissionLevel)
-        if (currentLevel) sanitized.permissionLevel = currentLevel
-      }
-      // 缺失时保留现有值，不把旧前端没发过的字段写丢
-      for (const key of [
+
+      // 受保护字段在畸形输入回落为 undefined 时仍沿用已有值；排序等展示字段畸形时删除回默认
+      const preserveOnMalformed = new Set<string>([
+        'permissionLevel',
         'closeToTray',
         'autoInstallWorktreeDeps',
         'useSystemProxy',
         'autoRefreshCatalog',
-      ] as const) {
-        if (typeof sanitized[key] !== 'boolean' && typeof settingsCache[key] === 'boolean') {
-          sanitized[key] = settingsCache[key]
+      ])
+      for (const [key, value] of Object.entries(parsed.data)) {
+        if (value !== undefined) {
+          merged[key] = value
+        } else if (
+          Object.prototype.hasOwnProperty.call(rawIncoming, key) &&
+          !preserveOnMalformed.has(key)
+        ) {
+          delete merged[key]
         }
       }
-      await saveSettingsFile(sanitized)
-      updateAppSettingsCache(sanitized)
+
+      await saveSettingsFile(merged)
+      setAppSettingsCache(merged)
       // 托盘开关、菜单文案、系统代理与标题栏配色跟随设置即时生效
       refreshTray()
       refreshSystemProxy()
-      options?.onSettingsSaved?.(sanitized)
+      options?.onSettingsSaved?.(merged)
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }

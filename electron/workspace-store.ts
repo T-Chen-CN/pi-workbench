@@ -32,7 +32,17 @@ export function importRecentWorkspaces(store: WorkspaceStore, recent: string[], 
   }
 }
 
-export function createWorkspaceStore(dbPath: string): WorkspaceStore {
+function comparePathKey(workspacePath: string, platform: NodeJS.Platform): string {
+  if (platform !== 'win32') return workspacePath
+  // Windows 路径大小写不敏感，且统一分隔符与尾随斜杠用于判重，避免 C:\Repo 与 c:\repo 重复入库
+  const unified = workspacePath.replace(/\//g, '\\').replace(/\\+$/, '')
+  return (unified || workspacePath).toLowerCase()
+}
+
+export function createWorkspaceStore(
+  dbPath: string,
+  platform: NodeJS.Platform = process.platform
+): WorkspaceStore {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true })
   const requireFromHere = createRequire(import.meta.url)
   const { DatabaseSync } = requireFromHere('node:sqlite') as typeof import('node:sqlite')
@@ -49,6 +59,9 @@ export function createWorkspaceStore(dbPath: string): WorkspaceStore {
       'ON CONFLICT(path) DO UPDATE SET opened_at = excluded.opened_at, ' +
       'open_count = workspaces.open_count + 1'
   )
+  const updateExisting = db.prepare(
+    'UPDATE workspaces SET opened_at = ?, open_count = ? WHERE path = ?'
+  )
   const listStmt = db.prepare(
     'SELECT path, opened_at, open_count FROM workspaces ORDER BY opened_at DESC, rowid DESC'
   )
@@ -59,29 +72,67 @@ export function createWorkspaceStore(dbPath: string): WorkspaceStore {
   // 记录时保证严格递增，让「刚打开的在最前」在任何时钟精度下都成立。
   let lastOpenedAt = Number((maxStmt.get() as { maxAt: number | null } | undefined)?.maxAt ?? 0) || 0
 
+  type RawRow = { path: string; opened_at: number; open_count: number }
+
+  const listDeduped = (): WorkspaceRecord[] => {
+    const rows = listStmt.all() as RawRow[]
+    const seen = new Set<string>()
+    const records: WorkspaceRecord[] = []
+    for (const row of rows) {
+      const value = String(row.path)
+      const key = comparePathKey(value, platform)
+      if (seen.has(key)) continue
+      seen.add(key)
+      records.push({
+        path: value,
+        openedAt: Number(row.opened_at) || 0,
+        openCount: Number(row.open_count) || 1,
+      })
+    }
+    return records
+  }
+
   return {
     recordOpen(workspacePath, at) {
       const openedAt = at ?? Math.max(Date.now(), lastOpenedAt + 1)
       lastOpenedAt = Math.max(lastOpenedAt, openedAt)
+      if (platform === 'win32') {
+        const key = comparePathKey(workspacePath, platform)
+        const matches = (listStmt.all() as RawRow[]).filter(
+          (row) => comparePathKey(String(row.path), platform) === key
+        )
+        if (matches.length > 0) {
+          const primary = matches[0]
+          const totalCount =
+            matches.reduce((sum, row) => sum + (Number(row.open_count) || 1), 0) + 1
+          for (let i = 1; i < matches.length; i += 1) {
+            removeStmt.run(String(matches[i].path))
+          }
+          updateExisting.run(openedAt, totalCount, String(primary.path))
+          return
+        }
+      }
       upsert.run(workspacePath, openedAt)
     },
     list() {
-      const rows = listStmt.all() as Array<{
-        path: string
-        opened_at: number
-        open_count: number
-      }>
-      return rows.map((row) => ({
-        path: String(row.path),
-        openedAt: Number(row.opened_at) || 0,
-        openCount: Number(row.open_count) || 1
-      }))
+      return listDeduped()
     },
     listRecent(limit = 10) {
-      const rows = listStmt.all() as Array<{ path: string }>
-      return rows.slice(0, limit).map((row) => String(row.path))
+      return listDeduped()
+        .slice(0, limit)
+        .map((record) => record.path)
     },
     remove(workspacePath) {
+      if (platform === 'win32') {
+        const key = comparePathKey(workspacePath, platform)
+        const matches = (listStmt.all() as RawRow[]).filter(
+          (row) => comparePathKey(String(row.path), platform) === key
+        )
+        for (const row of matches) {
+          removeStmt.run(String(row.path))
+        }
+        return
+      }
       removeStmt.run(workspacePath)
     },
     close() {

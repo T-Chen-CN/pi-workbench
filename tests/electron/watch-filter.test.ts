@@ -15,6 +15,7 @@ describe('isIgnoredWatchPath', () => {
       'dist-electron/main.js',
       'release/Pi Workbench.exe',
       'cache/temp/file.txt',
+      'logs/main.log',
     ]
 
     for (const path of ignored) {
@@ -22,11 +23,15 @@ describe('isIgnoredWatchPath', () => {
     }
   })
 
-  it('accepts normal source files', () => {
+  it('accepts normal source files including nested cache/dist/release/logs directories', () => {
     const accepted = [
       'src/index.ts',
       'docs/readme.md',
       'src/cacheUtils.ts',
+      'src/cache/lru.ts',
+      'src/dist/format.ts',
+      'src/release/notes.ts',
+      'src/logs/parser.ts',
       'src/distance.ts',
       'src/.pi-worktreesBackup/file.ts',
       'package.json',

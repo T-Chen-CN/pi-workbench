@@ -246,7 +246,14 @@ interface RunningInstall {
   child: SpawnedProcess | null
   cancelled: boolean
   /** 提前结算（取消 / 超时）；exit 事件之后再来一次是空操作 */
-  settle: ((result: InstallResult, options?: { deferSlotRelease?: boolean }) => void) | null
+  settle:
+    | ((
+        result: InstallResult,
+        options?: { deferSlotRelease?: boolean; deferUnregister?: boolean }
+      ) => void)
+    | null
+  /** 进程退出或树杀完成后注销 childRegistry 登记（可重复调用） */
+  unregisterChild: (() => void) | null
   promise: Promise<InstallResult>
   /** 子进程实际退出（或超时兜底）后 resolve，供删树前等待文件句柄释放 */
   exitPromise: Promise<void>
@@ -276,8 +283,8 @@ const defaultSpawn: SpawnFn = (command, args, options) =>
  * Windows 上 SIGTERM 只作用于直接子进程，包管理器派生出的孙进程会变成孤儿；
  * 因此先 taskkill /T 收整棵树 —— 顺序不能反：根进程先死，taskkill 就找不到子进程了。
  */
-function terminateTree(child: SpawnedProcess | null): void {
-  if (!child) return
+function terminateTree(child: SpawnedProcess | null): Promise<void> {
+  if (!child) return Promise.resolve()
   const pid = typeof child.pid === 'number' && child.pid > 0 ? child.pid : null
   const killSelf = () => {
     try {
@@ -288,18 +295,21 @@ function terminateTree(child: SpawnedProcess | null): void {
   }
   if (pid !== null && process.platform === 'win32') {
     // 必须等 taskkill /T /F 先收完进程树再补 SIGTERM，否则根进程先死会让 taskkill 找不到孙进程
-    void killProcessTreeAsync(pid).finally(killSelf)
-    return
+    return killProcessTreeAsync(pid).then(
+      () => killSelf(),
+      () => killSelf()
+    )
   }
   if (pid !== null && process.platform !== 'win32') {
     try {
       process.kill(-pid, 'SIGTERM')
-      return
+      return Promise.resolve()
     } catch {
       // 进程未处于独立进程组时回退直接杀子进程
     }
   }
   killSelf()
+  return Promise.resolve()
 }
 
 /**
@@ -333,6 +343,7 @@ export class WorktreeDepsInstaller {
       child: null,
       cancelled: false,
       settle: null,
+      unregisterChild: null,
       promise: Promise.resolve({ ok: false, error: 'not started' }),
       exitPromise: Promise.resolve(),
     }
@@ -397,9 +408,18 @@ export class WorktreeDepsInstaller {
     entry.cancelled = true
     this.running.delete(worktreePath)
     const hasRealPid = typeof entry.child?.pid === 'number' && entry.child.pid > 0
-    terminateTree(entry.child)
+    const killPromise = terminateTree(entry.child)
+    if (hasRealPid) {
+      // 必须等异步树杀完成（或子进程 exit）后才注销 childRegistry，防止退出期间提前摘除导致孤儿残留
+      void killPromise.finally(() => {
+        entry.unregisterChild?.()
+      })
+    }
     // 真实子进程正在退出时延迟归还串行槽位，防止下一个安装与未退净的进程争抢句柄
-    entry.settle?.({ ok: false, cancelled: true }, { deferSlotRelease: hasRealPid })
+    entry.settle?.(
+      { ok: false, cancelled: true },
+      { deferSlotRelease: hasRealPid, deferUnregister: hasRealPid }
+    )
     return true
   }
 
@@ -469,10 +489,20 @@ export class WorktreeDepsInstaller {
         this.releaseSlot()
       }
 
+      let unregisterChild: (() => void) | null = null
+      const unregisterOnce = (): void => {
+        unregisterChild?.()
+        unregisterChild = null
+        entry.unregisterChild = null
+      }
+
       const finish = (
         result: InstallResult,
-        finishOptions?: { deferSlotRelease?: boolean }
+        finishOptions?: { deferSlotRelease?: boolean; deferUnregister?: boolean }
       ): void => {
+        if (!finishOptions?.deferUnregister) {
+          unregisterOnce()
+        }
         if (!finishOptions?.deferSlotRelease) {
           resolveExit()
           releaseSlotOnce()
@@ -488,14 +518,10 @@ export class WorktreeDepsInstaller {
         settled = true
         if (timer) clearTimeout(timer)
         timer = null
-        unregisterChild?.()
-        unregisterChild = null
         this.tails.set(worktreePath, tail)
         this.running.delete(worktreePath)
         resolve(result)
       }
-
-      let unregisterChild: (() => void) | null = null
 
       entry.settle = finish
 
@@ -532,6 +558,7 @@ export class WorktreeDepsInstaller {
           group: 'install',
           kill: () => child.kill('SIGTERM'),
         })
+        entry.unregisterChild = unregisterOnce
       }
       child.stdout?.on('data', append)
       child.stderr?.on('data', append)
@@ -559,13 +586,18 @@ export class WorktreeDepsInstaller {
 
       timer = setTimeout(() => {
         log?.warn(`[WorktreeDeps] ${info.manager} install timed out in ${worktreePath}`)
-        terminateTree(child)
-        finish({
-          ok: false,
-          error: truncateError(
-            `安装超时（超过 ${Math.round(timeoutMs / 1000)} 秒）\n${tail}`
-          ),
-        })
+        const hasRealPid = typeof child.pid === 'number' && child.pid > 0
+        const killPromise = terminateTree(child)
+        if (hasRealPid) void killPromise.finally(unregisterOnce)
+        finish(
+          {
+            ok: false,
+            error: truncateError(
+              `安装超时（超过 ${Math.round(timeoutMs / 1000)} 秒）\n${tail}`
+            ),
+          },
+          { deferSlotRelease: hasRealPid, deferUnregister: hasRealPid }
+        )
       }, timeoutMs)
       timer.unref?.()
     })

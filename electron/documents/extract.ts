@@ -179,17 +179,18 @@ async function readPdf(
   request: DocumentReadRequest,
   deps: DocumentReaderDeps
 ): Promise<DocumentReadResult> {
-  const first = await extractPdfText(targetPath, { maxPages: DEFAULT_PDF_PAGES })
-  const pageCount = first.pageCount
-  const wanted = parsePageRange(request.pages, pageCount)
-  // 指定了页码范围时再单独解析一次（默认那次只覆盖前 N 页）
-  const pages =
-    wanted && wanted.some((page) => page > DEFAULT_PDF_PAGES)
-      ? await extractPdfText(targetPath, { pages: wanted })
-      : { ...first, pages: first.pages.filter((page) => !wanted || wanted.includes(page.index)) }
+  // 先解析页码范围再一次性读入并解析 PDF：extractPdfText 内部按真实 numPages 过滤，避免双重读盘与重复解析
+  const wanted = parsePageRange(request.pages, Number.MAX_SAFE_INTEGER)
+  const pages = await extractPdfText(
+    targetPath,
+    wanted ? { pages: wanted } : { maxPages: DEFAULT_PDF_PAGES }
+  )
+  const pageCount = pages.pageCount
 
   const sink = new TextSink()
-  sink.push(`--- document: ${path.basename(targetPath)} (${pageCount} pages${first.title ? `, title: ${first.title}` : ''}) ---`)
+  sink.push(
+    `--- document: ${path.basename(targetPath)} (${pageCount} pages${pages.title ? `, title: ${pages.title}` : ''}) ---`
+  )
   const scanned: number[] = []
   for (const page of pages.pages) {
     if (isScannedPage(page)) {

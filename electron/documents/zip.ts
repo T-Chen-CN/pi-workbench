@@ -42,7 +42,13 @@ function findEndOfCentralDirectory(buffer: Buffer): number {
   for (let offset = buffer.length - EOCD_MIN_BYTES; offset >= start; offset -= 1) {
     if (buffer.readUInt32LE(offset) !== EOCD_SIGNATURE) continue
     const commentLength = buffer.readUInt16LE(offset + 20)
-    if (offset + EOCD_MIN_BYTES + commentLength <= buffer.length) return offset
+    // EOCD 注释必须恰好抵到文件尾，避免注释或条目体内恰好出现 0x06054b50 导致误命中
+    if (offset + EOCD_MIN_BYTES + commentLength !== buffer.length) continue
+    const directorySize = buffer.readUInt32LE(offset + 12)
+    const directoryOffset = buffer.readUInt32LE(offset + 16)
+    const isZip64Sentinel = directorySize === 0xffffffff || directoryOffset === 0xffffffff
+    if (!isZip64Sentinel && directoryOffset + directorySize > offset) continue
+    return offset
   }
   return -1
 }
@@ -61,11 +67,24 @@ export class ZipArchive {
     const eocd = findEndOfCentralDirectory(buffer)
     if (eocd < 0) throw new ZipError('找不到 ZIP 目录结构，文件可能已损坏')
 
+    const diskNumber = buffer.readUInt16LE(eocd + 4)
+    const centralDirDisk = buffer.readUInt16LE(eocd + 6)
+    const entriesOnDisk = buffer.readUInt16LE(eocd + 8)
     const total = buffer.readUInt16LE(eocd + 10)
     const directorySize = buffer.readUInt32LE(eocd + 12)
     let offset = buffer.readUInt32LE(eocd + 16)
-    if (directorySize === 0xffffffff || offset === 0xffffffff) {
+    if (
+      diskNumber === 0xffff ||
+      centralDirDisk === 0xffff ||
+      entriesOnDisk === 0xffff ||
+      total === 0xffff ||
+      directorySize === 0xffffffff ||
+      offset === 0xffffffff
+    ) {
       throw new ZipError('不支持 ZIP64 格式的文档')
+    }
+    if (offset + directorySize > eocd) {
+      throw new ZipError('ZIP 目录结构已损坏')
     }
 
     const records = new Map<string, ZipEntryRecord>()
@@ -85,7 +104,11 @@ export class ZipArchive {
       if (nameLength === 0 || offset + 46 + nameLength > buffer.length) {
         throw new ZipError('ZIP 条目名被截断')
       }
-      if (localOffset === 0xffffffff || compressedSize === 0xffffffff) {
+      if (
+        localOffset === 0xffffffff ||
+        compressedSize === 0xffffffff ||
+        uncompressedSize === 0xffffffff
+      ) {
         throw new ZipError('不支持 ZIP64 格式的文档')
       }
       // 条目名在 UTF-8 标记缺失时按 CP437 编码；OOXML / EPUB 的条目名都是 ASCII

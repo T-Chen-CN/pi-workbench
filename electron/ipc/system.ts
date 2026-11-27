@@ -32,6 +32,10 @@ export interface SystemIpcContext {
   pluginManager: PluginManager
   getFileLogger: () => FileLogger | null
   getRendererLogger: () => FileLogger | null
+  /** 更新安装前确认钩子（Decision 4.A）：取消时返回 false，避免先派生 NSIS 安装器 */
+  confirmBeforeUpdateInstall?: () => boolean
+  /** 安装未成功触发退出时复位 unload 免弹标记 */
+  onUpdateInstallAborted?: () => void
 }
 
 let updateController: UpdateController | null = null
@@ -209,6 +213,7 @@ export function registerSystemIpc(context: SystemIpcContext): void {
         platform: process.platform,
         supported: true,
         logger: updateLogger,
+        confirmBeforeInstall: context.confirmBeforeUpdateInstall,
       })
       return updateController
     } catch (error) {
@@ -238,7 +243,11 @@ export function registerSystemIpc(context: SystemIpcContext): void {
   handleIpc('update:install', async () => {
     const controller = await ensureUpdateController()
     if (!controller) return { success: false, error: 'ERR_UPDATE_NOT_PACKAGED' }
-    return controller.install()
+    const result = controller.install()
+    if (!result.success) {
+      context.onUpdateInstallAborted?.()
+    }
+    return result
   })
 
   handleIpc('update:getState', async () => {

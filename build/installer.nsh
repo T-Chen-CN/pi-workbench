@@ -89,7 +89,10 @@ LangString PW_KEEP_DATA_CHECKBOX 2052 "保留用户配置与会话数据（%APPD
   RMDir /r "${PI_LEGACY_UPDATE_CACHE}"
   Delete "${PI_LEGACY_UPDATE_FLAG}"
 
-  # 更新后刷新 Windows Shell / 图标缓存
+  # 更新后刷新 Windows Shell / 图标缓存（Win10/11 用 -ClearIconCache；缺文件时静默跳过）
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0x0000, i 0, i 0)'
-  Exec '"$SYSDIR\ie4uinit.exe" -show'
+  ${If} ${FileExists} "$SYSDIR\ie4uinit.exe"
+    nsExec::Exec '"$SYSDIR\ie4uinit.exe" -ClearIconCache'
+    Pop $0
+  ${EndIf}
 !macroend

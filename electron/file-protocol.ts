@@ -248,7 +248,7 @@ export async function serveFileRequest(
   }
 
   if (method === 'HEAD') {
-    const headers = baseHeaders(target, size, originHeader)
+    const headers = baseHeaders(target, range ? range.end - range.start + 1 : size, originHeader)
     if (range) headers.set('Content-Range', `bytes ${range.start}-${range.end}/${size}`)
     return new Response(null, { status: range ? 206 : 200, headers })
   }
@@ -346,7 +346,9 @@ export function createPreviewNetworkGuard(options: {
   const handleRequest: PreviewNetworkGuard['handleRequest'] = (details, callback) => {
     const filePath = resolvePreviewFilePath(details)
     if (!filePath) {
-      if (details.initiatorOrigin === PREVIEW_ORIGIN) {
+      // 沙箱 HTML 预览（sandbox="allow-scripts allow-forms"）的 initiatorOrigin 是不透明字符串 "null"；
+      // 无法定位所属预览文件时必须 fail-closed 拦截，防止子帧绕过离线审批守卫
+      if (details.initiatorOrigin === PREVIEW_ORIGIN || details.initiatorOrigin === 'null') {
         callback({ cancel: true })
         return
       }

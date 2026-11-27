@@ -19,6 +19,10 @@ export const safePathSchema = z
   .max(MAX_PATH_LEN, 'Path is too long')
   .refine((v) => !v.includes('\0'), 'Path must not contain NUL bytes')
 
+export const fsCreateFileSchema = z.object({
+  filePath: safePathSchema,
+})
+
 export const fsWriteFileSchema = z.object({
   filePath: safePathSchema,
   content: z

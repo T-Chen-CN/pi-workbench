@@ -9,6 +9,7 @@ import { handleIpc } from './register.js'
 import {
   draftDeleteSchema,
   draftSaveSchema,
+  fsCreateFileSchema,
   fsRenameSchema,
   fsWriteFileSchema,
   parseIpcInput,
@@ -108,6 +109,24 @@ export function registerFilesIpc(context: FilesIpcContext): void {
       const error = await shell.openPath(target)
       return error ? { success: false, error } : { success: true }
     } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  handleIpc('fs:createFile', async (_event, filePath: string) => {
+    try {
+      const parsed = parseIpcInput(fsCreateFileSchema, { filePath })
+      if (!parsed.ok) return { success: false, error: parsed.error }
+      const target = resolveAllowedFileTarget(parsed.data.filePath)
+      if (!target) {
+        return { success: false, error: 'Path is outside the open workspace' }
+      }
+      await fs.writeFile(target, '', { encoding: 'utf-8', flag: 'wx' })
+      return { success: true }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') {
+        return { success: false, code: 'EEXIST', error: 'File already exists' }
+      }
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   })

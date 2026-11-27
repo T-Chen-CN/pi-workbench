@@ -23,6 +23,7 @@ import { disposeCoordinator } from '../worktree-coordinator.js'
 import { repoSync } from '../repo-sync.js'
 
 interface WorkspaceWatchEntry {
+  root: string
   watcher: FSWatcher
   batcher: WatchBatcher
 }
@@ -40,6 +41,18 @@ function closeWorkspaceWatcher(workspacePath: string): void {
   entry.batcher.cancel()
   entry.watcher.close()
   workspaceWatchers.delete(key)
+}
+
+/** 关闭工作区自身及其下全部受管/子工作树 watcher，避免关闭工作区标签后子工作树监听泄漏 */
+function closeWorkspaceWatchersUnder(workspacePath: string): void {
+  const root = canonicalizePath(workspacePath) ?? path.resolve(workspacePath)
+  for (const [key, entry] of [...workspaceWatchers.entries()]) {
+    if (isPathInsideRoot(root, entry.root)) {
+      entry.batcher.cancel()
+      entry.watcher.close()
+      workspaceWatchers.delete(key)
+    }
+  }
 }
 
 export function closeAllWorkspaceWatchers(): void {
@@ -139,7 +152,7 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
         console.error('[Main] Workspace watcher error:', error)
       })
 
-      workspaceWatchers.set(key, { watcher, batcher })
+      workspaceWatchers.set(key, { root: trustedWorkspace, watcher, batcher })
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -242,13 +255,13 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
     }
   })
 
-  // 关闭工作区标签时释放该工作区的主进程资源（插件、监听）
+  // 关闭工作区标签时释放该工作区的主进程资源（插件、监听，包括子工作树 watcher）
   handleIpc('workspace:dispose', async (_event, workspacePath: string) => {
     try {
       if (!isTrustedWorkspacePath(workspacePath)) {
         return { success: false, error: 'Workspace is not approved' }
       }
-      closeWorkspaceWatcher(workspacePath)
+      closeWorkspaceWatchersUnder(workspacePath)
       context.terminalManager.closeWorkspace(canonicalizePath(workspacePath) ?? workspacePath)
       context.pluginManager.unload(workspacePath)
       disposeCoordinator(workspacePath)
@@ -326,7 +339,7 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
           const target = canonicalizePath(candidate)
           if (!target || !isPathInsideRoot(workspaceRoot, target)) continue
           const relative = path.relative(workspaceRoot, target).split(path.sep).join('/')
-          if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) continue
+          if (!relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) continue
           if (!open.includes(relative)) open.push(relative)
           if (open.length >= 50) break
         }

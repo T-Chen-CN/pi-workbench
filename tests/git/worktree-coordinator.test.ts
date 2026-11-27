@@ -12,9 +12,14 @@ vi.mock('electron', () => ({
   },
 }))
 
-import { WorktreeCoordinator, configureWorktreeDeps, disposeCoordinator } from '../../electron/worktree-coordinator'
+import {
+  WorktreeCoordinator,
+  configureWorktreeDeps,
+  disposeCoordinator,
+  getCoordinator,
+} from '../../electron/worktree-coordinator'
 import { clearLockfileHashCache, detectLockfile, WorktreeDepsInstaller, type SpawnFn, type SpawnedProcess } from '../../electron/worktree-deps'
-import { commitDetail, loadSessionGit } from '../../electron/git-worktrees'
+import { commitDetail, getStatus, loadSessionGit } from '../../electron/git-worktrees'
 
 let workspace = ''
 
@@ -318,6 +323,34 @@ describe('WorktreeCoordinator', () => {
     // 目录与 git 登记都还在：不允许“忘记”一个活着的工作树
     expect((await coordinator!.forget(id)).success).toBe(false)
     expect(recordPaths()).toHaveLength(1)
+  })
+
+  it('returns unescaped UTF-8 filenames in getStatus for CJK paths', async () => {
+    await fs.writeFile(path.join(workspace, '中文文档.txt'), '你好\n', 'utf-8')
+    const status = await getStatus(workspace)
+    expect(status.clean).toBe(false)
+    expect(status.files.some((item) => item.path === '中文文档.txt')).toBe(true)
+  })
+
+  it('defaults auto-install to false (fail-closed) when deps config is not injected', async () => {
+    configureWorktreeDeps(null)
+    disposeCoordinator(workspace)
+    await fs.writeFile(path.join(workspace, 'package-lock.json'), '{"lockfileVersion":3}\n')
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    await coordinator!.bind('session-default-off', 'new')
+    const root = coordinator!.getSessionRoot('session-default-off')
+    const views = await coordinator!.listWorktrees('session-default-off')
+    const view = views.find((item) => item.path === root)
+    expect(view?.deps.state).toBe('idle')
+    disposeCoordinator(workspace)
+  })
+
+  it('does not resurrect a disposed coordinator when disposeCoordinator races with in-flight getCoordinator', async () => {
+    disposeCoordinator(workspace)
+    const pending = getCoordinator(workspace)
+    disposeCoordinator(workspace)
+    const resolved = await pending
+    expect(resolved).toBeNull()
   })
 })
 

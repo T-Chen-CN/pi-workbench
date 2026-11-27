@@ -148,12 +148,10 @@ export function readWordDocument(zip: ZipArchive): WordDocumentModel {
   let heading = 0
   let bullet = false
   let inText = false
-  let inCell = 0
-  let cellLines: string[] = []
-  let rowCells: string[] = []
-  /** 表格嵌套层数：块只记最外层表格，行仍然按现在的方式进 lines */
-  let tableDepth = 0
-  let tableRows: string[][] = []
+  // 必须按栈管理表格/行/单元格：嵌套表格闭合时不能抹掉外层单元格和同行前面已收集的列
+  const tableStack: string[][][] = []
+  const rowStack: string[][] = []
+  const cellStack: string[][] = []
 
   for (const token of scanXml(xml)) {
     if (token.type === 'text') {
@@ -189,18 +187,18 @@ export function readWordDocument(zip: ZipArchive): WordDocumentModel {
           break
         case 'tbl':
           if (!token.selfClosing) {
-            tableDepth += 1
-            if (tableDepth === 1) tableRows = []
+            tableStack.push([])
           }
           break
         case 'tc':
           if (!token.selfClosing) {
-            inCell += 1
-            cellLines = []
+            cellStack.push([])
           }
           break
         case 'tr':
-          if (!token.selfClosing) rowCells = []
+          if (!token.selfClosing) {
+            rowStack.push([])
+          }
           break
         default:
           break
@@ -213,8 +211,9 @@ export function readWordDocument(zip: ZipArchive): WordDocumentModel {
         break
       case 'p': {
         const produced = paragraphLines(text)
-        if (inCell > 0) {
-          for (const line of produced) cellLines.push(prefixedLine(line, heading, bullet))
+        const currentCell = cellStack[cellStack.length - 1]
+        if (currentCell) {
+          for (const line of produced) currentCell.push(prefixedLine(line, heading, bullet))
         } else {
           for (const line of produced) {
             lines.push(prefixedLine(line, heading, bullet))
@@ -227,23 +226,34 @@ export function readWordDocument(zip: ZipArchive): WordDocumentModel {
         break
       }
       case 'tc': {
-        inCell = Math.max(0, inCell - 1)
-        rowCells.push(cellLines.join(' ').trim())
-        cellLines = []
+        const finishedCell = cellStack.pop() ?? []
+        const currentRow = rowStack[rowStack.length - 1]
+        if (currentRow) {
+          currentRow.push(finishedCell.join(' ').trim())
+        }
         break
       }
       case 'tr': {
-        const row = normalizeSpaces(rowCells.join('\t')).replace(/\t+$/g, '')
-        if (row) lines.push(row)
-        if (tableDepth > 0) tableRows.push(rowCells.map((cell) => normalizeSpaces(cell)))
-        rowCells = []
+        const finishedRow = rowStack.pop() ?? []
+        const enclosingCell = cellStack[cellStack.length - 1]
+        if (enclosingCell) {
+          // 嵌套表格的行合入外层单元格，避免把内层列直接混进外层行或清空外层 cells
+          const nestedText = finishedRow.map((cell) => normalizeSpaces(cell)).filter(Boolean).join(' ')
+          if (nestedText) enclosingCell.push(nestedText)
+        } else {
+          const row = normalizeSpaces(finishedRow.join('\t')).replace(/\t+$/g, '')
+          if (row) lines.push(row)
+          const currentTable = tableStack[tableStack.length - 1]
+          if (currentTable) {
+            currentTable.push(finishedRow.map((cell) => normalizeSpaces(cell)))
+          }
+        }
         break
       }
       case 'tbl': {
-        tableDepth = Math.max(0, tableDepth - 1)
-        if (tableDepth === 0) {
-          if (tableRows.length > 0) blocks.push({ type: 'table', rows: tableRows })
-          tableRows = []
+        const finishedTable = tableStack.pop() ?? []
+        if (tableStack.length === 0 && finishedTable.length > 0) {
+          blocks.push({ type: 'table', rows: finishedTable })
         }
         break
       }
@@ -255,6 +265,15 @@ export function readWordDocument(zip: ZipArchive): WordDocumentModel {
 }
 
 // ==================== xlsx ====================
+
+/** 优先读取带命名空间的关系 ID（如 `r:id`），避免被 `<p:sldId r:id="rId2" id="256"/>` 的无前缀 `id` 遮蔽 */
+function relationshipId(attrs: Record<string, string>): string | undefined {
+  if (attrs['r:id']) return attrs['r:id']
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key.endsWith(':id') && value) return value
+  }
+  return attrs.id
+}
 
 function parseRelationships(xml: string | null): Map<string, string> {
   const map = new Map<string, string>()
@@ -365,6 +384,7 @@ function readSheet(
   const merges: string[] = []
   let dimension: string | undefined
   let rowIndex = 0
+  let lastRowIndex = -1
   let currentRow: string[] = []
   let cellColumn = -1
   let cellType: string | undefined
@@ -390,11 +410,16 @@ function readSheet(
         case 'dimension':
           dimension = token.attrs.ref ?? dimension
           break
-        case 'row':
-          rowIndex = Math.max(0, Number.parseInt(token.attrs.r ?? '0', 10) - 1)
-          if (!Number.isFinite(rowIndex)) rowIndex = 0
+        case 'row': {
+          // ECMA-376 中 `<row>` 的 `r` 属性可选：缺省时必须从上一行递增，否则全部落到第 0 行互相覆盖
+          const parsedRow =
+            token.attrs.r !== undefined ? Number.parseInt(token.attrs.r, 10) : Number.NaN
+          rowIndex =
+            Number.isFinite(parsedRow) && parsedRow >= 1 ? parsedRow - 1 : lastRowIndex + 1
+          lastRowIndex = rowIndex
           currentRow = []
           break
+        }
         case 'c':
           if (token.selfClosing) {
             cellColumn = -1
@@ -497,7 +522,7 @@ export function readSpreadsheet(zip: ZipArchive): SpreadsheetModel {
   for (const token of scanXml(workbookXml)) {
     if (token.type !== 'open' || token.name !== 'sheet') continue
     const name = token.attrs.name ?? `Sheet${declared.length + 1}`
-    const relId = token.attrs.id
+    const relId = relationshipId(token.attrs)
     declared.push({ name, target: relId ? relationships.get(relId) : undefined })
   }
 
@@ -599,7 +624,8 @@ export function readPresentation(
   const ordered: string[] = []
   for (const token of scanXml(presentationXml)) {
     if (token.type !== 'open' || token.name !== 'sldId') continue
-    const target = relationships.get(token.attrs.id ?? '')
+    const relId = relationshipId(token.attrs)
+    const target = relId ? relationships.get(relId) : undefined
     if (!target) continue
     const resolved = resolveZipPath('ppt', target)
     if (zip.has(resolved)) ordered.push(resolved)

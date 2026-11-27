@@ -36,6 +36,13 @@ function formatArg(value: unknown): string {
   return String(value)
 }
 
+interface PendingLogBatch {
+  lines: string[]
+  nextIndex: number
+  flushed: boolean
+  claimedByClose: boolean
+}
+
 export class FileLogger {
   readonly filePath: string
   private readonly maxBytes: number
@@ -43,6 +50,7 @@ export class FileLogger {
   private bytesWritten: number
   private pendingLines: string[] = []
   private pendingBytes = 0
+  private inFlightBatches: PendingLogBatch[] = []
   private flushTimer: NodeJS.Timeout | null = null
   private flushChain: Promise<void> = Promise.resolve()
 
@@ -81,43 +89,67 @@ export class FileLogger {
   /** 异步合并刷盘与按行轮转（不阻塞事件循环） */
   flushAsync(): Promise<void> {
     if (this.pendingLines.length === 0) return this.flushChain
-    const lines = this.pendingLines
+    const batch: PendingLogBatch = {
+      lines: this.pendingLines,
+      nextIndex: 0,
+      flushed: false,
+      claimedByClose: false,
+    }
     this.pendingLines = []
     this.pendingBytes = 0
+    this.inFlightBatches.push(batch)
     const next = this.flushChain.then(async () => {
-      await this.writeLinesAsync(lines)
+      if (batch.claimedByClose || batch.flushed) return
+      await this.writeBatchAsync(batch)
     })
     this.flushChain = next.catch(() => undefined)
     return next
   }
 
-  private async writeLinesAsync(lines: string[]): Promise<void> {
-    let chunk = ''
-    let chunkBytes = 0
-    for (const line of lines) {
-      const bytes = Buffer.byteLength(line)
-      chunk += line
-      chunkBytes += bytes
-      if (this.bytesWritten + chunkBytes >= this.maxBytes) {
-        try {
-          await fsp.appendFile(this.filePath, chunk, 'utf-8')
-          this.bytesWritten += chunkBytes
-          chunk = ''
-          chunkBytes = 0
-          await this.rotateAsync()
-        } catch {
-          chunk = ''
-          chunkBytes = 0
+  private async writeBatchAsync(batch: PendingLogBatch): Promise<void> {
+    try {
+      let chunk = ''
+      let chunkBytes = 0
+      let chunkCount = 0
+      for (let i = batch.nextIndex; i < batch.lines.length; i += 1) {
+        if (this.closed || batch.claimedByClose) return
+        const line = batch.lines[i]
+        const bytes = Buffer.byteLength(line)
+        chunk += line
+        chunkBytes += bytes
+        chunkCount += 1
+        if (this.bytesWritten + chunkBytes >= this.maxBytes) {
+          try {
+            await fsp.appendFile(this.filePath, chunk, 'utf-8')
+            if (this.closed || batch.claimedByClose) return
+            this.bytesWritten += chunkBytes
+            batch.nextIndex += chunkCount
+            chunk = ''
+            chunkBytes = 0
+            chunkCount = 0
+            await this.rotateAsync()
+          } catch {
+            batch.nextIndex += chunkCount
+            chunk = ''
+            chunkBytes = 0
+            chunkCount = 0
+          }
         }
       }
-    }
-    if (chunk) {
-      try {
-        await fsp.appendFile(this.filePath, chunk, 'utf-8')
-        this.bytesWritten += chunkBytes
-      } catch {
-        // 日志写入失败不应影响应用运行
+      if (chunk && !this.closed && !batch.claimedByClose) {
+        try {
+          await fsp.appendFile(this.filePath, chunk, 'utf-8')
+          if (this.closed || batch.claimedByClose) return
+          this.bytesWritten += chunkBytes
+          batch.nextIndex += chunkCount
+        } catch {
+          // 日志写入失败不应影响应用运行
+        }
       }
+      batch.flushed = true
+    } finally {
+      const idx = this.inFlightBatches.indexOf(batch)
+      if (idx >= 0) this.inFlightBatches.splice(idx, 1)
     }
   }
 
@@ -150,9 +182,21 @@ export class FileLogger {
       clearTimeout(this.flushTimer)
       this.flushTimer = null
     }
-    const lines = this.pendingLines
-    this.pendingLines = []
-    this.pendingBytes = 0
+    // 必须按顺序接管所有已移交 flushChain 但尚未落盘的批次，再追加 pendingLines，
+    // 否则退出前同步 close() 会丢掉在途批次或与异步链乱序交错
+    const lines: string[] = []
+    for (const batch of this.inFlightBatches) {
+      batch.claimedByClose = true
+      if (!batch.flushed && batch.nextIndex < batch.lines.length) {
+        lines.push(...batch.lines.slice(batch.nextIndex))
+      }
+    }
+    this.inFlightBatches = []
+    if (this.pendingLines.length > 0) {
+      lines.push(...this.pendingLines)
+      this.pendingLines = []
+      this.pendingBytes = 0
+    }
     if (lines.length === 0) return
 
     let chunk = ''

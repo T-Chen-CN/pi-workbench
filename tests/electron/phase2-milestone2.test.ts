@@ -88,20 +88,26 @@ describe('Phase 2 Milestone 2 workers and async I/O', () => {
           return
         }
         if (msg.type === 'req') {
-          pending.set(1, (cbVal) => {
+          pending.set(msg.id, (cbVal) => {
             parentPort.postMessage({ type: 'res', id: msg.id, ok: true, result: { echoed: msg.payload, cbVal } })
           })
-          parentPort.postMessage({ type: 'cb', callId: 1, name: 'double', payload: msg.payload })
+          parentPort.postMessage({ type: 'cb', requestId: msg.id, callId: msg.id, name: 'double', payload: msg.payload })
         }
       })
       `,
       'utf-8'
     )
     const echoClient = new WorkerClient(pathToFileURL(echoWorker), 'echo-test')
-    const rpcRes = await echoClient.call<{ echoed: number; cbVal: number }>('ping', 21, {
-      onCallback: async (name, val) => (name === 'double' ? Number(val) * 2 : 0),
-    })
-    expect(rpcRes).toEqual({ echoed: 21, cbVal: 42 })
+    const [rpcRes1, rpcRes2] = await Promise.all([
+      echoClient.call<{ echoed: number; cbVal: number }>('ping', 21, {
+        onCallback: async (name, val) => (name === 'double' ? Number(val) * 2 : 0),
+      }),
+      echoClient.call<{ echoed: number; cbVal: number }>('ping', 10, {
+        onCallback: async (name, val) => (name === 'double' ? Number(val) * 10 : 0),
+      }),
+    ])
+    expect(rpcRes1).toEqual({ echoed: 21, cbVal: 42 })
+    expect(rpcRes2).toEqual({ echoed: 10, cbVal: 100 })
 
     // 2. 当 dist-electron 已构建时，直接验证真实编译后的 repo-map-worker 与 documents-worker 零 electron 依赖可运行
     const repoMapWorkerPath = path.resolve(process.cwd(), 'dist-electron', 'repo-map-worker.js')

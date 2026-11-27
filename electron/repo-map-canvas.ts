@@ -82,10 +82,24 @@ function sanitizePoint(value: unknown): CanvasPoint | null {
   return x === null || y === null ? null : { x, y }
 }
 
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
 function isSafeKey(key: string): boolean {
   if (!key || key.length > 512) return false
+  if (FORBIDDEN_KEYS.has(key)) return false
   if (key.startsWith('/') || key.includes('\\')) return false
-  return !key.split('/').some((segment) => segment === '..' || segment === '')
+  return !key
+    .split('/')
+    .some((segment) => segment === '..' || segment === '' || FORBIDDEN_KEYS.has(segment))
+}
+
+function setOwnEntry<T>(target: Record<string, T>, key: string, value: T): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  })
 }
 
 /** 任意输入 → 合法状态；版本不符直接重置 */
@@ -108,7 +122,7 @@ export function sanitizeCanvasState(value: unknown): RepoMapCanvasState {
       if (!isSafeKey(key) || !isRecord(entry)) continue
       const point = sanitizePoint(entry)
       if (!point) continue
-      state.folders[key] = point
+      setOwnEntry(state.folders, key, point)
       count++
     }
   }
@@ -120,7 +134,7 @@ export function sanitizeCanvasState(value: unknown): RepoMapCanvasState {
       if (!isSafeKey(key)) continue
       const point = sanitizePoint(entry)
       if (!point) continue
-      state.files[key] = point
+      setOwnEntry(state.files, key, point)
       count++
     }
   }

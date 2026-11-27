@@ -132,6 +132,8 @@ let mainWindow: BrowserWindow | null = null
 configureIpcWindow(() => mainWindow)
 /** 真正退出流程已开始：关闭按钮不再收进托盘，窗口正常销毁 */
 let quitting = false
+/** 更新安装前已向用户完成未保存确认，放行紧随其后的 will-prevent-unload 避免重复弹窗 */
+let bypassUnloadPrompt = false
 
 /** 启动期的目录迁移、SQLite 播种与联网配置；最近工作区 IPC 会等它完成 */
 let startupReady: Promise<void> = Promise.resolve()
@@ -327,9 +329,10 @@ const notificationRouter = new NotificationRouter(
 /** 工具审批：挂起 Agent 的工具调用，等待渲染层响应或超时 */
 const approvalBroker = new ApprovalBroker(
   (payload) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('agent:approval-request', payload)
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
+      throw new Error('Main window unavailable for approval')
     }
+    mainWindow.webContents.send('agent:approval-request', payload)
     const text = notificationText()
     notificationRouter.notify({
       kind: 'approval',
@@ -340,7 +343,7 @@ const approvalBroker = new ApprovalBroker(
     })
   },
   (resolution) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('agent:approval-resolved', resolution)
     }
   }
@@ -505,12 +508,60 @@ registerGitIpc({
   logger: agentLogger
 })
 
+/** 更新安装前确认（Decision 4.A）：必须在 quitAndInstall 派生 NSIS 之前拦截未保存修改或运行中工作 */
+function confirmBeforeUpdateInstall(): boolean {
+  const hasDrafts = pluginManager.loadedWorkspaces().some((loaded) => {
+    const canonical = canonicalizePath(loaded)
+    return Boolean(canonical && draftStore.list(canonical).length > 0)
+  })
+  const hasActiveWork =
+    hasDrafts ||
+    agentRegistry.listRunning().length > 0 ||
+    approvalBroker.pendingCount > 0 ||
+    terminalManager.hasRecentActivity(3000)
+
+  if (!hasActiveWork) {
+    return true
+  }
+  if (!mainWindow || mainWindow.isDestroyed() || typeof dialog.showMessageBoxSync !== 'function') {
+    bypassUnloadPrompt = true
+    return true
+  }
+  if (!mainWindow.isVisible()) mainWindow.show()
+  const zh = app.getLocale?.().toLowerCase().startsWith('zh') ?? true
+  const choice = dialog.showMessageBoxSync(mainWindow, {
+    type: 'warning',
+    buttons: zh ? ['取消', '继续安装'] : ['Cancel', 'Install anyway'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    title: zh ? '还有未完成的工作' : 'Unfinished work',
+    message: zh
+      ? '有未保存的修改，或仍有会话 / 审批 / 终端在进行。'
+      : 'There are unsaved changes, or sessions, approvals, or terminals are still active.',
+    detail: zh
+      ? '重启安装更新会丢失未保存的修改，并中止运行中的会话与等待中的审批。'
+      : 'Restarting to install the update will discard unsaved changes and stop running sessions and pending approvals.'
+  })
+  if (choice !== 1) return false
+  bypassUnloadPrompt = true
+  for (const loaded of pluginManager.loadedWorkspaces()) {
+    const canonical = canonicalizePath(loaded)
+    if (canonical) draftStore.clear(canonical)
+  }
+  return true
+}
+
 registerSystemIpc({
   getMainWindow: () => mainWindow,
   terminalManager,
   pluginManager,
   getFileLogger: () => fileLogger,
-  getRendererLogger: () => rendererLogger
+  getRendererLogger: () => rendererLogger,
+  confirmBeforeUpdateInstall,
+  onUpdateInstallAborted: () => {
+    bypassUnloadPrompt = false
+  }
 })
 
 registerAuxWindowIpc({ getMainWindow: () => mainWindow })
@@ -815,6 +866,15 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
   // Electron 会保持窗口打开但不给用户任何提示；这里用原生对话框把选择权交给用户。
   mainWindow.webContents.on('will-prevent-unload', (event) => {
     if (!mainWindow || mainWindow.isDestroyed()) return
+    if (bypassUnloadPrompt) {
+      bypassUnloadPrompt = false
+      for (const loaded of pluginManager.loadedWorkspaces()) {
+        const canonical = canonicalizePath(loaded)
+        if (canonical) draftStore.clear(canonical)
+      }
+      event.preventDefault()
+      return
+    }
     // 必须先暂停退出卡死看门狗，否则用户在阻塞的原生确认框里思考超过 10s 会被强杀并跳过清理
     quitSequencer.cancel()
     // 从托盘退出时窗口是隐藏的，原生确认框必须挂在可见窗口上
@@ -975,8 +1035,8 @@ app.whenReady().then(async () => {
       const { previousVersion } = refreshShellCachesIfUpdated()
       const currentVersion = app.getVersion()
       if (previousVersion && previousVersion !== currentVersion) {
-        const isNewer = (next: string, now: string) => next.localeCompare(now, undefined, { numeric: true }) > 0
-        if (isNewer(currentVersion, previousVersion)) {
+        const { isNewerVersion } = await import('./updater.js')
+        if (isNewerVersion(currentVersion, previousVersion)) {
           setUpdateNotice({ from: previousVersion, to: currentVersion })
         }
       }

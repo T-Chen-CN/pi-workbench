@@ -4,7 +4,7 @@
  */
 import * as fs from 'fs'
 import * as path from 'path'
-import { childRegistry, killProcessTree } from './child-registry.js'
+import { childRegistry, killProcessTreeAsync } from './child-registry.js'
 
 export interface PtyProcess {
   /** shell 进程 pid；node-pty 会提供，测试替身可能没有 */
@@ -41,6 +41,8 @@ export interface TerminalManagerOptions {
   envSanitizer?: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv
   onData?: (id: string, data: string) => void
   onExit?: (id: string, exitCode: number) => void
+  /** 测试注入点：默认使用 child-registry 的异步树杀 */
+  killProcessTreeAsync?: (pid: number) => Promise<boolean>
 }
 
 export interface TerminalCreateResult {
@@ -195,7 +197,12 @@ export class TerminalManager {
       })
 
       pty.onExit(({ exitCode }) => {
-        this.flush(entry)
+        this.clearFlushTimer(id)
+        if (this.hasActiveAsyncWrite(id)) {
+          this.flushAsync(entry)
+        } else {
+          this.flush(entry)
+        }
         this.terminals.delete(id)
         entry.unregisterChild?.()
         entry.unregisterChild = null
@@ -228,35 +235,71 @@ export class TerminalManager {
   close(id: string): boolean {
     const entry = this.terminals.get(id)
     if (!entry) return false
-    this.terminals.delete(id)
-    this.clearFlushTimer(id)
-    const pid = typeof entry.pty.pid === 'number' && entry.pty.pid > 0 ? entry.pty.pid : null
-    // Windows 上先 taskkill /T 杀整棵进程树再 kill PTY，避免根进程先死导致孙进程变为孤儿
-    if (pid !== null && process.platform === 'win32') {
-      killProcessTree(pid)
-    }
-    try {
-      entry.pty.kill()
-    } catch (error) {
-      console.warn('[Terminal] Failed to kill terminal:', error)
-    } finally {
-      entry.unregisterChild?.()
-      entry.unregisterChild = null
-    }
-    if (this.activeAsyncWrites.has(id)) {
-      this.flushAsync(entry)
-    } else {
-      this.flush(entry)
-    }
+    void this.closeEntryAsync(entry, false)
     return true
   }
 
-  closeAll(): void {
+  async closeAll(): Promise<void> {
+    const tasks: Promise<void>[] = []
     for (const id of [...this.terminals.keys()]) {
       const entry = this.terminals.get(id)
-      this.close(id)
-      // 进程退出兜底：若前面因异步写链让路而仍有残余缓冲，同步落盘
-      if (entry) this.flush(entry)
+      if (!entry) continue
+      tasks.push(this.closeEntryAsync(entry, true))
+    }
+    await Promise.allSettled(tasks)
+  }
+
+  /**
+   * 异步关闭单个终端：使用非阻塞 killProcessTreeAsync，避免同步 taskkill 卡住主线程或退出看门狗。
+   * 当 pty 没有 pid（如测试替身）时，kill 与注销在第一个 await 之前同步完成。
+   */
+  private async closeEntryAsync(entry: TerminalEntry, awaitFlush: boolean): Promise<void> {
+    this.terminals.delete(entry.id)
+    this.clearFlushTimer(entry.id)
+    const pid = typeof entry.pty.pid === 'number' && entry.pty.pid > 0 ? entry.pty.pid : null
+
+    const killPty = () => {
+      try {
+        entry.pty.kill()
+      } catch (error) {
+        console.warn('[Terminal] Failed to kill terminal:', error)
+      } finally {
+        entry.unregisterChild?.()
+        entry.unregisterChild = null
+      }
+    }
+
+    const flushLogs = () => {
+      if (this.hasActiveAsyncWrite(entry.id)) {
+        this.flushAsync(entry)
+      } else {
+        this.flush(entry)
+      }
+    }
+
+    if (pid === null) {
+      killPty()
+      flushLogs()
+      if (awaitFlush) {
+        await entry.logWriteChain.catch(() => undefined)
+        if (entry.pending) this.flush(entry)
+      }
+      return
+    }
+
+    flushLogs()
+    const killTree = this.options.killProcessTreeAsync ?? killProcessTreeAsync
+    try {
+      // 必须先异步收整棵进程树再 kill PTY，且树杀结束前保留 childRegistry 登记供退出兜底
+      await killTree(pid)
+    } catch {
+      // 进程可能已退出
+    } finally {
+      killPty()
+    }
+    if (awaitFlush) {
+      await entry.logWriteChain.catch(() => undefined)
+      if (entry.pending) this.flush(entry)
     }
   }
 
@@ -282,15 +325,19 @@ export class TerminalManager {
     }
   }
 
-  /** 正在执行异步写/轮转的终端集合，防止 flushNow 同步写与后台异步轮转并发竞态 */
-  private activeAsyncWrites = new Set<string>()
+  /** 正在执行异步写/轮转的终端引用计数，避免多次并发 flushAsync 时首条完成提前清除保护 */
+  private activeAsyncWrites = new Map<string, number>()
+
+  private hasActiveAsyncWrite(id: string): boolean {
+    return (this.activeAsyncWrites.get(id) ?? 0) > 0
+  }
 
   /** 立即把待写入内容刷到日志文件：空闲时同步落盘，异步写进行中则排进串行链防轮转竞态 */
   flushNow(id: string): boolean {
     const entry = this.terminals.get(id)
     if (!entry) return false
     this.clearFlushTimer(id)
-    if (this.activeAsyncWrites.has(id)) {
+    if (this.hasActiveAsyncWrite(id)) {
       this.flushAsync(entry)
     } else {
       this.flush(entry)
@@ -321,7 +368,7 @@ export class TerminalManager {
     const text = entry.pending
     entry.pending = ''
     const logPath = entry.logPath
-    this.activeAsyncWrites.add(entry.id)
+    this.activeAsyncWrites.set(entry.id, (this.activeAsyncWrites.get(entry.id) ?? 0) + 1)
     entry.logWriteChain = entry.logWriteChain
       .then(async () => {
         await fs.promises.mkdir(path.dirname(logPath), { recursive: true })
@@ -338,7 +385,9 @@ export class TerminalManager {
         console.warn('[Terminal] Failed to write terminal log:', error)
       })
       .finally(() => {
-        this.activeAsyncWrites.delete(entry.id)
+        const remaining = (this.activeAsyncWrites.get(entry.id) ?? 1) - 1
+        if (remaining <= 0) this.activeAsyncWrites.delete(entry.id)
+        else this.activeAsyncWrites.set(entry.id, remaining)
       })
   }
 

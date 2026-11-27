@@ -5,6 +5,8 @@
  * 等待用户选择或超时。超时与通道缺失都按拒绝处理（fail-closed）。
  */
 
+import { canonicalizePath, normalizeForComparison } from './path-safety.js'
+
 export type ToolCategory = 'read' | 'write' | 'command' | 'other'
 
 export interface ApprovalRequestPayload {
@@ -95,6 +97,13 @@ export class ApprovalBroker {
 
   /** 发起审批；返回的 Promise 只会以 allow-* 或 deny 收尾 */
   request(request: ApprovalRequestPayload): Promise<ApprovalDecision> {
+    if (this.pending.has(request.requestId)) {
+      // 禁止重复 requestId 覆盖已有待决项导致旧定时器与 Promise 泄漏，直接 fail-closed 拒绝重复请求
+      return Promise.resolve({
+        action: 'deny',
+        reason: 'Duplicate approval request ID.',
+      })
+    }
     return new Promise<ApprovalDecision>((resolve) => {
       const timeoutMs = Math.min(
         MAX_TIMEOUT_MS,
@@ -136,8 +145,10 @@ export class ApprovalBroker {
 
   /** 工作区关闭 / Agent 释放时，取消该工作区所有待审批请求 */
   cancelForWorkspace(workspaceDir: string, reason = 'The workspace was closed.'): void {
-    const normalize = (p: string) =>
-      process.platform === 'win32' ? p.replace(/[\\/]+$/, '').toLowerCase() : p.replace(/\/+$/, '')
+    const normalize = (p: string) => {
+      const canonical = canonicalizePath(p) ?? p
+      return normalizeForComparison(canonical).replace(/[\\/]+$/, '')
+    }
     const target = normalize(workspaceDir)
     this.cancelWhere((request) => normalize(request.workspaceDir) === target, reason)
   }

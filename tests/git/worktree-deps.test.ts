@@ -521,4 +521,40 @@ describe('安装进程登记', () => {
     await expect(promise).resolves.toEqual({ ok: true })
     expect(childRegistry.size()).toBe(0)
   })
+
+  it('取消带真实 pid 的安装时，在子进程退出或树杀完成前不提前从 childRegistry 注销', async () => {
+    let exitChild: ((code: number) => void) | null = null
+    const spawn: SpawnFn = () => {
+      const exitListeners: Array<(...args: unknown[]) => void> = []
+      exitChild = (code) => {
+        for (const listener of exitListeners) listener(code)
+      }
+      return {
+        pid: 9_200_002,
+        stdout: { on: () => {} },
+        stderr: { on: () => {} },
+        on: (event, listener) => {
+          if (event === 'exit') exitListeners.push(listener)
+        },
+        kill: () => true,
+      }
+    }
+    const installer = new WorktreeDepsInstaller({ spawn })
+    await write('package-lock.json', 'lock\n')
+    const info = (await detectLockfile(repo))!
+
+    const promise = installer.install(worktree, info)
+    expect(childRegistry.list().map((child) => child.pid)).toEqual([9_200_002])
+
+    installer.cancel(worktree)
+    await expect(promise).resolves.toEqual({ ok: false, cancelled: true })
+    if (process.platform === 'win32') {
+      // 刚 cancel 完同步返回时异步 taskkill 仍在途，不能提前注销
+      expect(childRegistry.size()).toBe(1)
+    }
+    exitChild!(1)
+    await vi.waitFor(() => {
+      expect(childRegistry.size()).toBe(0)
+    })
+  })
 })

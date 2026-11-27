@@ -64,6 +64,23 @@ describe('FileLogger', () => {
     expect(current).toContain('written-to-new-file')
     expect(current).not.toContain('first-line')
   })
+
+  it('flushes in-flight async batches in order without losing lines when close() runs immediately', async () => {
+    logger = new FileLogger({ logDir })
+    logger.write('INFO', ['first-in-flight'])
+    const flushPromise = logger.flushAsync()
+    logger.write('INFO', ['second-pending'])
+    logger.close()
+    await flushPromise
+
+    const content = await fs.readFile(path.join(logDir, 'main.log'), 'utf-8')
+    const firstIdx = content.indexOf('first-in-flight')
+    const secondIdx = content.indexOf('second-pending')
+    expect(firstIdx).toBeGreaterThanOrEqual(0)
+    expect(secondIdx).toBeGreaterThan(firstIdx)
+    // 同一行不能被异步链与同步 close 重复写两次
+    expect(content.match(/first-in-flight/g)).toHaveLength(1)
+  })
 })
 
 describe('installConsoleTee', () => {

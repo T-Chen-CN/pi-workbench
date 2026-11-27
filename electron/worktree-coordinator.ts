@@ -111,7 +111,7 @@ export interface WorktreeDepsEventPayload {
 }
 
 export interface WorktreeDepsConfig {
-  /** 设置项 autoInstallWorktreeDeps；默认开 */
+  /** 设置项 autoInstallWorktreeDeps；默认关（fail-closed） */
   isAutoInstallEnabled: () => boolean
   onStatusChange?: (payload: WorktreeDepsEventPayload) => void
   /** 测试注入点：默认用真实 spawn 的安装器 */
@@ -183,6 +183,23 @@ function makeWorktreeId(state: WorkspaceState, sessionId: string): string {
 }
 
 const refreshingStates = new Map<string, Promise<WorkspaceState | null>>()
+/** 销毁代次：防止 disposeCoordinator / disposeAllCoordinators 期间在途的 refreshState 回填复活 */
+let globalDisposeEpoch = 0
+const workspaceDisposeEpochs = new Map<string, number>()
+
+function captureDisposeEpoch(key: string): { global: number; local: number } {
+  return {
+    global: globalDisposeEpoch,
+    local: workspaceDisposeEpochs.get(key) ?? 0,
+  }
+}
+
+function isDisposedSince(key: string, epoch: { global: number; local: number }): boolean {
+  return (
+    globalDisposeEpoch !== epoch.global ||
+    (workspaceDisposeEpochs.get(key) ?? 0) !== epoch.local
+  )
+}
 
 async function refreshState(workspaceDir: string): Promise<WorkspaceState | null> {
   const key = keyFor(workspaceDir)
@@ -191,9 +208,10 @@ async function refreshState(workspaceDir: string): Promise<WorkspaceState | null
   const inflight = refreshingStates.get(key)
   if (inflight) return inflight
 
+  const epoch = captureDisposeEpoch(key)
   const task = (async (): Promise<WorkspaceState | null> => {
     const repo = await getRepoInfo(workspaceDir)
-    if (!repo || repo.bare) return null
+    if (!repo || repo.bare || isDisposedSince(key, epoch)) return null
     const cached = states.get(key)
     if (cached) return cached
     // 安装回调需要 state 本身（按路径映射回工作树 key 才能落盘与推送）
@@ -201,7 +219,8 @@ async function refreshState(workspaceDir: string): Promise<WorkspaceState | null
     const deps = new WorktreeDepsManager({
       repoRoot: repo.root,
       logger: logging ?? SILENT_LOGGER,
-      isAutoInstallEnabled: () => depsConfig?.isAutoInstallEnabled() ?? true,
+      // fail-closed：未注入配置时默认关闭自动依赖安装，避免未经用户授权执行包管理器脚本
+      isAutoInstallEnabled: () => depsConfig?.isAutoInstallEnabled() ?? false,
       ...(depsConfig?.createInstaller
         ? { installer: depsConfig.createInstaller(repo.root) }
         : {}),
@@ -220,10 +239,21 @@ async function refreshState(workspaceDir: string): Promise<WorkspaceState | null
       lock: Promise.resolve(),
       deps,
     }
+    if (isDisposedSince(key, epoch)) {
+      deps.dispose()
+      return null
+    }
     ref.state = state
     states.set(key, state)
     await ensureWorktreeIgnored(repo.root)
     await pruneWorktrees(repo.root)
+    if (isDisposedSince(key, epoch)) {
+      if (states.get(key) === state) {
+        states.delete(key)
+      }
+      deps.dispose()
+      return null
+    }
     return state
   })()
   refreshingStates.set(key, task)
@@ -852,13 +882,17 @@ export async function getCoordinator(
   const key = keyFor(workspaceDir)
   const cached = coordinatorCache.get(key)
   if (cached) return cached
+  const epoch = captureDisposeEpoch(key)
   const coordinator = await WorktreeCoordinator.forWorkspace(workspaceDir)
-  if (coordinator) coordinatorCache.set(key, coordinator)
+  if (!coordinator || isDisposedSince(key, epoch)) return null
+  coordinatorCache.set(key, coordinator)
   return coordinator
 }
 
 export function disposeCoordinator(workspaceDir: string): void {
   const key = keyFor(workspaceDir)
+  workspaceDisposeEpochs.set(key, (workspaceDisposeEpochs.get(key) ?? 0) + 1)
+  refreshingStates.delete(key)
   coordinatorCache.delete(key)
   states.get(key)?.deps.dispose()
   states.delete(key)
@@ -872,6 +906,8 @@ export function disposeCoordinator(workspaceDir: string): void {
  * node_modules。
  */
 export function disposeAllCoordinators(): void {
+  globalDisposeEpoch += 1
+  refreshingStates.clear()
   coordinatorCache.clear()
   for (const [key, state] of [...states.entries()]) {
     try {

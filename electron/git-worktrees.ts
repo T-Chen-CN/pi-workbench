@@ -439,7 +439,14 @@ export async function listBranches(repoRoot: string): Promise<GitBranchInfo[]> {
 }
 
 export async function getStatus(worktreePath: string): Promise<GitStatusInfo> {
-  const result = await git(worktreePath, ['status', '--porcelain=v1', '-b', '-uall'])
+  const result = await git(worktreePath, [
+    '-c',
+    'core.quotepath=false',
+    'status',
+    '--porcelain=v1',
+    '-b',
+    '-uall',
+  ])
   const status: GitStatusInfo = {
     branch: null,
     upstream: null,
@@ -654,8 +661,8 @@ export async function logCommitStats(
   else if (branch) scope.push(validateGitRef(branch, 'branch name'))
   const count = normalizeLogLimit(limit)
   const [numstat, nameStatus] = await Promise.all([
-    git(worktreePath, ['log', '-n', count, '--numstat', '--format=%H', ...scope, '--']),
-    git(worktreePath, ['log', '-n', count, '--name-status', '--format=%H', ...scope, '--']),
+    git(worktreePath, ['-c', 'core.quotepath=false', 'log', '-n', count, '--numstat', '--format=%H', ...scope, '--']),
+    git(worktreePath, ['-c', 'core.quotepath=false', 'log', '-n', count, '--name-status', '--format=%H', ...scope, '--']),
   ])
   const stats: Record<string, GitCommitStats> = {}
   const ensure = (sha: string): GitCommitStats => {
@@ -720,8 +727,8 @@ export async function commitDetail(
   // 三条查询互不依赖，并行执行可省掉约一半的进程等待
   const [meta, filesResult, patchResult] = await Promise.all([
     git(worktreePath, ['show', '-s', `--format=${format}`, sha, '--']),
-    git(worktreePath, ['show', '--name-status', '--format=', sha, '--']),
-    git(worktreePath, ['show', '--format=', '--patch', '--no-ext-diff', sha, '--']),
+    git(worktreePath, ['-c', 'core.quotepath=false', 'show', '--name-status', '--format=', sha, '--']),
+    git(worktreePath, ['-c', 'core.quotepath=false', 'show', '--format=', '--patch', '--no-ext-diff', sha, '--']),
   ])
   if (!meta.ok) return null
   const fields = meta.stdout.split('\u0000')
@@ -762,7 +769,14 @@ export async function fileDiffBetween(
 ): Promise<string> {
   const safeFrom = validateGitRef(from, 'from ref')
   const safeTo = validateGitRef(to, 'to ref')
-  const result = await git(worktreePath, ['diff', '--no-ext-diff', `${safeFrom}..${safeTo}`, '--'])
+  const result = await git(worktreePath, [
+    '-c',
+    'core.quotepath=false',
+    'diff',
+    '--no-ext-diff',
+    `${safeFrom}..${safeTo}`,
+    '--',
+  ])
   return result.ok ? result.stdout.slice(0, 400_000) : ''
 }
 

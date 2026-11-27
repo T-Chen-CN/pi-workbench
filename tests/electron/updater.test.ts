@@ -94,12 +94,18 @@ function createController(
 }
 
 describe('update helpers', () => {
-  it('compares semantic versions', () => {
+  it('compares semantic versions including prerelease precedence (SemVer 2.0)', () => {
     expect(isNewerVersion('0.3.0', '0.2.0')).toBe(true)
     expect(isNewerVersion('v0.2.1', '0.2.0')).toBe(true)
     expect(isNewerVersion('0.2.0', '0.2.0')).toBe(false)
     expect(isNewerVersion('0.1.9', '0.2.0')).toBe(false)
     expect(isNewerVersion('not-a-version', '0.2.0')).toBe(false)
+    // SemVer 2.0: 正式版高于同版本的预发布版
+    expect(isNewerVersion('0.11.2', '0.11.2-rc.1')).toBe(true)
+    expect(isNewerVersion('0.11.2-rc.1', '0.11.2')).toBe(false)
+    expect(isNewerVersion('0.11.2-rc.10', '0.11.2-rc.2')).toBe(true)
+    expect(isNewerVersion('0.11.2-beta.1', '0.11.2-alpha.1')).toBe(true)
+    expect(isNewerVersion('0.11.2+build.2', '0.11.2+build.1')).toBe(false)
   })
 
   it('normalizes string and array release notes', () => {
@@ -129,6 +135,11 @@ describe('UpdateController', () => {
   beforeEach(() => {
     electronMock.fetch.mockReset()
     electronMock.openExternal.mockClear()
+    vi.stubGlobal('fetch', electronMock.fetch)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it('reports unsupported outside a packaged build', async () => {
@@ -310,6 +321,7 @@ describe('update cache and portable mode (D-01)', () => {
   })
 
   it('uses GitHub release check and disables auto-install in portable mode on Windows', async () => {
+    vi.stubGlobal('fetch', electronMock.fetch)
     electronMock.fetch.mockResolvedValue({
       ok: true,
       status: 200,
@@ -320,25 +332,66 @@ describe('update cache and portable mode (D-01)', () => {
       }),
     })
 
-    const { controller } = createController({
+    try {
+      const { controller } = createController({
+        platform: 'win32',
+        portable: true,
+      })
+
+      expect(controller.getState().canAutoInstall).toBe(false)
+      const checkResult = await controller.check()
+      expect(checkResult.success).toBe(true)
+      expect(controller.getState().status).toBe('available')
+      expect(controller.getState().version).toBe('0.9.0')
+
+      expect(await controller.download()).toEqual({
+        success: false,
+        error: UPDATE_ERROR.manualDownload,
+      })
+      expect(controller.install()).toEqual({
+        success: false,
+        error: UPDATE_ERROR.manualDownload,
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('cancels install before spawning NSIS when confirmBeforeInstall returns false (Decision 4.A)', async () => {
+    const confirmBeforeInstall = vi.fn(() => false)
+    const { controller, fake } = createController(
+      { confirmBeforeInstall },
+      { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    )
+    await controller.check()
+    await controller.download()
+
+    const result = controller.install()
+    expect(result).toEqual({ success: false, error: UPDATE_ERROR.cancelled })
+    expect(confirmBeforeInstall).toHaveBeenCalledTimes(1)
+    expect(fake.quitAndInstall).not.toHaveBeenCalled()
+  })
+
+  it('uses 8.3 short path or omits NSIS /D= when Windows installDir contains spaces', async () => {
+    const withShort = createController({
+      appDir: 'C:\\Users\\Alice\\AppData\\Roaming\\pi-workbench',
+      installDir: 'C:\\Program Files\\Pi Workbench',
       platform: 'win32',
-      portable: true,
+      resolveShortPath: () => 'C:\\PROGRA~1\\PIWORK~1',
     })
+    await withShort.controller.check()
+    expect((withShort.fake as { installDirectory?: string }).installDirectory).toBe(
+      'C:\\PROGRA~1\\PIWORK~1'
+    )
 
-    expect(controller.getState().canAutoInstall).toBe(false)
-    const checkResult = await controller.check()
-    expect(checkResult.success).toBe(true)
-    expect(controller.getState().status).toBe('available')
-    expect(controller.getState().version).toBe('0.9.0')
-
-    expect(await controller.download()).toEqual({
-      success: false,
-      error: UPDATE_ERROR.manualDownload,
+    const withoutShort = createController({
+      appDir: 'C:\\Users\\Alice\\AppData\\Roaming\\pi-workbench',
+      installDir: 'D:\\My Apps\\Pi Workbench',
+      platform: 'win32',
+      resolveShortPath: () => null,
     })
-    expect(controller.install()).toEqual({
-      success: false,
-      error: UPDATE_ERROR.manualDownload,
-    })
+    await withoutShort.controller.check()
+    expect((withoutShort.fake as { installDirectory?: string }).installDirectory).toBeUndefined()
   })
 
   it('keeps differential base and sibling drafts/temp when cleaning completed Windows update cache', async () => {

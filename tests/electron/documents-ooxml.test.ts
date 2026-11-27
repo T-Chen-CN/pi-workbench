@@ -53,6 +53,27 @@ describe('readWordDocument', () => {
     const zip = ZipArchive.open(buildZip([{ name: '[Content_Types].xml', content: '<Types/>' }]))
     expect(() => readWordDocument(zip)).toThrow(/word\/document\.xml/)
   })
+
+  it('嵌套表格使用栈隔离，不抹掉外层行的前序与后续单元格', () => {
+    const nested =
+      '<w:tbl><w:tr>' +
+      '<w:tc><w:p><w:r><w:t>外层左列</w:t></w:r></w:p></w:tc>' +
+      '<w:tc>' +
+      '<w:p><w:r><w:t>内表前</w:t></w:r></w:p>' +
+      '<w:tbl><w:tr>' +
+      '<w:tc><w:p><w:r><w:t>内A</w:t></w:r></w:p></w:tc>' +
+      '<w:tc><w:p><w:r><w:t>内B</w:t></w:r></w:p></w:tc>' +
+      '</w:tr></w:tbl>' +
+      '<w:p><w:r><w:t>内表后</w:t></w:r></w:p>' +
+      '</w:tc>' +
+      '<w:tc><w:p><w:r><w:t>外层右列</w:t></w:r></w:p></w:tc>' +
+      '</w:tr></w:tbl>'
+    const model = readWordDocument(ZipArchive.open(buildDocx(nested)))
+    expect(model.lines).toEqual(['外层左列\t内表前 内A 内B 内表后\t外层右列'])
+    expect(model.blocks).toEqual([
+      { type: 'table', rows: [['外层左列', '内表前 内A 内B 内表后', '外层右列']] },
+    ])
+  })
 })
 
 describe('readSpreadsheet', () => {
@@ -126,6 +147,27 @@ describe('readSpreadsheet', () => {
     )
     expect(model.sheets[0].rows).toEqual([['1'], ['99']])
   })
+
+  it('省略 <row> 的可选 r 属性时按行自动递增，不覆盖第 0 行', () => {
+    const model = readSpreadsheet(
+      ZipArchive.open(
+        buildXlsx({
+          sheets: [
+            {
+              name: 'NoR',
+              xml:
+                '<sheetData>' +
+                '<row><c><v>first</v></c></row>' +
+                '<row><c><v>second</v></c></row>' +
+                '<row><c><v>third</v></c></row>' +
+                '</sheetData>',
+            },
+          ],
+        })
+      )
+    )
+    expect(model.sheets[0].rows).toEqual([['first'], ['second'], ['third']])
+  })
 })
 
 describe('readPresentation', () => {
@@ -144,6 +186,44 @@ describe('readPresentation', () => {
     ])
     expect(model.images).toHaveLength(1)
     expect(model.images[0].dataUrl.startsWith('data:image/png;base64,')).toBe(true)
+  })
+
+  it('<p:sldId r:id="rId2" id="256"/> 属性顺序下 r:id 不被无前缀 id 覆盖，保持正确放映顺序', () => {
+    const zip = ZipArchive.open(
+      buildZip([
+        {
+          name: 'ppt/presentation.xml',
+          content:
+            '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" ' +
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+            '<p:sldIdLst>' +
+            '<p:sldId r:id="rId2" id="256"/>' +
+            '<p:sldId r:id="rId1" id="257"/>' +
+            '</p:sldIdLst></p:presentation>',
+        },
+        {
+          name: 'ppt/_rels/presentation.xml.rels',
+          content:
+            '<Relationships>' +
+            '<Relationship Id="rId1" Target="slides/slide1.xml"/>' +
+            '<Relationship Id="rId2" Target="slides/slide2.xml"/>' +
+            '</Relationships>',
+        },
+        {
+          name: 'ppt/slides/slide1.xml',
+          content: '<p:sld><a:p><a:r><a:t>实际第二页</a:t></a:r></a:p></p:sld>',
+        },
+        {
+          name: 'ppt/slides/slide2.xml',
+          content: '<p:sld><a:p><a:r><a:t>实际第一页</a:t></a:r></a:p></p:sld>',
+        },
+      ])
+    )
+    const model = readPresentation(zip, { includeImages: false })
+    expect(model.slides.map((s) => ({ sourcePath: s.sourcePath, lines: s.lines }))).toEqual([
+      { sourcePath: 'ppt/slides/slide2.xml', lines: ['实际第一页'] },
+      { sourcePath: 'ppt/slides/slide1.xml', lines: ['实际第二页'] },
+    ])
   })
 })
 
@@ -173,5 +253,30 @@ describe('readEpub', () => {
     expect(model.chapters).toHaveLength(2)
     expect(model.chapters[0].lines).toEqual(['第一章', '开场白'])
     expect(model.chapters[1].lines).toEqual(['第二章内容'])
+  })
+
+  it('自闭合 <script src="..."/> 不吞掉后续章节正文，带内部 DTD 的 DOCTYPE 不泄漏 ]>', () => {
+    const xhtml =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      '<!DOCTYPE html [ <!ENTITY nbsp "&#160;"> <!ENTITY gt ">"> ]>' +
+      '<html><head><title>ignored</title><script src="reader.js"/></head>' +
+      '<body><script src="inline.js"/><p>正文完整保留</p></body></html>'
+    const zip = ZipArchive.open(
+      buildZip([
+        {
+          name: 'META-INF/container.xml',
+          content: '<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>',
+        },
+        {
+          name: 'OEBPS/content.opf',
+          content:
+            '<package><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>' +
+            '<spine><itemref idref="c1"/></spine></package>',
+        },
+        { name: 'OEBPS/ch1.xhtml', content: xhtml },
+      ])
+    )
+    const model = readEpub(zip)
+    expect(model.chapters).toEqual([{ label: 'chapter 1', lines: ['正文完整保留'] }])
   })
 })

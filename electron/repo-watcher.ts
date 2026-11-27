@@ -48,6 +48,8 @@ const REF_FILES = new Set([
 interface WatchTarget {
   dir: string
   recursive: boolean
+  /** 监听子目录相对 commonDir 的前缀（refs / logs / worktrees），避免 fs.watch 回调只给子路径而被漏判 */
+  prefix: string
 }
 
 export class RepoWatcher {
@@ -68,19 +70,19 @@ export class RepoWatcher {
     this.closeWatchers()
     const { gitDir, commonDir } = this.options
     const targets: WatchTarget[] = [
-      { dir: commonDir, recursive: false },
-      { dir: path.join(commonDir, 'refs'), recursive: true },
-      { dir: path.join(commonDir, 'logs'), recursive: true },
-      { dir: path.join(commonDir, 'worktrees'), recursive: true },
+      { dir: commonDir, recursive: false, prefix: '' },
+      { dir: path.join(commonDir, 'refs'), recursive: true, prefix: 'refs' },
+      { dir: path.join(commonDir, 'logs'), recursive: true, prefix: 'logs' },
+      { dir: path.join(commonDir, 'worktrees'), recursive: true, prefix: 'worktrees' },
     ]
     if (path.resolve(gitDir) !== path.resolve(commonDir)) {
-      targets.push({ dir: gitDir, recursive: false })
+      targets.push({ dir: gitDir, recursive: false, prefix: '' })
     }
 
     for (const target of targets) {
       try {
         const watcher = watch(target.dir, { recursive: target.recursive }, (_event, filename) => {
-          this.onEvent(filename ? String(filename) : '')
+          this.onEvent(target.prefix, filename ? String(filename) : '')
         })
         watcher.on('error', (error) => this.onError(error))
         this.watchers.push(watcher)
@@ -111,20 +113,23 @@ export class RepoWatcher {
     this.pending.clear()
   }
 
-  private onEvent(filename: string): void {
+  private onEvent(prefix: string, filename: string): void {
     if (this.disposed) return
     this.failures = 0
-    if (filename && IGNORED_PATH.test(filename)) return
+    const relPath = filename && prefix ? path.join(prefix, filename) : filename
+    if (relPath && IGNORED_PATH.test(relPath)) return
 
-    if (!filename) {
-      // 个别平台不提供文件名：两类都刷新，交给快照比对去重
+    if (!relPath) {
+      // 个别平台不提供文件名：refs/logs 子目录只刷 refs，其余两类都刷新，交给快照比对去重
       this.pending.add('refs')
-      this.pending.add('status')
+      if (prefix !== 'refs' && prefix !== 'logs') {
+        this.pending.add('status')
+      }
     } else {
-      const base = path.basename(filename)
+      const base = path.basename(relPath)
       if (base === 'index') {
         this.pending.add('status')
-      } else if (REF_FILES.has(base) || REF_PATH.test(filename)) {
+      } else if (REF_FILES.has(base) || REF_PATH.test(relPath)) {
         this.pending.add('refs')
       } else {
         return

@@ -46,4 +46,28 @@ describe('ZipArchive', () => {
     const buffer = buildZip(files, { deflate: true })
     expect(() => ZipArchive.open(buffer.subarray(0, 40))).toThrow(ZipError)
   })
+
+  it('注释内含伪造 EOCD 魔数时仍严格定位注释结束恰好等于文件尾的真实 EOCD', () => {
+    const base = buildZip([{ name: 'a.txt', content: 'ok' }])
+    // 真实 EOCD 位于 base 末尾 22 字节；给它附加一条包含 0x06054b50 魔数的注释
+    const fakeComment = Buffer.alloc(24)
+    fakeComment.writeUInt32LE(0x06054b50, 0)
+    fakeComment.writeUInt16LE(0, 20)
+    const withComment = Buffer.concat([base, fakeComment])
+    withComment.writeUInt16LE(fakeComment.length, base.length - 2)
+
+    const zip = ZipArchive.open(withComment)
+    expect(zip.readText('a.txt')).toBe('ok')
+  })
+
+  it('遇到 ZIP64 哨兵值（0xffff 条目数 / 0xffffffff 未压缩体积）明确报 ZipError', () => {
+    const zipTotal64 = Buffer.from(buildZip([{ name: 'a.txt', content: 'ok' }]))
+    zipTotal64.writeUInt16LE(0xffff, zipTotal64.length - 12)
+    expect(() => ZipArchive.open(zipTotal64)).toThrow(/ZIP64/)
+
+    const zipSize64 = Buffer.from(buildZip([{ name: 'a.txt', content: 'ok' }]))
+    const cdOffset = zipSize64.readUInt32LE(zipSize64.length - 6)
+    zipSize64.writeUInt32LE(0xffffffff, cdOffset + 24)
+    expect(() => ZipArchive.open(zipSize64)).toThrow(/ZIP64/)
+  })
 })

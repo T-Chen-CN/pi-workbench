@@ -276,7 +276,7 @@ ChatPanel.handleSubmit
 | `documents:preview` | invoke | 取 Office / EPUB 的只读预览模型（经 `resolveAllowedFileTarget` 校验） |
 | `documents:render-request` | main → renderer | 请求把扫描页字节画成图片（字节随事件下发，渲染层没有路径读能力） |
 | `documents:render-result` | invoke | 渲染进程回传图片或失败原因 |
-| `fs:readFile` / `writeFile` / `listDirectory` / `exists` / `stat` | invoke | 文件操作 |
+| `fs:readFile` / `writeFile` / `createFile` / `listDirectory` / `exists` / `stat` | invoke | 文件操作（`createFile` 原子独占新建 `flag: 'wx'`） |
 | `fs:delete` / `fs:rename` | invoke | 删除 / 重命名 |
 | `fs:watch` / `fs:unwatch` | invoke | 工作区递归监听 |
 | `fs:changed` | main → renderer | 文件变化事件（300ms 批量） |

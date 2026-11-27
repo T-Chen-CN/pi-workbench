@@ -81,16 +81,63 @@ function findTagEnd(xml: string, from: number): number {
   return -1
 }
 
+const FORBIDDEN_ATTR_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
 function parseAttributes(source: string): Record<string, string> {
   const attrs: Record<string, string> = {}
   const pattern = /([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
   let match: RegExpExecArray | null
   while ((match = pattern.exec(source)) !== null) {
-    const name = localName(match[1])
-    const raw = match[2] ?? match[3] ?? ''
-    attrs[name] = decodeXmlEntities(raw)
+    const fullName = match[1]
+    const local = localName(fullName)
+    const value = decodeXmlEntities(match[2] ?? match[3] ?? '')
+    // 保留带命名空间前缀的完整名（如 `r:id`），避免 `<p:sldId r:id="rId2" id="256"/>`
+    // 被同名无前缀属性覆盖导致幻灯片顺序错乱；同时在未冲突时提供本地名别名
+    if (!FORBIDDEN_ATTR_KEYS.has(fullName)) {
+      attrs[fullName] = value
+    }
+    if (
+      local !== fullName &&
+      !FORBIDDEN_ATTR_KEYS.has(local) &&
+      !Object.prototype.hasOwnProperty.call(attrs, local)
+    ) {
+      attrs[local] = value
+    }
   }
   return attrs
+}
+
+/** 扫描 `<!DOCTYPE ...>` 等声明：必须追踪内部子集 `[...]` 深度与引号，避免把 `]>` 漏进正文 */
+function findDeclarationEnd(xml: string, from: number): number {
+  let bracketDepth = 0
+  let quote: string | null = null
+  for (let index = from + 2; index < xml.length; index += 1) {
+    const char = xml[index]
+    if (quote) {
+      if (char === quote) quote = null
+      continue
+    }
+    if (bracketDepth > 0 && xml.startsWith('<!--', index)) {
+      const commentEnd = xml.indexOf('-->', index + 4)
+      if (commentEnd < 0) return -1
+      index = commentEnd + 2
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (char === '[') {
+      bracketDepth += 1
+      continue
+    }
+    if (char === ']' && bracketDepth > 0) {
+      bracketDepth -= 1
+      continue
+    }
+    if (char === '>' && bracketDepth === 0) return index
+  }
+  return -1
 }
 
 /** 顺序遍历 XML token；遇到无法闭合的脏数据就结束，不抛错 */
@@ -117,8 +164,13 @@ export function* scanXml(xml: string): Generator<XmlToken> {
       index = end < 0 ? xml.length : end + 3
       continue
     }
-    if (xml.startsWith('<?', lt) || xml.startsWith('<!', lt)) {
-      const end = xml.indexOf('>', lt)
+    if (xml.startsWith('<?', lt)) {
+      const end = xml.indexOf('?>', lt + 2)
+      index = end < 0 ? xml.length : end + 2
+      continue
+    }
+    if (xml.startsWith('<!', lt)) {
+      const end = findDeclarationEnd(xml, lt)
       index = end < 0 ? xml.length : end + 1
       continue
     }
@@ -179,7 +231,7 @@ export function htmlToText(xml: string): string {
       continue
     }
     if (token.type === 'open') {
-      if (SKIP_TAGS.has(token.name)) skipDepth.value += 1
+      if (SKIP_TAGS.has(token.name) && !token.selfClosing) skipDepth.value += 1
       if (token.selfClosing && BLOCK_TAGS.has(token.name)) {
         lines.push(current)
         current = ''

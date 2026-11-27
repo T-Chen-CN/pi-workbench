@@ -263,15 +263,78 @@ describe('TerminalManager 子进程登记', () => {
     expect(childRegistry.size()).toBe(0)
   })
 
-  it('关闭终端时注销登记，避免误杀已复用的 pid', () => {
+  it('关闭终端时异步树杀完成后再注销登记，避免提前摘除或阻塞主线程', async () => {
     const pty = ptyWithPid(9_100_002)
-    manager = new TerminalManager({ spawn: () => pty, shell: 'bash' })
+    let resolveKill!: (ok: boolean) => void
+    const killTree = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveKill = resolve
+        })
+    )
+    manager = new TerminalManager({
+      spawn: () => pty,
+      shell: 'bash',
+      killProcessTreeAsync: killTree,
+    })
 
     const created = manager.create(tmpDir, 80, 24)
-    manager.close(created.id!)
+    expect(manager.close(created.id!)).toBe(true)
 
-    expect(pty.killed).toBe(true)
+    // 异步树杀完成前不阻塞返回，且保留 childRegistry 登记以便退出看门狗兜底
+    expect(killTree).toHaveBeenCalledWith(9_100_002)
+    expect(pty.killed).toBe(false)
+    expect(childRegistry.size()).toBe(1)
+
+    resolveKill(true)
+    await vi.waitFor(() => {
+      expect(pty.killed).toBe(true)
+      expect(childRegistry.size()).toBe(0)
+    })
+  })
+
+  it('closeAll 异步并行收尾全部终端，不阻塞事件循环', async () => {
+    const p1 = ptyWithPid(9_100_003)
+    const p2 = ptyWithPid(9_100_004)
+    let index = 0
+    const killTree = vi.fn(async () => true)
+    manager = new TerminalManager({
+      spawn: () => (index++ === 0 ? p1 : p2),
+      shell: 'bash',
+      killProcessTreeAsync: killTree,
+    })
+    manager.create(tmpDir, 80, 24)
+    manager.create(tmpDir, 80, 24)
+
+    await manager.closeAll()
+    expect(killTree).toHaveBeenCalledTimes(2)
+    expect(p1.killed).toBe(true)
+    expect(p2.killed).toBe(true)
     expect(childRegistry.size()).toBe(0)
+  })
+
+  it('并发 flushAsync 使用引用计数保护，onExit 不在异步写进行中并发同步写', async () => {
+    const logPath = path.join(tmpDir, '.pi-workbench', 'terminal-race.log')
+    makeManager({ logPathFor: () => logPath })
+    const id = manager.create(tmpDir, 80, 24).id as string
+
+    ptys[0].emitData('chunk-1\n')
+    // 触发第一次异步刷盘
+    ;(manager as unknown as { flushAsync: (e: unknown) => void }).flushAsync(
+      (manager as unknown as { terminals: Map<string, unknown> }).terminals.get(id)
+    )
+    ptys[0].emitData('chunk-2\n')
+    // 触发第二次并发 flushAsync + 紧接着 onExit
+    manager.flushNow(id)
+    ptys[0].emitData('chunk-3\n')
+    ptys[0].emitExit(0)
+
+    await vi.waitFor(async () => {
+      const content = await fs.readFile(logPath, 'utf-8')
+      expect(content).toContain('chunk-1\n')
+      expect(content).toContain('chunk-2\n')
+      expect(content).toContain('chunk-3\n')
+    })
   })
 
   it('没有 pid 的 pty（测试替身 / 未提供）不登记', () => {

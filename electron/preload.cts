@@ -46,6 +46,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 文件系统操作
   openDirectoryDialog: () => ipcRenderer.invoke('dialog:openDirectory'),
   readFile: (path: string) => ipcRenderer.invoke('fs:readFile', path),
+  createFile: (filePath: string): Promise<{ success: boolean; code?: string; error?: string }> =>
+    ipcRenderer.invoke('fs:createFile', filePath),
   writeFile: (path: string, content: string) => ipcRenderer.invoke('fs:writeFile', path, content),
   openPathExternally: (path: string) => ipcRenderer.invoke('fs:openExternally', path),
   // 外部链接：自定义协议下 target=_blank 会被主窗口拒绝，统一交给主进程转给系统浏览器
@@ -53,7 +55,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 剪贴板：pw-app:// 不是浏览器认可的可信来源，navigator.clipboard.writeText 会被拒绝。
   // sandbox preload 里没有 clipboard 模块（Electron 只暴露 ipcRenderer / contextBridge 等），
   // 因此转给主进程写系统剪贴板
-  writeClipboardText: (text: string): Promise<boolean> =>
+  writeClipboardText: (text: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('clipboard:writeText', String(text ?? '')),
   listDirectory: (path: string) => ipcRenderer.invoke('fs:listDirectory', path),
   exists: (path: string) => ipcRenderer.invoke('fs:exists', path),

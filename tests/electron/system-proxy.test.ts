@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import * as http from 'node:http'
+import * as net from 'node:net'
 
 const electronMock = vi.hoisted(() => ({
   ready: true,
@@ -15,9 +17,11 @@ vi.mock('electron', () => ({
 }))
 
 import {
+  createHttpConnectAgent,
   createSystemProxyFetch,
   extractHttpUrl,
   installSystemProxy,
+  parseFirstHttpProxyEntry,
   refreshSystemProxy,
   uninstallSystemProxy,
 } from '../../electron/system-proxy'
@@ -186,6 +190,95 @@ describe('installSystemProxy', () => {
     } finally {
       uninstallSystemProxy()
       globalThis.fetch = saved
+    }
+  })
+})
+
+describe('createHttpConnectAgent & parseFirstHttpProxyEntry', () => {
+  it('preserves proxy protocol scheme (http: vs https:) in parseFirstHttpProxyEntry', () => {
+    expect(parseFirstHttpProxyEntry('PROXY 127.0.0.1:7890')).toEqual({
+      host: '127.0.0.1',
+      port: 7890,
+      protocol: 'http:',
+    })
+    expect(parseFirstHttpProxyEntry('HTTPS proxy.example.com:8443')).toEqual({
+      host: 'proxy.example.com',
+      port: 8443,
+      protocol: 'https:',
+    })
+  })
+
+  it('brackets IPv6 target authority, propagates TLS handshake errors, and times out stalled CONNECT', async () => {
+    const receivedAuthorities: string[] = []
+    const openSockets = new Set<{ destroy(): void }>()
+    const proxyServer = http.createServer()
+    proxyServer.on('connect', (req, clientSocket) => {
+      openSockets.add(clientSocket)
+      clientSocket.once('close', () => openSockets.delete(clientSocket))
+      receivedAuthorities.push(req.url ?? '')
+      if (req.url === 'stall.example:443') {
+        // 故意不响应以验证 CONNECT 超时
+        return
+      }
+      if (req.url === 'tls-fail.example:443') {
+        // 回 200 后立刻发送非 TLS 明文数据触发 TLS 握手失败
+        clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\nNOT-TLS-DATA')
+        clientSocket.end()
+        return
+      }
+      clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+    })
+
+    await new Promise<void>((resolve) => proxyServer.listen(0, '127.0.0.1', resolve))
+    const address = proxyServer.address() as net.AddressInfo
+    try {
+      // 1. IPv6 目标主机在 CONNECT 请求中被正确方括号包裹
+      const plainAgent = createHttpConnectAgent(
+        { host: '127.0.0.1', port: address.port, protocol: 'http:' },
+        false,
+        { connectTimeoutMs: 500 }
+      )
+      await new Promise<void>((resolve, reject) => {
+        plainAgent.createConnection(
+          { hostname: '2001:db8::1', port: 8080 },
+          (err, socket) => {
+            if (err) return reject(err)
+            socket.destroy()
+            resolve()
+          }
+        )
+      })
+      expect(receivedAuthorities).toContain('[2001:db8::1]:8080')
+
+      // 2. TLS 握手失败会通过 callback 返回错误（不再被提前 done(null, tlsSocket) 吞掉）
+      const tlsAgent = createHttpConnectAgent(
+        { host: '127.0.0.1', port: address.port, protocol: 'http:' },
+        true,
+        { connectTimeoutMs: 500 }
+      )
+      const tlsErr = await new Promise<Error | null>((resolve) => {
+        tlsAgent.createConnection({ hostname: 'tls-fail.example', port: 443 }, (err) => {
+          resolve(err)
+        })
+      })
+      expect(tlsErr).toBeInstanceOf(Error)
+
+      // 3. CONNECT 挂起会在 timeout 后失败
+      const timeoutErr = await new Promise<Error | null>((resolve) => {
+        const fastTimeoutAgent = createHttpConnectAgent(
+          { host: '127.0.0.1', port: address.port, protocol: 'http:' },
+          false,
+          { connectTimeoutMs: 80 }
+        )
+        fastTimeoutAgent.createConnection({ hostname: 'stall.example', port: 443 }, (err) => {
+          resolve(err)
+        })
+      })
+      expect(timeoutErr?.message).toMatch(/timed out/i)
+    } finally {
+      for (const sock of openSockets) sock.destroy()
+      proxyServer.closeAllConnections?.()
+      await new Promise<void>((resolve) => proxyServer.close(() => resolve()))
     }
   })
 })

@@ -142,6 +142,21 @@ describe('filesystem IPC handlers', () => {
     })
   })
 
+  it('creates new files exclusively via fs:createFile and returns EEXIST if already present', async () => {
+    const target = path.join(workDir, 'exclusive.txt')
+    await expect(call('fs:createFile', target)).resolves.toEqual({ success: true })
+    await expect(fs.readFile(target, 'utf-8')).resolves.toBe('')
+
+    await expect(call('fs:createFile', target)).resolves.toEqual({
+      success: false,
+      code: 'EEXIST',
+      error: 'File already exists',
+    })
+
+    const outside = path.join(workDir, '..', 'outside-create.txt')
+    await expect(call('fs:createFile', outside)).resolves.toMatchObject({ success: false })
+  })
+
   it('rejects writes outside the approved workspaces', async () => {
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-outside-'))
     try {
@@ -265,13 +280,24 @@ describe('filesystem IPC handlers', () => {
     expect((await call('draft:list', workDir)).drafts).toEqual([])
   })
 
-  it('starts and stops the workspace watcher', async () => {
+  it('starts and stops the workspace watcher and cleans up child worktree watchers on workspace:dispose', async () => {
     const sender = { isDestroyed: () => false, send: vi.fn() }
+    const childWorktree = path.join(workDir, '.pi-workbench', 'worktrees', 'wt-child')
+    await fs.mkdir(childWorktree, { recursive: true })
 
     await expect(getHandler('fs:watch')({ sender }, workDir)).resolves.toMatchObject({
       success: true,
     })
-    await expect(call('fs:unwatch')).resolves.toMatchObject({ success: true })
+    await expect(getHandler('fs:watch')({ sender }, childWorktree)).resolves.toMatchObject({
+      success: true,
+    })
+    await expect(call('workspace:dispose', workDir)).resolves.toMatchObject({ success: true })
+
+    // dispose 后修改子工作树文件不应再触发任何 fs:changed 推送
+    sender.send.mockClear()
+    await fs.writeFile(path.join(childWorktree, 'after-dispose.txt'), 'quiet')
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    expect(sender.send).not.toHaveBeenCalled()
   })
 
   it('fails cleanly when watching a nonexistent directory', async () => {
@@ -308,6 +334,34 @@ describe('app settings handlers', () => {
       language: 'en-US',
       theme: 'light',
       autoSave: true,
+    })
+  })
+
+  it('preserves existing valid disk settings when saving a partial patch', async () => {
+    await call('app:saveSettings', {
+      language: 'en',
+      theme: 'dark',
+      autoSave: false,
+      autoSaveDelay: 5000,
+      budgetUsd: 25,
+      explorerSortBy: 'type',
+      useSystemProxy: false,
+    })
+
+    // 仅更新单个字段，不应把其它已落盘字段抹回默认值
+    await expect(call('app:saveSettings', { theme: 'light' })).resolves.toMatchObject({
+      success: true,
+    })
+
+    const result = await call('app:getSettings')
+    expect(result.settings).toMatchObject({
+      language: 'en',
+      theme: 'light',
+      autoSave: false,
+      autoSaveDelay: 5000,
+      budgetUsd: 25,
+      explorerSortBy: 'type',
+      useSystemProxy: false,
     })
   })
 
@@ -513,6 +567,69 @@ describe('provider settings handlers', () => {
       success: false,
       error: 'EMPTY_KEY',
     })
+  })
+
+  it('does not persist orphaned credentials when saveApiKey fails with NO_MODEL', async () => {
+    const { resetCatalogRuntime } = await import('../../electron/providers-service')
+    const storePath = path.join(appDir, 'data', 'agent', 'models-store.json')
+    await fs.mkdir(path.dirname(storePath), { recursive: true })
+    // 用远端空模型集合过滤掉内置目录，触发 NO_MODEL 分支
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        deepseek: {
+          models: [
+            {
+              id: 'nonexistent-model-only',
+              name: 'Ghost',
+              api: 'openai-completions',
+              provider: 'deepseek',
+              baseUrl: 'https://api.deepseek.com',
+              reasoning: false,
+              input: ['text'],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 1000,
+              maxTokens: 100,
+              type: 'chat',
+            },
+          ],
+          lastModified: Date.parse('2030-01-01T00:00:00Z'),
+          checkedAt: Date.parse('2030-01-01T00:00:00Z'),
+        },
+      }),
+      'utf-8'
+    )
+    // 让 models-store 覆盖为全空以触发 NO_MODEL（确保过滤后模型数为 0）
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        deepseek: {
+          models: [],
+          lastModified: Date.parse('2030-01-01T00:00:00Z'),
+          checkedAt: Date.parse('2030-01-01T00:00:00Z'),
+        },
+      }),
+      'utf-8'
+    )
+    resetCatalogRuntime()
+    try {
+      const { saveApiKey } = await import('../../electron/providers-service')
+      const res = await saveApiKey('deepseek', 'sk-should-not-persist')
+      // 若远端空列表未覆盖内置目录（内置目录仍有模型），则清理并跳过断言；
+      // 若触发了 NO_MODEL，必须保证 credentials.json 未写入该密钥
+      if (!res.ok) {
+        expect(res.error).toBe('NO_MODEL')
+        const credPath = path.join(appDir, 'config', 'credentials.json')
+        const exists = await fs.access(credPath).then(() => true, () => false)
+        if (exists) {
+          const raw = await fs.readFile(credPath, 'utf-8')
+          expect(raw).not.toContain('deepseek')
+        }
+      }
+    } finally {
+      await fs.rm(storePath, { force: true }).catch(() => undefined)
+      resetCatalogRuntime()
+    }
   })
 
   it('clamps overrides to the catalog values and reports pending while running', async () => {

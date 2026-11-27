@@ -12,7 +12,7 @@
  * （"这一页渲染失败"），不会让整轮对话失败。
  */
 
-import { BrowserWindow } from 'electron'
+import type { BrowserWindow } from 'electron'
 import * as fs from 'fs/promises'
 import { randomUUID } from 'crypto'
 import type { DocumentImage, RenderPagesRequest } from './extract.js'
@@ -54,15 +54,10 @@ export function configureRenderBridge(options: { getMainWindow: () => BrowserWin
   mainWindowGetter = options.getMainWindow
 }
 
-/** 必须优先使用主窗口（挂载了 preload 与 documents:render-request 监听）；仅在未注入时回退 */
+/** 仅使用挂载了 preload 与 documents:render-request 监听的主窗口；绝不回退到无 preload 的辅助窗口 */
 function pickTargetWindow(): BrowserWindow | null {
   const main = mainWindowGetter?.() ?? null
   if (main && !main.isDestroyed() && !main.webContents.isDestroyed()) return main
-  const focused = BrowserWindow.getFocusedWindow()
-  if (focused && !focused.isDestroyed() && !focused.webContents.isDestroyed()) return focused
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed() && !win.webContents.isDestroyed()) return win
-  }
   return null
 }
 
@@ -93,6 +88,7 @@ async function requestRenders(payload: RenderRequestPayload): Promise<DocumentIm
       pending.delete(payload.id)
       reject(new Error('渲染超时'))
     }, RENDER_TIMEOUT_MS)
+    timer.unref?.()
     pending.set(payload.id, { resolve, reject, timer })
     try {
       target.webContents.send('documents:render-request', payload)

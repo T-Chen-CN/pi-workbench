@@ -87,6 +87,28 @@ describe('RepoWatcher', () => {
     }
   })
 
+  it('reports refs when a loose ref or tag is created under .git/refs/**', async () => {
+    const repo = await getRepoInfo(workspace)
+    expect(repo).not.toBeNull()
+    const scopes: RepoChangeScope[] = []
+    const watcher = new RepoWatcher({
+      gitDir: repo!.gitDir,
+      commonDir: repo!.commonDir,
+      debounceMs: 30,
+      onScopes: (next) => scopes.push(...next),
+    })
+    watcher.start()
+    try {
+      // git tag 只写 .git/refs/tags/v1.0，不触碰 HEAD 或 packed-refs
+      git(['tag', 'v1.0'])
+
+      await waitFor(() => scopes.includes('refs'))
+      expect(scopes).toContain('refs')
+    } finally {
+      watcher.dispose()
+    }
+  })
+
   it('stops reporting after dispose', async () => {
     const repo = await getRepoInfo(workspace)
     const scopes: RepoChangeScope[] = []

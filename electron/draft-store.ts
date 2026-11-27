@@ -21,6 +21,11 @@ const MAX_DRAFT_CHARS = 2_000_000
 const MAX_DRAFTS_PER_WORKSPACE = 100
 
 export class DraftStore {
+  /** 同文件异步写/删串行队列，防止在途 save() 在 remove() 之后复活已删草稿 */
+  private readonly queues = new Map<string, Promise<void>>()
+  private readonly generations = new Map<string, number>()
+  private readonly workspaceClearGenerations = new Map<string, number>()
+
   constructor(private readonly rootDir: string) {
     try {
       fs.mkdirSync(rootDir, { recursive: true })
@@ -38,6 +43,33 @@ export class DraftStore {
     return path.join(this.rootDir, `${key}.json`)
   }
 
+  private keyFor(file: string): string {
+    return process.platform === 'win32' ? file.toLowerCase() : file
+  }
+
+  private bumpGeneration(key: string): number {
+    const next = (this.generations.get(key) ?? 0) + 1
+    this.generations.set(key, next)
+    return next
+  }
+
+  private bumpWorkspaceClearGeneration(workspace: string): number {
+    const next = (this.workspaceClearGenerations.get(workspace) ?? 0) + 1
+    this.workspaceClearGenerations.set(workspace, next)
+    return next
+  }
+
+  private enqueue(key: string, task: () => Promise<void>): Promise<void> {
+    const prev = this.queues.get(key) ?? Promise.resolve()
+    const run = prev.then(task, task)
+    const tail = run.catch(() => undefined)
+    this.queues.set(key, tail)
+    void tail.finally(() => {
+      if (this.queues.get(key) === tail) this.queues.delete(key)
+    })
+    return run
+  }
+
   /**
    * 写一份草稿（异步原子写）。
    *
@@ -52,32 +84,66 @@ export class DraftStore {
       console.warn(
         `[Drafts] Skipping draft for ${filePath}: content exceeds ${MAX_DRAFT_CHARS} characters`
       )
-      this.remove(workspace, filePath)
+      await this.removeAsync(workspace, filePath)
       return
     }
+    const file = this.fileFor(workspace, filePath)
+    const key = this.keyFor(file)
+    const gen = this.bumpGeneration(key)
+    const wsGen = this.workspaceClearGenerations.get(workspace) ?? 0
     const record: DraftRecord = {
       workspace,
       path: filePath,
       content,
       updatedAt: Date.now(),
     }
-    await writeJsonAtomicAsync(this.fileFor(workspace, filePath), record, { backup: false })
+    const isStale = () =>
+      this.generations.get(key) !== gen ||
+      (this.workspaceClearGenerations.get(workspace) ?? 0) !== wsGen
+
+    await this.enqueue(key, async () => {
+      if (isStale()) return
+      await writeJsonAtomicAsync(file, record, { backup: false, fsync: false })
+      // 同步 remove()/clear() 若在写盘 await 期间发生，必须立刻回收刚落盘的文件防止复活
+      if (isStale()) {
+        await fsp.rm(file, { force: true }).catch(() => undefined)
+      }
+    })
   }
 
   remove(workspace: string, filePath: string): void {
+    const file = this.fileFor(workspace, filePath)
+    const key = this.keyFor(file)
+    const gen = this.bumpGeneration(key)
     try {
-      fs.rmSync(this.fileFor(workspace, filePath), { force: true })
+      fs.rmSync(file, { force: true })
     } catch {
       // ignore
+    }
+    if (this.queues.has(key)) {
+      void this.enqueue(key, async () => {
+        if (this.generations.get(key) !== gen) return
+        try {
+          await fsp.rm(file, { force: true })
+        } catch {
+          // ignore
+        }
+      })
     }
   }
 
   async removeAsync(workspace: string, filePath: string): Promise<void> {
-    try {
-      await fsp.rm(this.fileFor(workspace, filePath), { force: true })
-    } catch {
-      // ignore
-    }
+    const file = this.fileFor(workspace, filePath)
+    const key = this.keyFor(file)
+    const gen = this.bumpGeneration(key)
+    await this.enqueue(key, async () => {
+      if (this.generations.get(key) !== gen) return
+      try {
+        await fsp.rm(file, { force: true })
+      } catch {
+        // ignore
+      }
+    })
   }
 
   list(workspace: string): DraftRecord[] {
@@ -150,12 +216,14 @@ export class DraftStore {
   }
 
   clear(workspace: string): void {
+    this.bumpWorkspaceClearGeneration(workspace)
     for (const draft of this.allForWorkspace(workspace)) {
       this.remove(workspace, draft.path)
     }
   }
 
   async clearAsync(workspace: string): Promise<void> {
+    this.bumpWorkspaceClearGeneration(workspace)
     const drafts = await this.allForWorkspaceAsync(workspace)
     await Promise.all(drafts.map((draft) => this.removeAsync(workspace, draft.path)))
   }

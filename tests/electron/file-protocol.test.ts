@@ -156,7 +156,7 @@ describe('serveFileRequest', () => {
     expect(await response.text()).toBe('2345')
   })
 
-  it('answers HEAD without a body', async () => {
+  it('answers HEAD without a body and sets subrange Content-Length on 206', async () => {
     const target = path.join(workDir, 'a.png')
     fs.writeFileSync(target, 'png-bytes')
 
@@ -165,6 +165,12 @@ describe('serveFileRequest', () => {
     expect(response.headers.get('Content-Type')).toBe('image/png')
     expect(response.headers.get('Content-Length')).toBe('9')
     expect(await response.text()).toBe('')
+
+    const partial = await serveFileRequest(toUrl(target), 'HEAD', 'bytes=2-5')
+    expect(partial.status).toBe(206)
+    expect(partial.headers.get('Content-Range')).toBe('bytes 2-5/9')
+    expect(partial.headers.get('Content-Length')).toBe('4')
+    expect(await partial.text()).toBe('')
   })
 
   it('returns 416 for an unsatisfiable range', async () => {
@@ -311,6 +317,13 @@ describe('createPreviewNetworkGuard', () => {
         url: 'https://evil.example/leak',
         frame: null,
         initiatorOrigin: 'pw-file://local',
+      })
+    ).toEqual({ cancel: true })
+    expect(
+      await callGuard(guard, {
+        url: 'https://evil.example/sandbox-leak',
+        frame: null,
+        initiatorOrigin: 'null',
       })
     ).toEqual({ cancel: true })
     expect(prompt).not.toHaveBeenCalled()

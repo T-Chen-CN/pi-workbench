@@ -73,4 +73,21 @@ describe('DraftStore', () => {
     store.clear('/ws/a')
     expect(store.list('/ws/a')).toEqual([])
   })
+
+  it('does not resurrect a draft deleted while save() is in flight', async () => {
+    const savePromise = store.save('/ws/a', '/ws/a/race.ts', 'stale content')
+    const removePromise = store.removeAsync('/ws/a', '/ws/a/race.ts')
+    await Promise.all([savePromise, removePromise])
+    expect(await store.listAsync('/ws/a')).toEqual([])
+
+    const save2 = store.save('/ws/a', '/ws/a/race2.ts', 'stale 2')
+    store.remove('/ws/a', '/ws/a/race2.ts')
+    await save2
+    expect(await store.listAsync('/ws/a')).toEqual([])
+
+    const save3 = store.save('/ws/a', '/ws/a/race3.ts', 'stale 3')
+    store.clear('/ws/a')
+    await save3
+    expect(await store.listAsync('/ws/a')).toEqual([])
+  })
 })

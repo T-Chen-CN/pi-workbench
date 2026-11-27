@@ -27,6 +27,8 @@ export interface WorkerResponseMessage {
 
 export interface WorkerCallbackMessage {
   type: 'cb'
+  /** 发起回调的请求 ID：严格路由回对应挂起调用，防止并发请求串线 */
+  requestId: number
   callId: number
   name: string
   payload: unknown
@@ -112,14 +114,11 @@ export class WorkerClient {
   }
 
   private async handleCallback(worker: Worker, msg: WorkerCallbackMessage): Promise<void> {
-    // 路由给当前挂起调用中注册了 onCallback 的那条（如扫描 PDF 渲染）
-    let handler: WorkerCallbackHandler | undefined
-    for (const entry of this.pending.values()) {
-      if (entry.onCallback) {
-        handler = entry.onCallback
-        break
-      }
-    }
+    // 严格按 requestId 路由回发起回调的原始请求，避免并发调用时串线
+    const handler =
+      typeof msg.requestId === 'number'
+        ? this.pending.get(msg.requestId)?.onCallback
+        : undefined
     const reply = (payload: WorkerCallbackReplyMessage) => {
       try {
         worker.postMessage(payload)

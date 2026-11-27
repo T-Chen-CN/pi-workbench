@@ -77,4 +77,19 @@ describe('workspace store', () => {
     expect(store.listRecent()).toEqual(['F:/other', 'F:/new', 'F:/mid', 'F:/old'])
     store.close()
   })
+
+  it('deduplicates Windows paths differing only by casing or slashes', () => {
+    const store = createWorkspaceStore(path.join(tmpRoot, 'win.db'), 'win32')
+    store.recordOpen('C:\\Repo', 1000)
+    store.recordOpen('c:\\repo', 2000)
+    store.recordOpen('C:/Repo/', 3000)
+
+    const records = store.list()
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ path: 'C:\\Repo', openedAt: 3000, openCount: 3 })
+
+    store.remove('c:/repo')
+    expect(store.list()).toEqual([])
+    store.close()
+  })
 })

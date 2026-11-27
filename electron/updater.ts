@@ -9,7 +9,8 @@
  * 因为数据目录与程序安装目录分离，Windows NSIS 卸载器不会误杀从数据目录启动的安装器，
  * 全机严格维持「程序目录 + 唯一数据目录」两处位置。
  */
-import { app, net, shell } from 'electron'
+import { app, shell } from 'electron'
+import { execFileSync } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 // electron-updater 是 CommonJS 模块：主进程以 ESM 运行，命名导入在 Node 的
@@ -134,12 +135,17 @@ export interface UpdateControllerOptions {
   publishTarget?: PublishTarget
   fetchRelease?: () => Promise<GithubRelease>
   createUpdater?: () => UpdaterLike
+  /** 安装前确认钩子（Decision 4.A）：返回 false 时中止安装，绝不派生 NSIS 安装器 */
+  confirmBeforeInstall?: () => boolean
+  /** Windows 下将含空格的安装目录解析为 8.3 短路径（测试可注入） */
+  resolveShortPath?: (dir: string) => string | null
 }
 
 export const UPDATE_ERROR = {
   notPackaged: 'ERR_UPDATE_NOT_PACKAGED',
   manualDownload: 'ERR_UPDATE_MANUAL',
   notDownloaded: 'ERR_UPDATE_NOT_DOWNLOADED',
+  cancelled: 'ERR_UPDATE_CANCELLED',
   noRelease: 'ERR_UPDATE_NO_RELEASE',
   network: 'ERR_UPDATE_NETWORK',
   rateLimit: 'ERR_UPDATE_RATE_LIMIT',
@@ -257,22 +263,84 @@ export async function cleanupCompletedUpdateCache(
   return !pending
 }
 
+interface ParsedSemver {
+  major: number
+  minor: number
+  patch: number
+  prerelease: string[]
+}
+
+function parseSemver(value: string): ParsedSemver | null {
+  const match =
+    /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(value.trim())
+  if (!match) return null
+  const prerelease = match[4] ? match[4].split('.').filter((part) => part.length > 0) : []
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease,
+  }
+}
+
 /** 把 `1.2.3` / `v1.2.3` / `1.2.3-beta.1` 解析成数字三元组 */
 export function parseVersion(value: string): [number, number, number] | null {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(value.trim())
-  if (!match) return null
-  return [Number(match[1]), Number(match[2]), Number(match[3])]
+  const parsed = parseSemver(value)
+  if (!parsed) return null
+  return [parsed.major, parsed.minor, parsed.patch]
+}
+
+/** 按 SemVer 2.0 规则比较版本号（含 prerelease：`0.11.2-rc.1 < 0.11.2`） */
+export function compareSemver(left: string, right: string): number | null {
+  const a = parseSemver(left)
+  const b = parseSemver(right)
+  if (!a || !b) return null
+  if (a.major !== b.major) return a.major > b.major ? 1 : -1
+  if (a.minor !== b.minor) return a.minor > b.minor ? 1 : -1
+  if (a.patch !== b.patch) return a.patch > b.patch ? 1 : -1
+
+  const aPre = a.prerelease
+  const bPre = b.prerelease
+  if (aPre.length === 0 && bPre.length === 0) return 0
+  if (aPre.length === 0) return 1
+  if (bPre.length === 0) return -1
+
+  const len = Math.min(aPre.length, bPre.length)
+  for (let i = 0; i < len; i += 1) {
+    const idA = aPre[i]
+    const idB = bPre[i]
+    if (idA === idB) continue
+    const numA = /^\d+$/.test(idA)
+    const numB = /^\d+$/.test(idB)
+    if (numA && numB) return Number(idA) > Number(idB) ? 1 : -1
+    if (numA !== numB) return numA ? -1 : 1
+    return idA > idB ? 1 : -1
+  }
+  if (aPre.length !== bPre.length) return aPre.length > bPre.length ? 1 : -1
+  return 0
 }
 
 export function isNewerVersion(candidate: string, current: string): boolean {
-  const next = parseVersion(candidate)
-  const now = parseVersion(current)
-  if (!next || !now) return false
-  for (let index = 0; index < 3; index += 1) {
-    if (next[index] > now[index]) return true
-    if (next[index] < now[index]) return false
+  const cmp = compareSemver(candidate, current)
+  return cmp !== null && cmp > 0
+}
+
+/** 在 Windows 上尝试将含空格目录解析为 8.3 短路径，供 NSIS `/D=` 无引号传参使用 */
+function defaultResolveWindowsShortPath(dir: string): string | null {
+  if (process.platform !== 'win32') return null
+  if (/["&|<>^%!;\r\n]/.test(dir)) return null
+  try {
+    if (!fs.existsSync(dir)) return null
+    const raw = execFileSync(
+      process.env.ComSpec || 'cmd.exe',
+      ['/d', '/c', `for %I in ("${dir}") do @echo %~sI`],
+      { windowsHide: true, encoding: 'utf8', timeout: 2000 }
+    ).trim()
+    if (!raw || /\s/.test(raw) || !fs.existsSync(raw)) return null
+    return raw.replace(/[\\/]+$/, '')
+  } catch {
+    return null
   }
-  return false
 }
 
 /** GitHub 的 release notes 可能是字符串或按版本分组的数组，统一成纯文本 */
@@ -371,6 +439,8 @@ export class UpdateController {
   private readonly publishTarget: PublishTarget
   private readonly fetchRelease: () => Promise<GithubRelease>
   private readonly createUpdater: (() => UpdaterLike) | null
+  private readonly confirmBeforeInstall: (() => boolean) | null
+  private readonly resolveShortPath: (dir: string) => string | null
   private readonly cacheBase: string
 
   private state: UpdateState
@@ -391,6 +461,8 @@ export class UpdateController {
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url))
     this.publishTarget = options.publishTarget ?? readPublishTarget(this.resourcesPath)
     this.createUpdater = options.createUpdater ?? null
+    this.confirmBeforeInstall = options.confirmBeforeInstall ?? null
+    this.resolveShortPath = options.resolveShortPath ?? defaultResolveWindowsShortPath
     this.cacheBase = resolveUpdaterCacheBase({
       appDir: this.appDir,
       platform: this.platform,
@@ -473,6 +545,10 @@ export class UpdateController {
     }
     if (this.state.status !== 'downloaded') {
       return { success: false, error: UPDATE_ERROR.notDownloaded }
+    }
+    if (this.confirmBeforeInstall && !this.confirmBeforeInstall()) {
+      this.logger.info('[Updater] Install cancelled by pre-install guard')
+      return { success: false, error: UPDATE_ERROR.cancelled }
     }
     try {
       this.logger.info('[Updater] Installing update', this.state.version)
@@ -584,7 +660,8 @@ export class UpdateController {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 10_000)
     try {
-      const response = await net.fetch(url, {
+      // 走 globalThis.fetch（受 system-proxy 包装器控制），确保 useSystemProxy=false 时不被绕过
+      const response = await globalThis.fetch(url, {
         headers: {
           Accept: 'application/vnd.github+json',
           'User-Agent': 'pi-workbench-updater',
@@ -626,13 +703,24 @@ export class UpdateController {
     if (this.platform === 'win32') {
       // 固定安装器目标为当前程序安装目录（而非用户数据目录）：
       // 不依赖注册表 InstallLocation，避免卸载旧目录却装到默认目录的分叉。
-      // NSIS /D= 不允许尾随反斜杠；若路径含空格，uv_spawn 加引号可能导致 NSIS 忽略 /D=，记录警告。
+      // NSIS /D= 不允许尾随反斜杠且不接受带引号的含空格路径：含空格时优先转为 8.3 短路径，
+      // 无法消除空格时跳过 /D=，退回 NSIS 读取注册表 InstallLocation，避免传出被静默忽略的引号参数。
       const pinnedDir = this.installDir.replace(/[\\/]+$/, '')
       if (/\s/.test(pinnedDir)) {
-        this.logger.warn('[Updater] Install directory contains spaces; NSIS /D= may ignore quoted paths:', pinnedDir)
+        const shortPath = this.resolveShortPath(pinnedDir)
+        if (shortPath && !/\s/.test(shortPath)) {
+          updater.installDirectory = shortPath
+          this.logger.info('[Updater] Install directory pinned via 8.3 short path:', shortPath)
+        } else {
+          this.logger.warn(
+            '[Updater] Skipping NSIS /D= because install directory contains spaces and has no 8.3 short path:',
+            pinnedDir
+          )
+        }
+      } else {
+        updater.installDirectory = pinnedDir
+        this.logger.info('[Updater] Install directory pinned:', pinnedDir)
       }
-      updater.installDirectory = pinnedDir
-      this.logger.info('[Updater] Install directory pinned:', pinnedDir)
     }
     this.attachEvents(updater)
     this.updater = updater
