@@ -1,7 +1,7 @@
 # 仓库地图（工作区面板）
 
 > **面向**：维护「面板」内容、改职责推断规则或缓存格式的人
-> **什么时候读**：动 `electron/repo-map.ts`、`electron/ipc/repo-map.ts`、`src/components/WorkspacePanel.tsx`、`src/store/repoMapStore.ts` 之前
+> **什么时候读**：动 `electron/repo-map.ts`、`electron/repo-map-worker.ts`、`electron/ipc/repo-map.ts`、`src/components/repo-map/WorkspacePanel.tsx`、`src/store/repoMapStore.ts` 之前
 > **什么时候要改**：角色分类、缓存字段、扫描上限、刷新触发条件变化时
 
 > 面板是编辑区的默认视图（入口是标签条最左那枚固定标签，样式见 [DESIGN_SYSTEM §6.3](../design/DESIGN_SYSTEM.md)）。
@@ -29,7 +29,7 @@ git ls-files -z ──► 路径全集（posix）
 ```
 
 - **指纹**：`size + mtimeMs`。改内容 / 改名 / 重写都会失配，只重算受影响的文件。
-- **串行**：同一工作区的扫描在主进程排队（`serializeScan`），渲染层也做了单飞，避免重复读盘。
+- **串行与 Worker 卸载**：同一工作区的扫描在主进程排队（`serializeScan`），重扫描计算通过 `electron/repo-map-worker.ts` + `electron/worker-runner.ts` 卸载到 `worker_threads`（避免阻塞 GUI 主线程），渲染层也做了单飞，避免重复读盘。
 - **只读工作区内**：仓库根可能高于工作区根（工作区是仓库子目录时），工作区之外的文件不列、不读；符号链接按 `realpath` 再校验一次。
 
 ## 3. 事实（缓存内容，与语言无关）

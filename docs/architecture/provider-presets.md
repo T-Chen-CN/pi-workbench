@@ -246,13 +246,12 @@ pi-bridge/AgentManager ──► ModelRuntime.create({
 | `pi-bridge/src/models-store.ts` | 文件型 `ModelsStore` + `snapshot()`（§3.4）；按 provider 原子写（SDK 的 `FileModelsStore` 未导出，锁要自己实现） |
 | `apps/cloud/src/agent/credentials-store.ts` | 云端适配器：注入 `encryptionKey`，文件 `data/cloud/credentials.json` |
 | `apps/cloud/src/agent/oauth-login.ts` | 云端 OAuth：同一个 `AuthInteraction` 桥接到 HTTP + 前端轮询；`select` 默认选 headless 分支；PKCE 临时表 + 登录串行化（§3.8） |
-| `src/components/ProviderAuthPanel.tsx` | 单个供应商卡片：状态 / 鉴权按钮 / 模型下拉 / 登出 |
-| `src/components/ModelCapabilityTable.tsx` | 模型能力表：名称 · 上下文 · 输出 · 思考 · 输入 · 价格 · 缓存；上下文 / 输出为下拉 |
-| `tests/credentials-store.test.ts` | 串行 / 加解密往返 / `list` 不解密 / delete / 坏文件 / 双适配器同内核 |
-| `tests/providers-config.test.ts` | 迁移矩阵、active 切换、overrides 归一化、未知 provider |
-| `tests/providers-service.test.ts` | 供应商视图合并、远端优先过滤、刷新 |
-| `tests/models-store.test.ts` | 快照读写、格式兼容、损坏回落 |
-| `tests/settings-providers.test.tsx` | 设置页交互（jsdom + mock electronAPI） |
+| `src/components/settings/ProviderAuthPanel.tsx` | 单个供应商卡片：状态 / 鉴权按钮 / 模型下拉 / 登出 |
+| `src/components/settings/ProviderSettings.tsx` | 模型能力表（集成于供应商设置页）：名称 · 上下文 · 输出 · 思考 · 输入 · 价格 · 缓存；上下文 / 输出为下拉 |
+| `tests/agent/credentials-store.test.ts` | 串行 / 加解密往返 / `list` 不解密 / delete / 坏文件 / 双适配器同内核 |
+| `tests/agent/providers-config.test.ts` | 迁移矩阵、active 切换、overrides 归一化、未知 provider |
+| `tests/agent/providers-catalog-settings.test.ts` | 供应商目录视图、远端优先过滤与设置交互 |
+| `tests/agent/models-store.test.ts` | 快照读写、格式兼容、损坏回落 |
 
 ### 5.2 修改
 
@@ -271,10 +270,10 @@ pi-bridge/AgentManager ──► ModelRuntime.create({
 | `electron/terminal-manager.ts` / `electron/worktree-deps.ts` | 敏感 env 名单去掉 `PI_WORKBENCH_API_KEY`（不再写入） |
 | `electron/main.ts` | 启动顺序：`createCredentialStore()` → 迁移 → 注册 IPC；日志脱敏断言 |
 | `electron/preload.cts` / `src/types/electron.d.ts` / `src/api/index.ts` | 新频道四步 + Web mock 改为"仅桌面端"占位 |
-| `src/components/Settings.tsx` | 「API 配置」段整体替换为「供应商」 |
-| `src/components/WelcomeScreen.tsx` / `src/hooks/useChatPanelState.ts` / `src/hooks/useChatSessions.ts` | 旧 `apiConfigGet` 调用改 `providers:list`；模型下拉数据源改动 |
+| `src/components/settings/Settings.tsx` | 「API 配置」段整体替换为「供应商」 |
+| `src/components/workspace/WelcomeScreen.tsx` / `src/hooks/useChatPanelState.ts` / `src/hooks/useChatSessions.ts` | 旧 `apiConfigGet` 调用改 `providers:list`；模型下拉数据源改动 |
 | `src/i18n/translations.ts` | 新增 / 删除文案 key（zh + en） |
-| `src/components/CloudView.tsx` | 云端供应商配置对齐（8 家 + catalog 模型 + overrides） |
+| `src/components/cloud/CloudView.tsx` | 云端供应商配置对齐（8 家 + catalog 模型 + overrides） |
 | `apps/cloud/src/agent/provider-models.ts` | 探测改为 catalog 校验（白名单 + 模型存在），`/models` 探测保留用于 Key 有效校验（D24） |
 | `apps/cloud/src/http/routes.ts` / `apps/cloud/src/main.ts` | 云端配置只接受 `{provider, model}` + `auth` 方式；`apiKey` 仍走 `apiKeyCipher`，OAuth token 走云端凭证文件（D19）；旧配置直接丢弃（D20）。`main.ts:476` 的 `agent.initialize({ apiConfig: { provider, apiUrl, apiKey, selectedModel } })` 改 `{ providerId, modelId }` 并注入云端 `CredentialStore` + `ModelsStore` |
 | `src/utils/model-capabilities.ts` | **删除**（档位常量与自动推导由 catalog 取代）；渲染层改用 `providers:models` 返回值 |
@@ -381,7 +380,7 @@ interface ModelView {
 5. **开关**：`自动更新模型目录`（D6）
 6. 安全提示：safeStorage 不可用时红字「当前系统无法加密存储密钥，密钥将以明文保存」
 
-约束：只用 `ui.tsx` / `patterns.tsx` 组件与 token；必须过 `tests/design-system.test.ts`。
+约束：只用 `src/components/ui/ui.tsx` / `patterns.tsx` 组件与 token；必须过 `tests/ui/design-system.test.ts`。
 
 ---
 
@@ -472,7 +471,7 @@ SDK 的远端目录是**叠加**在打包快照上的（`mergeModels(baseline, r
 - 验收：`npm run build:cloud` + `tests/{cloud-config-rotation,cloud-config-probe,cloud-model-list,cloud-server-e2e,cloud-snapshot-history,cloud-web-app,cloud-web-config-form}.test.ts`。
 - 关键：云端凭证与桌面端各自独立（D19）；`credentialCipher` 存的是整份凭证 JSON（api_key 与 oauth 同一路径）。
 
-### P6 · 跟随上游 + 文档收尾（S）
+### P6 · 跟随上游 + 文档收尾（S）— 已完成
 - 交付：`allowModelNetwork` 打开（限 8 家）、`providers:refresh` 接线、目录时间与 `source` 展示、两个开关。
 - 文档：本文 + `agent-runtime.md`（输出上限/档位改写为 catalog + overrides）、`paths-and-storage.md`（新增三个文件，注明应用级共享）、`PROJECT_STRUCTURE.md` §5 频道表、`README` 配置章节（五步 → 三步）、`docs/README.md`、BACKLOG 状态。
 - 验收：`npm test` + `npm run lint` + `npx electron-builder --win --dir --publish never`。

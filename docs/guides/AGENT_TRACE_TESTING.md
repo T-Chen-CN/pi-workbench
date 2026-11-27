@@ -76,11 +76,11 @@ npm run build
 
 | 文件 | 覆盖 |
 | --- | --- |
-| `tests/agent-manager.test.ts` | 文本 / 思考 / 工具事件顺序、`thinking_end` 补发与脱敏、历史 parts 聚合、工具结果与耗时 |
-| `tests/stores.test.ts` | text → tool → text → thinking 顺序、未完成工具收尾、历史 parts 恢复与旧数据降级 |
-| `tests/renderer-components.test.tsx` | 过程组默认收起、手动展开保持、工具行参数与结果预览 |
-| `tests/stream-buffer.test.ts` | 有序缓冲、相邻增量合并、工具事件不被重排 |
-| `tests/design-system.test.ts` | 新 UI 的 token / 颜色 / 字体守卫 |
+| `tests/agent/agent-manager.test.ts` | 文本 / 思考 / 工具事件顺序、`thinking_end` 补发与脱敏、历史 parts 聚合、工具结果与耗时 |
+| `tests/utils/stores.test.ts` | text → tool → text → thinking 顺序、未完成工具收尾、历史 parts 恢复与旧数据降级 |
+| `tests/ui/renderer-components.test.tsx` | 过程组默认收起、手动展开保持、工具行参数与结果预览 |
+| `tests/agent/stream-buffer.test.ts` | 有序缓冲、相邻增量合并、工具事件不被重排 |
+| `tests/ui/design-system.test.ts` | 新 UI 的 token / 颜色 / 字体守卫 |
 
 ## 4. 手动测试用例
 
@@ -271,4 +271,4 @@ npm run build
 - `tool_update` 实时输出与历史 thinking 时长（E-06 / E-07）均已交付；当前能力与待办以 [任务清单](../progress/BACKLOG.md) 为准。
 
 **维护者**: Pi Workbench Team
-**最后更新**: 2026-11-08
+**最后更新**: 2026-11-28

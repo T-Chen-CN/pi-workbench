@@ -40,7 +40,6 @@ import {
   getStatus,
   isPathInWorkspace,
   listBranches,
-  listWorktrees,
   logCommitStats,
   logCommits,
   mergeBranch,
@@ -578,17 +577,6 @@ export function registerGitIpc(context: GitIpcContext): void {
         success: true,
         status: await fetchGithubStatus(target.github, target.head, token),
       }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
-  })
-
-  // 供渲染层启动时清理无主托管工作树
-  handleIpc('git:listAllWorktrees', async (_event, workspaceDir: string) => {
-    try {
-      const root = await resolveRepoRoot(workspaceDir)
-      if (!root) return { success: true, worktrees: [] }
-      return { success: true, worktrees: await listWorktrees(root) }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

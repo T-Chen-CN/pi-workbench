@@ -90,7 +90,7 @@ This is not an IDE plugin but a standalone workbench: closing the window only pa
 - API keys are encrypted with Electron `safeStorage` as `enc:<base64>`; plaintext never reaches disk, logs or the workspace.
 - The renderer is sandboxed with no Node access; every IPC channel validates its sender; file operations are confined to trusted workspaces plus `{appDir}/cache/`.
 - No telemetry, no account, fully offline-capable; web search is optional.
-- On macOS the app bundle is read-only, so data lives in `~/Library/Application Support/pi-workbench`.
+- Standard builds use a strict two-directory layout separating the install folder from a single data directory (`%APPDATA%\pi-workbench` on Windows, `~/Library/Application Support/pi-workbench` on macOS, `~/.config/pi-workbench` on Linux); the Windows Portable `.zip` keeps data inside the extracted folder.
 
 > **Everything else** (useful, but not the selling point): multi-tab Monaco editing with 2s debounced auto-save, file tree operations with live refresh, an xterm.js + node-pty terminal, command palette and workspace plugins, Paper / Ink themes, Chinese / English UI, crash-recovered drafts, auto-update.
 
@@ -100,11 +100,12 @@ This is not an IDE plugin but a standalone workbench: closing the window only pa
 
 Grab the installer for your platform from the [latest release](https://github.com/T-Chen-CN/pi-workbench/releases/latest).
 
-| Platform | Asset                                  | Notes                                                                                |
-| -------- | -------------------------------------- | ------------------------------------------------------------------------------------ |
-| Windows  | `Pi-Workbench-Setup-<version>.exe`     | NSIS installer; upgrades replace program files and keep `config/ data/ logs/ cache/` |
-| macOS    | `Pi-Workbench-<version>-universal.dmg` | Universal binary (Apple Silicon + Intel)                                             |
-| Linux    | `Pi-Workbench-<version>.AppImage`      | `chmod +x` and run                                                                   |
+| Platform | Asset                                      | Notes                                                                                                    |
+| -------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| Windows  | `Pi-Workbench-Setup-<version>.exe`         | NSIS installer (supports differential auto-updates); data lives in `%APPDATA%\pi-workbench`              |
+| Windows  | `Pi-Workbench-Portable-<version>-win-x64.zip` | Portable build; unzip and run with data inside the extracted folder (guided manual download on update) |
+| macOS    | `Pi-Workbench-<version>-universal.dmg`     | Universal binary (Apple Silicon + Intel)                                                                 |
+| Linux    | `Pi-Workbench-<version>.AppImage`          | `chmod +x` and run                                                                                       |
 
 Builds are produced by GitHub Actions on a version tag. They are **not code-signed or notarized**, so the first launch triggers Windows SmartScreen or macOS Gatekeeper — confirm once.
 
@@ -147,7 +148,7 @@ Artifacts land in `release/`. Building, signing, auto-update and troubleshooting
 
 ```bash
 npm run type-check
-npm test           # 1,200+ Vitest cases
+npm test           # 1,800+ Vitest cases
 npm run lint
 npm run build
 ```
@@ -170,14 +171,14 @@ Open **Settings → Providers** on first run and complete three steps:
 
 | Item            | State                                                                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Current version | `0.11.1` (2026-11-26)                                                                                                                                         |
-| Releases        | 21 GitHub releases; installers and `latest*.yml` produced by CI on tags                                                                                       |
-| Phases          | Phase 0–4 done · Phase 5 (Fleet background jobs) removed 2026-10-24 · Phase 6 ongoing                                                                         |
-| Quality         | type-check + lint + 1,600+ Vitest cases + full build; CI also runs a Windows packaging smoke test                                                             |
-| Stack           | Electron 44 · React 19 · TypeScript 5.9 · Monaco 0.57 · `@earendil-works/pi-coding-agent` 1.3                                                                 |
+| Current version | `0.11.2` (2026-11-27; Phase 0–2 hardening & refactor + two-folder/portable builds ready on `main`)                                                            |
+| Releases        | Installers, Windows Portable `.zip` and `latest*.yml` produced by CI on version tags                                                                          |
+| Phases          | Local Agent workbench & Pi-kernel Cloud Agent live; security hardening, SQLite, shared cloud UI, workers, Zod validation, and domain restructuring complete   |
+| Quality         | 7-tsconfig type-check + lint (`jsx-a11y` / AST color / boundary rules) + 1,800+ Vitest cases + full `build` / `build:cloud`; CI runs Windows packaging smoke  |
+| Stack           | Electron 44 · React 19 · TypeScript 5.9 · Monaco 0.57 · Zod 4 · `@earendil-works/pi-coding-agent` 1.3                                                         |
 | Known limits    | Not signed or notarized; legacy Office formats are not parsed; no OCR for scans; Linux tray degrades to minimize; manual platform acceptance is still pending |
 
-**Next up**: wrapping up R-23 output budgeting (follow-up actions for truncated output, context-limit warnings, dedicated budgets for light tasks), manual macOS / Linux acceptance, and completing the Pi-kernel cloud agent rollout. Current state is in [STATUS](docs/progress/STATUS.md); tasks and parked items in [BACKLOG](docs/progress/BACKLOG.md).
+**Next up**: live-credential manual acceptance for the 8 provider presets, manual macOS / Linux acceptance, cloud OAuth login, and evaluating managed worktree placement. Current state is in [STATUS](docs/progress/STATUS.md); tasks and parked items in [BACKLOG](docs/progress/BACKLOG.md).
 
 ---
 
@@ -194,19 +195,21 @@ Main process (Electron 44 / Node 24)
   read / write / edit / bash operate on the workspace directly
 ```
 
-The agent never runs in a child process, a worker or an HTTP service — it is a main-process runtime. That is what makes permission enforcement, approval timeouts and worktree binding possible.
+The Pi Agent runs inside the main process (never behind a local HTTP service) so permission enforcement, approval timeouts and worktree binding remain deterministic; CPU-heavy non-agent parsing (PDF / Office extraction, repo-map scanning) is offloaded to `worker_threads` to keep the UI responsive.
 
 ---
 
 ## Project structure
 
 ```
-electron/     main process: IPC domains, agent registry, git, document extraction, terminal, updater
-src/          renderer: components, stores, hooks, api (IPC wrappers), i18n, theme
-pi-bridge/    AgentManager: sessions, tool policy and titles on top of pi-coding-agent
-tests/        Vitest suites (flat, one file per source file)
-docs/         project documentation
-examples/     plugin examples (git-tools)
+electron/           main process: IPC domains (Zod), agent registry, git, worker parsing, terminal, updater, cloud runner
+src/                renderer: components (grouped by domain), store, hooks, api (IPC wrappers), i18n, theme
+pi-bridge/          AgentManager: session projection, tool policy, titles and cloud protocol contracts on top of pi-coding-agent
+packages/cloud-ui/  shared UI between desktop and cloud web (types, WS reducer, Paper & Ink primitives and cards)
+apps/cloud/         cloud agent service (Node 24 node:sqlite + dual WS + web console)
+tests/              Vitest suites (grouped by domain: agent / cloud / electron / git / ui / utils)
+docs/               project documentation
+examples/           plugin examples (git-tools)
 ```
 
 Process model, data flow and the IPC channel table: [PROJECT_STRUCTURE](docs/architecture/PROJECT_STRUCTURE.md).
@@ -216,7 +219,7 @@ Process model, data flow and the IPC channel table: [PROJECT_STRUCTURE](docs/arc
 ## Contributing
 
 - **Report a bug**: include reproduction steps and the relevant slice of `logs/main.log` / `logs/agent.log` (keys never reach the logs).
-- **Send a PR**: run `npm run type-check` / `npm test` / `npm run lint` / `npm run build` first; UI changes must also pass `tests/design-system.test.ts`.
+- **Send a PR**: run `npm run type-check` / `npm test` / `npm run lint` / `npm run build` first; UI changes must also pass `tests/ui/design-system.test.ts`.
 - **Translate**: UI strings live in `src/i18n/`; keep Chinese and English in sync.
 - **Write a plugin**: start from [examples/plugins/git-tools](examples/plugins/git-tools); commands and hooks are documented in [PROJECT_STRUCTURE](docs/architecture/PROJECT_STRUCTURE.md).
 

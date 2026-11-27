@@ -4,7 +4,7 @@
 > **什么时候读**：新增模块 / 频道、接手陌生代码、写设计文档之前
 > **什么时候要改**：目录、频道、进程模型或关键数据流变化时
 
-**最后更新**: 2026-11-27
+**最后更新**: 2026-11-28
 
 ---
 
@@ -30,7 +30,7 @@ pi-workbench/
 ├── electron/                     # Electron 主进程
 │   ├── main.ts                   # 启动、窗口与生命周期装配
 │   ├── preload.cts               # contextBridge（编译为 CommonJS preload.cjs）
-│   ├── app-paths.ts              # 便携式应用目录
+│   ├── app-paths.ts              # 严格两目录模型（安装目录 + <appData>/pi-workbench，便携版退回单目录）
 │   ├── workspace-trust.ts        # 工作区信任与路径包含（lstat/readlink/realpath 防悬挂软链）
 │   ├── path-safety.ts            # 纯 Node 路径安全工具（Worker 可复用，不引 electron）
 │   ├── worker-runner.ts          # 轻量 worker_threads 执行器（文档解析 / 仓库地图卸载）
@@ -58,7 +58,6 @@ pi-workbench/
 │   ├── watch-batcher.ts          # 文件监听事件批量合并
 │   ├── watch-filter.ts           # 监听忽略规则
 │   ├── atomic-json.ts            # 原子写 + .bak 恢复
-│   ├── text-sanitize.ts          # 剥终端颜色码（派活轨迹 / 审计预览，与 pi-bridge 同语义）
 │   ├── logger.ts                 # 主进程文件日志
 │   ├── updater.ts                # 自动更新
 │   ├── app-protocol.ts           # 自定义 scheme（pw-file:// 等）注册
@@ -180,7 +179,6 @@ pi-workbench/
 │   │   ├── tool-policy.ts        # 模式对应的工具集
 │   │   ├── approval-extension.ts # 审批请求扩展
 │   │   ├── plan.ts               # 结构化计划
-│   │   ├── dispatch-extension.ts # 派活反问工具 ask_cloud_operator（当前无调用方；云端用 electron/cloud 的 ask_cloud）
 │   │   ├── cloud-protocol.ts     # 云端协议契约（帧、状态机常量、事件载荷；桌面端/云端/Web 共用）
 │   │   ├── plan-extension.ts     # 计划工具扩展
 │   │   ├── worktree-extension.ts # 工作树切换工具扩展
@@ -283,6 +281,7 @@ ChatPanel.handleSubmit
 | `fs:watch` / `fs:unwatch` | invoke | 工作区递归监听 |
 | `fs:changed` | main → renderer | 文件变化事件（300ms 批量） |
 | `app:getSettings` / `saveSettings` | invoke | 应用设置 |
+| `app:openDataDir` | invoke | 在系统文件管理器中打开数据目录 |
 | `app:getRecentWorkspaces` / `addRecentWorkspace` | invoke | 最近工作区（只返回仍然存在的目录） |
 | `app:hasActiveWork` | invoke | 更新安装前的忙碌检查 |
 | `workspace:init` / `dispose` / `searchFiles` / `editorTabs:*` | invoke | 工作区生命周期与标签 |
@@ -301,9 +300,9 @@ ChatPanel.handleSubmit
 | `log:renderer` | invoke | 渲染进程日志 |
 | `update:check` / `download` / `install` / `getState` / `openDownload` | invoke | 自动更新 |
 | `update:status` | main → renderer | 更新进度事件 |
-| `window:minimize` / `toggleMaximize` / `close` / `isMaximized` | invoke | 自绘窗口按钮 |
+| `window:minimize` / `toggleMaximize` / `close` / `isMaximized` | invoke | 窗口控制（原生 `titleBarOverlay` 不可用时的回退） |
 | `window:maximized-changed` | main → renderer | 最大化状态变化 |
-| `git:*`（22 invoke + 2 推送） | invoke / main → renderer | 工作树、只读历史、分支 / 提交、工作树依赖安装；见 [git-and-worktrees §3](../agent/git-and-worktrees.md) |
+| `git:*`（21 invoke + 2 推送） | invoke / main → renderer | 工作树、只读历史、分支 / 提交、工作树依赖安装；见 [git-and-worktrees §3](../agent/git-and-worktrees.md) |
 | `github:*`（7 invoke + 1 推送） | invoke / main → renderer | GitHub OAuth（设备码 / 回调）、登录状态、账号配置 |
 | `aux:*`（4 invoke + 1 推送） | invoke / main → renderer | 可停见面板的辅助窗口（拖动起点、拆出位置、窗口命令、状态、关闭事件）；handler 注册在 `electron/aux-window.ts` |
 | `shell:openExternal` | invoke | 外部链接（https / http / mailto）交系统浏览器；白名单在 `electron/external-links.ts` |

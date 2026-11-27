@@ -49,10 +49,10 @@
   一次性 `onTrace` 收不到它的轨迹。
 - 压缩前自动记忆抽取与动态注入（`apps/cloud/src/memory/`，C-03a / F-38 ~ F-41 / A-25）：通过 SDK 原生扩展同时注册 `session_before_compact`（压缩前抽取结构化记忆）与 `before_agent_start`（每轮在 6000 字符预算内注入 `SOUL.md` + `AGENTS.md` + 置顶/高相关记忆），并在空闲 ≥30 分钟且无活跃工单时运行梦境整理；`source === 'manual'` 的手工记忆永不被自动抽取或梦境覆盖。
 - 多端已读同步与托盘角标（C-03c / F-52 / F-32）：客户端上报 `mark_read` 或 `POST /v1/read` 后，服务端广播 `read_state`；Web 顶栏与标题、桌面端底部状态栏及系统托盘 Tooltip / `setBadgeCount` / Windows `setOverlayIcon` 同步反映执行中工单数与未读数。
-- 脱敏 diff 按需审查（C-03b）：终端 `collectTaskDiff` 采集已提交与工作树改动并排除 `.env*`/锁文件/二进制、对疑似密钥行脱敏后按字节上限裁剪上报；服务端仅存于 `task.progress.diff`，不推给 UI、也不自动塞入 `done` 唤醒事件，云端 Agent 仅在需要复核代码时调 `get_task({ taskId, includeDiff: true })` 按需拉取。
+- 脱敏 diff 按需审查（C-03b）：终端 `collectTaskDiff` 采集已提交与工作树改动并排除 `.env*`/锁文件/二进制、对疑似密钥行脱敏后按字节上限裁剪上报；服务端剥离后独立存于 `cloud.db` 的 `task_diffs` 表，不推给 UI、也不自动塞入 `done` 唤醒事件，云端 Agent 仅在需要复核代码时调 `get_task({ taskId, includeDiff: true })` 按需拉取。
 
-**配置轮换（F-13 / A-16）**：不在 `agent_settled` 里重建，而是放在**每个入口的 `ensureAgent()` 里**判定
-（`say` / `flushEvents` / 快照都会先过它）：
+**配置轮换（F-13 / A-16）**：不在 `agent_settled` 里重建，而是放在**写/对话入口的 `ensureAgent()` 里**判定
+（`say` / `flushEvents` 等会应用待生效配置；只读 `buildSnapshot()` 传 `{ applyPendingConfig: false }`，绝不在拉快照时拆建运行时）：
 
 1. 比 `runningConfigStamp` 与磁盘配置的 `updatedAt`；相同就直接返回（最常见路径零成本）。
 2. 本轮在跑（`session.isBusy()`）就**不动**，等下一轮开始前再生效 —— 绝不打断进行中的轮次。
@@ -198,22 +198,18 @@
 在连接已活着时（渲染层重载、云端页重新挂载）主动发这一帧——主进程的 socket 和游标还在，但渲染层
 store 已经清空，不复用又不补快照就一直白屏。
 
-服务端同理：`buildSnapshot()` 里先 `ensureAgent()` 再取历史。云端会话是懒初始化的（只在 say / 派活时起），
+服务端同理：`buildSnapshot()` 里先 `ensureAgent({ applyPendingConfig: false })` 再取历史（只读加载，不触发待生效配置拆建）。云端会话是懒初始化的（只在 say / 派活时起），
 进程刚重启、还没人说话时 `sessionId` 还是 null，历史就会被投影成空——历史明明躺在 `agentDir/sessions/` 里。
 `listen()` 成功后会立刻 `void ensureAgent()` 预热，所以这一句在正常路径上只是兜底，不会把首屏卡在
 SDK 初始化上；配置解密失败时才每次快照都往 hub 推一条 `missing-cloud-config` 提示。
 
-### 3.6 拉模型清单（`POST /v1/cloud-config/models`）
+### 3.6 云端供应商目录与配置（`GET /v1/cloud-config/catalog` / `PUT /v1/cloud-config`）
 
-浏览器直连供应商的 `/models` 会被 CORS 挡，所以由云端代跑一次，客户端只拿到 id 列表：
+云端与桌面端对齐同一套 8 家供应商预设与 Pi 内置目录（不再支持自定义 Base URL 或旧 `POST /v1/cloud-config/models` 端点）：
 
-- 请求体 `{ provider, apiUrl, apiKey }`，三项都可省：省了就回退到**已保存**的配置（解密后用），
-  所以「先保存再刷新列表」也能用；只回 `{ models, provider, apiUrl }`，不回显 Key、不回传供应商响应原文。
-- 鉴权头与桌面端一致：`anthropic` → `x-api-key` + `anthropic-version`，其余 → `Bearer`。
-- 兼容 `{ data: [{ id }] }` / `{ models: [...] }` / `[...]` 三种形状，去重后排序。
-- **SSRF 面**：设备 token 也能让它请求任意 http(s) 地址（单管理员部署的取舍），因此只允许 http(s)、
-  15 秒超时、响应截断 256KB；失败统一回 502 + `provider-unreachable` / `provider-error`。
-- 两边界面同一口径：拿到列表用下拉，拿到空列表或失败就允许手填（不是所有代理商都实现 `/models`）。
+- `GET /v1/cloud-config/catalog` 返回白名单 8 家供应商与模型能力摘要（来自 `pi-bridge` 再导出的 catalog）。
+- `PUT /v1/cloud-config` 校验 `providerId` 与 `model` 在目录白名单内，并对新填入的 API Key 执行一次轻量 `/models` 探测（401/403 拒绝，网络异常按策略处理）；凭证经 `AES-256-GCM` 加密落盘，响应仅返回脱敏掩码。
+- 两边界面（Web 控制台与桌面端云端页）共用 `@pi-workbench/cloud-ui` 配置表单与同一套服务端配置。
 
 **Web 客户端的两条铁律**：
 
@@ -327,7 +323,7 @@ node apps/cloud/scripts/acceptance.mjs https://<域名>
 | 项 | 值 |
 | --- | --- |
 | 域名 / 反代 | `<cloud-host>` → Caddy → `127.0.0.1:8787` |
-| 代码 | `/opt/pi-cloud/releases/<ts>` + `current` 软链（当前 `20261126125255-f031b7b`，回滚点 `20261126123544`） |
+| 代码 | `/opt/pi-cloud/releases/<ts>` + `current` 软链（`update.sh` 滚动保留最近 5 版） |
 | 数据 | `/var/lib/pi-cloud`（属主 `pi-cloud`） |
 | 配置 / 密钥 | `/etc/pi-cloud/env`（`0600 root:root`）；出口代理启用 `NODE_USE_ENV_PROXY=1` + `HTTPS_PROXY=http://127.0.0.1:8118`（`NO_PROXY` 排除本机与国内供应商） |
 | 单元 | `pi-cloud.service`（`Restart=always`、`ProtectSystem=strict`、`LimitNOFILE=65536`）· `pi-warp-proxy.service`（`wireproxy` 用户态 WARP 出口，仅监听 `127.0.0.1:8118`，不改路由表）· `pi-cloud-backup.timer`（每日 03:20 UTC）；更新脚本 `/opt/pi-cloud/update.sh` 仅按需手动触发（不设自动定时重启） |
@@ -339,8 +335,8 @@ node apps/cloud/scripts/acceptance.mjs https://<域名>
 | 现象 | 先看 |
 | --- | --- |
 | 配对一直失败 | `journalctl -u pi-cloud`；确认 `PI_CLOUD_ENC_KEY` 没换过（换了要重新推模型配置） |
-| 「获取可用模型」报 502 | 供应商不实现 `/models` 或该 Base URL 不是 v1 根；直接手填模型名即可 |
-| 设备显示在线但收不到工单 | 服务端 `devices.json` 的 `workspaces` 是否为仓库根、`isGit` 是否为 true |
+| 保存云端模型配置报 401/403 或探测失败 | 核对 API Key 是否有效、以及出口代理 / `NO_PROXY` 是否放通目标供应商 |
+| 设备显示在线但收不到工单 | 检查 `cloud.db` 的 `devices` 表中该设备 `workspaces` 是否为仓库根、`isGit` 是否为 true |
 | 工单卡在 `queued` | 终端日志 `[Cloud Task]`；60 秒后会被判超时 |
 | 工单失败「not a git repository」 | 非 git 目录不接受派活（G10），先 `git init` |
 | 显示「设备离线，工单已取消」 | 正常语义：离线即刻取消，不排队等回来 |

@@ -327,7 +327,7 @@ createTraceBuffer(onFlush: (events: BufferedTraceEvent[]) => void, intervalMs = 
 
 ### 6.3 UI 结构
 
-新增 `src/components/AgentTrace.tsx`（扁平组件，符合项目结构约定）：
+组件位于 `src/components/chat/AgentTrace.tsx`：
 
 - `AgentParts`：遍历 parts，把相邻的 thinking/tool 组合成 `WorkGroup`，text 用现有的 `StreamingMarkdown` / `MarkdownBody`。
 - `WorkGroup`：

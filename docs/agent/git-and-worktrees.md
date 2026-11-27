@@ -56,9 +56,9 @@
 7. **Git 视图只读**：`GitView` 不做隐式写操作（不自动 fetch、不自动 checkout）；所有变更走用户显式操作。
 8. **依赖状态落盘只写哈希**：`installing` / `failed` / `error` 只活在内存（重启后按哈希 + 目录重新判定）；错误截断到 2000 字符，只进日志与 Toast / Tooltip，不落盘。工作树被删除 / 遗忘 / 工作区关闭时，`WorktreeDepsManager.forget()` / `dispose()` 会 `kill` 在跑的安装进程。
 
-## 3. 频道（22 invoke + 2 推送）
+## 3. 频道（21 invoke + 2 推送）
 
-invoke：`git:repoInfo` `git:status` `git:branches` `git:log` `git:commitDetail` `git:commitStats` `git:diff` `git:listWorktrees` `git:listAllWorktrees` `git:sessionBinding` `git:bindWorktree` `git:releaseSession` `git:forgetWorktree` `git:installWorktreeDeps` `git:cleanupOrphans` `git:fetch` `git:checkout` `git:createBranch` `git:merge` `git:prStatus` `git:githubTokenStatus` `git:setGithubToken`
+invoke：`git:repoInfo` `git:status` `git:branches` `git:log` `git:commitDetail` `git:commitStats` `git:diff` `git:listWorktrees` `git:sessionBinding` `git:bindWorktree` `git:releaseSession` `git:forgetWorktree` `git:installWorktreeDeps` `git:cleanupOrphans` `git:fetch` `git:checkout` `git:createBranch` `git:merge` `git:prStatus` `git:githubTokenStatus` `git:setGithubToken`
 
 推送（main → renderer）：`git:changed`（refs / status 分层刷新）、`git:worktree-deps`（`{ workspaceDir, key, state, manager, error? }`）。工作树 chip 只收这一个事件做局部更新，不整表轮询。
 
@@ -67,7 +67,7 @@ invoke：`git:repoInfo` `git:status` `git:branches` `git:log` `git:commitDetail`
 - 优先设备码登录（`github-device-login.ts`，`pi-workbench://` 协议回调 + 轮询），备选个人访问令牌（PAT）。
 - 凭据经 `secret-crypto.ts`（safeStorage）加密，只存在 `config/` 下，**不进工作区**。
 - 用途：Git 视图展示 PR 与 CI 状态（`git:prStatus`），不参与任何写操作。
-- 设置界面：`src/components/GithubSettings.tsx`；频道 `github:*`（7 个）。
+- 设置界面：`src/components/settings/GithubSettings.tsx`；频道 `github:*`（7 个）。
 
 ## 5. 终端与工作树
 

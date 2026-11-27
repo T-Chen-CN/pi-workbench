@@ -55,7 +55,7 @@
 - **修复**：显式向 `SettingsManager.create` 传入 `{ projectTrusted: false }`，向 `DefaultResourceLoader` 传入 `noExtensions: true`（仅通过 `additionalExtensionPaths` / `extensionFactories` 加载应用内置白名单扩展）。
 
 ### [CRITICAL] SEC-02：单击 `.html` 文件触发 1-Click 沙箱逃逸 → 完整 Electron IPC 与 OS RCE
-- **位置**：[src/utils/fileKind.ts](../../src/utils/fileKind.ts#L106-L108)、[src/components/HtmlPreview.tsx](../../src/components/HtmlPreview.tsx#L84-L90)、[electron/aux-window.ts](../../electron/aux-window.ts#L243-L288)、[electron/ipc/register.ts](../../electron/ipc/register.ts#L31-L60)、[electron/file-protocol.ts](../../electron/file-protocol.ts#L169-L184)
+- **位置**：[src/utils/fileKind.ts](../../src/utils/fileKind.ts#L106-L108)、[src/components/editor/HtmlPreview.tsx](../../src/components/editor/HtmlPreview.tsx)、[electron/aux-window.ts](../../electron/aux-window.ts#L243-L288)、[electron/ipc/register.ts](../../electron/ipc/register.ts#L31-L60)、[electron/file-protocol.ts](../../electron/file-protocol.ts#L169-L184)
 - **完整攻击链**：
   1. 文件树单击即打开 `.html`，默认进入 `HtmlPreview` 阅读视图，渲染 `<iframe src="pw-file://local/..." sandbox="allow-scripts allow-forms allow-popups">`。
   2. 恶意 HTML 脚本执行 `const w = window.open('about:blank', 'pi-panel:pwn')`。
@@ -127,8 +127,8 @@
 - **`fs:openExternally` 黑名单漏网与历史工作区永久信任**（[electron/ipc/files.ts](../../electron/ipc/files.ts#L30-L35)、[electron/main.ts](../../electron/main.ts#L434)）：黑名单遗漏 Windows `.url/.scf/.inf/.chm/.iso/.vhd/.py/.docm/.xlsm`、macOS `.workflow/.scpt/.tool/.terminal`、Linux `.desktop`；`seedTrustedWorkspaces()` 启动时一次性永久信任 `workspaces.db` 里历史全部仓库，且关闭工作区不撤销信任。
 
 ### [HIGH] SEC-12：公开 MIT 仓库暴露个人生产基础设施完整攻击面
-- **位置**：[docs/reports/cloud-server-feasibility-2026-11-19.md](./cloud-server-feasibility-2026-11-19.md#L8-L48)、[docs/agent/cloud-agent.md](../agent/cloud-agent.md#L255-L339)、[src/components/CloudView.tsx](../../src/components/CloudView.tsx#L623)、[apps/cloud/src/config.ts](../../apps/cloud/src/config.ts#L50)
-- **问题**：公网报告文件暴露了现网 VPS 公网 IPv4/IPv6、内网 IP、云厂商区域、`ufw inactive`、`ip6tables ACCEPT`、`PermitRootLogin yes`、未装 `fail2ban`、免密 sudo 等高敏运维细节；[CloudView.tsx](../../src/components/CloudView.tsx#L623) 与 `config.ts` 等 5 处将个人生产域名写死为所有用户的默认值。
+- **位置**：`docs/reports/cloud-server-feasibility-2026-11-19.md`（已清理移除）、[docs/agent/cloud-agent.md](../agent/cloud-agent.md#L255-L339)、[src/components/cloud/CloudView.tsx](../../src/components/cloud/CloudView.tsx)、[apps/cloud/src/config.ts](../../apps/cloud/src/config.ts#L50)
+- **问题**：公网报告文件暴露了现网 VPS 公网 IPv4/IPv6、内网 IP、云厂商区域、`ufw inactive`、`ip6tables ACCEPT`、`PermitRootLogin yes`、未装 `fail2ban`、免密 sudo 等高敏运维细节；[CloudView.tsx](../../src/components/cloud/CloudView.tsx) 与 `config.ts` 等 5 处将个人生产域名写死为所有用户的默认值。
 - **修复**：彻底清理仓库文档与代码中的个人域名与 VPS 拓扑信息（改用 `https://cloud.example.com` 占位符），并加固目标服务器防火墙/SSH 配置。
 
 ---
@@ -158,8 +158,8 @@
 - **现状问题**：ADR-001 否决了“独立 `BrowserWindow` + IPC”，选择单渲染进程 `window.open('about:blank')` + `React.createPortal`。实际落地已经触发了几乎全部社区已知痛点：
   1. 触发 **SEC-02** 一键沙箱逃逸 RCE；
   2. [auxWindow.ts](../../src/panelHost/auxWindow.ts#L71-L89) 的 `cloneDocumentHead` 是一次性快照，**没有 `MutationObserver` 监听 `source.head`**，拆窗后动态加载的 CSS（如 Monaco/PDF/xterm/KaTeX 懒加载 chunk 与 Vite HMR）全丢失；
-  3. **跨 Realm `instanceof HTMLElement` 失效**（[ui.tsx](../../src/components/ui.tsx#L267)）：`doc.body.appendChild` 会把节点 adopt 到子窗口 Realm，导致 `doc.activeElement instanceof HTMLElement` 在所有拆出窗口中恒为 `false`，`PopoverMenu` 关闭后永远无法恢复焦点；
-  4. [GitView.tsx](../../src/components/GitView.tsx#L470) 与全局快捷键（`CommandPalette`、`App.tsx:370`）绑在主 `window` 上，拆窗内快捷键失灵；
+  3. **跨 Realm `instanceof HTMLElement` 失效**（[ui.tsx](../../src/components/ui/ui.tsx)）：`doc.body.appendChild` 会把节点 adopt 到子窗口 Realm，导致 `doc.activeElement instanceof HTMLElement` 在所有拆出窗口中恒为 `false`，`PopoverMenu` 关闭后永远无法恢复焦点；
+  4. [GitView.tsx](../../src/components/git/GitView.tsx) 与全局快捷键（`CommandPalette`、`App.tsx:370`）绑在主 `window` 上，拆窗内快捷键失灵；
   5. `closeToTray: false` 关闭主窗口时辅助窗未联动关闭，留下一堆失去 React 树的空白僵尸窗；
   6. [main.ts](../../electron/main.ts#L574-L588) 等多处把事件广播到 `BrowserWindow.getAllWindows()`，注释竟误以为辅助窗有独立渲染进程；
   7. [tokens.ts](../../src/theme/tokens.ts#L42-L56) `readThemeTokens()` 临时双切 `html.dark`，每次触发所有拆窗的 `MutationObserver` 与双倍全局样式重算。
@@ -253,7 +253,7 @@
 ## 五、前端架构、性能、打包体积与 UX / A11y 审查
 
 ### 5.1 高危状态与交互缺陷
-1. **[CRITICAL] 切换界面语言会重新初始化全部工作区的 Pi Agent 并重载所有文件树**：[i18nStore.ts](../../src/store/i18nStore.ts#L28-L46) 每次 `setLanguage()` 生成新 `t` 引用，而 [useChatSessions.ts](../../src/hooks/useChatSessions.ts#L249)、[FileExplorer.tsx](../../src/components/FileExplorer.tsx#L238)、[ToolResultViewer.tsx](../../src/components/ToolResultViewer.tsx#L135)、[ProviderSettings.tsx](../../src/components/ProviderSettings.tsx#L180)、[CommandPalette.tsx](../../src/components/CommandPalette.tsx#L102)、[App.tsx](../../src/App.tsx#L174) 把 `t` 列入 `useEffect` 依赖，导致切换一次语言全局重跑初始化与磁盘/IPC 拉取。
+1. **[CRITICAL] 切换界面语言会重新初始化全部工作区的 Pi Agent 并重载所有文件树**：[i18nStore.ts](../../src/store/i18nStore.ts#L28-L46) 每次 `setLanguage()` 生成新 `t` 引用，而 [useChatSessions.ts](../../src/hooks/useChatSessions.ts#L249)、[FileExplorer.tsx](../../src/components/files/FileExplorer.tsx)、[ToolResultViewer.tsx](../../src/components/chat/ToolResultViewer.tsx)、[ProviderSettings.tsx](../../src/components/settings/ProviderSettings.tsx)、[CommandPalette.tsx](../../src/components/workspace/CommandPalette.tsx)、[App.tsx](../../src/App.tsx#L174) 把 `t` 列入 `useEffect` 依赖，导致切换一次语言全局重跑初始化与磁盘/IPC 拉取。
 2. **[HIGH] 终端重启回放旧乱码 + 并发 spawn 竞态**：[terminalStore.ts](../../src/store/terminalStore.ts#L130-L154) / [#L193-L217](../../src/store/terminalStore.ts#L193-L217) 重置了已废弃的 `buffer: []` 字段，遗漏 `replayBuffers.delete(workspacePath)`，且未给 `spawn()` 加代次令牌。
 3. **[HIGH] 多工作区资源常驻叠加与泄漏**：
    - 所有打开的工作区永久挂载全套 Monaco + xterm + PDF + RepoMap DOM；[useFileDocument.ts](../../src/workspace/useFileDocument.ts#L286-L290) 监听全局 `pi:refresh-files`，导致隐藏工作区也在每次 Agent 改文件时批量 `exists` + `readFile`。
@@ -262,15 +262,15 @@
 
 ### 5.2 渲染性能、虚拟化与组件体验瓶颈
 - **流式/打字重渲染风暴**：
-  - [ChatPanel.tsx](../../src/components/ChatPanel.tsx#L308) 与 [MarkdownReadingView.tsx](../../src/components/MarkdownReadingView.tsx#L90) 给 `MarkdownLinkScopeProvider` 传未 memoize 的字面量对象，击穿 `ChatMessageRow`/`AgentMarkdown` 全部 `React.memo`。
-  - [MonacoEditor.tsx](../../src/components/MonacoEditor.tsx#L388-L399) 每敲一字 `editor.getValue()` 拷贝全文并触发两次同步 Zustand `set()`；`useChatPanelState.ts:310-315` 每 50ms 跨所有工作区遍历 `Object.entries(conversations)`，重试时 250ms 定时 `setRetryNow` 重渲染整个 1,261 行 `ChatPanel`；`App.tsx` 与 `Settings.tsx` / `DiffViewer.tsx` 多处无 selector 订阅全局 Store（55 处 `useI18nStore()` 无 selector），`WorkspaceView` 未 `React.memo`。
+  - [ChatPanel.tsx](../../src/components/chat/ChatPanel.tsx) 与 [MarkdownReadingView.tsx](../../src/components/editor/MarkdownReadingView.tsx) 给 `MarkdownLinkScopeProvider` 传未 memoize 的字面量对象，击穿 `ChatMessageRow`/`AgentMarkdown` 全部 `React.memo`。
+  - [MonacoEditor.tsx](../../src/components/editor/MonacoEditor.tsx) 每敲一字 `editor.getValue()` 拷贝全文并触发两次同步 Zustand `set()`；`useChatPanelState.ts:310-315` 每 50ms 跨所有工作区遍历 `Object.entries(conversations)`，重试时 250ms 定时 `setRetryNow` 重渲染整个 1,261 行 `ChatPanel`；`App.tsx` 与 `Settings.tsx` / `DiffViewer.tsx` 多处无 selector 订阅全局 Store（55 处 `useI18nStore()` 无 selector），`WorkspaceView` 未 `React.memo`。
 - **虚拟化、滚动、Diff、PDF 四处缺陷**：
   - [useVirtualRows.ts](../../src/hooks/useVirtualRows.ts#L23-L30) 漏传 `getItemKey`，切会话复用旧会话行高缓存引发跳动/重叠；[useChatScroll.ts](../../src/hooks/useChatScroll.ts#L73-L79) 切会话不重置 `showScrollButton` 与 `newMessageCount`，且随 `messages` 频繁重建 `ResizeObserver`。
-  - [DiffViewer.tsx](../../src/components/DiffViewer.tsx#L185-L212) `SplitDiffView` 左右各自 `filter` 无补齐空行、无同步滚动；[GitView.tsx](../../src/components/GitView.tsx#L1125)（200 提交 × 双 SVG）与 [OfficeDocumentView.tsx](../../src/components/OfficeDocumentView.tsx#L100-L138) `SheetTable` 均无虚拟化；`GitView.tsx:422` 每次切会话重复拉全仓提交日志并触发 `gitFetch`。
-  - [PdfReadingView.tsx](../../src/components/PdfReadingView.tsx#L46) / [#L110-L124](../../src/components/PdfReadingView.tsx#L110-L124) `PdfPage` 未 memoize 且因 `onSize` 改依赖触发清零重绘两遍；`HtmlPreview.tsx:87` 未等自动保存刷盘即重载磁盘旧 HTML。
-  - 超过 20,000 字符的流式回复在 [AgentTrace.tsx](../../src/components/AgentTrace.tsx#L188) / [ChatMessageRow.tsx](../../src/components/ChatMessageRow.tsx#L535) 会触发高亮断崖，瞬间剥掉全部 Shiki 高亮与 Mermaid 图表。
+  - [DiffViewer.tsx](../../src/components/editor/DiffViewer.tsx) `SplitDiffView` 左右各自 `filter` 无补齐空行、无同步滚动；[GitView.tsx](../../src/components/git/GitView.tsx)（200 提交 × 双 SVG）与 [OfficeDocumentView.tsx](../../src/components/editor/OfficeDocumentView.tsx) `SheetTable` 均无虚拟化；`GitView.tsx:422` 每次切会话重复拉全仓提交日志并触发 `gitFetch`。
+  - [PdfReadingView.tsx](../../src/components/editor/PdfReadingView.tsx) `PdfPage` 未 memoize 且因 `onSize` 改依赖触发清零重绘两遍；`HtmlPreview.tsx:87` 未等自动保存刷盘即重载磁盘旧 HTML。
+  - 超过 20,000 字符的流式回复在 [AgentTrace.tsx](../../src/components/chat/AgentTrace.tsx) / [ChatMessageRow.tsx](../../src/components/chat/ChatMessageRow.tsx) 会触发高亮断崖，瞬间剥掉全部 Shiki 高亮与 Mermaid 图表。
 - **`RepoMapCanvas` 假 60fps 与反直觉交互**：
-  - [RepoMapCanvas.tsx](../../src/components/RepoMapCanvas.tsx#L609) / [#L712](../../src/components/RepoMapCanvas.tsx#L712) / [#L912-L922](../../src/components/RepoMapCanvas.tsx#L912-L922) 每帧 `setViewportRect`/`setZoom` 且内联回调击穿 `React.memo(RepoMapNodeCard)`，平移缩放全量重渲染 DOM 卡片；无视口裁剪；`chainLayout` 有 `O(N²)` 去重；大目录向右展超 3,200px 不移镜头；空白拖/中键拖无效、强制 `Space+拖` 且全局空格拦截漏排除 `menu`/`menuitem`/`treeitem`/`<summary>`；多命中搜索只能看第一条，无计数与上下跳转；退层无面包屑、无一键回根。
+  - [RepoMapCanvas.tsx](../../src/components/repo-map/RepoMapCanvas.tsx) 每帧 `setViewportRect`/`setZoom` 且内联回调击穿 `React.memo(RepoMapNodeCard)`，平移缩放全量重渲染 DOM 卡片；无视口裁剪；`chainLayout` 有 `O(N²)` 去重；大目录向右展超 3,200px 不移镜头；空白拖/中键拖无效、强制 `Space+拖` 且全局空格拦截漏排除 `menu`/`menuitem`/`treeitem`/`<summary>`；多命中搜索只能看第一条，无计数与上下跳转；退层无面包屑、无一键回根。
 
 ### 5.3 打包体积、资源加载与冗余依赖实测分析
 
@@ -283,13 +283,13 @@
 | **pdf.js 资源转 Base64 JS** | `cmaps` 1,528 KB + `wasm` 1,199 KB + `standard_fonts` 1,009 KB = **3.74 MB** | [vite.config.ts](../../vite.config.ts#L465-L502) 将二进制转为 Base64 JS 模块，带来 33% 膨胀与 JS 解析开销 |
 | **555 行 `mockAPI` 进生产包** | [src/api/index.ts](../../src/api/index.ts#L81-L637)、[src/api/piAgentAPI.ts](../../src/api/piAgentAPI.ts#L72-L374) | 未用 `import.meta.env.DEV` 门控，`mockAPI`（含 `localStorage`）与浏览器 SSE 桥全部打进生产 Electron |
 | **死依赖与双 Markdown 残余** | `package.json:91-92`、`index.css:584-644`、`vite.config.ts:543-557` | `react-markdown`、`rehype-highlight` 全仓零引用，仍保留依赖、Vite 分包与 60 行 `.hljs-*` CSS；`markdownBlocks.ts` 又单独引 `unified`/`remark-parse` 仅做切块 |
-| **编辑器语言被过度裁剪 + 公式误伤代码** | [vite.config.ts](../../vite.config.ts#L428-L439) vs [shikiHighlighter.ts](../../src/utils/shikiHighlighter.ts#L73-L107)、[StreamdownView.tsx](../../src/components/StreamdownView.tsx#L28) | Monaco 砍掉了 `yaml`/`bash`/`sql`/`dockerfile`/`cpp`/`java`/`powershell`/`toml`/`xml`（仅剩 10 种），而聊天 Shiki 支持 33 种；`singleDollarTextMath: true` 会把技术对话中的 `$VAR` / 价格误渲染成 KaTeX 公式 |
+| **编辑器语言被过度裁剪 + 公式误伤代码** | [vite.config.ts](../../vite.config.ts#L428-L439) vs [shikiHighlighter.ts](../../src/utils/shikiHighlighter.ts#L73-L107)、[StreamdownView.tsx](../../src/components/ui/StreamdownView.tsx) | Monaco 砍掉了 `yaml`/`bash`/`sql`/`dockerfile`/`cpp`/`java`/`powershell`/`toml`/`xml`（仅剩 10 种），而聊天 Shiki 支持 33 种；`singleDollarTextMath: true` 会把技术对话中的 `$VAR` / 价格误渲染成 KaTeX 公式 |
 
 ### 5.4 前端设计、无障碍（A11y）与 i18n
-- **桌面原生交互退化**：自绘标题栏（`frame: false`）主动放弃了 **Windows 11 Snap Layouts** 悬停分屏，而 Electron 原生 `titleBarStyle: 'hidden' + titleBarOverlay` 可完美兼顾；启动强塞 **1 秒 `setBounds` 形变动画**（600ms 人工停留 + 25 次 16ms `setBounds` 调用，[window-morph.ts](../../electron/window-morph.ts#L48-L75)），拖慢冷启且在 Linux Wayland 上被合成器禁止。
+- **桌面原生交互退化**：自绘标题栏（`frame: false`）主动放弃了 **Windows 11 Snap Layouts** 悬停分屏，而 Electron 原生 `titleBarStyle: 'hidden' + titleBarOverlay` 可完美兼顾；启动强塞 **1 秒 `setBounds` 形变动画**（600ms 人工停留 + 25 次 16ms `setBounds` 调用，原 `electron/window-morph.ts`，已移除），拖慢冷启且在 Linux Wayland 上被合成器禁止。
 - **焦点、键盘与 ARIA 缺陷**：
   - `Modal` 无 Portal 且未给背景设 `inert`，`FOCUSABLE_SELECTOR` 未过滤隐藏/禁用祖先元素；`CommandPalette` 与 `DiffViewer` 绕过 `Modal` 零焦点陷阱与恢复；
-  - 4 处 `Escape` 穿透/双触发：`PopoverMenu` 在 `Modal` 内按 `Escape` 未调 `preventDefault()` 会把父弹窗一起关掉（[ui.tsx](../../src/components/ui.tsx#L289-L294) vs [#L536](../../src/components/ui.tsx#L536)）；`ToolResultViewer` 图片灯箱按 `Escape` 关整个查看器；`DialogHost`、`FileExplorer` 重复处理 `Escape`；
+  - 4 处 `Escape` 穿透/双触发：`PopoverMenu` 在 `Modal` 内按 `Escape` 未调 `preventDefault()` 会把父弹窗一起关掉（[ui.tsx](../../src/components/ui/ui.tsx)）；`ToolResultViewer` 图片灯箱按 `Escape` 关整个查看器；`DialogHost`、`FileExplorer` 重复处理 `Escape`；
   - `Tab` 在 `role="tab"` 内嵌套 `<button>` 违反 WAI-ARIA `nested-interactive`（`GitView.tsx:762` 同理）；`FileExplorer` `role="treeitem"` 缺少方向键导航与 roving tabindex；`SelectionQuoteButton` 捕获阶段不节流 `scroll` 且越界不隐藏；`CardHeader` `{status ?? action}` 静默吞掉 `action`。
 - **对比度与排版违规**：`--ink-subtle`（~3.1:1）规范明令“仅装饰/禁用”，却在 `patterns.tsx:208`、`ChatPanel`、`ChatMessageRow`、`AgentTrace`、`RepoMapNodeCard`、`GitView`、`OfficeDocumentView` 等十余处承载真实信息；存在 `7px` / `8.5px` / `9px` 极小字号。
 - **i18n 缺口**：[translations.ts](../../src/i18n/translations.ts#L2063) 缺 `satisfies Record<Language, Record<TranslationKey, string>>`（`en` 漏 key 编译不报错）；存在 **37 个死 key**（74 行）；`cloudStore.ts` / `CloudView.tsx` 混入硬编码中英文；`CloudTraceSection.tsx:100,113` 存在英文单复数错误（`"1 tools"`, `"2 tool failed"`）。
@@ -302,7 +302,7 @@
 | --- | --- | --- |
 | **[AGENTS.md](../../AGENTS.md)** | ① **验证矩阵盲区**：要求改 `electron/` 跑 `npm run type-check`，但 `package.json` 的 `type-check` 只查 `src/` + `vite.config.ts`，**完全不查 `electron/`、`pi-bridge/`、`apps/cloud/src/`**！<br>② **禁建子目录铁律反噬**：强制 `src/components/`（62 文件）与 `tests/`（174 文件）平铺，倒逼开发者把 8 个组件塞进 1,702 行单文件。<br>③ **`xxxStoreFor()` 铁律名存实亡**：9 个工作区 Store 仅 2 个遵守，且工厂的 `setTimeout(0)` 释放反生竞态。<br>④ **一刀切“禁 Worker/子进程”**：把文档解析/索引/插件锁死在 GUI 主线程。 | 补齐全工作区 `type-check`；允许按业务域建 `src/components/{chat,cloud,git,repo-map,settings,ui}/` 与 `tests/<domain>/`；工作区级状态改用 Zustand `createStore` + React Context 随视图卸载自动回收；把“禁本地 HTTP 服务”与“允许 `utilityProcess`/`worker_threads`”解耦。 |
 | **[DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md)** | ① **严重膨胀且越界**（992 行 / 97 KB）：把画布坐标公式、数据属性名、标题 JSON 格式、启动 `setBounds` 毫秒数全塞进视觉规范，却强制动任何 UI 前必读。<br>② **多处严重过时**：文首标 `v1.48`（记录已到 `v1.68`）；§6.7 仍写 0.10 已删供应商表；§9.2 仍写旧版面板列表视图；§11 索引把 `WorkspacePanel` 写为占位。<br>③ **反无障碍条款**：v1.18 明令忽略 `prefers-reduced-motion`（违反 WCAG 2.3.3），同时 `index.css:698` 又局部遵守，自相矛盾。 | 瘦身为纯 Token / 排版 / 组件 API / A11y 契约（目标 ≤300 行），页面交互规格下沉至对应特性文档；恢复 `prefers-reduced-motion` 支持；改用 `titleBarOverlay` 恢复 Win11 Snap Layouts；取消 1 秒启动 `setBounds` 动画。 |
-| **[tests/design-system.test.ts](../../tests/design-system.test.ts)** & **[eslint.config.js](../../eslint.config.js)** | ① **脆弱字符串正则**：只扫 `.tsx` 漏掉 [shikiHighlighter.ts](../../src/utils/shikiHighlighter.ts#L22-L66) 里 24 处硬编码 hex；会对注释/URL 误报；`FLOATING` 按整文件豁免放行了千行 `App.tsx`/`ChatPanel.tsx`。<br>② **ESLint 护栏缺失**：全局关 `@typescript-eslint/no-explicit-any`，无 `eslint-plugin-jsx-a11y`，无跨包边界规则（放任 `apps/cloud/web-src` 跨 3 层引 `src/`）。 | 迁移到 AST 级 ESLint 规则 + `eslint-plugin-jsx-a11y` + `import/no-restricted-paths`（隔离桌面与云端依赖边界），按需收紧 `no-explicit-any`。 |
+| **[tests/ui/design-system.test.ts](../../tests/ui/design-system.test.ts)** & **[eslint.config.js](../../eslint.config.js)** | ① **脆弱字符串正则**：只扫 `.tsx` 漏掉 [shikiHighlighter.ts](../../src/utils/shikiHighlighter.ts#L22-L66) 里 24 处硬编码 hex；会对注释/URL 误报；`FLOATING` 按整文件豁免放行了千行 `App.tsx`/`ChatPanel.tsx`。<br>② **ESLint 护栏缺失**：全局关 `@typescript-eslint/no-explicit-any`，无 `eslint-plugin-jsx-a11y`，无跨包边界规则（放任 `apps/cloud/web-src` 跨 3 层引 `src/`）。 | 迁移到 AST 级 ESLint 规则 + `eslint-plugin-jsx-a11y` + `import/no-restricted-paths`（隔离桌面与云端依赖边界），按需收紧 `no-explicit-any`。 |
 | **CI/CD & `tsconfig` & 文档** | ① `electron/tsconfig.json` 仅 `"include": ["main.ts"]` 漏掉孤立文件 `electron/text-sanitize.ts`。<br>② `ci.yml` 不跑 `type-check:cloud` 和 `build:cloud`。<br>③ `cloud-release.yml` 零测试零类型检查即发布 `cloud-latest`，且手工维护 18 条 `paths` 已漏掉 4 个传递依赖。<br>④ `build-cloud-bundle.mjs` 脱离 `package-lock.json` 用 `^` 现装线上依赖。<br>⑤ 过期文档：`PROJECT_PLAN.md`（仍写自定义端点与 `$PI_WORKBENCH_API_KEY`）、`ipc-and-trust.md`（写 127 频道 + 已删 `devModelsProxy`）、`paths-and-storage.md`（写 6s 看门狗实际 7.5s）、`cloud-agent.md`（5 处与代码矛盾）、`acceptance.mjs`（测已删 `/app.css`）。 | `npm run type-check` 串联全部 6 份 tsconfig；`ci.yml` 补 `type-check:cloud` + `build:cloud`；`cloud-release.yml` 必须先过测试与类型检查再发布，且按 `package-lock.json` 锁定生产依赖版本；建立文档“单一事实源”清理过时副本。 |
 
 ---
@@ -349,4 +349,5 @@
 - [x] 拆分 3,234 行 `AgentManager`（`agent-runtime-types.ts`、`agent-session-events.ts`、`agent-title-service.ts`、`agent-catalog.ts`），落地 `pi-bridge/src/session-view.ts` 单一聊天渲染投影（持久化 `entryId` / `userEntryId`、多步聚合 `usage`、轮末 `reconcileMessages` 自愈）
 - [x] 高危 Electron IPC（`electron/ipc/schemas.ts`）与云端 WS 协议（`pi-bridge/src/cloud-protocol.ts`）引入 Zod v4 校验与协议能力协商（向后兼容 `v: 1`）
 - [x] 保留 Paper & Ink 自绘组件同时修完 Modal Portal/`inert`、Tab 兄弟关闭按钮、焦点陷阱/Escape 穿透与对比度缺陷；Windows/Linux 切换原生 `titleBarStyle: 'hidden' + titleBarOverlay`（恢复 Win11 Snap Layouts），取消 1 秒启动 `setBounds` 动画，恢复 `prefers-reduced-motion`；升级 `RepoMapCanvas`（视口裁剪、多命中搜索计数与上下跳转、面包屑一键回根、`O(N)` 去重、空格排除扩展、大目录自动平移）并补齐 `GitView`/`OfficeDocumentView` 虚拟化与 `chatStore` `O(1)` 忙碌计数
-- [x] 瘦身重写 `DESIGN_SYSTEM.md`（≤300 行）与同步 `AGENTS.md` 及过期文档；落地 ESLint `jsx-a11y` + 跨包边界 + AST 色值门禁；全仓重组 `src/components/`（10 域）与 `tests/`（6 域）；便携目录（`D-01`）与托管工作树存放位置（`D-02`）按所有者决策记入 [BACKLOG](../progress/BACKLOG.md) 待单独讨论
+- [x] 瘦身重写 `DESIGN_SYSTEM.md`（≤300 行）与同步 `AGENTS.md` 及过期文档；落地 ESLint `jsx-a11y` + 跨包边界 + AST 色值门禁；全仓重组 `src/components/`（10 域）与 `tests/`（6 域）；严格两目录与 Windows 便携 `.zip`（`D-01`）已落地（`c50bd30`）；托管工作树存放位置（`D-02`）按所有者决策保留在 [BACKLOG](../progress/BACKLOG.md) 待单独讨论
+- [x] 全局清理（2026-11-28）：删除无引用遗留文件（`electron/window-morph.ts`、`electron/text-sanitize.ts`、`git:listAllWorktrees` 孤立 IPC、8 个死 i18n key、3 份早期云端阶段性报告）并修复文档断链与过时路径描述

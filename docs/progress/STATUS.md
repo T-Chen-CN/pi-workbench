@@ -9,11 +9,11 @@
 
 | 项 | 值 |
 | --- | --- |
-| 版本 | **0.11.2+**（2026-11-27，Phase 0–2 深度整改在 main 就绪） |
+| 版本 | **0.11.2+**（2026-11-28，Phase 0–2 深度整改、D-01 与全局清理在 main 就绪） |
 | 阶段 | 本地 Agent 工作台与云端 Agent 完成安全止血、性能瘦身、SQLite / 共享 UI / Worker / Zod / 单一聊天投影 / 原生标题栏 / 按域目录重组与工程门禁升级 |
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 + Zod 4 |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（跑在主进程；重 CPU 非 Agent 解析走 `worker_threads`） |
-| 质量门槛 | 全仓 7 份 `type-check` · `lint`（含 `jsx-a11y` / 跨包边界 / AST 色值）· `npm test`（179 文件 / 1815 用例）· `design-system` · `build` / `build:cloud` 全绿 |
+| 质量门槛 | 全仓 7 份 `type-check` · `lint`（含 `jsx-a11y` / 跨包边界 / AST 色值）· `npm test`（178 文件 / 1810 用例）· `design-system` · `build` / `build:cloud` 全绿 |
 | 云端 Agent | **P0（C-01）与 P1（C-02 ~ C-07 / P-09）全部落地，已迁至 Node 24 `node:sqlite` (WAL) + `packages/cloud-ui` 共享包 + Zod 协议校验与能力协商**；剩余仅 P2（`P-02` 云端 OAuth 登录） |
 
 ## 正在做 / 下一步
@@ -24,6 +24,7 @@
 
 ## 已交付（一行一项，细节在 git）
 
+- **全局代码与文档清理（2026-11-28）**：移除无引用遗留模块（`electron/window-morph.ts`、`electron/text-sanitize.ts`）、孤立 IPC（`git:listAllWorktrees`）、8 个死 i18n 文案键与 3 份早期云端可行性/PoC 报告，修复 27 处文档断链并同步全仓 `README` / 架构 / 运维文档。
 - **D-01 两目录模型与便携 zip（2026-11-27）**：统一「程序安装目录 + `<appData>/pi-workbench` 唯一数据目录」（含更新缓存收口与旧安装目录无损迁移）、瘦身 `build/installer.nsh` 并移除 `installer-manifest` 脚本、设置页新增「打开数据目录」，Windows 发布同时产出 Setup `.exe` 与免安装 Portable `.zip`。
 - **Phase 0–2 深度整改（2026-11-27）**：完成 12 项 P0 安全漏洞与数据防丢止血；完成前端瘦身、`packages/cloud-ui` 共享包抽离与云端 `node:sqlite` 持久化；完成 `worker_threads` 文档/地图卸载、`AgentManager` 拆分与 `deriveMessages` 单一聊天渲染投影、Zod IPC/云端协议校验与能力协商、原生 `titleBarOverlay` + 取消启动形变 + A11y / `RepoMapCanvas` / 虚拟化优化、ESLint `jsx-a11y` + 边界/AST 规则、全仓 `src/components/` 与 `tests/` 按域目录重组及 `DESIGN_SYSTEM.md` 瘦身。
 
@@ -37,4 +38,4 @@
 ---
 
 **维护者**: Pi Workbench Team
-**最后更新**: 2026-11-27（Phase 0–2 整改完成）
+**最后更新**: 2026-11-28（全局代码与文档清理完成）

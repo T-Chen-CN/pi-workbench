@@ -5,7 +5,13 @@
  * 拖慢首帧可交互时间）；渲染层就绪（或兜底超时）后立刻通知切换到主界面。
  */
 import { app, BrowserWindow, type Rectangle } from 'electron'
-import type { WindowBounds } from './window-morph.js'
+
+export interface WindowBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
 
 const APP_WINDOW_WIDTH = 1200
 const APP_WINDOW_HEIGHT = 800

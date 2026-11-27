@@ -12,7 +12,7 @@
 ### 🏗️ 架构和设计
 - **[项目结构](./architecture/PROJECT_STRUCTURE.md)** — 代码组织、进程模型、数据流与 IPC 频道表
 - **[Agent 过程轨迹方案](./architecture/AGENT_TRACE.md)** — 思考、工具调用与正文的 parts 时间线（已实现 v1）
-- **[聊天渲染单一数据源](./architecture/chat-render-single-source.md)** — 设计稿（未实施）：实时流式与重载历史产出同一份消息，根治插话 / 压缩点位置问题
+- **[聊天渲染单一数据源](./architecture/chat-render-single-source.md)** — 已落地实现（`pi-bridge/src/session-view.ts`）：实时流式与重载历史产出同一份消息，根治插话 / 压缩点位置问题
 - **[供应商预设与鉴权（8 家）](./architecture/provider-presets.md)** — 落地方案：固定 provider 白名单、`providers.json` / `credentials.json` 数据模型、safeStorage 凭证存储、OAuth 登录、六阶段实施与迁移回滚
 - **[设计系统](./design/DESIGN_SYSTEM.md)** — 颜色、字体、组件与交互的唯一事实来源（强制）
 
@@ -32,7 +32,7 @@
 - **[Agent 过程轨迹测试方案](./guides/AGENT_TRACE_TESTING.md)** — thinking / 工具步骤的自动化与手动验收
 
 ### 🧭 Agent 开发约束（从 AGENTS.md 拆出）
-- **[路径与持久化](./agent/paths-and-storage.md)** — 便携式目录、启动顺序、落盘文件清单、多工作区状态
+- **[路径与持久化](./agent/paths-and-storage.md)** — 严格两目录模型（与可选便携版）、启动顺序、落盘文件清单、多工作区状态
 - **[IPC 与信任边界](./agent/ipc-and-trust.md)** — `handleIpc`、来源校验、preload / API 层、CSP
 - **[Agent 运行时](./agent/agent-runtime.md)** — 会话、权限审批、计划模式、工具白名单、标题、压缩、导出、联网
 - **[Git 与工作树会话](./agent/git-and-worktrees.md)** — 工作树绑定、Git 视图、仓库同步、GitHub 关联
@@ -81,4 +81,4 @@
 
 ---
 
-**最后更新**: 2026-11-08（文档收敛：任务表合并、已交付文档删除、顶层 Agent 草案下线）
+**最后更新**: 2026-11-28（全局清理：移除废弃模块与过时报告、对齐目录结构与架构文档）

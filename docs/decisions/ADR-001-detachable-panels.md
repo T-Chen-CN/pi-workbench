@@ -84,5 +84,6 @@
 
 ## 修订记录
 
+- 2026-11-27（Phase 0 / Phase 2 整改）：① 安全加固撤销 2026-10-29 的 `trustIpcSender` / `preload` 继承（避免子文档成为独立 IPC 来源，彻底回到纯 DOM Portal，React 事件在主窗口 JS Realm 内执行），并限制仅主窗口主框架可打开 `pi-panel:` 辅助窗；② Windows / Linux 外壳由 `frame: false` 改为原生 `titleBarStyle: 'hidden' + titleBarOverlay`（恢复 Win11 Snap Layouts），仅在不可用时回退自绘按钮；③ `auxWindow.ts` 补 `<head>` `MutationObserver` 同步懒加载样式，修跨 Realm `instanceof` 与主窗口关闭联动；④ 面板组件与测试按域迁至 `src/components/panels/` 与 `tests/{electron,ui}/`。
 - 2026-10-29：辅助窗口改为**登记过的 IPC 来源**（`trustIpcSender` / `untrustIpcSender`，子框架仍拒绝），原文「IPC 来源恒为主窗口」作废——拆出面板里的复制、外链、会话操作直接走自己的 `webContents`；窗口寻址仍按 `frameName` 显式带（理由改为「一套 IPC 服务多个窗口」，结论不变）。拆出判据同时加入 96 DIP 拖动距离（`PANEL_DETACH_DISTANCE`），外链在 `setWindowOpenHandler` 里直接交给系统浏览器。
 - 2026-10-28（设计系统 v1.39）：原「原位占位不塌陷」改为「主窗口彻底让位」——占位卡与接缝一并撤销，面板仍挂载但容器 `hidden`；辅助窗口标题改为工作区名；随之删除 `PanelDetachedPlaceholder`、`PanelSlot` 的 `placeholder` 入参、`focusPanelWindow` 与「定位到独立窗口」入口（回位只靠关窗）。

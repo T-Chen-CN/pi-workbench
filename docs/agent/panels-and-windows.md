@@ -24,10 +24,10 @@
 
 - 关闭辅助窗口 = 面板回位；主窗口侧不提供"定位 / 还原"入口。回位靠主进程 `closed` 事件回传 `aux:window-closed`，所以**该回调里的任何异常都会让面板回不去**：窗口销毁后读 `child.webContents` 会抛 `Object has been destroyed`，webContents id 必须在 `did-create-window` 时取成数字存着（`closed` 里只带数字）。
 - 渲染层回收分两种：主动还原（`dockPanel` / 退出）拆容器 + 关窗；用户直接点 X 时文档已随窗口销毁，`dispose()` 只停主题镜像、不碰 DOM（`isWindowClosed()` 判）。`useHostWindow()` 同样在窗口已关闭时回退主窗口，避免读到空 `document`。
-- 最小尺寸 320 × 220；外壳与主窗口一致（Windows / Linux 无边框自绘按钮，macOS `hiddenInset`）。
+- 最小尺寸 320 × 220；外壳与主窗口一致（Windows / Linux 原生 `titleBarStyle: 'hidden' + titleBarOverlay`，macOS `hiddenInset`；无 overlay 时回退自绘按钮）。
 - 频道：`aux:drag-begin`（拖动起点）、`aux:detach-at`（拖出落点）、`aux:window-command`、`aux:window-state`。起点与落点都由主进程用 `screen.getCursorScreenPoint()` 取，混合 DPI 下不失真；渲染层不自己算坐标。
 - 拆出判据：光标离开窗口 **或** 拖动距离 ≥ 96 DIP（`PANEL_DETACH_DISTANCE`，与面板头同宽量级）——短促误拖不会拆窗。
-- 辅助窗口是**登记过的 IPC 来源**（`trustIpcSender` / `untrustIpcSender`，见 [ipc-and-trust §1](ipc-and-trust.md)），所以拆出面板里的复制、外链、会话操作都可用；但主进程窗口白名单不受影响，仍然只放行 `about:blank` + `pi-panel:`，其它 URL 一律 deny（`isExternalUrl()` 命中的交给 `shell.openExternal`）。
+- 辅助窗口为**纯 DOM Portal**，**不继承 `preload`、也不登记 `trustIpcSender`**（见 [ipc-and-trust §1](ipc-and-trust.md)）：拆出面板里的 React 事件天然运行在主窗口 JS Realm 并通过主窗口 IPC 通道执行；主进程窗口白名单仅放行来自主窗口主框架的 `about:blank` + `pi-panel:`，其它 URL 一律 deny（主框架外链交给 `shell.openExternal`）。
 - 布局**不做**持久化。
 
 ## 2. 主窗口关闭与托盘常驻
@@ -54,6 +54,6 @@
 
 应用走自定义协议 `pw-app://bundle/` 加载（不同 `file://` URL 的 origin 不一致，会阻碍跨文档操作）；`pw-file://` 是只读文件协议，供图片 / 音频 / 视频 / PDF / HTML 预览使用，只允许 `GET` / `HEAD` 且限定在受信任根内。新增协议时要同步 `electron/app-protocol.ts`、`electron/scheme-privileges.ts` 与 `vite.config.ts` 的 CSP。
 
-## 5. 启动窗口形变
+## 5. 启动窗口
 
-`electron/window-morph.ts` 只做启动时的小尺寸 → 工作台尺寸插值（`easeOutCubic` + 边界插值），不依赖 Electron，主进程注入 `apply`、测试注入时钟。它**不是**面板窗口迁移逻辑，不要混用。
+`electron/boot-window.ts` 直接以正常工作台尺寸居中打开主窗口，不再播放 1s `setBounds` 启动形变动画（原 `electron/window-morph.ts` 已移除），渲染层就绪或兜底超时后立即切入主界面。

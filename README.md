@@ -90,7 +90,7 @@ Agent 改完不是甩一句「已完成」。这一轮动过的文件都摆进�
 - API Key 用 Electron `safeStorage` 加密成 `enc:<base64>`，明文不进磁盘、日志或工作区。
 - 渲染进程开启 sandbox、无 Node 权限；每个 IPC 频道校验来源；文件操作限定在受信任工作区与 `{appDir}/cache/`。
 - 无遥测、无账号、可完全离线；联网搜索是可选配置。
-- macOS 因应用包只读，数据放在 `~/Library/Application Support/pi-workbench`。
+- 标准安装版采用严格两目录模型：程序安装目录与唯一数据目录分离（Windows `%APPDATA%\pi-workbench`、macOS `~/Library/Application Support/pi-workbench`、Linux `~/.config/pi-workbench`）；Windows 免安装便携 `.zip` 将数据留在解压目录内。
 
 > **其余能力**（够用，但不算特色）：Monaco 多标签编辑与 2 秒防抖自动保存、文件树增删改与监听刷新、xterm.js + node-pty 终端、命令面板与工作区插件、Paper / Ink 双主题、中英双语界面、崩溃恢复草稿、自动更新。
 
@@ -100,11 +100,12 @@ Agent 改完不是甩一句「已完成」。这一轮动过的文件都摆进�
 
 到 [最新 Release](https://github.com/T-Chen-CN/pi-workbench/releases/latest) 取对应平台的安装包。
 
-| 平台    | 文件                                | 说明                                                               |
-| ------- | ----------------------------------- | ------------------------------------------------------------------ |
-| Windows | `Pi-Workbench-Setup-<版本>.exe`     | NSIS 安装包；升级只替换程序文件，保留 `config/ data/ logs/ cache/` |
-| macOS   | `Pi-Workbench-<版本>-universal.dmg` | Universal 二进制（Apple Silicon + Intel）                          |
-| Linux   | `Pi-Workbench-<版本>.AppImage`      | `chmod +x` 后直接运行                                              |
+| 平台    | 文件                                        | 说明                                                                 |
+| ------- | ------------------------------------------- | -------------------------------------------------------------------- |
+| Windows | `Pi-Workbench-Setup-<版本>.exe`             | NSIS 安装包（支持自动差分更新）；数据存 `%APPDATA%\pi-workbench`     |
+| Windows | `Pi-Workbench-Portable-<版本>-win-x64.zip`  | 免安装便携版；解压即用，数据留在解压目录内（引导手动下载升级）       |
+| macOS   | `Pi-Workbench-<版本>-universal.dmg`         | Universal 二进制（Apple Silicon + Intel）                            |
+| Linux   | `Pi-Workbench-<版本>.AppImage`              | `chmod +x` 后直接运行                                                |
 
 构建由 GitHub Actions 在版本标签上产出，**未做代码签名与公证**，因此首次启动会被 Windows SmartScreen 或 macOS Gatekeeper 拦一次，确认「仍要运行」即可。
 
@@ -147,7 +148,7 @@ npm run package:linux
 
 ```bash
 npm run type-check
-npm test           # 1200+ Vitest 用例
+npm test           # 1800+ Vitest 用例
 npm run lint
 npm run build
 ```
@@ -168,16 +169,16 @@ npm run build
 
 ## 开发情况
 
-| 项       | 现状                                                                                           |
-| -------- | ---------------------------------------------------------------------------------------------- |
-| 当前版本 | `0.11.1`（2026-11-26）                                                                         |
-| 发布     | 21 个 Release；三平台安装包与 `latest*.yml` 由 CI 在 tag 上产出                                |
-| 阶段     | Phase 0–4 完成 · Phase 5（Fleet 后台任务）已于 2026-10-24 整体移除 · Phase 6 持续优化          |
-| 质量     | type-check + lint + 1600+ Vitest 用例 + 全量 build；CI 另跑一次 Windows 打包冒烟               |
-| 依赖     | Electron 44 · React 19 · TypeScript 5.9 · Monaco 0.57 · `@earendil-works/pi-coding-agent` 1.3  |
-| 已知边界 | 未签名未公证；旧格式 Office 不解析；扫描件不做 OCR；Linux 托盘降级为最小化；平台手工验收仍未做 |
+| 项       | 现状                                                                                                  |
+| -------- | ----------------------------------------------------------------------------------------------------- |
+| 当前版本 | `0.11.2`（2026-11-27，main 就绪 Phase 0–2 深度整改与两目录/便携版重构）                                |
+| 发布     | 三平台安装包、Windows 便携 `.zip` 与 `latest*.yml` 由 CI 在 tag 上产出                                |
+| 阶段     | 本地 Agent 工作台与云端 Agent（Pi 内核）已落地；完成安全止血、性能瘦身、SQLite/共享 UI/Worker/Zod 改造 |
+| 质量     | 全仓 7 份 type-check + lint（含 jsx-a11y/AST 色值/跨包边界）+ 1800+ Vitest 用例 + 全量 build / build:cloud |
+| 依赖     | Electron 44 · React 19 · TypeScript 5.9 · Monaco 0.57 · Zod 4 · `@earendil-works/pi-coding-agent` 1.3 |
+| 已知边界 | 未签名未公证；旧格式 Office 不解析；扫描件不做 OCR；Linux 托盘降级为最小化；平台手工验收仍未做        |
 
-**接下来在做的**：R-23 输出预算收尾（续写截断的后续动作、上下文临界预警、轻任务预算）、macOS / Linux 手工验收、以 Pi Agent 为内核重做云端 Agent。当前状态见 [STATUS](docs/progress/STATUS.md)，任务与停放项在 [BACKLOG](docs/progress/BACKLOG.md)。
+**接下来在做的**：供应商预设真实凭证手工验收、macOS / Linux 平台手工验收、云端 OAuth 登录与托管工作树目录方案评估。当前状态见 [STATUS](docs/progress/STATUS.md)，任务与停放项在 [BACKLOG](docs/progress/BACKLOG.md)。
 
 ---
 
@@ -194,19 +195,21 @@ npm run build
   read / write / edit / bash 直接作用于工作区
 ```
 
-Agent 不跑在子进程、Worker 或 HTTP 服务里 —— 它是主进程内的运行时。这是权限拦截、审批超时、工作树绑定能成立的前提。
+Pi Agent 跑在主进程内（不走本地 HTTP 服务），这是权限拦截、审批超时、工作树绑定能成立的前提；重 CPU 的非 Agent 解析（PDF / Office 文档解析、仓库地图扫描）则卸载到 `worker_threads` 避免阻塞界面。
 
 ---
 
 ## 项目结构
 
 ```
-electron/     主进程：IPC 各域、Agent 注册表、Git、文档抽取、终端、更新
-src/          渲染层：components、stores、hooks、api（IPC 封装）、i18n、theme
-pi-bridge/    AgentManager，pi-coding-agent 之上的会话、工具策略与标题
-tests/        Vitest 用例（扁平，与源文件一一对应）
-docs/         项目文档
-examples/     插件示例（git-tools）
+electron/           主进程：IPC 各域（Zod 校验）、Agent 注册表、Git、Worker 文档/地图、终端、更新、云端执行器
+src/                渲染层：components（按业务域分组）、store、hooks、api（IPC 封装）、i18n、theme
+pi-bridge/          AgentManager，pi-coding-agent 之上的会话投影、工具策略、标题与云端协议契约
+packages/cloud-ui/  桌面端与云端 Web 共享 UI（类型、WS 归并器、Paper & Ink 原语与卡片）
+apps/cloud/         云端 Agent 服务（Node 24 node:sqlite + 双 WS + Web 控制台）
+tests/              Vitest 用例（按域分子目录：agent / cloud / electron / git / ui / utils）
+docs/               项目文档
+examples/           插件示例（git-tools）
 ```
 
 进程模型、数据流与 IPC 频道表见 [PROJECT_STRUCTURE](docs/architecture/PROJECT_STRUCTURE.md)。
@@ -216,7 +219,7 @@ examples/     插件示例（git-tools）
 ## 参与贡献
 
 - **报问题**：带上复现步骤，附 `logs/main.log` 与 `logs/agent.log` 的相关片段（密钥不会入日志）。
-- **提 PR**：先跑 `npm run type-check` / `npm test` / `npm run lint` / `npm run build`；改 UI 还要过 `tests/design-system.test.ts`。
+- **提 PR**：先跑 `npm run type-check` / `npm test` / `npm run lint` / `npm run build`；改 UI 还要过 `tests/ui/design-system.test.ts`。
 - **翻译**：界面文案在 `src/i18n/`，中英对齐即可。
 - **写插件**：从 [examples/plugins/git-tools](examples/plugins/git-tools) 开始，命令与钩子见 [PROJECT_STRUCTURE](docs/architecture/PROJECT_STRUCTURE.md)。
 

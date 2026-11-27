@@ -340,7 +340,6 @@ const TOOL_RESULT_LIMIT = 2_000
  * 人眼看不见，但它占预算 —— 实测 160 字的截断预览里平均 47 个字节是颜色码，
  * 而工具卡预览与派活轨迹（上报云端）都从这份摘要走。
  *
- * 与 `electron/text-sanitize.ts` 同语义（主进程与 bridge 独立构建，不能共享源码）。
  * 控制字符用 `String.fromCharCode` 拼出来，否则会被 `no-control-regex` 正当拦下。
  */
 const ESC = String.fromCharCode(27)

@@ -1,7 +1,7 @@
 # 工作区面板（编辑区默认视图）
 
 > **面向**：改「面板」的人 —— 标签条入口、画布交互、上浮链、落盘状态、测试
-> **什么时候读**：动 `src/components/WorkspacePanel.tsx`、`src/components/RepoMapCanvas.tsx`、`src/components/RepoMapNodeCard.tsx`、`src/utils/repoMapLayout.ts`、`src/utils/repoMapCanvasState.ts` 之前
+> **什么时候读**：动 `src/components/repo-map/WorkspacePanel.tsx`、`src/components/repo-map/RepoMapCanvas.tsx`、`src/components/repo-map/RepoMapNodeCard.tsx`、`src/utils/repoMapLayout.ts`、`src/utils/repoMapCanvasState.ts` 之前
 > **不在本文范围**：职责事实怎么扫描 / 缓存（见 [repo-map](./repo-map.md)）、颜色与组件样式（见 [DESIGN_SYSTEM §6.3](../design/DESIGN_SYSTEM.md)）、标签条本身的通用规则（见 [DESIGN_SYSTEM §6.1](../design/DESIGN_SYSTEM.md)）
 
 面板是编辑区的**默认视图**，回答一个问题：**这个仓库里有哪些文件、各自负责什么**，并且用一张可以自由摆放的地图把它摆出来。
@@ -42,6 +42,7 @@
 ```
 主进程
   electron/repo-map.ts           扫描：git ls-files → 指纹增量 → 事实表（role/headComment/exports）
+  electron/repo-map-worker.ts    worker_threads 卸载扫描入口
   electron/repo-map-canvas.ts    画布布局落盘：读 + 清洗 + 原子写（.pi-workbench/repo-map-canvas.json）
   electron/ipc/repo-map.ts       repo-map:scan / describe / canvas:get / canvas:set
 
@@ -51,10 +52,10 @@
   workspace/repoMapCanvas.ts     画布状态读取 + 400ms 防抖写回（唯一写入口）
   workspace/openFileInEditor.ts  打开文件 → 切回文件视图
 
-  components/WorkspacePanel.tsx  工具条：搜索 / 刷新 / 缩放 / 适应 / 还原 + 降级提示 + 空态
-  components/RepoMapCanvas.tsx   单一视口舞台：平移 / 缩放 / 拖动 / 吸附 / 上浮链 / 小地图 / 键盘
-  components/RepoMapNodeCard.tsx 卡片：文件夹卡 / 文件卡 + 层级样式
-  components/RepoMapMinimap.tsx  小地图：同一张世界图 + 视口框
+  components/repo-map/WorkspacePanel.tsx  工具条：搜索 / 刷新 / 缩放 / 适应 / 还原 + 降级提示 + 空态
+  components/repo-map/RepoMapCanvas.tsx   单一视口舞台：平移 / 缩放 / 拖动 / 吸附 / 上浮链 / 小地图 / 键盘
+  components/repo-map/RepoMapNodeCard.tsx 卡片：文件夹卡 / 文件卡 + 层级样式
+  components/repo-map/RepoMapMinimap.tsx  小地图：同一张世界图 + 视口框
 
   utils/repoMapText.ts           文案：事实 → 当前语言的一句话职责
   utils/repoMapLayout.ts         树构建 + 底层排版 + 上浮链排版 + 吸附 / 视口数学
@@ -247,16 +248,16 @@
 
 | 文件 | 覆盖（按行为列，改哪块就补哪条） |
 | --- | --- |
-| `tests/repo-map-layout.test.ts` | 树构建与排序 · 底层固定网格（每行 4 张 / 两块间距 / 顺序无关）· `chainLevelGrid`（列优先 / 8 行折列 / 列宽取最宽卡）· `chainLayout`（原地抬起 / 中线居中 / 折列 / 负坐标 / `depths` / `focus` / `anchor` / 不推动已有卡 / 同层不重叠）· `nextChain`（追加 / 截断 / 链外无效）· `collectFiles` / `ancestorFolders` · `boundsOf` / `fitView` / `zoomAt` · 吸附与参考线 |
-| `tests/repo-map-canvas.test.tsx` | 底层渲染与落盘恢复 · 拖动提交（底层落盘 / 链上只进会话）· 缩放与 LOD · 键盘（`0` / `+` `-` / 方向键 / `Esc`）· 小地图 · 布局迁移与剪枝 · 展开不动镜头 · 父/子角色色（`data-role` + `bg-raised` + 竖条）· 搜索建链与命中叠层 · **空格手形工具**（不按空格拖动不平移 / 空格拖动平移 / 空格点卡片不作动 / 失焦复位 / 双击空白不触发适应窗口）· **空白单击退一层** |
-| `tests/repo-map-canvas-state.test.ts` | 落盘形状、清洗、`layoutVersion` 迁移、剪枝、坐标查询 |
-| `tests/workspace-panel.test.tsx` | 工具条与摘要 · 搜索 · 刷新 · 空态 / 非仓库 / 失败重试 · 展开与当前层 · 按需补描述 · 隐藏时零开销（不扫描、`git:changed` 只记待办）· 卡片过多提示的阈值边界（599 / 600） |
-| `tests/design-system.test.ts` | 面板相关颜色 token 与组件类名门槛（强制） |
-| `tests/main-ipc.test.ts` | `repo-map:*` 四个频道的注册与参数校验 |
+| `tests/utils/repo-map-layout.test.ts` | 树构建与排序 · 底层固定网格（每行 4 张 / 两块间距 / 顺序无关）· `chainLevelGrid`（列优先 / 8 行折列 / 列宽取最宽卡）· `chainLayout`（原地抬起 / 中线居中 / 折列 / 负坐标 / `depths` / `focus` / `anchor` / 不推动已有卡 / 同层不重叠）· `nextChain`（追加 / 截断 / 链外无效）· `collectFiles` / `ancestorFolders` · `boundsOf` / `fitView` / `zoomAt` · 吸附与参考线 |
+| `tests/ui/repo-map-canvas.test.tsx` | 底层渲染与落盘恢复 · 拖动提交（底层落盘 / 链上只进会话）· 缩放与 LOD · 键盘（`0` / `+` `-` / 方向键 / `Esc`）· 小地图 · 布局迁移与剪枝 · 展开不动镜头 · 父/子角色色（`data-role` + `bg-raised` + 竖条）· 搜索建链与命中叠层 · **空格手形工具**（不按空格拖动不平移 / 空格拖动平移 / 空格点卡片不作动 / 失焦复位 / 双击空白不触发适应窗口）· **空白单击退一层** |
+| `tests/utils/repo-map-canvas-state.test.ts` | 落盘形状、清洗、`layoutVersion` 迁移、剪枝、坐标查询 |
+| `tests/ui/workspace-panel.test.tsx` | 工具条与摘要 · 搜索 · 刷新 · 空态 / 非仓库 / 失败重试 · 展开与当前层 · 按需补描述 · 隐藏时零开销（不扫描、`git:changed` 只记待办）· 卡片过多提示的阈值边界（599 / 600） |
+| `tests/ui/design-system.test.ts` | 面板相关颜色 token 与组件类名门槛（强制） |
+| `tests/electron/main-ipc.test.ts` | `repo-map:*` 四个频道的注册与参数校验 |
 
 ```bash
-npx vitest run tests/repo-map-layout.test.ts tests/repo-map-canvas.test.tsx
-npx vitest run tests/workspace-panel.test.tsx tests/repo-map-canvas-state.test.ts
+npx vitest run tests/utils/repo-map-layout.test.ts tests/ui/repo-map-canvas.test.tsx
+npx vitest run tests/ui/workspace-panel.test.tsx tests/utils/repo-map-canvas-state.test.ts
 npm test && npm run lint && npm run type-check
 ```
 
@@ -284,7 +285,7 @@ npm test && npm run lint && npm run type-check
 | 一层折列行数 | `CHAIN_MAX_ROWS = 8` + `chainLevelGrid`（改完补 `repo-map-layout` 用例） |
 | 层间对齐方式 | `chainLayout` 里的 `top = Math.round(point.y + (76 − 块高) / 2)`（中线居中 → 改成贴顶/贴底就改这一行） |
 | 层级视觉（上移 / 阴影 / 退后档） | `RepoMapNodeCard.tsx` 的 `STEP_PX` / `RECESSED_OPACITY` + `index.css` 的 `.repo-map-card` 过渡 + §6.3 文档 |
-| 新增一种交互 | `RepoMapCanvas.tsx` 的事件层 + `tests/repo-map-canvas.test.tsx` + §7/§8 文档 |
+| 新增一种交互 | `RepoMapCanvas.tsx` 的事件层 + `tests/ui/repo-map-canvas.test.tsx` + §7/§8 文档 |
 | 改落盘形状 | `repoMapCanvasState.ts`（形状 + 清洗 + 迁移）、`electron/repo-map-canvas.ts`（主进程清洗）、`CANVAS_LAYOUT_VERSION` 递增 + 迁移用例 + §9 文档 |
 | 改 LOD 阈值 | `repoMapLod.ts` + `index.css` 的 LOD 选择器 + §8 文档 |
 | 改扫描口径 / 缓存 | 见 [repo-map](./repo-map.md)，本文不重复 |
@@ -296,8 +297,8 @@ npm test && npm run lint && npm run type-check
 改任何一处面板行为，按这张单子走完再收尾（顺序即验证顺序）：
 
 1. **常量**：尺寸 / 间距 / 折列 / 阈值都在 `repoMapLayout.ts` 与 `WorkspacePanel.tsx` 顶部，改完回到本文 §5 / §6 / §10 对齐数字。
-2. **布局用例**：`tests/repo-map-layout.test.ts` —— 排布规则变了就补一条「形状只由索引决定」的断言（不写「看起来对」，写具体坐标 / 尺寸）。
-3. **交互用例**：`tests/repo-map-canvas.test.tsx` / `tests/workspace-panel.test.tsx` —— 手势改动必须同时覆盖「做了什么」与「没做什么」（例：空格点卡片既没打开也没展开）。
+2. **布局用例**：`tests/utils/repo-map-layout.test.ts` —— 排布规则变了就补一条「形状只由索引决定」的断言（不写「看起来对」，写具体坐标 / 尺寸）。
+3. **交互用例**：`tests/ui/repo-map-canvas.test.tsx` / `tests/ui/workspace-panel.test.tsx` —— 手势改动必须同时覆盖「做了什么」与「没做什么」（例：空格点卡片既没打开也没展开）。
 4. **两份文档**：`docs/design/DESIGN_SYSTEM.md §6.3`（视觉 / 手势的唯一事实源，含变更记录）+ 本文 §7 / §8（规则表）。
-5. **门禁**：`tests/design-system.test.ts`（颜色 / 类名）→ `npm run type-check` → `npm run lint` → `npm test`；UI 改动另跑 Paper / Ink 两套主题、1024 / 1440 两个宽度。
+5. **门禁**：`tests/ui/design-system.test.ts`（颜色 / 类名）→ `npm run type-check` → `npm run lint` → `npm test`；UI 改动另跑 Paper / Ink 两套主题、1024 / 1440 两个宽度。
 6. **别碰**：落盘形状（`repoMapCanvasState` + `CANVAS_LAYOUT_VERSION`）与 IPC 频道名属于兼容性契约，改它们要单独确认，并在 §9 记录迁移。

@@ -4,11 +4,11 @@
 > **什么时候读**：动 `apps/cloud`、终端派活（device agent）、云端会话、工单状态机之前
 > **什么时候要改**：角色边界、通道形态、工单语义、可见性或验收场景变化时
 
-**状态**：需求定稿 v3.3（Web 与桌面端双客户端、单会话模型、多端同步、事件唤醒、工作树干净即自动回收）；**P0（C-01）与后续收口项（C-02 / C-04 / C-05 / C-06 / C-07 / P-09）均已落地、部署并完成线上真派活闭环验收**（`/v1/health` → `ok/hasAccount/ready` 全为 true，真派活、隔离工作树、实时里程碑、结果汇总、干净树自动回收、公网重启重连与安全/隔离复核全部通过，见 [cloud-agent](../agent/cloud-agent.md) 与 [STATUS](../progress/STATUS.md)）。剩余 P1 待办集中在 [BACKLOG](../progress/BACKLOG.md) 的 **C-03**（记忆抽取、梦境整理、已读未读、diff 回传、托盘角标、并发压测含 A-25）。**§4.0 的两个开工前置 PoC（V1 双实例并发 / V2 压缩前历史）已于 2026-11-20 执行通过**，见 §4.0 与[实测报告](../reports/cloud-agent-poc-verification-2026-11-20.md)
+**状态**：需求定稿 v3.3（Web 与桌面端双客户端、单会话模型、多端同步、事件唤醒、工作树干净即自动回收）；**P0（C-01）与 P1（C-02 ~ C-07 / P-09）均已落地、部署并完成线上真派活闭环验收**（`/v1/health` → `ok/hasAccount/ready` 全为 true，真派活、隔离工作树、实时里程碑、结果汇总、干净树自动回收、公网重启重连与安全/隔离复核全部通过，数据层已迁至 Node 24 `node:sqlite` WAL，见 [cloud-agent](../agent/cloud-agent.md) 与 [STATUS](../progress/STATUS.md)）。剩余待办见 [BACKLOG](../progress/BACKLOG.md)（仅 P2 `P-02` 云端 OAuth 登录）。**§4.0 的两个开工前置 PoC（V1 双实例并发 / V2 压缩前历史）已于 2026-11-20 执行通过**（结论已收录于 §4.0）。
 **日期**：2026-11-19（v3.1 修订：2026-11-20；v3.2 修订：2026-11-21；v3.3 修订：2026-11-21）
 **范围**：云端 Agent 的调度闭环 —— 提需求、定目标终端与工作区、出方案、确认、派活、跟进、汇报、停止；客户端为桌面端**独立页面** + Web（完整交互）
 **不包含**：日常助理（日程 / 笔记 / 搜索类）、服务器上跑开发、多用户多租户、手机原生客户端、旧 Hermes 协议与网关插件
-**配套**：[服务器可行性实测报告](../reports/cloud-server-feasibility-2026-11-19.md)（部署基线的数据来源）；[代码侧复核](../reports/cloud-agent-plan-feasibility-2026-11-19.md)（**v2 基线，仅作史料**：其中「G5 必须做」已由 D-24 推翻、15.5 人日已重算，以本文件 v3.2 为准）
+**实现与运维**：见 [docs/agent/cloud-agent.md](../agent/cloud-agent.md)（早期 2026-11-19/20 阶段性可行性与 PoC 报告已完成历史使命并清理，关键结论均已并入本文与实现文档）
 
 > **v2/v3 相对 v1 的变化**：① 增加 Web 客户端（登录 / 设备 / 配对码 / 会话交互），配对从"云端下发码"改为"Web 生成码"；② 云端只保留**一个唯一会话**，长内容靠记忆 / 知识库 / 梦境维护；③ 会话与指示器状态在 Web 与桌面端**同源同步**；④ 不维护旧客户端兼容；⑤ 失败由云端在会话中主动说明；⑥ **终端工单不做路径级硬限制**（隔离靠 worktree，可见靠改动清单）；⑦ **事件唤醒**取代阻塞等待（取消 `wait_task`）；⑧ 桌面端云端页是**独立页面**（保留顶栏与底部状态栏）；⑨ **一机一 token、双通道**，不需要配两次码。
 
@@ -39,7 +39,7 @@
 
 - 历史与导出的唯一真相源是会话记录（JSONL + `parentId` 分支），见 [ADR-003](../decisions/ADR-003-session-record-single-source.md)。云端会话与终端会话各自成立，**互不复制**。
 - 权限是安全边界：`readonly` 用 deny 而不是 ask，审批超时与通道缺失一律拒绝（fail-closed）。见 [agent-runtime](../agent/agent-runtime.md)。
-- 便携式目录与落盘位置遵循 [paths-and-storage](../agent/paths-and-storage.md)；`data/cloud/` 落在受保护的 `data/` 之下，无需改 `PROTECTED_TOP_LEVEL`（只有新增**顶层**目录才要改）。
+- 目录与落盘位置遵循 [paths-and-storage](../agent/paths-and-storage.md) 的严格两目录模型（与便携 `.zip` 单目录模式）；`data/cloud/` 落在统一数据目录 `getAppDir()` 的 `data/` 之下。
 
 ---
 
@@ -151,7 +151,7 @@
                                        └───────────────────────────┘
 ```
 
-实测基线（2026-11-19，详见 [服务器可行性报告](../reports/cloud-server-feasibility-2026-11-19.md)）：
+实测基线（2026-11-19）：
 
 | 项 | 值 |
 | --- | --- |
@@ -193,7 +193,7 @@
 | 主进程连 WS | Electron 44.9.1 = **Node 24.22.0，全局 `WebSocket` 可用（已实测）**；SDK 另带 `undici` | 主进程不需要新依赖；`ws` 只有服务端要（D-25） |
 | 落盘不写明文 Key | `models.json` 里只写 `apiKey: $PI_WORKBENCH_API_KEY`，Key 只走 `process.env` | `pi-bridge/src/model-config.ts:167` |
 
-**2026-11-20 已把其中四条从“读代码”升级为实测**（脚本在 `cache/poc/`，结论见[实测报告](../reports/cloud-agent-poc-verification-2026-11-20.md)）：
+**2026-11-20 已把其中四条从“读代码”升级为实测**：
 
 | 实测项 | 结果 |
 | --- | --- |
@@ -218,7 +218,7 @@
 | **V1-env** | `process.env` 是否串写 | **串写，且不可修** | 140 次请求全部携带**后 `initialize` 者**的 Key；引用计数归 0 时精确还原进程原值 → 设备侧必须共用同一个 Key（§3.1） |
 | **V2** | 云端单会话跑到触发压缩，压缩后仍能取到压缩前的完整 `branchEntries` | **通过** | `session_before_compact` 8/8 触发，最后一次拿到 **26 条 `branchEntries`**、8/8 轮标记全部可见 → P1 记忆抽取可以只挂这个钩子 |
 
-脚本在 `cache/poc/`（`/cache/` 已 gitignore），复现步骤与逐项数据见[实测报告](../reports/cloud-agent-poc-verification-2026-11-20.md)。
+上述 PoC 结论已全部转化为代码护栏与自动化测试。
 
 **实测新发现的三个实现约束（写 G2 / 云端会话之前必读）**：
 
@@ -249,7 +249,7 @@ G1–G3、G8–G12 是注入与守卫改造，**不改变现有行为**；G5 **�
 
 - **`initialize()` 会无条件 `SessionManager.continueRecent(config.workspaceDir, sessionDir)`**（`agent-manager.ts:625`）——device agent 启动时会在 `data/cloud/agent/sessions` 开一个自己永远不用的“最近会话”。无害，但会话目录里会有一个空壳，排障时别当成工单会话。
 - **第一次 bind 会触发依赖安装**：`bind()` 里调 `deps.ensureInstalled()`（`worktree-coordinator.ts:507`），即“接单 → 第一个改动”之间可能夹着一次 npm/pnpm install（可能失败、可能执行仓库的 install 脚本）。单设备并发 1 与 FIFO 时序都要把这段算进去。
-- **两条项目硬约束不因“新页面”而放宽**：① 桌面端新增的配对页 / 云端配置页 / 状态栏指示器必须过 `tests/design-system.test.ts`（Paper / Ink 两套主题、1024 / 1440 两档宽度），颜色只能用主题 token（禁 `gray-*` / `dark:`）；② 配对页与配置页需要新 IPC，必须走四步：`electron/ipc/<域>.ts` 用 `handleIpc` → `electron/preload.cts` → `src/types/electron.d.ts` → `src/api/index.ts`（含 Web mock）。
+- **两条项目硬约束不因“新页面”而放宽**：① 桌面端新增的配对页 / 云端配置页 / 状态栏指示器必须过 `tests/ui/design-system.test.ts`（Paper / Ink 两套主题、1024 / 1440 两档宽度），颜色只能用主题 token（禁 `gray-*` / `dark:`）；② 配对页与配置页需要新 IPC，必须走四步：`electron/ipc/<域>.ts` 用 `handleIpc` → `electron/preload.cts` → `src/types/electron.d.ts` → `src/api/index.ts`（含 Web mock）。
 
 ### 4.1 身份与准入（Web 登录 + 配对码）
 
@@ -441,20 +441,20 @@ G1–G3、G8–G12 是注入与守卫改造，**不改变现有行为**；G5 **�
 
 | 位置 | 内容 |
 | --- | --- |
-| 云端 `/var/lib/pi-cloud/` | `accounts.json`（密码哈希）、`devices.json`（token 哈希 + 仓库清单）、`sessions/*.jsonl`（唯一会话）、`tasks.json`、`outbox/`、`memory/`、`kb/`、`config.enc`（AES-256-GCM）；`workspace/` 与 `agent/` 是云端 `AgentManager.initialize()` 必需的 `workspaceDir` / `agentDir`（会话目录在 `agent/sessions`） |
+| 云端 `/var/lib/pi-cloud/` | `cloud.db`（Node 24 `node:sqlite` WAL：账号 / 设备与分权 token / 配对码 / 云端加密配置 / 工单 / 独立 `task_diffs` 表 / 工作单元 / 授权 / 已读游标）、`memory/`（`memories.json`、`dreams.json`、`AGENTS.md`、`SOUL.md`）、`agent/`（云端 `AgentManager` 的 `agentDir`，含 `sessions/*.jsonl`）与 `workspace/` |
 | 终端与桌面端 `data/cloud/` | **同一个进程、同一个目录**，不是两套存储：`identity.json`（加密 token + `deviceId` + 服务器地址）、`workspaces.json`（仓库清单缓存）、`tasks.json`（工单本地状态 + `idempotencyKey` 台账）、`units.json`（`unitId → worktree path` + `cloud:<unitId>` 绑定 id）；`agent/` 为 device agent 的独立 `agentDir`（`models.json` + `settings.json` + `sessions/`） |
 | 终端会话目录 | 执行过程会话落在 `data/cloud/agent/sessions`（device agent 独立 `agentDir`），不进入用户会话目录 |
 
 - 落盘一律走原子写：主进程用 `electron/atomic-json.ts`，`pi-bridge` 侧用它自己的 `pi-bridge/src/atomic-json.ts`（**两份同语义实现，不要跨包 import**）；**不要自己 `writeFile` 覆盖**。
-- `data/cloud/` 在受保护的 `data/` 下（`PROTECTED_TOP_LEVEL = config / data / logs / cache`，实际定义在 `scripts/lib/installer-manifest.js:11`）——**不需要也不要**改它。
+- `data/cloud/` 落在统一数据目录 `getAppDir()` 的 `data/` 下（独立于程序安装目录，升级绝不被触碰）。
 - ⚠️ 新目录叫 `data/cloud/`，与 0.10.0 首启清理删掉的 `data/cloud-agent/` 名字相近：实现时不要写错路径，也不要把它加进 legacy 清理名单（`electron/legacy-cleanup.ts:38`，那会把新数据删掉）。
-- **device agent 的模型配置必须由主进程同步**：`agentDir` 里的 `models.json` / `settings.json` 由 `AgentManager.initialize({ apiConfig })` 生成（Key 不落盘，只写 `$PI_WORKBENCH_API_KEY`）。所以 device agent 的 `initialize()` 要用**用户当前生效的 `apiConfig`**，并在用户改模型配置后重新 `initialize()`——它会重建所有会话运行时，所以只能在**无工单运行**时做（同 F-13 的轮次边界规则）。
+- **device agent 的模型配置必须由主进程同步**：`agentDir` 里的 `models.json` / `settings.json` 由 `AgentManager.initialize({ apiConfig })` 生成（凭证走 `CredentialStore`，不落明文 Key）。所以 device agent 的 `initialize()` 要用**用户当前生效的 `apiConfig`**，并在用户改模型配置后重新 `initialize()`——它会重建所有会话运行时，所以只能在**无工单运行**时做（同 F-13 的轮次边界规则）。
 
 ### 4.12 部署与运维（P2，最终必须有）
 
 - **F-53** 一份可照着做的部署手册：首次部署（Node、Caddy 片段、systemd 单元、`StateDirectory`、`LimitNOFILE`）、升级流程、回滚、备份（`/var/lib/pi-cloud` + 证书目录）、日志查看与轮转。
 - **F-54** 健康检查端点 `GET /v1/health`（不鉴权，只返回版本与就绪状态），供 Caddy 与人工巡检使用。
-- **F-55** 备份策略：每日打包 `/var/lib/pi-cloud/` 下的 `sessions/` `tasks.json` `devices.json` `memory/` **以及 `accounts.json` 与 `config.enc`**（漏了前两者恢复后没人能登录，漏了后者云端 Key 丢失、模型配置得重推），保留 7 天。
+- **F-55** 备份策略：每日打包 `/var/lib/pi-cloud/` 下的 `cloud.db`（含账号 / 设备 / 配置密文 / 工单）、`agent/`（会话 JSONL）与 `memory/`，保留 7 天。
 
 ---
 
@@ -584,7 +584,7 @@ G1–G3、G8–G12 是注入与守卫改造，**不改变现有行为**；G5 **�
 | 多端同步与恢复 | 快照 + 增量、离线期汇报、指示器状态、已读位点 | 1.5 人日 |
 | 事件唤醒 | 状态事件 → `sendCustomMessage(customType:'task-event')` + `followUp` 合并 2 s | 0.5 人日 |
 | 终端 device agent | 出站连接 + 工单执行 + `ask_cloud` + abort + 里程碑回流 + 退出时上报 `interrupted` | 2.3 人日 |
-| 桌面端 UI | 状态栏指示器 + 配对页 + 云端配置页 + **云端页轻量渲染**（过 `tests/design-system.test.ts` + Paper/Ink 两套主题 + 1024/1440 两档宽度） | 2.5 人日 |
+| 桌面端 UI | 状态栏指示器 + 配对页 + 云端配置页 + **云端页轻量渲染**（过 `tests/ui/design-system.test.ts` + Paper/Ink 两套主题 + 1024/1440 两档宽度） | 2.5 人日 |
 | 最小运维块 | systemd 单元 + Caddy 片段 + 每日备份（含 `accounts.json` / `config.enc`） | 0.5 人日 |
 | 服务端测试 | 登录 / token / 配对爆破 / outbox resume / 授权越界 / 幂等（AGENTS §6 要求，不能只靠手点） | 2 人日 |
 | 串联验收 | §5 的 A-01~A-24、A-26~A-45（**A-25 属 P1**） | 1.5 人日 |
