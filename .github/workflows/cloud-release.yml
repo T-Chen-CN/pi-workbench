@@ -7,11 +7,11 @@ on:
       - 'apps/cloud/**'
       - 'packages/cloud-ui/**'
       - 'pi-bridge/**'
-      - 'src/components/StreamdownView.tsx'
-      - 'src/components/CloudTraceSection.tsx'
-      - 'src/components/StreamingTranscript.tsx'
-      - 'src/components/TaskResultSection.tsx'
-      - 'src/components/BrandSeal.tsx'
+      - 'src/components/ui/StreamdownView.tsx'
+      - 'src/components/cloud/CloudTraceSection.tsx'
+      - 'src/components/ui/StreamingTranscript.tsx'
+      - 'src/components/cloud/TaskResultSection.tsx'
+      - 'src/components/ui/BrandSeal.tsx'
       - 'src/hooks/chatScroll.ts'
       - 'src/utils/shikiHighlighter.ts'
       - 'src/types/cloud.ts'
@@ -55,7 +55,7 @@ jobs:
           npm run build:bridge
           npm run type-check:cloud
           npm run type-check --workspace @pi-workbench/cloud-ui
-          npx vitest run tests/cloud-*.test.ts tests/cloud-*.test.tsx tests/phase0-security-and-reliability.test.ts tests/design-system.test.ts
+          npx vitest run tests/cloud/ tests/electron/phase0-security-and-reliability.test.ts tests/ui/design-system.test.ts
 
       - name: Build self-contained cloud bundle
         run: node scripts/build-cloud-bundle.mjs

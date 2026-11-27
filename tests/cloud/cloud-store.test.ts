@@ -1,0 +1,540 @@
+/** 云端页 store 的帧投影（轻量渲染的数据来源） */
+
+// @vitest-environment jsdom
+
+import { describe, expect, it, vi } from 'vitest'
+
+/** 发送只记账，不真的走 IPC；用例只用它拿到本端生成的 clientMessageId */
+const sent: Array<{ type: string; clientMessageId?: string }> = []
+vi.mock('../../src/api', () => ({
+  api: {
+    cloudClientSend: vi.fn(async (frame: { type: string; clientMessageId?: string }) => {
+      sent.push(frame)
+      return { success: true }
+    }),
+    cloudUnlink: vi.fn(async () => ({ success: true })),
+  },
+}))
+
+import { useCloudStore } from '../../src/store/cloudStore'
+
+function reset(): void {
+  useCloudStore.setState({
+    link: { linked: true },
+    messages: [],
+    tasks: [],
+    devices: [],
+    authorizations: [],
+    notices: [],
+    lastSeq: 0,
+    agentStatus: 'idle',
+    canStopReply: false,
+    units: [],
+  })
+  sent.length = 0
+}
+
+describe('snapshot', () => {
+  it('整体替换消息、工单、设备与授权', () => {
+    reset()
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'snapshot',
+      seq: 7,
+      snapshot: {
+        lastSeq: 7,
+        cloud: { status: 'idle', canStopReply: false },
+        messages: [
+          { id: 'm1', role: 'user', text: '你好', at: 1 },
+          { id: 'm2', role: 'assistant', text: '在', at: 2 },
+        ],
+        tasks: [
+          {
+            id: 'T-1',
+            status: 'running',
+            createdAt: 10,
+            updatedAt: 20,
+            spec: {
+              workUnitId: 'u1',
+              deviceId: 'dev-1',
+              repo: { workspacePath: 'E:/repo' },
+              title: '构建',
+            },
+            progress: { step: 1, lastEventAt: 20, summary: '正在跑测试' },
+          },
+        ],
+        devices: [
+          {
+            id: 'dev-1',
+            name: '笔记本',
+            platform: 'win32',
+            online: true,
+            workspaces: [{ path: 'E:/repo', name: 'repo', isGit: true }],
+          },
+        ],
+        authorizations: [
+          { id: 'auth-1', items: [], quota: 5, used: 1, confirmedAt: 1, expiresAt: 2, confirmedSummary: 'x' },
+        ],
+        units: [
+          {
+            unitId: 'u1',
+            deviceId: 'dev-1',
+            workspacePath: 'E:/repo',
+            worktreePath: 'E:/repo/.pi-workbench/worktrees/wt-1',
+            branch: 'pi/wt-1',
+            createdAt: 5,
+            closedAt: null,
+            dirtyAt: 9,
+          },
+        ],
+      },
+    })
+
+    const state = useCloudStore.getState()
+    expect(state.messages).toHaveLength(2)
+    expect(state.messages[0]).toMatchObject({ role: 'user', text: '你好' })
+    expect(state.tasks[0]).toMatchObject({ id: 'T-1', title: '构建', status: 'running', lastMilestone: '正在跑测试' })
+    expect(state.devices[0]).toMatchObject({ id: 'dev-1', online: true })
+    expect(state.authorizations[0].used).toBe(1)
+    expect(state.units[0]).toMatchObject({
+      unitId: 'u1',
+      branch: 'pi/wt-1',
+      closedAt: null,
+      dirtyAt: 9,
+    })
+    expect(state.lastSeq).toBe(7)
+  })
+
+  it('unit 事件按 unitId 合并，不重复堆行（F-19a）', () => {
+    reset()
+    const store = useCloudStore.getState()
+    const frame = (unit: Record<string, unknown>, seq: number) => ({
+      v: 1,
+      type: 'event',
+      seq,
+      event: { type: 'unit', unit },
+    })
+    store.applyFrame(
+      frame(
+        { unitId: 'u1', deviceId: 'd', workspacePath: 'E:/repo', createdAt: 1, closedAt: null },
+        1
+      )
+    )
+    store.applyFrame(
+      frame({ unitId: 'u1', deviceId: 'd', workspacePath: 'E:/repo', createdAt: 1, closedAt: 8 }, 2)
+    )
+    expect(useCloudStore.getState().units).toHaveLength(1)
+    expect(useCloudStore.getState().units[0].closedAt).toBe(8)
+  })
+})
+
+describe('流式事件', () => {
+  it('text_delta 追加到同一条助手消息', () => {
+    reset()
+    const store = useCloudStore.getState()
+    store.applyFrame({ v: 1, type: 'event', seq: 1, event: { type: 'text_delta', delta: '你' } })
+    store.applyFrame({ v: 1, type: 'event', seq: 2, event: { type: 'text_delta', delta: '好' } })
+    const state = useCloudStore.getState()
+    expect(state.messages).toHaveLength(1)
+    expect(state.messages[0]).toMatchObject({ role: 'assistant', text: '你好', streaming: true })
+  })
+
+  it('message_end 收尾并带上错误', () => {
+    reset()
+    const store = useCloudStore.getState()
+    store.applyFrame({ v: 1, type: 'event', seq: 1, event: { type: 'text_delta', delta: '半句' } })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'message_end', text: '完整一句', error: 'aborted' },
+    })
+    const state = useCloudStore.getState()
+    expect(state.messages[0]).toMatchObject({ text: '完整一句', streaming: false, error: 'aborted' })
+  })
+
+  it('trace 投影成可折叠的工具块', () => {
+    reset()
+    const store = useCloudStore.getState()
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: { type: 'trace', trace: { type: 'tool_start', toolCallId: 't1', toolName: 'dispatch_task', argsSummary: 'T-1' } },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'trace', trace: { type: 'tool_end', toolCallId: 't1', toolName: 'dispatch_task', status: 'success', resultPreview: 'ok' } },
+    })
+    const traces = useCloudStore.getState().messages[0].traces
+    expect(traces).toHaveLength(1)
+    expect(traces[0]).toMatchObject({ toolName: 'dispatch_task', status: 'ok', summary: 'ok' })
+  })
+
+  it('task / device 事件按 id 合并而不是重复插入', () => {
+    reset()
+    const store = useCloudStore.getState()
+    const task = (status: string) => ({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: {
+        type: 'task',
+        task: {
+          id: 'T-1',
+          status,
+          createdAt: 1,
+          updatedAt: 2,
+          spec: { workUnitId: 'u1', deviceId: 'dev-1', repo: { workspacePath: 'E:/repo' }, title: '构建' },
+          progress: { step: 0, lastEventAt: 2 },
+        },
+      },
+    })
+    store.applyFrame(task('queued'))
+    store.applyFrame(task('running'))
+    expect(useCloudStore.getState().tasks).toHaveLength(1)
+    expect(useCloudStore.getState().tasks[0].status).toBe('running')
+
+    const device = (online: boolean) => ({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: {
+        type: 'device',
+        device: { id: 'dev-1', name: '笔记本', platform: 'win32', online, workspaces: [] },
+      },
+    })
+    store.applyFrame(device(true))
+    store.applyFrame(device(false))
+    expect(useCloudStore.getState().devices).toHaveLength(1)
+    expect(useCloudStore.getState().devices[0].online).toBe(false)
+  })
+
+  it('notice 与 cloud_status 更新指示器', () => {
+    reset()
+    const store = useCloudStore.getState()
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: { type: 'cloud_status', status: 'replying' },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'notice', level: 'warn', text: '终端离线', at: 5, key: 'offline' },
+    })
+    const state = useCloudStore.getState()
+    expect(state.agentStatus).toBe('replying')
+    expect(state.canStopReply).toBe(true)
+    expect(state.notices[0]).toMatchObject({ level: 'warn', text: '终端离线' })
+  })
+
+  it('用户消息：服务端回显按 id 去重，本端乐观追加的不会被画两遍', () => {
+    reset()
+    // 本端发送时先乐观追加一条（id 与 clientMessageId 一致）
+    useCloudStore.setState({
+      messages: [{ id: 'c-abc', role: 'user', text: '你好', at: 1, traces: [] }],
+    })
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: { type: 'message_start', messageId: 'c-abc', role: 'user', at: 2 },
+    })
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'message_end', messageId: 'c-abc', text: '你好', at: 3 },
+    })
+    const messages = useCloudStore.getState().messages
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ id: 'c-abc', role: 'user', text: '你好', streaming: false })
+  })
+
+  it('另一端的用户消息也会显示（之前只有 assistant 气泡）', () => {
+    reset()
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: { type: 'message_start', messageId: 'u-c-1', role: 'user', at: 1 },
+    })
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'message_end', messageId: 'u-c-1', text: '在 Web 上说的话', at: 2 },
+    })
+    const messages = useCloudStore.getState().messages
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ role: 'user', text: '在 Web 上说的话' })
+  })
+
+  it('协议版本不符的帧被忽略', () => {
+    reset()
+    useCloudStore.getState().applyFrame({ v: 2, type: 'snapshot', snapshot: { messages: [{ id: 'x' }] } })
+    expect(useCloudStore.getState().messages).toHaveLength(0)
+  })
+})
+
+describe('用户消息回显（多端同一份对话）', () => {
+  it('本端乐观追加 + 服务端回显只留一条（不能变成两个 YOU 气泡）', async () => {
+    reset()
+    const store = useCloudStore.getState()
+    await store.say('你列一下你可控的设备和工作区')
+
+    // 本端先乐观追加一条，id 是本端生成的 clientMessageId
+    expect(useCloudStore.getState().messages).toHaveLength(1)
+    const clientMessageId = sent[0]?.clientMessageId ?? ''
+    expect(clientMessageId).toMatch(/^c-/)
+    expect(useCloudStore.getState().messages[0]).toMatchObject({ role: 'user', id: clientMessageId })
+
+    // 服务端把这条消息广播回来（id 是 u-<clientMessageId>，两端都靠它渲染气泡）
+    const echoId = `u-${clientMessageId}`
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: { type: 'message_start', messageId: echoId, role: 'user', at: 1 },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'message_end', messageId: echoId, text: '你列一下你可控的设备和工作区', at: 2 },
+    })
+
+    const messages = useCloudStore.getState().messages
+    expect(messages).toHaveLength(1)
+    // 采纳服务端 id，后续 message_end / 重连快照都能对上
+    expect(messages[0]).toMatchObject({
+      id: echoId,
+      role: 'user',
+      text: '你列一下你可控的设备和工作区',
+    })
+  })
+
+  it('别的端发的消息照常新增（本地没有对应乐观气泡）', () => {
+    reset()
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: { type: 'message_start', messageId: 'u-c-from-web', role: 'user', at: 1 },
+    })
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'message_end', messageId: 'u-c-from-web', text: '来自 Web', at: 2 },
+    })
+    expect(useCloudStore.getState().messages).toEqual([
+      expect.objectContaining({ id: 'u-c-from-web', role: 'user', text: '来自 Web' }),
+    ])
+  })
+})
+
+describe('已读游标、流式插话与解绑清理（P0-2 / P1）', () => {
+  it('unreadCount 为 0 时 markRead 不发帧，read_state 推进 lastSeq 也不会触发死循环（P0-2）', async () => {
+    reset()
+    useCloudStore.setState({
+      clientState: { status: 'open', lastSeq: 10 },
+      lastSeq: 10,
+      lastReadSeq: 5,
+      unreadCount: 2,
+    })
+    await useCloudStore.getState().markRead()
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ type: 'mark_read', seq: 10 })
+
+    // 服务端广播 read_state（带有更高 seq=11，但 unreadCount 归零）
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 11,
+      event: { type: 'read_state', lastReadSeq: 10, unreadCount: 0 },
+    })
+    const state = useCloudStore.getState()
+    expect(state.unreadCount).toBe(0)
+    expect(state.lastReadSeq).toBe(11)
+
+    // 再次调用 markRead 必须静默，不得形成 mark_read <-> read_state 风暴
+    await useCloudStore.getState().markRead()
+    expect(sent).toHaveLength(1)
+  })
+
+  it('先来 trace 再来 message_start 时复用占位行，流式插话按 messageId 归并', () => {
+    reset()
+    const store = useCloudStore.getState()
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: {
+        type: 'trace',
+        trace: { type: 'tool_start', toolCallId: 't-1', toolName: 'dispatch_task', argsSummary: 'build' },
+      },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'message_start', messageId: 'a-1', role: 'assistant', at: 10 },
+    })
+    // 流式过程中插入一条用户消息
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 3,
+      event: { type: 'message_start', messageId: 'u-steer', role: 'user', at: 11 },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 4,
+      event: { type: 'message_end', messageId: 'u-steer', text: '补充一下', at: 12 },
+    })
+    // 助手继续按 messageId 追加 delta 并结束
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 5,
+      event: { type: 'text_delta', messageId: 'a-1', delta: '收到补充' },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 6,
+      event: { type: 'message_end', messageId: 'a-1', text: '收到补充', at: 13 },
+    })
+
+    const messages = useCloudStore.getState().messages
+    expect(messages).toHaveLength(2)
+    expect(messages[0]).toMatchObject({ id: 'a-1', role: 'assistant', text: '收到补充', streaming: false })
+    expect(messages[0].traces).toHaveLength(1)
+    expect(messages[1]).toMatchObject({ id: 'u-steer', role: 'user', text: '补充一下' })
+  })
+
+  it('unlink 清空未读计数、离开摘要与停止中工单集合', async () => {
+    reset()
+    useCloudStore.setState({
+      lastSeq: 9,
+      lastReadSeq: 4,
+      unreadCount: 3,
+      awaySummary: { since: 1, until: 9, text: '你离开期间完成了 1 个工单', items: [] },
+      stoppingTaskIds: { 'T-1': true },
+    })
+    await useCloudStore.getState().unlink()
+    const state = useCloudStore.getState()
+    expect(state.link.linked).toBe(false)
+    expect(state.unreadCount).toBe(0)
+    expect(state.lastReadSeq).toBe(0)
+    expect(state.awaySummary).toBeNull()
+    expect(state.stoppingTaskIds).toEqual({})
+  })
+
+  it('thinking_delta / thinking_redacted / tool_update 实时归并并在正文到达时收敛思考耗时', () => {
+    reset()
+    const store = useCloudStore.getState()
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 1,
+      event: { type: 'trace', messageId: 'm-think', trace: { type: 'thinking_delta', delta: '第一步：' } },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 2,
+      event: { type: 'trace', messageId: 'm-think', trace: { type: 'thinking_delta', delta: '查设备' } },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 3,
+      event: { type: 'trace', messageId: 'm-think', trace: { type: 'thinking_redacted' } },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 4,
+      event: {
+        type: 'trace',
+        messageId: 'm-think',
+        trace: { type: 'tool_start', toolCallId: 'tc-1', toolName: 'list_devices', argsSummary: '{}' },
+      },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 5,
+      event: {
+        type: 'trace',
+        messageId: 'm-think',
+        trace: { type: 'tool_update', toolCallId: 'tc-1', resultPreview: '正在查询…' },
+      },
+    })
+    store.applyFrame({
+      v: 1,
+      type: 'event',
+      seq: 6,
+      event: { type: 'text_delta', messageId: 'm-think', delta: '查到了' },
+    })
+
+    const msg = useCloudStore.getState().messages[0]
+    expect(msg).toMatchObject({
+      id: 'm-think',
+      thinking: '第一步：查设备',
+      thinkingRedacted: true,
+      text: '查到了',
+      streaming: true,
+    })
+    expect(typeof msg.thinkingDurationMs).toBe('number')
+    expect(msg.traces[0]).toMatchObject({
+      id: 'tc-1',
+      toolName: 'list_devices',
+      resultPreview: '正在查询…',
+    })
+  })
+
+  it('snapshot 水合持久化的 thinking 与 traces 字段', () => {
+    reset()
+    useCloudStore.getState().applyFrame({
+      v: 1,
+      type: 'snapshot',
+      seq: 5,
+      snapshot: {
+        lastSeq: 5,
+        cloud: { status: 'idle', canStopReply: false },
+        messages: [
+          {
+            id: 'h-0',
+            role: 'assistant',
+            text: '已完成检查',
+            at: 100,
+            thinking: '先看状态再汇总',
+            thinkingDurationMs: 1500,
+            traces: [{ id: 'tc-s', toolName: 'get_task', summary: 'done', status: 'ok', durationMs: 42 }],
+          },
+        ],
+        tasks: [],
+        devices: [],
+        authorizations: [],
+        units: [],
+      },
+    })
+    const msg = useCloudStore.getState().messages[0]
+    expect(msg).toMatchObject({
+      id: 'h-0',
+      thinking: '先看状态再汇总',
+      thinkingDurationMs: 1500,
+    })
+    expect(msg.traces).toHaveLength(1)
+    expect(msg.traces[0]).toMatchObject({ id: 'tc-s', toolName: 'get_task', status: 'ok', durationMs: 42 })
+  })
+})

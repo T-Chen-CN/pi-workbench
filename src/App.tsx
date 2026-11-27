@@ -12,20 +12,20 @@ import {
 } from 'lucide-react'
 import { api } from './api'
 import { piAgentAPI } from './api/piAgentAPI'
-import { BrandSeal } from './components/BrandSeal'
-import type { SettingsSection } from './components/Settings'
-import { UpdateDialog } from './components/UpdateDialog'
-import { UpdateStatusIndicator } from './components/UpdateStatusIndicator'
-import { CloudStatusIndicator } from './components/CloudStatusIndicator'
-import { ToastContainer } from './components/Toast'
-import { DialogHost } from './components/DialogHost'
-import { WelcomeScreen } from './components/WelcomeScreen'
-import { WorkspacePickerDialog } from './components/WorkspacePickerDialog'
-import { WindowControls } from './components/WindowControls'
-import { BootScreen } from './components/BootScreen'
+import { BrandSeal } from './components/ui/BrandSeal'
+import type { SettingsSection } from './components/settings/Settings'
+import { UpdateDialog } from './components/settings/UpdateDialog'
+import { UpdateStatusIndicator } from './components/settings/UpdateStatusIndicator'
+import { CloudStatusIndicator } from './components/cloud/CloudStatusIndicator'
+import { ToastContainer } from './components/ui/Toast'
+import { DialogHost } from './components/ui/DialogHost'
+import { WelcomeScreen } from './components/workspace/WelcomeScreen'
+import { WorkspacePickerDialog } from './components/workspace/WorkspacePickerDialog'
+import { WindowControls } from './components/ui/WindowControls'
+import { BootScreen } from './components/ui/BootScreen'
 import type { AppView } from './types/navigation'
-import { Button, IconButton, Modal, Spinner } from './components/ui'
-import { handleTabStripWheel, Tab } from './components/patterns'
+import { Button, IconButton, Modal, Spinner } from './components/ui/ui'
+import { handleTabStripWheel, Tab } from './components/ui/patterns'
 import { useToastStore, toast } from './store/toastStore'
 import { useI18nStore } from './store/i18nStore'
 import { useThemeStore, useResolvedTheme, type ThemeMode } from './store/themeStore'
@@ -53,19 +53,19 @@ import { emitAppEvent, onAppEvent } from './utils/appEvents'
 
 // 非首屏重组件（工作区、云端视图、设置页、命令面板、开发调试面板）均走按需分包，不阻塞启动页
 const WorkspaceView = lazy(() =>
-  import('./components/WorkspaceView').then((module) => ({ default: module.WorkspaceView }))
+  import('./components/workspace/WorkspaceView').then((module) => ({ default: module.WorkspaceView }))
 )
 const CloudView = lazy(() =>
-  import('./components/CloudView').then((module) => ({ default: module.CloudView }))
+  import('./components/cloud/CloudView').then((module) => ({ default: module.CloudView }))
 )
 const Settings = lazy(() =>
-  import('./components/Settings').then((module) => ({ default: module.Settings }))
+  import('./components/settings/Settings').then((module) => ({ default: module.Settings }))
 )
 const CommandPalette = lazy(() =>
-  import('./components/CommandPalette').then((module) => ({ default: module.CommandPalette }))
+  import('./components/workspace/CommandPalette').then((module) => ({ default: module.CommandPalette }))
 )
 const IPCDebug = lazy(() =>
-  import('./components/IPCDebug').then((module) => ({ default: module.IPCDebug }))
+  import('./components/ui/IPCDebug').then((module) => ({ default: module.IPCDebug }))
 )
 
 type BootPhase = 'boot' | 'reveal' | 'ready'

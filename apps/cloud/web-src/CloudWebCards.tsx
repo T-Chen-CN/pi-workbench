@@ -16,7 +16,7 @@ import {
   StatusText,
   Textarea,
 } from '@pi-workbench/cloud-ui'
-import { TaskResultSection } from '../../../src/components/TaskResultSection'
+import { TaskResultSection } from '../../../src/components/cloud/TaskResultSection'
 import {
   MEMORY_KIND_LABELS,
   PROVIDER_PRESETS,

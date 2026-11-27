@@ -1,0 +1,217 @@
+import React, { Suspense, lazy, useEffect, useState } from 'react'
+import { Code, Eye, FileQuestion, FilePlus2, AlertCircle } from 'lucide-react'
+import { editorStoreFor, useEditorStore } from '../../store/editorStore'
+import { useI18nStore } from '../../store/i18nStore'
+import { api } from '../../api'
+import { toast } from '../../store/toastStore'
+import { localizeError } from '../../i18n/errors'
+import { hasReadingView, isOfficeDocumentKind, supportsSourceView } from '../../utils/fileKind'
+import { useFileDocument } from '../../workspace/useFileDocument'
+import { Button, EmptyState, OverlayButton, Spinner } from '../ui/ui'
+import { EditorTabs } from './EditorTabs'
+import { WorkspacePanel } from '../repo-map/WorkspacePanel'
+import { MarkdownReadingView } from './MarkdownReadingView'
+import { HtmlPreview } from './HtmlPreview'
+import { MediaView } from './MediaView'
+import { PdfReadingView } from './PdfReadingView'
+import { OfficeDocumentView } from './OfficeDocumentView'
+
+// Monaco 体积大：只在真正需要源码视图时加载
+const MonacoEditor = lazy(() =>
+  import('./MonacoEditor').then((module) => ({ default: module.MonacoEditor }))
+)
+
+/** 二进制文件：不猜内容，直接给出系统打开入口 */
+const UnsupportedFileView: React.FC<{ path: string; name: string }> = ({ path, name }) => {
+  const { t } = useI18nStore()
+  const openExternal = async () => {
+    const result = await api.openPathExternally(path)
+    if (!result.success) {
+      toast.error(
+        t('openExternallyFailed', { error: localizeError(result.error || 'Failed to open file') })
+      )
+    }
+  }
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center bg-surface">
+      <EmptyState
+        icon={FileQuestion}
+        title={t('previewUnavailableTitle')}
+        description={`${name} — ${t('previewUnavailableDescription')}`}
+        action={
+          <Button size="sm" icon={FilePlus2} onClick={openExternal}>
+            {t('openExternally')}
+          </Button>
+        }
+      />
+    </div>
+  )
+}
+
+export interface FileViewProps {
+  workspacePath: string
+  viewRoot?: string
+  active?: boolean
+}
+
+/**
+ * 编辑区容器：标签条 + 视图分发。
+ *
+ * 内容区只有两种形态：工作区面板（默认，见 `panelActive`）与文件视图。切到面板时
+ * 文件视图是 `hidden` 而不是卸载 —— 与阅读视图同一套约定：Monaco 的撤销栈、
+ * 阅读视图的滚动位置在切回来时都还在。
+ *
+ * 文件视图形态由 `file.kind` 决定，切换按钮只对支持源码视图的类型出现
+ * （Markdown / HTML）；媒体类始终是预览。保存与草稿由 `useFileDocument` 承担，
+ * 因此阅读视图里的修改与 Monaco 里的修改走同一条落盘路径。
+ */
+export const FileView: React.FC<FileViewProps> = ({
+  workspacePath,
+  viewRoot,
+  active = true,
+}) => {
+  const root = viewRoot ?? workspacePath
+  const { t } = useI18nStore()
+  const store = editorStoreFor(root)
+  const currentFile = useEditorStore(root, (state) => state.currentFile)
+  const panelActive = useEditorStore(root, (state) => state.panelActive)
+  const { conflicts, reloadFromDisk, keepLocal } = useFileDocument({ workspacePath, root, active })
+
+  // Monaco 一经挂载就保留（隐藏而非卸载），这样切回源码视图时撤销栈还在
+  const [sourceMounted, setSourceMounted] = useState(false)
+  const fileKind = currentFile?.kind
+  // 只有 Markdown / HTML 有阅读视图：其余类型即使残留 reading 也按源码处理
+  const reading = Boolean(
+    currentFile && currentFile.view === 'reading' && hasReadingView(currentFile.kind)
+  )
+  const canSource = Boolean(currentFile && supportsSourceView(currentFile.kind))
+  const readingKind = fileKind && hasReadingView(fileKind) ? fileKind : null
+
+  // 磁盘内容被外部（Agent / 其它编辑器）改过、本地又有未保存修改：提示条让用户选择
+  const conflictContent = currentFile ? (conflicts[currentFile.path] ?? null) : null
+
+  useEffect(() => {
+    if (!currentFile) return
+    // 纯文本永远走源码视图；Markdown / HTML 只有切到源码时才加载 Monaco
+    if (!supportsSourceView(currentFile.kind)) return
+    if (currentFile.kind === 'text' || currentFile.view === 'source') setSourceMounted(true)
+  }, [currentFile])
+
+  // 预热 Monaco：Markdown / HTML 随时可能切到源码，先让浏览器把模块取下来，
+  // 否则第一次点切换要现等 4MB 模块下载 + 解析
+  useEffect(() => {
+    if (!canSource) return
+    const handle = window.setTimeout(() => void import('./MonacoEditor'), 300)
+    return () => window.clearTimeout(handle)
+  }, [canSource])
+
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <EditorTabs workspacePath={workspacePath} root={root} />
+
+      {!panelActive && conflictContent !== null && currentFile && (
+        <div
+          role="status"
+          data-testid="file-conflict-bar"
+          className="flex flex-shrink-0 flex-wrap items-center gap-2 border-b border-rule-divide bg-panel px-3 py-1"
+        >
+          <AlertCircle size={12} className="flex-shrink-0 text-warning" />
+          <span className="type-caption text-ink-muted">{t('fileChangedOnDisk')}</span>
+          <button
+            type="button"
+            onClick={() => void reloadFromDisk(currentFile.path)}
+            className="type-caption text-ink transition-colors hover:text-accent"
+          >
+            {t('fileReload')}
+          </button>
+          <button
+            type="button"
+            onClick={() => keepLocal(currentFile.path)}
+            className="type-caption text-ink-muted transition-colors hover:text-ink"
+          >
+            {t('fileKeepMine')}
+          </button>
+        </div>
+      )}
+
+      <div className="relative flex min-h-0 min-w-0 flex-1">
+        {/* 面板：预览区的默认内容 */}
+        <div className={panelActive ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}>
+          <WorkspacePanel workspacePath={workspacePath} viewRoot={root} active={panelActive && active} />
+        </div>
+
+        {/* 文件视图常驻 DOM，面板激活时只是藏起来（撤销栈 / 滚动位置都留着） */}
+        <div
+          data-testid="file-content-pane"
+          data-active={panelActive ? 'false' : 'true'}
+          className={panelActive ? 'hidden' : 'relative flex min-h-0 min-w-0 flex-1'}
+        >
+          {currentFile ? (
+            <>
+              {canSource && (
+                <div className={reading ? 'hidden' : 'flex min-h-0 min-w-0 flex-1'}>
+                  {sourceMounted ? (
+                    <Suspense
+                      fallback={
+                        <div className="flex min-h-0 flex-1 items-center justify-center bg-surface">
+                          <Spinner />
+                        </div>
+                      }
+                    >
+                      <MonacoEditor
+                        workspacePath={workspacePath}
+                        viewRoot={root}
+                        active={active && !reading && !panelActive}
+                      />
+                    </Suspense>
+                  ) : null}
+                </div>
+              )}
+
+              {/* 阅读视图同样常驻：切回源码再切回来时不必重建 DOM，滚动位置也留着 */}
+              {readingKind && (
+                <div
+                  data-testid="file-reading-pane"
+                  data-active={reading ? 'true' : 'false'}
+                  className={reading ? 'flex min-h-0 min-w-0 flex-1' : 'hidden'}
+                >
+                  {readingKind === 'markdown' ? (
+                    <MarkdownReadingView
+                      root={root}
+                      file={currentFile}
+                      active={reading && !panelActive}
+                    />
+                  ) : (
+                    <HtmlPreview file={currentFile} visible={reading && !panelActive && active} />
+                  )}
+                </div>
+              )}
+              {fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' ? (
+                <MediaView file={currentFile} />
+              ) : null}
+              {fileKind === 'pdf' && <PdfReadingView file={currentFile} />}
+              {/* Office / EPUB：主进程解析成结构化模型，这里只负责画 */}
+              {fileKind && isOfficeDocumentKind(fileKind) && (
+                <OfficeDocumentView file={currentFile} />
+              )}
+              {fileKind === 'binary' && (
+                <UnsupportedFileView path={currentFile.path} name={currentFile.name} />
+              )}
+
+              {/* 视图切换浮在内容右下角：不再和文件标签抢标签条，标签再多也不会被挤出可视区 */}
+              {readingKind && (
+                <OverlayButton
+                  data-testid="file-view-toggle"
+                  icon={reading ? Code : Eye}
+                  label={reading ? t('viewSource') : t('viewReading')}
+                  className="absolute bottom-4 right-4 z-10"
+                  onClick={() => store.getState().toggleFileView(currentFile.path)}
+                />
+              )}
+            </>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}

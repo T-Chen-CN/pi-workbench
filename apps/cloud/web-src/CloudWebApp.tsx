@@ -11,13 +11,13 @@ import {
   Tab,
   Textarea,
 } from '@pi-workbench/cloud-ui'
-import { BrandSeal } from '../../../src/components/BrandSeal'
-import { CloudTraceSection } from '../../../src/components/CloudTraceSection'
-import { StreamdownView } from '../../../src/components/StreamdownView'
+import { BrandSeal } from '../../../src/components/ui/BrandSeal'
+import { CloudTraceSection } from '../../../src/components/cloud/CloudTraceSection'
+import { StreamdownView } from '../../../src/components/ui/StreamdownView'
 import {
   StreamingTranscript,
   type StreamingTranscriptHandle,
-} from '../../../src/components/StreamingTranscript'
+} from '../../../src/components/ui/StreamingTranscript'
 import {
   ACTIVE_TASK_STATUSES,
   AGENT_STATUS_LABELS,

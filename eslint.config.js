@@ -132,8 +132,6 @@ export default tseslint.config(
     ignores: [
       'src/theme/**',
       'src/utils/shikiHighlighter.ts',
-      'src/components/ui.tsx',
-      'src/components/patterns.tsx',
       'src/components/ui/ui.tsx',
       'src/components/ui/patterns.tsx',
       'packages/cloud-ui/src/primitives.tsx',

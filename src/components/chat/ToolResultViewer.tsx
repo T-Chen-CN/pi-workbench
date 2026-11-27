@@ -1,0 +1,400 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronLeft, ChevronRight, Copy, ExternalLink } from 'lucide-react'
+import { piAgentAPI } from '../../api/piAgentAPI'
+import type { ToolResultMeta } from '../../types/electron'
+import { useI18nStore } from '../../store/i18nStore'
+import { toast } from '../../store/toastStore'
+import { useVirtualRows } from '../../hooks/useVirtualRows'
+import { useHostDocument } from '../../panelHost/HostContext'
+import { VirtualRows } from '../ui/VirtualRows'
+import { Button, Caption, IconButton, Modal, Spinner } from '../ui/ui'
+import { SearchField } from '../ui/patterns'
+import { formatBytes } from '../../utils/formatBytes'
+import { copyText } from '../../utils/clipboard'
+
+/** 每次读取的字符数；分块传输避免超长结果一次性进入渲染进程 */
+const CHUNK_CHARS = 262_144
+/** 超过该大小时默认不在内嵌查看器中加载，改为外部编辑器打开 */
+const AUTO_VIEW_BYTES = 20 * 1024 * 1024
+
+export interface ToolResultViewerProps {
+  workspacePath: string
+  sessionId: string
+  toolCallId: string
+  toolName: string
+  onClose: () => void
+}
+
+/** 工具结果全量查看器（R-20）：只读，不修改会话，也不重新注入 Agent 上下文 */
+export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
+  workspacePath,
+  sessionId,
+  toolCallId,
+  toolName,
+  onClose,
+}) => {
+  const t = useI18nStore((state) => state.t)
+  const hostDocument = useHostDocument()
+  const lightboxRef = useRef<HTMLDivElement | null>(null)
+  const [meta, setMeta] = useState<ToolResultMeta | null>(null)
+  const [text, setText] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [progress, setProgress] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [image, setImage] = useState<string | null>(null)
+  const [imageIndex, setImageIndex] = useState(0)
+  const [showImage, setShowImage] = useState(false)
+  const [opening, setOpening] = useState(false)
+  const [started, setStarted] = useState(false)
+  const loadTokenRef = useRef(0)
+
+  const loadText = useCallback(
+    async (total: number) => {
+      const token = ++loadTokenRef.current
+      setLoading(true)
+      setError(null)
+      let offset = 0
+      let acc = ''
+      try {
+        for (;;) {
+          if (loadTokenRef.current !== token) return
+          const chunk = await piAgentAPI.readToolResultChunk(
+            workspacePath,
+            sessionId,
+            toolCallId,
+            offset,
+            CHUNK_CHARS
+          )
+          if (loadTokenRef.current !== token) return
+          if (!chunk.success) {
+            setError(chunk.error ?? useI18nStore.getState().t('toolResultLoadFailed', { error: '' }))
+            break
+          }
+          acc += chunk.text ?? ''
+          if (chunk.done) break
+          const next = chunk.nextOffset ?? offset
+          if (next <= offset) break
+          offset = next
+          if (total > 0) setProgress(Math.min(99, Math.round((offset / total) * 100)))
+        }
+        if (loadTokenRef.current !== token) return
+        setProgress(100)
+      } finally {
+        if (loadTokenRef.current === token) {
+          setText(acc)
+          setLoading(false)
+        }
+      }
+    },
+    [workspacePath, sessionId, toolCallId]
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    setMeta(null)
+    setText('')
+    setError(null)
+    setProgress(0)
+    setStarted(false)
+    setImage(null)
+    setQuery('')
+
+    void (async () => {
+      const result = await piAgentAPI.getToolResultMeta(workspacePath, sessionId, toolCallId)
+      if (cancelled) return
+      if (!result.success || !result.meta) {
+        setError(useI18nStore.getState().t('toolResultLoadFailed', { error: result.error ?? '' }))
+        setLoading(false)
+        return
+      }
+      const nextMeta = result.meta
+      setMeta(nextMeta)
+
+      if (nextMeta.imageCount > 0) {
+        const loaded = await piAgentAPI.getToolResultImage(workspacePath, sessionId, toolCallId, 0)
+        if (cancelled) return
+        if (loaded.success && loaded.data) {
+          setImage(`data:${loaded.mimeType ?? 'image/png'};base64,${loaded.data}`)
+        }
+      }
+
+      if (nextMeta.kind === 'image') {
+        setLoading(false)
+        return
+      }
+      if (nextMeta.bytes > AUTO_VIEW_BYTES) {
+        setLoading(false)
+        return
+      }
+      setStarted(true)
+      await loadText(nextMeta.chars)
+    })()
+
+    return () => {
+      cancelled = true
+      loadTokenRef.current += 1
+    }
+  }, [workspacePath, sessionId, toolCallId, loadText])
+
+  const lines = useMemo(() => (text.length > 0 ? text.split('\n') : []), [text])
+
+  const matches = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return null
+    const found: Array<{ lineNumber: number; text: string }> = []
+    for (let index = 0; index < lines.length; index += 1) {
+      if (lines[index].toLowerCase().includes(needle)) {
+        found.push({ lineNumber: index + 1, text: lines[index] })
+        if (found.length >= 5_000) break
+      }
+    }
+    return found
+  }, [lines, query])
+
+  const rows = useMemo(
+    () =>
+      matches ?? lines.map((line, index) => ({ lineNumber: index + 1, text: line })),
+    [matches, lines]
+  )
+
+  const { parentRef, virtualizer } = useVirtualRows({
+    count: rows.length,
+    estimateSize: 18,
+    overscan: 12,
+  })
+
+  useEffect(() => {
+    parentRef.current?.scrollTo({ top: 0 })
+  }, [query, parentRef])
+
+  // 大图灯箱在捕获阶段独占 Escape，防止关闭灯箱时顺手把外层 ToolResultViewer 弹窗一起关掉
+  useEffect(() => {
+    if (!showImage) return
+    lightboxRef.current?.focus()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      setShowImage(false)
+    }
+    hostDocument.addEventListener('keydown', onKeyDown, true)
+    return () => hostDocument.removeEventListener('keydown', onKeyDown, true)
+  }, [showImage, hostDocument])
+
+  const handleCopy = async () => {
+    const content = matches ? matches.map((match) => match.text).join('\n') : text
+    if (await copyText(content)) {
+      toast.info(t('toolResultCopied'))
+    } else {
+      toast.error(t('copyFailedPlain'))
+    }
+  }
+
+  const handleOpenExternal = async () => {
+    setOpening(true)
+    const result = await piAgentAPI.openToolResultExternally(workspacePath, sessionId, toolCallId)
+    setOpening(false)
+    if (!result.success) {
+      toast.error(t('toolResultOpenFailed', { error: result.error ?? '' }))
+    }
+  }
+
+  const canCopy = !loading && (text.length > 0 || matches !== null)
+  const tooLarge = Boolean(meta && meta.bytes > AUTO_VIEW_BYTES)
+
+  const selectImage = async (index: number) => {
+    const loaded = await piAgentAPI.getToolResultImage(
+      workspacePath,
+      sessionId,
+      toolCallId,
+      index
+    )
+    if (loaded.success && loaded.data) {
+      setImage(`data:${loaded.mimeType ?? 'image/png'};base64,${loaded.data}`)
+      setImageIndex(index)
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`${t('toolResultTitle')} · ${meta?.toolName || toolName}`}
+      size="lg"
+      closeLabel={t('close')}
+    >
+      <div className="flex flex-col gap-2 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {meta && (
+            <Caption className="text-ink-muted">
+              {formatBytes(meta.bytes)}
+              {meta.kind === 'text' && ` · ${meta.lines.toLocaleString()} ${t('toolResultLines')}`}
+              {meta.imageCount > 1 &&
+                ` · ${t('toolResultImages', { count: meta.imageCount })}`}
+            </Caption>
+          )}
+          <span className="ml-auto flex items-center gap-1.5">
+            <SearchField
+              value={query}
+              onChange={setQuery}
+              placeholder={t('toolResultSearch')}
+              ariaLabel={t('toolResultSearch')}
+              className="w-48"
+            />
+            <IconButton
+              icon={Copy}
+              label={t('toolResultCopy')}
+              size="sm"
+              onClick={() => void handleCopy()}
+              disabled={!canCopy}
+            />
+            <Button
+              size="sm"
+              icon={ExternalLink}
+              loading={opening}
+              onClick={() => void handleOpenExternal()}
+            >
+              {t('toolResultOpenExternal')}
+            </Button>
+          </span>
+        </div>
+
+        {error && (
+          <div className="border border-rule-hairline bg-raised p-3 type-caption text-danger">
+            {error}
+          </div>
+        )}
+
+        {image && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowImage(true)}
+              className="w-fit border border-rule-hairline bg-sunken p-1"
+              aria-label={t('toolResultPreviewImage')}
+            >
+              <img
+                src={image}
+                alt={toolName}
+                className="max-h-80 max-w-full object-contain"
+              />
+            </button>
+            {meta && meta.imageCount > 1 && (
+              <span className="flex items-center gap-0.5">
+                <IconButton
+                  icon={ChevronLeft}
+                  label={t('previousImage')}
+                  size="sm"
+                  disabled={imageIndex <= 0}
+                  onClick={() => void selectImage(imageIndex - 1)}
+                />
+                <Caption className="text-ink-muted">
+                  {imageIndex + 1}/{meta.imageCount}
+                </Caption>
+                <IconButton
+                  icon={ChevronRight}
+                  label={t('nextImage')}
+                  size="sm"
+                  disabled={imageIndex >= meta.imageCount - 1}
+                  onClick={() => void selectImage(imageIndex + 1)}
+                />
+              </span>
+            )}
+          </div>
+        )}
+
+        {meta?.kind === 'image' && !image && !loading && !error && (
+          <Caption className="text-ink-muted">{t('toolResultEmpty')}</Caption>
+        )}
+
+        {tooLarge && !started && (
+          <div className="flex flex-col gap-2 border border-rule-hairline bg-raised p-3">
+            <Caption className="text-ink-muted">
+              {t('toolResultLargeHint', { size: formatBytes(meta?.bytes ?? 0) })}
+            </Caption>
+            <div>
+              <Button
+                size="sm"
+                onClick={() => {
+                  setStarted(true)
+                  void loadText(meta?.chars ?? 0)
+                }}
+              >
+                {t('toolResultLoadInViewer')}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {loading && (
+          <div className="flex items-center gap-2 py-3 type-caption text-ink-muted">
+            <Spinner size={12} />
+            {t('toolResultLoading', { percent: progress })}
+          </div>
+        )}
+
+        {!loading && !error && started && rows.length > 0 && (
+          <>
+            {matches !== null && (
+              <Caption className="text-ink-muted">
+                {t('toolResultMatches', { count: matches.length })}
+              </Caption>
+            )}
+            <div
+              ref={parentRef}
+              className="h-[55vh] overflow-auto border border-rule-hairline bg-sunken"
+            >
+              <VirtualRows
+                virtualizer={virtualizer}
+                items={rows}
+                getKey={(item) => item.lineNumber}
+                measure
+                fallbackCount={200}
+                rowClassName="flex items-start gap-2 px-2 py-0.5 type-data"
+                renderItem={(item) => (
+                  <>
+                    <span className="w-12 flex-shrink-0 select-none text-right text-ink-subtle">
+                      {item.lineNumber}
+                    </span>
+                    <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-ink">
+                      {item.text || ' '}
+                    </span>
+                  </>
+                )}
+              />
+            </div>
+          </>
+        )}
+
+        {!loading && !error && started && rows.length === 0 && (
+          <Caption className="text-ink-muted">
+            {matches !== null ? t('toolResultNoMatches') : t('toolResultEmpty')}
+          </Caption>
+        )}
+      </div>
+
+      {showImage && image && (
+        <div
+          ref={lightboxRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={toolName}
+          tabIndex={-1}
+          className="fixed inset-0 z-50 flex items-center justify-center p-6 focus:outline-none"
+        >
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 bg-overlay/70"
+            onClick={() => setShowImage(false)}
+          />
+          <img
+            src={image}
+            alt={toolName}
+            className="relative max-h-full max-w-full object-contain"
+          />
+        </div>
+      )}
+    </Modal>
+  )
+}
