@@ -20,12 +20,17 @@ type IpcHandler = (event: unknown, ...args: unknown[]) => Promise<IpcResult> | I
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, IpcHandler>()
   const state = { appDir: '', pickedPath: '' }
+  const shell = {
+    openPath: vi.fn(async () => ''),
+    openExternal: vi.fn(async () => {}),
+    showItemInFolder: vi.fn(),
+  }
   const safeStorage = {
     isEncryptionAvailable: () => true,
     encryptString: (value: string) => Buffer.from(`enc:${value}`, 'utf-8'),
     decryptString: (buffer: Buffer) => Buffer.from(buffer).toString('utf-8').slice(4),
   }
-  return { handlers, state, safeStorage }
+  return { handlers, state, shell, safeStorage }
 })
 
 vi.mock('electron', () => ({
@@ -53,10 +58,16 @@ vi.mock('electron', () => ({
     handle: () => {},
     unhandle: () => {},
   },
-  shell: {
-    openPath: async () => '',
-    openExternal: async () => {},
+  session: {
+    defaultSession: {
+      setPermissionRequestHandler: vi.fn(),
+      setPermissionCheckHandler: vi.fn(),
+      webRequest: {
+        onBeforeRequest: vi.fn(),
+      },
+    },
   },
+  shell: mocks.shell,
   screen: {
     getCursorScreenPoint: () => ({ x: 0, y: 0 }),
     getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
@@ -130,15 +141,58 @@ afterEach(async () => {
 })
 
 describe('filesystem IPC handlers', () => {
-  it('writes and reads a file', async () => {
+  it('writes and reads a file atomically without leaving temp artifacts', async () => {
     await call('workspace:init', workDir)
     const target = path.join(workDir, 'a.txt')
 
     await expect(call('fs:writeFile', target, 'hello')).resolves.toMatchObject({ success: true })
+    await expect(call('fs:writeFile', target, 'updated')).resolves.toMatchObject({ success: true })
     await expect(call('fs:readFile', target)).resolves.toEqual({
       success: true,
       binary: false,
-      content: 'hello',
+      content: 'updated',
+    })
+    const entries = await fs.readdir(workDir)
+    expect(entries.filter((name) => name.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('uses strict allowlist for fs:openExternally and reveals non-allowlisted files safely', async () => {
+    mocks.shell.openPath.mockClear()
+    mocks.shell.showItemInFolder.mockClear()
+
+    const pdfFile = path.join(workDir, 'report.pdf')
+    const scriptFile = path.join(workDir, 'setup.ps1')
+    const codeFile = path.join(workDir, 'app.ts')
+    const subDir = path.join(workDir, 'folder')
+    await fs.writeFile(pdfFile, '%PDF-1.7')
+    await fs.writeFile(scriptFile, 'Write-Host hi')
+    await fs.writeFile(codeFile, 'export const x = 1')
+    await fs.mkdir(subDir)
+
+    await expect(call('fs:openExternally', pdfFile)).resolves.toEqual({ success: true })
+    expect(mocks.shell.openPath).toHaveBeenCalledWith(pdfFile)
+    expect(mocks.shell.showItemInFolder).not.toHaveBeenCalled()
+
+    mocks.shell.openPath.mockClear()
+    await expect(call('fs:openExternally', scriptFile)).resolves.toEqual({
+      success: true,
+      revealed: true,
+    })
+    expect(mocks.shell.openPath).not.toHaveBeenCalled()
+    expect(mocks.shell.showItemInFolder).toHaveBeenCalledWith(scriptFile)
+
+    mocks.shell.showItemInFolder.mockClear()
+    await expect(call('fs:openExternally', codeFile)).resolves.toEqual({
+      success: true,
+      revealed: true,
+    })
+    expect(mocks.shell.openPath).not.toHaveBeenCalled()
+    expect(mocks.shell.showItemInFolder).toHaveBeenCalledWith(codeFile)
+
+    // 目录与非普通文件必须被拒绝
+    await expect(call('fs:openExternally', subDir)).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('regular file'),
     })
   })
 

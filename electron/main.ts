@@ -1,6 +1,6 @@
 import { getAppDir, getInstallDir, isPortableMode, piAgentDir } from './app-paths.js'
 import { migrateLegacyInstallDirSync } from './legacy-paths.js'
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, screen } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, screen, session } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import * as os from 'os'
@@ -22,6 +22,7 @@ import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
 import { installAuxWindowSupport, registerAuxWindowIpc } from './aux-window.js'
 import { appUrl, isAppUrl, registerAppProtocol } from './app-protocol.js'
+import { runStartupCacheMaintenance } from './cache-maintenance.js'
 import { runLegacyCleanups } from './legacy-cleanup.js'
 import {
   destroyTray,
@@ -969,6 +970,13 @@ app.whenReady().then(async () => {
   }
 
   await initAppDirectories()
+  // 默认拒绝所有 Chromium Web 权限请求与权限检查（fail-closed；剪贴板与桌面通知均走主进程受控 API）
+  if (session?.defaultSession) {
+    session.defaultSession.setPermissionRequestHandler?.((_wc, _permission, callback) => {
+      callback(false)
+    })
+    session.defaultSession.setPermissionCheckHandler?.(() => false)
+  }
   // 外壳协议必须在任何 loadURL 之前注册；辅助窗口依赖它拿到同源文档
   registerAppProtocol(path.join(__dirname, '../dist'))
   // 只读文件协议：图片 / 音视频 / PDF / HTML 预览（外网请求按文件弹窗拦截）
@@ -1088,6 +1096,14 @@ app.whenReady().then(async () => {
       await refreshModelsDevSnapshot({ force: false, allowNetwork: true })
     })
     .catch(() => undefined)
+
+  // 启动后延迟异步执行纯自动缓存维护（更新 pending、temp、孤儿草稿），不阻塞首屏也不阻止进程退出
+  const cacheMaintenanceTimer = setTimeout(() => {
+    void runStartupCacheMaintenance(getAppDir(), { logger: console }).catch((error) =>
+      console.warn('[Main] Startup cache maintenance failed:', error)
+    )
+  }, 5_000)
+  cacheMaintenanceTimer.unref?.()
 
   // 启动后静默检查更新：Windows / Linux 发现新版本会自动下载，但不会自动安装。
   setTimeout(() => {

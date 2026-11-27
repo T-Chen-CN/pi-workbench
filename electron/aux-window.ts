@@ -232,6 +232,27 @@ export interface AuxWindowSupportOptions {
   onClosed: (frameName: string) => void
 }
 
+/** 白名单校验 window.open 来源：仅放行应用外壳 `pw-app://bundle/` 或当前 Vite 开发服务器同源，其余一律拒绝 */
+function isAllowedWindowOpenReferrer(referrerUrl: string): boolean {
+  if (!referrerUrl) return false
+  let parsed: URL
+  try {
+    parsed = new URL(referrerUrl)
+  } catch {
+    return false
+  }
+  if (parsed.protocol === 'pw-app:' && parsed.hostname === 'bundle') return true
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL
+  if (devServerUrl) {
+    try {
+      if (parsed.origin === new URL(devServerUrl).origin) return true
+    } catch {
+      return false
+    }
+  }
+  return false
+}
+
 /**
  * 在主窗口上启用辅助窗口：
  * - 只放行 `about:blank` + `pi-panel:` 前缀的 window.open；
@@ -243,8 +264,8 @@ export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowS
   host.webContents.setWindowOpenHandler((details) => {
     const { url, frameName, features } = details
     const referrerUrl = typeof details.referrer?.url === 'string' ? details.referrer.url : ''
-    // 禁止来自 pw-file:// 预览子框或空来源子框拉起任何窗口或外部协议（防沙箱 HTML 逃逸）
-    if (referrerUrl.startsWith('pw-file:') || referrerUrl === 'about:blank') {
+    // 白名单来源校验：拒绝空来源、不透明来源、pw-file:// 预览子框、about:blank 或未知来源拉起窗口/外链
+    if (!isAllowedWindowOpenReferrer(referrerUrl)) {
       return { action: 'deny' }
     }
     // 外部链接（文档 / 对话里的 http(s)）交给系统浏览器，不开内部窗口

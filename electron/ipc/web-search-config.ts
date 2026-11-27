@@ -7,6 +7,7 @@ import {
   type WebSearchProviderId,
   type WebSearchProviderSpec,
 } from './web-search-providers.js'
+import { sanitizeChildEnv } from '../env-sanitize.js'
 
 /** 环境变量名前缀：按供应商分别注入，切换来源不会覆盖旧会话正在使用的 Key */
 export const WEB_SEARCH_KEY_ENV_PREFIX = 'PI_WORKBENCH_WEB_SEARCH_KEY'
@@ -15,14 +16,9 @@ export function webSearchKeyEnv(provider: WebSearchProviderId): string {
   return `${WEB_SEARCH_KEY_ENV_PREFIX}_${provider.toUpperCase()}`
 }
 
-/** 子进程环境清理：剥离联网搜索密钥，避免 git hook / credential helper / 外部工具读取主进程秘密 */
+/** 子进程环境清理：复用统一 env-sanitize 剥离供应商/联网/云端密钥，避免 git hook 与外部工具读取主进程秘密 */
 export function sanitizedChildEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {}
-  for (const [key, value] of Object.entries(base)) {
-    if (key.startsWith(WEB_SEARCH_KEY_ENV_PREFIX)) continue
-    if (value !== undefined) env[key] = value
-  }
-  return env
+  return sanitizeChildEnv(base)
 }
 
 export type WebSearchEndpoint = 'global' | 'china'

@@ -223,18 +223,36 @@ describe('TerminalManager', () => {
       env: {
         PATH: '/usr/bin',
         PI_WORKBENCH_API_KEY: 'sk-secret',
+        PI_CODING_AGENT_DIR: '/agent',
         ANTHROPIC_API_KEY: 'sk-ant',
         OPENAI_API_KEY: 'sk-openai',
+        GITHUB_TOKEN: 'ghp-secret',
+        NPM_TOKEN: 'npm-secret',
+        CUSTOM_PRIVATE_KEY: 'priv-secret',
       },
     })
 
     manager.create(tmpDir, 80, 24)
 
     const options = spawn.mock.calls[0][2]
-    expect(options.env.PATH).toBe('/usr/bin')
-    expect(options.env.PI_WORKBENCH_API_KEY).toBeUndefined()
-    expect(options.env.ANTHROPIC_API_KEY).toBeUndefined()
-    expect(options.env.OPENAI_API_KEY).toBeUndefined()
+    expect(options.env).toEqual({ PATH: '/usr/bin' })
+  })
+
+  it('prunes excess rotated sibling terminal logs when creating a new terminal', async () => {
+    const metaDir = path.join(tmpDir, '.pi-workbench')
+    await fs.mkdir(metaDir, { recursive: true })
+    await fs.writeFile(path.join(metaDir, 'terminal-old.log.1'), 'keep-1')
+    await fs.writeFile(path.join(metaDir, 'terminal-old.log.4'), 'excess-4')
+
+    makeManager({
+      logPathFor: (ws, id) => path.join(ws, '.pi-workbench', `terminal-${id}.log`),
+    })
+    manager.create(tmpDir, 80, 24)
+
+    await vi.waitFor(async () => {
+      await expect(fs.access(path.join(metaDir, 'terminal-old.log.4'))).rejects.toThrow()
+    })
+    await expect(fs.access(path.join(metaDir, 'terminal-old.log.1'))).resolves.toBeUndefined()
   })
 })
 

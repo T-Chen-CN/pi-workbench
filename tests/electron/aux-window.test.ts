@@ -300,52 +300,66 @@ function createHost() {
   }
 }
 
+const APP_REFERRER = { url: 'pw-app://bundle/index.html' }
+
 describe('installAuxWindowSupport', () => {
-  it('allows only about:blank windows with the panel frame prefix', () => {
-    const host = createHost()
-    installAuxWindowSupport(host as never, { onClosed: () => {} })
-
-    expect(host.open({ url: 'https://example.com', frameName: 'x', features: '' }).action).toBe('deny')
-    expect(host.open({ url: 'about:blank', frameName: 'other', features: '' }).action).toBe('deny')
-    expect(host.open({ url: 'about:blank', frameName: `${AUX_FRAME_PREFIX}aux:1`, features: '' }).action).toBe('allow')
-  })
-
-  it('denies popups and external links from pw-file:// preview iframes and strips preload (SEC-02)', () => {
-    mocks.externalUrls.length = 0
+  it('allows only about:blank windows with the panel frame prefix from trusted app origin', () => {
     const host = createHost()
     installAuxWindowSupport(host as never, { onClosed: () => {} })
 
     expect(
-      host.open({
-        url: 'https://evil.example',
-        frameName: '_blank',
-        features: '',
-        referrer: { url: 'pw-file://local/workspace/index.html' },
-      }).action
+      host.open({ url: 'https://example.com', frameName: 'x', features: '', referrer: APP_REFERRER }).action
+    ).toBe('deny')
+    expect(
+      host.open({ url: 'about:blank', frameName: 'other', features: '', referrer: APP_REFERRER }).action
     ).toBe('deny')
     expect(
       host.open({
         url: 'about:blank',
-        frameName: `${AUX_FRAME_PREFIX}aux:hijack`,
+        frameName: `${AUX_FRAME_PREFIX}aux:1`,
         features: '',
-        referrer: { url: 'pw-file://local/workspace/index.html' },
+        referrer: APP_REFERRER,
       }).action
-    ).toBe('deny')
-    expect(
-      host.open({
-        url: 'https://evil.example',
-        frameName: '_blank',
-        features: '',
-        referrer: { url: 'about:blank' },
-      }).action
-    ).toBe('deny')
+    ).toBe('allow')
+  })
+
+  it('enforces referrer allowlist and denies empty, opaque, pw-file://, about:blank, and foreign referrers (SEC-02)', () => {
+    mocks.externalUrls.length = 0
+    const host = createHost()
+    installAuxWindowSupport(host as never, { onClosed: () => {} })
+
+    for (const badReferrer of [
+      undefined,
+      { url: '' },
+      { url: 'null' },
+      { url: 'about:blank' },
+      { url: 'pw-file://local/workspace/index.html' },
+      { url: 'https://evil.example/page.html' },
+    ]) {
+      expect(
+        host.open({
+          url: 'https://evil.example',
+          frameName: '_blank',
+          features: '',
+          referrer: badReferrer,
+        }).action
+      ).toBe('deny')
+      expect(
+        host.open({
+          url: 'about:blank',
+          frameName: `${AUX_FRAME_PREFIX}aux:hijack`,
+          features: '',
+          referrer: badReferrer,
+        }).action
+      ).toBe('deny')
+    }
     expect(mocks.externalUrls).toEqual([])
 
     const allowed = host.open({
       url: 'about:blank',
       frameName: `${AUX_FRAME_PREFIX}aux:safe`,
       features: '',
-      referrer: { url: 'pw-app://bundle/index.html' },
+      referrer: APP_REFERRER,
     }) as { action: string; overrideBrowserWindowOptions?: { webPreferences?: Record<string, unknown> } }
     expect(allowed.action).toBe('allow')
     expect(allowed.overrideBrowserWindowOptions?.webPreferences).toMatchObject({
@@ -354,6 +368,31 @@ describe('installAuxWindowSupport', () => {
       contextIsolation: true,
       sandbox: true,
     })
+
+    // 开发模式下允许同源 VITE_DEV_SERVER_URL
+    const prevDev = process.env.VITE_DEV_SERVER_URL
+    process.env.VITE_DEV_SERVER_URL = 'http://localhost:5173'
+    try {
+      expect(
+        host.open({
+          url: 'about:blank',
+          frameName: `${AUX_FRAME_PREFIX}aux:dev`,
+          features: '',
+          referrer: { url: 'http://localhost:5173/?theme=light' },
+        }).action
+      ).toBe('allow')
+      expect(
+        host.open({
+          url: 'about:blank',
+          frameName: `${AUX_FRAME_PREFIX}aux:dev-bad`,
+          features: '',
+          referrer: { url: 'http://localhost:9999/' },
+        }).action
+      ).toBe('deny')
+    } finally {
+      if (prevDev === undefined) delete process.env.VITE_DEV_SERVER_URL
+      else process.env.VITE_DEV_SERVER_URL = prevDev
+    }
   })
 
   it('returns hardened window options with the same chrome as the main window', () => {
@@ -362,7 +401,8 @@ describe('installAuxWindowSupport', () => {
     const result = host.open({
       url: 'about:blank',
       frameName: `${AUX_FRAME_PREFIX}aux:2`,
-      features: 'width=600,height=500,left=40,top=40,bg=%231b1b1a'
+      features: 'width=600,height=500,left=40,top=40,bg=%231b1b1a',
+      referrer: APP_REFERRER,
     }) as { action: string; overrideBrowserWindowOptions: Record<string, unknown> }
 
     expect(result.action).toBe('allow')
@@ -393,7 +433,7 @@ describe('installAuxWindowSupport', () => {
     const onClosed = vi.fn()
     const host = createHost()
     installAuxWindowSupport(host as never, { onClosed })
-    host.open({ url: 'about:blank', frameName: `${AUX_FRAME_PREFIX}aux:3`, features: '' })
+    host.open({ url: 'about:blank', frameName: `${AUX_FRAME_PREFIX}aux:3`, features: '', referrer: APP_REFERRER })
 
     const child = host.createWindow(`${AUX_FRAME_PREFIX}aux:3`)
     // 不能给子窗口单独设菜单：默认快捷键（Ctrl +/-/0、Ctrl+W）依附在继承来的应用菜单上
@@ -412,7 +452,7 @@ describe('installAuxWindowSupport', () => {
     const host = createHost()
     installAuxWindowSupport(host as never, { onClosed })
     const frameName = `${AUX_FRAME_PREFIX}aux:9`
-    host.open({ url: 'about:blank', frameName, features: '' })
+    host.open({ url: 'about:blank', frameName, features: '', referrer: APP_REFERRER })
     const child = host.createWindow(frameName)
 
     expect(() => child.close()).not.toThrow()
@@ -424,7 +464,7 @@ describe('installAuxWindowSupport', () => {
     const host = createHost()
     installAuxWindowSupport(host as never, { onClosed: () => {} })
     const frameName = `${AUX_FRAME_PREFIX}aux:7`
-    host.open({ url: 'about:blank', frameName, features: '' })
+    host.open({ url: 'about:blank', frameName, features: '', referrer: APP_REFERRER })
     const child = host.createWindow(frameName)
 
     expect(getAuxWindow(frameName)).toBe(child)
@@ -449,7 +489,7 @@ describe('installAuxWindowSupport', () => {
     const host = createHost()
     installAuxWindowSupport(host as never, { onClosed: () => {} })
     const frameName = `${AUX_FRAME_PREFIX}aux:8`
-    host.open({ url: 'about:blank', frameName, features: '' })
+    host.open({ url: 'about:blank', frameName, features: '', referrer: APP_REFERRER })
     const child = host.createWindow(frameName)
 
     child.maximize()
@@ -465,7 +505,7 @@ describe('installAuxWindowSupport', () => {
     const host = createHost()
     installAuxWindowSupport(host as never, { onClosed: () => {} })
     const frameName = `${AUX_FRAME_PREFIX}aux:9`
-    host.open({ url: 'about:blank', frameName, features: '' })
+    host.open({ url: 'about:blank', frameName, features: '', referrer: APP_REFERRER })
     host.createWindow(frameName)
     registerAuxWindowIpc({ getMainWindow: () => null })
 

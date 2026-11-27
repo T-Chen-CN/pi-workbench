@@ -551,8 +551,10 @@ export async function branchHasNewCommits(
 }
 
 export async function deleteBranch(repoRoot: string, branch: string): Promise<void> {
-  if (!branch || branch === 'main' || branch === 'master') return
+  if (!branch) return
   const safeBranch = validateGitRef(branch, 'branch name')
+  // 仅允许删除应用受管的 pi/ 分支：即使仓库内提交的 session-git.json 伪造 managed: true，也不得误删用户分支
+  if (!safeBranch.startsWith('pi/')) return
   await git(repoRoot, ['branch', '-D', '--', safeBranch])
 }
 

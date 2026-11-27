@@ -65,6 +65,28 @@ describe('FileLogger', () => {
     expect(current).not.toContain('first-line')
   })
 
+  it('caps rotated log files to maxFiles (default 3) and removes stale higher generations', async () => {
+    await fs.writeFile(path.join(logDir, 'main.log.3'), 'stale-3', 'utf-8')
+    await fs.writeFile(path.join(logDir, 'main.log.4'), 'stale-4', 'utf-8')
+
+    logger = new FileLogger({ logDir, maxBytes: 80, maxFiles: 3 })
+    // 启动时已清理越界旧轮转
+    await expect(fs.access(path.join(logDir, 'main.log.3'))).rejects.toThrow()
+    await expect(fs.access(path.join(logDir, 'main.log.4'))).rejects.toThrow()
+
+    for (let i = 1; i <= 6; i += 1) {
+      logger.write('INFO', [`rotation-entry-${i}-${'x'.repeat(50)}`])
+    }
+    logger.write('INFO', ['tail'])
+    logger.close()
+
+    const files = (await fs.readdir(logDir)).sort()
+    expect(files).toEqual(['main.log', 'main.log.1', 'main.log.2'])
+    expect(await fs.readFile(path.join(logDir, 'main.log'), 'utf-8')).toContain('tail')
+    expect(await fs.readFile(path.join(logDir, 'main.log.1'), 'utf-8')).toContain('rotation-entry-6')
+    expect(await fs.readFile(path.join(logDir, 'main.log.2'), 'utf-8')).toContain('rotation-entry-5')
+  })
+
   it('flushes in-flight async batches in order without losing lines when close() runs immediately', async () => {
     logger = new FileLogger({ logDir })
     logger.write('INFO', ['first-in-flight'])

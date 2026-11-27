@@ -189,6 +189,16 @@ const HTML_PREVIEW_CSP = [
   "frame-ancestors pw-app: http://localhost:5173 http://127.0.0.1:5173",
 ].join('; ')
 
+const SVG_PREVIEW_CSP = [
+  "default-src 'none'",
+  "img-src 'self' data:",
+  "style-src 'unsafe-inline'",
+  "script-src 'none'",
+  "object-src 'none'",
+  "worker-src 'none'",
+  "frame-ancestors 'self'",
+].join('; ')
+
 function baseHeaders(targetPath: string, size: number, originHeader: string | null = null): Headers {
   const mime = mimeForPath(targetPath)
   const headers = new Headers({
@@ -197,9 +207,11 @@ function baseHeaders(targetPath: string, size: number, originHeader: string | nu
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
   })
-  // HTML 预览页强制结构性沙箱 CSP；实际外网访问由主进程 webRequest.onBeforeRequest 按文件弹窗拦截
+  // HTML 预览页强制结构性沙箱 CSP；SVG 独立文档禁止脚本与外链资源
   if (mime.startsWith('text/html')) {
     headers.set('Content-Security-Policy', HTML_PREVIEW_CSP)
+  } else if (mime === 'image/svg+xml') {
+    headers.set('Content-Security-Policy', SVG_PREVIEW_CSP)
   }
   // 只允许应用自身 origin 跨域读取（禁止 `*` 与不透明 `null` origin，防止沙箱 HTML 预览跨域窃取工作区文件）
   const corsOrigin = allowedCorsOrigin(originHeader)
@@ -271,6 +283,7 @@ export interface PreviewNetworkRequest {
   frame?: PreviewFrameLike | null
   initiatorOrigin?: string
   referrer?: string
+  resourceType?: string
   webContents?: WebContents | unknown
 }
 
@@ -289,7 +302,37 @@ export interface PreviewNetworkGuard {
   clearDecisions: () => void
 }
 
-const PREVIEW_ORIGIN = `${FILE_SCHEME}://${FILE_HOST}`
+const TRUSTED_DEV_ORIGINS = new Set(['http://localhost:5173', 'http://127.0.0.1:5173'])
+
+function trustedDevOrigins(): Set<string> {
+  if (app?.isPackaged) return new Set()
+  const origins = new Set(TRUSTED_DEV_ORIGINS)
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL
+  if (devServerUrl) {
+    try {
+      origins.add(new URL(devServerUrl).origin)
+    } catch {
+      // ignore malformed env
+    }
+  }
+  return origins
+}
+
+function isTrustedAppInitiator(initiatorOrigin: string | undefined): boolean {
+  if (!initiatorOrigin) return false
+  if (initiatorOrigin === APP_ORIGIN) return true
+  return trustedDevOrigins().has(initiatorOrigin)
+}
+
+function isTrustedDevMainFrameNavigation(details: PreviewNetworkRequest): boolean {
+  if (app?.isPackaged) return false
+  if (details.resourceType !== 'mainFrame' || details.initiatorOrigin) return false
+  try {
+    return trustedDevOrigins().has(new URL(details.url).origin)
+  } catch {
+    return false
+  }
+}
 
 /** 沿 frame 祖先链追溯触发外网请求的本地预览文件路径；已销毁的 frame 访问可能抛错，必须兜底 */
 export function resolvePreviewFilePath(
@@ -320,22 +363,23 @@ export function resolvePreviewFilePath(
 
 function extractTargetHost(rawUrl: string): string {
   try {
-    return new URL(rawUrl).host || rawUrl
+    return (new URL(rawUrl).host || rawUrl).toLowerCase()
   } catch {
-    return rawUrl
+    return rawUrl.toLowerCase()
   }
 }
 
-function previewDecisionKey(filePath: string): string {
-  return process.platform === 'win32' ? filePath.toLowerCase() : filePath
+function previewDecisionKey(filePath: string, targetHost: string): string {
+  const fileKey = process.platform === 'win32' ? filePath.toLowerCase() : filePath
+  return `${fileKey}\0${targetHost.toLowerCase()}`
 }
 
 /**
- * 本地 HTML 预览的外网按需审批守卫：
- * - 非 `pw-file://` 来源请求直接放行（不影响应用本身与开发服务器）；
- * - `pw-file://` 预览页默认离线，首次发起 http(s)/ws(s) 请求时在主进程暂停并弹一次确认框；
- * - 同一文件并发多个外网请求共享同一个待决 Promise，避免弹窗风暴；
- * - 确认结果按文件路径在本会话期内缓存；无法定位文件或弹窗异常时一律 fail-closed 拒绝。
+ * 本地 HTML 预览的外网按需审批守卫（白名单反转 + 按文件与目标主机双重隔离）：
+ * - 仅自动放行来自应用自身 origin（`pw-app://bundle` 或非打包态 Vite dev origin）的请求；
+ * - `pw-file://` 预览页默认离线，按 `(filePath, targetHost)` 独立弹窗确认，允许某域名不会放开任意第三方主机；
+ * - 同一 `(filePath, targetHost)` 并发请求共享待决 Promise 避免弹窗风暴；
+ * - 无法归属已知预览文件且非受信任应用 origin（含 `pw-file://local`、不透明 `"null"`、未知来源）一律 fail-closed 拦截。
  */
 export function createPreviewNetworkGuard(options: {
   prompt: (payload: PreviewNetworkPromptPayload) => Promise<boolean>
@@ -346,17 +390,19 @@ export function createPreviewNetworkGuard(options: {
   const handleRequest: PreviewNetworkGuard['handleRequest'] = (details, callback) => {
     const filePath = resolvePreviewFilePath(details)
     if (!filePath) {
-      // 沙箱 HTML 预览（sandbox="allow-scripts allow-forms"）的 initiatorOrigin 是不透明字符串 "null"；
-      // 无法定位所属预览文件时必须 fail-closed 拦截，防止子帧绕过离线审批守卫
-      if (details.initiatorOrigin === PREVIEW_ORIGIN || details.initiatorOrigin === 'null') {
-        callback({ cancel: true })
+      if (
+        isTrustedAppInitiator(details.initiatorOrigin) ||
+        isTrustedDevMainFrameNavigation(details)
+      ) {
+        callback({})
         return
       }
-      callback({})
+      callback({ cancel: true })
       return
     }
 
-    const key = previewDecisionKey(filePath)
+    const targetHost = extractTargetHost(details.url)
+    const key = previewDecisionKey(filePath, targetHost)
     const decided = decisions.get(key)
     if (decided === 'allow') {
       callback({ cancel: false })
@@ -369,7 +415,6 @@ export function createPreviewNetworkGuard(options: {
 
     let pending = inFlight.get(key)
     if (!pending) {
-      const targetHost = extractTargetHost(details.url)
       pending = Promise.resolve()
         .then(() =>
           options.prompt({
@@ -437,8 +482,8 @@ async function promptPreviewNetworkAccess(
       ? `「${fileName}」正在请求访问外部网络（${payload.targetHost}）`
       : `"${fileName}" is requesting access to an external address (${payload.targetHost})`,
     detail: zh
-      ? `文件：${payload.filePath}\n目标：${displayUrl}\n\n本地 HTML 预览默认保持离线。仅在你信任此 HTML 文件时选择允许；本次选择在应用重启前对该文件持续有效。`
-      : `File: ${payload.filePath}\nTarget: ${displayUrl}\n\nLocal HTML previews stay offline by default. Allow only if you trust this HTML file; this decision applies to this file until the app restarts.`,
+      ? `文件：${payload.filePath}\n目标：${displayUrl}\n\n本地 HTML 预览默认保持离线。仅在你信任此 HTML 文件时选择允许；本次选择在应用重启前仅对该文件访问 ${payload.targetHost} 生效。`
+      : `File: ${payload.filePath}\nTarget: ${displayUrl}\n\nLocal HTML previews stay offline by default. Allow only if you trust this HTML file; this decision applies to ${payload.targetHost} for this file until the app restarts.`,
   }
   const result = owner
     ? await dialog.showMessageBox(owner, boxOptions)

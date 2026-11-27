@@ -2,24 +2,28 @@
  * 主进程文件日志。
  *
  * Electron 打包后没有控制台，这里把 console 输出同时写入 {appDir}/logs/main.log，
- * 按大小轮转并保留一份 main.log.1 备份。
+ * 按大小轮转并保持有界文件总数（默认 5 MB × 3 份：活动文件 + .1 + .2），超界旧轮转文件自动清理。
  * 正常运行时采用异步合并刷盘（50ms 或 32KB），避免每次 console.* 同步 writeSync/renameSync 阻塞 GUI 线程；
  * close() 时同步冲刷残余缓冲，确保退出前不丢日志。
  */
 import * as fs from 'fs'
 import * as fsp from 'fs/promises'
 import * as path from 'path'
+import { rotateLogFileAsync, rotateLogFileSync } from './cache-maintenance.js'
 
 export interface FileLoggerOptions {
   logDir: string
   fileName?: string
-  /** 单个日志文件的上限，超过后轮转为 <fileName>.1 */
+  /** 单个日志文件的上限，超过后轮转 */
   maxBytes?: number
+  /** 含活动日志在内的最大文件总数（默认 3：main.log + .1 + .2） */
+  maxFiles?: number
 }
 
 export type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG'
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024
+const DEFAULT_MAX_FILES = 3
 const FLUSH_INTERVAL_MS = 50
 const FLUSH_THRESHOLD_BYTES = 32 * 1024
 
@@ -46,6 +50,7 @@ interface PendingLogBatch {
 export class FileLogger {
   readonly filePath: string
   private readonly maxBytes: number
+  private readonly maxBackups: number
   private closed = false
   private bytesWritten: number
   private pendingLines: string[] = []
@@ -58,7 +63,32 @@ export class FileLogger {
     fs.mkdirSync(options.logDir, { recursive: true })
     this.filePath = path.join(options.logDir, options.fileName ?? 'main.log')
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES
+    const maxFiles = Math.max(1, Math.floor(options.maxFiles ?? DEFAULT_MAX_FILES))
+    this.maxBackups = maxFiles - 1
     this.bytesWritten = fs.existsSync(this.filePath) ? fs.statSync(this.filePath).size : 0
+    this.pruneExcessBackupsSync()
+  }
+
+  private pruneExcessBackupsSync(): void {
+    const dir = path.dirname(this.filePath)
+    const prefix = `${path.basename(this.filePath)}.`
+    try {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.startsWith(prefix)) continue
+        const suffix = entry.name.slice(prefix.length)
+        if (!/^\d+$/.test(suffix)) continue
+        const generation = Number(suffix)
+        if (generation > this.maxBackups || generation < 1) {
+          try {
+            fs.rmSync(path.join(dir, entry.name), { force: true })
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
   }
 
   write(level: LogLevel, args: unknown[]): void {
@@ -155,9 +185,7 @@ export class FileLogger {
 
   private async rotateAsync(): Promise<void> {
     try {
-      const backup = `${this.filePath}.1`
-      await fsp.rm(backup, { force: true })
-      await fsp.rename(this.filePath, backup)
+      await rotateLogFileAsync(this.filePath, this.maxBackups)
       this.bytesWritten = 0
     } catch {
       // 轮转失败时继续追加，避免静默丢日志
@@ -166,9 +194,7 @@ export class FileLogger {
 
   private rotateSync(): void {
     try {
-      const backup = `${this.filePath}.1`
-      if (fs.existsSync(backup)) fs.unlinkSync(backup)
-      if (fs.existsSync(this.filePath)) fs.renameSync(this.filePath, backup)
+      rotateLogFileSync(this.filePath, this.maxBackups)
       this.bytesWritten = 0
     } catch {
       // ignore

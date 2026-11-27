@@ -92,8 +92,6 @@ export interface PluginManagerOptions {
 
 const requireFromHere = createRequire(import.meta.url)
 
-const PLUGIN_HASH_EXTS = new Set(['.js', '.cjs', '.mjs', '.json'])
-
 /** 清理插件目录及其所有子模块的 require.cache，避免热重载残留旧闭包 */
 function purgePluginRequireCache(pluginRoot: string, entryPath: string): void {
   const normalizedRoot = process.platform === 'win32' ? pluginRoot.toLowerCase() : pluginRoot
@@ -112,34 +110,31 @@ function purgePluginRequireCache(pluginRoot: string, entryPath: string): void {
   }
 }
 
-/** 计算插件目录内所有代码/清单文件的确定性 SHA-256 哈希，用于防止磁盘被静默篡改后自动热重载执行 */
+/**
+ * 计算插件目录内全部常规文件的确定性 SHA-256 哈希（覆盖 node_modules、原生 .node/.wasm、脚本与清单，仅跳过 .git）。
+ * 发现任何符号链接立即抛错（fail-closed），阻止借软链逃逸或静默篡改代码绕过哈希钉住。
+ */
 export function computePluginDirectoryHash(directory: string): string {
+  const rootStat = fs.lstatSync(directory)
+  if (rootStat.isSymbolicLink()) {
+    throw new Error(`Plugin directory must not contain symbolic links: ${directory}`)
+  }
   const hash = createHash('sha256')
   const files: string[] = []
 
   const walk = (dir: string, relBase: string): void => {
-    let entries: fs.Dirent[]
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true })
-    } catch {
-      return
-    }
+    const entries = fs.readdirSync(dir, { withFileTypes: true })
     entries.sort((a, b) => a.name.localeCompare(b.name))
     for (const entry of entries) {
-      if (entry.name === 'node_modules' || entry.name === '.git') continue
+      if (entry.name === '.git') continue
       const full = path.join(dir, entry.name)
       const rel = relBase ? `${relBase}/${entry.name}` : entry.name
       if (entry.isSymbolicLink()) {
-        try {
-          hash.update(`symlink:${rel}->${fs.readlinkSync(full)}\n`)
-        } catch {
-          hash.update(`symlink:${rel}\n`)
-        }
-        continue
+        throw new Error(`Plugin directory must not contain symbolic links: ${rel}`)
       }
       if (entry.isDirectory()) {
         walk(full, rel)
-      } else if (entry.isFile() && PLUGIN_HASH_EXTS.has(path.extname(entry.name).toLowerCase())) {
+      } else if (entry.isFile()) {
         files.push(rel)
       }
     }
@@ -149,11 +144,7 @@ export function computePluginDirectoryHash(directory: string): string {
   files.sort()
   for (const rel of files) {
     hash.update(`file:${rel}\0`)
-    try {
-      hash.update(fs.readFileSync(path.join(directory, rel)))
-    } catch {
-      hash.update('<unreadable>')
-    }
+    hash.update(fs.readFileSync(path.join(directory, rel)))
     hash.update('\0')
   }
   return hash.digest('hex')
@@ -213,10 +204,27 @@ export class PluginManager {
     }
 
     const seenIds = new Set<string>()
+    const revokedIds = new Set<string>()
     for (const entry of entries) {
       const directory = path.join(pluginsDir, entry.name)
-      const plugin = this.loadPlugin(directory, entry.name, enabledIds, pinnedHashes, workspaceDir, seenIds)
+      const plugin = this.loadPlugin(
+        directory,
+        entry.name,
+        enabledIds,
+        pinnedHashes,
+        workspaceDir,
+        seenIds,
+        revokedIds
+      )
       state.plugins.push(plugin)
+    }
+
+    // 哈希缺失/变化或含符号链接时撤销持久化启用授权，强制要求用户显式重新启用
+    if (revokedIds.size > 0 && enabledIds) {
+      const remainingEnabled = enabledIds.filter((id) => !revokedIds.has(id))
+      const remainingHashes = { ...pinnedHashes }
+      for (const id of revokedIds) delete remainingHashes[id]
+      this.writeEnabledIds(workspaceDir, remainingEnabled, remainingHashes)
     }
 
     this.rebuildCommandIndex(state)
@@ -399,7 +407,8 @@ export class PluginManager {
     enabledIds: string[] | null,
     pinnedHashes: Record<string, string>,
     workspaceDir: string,
-    seenIds: Set<string>
+    seenIds: Set<string>,
+    revokedIds: Set<string>
   ): LoadedPlugin {
     const manifestPath = path.join(directory, 'plugin.json')
     let manifest: PluginManifest = {}
@@ -448,17 +457,37 @@ export class PluginManager {
 
     if (!enabled) return plugin
 
-    // 代码哈希钉住校验：若磁盘内容在用户批准启用后被改写（如 git pull / Agent 修改），拒绝静默执行
+    // 代码哈希钉住校验（fail-closed）：缺少哈希、目录含符号链接或内容变更一律拒绝执行并撤销授权，需用户显式重新启用
     const expectedHash = pinnedHashes[id]
-    if (expectedHash) {
-      const actualHash = computePluginDirectoryHash(directory)
-      if (actualHash !== expectedHash) {
-        plugin.info.enabled = false
-        plugin.info.error =
-          'Plugin files changed since approval; re-enable the plugin to trust the updated code.'
-        console.warn(`[Plugins] Hash mismatch for "${id}" in ${directory}; refusing auto-activation`)
-        return plugin
-      }
+    if (!expectedHash) {
+      plugin.info.enabled = false
+      plugin.info.error =
+        'Plugin code hash is missing; re-enable the plugin to approve and pin its current code.'
+      revokedIds.add(id)
+      console.warn(`[Plugins] Missing pinned hash for "${id}" in ${directory}; refusing auto-activation`)
+      return plugin
+    }
+
+    let actualHash: string
+    try {
+      actualHash = computePluginDirectoryHash(directory)
+    } catch (error) {
+      plugin.info.enabled = false
+      plugin.info.error = errorMessage(error)
+      revokedIds.add(id)
+      console.warn(`[Plugins] Failed to verify plugin hash for "${id}" in ${directory}:`, error)
+      return plugin
+    }
+
+    if (actualHash !== expectedHash) {
+      plugin.info.enabled = false
+      plugin.info.error =
+        'Plugin files changed since approval; re-enable the plugin to trust the updated code.'
+      revokedIds.add(id)
+      console.warn(
+        `[Plugins] Hash mismatch for "${id}" in ${directory}; disabled pending explicit re-enable`
+      )
+      return plugin
     }
 
     try {

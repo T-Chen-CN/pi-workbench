@@ -5,6 +5,14 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { childRegistry, killProcessTreeAsync } from './child-registry.js'
+import { sanitizeChildEnv } from './env-sanitize.js'
+import {
+  DEFAULT_TERMINAL_LOG_KEEP,
+  DEFAULT_TERMINAL_LOG_MAX_BYTES,
+  rotateLogFileAsync,
+  rotateLogFileSync,
+  rotateTerminalLogs,
+} from './cache-maintenance.js'
 
 export interface PtyProcess {
   /** shell 进程 pid；node-pty 会提供，测试替身可能没有 */
@@ -73,7 +81,8 @@ interface TerminalEntry {
 }
 
 const FLUSH_DELAY_MS = 500
-const MAX_LOG_BYTES = 5 * 1024 * 1024
+const MAX_LOG_BYTES = DEFAULT_TERMINAL_LOG_MAX_BYTES
+const MAX_LOG_BACKUPS = DEFAULT_TERMINAL_LOG_KEEP
 /** 待落盘内存缓冲上限，防止高频输出在写盘慢时耗尽内存 */
 const MAX_PENDING_LOG_BYTES = 1024 * 1024
 
@@ -81,20 +90,10 @@ function workspacePathKey(dir: string): string {
   const resolved = path.resolve(dir)
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved
 }
-/** 终端与子进程不应继承 Agent 的供应商密钥及应用内部凭据 */
-const SENSITIVE_ENV_KEYS = new Set(['PI_WORKBENCH_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'])
-/** 应用注入的敏感环境变量前缀（Windows 环境变量名大小写不敏感，必须统一大写比对） */
-const SENSITIVE_ENV_PREFIXES = ['PI_WORKBENCH_']
 
+/** 终端与子进程不应继承 Agent 的供应商密钥及应用内部凭据（统一复用 env-sanitize） */
 export function sanitizeTerminalEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const sanitized: NodeJS.ProcessEnv = {}
-  for (const [key, value] of Object.entries(env)) {
-    const upper = key.toUpperCase()
-    if (SENSITIVE_ENV_KEYS.has(upper)) continue
-    if (SENSITIVE_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix))) continue
-    sanitized[key] = value
-  }
-  return sanitized
+  return sanitizeChildEnv(env)
 }
 
 function clampDimension(value: number, min: number, max: number): number {
@@ -181,6 +180,12 @@ export class TerminalManager {
             entry,
             `\n--- terminal ${id} started at ${new Date().toISOString()} ---\n`
           )
+          // 后台顺手裁剪同工作区其他历史终端日志及多余轮转文件（跳过当前活跃日志避免竞态）
+          void rotateTerminalLogs(workspaceDir, {
+            maxBytes: MAX_LOG_BYTES,
+            keep: MAX_LOG_BACKUPS,
+            excludeBaseNames: [path.basename(logPath)],
+          }).catch(() => undefined)
         } catch (error) {
           console.warn('[Terminal] Failed to prepare terminal log:', error)
         }
@@ -375,9 +380,7 @@ export class TerminalManager {
         await fs.promises.appendFile(logPath, text, 'utf-8')
         entry.logBytes += Buffer.byteLength(text, 'utf-8')
         if (entry.logBytes > MAX_LOG_BYTES) {
-          const rotated = `${logPath}.1`
-          await fs.promises.rm(rotated, { force: true }).catch(() => undefined)
-          await fs.promises.rename(logPath, rotated).catch(() => undefined)
+          await rotateLogFileAsync(logPath, MAX_LOG_BACKUPS)
           entry.logBytes = 0
         }
       })
@@ -414,10 +417,8 @@ export class TerminalManager {
 
   private rotateLog(entry: TerminalEntry): void {
     if (!entry.logPath) return
-    const rotated = `${entry.logPath}.1`
     try {
-      fs.rmSync(rotated, { force: true })
-      fs.renameSync(entry.logPath, rotated)
+      rotateLogFileSync(entry.logPath, MAX_LOG_BACKUPS)
       entry.logBytes = 0
     } catch (error) {
       console.warn('[Terminal] Failed to rotate terminal log:', error)

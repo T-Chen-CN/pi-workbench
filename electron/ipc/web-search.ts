@@ -122,7 +122,12 @@ export function currentWebSearchConfigVersion(): string {
   return appliedVersion
 }
 
-/** 把配置落到 Agent 目录并注入 Key 环境变量 */
+/**
+ * 把配置落到 Agent 目录并注入 Key 环境变量。
+ * 约束：`pi-web-access` 仅从磁盘 `web-search.json` 与当前 `process.env` 读取凭据，不接受内存回调；
+ * 为禁止明文 Key 落盘（AGENTS.md 铁律），必须继续以 `$PI_WORKBENCH_WEB_SEARCH_KEY_*` 引用传递，
+ * 并由 `electron/env-sanitize.ts` 与 `pi-bridge` 的 `sanitizeAgentShellEnv` 在所有子进程边界统一剥离 `PI_WORKBENCH_*`。
+ */
 async function applyWebSearchConfig(config: WebSearchConfig): Promise<void> {
   await writeJsonAtomic(agentConfigPath(), buildAgentWebSearchConfig(config))
   appliedVersion = webSearchConfigVersion(config)

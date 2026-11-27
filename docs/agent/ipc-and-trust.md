@@ -31,9 +31,15 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
 
 校验失败返回 `{ success: false, error: 'Untrusted IPC sender' }`（**fail-closed**，不是放行也不是抛错）。
 
-**面板辅助窗口为纯 DOM Portal**：拆出的 `BrowserWindow` 由主框架经 `window.open('about:blank')` 创建，**不继承 `preload`、也不登记 `trustIpcSender`**；Portal 内所有 React 事件与 IPC 调用均运行在主窗口 JS Realm 中并天然经由主窗口 `webContents` 校验。来自 `pw-file:` 等非主框架来源的 `window.open` 一律拒绝（封堵 HTML 预览沙箱逃逸）。细节见 [panels-and-windows](panels-and-windows.md)。
+**面板辅助窗口为纯 DOM Portal**：拆出的 `BrowserWindow` 由主框架经 `window.open('about:blank')` 创建，**不继承 `preload`、也不登记 `trustIpcSender`**；Portal 内所有 React 事件与 IPC 调用均运行在主窗口 JS Realm 中并天然经由主窗口 `webContents` 校验。`setWindowOpenHandler` 采用来源白名单（仅放行 `pw-app://bundle/` 或当前 Vite dev origin，拒绝空/不透明/`pw-file:`/`about:blank` 来源），封堵 HTML 预览沙箱逃逸。细节见 [panels-and-windows](panels-and-windows.md)。
 
 **高危 IPC 入参经 Zod 校验**：`electron/ipc/schemas.ts` 定义文件写/删/重命名、设置保存、终端创建/写入/缩放、Git 与云端配对/发帧等高危入参的 Zod v4 Schema；解析失败统一返回 `{ success: false, error: ... }`，不落盘脏结构。
+
+**文件写与外部打开安全边界**：`fs:writeFile` 采用同目录临时文件 + rename 原子写（Windows 带 `EPERM`/`EBUSY` 重试、POSIX 尽量保留权限位），避免崩溃截断源文件；`fs:openExternally` 强制 `isFile()` 与 `SAFE_EXTERNAL_OPEN_EXTENSIONS` 安全文档/媒体白名单，非白名单后缀不调用 `shell.openPath`，改由 `shell.showItemInFolder` 安全定位并返回 `{ success: true, revealed: true }`。
+
+**插件哈希钉住（fail-closed）**：`electron/plugin-manager.ts` 对插件目录内全部常规文件计算 SHA-256（覆盖 `node_modules`、`.node`/`.wasm` 与脚本，仅跳过 `.git`），目录内存在任意符号链接即拒绝；缺失钉住哈希或热重载检测到哈希变化时拒绝执行、卸载旧实例并撤销持久化启用态，必须由用户显式重新启用。
+
+**子进程环境与工作树安全**：`electron/env-sanitize.ts`（及 `pi-bridge/src/agent-runtime-types.ts` 对齐的 `sanitizeAgentShellEnv`）在终端 PTY、工作树依赖安装、Git 与 Agent shell 子进程边界统一剥离 `PI_WORKBENCH_*`、`PI_CODING_AGENT_*`、已知供应商/云端/GitHub/NPM/AWS 密钥及常见 `*_API_KEY`/`*_TOKEN`/`*_SECRET_KEY`/`*_PRIVATE_KEY`；工作树依赖安装传递 `--ignore-scripts`（Yarn Berry 传 `--mode=skip-build` + `YARN_ENABLE_SCRIPTS=0`）；`deleteBranch` 与工作树回收强制 `branch.startsWith('pi/')` 前缀守卫。
 
 ## 2. 新增一个 IPC 的 4 步
 
@@ -94,6 +100,8 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
 
 `src/api/index.ts` 的 `mockAPI` 仅在 `import.meta.env.DEV` 下挂载（生产 Electron 包完全裁剪），新增 API 时同步更新类型与 DEV mock。
 
-## 7. CSP 约束（生产与 HTML 预览）
+## 7. CSP 与权限约束（生产与 HTML/SVG 预览）
 
-`script-src 'self'`：**不要引入内联脚本或远程脚本**。`style-src` 允许 inline（Monaco 运行时注入 `<style>`）；`worker-src 'self' blob:`（Monaco worker）；`img-src`/`media-src`/`frame-src`/`connect-src` 额外允许 `pw-file:`（只读文件协议）。`pw-file://` 对本地 HTML 响应下发沙箱 CSP（含 `worker-src 'none'`），且在主进程 `webRequest.onBeforeRequest` 默认拦截外网请求、按文件弹窗征询用户允许或拒绝。新增资源协议时必须同步改 `CONTENT_SECURITY_POLICY`。
+- **主窗口 HTTP CSP**：`electron/app-protocol.ts` 在 HTML 响应头直接下发 `Content-Security-Policy`（含 `script-src 'self'`、`frame-ancestors 'none'`，与 `vite.config.ts` meta CSP 对齐）。**不要引入内联脚本或远程脚本**；`style-src` 允许 inline（Monaco 运行时注入 `<style>`）；`worker-src 'self' blob:`（Monaco worker）；`img-src`/`media-src`/`frame-src`/`connect-src` 额外允许 `pw-file:`。新增资源协议时必须同步更新两处 CSP。
+- **Chromium Web 权限 fail-closed**：`electron/main.ts` 在 `app.whenReady()` 后注册 `setPermissionRequestHandler` 与 `setPermissionCheckHandler` 默认全部拒绝（剪贴板与桌面通知均走主进程受控 API）。
+- **`pw-file://` 预览沙箱与外网审批**：本地 HTML 响应下发沙箱 CSP（含 `worker-src 'none'`），SVG（`image/svg+xml`）响应下发只读禁用脚本 CSP（`default-src 'none'; script-src 'none'; ...`）。主进程 `webRequest.onBeforeRequest` 采用白名单反转：仅自动放行来自 `pw-app://bundle` 或非打包态 Vite dev origin 的请求；本地预览外网访问按 `(fileKey, targetHost)` 独立弹窗与缓存（批准某域名绝不放行其他主机），无法归属的 `pw-file://` / 不透明 `"null"` / 未知来源一律 fail-closed 拦截。

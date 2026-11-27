@@ -137,13 +137,34 @@ export function resolveAppTarget(segments: string[], distDir: string): string | 
   }
 }
 
+/** 生产环境主窗口 HTML 响应头 CSP（与 vite.config.ts 保持一致并追加 frame-ancestors 'none'） */
+export const APP_CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
+  "img-src 'self' data: pw-file:",
+  "media-src 'self' pw-file:",
+  "frame-src 'self' pw-file:",
+  "worker-src 'self' blob:",
+  "connect-src 'self' pw-file:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'none'",
+].join('; ')
+
 function baseHeaders(targetPath: string, size: number): Headers {
-  return new Headers({
-    'Content-Type': mimeForAppPath(targetPath),
+  const mime = mimeForAppPath(targetPath)
+  const headers = new Headers({
+    'Content-Type': mime,
     'Content-Length': String(size),
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
   })
+  if (mime.startsWith('text/html')) {
+    headers.set('Content-Security-Policy', APP_CONTENT_SECURITY_POLICY)
+  }
+  return headers
 }
 
 /** 协议响应；抽成纯函数便于单测（不依赖 Electron 运行时） */

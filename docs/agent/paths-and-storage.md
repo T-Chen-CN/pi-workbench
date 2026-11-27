@@ -75,6 +75,7 @@
 | `config/web-search.json` | `webSearch:*` | 当前 provider + 各 provider 的 Key（`enc:`） |
 | `config/last-run-version.json` | `shell-refresh.ts` | 仅在版本变化时刷新 shell / 图标缓存 |
 | `config/migrations.json` | `electron/legacy-cleanup.ts` | 已执行的一次性迁移：`{applied: { [id]: 时间戳 }}`。**删了等于让迁移重跑**，而迁移是幂等的，所以代价只是白做一次 |
+| `config/workspace-plugins.json` | `plugin-manager.ts` | 各工作区已启用插件白名单与全目录 SHA-256 哈希钉住记录（绝不读仓库内 `.pi-workbench/config.json`） |
 | `data/workspaces.db` | `workspace-store.ts` | `node:sqlite`，表 `workspaces(path, opened_at, open_count)`；**最近工作区的唯一来源**，渲染层不再保存 `recentWorkspaces` |
 | `data/agent/models.json` | `model-config.ts` | 由应用整体覆盖生成：只含 8 家白名单 provider 的 `modelOverrides`，不含 baseUrl / api / apiKey |
 | `data/agent/models-store.json` | `models-store.ts` | 远端目录缓存（SDK 格式），`source` 与列表过滤共用一个判据 |
@@ -82,8 +83,8 @@
 | `data/agent/sessions/*.jsonl` | Pi SDK | 会话记录（按 cwd 过滤），历史与导出的唯一真相源 |
 | `data/agent/session-extras/<id>.json` | `AgentManager` | 会话 sidecar：`title`（标题备份）、`plan`（结构化计划，不进模型上下文、压缩后保留）、`permission`（会话权限，`null` 表示首次打开时从全局默认档生成）、`branchLeaves`（分支切换恢复）、`thinkingDurations` |
 | `data/profile/` | Chromium | userData（localStorage、GPU / 代码缓存）。可安全清空的只有 `Cache/`、`Code Cache/` |
-| `logs/{main,renderer,agent}.log` | `logger.ts` / SDK | 5 MB 轮转，保留 `.1` |
-| `cache/drafts/<sha1>.json` | `draft-store.ts` | 崩溃恢复草稿；单条 ≤ 2,000,000 **字符**（`MAX_DRAFT_CHARS`，中文约 4–6 MB）、每工作区 ≤ 100 条；正常保存后删除 |
+| `logs/{main,renderer,agent}.log` | `logger.ts` / SDK | 5 MB 轮转 × 有界 3 份（活动文件 + `.1` + `.2`），自动清理更早轮转备份 |
+| `cache/drafts/<sha1>.json` | `draft-store.ts` | 崩溃恢复草稿；单条 ≤ 2,000,000 **字符**（`MAX_DRAFT_CHARS`，中文约 4–6 MB）、每工作区 ≤ 100 条；正常保存后删除；超过 30 天的孤儿草稿由启动期自动维护回收 |
 
 工作区级（`{workspaceDir}/.pi-workbench/`）：
 
@@ -96,7 +97,13 @@
 | `session-git.json` | `{ version: 1, worktrees, sessions }`：会话 ↔ 工作树绑定（见 [git-and-worktrees](git-and-worktrees.md)） |
 | `plugins/` | 工作区插件（见 [agent-runtime](agent-runtime.md) 之外的插件约束） |
 | `worktrees/` | 托管工作树 checkout 目录 |
-| `terminal-{id}.log` | 每个终端的输出尾巴（Agent 可附加为上下文；超限截断） |
+| `terminal-{id}.log` | 每个终端的输出日志（5 MB 轮转，最多保留 `.1`–`.3` 三份备份并自动裁剪旧轮转文件） |
+
+**纯自动缓存维护（`electron/cache-maintenance.ts`）**：应用在 `whenReady` 后延迟 5 秒异步执行（`.unref()`，不阻塞首屏、不暴露手动清理按钮）：
+- `cleanupInstalledUpdaterCache`：发现 `cache/pi-workbench-updater.flag` 或 `cache/pi-workbench-updater/pending/` 内文件超过 7 天时清理 `pending/` 并清除标记（保留 `installer.exe` / `current.blockmap` 差分基准）；
+- `cleanupTempCache`：清理 `cache/temp/` 中超过 7 天或超出 100 MiB 总预算的最旧文件（含历史 `tool-result-*.txt`）；
+- `pruneOrphanDrafts`：清理 `cache/drafts/` 中超过 30 天的陈旧草稿；
+- `rotateTerminalLogs`：在打开/写入工作区终端日志时按 5 MB × 3 份上限自动轮转与裁剪。
 
 **所有 JSON 落盘都走 `electron/atomic-json.ts`**：临时文件 → fsync → rename；覆盖前把旧文件复制为 `.bak`，读取时主文件损坏则回退备份。自己 `writeFile` 覆盖这些文件会破坏崩溃恢复。
 

@@ -15,6 +15,7 @@
 
 import { spawn as nodeSpawn } from 'child_process'
 import { childRegistry, killProcessTreeAsync } from './child-registry.js'
+import { sanitizeChildEnv } from './env-sanitize.js'
 import { createHash } from 'crypto'
 import { existsSync } from 'fs'
 import * as fs from 'fs/promises'
@@ -72,44 +73,34 @@ const CANDIDATES: ReadonlyArray<{
   { lockfile: 'uv.lock', manager: 'uv', depsDir: '.venv' },
 ]
 
-/** 安装命令固定使用「按 lockfile 精确安装」的形态，绝不改动 lockfile（自动安装默认关闭，手动或主动开启时允许正常构建原生依赖） */
+/** 安装命令固定使用「按 lockfile 精确安装 + 禁止生命周期脚本」的形态，阻断恶意仓库 postinstall 执行 */
 export function installCommand(
   manager: PackageManager,
   repoRoot: string
 ): { command: string; args: string[] } {
   switch (manager) {
     case 'pnpm':
-      return { command: 'pnpm', args: ['install', '--frozen-lockfile'] }
+      return { command: 'pnpm', args: ['install', '--frozen-lockfile', '--ignore-scripts'] }
     case 'bun':
-      return { command: 'bun', args: ['install', '--frozen-lockfile'] }
+      return { command: 'bun', args: ['install', '--frozen-lockfile', '--ignore-scripts'] }
     case 'yarn':
-      // yarn berry 用的是 --immutable；v1 用 --frozen-lockfile
+      // yarn berry 使用 --immutable + --mode=skip-build（且在 spawn 环境设置 YARN_ENABLE_SCRIPTS=0）；v1 使用 --frozen-lockfile --ignore-scripts
       return existsSync(path.join(repoRoot, '.yarnrc.yml'))
-        ? { command: 'yarn', args: ['install', '--immutable'] }
-        : { command: 'yarn', args: ['install', '--frozen-lockfile'] }
+        ? { command: 'yarn', args: ['install', '--immutable', '--mode=skip-build'] }
+        : { command: 'yarn', args: ['install', '--frozen-lockfile', '--ignore-scripts'] }
     case 'npm':
-      return { command: 'npm', args: ['ci'] }
+      return { command: 'npm', args: ['ci', '--ignore-scripts'] }
     case 'uv':
       return { command: 'uv', args: ['sync', '--frozen'] }
   }
 }
 
 /**
- * 安装脚本不能拿到 Agent 的供应商密钥，也不能看到应用自己的敏感环境变量。
- * 必须按大小写无关剔除（Windows 环境变量名大小写不敏感）。
+ * 安装进程不能拿到 Agent 的供应商密钥，也不能看到应用或宿主环境中的敏感凭据。
+ * 统一委托给 env-sanitize（按大小写无关剔除，兼容 Windows）。
  */
-const SENSITIVE_ENV_KEYS = new Set(['PI_WORKBENCH_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'])
-const SENSITIVE_ENV_PREFIXES = ['PI_WORKBENCH_']
-
 export function sanitizeInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const sanitized: NodeJS.ProcessEnv = {}
-  for (const [key, value] of Object.entries(env)) {
-    const upper = key.toUpperCase()
-    if (SENSITIVE_ENV_KEYS.has(upper)) continue
-    if (SENSITIVE_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix))) continue
-    sanitized[key] = value
-  }
-  return sanitized
+  return sanitizeChildEnv(env)
 }
 
 /** lockfile 内容哈希按 mtime + size 缓存：`listWorktrees` 每条消息都会问一次状态 */
@@ -461,6 +452,10 @@ export class WorktreeDepsInstaller {
     const spawnFn = this.options.spawn ?? defaultSpawn
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS
     const env = sanitizeInstallEnv(this.options.env ?? process.env)
+    if (info.manager === 'yarn') {
+      // Yarn Berry 通过环境变量全局禁用 postinstall 构建脚本（同时兼容 v2/v3/v4）
+      env.YARN_ENABLE_SCRIPTS = '0'
+    }
     const log = this.options.log
 
     return new Promise<InstallResult>((resolve) => {

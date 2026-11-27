@@ -190,9 +190,11 @@ describe('serveFileRequest', () => {
     expect((await serveFileRequest(toUrl(dir))).status).toBe(404)
   })
 
-  it('attaches structural sandbox CSP header to HTML preview responses (SEC-02)', async () => {
+  it('attaches structural sandbox CSP header to HTML and SVG preview responses (SEC-02)', async () => {
     const htmlFile = path.join(workDir, 'preview.html')
     fs.writeFileSync(htmlFile, '<html><body>hi</body></html>')
+    const svgFile = path.join(workDir, 'diagram.svg')
+    fs.writeFileSync(svgFile, '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
     const txtFile = path.join(workDir, 'note.txt')
     fs.writeFileSync(txtFile, 'plain')
 
@@ -204,6 +206,16 @@ describe('serveFileRequest', () => {
     expect(csp).toContain("object-src 'none'")
     expect(csp).toContain("base-uri 'none'")
     expect(csp).toContain('frame-ancestors pw-app:')
+
+    const svgRes = await serveFileRequest(toUrl(svgFile), 'GET')
+    expect(svgRes.status).toBe(200)
+    expect(svgRes.headers.get('Content-Type')).toBe('image/svg+xml')
+    const svgCsp = svgRes.headers.get('Content-Security-Policy') ?? ''
+    expect(svgCsp).toContain("default-src 'none'")
+    expect(svgCsp).toContain("script-src 'none'")
+    expect(svgCsp).toContain("object-src 'none'")
+    expect(svgCsp).toContain("worker-src 'none'")
+    expect(svgCsp).toContain("frame-ancestors 'self'")
 
     const txtRes = await serveFileRequest(toUrl(txtFile), 'GET')
     expect(txtRes.headers.get('Content-Security-Policy')).toBeNull()
@@ -219,20 +231,22 @@ describe('createPreviewNetworkGuard', () => {
       guard.handleRequest(details, resolve)
     })
 
-  it('passes through requests from non-preview frames without prompting', async () => {
+  it('auto-allows only trusted app and Vite dev initiator origins without prompting', async () => {
     const prompt = vi.fn(async () => false)
     const guard = createPreviewNetworkGuard({ prompt })
 
-    const res = await callGuard(guard, {
-      url: 'https://api.example.com/v1/health',
-      frame: { url: 'pw-app://bundle/index.html', parent: null },
-      initiatorOrigin: 'pw-app://bundle',
-    })
-    expect(res).toEqual({})
+    for (const origin of ['pw-app://bundle', 'http://localhost:5173', 'http://127.0.0.1:5173']) {
+      const res = await callGuard(guard, {
+        url: 'https://api.example.com/v1/health',
+        frame: { url: `${origin}/index.html`, parent: null },
+        initiatorOrigin: origin,
+      })
+      expect(res).toEqual({})
+    }
     expect(prompt).not.toHaveBeenCalled()
   })
 
-  it('deduplicates concurrent external requests for the same HTML file and caches deny', async () => {
+  it('deduplicates concurrent requests per (file, targetHost) and caches deny', async () => {
     let resolvePrompt!: (allowed: boolean) => void
     const prompt = vi.fn(
       (_payload: { filePath: string; requestUrl: string; targetHost: string }) =>
@@ -248,7 +262,7 @@ describe('createPreviewNetworkGuard', () => {
       frame: { url: previewUrl, parent: null },
     })
     const p2 = callGuard(guard, {
-      url: 'https://fonts.example.com/b.css',
+      url: 'https://cdn.example.com/b.css',
       frame: { url: previewUrl, parent: null },
     })
 
@@ -262,19 +276,20 @@ describe('createPreviewNetworkGuard', () => {
     resolvePrompt(false)
     expect(await Promise.all([p1, p2])).toEqual([{ cancel: true }, { cancel: true }])
 
-    // 后续同文件请求直接按缓存拒绝，不再重复弹窗
+    // 后续同文件同主机请求直接按缓存拒绝，不再重复弹窗
     expect(
       await callGuard(guard, {
-        url: 'https://api.example.com/data',
+        url: 'https://cdn.example.com/data',
         frame: { url: `${previewUrl}?v=2`, parent: null },
       })
     ).toEqual({ cancel: true })
     expect(prompt).toHaveBeenCalledTimes(1)
   })
 
-  it('allows a permitted file (including nested iframes and reloads) while prompting other files independently', async () => {
-    const prompt = vi.fn(async ({ filePath }: { filePath: string }) =>
-      filePath.endsWith('trusted.html')
+  it('scopes approval per (file, targetHost) so allowing one host never grants arbitrary third-party hosts', async () => {
+    const prompt = vi.fn(
+      async ({ filePath, targetHost }: { filePath: string; targetHost: string }) =>
+        filePath.endsWith('trusted.html') && targetHost === 'fonts.googleapis.com'
     )
     const guard = createPreviewNetworkGuard({ prompt })
     const trustedUrl = toUrl(path.join(workDir, 'trusted.html'))
@@ -282,50 +297,54 @@ describe('createPreviewNetworkGuard', () => {
 
     expect(
       await callGuard(guard, {
-        url: 'https://cdn.example.com/lib.js',
+        url: 'https://fonts.googleapis.com/css2?family=Inter',
         frame: { url: trustedUrl, parent: null },
       })
     ).toEqual({ cancel: false })
 
-    // 同文件刷新与嵌套子 iframe 自动继承放行
+    // 同文件同主机在刷新与嵌套子 iframe 中继承放行
     expect(
       await callGuard(guard, {
-        url: 'https://cdn.example.com/style.css',
+        url: 'https://fonts.googleapis.com/css2?family=Mono',
         frame: { url: 'about:blank', parent: { url: `${trustedUrl}?v=5`, parent: null } },
       })
     ).toEqual({ cancel: false })
     expect(prompt).toHaveBeenCalledTimes(1)
 
-    // 另一个 HTML 文件仍独立询问并拒绝
+    // 同一文件请求未获批的新第三方主机必须独立弹窗并按决定拦截
     expect(
       await callGuard(guard, {
-        url: 'https://cdn.example.com/evil.js',
-        frame: { url: otherUrl, parent: null },
+        url: 'https://evil.example/exfiltrate',
+        frame: { url: trustedUrl, parent: null },
       })
     ).toEqual({ cancel: true })
     expect(prompt).toHaveBeenCalledTimes(2)
+
+    // 另一个 HTML 文件请求同一主机也必须独立询问
+    expect(
+      await callGuard(guard, {
+        url: 'https://fonts.googleapis.com/css2',
+        frame: { url: otherUrl, parent: null },
+      })
+    ).toEqual({ cancel: true })
+    expect(prompt).toHaveBeenCalledTimes(3)
   })
 
-  it('fails closed when prompt throws or frame is missing for pw-file initiator', async () => {
+  it('fails closed when prompt throws or initiatorOrigin is untrusted/unknown without preview file', async () => {
     const prompt = vi.fn(async () => {
       throw new Error('dialog failed')
     })
     const guard = createPreviewNetworkGuard({ prompt })
 
-    expect(
-      await callGuard(guard, {
-        url: 'https://evil.example/leak',
-        frame: null,
-        initiatorOrigin: 'pw-file://local',
-      })
-    ).toEqual({ cancel: true })
-    expect(
-      await callGuard(guard, {
-        url: 'https://evil.example/sandbox-leak',
-        frame: null,
-        initiatorOrigin: 'null',
-      })
-    ).toEqual({ cancel: true })
+    for (const initiatorOrigin of ['pw-file://local', 'null', 'https://evil.example', undefined]) {
+      expect(
+        await callGuard(guard, {
+          url: 'https://evil.example/leak',
+          frame: null,
+          initiatorOrigin,
+        })
+      ).toEqual({ cancel: true })
+    }
     expect(prompt).not.toHaveBeenCalled()
 
     expect(

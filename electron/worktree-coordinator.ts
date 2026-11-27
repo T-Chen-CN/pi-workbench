@@ -757,8 +757,10 @@ export class WorktreeCoordinator {
         // 工作树即将消失：终止并等待依赖安装进程退出，避免 Windows 句柄占用导致 git worktree remove 失败
         await state.deps.forgetAndWait(target)
         await gitRemoveWorktree(state.repo.root, target)
-        const hasCommits = await branchHasNewCommits(state.repo.root, record.branch, record.base)
-        if (record.branch && !hasCommits) await deleteBranch(state.repo.root, record.branch)
+        if (record.branch && record.branch.startsWith('pi/')) {
+          const hasCommits = await branchHasNewCommits(state.repo.root, record.branch, record.base)
+          if (!hasCommits) await deleteBranch(state.repo.root, record.branch)
+        }
         delete state.data.worktrees[key]
         await persist(state)
         return { success: true, removed: true, dirty: false, worktreePath: target }
@@ -803,8 +805,10 @@ export class WorktreeCoordinator {
         try {
           await state.deps.forgetAndWait(target)
           await gitRemoveWorktree(state.repo.root, target)
-          const hasCommits = await branchHasNewCommits(state.repo.root, record.branch, record.base)
-          if (record.branch && !hasCommits) await deleteBranch(state.repo.root, record.branch)
+          if (record.branch && record.branch.startsWith('pi/')) {
+            const hasCommits = await branchHasNewCommits(state.repo.root, record.branch, record.base)
+            if (!hasCommits) await deleteBranch(state.repo.root, record.branch)
+          }
           delete state.data.worktrees[id]
           removed.push(target)
         } catch {

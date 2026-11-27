@@ -23,19 +23,43 @@ import type {
 } from './types.js'
 
 const AGENT_SHELL_SENSITIVE_KEYS = new Set([
-  'PI_WORKBENCH_API_KEY',
   'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_OAUTH_TOKEN',
   'OPENAI_API_KEY',
+  'GEMINI_API_KEY',
+  'GOOGLE_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'XAI_API_KEY',
+  'XIAOMI_API_KEY',
+  'XIAOMI_TOKEN_PLAN_CN_API_KEY',
+  'OPENROUTER_API_KEY',
+  'GROQ_API_KEY',
+  'MISTRAL_API_KEY',
+  'COHERE_API_KEY',
+  'TOGETHER_API_KEY',
+  'FIREWORKS_API_KEY',
+  'PERPLEXITY_API_KEY',
+  'GITHUB_TOKEN',
+  'GH_TOKEN',
+  'COPILOT_GITHUB_TOKEN',
+  'NPM_TOKEN',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SESSION_TOKEN',
 ])
-const AGENT_SHELL_SENSITIVE_PREFIXES = ['PI_WORKBENCH_']
+const AGENT_SHELL_SENSITIVE_PREFIXES = ['PI_WORKBENCH_', 'PI_CODING_AGENT_']
+const AGENT_SHELL_SENSITIVE_PATTERN =
+  /^(?:.*_(?:API_KEY|AUTH_TOKEN|OAUTH_TOKEN|SECRET_KEY|ACCESS_TOKEN|PRIVATE_KEY))$/i
 
-/** 清洗 Agent 派生 shell 子进程的敏感环境变量（Windows 大小写不敏感），防止联网搜索 Key 经 bash 暴露 */
+/** 清洗 Agent 派生 shell 子进程的敏感环境变量（与 electron/env-sanitize.ts 规则一致，Windows 大小写不敏感） */
 export function sanitizeAgentShellEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const sanitized: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) continue
     const upper = key.toUpperCase()
     if (AGENT_SHELL_SENSITIVE_KEYS.has(upper)) continue
     if (AGENT_SHELL_SENSITIVE_PREFIXES.some((prefix) => upper.startsWith(prefix))) continue
+    if (AGENT_SHELL_SENSITIVE_PATTERN.test(key)) continue
     sanitized[key] = value
   }
   return sanitized

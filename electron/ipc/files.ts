@@ -35,19 +35,65 @@ export interface FilesIpcContext {
 const BINARY_PROBE_BYTES = 8192
 /** 文本文件读取上限：防止超大单文件一次读入主进程内存造成 OOM */
 const MAX_TEXT_FILE_BYTES = 32 * 1024 * 1024
-/** 禁止通过 shell.openPath 直接执行的可执行/脚本/快捷方式/宏/镜像后缀 */
-const BLOCKED_EXTERNAL_OPEN_EXTENSIONS = new Set([
-  '.exe', '.msi', '.msp', '.bat', '.cmd', '.com', '.ps1', '.psm1', '.psd1',
-  '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.scr', '.pif', '.lnk',
-  '.hta', '.reg', '.cpl', '.msc', '.jar', '.sh', '.bash', '.zsh', '.command',
-  '.app', '.dmg', '.pkg', '.appimage', '.run',
-  // Windows 快捷方式/脚本/帮助/镜像/带宏文档
-  '.url', '.scf', '.inf', '.chm', '.iso', '.vhd', '.vhdx', '.gadget',
-  '.msh', '.msh1', '.msh2', '.mshxml', '.settingcontent-ms', '.library-ms', '.search-ms',
-  '.py', '.pyw', '.rb', '.pl', '.docm', '.xlsm', '.pptm', '.dotm', '.xltm',
-  // macOS / Linux 自动化与桌面启动器
-  '.workflow', '.scpt', '.scptd', '.applescript', '.tool', '.terminal', '.action', '.desktop',
+/** 允许直接交给 shell.openPath 打开的安全文档与媒体白名单；其余后缀退回文件管理器定位，避免触发任意程序/脚本执行 */
+export const SAFE_EXTERNAL_OPEN_EXTENSIONS = new Set([
+  '.pdf',
+  '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.ico',
+  '.mp3', '.wav', '.flac', '.ogg', '.m4a',
+  '.mp4', '.webm', '.mov', '.mkv',
+  '.docx', '.xlsx', '.pptx', '.odt', '.ods', '.odp', '.epub',
+  '.txt', '.md', '.csv', '.json', '.log',
 ])
+
+let atomicWriteSeq = 0
+
+async function renameWithWindowsRetry(from: string, to: string): Promise<void> {
+  const retries = process.platform === 'win32' ? 5 : 1
+  let lastError: unknown
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    try {
+      await fs.rename(from, to)
+      return
+    } catch (error) {
+      lastError = error
+      const code = (error as NodeJS.ErrnoException)?.code
+      if (
+        process.platform !== 'win32' ||
+        (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY')
+      ) {
+        throw error
+      }
+      await new Promise((resolve) => setTimeout(resolve, 15 * (attempt + 1)))
+    }
+  }
+  throw lastError
+}
+
+/** 同目录临时文件 + rename 原子写，防止崩溃截断用户源文件；POSIX 上尽量保留原文件权限位 */
+async function writeTextFileAtomic(target: string, content: string): Promise<void> {
+  let existingMode: number | undefined
+  try {
+    const existing = await fs.stat(target)
+    existingMode = existing.mode & 0o777
+  } catch {
+    // 目标文件尚不存在
+  }
+
+  const tmpPath = path.join(
+    path.dirname(target),
+    `.${path.basename(target)}.${process.pid}.${Date.now()}.${++atomicWriteSeq}.tmp`
+  )
+  try {
+    await fs.writeFile(tmpPath, content, 'utf-8')
+    if (existingMode !== undefined && process.platform !== 'win32') {
+      await fs.chmod(tmpPath, existingMode).catch(() => undefined)
+    }
+    await renameWithWindowsRetry(tmpPath, target)
+  } catch (error) {
+    await fs.unlink(tmpPath).catch(() => undefined)
+    throw error
+  }
+}
 
 /** 头部出现 NUL 字节即视为二进制：文本文件不会包含它 */
 async function looksBinary(targetPath: string, size: number): Promise<boolean> {
@@ -93,7 +139,7 @@ export function registerFilesIpc(context: FilesIpcContext): void {
     }
   })
 
-  // 用系统默认程序打开：不支持预览的类型与媒体文件（拒绝直接执行可执行文件）
+  // 用系统默认程序打开：仅白名单安全文档与媒体走 shell.openPath，其余类型安全在文件管理器中定位
   handleIpc('fs:openExternally', async (_event, filePath: string) => {
     try {
       const parsedPath = parseIpcInput(safePathSchema, filePath)
@@ -102,9 +148,14 @@ export function registerFilesIpc(context: FilesIpcContext): void {
       if (!target) {
         return { success: false, error: 'Path is outside the open workspace' }
       }
+      const stats = await fs.stat(target)
+      if (!stats.isFile()) {
+        return { success: false, error: 'Target is not a regular file' }
+      }
       const ext = path.extname(target).toLowerCase()
-      if (BLOCKED_EXTERNAL_OPEN_EXTENSIONS.has(ext)) {
-        return { success: false, error: `Refusing to open executable file type: ${ext}` }
+      if (!SAFE_EXTERNAL_OPEN_EXTENSIONS.has(ext)) {
+        shell.showItemInFolder(target)
+        return { success: true, revealed: true }
       }
       const error = await shell.openPath(target)
       return error ? { success: false, error } : { success: true }
@@ -139,7 +190,7 @@ export function registerFilesIpc(context: FilesIpcContext): void {
       if (!target) {
         return { success: false, error: 'Path is outside the open workspace' }
       }
-      await fs.writeFile(target, parsed.data.content, 'utf-8')
+      await writeTextFileAtomic(target, parsed.data.content)
       context.onFileSaved?.(target)
       return { success: true }
     } catch (error) {

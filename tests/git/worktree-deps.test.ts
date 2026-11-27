@@ -47,10 +47,10 @@ describe('lockfile 探测', () => {
   })
 
   it.each([
-    ['pnpm-lock.yaml', 'pnpm', 'pnpm', ['install', '--frozen-lockfile'], 'node_modules'],
-    ['bun.lockb', 'bun', 'bun', ['install', '--frozen-lockfile'], 'node_modules'],
-    ['bun.lock', 'bun', 'bun', ['install', '--frozen-lockfile'], 'node_modules'],
-    ['package-lock.json', 'npm', 'npm', ['ci'], 'node_modules'],
+    ['pnpm-lock.yaml', 'pnpm', 'pnpm', ['install', '--frozen-lockfile', '--ignore-scripts'], 'node_modules'],
+    ['bun.lockb', 'bun', 'bun', ['install', '--frozen-lockfile', '--ignore-scripts'], 'node_modules'],
+    ['bun.lock', 'bun', 'bun', ['install', '--frozen-lockfile', '--ignore-scripts'], 'node_modules'],
+    ['package-lock.json', 'npm', 'npm', ['ci', '--ignore-scripts'], 'node_modules'],
     ['uv.lock', 'uv', 'uv', ['sync', '--frozen'], '.venv'],
   ])('%s → %s', async (lockfile, manager, command, args, depsDir) => {
     await write(lockfile as string, 'lockfile-content\n')
@@ -59,20 +59,20 @@ describe('lockfile 探测', () => {
     expect(info?.hash).toBe(`${manager}:${sha1('lockfile-content\n')}`)
   })
 
-  it('yarn v1 用 --frozen-lockfile', async () => {
+  it('yarn v1 用 --frozen-lockfile --ignore-scripts', async () => {
     await write('yarn.lock', 'yarn\n')
     expect(await detectLockfile(repo)).toMatchObject({
       manager: 'yarn',
-      args: ['install', '--frozen-lockfile'],
+      args: ['install', '--frozen-lockfile', '--ignore-scripts'],
     })
   })
 
-  it('有 .yarnrc.yml 时视为 berry，用 --immutable', async () => {
+  it('有 .yarnrc.yml 时视为 berry，用 --immutable --mode=skip-build', async () => {
     await write('yarn.lock', 'yarn\n')
     await write('.yarnrc.yml', 'nodeLinker: node-modules\n')
     expect(await detectLockfile(repo)).toMatchObject({
       manager: 'yarn',
-      args: ['install', '--immutable'],
+      args: ['install', '--immutable', '--mode=skip-build'],
     })
   })
 
@@ -92,12 +92,15 @@ describe('lockfile 探测', () => {
     expect(first?.hash).not.toBe(second?.hash)
   })
 
-  it('命令映射覆盖全部包管理器', () => {
+  it('命令映射覆盖全部包管理器并禁用生命周期脚本', () => {
     expect(installCommand('pnpm', repo)).toEqual({
       command: 'pnpm',
-      args: ['install', '--frozen-lockfile'],
+      args: ['install', '--frozen-lockfile', '--ignore-scripts'],
     })
-    expect(installCommand('npm', repo)).toEqual({ command: 'npm', args: ['ci'] })
+    expect(installCommand('npm', repo)).toEqual({
+      command: 'npm',
+      args: ['ci', '--ignore-scripts'],
+    })
     expect(installCommand('uv', repo)).toEqual({ command: 'uv', args: ['sync', '--frozen'] })
   })
 })
@@ -139,16 +142,19 @@ describe('依赖状态判定', () => {
 })
 
 describe('安装环境变量', () => {
-  it('剔除应用自己的敏感变量与供应商密钥', () => {
+  it('剔除应用内部变量、供应商密钥与通用凭据（含 NPM_TOKEN / GITHUB_TOKEN / AWS 密钥）', () => {
     const env = sanitizeInstallEnv({
       PATH: '/usr/bin',
       HOME: '/home/u',
       PI_WORKBENCH_API_KEY: 'secret',
       PI_WORKBENCH_WEB_SEARCH_KEY_TAVILY: 'secret',
+      PI_CODING_AGENT_DIR: '/agent',
       ANTHROPIC_API_KEY: 'secret',
       NPM_TOKEN: 'registry-token',
+      GITHUB_TOKEN: 'gh-token',
+      AWS_SECRET_ACCESS_KEY: 'aws-secret',
     })
-    expect(env).toEqual({ PATH: '/usr/bin', HOME: '/home/u', NPM_TOKEN: 'registry-token' })
+    expect(env).toEqual({ PATH: '/usr/bin', HOME: '/home/u' })
   })
 
   it('错误信息截断到 2000 字符', () => {
@@ -211,7 +217,7 @@ describe('WorktreeDepsInstaller', () => {
     expect(installer.isRunning(worktree)).toBe(true)
     expect(fake.children).toHaveLength(1)
     expect(fake.children[0].command).toBe('pnpm')
-    expect(fake.children[0].args).toEqual(['install', '--frozen-lockfile'])
+    expect(fake.children[0].args).toEqual(['install', '--frozen-lockfile', '--ignore-scripts'])
     expect(fake.children[0].options.cwd).toBe(worktree)
 
     fake.children[0].exit(0)

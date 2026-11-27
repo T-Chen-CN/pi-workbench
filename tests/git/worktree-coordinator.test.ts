@@ -19,7 +19,7 @@ import {
   getCoordinator,
 } from '../../electron/worktree-coordinator'
 import { clearLockfileHashCache, detectLockfile, WorktreeDepsInstaller, type SpawnFn, type SpawnedProcess } from '../../electron/worktree-deps'
-import { commitDetail, getStatus, loadSessionGit } from '../../electron/git-worktrees'
+import { commitDetail, deleteBranch, getStatus, loadSessionGit, saveSessionGit } from '../../electron/git-worktrees'
 
 let workspace = ''
 
@@ -352,6 +352,68 @@ describe('WorktreeCoordinator', () => {
     const resolved = await pending
     expect(resolved).toBeNull()
   })
+
+  it('refuses to delete non-pi/ branches in deleteBranch, release, and cleanupOrphans even if session-git.json marks managed: true', async () => {
+    git(['branch', 'release/v1'])
+    git(['branch', 'feature/user-work'])
+    git(['branch', 'pi/disposable'])
+
+    // 直接调用 deleteBranch 拒绝任何非 pi/ 前缀分支
+    await deleteBranch(workspace, 'release/v1')
+    await deleteBranch(workspace, 'feature/user-work')
+    await deleteBranch(workspace, 'pi/disposable')
+    const afterDirect = git(['branch', '--format=%(refname:short)'])
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    expect(afterDirect).toContain('release/v1')
+    expect(afterDirect).toContain('feature/user-work')
+    expect(afterDirect).not.toContain('pi/disposable')
+
+    // 即使仓库内提交了恶意伪造 managed: true 的 session-git.json，release 与 cleanupOrphans 绝不删非 pi/ 分支
+    const wtRelease = path.join(workspace, '.pi-workbench', 'worktrees', 'fake-release')
+    const wtFeature = path.join(workspace, '.pi-workbench', 'worktrees', 'fake-feature')
+    await fs.mkdir(path.dirname(wtRelease), { recursive: true })
+    git(['worktree', 'add', wtRelease, 'release/v1'])
+    git(['worktree', 'add', wtFeature, 'feature/user-work'])
+
+    await saveSessionGit(workspace, {
+      version: 1,
+      worktrees: {
+        'fake-release': {
+          path: '.pi-workbench/worktrees/fake-release',
+          managed: true,
+          branch: 'release/v1',
+          base: 'main',
+          createdBySession: 'sess-evil',
+          createdAt: new Date().toISOString(),
+        },
+        'fake-feature': {
+          path: '.pi-workbench/worktrees/fake-feature',
+          managed: true,
+          branch: 'feature/user-work',
+          base: 'main',
+          createdBySession: '',
+          createdAt: new Date().toISOString(),
+        },
+      },
+      sessions: {
+        'sess-evil': { worktree: 'fake-release' },
+      },
+    })
+
+    disposeCoordinator(workspace)
+    const coordinator = await WorktreeCoordinator.forWorkspace(workspace)
+    await coordinator!.release('sess-evil')
+    await coordinator!.cleanupOrphans()
+
+    const branches = git(['branch', '--format=%(refname:short)'])
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    expect(branches).toContain('release/v1')
+    expect(branches).toContain('feature/user-work')
+  })
 })
 
 /** 当前 workspace 里登记的工作树相对路径 */
@@ -449,7 +511,7 @@ describe('WorktreeCoordinator 依赖安装（GIT-118）', () => {
     expect(fake.children).toHaveLength(1)
     expect(fake.children[0].cwd).toBe(root)
     expect(fake.children[0].command).toBe('npm')
-    expect(fake.children[0].args).toEqual(['ci'])
+    expect(fake.children[0].args).toEqual(['ci', '--ignore-scripts'])
     expect(depsOf(await coordinator!.listWorktrees('session-deps'), root)?.state).toBe(
       'installing'
     )

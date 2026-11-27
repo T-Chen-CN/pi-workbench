@@ -24,8 +24,10 @@ vi.mock('electron', () => ({
 
 const { sanitizeAgentShellEnv } = await import('../../pi-bridge/src/agent-manager')
 const { createApprovalExtension } = await import('../../pi-bridge/src/approval-extension')
+const { sanitizeChildEnv } = await import('../../electron/env-sanitize')
 const { sanitizeTerminalEnv } = await import('../../electron/terminal-manager')
 const { sanitizeInstallEnv } = await import('../../electron/worktree-deps')
+const { sanitizedChildEnv } = await import('../../electron/ipc/web-search-config')
 const {
   canonicalizePath,
   resolveAllowedFileTarget,
@@ -68,33 +70,45 @@ afterEach(async () => {
 })
 
 describe('SEC-06：环境变量大小写无关脱敏', () => {
-  it('sanitizeAgentShellEnv、sanitizeTerminalEnv 与 sanitizeInstallEnv 均剥离大小写变体密钥', () => {
+  it('sanitizeChildEnv、sanitizeAgentShellEnv、sanitizeTerminalEnv、sanitizeInstallEnv 与 sanitizedChildEnv 均剥离全量敏感凭据', () => {
     const dirty: NodeJS.ProcessEnv = {
       PATH: '/usr/bin',
       HOME: '/home/user',
       PI_WORKBENCH_API_KEY: 'secret-1',
       pi_workbench_web_search_key_tavily: 'secret-2',
       Pi_Workbench_Custom: 'secret-3',
+      PI_CODING_AGENT_DIR: '/data/agent',
+      pi_coding_agent_session_dir: '/data/agent/sessions',
       ANTHROPIC_API_KEY: 'sk-ant-secret',
-      anthropic_api_key: 'sk-ant-lower',
+      anthropic_auth_token: 'tok-ant',
       OPENAI_API_KEY: 'sk-openai-secret',
       openai_api_key: 'sk-openai-lower',
+      GEMINI_API_KEY: 'sk-gemini',
+      DEEPSEEK_API_KEY: 'sk-deepseek',
+      XIAOMI_TOKEN_PLAN_CN_API_KEY: 'sk-xiaomi',
+      GITHUB_TOKEN: 'ghp_secret',
+      gh_token: 'ghp_lower',
+      COPILOT_GITHUB_TOKEN: 'ghu_copilot',
+      NPM_TOKEN: 'npm_secret',
+      AWS_SECRET_ACCESS_KEY: 'aws-secret',
+      AWS_SESSION_TOKEN: 'aws-session',
+      CUSTOM_SERVICE_SECRET_KEY: 'custom-secret',
+      STRIPE_PRIVATE_KEY: 'stripe-priv',
+      MY_APP_ACCESS_TOKEN: 'access-tok',
       SAFE_VAR: 'keep-me',
     }
     for (const clean of [
+      sanitizeChildEnv(dirty),
       sanitizeAgentShellEnv(dirty),
       sanitizeTerminalEnv(dirty),
       sanitizeInstallEnv(dirty),
+      sanitizedChildEnv(dirty),
     ]) {
-      expect(clean.PATH).toBe('/usr/bin')
-      expect(clean.SAFE_VAR).toBe('keep-me')
-      expect(clean.PI_WORKBENCH_API_KEY).toBeUndefined()
-      expect(clean.pi_workbench_web_search_key_tavily).toBeUndefined()
-      expect(clean.Pi_Workbench_Custom).toBeUndefined()
-      expect(clean.ANTHROPIC_API_KEY).toBeUndefined()
-      expect(clean.anthropic_api_key).toBeUndefined()
-      expect(clean.OPENAI_API_KEY).toBeUndefined()
-      expect(clean.openai_api_key).toBeUndefined()
+      expect(clean).toEqual({
+        PATH: '/usr/bin',
+        HOME: '/home/user',
+        SAFE_VAR: 'keep-me',
+      })
     }
   })
 })
@@ -415,8 +429,9 @@ describe('SEC-08 / SEC-09 / R-1：云端首启口令、Token 分域与 Diff 独�
       const pairDevice = async (name: string) => {
         const codeRes = await fetch(`${base}/v1/pair/code`, {
           method: 'POST',
-          headers: { cookie },
+          headers: { cookie, origin: base },
         })
+        expect(codeRes.status).toBe(200)
         const { code } = (await codeRes.json()) as { code: string }
         const pairRes = await fetch(`${base}/v1/pair`, {
           method: 'POST',

@@ -138,10 +138,18 @@ describe('serveAppRequest', () => {
     expect((await serveAppRequest('pw-app://bundle/assets', 'GET', distDir)).status).toBe(404)
   })
 
-  it('serves the root document', async () => {
+  it('serves the root document with a formal HTTP Content-Security-Policy header', async () => {
     const response = await serveAppRequest('pw-app://bundle/', 'GET', distDir)
     expect(response.status).toBe(200)
+    const csp = response.headers.get('content-security-policy') ?? ''
+    expect(csp).toContain("default-src 'self'")
+    expect(csp).toContain("script-src 'self'")
+    expect(csp).toContain("frame-ancestors 'none'")
+    expect(csp).toContain("object-src 'none'")
     expect(await response.text()).toContain('<title>ok</title>')
+
+    const jsResponse = await serveAppRequest('pw-app://bundle/assets/main.js', 'GET', distDir)
+    expect(jsResponse.headers.get('content-security-policy')).toBeNull()
   })
 })
 
