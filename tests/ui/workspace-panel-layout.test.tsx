@@ -115,7 +115,8 @@ describe('WorkspaceView panel detach layout', () => {
     const { container } = renderView()
 
     act(() => emitAppEvent('workspace-toggle-terminal'))
-    expect(hidesPanel(screen.getByTestId('terminal-panel').parentElement)).toBe(false)
+    const terminalNode = await screen.findByTestId('terminal-panel')
+    expect(hidesPanel(terminalNode.parentElement)).toBe(false)
 
     act(() =>
       usePanelStore.setState({

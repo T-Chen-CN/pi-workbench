@@ -62,6 +62,43 @@ export function normalizeNotificationPrefs(input: unknown): NotificationPrefs {
   return result
 }
 
+export interface PanelWidths {
+  sidebar: number
+  chat: number
+  terminalHeight: number
+}
+
+export const DEFAULT_PANEL_WIDTHS: PanelWidths = {
+  sidebar: 232,
+  chat: 336,
+  terminalHeight: 172,
+}
+
+const PANEL_WIDTH_LIMITS = {
+  sidebar: { min: 160, max: 600 },
+  chat: { min: 260, max: 900 },
+  terminalHeight: { min: 100, max: 700 },
+} as const
+
+function clampPanelWidth(key: keyof PanelWidths, value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  const { min, max } = PANEL_WIDTH_LIMITS[key]
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+export function normalizePanelWidths(
+  input: unknown,
+  base: PanelWidths = DEFAULT_PANEL_WIDTHS
+): PanelWidths {
+  const source =
+    input && typeof input === 'object' ? (input as Record<string, unknown>) : {}
+  return {
+    sidebar: clampPanelWidth('sidebar', source.sidebar, base.sidebar),
+    chat: clampPanelWidth('chat', source.chat, base.chat),
+    terminalHeight: clampPanelWidth('terminalHeight', source.terminalHeight, base.terminalHeight),
+  }
+}
+
 export function clampAutoSaveDelay(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_AUTO_SAVE_DELAY
   return Math.min(MAX_AUTO_SAVE_DELAY, Math.max(MIN_AUTO_SAVE_DELAY, Math.round(value)))
@@ -88,6 +125,8 @@ interface SettingsState {
   useSystemProxy: boolean
   /** 后台自动更新模型目录；主进程读取同一字段（D6） */
   autoRefreshCatalog: boolean
+  /** 侧栏 / 聊天列 / 终端面板尺寸偏好（D8），持久化到 config/settings.json */
+  panelWidths: PanelWidths
   setAutoSave: (enabled: boolean) => void
   setAutoSaveDelay: (delayMs: number) => void
   setPermissionLevel: (level: PermissionLevel) => void
@@ -103,6 +142,7 @@ interface SettingsState {
   setAutoInstallWorktreeDeps: (enabled: boolean) => void
   setUseSystemProxy: (enabled: boolean) => void
   setAutoRefreshCatalog: (enabled: boolean) => void
+  setPanelWidths: (patch: Partial<PanelWidths>) => void
   hydrate: (settings: {
     autoSave?: unknown
     autoSaveDelay?: unknown
@@ -118,6 +158,7 @@ interface SettingsState {
     autoInstallWorktreeDeps?: unknown
     useSystemProxy?: unknown
     autoRefreshCatalog?: unknown
+    panelWidths?: unknown
   }) => void
 }
 
@@ -137,6 +178,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   autoInstallWorktreeDeps: DEFAULT_AUTO_INSTALL_WORKTREE_DEPS,
   useSystemProxy: DEFAULT_USE_SYSTEM_PROXY,
   autoRefreshCatalog: DEFAULT_AUTO_REFRESH_CATALOG,
+  panelWidths: { ...DEFAULT_PANEL_WIDTHS },
 
   setAutoSave: (enabled) => set({ autoSave: enabled }),
 
@@ -172,6 +214,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setUseSystemProxy: (enabled) => set({ useSystemProxy: enabled }),
 
   setAutoRefreshCatalog: (enabled) => set({ autoRefreshCatalog: enabled }),
+
+  setPanelWidths: (patch) =>
+    set((state) => ({ panelWidths: normalizePanelWidths(patch, state.panelWidths) })),
 
   hydrate: (settings) =>
     set((state) => ({
@@ -227,5 +272,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         typeof settings.autoRefreshCatalog === 'boolean'
           ? settings.autoRefreshCatalog
           : state.autoRefreshCatalog,
+      panelWidths:
+        settings.panelWidths === undefined
+          ? state.panelWidths
+          : normalizePanelWidths(settings.panelWidths, state.panelWidths),
     })),
 }))

@@ -1,3 +1,12 @@
+/**
+ * 线条角色在 `src/index.css` 中已是完整 `rgb(var(--line) / <alpha>)` 颜色；
+ * 通过函数式配置 + `color-mix` 同时支持无修饰符（原样保留基线透明度）与 `/<opacity>` 修饰符。
+ */
+const ruleColor = (cssVar) => ({ opacityValue }) =>
+  opacityValue === undefined
+    ? `var(${cssVar})`
+    : `color-mix(in srgb, var(${cssVar}) calc(${opacityValue} * 100%), transparent)`
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
@@ -17,7 +26,7 @@ export default {
           DEFAULT: 'rgb(var(--sunken) / <alpha-value>)',
           foreground: 'rgb(var(--ink-muted) / <alpha-value>)',
         },
-        border: 'var(--rule-divide)',
+        border: ruleColor('--rule-divide'),
         sidebar: 'rgb(var(--code-bg) / <alpha-value>)',
         card: 'rgb(var(--raised) / <alpha-value>)',
         popover: {
@@ -32,10 +41,10 @@ export default {
         hover: 'rgb(var(--hover) / <alpha-value>)',
         active: 'rgb(var(--active) / <alpha-value>)',
         line: 'rgb(var(--line) / <alpha-value>)',
-        'rule-control': 'var(--rule-control)',
-        'rule-divide': 'var(--rule-divide)',
-        'rule-hairline': 'var(--rule-hairline)',
-        'rule-seam': 'var(--rule-seam)',
+        'rule-control': ruleColor('--rule-control'),
+        'rule-divide': ruleColor('--rule-divide'),
+        'rule-hairline': ruleColor('--rule-hairline'),
+        'rule-seam': ruleColor('--rule-seam'),
         overlay: 'rgb(var(--overlay) / <alpha-value>)',
         ink: {
           DEFAULT: 'rgb(var(--ink) / <alpha-value>)',

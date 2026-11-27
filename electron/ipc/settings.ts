@@ -144,10 +144,26 @@ export function registerSettingsIpc(options?: SettingsIpcOptions): void {
         'autoInstallWorktreeDeps',
         'useSystemProxy',
         'autoRefreshCatalog',
+        'panelWidths',
       ])
       for (const [key, value] of Object.entries(parsed.data)) {
         if (value !== undefined) {
-          merged[key] = value
+          if (key === 'panelWidths' && value && typeof value === 'object' && !Array.isArray(value)) {
+            // 部分更新 panelWidths（例如仅拖宽侧边栏）必须保留磁盘里其它面板的既有尺寸
+            const existing =
+              merged.panelWidths &&
+              typeof merged.panelWidths === 'object' &&
+              !Array.isArray(merged.panelWidths)
+                ? (merged.panelWidths as Record<string, unknown>)
+                : {}
+            const nextWidths: Record<string, unknown> = { ...existing }
+            for (const [dimension, px] of Object.entries(value as Record<string, unknown>)) {
+              if (px !== undefined) nextWidths[dimension] = px
+            }
+            merged.panelWidths = nextWidths
+          } else {
+            merged[key] = value
+          }
         } else if (
           Object.prototype.hasOwnProperty.call(rawIncoming, key) &&
           !preserveOnMalformed.has(key)

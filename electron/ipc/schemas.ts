@@ -124,6 +124,14 @@ export const appSaveSettingsSchema = z.object({
   autoInstallWorktreeDeps: z.boolean().optional().catch(undefined),
   useSystemProxy: z.boolean().optional().catch(undefined),
   autoRefreshCatalog: z.boolean().optional().catch(undefined),
+  panelWidths: z
+    .object({
+      sidebar: z.number().int().min(160).max(600).optional(),
+      chat: z.number().int().min(260).max(900).optional(),
+      terminalHeight: z.number().int().min(100).max(700).optional(),
+    })
+    .optional()
+    .catch(undefined),
   /** 历史兼容字段（迁移读取用，不接受超大值） */
   permissions: z
     .record(z.string().max(32), z.enum(['allow', 'ask', 'deny']))

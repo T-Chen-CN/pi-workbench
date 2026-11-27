@@ -27,60 +27,126 @@ const TOAST_STYLES: Record<ToastType, { border: string; icon: string; Icon: type
   info: { border: 'border-l-accent', icon: 'text-accent', Icon: Info },
 }
 
+export const DEFAULT_TOAST_DURATION_MS = 3000
+export const ERROR_TOAST_DURATION_MS = 8000
 const TOAST_EXIT_MS = 160
 
 const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
   const { t } = useI18nStore()
   const [isExiting, setIsExiting] = useState(false)
+  const isError = message.type === 'error'
+  const baseDuration =
+    message.duration ?? (isError ? ERROR_TOAST_DURATION_MS : DEFAULT_TOAST_DURATION_MS)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const closedRef = useRef(false)
+  const remainingRef = useRef<number>(baseDuration)
+  const startedAtRef = useRef<number | null>(null)
+  const hoveredRef = useRef(false)
+  const focusedRef = useRef(false)
 
-  const handleClose = useCallback(() => {
-    if (closedRef.current) return
-    closedRef.current = true
+  const clearAutoTimer = useCallback(() => {
     if (autoTimerRef.current) {
       clearTimeout(autoTimerRef.current)
       autoTimerRef.current = null
     }
+  }, [])
+
+  const handleClose = useCallback(() => {
+    if (closedRef.current) return
+    closedRef.current = true
+    clearAutoTimer()
+    startedAtRef.current = null
     setIsExiting(true)
     if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
     exitTimerRef.current = setTimeout(() => {
       exitTimerRef.current = null
       onCloseRef.current(message.id)
     }, TOAST_EXIT_MS)
-  }, [message.id])
+  }, [clearAutoTimer, message.id])
 
-  useEffect(() => {
-    return () => {
-      if (autoTimerRef.current) clearTimeout(autoTimerRef.current)
-      if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
-    }
-  }, [])
-
-  useEffect(() => {
+  const startTimer = useCallback(() => {
     if (message.duration === 0 || closedRef.current) return
-
+    if (autoTimerRef.current) return
+    const remaining = remainingRef.current
+    if (remaining <= 0) {
+      handleClose()
+      return
+    }
+    startedAtRef.current = Date.now()
     autoTimerRef.current = setTimeout(() => {
       autoTimerRef.current = null
+      startedAtRef.current = null
+      remainingRef.current = 0
       handleClose()
-    }, message.duration || 3000)
+    }, remaining)
+  }, [handleClose, message.duration])
 
-    return () => {
-      if (autoTimerRef.current) {
-        clearTimeout(autoTimerRef.current)
-        autoTimerRef.current = null
-      }
+  const pauseTimer = useCallback(() => {
+    if (!autoTimerRef.current) return
+    clearAutoTimer()
+    if (startedAtRef.current !== null) {
+      const elapsed = Math.max(0, Date.now() - startedAtRef.current)
+      remainingRef.current = Math.max(0, remainingRef.current - elapsed)
+      startedAtRef.current = null
     }
-  }, [message.id, message.duration, handleClose])
+  }, [clearAutoTimer])
+
+  useEffect(() => {
+    return () => {
+      clearAutoTimer()
+      if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
+    }
+  }, [clearAutoTimer])
+
+  useEffect(() => {
+    remainingRef.current = baseDuration
+    startedAtRef.current = null
+    if (message.duration === 0 || closedRef.current) return
+    if (isError && (hoveredRef.current || focusedRef.current)) return
+    startTimer()
+    return () => {
+      clearAutoTimer()
+    }
+  }, [message.id, message.duration, baseDuration, isError, startTimer, clearAutoTimer])
+
+  const handleMouseEnter = () => {
+    if (!isError) return
+    hoveredRef.current = true
+    pauseTimer()
+  }
+
+  const handleMouseLeave = () => {
+    if (!isError) return
+    hoveredRef.current = false
+    if (!focusedRef.current) startTimer()
+  }
+
+  const handleFocus = () => {
+    if (!isError) return
+    focusedRef.current = true
+    pauseTimer()
+  }
+
+  const handleBlur = (event: React.FocusEvent<HTMLDivElement>) => {
+    if (!isError) return
+    if (event.relatedTarget && event.currentTarget.contains(event.relatedTarget as Node)) return
+    focusedRef.current = false
+    if (!hoveredRef.current) startTimer()
+  }
 
   const { border, icon, Icon } = TOAST_STYLES[message.type]
 
   return (
     <div
-      role="status"
+      role={isError ? 'alert' : 'status'}
+      aria-live={isError ? 'assertive' : 'polite'}
+      onMouseEnter={isError ? handleMouseEnter : undefined}
+      onMouseLeave={isError ? handleMouseLeave : undefined}
+      onFocus={isError ? handleFocus : undefined}
+      onBlur={isError ? handleBlur : undefined}
       className={`flex items-start gap-2.5 border border-line border-l-2 ${border} bg-raised px-3 py-2.5 text-ink shadow-print ${
         isExiting ? 'animate-toast-out' : 'animate-toast-in'
       }`}

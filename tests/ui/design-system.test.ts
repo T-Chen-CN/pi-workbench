@@ -140,6 +140,35 @@ describe('design system usage', () => {
     }
   })
 
+  it('enforces >= 12px floor on functional typography roles and avoids global optimizeLegibility (D10)', () => {
+    const css = readFileSync(resolve(SRC, 'index.css'), 'utf-8')
+    const functionalRoles = [
+      'type-data',
+      'type-caption',
+      'type-key',
+      'type-eyebrow',
+      'type-eyebrow-cjk',
+      'type-label',
+      'type-value',
+      'type-body',
+      'type-reading',
+      'type-code',
+    ]
+    for (const role of functionalRoles) {
+      const block = css.match(new RegExp(`\\.${role}\\s*\\{([^}]*)\\}`))
+      expect(block, `missing .${role} rule`).not.toBeNull()
+      const sizeMatch = block![1].match(/font-size:\s*([0-9.]+)px\s*;/)
+      expect(sizeMatch, `missing px font-size in .${role}`).not.toBeNull()
+      expect(Number(sizeMatch![1]), `.${role} must be >= 12px`).toBeGreaterThanOrEqual(12)
+    }
+
+    const eyebrowCjk = css.match(/\.type-eyebrow-cjk\s*\{([^}]*)\}/)
+    expect(eyebrowCjk?.[1]).toContain('font-family: var(--font-ui)')
+
+    const bodyBlock = css.match(/\bbody\s*\{([^}]*)\}/)
+    expect(bodyBlock?.[1]).not.toContain('optimizeLegibility')
+  })
+
   it('exports the shared content patterns', () => {
     const patterns = readFileSync(resolve(SRC, 'components/ui/patterns.tsx'), 'utf-8')
     for (const component of [
@@ -296,11 +325,13 @@ describe('cloud web design system compliance (D-06)', () => {
   const faviconSvg = readFileSync(resolve(CLOUD_WEB_SRC, 'public/favicon.svg'), 'utf-8')
   const mainTsx = readFileSync(resolve(CLOUD_WEB_SRC, 'main.tsx'), 'utf-8')
 
-  it('reuses shared Paper & Ink stylesheet, bundled fonts, and Pine favicon', () => {
+  it('reuses shared Paper & Ink stylesheet, slim display/mono fonts (D11), and Pine favicon', () => {
     expect(mainTsx).toContain("import '../../../src/index.css'")
     expect(mainTsx).toContain('@fontsource/instrument-serif')
-    expect(mainTsx).toContain('@fontsource-variable/noto-sans-sc')
     expect(mainTsx).toContain('@fontsource-variable/geist-mono')
+    expect(mainTsx).not.toContain('@fontsource-variable/noto-sans-sc')
+    expect(mainTsx).not.toContain('@fontsource-variable/noto-serif-sc')
+    expect(mainTsx).not.toContain('@fontsource-variable/noto-sans')
     expect(faviconSvg).toContain('#2F5D4E')
     expect(indexHtml).toContain('viewport-fit=cover')
   })

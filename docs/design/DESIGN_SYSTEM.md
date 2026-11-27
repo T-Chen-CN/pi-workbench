@@ -53,23 +53,25 @@
 | `--accent` / `hover` / `fg` | `*-accent*` | `#2F5D4E` / `#24493D` / `#FBFAF4` | `#8FC7B4` / `#A9D8C8` / `#141311` | 品牌强调、焦点、主按钮、印章（≥6.66:1） |
 | `--success` / `--warning` / `--danger` | `*-success/warning/danger` | `#5E6B2E` / `#9A5B1F` / `#A83A22` | `#A8BF7A` / `#D6B26E` / `#E06A4A` | 状态语义色（全部 ≥4.79:1，AA） |
 
-- 淡洗背景用语义透明度修饰符（如 `bg-accent/[0.06]`、`bg-danger/10`）；禁止 `border-line/50` 裸透明度与 `bg-line` 分隔线。
+- 淡洗背景用语义透明度修饰符（如 `bg-accent/[0.06]`、`bg-danger/10`）；禁止 `border-line/50` 裸透明度与 `bg-line` 分隔线。`tailwind.config.js` 对 `rule-*` / `border` 采用函数式 `color-mix()` 映射，支持透明修饰符且不破坏 `src/index.css` 中的 RGB 线条变量格式。
 - 语法高亮内容色（`--code-bg`、`--code-border`、`--hl-keyword/string/number/comment/function/type/attr`）定义于 [index.css](../../src/index.css)，由 [tokens.ts](../../src/theme/tokens.ts) 同步到 Monaco / xterm，不跟随品牌主色。
 
 ---
 
 ## 3. 字体与排版
 
-全部字体通过 `@fontsource` 本地打包（构建时按需过滤非中/英子集），不依赖外网 CDN。
+- **桌面端**（`src/main.tsx`）：全部 4 套字体通过 `@fontsource` 本地打包（构建时过滤非中/英子集），完全离线可用。
+- **云端 Web**（`apps/cloud/web-src/main.tsx`，D11）：只内嵌 `Instrument Serif` + `Geist Mono`（约 120 KB）保持标题与等宽印刷气质，中文字体直接走操作系统原生栈（`PingFang SC` / `Microsoft YaHei` / `Songti SC` / `SimSun`），将公网首屏静态包从 18.5 MB 瘦身并由服务端 `br`/`gzip` 预压缩下发。
+- 全局 `body` **不开启** `text-rendering: optimizeLegibility`，确保长日志与编辑器在 Chromium 下走快速排版通道。
 
 | 族 | 变量 / 用途 | 栈 |
 | --- | --- | --- |
 | Display | `--font-display`（标题、项目名、弹窗标题） | Instrument Serif → Noto Serif SC → Songti SC → serif |
 | Reading | `--font-reading`（长正文、Agent 回复、说明） | Noto Serif SC → Songti SC → serif |
-| UI Sans | `--font-ui`（默认；按钮、标签、字段值、文件树） | Noto Sans Variable → Noto Sans SC Variable → system-ui |
+| UI Sans | `--font-ui`（默认；按钮、标签、字段值、文件树） | Noto Sans Variable → Noto Sans SC Variable → PingFang SC / Microsoft YaHei → system-ui |
 | Mono | `--font-mono`（路径、ID、时间、快捷键、代码） | Geist Mono Variable → Noto Sans SC Variable → Consolas |
 
-### 语义排版角色（`src/index.css` 唯一定义）
+### 语义排版角色（`src/index.css` 唯一定义，功能字号底线 ≥12px，D10）
 
 业务组件**禁止**直接写 `font-*`、`text-xs..3xl`、`text-[*px]`、`uppercase`、`tracking-[*]`、`leading-[*]`，统一使用下列 `.type-*` 类或语义文字组件：
 
@@ -79,20 +81,22 @@
 | `type-title` / `type-subtitle` / `type-project` | 28px / 20px / 17px display | 弹窗标题 / 分区与空状态标题 / 项目名 |
 | `type-reading` / `type-body` | 14px reading (1.85) / 13px ui (1.6) | 阅读正文 / 常规控件 |
 | `type-label` / `type-value` | 12px 500 ui / 12.5px tabular-nums ui | 字段与分区标签 / 字段与状态值 |
-| `type-data` / `type-code` / `type-caption` | 11.5px mono / 12.5px mono / 11px ui | 路径与时间 / 代码 / 计数与提示 |
-| `type-key` / `type-eyebrow` / `type-eyebrow-cjk` | 10.5px mono / 10.5px upper mono / 11px ui | 键帽 / 纯 Latin 眉题 / 中文眉题 |
-| `type-wordmark` / `type-signature` / `type-stamp` | 8.5–9px 装饰微字 | 品牌副标、署名、印章（**不得承载唯一信息**） |
+| `type-data` / `type-code` / `type-caption` | 12px mono / 12.5px mono / 12px ui | 路径与时间 / 代码 / 计数与提示 |
+| `type-key` / `type-eyebrow` / `type-eyebrow-cjk` | 12px mono / 12px upper mono / 12px ui | 键帽 / 纯 Latin 眉题 / 中文眉题 |
+| `type-wordmark` / `type-signature` / `type-stamp` / `type-stamp-sub` | 7–9px 装饰微字 | 品牌副标、署名、欢迎页印章（**仅装饰，不得承载唯一信息**） |
 
 - 中文标签与字段值一律用 UI sans，不用 mono，不加 `uppercase` 或宽字距；数字列使用 `tabular-nums`。
+- **云端 Web 移动端防缩放与安全区**：`src/index.css` 在 `@media (max-width: 640px)` 下将 `[data-cloud-web='true']` 内的 `input/textarea/select` 统一提至 `16px` 以阻止 iOS Safari 聚焦自动缩放；顶栏、底栏与输入区使用 `.safe-top` / `.safe-bottom` / `.safe-x` 适配 `env(safe-area-inset-*)`。
 - **品牌标志**（[BrandSeal.tsx](../../src/components/ui/BrandSeal.tsx)）：松绿印面（圆角 19.8%，Noto Serif π）底边与 `WORKBENCH` 基线对齐（`items-baseline`）；`WORKBENCH` 与署名 `TChen` 用 `text-ink-muted` 不上色。
 
 ---
 
 ## 4. 间距、形状、阴影、动效与命中区
 
-- **间距**：严格 4px 基数（4 / 8 / 12 / 16 / 20 / 24 / 32 / 48）；常规面板内边距 12–16px，纸卡 20–24px。
-- **圆角与边框**：`rounded-sm`（1px）或 `rounded`（2px），禁止 `rounded-md/lg/xl/2xl/3xl`（圆形按钮/状态点可用 `rounded-full`）。边框统一 1px，按 `border-rule-*` 角色取值；满墨 `border-line` 只留给浮层。
+- **间距**：严格 4px 基数（4 / 8 / 12 / 16 / 20 / 24 / 32 / 48）；常规面板与纸卡内边距 `12–16px`（`Card` `compact=12px` / `default=16px`），弹窗内容区 `16–20px`。
+- **圆角与边框**：业务组件只使用 `rounded-sm`（1px）或 `rounded`（2px），禁止 `rounded-md/lg/xl/2xl/3xl`（圆形按钮/状态点可用 `rounded-full`；`tailwind.config.js` 保留 `md: 2px` / `lg: 4px` 仅用于收束 Streamdown 等第三方类名的圆角）。边框统一 1px，按 `border-rule-*` 角色取值；满墨 `border-line` 只留给浮层。
 - **阴影**：浮层（Modal / 菜单 / 命令面板 / Toast）用 `bg-raised border border-line shadow-print`；页面内纸卡不投影，禁止柔光阴影（`shadow-sm..2xl`）。
+- **Toast 与面板偏好（D8）**：常规 Toast（`info`/`success`）默认 3 秒自动消失（`role="status"`）；错误 Toast（`error`）使用 `role="alert"` + `aria-live="assertive"`，默认 8 秒自动消失，且鼠标悬停或键盘聚焦期间暂停倒计时、离开后恢复剩余时长。桌面端侧栏/面板宽度按用户偏好持久化，终端开关与窗口句柄保持运行期不落盘。
 - **动效与减弱动态**：过渡控制在 120–200ms `ease-out`（禁止 `duration-300+`）；仅允许会话运行中 `pulse`（1.4s）与待操作 `breathe`（2.4s）透明度循环。**必须尊重系统 `@media (prefers-reduced-motion: reduce)`**（[index.css](../../src/index.css) 全局禁用非必要过渡与循环动画）。
 - **命中区**：点击处理器挂在最大可视矩形本体，装饰图标设 `pointer-events-none`；次级动作（关闭/删除）命中区 **≥24×24px**（`h-6 w-6`），且必须作为**兄弟元素**位于主可交互元素外部（禁止 `nested-interactive`）。
 

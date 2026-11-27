@@ -122,7 +122,6 @@ body {
   font-family: var(--font-ui);
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
 }
 
 #root {
@@ -182,7 +181,7 @@ button {
 @layer components {
   .type-eyebrow {
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: 12px;
     font-weight: 500;
     line-height: 1.2;
     letter-spacing: 0.14em;
@@ -190,8 +189,8 @@ button {
   }
 
   .type-eyebrow-cjk {
-    font-family: var(--font-reading);
-    font-size: 11px;
+    font-family: var(--font-ui);
+    font-size: 12px;
     font-weight: 500;
     line-height: 1.4;
     letter-spacing: 0.12em;
@@ -265,12 +264,13 @@ button {
 
   .type-caption {
     font-family: var(--font-ui);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 400;
     line-height: 1.4;
     font-variant-numeric: tabular-nums;
   }
 
+  /* 以下 4 个角色仅作装饰微字（品牌副标 / 署名 / 欢迎页印章），禁止承载唯一有效信息 */
   .type-wordmark {
     font-family: var(--font-mono);
     font-size: 8.5px;
@@ -290,7 +290,7 @@ button {
 
   .type-data {
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: 12px;
     font-weight: 400;
     line-height: 1.4;
   }
@@ -304,11 +304,12 @@ button {
 
   .type-key {
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: 12px;
     font-weight: 400;
     line-height: 1.2;
   }
 
+  /* 仅装饰印章微字，不得承载唯一信息 */
   .type-stamp {
     font-family: var(--font-mono);
     font-size: 9px;
@@ -317,6 +318,7 @@ button {
     letter-spacing: 0.16em;
   }
 
+  /* 仅装饰印章副字（WelcomeScreen），不得承载唯一信息 */
   .type-stamp-sub {
     font-family: var(--font-mono);
     font-size: 7px;
@@ -510,7 +512,7 @@ button {
   padding: 0 10px;
   border-bottom: 1px solid var(--rule-hairline);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: rgb(var(--ink-muted));
 }
 
@@ -579,7 +581,7 @@ button {
   background: rgb(var(--ink) / 0.04);
   border-left: 2px solid rgb(var(--line) / 0.24);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.65;
   white-space: pre-wrap;
   color: rgb(var(--ink-muted));
@@ -654,5 +656,42 @@ button {
 
   .repo-map-card {
     transition: none;
+  }
+}
+
+/* ------------------------------------------------------------------
+   移动端安全区与防自动缩放（云端 Web 控制台）
+   使用独立外层容器挂 safe-* 类，避免与 Tailwind 的 px/py 内边距互相覆盖。
+------------------------------------------------------------------- */
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.safe-left {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+
+.safe-right {
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+.safe-x {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* 移动端云端 Web 表单控件保持 ≥16px，避免 iOS Safari 聚焦输入框时触发页面自动放大 */
+@media (max-width: 640px) {
+  [data-cloud-web='true'] input,
+  [data-cloud-web='true'] textarea,
+  [data-cloud-web='true'] select,
+  .cloud-web-root input,
+  .cloud-web-root textarea,
+  .cloud-web-root select {
+    font-size: 16px;
   }
 }
