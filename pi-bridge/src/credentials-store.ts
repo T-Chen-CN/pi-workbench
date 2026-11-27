@@ -14,8 +14,9 @@
  * { "version": 1, "entries": { "<providerId>": { "type": "api_key" | "oauth", "secret": "<密文>" } } }
  *
  * 每次操作都从磁盘重读：文件只有几 KB、操作频率低，顺带获得跨进程的
- * 读-改-写安全。写盘用临时文件 + fsync + rename，不留 `.bak`（旧密文没有
- * 回滚价值，而 OAuth 刷新会让写入变频繁）。
+ * 读-改-写安全。写盘用临时文件 + fsync + 合法主文件备份 `.bak` + rename；
+ * 主文件损坏时先尝试从 `.bak` 恢复，写路径若无可用备份则保留 `.corrupt.<ts>` 并抛错，
+ * 严禁按空表静默覆盖其他供应商凭证。
  */
 
 import * as fs from 'fs/promises'
@@ -97,7 +98,13 @@ function isCredential(value: unknown): value is Credential {
   return type === 'api_key' || type === 'oauth'
 }
 
-/** 逐条校验，坏条目丢弃；整文件坏掉时调用方回落到空表 */
+function isStoredFile(value: unknown): value is { entries: Record<string, unknown> } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const entries = (value as { entries?: unknown }).entries
+  return Boolean(entries && typeof entries === 'object' && !Array.isArray(entries))
+}
+
+/** 逐条校验，坏条目丢弃；整文件坏掉时由调用方先尝试 .bak 恢复或拒绝覆盖 */
 function normalizeEntries(value: unknown, logger: CredentialStoreLogger): Record<string, StoredEntry> {
   const entries: Record<string, StoredEntry> = {}
   if (!value || typeof value !== 'object') return entries
@@ -139,6 +146,28 @@ export function createFileCredentialStore(options: FileCredentialStoreOptions): 
     return { version: fileVersion, entries: {} }
   }
 
+  async function readBackupFile(): Promise<StoredFile | null> {
+    try {
+      const raw = await fs.readFile(`${filePath}.bak`, 'utf-8')
+      const parsed: unknown = JSON.parse(raw)
+      if (!isStoredFile(parsed)) return null
+      return { version: fileVersion, entries: normalizeEntries(parsed, logger) }
+    } catch {
+      return null
+    }
+  }
+
+  async function preserveCorruptPrimary(): Promise<string | null> {
+    const corruptPath = `${filePath}.corrupt.${Date.now()}`
+    try {
+      await renameWithRetry(filePath, corruptPath)
+      return corruptPath
+    } catch (renameError) {
+      logger.warn('[Credentials] 备份损坏主文件失败:', renameError)
+      return null
+    }
+  }
+
   async function readFile(readOpts: { throwOnIoError?: boolean } = {}): Promise<StoredFile> {
     let raw: string
     try {
@@ -152,10 +181,29 @@ export function createFileCredentialStore(options: FileCredentialStoreOptions): 
       return emptyFile()
     }
     let parsed: unknown
+    let parseError: unknown = null
     try {
       parsed = JSON.parse(raw)
+      if (!isStoredFile(parsed)) {
+        parseError = new Error('Invalid credentials store structure')
+      }
     } catch (error) {
-      logger.warn('[Credentials] 文件不是合法 JSON，按空表处理:', error)
+      parseError = error
+    }
+    if (parseError !== null) {
+      const recovered = await readBackupFile()
+      if (recovered) {
+        logger.warn('[Credentials] 主文件损坏，已从 .bak 恢复:', parseError)
+        return recovered
+      }
+      if (readOpts.throwOnIoError) {
+        const preserved = await preserveCorruptPrimary()
+        logger.warn('[Credentials] 主文件损坏且无可用备份，拒绝覆盖写盘:', parseError)
+        const reason = parseError instanceof Error ? parseError.message : String(parseError)
+        const suffix = preserved ? ` (preserved as ${path.basename(preserved)})` : ''
+        throw new Error(`Credentials file is corrupted and cannot be recovered${suffix}: ${reason}`)
+      }
+      logger.warn('[Credentials] 文件不是合法 JSON，按空表处理:', parseError)
       return emptyFile()
     }
     return { version: fileVersion, entries: normalizeEntries(parsed, logger) }
@@ -192,6 +240,15 @@ export function createFileCredentialStore(options: FileCredentialStoreOptions): 
     }
     await handle.close()
     try {
+      try {
+        const existing = await fs.readFile(filePath, 'utf-8')
+        const parsed: unknown = JSON.parse(existing)
+        if (isStoredFile(parsed)) {
+          await fs.copyFile(filePath, `${filePath}.bak`)
+        }
+      } catch {
+        // 主文件不存在或已损坏：绝不用损坏内容覆盖健康 .bak
+      }
       await renameWithRetry(tmpPath, filePath)
     } catch (error) {
       await fs.rm(tmpPath, { force: true }).catch(() => {})

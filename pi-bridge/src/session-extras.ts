@@ -170,7 +170,16 @@ export class SessionExtrasStore {
         }
         await handle.close()
         try {
-          await fs.copyFile(target, `${target}.bak`).catch(() => undefined)
+          try {
+            // 仅在旧主文件为合法 JSON 且结构有效时才更新 .bak，避免损坏主文件覆盖健康备份
+            const existing = await fs.readFile(target, 'utf-8')
+            const parsed: unknown = JSON.parse(existing)
+            if (this.parseExtras(parsed)) {
+              await fs.copyFile(target, `${target}.bak`)
+            }
+          } catch {
+            // 主文件不存在或已损坏：保留现有 .bak
+          }
           await renameWithRetry(temp, target)
         } catch (error) {
           await fs.rm(temp, { force: true }).catch(() => {})

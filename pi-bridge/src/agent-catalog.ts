@@ -22,6 +22,21 @@ export interface AgentCatalogDeps {
   getLogger: () => AgentLogger
 }
 
+/** `PI_OFFLINE` 总开关（D6）：任意非 0/false/空值都视为离线模式，禁止请求远端模型目录 */
+export function isPiOffline(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.PI_OFFLINE
+  if (typeof raw !== 'string') return false
+  const normalized = raw.trim().toLowerCase()
+  return normalized !== '' && normalized !== '0' && normalized !== 'false'
+}
+
+/** 同步规范化进程级 `PI_OFFLINE`：SDK 将任意已定义的 `PI_OFFLINE` 都视为离线，因此 `0`/`false`/空值必须删除 */
+export function normalizePiOfflineEnv(env: NodeJS.ProcessEnv = process.env): void {
+  if (typeof env.PI_OFFLINE === 'string' && !isPiOffline(env)) {
+    delete env.PI_OFFLINE
+  }
+}
+
 export class AgentCatalogService {
   /** 当前 provider 的远端目录快照（D12/D26）：用于过滤内置快照里上游已下架的模型 */
   private remoteCatalogSnapshot: CatalogSnapshot | undefined = undefined
@@ -175,6 +190,15 @@ export class AgentCatalogService {
     if (!modelRuntime || !config) {
       return { success: false, added: 0, removed: 0, error: 'Agent not initialized.' }
     }
+    if (isPiOffline()) {
+      return {
+        success: false,
+        added: 0,
+        removed: 0,
+        checkedAt: Date.now(),
+        error: 'PI_OFFLINE',
+      }
+    }
     const store = config.modelsStore
     const snapshotter =
       store && 'snapshot' in store
@@ -185,7 +209,7 @@ export class AgentCatalogService {
     const before = snapshotter ? await snapshotter.snapshot() : []
     try {
       const result = await modelRuntime.refresh({
-        allowNetwork: true,
+        allowNetwork: !isPiOffline(),
         providers: [...PRESET_PROVIDER_IDS],
         force: options.force === true,
       })

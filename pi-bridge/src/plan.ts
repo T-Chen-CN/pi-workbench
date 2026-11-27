@@ -62,7 +62,11 @@ export function isStructuredPlan(value: unknown): value is StructuredPlan {
     !plan.id.trim() ||
     typeof plan.summary !== 'string' ||
     !Array.isArray(plan.steps) ||
-    (plan.status !== 'proposed' && plan.status !== 'approved' && plan.status !== 'rejected')
+    (plan.status !== 'proposed' && plan.status !== 'approved' && plan.status !== 'rejected') ||
+    typeof plan.createdAt !== 'number' ||
+    !Number.isFinite(plan.createdAt) ||
+    typeof plan.updatedAt !== 'number' ||
+    !Number.isFinite(plan.updatedAt)
   ) {
     return false
   }
@@ -73,6 +77,9 @@ export function isStructuredPlan(value: unknown): value is StructuredPlan {
       typeof record.id === 'string' &&
       record.id.length > 0 &&
       typeof record.title === 'string' &&
+      Array.isArray(record.files) &&
+      record.files.every((file) => typeof file === 'string') &&
+      (record.risk === undefined || typeof record.risk === 'string') &&
       (record.status === 'pending' ||
         record.status === 'in_progress' ||
         record.status === 'done' ||

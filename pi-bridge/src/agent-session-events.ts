@@ -203,7 +203,9 @@ export function subscribeSessionEvents(
 
       if (event.type === 'turn_end' || event.type === 'agent_end') {
         runtime.watchdog?.resetTools()
-        if (event.type === 'agent_end') {
+        // 自动重试期间（willRetry === true）本轮尚未收敛，必须保持 sdkStreaming 与后台看门狗存活，
+        // 待 agent_settled 或非重试终态 agent_end 再释放。
+        if (event.type === 'agent_end' && event.willRetry !== true) {
           runtime.sdkStreaming = false
           if (runtime.bgWatchdog) {
             runtime.bgWatchdog.stop()

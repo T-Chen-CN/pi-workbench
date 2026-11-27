@@ -19,6 +19,15 @@ export type TimelineItem =
       timestamp: number
       tokensBefore?: number
     }
+  | {
+      kind: 'custom_message'
+      entryId: string
+      timestamp: number
+      customType: string
+      content?: unknown
+      display?: boolean
+      details?: unknown
+    }
 
 /** entry.timestamp 既可能是 ISO 字符串，也可能是毫秒数；缺失时返回稳定值 0，避免每次投影变化破坏分支匹配 */
 export function entryTimestamp(value: unknown): number {
@@ -69,6 +78,27 @@ export function activeTimeline(manager: SessionManager): TimelineItem[] {
         timestamp: entryTimestamp(entry.timestamp),
         tokensBefore:
           typeof entry.tokensBefore === 'number' ? entry.tokensBefore : undefined,
+      })
+      continue
+    }
+
+    if (entry.type === 'custom_message') {
+      let content: unknown = entry.content
+      if (edits.has(entry.id)) {
+        const replacement = edits.get(entry.id)
+        if (replacement === null) continue
+        if (replacement && typeof replacement === 'object' && 'content' in replacement) {
+          content = replacement.content
+        }
+      }
+      items.push({
+        kind: 'custom_message',
+        entryId: String(entry.id ?? ''),
+        timestamp: entryTimestamp(entry.timestamp),
+        customType: typeof entry.customType === 'string' ? entry.customType : '',
+        content,
+        display: Boolean(entry.display),
+        ...(entry.details !== undefined ? { details: entry.details } : {}),
       })
       continue
     }

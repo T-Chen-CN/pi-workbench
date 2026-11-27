@@ -54,11 +54,15 @@ function isEntry(value: unknown): value is ModelsStoreEntry {
   )
 }
 
+function isStoredCatalogsObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
 /** 只保留 SDK 认识的字段，避免把手工改出来的垃圾写回去 */
 function normalize(raw: unknown): StoredCatalogs {
   const catalogs: StoredCatalogs = {}
-  if (!raw || typeof raw !== 'object') return catalogs
-  for (const [providerId, entry] of Object.entries(raw as Record<string, unknown>)) {
+  if (!isStoredCatalogsObject(raw)) return catalogs
+  for (const [providerId, entry] of Object.entries(raw)) {
     if (!isEntry(entry)) continue
     catalogs[providerId] = {
       models: entry.models as readonly AnyModel[],
@@ -75,6 +79,42 @@ export function createFileModelsStore(options: FileModelsStoreOptions): TrackedM
   const logger = options.logger ?? console
   /** 整文件读-改-写必须串行，否则两个 provider 的刷新会互相覆盖 */
   let writeChain: Promise<void> = Promise.resolve()
+
+  async function renameWithRetry(from: string, to: string, attempts = 6): Promise<void> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await fs.rename(from, to)
+        return
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        const transient = code === 'EPERM' || code === 'EBUSY' || code === 'EACCES'
+        if (!transient || attempt >= attempts - 1) throw error
+        await new Promise((resolve) => setTimeout(resolve, 15 * (attempt + 1)))
+      }
+    }
+  }
+
+  async function readBackupFile(): Promise<StoredCatalogs | null> {
+    try {
+      const raw = await fs.readFile(`${filePath}.bak`, 'utf-8')
+      const parsed: unknown = JSON.parse(raw)
+      if (!isStoredCatalogsObject(parsed)) return null
+      return normalize(parsed)
+    } catch {
+      return null
+    }
+  }
+
+  async function preserveCorruptPrimary(): Promise<string | null> {
+    const corruptPath = `${filePath}.corrupt.${Date.now()}`
+    try {
+      await renameWithRetry(filePath, corruptPath)
+      return corruptPath
+    } catch (renameError) {
+      logger.warn('[ModelsStore] 备份损坏主缓存失败:', renameError)
+      return null
+    }
+  }
 
   async function readAll(strict = false): Promise<StoredCatalogs> {
     let raw: string
@@ -96,12 +136,33 @@ export function createFileModelsStore(options: FileModelsStoreOptions): TrackedM
         return {}
       }
     }
+    let parsed: unknown
+    let parseError: unknown = null
     try {
-      return normalize(JSON.parse(raw))
+      parsed = JSON.parse(raw)
+      if (!isStoredCatalogsObject(parsed)) {
+        parseError = new Error('Invalid models store structure')
+      }
     } catch (error) {
-      logger.warn('[ModelsStore] 缓存不是合法 JSON，按空缓存处理:', error)
+      parseError = error
+    }
+    if (parseError !== null) {
+      const recovered = await readBackupFile()
+      if (recovered !== null) {
+        logger.warn('[ModelsStore] 主缓存损坏，已从 .bak 恢复:', parseError)
+        return recovered
+      }
+      if (strict) {
+        const preserved = await preserveCorruptPrimary()
+        logger.warn('[ModelsStore] 缓存损坏且无可用备份，拒绝覆盖写盘:', parseError)
+        const reason = parseError instanceof Error ? parseError.message : String(parseError)
+        const suffix = preserved ? ` (preserved as ${path.basename(preserved)})` : ''
+        throw new Error(`Models store file is corrupted and cannot be recovered${suffix}: ${reason}`)
+      }
+      logger.warn('[ModelsStore] 缓存不是合法 JSON，按空缓存处理:', parseError)
       return {}
     }
+    return normalize(parsed)
   }
 
   async function writeFile(catalogs: StoredCatalogs): Promise<void> {
@@ -121,17 +182,16 @@ export function createFileModelsStore(options: FileModelsStoreOptions): TrackedM
     }
     await handle.close()
     try {
-      for (let attempt = 0; ; attempt += 1) {
-        try {
-          await fs.rename(tmpPath, filePath)
-          return
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code
-          const transient = code === 'EPERM' || code === 'EBUSY' || code === 'EACCES'
-          if (!transient || attempt >= 5) throw error
-          await new Promise((resolve) => setTimeout(resolve, 15 * (attempt + 1)))
+      try {
+        const existing = await fs.readFile(filePath, 'utf-8')
+        const parsed: unknown = JSON.parse(existing)
+        if (isStoredCatalogsObject(parsed)) {
+          await fs.copyFile(filePath, `${filePath}.bak`)
         }
+      } catch {
+        // 主缓存不存在或已损坏：绝不用损坏内容覆盖健康 .bak
       }
+      await renameWithRetry(tmpPath, filePath)
     } catch (error) {
       await fs.rm(tmpPath, { force: true }).catch(() => {})
       throw error

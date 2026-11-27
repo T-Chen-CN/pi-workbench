@@ -236,4 +236,170 @@ describe('buildSessionMessagesFromEntries', () => {
     expect(types(history[1])).toEqual(['thinking', 'tool', 'tool', 'text'])
     expect(history[1].content).toBe('Pi Workbench v0.11.2 已发布完成。')
   })
+
+  it('does not let a pre-turn compaction entryId hijack the assistant turn entryId', () => {
+    const history = buildSessionMessagesFromEntries(
+      [
+        { kind: 'message', entryId: 'u-1', message: { role: 'user', content: 'go', timestamp: 1000 } },
+        compaction('c-1', 42_000, 1050),
+        {
+          kind: 'message',
+          entryId: 'a-1',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'reply' }], timestamp: 1100 },
+        },
+      ],
+      options
+    )
+
+    expect(history).toHaveLength(2)
+    expect(history[1].entryId).toBe('a-1')
+    expect(history[1].parts?.[0]).toMatchObject({ type: 'compaction', entryId: 'c-1' })
+  })
+
+  it('flushes separate assistant turns across task-event custom_message boundaries without faking user bubbles', () => {
+    const history = buildSessionMessagesFromEntries(
+      [
+        { kind: 'message', entryId: 'u-1', message: { role: 'user', content: 'dispatch', timestamp: 1000 } },
+        {
+          kind: 'message',
+          entryId: 'a-1',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'dispatched' }], timestamp: 1100 },
+        },
+        {
+          kind: 'custom_message',
+          entryId: 'ev-1',
+          timestamp: 2000,
+          customType: 'task-event',
+          content: '[task-event] T-1 done',
+          display: false,
+        },
+        {
+          kind: 'message',
+          entryId: 'a-2',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'T-1 finished' }], timestamp: 2100 },
+        },
+        {
+          kind: 'custom_message',
+          entryId: 'ev-2',
+          timestamp: 3000,
+          customType: 'task-event',
+          content: '[task-event] T-2 done',
+          display: false,
+        },
+        {
+          kind: 'message',
+          entryId: 'a-3',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'T-2 finished' }], timestamp: 3100 },
+        },
+      ],
+      options
+    )
+
+    expect(history.map((m) => ({ role: m.role, entryId: m.entryId, content: m.content }))).toEqual([
+      { role: 'user', entryId: 'u-1', content: 'dispatch' },
+      { role: 'assistant', entryId: 'a-1', content: 'dispatched' },
+      { role: 'assistant', entryId: 'a-2', content: 'T-1 finished' },
+      { role: 'assistant', entryId: 'a-3', content: 'T-2 finished' },
+    ])
+  })
+
+  it('projects nestedCalls from toolResult messages directly under their parent tool call', () => {
+    const history = buildSessionMessagesFromEntries(
+      [
+        userMessage('run script'),
+        assistantMessage(
+          [
+            { type: 'toolCall', id: 'call-parent', name: 'codemode', arguments: { script: 'run()' } },
+            { type: 'toolCall', id: 'call-next', name: 'read', arguments: { path: 'b.ts' } },
+          ],
+          1100
+        ),
+        {
+          kind: 'message',
+          entryId: 'tr-1',
+          message: {
+            role: 'toolResult',
+            toolCallId: 'call-parent',
+            toolName: 'codemode',
+            content: [{ type: 'text', text: 'done' }],
+            isError: false,
+            durationMs: 120,
+            timestamp: 1200,
+            nestedCalls: {
+              complete: true,
+              calls: [
+                {
+                  id: 'call-parent/1',
+                  name: 'read',
+                  arguments: { path: 'a.ts' },
+                  status: 'ok',
+                  durationMs: 15,
+                },
+                {
+                  id: 'call-parent/2',
+                  name: 'bash',
+                  argumentsBytes: 512,
+                  status: 'error',
+                  durationMs: 30,
+                  error: 'exit 1',
+                },
+              ],
+            },
+          },
+        },
+        toolResult('call-next', [{ type: 'text', text: 'body' }], 1300),
+      ],
+      options
+    )
+
+    const toolParts = (history[1].parts ?? []).filter((p) => p.type === 'tool')
+    expect(toolParts.map((p) => p.toolCallId)).toEqual([
+      'call-parent',
+      'call-parent/1',
+      'call-parent/2',
+      'call-next',
+    ])
+    expect(toolParts[1]).toMatchObject({
+      toolCallId: 'call-parent/1',
+      parentToolCallId: 'call-parent',
+      toolName: 'read',
+      argsSummary: 'a.ts',
+      status: 'success',
+      isError: false,
+      durationMs: 15,
+    })
+    expect(toolParts[2]).toMatchObject({
+      toolCallId: 'call-parent/2',
+      parentToolCallId: 'call-parent',
+      toolName: 'bash',
+      argsSummary: '(512 bytes)',
+      status: 'error',
+      isError: true,
+      resultPreview: 'exit 1',
+    })
+  })
+
+  it('preserves active running tools when isLiveStreaming is true while still marking earlier orphaned tools as error', () => {
+    const items: TimelineItem[] = [
+      userMessage('turn 1', 1000),
+      assistantMessage(
+        [{ type: 'toolCall', id: 'old-orphan', name: 'bash', arguments: { command: 'hang' } }],
+        1100
+      ),
+      userMessage('turn 2', 2000),
+      assistantMessage(
+        [{ type: 'toolCall', id: 'live-tool', name: 'bash', arguments: { command: 'npm test' } }],
+        2100
+      ),
+    ]
+
+    const historical = buildSessionMessagesFromEntries(items, options)
+    expect(historical[1].parts?.[0]).toMatchObject({ toolCallId: 'old-orphan', status: 'error', isError: true })
+    expect(historical[3].parts?.[0]).toMatchObject({ toolCallId: 'live-tool', status: 'error', isError: true })
+
+    const live = buildSessionMessagesFromEntries(items, { ...options, isLiveStreaming: true })
+    expect(live[1].parts?.[0]).toMatchObject({ toolCallId: 'old-orphan', status: 'error', isError: true })
+    expect(live[3].parts?.[0]).toMatchObject({ toolCallId: 'live-tool', status: 'running' })
+    expect((live[3].parts?.[0] as { isError?: boolean }).isError).toBeUndefined()
+  })
 })

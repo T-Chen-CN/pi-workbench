@@ -110,6 +110,8 @@ export function buildExportTurns(sessionManager: SessionManager): ExportTurn[] {
       continue
     }
 
+    if (item.kind === 'custom_message') continue
+
     const message = item.message as any
 
     if (message?.role === 'user') {
@@ -164,8 +166,8 @@ export function buildExportTurns(sessionManager: SessionManager): ExportTurn[] {
 }
 
 /**
- * 命名输入：会话记录里首条用户消息 + 最早一条带文本的回复。
- * - 只读会话记录（getEntries）：压缩后的模型上下文不含首条消息，用它命名会得到与主题无关的标题。
+ * 命名输入：当前活跃分支里首条用户消息 + 最早一条带文本的回复。
+ * - 只读活跃分支记录（getBranch）：压缩后的模型上下文不含首条消息，而 getEntries 会混入已回退/废弃分支。
  * - 首条 assistant 常常只有 thinking / toolCall，必须跳过它们取最后一条带文本的回复。
  */
 export function extractTitleSourceTexts(
@@ -179,7 +181,12 @@ export function extractTitleSourceTexts(
   let firstUser: any = null
   let assistantText = ''
   try {
-    for (const entry of sessionManager.getEntries() as any[]) {
+    const entries = (
+      typeof sessionManager.getBranch === 'function'
+        ? sessionManager.getBranch()
+        : sessionManager.getEntries()
+    ) as any[]
+    for (const entry of entries) {
       if (entry?.type !== 'message' || !entry.message) continue
       const message = entry.message
       if (message.role === 'user') {

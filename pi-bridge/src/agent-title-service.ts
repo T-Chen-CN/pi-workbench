@@ -77,10 +77,15 @@ export class AgentTitleService {
     this.deps.persistExtras(runtime)
   }
 
-  /** 记录行序的首条用户消息文本（与磁盘列表第一句保持同一口径） */
+  /** 当前活跃分支的首条用户消息文本（废弃/回退分支不参与兜底标题） */
   recordFirstUserText(runtime: SessionRuntime): string {
     try {
-      for (const entry of runtime.sessionManager.getEntries() as any[]) {
+      const entries = (
+        typeof runtime.sessionManager.getBranch === 'function'
+          ? runtime.sessionManager.getBranch()
+          : runtime.sessionManager.getEntries()
+      ) as any[]
+      for (const entry of entries) {
         if (entry?.type !== 'message' || entry.message?.role !== 'user') continue
         const text = stripContextBlock(extractMessageText(entry.message.content)).trim()
         if (text) return text

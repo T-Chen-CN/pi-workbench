@@ -128,6 +128,52 @@ describe('activeTimeline', () => {
     expect(message?.role).toBe('assistant')
     expect(message?.content).toEqual([{ type: 'text', text: 'second edit' }])
   })
+
+  it('preserves custom_message entries (e.g. task-event) and honors context_edit on them', () => {
+    const branch = [
+      messageEntry('a1', null, 'assistant', 'first reply', 1000),
+      {
+        id: 'cm1',
+        parentId: 'a1',
+        type: 'custom_message',
+        customType: 'task-event',
+        content: 'task done',
+        display: false,
+        details: { taskId: 'T-1' },
+        timestamp: new Date(1500).toISOString(),
+      },
+      {
+        id: 'cm2',
+        parentId: 'cm1',
+        type: 'custom_message',
+        customType: 'task-event',
+        content: 'omitted event',
+        display: false,
+        timestamp: new Date(1600).toISOString(),
+      },
+      {
+        id: 'e1',
+        parentId: 'cm2',
+        type: 'context_edit',
+        timestamp: '',
+        targetId: 'cm2',
+        replacement: null,
+      },
+      messageEntry('a2', 'e1', 'assistant', 'second reply', 2000),
+    ]
+
+    const items = activeTimeline(managerWith(branch))
+    expect(items.map((item) => item.kind)).toEqual(['message', 'custom_message', 'message'])
+    expect(items[1]).toEqual({
+      kind: 'custom_message',
+      entryId: 'cm1',
+      timestamp: 1500,
+      customType: 'task-event',
+      content: 'task done',
+      display: false,
+      details: { taskId: 'T-1' },
+    })
+  })
 })
 
 describe('entryTimestamp', () => {

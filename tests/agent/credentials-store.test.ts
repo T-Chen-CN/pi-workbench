@@ -149,7 +149,7 @@ describe('文件凭证存储', () => {
     await store.delete('never-existed')
   })
 
-  it('坏 JSON 回落空表，且之后仍能写入', async () => {
+  it('坏 JSON 且无 .bak 时只读回落空表，写路径拒绝覆盖并保留 .corrupt 现场', async () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     await fs.writeFile(filePath, '{ this is not json', 'utf-8')
 
@@ -158,8 +158,46 @@ describe('文件凭证存储', () => {
     expect(await store.list()).toEqual([])
     expect(logger.warn).toHaveBeenCalled()
 
+    await expect(store.modify('deepseek', async () => apiKey('recovered'))).rejects.toThrow(
+      /corrupted/i
+    )
+    const names = await fs.readdir(path.dirname(filePath))
+    const corruptBackup = names.find((name) => name.startsWith('credentials.json.corrupt.'))
+    expect(corruptBackup).toBeDefined()
+    expect(
+      await fs.readFile(path.join(path.dirname(filePath), corruptBackup!), 'utf-8')
+    ).toBe('{ this is not json')
+
+    // 损坏主文件已挪至 .corrupt.<ts> 后，用户明确重试写入可正常重建
     await store.modify('deepseek', async () => apiKey('recovered'))
     expect(await store.read('deepseek')).toEqual(apiKey('recovered'))
+  })
+
+  it('主文件损坏但存在健康 .bak 时自动从备份恢复且不丢失其他供应商凭证', async () => {
+    const { store, logger } = createStore()
+    await store.modify('deepseek', async () => apiKey('dk-1'))
+    await store.modify('openai', async () => oauth('oa-1'))
+
+    // 破坏主文件，但 .bak 保留了上一次有效状态（含 deepseek）
+    await fs.writeFile(filePath, '{ broken json', 'utf-8')
+
+    expect(await store.read('deepseek')).toEqual(apiKey('dk-1'))
+    expect(logger.warn).toHaveBeenCalled()
+
+    // 写路径从 .bak 恢复后合并写入，既保留 deepseek 又新增 anthropic，并自愈主文件
+    await store.modify('anthropic', async () => apiKey('ak-1'))
+    expect(await store.read('deepseek')).toEqual(apiKey('dk-1'))
+    expect(await store.read('anthropic')).toEqual(apiKey('ak-1'))
+  })
+
+  it('坏 JSON 且无 .bak 时 delete 也抛出错误并保留 .corrupt 文件', async () => {
+    await fs.mkdir(path.dirname(filePath), { recursive: true })
+    await fs.writeFile(filePath, 'not-json', 'utf-8')
+
+    const { store } = createStore()
+    await expect(store.delete('deepseek')).rejects.toThrow(/corrupted/i)
+    const names = await fs.readdir(path.dirname(filePath))
+    expect(names.some((name) => name.startsWith('credentials.json.corrupt.'))).toBe(true)
   })
 
   it('字段不完整的条目被逐条丢弃，不影响其他条目', async () => {

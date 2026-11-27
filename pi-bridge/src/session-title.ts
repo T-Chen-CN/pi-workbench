@@ -128,6 +128,7 @@ export async function requestSessionTitle(
 ): Promise<string | null> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS)
+  timer.unref?.()
   try {
     const message = await runner.completeSimple(
       model,

@@ -11,6 +11,7 @@
 
 import type { AgentMessage, AgentTracePart, AgentUsage, MessageContext } from './types.js'
 import type { TimelineItem } from './session-entries.js'
+import { CLOUD_TASK_EVENT_CUSTOM_TYPE } from './cloud-protocol.js'
 import {
   parseContextBlock,
   stripContextBlock,
@@ -21,6 +22,13 @@ import {
 export interface DeriveMessagesOptions {
   thinkingDurations: Record<string, number[]>
   toolFilePath: (toolName: string, args: any) => string | undefined
+  /**
+   * 正在流式执行时置 true：最后一个助手轮次中仍在执行的工具保持 `running`，
+   * 仅把更早的历史轮次中因崩溃未闭合的工具归一为 `error`。缺省 false（历史加载全量归一）。
+   */
+  isLiveStreaming?: boolean
+  /** 显式已知仍在执行的工具调用 ID 集合（优先于 isLiveStreaming 的整尾轮豁免） */
+  activeToolCallIds?: ReadonlySet<string>
 }
 
 /** 从 assistant 消息中提取 usage */
@@ -137,7 +145,8 @@ export function deriveMessages(
 
   const pushCompaction = (item: Extract<TimelineItem, { kind: 'compaction' }>) => {
     const ts = resolveTimestamp(item.timestamp)
-    if (!turn) turn = { entryId: item.entryId || undefined, parts: [], timestamp: ts }
+    // turn.entryId 严格留给首条 assistant 消息，不能被前置 compaction 的 entryId 占掉
+    if (!turn) turn = { parts: [], timestamp: ts }
     turn.parts.push({
       type: 'compaction',
       id: item.entryId ? `compaction-${item.entryId}` : nextId('compaction'),
@@ -151,6 +160,15 @@ export function deriveMessages(
     if (item.kind === 'compaction') {
       // 不 flush 轮次：压缩点落在它发生的那一轮里，位置与实时一致
       pushCompaction(item)
+      continue
+    }
+
+    if (item.kind === 'custom_message') {
+      // 事件唤醒（task-event）或显式展示的自定义消息作为轮次边界：先收束前一轮，
+      // 防止连续事件触发的助手回复合并为同一条消息，同时绝不伪造用户气泡。
+      if (item.customType === CLOUD_TASK_EVENT_CUSTOM_TYPE || item.display === true) {
+        flushTurn()
+      }
       continue
     }
 
@@ -240,11 +258,12 @@ export function deriveMessages(
 
     if (msg.role === 'toolResult') {
       if (!turn) continue
-      const toolPart = turn.parts.find(
-        (part): part is Extract<AgentTracePart, { type: 'tool' }> =>
-          part.type === 'tool' && part.toolCallId === msg.toolCallId
+      const toolPartIndex = turn.parts.findIndex(
+        (part) => part.type === 'tool' && part.toolCallId === msg.toolCallId
       )
-      if (!toolPart) continue
+      if (toolPartIndex < 0) continue
+      const toolPart = turn.parts[toolPartIndex]
+      if (toolPart.type !== 'tool') continue
       toolPart.status = msg.isError ? 'error' : 'success'
       toolPart.isError = Boolean(msg.isError)
       if (typeof msg.durationMs === 'number') toolPart.durationMs = msg.durationMs
@@ -255,18 +274,75 @@ export function deriveMessages(
         { content: msg.content, details: msg.details },
         msg.toolName === 'bash' || msg.toolName === 'powershell'
       )
+
+      // 投影子工具/嵌套调用记录（SDK 保存在 toolResult.nestedCalls.calls），使轮末对账与重载不丢失嵌套轨迹
+      const nestedRaw = msg.nestedCalls?.calls
+      if (Array.isArray(nestedRaw) && nestedRaw.length > 0) {
+        const existingIds = new Set<string>()
+        for (const existingPart of turn.parts) {
+          if (existingPart.type === 'tool') existingIds.add(existingPart.toolCallId)
+        }
+        const nestedParts: Array<Extract<AgentTracePart, { type: 'tool' }>> = []
+        for (const call of nestedRaw) {
+          if (!call || typeof call !== 'object') continue
+          const nestedId =
+            typeof call.id === 'string' && call.id ? call.id : nextId('nested-tool', entryId)
+          if (existingIds.has(nestedId)) continue
+          existingIds.add(nestedId)
+          const nestedName = typeof call.name === 'string' && call.name ? call.name : 'tool'
+          const hasArgs = Boolean(call.arguments && typeof call.arguments === 'object')
+          const nestedArgs = hasArgs ? call.arguments : {}
+          const argsSummary = hasArgs
+            ? summarizeToolArgs(nestedName, nestedArgs)
+            : typeof call.argumentsBytes === 'number'
+              ? `(${call.argumentsBytes} bytes)`
+              : ''
+          const isOk = call.status === 'ok'
+          const slashIndex = nestedId.lastIndexOf('/')
+          const directParent =
+            slashIndex > 0 && existingIds.has(nestedId.slice(0, slashIndex))
+              ? nestedId.slice(0, slashIndex)
+              : toolPart.toolCallId
+          const nestedFilePath = hasArgs ? toolFilePath(nestedName, nestedArgs) : undefined
+          nestedParts.push({
+            type: 'tool',
+            id: nestedId,
+            toolCallId: nestedId,
+            toolName: nestedName,
+            argsSummary,
+            status: isOk ? 'success' : 'error',
+            isError: !isOk,
+            ...(typeof call.durationMs === 'number' ? { durationMs: call.durationMs } : {}),
+            ...(typeof call.error === 'string' && call.error.trim()
+              ? { resultPreview: call.error.trim() }
+              : {}),
+            ...(nestedFilePath ? { filePath: nestedFilePath } : {}),
+            parentToolCallId: directParent,
+          })
+        }
+        if (nestedParts.length > 0) {
+          turn.parts.splice(toolPartIndex + 1, 0, ...nestedParts)
+        }
+      }
     }
   }
 
   flushTurn()
-  // 历史中因崩溃截断未闭合的工具调用不能永久保持 running 状态，统一归一为 error
+  // 历史中因崩溃截断未闭合的工具调用不能永久保持 running 状态，统一归一为 error；
+  // 仅在显式声明活跃流式快照时豁免仍在执行的工具调用。
+  const lastMessage = result[result.length - 1]
   for (const message of result) {
     if (!message.parts) continue
+    const preserveLiveTurn =
+      options.isLiveStreaming === true &&
+      !options.activeToolCallIds &&
+      message === lastMessage &&
+      message.role === 'assistant'
     for (const part of message.parts) {
-      if (part.type === 'tool' && part.status === 'running') {
-        part.status = 'error'
-        part.isError = true
-      }
+      if (part.type !== 'tool' || part.status !== 'running') continue
+      if (preserveLiveTurn || options.activeToolCallIds?.has(part.toolCallId)) continue
+      part.status = 'error'
+      part.isError = true
     }
   }
   return result

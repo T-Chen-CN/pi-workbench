@@ -68,7 +68,7 @@ import {
 } from './model-config.js'
 import { ensureBashOnPath } from './environment.js'
 import { type ModelLimits } from './provider-presets.js'
-import { AgentCatalogService } from './agent-catalog.js'
+import { AgentCatalogService, isPiOffline, normalizePiOfflineEnv } from './agent-catalog.js'
 import { deriveMessages } from './session-view.js'
 import { activeTimeline } from './session-entries.js'
 import {
@@ -116,6 +116,7 @@ import {
   collectRunAssistants,
   consoleAgentLogger,
   effectiveLimits,
+  normalizePathForCompare,
   resolveToolFilePath,
   sanitizeAgentShellEnv,
   stallErrorMessage,
@@ -315,6 +316,7 @@ export class AgentManager {
       ensureBashOnPath(this.logger)
 
       this.catalogService.resetSnapshot()
+      normalizePiOfflineEnv()
       this.modelRuntime = await withTimeout(
         ModelRuntime.create({
           modelsPath,
@@ -351,8 +353,8 @@ export class AgentManager {
         )
       }
 
-      // 目录刷新不阻塞启动：就绪后在后台跑（D6/D14）
-      if (config.allowModelNetwork) void this.refreshCatalog()
+      // 目录刷新不阻塞启动：就绪后在后台跑（D6/D14）；PI_OFFLINE 下严格禁网
+      if (config.allowModelNetwork && !isPiOffline()) void this.refreshCatalog()
 
       this.sessionDir = path.join(this.agentDir, 'sessions')
       const sessionManager = SessionManager.continueRecent(config.workspaceDir, this.sessionDir)
@@ -583,6 +585,9 @@ export class AgentManager {
   ): Promise<{ success: boolean; plan?: StructuredPlan; error?: string }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
+      if (this.isRuntimeBusy(runtime)) {
+        return { success: false, error: 'Session is running; stop it before rejecting the plan.' }
+      }
       const plan = runtime.extras.plan
       if (!plan || plan.id !== planId) return { success: false, error: 'Plan not found.' }
       if (plan.status !== 'proposed') {
@@ -591,6 +596,7 @@ export class AgentManager {
       plan.status = 'rejected'
       plan.updatedAt = Date.now()
       this.persistExtras(runtime)
+      await runtime.extrasSave
       return { success: true, plan }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -1080,6 +1086,11 @@ export class AgentManager {
         if (runtime.compactingPromise === compactPromise) {
           runtime.compactingPromise = null
         }
+        if (this.pendingRoots.has(runtime.id) && !this.isRuntimeBusy(runtime)) {
+          setTimeout(() => {
+            void this.applyPendingRoot(runtime)
+          }, 0)
+        }
       }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -1531,15 +1542,39 @@ export class AgentManager {
     planContext.runtime = runtime
     runtimeRef.current = runtime
     this.applySessionModeTools(runtime, fallbackPermission.mode)
+    // 兜底防泄漏：若并发边界里已有同 id 运行时被挤入，先销毁被顶替的旧实例再写入
+    const superseded = this.runtimes.get(id)
+    if (superseded && superseded !== runtime) {
+      superseded.watchdog?.stop()
+      superseded.watchdog = null
+      superseded.bgWatchdog?.stop()
+      superseded.bgWatchdog = null
+      try {
+        superseded.unsubscribe?.()
+      } catch {
+        // ignore
+      }
+      superseded.unsubscribe = null
+      try {
+        superseded.session.dispose()
+      } catch (error) {
+        this.logger.warn('[Agent Manager] Failed to dispose superseded session:', error)
+      }
+    }
     this.runtimes.set(id, runtime)
     if (seededPermission || titleBackfilled) this.persistExtras(runtime)
     return runtime
   }
 
-  private async disposeRuntime(runtime: SessionRuntime): Promise<void> {
+  private async disposeRuntime(
+    runtime: SessionRuntime,
+    options?: { skipAbort?: boolean }
+  ): Promise<void> {
     runtime.watchdog?.stop()
     runtime.watchdog = null
-    if (runtime.isProcessing) {
+    runtime.bgWatchdog?.stop()
+    runtime.bgWatchdog = null
+    if (!options?.skipAbort && this.isRuntimeBusy(runtime)) {
       try {
         await withTimeout(runtime.session.abort(), ABORT_TIMEOUT_MS, 'Agent abort')
       } catch (error) {
@@ -1560,7 +1595,9 @@ export class AgentManager {
     } catch (error) {
       this.logger.warn('[Agent Manager] Failed to dispose session:', error)
     }
-    this.runtimes.delete(runtime.id)
+    if (this.runtimes.get(runtime.id) === runtime) {
+      this.runtimes.delete(runtime.id)
+    }
     this.pendingRoots.delete(runtime.id)
     if (this.lastSessionId === runtime.id) this.lastSessionId = null
   }
@@ -1573,6 +1610,27 @@ export class AgentManager {
     this.lastSessionId = null
   }
 
+  /** 按 sessionId 合并并发的运行时创建，避免同一会话同时建出两份 AgentSession 泄漏 */
+  private trackRuntimeCreation(
+    sessionId: string,
+    factory: () => Promise<SessionRuntime>
+  ): Promise<SessionRuntime> {
+    const existing = this.runtimes.get(sessionId)
+    if (existing) return Promise.resolve(existing)
+    const inflight = this.creatingRuntimes.get(sessionId)
+    if (inflight) return inflight
+
+    const creation = factory()
+    this.creatingRuntimes.set(sessionId, creation)
+    const cleanup = () => {
+      if (this.creatingRuntimes.get(sessionId) === creation) {
+        this.creatingRuntimes.delete(sessionId)
+      }
+    }
+    void creation.then(cleanup, cleanup)
+    return creation
+  }
+
   /**
    * 确保某个会话已有运行时（不存在则从磁盘打开）。
    * 打开是异步的：打开会话 / 读分支 / 读计划 / 读列表可能同时进来，必须共用同一次创建。
@@ -1583,12 +1641,7 @@ export class AgentManager {
     if (rebinding) {
       await rebinding.catch(() => undefined)
     }
-    const existing = this.runtimes.get(sessionId)
-    if (existing) return existing
-    const creating = this.creatingRuntimes.get(sessionId)
-    if (creating) return creating
-
-    const creation = (async () => {
+    return this.trackRuntimeCreation(sessionId, async () => {
       const config = this.config
       if (!config) throw new Error('Agent not initialized.')
       const root = config.resolveSessionRoot?.(sessionId) ?? config.workspaceDir
@@ -1598,15 +1651,7 @@ export class AgentManager {
       if (!file) throw new Error('Session not found.')
       const manager = SessionManager.open(file, this.sessionDir, root)
       return await this.createRuntime(manager)
-    })()
-    this.creatingRuntimes.set(sessionId, creation)
-    const cleanup = () => {
-      if (this.creatingRuntimes.get(sessionId) === creation) {
-        this.creatingRuntimes.delete(sessionId)
-      }
-    }
-    void creation.then(cleanup, cleanup)
-    return creation
+    })
   }
 
   /** 会话文件按 id 查找，同时强制校验归属当前工作区（防跨工作区打开/改名/删除共享 sessionDir 下的他人会话） */
@@ -1620,15 +1665,33 @@ export class AgentManager {
       if (config.isSessionOfWorkspace) {
         if (!config.isSessionOfWorkspace(matched.id, matched.cwd)) return null
       } else {
-        const workspaceRoot = path.resolve(config.workspaceDir)
-        const infoCwd = matched.cwd ? path.resolve(matched.cwd) : workspaceRoot
-        const norm = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p)
-        if (norm(infoCwd) !== norm(workspaceRoot)) return null
+        const workspaceRoot = normalizePathForCompare(config.workspaceDir)
+        const infoCwd = matched.cwd ? normalizePathForCompare(matched.cwd) : workspaceRoot
+        if (infoCwd !== workspaceRoot) return null
       }
       return matched.path
     } catch (error) {
       this.logger.warn('[Agent Manager] Failed to locate session file:', error)
       return null
+    }
+  }
+
+  /** 判定 sessionId 是否已落盘但明确归属其他工作区（防止删除无本地文件会话时误删他仓 extras） */
+  private async isForeignSessionOnDisk(sessionId: string): Promise<boolean> {
+    const config = this.config
+    if (!config || typeof SessionManager.listAll !== 'function') return false
+    try {
+      const infos = await SessionManager.listAll(this.sessionDir)
+      const matched = infos.find((info) => info.id === sessionId)
+      if (!matched) return false
+      if (config.isSessionOfWorkspace) {
+        return !config.isSessionOfWorkspace(matched.id, matched.cwd)
+      }
+      const workspaceRoot = normalizePathForCompare(config.workspaceDir)
+      const infoCwd = matched.cwd ? normalizePathForCompare(matched.cwd) : workspaceRoot
+      return infoCwd !== workspaceRoot
+    } catch {
+      return false
     }
   }
 
@@ -1665,6 +1728,7 @@ export class AgentManager {
    * 文件要等第一条消息才写出，所以要按文件是否真的存在判断，而不是看路径。
    */
   private async applyPendingRoot(runtime: SessionRuntime): Promise<boolean> {
+    if (this.disposed) return false
     const pending = this.pendingRoots.get(runtime.id)
     if (!pending) return false
     if (this.runtimes.get(runtime.id) !== runtime) return false
@@ -1673,7 +1737,7 @@ export class AgentManager {
 
     const id = runtime.id
     const oldRoot = runtime.sessionManager.getCwd()
-    if (path.resolve(oldRoot) === path.resolve(pending.root)) {
+    if (normalizePathForCompare(oldRoot) === normalizePathForCompare(pending.root)) {
       this.pendingRoots.delete(id)
       return true
     }
@@ -1708,6 +1772,7 @@ export class AgentManager {
         )
         return true
       } catch (error) {
+        if (this.disposed) return false
         this.logger.error('[Agent Manager] Failed to apply worktree switch:', error)
         try {
           const manager = this.openManagerForRoot(id, file, oldRoot)
@@ -1783,7 +1848,9 @@ export class AgentManager {
     const runtime = this.runtimes.get(sessionId)
     if (!runtime) return { success: true }
     this.scheduleRoot(sessionId, root)
-    if (runtime.isProcessing) return { success: true, scheduled: true }
+    if (this.isRuntimeBusy(runtime) || this.rebinding.has(sessionId)) {
+      return { success: true, scheduled: true }
+    }
     const applied = await this.applyPendingRoot(runtime)
     return applied
       ? { success: true }
@@ -1795,10 +1862,14 @@ export class AgentManager {
    * parts 保留 thinking、text、tool 的真实顺序，供前端时间线渲染。
    */
   private sessionMessages(runtime: SessionRuntime): AgentMessage[] {
+    const isLiveStreaming = Boolean(
+      runtime.isProcessing || runtime.sdkStreaming || (runtime.session as any)?.isStreaming
+    )
     return deriveMessages(activeTimeline(runtime.sessionManager), {
       thinkingDurations: runtime.extras.thinkingDurations,
       toolFilePath: (toolName: string, args: any) =>
         this.toolFilePath(toolName, args, runtime.sessionManager.getCwd()),
+      isLiveStreaming,
     })
   }
 
@@ -1841,7 +1912,12 @@ export class AgentManager {
           this.config.workspaceDir,
           this.sessionDir
         )
-        runtime = await this.createRuntime(manager)
+        const recentId = manager.getSessionId()
+        const rebinding = this.rebindingPromises.get(recentId)
+        if (rebinding) {
+          await rebinding.catch(() => undefined)
+        }
+        runtime = await this.trackRuntimeCreation(recentId, () => this.createRuntime(manager))
       }
 
       this.lastSessionId = runtime.id
@@ -1919,12 +1995,12 @@ export class AgentManager {
         infos = await SessionManager.list(config.workspaceDir, this.sessionDir)
       }
       const belongs = config.isSessionOfWorkspace
-      const workspaceRoot = path.resolve(config.workspaceDir)
+      const workspaceRoot = normalizePathForCompare(config.workspaceDir)
       for (const info of infos) {
         if (belongs) {
           if (!belongs(info.id, info.cwd)) continue
         } else {
-          const cwd = info.cwd ? path.resolve(info.cwd) : workspaceRoot
+          const cwd = info.cwd ? normalizePathForCompare(info.cwd) : workspaceRoot
           if (cwd !== workspaceRoot) continue
         }
         sessions.set(info.id, {
@@ -2011,11 +2087,31 @@ export class AgentManager {
       const config = this.config
       if (!config) return { success: false, error: 'Agent not initialized.' }
       if (!isSafeSessionId(sessionId)) return { success: false, error: 'Invalid session id.' }
-      // 会话 extras 以 id 为文件名，必须先确认 id 属于当前工作区，避免跨工作区删除
+      // 会话 extras 以 id 为文件名，必须先确认 id 不属于其他工作区，避免跨工作区误删
       const root = config.resolveSessionRoot?.(sessionId) ?? config.workspaceDir
+      const hadLocalRuntime =
+        this.runtimes.has(sessionId) || this.creatingRuntimes.has(sessionId)
       const file =
         (await this.findSessionFile(sessionId)) ??
         SessionManager.findById(root, sessionId, this.sessionDir)
+      if (!file && !hadLocalRuntime && (await this.isForeignSessionOnDisk(sessionId))) {
+        return { success: true }
+      }
+      let resolvedFile: string | null = null
+      if (file) {
+        resolvedFile = path.resolve(file)
+        const normalizedResolved = normalizePathForCompare(resolvedFile)
+        const normalizedSessionDir = normalizePathForCompare(this.sessionDir)
+        const sessionDirPrefix = normalizedSessionDir.endsWith(path.sep)
+          ? normalizedSessionDir
+          : normalizedSessionDir + path.sep
+        if (!normalizedResolved.startsWith(sessionDirPrefix)) {
+          return {
+            success: false,
+            error: 'Refusing to delete a session outside the session directory.',
+          }
+        }
+      }
       // 先标记 deletedSessions 并等待在途创建结束，避免删除瞬间创建完成的运行时回魂
       this.deletedSessions.add(sessionId)
       if (this.deletedSessions.size > 500) {
@@ -2029,19 +2125,15 @@ export class AgentManager {
       await this.closeSession(sessionId)
       this.titleService.delete(sessionId)
       this.creatingRuntimes.delete(sessionId)
-      if (!file) return { success: true }
+      this.seedPermissions.delete(sessionId)
+      // 未落盘会话也可能已写入权限/标题 sidecar，无论 file 是否存在都必须清理 extras
       if (this.extrasStore) {
         await this.extrasStore.delete(sessionId).catch((error) => {
           this.logger.warn('[Agent Manager] Failed to delete session extras:', error)
         })
       }
-
-      const resolved = path.resolve(file)
-      const sessionDirRoot = path.resolve(this.sessionDir)
-      if (!resolved.startsWith(sessionDirRoot + path.sep)) {
-        return { success: false, error: 'Refusing to delete a session outside the session directory.' }
-      }
-      await fs.unlink(resolved).catch((error: NodeJS.ErrnoException) => {
+      if (!resolvedFile) return { success: true }
+      await fs.unlink(resolvedFile).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== 'ENOENT') throw error
       })
       return { success: true }
@@ -2428,18 +2520,20 @@ export class AgentManager {
     const id = runtime.id
     const root = runtime.sessionManager.getCwd()
     const preservedSinks = [...runtime.traceSinks]
-    await this.disposeRuntime(runtime)
+    await this.disposeRuntime(runtime, { skipAbort: true })
     const config = this.config
-    if (!config) return
+    if (!config || this.disposed || this.deletedSessions.has(id)) return
 
     try {
-      const file =
-        (await this.findSessionFile(id)) ??
-        SessionManager.findById(root, id, this.sessionDir)
-      const manager = file
-        ? SessionManager.open(file, this.sessionDir, root)
-        : SessionManager.create(root, this.sessionDir, { id })
-      const next = await this.createRuntime(manager)
+      const next = await this.trackRuntimeCreation(id, async () => {
+        const file =
+          (await this.findSessionFile(id)) ??
+          SessionManager.findById(root, id, this.sessionDir)
+        const manager = file
+          ? SessionManager.open(file, this.sessionDir, root)
+          : SessionManager.create(root, this.sessionDir, { id })
+        return await this.createRuntime(manager)
+      })
       for (const sink of preservedSinks) next.traceSinks.add(sink)
       this.lastSessionId = next.id
     } catch (error) {
@@ -2498,14 +2592,17 @@ export class AgentManager {
     const runtime = this.modelRuntime
     const config = this.config
     if (!runtime || !config) return null
-    const model = runtime.getModel(
-      config.apiConfig.providerId as never,
-      config.apiConfig.modelId as never
-    )
+    const model =
+      this.resolveActiveModel() ??
+      runtime.getModel(
+        config.apiConfig.providerId as never,
+        config.apiConfig.modelId as never
+      )
     if (!model) return null
     const controller = new AbortController()
     const timeoutMs = options?.timeoutMs ?? 20_000
     const timer = setTimeout(() => controller.abort(), timeoutMs)
+    timer.unref?.()
     try {
       const response = await runtime.completeSimple(
         model,

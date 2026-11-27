@@ -105,6 +105,27 @@ describe('目录缓存与远端判据', () => {
     expect((await store.snapshot()).map((s) => s.providerId)).toEqual(['deepseek'])
   })
 
+  it('主缓存损坏时优先从 .bak 恢复；无可用备份时写/删抛错并保留 .corrupt 现场', async () => {
+    const { store } = createStore()
+    await store.write('deepseek', entry(['a']))
+    await store.write('openai', entry(['b']))
+
+    // 破坏主缓存但保留由第二次写入生成的健康 .bak（含 deepseek）
+    await fs.writeFile(filePath, '{ broken', 'utf-8')
+    expect((await store.read('deepseek'))?.models.map((m) => m.id)).toEqual(['a'])
+
+    await store.write('xai', entry(['c']))
+    expect((await store.read('deepseek'))?.models.map((m) => m.id)).toEqual(['a'])
+    expect((await store.read('xai'))?.models.map((m) => m.id)).toEqual(['c'])
+
+    // 主缓存与 .bak 同时损坏时，严格写路径拒绝清盘覆盖并保留 .corrupt.<ts>
+    await fs.writeFile(filePath, '{ broken-primary', 'utf-8')
+    await fs.writeFile(`${filePath}.bak`, '{ broken-bak', 'utf-8')
+    await expect(store.write('google', entry(['g']))).rejects.toThrow(/corrupted/i)
+    const names = await fs.readdir(dir)
+    expect(names.some((name) => name.startsWith('models-store.json.corrupt.'))).toBe(true)
+  })
+
   it('写完不留临时文件', async () => {
     const { store } = createStore()
     await store.write('deepseek', entry(['a']))

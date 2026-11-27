@@ -3,6 +3,7 @@ import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
 import { SessionExtrasStore, emptyExtras } from '../../pi-bridge/src/session-extras'
+import { isStructuredPlan } from '../../pi-bridge/src/plan'
 
 let tmpRoot = ''
 
@@ -141,6 +142,49 @@ describe('SessionExtrasStore', () => {
     const store = new SessionExtrasStore(tmpRoot)
     await fs.writeFile(path.join(tmpRoot, 'broken.json'), '{oops', 'utf-8')
     await expect(store.load('broken')).resolves.toEqual(emptyExtras())
+  })
+
+  it('never overwrites a healthy .bak with a corrupted primary during save', async () => {
+    const store = new SessionExtrasStore(tmpRoot)
+    const target = path.join(tmpRoot, 'safe-bak.json')
+    const healthy = emptyExtras()
+    healthy.title = 'Healthy backup'
+    await fs.writeFile(`${target}.bak`, JSON.stringify(healthy), 'utf-8')
+    await fs.writeFile(target, '{corrupted primary', 'utf-8')
+
+    const next = emptyExtras()
+    next.title = 'New state'
+    await store.save('safe-bak', next)
+
+    const bakAfter = JSON.parse(await fs.readFile(`${target}.bak`, 'utf-8'))
+    expect(bakAfter.title).toBe('Healthy backup')
+    expect((await store.load('safe-bak')).title).toBe('New state')
+  })
+
+  it('validates step.files and timestamps in isStructuredPlan', () => {
+    const base = {
+      id: 'plan-1',
+      summary: 'Summary',
+      status: 'proposed',
+      createdAt: 100,
+      updatedAt: 200,
+      steps: [{ id: 'step-1', title: 'Step', files: ['a.ts'], status: 'pending' }],
+    }
+    expect(isStructuredPlan(base)).toBe(true)
+    expect(
+      isStructuredPlan({
+        ...base,
+        steps: [{ id: 'step-1', title: 'Step', files: 'not-an-array', status: 'pending' }],
+      })
+    ).toBe(false)
+    expect(
+      isStructuredPlan({
+        ...base,
+        steps: [{ id: 'step-1', title: 'Step', files: ['a.ts', 42], status: 'pending' }],
+      })
+    ).toBe(false)
+    expect(isStructuredPlan({ ...base, createdAt: '100' })).toBe(false)
+    expect(isStructuredPlan({ ...base, updatedAt: Number.NaN })).toBe(false)
   })
 
   it('rejects session ids that could escape the extras directory', async () => {

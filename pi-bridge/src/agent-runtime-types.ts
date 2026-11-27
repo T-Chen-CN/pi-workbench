@@ -179,6 +179,12 @@ export function aggregateTurnUsage(assistants: any[]): AgentUsage | undefined {
   return acc
 }
 
+/** Windows 路径大小写不敏感比较前统一归一化 */
+export function normalizePathForCompare(filePath: string): string {
+  const resolved = path.resolve(filePath)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
 /** 把工具参数里的路径解析为绝对路径 */
 export function resolveToolPath(toolPath: unknown, root?: string, fallbackRoot?: string): string | null {
   if (typeof toolPath !== 'string' || !toolPath) return null

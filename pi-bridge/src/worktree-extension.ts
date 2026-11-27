@@ -20,6 +20,12 @@ export interface WorktreeExtensionContext {
   scheduleRoot: (root: string, branch?: string) => void
 }
 
+function sameNormalizedPath(a: string, b: string): boolean {
+  const left = path.resolve(a)
+  const right = path.resolve(b)
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
+}
+
 export function createWorktreeExtension(context: WorktreeExtensionContext): ExtensionFactory {
   const result = (text: string) => ({
     content: [{ type: 'text' as const, text }],
@@ -29,7 +35,7 @@ export function createWorktreeExtension(context: WorktreeExtensionContext): Exte
   return (pi) => {
     // 工作树的 .pi 通常不在版本控制里；把仓库根的 skills / prompts / themes 补进资源发现
     pi.on('resources_discover', async () => {
-      if (path.resolve(context.getRoot()) === path.resolve(context.workspaceDir)) return {}
+      if (sameNormalizedPath(context.getRoot(), context.workspaceDir)) return {}
       const projectDir = path.join(context.workspaceDir, '.pi')
       const pick = (name: string): string[] => {
         const dir = path.join(projectDir, name)
@@ -77,7 +83,7 @@ export function createWorktreeExtension(context: WorktreeExtensionContext): Exte
         if (!switched.success || !switched.root) {
           return result(`Unable to switch worktree: ${switched.error ?? 'unknown error'}`)
         }
-        if (switched.root === context.getRoot()) {
+        if (sameNormalizedPath(switched.root, context.getRoot())) {
           return result('This session is already using the requested worktree.')
         }
         context.scheduleRoot(switched.root, switched.branch)

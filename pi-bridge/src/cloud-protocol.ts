@@ -218,7 +218,7 @@ const cloudWorkspaceInfoSchema = z
     name: z.string(),
     isGit: z.boolean(),
     remote: z.string().optional(),
-    branch: z.string().optional(),
+    defaultBranch: z.string().max(256).optional(),
   })
   .loose()
 

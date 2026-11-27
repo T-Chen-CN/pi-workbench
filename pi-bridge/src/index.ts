@@ -6,6 +6,7 @@
  */
 
 export { AgentManager } from './agent-manager.js'
+export { isPiOffline, normalizePiOfflineEnv } from './agent-catalog.js'
 export {
   deriveMessage,
   deriveMessages,
