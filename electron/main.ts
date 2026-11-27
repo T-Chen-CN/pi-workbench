@@ -20,7 +20,11 @@ import { NotificationRouter, notificationCopy, notificationSummary } from './not
 import { createWorkspaceStore, importRecentWorkspaces } from './workspace-store.js'
 import { canonicalizePath, trustWorkspace } from './workspace-trust.js'
 import { configureIpcWindow } from './ipc/register.js'
-import { installAuxWindowSupport, registerAuxWindowIpc } from './aux-window.js'
+import {
+  closeAllDetachedPanelWindows,
+  installAuxWindowSupport,
+  registerAuxWindowIpc,
+} from './aux-window.js'
 import { appUrl, isAppUrl, registerAppProtocol } from './app-protocol.js'
 import { runStartupCacheMaintenance } from './cache-maintenance.js'
 import { runLegacyCleanups } from './legacy-cleanup.js'
@@ -145,6 +149,34 @@ const bootWindow = createBootWindowController({
     void ensureAppDirWritable()
   },
 })
+
+/** 向所有非销毁窗口（含主窗口与独立拆出面板窗口）广播事件，兼容测试中 getAllWindows() 为空的场景 */
+function collectAliveWindows(): BrowserWindow[] {
+  const targets: BrowserWindow[] = []
+  const seenIds = new Set<number>()
+  const allWindows =
+    typeof BrowserWindow?.getAllWindows === 'function' ? BrowserWindow.getAllWindows() : []
+  for (const win of allWindows) {
+    if (win.isDestroyed() || win.webContents?.isDestroyed?.()) continue
+    seenIds.add(win.webContents.id)
+    targets.push(win)
+  }
+  if (
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    !mainWindow.webContents?.isDestroyed?.() &&
+    !seenIds.has(mainWindow.webContents.id)
+  ) {
+    targets.push(mainWindow)
+  }
+  return targets
+}
+
+function broadcastToWindows(channel: string, payload: unknown): void {
+  for (const win of collectAliveWindows()) {
+    win.webContents.send(channel, payload)
+  }
+}
 
 function resolveTheme(settings: { theme?: unknown }): 'dark' | 'light' {
   if (settings.theme === 'dark') return 'dark'
@@ -318,7 +350,7 @@ const notificationRouter = new NotificationRouter(
     notification.show()
   },
   () => getAppSettingsCache().notifications,
-  () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()),
+  () => collectAliveWindows().some((win) => win.isFocused()),
   {
     info: (message) => console.log(message),
     warn: (message) => console.warn(message)
@@ -330,10 +362,13 @@ const notificationRouter = new NotificationRouter(
 /** 工具审批：挂起 Agent 的工具调用，等待渲染层响应或超时 */
 const approvalBroker = new ApprovalBroker(
   (payload) => {
-    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
-      throw new Error('Main window unavailable for approval')
+    const targets = collectAliveWindows()
+    if (targets.length === 0) {
+      throw new Error('No window available for approval')
     }
-    mainWindow.webContents.send('agent:approval-request', payload)
+    for (const win of targets) {
+      win.webContents.send('agent:approval-request', payload)
+    }
     const text = notificationText()
     notificationRouter.notify({
       kind: 'approval',
@@ -344,9 +379,7 @@ const approvalBroker = new ApprovalBroker(
     })
   },
   (resolution) => {
-    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
-      mainWindow.webContents.send('agent:approval-resolved', resolution)
-    }
+    broadcastToWindows('agent:approval-resolved', resolution)
   }
 )
 
@@ -373,14 +406,10 @@ function loadPty(): typeof import('node-pty') {
 const terminalManager = new TerminalManager({
   spawn: (shell, args, options) => loadPty().spawn(shell, args, options),
   onData: (id, data) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('terminal:data', { id, data })
-    }
+    broadcastToWindows('terminal:data', { id, data })
   },
   onExit: (id, exitCode) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('terminal:exit', { id, exitCode })
-    }
+    broadcastToWindows('terminal:exit', { id, exitCode })
   },
   logPathFor: (workspaceDir, terminalId) => path.join(workspaceDir, '.pi-workbench', `terminal-${terminalId}.log`),
   // 复用统一的环境清洗：同时剔除已知供应商 Key 与 PI_WORKBENCH_* 内部凭据（Windows 大小写不敏感）
@@ -390,9 +419,7 @@ const terminalManager = new TerminalManager({
 const pluginManager = new PluginManager({
   stateFilePath: path.join(getAppDir(), 'config', 'workspace-plugins.json'),
   onChanged: (workspaceDir) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('plugins:changed', { workspaceDir })
-    }
+    broadcastToWindows('plugins:changed', { workspaceDir })
   }
 })
 
@@ -565,7 +592,19 @@ registerSystemIpc({
   }
 })
 
-registerAuxWindowIpc({ getMainWindow: () => mainWindow })
+registerAuxWindowIpc({
+  getMainWindow: () => mainWindow,
+  preloadPath: path.join(__dirname, 'preload.cjs'),
+  iconPath: path.join(__dirname, '../app-icon.png'),
+  resolveTheme: () => resolveTheme(getAppSettingsCache()),
+  resolveLanguage: () => resolveLanguage(getAppSettingsCache()),
+  onThemeSync: (mode) => syncAllTitleBarOverlays(mode),
+  onClosed: (frameName) => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send('aux:window-closed', frameName)
+    }
+  },
+})
 
 // 主进程同步追踪云端运行中工单数与未读数，即使窗口收进托盘也能刷新角标（F-32 / C-03c）
 const cloudTrayTaskStatuses = new Map<string, string>()
@@ -861,6 +900,8 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
     // 启动动画与兜底定时器不能留到窗口销毁之后
     bootWindow.reset()
     mainWindow = null
+    // 主窗口真正销毁（而非收进托盘）时回收独立拆出面板窗口，避免无主窗口残留阻塞退出
+    closeAllDetachedPanelWindows()
   })
 
   // 渲染进程 beforeunload 阻止关闭时（未保存修改或运行中的会话 / 审批），
@@ -915,14 +956,8 @@ function createWindow(settings: { theme?: unknown; language?: unknown }): void {
     }
   })
 
-  // 面板辅助窗口：只放行 about:blank + pi-panel: 前缀的 window.open
-  installAuxWindowSupport(mainWindow, {
-    onClosed: (frameName) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('aux:window-closed', frameName)
-      }
-    }
-  })
+  // 收紧主窗口 window.open：仅允许可信来源拉起外部 http(s) 链接，禁止所有内部弹窗（面板拆窗改走 panel:detach IPC）
+  installAuxWindowSupport(mainWindow)
 
   mainWindow.webContents.on('will-attach-webview', (event) => {
     event.preventDefault()
@@ -1205,6 +1240,8 @@ const quitSequencer = createQuitSequencer({
 // 所有窗口真正关闭后再在 will-quit 里做异步清理，避免用户取消关闭时资源已被释放。
 app.on('before-quit', () => {
   quitting = true
+  // 真正退出时关闭全部独立拆出面板窗口，防止拆窗阻塞应用退出（收进托盘时不触碰拆窗）
+  closeAllDetachedPanelWindows()
   quitSequencer.handleBeforeQuit()
 })
 

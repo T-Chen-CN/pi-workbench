@@ -130,14 +130,81 @@ function patch(workspacePath: string, next: Partial<TerminalEntry>): void {
 /** 代次令牌：防止 restart/close 并发触发时旧的 terminalCreate 回包覆盖新 PTY 或泄漏孤儿 PTY */
 const spawnGeneration = new Map<string, number>()
 
-async function spawn(workspacePath: string, cwd: string | null, cols: number, rows: number): Promise<void> {
+function normalizeDirCmp(dir: string): string {
+  const normalized = dir.replace(/\\+/g, '/').replace(/\/+$/, '')
+  return typeof window !== 'undefined' && window.electronAPI?.platform === 'win32'
+    ? normalized.toLowerCase()
+    : normalized
+}
+
+/**
+ * 尝试接管主进程里已运行中的同工作区 PTY（供独立拆窗与回位时无缝保留 shell 与滚动缓冲）。
+ * 找到匹配 PTY 返回 true，未找到或不支持时返回 false。
+ */
+async function tryAttachExisting(workspacePath: string, cwd: string | null): Promise<boolean> {
+  if (typeof api.terminalList !== 'function') return false
+  try {
+    const res = await api.terminalList(workspacePath)
+    if (!res.success || !Array.isArray(res.terminals) || res.terminals.length === 0) {
+      return false
+    }
+    const targetCwd = cwd ? normalizeDirCmp(cwd) : null
+    const matched =
+      (targetCwd
+        ? res.terminals.find((item) => normalizeDirCmp(item.cwd) === targetCwd)
+        : res.terminals[0]) ?? null
+    if (!matched) return false
+
+    ensureBridge()
+    owners.set(matched.id, workspacePath)
+    replayBuffers.delete(workspacePath)
+    if (matched.replay) {
+      replayBuffers.set(workspacePath, {
+        chunks: [matched.replay],
+        bytes: matched.replay.length,
+      })
+    }
+    patch(workspacePath, {
+      id: matched.id,
+      cwd: cwd ?? matched.cwd,
+      status: 'ready',
+      shellName: matched.shell,
+      logPath: matched.logPath,
+      error: null,
+    })
+    if (matched.replay) {
+      emit(workspacePath, matched.replay)
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function spawn(
+  workspacePath: string,
+  cwd: string | null,
+  cols: number,
+  rows: number,
+  options?: { allowAttach?: boolean }
+): Promise<void> {
   if (pending.has(workspacePath)) return
   const gen = (spawnGeneration.get(workspacePath) ?? 0) + 1
   spawnGeneration.set(workspacePath, gen)
   pending.add(workspacePath)
-  ensureBridge()
   replayBuffers.delete(workspacePath)
   patch(workspacePath, { status: 'starting', error: null, buffer: [], bufferBytes: 0 })
+
+  if (options?.allowAttach !== false && typeof api.terminalList === 'function') {
+    const attached = await tryAttachExisting(workspacePath, cwd)
+    if (spawnGeneration.get(workspacePath) !== gen) {
+      return
+    }
+    if (attached) {
+      pending.delete(workspacePath)
+      return
+    }
+  }
 
   let result: Awaited<ReturnType<typeof api.terminalCreate>>
   try {
@@ -163,6 +230,7 @@ async function spawn(workspacePath: string, cwd: string | null, cols: number, ro
   }
 
   if (result.success && result.id) {
+    ensureBridge()
     owners.set(result.id, workspacePath)
     patch(workspacePath, {
       id: result.id,
@@ -197,7 +265,12 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       get().restart(workspacePath, cwd, cols, rows)
       return
     }
-    if (entry.status === 'idle') void spawn(workspacePath, cwd, cols, rows)
+    if (entry.status === 'idle') {
+      void spawn(workspacePath, cwd, cols, rows, { allowAttach: true })
+    } else if (entry.status === 'error') {
+      // 例如终端在拆出窗口被重启过：若主进程已有运行中的新 PTY，回位时自动接管
+      void tryAttachExisting(workspacePath, cwd)
+    }
   },
 
   restart: (workspacePath, cwd, cols, rows) => {
@@ -227,7 +300,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         bufferBytes: 0
       })
     }
-    void spawn(workspacePath, cwd, cols, rows)
+    void spawn(workspacePath, cwd, cols, rows, { allowAttach: false })
   },
 
   close: (workspacePath) => {

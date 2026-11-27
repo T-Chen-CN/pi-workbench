@@ -42,6 +42,7 @@ import type {
   PluginCommandResult,
   TerminalCreateResult,
   TerminalResult,
+  TerminalListResult,
   UpdateCheckResult,
   UpdateActionResult,
   UpdateNoticeResult,
@@ -57,6 +58,10 @@ import type {
   GitWorktreeDepsPayload,
   AuxDetachResult,
   AuxWindowCommandResult,
+  PanelDetachRequest,
+  PanelDetachResult,
+  PanelDockResult,
+  WindowSyncMessage,
   WindowCommand,
   WindowMaximizedState,
   AttachmentPickResult,
@@ -278,6 +283,17 @@ const mockAPI = {
     success: false,
     error: 'Not supported',
   }),
+  panelDetach: async (_options: PanelDetachRequest): Promise<PanelDetachResult> => ({
+    success: false,
+    error: 'aux-window-blocked',
+  }),
+  panelDock: async (_hostId: string): Promise<PanelDockResult> => ({
+    success: true,
+  }),
+  syncBroadcast: async (_message: WindowSyncMessage): Promise<{ success: boolean; error?: string }> => ({
+    success: true,
+  }),
+  onSyncState: (_callback: (message: WindowSyncMessage) => void) => () => {},
   appBootReady: () => {},
   onAppBootExpanded: (_callback: () => void) => () => {},
   initWorkspace: async (workspacePath: string): Promise<WorkspaceResult> => {
@@ -638,6 +654,7 @@ const mockAPI = {
   terminalResize: async (): Promise<TerminalResult> => ({ success: false }),
   terminalClose: async (): Promise<TerminalResult> => ({ success: false }),
   terminalFlush: async (): Promise<TerminalResult> => ({ success: false }),
+  terminalList: async (): Promise<TerminalListResult> => ({ success: true, terminals: [] }),
   onTerminalData: (_callback: (payload: { id: string; data: string }) => void) => () => {},
   onTerminalExit: (_callback: (payload: { id: string; exitCode: number }) => void) => () => {},
   onDocumentRenderRequest: (
@@ -833,6 +850,17 @@ export const api = {
     fallback: () => ({ success: false }),
     onError: () => ({ success: false }),
   }),
+  panelDetach: createContractApiCall(getBridge, 'panelDetach', {
+    fallback: () => ({ success: false, error: 'aux-window-blocked' }),
+  }),
+  panelDock: createContractApiCall(getBridge, 'panelDock', {
+    fallback: () => ({ success: false, error: 'Not supported' }),
+  }),
+  syncBroadcast: createContractApiCall(getBridge, 'syncBroadcast', {
+    fallback: () => ({ success: false }),
+    onError: () => ({ success: false }),
+  }),
+  onSyncState: createContractEventSub(getBridge, 'onSyncState'),
   appBootReady: () => {
     if (typeof electronAPI.appBootReady === 'function') electronAPI.appBootReady()
   },
@@ -991,6 +1019,10 @@ export const api = {
   terminalResize: createContractApiCall(getBridge, 'terminalResize'),
   terminalClose: createContractApiCall(getBridge, 'terminalClose'),
   terminalFlush: createContractApiCall(getBridge, 'terminalFlush'),
+  terminalList: createContractApiCall(getBridge, 'terminalList', {
+    fallback: () => ({ success: false, terminals: [] }),
+    onError: (error) => ({ success: false, terminals: [], error }),
+  }),
   onTerminalData: createContractEventSub(getBridge, 'onTerminalData'),
   onTerminalExit: createContractEventSub(getBridge, 'onTerminalExit'),
 }

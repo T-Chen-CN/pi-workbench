@@ -7,37 +7,36 @@ import { openPanelWindow, type AuxWindowHandle } from '../../src/panelHost/auxWi
 import { MAIN_HOST } from '../../src/panelHost/types'
 import { useI18nStore } from '../../src/store/i18nStore'
 
+vi.mock('../../src/api', () => ({
+  api: {
+    panelDetach: vi.fn(async (req: { hostId: string }) => ({
+      success: true,
+      hostId: req.hostId,
+      frameName: `pi-panel:${req.hostId}`,
+    })),
+    panelDock: vi.fn(async () => ({ success: true })),
+  },
+}))
+
+const { api } = await import('../../src/api')
 const WORKSPACE = '/tmp/ws'
 
 function reset(): void {
   usePanelStore.setState({ panelHost: {}, windows: {} })
 }
 
-function installPopup() {
-  const popup = {
-    document: document.implementation.createHTMLDocument('blank'),
-    closed: false,
-    close() {
-      this.closed = true
-    },
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    focus: vi.fn()
-  }
-  vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
-  return popup
-}
-
 async function detach(panel: 'chat' | 'files' = 'chat', id = 'aux:1'): Promise<AuxWindowHandle> {
   const handle = await openPanelWindow({
     id,
-    title: panel,
-    rect: { x: 0, y: 0, width: 480, height: 600 }
+    workspaceDir: WORKSPACE,
+    panel,
+    title: 'ws',
+    rect: { x: 0, y: 0, width: 480, height: 600 },
   })
   act(() => {
     usePanelStore.setState({
-      panelHost: { [WORKSPACE]: { [panel]: id } },
-      windows: { [id]: { workspaceDir: WORKSPACE, panel, handle } }
+      panelHost: { [WORKSPACE]: { ...usePanelStore.getState().panelHost[WORKSPACE], [panel]: id } },
+      windows: { ...usePanelStore.getState().windows, [id]: { workspaceDir: WORKSPACE, panel, handle } },
     })
   })
   return handle
@@ -46,7 +45,14 @@ async function detach(panel: 'chat' | 'files' = 'chat', id = 'aux:1'): Promise<A
 beforeEach(() => {
   reset()
   useI18nStore.getState().setLanguage?.('zh')
-  installPopup()
+  vi.mocked(api.panelDetach).mockClear()
+  vi.mocked(api.panelDock).mockClear()
+  vi.mocked(api.panelDetach).mockImplementation(async (req) => ({
+    success: true,
+    hostId: req.hostId,
+    frameName: `pi-panel:${req.hostId}`,
+  }))
+  vi.mocked(api.panelDock).mockResolvedValue({ success: true })
 })
 
 afterEach(() => {
@@ -62,20 +68,29 @@ describe('panelStore', () => {
 
   it('ignores a second detach while the panel is already out', async () => {
     await detach('chat')
+    vi.mocked(api.panelDetach).mockClear()
     await usePanelStore.getState().detachPanel(WORKSPACE, 'chat')
 
+    expect(api.panelDetach).not.toHaveBeenCalled()
     expect(Object.keys(usePanelStore.getState().windows)).toEqual(['aux:1'])
   })
 
-  it('titles the detached window after the workspace, not the panel', async () => {
+  it('titles the detached native window after the workspace, not the panel', async () => {
     await usePanelStore.getState().detachPanel(WORKSPACE, 'chat')
-    const [entry] = Object.values(usePanelStore.getState().windows)
-    // 标题只写工作区名：同一工作区拆几个窗口都不可能靠面板名区分
-    expect(entry.handle.document.title).toBe('ws')
+    expect(api.panelDetach).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: WORKSPACE,
+        panel: 'chat',
+        title: 'ws',
+      })
+    )
   })
 
-  it('surfaces a toast when the popup is blocked', async () => {
-    vi.spyOn(window, 'open').mockReturnValue(null)
+  it('cleans up cleanly when panel:detach fails', async () => {
+    vi.mocked(api.panelDetach).mockResolvedValueOnce({
+      success: false,
+      error: 'aux-window-blocked',
+    })
 
     await usePanelStore.getState().detachPanel(WORKSPACE, 'chat')
 
@@ -84,35 +99,28 @@ describe('panelStore', () => {
 
   it('docks every detached panel of a workspace', async () => {
     await detach('chat', 'aux:1')
-    const second = await openPanelWindow({
-      id: 'aux:2',
-      title: 'files',
-      rect: { x: 0, y: 0, width: 480, height: 600 }
-    })
-    act(() => {
-      usePanelStore.setState({
-        panelHost: { [WORKSPACE]: { chat: 'aux:1', files: 'aux:2' } },
-        windows: {
-          ...usePanelStore.getState().windows,
-          'aux:2': { workspaceDir: WORKSPACE, panel: 'files', handle: second }
-        }
-      })
-    })
+    await detach('files', 'aux:2')
 
     act(() => usePanelStore.getState().dockWorkspace(WORKSPACE))
 
     expect(panelHostOf(WORKSPACE, 'chat')).toBe(MAIN_HOST)
     expect(panelHostOf(WORKSPACE, 'files')).toBe(MAIN_HOST)
     expect(usePanelStore.getState().windows).toEqual({})
-    expect(second.window?.closed).toBe(true)
+    expect(api.panelDock).toHaveBeenCalledWith('aux:1')
+    expect(api.panelDock).toHaveBeenCalledWith('aux:2')
+  })
+
+  it('calls panel:dock when invoked inside a detached native window with explicit host', () => {
+    act(() => usePanelStore.getState().dockPanel(WORKSPACE, 'files', 'aux:7'))
+    expect(api.panelDock).toHaveBeenCalledWith('aux:7')
   })
 
   it('disposes every window on shutdown', async () => {
-    const handle = await detach('chat')
+    await detach('chat', 'aux:5')
 
     act(() => usePanelStore.getState().disposeAllWindows())
 
-    expect(handle.window?.closed).toBe(true)
+    expect(api.panelDock).toHaveBeenCalledWith('aux:5')
     expect(usePanelStore.getState().windows).toEqual({})
     expect(usePanelStore.getState().panelHost).toEqual({})
   })

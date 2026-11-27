@@ -24,7 +24,7 @@ import { api } from '../../api'
 import { useEditorStore, editorStoreFor } from '../../store/editorStore'
 import { useI18nStore } from '../../store/i18nStore'
 import { usePanelContextMenu } from '../panels/PanelContextMenu'
-import { readPanelUi, writePanelUi } from '../../panelHost/panelUiState'
+import { readPanelUi, subscribePanelUiSync, writePanelUi } from '../../panelHost/panelUiState'
 import { PanelDragHandle } from '../panels/PanelDragHandle'
 import { useSettingsStore } from '../../store/settingsStore'
 import { localizeError } from '../../i18n/errors'
@@ -265,6 +265,45 @@ export const FileExplorer: React.FC<{
       setTree(skeleton)
     }
   }, [workspacePath])
+
+  // 接收跨窗口同步来的展开目录快照（独立拆窗启动后由主窗口回推），立即重建骨架并补拉子节点
+  useEffect(() => {
+    if (!workspacePath) return
+    return subscribePanelUiSync((targetWorkspace, name, value) => {
+      if (targetWorkspace !== workspacePath || name !== 'files') return
+      const snapshot = value as { expanded?: unknown; scrollTop?: unknown } | null
+      if (!snapshot || typeof snapshot !== 'object') return
+      const expanded = Array.isArray(snapshot.expanded)
+        ? snapshot.expanded.filter((item): item is string => typeof item === 'string')
+        : []
+      if (typeof snapshot.scrollTop === 'number' && Number.isFinite(snapshot.scrollTop)) {
+        restoreRef.current = { scrollTop: snapshot.scrollTop }
+      }
+      if (expanded.length > 0) {
+        const skeleton = buildExpandedSkeleton(expanded, workspacePath)
+        treeRef.current = skeleton
+        setTree(skeleton)
+        void loadRootDirectory(workspacePath)
+      }
+    })
+  }, [workspacePath, loadRootDirectory])
+
+  // 展开状态变化时及时写回 panelUiState（并同步到主窗口），避免系统 X 直接关窗时丢失手感
+  useEffect(() => {
+    if (!workspacePath || !hydratedRef.current) return
+    const expanded: string[] = []
+    const walk = (nodes: TreeNode[]) => {
+      for (const node of nodes) {
+        if (node.isDirectory && node.isExpanded) expanded.push(node.path)
+        if (node.children) walk(node.children)
+      }
+    }
+    walk(tree)
+    writePanelUi(workspacePath, 'files', {
+      expanded,
+      scrollTop: treeScrollRef.current?.scrollTop ?? 0,
+    })
+  }, [workspacePath, tree, treeScrollRef])
 
   useEffect(() => {
     if (!workspacePath) return

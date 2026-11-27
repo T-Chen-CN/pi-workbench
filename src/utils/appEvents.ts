@@ -12,6 +12,7 @@ export interface AppEventMap {
       | 'about'
   }
   'open-command-palette': void
+  'focus-workspace': void
   'workspace-toggle-terminal': void
   'pi:refresh-files': void
   'pi:insert-slash': { insert: string }

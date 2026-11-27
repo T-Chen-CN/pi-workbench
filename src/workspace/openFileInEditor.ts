@@ -8,6 +8,7 @@
  */
 
 import { api } from '../api'
+import { currentWindowHostId, isDetachedPanelWindow } from '../panelHost/types'
 import { editorStoreFor } from '../store/editorStore'
 import { useI18nStore } from '../store/i18nStore'
 import { confirmDialog } from '../store/dialogStore'
@@ -57,6 +58,18 @@ export async function openFileInEditor(
   targetPath: string,
   options: OpenFileOptions = {}
 ): Promise<OpenFileOutcome> {
+  // 独立拆出面板窗口内无 Monaco 编辑器：把打开文件请求转发给主窗口并置前显示
+  if (isDetachedPanelWindow() && typeof api.syncBroadcast === 'function') {
+    void api.syncBroadcast({
+      sourceHost: currentWindowHostId(),
+      kind: 'open-file',
+      workspaceDir: root,
+      filePath: targetPath,
+      ...(options.revealLine ? { line: options.revealLine } : {}),
+    })
+    return { status: 'opened', kind: detectFileKind(targetPath) }
+  }
+
   const store = editorStoreFor(root)
   /** 任何入口打开 / 切到文件都回到文件视图；面板标签只由标签条自己激活 */
   const openedInEditor = (fileKind: FileKind): OpenFileOutcome => {

@@ -1,63 +1,41 @@
 /**
  * 面板宿主上下文。
  *
- * docked 面板拿到 `main`，拆出的面板拿到 `aux:<n>`。面板内部的组件用它来判断
- * 「我渲染在哪个文档里」——凡是需要挂全局监听、弹层、读焦点的地方都必须问它，
- * 否则会出现「快捷键在辅助窗口失灵」「弹窗跑到主窗口」这类错窗口问题。
+ * docked 面板拿到 `main`，拆到独立原生 BrowserWindow 的面板拿到 `aux:<n>`。
+ * 每个原生窗口拥有自己独立的 `window` 与 `document`，不再存在跨文档 Portal 代理，
+ * 保留统一 Hook 签名以便业务组件、弹窗与快捷键保持零差异复用。
  */
 
 import React, { createContext, useContext, useEffect } from 'react'
 import { HostDocumentProvider } from '@pi-workbench/ui'
-import { usePanelStore } from '../store/panelStore'
-import { isWindowClosed } from './auxWindow'
-import { MAIN_HOST } from './types'
-import type { HostId } from './types'
+import { MAIN_HOST, type HostId } from './types'
 
 const HostContext = createContext<HostId>(MAIN_HOST)
 
 export const HostProvider: React.FC<{ host: HostId; children: React.ReactNode }> = ({
   host,
   children,
-}) => {
-  const win = usePanelStore((state) =>
-    host === MAIN_HOST ? null : (state.windows[host]?.handle?.window ?? null)
-  )
-  const hostWindow = isWindowClosed(win) ? window : (win as Window)
-  const hostDocument = hostWindow.document ?? document
-
-  return (
-    <HostContext.Provider value={host}>
-      <HostDocumentProvider value={hostDocument}>{children}</HostDocumentProvider>
-    </HostContext.Provider>
-  )
-}
+}) => (
+  <HostContext.Provider value={host}>
+    <HostDocumentProvider value={document}>{children}</HostDocumentProvider>
+  </HostContext.Provider>
+)
 
 export function useHostId(): HostId {
   return useContext(HostContext)
 }
 
-/** 宿主窗口的 window；辅助窗口已关闭时回落到主窗口 */
+/** 宿主窗口的原生 window */
 export function useHostWindow(): Window {
-  const host = useHostId()
-  const win = usePanelStore((state) =>
-    host === MAIN_HOST ? null : (state.windows[host]?.handle?.window ?? null)
-  )
-  // 关窗到 IPC 抵达之间不足一帧，但 store 里那条句柄还在：
-  // 已关闭的 WindowProxy 上 `document` 可能取不到，必须在读之前就回落。
-  if (isWindowClosed(win)) return window
-  return win as Window
+  return window
 }
 
-/** 宿主窗口的 document；辅助窗口已关闭时回落到主文档 */
+/** 宿主窗口的原生 document */
 export function useHostDocument(): Document {
-  const win = useHostWindow()
-  return win.document ?? document
+  return document
 }
 
-/**
- * 在「当前面板所在窗口」上注册 keydown。
- * 主窗口文档与辅助窗口文档是两棵独立的 DOM，全局快捷键必须分别注册。
- */
+/** 在当前窗口 document 上注册 keydown */
 export function useHostKeydown(
   handler: (event: KeyboardEvent) => void,
   deps: React.DependencyList = [],

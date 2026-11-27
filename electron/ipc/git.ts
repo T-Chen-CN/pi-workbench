@@ -1,6 +1,7 @@
 /** Git 工作树、分支、只读历史与 GitHub 状态的 IPC */
 
-import { BrowserWindow } from 'electron'
+import * as electron from 'electron'
+import type { BrowserWindow } from 'electron'
 import * as path from 'path'
 import { handleIpc } from './register.js'
 import {
@@ -104,15 +105,30 @@ export function registerGitIpc(context: GitIpcContext): void {
   configureWorktreeDeps({
     isAutoInstallEnabled: () => getAppSettingsCache().autoInstallWorktreeDeps === true,
     onStatusChange: ({ workspaceDir, key, status }) => {
-      const window = context.getMainWindow()
-      if (!window || window.isDestroyed()) return
-      window.webContents.send('git:worktree-deps', {
+      const payload = {
         workspaceDir,
         key,
         state: status.state,
         manager: status.manager,
         ...(status.error ? { error: status.error } : {}),
-      })
+      }
+      const sentIds = new Set<number>()
+      let allWindows: BrowserWindow[] = []
+      try {
+        const bw = (electron as { BrowserWindow?: typeof BrowserWindow }).BrowserWindow
+        if (typeof bw?.getAllWindows === 'function') allWindows = bw.getAllWindows()
+      } catch {
+        allWindows = []
+      }
+      for (const win of allWindows) {
+        if (win.isDestroyed() || win.webContents.isDestroyed()) continue
+        sentIds.add(win.webContents.id)
+        win.webContents.send('git:worktree-deps', payload)
+      }
+      const mainWin = context.getMainWindow()
+      if (mainWin && !mainWin.isDestroyed() && !sentIds.has(mainWin.webContents.id)) {
+        mainWin.webContents.send('git:worktree-deps', payload)
+      }
     },
   })
 

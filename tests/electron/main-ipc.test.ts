@@ -445,17 +445,27 @@ describe('IPC sender trust enforcement', () => {
     }
   })
 
-  it('accepts explicitly trusted auxiliary window senders and revokes them on untrust', async () => {
+  it('accepts explicitly trusted native detached panel senders (pw-app://), rejects about:blank, and revokes on untrust', async () => {
     const { trustIpcSender, untrustIpcSender } = await import('../../electron/ipc/register')
-    const auxFrame = { url: 'about:blank' }
+    const auxFrame = { url: 'pw-app://bundle/index.html?windowMode=panel&panel=files&hostId=aux:1' }
     const auxEvent = {
       sender: { id: 42, mainFrame: auxFrame, isDestroyed: () => false },
       senderFrame: auxFrame,
+    }
+    const blankFrame = { url: 'about:blank' }
+    const blankEvent = {
+      sender: { id: 42, mainFrame: blankFrame, isDestroyed: () => false },
+      senderFrame: blankFrame,
     }
     trustIpcSender(42)
     try {
       await expect(callWithEvent(auxEvent, 'app:getSettings')).resolves.toMatchObject({
         success: true,
+      })
+      // Phase E：不再放行 about:blank，即便 sender.id 在信任表内也拒绝
+      await expect(callWithEvent(blankEvent, 'app:getSettings')).resolves.toEqual({
+        success: false,
+        error: 'Untrusted IPC sender',
       })
     } finally {
       untrustIpcSender(42)

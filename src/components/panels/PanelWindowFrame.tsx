@@ -62,7 +62,7 @@ export const PanelWindowFrame: React.FC<{
               label={t('panelDockBack')}
               title={t('panelDockBack')}
               size="sm"
-              onClick={() => dockPanel(workspacePath, panel)}
+              onClick={() => dockPanel(workspacePath, panel, host)}
             />
           </div>
           {!isMac && !usesNativeOverlay && <WindowControls host={host} compact />}

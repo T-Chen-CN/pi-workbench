@@ -99,8 +99,8 @@ const WorkspaceViewContent: React.FC<WorkspaceViewProps> = React.memo(function W
   const [terminalHeight, setTerminalHeight] = useState(
     () => useSettingsStore.getState().panelWidths.terminalHeight
   )
-  // 面板拆到独立窗口后：主窗口这一侧完全让位（不占宽、不占高、不留占位）。
-  // 但 PanelSlot 必须继续挂载 —— portal 的 fiber 挂在这里，卸载会把独立窗口里的面板一起拆掉。
+  // 面板拆到独立原生 BrowserWindow 后：主窗口这一侧完全让位（不占宽、不占高、不留占位与隐藏 DOM），
+  // 面板组件在独立窗口的 DetachedPanelApp 中运行。
   const detached = usePanelStore((state) => state.panelHost[workspacePath])
   const chatDetached = detached?.chat !== undefined
   const filesDetached = detached?.files !== undefined
@@ -108,11 +108,9 @@ const WorkspaceViewContent: React.FC<WorkspaceViewProps> = React.memo(function W
   const terminalDetached = detached?.terminal !== undefined
   /** 侧栏是 files / git 共用的：只要还剩一个停靠，侧栏就还能出现 */
   const sidebarHasDocked = !filesDetached || !gitDetached
-  const sidebarMounted = showSidebar || filesDetached || gitDetached
   const sidebarShown = showSidebar && sidebarHasDocked
-  const chatMounted = showChat || chatDetached
   const chatShown = showChat && !chatDetached
-  const terminalMounted = showTerminal || terminalDetached
+  const terminalShown = showTerminal && !terminalDetached
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('files')
   // 当前标签被拆走时切到还在的那一边，避免标签条指向一个已经不在这里的面板
   useEffect(() => {
@@ -380,13 +378,12 @@ const WorkspaceViewContent: React.FC<WorkspaceViewProps> = React.memo(function W
       }`}
     >
       <WorkspaceScopeProvider value={workspacePath}>
-        {/* 侧栏是 files / git 共用的：还剩一个停靠就保留侧栏，两个都拆出就整块让位。
-            已拆出的那个也必须保持挂载 —— portal 的 fiber 挂在这里 */}
-        {sidebarMounted && (
+        {/* 侧栏是 files / git 共用的：还剩一个停靠就保留侧栏，两个都拆出就整块让位给编辑器 */}
+        {sidebarShown && (
           <aside
             id={filePanelId}
-            className={sidebarShown ? 'flex flex-shrink-0 flex-col overflow-hidden bg-panel' : 'hidden'}
-            style={sidebarShown ? { width: sidebarWidth } : undefined}
+            className="flex flex-shrink-0 flex-col overflow-hidden bg-panel"
+            style={{ width: sidebarWidth }}
           >
             <div className="flex h-[34px] flex-shrink-0 items-center gap-0.5 border-b border-rule-divide px-1.5">
               <button
@@ -409,27 +406,26 @@ const WorkspaceViewContent: React.FC<WorkspaceViewProps> = React.memo(function W
               </button>
             </div>
             <div className="min-h-0 flex-1">
-              {/* 已拆出的面板必须保持挂载（portal 在别的窗口里），只是主窗口这边不显示 */}
-              {(sidebarTab === 'files' || filesDetached) && (
-                <div className={sidebarTab === 'files' ? 'h-full' : 'hidden'} aria-hidden={sidebarTab !== 'files'}>
+              {sidebarTab === 'files' && !filesDetached && (
+                <div className="h-full">
                   <PanelSlot panel="files">
                     <ErrorBoundary scope="pane" resetKey={`${viewRoot}:files`}>
                       <FileExplorer
                         workspacePath={viewRoot}
-                        onCollapse={filesDetached ? undefined : collapseSidebar}
+                        onCollapse={collapseSidebar}
                         collapseButtonRef={sidebarCollapseRef}
                         panelId={filePanelId}
-                        active={active || filesDetached}
+                        active={active}
                       />
                     </ErrorBoundary>
                   </PanelSlot>
                 </div>
               )}
-              {(sidebarTab === 'git' || gitDetached) && (
-                <div className={sidebarTab === 'git' ? 'h-full' : 'hidden'} aria-hidden={sidebarTab !== 'git'}>
+              {sidebarTab === 'git' && !gitDetached && (
+                <div className="h-full">
                   <PanelSlot panel="git">
                     <ErrorBoundary scope="pane" resetKey={`${workspacePath}:git`}>
-                      <GitView workspacePath={workspacePath} active={active || gitDetached} />
+                      <GitView workspacePath={workspacePath} active={active} />
                     </ErrorBoundary>
                   </PanelSlot>
                 </div>
@@ -482,9 +478,8 @@ const WorkspaceViewContent: React.FC<WorkspaceViewProps> = React.memo(function W
               />
             )}
           </div>
-          {/* 终端拆出后，主窗口这一侧不留行高；`visible` 仍是面板自身的可见性，
-              否则独立窗口里的 xterm 会拿到 visible=false 而不初始化 / 不适配尺寸 */}
-          {terminalMounted && !terminalDetached && showTerminal && (
+          {/* 终端拆出后，主窗口这一侧不留行高与分隔线，空间全部还给编辑器 */}
+          {terminalShown && (
             <div
               role="separator"
               aria-orientation="horizontal"
@@ -492,16 +487,10 @@ const WorkspaceViewContent: React.FC<WorkspaceViewProps> = React.memo(function W
               onPointerDown={startTerminalResize}
             />
           )}
-          {terminalMounted && (
+          {terminalShown && (
             <div
-              className={
-                terminalDetached
-                  ? 'hidden'
-                  : showTerminal
-                    ? 'flex flex-shrink-0 flex-col [&>*]:!h-full'
-                    : 'hidden'
-              }
-              style={!terminalDetached && showTerminal ? { height: terminalHeight } : undefined}
+              className="flex flex-shrink-0 flex-col [&>*]:!h-full"
+              style={{ height: terminalHeight }}
             >
               <PanelSlot panel="terminal">
                 <ErrorBoundary scope="pane" resetKey={`${workspacePath}:terminal`}>
@@ -510,8 +499,8 @@ const WorkspaceViewContent: React.FC<WorkspaceViewProps> = React.memo(function W
                       workspacePath={workspacePath}
                       cwd={viewRoot}
                       visible={showTerminal}
-                      onClose={terminalDetached ? undefined : () => setShowTerminal(false)}
-                      active={active || terminalDetached}
+                      onClose={() => setShowTerminal(false)}
+                      active={active}
                     />
                   </Suspense>
                 </ErrorBoundary>
@@ -528,28 +517,28 @@ const WorkspaceViewContent: React.FC<WorkspaceViewProps> = React.memo(function W
             onPointerDown={startResize('chat')}
           />
         )}
-        {/* 拆出后整列（含接缝）让给编辑器，但面板必须保持挂载 */}
-        {chatMounted && (
+        {/* 拆出后整列（含接缝）让给编辑器，不再保留隐藏 DOM */}
+        {chatShown && (
           <aside
             id={chatPanelId}
-            className={chatShown ? 'flex-shrink-0 overflow-hidden bg-panel' : 'hidden'}
-            style={chatShown ? { width: chatWidthShown } : undefined}
+            className="flex-shrink-0 overflow-hidden bg-panel"
+            style={{ width: chatWidthShown }}
           >
             <PanelSlot panel="chat">
               <ErrorBoundary scope="pane" resetKey={chatResetKey}>
                 <ChatPanel
                   workspacePath={workspacePath}
                   viewRoot={viewRoot}
-                  onCollapse={chatDetached ? undefined : collapseChat}
+                  onCollapse={collapseChat}
                   collapseButtonRef={chatCollapseRef}
                   panelId={chatPanelId}
-                  active={active || chatDetached}
+                  active={active}
                 />
               </ErrorBoundary>
             </PanelSlot>
           </aside>
         )}
-        {!chatMounted && (
+        {!showChat && !chatDetached && (
           <button
             ref={chatRailRef}
             type="button"

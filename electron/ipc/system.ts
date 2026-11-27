@@ -9,6 +9,7 @@ import {
   shellOpenExternalSchema,
   terminalCreateSchema,
   terminalIdSchema,
+  terminalListSchema,
   terminalResizeSchema,
   terminalWriteSchema,
 } from './schemas.js'
@@ -102,6 +103,19 @@ export function registerSystemIpc(context: SystemIpcContext): void {
     const parsed = parseIpcInput(terminalIdSchema, { id })
     if (!parsed.ok) return { success: false, error: parsed.error }
     return { success: context.terminalManager.flushNow(parsed.data.id) }
+  })
+
+  handleIpc('terminal:list', async (_event, workspaceDir: string) => {
+    const parsed = parseIpcInput(terminalListSchema, { workspaceDir })
+    if (!parsed.ok) return { success: false, error: parsed.error }
+    if (!isTrustedWorkspacePath(parsed.data.workspaceDir)) {
+      return { success: false, error: 'Workspace is not approved' }
+    }
+    const trusted = canonicalizePath(parsed.data.workspaceDir) ?? parsed.data.workspaceDir
+    return {
+      success: true,
+      terminals: context.terminalManager.listForWorkspace(trusted),
+    }
   })
 
   // ---- 工作台插件 ----

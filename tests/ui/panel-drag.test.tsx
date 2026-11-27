@@ -9,7 +9,16 @@ import { WorkspaceScopeProvider } from '../../src/workspace/WorkspaceScope'
 import { api } from '../../src/api'
 
 vi.mock('../../src/api', () => ({
-  api: { auxDetachAt: vi.fn(), auxDragBegin: vi.fn(async () => ({ success: true })) }
+  api: {
+    auxDetachAt: vi.fn(),
+    auxDragBegin: vi.fn(async () => ({ success: true })),
+    panelDetach: vi.fn(async (req: { hostId: string }) => ({
+      success: true,
+      hostId: req.hostId,
+      frameName: `pi-panel:${req.hostId}`,
+    })),
+    panelDock: vi.fn(async () => ({ success: true })),
+  },
 }))
 
 const WORKSPACE = '/tmp/ws'
@@ -74,8 +83,10 @@ describe('PanelDragHandle', () => {
 
     const handle = await openPanelWindow({
       id: 'aux:1',
-      title: 'chat',
-      rect: { x: 0, y: 0, width: 480, height: 600 }
+      workspaceDir: WORKSPACE,
+      panel: 'chat',
+      title: 'ws',
+      rect: { x: 0, y: 0, width: 480, height: 600 },
     })
     act(() => {
       usePanelStore.setState({

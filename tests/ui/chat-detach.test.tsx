@@ -10,29 +10,21 @@ import { WorkspaceScopeProvider } from '../../src/workspace/WorkspaceScope'
 vi.mock('../../src/api', () => ({
   api: {
     auxDetachAt: vi.fn(),
+    panelDetach: vi.fn(async (req: { hostId: string }) => ({
+      success: true,
+      hostId: req.hostId,
+      frameName: `pi-panel:${req.hostId}`,
+    })),
+    panelDock: vi.fn(async () => ({ success: true })),
     onAgentSessionRootChanged: vi.fn(() => () => {}),
     onGitChanged: vi.fn(() => () => {}),
     worktreeStatus: vi.fn(async () => ({ success: false })),
   },
 }))
 
+const { api } = await import('../../src/api')
 const WORKSPACE = '/tmp/ws'
 const zh = translations.zh
-
-function installPopup() {
-  const popup = {
-    document: document.implementation.createHTMLDocument('blank'),
-    closed: false,
-    close() {
-      this.closed = true
-    },
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    focus: vi.fn(),
-  }
-  vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
-  return popup
-}
 
 function renderHeader() {
   const t = (key: keyof typeof zh) => zh[key]
@@ -54,7 +46,8 @@ function renderHeader() {
 beforeEach(() => {
   usePanelStore.setState({ panelHost: {}, windows: {} })
   useI18nStore.getState().setLanguage?.('zh')
-  installPopup()
+  vi.mocked(api.panelDetach).mockClear()
+  vi.mocked(api.panelDock).mockClear()
 })
 
 afterEach(() => {
@@ -64,7 +57,7 @@ afterEach(() => {
 })
 
 describe('chat panel detach', () => {
-  it('offers detach from the header context menu', async () => {
+  it('offers detach from the header context menu and invokes panel:detach', async () => {
     renderHeader()
 
     fireEvent.contextMenu(screen.getByText(zh.agentChatTitle))
@@ -76,6 +69,9 @@ describe('chat panel detach', () => {
 
     await waitFor(() =>
       expect(usePanelStore.getState().panelHost[WORKSPACE]?.chat).toMatch(/^aux:/)
+    )
+    expect(api.panelDetach).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: WORKSPACE, panel: 'chat' })
     )
     expect(Object.values(usePanelStore.getState().windows)[0]?.panel).toBe('chat')
   })
@@ -91,6 +87,7 @@ describe('chat panel detach', () => {
     expect(await screen.findByRole('menuitem', { name: zh.panelDockBack })).toBeTruthy()
 
     act(() => usePanelStore.getState().dockPanel(WORKSPACE, 'chat'))
+    expect(api.panelDock).toHaveBeenCalled()
     expect(usePanelStore.getState().windows).toEqual({})
   })
 

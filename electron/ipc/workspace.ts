@@ -4,7 +4,7 @@ import { existsSync } from 'fs'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import chokidar, { type FSWatcher } from 'chokidar'
-import { dialog, type BrowserWindow } from 'electron'
+import { BrowserWindow, dialog } from 'electron'
 import { handleIpc } from './register.js'
 import { WatchBatcher } from '../watch-batcher.js'
 import { isIgnoredWatchPath } from '../watch-filter.js'
@@ -159,9 +159,20 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
 
       const sender = event.sender
       const batcher = new WatchBatcher((changes) => {
-        if (sender.isDestroyed()) return
-        for (const change of changes) {
-          sender.send('fs:changed', change)
+        const sentIds = new Set<number>()
+        const allWindows =
+          typeof BrowserWindow?.getAllWindows === 'function' ? BrowserWindow.getAllWindows() : []
+        for (const win of allWindows) {
+          if (win.isDestroyed() || win.webContents.isDestroyed()) continue
+          sentIds.add(win.webContents.id)
+          for (const change of changes) {
+            win.webContents.send('fs:changed', change)
+          }
+        }
+        if (!sender.isDestroyed() && !sentIds.has(sender.id)) {
+          for (const change of changes) {
+            sender.send('fs:changed', change)
+          }
         }
       })
 

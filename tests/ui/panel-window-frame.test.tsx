@@ -20,6 +20,7 @@ const bridge = {
   isWindowMaximized: vi.fn(async () => ({ success: true, maximized: false })),
   auxWindowCommand: vi.fn(async () => ({ success: true, maximized: true })),
   auxWindowState: vi.fn(async () => ({ success: true, maximized: false })),
+  panelDock: vi.fn(async () => ({ success: true })),
   listeners: [] as MaxListener[],
   onWindowMaximizedChange: vi.fn((callback: MaxListener) => {
     bridge.listeners.push(callback)
@@ -34,6 +35,7 @@ beforeEach(() => {
   bridge.onWindowMaximizedChange.mockClear()
   bridge.auxWindowCommand.mockClear()
   bridge.auxWindowState.mockClear()
+  bridge.panelDock.mockClear()
   bridge.toggleMaximizeWindow.mockClear()
   bridge.closeWindow.mockClear()
   ;(window as unknown as { electronAPI: unknown }).electronAPI = bridge

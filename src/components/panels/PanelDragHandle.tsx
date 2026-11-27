@@ -3,6 +3,7 @@ import { GripVertical } from 'lucide-react'
 import { useI18nStore } from '../../store/i18nStore'
 import { usePanelStore } from '../../store/panelStore'
 import { useWorkspaceScope } from '../../workspace/WorkspaceScope'
+import { useHostId } from '../../panelHost/HostContext'
 import { beginPanelDrag, finishPanelDrag } from '../../panelHost/panelDrag'
 import { PANEL_TITLE_KEY } from '../../panelHost/panelLabels'
 import { MAIN_HOST, type PanelId } from '../../panelHost/types'
@@ -16,9 +17,11 @@ import { MAIN_HOST, type PanelId } from '../../panelHost/types'
 export const PanelDragHandle: React.FC<{ panel: PanelId; className?: string }> = ({ panel, className = '' }) => {
   const workspacePath = useWorkspaceScope()
   const { t } = useI18nStore()
-  const host = usePanelStore((state) =>
+  const contextHost = useHostId()
+  const storeHost = usePanelStore((state) =>
     workspacePath ? (state.panelHost[workspacePath]?.[panel] ?? MAIN_HOST) : MAIN_HOST
   )
+  const host = contextHost !== MAIN_HOST ? contextHost : storeHost
 
   if (!workspacePath || host !== MAIN_HOST) return null
 

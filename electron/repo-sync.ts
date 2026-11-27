@@ -8,6 +8,7 @@
 
 import { existsSync } from 'fs'
 import * as path from 'path'
+import * as electron from 'electron'
 import type { BrowserWindow } from 'electron'
 import {
   fetchRemote,
@@ -282,8 +283,30 @@ export class RepoSyncManager {
     reason: GitChangedPayload['reason']
   ): void {
     if (entry.disposed) return
-    const win = this.context?.getMainWindow()
-    if (!win || win.isDestroyed()) return
+    const targets: BrowserWindow[] = []
+    const seenIds = new Set<number>()
+    let allWindows: BrowserWindow[] = []
+    try {
+      const bw = (electron as { BrowserWindow?: typeof BrowserWindow }).BrowserWindow
+      if (typeof bw?.getAllWindows === 'function') allWindows = bw.getAllWindows()
+    } catch {
+      allWindows = []
+    }
+    for (const win of allWindows) {
+      if (win.isDestroyed() || win.webContents?.isDestroyed?.()) continue
+      seenIds.add(win.webContents.id)
+      targets.push(win)
+    }
+    const mainWin = this.context?.getMainWindow()
+    if (
+      mainWin &&
+      !mainWin.isDestroyed() &&
+      !mainWin.webContents?.isDestroyed?.() &&
+      !seenIds.has(mainWin.webContents.id)
+    ) {
+      targets.push(mainWin)
+    }
+    if (targets.length === 0) return
     for (const workspaceDir of entry.workspaces.values()) {
       const payload: GitChangedPayload = {
         workspaceDir,
@@ -291,7 +314,9 @@ export class RepoSyncManager {
         scopes,
         reason,
       }
-      win.webContents.send('git:changed', payload)
+      for (const win of targets) {
+        win.webContents.send('git:changed', payload)
+      }
     }
   }
 

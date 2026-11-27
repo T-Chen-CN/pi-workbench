@@ -63,9 +63,20 @@ export interface TerminalCreateResult {
   error?: string
 }
 
+export interface TerminalSnapshot {
+  id: string
+  workspaceDir: string
+  cwd: string
+  shell: string
+  logPath: string | null
+  replay: string
+}
+
 interface TerminalEntry {
   id: string
   workspaceDir: string
+  cwd: string
+  shell: string
   pty: PtyProcess
   /** 尚未写入日志文件的内容 */
   pending: string
@@ -74,6 +85,9 @@ interface TerminalEntry {
   logBytes: number
   /** 后台异步写日志的串行链，避免重叠 append / rotate */
   logWriteChain: Promise<void>
+  /** 内存尾部输出回放缓冲（供独立面板窗口或回位时无缝接管运行中 PTY） */
+  replayChunks: string[]
+  replayBytes: number
   /** 最近一次输出时间，用于判断终端是否仍在执行任务 */
   lastActivityAt: number
   /** 从子进程登记表注销；进程退出 / 终端关闭时调用 */
@@ -85,6 +99,8 @@ const MAX_LOG_BYTES = DEFAULT_TERMINAL_LOG_MAX_BYTES
 const MAX_LOG_BACKUPS = DEFAULT_TERMINAL_LOG_KEEP
 /** 待落盘内存缓冲上限，防止高频输出在写盘慢时耗尽内存 */
 const MAX_PENDING_LOG_BYTES = 1024 * 1024
+/** 跨窗口接管 PTY 时的内存回放上限（与渲染层 terminalStore 保持一致） */
+const MAX_REPLAY_BYTES = 200_000
 
 function workspacePathKey(dir: string): string {
   const resolved = path.resolve(dir)
@@ -142,14 +158,19 @@ export class TerminalManager {
         env: spawnEnv,
       })
 
+      const shellName = path.basename(shell)
       const entry: TerminalEntry = {
         id,
         workspaceDir,
+        cwd: spawnCwd,
+        shell: shellName,
         pty,
         pending: '',
         logPath,
         logBytes: 0,
         logWriteChain: Promise.resolve(),
+        replayChunks: [],
+        replayBytes: 0,
         lastActivityAt: 0,
         unregisterChild: null,
       }
@@ -195,6 +216,12 @@ export class TerminalManager {
         entry.pending += data
         if (entry.pending.length > MAX_PENDING_LOG_BYTES) {
           entry.pending = entry.pending.slice(-MAX_PENDING_LOG_BYTES)
+        }
+        entry.replayChunks.push(data)
+        entry.replayBytes += data.length
+        while (entry.replayBytes > MAX_REPLAY_BYTES && entry.replayChunks.length > 1) {
+          entry.replayBytes -= entry.replayChunks[0].length
+          entry.replayChunks.shift()
         }
         entry.lastActivityAt = Date.now()
         this.scheduleFlush(entry)
@@ -318,6 +345,24 @@ export class TerminalManager {
       if (entry.lastActivityAt >= threshold) return true
     }
     return false
+  }
+
+  /** 返回某工作区当前运行中的 PTY 快照与尾部回放，供独立面板窗口无缝接管 shell */
+  listForWorkspace(workspaceDir: string): TerminalSnapshot[] {
+    const normalized = workspacePathKey(workspaceDir)
+    const snapshots: TerminalSnapshot[] = []
+    for (const entry of this.terminals.values()) {
+      if (workspacePathKey(entry.workspaceDir) !== normalized) continue
+      snapshots.push({
+        id: entry.id,
+        workspaceDir: entry.workspaceDir,
+        cwd: entry.cwd,
+        shell: entry.shell,
+        logPath: entry.logPath,
+        replay: entry.replayChunks.join(''),
+      })
+    }
+    return snapshots
   }
 
   /** 关闭某个工作区的全部终端（关闭工作区标签时调用） */

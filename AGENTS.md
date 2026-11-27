@@ -29,7 +29,7 @@ npm run build         # @pi-workbench/i18n + 渲染层 + pi-bridge + 主进程�
 | 位置 | 规则 |
 | --- | --- |
 | `electron/` | 主进程。**IPC 一律写在 `electron/ipc/<域>.ts`，用 `handleIpc()` 注册**；单一 IPC 契约在 `electron/ipc/contract.ts`，高危入参经 `electron/ipc/schemas.ts`（Zod）校验；`scripts/build-preload.mjs` 用 esbuild 打包 `preload.cts` → `dist-electron/preload.cjs`；重 CPU 解析（`documents/`、`repo-map.ts`）卸载到 `worker_threads` |
-| `electron/ipc/register.ts` | `handleIpc` + `isTrustedIpcSender`：只接受主窗口主框架，ready 之后 fail-closed（辅助窗口为纯 DOM Portal，不继承 `preload`） |
+| `electron/ipc/register.ts` | `handleIpc` + `isTrustedIpcSender`：只接受主窗口与已登记的独立原生面板窗口主框架（`pw-app://bundle/` 或开发服同源，拒绝 `about:blank`），ready 之后 fail-closed |
 | `src/` | 渲染进程分层：`components/{chat,cloud,editor,files,git,panels,repo-map,settings,ui,workspace}/` · `store/`（一域一个 Zustand store）· `hooks/` · `utils/` · `workspace/` · `panelHost/` · `theme/` · `pdf/` · `api/`（IPC 封装 + 仅 DEV 回退 mock） |
 | `packages/ui/` | 桌面端与云端 Web 共享 Paper & Ink UI 基础包（`@pi-workbench/ui`：`primitives.tsx`、`patterns.tsx`、`BrandSeal`、`StreamdownView`、`StreamingTranscript`、`chatScroll`、`shikiHighlighter`），零桌面 store / Electron 依赖 |
 | `packages/i18n/` | 类型安全多语言资源包（`@pi-workbench/i18n`：i18next 中英文词条与错误本地化），供渲染进程、Electron 主进程与云端 Web 共用；改完需 `npm run build:i18n` |
@@ -66,14 +66,14 @@ npm run build         # @pi-workbench/i18n + 渲染层 + pi-bridge + 主进程�
 
 | 铁律 | 细节 |
 | --- | --- |
-| Pi Agent 仍在主进程运行（禁止本地 HTTP 服务承载 Agent）；重 CPU 非 Agent 解析（文档解析、仓库地图扫描）走 `worker_threads` | [agent-runtime](docs/agent/agent-runtime.md) |
+| Pi Agent 与工作区插件在独立 Electron `utilityProcess` 隔离运行（直连 `MessagePort` 推流，崩溃自愈，禁止本地 HTTP 服务承载 Agent）；重 CPU 非 Agent 解析（文档解析、仓库地图扫描）走 `worker_threads` | [agent-runtime](docs/agent/agent-runtime.md) |
 | 权限是安全边界：`readonly` 用 `deny` 而不是 `ask`；审批超时与通道缺失一律拒绝（fail-closed）；会话是权限的唯一权威；默认禁用仓库级 `.pi/extensions`（`projectTrusted: false`） | [agent-runtime](docs/agent/agent-runtime.md) |
 | 历史、实时轮末对账与导出的唯一真相源是会话记录（JSONL + `parentId` 分支），经 `pi-bridge/src/session-view.ts` `deriveMessages` 统一投影 | [ADR-003](docs/decisions/ADR-003-session-record-single-source.md) |
 | 严格两目录模型（程序目录 + 唯一数据目录 `<appData>/pi-workbench`，含 `config/cache/data/logs`）；免安装便携 `.zip` 靠根级 `portable` 标记切单目录；`setPath('userData')` 必须早于单实例锁；Pi SDK 目录靠环境变量固定 | [paths-and-storage](docs/agent/paths-and-storage.md) |
 | 退出只在 `will-quit` 收尾：每步超时 + 7.5 s 看门狗 `app.exit(0)`（未保存弹窗期间暂停），不再二次 `app.quit()`；托盘最后销毁；子进程登记 `child-registry` 统一先杀树再杀父 | [paths-and-storage](docs/agent/paths-and-storage.md) |
 | 多工作区是常驻视图：切换只 `visibility: hidden` + `inert`，不卸载不 reset；关闭标签是唯一回收入口 | [paths-and-storage](docs/agent/paths-and-storage.md) |
 | 安装版更新走标准替换（数据目录在安装目录外绝不被触碰）；Windows 同时发布 Setup `.exe`（自动差分更新）与 Portable `.zip`（引导手动下载） | [BUILD_AND_PACKAGE §4.1](docs/guides/BUILD_AND_PACKAGE.md) |
-| 面板可拆成独立窗口（`window.open('about:blank')` + 纯 DOM React Portal，无 `preload` 继承）；Windows/Linux 用原生 `titleBarStyle: 'hidden' + titleBarOverlay`；主窗口 `X` 默认收托盘 | [panels-and-windows](docs/agent/panels-and-windows.md) |
+| 面板拆出为独立原生 `BrowserWindow`（`panel:detach` / `panel:dock` + `sync:broadcast` 跨窗同步，不设 `parent` 保证主窗口收托盘时拆窗仍可见，重启默认回位）；Windows/Linux 用原生 `titleBarStyle: 'hidden' + titleBarOverlay`；主窗口 `X` 默认收托盘 | [panels-and-windows](docs/agent/panels-and-windows.md) |
 | Git 工作树会话：切换在**轮次边界**生效，绑定关系写 `.pi-workbench/session-git.json` | [git-and-worktrees](docs/agent/git-and-worktrees.md) |
 
 ## 5. 交互约定

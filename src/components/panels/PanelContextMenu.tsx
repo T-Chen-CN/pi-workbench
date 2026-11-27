@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { ExternalLink, PanelRightClose, type LucideIcon } from 'lucide-react'
 import { useI18nStore } from '../../store/i18nStore'
 import { rectFromPointer, usePanelStore } from '../../store/panelStore'
-import { useHostDocument, useHostKeydown } from '../../panelHost/HostContext'
+import { useHostDocument, useHostId, useHostKeydown } from '../../panelHost/HostContext'
 import { MAIN_HOST, type PanelId } from '../../panelHost/types'
 import { useWorkspaceScope } from '../../workspace/WorkspaceScope'
 
@@ -101,9 +101,11 @@ export function usePanelContextMenu(panel: PanelId): {
   const workspacePath = useWorkspaceScope()
   const { t } = useI18nStore()
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null)
-  const host = usePanelStore((state) =>
+  const contextHost = useHostId()
+  const storeHost = usePanelStore((state) =>
     workspacePath ? state.panelHost[workspacePath]?.[panel] ?? MAIN_HOST : MAIN_HOST
   )
+  const host = contextHost !== MAIN_HOST ? contextHost : storeHost
   const detachPanel = usePanelStore((state) => state.detachPanel)
   const dockPanel = usePanelStore((state) => state.dockPanel)
 
@@ -137,7 +139,7 @@ export function usePanelContextMenu(panel: PanelId): {
                 {
                   label: t('panelDockBack'),
                   icon: PanelRightClose,
-                  onSelect: () => dockPanel(workspacePath, panel),
+                  onSelect: () => dockPanel(workspacePath, panel, host),
                 },
               ]
         }

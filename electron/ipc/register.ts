@@ -16,8 +16,9 @@ export function configureIpcWindow(getter: () => BrowserWindow | null): void {
 }
 
 /**
- * 拆出的面板窗口同样要能用 IPC（链接、剪贴板、会话）。
- * 它们由主窗口 window.open('about:blank') 创建，与主窗口同源；窗口销毁时移除。
+ * 拆出的独立原生面板窗口同样要能用 IPC（文件树、Git、会话、终端、跨窗同步）。
+ * 它们由主进程 `createDetachedPanelWindow` 创建并加载 `pw-app://bundle/index.html`（或开发服务器），
+ * 窗口创建时登记 `webContents.id`，销毁时移除。
  *
  * 接口收的是 webContents **id**，不是 webContents 对象：窗口 destroyed 之后读
  * `win.webContents` 会抛 `Object has been destroyed`，而 `closed` 回调正是那个时刻，
@@ -33,9 +34,8 @@ export function untrustIpcSender(webContentsId: number): void {
   trustedAuxSenders.delete(webContentsId)
 }
 
-function isTrustedFrameUrl(frameUrl: string, allowAuxBlank: boolean): boolean {
+function isTrustedFrameUrl(frameUrl: string): boolean {
   if (!frameUrl) return false
-  if (allowAuxBlank && frameUrl === 'about:blank') return true
   if (isAppUrl(frameUrl)) return true
   const devServerUrl = process.env.VITE_DEV_SERVER_URL
   if (devServerUrl) {
@@ -48,7 +48,7 @@ function isTrustedFrameUrl(frameUrl: string, allowAuxBlank: boolean): boolean {
   return false
 }
 
-/** 只接受主窗口主框架（或已登记的辅助窗口）发来的 IPC；应用 ready 之后 fail-closed */
+/** 只接受主窗口主框架（或已登记的独立面板窗口）发来的 IPC；应用 ready 之后 fail-closed */
 export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
   // 测试替身没有 isReady，直接放行
   if (typeof app.isReady !== 'function') return true
@@ -62,7 +62,7 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
   if (!fromMain && !fromAux) return false
   // fail-closed：缺失 senderFrame 或来自子框架一律拒绝
   if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) return false
-  if (!isTrustedFrameUrl(event.senderFrame.url, fromAux)) return false
+  if (!isTrustedFrameUrl(event.senderFrame.url)) return false
   return true
 }
 

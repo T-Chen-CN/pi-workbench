@@ -1,23 +1,38 @@
 /**
- * 面板辅助窗口（把面板拆成独立窗口）。
+ * 面板独立原生窗口宿主（Phase E · 原生多 BrowserWindow 拆窗）。
  *
- * 走 `window.open('about:blank')`：子窗口与主窗口同 JS 上下文（Chromium 为
- * `about:blank` 继承 opener 的 origin），React 通过 portal 把面板渲染进子文档。
- * 因此这里只需要「允许开窗 + 加固子窗口 + 提供拖拽落点」三件事，
- * 不需要额外的数据通道或窗口注册表。
- *
- * 与 VS Code 的 auxiliary window、Obsidian 的 popout 是同一路线。
- *
- * 外壳与主窗口一致：Windows / Linux 无边框 + 自绘窗口按钮，macOS 隐藏标题栏
- * 保留红绿灯。自绘按钮意味着「关闭」不再由系统处理，因此这里维护
- * frameName → BrowserWindow 的注册表，让渲染层按窗口寻址，而不是一律操作主窗口。
+ * 每个拆出面板由主进程通过 `panel:detach` IPC 派生独立原生 `BrowserWindow`：
+ * - 加载应用自身 `pw-app://bundle/index.html?windowMode=panel&...`（开发模式走 `VITE_DEV_SERVER_URL`），
+ *   彻底移除旧版 `window.open('about:blank')` 与跨文档 React Portal；
+ * - 注入沙盒 `preload.cjs` 并在创建时登记 `trustIpcSender(wcId)`，关闭时按预存数值 `wcId` 注销；
+ * - **禁止设置 `parent: mainWindow`**（Q5 生命周期铁律）：主窗口点 `X` 收进托盘（`hide()`）时，
+ *   拆出窗口留在屏幕上继续可见；关闭拆出窗口即回位主窗口；应用重启不持久化拆窗布局；
+ * - 通过 `sync:broadcast` → `sync:state` 在主窗口与各拆出窗口之间同步主题、语言、会话、文件打开与 UI 状态。
  */
 
-import { screen, shell, type BrowserWindow, type BrowserWindowConstructorOptions, type Rectangle } from 'electron'
-import { handleIpc } from './ipc/register.js'
+import * as path from 'path'
+import {
+  BrowserWindow,
+  screen,
+  shell,
+  type BrowserWindowConstructorOptions,
+  type Rectangle,
+} from 'electron'
+import { appUrl, isAppUrl } from './app-protocol.js'
 import { isExternalUrl } from './external-links.js'
+import {
+  parseContractArgs,
+  type DetachablePanelId,
+  type PanelDetachRect,
+  type PanelDetachRequest,
+  type PanelDetachResult,
+  type PanelDockResult,
+  type WindowSyncMessage,
+} from './ipc/contract.js'
+import { handleIpc, trustIpcSender, untrustIpcSender } from './ipc/register.js'
+import { isTrustedWorkspacePath } from './workspace-trust.js'
 
-/** window.open 的 frameName 前缀；只有带前缀的 about:blank 会被放行 */
+/** 辅助窗口注册表键前缀，与 src/panelHost/types.ts 保持逐字一致 */
 export const AUX_FRAME_PREFIX = 'pi-panel:'
 
 export const AUX_MIN_WIDTH = 320
@@ -26,7 +41,11 @@ export const AUX_MIN_HEIGHT = 220
 const DEFAULT_AUX_WIDTH = 520
 const DEFAULT_AUX_HEIGHT = 640
 const DEFAULT_AUX_BACKGROUND = '#f4f1ea'
+const LIGHT_PANEL_BACKGROUND = '#FBF9F4'
+const DARK_PANEL_BACKGROUND = '#1A1815'
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
+const AUX_HOST_ID_RE = /^aux:\d+$/
+const VALID_PANELS = new Set<DetachablePanelId>(['files', 'git', 'chat', 'terminal'])
 
 export interface AuxWindowOptions {
   width: number
@@ -75,26 +94,41 @@ function parseFeatures(raw: string): Map<string, string> {
   return map
 }
 
+/** 将目标矩形夹入指定显示器工作区，保证窗口不小于最小尺寸且不落到屏幕之外 */
+function clampRectToWorkArea(
+  rect: Partial<PanelDetachRect> | undefined,
+  workArea: Rectangle
+): Rectangle {
+  const maxWidth = Math.max(AUX_MIN_WIDTH, workArea.width)
+  const maxHeight = Math.max(AUX_MIN_HEIGHT, workArea.height)
+  const width = clampInt(rect?.width ?? DEFAULT_AUX_WIDTH, AUX_MIN_WIDTH, maxWidth)
+  const height = clampInt(rect?.height ?? DEFAULT_AUX_HEIGHT, AUX_MIN_HEIGHT, maxHeight)
+  const fallbackX = workArea.x + Math.round((workArea.width - width) / 2)
+  const fallbackY = workArea.y + Math.round((workArea.height - height) / 2)
+  const x = clampInt(rect?.x ?? fallbackX, workArea.x, workArea.x + workArea.width - width)
+  const y = clampInt(rect?.y ?? fallbackY, workArea.y, workArea.y + workArea.height - height)
+  return { x, y, width, height }
+}
+
 /**
- * window.open features → 受控的 BrowserWindow 选项。
- * 只读取位置、尺寸与首帧背景色；其余一律忽略，渲染层无法借 features 提权。
+ * 几何字符串 → 受控窗口边界（保留给工具校验与单测复用）。
+ * 只读取位置、尺寸与首帧背景色；其余字段一律忽略。
  */
 export function parseAuxWindowFeatures(raw: string, workArea: Rectangle): AuxWindowOptions {
   const features = parseFeatures(raw)
-  const maxWidth = Math.max(AUX_MIN_WIDTH, workArea.width)
-  const maxHeight = Math.max(AUX_MIN_HEIGHT, workArea.height)
-
-  const width = clampInt(readNumber(features, 'width') ?? DEFAULT_AUX_WIDTH, AUX_MIN_WIDTH, maxWidth)
-  const height = clampInt(readNumber(features, 'height') ?? DEFAULT_AUX_HEIGHT, AUX_MIN_HEIGHT, maxHeight)
-  const fallbackX = workArea.x + Math.round((workArea.width - width) / 2)
-  const fallbackY = workArea.y + Math.round((workArea.height - height) / 2)
-  const x = clampInt(readNumber(features, 'left') ?? fallbackX, workArea.x, workArea.x + workArea.width - width)
-  const y = clampInt(readNumber(features, 'top') ?? fallbackY, workArea.y, workArea.y + workArea.height - height)
-
+  const bounds = clampRectToWorkArea(
+    {
+      x: readNumber(features, 'left') ?? undefined,
+      y: readNumber(features, 'top') ?? undefined,
+      width: readNumber(features, 'width') ?? undefined,
+      height: readNumber(features, 'height') ?? undefined,
+    },
+    workArea
+  )
   const rawBackground = features.get('bg') ?? ''
   const backgroundColor = HEX_COLOR.test(rawBackground) ? rawBackground : DEFAULT_AUX_BACKGROUND
 
-  return { width, height, x, y, backgroundColor }
+  return { ...bounds, backgroundColor }
 }
 
 export function isPointInBounds(point: ScreenPoint, bounds: Rectangle): boolean {
@@ -158,7 +192,7 @@ export function resolveDetachTarget(host: BrowserWindow): AuxDetachResult {
     success: true,
     inside,
     rect: computeDetachedRect(point, bounds, workArea),
-    distance
+    distance,
   }
 }
 
@@ -170,7 +204,7 @@ export interface AuxWindowCommandResult {
   error?: string
 }
 
-/** frameName → 子窗口。渲染层只有 frameName，窗口引用必须留在主进程 */
+/** frameName → 独立原生面板窗口。渲染层只有 hostId / frameName，窗口引用留在主进程 */
 const auxWindows = new Map<string, BrowserWindow>()
 
 export function getAuxWindow(frameName: string): BrowserWindow | null {
@@ -209,30 +243,15 @@ function isAuxFrameName(value: unknown): value is string {
   return typeof value === 'string' && value.startsWith(AUX_FRAME_PREFIX)
 }
 
-export function registerAuxWindowIpc(context: { getMainWindow: () => BrowserWindow | null }): void {
-  handleIpc('aux:drag-begin', () => beginDetachDrag())
-  handleIpc('aux:detach-at', () => resolveDetachTarget(context.getMainWindow() as BrowserWindow))
-
-  handleIpc('aux:window-command', (_event, frameName: unknown, command: unknown) => {
-    if (!isAuxFrameName(frameName)) return { success: false, error: 'Invalid host' }
-    if (command !== 'minimize' && command !== 'toggleMaximize' && command !== 'close') {
-      return { success: false, error: 'Invalid command' }
-    }
-    return runAuxWindowCommand(frameName, command)
-  })
-
-  handleIpc('aux:window-state', (_event, frameName: unknown) => {
-    if (!isAuxFrameName(frameName)) return { success: false, error: 'Invalid host' }
-    return readAuxWindowState(frameName)
-  })
+function isValidHostId(value: unknown): value is string {
+  return typeof value === 'string' && AUX_HOST_ID_RE.test(value)
 }
 
-export interface AuxWindowSupportOptions {
-  /** 子窗口被用户关闭时回调，参数是 window.open 的 frameName */
-  onClosed: (frameName: string) => void
+function isValidPanelId(value: unknown): value is DetachablePanelId {
+  return typeof value === 'string' && VALID_PANELS.has(value as DetachablePanelId)
 }
 
-/** 白名单校验 window.open 来源：仅放行应用外壳 `pw-app://bundle/` 或当前 Vite 开发服务器同源，其余一律拒绝 */
+/** 白名单校验 window.open 来源：仅放行应用外壳 `pw-app://bundle/` 或当前 Vite 开发服务器同源 */
 function isAllowedWindowOpenReferrer(referrerUrl: string): boolean {
   if (!referrerUrl) return false
   let parsed: URL
@@ -253,99 +272,325 @@ function isAllowedWindowOpenReferrer(referrerUrl: string): boolean {
   return false
 }
 
+/** 白名单校验窗口导航目标：仅允许外壳协议或开发服务器同源 */
+function isAllowedAppNavigation(targetUrl: string): boolean {
+  if (isAppUrl(targetUrl)) return true
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL
+  if (devServerUrl) {
+    try {
+      return new URL(targetUrl).origin === new URL(devServerUrl).origin
+    } catch {
+      return false
+    }
+  }
+  return false
+}
+
+function buildPanelWindowUrl(query: Record<string, string>): string {
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL
+  if (devServerUrl) {
+    const devUrl = new URL(devServerUrl)
+    for (const [key, value] of Object.entries(query)) devUrl.searchParams.set(key, value)
+    return devUrl.toString()
+  }
+  return appUrl('/index.html', query)
+}
+
+function isWebContentsAlive(win: BrowserWindow | null | undefined): win is BrowserWindow {
+  if (!win || win.isDestroyed()) return false
+  const wc = win.webContents
+  if (!wc) return false
+  return typeof wc.isDestroyed === 'function' ? !wc.isDestroyed() : true
+}
+
+/** 向除发送者外的所有非销毁窗口广播跨窗同步消息（避免回声循环） */
+export function relaySyncState(message: WindowSyncMessage, excludeWebContentsId?: number): void {
+  if (typeof BrowserWindow?.getAllWindows !== 'function') return
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!isWebContentsAlive(win)) continue
+    if (excludeWebContentsId !== undefined && win.webContents.id === excludeWebContentsId) continue
+    win.webContents.send('sync:state', message)
+  }
+}
+
+export interface AuxWindowIpcContext {
+  getMainWindow: () => BrowserWindow | null
+  preloadPath?: string
+  iconPath?: string
+  onClosed?: (frameName: string) => void
+  resolveTheme?: () => 'light' | 'dark'
+  resolveLanguage?: () => 'zh' | 'en'
+  onThemeSync?: (mode: 'light' | 'dark' | 'system') => void
+}
+
 /**
- * 在主窗口上启用辅助窗口：
- * - 只放行 `about:blank` + `pi-panel:` 前缀的 window.open；
- * - 覆盖窗口选项（与主窗口一致的外壳、最小尺寸、主题背景色，避免首帧白闪）；
- * - 子窗口反向加固：隐藏菜单栏（保留应用默认菜单的快捷键）、禁导航、禁二级弹窗、禁 webview；
- * - 登记窗口引用，并转发最大化状态给渲染层。
+ * 为拆出面板创建独立的原生 `BrowserWindow`。
+ *
+ * 铁律（Q5）：
+ * - 不设置 `parent`，确保主窗口收进托盘（`hide()`）时拆出窗口留在屏幕上；
+ * - 注入沙盒 preload 并在创建时登记 `trustIpcSender(wcId)`，关闭时按预存 `wcId` 注销；
+ * - 窗口关闭自动通知主窗口回位并广播 `panel-docked`。
  */
-export function installAuxWindowSupport(host: BrowserWindow, options: AuxWindowSupportOptions): void {
-  host.webContents.setWindowOpenHandler((details) => {
-    const { url, frameName, features } = details
+export function createDetachedPanelWindow(
+  options: PanelDetachRequest,
+  context: AuxWindowIpcContext
+): PanelDetachResult {
+  if (!options || typeof options !== 'object') {
+    return { success: false, error: 'Invalid detach request' }
+  }
+  const { workspaceDir, panel, hostId, title, rect } = options
+  if (typeof workspaceDir !== 'string' || !workspaceDir || !isTrustedWorkspacePath(workspaceDir)) {
+    return { success: false, error: 'Workspace is not approved' }
+  }
+  if (!isValidPanelId(panel)) {
+    return { success: false, error: 'Invalid panel' }
+  }
+  if (!isValidHostId(hostId)) {
+    return { success: false, error: 'Invalid host' }
+  }
+
+  const frameName = `${AUX_FRAME_PREFIX}${hostId}`
+  const existing = getAuxWindow(frameName)
+  if (existing) {
+    if (existing.isMinimized?.()) existing.restore?.()
+    existing.show?.()
+    existing.focus?.()
+    return { success: true, hostId, frameName }
+  }
+
+  const anchorPoint: ScreenPoint =
+    rect && Number.isFinite(rect.x) && Number.isFinite(rect.y)
+      ? { x: Math.round(rect.x), y: Math.round(rect.y) }
+      : screen.getCursorScreenPoint()
+  const workArea = screen.getDisplayNearestPoint(anchorPoint).workArea
+  const bounds = clampRectToWorkArea(rect, workArea)
+
+  const theme: 'light' | 'dark' =
+    options.theme === 'dark' || options.theme === 'light'
+      ? options.theme
+      : (context.resolveTheme?.() ?? 'light')
+  const language: 'zh' | 'en' =
+    options.language === 'en' || options.language === 'zh'
+      ? options.language
+      : (context.resolveLanguage?.() ?? 'zh')
+  const isDark = theme === 'dark'
+  const backgroundColor = isDark ? DARK_PANEL_BACKGROUND : LIGHT_PANEL_BACKGROUND
+  const windowTitle =
+    typeof title === 'string' && title.trim()
+      ? title.trim()
+      : path.basename(workspaceDir) || workspaceDir
+
+  const winOptions: BrowserWindowConstructorOptions = {
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: AUX_MIN_WIDTH,
+    minHeight: AUX_MIN_HEIGHT,
+    title: windowTitle,
+    backgroundColor,
+    resizable: true,
+    autoHideMenuBar: true,
+    show: true,
+    ...(context.iconPath ? { icon: context.iconPath } : {}),
+    ...(process.platform === 'darwin'
+      ? {
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 12, y: 10 },
+        }
+      : {
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: isDark
+            ? { color: DARK_PANEL_BACKGROUND, symbolColor: '#A8A093', height: 34 }
+            : { color: LIGHT_PANEL_BACKGROUND, symbolColor: '#615C52', height: 34 },
+        }),
+    webPreferences: {
+      ...(context.preloadPath ? { preload: context.preloadPath } : {}),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  }
+
+  const child = new BrowserWindow(winOptions)
+  const wcId = child.webContents.id
+  trustIpcSender(wcId)
+  auxWindows.set(frameName, child)
+
+  try {
+    child.setMenuBarVisibility?.(false)
+  } catch {
+    // 个别平台没有菜单栏
+  }
+
+  const notifyMaximized = (maximized: boolean): void => {
+    const payload = { host: frameName, maximized }
+    const host = context.getMainWindow()
+    if (isWebContentsAlive(host)) {
+      host.webContents.send('window:maximized-changed', payload)
+    }
+    if (isWebContentsAlive(child)) {
+      child.webContents.send('window:maximized-changed', payload)
+    }
+  }
+  child.on('maximize', () => notifyMaximized(true))
+  child.on('unmaximize', () => notifyMaximized(false))
+
+  // 子窗口反向加固：禁止 webview、限制导航白名单、仅允许可信来源拉起外部 http(s) 链接
+  child.webContents.setWindowOpenHandler?.((details) => {
     const referrerUrl = typeof details.referrer?.url === 'string' ? details.referrer.url : ''
-    // 白名单来源校验：拒绝空来源、不透明来源、pw-file:// 预览子框、about:blank 或未知来源拉起窗口/外链
+    if (isAllowedWindowOpenReferrer(referrerUrl) && isExternalUrl(details.url)) {
+      void shell.openExternal(details.url).catch(() => undefined)
+    }
+    return { action: 'deny' }
+  })
+  child.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedAppNavigation(url)) event.preventDefault()
+  })
+  child.webContents.on('will-attach-webview', (event) => {
+    event.preventDefault()
+  })
+
+  child.on('closed', () => {
+    // 身份校验：防止重开同名窗口时旧窗口 closed 误删新窗口登记记录
+    const isCurrent = auxWindows.get(frameName) === child
+    if (isCurrent) auxWindows.delete(frameName)
+    // 窗口销毁后不可再读 child.webContents，必须使用创建时缓存的数值 wcId
+    untrustIpcSender(wcId)
+    if (!isCurrent) return
+    const host = context.getMainWindow()
+    if (context.onClosed) {
+      if (host && !host.isDestroyed()) context.onClosed(frameName)
+    } else if (isWebContentsAlive(host)) {
+      host.webContents.send('aux:window-closed', frameName)
+    }
+    relaySyncState(
+      {
+        sourceHost: hostId,
+        kind: 'panel-docked',
+        workspaceDir,
+        panel,
+        hostId,
+      },
+      wcId
+    )
+  })
+
+  const targetUrl = buildPanelWindowUrl({
+    windowMode: 'panel',
+    panel,
+    workspace: workspaceDir,
+    hostId,
+    theme,
+    lang: language,
+    boot: '0',
+  })
+  void Promise.resolve(child.loadURL(targetUrl)).catch((error: unknown) => {
+    console.error('[AuxWindow] Failed to load detached panel URL:', error)
+  })
+
+  return { success: true, hostId, frameName }
+}
+
+/** 关闭指定 hostId 的拆出面板窗口（回位主窗口）；已关闭时幂等返回成功 */
+export function closeDetachedPanelWindow(hostId: string): PanelDockResult {
+  if (!isValidHostId(hostId)) {
+    return { success: false, error: 'Invalid host' }
+  }
+  const frameName = `${AUX_FRAME_PREFIX}${hostId}`
+  const win = auxWindows.get(frameName)
+  if (!win || win.isDestroyed()) {
+    auxWindows.delete(frameName)
+    return { success: true }
+  }
+  win.close()
+  return { success: true }
+}
+
+/** 真正退出应用（before-quit）或主窗口彻底销毁时回收全部拆出面板窗口，避免阻塞退出 */
+export function closeAllDetachedPanelWindows(): void {
+  for (const [frameName, win] of [...auxWindows.entries()]) {
+    if (win.isDestroyed()) {
+      auxWindows.delete(frameName)
+      continue
+    }
+    try {
+      win.close()
+    } catch {
+      // 窗口可能已在退出过程中销毁
+    }
+  }
+}
+
+export function registerAuxWindowIpc(context: AuxWindowIpcContext): void {
+  handleIpc('aux:drag-begin', () => beginDetachDrag())
+  handleIpc('aux:detach-at', () => resolveDetachTarget(context.getMainWindow() as BrowserWindow))
+
+  handleIpc('aux:window-command', (_event, frameName: unknown, command: unknown) => {
+    if (!isAuxFrameName(frameName)) return { success: false, error: 'Invalid host' }
+    if (command !== 'minimize' && command !== 'toggleMaximize' && command !== 'close') {
+      return { success: false, error: 'Invalid command' }
+    }
+    return runAuxWindowCommand(frameName, command)
+  })
+
+  handleIpc('aux:window-state', (_event, frameName: unknown) => {
+    if (!isAuxFrameName(frameName)) return { success: false, error: 'Invalid host' }
+    return readAuxWindowState(frameName)
+  })
+
+  handleIpc('panel:detach', (_event, rawOptions: unknown) => {
+    const validated = parseContractArgs('panel:detach', [rawOptions])
+    if (!validated.ok) return { success: false, error: validated.error }
+    return createDetachedPanelWindow(validated.data[0], context)
+  })
+
+  handleIpc('panel:dock', (_event, hostId: unknown) => {
+    const validated = parseContractArgs('panel:dock', [hostId])
+    if (!validated.ok) return { success: false, error: validated.error }
+    return closeDetachedPanelWindow(validated.data[0])
+  })
+
+  handleIpc('sync:broadcast', (event, rawMessage: unknown) => {
+    const validated = parseContractArgs('sync:broadcast', [rawMessage])
+    if (!validated.ok) return { success: false, error: validated.error }
+    const [message] = validated.data
+    if (message.kind === 'theme') {
+      context.onThemeSync?.(message.mode)
+    } else if (message.kind === 'open-file' || message.kind === 'open-settings') {
+      const mainWin = context.getMainWindow()
+      if (mainWin && !mainWin.isDestroyed()) {
+        if (mainWin.isMinimized?.()) mainWin.restore?.()
+        if (typeof mainWin.isVisible === 'function' && !mainWin.isVisible()) mainWin.show?.()
+        mainWin.focus?.()
+      }
+    }
+    const senderId = typeof event?.sender?.id === 'number' ? event.sender.id : undefined
+    relaySyncState(message, senderId)
+    return { success: true }
+  })
+}
+
+export interface AuxWindowSupportOptions {
+  /** 保留可选签名兼容既有调用点；拆窗已改走 `panel:detach` IPC */
+  onClosed?: (frameName: string) => void
+}
+
+/**
+ * 收紧主窗口 `window.open` 策略：
+ * - 仅放行来自可信外壳/开发服务器的外部 `http(s)://` 链接交给系统浏览器；
+ * - 拒绝所有内部弹窗（包括旧版 `about:blank` + `pi-panel:`），所有面板拆窗统一经 `panel:detach` IPC 创建。
+ */
+export function installAuxWindowSupport(host: BrowserWindow, _options?: AuxWindowSupportOptions): void {
+  host.webContents.setWindowOpenHandler((details) => {
+    const { url } = details
+    const referrerUrl = typeof details.referrer?.url === 'string' ? details.referrer.url : ''
     if (!isAllowedWindowOpenReferrer(referrerUrl)) {
       return { action: 'deny' }
     }
-    // 外部链接（文档 / 对话里的 http(s)）交给系统浏览器，不开内部窗口
     if (isExternalUrl(url)) {
       void shell.openExternal(url).catch(() => undefined)
-      return { action: 'deny' }
     }
-    if (url !== 'about:blank') return { action: 'deny' }
-    if (!frameName.startsWith(AUX_FRAME_PREFIX)) return { action: 'deny' }
-
-    const point = screen.getCursorScreenPoint()
-    const workArea = screen.getDisplayNearestPoint(point).workArea
-    const parsed = parseAuxWindowFeatures(features, workArea)
-
-    const isDarkAux = parsed.backgroundColor.toLowerCase().startsWith('#1')
-    const override: BrowserWindowConstructorOptions = {
-      x: parsed.x,
-      y: parsed.y,
-      width: parsed.width,
-      height: parsed.height,
-      minWidth: AUX_MIN_WIDTH,
-      minHeight: AUX_MIN_HEIGHT,
-      backgroundColor: parsed.backgroundColor,
-      // 辅助窗仅为 React Portal DOM 宿主：禁止继承 preload，IPC 全部经主窗口 JS Realm 调用
-      webPreferences: {
-        preload: undefined,
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: true,
-      },
-      // 与主窗口同一套外壳：Windows / Linux 使用原生 titleBarOverlay 保留系统贴靠（Snap Layouts）
-      ...(process.platform === 'darwin'
-        ? {
-            titleBarStyle: 'hiddenInset' as const,
-            trafficLightPosition: { x: 12, y: 10 }
-          }
-        : {
-            titleBarStyle: 'hidden' as const,
-            titleBarOverlay: isDarkAux
-              ? { color: '#1A1815', symbolColor: '#A8A093', height: 34 }
-              : { color: '#FBF9F4', symbolColor: '#615C52', height: 34 }
-          }),
-      autoHideMenuBar: true,
-      show: true
-    }
-    return { action: 'allow', overrideBrowserWindowOptions: override }
-  })
-
-  host.webContents.on('did-create-window', (child, details) => {
-    const frameName = details.frameName
-    auxWindows.set(frameName, child)
-    try {
-      // 不给子窗口单独设菜单：BrowserWindow 会自动继承应用菜单（Windows / Linux 上是
-      // 该窗口的菜单栏），Ctrl +/-/0、Ctrl+W 等默认快捷键依附在这份菜单上。
-      // 无边框窗口不绘制菜单栏，所以只需把栏隐藏起来即可。
-      child.setMenuBarVisibility(false)
-    } catch {
-      // 个别平台没有菜单栏
-    }
-
-    // 自绘窗口按钮的图标切换：主窗口与每个辅助窗口各自上报
-    const notifyMaximized = (maximized: boolean) => {
-      if (host.isDestroyed()) return
-      host.webContents.send('window:maximized-changed', { host: frameName, maximized })
-    }
-    child.on('maximize', () => notifyMaximized(true))
-    child.on('unmaximize', () => notifyMaximized(false))
-
-    child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-    child.webContents.on('will-navigate', (event, url) => {
-      if (url !== 'about:blank') event.preventDefault()
-    })
-    child.webContents.on('will-attach-webview', (event) => {
-      event.preventDefault()
-    })
-    child.on('closed', () => {
-      // 重开同名窗口时旧窗口 closed 绝不能误删新窗口的登记记录
-      const isCurrent = auxWindows.get(frameName) === child
-      if (isCurrent) auxWindows.delete(frameName)
-      if (isCurrent && !host.isDestroyed()) options.onClosed(frameName)
-    })
+    return { action: 'deny' }
   })
 }

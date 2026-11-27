@@ -45,6 +45,8 @@ import { useUpdaterStore } from './store/updaterStore'
 import { hostIdFromFrameName, usePanelStore } from './store/panelStore'
 import { useTerminalStore } from './store/terminalStore'
 import { clearPanelUi } from './panelHost/panelUiState'
+import { MAIN_HOST } from './panelHost/types'
+import { installWindowSync } from './panelHost/windowSync'
 import { localizeError } from './i18n/errors'
 import { formatShortcut, matchShortcut } from './utils/keybindings'
 import { restoreEditorTabs, saveEditorTabs } from './workspace/editorTabs'
@@ -370,8 +372,16 @@ export default function App() {
   useEffect(() => {
     const openSettingsEvent = (detail?: { section?: SettingsSection }) =>
       openSettings(detail?.section ?? 'general')
-    return onAppEvent('open-settings', openSettingsEvent)
+    const offSettings = onAppEvent('open-settings', openSettingsEvent)
+    const offFocusWorkspace = onAppEvent('focus-workspace', () => setView('workspace'))
+    return () => {
+      offSettings()
+      offFocusWorkspace()
+    }
   }, [openSettings])
+
+  // 跨原生窗口同步：主窗口接收拆窗的打开文件 / 活跃会话 / UI 快照，并向拆窗同步主题与语言变更
+  useEffect(() => installWindowSync(MAIN_HOST), [])
 
   // 更新状态由 App 统一订阅，设置页、状态栏和安装弹窗共享同一份状态
   const applyUpdateState = useUpdaterStore((store) => store.applyState)

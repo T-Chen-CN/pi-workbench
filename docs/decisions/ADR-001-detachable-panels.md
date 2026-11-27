@@ -84,6 +84,12 @@
 
 ## 修订记录
 
+- 2026-11-28（Phase E 架构修订）：彻底废止 `window.open('about:blank')` + 跨文档 `ReactDOM.createPortal` 路线，全面升级为**原生多 `BrowserWindow` 架构**：
+  1. 主进程 `setWindowOpenHandler` 拒绝全部内部弹窗（含 `about:blank` + `pi-panel:`），仅允许可信来源拉起外部 `http(s)://` 链接；
+  2. 拆窗改由主进程 `panel:detach` IPC 派生独立原生 `BrowserWindow`，直接加载 `pw-app://bundle/index.html?windowMode=panel&panel=<id>&workspace=<path>&hostId=<id>&...`（开发态走 `VITE_DEV_SERVER_URL`），独立挂载 `DetachedPanelApp` 与 `<DiffViewer>`，注入沙盒 `preload.cjs` 并在创建时登记 `trustIpcSender(wcId)`、关闭时以预存数值 `wcId` 注销，同时废止 `about:blank` 帧来源白名单；
+  3. 回位走 `panel:dock` IPC 或直接关闭拆出窗口；主进程新增 `sync:broadcast` → `sync:state` 跨窗同步通道（主题、语言、活跃会话、打开文件、面板 UI 快照与 `panel-docked`），并将 `fs:changed` / `git:changed` / `terminal:data` / `agent:approval-*` / `plugins:changed` 广播至所有存活窗口，终端新增 `terminal:list` 快照以在拆窗与回位时无缝接管运行中 PTY 与 200KB 滚动缓冲；
+  4. `PanelSlot` 移除 `createPortal`，拆出后直接返回 `null`，`WorkspaceView` 不再保留隐藏 DOM；
+  5. 严格执行 Q5 窗口生命周期：① 拆出窗口不设 `parent: mainWindow`，主窗口点 `X` 收进托盘（`hide()`）时拆出窗口继续留在屏幕可见；② 关闭拆出窗口即回位到主窗口；③ 应用重启不持久化拆窗布局，全部面板默认回位主窗口（仅持久化 `panelWidths`）。
 - 2026-11-27（Phase 0 / Phase 2 整改）：① 安全加固撤销 2026-10-29 的 `trustIpcSender` / `preload` 继承（避免子文档成为独立 IPC 来源，彻底回到纯 DOM Portal，React 事件在主窗口 JS Realm 内执行），并限制仅主窗口主框架可打开 `pi-panel:` 辅助窗；② Windows / Linux 外壳由 `frame: false` 改为原生 `titleBarStyle: 'hidden' + titleBarOverlay`（恢复 Win11 Snap Layouts），仅在不可用时回退自绘按钮；③ `auxWindow.ts` 补 `<head>` `MutationObserver` 同步懒加载样式，修跨 Realm `instanceof` 与主窗口关闭联动；④ 面板组件与测试按域迁至 `src/components/panels/` 与 `tests/{electron,ui}/`。
 - 2026-10-29：辅助窗口改为**登记过的 IPC 来源**（`trustIpcSender` / `untrustIpcSender`，子框架仍拒绝），原文「IPC 来源恒为主窗口」作废——拆出面板里的复制、外链、会话操作直接走自己的 `webContents`；窗口寻址仍按 `frameName` 显式带（理由改为「一套 IPC 服务多个窗口」，结论不变）。拆出判据同时加入 96 DIP 拖动距离（`PANEL_DETACH_DISTANCE`），外链在 `setWindowOpenHandler` 里直接交给系统浏览器。
 - 2026-10-28（设计系统 v1.39）：原「原位占位不塌陷」改为「主窗口彻底让位」——占位卡与接缝一并撤销，面板仍挂载但容器 `hidden`；辅助窗口标题改为工作区名；随之删除 `PanelDetachedPlaceholder`、`PanelSlot` 的 `placeholder` 入参、`focusPanelWindow` 与「定位到独立窗口」入口（回位只靠关窗）。

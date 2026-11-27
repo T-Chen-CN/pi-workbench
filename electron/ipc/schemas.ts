@@ -76,6 +76,31 @@ export const terminalIdSchema = z.object({
   id: z.string().min(1).max(128),
 })
 
+export const terminalListSchema = z.object({
+  workspaceDir: safePathSchema,
+})
+
+export const panelDetachSchema = z.object({
+  workspaceDir: safePathSchema,
+  panel: z.enum(['files', 'git', 'chat', 'terminal']),
+  hostId: z.string().regex(/^aux:\d+$/, 'Invalid host id'),
+  title: z.string().max(256).optional(),
+  rect: z
+    .object({
+      x: z.number().finite(),
+      y: z.number().finite(),
+      width: z.number().finite(),
+      height: z.number().finite(),
+    })
+    .optional(),
+  theme: z.enum(['light', 'dark']).optional(),
+  language: z.enum(['zh', 'en']).optional(),
+})
+
+export const panelDockSchema = z.object({
+  hostId: z.string().regex(/^aux:\d+$/, 'Invalid host id'),
+})
+
 export const pluginToggleSchema = z.object({
   workspaceDir: safePathSchema,
   pluginId: z.string().min(1).max(128),

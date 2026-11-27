@@ -195,6 +195,118 @@ async function main() {
       'Disk contents must match written text'
     )
 
+    // 5. Phase E：原生多 BrowserWindow 拆窗、跨窗主题同步、Q5 托盘隔离与关闭回位
+    await page.evaluate(() => {
+      window.__e2eClosedFrames = []
+      window.__e2eOffAuxClosed = window.electronAPI.onAuxWindowClosed((frameName) => {
+        window.__e2eClosedFrames.push(frameName)
+      })
+    })
+
+    const detachedWindowPromise = electronApp.waitForEvent('window', { timeout: 20_000 })
+    const detachResult = await page.evaluate(async (dir) => {
+      return window.electronAPI.panelDetach({
+        workspaceDir: dir,
+        panel: 'files',
+        hostId: 'aux:1',
+        theme: 'light',
+        language: 'zh',
+      })
+    }, tempWorkspace)
+    assert.equal(detachResult?.success, true, `panelDetach must succeed: ${detachResult?.error ?? ''}`)
+
+    const detachedPage = await detachedWindowPromise
+    detachedPage.on('pageerror', (err) => {
+      const msg = err instanceof Error ? err.stack || err.message : String(err)
+      pageErrors.push(`[detached] ${msg}`)
+      console.error('[E2E Smoke][detached pageerror]', msg)
+    })
+
+    await detachedPage.waitForLoadState('domcontentloaded', { timeout: 20_000 })
+    const detachedUrl = new URL(detachedPage.url())
+    assert.equal(detachedUrl.searchParams.get('windowMode'), 'panel', 'Detached window URL must specify windowMode=panel')
+    assert.equal(detachedUrl.searchParams.get('panel'), 'files', 'Detached window URL must specify panel=files')
+    assert.equal(detachedUrl.searchParams.get('hostId'), 'aux:1', 'Detached window URL must specify hostId=aux:1')
+
+    const detachedHasApi = await detachedPage.evaluate(() => typeof window.electronAPI === 'object')
+    assert.equal(detachedHasApi, true, 'Detached native BrowserWindow must expose window.electronAPI')
+
+    const dockBackBtn = detachedPage.locator('button[aria-label="还原到主窗口"], button[aria-label="Dock back to main window"]')
+    await dockBackBtn.waitFor({ state: 'visible', timeout: 20_000 })
+    await detachedPage.waitForSelector('text=README.md', { timeout: 20_000 })
+
+    // 跨窗实时主题同步：主窗口切到 Ink (dark)，验证独立拆出窗口同步获得 html.dark，再切回 Paper (light)
+    await settingsBtn.click()
+    await page.waitForSelector('#settings-theme', { timeout: 10_000 })
+    await page.selectOption('#settings-theme', 'dark')
+    await detachedPage.waitForFunction(
+      () => document.documentElement.classList.contains('dark'),
+      null,
+      { timeout: 10_000 }
+    )
+    await page.selectOption('#settings-theme', 'light')
+    await detachedPage.waitForFunction(
+      () => !document.documentElement.classList.contains('dark'),
+      null,
+      { timeout: 10_000 }
+    )
+    await page.keyboard.press('Escape')
+    await page.waitForSelector('#settings-theme', { state: 'detached', timeout: 5_000 })
+
+    // Q5 托盘生命周期验证：主窗口 hide() 收进托盘时，独立拆出窗口必须保持可见
+    const q5Visibility = await electronApp.evaluate(({ BrowserWindow }) => {
+      const wins = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed())
+      const detachedWin = wins.find((w) => w.webContents.getURL().includes('windowMode=panel'))
+      const mainWin = wins.find((w) => !w.webContents.getURL().includes('windowMode=panel'))
+      if (!mainWin || !detachedWin) {
+        return { ok: false, reason: `Expected 2 windows, got ${wins.length}` }
+      }
+      mainWin.hide()
+      const mainHidden = !mainWin.isVisible()
+      const detachedStillVisible = detachedWin.isVisible()
+      mainWin.show()
+      return { ok: true, mainHidden, detachedStillVisible }
+    })
+    assert.equal(q5Visibility.ok, true, q5Visibility.reason || 'Q5 window lookup failed')
+    assert.equal(q5Visibility.mainHidden, true, 'Main window must hide cleanly')
+    assert.equal(
+      q5Visibility.detachedStillVisible,
+      true,
+      'Q5 violation: detached panel window must remain visible when main window hides to tray'
+    )
+
+    // 点击拆窗标题栏「还原到主窗口」按钮，验证窗口关闭且主窗口收到 aux:window-closed
+    const detachedClosedPromise = detachedPage.waitForEvent('close', { timeout: 15_000 })
+    await dockBackBtn.click()
+    await detachedClosedPromise
+
+    await page.waitForFunction(
+      () => Array.isArray(window.__e2eClosedFrames) && window.__e2eClosedFrames.includes('pi-panel:aux:1'),
+      null,
+      { timeout: 10_000 }
+    )
+    await page.evaluate(() => {
+      window.__e2eOffAuxClosed?.()
+      delete window.__e2eOffAuxClosed
+      delete window.__e2eClosedFrames
+    })
+
+    // 6. Phase E Agent utilityProcess 宿主页诊断核验
+    const hostInfo = await page.evaluate(async (dir) => {
+      return window.electronAPI.agentHostInfo(dir)
+    }, tempWorkspace)
+    assert.equal(hostInfo?.success, true, `agentHostInfo must succeed: ${hostInfo?.error ?? ''}`)
+    assert.equal(typeof hostInfo?.mainPid, 'number', 'agentHostInfo must report mainPid')
+    assert.ok(hostInfo.mainPid > 0, 'mainPid must be a positive PID')
+    assert.equal(typeof hostInfo?.isolated, 'boolean', 'agentHostInfo must report isolated flag')
+    assert.ok(Array.isArray(hostInfo?.runningSessionIds), 'agentHostInfo must report runningSessionIds array')
+    if (!packagedExe) {
+      assert.ok(
+        fs.existsSync(path.join(rootDir, 'dist-electron', 'agent-host-worker.js')),
+        'Built dist-electron/agent-host-worker.js must exist for utilityProcess isolation'
+      )
+    }
+
     // 关闭工作区标签，释放文件监听与主进程资源
     await page.evaluate(async (dir) => {
       await window.electronAPI.unwatchWorkspace(dir)

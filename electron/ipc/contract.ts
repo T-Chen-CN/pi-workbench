@@ -39,6 +39,50 @@ export interface AuxWindowCommandResult {
   error?: string
 }
 
+/** 支持拆出为独立原生 BrowserWindow 的面板标识 */
+export type DetachablePanelId = 'files' | 'git' | 'chat' | 'terminal'
+
+export interface PanelDetachRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface PanelDetachRequest {
+  workspaceDir: string
+  panel: DetachablePanelId
+  hostId: string
+  title?: string
+  rect?: PanelDetachRect
+  theme?: 'light' | 'dark'
+  language?: 'zh' | 'en'
+}
+
+export interface PanelDetachResult {
+  success: boolean
+  hostId?: string
+  frameName?: string
+  error?: string
+}
+
+export interface PanelDockResult {
+  success: boolean
+  error?: string
+}
+
+/** 主窗口与独立原生面板窗口之间的状态广播载荷 */
+export type WindowSyncMessage =
+  | { sourceHost: string; kind: 'theme'; mode: 'light' | 'dark' | 'system' }
+  | { sourceHost: string; kind: 'language'; language: 'zh' | 'en' }
+  | { sourceHost: string; kind: 'active-session'; workspaceDir: string; sessionId: string | null }
+  | { sourceHost: string; kind: 'open-file'; workspaceDir: string; filePath: string; line?: number }
+  | { sourceHost: string; kind: 'panel-ui-state'; workspaceDir: string; name: string; value: unknown }
+  | { sourceHost: string; kind: 'worktree-changed'; workspaceDir: string; sessionId?: string | null; root?: string }
+  | { sourceHost: string; kind: 'panel-docked'; workspaceDir: string; panel: DetachablePanelId; hostId: string }
+  | { sourceHost: string; kind: 'panel-ready'; workspaceDir: string; panel: DetachablePanelId }
+  | { sourceHost: string; kind: 'open-settings'; section?: string }
+
 export interface GitRepoInfo {
   root: string
   gitDir: string
@@ -1187,6 +1231,22 @@ export interface TerminalResult {
   error?: string
 }
 
+/** 主进程运行中 PTY 的快照（供拆窗或回位时无缝接管当前 shell 与滚动历史） */
+export interface TerminalSnapshotInfo {
+  id: string
+  workspaceDir: string
+  cwd: string
+  shell: string
+  logPath: string | null
+  replay: string
+}
+
+export interface TerminalListResult {
+  success: boolean
+  terminals?: TerminalSnapshotInfo[]
+  error?: string
+}
+
 export interface PluginCommandInfo {
   id: string
   title: string
@@ -1366,6 +1426,9 @@ export const IPC_INVOKE_CHANNELS = {
   auxDragBegin: 'aux:drag-begin',
   auxWindowCommand: 'aux:window-command',
   auxWindowState: 'aux:window-state',
+  panelDetach: 'panel:detach',
+  panelDock: 'panel:dock',
+  syncBroadcast: 'sync:broadcast',
 
   // 工作区、草稿、标签与仓库地图
   initWorkspace: 'workspace:init',
@@ -1428,6 +1491,7 @@ export const IPC_INVOKE_CHANNELS = {
   terminalResize: 'terminal:resize',
   terminalClose: 'terminal:close',
   terminalFlush: 'terminal:flush',
+  terminalList: 'terminal:list',
 
   // Git 与 GitHub 认证
   gitRepoInfo: 'git:repoInfo',
@@ -1512,6 +1576,7 @@ export const IPC_EVENT_CHANNELS = {
   onUpdateStatus: 'update:status',
   onWindowMaximizedChange: 'window:maximized-changed',
   onAuxWindowClosed: 'aux:window-closed',
+  onSyncState: 'sync:state',
   onAppBootExpanded: 'app:boot-expanded',
   onAgentStream: 'agent:stream',
   onAgentHostCrashed: 'agent:host-crashed',
@@ -1595,6 +1660,9 @@ export interface IpcInvokeContract {
   'aux:drag-begin': { args: []; result: { success: boolean } }
   'aux:window-command': { args: [host: string, command: WindowCommand]; result: AuxWindowCommandResult }
   'aux:window-state': { args: [host: string]; result: AuxWindowCommandResult }
+  'panel:detach': { args: [options: PanelDetachRequest]; result: PanelDetachResult }
+  'panel:dock': { args: [hostId: string]; result: PanelDockResult }
+  'sync:broadcast': { args: [message: WindowSyncMessage]; result: { success: boolean; error?: string } }
 
   // 工作区、草稿、标签与仓库地图
   'workspace:init': { args: [workspacePath: string]; result: WorkspaceResult }
@@ -1797,6 +1865,7 @@ export interface IpcInvokeContract {
   'terminal:resize': { args: [id: string, cols: number, rows: number]; result: TerminalResult }
   'terminal:close': { args: [id: string]; result: TerminalResult }
   'terminal:flush': { args: [id: string]; result: TerminalResult }
+  'terminal:list': { args: [workspaceDir: string]; result: TerminalListResult }
 
   // Git 与 GitHub 认证
   'git:repoInfo': {
@@ -2027,6 +2096,7 @@ export interface IpcEventContract {
   'update:status': { payload: UpdateState }
   'window:maximized-changed': { payload: WindowMaximizedState }
   'aux:window-closed': { payload: string }
+  'sync:state': { payload: WindowSyncMessage }
   'app:boot-expanded': { payload: void }
   'agent:stream': { payload: AgentStreamPayload }
   'agent:host-crashed': { payload: AgentHostCrashedPayload }
@@ -2119,6 +2189,71 @@ function buildIpcInvokeSchemas(): Partial<Record<IpcInvokeChannel, z.ZodType<rea
     .refine((v) => !v.includes('\0'), 'Path must not contain NUL bytes')
 
   const terminalId = z.string().min(1).max(128)
+  const auxHostId = z.string().regex(/^aux:\d+$/, 'Invalid host id')
+  const detachablePanel = z.enum(['files', 'git', 'chat', 'terminal'])
+  const panelDetachRect = z.object({
+    x: z.number().finite(),
+    y: z.number().finite(),
+    width: z.number().finite(),
+    height: z.number().finite(),
+  })
+  const windowSyncMessage = z.discriminatedUnion('kind', [
+    z.object({
+      sourceHost: z.string().min(1).max(64),
+      kind: z.literal('theme'),
+      mode: z.enum(['light', 'dark', 'system']),
+    }),
+    z.object({
+      sourceHost: z.string().min(1).max(64),
+      kind: z.literal('language'),
+      language: z.enum(['zh', 'en']),
+    }),
+    z.object({
+      sourceHost: z.string().min(1).max(64),
+      kind: z.literal('active-session'),
+      workspaceDir: safePath,
+      sessionId: z.string().max(128).nullable(),
+    }),
+    z.object({
+      sourceHost: z.string().min(1).max(64),
+      kind: z.literal('open-file'),
+      workspaceDir: safePath,
+      filePath: safePath,
+      line: z.number().int().min(1).max(1_000_000).optional(),
+    }),
+    z.object({
+      sourceHost: z.string().min(1).max(64),
+      kind: z.literal('panel-ui-state'),
+      workspaceDir: safePath,
+      name: z.string().min(1).max(128),
+      value: z.unknown(),
+    }),
+    z.object({
+      sourceHost: z.string().min(1).max(64),
+      kind: z.literal('worktree-changed'),
+      workspaceDir: safePath,
+      sessionId: z.string().max(128).nullable().optional(),
+      root: safePath.optional(),
+    }),
+    z.object({
+      sourceHost: z.string().min(1).max(64),
+      kind: z.literal('panel-docked'),
+      workspaceDir: safePath,
+      panel: detachablePanel,
+      hostId: auxHostId,
+    }),
+    z.object({
+      sourceHost: z.string().min(1).max(64),
+      kind: z.literal('panel-ready'),
+      workspaceDir: safePath,
+      panel: detachablePanel,
+    }),
+    z.object({
+      sourceHost: z.string().min(1).max(64),
+      kind: z.literal('open-settings'),
+      section: z.string().max(64).optional(),
+    }),
+  ])
 
   const appSaveSettings = z.object({
     language: z.enum(['zh', 'en', 'zh-CN', 'en-US']).optional(),
@@ -2186,6 +2321,20 @@ function buildIpcInvokeSchemas(): Partial<Record<IpcInvokeChannel, z.ZodType<rea
     ]),
     'terminal:close': z.tuple([terminalId]),
     'terminal:flush': z.tuple([terminalId]),
+    'terminal:list': z.tuple([safePath]),
+    'panel:detach': z.tuple([
+      z.object({
+        workspaceDir: safePath,
+        panel: detachablePanel,
+        hostId: auxHostId,
+        title: z.string().max(256).optional(),
+        rect: panelDetachRect.optional(),
+        theme: z.enum(['light', 'dark']).optional(),
+        language: z.enum(['zh', 'en']).optional(),
+      }),
+    ]),
+    'panel:dock': z.tuple([auxHostId]),
+    'sync:broadcast': z.tuple([windowSyncMessage]),
     'plugins:setEnabled': z.tuple([safePath, z.string().min(1).max(128), z.boolean()]),
     'shell:openExternal': z.tuple([z.string().min(1).max(4096)]),
     'clipboard:writeText': z.tuple([
