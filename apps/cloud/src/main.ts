@@ -94,11 +94,26 @@ export async function createCloudServer(
   await fs.mkdir(config.agentDir, { recursive: true })
 
   const store = await CloudStore.open(config.dataDir)
-  const memoryStore = await CloudMemoryStore.open(config.dataDir)
+  const memoryStore = await CloudMemoryStore.open(config.dataDir, store)
+
+  // D9：生产环境若尚无管理员账号且未显式提供 PI_CLOUD_SETUP_TOKEN，
+  // 启动时自动生成一次性 32 字符随机口令驻留内存并打印一次日志，彻底杜绝公网首启抢注。
+  const isProduction = process.env.NODE_ENV === 'production'
+  if (isProduction && !store.getAccount() && !config.setupToken?.trim()) {
+    const generatedToken = randomBytes(24).toString('base64url')
+    config.setupToken = generatedToken
+    logger.info(`[cloud] one-time setup token: ${generatedToken}`)
+  }
+
   // 登录限速保留每源 5/5m + 并发 scrypt 上限，但不启用全局熔断（防外部伪造错误请求永久锁死管理员登录）；
-  // 6 位配对码仍启用全局熔断防分布式穷举（A-45）。
+  // /v1/pair 保留严格每源 5/5m（IPv6 按 /64 归一化）+ 高滥用天花板 200/5m，避免 4 个 IP 轻易锁死全局配对。
   const loginLimiter = new AttemptLimiter({ globalLimit: Number.POSITIVE_INFINITY })
-  const pairLimiter = new AttemptLimiter()
+  const pairLimiter = new AttemptLimiter({
+    limit: 5,
+    windowMs: 5 * 60 * 1000,
+    globalLimit: 200,
+    cooldownMs: 5 * 60 * 1000,
+  })
 
   const agent = new AgentManager()
   const session = new CloudSession({
@@ -243,7 +258,12 @@ export async function createCloudServer(
         }
       },
     },
-    () => Date.now()
+    () => Date.now(),
+    {
+      ...(config.maxClientConnections !== undefined
+        ? { maxClientConnections: config.maxClientConnections }
+        : {}),
+    }
   )
 
   const dispatcher = new TaskDispatcher({
@@ -304,6 +324,7 @@ export async function createCloudServer(
     onMarkRead: (seq) => markRead(seq),
     memoryStore,
     onRunDream: () => triggerDream('manual'),
+    isProduction,
     logger,
   })
 
@@ -396,6 +417,11 @@ export async function createCloudServer(
             socket.destroy()
             return
           }
+          if (!hub.canAcceptClient()) {
+            socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n')
+            socket.destroy()
+            return
+          }
           wsServer.handleUpgrade(req, socket, head, (ws) => {
             hub.addClient(
               ws,
@@ -465,7 +491,7 @@ export async function createCloudServer(
       case 'ack':
         return
       case 'ping':
-        peer.socket.send(JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, type: 'pong', at: frame.at }))
+        hub.sendPong(peer, frame.at)
         return
       case 'say':
         if (typeof frame.text !== 'string') return
@@ -647,9 +673,7 @@ export async function createCloudServer(
     }
     if (frame.type === 'heartbeat' || frame.type === 'ack' || frame.type === 'ping') {
       if (frame.type === 'ping') {
-        peer.socket.send(
-          JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, type: 'pong', at: frame.at })
-        )
+        hub.sendPong(peer, frame.at)
       }
       return
     }

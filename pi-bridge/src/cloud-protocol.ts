@@ -114,6 +114,8 @@ export const CLOUD_TASK_SILENCE_CHECK_MS = 20 * 60 * 1000
 export const CLOUD_TASK_HEARTBEAT_MS = 60 * 1000
 /** 客户端连接超时：把“静默被墙”变成可读错误（F-43 / A-19） */
 export const CLOUD_CONNECT_TIMEOUT_MS = 8_000
+/** 单帧最大字节上限（UTF-8）：在 JSON.parse 之前硬截断，防超大载荷 DoS */
+export const MAX_CLOUD_FRAME_BYTES = 512 * 1024
 
 // ---------------------------------------------------------------------------
 // 错误与连接分级
@@ -208,35 +210,98 @@ export const DEVICE_TO_SERVER_TYPES: ReadonlySet<string> = new Set([
   'ping',
 ])
 
+export const SERVER_TO_CLIENT_TYPES: ReadonlySet<string> = new Set([
+  'snapshot',
+  'event',
+  'ack',
+  'pong',
+  'error',
+])
+
+export const SERVER_TO_DEVICE_TYPES: ReadonlySet<string> = new Set([
+  'ack',
+  'task',
+  'task_cancel',
+  'task_answer',
+  'task_message',
+  'close_unit',
+  'pong',
+  'error',
+])
+
 const nonEmptyStr = z.string().min(1)
+const idStr = nonEmptyStr.max(256)
 const finiteNum = z.number().finite()
 const versionField = z.number().int().min(CLOUD_PROTOCOL_MIN_VERSION).max(CLOUD_PROTOCOL_VERSION)
 
+const cloudErrorCodeSchema = z.enum([
+  'protocol-version',
+  'unauthorized',
+  'rate-limited',
+  'invalid-frame',
+  'unknown-target',
+  'conflict',
+  'server-error',
+])
+
+const cloudAgentStatusSchema = z.enum(['idle', 'thinking', 'replying', 'error'])
+const cloudChatRoleSchema = z.enum(['user', 'assistant', 'system', 'event'])
+
+const cloudTaskTerminalReasonSchema = z.enum([
+  'device-offline',
+  'user-cancel',
+  'app-quit',
+  'ack-timeout',
+  'waiting-human-timeout',
+  'failed',
+  'completed',
+])
+
 const cloudWorkspaceInfoSchema = z
   .object({
-    path: nonEmptyStr,
-    name: z.string(),
+    path: nonEmptyStr.max(1_024),
+    name: z.string().max(256),
     isGit: z.boolean(),
-    remote: z.string().optional(),
+    remote: z.string().max(512).optional(),
     defaultBranch: z.string().max(256).optional(),
   })
   .loose()
 
-const cloudChangedFileSchema = z
-  .object({
-    path: nonEmptyStr,
-    kind: z.enum(['added', 'modified', 'deleted', 'renamed']),
-    attention: z.string().optional(),
-  })
-  .loose()
+const cloudChangedFileSchema = z.object({
+  path: nonEmptyStr.max(1_024),
+  kind: z.enum(['added', 'modified', 'deleted', 'renamed']),
+  attention: z.string().max(512).optional(),
+})
 
-const cloudSecretHitSchema = z
-  .object({
-    path: nonEmptyStr,
-    line: finiteNum,
-    kind: nonEmptyStr,
-  })
-  .loose()
+const cloudSecretHitSchema = z.object({
+  path: nonEmptyStr.max(1_024),
+  line: finiteNum,
+  kind: nonEmptyStr.max(128),
+})
+
+const cloudTaskDiffSchema = z.object({
+  bytes: finiteNum.min(0),
+  excerpt: z.string().max(CLOUD_MAX_DIFF_LIMIT_BYTES * 2),
+  truncated: z.boolean().optional(),
+})
+
+const cloudTaskTestsSchema = z.object({
+  command: z.string().max(1_024),
+  passed: z.boolean(),
+  excerpt: z.string().max(16_000).optional(),
+})
+
+const cloudTaskResultSchema = z.object({
+  summary: z.string().max(32_000),
+  changedFiles: z.array(cloudChangedFileSchema).max(2_000),
+  tests: cloudTaskTestsSchema.optional(),
+  diff: cloudTaskDiffSchema.optional(),
+  branch: z.string().max(256).optional(),
+  commit: z.string().max(128).optional(),
+  notes: z.string().max(8_000).optional(),
+  secretHits: z.array(cloudSecretHitSchema).max(2_000).optional(),
+  worktreeClean: z.boolean().optional(),
+})
 
 const cloudTaskStatusSchema = z.enum([
   'queued',
@@ -251,6 +316,273 @@ const cloudTaskStatusSchema = z.enum([
   'interrupted',
 ])
 
+const cloudTaskProgressSchema = z
+  .object({
+    step: finiteNum,
+    totalSteps: finiteNum.optional(),
+    summary: z.string().max(32_000).optional(),
+    currentTool: z.string().max(256).optional(),
+    changedFiles: z.array(cloudChangedFileSchema).max(2_000).optional(),
+    secretHits: z.array(cloudSecretHitSchema).max(2_000).optional(),
+    diff: cloudTaskDiffSchema.optional(),
+    branch: z.string().max(256).optional(),
+    commit: z.string().max(128).optional(),
+    lastEventAt: finiteNum,
+  })
+  .loose()
+
+const cloudTaskSpecSchema = z
+  .object({
+    workUnitId: idStr,
+    deviceId: idStr,
+    repo: z
+      .object({
+        workspacePath: nonEmptyStr.max(1_024),
+        remote: z.string().max(512).optional(),
+        baseBranch: z.string().max(256).optional(),
+      })
+      .loose(),
+    title: z.string().max(1_024),
+    background: z.string().max(64_000),
+    goal: z.string().max(64_000),
+    acceptance: z.string().max(64_000),
+    expectedChanges: z.string().max(32_000).optional(),
+    forbidden: z.array(z.string().max(1_024)).max(200).optional(),
+    output: z
+      .object({
+        summary: z.boolean(),
+        changeList: z.boolean(),
+        testResult: z.boolean(),
+        diffLimitBytes: finiteNum.min(0).optional(),
+      })
+      .loose(),
+    commit: z.boolean(),
+    authorizationId: idStr,
+  })
+  .loose()
+
+const cloudTaskSnapshotSchema = z
+  .object({
+    id: idStr,
+    spec: cloudTaskSpecSchema,
+    status: cloudTaskStatusSchema,
+    idempotencyKey: z.string().max(512),
+    createdAt: finiteNum,
+    dispatchedAt: finiteNum.nullable().optional(),
+    updatedAt: finiteNum,
+    startedAt: finiteNum.optional(),
+    finishedAt: finiteNum.optional(),
+    terminalReason: cloudTaskTerminalReasonSchema.optional(),
+    progress: cloudTaskProgressSchema,
+    question: z
+      .object({
+        id: idStr,
+        text: z.string().max(100_000),
+        at: finiteNum,
+      })
+      .optional(),
+    error: z.string().max(8_000).optional(),
+  })
+  .loose()
+
+const cloudDeviceSnapshotSchema = z
+  .object({
+    id: idStr,
+    name: z.string().max(256),
+    platform: z.string().max(128),
+    online: z.boolean(),
+    lastSeenAt: finiteNum,
+    workspaces: z.array(cloudWorkspaceInfoSchema).max(500),
+    runningTaskIds: z.array(idStr).max(200),
+  })
+  .loose()
+
+const cloudUnitViewSchema = z
+  .object({
+    unitId: idStr,
+    deviceId: idStr,
+    workspacePath: nonEmptyStr.max(1_024),
+    worktreePath: z.string().max(1_024).optional(),
+    branch: z.string().max(256).optional(),
+    createdAt: finiteNum,
+    closedAt: finiteNum.nullable(),
+    closeRequestedAt: finiteNum.optional(),
+    dirtyAt: finiteNum.optional(),
+  })
+  .loose()
+
+const cloudAuthorizationViewSchema = z
+  .object({
+    id: idStr,
+    items: z
+      .array(
+        z.object({
+          deviceId: idStr,
+          workspacePath: nonEmptyStr.max(1_024),
+        })
+      )
+      .max(200),
+    quota: finiteNum.min(0),
+    used: finiteNum.min(0),
+    confirmedAt: finiteNum,
+    confirmedSummary: z.string().max(2_000),
+    expiresAt: finiteNum,
+  })
+  .loose()
+
+const cloudChatTraceItemSchema = z
+  .object({
+    id: nonEmptyStr.max(256),
+    toolName: nonEmptyStr.max(256),
+    summary: z.string().max(8_000),
+    status: z.enum(['running', 'ok', 'error']),
+    durationMs: finiteNum.optional(),
+    resultPreview: z.string().max(8_000).optional(),
+  })
+  .loose()
+
+const cloudChatMessageSchema = z
+  .object({
+    id: nonEmptyStr.max(256),
+    role: cloudChatRoleSchema,
+    text: z.string().max(200_000),
+    at: finiteNum,
+    streaming: z.boolean().optional(),
+    error: z.string().max(8_000).optional(),
+    thinking: z.string().max(200_000).optional(),
+    thinkingRedacted: z.boolean().optional(),
+    thinkingDurationMs: finiteNum.optional(),
+    traces: z.array(cloudChatTraceItemSchema).max(200).optional(),
+    taskEvent: z
+      .object({
+        taskId: z.string().max(256).optional(),
+        kind: nonEmptyStr.max(64),
+      })
+      .optional(),
+    usage: z
+      .object({
+        input: finiteNum.optional(),
+        output: finiteNum.optional(),
+        reasoning: finiteNum.optional(),
+        cost: finiteNum.optional(),
+      })
+      .optional(),
+  })
+  .loose()
+
+const cloudRuntimeStateSchema = z
+  .object({
+    status: cloudAgentStatusSchema,
+    turnStartedAt: finiteNum.optional(),
+    canStopReply: z.boolean(),
+    error: z.string().max(8_000).optional(),
+    model: z
+      .object({
+        provider: nonEmptyStr.max(128),
+        id: nonEmptyStr.max(256),
+      })
+      .optional(),
+  })
+  .loose()
+
+const cloudAwaySummarySchema = z
+  .object({
+    since: finiteNum,
+    until: finiteNum,
+    items: z
+      .array(
+        z.object({
+          taskId: idStr,
+          title: z.string().max(1_024),
+          status: cloudTaskStatusSchema,
+          terminalReason: cloudTaskTerminalReasonSchema.optional(),
+          at: finiteNum,
+        })
+      )
+      .max(500),
+    text: z.string().max(32_000),
+  })
+  .loose()
+
+const cloudSnapshotSchema = z
+  .object({
+    serverVersion: z.string().max(128),
+    protocol: versionField,
+    lastSeq: finiteNum,
+    lastReadSeq: finiteNum.optional(),
+    unreadCount: finiteNum.optional(),
+    cloud: cloudRuntimeStateSchema,
+    messages: z.array(cloudChatMessageSchema).max(500),
+    tasks: z.array(cloudTaskSnapshotSchema).max(500),
+    devices: z.array(cloudDeviceSnapshotSchema).max(500),
+    units: z.array(cloudUnitViewSchema).max(500),
+    authorizations: z.array(cloudAuthorizationViewSchema).max(500),
+    capabilities: z.array(z.string().max(64)).max(64).optional(),
+    awaySummary: cloudAwaySummarySchema.optional(),
+  })
+  .loose()
+
+const cloudEventSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      type: z.literal('message_start'),
+      messageId: nonEmptyStr.max(256),
+      role: cloudChatRoleSchema,
+      at: finiteNum,
+    })
+    .loose(),
+  z
+    .object({
+      type: z.literal('text_delta'),
+      messageId: nonEmptyStr.max(256),
+      delta: z.string().max(200_000),
+    })
+    .loose(),
+  z
+    .object({
+      type: z.literal('message_end'),
+      messageId: nonEmptyStr.max(256),
+      text: z.string().max(200_000),
+      at: finiteNum,
+      error: z.string().max(8_000).optional(),
+    })
+    .loose(),
+  z
+    .object({
+      type: z.literal('trace'),
+      messageId: z.string().max(256).optional(),
+      trace: z.object({ type: nonEmptyStr.max(64) }).loose(),
+    })
+    .loose(),
+  z
+    .object({
+      type: z.literal('cloud_status'),
+      status: cloudAgentStatusSchema,
+      error: z.string().max(8_000).optional(),
+    })
+    .loose(),
+  z.object({ type: z.literal('task'), task: cloudTaskSnapshotSchema }).loose(),
+  z.object({ type: z.literal('device'), device: cloudDeviceSnapshotSchema }).loose(),
+  z.object({ type: z.literal('unit'), unit: cloudUnitViewSchema }).loose(),
+  z
+    .object({
+      type: z.literal('notice'),
+      level: z.enum(['info', 'warn', 'error']),
+      text: z.string().max(8_000),
+      at: finiteNum,
+      key: z.string().max(256).optional(),
+    })
+    .loose(),
+  z
+    .object({
+      type: z.literal('read_state'),
+      lastReadSeq: finiteNum,
+      unreadCount: finiteNum,
+      at: finiteNum,
+    })
+    .loose(),
+])
+
 /** 客户端上行帧运行时 Zod Schema（保留未知可选字段以支持前向能力扩展） */
 export const clientToServerFrameSchema = z.discriminatedUnion('type', [
   z
@@ -258,7 +590,7 @@ export const clientToServerFrameSchema = z.discriminatedUnion('type', [
       v: versionField,
       type: z.literal('resume'),
       lastAckSeq: finiteNum,
-      capabilities: z.array(z.string()).max(64).optional(),
+      capabilities: z.array(z.string().max(64)).max(64).optional(),
     })
     .loose(),
   z.object({ v: versionField, type: z.literal('ack'), seq: finiteNum }).loose(),
@@ -276,14 +608,14 @@ export const clientToServerFrameSchema = z.discriminatedUnion('type', [
       type: z.literal('confirm_plan'),
       planText: z.string().max(200_000),
       items: z
-        .array(z.object({ deviceId: nonEmptyStr, workspacePath: nonEmptyStr }).loose())
+        .array(z.object({ deviceId: idStr, workspacePath: nonEmptyStr.max(1_024) }).loose())
         .max(100),
       quota: finiteNum.min(0).max(10_000),
     })
     .loose(),
   z.object({ v: versionField, type: z.literal('stop_reply') }).loose(),
-  z.object({ v: versionField, type: z.literal('stop_task'), taskId: nonEmptyStr }).loose(),
-  z.object({ v: versionField, type: z.literal('close_unit'), unitId: nonEmptyStr }).loose(),
+  z.object({ v: versionField, type: z.literal('stop_task'), taskId: idStr }).loose(),
+  z.object({ v: versionField, type: z.literal('close_unit'), unitId: idStr }).loose(),
   z
     .object({
       v: versionField,
@@ -296,7 +628,7 @@ export const clientToServerFrameSchema = z.discriminatedUnion('type', [
     .object({
       v: versionField,
       type: z.literal('task_message'),
-      taskId: nonEmptyStr,
+      taskId: idStr,
       text: z.string().max(200_000),
       at: finiteNum.optional(),
     })
@@ -304,16 +636,16 @@ export const clientToServerFrameSchema = z.discriminatedUnion('type', [
   z.object({ v: versionField, type: z.literal('ping'), at: finiteNum }).loose(),
 ])
 
-/** 设备端上行帧运行时 Zod Schema */
+/** 设备端上行帧运行时 Zod Schema（所有文本与数组字段均有严格上界，result 显式校验禁止任意 blob 透传） */
 export const deviceToServerFrameSchema = z.discriminatedUnion('type', [
   z
     .object({
       v: versionField,
       type: z.literal('hello'),
-      deviceId: nonEmptyStr,
+      deviceId: idStr,
       workspaces: z.array(cloudWorkspaceInfoSchema).max(500),
-      runningTasks: z.array(nonEmptyStr).max(200).optional(),
-      capabilities: z.array(z.string()).max(64).optional(),
+      runningTasks: z.array(idStr).max(200).optional(),
+      capabilities: z.array(z.string().max(64)).max(64).optional(),
     })
     .loose(),
   z
@@ -321,7 +653,7 @@ export const deviceToServerFrameSchema = z.discriminatedUnion('type', [
       v: versionField,
       type: z.literal('resume'),
       lastAckSeq: finiteNum,
-      capabilities: z.array(z.string()).max(64).optional(),
+      capabilities: z.array(z.string().max(64)).max(64).optional(),
     })
     .loose(),
   z.object({ v: versionField, type: z.literal('ack'), seq: finiteNum }).loose(),
@@ -337,7 +669,7 @@ export const deviceToServerFrameSchema = z.discriminatedUnion('type', [
     .object({
       v: versionField,
       type: z.literal('task_status'),
-      taskId: nonEmptyStr,
+      taskId: idStr,
       status: cloudTaskStatusSchema,
       at: finiteNum,
     })
@@ -346,10 +678,10 @@ export const deviceToServerFrameSchema = z.discriminatedUnion('type', [
     .object({
       v: versionField,
       type: z.literal('task_worktree'),
-      taskId: nonEmptyStr,
-      unitId: nonEmptyStr,
-      path: nonEmptyStr,
-      branch: z.string().optional(),
+      taskId: idStr,
+      unitId: idStr,
+      path: nonEmptyStr.max(1_024),
+      branch: z.string().max(256).optional(),
       at: finiteNum,
     })
     .loose(),
@@ -357,23 +689,21 @@ export const deviceToServerFrameSchema = z.discriminatedUnion('type', [
     .object({
       v: versionField,
       type: z.literal('task_milestone'),
-      taskId: nonEmptyStr,
-      milestone: z
-        .object({
-          kind: z.enum(['accepted', 'first-change', 'tests-done', 'progress', 'uncommitted']),
-          text: z.string(),
-          at: finiteNum,
-          changedFiles: z.array(cloudChangedFileSchema).max(2000).optional(),
-        })
-        .loose(),
+      taskId: idStr,
+      milestone: z.object({
+        kind: z.enum(['accepted', 'first-change', 'tests-done', 'progress', 'uncommitted']),
+        text: z.string().max(8_000),
+        at: finiteNum,
+        changedFiles: z.array(cloudChangedFileSchema).max(2_000).optional(),
+      }),
     })
     .loose(),
   z
     .object({
       v: versionField,
       type: z.literal('task_question'),
-      taskId: nonEmptyStr,
-      questionId: nonEmptyStr,
+      taskId: idStr,
+      questionId: idStr,
       text: z.string().max(100_000),
       at: finiteNum,
     })
@@ -382,8 +712,8 @@ export const deviceToServerFrameSchema = z.discriminatedUnion('type', [
     .object({
       v: versionField,
       type: z.literal('task_stalled'),
-      taskId: nonEmptyStr,
-      toolName: z.string().optional(),
+      taskId: idStr,
+      toolName: z.string().max(256).optional(),
       idleMs: finiteNum,
       at: finiteNum,
     })
@@ -392,7 +722,7 @@ export const deviceToServerFrameSchema = z.discriminatedUnion('type', [
     .object({
       v: versionField,
       type: z.literal('task_heartbeat'),
-      taskId: nonEmptyStr,
+      taskId: idStr,
       at: finiteNum,
     })
     .loose(),
@@ -400,14 +730,8 @@ export const deviceToServerFrameSchema = z.discriminatedUnion('type', [
     .object({
       v: versionField,
       type: z.literal('task_result'),
-      taskId: nonEmptyStr,
-      result: z
-        .object({
-          summary: z.string(),
-          changedFiles: z.array(cloudChangedFileSchema).max(5000),
-          secretHits: z.array(cloudSecretHitSchema).max(5000).optional(),
-        })
-        .loose(),
+      taskId: idStr,
+      result: cloudTaskResultSchema,
       at: finiteNum,
     })
     .loose(),
@@ -415,10 +739,10 @@ export const deviceToServerFrameSchema = z.discriminatedUnion('type', [
     .object({
       v: versionField,
       type: z.literal('task_failed'),
-      taskId: nonEmptyStr,
-      error: z.string(),
-      changedFiles: z.array(cloudChangedFileSchema).max(5000).optional(),
-      secretHits: z.array(cloudSecretHitSchema).max(5000).optional(),
+      taskId: idStr,
+      error: z.string().max(8_000),
+      changedFiles: z.array(cloudChangedFileSchema).max(2_000).optional(),
+      secretHits: z.array(cloudSecretHitSchema).max(2_000).optional(),
       worktreeClean: z.boolean().optional(),
       at: finiteNum,
     })
@@ -427,8 +751,8 @@ export const deviceToServerFrameSchema = z.discriminatedUnion('type', [
     .object({
       v: versionField,
       type: z.literal('task_interrupted'),
-      taskId: nonEmptyStr,
-      reason: z.string(),
+      taskId: idStr,
+      reason: z.string().max(2_000),
       worktreeClean: z.boolean().optional(),
       at: finiteNum,
     })
@@ -437,12 +761,12 @@ export const deviceToServerFrameSchema = z.discriminatedUnion('type', [
     .object({
       v: versionField,
       type: z.literal('unit_closed'),
-      unitId: nonEmptyStr,
+      unitId: idStr,
       removed: z.boolean(),
       dirty: z.boolean(),
-      worktreePath: z.string().optional(),
-      branch: z.string().optional(),
-      error: z.string().optional(),
+      worktreePath: z.string().max(1_024).optional(),
+      branch: z.string().max(256).optional(),
+      error: z.string().max(2_000).optional(),
       at: finiteNum,
     })
     .loose(),
@@ -450,13 +774,105 @@ export const deviceToServerFrameSchema = z.discriminatedUnion('type', [
     .object({
       v: versionField,
       type: z.literal('unit_state'),
-      unitId: nonEmptyStr,
+      unitId: idStr,
       clean: z.boolean(),
-      worktreePath: z.string().optional(),
+      worktreePath: z.string().max(1_024).optional(),
       at: finiteNum,
     })
     .loose(),
   z.object({ v: versionField, type: z.literal('ping'), at: finiteNum }).loose(),
+])
+
+/** 服务端 → 客户端下行帧运行时 Zod Schema */
+export const serverToClientFrameSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      v: versionField,
+      type: z.literal('snapshot'),
+      seq: finiteNum,
+      snapshot: cloudSnapshotSchema,
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('event'),
+      seq: finiteNum,
+      event: cloudEventSchema,
+    })
+    .loose(),
+  z.object({ v: versionField, type: z.literal('ack'), seq: finiteNum }).loose(),
+  z.object({ v: versionField, type: z.literal('pong'), at: finiteNum }).loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('error'),
+      code: cloudErrorCodeSchema,
+      message: z.string().max(8_000),
+      fatal: z.boolean(),
+    })
+    .loose(),
+])
+
+/** 服务端 → 设备端下行帧运行时 Zod Schema */
+export const serverToDeviceFrameSchema = z.discriminatedUnion('type', [
+  z.object({ v: versionField, type: z.literal('ack'), seq: finiteNum }).loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task'),
+      seq: finiteNum,
+      task: cloudTaskSnapshotSchema,
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task_cancel'),
+      seq: finiteNum,
+      taskId: idStr,
+      reason: z.string().max(2_000),
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task_answer'),
+      taskId: idStr,
+      questionId: idStr,
+      text: z.string().max(200_000),
+      at: finiteNum,
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task_message'),
+      seq: finiteNum,
+      taskId: idStr,
+      text: z.string().max(200_000),
+      at: finiteNum,
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('close_unit'),
+      seq: finiteNum,
+      unitId: idStr,
+      reason: z.enum(['converged', 'user-close', 'sweep']),
+    })
+    .loose(),
+  z.object({ v: versionField, type: z.literal('pong'), at: finiteNum }).loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('error'),
+      code: cloudErrorCodeSchema,
+      message: z.string().max(8_000),
+      fatal: z.boolean(),
+    })
+    .loose(),
 ])
 
 function formatZodIssues(error: z.ZodError): string {
@@ -466,15 +882,48 @@ function formatZodIssues(error: z.ZodError): string {
   return `${loc}${first.message}`
 }
 
+/** 纯 JS 计算字符串 UTF-8 字节数（零分配、无 Node Buffer 依赖，Web 端可用） */
+function utf8ByteLength(text: string): number {
+  let bytes = 0
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i)
+    if (code <= 0x7f) {
+      bytes += 1
+    } else if (code <= 0x7ff) {
+      bytes += 2
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = i + 1 < text.length ? text.charCodeAt(i + 1) : 0
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4
+        i += 1
+      } else {
+        bytes += 3
+      }
+    } else {
+      bytes += 3
+    }
+  }
+  return bytes
+}
+
 /**
- * 解帧：JSON 合法、是对象、`v` 在兼容范围内、`type` 在通道登记表内，
- * 并对 `CLIENT_TO_SERVER_TYPES` / `DEVICE_TO_SERVER_TYPES` 自动执行 Zod 运行时字段校验。
+ * 解帧：先硬校验 UTF-8 字节上限再 JSON.parse（防超大载荷 DoS），
+ * 随后校验对象形态、`v` 兼容范围、`type` 登记表，并对四条方向自动执行 Zod 运行时字段校验。
  */
 export function decodeFrame<T extends FrameBase>(
   raw: unknown,
-  knownTypes?: ReadonlySet<string>
+  knownTypes?: ReadonlySet<string>,
+  maxBytes = MAX_CLOUD_FRAME_BYTES
 ): CloudFrameResult<T> {
   if (typeof raw !== 'string') return { ok: false, code: 'invalid-frame', message: 'Frame must be text.' }
+  // O(1) 快速路径：字符数 > 上限时 UTF-8 字节数必然超限；字符数 * 3 <= 上限时必然不超限
+  if (raw.length > maxBytes || (raw.length * 3 > maxBytes && utf8ByteLength(raw) > maxBytes)) {
+    return {
+      ok: false,
+      code: 'invalid-frame',
+      message: `Frame exceeds maximum size of ${maxBytes} bytes.`,
+    }
+  }
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -518,6 +967,20 @@ export function decodeFrame<T extends FrameBase>(
     }
     return { ok: true, frame: validated.data as unknown as T }
   }
+  if (knownTypes === SERVER_TO_CLIENT_TYPES) {
+    const validated = serverToClientFrameSchema.safeParse(parsed)
+    if (!validated.success) {
+      return { ok: false, code: 'invalid-frame', message: formatZodIssues(validated.error) }
+    }
+    return { ok: true, frame: validated.data as unknown as T }
+  }
+  if (knownTypes === SERVER_TO_DEVICE_TYPES) {
+    const validated = serverToDeviceFrameSchema.safeParse(parsed)
+    if (!validated.success) {
+      return { ok: false, code: 'invalid-frame', message: formatZodIssues(validated.error) }
+    }
+    return { ok: true, frame: validated.data as unknown as T }
+  }
   return { ok: true, frame: parsed as T }
 }
 
@@ -527,6 +990,14 @@ export function parseClientToServerFrame(raw: unknown): CloudFrameResult<ClientT
 
 export function parseDeviceToServerFrame(raw: unknown): CloudFrameResult<DeviceToServerFrame> {
   return decodeFrame<DeviceToServerFrame>(raw, DEVICE_TO_SERVER_TYPES)
+}
+
+export function parseServerToClientFrame(raw: unknown): CloudFrameResult<ServerToClientFrame> {
+  return decodeFrame<ServerToClientFrame>(raw, SERVER_TO_CLIENT_TYPES)
+}
+
+export function parseServerToDeviceFrame(raw: unknown): CloudFrameResult<ServerToDeviceFrame> {
+  return decodeFrame<ServerToDeviceFrame>(raw, SERVER_TO_DEVICE_TYPES)
 }
 
 // ---------------------------------------------------------------------------

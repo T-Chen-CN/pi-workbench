@@ -32,6 +32,8 @@ export interface CloudConfig {
   setupToken?: string
   /** 干净工作树自动回收的空闲延迟（毫秒，默认 10 分钟，由 PI_CLOUD_WORKTREE_RECLAIM_DELAY_MS 控制） */
   worktreeReclaimDelayMs?: number
+  /** `/client/ws` 并发客户端连接上限（默认 32，由 PI_CLOUD_MAX_CLIENT_CONNECTIONS 控制） */
+  maxClientConnections?: number
 }
 
 function required(name: string): string {
@@ -59,6 +61,12 @@ export function loadConfig(overrides: Partial<CloudConfig> = {}): CloudConfig {
   if (envReclaimDelay !== undefined && (!Number.isFinite(envReclaimDelay) || envReclaimDelay < 0)) {
     throw new Error(`Invalid PI_CLOUD_WORKTREE_RECLAIM_DELAY_MS: ${rawReclaimDelay}`)
   }
+  const rawMaxClients = process.env.PI_CLOUD_MAX_CLIENT_CONNECTIONS
+  const envMaxClients =
+    rawMaxClients !== undefined && rawMaxClients.trim() !== '' ? Number(rawMaxClients) : undefined
+  if (envMaxClients !== undefined && (!Number.isInteger(envMaxClients) || envMaxClients < 1)) {
+    throw new Error(`Invalid PI_CLOUD_MAX_CLIENT_CONNECTIONS: ${rawMaxClients}`)
+  }
   const config: CloudConfig = {
     domain: process.env.PI_CLOUD_DOMAIN || 'cloud.example.com',
     host: process.env.PI_CLOUD_HOST || '127.0.0.1',
@@ -74,6 +82,7 @@ export function loadConfig(overrides: Partial<CloudConfig> = {}): CloudConfig {
     webDir: process.env.PI_CLOUD_WEB_DIR || '',
     ...(envSetupToken ? { setupToken: envSetupToken } : {}),
     ...(envReclaimDelay !== undefined ? { worktreeReclaimDelayMs: envReclaimDelay } : {}),
+    ...(envMaxClients !== undefined ? { maxClientConnections: envMaxClients } : {}),
     ...overrides,
   }
   if (!Number.isFinite(config.port) || config.port < 0) {
@@ -84,6 +93,12 @@ export function loadConfig(overrides: Partial<CloudConfig> = {}): CloudConfig {
     (!Number.isFinite(config.worktreeReclaimDelayMs) || config.worktreeReclaimDelayMs < 0)
   ) {
     throw new Error(`Invalid worktreeReclaimDelayMs: ${String(config.worktreeReclaimDelayMs)}`)
+  }
+  if (
+    config.maxClientConnections !== undefined &&
+    (!Number.isInteger(config.maxClientConnections) || config.maxClientConnections < 1)
+  ) {
+    throw new Error(`Invalid maxClientConnections: ${String(config.maxClientConnections)}`)
   }
   return config
 }

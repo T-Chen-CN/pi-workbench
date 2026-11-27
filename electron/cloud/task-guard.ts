@@ -1,13 +1,12 @@
 /**
- * 工单会话的工具守卫（G8 / D-32）。
+ * 工单会话的工具守卫（G8 / D-32 / D4）。
  *
- * 定位：**挡误伤与注入的主流路径，不是安全边界**。路径级完全隔离已被明确取消
- * （D-20）—— `bash` 能绕过任何路径检查，所以这里只做三件确定有用的事：
- * 1. `write` / `edit` 的绝对路径必须落在工作树内；
+ * 约束：
+ * 1. `write` / `edit` 以及 `read` / `ls` / `grep` / `find` 的显式目标路径必须落在工单工作树内（省略路径时默认工作树 cwd 放行）；
  * 2. `bash` / `powershell` 里 `git push`、`curl … | sh` 一类管道执行直接拒绝；
- * 3. `rm -rf` 的每个目标都必须落在工作树内。
+ * 3. `rm` / `del` / `rmdir` / `Remove-Item`（无论是否带递归/强制参数）的每个目标都必须落在工作树内。
  *
- * 约束：`tool_call` 的分发循环没有 try/catch，handler 自己抛错会掀掉整轮，
+ * `tool_call` 的分发循环没有 try/catch，handler 自己抛错会掀掉整轮，
  * 所以任何异常都必须在这里 catch 掉并按拒绝处理（fail-closed）。
  */
 
@@ -26,7 +25,10 @@ const PRE_PUSH_SCRIPT =
   '#!/bin/sh\necho "[pi-workbench] git push is blocked in delegated task worktrees." >&2\nexit 1\n'
 
 const WRITE_TOOLS = new Set(['write', 'edit'])
+const READ_TOOLS = new Set(['read', 'ls', 'grep', 'find'])
 const SHELL_TOOLS = new Set(['bash', 'powershell'])
+const WRITE_PATH_KEYS = ['path', 'file_path', 'filePath', 'target'] as const
+const READ_PATH_KEYS = ['path', 'file_path', 'filePath', 'target', 'dir', 'directory', 'cwd'] as const
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g
 
 /** 管道执行：下载内容直接进 shell / 解释器，或下载落地后直接执行 */
@@ -75,9 +77,24 @@ function resolveToolPath(cwd: string, input: string): string | null {
 /** 取出该次调用涉及的写入路径（不同工具参数名不一致） */
 function writeTargets(input: Record<string, unknown>): string[] {
   const targets: string[] = []
-  for (const key of ['path', 'file_path', 'filePath', 'target']) {
+  for (const key of WRITE_PATH_KEYS) {
     const value = input[key]
     if (typeof value === 'string' && value.trim()) targets.push(value.trim())
+  }
+  return targets
+}
+
+/** 取出该次读/列/搜工具显式指定的路径；省略路径参数时默认落在工作树 cwd，返回空数组 */
+function readTargets(input: Record<string, unknown>): string[] {
+  const targets: string[] = []
+  for (const key of READ_PATH_KEYS) {
+    const value = input[key]
+    if (typeof value === 'string' && value.trim()) targets.push(value.trim())
+  }
+  if (Array.isArray(input.paths)) {
+    for (const item of input.paths) {
+      if (typeof item === 'string' && item.trim()) targets.push(item.trim())
+    }
   }
   return targets
 }
@@ -123,34 +140,35 @@ function escapingRmTarget(cwd: string, root: string, command: string): string | 
     while ((match = RM_COMMAND.exec(segment)) !== null) {
       const cmd = (match[1] ?? '').toLowerCase()
       const args = match[2] ?? ''
-      const hasRecursiveOrForce =
-        cmd === 'del' || cmd === 'rmdir'
-          ? /(^|\s)\/[sqf]\b/i.test(args) || /(^|\s)-[a-zA-Z]*(r|f)/i.test(args)
-          : cmd === 'remove-item' || cmd === 'ri'
-            ? /(^|\s)-(recurse|force|r|fo)\b/i.test(args)
-            : /(^|\s)-[a-zA-Z]*(r|f)/.test(args) || /(^|\s)--(recursive|force)\b/i.test(args)
-      if (!hasRecursiveOrForce) continue
+      const isWindowsCmd = cmd === 'del' || cmd === 'rmdir'
 
       const rawTokens = tokenizeShellArgs(args)
       const targets: string[] = []
+      let afterDoubleDash = false
       for (let i = 0; i < rawTokens.length; i += 1) {
         const token = rawTokens[i]
-        // 处理 PowerShell `-Path=...` / `-LiteralPath=...` 与 `-Path <val>`
-        const psPathEq = /^-(?:literal)?path=(.+)$/i.exec(token)
-        if (psPathEq) {
-          targets.push(psPathEq[1])
-          continue
+        if (!afterDoubleDash) {
+          if (token === '--') {
+            afterDoubleDash = true
+            continue
+          }
+          // 处理 PowerShell `-Path=...` / `-LiteralPath=...` 与 `-Path <val>`
+          const psPathEq = /^-(?:literal)?path=(.+)$/i.exec(token)
+          if (psPathEq) {
+            targets.push(psPathEq[1])
+            continue
+          }
+          if (/^-(?:literal)?path$/i.test(token) && i + 1 < rawTokens.length) {
+            targets.push(rawTokens[++i])
+            continue
+          }
+          if (token.startsWith('-') || (isWindowsCmd && /^\/[a-zA-Z]$/i.test(token))) continue
         }
-        if (/^-(?:literal)?path$/i.test(token) && i + 1 < rawTokens.length) {
-          targets.push(rawTokens[++i])
-          continue
-        }
-        if (token.startsWith('-') || /^\/[a-zA-Z]$/i.test(token)) continue
         targets.push(token)
       }
       if (targets.length === 0) continue
 
-      // fail-closed：无法解析工作树根或当前工作目录（如符号链接循环）时一律拒绝递归删除
+      // fail-closed：无法解析工作树根或当前工作目录（如符号链接循环）时一律拒绝删除
       if (!canonicalRoot || !effectiveCwd) return targets[0]
 
       for (const raw of targets) {
@@ -186,11 +204,12 @@ export function createTaskGuardExtension(context: TaskGuardContext): ExtensionFa
       try {
         const toolName = String(event?.toolName ?? '')
         const input = (event?.input ?? event?.args ?? {}) as Record<string, unknown>
-        const guarded = WRITE_TOOLS.has(toolName) || SHELL_TOOLS.has(toolName)
+        const guarded =
+          WRITE_TOOLS.has(toolName) || READ_TOOLS.has(toolName) || SHELL_TOOLS.has(toolName)
         const cwd = String(extensionCtx?.cwd ?? '')
         if (!cwd) {
           if (!guarded) return undefined
-          // fail-closed：写/命令工具缺失 cwd 时无法校验工作树边界，必须拒绝
+          // fail-closed：读写/命令工具缺失 cwd 时无法校验工作树边界，必须拒绝
           return {
             block: true,
             reason: 'Cannot determine task working directory; blocking tool call (fail-closed).',
@@ -232,6 +251,23 @@ export function createTaskGuardExtension(context: TaskGuardContext): ExtensionFa
           return undefined
         }
 
+        if (READ_TOOLS.has(toolName)) {
+          for (const raw of readTargets(input)) {
+            const resolved = resolveToolPath(root, raw)
+            if (!resolved) {
+              return block(
+                `Refusing to read unresolvable path (possible symlink loop): ${raw}.`
+              )
+            }
+            if (!isPathInsideRoot(root, resolved)) {
+              return block(
+                `Refusing to read outside the task worktree: ${resolved}. Stay inside ${root}.`
+              )
+            }
+          }
+          return undefined
+        }
+
         if (SHELL_TOOLS.has(toolName)) {
           const command = String(input.command ?? input.script ?? input.cmd ?? '')
           if (!command) return undefined
@@ -249,7 +285,7 @@ export function createTaskGuardExtension(context: TaskGuardContext): ExtensionFa
           const escaping = escapingRmTarget(root, root, flat)
           if (escaping) {
             return block(
-              `Refusing a recursive delete outside the task worktree: ${escaping}. Stay inside ${root}.`
+              `Refusing to delete outside the task worktree: ${escaping}. Stay inside ${root}.`
             )
           }
           return undefined

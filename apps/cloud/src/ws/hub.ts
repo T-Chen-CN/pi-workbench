@@ -1,13 +1,13 @@
 /**
- * 数据面：客户端通道 + 设备通道的连接管理与事件投递（F-43 ~ F-50）。
+ * 数据面：客户端通道 + 设备通道的连接管理、背压保护、帧限流与事件投递（F-43 ~ F-50）。
  *
  * 设计取舍：
  * - **客户端事件日志是全局单条**（单会话模型），每个连接按自己的 `lastAckSeq` 续读；
  *   多条浏览器标签不会各存一份。超上限 / 超时效就丢旧增量并要求对方重拉 snapshot。
  * - **设备日志按设备一条**，工单进终态时立刻清掉它的待投递项（F-21），重连不会再收到
  *   已被取消的工单。`ack(seq)` 只用于裁剪设备日志。
- * - 心跳 25 s、静默 60 s 判离线；离线判定只负责通知上层（工单转 `cancelled` 的决策在
- *   dispatcher 里，避免连接层持有业务状态）。
+ * - 心跳 25 s、静默 60 s 判离线；发送前检查 `readyState === OPEN` 与 `bufferedAmount <= MAX_WS_BUFFERED_BYTES`
+ *   （慢消费者超 4 MiB 立即断开防 OOM）；单客户端高开销帧（`resume` / `say` / `confirm_plan`）走令牌桶限流。
  */
 
 import type { WebSocket } from 'ws'
@@ -30,6 +30,20 @@ import {
   type ServerToClientFrame,
   type ServerToDeviceFrame,
 } from 'pi-bridge'
+
+/** `/client/ws` 默认并发连接上限，超出后拒绝升级或 1013 关闭 */
+export const MAX_CLIENT_CONNECTIONS = 32
+/** 单 socket 发送缓冲背压上限（4 MiB）；超出视为慢消费者立即断开，防止 OOM */
+export const MAX_WS_BUFFERED_BYTES = 4 * 1024 * 1024
+
+const WS_OPEN = 1
+const EXPENSIVE_CLIENT_FRAMES: ReadonlySet<string> = new Set(['resume', 'say', 'confirm_plan'])
+const DEFAULT_EXPENSIVE_BUCKET = { capacity: 10, refillPerSec: 2 }
+
+interface TokenBucketState {
+  tokens: number
+  lastRefillAt: number
+}
 
 interface StoredFrame {
   seq: number
@@ -164,22 +178,65 @@ export interface HubHandlers {
   logger: { warn: (...args: unknown[]) => void; info: (...args: unknown[]) => void }
 }
 
+export interface HubOptions {
+  /** 并发 `/client/ws` 连接上限（默认 32） */
+  maxClientConnections?: number
+  /** 单 socket 发送缓冲背压上限（默认 4 MiB） */
+  maxBufferedBytes?: number
+  /** 单 socket 高开销帧（`resume` / `say` / `confirm_plan`）令牌桶参数 */
+  expensiveFrameBucket?: { capacity: number; refillPerSec: number }
+}
+
 export class Hub {
   private clients = new Set<ClientPeer>()
   private devices = new Map<string, DevicePeer>()
   private clientLog = new BoundedLog()
   private deviceLogs = new Map<string, BoundedLog>()
+  private clientBuckets = new WeakMap<ClientPeer, TokenBucketState>()
   private heartbeat: NodeJS.Timeout | null = null
+  private readonly maxClientConnections: number
+  private readonly maxBufferedBytes: number
+  private readonly bucketConfig: { capacity: number; refillPerSec: number }
   private static counter = 0
 
   constructor(
     private readonly handlers: HubHandlers,
-    private readonly now: () => number = Date.now
-  ) {}
+    private readonly now: () => number = Date.now,
+    options: HubOptions = {}
+  ) {
+    this.maxClientConnections = Math.max(1, options.maxClientConnections ?? MAX_CLIENT_CONNECTIONS)
+    this.maxBufferedBytes = Math.max(1024, options.maxBufferedBytes ?? MAX_WS_BUFFERED_BYTES)
+    this.bucketConfig = {
+      capacity: Math.max(1, options.expensiveFrameBucket?.capacity ?? DEFAULT_EXPENSIVE_BUCKET.capacity),
+      refillPerSec: Math.max(
+        0.01,
+        options.expensiveFrameBucket?.refillPerSec ?? DEFAULT_EXPENSIVE_BUCKET.refillPerSec
+      ),
+    }
+  }
 
   // ------------------------------ 连接 ------------------------------
 
-  addClient(socket: WebSocket, resumeFrom: number | null, deviceId?: string): ClientPeer {
+  canAcceptClient(): boolean {
+    return this.clients.size < this.maxClientConnections
+  }
+
+  addClient(socket: WebSocket, resumeFrom: number | null, deviceId?: string): ClientPeer | null {
+    if (!this.canAcceptClient()) {
+      this.handlers.logger.warn(
+        `[cloud] rejecting client ws: connection cap (${this.maxClientConnections}) reached`
+      )
+      try {
+        socket.close(1013, 'Too many client connections')
+      } catch {
+        try {
+          socket.terminate()
+        } catch {
+          // ignore
+        }
+      }
+      return null
+    }
     const wasEmpty = this.clients.size === 0
     Hub.counter += 1
     const peer: ClientPeer = {
@@ -215,6 +272,55 @@ export class Hub {
     if (this.clients.size === 0) {
       this.handlers.onClientsEmpty?.()
     }
+  }
+
+  private terminatePeer(peer: HubPeer, reason: string): void {
+    this.handlers.logger.warn(`[cloud] terminating ${peer.role} ${peer.id}: ${reason}`)
+    peer.alive = false
+    if (peer.role === 'client') {
+      this.removeClient(peer)
+    } else if (this.devices.get(peer.deviceId) === peer) {
+      this.devices.delete(peer.deviceId)
+      this.handlers.onDeviceOffline(peer.deviceId)
+    }
+    try {
+      peer.socket.terminate()
+    } catch {
+      try {
+        peer.socket.close()
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  /**
+   * 背压与就绪状态保护发送：
+   * - 连接非 OPEN 直接跳过；
+   * - `bufferedAmount > maxBufferedBytes`（4 MiB）判定为慢消费者，立即终止连接防止 OOM。
+   */
+  private safeSend(peer: HubPeer, payload: string): boolean {
+    if (peer.socket.readyState !== WS_OPEN) return false
+    const buffered = typeof peer.socket.bufferedAmount === 'number' ? peer.socket.bufferedAmount : 0
+    if (buffered > this.maxBufferedBytes) {
+      this.terminatePeer(
+        peer,
+        `slow consumer backpressure (${buffered} > ${this.maxBufferedBytes} bytes)`
+      )
+      return false
+    }
+    try {
+      peer.socket.send(payload)
+      return true
+    } catch (error) {
+      this.handlers.logger.warn(`[cloud] failed to send to ${peer.role} ${peer.id}:`, error)
+      return false
+    }
+  }
+
+  /** 发送 pong（走背压保护通道） */
+  sendPong(peer: HubPeer, at: number): boolean {
+    return this.safeSend(peer, encodeFrame({ v: CLOUD_PROTOCOL_VERSION, type: 'pong', at }))
   }
 
   /** 撤销设备时立即断开其 `/device/ws` 及由该设备 token 鉴权的全部 `/client/ws` 连接 */
@@ -325,16 +431,16 @@ export class Hub {
     const needsSnapshot = cursor === null || overflow
     if (needsSnapshot) {
       const snapshot = await this.handlers.buildSnapshot()
-      try {
-        peer.socket.send(
-          encodeFrame({
-            v: CLOUD_PROTOCOL_VERSION,
-            type: 'snapshot',
-            seq: snapshot.lastSeq,
-            snapshot,
-          })
-        )
-      } catch {
+      const sent = this.safeSend(
+        peer,
+        encodeFrame({
+          v: CLOUD_PROTOCOL_VERSION,
+          type: 'snapshot',
+          seq: snapshot.lastSeq,
+          snapshot,
+        })
+      )
+      if (!sent) {
         peer.initialized = true
         return
       }
@@ -342,16 +448,16 @@ export class Hub {
       return
     }
     for (const entry of frames) {
-      try {
-        peer.socket.send(
-          encodeFrame({
-            v: CLOUD_PROTOCOL_VERSION,
-            type: 'event',
-            seq: entry.seq,
-            event: entry.frame,
-          })
-        )
-      } catch {
+      const sent = this.safeSend(
+        peer,
+        encodeFrame({
+          v: CLOUD_PROTOCOL_VERSION,
+          type: 'event',
+          seq: entry.seq,
+          event: entry.frame,
+        })
+      )
+      if (!sent) {
         peer.initialized = true
         return
       }
@@ -372,19 +478,15 @@ export class Hub {
       event,
     }
     const text = encodeFrame(frame)
-    for (const peer of this.clients) {
+    for (const peer of [...this.clients]) {
       // 首包未发完的对端先不推：它在 sendInitial/resumeClient 结束时按日志补上，顺序就对了
       if (!peer.initialized) continue
-      try {
-        peer.socket.send(text)
-      } catch (error) {
-        this.handlers.logger.warn('[cloud] failed to push event:', error)
-      }
+      this.safeSend(peer, text)
     }
     return seq
   }
 
-  /** 工单帧投给设备；设备离线时返回 false（调用方按 F-21 处理） */
+  /** 工单帧投给设备；设备离线或触发背压断开时返回 false（调用方按 F-21 处理） */
   sendToDevice(deviceId: string, frame: ServerToDeviceFrame, taskId?: string): boolean {
     const log = this.deviceLog(deviceId)
     // 帧本身要带 seq：重连补投时不能再包一层
@@ -394,13 +496,7 @@ export class Hub {
     )
     const peer = this.devices.get(deviceId)
     if (!peer) return false
-    try {
-      peer.socket.send(encodeFrame(sequenced.frame))
-      return true
-    } catch (error) {
-      this.handlers.logger.warn('[cloud] failed to push to device:', error)
-      return false
-    }
+    return this.safeSend(peer, encodeFrame(sequenced.frame))
   }
 
   /** 工单进终态：不再补投 */
@@ -415,12 +511,14 @@ export class Hub {
     fatal = false
   ): void {
     const frame = { v: CLOUD_PROTOCOL_VERSION, type: 'error', code, message, fatal }
-    try {
-      peer.socket.send(encodeFrame(frame))
-    } catch {
-      // ignore
+    this.safeSend(peer, encodeFrame(frame))
+    if (fatal) {
+      try {
+        peer.socket.close()
+      } catch {
+        // ignore
+      }
     }
-    if (fatal) peer.socket.close()
   }
 
   // ------------------------------ 心跳 ------------------------------
@@ -476,6 +574,25 @@ export class Hub {
 
   // ------------------------------ 内部 ------------------------------
 
+  private consumeExpensiveFrameToken(peer: ClientPeer): boolean {
+    const now = this.now()
+    let state = this.clientBuckets.get(peer)
+    if (!state) {
+      state = { tokens: this.bucketConfig.capacity, lastRefillAt: now }
+      this.clientBuckets.set(peer, state)
+    } else {
+      const elapsedSec = Math.max(0, (now - state.lastRefillAt) / 1000)
+      state.tokens = Math.min(
+        this.bucketConfig.capacity,
+        state.tokens + elapsedSec * this.bucketConfig.refillPerSec
+      )
+      state.lastRefillAt = now
+    }
+    if (state.tokens < 1) return false
+    state.tokens -= 1
+    return true
+  }
+
   private deviceLog(deviceId: string): BoundedLog {
     let log = this.deviceLogs.get(deviceId)
     if (!log) {
@@ -491,24 +608,21 @@ export class Hub {
     // 服务端重启游标归零或设备日志溢出：发送 ack(seq: 0) 重置终端游标并重放当前全部待投递帧，防止静默丢帧
     const toReplay = overflow ? log.since(0).frames : frames
     if (overflow) {
-      try {
-        peer.socket.send(
+      if (
+        !this.safeSend(
+          peer,
           encodeFrame({
             v: CLOUD_PROTOCOL_VERSION,
             type: 'ack',
             seq: 0,
           })
         )
-      } catch {
+      ) {
         return
       }
     }
     for (const entry of toReplay) {
-      try {
-        peer.socket.send(encodeFrame(entry.frame))
-      } catch {
-        return
-      }
+      if (!this.safeSend(peer, encodeFrame(entry.frame))) return
     }
   }
 
@@ -519,37 +633,32 @@ export class Hub {
       const { frames, overflow } = this.clientLog.since(cursor)
       if (!overflow) {
         for (const entry of frames) {
-          try {
-            peer.socket.send(
-              encodeFrame({
-                v: CLOUD_PROTOCOL_VERSION,
-                type: 'event',
-                seq: entry.seq,
-                event: entry.frame,
-              })
-            )
-          } catch {
-            return
-          }
+          const sent = this.safeSend(
+            peer,
+            encodeFrame({
+              v: CLOUD_PROTOCOL_VERSION,
+              type: 'event',
+              seq: entry.seq,
+              event: entry.frame,
+            })
+          )
+          if (!sent) return
         }
         this.finishInitial(peer, frames.length > 0 ? frames[frames.length - 1].seq : cursor)
         return
       }
     }
     const snapshot = await this.handlers.buildSnapshot()
-    try {
-      peer.socket.send(
-        encodeFrame({
-          v: CLOUD_PROTOCOL_VERSION,
-          type: 'snapshot',
-          seq: snapshot.lastSeq,
-          snapshot,
-        })
-      )
-    } catch (error) {
-      this.handlers.logger.warn('[cloud] failed to send snapshot:', error)
-      return
-    }
+    const sent = this.safeSend(
+      peer,
+      encodeFrame({
+        v: CLOUD_PROTOCOL_VERSION,
+        type: 'snapshot',
+        seq: snapshot.lastSeq,
+        snapshot,
+      })
+    )
+    if (!sent) return
     this.finishInitial(peer, snapshot.lastSeq)
   }
 
@@ -560,18 +669,16 @@ export class Hub {
   private finishInitial(peer: ClientPeer, fromSeq: number): void {
     const { frames } = this.clientLog.since(fromSeq)
     for (const entry of frames) {
-      try {
-        peer.socket.send(
-          encodeFrame({
-            v: CLOUD_PROTOCOL_VERSION,
-            type: 'event',
-            seq: entry.seq,
-            event: entry.frame,
-          })
-        )
-      } catch {
-        return
-      }
+      const sent = this.safeSend(
+        peer,
+        encodeFrame({
+          v: CLOUD_PROTOCOL_VERSION,
+          type: 'event',
+          seq: entry.seq,
+          event: entry.frame,
+        })
+      )
+      if (!sent) return
     }
     peer.initialized = true
     this.handlers.onClientHello(peer)
@@ -584,6 +691,10 @@ export class Hub {
     const decoded = decodeClientFrame(text)
     if (!decoded.ok) {
       this.sendError(peer, decoded.code, decoded.message, decoded.code === 'protocol-version')
+      return
+    }
+    if (EXPENSIVE_CLIENT_FRAMES.has(decoded.frame.type) && !this.consumeExpensiveFrameToken(peer)) {
+      this.sendError(peer, 'rate-limited', 'Too many requests; slow down.', false)
       return
     }
     this.handlers.onClientFrame(peer, decoded.frame)

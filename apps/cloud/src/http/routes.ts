@@ -22,6 +22,8 @@ import {
   createToken,
   hashPassword,
   hashToken,
+  MAX_PASSWORD_BYTES,
+  needsPasswordRehash,
   verifyPassword,
   verifyToken,
 } from '../auth/credentials.js'
@@ -34,7 +36,13 @@ import {
   sessionCookieHeader,
   verifySessionCookie,
 } from '../auth/session-cookie.js'
-import { HttpError, isAllowedOrigin, Router, sendJson, type RequestContext } from './router.js'
+import {
+  HttpError,
+  isAllowedSameOriginFetch,
+  Router,
+  sendJson,
+  type RequestContext,
+} from './router.js'
 import { decryptSecret, encryptSecret, maskSecret } from '../secure/config-crypto.js'
 import {
   DEFAULT_AUTHORIZATION_TTL_MS,
@@ -74,6 +82,8 @@ export interface RouteDeps {
   memoryStore?: CloudMemoryStore
   /** 手动触发一次梦境整理（F-41 / C-03a） */
   onRunDream?: () => Promise<CloudDreamRecord | null>
+  /** 是否运行在生产模式（默认按 NODE_ENV === 'production' 判定） */
+  isProduction?: boolean
   logger: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void }
 }
 
@@ -94,15 +104,45 @@ function decryptCredential(
 
 export function buildRouter(deps: RouteDeps): Router {
   const router = new Router()
+  const isProduction = deps.isProduction ?? process.env.NODE_ENV === 'production'
+  /** 内存持有的一次性初始化口令；建号成功后立即清空 */
+  let activeSetupToken = deps.config.setupToken?.trim() || undefined
 
-  /** 限制并发 scrypt 次数，防止未鉴权并发登录瞬间打爆服务器内存 */
+  /** 限制并发 scrypt 次数，防止未鉴权并发登录/初始化瞬间打爆服务器内存 */
   const MAX_CONCURRENT_SCRYPT = 4
   let activeScrypt = 0
 
+  const withScryptSlot = async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (activeScrypt >= MAX_CONCURRENT_SCRYPT) {
+      throw new HttpError(429, CREDENTIAL_ERROR, 'rate-limited')
+    }
+    activeScrypt += 1
+    try {
+      return await fn()
+    } finally {
+      activeScrypt -= 1
+    }
+  }
+
+  /** Cookie 鉴权写操作严格同源校验（阻断空请求体跨站 POST / DELETE CSRF） */
   const assertSameOriginForCookieMutation = (ctx: RequestContext): void => {
     const method = (ctx.req.method ?? 'GET').toUpperCase()
     if (method === 'GET' || method === 'HEAD') return
-    if (!isAllowedOrigin(ctx.req)) {
+    if (
+      !isAllowedSameOriginFetch(ctx.req, {
+        requireOriginOrSameOriginFetchSite: true,
+        allowNonProdJsonFallback: !isProduction,
+      })
+    ) {
+      throw new HttpError(403, 'Cross-origin request rejected', 'forbidden-origin')
+    }
+  }
+
+  /** 非 Cookie 写端点（/v1/setup、/v1/login）：阻断跨站 Origin 与 Sec-Fetch-Site */
+  const assertNotCrossSite = (ctx: RequestContext): void => {
+    const method = (ctx.req.method ?? 'GET').toUpperCase()
+    if (method === 'GET' || method === 'HEAD') return
+    if (!isAllowedSameOriginFetch(ctx.req, { requireOriginOrSameOriginFetchSite: false })) {
       throw new HttpError(403, 'Cross-origin request rejected', 'forbidden-origin')
     }
   }
@@ -147,13 +187,24 @@ export function buildRouter(deps: RouteDeps): Router {
     return device
   }
 
-  router.get('/v1/health', () => ({
-    ok: true,
-    version: deps.config.version,
-    ready: deps.session.currentSessionId !== null,
-    hasAccount: deps.store.getAccount() !== null,
-    hasConfig: deps.store.getCloudConfig() !== null,
-  }))
+  router.get('/v1/health', () => {
+    const ready = deps.session.currentSessionId !== null
+    if (isProduction) {
+      // 生产环境不向未鉴权调用方暴露 hasAccount / hasConfig，防止暴露未初始化窗口
+      return {
+        ok: true,
+        version: deps.config.version,
+        ready,
+      }
+    }
+    return {
+      ok: true,
+      version: deps.config.version,
+      ready,
+      hasAccount: deps.store.getAccount() !== null,
+      hasConfig: deps.store.getCloudConfig() !== null,
+    }
+  })
 
   router.get('/v1/me', (ctx) => {
     return {
@@ -163,16 +214,16 @@ export function buildRouter(deps: RouteDeps): Router {
     }
   })
 
-  /** F-01：唯一的自助入口，只允许创建一次；防跨站、防爆破，配置了 setupToken 时强制核验启动令牌 */
+  /** F-01：唯一的自助入口，只允许创建一次；防跨站、防爆破，配置或生产自动生成了 setupToken 时强制核验 */
   router.post('/v1/setup', async (ctx) => {
-    assertSameOriginForCookieMutation(ctx)
+    assertNotCrossSite(ctx)
     if (deps.store.getAccount()) throw new HttpError(409, 'Account already exists', 'conflict')
     const source = ctx.source
     const body = await ctx.json<{ password?: string; setupToken?: string }>(16 * 1024)
     const lease = deps.loginLimiter.tryAcquire(source)
     if (!lease.allowed) throw new HttpError(429, CREDENTIAL_ERROR, 'rate-limited')
     try {
-      const expectedToken = deps.config.setupToken?.trim()
+      const expectedToken = activeSetupToken
       if (expectedToken) {
         const headerToken = ctx.req.headers['x-setup-token']
         const provided = String(
@@ -187,7 +238,10 @@ export function buildRouter(deps: RouteDeps): Router {
       }
       const password = String(body.password ?? '')
       if (password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters')
-      const hashed = await hashPassword(password)
+      if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
+        throw new HttpError(400, `Password must be at most ${MAX_PASSWORD_BYTES} bytes`)
+      }
+      const hashed = await withScryptSlot(() => hashPassword(password))
       const now = Date.now()
       const created = await deps.store.createAccount({
         passwordHash: hashed.hash,
@@ -196,6 +250,7 @@ export function buildRouter(deps: RouteDeps): Router {
         updatedAt: now,
       })
       if (!created) throw new HttpError(409, 'Account already exists', 'conflict')
+      activeSetupToken = undefined
       deps.loginLimiter.recordSuccess(source)
       deps.logger.info('[cloud] admin account created')
       return { ok: true }
@@ -205,34 +260,48 @@ export function buildRouter(deps: RouteDeps): Router {
   })
 
   router.post('/v1/login', async (ctx) => {
-    assertSameOriginForCookieMutation(ctx)
+    assertNotCrossSite(ctx)
     const account = deps.store.getAccount()
     if (!account) throw new HttpError(409, 'No account yet', 'conflict')
     const source = ctx.source
     // 先读并校验请求体，再原子占位限流，防止慢速/并发连接同时越过 canAttempt
     const body = await ctx.json<{ password?: string }>(16 * 1024)
+    const password = String(body.password ?? '')
     const lease = deps.loginLimiter.tryAcquire(source)
     if (!lease.allowed) {
       throw new HttpError(429, CREDENTIAL_ERROR, 'rate-limited')
     }
-    if (activeScrypt >= MAX_CONCURRENT_SCRYPT) {
+    if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
       lease.release()
-      throw new HttpError(429, CREDENTIAL_ERROR, 'rate-limited')
+      deps.loginLimiter.recordFailure(source)
+      throw new HttpError(401, CREDENTIAL_ERROR, CREDENTIAL_ERROR)
     }
-    activeScrypt += 1
     let ok = false
+    let upgradedHash: { hash: string; salt: string } | null = null
     try {
-      ok = await verifyPassword(String(body.password ?? ''), {
-        hash: account.passwordHash,
-        salt: account.salt,
+      await withScryptSlot(async () => {
+        const stored = { hash: account.passwordHash, salt: account.salt }
+        ok = await verifyPassword(password, stored)
+        if (ok && needsPasswordRehash(stored)) {
+          upgradedHash = await hashPassword(password)
+        }
       })
     } finally {
-      activeScrypt -= 1
       lease.release()
     }
     if (!ok) {
       deps.loginLimiter.recordFailure(source)
       throw new HttpError(401, CREDENTIAL_ERROR, CREDENTIAL_ERROR)
+    }
+    if (upgradedHash) {
+      const upgraded = upgradedHash as { hash: string; salt: string }
+      await deps.store.updateAccount({
+        ...account,
+        passwordHash: upgraded.hash,
+        salt: upgraded.salt,
+        updatedAt: Date.now(),
+      })
+      deps.logger.info('[cloud] upgraded legacy admin password hash to PHC scrypt')
     }
     deps.loginLimiter.recordSuccess(source)
     const cookie = issueSessionCookie(
@@ -346,18 +415,15 @@ export function buildRouter(deps: RouteDeps): Router {
 
   /** F-08：解绑 → 立即断开在线 WS，后续重连 401；允许管理员会话或设备本人自吊销 */
   router.delete('/v1/devices/:id', async (ctx) => {
-    let authorized = false
-    try {
-      requireSession(ctx)
-      authorized = true
-    } catch {
+    const authHeader = ctx.req.headers.authorization ?? ''
+    if (authHeader.startsWith('Bearer ')) {
       const self = requireDevice(ctx)
       if (self.id !== ctx.params.id) {
         throw new HttpError(403, 'A device may only revoke itself', 'forbidden')
       }
-      authorized = true
+    } else {
+      requireSession(ctx)
     }
-    if (!authorized) throw new HttpError(401, 'Unauthorized', 'unauthorized')
     const device = deps.store.findDevice(ctx.params.id)
     if (!device) throw new HttpError(404, 'Unknown device')
     await deps.store.updateDevice(device.id, { revokedAt: Date.now() })

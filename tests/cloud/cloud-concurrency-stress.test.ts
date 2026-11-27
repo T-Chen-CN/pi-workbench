@@ -93,7 +93,7 @@ async function registerOnlineDevice(
   if (viaPair) {
     const codeRes = await fetch(`${baseUrl}/v1/pair/code`, {
       method: 'POST',
-      headers: { cookie },
+      headers: { cookie, origin: baseUrl },
     })
     const { code } = (await codeRes.json()) as { code: string }
     const pairRes = await fetch(`${baseUrl}/v1/pair`, {

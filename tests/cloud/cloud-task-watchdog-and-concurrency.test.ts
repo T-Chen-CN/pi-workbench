@@ -312,6 +312,7 @@ describe('C-02 & C-07：终端工具静默检测、工单心跳与 ask_cloud 非
       logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
       dataDir,
       getApiConfig: async () => null,
+      installPrePushHook: async () => ({ ok: true }),
       getCoordinator: async () => ({
         bind: async () => ({ success: true, worktree: { path: worktreePath, branch: 'pi/wt' } }),
         getSessionBinding: () => ({ key: '', path: worktreePath, branch: 'pi/wt' }),
@@ -404,6 +405,7 @@ describe('C-02 & C-07：终端工具静默检测、工单心跳与 ask_cloud 非
       logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
       dataDir,
       getApiConfig: async () => null,
+      installPrePushHook: async () => ({ ok: true }),
       getCoordinator: async () => ({
         bind: async () => ({ success: true, worktree: { path: worktreePath, branch: 'pi/ask' } }),
         getSessionBinding: () => ({ key: '', path: worktreePath, branch: 'pi/ask' }),

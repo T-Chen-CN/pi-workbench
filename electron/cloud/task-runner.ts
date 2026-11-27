@@ -31,7 +31,12 @@ import {
   installWorktreePrePushHook,
   type TaskGuardInfo,
 } from './task-guard.js'
-import { annotateChangedFiles, collectTaskDiff, scanWorktreeSecrets } from './task-report.js'
+import {
+  annotateChangedFiles,
+  collectTaskDiff,
+  redactSecrets,
+  scanWorktreeSecrets,
+} from './task-report.js'
 import { createDesktopCredentialStore } from '../credentials-store.js'
 import { getModelsStore } from '../models-store.js'
 import { isCatalogNetworkAllowed } from '../providers-service.js'
@@ -144,6 +149,8 @@ export interface CloudTaskRunnerDeps {
   toolStallMs?: number
   taskHeartbeatMs?: number
   now?: () => number
+  /** 可覆盖 pre-push hook 安装实现（测试注入用，缺省走真实 installWorktreePrePushHook） */
+  installPrePushHook?: typeof installWorktreePrePushHook
   onResult: (taskId: string, result: CloudTaskResult) => void
   onFailed: (
     taskId: string,
@@ -362,6 +369,7 @@ export class CloudTaskRunner {
         }
       }
 
+      const installHook = this.deps.installPrePushHook ?? installWorktreePrePushHook
       const existing = this.units.get(spec.workUnitId)
       if (existing && existsSync(existing.worktreePath)) {
         const normPath = (p: string) =>
@@ -372,9 +380,17 @@ export class CloudTaskRunner {
             error: `Work unit ${spec.workUnitId} is bound to a different repository.`,
           }
         }
-        const hook = await installWorktreePrePushHook(existing.repoPath, existing.worktreePath)
+        const hook = await installHook(existing.repoPath, existing.worktreePath).catch((error) => ({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        }))
         if (!hook.ok) {
           this.deps.logger.warn('[Cloud Task] Failed to ensure worktree pre-push hook:', hook.error)
+          return {
+            ok: false,
+            error: `Failed to install worktree pre-push guard: ${hook.error ?? 'unknown error'}`,
+            record: existing,
+          }
         }
         return { ok: true, record: existing }
       }
@@ -394,10 +410,18 @@ export class CloudTaskRunner {
       if (!bound.success || !bound.worktree) {
         return { ok: false, error: bound.error ?? 'Unable to create a worktree for this task' }
       }
-      // D-32 / A-44：在单元工作树装独立 pre-push hook，防止绕过 tool_call 推送远端
-      const hook = await installWorktreePrePushHook(repoPath, bound.worktree.path)
+      // D-32 / A-44：在单元工作树装独立 pre-push hook，防止绕过 tool_call 推送远端；失败一律 fail-closed 并清理刚建好的未受保护工作树
+      const hook = await installHook(repoPath, bound.worktree.path).catch((error) => ({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      }))
       if (!hook.ok) {
         this.deps.logger.warn('[Cloud Task] Failed to install worktree pre-push hook:', hook.error)
+        await coordinator.release(bindingId).catch(() => undefined)
+        return {
+          ok: false,
+          error: `Failed to install worktree pre-push guard: ${hook.error ?? 'unknown error'}`,
+        }
       }
       const record: UnitRecord = {
         repoPath,
@@ -514,7 +538,7 @@ export class CloudTaskRunner {
           task.questionId = questionId
           task.awaitingAnswer = true
           this.stopTaskWatchdogs(task)
-          this.deps.onQuestion(task.id, questionId, question)
+          this.deps.onQuestion(task.id, questionId, redactSecrets(question))
           this.setStatus(task.id, 'waiting_human')
           return {
             content: [
@@ -562,12 +586,21 @@ export class CloudTaskRunner {
     this.deps.onStatus(taskId, status)
   }
 
+  /** 统一出口：所有上报给云端的里程碑文本必须先过密钥脱敏，防止命令输出或参数预览外泄密钥 */
+  private emitMilestone(taskId: string, milestone: CloudTaskMilestone): void {
+    const safeText = redactSecrets(milestone.text)
+    this.deps.onMilestone(
+      taskId,
+      safeText === milestone.text ? milestone : { ...milestone, text: safeText }
+    )
+  }
+
   private reportBlocked(info: TaskGuardInfo): void {
     const task = this.currentTaskForSession(undefined, info.cwd)
     if (!task) return
-    this.deps.onMilestone(task.id, {
+    this.emitMilestone(task.id, {
       kind: 'progress',
-      text: `已拦截一次越界操作（${info.toolName}）：${truncate(info.reason, 200)}`,
+      text: `已拦截一次越界操作（${info.toolName}）：${truncate(redactSecrets(info.reason), 200)}`,
       at: Date.now(),
     })
   }
@@ -612,7 +645,15 @@ export class CloudTaskRunner {
         return
       }
       if (!worktree.ok || !worktree.record) {
-        // 树都没建起来：云端那个单元没有 worktree 可收，按「干净」报一次让它能收口
+        if (worktree.record) {
+          await this.failWithWorktree(
+            taskId,
+            worktree.error ?? 'Unable to prepare the worktree',
+            worktree.record.worktreePath
+          )
+          return
+        }
+        // 树都没建起来（或守卫安装失败已即时释放）：云端那个单元没有 worktree 可收，按「干净」报一次让它能收口
         this.starting.delete(taskId)
         this.deps.onFailed(taskId, worktree.error ?? 'Unable to prepare the worktree', undefined, true)
         return
@@ -733,7 +774,7 @@ export class CloudTaskRunner {
 
       this.setStatus(taskId, 'running')
       this.startTaskWatchdogs(task)
-      this.deps.onMilestone(taskId, { kind: 'accepted', text: '已接单，开始执行', at: this.now() })
+      this.emitMilestone(taskId, { kind: 'accepted', text: '已接单，开始执行', at: this.now() })
 
       const firstTurn = this.runTurn(task, spec, buildTaskPrompt(spec, unit.worktreePath))
       task.turnChain = firstTurn.catch(() => undefined)
@@ -870,9 +911,11 @@ export class CloudTaskRunner {
           this.noteChanged(task, filePath, 'modified')
         }
         if (event.toolName === 'bash' || event.toolName === 'powershell') {
+          // 必须先脱敏再截断，否则被截断一半的密钥无法命中规则而泄露半截凭据
+          const safePreview = redactSecrets(String(event.resultPreview ?? ''))
           this.maybeMilestone(task, {
             kind: 'progress',
-            text: `执行命令：${truncate(String(event.resultPreview ?? ''), 80) || event.toolName}`,
+            text: `执行命令：${truncate(safePreview, 80) || event.toolName}`,
             at: this.now(),
           })
         }
@@ -891,9 +934,10 @@ export class CloudTaskRunner {
           const targetPath = extractWriteOrEditPath(event)
           if (targetPath) this.noteChanged(task, targetPath, 'modified')
         }
+        const safeArgs = redactSecrets(String(event.argsSummary ?? ''))
         this.maybeMilestone(task, {
           kind: 'progress',
-          text: `${toolName} ${truncate(String(event.argsSummary ?? ''), 100)}`.trim(),
+          text: `${toolName} ${truncate(safeArgs, 100)}`.trim(),
           at: this.now(),
         })
       }
@@ -909,7 +953,7 @@ export class CloudTaskRunner {
     if (!normalized || task.changed.has(normalized)) return
     task.changed.set(normalized, { path: normalized, kind })
     if (task.changed.size === 1) {
-      this.deps.onMilestone(task.id, {
+      this.emitMilestone(task.id, {
         kind: 'first-change',
         text: `第一次改动：${normalized}`,
         at: Date.now(),
@@ -922,7 +966,7 @@ export class CloudTaskRunner {
     const now = Date.now()
     if (now - task.lastMilestoneAt < MILESTONE_THROTTLE_MS) return
     task.lastMilestoneAt = now
-    this.deps.onMilestone(task.id, milestone)
+    this.emitMilestone(task.id, milestone)
   }
 
   private async finishDone(task: ActiveTask, spec: CloudTaskSpec, outcome: any): Promise<void> {
@@ -948,7 +992,8 @@ export class CloudTaskRunner {
     } catch {
       // 不是 git 仓库或还没提交：留空即可
     }
-    const summary = String(outcome?.response ?? '').trim() || '(模型没有返回总结)'
+    const rawSummary = String(outcome?.response ?? '').trim()
+    const summary = (rawSummary ? redactSecrets(rawSummary) : '') || '(模型没有返回总结)'
     const result: CloudTaskResult = {
       summary,
       changedFiles,
@@ -989,7 +1034,7 @@ export class CloudTaskRunner {
     await this.persistTasks().catch(() => undefined)
     this.deps.onFailed(
       task.id,
-      error,
+      redactSecrets(error),
       changedFiles,
       worktreeClean,
       secretHits.length > 0 ? secretHits : undefined
@@ -1219,9 +1264,9 @@ export class CloudTaskRunner {
     const task = this.active.get(taskId)
     if (!task) return false
     const manager = this.taskManager(task)
-    const preview = text.trim().replace(/\s+/g, ' ').slice(0, 80)
+    const preview = redactSecrets(text).trim().replace(/\s+/g, ' ').slice(0, 80)
     if (preview) {
-      this.deps.onMilestone(task.id, {
+      this.emitMilestone(task.id, {
         kind: 'progress',
         text: `已收到追加指令：${preview}`,
         at: this.now(),

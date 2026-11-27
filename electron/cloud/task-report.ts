@@ -7,10 +7,10 @@
  * 2. 密钥扫描**绝不返回或记录原始密钥值**，只输出 `{ path, line, kind }`。
  */
 
-import { execFile } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
-import { promisify } from 'node:util'
+import { StringDecoder } from 'node:string_decoder'
 import {
   CLOUD_DEFAULT_DIFF_LIMIT_BYTES,
   CLOUD_MAX_DIFF_LIMIT_BYTES,
@@ -20,9 +20,9 @@ import {
 } from 'pi-bridge'
 import { sanitizeTerminalEnv } from '../terminal-manager.js'
 
-const execFileAsync = promisify(execFile)
-
 const GIT_TIMEOUT_MS = 15_000
+const DEFAULT_GIT_STREAM_MAX_BYTES = 16 * 1024 * 1024
+const MAX_STREAM_LINE_CHARS = 512 * 1024
 const MAX_SECRET_HITS = 50
 const MAX_UNTRACKED_FILES = 50
 const MAX_UNTRACKED_BYTES = 256 * 1024
@@ -58,19 +58,25 @@ const RELEASE_CONFIG_NAMES = new Set([
   '.releaserc.yaml',
 ])
 
+const ENV_TEMPLATE_NAMES = new Set(['.env.example', '.env.template', '.env.sample'])
+
 const SECRET_FILE_NAMES = new Set([
   '.npmrc',
   '.pypirc',
   '.netrc',
   '.envrc',
   'credentials.json',
+  'service-account.json',
+  'terraform.tfvars',
+  'terraform.tfvars.json',
+  'kubeconfig',
   'id_rsa',
   'id_dsa',
   'id_ecdsa',
   'id_ed25519',
 ])
 
-const SECRET_FILE_EXTS = new Set(['.pem', '.key', '.p12', '.pfx', '.jks', '.keystore'])
+const SECRET_FILE_EXTS = new Set(['.pem', '.key', '.p8', '.p12', '.pfx', '.jks', '.keystore'])
 
 const GIT_HOOK_CONFIG_NAMES = new Set([
   'lefthook.yml',
@@ -188,11 +194,19 @@ export function classifyAttentionPath(filePath: string): string | undefined {
   const base = lower.split('/').pop() ?? lower
   const ext = path.extname(base)
 
-  if (base === '.env' || base.startsWith('.env.')) return 'env-file'
+  if (base === '.env' || base.startsWith('.env.')) {
+    if (ENV_TEMPLATE_NAMES.has(base)) return undefined
+    return 'env-file'
+  }
   if (
     SECRET_FILE_NAMES.has(base) ||
     SECRET_FILE_EXTS.has(ext) ||
-    base.startsWith('secrets.')
+    base.startsWith('secrets.') ||
+    base.endsWith('.tfvars') ||
+    base.endsWith('service-account.json') ||
+    (ext === '.json' && base.includes('credentials')) ||
+    lower === '.kube/config' ||
+    lower.endsWith('/.kube/config')
   ) {
     return 'secret-file'
   }
@@ -260,7 +274,7 @@ const SECRET_RULES: readonly SecretRule[] = [
   { kind: 'npm-token', pattern: /(?:^|\s)\/\/[^/\s]+.*:_authToken\s*=\s*(\S{8,})/i },
   {
     kind: 'database-url',
-    pattern: /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqp|amqps):\/\/[^:\s/]+:([^@\s/]{6,})@[^\s'"]+/i,
+    pattern: /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqp|amqps):\/\/[^:\s/]+:([^@\s/]{6,})@[A-Za-z0-9._~:/?#[\]@!$&*+;=%-]+/i,
   },
   {
     kind: 'jwt-token',
@@ -278,25 +292,278 @@ const SECRET_RULES: readonly SecretRule[] = [
 ]
 
 const PLACEHOLDER_RE = /(?:example|placeholder|your[_-]?|changeme|dummy|sample|fake|mock|test[_-]?key|xxxx|0000|123456)/i
+const PLACEHOLDER_EXEMPT_KINDS = new Set([
+  'secret-assignment',
+  'aws-secret-key',
+  'bearer-token',
+  'database-url',
+  'npm-token',
+])
+
+const INLINE_SECRET_RULES = SECRET_RULES.filter((rule) => rule.kind !== 'private-key').map((rule) => ({
+  kind: rule.kind,
+  pattern: new RegExp(
+    rule.pattern.source,
+    rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`
+  ),
+}))
 
 function detectSecretKind(line: string): string | null {
   for (const rule of SECRET_RULES) {
     const match = rule.pattern.exec(line)
     if (!match) continue
     // 泛化赋值与凭据规则要跳过明显的占位符示例，减少误报
-    if (
-      rule.kind === 'secret-assignment' ||
-      rule.kind === 'aws-secret-key' ||
-      rule.kind === 'bearer-token' ||
-      rule.kind === 'database-url' ||
-      rule.kind === 'npm-token'
-    ) {
+    if (PLACEHOLDER_EXEMPT_KINDS.has(rule.kind)) {
       const value = match[1] ?? ''
       if (PLACEHOLDER_RE.test(value) || /^([a-z0-9])\1{7,}$/i.test(value)) continue
     }
     return rule.kind
   }
   return null
+}
+
+function redactInlineRules(
+  segment: string,
+  lineNo: number,
+  sourcePath: string,
+  hits: CloudSecretHit[]
+): string {
+  let output = segment
+  for (const rule of INLINE_SECRET_RULES) {
+    rule.pattern.lastIndex = 0
+    output = output.replace(rule.pattern, (...args) => {
+      const fullMatch = String(args[0] ?? '')
+      if (PLACEHOLDER_EXEMPT_KINDS.has(rule.kind)) {
+        const value = typeof args[1] === 'string' ? args[1] : ''
+        if (PLACEHOLDER_RE.test(value) || /^([a-z0-9])\1{7,}$/i.test(value)) {
+          return fullMatch
+        }
+      }
+      if (hits.length < MAX_SECRET_HITS) {
+        hits.push({ path: sourcePath, line: lineNo, kind: rule.kind })
+      }
+      const leadingWs = rule.kind === 'npm-token' ? /^\s+/.exec(fullMatch)?.[0] ?? '' : ''
+      return `${leadingWs}[REDACTED: ${rule.kind}]`
+    })
+  }
+  return output
+}
+
+/**
+ * 扫描并就地脱敏任意纯文本（里程碑预览、命令输出、工单总结等）。
+ * 命中单行密钥、多行 PEM 私钥或被折成单行的 PEM 私钥时一律替换为 `[REDACTED: <kind>]`，绝不保留原值。
+ */
+export function redactTextSecrets(
+  text: string,
+  sourcePath = '<text>'
+): { text: string; hits: CloudSecretHit[] } {
+  if (!text) return { text, hits: [] }
+  const hits: CloudSecretHit[] = []
+  const lines = text.split(/\r?\n/)
+  const outputLines: string[] = []
+  let inPrivateKeyBlock = false
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const lineNo = index + 1
+    let cursor = lines[index] ?? ''
+    let built = ''
+
+    while (cursor.length > 0) {
+      if (inPrivateKeyBlock) {
+        const endMatch = PRIVATE_KEY_END_RE.exec(cursor)
+        if (!endMatch) {
+          built += '[REDACTED: private-key]'
+          cursor = ''
+          break
+        }
+        inPrivateKeyBlock = false
+        built += '[REDACTED: private-key]'
+        cursor = cursor.slice(endMatch.index + endMatch[0].length)
+        continue
+      }
+
+      const beginMatch = PRIVATE_KEY_BEGIN_RE.exec(cursor)
+      if (!beginMatch) {
+        built += redactInlineRules(cursor, lineNo, sourcePath, hits)
+        cursor = ''
+        break
+      }
+
+      if (hits.length < MAX_SECRET_HITS) {
+        hits.push({ path: sourcePath, line: lineNo, kind: 'private-key' })
+      }
+      const before = cursor.slice(0, beginMatch.index)
+      if (before) built += redactInlineRules(before, lineNo, sourcePath, hits)
+      built += '[REDACTED: private-key]'
+      const afterBegin = cursor.slice(beginMatch.index + beginMatch[0].length)
+      const endMatch = PRIVATE_KEY_END_RE.exec(afterBegin)
+      if (endMatch) {
+        cursor = afterBegin.slice(endMatch.index + endMatch[0].length)
+      } else {
+        // 跨行私钥或被截断到行尾的私钥：本行剩余内容整段丢弃，后续行继续吞到 END 为止
+        inPrivateKeyBlock = true
+        cursor = ''
+      }
+    }
+
+    outputLines.push(built)
+  }
+
+  return { text: outputLines.join('\n'), hits }
+}
+
+/** 便捷脱敏包装：直接返回脱敏后的文本 */
+export function redactSecrets(text: string): string {
+  return redactTextSecrets(text).text
+}
+
+interface GitStreamResult {
+  ok: boolean
+  truncated: boolean
+  bytesRead: number
+}
+
+/**
+ * 流式执行 git 子进程并逐行回调：读取期间实时强制字节上限并在超限时终止子进程，
+ * 避免 `execFile` 命中 `maxBuffer` 后整段抛错导致密钥扫描静默返回 0 条命中或丢失 diff。
+ */
+function streamGitLines(
+  worktreePath: string,
+  args: string[],
+  options: {
+    maxBytes?: number
+    timeoutMs?: number
+    onLine: (line: string) => boolean | void
+  }
+): Promise<GitStreamResult> {
+  const maxBytes = Math.max(1, options.maxBytes ?? DEFAULT_GIT_STREAM_MAX_BYTES)
+  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS
+
+  return new Promise<GitStreamResult>((resolve) => {
+    let settled = false
+    let stoppedEarly = false
+    let truncated = false
+    let timedOut = false
+    let bytesRead = 0
+    let pending = ''
+    const decoder = new StringDecoder('utf8')
+
+    const child = spawn('git', ['-C', worktreePath, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: sanitizeTerminalEnv(process.env),
+    })
+
+    const finish = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ ok, truncated, bytesRead })
+    }
+
+    const stopChild = (markTruncated: boolean) => {
+      stoppedEarly = true
+      if (markTruncated) truncated = true
+      try {
+        child.stdout?.destroy()
+      } catch {
+        // ignore
+      }
+      try {
+        child.stderr?.destroy()
+      } catch {
+        // ignore
+      }
+      try {
+        child.kill()
+      } catch {
+        // ignore
+      }
+    }
+
+    const emitLine = (rawLine: string): boolean => {
+      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+      if (options.onLine(line) === false) {
+        stopChild(false)
+        return false
+      }
+      return true
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true
+      stopChild(false)
+      finish(false)
+    }, timeoutMs)
+    timer.unref?.()
+
+    // 排空 stderr，防止子进程因 stderr 缓冲区满而阻塞退出
+    child.stderr?.resume()
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (settled || stoppedEarly) return
+      let slice = chunk
+      let hitLimit = false
+      if (bytesRead + chunk.length > maxBytes) {
+        const remaining = Math.max(0, maxBytes - bytesRead)
+        slice = chunk.subarray(0, remaining)
+        bytesRead = maxBytes
+        hitLimit = true
+      } else {
+        bytesRead += chunk.length
+      }
+
+      if (slice.length > 0) {
+        pending += decoder.write(slice)
+      }
+
+      let nlIdx = pending.indexOf('\n')
+      while (nlIdx !== -1) {
+        const line = pending.slice(0, nlIdx)
+        pending = pending.slice(nlIdx + 1)
+        if (!emitLine(line)) return
+        nlIdx = pending.indexOf('\n')
+      }
+
+      while (pending.length > MAX_STREAM_LINE_CHARS) {
+        const part = pending.slice(0, MAX_STREAM_LINE_CHARS)
+        pending = pending.slice(MAX_STREAM_LINE_CHARS)
+        if (!emitLine(part)) return
+      }
+
+      if (hitLimit) {
+        // 不调用 decoder.end()，直接丢弃可能落在截断边界上的残缺 UTF-8 多字节尾序列，避免产生 \uFFFD
+        if (pending.length > 0) {
+          const tail = pending
+          pending = ''
+          emitLine(tail)
+        }
+        stopChild(true)
+      }
+    })
+
+    child.stdout?.on('end', () => {
+      if (settled || stoppedEarly) return
+      pending += decoder.end()
+      if (pending.length > 0) {
+        const tail = pending
+        pending = ''
+        emitLine(tail)
+      }
+    })
+
+    child.on('error', () => {
+      finish(false)
+    })
+
+    child.on('close', (code) => {
+      if (timedOut) {
+        finish(false)
+        return
+      }
+      finish(stoppedEarly || code === 0)
+    })
+  })
 }
 
 /** 扫描单个纯文本内容（用于未跟踪的新文件）；只返回位置与类型 */
@@ -314,57 +581,75 @@ export function scanTextForSecrets(filePath: string, content: string): CloudSecr
   return hits
 }
 
+/** 增量 unified diff 密钥扫描器：供内存字符串扫描与流式 git diff 复用 */
+function createDiffSecretScanner(
+  hits: CloudSecretHit[],
+  seen: Set<string>
+): { feedLine: (rawLine: string) => boolean } {
+  let currentPath = ''
+  let currentLine = 0
+
+  return {
+    feedLine(rawLine: string): boolean {
+      if (hits.length >= MAX_SECRET_HITS) return false
+      if (rawLine.startsWith('+++ ')) {
+        const target = unquoteGitPath(rawLine.slice(4).trim())
+        currentPath =
+          target === '/dev/null'
+            ? ''
+            : normalizePosix(target.replace(/^b\//, ''))
+        currentLine = 0
+        return true
+      }
+      if (rawLine.startsWith('@@ ')) {
+        const match = /\+(\d+)/.exec(rawLine)
+        currentLine = match ? Number.parseInt(match[1], 10) : 0
+        return true
+      }
+      if (!currentPath || currentLine <= 0) return true
+      if (rawLine.startsWith('+') && !rawLine.startsWith('+++')) {
+        const kind = detectSecretKind(rawLine.slice(1))
+        if (kind) {
+          const key = `${currentPath}:${currentLine}:${kind}`
+          if (!seen.has(key)) {
+            seen.add(key)
+            hits.push({ path: currentPath, line: currentLine, kind })
+            if (hits.length >= MAX_SECRET_HITS) return false
+          }
+        }
+        currentLine += 1
+      } else if (rawLine.startsWith(' ')) {
+        currentLine += 1
+      }
+      return true
+    },
+  }
+}
+
 /** 扫描 unified diff 的新增行（`+` 开头，不含 `+++` 头）；只返回位置与类型，绝不返回原值 */
 export function scanDiffForSecrets(diffText: string): CloudSecretHit[] {
   const hits: CloudSecretHit[] = []
   const seen = new Set<string>()
-  let currentPath = ''
-  let currentLine = 0
-
+  const scanner = createDiffSecretScanner(hits, seen)
   for (const rawLine of diffText.split(/\r?\n/)) {
-    if (rawLine.startsWith('+++ ')) {
-      const target = unquoteGitPath(rawLine.slice(4).trim())
-      currentPath =
-        target === '/dev/null'
-          ? ''
-          : normalizePosix(target.replace(/^b\//, ''))
-      currentLine = 0
-      continue
-    }
-    if (rawLine.startsWith('@@ ')) {
-      const match = /\+(\d+)/.exec(rawLine)
-      currentLine = match ? Number.parseInt(match[1], 10) : 0
-      continue
-    }
-    if (!currentPath || currentLine <= 0) continue
-    if (rawLine.startsWith('+') && !rawLine.startsWith('+++')) {
-      const kind = detectSecretKind(rawLine.slice(1))
-      if (kind) {
-        const key = `${currentPath}:${currentLine}:${kind}`
-        if (!seen.has(key)) {
-          seen.add(key)
-          hits.push({ path: currentPath, line: currentLine, kind })
-          if (hits.length >= MAX_SECRET_HITS) break
-        }
-      }
-      currentLine += 1
-    } else if (rawLine.startsWith(' ')) {
-      currentLine += 1
-    }
+    if (!scanner.feedLine(rawLine)) break
   }
   return hits
 }
 
 /**
  * 扫描工单工作树里的全部新增改动（已提交 + 已暂存 + 未暂存 + 未跟踪新文件）。
- * 任何 git / 读取异常都静默降级，绝不阻断工单结单。
+ * 流式读取 git diff 并在达到字节上限或命中上限时主动终止子进程，绝不因超大 diff 静默丢失命中。
  */
 export async function scanWorktreeSecrets(
   base: string | undefined,
-  worktreePath: string
+  worktreePath: string,
+  options?: { maxDiffBytes?: number }
 ): Promise<CloudSecretHit[]> {
   const hits: CloudSecretHit[] = []
   const seen = new Set<string>()
+  const maxDiffBytes = options?.maxDiffBytes ?? DEFAULT_GIT_STREAM_MAX_BYTES
+
   const push = (incoming: CloudSecretHit[]) => {
     for (const hit of incoming) {
       if (hits.length >= MAX_SECRET_HITS) return
@@ -375,73 +660,64 @@ export async function scanWorktreeSecrets(
     }
   }
 
-  const runGit = (args: string[]): Promise<string> =>
-    execFileAsync('git', ['-C', worktreePath, ...args], {
-      timeout: GIT_TIMEOUT_MS,
-      windowsHide: true,
-      maxBuffer: 8 * 1024 * 1024,
-      env: sanitizeTerminalEnv(process.env),
-    }).then((result) => result.stdout)
+  const scanGitDiff = async (args: string[]): Promise<boolean> => {
+    const scanner = createDiffSecretScanner(hits, seen)
+    const res = await streamGitLines(worktreePath, args, {
+      maxBytes: maxDiffBytes,
+      onLine: (line) => scanner.feedLine(line),
+    })
+    return res.ok
+  }
 
   // 1. 相对 base 的全部 diff（含已提交 + 工作区修改）；没有 base 时退回 HEAD（已含暂存与未暂存），
   // 仅当 HEAD 不可用（unborn 分支）时再退回暂存/工作区 diff，避免重复扫描
   let diffResolved = false
   if (base) {
-    try {
-      const diff = await runGit(['diff', '--no-color', '-U0', base])
-      if (diff) push(scanDiffForSecrets(diff))
-      diffResolved = true
-    } catch {
-      // base 不可用时继续尝试 HEAD
-    }
+    diffResolved = await scanGitDiff(['diff', '--no-color', '-U0', base])
   }
   if (!diffResolved) {
-    try {
-      const diff = await runGit(['diff', '--no-color', '-U0', 'HEAD'])
-      if (diff) push(scanDiffForSecrets(diff))
-      diffResolved = true
-    } catch {
-      // 无 HEAD（unborn 分支）时分别扫描暂存与未暂存改动
-    }
+    diffResolved = await scanGitDiff(['diff', '--no-color', '-U0', 'HEAD'])
   }
   if (!diffResolved) {
     for (const args of [
       ['diff', '--no-color', '-U0', '--cached'],
       ['diff', '--no-color', '-U0'],
     ]) {
-      try {
-        const diff = await runGit(args)
-        if (diff) push(scanDiffForSecrets(diff))
-      } catch {
-        // 忽略非 git 目录错误
-      }
+      if (hits.length >= MAX_SECRET_HITS) break
+      await scanGitDiff(args)
     }
   }
 
   // 2. 未跟踪的新文件（git diff 看不到它们）
   if (hits.length < MAX_SECRET_HITS) {
-    try {
-      const output = await runGit(['ls-files', '--others', '--exclude-standard'])
-      const untracked = output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .slice(0, MAX_UNTRACKED_FILES)
+    const untracked: string[] = []
+    const listed = await streamGitLines(
+      worktreePath,
+      ['ls-files', '--others', '--exclude-standard'],
+      {
+        maxBytes: 1024 * 1024,
+        onLine: (line) => {
+          const trimmed = line.trim()
+          if (trimmed) untracked.push(trimmed)
+          return untracked.length < MAX_UNTRACKED_FILES
+        },
+      }
+    )
+    if (listed.ok) {
       for (const relPath of untracked) {
         if (hits.length >= MAX_SECRET_HITS) break
-        const fullPath = path.join(worktreePath, unquoteGitPath(relPath))
+        const unquoted = unquoteGitPath(relPath)
+        const fullPath = path.join(worktreePath, unquoted)
         try {
           // 必须使用 lstat 拒绝符号链接，防止工单通过软链读取宿主机敏感文件
           const stat = await fs.lstat(fullPath)
           if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_UNTRACKED_BYTES) continue
           const content = await fs.readFile(fullPath, 'utf-8')
-          push(scanTextForSecrets(unquoteGitPath(relPath), content))
+          push(scanTextForSecrets(unquoted, content))
         } catch {
           // 跳过不可读或已删文件
         }
       }
-    } catch {
-      // 非 git 目录时忽略
     }
   }
 
@@ -507,6 +783,125 @@ function clampDiffLimit(limitBytes?: number): number {
 }
 
 /**
+ * 增量脱敏收集器：按流式逐行过滤 `.env*` / 密钥文件 / 依赖锁 / 二进制块并脱敏密钥行，
+ * 仅在内存中保留 `maxBytes` 预算窗口内的行，防止超大 diff 占满堆内存。
+ */
+function createDiffSanitizer(limitBytes?: number) {
+  const maxBytes = clampDiffLimit(limitBytes)
+  // 留一点余量用于 finalize 时精确核算 notice 长度；超出窗口的后续行只累计 totalBytes 不占数组
+  const keepWindowBytes = maxBytes + 1024
+  const keptLines: string[] = []
+  let keptBytes = 0
+  let totalBytes = 0
+  let lineCount = 0
+  let started = false
+  let trailingEmptyLines = 0
+  let skippingFile = false
+  const redactState = { inPrivateKeyBlock: false }
+
+  const appendSanitized = (line: string) => {
+    if (!started) {
+      if (line.trim().length === 0) return
+      started = true
+    }
+    if (line.length === 0) {
+      trailingEmptyLines += 1
+      return
+    }
+    while (trailingEmptyLines > 0) {
+      trailingEmptyLines -= 1
+      const emptyBytes = lineCount > 0 ? 1 : 0
+      totalBytes += emptyBytes
+      lineCount += 1
+      if (keptBytes < keepWindowBytes) {
+        keptLines.push('')
+        keptBytes += emptyBytes
+      }
+    }
+    const lineBytes = Buffer.byteLength(line, 'utf8') + (lineCount > 0 ? 1 : 0)
+    totalBytes += lineBytes
+    lineCount += 1
+    if (keptBytes < keepWindowBytes) {
+      keptLines.push(line)
+      keptBytes += lineBytes
+    }
+  }
+
+  const pushRawLine = (line: string) => {
+    if (line.startsWith('diff --git ')) {
+      redactState.inPrivateKeyBlock = false
+      const parsed = parseDiffGitPaths(line)
+      const aPath = parsed?.aPath ?? ''
+      const bPath = parsed?.bPath ?? ''
+      // 同时检查 a/ 与 b/ 双侧，防止将 .env 重命名为普通文件名绕过过滤
+      const skipPath =
+        aPath && shouldSkipDiffPath(aPath)
+          ? aPath
+          : bPath && shouldSkipDiffPath(bPath)
+            ? bPath
+            : ''
+      if (skipPath) {
+        skippingFile = true
+        appendSanitized(`diff --git a/${aPath || skipPath} b/${bPath || skipPath}`)
+        appendSanitized(`[omitted: ${classifyAttentionPath(skipPath)}]`)
+        return
+      }
+      skippingFile = false
+      appendSanitized(line)
+      return
+    }
+    if (skippingFile) return
+    if (line.startsWith('Binary files ') || line === 'GIT binary patch') {
+      appendSanitized(line)
+      skippingFile = true
+      redactState.inPrivateKeyBlock = false
+      return
+    }
+    appendSanitized(redactDiffLine(line, redactState))
+  }
+
+  const resetFileState = () => {
+    skippingFile = false
+    redactState.inPrivateKeyBlock = false
+  }
+
+  const finalize = (streamTruncated = false): NonNullable<CloudTaskResult['diff']> | undefined => {
+    if (lineCount === 0 || keptLines.length === 0) return undefined
+    if (!streamTruncated && totalBytes <= maxBytes) {
+      const fullText = keptLines.join('\n').trim()
+      if (!fullText) return undefined
+      return { bytes: Buffer.byteLength(fullText, 'utf8'), excerpt: fullText }
+    }
+
+    const notice =
+      totalBytes > maxBytes
+        ? `\n... [truncated, total ${totalBytes}${streamTruncated ? '+' : ''} bytes > limit ${maxBytes} bytes]`
+        : '\n... [truncated, diff stream exceeded limit]'
+    const budget = Math.max(128, maxBytes - Buffer.byteLength(notice, 'utf8'))
+    const kept: string[] = []
+    let used = 0
+    for (const line of keptLines) {
+      const lineBytes = Buffer.byteLength(line, 'utf8') + (kept.length > 0 ? 1 : 0)
+      if (used + lineBytes > budget) {
+        if (kept.length === 0) {
+          kept.push(sliceUtf8ByBytes(line, budget))
+        }
+        break
+      }
+      kept.push(line)
+      used += lineBytes
+    }
+    return {
+      bytes: totalBytes,
+      excerpt: kept.join('\n') + notice,
+      truncated: true,
+    }
+  }
+
+  return { pushRawLine, resetFileState, finalize }
+}
+
+/**
  * 清洗并截断 unified diff（C-03b）：
  * - 跳过 `.env*`、密钥文件、依赖锁文件与二进制块（只保留一句省略提示）；
  * - 命中疑似密钥或处于多行 PEM 私钥块内的任意行全部替换为 `[REDACTED: <kind>]`；
@@ -516,139 +911,76 @@ export function sanitizeDiffExcerpt(
   rawDiff: string,
   limitBytes?: number
 ): NonNullable<CloudTaskResult['diff']> | undefined {
-  const maxBytes = clampDiffLimit(limitBytes)
-  const trimmed = rawDiff.trim()
-  if (!trimmed) return undefined
-
-  const rawLines = rawDiff.split(/\r?\n/)
-  const filtered: string[] = []
-  let skippingFile = false
-  const redactState = { inPrivateKeyBlock: false }
-
-  for (const line of rawLines) {
-    if (line.startsWith('diff --git ')) {
-      redactState.inPrivateKeyBlock = false
-      const parsed = parseDiffGitPaths(line)
-      const aPath = parsed?.aPath ?? ''
-      const bPath = parsed?.bPath ?? ''
-      // 同时检查 a/ 与 b/ 双侧，防止将 .env 重命名为普通文件名绕过过滤
-      const skipPath = (aPath && shouldSkipDiffPath(aPath))
-        ? aPath
-        : (bPath && shouldSkipDiffPath(bPath))
-          ? bPath
-          : ''
-      if (skipPath) {
-        skippingFile = true
-        filtered.push(`diff --git a/${aPath || skipPath} b/${bPath || skipPath}`)
-        filtered.push(`[omitted: ${classifyAttentionPath(skipPath)}]`)
-        continue
-      }
-      skippingFile = false
-      filtered.push(line)
-      continue
-    }
-    if (skippingFile) continue
-    if (line.startsWith('Binary files ') || line === 'GIT binary patch') {
-      filtered.push(line)
-      skippingFile = true
-      redactState.inPrivateKeyBlock = false
-      continue
-    }
-    filtered.push(redactDiffLine(line, redactState))
+  if (!rawDiff.trim()) return undefined
+  const sanitizer = createDiffSanitizer(limitBytes)
+  for (const line of rawDiff.split(/\r?\n/)) {
+    sanitizer.pushRawLine(line)
   }
-
-  const fullText = filtered.join('\n').trim()
-  if (!fullText) return undefined
-  const totalBytes = Buffer.byteLength(fullText, 'utf8')
-  if (totalBytes <= maxBytes) {
-    return { bytes: totalBytes, excerpt: fullText }
-  }
-
-  const notice = `\n... [truncated, total ${totalBytes} bytes > limit ${maxBytes} bytes]`
-  const budget = Math.max(128, maxBytes - Buffer.byteLength(notice, 'utf8'))
-  const kept: string[] = []
-  let used = 0
-  for (const line of fullText.split('\n')) {
-    const lineBytes = Buffer.byteLength(line, 'utf8') + (kept.length > 0 ? 1 : 0)
-    if (used + lineBytes > budget) {
-      if (kept.length === 0) {
-        kept.push(sliceUtf8ByBytes(line, budget))
-      }
-      break
-    }
-    kept.push(line)
-    used += lineBytes
-  }
-  return {
-    bytes: totalBytes,
-    excerpt: kept.join('\n') + notice,
-    truncated: true,
-  }
+  return sanitizer.finalize(false)
 }
 
 /**
  * 采集工单工作树里的脱敏 diff（含相对 base 的已提交 + 未提交改动 + 未跟踪文本文件）。
- * 任何 git / 读取异常静默降级为 undefined，绝不阻断工单结单。
+ * 使用流式 `spawn` 强制 raw 字节上限，超大 diff 截断后正常返回脱敏摘要而非静默丢弃。
  */
 export async function collectTaskDiff(
   base: string | undefined,
   worktreePath: string,
-  limitBytes?: number
+  limitBytes?: number,
+  options?: { maxRawBytes?: number }
 ): Promise<NonNullable<CloudTaskResult['diff']> | undefined> {
-  const runGit = (args: string[]): Promise<string> =>
-    execFileAsync('git', ['-C', worktreePath, ...args], {
-      timeout: GIT_TIMEOUT_MS,
-      windowsHide: true,
-      maxBuffer: 8 * 1024 * 1024,
-      env: sanitizeTerminalEnv(process.env),
-    }).then((result) => result.stdout)
+  const maxRawBytes = options?.maxRawBytes ?? DEFAULT_GIT_STREAM_MAX_BYTES
+  const sanitizer = createDiffSanitizer(limitBytes)
+  let streamTruncated = false
 
-  const parts: string[] = []
+  const streamDiff = async (args: string[]): Promise<boolean> => {
+    sanitizer.resetFileState()
+    const res = await streamGitLines(worktreePath, args, {
+      maxBytes: maxRawBytes,
+      onLine: (line) => {
+        sanitizer.pushRawLine(line)
+      },
+    })
+    if (res.truncated) streamTruncated = true
+    return res.ok
+  }
+
   let diffResolved = false
   if (base) {
-    try {
-      const diff = await runGit(['diff', '--no-color', '-U3', base])
-      if (diff.trim()) parts.push(diff.trimEnd())
-      diffResolved = true
-    } catch {
-      // base 不可用时回退 HEAD
-    }
+    diffResolved = await streamDiff(['diff', '--no-color', '-U3', base])
   }
   if (!diffResolved) {
-    try {
-      // `git diff HEAD` 已包含相对 HEAD 的已暂存 + 未暂存改动，成功后绝不能再追加 `git diff` 否则重复
-      const diff = await runGit(['diff', '--no-color', '-U3', 'HEAD'])
-      if (diff.trim()) parts.push(diff.trimEnd())
-      diffResolved = true
-    } catch {
-      // 无 HEAD（unborn 分支）时分别采集暂存区与工作区改动
-    }
+    // `git diff HEAD` 已包含相对 HEAD 的已暂存 + 未暂存改动，成功后绝不能再追加 `git diff` 否则重复
+    diffResolved = await streamDiff(['diff', '--no-color', '-U3', 'HEAD'])
   }
   if (!diffResolved) {
     for (const args of [
       ['diff', '--no-color', '-U3', '--cached'],
       ['diff', '--no-color', '-U3'],
     ]) {
-      try {
-        const diff = await runGit(args)
-        if (diff.trim()) parts.push(diff.trimEnd())
-      } catch {
-        // 忽略非 git 目录错误
-      }
+      await streamDiff(args)
     }
   }
 
   // 未跟踪新文件：构造标准 unified diff 片段，排除 .env* / lockfile / 二进制 / 超大文件
-  try {
-    const output = await runGit(['ls-files', '--others', '--exclude-standard'])
-    const untracked = output
-      .split(/\r?\n/)
-      .map((line) => normalizePosix(unquoteGitPath(line.trim())))
-      .filter(Boolean)
-      .slice(0, MAX_UNTRACKED_FILES)
+  const untracked: string[] = []
+  const listed = await streamGitLines(
+    worktreePath,
+    ['ls-files', '--others', '--exclude-standard'],
+    {
+      maxBytes: 1024 * 1024,
+      onLine: (line) => {
+        const normalized = normalizePosix(unquoteGitPath(line.trim()))
+        if (normalized) untracked.push(normalized)
+        return untracked.length < MAX_UNTRACKED_FILES
+      },
+    }
+  )
+  if (listed.ok) {
     for (const relPath of untracked) {
+      sanitizer.resetFileState()
       if (shouldSkipDiffPath(relPath)) {
-        parts.push(`diff --git a/${relPath} b/${relPath}\n[omitted: ${classifyAttentionPath(relPath)}]`)
+        sanitizer.pushRawLine(`diff --git a/${relPath} b/${relPath}`)
         continue
       }
       const fullPath = path.join(worktreePath, relPath)
@@ -659,18 +991,19 @@ export async function collectTaskDiff(
         const content = await fs.readFile(fullPath, 'utf-8')
         if (content.includes('\0')) continue
         const lines = content.split(/\r?\n/)
-        const body = lines.map((line) => `+${line}`).join('\n')
-        parts.push(
-          `diff --git a/${relPath} b/${relPath}\nnew file\n--- /dev/null\n+++ b/${relPath}\n@@ -0,0 +1,${lines.length} @@\n${body}`
-        )
+        sanitizer.pushRawLine(`diff --git a/${relPath} b/${relPath}`)
+        sanitizer.pushRawLine('new file')
+        sanitizer.pushRawLine('--- /dev/null')
+        sanitizer.pushRawLine(`+++ b/${relPath}`)
+        sanitizer.pushRawLine(`@@ -0,0 +1,${lines.length} @@`)
+        for (const line of lines) {
+          sanitizer.pushRawLine(`+${line}`)
+        }
       } catch {
         // 跳过不可读或已删文件
       }
     }
-  } catch {
-    // 非 git 目录时忽略
   }
 
-  if (parts.length === 0) return undefined
-  return sanitizeDiffExcerpt(parts.join('\n'), limitBytes)
+  return sanitizer.finalize(streamTruncated)
 }

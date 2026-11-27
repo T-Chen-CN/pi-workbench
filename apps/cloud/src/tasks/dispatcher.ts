@@ -258,7 +258,10 @@ export class TaskDispatcher {
     const sameUnit = Boolean(existingUnit && !existingUnit.closedAt)
 
     // 幂等：同一 idempotencyKey 只生成一张工单（先于配额扣减检查，避免重复扣减）
-    const existing = store.listTasks().find((task) => task.idempotencyKey === key)
+    const existing =
+      typeof store.findTaskByIdempotencyKey === 'function'
+        ? store.findTaskByIdempotencyKey(key)
+        : store.listTasks().find((task) => task.idempotencyKey === key)
     if (existing) return { ok: true, task: existing }
 
     if (sameUnit) {
@@ -1061,6 +1064,11 @@ export class TaskDispatcher {
   private taskSeq = 0
 
   private nextTaskId(): string {
+    if (typeof this.deps.store.nextTaskSeq === 'function') {
+      const seq = this.deps.store.nextTaskSeq()
+      this.taskSeq = seq
+      return `T-${String(seq).padStart(3, '0')}`
+    }
     if (this.taskSeq === 0) {
       let max = 0
       for (const task of this.deps.store.listTasks()) {

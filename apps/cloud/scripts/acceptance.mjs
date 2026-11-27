@@ -36,7 +36,7 @@ async function call(path, init = {}) {
 }
 const post = (body, extra = {}) => ({
   method: 'POST',
-  headers: { 'content-type': 'application/json', ...(extra.headers ?? {}) },
+  headers: { 'content-type': 'application/json', origin: BASE, ...(extra.headers ?? {}) },
   body: JSON.stringify(body ?? {}),
   ...extra,
 })
@@ -71,7 +71,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 // ---- 账号与 cookie 会话 ----
 let cookie = ''
 {
-  const setup = await call('/v1/setup', post({ password: PW }))
+  const setupToken = process.env.PI_CLOUD_SETUP_TOKEN?.trim()
+  const setup = await call(
+    '/v1/setup',
+    post({ password: PW, ...(setupToken ? { setupToken } : {}) })
+  )
   ok('建管理员账号', setup.status === 200, `status=${setup.status}`)
   ok('二次建账号被拒', (await call('/v1/setup', post({ password: 'another-pass-1' }))).status === 409)
   ok('错误口令 401', (await call('/v1/login', post({ password: 'wrong-password' }))).status === 401)
@@ -159,7 +163,7 @@ let deviceId = ''
 {
   const auth = await call('/v1/authorizations', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', cookie },
+    headers: { 'content-type': 'application/json', origin: BASE, cookie },
     body: JSON.stringify({
       planText: 'acceptance run',
       items: [{ deviceId, workspacePath: '/srv/pi-accept-repo' }],
@@ -213,7 +217,10 @@ let deviceId = ''
   const httpSnapshot = await call('/v1/snapshot', { headers: { cookie } })
   ok('HTTP 快照', httpSnapshot.status === 200 && httpSnapshot.json?.protocol === 1)
   // 结束工作单元的入口（F-19a）：未知单元必须 404，不能默默成功
-  const unknownUnit = await call('/v1/units/nope/close', { method: 'POST', headers: { cookie } })
+  const unknownUnit = await call('/v1/units/nope/close', {
+    method: 'POST',
+    headers: { origin: BASE, cookie },
+  })
   ok('结束未知工作单元 → 404', unknownUnit.status === 404, `status=${unknownUnit.status}`)
   client.close()
 

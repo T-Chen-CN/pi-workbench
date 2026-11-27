@@ -230,6 +230,7 @@ describe('closeUnit（F-19a）', () => {
       logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
       dataDir,
       getApiConfig: async () => null,
+      installPrePushHook: async () => ({ ok: true }),
       getCoordinator: async () => ({
         bind: async (sessionId: string) => {
           bindings.add(sessionId)

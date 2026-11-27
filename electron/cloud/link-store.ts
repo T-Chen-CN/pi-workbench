@@ -110,6 +110,30 @@ export async function clearCloudLink(): Promise<void> {
   await fs.rm(`${file}.bak`, { force: true }).catch(() => undefined)
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  const lower = hostname.toLowerCase()
+  return lower === 'localhost' || lower === '127.0.0.1' || lower === '[::1]' || lower === '::1'
+}
+
+/** 拒绝云厂商链路本地元数据地址（AWS/GCP/Azure IMDS 等），避免误连或 SSRF 暴露本机凭据 */
+function isBlockedMetadataHost(hostname: string): boolean {
+  const unbracketed = hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.+$/, '')
+  if (!unbracketed) return true
+  if (
+    unbracketed === 'metadata.google.internal' ||
+    unbracketed.endsWith('.metadata.google.internal') ||
+    unbracketed === 'metadata.goog' ||
+    unbracketed === 'fd00:ec2::254'
+  ) {
+    return true
+  }
+  if (/^169\.254\.\d{1,3}\.\d{1,3}$/.test(unbracketed)) return true
+  // IPv6 映射的 169.254.0.0/16（WHATWG URL 会归一化成 ::ffff:a9fe:xxxx）与 fe80::/10 链路本地地址
+  if (/^::ffff:(?:a9fe:[0-9a-f]{1,4}|169\.254\.\d{1,3}\.\d{1,3})$/.test(unbracketed)) return true
+  if (/^fe[89ab][0-9a-f]:/.test(unbracketed)) return true
+  return false
+}
+
 export function normalizeBaseUrl(input: string): string {
   const trimmed = input.trim().replace(/\/+$/, '')
   if (!trimmed) return ''
@@ -118,6 +142,9 @@ export function normalizeBaseUrl(input: string): string {
     const parsed = new URL(candidate)
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
     if (!parsed.hostname) return ''
+    if (isBlockedMetadataHost(parsed.hostname)) return ''
+    // 远程主机必须走 HTTPS；仅回环开发地址允许明文 HTTP
+    if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) return ''
     return parsed.origin + parsed.pathname.replace(/\/+$/, '')
   } catch {
     return ''

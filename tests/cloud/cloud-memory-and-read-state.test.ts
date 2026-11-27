@@ -107,7 +107,7 @@ async function setupServerWithDevice(hooks: Parameters<typeof createCloudServer>
 
   const pairCodeRes = await fetch(`${baseUrl}/v1/pair/code`, {
     method: 'POST',
-    headers: { cookie },
+    headers: { cookie, origin: baseUrl },
   })
   const { code } = (await pairCodeRes.json()) as { code: string }
 

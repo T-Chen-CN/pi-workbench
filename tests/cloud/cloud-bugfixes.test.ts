@@ -489,6 +489,7 @@ describe('Bug 11: task-runner porcelain、路径解析、answer 防重放、disp
       logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
       dataDir: path.join(dir, 'data'),
       getApiConfig: async () => null,
+      installPrePushHook: async () => ({ ok: true }),
       getCoordinator: async () => ({
         bind: async () => ({ success: true, worktree: { path: wt, branch: 'pi/wt' } }),
         getSessionBinding: () => ({ key: '', path: wt, branch: 'pi/wt' }),
@@ -663,6 +664,7 @@ describe('Bug 11: task-runner porcelain、路径解析、answer 防重放、disp
       logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
       dataDir: path.join(dir, 'data'),
       getApiConfig: async () => null,
+      installPrePushHook: async () => ({ ok: true }),
       getCoordinator: async () => ({
         bind: async () => ({ success: true, worktree: { path: wt, branch: 'pi/retry' } }),
         getSessionBinding: () => ({ key: '', path: wt, branch: 'pi/retry' }),

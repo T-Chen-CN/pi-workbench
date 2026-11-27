@@ -34,6 +34,15 @@ describe('classifyAttentionPath / annotateChangedFiles（F-36）', () => {
     expect(classifyAttentionPath('electron-builder.yml')).toBe('release-config')
     expect(classifyAttentionPath('Dockerfile.prod')).toBe('release-config')
     expect(classifyAttentionPath('src/components/CloudView.tsx')).toBeUndefined()
+    // 豁免无害模板文件，同时标红基础设施与凭据文件
+    expect(classifyAttentionPath('.env.example')).toBeUndefined()
+    expect(classifyAttentionPath('apps/cloud/.env.template')).toBeUndefined()
+    expect(classifyAttentionPath('.env.sample')).toBeUndefined()
+    expect(classifyAttentionPath('infra/terraform.tfvars')).toBe('secret-file')
+    expect(classifyAttentionPath('deploy/kubeconfig')).toBe('secret-file')
+    expect(classifyAttentionPath('keys/AuthKey_ABC.p8')).toBe('secret-file')
+    expect(classifyAttentionPath('config/service-account.json')).toBe('secret-file')
+    expect(classifyAttentionPath('config/gcp-credentials.json')).toBe('secret-file')
   })
 
   it('annotateChangedFiles 保留普通与注意分组，供云端事件按组汇报', () => {

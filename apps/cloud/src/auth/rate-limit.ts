@@ -21,7 +21,7 @@ export interface RateLimitOptions {
 export const DEFAULT_CREDENTIAL_LIMITS: RateLimitOptions = {
   limit: 5,
   windowMs: 5 * 60 * 1000,
-  globalLimit: 20,
+  globalLimit: 200,
   cooldownMs: 5 * 60 * 1000,
 }
 

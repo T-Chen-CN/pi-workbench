@@ -30,8 +30,8 @@
 
 | 文件 / 目录 | 内容 |
 | --- | --- |
-| `cloud.db`（WAL） | Node 24 原生 `node:sqlite` 统一存储：管理员账号（`scrypt`）、设备与分权 token 哈希（`token` 执行通道 + `clientToken` 控制面）、6 位配对码（CAS 作废）、云端模型配置（AES-256-GCM 密文）、工单、独立 `task_diffs` 表（不混入快照/广播）、工作单元、授权台账、多端已读游标；首次启动自动一次性迁移旧 JSON 并保留备份 |
-| `memory/` | 持久记忆与留存文档（每日 `backup.sh` 自动备份）：`memories.json`（结构化记忆，手工条目硬保护 + 梦境事务回滚）、`dreams.json`（梦境整理记录）、`AGENTS.md` / `SOUL.md`（白名单留存文档，Web 与桌面端透明可查可编辑） |
+| `cloud.db`（WAL） | Node 24 原生 `node:sqlite` 统一存储（`PRAGMA user_version` 版本化迁移 + 预编译语句缓存 + 嵌套 `SAVEPOINT` 事务）：管理员账号（PHC `scrypt` `N=131072,r=8,p=1`）、设备与分权 token 哈希（`pk_<kid>.<secret>` 经 `token_kid` / `client_token_kid` O(1) 索引定位）、6 位配对码（SQL `WHERE used_at IS NULL` 原子 CAS 作废，最多保留 5 个并发活跃码）、云端模型配置（AES-256-GCM 密文）、工单与持久化单调 `task_seq`、独立 `task_diffs` 表、工作单元（已关闭保留最近 500 条）、授权台账（过期/撤销保留最近 500 条）、多端已读游标，以及统一入库的 `memories` 与 `dreams` 表；首次升级自动一次性导入旧 JSON（`memories.json` / `dreams.json` 导入后重命名为 `.migrated`） |
+| `memory/` | 留存文档目录（每日 `backup.sh` 自动备份）：`AGENTS.md` / `SOUL.md` 白名单留存 Markdown 文档，Web 与桌面端透明可查可编辑（结构化记忆与梦境记录已迁入 `cloud.db`） |
 | `agent/` | 云端会话（Pi SDK 的 agentDir）：`sessions/*.jsonl` 是历史与导出的唯一真相源 |
 
 桌面端只落两处：`{appDir}/config/cloud-link.json`（token，`safeStorage` 加密）与
@@ -159,8 +159,9 @@
   `close_unit` 也走这条队列：设备离线时回收请求不会丢，重连后补发。
 - 单元相关帧：`close_unit`（服务端→设备，`reason: converged | user-close | sweep`）、
   `unit_closed`（设备→服务端，回收回执）、`unit_state`（设备→服务端，启动/重连的工作树状态）。
-- 协议版本保持 `v: 1` 向后兼容，全部入站 WS 帧经 `pi-bridge/src/cloud-protocol.ts` Zod v4 discriminated-union 校验，并在设备 `hello` 与快照 `snapshot.capabilities` 中声明协商能力（`CLOUD_PROTOCOL_CAPABILITIES` + `negotiateProtocolCapabilities`）。服务端置 `fatal` 的错误帧，桌面端客户端通道同样进终止态
+- 协议版本保持 `v: 1` 向后兼容：`pi-bridge/src/cloud-protocol.ts` 在 `JSON.parse` 前强制校验单帧字节上限 `MAX_CLOUD_FRAME_BYTES`（512 KiB），双向（`client↔server` 与 `device↔server`）全部提供 Zod v4 discriminated-union 校验与显式字段长度/数组上界（`task_result.result` 不再允许 `.loose()` 任意 blob 透传），并在设备 `hello` 与快照 `snapshot.capabilities` 中声明协商能力（`CLOUD_PROTOCOL_CAPABILITIES` + `negotiateProtocolCapabilities`）。服务端置 `fatal` 的错误帧，桌面端客户端通道同样进终止态
   （`fatal: true`，停掉退避定时器 + 云端页常驻横幅），否则旧客户端会无限重连而提示只活在空对话里（F-47 / A-27）。
+- WS 背压与连接防护（`apps/cloud/src/ws/hub.ts`）：`/client/ws` 限制并发连接上限（默认 `MAX_CLIENT_CONNECTIONS = 32`，超限升级阶段回 503 / 1013 关闭）；每次 `send` 前校验 `readyState === OPEN` 与 `bufferedAmount <= MAX_WS_BUFFERED_BYTES`（4 MiB，慢消费者直接终止连接防 OOM）；单 socket 高开销帧（`resume` / `say` / `confirm_plan`）走令牌桶限流。
 - Web 控制台的登录态是 30 天固定期限的签名 cookie，**不续期**。过期后 WS 升级被 401 拒、浏览器只给 1006，
   所以握手失败时先回查 `/v1/me`：未登录即回登录页并提示「登录已过期」，不得停在「正在重连…」（REST 401 同路径）。
 
@@ -171,8 +172,10 @@
   - `clientToken`（桌面控制面凭证）：访问 `/client/ws`、跨设备授权、模型配置、记忆与文档管理。
 - 授权入口两端都有：Web 的「确认方案并授权」弹层 + 桌面端云端页同一个共享弹层
   （`@pi-workbench/cloud-ui` `AuthorizeDialog` → 帧 `confirm_plan`）。这个动作本身不派活，只落「设备 × 仓库 + 额度」凭据。
-- 配对码 6 位一次性；`/v1/pair` 按来源 IP（仅可信本机反代取 `X-Forwarded-For` 右侧，不信任 `X-Real-IP`）限速 5 次 / 5 分钟，并与管理员登录解耦；首次 `/v1/setup` 支持 `PI_CLOUD_SETUP_TOKEN` 一次性启动口令与 15s body 超时。
-- 账号类操作（建账号、登录、生成配对码、移除设备）只认 cookie 会话；Cookie 路由与 WS 强制校验精确非空 `Origin`。
+- 配对码 6 位一次性（最多 5 个并发活跃码）；来源 IP 归一化（仅可信本机反代取 `X-Forwarded-For` 末跳、绝不读 `X-Real-IP`；IPv6 折叠至 `/64` 前缀，`::ffff:a.b.c.d` 还原为 IPv4）；`/v1/pair` 按来源 5 次 / 5 分钟 + 全局滥用上限 200 次 / 5 分钟，并与管理员登录解耦。
+- 首次初始化与口令安全：生产环境（`NODE_ENV === 'production'`）尚无管理员账号且未配置 `PI_CLOUD_SETUP_TOKEN` 时，启动时自动在内存生成一次性 32 字符随机口令并打印一次日志（`[cloud] one-time setup token: ...`），建号后立即销毁；同时生产环境 `/v1/health` 仅返回最小 `{ ok, version, ready }` 不暴露 `hasAccount`。`/v1/setup` 与 `/v1/login` 共享 `MAX_PASSWORD_BYTES = 128` 字节上限与并发 scrypt 槽位保护，登录成功时自动将旧版 `N=16384` 密码哈希升级为 PHC `$scrypt$N=131072,r=8,p=1$...`。
+- 账号类操作（建账号、登录、生成配对码、移除设备）只认 cookie 会话；所有非 GET/HEAD Cookie 路由（含空请求体 `POST`/`DELETE`）强制校验 `Sec-Fetch-Site`（仅 `same-origin`/`none`）与匹配 `Origin`（或 `Sec-Fetch-Site: same-origin`），WS 升级强制校验精确非空 `Origin`。
+- 提示注入隔离：用户手写文档（`SOUL.md` / `AGENTS.md`）与自动抽取/梦境记忆及终端事件完全分离；不可信自动记忆与终端上报事件均转义 XML 标签并用每轮随机 nonce 边界与不可信数据声明包裹，不原始拼入系统规则。
 - Web 客户端零 XSS：源码禁用 `innerHTML` / `dangerouslySetInnerHTML` / `eval`，Markdown 经 `StreamdownView`（`rehype-sanitize`）净化，静态文件走白名单与严格单段 `/assets/` 校验（`src/http/static.ts`）+ 无 `eval`/WASM CSP。
 - 云端 API Key 加密落盘、接口只回末四位；Web / 桌面端写的是同一份配置。
 
