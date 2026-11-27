@@ -21,6 +21,8 @@ export interface ApprovalExtensionContext {
   requestApproval: (request: ApprovalRequestPayload) => Promise<ApprovalDecision>
   /** 轮次边界等待切换工作树时，禁止继续写文件 */
   isSwitchPending?: () => boolean
+  /** 判断动态工具（如 MCP 工具）是否为只读 */
+  isReadOnlyTool?: (name: string) => boolean
 }
 
 export function createApprovalExtension(
@@ -38,7 +40,7 @@ export function createApprovalExtension(
         }
         const toolName = String(event?.toolName ?? '')
         const args = event?.input ?? event?.args ?? {}
-        const category = categorizeTool(toolName)
+        const category = categorizeTool(toolName, { isReadOnlyTool: context.isReadOnlyTool })
         const permission = normalizeSessionPermission(getPermission())
 
         if (

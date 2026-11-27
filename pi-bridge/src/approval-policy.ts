@@ -5,6 +5,13 @@
  * 审批的执行（挂起 / 放行）在 AgentManager 里，通过 Pi 的 tool_call 扩展钩子完成。
  */
 
+import { isMcpToolName } from './mcp-types.js'
+
+export interface CategorizeToolOptions {
+  /** 判断动态工具（如 MCP 工具）是否声明了只读属性 */
+  isReadOnlyTool?: (name: string) => boolean
+}
+
 export type ToolCategory = 'read' | 'write' | 'command' | 'other'
 
 export type PermissionAction = 'allow' | 'ask' | 'deny'
@@ -139,7 +146,13 @@ export function derivePermissionLevelFromPolicy(input: unknown): PermissionLevel
   return 'readonly'
 }
 
-export function categorizeTool(toolName: string): ToolCategory {
+export function categorizeTool(
+  toolName: string,
+  options?: CategorizeToolOptions
+): ToolCategory {
+  if (isMcpToolName(toolName)) {
+    return options?.isReadOnlyTool?.(toolName) === true ? 'read' : 'other'
+  }
   switch (toolName) {
     // 只读工具：计划工具只更新会话内状态，联网工具只读取外部信息
     case 'read':
@@ -221,6 +234,19 @@ export function buildApprovalDetails(toolName: string, args: unknown): ApprovalD
   }
   if (toolName === 'edit' && Array.isArray(value.edits)) {
     details.editCount = value.edits.length
+  }
+  if (isMcpToolName(toolName) && !details.preview && Object.keys(value).length > 0) {
+    try {
+      // 必须在 JSON.stringify 之前清洗字符串值，否则 ESC 等控制字符会被转义成 \u001b 字面量
+      const compact = JSON.stringify(value, (_key, item) =>
+        typeof item === 'string' ? sanitizeApprovalText(item) : item
+      )
+      if (compact && compact !== '{}') {
+        details.preview = truncate(sanitizeApprovalText(compact), PREVIEW_LIMIT)
+      }
+    } catch {
+      // ignore unserializable args
+    }
   }
   return details
 }

@@ -5,6 +5,14 @@
  * 两者分开，避免模式逻辑被环境分支污染。
  */
 import type { SessionMode } from './approval-policy.js'
+import { isMcpToolName } from './mcp-types.js'
+
+export interface ResolveModeToolsOptions {
+  /** 判断动态工具（如 MCP 工具）是否声明了只读属性 */
+  isReadOnlyTool?: (name: string) => boolean
+  /** 存在 allowlist 时是否允许放行已连接的 MCP 工具（仍受模式只读规则约束） */
+  allowMcpTools?: boolean
+}
 
 /**
  * 只读模式可用工具。
@@ -54,25 +62,32 @@ export function isToolAvailableOnPlatform(
 /**
  * 计算某个会话模式下实际激活的工具名。
  *
- * - readonly / plan：使用固定白名单
- * - ask / auto：所有已注册工具，减去 Plan-only 和当前平台不可用的工具
- * - `allowlist`（G2）：给定时再与它取交集；空数组表示一个工具都不激活
+ * - readonly / plan：使用固定白名单，并放行显式声明 `readOnlyHint: true` 的 MCP 工具
+ * - ask / auto：所有已注册工具（含全部 MCP 工具），减去 Plan-only 和当前平台不可用的工具
+ * - `allowlist`（G2）：给定时再与它取交集；空数组表示一个工具都不激活；
+ *   若 `options.allowMcpTools === true`，通过模式检查的 MCP 工具不受内置白名单裁剪
  *
- * 结果只取决于模式、注册表、平台与白名单，不受会话历史影响。
+ * 结果只取决于模式、注册表、平台、白名单与工具只读元信息，不受会话历史影响。
  */
 export function resolveModeTools(
   mode: SessionMode,
   registered: readonly string[],
   platform: NodeJS.Platform = process.platform,
-  allowlist?: readonly string[]
+  allowlist?: readonly string[],
+  options?: ResolveModeToolsOptions
 ): string[] {
   const available = registered.filter((name) => isToolAvailableOnPlatform(name, platform))
   const allow = MODE_ALLOWLIST[mode]
   const byMode = allow
-    ? available.filter((name) => allow.includes(name))
+    ? available.filter(
+        (name) =>
+          allow.includes(name) ||
+          (isMcpToolName(name) && options?.isReadOnlyTool?.(name) === true)
+      )
     : available.filter((name) => !PLAN_ONLY_TOOLS_SET.has(name))
 
   if (!allowlist) return byMode
   const allowed = new Set(allowlist)
-  return byMode.filter((name) => allowed.has(name))
+  const allowMcp = options?.allowMcpTools === true
+  return byMode.filter((name) => allowed.has(name) || (allowMcp && isMcpToolName(name)))
 }

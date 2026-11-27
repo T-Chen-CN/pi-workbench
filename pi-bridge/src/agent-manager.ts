@@ -32,6 +32,8 @@ import {
 import { withTimeout } from './async-utils.js'
 import { ensureBashOnPath } from './environment.js'
 import { validateChatImages } from './images.js'
+import { McpClientHost } from './mcp-host.js'
+import type { McpServerConfig, McpServerStatus } from './mcp-types.js'
 import { writeCompactionSettings, writeModelsConfig } from './model-config.js'
 import {
   type PlanStatus,
@@ -109,6 +111,7 @@ export class AgentManager {
   private deletedSessions = new Set<string>()
   private lastWebAccessVersion: string | null = null
   private seedPermissions = new Map<string, SessionPermission>()
+  private mcpHost: McpClientHost | null = null
   private disposed = false
 
   private readonly catalogService = new AgentCatalogService({
@@ -161,6 +164,7 @@ export class AgentManager {
         this.config?.onAgentSettled?.(sessionId)
       },
       onHardStop: (controller) => this.resetControllerAfterHardStop(controller),
+      getMcpHost: () => this.mcpHost,
     }
   }
 
@@ -203,6 +207,7 @@ export class AgentManager {
     this.logger = config.logger ?? consoleAgentLogger
     try {
       await this.disposeAllControllers()
+      await this.disposeMcpHost()
       this.lastWebAccessVersion = null
       this.config = config
       const { providerId, modelId, overrides } = config.apiConfig
@@ -253,6 +258,8 @@ export class AgentManager {
 
       if (config.allowModelNetwork && !isPiOffline()) void this.refreshCatalog()
 
+      await this.initializeMcpHost(config)
+
       this.sessionDir = path.join(this.agentDir, 'sessions')
       const sessionManager = SessionManager.continueRecent(config.workspaceDir, this.sessionDir)
       const controller = await this.createController(sessionManager)
@@ -277,6 +284,7 @@ export class AgentManager {
         this.controllers.clear()
         this.runtimes.clear()
         this.modelRuntime = null
+        void this.disposeMcpHost()
       }
     }
   }
@@ -311,6 +319,7 @@ export class AgentManager {
       model,
       sessionManager,
       logger: this.logger,
+      mcpHost: this.mcpHost,
       loadExtras: (sessionId) => this.repository.loadExtrasWithStatus(sessionId),
       takeSeedPermission: (sessionId) => {
         const seed = this.seedPermissions.get(sessionId)
@@ -997,6 +1006,59 @@ export class AgentManager {
   }
 
   // ---------------------------------------------------------------------------
+  // MCP 服务器生命周期与状态查询
+  // ---------------------------------------------------------------------------
+
+  private createMcpHost(config: AgentConfig | null): McpClientHost {
+    return new McpClientHost({
+      logger: this.logger,
+      defaultCwd: config?.mcpCwd ?? config?.workspaceDir,
+      onChildPid: config?.onMcpChildPid,
+      outputRedactor: config?.mcpOutputRedactor,
+    })
+  }
+
+  /** 安全初始化 MCP 宿主：任何单台或配置加载错误仅告警，绝不阻断 AgentManager.initialize() */
+  private async initializeMcpHost(config: AgentConfig): Promise<void> {
+    if (!config.getMcpServers && (!config.mcpServers || config.mcpServers.length === 0)) {
+      return
+    }
+    try {
+      const servers = config.getMcpServers
+        ? await config.getMcpServers()
+        : (config.mcpServers ?? [])
+      if (this.disposed || !Array.isArray(servers) || servers.length === 0) return
+      this.mcpHost = this.createMcpHost(config)
+      await this.mcpHost.syncServers(servers)
+    } catch (error) {
+      this.logger.warn('[Agent Manager] MCP initialization failed (continuing without MCP):', error)
+    }
+  }
+
+  private async disposeMcpHost(): Promise<void> {
+    const host = this.mcpHost
+    this.mcpHost = null
+    if (!host) return
+    try {
+      await host.dispose()
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Failed to dispose MCP host:', error)
+    }
+  }
+
+  getMcpStatuses(): McpServerStatus[] {
+    return this.mcpHost?.getStatuses() ?? []
+  }
+
+  async refreshMcpServers(servers: McpServerConfig[]): Promise<McpServerStatus[]> {
+    if (this.disposed) return []
+    if (!this.mcpHost) {
+      this.mcpHost = this.createMcpHost(this.config)
+    }
+    return this.mcpHost.syncServers(servers)
+  }
+
+  // ---------------------------------------------------------------------------
   // 状态查询与清理
   // ---------------------------------------------------------------------------
 
@@ -1026,6 +1088,7 @@ export class AgentManager {
     const inflight = [...this.creatingControllers.values(), ...this.rebindingPromises.values()]
     if (inflight.length > 0) await Promise.allSettled(inflight)
     await this.disposeAllControllers()
+    await this.disposeMcpHost()
     this.titleService.clear()
     this.catalogService.resetSnapshot()
     this.creatingControllers.clear()

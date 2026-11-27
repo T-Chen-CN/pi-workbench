@@ -67,6 +67,7 @@ export type {
   ApprovalDecision,
   ApprovalDetails,
   ApprovalRequestPayload,
+  CategorizeToolOptions,
   PermissionAction,
   PermissionLevel,
   PermissionPolicy,
@@ -184,5 +185,18 @@ export type {
   ModelsDevEnrichment,
   ModelsDevModalities,
 } from './models-dev.js'
+
+/** MCP（Model Context Protocol）共享类型、客户端宿主与 Pi 扩展（Phase F） */
+export * from './mcp-types.js'
+export {
+  MCP_MAX_TOOL_TEXT_BYTES,
+  McpClientHost,
+  computeMcpServerFingerprint,
+  type McpCallToolResult,
+  type McpClientHostOptions,
+  type McpToolContentPart,
+} from './mcp-host.js'
+export { createMcpExtension, type McpExtensionOptions } from './mcp-extension.js'
+
 
 

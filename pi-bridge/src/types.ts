@@ -9,6 +9,7 @@ import type {
 import type { StructuredPlan } from './plan.js'
 import type { DocumentReadHook } from './read-with-documents.js'
 import type { ModelOverrides } from './provider-presets.js'
+import type { McpServerConfig } from './mcp-types.js'
 
 export interface AgentLogger {
   info: (...args: unknown[]) => void
@@ -206,6 +207,18 @@ export interface AgentConfig {
   onAgentSettled?: (sessionId: string) => void
   /** 压缩前钩子（P1 记忆抽取用；P0 只留接口，不消费） */
   onSessionBeforeCompact?: (sessionId: string, event: SessionBeforeCompactInfo) => void
+  /** 静态 MCP 服务器列表（若同时提供 getMcpServers，则以 getMcpServers 返回值为准） */
+  mcpServers?: McpServerConfig[]
+  /** 动态加载 MCP 服务器列表 */
+  getMcpServers?: () => McpServerConfig[] | Promise<McpServerConfig[]>
+  /** 配置 toolAllowlist 时是否放行已连接的 MCP 工具（缺省：已发现 MCP 工具时为 true） */
+  allowMcpTools?: boolean
+  /** MCP stdio 子进程 PID 登记回调（接入主进程 child-registry，返回注销函数） */
+  onMcpChildPid?: (pid: number, kill: () => void) => () => void
+  /** MCP 工具文本输出脱敏钩子 */
+  mcpOutputRedactor?: (text: string) => string
+  /** MCP stdio 服务器未指定 cwd 时的默认工作目录（缺省为 workspaceDir） */
+  mcpCwd?: string
 }
 
 export interface SessionSummary {

@@ -10,6 +10,7 @@ export default defineConfig({
       { find: /^pi-bridge\/protocol$/, replacement: path.resolve(rootDir, 'pi-bridge/src/protocol.ts') },
       { find: /^pi-bridge\/presets$/, replacement: path.resolve(rootDir, 'pi-bridge/src/presets.ts') },
       { find: /^pi-bridge\/images$/, replacement: path.resolve(rootDir, 'pi-bridge/src/images.ts') },
+      { find: /^pi-bridge\/mcp$/, replacement: path.resolve(rootDir, 'pi-bridge/src/mcp.ts') },
       { find: /^pi-bridge\/atomic-json$/, replacement: path.resolve(rootDir, 'pi-bridge/src/atomic-json.ts') },
       { find: /^pi-bridge$/, replacement: path.resolve(rootDir, 'pi-bridge/src/index.ts') },
     ],

@@ -51,6 +51,8 @@ import {
 import { withTimeout, withTimeoutResult } from './async-utils.js'
 import { createCompactHookExtension } from './compact-hook-extension.js'
 import { validateChatImages } from './images.js'
+import { createMcpExtension } from './mcp-extension.js'
+import type { McpClientHost } from './mcp-host.js'
 import { computeCompactionThresholds } from './model-config.js'
 import { type StructuredPlan } from './plan.js'
 import { createPlanExtension } from './plan-extension.js'
@@ -110,6 +112,7 @@ export interface SessionControllerDeps {
   onPendingRootReady?: (controller: SessionController) => void
   onAgentSettled?: (sessionId: string) => void
   onHardStop?: (controller: SessionController) => Promise<void>
+  getMcpHost?: () => McpClientHost | null
 }
 
 export interface BuildExtensionFactoriesInput {
@@ -120,6 +123,7 @@ export interface BuildExtensionFactoriesInput {
   planContext: { runtime: SessionRuntime | null }
   controllerRef: { current: SessionController | null }
   fallbackPermission: SessionPermission
+  mcpHost?: McpClientHost | null
   onWorktreeSwitch: (
     target: string,
     base?: string
@@ -163,6 +167,9 @@ export function buildSessionExtensionFactories(
                   reason: 'No approval channel is available in this environment.',
                 }),
           isSwitchPending: () => controllerRef.current?.hasPendingRoot() ?? false,
+          isReadOnlyTool: input.mcpHost
+            ? (name) => input.mcpHost?.isReadOnlyTool(name) ?? false
+            : undefined,
         },
         id,
         () =>
@@ -229,6 +236,10 @@ export function buildSessionExtensionFactories(
     })
   )
 
+  if (input.mcpHost && input.mcpHost.getTools().length > 0) {
+    factories.push(createMcpExtension(input.mcpHost))
+  }
+
   for (const factory of config.extensionFactories ?? []) factories.push(factory)
   return factories
 }
@@ -240,6 +251,7 @@ export interface CreateSessionControllerOptions {
   model: Model<Api>
   sessionManager: SessionManager
   logger: AgentLogger
+  mcpHost?: McpClientHost | null
   loadExtras: (sessionId: string) => Promise<SessionExtrasLoadResult>
   takeSeedPermission: (sessionId: string) => SessionPermission | undefined
   onTitleRestored: (sessionId: string, title: string) => void
@@ -337,6 +349,7 @@ export async function createSessionController(
       planContext,
       controllerRef,
       fallbackPermission,
+      mcpHost: options.mcpHost,
       onWorktreeSwitch: (target, base) => options.onWorktreeSwitch(id, target, base),
     }),
   })
@@ -587,12 +600,19 @@ export class SessionController {
   /** 按会话模式切换可用工具集；模式是唯一事实源，不依赖会话历史 */
   applyModeTools(mode: SessionMode): void {
     try {
+      const config = this.deps.getConfig()
+      const mcpHost = this.deps.getMcpHost?.() ?? null
+      const hasMcpTools = (mcpHost?.getTools().length ?? 0) > 0
       this.runtime.session.setActiveToolsByName(
         resolveModeTools(
           mode,
           this.runtime.registeredTools,
           process.platform,
-          this.deps.getConfig()?.toolAllowlist
+          config?.toolAllowlist,
+          {
+            isReadOnlyTool: mcpHost ? (name) => mcpHost.isReadOnlyTool(name) : undefined,
+            allowMcpTools: config?.allowMcpTools ?? hasMcpTools,
+          }
         )
       )
     } catch (error) {
