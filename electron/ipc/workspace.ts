@@ -1,8 +1,9 @@
 /** 工作区选择、监听、最近列表、生命周期与编辑器标签 IPC */
 
-import { existsSync, watch, type FSWatcher } from 'fs'
+import { existsSync } from 'fs'
 import * as fs from 'fs/promises'
 import * as path from 'path'
+import chokidar, { type FSWatcher } from 'chokidar'
 import { dialog, type BrowserWindow } from 'electron'
 import { handleIpc } from './register.js'
 import { WatchBatcher } from '../watch-batcher.js'
@@ -34,12 +35,31 @@ function workspaceWatchKey(workspacePath: string): string {
   return normalizeForComparison(canonicalizePath(workspacePath) ?? path.resolve(workspacePath))
 }
 
+/** 构造 chokidar v4 的 ignored 谓词：基于相对路径跳过依赖/构建/元数据目录，避免递归扫描 node_modules 与 .git */
+export function createWorkspaceWatchIgnored(
+  workspaceRoot: string
+): (candidatePath: string) => boolean {
+  const normalizedRoot = path.resolve(workspaceRoot).replace(/\\/g, '/').replace(/\/+$/, '')
+  const rootCmp = process.platform === 'win32' ? normalizedRoot.toLowerCase() : normalizedRoot
+  return (candidatePath: string): boolean => {
+    const normalized = candidatePath.replace(/\\/g, '/').replace(/\/+$/, '')
+    const cmp = process.platform === 'win32' ? normalized.toLowerCase() : normalized
+    if (cmp === rootCmp) return false
+    if (!cmp.startsWith(`${rootCmp}/`)) return false
+    const rel = normalized.slice(normalizedRoot.length + 1)
+    // 放行工作区根下的 `.pi-workbench` 目录本身，否则 chokidar 不会进入 `.pi-workbench/worktrees/<id>/**`；
+    // `.pi-workbench` 内的 plugins / drafts / cache / config.json 仍会被 isIgnoredWatchPath 立即剪枝
+    if (rel === '.pi-workbench') return false
+    return isIgnoredWatchPath(rel)
+  }
+}
+
 function closeWorkspaceWatcher(workspacePath: string): void {
   const key = workspaceWatchKey(workspacePath)
   const entry = workspaceWatchers.get(key)
   if (!entry) return
   entry.batcher.cancel()
-  entry.watcher.close()
+  void entry.watcher.close().catch(() => {})
   workspaceWatchers.delete(key)
 }
 
@@ -49,7 +69,7 @@ function closeWorkspaceWatchersUnder(workspacePath: string): void {
   for (const [key, entry] of [...workspaceWatchers.entries()]) {
     if (isPathInsideRoot(root, entry.root)) {
       entry.batcher.cancel()
-      entry.watcher.close()
+      void entry.watcher.close().catch(() => {})
       workspaceWatchers.delete(key)
     }
   }
@@ -58,7 +78,7 @@ function closeWorkspaceWatchersUnder(workspacePath: string): void {
 export function closeAllWorkspaceWatchers(): void {
   for (const entry of workspaceWatchers.values()) {
     entry.batcher.cancel()
-    entry.watcher.close()
+    void entry.watcher.close().catch(() => {})
   }
   workspaceWatchers.clear()
 }
@@ -123,13 +143,17 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
       if (!trustedWorkspace) {
         return { success: false, error: 'Workspace is not approved' }
       }
+      const stats = await fs.stat(trustedWorkspace)
+      if (!stats.isDirectory()) {
+        return { success: false, error: 'Watch target is not a directory' }
+      }
 
       const key = workspaceWatchKey(trustedWorkspace)
       // 同一工作区重复 watch 时先替换旧监听，其他工作区不受影响
       const previous = workspaceWatchers.get(key)
       if (previous) {
         previous.batcher.cancel()
-        previous.watcher.close()
+        void previous.watcher.close().catch(() => {})
         workspaceWatchers.delete(key)
       }
 
@@ -141,9 +165,19 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
         }
       })
 
-      const watcher = watch(trustedWorkspace, { recursive: true }, (eventType, filename) => {
-        if (!filename || isIgnoredWatchPath(filename)) return
-        const fullPath = path.join(trustedWorkspace, filename)
+      const watcher = chokidar.watch(trustedWorkspace, {
+        ignored: createWorkspaceWatchIgnored(trustedWorkspace),
+        ignoreInitial: true,
+        persistent: true,
+        ignorePermissionErrors: true,
+        awaitWriteFinish: { stabilityThreshold: 80, pollInterval: 25 },
+      })
+
+      watcher.on('all', (eventName, changedPath) => {
+        const fullPath = path.resolve(trustedWorkspace, changedPath)
+        const rel = path.relative(trustedWorkspace, fullPath)
+        if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || isIgnoredWatchPath(rel)) return
+        const eventType = eventName === 'change' ? 'change' : 'rename'
         const changeKey = process.platform === 'win32' ? fullPath.toLowerCase() : fullPath
         batcher.add({ type: eventType, path: fullPath }, changeKey)
       })

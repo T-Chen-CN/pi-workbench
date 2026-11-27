@@ -9,6 +9,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { createHash } from 'crypto'
 import { createRequire } from 'module'
+import chokidar, { type FSWatcher as ChokidarFSWatcher } from 'chokidar'
 import { readJsonWithBackup, writeJsonAtomicSync } from './atomic-json.js'
 
 export interface PluginManifest {
@@ -75,7 +76,7 @@ interface WorkspacePlugins {
   workspaceDir: string
   plugins: LoadedPlugin[]
   commands: Map<string, { plugin: LoadedPlugin; handler: PluginCommandHandler; info: PluginCommandInfo }>
-  watcher: fs.FSWatcher | null
+  watcher: ChokidarFSWatcher | null
   reloadTimer: NodeJS.Timeout | null
 }
 
@@ -363,10 +364,13 @@ export class PluginManager {
       clearTimeout(state.reloadTimer)
       state.reloadTimer = null
     }
-    state.watcher?.close()
-    state.watcher = null
-
     const pending: Array<Promise<unknown>> = []
+    if (state.watcher) {
+      const closing = state.watcher.close().catch(() => {})
+      state.watcher = null
+      pending.push(closing)
+    }
+
     for (const plugin of state.plugins) {
       try {
         const res = plugin.deactivate?.()
@@ -678,6 +682,36 @@ export class PluginManager {
     return enabledIds !== null && enabledIds.includes(id)
   }
 
+  private snapshotPluginsDir(pluginsDir: string): string {
+    const parts: string[] = []
+    const walk = (dir: string, relPrefix: string): void => {
+      let entries: fs.Dirent[]
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true })
+      } catch {
+        return
+      }
+      entries.sort((a, b) => a.name.localeCompare(b.name))
+      for (const entry of entries) {
+        if (entry.name === '.git') continue
+        const full = path.join(dir, entry.name)
+        const rel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name
+        if (entry.isDirectory()) {
+          walk(full, rel)
+        } else if (entry.isFile()) {
+          try {
+            const st = fs.statSync(full)
+            parts.push(`${rel}=${st.mtimeMs}:${st.size}`)
+          } catch {
+            // ignore transient files
+          }
+        }
+      }
+    }
+    walk(pluginsDir, '')
+    return parts.join('|')
+  }
+
   private startWatcher(
     workspaceDir: string,
     pluginsDir: string,
@@ -686,17 +720,47 @@ export class PluginManager {
     if (this.options.watch === false) return
 
     try {
-      state.watcher = fs.watch(pluginsDir, { recursive: true }, () => {
+      const normalizedRoot = path.resolve(pluginsDir).replace(/\\/g, '/').replace(/\/+$/, '')
+      const rootCmp = process.platform === 'win32' ? normalizedRoot.toLowerCase() : normalizedRoot
+      const ignored = (candidatePath: string): boolean => {
+        const normalized = candidatePath.replace(/\\/g, '/').replace(/\/+$/, '')
+        const cmp = process.platform === 'win32' ? normalized.toLowerCase() : normalized
+        if (cmp === rootCmp) return false
+        if (!cmp.startsWith(`${rootCmp}/`)) return false
+        const rel = normalized.slice(normalizedRoot.length + 1)
+        return /(^|\/)\.git(\/|$)/.test(rel)
+      }
+
+      const initialSnapshot = this.snapshotPluginsDir(pluginsDir)
+      const scheduleReload = (): void => {
+        if (this.workspaces.get(this.mapKey(workspaceDir)) !== state) return
         if (state.reloadTimer) clearTimeout(state.reloadTimer)
         state.reloadTimer = setTimeout(() => {
           state.reloadTimer = null
+          if (this.workspaces.get(this.mapKey(workspaceDir)) !== state) return
           this.loadWorkspace(workspaceDir)
           this.options.onChanged?.(workspaceDir)
         }, this.options.debounceMs ?? 500)
+      }
+
+      const watcher = chokidar.watch(pluginsDir, {
+        ignoreInitial: true,
+        ignored,
+        persistent: true,
+        ignorePermissionErrors: true,
+        awaitWriteFinish: { stabilityThreshold: 80, pollInterval: 25 },
       })
-      state.watcher.on('error', (error) => {
+      watcher.on('all', scheduleReload)
+      watcher.on('ready', () => {
+        if (this.workspaces.get(this.mapKey(workspaceDir)) !== state) return
+        if (this.snapshotPluginsDir(pluginsDir) !== initialSnapshot) {
+          scheduleReload()
+        }
+      })
+      watcher.on('error', (error) => {
         console.warn('[Plugins] Watcher error:', error)
       })
+      state.watcher = watcher
     } catch (error) {
       console.warn('[Plugins] Failed to watch plugins directory:', error)
     }

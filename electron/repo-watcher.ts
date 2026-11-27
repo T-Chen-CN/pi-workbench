@@ -1,14 +1,16 @@
 /**
- * 仓库文件监听：把 gitdir 的变化合并成 refs / status 两类事件。
+ * 仓库文件监听（基于 `chokidar` v4）：把 gitdir 的变化合并成 refs / status 两类事件。
  *
- * - 监听 common-dir（HEAD、index、packed-refs）与 refs / logs / worktrees 子目录；
+ * - 监听 common-dir（HEAD、index、packed-refs）与 refs / logs / worktrees 子目录，
+ *   并在 chokidar `ignored` 阶段直接剪枝 `objects/`、`lfs/`、`*.lock` 与无关目录；
  * - index 变化归为 status，HEAD / refs / packed-refs 归为 refs；
- * - 事件按防抖窗口合并，status 另有最小间隔，避免编辑文件时刷爆。
- * - watcher 不可用（inotify 上限、网络盘、packed-refs 无事件）时降级为定时轮询。
+ * - 事件按防抖窗口合并，status 另有最小间隔，避免编辑文件时刷爆；
+ * - watcher 不可用（inotify 上限、网络盘、目录缺失）时重试并降级为定时轮询。
  */
 
-import { watch, type FSWatcher } from 'fs'
+import * as fs from 'fs'
 import * as path from 'path'
+import chokidar, { type FSWatcher } from 'chokidar'
 
 export type RepoChangeScope = 'refs' | 'status'
 
@@ -27,10 +29,12 @@ const DEFAULT_STATUS_MIN_INTERVAL_MS = 2000
 const DEFAULT_POLL_INTERVAL_MS = 5000
 const RETRY_DELAY_MS = 1000
 const MAX_WATCH_FAILURES = 3
+const MAX_SNAPSHOT_ENTRIES = 2000
 
 /** objects / lfs 与锁文件不参与刷新 */
-const IGNORED_PATH = /(\.lock$|[\\/]objects([\\/]|$)|[\\/]lfs([\\/]|$))/
+const IGNORED_PATH = /(?:\.lock$|(?:^|[\\/])(?:objects|lfs)(?:[\\/]|$))/
 const REF_PATH = /(^|[\\/])(refs|logs|worktrees)([\\/]|$)/
+const REF_SUBDIRS = new Set(['refs', 'logs', 'worktrees'])
 const REF_FILES = new Set([
   'HEAD',
   'packed-refs',
@@ -45,11 +49,132 @@ const REF_FILES = new Set([
   'gitdir',
 ])
 
-interface WatchTarget {
-  dir: string
-  recursive: boolean
-  /** 监听子目录相对 commonDir 的前缀（refs / logs / worktrees），避免 fs.watch 回调只给子路径而被漏判 */
-  prefix: string
+function normalizePosixPath(targetPath: string): string {
+  return path.resolve(targetPath).replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+function compareKey(posixPath: string): string {
+  return process.platform === 'win32' ? posixPath.toLowerCase() : posixPath
+}
+
+function relativeInside(rootPosix: string, rootCmp: string, candidatePosix: string): string | null {
+  const candidateCmp = compareKey(candidatePosix)
+  if (candidateCmp === rootCmp) return ''
+  if (!candidateCmp.startsWith(`${rootCmp}/`)) return null
+  return candidatePosix.slice(rootPosix.length + 1)
+}
+
+/** chokidar v4 忽略谓词：仅放行 gitdir/commonDir 根、顶层关键文件与 refs/logs/worktrees 子树 */
+function createRepoWatchIgnored(commonDir: string, gitDir: string): (candidatePath: string) => boolean {
+  const commonPosix = normalizePosixPath(commonDir)
+  const commonCmp = compareKey(commonPosix)
+  const gitPosix = normalizePosixPath(gitDir)
+  const gitCmp = compareKey(gitPosix)
+  const hasDistinctGitDir = gitCmp !== commonCmp
+
+  const shouldIgnoreRelative = (rel: string, allowWorktrees: boolean): boolean => {
+    if (!rel) return false
+    if (IGNORED_PATH.test(rel)) return true
+    const slash = rel.indexOf('/')
+    if (slash < 0) {
+      return rel !== 'index' && !REF_FILES.has(rel) && !(REF_SUBDIRS.has(rel) && (allowWorktrees || rel !== 'worktrees'))
+    }
+    const first = rel.slice(0, slash)
+    if (!REF_SUBDIRS.has(first)) return true
+    if (first === 'worktrees' && !allowWorktrees) return true
+    return false
+  }
+
+  return (candidatePath: string): boolean => {
+    const candidatePosix = candidatePath.replace(/\\/g, '/').replace(/\/+$/, '')
+    if (hasDistinctGitDir) {
+      const gitRel = relativeInside(gitPosix, gitCmp, candidatePosix)
+      if (gitRel !== null) {
+        return shouldIgnoreRelative(gitRel, false)
+      }
+    }
+    const commonRel = relativeInside(commonPosix, commonCmp, candidatePosix)
+    if (commonRel !== null) {
+      return shouldIgnoreRelative(commonRel, true)
+    }
+    return false
+  }
+}
+
+interface RepoSnapshot {
+  statusSig: string
+  refsSig: string
+}
+
+function statSignature(filePath: string): string {
+  try {
+    const st = fs.statSync(filePath)
+    return `${st.mtimeMs}:${st.size}`
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 同步采集 git 元数据轻量快照：弥补 chokidar 异步初始化（stat/readdirp）窗口期，
+ * 避免 `start()` 后紧接着发生的同步 git 写入在 `ready` 前被 `ignoreInitial` 吞掉。
+ */
+function captureRepoSnapshot(commonDir: string, gitDir: string): RepoSnapshot {
+  const statusParts: string[] = [`c:index=${statSignature(path.join(commonDir, 'index'))}`]
+  const refsParts: string[] = []
+  const resolvedCommon = path.resolve(commonDir)
+  const resolvedGit = path.resolve(gitDir)
+
+  for (const name of REF_FILES) {
+    const sig = statSignature(path.join(commonDir, name))
+    if (sig) refsParts.push(`c:${name}=${sig}`)
+  }
+
+  if (resolvedGit !== resolvedCommon) {
+    statusParts.push(`g:index=${statSignature(path.join(gitDir, 'index'))}`)
+    for (const name of REF_FILES) {
+      const sig = statSignature(path.join(gitDir, name))
+      if (sig) refsParts.push(`g:${name}=${sig}`)
+    }
+  }
+
+  let visited = 0
+  const walk = (dir: string, relPrefix: string): void => {
+    if (visited >= MAX_SNAPSHOT_ENTRIES) return
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name))
+    for (const entry of entries) {
+      if (visited >= MAX_SNAPSHOT_ENTRIES) break
+      const rel = `${relPrefix}/${entry.name}`
+      if (IGNORED_PATH.test(rel)) continue
+      const full = path.join(dir, entry.name)
+      visited += 1
+      if (entry.isDirectory()) {
+        walk(full, rel)
+      } else if (entry.isFile()) {
+        const sig = statSignature(full)
+        if (entry.name === 'index') {
+          statusParts.push(`${rel}=${sig}`)
+        } else {
+          refsParts.push(`${rel}=${sig}`)
+        }
+      }
+    }
+  }
+
+  for (const sub of REF_SUBDIRS) {
+    walk(path.join(commonDir, sub), sub)
+  }
+
+  return {
+    statusSig: statusParts.join('|'),
+    refsSig: refsParts.join('|'),
+  }
 }
 
 export class RepoWatcher {
@@ -69,35 +194,63 @@ export class RepoWatcher {
     if (this.disposed) return
     this.closeWatchers()
     const { gitDir, commonDir } = this.options
-    const targets: WatchTarget[] = [
-      { dir: commonDir, recursive: false, prefix: '' },
-      { dir: path.join(commonDir, 'refs'), recursive: true, prefix: 'refs' },
-      { dir: path.join(commonDir, 'logs'), recursive: true, prefix: 'logs' },
-      { dir: path.join(commonDir, 'worktrees'), recursive: true, prefix: 'worktrees' },
-    ]
-    if (path.resolve(gitDir) !== path.resolve(commonDir)) {
-      targets.push({ dir: gitDir, recursive: false, prefix: '' })
+    const commonPosix = normalizePosixPath(commonDir)
+    const commonCmp = compareKey(commonPosix)
+    const gitPosix = normalizePosixPath(gitDir)
+    const gitCmp = compareKey(gitPosix)
+
+    const targets: string[] = []
+    if (fs.existsSync(commonDir)) {
+      targets.push(commonDir)
+    }
+    // 独立 gitDir（且不在 commonDir 子树下，如外部 worktree）单独加入监听目标
+    const gitInsideCommon = gitCmp === commonCmp || gitCmp.startsWith(`${commonCmp}/`)
+    if (!gitInsideCommon && fs.existsSync(gitDir)) {
+      targets.push(gitDir)
     }
 
-    for (const target of targets) {
-      try {
-        const watcher = watch(target.dir, { recursive: target.recursive }, (_event, filename) => {
-          this.onEvent(target.prefix, filename ? String(filename) : '')
-        })
-        watcher.on('error', (error) => this.onError(error))
-        this.watchers.push(watcher)
-      } catch {
-        // 目录不存在（没有 logs / worktrees）或超出手柄上限：其余监听继续工作
-      }
-    }
-
-    if (this.watchers.length === 0) {
+    if (targets.length === 0) {
       this.startPolling()
-    } else {
-      // 不在 start() 同步清零 failures：异步 watcher error 往往在创建后立刻触发，
-      // 只有真正收到有效事件时才认定恢复，否则会陷入无限 1s 重试而不降级轮询
-      this.stopPolling()
+      return
     }
+
+    const initialSnapshot = captureRepoSnapshot(commonDir, gitDir)
+    try {
+      const watcher = chokidar.watch(targets, {
+        ignoreInitial: true,
+        ignored: createRepoWatchIgnored(commonDir, gitDir),
+        persistent: true,
+        ignorePermissionErrors: true,
+      })
+
+      watcher.on('all', (_eventName, changedPath) => {
+        const changedPosix = path.resolve(changedPath).replace(/\\/g, '/').replace(/\/+$/, '')
+        const gitRel = !gitInsideCommon ? relativeInside(gitPosix, gitCmp, changedPosix) : null
+        const rel = gitRel ?? relativeInside(commonPosix, commonCmp, changedPosix) ?? ''
+        this.onEvent('', rel)
+      })
+
+      watcher.on('ready', () => {
+        if (this.disposed || !this.watchers.includes(watcher)) return
+        const readySnapshot = captureRepoSnapshot(commonDir, gitDir)
+        if (readySnapshot.statusSig !== initialSnapshot.statusSig) {
+          this.onEvent('', 'index')
+        }
+        if (readySnapshot.refsSig !== initialSnapshot.refsSig) {
+          this.onEvent('refs', 'HEAD')
+        }
+      })
+
+      watcher.on('error', (error) => this.onError(error))
+      this.watchers.push(watcher)
+    } catch (error) {
+      this.onError(error)
+      return
+    }
+
+    // 不在 start() 同步清零 failures：异步 watcher error 往往在创建后立刻触发，
+    // 只有真正收到有效事件时才认定恢复，否则会陷入无限 1s 重试而不降级轮询
+    this.stopPolling()
   }
 
   dispose(): void {
@@ -212,7 +365,7 @@ export class RepoWatcher {
   private closeWatchers(): void {
     for (const watcher of this.watchers) {
       try {
-        watcher.close()
+        void watcher.close().catch(() => {})
       } catch {
         // ignore
       }
