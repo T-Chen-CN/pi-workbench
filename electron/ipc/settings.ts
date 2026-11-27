@@ -6,6 +6,7 @@ import { readJsonWithBackup, writeJsonAtomic } from '../atomic-json.js'
 import { refreshTray } from '../tray.js'
 import { refreshSystemProxy } from '../system-proxy.js'
 import { handleIpc } from './register.js'
+import { appSaveSettingsSchema, parseIpcInput } from './schemas.js'
 
 const DEFAULT_SETTINGS = {
   language: 'zh',
@@ -107,57 +108,30 @@ export function registerSettingsIpc(): void {
     }
   })
 
-  handleIpc('app:saveSettings', async (_event, settings: any) => {
+  handleIpc('app:saveSettings', async (_event, settings: unknown) => {
     try {
-      const sanitized = { ...(settings ?? {}) }
-      // 最近工作区由主进程的 SQLite 独占管理，渲染层不再保存该字段
-      delete sanitized.recentWorkspaces
-      // 权限档位只接受三个合法值；缺失时保留现有值（旧前端不会发送该字段）
-      const level = normalizePermissionLevel(sanitized.permissionLevel)
-      if (level) {
-        sanitized.permissionLevel = level
-      } else {
+      const parsed = parseIpcInput(appSaveSettingsSchema, settings ?? {})
+      if (!parsed.ok) {
+        return { success: false, error: parsed.error }
+      }
+      const sanitized: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(parsed.data)) {
+        if (value !== undefined) sanitized[key] = value
+      }
+      // 权限档位缺失时保留现有值（旧前端不会发送该字段）
+      if (!sanitized.permissionLevel) {
         const currentLevel = normalizePermissionLevel(settingsCache.permissionLevel)
         if (currentLevel) sanitized.permissionLevel = currentLevel
-        else delete sanitized.permissionLevel
       }
-      // 文件树排序：只接受已知排序键与布尔开关，非法值落回默认
-      if (sanitized.explorerSortBy !== 'name' && sanitized.explorerSortBy !== 'type') {
-        delete sanitized.explorerSortBy
-      }
-      for (const key of ['explorerFoldersFirst', 'explorerSortReverse'] as const) {
-        if (typeof sanitized[key] !== 'boolean') delete sanitized[key]
-      }
-      // 关闭按钮行为：缺失时保留现有值，不把旧前端没发过的字段写丢
-      if (typeof sanitized.closeToTray !== 'boolean') {
-        if (typeof settingsCache.closeToTray === 'boolean') {
-          sanitized.closeToTray = settingsCache.closeToTray
-        } else {
-          delete sanitized.closeToTray
-        }
-      }
-      // 工作树依赖自动安装：同上，缺失时保留现有值
-      if (typeof sanitized.autoInstallWorktreeDeps !== 'boolean') {
-        if (typeof settingsCache.autoInstallWorktreeDeps === 'boolean') {
-          sanitized.autoInstallWorktreeDeps = settingsCache.autoInstallWorktreeDeps
-        } else {
-          delete sanitized.autoInstallWorktreeDeps
-        }
-      }
-      // 系统代理：缺失时保留现有值，不把旧前端没发过的字段写丢
-      if (typeof sanitized.useSystemProxy !== 'boolean') {
-        if (typeof settingsCache.useSystemProxy === 'boolean') {
-          sanitized.useSystemProxy = settingsCache.useSystemProxy
-        } else {
-          delete sanitized.useSystemProxy
-        }
-      }
-      // 自动更新模型目录：同上，缺失时保留现有值
-      if (typeof sanitized.autoRefreshCatalog !== 'boolean') {
-        if (typeof settingsCache.autoRefreshCatalog === 'boolean') {
-          sanitized.autoRefreshCatalog = settingsCache.autoRefreshCatalog
-        } else {
-          delete sanitized.autoRefreshCatalog
+      // 缺失时保留现有值，不把旧前端没发过的字段写丢
+      for (const key of [
+        'closeToTray',
+        'autoInstallWorktreeDeps',
+        'useSystemProxy',
+        'autoRefreshCatalog',
+      ] as const) {
+        if (typeof sanitized[key] !== 'boolean' && typeof settingsCache[key] === 'boolean') {
+          sanitized[key] = settingsCache[key]
         }
       }
       await saveSettingsFile(sanitized)

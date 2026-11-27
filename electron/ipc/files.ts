@@ -6,6 +6,14 @@ import * as path from 'path'
 import { statSync } from 'fs'
 import { shell } from 'electron'
 import { handleIpc } from './register.js'
+import {
+  draftDeleteSchema,
+  draftSaveSchema,
+  fsRenameSchema,
+  fsWriteFileSchema,
+  parseIpcInput,
+  safePathSchema,
+} from './schemas.js'
 import { mimeForPath } from '../file-protocol.js'
 import type { DraftStore } from '../draft-store.js'
 import {
@@ -87,7 +95,9 @@ export function registerFilesIpc(context: FilesIpcContext): void {
   // 用系统默认程序打开：不支持预览的类型与媒体文件（拒绝直接执行可执行文件）
   handleIpc('fs:openExternally', async (_event, filePath: string) => {
     try {
-      const target = resolveAllowedFileTarget(filePath)
+      const parsedPath = parseIpcInput(safePathSchema, filePath)
+      if (!parsedPath.ok) return { success: false, error: parsedPath.error }
+      const target = resolveAllowedFileTarget(parsedPath.data)
       if (!target) {
         return { success: false, error: 'Path is outside the open workspace' }
       }
@@ -104,11 +114,13 @@ export function registerFilesIpc(context: FilesIpcContext): void {
 
   handleIpc('fs:writeFile', async (_event, filePath: string, content: string) => {
     try {
-      const target = resolveAllowedFileTarget(filePath)
+      const parsed = parseIpcInput(fsWriteFileSchema, { filePath, content })
+      if (!parsed.ok) return { success: false, error: parsed.error }
+      const target = resolveAllowedFileTarget(parsed.data.filePath)
       if (!target) {
         return { success: false, error: 'Path is outside the open workspace' }
       }
-      await fs.writeFile(target, content, 'utf-8')
+      await fs.writeFile(target, parsed.data.content, 'utf-8')
       context.onFileSaved?.(target)
       return { success: true }
     } catch (error) {
@@ -164,7 +176,9 @@ export function registerFilesIpc(context: FilesIpcContext): void {
 
   handleIpc('fs:delete', async (_event, targetPath: string) => {
     try {
-      const target = resolveAllowedFileTarget(targetPath)
+      const parsedPath = parseIpcInput(safePathSchema, targetPath)
+      if (!parsedPath.ok) return { success: false, error: parsedPath.error }
+      const target = resolveAllowedFileTarget(parsedPath.data)
       if (!target) {
         return { success: false, error: 'Path is outside the open workspace' }
       }
@@ -180,8 +194,10 @@ export function registerFilesIpc(context: FilesIpcContext): void {
 
   handleIpc('fs:rename', async (_event, oldPath: string, newPath: string) => {
     try {
-      const source = resolveAllowedFileTarget(oldPath)
-      const destination = resolveAllowedFileTarget(newPath)
+      const parsed = parseIpcInput(fsRenameSchema, { oldPath, newPath })
+      if (!parsed.ok) return { success: false, error: parsed.error }
+      const source = resolveAllowedFileTarget(parsed.data.oldPath)
+      const destination = resolveAllowedFileTarget(parsed.data.newPath)
       if (!source || !destination) {
         return { success: false, error: 'Path is outside the open workspace' }
       }
@@ -260,14 +276,13 @@ export function registerFilesIpc(context: FilesIpcContext): void {
 
   handleIpc('draft:save', async (_event, workspacePath: string, filePath: string, content: unknown) => {
     try {
-      const target = resolveWorkspaceFile(workspacePath, filePath)
+      const parsed = parseIpcInput(draftSaveSchema, { workspacePath, filePath, content })
+      if (!parsed.ok) return { success: false, error: parsed.error }
+      const target = resolveWorkspaceFile(parsed.data.workspacePath, parsed.data.filePath)
       if (!target) {
         return { success: false, error: 'Path is outside the open workspace' }
       }
-      if (typeof content !== 'string') {
-        return { success: false, error: 'Draft content must be a string' }
-      }
-      await context.draftStore.save(target.workspace, target.file, content)
+      await context.draftStore.save(target.workspace, target.file, parsed.data.content)
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -276,7 +291,9 @@ export function registerFilesIpc(context: FilesIpcContext): void {
 
   handleIpc('draft:delete', async (_event, workspacePath: string, filePath: string) => {
     try {
-      const target = resolveWorkspaceFile(workspacePath, filePath)
+      const parsed = parseIpcInput(draftDeleteSchema, { workspacePath, filePath })
+      if (!parsed.ok) return { success: false, error: parsed.error }
+      const target = resolveWorkspaceFile(parsed.data.workspacePath, parsed.data.filePath)
       if (!target) {
         return { success: false, error: 'Path is outside the open workspace' }
       }

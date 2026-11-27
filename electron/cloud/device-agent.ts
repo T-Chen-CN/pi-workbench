@@ -8,6 +8,7 @@
 
 import { WebSocket } from 'ws'
 import {
+  CLOUD_PROTOCOL_CAPABILITIES,
   CLOUD_PROTOCOL_VERSION,
   CLOUD_WS_PATHS,
   type CloudChangedFile,
@@ -351,6 +352,7 @@ export class DeviceAgent {
           workspaces,
           // 重连对账（F-21 / A-13）：服务端据此把掉线期间已判终态的工单重新下发 cancel
           runningTasks: [...this.running],
+          capabilities: [...CLOUD_PROTOCOL_CAPABILITIES],
         })
       )
     } catch (error) {

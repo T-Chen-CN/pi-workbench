@@ -2,6 +2,16 @@
 
 import { app, clipboard, shell, type BrowserWindow } from 'electron'
 import { handleIpc } from './register.js'
+import {
+  clipboardWriteSchema,
+  parseIpcInput,
+  pluginToggleSchema,
+  shellOpenExternalSchema,
+  terminalCreateSchema,
+  terminalIdSchema,
+  terminalResizeSchema,
+  terminalWriteSchema,
+} from './schemas.js'
 import { getAppDir } from '../app-paths.js'
 import { isExternalUrl } from '../external-links.js'
 import { isTrustedWorkspacePath, canonicalizePath, isPathInsideRoot } from '../workspace-trust.js'
@@ -46,37 +56,49 @@ export function registerSystemIpc(context: SystemIpcContext): void {
   handleIpc(
     'terminal:create',
     async (_event, workspaceDir: string, cols: number, rows: number, cwd?: string) => {
-      if (!isTrustedWorkspacePath(workspaceDir)) {
+      const parsed = parseIpcInput(terminalCreateSchema, { workspaceDir, cols, rows, cwd })
+      if (!parsed.ok) return { success: false, error: parsed.error }
+      if (!isTrustedWorkspacePath(parsed.data.workspaceDir)) {
         return { success: false, error: 'Workspace is not approved' }
       }
-      const trusted = canonicalizePath(workspaceDir) ?? workspaceDir
+      const trusted = canonicalizePath(parsed.data.workspaceDir) ?? parsed.data.workspaceDir
       let spawnCwd = trusted
-      if (typeof cwd === 'string' && cwd) {
-        const target = canonicalizePath(cwd)
+      if (parsed.data.cwd) {
+        const target = canonicalizePath(parsed.data.cwd)
         if (!target || !isPathInsideRoot(trusted, target)) {
           return { success: false, error: 'Terminal cwd is outside the workspace' }
         }
         spawnCwd = target
       }
-      return context.terminalManager.create(trusted, cols, rows, spawnCwd)
+      return context.terminalManager.create(trusted, parsed.data.cols, parsed.data.rows, spawnCwd)
     }
   )
 
-  handleIpc('terminal:write', async (_event, id: string, data: string) => ({
-    success: context.terminalManager.write(id, data),
-  }))
+  handleIpc('terminal:write', async (_event, id: string, data: string) => {
+    const parsed = parseIpcInput(terminalWriteSchema, { id, data })
+    if (!parsed.ok) return { success: false, error: parsed.error }
+    return { success: context.terminalManager.write(parsed.data.id, parsed.data.data) }
+  })
 
-  handleIpc('terminal:resize', async (_event, id: string, cols: number, rows: number) => ({
-    success: context.terminalManager.resize(id, cols, rows),
-  }))
+  handleIpc('terminal:resize', async (_event, id: string, cols: number, rows: number) => {
+    const parsed = parseIpcInput(terminalResizeSchema, { id, cols, rows })
+    if (!parsed.ok) return { success: false, error: parsed.error }
+    return {
+      success: context.terminalManager.resize(parsed.data.id, parsed.data.cols, parsed.data.rows),
+    }
+  })
 
-  handleIpc('terminal:close', async (_event, id: string) => ({
-    success: context.terminalManager.close(id),
-  }))
+  handleIpc('terminal:close', async (_event, id: string) => {
+    const parsed = parseIpcInput(terminalIdSchema, { id })
+    if (!parsed.ok) return { success: false, error: parsed.error }
+    return { success: context.terminalManager.close(parsed.data.id) }
+  })
 
-  handleIpc('terminal:flush', async (_event, id: string) => ({
-    success: context.terminalManager.flushNow(id),
-  }))
+  handleIpc('terminal:flush', async (_event, id: string) => {
+    const parsed = parseIpcInput(terminalIdSchema, { id })
+    if (!parsed.ok) return { success: false, error: parsed.error }
+    return { success: context.terminalManager.flushNow(parsed.data.id) }
+  })
 
   // ---- 工作台插件 ----
   handleIpc('plugins:list', async (_event, workspaceDir: string) => {
@@ -124,12 +146,22 @@ export function registerSystemIpc(context: SystemIpcContext): void {
     'plugins:setEnabled',
     async (_event, workspaceDir: string, pluginId: string, enabled: unknown) => {
       try {
-        if (!isTrustedWorkspacePath(workspaceDir)) {
+        const parsed = parseIpcInput(pluginToggleSchema, {
+          workspaceDir,
+          pluginId,
+          enabled: Boolean(enabled),
+        })
+        if (!parsed.ok) return { success: false, plugins: [], error: parsed.error }
+        if (!isTrustedWorkspacePath(parsed.data.workspaceDir)) {
           return { success: false, plugins: [], error: 'Workspace is not approved' }
         }
         return {
           success: true,
-          plugins: context.pluginManager.setEnabled(workspaceDir, pluginId, Boolean(enabled)),
+          plugins: context.pluginManager.setEnabled(
+            parsed.data.workspaceDir,
+            parsed.data.pluginId,
+            parsed.data.enabled
+          ),
         }
       } catch (error) {
         return {
@@ -298,9 +330,12 @@ export function registerSystemIpc(context: SystemIpcContext): void {
   // ---- 外部链接 ----
   // 自定义协议下 window.open / target=_blank 一律被主窗口拒绝，链接只能走这条通道
   handleIpc('shell:openExternal', async (_event, url: unknown) => {
-    if (!isExternalUrl(url)) return { success: false, error: 'Unsupported URL' }
+    const parsed = parseIpcInput(shellOpenExternalSchema, { url })
+    if (!parsed.ok || !isExternalUrl(parsed.data.url)) {
+      return { success: false, error: 'Unsupported URL' }
+    }
     try {
-      await shell.openExternal(url)
+      await shell.openExternal(parsed.data.url)
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -308,8 +343,12 @@ export function registerSystemIpc(context: SystemIpcContext): void {
   })
 
   handleIpc('clipboard:writeText', async (_event, text: unknown) => {
+    const parsed = parseIpcInput(clipboardWriteSchema, {
+      text: typeof text === 'string' ? text : '',
+    })
+    if (!parsed.ok) return { success: false, error: parsed.error }
     try {
-      clipboard.writeText(typeof text === 'string' ? text : '')
+      clipboard.writeText(parsed.data.text)
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }

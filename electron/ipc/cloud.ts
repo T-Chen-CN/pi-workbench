@@ -6,6 +6,7 @@
  */
 
 import { handleIpc } from './register.js'
+import { cloudPairSchema, cloudSaveConfigSchema, parseIpcInput } from './schemas.js'
 import { getAppDir } from '../app-paths.js'
 import { getCoordinator } from '../worktree-coordinator.js'
 import { canonicalizePath, isTrustedWorkspacePath, normalizeForComparison } from '../workspace-trust.js'
@@ -147,8 +148,10 @@ export function registerCloudIpc(context: CloudIpcContext): void {
       _event,
       input: { baseUrl?: string; code?: string; deviceName?: string }
     ) => {
-      const baseUrl = normalizeBaseUrl(String(input?.baseUrl ?? ''))
-      const code = String(input?.code ?? '').trim()
+      const parsed = parseIpcInput(cloudPairSchema, input)
+      if (!parsed.ok) return { success: false, error: parsed.error }
+      const baseUrl = normalizeBaseUrl(parsed.data.baseUrl)
+      const code = parsed.data.code.trim()
       if (!baseUrl) return { success: false, error: 'Cloud address is required' }
       if (!/^\d{6}$/.test(code)) return { success: false, error: 'The pairing code is 6 digits' }
 
@@ -289,6 +292,8 @@ export function registerCloudIpc(context: CloudIpcContext): void {
   })
 
   handleIpc('cloud:saveConfig', async (_event, config: unknown) => {
+    const parsed = parseIpcInput(cloudSaveConfigSchema, config ?? {})
+    if (!parsed.ok) return { success: false, error: parsed.error }
     const link = readCloudLink()
     if (!link) return { success: false, error: 'This device is not paired' }
     const token = readCloudClientToken(link)
@@ -300,7 +305,7 @@ export function registerCloudIpc(context: CloudIpcContext): void {
           'content-type': 'application/json',
           authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(config ?? {}),
+        body: JSON.stringify(parsed.data),
         signal: AbortSignal.timeout(15_000),
       })
       const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>

@@ -10,6 +10,7 @@ import { promises as fs } from 'fs'
 import * as path from 'path'
 import { WebSocketServer, type WebSocket } from 'ws'
 import {
+  CLOUD_PROTOCOL_CAPABILITIES,
   CLOUD_PROTOCOL_VERSION,
   CLOUD_WS_PATHS,
   isTerminalTaskStatus,
@@ -269,6 +270,7 @@ export async function createCloudServer(
     return {
       serverVersion: config.version,
       protocol: CLOUD_PROTOCOL_VERSION,
+      capabilities: [...CLOUD_PROTOCOL_CAPABILITIES],
       lastSeq: hub.lastClientSeq(),
       lastReadSeq: lastReadSeqRuntime,
       unreadCount: computeUnreadCount(messages),

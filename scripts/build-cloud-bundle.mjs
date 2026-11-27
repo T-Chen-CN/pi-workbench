@@ -54,6 +54,7 @@ const pinnedDependencies = resolveLockedVersions([
   '@earendil-works/pi-ai',
   '@earendil-works/pi-coding-agent',
   'ws',
+  'zod',
 ])
 
 writeFileSync(

@@ -3,6 +3,13 @@
 import { BrowserWindow } from 'electron'
 import * as path from 'path'
 import { handleIpc } from './register.js'
+import {
+  gitBindWorktreeSchema,
+  gitCheckoutSchema,
+  gitCreateBranchSchema,
+  gitMergeSchema,
+  parseIpcInput,
+} from './schemas.js'
 import { getAppSettingsCache } from './settings.js'
 import { isTrustedWorkspacePath } from '../workspace-trust.js'
 import type { AgentRegistry } from '../agent-registry.js'
@@ -268,14 +275,26 @@ export function registerGitIpc(context: GitIpcContext): void {
       base?: string
     ) => {
       try {
-        if (!isTrustedWorkspacePath(workspaceDir)) {
+        const parsed = parseIpcInput(gitBindWorktreeSchema, {
+          workspaceDir,
+          sessionId,
+          target,
+          ...(base !== undefined ? { base } : {}),
+        })
+        if (!parsed.ok) return { success: false, error: parsed.error }
+        if (!isTrustedWorkspacePath(parsed.data.workspaceDir)) {
           return { success: false, error: 'Workspace is not approved' }
         }
-        const coordinator = await getCoordinator(workspaceDir)
+        const coordinator = await getCoordinator(parsed.data.workspaceDir)
         if (!coordinator) return { success: false, error: 'Not a git repository' }
-        const wasBound = coordinator.hasBinding(sessionId)
-        const previousRoot = coordinator.getSessionRoot(sessionId)
-        const bound = await coordinator.bind(sessionId, target, base, sessionId)
+        const wasBound = coordinator.hasBinding(parsed.data.sessionId)
+        const previousRoot = coordinator.getSessionRoot(parsed.data.sessionId)
+        const bound = await coordinator.bind(
+          parsed.data.sessionId,
+          parsed.data.target,
+          parsed.data.base,
+          parsed.data.sessionId
+        )
         if (!bound.success || !bound.worktree) return bound
         const agent = context.agentRegistry.get(workspaceDir)
         const switched = agent?.requestSessionRoot
@@ -369,9 +388,11 @@ export function registerGitIpc(context: GitIpcContext): void {
     'git:createBranch',
     async (_event, workspaceDir: string, sha: string, name: string) => {
       try {
-        const root = await resolveRepoRoot(workspaceDir)
+        const parsed = parseIpcInput(gitCreateBranchSchema, { workspaceDir, sha, name })
+        if (!parsed.ok) return { success: false, error: parsed.error }
+        const root = await resolveRepoRoot(parsed.data.workspaceDir)
         if (!root) return { success: false, error: 'Not a git repository' }
-        await createBranch(root, name, sha)
+        await createBranch(root, parsed.data.name, parsed.data.sha)
         return { success: true }
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -409,10 +430,15 @@ export function registerGitIpc(context: GitIpcContext): void {
     'git:checkout',
     async (_event, workspaceDir: string, worktreePath: string, branch: string) => {
       try {
-        if (!isTrustedWorkspacePath(workspaceDir) || !isPathInWorkspace(workspaceDir, worktreePath)) {
+        const parsed = parseIpcInput(gitCheckoutSchema, { workspaceDir, worktreePath, branch })
+        if (!parsed.ok) return { success: false, error: parsed.error }
+        if (
+          !isTrustedWorkspacePath(parsed.data.workspaceDir) ||
+          !isPathInWorkspace(parsed.data.workspaceDir, parsed.data.worktreePath)
+        ) {
           return { success: false, error: 'Path is outside the workspace' }
         }
-        await checkout(worktreePath, branch)
+        await checkout(parsed.data.worktreePath, parsed.data.branch)
         return { success: true }
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -430,10 +456,24 @@ export function registerGitIpc(context: GitIpcContext): void {
       strategy?: 'merge' | 'squash' | 'rebase'
     ) => {
       try {
-        if (!isTrustedWorkspacePath(workspaceDir) || !isPathInWorkspace(workspaceDir, worktreePath)) {
+        const parsed = parseIpcInput(gitMergeSchema, {
+          workspaceDir,
+          worktreePath,
+          branch,
+          ...(strategy !== undefined ? { strategy } : {}),
+        })
+        if (!parsed.ok) return { success: false, error: parsed.error }
+        if (
+          !isTrustedWorkspacePath(parsed.data.workspaceDir) ||
+          !isPathInWorkspace(parsed.data.workspaceDir, parsed.data.worktreePath)
+        ) {
           return { success: false, error: 'Path is outside the workspace' }
         }
-        await mergeBranch(worktreePath, branch, strategy ?? 'merge')
+        await mergeBranch(
+          parsed.data.worktreePath,
+          parsed.data.branch,
+          parsed.data.strategy ?? 'merge'
+        )
         return { success: true }
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) }

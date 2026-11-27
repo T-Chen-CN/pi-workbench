@@ -12,10 +12,37 @@
  * - 所有服务端 → 对端的增量帧都带单调 `seq`；`ack(seq)` 之后服务端才可以删 outbox。
  */
 
+import { z } from 'zod'
 import type { AgentTraceEvent } from './types.js'
 
-/** 协议版本：任何破坏性帧变更都必须 +1，服务端按它直接拒绝旧客户端 */
+/** 协议版本范围：破坏性帧变更时递增 CLOUD_PROTOCOL_VERSION，同时通过 capabilities 协商可选增量能力 */
+export const CLOUD_PROTOCOL_MIN_VERSION = 1
 export const CLOUD_PROTOCOL_VERSION = 1
+
+/** 当前协议支持的可协商能力（用于桌面端/云端独立发布时的平滑前向兼容） */
+export const CLOUD_PROTOCOL_CAPABILITIES = [
+  'sqlite-store',
+  'read-state-sync',
+  'task-message',
+  'diff-sidecar',
+] as const
+
+export type CloudProtocolCapability = (typeof CLOUD_PROTOCOL_CAPABILITIES)[number]
+
+/** 计算双方共同支持的协议能力交集；对端未上报时返回空集（按基础 v1 兼容） */
+export function negotiateProtocolCapabilities(
+  peerCapabilities?: readonly string[]
+): CloudProtocolCapability[] {
+  if (!Array.isArray(peerCapabilities) || peerCapabilities.length === 0) return []
+  const supported = new Set<string>(CLOUD_PROTOCOL_CAPABILITIES)
+  const negotiated: CloudProtocolCapability[] = []
+  for (const item of peerCapabilities) {
+    if (typeof item === 'string' && supported.has(item) && !negotiated.includes(item as CloudProtocolCapability)) {
+      negotiated.push(item as CloudProtocolCapability)
+    }
+  }
+  return negotiated
+}
 
 /** 两条数据面路径（Caddy 反代到 127.0.0.1:8787） */
 export const CLOUD_WS_PATHS = {
@@ -181,9 +208,267 @@ export const DEVICE_TO_SERVER_TYPES: ReadonlySet<string> = new Set([
   'ping',
 ])
 
+const nonEmptyStr = z.string().min(1)
+const finiteNum = z.number().finite()
+const versionField = z.number().int().min(CLOUD_PROTOCOL_MIN_VERSION).max(CLOUD_PROTOCOL_VERSION)
+
+const cloudWorkspaceInfoSchema = z
+  .object({
+    path: nonEmptyStr,
+    name: z.string(),
+    isGit: z.boolean(),
+    remote: z.string().optional(),
+    branch: z.string().optional(),
+  })
+  .loose()
+
+const cloudChangedFileSchema = z
+  .object({
+    path: nonEmptyStr,
+    kind: z.enum(['added', 'modified', 'deleted', 'renamed']),
+    attention: z.string().optional(),
+  })
+  .loose()
+
+const cloudSecretHitSchema = z
+  .object({
+    path: nonEmptyStr,
+    line: finiteNum,
+    kind: nonEmptyStr,
+  })
+  .loose()
+
+const cloudTaskStatusSchema = z.enum([
+  'queued',
+  'assigned',
+  'running',
+  'waiting_human',
+  'done',
+  'failed',
+  'cancelled',
+  'expired',
+  'rejected',
+  'interrupted',
+])
+
+/** 客户端上行帧运行时 Zod Schema（保留未知可选字段以支持前向能力扩展） */
+export const clientToServerFrameSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      v: versionField,
+      type: z.literal('resume'),
+      lastAckSeq: finiteNum,
+      capabilities: z.array(z.string()).max(64).optional(),
+    })
+    .loose(),
+  z.object({ v: versionField, type: z.literal('ack'), seq: finiteNum }).loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('say'),
+      text: z.string().max(200_000),
+      clientMessageId: z.string().max(256),
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('confirm_plan'),
+      planText: z.string().max(200_000),
+      items: z
+        .array(z.object({ deviceId: nonEmptyStr, workspacePath: nonEmptyStr }).loose())
+        .max(100),
+      quota: finiteNum.min(0).max(10_000),
+    })
+    .loose(),
+  z.object({ v: versionField, type: z.literal('stop_reply') }).loose(),
+  z.object({ v: versionField, type: z.literal('stop_task'), taskId: nonEmptyStr }).loose(),
+  z.object({ v: versionField, type: z.literal('close_unit'), unitId: nonEmptyStr }).loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('mark_read'),
+      seq: finiteNum.optional(),
+      at: finiteNum.optional(),
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task_message'),
+      taskId: nonEmptyStr,
+      text: z.string().max(200_000),
+      at: finiteNum.optional(),
+    })
+    .loose(),
+  z.object({ v: versionField, type: z.literal('ping'), at: finiteNum }).loose(),
+])
+
+/** 设备端上行帧运行时 Zod Schema */
+export const deviceToServerFrameSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      v: versionField,
+      type: z.literal('hello'),
+      deviceId: nonEmptyStr,
+      workspaces: z.array(cloudWorkspaceInfoSchema).max(500),
+      runningTasks: z.array(nonEmptyStr).max(200).optional(),
+      capabilities: z.array(z.string()).max(64).optional(),
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('resume'),
+      lastAckSeq: finiteNum,
+      capabilities: z.array(z.string()).max(64).optional(),
+    })
+    .loose(),
+  z.object({ v: versionField, type: z.literal('ack'), seq: finiteNum }).loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('workspaces'),
+      workspaces: z.array(cloudWorkspaceInfoSchema).max(500),
+    })
+    .loose(),
+  z.object({ v: versionField, type: z.literal('heartbeat'), at: finiteNum }).loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task_status'),
+      taskId: nonEmptyStr,
+      status: cloudTaskStatusSchema,
+      at: finiteNum,
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task_worktree'),
+      taskId: nonEmptyStr,
+      unitId: nonEmptyStr,
+      path: nonEmptyStr,
+      branch: z.string().optional(),
+      at: finiteNum,
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task_milestone'),
+      taskId: nonEmptyStr,
+      milestone: z
+        .object({
+          kind: z.enum(['accepted', 'first-change', 'tests-done', 'progress', 'uncommitted']),
+          text: z.string(),
+          at: finiteNum,
+          changedFiles: z.array(cloudChangedFileSchema).max(2000).optional(),
+        })
+        .loose(),
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task_question'),
+      taskId: nonEmptyStr,
+      questionId: nonEmptyStr,
+      text: z.string().max(100_000),
+      at: finiteNum,
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task_stalled'),
+      taskId: nonEmptyStr,
+      toolName: z.string().optional(),
+      idleMs: finiteNum,
+      at: finiteNum,
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task_heartbeat'),
+      taskId: nonEmptyStr,
+      at: finiteNum,
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task_result'),
+      taskId: nonEmptyStr,
+      result: z
+        .object({
+          summary: z.string(),
+          changedFiles: z.array(cloudChangedFileSchema).max(5000),
+          secretHits: z.array(cloudSecretHitSchema).max(5000).optional(),
+        })
+        .loose(),
+      at: finiteNum,
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task_failed'),
+      taskId: nonEmptyStr,
+      error: z.string(),
+      changedFiles: z.array(cloudChangedFileSchema).max(5000).optional(),
+      secretHits: z.array(cloudSecretHitSchema).max(5000).optional(),
+      worktreeClean: z.boolean().optional(),
+      at: finiteNum,
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('task_interrupted'),
+      taskId: nonEmptyStr,
+      reason: z.string(),
+      worktreeClean: z.boolean().optional(),
+      at: finiteNum,
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('unit_closed'),
+      unitId: nonEmptyStr,
+      removed: z.boolean(),
+      dirty: z.boolean(),
+      worktreePath: z.string().optional(),
+      branch: z.string().optional(),
+      error: z.string().optional(),
+      at: finiteNum,
+    })
+    .loose(),
+  z
+    .object({
+      v: versionField,
+      type: z.literal('unit_state'),
+      unitId: nonEmptyStr,
+      clean: z.boolean(),
+      worktreePath: z.string().optional(),
+      at: finiteNum,
+    })
+    .loose(),
+  z.object({ v: versionField, type: z.literal('ping'), at: finiteNum }).loose(),
+])
+
+function formatZodIssues(error: z.ZodError): string {
+  const first = error.issues[0]
+  if (!first) return 'Frame schema validation failed.'
+  const loc = first.path.length > 0 ? `${first.path.join('.')}: ` : ''
+  return `${loc}${first.message}`
+}
+
 /**
- * 解帧：JSON 合法、是对象、`v` 匹配、`type` 在本次通道的登记表里。
- * 具体字段校验交给各帧的处理分支（避免这里变成第二个 schema 定义）。
+ * 解帧：JSON 合法、是对象、`v` 在兼容范围内、`type` 在通道登记表内，
+ * 并对 `CLIENT_TO_SERVER_TYPES` / `DEVICE_TO_SERVER_TYPES` 自动执行 Zod 运行时字段校验。
  */
 export function decodeFrame<T extends FrameBase>(
   raw: unknown,
@@ -200,7 +485,12 @@ export function decodeFrame<T extends FrameBase>(
     return { ok: false, code: 'invalid-frame', message: 'Frame must be an object.' }
   }
   const version = (parsed as { v?: unknown }).v
-  if (version !== CLOUD_PROTOCOL_VERSION) {
+  if (
+    typeof version !== 'number' ||
+    !Number.isInteger(version) ||
+    version < CLOUD_PROTOCOL_MIN_VERSION ||
+    version > CLOUD_PROTOCOL_VERSION
+  ) {
     return {
       ok: false,
       code: 'protocol-version',
@@ -214,7 +504,29 @@ export function decodeFrame<T extends FrameBase>(
   if (knownTypes && !knownTypes.has(type)) {
     return { ok: false, code: 'invalid-frame', message: `Unknown frame type "${type}".` }
   }
+  if (knownTypes === CLIENT_TO_SERVER_TYPES) {
+    const validated = clientToServerFrameSchema.safeParse(parsed)
+    if (!validated.success) {
+      return { ok: false, code: 'invalid-frame', message: formatZodIssues(validated.error) }
+    }
+    return { ok: true, frame: validated.data as unknown as T }
+  }
+  if (knownTypes === DEVICE_TO_SERVER_TYPES) {
+    const validated = deviceToServerFrameSchema.safeParse(parsed)
+    if (!validated.success) {
+      return { ok: false, code: 'invalid-frame', message: formatZodIssues(validated.error) }
+    }
+    return { ok: true, frame: validated.data as unknown as T }
+  }
   return { ok: true, frame: parsed as T }
+}
+
+export function parseClientToServerFrame(raw: unknown): CloudFrameResult<ClientToServerFrame> {
+  return decodeFrame<ClientToServerFrame>(raw, CLIENT_TO_SERVER_TYPES)
+}
+
+export function parseDeviceToServerFrame(raw: unknown): CloudFrameResult<DeviceToServerFrame> {
+  return decodeFrame<DeviceToServerFrame>(raw, DEVICE_TO_SERVER_TYPES)
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +772,8 @@ export interface CloudSnapshot {
   units: CloudUnitView[]
   /** 当前有效的授权（UI 用来显示「已授权 N 张 / 剩 M 张」） */
   authorizations: CloudAuthorizationView[]
+  /** 服务端支持的可协商协议能力 */
+  capabilities?: CloudProtocolCapability[]
   /** 客户端离线期间的工单汇总（F-51 / A-23）；无变化时省略 */
   awaySummary?: CloudAwaySummary
 }
@@ -527,7 +841,7 @@ export type CloudEvent =
 // ---------------------------------------------------------------------------
 
 export type ClientToServerFrame =
-  | ({ type: 'resume'; lastAckSeq: number } & FrameBase)
+  | ({ type: 'resume'; lastAckSeq: number; capabilities?: string[] } & FrameBase)
   | ({ type: 'ack'; seq: number } & FrameBase)
   | ({ type: 'say'; text: string; clientMessageId: string } & FrameBase)
   | ({
@@ -584,8 +898,10 @@ export type DeviceToServerFrame =
        * 在终端掉线期间，终端不知道工单已经结束，不纠正会把“已取消”的活干完。
        */
       runningTasks?: string[]
+      /** 终端上报的可协商协议能力（缺失按基础 v1 兼容） */
+      capabilities?: string[]
     } & FrameBase)
-  | ({ type: 'resume'; lastAckSeq: number } & FrameBase)
+  | ({ type: 'resume'; lastAckSeq: number; capabilities?: string[] } & FrameBase)
   | ({ type: 'ack'; seq: number } & FrameBase)
   | ({ type: 'workspaces'; workspaces: CloudWorkspaceInfo[] } & FrameBase)
   | ({ type: 'heartbeat'; at: number } & FrameBase)
