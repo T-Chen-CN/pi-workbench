@@ -1,0 +1,20 @@
+{
+  "name": "@pi-workbench/i18n",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Typed i18next translation resources and error catalog shared by Desktop Renderer, Electron Main, and Cloud Web",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "type-check": "tsc -p tsconfig.json --noEmit"
+  }
+}

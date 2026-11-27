@@ -22,6 +22,7 @@ import {
 } from 'electron'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
+import { getMainTranslator, normalizeMainLanguage } from './i18n.js'
 
 // 主进程为 ESM，没有 CJS 的 __dirname
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
@@ -29,25 +30,24 @@ const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 /** 主窗口关闭时该做什么 */
 export type CloseAction = 'close' | 'hide' | 'minimize'
 
-export const TRAY_LABELS = {
-  zh: {
-    tooltip: 'Pi Workbench',
-    show: '显示主窗口',
-    quit: '退出',
-    hintTitle: '仍在后台运行',
-    hintBody: '应用已收进托盘，会话与终端继续运行。点托盘图标可打开主窗口。'
-  },
-  en: {
-    tooltip: 'Pi Workbench',
-    show: 'Show Main Window',
-    quit: 'Quit',
-    hintTitle: 'Still running',
-    hintBody: 'The app is in the tray and your sessions keep running. Click the tray icon to open the window.'
+function buildTrayLabels(language: 'zh' | 'en') {
+  const t = getMainTranslator(language)
+  return {
+    tooltip: t('trayTooltip'),
+    show: t('trayShowWindow'),
+    quit: t('trayQuit'),
+    hintTitle: t('trayHintTitle'),
+    hintBody: t('trayHintBody'),
   }
+}
+
+export const TRAY_LABELS = {
+  zh: buildTrayLabels('zh'),
+  en: buildTrayLabels('en'),
 } as const
 
 export function normalizeTrayLanguage(value: unknown): 'zh' | 'en' {
-  return value === 'en' ? 'en' : 'zh'
+  return normalizeMainLanguage(value)
 }
 
 /**
@@ -74,11 +74,11 @@ export function trayMenuTemplate(
   language: unknown,
   actions: { showMainWindow: () => void; quit: () => void }
 ): MenuItemConstructorOptions[] {
-  const labels = TRAY_LABELS[normalizeTrayLanguage(language)]
+  const t = getMainTranslator(language)
   return [
-    { label: labels.show, click: actions.showMainWindow },
+    { label: t('trayShowWindow'), click: actions.showMainWindow },
     { type: 'separator' },
-    { label: labels.quit, click: actions.quit }
+    { label: t('trayQuit'), click: actions.quit }
   ]
 }
 
@@ -88,18 +88,18 @@ export interface TrayBadgeState {
 }
 
 export function formatTrayTooltip(language: unknown, status?: TrayBadgeState): string {
-  const lang = normalizeTrayLanguage(language)
-  const base = TRAY_LABELS[lang].tooltip
+  const t = getMainTranslator(language)
+  const base = t('trayTooltip')
   if (!status) return base
   const running = Math.max(0, Math.floor(status.runningTasks))
   const unread = Math.max(0, Math.floor(status.unreadCount))
   if (running === 0 && unread === 0) return base
   const parts: string[] = [base]
   if (running > 0) {
-    parts.push(lang === 'en' ? `${running} task${running > 1 ? 's' : ''} running` : `${running} 个工单执行中`)
+    parts.push(t(running > 1 ? 'trayRunningTaskMany' : 'trayRunningTaskOne', { count: running }))
   }
   if (unread > 0) {
-    parts.push(lang === 'en' ? `${unread} unread` : `${unread} 条未读`)
+    parts.push(t('trayUnreadCount', { count: unread }))
   }
   return parts.join(' · ')
 }
@@ -267,11 +267,11 @@ export function destroyTray(): void {
 export function showTrayHintOnce(): void {
   if (process.platform !== 'win32' || hintShown || !isTrayReady()) return
   hintShown = true
-  const labels = TRAY_LABELS[normalizeTrayLanguage(options?.getLanguage())]
+  const t = getMainTranslator(options?.getLanguage())
   try {
     tray?.displayBalloon({
-      title: labels.hintTitle,
-      content: labels.hintBody,
+      title: t('trayHintTitle'),
+      content: t('trayHintBody'),
       icon: trayImage(),
       iconType: 'info',
       noSound: true

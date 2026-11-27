@@ -1,23 +1,16 @@
 import { create } from 'zustand'
 import {
-  Language,
-  translations,
-  TranslationKey,
-  TranslationParams,
-} from '../i18n/translations'
+  i18n,
+  translate,
+  type Language,
+  type TranslationKey,
+  type TranslationParams,
+} from '@pi-workbench/i18n'
 
 interface I18nState {
   language: Language
   setLanguage: (lang: Language) => void
   t: (key: TranslationKey, params?: TranslationParams) => string
-}
-
-/** 把 `{name}` 占位符替换为调用方传入的参数 */
-function interpolate(template: string, params?: TranslationParams): string {
-  if (!params) return template
-  return template.replace(/\{(\w+)\}/g, (match, name: string) =>
-    name in params ? String(params[name]) : match
-  )
 }
 
 /**
@@ -26,10 +19,8 @@ function interpolate(template: string, params?: TranslationParams): string {
  * - 调用时仍动态读取 `get().language`，兼容测试直接 `useI18nStore.setState({ language })`。
  */
 function makeTranslator(get: () => I18nState): I18nState['t'] {
-  return (key: TranslationKey, params?: TranslationParams): string => {
-    const lang = get().language
-    return interpolate(translations[lang]?.[key] || key, params)
-  }
+  return (key: TranslationKey, params?: TranslationParams): string =>
+    translate(get().language, key, params)
 }
 
 /**
@@ -42,6 +33,7 @@ export const useI18nStore = create<I18nState>()((set, get) => ({
   language: 'zh',
 
   setLanguage: (lang: Language) => {
+    void i18n.changeLanguage(lang)
     set({ language: lang, t: makeTranslator(get) })
   },
 
