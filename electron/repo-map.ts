@@ -18,6 +18,7 @@ import { writeJsonAtomicAsync } from './atomic-json.js'
 import { getRepoInfo } from './git-worktrees.js'
 import { sanitizedChildEnv } from './ipc/web-search-config.js'
 import { canonicalizePath, isPathInsideRoot } from './path-safety.js'
+import { extractExportsAst } from './tree-sitter-exports.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -527,7 +528,9 @@ async function scanUncached(
     if (!head) {
       return { ...stats, path: rel, role, binary: false, described: false }
     }
-    const exports = head.binary ? [] : extractExports(head.head)
+    const exports = head.binary
+      ? []
+      : ((await extractExportsAst(head.head, rel)) ?? extractExports(head.head))
     const comment = head.binary ? undefined : extractHeadComment(head.head)
     dirty = true
     return {

@@ -636,11 +636,97 @@ export function pdfjsAssets(): Plugin {
   }
 }
 
+/**
+ * web-tree-sitter 运行时与 9 种主流语言语法 WASM 以原始二进制随包分发（`dist/tree-sitter/<file>`）。
+ * 开发态由 Vite dev middleware 按需直出，生产环境经 `pw-app://bundle/tree-sitter/...` 读取。
+ */
+const TREE_SITTER_CORE_WASM = 'tree-sitter.wasm'
+const TREE_SITTER_GRAMMAR_WASMS = [
+  'tree-sitter-typescript.wasm',
+  'tree-sitter-tsx.wasm',
+  'tree-sitter-javascript.wasm',
+  'tree-sitter-python.wasm',
+  'tree-sitter-go.wasm',
+  'tree-sitter-rust.wasm',
+  'tree-sitter-java.wasm',
+  'tree-sitter-cpp.wasm',
+  'tree-sitter-c.wasm',
+] as const
+const TREE_SITTER_GRAMMAR_SET = new Set<string>(TREE_SITTER_GRAMMAR_WASMS)
+
+export function treeSitterAssets(): Plugin {
+  const root = process.cwd()
+
+  return {
+    name: 'pi-workbench-tree-sitter-assets',
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        const pathname = (req.url ?? '').split('?')[0]
+        const match = /^\/tree-sitter\/([^/]+)$/.exec(pathname)
+        if (!match) return next()
+        let filename: string
+        try {
+          filename = decodeURIComponent(match[1])
+        } catch {
+          res.statusCode = 400
+          res.end('Bad Request')
+          return
+        }
+        if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+          res.statusCode = 400
+          res.end('Bad Request')
+          return
+        }
+        let targetPath: string | null = null
+        if (filename === TREE_SITTER_CORE_WASM) {
+          targetPath = path.join(root, 'node_modules', 'web-tree-sitter', TREE_SITTER_CORE_WASM)
+        } else if (TREE_SITTER_GRAMMAR_SET.has(filename)) {
+          targetPath = path.join(root, 'node_modules', 'tree-sitter-wasms', 'out', filename)
+        }
+        if (!targetPath) {
+          res.statusCode = 404
+          res.end('Not Found')
+          return
+        }
+        try {
+          const bytes = await readFile(targetPath)
+          res.setHeader('Content-Type', 'application/wasm')
+          res.end(bytes)
+        } catch {
+          res.statusCode = 404
+          res.end('Not Found')
+        }
+      })
+    },
+    async generateBundle() {
+      const coreSource = await readFile(
+        path.join(root, 'node_modules', 'web-tree-sitter', TREE_SITTER_CORE_WASM)
+      )
+      this.emitFile({
+        type: 'asset',
+        fileName: `tree-sitter/${TREE_SITTER_CORE_WASM}`,
+        source: coreSource,
+      })
+      for (const name of TREE_SITTER_GRAMMAR_WASMS) {
+        const source = await readFile(
+          path.join(root, 'node_modules', 'tree-sitter-wasms', 'out', name)
+        )
+        this.emitFile({
+          type: 'asset',
+          fileName: `tree-sitter/${name}`,
+          source,
+        })
+      }
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
     fontSubsetFilter(),
     react(),
     pdfjsAssets(),
+    treeSitterAssets(),
     devAgentBridge(),
     contentSecurityPolicy(),
     monacoLanguageFilter(),

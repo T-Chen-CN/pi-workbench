@@ -6,7 +6,12 @@ import { editorStoreFor } from '../store/editorStore'
 import { api } from '../api'
 import { toast } from '../store/toastStore'
 import { formatBytes } from '../utils/formatBytes'
-import { extractSymbols, sliceSymbol, type ExtractedSymbol } from '../utils/symbols'
+import {
+  extractSymbols,
+  extractSymbolsAsync,
+  sliceSymbol,
+  type ExtractedSymbol,
+} from '../utils/symbols'
 import { isPathInside } from '../utils/filePath'
 import {
   ALLOWED_IMAGE_TYPES,
@@ -76,12 +81,54 @@ export function useChatAttachments(options: UseChatAttachmentsOptions) {
     }
   }, [editorRoot, symbolsActive])
 
-  const currentSymbols = useMemo(() => {
+  const syncSymbols = useMemo(() => {
     if (!symbolsActive) return EMPTY_SYMBOLS
     void symbolTick
     const file = editorStoreFor(editorRoot).getState().currentFile
     return file ? extractSymbols(file.content, file.name) : EMPTY_SYMBOLS
   }, [editorRoot, symbolsActive, symbolTick])
+
+  const scanKey = symbolsActive ? `${editorRoot}\0${symbolTick}` : ''
+  const [astSymbolsState, setAstSymbolsState] = useState<{
+    key: string
+    path: string
+    symbols: ExtractedSymbol[]
+  } | null>(null)
+
+  useEffect(() => {
+    if (!symbolsActive) {
+      setAstSymbolsState(null)
+      return
+    }
+    const file = editorStoreFor(editorRoot).getState().currentFile
+    if (!file) {
+      setAstSymbolsState(null)
+      return
+    }
+    let cancelled = false
+    const key = `${editorRoot}\0${symbolTick}`
+    const filePath = file.path
+    void extractSymbolsAsync(file.content, file.name)
+      .then((symbols) => {
+        if (cancelled) return
+        setAstSymbolsState({ key, path: filePath, symbols })
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [editorRoot, symbolsActive, symbolTick])
+
+  const activeFilePath = symbolsActive
+    ? (editorStoreFor(editorRoot).getState().currentFile?.path ?? '')
+    : ''
+  const currentSymbols = !symbolsActive
+    ? EMPTY_SYMBOLS
+    : astSymbolsState &&
+        astSymbolsState.key === scanKey &&
+        astSymbolsState.path === activeFilePath
+      ? astSymbolsState.symbols
+      : syncSymbols
 
   /** 附加单个符号（函数 / 类等）作为上下文 */
   const attachSymbol = (symbol: ExtractedSymbol) => {

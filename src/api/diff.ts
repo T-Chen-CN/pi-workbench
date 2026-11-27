@@ -1,8 +1,9 @@
 /**
- * Simple diff algorithm for text comparison
- * Returns line-by-line differences with context
+ * Line-level text diff powered by fast-diff (Myers O(ND) with linear space).
+ * Returns line-by-line differences with 1-based original/modified line numbers.
  */
 
+import fastDiff from 'fast-diff'
 import type { FileEdit } from '../types/electron'
 
 export enum DiffLineType {
@@ -29,9 +30,81 @@ export interface DiffResult {
   removedCount: number
 }
 
+const SURROGATE_START = 0xd800
+const SURROGATE_END = 0xdfff
+const MAX_BMP_CODE = 0xffff
+/** 单字符 UTF-16 编码上限（跳过 U+0000 与代理区 U+D800..U+DFFF，保留安全裕量） */
+const MAX_UNIQUE_LINES = 60_000
+
+function fallbackPairedDiff(
+  originalLines: string[],
+  modifiedLines: string[],
+  originalStart: number,
+  modifiedStart: number
+): DiffLine[] {
+  const lines: DiffLine[] = []
+  const max = Math.max(originalLines.length, modifiedLines.length)
+  for (let i = 0; i < max; i++) {
+    if (i < originalLines.length) {
+      lines.push({
+        type: DiffLineType.Removed,
+        originalLineNumber: originalStart + i + 1,
+        content: originalLines[i],
+      })
+    }
+    if (i < modifiedLines.length) {
+      lines.push({
+        type: DiffLineType.Added,
+        modifiedLineNumber: modifiedStart + i + 1,
+        content: modifiedLines[i],
+      })
+    }
+  }
+  return lines
+}
+
 /**
- * 对两段行数组做 LCS 差异比较（调用方已剥离公共前后缀）。
- * 匹配规模过大时退化为逐行配对，避免 DP 表占用过多内存。
+ * 将唯一行映射为单个非代理 BMP 字符，使 fast-diff 直接以行粒度执行线性空间 Myers 差分。
+ * 唯一行数超过 MAX_UNIQUE_LINES 时返回 null，交由调用方走安全退化路径。
+ */
+function encodeLinesToChars(
+  originalLines: string[],
+  modifiedLines: string[]
+): { encodedOld: string; encodedNew: string } | null {
+  const lineToChar = new Map<string, string>()
+  let nextCode = 1
+  let uniqueCount = 0
+
+  const encode = (source: string[]): string | null => {
+    const chars = new Array<string>(source.length)
+    for (let i = 0; i < source.length; i++) {
+      const line = source[i]
+      let ch = lineToChar.get(line)
+      if (ch === undefined) {
+        if (uniqueCount >= MAX_UNIQUE_LINES) return null
+        if (nextCode >= SURROGATE_START && nextCode <= SURROGATE_END) {
+          nextCode = SURROGATE_END + 1
+        }
+        if (nextCode > MAX_BMP_CODE) return null
+        ch = String.fromCharCode(nextCode++)
+        uniqueCount++
+        lineToChar.set(line, ch)
+      }
+      chars[i] = ch
+    }
+    return chars.join('')
+  }
+
+  const encodedOld = encode(originalLines)
+  if (encodedOld === null) return null
+  const encodedNew = encode(modifiedLines)
+  if (encodedNew === null) return null
+  return { encodedOld, encodedNew }
+}
+
+/**
+ * 对两段行数组做行级 Myers 差分（调用方已剥离公共前后缀）。
+ * 线性空间复杂度，大文件不会分配 O(N*M) DP 矩阵。
  */
 function diffMiddle(
   originalLines: string[],
@@ -39,87 +112,69 @@ function diffMiddle(
   originalStart: number,
   modifiedStart: number
 ): DiffLine[] {
-  const lines: DiffLine[] = []
   const n = originalLines.length
   const m = modifiedLines.length
 
-  if (n * m > 4_000_000) {
-    const max = Math.max(n, m)
-    for (let i = 0; i < max; i++) {
-      if (i < n) {
+  if (n === 0 && m === 0) return []
+  if (n === 0) {
+    return modifiedLines.map((content, idx) => ({
+      type: DiffLineType.Added,
+      modifiedLineNumber: modifiedStart + idx + 1,
+      content,
+    }))
+  }
+  if (m === 0) {
+    return originalLines.map((content, idx) => ({
+      type: DiffLineType.Removed,
+      originalLineNumber: originalStart + idx + 1,
+      content,
+    }))
+  }
+
+  const encoded = encodeLinesToChars(originalLines, modifiedLines)
+  if (!encoded) {
+    return fallbackPairedDiff(originalLines, modifiedLines, originalStart, modifiedStart)
+  }
+
+  const chunks = fastDiff(encoded.encodedOld, encoded.encodedNew)
+  const lines: DiffLine[] = []
+  let origIdx = 0
+  let modIdx = 0
+
+  for (const [op, text] of chunks) {
+    const count = text.length
+    if (op === 0) {
+      for (let k = 0; k < count; k++) {
+        lines.push({
+          type: DiffLineType.Unchanged,
+          originalLineNumber: originalStart + origIdx + 1,
+          modifiedLineNumber: modifiedStart + modIdx + 1,
+          content: originalLines[origIdx],
+        })
+        origIdx++
+        modIdx++
+      }
+    } else if (op === -1) {
+      for (let k = 0; k < count; k++) {
         lines.push({
           type: DiffLineType.Removed,
-          originalLineNumber: originalStart + i + 1,
-          content: originalLines[i],
+          originalLineNumber: originalStart + origIdx + 1,
+          content: originalLines[origIdx],
         })
+        origIdx++
       }
-      if (i < m) {
+    } else if (op === 1) {
+      for (let k = 0; k < count; k++) {
         lines.push({
           type: DiffLineType.Added,
-          modifiedLineNumber: modifiedStart + i + 1,
-          content: modifiedLines[i],
+          modifiedLineNumber: modifiedStart + modIdx + 1,
+          content: modifiedLines[modIdx],
         })
+        modIdx++
       }
     }
-    return lines
   }
 
-  // dp[i][j] = originalLines[i..] 与 modifiedLines[j..] 的最长公共子序列长度
-  const width = m + 1
-  const dp = new Int32Array((n + 1) * width)
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      dp[i * width + j] =
-        originalLines[i] === modifiedLines[j]
-          ? dp[(i + 1) * width + j + 1] + 1
-          : Math.max(dp[(i + 1) * width + j], dp[i * width + j + 1])
-    }
-  }
-
-  let i = 0
-  let j = 0
-  while (i < n && j < m) {
-    if (originalLines[i] === modifiedLines[j]) {
-      lines.push({
-        type: DiffLineType.Unchanged,
-        originalLineNumber: originalStart + i + 1,
-        modifiedLineNumber: modifiedStart + j + 1,
-        content: originalLines[i],
-      })
-      i++
-      j++
-    } else if (dp[(i + 1) * width + j] >= dp[i * width + j + 1]) {
-      lines.push({
-        type: DiffLineType.Removed,
-        originalLineNumber: originalStart + i + 1,
-        content: originalLines[i],
-      })
-      i++
-    } else {
-      lines.push({
-        type: DiffLineType.Added,
-        modifiedLineNumber: modifiedStart + j + 1,
-        content: modifiedLines[j],
-      })
-      j++
-    }
-  }
-  while (i < n) {
-    lines.push({
-      type: DiffLineType.Removed,
-      originalLineNumber: originalStart + i + 1,
-      content: originalLines[i],
-    })
-    i++
-  }
-  while (j < m) {
-    lines.push({
-      type: DiffLineType.Added,
-      modifiedLineNumber: modifiedStart + j + 1,
-      content: modifiedLines[j],
-    })
-    j++
-  }
   return lines
 }
 

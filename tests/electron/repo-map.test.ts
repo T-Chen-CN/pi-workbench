@@ -3,6 +3,7 @@ import { execFileSync } from 'child_process'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import { tmpdir } from 'os'
+import { pathToFileURL } from 'url'
 
 vi.mock('electron', () => ({
   app: {
@@ -20,6 +21,7 @@ import {
   roleForPath,
   scanRepoMap
 } from '../../electron/repo-map'
+import { extractExportsAst } from '../../electron/tree-sitter-exports'
 
 function run(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' })
@@ -307,5 +309,218 @@ describe('scanRepoMap', () => {
 
     const forced = await scanRepoMap(dir, { force: true })
     expect(forced.files[0].headComment).toBe('甲')
+  })
+
+  it('uses tree-sitter AST exports in scanRepoMap and ignores commented fake exports', async () => {
+    const dir = await makeTempDir()
+    await initRepo(dir)
+    await fs.writeFile(
+      path.join(dir, 'fake-only.ts'),
+      ['/*', 'export function fakeInComment() {}', '*/', 'const internal = 1'].join('\n')
+    )
+    await fs.writeFile(
+      path.join(dir, 'service.py'),
+      ['# def fake(): pass', 'def _private():', '    pass', 'class PublicApi:', '    pass', 'def run():', '    return 1'].join('\n')
+    )
+    await fs.writeFile(
+      path.join(dir, 'server.go'),
+      ['package main', '// func Fake() {}', 'func helper() {}', 'type Server struct {}', 'func Start() {}'].join('\n')
+    )
+    await fs.writeFile(
+      path.join(dir, 'lib.rs'),
+      ['/* pub fn fake() {} */', 'fn hidden() {}', 'pub struct Engine {}', 'pub fn launch() {}'].join('\n')
+    )
+    await commitAll(dir)
+
+    const result = await scanRepoMap(dir)
+    expect(result.success).toBe(true)
+
+    const fakeOnly = result.files.find((file) => file.path === 'fake-only.ts')!
+    expect(fakeOnly.exports).toBeUndefined()
+
+    const py = result.files.find((file) => file.path === 'service.py')!
+    expect(py.exports).toEqual(['PublicApi', 'run'])
+
+    const go = result.files.find((file) => file.path === 'server.go')!
+    expect(go.exports).toEqual(['Server', 'Start'])
+
+    const rs = result.files.find((file) => file.path === 'lib.rs')!
+    expect(rs.exports).toEqual(['Engine', 'launch'])
+  })
+})
+
+describe('extractExportsAst (web-tree-sitter)', () => {
+  it('skips fake declarations inside comments and string/template literals across TS, Python, Go, Rust, Java, and C++', async () => {
+    const tsSource = [
+      '/*',
+      'export function fakeBlock() {}',
+      '*/',
+      '// export const fakeLine = 1',
+      'const tpl = `export class FakeTpl {}`',
+      'export function realA() {}',
+      'export interface RealB {}',
+      'export const realC = 1',
+      'export class IgnoredFourth {}',
+    ].join('\n')
+    expect(await extractExportsAst(tsSource, 'index.ts')).toEqual(['realA', 'RealB', 'realC'])
+
+    const tsOnlyComment = '/* export function fakeOnly() {} */\nconst hidden = 1\n'
+    expect(await extractExportsAst(tsOnlyComment, 'empty.ts')).toEqual([])
+
+    const cjsSource = '// module.exports = { fake }\nmodule.exports = { start, stop }\n'
+    expect(await extractExportsAst(cjsSource, 'legacy.cjs')).toEqual(['start', 'stop'])
+
+    const pySource = [
+      '"""',
+      'def fake_doc(): pass',
+      '"""',
+      '# class FakeComment: pass',
+      'def _secret(): pass',
+      'class Runner:',
+      '    pass',
+      'def execute():',
+      '    return 1',
+    ].join('\n')
+    expect(await extractExportsAst(pySource, 'runner.py')).toEqual(['Runner', 'execute'])
+
+    const goSource = [
+      'package api',
+      '// func FakeExport() {}',
+      'const raw = `type FakeRaw struct{}`',
+      'func internalHelper() {}',
+      'type Client struct{}',
+      'func Dial() {}',
+    ].join('\n')
+    expect(await extractExportsAst(goSource, 'client.go')).toEqual(['Client', 'Dial'])
+
+    const rsSource = [
+      '/* pub struct FakeStruct {} */',
+      'const S: &str = "pub fn fake_str() {}";',
+      'struct Private {}',
+      'pub struct App {}',
+      'pub enum Mode { Fast }',
+      'pub trait Plugin {}',
+    ].join('\n')
+    expect(await extractExportsAst(rsSource, 'app.rs')).toEqual(['App', 'Mode', 'Plugin'])
+
+    const javaSource = [
+      '// public class FakeJava {}',
+      'class PackageLocal {}',
+      'public interface Store {}',
+      'public record Item(String id) {}',
+    ].join('\n')
+    expect(await extractExportsAst(javaSource, 'Store.java')).toEqual(['Store', 'Item'])
+
+    const cppSource = [
+      '/* class FakeCpp {}; */',
+      'const char* s = "int fake_fn() { return 0; }";',
+      'class Engine { void run() {} };',
+      'struct Vec2 { int x; };',
+      'int* allocate(int n) { return nullptr; }',
+    ].join('\n')
+    expect(await extractExportsAst(cppSource, 'engine.cpp')).toEqual(['Engine', 'Vec2', 'allocate'])
+
+    expect(await extractExportsAst('puts 1', 'script.rb')).toBeNull()
+  })
+})
+
+describe('treeSitterAssets Vite plugin', () => {
+  async function loadTreeSitterAssets() {
+    const modUrl = pathToFileURL(path.resolve(process.cwd(), 'vite.config.ts')).href
+    const mod = (await import(/* @vite-ignore */ modUrl)) as {
+      treeSitterAssets: () => {
+        generateBundle?: (this: {
+          emitFile: (asset: { type: string; fileName: string; source: Uint8Array }) => void
+        }) => Promise<void>
+        configureServer?: (server: {
+          middlewares: { use: (fn: (req: any, res: any, next: () => void) => Promise<void>) => void }
+        }) => void
+      }
+    }
+    return mod.treeSitterAssets()
+  }
+
+  it('emits tree-sitter.wasm and exactly the 9 curated grammar WASMs in generateBundle', async () => {
+    const plugin = await loadTreeSitterAssets()
+    const emitted: string[] = []
+    await plugin.generateBundle!.call({
+      emitFile(asset) {
+        expect(asset.type).toBe('asset')
+        expect(asset.source.byteLength).toBeGreaterThan(0)
+        emitted.push(asset.fileName)
+      },
+    })
+
+    expect(emitted).toEqual([
+      'tree-sitter/tree-sitter.wasm',
+      'tree-sitter/tree-sitter-typescript.wasm',
+      'tree-sitter/tree-sitter-tsx.wasm',
+      'tree-sitter/tree-sitter-javascript.wasm',
+      'tree-sitter/tree-sitter-python.wasm',
+      'tree-sitter/tree-sitter-go.wasm',
+      'tree-sitter/tree-sitter-rust.wasm',
+      'tree-sitter/tree-sitter-java.wasm',
+      'tree-sitter/tree-sitter-cpp.wasm',
+      'tree-sitter/tree-sitter-c.wasm',
+    ])
+  })
+
+  it('serves allowed WASM files with application/wasm and rejects traversal or unlisted grammars', async () => {
+    const plugin = await loadTreeSitterAssets()
+    let middleware: ((req: any, res: any, next: () => void) => Promise<void>) | null = null
+    plugin.configureServer!({
+      middlewares: {
+        use(fn) {
+          middleware = fn
+        },
+      },
+    })
+    expect(middleware).toBeTruthy()
+
+    const invoke = async (url: string) => {
+      const headers: Record<string, string> = {}
+      let statusCode = 200
+      let body: unknown = null
+      let calledNext = false
+      await middleware!(
+        { url },
+        {
+          set statusCode(code: number) {
+            statusCode = code
+          },
+          get statusCode() {
+            return statusCode
+          },
+          setHeader(k: string, v: string) {
+            headers[k.toLowerCase()] = v
+          },
+          end(data: unknown) {
+            body = data
+          },
+        },
+        () => {
+          calledNext = true
+        }
+      )
+      return { statusCode, headers, body, calledNext }
+    }
+
+    const core = await invoke('/tree-sitter/tree-sitter.wasm')
+    expect(core.statusCode).toBe(200)
+    expect(core.headers['content-type']).toBe('application/wasm')
+    expect(Buffer.isBuffer(core.body) && core.body.length > 0).toBe(true)
+
+    const ts = await invoke('/tree-sitter/tree-sitter-typescript.wasm')
+    expect(ts.statusCode).toBe(200)
+    expect(ts.headers['content-type']).toBe('application/wasm')
+
+    const unlisted = await invoke('/tree-sitter/tree-sitter-ruby.wasm')
+    expect(unlisted.statusCode).toBe(404)
+
+    const traversal = await invoke('/tree-sitter/..%2Fpackage.json')
+    expect(traversal.statusCode).toBe(400)
+
+    const unrelated = await invoke('/other/file.js')
+    expect(unrelated.calledNext).toBe(true)
   })
 })
