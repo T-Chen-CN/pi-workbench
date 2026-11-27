@@ -1,5 +1,6 @@
-import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Dialog } from '@base-ui/react/dialog'
+import { autoUpdate, flip, offset, shift, useFloating } from '@floating-ui/react'
 import { Check, ChevronDown, Loader2, X, type LucideIcon } from 'lucide-react'
 import { useHostDocument } from '../../panelHost/HostContext'
 
@@ -207,10 +208,9 @@ export interface PopoverMenuProps {
 }
 
 /**
- * Anchored popover that opens away from its trigger. The trigger and this
- * popover live inside the same relatively-positioned wrapper, so the menu stays
- * next to the control it belongs to instead of floating elsewhere. The menu is
- * clamped inside the nearest clipping container so it never runs off a panel.
+ * Anchored popover powered by Floating UI (`useFloating` + `offset` + `flip` + `shift` + `autoUpdate`).
+ * The trigger and this popover live inside the same relatively-positioned wrapper, so the menu
+ * anchors to its parent wrapper automatically without requiring callers to wire refs.
  */
 export const PopoverMenu: React.FC<PopoverMenuProps> = ({
   open,
@@ -221,47 +221,31 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
   className = '',
   children,
 }) => {
-  const menuRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
-  /** Horizontal offset from the anchor; null until measured */
-  const [offset, setOffset] = useState<number | null>(null)
 
-  useLayoutEffect(() => {
-    if (!open) {
-      setOffset(null)
-      return
-    }
-    const menu = menuRef.current
-    const anchor = menu?.parentElement
-    if (!menu || !anchor) return
+  const {
+    refs,
+    floatingStyles,
+    placement: resolvedPlacement,
+  } = useFloating({
+    open,
+    placement: placement === 'up' ? 'top-start' : 'bottom-start',
+    strategy: 'absolute',
+    whileElementsMounted: autoUpdate,
+    middleware: [offset(4), flip(), shift({ padding: 4 })],
+  })
+  const { setFloating, setReference } = refs
 
-    // 面板可能被拆到辅助窗口：测量、裁剪与监听都落在它自己的 document 上
-    const doc = menu.ownerDocument
-    const view = doc.defaultView
-    const anchorRect = anchor.getBoundingClientRect()
-    const width = menu.getBoundingClientRect().width
-
-    let clipLeft = 0
-    let clipRight = doc.documentElement.clientWidth
-    let node: HTMLElement | null = anchor.parentElement
-    while (node) {
-      const style = (view ?? window).getComputedStyle(node)
-      if (/(hidden|clip|auto|scroll)/.test(`${style.overflowX} ${style.overflowY}`)) {
-        const rect = node.getBoundingClientRect()
-        clipLeft = rect.left
-        clipRight = rect.right
-        break
-      }
-      node = node.parentElement
-    }
-
-    let left = anchorRect.left
-    if (left + width > clipRight - 4) {
-      left = Math.max(clipLeft + 4, anchorRect.right - width)
-    }
-    setOffset(left - anchorRect.left)
-  }, [open, role, label])
+  const setMenuNode = useCallback(
+    (node: HTMLDivElement | null) => {
+      menuRef.current = node
+      setFloating(node)
+      setReference(node?.parentElement ?? null)
+    },
+    [setFloating, setReference]
+  )
 
   useEffect(() => {
     if (!open) return
@@ -341,14 +325,13 @@ export const PopoverMenu: React.FC<PopoverMenuProps> = ({
 
   return (
     <div
-      ref={menuRef}
+      ref={setMenuNode}
       role={role}
       aria-label={label}
+      data-placement={resolvedPlacement}
       tabIndex={role === 'dialog' ? -1 : undefined}
-      style={{ left: offset ?? 0 }}
-      className={`absolute z-20 border border-line bg-raised shadow-print focus:outline-none ${
-        placement === 'up' ? 'bottom-full mb-1' : 'top-full mt-1'
-      } ${className}`}
+      style={floatingStyles}
+      className={`z-20 border border-line bg-raised shadow-print focus:outline-none ${className}`}
     >
       {children}
     </div>
@@ -485,8 +468,30 @@ const MODAL_SIZES = {
 
 /** 按宿主文档维护模态栈：嵌套弹窗（如 Settings → UpdateDialog、DiffViewer → DialogHost）按 Esc 只关最顶层 */
 const modalStacks = new WeakMap<Document, Array<symbol>>()
+/** 栈顶变更订阅：让非栈顶 Modal 退让 Base UI 的 aria-hidden 标记，避免互相隐藏顶层弹窗 */
+const modalStackListeners = new WeakMap<Document, Set<() => void>>()
 /** 记录因打开模态框而被加上 inert 的 body 直接子节点，栈清空时精确恢复 */
 const modalInertNodes = new WeakMap<Document, Set<Element>>()
+
+function notifyModalStack(doc: Document): void {
+  const listeners = modalStackListeners.get(doc)
+  if (!listeners) return
+  for (const listener of listeners) {
+    listener()
+  }
+}
+
+function subscribeModalStack(doc: Document, listener: () => void): () => void {
+  let listeners = modalStackListeners.get(doc)
+  if (!listeners) {
+    listeners = new Set()
+    modalStackListeners.set(doc, listeners)
+  }
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
 
 function pushModalToken(doc: Document, token: symbol): void {
   const stack = modalStacks.get(doc) ?? []
@@ -508,6 +513,7 @@ function pushModalToken(doc: Document, token: symbol): void {
     }
     modalInertNodes.set(doc, marked)
   }
+  notifyModalStack(doc)
 }
 
 function removeModalToken(doc: Document, token: symbol): void {
@@ -524,6 +530,7 @@ function removeModalToken(doc: Document, token: symbol): void {
       marked.clear()
     }
   }
+  notifyModalStack(doc)
 }
 
 function isTopModalToken(doc: Document, token: symbol): boolean {
@@ -554,23 +561,31 @@ export const Modal: React.FC<ModalProps> = ({
   zIndexClass = 'z-40',
 }) => {
   const hostDocument = useHostDocument()
-  const titleId = useId()
   const dialogRef = useRef<HTMLDivElement | null>(null)
+  const tokenRef = useRef<symbol | null>(null)
+  const [isTopModal, setIsTopModal] = useState(true)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
-  useEffect(() => {
-    if (!open) return
-    // 必须在 pushModalToken 设置 inert 之前记录焦点：一旦给背景加上 inert，浏览器会立刻把焦点清回 body
+  // 维护宿主文档的模态栈与背景 inert：确保无论是嵌套还是同级挂载的多层 Modal，
+  // 只有栈顶 Modal 开启 Base UI 模态隔离，按 Escape / 点遮罩只关闭最顶层，且关闭时同步恢复焦点。
+  useLayoutEffect(() => {
+    if (!open) {
+      tokenRef.current = null
+      setIsTopModal(true)
+      return
+    }
     const activeEl = hostDocument.activeElement
     const previousFocus =
       activeEl && typeof (activeEl as HTMLElement).focus === 'function'
         ? (activeEl as HTMLElement)
         : null
     const token = Symbol('modal')
+    tokenRef.current = token
+    const syncTop = () => setIsTopModal(isTopModalToken(hostDocument, token))
+    const unsubscribe = subscribeModalStack(hostDocument, syncTop)
     pushModalToken(hostDocument, token)
 
-    // 若内容中没有元素主动 autoFocus 到弹窗内，则把焦点移入对话框容器
     const raf = hostDocument.defaultView?.requestAnimationFrame(() => {
       const container = dialogRef.current
       if (!container) return
@@ -580,84 +595,86 @@ export const Modal: React.FC<ModalProps> = ({
       }
     })
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!isTopModalToken(hostDocument, token)) return
-      if (event.key === 'Escape') {
-        if (event.defaultPrevented) return
-        event.preventDefault()
-        event.stopImmediatePropagation()
-        onCloseRef.current()
-        return
-      }
-      if (event.key === 'Tab') {
-        const container = dialogRef.current
-        if (!container) return
-        const focusables = getVisibleFocusables(container, hostDocument)
-        if (focusables.length === 0) {
-          event.preventDefault()
-          container.focus()
-          return
-        }
-        const first = focusables[0]
-        const last = focusables[focusables.length - 1]
-        const active = hostDocument.activeElement as HTMLElement | null
-        if (event.shiftKey) {
-          if (!active || active === first || !container.contains(active)) {
-            event.preventDefault()
-            last.focus()
-          }
-        } else if (!active || active === last || !container.contains(active)) {
-          event.preventDefault()
-          first.focus()
-        }
-      }
-    }
-    hostDocument.addEventListener('keydown', onKeyDown)
     return () => {
       if (raf !== undefined) hostDocument.defaultView?.cancelAnimationFrame(raf)
-      hostDocument.removeEventListener('keydown', onKeyDown)
+      unsubscribe()
       removeModalToken(hostDocument, token)
+      if (tokenRef.current === token) tokenRef.current = null
       if (previousFocus && hostDocument.contains(previousFocus)) {
         previousFocus.focus()
       }
     }
   }, [open, hostDocument])
 
-  if (!open) return null
-
-  const content = (
-    <div
-      data-modal-portal="true"
-      className={`fixed inset-0 ${zIndexClass} flex items-center justify-center p-6`}
+  return (
+    <Dialog.Root
+      open={open}
+      modal={isTopModal}
+      disablePointerDismissal={!isTopModal}
+      onOpenChange={(nextOpen, eventDetails) => {
+        if (nextOpen) return
+        if (eventDetails.reason === 'focus-out') {
+          eventDetails.cancel()
+          return
+        }
+        const token = tokenRef.current
+        if (eventDetails.reason === 'escape-key') {
+          const nativeEvent = eventDetails.event as KeyboardEvent | undefined
+          if (nativeEvent?.defaultPrevented || !token || !isTopModalToken(hostDocument, token)) {
+            eventDetails.cancel()
+            if (!nativeEvent?.defaultPrevented) {
+              eventDetails.allowPropagation()
+            }
+            return
+          }
+        } else if (eventDetails.reason === 'outside-press') {
+          if (!token || !isTopModalToken(hostDocument, token)) {
+            eventDetails.cancel()
+            return
+          }
+        }
+        onCloseRef.current()
+      }}
     >
-      <div aria-hidden="true" className="absolute inset-0 bg-overlay/35" onClick={onClose} />
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={title ? titleId : undefined}
-        tabIndex={-1}
-        className={`relative flex max-h-[85vh] w-full ${MODAL_SIZES[size]} flex-col overflow-hidden border border-line bg-raised shadow-print focus:outline-none`}
+      <Dialog.Portal
+        data-modal-portal="true"
+        container={hostDocument.body ?? undefined}
       >
-        {title && (
-          <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-rule-divide px-5">
-            <h2 id={titleId} className="m-0 type-subtitle text-ink">
-              {title}
-            </h2>
-            <IconButton icon={X} label={closeLabel} onClick={onClose} size="sm" />
-          </div>
-        )}
-        <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
-        {footer && (
-          <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-rule-divide px-5 py-3">
-            {footer}
-          </div>
-        )}
-      </div>
-    </div>
+        <Dialog.Backdrop
+          forceRender
+          className={`fixed inset-0 ${zIndexClass} bg-overlay/35`}
+        />
+        <Dialog.Viewport
+          className={`fixed inset-0 ${zIndexClass} flex items-center justify-center p-6`}
+        >
+          <Dialog.Popup
+            ref={dialogRef}
+            aria-modal="true"
+            initialFocus={false}
+            finalFocus={false}
+            className={`relative flex max-h-[85vh] w-full ${MODAL_SIZES[size]} flex-col overflow-hidden border border-line bg-raised shadow-print focus:outline-none`}
+          >
+            {title && (
+              <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-rule-divide px-5">
+                <Dialog.Title className="m-0 type-subtitle text-ink">
+                  {title}
+                </Dialog.Title>
+                <Dialog.Close
+                  render={<IconButton icon={X} label={closeLabel} size="sm" />}
+                />
+              </div>
+            )}
+            <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+            {footer && (
+              <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-rule-divide px-5 py-3">
+                {footer}
+              </div>
+            )}
+          </Dialog.Popup>
+        </Dialog.Viewport>
+      </Dialog.Portal>
+    </Dialog.Root>
   )
-
-  return hostDocument.body ? createPortal(content, hostDocument.body) : content
 }
 
 export const Spinner: React.FC<{ size?: number; className?: string }> = ({

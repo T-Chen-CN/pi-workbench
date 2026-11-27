@@ -1,4 +1,5 @@
 import React from 'react'
+import { Tabs as BaseTabs } from '@base-ui/react/tabs'
 import { Search, X, type LucideIcon } from 'lucide-react'
 import { Caption, DataText, Label, Value } from './ui'
 
@@ -549,4 +550,95 @@ export function handleTabStripWheel(event: React.WheelEvent<HTMLElement>): void 
   const strip = event.currentTarget
   if (strip.scrollWidth <= strip.clientWidth) return
   strip.scrollLeft += event.deltaY
+}
+
+/* ------------------------------------------------------------------
+   Base UI Tabs 原语（Paper & Ink 皮肤）
+
+   面向设置分区 / 面板子页签等标准 tablist + tabpanel 场景；
+   支持方向键 / Home / End 自动激活与 WAI-ARIA aria-controls / aria-labelledby 关联。
+------------------------------------------------------------------- */
+
+function mergeBaseClass<S>(
+  base: string,
+  className?: string | ((state: S) => string | undefined)
+): string | ((state: S) => string | undefined) {
+  if (typeof className === 'function') {
+    return (state: S) => {
+      const extra = className(state)
+      return extra ? `${base} ${extra}` : base
+    }
+  }
+  return className ? `${base} ${className}` : base
+}
+
+export type TabsRootProps = React.ComponentPropsWithoutRef<typeof BaseTabs.Root>
+export type TabsListProps = React.ComponentPropsWithoutRef<typeof BaseTabs.List>
+export type TabsTabProps = React.ComponentPropsWithoutRef<typeof BaseTabs.Tab>
+export type TabsPanelProps = React.ComponentPropsWithoutRef<typeof BaseTabs.Panel>
+
+export const TabsRoot = React.forwardRef<HTMLDivElement, TabsRootProps>(function TabsRoot(
+  { className, ...rest },
+  ref
+) {
+  return (
+    <BaseTabs.Root
+      ref={ref}
+      className={mergeBaseClass('flex flex-col', className)}
+      {...rest}
+    />
+  )
+})
+
+export const TabsList = React.forwardRef<HTMLDivElement, TabsListProps>(function TabsList(
+  { className, activateOnFocus = true, ...rest },
+  ref
+) {
+  return (
+    <BaseTabs.List
+      ref={ref}
+      activateOnFocus={activateOnFocus}
+      className={mergeBaseClass(
+        'flex items-center border-b border-rule-divide bg-panel',
+        className
+      )}
+      {...rest}
+    />
+  )
+})
+
+export const TabsTab = React.forwardRef<HTMLElement, TabsTabProps>(function TabsTab(
+  { className, ...rest },
+  ref
+) {
+  return (
+    <BaseTabs.Tab
+      ref={ref}
+      className={mergeBaseClass(
+        'flex h-8 flex-shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-rule-divide px-3 type-label text-ink-muted transition-colors hover:bg-hover hover:text-ink focus-visible:outline-offset-[-2px] disabled:cursor-not-allowed disabled:opacity-50 data-[active]:bg-surface data-[active]:text-ink data-[active]:shadow-[inset_0_2px_0_rgb(var(--accent))]',
+        className
+      )}
+      {...rest}
+    />
+  )
+})
+
+export const TabsPanel = React.forwardRef<HTMLDivElement, TabsPanelProps>(function TabsPanel(
+  { className, ...rest },
+  ref
+) {
+  return (
+    <BaseTabs.Panel
+      ref={ref}
+      className={mergeBaseClass('focus:outline-none', className)}
+      {...rest}
+    />
+  )
+})
+
+export const Tabs = {
+  Root: TabsRoot,
+  List: TabsList,
+  Tab: TabsTab,
+  Panel: TabsPanel,
 }

@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Dialog } from '@base-ui/react/dialog'
+import { Command } from 'cmdk'
 import { RefreshCw, Search, X } from 'lucide-react'
 import { api } from '../../api'
+import { useHostDocument } from '../../panelHost/HostContext'
 import { useI18nStore } from '../../store/i18nStore'
 import { selectionForWorkspace, useSelectionStore } from '../../store/selectionStore'
 import { useSessionStore } from '../../store/sessionStore'
@@ -50,10 +53,43 @@ const BUILTIN_COMMANDS: Array<{
   { id: 'workbench.session-close', titleKey: 'closeSessionTab', event: 'session-close' },
 ]
 
+/**
+ * cmdk 内部直接调用 ResizeObserver 与 Element.prototype.scrollIntoView；
+ * Chromium / Electron 渲染器原生具备，仅在 jsdom 等无布局测试环境补齐无副作用桩函数。
+ */
+function ensureCmdkDomApis(): void {
+  if (typeof globalThis.ResizeObserver === 'undefined') {
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as typeof ResizeObserver
+  }
+  if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
+    Element.prototype.scrollIntoView = () => {}
+  }
+}
+
+function filterCommand(value: string, search: string, keywords?: string[]): number {
+  const needle = search.trim().toLowerCase()
+  if (!needle) return 1
+  const haystack = `${value} ${(keywords ?? []).join(' ')}`.toLowerCase()
+  return haystack.includes(needle) ? 1 : 0
+}
+
+function stopCmdkNavigationKeys(event: React.KeyboardEvent): void {
+  if (['Enter', 'ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    event.stopPropagation()
+  }
+}
+
 export const CommandPalette: React.FC<CommandPaletteProps> = ({
   workspacePath,
   active: workspaceActive = true,
 }) => {
+  ensureCmdkDomApis()
+
+  const hostDocument = useHostDocument()
   const t = useI18nStore((state) => state.t)
   const [open, setOpen] = useState(false)
   const [plugins, setPlugins] = useState<PluginInfo[]>([])
@@ -66,7 +102,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [args, setArgs] = useState('')
-  const [selected, setSelected] = useState(0)
   const [output, setOutput] = useState<CommandOutput | null>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -107,16 +142,19 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     }
   }, [workspacePath])
 
-  // 全局快捷键与外部打开事件
+  // 全局快捷键与外部打开事件（保留 window 级 Escape 兜底，但让位于更高层级的非命令面板模态框）
   const paletteShortcut = useSettingsStore((state) => state.keybindings.commandPalette)
-  const listRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (matchShortcut(event, paletteShortcut)) {
         event.preventDefault()
         setOpen((value) => !value)
       } else if (event.key === 'Escape' && open && !event.defaultPrevented) {
-        if (document.querySelector('[role="dialog"][aria-modal="true"]:not([data-command-palette])')) {
+        if (
+          hostDocument.querySelector(
+            '[role="dialog"][aria-modal="true"]:not([data-command-palette])'
+          )
+        ) {
           return
         }
         event.preventDefault()
@@ -132,30 +170,27 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       window.removeEventListener('keydown', onKeyDown)
       offOpen()
     }
-  }, [paletteShortcut, open])
-
-  // 键盘上下选择时确保高亮项滚入可视区
-  useEffect(() => {
-    if (!open) return
-    const item = listRef.current?.querySelector<HTMLElement>(`[data-cmd-index="${selected}"]`)
-    item?.scrollIntoView?.({ block: 'nearest' })
-  }, [open, selected])
+  }, [paletteShortcut, open, hostDocument])
 
   useEffect(() => {
     if (!open) {
       refreshSeqRef.current += 1
       return
     }
-    const previousFocus = document.activeElement as HTMLElement | null
+    const previousFocus = hostDocument.activeElement as HTMLElement | null
     void refresh()
-    const timer = setTimeout(() => inputRef.current?.focus(), 0)
+    const timer = setTimeout(() => {
+      if (!hostDocument.querySelector('[data-modal-portal]')) {
+        inputRef.current?.focus()
+      }
+    }, 0)
     const onTabTrap = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return
       const container = dialogRef.current
       if (!container) return
-      const hostDocument = container.ownerDocument ?? document
+      const doc = container.ownerDocument ?? hostDocument
       // 若有更高层级的 Modal（如 z-[60] 的 DialogHost）打开，让出 Tab 焦点循环
-      if (hostDocument.querySelector('[data-modal-portal]')) return
+      if (doc.querySelector('[data-modal-portal]')) return
       const focusables = Array.from(
         container.querySelectorAll<HTMLElement>(
           'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
@@ -164,7 +199,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       if (focusables.length === 0) return
       const first = focusables[0]
       const last = focusables[focusables.length - 1]
-      const active = hostDocument.activeElement as HTMLElement | null
+      const active = doc.activeElement as HTMLElement | null
       if (event.shiftKey) {
         if (!active || active === first || !container.contains(active)) {
           event.preventDefault()
@@ -175,16 +210,16 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         first.focus()
       }
     }
-    document.addEventListener('keydown', onTabTrap)
+    hostDocument.addEventListener('keydown', onTabTrap)
     return () => {
       clearTimeout(timer)
-      document.removeEventListener('keydown', onTabTrap)
+      hostDocument.removeEventListener('keydown', onTabTrap)
       refreshSeqRef.current += 1
-      if (previousFocus && document.contains(previousFocus)) {
+      if (previousFocus && hostDocument.contains(previousFocus)) {
         previousFocus.focus()
       }
     }
-  }, [open, refresh])
+  }, [open, refresh, hostDocument])
 
   useEffect(() => {
     const unsubscribe = api.onPluginsChanged((payload) => {
@@ -195,14 +230,19 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     return unsubscribe
   }, [open, workspacePath, refresh])
 
-  const commands = useMemo(() => {
-    const builtins: PluginCommandInfo[] = BUILTIN_COMMANDS.map((command) => ({
-      id: command.id,
-      title: t(command.titleKey),
-      pluginId: 'workbench',
-      pluginName: 'Workbench',
-    }))
-    const resourceCommands: PluginCommandInfo[] = [
+  const builtinCommands = useMemo<PluginCommandInfo[]>(
+    () =>
+      BUILTIN_COMMANDS.map((command) => ({
+        id: command.id,
+        title: t(command.titleKey),
+        pluginId: 'workbench',
+        pluginName: 'Workbench',
+      })),
+    [t]
+  )
+
+  const resourceCommands = useMemo<PluginCommandInfo[]>(
+    () => [
       ...resources.templates.map((template) => ({
         id: `template:${template.name}`,
         title: `/${template.name}`,
@@ -217,25 +257,17 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         pluginId: 'pi-skills',
         pluginName: t('slashSkill'),
       })),
-    ]
-    return [
-      ...builtins,
-      ...resourceCommands,
-      ...plugins.filter((plugin) => plugin.enabled && !plugin.error).flatMap((plugin) => plugin.commands),
-    ]
-  }, [plugins, resources, t])
+    ],
+    [resources, t]
+  )
 
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    if (!needle) return commands
-    return commands.filter((command) =>
-      `${command.title} ${command.id} ${command.pluginName}`.toLowerCase().includes(needle)
-    )
-  }, [commands, query])
-
-  useEffect(() => {
-    setSelected(0)
-  }, [query, open])
+  const pluginCommands = useMemo<PluginCommandInfo[]>(
+    () =>
+      plugins
+        .filter((plugin) => plugin.enabled && !plugin.error)
+        .flatMap((plugin) => plugin.commands),
+    [plugins]
+  )
 
   const runCommand = async (command: PluginCommandInfo) => {
     // 模板 / 技能：插入到聊天输入框，由 Pi SDK 展开（仍走审批）
@@ -356,166 +388,247 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     }
   }
 
-  if (!open) return null
+  const renderCommandItem = (command: PluginCommandInfo, index: number) => (
+    <Command.Item
+      key={command.id}
+      value={command.id}
+      keywords={[command.title, command.id, command.pluginName]}
+      onSelect={() => {
+        if (!loading) void runCommand(command)
+      }}
+      className="flex w-full cursor-pointer items-start gap-3 border-b border-rule-divide border-l-2 border-l-transparent px-3 py-2 text-left transition-colors hover:bg-hover data-[selected=true]:border-l-accent data-[selected=true]:bg-accent/[0.06]"
+    >
+      <span className="mt-0.5 type-data text-ink-muted">
+        {String(index + 1).padStart(2, '0')}
+      </span>
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className="type-value text-ink">{command.title}</span>
+        <span className="type-caption text-ink-muted">
+          {command.pluginName} · {command.id}
+          {command.description ? ` — ${command.description}` : ''}
+        </span>
+      </span>
+    </Command.Item>
+  )
+
+  const builtinOffset = 0
+  const resourceOffset = builtinCommands.length
+  const pluginOffset = resourceOffset + resourceCommands.length
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={t('commandPalette')}
-      data-command-palette="true"
-      className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-20"
+    <Dialog.Root
+      open={open}
+      modal={false}
+      onOpenChange={(nextOpen, eventDetails) => {
+        if (nextOpen) {
+          setOpen(true)
+          return
+        }
+        // 焦点移往更高层级 Modal（如 DialogHost）时不得误关命令面板
+        if (eventDetails.reason === 'focus-out') {
+          eventDetails.cancel()
+          return
+        }
+        if (eventDetails.reason === 'escape-key') {
+          const nativeEvent = eventDetails.event as KeyboardEvent | undefined
+          if (
+            nativeEvent?.defaultPrevented ||
+            hostDocument.querySelector(
+              '[role="dialog"][aria-modal="true"]:not([data-command-palette])'
+            )
+          ) {
+            eventDetails.cancel()
+            if (!nativeEvent?.defaultPrevented) {
+              eventDetails.allowPropagation()
+            }
+            return
+          }
+        }
+        if (
+          eventDetails.reason === 'outside-press' &&
+          hostDocument.querySelector('[data-modal-portal]')
+        ) {
+          eventDetails.cancel()
+          return
+        }
+        setOpen(false)
+      }}
     >
-      <div aria-hidden="true" className="absolute inset-0 bg-overlay/50" onClick={() => setOpen(false)} />
-      <div
-        ref={dialogRef}
-        className="relative flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden border border-line bg-raised shadow-print"
-      >
-        <div className="flex h-10 flex-shrink-0 items-center justify-between border-b border-rule-divide px-3">
-          <h3 className="m-0 type-label text-ink-muted">
-            {t('commandPalette')}
-          </h3>
-          <div className="flex items-center gap-1">
-            <IconButton
-              icon={RefreshCw}
-              label={t('reloadPlugins')}
-              size="sm"
-              onClick={reload}
-            />
-            <IconButton icon={X} label={t('close')} size="sm" onClick={() => setOpen(false)} />
-          </div>
-        </div>
+      <Dialog.Portal container={hostDocument.body ?? undefined}>
+        <Dialog.Backdrop
+          forceRender
+          className="fixed inset-0 z-50 bg-overlay/50"
+        />
+        <Dialog.Viewport className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-20">
+          <Dialog.Popup
+            ref={dialogRef}
+            aria-modal="true"
+            aria-label={t('commandPalette')}
+            data-command-palette="true"
+            initialFocus={false}
+            finalFocus={false}
+            className="relative flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden border border-line bg-raised shadow-print focus:outline-none"
+          >
+            <div className="flex h-10 flex-shrink-0 items-center justify-between border-b border-rule-divide px-3">
+              <h3 className="m-0 type-label text-ink-muted">
+                {t('commandPalette')}
+              </h3>
+              <div className="flex items-center gap-1">
+                <IconButton
+                  icon={RefreshCw}
+                  label={t('reloadPlugins')}
+                  size="sm"
+                  onClick={reload}
+                />
+                <IconButton icon={X} label={t('close')} size="sm" onClick={() => setOpen(false)} />
+              </div>
+            </div>
 
-        <div className="flex flex-shrink-0 items-center gap-2 border-b border-rule-divide px-3 transition-colors focus-within:border-accent">
-          <Search size={15} className="text-ink-muted" />
-          <input
-            ref={inputRef}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'ArrowDown') {
-                event.preventDefault()
-                setSelected((value) => Math.min(value + 1, Math.max(filtered.length - 1, 0)))
-              } else if (event.key === 'ArrowUp') {
-                event.preventDefault()
-                setSelected((value) => Math.max(value - 1, 0))
-              } else if (
-                event.key === 'Enter' &&
-                !event.nativeEvent.isComposing &&
-                event.keyCode !== 229
-              ) {
-                event.preventDefault()
-                const command = filtered[selected]
-                if (command && !loading) void runCommand(command)
-              }
-            }}
-            placeholder={t('pluginCommands')}
-            className="h-10 w-full bg-transparent type-body text-ink placeholder:text-ink-muted focus:outline-none"
-          />
-          {loading && <Spinner size={14} className="text-ink-muted" />}
-        </div>
-
-        <div className="flex flex-shrink-0 flex-wrap items-center gap-1.5 border-b border-rule-divide px-3 py-1.5">
-          <span className="type-label text-ink-muted">
-            {t('plugins')}
-          </span>
-          {plugins.length === 0 && !loading && (
-            <span className="type-caption text-ink-muted">{t('noPlugins')}</span>
-          )}
-          {plugins.map((plugin) => (
-            <label
-              key={plugin.id}
-              className={`inline-flex cursor-pointer items-center gap-1.5 border px-2 py-0.5 type-caption ${
-                plugin.error
-                  ? 'border-danger/40 bg-danger/10 text-danger'
-                  : 'border-rule-control bg-sunken text-ink-muted hover:text-ink'
-              }`}
-              title={plugin.error || plugin.description || plugin.id}
+            <Command
+              label={t('commandPalette')}
+              filter={filterCommand}
+              loop
+              className="flex min-h-0 flex-1 flex-col"
             >
-              <input
-                type="checkbox"
-                className="h-3 w-3 accent-accent"
-                checked={plugin.enabled}
-                onChange={() => void setEnabled(plugin)}
-              />
-              {plugin.name}
-            </label>
-          ))}
-        </div>
+              <div className="flex flex-shrink-0 items-center gap-2 border-b border-rule-divide px-3 transition-colors focus-within:border-accent">
+                <Search size={15} className="text-ink-muted" aria-hidden="true" />
+                <Command.Input
+                  ref={inputRef}
+                  value={query}
+                  onValueChange={setQuery}
+                  placeholder={t('pluginCommands')}
+                  className="h-10 w-full bg-transparent type-body text-ink placeholder:text-ink-muted focus:outline-none"
+                />
+                {loading && <Spinner size={14} className="text-ink-muted" />}
+              </div>
 
-        <div className="flex-shrink-0 border-b border-rule-divide px-3 py-1.5 transition-colors focus-within:border-accent">
-          <input
-            value={args}
-            onChange={(event) => setArgs(event.target.value)}
-            placeholder={t('commandArguments')}
-            className="w-full bg-transparent type-caption text-ink-muted placeholder:text-ink-muted focus:outline-none"
-          />
-        </div>
-
-        {error && (
-          <div className="flex-shrink-0 border-b border-danger/30 bg-danger/10 px-3 py-1.5 type-caption text-danger">
-            {error}
-          </div>
-        )}
-
-        <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto">
-          {filtered.length === 0 ? (
-            <div className="px-3 py-8 text-center type-caption text-ink-muted">
-              {loading ? t('loading') : t('noPluginCommands')}
-            </div>
-          ) : (
-            filtered.map((command, index) => (
-              <button
-                key={command.id}
-                data-cmd-index={index}
-                type="button"
-                onClick={() => void runCommand(command)}
-                onMouseEnter={() => setSelected(index)}
-                className={`flex w-full items-start gap-3 border-b border-rule-divide border-l-2 px-3 py-2 text-left transition-colors ${
-                  index === selected
-                    ? 'border-l-accent bg-accent/[0.06]'
-                    : 'border-l-transparent hover:bg-hover'
-                }`}
-              >
-                <span className="mt-0.5 type-data text-ink-muted">
-                  {String(index + 1).padStart(2, '0')}
+              <div className="flex flex-shrink-0 flex-wrap items-center gap-1.5 border-b border-rule-divide px-3 py-1.5">
+                <span className="type-label text-ink-muted">
+                  {t('plugins')}
                 </span>
-                <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className="type-value text-ink">{command.title}</span>
-                  <span className="type-caption text-ink-muted">
-                    {command.pluginName} · {command.id}
-                    {command.description ? ` — ${command.description}` : ''}
+                {plugins.length === 0 && !loading && (
+                  <span className="type-caption text-ink-muted">{t('noPlugins')}</span>
+                )}
+                {plugins.map((plugin) => (
+                  <label
+                    key={plugin.id}
+                    className={`inline-flex cursor-pointer items-center gap-1.5 border px-2 py-0.5 type-caption ${
+                      plugin.error
+                        ? 'border-danger/40 bg-danger/10 text-danger'
+                        : 'border-rule-control bg-sunken text-ink-muted hover:text-ink'
+                    }`}
+                    title={plugin.error || plugin.description || plugin.id}
+                  >
+                    <input
+                      type="checkbox"
+                      className="h-3 w-3 accent-accent"
+                      checked={plugin.enabled}
+                      onChange={() => void setEnabled(plugin)}
+                      onKeyDown={stopCmdkNavigationKeys}
+                    />
+                    {plugin.name}
+                  </label>
+                ))}
+              </div>
+
+              <div className="flex-shrink-0 border-b border-rule-divide px-3 py-1.5 transition-colors focus-within:border-accent">
+                <input
+                  value={args}
+                  onChange={(event) => setArgs(event.target.value)}
+                  onKeyDown={stopCmdkNavigationKeys}
+                  placeholder={t('commandArguments')}
+                  aria-label={t('commandArguments')}
+                  className="w-full bg-transparent type-caption text-ink-muted placeholder:text-ink-muted focus:outline-none"
+                />
+              </div>
+
+              {error && (
+                <div className="flex-shrink-0 border-b border-danger/30 bg-danger/10 px-3 py-1.5 type-caption text-danger">
+                  {error}
+                </div>
+              )}
+
+              <Command.List
+                label={t('pluginCommands')}
+                className="min-h-0 flex-1 overflow-y-auto"
+              >
+                <Command.Empty className="px-3 py-8 text-center type-caption text-ink-muted">
+                  {loading ? t('loading') : t('noPluginCommands')}
+                </Command.Empty>
+
+                {builtinCommands.length > 0 && (
+                  <Command.Group
+                    value="workbench"
+                    heading={
+                      <span className="block border-b border-rule-divide bg-panel px-3 py-1 type-label text-ink-muted">
+                        Workbench
+                      </span>
+                    }
+                  >
+                    {builtinCommands.map((command, idx) =>
+                      renderCommandItem(command, builtinOffset + idx)
+                    )}
+                  </Command.Group>
+                )}
+
+                {resourceCommands.length > 0 && (
+                  <Command.Group
+                    value="resources"
+                    heading={
+                      <span className="block border-b border-rule-divide bg-panel px-3 py-1 type-label text-ink-muted">
+                        {`${t('slashTemplate')} / ${t('slashSkill')}`}
+                      </span>
+                    }
+                  >
+                    {resourceCommands.map((command, idx) =>
+                      renderCommandItem(command, resourceOffset + idx)
+                    )}
+                  </Command.Group>
+                )}
+
+                {pluginCommands.length > 0 && (
+                  <Command.Group
+                    value="plugins"
+                    heading={
+                      <span className="block border-b border-rule-divide bg-panel px-3 py-1 type-label text-ink-muted">
+                        {t('pluginCommands')}
+                      </span>
+                    }
+                  >
+                    {pluginCommands.map((command, idx) =>
+                      renderCommandItem(command, pluginOffset + idx)
+                    )}
+                  </Command.Group>
+                )}
+              </Command.List>
+            </Command>
+
+            {output && (
+              <div className="flex-shrink-0 border-t border-rule-divide">
+                <div className="flex items-center justify-between px-3 py-1.5">
+                  <span
+                    className={`type-caption font-medium ${
+                      output.success ? 'text-success' : 'text-danger'
+                    }`}
+                  >
+                    {t('commandOutput')}: {output.title}
                   </span>
-                </span>
-              </button>
-            ))
-          )}
-        </div>
-
-        {output && (
-          <div className="flex-shrink-0 border-t border-rule-divide">
-            <div className="flex items-center justify-between px-3 py-1.5">
-              <span
-                className={`type-caption font-medium ${
-                  output.success ? 'text-success' : 'text-danger'
-                }`}
-              >
-                {t('commandOutput')}: {output.title}
-              </span>
-              <button
-                type="button"
-                onClick={() => setOutput(null)}
-                className="type-caption text-ink-muted hover:text-ink"
-              >
-                {t('clear')}
-              </button>
-            </div>
-            <pre className="m-0 max-h-40 overflow-auto px-3 pb-2 type-code text-ink-muted whitespace-pre-wrap">
-              {output.text}
-            </pre>
-          </div>
-        )}
-      </div>
-    </div>
+                  <button
+                    type="button"
+                    onClick={() => setOutput(null)}
+                    className="type-caption text-ink-muted hover:text-ink"
+                  >
+                    {t('clear')}
+                  </button>
+                </div>
+                <pre className="m-0 max-h-40 overflow-auto px-3 pb-2 type-code text-ink-muted whitespace-pre-wrap">
+                  {output.text}
+                </pre>
+              </div>
+            )}
+          </Dialog.Popup>
+        </Dialog.Viewport>
+      </Dialog.Portal>
+    </Dialog.Root>
   )
 }
