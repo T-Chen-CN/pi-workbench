@@ -2,6 +2,11 @@
 
 import { app, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { isAppUrl } from '../app-protocol.js'
+import {
+  parseContractArgs,
+  type IpcInvokeChannel,
+  type IpcInvokeContract,
+} from './contract.js'
 
 let getMainWindow: () => BrowserWindow | null = () => null
 
@@ -50,7 +55,9 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
   if (!app.isReady()) return true
   const senderId = event.sender.id
   const mainWindow = getMainWindow()
-  const fromMain = Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents)
+  const fromMain = Boolean(
+    mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents
+  )
   const fromAux = !fromMain && trustedAuxSenders.has(senderId)
   if (!fromMain && !fromAux) return false
   // fail-closed：缺失 senderFrame 或来自子框架一律拒绝
@@ -59,14 +66,38 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
   return true
 }
 
-export function handleIpc(
+export function handleIpc<TArgs extends readonly unknown[] = unknown[], TResult = unknown>(
   channel: string,
-  listener: (event: IpcMainInvokeEvent, ...args: any[]) => unknown
+  listener: (event: IpcMainInvokeEvent, ...args: TArgs) => TResult | Promise<TResult>
 ): void {
-  ipcMain.handle(channel, (event, ...args) => {
+  ipcMain.handle(channel, (event, ...args: unknown[]) => {
     if (!isTrustedIpcSender(event)) {
       return { success: false, error: 'Untrusted IPC sender' }
     }
-    return listener(event, ...args)
+    return listener(event, ...(args as unknown as TArgs))
+  })
+}
+
+/**
+ * 基于单源契约（`electron/ipc/contract.ts`）的强类型 IPC 注册入口：
+ * - 与 `handleIpc` 一致强制执行 `isTrustedIpcSender` fail-closed；
+ * - 若该通道在 `IPC_INVOKE_SCHEMAS` 登记了运行时 Zod 校验器，先校验再分发。
+ */
+export function handleTypedIpc<K extends IpcInvokeChannel>(
+  channel: K,
+  listener: (
+    event: IpcMainInvokeEvent,
+    ...args: IpcInvokeContract[K]['args']
+  ) => IpcInvokeContract[K]['result'] | Promise<IpcInvokeContract[K]['result']>
+): void {
+  ipcMain.handle(channel, (event, ...rawArgs: unknown[]) => {
+    if (!isTrustedIpcSender(event)) {
+      return { success: false, error: 'Untrusted IPC sender' }
+    }
+    const validated = parseContractArgs(channel, rawArgs)
+    if (!validated.ok) {
+      return { success: false, error: validated.error }
+    }
+    return listener(event, ...validated.data)
   })
 }

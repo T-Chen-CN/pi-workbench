@@ -1,532 +1,107 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
+import {
+  buildPreloadEventApi,
+  buildPreloadInvokeApi,
+  IPC_SEND_CHANNELS,
+  type CloudClientOutgoingFrame,
+  type CloudClientState,
+  type CloudConfigInput,
+  type CloudDeviceState,
+  type CloudPairInput,
+  type ElectronAPIContract,
+  type IpcInvokeChannel,
+  type IpcInvokeContract,
+} from './ipc/contract.js'
 
-type NotifyClickPayload = {
-  /** 本地工作区会话才有 */
-  workspaceDir: string | null
-  sessionId: string
+function invoke<K extends IpcInvokeChannel>(
+  channel: K,
+  ...args: IpcInvokeContract[K]['args']
+): Promise<IpcInvokeContract[K]['result']> {
+  return ipcRenderer.invoke(channel, ...args) as Promise<IpcInvokeContract[K]['result']>
 }
 
-type AgentStreamPayload = {
-  requestId?: string
-  workspaceDir?: string
-  sessionId?: string
-  type:
-    | 'text_delta'
-    | 'thinking_delta'
-    | 'thinking_redacted'
-    | 'tool_start'
-    | 'tool_update'
-    | 'tool_end'
-    | 'retry_start'
-    | 'retry_end'
-    | 'compaction_start'
-    | 'compaction_end'
-  delta?: string
-  toolCallId?: string
-  parentToolCallId?: string
-  toolName?: string
-  argsSummary?: string
-  startedAt?: number
-  status?: 'success' | 'error'
-  durationMs?: number
-  resultPreview?: string
-  filePath?: string
-  reason?: 'manual' | 'threshold' | 'overflow'
-  tokensBefore?: number
-  error?: string
-}
+const invokeApi = buildPreloadInvokeApi((channel, ...args) => ipcRenderer.invoke(channel, ...args))
+const eventApi = buildPreloadEventApi((channel, listener) => {
+  const wrapped = (event: IpcRendererEvent, payload: unknown) => listener(event, payload)
+  ipcRenderer.on(channel, wrapped)
+  return () => {
+    ipcRenderer.removeListener(channel, wrapped)
+  }
+})
 
-/** 自绘窗口按钮的最大化状态：主窗口与辅助窗口各自上报，渲染层按 host 过滤 */
-type WindowMaximizedState = { host: string; maximized: boolean }
-
-contextBridge.exposeInMainWorld('electronAPI', {
+const electronAPI: ElectronAPIContract = {
   platform: process.platform,
   /** Windows / Linux 主窗口与辅助窗口启用原生 titleBarOverlay，渲染层不再重复绘制窗口按钮 */
   nativeTitleBarOverlay: process.platform !== 'darwin',
-  // 文件系统操作
-  openDirectoryDialog: () => ipcRenderer.invoke('dialog:openDirectory'),
-  readFile: (path: string) => ipcRenderer.invoke('fs:readFile', path),
-  createFile: (filePath: string): Promise<{ success: boolean; code?: string; error?: string }> =>
-    ipcRenderer.invoke('fs:createFile', filePath),
-  writeFile: (path: string, content: string) => ipcRenderer.invoke('fs:writeFile', path, content),
-  openPathExternally: (path: string) => ipcRenderer.invoke('fs:openExternally', path),
-  // 外部链接：自定义协议下 target=_blank 会被主窗口拒绝，统一交给主进程转给系统浏览器
-  openExternalUrl: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+
+  ...invokeApi,
+  ...eventApi,
+
   // 剪贴板：pw-app:// 不是浏览器认可的可信来源，navigator.clipboard.writeText 会被拒绝。
-  // sandbox preload 里没有 clipboard 模块（Electron 只暴露 ipcRenderer / contextBridge 等），
-  // 因此转给主进程写系统剪贴板
-  writeClipboardText: (text: string): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('clipboard:writeText', String(text ?? '')),
-  listDirectory: (path: string) => ipcRenderer.invoke('fs:listDirectory', path),
-  exists: (path: string) => ipcRenderer.invoke('fs:exists', path),
-  stat: (path: string) => ipcRenderer.invoke('fs:stat', path),
-  deletePath: (path: string) => ipcRenderer.invoke('fs:delete', path),
-  renamePath: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:rename', oldPath, newPath),
-  watchWorkspace: (workspacePath: string) => ipcRenderer.invoke('fs:watch', workspacePath),
-  unwatchWorkspace: (workspacePath?: string) => ipcRenderer.invoke('fs:unwatch', workspacePath),
-  onFsChanged: (callback: (payload: { type: string; path: string }) => void) => {
-    const listener = (_event: unknown, payload: { type: string; path: string }) => callback(payload)
-    ipcRenderer.on('fs:changed', listener)
-    return () => ipcRenderer.removeListener('fs:changed', listener)
-  },
+  // sandbox preload 里没有 clipboard 模块，转给主进程写系统剪贴板并规范为字符串。
+  writeClipboardText: (text: string) => invoke('clipboard:writeText', String(text ?? '')),
 
-  // 自动更新
-  updateCheck: () => ipcRenderer.invoke('update:check'),
-  updateDownload: () => ipcRenderer.invoke('update:download'),
-  updateInstall: () => ipcRenderer.invoke('update:install'),
-  updateGetState: () => ipcRenderer.invoke('update:getState'),
-  updateOpenDownload: () => ipcRenderer.invoke('update:openDownload'),
-  consumeUpdateNotice: () => ipcRenderer.invoke('app:consumeUpdateNotice'),
-  onUpdateStatus: (callback: (status: unknown) => void) => {
-    const listener = (_event: unknown, status: unknown) => callback(status)
-    ipcRenderer.on('update:status', listener)
-    return () => ipcRenderer.removeListener('update:status', listener)
-  },
+  // 强制收敛为布尔值，防止渲染层传入非布尔值触发协议歧义
+  providersRefresh: (force?: boolean) => invoke('providers:refresh', force === true),
 
-  // 应用信息与运行状态
-  appGetInfo: () => ipcRenderer.invoke('app:getInfo'),
-  appHasActiveWork: () => ipcRenderer.invoke('app:hasActiveWork'),
-
-  // 渲染进程日志（写入 {appDir}/logs/renderer.log）
-  logRenderer: (level: string, args: unknown[]) => ipcRenderer.invoke('log:renderer', level, args),
-
-  // 应用配置管理（两目录模型 / 可选便携模式）
-  getAppDir: () => ipcRenderer.invoke('app:getAppDir'),
-  openDataDir: () => ipcRenderer.invoke('app:openDataDir'),
-  getSettings: () => ipcRenderer.invoke('app:getSettings'),
-  saveSettings: (settings: any) => ipcRenderer.invoke('app:saveSettings', settings),
-  getRecentWorkspaces: () => ipcRenderer.invoke('app:getRecentWorkspaces'),
-  addRecentWorkspace: (workspacePath: string) => ipcRenderer.invoke('app:addRecentWorkspace', workspacePath),
-
-  // 自绘窗口按钮
-  minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
-  toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggleMaximize'),
-  closeWindow: () => ipcRenderer.invoke('window:close'),
-  isWindowMaximized: () => ipcRenderer.invoke('window:isMaximized'),
-  onWindowMaximizedChange: (callback: (state: WindowMaximizedState) => void) => {
-    const listener = (_event: unknown, state: WindowMaximizedState) => callback(state)
-    ipcRenderer.on('window:maximized-changed', listener)
-    return () => ipcRenderer.removeListener('window:maximized-changed', listener)
-  },
-
-  // 面板辅助窗口（拆成独立窗口）
-  onAuxWindowClosed: (callback: (frameName: string) => void) => {
-    const listener = (_event: unknown, frameName: string) => callback(frameName)
-    ipcRenderer.on('aux:window-closed', listener)
-    return () => ipcRenderer.removeListener('aux:window-closed', listener)
-  },
-  auxDetachAt: () => ipcRenderer.invoke('aux:detach-at'),
-  auxDragBegin: () => ipcRenderer.invoke('aux:drag-begin'),
-  auxWindowCommand: (frameName: string, command: string) =>
-    ipcRenderer.invoke('aux:window-command', frameName, command),
-  auxWindowState: (frameName: string) => ipcRenderer.invoke('aux:window-state', frameName),
-
-  // 启动闸门：渲染层数据就绪后通知主进程放大窗口
-  appBootReady: () => ipcRenderer.send('app:boot-ready'),
-  onAppBootExpanded: (callback: () => void) => {
-    const listener = () => callback()
-    ipcRenderer.on('app:boot-expanded', listener)
-    return () => ipcRenderer.removeListener('app:boot-expanded', listener)
-  },
-
-  // 工作区配置管理
-  initWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace:init', workspacePath),
-  disposeWorkspace: (workspacePath: string) => ipcRenderer.invoke('workspace:dispose', workspacePath),
-
-  // 崩溃恢复草稿
-  draftSave: (workspacePath: string, filePath: string, content: string) =>
-    ipcRenderer.invoke('draft:save', workspacePath, filePath, content),
-  draftDelete: (workspacePath: string, filePath: string) => ipcRenderer.invoke('draft:delete', workspacePath, filePath),
-  draftList: (workspacePath: string) => ipcRenderer.invoke('draft:list', workspacePath),
-  draftClear: (workspacePath: string) => ipcRenderer.invoke('draft:clear', workspacePath),
-
-  // Pi Agent API
-  agentInitialize: (config: { workspaceDir: string; agentDir?: string }) =>
-    ipcRenderer.invoke('agent:initialize', config),
-  agentChat: (
-    message: string,
-    requestId?: string,
-    workspaceDir?: string,
-    sessionId?: string,
-    images?: Array<{ data: string; mimeType: string }>
-  ) => ipcRenderer.invoke('agent:chat', message, requestId, workspaceDir, sessionId, images),
-  agentAbort: (workspaceDir?: string, sessionId?: string) => ipcRenderer.invoke('agent:abort', workspaceDir, sessionId),
-  onAgentStream: (callback: (payload: AgentStreamPayload) => void) => {
-    const listener = (_event: unknown, payload: AgentStreamPayload) => callback(payload)
-    ipcRenderer.on('agent:stream', listener)
-    return () => ipcRenderer.removeListener('agent:stream', listener)
-  },
-  onAgentSessionTitle: (callback: (payload: { workspaceDir: string; sessionId: string; title: string }) => void) => {
-    const listener = (_event: unknown, payload: { workspaceDir: string; sessionId: string; title: string }) =>
-      callback(payload)
-    ipcRenderer.on('agent:session-title', listener)
-    return () => ipcRenderer.removeListener('agent:session-title', listener)
-  },
-  agentDispose: (workspaceDir?: string) => ipcRenderer.invoke('agent:dispose', workspaceDir),
-  agentSessionsList: (workspaceDir: string) => ipcRenderer.invoke('agent:sessions:list', workspaceDir),
-  agentSessionsOpen: (workspaceDir: string, sessionId?: string) =>
-    ipcRenderer.invoke('agent:sessions:open', workspaceDir, sessionId),
-  agentSessionsCreate: (workspaceDir: string, root?: string) =>
-    ipcRenderer.invoke('agent:sessions:create', workspaceDir, root),
-  agentSessionsClose: (workspaceDir: string, sessionId: string) =>
-    ipcRenderer.invoke('agent:sessions:close', workspaceDir, sessionId),
-  agentSessionsRename: (workspaceDir: string, sessionId: string, name: string) =>
-    ipcRenderer.invoke('agent:sessions:rename', workspaceDir, sessionId, name),
-  agentSessionsDelete: (workspaceDir: string, sessionId: string) =>
-    ipcRenderer.invoke('agent:sessions:delete', workspaceDir, sessionId),
-  agentSessionsGetTabs: (workspaceDir: string) => ipcRenderer.invoke('agent:sessions:getTabs', workspaceDir),
-  agentSessionsSetTabs: (workspaceDir: string, tabs: { open: string[]; active: string | null }) =>
-    ipcRenderer.invoke('agent:sessions:setTabs', workspaceDir, tabs),
-  editorTabsGet: (workspaceDir: string) => ipcRenderer.invoke('workspace:editorTabs:get', workspaceDir),
-  editorTabsSet: (workspaceDir: string, tabs: { open: string[]; active: string | null }) =>
-    ipcRenderer.invoke('workspace:editorTabs:set', workspaceDir, tabs),
-  repoMapScan: (workspaceDir: string, options?: { force?: boolean; paths?: string[] }) =>
-    ipcRenderer.invoke('repo-map:scan', workspaceDir, options),
-  repoMapDescribe: (workspaceDir: string, paths: string[]) =>
-    ipcRenderer.invoke('repo-map:describe', workspaceDir, paths),
-  repoMapCanvasGet: (workspaceDir: string) =>
-    ipcRenderer.invoke('repo-map:canvas:get', workspaceDir),
-  repoMapCanvasSet: (workspaceDir: string, state: unknown) =>
-    ipcRenderer.invoke('repo-map:canvas:set', workspaceDir, state),
-  agentSteer: (
-    workspaceDir: string,
-    sessionId: string,
-    message: string,
-    images?: Array<{ data: string; mimeType: string }>
-  ) => ipcRenderer.invoke('agent:steer', workspaceDir, sessionId, message, images),
-  agentContextUsage: (workspaceDir: string, sessionId: string) =>
-    ipcRenderer.invoke('agent:context:usage', workspaceDir, sessionId),
-  agentCompactContext: (workspaceDir: string, sessionId: string) =>
-    ipcRenderer.invoke('agent:context:compact', workspaceDir, sessionId),
-  agentRewind: (workspaceDir: string, sessionId: string, newText?: string) =>
-    ipcRenderer.invoke('agent:rewind', workspaceDir, sessionId, newText),
-  agentBranchesList: (workspaceDir: string, sessionId: string) =>
-    ipcRenderer.invoke('agent:branches:list', workspaceDir, sessionId),
-  agentBranchesSwitch: (workspaceDir: string, sessionId: string, entryId: string) =>
-    ipcRenderer.invoke('agent:branches:switch', workspaceDir, sessionId, entryId),
-  agentSessionSettings: (workspaceDir: string, sessionId: string) =>
-    ipcRenderer.invoke('agent:session:settings', workspaceDir, sessionId),
-  agentSessionSetPermission: (workspaceDir: string, sessionId: string, permission: unknown) =>
-    ipcRenderer.invoke('agent:session:setPermission', workspaceDir, sessionId, permission),
-  agentSessionStats: (workspaceDir: string, sessionId: string) =>
-    ipcRenderer.invoke('agent:session:stats', workspaceDir, sessionId),
-  agentModelCapabilities: (workspaceDir: string) => ipcRenderer.invoke('agent:models:capabilities', workspaceDir),
-  agentPromptResources: (workspaceDir: string, sessionId: string) =>
-    ipcRenderer.invoke('agent:prompt-resources', workspaceDir, sessionId),
-  agentPlanGet: (workspaceDir: string, sessionId: string) =>
-    ipcRenderer.invoke('agent:plan:get', workspaceDir, sessionId),
-  agentPlanApprove: (workspaceDir: string, sessionId: string, planId: string, targetMode: 'ask' | 'auto') =>
-    ipcRenderer.invoke('agent:plan:approve', workspaceDir, sessionId, planId, targetMode),
-  agentPlanReject: (workspaceDir: string, sessionId: string, planId: string) =>
-    ipcRenderer.invoke('agent:plan:reject', workspaceDir, sessionId, planId),
-  agentToolResultMeta: (workspaceDir: string, sessionId: string, toolCallId: string) =>
-    ipcRenderer.invoke('agent:tool-result:meta', workspaceDir, sessionId, toolCallId),
-  agentToolResultChunk: (
-    workspaceDir: string,
-    sessionId: string,
-    toolCallId: string,
-    offset?: number,
-    limit?: number
-  ) => ipcRenderer.invoke('agent:tool-result:chunk', workspaceDir, sessionId, toolCallId, offset, limit),
-  agentToolResultImage: (workspaceDir: string, sessionId: string, toolCallId: string, index?: number) =>
-    ipcRenderer.invoke('agent:tool-result:image', workspaceDir, sessionId, toolCallId, index),
-  agentToolResultOpen: (workspaceDir: string, sessionId: string, toolCallId: string) =>
-    ipcRenderer.invoke('agent:tool-result:open', workspaceDir, sessionId, toolCallId),
-  agentExportSession: (
-    workspaceDir: string,
-    sessionId: string,
-    format: 'md' | 'html' | 'jsonl',
-    language?: 'zh' | 'en'
-  ) => ipcRenderer.invoke('agent:export-session', workspaceDir, sessionId, format, language),
-  agentSessionSetModel: (workspaceDir: string, sessionId: string, modelId: string) =>
-    ipcRenderer.invoke('agent:session:setModel', workspaceDir, sessionId, modelId),
-  agentSessionSetThinking: (workspaceDir: string, sessionId: string, level: string) =>
-    ipcRenderer.invoke('agent:session:setThinking', workspaceDir, sessionId, level),
-  agentSessionsMetaGet: (workspaceDir: string) => ipcRenderer.invoke('agent:sessions:meta:get', workspaceDir),
-  agentSessionsMetaSet: (workspaceDir: string, meta: { pinned?: string[]; archived?: string[] }) =>
-    ipcRenderer.invoke('agent:sessions:meta:set', workspaceDir, meta),
-  searchWorkspaceFiles: (workspaceDir: string, query: string, limit?: number) =>
-    ipcRenderer.invoke('workspace:searchFiles', workspaceDir, query, limit),
+  // Electron 原生拖拽文件真实路径解析（仅 preload webUtils 可访问）
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  /** 原生文件选择：任意路径 / 任意格式；除图片外只回传元信息 */
-  pickAttachments: () => ipcRenderer.invoke('attachment:pick'),
-  onNotifyClick: (callback: (payload: NotifyClickPayload) => void) => {
-    const listener = (_event: unknown, payload: NotifyClickPayload) => callback(payload)
-    ipcRenderer.on('app:notify-click', listener)
-    return () => ipcRenderer.removeListener('app:notify-click', listener)
-  },
-  onAgentApprovalRequest: (
-    callback: (payload: {
-      requestId: string
-      workspaceDir: string
-      sessionId: string
-      toolCallId: string
-      toolName: string
-      category: 'read' | 'write' | 'command' | 'other'
-      summary: string
-      details: { path?: string; command?: string; preview?: string; editCount?: number }
-      createdAt: number
-      expiresAt: number
-    }) => void
-  ) => {
-    const listener = (_event: unknown, payload: any) => callback(payload)
-    ipcRenderer.on('agent:approval-request', listener)
-    return () => ipcRenderer.removeListener('agent:approval-request', listener)
-  },
-  agentRespondApproval: (requestId: string, decision: unknown) =>
-    ipcRenderer.invoke('agent:approval:respond', requestId, decision),
-  onAgentApprovalResolved: (
-    callback: (payload: { requestId: string; workspaceDir: string; sessionId: string; decision: unknown }) => void
-  ) => {
-    const listener = (_event: unknown, payload: any) => callback(payload)
-    ipcRenderer.on('agent:approval-resolved', listener)
-    return () => ipcRenderer.removeListener('agent:approval-resolved', listener)
+
+  // 启动闸门：渲染层数据就绪后单向通知主进程放大窗口
+  appBootReady: () => {
+    ipcRenderer.send(IPC_SEND_CHANNELS.appBootReady)
   },
 
-  // 终端
-  terminalCreate: (workspaceDir: string, cols: number, rows: number, cwd?: string) =>
-    ipcRenderer.invoke('terminal:create', workspaceDir, cols, rows, cwd),
-  terminalWrite: (id: string, data: string) => ipcRenderer.invoke('terminal:write', id, data),
-  terminalResize: (id: string, cols: number, rows: number) => ipcRenderer.invoke('terminal:resize', id, cols, rows),
-  terminalClose: (id: string) => ipcRenderer.invoke('terminal:close', id),
-  terminalFlush: (id: string) => ipcRenderer.invoke('terminal:flush', id),
-  onTerminalData: (callback: (payload: { id: string; data: string }) => void) => {
-    const listener = (_event: unknown, payload: { id: string; data: string }) => callback(payload)
-    ipcRenderer.on('terminal:data', listener)
-    return () => ipcRenderer.removeListener('terminal:data', listener)
-  },
-  onTerminalExit: (callback: (payload: { id: string; exitCode: number }) => void) => {
-    const listener = (_event: unknown, payload: { id: string; exitCode: number }) => callback(payload)
-    ipcRenderer.on('terminal:exit', listener)
-    return () => ipcRenderer.removeListener('terminal:exit', listener)
-  },
-
-  // Git 工作树 / 只读历史 / GitHub 状态
-  gitRepoInfo: (workspaceDir: string) => ipcRenderer.invoke('git:repoInfo', workspaceDir),
-  gitFetch: (workspaceDir: string, options?: { force?: boolean }) =>
-    ipcRenderer.invoke('git:fetch', workspaceDir, options),
-  onGitChanged: (
-    callback: (payload: {
-      workspaceDir: string
-      repoRoot: string
-      scopes: Array<'refs' | 'status'>
-      reason: 'watch' | 'fetch'
-    }) => void
-  ) => {
-    const listener = (
-      _event: unknown,
-      payload: {
-        workspaceDir: string
-        repoRoot: string
-        scopes: Array<'refs' | 'status'>
-        reason: 'watch' | 'fetch'
-      }
-    ) => callback(payload)
-    ipcRenderer.on('git:changed', listener)
-    return () => ipcRenderer.removeListener('git:changed', listener)
-  },
-  gitListWorktrees: (workspaceDir: string, activeSessionId?: string) =>
-    ipcRenderer.invoke('git:listWorktrees', workspaceDir, activeSessionId),
-  gitForgetWorktree: (workspaceDir: string, id: string, activeSessionId?: string) =>
-    ipcRenderer.invoke('git:forgetWorktree', workspaceDir, id, activeSessionId),
-  gitInstallWorktreeDeps: (workspaceDir: string, id: string) =>
-    ipcRenderer.invoke('git:installWorktreeDeps', workspaceDir, id),
-  onGitWorktreeDeps: (
-    callback: (payload: {
-      workspaceDir: string
-      key: string
-      state: 'none' | 'idle' | 'installing' | 'ready' | 'failed'
-      manager: string | null
-      error?: string
-    }) => void
-  ) => {
-    const listener = (
-      _event: unknown,
-      payload: {
-        workspaceDir: string
-        key: string
-        state: 'none' | 'idle' | 'installing' | 'ready' | 'failed'
-        manager: string | null
-        error?: string
-      }
-    ) => callback(payload)
-    ipcRenderer.on('git:worktree-deps', listener)
-    return () => ipcRenderer.removeListener('git:worktree-deps', listener)
-  },
-  gitBranches: (workspaceDir: string) => ipcRenderer.invoke('git:branches', workspaceDir),
-  gitStatus: (workspaceDir: string, worktreePath?: string) =>
-    ipcRenderer.invoke('git:status', workspaceDir, worktreePath),
-  gitSessionBinding: (workspaceDir: string, sessionId: string) =>
-    ipcRenderer.invoke('git:sessionBinding', workspaceDir, sessionId),
-  gitBindWorktree: (workspaceDir: string, sessionId: string, target: string, base?: string) =>
-    ipcRenderer.invoke('git:bindWorktree', workspaceDir, sessionId, target, base),
-  gitReleaseSession: (workspaceDir: string, sessionId: string) =>
-    ipcRenderer.invoke('git:releaseSession', workspaceDir, sessionId),
-  gitCleanupOrphans: (workspaceDir: string) => ipcRenderer.invoke('git:cleanupOrphans', workspaceDir),
-  gitLog: (workspaceDir: string, limit?: number, branch?: string, all?: boolean) =>
-    ipcRenderer.invoke('git:log', workspaceDir, limit, branch, all),
-  gitCommitStats: (workspaceDir: string, limit?: number, branch?: string, all?: boolean) =>
-    ipcRenderer.invoke('git:commitStats', workspaceDir, limit, branch, all),
-  gitCreateBranch: (workspaceDir: string, sha: string, name: string) =>
-    ipcRenderer.invoke('git:createBranch', workspaceDir, sha, name),
-  gitCommitDetail: (workspaceDir: string, sha: string) => ipcRenderer.invoke('git:commitDetail', workspaceDir, sha),
-  gitDiff: (workspaceDir: string, from: string, to: string) => ipcRenderer.invoke('git:diff', workspaceDir, from, to),
-  gitCheckout: (workspaceDir: string, worktreePath: string, branch: string) =>
-    ipcRenderer.invoke('git:checkout', workspaceDir, worktreePath, branch),
-  gitMerge: (workspaceDir: string, worktreePath: string, branch: string, strategy?: 'merge' | 'squash' | 'rebase') =>
-    ipcRenderer.invoke('git:merge', workspaceDir, worktreePath, branch, strategy),
-  gitGithubTokenStatus: () => ipcRenderer.invoke('git:githubTokenStatus'),
-  githubAuthConfig: () => ipcRenderer.invoke('github:auth:config'),
-  githubAuthStart: () => ipcRenderer.invoke('github:auth:start'),
-  githubAuthStatus: () => ipcRenderer.invoke('github:auth:status'),
-  githubAuthLogout: () => ipcRenderer.invoke('github:auth:logout'),
-  onGithubAuthComplete: (
-    callback: (payload: {
-      success: boolean
-      user?: { login: string; name: string | null; avatarUrl: string | null } | null
-      error?: string
-    }) => void
-  ) => {
-    const listener = (
-      _event: unknown,
-      payload: {
-        success: boolean
-        user?: { login: string; name: string | null; avatarUrl: string | null } | null
-        error?: string
-      }
-    ) => callback(payload)
-    ipcRenderer.on('github:auth:complete', listener)
-    return () => ipcRenderer.removeListener('github:auth:complete', listener)
-  },
-  githubAuthDeviceStart: () => ipcRenderer.invoke('github:auth:device:start'),
-  githubAuthDeviceCancel: () => ipcRenderer.invoke('github:auth:device:cancel'),
-  githubAuthDeviceOpen: () => ipcRenderer.invoke('github:auth:device:open'),
-  onGithubAuthDeviceEvent: (
-    callback: (payload: {
-      status: 'pending' | 'slow_down' | 'expired' | 'denied' | 'error'
-      interval?: number
-      error?: string
-    }) => void
-  ) => {
-    const listener = (
-      _event: unknown,
-      payload: {
-        status: 'pending' | 'slow_down' | 'expired' | 'denied' | 'error'
-        interval?: number
-        error?: string
-      }
-    ) => callback(payload)
-    ipcRenderer.on('github:auth:device:event', listener)
-    return () => ipcRenderer.removeListener('github:auth:device:event', listener)
-  },
-  gitSetGithubToken: (token: string) => ipcRenderer.invoke('git:setGithubToken', token),
-  gitPrStatus: (workspaceDir: string, worktreePath?: string) =>
-    ipcRenderer.invoke('git:prStatus', workspaceDir, worktreePath),
-  onAgentSessionRootChanged: (
-    callback: (payload: { workspaceDir: string; sessionId: string; root: string }) => void
-  ) => {
-    const listener = (_event: unknown, payload: { workspaceDir: string; sessionId: string; root: string }) =>
-      callback(payload)
-    ipcRenderer.on('agent:session-root-changed', listener)
-    return () => ipcRenderer.removeListener('agent:session-root-changed', listener)
-  },
-
-  // 云端连接（配对 / 解绑 / 状态 / 云端页通道 / 云端模型配置）
-  cloudLinkStatus: () => ipcRenderer.invoke('cloud:linkStatus'),
-  cloudPair: (input: { baseUrl?: string; code?: string; deviceName?: string }) =>
-    ipcRenderer.invoke('cloud:pair', input),
-  cloudUnlink: () => ipcRenderer.invoke('cloud:unlink'),
-  cloudReconnect: () => ipcRenderer.invoke('cloud:reconnect'),
-  cloudRefreshWorkspaces: () => ipcRenderer.invoke('cloud:refreshWorkspaces'),
-  cloudListWorkspaces: () => ipcRenderer.invoke('cloud:listWorkspaces'),
-  cloudClientOpen: () => ipcRenderer.invoke('cloud:clientOpen'),
-  cloudClientClose: () => ipcRenderer.invoke('cloud:clientClose'),
-  cloudClientSend: (frame: unknown) => ipcRenderer.invoke('cloud:clientSend', frame),
-  cloudClientState: () => ipcRenderer.invoke('cloud:clientState'),
-  cloudGetConfig: () => ipcRenderer.invoke('cloud:getConfig'),
-  cloudSaveConfig: (config: unknown) => ipcRenderer.invoke('cloud:saveConfig', config),
-  cloudFetchModels: (input: unknown) => ipcRenderer.invoke('cloud:fetchModels', input),
-  cloudGetMemoryData: () => ipcRenderer.invoke('cloud:getMemoryData'),
-  cloudAddMemory: (input: unknown) => ipcRenderer.invoke('cloud:addMemory', input),
-  cloudUpdateMemory: (input: unknown) => ipcRenderer.invoke('cloud:updateMemory', input),
-  cloudDeleteMemory: (id: string) => ipcRenderer.invoke('cloud:deleteMemory', id),
-  cloudSaveDoc: (input: unknown) => ipcRenderer.invoke('cloud:saveDoc', input),
-  cloudRunDream: () => ipcRenderer.invoke('cloud:runDream'),
-  onCloudState: (callback: (state: unknown) => void) => {
-    const listener = (_event: unknown, state: unknown) => callback(state)
+  // 云端通道显式契约绑定（与 IPC_INVOKE_CHANNELS / IPC_EVENT_CHANNELS 强对齐，
+  // 同时满足静态预加载连线检查）
+  cloudLinkStatus: () => invoke('cloud:linkStatus'),
+  cloudPair: (input: CloudPairInput) => invoke('cloud:pair', input),
+  cloudUnlink: () => invoke('cloud:unlink'),
+  cloudReconnect: () => invoke('cloud:reconnect'),
+  cloudRefreshWorkspaces: () => invoke('cloud:refreshWorkspaces'),
+  cloudListWorkspaces: () => invoke('cloud:listWorkspaces'),
+  cloudClientOpen: () => invoke('cloud:clientOpen'),
+  cloudClientClose: () => invoke('cloud:clientClose'),
+  cloudClientSend: (frame: CloudClientOutgoingFrame) => invoke('cloud:clientSend', frame),
+  cloudClientState: () => invoke('cloud:clientState'),
+  cloudGetConfig: () => invoke('cloud:getConfig'),
+  cloudSaveConfig: (config: CloudConfigInput) => invoke('cloud:saveConfig', config),
+  cloudFetchModels: (input: { providerId: string }) => invoke('cloud:fetchModels', input),
+  cloudGetMemoryData: () => invoke('cloud:getMemoryData'),
+  cloudAddMemory: (input: { kind?: string; content: string; tags?: string[]; pinned?: boolean }) =>
+    invoke('cloud:addMemory', input),
+  cloudUpdateMemory: (input: {
+    id: string
+    kind?: string
+    content?: string
+    tags?: string[]
+    pinned?: boolean
+  }) => invoke('cloud:updateMemory', input),
+  cloudDeleteMemory: (id: string) => invoke('cloud:deleteMemory', id),
+  cloudSaveDoc: (input: { name: 'AGENTS.md' | 'SOUL.md'; content: string }) =>
+    invoke('cloud:saveDoc', input),
+  cloudRunDream: () => invoke('cloud:runDream'),
+  onCloudState: (callback: (state: CloudDeviceState) => void) => {
+    const listener = (_event: IpcRendererEvent, state: CloudDeviceState) => callback(state)
     ipcRenderer.on('cloud:state', listener)
-    return () => ipcRenderer.removeListener('cloud:state', listener)
+    return () => {
+      ipcRenderer.removeListener('cloud:state', listener)
+    }
   },
   onCloudClientFrame: (callback: (frame: unknown) => void) => {
-    const listener = (_event: unknown, frame: unknown) => callback(frame)
+    const listener = (_event: IpcRendererEvent, frame: unknown) => callback(frame)
     ipcRenderer.on('cloud:client-frame', listener)
-    return () => ipcRenderer.removeListener('cloud:client-frame', listener)
+    return () => {
+      ipcRenderer.removeListener('cloud:client-frame', listener)
+    }
   },
-  onCloudClientState: (callback: (state: unknown) => void) => {
-    const listener = (_event: unknown, state: unknown) => callback(state)
+  onCloudClientState: (callback: (state: CloudClientState) => void) => {
+    const listener = (_event: IpcRendererEvent, state: CloudClientState) => callback(state)
     ipcRenderer.on('cloud:client-state', listener)
-    return () => ipcRenderer.removeListener('cloud:client-state', listener)
+    return () => {
+      ipcRenderer.removeListener('cloud:client-state', listener)
+    }
   },
+}
 
-  // 工作台插件
-  pluginsList: (workspaceDir: string) => ipcRenderer.invoke('plugins:list', workspaceDir),
-  pluginsInvoke: (workspaceDir: string, commandId: string, args?: unknown) =>
-    ipcRenderer.invoke('plugins:invoke', workspaceDir, commandId, args),
-  pluginsReload: (workspaceDir: string) => ipcRenderer.invoke('plugins:reload', workspaceDir),
-  pluginsSetEnabled: (workspaceDir: string, pluginId: string, enabled: boolean) =>
-    ipcRenderer.invoke('plugins:setEnabled', workspaceDir, pluginId, enabled),
-  onPluginsChanged: (callback: (payload: { workspaceDir: string }) => void) => {
-    const listener = (_event: unknown, payload: { workspaceDir: string }) => callback(payload)
-    ipcRenderer.on('plugins:changed', listener)
-    return () => ipcRenderer.removeListener('plugins:changed', listener)
-  },
-
-  // 供应商预设（凭证 + 模型目录）；从不返回密钥
-  providersList: () => ipcRenderer.invoke('providers:list'),
-  providersSetActive: (providerId: string, modelId?: string) =>
-    ipcRenderer.invoke('providers:setActive', providerId, modelId),
-  providersSetOverrides: (providerId: string, modelId: string, overrides: unknown) =>
-    ipcRenderer.invoke('providers:setOverrides', providerId, modelId, overrides),
-  providersRefresh: (force?: boolean) => ipcRenderer.invoke('providers:refresh', force === true),
-  providersSetApiKey: (providerId: string, apiKey: string) =>
-    ipcRenderer.invoke('providers:setApiKey', providerId, apiKey),
-  providersForget: (providerId: string) => ipcRenderer.invoke('providers:forget', providerId),
-  providersLogin: (providerId: string, type: string) =>
-    ipcRenderer.invoke('providers:login', providerId, type),
-  providersAuthAnswer: (requestId: string, value: string) =>
-    ipcRenderer.invoke('providers:authAnswer', requestId, value),
-  providersCancelLogin: (providerId: string) => ipcRenderer.invoke('providers:cancelLogin', providerId),
-  onProvidersAuthEvent: (callback: (payload: unknown) => void) => {
-    const listener = (_event: unknown, payload: unknown) => callback(payload)
-    ipcRenderer.on('providers:auth-event', listener)
-    return () => ipcRenderer.removeListener('providers:auth-event', listener)
-  },
-
-  // 联网搜索（内置能力）
-  webSearchGet: () => ipcRenderer.invoke('webSearch:get'),
-  webSearchSave: (config: any) => ipcRenderer.invoke('webSearch:save', config),
-
-  // 文档扫描页渲染：主进程发请求，渲染层画完回传 PNG
-  documentsPreview: (path: string) => ipcRenderer.invoke('documents:preview', path),
-  onDocumentRenderRequest: (
-    callback: (payload: {
-      id: string
-      name: string
-      bytes: Uint8Array
-      pages: number[]
-      scale: number
-    }) => void
-  ) => {
-    const listener = (
-      _event: unknown,
-      payload: { id: string; name: string; bytes: Uint8Array; pages: number[]; scale: number }
-    ) => callback(payload)
-    ipcRenderer.on('documents:render-request', listener)
-    return () => ipcRenderer.removeListener('documents:render-request', listener)
-  },
-  documentRenderResult: (payload: {
-    id: string
-    images?: { data: string; mimeType: string }[]
-    error?: string
-  }) => ipcRenderer.invoke('documents:render-result', payload),
-})
+contextBridge.exposeInMainWorld('electronAPI', electronAPI)

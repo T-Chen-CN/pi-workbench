@@ -3,22 +3,25 @@
  * Portable Architecture: All app data stored in application directory
  */
 
+import {
+  createContractApiCall,
+  createContractEventSub,
+  normalizeIpcError,
+  type IpcEventBridge,
+  type IpcInvokeBridge,
+} from '../../electron/ipc/contract'
 import type {
   RepoMapResult,
-  RepoMapScanOptions,
   RepoMapCanvasState,
   RepoMapCanvasGetResult,
   RepoMapCanvasSetResult,
   OpenDirectoryResult,
   CloudLinkStatusResult,
-  CloudPairInput,
   CloudPairResult,
   CloudDeviceState,
   CloudWorkspaceEntry,
   CloudClientState,
-  CloudClientOutgoingFrame,
   CloudCatalogModel,
-  CloudConfigInput,
   CloudConfigResult,
   ListDirectoryResult,
   ReadFileResult,
@@ -31,9 +34,6 @@ import type {
   SaveSettingsResult,
   WorkspaceResult,
   ProvidersListResult,
-  ProviderAuthEvent,
-  ProviderAuthMethod,
-  ProviderModelOverrides,
   WebSearchConfig,
   WebSearchGetResult,
   WebSearchSaveResult,
@@ -53,7 +53,6 @@ import type {
   DraftResult,
   EditorTabs,
   EditorTabsResult,
-  GithubDeviceLoginEvent,
   GitChangedPayload,
   GitWorktreeDepsPayload,
   AuxDetachResult,
@@ -61,7 +60,8 @@ import type {
   WindowCommand,
   WindowMaximizedState,
   AttachmentPickResult,
-  DocumentPreviewResult
+  DocumentPreviewResult,
+  NotifyClickPayload,
 } from '../types/electron'
 import { frameNameOf, type HostId } from '../panelHost/types'
 import { emptyCanvasState, sanitizeCanvasState } from '../utils/repoMapCanvasState'
@@ -72,11 +72,11 @@ const CANVAS_UNAVAILABLE = 'Restart the app to save the canvas layout'
 const MOCK_WEB_SEARCH_KEY = 'pi-workbench-web-search-config'
 const MOCK_SETTINGS_KEY = 'pi-workbench-settings'
 
-const mockUpdateState: UpdateState = {
+const fallbackUpdateState: UpdateState = {
   status: 'unsupported',
   currentVersion: '0.0.0-web',
   platform: 'web',
-  canAutoInstall: false
+  canAutoInstall: false,
 }
 
 const mockExistingFiles = new Set<string>(['/mock/src', '/mock/package.json'])
@@ -97,8 +97,8 @@ const mockAPI = {
       success: true,
       items: [
         { name: 'src', path: '/mock/src', isDirectory: true },
-        { name: 'package.json', path: '/mock/package.json', isDirectory: false }
-      ]
+        { name: 'package.json', path: '/mock/package.json', isDirectory: false },
+      ],
     }
   },
   readFile: async (filePath: string): Promise<ReadFileResult> => {
@@ -173,24 +173,24 @@ const mockAPI = {
   logRenderer: async () => ({ success: true }),
   updateCheck: async (): Promise<UpdateCheckResult> => ({
     success: false,
-    state: mockUpdateState,
-    error: 'ERR_UPDATE_NOT_PACKAGED'
+    state: fallbackUpdateState,
+    error: 'ERR_UPDATE_NOT_PACKAGED',
   }),
   updateDownload: async (): Promise<UpdateActionResult> => ({
     success: false,
-    error: 'ERR_UPDATE_NOT_PACKAGED'
+    error: 'ERR_UPDATE_NOT_PACKAGED',
   }),
   updateInstall: async (): Promise<UpdateActionResult> => ({
     success: false,
-    error: 'ERR_UPDATE_NOT_PACKAGED'
+    error: 'ERR_UPDATE_NOT_PACKAGED',
   }),
   updateGetState: async (): Promise<UpdateStateResult> => ({
     success: true,
-    state: mockUpdateState
+    state: fallbackUpdateState,
   }),
   updateOpenDownload: async (): Promise<UpdateActionResult> => ({
     success: false,
-    error: 'ERR_UPDATE_NOT_PACKAGED'
+    error: 'ERR_UPDATE_NOT_PACKAGED',
   }),
   consumeUpdateNotice: async (): Promise<UpdateNoticeResult> => ({ success: true, notice: null }),
   onUpdateStatus: (_callback: (status: UpdateState) => void) => () => {},
@@ -203,12 +203,12 @@ const mockAPI = {
       node: '-',
       platform: 'web',
       arch: '-',
-      appDir: '/mock/app/dir'
-    }
+      appDir: '/mock/app/dir',
+    },
   }),
   appHasActiveWork: async (): Promise<AppActiveWorkResult> => ({
     success: true,
-    terminal: false
+    terminal: false,
   }),
   getSettings: async (): Promise<GetSettingsResult> => {
     const defaults = {
@@ -217,23 +217,26 @@ const mockAPI = {
       autoSave: true,
       autoSaveDelay: 2000,
       useSystemProxy: true,
-      autoRefreshCatalog: true
+      autoRefreshCatalog: true,
     }
     try {
       const saved = localStorage.getItem(MOCK_SETTINGS_KEY)
-      return { success: true, settings: saved ? { ...defaults, ...JSON.parse(saved) } : defaults }
+      return {
+        success: true,
+        settings: saved ? { ...defaults, ...(JSON.parse(saved) as Record<string, unknown>) } : defaults,
+      }
     } catch {
       return { success: true, settings: defaults }
     }
   },
-  saveSettings: async (settings: any): Promise<SaveSettingsResult> => {
+  saveSettings: async (settings: Record<string, unknown>): Promise<SaveSettingsResult> => {
     localStorage.setItem(MOCK_SETTINGS_KEY, JSON.stringify(settings))
     return { success: true }
   },
   getRecentWorkspaces: async (): Promise<RecentWorkspacesResult> => {
     try {
       const saved = localStorage.getItem('pi-workbench-recent-workspaces')
-      return { success: true, workspaces: saved ? JSON.parse(saved) : [] }
+      return { success: true, workspaces: saved ? (JSON.parse(saved) as string[]) : [] }
     } catch {
       return { success: true, workspaces: [] }
     }
@@ -241,7 +244,7 @@ const mockAPI = {
   addRecentWorkspace: async (workspacePath: string): Promise<RecentWorkspacesResult> => {
     let existing: string[] = []
     try {
-      existing = JSON.parse(localStorage.getItem('pi-workbench-recent-workspaces') || '[]')
+      existing = JSON.parse(localStorage.getItem('pi-workbench-recent-workspaces') || '[]') as string[]
     } catch {
       /* ignore */
     }
@@ -252,25 +255,28 @@ const mockAPI = {
   minimizeWindow: async (): Promise<{ success: boolean }> => ({ success: false }),
   toggleMaximizeWindow: async (): Promise<{ success: boolean; maximized: boolean }> => ({
     success: false,
-    maximized: false
+    maximized: false,
   }),
   closeWindow: async (): Promise<{ success: boolean }> => ({ success: false }),
   isWindowMaximized: async (): Promise<{ success: boolean; maximized: boolean }> => ({
     success: true,
-    maximized: false
+    maximized: false,
   }),
   onWindowMaximizedChange: (_callback: (state: WindowMaximizedState) => void) => () => {},
   // 浏览器开发模式没有辅助窗口的主进程支持：拆窗退化为普通 window.open，由渲染层用 screenX/screenY 定位
   onAuxWindowClosed: (_callback: (frameName: string) => void) => () => {},
   auxDetachAt: async (): Promise<AuxDetachResult> => ({ success: false, error: 'Not supported' }),
   auxDragBegin: async (): Promise<{ success: boolean }> => ({ success: false }),
-  auxWindowCommand: async (_host: string, _command: WindowCommand): Promise<AuxWindowCommandResult> => ({
+  auxWindowCommand: async (
+    _host: string,
+    _command: WindowCommand
+  ): Promise<AuxWindowCommandResult> => ({
     success: false,
-    error: 'Not supported'
+    error: 'Not supported',
   }),
   auxWindowState: async (_host: string): Promise<AuxWindowCommandResult> => ({
     success: false,
-    error: 'Not supported'
+    error: 'Not supported',
   }),
   appBootReady: () => {},
   onAppBootExpanded: (_callback: () => void) => () => {},
@@ -297,8 +303,8 @@ const mockAPI = {
           open: Array.isArray(parsed.open)
             ? parsed.open.filter((item): item is string => typeof item === 'string')
             : [],
-          active: typeof parsed.active === 'string' ? parsed.active : null
-        }
+          active: typeof parsed.active === 'string' ? parsed.active : null,
+        },
       }
     } catch {
       return { success: true, tabs: { open: [], active: null } }
@@ -326,7 +332,7 @@ const mockAPI = {
         described: true,
         headComment: '工作区面板：编辑区的默认视图',
         exports: ['WorkspacePanel'],
-        symbol: 'WorkspacePanel'
+        symbol: 'WorkspacePanel',
       },
       {
         path: 'src/store/repoMapStore.ts',
@@ -337,7 +343,7 @@ const mockAPI = {
         described: true,
         headComment: '仓库地图状态：按工作区缓存扫描结果',
         exports: ['useRepoMapStore'],
-        symbol: 'useRepoMapStore'
+        symbol: 'useRepoMapStore',
       },
       {
         path: 'docs/README.md',
@@ -345,7 +351,7 @@ const mockAPI = {
         binary: false,
         size: 1024,
         mtimeMs: 0,
-        described: true
+        described: true,
       },
       {
         path: 'package.json',
@@ -353,9 +359,9 @@ const mockAPI = {
         binary: false,
         size: 512,
         mtimeMs: 0,
-        described: true
-      }
-    ]
+        described: true,
+      },
+    ],
   }),
   repoMapDescribe: async (): Promise<RepoMapResult> => mockAPI.repoMapScan(),
   repoMapCanvasGet: async (workspacePath: string): Promise<RepoMapCanvasGetResult> => {
@@ -378,7 +384,7 @@ const mockAPI = {
       )
       return { success: true }
     } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
+      return { success: false, error: normalizeIpcError(error) }
     }
   },
 
@@ -389,7 +395,7 @@ const mockAPI = {
   },
   providersSetActive: async (): Promise<{ success: boolean; error?: string }> => ({
     success: false,
-    error: 'Desktop only'
+    error: 'Desktop only',
   }),
   providersSetOverrides: async (): Promise<{
     success: boolean
@@ -405,12 +411,12 @@ const mockAPI = {
   }> => ({ success: false, added: 0, removed: 0, checkedAt: Date.now(), error: 'Desktop only' }),
   providersSetApiKey: async (): Promise<{ success: boolean; error?: string }> => ({
     success: false,
-    error: 'Desktop only'
+    error: 'Desktop only',
   }),
   providersForget: async (): Promise<{ success: boolean }> => ({ success: false }),
   providersLogin: async (): Promise<{ success: boolean; error?: string }> => ({
     success: false,
-    error: 'Desktop only'
+    error: 'Desktop only',
   }),
   providersAuthAnswer: async (): Promise<{ ok: boolean }> => ({ ok: false }),
   providersCancelLogin: async (): Promise<{ ok: boolean }> => ({ ok: false }),
@@ -437,7 +443,7 @@ const mockAPI = {
   pluginsList: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
   pluginsInvoke: async (): Promise<PluginCommandResult> => ({
     success: false,
-    error: 'Plugins are only available in the Electron app'
+    error: 'Plugins are only available in the Electron app',
   }),
   pluginsReload: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
   pluginsSetEnabled: async (): Promise<PluginsListResult> => ({ success: true, plugins: [] }),
@@ -448,47 +454,53 @@ const mockAPI = {
     success: true,
     link: { linked: false },
     state: { status: 'unlinked', pending: 0 },
-    error: 'Cloud pairing is only available in the Electron app'
+    error: 'Cloud pairing is only available in the Electron app',
   }),
   cloudPair: async (): Promise<CloudPairResult> => ({
     success: false,
-    error: 'Cloud pairing is only available in the Electron app'
+    error: 'Cloud pairing is only available in the Electron app',
   }),
   cloudUnlink: async () => ({
     success: false,
-    error: 'Cloud pairing is only available in the Electron app'
+    error: 'Cloud pairing is only available in the Electron app',
   }),
   cloudReconnect: async () => ({
     success: false,
-    error: 'Cloud pairing is only available in the Electron app'
+    error: 'Cloud pairing is only available in the Electron app',
   }),
   cloudRefreshWorkspaces: async () => ({
     success: false,
-    error: 'Cloud pairing is only available in the Electron app'
+    error: 'Cloud pairing is only available in the Electron app',
   }),
-  cloudListWorkspaces: async (): Promise<{ success: boolean; workspaces: CloudWorkspaceEntry[] }> => ({
+  cloudListWorkspaces: async (): Promise<{
+    success: boolean
+    workspaces: CloudWorkspaceEntry[]
+  }> => ({
     success: true,
-    workspaces: []
+    workspaces: [],
   }),
   onCloudState: (_callback: (state: CloudDeviceState) => void) => () => {},
   cloudClientOpen: async () => ({
     success: false,
     state: { status: 'closed' } as CloudClientState,
-    error: 'Cloud connection is only available in the Electron app'
+    error: 'Cloud connection is only available in the Electron app',
   }),
   cloudClientClose: async () => ({ success: true }),
   cloudClientSend: async () => ({
     success: false,
-    error: 'Cloud connection is only available in the Electron app'
+    error: 'Cloud connection is only available in the Electron app',
   }),
-  cloudClientState: async () => ({ success: true, state: { status: 'closed' } as CloudClientState }),
+  cloudClientState: async () => ({
+    success: true,
+    state: { status: 'closed' } as CloudClientState,
+  }),
   cloudGetConfig: async (): Promise<CloudConfigResult> => ({
     success: false,
-    error: 'Cloud settings are only available in the Electron app'
+    error: 'Cloud settings are only available in the Electron app',
   }),
   cloudSaveConfig: async () => ({
     success: false,
-    error: 'Cloud settings are only available in the Electron app'
+    error: 'Cloud settings are only available in the Electron app',
   }),
   cloudFetchModels: async (): Promise<{
     success: boolean
@@ -499,7 +511,7 @@ const mockAPI = {
     success: false,
     models: [],
     catalog: [],
-    error: 'Cloud settings are only available in the Electron app'
+    error: 'Cloud settings are only available in the Electron app',
   }),
   cloudGetMemoryData: async () => ({
     success: false,
@@ -531,23 +543,23 @@ const mockAPI = {
   // Terminal（Web 模式没有 PTY，返回失败而不是抛异常）
   terminalCreate: async (): Promise<TerminalCreateResult> => ({
     success: false,
-    error: 'Terminal is only available in the Electron app'
+    error: 'Terminal is only available in the Electron app',
   }),
   gitRepoInfo: async () => ({ success: true, repo: null, worktrees: [] }),
   gitFetch: async () => ({
     success: false,
     skipped: true,
-    error: 'Git is only available in the Electron app'
+    error: 'Git is only available in the Electron app',
   }),
   onGitChanged: (_callback: (payload: GitChangedPayload) => void) => () => {},
   gitListWorktrees: async () => ({ success: true, worktrees: [] }),
   gitForgetWorktree: async () => ({
     success: false,
-    error: 'Git is only available in the Electron app'
+    error: 'Git is only available in the Electron app',
   }),
   gitInstallWorktreeDeps: async () => ({
     success: false,
-    error: 'Git is only available in the Electron app'
+    error: 'Git is only available in the Electron app',
   }),
   onGitWorktreeDeps: (_callback: (payload: GitWorktreeDepsPayload) => void) => () => {},
   gitBranches: async () => ({ success: true, branches: [] }),
@@ -560,38 +572,50 @@ const mockAPI = {
       behind: 0,
       detached: false,
       clean: true,
-      files: []
-    }
+      files: [],
+    },
   }),
   gitSessionBinding: async () => ({
     success: true,
-    binding: { key: 'main', path: '', branch: null }
+    binding: { key: 'main', path: '', branch: null },
   }),
   gitBindWorktree: async () => ({
     success: false,
-    error: 'Git is only available in the Electron app'
+    error: 'Git is only available in the Electron app',
   }),
   gitReleaseSession: async () => ({ success: true, removed: false, dirty: false }),
   gitCleanupOrphans: async () => ({ success: true, removed: [], dirty: [], external: [] }),
   gitLog: async () => ({ success: true, commits: [] }),
   gitCommitStats: async () => ({ success: true, stats: {} }),
-  gitCreateBranch: async () => ({ success: false, error: 'Git is only available in the Electron app' }),
-  gitCommitDetail: async () => ({ success: false, error: 'Git is only available in the Electron app' }),
+  gitCreateBranch: async () => ({
+    success: false,
+    error: 'Git is only available in the Electron app',
+  }),
+  gitCommitDetail: async () => ({
+    success: false,
+    error: 'Git is only available in the Electron app',
+  }),
   gitDiff: async () => ({ success: true, patch: '' }),
-  gitCheckout: async () => ({ success: false, error: 'Git is only available in the Electron app' }),
-  gitMerge: async () => ({ success: false, error: 'Git is only available in the Electron app' }),
+  gitCheckout: async () => ({
+    success: false,
+    error: 'Git is only available in the Electron app',
+  }),
+  gitMerge: async () => ({
+    success: false,
+    error: 'Git is only available in the Electron app',
+  }),
   gitGithubTokenStatus: async () => ({ success: true, configured: false }),
   githubAuthConfig: async () => ({ success: true, appConfigured: false, linked: false }),
   githubAuthStart: async () => ({
     success: false,
-    error: 'GitHub login is only available in the Electron app'
+    error: 'GitHub login is only available in the Electron app',
   }),
   githubAuthStatus: async () => ({ success: true, configured: false }),
   githubAuthLogout: async () => ({ success: true }),
   onGithubAuthComplete: () => () => {},
   githubAuthDeviceStart: async () => ({
     success: false,
-    error: 'GitHub login is only available in the Electron app'
+    error: 'GitHub login is only available in the Electron app',
   }),
   githubAuthDeviceCancel: async () => ({ success: true, cancelled: false }),
   githubAuthDeviceOpen: async () => ({ success: false }),
@@ -599,7 +623,7 @@ const mockAPI = {
   gitSetGithubToken: async () => ({ success: true }),
   gitPrStatus: async () => ({
     success: true,
-    status: { available: false, reason: 'Git is only available in the Electron app' }
+    status: { available: false, reason: 'Git is only available in the Electron app' },
   }),
   onAgentSessionRootChanged: () => () => {},
   terminalWrite: async (): Promise<TerminalResult> => ({ success: false }),
@@ -608,16 +632,18 @@ const mockAPI = {
   terminalFlush: async (): Promise<TerminalResult> => ({ success: false }),
   onTerminalData: (_callback: (payload: { id: string; data: string }) => void) => () => {},
   onTerminalExit: (_callback: (payload: { id: string; exitCode: number }) => void) => () => {},
-  onDocumentRenderRequest: (_callback: (payload: {
-    id: string
-    name: string
-    bytes: Uint8Array
-    pages: number[]
-    scale: number
-  }) => void) => () => {},
+  onDocumentRenderRequest: (
+    _callback: (payload: {
+      id: string
+      name: string
+      bytes: Uint8Array
+      pages: number[]
+      scale: number
+    }) => void
+  ) => () => {},
   documentsPreview: async (_path: string): Promise<DocumentPreviewResult> => ({
     success: false,
-    error: 'Document preview is only available in the Electron app'
+    error: 'Document preview is only available in the Electron app',
   }),
   documentRenderResult: async (_payload: {
     id: string
@@ -626,12 +652,12 @@ const mockAPI = {
   }) => ({ success: false }),
   searchWorkspaceFiles: async (_workspaceDir: string, _query: string, _limit?: number) => ({
     success: true,
-    files: [] as string[]
+    files: [] as string[],
   }),
   getPathForFile: (_file: File) => '',
   agentSessionsMetaGet: async (_workspaceDir: string) => ({
     success: true,
-    meta: { pinned: [] as string[], archived: [] as string[] }
+    meta: { pinned: [] as string[], archived: [] as string[] },
   }),
   agentSessionsMetaSet: async (
     _workspaceDir: string,
@@ -648,7 +674,7 @@ const mockAPI = {
     }
     return { success: false, error: 'Clipboard unavailable in web mock' }
   },
-  onNotifyClick: (_callback: (payload: { workspaceDir: string; sessionId: string }) => void) => () => {}
+  onNotifyClick: (_callback: (payload: NotifyClickPayload) => void) => () => {},
 }
 
 const prodFallbackAPI = new Proxy(
@@ -662,7 +688,7 @@ const prodFallbackAPI = new Proxy(
   }
 ) as unknown as typeof mockAPI
 
-// 生产包由 import.meta.env.DEV 编译期常量裁掉全部 555 行 mockAPI（含 localStorage）
+// 生产包由 import.meta.env.DEV 编译期常量裁掉全部 mockAPI（含 localStorage）
 const electronAPI = window.electronAPI || (import.meta.env.DEV ? mockAPI : prodFallbackAPI)
 
 if (!window.electronAPI) {
@@ -672,303 +698,291 @@ if (!window.electronAPI) {
   )
 }
 
+const getBridge = (): Partial<IpcInvokeBridge & IpcEventBridge> =>
+  electronAPI as unknown as Partial<IpcInvokeBridge & IpcEventBridge>
+
+const auxWindowCommandCall = createContractApiCall(getBridge, 'auxWindowCommand', {
+  fallback: () => ({ success: false, error: 'Not supported' }),
+})
+const auxWindowStateCall = createContractApiCall(getBridge, 'auxWindowState', {
+  fallback: () => ({ success: false, error: 'Not supported' }),
+})
+
+const repoMapUnavailable = (): RepoMapResult => ({
+  success: false,
+  isRepo: false,
+  total: 0,
+  described: 0,
+  truncated: false,
+  files: [],
+  error: 'Restart the app to enable the repository map',
+})
+
 export const api = {
   // File system operations
-  openDirectoryDialog: () => electronAPI.openDirectoryDialog(),
-  pickAttachments: () =>
-    typeof electronAPI.pickAttachments === 'function'
-      ? electronAPI.pickAttachments()
-      : Promise.resolve({ success: true, canceled: true, files: [] } as AttachmentPickResult),
-  listDirectory: (path: string) => electronAPI.listDirectory(path),
-  searchWorkspaceFiles: (workspaceDir: string, query: string, limit?: number) =>
-    typeof electronAPI.searchWorkspaceFiles === 'function'
-      ? electronAPI.searchWorkspaceFiles(workspaceDir, query, limit)
-      : Promise.resolve({ success: true, files: [] as string[] }),
+  openDirectoryDialog: createContractApiCall(getBridge, 'openDirectoryDialog'),
+  pickAttachments: createContractApiCall(getBridge, 'pickAttachments', {
+    fallback: () => ({ success: true, canceled: true, files: [] }),
+    onError: (error) => ({ success: false, canceled: true, files: [], error }),
+  }),
+  listDirectory: createContractApiCall(getBridge, 'listDirectory'),
+  searchWorkspaceFiles: createContractApiCall(getBridge, 'searchWorkspaceFiles', {
+    fallback: () => ({ success: true, files: [] }),
+  }),
   getPathForFile: (file: File) =>
     typeof electronAPI.getPathForFile === 'function' ? electronAPI.getPathForFile(file) : '',
-  getSessionMeta: (workspaceDir: string) =>
-    typeof electronAPI.agentSessionsMetaGet === 'function'
-      ? electronAPI.agentSessionsMetaGet(workspaceDir)
-      : Promise.resolve({ success: true, meta: { pinned: [], archived: [] } }),
-  setSessionMeta: (workspaceDir: string, meta: { pinned: string[]; archived: string[] }) =>
-    typeof electronAPI.agentSessionsMetaSet === 'function'
-      ? electronAPI.agentSessionsMetaSet(workspaceDir, meta)
-      : Promise.resolve({ success: true }),
-  readFile: (path: string) => electronAPI.readFile(path),
-  writeFile: (path: string, content: string) => electronAPI.writeFile(path, content),
-  createFile: (filePath: string) => electronAPI.createFile(filePath),
-  writeClipboardText: (text: string) =>
-    typeof electronAPI.writeClipboardText === 'function'
-      ? electronAPI.writeClipboardText(text)
-      : Promise.resolve({ success: false, error: 'Clipboard unavailable' }),
-  openPathExternally: (path: string) =>
-    typeof electronAPI.openPathExternally === 'function'
-      ? electronAPI.openPathExternally(path)
-      : Promise.resolve({ success: false, error: 'Not available in the browser' }),
-  openExternalUrl: (url: string) =>
-    typeof electronAPI.openExternalUrl === 'function'
-      ? electronAPI.openExternalUrl(url)
-      : Promise.resolve({ success: false, error: 'Not available in the browser' }),
-  exists: (path: string) => electronAPI.exists(path),
-  stat: (path: string) => electronAPI.stat(path),
-  deletePath: (path: string) => electronAPI.deletePath(path),
-  renamePath: (oldPath: string, newPath: string) => electronAPI.renamePath(oldPath, newPath),
-  watchWorkspace: (workspacePath: string) => electronAPI.watchWorkspace(workspacePath),
-  unwatchWorkspace: (workspacePath?: string) => electronAPI.unwatchWorkspace(workspacePath),
-  onFsChanged: (callback: (payload: { type: string; path: string }) => void) => electronAPI.onFsChanged(callback),
+  getSessionMeta: createContractApiCall(getBridge, 'agentSessionsMetaGet', {
+    fallback: () => ({ success: true, meta: { pinned: [], archived: [] } }),
+  }),
+  setSessionMeta: createContractApiCall(getBridge, 'agentSessionsMetaSet', {
+    fallback: () => ({ success: true }),
+  }),
+  readFile: createContractApiCall(getBridge, 'readFile'),
+  writeFile: createContractApiCall(getBridge, 'writeFile'),
+  createFile: createContractApiCall(getBridge, 'createFile'),
+  writeClipboardText: createContractApiCall(getBridge, 'writeClipboardText', {
+    fallback: () => ({ success: false, error: 'Clipboard unavailable' }),
+  }),
+  openPathExternally: createContractApiCall(getBridge, 'openPathExternally', {
+    fallback: () => ({ success: false, error: 'Not available in the browser' }),
+  }),
+  openExternalUrl: createContractApiCall(getBridge, 'openExternalUrl', {
+    fallback: () => ({ success: false, error: 'Not available in the browser' }),
+  }),
+  exists: createContractApiCall(getBridge, 'exists'),
+  stat: createContractApiCall(getBridge, 'stat'),
+  deletePath: createContractApiCall(getBridge, 'deletePath'),
+  renamePath: createContractApiCall(getBridge, 'renamePath'),
+  watchWorkspace: createContractApiCall(getBridge, 'watchWorkspace'),
+  unwatchWorkspace: createContractApiCall(getBridge, 'unwatchWorkspace'),
+  onFsChanged: createContractEventSub(getBridge, 'onFsChanged'),
 
   // 文档扫描页渲染：主进程发请求，渲染层回传 PNG
-  onDocumentRenderRequest: (
-    callback: (payload: {
-      id: string
-      name: string
-      bytes: Uint8Array
-      pages: number[]
-      scale: number
-    }) => void
-  ) =>
-    typeof electronAPI.onDocumentRenderRequest === 'function'
-      ? electronAPI.onDocumentRenderRequest(callback)
-      : () => {},
-  documentsPreview: (path: string) =>
-    typeof electronAPI.documentsPreview === 'function'
-      ? electronAPI.documentsPreview(path)
-      : Promise.resolve<DocumentPreviewResult>({
-          success: false,
-          error: 'Document preview is only available in the Electron app'
-        }),
-  documentRenderResult: (payload: {
-    id: string
-    images?: { data: string; mimeType: string }[]
-    error?: string
-  }) =>
-    typeof electronAPI.documentRenderResult === 'function'
-      ? electronAPI.documentRenderResult(payload)
-      : Promise.resolve({ success: false }),
+  onDocumentRenderRequest: createContractEventSub(getBridge, 'onDocumentRenderRequest'),
+  documentsPreview: createContractApiCall(getBridge, 'documentsPreview', {
+    fallback: () => ({
+      success: false,
+      error: 'Document preview is only available in the Electron app',
+    }),
+  }),
+  documentRenderResult: createContractApiCall(getBridge, 'documentRenderResult', {
+    fallback: () => ({ success: false }),
+    onError: () => ({ success: false }),
+  }),
 
   // App configuration & data directory
-  getAppDir: () => electronAPI.getAppDir(),
-  openDataDir: () =>
-    typeof electronAPI.openDataDir === 'function'
-      ? electronAPI.openDataDir()
-      : Promise.resolve({ success: false, error: 'Unsupported' }),
-  logRenderer: (level: string, args: unknown[]) => electronAPI.logRenderer(level, args),
-  updateCheck: () => electronAPI.updateCheck(),
-  updateDownload: () => electronAPI.updateDownload(),
-  updateInstall: () => electronAPI.updateInstall(),
-  updateGetState: () => electronAPI.updateGetState(),
-  updateOpenDownload: () => electronAPI.updateOpenDownload(),
-  consumeUpdateNotice: () => electronAPI.consumeUpdateNotice(),
-  onUpdateStatus: (callback: (status: UpdateState) => void) => electronAPI.onUpdateStatus(callback),
-  appGetInfo: () => electronAPI.appGetInfo(),
-  appHasActiveWork: () => electronAPI.appHasActiveWork(),
-  getSettings: () => electronAPI.getSettings(),
-  saveSettings: (settings: any) => electronAPI.saveSettings(settings),
-  getRecentWorkspaces: () => electronAPI.getRecentWorkspaces(),
-  addRecentWorkspace: (workspacePath: string) => electronAPI.addRecentWorkspace(workspacePath),
-  minimizeWindow: () => electronAPI.minimizeWindow(),
-  toggleMaximizeWindow: () => electronAPI.toggleMaximizeWindow(),
-  closeWindow: () => electronAPI.closeWindow(),
-  isWindowMaximized: () => electronAPI.isWindowMaximized(),
-  onWindowMaximizedChange: (callback: (state: WindowMaximizedState) => void) =>
-    electronAPI.onWindowMaximizedChange(callback),
+  getAppDir: createContractApiCall(getBridge, 'getAppDir'),
+  openDataDir: createContractApiCall(getBridge, 'openDataDir', {
+    fallback: () => ({ success: false, error: 'Unsupported' }),
+  }),
+  logRenderer: createContractApiCall(getBridge, 'logRenderer', {
+    onError: () => ({ success: false }),
+  }),
+  updateCheck: createContractApiCall(getBridge, 'updateCheck', {
+    onError: (error) => ({ success: false, state: fallbackUpdateState, error }),
+  }),
+  updateDownload: createContractApiCall(getBridge, 'updateDownload'),
+  updateInstall: createContractApiCall(getBridge, 'updateInstall'),
+  updateGetState: createContractApiCall(getBridge, 'updateGetState', {
+    onError: (error) => ({ success: false, state: fallbackUpdateState, error }),
+  }),
+  updateOpenDownload: createContractApiCall(getBridge, 'updateOpenDownload'),
+  consumeUpdateNotice: createContractApiCall(getBridge, 'consumeUpdateNotice'),
+  onUpdateStatus: createContractEventSub(getBridge, 'onUpdateStatus'),
+  appGetInfo: createContractApiCall(getBridge, 'appGetInfo'),
+  appHasActiveWork: createContractApiCall(getBridge, 'appHasActiveWork', {
+    onError: () => ({ success: false, terminal: false }),
+  }),
+  getSettings: createContractApiCall(getBridge, 'getSettings'),
+  saveSettings: createContractApiCall(getBridge, 'saveSettings'),
+  getRecentWorkspaces: createContractApiCall(getBridge, 'getRecentWorkspaces', {
+    onError: (error) => ({ success: false, workspaces: [], error }),
+  }),
+  addRecentWorkspace: createContractApiCall(getBridge, 'addRecentWorkspace', {
+    onError: (error) => ({ success: false, workspaces: [], error }),
+  }),
+  minimizeWindow: createContractApiCall(getBridge, 'minimizeWindow', {
+    onError: () => ({ success: false }),
+  }),
+  toggleMaximizeWindow: createContractApiCall(getBridge, 'toggleMaximizeWindow', {
+    onError: () => ({ success: false, maximized: false }),
+  }),
+  closeWindow: createContractApiCall(getBridge, 'closeWindow', {
+    onError: () => ({ success: false }),
+  }),
+  isWindowMaximized: createContractApiCall(getBridge, 'isWindowMaximized', {
+    onError: () => ({ success: false, maximized: false }),
+  }),
+  onWindowMaximizedChange: createContractEventSub(getBridge, 'onWindowMaximizedChange'),
   // 主进程只接受带 `pi-panel:` 前缀的 frameName，渲染层统一用 HostId
   auxWindowCommand: (host: HostId, command: WindowCommand): Promise<AuxWindowCommandResult> =>
-    typeof electronAPI.auxWindowCommand === 'function'
-      ? electronAPI.auxWindowCommand(frameNameOf(host), command)
-      : Promise.resolve({ success: false, error: 'Not supported' }),
+    auxWindowCommandCall(frameNameOf(host), command),
   auxWindowState: (host: HostId): Promise<AuxWindowCommandResult> =>
-    typeof electronAPI.auxWindowState === 'function'
-      ? electronAPI.auxWindowState(frameNameOf(host))
-      : Promise.resolve({ success: false, error: 'Not supported' }),
-  onAuxWindowClosed: (callback: (frameName: string) => void) =>
-    typeof electronAPI.onAuxWindowClosed === 'function' ? electronAPI.onAuxWindowClosed(callback) : () => {},
-  auxDetachAt: () => electronAPI.auxDetachAt(),
-  auxDragBegin: (): Promise<{ success: boolean }> =>
-    typeof electronAPI.auxDragBegin === 'function'
-      ? electronAPI.auxDragBegin()
-      : Promise.resolve({ success: false }),
+    auxWindowStateCall(frameNameOf(host)),
+  onAuxWindowClosed: createContractEventSub(getBridge, 'onAuxWindowClosed'),
+  auxDetachAt: createContractApiCall(getBridge, 'auxDetachAt'),
+  auxDragBegin: createContractApiCall(getBridge, 'auxDragBegin', {
+    fallback: () => ({ success: false }),
+    onError: () => ({ success: false }),
+  }),
   appBootReady: () => {
     if (typeof electronAPI.appBootReady === 'function') electronAPI.appBootReady()
   },
-  onAppBootExpanded: (callback: () => void) =>
-    typeof electronAPI.onAppBootExpanded === 'function' ? electronAPI.onAppBootExpanded(callback) : () => {},
+  onAppBootExpanded: createContractEventSub(getBridge, 'onAppBootExpanded'),
 
   // Workspace configuration
-  initWorkspace: (workspacePath: string) => electronAPI.initWorkspace(workspacePath),
-  disposeWorkspace: (workspacePath: string) => electronAPI.disposeWorkspace(workspacePath),
-  draftSave: (workspacePath: string, filePath: string, content: string) =>
-    electronAPI.draftSave(workspacePath, filePath, content),
-  draftDelete: (workspacePath: string, filePath: string) => electronAPI.draftDelete(workspacePath, filePath),
-  draftList: (workspacePath: string) => electronAPI.draftList(workspacePath),
-  draftClear: (workspacePath: string) => electronAPI.draftClear(workspacePath),
-  editorTabsGet: (workspacePath: string) => electronAPI.editorTabsGet(workspacePath),
-  editorTabsSet: (workspacePath: string, tabs: EditorTabs) => electronAPI.editorTabsSet(workspacePath, tabs),
+  initWorkspace: createContractApiCall(getBridge, 'initWorkspace'),
+  disposeWorkspace: createContractApiCall(getBridge, 'disposeWorkspace'),
+  draftSave: createContractApiCall(getBridge, 'draftSave'),
+  draftDelete: createContractApiCall(getBridge, 'draftDelete'),
+  draftList: createContractApiCall(getBridge, 'draftList', {
+    onError: (error) => ({ success: false, drafts: [], error }),
+  }),
+  draftClear: createContractApiCall(getBridge, 'draftClear'),
+  editorTabsGet: createContractApiCall(getBridge, 'editorTabsGet'),
+  editorTabsSet: createContractApiCall(getBridge, 'editorTabsSet'),
   // 旧 preload（热更新期间尚未重启主进程）没有这两个接口：降级为明确的失败，而不是抛异常
-  repoMapScan: (workspacePath: string, options?: RepoMapScanOptions): Promise<RepoMapResult> =>
-    typeof electronAPI.repoMapScan === 'function'
-      ? electronAPI.repoMapScan(workspacePath, options)
-      : Promise.resolve({
-          success: false,
-          isRepo: false,
-          total: 0,
-          described: 0,
-          truncated: false,
-          files: [],
-          error: 'Restart the app to enable the repository map'
-        }),
-  repoMapDescribe: (workspacePath: string, paths: string[]): Promise<RepoMapResult> =>
-    typeof electronAPI.repoMapDescribe === 'function'
-      ? electronAPI.repoMapDescribe(workspacePath, paths)
-      : Promise.resolve({
-          success: false,
-          isRepo: false,
-          total: 0,
-          described: 0,
-          truncated: false,
-          files: [],
-          error: 'Restart the app to enable the repository map'
-        }),
-  repoMapCanvasGet: (workspacePath: string): Promise<RepoMapCanvasGetResult> =>
-    typeof electronAPI.repoMapCanvasGet === 'function'
-      ? electronAPI.repoMapCanvasGet(workspacePath)
-      : Promise.resolve({ success: false, state: emptyCanvasState(), error: CANVAS_UNAVAILABLE }),
-  repoMapCanvasSet: (
-    workspacePath: string,
-    state: RepoMapCanvasState
-  ): Promise<RepoMapCanvasSetResult> =>
-    typeof electronAPI.repoMapCanvasSet === 'function'
-      ? electronAPI.repoMapCanvasSet(workspacePath, state)
-      : Promise.resolve({ success: false, error: CANVAS_UNAVAILABLE }),
+  repoMapScan: createContractApiCall(getBridge, 'repoMapScan', {
+    fallback: repoMapUnavailable,
+    onError: (error) => ({ ...repoMapUnavailable(), error }),
+  }),
+  repoMapDescribe: createContractApiCall(getBridge, 'repoMapDescribe', {
+    fallback: repoMapUnavailable,
+    onError: (error) => ({ ...repoMapUnavailable(), error }),
+  }),
+  repoMapCanvasGet: createContractApiCall(getBridge, 'repoMapCanvasGet', {
+    fallback: () => ({ success: false, state: emptyCanvasState(), error: CANVAS_UNAVAILABLE }),
+    onError: (error) => ({ success: false, state: emptyCanvasState(), error }),
+  }),
+  repoMapCanvasSet: createContractApiCall(getBridge, 'repoMapCanvasSet', {
+    fallback: () => ({ success: false, error: CANVAS_UNAVAILABLE }),
+  }),
 
   // API Configuration management (portable architecture)
-  providersList: () => electronAPI.providersList(),
-  providersSetActive: (providerId: string, modelId?: string) =>
-    electronAPI.providersSetActive(providerId, modelId),
-  providersSetOverrides: (providerId: string, modelId: string, overrides: ProviderModelOverrides) =>
-    electronAPI.providersSetOverrides(providerId, modelId, overrides),
-  providersRefresh: (force?: boolean) => electronAPI.providersRefresh(force),
-  providersSetApiKey: (providerId: string, apiKey: string) =>
-    electronAPI.providersSetApiKey(providerId, apiKey),
-  providersForget: (providerId: string) => electronAPI.providersForget(providerId),
-  providersLogin: (providerId: string, type: ProviderAuthMethod) =>
-    electronAPI.providersLogin(providerId, type),
-  providersAuthAnswer: (requestId: string, value: string) =>
-    electronAPI.providersAuthAnswer(requestId, value),
-  providersCancelLogin: (providerId: string) => electronAPI.providersCancelLogin(providerId),
-  onProvidersAuthEvent: (callback: (payload: ProviderAuthEvent) => void) =>
-    electronAPI.onProvidersAuthEvent(callback),
+  providersList: createContractApiCall(getBridge, 'providersList'),
+  providersSetActive: createContractApiCall(getBridge, 'providersSetActive'),
+  providersSetOverrides: createContractApiCall(getBridge, 'providersSetOverrides'),
+  providersRefresh: createContractApiCall(getBridge, 'providersRefresh', {
+    onError: (error) => ({ success: false, added: 0, removed: 0, checkedAt: Date.now(), error }),
+  }),
+  providersSetApiKey: createContractApiCall(getBridge, 'providersSetApiKey'),
+  providersForget: createContractApiCall(getBridge, 'providersForget', {
+    onError: () => ({ success: false }),
+  }),
+  providersLogin: createContractApiCall(getBridge, 'providersLogin'),
+  providersAuthAnswer: createContractApiCall(getBridge, 'providersAuthAnswer', {
+    onError: () => ({ ok: false }),
+  }),
+  providersCancelLogin: createContractApiCall(getBridge, 'providersCancelLogin', {
+    onError: () => ({ ok: false }),
+  }),
+  onProvidersAuthEvent: createContractEventSub(getBridge, 'onProvidersAuthEvent'),
 
   // Web search (内置联网能力)
-  webSearchGet: () => electronAPI.webSearchGet(),
-  webSearchSave: (config: WebSearchConfig) => electronAPI.webSearchSave(config),
+  webSearchGet: createContractApiCall(getBridge, 'webSearchGet'),
+  webSearchSave: createContractApiCall(getBridge, 'webSearchSave'),
 
   // Workbench plugins
-  pluginsList: (workspaceDir: string) => electronAPI.pluginsList(workspaceDir),
-  pluginsInvoke: (workspaceDir: string, commandId: string, args?: unknown) =>
-    electronAPI.pluginsInvoke(workspaceDir, commandId, args),
-  pluginsReload: (workspaceDir: string) => electronAPI.pluginsReload(workspaceDir),
-  pluginsSetEnabled: (workspaceDir: string, pluginId: string, enabled: boolean) =>
-    electronAPI.pluginsSetEnabled(workspaceDir, pluginId, enabled),
-  onPluginsChanged: (callback: (payload: { workspaceDir: string }) => void) => electronAPI.onPluginsChanged(callback),
+  pluginsList: createContractApiCall(getBridge, 'pluginsList', {
+    onError: (error) => ({ success: false, plugins: [], error }),
+  }),
+  pluginsInvoke: createContractApiCall(getBridge, 'pluginsInvoke'),
+  pluginsReload: createContractApiCall(getBridge, 'pluginsReload', {
+    onError: (error) => ({ success: false, plugins: [], error }),
+  }),
+  pluginsSetEnabled: createContractApiCall(getBridge, 'pluginsSetEnabled', {
+    onError: (error) => ({ success: false, plugins: [], error }),
+  }),
+  onPluginsChanged: createContractEventSub(getBridge, 'onPluginsChanged'),
 
   // 云端连接（配对 / 解绑 / 状态）
-  cloudLinkStatus: () => electronAPI.cloudLinkStatus(),
-  cloudPair: (input: CloudPairInput) => electronAPI.cloudPair(input),
-  cloudUnlink: () => electronAPI.cloudUnlink(),
-  cloudReconnect: () => electronAPI.cloudReconnect(),
-  cloudRefreshWorkspaces: () => electronAPI.cloudRefreshWorkspaces(),
-  cloudListWorkspaces: () => electronAPI.cloudListWorkspaces(),
-  onCloudState: (callback: (state: CloudDeviceState) => void) => electronAPI.onCloudState(callback),
-  cloudClientOpen: () => electronAPI.cloudClientOpen(),
-  cloudClientClose: () => electronAPI.cloudClientClose(),
-  cloudClientSend: (frame: CloudClientOutgoingFrame) => electronAPI.cloudClientSend(frame),
-  cloudClientState: () => electronAPI.cloudClientState(),
-  cloudGetConfig: () => electronAPI.cloudGetConfig(),
-  cloudSaveConfig: (config: CloudConfigInput) => electronAPI.cloudSaveConfig(config),
-  cloudFetchModels: (input: { providerId: string }) =>
-    electronAPI.cloudFetchModels(input),
-  cloudGetMemoryData: () => electronAPI.cloudGetMemoryData(),
-  cloudAddMemory: (input: { kind?: string; content: string; tags?: string[]; pinned?: boolean }) =>
-    electronAPI.cloudAddMemory(input),
-  cloudUpdateMemory: (input: {
-    id: string
-    kind?: string
-    content?: string
-    tags?: string[]
-    pinned?: boolean
-  }) => electronAPI.cloudUpdateMemory(input),
-  cloudDeleteMemory: (id: string) => electronAPI.cloudDeleteMemory(id),
-  cloudSaveDoc: (input: { name: 'AGENTS.md' | 'SOUL.md'; content: string }) =>
-    electronAPI.cloudSaveDoc(input),
-  cloudRunDream: () => electronAPI.cloudRunDream(),
-  onCloudClientFrame: (callback: (frame: unknown) => void) => electronAPI.onCloudClientFrame(callback),
-  onCloudClientState: (callback: (state: CloudClientState) => void) =>
-    electronAPI.onCloudClientState(callback),
+  cloudLinkStatus: createContractApiCall(getBridge, 'cloudLinkStatus', {
+    onError: (error) => ({
+      success: false,
+      link: { linked: false },
+      state: { status: 'error', pending: 0, lastError: error },
+      error,
+    }),
+  }),
+  cloudPair: createContractApiCall(getBridge, 'cloudPair'),
+  cloudUnlink: createContractApiCall(getBridge, 'cloudUnlink'),
+  cloudReconnect: createContractApiCall(getBridge, 'cloudReconnect'),
+  cloudRefreshWorkspaces: createContractApiCall(getBridge, 'cloudRefreshWorkspaces'),
+  cloudListWorkspaces: createContractApiCall(getBridge, 'cloudListWorkspaces', {
+    onError: () => ({ success: false, workspaces: [] }),
+  }),
+  onCloudState: createContractEventSub(getBridge, 'onCloudState'),
+  cloudClientOpen: createContractApiCall(getBridge, 'cloudClientOpen', {
+    onError: (error) => ({ success: false, state: { status: 'closed' }, error }),
+  }),
+  cloudClientClose: createContractApiCall(getBridge, 'cloudClientClose', {
+    onError: () => ({ success: false }),
+  }),
+  cloudClientSend: createContractApiCall(getBridge, 'cloudClientSend'),
+  cloudClientState: createContractApiCall(getBridge, 'cloudClientState', {
+    onError: () => ({ success: false, state: { status: 'closed' } }),
+  }),
+  cloudGetConfig: createContractApiCall(getBridge, 'cloudGetConfig'),
+  cloudSaveConfig: createContractApiCall(getBridge, 'cloudSaveConfig'),
+  cloudFetchModels: createContractApiCall(getBridge, 'cloudFetchModels', {
+    onError: (error) => ({ success: false, models: [], error }),
+  }),
+  cloudGetMemoryData: createContractApiCall(getBridge, 'cloudGetMemoryData'),
+  cloudAddMemory: createContractApiCall(getBridge, 'cloudAddMemory'),
+  cloudUpdateMemory: createContractApiCall(getBridge, 'cloudUpdateMemory'),
+  cloudDeleteMemory: createContractApiCall(getBridge, 'cloudDeleteMemory'),
+  cloudSaveDoc: createContractApiCall(getBridge, 'cloudSaveDoc'),
+  cloudRunDream: createContractApiCall(getBridge, 'cloudRunDream'),
+  onCloudClientFrame: createContractEventSub(getBridge, 'onCloudClientFrame'),
+  onCloudClientState: createContractEventSub(getBridge, 'onCloudClientState'),
 
   // Git worktrees / read-only history / GitHub status
-  gitRepoInfo: (workspaceDir: string) => electronAPI.gitRepoInfo(workspaceDir),
-  gitFetch: (workspaceDir: string, options?: { force?: boolean }) => electronAPI.gitFetch(workspaceDir, options),
-  onGitChanged: (callback: (payload: GitChangedPayload) => void) => electronAPI.onGitChanged(callback),
-  gitListWorktrees: (workspaceDir: string, activeSessionId?: string) =>
-    electronAPI.gitListWorktrees(workspaceDir, activeSessionId),
-  gitForgetWorktree: (workspaceDir: string, id: string, activeSessionId?: string) =>
-    electronAPI.gitForgetWorktree(workspaceDir, id, activeSessionId),
-  gitInstallWorktreeDeps: (workspaceDir: string, id: string) =>
-    electronAPI.gitInstallWorktreeDeps(workspaceDir, id),
-  onGitWorktreeDeps: (callback: (payload: GitWorktreeDepsPayload) => void) =>
-    electronAPI.onGitWorktreeDeps(callback),
-  gitBranches: (workspaceDir: string) => electronAPI.gitBranches(workspaceDir),
-  gitStatus: (workspaceDir: string, worktreePath?: string) => electronAPI.gitStatus(workspaceDir, worktreePath),
-  gitSessionBinding: (workspaceDir: string, sessionId: string) =>
-    electronAPI.gitSessionBinding(workspaceDir, sessionId),
-  gitBindWorktree: (workspaceDir: string, sessionId: string, target: string, base?: string) =>
-    electronAPI.gitBindWorktree(workspaceDir, sessionId, target, base),
-  gitReleaseSession: (workspaceDir: string, sessionId: string) =>
-    electronAPI.gitReleaseSession(workspaceDir, sessionId),
-  gitCleanupOrphans: (workspaceDir: string) => electronAPI.gitCleanupOrphans(workspaceDir),
-  gitLog: (workspaceDir: string, limit?: number, branch?: string, all?: boolean) =>
-    electronAPI.gitLog(workspaceDir, limit, branch, all),
-  gitCommitStats: (workspaceDir: string, limit?: number, branch?: string, all?: boolean) =>
-    electronAPI.gitCommitStats(workspaceDir, limit, branch, all),
-  gitCreateBranch: (workspaceDir: string, sha: string, name: string) =>
-    electronAPI.gitCreateBranch(workspaceDir, sha, name),
-  gitCommitDetail: (workspaceDir: string, sha: string) => electronAPI.gitCommitDetail(workspaceDir, sha),
-  gitDiff: (workspaceDir: string, from: string, to: string) => electronAPI.gitDiff(workspaceDir, from, to),
-  gitCheckout: (workspaceDir: string, worktreePath: string, branch: string) =>
-    electronAPI.gitCheckout(workspaceDir, worktreePath, branch),
-  gitMerge: (workspaceDir: string, worktreePath: string, branch: string, strategy?: 'merge' | 'squash' | 'rebase') =>
-    electronAPI.gitMerge(workspaceDir, worktreePath, branch, strategy),
-  gitGithubTokenStatus: () => electronAPI.gitGithubTokenStatus(),
-  githubAuthConfig: () => electronAPI.githubAuthConfig(),
-  githubAuthStart: () => electronAPI.githubAuthStart(),
-  githubAuthStatus: () => electronAPI.githubAuthStatus(),
-  githubAuthLogout: () => electronAPI.githubAuthLogout(),
-  onGithubAuthComplete: (
-    callback: (payload: {
-      success: boolean
-      user?: { login: string; name: string | null; avatarUrl: string | null } | null
-      error?: string
-    }) => void
-  ) => electronAPI.onGithubAuthComplete(callback),
-  githubAuthDeviceStart: () => electronAPI.githubAuthDeviceStart(),
-  githubAuthDeviceCancel: () => electronAPI.githubAuthDeviceCancel(),
-  githubAuthDeviceOpen: () => electronAPI.githubAuthDeviceOpen(),
-  onGithubAuthDeviceEvent: (callback: (payload: GithubDeviceLoginEvent) => void) =>
-    electronAPI.onGithubAuthDeviceEvent(callback),
-  gitSetGithubToken: (token: string) => electronAPI.gitSetGithubToken(token),
-  gitPrStatus: (workspaceDir: string, worktreePath?: string) => electronAPI.gitPrStatus(workspaceDir, worktreePath),
-  onAgentSessionRootChanged: (callback: (payload: { workspaceDir: string; sessionId: string; root: string }) => void) =>
-    electronAPI.onAgentSessionRootChanged(callback),
+  gitRepoInfo: createContractApiCall(getBridge, 'gitRepoInfo'),
+  gitFetch: createContractApiCall(getBridge, 'gitFetch'),
+  onGitChanged: createContractEventSub(getBridge, 'onGitChanged'),
+  gitListWorktrees: createContractApiCall(getBridge, 'gitListWorktrees'),
+  gitForgetWorktree: createContractApiCall(getBridge, 'gitForgetWorktree'),
+  gitInstallWorktreeDeps: createContractApiCall(getBridge, 'gitInstallWorktreeDeps'),
+  onGitWorktreeDeps: createContractEventSub(getBridge, 'onGitWorktreeDeps'),
+  gitBranches: createContractApiCall(getBridge, 'gitBranches'),
+  gitStatus: createContractApiCall(getBridge, 'gitStatus'),
+  gitSessionBinding: createContractApiCall(getBridge, 'gitSessionBinding'),
+  gitBindWorktree: createContractApiCall(getBridge, 'gitBindWorktree'),
+  gitReleaseSession: createContractApiCall(getBridge, 'gitReleaseSession'),
+  gitCleanupOrphans: createContractApiCall(getBridge, 'gitCleanupOrphans'),
+  gitLog: createContractApiCall(getBridge, 'gitLog'),
+  gitCommitStats: createContractApiCall(getBridge, 'gitCommitStats'),
+  gitCreateBranch: createContractApiCall(getBridge, 'gitCreateBranch'),
+  gitCommitDetail: createContractApiCall(getBridge, 'gitCommitDetail'),
+  gitDiff: createContractApiCall(getBridge, 'gitDiff'),
+  gitCheckout: createContractApiCall(getBridge, 'gitCheckout'),
+  gitMerge: createContractApiCall(getBridge, 'gitMerge'),
+  gitGithubTokenStatus: createContractApiCall(getBridge, 'gitGithubTokenStatus', {
+    onError: () => ({ success: false }),
+  }),
+  githubAuthConfig: createContractApiCall(getBridge, 'githubAuthConfig'),
+  githubAuthStart: createContractApiCall(getBridge, 'githubAuthStart'),
+  githubAuthStatus: createContractApiCall(getBridge, 'githubAuthStatus'),
+  githubAuthLogout: createContractApiCall(getBridge, 'githubAuthLogout'),
+  onGithubAuthComplete: createContractEventSub(getBridge, 'onGithubAuthComplete'),
+  githubAuthDeviceStart: createContractApiCall(getBridge, 'githubAuthDeviceStart'),
+  githubAuthDeviceCancel: createContractApiCall(getBridge, 'githubAuthDeviceCancel', {
+    onError: () => ({ success: false }),
+  }),
+  githubAuthDeviceOpen: createContractApiCall(getBridge, 'githubAuthDeviceOpen', {
+    onError: () => ({ success: false }),
+  }),
+  onGithubAuthDeviceEvent: createContractEventSub(getBridge, 'onGithubAuthDeviceEvent'),
+  gitSetGithubToken: createContractApiCall(getBridge, 'gitSetGithubToken'),
+  gitPrStatus: createContractApiCall(getBridge, 'gitPrStatus'),
+  onAgentSessionRootChanged: createContractEventSub(getBridge, 'onAgentSessionRootChanged'),
 
   // Terminal
-  terminalCreate: (workspaceDir: string, cols: number, rows: number, cwd?: string) =>
-    electronAPI.terminalCreate(workspaceDir, cols, rows, cwd),
-  terminalWrite: (id: string, data: string) => electronAPI.terminalWrite(id, data),
-  terminalResize: (id: string, cols: number, rows: number) => electronAPI.terminalResize(id, cols, rows),
-  terminalClose: (id: string) => electronAPI.terminalClose(id),
-  terminalFlush: (id: string) => electronAPI.terminalFlush(id),
-  onTerminalData: (callback: (payload: { id: string; data: string }) => void) => electronAPI.onTerminalData(callback),
-  onTerminalExit: (callback: (payload: { id: string; exitCode: number }) => void) =>
-    electronAPI.onTerminalExit(callback)
+  terminalCreate: createContractApiCall(getBridge, 'terminalCreate'),
+  terminalWrite: createContractApiCall(getBridge, 'terminalWrite'),
+  terminalResize: createContractApiCall(getBridge, 'terminalResize'),
+  terminalClose: createContractApiCall(getBridge, 'terminalClose'),
+  terminalFlush: createContractApiCall(getBridge, 'terminalFlush'),
+  onTerminalData: createContractEventSub(getBridge, 'onTerminalData'),
+  onTerminalExit: createContractEventSub(getBridge, 'onTerminalExit'),
 }

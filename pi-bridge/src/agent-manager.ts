@@ -23,6 +23,8 @@ import {
 import { AgentTitleService } from './agent-title-service.js'
 import {
   normalizeSessionPermission,
+  type ApprovalDecision,
+  type ApprovalRequestPayload,
   type PermissionLevel,
   type SessionMode,
   type SessionPermission,
@@ -159,6 +161,22 @@ export class AgentManager {
         this.config?.onAgentSettled?.(sessionId)
       },
       onHardStop: (controller) => this.resetControllerAfterHardStop(controller),
+    }
+  }
+
+  /** 向宿主请求审批（委托给对应会话控制器以暂停活跃看门狗，无通道或超时均 fail-closed 拒绝） */
+  async requestToolApproval(request: ApprovalRequestPayload): Promise<ApprovalDecision> {
+    const controller = this.controllers.get(request.sessionId)
+    if (controller) return controller.requestToolApproval(request)
+    const handler = this.config?.requestApproval
+    if (!handler) {
+      return { action: 'deny', reason: 'No approval channel is available in this environment.' }
+    }
+    try {
+      return await withTimeout(handler(request), APPROVAL_TIMEOUT_MS, 'Tool approval')
+    } catch (error) {
+      this.logger.warn('[Agent Manager] Approval failed or timed out:', error)
+      return { action: 'deny', reason: 'The approval request timed out.' }
     }
   }
 
